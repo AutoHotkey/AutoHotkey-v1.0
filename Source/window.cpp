@@ -1113,6 +1113,10 @@ int MsgBox(char *aText, UINT uType, char *aTitle, double aTimeout)
 	// any more MsgBoxes:
 	if (g_nMessageBoxes > MAX_MSGBOXES + 1)  // +1 for the final warning dialog.  Verified correct.
 		return FAIL;
+
+	// At this point, we know a dialog will be displayed.  See macro's comments for details:
+	DIALOG_PREP // Must be done prior to POST_AHK_DIALOG() below.
+
 	if (g_nMessageBoxes == MAX_MSGBOXES)
 	{
 		// Do a recursive call to self so that it will be forced to the foreground.

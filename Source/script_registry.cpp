@@ -427,7 +427,5 @@ ResultType Line::RegDelete(HKEY aRootKey, char *aRegSubkey, char *aValueName)
 			return OK;  // Let ErrorLevel tell the story.
 	}
 
-	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-	return OK;
-
+	return g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 } // RegDelete()

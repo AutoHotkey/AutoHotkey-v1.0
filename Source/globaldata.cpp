@@ -76,6 +76,9 @@ int g_nThreads = 0;
 int g_nPausedThreads = 0;
 bool g_UnpauseWhenResumed = false;  // Start off "false" because the Unpause mode must be explicitly triggered.
 
+// g_MaxVarCapacity is used to prevent a buggy script from consuming all available system RAM.
+// The chosen default seems big enough to be flexible, yet small enough to not be a problem on 99% of systems:
+VarSizeType g_MaxVarCapacity = 64 * 1024 * 1024;
 UCHAR g_MaxThreadsPerHotkey = 1;
 int g_MaxThreadsTotal = 10;
 // On my system, the repeat-rate (which is probably set to XP's default) is such that between 20
@@ -87,7 +90,7 @@ int g_MaxHotkeysPerInterval = 50;
 int g_HotkeyThrottleInterval = 2000; // Milliseconds.
 bool g_MaxThreadsBuffer = false;  // This feature usually does more harm than good, so it defaults to OFF.
 
-MenuVisibleType g_MenuIsVisible = MENU_VISIBLE_NONE;
+MenuTypeType g_MenuIsVisible = MENU_TYPE_NONE;
 int g_nMessageBoxes = 0;
 int g_nInputBoxes = 0;
 int g_nFileDialogs = 0;
@@ -95,6 +98,7 @@ int g_nFolderDialogs = 0;
 InputBoxType g_InputBox[MAX_INPUTBOXES];
 SplashType g_Progress[MAX_PROGRESS_WINDOWS] = {{0}};
 SplashType g_SplashImage[MAX_SPLASHIMAGE_WINDOWS] = {{0}};
+GuiType *g_gui[MAX_GUI_WINDOWS] = {NULL};
 HWND g_hWndToolTip[MAX_TOOLTIPS] = {NULL};
 
 // Init not needed for these:
@@ -166,6 +170,9 @@ bool g_ForceKeybdHook = false;
 ToggleValueType g_ForceNumLock = NEUTRAL;
 ToggleValueType g_ForceCapsLock = NEUTRAL;
 ToggleValueType g_ForceScrollLock = NEUTRAL;
+
+ToggleValueType g_BlockInputMode = TOGGLE_DEFAULT;
+bool g_BlockInput = false;
 
 vk2_type g_sc_to_vk[SC_ARRAY_COUNT] = {{0}};
 sc2_type g_vk_to_sc[VK_ARRAY_COUNT] = {{0}};
@@ -241,6 +248,7 @@ Action g_act[] =
 	, {">=", 1, 2, NULL}, {"<", 1, 2, NULL}, {"<=", 1, 2, NULL}
 	, {"between", 1, 3, NULL}, {"not between", 1, 3, NULL}  // Min 1 to allow #2 and #3 to be the empty string.
 	, {"in", 2, 2, NULL}, {"not in", 2, 2, NULL}
+	, {"contains", 2, 2, NULL}, {"not contains", 2, 2, NULL}  // Very similar to "in" and "not in"
 	, {"is", 2, 2, NULL}, {"is not", 2, 2, NULL}
 
 	// For these, allow a minimum of zero, otherwise, the first param (WinTitle) would
@@ -288,8 +296,8 @@ Action g_act[] =
 	, {"EnvUpdate", 0, 0, NULL}
 
 	, {"RunAs", 0, 3, NULL} // user, pass, domain (0 params can be passed to disable the feature)
-	, {"Run", 1, 4, NULL}      // TargetFile, Working Dir, WinShow-Mode, OutputVarPID
-	, {"RunWait", 1, 3, NULL}  // TargetFile, Working Dir, WinShow-Mode
+	, {"Run", 1, 4, NULL}      // TargetFile, Working Dir, WinShow-Mode/UseErrorLevel, OutputVarPID
+	, {"RunWait", 1, 3, NULL}  // TargetFile, Working Dir, WinShow-Mode/UseErrorLevel
 	, {"URLDownloadToFile", 2, 2, NULL} // URL, save-as-filename
 
 	, {"GetKeyState", 2, 3, NULL} // OutputVar, key name, mode (optional) P = Physical, T = Toggle
@@ -321,6 +329,7 @@ Action g_act[] =
 	, {"StatusBarGetText", 1, 6, {2, 0}} // Output-var, part# (numeric), std. 4 window params
 	, {"StatusBarWait", 0, 8, {2, 3, 6, 0}} // Wait-text(blank ok),seconds,part#,title,text,interval,exclude-title,exclude-text
 	, {"ClipWait", 0, 1, {1, 0}} // Seconds-to-wait (0 = 500ms)
+	, {"KeyWait", 1, 2, NULL} // KeyName, Options
 
 	, {"Sleep", 1, 1, {1, 0}} // Sleep time in ms (numeric)
 	, {"Random", 1, 3, {2, 3, 0}} // Output var, Min, Max (Note: MinParams is 1 so that param2 can be blank).
@@ -351,7 +360,7 @@ Action g_act[] =
 	, {"WinKill", 0, 5, {3, 0}} // same as WinClose.
 	, {"WinMove", 0, 8, {3, 4, 5, 6, 0}} // title, text, xpos, ypos, width, height, exclude-title, exclude_text
 	// Note for WinMove: xpos/ypos/width/height can be the string "default", but that is explicitly
-	// checked for in spite of requiring it to be numeric in the definition here.
+	// checked for, even though it is required it to be numeric in the definition here.
 	, {"WinMenuSelectItem", 0, 11, NULL} // WinTitle, WinText, Menu name, 6 optional sub-menu names, ExcludeTitle/Text
 
 	, {"Process", 1, 3, NULL}  // Sub-cmd, PID/name, Param3 (use minimum of 1 param so that 2nd can be blank)
@@ -453,6 +462,7 @@ Action g_act[] =
 	, {"Edit", 0, 0, NULL}
 	, {"Reload", 0, 0, NULL}
 	, {"Menu", 2, 6, NULL}  // tray, add, name, label, options, future use
+	, {"Gui", 1, 4, NULL}  // Cmd/Add, ControlType, Options, Text
 
 	, {"ExitApp", 0, 1, NULL}  // Optional exit-code
 	, {"Shutdown", 1, 1, {1, 0}} // Seems best to make the first param (the flag/code) mandatory.

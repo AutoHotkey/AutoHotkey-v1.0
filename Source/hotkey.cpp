@@ -530,10 +530,8 @@ void Hotkey::TriggerJoyHotkeys(int aJoystickID, DWORD aButtonsNewlyDown)
 			continue;
 		// Determine if this hotkey's button is among those newly pressed:
 		if (   aButtonsNewlyDown & ((DWORD)0x01 << (shk[i]->mSC - JOYCTRL_1))   )
-			// Post it to the thread, just in case the OS tries to be "helpful" and
-			// directly call MainWindowProc() rather than actually posting the message.
-			// We want the main loop to handle this message:
-			PostThreadMessage(GetCurrentThreadId(), WM_HOTKEY, (WPARAM)i, 0);
+			// Post it to the thread because the message pump itself (not the WindowProc) will handle it:
+			PostMessage(NULL, WM_HOTKEY, (WPARAM)i, 0);
 	}
 }
 

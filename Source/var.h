@@ -23,11 +23,8 @@ GNU General Public License for more details.
 #include "util.h" // for strlcpy() & snprintf()
 EXTERN_CLIPBOARD;
 
-// Something big enough to be flexible, yet small enough to not be a problem on 99% of systems:
-#define MAX_ALLOC_MALLOC (64 * 1024 * 1024)
 #define MAX_ALLOC_SIMPLE 64  // Do not decrease this much since it is used for the sizing of some built-in variables.
 #define SMALL_STRING_LENGTH (MAX_ALLOC_SIMPLE - 1)  // The largest string that can fit in the above.
-#define DEREF_BUF_MAX MAX_ALLOC_MALLOC
 #define DEREF_BUF_EXPAND_INCREMENT (32 * 1024)
 #define ERRORLEVEL_NONE "0"
 #define ERRORLEVEL_ERROR "1"
@@ -107,7 +104,7 @@ public:
 	static ResultType ValidateName(char *aName, bool aIsRuntime = false);
 	VarSizeType Capacity() {return mCapacity;}
 	char *ToText(char *aBuf, size_t aBufSize, bool aAppendNewline)
-	// Translates this var into its text equivalent, putting the result into aBuf and
+	// Translates this var into its text equivalent, putting the result into aBuf andp
 	// returning the position in aBuf of its new string terminator.
 	{
 		if (!aBuf) return NULL;

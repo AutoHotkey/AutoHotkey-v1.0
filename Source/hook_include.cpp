@@ -858,9 +858,19 @@ inline bool CollectInput(LPARAM lParam, vk_type vk, sc_type sc, bool key_up, boo
 		}
 	}
 
-	if (g_modifiersLR_physical & (MOD_LWIN | MOD_RWIN | MOD_LCONTROL | MOD_RCONTROL | MOD_LALT | MOD_RALT))
-		// If any modifiers except SHIFT are physically down, don't transcribe the key since most users
-		// wouldn't want that.  An additional benefit of this policy is that registered hotkeys will
+	if (g_modifiersLR_physical && g_modifiersLR_physical != MOD_LSHIFT && g_modifiersLR_physical != MOD_RSHIFT
+		&& g_modifiersLR_physical != (MOD_LSHIFT & MOD_RSHIFT)
+		&& !((g_modifiersLR_physical & (MOD_LALT | MOD_RALT)) && (g_modifiersLR_physical & (MOD_LCONTROL | MOD_RCONTROL))))
+		// Since in some keybd layouts, AltGr (Ctrl+Alt) will produce valid characters (such as the @ symbol,
+		// which is Ctrl+Alt+Q in the German/IBM layout and Ctrl+Alt+2 in the Spanish layout), an attempt
+		// will now be made to transcribe all of the following modifier combinations:
+		// - Anything with no modifiers at all.
+		// - Anything that uses ONLY the shift key.
+		// - Anything with Ctrl+Alt together in it, including Ctrl+Alt+Shift, etc. -- but don't do
+		//   "anything containing the Alt key" because that causes weird side-effects with
+		//   Alt+LeftArrow/RightArrow and maybe other keys too).
+		// Older/Obsolete: If any modifiers except SHIFT are physically down, don't transcribe the key since
+		// most users wouldn't want that.  An additional benefit of this policy is that registered hotkeys will
 		// normally be excluded from the input (except those rare ones that have only SHIFT as a modifier).
 		// Note that ToAscii() will translate ^i to a tab character, !i to plain i, and many other modified
 		// letters as just the plain letter key, which we don't want.
@@ -1009,6 +1019,8 @@ inline bool CollectInput(LPARAM lParam, vk_type vk, sc_type sc, bool key_up, boo
 		if (g_HSBufLength)
 		{
 			char *cphs, *cpbuf, *cpcase_start, *cpcase_end;
+			int characters_with_case;
+			bool first_char_with_case_is_upper, first_char_with_case_has_gone_by;
 			Hotstring *hs;
 			CaseConformModes case_conform_mode;
 
@@ -1083,17 +1095,46 @@ inline bool CollectInput(LPARAM lParam, vk_type vk, sc_type sc, bool key_up, boo
 						cpcase_end = g_HSBuf + g_HSBufLength;
 						if (hs->mEndCharRequired)
 							--cpcase_end;
-						cpcase_start = cpcase_end - hs->mStringLength;
-						if (!IsCharUpper(*cpcase_start))
+						// Bug-fix for v1.0.19: First find out how many of the characters in the abbreviation
+						// have upper and lowercase versions (i.e. exclude digits, punctuation, etc):
+						for (characters_with_case = 0, first_char_with_case_is_upper = first_char_with_case_has_gone_by = false
+							, cpcase_start = cpcase_end - hs->mStringLength
+							; cpcase_start < cpcase_end; ++cpcase_start)
+							if (IsCharLower(*cpcase_start) || IsCharUpper(*cpcase_start)) // A case-potential char.
+							{
+								if (!first_char_with_case_has_gone_by)
+								{
+									first_char_with_case_has_gone_by = true;
+									if (IsCharUpper(*cpcase_start))
+										first_char_with_case_is_upper = true; // Override default.
+								}
+								++characters_with_case;
+							}
+						if (!characters_with_case) // All characters in the abbreviation are caseless.
 							case_conform_mode = CASE_CONFORM_NONE;
-						else
+						else if (characters_with_case == 1)
+							// Since there is only a single character with case potential, it seems best as
+							// a default behavior to capitalize the first letter of the replacment whenever
+							// that character was typed in uppercase.  The behavior can be overridden by
+							// turning off the case-conform mode.
+							case_conform_mode = first_char_with_case_is_upper ? CASE_CONFORM_FIRST_CAP : CASE_CONFORM_NONE;
+						else // At least two characters have case potential. If all of them are upper, use ALL_CAPS.
 						{
-							case_conform_mode = CASE_CONFORM_FIRST_CAP; // Set default.
-							for (++cpcase_start; cpcase_start < cpcase_end; ++cpcase_start)
-								if (!IsCharUpper(*cpcase_start)) // Use this to better support chars from non-English languages.
-									break;
-							if (cpcase_start == cpcase_end)
-								case_conform_mode = CASE_CONFORM_ALL_CAPS;
+							if (!first_char_with_case_is_upper) // It can't be either FIRST_CAP or ALL_CAPS.
+								case_conform_mode = CASE_CONFORM_NONE;
+							else // First char is uppercase, and if all the others are too, this will be ALL_CAPS.
+							{
+								case_conform_mode = CASE_CONFORM_FIRST_CAP; // Set default.
+								// Bug-fix for v1.0.19: Changed !IsCharUpper() below to IsCharLower() so that
+								// caseless characters such as the @ symbol do not disqualify an abbreviation
+								// from being considered "all uppercase":
+								for (cpcase_start = cpcase_end - hs->mStringLength; cpcase_start < cpcase_end; ++cpcase_start)
+									if (IsCharLower(*cpcase_start)) // Use IsCharLower to better support chars from non-English languages.
+										break; // Any lowercase char disqualifies CASE_CONFORM_ALL_CAPS.
+								if (cpcase_start == cpcase_end) // All case-possible characters are uppercase.
+									case_conform_mode = CASE_CONFORM_ALL_CAPS;
+								//else leave it at the default set above.
+							}
 						}
 					}
 

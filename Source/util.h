@@ -68,6 +68,10 @@ inline size_t strnlen(char *aBuf, size_t aMax)
 
 
 inline char *StrChrAny(char *aStr, char *aCharList)
+// Update: Yes, this seems identical to strpbrk().  However, since the corresponding code would
+// have to be added to the EXE regardless of which was used, there doesn't seem to be much
+// advantage to switching (especially since if the two differ in behavior at all, things might
+// get broken).  Another reason is the name "strpbrk()" is not as easy to remember.
 // Returns the position of the first char in aStr that is of any one of
 // the characters listed in aCharList.  Returns NULL if not found.
 {
@@ -228,7 +232,7 @@ inline char *trim (char *aStr)
 
 
 inline COLORREF rgb_to_bgr(DWORD aRGB)
-// Fancier methods are prone to problems due to byte alignment or compiler issues.
+// Fancier methods seem prone to problems due to byte alignment or compiler issues.
 {
 	return RGB(GetBValue(aRGB), GetGValue(aRGB), GetRValue(aRGB));
 }
@@ -454,18 +458,25 @@ __int64 FileTimeSecondsUntil(FILETIME *pftStart, FILETIME *pftEnd);
 //unsigned __int64 GetFileSize64(HANDLE aFileHandle);
 int snprintf(char *aBuf, size_t aBufSize, const char *aFormat, ...);
 int snprintfcat(char *aBuf, size_t aBufSize, const char *aFormat, ...);
-int strlcmp (char *aBuf1, char *aBuf2, UINT aLength1 = UINT_MAX, UINT aLength2 = UINT_MAX);
+// Not currently used by anything, so commented out to possibly reduce code size:
+//int strlcmp (char *aBuf1, char *aBuf2, UINT aLength1 = UINT_MAX, UINT aLength2 = UINT_MAX);
 int strlicmp(char *aBuf1, char *aBuf2, UINT aLength1 = UINT_MAX, UINT aLength2 = UINT_MAX);
 char *strrstr(char *aStr, char *aPattern, bool aCaseSensitive = true, int aOccurrence = 1);
 char *stristr(char *aStr, char *aPattern);
 char *StrReplace(char *Str, char *OldStr, char *NewStr = "", bool aCaseSensitive = true);
 char *StrReplaceAll(char *Str, char *OldStr, char *NewStr = "", bool aCaseSensitive = true);
 char *StrReplaceAllSafe(char *Str, size_t Str_size, char *OldStr, char *NewStr = "", bool aCaseSensitive = true);
+char *TranslateLFtoCRLF(char *aString);
 bool DoesFilePatternExist(char *aFilePattern);
 ResultType FileAppend(char *aFilespec, char *aLine, bool aAppendNewline = true);
 char *ConvertFilespecToCorrectCase(char *aFullFileSpec);
+void AssignColor(char *aColorName, COLORREF &aColor, HBRUSH &aBrush);
 COLORREF ColorNameToBGR(char *aColorName);
 char *ConvertEscapeSequences(char *aBuf, char aEscapeChar);
-bool IsStringInList(char *aStr, char *aList, bool aCaseSensitive);
+POINT CenterWindow(int aWidth, int aHeight);
+bool FontExist(HDC aHdc, char *aTypeface);
+HBITMAP LoadPicture(char *aFilespec, int aWidth = 0, int aHeight = 0);
+int CALLBACK FontEnumProc(ENUMLOGFONTEX *lpelfe, NEWTEXTMETRICEX *lpntme, DWORD FontType, LPARAM lParam);
+bool IsStringInList(char *aStr, char *aList, bool aFindExactMatch, bool aCaseSensitive);
 
 #endif

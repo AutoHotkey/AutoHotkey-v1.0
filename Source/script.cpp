@@ -116,14 +116,6 @@ Script::~Script()
 	// Only after the above do we get rid of the icon:
 	if (mCustomIcon) // A custom icon was installed
 		DestroyIcon(mCustomIcon);
-	// Since they're not associated with a window, we must free the resources for all popup menus:
-	UserMenu *menu_to_delete;
-	for (UserMenu *m = mFirstMenu; m;)
-	{
-		menu_to_delete = m;
-		m = m->mNextMenu;
-		ScriptDeleteMenu(menu_to_delete);
-	}
 	// Destroy any Progress/SplashImage windows that haven't already been destroyed.  This is necessary
 	// because sometimes these windows aren't owned by the main window:
 	int i;
@@ -152,12 +144,38 @@ Script::~Script()
 			DeleteObject(g_SplashImage[i].hbrush);
 	}
 
+	// It is safer/easier to destroy the GUI windows prior to the menus (especially the menu bars).
+	// This is because one GUI window might get destroyed and take with it a menu bar that is still
+	// in use by an existing GUI window.  GuiType::Destroy() adheres to this philosophy by detaching
+	// its menu bar prior to destroying its window:
+	for (i = 0; i < MAX_GUI_WINDOWS; ++i)
+		GuiType::Destroy(i); // Static method to avoid problems with object destroying itself.
+	for (i = 0; i < GuiType::sFontCount; ++i) // Now that GUI windows are gone, delete all GUI fonts.
+		if (GuiType::sFont[i].hfont)
+			DeleteObject(GuiType::sFont[i].hfont);
+	// The above might attempt to delete an HFONT from GetStockObject(DEFAULT_GUI_FONT), etc.
+	// But that should be harmless:
+	// MSDN: "It is not necessary (but it is not harmful) to delete stock objects by calling DeleteObject."
+
+	// Since they're not associated with a window, we must free the resources for all popup menus.
+	// Update: Even if a menu is being used as a GUI window's menu bar, see note above for why menu
+	// destruction is done AFTER the GUI windows are destroyed:
+	UserMenu *menu_to_delete;
+	for (UserMenu *m = mFirstMenu; m;)
+	{
+		menu_to_delete = m;
+		m = m->mNextMenu;
+		ScriptDeleteMenu(menu_to_delete);
+		// Above call should not return FAIL, since the only way FAIL can realistically happen is
+		// when a GUI window is still using the menu as its menu bar.  But all GUI windows are gone now.
+	}
+
 	// Since tooltip windows are unowned, they should be destroyed to avoid resource leak:
 	for (i = 0; i < MAX_TOOLTIPS; ++i)
 		if (g_hWndToolTip[i] && IsWindow(g_hWndToolTip[i]))
 			DestroyWindow(g_hWndToolTip[i]);
 
-	if (g_hFontSplash) // The splash window should already be destroyed at this point, since it's owned by main.
+	if (g_hFontSplash) // The splash window itself should auto-destroyed, since it's owned by main.
 		DeleteObject(g_hFontSplash);
 
 	// Close any open sound item to prevent hang-on-exit in certain operating systems or conditions.
@@ -299,14 +317,13 @@ ResultType Script::CreateWindows()
 	if (!mMainWindowTitle || !*mMainWindowTitle) return FAIL;  // Init() must be called before this function.
 	// Register a window class for the main window:
 	HICON hIcon = LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_MAIN)); // LoadIcon((HINSTANCE) NULL, IDI_APPLICATION)
-	WNDCLASSEX wc;
-	ZeroMemory(&wc, sizeof(wc));
+	WNDCLASSEX wc = {0};
 	wc.cbSize = sizeof(wc);
 	wc.lpszClassName = WINDOW_CLASS_MAIN;
 	wc.hInstance = g_hInstance;
 	wc.lpfnWndProc = MainWindowProc;
 	// Provided from some example code:
-	wc.style = 0;  // Aut3: CS_HREDRAW | CS_VREDRAW
+	wc.style = 0;  // CS_HREDRAW | CS_VREDRAW
 	wc.cbClsExtra = 0;
 	wc.cbWndExtra = 0;
 	wc.hIcon = hIcon;
@@ -499,15 +516,13 @@ ResultType Script::AutoExecSection()
 		// unless someone actually reports that such a thing ever happens.  Still, to reduce the chance
 		// of such a thing ever happening, it seems best to boost the timeout from 50 up to 100:
 		SET_AUTOEXEC_TIMER(100);
-		g.AllowThisThreadToBeInterrupted = false; // See AutoExecSectionTimeout() for why this var is used.
 		AutoExecSectionIsRunning = true;
 
 		++g_nThreads;
 		ResultType result = mFirstLine->ExecUntil(UNTIL_RETURN);
 		--g_nThreads;
 
-		KILL_AUTOEXEC_TIMER
-		g.AllowThisThreadToBeInterrupted = true; // Must restore to true in this case since above wasn't run as a new thread (i.e. there's nothing to resume).
+		KILL_AUTOEXEC_TIMER  // This also does "g.AllowThisThreadToBeInterrupted = true"
 		AutoExecSectionIsRunning = false;
 
 		return result;
@@ -673,6 +688,8 @@ ResultType Script::ExitApp(ExitReasons aExitReason, char *aBuf, int aExitCode)
 	RESUME_UNDERLYING_THREAD // For explanation, see comments where the macro is defined.
 	g_AllowInterruption = g_AllowInterruption_prev;  // Restore original setting.
 	if (uninterruptible_timer_was_pending)
+		// Update: An alternative to the below would be to make the current thread interruptible
+		// right before the OnExit thread interrupts it, and keep it that way.
 		// Below macro recreates the timer if it doesn't already exists (i.e. if it fired during
 		// the running of the OnExit subroutine).  Although such a firing would have had
 		// no negative impact on the OnExit subroutine (since it's kept always-uninterruptible
@@ -1563,6 +1580,17 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 		g_HotkeyModifierTimeout = ATOI(cp);  // cp was set to the right position by the above macro
 		return CONDITION_TRUE;
 	}
+	if (IS_DIRECTIVE_MATCH("#MaxMem"))
+	{
+		RETURN_IF_NO_CHAR
+		value = ATOI(cp);  // cp was set to the right position by the above macro
+		if (value > 4095)  // Don't exceed capacity of VarSizeType, which is currently a DWORD (4 gig).
+			value = 4095;  // Don't use 4096 since that might be a special/reserved value for some functions.
+		else if (value < 1)
+			value = 1;
+		g_MaxVarCapacity = (VarSizeType)value * 1024 * 1024;
+		return CONDITION_TRUE;
+	}
 	if (IS_DIRECTIVE_MATCH("#MaxThreads"))
 	{
 		RETURN_IF_NO_CHAR
@@ -1992,6 +2020,14 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 				// Set things up to be parsed as args further down.  A delimiter is inserted later below:
 				memset(operation, ' ', 7);
 				break;
+			case 'c': // "Contains"
+			case 'C':
+				if (strnicmp(operation, "contains", 8))
+					return ScriptError("The word CONTAINS was expected but not found.", aLineText);
+				action_type = ACT_IFCONTAINS;
+				// Set things up to be parsed as args further down.  A delimiter is inserted later below:
+				memset(operation, ' ', 8);
+				break;
 			case 'i':  // "is" or "is not"
 			case 'I':
 				switch (toupper(*(operation + 1)))
@@ -2018,7 +2054,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 					return ScriptError("The word IS or IN was expected but not found.", aLineText);
 				} // switch()
 				break;
-			case 'n':  // It's either "not in" or "not between"
+			case 'n':  // It's either "not in", "not between", or "not contains"
 			case 'N':
 				if (strnicmp(operation, "not", 3))
 					return ScriptError("The word NOT was expected but not found.", aLineText);
@@ -2035,6 +2071,11 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 				{
 					action_type = ACT_IFNOTBETWEEN;
 					memset(next_word, ' ', 7);
+				}
+				else if (!strnicmp(next_word, "contains", 8))
+				{
+					action_type = ACT_IFNOTCONTAINS;
+					memset(next_word, ' ', 8);
 				}
 				break;
 			default:
@@ -2816,7 +2857,6 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_STRINGCASESENSE:
 	case ACT_DETECTHIDDENWINDOWS:
 	case ACT_DETECTHIDDENTEXT:
-	case ACT_BLOCKINPUT:
 	case ACT_SETSTORECAPSLOCKMODE:
 		if (line->mArgc > 0 && !line->ArgHasDeref(1) && !line->ConvertOnOff(LINE_RAW_ARG1))
 			return ScriptError(ERR_ON_OFF, LINE_RAW_ARG1);
@@ -2834,6 +2874,11 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_SUSPEND:
 		if (line->mArgc > 0 && !line->ArgHasDeref(1) && !line->ConvertOnOffTogglePermit(LINE_RAW_ARG1))
 			return ScriptError(ERR_ON_OFF_TOGGLE_PERMIT, LINE_RAW_ARG1);
+		break;
+
+	case ACT_BLOCKINPUT:
+		if (line->mArgc > 0 && !line->ArgHasDeref(1) && !line->ConvertBlockInput(LINE_RAW_ARG1))
+			return ScriptError(ERR_BLOCKINPUT, LINE_RAW_ARG1);
 		break;
 
 	case ACT_PAUSE:
@@ -3353,9 +3398,38 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				}
 				break;
 
-			// These have a highly variable number of paramters, so are not validated here:
+			// These have a highly variable number of parameters, or are too rarely used
+			// to warrant detailed load-time checking, so are not validated here:
 			//case MENU_CMD_ADD:
+			//case MENU_CMD_COLOR:
 			//case MENU_CMD_ICON:
+			}
+		}
+		break;
+
+	case ACT_GUI:
+		if (line->mArgc > 0 && !line->ArgHasDeref(1))
+		{
+			GuiCommands gui_cmd = line->ConvertGuiCommand(LINE_RAW_ARG1);
+
+			switch (gui_cmd)
+			{
+			case GUI_CMD_INVALID:
+				return ScriptError(ERR_GUICOMMAND, LINE_RAW_ARG1);
+			case GUI_CMD_ADD:
+				if (line->mArgc > 1 && !line->ArgHasDeref(2) && !line->ConvertGuiControl(LINE_RAW_ARG2))
+					return ScriptError(ERR_GUICONTROL, LINE_RAW_ARG2);
+				break;
+			case GUI_CMD_CANCEL:
+			case GUI_CMD_DESTROY:
+				if (line->mArgc > 1)
+					return ScriptError("Parameter #2 and beyond should be omitted in this case.", LINE_RAW_ARG2);
+				break;
+			case GUI_CMD_SUBMIT:
+			case GUI_CMD_MENU:
+				if (line->mArgc > 2)
+					return ScriptError("Parameter #3 and beyond should be omitted in this case.", LINE_RAW_ARG3);
+				break;
 			}
 		}
 		break;
@@ -3543,13 +3617,6 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				if (strlen(LINE_RAW_ARG2) > 1 || !strchr("RA", toupper(*LINE_RAW_ARG2)))
 					return ScriptError("Parameter #2 must be either blank, R, A, or a variable reference."
 						, LINE_RAW_ARG2);
-		break;
-
-	case ACT_RUN:
-	case ACT_RUNWAIT:
-		if (*LINE_RAW_ARG3 && !line->ArgHasDeref(3))
-			if (line->ConvertRunMode(LINE_RAW_ARG3) == SW_SHOWNORMAL)
-				return ScriptError(ERR_RUN_SHOW_MODE, LINE_RAW_ARG3);
 		break;
 
 	case ACT_REPEAT: // These types of loops are always "NORMAL".
@@ -4122,7 +4189,7 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 			// can be constructed.  Going much larger than 1000 seems unwise since ExecUntil()
 			// will have to recurse for each nest-level, possibly resulting in stack overflow
 			// if things get too deep (though I think most/all(?) versions of Windows will
-			// dynamically grow the stack to try to keep up:
+			// dynamically grow the stack to try to keep up):
 			if (nest_level > 1000)
 			{
 				abort = true; // So that the caller doesn't also report an error.
@@ -4383,7 +4450,7 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 					return NULL; // Error was already displayed by called function.
 			break;
 
-		// These next 3 must also be done here (i.e. *after* all the script lines have been added),
+		// These next 4 must also be done here (i.e. *after* all the script lines have been added),
 		// so that labels both above and below this line can be resolved:
 		case ACT_ONEXIT:
 			if (*LINE_RAW_ARG1 && !line->ArgHasDeref(1))
@@ -4549,10 +4616,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
 			// it did, it might interfere with the fact that some other code might already be using
 			// g.AllowThisThreadToBeInterrupted again for its own purpose:
 			if (g.UninterruptedLineCount > g_script.mUninterruptedLineCountMax)
-			{
-				KILL_UNINTERRUPTIBLE_TIMER
-				g.AllowThisThreadToBeInterrupted = true;
-			}
+				MAKE_THREAD_INTERRUPTIBLE
 			else
 				// Incrementing this unconditionally makes it a cruder measure than g.LinesPerCycle,
 				// but it seems okay to be less accurate for this purpose:
@@ -4688,8 +4752,8 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
 					line = jump_to_line;
 				else // Do the normal clean-up for an IF statement:
 				{
-					line = line->mRelatedLine;  // Now line is either the IF's else or the end of the if-stmt.
-					if (line == NULL)
+					// Set line to be either the IF's else or the end of the if-stmt:
+					if (   !(line = line->mRelatedLine)   )
 						// The preparser has ensured that the only time this can happen is when
 						// the end of the script has been reached (i.e. this if-statement
 						// has no else and it's the last statement in the script):
@@ -4705,8 +4769,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
 			}
 			else // if_condition == CONDITION_FALSE
 			{
-				line = line->mRelatedLine;  // Set to IF's related line.
-				if (line == NULL)
+				if (   !(line = line->mRelatedLine)   )  // Set to IF's related line.
 					// The preparser has ensured that this can only happen if the end of the script
 					// has been reached.  UPDATE: Probably can't happen anymore since all scripts
 					// are now provided with a terminating ACT_EXIT:
@@ -5333,8 +5396,15 @@ inline ResultType Line::EvaluateCondition()
 
 	case ACT_IFIN:
 	case ACT_IFNOTIN:
-		if_condition = IsStringInList(ARG1, ARG2, g.StringCaseSense);
+		if_condition = IsStringInList(ARG1, ARG2, true, g.StringCaseSense);
 		if (mActionType == ACT_IFNOTIN)
+			if_condition = !if_condition;
+		break;
+
+	case ACT_IFCONTAINS:
+	case ACT_IFNOTCONTAINS:
+		if_condition = IsStringInList(ARG1, ARG2, false, g.StringCaseSense);
+		if (mActionType == ACT_IFNOTCONTAINS)
 			if_condition = !if_condition;
 		break;
 
@@ -6068,6 +6138,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	ResultType result;  // General purpose.
 	HANDLE running_process; // For RUNWAIT
 	DWORD exit_code; // For RUNWAIT
+	bool do_selective_blockinput, blockinput_prev;  // For the mouse commands.
 
 	// Even though the loading-parser already checked, check again, for now,
 	// at least until testing raises confidence.  UPDATE: Don't this because
@@ -6195,8 +6266,8 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		// realized that it's impossible to "retrieve" the value of an env var that has spaces since
 		// there is no EnvGet() command (EnvGet() is implicit whenever an undefined or blank script
 		// variable is dereferenced).  For now, this is documented here as a known limitation.
-		g_ErrorLevel->Assign(SetEnvironmentVariable(ARG1, ARG2) ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
-		return OK;
+		return g_ErrorLevel->Assign(SetEnvironmentVariable(ARG1, ARG2) ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
+
 	case ACT_ENVUPDATE:
 	{
 		// From the AutoIt3 source:
@@ -6204,10 +6275,9 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		// vs. SMTO_NORMAL.  Since I'm not sure why, I'm leaving it that way for now:
 		ULONG nResult;
 		if (SendMessageTimeout(HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM)"Environment", SMTO_BLOCK, 15000, &nResult))
-			g_ErrorLevel->Assign(ERRORLEVEL_NONE);
+			return g_ErrorLevel->Assign(ERRORLEVEL_NONE);
 		else
-			g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
-		return OK;
+			return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
 	}
 
 	case ACT_URLDOWNLOADTOFILE:
@@ -6237,13 +6307,32 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			mbstowcs(g_script.mRunAsDomain, ARG3, RUNAS_ITEM_SIZE);
 		}
 		return OK;
-	case ACT_RUN: // Be sure to pass NULL for 2nd param:
-		return g_script.ActionExec(ARG1, NULL, ARG2, true, ARG3, NULL, true, ResolveVarOfArg(3));
+
+	case ACT_RUN: // Be sure to pass NULL for 2nd param.
+		if (stristr(ARG3, "UseErrorLevel"))
+			return g_ErrorLevel->Assign(g_script.ActionExec(ARG1, NULL, ARG2, false, ARG3, NULL, true
+				, ResolveVarOfArg(3)) ? ERRORLEVEL_NONE : "ERROR");
+			// The special string ERROR is used, rather than a number like 1, because currently
+			// RunWait might in the future be able to return any value, including 259 (STATUS_PENDING).
+		else // If launch fails, display warning dialog and terminate current thread.
+			return g_script.ActionExec(ARG1, NULL, ARG2, true, ARG3, NULL, true, ResolveVarOfArg(3));
+
 	case ACT_RUNWAIT:
-		if (!g_script.ActionExec(ARG1, NULL, ARG2, true, ARG3, &running_process, true, NULL))
-			return FAIL;
-		// else fall through to the below.
+		if (stristr(ARG3, "UseErrorLevel"))
+		{
+			if (!g_script.ActionExec(ARG1, NULL, ARG2, false, ARG3, &running_process, true, NULL))
+				return g_ErrorLevel->Assign("ERROR"); // See above comment for explanation.
+			//else fall through to the waiting-phase of the operation.
+			// Above: The special string ERROR is used, rather than a number like 1, because currently
+			// RunWait might in the future be able to return any value, including 259 (STATUS_PENDING).
+		}
+		else // If launch fails, display warning dialog and terminate current thread.
+			if (!g_script.ActionExec(ARG1, NULL, ARG2, true, ARG3, &running_process, true, NULL))
+				return FAIL;
+			//else fall through to the waiting-phase of the operation.
+
 	case ACT_CLIPWAIT:
+	case ACT_KEYWAIT:
 	case ACT_WINWAIT:
 	case ACT_WINWAITCLOSE:
 	case ACT_WINWAITACTIVE:
@@ -6252,7 +6341,49 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		bool wait_indefinitely;
 		int sleep_duration;
 		DWORD start_time;
-		if (   (mActionType != ACT_RUNWAIT && mActionType != ACT_CLIPWAIT && *ARG3)
+		// For ACT_KEYWAIT:
+		bool wait_for_keydown;
+		KeyStateTypes key_state_type;
+		JoyControls joy;
+		int joystick_id;
+
+		if (mActionType == ACT_KEYWAIT)
+		{
+			if (   !(vk = TextToVK(ARG1))   )
+			{
+				if (   !(joy = (JoyControls)ConvertJoy(ARG1, &joystick_id))   ) // Not a valid key name.
+					// Indicate immediate timeout (if timeout was specified) or error.
+					return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+				if (!IS_JOYSTICK_BUTTON(joy)) // Currently, only buttons are supported.
+					return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+			}
+			// Set defaults:
+			wait_for_keydown = false;  // The default is to wait for the key to be released.
+			key_state_type = KEYSTATE_PHYSICAL;  // Since physical is more often used.
+			wait_indefinitely = true;
+			sleep_duration = 0;
+			for (char *cp = ARG2; *cp; ++cp)
+			{
+				switch(toupper(*cp))
+				{
+				case 'D':
+					wait_for_keydown = true;
+					break;
+				case 'L':
+					key_state_type = KEYSTATE_LOGICAL;
+					break;
+				case 'T':
+					// Although ATOF() supports hex, it's been documented in the help file that hex should
+					// not be used (see comment above) so if someone does it anyway, some option letters
+					// might be misinterpreted:
+					wait_indefinitely = false;
+					sleep_duration = (int)(ATOF(cp + 1) * 1000);
+					start_time = GetTickCount();
+					break;
+				}
+			}
+		}
+		else if (   (mActionType != ACT_RUNWAIT && mActionType != ACT_CLIPWAIT && *ARG3)
 			|| (mActionType == ACT_CLIPWAIT && *ARG1)   )
 		{
 			// Since the param containing the timeout value isn't blank, it must be numeric,
@@ -6335,6 +6466,18 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 				if (IsClipboardFormatAvailable(CF_TEXT) || IsClipboardFormatAvailable(CF_HDROP))
 					return OK;
 				break;
+			case ACT_KEYWAIT:
+				if (vk) // Waiting for key or mouse button, not joystick.
+				{
+					if (ScriptGetKeyState(vk, key_state_type) == wait_for_keydown)
+						return OK;
+				}
+				else // Waiting for joystick button
+				{
+					if ((bool)ScriptGetJoyState(joy, joystick_id, NULL) == wait_for_keydown)
+						return OK;
+				}
+				break;
 			case ACT_RUNWAIT:
 				// Pretty nasty, but for now, nothing is done to prevent an infinite loop.
 				// In the future, maybe OpenProcess() can be used to detect if a process still
@@ -6345,7 +6488,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 					GetExitCodeProcess(running_process, &exit_code);
 				else // it can be NULL in the case of launching things like "find D:\" or "www.yahoo.com"
 					exit_code = 0;
-				if (exit_code != STATUS_PENDING)
+				if (exit_code != STATUS_PENDING) // STATUS_PENDING == STILL_ACTIVE
 				{
 					if (running_process)
 						CloseHandle(running_process);
@@ -6357,8 +6500,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 					// to check against a return value of -1, for example, which I suspect many apps
 					// return.  AutoIt3 (and probably 2) use a signed int as well, so that is another
 					// reason to keep it this way:
-					g_ErrorLevel->Assign((int)exit_code);
-					return OK;
+					return g_ErrorLevel->Assign((int)exit_code);
 				}
 				break;
 			}
@@ -6366,11 +6508,8 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			// Must cast to int or any negative result will be lost due to DWORD type:
 			if (wait_indefinitely || (int)(sleep_duration - (GetTickCount() - start_time)) > SLEEP_INTERVAL_HALF)
 				MsgSleep(INTERVAL_UNSPECIFIED); // INTERVAL_UNSPECIFIED performs better.
-			else
-			{
-				g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Since it timed out, we override the default with this.
-				return OK;  // Done waiting.
-			}
+			else // Done waiting.
+				return g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Since it timed out, we override the default with this.
 		} // for()
 		break; // Never executed, just for safety.
 	}
@@ -6830,7 +6969,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		return PerformSort(ARG1, ARG2);
 
 	case ACT_GETKEYSTATE:
-		return ScriptGetKeyState(ARG2, ARG3);
+		return GetKeyJoyState(ARG2, ARG3);
 
 	case ACT_RANDOM:
 	{
@@ -7245,10 +7384,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		else // Use the new, AutoIt3 method.
 			H += min_height;
 
-		RECT rect;
-		SystemParametersInfo(SPI_GETWORKAREA, 0, &rect, 0);  // Get Desktop rect excluding task bar.
-		int xpos = (rect.right - W)/2;  // Center splash horizontally
-		int ypos = (rect.bottom - H)/2; // Center splash vertically
+		POINT pt = CenterWindow(W, H);  // Determine how to center the window in the region that excludes the task bar.
 
 		// My: Probably not to much overhead to do this, though it probably would
 		// perform better to resize and "re-text" the existing window rather than
@@ -7268,9 +7404,9 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		// In addition, making it an owned window should automatically cause it to be
 		// destroyed when it's parent window is destroyed:
 		g_hWndSplash = CreateWindowEx(WS_EX_TOPMOST, WINDOW_CLASS_SPLASH, ARG3  // ARG3 is the window title
-			, WS_DISABLED|WS_POPUP|WS_CAPTION, xpos, ypos, W, H
-			, g_hWnd, (HMENU)NULL, g_hInstance, NULL);
+			, WS_DISABLED|WS_POPUP|WS_CAPTION, pt.x, pt.y, W, H, g_hWnd, (HMENU)NULL, g_hInstance, NULL);
 
+		RECT rect;
 		GetClientRect(g_hWndSplash, &rect);	// get the client size
 
 		// CREATE static label full size of client area
@@ -7335,6 +7471,23 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		SendKeys(ARG1, mActionType == ACT_SENDRAW);
 		return OK;
 
+
+	// Macros used by the Mouse commands.  These macros are executed here rather than inside the various
+	// MouseXXX() functions because some of those functions call the others.  Notes:
+	// Turn it on unconditionally even if it was on, since Ctrl-Alt-Del might have disabled it.
+	// Turn it back off only if it wasn't ON before we started.
+	#define MOUSE_BLOCKINPUT_ON \
+		if (do_selective_blockinput = (g_BlockInputMode == TOGGLE_MOUSE || g_BlockInputMode == TOGGLE_SENDANDMOUSE) \
+			&& g_os.IsWinNT4orLater())\
+		{\
+			blockinput_prev = g_BlockInput;\
+			ScriptBlockInput(true);\
+		}
+	#define MOUSE_BLOCKINPUT_OFF \
+	if (do_selective_blockinput && !blockinput_prev)\
+		ScriptBlockInput(false);
+
+
 	case ACT_MOUSECLICKDRAG:
 		if (   !(vk = ConvertMouseButton(ARG1, false))   )
 			return LineError(ERR_MOUSE_BUTTON ERR_ABORT, FAIL, ARG1);
@@ -7346,8 +7499,10 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		// current mouse position:
 		x = *ARG2 ? ATOI(ARG2) : COORD_UNSPECIFIED;
 		y = *ARG3 ? ATOI(ARG3) : COORD_UNSPECIFIED;
+		MOUSE_BLOCKINPUT_ON
 		MouseClickDrag(vk, x, y, ATOI(ARG4), ATOI(ARG5), *ARG6 ? ATOI(ARG6) : g.DefaultMouseSpeed
 			, toupper(*ARG7) == 'R');
+		MOUSE_BLOCKINPUT_OFF
 		return OK;
 
 	case ACT_MOUSECLICK:
@@ -7357,8 +7512,10 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			return LineError(ERR_MOUSE_COORD ERR_ABORT, FAIL, ARG2);
 		x = *ARG2 ? ATOI(ARG2) : COORD_UNSPECIFIED;
 		y = *ARG3 ? ATOI(ARG3) : COORD_UNSPECIFIED;
+		MOUSE_BLOCKINPUT_ON
 		MouseClick(vk, x, y, *ARG4 ? ATOI(ARG4) : 1, *ARG5 ? ATOI(ARG5) : g.DefaultMouseSpeed, *ARG6
 			, toupper(*ARG7) == 'R');
+		MOUSE_BLOCKINPUT_OFF
 		return OK;
 
 	case ACT_MOUSEMOVE:
@@ -7366,7 +7523,9 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			return LineError(ERR_MOUSE_COORD ERR_ABORT, FAIL, ARG1);
 		x = *ARG1 ? ATOI(ARG1) : COORD_UNSPECIFIED;
 		y = *ARG2 ? ATOI(ARG2) : COORD_UNSPECIFIED;
+		MOUSE_BLOCKINPUT_ON
 		MouseMove(x, y, *ARG3 ? ATOI(ARG3) : g.DefaultMouseSpeed, toupper(*ARG4) == 'R');
+		MOUSE_BLOCKINPUT_OFF
 		return OK;
 
 	case ACT_MOUSEGETPOS:
@@ -7453,6 +7612,9 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	case ACT_MENU:
 		return g_script.PerformMenu(FIVE_ARGS);
 
+	case ACT_GUI:
+		return g_script.PerformGui(FOUR_ARGS);
+
 	case ACT_SETCONTROLDELAY: g.ControlDelay = ATOI(ARG1); return OK;
 	case ACT_SETWINDELAY: g.WinDelay = ATOI(ARG1); return OK;
 	case ACT_SETKEYDELAY: g.KeyDelay = ATOI(ARG1); return OK;
@@ -7531,8 +7693,22 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			g.DetectHiddenText = (toggle == TOGGLED_ON);
 		return OK;
 	case ACT_BLOCKINPUT:
-		if (   (toggle = ConvertOnOff(ARG1, NEUTRAL)) != NEUTRAL   )
-			BlockInput(toggle == TOGGLED_ON);
+		switch (toggle = ConvertBlockInput(ARG1))
+		{
+		case TOGGLED_ON:
+			ScriptBlockInput(true);
+			break;
+		case TOGGLED_OFF:
+			ScriptBlockInput(false);
+			break;
+		case TOGGLE_SEND:
+		case TOGGLE_MOUSE:
+		case TOGGLE_SENDANDMOUSE:
+		case TOGGLE_DEFAULT:
+			g_BlockInputMode = toggle;
+			break;
+		// default (NEUTRAL or TOGGLE_INVALID): do nothing.
+		}
 		return OK;
 
 	////////////////////////////////////////////////////////////////////////////////////////
@@ -7583,9 +7759,9 @@ ResultType Line::ExpandArgs()
 	if (space_needed == VARSIZE_ERROR)
 		return FAIL;  // It will have already displayed the error.
 
-	if (space_needed > DEREF_BUF_MAX)
+	if (space_needed > g_MaxVarCapacity)
 		// Dereferencing the variables in this line's parameters would exceed the allowed size of the temp buffer:
-		return LineError("Variables too large" ERR_ABORT); // Short msg since so rare.
+		return LineError("Variable is too large (see #MaxMem in the help file)." ERR_ABORT);
 
 	// Only allocate the buf at the last possible moment,
 	// when it's sure the buffer will be used (improves performance when only a short
@@ -7993,6 +8169,7 @@ ResultType Line::Deref(Var *aOutputVar, char *aBuf)
 	} // for() (first and second passes)
 
 	*dest = '\0';  // Terminate the output variable.
+	aOutputVar->Length() = (VarSizeType)strlen(aOutputVar->Contents());  // Update to actual in case estimate was too large.
 	return aOutputVar->Close();  // In case it's the clipboard.
 }
 
@@ -8445,7 +8622,7 @@ ResultType Line::ChangePauseState(ToggleValueType aChangeTo)
 
 
 
-ResultType Line::BlockInput(bool aEnable)
+ResultType Line::ScriptBlockInput(bool aEnable)
 // Adapted from the AutoIt3 source.
 // Always returns OK for caller convenience.
 {
@@ -8454,8 +8631,11 @@ ResultType Line::BlockInput(bool aEnable)
 	// at all otherwise).
 	typedef void (CALLBACK *BlockInput)(BOOL);
 	static BlockInput lpfnDLLProc = (BlockInput)GetProcAddress(GetModuleHandle("User32.dll"), "BlockInput");
+	// Always turn input ON/OFF even if g_BlockInput says its already in the right state.  This is because
+	// BlockInput can be externally and undetectibly disabled, e.g. if the user presses Ctrl-Alt-Del:
 	if (lpfnDLLProc)
 		(*lpfnDLLProc)(aEnable ? TRUE : FALSE);
+	g_BlockInput = aEnable;
 	return OK;  // By design, it never returns FAIL.
 }
 
@@ -8969,6 +9149,10 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 			return FAIL;
 		}
 		SHELLEXECUTEINFO sei = {0};
+		// sei.hwnd is left NULL to avoid potential side-effects with having a hidden window be the parent.
+		// However, doing so may result in the launched app appearing on a different monitor than the
+		// script's main window appears on (for multimonitor systems).  This seems fairly inconsequential
+		// since scripted workarounds are possible.
 		sei.cbSize = sizeof(sei);
 		// Below: "indicate that the hProcess member receives the process handle" and not to display error dialog:
 		sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;

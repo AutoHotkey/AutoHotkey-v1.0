@@ -66,7 +66,7 @@ enum enum_act {
 , ACT_REPEAT // Never parsed directly, only provided as a translation target for the old command (see other notes).
 , ACT_ELSE   // Parsed at a lower level than most commands to support same-line ELSE-actions (e.g. "else if").
 , ACT_IFEQUAL, ACT_IFNOTEQUAL, ACT_IFGREATER, ACT_IFGREATEROREQUAL, ACT_IFLESS, ACT_IFLESSOREQUAL
-, ACT_IFBETWEEN, ACT_IFNOTBETWEEN, ACT_IFIN, ACT_IFNOTIN, ACT_IFIS, ACT_IFISNOT
+, ACT_IFBETWEEN, ACT_IFNOTBETWEEN, ACT_IFIN, ACT_IFNOTIN, ACT_IFCONTAINS, ACT_IFNOTCONTAINS, ACT_IFIS, ACT_IFISNOT
 , ACT_FIRST_COMMAND // i.e the above aren't considered commands for parsing/searching purposes.
 , ACT_IFWINEXIST = ACT_FIRST_COMMAND
 , ACT_IFWINNOTEXIST, ACT_IFWINACTIVE, ACT_IFWINNOTACTIVE
@@ -86,7 +86,7 @@ enum enum_act {
 , ACT_COORDMODE, ACT_SETDEFAULTMOUSESPEED, ACT_MOUSEMOVE, ACT_MOUSECLICK, ACT_MOUSECLICKDRAG, ACT_MOUSEGETPOS
 , ACT_STATUSBARGETTEXT
 , ACT_STATUSBARWAIT
-, ACT_CLIPWAIT
+, ACT_CLIPWAIT, ACT_KEYWAIT
 , ACT_SLEEP, ACT_RANDOM
 , ACT_GOTO, ACT_GOSUB, ACT_ONEXIT, ACT_HOTKEY, ACT_SETTIMER, ACT_THREAD, ACT_RETURN, ACT_EXIT
 , ACT_LOOP, ACT_BREAK, ACT_CONTINUE
@@ -118,7 +118,7 @@ enum enum_act {
 , ACT_AUTOTRIM, ACT_STRINGCASESENSE, ACT_DETECTHIDDENWINDOWS, ACT_DETECTHIDDENTEXT, ACT_BLOCKINPUT
 , ACT_SETNUMLOCKSTATE, ACT_SETSCROLLLOCKSTATE, ACT_SETCAPSLOCKSTATE, ACT_SETSTORECAPSLOCKMODE
 , ACT_KEYHISTORY, ACT_LISTLINES, ACT_LISTVARS, ACT_LISTHOTKEYS
-, ACT_EDIT, ACT_RELOAD, ACT_MENU
+, ACT_EDIT, ACT_RELOAD, ACT_MENU, ACT_GUI
 , ACT_EXITAPP
 , ACT_SHUTDOWN
 // Make these the last ones before the count so they will be less often processed.  This helps
@@ -163,13 +163,33 @@ enum enum_act_old {
 	if (threads_are_attached)\
 		AttachThreadInput(my_thread, target_thread, FALSE);
 
+// Notes about the below macro:
+// One of the menus in the menu bar has been displayed, and the we know the user is is still in
+// the menu bar, even moving to different menus and/or menu items, until WM_EXITMENULOOP is received.
+// Note: It seems that when window's menu bar is being displayed/navigated by the user, our thread
+// is tied up in a message loop other than our own.  In other words, it's very similar to the
+// TrackPopupMenuEx() call used to handle the tray menu, which is why g_MenuIsVisible can be used
+// for both types of menus to indicate to MainWindowProc() that timed subroutines should not be
+// checked or allowed to launch during such times.  Also, "break" is used rather than "return 0"
+// to let DefWindowProc()/DefaultDlgProc() take whatever action it needs to do for these.
+#define HANDLE_MENU_LOOP \
+	case WM_ENTERMENULOOP:\
+		g_MenuIsVisible = MENU_TYPE_BAR;\
+		break;\
+	case WM_EXITMENULOOP:\
+		g_MenuIsVisible = MENU_TYPE_NONE;\
+		break;
+
 #define IS_PERSISTENT (Hotkey::sHotkeyCount || Hotstring::sHotstringCount || Hotkey::HookIsActive() || g_persistent)
 
 // The starting ID is arbitrary, but it seems best to avoid low IDs to avoid any chance of
 // a conflict with system menu id's, for example (though this is unlikely since I believe
 // they all  generate WM_SYSCOMMAND vs. WM_COMMAND).  Also need to avoid a conflict with the
-// main menu's IDs in resource.h.  ID_TRAY_USER is the id of the first user defined menu item
-// (i.e. if the script uses the MENU command to customize the tray menu).
+// main menu's IDs in resource.h.  Finally, for GUI windows, need to avoid conflicts with
+// controls in each window, which are sequentially numbered between 4 and 504 or so (and starting
+// at 16000 here should give it room to grow).
+// ID_TRAY_USER is the id of the first user defined menu item (i.e. if the script uses the MENU
+// command to customize the tray menu).
 enum TrayMenuItems {ID_TRAY_OPEN = 16000, ID_TRAY_HELP, ID_TRAY_WINDOWSPY, ID_TRAY_RELOADSCRIPT
 	, ID_TRAY_EDITSCRIPT, ID_TRAY_SUSPEND, ID_TRAY_PAUSE, ID_TRAY_EXIT, ID_TRAY_USER};
 
@@ -188,6 +208,7 @@ enum TrayMenuItems {ID_TRAY_OPEN = 16000, ID_TRAY_HELP, ID_TRAY_WINDOWSPY, ID_TR
 #define ERR_MENU "Menu does not exist."
 #define ERR_SUBMENU "Submenu does not exist."
 #define ERR_MENULABEL "This menu item's target label does not exist."
+#define ERR_CONTROLLABEL "This control's target label does not exist."
 #define ERR_GROUPADD_LABEL "The target label in parameter #4 does not exist."
 #define ERR_WINDOW_PARAM "This command requires that at least one of its window parameters be non-blank."
 #define ERR_LOOP_FILE_MODE "If not blank or a variable reference, parameter #2 must be either 0, 1, 2."
@@ -196,11 +217,14 @@ enum TrayMenuItems {ID_TRAY_OPEN = 16000, ID_TRAY_HELP, ID_TRAY_WINDOWSPY, ID_TR
 #define ERR_ON_OFF_ALWAYS "If not blank or a variable reference, this parameter must be either ON, OFF, ALWAYSON, or ALWAYSOFF."
 #define ERR_ON_OFF_TOGGLE "If not blank or a variable reference, this parameter must be either ON, OFF, or TOGGLE."
 #define ERR_ON_OFF_TOGGLE_PERMIT "If not blank or a variable reference, this parameter must be either ON, OFF, TOGGLE, or PERMIT."
+#define ERR_BLOCKINPUT "Parameter #1 is not a valid BlockInput mode."
 #define ERR_TITLEMATCHMODE "TitleMatchMode must be either 1, 2, 3, slow, fast, or a variable reference."
 #define ERR_TITLEMATCHMODE2 "The variable does not contain a valid TitleMatchMode." ERR_ABORT
 #define ERR_TRANSFORMCOMMAND "Parameter #2 is not a valid transform command."
 #define ERR_MENUCOMMAND "Parameter #2 is not a valid menu command."
 #define ERR_MENUCOMMAND2 "Parameter #2's variable does not contain a valid menu command."
+#define ERR_GUICOMMAND "Parameter #1 is not a valid GUI command."
+#define ERR_GUICONTROL "Parameter #2 is not a valid GUI control type."
 #define ERR_THREADCOMMAND "Parameter #1 is not a valid thread command."
 #define ERR_MENUTRAY "Supported only for the tray menu."
 #define ERR_CONTROLCOMMAND "Parameter #1 is not a valid Control command."
@@ -212,7 +236,6 @@ enum TrayMenuItems {ID_TRAY_OPEN = 16000, ID_TRAY_HELP, ID_TRAY_WINDOWSPY, ID_TR
 #define ERR_IFMSGBOX "This line specifies an invalid MsgBox result."
 #define ERR_REG_KEY "The key name must be either HKEY_LOCAL_MACHINE, HKEY_USERS, HKEY_CURRENT_USER, HKEY_CLASSES_ROOT, HKEY_CURRENT_CONFIG, or the abbreviations for these."
 #define ERR_REG_VALUE_TYPE "The value type must be either REG_SZ, REG_EXPAND_SZ, REG_MULTI_SZ, REG_DWORD, or REG_BINARY."
-#define ERR_RUN_SHOW_MODE "Parameter #3 must be either blank, a variable reference, or one of these words: MIN, MAX, HIDE."
 #define ERR_COMPARE_TIMES "Parameter #3 must be either blank, a variable reference, or one of these words: Seconds, Minutes, Hours, Days."
 #define ERR_INVALID_DATETIME "This date-time string contains at least one invalid component."
 #define ERR_FILE_TIME "Parameter #3 must be either blank, M, C, A, or a variable reference."
@@ -302,6 +325,7 @@ BOOL CALLBACK EnumChildFindSeqNum(HWND aWnd, LPARAM lParam);
 BOOL CALLBACK EnumChildFindPoint(HWND aWnd, LPARAM lParam);
 BOOL CALLBACK EnumChildGetText(HWND aWnd, LPARAM lParam);
 LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lParam);
+bool HandleMenuItem(WORD aMenuItemID, WPARAM aGuiIndex);
 
 
 typedef UINT LineNumberType;
@@ -394,6 +418,7 @@ enum JoyControls {JOYCTRL_INVALID, JOYCTRL_XPOS, JOYCTRL_YPOS, JOYCTRL_ZPOS
 , JOYCTRL_25, JOYCTRL_26, JOYCTRL_27, JOYCTRL_28, JOYCTRL_29, JOYCTRL_30, JOYCTRL_31, JOYCTRL_32
 , JOYCTRL_BUTTON_MAX = JOYCTRL_32
 };
+#define IS_JOYSTICK_BUTTON(joy) (joy >= JOYCTRL_1 && joy <= JOYCTRL_BUTTON_MAX)
 
 enum WinGetCmds {WINGET_CMD_INVALID, WINGET_CMD_ID, WINGET_CMD_IDLAST, WINGET_CMD_PID
 	, WINGET_CMD_COUNT, WINGET_CMD_LIST
@@ -410,10 +435,35 @@ enum TransformCmds {TRANS_CMD_INVALID, TRANS_CMD_ASC, TRANS_CMD_CHR, TRANS_CMD_D
 enum MenuCommands {MENU_CMD_INVALID, MENU_CMD_SHOW, MENU_CMD_USEERRORLEVEL
 	, MENU_CMD_ADD, MENU_CMD_RENAME, MENU_CMD_CHECK, MENU_CMD_UNCHECK, MENU_CMD_TOGGLECHECK
 	, MENU_CMD_ENABLE, MENU_CMD_DISABLE, MENU_CMD_TOGGLEENABLE
-	, MENU_CMD_STANDARD, MENU_CMD_NOSTANDARD, MENU_CMD_DEFAULT, MENU_CMD_NODEFAULT
+	, MENU_CMD_STANDARD, MENU_CMD_NOSTANDARD, MENU_CMD_COLOR, MENU_CMD_DEFAULT, MENU_CMD_NODEFAULT
 	, MENU_CMD_DELETE, MENU_CMD_DELETEALL, MENU_CMD_TIP, MENU_CMD_ICON, MENU_CMD_NOICON
 	, MENU_CMD_MAINWINDOW, MENU_CMD_NOMAINWINDOW
 };
+
+enum GuiCommands {GUI_CMD_INVALID, GUI_CMD_OPTIONS, GUI_CMD_ADD, GUI_CMD_MENU, GUI_CMD_SHOW
+	, GUI_CMD_SUBMIT, GUI_CMD_CANCEL, GUI_CMD_DESTROY, GUI_CMD_FONT, GUI_CMD_COLOR
+};
+
+// Not done as an enum so that it can be a UCHAR type, which saves memory in the arrays of controls:
+typedef UCHAR GuiControls;
+#define GUI_CONTROL_INVALID      0  // This should be zero due to use of things like ZeroMemory() on the struct.
+#define GUI_CONTROL_TEXT         1
+#define GUI_CONTROL_PIC          2
+#define GUI_CONTROL_GROUPBOX     3
+#define GUI_CONTROL_BUTTON       4
+#define GUI_CONTROL_CHECKBOX     5
+#define GUI_CONTROL_RADIO        6
+#define GUI_CONTROL_LISTBOX      7
+#define GUI_CONTROL_DROPDOWNLIST 8
+#define GUI_CONTROL_COMBOBOX     9
+#define GUI_CONTROL_EDIT         10
+
+
+// Not done as an enum so that it can be a UCHAR type, which saves memory in the arrays of controls:
+typedef UCHAR GuiImplicitActions;
+#define GUI_IMPLICIT_NONE   0  // This should be zero due to use of things like ZeroMemory() on the struct.
+#define GUI_IMPLICIT_CANCEL 1
+#define GUI_IMPLICIT_CLEAR  2
 
 enum ThreadCommands {THREAD_CMD_INVALID, THREAD_CMD_PRIORITY, THREAD_CMD_INTERRUPT};
 
@@ -471,7 +521,11 @@ private:
 	ResultType StringSplit(char *aArrayName, char *aInputString, char *aDelimiterList, char *aOmitList);
 	ResultType SplitPath(char *aFileSpec);
 	ResultType PerformSort(char *aContents, char *aOptions);
-	ResultType ScriptGetKeyState(char *aKeyName, char *aOption);
+
+	ResultType GetKeyJoyState(char *aKeyName, char *aOption);
+	bool ScriptGetKeyState(vk_type aVK, KeyStateTypes aKeyStateType);
+	double ScriptGetJoyState(JoyControls aJoy, int aJoystickID, Var *aOutputVar);
+
 	ResultType DriveSpace(char *aPath, bool aGetFreeSpace);
 	ResultType DriveGet(char *aCmd, char *aValue);
 	ResultType SoundSetGet(char *aSetting, DWORD aComponentType, int aComponentInstance
@@ -1095,6 +1149,7 @@ public:
 		if (!stricmp(aBuf, "ToggleEnable")) return MENU_CMD_TOGGLEENABLE;
 		if (!stricmp(aBuf, "Standard")) return MENU_CMD_STANDARD;
 		if (!stricmp(aBuf, "NoStandard")) return MENU_CMD_NOSTANDARD;
+		if (!stricmp(aBuf, "Color")) return MENU_CMD_COLOR;
 		if (!stricmp(aBuf, "Default")) return MENU_CMD_DEFAULT;
 		if (!stricmp(aBuf, "NoDefault")) return MENU_CMD_NODEFAULT;
 		if (!stricmp(aBuf, "Delete")) return MENU_CMD_DELETE;
@@ -1105,6 +1160,53 @@ public:
 		if (!stricmp(aBuf, "MainWindow")) return MENU_CMD_MAINWINDOW;
 		if (!stricmp(aBuf, "NoMainWindow")) return MENU_CMD_NOMAINWINDOW;
 		return MENU_CMD_INVALID;
+	}
+
+	static GuiCommands ConvertGuiCommand(char *aBuf, int *aWindowIndex = NULL, char **aOptions = NULL)
+	{
+		char *colon_pos = strchr(aBuf, ':');
+		
+		// "< 3" avoids ambiguity with a future use such as "gui +cmd:whatever" while still allowing
+		// up to 99 windows, e.g. "gui 99:add
+		if (colon_pos && colon_pos - aBuf < 3)
+		{
+			if (aWindowIndex)
+				*aWindowIndex = ATOI(aBuf) - 1;
+			aBuf = omit_leading_whitespace(colon_pos + 1);  // Move the buf pointer to the location of the sub-command.
+		}
+		else
+			if (aWindowIndex)
+				*aWindowIndex = 0;  // Operate upon the default window (the first).
+		if (aOptions)
+			*aOptions = aBuf; // Return position where options start to the caller.
+		if (!*aBuf || *aBuf == '+' || *aBuf == '-') // Assume a var ref that resolves to blank is "options" (for runtime flexibility).
+			return GUI_CMD_OPTIONS;
+		if (!stricmp(aBuf, "Add")) return GUI_CMD_ADD;
+		if (!stricmp(aBuf, "Show")) return GUI_CMD_SHOW;
+		if (!stricmp(aBuf, "Submit")) return GUI_CMD_SUBMIT;
+		if (!stricmp(aBuf, "Cancel")) return GUI_CMD_CANCEL;
+		if (!stricmp(aBuf, "Destroy")) return GUI_CMD_DESTROY;
+		if (!stricmp(aBuf, "Menu")) return GUI_CMD_MENU;
+		if (!stricmp(aBuf, "Font")) return GUI_CMD_FONT;
+		if (!stricmp(aBuf, "Color")) return GUI_CMD_COLOR;
+		return GUI_CMD_INVALID;
+	}
+
+	static GuiControls ConvertGuiControl(char *aBuf)
+	{
+		if (!aBuf || !*aBuf) return GUI_CONTROL_INVALID;
+		if (!stricmp(aBuf, "Text")) return GUI_CONTROL_TEXT;
+		if (!stricmp(aBuf, "Button")) return GUI_CONTROL_BUTTON;
+		if (!stricmp(aBuf, "Checkbox")) return GUI_CONTROL_CHECKBOX;
+		if (!stricmp(aBuf, "Radio")) return GUI_CONTROL_RADIO;
+		if (!stricmp(aBuf, "DDL") || !stricmp(aBuf, "DropDownList")) return GUI_CONTROL_DROPDOWNLIST;
+		if (!stricmp(aBuf, "ComboBox")) return GUI_CONTROL_COMBOBOX;
+		if (!stricmp(aBuf, "ListBox")) return GUI_CONTROL_LISTBOX;
+		if (!stricmp(aBuf, "Edit")) return GUI_CONTROL_EDIT;
+		// Keep those seldom used at the bottom for performance:
+		if (!stricmp(aBuf, "GroupBox")) return GUI_CONTROL_GROUPBOX;
+		if (!stricmp(aBuf, "Pic") || !stricmp(aBuf, "Picture")) return GUI_CONTROL_PIC;
+		return GUI_CONTROL_INVALID;
 	}
 
 	static ThreadCommands ConvertThreadCommand(char *aBuf)
@@ -1228,6 +1330,18 @@ public:
 		return aDefault;
 	}
 
+	static ToggleValueType ConvertBlockInput(char *aBuf)
+	{
+		if (!aBuf || !*aBuf) return NEUTRAL;  // For backward compatibility, blank is not considered INVALID.
+		if (!stricmp(aBuf, "On")) return TOGGLED_ON;
+		if (!stricmp(aBuf, "Off")) return TOGGLED_OFF;
+		if (!stricmp(aBuf, "Send")) return TOGGLE_SEND;
+		if (!stricmp(aBuf, "Mouse")) return TOGGLE_MOUSE;
+		if (!stricmp(aBuf, "SendAndMouse")) return TOGGLE_SENDANDMOUSE;
+		if (!stricmp(aBuf, "Default")) return TOGGLE_DEFAULT;
+		return TOGGLE_INVALID;
+	}
+
 	static FileLoopModeType ConvertLoopMode(char *aBuf)
 	// Returns the file loop mode, or FILE_LOOP_INVALID if aBuf contains an invalid mode.
 	{
@@ -1264,10 +1378,12 @@ public:
 	// Returns the matching WinShow mode, or SW_SHOWNORMAL if none.
 	// These are also the modes that AutoIt3 uses.
 	{
+		// For v1.0.19, this was made more permissive (the use of stristr vs. stricmp) to support
+		// the optional word ErrorLevel inside this parameter:
 		if (!aBuf || !*aBuf) return SW_SHOWNORMAL;
-		if (!stricmp(aBuf, "MIN")) return SW_MINIMIZE;
-		if (!stricmp(aBuf, "MAX")) return SW_MAXIMIZE;
-		if (!stricmp(aBuf, "HIDE")) return SW_HIDE;
+		if (stristr(aBuf, "MIN")) return SW_MINIMIZE;
+		if (stristr(aBuf, "MAX")) return SW_MAXIMIZE;
+		if (stristr(aBuf, "HIDE")) return SW_HIDE;
 		return SW_SHOWNORMAL;
 	}
 
@@ -1321,7 +1437,7 @@ public:
 
 	static void ToggleSuspendState();
 	ResultType ChangePauseState(ToggleValueType aChangeTo);
-	ResultType Line::BlockInput(bool aEnable);
+	static ResultType ScriptBlockInput(bool aEnable);
 
 	Line *PreparseError(char *aErrorText);
 	// Call this LineError to avoid confusion with Script's error-displaying functions:
@@ -1405,23 +1521,19 @@ public:
 	UINT mMenuItemCount;  // The count of user-defined menu items (doesn't include the standard items, if present).
 	UserMenu *mNextMenu;  // Next item in linked list
 	HMENU mMenu;
+	bool mIsPopup;   // True if this menu was last created via CreatePopupMenu() vs. CreateMenu() (used for menu bars).
+	HBRUSH mBrush;   // Background color to apply to menu.
+	COLORREF mColor; // The color that corresponds to the above.
 
 	// Don't overload new and delete operators in this case since we want to use real dynamic memory
 	// (since menus can be read in from a file, destroyed and recreated, over and over).
 
 	UserMenu(char *aName) // Constructor
 		: mFirstMenuItem(NULL), mLastMenuItem(NULL), mDefault(NULL), mIncludeStandardItems(false)
-		, mMenuItemCount(0), mNextMenu(NULL), mMenu(NULL)
+		, mMenuItemCount(0), mNextMenu(NULL), mMenu(NULL), mIsPopup(true)
+		, mBrush(NULL), mColor(CLR_DEFAULT)
 	{
 		strlcpy(mName, aName, sizeof(mName));
-	}
-
-	~UserMenu() // Destructor
-	{
-		// The below accomplishes the following:
-		// 1) Destroys the OS menu to free resources, which (if program is exiting) ensures a clean exit.
-		// 2) Destructs the individual menu items, since they are separately dynamic.
-		DeleteAllItems();
 	}
 
 	ResultType AddItem(char *aName, UINT aMenuID, Label *aLabel, UserMenu *aSubmenu, char *aOptions);
@@ -1439,7 +1551,9 @@ public:
 	ResultType SetDefault(UserMenuItem *aMenuItem = NULL);
 	ResultType IncludeStandardItems();
 	ResultType ExcludeStandardItems();
-	ResultType Create();
+	ResultType Create(bool aCreateAsPopup = true); // Menu bars require non-popup menus.
+	void SetColor(char *aColorName, bool aApplyToSubmenus);
+	void ApplyColor(bool aApplyToSubmenus);
 	ResultType AppendStandardItems();
 	ResultType Destroy();
 	ResultType Display(bool aForceToForeground = true);
@@ -1479,6 +1593,147 @@ public:
 
 	// Don't overload new and delete operators in this case since we want to use real dynamic memory
 	// (since menus can be read in from a file, destroyed and recreated, over and over).
+};
+
+
+
+struct FontType
+{
+	#define MAX_FONT_NAME_LENGTH 63  // Longest name I've seen is 29 chars, "Franklin Gothic Medium Italic".
+	char name[MAX_FONT_NAME_LENGTH + 1];
+	int point_size; // Decided to use int vs. float to simplify the code in many places. Fractional sizes seem rarely needed.
+	int weight;
+	bool italic;
+	bool underline;
+	bool strikeout;
+	HFONT hfont;
+};
+
+struct GuiControlType
+{
+	HWND hwnd;
+	GuiControls type;
+	Var *output_var;
+	Label *jump_to_label;
+	bool label_is_running;
+	GuiImplicitActions implicit_action;
+	COLORREF color; // Color of the control's text.
+	HBITMAP hbitmap; // For PIC controls, stores the bitmap.  Might also have uses for future types of controls.
+};
+
+LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lParam);
+
+class GuiType
+{
+public:
+	#define CONTROL_ID_OFFSET (IDCANCEL + 1)
+	#define MAX_CONTROLS_PER_GUI 500
+	#define GUI_STANDARD_WIDTH_MULTIPLIER 15 // This times font size = width, if all other means of determining it are exhausted.
+	#define GUI_STANDARD_WIDTH (GUI_STANDARD_WIDTH_MULTIPLIER * sFont[mCurrentFontIndex].point_size)
+	// Edits are known to have exactly 8 pixels of non-editable vertical space within their
+	// boundaries.  But add one extra so that letters like 'g' don't hit bottom.  Other controls,
+	// such as DropDownList, probably use the same spacing:
+	#define GUI_CTL_VERTICAL_DEADSPACE 9 
+	// Below: ES_MULTILINE is required for any CRLFs in the default value to display correctly.
+	// If ES_MULTILINE is in effect: "If you do not specify ES_AUTOHSCROLL, the control automatically
+	// wraps words to the beginning of the next line when necessary."
+	// Also, ES_AUTOVSCROLL seems to have no additional effect, perhaps because this window type
+	// is considered to be a dialog. MSDN: "When the multiline edit control is not in a dialog box
+	// and the ES_AUTOVSCROLL style is specified, the edit control shows as many lines as possible
+	// and scrolls vertically when the user presses the ENTER key. If you do not specify ES_AUTOVSCROLL,
+	// the edit control shows as many lines as possible and beeps if the user presses the ENTER key when
+	// no more lines can be displayed."
+	#define GUI_EDIT_DEFAULT_STYLE_MULTI (WS_VSCROLL|ES_MULTILINE|ES_WANTRETURN)
+	#define GUI_EDIT_DEFAULT_STYLE_SINGLE ES_AUTOHSCROLL
+	HWND mHwnd;
+	// Control IDs are higher than their index in the array by the below amount.  This offset is
+	// necessary because windows that behave like dialogs automatically return IDOK and IDCANCEL in
+	// response to certain types of standard actions:
+	UINT mWindowIndex;
+	UINT mControlCount;
+	GuiControlType mControl[MAX_CONTROLS_PER_GUI];
+	UINT mDefaultButtonIndex; // Index vs. pointer is needed for some things.
+	Label *mLabelForClose, *mLabelForEscape;
+	bool mLabelForCloseIsRunning, mLabelForEscapeIsRunning;
+	DWORD mStyle; // Style of window.
+	bool mInRadioGroup; // Whether the control currently being created is inside a prior radio-group.
+	HWND mOwner;  // The window that owns this one, if any.  Note that Windows provides no way to change owners after window creation.
+	int mCurrentFontIndex;
+	COLORREF mCurrentColor;       // The default color of text in controls.
+	COLORREF mBackgroundColorWin; // The window's background color itself.
+	HBRUSH mBackgroundBrushWin;   // Brush corresponding to the above.
+	COLORREF mBackgroundColorCtl; // Background color for controls.
+	HBRUSH mBackgroundBrushCtl;   // Brush corresponding to the above.
+	int mMarginX, mMarginY, mPrevX, mPrevY, mPrevWidth, mPrevHeight, mMaxExtentRight, mMaxExtentDown;
+	bool mFirstShowing;
+
+	#define MAX_GUI_FONTS 100
+	static FontType sFont[MAX_GUI_FONTS];
+	static int sFontCount;
+
+	// Don't overload new and delete operators in this case since we want to use real dynamic memory
+	// (since GUIs can be destroyed and recreated, over and over).
+
+	// Keep the default destructor to avoid entering the "Law of the Big Three": If your class requires a
+	// copy constructor, copy assignment operator, or a destructor, then it very likely will require all three.
+
+	GuiType(int aWindowIndex) // Constructor
+		: mHwnd(NULL), mWindowIndex(aWindowIndex), mControlCount(0)
+		, mDefaultButtonIndex(UINT_MAX), mLabelForClose(NULL), mLabelForEscape(NULL)
+		, mLabelForCloseIsRunning(false), mLabelForEscapeIsRunning(false)
+		// The styles DS_CENTER and DS_3DLOOK appear to be ineffectual in this case:
+		, mStyle(WS_CAPTION|WS_MINIMIZEBOX|WS_SYSMENU|WS_CLIPSIBLINGS) // WS_CLIPCHILDREN, WS_POPUP (doesn't seem helpful currently)
+		, mInRadioGroup(false), mOwner(NULL)
+		, mCurrentFontIndex(FindOrCreateFont()) // Omit params to tell it to find or create DEFAULT_GUI_FONT.
+		, mCurrentColor(CLR_DEFAULT)
+		, mBackgroundColorWin(CLR_DEFAULT), mBackgroundBrushWin(NULL)
+		, mBackgroundColorCtl(CLR_DEFAULT), mBackgroundBrushCtl(NULL)
+		, mMarginX(COORD_UNSPECIFIED), mMarginY(COORD_UNSPECIFIED) // These will be set when the first control is added.
+		, mPrevX(0), mPrevY(0)
+		, mPrevWidth(0), mPrevHeight(0) // Needs to be zero for first control to start off at right offset.
+		, mMaxExtentRight(0), mMaxExtentDown(0)
+		, mFirstShowing(true)
+	{
+		// The array of controls is left unitialized to catch bugs.  Each control's attributes should be
+		// fully populated when it is created.
+		//ZeroMemory(mControl, sizeof(mControl));
+	}
+
+	static ResultType Destroy(UINT aWindowIndex);
+	ResultType Create();
+	ResultType AddControl(GuiControls aControlType, char *aOptions, char *aText);
+	void AddControlContent(GuiControlType &aControl, char *aContent, int aChoice);
+	void Event(UINT aControlIndex, WORD aNotifyCode);
+	ResultType Show(char *aOptions, char *aTitle);
+	ResultType PerformImplicitAction(GuiImplicitActions aImplicitAction);
+	ResultType Submit(bool aHideIt);
+	ResultType Clear();
+	ResultType Cancel();
+	ResultType Close(); // Due to SC_CLOSE, etc.
+	ResultType Escape(); // Similar to close, except typically called when the user presses ESCAPE.
+	ResultType SetCurrentFont(char *aOptions, char *aFontName);
+	static int FindOrCreateFont(char *aOptions = "", char *aFontName = "", FontType *aFoundationFont = NULL
+		, COLORREF *aColor = NULL);
+	static int FindFont(FontType &aFont);
+
+	static GuiType *FindGui(HWND aHwnd) // Find which GUI object owns the specified window.
+	{
+		#define EXTERN_GUI extern GuiType *g_gui[MAX_GUI_WINDOWS]
+		EXTERN_GUI;
+		// The loop will usually find it on the first iteration since the #1 window is default.
+		for (int i = 0; i < MAX_GUI_WINDOWS; ++i)
+			if (g_gui[i] && g_gui[i]->mHwnd == aHwnd)
+				return g_gui[i];
+		return NULL;
+	}
+
+	GuiControlType *FindControl(HWND aHwnd)
+	{
+		for (UINT u = 0; u < mControlCount; ++u)
+			if (mControl[u].hwnd == aHwnd)
+				return &mControl[u];
+		return NULL;
+	}
 };
 
 
@@ -1623,6 +1878,7 @@ public:
 		return NULL;
 	}
 
+	ResultType PerformGui(char *aCommand, char *aControlType, char *aOptions, char *aParam4);
 
 	VarSizeType GetBatchLines(char *aBuf = NULL)
 	{

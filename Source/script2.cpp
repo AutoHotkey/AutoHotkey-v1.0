@@ -207,7 +207,7 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 			else if (*(cp + 1) == '2')
 				style |= WS_DLGFRAME;
 			break;
-		case 'C': // Centered
+		case 'C': // Colors
 			if (!*(cp + 1)) // Avoids out-of-bounds when the loop's own ++cp is done.
 				break;
 			++cp; // Always increment to omit the next char from consideration by the next loop iteration.
@@ -224,11 +224,13 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 					*space_pos = '\0';
 				//else a color name can still be present if it's at the end of the string.
 				COLORREF color = ColorNameToBGR(color_str);
-				if (color == CLR_DEFAULT) // A matching color name was not found, so assume it's in hex format.
+				if (color == CLR_NONE) // A matching color name was not found, so assume it's in hex format.
 				{
 					if (strlen(color_str) > 6)
 						color_str[6] = '\0';  // Shorten to exactly 6 chars, which happens if no space/tab delimiter is present.
 					color = rgb_to_bgr(strtol(color_str, NULL, 16));
+					// if color_str does not contain something hex-numeric, black (0x00) will be assumed,
+					// which seems okay given how rare such a problem would be.
 				}
 				switch (toupper(*cp))
 				{
@@ -332,8 +334,8 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 			}
 			break;
 		// Otherwise: Ignore other characters, such as the digits that occur after the P/X/Y option letters.
-		}
-	}
+		} // switch()
+	} // for()
 
 	HDC hdc = CreateDC("DISPLAY", NULL, NULL, NULL);
 	int pixels_per_point_y = GetDeviceCaps(hdc, LOGPIXELSY);
@@ -447,7 +449,7 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 		// that is 25% larger than the default size (since the default size itself is used for aSubtext).
 		// On a typical system, the default GUI font's point size is 8, so this will make it 10 by default.
 		// Also, it appears that changing the system's font size in Control Panel -> Display -> Appearance
-		// does not affect the reported default font size.  Thus, the default is probably 8 for most/all
+		// does not affect the reported default font size.  Thus, the default is probably 8/9 for most/all
 		// XP systems and probably other OSes as well.
 		// By specifying PROOF_QUALITY the nearest matching font size should be chosen, which should avoid
 		// any scaling artifacts that might be caused if default_gui_font_height is not 8.
@@ -455,6 +457,9 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 			, 0, 0, 0, font_weight1 ? font_weight1 : FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET, OUT_TT_PRECIS
 			, CLIP_DEFAULT_PRECIS, PROOF_QUALITY, FF_DONTCARE, *aFontName ? aFontName : default_font_name))   )
 			// Call it again with default font in case above failed due to non-existent aFontName.
+			// Update: I don't think this actually does any good, at least on XP, because it appears
+			// that CreateFont() does not fail merely due to a non-existent typeface.  But it is kept
+			// in case it ever fails for other reasons:
 			splash.hfont1 = CreateFont(font_size1 ? -MulDiv(font_size1, pixels_per_point_y, 72) : (int)(1.25 * default_gui_font_height)
 				, 0, 0, 0, font_weight1 ? font_weight1 : FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET, OUT_TT_PRECIS
 				, CLIP_DEFAULT_PRECIS, PROOF_QUALITY, FF_DONTCARE, default_font_name);
@@ -473,6 +478,9 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 			, font_weight2, 0, 0, 0, DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS
 			, PROOF_QUALITY, FF_DONTCARE, *aFontName ? aFontName : default_font_name))   )
 			// Call it again with default font in case above failed due to non-existent aFontName.
+			// Update: I don't think this actually does any good, at least on XP, because it appears
+			// that CreateFont() does not fail merely due to a non-existent typeface.  But it is kept
+			// in case it ever fails for other reasons:
 			if (font_size2 || font_weight2)
 				splash.hfont2 = CreateFont(-MulDiv(font_size2, pixels_per_point_y, 72), 0, 0, 0
 					, font_weight2, 0, 0, 0, DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS
@@ -519,20 +527,29 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 	int main_width = main_rect.right - main_rect.left;  // main.left might be slightly less than zero.
 	int main_height = main_rect.bottom - main_rect.top; // main.top might be slightly less than zero.
 
-	RECT desk_rect;
-	SystemParametersInfo(SPI_GETWORKAREA, 0, &desk_rect, 0);  // Get Desktop rect excluding task bar.
+	RECT work_rect;
+	SystemParametersInfo(SPI_GETWORKAREA, 0, &work_rect, 0);  // Get Desktop rect excluding task bar.
+	int work_width = work_rect.right - work_rect.left;  // Note that "left" won't be zero if task bar is on left!
+	int work_height = work_rect.bottom - work_rect.top;  // Note that "top" won't be zero if task bar is on top!
 
 	// Seems best (and easier) to unconditionally restrict window size to the size of the desktop,
 	// since most users would probably want that.  This can be overridden by using WinMove afterward.
-	if (main_width > desk_rect.right)
-		main_width = desk_rect.right;
-	if (main_height > desk_rect.bottom)
-		main_height = desk_rect.bottom;
+	if (main_width > work_width)
+		main_width = work_width;
+	if (main_height > work_height)
+		main_height = work_height;
 
+	// Centering doesn'tcurrently handle multi-monitor systems explicitly, since those calculations
+	// require API functions that don't exist in Win95/NT (and thus would have to be loaded
+	// dynamically to allow the program to launch).  Therefore, windows will likely wind up
+	// being centered across the total dimensions of all monitors, which usually results in
+	// half being on one monitor and half in the other.  This doesn't seem too terrible and
+	// might even be what the user wants in some cases (i.e. for really big windows).
+	// See comments above for why work_rect.left and top are added in (they aren't always zero).
 	if (xpos == COORD_UNSPECIFIED)
-		xpos = (desk_rect.right - main_width) / 2;  // Don't use splash.width.
+		xpos = work_rect.left + ((work_width - main_width) / 2);  // Don't use splash.width.
 	if (ypos == COORD_UNSPECIFIED)
-		ypos = (desk_rect.bottom - main_height) / 2; // Don't use splash.height
+		ypos = work_rect.top + ((work_height - main_height) / 2);  // Don't use splash.width.
 
 	// CREATE Main Splash Window
 	// It seems best to make this an unowned window for two reasons:
@@ -1613,8 +1630,7 @@ ResultType Line::WinMenuSelectItem(char *aTitle, char *aText, char *aMenu1, char
 
 	// Since the above didn't return, the specified search hierarchy was completely found.
 	PostMessage(target_window, WM_COMMAND, (WPARAM)menu_id, 0);
-	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-	return OK;
+	return g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 }
 
 
@@ -1632,8 +1648,7 @@ ResultType Line::ControlSend(char *aControl, char *aKeysToSend, char *aTitle, ch
 		return OK;
 	SendKeys(aKeysToSend, aSendRaw, control_window);
 	// But don't do WinDelay because KeyDelay should have been in effect for the above.
-	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-	return OK;
+	return g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 }
 
 
@@ -1784,8 +1799,7 @@ ResultType Line::ControlClick(vk_type aVK, int aClickCount, char *aOptions, char
 
 	DETACH_THREAD_INPUT
 
-	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-	return OK;
+	return g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 }
 
 
@@ -2006,8 +2020,7 @@ ResultType Line::ControlSetText(char *aControl, char *aNewText, char *aTitle, ch
 	SendMessageTimeout(control_window, WM_SETTEXT, (WPARAM)0, (LPARAM)aNewText
 		, SMTO_ABORTIFHUNG, 5000, &result);
 	DoControlDelay;
-	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-	return OK;
+	return g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 }
 
 
@@ -2029,6 +2042,8 @@ ResultType Line::ControlGetText(char *aControl, char *aTitle, char *aText
 	// PerformAssign().  Note: Using GetWindowTextTimeout() vs. GetWindowText()
 	// because it is able to get text from more types of controls (e.g. large edit controls):
 	VarSizeType space_needed = control_window ? GetWindowTextTimeout(control_window) + 1 : 1; // 1 for terminator.
+	if (space_needed > g_MaxVarCapacity) // Allow the command to succeed by truncating the text.
+		space_needed = g_MaxVarCapacity;
 
 	// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
 	// this call will set up the clipboard for writing:
@@ -2351,27 +2366,29 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 			return output_var->Assign();  // Let ErrorLevel tell the story.
 		if (!SendMessageTimeout(control_window, msg, 0, 0, SMTO_ABORTIFHUNG, 2000, &index))
 			return output_var->Assign();
-		if (index == CB_ERR)  // CB_ERR == LB_ERR
+		if (index == CB_ERR)  // CB_ERR == LB_ERR.  There is no selection (or very rarely, some other type of problem).
 			return output_var->Assign();
 		if (!SendMessageTimeout(control_window, x_msg, (WPARAM)index, 0, SMTO_ABORTIFHUNG, 2000, &length))
 			return output_var->Assign();
 		if (length == CB_ERR)  // CB_ERR == LB_ERR
 			return output_var->Assign();
-		++length;
-		if (   !(dyn_buf = (char *)calloc(256 + length, 1))   )
-			return output_var->Assign();
-		if (!SendMessageTimeout(control_window, y_msg, (WPARAM)index, (LPARAM)dyn_buf, SMTO_ABORTIFHUNG, 2000, &length))
+		// In unusual cases, MSDN says the indicated length might be longer than it actually winds up
+		// being when the item's text is retrieved.  This should be harmless, since there are many
+		// other precedents where a variable is sized to something larger than it winds up carrying.
+		// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
+		// this call will set up the clipboard for writing:
+		if (output_var->Assign(NULL, (VarSizeType)length) != OK) // It already displayed the error.
+			return FAIL;
+		if (!SendMessageTimeout(control_window, y_msg, (WPARAM)index, (LPARAM)output_var->Contents()
+			, SMTO_ABORTIFHUNG, 2000, &length))
 		{
-			free(dyn_buf);
-			return output_var->Assign();
+			output_var->Close(); // In case it's the clipboard.
+			return output_var->Assign(); // Let ErrorLevel tell the story.
 		}
-		if (length == CB_ERR)  // CB_ERR == LB_ERR
-		{
-			free(dyn_buf);
-			return output_var->Assign();
-		}
-		output_var->Assign(dyn_buf);
-		free(dyn_buf);
+		output_var->Close(); // In case it's the clipboard.
+		if (length == CB_ERR)  // Probably impossible given the way it was called above.  Also, CB_ERR == LB_ERR
+			return output_var->Assign(); // Let ErrorLevel tell the story.
+		output_var->Length() = length;  // Update to actual vs. estimated length.
 		break;
 
 	case CONTROLGET_CMD_LINECOUNT:  //Must be an Edit
@@ -2450,6 +2467,9 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 			// Since the above didn't return for start == end, this is an error because
 			// we have a selection of non-zero length, but no text to go with it!
 			return output_var->Assign();
+		// Uses calloc() because must get all the control's text so that just the selected region
+		// can be cropped out and assigned to the output variable.  Otherwise, output_var might
+		// have to be sized much larger than it would need to be:
 		if (   !(dyn_buf = (char *)calloc(256 + length, 1))   )
 			return output_var->Assign();
 		if (!SendMessageTimeout(control_window, WM_GETTEXT, (WPARAM)(length + 1), (LPARAM)dyn_buf, SMTO_ABORTIFHUNG, 2000, &length))
@@ -2526,10 +2546,9 @@ ResultType Line::ScriptPostMessage(char *aMsg, char *awParam, char *alParam, cha
 	// Use ATOI64 to support unsigned (i.e. UINT, LPARAM, and WPARAM are all 32-bit unsigned values).
 	// ATOI64 also supports hex strings in the script, such as 0xFF, which is why it's commonly
 	// used in functions such as this:
-	g_ErrorLevel->Assign(PostMessage(control_window, (UINT)ATOI64(aMsg), (LPARAM)ATOI64(awParam)
+	return g_ErrorLevel->Assign(PostMessage(control_window, (UINT)ATOI64(aMsg), (LPARAM)ATOI64(awParam)
 		, (WPARAM)ATOI64(alParam)) ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
 	// By design (since this is a power user feature), no ControlDelay is done here.
-	return OK;
 }
 
 
@@ -2759,8 +2778,8 @@ ResultType Line::WinGetTitle(char *aTitle, char *aText, char *aExcludeTitle, cha
 		return FAIL;  // It already displayed the error.
 	if (target_window)
 	{
-		output_var->Length() = (VarSizeType)GetWindowText(target_window
-			, output_var->Contents(), space_needed);
+		// Update length using the actual length, rather than the estimate provided by GetWindowTextLength():
+		output_var->Length() = (VarSizeType)GetWindowText(target_window, output_var->Contents(), space_needed);
 		if (!output_var->Length())
 			// There was no text to get or GetWindowTextTimeout() failed.
 			*output_var->Contents() = '\0';  // Safe because Assign() gave us a non-constant memory area.
@@ -2910,6 +2929,11 @@ ResultType Line::WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 		return output_var->Assign(); // Tell it not to free the memory by omitting all params.
 	}
+	// This adjustment was added because someone reported that max variable capacity was being
+	// exceeded in some cases (perhaps custom controls that retrieve large amounts of text
+	// from the disk in response to the "get text" message):
+	if (sab.total_length >= g_MaxVarCapacity) // Allow the command to succeed by truncating the text.
+		sab.total_length = g_MaxVarCapacity - 1;
 
 	// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
 	// this call will set up the clipboard for writing:
@@ -3121,8 +3145,7 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int a
 	// If the above didn't return, the pixel wasn't found in the specified region.
 	// So leave ErrorLevel set to "error" to indicate that:
 	ReleaseDC(NULL, hdc);
-	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // This value indicates "color not found".
-	return OK;
+	return g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // This value indicates "color not found".
 }
 
 
@@ -3368,175 +3391,20 @@ ResultType Line::PixelGetColor(int aX, int aY)
 
 LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lParam)
 {
-    char buf_temp[2048];  // For various uses.
 	int i;
+
+	// Detect Explorer crashes so that tray icon can be recreated.  I think this only works on Win98
+	// and beyond, since the feature was never properly implemented in Win95:
+	static UINT WM_TASKBARCREATED = RegisterWindowMessage("TaskbarCreated");
 
 	TRANSLATE_AHK_MSG(iMsg, wParam)
 	
 	switch (iMsg)
 	{
-	case WM_COMMAND: // If an application processes this message, it should return zero.
-		// See if an item was selected from the tray menu or main menu:
-		switch (LOWORD(wParam))
-		{
-		case ID_TRAY_OPEN:
-			ShowMainWindow();
-			return 0;
-		case ID_TRAY_EDITSCRIPT:
-		case ID_FILE_EDITSCRIPT:
-			g_script.Edit();
-			return 0;
-		case ID_TRAY_RELOADSCRIPT:
-		case ID_FILE_RELOADSCRIPT:
-			if (!g_script.Reload(false))
-				MsgBox("The script could not be reloaded." PLEASE_REPORT);
-			return 0;
-		case ID_TRAY_WINDOWSPY:
-		case ID_FILE_WINDOWSPY:
-			// ActionExec()'s CreateProcess() is currently done in a way that prefers enclosing double quotes:
-			*buf_temp = '"';
-			// Try GetAHKInstallDir() first so that compiled scripts running on machines that happen
-			// to have AHK installed will still be able to fetch the help file:
-			if (GetAHKInstallDir(buf_temp + 1))
-				snprintfcat(buf_temp, sizeof(buf_temp), "\\AU3_Spy.exe\"");
-			else
-				// Mostly this ELSE is here in case AHK isn't installed (i.e. the user just
-				// copied the files over without running the installer).  But also:
-				// Even if this is the self-contained version (AUTOHOTKEYSC), attempt to launch anyway in
-				// case the user has put a copy of WindowSpy in the same dir with the compiled script:
-				// ActionExec()'s CreateProcess() is currently done in a way that prefers enclosing double quotes:
-				snprintfcat(buf_temp, sizeof(buf_temp), "%sAU3_Spy.exe\"", g_script.mOurEXEDir);
-			if (!g_script.ActionExec(buf_temp, "", NULL, false))
-				MsgBox(buf_temp, 0, "Could not launch Window Spy:");
-			return 0;
-		case ID_TRAY_HELP:
-		case ID_HELP_USERMANUAL:
-			// ActionExec()'s CreateProcess() is currently done in a way that prefers enclosing double quotes:
-			*buf_temp = '"';
-			// Try GetAHKInstallDir() first so that compiled scripts running on machines that happen
-			// to have AHK installed will still be able to fetch the help file:
-			if (GetAHKInstallDir(buf_temp + 1))
-				snprintfcat(buf_temp, sizeof(buf_temp), "\\AutoHotkey.chm\"");
-			else
-				// Even if this is the self-contained version (AUTOHOTKEYSC), attempt to launch anyway in
-				// case the user has put a copy of the help file in the same dir with the compiled script:
-				// Also, for this one I saw it report failure once on Win98SE even though the help file did
-				// wind up getting launched.  Couldn't repeat it.  So in reponse to that try explicit "hh.exe":
-				snprintfcat(buf_temp, sizeof(buf_temp), "%sAutoHotkey.chm\"", g_script.mOurEXEDir);
-			if (!g_script.ActionExec("hh.exe", buf_temp, NULL, false))
-			{
-				// Try it without the hh.exe in case .CHM is associate with some other application
-				// in some OSes:
-				if (!g_script.ActionExec(buf_temp, "", NULL, false)) // Use "" vs. NULL to specify that there are no params at all.
-					MsgBox(buf_temp, 0, "Could not launch help file:");
-			}
-			return 0;
-		case ID_TRAY_SUSPEND:
-		case ID_FILE_SUSPEND:
-			Line::ToggleSuspendState();
-			return 0;
-		case ID_TRAY_PAUSE:
-		case ID_FILE_PAUSE:
-			if (!g.IsPaused && g_nThreads < 1)
-			{
-				MsgBox("The script cannot be paused while it is doing nothing.  If you wish to prevent new"
-					" hotkey subroutines from running, use Suspend instead.");
-				// i.e. we don't want idle scripts to ever be in a paused state.
-				return 0;
-			}
-			if (g.IsPaused)
-				--g_nPausedThreads;
-			else
-				++g_nPausedThreads;
-			g.IsPaused = !g.IsPaused;
-			g_script.UpdateTrayIcon();
-			CheckMenuItem(GetMenu(g_hWnd), ID_FILE_PAUSE, g.IsPaused ? MF_CHECKED : MF_UNCHECKED);
-			return 0;
-		case ID_TRAY_EXIT:
-		case ID_FILE_EXIT:
-			g_script.ExitApp(EXIT_MENU);  // More reliable than PostQuitMessage(), which has been known to fail in rare cases.
-			return 0; // If there is an OnExit subroutine, the above might not actually exit.
-		case ID_VIEW_LINES:
-			ShowMainWindow(MAIN_MODE_LINES);
-			return 0;
-		case ID_VIEW_VARIABLES:
-			ShowMainWindow(MAIN_MODE_VARS);
-			return 0;
-		case ID_VIEW_HOTKEYS:
-			ShowMainWindow(MAIN_MODE_HOTKEYS);
-			return 0;
-		case ID_VIEW_KEYHISTORY:
-			ShowMainWindow(MAIN_MODE_KEYHISTORY);
-			return 0;
-		case ID_VIEW_REFRESH:
-			ShowMainWindow(MAIN_MODE_REFRESH);
-			return 0;
-		case ID_HELP_WEBSITE:
-			if (!g_script.ActionExec("http://www.autohotkey.com", "", NULL, false))
-				MsgBox("Could not open URL http://www.autohotkey.com in default browser.");
-			return 0;
-		case ID_HELP_EMAIL:
-			if (!g_script.ActionExec("mailto:support@autohotkey.com", "", NULL, false))
-				MsgBox("Could not open URL mailto:support@autohotkey.com in default e-mail client.");
-			return 0;
-		default:
-		{
-			// See if this command ID is one of the user's custom menu items.  Due to the possibility
-			// that some items have been deleted from the menu, can't rely on comparing
-			// LOWORD(wParam) to g_script.mMenuItemCount in any way.  Just look up the ID to make sure
-			// there really is a menu item for it:
-			if (g_script.FindMenuItemByID(LOWORD(wParam)))
-			{
-				// It seems best to treat the selection of a custom menu item in a way similar
-				// to how hotkeys are handled by the hook.
-				// Post it to the thread, just in case the OS tries to be "helpful" and
-				// directly call the WindowProc (i.e. this function) rather than actually
-				// posting the message.  We don't want to be called, we want the main loop
-				// to handle this message:
-				#define HANDLE_USER_MENU(menu_id) \
-				{\
-					POST_AHK_USER_MENU(menu_id) \
-					MsgSleep(-1);\
-				}
-				HANDLE_USER_MENU(LOWORD(wParam))  // Send the menu's cmd ID.
-				// Try to maintain a list here of all the ways the script can be uninterruptible
-				// at this moment in time, and whether that uninterruptibility should be overridden here:
-				// 1) YES: g_MenuIsVisible is true (which in turn means that the script is marked
-				//    uninterruptible to prevent timed subroutines from running and possibly
-				//    interfering with menu navigation): Seems impossible because apparently 
-				//    the WM_RBUTTONDOWN must first be returned from before we're called directly
-				//    with the WM_COMMAND message corresponding to the menu item chosen by the user.
-				//    In other words, g_MenuIsVisible will be false and the script thus will
-				//    not be uninterruptible, at least not solely for that reason.
-				// 2) YES: A new hotkey or timed subroutine was just launched and it's still in its
-				//    grace period.  In this case, ExecUntil()'s call of PeekMessage() every 10ms
-				//    or so will catch the item we just posted.  But it seems okay to interrupt
-				//    here directly in most such cases.  INIT_NEW_THREAD: Newly launched
-				//    timed subroutine or hotkey subroutine.
-				// 3) YES: Script is engaged in an uninterruptible activity such as SendKeys().  In this
-				//    case, since the user has managed to get the tray menu open, it's probably
-				//    best to process the menu item with the same priority as if any other menu
-				//    item had been selected, interrupting even a critical operation since that's
-				//    probably what the user would want.  SLEEP_WITHOUT_INTERRUPTION: SendKeys,
-				//    Mouse input, Clipboard open, SetForegroundWindowEx().
-				// 4) YES: AutoExecSection(): Since its grace period is only 100ms, doesn't seem to be
-				//    a problem.  In any case, the timer would fire and briefly interrupt the menu
-				//    subroutine we're trying to launch here even if a menu item were somehow
-				//    activated in the first 100ms.
-				//
-				// IN LIGHT OF THE ABOVE, it seems best not to do the below.  In addition, the msg
-				// filtering done by MsgSleep when the script is uninterruptible now excludes the
-				// AHK_USER_MENU message (i.e. that message is always retrieved and acted upon,
-				// even when the script is uninterruptible):
-				//if (!INTERRUPTIBLE)
-				//	return 0;  // Leave the message buffered until later.
-				// Now call the main loop to handle the message we just posted (and any others):
-				return 0;
-			}
-			// else do nothing, let DefWindowProc() try to handle it.
-		}
-		} // Inner switch()
-		break;
+	case WM_COMMAND:
+		if (HandleMenuItem(LOWORD(wParam), INT_MAX)) // It was handled fully. INT_MAX says "no gui window".
+			return 0; // If an application processes this message, it should return zero.
+		break; // Otherwise, let DefWindowProc() try to handle it.
 
 	case AHK_NOTIFYICON:  // Tray icon clicked on.
 	{
@@ -3547,7 +3415,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 // to see the contents of the script:
 		case WM_LBUTTONDBLCLK:
 			if (g_script.mTrayMenu->mDefault)
-				HANDLE_USER_MENU(g_script.mTrayMenu->mDefault->mMenuID)
+				HANDLE_USER_MENU(g_script.mTrayMenu->mDefault->mMenuID, -1)
 #ifdef AUTOHOTKEYSC
 			else if (g_script.mTrayMenu->mIncludeStandardItems && g_AllowMainWindow)
 				ShowMainWindow();
@@ -3565,22 +3433,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		break;
 	} // case AHK_NOTIFYICON
 
-	case WM_ENTERMENULOOP:
-		// One of the menus in the menu bar has been displayed, and the we know the user is is still in
-		// the menu bar, even moving to different menus and/or menu items, until WM_EXITMENULOOP is received.
-		// Note: It seems that when window's menu bar is being displayed/navigated by the user, our thread
-		// is tied up in a message loop other than our own.  In other words, it's very similar to the
-		// TrackPopupMenuEx() call used to handle the tray menu, which is why g_MenuIsVisible can be used
-		// for both types of menus to indicate to MainWindowProc() that timed subroutines should not be
-		// checked or allowed to launch during such times:
-		g_MenuIsVisible = MENU_VISIBLE_MAIN;
-		break; // Let DefWindowProc() handle it from here.
-
-	case WM_EXITMENULOOP:
-		g_MenuIsVisible = MENU_VISIBLE_NONE;
-		break; // Let DefWindowProc() handle it from here.
-
-	case AHK_DIALOG:  // User defined msg sent from MsgBox() or FileSelectFile().
+	case AHK_DIALOG:  // User defined msg sent from our functions MsgBox() or FileSelectFile().
 	{
 		// Always call this to close the clipboard if it was open (e.g. due to a script
 		// line such as "MsgBox, %clipboard%" that got us here).  Seems better just to
@@ -3624,27 +3477,27 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 	case WM_HOTKEY: // As a result of this app having previously called RegisterHotkey().
 	case AHK_HOOK_HOTKEY:  // Sent from this app's keyboard or mouse hook.
 	{
-		// Post it to the thread, just in case the OS tries to be "helpful" and
-		// directly call the WindowProc (i.e. this function) rather than actually
-		// posting the message.  We don't want to be called, we want the main loop
-		// to handle this message:
-		PostThreadMessage(GetCurrentThreadId(), iMsg, wParam, lParam);
-		// The message is posted unconditionally (above), but the processing of it will be deferred
-		// if hotkeys are not allowed to be activated right now:
+		// Post it with a NULL hwnd to avoid any chance that our message pump will dispatch it
+		// back to us.  We want these events to always be handled there, where almost all new
+		// quasi-threads get launched:
+		PostMessage(NULL, iMsg, wParam, lParam);
 		if (!INTERRUPTIBLE)
-		{
-			// Used to prevent runaway hotkeys, or too many happening due to key-repeat feature.
-			// It can also be used to prevent a call to MsgSleep() from accepting new hotkeys
-			// in cases where the caller's activity might be interferred with by the launch
-			// of a new hotkey subroutine, such as reading or writing to the clipboard.
-			// Also turn on the timer so that if a dialog happens to be displayed currently,
-			// the hotkey we just posted won't be delayed until after the dialog is gone,
-			// i.e we want this hotkey to fire the moment the script becomes interruptible again.
-			// See comments in the WM_TIMER case of this function for more explanation.
-			SET_MAIN_TIMER
+			// If the script is uninterruptible, don't incur the overhead of doing a MsgSleep()
+			// right now.  Instead, let this message sit in the queue until the current quasi-
+			// thread either becomes interruptible or ends.  NOTE: THE MERE FACT that the script
+			// is uninterruptible implies that there is an instance of MsgSleep() closer on the
+			// call-stack than any dialog's message pump that might also be in the call stack
+			// beneath us.  This is because the current quasi-thread -- if displaying a dialog --
+			// is guaranteed to be interruptible (there is code to ensure this).  If some other
+			// thread interruptible a thread that was displaying dialog, by definition that new
+			// thread would have an instance of MsgSleep() closer on the call stack than the
+			// dialog's message pump.  Thus, the message we just posted above will be processed
+			// by our message pump rather than the dialogs (because ours ensures the msg queue
+			// is cleaned out prior to returning to its caller), which in turn prevents the
+			// dialog's message pump from discarding this null-hwnd message (since it doesn't
+			// know how to dispatch it).
 			return 0;
-		}
-		if (g_MenuIsVisible == MENU_VISIBLE_POPUP || (iMsg == AHK_HOOK_HOTKEY && lParam && g_hWnd == GetForegroundWindow()))
+		if (g_MenuIsVisible == MENU_TYPE_POPUP || (iMsg == AHK_HOOK_HOTKEY && lParam && g_hWnd == GetForegroundWindow()))
 		{
 			// UPDATE: Since it didn't return above, the script is interruptible, which should
 			// mean that none of the script's or thread's menus should be currently displayed.
@@ -3688,59 +3541,48 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		}
 		// Now call the main loop to handle the message we just posted (and any others):
 		MsgSleep(-1);
-		return 0; // Not sure if this is the correct return value.  It probably doesn't matter.
+		return 0;
 	}
 
 	case WM_TIMER:
-		// Since we're here, the receipt of this msg indicates that g_script.mTimerEnabledCount > 0,
-		// so it performs a little better to call it directly vs. CHECK_SCRIPT_TIMERS_IF_NEEDED.
-		// UPDATE: The WM_HOTKEY case of this function now also turns on the main timer in some
-		// cases so that hotkeys that are pressed while the script is both displaying a dialog
-		// and is uninterruptible will not get stuck in the buffer until the dialog is dismissed.
-		// Therefore, just do a quick msg check, which will also handle the script timers for us:
-		//CheckScriptTimers();
-		// More explanation:
-		// At first I was concerned that the moment ExecUntil() or anyone does a Sleep(10+) (due to
-		// SetBatchLines or whatever), the timer would be disabled by IsCycleComplete() upon return.
-		// But realistically, I don't think the following conditions can ever be true simultaneously?:
-		// 1) The timer is not enabled.
-		// 2) The script is not interruptible.
-		// 3) A dialog is displayed (it's msg pump is routing hotkey presses to MainWindowProc())
-		// I don't think it's possible (or realistically likely) for all of the above to be true, since
-		// for example the script can only be uninterruptible while it's idle-waiting-for-dialog
-		// (which is the only time hotkey presses get caught by its msg pump rather than ours, and thus
-		// get routed to MainWindowProc() rather than get caught directly by MsgSleep()) if there are
-		// timed subroutines, in which case the timer is already running anyway.  But that's just it:
-		// when there are timed subroutines, hotkeys would get blocked if they happened to be pressed at
-		// an instant when the script is uninterruptible during a short timed subroutine (and maybe even
-		// a short hotkey subroutine) that never has a chance to do any MsgSleep()'s (and this would be
-		// even more likely if the user increased the uninterruptible time via a setting).  That is why
-		// MsgSleep() is called in lieu of a direct call to CheckScriptTimers().  So the issue is that
-		// it's unlikely that the SET_MAIN_TIMER statement in the WM_HOTKEY case will ever actually turn
-		// on the timer since it will already be on in nearly all such cases (i.e. so it's really just a
-		// safety check).  And the overhead of calling MsgSleep(-1) vs. CheckScriptTimers() here isn't
-		// too much of a worry since scripts don't spend most of their time waiting for dialogs.
-		// UPDATE: Do not call MsgSleep() while the tray menu is visible because that causes long delays
+		// MSDN: "When you specify a TimerProc callback function, the default window procedure calls
+		// the callback function when it processes WM_TIMER. Therefore, you need to dispatch messages
+		// in the calling thread, even when you use TimerProc instead of processing WM_TIMER."
+		// MSDN CONTRADICTION: "You can process the message by providing a WM_TIMER case in the window
+		// procedure. Otherwise, DispatchMessage will call the TimerProc callback function specified in
+		// the call to the SetTimer function used to install the timer."
+		// In light of the above, it seems best to let the default proc handle this message if it
+		// has a non-NULL lparam:
+		if (lParam)
+			break;
+		// Otherwise, it's the main timer, which is the means by which joystick hotkeys and script timers
+		// created via the SetTimer script command continue to execute even while a dialog's message pump
+		// is running.  Even if the script is NOT INTERRUPTIBLE (which generally isn't possible, since
+		// the mere fact that we're here means that a dialog's message pump dispatched a message to us
+		// [since our msg pump would not dispatch this type of msg], which in turn means that the script
+		// should be interruptible due to DIALOG_PREP), call MsgSleep() anyway so that joystick
+		// hotkeys will be polled.  If any such hotkeys are "newly down" right now, those events queued
+		// will be buffered/queued for later, when the script becomes interruptible again.  Also, don't
+		// call CheckScriptTimers() or PollJoysticks() directly from here.  See comments at the top of
+		// those functions for why.
+		// This is an older comment, but I think it might still apply, which is why MsgSleep() is not
+		// called when a popup menu or a window's main menu is visible.  We don't really want to run the
+		// script's timed subroutines or monitor joystick hotkeys while a menu is displayed anyway:
+		// Do not call MsgSleep() while a popup menu is visible because that causes long delays
 		// sometime when the user is trying to select a menu (the user's click is ignored and the menu
 		// stays visible).  I think this is because MsgSleep()'s PeekMessage() intercepts the user's
 		// clicks and is unable to route them to TrackPopupMenuEx()'s message loop, which is the only
 		// place they can be properly processed.  UPDATE: This also needs to be done when the MAIN MENU
 		// is visible, because testing shows that that menu would otherwise become sluggish too, perhaps
-		// more rarely, when timers are running.  UPDATE: It seems pointless to call MsgSleep() (and harmful
-		// in the case where g_MenuIsVisible is true) if the script is not interruptible, so it's now called
-		// only when interrupts are possible (this also covers g_MenuIsVisible).
+		// more rarely, when timers are running.
 		// Other background info:
 		// Checking g_MenuIsVisible here prevents timed subroutines from running while the tray menu
 		// or main menu is in use.  This is documented behavior, and is desirable most of the time
 		// anyway.  But not to do this would produce strange effects because any timed subroutine
 		// that took a long time to run might keep us away from the "menu loop", which would result
-		// in the menu becoming temporarily unreponsive while the user is in it (and probably other
+		// in the menu becoming temporarily unresponsive while the user is in it (and probably other
 		// undesired effects).
-		// Also, this allows MainWindowProc() to close the popup menu upon receive of any hotkey,
-		// which is probably a good idea since most hotkeys change the foreground window and if that
-		// happens, the menu cannot be dismissed (ever?) except by selecting one of the items in the
-		// menu (which is often undesirable).
-		if (INTERRUPTIBLE)
+		if (!g_MenuIsVisible)
 			MsgSleep(-1);
 		return 0;
 
@@ -3784,7 +3626,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 				break;
 			case WM_ENDSESSION: // MSDN: "A window receives this message through its WindowProc function."
 				if (wParam) // the session is being ended (otherwise, a prior WM_QUERYENDSESSION was aborted).
-					g_script.ExitApp(lParam & ENDSESSION_LOGOFF ? EXIT_LOGOFF : EXIT_SHUTDOWN);
+					g_script.ExitApp((lParam & ENDSESSION_LOGOFF) ? EXIT_LOGOFF : EXIT_SHUTDOWN);
 				break;
 			case AHK_EXIT_BY_RELOAD:
 				g_script.ExitApp(EXIT_RELOAD);
@@ -3912,7 +3754,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			if (splash.color_text != CLR_DEFAULT)
 				SetTextColor((HDC)wParam, splash.color_text);
 			// Always return a real HBRUSH so that Windows knows we altered the HDC for it to use:
-			return splash.hbrush ? (LRESULT)splash.hbrush : (LRESULT)GetSysColorBrush(COLOR_BTNFACE);
+			return (LRESULT)(splash.hbrush ? splash.hbrush : GetSysColorBrush(COLOR_BTNFACE));
 		case WM_ERASEBKGND:
 		{
 			if (splash.pic) // And since there is a pic, its object_width/height should already be valid.
@@ -3956,6 +3798,8 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		break;
 
 	case AHK_RETURN_PID:
+		// This is obsolete in light of WinGet's support for fetching the PID of any window.
+		// But since it's simple, it is retained for backward compatibility.
 		// Rajat wanted this so that it's possible to discover the PID based on the title of each
 		// script's main window (i.e. if there are multiple scripts running).  Note that
 		// ReplyMessage() has no effect if our own thread sent this message to us.  In other words,
@@ -3965,19 +3809,183 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		ReplyMessage(GetCurrentProcessId());
 		return 0;
 
-	} // end main switch
+	HANDLE_MENU_LOOP // Cases for WM_ENTERMENULOOP and WM_EXITMENULOOP.
 
-	// Detect Explorer crashes so that tray icon can be recreated.  I think this only works on Win98
-	// and beyond, since the feature was never properly implemented in Win95:
-	static UINT WM_TASKBARCREATED = RegisterWindowMessage("TaskbarCreated");
-	if (iMsg == WM_TASKBARCREATED && !g_NoTrayIcon)
-	{
-		g_script.CreateTrayIcon();
-		g_script.UpdateTrayIcon(true);  // Force the icon into the correct pause/suspend state.
-		// And now pass this iMsg on to DefWindowProc() in case it does anything with it.
-	}
+	default:
+		// This iMsg can't be in the switch() since it's not constant:
+		if (iMsg == WM_TASKBARCREATED && !g_NoTrayIcon) // !g_NoTrayIcon --> the tray icon should be always visible.
+		{
+			g_script.CreateTrayIcon();
+			g_script.UpdateTrayIcon(true);  // Force the icon into the correct pause/suspend state.
+			// And now pass this iMsg on to DefWindowProc() in case it does anything with it.
+		}
+
+	} // switch()
 
 	return DefWindowProc(hWnd, iMsg, wParam, lParam);
+}
+
+
+
+bool HandleMenuItem(WORD aMenuItemID, WPARAM aGuiIndex)
+// See if an item was selected from the tray menu or main menu.  Note that it is possible
+// for one of the standard menu items to be triggered from a GUI menu if the menu or one of
+// its submenus was modified with the "menu, MenuName, Standard" command.
+// Returns true if the message is fully handled here, false otherwise.
+{
+    char buf_temp[2048];  // For various uses.
+
+	switch (aMenuItemID)
+	{
+	case ID_TRAY_OPEN:
+		ShowMainWindow();
+		return true;
+	case ID_TRAY_EDITSCRIPT:
+	case ID_FILE_EDITSCRIPT:
+		g_script.Edit();
+		return true;
+	case ID_TRAY_RELOADSCRIPT:
+	case ID_FILE_RELOADSCRIPT:
+		if (!g_script.Reload(false))
+			MsgBox("The script could not be reloaded." PLEASE_REPORT);
+		return true;
+	case ID_TRAY_WINDOWSPY:
+	case ID_FILE_WINDOWSPY:
+		// ActionExec()'s CreateProcess() is currently done in a way that prefers enclosing double quotes:
+		*buf_temp = '"';
+		// Try GetAHKInstallDir() first so that compiled scripts running on machines that happen
+		// to have AHK installed will still be able to fetch the help file:
+		if (GetAHKInstallDir(buf_temp + 1))
+			snprintfcat(buf_temp, sizeof(buf_temp), "\\AU3_Spy.exe\"");
+		else
+			// Mostly this ELSE is here in case AHK isn't installed (i.e. the user just
+			// copied the files over without running the installer).  But also:
+			// Even if this is the self-contained version (AUTOHOTKEYSC), attempt to launch anyway in
+			// case the user has put a copy of WindowSpy in the same dir with the compiled script:
+			// ActionExec()'s CreateProcess() is currently done in a way that prefers enclosing double quotes:
+			snprintfcat(buf_temp, sizeof(buf_temp), "%sAU3_Spy.exe\"", g_script.mOurEXEDir);
+		if (!g_script.ActionExec(buf_temp, "", NULL, false))
+			MsgBox(buf_temp, 0, "Could not launch Window Spy:");
+		return true;
+	case ID_TRAY_HELP:
+	case ID_HELP_USERMANUAL:
+		// ActionExec()'s CreateProcess() is currently done in a way that prefers enclosing double quotes:
+		*buf_temp = '"';
+		// Try GetAHKInstallDir() first so that compiled scripts running on machines that happen
+		// to have AHK installed will still be able to fetch the help file:
+		if (GetAHKInstallDir(buf_temp + 1))
+			snprintfcat(buf_temp, sizeof(buf_temp), "\\AutoHotkey.chm\"");
+		else
+			// Even if this is the self-contained version (AUTOHOTKEYSC), attempt to launch anyway in
+			// case the user has put a copy of the help file in the same dir with the compiled script:
+			// Also, for this one I saw it report failure once on Win98SE even though the help file did
+			// wind up getting launched.  Couldn't repeat it.  So in reponse to that try explicit "hh.exe":
+			snprintfcat(buf_temp, sizeof(buf_temp), "%sAutoHotkey.chm\"", g_script.mOurEXEDir);
+		if (!g_script.ActionExec("hh.exe", buf_temp, NULL, false))
+		{
+			// Try it without the hh.exe in case .CHM is associate with some other application
+			// in some OSes:
+			if (!g_script.ActionExec(buf_temp, "", NULL, false)) // Use "" vs. NULL to specify that there are no params at all.
+				MsgBox(buf_temp, 0, "Could not launch help file:");
+		}
+		return true;
+	case ID_TRAY_SUSPEND:
+	case ID_FILE_SUSPEND:
+		Line::ToggleSuspendState();
+		return true;
+	case ID_TRAY_PAUSE:
+	case ID_FILE_PAUSE:
+		if (!g.IsPaused && g_nThreads < 1)
+		{
+			MsgBox("The script cannot be paused while it is doing nothing.  If you wish to prevent new"
+				" hotkey subroutines from running, use Suspend instead.");
+			// i.e. we don't want idle scripts to ever be in a paused state.
+			return true;
+		}
+		if (g.IsPaused)
+			--g_nPausedThreads;
+		else
+			++g_nPausedThreads;
+		g.IsPaused = !g.IsPaused;
+		g_script.UpdateTrayIcon();
+		CheckMenuItem(GetMenu(g_hWnd), ID_FILE_PAUSE, g.IsPaused ? MF_CHECKED : MF_UNCHECKED);
+		return true;
+	case ID_TRAY_EXIT:
+	case ID_FILE_EXIT:
+		g_script.ExitApp(EXIT_MENU);  // More reliable than PostQuitMessage(), which has been known to fail in rare cases.
+		return true; // If there is an OnExit subroutine, the above might not actually exit.
+	case ID_VIEW_LINES:
+		ShowMainWindow(MAIN_MODE_LINES);
+		return true;
+	case ID_VIEW_VARIABLES:
+		ShowMainWindow(MAIN_MODE_VARS);
+		return true;
+	case ID_VIEW_HOTKEYS:
+		ShowMainWindow(MAIN_MODE_HOTKEYS);
+		return true;
+	case ID_VIEW_KEYHISTORY:
+		ShowMainWindow(MAIN_MODE_KEYHISTORY);
+		return true;
+	case ID_VIEW_REFRESH:
+		ShowMainWindow(MAIN_MODE_REFRESH);
+		return true;
+	case ID_HELP_WEBSITE:
+		if (!g_script.ActionExec("http://www.autohotkey.com", "", NULL, false))
+			MsgBox("Could not open URL http://www.autohotkey.com in default browser.");
+		return true;
+	case ID_HELP_EMAIL:
+		if (!g_script.ActionExec("mailto:support@autohotkey.com", "", NULL, false))
+			MsgBox("Could not open URL mailto:support@autohotkey.com in default e-mail client.");
+		return true;
+	default:
+		// See if this command ID is one of the user's custom menu items.  Due to the possibility
+		// that some items have been deleted from the menu, can't rely on comparing
+		// aMenuItemID to g_script.mMenuItemCount in any way.  Just look up the ID to make sure
+		// there really is a menu item for it:
+		if (!g_script.FindMenuItemByID(aMenuItemID)) // Do nothing, let caller try to handle it some other way.
+			return false;
+		// It seems best to treat the selection of a custom menu item in a way similar
+		// to how hotkeys are handled by the hook.
+		// Post it to the thread, just in case the OS tries to be "helpful" and
+		// directly call the WindowProc (i.e. this function) rather than actually
+		// posting the message.  We don't want to be called, we want the main loop
+		// to handle this message:
+		HANDLE_USER_MENU(aMenuItemID, aGuiIndex)  // Send the menu's cmd ID and the window index (index is safer than pointer, since pointer might get deleted).
+		// Try to maintain a list here of all the ways the script can be uninterruptible
+		// at this moment in time, and whether that uninterruptibility should be overridden here:
+		// 1) YES: g_MenuIsVisible is true (which in turn means that the script is marked
+		//    uninterruptible to prevent timed subroutines from running and possibly
+		//    interfering with menu navigation): Seems impossible because apparently 
+		//    the WM_RBUTTONDOWN must first be returned from before we're called directly
+		//    with the WM_COMMAND message corresponding to the menu item chosen by the user.
+		//    In other words, g_MenuIsVisible will be false and the script thus will
+		//    not be uninterruptible, at least not solely for that reason.
+		// 2) YES: A new hotkey or timed subroutine was just launched and it's still in its
+		//    grace period.  In this case, ExecUntil()'s call of PeekMessage() every 10ms
+		//    or so will catch the item we just posted.  But it seems okay to interrupt
+		//    here directly in most such cases.  INIT_NEW_THREAD: Newly launched
+		//    timed subroutine or hotkey subroutine.
+		// 3) YES: Script is engaged in an uninterruptible activity such as SendKeys().  In this
+		//    case, since the user has managed to get the tray menu open, it's probably
+		//    best to process the menu item with the same priority as if any other menu
+		//    item had been selected, interrupting even a critical operation since that's
+		//    probably what the user would want.  SLEEP_WITHOUT_INTERRUPTION: SendKeys,
+		//    Mouse input, Clipboard open, SetForegroundWindowEx().
+		// 4) YES: AutoExecSection(): Since its grace period is only 100ms, doesn't seem to be
+		//    a problem.  In any case, the timer would fire and briefly interrupt the menu
+		//    subroutine we're trying to launch here even if a menu item were somehow
+		//    activated in the first 100ms.
+		//
+		// IN LIGHT OF THE ABOVE, it seems best not to do the below.  In addition, the msg
+		// filtering done by MsgSleep when the script is uninterruptible now excludes the
+		// AHK_USER_MENU message (i.e. that message is always retrieved and acted upon,
+		// even when the script is uninterruptible):
+		//if (!INTERRUPTIBLE)
+		//	return true;  // Leave the message buffered until later.
+		// Now call the main loop to handle the message we just posted (and any others):
+		return true;
+	} // switch()
+	return false;  // Indicate that the message was NOT handled.
 }
 
 
@@ -4156,6 +4164,9 @@ ResultType InputBox(Var *aOutputVar, char *aTitle, char *aText, bool aHideInput,
 	g_InputBox[g_nInputBoxes].output_var = aOutputVar;
 	g_InputBox[g_nInputBoxes].password_char = aHideInput ? '*' : '\0';
 
+	// At this point, we know a dialog will be displayed.  See macro's comments for details:
+	DIALOG_PREP
+
 	// Specify NULL as the owner window since we want to be able to have the main window in the foreground
 	// even if there are InputBox windows:
 	++g_nInputBoxes;
@@ -4237,8 +4248,9 @@ BOOL CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 		int new_width = (CURR_INPUTBOX.width == INPUTBOX_DEFAULT) ? rect.right - rect.left : CURR_INPUTBOX.width;
 		int new_height = (CURR_INPUTBOX.height == INPUTBOX_DEFAULT) ? rect.bottom - rect.top : CURR_INPUTBOX.height;
 
-		// If a non-default size was specified, the box will need to be recentered.  The exception is when
-		// an explicit xpos or ypos is specified, in which case centering is disabled for that dimension.
+		// If a non-default size was specified, the box will need to be recentered; thus, we can't rely on
+		// the dialog's DS_CENTER style in its template.  The exception is when an explicit xpos or ypos is
+		// specified, in which case centering is disabled for that dimension.
 		int new_xpos, new_ypos;
 		if (CURR_INPUTBOX.xpos != INPUTBOX_DEFAULT && CURR_INPUTBOX.ypos != INPUTBOX_DEFAULT)
 		{
@@ -4247,13 +4259,13 @@ BOOL CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 		}
 		else
 		{
-			SystemParametersInfo(SPI_GETWORKAREA, 0, &rect, 0);  // Get Desktop rect excluding task bar.
+			POINT pt = CenterWindow(new_width, new_height);
   			if (CURR_INPUTBOX.xpos == INPUTBOX_DEFAULT) // Center horizontally.
-				new_xpos = (rect.right - new_width) / 2;
+				new_xpos = pt.x;
 			else
 				new_xpos = CURR_INPUTBOX.xpos;
   			if (CURR_INPUTBOX.ypos == INPUTBOX_DEFAULT) // Center vertically.
-				new_ypos = (rect.bottom - new_height) / 2;
+				new_ypos = pt.y;
 			else
 				new_ypos = CURR_INPUTBOX.ypos;
 		}
@@ -5209,7 +5221,8 @@ void Util_WinKill(HWND hWnd)
 ResultType Line::StringSplit(char *aArrayName, char *aInputString, char *aDelimiterList, char *aOmitList)
 {
 	// Make it longer than Max so that FindOrAddVar() will be able to spot and report var names
-	// that are too long:
+	// that are too long, either because the base-name is too long, or the name becomes too long
+	// as a result of appending the array index number:
 	char var_name[MAX_VAR_NAME_LENGTH + 20];
 	snprintf(var_name, sizeof(var_name), "%s0", aArrayName);
 	Var *array0 = g_script.FindOrAddVar(var_name);
@@ -5664,12 +5677,11 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 
 
 
-ResultType Line::ScriptGetKeyState(char *aKeyName, char *aOption)
+ResultType Line::GetKeyJoyState(char *aKeyName, char *aOption)
 {
 	Var *output_var = ResolveVarOfArg(0);
 	if (!output_var)
 		return FAIL;
-
 	JoyControls joy;
 	int joystick_id;
 	vk_type vk = TextToVK(aKeyName);
@@ -5680,145 +5692,222 @@ ResultType Line::ScriptGetKeyState(char *aKeyName, char *aOption)
 	}
 	else // There is a virtual key (not a joystick control).
 	{
+		KeyStateTypes key_state_type;
 		switch (toupper(*aOption))
 		{
-		case 'T': // Whether a toggleable key such as CapsLock is currently turned on.
-			// Under Win9x, at least certain versions and for certain hardware, this
-			// doesn't seem to be always accurate, especially when the key has just
-			// been toggled and the user hasn't pressed any other key since then.
-			// I tried using GetKeyboardState() instead, but it produces the same
-			// result.  Therefore, I've documented this as a limitation in the help file.
-			// In addition, this was attempted but it didn't seem to help:
-			//if (g_os.IsWin9x())
-			//{
-			//	DWORD my_thread  = GetCurrentThreadId();
-			//	DWORD fore_thread = GetWindowThreadProcessId(GetForegroundWindow(), NULL);
-			//	bool is_attached_my_to_fore = false;
-			//	if (fore_thread && fore_thread != my_thread)
-			//		is_attached_my_to_fore = AttachThreadInput(my_thread, fore_thread, TRUE) != 0;
-			//	output_var->Assign(IsKeyToggledOn(vk) ? "D" : "U");
-			//	if (is_attached_my_to_fore)
-			//		AttachThreadInput(my_thread, fore_thread, FALSE);
-			//	return OK;
-			//}
-			//else
-			return output_var->Assign(IsKeyToggledOn(vk) ? "D" : "U");
-		case 'P': // Physical state of key.
-			if (VK_IS_MOUSE(vk)) // mouse button
-			{
-				if (g_MouseHook) // mouse hook is installed, so use it's tracking of physical state.
-					return output_var->Assign(g_PhysicalKeyState[vk] & STATE_DOWN ? "D" : "U");
-				else // Even for Win9x/NT, it seems slightly better to call this rather than IsKeyDown9xNT():
-					return output_var->Assign(IsPhysicallyDown(vk) ? "D" : "U");
-			}
-			else // keyboard
-			{
-				if (g_KeybdHook)
-				{
-					// Since the hook is installed, use its value rather than that from
-					// GetAsyncKeyState(), which doesn't seem to return the physical state
-					// as expected/advertised, least under WinXP.
-					// But first, correct the hook modifier state if it needs it.  See comments
-					// in GetModifierLRState() for why this is needed:
-					if (KeyToModifiersLR(vk))     // It's a modifier.
-						GetModifierLRState(true); // Correct hook's physical state if needed.
-					return output_var->Assign(g_PhysicalKeyState[vk] & STATE_DOWN ? "D" : "U");
-				}
-				else // Even for Win9x/NT, it seems slightly better to call this rather than IsKeyDown9xNT():
-					return output_var->Assign(IsPhysicallyDown(vk) ? "D" : "U");
-			}
-		default: // Logical state of key.
-			if (g_os.IsWin9x() || g_os.IsWinNT4())
-				return output_var->Assign(IsKeyDown9xNT(vk) ? "D" : "U"); // This seems more likely to be reliable.
-			else
-				// On XP/2K at least, a key can be physically down even if it isn't logically down,
-				// which is why the below specifically calls IsKeyDown2kXP() rather than some more
-				// comprehensive method such as consulting the physical key state as tracked by the hook:
-				return output_var->Assign(IsKeyDown2kXP(vk) ? "D" : "U");
+		case 'T': key_state_type = KEYSTATE_TOGGLE; break; // Whether a toggleable key such as CapsLock is currently turned on.
+		case 'P': key_state_type = KEYSTATE_PHYSICAL; break; // Physical state of key.
+		default: key_state_type = KEYSTATE_LOGICAL;
 		}
+		return output_var->Assign(ScriptGetKeyState(vk, key_state_type) ? "D" : "U");
 	}
-
 	// Since the above didn't return, joy contains a valid joystick button/control ID:
-	bool joy_is_button = (joy >= JOYCTRL_1 && joy <= JOYCTRL_BUTTON_MAX);
+	ScriptGetJoyState(joy, joystick_id, output_var);
+	// Always returns OK since ScriptGetJoyState() returns FAIL and sets output_var to be blank if
+	// the result is indeterminate or there was a problem reading the joystick.
+	return OK;
+}
+
+
+
+bool Line::ScriptGetKeyState(vk_type aVK, KeyStateTypes aKeyStateType)
+// Returns true if "down", false if "up".
+{
+    if (!aVK) // Assume "up" if indeterminate.
+		return false;
+
+	switch (aKeyStateType)
+	{
+	case KEYSTATE_TOGGLE: // Whether a toggleable key such as CapsLock is currently turned on.
+		// Under Win9x, at least certain versions and for certain hardware, this
+		// doesn't seem to be always accurate, especially when the key has just
+		// been toggled and the user hasn't pressed any other key since then.
+		// I tried using GetKeyboardState() instead, but it produces the same
+		// result.  Therefore, I've documented this as a limitation in the help file.
+		// In addition, this was attempted but it didn't seem to help:
+		//if (g_os.IsWin9x())
+		//{
+		//	DWORD my_thread  = GetCurrentThreadId();
+		//	DWORD fore_thread = GetWindowThreadProcessId(GetForegroundWindow(), NULL);
+		//	bool is_attached_my_to_fore = false;
+		//	if (fore_thread && fore_thread != my_thread)
+		//		is_attached_my_to_fore = AttachThreadInput(my_thread, fore_thread, TRUE) != 0;
+		//	output_var->Assign(IsKeyToggledOn(aVK) ? "D" : "U");
+		//	if (is_attached_my_to_fore)
+		//		AttachThreadInput(my_thread, fore_thread, FALSE);
+		//	return OK;
+		//}
+		//else
+		return IsKeyToggledOn(aVK);
+	case KEYSTATE_PHYSICAL: // Physical state of key.
+		if (VK_IS_MOUSE(aVK)) // mouse button
+		{
+			if (g_MouseHook) // mouse hook is installed, so use it's tracking of physical state.
+				return g_PhysicalKeyState[aVK] & STATE_DOWN;
+			else // Even for Win9x/NT, it seems slightly better to call this rather than IsKeyDown9xNT():
+				return IsPhysicallyDown(aVK);
+		}
+		else // keyboard
+		{
+			if (g_KeybdHook)
+			{
+				// Since the hook is installed, use its value rather than that from
+				// GetAsyncKeyState(), which doesn't seem to return the physical state
+				// as expected/advertised, least under WinXP.
+				// But first, correct the hook modifier state if it needs it.  See comments
+				// in GetModifierLRState() for why this is needed:
+				if (KeyToModifiersLR(aVK))     // It's a modifier.
+					GetModifierLRState(true); // Correct hook's physical state if needed.
+				return g_PhysicalKeyState[aVK] & STATE_DOWN;
+			}
+			else // Even for Win9x/NT, it seems slightly better to call this rather than IsKeyDown9xNT():
+				return IsPhysicallyDown(aVK);
+		}
+	} // switch()
+
+	// Otherwise, use the default state-type: KEYSTATE_LOGICAL
+	if (g_os.IsWin9x() || g_os.IsWinNT4())
+		return IsKeyDown9xNT(aVK); // This seems more likely to be reliable.
+	else
+		// On XP/2K at least, a key can be physically down even if it isn't logically down,
+		// which is why the below specifically calls IsKeyDown2kXP() rather than some more
+		// comprehensive method such as consulting the physical key state as tracked by the hook:
+		return IsKeyDown2kXP(aVK);
+}
+
+
+
+double Line::ScriptGetJoyState(JoyControls aJoy, int aJoystickID, Var *aOutputVar)
+// For buttons: Returns 0 if "up", non-zero if down.
+// For axes and other controls: Returns a number indicating that controls position or status.
+// If there was a problem determining the position/state, aOutputVar is made blank and zero is returned.
+// Also returns zero in cases where a non-numerical result is requested, such as the joystick name.
+// In those cases, caller should normally have provided a non-NULL aOutputVar for the result.
+{
+	if (aOutputVar) // Set default in case of early return.
+		aOutputVar->Assign("");
+    if (!aJoy) // Currently never called this way.
+		return 0;
+
+	bool aJoy_is_button = IS_JOYSTICK_BUTTON(aJoy);
 
 	JOYCAPS jc;
-	if (!joy_is_button && joy != JOYCTRL_POV)
+	if (!aJoy_is_button && aJoy != JOYCTRL_POV)
 	{
-		// Get the joystick's range of motion so that we can report it as a percentage.
-		if (joyGetDevCaps(joystick_id, &jc, sizeof(JOYCAPS)) != JOYERR_NOERROR)
-			ZeroMemory(&jc, sizeof(jc));
+		// Get the joystick's range of motion so that we can report position as a percentage.
+		if (joyGetDevCaps(aJoystickID, &jc, sizeof(JOYCAPS)) != JOYERR_NOERROR)
+			ZeroMemory(&jc, sizeof(jc));  // Zero it on failure, for use of the zeroes later below.
 	}
 
+	// Fetch this struct's info only if needed:
 	JOYINFOEX jie;
-
-	if (joy != JOYCTRL_NAME && joy != JOYCTRL_BUTTONS && joy != JOYCTRL_AXES && joy != JOYCTRL_INFO)
+	if (aJoy != JOYCTRL_NAME && aJoy != JOYCTRL_BUTTONS && aJoy != JOYCTRL_AXES && aJoy != JOYCTRL_INFO)
 	{
 		jie.dwSize = sizeof(JOYINFOEX);
 		jie.dwFlags = JOY_RETURNALL;
-		if (joyGetPosEx(joystick_id, &jie) != JOYERR_NOERROR)
-			return output_var->Assign("");
-		if (joy_is_button)
-			return output_var->Assign(((jie.dwButtons >> (joy - JOYCTRL_1)) & (DWORD)0x01) ? "D" : "U");
+		if (joyGetPosEx(aJoystickID, &jie) != JOYERR_NOERROR)
+			return 0; // And leave aOutputVar set to blank.
+		if (aJoy_is_button)
+		{
+			bool is_down = ((jie.dwButtons >> (aJoy - JOYCTRL_1)) & (DWORD)0x01);
+			if (aOutputVar)
+				aOutputVar->Assign(is_down ? "D" : "U");
+			return is_down;
+		}
 	}
 
 	// Otherwise:
 	UINT range;
 	char buf[128], *buf_ptr;
+	double result_double;  // Not initialized to help catch bugs.
 
-	switch(joy)
+	switch(aJoy)
 	{
 	case JOYCTRL_XPOS:
 		range = (jc.wXmax > jc.wXmin) ? jc.wXmax - jc.wXmin : 0;
-		return output_var->Assign(range ? 100 * (double)jie.dwXpos / range : jie.dwXpos);
+		result_double = range ? 100 * (double)jie.dwXpos / range : jie.dwXpos;
+		break;
 	case JOYCTRL_YPOS:
 		range = (jc.wYmax > jc.wYmin) ? jc.wYmax - jc.wYmin : 0;
-		return output_var->Assign(range ? 100 * (double)jie.dwYpos / range : jie.dwYpos);
+		result_double = range ? 100 * (double)jie.dwYpos / range : jie.dwYpos;
+		break;
 	case JOYCTRL_ZPOS:
 		range = (jc.wZmax > jc.wZmin) ? jc.wZmax - jc.wZmin : 0;
-		return output_var->Assign(range ? 100 * (double)jie.dwZpos / range : jie.dwZpos);
+		result_double = range ? 100 * (double)jie.dwZpos / range : jie.dwZpos;
+		break;
 	case JOYCTRL_RPOS:  // Rudder or 4th axis.
 		range = (jc.wRmax > jc.wRmin) ? jc.wRmax - jc.wRmin : 0;
-		return output_var->Assign(range ? 100 * (double)jie.dwRpos / range : jie.dwRpos);
+		result_double = range ? 100 * (double)jie.dwRpos / range : jie.dwRpos;
+		break;
 	case JOYCTRL_UPOS:  // 5th axis.
 		range = (jc.wUmax > jc.wUmin) ? jc.wUmax - jc.wUmin : 0;
-		return output_var->Assign(range ? 100 * (double)jie.dwUpos / range : jie.dwUpos);
+		result_double = range ? 100 * (double)jie.dwUpos / range : jie.dwUpos;
+		break;
 	case JOYCTRL_VPOS:  // 6th axis.
 		range = (jc.wVmax > jc.wVmin) ? jc.wVmax - jc.wVmin : 0;
-		return output_var->Assign(range ? 100 * (double)jie.dwVpos / range : jie.dwVpos);
+		result_double = range ? 100 * (double)jie.dwVpos / range : jie.dwVpos;
+		break;
+
 	case JOYCTRL_POV:  // Need to explicitly compare against JOY_POVCENTERED because it's a WORD not a DWORD.
 		if (jie.dwPOV == JOY_POVCENTERED)
-			return output_var->Assign("-1"); // Documented behavior.
-		else
-			return output_var->Assign(jie.dwPOV);
-	case JOYCTRL_NAME:
-		return output_var->Assign(jc.szPname);
-	case JOYCTRL_BUTTONS:
-		return output_var->Assign((DWORD)jc.wNumButtons);  // wMaxButtons is the *driver's* max supported buttons.
-	case JOYCTRL_AXES:
-		return output_var->Assign((DWORD)jc.wNumAxes);  // wMaxAxes is the *driver's* max supported axes.
-	case JOYCTRL_INFO:
-		buf_ptr = buf;
-		if (jc.wCaps & JOYCAPS_HASZ)
-			*buf_ptr++ = 'Z';
-		if (jc.wCaps & JOYCAPS_HASR)
-			*buf_ptr++ = 'R';
-		if (jc.wCaps & JOYCAPS_HASU)
-			*buf_ptr++ = 'U';
-		if (jc.wCaps & JOYCAPS_HASV)
-			*buf_ptr++ = 'V';
-		if (jc.wCaps & JOYCAPS_HASPOV)
 		{
-			*buf_ptr++ = 'P';
-			if (jc.wCaps & JOYCAPS_POV4DIR)
-				*buf_ptr++ = 'D';
-			if (jc.wCaps & JOYCAPS_POVCTS)
-				*buf_ptr++ = 'C';
+			if (aOutputVar)
+				aOutputVar->Assign("-1"); // Assign as string to ensure its written exactly as "-1". Documented behavior.
+			return -1;
 		}
-		*buf_ptr = '\0'; // Final termination.
-		return output_var->Assign(buf);
-	}
+		else
+		{
+			if (aOutputVar)
+				aOutputVar->Assign(jie.dwPOV);
+			return jie.dwPOV;
+		}
+		// No break since above always returns.
 
-	return output_var->Assign(); // Should never be executed.
+	case JOYCTRL_NAME:
+		if (aOutputVar)
+			aOutputVar->Assign(jc.szPname);
+		return 0;  // Returns zero in cases where a non-numerical result is obtained.
+
+	case JOYCTRL_BUTTONS:
+		if (aOutputVar)
+			aOutputVar->Assign((DWORD)jc.wNumButtons);
+		return jc.wNumButtons;  // wMaxButtons is the *driver's* max supported buttons.
+
+	case JOYCTRL_AXES:
+		if (aOutputVar)
+			aOutputVar->Assign((DWORD)jc.wNumAxes); // wMaxAxes is the *driver's* max supported axes.
+		return jc.wNumAxes;
+
+	case JOYCTRL_INFO:
+		if (aOutputVar)
+		{
+			buf_ptr = buf;
+			if (jc.wCaps & JOYCAPS_HASZ)
+				*buf_ptr++ = 'Z';
+			if (jc.wCaps & JOYCAPS_HASR)
+				*buf_ptr++ = 'R';
+			if (jc.wCaps & JOYCAPS_HASU)
+				*buf_ptr++ = 'U';
+			if (jc.wCaps & JOYCAPS_HASV)
+				*buf_ptr++ = 'V';
+			if (jc.wCaps & JOYCAPS_HASPOV)
+			{
+				*buf_ptr++ = 'P';
+				if (jc.wCaps & JOYCAPS_POV4DIR)
+					*buf_ptr++ = 'D';
+				if (jc.wCaps & JOYCAPS_POVCTS)
+					*buf_ptr++ = 'C';
+			}
+			*buf_ptr = '\0'; // Final termination.
+			aOutputVar->Assign(buf);
+		}
+		return 0;  // Returns zero in cases where a non-numerical result is obtained.
+	} // switch()
+
+	// If above didn't return, the result should now be in result_double.
+	if (aOutputVar)
+		aOutputVar->Assign(result_double);
+	return result_double;
 }
 
 
@@ -6577,7 +6666,9 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 	if (options & 0x01)
 		ofn.Flags |= OFN_FILEMUSTEXIST;
 
-	POST_AHK_DIALOG(0) // Must pass 0 for timeout in this case.
+	// At this point, we know a dialog will be displayed.  See macro's comments for details:
+	DIALOG_PREP
+	POST_AHK_DIALOG(0) // Do this only after the above. Must pass 0 for timeout in this case.
 
 	++g_nFileDialogs;
 	// Below: OFN_CREATEPROMPT doesn't seem to work with GetSaveFileName(), so always
@@ -6687,7 +6778,9 @@ ResultType Line::FileSelectFolder(char *aRootDir, DWORD aOptions, char *aGreetin
 	char Result[2048];
 	browseInfo.pszDisplayName = Result;  // This will hold the user's choice.
 
-	POST_AHK_DIALOG(0) // Must pass 0 for timeout in this case.
+	// At this point, we know a dialog will be displayed.  See macro's comments for details:
+	DIALOG_PREP
+	POST_AHK_DIALOG(0) // Do this only after the above.  Must pass 0 for timeout in this case.
 
 	++g_nFolderDialogs;
 	LPITEMIDLIST lpItemIDList = SHBrowseForFolder(&browseInfo);  // Spawn Dialog
@@ -6840,8 +6933,7 @@ ResultType Line::FileReadLine(char *aFilespec, char *aLineNumber)
 	else
 		if (!output_var->Assign(buf, (VarSizeType)buf_length))
 			return FAIL;
-	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-	return OK;
+	return g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 }
 
 
@@ -6929,8 +7021,7 @@ ResultType Line::FileDelete(char *aFilePattern)
 
 	if (file_search != INVALID_HANDLE_VALUE) // In case the loop had zero iterations.
 		FindClose(file_search);
-	g_ErrorLevel->Assign(failure_count); // i.e. indicate success if there were no failures.
-	return OK;
+	return g_ErrorLevel->Assign(failure_count); // i.e. indicate success if there were no failures.
 }
 
 
@@ -7655,10 +7746,7 @@ bool Line::Util_MoveDir (const char *szInputSource, const char *szInputDest, boo
 	FileOp.wFunc	= FO_MOVE;
 	FileOp.fFlags	= FOF_SILENT | FOF_NOCONFIRMMKDIR | FOF_NOCONFIRMATION | FOF_NOERRORUI;
 
-	if ( SHFileOperation(&FileOp) ) 
-		return false;								
-	else
-		return true;
+	return !SHFileOperation(&FileOp);
 
 } // Util_MoveDir()
 
@@ -7706,11 +7794,7 @@ bool Line::Util_RemoveDir (const char *szInputSource, bool bRecurse)
 	FileOp.wFunc	= FO_DELETE;
 	FileOp.fFlags	= FOF_SILENT | FOF_NOCONFIRMMKDIR | FOF_NOCONFIRMATION | FOF_NOERRORUI;
 	
-	if ( SHFileOperation(&FileOp) ) 
-		return false;								
-
-	return true;
-
+	return !SHFileOperation(&FileOp);
 } // Util_RemoveDir()
 
 
@@ -8069,7 +8153,6 @@ bool Line::Util_DoesFileExist(const char *szFilename)
 		else
 			return false;
 	}
-
 } // Util_DoesFileExist
 
 
@@ -8090,7 +8173,6 @@ bool Line::Util_IsDir(const char *szPath)
 		return true;
 	else
 		return false;
-
 } // Util_IsDir
 
 
@@ -8126,7 +8208,6 @@ void Line::Util_StripTrailingDir(char *szPath)
 {
 	if (szPath[strlen(szPath)-1] == '\\')
 		szPath[strlen(szPath)-1] = '\0';
-
 } // Util_StripTrailingDir
 
 
@@ -8159,18 +8240,10 @@ bool Line::Util_IsDifferentVolumes(const char *szPath1, const char *szPath2)
 	_splitpath( szP2, szP2Drive, szDir, szFile, szExt );
 
 	if (szP1Drive[0] == '\0' || szP2Drive[0] == '\0')
-	{
 		// One or both paths is a UNC - assume different volumes
 		return true;
-	}
 	else
-	{
-		if (stricmp(szP1Drive, szP2Drive))
-			return true;
-		else
-			return false;
-	}
-
+		return stricmp(szP1Drive, szP2Drive);
 } // Util_IsDifferentVolumes()
 
 
@@ -8395,6 +8468,8 @@ ArgTypeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_IFNOTBETWEEN:
 		case ACT_IFIN:
 		case ACT_IFNOTIN:
+		case ACT_IFCONTAINS:
+		case ACT_IFNOTCONTAINS:
 		case ACT_IFIS:
 		case ACT_IFISNOT:
 			return ARG_TYPE_INPUT_VAR;

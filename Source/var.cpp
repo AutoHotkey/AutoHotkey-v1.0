@@ -126,8 +126,8 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt)
 			// any error that occurred:
 			return g_clip.PrepareForWrite(space_needed) ? OK : FAIL;
 
-	if (space_needed > MAX_ALLOC_MALLOC)
-		return g_script.ScriptError("Beyond supported variable capacity." ERR_ABORT);
+	if (space_needed > g_MaxVarCapacity)
+		return g_script.ScriptError("Variable is too large (see #MaxMem in the help file)." ERR_ABORT);
 
 	if (space_needed <= 1) // Variable is being assigned the empty string (or a deref that resolves to it).
 	{
@@ -179,7 +179,7 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt)
 			// amount regardless of how long the program runs.  The reason for all of this
 			// is that allocating dynamic memory is costly: it causes system memory fragmentation,
 			// (especially if a var were to be malloc'd and free'd thousands of times in a loop)
-			// and small-sized malloc'd have a large overhead: it's been said that every block
+			// and small-sized mallocs have a large overhead: it's been said that every block
 			// of dynamic mem, even those of size 1 or 2, incurs about 40 bytes of overhead.
 			return OK;
 		} // switch()
@@ -218,8 +218,8 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt)
 				alloc_size = (size_t)(alloc_size * 1.1);
 			else
 				alloc_size += (8 * 1024);
-			if (alloc_size > MAX_ALLOC_MALLOC)
-				alloc_size = MAX_ALLOC_MALLOC;  // which has already been verified to be enough.
+			if (alloc_size > g_MaxVarCapacity)
+				alloc_size = g_MaxVarCapacity;  // which has already been verified to be enough.
 			if (   !(mContents = (char *)malloc(alloc_size))   )
 				return g_script.ScriptError(ERR_MEM_ASSIGN);
 			mHowAllocated = ALLOC_MALLOC;

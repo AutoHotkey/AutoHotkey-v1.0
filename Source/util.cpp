@@ -15,6 +15,7 @@ GNU General Public License for more details.
 */
 
 #include "stdafx.h" // pre-compiled headers
+#include <olectl.h> // for OleLoadPicture()
 #include "util.h"
 
 
@@ -221,17 +222,34 @@ int snprintfcat(char *aBuf, size_t aBufSize, const char *aFormat, ...)
 
 
 
-int strlcmp(char *aBuf1, char *aBuf2, UINT aLength1, UINT aLength2)
-// Similar to strncmp but considers each aBuf to be a string of length aLength
-// if aLength was specified.  In other words, unlike strncmp() which would
-// consider strncmp("ab", "abc", 2) to be a match, this function would consider
+// Not currently used by anything, so commented out to possibly reduce code size:
+//int strlcmp(char *aBuf1, char *aBuf2, UINT aLength1, UINT aLength2)
+//// Case sensitive version.  See strlicmp() comments below.
+//{
+//	if (!aBuf1 || !aBuf2) return 0;
+//	if (aLength1 == UINT_MAX) aLength1 = (UINT)strlen(aBuf1);
+//	if (aLength2 == UINT_MAX) aLength2 = (UINT)strlen(aBuf2);
+//	UINT least_length = aLength1 < aLength2 ? aLength1 : aLength2;
+//	int diff;
+//	for (UINT i = 0; i < least_length; ++i)
+//		if (   diff = (int)((UCHAR)aBuf1[i] - (UCHAR)aBuf2[i])   ) // Use unsigned chars like strcmp().
+//			return diff;
+//	return (int)(aLength1 - aLength2);
+//}	
+
+
+
+int strlicmp(char *aBuf1, char *aBuf2, UINT aLength1, UINT aLength2)
+// Similar to strnicmp but considers each aBuf to be a string of length aLength if aLength was
+// specified.  In other words, unlike strnicmp() which would consider strnicmp("ab", "abc", 2)
+// [example verified correct] to be a match, this function would consider
 // them to be a mismatch.  Another way of looking at it: aBuf1 and aBuf2 will
 // be directly compared to one another as though they were actually of length
-// aLength1 and aLength2, respectively and then passed to strcmp() as those
+// aLength1 and aLength2, respectively and then passed to stricmp() as those
 // shorter strings.  This behavior is useful for cases where you don't want
 // to have to bother with temporarily terminating a string so you can compare
 // only a substring to something else.  The return value meaning is the
-// same as strncmp().  If either aLength param is UINT_MAX (via the default
+// same as strnicmp().  If either aLength param is UINT_MAX (via the default
 // parameters or via explicit call), it will be assumed that the entire
 // length of the respective aBuf will be used.
 {
@@ -241,28 +259,12 @@ int strlcmp(char *aBuf1, char *aBuf2, UINT aLength1, UINT aLength2)
 	UINT least_length = aLength1 < aLength2 ? aLength1 : aLength2;
 	int diff;
 	for (UINT i = 0; i < least_length; ++i)
-		if (   diff = (int)((UCHAR)aBuf1[i] - (UCHAR)aBuf2[i])   ) // Use unsigned chars like strcmp().
+		if (   diff = (int)((UCHAR)toupper(aBuf1[i]) - (UCHAR)toupper(aBuf2[i]))   )
 			return diff;
 	// Since the above didn't return, the strings are equal if they're the same length.
 	// Otherwise, the longer one is considered greater than the shorter one since the
 	// longer one's next character is by definition something non-zero.  I'm not completely
 	// sure that this is the same policy followed by ANSI strcmp():
-	return (int)(aLength1 - aLength2);
-}	
-
-
-
-int strlicmp(char *aBuf1, char *aBuf2, UINT aLength1, UINT aLength2)
-// Case insensitive version.  See strlcmp() comments above.
-{
-	if (!aBuf1 || !aBuf2) return 0;
-	if (aLength1 == UINT_MAX) aLength1 = (UINT)strlen(aBuf1);
-	if (aLength2 == UINT_MAX) aLength2 = (UINT)strlen(aBuf2);
-	UINT least_length = aLength1 < aLength2 ? aLength1 : aLength2;
-	int diff;
-	for (UINT i = 0; i < least_length; ++i)
-		if (   diff = (int)((UCHAR)toupper(aBuf1[i]) - (UCHAR)toupper(aBuf2[i]))   )
-			return diff;
 	return (int)(aLength1 - aLength2);
 }	
 
@@ -464,6 +466,37 @@ char *StrReplaceAllSafe(char *Str, size_t Str_size, char *OldStr, char *NewStr, 
 
 
 
+char *TranslateLFtoCRLF(char *aString)
+// Translates any naked LFs in aString to CRLF, copying the result into a malloc'd buffer
+// (which the caller must free when it's done with it).  Any CRLFs originally present in aString
+// are not changed (i.e. they don't become CRCRLF).
+{
+	UINT naked_LF_count = 0;
+	size_t length = 0;
+	char *cp;
+	for (cp = aString; *cp; ++cp)
+	{
+		++length;
+		if (*cp == '\n' && (cp == aString || *(cp - 1) != '\r')) // Relies on short-circuit boolean order.
+			++naked_LF_count;
+	}
+	char *buf = (char *)malloc(length + naked_LF_count + 1);  // +1 for zero terminator.
+	if (!buf)
+		return NULL;
+	// Now perform the translation.
+	char *dp = buf;
+	for (cp = aString; *cp; ++cp)
+	{
+		if (*cp == '\n' && (cp == aString || *(cp - 1) != '\r')) // Relies on short-circuit boolean order.
+			*dp++ = '\r';  // Insert an extra CR here, then insert the '\n' normally below.
+		*dp++ = *cp;
+	}
+	*dp = '\0';  // Final terminator.
+	return buf;  // Caller must free it when it's done with it.
+}
+
+
+
 bool DoesFilePatternExist(char *aFilePattern)
 // Adapted from the AutoIt3 source:
 {
@@ -575,10 +608,47 @@ char *ConvertFilespecToCorrectCase(char *aFullFileSpec)
 
 
 
-COLORREF ColorNameToBGR(char *aColorName)
-// These are the main HTML color names.  Returns CLR_DEFAULT if a matching HTML color name can't be found.
+void AssignColor(char *aColorName, COLORREF &aColor, HBRUSH &aBrush)
+// Assign the color indicated in aColorName (either a name or a hex RGB value) to both
+// aColor and aBrush, deleting any prior handle in aBrush first.  If the color cannot
+// be determined, it will always be set to CLR_DEFAULT (and aBrush set to NULL to match).
+// It will never be set to CLR_NONE.
 {
-	if (!aColorName || !*aColorName) return CLR_DEFAULT;
+	COLORREF color;
+	if (!*aColorName)
+		color = CLR_DEFAULT;
+	else
+	{
+		color = ColorNameToBGR(aColorName);
+		if (color == CLR_NONE) // A matching color name was not found, so assume it's a hex color value.
+			// It seems strtol() automatically handles the optional leading "0x" if present:
+			color = rgb_to_bgr(strtol(aColorName, NULL, 16));
+			// if aColorName does not contain something hex-numeric, black (0x00) will be assumed,
+			// which seems okay given how rare such a problem would be.
+	}
+	if (color != aColor) // It's not already the right color.
+	{
+		if (aBrush) // Free the resources of the old brush.
+			DeleteObject(aBrush);
+		if (color == CLR_DEFAULT) // Caller doesn't need brush for CLR_DEFAULT, assuming that's even possible.
+			aBrush = NULL;
+		else
+		{
+			if (aBrush = CreateSolidBrush(color)) // Assign.  Failure should be very rare.
+				aColor = color;
+			else
+				aColor = CLR_DEFAULT; // A NULL HBRUSH should always corresponds to CLR_DEFAULT.
+		}
+	}
+}
+
+
+
+COLORREF ColorNameToBGR(char *aColorName)
+// These are the main HTML color names.  Returns CLR_NONE if a matching HTML color name can't be found.
+// Returns CLR_DEFAULT only if aColorName is the word Default.
+{
+	if (!aColorName || !*aColorName) return CLR_NONE;
 	if (!stricmp(aColorName, "Black"))  return 0x000000;  // These colors are all in BGR format, not RGB.
 	if (!stricmp(aColorName, "Silver")) return 0xC0C0C0;
 	if (!stricmp(aColorName, "Gray"))   return 0x808080;
@@ -595,7 +665,137 @@ COLORREF ColorNameToBGR(char *aColorName)
 	if (!stricmp(aColorName, "Blue"))   return 0xFF0000;
 	if (!stricmp(aColorName, "Teal"))   return 0x808000;
 	if (!stricmp(aColorName, "Aqua"))   return 0xFFFF00;
-	return CLR_DEFAULT;
+	if (!stricmp(aColorName, "Default"))return CLR_DEFAULT;
+	return CLR_NONE;
+}
+
+
+
+POINT CenterWindow(int aWidth, int aHeight)
+// Given a the window's width and height, calculates where to position its upper-left corner
+// so that it is centered EVEN IF the task bar is on the left side or top side of the window.
+// This does not currently handle multi-monitor systems explicitly, since those calculations
+// require API functions that don't exist in Win95/NT (and thus would have to be loaded
+// dynamically to allow the program to launch).  Therefore, windows will likely wind up
+// being centered across the total dimensions of all monitors, which usually results in
+// half being on one monitor and half in the other.  This doesn't seem too terrible and
+// might even be what the user wants in some cases (i.e. for really big windows).
+{
+	RECT rect;
+	SystemParametersInfo(SPI_GETWORKAREA, 0, &rect, 0);  // Get desktop rect excluding task bar.
+	// Note that rect.left will NOT be zero if the taskbar is on docked on the left.
+	// Similarly, rect.top will NOT be zero if the taskbar is on docked at the top of the screen.
+	POINT pt;
+	pt.x = rect.left + (((rect.right - rect.left) - aWidth) / 2);
+	pt.y = rect.top + (((rect.bottom - rect.top) - aHeight) / 2);
+	return pt;
+}
+
+
+
+bool FontExist(HDC aHdc, char *aTypeface)
+{
+	LOGFONT lf;
+	lf.lfCharSet = DEFAULT_CHARSET;  // Enumerate all char sets.
+	lf.lfPitchAndFamily = 0;  // Must be zero.
+	strlcpy(lf.lfFaceName, aTypeface, LF_FACESIZE);
+	bool font_exists = false;
+	EnumFontFamiliesEx(aHdc, &lf, (FONTENUMPROC)FontEnumProc, (LPARAM)&font_exists, 0);
+	return font_exists;
+}
+
+
+
+int CALLBACK FontEnumProc(ENUMLOGFONTEX *lpelfe, NEWTEXTMETRICEX *lpntme, DWORD FontType, LPARAM lParam)
+{
+	*((bool *)lParam) = true; // Indicate to the caller that the font exists.
+	return 0;  // Stop the enumeration after the first, since even one match means the font exists.
+}
+
+
+
+HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight)
+// Based on code sample at http://www.codeguru.com/Cpp/G-M/bitmap/article.php/c4935/
+// Loads a JPG/GIF/BMP and returns an HBITMAP to the caller (which it may call DeleteObject() upon,
+// though upon program termination all such handles are freed automatically).  The image is scaled
+// to the specified width and height.  If zero is specified for either, the image's actual size
+// will be used for that dimension.  If -1 is specified for one, that dimension will be kept
+// proportional to the other dimension's size so that the original aspect ratio is retained.
+// Returns NULL on failure.
+{
+	HANDLE hfile = CreateFile(aFilespec, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
+	if (hfile == INVALID_HANDLE_VALUE)
+		return NULL;
+	DWORD size = GetFileSize(hfile, NULL);
+	HGLOBAL hglobal = GlobalAlloc(GMEM_MOVEABLE, size);
+	if (!hglobal)
+	{
+		CloseHandle(hfile);
+		return NULL;
+	}
+	LPVOID hlocked = GlobalLock(hglobal);
+	if (!hlocked)
+	{
+		CloseHandle(hfile);
+		GlobalFree(hglobal);
+		return NULL;
+	}
+	// Read the file into memory:
+	ReadFile(hfile, hlocked, size, &size, NULL);
+	GlobalUnlock(hglobal);
+	CloseHandle(hfile);
+	LPSTREAM stream;
+	if (FAILED(CreateStreamOnHGlobal(hglobal, FALSE, &stream)) || !stream)  // Relies on short-circuit boolean order.
+	{
+		GlobalFree(hglobal);
+		return NULL;
+	}
+	IPicture *pic;
+	// Specify TRUE to have it do the GlobalFree() for us.  But since the call might fail, it seems best
+	// to free the mem ourselves to avoid uncertainy over what it does on failure:
+	if (FAILED(OleLoadPicture(stream, 0, FALSE, IID_IPicture, (void **)&pic)))
+		pic = NULL;
+	stream->Release();
+	GlobalFree(hglobal);
+	if (!pic)
+		return NULL;
+	HBITMAP hbitmap;
+	pic->get_Handle((OLE_HANDLE *)&hbitmap);
+	// Above: MSDN: "The caller is responsible for this handle upon successful return. The variable is set
+	// to NULL on failure."
+	if (!hbitmap)
+	{
+		pic->Release();
+		return NULL;
+	}
+	// Adjust things if "keep aspect ratio" is in effect:
+	long hm_width, hm_height;
+	if (aHeight == -1 && aWidth > 0)
+	{
+		// Caller wants aHeight calculated based on the specified aWidth (keep aspect ratio).
+		pic->get_Width(&hm_width);
+		pic->get_Height(&hm_height);
+		if (hm_width) // Avoid any chance of divide-by-zero.
+			aHeight = (int)(((double)hm_height / hm_width) * aWidth + .5); // Round.
+	}
+	else if (aWidth == -1 && aHeight > 0)
+	{
+		// Caller wants aWidth calculated based on the specified aHeight (keep aspect ratio).
+		pic->get_Width(&hm_width);
+		pic->get_Height(&hm_height);
+		if (hm_height) // Avoid any chance of divide-by-zero.
+			aWidth = (int)(((double)hm_width / hm_height) * aHeight + .5); // Round.
+	}
+	// The below statement is confirmed by having tested that DeleteObject(hbitmap) fails
+	// if called after pic->Release():
+	// "Copy the image. Necessary, because upon pic's release the handle is destroyed."
+	// MSDN: CopyImage(): "[If either width or height] is zero, then the returned image will have the
+	// same width/height as the original."
+	HBITMAP hbitmap_new = (HBITMAP)CopyImage(hbitmap, IMAGE_BITMAP, aWidth, aHeight
+		, (aWidth || aHeight) ? 0 : LR_COPYRETURNORG); // Produce original size if no scaling is needed.
+	pic->Release();
+	DeleteObject(hbitmap);
+	return hbitmap_new;
 }
 
 
@@ -634,7 +834,7 @@ char *ConvertEscapeSequences(char *aBuf, char aEscapeChar)
 
 
 
-bool IsStringInList(char *aStr, char *aList, bool aCaseSensitive)
+bool IsStringInList(char *aStr, char *aList, bool aFindExactMatch, bool aCaseSensitive)
 // Checks if aStr exists in aList (which is a comma-separated list).
 // If aStr is blank, aList must start with a delimiting comma for there to be a match.
 {
@@ -643,7 +843,6 @@ bool IsStringInList(char *aStr, char *aList, bool aCaseSensitive)
 	// if var in string,,with,,literal,,commas
 	char buf[LINE_SIZE];
     char *this_field = aList, *next_field, *cp;
-	size_t length;
 
 	while (*this_field)  // For each field in aList.
 	{
@@ -672,20 +871,38 @@ bool IsStringInList(char *aStr, char *aList, bool aCaseSensitive)
 		if (*next_field)  // The end of the field occurred prior to the end of aList.
 			++next_field; // Point it to the character after the delimiter (otherwise, leave it where it is).
 
-		length = strlen(buf);
-		if (length) // It is possible for this to be zero only for the first field.  Example: if var in ,abc
+		if (*buf) // It is possible for this to be blank only for the first field.  Example: if var in ,abc
 		{
-			if (aCaseSensitive)
+			if (aFindExactMatch)
 			{
-				if (!strcmp(aStr, buf)) // Match found
+				if (aCaseSensitive)
+				{
+					if (!strcmp(aStr, buf)) // Match found
+						return true;
+				}
+				else // Not case sensitive
+					if (!stricmp(aStr, buf)) // Match found
+						return true;
+			}
+			else // Substring match
+			{
+				if (aCaseSensitive)
+				{
+					if (strstr(aStr, buf)) // Match found
+						return true;
+				}
+				else // Not case sensitive
+					if (stristr(aStr, buf)) // Match found
+						return true;
+			}
+		}
+		else // First item in the list is the empty string.
+			if (aFindExactMatch) // In this case, this is a match if aStr is also blank.
+			{
+				if (!*aStr)
 					return true;
 			}
-			else // Not case sensitive
-				if (!stricmp(aStr, buf)) // Match found
-					return true;
-		}
-		else // First item in the list is the empty string, so this is a match if aStr is also blank:
-			if (!*aStr)
+			else // Empty string is always found as a substring in any other string.
 				return true;
 		this_field = next_field;
 	} // while()

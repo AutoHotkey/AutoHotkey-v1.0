@@ -152,6 +152,12 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 		prior_capslock_state = TOGGLE_INVALID;
 	}
 
+	bool blockinput_prev = g_BlockInput;
+	bool do_selective_blockinput = (g_BlockInputMode == TOGGLE_SEND || g_BlockInputMode == TOGGLE_SENDANDMOUSE)
+		&& !aTargetWindow && g_os.IsWinNT4orLater();
+	if (do_selective_blockinput)
+		Line::ScriptBlockInput(true); // Turn it on unconditionally even if it was on, since Ctrl-Alt-Del might have disabled it.
+
 	char single_char_string[2];
 	vk_type vk = 0;
 	sc_type sc = 0;
@@ -393,6 +399,9 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 	// tends to help with updating the global state of keys (perhaps only under Win9x in this case):
 	if (threads_are_attached)
 		AttachThreadInput(my_thread, target_thread, FALSE);
+
+	if (do_selective_blockinput && !blockinput_prev) // Turn it back off only if it wasn't ON before we started.
+		Line::ScriptBlockInput(false);
 }
 
 
@@ -877,6 +886,18 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 	}
 	else
 	{
+		// Turn off BlockInput momentarily to support sending of the ALT key.  This is not done for
+		// Win9x because input cannot be simulated during BlockInput on that platform anyway; thus
+		// it seems best (due to backward compatibility) not to turn off BlockInput then.
+		// Jon Bennett noted: "As many of you are aware BlockInput was "broken" by a SP1 hotfix under
+		// Windows XP so that the ALT key could not be sent. I just tried it under XP SP2 and it seems
+		// to work again."  In light of this, it seems best to unconditionally and momentarily disable
+		// input blocking regardless of which OS is being used (except Win9x, since no simulated input
+		// is even possible for those OSes).
+		bool we_turned_blockinput_off = g_BlockInput && (aVK == VK_MENU || aVK == VK_LMENU || aVK == VK_RMENU)
+			&& g_os.IsWinNT4orLater();
+		if (we_turned_blockinput_off)
+			Line::ScriptBlockInput(false);
 		if (aEventType != KEYUP)  // i.e. always do it for KEYDOWNANDUP
 		{
 			keybd_event(aVK
@@ -916,6 +937,8 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 			if (!g_KeybdHook) // Hook isn't logging, so we'll log just the keys we send, here.
 				UpdateKeyEventHistory(true);
 		}
+		if (we_turned_blockinput_off)  // Turn it back on.
+			Line::ScriptBlockInput(true);
 	}
 
 	if (aDoKeyDelay)

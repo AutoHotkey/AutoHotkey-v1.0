@@ -132,7 +132,7 @@ typedef UCHAR vk_type;  // Probably better than using UCHAR, since UCHAR might b
 // Although only need 9 bits for compressed and 16 for uncompressed scan code, use a full 32 bits so that
 // mouse messages (WPARAM) can be stored as scan codes.  Formerly USHORT (which is always 16-bit).
 typedef UINT sc_type;
-typedef UINT mod_type; // Standard windows modifier type.
+typedef UINT mod_type; // Standard Windows modifier type.
 
 
 // The maximum number of virtual keys and scan codes that can ever exist.
@@ -189,6 +189,7 @@ struct sc2_type
 };
 
 
+enum KeyStateTypes {KEYSTATE_LOGICAL, KEYSTATE_PHYSICAL, KEYSTATE_TOGGLE}; // For use with GetKeyJoyState(), etc.
 enum KeyEventTypes {KEYDOWN, KEYUP, KEYDOWNANDUP};
 
 void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow = NULL);

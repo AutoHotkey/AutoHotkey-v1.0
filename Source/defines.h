@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.18"
+#define NAME_VERSION "1.0.19"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -46,6 +46,7 @@ GNU General Public License for more details.
 // should keep class name strings as short a possible:
 #define WINDOW_CLASS_MAIN "AutoHotkey"
 #define WINDOW_CLASS_SPLASH "AutoHotkey2"
+#define WINDOW_CLASS_GUI "AutoHotkeyGUI"
 
 #define EXT_AUTOIT2 ".aut"
 #define EXT_AUTOHOTKEY ".ahk"
@@ -102,13 +103,13 @@ enum ExitReasons {EXIT_NONE, EXIT_CRITICAL, EXIT_ERROR, EXIT_DESTROY, EXIT_LOGOF
 enum SingleInstanceType {ALLOW_MULTI_INSTANCE, SINGLE_INSTANCE, SINGLE_INSTANCE_REPLACE
 	, SINGLE_INSTANCE_IGNORE, SINGLE_INSTANCE_OFF}; // ALLOW_MULTI_INSTANCE must be zero.
 
-enum MenuVisibleType {MENU_VISIBLE_NONE, MENU_VISIBLE_POPUP, MENU_VISIBLE_MAIN}; // NONE must be zero.
+enum MenuTypeType {MENU_TYPE_NONE, MENU_TYPE_POPUP, MENU_TYPE_BAR}; // NONE must be zero.
 
 // These are used for things that can be turned on, off, or left at a
 // neutral default value that is neither on nor off.  INVALID must
 // be zero:
 enum ToggleValueType {TOGGLE_INVALID = 0, TOGGLED_ON, TOGGLED_OFF, ALWAYS_ON, ALWAYS_OFF
-	, TOGGLE, TOGGLE_PERMIT, NEUTRAL};
+	, TOGGLE, TOGGLE_PERMIT, NEUTRAL, TOGGLE_SEND, TOGGLE_MOUSE, TOGGLE_SENDANDMOUSE, TOGGLE_DEFAULT};
 
 // For convenience in many places.  Must cast to int to avoid loss of negative values.
 #define BUF_SPACE_REMAINING ((int)(aBufSize - (aBuf - aBuf_orig)))
@@ -125,8 +126,10 @@ enum ToggleValueType {TOGGLE_INVALID = 0, TOGGLED_ON, TOGGLED_OFF, ALWAYS_ON, AL
 #define MAX_PROGRESS_WINDOWS_STR "10" // Keep this in sync with above.
 #define MAX_SPLASHIMAGE_WINDOWS 10
 #define MAX_SPLASHIMAGE_WINDOWS_STR "10" // Keep this in sync with above.
+#define MAX_GUI_WINDOWS 5  // Increasing this will impact performance for routines that search through them all.
+#define MAX_GUI_WINDOWS_STR "5" // Keep this in sync with above.
 #define MAX_TOOLTIPS 20
-#define MAX_TOOLTIPS_STR "20"
+#define MAX_TOOLTIPS_STR "20"   // Keep this in sync with above.
 #define MAX_FILEDIALOGS 4
 #define MAX_FOLDERDIALOGS 4
 #define MAX_NUMBER_LENGTH 20
@@ -320,6 +323,7 @@ inline void global_init(global_struct *gp)
 	#define MAX_MOUSE_SPEED 100
 	#define MAX_MOUSE_SPEED_STR "100"
 	#define COORD_UNSPECIFIED INT_MIN
+	#define COORD_CENTERED (INT_MIN + 1)
 	gp->DefaultMouseSpeed = DEFAULT_MOUSE_SPEED;
 	gp->CoordMode = 0;  // All the flags it contains are off by default.
 	gp->StoreCapslockMode = true;  // AutoIt2 (and probably 3's) default, and it makes a lot of sense.

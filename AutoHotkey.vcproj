@@ -250,6 +250,9 @@
 				RelativePath=".\source\script2.cpp">
 			</File>
 			<File
+				RelativePath=".\source\script_gui.cpp">
+			</File>
+			<File
 				RelativePath=".\source\script_menu.cpp">
 			</File>
 			<File

@@ -193,6 +193,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 	bool sleep0_was_done = false;
 	bool empty_the_queue_via_peek = false;
 
+	int i;
 	HWND fore_window;
 	DWORD fore_pid;
 	char fore_class_name[32];
@@ -200,6 +201,9 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 	ActionTypeType type_of_first_line;
 	int priority;
 	Hotstring *hs;
+	GuiType *pgui;
+	bool *pgui_label_is_running;
+	Label *gui_label;
 	MSG msg;
 
 	for (;;)
@@ -305,6 +309,23 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 			// else Peek() found a message, so process it below.
 		}
 
+		// If this message might be for one of our GUI windows, check that before doing anything
+		// else with the message.  This must be done first because some of the standard controls
+		// also use WM_USER messages, so we must not assume they're generic thread messages just
+		// because they're >= WM_USER.  The exception is AHK_GUI_ACTION should always be handled here:
+		if (msg.hwnd && msg.hwnd != g_hWnd && msg.message != AHK_GUI_ACTION)
+		{
+			for (i = 0; i < MAX_GUI_WINDOWS; ++i)
+				// Note: indications are that IsDialogMessage() should not be called with NULL as
+				// its first parameter (perhaps as an attempt to get allow dialogs owned by our
+				// thread to be handled at once). Although it might work on some versions of Windows,
+				// it's undocumented and shouldn't be relied on:
+				if (g_gui[i] && g_gui[i]->mHwnd && IsDialogMessage(g_gui[i]->mHwnd, &msg))
+					break;
+			if (i < MAX_GUI_WINDOWS) // This message was handled by IsDialogMessage() above.
+				continue; // Continue with the main message loop.
+		}
+
 		TRANSLATE_AHK_MSG(msg.message, msg.wParam)
 
 		switch(msg.message)
@@ -361,10 +382,21 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 		case AHK_HOOK_HOTKEY:  // Sent from this app's keyboard or mouse hook.
 		case AHK_HOTSTRING:    // Sent from keybd hook to activate a non-auto-replace hotstring.
 		case AHK_USER_MENU:    // The user selected a custom menu item.
+		case AHK_GUI_ACTION:   // The user pressed a button on a GUI window, or some other actionable event.
 			// MSG_FILTER_MAX should prevent us from receiving these messages (except AHK_USER_MENU)
 			// whenever g_AllowInterruption or g.AllowThisThreadToBeInterrupted is false.
-			if (msg.message == AHK_HOTSTRING)
+			switch(msg.message)
 			{
+			case AHK_USER_MENU: // user-defined menu item
+				if (   !(menu_item = g_script.FindMenuItemByID((UINT)msg.lParam))   ) // Item not found.
+					continue; // ignore the msg
+				// And just in case a menu item that lacks a label (such as a separator) is ever
+				// somehow selected (perhaps via someone sending direct messages to us, bypassing
+				// the menu):
+				if (!menu_item->mLabel)
+					continue;
+				break;
+			case AHK_HOTSTRING:
 				if (msg.wParam >= Hotstring::sHotstringCount) // Invalid hotstring ID (perhaps spoofed by external app)
 					continue; // Do nothing.
 				hs = Hotstring::shs[msg.wParam];  // For performance and convenience.
@@ -379,17 +411,45 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 				// But first, since this isn't an auto-replace hotstring, set this value to support
 				// the built-in variable A_EndChar:
 				g_script.mEndChar = (char)LOWORD(msg.lParam);
-			}
-			if (msg.message == AHK_USER_MENU) // user-defined menu item
-			{
-				if (   !(menu_item = g_script.FindMenuItemByID((UINT)msg.lParam))   ) // Item not found.
-					continue; // ignore the msg
-				// And just in case a menu item that lacks a label (such as a separator) is ever
-				// somehow selected (perhaps via someone sending direct messages to us, bypassing
-				// the menu):
-				if (!menu_item->mLabel)
+				break;
+			case AHK_GUI_ACTION:
+				// Assume that it is possible that this message's GUI window has been destroyed
+				// (and maybe even recreated) since the time the msg was posted.  If this can happen,
+				// that's another reason for finding which GUI this control is associate with (it also
+				// needs to be found so that we can call the correct GUI window object to perform
+				// the action):
+				if (   !(pgui = GuiType::FindGui(msg.hwnd))   ) // No associated GUI object, so ignore this event.
 					continue;
+				if (msg.wParam == AHK_GUI_CLOSE) // This is the signal to run the window's OnClose label.
+				{
+					if (   !(gui_label = pgui->mLabelForClose)   ) // In case it became NULL since the msg was posted.
+						continue;
+					pgui_label_is_running = &pgui->mLabelForCloseIsRunning;
+				}
+				else if (msg.wParam == AHK_GUI_ESCAPE) // This is the signal to run the window's OnEscape label.
+				{
+					if (   !(gui_label = pgui->mLabelForEscape)   ) // In case it became NULL since the msg was posted.
+						continue;
+					pgui_label_is_running = &pgui->mLabelForEscapeIsRunning;
+				}
+				else // This is an action from a particular control in the GUI window.
+				{
+					if (msg.wParam >= pgui->mControlCount) // Index beyond the quantity of controls, so ignore this event.
+						continue;
+					if (   !(gui_label = pgui->mControl[msg.wParam].jump_to_label)   )
+					{
+						// On if there's no label is the implicit action considered.
+						// If there is no implicit action either, this will take no action:
+						pgui->PerformImplicitAction(pgui->mControl[msg.wParam].implicit_action);  // Don't start a new thread for implicit/simple actions.
+						continue; // Fully handled by the above; or there was no label.
+						// This event might lack both a label and an action if its control was changed to be
+						// non-actionable since the time the msg was posted.
+					}
+					pgui_label_is_running = &pgui->mControl[msg.wParam].label_is_running;
+				}
+				break;
 			}
+
 			if (g_nThreads >= g_MaxThreadsTotal)
 			{
 				// The below allows 1 thread beyond the limit in case the script's configured
@@ -398,52 +458,73 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 				// when we're at the absolute limit:
 				if (g_nThreads > MAX_THREADS_LIMIT)
 					continue;
-
-				if (msg.message == AHK_USER_MENU) // user-defined menu item
+				switch(msg.message)
+				{
+				case AHK_USER_MENU: // user-defined menu item
 					type_of_first_line = menu_item->mLabel->mJumpToLine->mActionType;
-				else if (msg.message == AHK_HOTSTRING)
+					break;
+				case AHK_HOTSTRING:
 					type_of_first_line = hs->mJumpToLabel->mJumpToLine->mActionType;
-				else // hotkey
+					break;
+				case AHK_GUI_ACTION:
+					type_of_first_line = gui_label->mJumpToLine->mActionType;
+					break;
+				default: // hotkey
 					type_of_first_line = Hotkey::GetTypeOfFirstLine((HotkeyIDType)msg.wParam);
+				}
 				if (!ACT_IS_ALWAYS_ALLOWED(type_of_first_line))
 					// Allow only a limited number of recursion levels to avoid any chance of
 					// stack overflow.  So ignore this message.  Later, can devise some way
-					// to support "queuing up" these hotkey firings for use later when there
-					// is "room" to run them, but that might cause complications because in
-					// some cases, the user didn't intend to hit the key twice (e.g. due to
+					// to support "queuing up" these launch-thread events for use later when
+					// there is "room" to run them, but that might cause complications because
+					// in some cases, the user didn't intend to hit the key twice (e.g. due to
 					// "fat fingers") and would have preferred to have it ignored.  Doing such
 					// might also make "infinite key loops" harder to catch because the rate
 					// of incoming hotkeys would be slowed down to prevent the subroutines from
 					// running concurrently.
 					continue;
-				// If the above "continued", it seems best not to buffer the key since it might be a
-				// while before the number of threads drops back below the limit.
+				// If the above "continued", it seems best not to re-queue/buffer the key since
+				// it might be a while before the number of threads drops back below the limit.
 			}
 
-			// Due to the key-repeat feature and the fact that most scripts use a value of 1
-			// for their #MaxThreadsPerHotkey, this check will often help average performance
-			// by avoiding a lot of unncessary overhead that would otherwise occur:
-			if ((msg.message == WM_HOTKEY || msg.message == AHK_HOOK_HOTKEY)
-				&& !Hotkey::PerformIsAllowed((HotkeyIDType)msg.wParam))
+			switch(msg.message)
 			{
-				// The key is buffered in this case to boost the responsiveness of hotkeys
-				// that are being held down by the user to activate the keyboard's key-repeat
-				// feature.  This way, there will always be one extra event waiting in the queue,
-				// which will be fired almost the instant the previous iteration of the subroutine
-				// finishes (this above descript applies only when MaxThreadsPerHotkey is 1,
-				// which it usually is).
-				Hotkey::RunAgainAfterFinished((HotkeyIDType)msg.wParam);
-				continue;
+			case AHK_USER_MENU: // user-defined menu item
+				// Ignore/discard a hotkey or custom menu item event if the current thread's priority
+				// is higher than it's:
+				priority = menu_item->mPriority;
+				break;
+			case AHK_HOTSTRING:
+				priority = hs->mPriority;
+				break;
+			case AHK_GUI_ACTION:
+				// It seems best by default not to allow multiple threads for the same control.
+				// Such events are discarded because it seems likely that most script designers
+				// would want to see the effects of faulty design (e.g. long running timers or
+				// hotkeys that interrupt gui threads) rather than having events for later,
+				// when they might suddenly take effect unexpectedly:
+				if (*pgui_label_is_running)
+					continue;
+				priority = 0;  // Always use default for now.
+				break;
+			default: // hotkey
+				// Due to the key-repeat feature and the fact that most scripts use a value of 1
+				// for their #MaxThreadsPerHotkey, this check will often help average performance
+				// by avoiding a lot of unncessary overhead that would otherwise occur:
+				if (!Hotkey::PerformIsAllowed((HotkeyIDType)msg.wParam))
+				{
+					// The key is buffered in this case to boost the responsiveness of hotkeys
+					// that are being held down by the user to activate the keyboard's key-repeat
+					// feature.  This way, there will always be one extra event waiting in the queue,
+					// which will be fired almost the instant the previous iteration of the subroutine
+					// finishes (this above descript applies only when MaxThreadsPerHotkey is 1,
+					// which it usually is).
+					Hotkey::RunAgainAfterFinished((HotkeyIDType)msg.wParam);
+					continue;
+				}
+				priority = Hotkey::GetPriority((HotkeyIDType)msg.wParam);
 			}
 
-			// Ignore/discard a hotkey or custom menu item event if the current thread's priority
-			// is higher than it's:
-			if (msg.message == AHK_USER_MENU) // user-defined menu item
-				priority = menu_item->mPriority;
-			else if (msg.message == AHK_HOTSTRING)
-				priority = hs->mPriority;
-			else // hotkey
-				priority = Hotkey::GetPriority((HotkeyIDType)msg.wParam);
 			if (priority < g.Priority)
 				continue;
 
@@ -485,14 +566,16 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 				// to launch a new subroutine.
 			}
 
-			if (msg.message == AHK_USER_MENU)
+			switch(msg.message)
 			{
+			case AHK_USER_MENU: // user-defined menu item
 				// Safer to make a full copies than point to something potentially volatile.
 				strlcpy(g_script.mThisMenuItemName, menu_item->mName, sizeof(g_script.mThisMenuItemName));
 				strlcpy(g_script.mThisMenuName, menu_item->mMenu->mName, sizeof(g_script.mThisMenuName));
-			}
-			else // Hotkey or hot string
-			{
+				break;
+			case AHK_GUI_ACTION:
+				break; // Do nothing at this stage.
+			default: // hotkey or hotstring
 				// Just prior to launching the hotkey, update these values to support built-in
 				// variables such as A_TimeSincePriorHotkey:
 				g_script.mPriorHotkeyName = g_script.mThisHotkeyName;
@@ -528,8 +611,9 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 			g_script.UpdateTrayIcon();
 			// Make every newly launched subroutine start off with the global default values that
 			// the user set up in the auto-execute part of the script (e.g. KeyDelay, WinDelay, etc.).
-			// However, we do not set ErrorLevel to NONE here because it's more flexible that way
-			// (i.e. the user may want one hotkey subroutine to use the value of ErrorLevel set by another):
+			// However, we do not set ErrorLevel to anything special here (except for GUI threads, later
+			// below) because it's more flexible that way (i.e. the user may want one hotkey subroutine
+			// to use the value of ErrorLevel set by another):
 			INIT_NEW_THREAD
 			g.Priority = priority;  // Set thread priority.
 
@@ -542,20 +626,51 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 			// that is reset also:
 			g_script.mLinesExecutedThisCycle = 0;
 			g_script.mLastScriptRest = GetTickCount();
-			if (msg.message != AHK_USER_MENU) // Done even for hot strings.
+			if (msg.message != AHK_USER_MENU) // Done for hotstrings, hotkeys, and GUI threads.
 				g_script.mThisHotkeyStartTime = g_script.mLastScriptRest;
 
 			// Perform the new thread's subroutine:
 			++g_nThreads;
-			if (msg.message == AHK_USER_MENU)
+			switch(msg.message)
+			{
+			case AHK_USER_MENU: // user-defined menu item
+				// Below: the menu type is passed with the message so that its value will be in sync
+				// with the timestamp of the message (in case this message has been stuck in the
+				// queue for a long time):
+				if (msg.wParam < MAX_GUI_WINDOWS) // Poster specified that this menu item was from a gui's menu bar.
+				{
+					// msg.wParam is the index rather than a pointer to avoid any chance of problems with
+					// a gui object or its window having been destroyed while the msg was waiting in the queue.
+					// As documented, set the last found window if possible/applicable.  It's not necessary to
+					// check IsWindow/IsWindowVisible/DetectHiddenWindows since g_ValidLastUsedWindow
+					// takes care of that whenever the script actually tries to use the last found window.
+					if (g_gui[msg.wParam])
+						g.hWndLastUsed = g_gui[msg.wParam]->mHwnd; // OK if NULL.
+				}
 				menu_item->mLabel->mJumpToLine->ExecUntil(UNTIL_RETURN);
-			else if (msg.message == AHK_HOTSTRING)
+				break;
+
+			case AHK_HOTSTRING:
 				hs->Perform();
-			else // hotkey
+				break;
+
+			case AHK_GUI_ACTION:
+				g_ErrorLevel->Assign(); // Reset for potential future uses (may help avoid breaking existing scripts if ErrorLevel is ever set).
+				// Set last found window (as documented).  It's not necessary to check IsWindow/IsWindowVisible/
+				// DetectHiddenWindows since g_ValidLastUsedWindow takes care of that whenever the script
+				// actually tries to use the last found window:
+				g.hWndLastUsed = pgui->mHwnd; // OK if NULL.
+				*pgui_label_is_running = true;
+				gui_label->mJumpToLine->ExecUntil(UNTIL_RETURN);
+				*pgui_label_is_running = false;
+				break;
+
+			default: // hotkey
 				Hotkey::PerformID((HotkeyIDType)msg.wParam);
+			}
 			--g_nThreads;
 
-			KILL_UNINTERRUPTIBLE_TIMER
+			MAKE_THREAD_INTERRUPTIBLE
 
 			if (msg.message == WM_HOTKEY || msg.message == AHK_HOOK_HOTKEY)
 				g_LastPerformedHotkeyType = Hotkey::GetType((HotkeyIDType)msg.wParam); // For use with the KeyHistory cmd.
@@ -585,10 +700,12 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 			}
 			else
 			{
+				// Make double sure this "idle thread" is interruptible, because there might still ways
+				// it could otherwise acuire a permanent false value:
 				// Since the script is now idle again, this must done because they indicate that the
 				// "idle thread" can always be interrupted:
+				g.AllowThisThreadToBeInterrupted = true;
 				g.Priority = PRIORITY_MINIMUM; // Minimum priority so that idle state can always be "interrupted".
-				g.AllowThisThreadToBeInterrupted = true; // There is no actual thread in this case, since script is idle.
 			}
 			continue;
 
@@ -623,7 +740,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 		} // switch()
 
 		// If a "continue" statement wasn't encountered somewhere in the switch(), we want to
-		// process this message in a more generic way:
+		// process this message in a more generic way.
 		// This little part is from the Miranda source code.  But it doesn't seem
 		// to provide any additional functionality: You still can't use keyboard
 		// keys to navigate in the dialog unless it's the topmost dialog.
@@ -717,6 +834,11 @@ ResultType IsCycleComplete(int aSleepDuration, DWORD aStartTime, bool aAllowEarl
 
 
 void CheckScriptTimers()
+// It's best to call this function only directly from MsgSleep() or when there is an instance of
+// MsgSleep() closer on the call stack than the nearest dialog's message pump (e.g. MsgBox).
+// This is because threads some events might get queued up for our thread during the execution
+// of the timer subroutines here.  When those subroutines finish, if we return directly to a dialog's
+// message pump, and such pending messages might be discarded or mishandled.
 // Caller should already have checked the value of g_script.mTimerEnabledCount to ensure it's
 // greater than zero, since we don't check that here (for performance).
 // This function will go through the list of timed subroutines only once and then return to its caller.
@@ -772,7 +894,7 @@ void CheckScriptTimers()
 				// Increment the count of quasi-threads only once because this instance of this
 				// function will never create more than 1 thread (i.e. if there is more than one
 				// enabled timer subroutine, the will always be run sequentially by this instance).
-				// If g_nThreads is zero, incremented it will also effectively mark the script as
+				// If g_nThreads is zero, incrementing it will also effectively mark the script as
 				// non-idle, the main consequence being that an otherwise-idle script can be paused
 				// if the user happens to do it at the moment a timed subroutine is running, which
 				// seems best since some timed subroutines might take a long time to run:
@@ -814,7 +936,7 @@ void CheckScriptTimers()
 			timer->mLabel->mJumpToLine->ExecUntil(UNTIL_RETURN);
 			--timer->mExistingThreads;
 
-			KILL_UNINTERRUPTIBLE_TIMER
+			MAKE_THREAD_INTERRUPTIBLE
 
 			// Seems better to store the start time rather than the finish time, though it's clearly
 			// debatable.  The reason is that it's sometimes more important to ensure that a given
@@ -838,6 +960,10 @@ void CheckScriptTimers()
 
 
 void PollJoysticks()
+// It's best to call this function only directly from MsgSleep() or when there is an instance of
+// MsgSleep() closer on the call stack than the nearest dialog's message pump (e.g. MsgBox).
+// This is because events posted to the thread indirectly by us here would be discarded or mishandled
+// by a non-standard (dialog) message pump.
 // Polling the joysticks this way rather than using joySetCapture() is preferable for several reasons:
 // 1) I believe joySetCapture() internally polls the joystick anyway, via a system timer, so it probably
 //    doesn't perform much better (if at all) than polling "manually".
@@ -848,7 +974,7 @@ void PollJoysticks()
 {
 	// Even if joystick hotkeys aren't currently allowed to fire, poll it anyway so that hotkey
 	// messages can be buffered for later.
-	static DWORD buttons_prev[MAX_JOYSTICKS] = {0}; // Set initial state to "all buttons up for all joysticks".
+	static DWORD sButtonsPrev[MAX_JOYSTICKS] = {0}; // Set initial state to "all buttons up for all joysticks".
 	JOYINFOEX jie;
 	DWORD buttons_newly_down;
 
@@ -864,8 +990,8 @@ void PollJoysticks()
 		// The exclusive-or operator determines which buttons have changed state.  After that,
 		// the bitwise-and operator determines which of those have gone from up to down (the
 		// down-to-up events are currently not significant).
-		buttons_newly_down = (jie.dwButtons ^ buttons_prev[i]) & jie.dwButtons;
-		buttons_prev[i] = jie.dwButtons;
+		buttons_newly_down = (jie.dwButtons ^ sButtonsPrev[i]) & jie.dwButtons;
+		sButtonsPrev[i] = jie.dwButtons;
 		if (!buttons_newly_down)
 			continue;
 		// See if any of the joystick hotkeys match this joystick ID and one of the buttons that
@@ -911,6 +1037,12 @@ VOID CALLBACK AutoExecSectionTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD d
 	// the desired action hasn't already occurred.  Finally, the macro is used here because
 	// it's possible that the timer has already been killed, so we don't want to risk any
 	// problems that might arise from killing a non-existent timer (which this prevents):
+	// The below also sets "g.AllowThisThreadToBeInterrupted = true".  Notes about this:
+	// And since the AutoExecute is taking a long time (or might never complete), we now allow
+	// interruptions such as hotkeys and timed subroutines. Use g.AllowThisThreadToBeInterrupted
+	// vs. g_AllowInterruption in case commands in the AutoExecute section need exclusive use of
+	// g_AllowInterruption (i.e. they might change its value to false and then back to true,
+	// which would interfere with our use of that var):
 	KILL_AUTOEXEC_TIMER
 
 	// This is a double-check because it's possible for the WM_TIMER message to have
@@ -921,23 +1053,16 @@ VOID CALLBACK AutoExecSectionTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD d
 	if (!g_script.AutoExecSectionIsRunning)
 		return;
 
-	// Otherwise:
+	// Otherwise, update global DEFAULTS, which are for all threads launched in the future:
 	CopyMemory(&g_default, &g, sizeof(global_struct));
 	global_clear_state(&g_default);  // Only clear g_default, not g.
-	// And since the AutoExecute is taking a long time (or might never complete), we now allow
-	// interruptions such as hotkeys and timed subroutines. Use g.AllowThisThreadToBeInterrupted
-	// vs. g_AllowInterruption in case commands in the AutoExecute section need exclusive use of
-	// g_AllowInterruption (i.e. they might change its value to false and then back to true,
-	// which would interfere with our use of that var):
-	g.AllowThisThreadToBeInterrupted = true;
 }
 
 
 
 VOID CALLBACK UninteruptibleTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
 {
-	KILL_UNINTERRUPTIBLE_TIMER // Best to use the macro so that g_UninterruptibleTimerExists is reset to false.
-	g.AllowThisThreadToBeInterrupted = true;
+	MAKE_THREAD_INTERRUPTIBLE // Best to use the macro so that g_UninterruptibleTimerExists is reset to false.
 }
 
 

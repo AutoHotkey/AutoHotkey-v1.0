@@ -25,7 +25,9 @@ GNU General Public License for more details.
 // If this is a problem, try making the msg have an ID less than WM_USER via a technique such as that used
 // for AHK_USER_MENU (perhaps WM_COMMNOTIFY can be "overloaded" to contain more than one type of msg):
 enum UserMessages {AHK_HOOK_HOTKEY = WM_USER, AHK_HOTSTRING, AHK_USER_MENU, AHK_DIALOG, AHK_NOTIFYICON
-	, AHK_RETURN_PID, AHK_EXIT_BY_RELOAD, AHK_EXIT_BY_SINGLEINSTANCE, AHK_HOOK_TEST_MSG};
+	, AHK_RETURN_PID, AHK_EXIT_BY_RELOAD, AHK_EXIT_BY_SINGLEINSTANCE
+	, AHK_GUI_ACTION = WM_USER + 100  // Allow some room in between for more "exit" type msgs to be added in the future (see below comment).
+	, AHK_HOOK_TEST_MSG};
 // NOTE: TRY NEVER TO CHANGE the specific numbers of the above messages, since some users might be
 // using the Post/SendMessage commands to automate AutoHotkey itself.  Here is the original order
 // that should be maintained:
@@ -55,10 +57,20 @@ enum UserMessages {AHK_HOOK_HOTKEY = WM_USER, AHK_HOTSTRING, AHK_USER_MENU, AHK_
 		wparam = 0;\
 	} // In the above, wparam is made zero to help catch bugs.
 
+#define AHK_GUI_CLOSE -1
+#define AHK_GUI_ESCAPE -2
+
 // And these macros are kept here so that all this trickery is centrally located and thus more maintainable:
 #define ASK_INSTANCE_TO_CLOSE(window, reason) PostMessage(window, WM_COMMNOTIFY, reason, 0);
-#define POST_AHK_USER_MENU(menu) PostThreadMessage(GetCurrentThreadId(), AHK_USER_MENU, 0, menu);
+#define POST_AHK_USER_MENU(menu, gui_index) PostMessage(NULL, AHK_USER_MENU, gui_index, menu);
+#define POST_AHK_GUI_ACTION(window, control_index) PostMessage(window, AHK_GUI_ACTION, control_index, 0);
 #define POST_AHK_DIALOG(timeout) PostMessage(g_hWnd, WM_COMMNOTIFY, AHK_DIALOG, (LPARAM)timeout);
+// Notes about POST_AHK_USER_MENU: a gui_index value >= 0 is passed with the message if it came from a
+// GUI's menu bar.  This is done because it's good way to pass the info, but also so that its value will
+// be in sync with the timestamp of the message (in case the message is stuck in the queue for a long time).
+// No pointer is passed in this case since they might become invalid between the time the msg is posted vs.
+// processed.
+
 // Notes about POST_AHK_DIALOG above:
 // Post a special msg that will attempt to force it to the foreground after it has been displayed,
 // since the dialog often will flash in the task bar instead of becoming foreground.
@@ -71,6 +83,15 @@ enum UserMessages {AHK_HOOK_HOTKEY = WM_USER, AHK_HOTSTRING, AHK_USER_MENU, AHK_
 // MessageBox() and the other dialog invocating API calls (for FileSelectFile/Folder) likely
 // ensures its window really exists before dispatching messages.
 
+// Notes about the below: It is important to call MsgSleep() immediately after posting the message
+// in case a dialog's message pump is running, in which case the message would otherwise be lost
+// due to the dialog's message pump being unable to dispatch thread messages (those with a NULL window),
+// resulting in the loss of such messages:
+#define HANDLE_USER_MENU(menu_id, gui_index) \
+{\
+	POST_AHK_USER_MENU(menu_id, gui_index) \
+	MsgSleep(-1);\
+}
 
 
 

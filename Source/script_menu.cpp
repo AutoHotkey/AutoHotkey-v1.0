@@ -61,7 +61,7 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 		if (mNIC.hWnd) // i.e. only update the tip if the tray icon exists (can't work otherwise).
 		{
 			UPDATE_TIP_FIELD
-			Shell_NotifyIcon(NIM_MODIFY, &mNIC);  // Currently not checking its result.
+			Shell_NotifyIcon(NIM_MODIFY, &mNIC);  // Currently not checking its result (e.g. in case a shell other than Explorer is running).
 		}
 		return OK;
 
@@ -100,7 +100,7 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 
 		// Alternate method, untested and probably doesn't work on EXEs:
 		// Specifying size 32x32 probably saves memory if the icon file is large:
-		//new_icon = LoadImage(NULL, aParam3, IMAGE_ICON, 32, 32, LR_LOADFROMFILE);
+		//HICON new_icon = LoadImage(NULL, aParam3, IMAGE_ICON, 32, 32, LR_LOADFROMFILE);
 		HICON new_icon = ExtractIcon(g_hInstance, aParam3, icon_number - 1);
 		if (!new_icon)
 			RETURN_MENU_ERROR("Icon could not be loaded.", aParam3);
@@ -206,9 +206,13 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 			break;    // Let a later switch() handle it.
 		if (menu == mTrayMenu)
 			RETURN_MENU_ERROR("Tray menu must not be deleted.", "");
-		return ScriptDeleteMenu(menu);
+		if (!ScriptDeleteMenu(menu))
+			RETURN_MENU_ERROR("Can't delete menu. It might be in use.", menu->mName); // Possibly in use as a menu bar.
+		return OK;
 	case MENU_CMD_DELETEALL:
-		return menu->DeleteAllItems();
+		if (!menu->DeleteAllItems())
+			RETURN_MENU_ERROR("Can't delete items. Menu might be in use.", menu->mName); // Possibly in use as a menu bar.
+		return OK;
 	case MENU_CMD_DEFAULT:
 		if (*aParam3) // Since a menu item has been specified, let a later switch() handle it.
 			break;
@@ -216,9 +220,14 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 	case MENU_CMD_NODEFAULT:
 		return menu->SetDefault();
 	case MENU_CMD_STANDARD:
-		return menu->IncludeStandardItems();
+		menu->IncludeStandardItems(); // Since failure is very rare, no check of its return value is done.
+		return OK;
 	case MENU_CMD_NOSTANDARD:
-		return menu->ExcludeStandardItems();
+		menu->ExcludeStandardItems(); // Since failure is very rare, no check of its return value is done.
+		return OK;
+	case MENU_CMD_COLOR:
+		menu->SetColor(aParam3, stricmp(aParam4, "Single"));
+		return OK;
 	}
 
 	// All the remaining commands need a menu item to operate upon, or some other requirement met below.
@@ -425,9 +434,12 @@ ResultType Script::ScriptDeleteMenu(UserMenu *aMenu)
 		mFirstMenu = aMenu->mNextMenu; // Can be NULL if the list will now be empty.
 	// Do this last when its contents are no longer needed.  Its destructor will delete all
 	// the items in the menu and destroy the OS menu itself:
+	aMenu->DeleteAllItems(); // This also calls Destroy() to free the menu's resources.
+	if (aMenu->mBrush) // Free the brush used for the menu's background color.
+		DeleteObject(aMenu->mBrush);
 	delete aMenu;
 	--mMenuCount;
-	return OK; // For caller convenience.
+	return OK;
 }
 
 
@@ -516,10 +528,17 @@ ResultType UserMenu::DeleteAllItems()
 	// it's probably better to start off fresh than have the destructor individually remove each
 	// menu item as the items in the linked list are deleted.  In addition, this avoids the need
 	// to find any submenus by position:
-	Destroy(); // if mStandardMenuItems is true, the menu will be recreated later when needed.
+	if (!Destroy())  // if mStandardMenuItems is true, the menu will be recreated later when needed.
+		// If menu can't be destroyed, it's probably due to it being attached as a menu bar to an existing
+		// GUI window.  In this case, when the window is destroyed, the menu bar will be too, so it's
+		// probably best to do nothing.  If we were called as a result of "menu, MenuName, Delete", it
+		// is documented that this will fail in this case.
+		return FAIL;
 	// The destructor relies on the fact that the above destroys the menu but does not recreate it.
-	// This is because popup menus, not being affiliated with window, must be destroyed with
-	// DestroyMenu() to ensure a clean exit (resources freed).
+	// This is because popup menus, not being affiliated with a window (unless they're attached to
+	// a menu bar, but that isn't the case with our GUI windows, which detach such menus prior to
+	// when the GUI window is destroyed in case the menu is in use by another window), must be
+	// destroyed with DestroyMenu() to ensure a clean exit (resources freed).
 	UserMenuItem *menu_item_to_delete;
 	for (UserMenuItem *mi = mFirstMenuItem; mi;)
 	{
@@ -583,7 +602,7 @@ ResultType UserMenu::ModifyItem(UserMenuItem *aMenuItem, Label *aLabel, UserMenu
 		{
 			UserMenu *temp = aMenuItem->mSubmenu;
 			aMenuItem->mSubmenu = aSubmenu; // Should be done before the below so that Destroy() sees the change.
-			temp->Destroy();
+			temp->Destroy(); // Shouldn't fail because submenus are popup menus, and popup menus can't be menu bars.
 		}
 		else
 			aMenuItem->mSubmenu = aSubmenu;
@@ -764,6 +783,7 @@ ResultType UserMenu::IncludeStandardItems()
 }
 
 
+
 ResultType UserMenu::ExcludeStandardItems()
 {
 	if (!mIncludeStandardItems)
@@ -774,19 +794,34 @@ ResultType UserMenu::ExcludeStandardItems()
 
 
 
-ResultType UserMenu::Create()
+ResultType UserMenu::Create(bool aCreateAsPopup)
+// Menu bars require non-popup menus (CreateMenu vs. CreatePopupMenu).  Rather than maintain two
+// different types of HMENUs on the rare chance that a script might try to use a menu both as
+// a popup and a menu bar, it seems best to have only one type to keep the code simple and reduce
+// resources used for the menu.  This has been documented in the help file.
+// Note that a menu bar's submenus can be (perhaps must be) of the popup type, so we only need
+// to worry about the distinction for the menu bar itself.  The caller tells us which is which.
 {
 	if (mMenu)
-		return OK;
-	if (   !(mMenu = CreatePopupMenu())   ) // Rare, so no error msg here (caller can, if it wants).
+	{
+		if (aCreateAsPopup == mIsPopup) // It already exists and is the right type of menu.
+			return OK;
+		else // It exists but it's the wrong type.  Destroy and recreate it (but keep TRAY always as popup type).
+			if (!stricmp(mName, "tray") || !Destroy()) // Could not be destroyed, perhaps because it is attached to a window as a menu bar.
+				return FAIL;
+	}
+	if (   !(mMenu = aCreateAsPopup ? CreatePopupMenu() : CreateMenu())   )
+		// Failure is rare, so no error msg here (caller can, if it wants).
 		return FAIL;
+
+	mIsPopup = aCreateAsPopup;  // We have to track its type since I don't think there's any way to find out.
 
 	// It seems best not to have a mandatory EXIT item added to the bottom of the tray menu
 	// for these reasons:
 	// 1) Allows the tray icon to be shown even at time when the user wants it to have no menu at all
 	//    (i.e. avoids the need for #NoTrayIcon just to disable the showing of the menu).
 	// 2) Avoids complexity because there would be a 3rd state: Standard, NoStandard, and
-	//    NoStandardWithExit.  This might be inconsequential, but would requir testing.
+	//    NoStandardWithExit.  This might be inconsequential, but would require testing.
 	//if (!mIncludeStandardItems && !mMenuItemCount)
 	//{
 	//	AppendMenu(mTrayMenu->mMenu, MF_STRING, ID_TRAY_EXIT, "E&xit");
@@ -820,10 +855,52 @@ ResultType UserMenu::Create()
 		AppendMenu(mMenu, flags, mi->mSubmenu ? (UINT_PTR)mi->mSubmenu->mMenu : mi->mMenuID, mi->mName);
 	}
 	if (mDefault)
-		// This also ensures that only one is default at a time:
+		// This also automatically ensures that only one is default at a time:
 		SetMenuDefaultItem(mMenu, mDefault->mMenuID, FALSE);
 
+	// Apply background color if this menu has a non-standard one.  If this menu has submenus,
+	// they will be individually given their own background color when created via Create(),
+	// which is why false is passed:
+	ApplyColor(false);
+
 	return OK;
+}
+
+
+
+void UserMenu::SetColor(char *aColorName, bool aApplyToSubmenus)
+{
+	// Avoid the overhead of creating HBRUSH's on OSes that don't support SetMenuInfo().
+	// Perhaps there is some other way to change menu background color on Win95/NT?
+	if (g_os.IsWin95() || g_os.IsWinNT4())
+		return;
+	AssignColor(aColorName, mColor, mBrush);  // Takes care of deleting old brush, etc.
+	// To avoid complications, such as a submenu being detached from its parent and then its parent
+	// later being being deleted (which causes the HBRUSH to get deleted too), give each submenu it's
+	// own HBRUSH handle by calling AssignColor() for each:
+	if (aApplyToSubmenus)
+		for (UserMenuItem *mi = mFirstMenuItem; mi; mi = mi->mNextMenuItem)
+			if (mi->mSubmenu)
+				AssignColor(aColorName, mi->mSubmenu->mColor, mi->mSubmenu->mBrush);
+	ApplyColor(aApplyToSubmenus);
+}
+
+
+
+void UserMenu::ApplyColor(bool aApplyToSubmenus)
+{
+	if (!mBrush || !mMenu)
+		return;
+	// Must fetch function address dynamically or program won't launch at all on Win95/NT:
+	typedef BOOL (WINAPI *MySetMenuInfoType)(HMENU, LPCMENUINFO);
+	static MySetMenuInfoType MySetMenuInfo = (MySetMenuInfoType)GetProcAddress(GetModuleHandle("User32.dll"), "SetMenuInfo");
+	if (!MySetMenuInfo)
+		return;
+	MENUINFO mi = {0}; 
+	mi.cbSize = sizeof(MENUINFO);
+	mi.fMask = MIM_BACKGROUND|(aApplyToSubmenus ? MIM_APPLYTOSUBMENUS : 0);
+	mi.hbrBack = mBrush;
+	MySetMenuInfo(mMenu, &mi);
 }
 
 
@@ -882,33 +959,45 @@ ResultType UserMenu::Destroy()
 	// its parent menu is destroyed, or whenever a submenu is converted back into a normal menu item):
 	if (IsMenu(mMenu))
 	{
+		// As a precaution, don't allow a menu to be destroyed if a window is using it as its
+		// menu bar. That might have bad side-effects on some OSes, especially older ones:
+		if (!mIsPopup) // If it's not a popup, it's probably a menu bar.
+			for (int i = 0; i < MAX_GUI_WINDOWS; ++i)
+				if (g_gui[i] && g_gui[i]->mHwnd && GetMenu(g_gui[i]->mHwnd) == mMenu)
+					return FAIL; // A GUI window is using this menu, so don't destroy the menu.
 		DestroyMenu(mMenu);
-		// The moment the above is done, any submenus that were attached to mMenu are also destroyed
-		// by the OS.  So mark them as destroyed in our bookkeeping also:
-		UserMenuItem *mi;
-		for (mi = mFirstMenuItem; mi ; mi = mi->mNextMenuItem)
-			if (mi->mSubmenu && mi->mSubmenu->mMenu && !IsMenu(mi->mSubmenu->mMenu))
-				mi->mSubmenu->Destroy();
-
-		// Destroy any menu that contains this menu as a submenu.  This is done so that such
-		// menus will be automatically recreated the next time they are used, which is necessary
-		// because otherwise when such a menu is displayed the next time, the OS will show its
-		// old contents even though the menu is gone.  Thus, those old menu items will be
-		// selectable but will have no effect.  In addition, sometimes our caller plans to
-		// recreate this->mMenu (or have it recreated automatically upon first use) and thus
-		// we don't want to use DeleteMenu() because that would require having to detect whether
-		// the menu needs updating (to reflect whether the submenu has been recreated) every
-		// time we display it.  Another drawback to DeleteMenu() is that it would changing the
-		// order of the menu items to something other than what the user originally specified
-		// unless InsertMenu was used during the update:
-		for (UserMenu *m = g_script.mFirstMenu; m; m = m->mNextMenu)
-			if (m->mMenu)
-				for (mi = m->mFirstMenuItem; mi; mi = mi->mNextMenuItem)
-					if (mi->mSubmenu == this)
-						m->Destroy();  // Destroy any menu that contains this menu as a submenu.
-
 	}
-	mMenu = NULL;
+	mMenu = NULL; // This must be done immediately after destroying the menu to prevent recursion problems below.
+
+	// Bug-fix for v1.0.19: The below is now done OUTSIDE the above block because the moment a
+	// parent menu is deleted all its submenus AND SUB-SUB-SUB...MENUS become invalid menu handles.
+	// But even though the OS has done this, Destroy() must still be called recursively from here
+	// so that the menu handles will be set to NULL.  This is because other functions (such as
+	// Display()) do not do the IsMenu() check, relying instead on whether the handle is NULL to
+	// determine whether the menu physically exists.
+	// The moment the above is done, any submenus that were attached to mMenu are also destroyed
+	// by the OS.  So mark them as destroyed in our bookkeeping also:
+	UserMenuItem *mi;
+	for (mi = mFirstMenuItem; mi ; mi = mi->mNextMenuItem)
+		if (mi->mSubmenu && mi->mSubmenu->mMenu && !IsMenu(mi->mSubmenu->mMenu))
+			mi->mSubmenu->Destroy();
+
+	// Destroy any menu that contains this menu as a submenu.  This is done so that such
+	// menus will be automatically recreated the next time they are used, which is necessary
+	// because otherwise when such a menu is displayed the next time, the OS will show its
+	// old contents even though the menu is gone.  Thus, those old menu items will be
+	// selectable but will have no effect.  In addition, sometimes our caller plans to
+	// recreate this->mMenu (or have it recreated automatically upon first use) and thus
+	// we don't want to use DeleteMenu() because that would require having to detect whether
+	// the menu needs updating (to reflect whether the submenu has been recreated) every
+	// time we display it.  Another drawback to DeleteMenu() is that it would change the
+	// order of the menu items to something other than what the user originally specified
+	// unless InsertMenu() was woven in during the update:
+	for (UserMenu *m = g_script.mFirstMenu; m; m = m->mNextMenu)
+		if (m->mMenu)
+			for (mi = m->mFirstMenuItem; mi; mi = mi->mNextMenuItem)
+				if (mi->mSubmenu == this)
+					m->Destroy();  // Destroy any menu that contains this menu as a submenu.
 	return OK;
 }
 
@@ -925,6 +1014,8 @@ ResultType UserMenu::Display(bool aForceToForeground)
 {
 	if (!mMenuItemCount && !mIncludeStandardItems)
 		return OK;  // Consider the display of an empty menu to be a success.
+	//if (!IsMenu(mMenu))
+	//	mMenu = NULL;
 	if (!mMenu) // i.e. because this is the first time the user has opened the menu.
 		if (!Create()) // no error msg since so rare
 			return FAIL;
@@ -978,9 +1069,9 @@ ResultType UserMenu::Display(bool aForceToForeground)
 		//else
 		//...
 	}
-	g_MenuIsVisible = MENU_VISIBLE_POPUP;
+	g_MenuIsVisible = MENU_TYPE_POPUP;
 	TrackPopupMenuEx(mMenu, TPM_LEFTALIGN | TPM_LEFTBUTTON, pt.x, pt.y, g_hWnd, NULL);
-	g_MenuIsVisible = MENU_VISIBLE_NONE;
+	g_MenuIsVisible = MENU_TYPE_NONE;
 	// MSDN recommends this to prevent menu from closing on 2nd click.  It *might* only apply to when
 	// the menu is opened via the tray icon, but not knowing, it seems safe to do it unconditionally:
 	PostMessage(g_hWnd, WM_NULL, 0, 0);

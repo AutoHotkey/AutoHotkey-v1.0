@@ -81,9 +81,17 @@ if (!g_UninterruptibleTimerExists && !(g_UninterruptibleTimerExists = SetTimer(g
 	, g_script.mUninterruptibleTime < 10 ? 10 : g_script.mUninterruptibleTime, UninteruptibleTimeout)))\
 	g_script.ExitApp(EXIT_CRITICAL, "SetTimer() unexpectedly failed.");
 
+// See AutoExecSectionTimeout() for why g.AllowThisThreadToBeInterrupted is used rather than the other var.
+// Also, from MSDN: "When you specify a TimerProc callback function, the default window procedure calls the
+// callback function when it processes WM_TIMER. Therefore, you need to dispatch messages in the calling thread,
+// even when you use TimerProc instead of processing WM_TIMER."  My: This is why all TimerProc type timers
+// should probably have a window rather than passing NULL as first param of SetTimer().
 #define SET_AUTOEXEC_TIMER(aTimeoutValue) \
-if (!g_AutoExecTimerExists && !(g_AutoExecTimerExists = SetTimer(g_hWnd, TIMER_ID_AUTOEXEC, aTimeoutValue, AutoExecSectionTimeout)))\
-	g_script.ExitApp(EXIT_CRITICAL, "SetTimer() unexpectedly failed.");
+{\
+	g.AllowThisThreadToBeInterrupted = false;\
+	if (!g_AutoExecTimerExists && !(g_AutoExecTimerExists = SetTimer(g_hWnd, TIMER_ID_AUTOEXEC, aTimeoutValue, AutoExecSectionTimeout)))\
+		g_script.ExitApp(EXIT_CRITICAL, "SetTimer() unexpectedly failed.");\
+}
 
 #define SET_INPUT_TIMER(aTimeoutValue) \
 	if (!g_InputTimerExists)\
@@ -93,13 +101,54 @@ if (!g_AutoExecTimerExists && !(g_AutoExecTimerExists = SetTimer(g_hWnd, TIMER_I
 if (g_MainTimerExists && KillTimer(g_hWnd, TIMER_ID_MAIN))\
 	g_MainTimerExists = false;
 
-#define KILL_UNINTERRUPTIBLE_TIMER \
-if (g_UninterruptibleTimerExists && KillTimer(g_hWnd, TIMER_ID_UNINTERRUPTIBLE))\
-	g_UninterruptibleTimerExists = false;
+// Although the caller doesn't always need g.AllowThisThreadToBeInterrupted reset to true,
+// it's much more maintainable and nicer to do it unconditionally due to the complexity of
+// managing quasi-threads.  At the very least, it's needed for when the "idle thread"
+// is "resumed" (see MsgSleep for explanation).
+#define MAKE_THREAD_INTERRUPTIBLE \
+{\
+	g.AllowThisThreadToBeInterrupted = true;\
+	if (g_UninterruptibleTimerExists && KillTimer(g_hWnd, TIMER_ID_UNINTERRUPTIBLE))\
+		g_UninterruptibleTimerExists = false;\
+}
 
+// Notes about the below macro:
+// If our thread's message queue has any message pending whose HWND member is NULL -- or even
+// normal messages which would be routed back to the thread by the WindowProc() -- clean them
+// out of the message queue before launching the dialog's message pump below.  That message pump
+// doesn't know how to properly handle such messages (it would either lose them or dispatch them
+// at times we don't want them dispatched).  But first ensure the current quasi-thread is
+// interruptible, since it's about to display a dialog so there little benefit (and a high cost)
+// to leaving it uninterruptible.  The "high cost" is that MsgSleep (our main message pump) would
+// filter out (leave queued) certain messages if the script were uninterruptible.  Then when it
+// returned, the dialog message pump below would start, and it would discard or misroute the
+// messages.
+// If this is not done, the following scenario would also be a problem:
+// A newly launched thread (in its period of uninterruptibility) displays a dialog.  As a consequence,
+// the dialog's message pump starts dispatching all messages.  If during this brief time (before the
+// thread becomes interruptible) a hotkey/hotstring/custom menu item/gui thread is dispatched to one
+// of our WindowProc's, and then posted to our thread via PostMessage(NULL,...), the item would be lost
+// because the dialog message pump discards messages that lack an HWND (since it doesn't know how to
+// dispatch them to a Window Proc).
+// GetQueueStatus() is used because unlike PeekMessage() or GetMessage(), it might not yield
+// our timeslice if the CPU is under heavy load, which would be good to improve performance here.
+#define DIALOG_PREP \
+{\
+	MAKE_THREAD_INTERRUPTIBLE \
+	if (HIWORD(GetQueueStatus(QS_ALLEVENTS)))\
+		MsgSleep(-1);\
+}
+
+
+// See above comment about g.AllowThisThreadToBeInterrupted.
+// Also, must restore to true in this case since auto-exec section isn't run as a new thread
+// (i.e. there's nothing to resume).
 #define KILL_AUTOEXEC_TIMER \
-if (g_AutoExecTimerExists && KillTimer(g_hWnd, TIMER_ID_AUTOEXEC))\
-	g_AutoExecTimerExists = false;
+{\
+	g.AllowThisThreadToBeInterrupted = true;\
+	if (g_AutoExecTimerExists && KillTimer(g_hWnd, TIMER_ID_AUTOEXEC))\
+		g_AutoExecTimerExists = false;\
+}
 
 #define KILL_INPUT_TIMER \
 if (g_InputTimerExists && KillTimer(g_hWnd, TIMER_ID_INPUT))\
@@ -223,8 +272,14 @@ if (g_script.mUninterruptibleTime && g_script.mUninterruptedLineCountMax)\
 // But always update the tray icon in case the paused state of the subroutine
 // we're about to resume is different from our previous paused state.  Do this even
 // when the macro is used by CheckScriptTimers(), which although it might not techically
-// need it, lends maintainability and peace of mind:
+// need it, lends maintainability and peace of mind.
+// UPDATE: Doing "g.AllowThisThreadToBeInterrupted = true" seems like a good idea to be safe,
+// at least in the case where CheckScriptTimers() calls this macro at a time when there
+// is no thread other than the "idle thread" to resume.  A resumed thread should always
+// be interruptible anyway, since otherwise it couldn't have been interrupted in the
+// first place to get us here:
 #define RESUME_UNDERLYING_THREAD \
+{\
 	CopyMemory(&g, &global_saved, sizeof(global_struct));\
 	g_ErrorLevel->Assign(g.ErrorLevel);\
 	if (g_UnpauseWhenResumed && g.IsPaused)\
@@ -234,7 +289,9 @@ if (g_script.mUninterruptibleTime && g_script.mUninterruptedLineCountMax)\
 		--g_nPausedThreads;\
 		CheckMenuItem(GetMenu(g_hWnd), ID_FILE_PAUSE, MF_UNCHECKED);\
 	}\
-	g_script.UpdateTrayIcon();
+	g_script.UpdateTrayIcon();\
+	g.AllowThisThreadToBeInterrupted = true;\
+}
 
 
 // Have this be dynamically resolved each time.  For example, when MsgSleep() uses this
@@ -266,6 +323,11 @@ if (g_script.mUninterruptibleTime && g_script.mUninterruptedLineCountMax)\
 
 ResultType IsCycleComplete(int aSleepDuration, DWORD aStartTime, bool aAllowEarlyReturn);
 
+// These should only be called from MsgSleep() (or something called by MsgSleep()) because
+// we don't want to be in the situation where a thread launched by CheckScriptTimers() returns
+// first to a dialog's message pump rather than MsgSleep's pump.  That's because our thread
+// might then have queued messages that would be stuck in the queue (due to the possible absence
+// of the main timer) until the dialog's msg pump ended.
 void CheckScriptTimers();
 #define CHECK_SCRIPT_TIMERS_IF_NEEDED if (g_script.mTimerEnabledCount) CheckScriptTimers();
 

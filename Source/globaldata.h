@@ -73,6 +73,7 @@ extern int g_nThreads;
 extern int g_nPausedThreads;
 extern bool g_UnpauseWhenResumed;
 
+extern VarSizeType g_MaxVarCapacity;
 // This value is the absolute limit:
 #define MAX_THREADS_LIMIT 20
 #define MAX_THREADS_DEFAULT 10
@@ -82,7 +83,7 @@ extern int g_MaxHotkeysPerInterval;
 extern int g_HotkeyThrottleInterval;
 extern bool g_MaxThreadsBuffer;
 
-extern MenuVisibleType g_MenuIsVisible;
+extern MenuTypeType g_MenuIsVisible;
 extern int g_nMessageBoxes;
 extern int g_nInputBoxes;
 extern int g_nFileDialogs;
@@ -90,6 +91,7 @@ extern int g_nFolderDialogs;
 extern InputBoxType g_InputBox[MAX_INPUTBOXES];
 extern SplashType g_Progress[MAX_PROGRESS_WINDOWS];
 extern SplashType g_SplashImage[MAX_SPLASHIMAGE_WINDOWS];
+EXTERN_GUI;
 extern HWND g_hWndToolTip[MAX_TOOLTIPS];
 
 extern bool g_SortCaseSensitive;
@@ -147,6 +149,9 @@ extern bool g_ForceKeybdHook;
 extern ToggleValueType g_ForceNumLock;
 extern ToggleValueType g_ForceCapsLock;
 extern ToggleValueType g_ForceScrollLock;
+
+extern ToggleValueType g_BlockInputMode;
+extern bool g_BlockInput;  // Whether input blocking is currently enabled.
 
 extern vk2_type g_sc_to_vk[SC_ARRAY_COUNT];
 extern sc2_type g_vk_to_sc[VK_ARRAY_COUNT];
