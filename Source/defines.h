@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.25.09"
+#define NAME_VERSION "1.0.25.10"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -128,7 +128,7 @@ enum ToggleValueType {TOGGLE_INVALID = 0, TOGGLED_ON, TOGGLED_OFF, ALWAYS_ON, AL
 #define MAX_SPLASHIMAGE_WINDOWS_STR "10" // Keep this in sync with above.
 #define MAX_GUI_WINDOWS 10  // Increasing this will impact performance for routines that search through them all.
 #define MAX_GUI_WINDOWS_STR "10" // Keep this in sync with above.
-#define MAX_CONTROLS_PER_GUI 500
+#define MAX_CONTROLS_PER_GUI 1000 // Can't go any higher than 1000 without running into ID_USER_FIRST.
 #define MAX_TOOLTIPS 20
 #define MAX_TOOLTIPS_STR "20"   // Keep this in sync with above.
 #define MAX_FILEDIALOGS 4

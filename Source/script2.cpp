@@ -2101,7 +2101,7 @@ ResultType Line::ControlGetFocus(char *aTitle, char *aText, char *aExcludeTitle,
 
 	char class_name[WINDOW_CLASS_SIZE];
 	cah.class_name = class_name;
-	if (!GetClassName(cah.hwnd, class_name, sizeof(class_name) - 3)) // -3 to allow room for sequence number.
+	if (!GetClassName(cah.hwnd, class_name, sizeof(class_name) - 5)) // -5 to allow room for sequence number.
 		return OK;  // Let ErrorLevel and the blank output variable tell the story.
 	
 	cah.class_count = 0;  // Init for the below.
@@ -5560,9 +5560,8 @@ void Line::MouseMove(int aX, int aY, int aSpeed, bool aMoveRelative)
 
 
 
-ResultType Line::MouseGetPos()
+ResultType Line::MouseGetPos(bool aSimpleMode)
 // Returns OK or FAIL.
-// This has been adapted from the AutoIt3 source.
 {
 	// Caller should already have ensured that at least one of these will be non-NULL.
 	// The only time this isn't true is for dynamically-built variable names.  In that
@@ -5622,11 +5621,18 @@ ResultType Line::MouseGetPos()
 
 	// Doing it this way overcomes the limitations of WindowFromPoint() and ChildWindowFromPoint()
 	// and also better matches the control that Window Spy would think is under the cursor:
-	point_and_hwnd_type pah = {0};
-	pah.pt = point;
-	EnumChildWindows(parent_under_cursor, EnumChildFindPoint, (LPARAM)&pah); // Find topmost control containing point.
-	if (pah.hwnd_found)
-		child_under_cursor = pah.hwnd_found;
+	if (!aSimpleMode)
+	{
+		point_and_hwnd_type pah = {0};
+		pah.pt = point;
+		EnumChildWindows(parent_under_cursor, EnumChildFindPoint, (LPARAM)&pah); // Find topmost control containing point.
+		if (pah.hwnd_found)
+			child_under_cursor = pah.hwnd_found;
+	}
+	//else as of v1.0.25.10, leave child_under_cursor set the the value retrieved earlier from WindowFromPoint().
+	// This allows MDI child windows to be reported correctly; i.e. that the window on top of the others
+	// is reported rather than the one at the top of the z-order (the z-order of MDI child windows,
+	// although probably constant, is not useful for determine which one is one top of the others).
 
 	if (parent_under_cursor == child_under_cursor) // if there's no control per se, make it blank.
 		return output_var_child->Assign();
@@ -5635,7 +5641,7 @@ ResultType Line::MouseGetPos()
 	cah.hwnd = child_under_cursor;  // This is the specific control we need to find the sequence number of.
 	char class_name[WINDOW_CLASS_SIZE];
 	cah.class_name = class_name;
-	if (!GetClassName(cah.hwnd, class_name, sizeof(class_name) - 3))  // -3 to allow room for sequence number.
+	if (!GetClassName(cah.hwnd, class_name, sizeof(class_name) - 5))  // -5 to allow room for sequence number.
 		return output_var_child->Assign();
 	cah.class_count = 0;  // Init for the below.
 	cah.is_found = false; // Same.

@@ -1618,18 +1618,7 @@ modLR_type GetModifierLRState(bool aExplicitlyGet)
 			g_modifiersLR_logical &= ~hook_wrongly_down;
 			g_modifiersLR_logical_non_ignored &= ~hook_wrongly_down;
 			// Also adjust physical state so that the GetKeyState command will retrieve the correct values:
-			g_PhysicalKeyState[VK_LSHIFT] = (g_modifiersLR_physical & MOD_LSHIFT) ? STATE_DOWN : 0;
-			g_PhysicalKeyState[VK_RSHIFT] = (g_modifiersLR_physical & MOD_RSHIFT) ? STATE_DOWN : 0;
-			g_PhysicalKeyState[VK_LCONTROL] = (g_modifiersLR_physical & MOD_LCONTROL) ? STATE_DOWN : 0;
-			g_PhysicalKeyState[VK_RCONTROL] = (g_modifiersLR_physical & MOD_RCONTROL) ? STATE_DOWN : 0;
-			g_PhysicalKeyState[VK_LMENU] = (g_modifiersLR_physical & MOD_LALT) ? STATE_DOWN : 0;
-			g_PhysicalKeyState[VK_RMENU] = (g_modifiersLR_physical & MOD_RALT) ? STATE_DOWN : 0;
-			g_PhysicalKeyState[VK_LWIN] = (g_modifiersLR_physical & MOD_LWIN) ? STATE_DOWN : 0;
-			g_PhysicalKeyState[VK_RWIN] = (g_modifiersLR_physical & MOD_RWIN) ? STATE_DOWN : 0;
-			// Update the state of neutral keys only after the above, in case both keys of the pair were wrongly down:
-			g_PhysicalKeyState[VK_SHIFT] = (g_PhysicalKeyState[VK_LSHIFT] || g_PhysicalKeyState[VK_RSHIFT]) ? STATE_DOWN : 0;
-			g_PhysicalKeyState[VK_CONTROL] = (g_PhysicalKeyState[VK_LCONTROL] || g_PhysicalKeyState[VK_RCONTROL]) ? STATE_DOWN : 0;
-			g_PhysicalKeyState[VK_MENU] = (g_PhysicalKeyState[VK_LMENU] || g_PhysicalKeyState[VK_RMENU]) ? STATE_DOWN : 0;
+			AdjustKeyState(g_PhysicalKeyState, g_modifiersLR_physical);
 		}
 	}
 
@@ -1646,6 +1635,26 @@ modLR_type GetModifierLRState(bool aExplicitlyGet)
 	// if the keyboard hook is active.  Bitwise and is used because generally it's safer
 	// to assume a modifier key is up, when in doubt (e.g. to avoid firing unwanted hotkeys):
 //	return g_KeybdHook ? (g_modifiersLR_logical & g_modifiersLR_get) : g_modifiersLR_get;
+}
+
+
+
+void AdjustKeyState(BYTE aKeyState[], modLR_type aModifiersLR)
+// Caller has ensured that aKeyState is a 256-BYTE array of key states, in the same format used
+// by GetKeyboardState() and ToAscii().
+{
+	aKeyState[VK_LSHIFT] = (aModifiersLR & MOD_LSHIFT) ? STATE_DOWN : 0;
+	aKeyState[VK_RSHIFT] = (aModifiersLR & MOD_RSHIFT) ? STATE_DOWN : 0;
+	aKeyState[VK_LCONTROL] = (aModifiersLR & MOD_LCONTROL) ? STATE_DOWN : 0;
+	aKeyState[VK_RCONTROL] = (aModifiersLR & MOD_RCONTROL) ? STATE_DOWN : 0;
+	aKeyState[VK_LMENU] = (aModifiersLR & MOD_LALT) ? STATE_DOWN : 0;
+	aKeyState[VK_RMENU] = (aModifiersLR & MOD_RALT) ? STATE_DOWN : 0;
+	aKeyState[VK_LWIN] = (aModifiersLR & MOD_LWIN) ? STATE_DOWN : 0;
+	aKeyState[VK_RWIN] = (aModifiersLR & MOD_RWIN) ? STATE_DOWN : 0;
+	// Update the state of neutral keys only after the above, in case both keys of the pair were wrongly down:
+	aKeyState[VK_SHIFT] = (aKeyState[VK_LSHIFT] || aKeyState[VK_RSHIFT]) ? STATE_DOWN : 0;
+	aKeyState[VK_CONTROL] = (aKeyState[VK_LCONTROL] || aKeyState[VK_RCONTROL]) ? STATE_DOWN : 0;
+	aKeyState[VK_MENU] = (aKeyState[VK_LMENU] || aKeyState[VK_RMENU]) ? STATE_DOWN : 0;
 }
 
 

@@ -329,7 +329,7 @@ Action g_act[] =
 	, {"MouseMove", 2, 4, {1, 2, 3, 0}} // x, y, speed, option
 	, {"MouseClick", 1, 7, {2, 3, 4, 5, 0}} // which-button, x, y, ClickCount, speed, d=hold-down/u=release, Relative
 	, {"MouseClickDrag", 1, 7, {2, 3, 4, 5, 6, 0}} // which-button, x1, y1, x2, y2, speed, Relative
-	, {"MouseGetPos", 0, 4, NULL} // 4 optional output vars: xpos, ypos, WindowID, ControlName. MinParams must be 0.
+	, {"MouseGetPos", 0, 5, {5, 0}} // 4 optional output vars: xpos, ypos, WindowID, ControlName. Finally: Mode. MinParams must be 0.
 
 	, {"StatusBarGetText", 1, 6, {2, 0}} // Output-var, part# (numeric), std. 4 window params
 	, {"StatusBarWait", 0, 8, {2, 3, 6, 0}} // Wait-text(blank ok),seconds,part#,title,text,interval,exclude-title,exclude-text

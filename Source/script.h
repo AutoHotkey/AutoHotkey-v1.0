@@ -832,7 +832,7 @@ public:
 		, int aX = COORD_UNSPECIFIED, int aY = COORD_UNSPECIFIED // These values signal us not to move the mouse.
 		, int aClickCount = 1, int aSpeed = DEFAULT_MOUSE_SPEED, KeyEventTypes aEventType = KEYDOWNANDUP, bool aMoveRelative = false);
 	static void MouseMove(int aX, int aY, int aSpeed = DEFAULT_MOUSE_SPEED, bool aMoveRelative = false);
-	ResultType MouseGetPos();
+	ResultType MouseGetPos(bool aSimpleMode);
 	static void MouseEvent(DWORD aEventFlags, DWORD aX = 0, DWORD aY = 0, DWORD aData = 0)
 	// A small inline to help us remember to use KEY_IGNORE so that our own mouse
 	// events won't be falsely detected as hotkeys by the hooks (if they are installed).

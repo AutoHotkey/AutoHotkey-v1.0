@@ -902,18 +902,23 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 		return treat_as_visible;
 	}
 
+	BYTE ch[3], key_state[256];
+	memcpy(key_state, g_PhysicalKeyState, 256);
+	// As of v1.0.25.10, the below fixes the Input command so that when it is capturing artificial input,
+	// such as from the Send command or a hotstring's replacement text, the captured input will reflect
+	// any modifiers that are logically but not physically down:
+	AdjustKeyState(key_state, g_modifiersLR_logical);
 	// Make the state of capslock accurate so that ToAscii() will return upper vs. lower if appropriate:
 	if (IsKeyToggledOn(VK_CAPITAL))
-		g_PhysicalKeyState[VK_CAPITAL] |= STATE_ON;
+		key_state[VK_CAPITAL] |= STATE_ON;
 	else
-		g_PhysicalKeyState[VK_CAPITAL] &= ~STATE_ON;
+		key_state[VK_CAPITAL] &= ~STATE_ON;
 
 	// Use ToAsciiEx() vs. ToAscii() because there is evidence from Putty author that
 	// ToAsciiEx() works better with more keyboard layouts under 2k/XP than ToAscii()
 	// does (though if true, there is no MS explanation).
-	BYTE ch[3];
 	int byte_count = ToAsciiEx(vk, event.scanCode  // Uses the original scan code, not the adjusted "sc" one.
-		, g_PhysicalKeyState, (LPWORD)ch, g_MenuIsVisible ? 1 : 0
+		, key_state, (LPWORD)ch, g_MenuIsVisible ? 1 : 0
 		, GetKeyboardLayout(0)); // Fetch layout every time in case it changes while the program is running.
 	if (!byte_count) // No translation for this key.
 		return treat_as_visible;
@@ -985,15 +990,12 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 		return false;
 	}
 
-	// It seems best to keep this turned off when not in use, since it is not maintained in realtime
-	// (due to the possibility of it getting out of sync somehow, perhaps while the hook is inactive
-	// due to the Logon screen or the Ctrl-Alt-Del combo having been pressed):
-	g_PhysicalKeyState[VK_CAPITAL] &= ~STATE_ON;
-
 	if (ch[0] == '\r')  // Translate \r to \n since \n is more typical and useful in Windows.
 		ch[0] = '\n';
 	if (ch[1] == '\r')  // But it's never referred to if byte_count < 2
 		ch[1] = '\n';
+
+	bool suppress_hotstring_final_char = false; // Set default.
 
 	if (do_monitor_hotstring)
 	{
@@ -1180,12 +1182,28 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 						g_HSBuf[g_HSBufLength] = '\0';
 					}
 					if (hs.mDoBackspace)
+					{
 						// Have caller suppress this final key pressed by the user, since it would have
 						// to be backspaced over anyway.  Even if there is a visible Input command in
 						// progress, this should still be okay since the input will still see the key,
 						// it's just that the active window won't see it, which is okay since once again
-						// it would have to be backspaced over anyway.
-						treat_as_visible = false;
+						// it would have to be backspaced over anyway.  UPDATE: If an Input is in progress,
+						// it should not receive this final key because otherwise the hotstring's backspacing
+						// would backspace one too few times from the Input's point of view, thus the input
+						// would have one extra, unwanted character left over (namely the first character
+						// of the hotstring's abbreviation).  However, this method is not a complete
+						// solution because it fails to work under a situation such as the following:
+						// A hotstring script is started, followed by a separate script that uses the
+						// Input command.  The Input script's hook will take precedence (since it was
+						// started most recently), thus when the Hotstring's script's hook does sends
+						// its replacement text, the Input script's hook will get a hold of it first
+						// before the Hotstring's script has a chance to suppress it.  In other words,
+						// The Input command command capture the ending character and then there will
+						// be insufficient backspaces sent to clear the abbrevation out of it.  This
+						// situation is quite rare so for now it's just mentioned here as a known limitation.
+						treat_as_visible = false; // It might already have been false due to an invisible-input in progress, etc.
+						suppress_hotstring_final_char = true; // This var probably must be separate from treat_as_visible to support invisible inputs.
+					}
 					break;
 				}
 			} // for()
@@ -1194,7 +1212,7 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 
 	// Note that it might have been in progress upon entry to this function but now isn't due to
 	// INPUT_TERMINATED_BY_ENDKEY above:
-	if (!do_input || g_input.status != INPUT_IN_PROGRESS)
+	if (!do_input || g_input.status != INPUT_IN_PROGRESS || suppress_hotstring_final_char)
 		return treat_as_visible;
 
 	// Since above didn't return, the only thing remaining to do below is handle the input that's

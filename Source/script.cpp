@@ -8180,7 +8180,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		return OK;
 
 	case ACT_MOUSEGETPOS:
-		return MouseGetPos();
+		return MouseGetPos(ATOI(ARG5) == 1);
 
 //////////////////////////////////////////////////////////////////////////
 
