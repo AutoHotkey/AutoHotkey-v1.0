@@ -385,6 +385,12 @@ VarSizeType Var::Get(char *aBuf)
 	case VAR_LOOPFILESIZEKB: if (!aBuf) return g_script.GetLoopFileSize(NULL, 1024); else aBuf += g_script.GetLoopFileSize(aBuf, 1024); break;
 	case VAR_LOOPFILESIZEMB: if (!aBuf) return g_script.GetLoopFileSize(NULL, 1024*1024); else aBuf += g_script.GetLoopFileSize(aBuf, 1024*1024); break;
 
+	case VAR_LOOPREGTYPE: if (!aBuf) return g_script.GetLoopRegType(); else aBuf += g_script.GetLoopRegType(aBuf); break;
+	case VAR_LOOPREGKEY: if (!aBuf) return g_script.GetLoopRegKey(); else aBuf += g_script.GetLoopRegKey(aBuf); break;
+	case VAR_LOOPREGSUBKEY: if (!aBuf) return g_script.GetLoopRegSubKey(); else aBuf += g_script.GetLoopRegSubKey(aBuf); break;
+	case VAR_LOOPREGNAME: if (!aBuf) return g_script.GetLoopRegName(); else aBuf += g_script.GetLoopRegName(aBuf); break;
+	case VAR_LOOPREGTIMEMODIFIED: if (!aBuf) return g_script.GetLoopRegTimeModified(); else aBuf += g_script.GetLoopRegTimeModified(aBuf); break;
+
 	case VAR_THISHOTKEY: if (!aBuf) return g_script.GetThisHotkey(); else aBuf += g_script.GetThisHotkey(aBuf); break;
 	case VAR_PRIORHOTKEY: if (!aBuf) return g_script.GetPriorHotkey(); else aBuf += g_script.GetPriorHotkey(aBuf); break;
 	case VAR_TIMESINCETHISHOTKEY: if (!aBuf) return g_script.GetTimeSinceThisHotkey(); else aBuf += g_script.GetTimeSinceThisHotkey(aBuf); break;

@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.02"
+#define NAME_VERSION "1.0.03"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -118,6 +118,7 @@ typedef UCHAR HookType;
 #define HOOK_MOUSE 0x02
 #define HOOK_FAIL  0xFF
 
+#define EXTERN_OSVER extern OS_Version g_os
 #define EXTERN_CLIPBOARD extern Clipboard g_clip
 #define CLOSE_CLIPBOARD_IF_OPEN	if (g_clip.mIsOpen) g_clip.Close()
 #define CLIPBOARD_CONTAINS_ONLY_FILES (!IsClipboardFormatAvailable(CF_TEXT) && IsClipboardFormatAvailable(CF_HDROP))

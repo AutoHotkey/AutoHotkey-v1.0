@@ -75,7 +75,7 @@ extern char g_EscapeChar;
 extern Script g_script;
 extern Var *g_ErrorLevel;
 EXTERN_CLIPBOARD;
-extern OS_Version g_os;
+EXTERN_OSVER;
 
 extern DWORD g_OriginalTimeout;
 

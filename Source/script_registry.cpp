@@ -77,7 +77,7 @@ ResultType Line::IniDelete(char *aFilespec, char *aSection, char *aKey)
 
 
 
-ResultType Line::RegRead(char *aRegKey, char *aRegSubkey, char *aValueName)
+ResultType Line::RegRead(HKEY aRootKey, char *aRegSubkey, char *aValueName)
 {
 	// $var = RegRead(key, valuename)
 
@@ -87,22 +87,24 @@ ResultType Line::RegRead(char *aRegKey, char *aRegSubkey, char *aValueName)
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 	output_var->Assign(); // Init.  Tell it not to free the memory by not calling with "".
 
-	HKEY	hRegKey, hMainKey;
+	HKEY	hRegKey;
 	DWORD	dwRes, dwBuf, dwType;
 	// My: Seems safest to keep the limit just below 64K in case Win95 has problems with larger values.
 	char	szRegBuffer[65535]; // Only allow reading of 64Kb from a key
 
-	// Get the main key name
-	if (   !(hMainKey = RegConvertMainKey(aRegKey))   )
+	if (!aRootKey)
 		return OK;  // Let ErrorLevel tell the story.
 
 	// Open the registry key
-	if ( RegOpenKeyEx(hMainKey, aRegSubkey, 0, KEY_READ, &hRegKey) != ERROR_SUCCESS )
+	if ( RegOpenKeyEx(aRootKey, aRegSubkey, 0, KEY_READ, &hRegKey) != ERROR_SUCCESS )
 		return OK;  // Let ErrorLevel tell the story.
 
 	// Read the value and determine the type
 	if ( RegQueryValueEx(hRegKey, aValueName, NULL, &dwType, NULL, NULL) != ERROR_SUCCESS )
+	{
+		RegCloseKey(hRegKey);
 		return OK;  // Let ErrorLevel tell the story.
+	}
 
 	char *buf;
 
@@ -229,13 +231,13 @@ ResultType Line::RegRead(char *aRegKey, char *aRegSubkey, char *aValueName)
 
 
 
-ResultType Line::RegWrite(char *aValueType, char *aRegKey, char *aRegSubkey, char *aValueName, char *aValue)
+ResultType Line::RegWrite(DWORD aValueType, HKEY aRootKey, char *aRegSubkey, char *aValueName, char *aValue)
 {
 	// $var = RegWrite(key, valuename, type, value)
 
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 
-	HKEY	hRegKey, hMainKey;
+	HKEY	hRegKey;
 	DWORD	dwRes, dwBuf;
 
 	// My: Seems safest to keep the limit just below 64K in case Win95 has problems with larger values.
@@ -249,35 +251,32 @@ ResultType Line::RegWrite(char *aValueType, char *aRegKey, char *aRegSubkey, cha
 		else\
 			buf = aValue;
 
-	// Get the main key name
-	if (   !(hMainKey = RegConvertMainKey(aRegKey))   )
+	if (!aRootKey || aValueType == REG_NONE || aValueType == REG_SUBKEY) // Can't write to these.
 		return OK;  // Let ErrorLevel tell the story.
 
 	// Open/Create the registry key
-	if (RegCreateKeyEx(hMainKey, aRegSubkey, 0, "", REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hRegKey, &dwRes)
+	if (RegCreateKeyEx(aRootKey, aRegSubkey, 0, "", REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hRegKey, &dwRes)
 		!= ERROR_SUCCESS)
 		return OK;  // Let ErrorLevel tell the story.
 
 	// Write the registry differently depending on type of variable we are writing
-	if (!stricmp(aValueType, "REG_SZ"))
+	switch (aValueType)
 	{
+	case REG_SZ:
 		SET_REG_BUF
 		if (RegSetValueEx(hRegKey, aValueName, 0, REG_SZ, (CONST BYTE *)buf, (DWORD)strlen(buf)+1) == ERROR_SUCCESS)
 			g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 		RegCloseKey(hRegKey);
 		return OK;
-	}
 
-	if (!stricmp(aValueType, "REG_EXPAND_SZ"))
-	{
+	case REG_EXPAND_SZ:
 		SET_REG_BUF
 		if (RegSetValueEx(hRegKey, aValueName, 0, REG_EXPAND_SZ, (CONST BYTE *)buf, (DWORD)strlen(buf)+1) == ERROR_SUCCESS)
 			g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 		RegCloseKey(hRegKey);
 		return OK;
-	}
-
-	if (!stricmp(aValueType, "REG_MULTI_SZ"))
+	
+	case REG_MULTI_SZ:
 	{
 		// Don't allow values over 64K for this type because aValue might not be a writable
 		// string, and we would need to write to it to temporarily change the newline delimiters
@@ -306,8 +305,7 @@ ResultType Line::RegWrite(char *aValueType, char *aRegKey, char *aRegSubkey, cha
 		return OK;
 	}
 
-	if (!stricmp(aValueType, "REG_DWORD"))
-	{
+	case REG_DWORD:
 		if (*aValue)
 			sscanf(aValue, "%u", &dwBuf);
 		else // Default to 0 when blank.
@@ -316,10 +314,8 @@ ResultType Line::RegWrite(char *aValueType, char *aRegKey, char *aRegSubkey, cha
 			g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 		RegCloseKey(hRegKey);
 		return OK;
-	}
 
-	// REG_BINARY - eeek
-	if (!stricmp(aValueType, "REG_BINARY"))
+	case REG_BINARY:
 	{
 		int nLen = (int)strlen(aValue);
 
@@ -360,8 +356,9 @@ ResultType Line::RegWrite(char *aValueType, char *aRegKey, char *aRegSubkey, cha
 		RegCloseKey(hRegKey);
 		return OK;
 	}
+	} // switch()
 
-	// If we reached here then the requested type was not known.
+	// If we reached here then the requested type was unknown/unsupported.
 	// Let ErrorLevel tell the story.
 	RegCloseKey(hRegKey);
 	return OK;
@@ -398,30 +395,29 @@ bool Line::RegRemoveSubkeys(HKEY hRegKey)
 
 
 
-ResultType Line::RegDelete(char *aRegKey, char *aRegSubkey, char *aValueName)
+ResultType Line::RegDelete(HKEY aRootKey, char *aRegSubkey, char *aValueName)
 {
 	// $var = RegDelete(key[, valuename])
 
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 
-	HKEY	hRegKey, hMainKey;
+	HKEY	hRegKey;
 
-	// Get the main key name
-	if (   !(hMainKey = RegConvertMainKey(aRegKey))   )
+	if (!aRootKey)
 		return OK;  // Let ErrorLevel tell the story.
 
 	// Open the key we want
-	if ( RegOpenKeyEx(hMainKey, aRegSubkey, 0, KEY_READ | KEY_WRITE, &hRegKey) != ERROR_SUCCESS )
+	if ( RegOpenKeyEx(aRootKey, aRegSubkey, 0, KEY_READ | KEY_WRITE, &hRegKey) != ERROR_SUCCESS )
 		return OK;  // Let ErrorLevel tell the story.
 
 	if (!aValueName || !*aValueName)
 	{
 		// Remove the entire Key
 		bool success = RegRemoveSubkeys(hRegKey); // Delete any subitems within the key.
-		RegCloseKey(hRegKey); // Close parent key.  Not sure if this needs to be done after the above.
+		RegCloseKey(hRegKey); // Close parent key.  Not sure if this needs to be done only after the above.
 		if (!success)
 			return OK;  // Let ErrorLevel tell the story.
-		if (RegDeleteKey(hMainKey, aRegSubkey) != ERROR_SUCCESS) 
+		if (RegDeleteKey(aRootKey, aRegSubkey) != ERROR_SUCCESS) 
 			return OK;  // Let ErrorLevel tell the story.
 	}
 	else

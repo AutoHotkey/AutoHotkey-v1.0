@@ -39,7 +39,7 @@ static size_t g_CommentFlagLength = strlen(g_CommentFlag); // pre-calculated for
 
 Script::Script()
 	: mFirstLine(NULL), mLastLine(NULL), mCurrLine(NULL)
-	, mLoopFile(NULL)
+	, mLoopFile(NULL), mLoopRegItem(NULL)
 	, mThisHotkeyLabel(NULL), mPriorHotkeyLabel(NULL), mPriorHotkeyStartTime(0)
 	, mFirstLabel(NULL), mLastLabel(NULL)
 	, mFirstVar(NULL), mLastVar(NULL)
@@ -2147,23 +2147,28 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_REGREAD:
 		if (line->mArgc > 4) // The obsolete 5-param method is being used, wherein ValueType is the 2nd param.
 		{
-			if (!line->ArgHasDeref(3) && *LINE_RAW_ARG3 && !line->ValidateRegKey(LINE_RAW_ARG3))
+			if (!line->ArgHasDeref(3) && *LINE_RAW_ARG3 && !line->RegConvertRootKey(LINE_RAW_ARG3))
 				return ScriptError(ERR_REG_KEY, LINE_RAW_ARG3);
 		}
 		else
-			if (line->mArgc > 1 && !line->ArgHasDeref(2) && *LINE_RAW_ARG2 && !line->ValidateRegKey(LINE_RAW_ARG2))
+			if (line->mArgc > 1 && !line->ArgHasDeref(2) && *LINE_RAW_ARG2 && !line->RegConvertRootKey(LINE_RAW_ARG2))
 				return ScriptError(ERR_REG_KEY, LINE_RAW_ARG2);
 		break;
 
 	case ACT_REGWRITE:
-		if (line->mArgc > 0 && !line->ArgHasDeref(1) && *LINE_RAW_ARG1 && !line->ValidateRegValueType(LINE_RAW_ARG1))
-			return ScriptError(ERR_REG_VALUE_TYPE, LINE_RAW_ARG1);
-		if (line->mArgc > 1 && !line->ArgHasDeref(2) && *LINE_RAW_ARG2 && !line->ValidateRegKey(LINE_RAW_ARG2))
-			return ScriptError(ERR_REG_KEY, LINE_RAW_ARG2);
+		// Both of these checks require that at least two parameters be present.  Otherwise, the command
+		// is being used in its registry-loop mode and is validated elsewhere:
+		if (line->mArgc > 1)
+		{
+			if (!line->ArgHasDeref(1) && *LINE_RAW_ARG1 && !line->RegConvertValueType(LINE_RAW_ARG1))
+				return ScriptError(ERR_REG_VALUE_TYPE, LINE_RAW_ARG1);
+			if (!line->ArgHasDeref(2) && *LINE_RAW_ARG2 && !line->RegConvertRootKey(LINE_RAW_ARG2))
+				return ScriptError(ERR_REG_KEY, LINE_RAW_ARG2);
+		}
 		break;
 
 	case ACT_REGDELETE:
-		if (line->mArgc > 0 && !line->ArgHasDeref(1) && *LINE_RAW_ARG1 && !line->ValidateRegKey(LINE_RAW_ARG1))
+		if (line->mArgc > 0 && !line->ArgHasDeref(1) && *LINE_RAW_ARG1 && !line->RegConvertRootKey(LINE_RAW_ARG1))
 			return ScriptError(ERR_REG_KEY, LINE_RAW_ARG1);
 		break;
 
@@ -2444,17 +2449,34 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			if (line->ArgHasDeref(1)) // Impossible to know now what type of loop (only at runtime).
 				line->mAttribute = ATTR_LOOP_UNKNOWN;
 			else
-				line->mAttribute = IsPureNumeric(LINE_RAW_ARG1, false) ? ATTR_LOOP_NORMAL : ATTR_LOOP_FILE;
+			{
+				if (IsPureNumeric(LINE_RAW_ARG1, false))
+					line->mAttribute = ATTR_LOOP_NORMAL;
+				else
+					line->mAttribute = line->RegConvertRootKey(LINE_RAW_ARG1) ? ATTR_LOOP_REG : ATTR_LOOP_FILE;
+			}
 			break;
 		default:  // has 2 or more args.
-			line->mAttribute = ATTR_LOOP_FILE;
-			// Validate whatever we can rather than waiting for runtime validation:
-			if (!line->ArgHasDeref(2) && Line::ConvertLoopMode(LINE_RAW_ARG2) == FILE_LOOP_INVALID)
-				return ScriptError(ERR_LOOP_FILE_MODE, LINE_RAW_ARG2);
-			if (line->mArgc > 2 && !line->ArgHasDeref(3) && *LINE_RAW_ARG3)
-				if (strlen(LINE_RAW_ARG3) > 1 || (*LINE_RAW_ARG3 != '0' && *LINE_RAW_ARG3 != '1'))
-					return ScriptError("Parameter #3 must be either blank, 0, 1, or a variable reference."
-						, LINE_RAW_ARG3);
+			line->mAttribute = line->RegConvertRootKey(LINE_RAW_ARG1) ? ATTR_LOOP_REG : ATTR_LOOP_FILE;
+			if (line->mAttribute == ATTR_LOOP_FILE)
+			{
+				// Validate whatever we can rather than waiting for runtime validation:
+				if (!line->ArgHasDeref(2) && Line::ConvertLoopMode(LINE_RAW_ARG2) == FILE_LOOP_INVALID)
+					return ScriptError(ERR_LOOP_FILE_MODE, LINE_RAW_ARG2);
+				if (line->mArgc > 2 && !line->ArgHasDeref(3) && *LINE_RAW_ARG3)
+					if (strlen(LINE_RAW_ARG3) > 1 || (*LINE_RAW_ARG3 != '0' && *LINE_RAW_ARG3 != '1'))
+						return ScriptError("Parameter #3 must be either blank, 0, 1, or a variable reference."
+							, LINE_RAW_ARG3);
+			}
+			else // Registry loop.
+			{
+				if (line->mArgc > 2 && !line->ArgHasDeref(3) && Line::ConvertLoopMode(LINE_RAW_ARG3) == FILE_LOOP_INVALID)
+					return ScriptError(ERR_LOOP_REG_MODE, LINE_RAW_ARG3);
+				if (line->mArgc > 3 && !line->ArgHasDeref(4) && *LINE_RAW_ARG4)
+					if (strlen(LINE_RAW_ARG4) > 1 || (*LINE_RAW_ARG4 != '0' && *LINE_RAW_ARG4 != '1'))
+						return ScriptError("Parameter #4 must be either blank, 0, 1, or a variable reference."
+							, LINE_RAW_ARG4);
+			}
 		}
 		break; // Outer switch().
 	}
@@ -2687,6 +2709,12 @@ ResultType Script::AddVar(char *aVarName, size_t aVarNameLength)
 	else if (!stricmp(new_name, "a_LoopFileSizeKB")) var_type = VAR_LOOPFILESIZEKB;
 	else if (!stricmp(new_name, "a_LoopFileSizeMB")) var_type = VAR_LOOPFILESIZEMB;
 
+	else if (!stricmp(new_name, "a_LoopRegType")) var_type = VAR_LOOPREGTYPE;
+	else if (!stricmp(new_name, "a_LoopRegKey")) var_type = VAR_LOOPREGKEY;
+	else if (!stricmp(new_name, "a_LoopRegSubKey")) var_type = VAR_LOOPREGSUBKEY;
+	else if (!stricmp(new_name, "a_LoopRegName")) var_type = VAR_LOOPREGNAME;
+	else if (!stricmp(new_name, "a_LoopRegTimeModified")) var_type = VAR_LOOPREGTIMEMODIFIED;
+
 	else if (!stricmp(new_name, "a_ThisHotkey")) var_type = VAR_THISHOTKEY;
 	else if (!stricmp(new_name, "a_PriorHotkey")) var_type = VAR_PRIORHOTKEY;
 	else if (!stricmp(new_name, "a_TimeSinceThisHotkey")) var_type = VAR_TIMESINCETHISHOTKEY;
@@ -2886,7 +2914,7 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 
 
 
-Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, AttributeType aLoopType)
+Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, AttributeType aLoopType1, AttributeType aLoopType2)
 // Zero is the default for aMode, otherwise:
 // Will return NULL to the top-level caller if there's an error, or if
 // mLastLine is NULL (i.e. the script is empty).
@@ -2897,7 +2925,7 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 	// Don't check aStartingLine here at top: only do it at the bottom
 	// for it's differing return values.
 	Line *line_temp;
-	AttributeType loop_type;
+	AttributeType loop_type1, loop_type2;  // Although rare, a statement can be enclosed in both a file-loop and a reg-loop.
 	for (Line *line = aStartingLine; line != NULL;)
 	{
 		if (ACT_IS_IF(line->mActionType) || line->mActionType == ACT_LOOP || line->mActionType == ACT_REPEAT)
@@ -2910,19 +2938,30 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 			if (line_temp->mActionType == ACT_ELSE || line_temp->mActionType == ACT_BLOCK_END)
 				return line->PreparseError("The line beneath this IF or LOOP is an invalid action.");
 
-			loop_type = ATTR_NONE;
-			if (aLoopType == ATTR_LOOP_FILE || line->mAttribute == ATTR_LOOP_FILE)
+			// We're checking for ATTR_LOOP_FILE here to detect whether qualified commands enclosed
+			// in a true file loop are allowed to omit their filename paremeter:
+			loop_type1 = ATTR_NONE;
+			if (aLoopType1 == ATTR_LOOP_FILE || line->mAttribute == ATTR_LOOP_FILE)
 				// i.e. if either one is a file-loop, that's enough to establish
 				// the fact that we're in a file loop.
-				loop_type = ATTR_LOOP_FILE;
-			else if (aLoopType == ATTR_LOOP_UNKNOWN || line->mAttribute == ATTR_LOOP_UNKNOWN)
+				loop_type1 = ATTR_LOOP_FILE;
+			else if (aLoopType1 == ATTR_LOOP_UNKNOWN || line->mAttribute == ATTR_LOOP_UNKNOWN)
 				// ATTR_LOOP_UNKNOWN takes precedence over ATTR_LOOP_NORMAL because
 				// we can't be sure if we're in a file loop, but it's correct to
 				// assume that we are (otherwise, unwarranted syntax errors may be reported
 				// later on in here).
-				loop_type = ATTR_LOOP_UNKNOWN;
-			else if (aLoopType == ATTR_LOOP_NORMAL || line->mAttribute == ATTR_LOOP_NORMAL)
-				loop_type = ATTR_LOOP_NORMAL;
+				loop_type1 = ATTR_LOOP_UNKNOWN;
+			else if (aLoopType1 == ATTR_LOOP_NORMAL || line->mAttribute == ATTR_LOOP_NORMAL)
+				loop_type1 = ATTR_LOOP_NORMAL;
+
+			// The section is the same as above except for registry vs. file loops:
+			loop_type2 = ATTR_NONE;
+			if (aLoopType2 == ATTR_LOOP_REG || line->mAttribute == ATTR_LOOP_REG)
+				loop_type2 = ATTR_LOOP_REG;
+			else if (aLoopType2 == ATTR_LOOP_UNKNOWN || line->mAttribute == ATTR_LOOP_UNKNOWN)
+				loop_type2 = ATTR_LOOP_UNKNOWN;
+			else if (aLoopType2 == ATTR_LOOP_NORMAL || line->mAttribute == ATTR_LOOP_NORMAL)
+				loop_type2 = ATTR_LOOP_NORMAL;
 
 			// Check if the IF's action-line is something we want to recurse.  UPDATE: Always
 			// recurse because other line types, such as Goto and Gosub, need to be preparsed
@@ -2930,7 +2969,7 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 			// Recurse this line rather than the next because we want
 			// the called function to recurse again if this line is a ACT_BLOCK_BEGIN
 			// or is itself an IF:
-			line_temp = PreparseIfElse(line_temp, ONLY_ONE_LINE, loop_type);
+			line_temp = PreparseIfElse(line_temp, ONLY_ONE_LINE, loop_type1, loop_type2);
 			// If not end-of-script or error, line_temp is now either:
 			// 1) If this if's/loop's action was a BEGIN_BLOCK: The line after the end of the block.
 			// 2) If this if's/loop's action was another IF or LOOP:
@@ -2994,7 +3033,7 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 				if (line->mActionType == ACT_ELSE || line->mActionType == ACT_BLOCK_END)
 					return line_temp->PreparseError("The line beneath this ELSE is an invalid action.");
 				// Assign to line rather than line_temp:
-				line = PreparseIfElse(line, ONLY_ONE_LINE, aLoopType);
+				line = PreparseIfElse(line, ONLY_ONE_LINE, aLoopType1, aLoopType2);
 				if (line == NULL)
 					return NULL; // Error or end-of-script.
 				// Set this ELSE's jumppoint.  This is similar to the jumppoint set for
@@ -3017,7 +3056,7 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 		switch (line->mActionType)
 		{
 		case ACT_BLOCK_BEGIN:
-			line = PreparseIfElse(line->mNextLine, UNTIL_BLOCK_END, aLoopType);
+			line = PreparseIfElse(line->mNextLine, UNTIL_BLOCK_END, aLoopType1, aLoopType2);
 			// line is now either NULL due to an error, or the location
 			// of the END_BLOCK itself.
 			if (line == NULL)
@@ -3040,18 +3079,30 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 			return line->PreparseError("Unexpected end-of-block (parsing multiple lines).");
 		case ACT_BREAK:
 		case ACT_CONTINUE:
-			if (!aLoopType)
+			if (!aLoopType1 && !aLoopType2)
 				return line->PreparseError("This break or continue statement is not enclosed by a loop.");
 			break;
+
+		case ACT_REGREAD:
+		case ACT_REGWRITE: // Unknown loops get the benefit of the doubt.
+			if (aLoopType2 != ATTR_LOOP_REG && aLoopType2 != ATTR_LOOP_UNKNOWN && line->mArgc < 4)
+				return line->PreparseError("When not enclosed in a registry-loop, this command requires 4 parameters.");
+			break;
+		case ACT_REGDELETE:
+			if (aLoopType2 != ATTR_LOOP_REG && aLoopType2 != ATTR_LOOP_UNKNOWN && line->mArgc < 2)
+				return line->PreparseError("When not enclosed in a registry-loop, this command requires 2 parameters.");
+			break;
+
 		case ACT_FILEGETATTRIB:
 		case ACT_FILESETATTRIB:
 		case ACT_FILEGETSIZE:
 		case ACT_FILEGETVERSION:
 		case ACT_FILEGETTIME:
 		case ACT_FILESETTIME:
-			if (aLoopType != ATTR_LOOP_FILE && aLoopType != ATTR_LOOP_UNKNOWN && !*LINE_RAW_ARG2)
+			if (aLoopType1 != ATTR_LOOP_FILE && aLoopType1 != ATTR_LOOP_UNKNOWN && !*LINE_RAW_ARG2)
 				return line->PreparseError("When not enclosed in a file-loop, this command requires a 2nd parameter.");
 			break;
+
 		case ACT_GOTO:  // These two must be done here (i.e. *after* all the script lines have been added),
 		case ACT_GOSUB: // so that labels both above and below each Gosub/Goto can be resolved.
 			if (line->ArgHasDeref(1))
@@ -3134,7 +3185,7 @@ char *Line::sArgDeref[MAX_ARGS]; // No init needed.
 
 
 ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **apJumpToLine
-	, WIN32_FIND_DATA *aCurrentFile)
+	, WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aCurrentRegItem)
 // Start executing at "this" line, stop when aMode indicates.
 // RECURSIVE: Handles all lines that involve flow-control.
 // aMode can be UNTIL_RETURN, UNTIL_BLOCK_END, ONLY_ONE_LINE.
@@ -3246,6 +3297,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 		// aCurrentFile to be non-NULL if there isn't a PerformLoop() beneath us
 		// in the stack:
 		g_script.mLoopFile = aCurrentFile;
+		g_script.mLoopRegItem = aCurrentRegItem; // Similar in function to the above.
 
 		// Do this only after the opportunity to Sleep (above) has passed, because during
 		// that sleep, a new subroutine might be launched which would likely overwrite the
@@ -3269,7 +3321,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 			{
 				// line->mNextLine has already been verified non-NULL by the pre-parser, so
 				// this dereference is safe:
-				result = line->mNextLine->ExecUntil(ONLY_ONE_LINE, aModifiersLR, &jump_to_line, aCurrentFile);
+				result = line->mNextLine->ExecUntil(ONLY_ONE_LINE, aModifiersLR, &jump_to_line, aCurrentFile, aCurrentRegItem);
 				if (jump_to_line == line)
 					// Since this IF's ExecUntil() encountered a Goto whose target is the IF
 					// itself, continue with the for-loop without moving to a different
@@ -3346,7 +3398,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 				if (line->mActionType == ACT_ELSE) // This IF has an else.
 				{
 					// Preparser has ensured that every ELSE has a non-NULL next line:
-					result = line->mNextLine->ExecUntil(ONLY_ONE_LINE, aModifiersLR, &jump_to_line, aCurrentFile);
+					result = line->mNextLine->ExecUntil(ONLY_ONE_LINE, aModifiersLR, &jump_to_line, aCurrentFile, aCurrentRegItem);
 					if (aMode == ONLY_ONE_LINE && jump_to_line != NULL && apJumpToLine != NULL)
 						// The above call to ExecUntil() told us to jump somewhere.  But since we're in
 						// ONLY_ONE_LINE mode, our caller must handle it because only it knows how
@@ -3414,7 +3466,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 			// I'm pretty sure it's not valid for this call to ExecUntil() to tell us to jump
 			// somewhere, because the called function, or a layer even deeper, should handle
 			// the goto prior to returning to us?  So the last param is omitted:
-			result = line->mRelatedLine->ExecUntil(UNTIL_RETURN, aModifiersLR, NULL, aCurrentFile);
+			result = line->mRelatedLine->ExecUntil(UNTIL_RETURN, aModifiersLR, NULL, aCurrentFile, aCurrentRegItem);
 			// Must do these return conditions in this specific order:
 			if (result == FAIL || result == EARLY_EXIT)
 				return result;
@@ -3446,7 +3498,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 					// crazy place:
 					return FAIL;
 				// This section is just like the Gosub code above, so maintain them together.
-				result = jump_to_line->ExecUntil(UNTIL_RETURN, aModifiersLR, NULL, aCurrentFile);
+				result = jump_to_line->ExecUntil(UNTIL_RETURN, aModifiersLR, NULL, aCurrentFile, aCurrentRegItem);
 				if (result == FAIL || result == EARLY_EXIT)
 					return result;
 				if (aMode == ONLY_ONE_LINE)
@@ -3477,9 +3529,12 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 		case ACT_LOOP:
 		{
 			AttributeType attr = line->mAttribute;
-			if (attr == ATTR_LOOP_UNKNOWN || attr == ATTR_NONE)
+			HKEY reg_root_key = NULL;
+			if (attr == ATTR_LOOP_REG)
+				reg_root_key = RegConvertRootKey(LINE_ARG1);
+			else if (attr == ATTR_LOOP_UNKNOWN || attr == ATTR_NONE)
 				// Since it couldn't be determined at load-time (probably due to derefs),
-				// determine whether it's a file-loop or a normal/counter loop.
+				// determine whether it's a file-loop, registry-loop or a normal/counter loop.
 				// But don't change the value of line->mAttribute because that's our
 				// indicator of whether this needs to be evaluated every time for
 				// this particular loop (since the nature of the loop can change if the
@@ -3487,36 +3542,61 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 			{
 				switch (line->mArgc)
 				{
-				case 0: attr = ATTR_LOOP_NORMAL; break;
-				// Unlike at loadtime, allow it to be negative at runtime in case it was a variable
-				// reference that resolved to a negative number, to indicate that 0 iterations
-				// should be performed:
-				case 1: attr = IsPureNumeric(LINE_ARG1, true) ? ATTR_LOOP_NORMAL : ATTR_LOOP_FILE; break;
-				default: attr = ATTR_LOOP_FILE; break;  // 2 or more args.
+				case 0:
+					attr = ATTR_LOOP_NORMAL;
+					break;
+				case 1:
+					// Unlike at loadtime, allow it to be negative at runtime in case it was a variable
+					// reference that resolved to a negative number, to indicate that 0 iterations
+					// should be performed:
+					if (IsPureNumeric(LINE_ARG1, true))
+						attr = ATTR_LOOP_NORMAL;
+					else
+					{
+						reg_root_key = RegConvertRootKey(LINE_ARG1);
+						attr = reg_root_key ? ATTR_LOOP_REG : ATTR_LOOP_FILE;
+					}
+					break;
+				default: // 2 or more args.
+					reg_root_key = RegConvertRootKey(LINE_ARG1);
+					attr = reg_root_key ? ATTR_LOOP_REG : ATTR_LOOP_FILE;
 				}
 			}
 
-			bool recurse_subfolders = (attr == ATTR_LOOP_FILE && *LINE_ARG3 == '1' && !*(LINE_ARG3 + 1));
+			bool recurse_subfolders = (attr == ATTR_LOOP_FILE && *LINE_ARG3 == '1' && !*(LINE_ARG3 + 1))
+				|| (attr == ATTR_LOOP_REG && *LINE_ARG4 == '1' && !*(LINE_ARG4 + 1));
 
 			__int64 iteration_limit = 0;
 			bool is_infinite = line->mArgc < 1;
 			if (!is_infinite)
 				// Must be set to zero for ATTR_LOOP_FILE:
-				iteration_limit = (attr == ATTR_LOOP_FILE) ? 0 : _atoi64(LINE_ARG1);
+				iteration_limit = (attr == ATTR_LOOP_FILE || attr == ATTR_LOOP_REG) ? 0 : _atoi64(LINE_ARG1);
 
 			if (line->mActionType == ACT_REPEAT && !iteration_limit)
 				is_infinite = true;  // Because a 0 means infinite in AutoIt2 for the REPEAT command.
 
-			FileLoopModeType file_loop_mode = (line->mArgc <= 1) ? FILE_LOOP_FILES_ONLY
-				: ConvertLoopMode(LINE_ARG2);
-			if (file_loop_mode == FILE_LOOP_INVALID)
-				return line->LineError(ERR_LOOP_FILE_MODE ERR_ABORT, FAIL, LINE_ARG2);
+			FileLoopModeType file_loop_mode = FILE_LOOP_INVALID;
+			if (attr == ATTR_LOOP_FILE)
+			{
+				file_loop_mode = (line->mArgc <= 1) ? FILE_LOOP_FILES_ONLY : ConvertLoopMode(LINE_ARG2);
+				if (file_loop_mode == FILE_LOOP_INVALID)
+					return line->LineError(ERR_LOOP_FILE_MODE ERR_ABORT, FAIL, LINE_ARG2);
+			}
+			else if (attr == ATTR_LOOP_REG)
+			{
+				file_loop_mode = (line->mArgc <= 2) ? FILE_LOOP_FILES_ONLY : ConvertLoopMode(LINE_ARG3);
+				if (file_loop_mode == FILE_LOOP_INVALID)
+					return line->LineError(ERR_LOOP_REG_MODE ERR_ABORT, FAIL, LINE_ARG3);
+			}
 
 			bool continue_main_loop = false; // Init prior to below call.
 			jump_to_line = NULL; // Init prior to below call.
-			result = line->PerformLoop(aModifiersLR, aCurrentFile, continue_main_loop, jump_to_line
-				, attr, file_loop_mode, recurse_subfolders, line->sArgDeref[0]
-				, iteration_limit, is_infinite);
+			if (attr == ATTR_LOOP_REG)
+				result = line->PerformLoopReg(aModifiersLR, aCurrentFile, continue_main_loop, jump_to_line
+					, file_loop_mode, recurse_subfolders, reg_root_key, LINE_ARG2);
+			else // All other loops types are handled this way:
+				result = line->PerformLoop(aModifiersLR, aCurrentFile, aCurrentRegItem, continue_main_loop, jump_to_line
+					, attr, file_loop_mode, recurse_subfolders, LINE_ARG1, iteration_limit, is_infinite);
 			if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT)
 				return result;
 			// else result can be LOOP_BREAK or OK, but not LOOP_CONTINUE.
@@ -3576,7 +3656,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 			// Don't count block-begin/end against the total since they should be nearly instantaneous:
 			//++g_script.mLinesExecutedThisCycle;
 			// In this case, line->mNextLine is already verified non-NULL by the pre-parser:
-			result = line->mNextLine->ExecUntil(UNTIL_BLOCK_END, aModifiersLR, &jump_to_line, aCurrentFile);
+			result = line->mNextLine->ExecUntil(UNTIL_BLOCK_END, aModifiersLR, &jump_to_line, aCurrentFile, aCurrentRegItem);
 			if (jump_to_line == line)
 				// Since this Block-begin's ExecUntil() encountered a Goto whose target is the
 				// block-begin itself, continue with the for-loop without moving to a different
@@ -3635,7 +3715,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 			return line->LineError("This ELSE is unexpected." PLEASE_REPORT ERR_ABORT);
 		default:
 			++g_script.mLinesExecutedThisCycle;
-			result = line->Perform(aModifiersLR, aCurrentFile);
+			result = line->Perform(aModifiersLR, aCurrentFile, aCurrentRegItem);
 			if (result == FAIL || aMode == ONLY_ONE_LINE)
 				// Thus, Perform() should be designed to only return FAIL if it's an
 				// error that would make it unsafe to proceed the subroutine
@@ -3875,7 +3955,7 @@ inline ResultType Line::EvaluateCondition()
 
 
 ResultType Line::PerformLoop(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrentFile
-	, bool &aContinueMainLoop, Line *&aJumpToLine
+	, RegItemStruct *apCurrentRegItem, bool &aContinueMainLoop, Line *&aJumpToLine
 	, AttributeType aAttr, FileLoopModeType aFileLoopMode, bool aRecurseSubfolders, char *aFilePattern
 	, __int64 aIterationLimit, bool aIsInfinite)
 // Note: Even if aFilePattern is just a directory (i.e. with not wildcard pattern), it seems best
@@ -3929,7 +4009,8 @@ ResultType Line::PerformLoop(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrent
 		// apCurrentFile is sent as an arg so that more than one nested/recursive
 		// file-loop can be supported:
 		result = mNextLine->ExecUntil(ONLY_ONE_LINE, aModifiersLR, &jump_to_line
-			, file_found ? &new_current_file : apCurrentFile); // inner loop's file takes precedence over outer's.
+			, file_found ? &new_current_file : apCurrentFile // inner loop's file takes precedence over outer's.
+			, apCurrentRegItem);
 		if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT || result == LOOP_BREAK)
 		{
 			#define CLOSE_FILE_SEARCH \
@@ -4021,7 +4102,7 @@ ResultType Line::PerformLoop(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrent
 		// its first loop iteration.  This is because this directory is being recursed into, not
 		// processed itself as a file-loop item (since this was already done in the first loop,
 		// above, if its name matches the original search pattern):
-		result = PerformLoop(aModifiersLR, NULL, aContinueMainLoop, aJumpToLine
+		result = PerformLoop(aModifiersLR, NULL, apCurrentRegItem, aContinueMainLoop, aJumpToLine
 			, aAttr, aFileLoopMode, aRecurseSubfolders, file_path
 			, aIterationLimit, aIsInfinite);
 		// result should never be LOOP_CONTINUE because the above call to PerformLoop() should have
@@ -4045,7 +4126,128 @@ ResultType Line::PerformLoop(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrent
 
 
 
-inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurrentFile)
+ResultType Line::PerformLoopReg(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrentFile
+	, bool &aContinueMainLoop, Line *&aJumpToLine, FileLoopModeType aFileLoopMode
+	, bool aRecurseSubfolders, HKEY aRootKey, char *aRegSubkey)
+{
+	RegItemStruct reg_item(aRootKey, aRegSubkey);
+	HKEY hRegKey;
+
+	// Open the specified subkey.  Be sure to only open with the minimum permission level so that
+	// the keys & values can be deleted or written to (though I'm not sure this would be an issue
+	// in most cases):
+	if (RegOpenKeyEx(reg_item.root_key, reg_item.subkey, 0, KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS, &hRegKey) != ERROR_SUCCESS)
+		return OK;
+
+	// Get the count of how many values and subkeys are contained in this parent key:
+	DWORD count_subkeys;
+	DWORD count_values;
+	if (RegQueryInfoKey(hRegKey, NULL, NULL, NULL, &count_subkeys, NULL, NULL
+		, &count_values, NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
+	{
+		RegCloseKey(hRegKey);
+		return OK;
+	}
+
+	ResultType result;
+	Line *jump_to_line;
+	DWORD i;
+
+	// See comments in PerformLoop() for details about this section.
+	// Note that &reg_item is passed to ExecUntil() rather than 
+	#define MAKE_SCRIPT_LOOP_PROCESS_THIS_ITEM \
+	{\
+		result = mNextLine->ExecUntil(ONLY_ONE_LINE, aModifiersLR, &jump_to_line, apCurrentFile, &reg_item);\
+		if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT || result == LOOP_BREAK)\
+		{\
+			RegCloseKey(hRegKey);\
+			return result;\
+		}\
+		if (jump_to_line == this)\
+		{\
+			aContinueMainLoop = true;\
+			break;\
+		}\
+		if (jump_to_line)\
+		{\
+			aJumpToLine = jump_to_line;\
+			break;\
+		}\
+	}
+
+	DWORD name_size;
+
+	// First enumerate the values, which are analogous to files in the file system.
+	// Later, the subkeys ("subfolders") will be done:
+	if (count_values > 0 && aFileLoopMode != FILE_LOOP_FOLDERS_ONLY) // The caller doesn't want "files" (values) excluded.
+	{
+		reg_item.InitForValues();
+		// Going in reverse order allows values to be deleted without disrupting the enumeration,
+		// at least in some cases:
+		for (i = count_values - 1, jump_to_line = NULL;; --i) 
+		{ 
+			// Don't use CONTINUE in loops such as this due to the loop-ending condition being explicitly
+			// checked at the bottom.
+			name_size = sizeof(reg_item.name);  // Must reset this every time through the loop.
+			*reg_item.name = '\0';
+			if (RegEnumValue(hRegKey, i, reg_item.name, &name_size, NULL, &reg_item.type, NULL, NULL) == ERROR_SUCCESS)
+				MAKE_SCRIPT_LOOP_PROCESS_THIS_ITEM
+			// else continue the loop in case some of the lower indexes can still be retrieved successfully.
+			if (i == 0)  // Check this here due to it being an unsigned value that we don't want to go negative.
+				break;
+		}
+	}
+
+	// If the loop is neither processing subfolders nor recursing into them, don't waste the performance
+	// doing the next loop:
+	if (!count_subkeys || (aFileLoopMode == FILE_LOOP_FILES_ONLY && !aRecurseSubfolders))
+	{
+		RegCloseKey(hRegKey);
+		return OK;
+	}
+
+	// Enumerate the subkeys, which are analogous to subfolders in the files system:
+	// Going in reverse order allows keys to be deleted without disrupting the enumeration,
+	// at least in some cases:
+	reg_item.InitForSubkeys();
+	char subkey_full_path[MAX_KEY_LENGTH + 1]; // But doesn't include the root key name.
+	for (i = count_subkeys - 1, jump_to_line = NULL;; --i) // Will have zero iterations if there are no subkeys.
+	{
+		// Don't use CONTINUE in loops such as this due to the loop-ending condition being explicitly
+		// checked at the bottom.
+		name_size = sizeof(reg_item.name); // Must be reset for every iteration.
+		if (RegEnumKeyEx(hRegKey, i, reg_item.name, &name_size, NULL, NULL, NULL, &reg_item.ftLastWriteTime) == ERROR_SUCCESS)
+		{
+			if (aFileLoopMode != FILE_LOOP_FILES_ONLY) // have the script's loop process this subkey.
+				MAKE_SCRIPT_LOOP_PROCESS_THIS_ITEM
+			if (aRecurseSubfolders) // Now recurse into the subkey, regardless of whether it was processed above.
+			{
+				// Build the new subkey name using the an area of memory on the stack that we won't need
+				// after the recusive call returns to us:
+				snprintf(subkey_full_path, sizeof(subkey_full_path), "%s\\%s", reg_item.subkey, reg_item.name);
+				// This section is very similar to the one in PerformLoop(), so see it for comments:
+				result = PerformLoopReg(aModifiersLR, apCurrentFile, aContinueMainLoop, aJumpToLine
+					, aFileLoopMode, aRecurseSubfolders, aRootKey, subkey_full_path);
+				if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT || result == LOOP_BREAK)
+				{
+					RegCloseKey(hRegKey);
+					return result;
+				}
+				if (aContinueMainLoop || aJumpToLine)
+					break;
+			}
+		}
+		// else continue the loop in case some of the lower indexes can still be retrieved successfully.
+		if (i == 0)  // Check this here due to it being an unsigned value that we don't want to go negative.
+			break;
+	}
+	RegCloseKey(hRegKey);
+	return OK;
+}
+
+
+
+inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aCurrentRegItem)
 // Performs only this line's action.
 // Returns OK or FAIL.
 // The function should not be called to perform any flow-control actions such as
@@ -4110,14 +4312,38 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		return IniDelete(THREE_ARGS);
 
 	case ACT_REGREAD:
-		if (mArgc < 5) // The new 4-parameter mode.
-			return RegRead(ARG2, ARG3, ARG4);
+		if (mArgc < 2 && aCurrentRegItem) // Uses the registry loop's current item.
+			// If aCurrentRegItem->name specifies a subkey rather than a value name, do this anyway
+			// so that it will set ErrorLevel to ERROR and set the output variable to be blank:
+			return RegRead(aCurrentRegItem->root_key, aCurrentRegItem->subkey, aCurrentRegItem->name);
+		else if (mArgc < 5) // The new 4-parameter mode.
+			return RegRead(RegConvertRootKey(ARG2), ARG3, ARG4);
 		else // In 5-parameter mode, Arg2 is unused; it's only for backward compatibility with AutoIt2.
-			return RegRead(ARG3, ARG4, ARG5);
+			return RegRead(RegConvertRootKey(ARG3), ARG4, ARG5);
 	case ACT_REGWRITE:
-		return RegWrite(FIVE_ARGS);
+		if (mArgc < 2 && aCurrentRegItem) // Uses the registry loop's current item.
+			// If aCurrentRegItem->name specifies a subkey rather than a value name, do this anyway
+			// so that it will set ErrorLevel to ERROR.  An error will also be indicated if
+			// aCurrentRegItem->type is an unsupported type:
+			return RegWrite(aCurrentRegItem->type, aCurrentRegItem->root_key, aCurrentRegItem->subkey, aCurrentRegItem->name, ARG1);
+		else
+			return RegWrite(RegConvertValueType(ARG1), RegConvertRootKey(ARG2), ARG3, ARG4, ARG5);
 	case ACT_REGDELETE:
-		return RegDelete(THREE_ARGS);
+		if (mArgc < 1 && aCurrentRegItem) // Uses the registry loop's current item.
+		{
+			// In this case, if the CurrentRegItem is a value, just delete it normally.
+			// But if it's a subkey, append it to the dir name so that the proper subkey
+			// will be deleted as the user intended:
+			if (aCurrentRegItem->type == REG_SUBKEY)
+			{
+				snprintf(buf_temp, sizeof(buf_temp), "%s\\%s", aCurrentRegItem->subkey, aCurrentRegItem->name);
+				return RegDelete(aCurrentRegItem->root_key, buf_temp, "");
+			}
+			else
+				return RegDelete(aCurrentRegItem->root_key, aCurrentRegItem->subkey, aCurrentRegItem->name);
+		}
+		else
+			return RegDelete(RegConvertRootKey(ARG1), ARG2, ARG3);
 
 	case ACT_SHUTDOWN:
 		return Util_Shutdown(atoi(ARG1)) ? OK : FAIL;
@@ -4694,7 +4920,14 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_FILEINSTALL:
 		return FileInstall(THREE_ARGS);
 	case ACT_FILECOPY:
-		return g_ErrorLevel->Assign(Util_CopyFile(ARG1, ARG2, *ARG3 == '1' && !*(ARG3 + 1), false));
+	{
+		int error_count = Util_CopyFile(ARG1, ARG2, *ARG3 == '1' && !*(ARG3 + 1), false);
+		if (!error_count)
+			return g_ErrorLevel->Assign(ERRORLEVEL_NONE);
+		if (g_script.mIsAutoIt2)
+			return g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // For backward compatibility with v2.
+		return g_ErrorLevel->Assign(error_count);
+	}
 	case ACT_FILEMOVE:
 		return g_ErrorLevel->Assign(Util_CopyFile(ARG1, ARG2, *ARG3 == '1' && !*(ARG3 + 1), true));
 	case ACT_FILECOPYDIR:
@@ -4729,6 +4962,8 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		return FileSelectFile(ARG2, ARG3, ARG4, ARG5);
 	case ACT_FILESELECTFOLDER:
 		return FileSelectFolder(ARG2, *ARG3 ? (atoi(ARG3) != 0) : true, ARG4);
+	case ACT_FILECREATESHORTCUT:
+		return FileCreateShortcut(SEVEN_ARGS);
 
 	// Like AutoIt2, if either output_var or ARG1 aren't purely numeric, they
 	// will be considered to be zero for all of the below math functions:

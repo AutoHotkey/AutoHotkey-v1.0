@@ -40,7 +40,7 @@ modLR_type g_modifiersLR_get = 0;
 // not work as advertised, at least under WinXP:
 bool g_PhysicalKeyState[VK_MAX + 1] = {false};
 
-int g_HotkeyModifierTimeout = 100;
+int g_HotkeyModifierTimeout = 50;  // Reduced from 100, which was a little too large for fast typists.
 HHOOK g_hhkLowLevelKeybd = NULL;
 HHOOK g_hhkLowLevelMouse = NULL;
 bool g_ForceLaunch = false;
@@ -227,7 +227,7 @@ Action g_act[] =
 	, {"Random", 1, 3, {2, 3, 0}} // Output var, Min, Max (Note: MinParams is 1 so that param2 can be blank).
 	, {"Goto", 1, 1, NULL}, {"Gosub", 1, 1, NULL} // Label (or dereference that resolves to a label).
 	, {"Return", 0, 0, NULL}, {"Exit", 0, 1, {1, 0}} // ExitCode (currently ignored)
-	, {"Loop", 0, 3, NULL} // Iteration Count or file-search (e.g. c:\*.*), FileLoopMode, Recurse? (custom validation for these last two)
+	, {"Loop", 0, 4, NULL} // Iteration Count or FilePattern or root key name [,subkey name], FileLoopMode, Recurse? (custom validation for these last two)
 	, {"Break", 0, 0, NULL}, {"Continue", 0, 0, NULL}
 	, {"{", 0, 0, NULL}, {"}", 0, 0, NULL}
 
@@ -292,13 +292,18 @@ Action g_act[] =
 	, {"FileSelectFile", 1, 5, {2, 0}} // output var, flag, working dir, greeting, filter
 	, {"FileSelectFolder", 1, 4, NULL} // output var, root directory, allow create folder (0=no, 1=yes), greeting
 
+	, {"FileCreateShortcut", 2, 7, NULL} // file, lnk [, workdir, args, desc, icon, hotkey]
+
 	, {"IniRead", 4, 5, NULL}   // OutputVar, Filespec, Section, Key, Default (value to return if key not found)
 	, {"IniWrite", 4, 4, NULL}  // Value, Filespec, Section, Key
 	, {"IniDelete", 3, 3, NULL} // Filespec, Section, Key
 
+	// These require so few parameters due to registry loops, which provide the missing parameter values
+	// automatically.  In addition, RegRead can't require more than 1 param since the 2nd param is
+	// an option/obsolete parameter:
 	, {"RegRead", 1, 5, NULL} // output var, (ValueType [optional]), RegKey, RegSubkey, ValueName
-	, {"RegWrite", 4, 5, NULL} // ValueType, RegKey, RegSubKey, ValueName, Value (set to blank if omitted?)
-	, {"RegDelete", 2, 3, NULL} // RegKey, RegSubKey, ValueName
+	, {"RegWrite", 0, 5, NULL} // ValueType, RegKey, RegSubKey, ValueName, Value (set to blank if omitted?)
+	, {"RegDelete", 0, 3, NULL} // RegKey, RegSubKey, ValueName
 
 	, {"SetKeyDelay", 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)
 	, {"SetMouseDelay", 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)

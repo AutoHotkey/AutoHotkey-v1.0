@@ -254,7 +254,7 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 				// Also, sending the ASC sequence to window doesn't work, so don't even try:
 				if (key_text_length > 4 && !strnicmp(aKeys + 1, "ASC ", 4) && !aTargetWindow)
 				{
-					keys_sent += SendASC(atoi(aKeys + 4), aTargetWindow); // aTargetWindow is always NULL, it's just for maintainability.
+					keys_sent += SendASC(omit_leading_whitespace(aKeys + 4), aTargetWindow); // aTargetWindow is always NULL, it's just for maintainability.
 					// Do this only once at the end of the sequence:
 					DoKeyDelay();
 				}
@@ -429,17 +429,16 @@ int SendKeySpecial(char aChar, mod_type aModifiers, mod_type aModifiersPersisten
 /*240 */	' ', 'n', 'o', 'o', 'o', 'o', 'o', ' ', ' ', 'u', 'u', 'u', 'u', 'y', ' ', 'y'
 		};
 
-	int ascii, ascii_diadic, pair_index;
-	bool needs_leading_zero = false;  // Set default.
+	int pair_index;
+	char ascii[8] = "", ascii_diadic[8] = "";  // Make it a string since leading zeros in it are significant.
 
 	switch(aChar)
 	{
-	case 'ø': ascii = 248; needs_leading_zero = true; break;
-	case 'Ø': ascii = 216; needs_leading_zero = true; break;
-	default: ascii = 0;
+	case 'ø': strlcpy(ascii, "0248", sizeof(ascii)); break;  // Must have leading zero.
+	case 'Ø': strlcpy(ascii, "0216", sizeof(ascii)); break;  // Must have leading zero.
 	}
 
-	if (ascii == 0)
+	if (!*ascii)
 	{
 		// AutoIt3: // simulation using {ASC nnn}
 		// Only the char code between {asc 128} and {asc 175} can be sent
@@ -452,11 +451,11 @@ int SendKeySpecial(char aChar, mod_type aModifiers, mod_type aModifiersPersisten
 				// but this seems pointless to me.  So for now, the user shouldn't be using the
 				// ControlSend command to send anything that requires the ASC method:
 				return 0;
-			ascii = 128 + (int)(cp - szSpecials);
+			ITOA(128 + (int)(cp - szSpecials), ascii);
 		}
 		else // ASCII codes between 192 and 255 inclusive (a total of 64 characters).
 		{
-			ascii = 0;  // Set as indicator that the below alternate method will be used instead.
+			// Leave ascii as empty string to indicate to the below that the alternate method will be used instead.
 			if (aChar >= 'À')
 			{
 				pair_index = aChar - 'À'; // 'À' expressed as a signed char is -64.
@@ -472,10 +471,9 @@ int SendKeySpecial(char aChar, mod_type aModifiers, mod_type aModifiersPersisten
 				{
 					if (aTargetWindow) // Not supported, see above.
 						return 0;
-					ascii_diadic = 128 + (int)(cp - szSpecials);
+					ITOA(128 + (int)(cp - szSpecials), ascii_diadic);
 				}
-				else
-					ascii_diadic = 0;
+				// else leave ascii_diadic set to empty string.
 			}
 		}
 	}
@@ -489,14 +487,14 @@ int SendKeySpecial(char aChar, mod_type aModifiers, mod_type aModifiersPersisten
 			keys_sent = 0;
 			DoKeyDelay(0);
 		}
-		if (ascii) // Method #1
+		if (*ascii) // Method #1
 		{
-			keys_sent += SendASC(ascii, aTargetWindow, needs_leading_zero); // aTargetWindow is always NULL, it's just for maintainability.
+			keys_sent += SendASC(ascii, aTargetWindow); // aTargetWindow is always NULL, it's just for maintainability.
 			DoKeyDelay();
 		}
 		else // Method #2
 		{
-			if (ascii_diadic)
+			if (*ascii_diadic)
 				keys_sent += SendASC(ascii_diadic, aTargetWindow); // aTargetWindow is always NULL, it's just for maintainability.
 			else
 				keys_sent += SendChar(diadic[pair_index], aModifiers | aModifiersPersistent, KEYDOWNANDUP, aTargetWindow);
@@ -510,12 +508,16 @@ int SendKeySpecial(char aChar, mod_type aModifiers, mod_type aModifiersPersisten
 
 
 
-int SendASC(int aAscii, HWND aTargetWindow, bool aSendLeadingZero)
+int SendASC(char *aAscii, HWND aTargetWindow)
+// aAscii is a string to support explicit leading zeros because sending 216, for example, is not
+// the same as sending 0216.
 // Returns the number of keys sent (doesn't need to be exact).
 {
 	// This is just here to catch bugs in callers who do it wrong.  See notes in SendKeys() for explanation:
 	if (aTargetWindow) return 0;
-	if (aAscii < 0 || aAscii > 255) return 0; // Sanity check.
+
+	int value = atoi(aAscii);
+	if (value < 0 || value > 255) return 0; // Sanity check.
 
 	// Known issue: If the hotkey that triggers this Send command is CONTROL-ALT
 	// (and maybe either CTRL or ALT separately, as well), the {ASC nnnn} method
@@ -541,16 +543,8 @@ int SendASC(int aAscii, HWND aTargetWindow, bool aSendLeadingZero)
 		++keys_sent;
 	}
 
-	if (aSendLeadingZero)
-	{
-		KeyEvent(KEYDOWNANDUP, VK_NUMPAD0);
-		++keys_sent;
-	}
-
-	char string_to_send[16];
-	ITOA(aAscii, string_to_send);
-
-	for (char *cp = string_to_send; *cp; ++cp)
+	// Caller relies upon us to stop upon reaching the first non-digit character:
+	for (char *cp = aAscii; *cp >= '0' && *cp <= '9'; ++cp)
 	{
 		// A comment from AutoIt3: ASCII 0 is 48, NUMPAD0 is 96, add on 48 to the ASCII.
 		// Also, don't do WinDelay after each keypress in this case because it would make
@@ -1252,6 +1246,7 @@ void init_vk_to_sc()
 	g_vk_to_sc[VK_APPS].a |= 0x0100;  // Application key on keyboards with LWIN/RWIN/Apps.  Not listed in MSDN?
 	g_vk_to_sc[VK_RMENU].a |= 0x0100;
 	g_vk_to_sc[VK_RCONTROL].a |= 0x0100;
+	g_vk_to_sc[VK_RSHIFT].a |= 0x0100; // WinXP needs this to be extended for KeyboardEvent() to work properly.
 	g_vk_to_sc[VK_CANCEL].a |= 0x0100; // Ctrl-break
 	g_vk_to_sc[VK_SNAPSHOT].a |= 0x0100;  // PrintScreen
 	g_vk_to_sc[VK_NUMLOCK].a |= 0x0100;
@@ -1302,7 +1297,7 @@ void init_sc_to_vk()
 
 	// Even though neither of the SHIFT keys are extended, and thus could be mapped with
 	// MapVirtualKey(), it seems better to define them explicitly because under Win9x (maybe just Win95),
-	// I'm pretty sure MapVirtualKey() wouldn't return VK_SHIFT instead of the left/right VK.
+	// I'm pretty sure MapVirtualKey() would return VK_SHIFT instead of the left/right VK.
 	g_sc_to_vk[SC_LSHIFT].a = VK_LSHIFT;
 	g_sc_to_vk[SC_RSHIFT].a = VK_RSHIFT;
 	g_sc_to_vk[SC_LCONTROL].a = VK_LCONTROL;

@@ -2220,6 +2220,54 @@ ResultType Line::FileSelectFolder(char *aRootDir, bool aAllowCreateFolder, char 
 
 
 
+ResultType Line::FileCreateShortcut(char *aTargetFile, char *aShortcutFile, char *aWorkingDir, char *aArgs
+	, char *aDescription, char *aIconFile, char *aHotkey)
+// Adapted from the AutoIt3 source.
+{
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
+	CoInitialize(NULL);
+	IShellLink *psl;
+
+	if (SUCCEEDED(CoCreateInstance(CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER, IID_IShellLink, (LPVOID *)&psl)))
+	{
+		psl->SetPath(aTargetFile);
+		if (aWorkingDir && *aWorkingDir)
+			psl->SetWorkingDirectory(aWorkingDir);
+		if (aArgs && *aArgs)
+			psl->SetArguments(aArgs);
+		if (aDescription && *aDescription)
+			psl->SetDescription(aDescription);
+		if (aIconFile && *aIconFile)
+			psl->SetIconLocation(aIconFile, 0);
+		if (aHotkey && *aHotkey)
+		{
+			// If badly formatted, it's not a critical error, just continue.
+			// Currently, only shortcuts with a CTRL+ALT are supported.
+			// AutoIt3 note: Make sure that CTRL+ALT is selected (otherwise invalid)
+			vk_type vk = TextToVK(aHotkey);
+			if (vk)
+				// Vk in low 8 bits, mods in high 8:
+				psl->SetHotkey(   (WORD)vk | ((WORD)(HOTKEYF_CONTROL | HOTKEYF_ALT) << 8)   );
+		}
+
+		IPersistFile *ppf;
+		WORD wsz[MAX_PATH];
+		if(SUCCEEDED(psl->QueryInterface(IID_IPersistFile,(LPVOID *)&ppf)))
+		{
+			MultiByteToWideChar(CP_ACP, 0, aShortcutFile, -1, (LPWSTR)wsz, MAX_PATH);
+			if (SUCCEEDED(ppf->Save((LPCWSTR)wsz, TRUE)))
+				g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+			ppf->Release();
+		}
+		psl->Release();
+	}
+
+	CoUninitialize();
+	return OK; // ErrorLevel indicates whether or not it succeeded.
+}
+
+
+
 ResultType Line::FileCreateDir(char *aDirSpec)
 {
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
@@ -3931,10 +3979,6 @@ ResultType Line::CheckForMandatoryArgs()
 	case ACT_PIXELSEARCH:
 		if (!*RAW_ARG3 || !*RAW_ARG4 || !*RAW_ARG5 || !*RAW_ARG6 || !*RAW_ARG7)
 			return LineError("Parameters 3 through 7 must not be blank.");
-		return OK;
-	case ACT_REGREAD:
-		if (!*RAW_ARG3 || !*RAW_ARG4) // But #5 can be blank in case the command is being used in 4-param mode.
-			return LineError("Parameters 3 and 4 must not be blank.");
 		return OK;
 	}
 	return OK;  // For when the command isn't mentioned in the switch().

@@ -71,6 +71,20 @@ key is actually down at the moment of consideration.
 //    another key while a numpad key was being held down (i.e. case #2 above), in which case the driver waits
 //    indefinitely for the user to press any other key and then immediately sneaks in the shift key-down event
 //    right before it in the input stream (insertion).
+// 5) Similar to #4, but if the driver needs to generate a shift-up for an unexpected Numpad-up event,
+//    the restoration of the shift key will be "lazy".  This case was added in response to the below
+//    example, wherein the shift key got stuck physically down (incorrectly) by the hook:
+// 68  048	 	d	0.00	Num 8          	
+// 6B  04E	 	d	0.09	Num +          	
+// 68  048	i	d	0.00	Num 8          	
+// 68  048	i	u	0.00	Num 8          	
+// A0  02A	i	d	0.02	Shift          	part of the macro
+// 01  000	i	d	0.03	LButton        	
+// A0  02A	 	u	0.00	Shift          	driver, for the next key
+// 26  048	 	u	0.00	Num 8          	
+// A0  02A	 	d	0.49	Shift          	driver lazy down (but not detected as non-physical)
+// 6B  04E	 	d	0.00	Num +          	
+
 
 // The below timeout is for the subset of driver-generated shift-events that occur immediately
 // before or after some other keyboard event.  The elapsed time is usually zero, but using 22ms
@@ -537,12 +551,14 @@ void UpdateKeyState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppressed)
 	if (prior_event_was_physical && (prior_vk == VK_LSHIFT || prior_vk == VK_SHIFT)  // But not RSHIFT.
 		&& (DWORD)(GetTickCount() - prior_event_tickcount) < (DWORD)SHIFT_KEY_WORKAROUND_TIMEOUT)
 	{
-		// Verified: Both down and up events for the current key qualify for this:
-		bool fix_it = !prior_event_was_key_up && DualStateNumpadKeyIsDown();
+		bool current_is_dual_state = IsDualStateNumpadKey((vk_type)pEvent->vkCode, sc);
+		// Verified: Both down and up events for the *current* (not prior) key qualify for this:
+		bool fix_it = (!prior_event_was_key_up && DualStateNumpadKeyIsDown())  // Case #4 of the workaround.
+			|| (prior_event_was_key_up && key_up && current_is_dual_state); // Case #5
 		if (fix_it)
 			next_phys_shift_down_is_not_phys = true;
 		// In the first case, both the numpad key-up and down events are eligible:
-		if (   fix_it || (prior_event_was_key_up && IsDualStateNumpadKey((vk_type)pEvent->vkCode, sc))   )
+		if (   fix_it || (prior_event_was_key_up && current_is_dual_state)   )
 		{
 			// Since the prior event (the shift key) already happened (took effect) and since only
 			// now is it known that it shouldn't have been physical, undo the effects of it having
@@ -752,8 +768,13 @@ LRESULT CALLBACK LowLevelKeybdProc(int code, WPARAM wParam, LPARAM lParam)
 	// array indexes to be out-of-bounds).  The 9th bit is later set to 1 if the key is extended:
 	sc &= 0xFF;
 	// Change sc to be extended if indicated.  But avoid doing so for VK_RSHIFT, which is
-	// apparently considered extended by the API when it shouldn't be:
-	if ((pEvent->flags & LLKHF_EXTENDED) && vk != VK_RSHIFT)
+	// apparently considered extended by the API when it shouldn't be.  Update: Well, it looks like
+	// VK_RSHIFT really is an extended key, at least on WinXP (and probably be extension on the other
+	// NT based OSes as well).  What little info I could find on the 'net about this is contradictory,
+	// but it's clear that some things just don't work right if the non-extended scan code is sent.  For
+	// example, the shift key will appear to get stuck down in the foreground app if the non-extended
+	// scan code is sent with VK_RSHIFT key-up event:
+	if ((pEvent->flags & LLKHF_EXTENDED)) // && vk != VK_RSHIFT)
 		sc |= 0x100;
 
 #else // Mouse Hook:

@@ -117,7 +117,7 @@ GNU General Public License for more details.
 #define SC_LCONTROL 0x01D
 #define SC_RCONTROL 0x11D
 #define SC_LSHIFT 0x02A
-#define SC_RSHIFT 0x036
+#define SC_RSHIFT 0x136 // Must be extended, at least on WinXP, or there will be problems, e.g. SetModifierLRState().
 #define SC_LALT 0x038
 #define SC_RALT 0x138
 #define SC_LWIN 0x15B
@@ -191,7 +191,7 @@ int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, mod_type aModifiersPe
 	, int aRepeatCount, KeyEventTypes aEventType, HWND aTargetWindow = NULL);
 int SendKeySpecial(char aChar, mod_type aModifiers, mod_type aModifiersPersistent
 	, int aRepeatCount, KeyEventTypes aEventType, HWND aTargetWindow);
-int SendASC(int aAscii, HWND aTargetWindow, bool aSendLeadingZero = false);
+int SendASC(char *aAscii, HWND aTargetWindow);
 int SendChar(char aChar, mod_type aModifiers, KeyEventTypes aEventType, HWND aTargetWindow);
 
 

@@ -23,11 +23,14 @@ GNU General Public License for more details.
 #include "keyboard.h" // for modLR_type
 #include "var.h" // for a script's variables.
 #include "WinGroup.h" // for a script's Window Groups.
-#include "Util.h" // for FileTimeToYYYYMMDD()
+#include "Util.h" // for FileTimeToYYYYMMDD(), strlcpy()
 #include "resources\resource.h"  // For tray icon.
 #ifdef AUTOHOTKEYSC
 	#include "lib/exearc_read.h"
 #endif
+
+#include "os_version.h" // For the global OS_Version object
+EXTERN_OSVER; // For the access to the g_os version object without having to include globaldata.h
 
 // AutoIt2 supports lines up to 16384 characters long, and we want to be able to do so too
 // so that really long lines from aut2 scripts, such as a chain of IF commands, can be
@@ -44,6 +47,7 @@ enum ExecUntilMode {NORMAL_MODE, UNTIL_RETURN, UNTIL_BLOCK_END, ONLY_ONE_LINE};
 #define ATTR_LOOP_UNKNOWN ((void *)1)
 #define ATTR_LOOP_NORMAL ((void *)2)
 #define ATTR_LOOP_FILE ((void *)3)
+#define ATTR_LOOP_REG ((void *)4)
 typedef void *AttributeType;
 
 enum FileLoopModeType {FILE_LOOP_INVALID, FILE_LOOP_FILES_ONLY, FILE_LOOP_FILES_AND_FOLDERS, FILE_LOOP_FOLDERS_ONLY};
@@ -103,7 +107,7 @@ enum enum_act {
 , ACT_FILECREATEDIR, ACT_FILEREMOVEDIR
 , ACT_FILEGETATTRIB, ACT_FILESETATTRIB, ACT_FILEGETTIME, ACT_FILESETTIME
 , ACT_FILEGETSIZE, ACT_FILEGETVERSION
-, ACT_FILESELECTFILE, ACT_FILESELECTFOLDER
+, ACT_FILESELECTFILE, ACT_FILESELECTFOLDER, ACT_FILECREATESHORTCUT
 , ACT_INIREAD, ACT_INIWRITE, ACT_INIDELETE
 , ACT_REGREAD, ACT_REGWRITE, ACT_REGDELETE
 , ACT_SETKEYDELAY, ACT_SETMOUSEDELAY, ACT_SETWINDELAY, ACT_SETCONTROLDELAY, ACT_SETBATCHLINES
@@ -157,6 +161,7 @@ enum enum_act_old {
 #define ERR_GROUPADD_LABEL "The target label in parameter #4 does not exist."
 #define ERR_WINDOW_PARAM "This command requires that at least one of its window parameters be non-blank."
 #define ERR_LOOP_FILE_MODE "If not blank, parameter #2 must be either 0, 1, 2, or a variable reference."
+#define ERR_LOOP_REG_MODE  "If not blank, parameter #3 must be either 0, 1, 2, or a variable reference."
 #define ERR_ON_OFF "If not blank, the value must be either ON, OFF, or a variable reference."
 #define ERR_ON_OFF_ALWAYS "If not blank, the value must be either ON, OFF, ALWAYSON, ALWAYSOFF, or a variable reference."
 #define ERR_ON_OFF_TOGGLE "If not blank, the value must be either ON, OFF, TOGGLE, or a variable reference."
@@ -173,7 +178,7 @@ enum enum_act_old {
 #define ERR_MOUSE_BUTTON "This line specifies an invalid mouse button."
 #define ERR_MOUSE_COORD "The X & Y coordinates must be either both absent or both present."
 #define ERR_MOUSE_UPDOWN "Parameter #6 must be either blank, D, U, or a variable reference."
-#define ERR_PERCENT "The parameter must be a percentage between 0 and 100, or a variable reference."
+#define ERR_PERCENT "The parameter must be a number between 0 and 100 (inclusive), or a variable reference."
 #define ERR_MOUSE_SPEED "The Mouse Speed must be a number between 0 and " MAX_MOUSE_SPEED_STR ", blank, or a variable reference."
 #define ERR_MEM_ASSIGN "Out of memory while assigning to this variable." ERR_ABORT
 #define ERR_VAR_IS_RESERVED "This variable is reserved and cannot be assigned to."
@@ -218,6 +223,40 @@ struct ArgStruct
 	DerefType *deref;  // Will hold a NULL-terminated array of var-deref locations within <text>.
 };
 
+
+// Some of these lengths and such are based on the MSDN example at
+// http://msdn.microsoft.com/library/default.asp?url=/library/en-us/sysinfo/base/enumerating_registry_subkeys.asp:
+#define MAX_KEY_LENGTH 255
+#define MAX_VALUE_NAME 16383
+#define REG_SUBKEY -2 // Custom type, not standard in Windows.
+struct RegItemStruct
+{
+	HKEY root_key;
+	char subkey[MAX_PATH];  // The branch of the registry where this subkey or value is located.
+	char name[MAX_VALUE_NAME]; // The subkey or value name.
+	DWORD type; // Value Type (e.g REG_DWORD). This is the length used by MSDN in their example code.
+	FILETIME ftLastWriteTime; // Non-initialized.
+	void InitForValues() {ftLastWriteTime.dwHighDateTime = ftLastWriteTime.dwLowDateTime = 0;}
+	void InitForSubkeys() {type = REG_SUBKEY;}  // To distinguish REG_DWORD and such from the subkeys themselves.
+	RegItemStruct(HKEY aRootKey, char *aSubKey)
+		: root_key(aRootKey), type(REG_NONE)
+	{
+		*name = '\0';
+		// Make a local copy on the caller's stack so that if the current script subroutine is
+		// interrupted to allow another to run, the contents of the deref buffer is saved here:
+		strlcpy(subkey, aSubKey, sizeof(subkey));
+		// Even though the call may work with a trailing backslash, it's best to remove it
+		// so that consistent results are delivered to the user.  For example, if the script
+		// is enumerating recursively into a subkey, subkeys deeper down will not include the
+		// trailing backslash when they are reported.  So the user's own subkey should not
+		// have one either so that when A_ScriptSubKey is referenced in the script, it will
+		// always show up as the value without a trailing backslash:
+		size_t length = strlen(subkey);
+		if (length && subkey[length - 1] == '\\')
+			subkey[length - 1] = '\0';
+	}
+};
+
 typedef UCHAR ArgCountType;
 #define MAX_ARGS 20
 
@@ -248,16 +287,21 @@ private:
 	static char *sArgDeref[MAX_ARGS];
 
 	ResultType EvaluateCondition();
-	ResultType PerformLoop(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrentFile
-		, bool &aContinueMainLoop, Line *&aJumpToLine
-		, AttributeType aAttr, FileLoopModeType aFileLoopMode, bool aRecurseSubfolders, char *aFilePattern
-		, __int64 aIterationLimit, bool aIsInfinite);
-	ResultType Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurrentFile = NULL);
+	ResultType PerformLoop(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
+		, bool &aContinueMainLoop, Line *&aJumpToLine, AttributeType aAttr, FileLoopModeType aFileLoopMode
+		, bool aRecurseSubfolders, char *aFilePattern, __int64 aIterationLimit, bool aIsInfinite);
+	ResultType PerformLoopReg(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrentFile
+		, bool &aContinueMainLoop, Line *&aJumpToLine, FileLoopModeType aFileLoopMode
+		, bool aRecurseSubfolders, HKEY aRootKey, char *aRegSubkey);
+	ResultType Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurrentFile = NULL
+		, RegItemStruct *aCurrentRegItem = NULL);
 	ResultType PerformAssign();
 	ResultType DriveSpaceFree(char *aPath);
 	ResultType SoundPlay(char *aFilespec, bool aSleepUntilDone);
 	ResultType FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeting, char *aFilter);
 	ResultType FileSelectFolder(char *aRootDir, bool aAllowCreateFolder, char *aGreeting);
+	ResultType FileCreateShortcut(char *aTargetFile, char *aShortcutFile, char *aWorkingDir, char *aArgs
+		, char *aDescription, char *aIconFile, char *aHotkey);
 	ResultType FileCreateDir(char *aDirSpec);
 	ResultType FileReadLine(char *aFilespec, char *aLineNumber);
 	ResultType FileAppend(char *aFilespec, char *aBuf);
@@ -290,20 +334,10 @@ private:
 	ResultType IniRead(char *aFilespec, char *aSection, char *aKey, char *aDefault);
 	ResultType IniWrite(char *aValue, char *aFilespec, char *aSection, char *aKey);
 	ResultType IniDelete(char *aFilespec, char *aSection, char *aKey);
-	ResultType RegRead(char *aRegKey, char *aRegSubkey, char *aValueName);
-	ResultType RegWrite(char *aValueType, char *aRegKey, char *aRegSubkey, char *aValueName, char *aValue);
-	ResultType RegDelete(char *aRegKey, char *aRegSubkey, char *aValueName);
+	ResultType RegRead(HKEY aRootKey, char *aRegSubkey, char *aValueName);
+	ResultType RegWrite(DWORD aValueType, HKEY aRootKey, char *aRegSubkey, char *aValueName, char *aValue);
+	ResultType RegDelete(HKEY aRootKey, char *aRegSubkey, char *aValueName);
 	static bool RegRemoveSubkeys(HKEY hRegKey);
-	static HKEY RegConvertMainKey(char *aBuf)
-	{
-		// Returns the HKEY, or NULL if aBuf contains an invalid key name.
-		if (!stricmp(aBuf, "HKEY_LOCAL_MACHINE"))  return HKEY_LOCAL_MACHINE;
-		if (!stricmp(aBuf, "HKEY_CLASSES_ROOT"))   return HKEY_CLASSES_ROOT;
-		if (!stricmp(aBuf, "HKEY_CURRENT_CONFIG")) return HKEY_CURRENT_CONFIG;
-		if (!stricmp(aBuf, "HKEY_CURRENT_USER"))   return HKEY_CURRENT_USER;
-		if (!stricmp(aBuf, "HKEY_USERS"))          return HKEY_USERS;
-		return NULL;
-	}
 
 	ResultType PerformShowWindow(ActionTypeType aActionType, char *aTitle = "", char *aText = ""
 		, char *aExcludeTitle = "", char *aExcludeText = "");
@@ -388,6 +422,7 @@ public:
 	#define LINE_ARG1 (line->mArgc > 0 ? line->sArgDeref[0] : "")
 	#define LINE_ARG2 (line->mArgc > 1 ? line->sArgDeref[1] : "")
 	#define LINE_ARG3 (line->mArgc > 2 ? line->sArgDeref[2] : "")
+	#define LINE_ARG4 (line->mArgc > 3 ? line->sArgDeref[3] : "")
 	#define SAVED_ARG1 (mArgc > 0 ? arg[0] : "")
 	#define SAVED_ARG2 (mArgc > 1 ? arg[1] : "")
 	#define SAVED_ARG3 (mArgc > 2 ? arg[2] : "")
@@ -433,7 +468,7 @@ public:
 	static int nSourceFiles; // An int vs. UCHAR so that it can be exactly 256 without overflowing.
 
 	ResultType ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **apJumpToLine = NULL
-		, WIN32_FIND_DATA *aCurrentFile = NULL);
+		, WIN32_FIND_DATA *aCurrentFile = NULL, RegItemStruct *aCurrentRegItem = NULL);
 
 	Var *ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary = true);
 	ResultType ExpandArgs();
@@ -565,6 +600,57 @@ public:
 		return false;  // Since above didn't return, negative is not allowed.
 	}
 
+	static HKEY RegConvertRootKey(char *aBuf)
+	{
+		if (!stricmp(aBuf, "HKEY_LOCAL_MACHINE"))  return HKEY_LOCAL_MACHINE;
+		if (!stricmp(aBuf, "HKEY_CLASSES_ROOT"))   return HKEY_CLASSES_ROOT;
+		if (!stricmp(aBuf, "HKEY_CURRENT_CONFIG")) return HKEY_CURRENT_CONFIG;
+		if (!stricmp(aBuf, "HKEY_CURRENT_USER"))   return HKEY_CURRENT_USER;
+		if (!stricmp(aBuf, "HKEY_USERS"))          return HKEY_USERS;
+		return NULL; // Invalid or unsupported root key name.
+	}
+	static char *RegConvertRootKey(char *aBuf, size_t aBufSize, HKEY aRootKey)
+	{
+		// switch() doesn't directly support expression of type HKEY:
+		if (aRootKey == HKEY_LOCAL_MACHINE)       strlcpy(aBuf, "HKEY_LOCAL_MACHINE", aBufSize);
+		else if (aRootKey == HKEY_CLASSES_ROOT)   strlcpy(aBuf, "HKEY_CLASSES_ROOT", aBufSize);
+		else if (aRootKey == HKEY_CURRENT_CONFIG) strlcpy(aBuf, "HKEY_CURRENT_CONFIG", aBufSize);
+		else if (aRootKey == HKEY_CURRENT_USER)   strlcpy(aBuf, "HKEY_CURRENT_USER", aBufSize);
+		else if (aRootKey == HKEY_USERS)          strlcpy(aBuf, "HKEY_USERS", aBufSize);
+		else if (aBufSize)                        *aBuf = '\0'; // Make it be the empty string for anything else.
+		// These are either unused or so rarely used (DYN_DATA on Win9x) that they aren't supported:
+		// HKEY_PERFORMANCE_DATA, HKEY_PERFORMANCE_TEXT, HKEY_PERFORMANCE_NLSTEXT, HKEY_DYN_DATA
+		return aBuf;
+	}
+	static int RegConvertValueType(char *aValueType)
+	{
+		if (!stricmp(aValueType, "REG_SZ")) return REG_SZ;
+		if (!stricmp(aValueType, "REG_EXPAND_SZ")) return REG_EXPAND_SZ;
+		if (!stricmp(aValueType, "REG_MULTI_SZ")) return REG_MULTI_SZ;
+		if (!stricmp(aValueType, "REG_DWORD")) return REG_DWORD;
+		if (!stricmp(aValueType, "REG_BINARY")) return REG_BINARY;
+		return REG_NONE; // Unknown or unsupported type.
+	}
+	static char *RegConvertValueType(char *aBuf, size_t aBufSize, DWORD aValueType)
+	{
+		switch(aValueType)
+		{
+		case REG_SZ: strlcpy(aBuf, "REG_SZ", aBufSize); return aBuf;
+		case REG_EXPAND_SZ: strlcpy(aBuf, "REG_EXPAND_SZ", aBufSize); return aBuf;
+		case REG_BINARY: strlcpy(aBuf, "REG_BINARY", aBufSize); return aBuf;
+		case REG_DWORD: strlcpy(aBuf, "REG_DWORD", aBufSize); return aBuf;
+		case REG_DWORD_BIG_ENDIAN: strlcpy(aBuf, "REG_DWORD_BIG_ENDIAN", aBufSize); return aBuf;
+		case REG_LINK: strlcpy(aBuf, "REG_LINK", aBufSize); return aBuf;
+		case REG_MULTI_SZ: strlcpy(aBuf, "REG_MULTI_SZ", aBufSize); return aBuf;
+		case REG_RESOURCE_LIST: strlcpy(aBuf, "REG_RESOURCE_LIST", aBufSize); return aBuf;
+		case REG_FULL_RESOURCE_DESCRIPTOR: strlcpy(aBuf, "REG_FULL_RESOURCE_DESCRIPTOR", aBufSize); return aBuf;
+		case REG_RESOURCE_REQUIREMENTS_LIST: strlcpy(aBuf, "REG_RESOURCE_REQUIREMENTS_LIST", aBufSize); return aBuf;
+		case REG_QWORD: strlcpy(aBuf, "REG_QWORD", aBufSize); return aBuf;
+		case REG_SUBKEY: strlcpy(aBuf, "KEY", aBufSize); return aBuf;  // Custom (non-standard) type.
+		default: if (aBufSize) *aBuf = '\0'; return aBuf;  // Make it be the empty string for REG_NONE and anything else.
+		}
+	}
+
 	static TitleMatchModes ConvertTitleMatchMode(char *aBuf)
 	{
 		if (!aBuf || !*aBuf) return MATCHMODE_INVALID;
@@ -693,26 +779,6 @@ public:
 		return FAIL; // Otherwise, one is blank but the other isn't, which is not allowed.
 	}
 
-	static ResultType ValidateRegKey(char *aKeyName)
-	{
-		if (!stricmp(aKeyName, "HKEY_LOCAL_MACHINE")) return OK;
-		if (!stricmp(aKeyName, "HKEY_USERS")) return OK;
-		if (!stricmp(aKeyName, "HKEY_CURRENT_USER")) return OK;
-		if (!stricmp(aKeyName, "HKEY_CLASSES_ROOT")) return OK;
-		if (!stricmp(aKeyName, "HKEY_CURRENT_CONFIG")) return OK;
-		return FAIL;
-	}
-
-	static ResultType ValidateRegValueType(char *aValueType)
-	{
-		if (!stricmp(aValueType, "REG_SZ")) return OK;
-		if (!stricmp(aValueType, "REG_EXPAND_SZ")) return OK;
-		if (!stricmp(aValueType, "REG_MULTI_SZ")) return OK;
-		if (!stricmp(aValueType, "REG_DWORD")) return OK;
-		if (!stricmp(aValueType, "REG_BINARY")) return OK;
-		return FAIL;
-	}
-
 	void Log()
 	{
 		// Probably doesn't need to be thread-safe or recursion-safe?
@@ -808,11 +874,12 @@ private:
 	// be done before dereferencing any line's mNextLine, for example:
 	Line *PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd = false, Line *aParentLine = NULL);
 	Line *PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode = NORMAL_MODE
-		, AttributeType aLoopType = ATTR_NONE);
+		, AttributeType aLoopType1 = ATTR_NONE, AttributeType aLoopType2 = ATTR_NONE);
 public:
 	Line *mCurrLine;  // Seems better to make this public than make Line our friend.
 	Label *mThisHotkeyLabel, *mPriorHotkeyLabel;
 	WIN32_FIND_DATA *mLoopFile;  // The file of the current file-loop, if applicable.
+	RegItemStruct *mLoopRegItem; // The registry subkey or value of the current registry enumeration loop.
 	DWORD mThisHotkeyStartTime, mPriorHotkeyStartTime;  // Tickcount timestamp of when its subroutine began.
 	char *mFileSpec; // Will hold the full filespec, for convenience.
 	char *mFileDir;  // Will hold the directory containing the script file.
@@ -992,6 +1059,55 @@ public:
 		}
 		return (VarSizeType)strlen(target_buf);
 	}
+
+	VarSizeType GetLoopRegType(char *aBuf = NULL)
+	{
+		char str[256] = "";  // Set default.
+		if (mLoopRegItem)
+			Line::RegConvertValueType(str, sizeof(str), mLoopRegItem->type);
+		if (aBuf)
+			strcpy(aBuf, str);
+		return (VarSizeType)strlen(str);
+	}
+	VarSizeType GetLoopRegKey(char *aBuf = NULL)
+	{
+		char str[256] = "";  // Set default.
+		if (mLoopRegItem)
+			Line::RegConvertRootKey(str, sizeof(str), mLoopRegItem->root_key);
+		if (aBuf)
+			strcpy(aBuf, str);
+		return (VarSizeType)strlen(str);
+	}
+	VarSizeType GetLoopRegSubKey(char *aBuf = NULL)
+	{
+		char *str = "";  // Set default.
+		if (mLoopRegItem)
+			str = mLoopRegItem->subkey;
+		if (aBuf)
+			strcpy(aBuf, str);
+		return (VarSizeType)strlen(str);
+	}
+	VarSizeType GetLoopRegName(char *aBuf = NULL)
+	{
+		char *str = "";  // Set default.
+		if (mLoopRegItem)
+			str = mLoopRegItem->name; // This can be either the name of a subkey or the name of a value.
+		if (aBuf)
+			strcpy(aBuf, str);
+		return (VarSizeType)strlen(str);
+	}
+	VarSizeType GetLoopRegTimeModified(char *aBuf = NULL)
+	{
+		char str[64] = "";  // Set default.
+		// Only subkeys (not values) have a time.  In addition, Win9x doesn't support retrieval
+		// of the time (nor does it store it), so make the var blank in that case:
+		if (mLoopRegItem && mLoopRegItem->type == REG_SUBKEY && !g_os.IsWin9x())
+			FileTimeToYYYYMMDD(str, &mLoopRegItem->ftLastWriteTime, true);
+		if (aBuf)
+			strcpy(aBuf, str);
+		return (VarSizeType)strlen(str);
+	}
+
 
 	VarSizeType GetThisHotkey(char *aBuf = NULL)
 	{
