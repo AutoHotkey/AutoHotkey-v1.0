@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003 Chris Mallett
+Copyright 2003-2005 Chris Mallett
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -2386,14 +2386,23 @@ ResultType Line::Control(char *aCmd, char *aValue, char *aControl, char *aTitle,
 		}
 		else if (!strnicmp(aControl, "List" ,4))
 		{
-			msg = LB_SETCURSEL;
+			if (GetWindowLong(control_window, GWL_STYLE) & (LBS_EXTENDEDSEL|LBS_MULTIPLESEL))
+				msg = LB_SETSEL;
+			else // single-select listbox
+				msg = LB_SETCURSEL;
 			x_msg = LBN_SELCHANGE;
 			y_msg = LBN_DBLCLK;
 		}
 		else
 			return OK;  // Must be ComboBox or ListBox.  Let ErrorLevel tell the story.
-		if (!SendMessageTimeout(control_window, msg, control_index, 0, SMTO_ABORTIFHUNG, 2000, &dwResult))
-			return OK;  // Let ErrorLevel tell the story.
+		if (msg == LB_SETSEL) // Multi-select, so use the cumulative method.
+		{
+			if (!SendMessageTimeout(control_window, msg, TRUE, control_index, SMTO_ABORTIFHUNG, 2000, &dwResult))
+				return OK;  // Let ErrorLevel tell the story.
+		}
+		else // ComboBox or single-select ListBox.
+			if (!SendMessageTimeout(control_window, msg, control_index, 0, SMTO_ABORTIFHUNG, 2000, &dwResult))
+				return OK;  // Let ErrorLevel tell the story.
 		if (dwResult == CB_ERR)  // CB_ERR == LB_ERR
 			return OK;
 		if (   !(immediate_parent = GetParent(control_window))   )
@@ -2418,16 +2427,28 @@ ResultType Line::Control(char *aCmd, char *aValue, char *aControl, char *aTitle,
 		}
 		else if (!strnicmp(aControl, "ListBox", 7))
 		{
-			msg = LB_SELECTSTRING;
+			if (GetWindowLong(control_window, GWL_STYLE) & (LBS_EXTENDEDSEL|LBS_MULTIPLESEL))
+				msg = LB_FINDSTRING;
+			else // single-select listbox
+				msg = LB_SELECTSTRING;
 			x_msg = LBN_SELCHANGE;
 			y_msg = LBN_DBLCLK;
 		}
 		else
 			return OK;  // Must be ComboBox or ListBox.  Let ErrorLevel tell the story.
-		if (!SendMessageTimeout(control_window, msg, 1, (LPARAM)aValue, SMTO_ABORTIFHUNG, 2000, &dwResult))
-			return OK;  // Let ErrorLevel tell the story.
-		if (dwResult == CB_ERR)  // CB_ERR == LB_ERR
-			return OK;
+		if (msg == LB_FINDSTRING) // Multi-select ListBox (LB_SELECTSTRING is not supported by these).
+		{
+			DWORD item_index;
+			if (!SendMessageTimeout(control_window, msg, -1, (LPARAM)aValue, SMTO_ABORTIFHUNG, 2000, &item_index)
+				|| item_index == LB_ERR
+				|| !SendMessageTimeout(control_window, LB_SETSEL, TRUE, item_index, SMTO_ABORTIFHUNG, 2000, &dwResult)
+				|| dwResult == LB_ERR) // Relies on short-circuit boolean.
+				return OK;  // Let ErrorLevel tell the story.
+		}
+		else // ComboBox or single-select ListBox.
+			if (!SendMessageTimeout(control_window, msg, 1, (LPARAM)aValue, SMTO_ABORTIFHUNG, 2000, &dwResult)
+				|| dwResult == CB_ERR) // CB_ERR == LB_ERR
+				return OK;  // Let ErrorLevel tell the story.
 		if (   !(immediate_parent = GetParent(control_window))   )
 			return OK;
 		if (   !(control_id = GetDlgCtrlID(control_window))   )
@@ -2476,10 +2497,10 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 	if (!control_window)
 		return output_var->Assign();  // Let ErrorLevel tell the story.
 
-	DWORD dwResult, index, length, start, end;
+	DWORD dwResult, index, length, item_length, start, end, u, item_count;
 	UINT msg, x_msg, y_msg;
 	int control_index;
-	char *dyn_buf, buf[32768];  // 32768 is the size Au3 uses for GETLINE and such.
+	char *cp, *dyn_buf, buf[32768];  // 32768 is the size Au3 uses for GETLINE and such.
 
 	switch(control_cmd)
 	{
@@ -2559,6 +2580,62 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 		if (length == CB_ERR)  // Probably impossible given the way it was called above.  Also, CB_ERR == LB_ERR
 			return output_var->Assign(); // Let ErrorLevel tell the story.
 		output_var->Length() = length;  // Update to actual vs. estimated length.
+		break;
+
+	case CONTROLGET_CMD_LIST:
+		// This is done here as the special LIST sub-command rather than just being built into
+		// ControlGetText because ControlGetText already has a function for ComboBoxes: it fetches
+		// the current selection.  Although ListBox does not have such a function, it seem best
+		// to consolidate both methods here.
+		if (!strnicmp(aControl, "ComboBox", 8))
+		{
+			msg = CB_GETCOUNT;
+			x_msg = CB_GETLBTEXTLEN;
+			y_msg = CB_GETLBTEXT;
+		}
+		else if (!strnicmp(aControl, "ListBox" ,7))
+		{
+			msg = LB_GETCOUNT;
+			x_msg = LB_GETTEXTLEN;
+			y_msg = LB_GETTEXT;
+		}
+		else // Must be ComboBox or ListBox
+			return output_var->Assign();  // Let ErrorLevel tell the story.
+		if (!(SendMessageTimeout(control_window, msg, 0, 0, SMTO_ABORTIFHUNG, 5000, &item_count))
+			|| item_count <= 0) // No items in ListBox/ComboBox or there was a problem getting the count.
+			return output_var->Assign();  // Let ErrorLevel tell the story.
+		// Calculate the length of delimited list of items.  Length is initialized to provide enough
+		// room for each item's delimiter (the last item does not have a delimiter).
+		for (length = item_count - 1, u = 0; u < item_count; ++u)
+		{
+			if (!SendMessageTimeout(control_window, x_msg, u, 0, SMTO_ABORTIFHUNG, 5000, &item_length)
+				|| item_length == LB_ERR) // Note that item_length is legitimately zero for a blank item in the list.
+				return output_var->Assign();  // Let ErrorLevel tell the story.
+			length += item_length;
+		}
+		// In unusual cases, MSDN says the indicated length might be longer than it actually winds up
+		// being when the item's text is retrieved.  This should be harmless, since there are many
+		// other precedents where a variable is sized to something larger than it winds up carrying.
+		// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
+		// this call will set up the clipboard for writing:
+		if (output_var->Assign(NULL, (VarSizeType)length) != OK)
+			return FAIL;  // It already displayed the error.
+		for (cp = output_var->Contents(), length = item_count - 1, u = 0; u < item_count; ++u)
+		{
+			if (SendMessageTimeout(control_window, y_msg, (WPARAM)u, (LPARAM)cp, SMTO_ABORTIFHUNG, 5000, &item_length)
+				&& item_length != LB_ERR)
+			{
+				length += item_length; // Accumulate actual vs. estimated length.
+				cp += item_length;  // Point it to the terminator in preparation for the next write.
+			}
+			//else do nothing, just consider this to be a blank item so that the process can continue.
+			if (u < item_count - 1)
+				*cp++ = '\n'; // Add delimiter after each item except the last (helps parsing loop).
+			// Above: In this case, seems better to use \n rather than pipe as default delimiter in case
+			// the listbox/combobox contains any real pipes.
+		}
+		output_var->Length() = (VarSizeType)length;  // Update it to the actual length, which can vary from the estimate.
+		output_var->Close(); // In case it's the clipboard.
 		break;
 
 	case CONTROLGET_CMD_LINECOUNT:  //Must be an Edit

@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003 Chris Mallett
+Copyright 2003-2005 Chris Mallett
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -61,7 +61,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\GUI Demo.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\Expressions.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\New Text Document.ahk";
-		char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\bug - Hotstrings send Ctrl-Enter as a substitute for user's press of the Enter key.ahk";
+		char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\ControlGet ListBox text (non-Gui command listbox).ahk";
 	#else
 		char *script_filespec = NAME_P ".ini";  // Use this extension for better file association with editor(s).
 	#endif

@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003 Chris Mallett
+Copyright 2003-2005 Chris Mallett
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -692,7 +692,8 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 			break;
 		default:  // Not a supported control type.
 			return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
-		}
+		} // switch(control.type)
+
 		if (guicontrol_cmd == GUICONTROL_CMD_CHOOSESTRING)
 		{
 			if (msg == LB_FINDSTRING)
@@ -4224,13 +4225,13 @@ ResultType GuiType::ControlGetContents(Var &aOutputVar, GuiControlType &aControl
 			if (GetWindowLong(aControl.hwnd, GWL_STYLE) & (LBS_EXTENDEDSEL|LBS_MULTIPLESEL))
 			{
 				LRESULT item_count = SendMessage(aControl.hwnd, LB_GETSELCOUNT, 0, 0);
-				if (!item_count || item_count == LB_ERR)  // LB_ERR should be impossible in this case.
+				if (item_count <= 0)  // <=0 to check for LB_ERR too (but it should be impossible in this case).
 					return aOutputVar.Assign();
 				int *item = (int *)malloc(item_count * sizeof(int)); // dynamic since there can be a very large number of items.
 				if (!item)
 					return aOutputVar.Assign();
 				item_count = SendMessage(aControl.hwnd, LB_GETSELITEMS, (WPARAM)item_count, (LPARAM)item);
-				if (!item_count || item_count == LB_ERR)  // Both these conditions should be impossible in this case.
+				if (item_count <= 0)  // 0 or LB_ERR, but both these conditions should be impossible in this case.
 				{
 					free(item);
 					return aOutputVar.Assign();

@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003 Chris Mallett
+Copyright 2003-2005 Chris Mallett
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -544,7 +544,7 @@ enum ControlCmds {CONTROL_CMD_INVALID, CONTROL_CMD_CHECK, CONTROL_CMD_UNCHECK
 
 enum ControlGetCmds {CONTROLGET_CMD_INVALID, CONTROLGET_CMD_CHECKED, CONTROLGET_CMD_ENABLED
 	, CONTROLGET_CMD_VISIBLE, CONTROLGET_CMD_TAB, CONTROLGET_CMD_FINDSTRING
-	, CONTROLGET_CMD_CHOICE, CONTROLGET_CMD_LINECOUNT, CONTROLGET_CMD_CURRENTLINE
+	, CONTROLGET_CMD_CHOICE, CONTROLGET_CMD_LIST, CONTROLGET_CMD_LINECOUNT, CONTROLGET_CMD_CURRENTLINE
 	, CONTROLGET_CMD_CURRENTCOL, CONTROLGET_CMD_LINE, CONTROLGET_CMD_SELECTED
 	, CONTROLGET_CMD_STYLE, CONTROLGET_CMD_EXSTYLE};
 
@@ -1510,6 +1510,7 @@ public:
 		if (!stricmp(aBuf, "Tab")) return CONTROLGET_CMD_TAB;
 		if (!stricmp(aBuf, "FindString")) return CONTROLGET_CMD_FINDSTRING;
 		if (!stricmp(aBuf, "Choice")) return CONTROLGET_CMD_CHOICE;
+		if (!stricmp(aBuf, "List")) return CONTROLGET_CMD_LIST;
 		if (!stricmp(aBuf, "LineCount")) return CONTROLGET_CMD_LINECOUNT;
 		if (!stricmp(aBuf, "CurrentLine")) return CONTROLGET_CMD_CURRENTLINE;
 		if (!stricmp(aBuf, "CurrentCol")) return CONTROLGET_CMD_CURRENTCOL;

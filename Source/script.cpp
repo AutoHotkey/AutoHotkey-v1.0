@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003 Chris Mallett
+Copyright 2003-2005 Chris Mallett
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -353,12 +353,23 @@ ResultType Script::CreateWindows()
 		return FAIL;
 	}
 
+	char class_name[64];
+	HWND fore_win = GetForegroundWindow();
+	bool do_minimize = !fore_win || (GetClassName(fore_win, class_name, sizeof(class_name))
+		&& !stricmp(class_name, "Shell_TrayWnd")); // Shell_TrayWnd is the taskbar's class on Win98/XP and probably the others too.
+
 	// Note: the title below must be constructed the same was as is done by our
 	// WinMain() (so that we can detect whether this script is already running)
 	// which is why it's standardized in g_script.mMainWindowTitle.
-	// Create the main window:
-	if (   !(g_hWnd = CreateWindow(
-		  WINDOW_CLASS_MAIN
+	// Create the main window.  Prevent momentary disruption of Start Menu, which
+	// some users understandably don't like, by omitting the taskbar button temporarily.
+	// This is done because testing shows that minimizing the window further below, even
+	// though the window is hidden, would otherwise briefly show the taskbar button (or
+	// at least redraw the taskbar).  Sometimes this isn't noticeable, but other times
+	// (such as when the system is under heavy load) a user reported that it is quite
+	// noticeable:
+	if (   !(g_hWnd = CreateWindowEx(do_minimize ? WS_EX_TOOLWINDOW : 0
+		, WINDOW_CLASS_MAIN
 		, mMainWindowTitle
 		, WS_OVERLAPPEDWINDOW // Style.  Alt: WS_POPUP or maybe 0.
 		, CW_USEDEFAULT // xpos
@@ -388,7 +399,6 @@ ResultType Script::CreateWindows()
 	}
 #endif
 
-	// AutoIt3: Add read-only edit control to our main window:
 	if (    !(g_hWndEdit = CreateWindow("edit", NULL, WS_CHILD | WS_VISIBLE | WS_BORDER
 		| ES_LEFT | ES_MULTILINE | ES_READONLY | WS_VSCROLL // | WS_HSCROLL (saves space)
 		, 0, 0, 0, 0, g_hWnd, (HMENU)1, g_hInstance, NULL))  )
@@ -397,24 +407,24 @@ ResultType Script::CreateWindows()
 		return FAIL;
 	}
 
-	// To be compliant, we're supposed to do this.  Also, some of the MSDN docs mention that
-	// an app's very first call to ShowWindow() makes that function operate in a special mode.
-	// Therefore, it seems best to get that first call out of the way to avoid the possibility
-	// that the first-call behavior will cause problems with our normal use of ShowWindow()
-	// elsewhere.  UPDATE: Decided to do only the SW_HIDE one, ingoring default / nCmdShow.
-	// That should avoid any momentary visual effects on startup:
-	//ShowWindow(g_hWnd, SW_SHOWDEFAULT);  // The docs conflict, sometimes suggesting nCmdShow vs. this.
-	//UpdateWindow(g_hWnd);  // Not necessary because it's empty.
-	// Should do at least one call.  But sometimes SW_HIDE will be ignored the first time
-	// (see MSDN docs), so do two calls to be sure the window is really hidden:
-	//ShowWindow(g_hWnd, SW_HIDE);
-	//ShowWindow(g_hWnd, SW_HIDE); // 2nd call to be safe.
-	// Update: Doing it this way prevents the launch of the program from "stealing focus"
-	// (changing the foreground window to be nothing).  This allows scripts launched from the
-	// start menu, for example, to immediately operate on the window that was foreground
-	// prior to the start menu having been displayed:
-	ShowWindow(g_hWnd, SW_MINIMIZE);
+	// Some of the MSDN docs mention that an app's very first call to ShowWindow() makes that
+	// function operate in a special mode. Therefore, it seems best to get that first call out
+	// of the way to avoid the possibility that the first-call behavior will cause problems with
+	// our normal use of ShowWindow() below and other places.  Also, decided to ignore nCmdShow,
+    // to avoid any momentary visual effects on startup:
 	ShowWindow(g_hWnd, SW_HIDE);
+
+	// Now that the first call to ShowWindow() is out of the way, minimize the main window so that
+	// if the script is launched from the Start Menu (and perhaps other places such as the
+	// Quick-launch toolbar), the window that was active before the Start Menu was displayed will
+	// become active again.  But as of v1.0.25.09, this minimize is done more selectively to prevent
+	// the launch of a script from knocking the user out of a full-screen game or other application
+	// that would be disrupted by an SW_MINIMIZE:
+	if (do_minimize)
+	{
+		ShowWindow(g_hWnd, SW_MINIMIZE);
+		SetWindowLong(g_hWnd, GWL_EXSTYLE, 0); // Give the main window back its taskbar button.
+	}
 
 	g_hAccelTable = LoadAccelerators(g_hInstance, MAKEINTRESOURCE(IDR_ACCELERATOR1));
 
