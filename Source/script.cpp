@@ -44,8 +44,8 @@ Script::Script()
 	, mFirstLabel(NULL), mLastLabel(NULL)
 	, mFirstVar(NULL), mLastVar(NULL)
 	, mLineCount(0), mLabelCount(0), mVarCount(0), mGroupCount(0)
-	, mFileLineCount(0)
-	, mFileSpec(""), mFileDir(""), mFileName(""), mOurEXE(""), mMainWindowTitle("")
+	, mCurrFileNumber(0), mCurrLineNumber(0)
+	, mFileSpec(""), mFileDir(""), mFileName(""), mOurEXE(""), mOurEXEDir(""), mMainWindowTitle("")
 	, mIsReadyToExecute(false)
 	, mIsRestart(false)
 	, mIsAutoIt2(false)
@@ -91,7 +91,7 @@ ResultType Script::Init(char *aScriptFilename, bool aIsRestart)
 	if (!aScriptFilename || !*aScriptFilename) return FAIL;
 	char buf[2048]; // Just make sure we have plenty of room to do things with.
 	char *filename_marker;
-	// In case the config file is a relative filespec (relative to current working dir):
+	// In case the script is a relative filespec (relative to current working dir):
 	if (!GetFullPathName(aScriptFilename, sizeof(buf), buf, &filename_marker))
 	{
 		MsgBox("Script::Init(): GetFullPathName() failed.");
@@ -167,9 +167,30 @@ ResultType Script::Init(char *aScriptFilename, bool aIsRestart)
 #endif
 	if (   !(mMainWindowTitle = SimpleHeap::Malloc(buf))   )
 		return FAIL;  // It already displayed the error for us.
-	if (GetModuleFileName(NULL, buf, sizeof(buf))) // realistically, probably can't fail.
+
+	// It may be better to get the module name this way rather than reading it from the registry
+	// (though it might be more proper to parse it out of the command line args or something),
+	// in case the user has moved it to a folder other than the install folder, hasn't installed it,
+	// or has renamed the EXE file itself.  Also, enclose the full filespec of the module in double
+	// quotes since that's how callers usually want it because ActionExec() currently needs it that way:
+	*buf = '"';
+	if (GetModuleFileName(NULL, buf + 1, sizeof(buf) - 2)) // -2 to leave room for the enclosing double quotes.
+	{
+		size_t buf_length = strlen(buf);
+		buf[buf_length++] = '"';
+		buf[buf_length] = '\0';
 		if (   !(mOurEXE = SimpleHeap::Malloc(buf))   )
 			return FAIL;  // It already displayed the error for us.
+		else
+		{
+			char *last_backslash = strrchr(buf, '\\');
+			if (!last_backslash) // probably can't happen due to the nature of GetModuleFileName().
+				mOurEXEDir = "";
+			last_backslash[1] = '\0'; // i.e. keep the trailing backslash for convenience.
+			if (   !(mOurEXEDir = SimpleHeap::Malloc(buf + 1))   ) // +1 to omit the leading double-quote.
+				return FAIL;  // It already displayed the error for us.
+		}
+	}
 	return OK;
 }
 
@@ -195,7 +216,7 @@ ResultType Script::CreateWindows(HINSTANCE aInstance)
 	wc.hIconSm = hIcon;
 	wc.hCursor = LoadCursor((HINSTANCE) NULL, IDC_ARROW);
 	wc.hbrBackground = (HBRUSH)GetStockObject(WHITE_BRUSH); // Aut3: GetSysColorBrush(COLOR_BTNFACE)
-	wc.lpszMenuName = NULL; // "MainMenu";
+	wc.lpszMenuName = MAKEINTRESOURCE(IDR_MENU_MAIN); // NULL; // "MainMenu";
 	ATOM wa = RegisterClassEx(&wc);
 	if (!wa)
 	{
@@ -246,6 +267,7 @@ ResultType Script::CreateWindows(HINSTANCE aInstance)
 	ShowWindow(g_hWnd, SW_HIDE);
 	ShowWindow(g_hWnd, SW_HIDE); // 2nd call to be safe.
 
+	g_hAccelTable = LoadAccelerators(aInstance, MAKEINTRESOURCE(IDR_ACCELERATOR1));
 
 	////////////////////
 	// Set up tray icon.
@@ -328,13 +350,16 @@ ResultType Script::Edit()
 		SetForegroundWindowEx(hwnd);
 	else
 	{
-		if (!ActionExec("edit", mFileSpec, mFileDir, false))  // Since this didn't work, try notepad.
+		char buf[MAX_PATH * 2];
+		// Enclose in double quotes anything that might contain spaces since the CreateProcess()
+		// method, which is attempted first, is more likely to succeed.  This is because it uses
+		// the command line method of creating the process, with everything all lumped together:
+		snprintf(buf, sizeof(buf), "\"%s\"", mFileSpec);
+		if (!ActionExec("edit", buf, mFileDir, false))  // Since this didn't work, try notepad.
 		{
 			// Even though notepad properly handles filenames with spaces in them under WinXP,
 			// even without double quotes around them, it seems safer and more correct to always
 			// enclose the filename in double quotes for maximum compatibility with all OSes:
-			char buf[MAX_PATH * 2];
-			snprintf(buf, sizeof(buf), "\"%s\"", mFileSpec);
 			if (!ActionExec("notepad.exe", buf, mFileDir, false))
 				MsgBox("Could not open the file for editing using the associated \"edit\" action or Notepad.");
 		}
@@ -344,25 +369,26 @@ ResultType Script::Edit()
 
 
 
-ResultType Script::Reload()
+ResultType Script::Reload(bool aDisplayErrors)
 {
 	char current_dir[MAX_PATH];
 	GetCurrentDirectory(sizeof(current_dir), current_dir);  // In case the user launched it in a non-default dir.
+	// The new instance we're about to start will tell our process to stop, or it will display
+	// a syntax error or some other error, in which case our process will still be running:
 #ifndef AUTOHOTKEYSC
 	char arg_string[MAX_PATH + 512];
 	snprintf(arg_string, sizeof(arg_string), "/restart \"%s\"", mFileSpec);
-	g_script.ActionExec(mOurEXE, arg_string, current_dir); // It will tell our process to stop.
+	return g_script.ActionExec(mOurEXE, arg_string, current_dir, aDisplayErrors);
 #else
 	// This is here in case a compiled script ever uses the Edit command.  Since the "Reload This
 	// Script" menu item is not available for compiled scripts, it can't be called from there.
-	g_script.ActionExec(mOurEXE, "/restart", current_dir); // It will tell our process to stop.
+	return g_script.ActionExec(mOurEXE, "/restart", current_dir, aDisplayErrors);
 #endif
-	return OK;
 }
 
 
 
-void Script::ExitApp(char *aBuf, int ExitCode)
+void Script::ExitApp(char *aBuf, int aExitCode)
 // Normal exit (if aBuf is NULL), or a way to exit immediately on error.  This is mostly
 // for times when it would be unsafe to call MsgBox() due to the possibility that it would
 // make the situation even worse.
@@ -378,59 +404,27 @@ void Script::ExitApp(char *aBuf, int ExitCode)
 		// To avoid chance of more errors, don't use MsgBox():
 		MessageBox(g_hWnd, buf, g_script.mFileSpec, MB_OK | MB_SETFOREGROUND | MB_APPLMODAL);
 	}
-	KeyLogToFile();  // Close the KeyLog file if it's open.
-	Hotkey::AllDestructAndExit(*aBuf ? CRITICAL_ERROR : ExitCode); // Terminate the application.
+	KeyHistoryToFile();  // Close the KeyHistory file if it's open.
+	PostQuitMessage(aExitCode); // This might be needed to prevent hang-on-exit.
+	Hotkey::AllDestructAndExit(*aBuf ? CRITICAL_ERROR : aExitCode); // Terminate the application.
 	// Not as reliable: PostQuitMessage(CRITICAL_ERROR);
 }
 
 
 
-int Script::LoadFromFile()
-// Returns the number of non-comment lines that were loaded, or -1 on error.
-// Use double-colon as delimiter to set these apart from normal labels.
-// The main reason for this is that otherwise the user would have to worry
-// about a normal label being unintentionally valid as a hotkey, e.g.
-// "Shift:" might be a legitimate label that the user forgot is also
-// a valid hotkey:
-#define HOTKEY_FLAG "::"
+LineNumberType Script::LoadFromFile()
+// Returns the number of non-comment lines that were loaded, or LOADING_FAILED on error.
 {
-	if (!mFileSpec || !*mFileSpec) return -1;
+	mIsReadyToExecute = false;
+	if (!mFileSpec || !*mFileSpec) return LOADING_FAILED;
 
-	UCHAR *script_buf = NULL;  // Init for the case when the buffer isn't used (non-standalone mode).
-	ULONG nDataSize = 0;
-
-#ifdef AUTOHOTKEYSC
-	HS_EXEArc_Read oRead;
-	// AutoIt3: Open the archive in this compiled exe
-	if ( oRead.Open(mFileSpec, "") != HS_EXEARC_E_OK)
+#ifndef AUTOHOTKEYSC  // Not in stand-alone mode, so read an external script file.
+	DWORD attr = GetFileAttributes(mFileSpec);
+	if (attr == MAXDWORD) // File does not exist or lacking the authorization to get its attributes.
 	{
-		MsgBox("Could not open the script inside the EXE.", 0, mFileSpec);
-		return -1;
-	}
-	// AutoIt3: Read the script (the func allocates the memory for the buffer :) )
-	if ( oRead.FileExtractToMem(">AUTOHOTKEY SCRIPT<", &script_buf, &nDataSize) != HS_EXEARC_E_OK)
-	{
-		oRead.Close();							// Close the archive
-		MsgBox("Could extract the script from the EXE into memory.", 0, mFileSpec);
-		return -1;
-	}
-	UCHAR *script_buf_marker = script_buf;  // "marker" will track where we are in the mem. file as we read from it.
-
-	// Must cast to int to avoid loss of negative values:
-	#define SCRIPT_BUF_SPACE_REMAINING ((int)(nDataSize - (script_buf_marker - script_buf)))
-	int script_buf_space_remaining, max_chars_to_read;
-
-	// AutoIt3: We have the data in RAW BINARY FORM, the script is a text file, so
-	// this means that instead of a newline character, there may also be carridge
-	// returns 0x0d 0x0a (\r\n)
-	HS_EXEArc_Read *fp = &oRead;  // To help consolidate the code below.
-
-#else  // Not in stand-alone mode, so read an external script file.
-	// Future: might be best to put a stat() in here for better handling.
-	FILE *fp = fopen(mFileSpec, "r");
-	if (!fp)
-	{
-		int response = MsgBox("Default script file can't be opened.  Create it now?", MB_YESNO);
+		char buf[MAX_PATH + 256];
+		snprintf(buf, sizeof(buf), "The script file \"%s\" does not exist.  Create it now?", mFileSpec);
+		int response = MsgBox(buf, MB_YESNO);
 		if (response != IDYES)
 			return 0;
 		FILE *fp2 = fopen(mFileSpec, "a");
@@ -438,7 +432,7 @@ int Script::LoadFromFile()
 		{
 			MsgBox("Could not create file, perhaps because the current directory is read-only"
 				" or has insufficient permissions.");
-			return -1;
+			return LOADING_FAILED;
 		}
 		fprintf(fp2, "; " NAME_P " script file\n"
 			"\n"
@@ -455,17 +449,160 @@ int Script::LoadFromFile()
 			"; (it will open files of this name by default).\n"
 			);
 		fclose(fp2);
-		// One or both of the below would probably fail if mFileSpec ever has spaces in it
-		// (since it's passed as the entire param string).  If that ever happens, enclosing
-		// the filename in double quotes should do the trick:
-		if (!ActionExec("edit", mFileSpec, mFileDir, false))
-			if (!ActionExec("Notepad.exe", mFileSpec, mFileDir, false))
+		// One or both of the below would probably fail -- at least on Win95 -- if mFileSpec ever
+		// has spaces in it (since it's passed as the entire param string).  So enclose the filename
+		// in double quotes.  I don't believe the directory needs to be in double quotes since it's
+		// a separate field within the CreateProcess() and ShellExecute() structures:
+		snprintf(buf, sizeof(buf), "\"%s\"", mFileSpec);
+		if (!ActionExec("edit", buf, mFileDir, false))
+			if (!ActionExec("Notepad.exe", buf, mFileDir, false))
 			{
-				MsgBox("The new config file was created, but could not be opened with the default editor or with Notepad.");
-				return -1;
+				MsgBox("The new script file was created, but could not be opened with the default editor or with Notepad.");
+				return LOADING_FAILED;
 			}
-		// future: have it wait for the process to close, then try to open the config file again:
+		// future: have it wait for the process to close, then try to open the script again:
 		return 0;
+	}
+#endif
+
+	if (LoadIncludedFile(mFileSpec, false) != OK)
+		return LOADING_FAILED;
+
+	// Rather than do this, which seems kinda nasty if ever someday support same-line
+	// else actions such as "else return", just add two EXITs to the end of every script.
+	// That way, if the first EXIT added accidentally "corrects" an actionless ELSE
+	// or IF, the second one will serve as the anchoring end-point (mRelatedLine) for that
+	// IF or ELSE.  In other words, since we never want mRelatedLine to be NULL, this should
+	// make absolutely sure of that:
+	//if (mLastLine->mActionType == ACT_ELSE ||
+	//	ACT_IS_IF(mLastLine->mActionType)
+	//	...
+	++mCurrLineNumber;
+	if (AddLine(ACT_EXIT) != OK) // First exit.
+		return LOADING_FAILED;
+
+	// Even if the last line of the script is already ACT_EXIT, always add another
+	// one in case the script ends in a label.  That way, every label will have
+	// a non-NULL target, which simplifies other aspects of script execution.
+	// Making sure that all scripts end with an EXIT ensures that if the script
+	// file ends with ELSEless IF or an ELSE, that IF's or ELSE's mRelatedLine
+	// will be non-NULL, which further simplifies script execution:
+	++mCurrLineNumber;
+	if (AddLine(ACT_EXIT) != OK) // Second exit to guaranty non-NULL mRelatedLine(s).
+		return LOADING_FAILED;
+
+	// Always preparse the blocks before the If/Else's because If/Else may rely on blocks:
+	if (PreparseBlocks(mFirstLine) && PreparseIfElse(mFirstLine))
+	{
+		// Use FindOrAdd, not Add, because the user may already have added it simply by
+		// referring to it in the script:
+		if (   !(g_ErrorLevel = FindOrAddVar("ErrorLevel"))   )
+			return LOADING_FAILED; // Error.  Above already displayed it for us.
+		// Initialize the var state to zero right before running anything in the script:
+		g_ErrorLevel->Assign(ERRORLEVEL_NONE);
+		mIsReadyToExecute = true;
+
+		// Initialize the random number generator:
+		// Note: On 32-bit hardware, the generator module uses only 2506 bytes of static
+		// data, so it doesn't seem worthwhile to put it in a class (so that the mem is
+		// only allocated on first use of the generator).
+		// This part is taken from the AutoIt3 source.  No comments were given there,
+		// so I'm not sure if this initialization method is better than using
+		// GetTickCount(), but I doubt it matters as long as it's at least 99.9999%
+		// likely to be a different seed every time the program starts:
+		struct _timeb timebuffer;
+		_ftime(&timebuffer);
+		init_genrand(timebuffer.millitm * (int)time(NULL));
+		return mLineCount; // The count of runnable lines that were loaded, which might be zero.
+	}
+	else
+		return LOADING_FAILED; // Error was already displayed by the above calls.
+}
+
+
+
+ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude)
+// Returns the number of non-comment lines that were loaded, or LOADING_FAILED on error.
+// Below: Use double-colon as delimiter to set these apart from normal labels.
+// The main reason for this is that otherwise the user would have to worry
+// about a normal label being unintentionally valid as a hotkey, e.g.
+// "Shift:" might be a legitimate label that the user forgot is also
+// a valid hotkey:
+#define HOTKEY_FLAG "::"
+{
+	if (!aFileSpec || !*aFileSpec) return FAIL;
+
+	if (Line::nSourceFiles >= MAX_SCRIPT_FILES)
+	{
+		// Only 255 because the main file uses up one slot:
+		MsgBox("The number of included files cannot exceed 255.");
+		return FAIL;
+	}
+
+	// Keep this var on the stack due to recursion, which allows newly created lines to be given the
+	// correct file number even when some #include's have been encountered in the middle of the script:
+	UCHAR source_file_number = Line::nSourceFiles;
+
+	if (!source_file_number)
+		// Since this is the first source file, it must be the main script file.  Just point it to the
+		// location of the filespec already dynamically allocated:
+		Line::sSourceFile[source_file_number] = mFileSpec;
+	else
+	{
+		// Get the full path in case aFileSpec has a relative path.  This is done so that duplicates
+		// can be reliably detected (we only want to avoid including a given file more than once):
+		char full_path[MAX_PATH * 2]; // In case OS supports extra-long filenames.
+		char *filename_marker;
+		GetFullPathName(aFileSpec, sizeof(full_path) - 1, full_path, &filename_marker);
+		// Check if this file was already included.  If so, it's not an error because we want
+		// to support automatic "include once" behavior.  So just ignore repeats:
+		if (!aAllowDuplicateInclude)
+			for (int f = 0; f < source_file_number; ++f)
+				if (!stricmp(Line::sSourceFile[f], full_path)) // Case insensitive like the file system.
+					return OK;
+		Line::sSourceFile[source_file_number] = SimpleHeap::Malloc(full_path);
+	}
+	++Line::nSourceFiles;
+
+	UCHAR *script_buf = NULL;  // Init for the case when the buffer isn't used (non-standalone mode).
+	ULONG nDataSize = 0;
+
+#ifdef AUTOHOTKEYSC
+	HS_EXEArc_Read oRead;
+	// AutoIt3: Open the archive in this compiled exe
+	if ( oRead.Open(aFileSpec, "") != HS_EXEARC_E_OK)
+	{
+		MsgBox("Could not open the script inside the EXE.", 0, aFileSpec);
+		return FAIL;
+	}
+	// AutoIt3: Read the script (the func allocates the memory for the buffer :) )
+	if ( oRead.FileExtractToMem(">AUTOHOTKEY SCRIPT<", &script_buf, &nDataSize) != HS_EXEARC_E_OK)
+	{
+		oRead.Close();							// Close the archive
+		MsgBox("Could not extract the script from the EXE into memory.", 0, aFileSpec);
+		return FAIL;
+	}
+	UCHAR *script_buf_marker = script_buf;  // "marker" will track where we are in the mem. file as we read from it.
+
+	// Must cast to int to avoid loss of negative values:
+	#define SCRIPT_BUF_SPACE_REMAINING ((int)(nDataSize - (script_buf_marker - script_buf)))
+	int script_buf_space_remaining, max_chars_to_read;
+
+	// AutoIt3: We have the data in RAW BINARY FORM, the script is a text file, so
+	// this means that instead of a newline character, there may also be carridge
+	// returns 0x0d 0x0a (\r\n)
+	HS_EXEArc_Read *fp = &oRead;  // To help consolidate the code below.
+
+#else  // Not in stand-alone mode, so read an external script file.
+	// Future: might be best to put a stat() in here for better handling.
+	FILE *fp = fopen(aFileSpec, "r");
+	if (!fp)
+	{
+		char msg_text[MAX_PATH + 256];
+		snprintf(msg_text, sizeof(msg_text), "%s file \"%s\" cannot be opened."
+			, Line::nSourceFiles > 1 ? "#include" : "Script", aFileSpec);
+		MsgBox(msg_text);
+		return FAIL;
 	}
 #endif
 
@@ -477,7 +614,12 @@ int Script::LoadFromFile()
 	HookActionType hook_action;
 	size_t buf_length;
 	bool is_label, section_comment = false;
-	for (mFileLineCount = 0, mIsReadyToExecute = false;;) // Init in case this func ever called more than once.
+
+	// Init both for main file and any included files loaded by this function:
+	mCurrFileNumber = source_file_number;  // source_file_number is kept on the stack due to recursion.
+	LineNumberType line_number = mCurrLineNumber = 0;  // Keep a copy on the stack to help with recursion.
+
+	for (;;)
 	{
 		mCurrLine = NULL;  // To signify that we're in transition, trying to load a new one.
 #ifdef AUTOHOTKEYSC
@@ -490,7 +632,9 @@ int Script::LoadFromFile()
 #endif
 			break;
 
-		++mFileLineCount; // Keep track of the phyiscal line number in the file for debugging purposes.
+		++mCurrLineNumber; // Keep track of the physical line number in the file for debugging purposes.
+		++line_number; // A local copy on the stack to help with recursion.
+
 		if (!buf_length)
 			continue;
 
@@ -541,9 +685,9 @@ int Script::LoadFromFile()
 			// falling through from above into a hotkey (which probably isn't very valid anyway)?
 			if (mFirstLabel == NULL)
 				if (AddLine(ACT_RETURN) != OK)
-					return CloseAndReturn(fp, script_buf, -1);
+					return CloseAndReturn(fp, script_buf, FAIL);
 			if (AddLabel(buf) != OK) // Always add a label before adding the first line of its section.
-				return CloseAndReturn(fp, script_buf, -1);
+				return CloseAndReturn(fp, script_buf, FAIL);
 			if (*hotkey_flag) // This hotkey's action is on the same line as its label.
 			{
 				if (!stricmp(hotkey_flag, "AltTab"))
@@ -563,16 +707,16 @@ int Script::LoadFromFile()
 				// via Goto/Gosub:
 				if (!hook_action)
 					if (ParseAndAddLine(hotkey_flag) != OK)
-						return CloseAndReturn(fp, script_buf, -1);
+						return CloseAndReturn(fp, script_buf, FAIL);
 				// Also add a Return that's implicit for a single-line hotkey:
 				if (AddLine(ACT_RETURN) != OK)
-					return CloseAndReturn(fp, script_buf, -1);
+					return CloseAndReturn(fp, script_buf, FAIL);
 			}
 			else
 				hook_action = 0;
 			// Set the new hotkey will jump to this label to begin execution:
 			if (Hotkey::AddHotkey(mLastLabel, hook_action) != OK)
-				return CloseAndReturn(fp, script_buf, -1);
+				return CloseAndReturn(fp, script_buf, FAIL);
 			continue;
 		}
 
@@ -594,7 +738,7 @@ int Script::LoadFromFile()
 			buf[buf_length - 1] = '\0';  // Remove the trailing colon.
 			rtrim(buf); // Has already been ltrimmed.
 			if (AddLabel(buf) != OK)
-				return CloseAndReturn(fp, script_buf, -1);
+				return CloseAndReturn(fp, script_buf, FAIL);
 			continue;
 		}
 		// It's not a label.
@@ -603,9 +747,15 @@ int Script::LoadFromFile()
 			switch(IsPreprocessorDirective(buf))
 			{
 			case CONDITION_TRUE:
+				// Since the directive may have been a #include which called us recursively,
+				// restore the class's values for these two, which are maintained separately
+				// like this to avoid having to specify them in various calls, especially the
+				// hundreds of calls to ScriptError() and LineError():
+				mCurrFileNumber = source_file_number;
+				mCurrLineNumber = line_number;
 				continue;
 			case FAIL:
-				return CloseAndReturn(fp, script_buf, -1); // It already reported the error.
+				return CloseAndReturn(fp, script_buf, FAIL); // It already reported the error.
 			// Otherwise it's CONDITION_FALSE.  Do nothing.
 			}
 		}
@@ -626,7 +776,7 @@ int Script::LoadFromFile()
 		if (strlicmp(action_start, g_act[ACT_ELSE].Name, (UINT)(action_end - action_start)))
 		{
 			if (ParseAndAddLine(buf) != OK)
-				return CloseAndReturn(fp, script_buf, -1);
+				return CloseAndReturn(fp, script_buf, FAIL);
 		}
 		else // This line is an ELSE.
 		{
@@ -635,10 +785,10 @@ int Script::LoadFromFile()
 			// don't want because we wouldn't have access to the corresponding literal-map to
 			// figure out the proper use of escaped characters:
 			if (AddLine(ACT_ELSE) != OK)
-				return CloseAndReturn(fp, script_buf, -1);
+				return CloseAndReturn(fp, script_buf, FAIL);
 			action_end = omit_leading_whitespace(action_end); // Now action_end is the word after the ELSE.
 			if (*action_end && ParseAndAddLine(action_end) != OK)
-				return CloseAndReturn(fp, script_buf, -1);
+				return CloseAndReturn(fp, script_buf, FAIL);
 			// Otherwise, there was either no same-line action or the same-line action was successfully added,
 			// so do nothing.
 		}
@@ -651,74 +801,21 @@ int Script::LoadFromFile()
 #else
 	fclose(fp);
 #endif
-
-	if (!mLineCount)
-		return mLineCount;
-
-	// Rather than do this, which seems kinda nasty if ever someday support same-line
-	// else actions such as "else return", just add two EXITs to the end of every script.
-	// That way, if the first EXIT added accidentally "corrects" an actionless ELSE
-	// or IF, the second one will serve as the anchoring end-point (mRelatedLine) for that
-	// IF or ELSE.  In other words, since we never want mRelatedLine to be NULL, the should
-	// make absolutely sure of that:
-	//if (mLastLine->mActionType == ACT_ELSE ||
-	//	ACT_IS_IF(mLastLine->mActionType)
-	//	...
-	++mFileLineCount;
-	if (AddLine(ACT_EXIT) != OK) // First exit.
-		return -1;
-
-	// Even if the last line of the script is already ACT_EXIT, always add another
-	// one in case the script ends in a label.  That way, every label will have
-	// a non-NULL target, which simplifies other aspects of script execution.
-	// Making sure that all scripts end with an EXIT ensures that if the script
-	// file ends with ELSEless IF or an ELSE, that IF's or ELSE's mRelatedLine
-	// will be non-NULL, which further simplifies script execution:
-	++mFileLineCount;
-	if (AddLine(ACT_EXIT) != OK) // Second exit to guaranty non-NULL mRelatedLine(s).
-		return -1;
-
-	// Always do the blocks before the If/Else's because If/Else may rely on blocks:
-	if (PreparseBlocks(mFirstLine) != NULL)
-		if (PreparseIfElse(mFirstLine) != NULL)
-		{
-			// Use FindOrAdd, not Add, because the user may already have added it simply by
-			// referring to it in the script:
-			if (   !(g_ErrorLevel = FindOrAddVar("ErrorLevel"))   )
-				return -1; // Error.  Above already displayed it for us.
-			// Initialize the var state to zero right before running anything in the script:
-			g_ErrorLevel->Assign(ERRORLEVEL_NONE);
-			mIsReadyToExecute = true;
-
-			// Initialize the random number generator:
-			// Note: On 32-bit hardware, the generator module uses only 2506 bytes of static
-			// data, so it doesn't seem worthwhile to put it in a class (so that the mem is
-			// only allocated on first use of the generator).
-			// This part is taken from the AutoIt3 source.  No comments were given there,
-			// so I'm not sure if this initialization method is better than using
-			// GetTickCount(), but I doubt it matters as long as it's at least 99.9999%
-			// likely to be a different seed every time the program starts:
-			struct _timeb timebuffer;
-			_ftime(&timebuffer);
-			init_genrand(timebuffer.millitm * (int)time(NULL));
-
-			return mLineCount;
-		}
-	return -1; // Error.
+	return OK;
 }
 
 
 
-// Small inline to make LoadFromFile() code cleaner.
+// Small inline to make LoadIncludedFile() code cleaner.
 #ifdef AUTOHOTKEYSC
-inline int Script::CloseAndReturn(HS_EXEArc_Read *fp, UCHAR *aBuf, int aReturnValue)
+inline ResultType Script::CloseAndReturn(HS_EXEArc_Read *fp, UCHAR *aBuf, ResultType aReturnValue)
 {
 	free(aBuf);
 	fp->Close();
 	return aReturnValue;
 }
 #else
-inline int Script::CloseAndReturn(FILE *fp, UCHAR *aBuf, int aReturnValue)
+inline ResultType Script::CloseAndReturn(FILE *fp, UCHAR *aBuf, ResultType aReturnValue)
 {
 	// aBuf is unused in this case.
 	fclose(fp);
@@ -836,65 +933,100 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 // #y::run, notepad
 {
 	char end_flags[] = {' ', '\t', g_delimiter, '\0'}; // '\0' must be last.
-	char *cp;
+	char *cp, *directive_end;
+	int value; // Helps detect values that are too large, since some of the target globals are UCHAR.
+
 	// Use strnicmp() so that a match is found as long as aBuf starts with the string in question.
 	// e.g. so that "#SingleInstance, on" will still work too, but
 	// "#a::run, something, "#SingleInstance" (i.e. a hotkey) will not be falsely detected
-	// due to using a more lenient function such as stristr():
-	#define IF_IS_DIRECTIVE_MATCH(directive) if (!strnicmp(aBuf, directive, strlen(directive)))
-	IF_IS_DIRECTIVE_MATCH("#SingleInstance")
+	// due to using a more lenient function such as stristr().  UPDATE: Using strlicmp() now so
+	// that overlapping names, such as #MaxThreads and #MaxThreadsPerHotkey won't get mixed up:
+	if (   !(directive_end = StrChrAny(aBuf, end_flags))   )
+		directive_end = aBuf + strlen(aBuf); // Point it to the zero terminator.
+	#define IS_DIRECTIVE_MATCH(directive) (!strlicmp(aBuf, directive, (UINT)(directive_end - aBuf)))
+
+	if (IS_DIRECTIVE_MATCH("#SingleInstance"))
 	{
 		g_AllowOnlyOneInstance = true;
 		return CONDITION_TRUE;
 	}
-	IF_IS_DIRECTIVE_MATCH("#NoTrayIcon")
+	if (IS_DIRECTIVE_MATCH("#NoTrayIcon"))
 	{
 		g_NoTrayIcon = true;
 		return CONDITION_TRUE;
 	}
-	IF_IS_DIRECTIVE_MATCH("#AllowSameLineComments")  // i.e. There's no way to turn it off, only on.
+	if (IS_DIRECTIVE_MATCH("#AllowSameLineComments"))  // i.e. There's no way to turn it off, only on.
 	{
 		g_AllowSameLineComments = true;
 		return CONDITION_TRUE;
 	}
-	IF_IS_DIRECTIVE_MATCH("#UseHook")
+	if (IS_DIRECTIVE_MATCH("#UseHook"))
 	{
 		// Set the default mode that will be used if there's no parameter at all:
 		g_ForceKeybdHook = true;
 		#define RETURN_IF_NO_CHAR \
-		if (   !(cp = StrChrAny(aBuf, end_flags))   )\
+		if (!*directive_end)\
 			return CONDITION_TRUE;\
-		if (   !*(cp = omit_leading_whitespace(cp))   )\
-			return CONDITION_TRUE;
-		RETURN_IF_NO_CHAR
-		if (*cp == g_delimiter)
-		{
-			++cp;
+		if (   !*(cp = omit_leading_whitespace(directive_end))   )\
+			return CONDITION_TRUE;\
+		if (*cp == g_delimiter)\
+		{\
+			++cp;\
 			if (   !*(cp = omit_leading_whitespace(cp))   )\
-				return CONDITION_TRUE;
+				return CONDITION_TRUE;\
 		}
+		RETURN_IF_NO_CHAR
 		if (Line::ConvertOnOff(cp) == TOGGLED_OFF)
 			g_ForceKeybdHook = false;
 		// else leave the default to "true" as set above.
 		return CONDITION_TRUE;
 	}
-	IF_IS_DIRECTIVE_MATCH("#InstallKeybdHook")
+	if (IS_DIRECTIVE_MATCH("#InstallKeybdHook"))
 	{
-		Hotkey::RequireHook(HOOK_KEYBD);
+		if (g_os.IsWin9x())
+			MsgBox("#InstallKeybdHook is not supported on Windows 95/98/ME.  This line will be ignored.");
+		else
+			Hotkey::RequireHook(HOOK_KEYBD);
 		return CONDITION_TRUE;
 	}
-	IF_IS_DIRECTIVE_MATCH("#InstallMouseHook")
+	if (IS_DIRECTIVE_MATCH("#InstallMouseHook"))
 	{
-		Hotkey::RequireHook(HOOK_MOUSE);
+		if (g_os.IsWin9x())
+			MsgBox("#InstallMouseHook is not supported on Windows 95/98/ME.  This line will be ignored.");
+		else
+			Hotkey::RequireHook(HOOK_MOUSE);
 		return CONDITION_TRUE;
 	}
-	IF_IS_DIRECTIVE_MATCH("#HotkeyModifierTimeout")
+	if (IS_DIRECTIVE_MATCH("#HotkeyModifierTimeout"))
 	{
 		RETURN_IF_NO_CHAR
 		g_HotkeyModifierTimeout = atoi(cp);  // cp was set to the right position by the above macro
 		return CONDITION_TRUE;
 	}
-	IF_IS_DIRECTIVE_MATCH("#HotkeyInterval")
+	if (IS_DIRECTIVE_MATCH("#MaxThreads"))
+	{
+		RETURN_IF_NO_CHAR
+		value = atoi(cp);  // cp was set to the right position by the above macro
+		if (value > MAX_THREADS_LIMIT) // For now, keep this limited to prevent stack overflow due to too many pseudo-threads.
+			value = MAX_THREADS_LIMIT;
+		else if (value < 1)
+			value = 1;
+		g_MaxThreadsTotal = value;
+		return CONDITION_TRUE;
+	}
+	if (IS_DIRECTIVE_MATCH("#MaxThreadsPerHotkey"))
+	{
+		RETURN_IF_NO_CHAR
+		// Use value as a temp holder since it's int vs. UCHAR and can thus detect very large or negative values:
+		value = atoi(cp);  // cp was set to the right position by the above macro
+		if (value > MAX_THREADS_LIMIT) // For now, keep this limited to prevent stack overflow due to too many pseudo-threads.
+			value = MAX_THREADS_LIMIT;
+		else if (value < 1)
+			value = 1;
+		g_MaxThreadsPerHotkey = value; // Note: g_MaxThreadsPerHotkey is UCHAR.
+		return CONDITION_TRUE;
+	}
+	if (IS_DIRECTIVE_MATCH("#HotkeyInterval"))
 	{
 		RETURN_IF_NO_CHAR
 		g_HotkeyThrottleInterval = atoi(cp);  // cp was set to the right position by the above macro
@@ -902,7 +1034,7 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 			g_HotkeyThrottleInterval = 10;
 		return CONDITION_TRUE;
 	}
-	IF_IS_DIRECTIVE_MATCH("#MaxHotkeysPerInterval")
+	if (IS_DIRECTIVE_MATCH("#MaxHotkeysPerInterval"))
 	{
 		RETURN_IF_NO_CHAR
 		g_MaxHotkeysPerInterval = atoi(cp);  // cp was set to the right position by the above macro
@@ -914,7 +1046,7 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 	// For the below series, it seems okay to allow the comment flag to contain other reserved chars,
 	// such as DerefChar, since comments are evaluated, and then taken out of the game at an earlier
 	// stage than DerefChar and the other special chars.
-	IF_IS_DIRECTIVE_MATCH("#CommentFlag")
+	if (IS_DIRECTIVE_MATCH("#CommentFlag"))
 	{
 		RETURN_IF_NO_CHAR
 		if (!*(cp + 1))  // i.e. the length is 1
@@ -940,7 +1072,7 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 		g_CommentFlagLength = strlen(g_CommentFlag);  // Keep this in sync with above.
 		return CONDITION_TRUE;
 	}
-	IF_IS_DIRECTIVE_MATCH("#EscapeChar")
+	if (IS_DIRECTIVE_MATCH("#EscapeChar"))
 	{
 		RETURN_IF_NO_CHAR
 		// Don't allow '.' since that can be part of literal floating point numbers:
@@ -950,7 +1082,7 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 		g_EscapeChar = *cp;
 		return CONDITION_TRUE;
 	}
-	IF_IS_DIRECTIVE_MATCH("#DerefChar")
+	if (IS_DIRECTIVE_MATCH("#DerefChar"))
 	{
 		RETURN_IF_NO_CHAR
 		if (   *cp == '#' || *cp == g_EscapeChar || *cp == g_delimiter || *cp == '.'
@@ -959,14 +1091,38 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 		g_DerefChar = *cp;
 		return CONDITION_TRUE;
 	}
-	IF_IS_DIRECTIVE_MATCH("#Delimiter")
+	if (IS_DIRECTIVE_MATCH("#Delimiter"))
 	{
+		// This macro will skip over any leading delimiter than may be present, e.g. #Delimiter, ^
+		// This should be okay since the user shouldn't be attempting to change the delimiter
+		// to what it already is, and even if this is attempted, it would just be ignored:
 		RETURN_IF_NO_CHAR
 		if (   *cp == '#' || *cp == g_EscapeChar || *cp == g_DerefChar || *cp == '.'
 			|| (g_CommentFlagLength == 1 && *cp == *g_CommentFlag)   )
 			return ScriptError(ERR_DEFINE_CHAR);
 		g_delimiter = *cp;
 		return CONDITION_TRUE;
+	}
+
+	bool include_again = false; // Set default in case of short-circuit boolean.
+	if (IS_DIRECTIVE_MATCH("#Include") || (include_again = IS_DIRECTIVE_MATCH("#IncludeAgain")))
+	{
+		// Standalone EXEs ignore this directive since the included files were already merged in
+		// with the main file when the script was compiled.  These should have been removed
+		// or commented out by Ahk2Exe, but just in case, it's safest to ignore them:
+#ifdef AUTOHOTKEYSC
+		return CONDITION_TRUE;
+#else
+		if (   !*(cp = omit_leading_whitespace(directive_end))   )
+			return ScriptError(ERR_INCLUDE_FILE);
+		if (*cp == g_delimiter)
+		{
+			++cp;
+			if (   !*(cp = omit_leading_whitespace(cp))   )
+				return ScriptError(ERR_INCLUDE_FILE);
+		}
+		return (LoadIncludedFile(cp, include_again) == FAIL) ? FAIL : CONDITION_TRUE;  // It will have already displayed any error.
+#endif
 	}
 
 	// Otherwise:
@@ -1821,7 +1977,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	// Now the above has allocated some dynamic memory, the pointers to which we turn over
 	// to Line's constructor so that they can be anchored to the new line.
 	//////////////////////////////////////////////////////////////////////////////////////
-	Line *line = new Line(g_script.mFileLineCount, aActionType, new_arg, aArgc);
+	Line *line = new Line(mCurrFileNumber, mCurrLineNumber, aActionType, new_arg, aArgc);
 	if (line == NULL)
 		return ScriptError("AddLine(): Out of memory.");
 	line->mPrevLine = mLastLine;  // Whether NULL or not.
@@ -1902,7 +2058,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_PAUSE:
-	case ACT_KEYLOG:
+	case ACT_KEYHISTORY:
 		if (line->mArgc > 0 && !line->ArgHasDeref(1) && !line->ConvertOnOffToggle(LINE_RAW_ARG1))
 			return ScriptError(ERR_ON_OFF_TOGGLE, LINE_RAW_ARG1);
 		break;
@@ -2037,6 +2193,13 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		}
 		break;
 
+	case ACT_CONTROLCLICK:
+		// Check that the button is valid (e.g. left/right/middle):
+		if (!line->ArgHasDeref(4) && *LINE_RAW_ARG4) // i.e. it's allowed to be blank (defaults to left).
+			if (!line->ConvertMouseButton(LINE_RAW_ARG4))
+				return ScriptError(ERR_MOUSE_BUTTON, LINE_RAW_ARG4);
+		break;
+
 	case ACT_ADD:
 	case ACT_SUB:
 		if (line->mArgc > 2)
@@ -2050,6 +2213,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		}
 		break;
 
+	case ACT_FILEINSTALL:
 	case ACT_FILECOPY:
 	case ACT_FILEMOVE:
 	case ACT_FILESELECTFOLDER:
@@ -2058,6 +2222,12 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			if (strlen(LINE_RAW_ARG3) > 1 || (*LINE_RAW_ARG3 != '0' && *LINE_RAW_ARG3 != '1'))
 				return ScriptError("Parameter #3 must be either blank, 0, 1, or a variable reference."
 					, LINE_RAW_ARG3);
+		}
+		if (aActionType == ACT_FILEINSTALL)
+		{
+			if (line->mArgc > 0 && line->ArgHasDeref(1))
+				return ScriptError("Parameter #1 must not contain references to variables."
+					, LINE_RAW_ARG1);
 		}
 		break;
 
@@ -2888,6 +3058,10 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 // Init static vars:
 Line *Line::sLog[] = {NULL};  // I think this initializes all the array elements.
 int Line::sLogNext = 0;  // Start at the first element.
+
+char *Line::sSourceFile[MAX_SCRIPT_FILES]; // No init needed.
+int Line::nSourceFiles = 0;  // Zero source files initially.  The main script will be the first.
+
 char *Line::sDerefBuf = NULL;  // Buffer to hold the values of any args that need to be dereferenced.
 char *Line::sDerefBufMarker = NULL;
 size_t Line::sDerefBufSize = 0;
@@ -3798,7 +3972,6 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	size_t source_length; // For String commands.
 	pure_numeric_type var_is_pure_numeric, value_is_pure_numeric; // For math operations.
 	vk_type vk; // For mouse commands and GetKeyState.
-	HWND target_window;
 	HANDLE running_process; // For RUNWAIT
 	DWORD exit_code; // For RUNWAIT
 
@@ -4038,8 +4211,15 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		return WinMenuSelectItem(ELEVEN_ARGS);
 	case ACT_CONTROLSEND:
 		return ControlSend(SIX_ARGS, aModifiersLR);
-	case ACT_CONTROLLEFTCLICK:
-		return ControlLeftClick(FIVE_ARGS);
+	case ACT_CONTROLCLICK:
+		if (*ARG4)
+		{
+			if (   !(vk = ConvertMouseButton(ARG4))   )
+				return LineError(ERR_MOUSE_BUTTON ERR_ABORT, FAIL, ARG1);
+		}
+		else // Default button when the param is blank or an reference to an empty var.
+			vk = VK_LBUTTON;
+		return ControlClick(vk, *ARG5 ? atoi(ARG5) : 1, ARG1, ARG2, ARG3, ARG6, ARG7);
 	case ACT_CONTROLGETFOCUS:
 		return ControlGetFocus(ARG2, ARG3, ARG4, ARG5);
 	case ACT_CONTROLFOCUS:
@@ -4414,6 +4594,8 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		return this->FileAppend(ARG2, ARG1);  // To avoid ambiguity in case there's another FileAppend().
 	case ACT_FILEREADLINE:
 		return FileReadLine(ARG2, ARG3);
+	case ACT_FILEINSTALL:
+		return FileInstall(THREE_ARGS);
 	case ACT_FILECOPY:
 		return FileCopy(THREE_ARGS);
 	case ACT_FILEMOVE:
@@ -4588,100 +4770,40 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		}
 	}
 
-	case ACT_KEYLOG:
-	{
+	case ACT_KEYHISTORY:
 		if (*ARG1 || *ARG2)
 		{
 			switch (ConvertOnOffToggle(ARG1))
 			{
 			case NEUTRAL:
 			case TOGGLE:
-				g_KeyLogToFile = !g_KeyLogToFile;
-				if (!g_KeyLogToFile)
-					KeyLogToFile();  // Signal it to close the file, if it's open.
+				g_KeyHistoryToFile = !g_KeyHistoryToFile;
+				if (!g_KeyHistoryToFile)
+					KeyHistoryToFile();  // Signal it to close the file, if it's open.
 				break;
 			case TOGGLED_ON:
-				g_KeyLogToFile = true;
+				g_KeyHistoryToFile = true;
 				break;
 			case TOGGLED_OFF:
-				g_KeyLogToFile = false;
-				KeyLogToFile();  // Signal it to close the file, if it's open.
+				g_KeyHistoryToFile = false;
+				KeyHistoryToFile();  // Signal it to close the file, if it's open.
 				break;
 			// We know it's a variable because otherwise the loading validation would have caught it earlier:
 			case TOGGLE_INVALID:
 				return LineError("The variable in param #1 does not resolve to an allowed value.", FAIL, ARG1);
 			}
 			if (*ARG2) // The user also specified a filename, so update the target filename.
-				KeyLogToFile(ARG2);
+				KeyHistoryToFile(ARG2);
 			return OK;
 		}
-		// I was initially concerned that GetWindowText() can hang if the target window is
-		// hung.  But at least on newer OS's, this doesn't seem to be a problem: MSDN says
-		// "If the window does not have a caption, the return value is a null string. This
-		// behavior is by design. It allows applications to call GetWindowText without hanging
-		// if the process that owns the target window is hung. However, if the target window
-		// is hung and it belongs to the calling application, GetWindowText will hang the
-		// calling application."
-		target_window = GetForegroundWindow();
-		char win_title[50];  // Keep it small because MessageBox() will truncate the text if too long.
-		if (target_window)
-			GetWindowText(target_window, win_title, sizeof(win_title));
-		else
-			*win_title = '\0';
-		char LRtext[128];
-		snprintf(buf_temp, sizeof(buf_temp),
-			"Window: %s"
-			//"\r\nBlocks: %u"
-			"\r\nKeybd hook: %s"
-			"\r\nMouse hook: %s"
-			"\r\nLast hotkey type: %s"
-			"\r\nInterrupted threads: %d%s"
-			"\r\nPaused threads: %d"
-			"\r\nMsgBoxes: %d"
-			"\r\nModifiers (GetKeyState() now) = %s"
-			"\r\n"
-			, win_title
-			//, SimpleHeap::GetBlockCount()
-			, g_hhkLowLevelKeybd == NULL ? "no" : "yes"
-			, g_hhkLowLevelMouse == NULL ? "no" : "yes"
-			, g_LastPerformedHotkeyType == HK_KEYBD_HOOK ? "keybd hook" : "not keybd hook"
-			, g_nInterruptedSubroutines
-			, g_nInterruptedSubroutines ? " (preempted: they will resume when the current thread finishes)" : ""
-			, g_nPausedSubroutines
-			, g_nMessageBoxes
-			, ModifiersLRToText(GetModifierLRStateSimple(), LRtext));
-		size_t length = strlen(buf_temp);
-		GetHookStatus(buf_temp + length, sizeof(buf_temp) - length);
-		ShowMainWindow(buf_temp);
-		// It seems okay to allow more than one of these windows to be on the screen at a time.
-		// That way, one window's contents can be compared with another's:
-		//if (!MsgBox(buf_temp))
-		//	return OK;  // It's usually safe to proceed with the script even if it failed.
-		return OK;
-	}
+		// Otherwise:
+		return ShowMainWindow(MAIN_MODE_KEYHISTORY);
 	case ACT_LISTLINES:
-		ShowMainWindow(NULL, true); // Given a NULL, it defaults to showing the lines for us.
-		// It seems okay to allow more than one of these windows to be on the screen at a time.
-		// That way, one window's contents can be compared with another's:
-		//if (!MsgBox(buf_temp))
-		//	return OK;  // It's usually safe to proceed with the script even if it failed.
-		return OK;
+		return ShowMainWindow(MAIN_MODE_LINES);
 	case ACT_LISTVARS:
-		g_script.ListVars(buf_temp, sizeof(buf_temp));
-		ShowMainWindow(buf_temp);
-		// It seems okay to allow more than one of these windows to be on the screen at a time.
-		// That way, one window's contents can be compared with another's:
-		//if (!MsgBox(buf_temp, MB_OK, "Variables (in order of appearance) & their current contents"))
-		//	return OK;  // It's usually safe to proceed with the script even if it failed.
-		return OK;
+		return ShowMainWindow(MAIN_MODE_VARS);
 	case ACT_LISTHOTKEYS:
-		Hotkey::ListHotkeys(buf_temp, sizeof(buf_temp));
-		ShowMainWindow(buf_temp);
-		// It seems okay to allow more than one of these windows to be on the screen at a time.
-		// That way, one window's contents can be compared with another's:
-		//if (!MsgBox(buf_temp, MB_OK, "   Type        Name"))
-		//	return OK;  // It's usually safe to proceed with the script even if it failed.
-		return OK;
+		return ShowMainWindow(MAIN_MODE_HOTKEYS);
 	case ACT_MSGBOX:
 	{
 		int result;
@@ -4861,6 +4983,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_SETCONTROLDELAY: g.ControlDelay = atoi(ARG1); return OK;
 	case ACT_SETWINDELAY: g.WinDelay = atoi(ARG1); return OK;
 	case ACT_SETKEYDELAY: g.KeyDelay = atoi(ARG1); return OK;
+	case ACT_SETMOUSEDELAY: g.MouseDelay = atoi(ARG1); return OK;
 	case ACT_SETBATCHLINES:
 		// This value is signed 64-bits to support variable reference (i.e. containing a large int)
 		// the user might throw at it:
@@ -4937,8 +5060,13 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_EDIT:
 		g_script.Edit();
 		return OK;
-	case ACT_RELOADCONFIG:
-		g_script.Reload();
+	case ACT_RELOAD:
+		g_script.Reload(true);
+		// Even if the reload failed, it seems best to return OK anyway.  That way,
+		// the script can take some follow-on action, e.g. it can sleep for 1000
+		// after issuing the reload command and then take action under the assumption
+		// that the reload didn't work (since obviously if the process and thread
+		// in which the Sleep is running still exist, it didn't work):
 		return OK;
 
 	case ACT_INVALID: // Should be impossible because Script::AddLine() forbids it.
@@ -5295,7 +5423,7 @@ char *Line::ToText(char *aBuf, size_t aBufSize, bool aAppendNewline)
 {
 	if (!aBuf) return NULL;
 	char *aBuf_orig = aBuf;
-	snprintf(aBuf, BUF_SPACE_REMAINING, "%03u: ", mFileLineNumber);
+	snprintf(aBuf, BUF_SPACE_REMAINING, "%03u: ", mLineNumber);
 	aBuf += strlen(aBuf);
 	if (ACT_IS_ASSIGN(mActionType) || (ACT_IS_IF(mActionType) && mActionType < ACT_FIRST_COMMAND))
 	{
@@ -5340,6 +5468,7 @@ void Line::ToggleSuspendState()
 		Hotkey::AllDeactivate(true);
 	g_IsSuspended = !g_IsSuspended;
 	g_script.UpdateTrayIcon();
+	CheckMenuItem(GetMenu(g_hWnd), ID_FILE_SUSPEND, g_IsSuspended ? MF_CHECKED : MF_UNCHECKED);
 }
 
 
@@ -5410,10 +5539,17 @@ ResultType Line::LineError(char *aErrorText, ResultType aErrorType, char *aExtra
 		aErrorText = "Unknown Error";
 	if (aExtraInfo == NULL)
 		aExtraInfo = "";
+
+	char source_file[MAX_PATH * 2];
+	if (mFileNumber)
+		snprintf(source_file, sizeof(source_file), " in #include file \"%s\"", sSourceFile[mFileNumber]);
+	else
+		*source_file = '\0'; // Don't bother cluttering the display if it's the main script file.
+
 	char buf[MSGBOX_TEXT_SIZE];
-	snprintf(buf, sizeof(buf), "%s: %-1.500s\n\n"  // Keep it to a sane size in case it's huge.
+	snprintf(buf, sizeof(buf), "%s%s: %-1.500s\n\n"  // Keep it to a sane size in case it's huge.
 		, aErrorType == WARN ? "Warning" : (aErrorType == CRITICAL_ERROR ? "Critical Error" : "Error")
-		, aErrorText);
+		, source_file, aErrorText);
 	if (*aExtraInfo)
 		// Use format specifier to make sure really huge strings that get passed our
 		// way, such as a var containing clipboard text, are kept to a reasonable size:
@@ -5462,12 +5598,19 @@ ResultType Script::ScriptError(char *aErrorText, char *aExtraInfo)
 		aErrorText = "Unknown Error";
 	if (aExtraInfo == NULL) // In case the caller explicitly called it with NULL.
 		aExtraInfo = "";
+
+	char source_file[MAX_PATH * 2];
+	if (mCurrFileNumber)
+		snprintf(source_file, sizeof(source_file), " in #include file \"%s\"", Line::sSourceFile[mCurrFileNumber]);
+	else
+		*source_file = '\0'; // Don't bother cluttering the display if it's the main script file.
+
 	char buf[MSGBOX_TEXT_SIZE];
-	snprintf(buf, sizeof(buf), "Error at line %u%s." // Don't call it "critical" because it's usually a syntax error.
+	snprintf(buf, sizeof(buf), "Error at line %u%s%s." // Don't call it "critical" because it's usually a syntax error.
 		"\n\nLine Text: %-1.100s%s"
 		"\nError: %-1.500s"
 		"\n\n%s"
-		, mFileLineCount, mFileLineCount ? "" : " (unknown)"
+		, mCurrLineNumber, source_file, mCurrLineNumber ? "" : " (unknown)"
 		, aExtraInfo // aExtraInfo defaults to "" so this is safe.
 		, strlen(aExtraInfo) > 100 ? "..." : ""
 		, aErrorText
@@ -5482,6 +5625,8 @@ ResultType Script::ScriptError(char *aErrorText, char *aExtraInfo)
 
 void Script::ShowInEditor()
 {
+	// IN LIGHT OF the addition of #include, this function will probably need to be revised so that
+	// it targets the correct file that is the source of the error.
 	// Disabled for now:
 	return;
 
@@ -5515,8 +5660,7 @@ void Script::ShowInEditor()
 	}
 	if (!goto_window)
 		return;
-	snprintf(buf, sizeof(buf), "%d{ENTER}"
-		, mCurrLine ? mCurrLine->mFileLineNumber : mFileLineCount);
+	snprintf(buf, sizeof(buf), "%d{ENTER}", mCurrLine ? mCurrLine->mLineNumber : mCurrLineNumber);
 	SendKeys(buf);
 	for (i = 0; i < 25; ++i)
 	{
@@ -5549,8 +5693,61 @@ char *Script::ListVars(char *aBuf, size_t aBufSize)
 
 
 
+char *Script::ListKeyHistory(char *aBuf, size_t aBufSize)
+// Translates this key history into text equivalent, putting the result
+// into aBuf and returning the position in aBuf of its new string terminator.
+{
+	if (!aBuf || aBufSize < 256) return NULL;
+	char *aBuf_orig = aBuf; // Needed for the BUF_SPACE_REMAINING macro.
+	// I was initially concerned that GetWindowText() can hang if the target window is
+	// hung.  But at least on newer OS's, this doesn't seem to be a problem: MSDN says
+	// "If the window does not have a caption, the return value is a null string. This
+	// behavior is by design. It allows applications to call GetWindowText without hanging
+	// if the process that owns the target window is hung. However, if the target window
+	// is hung and it belongs to the calling application, GetWindowText will hang the
+	// calling application."
+	HWND target_window = GetForegroundWindow();
+	char win_title[100];
+	if (target_window)
+		GetWindowText(target_window, win_title, sizeof(win_title));
+	else
+		*win_title = '\0';
+	char LRtext[128];
+	snprintf(aBuf, aBufSize,
+		"Window: %s"
+		//"\r\nBlocks: %u"
+		"\r\nKeybd hook: %s"
+		"\r\nMouse hook: %s"
+		"\r\nLast hotkey type: %s"
+		"\r\nInterrupted threads: %d%s"
+		"\r\nPaused threads: %d"
+		"\r\nMsgBoxes: %d"
+		"\r\nModifiers (GetKeyState() now) = %s"
+		"\r\n"
+		, win_title
+		//, SimpleHeap::GetBlockCount()
+		, g_hhkLowLevelKeybd == NULL ? "no" : "yes"
+		, g_hhkLowLevelMouse == NULL ? "no" : "yes"
+		, g_LastPerformedHotkeyType == HK_KEYBD_HOOK ? "keybd hook" : "not keybd hook"
+		, g_nInterruptedSubroutines
+		, g_nInterruptedSubroutines ? " (preempted: they will resume when the current thread finishes)" : ""
+		, g_nPausedSubroutines
+		, g_nMessageBoxes
+		, ModifiersLRToText(GetModifierLRStateSimple(), LRtext));
+	aBuf += strlen(aBuf);
+	GetHookStatus(aBuf, BUF_SPACE_REMAINING);
+	aBuf += strlen(aBuf);
+	snprintf(aBuf, BUF_SPACE_REMAINING, "\r\nPress [F5] to refresh.");
+	aBuf += strlen(aBuf);
+	return aBuf;
+}
+
+
+
 ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, bool aDisplayErrors
 	, char *aRunShowMode, HANDLE *aProcess)
+// Caller should specify NULL for aParams if it wants us to attempt to parse out params from
+// within aAction.  Caller may specify empty string ("") instead to specify no params at all.
 // Remember that aAction and aParams can both be NULL, so don't dereference without checking first.
 // Note: For the Run & RunWait commands, aParams should always be NULL.  Params are parsed out of
 // the aActionString at runtime, here, rather than at load-time because Run & RunWait might contain
@@ -5602,7 +5799,7 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 		// will not be considered to be the program to run (e.g. for use with a compiler, perhaps).
 		if (*aAction == '\"')
 		{
-			first_phrase = aAction + 1;  // Omit the double-quotes, for use with ProcessCreate() and such.
+			first_phrase = aAction + 1;  // Omit the double-quotes, for use with CreateProcess() and such.
 			first_phrase_end = strchr(first_phrase, '\"');
 		}
 		else
@@ -5706,9 +5903,19 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 		// Since CreateProcess() requires that the 2nd param be modifiable, ensure that it is
 		// (even if this is ANSI and not Unicode; it's just safer):
 		strlcpy(action, aAction_orig, sizeof(action)); // i.e. we're running the original action from caller.
+
 		// MSDN: "If [lpCurrentDirectory] is NULL, the new process is created with the same
 		// current drive and directory as the calling process." (i.e. since caller may have
-		// specified a NULL aWorkingDir):
+		// specified a NULL aWorkingDir).  Also, we pass NULL in for the first param so that
+		// it will behave the following way (hopefully under all OSes): "the first white-space – delimited
+		// token of the command line specifies the module name. If you are using a long file name that
+		// contains a space, use quoted strings to indicate where the file name ends and the arguments
+		// begin (see the explanation for the lpApplicationName parameter). If the file name does not
+		// contain an extension, .exe is appended. Therefore, if the file name extension is .com,
+		// this parameter must include the .com extension. If the file name ends in a period (.) with
+		// no extension, or if the file name contains a path, .exe is not appended. If the file name does
+		// not contain a directory path, the system searches for the executable file in the following
+		// sequence...":
 		if (CreateProcess(NULL, aAction, NULL, NULL, FALSE, 0, NULL, aWorkingDir, &si, &pi))
 		{
 			success = true;
@@ -5763,7 +5970,7 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 				, "Failed attempt to launch program or document:"
 				"\nAction: <%-0.400s%s>"
 				"%s"
-				"\nParams: <%-0.400s%s>"
+				"\nParams: <%-0.400s%s>\n\n" ERR_ABORT_NO_SPACES
 				, aAction, strlen(aAction) > 400 ? "..." : ""
 				, verb_text
 				, aParams, strlen(aParams) > 400 ? "..." : ""

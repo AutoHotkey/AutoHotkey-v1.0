@@ -17,7 +17,7 @@ GNU General Public License for more details.
 #ifndef globaldata_h
 #define globaldata_h
 
-#include "hook.h" // For KeyLogItem and probably other things.
+#include "hook.h" // For KeyHistoryItem and probably other things.
 #include "clipboard.h"  // For the global clipboard object
 #include "script.h" // For the global script object and g_ErrorLevel
 #include "os_version.h" // For the global OS_Version object
@@ -25,7 +25,9 @@ GNU General Public License for more details.
 extern HWND g_hWnd;  // The main window
 extern HWND g_hWndEdit;  // The edit window, child of main.
 extern HWND g_hWndSplash;  // The SplashText window.
+extern HACCEL g_hAccelTable; // Accelerator table for main menu shortcut keys.
 extern HINSTANCE g_hInstance;
+
 extern modLR_type g_modifiersLR_logical;   // Tracked by hook (if hook is active).
 extern modLR_type g_modifiersLR_physical;  // Same as above except it's which modifiers are PHYSICALLY down.
 extern modLR_type g_modifiersLR_get;  // From GetKeyState().
@@ -49,6 +51,11 @@ extern int g_nInterruptedSubroutines;
 extern int g_nPausedSubroutines;
 extern bool g_UnpauseWhenResumed;
 
+// This value is the absolute limit:
+#define MAX_THREADS_LIMIT 20
+#define MAX_THREADS_DEFAULT 10
+extern UCHAR g_MaxThreadsPerHotkey;
+extern int g_MaxThreadsTotal;
 extern int g_MaxHotkeysPerInterval;
 extern int g_HotkeyThrottleInterval;
 
@@ -97,9 +104,12 @@ extern key_to_sc_type g_key_to_sc[];
 extern int g_key_to_vk_count;
 extern int g_key_to_sc_count;
 
-extern KeyLogItem g_KeyLog[MAX_LOGGED_KEYS];
-extern int g_KeyLogNext;
-extern bool g_KeyLogToFile;
+extern KeyHistoryItem *g_KeyHistory;
+extern int g_KeyHistoryNext;
+extern bool g_KeyHistoryToFile;
+extern DWORD g_HistoryTickNow;
+extern DWORD g_HistoryTickPrev;
+
 
 
 inline VarSizeType GetBatchLines(char *aBuf = NULL)

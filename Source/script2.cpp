@@ -241,7 +241,7 @@ ResultType Line::ControlSend(char *aControl, char *aKeysToSend, char *aTitle, ch
 
 
 
-ResultType Line::ControlLeftClick(char *aControl, char *aTitle, char *aText
+ResultType Line::ControlClick(vk_type aVK, int aClickCount, char *aControl, char *aTitle, char *aText
 	, char *aExcludeTitle, char *aExcludeText)
 {
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
@@ -251,9 +251,26 @@ ResultType Line::ControlLeftClick(char *aControl, char *aTitle, char *aText
 	HWND control_window = ControlExist(target_window, aControl);
 	if (!control_window)
 		return OK;
-	PostMessage(control_window, WM_LBUTTONDOWN, MK_LBUTTON, 0);
-	PostMessage(control_window, WM_LBUTTONUP, 0, 0);
-	DoControlDelay;  // It seems safer and more flexible to do this even for Control commands.
+
+	UINT msg_down, msg_up;
+	WPARAM wparam;
+	switch (aVK)
+	{
+		case VK_LBUTTON: msg_down = WM_LBUTTONDOWN; msg_up = WM_LBUTTONUP; wparam = MK_LBUTTON; break;
+		case VK_RBUTTON: msg_down = WM_RBUTTONDOWN; msg_up = WM_RBUTTONUP; wparam = MK_RBUTTON; break;
+		case VK_MBUTTON: msg_down = WM_MBUTTONDOWN; msg_up = WM_MBUTTONUP; wparam = MK_MBUTTON; break;
+		default: return OK; // Just do nothing since this should realistically never happen.
+	}
+
+	for (int i = 0; i < aClickCount; ++i)
+	{
+		PostMessage(control_window, msg_down, wparam, 0);
+		// Seems best to do this one too, which is what AutoIt3 does also.  User can always reduce
+		// ControlDelay to 0 or -1.
+		DoControlDelay;
+		PostMessage(control_window, msg_up, 0, 0);
+		DoControlDelay;
+	}
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 	return OK;
 }
@@ -363,7 +380,7 @@ ResultType Line::ControlFocus(char *aControl, char *aTitle, char *aText
 	if (SetFocus(control_window))
 	{
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-		DoControlDelay;  // It seems safer and more flexible to do this even for Control commands.
+		DoControlDelay;
 	}
 
 	// Very important to detach any threads whose inputs were attached above,
@@ -396,7 +413,7 @@ ResultType Line::ControlSetText(char *aControl, char *aNewText, char *aTitle, ch
 	DWORD result;
 	SendMessageTimeout(control_window, WM_SETTEXT, (WPARAM)0, (LPARAM)aNewText
 		, SMTO_ABORTIFHUNG, 5000, &result);
-	DoControlDelay;  // It seems safer and more flexible to do this even for Control commands.
+	DoControlDelay;
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 	return OK;
 }
@@ -804,7 +821,7 @@ ResultType Line::PixelGetColor(int aX, int aY)
 
 LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lParam)
 {
-	char buf[2048], *last_backslash;  // For various uses.
+	char buf_temp[2048];  // For various uses.
 
 	switch (iMsg)
 	{
@@ -816,33 +833,41 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			ShowMainWindow();
 			return 0;
 		case ID_TRAY_EDITSCRIPT:
+		case ID_FILE_EDITSCRIPT:
 			g_script.Edit();
 			return 0;
 		case ID_TRAY_RELOADSCRIPT:
-			g_script.Reload();
+		case ID_FILE_RELOADSCRIPT:
+			if (!g_script.Reload(false))
+				MsgBox("The script could not be reloaded." PLEASE_REPORT);
 			return 0;
 		case ID_TRAY_WINDOWSPY:
-			strlcpy(buf, g_script.mOurEXE, sizeof(buf)); // Make a modifiable copy.
-			last_backslash = strrchr(buf, '\\');
-			if (!last_backslash)
-				break;
-			last_backslash[1] = '\0';
-			snprintfcat(buf, sizeof(buf), "AU3_Spy.exe");
-			g_script.ActionExec(buf, "");
+		case ID_FILE_WINDOWSPY:
+			// ActionExec()'s CreateProcess() is currently done in a way that prefers enclosing double quotes:
+			snprintf(buf_temp, sizeof(buf_temp), "\"%sAU3_Spy.exe\"", g_script.mOurEXEDir);
+			if (!g_script.ActionExec(buf_temp, "", NULL, false))
+				MsgBox("Could not launch Window Spy.");
 			return 0;
 		case ID_TRAY_HELP:
-			strlcpy(buf, g_script.mOurEXE, sizeof(buf)); // Make a modifiable copy.
-			last_backslash = strrchr(buf, '\\');
-			if (!last_backslash)
-				break;
-			last_backslash[1] = '\0';
-			snprintfcat(buf, sizeof(buf), "AutoHotkey.chm");
-			g_script.ActionExec(buf, "");
+		case ID_HELP_USERMANUAL:
+			// ActionExec()'s CreateProcess() is currently done in a way that prefers enclosing double quotes.
+			// Also, for this one I saw it report failure once on Win98SE even though the help file did
+			// wind up getting launched.  Couldn't repeat it.  So in reponse to that try explicit "hh.exe":
+			snprintf(buf_temp, sizeof(buf_temp), "\"%sAutoHotkey.chm\"", g_script.mOurEXEDir);
+			if (!g_script.ActionExec("hh.exe", buf_temp, NULL, false))
+			{
+				// Try it without the hh.exe in case .CHM is associate with some other application
+				// in some OSes:
+				if (!g_script.ActionExec(buf_temp, "", NULL, false)) // Use "" vs. NULL to specify that there are no params at all.
+					MsgBox("Could not launch help file.");
+			}
 			return 0;
 		case ID_TRAY_SUSPEND:
+		case ID_FILE_SUSPEND:
 			Line::ToggleSuspendState();
 			return 0;
 		case ID_TRAY_PAUSE:
+		case ID_FILE_PAUSE:
 			if (!g.IsPaused && g_IsIdle)
 			{
 				MsgBox("The script cannot be paused while it is doing nothing.  If you wish to prevent new"
@@ -856,9 +881,34 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 				++g_nPausedSubroutines;
 			g.IsPaused = !g.IsPaused;
 			g_script.UpdateTrayIcon();
+			CheckMenuItem(GetMenu(g_hWnd), ID_FILE_PAUSE, g.IsPaused ? MF_CHECKED : MF_UNCHECKED);
 			return 0;
 		case ID_TRAY_EXIT:
+		case ID_FILE_EXIT:
 			g_script.ExitApp();  // More reliable than PostQuitMessage(), which has been known to fail in rare cases.
+			return 0;
+		case ID_VIEW_LINES:
+			ShowMainWindow(MAIN_MODE_LINES);
+			return 0;
+		case ID_VIEW_VARIABLES:
+			ShowMainWindow(MAIN_MODE_VARS);
+			return 0;
+		case ID_VIEW_HOTKEYS:
+			ShowMainWindow(MAIN_MODE_HOTKEYS);
+			return 0;
+		case ID_VIEW_KEYHISTORY:
+			ShowMainWindow(MAIN_MODE_KEYHISTORY);
+			return 0;
+		case ID_VIEW_REFRESH:
+			ShowMainWindow(MAIN_MODE_REFRESH);
+			return 0;
+		case ID_HELP_WEBSITE:
+			if (!g_script.ActionExec("http://www.autohotkey.com", "", NULL, false))
+				MsgBox("Could not open URL http://www.autohotkey.com in default browser.");
+			return 0;
+		case ID_HELP_EMAIL:
+			if (!g_script.ActionExec("mailto:support@autohotkey.com", "", NULL, false))
+				MsgBox("Could not open URL mailto:support@autohotkey.com in default e-mail client.");
 			return 0;
 		} // Inner switch()
 		break;
@@ -877,7 +927,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 #endif
 		case WM_RBUTTONDOWN:
 		{
-			HMENU hMenu = LoadMenu(g_hInstance, MAKEINTRESOURCE(IDR_MENU1));
+			HMENU hMenu = LoadMenu(g_hInstance, MAKEINTRESOURCE(IDR_MENU_TRAY));
 			// TrackPopupMenu cannot display the menu bar so get
 			// the handle to the first shortcut menu.
 			if (!hMenu)
@@ -955,10 +1005,14 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		// foreground window.  This doesn't use FindWindow() since it can hang in rare
 		// cases.  And GetActiveWindow, GetTopWindow, GetWindow, etc. don't seem appropriate.
 		// So EnumWindows is probably the way to do it:
-		HWND top_box = WinActivateOurTopDialog();
-		if (top_box && (UINT)wParam > 0)
-			// Caller told us to establish a timeout for this modal dialog (currently always MessageBox):
-			SetTimer(top_box, g_nMessageBoxes, (UINT)wParam * 1000, DialogTimeout);
+		HWND top_box = FindOurTopDialog();
+		if (top_box)
+		{
+			SetForegroundWindowEx(top_box);
+			if ((UINT)wParam > 0)
+				// Caller told us to establish a timeout for this modal dialog (currently always MessageBox):
+				SetTimer(top_box, g_nMessageBoxes, (UINT)wParam * 1000, DialogTimeout);
+		}
 		// else: if !top_box: no error reporting currently.
 		return 0;
 	}
@@ -1017,9 +1071,13 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		return 0; // Not sure if this is the correct return value.  It probably doesn't matter.
 	}
 
-	case AHK_KEYLOG:
-		KeyLogToFile(NULL, ((KeyLogItem *)wParam)->event_type, ((KeyLogItem *)wParam)->key_up
-			, ((KeyLogItem *)wParam)->vk, ((KeyLogItem *)wParam)->sc);
+	case AHK_KEYHISTORY:
+		// Logging keys to a file is disabled in the main version in an effort to prevent
+		// AutoHotkey from being branded as a key logger or trojan by various security firms
+		// and security software. Comment out this line to re-enabled logging of keys to a file:
+		return 0;
+		KeyHistoryToFile(NULL, ((KeyHistoryItem *)wParam)->event_type, ((KeyHistoryItem *)wParam)->key_up
+			, ((KeyHistoryItem *)wParam)->vk, ((KeyHistoryItem *)wParam)->sc);
 		return 0;
 
 	case WM_SYSCOMMAND:
@@ -1089,22 +1147,70 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 
 
 
-ResultType ShowMainWindow(char *aContents, bool aJumpToBottom)
+ResultType ShowMainWindow(MainWindowModes aMode)
+// Always returns OK for caller convenience.
 {
-	ResultType result = OK; // Set default return value.
-	// Update the text before doing anything else, since it might be a little less disruptive
-	// while being quicker to do it while the window is hidden or non-foreground:
-	char buf_temp[1024 * 8];
-	if (!aContents)
+	// 32767 might be the limit for an edit control, at least under Win95.
+	// Later maybe use the EM_REPLACESEL method to avoid this limit if the
+	// OS is WinNT/2k/XP:
+	char buf_temp[32767] = "";
+	bool jump_to_bottom = false;  // Set default behavior for edit control.
+	static MainWindowModes current_mode = MAIN_MODE_NO_CHANGE;
+
+	// If the window is empty, caller wants us to default it to showing the most recently
+	// executed script lines:
+	if (current_mode == MAIN_MODE_NO_CHANGE && (aMode == MAIN_MODE_NO_CHANGE || aMode == MAIN_MODE_REFRESH))
+		aMode = MAIN_MODE_LINES;
+
+	switch (aMode)
 	{
+	// case MAIN_MODE_NO_CHANGE: do nothing
+	case MAIN_MODE_LINES:
 		Line::LogToText(buf_temp, sizeof(buf_temp));
-		aContents = buf_temp;
-		aJumpToBottom = true;
+		jump_to_bottom = true;
+		break;
+	case MAIN_MODE_VARS:
+		g_script.ListVars(buf_temp, sizeof(buf_temp));
+		break;
+	case MAIN_MODE_HOTKEYS:
+		Hotkey::ListHotkeys(buf_temp, sizeof(buf_temp));
+		break;
+	case MAIN_MODE_KEYHISTORY:
+		g_script.ListKeyHistory(buf_temp, sizeof(buf_temp));
+		break;
+	case MAIN_MODE_REFRESH:
+		// Rather than do a recursive call to self, which might stress the stack if the script is heavily recursed:
+		switch (current_mode)
+		{
+		case MAIN_MODE_LINES:
+			Line::LogToText(buf_temp, sizeof(buf_temp));
+			jump_to_bottom = true;
+			break;
+		case MAIN_MODE_VARS:
+			g_script.ListVars(buf_temp, sizeof(buf_temp));
+			break;
+		case MAIN_MODE_HOTKEYS:
+			Hotkey::ListHotkeys(buf_temp, sizeof(buf_temp));
+			break;
+		case MAIN_MODE_KEYHISTORY:
+			g_script.ListKeyHistory(buf_temp, sizeof(buf_temp));
+			// Special mode for when user refreshes, so that new keys can be seen without having
+			// to scroll down again:
+			jump_to_bottom = true;
+			break;
+		}
+		break;
 	}
-	// else, aContents can be empty string, which clears the window.
+
+	if (aMode != MAIN_MODE_REFRESH && aMode != MAIN_MODE_NO_CHANGE)
+		current_mode = aMode;
+
+	// Update the text before displaying the window, since it might be a little less disruptive
+	// and might also be quicker if the window is hidden or non-foreground.
 	// Unlike SetWindowText(), this method seems to expand tab characters:
-	if (SendMessage(g_hWndEdit, WM_SETTEXT, 0, (LPARAM)aContents) != TRUE) // FALSE or some non-TRUE value.
-		result = FAIL;
+	if (aMode != MAIN_MODE_NO_CHANGE)
+		SendMessage(g_hWndEdit, WM_SETTEXT, 0, (LPARAM)buf_temp);
+
 	if (!IsWindowVisible(g_hWnd))
 	{
 		ShowWindow(g_hWnd, SW_SHOW);
@@ -1113,15 +1219,15 @@ ResultType ShowMainWindow(char *aContents, bool aJumpToBottom)
 	}
 	if (g_hWnd != GetForegroundWindow())
 		if (!SetForegroundWindow(g_hWnd))
-			if (!SetForegroundWindowEx(g_hWnd))  // Only as a last resort, since it uses AttachThreadInput()
-				result = FAIL;
-	if (aJumpToBottom)
+			SetForegroundWindowEx(g_hWnd);  // Only as a last resort, since it uses AttachThreadInput()
+
+	if (jump_to_bottom)
 	{
 		SendMessage(g_hWndEdit, EM_LINESCROLL , 0, 999999);
 		//SendMessage(g_hWndEdit, EM_SETSEL, -1, -1);
 		//SendMessage(g_hWndEdit, EM_SCROLLCARET, 0, 0);
 	}
-	return result;
+	return OK;
 }
 
 
@@ -1311,7 +1417,7 @@ ResultType Line::MouseClickDrag(vk_type aVK, int aX1, int aY1, int aX2, int aY2,
 
 	// Always sleep a certain minimum amount of time between events to improve reliability,
 	// but allow the user to specify a higher time if desired:
-	#define MOUSE_SLEEP SLEEP_AND_IGNORE_HOTKEYS(g.KeyDelay > 10 ? g.KeyDelay : 10)
+	#define MOUSE_SLEEP if (g.MouseDelay >= 0) SLEEP_AND_IGNORE_HOTKEYS(g.MouseDelay)
 
 	// Do the drag operation
 	switch (aVK)
@@ -1880,7 +1986,12 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir)
 		MsgBox("The maximum number of File Dialogs has been reached." ERR_ABORT);
 		return FAIL;
 	}
-	char file_buf[64 * 1024]; // Large in case more than one file is allowed to be selected.
+	
+	// Large in case more than one file is allowed to be selected.
+	// The call to GetOpenFileName() may fail if the first character of the buffer isn't NULL
+	// because it then thinks the buffer contains the default filename, which if it's uninitialized
+	// may be a string that's too long:
+	char file_buf[65535] = "";
 
 	// Use a more specific title so that the dialogs of different scripts can be distinguished
 	// from one another, which may help script automation in rare cases:
@@ -1927,7 +2038,7 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir)
 	--g_nFileDialogs;
 	g.WaitingForDialog = false;  // IsCycleComplete() relies on this.
 
-	if (!result) // User pressed CANCEL vs. OK to dismiss the dialog.
+	if (!result) // User pressed CANCEL vs. OK to dismiss the dialog or there was a problem displaying it.
 		// It seems best to clear the variable in these cases, since this is a scripting
 		// language where performance is not the primary goal.  So do that and return OK,
 		// but leave ErrorLevel set to ERRORLEVEL_ERROR.
@@ -2216,13 +2327,36 @@ ResultType Line::FileDelete(char *aFilePattern)
 
 
 
-ResultType Line::FileMove(char *aSource, char *aDest, char *aFlag)
-// Adapted from the AutoIt3 source.
+ResultType Line::FileInstall(char *aSource, char *aDest, char *aFlag)
 {
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
-	bool bOverwrite = aFlag && *aFlag == '1';
-	if (MoveFile(aSource, aDest))
+	bool allow_overwrite = aFlag && *aFlag == '1';
+#ifdef AUTOHOTKEYSC
+	HS_EXEArc_Read oRead;
+	if (oRead.Open(g_script.mFileSpec, "") != HS_EXEARC_E_OK)
+	{
+		MsgBox(g_script.mFileSpec, 0, "Could not open this EXE to run the main script:");
+		return OK; // Let ErrorLevel tell the story.
+	}
+	if (!allow_overwrite && Util_DoesFileExist(aDest))
+	{
+		oRead.Close();
+		return OK; // Let ErrorLevel tell the story.
+	}
+	// aSource should be the same as the "file id" used to originally compress the file
+	// when it was compiled into an EXE.  So this should seek for the right file:
+	if ( oRead.FileExtract(aSource, aDest) != HS_EXEARC_E_OK)
+	{
+		oRead.Close();
+		MsgBox(aSource, 0, "Could not extract file:");
+		return OK; // Let ErrorLevel tell the story.
+	}
+	oRead.Close();
+	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+#else
+	if (Util_CopyFile(aSource, aDest, allow_overwrite))
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+#endif
 	return OK;
 }
 
@@ -2232,8 +2366,20 @@ ResultType Line::FileCopy(char *aSource, char *aDest, char *aFlag)
 // Adapted from the AutoIt3 source.
 {
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
-	bool bOverwrite = aFlag && *aFlag == '1';
-	if (Util_CopyFile(aSource, aDest, bOverwrite))
+	bool allow_overwrite = aFlag && *aFlag == '1';
+	if (Util_CopyFile(aSource, aDest, allow_overwrite))
+		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+	return OK;
+}
+
+
+
+ResultType Line::FileMove(char *aSource, char *aDest, char *aFlag)
+// Adapted from the AutoIt3 source.
+{
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
+	bool allow_overwrite = aFlag && *aFlag == '1';
+	if (MoveFile(aSource, aDest))
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 	return OK;
 }

@@ -160,6 +160,27 @@ unsigned __int64 GetFileSize64(HANDLE aFileHandle)
 
 
 
+int snprintf(char *aBuf, size_t aBufSize, const char *aFormat, ...)
+// _snprintf() seems to copy one more character into the buffer than it should, causing overflow.
+// So until that's been explained or fixed, reduce buffer size by 1 for safety.
+// Follows the xprintf() convention to "return the number of characters
+// printed (not including the trailing '\0' used to end output to strings)
+// or a negative value if an output error occurs, except for snprintf()
+// and vsnprintf(), which return the number of characters that would have
+// been printed if the size were unlimited (again, not including the final
+// '\0')."
+{
+	if (!aBuf || !aFormat) return -1;  // But allow aBufSize to be zero so that the proper return value is provided.
+	if (aBufSize) // avoid underflow
+		--aBufSize; // See above for explanation.
+	va_list ap;
+	va_start(ap, aFormat);
+	// Must use _vsnprintf() not _snprintf() because of the way va_list is handled:
+	return _vsnprintf(aBuf, aBufSize, aFormat, ap);
+}
+
+
+
 int snprintfcat(char *aBuf, size_t aBufSize, const char *aFormat, ...)
 // The caller must have ensured that aBuf contains a valid string
 // (i.e. that it is null-terminated somewhere within the limits of aBufSize).
@@ -172,13 +193,13 @@ int snprintfcat(char *aBuf, size_t aBufSize, const char *aFormat, ...)
 {
 	if (!aBuf || !aFormat) return -1;  // But allow aBufSize to be zero so that the proper return value is provided.
 	size_t length = strlen(aBuf);  // This could crash if caller didn't initialize it.
-	__int64 space_remaining = (__int64)(aBufSize - length);
+	__int64 space_remaining = (__int64)(aBufSize - length) - 1; // -1 for the overflow bug, see snprintf() comments.
 	if (space_remaining < 0) // But allow it to be zero so that the proper return value is provided.
 		return -1;
 	va_list ap;
 	va_start(ap, aFormat);
 	// Must use vsnprintf() not snprintf() because of the way va_list is handled:
-	return vsnprintf(aBuf + length, (size_t)space_remaining, aFormat, ap);
+	return _vsnprintf(aBuf + length, (size_t)space_remaining, aFormat, ap);
 }
 
 

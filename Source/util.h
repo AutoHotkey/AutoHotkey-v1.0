@@ -225,6 +225,7 @@ __int64 YYYYMMDDSecondsUntil(char *aYYYYMMDDStart, char *aYYYYMMDDEnd, bool &aFa
 __int64 FileTimeSecondsUntil(FILETIME *pftStart, FILETIME *pftEnd);
 
 unsigned __int64 GetFileSize64(HANDLE aFileHandle);
+int snprintf(char *aBuf, size_t aBufSize, const char *aFormat, ...);
 int snprintfcat(char *aBuf, size_t aBufSize, const char *aFormat, ...);
 int strlcmp (char *aBuf1, char *aBuf2, UINT aLength1 = UINT_MAX, UINT aLength2 = UINT_MAX);
 int strlicmp(char *aBuf1, char *aBuf2, UINT aLength1 = UINT_MAX, UINT aLength2 = UINT_MAX);

@@ -17,7 +17,6 @@ GNU General Public License for more details.
 #include "stdafx.h" // pre-compiled headers
 #include "var.h"
 #include "globaldata.h" // for g_script
-#include "util.h" // for strlcpy()
 
 
 ResultType Var::Assign(int aValueToAssign)
@@ -279,7 +278,8 @@ VarSizeType Var::Get(char *aBuf)
 					return result - 1;  // since GetEnvironmentVariable() returns total size needed in this case.
 				// The caller has ensured, probably via previous call to this function with aBuf == NULL,
 				// that aBuf is large enough to hold the result.  Also, don't use a size greater than
-				// 32767 because that may cause it to fail on Win95 (tested by Robert Yalkin).
+				// 32767 because that will cause it to fail on Win95 (tested by Robert Yalkin).
+				// (size probably must be under 64K, but that is untested.  Just stick with 32767)
 				// According to MSDN, 32767 is exactly large enough to handle the largest variable plus
 				// its zero terminator:
 				aBuf += GetEnvironmentVariable(mName, aBuf, 32767);

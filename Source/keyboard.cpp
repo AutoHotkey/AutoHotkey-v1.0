@@ -351,7 +351,12 @@ void SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, mod_type aModifiersP
 		// ^c::Send,^{d 15}
 		// Also: Seems best to do SetModifierState() even if Keydelay < 0:
 		SetModifierState(aModifiers | aModifiersPersistent, GetModifierLRState());
-		KeyEvent(KEYDOWNANDUP, aVK, aSC, aTargetWindow, true);
+		KeyEvent(KEYDOWNANDUP, aVK, aSC, aTargetWindow);
+		if (i + 1 < aRepeatCount) // There are more keys to send after this one.
+			DoKeyDelay();
+		// else let the below handle it because it's better to restore the modifier state
+		// immediately rather than doing a key-delay first.  This alleviates the shift-numpad
+		// issue discussed in hook_include.cpp.
 	}
 	// Release any modifiers that were pressed down just for the sake of the above
 	// event (i.e. leave any persistent modifiers pressed down).  The caller should
@@ -359,8 +364,17 @@ void SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, mod_type aModifiersP
 	// in aModifiersPersistent.  Also, call GetModifierLRState() again explicitly
 	// rather than trying to use a saved value from above, in case the above itself
 	// changed the value of the modifiers (i.e. aVk/aSC is a modifier).  Admittedly,
-	// that would be pretty strange but it seems the most correct thing to do:
+	// that would be pretty strange but it seems the most correct thing to do.
+	// Update: Sometimes the modifiers are being released so soon after the keys they
+	// modify that the modifiers are not in effect.  This can be seen sometimes when
+	// ctrl-shift-tabbing back through a multi-tabbed dialog: The last ^+{tab} will
+	// usually not take effect because the CTRL key was released too quickly.
+	// Therefore, try a sleep(0) so that we can keep the bulk of the benefit of
+	// why we're doing it so quickly in the first place (see above):
+	if (g.KeyDelay)
+		DoKeyDelay(0);
 	SetModifierState(aModifiersPersistent, GetModifierLRState());
+	DoKeyDelay();  // The delay for the final key, see above for details of why its done this way.
 }
 
 
@@ -445,12 +459,24 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 				, aExtraInfo);
 			if (!g_hhkLowLevelKeybd) // Hook isn't logging, so we'll log just the keys we send, here.
 			{
-				g_KeyLog[g_KeyLogNext].vk = aVK;
-				g_KeyLog[g_KeyLogNext].sc = aSC;
-				g_KeyLog[g_KeyLogNext].event_type = 'i';
-				g_KeyLog[g_KeyLogNext].key_up = false;
-				if (++g_KeyLogNext >= MAX_LOGGED_KEYS)
-					g_KeyLogNext = 0;
+				#define UpdateKeyEventHistory(aKeyUp) \
+				{\
+					g_KeyHistory[g_KeyHistoryNext].vk = aVK;\
+					g_KeyHistory[g_KeyHistoryNext].sc = aSC;\
+					g_KeyHistory[g_KeyHistoryNext].key_up = aKeyUp;\
+					g_KeyHistory[g_KeyHistoryNext].event_type = 'i';\
+					g_HistoryTickNow = GetTickCount();\
+					g_KeyHistory[g_KeyHistoryNext].elapsed_time = (g_HistoryTickNow - g_HistoryTickPrev) / (float)1000;\
+					g_HistoryTickPrev = g_HistoryTickNow;\
+					HWND fore_win = GetForegroundWindow();\
+					if (fore_win)\
+						GetWindowText(fore_win, g_KeyHistory[g_KeyHistoryNext].target_window, sizeof(g_KeyHistory[g_KeyHistoryNext].target_window));\
+					else\
+						*g_KeyHistory[g_KeyHistoryNext].target_window = '\0';\
+					if (++g_KeyHistoryNext >= MAX_HISTORY_KEYS)\
+						g_KeyHistoryNext = 0;\
+				}
+				UpdateKeyEventHistory(false);
 			}
 		}
 		if (aEventType != KEYDOWN)  // i.e. always do it for KEYDOWNANDUP
@@ -458,14 +484,7 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 			keybd_event(aVK, LOBYTE(aSC), (HIBYTE(aSC) ? KEYEVENTF_EXTENDEDKEY : 0)
 				| KEYEVENTF_KEYUP, aExtraInfo);
 			if (!g_hhkLowLevelKeybd) // Hook isn't logging, so we'll log just the keys we send, here.
-			{
-				g_KeyLog[g_KeyLogNext].vk = aVK;
-				g_KeyLog[g_KeyLogNext].sc = aSC;
-				g_KeyLog[g_KeyLogNext].event_type = 'i';
-				g_KeyLog[g_KeyLogNext].key_up = true;
-				if (++g_KeyLogNext >= MAX_LOGGED_KEYS)
-					g_KeyLogNext = 0;
-			}
+				UpdateKeyEventHistory(true);
 		}
 	}
 
@@ -1167,7 +1186,7 @@ int TextToSpecial(char *aText, UINT aTextLength, mod_type &aModifiers)
 
 
 
-ResultType KeyLogToFile(char *aFilespec, char aType, bool aKeyUp, vk_type aVK, sc_type aSC)
+ResultType KeyHistoryToFile(char *aFilespec, char aType, bool aKeyUp, vk_type aVK, sc_type aSC)
 {
 	static char target_filespec[MAX_PATH] = "";
 	static FILE *fp = NULL;

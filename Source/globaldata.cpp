@@ -16,7 +16,7 @@ GNU General Public License for more details.
 
 #include "stdafx.h" // pre-compiled headers
 // These includes should probably a superset of those in globaldata.h:
-#include "hook.h" // For KeyLogItem and probably other things.
+#include "hook.h" // For KeyHistoryItem and probably other things.
 #include "clipboard.h"  // For the global clipboard object
 #include "script.h" // For the global script object and g_ErrorLevel
 #include "os_version.h" // For the global OS_Version object
@@ -29,7 +29,9 @@ GNU General Public License for more details.
 HWND g_hWnd = NULL;
 HWND g_hWndEdit = NULL;
 HWND g_hWndSplash = NULL;
-HINSTANCE g_hInstance; // Set by WinMain().
+HINSTANCE g_hInstance = NULL; // Set by WinMain().
+HACCEL g_hAccelTable = NULL;
+
 modLR_type g_modifiersLR_logical = 0;
 modLR_type g_modifiersLR_physical = 0;
 modLR_type g_modifiersLR_get = 0;
@@ -53,6 +55,8 @@ int g_nInterruptedSubroutines = 0;
 int g_nPausedSubroutines = 0;
 bool g_UnpauseWhenResumed = false;  // Start off "false" because the Unpause mode must be explicitly triggered.
 
+UCHAR g_MaxThreadsPerHotkey = 1;
+int g_MaxThreadsTotal = 10;
 // On my system, the repeat-rate (which is probably set to XP's default) is such that between 20
 // and 25 keys are generated per second.  Therefore, 50 in 2000ms seems like it should allow the
 // key auto-repeat feature to work on most systems without triggering the warning dialog.
@@ -202,7 +206,7 @@ Action g_act[] =
 	// would be considered mandatory-non-blank by default.  It's easier to make all the params
 	// optional and validate elsewhere that the 2nd one specifically isn't blank:
 	, {"ControlSend", 0, 6, NULL} // Control, Chars-to-Send, std. 4 window params.
-	, {"ControlLeftClick", 0, 5, NULL} // Control, std. 4 window params
+	, {"ControlClick", 0, 7, {5, 0}} // Control, WinTitle, WinText, WhichButton, ClickCount, ExcludeTitle, ExcludeText
 	, {"ControlGetFocus", 1, 5, NULL}  // OutputVar, std. 4 window params
 	, {"ControlFocus", 0, 5, NULL}     // Control, std. 4 window params
 	, {"ControlSetText", 1, 6, NULL}   // Control, new text, std. 4 window params
@@ -268,6 +272,7 @@ Action g_act[] =
 
 	, {"FileAppend", 2, 2, NULL} // text, filename
 	, {"FileReadLine", 3, 3, NULL} // Output variable, filename, line-number (custom validation, not numeric validation)
+	, {"FileInstall", 2, 3, {3, 0}} // source, dest, flag (1/0, where 1=overwrite)
 	, {"FileCopy", 2, 3, {3, 0}} // source, dest, flag
 	, {"FileMove", 2, 3, {3, 0}} // source, dest, flag
 	, {"FileDelete", 1, 1, NULL} // filename
@@ -293,6 +298,7 @@ Action g_act[] =
 	, {"RegDelete", 2, 3, NULL} // RegKey, RegSubKey, ValueName
 
 	, {"SetKeyDelay", 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)
+	, {"SetMouseDelay", 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)
 	, {"SetWinDelay", 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)
 	, {"SetControlDelay", 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)
 	, {"SetBatchLines", 1, 1, {1, 0}} // Number of script lines to execute before sleeping.
@@ -311,7 +317,7 @@ Action g_act[] =
 	, {"SetCapslockState", 0, 1, NULL} // same
 	, {"SetStoreCapslockMode", 1, 1, NULL} // On/Off
 
-	, {"KeyLog", 0, 2, NULL}, {"ListLines", 0, 0, NULL}
+	, {"KeyHistory", 0, 2, NULL}, {"ListLines", 0, 0, NULL}
 	, {"ListVars", 0, 0, NULL}, {"ListHotkeys", 0, 0, NULL}
 
 	, {"Edit", 0, 0, NULL}
@@ -542,6 +548,13 @@ key_to_sc_type g_key_to_sc[] =
 int g_key_to_vk_count = sizeof(g_key_to_vk) / sizeof(key_to_vk_type);
 int g_key_to_sc_count = sizeof(g_key_to_sc) / sizeof(key_to_sc_type);
 
-KeyLogItem g_KeyLog[MAX_LOGGED_KEYS] = {{0}};
-int g_KeyLogNext = 0;
-bool g_KeyLogToFile = false;
+KeyHistoryItem *g_KeyHistory = NULL; // Array is allocated during startup.
+int g_KeyHistoryNext = 0;
+bool g_KeyHistoryToFile = false;
+
+// These must be global also, since both the keyboard and mouse hook functions,
+// in addition to KeyEvent() when it's logging keys with only the mouse hook installed,
+// MUST refer to the same variables.  Otherwise, the elapsed time between keyboard and
+// and mouse events will be wrong:
+DWORD g_HistoryTickNow = 0;
+DWORD g_HistoryTickPrev = GetTickCount();  // So that the first logged key doesn't have a huge elapsed time.

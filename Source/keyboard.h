@@ -231,7 +231,7 @@ sc_type TextToSC(char *aText);
 vk_type TextToVK(char *aText, mod_type *pModifiers = NULL, bool aExcludeThoseHandledByScanCode = false);
 int TextToSpecial(char *aText, UINT aTextLength, mod_type &aModifiers);
 
-ResultType KeyLogToFile(char *aFilespec = NULL, char aType = '\0', bool aKeyUp = false
+ResultType KeyHistoryToFile(char *aFilespec = NULL, char aType = '\0', bool aKeyUp = false
 	, vk_type aVK = 0, sc_type aSC = 0);
 char *GetKeyName(vk_type aVK, sc_type aSC, char *aBuf, size_t aBuf_size);
 

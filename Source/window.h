@@ -130,8 +130,9 @@ BOOL CALLBACK EnumControlFind(HWND aWnd, LPARAM lParam);
 #define DIALOG_TITLE_SIZE 1024
 int MsgBox(int aValue);
 int MsgBox(char *aText = "", UINT uType = MSGBOX_NORMAL, char *aTitle = NULL, double aTimeout = 0);
-HWND WinActivateOurTopDialog();
+HWND FindOurTopDialog();
 BOOL CALLBACK EnumDialog(HWND hwnd, LPARAM lParam);
+BOOL CALLBACK EnumDialogClose(HWND hwnd, LPARAM lParam);
 
 HWND WindowOwnsOthers(HWND aWnd);
 BOOL CALLBACK EnumParentFindOwned(HWND aWnd, LPARAM lParam);

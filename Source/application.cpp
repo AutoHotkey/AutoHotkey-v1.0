@@ -189,6 +189,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 	bool was_interrupted = false;
 	bool sleep0_was_done = false;
 	bool empty_the_queue_via_peek = false;
+	int n_existing_threads;
 
 	HWND fore_window;
 	DWORD fore_pid;
@@ -316,9 +317,24 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 		case AHK_HOOK_HOTKEY:  // Sent from this app's keyboard or mouse hook.
 			if (g_IgnoreHotkeys)
 				break;
-			if (g_nInterruptedSubroutines >= 10)
+			if (aMode == RETURN_AFTER_MESSAGES)
+				// Adjust by +1 to convert g_nInterruptedSubroutines into the total number of
+				// hotkey "threads" that currently exist:
+				n_existing_threads = g_nInterruptedSubroutines + 1;
+			else // There shouldn't be any interrupted subroutines in this case, nor should there be any threads.
+				n_existing_threads = 0;
+			if (   n_existing_threads >= g_MaxThreadsTotal
+				&& !(ACT_IS_ALWAYS_ALLOWED(Hotkey::GetTypeOfFirstLine((HotkeyIDType)msg.wParam))
+					&& n_existing_threads < MAX_THREADS_LIMIT)   )
 				// Allow only a limited number of recursion levels to avoid any chance of
-				// stack overflow.  So ignore this message:
+				// stack overflow.  So ignore this message.  Later, can devise some way
+				// to support "queuing up" these hotkey firings for use later when there
+				// is "room" to run them, but that might cause complications because in
+				// some cases, the user didn't intend to hit the key twice (e.g. due to
+				// "fat fingers") and would have preferred to have it ignored.  Doing such
+				// might also make "infinite key loops" harder to catch because the rate
+				// of incoming hotkeys would be slowed down to prevent the subroutines from
+				// running concurrently.
 				break;
 			if (aMode == RETURN_AFTER_MESSAGES)
 			{
@@ -382,7 +398,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 				// it seems best just to exit here directly, since there may be messages
 				// in our queue waiting and we don't want to process them:
 				g_script.ExitApp(NULL, CRITICAL_ERROR);
-			g_LastPerformedHotkeyType = Hotkey::GetType((HotkeyIDType)msg.wParam); // For use with the Keylog cmd.
+			g_LastPerformedHotkeyType = Hotkey::GetType((HotkeyIDType)msg.wParam); // For use with the KeyHistory cmd.
 
 			if (aMode == RETURN_AFTER_MESSAGES)
 			{
@@ -443,8 +459,6 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 				// because the user can simply click in the window to set the focus.  But for now,
 				// this is better than nothing:
 				ShowWindow(g_hWnd, SW_HIDE);  // And it's okay if this msg gets dispatched also.
-			if (msg.hwnd == g_hWndEdit && msg.message == WM_KEYDOWN && msg.wParam == VK_F5)
-				SendMessage(g_hWnd, WM_COMMAND, ID_TRAY_OPEN, 0);
 			// This little part is from the Miranda source code.  But it doesn't seem
 			// to provide any additional functionality: You still can't use keyboard
 			// keys to navigate in the dialog unless it's the topmost dialog.
@@ -470,12 +484,15 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 				}
 			}
 			// Translate keyboard input for any of our thread's windows that need it:
-			TranslateMessage(&msg);
-			// This just routes the message to the WindowProc() of the
-			// window the message was intended for (e.g. if our main window is visible
-			// or if we have a dialog window... though I think IsDialog() is supposed
-			// to be used for those, not Dispatch():
-			DispatchMessage(&msg);
+			if (!g_hAccelTable || !TranslateAccelerator(g_hWnd, g_hAccelTable, &msg))
+			{
+				TranslateMessage(&msg);
+				// This just routes the message to the WindowProc() of the
+				// window the message was intended for (e.g. if our main window is visible
+				// or if we have a dialog window... though I think IsDialog() is supposed
+				// to be used for those, not Dispatch():
+				DispatchMessage(&msg);
+			}
 		} // switch()
 	} // infinite-loop
 }

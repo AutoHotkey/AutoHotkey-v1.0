@@ -20,6 +20,7 @@ GNU General Public License for more details.
 #include "defines.h"
 #include "SimpleHeap.h"
 #include "clipboard.h"
+#include "util.h" // for strlcpy() & snprintf()
 EXTERN_CLIPBOARD;
 
 // Something big enough to be flexible, yet small enough to not be a problem on 99% of systems:

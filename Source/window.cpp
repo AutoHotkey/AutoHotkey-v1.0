@@ -920,7 +920,9 @@ BOOL CALLBACK EnumControlFind(HWND aWnd, LPARAM lParam)
 		// Note: since some controls end in a number (e.g. SysListView32),
 		// it would not be easy to parse out the user's sequence number to
 		// simplify/accelerate the search here.  So instead, use a method
-		// more certain to work even though it's a little ugly:
+		// more certain to work even though it's a little ugly.  It's also
+		// necessary to do this in a way functionally identical to the below
+		// so that Window Spy's sequence numbers match the ones generated here:
 		if (!strnicmp(pWin->title, buf, strlen(buf)))
 		{
 			// Use this var, initialized to zero by constructor, to accumulate the found-count:
@@ -1064,7 +1066,7 @@ int MsgBox(char *aText, UINT uType, char *aTitle, double aTimeout)
 //		ShowWindowAsync(g_hWnd, SW_SHOWMINIMIZED);
 
 	/*
-	If the config file contains a line such as "#y::MsgBox, test", and a hotkey is used
+	If the script contains a line such as "#y::MsgBox, test", and a hotkey is used
 	to activate Windows Explorer and another hotkey is then used to invoke a MsgBox,
 	that MsgBox will be psuedo-minimized or invisible, even though it does have the
 	input focus.  This attempt to fix it didn't work, so something is probably checking
@@ -1136,7 +1138,7 @@ int MsgBox(char *aText, UINT uType, char *aTitle, double aTimeout)
 
 
 
-HWND WinActivateOurTopDialog()
+HWND FindOurTopDialog()
 // Returns the HWND of our topmost MsgBox or FileOpen dialog (and perhaps other types of modal
 // dialogs if they are of class #32770) even if it wasn't successfully brought to
 // the foreground here.
@@ -1175,11 +1177,45 @@ BOOL CALLBACK EnumDialog(HWND aWnd, LPARAM lParam)
 		if(!strcmp(buf, "#32770"))
 		{
 			pThing->hwnd = aWnd;  // An output value for the caller.
-			SetForegroundWindowEx(aWnd);
 			return FALSE;  // We're done.
 		}
 	}
 	return TRUE;  // Keep searching.
+}
+
+
+
+BOOL CALLBACK EnumDialogClose(HWND aWnd, LPARAM lParam)
+// lParam should be a pointer to a ProcessId (ProcessIds are always non-zero?)
+// To continue enumeration, the function must return TRUE; to stop enumeration, it must return FALSE. 
+#define pThing ((pid_and_hwnd_type *)lParam)
+{
+	if (!lParam || !pThing->pid) return FALSE;
+	DWORD pid;
+	GetWindowThreadProcessId(aWnd, &pid);
+	if (pid == pThing->pid)
+	{
+		char buf[32];
+		GetClassName(aWnd, buf, sizeof(buf));
+		// This is the class name for windows created via MessageBox(), GetOpenFileName(), and probably
+		// other things that use modal dialogs:
+		if(!strcmp(buf, "#32770"))
+		{
+			// Since it's our window, I think this will effectively use our thread to immediately
+			// call the WindowProc() of the target dialog.  Testing reveals that under WinXP at least,
+			// this call does not destroy the windows (WM_CLOSE).  However, it seems better to use
+			// Send than Post in the hopes that Send has immediately caused the WindowProc to do
+			// things which indicate to the OS that the dialogs are marked for destruction.
+			// Note: Not supposed to call EndDialog() outside of a DialogProc(), so do this instead.
+			// UPDATE: Sending WM_QUIT vs. WM_CLOSE immediately terminates the dialogs, which seems
+			// better in light of the fact that our caller is trying to exit the program immediately.
+			// UPDATE #2: That is unrepeatable, I don't know how it happened that once.  Still, WM_QUIT
+			// might be better than WM_CLOSE in this case:
+			SendMessage(aWnd, WM_QUIT, 0, 0);
+			pThing->hwnd = aWnd;  // An output value for the caller so that it knows we closed at least one.
+		}
+	}
+	return TRUE;  // Keep searching so that all our dialogs will be sent the message.
 }
 
 

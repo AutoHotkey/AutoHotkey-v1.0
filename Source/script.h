@@ -76,7 +76,7 @@ enum enum_act {
 , ACT_ENVSET, ACT_ENVUPDATE
 , ACT_RUN, ACT_RUNWAIT
 , ACT_GETKEYSTATE
-, ACT_SEND, ACT_CONTROLSEND, ACT_CONTROLLEFTCLICK, ACT_CONTROLGETFOCUS, ACT_CONTROLFOCUS
+, ACT_SEND, ACT_CONTROLSEND, ACT_CONTROLCLICK, ACT_CONTROLGETFOCUS, ACT_CONTROLFOCUS
 , ACT_CONTROLSETTEXT, ACT_CONTROLGETTEXT
 , ACT_SETDEFAULTMOUSESPEED, ACT_MOUSEMOVE, ACT_MOUSECLICK, ACT_MOUSECLICKDRAG, ACT_MOUSEGETPOS
 , ACT_STATUSBARGETTEXT
@@ -97,20 +97,20 @@ enum enum_act {
 , ACT_PIXELGETCOLOR, ACT_PIXELSEARCH
 , ACT_GROUPADD, ACT_GROUPACTIVATE, ACT_GROUPDEACTIVATE, ACT_GROUPCLOSE
 , ACT_DRIVESPACEFREE, ACT_SOUNDSETWAVEVOLUME, ACT_SOUNDPLAY
-, ACT_FILEAPPEND, ACT_FILEREADLINE, ACT_FILECOPY, ACT_FILEMOVE, ACT_FILEDELETE
+, ACT_FILEAPPEND, ACT_FILEREADLINE, ACT_FILEINSTALL, ACT_FILECOPY, ACT_FILEMOVE, ACT_FILEDELETE
 , ACT_FILECREATEDIR, ACT_FILEREMOVEDIR
 , ACT_FILEGETATTRIB, ACT_FILESETATTRIB, ACT_FILEGETTIME, ACT_FILESETTIME
 , ACT_FILEGETSIZE, ACT_FILEGETVERSION
 , ACT_FILESELECTFILE, ACT_FILESELECTFOLDER
 , ACT_INIREAD, ACT_INIWRITE, ACT_INIDELETE
 , ACT_REGREAD, ACT_REGWRITE, ACT_REGDELETE
-, ACT_SETKEYDELAY, ACT_SETWINDELAY, ACT_SETCONTROLDELAY, ACT_SETBATCHLINES
+, ACT_SETKEYDELAY, ACT_SETMOUSEDELAY, ACT_SETWINDELAY, ACT_SETCONTROLDELAY, ACT_SETBATCHLINES
 , ACT_SETTITLEMATCHMODE, ACT_SETFORMAT
 , ACT_SUSPEND, ACT_PAUSE
 , ACT_AUTOTRIM, ACT_STRINGCASESENSE, ACT_DETECTHIDDENWINDOWS, ACT_DETECTHIDDENTEXT
 , ACT_SETNUMLOCKSTATE, ACT_SETSCROLLLOCKSTATE, ACT_SETCAPSLOCKSTATE, ACT_SETSTORECAPSLOCKMODE
-, ACT_KEYLOG, ACT_LISTLINES, ACT_LISTVARS, ACT_LISTHOTKEYS
-, ACT_EDIT, ACT_RELOADCONFIG
+, ACT_KEYHISTORY, ACT_LISTLINES, ACT_LISTVARS, ACT_LISTHOTKEYS
+, ACT_EDIT, ACT_RELOAD
 , ACT_EXITAPP
 , ACT_SHUTDOWN
 // Make these the last ones before the count so they will be less often processed.  This helps
@@ -123,6 +123,13 @@ enum enum_act {
 // at which time we know its true size:
 // , ACT_COUNT
 };
+
+// It seems best not to include ACT_SUSPEND in the below, since the user may have marked
+// a large number of subroutines as "Suspend, Permit".  Even PAUSE is iffy, since the user
+// may be using it as "Pause, off/toggle", but it seems best to support PAUSE:
+#define ACT_IS_ALWAYS_ALLOWED(ActionType) (ActionType == ACT_EXITAPP || ActionType == ACT_PAUSE \
+	|| ActionType == ACT_EDIT || ActionType == ACT_RELOAD || ActionType == ACT_KEYHISTORY \
+	|| ActionType == ACT_LISTLINES || ActionType == ACT_LISTVARS || ActionType == ACT_LISTHOTKEYS)
 #define ACT_IS_IF(ActionType) (ActionType >= ACT_IF_FIRST && ActionType <= ACT_IF_LAST)
 #define ACT_IS_ASSIGN(ActionType) (ActionType >= ACT_ASSIGN_FIRST && ActionType <= ACT_ASSIGN_LAST)
 
@@ -136,8 +143,9 @@ enum enum_act_old {
 };
 
 
-#define ERR_ABORT "  The current hotkey subroutine (or the entire script if"\
+#define ERR_ABORT_NO_SPACES "The current hotkey subroutine (or the entire script if"\
 	" this isn't a hotkey subroutine) will be aborted."
+#define ERR_ABORT "  " ERR_ABORT_NO_SPACES
 #define WILL_EXIT "The program will exit."
 #define OLD_STILL_IN_EFFECT "The script was not reloaded; the old version will remain in effect."
 #define PLEASE_REPORT "  Please report this as a bug."
@@ -167,6 +175,7 @@ enum enum_act_old {
 #define ERR_MEM_ASSIGN "Out of memory while assigning to this variable." ERR_ABORT
 #define ERR_VAR_IS_RESERVED "This variable is reserved and cannot be assigned to."
 #define ERR_DEFINE_CHAR "The character being defined must not be identical to another special or reserved character."
+#define ERR_INCLUDE_FILE "A filename must be specified for #Include."
 #define ERR_DEFINE_COMMENT "The comment flag must not be one of the hotkey definition symbols (e.g. ! ^ + $ ~ * < >)."
 
 //----------------------------------------------------------------------------------
@@ -182,6 +191,7 @@ struct InputBoxType
 
 
 typedef UINT LineNumberType;
+#define LOADING_FAILED UINT_MAX
 
 // -2 for the beginning and ending g_DerefChars:
 #define MAX_VAR_NAME_LENGTH (UCHAR_MAX - 2)
@@ -213,7 +223,10 @@ BOOL CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 BOOL CALLBACK EnumChildFocusFind(HWND aWnd, LPARAM lParam);
 BOOL CALLBACK EnumChildGetText(HWND aWnd, LPARAM lParam);
 LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lParam);
-ResultType ShowMainWindow(char *aContents = NULL, bool aJumpToBottom = false);
+
+enum MainWindowModes {MAIN_MODE_NO_CHANGE, MAIN_MODE_LINES, MAIN_MODE_VARS
+	, MAIN_MODE_HOTKEYS, MAIN_MODE_KEYHISTORY, MAIN_MODE_REFRESH};
+ResultType ShowMainWindow(MainWindowModes aMode = MAIN_MODE_NO_CHANGE);
 
 bool Util_Shutdown(int nFlag);
 BOOL Util_ShutdownHandler(HWND hwnd, DWORD lParam);
@@ -246,8 +259,9 @@ private:
 	ResultType FileReadLine(char *aFilespec, char *aLineNumber);
 	ResultType FileAppend(char *aFilespec, char *aBuf);
 	ResultType FileDelete(char *aFilePattern);
-	ResultType FileMove(char *aSource, char *aDest, char *aFlag);
 	ResultType FileCopy(char *aSource, char *aDest, char *aFlag);
+	ResultType FileMove(char *aSource, char *aDest, char *aFlag);
+	ResultType FileInstall(char *aSource, char *aDest, char *aFlag);
 	static bool Util_CopyFile(const char *szInputSource, const char *szInputDest, bool bOverwrite);
 	static void Util_ExpandFilenameWildcard(const char *szSource, const char *szDest, char *szExpandedDest);
 	static void Util_ExpandFilenameWildcardPart(const char *szSource, const char *szDest, char *szExpandedDest);
@@ -289,7 +303,7 @@ private:
 		, char *aExcludeTitle, char *aExcludeText);
 	ResultType ControlSend(char *aControl, char *aKeysToSend, char *aTitle, char *aText
 		, char *aExcludeTitle, char *aExcludeText, modLR_type aModifiersLR);
-	ResultType ControlLeftClick(char *aControl, char *aTitle, char *aText
+	ResultType ControlClick(vk_type aVK, int aClickCount, char *aControl, char *aTitle, char *aText
 		, char *aExcludeTitle, char *aExcludeText);
 	ResultType ControlGetFocus(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType ControlFocus(char *aControl, char *aTitle, char *aText
@@ -326,12 +340,9 @@ private:
 	}
 
 public:
-	#define LINE_LOG_SIZE 50
-	static Line *sLog[LINE_LOG_SIZE];
-	static int sLogNext;
-
 	ActionTypeType mActionType; // What type of line this is.
-	LineNumberType mFileLineNumber;  // The line number in the file from which the script was loaded, for debugging.
+	UCHAR mFileNumber;  // Which file the line came from.  0 is the first, and it's the main script file.
+	LineNumberType mLineNumber;  // The line number in the file from which the script was loaded, for debugging.
 	AttributeType mAttribute;
 	Line *mPrevLine, *mNextLine; // The prev & next lines adjacent to this one in the linked list; NULL if none.
 	Line *mRelatedLine;  // e.g. the "else" that belongs to this "if"
@@ -401,6 +412,14 @@ public:
 	#define ARG_HAS_VAR(ArgNum) (mArgc >= ArgNum && (*mArg[ArgNum-1].text || mArg[ArgNum-1].deref))
 	ArgCountType mArgc; // How many arguments exist in mArg[].
 	ArgStruct *mArg; // Will be used to hold a dynamic array of dynamic Args.
+
+	#define LINE_LOG_SIZE 50
+	static Line *sLog[LINE_LOG_SIZE];
+	static int sLogNext;
+
+	#define MAX_SCRIPT_FILES (UCHAR_MAX + 1)
+	static char *sSourceFile[MAX_SCRIPT_FILES];
+	static int nSourceFiles; // An int vs. UCHAR so that it can be exactly 256 without overflowing.
 
 	ResultType ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **apJumpToLine = NULL
 		, WIN32_FIND_DATA *aCurrentFile = NULL);
@@ -480,6 +499,7 @@ public:
 		case ACT_MULT:
 		case ACT_DIV:
 		case ACT_SETKEYDELAY:
+		case ACT_SETMOUSEDELAY:
 		case ACT_SETWINDELAY:
 		case ACT_SETCONTROLDELAY:
 		case ACT_SETBATCHLINES:
@@ -694,9 +714,10 @@ public:
 	// Call this LineError to avoid confusion with Script's error-displaying functions:
 	ResultType LineError(char *aErrorText, ResultType aErrorType = FAIL, char *aExtraInfo = "");
 
-	Line(LineNumberType aFileLineNumber, ActionTypeType aActionType, ArgStruct aArg[], ArgCountType aArgc) // Constructor
-		: mActionType(aActionType), mFileLineNumber(aFileLineNumber), mAttribute(ATTR_NONE)
-		, mArgc(aArgc), mArg(aArg)
+	Line(UCHAR aFileNumber, LineNumberType aFileLineNumber, ActionTypeType aActionType
+		, ArgStruct aArg[], ArgCountType aArgc) // Constructor
+		: mFileNumber(aFileNumber), mLineNumber(aFileLineNumber), mActionType(aActionType)
+		, mAttribute(ATTR_NONE), mArgc(aArgc), mArg(aArg)
 		, mPrevLine(NULL), mNextLine(NULL), mRelatedLine(NULL), mParentLine(NULL)
 		{}
 	void *operator new(size_t aBytes) {return SimpleHeap::Malloc(aBytes);}
@@ -736,27 +757,31 @@ private:
 	Var *mFirstVar, *mLastVar;  // The first and last variables in the linked list.
 	WinGroup *mFirstGroup, *mLastGroup;  // The first and last variables in the linked list.
 	UINT mLineCount, mLabelCount, mVarCount, mGroupCount;
-	LineNumberType mFileLineCount;  // How many physical lines are in the file.
+
+	// These two track the file number and line number in that file of the line currently being loaded,
+	// which simplifies calls to ScriptError() and LineError() (reduces the number of params that must be passed):
+	UCHAR mCurrFileNumber;
+	LineNumberType mCurrLineNumber;
+
 	NOTIFYICONDATA mNIC; // For ease of adding and deleting our tray icon.
 
 #ifdef AUTOHOTKEYSC
-	int CloseAndReturn(HS_EXEArc_Read *fp, UCHAR *aBuf, int return_value);
+	ResultType CloseAndReturn(HS_EXEArc_Read *fp, UCHAR *aBuf, ResultType return_value);
 	size_t GetLine(char *aBuf, int aMaxCharsToRead, UCHAR *&aMemFile);
 #else
-	int CloseAndReturn(FILE *fp, UCHAR *aBuf, int return_value);
+	ResultType CloseAndReturn(FILE *fp, UCHAR *aBuf, ResultType return_value);
 	size_t GetLine(char *aBuf, int aMaxCharsToRead, FILE *fp);
 #endif
 	ResultType IsPreprocessorDirective(char *aBuf);
 
-	ResultType ParseAndAddLine(char *aLineText, char *aActionName = NULL, char *aEndMarker = NULL
-		, char *aLiteralMap = NULL, size_t aLiteralMapLength = 0
+	ResultType ParseAndAddLine(char *aLineText, char *aActionName = NULL
+		, char *aEndMarker = NULL, char *aLiteralMap = NULL, size_t aLiteralMapLength = 0
 		, ActionTypeType aActionType = ACT_INVALID, ActionTypeType aOldActionType = OLD_INVALID);
 	char *ParseActionType(char *aBufTarget, char *aBufSource, bool aDisplayErrors);
 	static ActionTypeType ConvertActionType(char *aActionTypeString);
 	static ActionTypeType ConvertOldActionType(char *aActionTypeString);
 	ResultType AddLabel(char *aLabelName);
-	ResultType AddLine(ActionTypeType aActionType, char *aArg[] = NULL, ArgCountType aArgc = 0
-		, char *aArgMap[] = NULL);
+	ResultType AddLine(ActionTypeType aActionType, char *aArg[] = NULL, ArgCountType aArgc = 0, char *aArgMap[] = NULL);
 	ResultType AddVar(char *aVarName, size_t aVarNameLength = 0);
 
 	// These aren't in the Line class because I think they're easier to implement
@@ -775,6 +800,7 @@ public:
 	char *mFileDir;  // Will hold the directory containing the script file.
 	char *mFileName; // Will hold the script's naked file name.
 	char *mOurEXE; // Will hold this app's module name (e.g. C:\Program Files\AutoHotkey\AutoHotkey.exe).
+	char *mOurEXEDir;  // Same as above but just the containing diretory (for convenience).
 	char *mMainWindowTitle; // Will hold our main window's title, for consistency & convenience.
 	bool mIsReadyToExecute;
 	bool mIsRestart; // The app is restarting rather than starting from scratch.
@@ -786,9 +812,10 @@ public:
 	ResultType CreateWindows(HINSTANCE hInstance);
 	void UpdateTrayIcon();
 	ResultType Edit();
-	ResultType Reload();
+	ResultType Reload(bool aDisplayErrors);
 	void ExitApp(char *aBuf = NULL, int ExitCode = 0);
-	int LoadFromFile();
+	LineNumberType LoadFromFile();
+	ResultType LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude);
 	Var *FindOrAddVar(char *aVarName, size_t aVarNameLength = 0);
 	Var *FindVar(char *aVarName, size_t aVarNameLength = 0);
 	ResultType ExecuteFromLine1()
@@ -805,6 +832,7 @@ public:
 	ResultType ActionExec(char *aAction, char *aParams = NULL, char *aWorkingDir = NULL
 		, bool aDisplayErrors = true, char *aRunShowMode = NULL, HANDLE *aProcess = NULL);
 	char *ListVars(char *aBuf, size_t aBufSize);
+	char *ListKeyHistory(char *aBuf, size_t aBufSize);
 
 	VarSizeType GetFilename(char *aBuf = NULL)
 	{

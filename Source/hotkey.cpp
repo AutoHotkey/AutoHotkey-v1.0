@@ -59,7 +59,7 @@ void Hotkey::AllActivate()
 	{
 		// Do this part only if it hasn't been done before (as indicated by sHotkeysAreLocked)
 		// because it's not reviewed/designed to be run more than once:
-		bool is_neutral;
+		bool is_neutral, suppress_hotkey_warnings = false;
 		modLR_type modifiersLR;
 		for (i = 0; i < sHotkeyCount; ++i)
 		{
@@ -105,9 +105,12 @@ void Hotkey::AllActivate()
 						// other reporting (e.g. ListHotkeys) can easily tell which keys won't work
 						// on Win9x.  The first condition: e.g. a naked NumpadEnd or NumpadEnter shouldn't
 						// be allowed to be Registered() because it would cause the hotkey to also fire on
-						// END or ENTER (the non-Numpad versions of these keys).
-						if (!shk[i]->mModifiers)
-							shk[i]->mType = HK_KEYBD_HOOK;
+						// END or ENTER (the non-Numpad versions of these keys).  UPDATE: But it seems
+						// best to allow this on Win9x because it's more flexible to do so (i.e. some
+						// people might have a use for it):
+						//if (!shk[i]->mModifiers)
+						//	shk[i]->mType = HK_KEYBD_HOOK;
+						shk[i]->mType = HK_NORMAL;
 						// Second condition (now disabled): Since both keys (e.g. NumpadEnd and End) are
 						// configured as hotkeys with the same modifiers, only one of them can be registered.
 						// It's probably best to allow one of them to be registered, arbitrarily, so that some
@@ -121,7 +124,7 @@ void Hotkey::AllActivate()
 					}
 				}
 
-				// Fall back to default checks if more specific ones above didn't set it:
+				// Fall back to default checks if more specific ones above didn't set it to use the hook:
 				if (shk[i]->mType != HK_KEYBD_HOOK)
 				{
 					// Keys modified by CTRL/SHIFT/ALT/WIN can always be registered normally because these
@@ -132,13 +135,18 @@ void Hotkey::AllActivate()
 					if (shk[i]->mModifiers)
 						shk[i]->mType = HK_NORMAL;
 					else
+					{
 						if ((shk[i]->mVK == VK_LWIN || shk[i]->mVK == VK_RWIN))  // "!shk[i]->mModifiers" already true
 							// To prevent the start menu from appearing for a naked LWIN or RWIN, must
 							// handle this key with the hook (the presence of a normal modifier makes
 							// this unnecessary, at least under WinXP, because the start menu is
-							// never invoked when a modifier key is held down with lwin/rwin):
-							shk[i]->mType = HK_KEYBD_HOOK;
+							// never invoked when a modifier key is held down with lwin/rwin).
+							// But make it NORMAL on Win9x since the hook isn't yet supported.
+							// At least that way there's a chance some people might find it useful,
+							// perhaps by doing their own workaround for the start menu appearing:
+							shk[i]->mType = g_os.IsWin9x() ? HK_NORMAL : HK_KEYBD_HOOK;
 						else
+						{
 							// If this hotkey is an unmodified modifier (e.g. control = calc.exe) and
 							// there are any other hotkeys that rely specifically on this modifier,
 							// have the hook handle this hotkey so that it will only fire on key-up
@@ -161,43 +169,87 @@ void Hotkey::AllActivate()
 								// have gotten this far:
 								// !shk[i]->mModifiers && !shk[i]->mModifiersLR
 								// !shk[i]->mModifierVK && !shk[i]->mModifierSC
-								shk[i]->mType = HK_KEYBD_HOOK;
+								// If it's Win9x, take a stab at making it a normal registered hotkey
+								// in case it's of some use to someone to allow that:
+								shk[i]->mType = g_os.IsWin9x() ? HK_NORMAL : HK_KEYBD_HOOK;
 							else
 								// Check if this key is used as the modifier (prefix) for any other key.  If it is,
 								// the keyboard hook must handle this key also because otherwise the key-down event
 								// would trigger the registered hotkey immediately, rather than waiting to see if
 								// this key is be held down merely to modify some other key.
-								shk[i]->mType = FindHotkeyWithThisModifier(shk[i]->mVK, shk[i]->mSC) >= 0
+								shk[i]->mType = !g_os.IsWin9x() && FindHotkeyWithThisModifier(shk[i]->mVK, shk[i]->mSC) >= 0
 									? HK_KEYBD_HOOK : HK_NORMAL;
+						}
+					}
 					if (shk[i]->mVK == VK_APPS)
 						// Override anything set above:
 						// For now, always use the hook to handle hotkeys that use Appskey as a suffix.
 						// This is because registering such keys with RegisterHotkey() will fail to suppress
-						// hide the key-up events from the system, and the key-up for Apps key, at least in
+						// (hide) the key-up events from the system, and the key-up for Apps key, at least in
 						// apps like Explorer, is a special event that results in the context menu appearing
 						// (though most other apps seem to use the key-down event rather than the key-up,
 						// so they would probably work okay).  Note: Of possible future use is the fact that
 						// if the Alt key is held down before pressing Appskey, it's native function does
 						// not occur.  This may be similar to the fact that LWIN and RWIN don't cause the
-						// start menu to appear if a shift key is held down.
-						shk[i]->mType = HK_KEYBD_HOOK;
+						// start menu to appear if a shift key is held down.  For Win9x, take a stab at
+						// registering it in case its limited capability is useful to someone:
+						shk[i]->mType = g_os.IsWin9x() ? HK_NORMAL : HK_KEYBD_HOOK;
 				}
 			}
 
-			if (shk[i]->mType == HK_NORMAL)
-				if (!shk[i]->Register())
+			char buf[1024];
+			if (shk[i]->mType == HK_NORMAL && !shk[i]->Register())
+			{
+				if (g_os.IsWin9x())
+				{
+					if (!suppress_hotkey_warnings)
+					{
+						snprintf(buf, sizeof(buf), "Hotkey \"%s\" could not be registered as a hotkey, perhaps "
+							"because another script or application has already registered it.  It could "
+							" also be that this hotkey is not supported on Windows 95/98/ME."
+							"\n\nContinue to display this type of warning?"
+							, shk[i]->mJumpToLabel ? shk[i]->mJumpToLabel->mName : "N/A");
+						int response = MsgBox(buf, 4);
+						if (response != IDYES)
+							suppress_hotkey_warnings = true;
+					}
+				}
+				else
 					shk[i]->mType = HK_KEYBD_HOOK;
-			if (shk[i]->mType == HK_KEYBD_HOOK)
-				sWhichHookNeeded |= HOOK_KEYBD;
-			if (shk[i]->mType == HK_MOUSE_HOOK)
-				sWhichHookNeeded |= HOOK_MOUSE;
+			}
+			if ((shk[i]->mType == HK_KEYBD_HOOK || shk[i]->mType == HK_MOUSE_HOOK) && g_os.IsWin9x())
+			{
+				// Since it's flagged as a hook in spite of the fact that the OS is Win9x, it means
+				// that some previous logic determined that it's not even worth trying to register
+				// it because it's just plain not supported:
+				if (!suppress_hotkey_warnings)
+				{
+					snprintf(buf, sizeof(buf), "Hotkey \"%s\" is not supported on Windows 95/98/ME."
+						"\n\nContinue to display this type of warning?"
+						, shk[i]->mJumpToLabel ? shk[i]->mJumpToLabel->mName : "N/A");
+					int response = MsgBox(buf, 4);
+					if (response != IDYES)
+						suppress_hotkey_warnings = true;
+				}
+			}
+			else
+			{
+				if (shk[i]->mType == HK_KEYBD_HOOK)
+					sWhichHookNeeded |= HOOK_KEYBD;
+				if (shk[i]->mType == HK_MOUSE_HOOK)
+					sWhichHookNeeded |= HOOK_MOUSE;
+			}
 		} // for()
 	} // if()
 
 	// But do this part outside of the above block because these values may have changed since
 	// this function was first called:
 	if (g_ForceNumLock != NEUTRAL || g_ForceCapsLock != NEUTRAL || g_ForceScrollLock != NEUTRAL)
-		sWhichHookNeeded |= HOOK_KEYBD;
+		if (g_os.IsWin9x())
+			MsgBox("Keeping the NumLock, CapsLock, or ScrollLock key AlwaysOn or AlwaysOff "
+				"is not supported on Windows 95/98/ME.  This line will be ignored.");
+		else
+			sWhichHookNeeded |= HOOK_KEYBD;
 	// else it's currently not designed to ever deinstall the hook, because we don't track separately
 	// whether the hook is also needed to implement hotkeys. i.e. this is a known limitation.
 
@@ -307,6 +359,27 @@ void Hotkey::AllDestructAndExit(int aExitCode)
 	#pragma warning( default : 4312 ) 
 #endif
 */
+	// To help reliability of the exit() call further below:  Apparently, this doesn't actually close the
+	// windows (at least on WinXP), since our thread is needed for that and it's tied up here (i.e. it
+	// can't yet return to the original MessageBox() and its message loop).  However, by queuing up
+	// these close messages for the dialogs, there is a higher expecatation of a clean exit (I have
+	// on occasion observed the program's window and tray menu to be destroyed upon exit, but for the
+	// process to still exist.  This and the addition of PostQuitMessage() by the caller is an attempt
+	// to fix that):
+	pid_and_hwnd_type pid_and_hwnd;
+	pid_and_hwnd.pid = GetCurrentProcessId();
+	pid_and_hwnd.hwnd = NULL; // The below will make it non-NULL if it closed at least one window.
+	EnumWindows(EnumDialogClose, (LPARAM)&pid_and_hwnd);
+	if (pid_and_hwnd.hwnd) // It closed at least one dialog.
+		// Allow a tiny bit of time for the OS to do any cleanup of the dialogs.  Don't call
+		// MsgSleep() because our caller would not expect or want that complication while we're trying
+		// to terminate the application:
+		Sleep(10);
+	// I know this isn't the preferred way to exit the program.  However, due to unusual
+	// conditions such as the script having MsgBoxes or other dialogs displayed on the screen
+	// at the time the user exits (in which case our main event loop would be "buried" underneath
+	// the event loops of the dialogs themselves), this is the only reliable way I've found to exit
+	// so far.  The caller has already called PostQuitMessage(), which might not help but it doesn't hurt:
 	exit(aExitCode);
 }
 
@@ -322,7 +395,7 @@ ResultType Hotkey::PerformID(HotkeyIDType aHotkeyID)
 		return FAIL;  // Not a critical error in case some other app is sending us bogus messages?
 	}
 
-	// Help prevent runaway hotkeys (infinite loops due to recursion in bad config files):
+	// Help prevent runaway hotkeys (infinite loops due to recursion in bad script files):
 	static UINT throttled_key_count = 0;  // This var doesn't belong in struct since it's used only here.
 	UINT time_until_now;
 	int display_warning;
@@ -353,7 +426,7 @@ ResultType Hotkey::PerformID(HotkeyIDType aHotkeyID)
 			// and maybe other benefits (due to it not being "loaded")?
 			snprintf(error_text, sizeof(error_text), "More than %u hotkeys have been received in the last %ums."
 				"This could indicate a runaway condition (infinite loop) due to conflicting keys"
-				" within the config file (usually due to the Send command).  It might be possible to"
+				" within the script (usually due to the Send command).  It might be possible to"
 				" fix this problem simply by including the $ prefix in the hotkey definition"
 				" (e.g. $!d::), which would install the keyboard hook to handle this hotkey.\n\n"
 				" In addition, this warning can be reduced or eliminated by adding the following lines"
@@ -421,6 +494,8 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 	, mIsRegistered(false)
 	, mHookAction(aHookAction)
 	, mJumpToLabel(aJumpToLabel)
+	, mExistingThreads(0)
+	, mMaxThreads(g_MaxThreadsPerHotkey)  // The value of g_MaxThreadsPerHotkey can vary during load-time.
 	, mConstructedOK(false)
 
 // It's better to receive the hotkey_id as a param, since only the caller has better knowledge and
@@ -502,7 +577,8 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 	}
 
 	if (mType != HK_MOUSE_HOOK)  // Don't let a mouse key ever be affected by these checks.
-		if (g_ForceKeybdHook || mModifiersLR || mAllowExtraModifiers || !mDoSuppress || aHookAction)
+		if ((g_ForceKeybdHook || mModifiersLR || mAllowExtraModifiers || !mDoSuppress || aHookAction)
+			&& !g_os.IsWin9x())
 			mType = HK_KEYBD_HOOK;
 
 	// Currently, these take precedence over each other in the following order, so don't
@@ -584,7 +660,10 @@ char *Hotkey::TextToModifiers(char *aText)
 			mDoSuppress = false;
 			break;
 		case '$':
-			mType = HK_KEYBD_HOOK;
+			if (!g_os.IsWin9x())
+				mType = HK_KEYBD_HOOK;
+			// else ignore the flag and try to register normally, which in most cases seems better
+			// than disabling the hotkey.
 			break;
 		case '!':
 			if ((!key_right && !key_left))
@@ -739,8 +818,15 @@ scan code array).
 		mModifiers |= modifiers;  // Turn on any additional modifiers.  e.g. SHIFT to realize '#'.
 		mModifiersLR |= modifiersLR;
 		if (!is_mouse)
-			if (   !temp_vk || temp_vk == VK_NUMLOCK || temp_vk == VK_CAPITAL || temp_vk == VK_SCROLL
-				|| temp_vk == VK_LCONTROL || temp_vk == VK_RCONTROL
+		{
+			// For these, if it's Win9x, attempt to register them normally to give the user at least
+			// some partial functiality.  The key will probably be toggled to its opposite state when
+			// it's used as a hotkey, but the user may be able to concoct a script workaround for that:
+			if ((temp_vk == VK_NUMLOCK || temp_vk == VK_CAPITAL || temp_vk == VK_SCROLL) && !g_os.IsWin9x())
+				mType =  HK_KEYBD_HOOK;
+			// But these flag for the hook even if the OS is Win9x so that a warning will be
+			// displayed when it comes time to register them:
+			if (   !temp_vk || temp_vk == VK_LCONTROL || temp_vk == VK_RCONTROL
 				|| temp_vk == VK_LSHIFT || temp_vk == VK_RSHIFT
 				|| temp_vk == VK_LMENU || temp_vk == VK_RMENU   )
 				// Scan codes having no available virtual key must always be handled by the hook.
@@ -749,6 +835,7 @@ scan code array).
 				// also be done with the hook because even if RegisterHotkey() claims to succeed
 				// on them, I'm 99% sure I tried it and the hotkeys don't really work.
 				mType = HK_KEYBD_HOOK;
+		}
 		return mVK || mSC;
 	}
 }
@@ -764,7 +851,7 @@ ResultType Hotkey::Register()
 
 	// Indicate that the key modifies itself because RegisterHotkey() requires that +SHIFT,
 	// for example, be used to register the naked SHIFT key.  So what we do here saves the
-	// user from having to specify +SHIFT in the config file:
+	// user from having to specify +SHIFT in the script:
 	mod_type modifiers_prev = mModifiers;
 	switch (mVK)
 	{
@@ -784,7 +871,7 @@ ResultType Hotkey::Register()
 		char error_text[MAX_EXEC_STRING];
 		snprintf(error_text, sizeof(error_text), "RegisterHotKey() of hotkey \"%s\" (id=%d, virtual key=%d, modifiers=%d) failed,"
 			" perhaps because another application (or Windows itself) is already using it."
-			"  You could try adding the line \"%s, On\" prior to its line in the config file."
+			"  You could try adding the line \"%s, On\" prior to its line in the script."
 			, text, id, vk, modifiers, g_cmd[CMD_FORCE_KEYBD_HOOK]);
 		MsgBox(error_text);
 		return FAIL;
@@ -857,7 +944,7 @@ int Hotkey::FindHotkeyContainingModLR(modLR_type aModifiersLR) // , int hotkey_i
 // Returns the the HotkeyID if found, -1 otherwise.
 // Find the first hotkey whose modifiersLR contains *any* of the modifiers shows in the parameter value.
 // The caller tells us the ID of the hotkey to omit from the search because that one
-// would always be found (since something like "lcontrol=calc.exe" in the config file
+// would always be found (since something like "lcontrol=calc.exe" in the script
 // would really be defines as  "<^control=calc.exe".
 // Note: By intent, this function does not find hotkeys whose normal/neutral modifiers
 // contain <modifiersLR>.
@@ -880,8 +967,8 @@ char *Hotkey::ListHotkeys(char *aBuf, size_t aBufSize)
 	if (!aBuf || aBufSize < 256) return NULL;
 	char *aBuf_orig = aBuf;
 	// Save vertical space by limiting newlines here:
-	snprintf(aBuf, BUF_SPACE_REMAINING, "Type\tName\r\n"
-							 "----------------------------------\r\n");
+	snprintf(aBuf, BUF_SPACE_REMAINING, "Type\tRunning\tName\r\n"
+							 "---------------------------------------------------------------\r\n");
 	aBuf += strlen(aBuf);
 	// Start at the oldest and continue up through the newest:
 	for (int i = 0; i < sHotkeyCount; ++i)
@@ -897,9 +984,15 @@ char *Hotkey::ToText(char *aBuf, size_t aBufSize, bool aAppendNewline)
 {
 	if (!aBuf) return NULL;
 	char *aBuf_orig = aBuf;
-	snprintf(aBuf, BUF_SPACE_REMAINING, "%s%s\t%s"
+	char existing_threads_str[128];
+	if (mExistingThreads)
+		ITOA(mExistingThreads, existing_threads_str);
+	else
+		*existing_threads_str = '\0'; // Make it blank to avoid clutter in the hotkey display.
+	snprintf(aBuf, BUF_SPACE_REMAINING, "%s%s\t%s\t%s"
 		, (mType == HK_KEYBD_HOOK) ? "k-hook" : ((mType == HK_MOUSE_HOOK) ? "m-hook" : "reg")
 		, (mType == HK_NORMAL && !mIsRegistered) ? "(no)" : ""
+		, existing_threads_str
 		, mJumpToLabel->mName);
 	aBuf += strlen(aBuf);
 	if (aAppendNewline && BUF_SPACE_REMAINING >= 2)

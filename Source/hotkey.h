@@ -77,6 +77,7 @@ private:
 	bool mIsRegistered;  // Whether this hotkey has been successfully registered.
 	HookActionType mHookAction;
 	Label *mJumpToLabel;
+	UCHAR mExistingThreads, mMaxThreads;
 	bool mConstructedOK;
 
 	// Something in the compiler is currently preventing me from using HookType in place of UCHAR:
@@ -86,7 +87,23 @@ private:
 	ResultType TextInterpret();
 	char *TextToModifiers(char *aText);
 	int TextToKey(char *aText, bool aIsModifier);
-	ResultType Perform() {return mJumpToLabel->mJumpToLine->ExecUntil(UNTIL_RETURN, mModifiersConsolidated);}
+	ResultType Perform()
+	{
+		// For now, attempts to launch another simultaneous instance of this subroutine
+		// are ignored if MaxThreadsPerHotkey (for this particular hotkey) has been reached.
+		// In the future, it might be better to have this user-configurable, i.e. to devise
+		// some way for the hotkeys to be kept queued up so that they take effect only when
+		// the number of currently active threads drops below the max.  But doing such
+		// might make "infinite key loops" harder to catch because the rate of incoming hotkeys
+		// would be slowed down to prevent the subroutines from running concurrently:
+		if (mExistingThreads >= mMaxThreads && mJumpToLabel
+			&& !ACT_IS_ALWAYS_ALLOWED(mJumpToLabel->mJumpToLine->mActionType))
+			return OK;
+		++mExistingThreads;
+		ResultType result = mJumpToLabel->mJumpToLine->ExecUntil(UNTIL_RETURN, mModifiersConsolidated);
+		--mExistingThreads;
+		return result;
+	}
 	ResultType Register();
 	ResultType Unregister();
 	static ResultType AllDestruct();
@@ -120,6 +137,13 @@ public:
 	static Label *GetLabel(HotkeyIDType aHotkeyID)
 	{
 		return(aHotkeyID >= 0 && aHotkeyID < sHotkeyCount) ? shk[aHotkeyID]->mJumpToLabel : NULL;
+	}
+	static ActionTypeType GetTypeOfFirstLine(HotkeyIDType aHotkeyID)
+	{
+		Label *label = GetLabel(aHotkeyID);
+		if (!label)
+			return ACT_INVALID;
+		return label->mJumpToLine->mActionType;
 	}
 
 	static int FindHotkeyBySC(sc2_type aSC2, mod_type aModifiers, modLR_type aModifiersLR);

@@ -54,7 +54,7 @@ END
 // Menu
 //
 
-IDR_MENU1 MENU 
+IDR_MENU_TRAY MENU 
 BEGIN
     POPUP "Tray"
     BEGIN
@@ -68,6 +68,36 @@ BEGIN
         MENUITEM "&Suspend Hotkeys",            ID_TRAY_SUSPEND
         MENUITEM "&Pause Script",               ID_TRAY_PAUSE
         MENUITEM "E&xit",                       ID_TRAY_EXIT
+    END
+END
+
+IDR_MENU_MAIN MENU 
+BEGIN
+    POPUP "&File"
+    BEGIN
+        MENUITEM "&Reload Script\tCtrl+R",      ID_FILE_RELOADSCRIPT
+        MENUITEM "&Edit Script\tCtrl+E",        ID_FILE_EDITSCRIPT
+        MENUITEM "&Window Spy",                 ID_FILE_WINDOWSPY
+        MENUITEM SEPARATOR
+        MENUITEM "&Pause Script\tPause",        ID_FILE_PAUSE
+        MENUITEM "&Suspend Hotkeys",            ID_FILE_SUSPEND
+        MENUITEM SEPARATOR
+        MENUITEM "E&xit (Terminate Script)",    ID_FILE_EXIT
+    END
+    POPUP "&View"
+    BEGIN
+        MENUITEM "&Lines most recently executed\tCtrl+L", ID_VIEW_LINES
+        MENUITEM "&Variables and their contents\tCtrl+V", ID_VIEW_VARIABLES
+        MENUITEM "&Hotkeys and their methods\tCtrl+H", ID_VIEW_HOTKEYS
+        MENUITEM "&Key history and script info\tCtrl+K", ID_VIEW_KEYHISTORY
+        MENUITEM SEPARATOR
+        MENUITEM "&Refresh\tF5",                ID_VIEW_REFRESH
+    END
+    POPUP "&Help"
+    BEGIN
+        MENUITEM "&User Manual\tF1",            ID_HELP_USERMANUAL
+        MENUITEM "Web Site",                    ID_HELP_WEBSITE
+        MENUITEM "E-mail the Author",           ID_HELP_EMAIL
     END
 END
 
@@ -109,8 +139,8 @@ END
 //
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 0,2,24,0
- PRODUCTVERSION 0,2,24,0
+ FILEVERSION 0,2,25,0
+ PRODUCTVERSION 0,2,25,0
  FILEFLAGSMASK 0x17L
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -126,18 +156,37 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "FileDescription", "AutoHotkey"
-            VALUE "FileVersion", "0, 2, 24, 0"
+            VALUE "FileVersion", "0, 2, 25, 0"
             VALUE "InternalName", "AutoHotkey"
             VALUE "LegalCopyright", "Copyright (C) 2004"
             VALUE "OriginalFilename", "AutoHotkey.rc"
             VALUE "ProductName", " AutoHotkey"
-            VALUE "ProductVersion", "0, 2, 24, 0"
+            VALUE "ProductVersion", "0, 2, 25, 0"
         END
     END
     BLOCK "VarFileInfo"
     BEGIN
         VALUE "Translation", 0x409, 1200
     END
+END
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Accelerator
+//
+
+IDR_ACCELERATOR1 ACCELERATORS 
+BEGIN
+    VK_F1,          ID_HELP_USERMANUAL,     VIRTKEY, NOINVERT
+    "H",            ID_VIEW_HOTKEYS,        VIRTKEY, CONTROL, NOINVERT
+    "K",            ID_VIEW_KEYHISTORY,     VIRTKEY, CONTROL, NOINVERT
+    "L",            ID_VIEW_LINES,          VIRTKEY, CONTROL, NOINVERT
+    VK_F5,          ID_VIEW_REFRESH,        VIRTKEY, NOINVERT
+    "V",            ID_VIEW_VARIABLES,      VIRTKEY, CONTROL, NOINVERT
+    VK_PAUSE,       ID_FILE_PAUSE,          VIRTKEY, NOINVERT
+    "E",            ID_FILE_EDITSCRIPT,     VIRTKEY, CONTROL, NOINVERT
+    "R",            ID_FILE_RELOADSCRIPT,   VIRTKEY, CONTROL, NOINVERT
 END
 
 #endif    // English (U.S.) resources

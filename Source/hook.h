@@ -21,7 +21,7 @@ GNU General Public License for more details.
 #include "hotkey.h"
 
 // WM_USER is the lowest number that can be a user-defined message.  Anything above that is also valid.
-enum UserMessages {AHK_HOOK_HOTKEY = WM_USER, AHK_HOOK_TEST_MSG, AHK_DIALOG, AHK_NOTIFYICON, AHK_KEYLOG};
+enum UserMessages {AHK_HOOK_HOTKEY = WM_USER, AHK_HOOK_TEST_MSG, AHK_DIALOG, AHK_NOTIFYICON, AHK_KEYHISTORY};
 
 
 // Some reasoning behind the below data structures: Could build a new array for [sc][sc] and [vk][vk]
@@ -81,14 +81,23 @@ struct key_type
 
 //-------------------------------------------
 
-#define MAX_LOGGED_KEYS 50
-struct KeyLogItem
+#define MAX_HISTORY_KEYS 40
+struct KeyHistoryItem
 {
 	vk_type vk;
 	sc_type sc;
-	//LPARAM lParam;
-	bool key_up;
 	char event_type; // space=none, i=ignored, s=suppressed, h=hotkey, etc.
+	bool key_up;
+	float elapsed_time;  // Time since prior key or mouse button, in seconds.
+	// It seems better to store the foreground window's title rather than its HWND since keystrokes
+	// might result in a window closing (being destroyed), in which case the displayed key history
+	// would not be able to display the title at the time the history is displayed, which would
+	// be undesirable.
+	// To save mem, could point this into a shared buffer instead, but if that buffer were to run
+	// out of space (perhaps due to the target window changing frequently), window logging would
+	// no longer be possible without adding complexity to the logging function.  Seems best
+	// to keep it simple:
+	char target_window[100];
 };
 
 

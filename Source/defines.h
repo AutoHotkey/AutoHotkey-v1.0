@@ -34,7 +34,7 @@ GNU General Public License for more details.
 
 #define NAME_P "AutoHotkey"
 #define WINDOW_CLASS_NAME NAME_P
-#define NAME_VERSION "0.2.24"
+#define NAME_VERSION "0.2.25"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 #define EXT_AUTOIT2 ".aut"
@@ -45,17 +45,6 @@ GNU General Public License for more details.
 // 10 is the number base system:
 #define ITOA(value, buf) _itoa(value, buf, 10)
 #define ITOA64(value, buf) _i64toa(value, buf, 10)
-
-// This is not the best way to do this, but it does make MS compilers more
-// like MinGW and other Gnu-ish compilers.  Also, I'm not sure what (if
-// any) differences exist between _snprintf() and snprintf(), such as
-// their return values, so this might not be completely safe:
-#ifndef snprintf
-#define snprintf _snprintf
-#endif
-#ifndef vsnprintf
-#define vsnprintf _vsnprintf
-#endif
 
 // Items that may be needed for VC++ 6.X:
 #ifndef SPI_GETFOREGROUNDLOCKTIMEOUT
@@ -154,6 +143,7 @@ struct global_struct
 	int WinDelay;  // negative values may be used as special flags.
 	int ControlDelay;  // negative values may be used as special flags.
 	int KeyDelay;  // negative values may be used as special flags.
+	int MouseDelay;  // negative values may be used as special flags.
 	UCHAR DefaultMouseSpeed;
 	bool StoreCapslockMode;
 	bool AutoTrim;
@@ -198,6 +188,7 @@ inline void global_init(global_struct *gp)
 	gp->WinDelay = 100;  // AutoIt3's default is 250, which seems a little too high nowadays.
 	gp->ControlDelay = 20;
 	gp->KeyDelay = 10;   // AutoIt3's default.
+	gp->MouseDelay = 10;
 	// AutoIt3's default:
 	#define DEFAULT_MOUSE_SPEED 2
 	#define MAX_MOUSE_SPEED 100

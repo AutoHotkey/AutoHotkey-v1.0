@@ -41,6 +41,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	#ifdef _DEBUG
 	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Find.aut";
 	char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
+	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test.ahk";
 	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
 	#else
 	char *script_filespec = NAME_P ".ini";  // Use this extension for better file associate with editor(s).
@@ -117,10 +118,24 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	init_vk_to_sc();
 	init_sc_to_vk();
 
-	int load_result = g_script.LoadFromFile();
-	if (load_result < 0) // Error during load (was already displayed by the function call).
+	// Allocate from SimpleHeap() to reduce avg. memory load (i.e. since most scripts are small).
+	// Do this before LoadFromFile() so that it will be the first thing allocated from the first
+	// block, reducing the chance that a new block will have to be allocated just to handle this
+	// larger-than-average request:
+	if (g_KeyHistory = (KeyHistoryItem *)SimpleHeap::Malloc(MAX_HISTORY_KEYS * sizeof(KeyHistoryItem)))
+		ZeroMemory(g_KeyHistory, MAX_HISTORY_KEYS * sizeof(KeyHistoryItem)); // Must be zeroed.
+	else
+	{
+		// Realistically, this should never happen.  But it simplifies the code in many other
+		// places if we make sure the KeyHistory array isn't NULL right away:
+		MsgBox("Could not allocate mem for key history." PLEASE_REPORT);
+		return CRITICAL_ERROR;
+	}
+
+	LineNumberType load_result = g_script.LoadFromFile();
+	if (load_result == LOADING_FAILED) // Error during load (was already displayed by the function call).
 		return CRITICAL_ERROR;  // Should return this value because PostQuitMessage() also uses it.
-	if (!load_result) // No lines were loaded, so we're done.
+	if (!load_result) // LoadFromFile() relies upon us to do this check.  No lines were loaded, so we're done.
 		return 0;
 
 	HWND w_existing = NULL;
