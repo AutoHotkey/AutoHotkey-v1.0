@@ -44,7 +44,7 @@ WORD g_mouse_buttons_logical = 0;
 #endif
 
 // Used by the hook to track physical state of all virtual keys, since GetAsyncKeyState() does
-// not work as advertised, at least under WinXP.  Note that this array is also used by ToAscii(),
+// not work as advertised, at least under WinXP.  Note that this array is also used by	),
 // so it's format should be the same as that returned from GetKeyboardState():
 BYTE g_PhysicalKeyState[VK_ARRAY_COUNT] = {0};
 
@@ -94,6 +94,7 @@ int g_nInputBoxes = 0;
 int g_nFileDialogs = 0;
 int g_nFolderDialogs = 0;
 InputBoxType g_InputBox[MAX_INPUTBOXES];
+ProgressType g_Progress[MAX_PROGRESS_WINDOWS] = {{0}};
 
 // Init not needed for these:
 bool g_SortCaseSensitive;
@@ -235,8 +236,10 @@ Action g_act[] =
 	, {"InputBox", 1, 11, {5, 6, 7, 8, 10, 0}} // Output var, title, prompt, hide-text (e.g. passwords), width, height, X, Y, Font (e.g. courier:8 maybe), Timeout, Default
 	, {"SplashTextOn", 0, 4, {1, 2, 0}} // Width, height, title, text
 	, {"SplashTextOff", 0, 0, NULL}
+	, {"Progress", 0, 5, NULL}  // Off|Percent|Options, SubText, MainText, Title, FutureUse
 	, {"ToolTip", 0, 3, {2, 3, 0}}  // Text, X, Y.  If all 3 are omitted, the Tooltip is turned off.
 	, {"TrayTip", 0, 4, {3, 4, 0}}  // Title, Text, Timeout, Options
+
 	, {"Input", 0, 4, NULL}  // OutputVar, Options, EndKeys, MatchList.
 
 	, {"Transform", 3, 4, NULL}  // output var, operation, value1, value2
@@ -283,7 +286,7 @@ Action g_act[] =
 	, {"MouseMove", 2, 4, {1, 2, 3, 0}} // x, y, speed, option
 	, {"MouseClick", 1, 7, {2, 3, 4, 5, 0}} // which-button, x, y, ClickCount, speed, d=hold-down/u=release, Relative
 	, {"MouseClickDrag", 1, 7, {2, 3, 4, 5, 6, 0}} // which-button, x1, y1, x2, y2, speed, Relative
-	, {"MouseGetPos", 0, 3, NULL} // 3 optional output vars: xpos, ypos, WindowID. MinParams must be 0.
+	, {"MouseGetPos", 0, 4, NULL} // 4 optional output vars: xpos, ypos, WindowID, ControlName. MinParams must be 0.
 
 	, {"StatusBarGetText", 1, 6, {2, 0}} // Output-var, part# (numeric), std. 4 window params
 	, {"StatusBarWait", 0, 8, {2, 3, 6, 0}} // Wait-text(blank ok),seconds,part#,title,text,interval,exclude-title,exclude-text
@@ -373,7 +376,7 @@ Action g_act[] =
 	, {"FileGetVersion", 1, 2, NULL} // OutputVar, Filespec
 
 	, {"SetWorkingDir", 1, 1, NULL} // New path
-	, {"FileSelectFile", 1, 5, {2, 0}} // output var, flag, working dir, greeting, filter
+	, {"FileSelectFile", 1, 5, NULL} // output var, options, working dir, greeting, filter
 	, {"FileSelectFolder", 1, 4, NULL} // output var, root directory, allow create folder (0=no, 1=yes), greeting
 
 	, {"FileCreateShortcut", 2, 7, NULL} // file, lnk [, workdir, args, desc, icon, hotkey]

@@ -55,8 +55,7 @@ Script::Script()
 	, mCurrFileNumber(0), mCurrLineNumber(0), mNoHotkeyLabels(true), mMenuUseErrorLevel(false)
 	, mFileSpec(""), mFileDir(""), mFileName(""), mOurEXE(""), mOurEXEDir(""), mMainWindowTitle("")
 	, mIsReadyToExecute(false), AutoExecSectionIsRunning(false)
-	, mIsRestart(false)
-	, mIsAutoIt2(false)
+	, mIsRestart(false), mIsAutoIt2(false), mErrorStdOut(false)
 	, mLinesExecutedThisCycle(0), mUninterruptedLineCount(0)
 	, mRunAsUser(NULL), mRunAsPass(NULL), mRunAsDomain(NULL)
 	, mCustomIcon(NULL) // Normally NULL unless there's a custom tray icon loaded dynamically.
@@ -127,6 +126,11 @@ Script::~Script()
 		m = m->mNextMenu;
 		ScriptDeleteMenu(menu_to_delete);
 	}
+	// Destroy any progress windows that haven't already been destroyed.  This is necessary
+	// because sometimes these windows aren't owned by the main window:
+	for (int i = 0; i < MAX_PROGRESS_WINDOWS; ++i)
+		if (IsWindow(g_Progress[i].hwnd))
+			DestroyWindow(g_Progress[i].hwnd);
 	// Close any open sound item to prevent hang-on-exit in certain operating systems or conditions.
 	// If there's any chance that a sound was played and not closed out, or that it is still playing,
 	// this check is done.  Otherwise, the check is avoided since it might be a high overhead call,
@@ -279,7 +283,7 @@ ResultType Script::CreateWindows()
 	wc.hIcon = hIcon;
 	wc.hIconSm = hIcon;
 	wc.hCursor = LoadCursor((HINSTANCE) NULL, IDC_ARROW);
-	wc.hbrBackground = (HBRUSH)GetStockObject(WHITE_BRUSH); // Aut3: GetSysColorBrush(COLOR_BTNFACE)
+	wc.hbrBackground = GetSysColorBrush(COLOR_BTNFACE);  // Needed for ProgressBar. Old: (HBRUSH)GetStockObject(WHITE_BRUSH);
 	wc.lpszMenuName = MAKEINTRESOURCE(IDR_MENU_MAIN); // NULL; // "MainMenu";
 	if (!RegisterClassEx(&wc))
 	{
@@ -492,7 +496,7 @@ ResultType Script::Edit()
 	// Script" menu item is not available for compiled scripts, it can't be called from there.
 	TitleMatchModes old_mode = g.TitleMatchMode;
 	g.TitleMatchMode = FIND_ANYWHERE;
-	HWND hwnd = WinExist(mFileName, "", mMainWindowTitle); // Exclude our own main.
+	HWND hwnd = WinExist(mFileName, "", mMainWindowTitle); // Exclude our own main window.
 	g.TitleMatchMode = old_mode;
 	if (hwnd)
 	{
@@ -543,9 +547,9 @@ ResultType Script::Reload(bool aDisplayErrors)
 
 
 ResultType Script::ExitApp(ExitReasons aExitReason, char *aBuf, int aExitCode)
-// Normal exit (if aBuf is NULL), or a way to exit immediately on error.  This is mostly
+// Normal exit (if aBuf is NULL), or a way to exit immediately on error (which is mostly
 // for times when it would be unsafe to call MsgBox() due to the possibility that it would
-// make the situation even worse.
+// make the situation even worse).
 {
 	mExitReason = aExitReason;
 	bool terminate_afterward = aBuf && !*aBuf;
@@ -1216,6 +1220,11 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 	if (IS_DIRECTIVE_MATCH("#Persistent"))
 	{
 		g_persistent = true;
+		return CONDITION_TRUE;
+	}
+	if (IS_DIRECTIVE_MATCH("#ErrorStdOut"))
+	{
+		mErrorStdOut = true;
 		return CONDITION_TRUE;
 	}
 	if (IS_DIRECTIVE_MATCH("#SingleInstance"))
@@ -2788,10 +2797,13 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_FILESELECTFILE:
 		if (*LINE_RAW_ARG2 && !line->ArgHasDeref(2))
 		{
-			value = ATOI(LINE_RAW_ARG2);
+			if (toupper(*LINE_RAW_ARG2 == 'S'))
+                value = ATOI(LINE_RAW_ARG2 + 1);
+			else
+                value = ATOI(LINE_RAW_ARG2);
 			if (value < 0 || value > 31)
 				return ScriptError("Paremeter #2 must be either blank, a variable reference,"
-					" or a number between 0 and 31 inclusive.", LINE_RAW_ARG2);
+					" or contain a number between 0 and 31 inclusive.", LINE_RAW_ARG2);
 		}
 		break;
 
@@ -4964,27 +4976,66 @@ inline ResultType Line::EvaluateCondition()
 			if_condition = true;
 			for (cp = ARG1; *cp; ++cp)
 				if (!isdigit((UCHAR)*cp))
+				{
 					if_condition = false;
+					break;
+				}
 			break;
-		case VAR_TYPE_ALPHA:
-			// Like AutoIt3, the empty string is considered to be alphabetic, which is only slightly debatable.
+		case VAR_TYPE_XDIGIT:
 			if_condition = true;
 			for (cp = ARG1; *cp; ++cp)
-				if (!IsCharAlpha(*cp)) // Use this to better support chars from non-English languages.
+				if (!isxdigit((UCHAR)*cp))
+				{
 					if_condition = false;
+					break;
+				}
 			break;
 		case VAR_TYPE_ALNUM:
 			// Like AutoIt3, the empty string is considered to be alphabetic, which is only slightly debatable.
 			if_condition = true;
 			for (cp = ARG1; *cp; ++cp)
 				if (!IsCharAlphaNumeric(*cp)) // Use this to better support chars from non-English languages.
+				{
 					if_condition = false;
+					break;
+				}
+			break;
+		case VAR_TYPE_ALPHA:
+			// Like AutoIt3, the empty string is considered to be alphabetic, which is only slightly debatable.
+			if_condition = true;
+			for (cp = ARG1; *cp; ++cp)
+				if (!IsCharAlpha(*cp)) // Use this to better support chars from non-English languages.
+				{
+					if_condition = false;
+					break;
+				}
+			break;
+		case VAR_TYPE_UPPER:
+			if_condition = true;
+			for (cp = ARG1; *cp; ++cp)
+				if (!IsCharUpper(*cp)) // Use this to better support chars from non-English languages.
+				{
+					if_condition = false;
+					break;
+				}
+			break;
+		case VAR_TYPE_LOWER:
+			if_condition = true;
+			for (cp = ARG1; *cp; ++cp)
+				if (!IsCharLower(*cp)) // Use this to better support chars from non-English languages.
+				{
+					if_condition = false;
+					break;
+				}
 			break;
 		case VAR_TYPE_SPACE:
 			if_condition = true;
 			for (cp = ARG1; *cp; ++cp)
 				if (!isspace(*cp))
+				{
 					if_condition = false;
+					break;
+				}
 			break;
 		}
 		if (mActionType == ACT_IFISNOT)
@@ -6767,7 +6818,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		// an independent window.  Update: Must make it owned by the parent window
 		// otherwise it will get its own task-bar icon, which is usually undesirable.
 		// In addition, making it an owned window should automatically cause it to be
-		// destroyed when it's parent window is.
+		// destroyed when it's parent window is destroyed:
 		g_hWndSplash = CreateWindowEx(WS_EX_TOPMOST, WINDOW_CLASS_SPLASH, ARG3  // ARG3 is the window title
 			, WS_DISABLED|WS_POPUP|WS_CAPTION, xpos, ypos, W, H
 			, g_hWnd, (HMENU)NULL, g_hInstance, NULL);
@@ -6812,6 +6863,9 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	case ACT_SPLASHTEXTOFF:
 		DESTROY_SPLASH
 		return OK;
+
+	case ACT_PROGRESS:
+		return Progress(FOUR_ARGS);  // The 5th arg is for future use and currently not passed.
 
 	case ACT_TOOLTIP:
 		return ToolTip(THREE_ARGS);
@@ -7804,30 +7858,48 @@ ResultType Line::LineError(char *aErrorText, ResultType aErrorType, char *aExtra
 	if (!aExtraInfo)
 		aExtraInfo = "";
 
-	char source_file[MAX_PATH * 2];
-	if (mFileNumber)
-		snprintf(source_file, sizeof(source_file), " in #include file \"%s\"", sSourceFile[mFileNumber]);
+	if (g_script.mErrorStdOut && !g_script.mIsReadyToExecute) // i.e. runtime errors are always displayed via dialog.
+	{
+		// JdeB said:
+		// Just tested it in Textpad, Crimson and Scite. they all recognise the output and jump
+		// to the Line containing the error when you double click the error line in the output
+		// window (like it works in C++).  Had to change the format of the line to: 
+		// printf("%s (%d) : ==> %s: \n%s \n%s\n",szInclude, nAutScriptLine, szText, szScriptLine, szOutput2 );
+		// MY: Full filename is required, even if it's the main file, because some editors (EditPlus)
+		// seem to rely on that to determine which file and line number to jump to when the user double-clicks
+		// the error message in the output window:
+		printf("%s (%d): ==> %s\n", sSourceFile[mFileNumber], mLineNumber, aErrorText);
+		if (*aExtraInfo)
+			printf("     Specifically: %s\n", aExtraInfo);
+	}
 	else
-		*source_file = '\0'; // Don't bother cluttering the display if it's the main script file.
+	{
+		char source_file[MAX_PATH * 2];
+		if (mFileNumber)
+			snprintf(source_file, sizeof(source_file), " in #include file \"%s\"", sSourceFile[mFileNumber]);
+		else
+			*source_file = '\0'; // Don't bother cluttering the display if it's the main script file.
 
-	char buf[MSGBOX_TEXT_SIZE];
-	snprintf(buf, sizeof(buf), "%s%s: %-1.500s\n\n"  // Keep it to a sane size in case it's huge.
-		, aErrorType == WARN ? "Warning" : (aErrorType == CRITICAL_ERROR ? "Critical Error" : "Error")
-		, source_file, aErrorText);
-	if (*aExtraInfo)
-		// Use format specifier to make sure really huge strings that get passed our
-		// way, such as a var containing clipboard text, are kept to a reasonable size:
-		snprintfcat(buf, sizeof(buf), "Info: %-1.100s%s\n\n"
-		, aExtraInfo, strlen(aExtraInfo) > 100 ? "..." : "");
-	char *buf_marker = buf + strlen(buf);
-	buf_marker = VicinityToText(buf_marker, sizeof(buf) - (buf_marker - buf));
-	if (aErrorType == CRITICAL_ERROR || (aErrorType == FAIL && !g_script.mIsReadyToExecute))
-		strlcpy(buf_marker, g_script.mIsRestart ? ("\n" OLD_STILL_IN_EFFECT) : ("\n" WILL_EXIT)
-			, sizeof(buf) - (buf_marker - buf));
-	//buf_marker += strlen(buf_marker);
-	g_script.mCurrLine = this;  // This needs to be set in some cases where the caller didn't.
-	//g_script.ShowInEditor();
-	MsgBox(buf);
+		char buf[MSGBOX_TEXT_SIZE];
+		snprintf(buf, sizeof(buf), "%s%s: %-1.500s\n\n"  // Keep it to a sane size in case it's huge.
+			, aErrorType == WARN ? "Warning" : (aErrorType == CRITICAL_ERROR ? "Critical Error" : "Error")
+			, source_file, aErrorText);
+		if (*aExtraInfo)
+			// Use format specifier to make sure really huge strings that get passed our
+			// way, such as a var containing clipboard text, are kept to a reasonable size:
+			snprintfcat(buf, sizeof(buf), "Specifically: %-1.100s%s\n\n"
+			, aExtraInfo, strlen(aExtraInfo) > 100 ? "..." : "");
+		char *buf_marker = buf + strlen(buf);
+		buf_marker = VicinityToText(buf_marker, sizeof(buf) - (buf_marker - buf));
+		if (aErrorType == CRITICAL_ERROR || (aErrorType == FAIL && !g_script.mIsReadyToExecute))
+			strlcpy(buf_marker, g_script.mIsRestart ? ("\n" OLD_STILL_IN_EFFECT) : ("\n" WILL_EXIT)
+				, sizeof(buf) - (buf_marker - buf));
+		//buf_marker += strlen(buf_marker);
+		g_script.mCurrLine = this;  // This needs to be set in some cases where the caller didn't.
+		//g_script.ShowInEditor();
+		MsgBox(buf);
+	}
+
 	if (aErrorType == CRITICAL_ERROR && g_script.mIsReadyToExecute)
 		// Also ask the main message loop function to quit and announce to the system that
 		// we expect it to quit.  In most cases, this is unnecessary because all functions
@@ -7835,8 +7907,13 @@ ResultType Line::LineError(char *aErrorText, ResultType aErrorType, char *aExtra
 		// return immediately, all the way back to main.  However, there may cases
 		// when this isn't true:
 		// Note: Must do this only after MsgBox, since it appears that new dialogs can't
-		// be created once it's done:
-		PostQuitMessage(CRITICAL_ERROR);
+		// be created once it's done.  Update: Using ExitApp() now, since it's known to be
+		// more reliable:
+		//PostQuitMessage(CRITICAL_ERROR);
+		// This will attempt to run the OnExit subroutine, which should be okay since that subroutine
+		// will terminate the script if it encounters another runtime error:
+		g_script.ExitApp(EXIT_ERROR);
+
 	return aErrorType; // The caller told us whether it should be a critical error or not.
 }
 
@@ -7863,25 +7940,35 @@ ResultType Script::ScriptError(char *aErrorText, char *aExtraInfo) //, ResultTyp
 	if (!aExtraInfo) // In case the caller explicitly called it with NULL.
 		aExtraInfo = "";
 
-	char source_file[MAX_PATH * 2];
-	if (mCurrFileNumber)
-		snprintf(source_file, sizeof(source_file), " in #include file \"%s\"", Line::sSourceFile[mCurrFileNumber]);
+	if (g_script.mErrorStdOut && !g_script.mIsReadyToExecute) // i.e. runtime errors are always displayed via dialog.
+	{
+		// See LineError() for details.
+		printf("%s (%d): ==> %s\n", Line::sSourceFile[mCurrFileNumber], mCurrLineNumber, aErrorText);
+		if (*aExtraInfo)
+			printf("     Specifically: %s\n", aExtraInfo);
+	}
 	else
-		*source_file = '\0'; // Don't bother cluttering the display if it's the main script file.
+	{
+		char source_file[MAX_PATH * 2];
+		if (mCurrFileNumber)
+			snprintf(source_file, sizeof(source_file), " in #include file \"%s\"", Line::sSourceFile[mCurrFileNumber]);
+		else
+			*source_file = '\0'; // Don't bother cluttering the display if it's the main script file.
 
-	char buf[MSGBOX_TEXT_SIZE];
-	snprintf(buf, sizeof(buf), "Error at line %u%s%s." // Don't call it "critical" because it's usually a syntax error.
-		"\n\nLine Text: %-1.100s%s"
-		"\nError: %-1.500s"
-		"\n\n%s"
-		, mCurrLineNumber, source_file, mCurrLineNumber ? "" : " (unknown)"
-		, aExtraInfo // aExtraInfo defaults to "" so this is safe.
-		, strlen(aExtraInfo) > 100 ? "..." : ""
-		, aErrorText
-		, mIsRestart ? OLD_STILL_IN_EFFECT : WILL_EXIT
-		);
-	//ShowInEditor();
-	MsgBox(buf);
+		char buf[MSGBOX_TEXT_SIZE];
+		snprintf(buf, sizeof(buf), "Error at line %u%s%s." // Don't call it "critical" because it's usually a syntax error.
+			"\n\nLine Text: %-1.100s%s"
+			"\nError: %-1.500s"
+			"\n\n%s"
+			, mCurrLineNumber, source_file, mCurrLineNumber ? "" : " (unknown)"
+			, aExtraInfo // aExtraInfo defaults to "" so this is safe.
+			, strlen(aExtraInfo) > 100 ? "..." : ""
+			, aErrorText
+			, mIsRestart ? OLD_STILL_IN_EFFECT : WILL_EXIT
+			);
+		//ShowInEditor();
+		MsgBox(buf);
+	}
 	return FAIL; // See above for why it's better to return FAIL than CRITICAL_ERROR.
 }
 

@@ -778,13 +778,29 @@ inline bool CollectInput(LPARAM lParam, sc_type sc, bool key_up)
 		// otherwise the modifier key would get "stuck down":
 		return kvk[(vk_type)pEvent->vkCode].as_modifiersLR ? true : g_input.Visible;
 
-	if (g_input.EndVK[(vk_type)pEvent->vkCode] || g_input.EndSC[sc])
+	UCHAR end_key_attributes = g_input.EndVK[(vk_type)pEvent->vkCode];
+	if (!end_key_attributes)
+		end_key_attributes = g_input.EndSC[sc];
+	if (end_key_attributes) // A terminating keystroke has occurred unless the shift state isn't right.
 	{
-		g_input.status = INPUT_TERMINATED_BY_ENDKEY;
-		g_input.EndedBySC = g_input.EndSC[sc];
-		g_input.EndingVK = (vk_type)pEvent->vkCode;
-		g_input.EndingSC = sc;
-		return g_input.Visible;
+		// Caller has ensured that only one of the flags below is set (if any):
+		bool shift_must_be_down = end_key_attributes & END_KEY_WITH_SHIFT;
+		bool shift_must_not_be_down = end_key_attributes & END_KEY_WITHOUT_SHIFT;
+		bool shift_state_matters = shift_must_be_down && !shift_must_not_be_down
+			|| !shift_must_be_down && shift_must_not_be_down; // i.e. exactly one of them.
+		if (    !shift_state_matters
+			|| (shift_must_be_down && (g_modifiersLR_logical & (MOD_LSHIFT | MOD_RSHIFT)))
+			|| (shift_must_not_be_down && !(g_modifiersLR_logical & (MOD_LSHIFT | MOD_RSHIFT)))   )
+		{
+			// The shift state is correct to produce the desired end-key.
+			g_input.status = INPUT_TERMINATED_BY_ENDKEY;
+			g_input.EndedBySC = g_input.EndSC[sc];
+			g_input.EndingVK = (vk_type)pEvent->vkCode;
+			g_input.EndingSC = sc;
+			// Don't change this line:
+			g_input.EndingRequiredShift = shift_must_be_down && (g_modifiersLR_logical & (MOD_LSHIFT | MOD_RSHIFT));
+			return g_input.Visible;
+		}
 	}
 
 	if (g_input.BackspaceIsUndo && pEvent->vkCode == VK_BACK) // Backspace is being used as an Undo key.

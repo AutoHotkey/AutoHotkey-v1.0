@@ -101,6 +101,14 @@ struct class_and_hwnd_type
 	HWND hwnd;
 };
 
+struct point_and_hwnd_type
+{
+	POINT pt;
+	RECT rect_found;
+	HWND hwnd_found;
+	double distance;
+};
+
 
 HWND WinActivate(char *aTitle, char *aText = "", char *aExcludeTitle = "", char *aExcludeText = ""
 	, bool aFindLastMatch = false

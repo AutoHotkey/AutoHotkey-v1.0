@@ -37,6 +37,218 @@ GNU General Public License for more details.
 		target_window = g_ValidLastUsedWindow;
 
 
+ResultType Line::Progress(char *aOptions, char *aSubText, char *aMainText, char *aTitle)
+// Parts of this have been adapted from the AutoIt3 source.
+{
+	int window_index = 0;  // Set the default progress window to operate upon (the first).
+	char *options = strchr(aOptions, ':');
+	if (options)
+	{
+		window_index = ATOI(aOptions) - 1;
+		if (window_index < 0 || window_index >= MAX_PROGRESS_WINDOWS)
+			return LineError("The window number must be between 1 and " MAX_PROGRESS_WINDOWS_STR "." ERR_ABORT
+				, FAIL, aOptions);
+		++options;
+	}
+	else
+		options = aOptions;
+
+	bool turn_off = !stricmp(options, "Off");
+	// Allow floats at runtime for flexibility (i.e. in case aOptions was in a variable reference).
+	// But still use ATOI for the conversion:
+	int percent = (!turn_off && IsPureNumeric(options, false, false, true)) ? ATOI(options) : -1;
+	bool mode_is_modify = (percent >= 0 || !*options);
+
+	ProgressType &prog = g_Progress[window_index];
+
+	// In case it's possible for the window to get destroyed by other means (WinClose?).
+	// Do this only after the above options were set so that the each progress window's settings
+	// will be remembered until such time as "Progress, Off" is used:
+	if (prog.hwnd && !IsWindow(prog.hwnd))
+		prog.hwnd = NULL;
+
+	if (turn_off)
+	{
+		if (prog.hwnd)
+		{
+			DestroyWindow(prog.hwnd);
+			prog.hwnd = NULL;
+		}
+		return OK;
+	}
+
+	if (mode_is_modify) // The "modify existing window" mode is in effect.
+	{
+		// If there is an existing window, just update its percentage (progress position) and text.
+		// If not, do nothing since we don't have the original text of the window to recreate it.
+		if (prog.hwnd)
+		{
+			// Since this is our thread's window, it shouldn't be necessary to use SendMessageTimeout()
+			// since the window cannot be hung if our thread is active:
+			if (percent >= 0 && prog.percent != percent)
+			{
+				prog.percent = percent;
+				SendMessage(prog.hwnd_bar, PBM_SETPOS, (WPARAM)percent, 0);
+			}
+			// SendMessage() vs. SetWindowText() is used for controls so that tabs are expanded.
+			if (*aMainText) // i.e. setting it from non-blank to blank is not supported.
+				SendMessage(prog.hwnd_text1, WM_SETTEXT, 0, (LPARAM)(aMainText));
+			if (*aSubText)
+				SendMessage(prog.hwnd_text2, WM_SETTEXT, 0, (LPARAM)(aSubText));
+			if (*aTitle)
+				SetWindowText(prog.hwnd, aTitle); // Use the simple method for parent window titles.
+		}
+		return OK;
+	}
+
+	// Otherwise, the window doesn't exist yet or it is to be recreated.
+
+	if (!*aTitle) // Provide default title.
+		aTitle = (g_script.mFileName && *g_script.mFileName) ? g_script.mFileName : "";
+
+	// Since there is often just one progress window, and it defaults to always-on-top, it seems
+	// best to default owned to be true so that it doesn't get its own task bar button:
+	prog.owned = true;
+	prog.centered_main = true;
+	prog.centered_sub = true;
+	prog.style = WS_DISABLED|WS_POPUP|WS_CAPTION;
+	prog.xstyle = WS_EX_TOPMOST;
+	prog.xpos = COORD_UNSPECIFIED;
+	prog.ypos = COORD_UNSPECIFIED;
+	prog.height = 100; // au3's default
+	prog.width = 300; // au3's default
+
+	for (char *cp = options; *cp; ++cp)
+	{
+		switch(toupper(*cp))
+		{
+		case 'A':  // Always-on-top
+			if (*(cp + 1) == '0') // The zero is required to allow for future enhancement of this param.
+				prog.xstyle &= ~WS_EX_TOPMOST;
+			break;
+		case 'B': // Borderless
+			prog.style &= ~WS_CAPTION;
+			break;
+		case 'C': // Centered
+			if (*(cp + 1)) // It is documented that at least one digit is mandatory, this just prevents overflow.
+			{
+				prog.centered_sub = (*(cp + 1) != '0');
+				prog.centered_main = (*(cp + 2) != '0');
+			}
+			break;
+		case 'M': // Movable and (optionally) resizable.
+			prog.style &= ~WS_DISABLED;
+			if (*(cp + 1) == '1')
+				prog.style |= WS_SIZEBOX;
+			if (*(cp + 1) == '2')
+				prog.style |= WS_SIZEBOX|WS_MINIMIZEBOX|WS_MAXIMIZEBOX|WS_SYSMENU;
+			break;
+		case 'T': // Give it a task bar button by making it a non-owned window.
+			prog.owned = false;
+			break;
+		// For options such as W, X and Y:
+		// Use atoi() vs. ATOI() to avoid interpreting something like 0x01B as hex when in fact
+		// the B was meant to be an option letter:
+		case 'W':
+			prog.width = atoi(cp + 1);
+			break;
+		case 'H':
+			// Allow any width/height to be specified so that the window can be "rolled up" to its title bar:
+			prog.height = atoi(cp + 1);
+			break;
+		case 'X':
+			prog.xpos = atoi(cp + 1);
+			break;
+		case 'Y':
+			prog.ypos = atoi(cp + 1);
+			break;
+		// Otherwise: Ignore other characters, such as the digits that occur after the P/X/Y option letters.
+		}
+	}
+
+	// Destroy any existing window first:
+	if (prog.hwnd)
+	{
+		DestroyWindow(prog.hwnd);
+		prog.hwnd = NULL;
+	}
+
+	// Set up and display window:
+	RECT rect;
+	SystemParametersInfo(SPI_GETWORKAREA, 0, &rect, 0);	// Get Desktop rect
+	if (prog.xpos == COORD_UNSPECIFIED)
+		prog.xpos = (rect.right - prog.width) / 2;  // Center Horizontally
+	if (prog.ypos == COORD_UNSPECIFIED)
+		prog.ypos = (rect.bottom - prog.height) / 2; // Center Vertically
+
+	SetRect(&rect, 0, 0, prog.width, prog.height);
+	AdjustWindowRectEx(&rect, prog.style, FALSE, prog.xstyle);
+
+	// CREATE Main Progress Window
+	// It seems best to make this an unowned window for two reasons:
+	// 1) It will get its own task bar icon then, which is usually desirable for cases
+	//    where there are several progress windows or the progress bar is monitoring something.
+	// 2) The progress window won't prevent the main window from being used (owned windows
+	//    prevent their owners from ever becoming active).
+	// However, it seems likely that some users would want the above to be configurable,
+	// so now there is an option to change this behavior.
+	if (!(prog.hwnd = CreateWindowEx(prog.xstyle, WINDOW_CLASS_SPLASH, aTitle, prog.style, prog.xpos, prog.ypos
+		, rect.right - rect.left, rect.bottom - rect.top, prog.owned ? g_hWnd : NULL, NULL, g_hInstance, NULL)))
+		return FAIL;  // No error msg since so rare.
+
+	if ((prog.style & WS_SYSMENU) || !prog.owned)
+	{
+		// Setting the small icon puts it in the upper left corner of the dialog window.
+		// Setting the big icon makes the dialog show up correctly in the Alt-Tab menu (but big seems to
+		// have no effect unless the window is unowned, i.e. it has a button on the task bar.
+		LPARAM main_icon = (LPARAM)(g_script.mCustomIcon ? g_script.mCustomIcon
+			: LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_MAIN)));
+		if (prog.style & WS_SYSMENU)
+			SendMessage(prog.hwnd, WM_SETICON, ICON_SMALL, main_icon);
+		if (!prog.owned)
+			SendMessage(prog.hwnd, WM_SETICON, ICON_BIG, main_icon);
+	}
+
+	GetClientRect(prog.hwnd, &rect);  // to determine the available width so that control's can be centered.
+
+	// CREATE Main label
+	prog.hwnd_text1 = CreateWindowEx(0, "static", aMainText, WS_CHILD|WS_VISIBLE|(prog.centered_main ? SS_CENTER : SS_LEFT)
+		, PROGRESS_TEXT_MARGIN, 4, rect.right - rect.left - (PROGRESS_TEXT_MARGIN * 2), 24
+		, prog.hwnd, NULL, g_hInstance, NULL);
+
+	HDC h_dc = CreateDC("DISPLAY", NULL, NULL, NULL);
+	SelectObject(h_dc, (HFONT)GetStockObject(DEFAULT_GUI_FONT)); // Get Default Font Name
+	char szFont[65];
+	GetTextFace(h_dc, sizeof(szFont) -1, szFont);
+	int CyPixels = GetDeviceCaps(h_dc, LOGPIXELSY);			    // For Some Font Size Math
+	DeleteDC(h_dc);
+
+	HFONT hfFont = CreateFont(0-(10*CyPixels)/72, 0, 0, 0, 600, 0, 0, 0, DEFAULT_CHARSET   // Create a bigger
+		, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, PROOF_QUALITY, FF_DONTCARE, szFont);         // bolder default
+	SendMessage(prog.hwnd_text1, WM_SETFONT, (WPARAM)hfFont, MAKELPARAM(TRUE, 0));         // GUI font.
+
+	// CREATE Progress control (always starts off at its default position of zero)
+	prog.hwnd_bar = CreateWindowEx(WS_EX_CLIENTEDGE, "msctls_progress32", NULL, WS_CHILD|WS_VISIBLE|PBS_SMOOTH
+		, PROGRESS_BAR_MARGIN, 30, rect.right - rect.left - (PROGRESS_BAR_MARGIN * 2), PROGRESS_BAR_HEIGHT
+		, prog.hwnd, NULL, NULL, NULL);
+	SendMessage(prog.hwnd_bar, PBM_SETRANGE, 0, MAKELONG(0, 100));
+	SendMessage(prog.hwnd_bar, PBM_SETSTEP, 1, 0); // set some characteristics
+
+	// CREATE Sub label
+	prog.hwnd_text2 = CreateWindowEx(0, "static", aSubText, WS_CHILD|WS_VISIBLE|(prog.centered_sub ? SS_CENTER : SS_LEFT)
+		, PROGRESS_TEXT_MARGIN, 55, rect.right - rect.left - (PROGRESS_TEXT_MARGIN * 2), (rect.bottom - rect.top) - 55
+		, prog.hwnd, NULL, g_hInstance, NULL);
+	SendMessage(prog.hwnd_text2, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), MAKELPARAM(TRUE, 0));
+
+	// Show it without activating it.  Even with options that allow the window to be activated (such
+	// as movable), it seems best to do this to prevent changing the current foreground window, which
+	// is usually desirable for progress bars since they should be seen but not be disruptive:
+	ShowWindow(prog.hwnd,  SW_SHOWNOACTIVATE);
+	return OK;
+}
+
+
+
 ResultType Line::ToolTip(char *aText, char *aX, char *aY)
 // Adapted from the AutoIt3 source.
 // au3: Creates a tooltip with the specified text at any location on the screen.
@@ -52,16 +264,18 @@ ResultType Line::ToolTip(char *aText, char *aX, char *aY)
 	RECT dtw;
 	GetWindowRect(GetDesktopWindow(), &dtw);
 
-	POINT pt;
-	if (!*aX || !*aY)
+	bool one_or_both_coords_unspecified = !*aX || !*aY;
+	POINT pt, pt_cursor;
+	if (one_or_both_coords_unspecified)
 	{
-		GetCursorPos(&pt);
-		pt.x += 16;  // Set default spot to be near the mouse cursor.
-		pt.y += 16;
+		GetCursorPos(&pt_cursor);
+		pt.x = pt_cursor.x + 16;  // Set default spot to be near the mouse cursor.
+		pt.y = pt_cursor.y + 16;  // Use 16 to prevent the tooltip from overlapping large cursors.
+		// Update: Below is no longer needed due to a better fix further down that handles multi-line tooltips.
 		// 20 seems to be about the right amount to prevent it from "warping" to the top of the screen,
 		// at least on XP:
-		if (pt.y > dtw.bottom - 20)
-			pt.y = dtw.bottom - 20;
+		//if (pt.y > dtw.bottom - 20)
+		//	pt.y = dtw.bottom - 20;
 	}
 
 	RECT rect;
@@ -104,12 +318,52 @@ ResultType Line::ToolTip(char *aText, char *aX, char *aY)
 			CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, NULL, NULL, NULL, NULL);
 
 		SendMessageTimeout(g_hWndToolTip, TTM_ADDTOOL, 0, (LPARAM)(LPTOOLINFO)&ti, SMTO_ABORTIFHUNG, 2000, &dwResult);
+		SendMessageTimeout(g_hWndToolTip, TTM_SETMAXTIPWIDTH, 0, (LPARAM)dtw.right, SMTO_ABORTIFHUNG, 2000, &dwResult);
+		// Must do these next two when the window is first created, otherwise GetWindowRect() below will retrieve
+		// a tooltip window size that is quite a bit taller than it winds up being:
+		SendMessageTimeout(g_hWndToolTip, TTM_TRACKPOSITION, 0, (LPARAM)MAKELONG(pt.x, pt.y), SMTO_ABORTIFHUNG, 2000, &dwResult);
+		SendMessageTimeout(g_hWndToolTip, TTM_TRACKACTIVATE, TRUE, (LPARAM)&ti, SMTO_ABORTIFHUNG, 2000, &dwResult);
 	}
 	else
 		SendMessageTimeout(g_hWndToolTip, TTM_UPDATETIPTEXT, 0, (LPARAM)&ti, SMTO_ABORTIFHUNG, 2000, &dwResult);
 
-	SendMessageTimeout(g_hWndToolTip, TTM_SETMAXTIPWIDTH, 0, (LPARAM)dtw.right, SMTO_ABORTIFHUNG, 2000, &dwResult);
+
+	RECT ttw = {0};
+	GetWindowRect(g_hWndToolTip, &ttw); // Must be called this late to ensure the tooltip has been created by above.
+	int tt_width = ttw.right - ttw.left;
+	int tt_height = ttw.bottom - ttw.top;
+	if (pt.x + tt_width >= dtw.right)
+		pt.x = dtw.right - tt_width - 1;
+	if (pt.y + tt_height >= dtw.bottom)
+		pt.y = dtw.bottom - tt_height - 1;
+
+	if (one_or_both_coords_unspecified)
+	{
+		// Since Tooltip is being shown at the cursor's coordinates, try to ensure that the above
+		// adjustment doesn't result in the cursor being inside the tooltip's window boundaries,
+		// since that tends to cause problems such as blocking the tray area (which can make a
+		// tootip script impossible to terminate).  Normally, that can only happen in this case
+		// (one_or_both_coords_unspecified == true) when the cursor is near the buttom-right
+		// corner of the screen (unless the mouse is moving more quickly than the script's
+		// tool-tip update-frequency can cope with, but that seems inconsequential since it
+		// will adjust when the cursor slows down):
+		ttw.left = pt.x;
+		ttw.top = pt.y;
+		ttw.right = ttw.left + tt_width;
+		ttw.bottom = ttw.top + tt_height;
+		if (pt_cursor.x >= ttw.left && pt_cursor.x <= ttw.right && pt_cursor.y >= ttw.top && pt_cursor.y <= ttw.bottom)
+		{
+			// Push the tool tip to the upper-left side, since normally the only way the cursor can
+			// be inside its boundaries (when one_or_both_coords_unspecified == true) is when the
+			// cursor is near the bottom right corner of the screen.
+			pt.x = pt_cursor.x - tt_width - 3;    // Use a small offset since it can't overlap the cursor
+			pt.y = pt_cursor.y - tt_height - 3;   // when pushed to the the upper-left side of it.
+		}
+	}
+
 	SendMessageTimeout(g_hWndToolTip, TTM_TRACKPOSITION, 0, (LPARAM)MAKELONG(pt.x, pt.y), SMTO_ABORTIFHUNG, 2000, &dwResult);
+	// And do a TTM_TRACKACTIVATE even if the tooltip window already existed upon entry to this function,
+	// so that in case it was hidden or dismissed while its HWND still exists, it will be shown again:
 	SendMessageTimeout(g_hWndToolTip, TTM_TRACKACTIVATE, TRUE, (LPARAM)&ti, SMTO_ABORTIFHUNG, 2000, &dwResult);
 	return OK;
 }
@@ -381,12 +635,13 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 	//////////////////////////////////////////////
 	// Set up sparse arrays according to aEndKeys:
 	//////////////////////////////////////////////
-	bool end_vk[VK_ARRAY_COUNT] = {false};  // A sparse array that indicates which VKs terminate the input.
-	bool end_sc[SC_ARRAY_COUNT] = {false};  // A sparse array that indicates which SCs terminate the input.
+	UCHAR end_vk[VK_ARRAY_COUNT] = {0};  // A sparse array that indicates which VKs terminate the input.
+	UCHAR end_sc[SC_ARRAY_COUNT] = {0};  // A sparse array that indicates which SCs terminate the input.
 
 	char single_char_string[2];
 	vk_type vk = 0;
 	sc_type sc = 0;
+	mod_type modifiers;
 
 	for (; *aEndKeys; ++aEndKeys) // This a modified version of the processing loop used in SendKeys().
 	{
@@ -414,10 +669,10 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 			*end_pos = '\0';  // temporarily terminate the string here.
 
 			if (vk = TextToVK(aEndKeys + 1, NULL, true))
-				end_vk[vk] = true;
+				end_vk[vk] = END_KEY_ENABLED;
 			else
 				if (sc = TextToSC(aEndKeys + 1))
-					end_sc[sc] = true;
+					end_sc[sc] = END_KEY_ENABLED;
 
 			*end_pos = '}';  // undo the temporary termination
 
@@ -427,8 +682,27 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 		default:
 			single_char_string[0] = *aEndKeys;
 			single_char_string[1] = '\0';
-			if (vk = TextToVK(single_char_string, NULL, true))
-				end_vk[vk] = true;
+			modifiers = 0;  // Init prior to below.
+			if (vk = TextToVK(single_char_string, &modifiers, true))
+			{
+				end_vk[vk] |= END_KEY_ENABLED; // Use of |= is essential for cases such as ";:".
+				// Insist the shift key be down to form genuinely different symbols --
+				// namely punctuation marks -- but not for alphabetic chars.  In the
+				// future, an option can be added to the Options param to treat
+				// end chars as case sensitive (if there is any demand for that):
+				if (!IsCharAlpha(*single_char_string))
+				{
+					// Now we know it's not alphabetic, and it's not a key whose name
+					// is longer than one char such as a function key or numpad number.
+					// That leaves mostly just the number keys (top row) and all
+					// punctuation chars, which are the ones that we want to be
+					// distinguished between shifted and unshifted:
+					if (modifiers & MOD_SHIFT)
+						end_vk[vk] |= END_KEY_WITH_SHIFT;
+					else
+						end_vk[vk] |= END_KEY_WITHOUT_SHIFT;
+				}
+			}
 		} // switch()
 	} // for()
 
@@ -606,8 +880,26 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 	case INPUT_TERMINATED_BY_ENDKEY:
 	{
 		char key_name[128] = "EndKey:";
-		g_input.EndedBySC ? SCToKeyName(g_input.EndingSC, key_name + 7, sizeof(key_name) - 7)
-			: VKToKeyName(g_input.EndingVK, g_input.EndingSC, key_name + 7, sizeof(key_name) - 7);
+		if (g_input.EndingRequiredShift)
+		{
+			// Since the only way a shift key can be required in our case is if it's a key whose name
+			// is a single char (such as a shifted punctuation mark), use a diff. method to look up the
+			// key name based on fact that the shift key was down to terminate the input.  We also know
+			// that the key is an EndingVK because there's no way for the shift key to have been
+			// required by a scan code based on the logic (above) that builds the end_key arrays.
+			// MSDN: "Typically, ToAscii performs the translation based on the virtual-key code.
+			// In some cases, however, bit 15 of the uScanCode parameter may be used to distinguish
+			// between a key press and a key release. The scan code is used for translating ALT+
+			// number key combinations.
+			BYTE state[256] = {0};
+			state[VK_SHIFT] |= 0x80; // Indicate that the neutral shift key is down for conversion purposes.
+			int count = ToAscii(g_input.EndingVK, g_vk_to_sc[g_input.EndingVK].a, (PBYTE)&state
+				, (LPWORD)(key_name + 7), g_MenuIsVisible ? 1 : 0);
+			*(key_name + 7 + count) = '\0';  // Terminate the string.
+		}
+		else
+			g_input.EndedBySC ? SCToKeyName(g_input.EndingSC, key_name + 7, sizeof(key_name) - 7)
+				: VKToKeyName(g_input.EndingVK, g_input.EndingSC, key_name + 7, sizeof(key_name) - 7);
 		g_ErrorLevel->Assign(key_name);
 		break;
 	}
@@ -1051,35 +1343,34 @@ ResultType Line::ControlGetFocus(char *aTitle, char *aText, char *aExcludeTitle,
 
 	char class_name[1024];
 	cah.class_name = class_name;
-	if (!GetClassName(cah.hwnd, class_name, sizeof(class_name)))
+	if (!GetClassName(cah.hwnd, class_name, sizeof(class_name) - 3)) // -3 to allow room for sequence number.
 		return OK;  // Let ErrorLevel and the blank output variable tell the story.
 	
 	cah.class_count = 0;  // Init for the below.
 	cah.is_found = false; // Same.
-	EnumChildWindows(target_window, EnumChildFocusFind, (LPARAM)&cah);
+	EnumChildWindows(target_window, EnumChildFindSeqNum, (LPARAM)&cah);
 	if (!cah.is_found)
 		return OK;  // Let ErrorLevel and the blank output variable tell the story.
 	// Append the class sequence number onto the class name set the output param to be that value:
-	size_t class_name_length = strlen(class_name);
-	snprintf(class_name + class_name_length, sizeof(class_name) - class_name_length - 1, "%d", cah.class_count);
+	snprintfcat(class_name, sizeof(class_name), "%d", cah.class_count);
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 	return output_var->Assign(class_name);
 }
 
 
 
-BOOL CALLBACK EnumChildFocusFind(HWND aWnd, LPARAM lParam)
+BOOL CALLBACK EnumChildFindSeqNum(HWND aWnd, LPARAM lParam)
 {
-	#define cah ((class_and_hwnd_type *)lParam)
+	#define CAH ((class_and_hwnd_type *)lParam)
 	char class_name[1024];
 	if (!GetClassName(aWnd, class_name, sizeof(class_name)))
 		return TRUE;  // Continue the enumeration.
-	if (!strcmp(class_name, cah->class_name)) // Class names match.
+	if (!strcmp(class_name, CAH->class_name)) // Class names match.
 	{
-		++cah->class_count;
-		if (aWnd == cah->hwnd)  // The caller-specified window has been found.
+		++CAH->class_count;
+		if (aWnd == CAH->hwnd)  // The caller-specified window has been found.
 		{
-			cah->is_found = true;
+			CAH->is_found = true;
 			return FALSE;
 		}
 	}
@@ -2642,6 +2933,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 	// Can't do this without ruining MsgBox()'s ShowWindow().
 	// UPDATE: It doesn't do that anymore so leave this enabled for now.
 	case WM_SIZE:
+	{
 		if (hWnd == g_hWnd)
 		{
 			if (wParam == SIZE_MINIMIZED)
@@ -2651,8 +2943,50 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 				MoveWindow(g_hWndEdit, 0, 0, LOWORD(lParam), HIWORD(lParam), TRUE);
 			return 0; // The correct return value for this msg.
 		}
-		// Should probably never happen size SplashText window should never receive this msg?:
-		break;
+
+		if (wParam == SIZE_MINIMIZED)
+			break;  // Let DefWindowProc() handle it, though this situation should not occur normally.
+
+		int i;
+		for (i = 0; i < MAX_PROGRESS_WINDOWS; ++i)
+			if (g_Progress[i].hwnd == hWnd)
+				break;
+		if (i == MAX_PROGRESS_WINDOWS) // It's not a progress window.
+			// Let DefWindowProc() handle it (should probably never happen since currently the only
+			// other type of window is SplashText, which never receive this msg?)
+			break;
+
+		ProgressType &prog = g_Progress[i];
+
+		// Allow any width/height to be specified so that the window can be "rolled up" to its title bar.
+		int new_width = LOWORD(lParam);
+		int new_height = HIWORD(lParam);
+		if (new_width != prog.width || new_height != prog.height)
+		{
+			RECT rect;
+			GetClientRect(prog.hwnd, &rect); // to determine the available width so that control's can be centered.
+			// The Y offset for each control should match those used in Progress():
+			if (new_width != prog.width)
+			{
+				MoveWindow(prog.hwnd_text1, PROGRESS_TEXT_MARGIN, 4, rect.right - rect.left - (PROGRESS_TEXT_MARGIN * 2)
+					, 24, FALSE);
+				MoveWindow(prog.hwnd_bar, PROGRESS_BAR_MARGIN, 30, rect.right - rect.left - (PROGRESS_BAR_MARGIN * 2)
+					, PROGRESS_BAR_HEIGHT, FALSE);
+			}
+			// Move the window unconditionally because otherwise the text won't get recentered when only
+			// the width of the window changes:
+			MoveWindow(prog.hwnd_text2, PROGRESS_TEXT_MARGIN, 55, rect.right - rect.left - (PROGRESS_TEXT_MARGIN * 2)
+				, (rect.bottom - rect.top) - 55, FALSE);  // Negative height seems handled okay.
+			// Specifying repaint == true in MoveWindow() is not always enough refresh the text, so this
+			// is done instead:
+			InvalidateRect(prog.hwnd, &rect, TRUE);
+			// If the user resizes the window, have that size retained (remembered) until the script
+			// explicitly changes it or the script destroys the window.
+			prog.width = new_width;
+			prog.height = new_height;
+		}
+		return 0;  // i.e. completely handled here.
+	}
 
 	case WM_SETFOCUS:
 		if (hWnd == g_hWnd)
@@ -3565,7 +3899,8 @@ ResultType Line::MouseGetPos()
 	// warned:
 	Var *output_var_x = ResolveVarOfArg(0);  // Ok if NULL.
 	Var *output_var_y = ResolveVarOfArg(1);  // Ok if NULL.
-	Var *output_var_hwnd = ResolveVarOfArg(2);  // Ok if NULL.
+	Var *output_var_parent = ResolveVarOfArg(2);  // Ok if NULL.
+	Var *output_var_child = ResolveVarOfArg(3);  // Ok if NULL.
 
 	POINT point;
 	GetCursorPos(&point);  // Realistically, can't fail?
@@ -3584,21 +3919,110 @@ ResultType Line::MouseGetPos()
 		if (!output_var_y->Assign(point.y - rect.top))
 			return FAIL;
 
-	if (!output_var_hwnd)
+	if (!output_var_parent && !output_var_child)
 		return OK;
 
 	// This is the child window.  Despite what MSDN says, WindowFromPoint() appears to fetch
 	// a non-NULL value even when the mouse is hovering over a disabled control (at least on XP).
-	HWND window_under_cursor = WindowFromPoint(point);
-	if (!window_under_cursor)
-		return output_var_hwnd->Assign();
-	window_under_cursor = GetNonChildParent(window_under_cursor);  // Find the first ancestor that isn't a child.
-	// Testing reveals that an invisible parent window never obscure another window beneath it as seen by
-	// WindowFromPoint().  In other words, the below never happens, so there's no point in having it as a
-	// documented feature:
-	//if (!g.DetectHiddenWindows && !IsWindowVisible(window_under_cursor))
-	//	return output_var_hwnd->Assign();
-	return output_var_hwnd->AssignHWND(window_under_cursor);
+	HWND child_under_cursor = WindowFromPoint(point);
+	if (!child_under_cursor)
+	{
+		if (output_var_parent)
+			output_var_parent->Assign();
+		if (output_var_child)
+			output_var_child->Assign();
+		return OK;
+	}
+
+	HWND parent_under_cursor = GetNonChildParent(child_under_cursor);  // Find the first ancestor that isn't a child.
+	if (output_var_parent)
+	{
+		// Testing reveals that an invisible parent window never obscures another window beneath it as seen by
+		// WindowFromPoint().  In other words, the below never happens, so there's no point in having it as a
+		// documented feature:
+		//if (!g.DetectHiddenWindows && !IsWindowVisible(parent_under_cursor))
+		//	return output_var_parent->Assign();
+		if (!output_var_parent->AssignHWND(parent_under_cursor))
+			return FAIL;
+	}
+
+	if (!output_var_child)
+		return OK;
+
+	// Doing it this way overcomes the limitations of WindowFromPoint() and ChildWindowFromPoint()
+	// and also better matches the control that Window Spy would think is under the cursor:
+	point_and_hwnd_type pah = {0};
+	pah.pt = point;
+	EnumChildWindows(parent_under_cursor, EnumChildFindPoint, (LPARAM)&pah); // Find topmost control containing point.
+	if (pah.hwnd_found)
+		child_under_cursor = pah.hwnd_found;
+
+	if (parent_under_cursor == child_under_cursor) // if there's no control per se, make it blank.
+		return output_var_child->Assign();
+
+	class_and_hwnd_type cah;
+	cah.hwnd = child_under_cursor;  // This is the specific control we need to find the sequence number of.
+	char class_name[1024];
+	cah.class_name = class_name;
+	if (!GetClassName(cah.hwnd, class_name, sizeof(class_name) - 3))  // -3 to allow room for sequence number.
+		return output_var_child->Assign();
+	cah.class_count = 0;  // Init for the below.
+	cah.is_found = false; // Same.
+	EnumChildWindows(parent_under_cursor, EnumChildFindSeqNum, (LPARAM)&cah); // Find this control's seq. number.
+	if (!cah.is_found)
+		return output_var_child->Assign();  
+	// Append the class sequence number onto the class name and set the output param to be that value:
+	snprintfcat(class_name, sizeof(class_name), "%d", cah.class_count);
+	return output_var_child->Assign(class_name);
+}
+
+
+
+BOOL CALLBACK EnumChildFindPoint(HWND aWnd, LPARAM lParam)
+{
+	#define PAH ((point_and_hwnd_type *)lParam)
+	if (!IsWindowVisible(aWnd)) // Omit hidden controls, like Window Spy does.
+		return TRUE;
+	RECT rect;
+	if (!GetWindowRect(aWnd, &rect))
+		return TRUE;
+	// The given point must be inside aWnd's bounds.  Then, if there is no hwnd found yet or if aWnd
+	// is entirely contained within the previously found hwnd, update to a "better" found window like
+	// Window Spy.  This overcomes the limitations of WindowFromPoint() and ChildWindowFromPoint():
+	if (PAH->pt.x >= rect.left && PAH->pt.x <= rect.right && PAH->pt.y >= rect.top && PAH->pt.y <= rect.bottom)
+	{
+		// If the window's center is closer to the given point, break the tie and have it take
+		// precedence.  This solves the problem where a particular control from a set of overlapping
+		// controls is chosen arbitrarily (based on Z-order) rather than based on something the
+		// user would find more intuitive (the control whose center is closest to the mouse):
+		double center_x = rect.left + (double)(rect.right - rect.left) / 2;
+		double center_y = rect.top + (double)(rect.bottom - rect.top) / 2;
+		// Taking the absolute value first is not necessary because it seems that qmathHypot()
+		// takes the square root of the sum of the squares, which handles negatives correctly:
+		double distance = qmathHypot(PAH->pt.x - center_x, PAH->pt.y - center_y);
+		//double distance = qmathSqrt(qmathPow(PAH->pt.x - center_x, 2) + qmathPow(PAH->pt.y - center_y, 2));
+		bool update_it = !PAH->hwnd_found;
+		if (!update_it)
+		{
+			// If the new window's rect is entirely contained within the old found-window's rect, update
+			// even if the distance is greater.  Conversely, if the new window's rect entirely encloses
+			// the old window's rect, do not update even if the distance is less:
+			if (rect.left >= PAH->rect_found.left && rect.right <= PAH->rect_found.right
+				&& rect.top >= PAH->rect_found.top && rect.bottom <= PAH->rect_found.bottom)
+				update_it = true; // New is entirely enclosed by old: update to the New.
+			else if (   distance < PAH->distance &&
+				(PAH->rect_found.left < rect.left || PAH->rect_found.right > rect.right
+					|| PAH->rect_found.top < rect.top || PAH->rect_found.bottom > rect.bottom)   )
+				update_it = true; // New doesn't entirely enclose old and new's center is closer to the point.
+		}
+		if (update_it)
+		{
+			PAH->hwnd_found = aWnd;
+			PAH->rect_found = rect;
+			PAH->distance = distance;
+		}
+	}
+	return TRUE; // Continue enumeration all the way through.
 }
 
 
@@ -5024,9 +5448,7 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 			*filter = '\0';  // It will use a standard default below.
 	}
 
-	OPENFILENAME ofn;
-	// This init method is used in more than one example:
-	ZeroMemory(&ofn, sizeof(ofn));
+	OPENFILENAME ofn = {0};
 	// OPENFILENAME_SIZE_VERSION_400 must be used for 9x/NT otherwise the dialog will not appear!
 	// MSDN: "In an application that is compiled with WINVER and _WIN32_WINNT >= 0x0500, use
 	// OPENFILENAME_SIZE_VERSION_400 for this member.  Windows 2000/XP: Use sizeof(OPENFILENAME)
@@ -5044,6 +5466,15 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 	// workaround instead.  MSDN: "Windows NT 4.0/2000/XP: This flag is ineffective for GetOpenFileName."
 	// In addition, it does not prevent the CWD from changing while the user navigates from folder to
 	// folder in the dialog, except perhaps on Win9x.
+
+	bool always_use_save_dialog;
+	if (toupper(*aOptions) == 'S')
+	{
+		always_use_save_dialog = true;
+		++aOptions;
+	}
+	else
+		always_use_save_dialog = false;
 
 	int options = ATOI(aOptions);
 	ofn.Flags = OFN_HIDEREADONLY | OFN_EXPLORER | OFN_NODEREFERENCELINKS;
@@ -5063,7 +5494,7 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 	++g_nFileDialogs;
 	// Below: OFN_CREATEPROMPT doesn't seem to work with GetSaveFileName(), so always
 	// use GetOpenFileName() in that case:
-	BOOL result = (ofn.Flags & OFN_OVERWRITEPROMPT) && !(ofn.Flags & OFN_CREATEPROMPT)
+	BOOL result = (always_use_save_dialog || ((ofn.Flags & OFN_OVERWRITEPROMPT) && !(ofn.Flags & OFN_CREATEPROMPT)))
 		? GetSaveFileName(&ofn) : GetOpenFileName(&ofn);
 	--g_nFileDialogs;
 
@@ -6903,7 +7334,7 @@ ArgTypeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		break;
 
 	case 3:  // Arg #4
-		if (aActionType == ACT_WINGETPOS)
+		if (aActionType == ACT_WINGETPOS || aActionType == ACT_MOUSEGETPOS)
 			return ARG_TYPE_OUTPUT_VAR;
 		break;
 	}
@@ -6966,9 +7397,6 @@ ResultType Line::CheckForMandatoryArgs()
 			return LineError("Parameters 4 and 5 must specify a non-blank destination for the drag.");
 		return OK;
 	case ACT_MOUSEGETPOS:
-		if (!ARG_HAS_VAR(1) && !ARG_HAS_VAR(2) && !ARG_HAS_VAR(3))
-			return LineError(ERR_MISSING_OUTPUT_VAR);
-		return OK;
 	case ACT_WINGETPOS:
 		if (!ARG_HAS_VAR(1) && !ARG_HAS_VAR(2) && !ARG_HAS_VAR(3) && !ARG_HAS_VAR(4))
 			return LineError(ERR_MISSING_OUTPUT_VAR);

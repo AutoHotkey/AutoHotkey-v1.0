@@ -663,7 +663,7 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, Label *aJumpToLabel, HookActionTyp
 			else if (max_threads_per_hotkey < 1)
 				max_threads_per_hotkey = 1;
 			break;
-		// Ignore other characters, such as the digits that comprise the number after the T option.
+		// Otherwise: Ignore other characters, such as the digits that comprise the number after the T option.
 		}
 	}
 	hk->mMaxThreadsBuffer = max_threads_buffer;

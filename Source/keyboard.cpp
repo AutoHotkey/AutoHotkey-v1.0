@@ -232,6 +232,15 @@ void SendKeys(char *aKeys, HWND aTargetWindow)
 
 			vk = TextToVK(aKeys + 1, &modifiers_for_next_key, true);
 			sc = vk ? 0 : TextToSC(aKeys + 1);  // If sc is 0, it will be resolved by KeyEvent() later.
+			if (!vk && !sc && toupper(*(aKeys + 1)) == 'V' && toupper(*(aKeys + 2)) == 'K')
+			{
+				char *sc_string = StrChrAny(aKeys + 3, "Ss"); // Look for the "SC" that demarks the scan code.
+				if (sc_string && toupper(*(sc_string + 1)) == 'C')
+					sc = strtol(sc_string + 2, NULL, 16);  // Convert from hex.
+				// else leave sc set to zero and just get the specified VK.  This supports Send {VKnn}.
+				vk = (vk_type)strtol(aKeys + 3, NULL, 16);  // Convert from hex.
+			}
+
 			if (space_pos)  // undo the temporary termination
 				*space_pos = old_char;
 			*end_pos = '}';  // undo the temporary termination

@@ -43,8 +43,9 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 #else
 	#ifdef _DEBUG
 	//char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
-	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
-	char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\Menu command COMPREHENSIVE TEST.ahk";
+	char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
+	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\Menu command COMPREHENSIVE TEST.ahk";
+	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\ToolTip follows mouse.ahk";
 	#else
 	char *script_filespec = NAME_P ".ini";  // Use this extension for better file association with editor(s).
 	#endif
@@ -79,6 +80,8 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		else if (   (__argv[i][0] == '/' && toupper(__argv[i][1]) == 'F') || !stricmp(__argv[i], "/force")   )
 			// Force the keybd/mouse hook(s) to be installed again even if another instance already did.
 			g_ForceLaunch = true;
+		else if (!stricmp(__argv[i], "/ErrorStdOut"))
+			g_script.mErrorStdOut = true;
 		else // since this is not a recognized switch, the end of the [Switches] section has been reached (by design).
 		{
 			switch_processing_is_complete = true;  // No more switches allowed after this point.

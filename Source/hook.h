@@ -134,14 +134,20 @@ struct key_type
 enum InputStatusType {INPUT_OFF, INPUT_IN_PROGRESS, INPUT_TIMED_OUT, INPUT_TERMINATED_BY_MATCH
 	, INPUT_TERMINATED_BY_ENDKEY, INPUT_LIMIT_REACHED};
 
+// Bitwise flags for the end-key arrays:
+#define END_KEY_ENABLED 0x01
+#define END_KEY_WITH_SHIFT 0x02
+#define END_KEY_WITHOUT_SHIFT 0x04
+
 struct input_type
 {
 	InputStatusType status;
-	bool *EndVK; // A sparse array that indicates which VKs terminate the input.
-	bool *EndSC; // A sparse array that indicates which SCs terminate the input.
+	UCHAR *EndVK; // A sparse array that indicates which VKs terminate the input.
+	UCHAR *EndSC; // A sparse array that indicates which SCs terminate the input.
 	vk_type EndingVK; // The hook puts the terminating key into one of these if that's how it was terminated.
 	sc_type EndingSC;
 	bool EndedBySC;  // Whether the Ending key was one handled by VK or SC.
+	bool EndingRequiredShift;  // Whether the key that terminated the input was one that needed the SHIFT key.
 	char **match; // Array of strings, each string is a match-phrase which if entered, terminates the input.
 	UINT MatchCount; // The number of strings currently in the array.
 	UINT MatchCountMax; // The maximum number of strings that the match array can contain.

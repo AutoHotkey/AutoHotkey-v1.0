@@ -89,6 +89,7 @@ extern int g_nInputBoxes;
 extern int g_nFileDialogs;
 extern int g_nFolderDialogs;
 extern InputBoxType g_InputBox[MAX_INPUTBOXES];
+extern ProgressType g_Progress[MAX_PROGRESS_WINDOWS];
 
 extern bool g_SortCaseSensitive;
 extern bool g_SortNumeric;

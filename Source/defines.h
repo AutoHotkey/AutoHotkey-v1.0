@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.13"
+#define NAME_VERSION "1.0.14"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -114,6 +114,8 @@ enum ToggleValueType {TOGGLE_INVALID = 0, TOGGLED_ON, TOGGLED_OFF, ALWAYS_ON, AL
 // And these to prevent mutual dependency problem between window.h and globaldata.h:
 #define MAX_MSGBOXES 7
 #define MAX_INPUTBOXES 4
+#define MAX_PROGRESS_WINDOWS 20  // Allow a lot for downloads and such.  Also, keep the below updated.
+#define MAX_PROGRESS_WINDOWS_STR "20"
 #define MAX_FILEDIALOGS 4
 #define MAX_FOLDERDIALOGS 4
 #define MAX_NUMBER_LENGTH 20

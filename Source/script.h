@@ -54,8 +54,9 @@ enum ExecUntilMode {NORMAL_MODE, UNTIL_RETURN, UNTIL_BLOCK_END, ONLY_ONE_LINE};
 typedef void *AttributeType;
 
 enum FileLoopModeType {FILE_LOOP_INVALID, FILE_LOOP_FILES_ONLY, FILE_LOOP_FILES_AND_FOLDERS, FILE_LOOP_FOLDERS_ONLY};
-enum VariableTypeType {VAR_TYPE_INVALID, VAR_TYPE_NUMBER, VAR_TYPE_INTEGER, VAR_TYPE_FLOAT, VAR_TYPE_TIME
-	, VAR_TYPE_DIGIT, VAR_TYPE_ALPHA, VAR_TYPE_ALNUM, VAR_TYPE_SPACE};
+enum VariableTypeType {VAR_TYPE_INVALID, VAR_TYPE_NUMBER, VAR_TYPE_INTEGER, VAR_TYPE_FLOAT
+	, VAR_TYPE_TIME	, VAR_TYPE_DIGIT, VAR_TYPE_XDIGIT, VAR_TYPE_ALNUM, VAR_TYPE_ALPHA
+	, VAR_TYPE_UPPER, VAR_TYPE_LOWER, VAR_TYPE_SPACE};
 
 // But the array that goes with these actions is in globaldata.cpp because
 // otherwise it would be a little cumbersome to declare the extern version
@@ -77,7 +78,8 @@ enum enum_act {
 , ACT_IFINSTRING, ACT_IFNOTINSTRING
 , ACT_IFEXIST, ACT_IFNOTEXIST, ACT_IFMSGBOX
 , ACT_IF_FIRST = ACT_IFEQUAL, ACT_IF_LAST = ACT_IFMSGBOX  // Keep this updated with any new IFs that are added.
-, ACT_MSGBOX, ACT_INPUTBOX, ACT_SPLASHTEXTON, ACT_SPLASHTEXTOFF, ACT_TOOLTIP, ACT_TRAYTIP, ACT_INPUT
+, ACT_MSGBOX, ACT_INPUTBOX, ACT_SPLASHTEXTON, ACT_SPLASHTEXTOFF, ACT_PROGRESS
+, ACT_TOOLTIP, ACT_TRAYTIP, ACT_INPUT
 , ACT_TRANSFORM, ACT_STRINGLEFT, ACT_STRINGRIGHT, ACT_STRINGMID
 , ACT_STRINGTRIMLEFT, ACT_STRINGTRIMRIGHT, ACT_STRINGLOWER, ACT_STRINGUPPER
 , ACT_STRINGLEN, ACT_STRINGGETPOS, ACT_STRINGREPLACE, ACT_STRINGSPLIT, ACT_SORT
@@ -252,6 +254,27 @@ struct InputBoxType
 	HWND hwnd;
 };
 
+struct ProgressType
+{
+	int style;
+	int xstyle;
+	int xpos;
+	int ypos;
+	int width;
+	int height;
+	int percent;  // The position of the progress bar.
+	bool owned;   // Whether this window is owned by the main window.
+	bool centered_main;  // Whether the main text is centered.
+	bool centered_sub;  // Whether the sub text is centered.
+	HWND hwnd;
+	HWND hwnd_bar;
+	HWND hwnd_text1;  // MainText
+	HWND hwnd_text2;  // SubText
+};
+#define PROGRESS_BAR_HEIGHT 20  // The height of the bar itself.
+#define PROGRESS_BAR_MARGIN 10  // Left/Right
+#define PROGRESS_TEXT_MARGIN 10  // Left/Right.  Same margin as above to make left-justified text align properly.
+
 // From AutoIt3's inputbox:
 template <class T>
 inline void swap(T &v1, T &v2) {
@@ -265,7 +288,8 @@ ResultType InputBox(Var *aOutputVar, char *aTitle, char *aText, bool aHideInput
 	, int aWidth, int aHeight, int aX, int aY, double aTimeout, char *aDefault);
 BOOL CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
 VOID CALLBACK InputBoxTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);
-BOOL CALLBACK EnumChildFocusFind(HWND aWnd, LPARAM lParam);
+BOOL CALLBACK EnumChildFindSeqNum(HWND aWnd, LPARAM lParam);
+BOOL CALLBACK EnumChildFindPoint(HWND aWnd, LPARAM lParam);
 BOOL CALLBACK EnumChildGetText(HWND aWnd, LPARAM lParam);
 LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lParam);
 
@@ -487,6 +511,7 @@ private:
 
 	ResultType PerformShowWindow(ActionTypeType aActionType, char *aTitle = "", char *aText = ""
 		, char *aExcludeTitle = "", char *aExcludeText = "");
+	ResultType Progress(char *aOptions, char *aSubText, char *aMainText, char *aTitle);
 	ResultType ToolTip(char *aText, char *aX, char *aY);
 	ResultType TrayTip(char *aTitle, char *aText, char *aTimeout, char *aOptions);
 	ResultType Transform(char *aCmd, char *aValue1, char *aValue2);
@@ -1226,8 +1251,11 @@ public:
 		if (!stricmp(aBuf, "time")) return VAR_TYPE_TIME;
 		if (!stricmp(aBuf, "date")) return VAR_TYPE_TIME;  // "date" is just an alias for "time".
 		if (!stricmp(aBuf, "digit")) return VAR_TYPE_DIGIT;
-		if (!stricmp(aBuf, "alpha")) return VAR_TYPE_ALPHA;
+		if (!stricmp(aBuf, "xdigit")) return VAR_TYPE_XDIGIT;
 		if (!stricmp(aBuf, "alnum")) return VAR_TYPE_ALNUM;
+		if (!stricmp(aBuf, "alpha")) return VAR_TYPE_ALPHA;
+		if (!stricmp(aBuf, "upper")) return VAR_TYPE_UPPER;
+		if (!stricmp(aBuf, "lower")) return VAR_TYPE_LOWER;
 		if (!stricmp(aBuf, "space")) return VAR_TYPE_SPACE;
 		return VAR_TYPE_INVALID;
 	}
@@ -1478,6 +1506,7 @@ public:
 	bool AutoExecSectionIsRunning;
 	bool mIsRestart; // The app is restarting rather than starting from scratch.
 	bool mIsAutoIt2; // Whether this script is considered to be an AutoIt2 script.
+	bool mErrorStdOut; // true if load-time syntax errors should be sent to stdout vs. a MsgBox.
 	__int64 mLinesExecutedThisCycle; // Use 64-bit to match the type of g.LinesPerCycle
 	int mUninterruptedLineCount; // Similar in purpose to the above, but only 32-bit.
 	DWORD mLastScriptRest, mLastPeekTime;
