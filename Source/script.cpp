@@ -1371,9 +1371,10 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			case ACT_DETECTHIDDENWINDOWS:
 			case ACT_DETECTHIDDENTEXT:
 			case ACT_SETSTORECAPSLOCKMODE:
+			case ACT_SUSPEND:
 			case ACT_AUTOTRIM:
 			case ACT_STRINGCASESENSE:
-			if (i != 0) break;  // Should never happen in these cases.
+				if (i != 0) break;  // Should never happen in these cases.
 				if (!deref_count)
 					if (!Line::ConvertOnOff(new_arg[i].text))
 						return ScriptError(ERR_ON_OFF, g_act[aActionType].Name);
@@ -3667,6 +3668,17 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_SETSTORECAPSLOCKMODE:
 		if (   (toggle = ConvertOnOff(ARG1, NEUTRAL)) != NEUTRAL   )
 			g.StoreCapslockMode = (toggle == TOGGLED_ON);
+		return OK;
+	case ACT_SUSPEND:
+		switch (ConvertOnOff(ARG1))
+		{
+		case NEUTRAL:     g_IsSuspended = !g_IsSuspended; break;
+		case TOGGLED_ON:  g_IsSuspended = true; break;
+		case TOGGLED_OFF: g_IsSuspended = false; break;
+		// We know it's a variable because otherwise the loading validation would have caught it earlier:
+		case TOGGLE_INVALID: return LineError("The variable in param #1 does not resolve to an allowed value."
+			, FAIL, ARG1);
+		}
 		return OK;
 	case ACT_AUTOTRIM:
 		if (   (toggle = ConvertOnOff(ARG1, NEUTRAL)) != NEUTRAL   )

@@ -182,6 +182,8 @@ ResultType Line::StatusBarWait(char *aTextToWaitFor, char *aSeconds, char *aPart
 
 
 ResultType Line::WinSetTitle(char *aTitle, char *aText, char *aNewTitle, char *aExcludeTitle, char *aExcludeText)
+// Like AutoIt, this function and others like it always return OK, even if the target window doesn't
+// exist or there action doesn't actually succeed.
 {
 	DETERMINE_TARGET_WINDOW
 	if (!target_window)
@@ -484,7 +486,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 	case WM_HOTKEY: // As a result of this app having previously called RegisterHotkey().
 	case AHK_HOOK_HOTKEY:  // Sent from this app's keyboard or mouse hook.
 	{
-		if (g_IgnoreHotkeys || g_IsSuspended)
+		if (IGNORE_THIS_HOTKEY((HotkeyIDType)wParam))
 			// Used to prevent runaway hotkeys, or too many happening due to key-repeat feature.
 			// It can also be used to prevent a call to MsgSleep() from accepting new hotkeys
 			// in cases where the caller's activity might be interferred with by the launch

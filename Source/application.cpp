@@ -306,11 +306,11 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 		}
 		case WM_HOTKEY: // As a result of this app having previously called RegisterHotkey().
 		case AHK_HOOK_HOTKEY:  // Sent from this app's keyboard or mouse hook.
-			if (g_IgnoreHotkeys || g_IsSuspended)
+			if (IGNORE_THIS_HOTKEY((HotkeyIDType)msg.wParam))
 				break;
 			if (g_nSuspendedSubroutines >= 10)
-				// Allow only a limited number of levels of recursion, to avoid
-				// any chance of stack overflow.  So ignore this message:
+				// Allow only a limited number of recursion levels to avoid any chance of
+				// stack overflow.  So ignore this message:
 				break;
 			if (aMode == RETURN_AFTER_MESSAGES)
 			{

@@ -100,7 +100,7 @@ enum enum_act {
 , ACT_FILECREATEDIR, ACT_FILEREMOVEDIR
 , ACT_FILETOGGLEHIDDEN, ACT_FILESETDATEMODIFIED, ACT_FILESELECTFILE
 , ACT_REGREAD, ACT_REGWRITE, ACT_REGDELETE
-, ACT_SETTITLEMATCHMODE, ACT_SETKEYDELAY, ACT_SETWINDELAY, ACT_SETBATCHLINES
+, ACT_SETTITLEMATCHMODE, ACT_SETKEYDELAY, ACT_SETWINDELAY, ACT_SETBATCHLINES, ACT_SUSPEND
 , ACT_AUTOTRIM, ACT_STRINGCASESENSE, ACT_DETECTHIDDENWINDOWS, ACT_DETECTHIDDENTEXT
 , ACT_SETNUMLOCKSTATE, ACT_SETSCROLLLOCKSTATE, ACT_SETCAPSLOCKSTATE, ACT_SETSTORECAPSLOCKMODE
 , ACT_FORCE_KEYBD_HOOK
@@ -278,7 +278,7 @@ public:
 	static Line *sLog[LINE_LOG_SIZE];
 	static int sLogNext;
 	static const char sArgIsInputVar[1];   // A special, constant pointer value we can use.
-	static const char sArgIsOutputVar[1];  // A special, constant pointer value we can use.
+	static const char sArgIsOutputVar[1];  // same
 	#define IS_NOT_A_VAR NULL
 	#define IS_INPUT_VAR (Line::sArgIsInputVar)
 	#define IS_OUTPUT_VAR (Line::sArgIsOutputVar)
@@ -466,8 +466,8 @@ public:
 	// Returns aDefault if aBuf isn't either ON, OFF, ALWAYSON, ALWAYSOFF, or blank.
 	{
 		if (!aBuf || !*aBuf) return NEUTRAL;
-		if (!stricmp(aBuf, "ON")) return TOGGLED_ON;
-		if (!stricmp(aBuf, "OFF")) return TOGGLED_OFF;
+		if (!stricmp(aBuf, "On")) return TOGGLED_ON;
+		if (!stricmp(aBuf, "Off")) return TOGGLED_OFF;
 		if (!stricmp(aBuf, "AlwaysOn")) return ALWAYS_ON;
 		if (!stricmp(aBuf, "AlwaysOff")) return ALWAYS_OFF;
 		return aDefault;

@@ -99,6 +99,13 @@ public:
 	static void AllDestructAndExit(int exit_code);
 	static ResultType AddHotkey(Label *aJumpToLabel, HookActionType aHookAction);
 	static ResultType PerformID(HotkeyIDType aHotkeyID);
+	static ActionTypeType GetTypeOfFirstLine(HotkeyIDType aHotkeyID)
+	{
+		// Currently, hotkey_id can't be < 0 due to its type, so we only check if it's too large:
+		if (aHotkeyID >= sHotkeyCount) return ACT_INVALID;
+		if (shk[aHotkeyID]->mJumpToLabel == NULL) return ACT_INVALID;
+		return shk[aHotkeyID]->mJumpToLabel->mJumpToLine->mActionType;
+	}
 	static int AllActivate();
 	static HookType HookIsActive() {return sWhichHookActive;} // Returns bitwise values: HOOK_MOUSE, HOOK_KEYBD.
 

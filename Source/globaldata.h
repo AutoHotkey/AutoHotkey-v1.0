@@ -36,6 +36,8 @@ extern bool g_AllowSameLineComments;
 extern char g_LastPerformedHotkeyType;
 extern bool g_IgnoreHotkeys;
 extern bool g_IsSuspended;
+#define IGNORE_THIS_HOTKEY(id) (g_IgnoreHotkeys || (g_IsSuspended && Hotkey::GetTypeOfFirstLine(id) != ACT_SUSPEND))
+
 extern int g_nSuspendedSubroutines;
 
 extern bool g_TrayMenuIsVisible;

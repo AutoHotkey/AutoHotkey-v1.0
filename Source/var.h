@@ -71,7 +71,7 @@ public:
 		if (!aBuf) return NULL;
 		char *aBuf_orig = aBuf;
 		snprintf(aBuf, BUF_SPACE_REMAINING, "%s[%u of %u]: %-1.60s%s", mName
-			, mLength, mCapacity - 1  // Report capacity - 1 since it makes more sense to exclude the terminator.
+			, mLength, mCapacity ? (mCapacity - 1) : 0  // Use -1 since it makes more sense to exclude the terminator.
 			, mContents, mLength > 60 ? "..." : "");
 		aBuf += strlen(aBuf);
 		if (aAppendNewline && BUF_SPACE_REMAINING >= 2)

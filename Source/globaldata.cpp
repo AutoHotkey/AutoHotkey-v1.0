@@ -237,6 +237,7 @@ Action g_act[] =
 	, {"SetKeyDelay", 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)
 	, {"SetWinDelay", 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)
 	, {"SetBatchLines", 1, 1, {1, 0}} // Number of script lines to execute before sleeping.
+	, {"Suspend", 0, 1, NULL} // On/Off/Blank (blank causes it to toggle to the opposite value)
 	, {"AutoTrim", 1, 1, NULL} // On/Off
 	, {"StringCaseSense", 1, 1, NULL} // On/Off
 	, {"DetectHiddenWindows", 1, 1, NULL} // On/Off
