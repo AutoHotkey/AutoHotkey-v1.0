@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.25.12"
+#define NAME_VERSION "1.0.25.13"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -293,7 +293,7 @@ struct global_struct
 	char FormatFloat[32];
 	bool FormatIntAsHex;
 	char ErrorLevel[128]; // Big in case user put something bigger than a number in g_ErrorLevel.
-	HWND hWndLastUsed;  // In many cases, it's better to use g_ValidLastUsedWindow when referring to this.
+	HWND hWndLastUsed;  // In many cases, it's better to use GetValidLastUsedWindow() when referring to this.
 	//HWND hWndToRestore;
 	int MsgBoxResult;  // Which button was pressed in the most recent MsgBox.
 	bool IsPaused;

@@ -157,6 +157,8 @@ HWND WinExist(char *aTitle, char *aText = "", char *aExcludeTitle = "", char *aE
 	, bool aFindLastMatch = false, bool aUpdateLastUsed = false
 	, HWND aAlreadyVisited[] = NULL, int aAlreadyVisitedCount = 0, bool aReturnTheCount = false);
 
+HWND GetValidLastUsedWindow();
+
 BOOL CALLBACK EnumParentFind(HWND hwnd, LPARAM lParam);
 BOOL CALLBACK EnumChildFind(HWND hwnd, LPARAM lParam);
 

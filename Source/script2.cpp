@@ -2308,7 +2308,7 @@ ResultType Line::Control(char *aCmd, char *aValue, char *aControl, char *aTitle,
 		break;
 
 	case CONTROL_CMD_SHOW:
-		ShowWindow(control_window, SW_SHOWNOACTIVATE); // SW_SHOWNOACTIVATE is what au3 uses.
+		ShowWindow(control_window, SW_SHOWNOACTIVATE); // SW_SHOWNOACTIVATE has been seen in some example code for this purpose.
 		break;
 
 	case CONTROL_CMD_HIDE:
@@ -3003,7 +3003,7 @@ ResultType Line::WinSet(char *aAttrib, char *aValue, char *aTitle, char *aText
 		// Bottom line: The above is why there is currently no "on" or "toggle" sub-command, just "Off".
 		// Also, must fetch the below at runtime, otherwise the program can't even be launched on Win9x/NT.
 		// Also, since the color of an HBRUSH can't be easily determined (since it can be a pattern and
-		// since there seem to be no easy API calls to discover the colors of pixels in an HBRUSH,
+		// since there seem to be no easy API calls to discover the colors of pixels in an HBRUSH),
 		// the following is not yet implemented: Use window's own class background color (via
 		// GetClassLong) if aValue is entirely blank.
 		typedef BOOL (WINAPI *MySetLayeredWindowAttributesType)(HWND, COLORREF, BYTE, DWORD);
@@ -3156,7 +3156,7 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 	HWND target_window;
 	IF_USE_FOREGROUND_WINDOW(aTitle, aText, aExcludeTitle, aExcludeText)
 	else if (!*aTitle && !*aText && !*aExcludeTitle && !*aExcludeText)
-		target_window = g_ValidLastUsedWindow;
+		target_window = GetValidLastUsedWindow();
 	else
 		target_window_determined = false;  // A different method is required.
 
@@ -10027,8 +10027,8 @@ HWND Line::DetermineTargetWindow(char *aTitle, char *aText, char *aExcludeTitle,
 	IF_USE_FOREGROUND_WINDOW(aTitle, aText, aExcludeTitle, aExcludeText)
 	else if (*aTitle || *aText || *aExcludeTitle || *aExcludeText)
 		target_window = WinExist(aTitle, aText, aExcludeTitle, aExcludeText);
-	else
-		target_window = g_ValidLastUsedWindow;
+	else // Use the "last found" window.
+		target_window = GetValidLastUsedWindow();
 	return target_window;
 }
 

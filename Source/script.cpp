@@ -367,7 +367,8 @@ ResultType Script::CreateWindows()
 	// though the window is hidden, would otherwise briefly show the taskbar button (or
 	// at least redraw the taskbar).  Sometimes this isn't noticeable, but other times
 	// (such as when the system is under heavy load) a user reported that it is quite
-	// noticeable:
+	// noticeable. WS_EX_TOOLWINDOW is used instead of WS_EX_NOACTIVATE because
+	// WS_EX_NOACTIVATE is available only on 2000/XP.
 	if (   !(g_hWnd = CreateWindowEx(do_minimize ? WS_EX_TOOLWINDOW : 0
 		, WINDOW_CLASS_MAIN
 		, mMainWindowTitle
@@ -411,7 +412,17 @@ ResultType Script::CreateWindows()
 	// function operate in a special mode. Therefore, it seems best to get that first call out
 	// of the way to avoid the possibility that the first-call behavior will cause problems with
 	// our normal use of ShowWindow() below and other places.  Also, decided to ignore nCmdShow,
-    // to avoid any momentary visual effects on startup:
+    // to avoid any momentary visual effects on startup.
+	// Update: It's done a second time because the main window might now be visible if the process
+	// that launched ours specified that.  It seems best to override the requested state because
+	// some calling processes might specify "maximize" or "shownormal" as generic launch method.
+	// The script can display it's own main window with ListLines, etc.
+	// MSDN: "the nCmdShow value is ignored in the first call to ShowWindow if the program that
+	// launched the application specifies startup information in the structure. In this case,
+	// ShowWindow uses the information specified in the STARTUPINFO structure to show the window.
+	// On subsequent calls, the application must call ShowWindow with nCmdShow set to SW_SHOWDEFAULT
+	// to use the startup information provided by the program that launched the application."
+	ShowWindow(g_hWnd, SW_HIDE);
 	ShowWindow(g_hWnd, SW_HIDE);
 
 	// Now that the first call to ShowWindow() is out of the way, minimize the main window so that
@@ -8115,6 +8126,8 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		// (the text appears more quickly when the command after the splash is something
 		// that might keep our thread tied up and unable to check messages).
 		SLEEP_WITHOUT_INTERRUPTION(-1)
+		// UpdateWindow() would probably achieve the same effect as the above, but it feels safer to do
+		// the above because it ensures that our message queue is empty prior to returning to our caller.
 		return OK;
 	}
 	case ACT_SPLASHTEXTOFF:
