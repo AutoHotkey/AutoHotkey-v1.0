@@ -245,7 +245,15 @@ inline char *trim (char *aStr)
 	return ltrim(rtrim(aStr));
 }
 
-			
+
+
+inline COLORREF rgb_to_bgr(DWORD aRGB)
+// Fancier methods are prone to problems due to byte alignment or compiler issues.
+{
+	return RGB(GetBValue(aRGB), GetGValue(aRGB), GetRValue(aRGB));
+}
+
+
 
 inline bool IsHex(char *aBuf)
 // Note: AHK support for hex ints reduces performance by only 10% for decimal ints, even in the tightest
@@ -414,18 +422,18 @@ inline pure_numeric_type IsPureNumeric(char *aBuf, bool aAllowNegative = false
 
 
 
-inline size_t strlcpy (char *aDst, const char *aSrc, size_t aDstSize)
+inline void strlcpy (char *aDst, const char *aSrc, size_t aDstSize)
 // Same as strncpy() but guarantees null-termination of aDst upon return.
 // No more than aDstSize - 1 characters will be copied from aSrc into aDst
 // (leaving room for the zero terminator).
 // This function is defined in some Unices but is not standard.  But unlike
-// other versions, this one returns the number of unused chars remaining
-// in aDst after the copy.
+// other versions, this one uses void for return value for reduced code size
+// (since it's called in so many places).
 {
-	if (!aDst || !aSrc || !aDstSize) return aDstSize;  // aDstSize must not be zero due to the below method.
+	// Disabled for performance and reduced code size:
+	//if (!aDst || !aSrc || !aDstSize) return aDstSize;  // aDstSize must not be zero due to the below method.
 	strncpy(aDst, aSrc, aDstSize - 1);
 	aDst[aDstSize - 1] = '\0';
-	return aDstSize - strlen(aDst) - 1; // -1 because the zero terminator is defined as taking up 1 space.
 }
 
 
@@ -463,7 +471,7 @@ char *SystemTimeToYYYYMMDD(char *aBuf, SYSTEMTIME &aTime, bool aConvertToLocalTi
 __int64 YYYYMMDDSecondsUntil(char *aYYYYMMDDStart, char *aYYYYMMDDEnd, bool &aFailed);
 __int64 FileTimeSecondsUntil(FILETIME *pftStart, FILETIME *pftEnd);
 
-unsigned __int64 GetFileSize64(HANDLE aFileHandle);
+//unsigned __int64 GetFileSize64(HANDLE aFileHandle);
 int snprintf(char *aBuf, size_t aBufSize, const char *aFormat, ...);
 int snprintfcat(char *aBuf, size_t aBufSize, const char *aFormat, ...);
 int strlcmp (char *aBuf1, char *aBuf2, UINT aLength1 = UINT_MAX, UINT aLength2 = UINT_MAX);
@@ -476,5 +484,6 @@ char *StrReplaceAllSafe(char *Str, size_t Str_size, char *OldStr, char *NewStr =
 bool DoesFilePatternExist(char *aFilePattern);
 ResultType FileAppend(char *aFilespec, char *aLine, bool aAppendNewline = true);
 char *ConvertFilespecToCorrectCase(char *aFullFileSpec);
+COLORREF ColorNameToBGR(char *aColorName);
 
 #endif

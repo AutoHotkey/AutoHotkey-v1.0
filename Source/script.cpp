@@ -111,8 +111,6 @@ Script::~Script()
 	// MSDN: "Before terminating, an application must call the UnhookWindowsHookEx function to free
 	// system resources associated with the hook."
 	RemoveAllHooks();
-	if (g_hWndToolTip)  // Since this window is unowned, it should be destroyed to avoid resource leak.
-		DestroyWindow(g_hWndToolTip);
 	if (mNIC.hWnd) // Tray icon is installed.
 		Shell_NotifyIcon(NIM_DELETE, &mNIC); // Remove it.
 	// Only after the above do we get rid of the icon:
@@ -126,11 +124,42 @@ Script::~Script()
 		m = m->mNextMenu;
 		ScriptDeleteMenu(menu_to_delete);
 	}
-	// Destroy any progress windows that haven't already been destroyed.  This is necessary
+	// Destroy any Progress/SplashImage windows that haven't already been destroyed.  This is necessary
 	// because sometimes these windows aren't owned by the main window:
-	for (int i = 0; i < MAX_PROGRESS_WINDOWS; ++i)
-		if (IsWindow(g_Progress[i].hwnd))
+	int i;
+	for (i = 0; i < MAX_PROGRESS_WINDOWS; ++i)
+	{
+		if (g_Progress[i].hwnd && IsWindow(g_Progress[i].hwnd))
 			DestroyWindow(g_Progress[i].hwnd);
+		if (g_Progress[i].hfont1) // Destroy font only after destroying the window that uses it.
+			DeleteObject(g_Progress[i].hfont1);
+		if (g_Progress[i].hfont2) // Destroy font only after destroying the window that uses it.
+			DeleteObject(g_Progress[i].hfont2);
+		if (g_Progress[i].hbrush)
+			DeleteObject(g_Progress[i].hbrush);
+	}
+	for (i = 0; i < MAX_SPLASHIMAGE_WINDOWS; ++i)
+	{
+		if (g_SplashImage[i].pic)
+			g_SplashImage[i].pic->Release();
+		if (g_SplashImage[i].hwnd && IsWindow(g_SplashImage[i].hwnd))
+			DestroyWindow(g_SplashImage[i].hwnd);
+		if (g_SplashImage[i].hfont1) // Destroy font only after destroying the window that uses it.
+			DeleteObject(g_SplashImage[i].hfont1);
+		if (g_SplashImage[i].hfont2) // Destroy font only after destroying the window that uses it.
+			DeleteObject(g_SplashImage[i].hfont2);
+		if (g_SplashImage[i].hbrush)
+			DeleteObject(g_SplashImage[i].hbrush);
+	}
+
+	// Since tooltip windows are unowned, they should be destroyed to avoid resource leak:
+	for (i = 0; i < MAX_TOOLTIPS; ++i)
+		if (g_hWndToolTip[i] && IsWindow(g_hWndToolTip[i]))
+			DestroyWindow(g_hWndToolTip[i]);
+
+	if (g_hFontSplash) // The splash window should already be destroyed at this point, since it's owned by main.
+		DeleteObject(g_hFontSplash);
+
 	// Close any open sound item to prevent hang-on-exit in certain operating systems or conditions.
 	// If there's any chance that a sound was played and not closed out, or that it is still playing,
 	// this check is done.  Otherwise, the check is avoided since it might be a high overhead call,
@@ -283,7 +312,7 @@ ResultType Script::CreateWindows()
 	wc.hIcon = hIcon;
 	wc.hIconSm = hIcon;
 	wc.hCursor = LoadCursor((HINSTANCE) NULL, IDC_ARROW);
-	wc.hbrBackground = GetSysColorBrush(COLOR_BTNFACE);  // Needed for ProgressBar. Old: (HBRUSH)GetStockObject(WHITE_BRUSH);
+	wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);  // Needed for ProgressBar. Old: (HBRUSH)GetStockObject(WHITE_BRUSH);
 	wc.lpszMenuName = MAKEINTRESOURCE(IDR_MENU_MAIN); // NULL; // "MainMenu";
 	if (!RegisterClassEx(&wc))
 	{
@@ -830,7 +859,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 	// only allow files to be extracted from the exe is is bound to (i.e the script that it was
 	// compiled with).  There are various checks and CRCs to make sure that it can't be used to read
 	// the files from any other exe that is passed."
-	if ( oRead.Open(aFileSpec, "") != HS_EXEARC_E_OK)
+	if (oRead.Open(aFileSpec, "") != HS_EXEARC_E_OK)
 	{
 		MsgBox("Could not open the script inside the EXE.", 0, aFileSpec);
 		return FAIL;
@@ -883,8 +912,8 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 	mCurrFileNumber = source_file_number;  // source_file_number is kept on the stack due to recursion.
 	// Keep a copy of mCurrLineNumber on the stack to help with recursion:
 #ifdef AUTOHOTKEYSC
-	// -1 (MAX_UINT in this case) is  workaround for the fact that there seems to be an extra
-	// blank line at the top.  This corrects syntax error reporting so that it isn't off by 1:
+	// -1 (MAX_UINT in this case) to compensate for the fact that there is a comment containing
+	// the version number added to the top of each compiled script:
 	LineNumberType line_number = mCurrLineNumber = -1;
 #else
 	LineNumberType line_number = mCurrLineNumber = 0;
@@ -2538,6 +2567,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				return ScriptError("Parameter #3 must be a number greater than zero or a variable reference."
 					, LINE_RAW_ARG3);
 		}
+		if (line->mArgc > 4 && !line->ArgHasDeref(5) && stricmp(LINE_RAW_ARG5, "L"))
+			return ScriptError("Parameter #5 must be blank, the letter L, or a variable reference.", LINE_RAW_ARG5);
 		break;
 
 	case ACT_STRINGGETPOS:
@@ -2883,6 +2914,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 
 				// The following are not listed above because no validation of Paramter #3 is needed:
 				// TRANS_CMD_ASC
+				// TRANS_CMD_HTML
 				}
 			}
 
@@ -2890,6 +2922,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			{
 			case TRANS_CMD_ASC:
 			case TRANS_CMD_CHR:
+			case TRANS_CMD_HTML:
 			case TRANS_CMD_EXP:
 			case TRANS_CMD_SQRT:
 			case TRANS_CMD_LOG:
@@ -3980,36 +4013,6 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 		case ACT_CONTINUE:
 			if (!aLoopTypeFile && !aLoopTypeReg && !aLoopTypeRead && !aLoopTypeParse)
 				return line->PreparseError("This break or continue statement is not enclosed by a loop.");
-			break;
-
-		case ACT_REGREAD:
-		case ACT_REGWRITE: // Unknown loops get the benefit of the doubt.
-			// Note that these two cmds only require 3 params because the ValueName param can be blank
-			// or omitted to indicate that the key's "default value" should be retrieved or written to:
-			if (aLoopTypeReg != ATTR_LOOP_REG && aLoopTypeReg != ATTR_LOOP_UNKNOWN && line->mArgc < 3)
-				return line->PreparseError("When not enclosed in a registry-loop, this command requires 3 parameters.");
-			break;
-		case ACT_REGDELETE:
-			if (aLoopTypeReg != ATTR_LOOP_REG && aLoopTypeReg != ATTR_LOOP_UNKNOWN && line->mArgc < 2)
-				return line->PreparseError("When not enclosed in a registry-loop, this command requires 2 parameters.");
-			break;
-
-		case ACT_FILEAPPEND:
-			// But no attempt is made to validate that the enclosing file-read loop actually has
-			// an OutputFile.  If it doesn't, at runtime ErrorLevel will be set to 1 to indicate
-			// that the append failed.
-			if (aLoopTypeRead != ATTR_LOOP_READ_FILE && aLoopTypeRead != ATTR_LOOP_UNKNOWN && line->mArgc < 2)
-				return line->PreparseError("When not enclosed in a file-read loop, this command requires 2 parameters.");
-			break;
-
-		case ACT_FILEGETATTRIB:
-		case ACT_FILESETATTRIB:
-		case ACT_FILEGETSIZE:
-		case ACT_FILEGETVERSION:
-		case ACT_FILEGETTIME:
-		case ACT_FILESETTIME:
-			if (aLoopTypeFile != ATTR_LOOP_FILE && aLoopTypeFile != ATTR_LOOP_UNKNOWN && !*LINE_RAW_ARG2)
-				return line->PreparseError("When not enclosed in a file-loop, this command requires a 2nd parameter.");
 			break;
 
 		case ACT_GOTO:  // These two must be done here (i.e. *after* all the script lines have been added),
@@ -5992,6 +5995,8 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 
 	case ACT_CONTROLMOVE:
 		return ControlMove(NINE_ARGS);
+	case ACT_CONTROLGETPOS:
+		return ControlGetPos(ARG5, ARG6, ARG7, ARG8, ARG9);
 	case ACT_CONTROLGETFOCUS:
 		return ControlGetFocus(ARG2, ARG3, ARG4, ARG5);
 	case ACT_CONTROLFOCUS:
@@ -6187,15 +6192,26 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	case ACT_STRINGMID:
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
-		start_char_num = ATOI(ARG3);
-		if (start_char_num <= 0)
-			// It's somewhat debatable, but it seems best not to report an error in this and
-			// other cases.  The result here is probably enough to speak for itself, for script
-			// debugging purposes:
-			start_char_num = 1; // 1 is the position of the first char, unlike StringGetPos.
 		chars_to_extract = ATOI(ARG4); // Use 32-bit signed to detect negatives and fit it VarSizeType.
 		if (chars_to_extract < 0)
-			chars_to_extract = 0;
+			return output_var->Assign();  // Set it to be blank in this case.
+		start_char_num = ATOI(ARG3);
+		if (toupper(*ARG5) == 'L')  // Chars to the left of start_char_num will be extracted.
+		{
+			if (start_char_num < 1)
+				return output_var->Assign();  // Blank seems most appropriate for the L option in this case.
+			start_char_num -= (chars_to_extract - 1);
+			if (start_char_num < 1)
+				// Reduce chars_to_extract to reflect the fact that there aren't enough chars
+				// to the left of start_char_num, so we'll extract only them:
+				chars_to_extract -= (1 - start_char_num);
+		}
+		// UPDATE: The below is now also needed for the L option to work correctly.  Older:
+		// It's somewhat debatable, but it seems best not to report an error in this and
+		// other cases.  The result here is probably enough to speak for itself, for script
+		// debugging purposes:
+		if (start_char_num < 1)
+			start_char_num = 1; // 1 is the position of the first char, unlike StringGetPos.
 		// Assign() is capable of doing what we want in this case.
 		// It will display any error that occurs:
 		if ((int)strlen(ARG2) < start_char_num)
@@ -6378,6 +6394,9 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 
 	case ACT_STRINGSPLIT:
 		return StringSplit(ARG1, ARG2, ARG3, ARG4);
+
+	case ACT_SPLITPATH:
+		return SplitPath(ARG1);
 
 	case ACT_SORT:
 		return PerformSort(ARG1, ARG2);
@@ -6799,16 +6818,17 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			H += min_height;
 
 		RECT rect;
-		SystemParametersInfo(SPI_GETWORKAREA, 0, &rect, 0);	// Get Desktop rect
+		SystemParametersInfo(SPI_GETWORKAREA, 0, &rect, 0);  // Get Desktop rect excluding task bar.
 		int xpos = (rect.right - W)/2;  // Center splash horizontally
 		int ypos = (rect.bottom - H)/2; // Center splash vertically
 
 		// My: Probably not to much overhead to do this, though it probably would
 		// perform better to resize and "re-text" the existing window rather than
 		// recreating it:
-		#define DESTROY_SPLASH if (g_hWndSplash)\
+		#define DESTROY_SPLASH \
 		{\
-			DestroyWindow(g_hWndSplash);\
+			if (g_hWndSplash && IsWindow(g_hWndSplash))\
+				DestroyWindow(g_hWndSplash);\
 			g_hWndSplash = NULL;\
 		}
 		DESTROY_SPLASH
@@ -6831,22 +6851,25 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			, 0, 0, rect.right - rect.left, rect.bottom - rect.top
 			, g_hWndSplash, (HMENU)NULL, g_hInstance, NULL);
 
-		char szFont[65];
-		int CyPixels, nSize = 12, nWeight = 400;
-		HFONT hfFont;
-		HDC h_dc = CreateDC("DISPLAY", NULL, NULL, NULL);
-		SelectObject(h_dc, (HFONT)GetStockObject(DEFAULT_GUI_FONT));		// Get Default Font Name
-		GetTextFace(h_dc, sizeof(szFont) - 1, szFont); // -1 just in case, like AutoIt3.
-		CyPixels = GetDeviceCaps(h_dc, LOGPIXELSY);			// For Some Font Size Math
-		DeleteDC(h_dc);
-		//strcpy(szFont,vParams[7].szValue());	// Font Name
-		//nSize = vParams[8].nValue();		// Font Size
-		//if ( vParams[9].nValue() >= 0 && vParams[9].nValue() <= 1000 )
-		//	nWeight = vParams[9].nValue();			// Font Weight
-		hfFont = CreateFont(0-(nSize*CyPixels)/72,0,0,0,nWeight,0,0,0,DEFAULT_CHARSET,
-			OUT_TT_PRECIS,CLIP_DEFAULT_PRECIS,PROOF_QUALITY,FF_DONTCARE,szFont);	// Create Font
+		if (!g_hFontSplash)
+		{
+			char default_font_name[65];
+			int CyPixels, nSize = 12, nWeight = FW_NORMAL;
+			HDC hdc = CreateDC("DISPLAY", NULL, NULL, NULL);
+			SelectObject(hdc, (HFONT)GetStockObject(DEFAULT_GUI_FONT));		// Get Default Font Name
+			GetTextFace(hdc, sizeof(default_font_name) - 1, default_font_name); // -1 just in case, like AutoIt3.
+			CyPixels = GetDeviceCaps(hdc, LOGPIXELSY);			// For Some Font Size Math
+			DeleteDC(hdc);
+			//strcpy(default_font_name,vParams[7].szValue());	// Font Name
+			//nSize = vParams[8].nValue();		// Font Size
+			//if ( vParams[9].nValue() >= 0 && vParams[9].nValue() <= 1000 )
+			//	nWeight = vParams[9].nValue();			// Font Weight
+			g_hFontSplash = CreateFont(0-(nSize*CyPixels)/72,0,0,0,nWeight,0,0,0,DEFAULT_CHARSET,
+				OUT_TT_PRECIS,CLIP_DEFAULT_PRECIS,PROOF_QUALITY,FF_DONTCARE,default_font_name);	// Create Font
+			// The font is deleted when by g_script's destructor.
+		}
 
-		SendMessage(static_win, WM_SETFONT, (WPARAM)hfFont, MAKELPARAM(TRUE, 0));	// Do Font
+		SendMessage(static_win, WM_SETFONT, (WPARAM)g_hFontSplash, MAKELPARAM(TRUE, 0));	// Do Font
 		ShowWindow(g_hWndSplash, SW_SHOWNOACTIVATE);				// Show the Splash
 		// Doesn't help with the brief delay in updating the window that happens when
 		// something like URLDownloadToFile is used immediately after SplashTextOn:
@@ -6865,10 +6888,13 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		return OK;
 
 	case ACT_PROGRESS:
-		return Progress(FOUR_ARGS);  // The 5th arg is for future use and currently not passed.
+		return Splash(FIVE_ARGS, "", false);  // ARG6 is for future use and currently not passed.
+
+	case ACT_SPLASHIMAGE:
+		return Splash(ARG2, ARG3, ARG4, ARG5, ARG6, ARG1, true);  // ARG7 is for future use and currently not passed.
 
 	case ACT_TOOLTIP:
-		return ToolTip(THREE_ARGS);
+		return ToolTip(FOUR_ARGS);
 
 	case ACT_TRAYTIP:
 		return TrayTip(FOUR_ARGS);

@@ -86,6 +86,7 @@
 				BufferSecurityCheck="FALSE"
 				UsePrecompiledHeader="3"
 				WarningLevel="3"
+				WarnAsError="TRUE"
 				Detect64BitPortabilityProblems="FALSE"
 				DebugInformationFormat="3"/>
 			<Tool

@@ -78,16 +78,16 @@ enum enum_act {
 , ACT_IFINSTRING, ACT_IFNOTINSTRING
 , ACT_IFEXIST, ACT_IFNOTEXIST, ACT_IFMSGBOX
 , ACT_IF_FIRST = ACT_IFEQUAL, ACT_IF_LAST = ACT_IFMSGBOX  // Keep this updated with any new IFs that are added.
-, ACT_MSGBOX, ACT_INPUTBOX, ACT_SPLASHTEXTON, ACT_SPLASHTEXTOFF, ACT_PROGRESS
+, ACT_MSGBOX, ACT_INPUTBOX, ACT_SPLASHTEXTON, ACT_SPLASHTEXTOFF, ACT_PROGRESS, ACT_SPLASHIMAGE
 , ACT_TOOLTIP, ACT_TRAYTIP, ACT_INPUT
 , ACT_TRANSFORM, ACT_STRINGLEFT, ACT_STRINGRIGHT, ACT_STRINGMID
 , ACT_STRINGTRIMLEFT, ACT_STRINGTRIMRIGHT, ACT_STRINGLOWER, ACT_STRINGUPPER
-, ACT_STRINGLEN, ACT_STRINGGETPOS, ACT_STRINGREPLACE, ACT_STRINGSPLIT, ACT_SORT
+, ACT_STRINGLEN, ACT_STRINGGETPOS, ACT_STRINGREPLACE, ACT_STRINGSPLIT, ACT_SPLITPATH, ACT_SORT
 , ACT_ENVSET, ACT_ENVUPDATE
 , ACT_RUNAS, ACT_RUN, ACT_RUNWAIT, ACT_URLDOWNLOADTOFILE
 , ACT_GETKEYSTATE
-, ACT_SEND, ACT_CONTROLSEND, ACT_CONTROLCLICK, ACT_CONTROLMOVE, ACT_CONTROLFOCUS, ACT_CONTROLGETFOCUS
-, ACT_CONTROLSETTEXT, ACT_CONTROLGETTEXT, ACT_CONTROL, ACT_CONTROLGET
+, ACT_SEND, ACT_CONTROLSEND, ACT_CONTROLCLICK, ACT_CONTROLMOVE, ACT_CONTROLGETPOS
+, ACT_CONTROLFOCUS, ACT_CONTROLGETFOCUS, ACT_CONTROLSETTEXT, ACT_CONTROLGETTEXT, ACT_CONTROL, ACT_CONTROLGET
 , ACT_COORDMODE, ACT_SETDEFAULTMOUSESPEED, ACT_MOUSEMOVE, ACT_MOUSECLICK, ACT_MOUSECLICKDRAG, ACT_MOUSEGETPOS
 , ACT_STATUSBARGETTEXT
 , ACT_STATUSBARWAIT
@@ -148,7 +148,9 @@ enum enum_act_old {
 
 // It seems best not to include ACT_SUSPEND in the below, since the user may have marked
 // a large number of subroutines as "Suspend, Permit".  Even PAUSE is iffy, since the user
-// may be using it as "Pause, off/toggle", but it seems best to support PAUSE:
+// may be using it as "Pause, off/toggle", but it seems best to support PAUSE because otherwise
+// hotkey such as "#z::pause" would not be able to unpause the script if its MaxThreadsPerHotkey
+// was 1 (the default).
 #define ACT_IS_ALWAYS_ALLOWED(ActionType) (ActionType == ACT_EXITAPP || ActionType == ACT_PAUSE \
 	|| ActionType == ACT_EDIT || ActionType == ACT_RELOAD || ActionType == ACT_KEYHISTORY \
 	|| ActionType == ACT_LISTLINES || ActionType == ACT_LISTVARS || ActionType == ACT_LISTHOTKEYS)
@@ -254,26 +256,35 @@ struct InputBoxType
 	HWND hwnd;
 };
 
-struct ProgressType
+struct SplashType
 {
-	int style;
-	int xstyle;
-	int xpos;
-	int ypos;
 	int width;
 	int height;
 	int percent;  // The position of the progress bar.
-	bool owned;   // Whether this window is owned by the main window.
-	bool centered_main;  // Whether the main text is centered.
-	bool centered_sub;  // Whether the sub text is centered.
+	int margin_x; // left/right margin
+	int margin_y; // top margin
+	int text1_height; // Height of main text control.
+	int object_width;   // Width of image.
+	int object_height;  // Height of the progress bar or image.
 	HWND hwnd;
+	LPPICTURE pic; // For SplashImage.
 	HWND hwnd_bar;
 	HWND hwnd_text1;  // MainText
 	HWND hwnd_text2;  // SubText
+	HFONT hfont1; // Main
+	HFONT hfont2; // Sub
+	HBRUSH hbrush; // Window background color brush.
+	COLORREF color_bk; // The background color itself.
+	COLORREF color_text; // Color of the font.
 };
-#define PROGRESS_BAR_HEIGHT 20  // The height of the bar itself.
-#define PROGRESS_BAR_MARGIN 10  // Left/Right
-#define PROGRESS_TEXT_MARGIN 10  // Left/Right.  Same margin as above to make left-justified text align properly.
+
+// Use GetClientRect() to determine the available width so that control's can be centered.
+#define SPLASH_CALC_YPOS \
+	int bar_y = splash.margin_y + (splash.text1_height ? (splash.text1_height + splash.margin_y) : 0);\
+	int sub_y = bar_y + splash.object_height + (splash.object_height ? splash.margin_y : 0); // i.e. don't include margin_y twice if there's no bar.
+#define PROGRESS_MAIN_POS splash.margin_x, splash.margin_y, control_width, splash.text1_height
+#define PROGRESS_BAR_POS  splash.margin_x, bar_y, control_width, splash.object_height
+#define PROGRESS_SUB_POS  splash.margin_x, sub_y, control_width, (client_rect.bottom - client_rect.top) - sub_y
 
 // From AutoIt3's inputbox:
 template <class T>
@@ -387,7 +398,7 @@ enum JoyControls {JOYCTRL_INVALID, JOYCTRL_XPOS, JOYCTRL_YPOS, JOYCTRL_ZPOS
 
 enum WinGetCmds {WINGET_CMD_INVALID, WINGET_CMD_ID, WINGET_CMD_IDLAST, WINGET_CMD_COUNT, WINGET_CMD_LIST};
 
-enum TransformCmds {TRANS_CMD_INVALID, TRANS_CMD_ASC, TRANS_CMD_CHR, TRANS_CMD_MOD
+enum TransformCmds {TRANS_CMD_INVALID, TRANS_CMD_ASC, TRANS_CMD_CHR, TRANS_CMD_HTML, TRANS_CMD_MOD
 	, TRANS_CMD_POW, TRANS_CMD_EXP, TRANS_CMD_SQRT, TRANS_CMD_LOG, TRANS_CMD_LN
 	, TRANS_CMD_ROUND, TRANS_CMD_CEIL, TRANS_CMD_FLOOR, TRANS_CMD_ABS
 	, TRANS_CMD_SIN, TRANS_CMD_COS, TRANS_CMD_TAN, TRANS_CMD_ASIN, TRANS_CMD_ACOS, TRANS_CMD_ATAN
@@ -451,6 +462,7 @@ private:
 		, LoopReadFileStruct *aCurrentReadFile = NULL);
 	ResultType PerformAssign();
 	ResultType StringSplit(char *aArrayName, char *aInputString, char *aDelimiterList, char *aOmitList);
+	ResultType SplitPath(char *aFileSpec);
 	ResultType PerformSort(char *aContents, char *aOptions);
 	ResultType ScriptGetKeyState(char *aKeyName, char *aOption);
 	ResultType DriveSpace(char *aPath, bool aGetFreeSpace);
@@ -511,8 +523,9 @@ private:
 
 	ResultType PerformShowWindow(ActionTypeType aActionType, char *aTitle = "", char *aText = ""
 		, char *aExcludeTitle = "", char *aExcludeText = "");
-	ResultType Progress(char *aOptions, char *aSubText, char *aMainText, char *aTitle);
-	ResultType ToolTip(char *aText, char *aX, char *aY);
+	ResultType Splash(char *aOptions, char *aSubText, char *aMainText, char *aTitle, char *aFontName
+		, char *aImageFile, bool aSplashImage);
+	ResultType ToolTip(char *aText, char *aX, char *aY, char *aID);
 	ResultType TrayTip(char *aTitle, char *aText, char *aTimeout, char *aOptions);
 	ResultType Transform(char *aCmd, char *aValue1, char *aValue2);
 	ResultType Input(char *aOptions, char *aEndKeys, char *aMatchList);
@@ -527,6 +540,7 @@ private:
 		, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType ControlMove(char *aControl, char *aX, char *aY, char *aWidth, char *aHeight
 		, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
+	ResultType ControlGetPos(char *aControl, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType ControlGetFocus(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType ControlFocus(char *aControl, char *aTitle, char *aText
 		, char *aExcludeTitle, char *aExcludeText);
@@ -759,11 +773,10 @@ public:
 		case ACT_CONTROLMOVE:
 		case ACT_SETINTERRUPT:
 		case ACT_PIXELGETCOLOR:
-		case ACT_TOOLTIP:  // Seems best to allow negative for this one even though the tip will be put in a visible region.
 			return true;
 
-		// Since mouse coords are relative to the foreground window, they can be negative:
-		case ACT_MOUSECLICK:
+		case ACT_TOOLTIP:    // Seems best to allow negative even though the tip will be put in a visible region.
+		case ACT_MOUSECLICK: // Since mouse coords are relative to the foreground window, they can be negative.
 			return (aArgNum == 2 || aArgNum == 3);
 		case ACT_MOUSECLICKDRAG:
 			return (aArgNum >= 2 && aArgNum <= 5);  // Allow dragging to/from negative coordinates.
@@ -1027,6 +1040,7 @@ public:
 		if (!aBuf || !*aBuf) return TRANS_CMD_INVALID;
 		if (!stricmp(aBuf, "Asc")) return TRANS_CMD_ASC;
 		if (!stricmp(aBuf, "Chr")) return TRANS_CMD_CHR;
+		if (!stricmp(aBuf, "HTML")) return TRANS_CMD_HTML;
 		if (!stricmp(aBuf, "Mod")) return TRANS_CMD_MOD;
 		if (!stricmp(aBuf, "Pow")) return TRANS_CMD_POW;
 		if (!stricmp(aBuf, "Exp")) return TRANS_CMD_EXP;

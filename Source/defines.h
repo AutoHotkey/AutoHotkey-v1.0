@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.14"
+#define NAME_VERSION "1.0.15"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -74,7 +74,9 @@ GNU General Public License for more details.
 	#define XBUTTON1      0x0001
 	#define XBUTTON2      0x0002
 #endif
-
+#ifndef HIMETRIC_INCH
+	#define HIMETRIC_INCH 2540
+#endif
 
 
 #define IS_32BIT(signed_value_64) (signed_value_64 >= INT_MIN && signed_value_64 <= INT_MAX)
@@ -114,8 +116,12 @@ enum ToggleValueType {TOGGLE_INVALID = 0, TOGGLED_ON, TOGGLED_OFF, ALWAYS_ON, AL
 // And these to prevent mutual dependency problem between window.h and globaldata.h:
 #define MAX_MSGBOXES 7
 #define MAX_INPUTBOXES 4
-#define MAX_PROGRESS_WINDOWS 20  // Allow a lot for downloads and such.  Also, keep the below updated.
-#define MAX_PROGRESS_WINDOWS_STR "20"
+#define MAX_PROGRESS_WINDOWS 10  // Allow a lot for downloads and such.
+#define MAX_PROGRESS_WINDOWS_STR "10" // Keep this in sync with above.
+#define MAX_SPLASHIMAGE_WINDOWS 10
+#define MAX_SPLASHIMAGE_WINDOWS_STR "10" // Keep this in sync with above.
+#define MAX_TOOLTIPS 20
+#define MAX_TOOLTIPS_STR "20"
 #define MAX_FILEDIALOGS 4
 #define MAX_FOLDERDIALOGS 4
 #define MAX_NUMBER_LENGTH 20
@@ -301,7 +307,7 @@ inline void global_init(global_struct *gp)
 	#define DEFAULT_MOUSE_SPEED 2
 	#define MAX_MOUSE_SPEED 100
 	#define MAX_MOUSE_SPEED_STR "100"
-	#define COORD_UNSPECIFIED (INT_MIN)
+	#define COORD_UNSPECIFIED INT_MIN
 	gp->DefaultMouseSpeed = DEFAULT_MOUSE_SPEED;
 	gp->CoordMode = 0;  // All the flags it contains are off by default.
 	gp->StoreCapslockMode = true;  // AutoIt2 (and probably 3's) default, and it makes a lot of sense.

@@ -983,12 +983,16 @@ LRESULT AllowIt(HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, sc_type sc, b
 
 	// Although the delete key itself can be simulated (logical or physical), the user must be physically
 	// (not logically) holding down CTRL and ALT for the ctrl-alt-del sequence to take effect,
-	// which is why g_modifiersLR_physical is used vs. g_modifiersLR_logical (which is used above since it's different):
+	// which is why g_modifiersLR_physical is used vs. g_modifiersLR_logical (which is used above since
+	// it's different).  Also, this is now done for XP -- in addition to NT4 & Win2k -- in case XP is
+	// configured to display the NT/2k style security window instead of the task manager.  This is
+	// probably very common because whenever the welcome screen is diabled, that's the default behavior?:
+	// Control Panel > User Accounts > Use the welcome screen for fast and easy logon
 	if (   (pEvent->vkCode == VK_DELETE || pEvent->vkCode == VK_DECIMAL) && !key_up // Both of these qualify, see notes.
 		&& (g_modifiersLR_physical & (MOD_LCONTROL | MOD_RCONTROL)) // At least one CTRL key is physically down.
 		&& (g_modifiersLR_physical & (MOD_LALT | MOD_RALT))         // At least one ALT key is physically down.
 		&& !(g_modifiersLR_physical & (MOD_LSHIFT | MOD_RSHIFT))    // Neither shift key is phys. down (WIN is ok).
-		&& (g_os.IsWin2000() || g_os.IsWinNT4())   )                // Only these two should need the fix.
+		&& g_os.IsWinNT4orLater()   )
 	{
 		// Similar to the above case except for Windows 2000.  I suspect it also applies to NT,
 		// but I'm not sure.  It seems safer to apply it to NT until confirmed otherwise.

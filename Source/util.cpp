@@ -162,18 +162,18 @@ __int64 FileTimeSecondsUntil(FILETIME *pftStart, FILETIME *pftEnd)
 
 
 
-unsigned __int64 GetFileSize64(HANDLE aFileHandle)
-// Code adapted from someone's on the Usenet.
-{
-    ULARGE_INTEGER ui = {0};
-    ui.LowPart = GetFileSize(aFileHandle, &ui.HighPart);
-    if(ui.LowPart == MAXDWORD && GetLastError() != NO_ERROR)
-    {
-        // the caller should use GetLastError() to test for error
-        return ULLONG_MAX;
-    }
-    return (unsigned __int64)ui.QuadPart;
-}
+//unsigned __int64 GetFileSize64(HANDLE aFileHandle)
+//// Code adapted from someone's on the Usenet.
+//{
+//    ULARGE_INTEGER ui = {0};
+//    ui.LowPart = GetFileSize(aFileHandle, &ui.HighPart);
+//    if(ui.LowPart == MAXDWORD && GetLastError() != NO_ERROR)
+//    {
+//        // the caller should use GetLastError() to test for error
+//        return ULLONG_MAX;
+//    }
+//    return (unsigned __int64)ui.QuadPart;
+//}
 
 
 
@@ -562,4 +562,29 @@ char *ConvertFilespecToCorrectCase(char *aFullFileSpec)
 	// aFullFileSpec is large enough:
 	strcpy(aFullFileSpec, built_filespec);
 	return aFullFileSpec;
+}
+
+
+
+COLORREF ColorNameToBGR(char *aColorName)
+// These are the main HTML color names.  Returns CLR_DEFAULT if a matching HTML color name can't be found.
+{
+	if (!aColorName || !*aColorName) return CLR_DEFAULT;
+	if (!stricmp(aColorName, "Black"))  return 0x000000;  // These colors are all in BGR format, not RGB.
+	if (!stricmp(aColorName, "Silver")) return 0xC0C0C0;
+	if (!stricmp(aColorName, "Gray"))   return 0x808080;
+	if (!stricmp(aColorName, "White"))  return 0xFFFFFF;
+	if (!stricmp(aColorName, "Maroon")) return 0x000080;
+	if (!stricmp(aColorName, "Red"))    return 0x0000FF;
+	if (!stricmp(aColorName, "Purple")) return 0x800080;
+	if (!stricmp(aColorName, "Fuchsia"))return 0xFF00FF;
+	if (!stricmp(aColorName, "Green"))  return 0x008000;
+	if (!stricmp(aColorName, "Lime"))   return 0x00FF00;
+	if (!stricmp(aColorName, "Olive"))  return 0x008080;
+	if (!stricmp(aColorName, "Yellow")) return 0x00FFFF;
+	if (!stricmp(aColorName, "Navy"))   return 0x800000;
+	if (!stricmp(aColorName, "Blue"))   return 0xFF0000;
+	if (!stricmp(aColorName, "Teal"))   return 0x808000;
+	if (!stricmp(aColorName, "Aqua"))   return 0xFFFF00;
+	return CLR_DEFAULT;
 }

@@ -27,7 +27,7 @@ extern bool g_DestroyWindowCalled;
 extern HWND g_hWnd;  // The main window
 extern HWND g_hWndEdit;  // The edit window, child of main.
 extern HWND g_hWndSplash;  // The SplashText window.
-extern HWND g_hWndToolTip;  // The tooltip window.
+extern HFONT g_hFontSplash;
 extern HACCEL g_hAccelTable; // Accelerator table for main menu shortcut keys.
 
 extern modLR_type g_modifiersLR_logical;   // Tracked by hook (if hook is active).
@@ -89,7 +89,9 @@ extern int g_nInputBoxes;
 extern int g_nFileDialogs;
 extern int g_nFolderDialogs;
 extern InputBoxType g_InputBox[MAX_INPUTBOXES];
-extern ProgressType g_Progress[MAX_PROGRESS_WINDOWS];
+extern SplashType g_Progress[MAX_PROGRESS_WINDOWS];
+extern SplashType g_SplashImage[MAX_SPLASHIMAGE_WINDOWS];
+extern HWND g_hWndToolTip[MAX_TOOLTIPS];
 
 extern bool g_SortCaseSensitive;
 extern bool g_SortNumeric;

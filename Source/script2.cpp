@@ -16,6 +16,7 @@ GNU General Public License for more details.
 
 #include "stdafx.h" // pre-compiled headers
 #include <wininet.h> // For URLDownloadToFile().
+#include <olectl.h> // for OleLoadPicture()
 #include "qmath.h" // Used by Transform() [math.h incurs 2k larger code size just for ceil() & floor()]
 #include "script.h"
 #include "window.h" // for IF_USE_FOREGROUND_WINDOW
@@ -37,224 +38,577 @@ GNU General Public License for more details.
 		target_window = g_ValidLastUsedWindow;
 
 
-ResultType Line::Progress(char *aOptions, char *aSubText, char *aMainText, char *aTitle)
+ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *aTitle, char *aFontName
+	, char *aImageFile, bool aSplashImage)
 // Parts of this have been adapted from the AutoIt3 source.
 {
-	int window_index = 0;  // Set the default progress window to operate upon (the first).
-	char *options = strchr(aOptions, ':');
-	if (options)
+	int window_index = 0;  // Set the default window to operate upon (the first).
+	char *options, *image_filename = aImageFile;  // Set default.
+	bool turn_off = false;
+	int percent = -1;  // Must be set to -1 in the case of SplashImage.
+
+	if (aSplashImage)
 	{
-		window_index = ATOI(aOptions) - 1;
-		if (window_index < 0 || window_index >= MAX_PROGRESS_WINDOWS)
-			return LineError("The window number must be between 1 and " MAX_PROGRESS_WINDOWS_STR "." ERR_ABORT
-				, FAIL, aOptions);
-		++options;
-	}
-	else
 		options = aOptions;
+		if (*aImageFile)
+		{
+			char *colon_pos = strchr(aImageFile, ':');
+			if (colon_pos)
+			{
+				char window_number_str[32];  // Allow extra room in case leading spaces or in hex format, e.g. 0x02
+				size_t length_to_copy = colon_pos - aImageFile;
+				if (length_to_copy < sizeof(window_number_str))
+				{
+					strlcpy(window_number_str, aImageFile, length_to_copy + 1);
+					if (IsPureNumeric(window_number_str, false, false, true)) // Seems best to allow float at runtime.
+					{
+						// Note that filenames can start with spaces, so omit_leading_whitespace() is only
+						// used if the string is entirely blank:
+						image_filename = colon_pos + 1;
+						char *blank_str = omit_leading_whitespace(image_filename);
+						if (!*blank_str)
+							image_filename = blank_str;
+						window_index = ATOI(window_number_str) - 1;
+						if (window_index < 0 || window_index >= MAX_SPLASHIMAGE_WINDOWS)
+							return LineError("The window number must be between 1 and " MAX_SPLASHIMAGE_WINDOWS_STR
+								"." ERR_ABORT, FAIL, aOptions);
+					}
+				}
+			}
+			turn_off = !stricmp(image_filename, "Off");
+		}
+	}
+	else // Progress Window.
+	{
+		if (   !(options = strchr(aOptions, ':'))   )
+			options = aOptions;
+		else
+		{
+			window_index = ATOI(aOptions) - 1;
+			if (window_index < 0 || window_index >= MAX_PROGRESS_WINDOWS)
+				return LineError("The window number must be between 1 and " MAX_PROGRESS_WINDOWS_STR "." ERR_ABORT
+					, FAIL, aOptions);
+			++options;
+		}
+		turn_off = !stricmp(options, "Off");
+		// Allow floats at runtime for flexibility (i.e. in case aOptions was in a variable reference).
+		// But still use ATOI for the conversion:
+		if (!turn_off && IsPureNumeric(options, false, false, true))
+			percent = ATOI(options);
+		//else leave it set to the default.
+	}
 
-	bool turn_off = !stricmp(options, "Off");
-	// Allow floats at runtime for flexibility (i.e. in case aOptions was in a variable reference).
-	// But still use ATOI for the conversion:
-	int percent = (!turn_off && IsPureNumeric(options, false, false, true)) ? ATOI(options) : -1;
-	bool mode_is_modify = (percent >= 0 || !*options);
-
-	ProgressType &prog = g_Progress[window_index];
+	SplashType &splash = aSplashImage ? g_SplashImage[window_index] : g_Progress[window_index];
 
 	// In case it's possible for the window to get destroyed by other means (WinClose?).
-	// Do this only after the above options were set so that the each progress window's settings
-	// will be remembered until such time as "Progress, Off" is used:
-	if (prog.hwnd && !IsWindow(prog.hwnd))
-		prog.hwnd = NULL;
+	// Do this only after the above options were set so that the each window's settings
+	// will be remembered until such time as "Command, Off" is used:
+	if (splash.hwnd && !IsWindow(splash.hwnd))
+		splash.hwnd = NULL;
+
+	if (!turn_off && splash.hwnd && !*image_filename && (percent >= 0 || !*options)) // The "modify existing window" mode is in effect.
+	{
+		// If there is an existing window, just update its percentage (progress bar position) and text.
+		// If not, do nothing since we don't have the original text of the window to recreate it.
+		// Since this is our thread's window, it shouldn't be necessary to use SendMessageTimeout()
+		// since the window cannot be hung if our thread is active.  Also, setting a text item
+		// from non-blank to blank is not supported so that elements can be omitted from an update
+		// command without changing the text that's in the window.  The script can specify %a_space%
+		// to explicitly make an element blank.
+		if (!aSplashImage && percent >= 0 && splash.percent != percent)
+		{
+			splash.percent = percent;
+			if (splash.hwnd_bar)
+				SendMessage(splash.hwnd_bar, PBM_SETPOS, (WPARAM)percent, 0);
+		}
+		// SendMessage() vs. SetWindowText() is used for controls so that tabs are expanded.
+		// For simplicity, the hwnd_text1 control is not expanded dynamically if it is currently of
+		// height zero.  The user can recreate the window if a different height is needed.
+		if (*aMainText && splash.hwnd_text1)
+			SendMessage(splash.hwnd_text1, WM_SETTEXT, 0, (LPARAM)(aMainText));
+		if (*aSubText)
+			SendMessage(splash.hwnd_text2, WM_SETTEXT, 0, (LPARAM)(aSubText));
+		if (*aTitle)
+			SetWindowText(splash.hwnd, aTitle); // Use the simple method for parent window titles.
+		return OK;
+	}
+
+	// Otherwise, destroy any existing window first:
+	if (splash.hwnd)
+		DestroyWindow(splash.hwnd);
+	if (splash.hfont1) // Destroy font only after destroying the window that uses it.
+		DeleteObject(splash.hfont1);
+	if (splash.hfont2)
+		DeleteObject(splash.hfont2);
+	if (splash.hbrush)
+		DeleteObject(splash.hbrush);
+	if (splash.pic)
+		splash.pic->Release();
+	ZeroMemory(&splash, sizeof(splash)); // Set the above and all other fields to zero.
 
 	if (turn_off)
-	{
-		if (prog.hwnd)
-		{
-			DestroyWindow(prog.hwnd);
-			prog.hwnd = NULL;
-		}
 		return OK;
-	}
-
-	if (mode_is_modify) // The "modify existing window" mode is in effect.
-	{
-		// If there is an existing window, just update its percentage (progress position) and text.
-		// If not, do nothing since we don't have the original text of the window to recreate it.
-		if (prog.hwnd)
-		{
-			// Since this is our thread's window, it shouldn't be necessary to use SendMessageTimeout()
-			// since the window cannot be hung if our thread is active:
-			if (percent >= 0 && prog.percent != percent)
-			{
-				prog.percent = percent;
-				SendMessage(prog.hwnd_bar, PBM_SETPOS, (WPARAM)percent, 0);
-			}
-			// SendMessage() vs. SetWindowText() is used for controls so that tabs are expanded.
-			if (*aMainText) // i.e. setting it from non-blank to blank is not supported.
-				SendMessage(prog.hwnd_text1, WM_SETTEXT, 0, (LPARAM)(aMainText));
-			if (*aSubText)
-				SendMessage(prog.hwnd_text2, WM_SETTEXT, 0, (LPARAM)(aSubText));
-			if (*aTitle)
-				SetWindowText(prog.hwnd, aTitle); // Use the simple method for parent window titles.
-		}
-		return OK;
-	}
-
-	// Otherwise, the window doesn't exist yet or it is to be recreated.
+	// Otherwise, the window needs to be created or recreated.
 
 	if (!*aTitle) // Provide default title.
 		aTitle = (g_script.mFileName && *g_script.mFileName) ? g_script.mFileName : "";
 
-	// Since there is often just one progress window, and it defaults to always-on-top, it seems
-	// best to default owned to be true so that it doesn't get its own task bar button:
-	prog.owned = true;
-	prog.centered_main = true;
-	prog.centered_sub = true;
-	prog.style = WS_DISABLED|WS_POPUP|WS_CAPTION;
-	prog.xstyle = WS_EX_TOPMOST;
-	prog.xpos = COORD_UNSPECIFIED;
-	prog.ypos = COORD_UNSPECIFIED;
-	prog.height = 100; // au3's default
-	prog.width = 300; // au3's default
+	// Since there is often just one progress/splash window, and it defaults to always-on-top,
+	// it seems best to default owned to be true so that it doesn't get its own task bar button:
+	bool owned = true;          // Whether this window is owned by the main window.
+	bool centered_main = true;  // Whether the main text is centered.
+	bool centered_sub = true;   // Whether the sub text is centered.
+	int style = WS_DISABLED|WS_POPUP|WS_CAPTION;  // WS_CAPTION implies WS_BORDER
+	int xstyle = WS_EX_TOPMOST;
+	int xpos = COORD_UNSPECIFIED;
+	int ypos = COORD_UNSPECIFIED;
+	int font_size1 = 0; // 0 is the flag to "use default size".
+	int font_size2 = 0;
+	int font_weight1 = FW_DONTCARE;  // Flag later logic to use default.
+	int font_weight2 = FW_DONTCARE;  // Flag later logic to use default.
+	COLORREF bar_color = CLR_DEFAULT;
+	splash.color_bk = CLR_DEFAULT;
+	splash.color_text = CLR_DEFAULT;
+	splash.height = COORD_UNSPECIFIED; // au3's default is 100 (client area)
+	if (aSplashImage)
+	{
+		#define SPLASH_DEFAULT_WIDTH 300   // au3's default
+		splash.width = COORD_UNSPECIFIED;
+		splash.object_height = COORD_UNSPECIFIED;
+	}
+	else // Progress window.
+	{
+		splash.width = SPLASH_DEFAULT_WIDTH;
+		splash.object_height = 20;
+	}
+	splash.object_width = COORD_UNSPECIFIED;  // Currently only used for SplashImage, not Progress.
+	if (*aMainText || *aSubText || !aSplashImage)
+	{
+		splash.margin_x = 10;
+		splash.margin_y = 5;
+	}
+	else // Displaying only a naked image, so don't use borders.
+		splash.margin_x = splash.margin_y = 0;
 
 	for (char *cp = options; *cp; ++cp)
 	{
 		switch(toupper(*cp))
 		{
-		case 'A':  // Always-on-top
-			if (*(cp + 1) == '0') // The zero is required to allow for future enhancement of this param.
-				prog.xstyle &= ~WS_EX_TOPMOST;
+		case 'A':  // Non-Always-on-top.  Synonymous with A0 in early versions.
+			// Decided against this enforcement.  In the enhancement mentioned below is ever done (unlikely),
+			// it seems that A1 can turn always-on-top on and A0 or A by itself can turn it off:
+			//if (*(cp + 1) == '0') // The zero is required to allow for future enhancement: modify attrib. of existing window.
+			xstyle &= ~WS_EX_TOPMOST;
 			break;
-		case 'B': // Borderless
-			prog.style &= ~WS_CAPTION;
+		case 'B': // Borderless and/or Titleless
+			style &= ~WS_CAPTION;
+			if (*(cp + 1) == '1')
+				style |= WS_BORDER;
+			else if (*(cp + 1) == '2')
+				style |= WS_DLGFRAME;
 			break;
 		case 'C': // Centered
-			if (*(cp + 1)) // It is documented that at least one digit is mandatory, this just prevents overflow.
+			if (!*(cp + 1)) // Avoids out-of-bounds when the loop's own ++cp is done.
+				break;
+			++cp; // Always increment to omit the next char from consideration by the next loop iteration.
+			switch(toupper(*cp))
 			{
-				prog.centered_sub = (*(cp + 1) != '0');
-				prog.centered_main = (*(cp + 2) != '0');
+			case 'B': // Bar color.
+			case 'T': // Text color.
+			case 'W': // Window/Background color.
+			{
+				char color_str[32];
+				strlcpy(color_str, cp + 1, sizeof(color_str));
+				char *space_pos = StrChrAny(color_str, " \t");  // space or tab
+				if (space_pos)
+					*space_pos = '\0';
+				//else a color name can still be present if it's at the end of the string.
+				COLORREF color = ColorNameToBGR(color_str);
+				if (color == CLR_DEFAULT) // A matching color name was not found, so assume it's in hex format.
+				{
+					if (strlen(color_str) > 6)
+						color_str[6] = '\0';  // Shorten to exactly 6 chars, which happens if no space/tab delimiter is present.
+					color = rgb_to_bgr(strtol(color_str, NULL, 16));
+				}
+				switch (toupper(*cp))
+				{
+				case 'B':
+					bar_color = color;
+					break;
+				case 'T':
+					splash.color_text = color;
+					break;
+				case 'W':
+					splash.color_bk = color;
+					splash.hbrush = CreateSolidBrush(color); // Used for window & control backgrounds.
+					break;
+				}
+				// Skip over the color string to avoid interpreting hex digits or color names as option letters:
+				cp += strlen(color_str);
+				break;
+			}
+			default:
+				centered_sub = (*cp != '0');
+				centered_main = (*(cp + 1) != '0');
+			}
+		case 'F':
+			if (!*(cp + 1)) // Avoids out-of-bounds when the loop's own ++cp is done.
+				break;
+			++cp; // Always increment to omit the next char from consideration by the next loop iteration.
+			switch(toupper(*cp))
+			{
+			case 'M':
+				if ((font_size1 = atoi(cp + 1)) < 0)
+					font_size1 = 0;
+				break;
+			case 'S':
+				if ((font_size2 = atoi(cp + 1)) < 0)
+					font_size2 = 0;
+				break;
 			}
 			break;
 		case 'M': // Movable and (optionally) resizable.
-			prog.style &= ~WS_DISABLED;
+			style &= ~WS_DISABLED;
 			if (*(cp + 1) == '1')
-				prog.style |= WS_SIZEBOX;
+				style |= WS_SIZEBOX;
 			if (*(cp + 1) == '2')
-				prog.style |= WS_SIZEBOX|WS_MINIMIZEBOX|WS_MAXIMIZEBOX|WS_SYSMENU;
+				style |= WS_SIZEBOX|WS_MINIMIZEBOX|WS_MAXIMIZEBOX|WS_SYSMENU;
 			break;
 		case 'T': // Give it a task bar button by making it a non-owned window.
-			prog.owned = false;
+			owned = false;
 			break;
 		// For options such as W, X and Y:
 		// Use atoi() vs. ATOI() to avoid interpreting something like 0x01B as hex when in fact
 		// the B was meant to be an option letter:
 		case 'W':
-			prog.width = atoi(cp + 1);
+			if (!*(cp + 1)) // Avoids out-of-bounds when the loop's own ++cp is done.
+				break;
+			++cp; // Always increment to omit the next char from consideration by the next loop iteration.
+			switch(toupper(*cp))
+			{
+			case 'M':
+				if ((font_weight1 = atoi(cp + 1)) < 0)
+					font_weight1 = 0;
+				break;
+			case 'S':
+				if ((font_weight2 = atoi(cp + 1)) < 0)
+					font_weight2 = 0;
+				break;
+			default:
+				if (aSplashImage)
+					splash.width = atoi(cp);
+				//else don't allow it to be changed from its default for Progress Bars.
+			}
 			break;
 		case 'H':
 			// Allow any width/height to be specified so that the window can be "rolled up" to its title bar:
-			prog.height = atoi(cp + 1);
+			splash.height = atoi(cp + 1);
 			break;
 		case 'X':
-			prog.xpos = atoi(cp + 1);
+			xpos = atoi(cp + 1);
 			break;
 		case 'Y':
-			prog.ypos = atoi(cp + 1);
+			ypos = atoi(cp + 1);
+			break;
+		case 'Z':
+			if (!*(cp + 1)) // Avoids out-of-bounds when the loop's own ++cp is done.
+				break;
+			++cp; // Always increment to omit the next char from consideration by the next loop iteration.
+			switch(toupper(*cp))
+			{
+			case 'B':  // for backward compatibility with interim releases of v1.0.14
+			case 'H':
+				splash.object_height = atoi(cp + 1); // Allow it to be zero or negative to omit the object.
+				break;
+			case 'W':
+				splash.object_width = atoi(cp + 1); // Allow it to be zero or negative to omit the object.
+				break;
+			case 'X':
+				splash.margin_x = atoi(cp + 1);
+				break;
+			case 'Y':
+				splash.margin_y = atoi(cp + 1);
+				break;
+			}
 			break;
 		// Otherwise: Ignore other characters, such as the digits that occur after the P/X/Y option letters.
 		}
 	}
 
-	// Destroy any existing window first:
-	if (prog.hwnd)
+	HDC hdc = CreateDC("DISPLAY", NULL, NULL, NULL);
+	int pixels_per_point_y = GetDeviceCaps(hdc, LOGPIXELSY);
+
+	// Get name and size of default font.
+	HFONT hfont_default = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+	HFONT hfont_old = (HFONT)SelectObject(hdc, hfont_default);
+	char default_font_name[65];
+	GetTextFace(hdc, sizeof(default_font_name) - 1, default_font_name);
+	TEXTMETRIC tm;
+	GetTextMetrics(hdc, &tm);
+	int default_gui_font_height = tm.tmHeight;
+
+	if (   (splash.object_height <= 0 && splash.object_height != COORD_UNSPECIFIED)
+		|| (splash.object_width <= 0 && splash.object_width != COORD_UNSPECIFIED)   )
+		splash.object_height = splash.object_width = 0;  // Reset for maintainability and sizing below.
+
+	// If there's an image, handle it first so that automatic-width can be applied (if no width was specified)
+	// for later font calculations:
+	HANDLE hfile_image;
+	if (aSplashImage && *image_filename && splash.object_height
+		&& (hfile_image = CreateFile(image_filename, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL)) != INVALID_HANDLE_VALUE)
 	{
-		DestroyWindow(prog.hwnd);
-		prog.hwnd = NULL;
+		// If any of these calls fail (rare), just omit the picture from the window.
+		DWORD file_size = GetFileSize(hfile_image, NULL);
+		if (file_size != -1)
+		{
+			HGLOBAL hglobal = GlobalAlloc(GMEM_MOVEABLE, file_size); // MSDN: alloc memory based on file size
+			if (hglobal)
+			{
+				LPVOID pdata = GlobalLock(hglobal);
+				if (pdata)
+				{
+					DWORD bytes_to_read = 0;
+					// MSDN: read file and store in global memory:
+					if (ReadFile(hfile_image, pdata, file_size, &bytes_to_read, NULL))
+					{
+						// MSDN: create IStream* from global memory:
+						LPSTREAM pstm = NULL;
+						if (SUCCEEDED(CreateStreamOnHGlobal(hglobal, TRUE, &pstm)) && pstm)
+						{
+							// MSDN: Create IPicture from image file:
+							if (FAILED(OleLoadPicture(pstm, file_size, FALSE, IID_IPicture, (LPVOID *)&splash.pic)))
+								splash.pic = NULL;
+							pstm->Release();
+							long hm_value;
+							if (splash.object_height == COORD_UNSPECIFIED)
+							{
+								splash.pic->get_Height(&hm_value);
+								// Convert himetric to pixels:
+								splash.object_height = MulDiv(hm_value, pixels_per_point_y, HIMETRIC_INCH);
+							}
+							if (splash.object_width == COORD_UNSPECIFIED)
+							{
+								splash.pic->get_Width(&hm_value);
+								splash.object_width = MulDiv(hm_value, GetDeviceCaps(hdc, LOGPIXELSX), HIMETRIC_INCH);
+							}
+							if (splash.width == COORD_UNSPECIFIED)
+								splash.width = splash.object_width + (2 * splash.margin_x);
+						}
+					}
+					GlobalUnlock(hglobal);
+				}
+			}
+		}
+		CloseHandle(hfile_image);
 	}
 
-	// Set up and display window:
-	RECT rect;
-	SystemParametersInfo(SPI_GETWORKAREA, 0, &rect, 0);	// Get Desktop rect
-	if (prog.xpos == COORD_UNSPECIFIED)
-		prog.xpos = (rect.right - prog.width) / 2;  // Center Horizontally
-	if (prog.ypos == COORD_UNSPECIFIED)
-		prog.ypos = (rect.bottom - prog.height) / 2; // Center Vertically
+	// If width is still unspecified -- which should only happen if it's a SplashImage window with
+	// no image, or there was a problem getting the image above -- set it to be the default.
+	if (splash.width == COORD_UNSPECIFIED)
+		splash.width = SPLASH_DEFAULT_WIDTH;
+	// Similarly, object_height is set to zero if the object is not present:
+	if (splash.object_height == COORD_UNSPECIFIED)
+		splash.object_height = 0;
 
-	SetRect(&rect, 0, 0, prog.width, prog.height);
-	AdjustWindowRectEx(&rect, prog.style, FALSE, prog.xstyle);
+	// Lay out client area.  If height is COORD_UNSPECIFIED, use a temp value for now until
+	// it can be later determined.
+	RECT client_rect, draw_rect;
+	SetRect(&client_rect, 0, 0, splash.width, splash.height == COORD_UNSPECIFIED ? 500 : splash.height);
 
-	// CREATE Main Progress Window
+	// Create fonts based on specified point sizes.  A zero value for font_size1 & 2 are correctly handled
+	// by CreateFont():
+	if (*aMainText)
+	{
+		// If a zero size is specified, it should use the default size.  But the default brought about
+		// by passing a zero here is not what the system uses as a default, so instead use a font size
+		// that is 25% larger than the default size (since the default size itself is used for aSubtext).
+		// On a typical system, the default GUI font's point size is 8, so this will make it 10 by default.
+		// Also, it appears that changing the system's font size in Control Panel -> Display -> Appearance
+		// does not affect the reported default font size.  Thus, the default is probably 8 for most/all
+		// XP systems and probably other OSes as well.
+		// By specifying PROOF_QUALITY the nearest matching font size should be chosen, which should avoid
+		// any scaling artifacts that might be caused if default_gui_font_height is not 8.
+		if (   !(splash.hfont1 = CreateFont(font_size1 ? -MulDiv(font_size1, pixels_per_point_y, 72) : (int)(1.25 * default_gui_font_height)
+			, 0, 0, 0, font_weight1 ? font_weight1 : FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET, OUT_TT_PRECIS
+			, CLIP_DEFAULT_PRECIS, PROOF_QUALITY, FF_DONTCARE, *aFontName ? aFontName : default_font_name))   )
+			// Call it again with default font in case above failed due to non-existent aFontName.
+			splash.hfont1 = CreateFont(font_size1 ? -MulDiv(font_size1, pixels_per_point_y, 72) : (int)(1.25 * default_gui_font_height)
+				, 0, 0, 0, font_weight1 ? font_weight1 : FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET, OUT_TT_PRECIS
+				, CLIP_DEFAULT_PRECIS, PROOF_QUALITY, FF_DONTCARE, default_font_name);
+		// To avoid showing a runtime error, fall back to the default font if other font wasn't created:
+		SelectObject(hdc, splash.hfont1 ? splash.hfont1 : hfont_default);
+		// Calc height of text by taking into account font size, number of lines, and space between lines:
+		draw_rect = client_rect;
+		draw_rect.left += splash.margin_x;
+		draw_rect.right -= splash.margin_x;
+		splash.text1_height = DrawText(hdc, aMainText, -1, &draw_rect, DT_CALCRECT | DT_WORDBREAK | DT_EXPANDTABS);
+	}
+	// else leave the above fields set to the zero defaults.
+
+	if (font_size2 || font_weight2 || aFontName)
+		if (   !(splash.hfont2 = CreateFont(-MulDiv(font_size2, pixels_per_point_y, 72), 0, 0, 0
+			, font_weight2, 0, 0, 0, DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS
+			, PROOF_QUALITY, FF_DONTCARE, *aFontName ? aFontName : default_font_name))   )
+			// Call it again with default font in case above failed due to non-existent aFontName.
+			if (font_size2 || font_weight2)
+				splash.hfont2 = CreateFont(-MulDiv(font_size2, pixels_per_point_y, 72), 0, 0, 0
+					, font_weight2, 0, 0, 0, DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS
+					, PROOF_QUALITY, FF_DONTCARE, default_font_name);
+	//else leave it NULL so that hfont_default will be used.
+
+	// The font(s) will be deleted the next time this window is destroyed or recreated,
+	// or by the g_script destructor.
+
+	SPLASH_CALC_YPOS  // Calculate the Y position of each control in the window.
+
+	if (splash.height == COORD_UNSPECIFIED)
+	{
+		// Since the window height was not specified, determine what it should be based on the height
+		// of all the controls in the window:
+		int subtext_height;
+		if (*aSubText)
+		{
+			SelectObject(hdc, splash.hfont2 ? splash.hfont2 : hfont_default);
+			// Calc height of text by taking into account font size, number of lines, and space between lines:
+			// Reset unconditionally because the previous DrawText() sometimes alters the rect:
+			draw_rect = client_rect;
+			draw_rect.left += splash.margin_x;
+			draw_rect.right -= splash.margin_x;
+			subtext_height = DrawText(hdc, aSubText, -1, &draw_rect, DT_CALCRECT | DT_WORDBREAK);
+		}
+		else
+			subtext_height = 0;
+		// For the below: sub_y was previously calc'd to be the top of the subtext control.
+		// Also, splash.margin_y is added because the text looks a little better if the window
+		// doesn't end immediately beneath it:
+		splash.height = subtext_height + sub_y + splash.margin_y;
+		client_rect.bottom = splash.height;
+	}
+
+	SelectObject(hdc, hfont_old); // Necessary to avoid memory leak.
+	if (!DeleteDC(hdc))
+		return FAIL;  // Force a failure to detect bugs such as hdc still having a created handle inside.
+
+	// Based on the client area determined above, expand the main_rect to include title bar, borders, etc.
+	// If the window has a border or caption this also changes top & left *slightly* from zero.
+	RECT main_rect = client_rect;
+	AdjustWindowRectEx(&main_rect, style, FALSE, xstyle);
+	int main_width = main_rect.right - main_rect.left;  // main.left might be slightly less than zero.
+	int main_height = main_rect.bottom - main_rect.top; // main.top might be slightly less than zero.
+
+	RECT desk_rect;
+	SystemParametersInfo(SPI_GETWORKAREA, 0, &desk_rect, 0);  // Get Desktop rect excluding task bar.
+
+	// Seems best (and easier) to do unconditionally restrict window size to the size of the desktop,
+	// since most users would probably want that.  This can be overridden by using WinMove afterward.
+	if (main_width > desk_rect.right)
+		main_width = desk_rect.right;
+	if (main_height > desk_rect.bottom)
+		main_height = desk_rect.bottom;
+
+	if (xpos == COORD_UNSPECIFIED)
+		xpos = (desk_rect.right - main_width) / 2;  // Don't use splash.width.
+	if (ypos == COORD_UNSPECIFIED)
+		ypos = (desk_rect.bottom - main_height) / 2; // Don't use splash.height
+
+	// CREATE Main Splash Window
 	// It seems best to make this an unowned window for two reasons:
-	// 1) It will get its own task bar icon then, which is usually desirable for cases
-	//    where there are several progress windows or the progress bar is monitoring something.
-	// 2) The progress window won't prevent the main window from being used (owned windows
+	// 1) It will get its own task bar icon then, which is usually desirable for cases where
+	//    there are several progress/splash windows or the window is monitoring something.
+	// 2) The progress/splash window won't prevent the main window from being used (owned windows
 	//    prevent their owners from ever becoming active).
 	// However, it seems likely that some users would want the above to be configurable,
 	// so now there is an option to change this behavior.
-	if (!(prog.hwnd = CreateWindowEx(prog.xstyle, WINDOW_CLASS_SPLASH, aTitle, prog.style, prog.xpos, prog.ypos
-		, rect.right - rect.left, rect.bottom - rect.top, prog.owned ? g_hWnd : NULL, NULL, g_hInstance, NULL)))
+	if (!(splash.hwnd = CreateWindowEx(xstyle, WINDOW_CLASS_SPLASH, aTitle, style, xpos, ypos
+		, main_width, main_height, owned ? g_hWnd : NULL, NULL, g_hInstance, NULL)))
 		return FAIL;  // No error msg since so rare.
 
-	if ((prog.style & WS_SYSMENU) || !prog.owned)
+	if ((style & WS_SYSMENU) || !owned)
 	{
 		// Setting the small icon puts it in the upper left corner of the dialog window.
 		// Setting the big icon makes the dialog show up correctly in the Alt-Tab menu (but big seems to
 		// have no effect unless the window is unowned, i.e. it has a button on the task bar.
 		LPARAM main_icon = (LPARAM)(g_script.mCustomIcon ? g_script.mCustomIcon
 			: LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_MAIN)));
-		if (prog.style & WS_SYSMENU)
-			SendMessage(prog.hwnd, WM_SETICON, ICON_SMALL, main_icon);
-		if (!prog.owned)
-			SendMessage(prog.hwnd, WM_SETICON, ICON_BIG, main_icon);
+		if (style & WS_SYSMENU)
+			SendMessage(splash.hwnd, WM_SETICON, ICON_SMALL, main_icon);
+		if (!owned)
+			SendMessage(splash.hwnd, WM_SETICON, ICON_BIG, main_icon);
 	}
 
-	GetClientRect(prog.hwnd, &rect);  // to determine the available width so that control's can be centered.
+	// Update client rect in case it was resized due to being too large (above) or in case the OS
+	// auto-resized it for some reason.  These updated values are also used by SPLASH_CALC_CTRL_WIDTH
+	// to properly position the static text controls so that text will be centered properly:
+	GetClientRect(splash.hwnd, &client_rect);
+	splash.height = client_rect.bottom;
+	splash.width = client_rect.right;
+	int control_width = client_rect.right - (splash.margin_x * 2);
 
 	// CREATE Main label
-	prog.hwnd_text1 = CreateWindowEx(0, "static", aMainText, WS_CHILD|WS_VISIBLE|(prog.centered_main ? SS_CENTER : SS_LEFT)
-		, PROGRESS_TEXT_MARGIN, 4, rect.right - rect.left - (PROGRESS_TEXT_MARGIN * 2), 24
-		, prog.hwnd, NULL, g_hInstance, NULL);
+	if (*aMainText)
+	{
+		splash.hwnd_text1 = CreateWindowEx(0, "static", aMainText
+			, WS_CHILD|WS_VISIBLE|SS_NOPREFIX|(centered_main ? SS_CENTER : SS_LEFT)
+			, PROGRESS_MAIN_POS, splash.hwnd, NULL, g_hInstance, NULL);
+		SendMessage(splash.hwnd_text1, WM_SETFONT, (WPARAM)(splash.hfont1 ? splash.hfont1 : hfont_default), MAKELPARAM(TRUE, 0));
+	}
 
-	HDC h_dc = CreateDC("DISPLAY", NULL, NULL, NULL);
-	SelectObject(h_dc, (HFONT)GetStockObject(DEFAULT_GUI_FONT)); // Get Default Font Name
-	char szFont[65];
-	GetTextFace(h_dc, sizeof(szFont) -1, szFont);
-	int CyPixels = GetDeviceCaps(h_dc, LOGPIXELSY);			    // For Some Font Size Math
-	DeleteDC(h_dc);
-
-	HFONT hfFont = CreateFont(0-(10*CyPixels)/72, 0, 0, 0, 600, 0, 0, 0, DEFAULT_CHARSET   // Create a bigger
-		, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, PROOF_QUALITY, FF_DONTCARE, szFont);         // bolder default
-	SendMessage(prog.hwnd_text1, WM_SETFONT, (WPARAM)hfFont, MAKELPARAM(TRUE, 0));         // GUI font.
-
-	// CREATE Progress control (always starts off at its default position of zero)
-	prog.hwnd_bar = CreateWindowEx(WS_EX_CLIENTEDGE, "msctls_progress32", NULL, WS_CHILD|WS_VISIBLE|PBS_SMOOTH
-		, PROGRESS_BAR_MARGIN, 30, rect.right - rect.left - (PROGRESS_BAR_MARGIN * 2), PROGRESS_BAR_HEIGHT
-		, prog.hwnd, NULL, NULL, NULL);
-	SendMessage(prog.hwnd_bar, PBM_SETRANGE, 0, MAKELONG(0, 100));
-	SendMessage(prog.hwnd_bar, PBM_SETSTEP, 1, 0); // set some characteristics
+	if (!aSplashImage && splash.object_height > 0) // Progress window
+	{
+		// CREATE Progress control (always starts off at its default percentage of zero):
+		splash.hwnd_bar = CreateWindowEx(WS_EX_CLIENTEDGE, "msctls_progress32", NULL, WS_CHILD|WS_VISIBLE|PBS_SMOOTH
+			, PROGRESS_BAR_POS, splash.hwnd, NULL, NULL, NULL);
+		SendMessage(splash.hwnd_bar, PBM_SETRANGE, 0, MAKELONG(0, 100));
+		SendMessage(splash.hwnd_bar, PBM_SETSTEP, 1, 0); // set some characteristics
+		if (bar_color != CLR_DEFAULT)
+			SendMessage(splash.hwnd_bar, PBM_SETBARCOLOR, 0, bar_color); // Set color.
+		if (splash.color_bk != CLR_DEFAULT)
+			SendMessage(splash.hwnd_bar, PBM_SETBKCOLOR, 0, splash.color_bk); // Set color.
+		if (percent > 0)
+		{
+			// This happens when the window doesn't exist and a command such as the following is given:
+			// Progress, 50 [, ...]
+			splash.percent = percent;
+			SendMessage(splash.hwnd_bar, PBM_SETPOS, (WPARAM)percent, 0);
+		}
+	}
 
 	// CREATE Sub label
-	prog.hwnd_text2 = CreateWindowEx(0, "static", aSubText, WS_CHILD|WS_VISIBLE|(prog.centered_sub ? SS_CENTER : SS_LEFT)
-		, PROGRESS_TEXT_MARGIN, 55, rect.right - rect.left - (PROGRESS_TEXT_MARGIN * 2), (rect.bottom - rect.top) - 55
-		, prog.hwnd, NULL, g_hInstance, NULL);
-	SendMessage(prog.hwnd_text2, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), MAKELPARAM(TRUE, 0));
+	splash.hwnd_text2 = CreateWindowEx(0, "static", aSubText
+		, WS_CHILD|WS_VISIBLE|SS_NOPREFIX|(centered_sub ? SS_CENTER : SS_LEFT)
+		, PROGRESS_SUB_POS, splash.hwnd, NULL, g_hInstance, NULL);
+	SendMessage(splash.hwnd_text2, WM_SETFONT, (WPARAM)(splash.hfont2 ? splash.hfont2 : hfont_default), MAKELPARAM(TRUE, 0));
 
 	// Show it without activating it.  Even with options that allow the window to be activated (such
 	// as movable), it seems best to do this to prevent changing the current foreground window, which
-	// is usually desirable for progress bars since they should be seen but not be disruptive:
-	ShowWindow(prog.hwnd,  SW_SHOWNOACTIVATE);
+	// is usually desirable for progress/splash windows since they should be seen but not be disruptive:
+	ShowWindow(splash.hwnd,  SW_SHOWNOACTIVATE);
 	return OK;
 }
 
 
 
-ResultType Line::ToolTip(char *aText, char *aX, char *aY)
+ResultType Line::ToolTip(char *aText, char *aX, char *aY, char *aID)
 // Adapted from the AutoIt3 source.
 // au3: Creates a tooltip with the specified text at any location on the screen.
 // The window isn't created until it's first needed, so no resources are used until then.
 // Also, the window is destroyed in AutoIt_Script's destructor so no resource leaks occur.
 {
+	int window_index = *aID ? ATOI(aID) - 1 : 0;
+	if (window_index < 0 || window_index >= MAX_TOOLTIPS)
+		return LineError("The window number must be between 1 and " MAX_TOOLTIPS_STR "." ERR_ABORT, FAIL, aID);
+	HWND tip_hwnd = g_hWndToolTip[window_index];
+
+	// Destroy windows except the first (for performance) so that resources/mem are conserved.
+	// The first window will be hidden by the TTM_UPDATETIPTEXT message if aText is blank.
+	if (window_index > 0 && !*aText)
+	{
+		if (tip_hwnd && IsWindow(tip_hwnd))
+			DestroyWindow(tip_hwnd);
+		g_hWndToolTip[window_index] = NULL;
+		return OK;
+	}
+
 	// Set default values for the tip as the current mouse position.
 	// UPDATE: Don't call GetCursorPos() unless absolutely needed because it seems to mess
 	// up double-click timing, at least on XP.  UPDATE #2: Is isn't GetCursorPos() that's
@@ -310,26 +664,25 @@ ResultType Line::ToolTip(char *aText, char *aX, char *aY)
 	//ti.rect.left = dtw.left;
 
 	DWORD dwResult;
-	if (!g_hWndToolTip)
+	if (!tip_hwnd)
 	{
 		// This this window has no owner, it won't be automatically destroyed when its owner is.
 		// Thus, it should be destroyed upon program termination.
-		g_hWndToolTip = CreateWindowEx(WS_EX_TOPMOST, TOOLTIPS_CLASS, NULL, TTS_NOPREFIX | TTS_ALWAYSTIP,
-			CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, NULL, NULL, NULL, NULL);
-
-		SendMessageTimeout(g_hWndToolTip, TTM_ADDTOOL, 0, (LPARAM)(LPTOOLINFO)&ti, SMTO_ABORTIFHUNG, 2000, &dwResult);
-		SendMessageTimeout(g_hWndToolTip, TTM_SETMAXTIPWIDTH, 0, (LPARAM)dtw.right, SMTO_ABORTIFHUNG, 2000, &dwResult);
+		tip_hwnd = g_hWndToolTip[window_index] = CreateWindowEx(WS_EX_TOPMOST, TOOLTIPS_CLASS, NULL, TTS_NOPREFIX | TTS_ALWAYSTIP
+			, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, NULL, NULL, NULL, NULL);
+		SendMessageTimeout(tip_hwnd, TTM_ADDTOOL, 0, (LPARAM)(LPTOOLINFO)&ti, SMTO_ABORTIFHUNG, 2000, &dwResult);
+		SendMessageTimeout(tip_hwnd, TTM_SETMAXTIPWIDTH, 0, (LPARAM)dtw.right, SMTO_ABORTIFHUNG, 2000, &dwResult);
 		// Must do these next two when the window is first created, otherwise GetWindowRect() below will retrieve
 		// a tooltip window size that is quite a bit taller than it winds up being:
-		SendMessageTimeout(g_hWndToolTip, TTM_TRACKPOSITION, 0, (LPARAM)MAKELONG(pt.x, pt.y), SMTO_ABORTIFHUNG, 2000, &dwResult);
-		SendMessageTimeout(g_hWndToolTip, TTM_TRACKACTIVATE, TRUE, (LPARAM)&ti, SMTO_ABORTIFHUNG, 2000, &dwResult);
+		SendMessageTimeout(tip_hwnd, TTM_TRACKPOSITION, 0, (LPARAM)MAKELONG(pt.x, pt.y), SMTO_ABORTIFHUNG, 2000, &dwResult);
+		SendMessageTimeout(tip_hwnd, TTM_TRACKACTIVATE, TRUE, (LPARAM)&ti, SMTO_ABORTIFHUNG, 2000, &dwResult);
 	}
 	else
-		SendMessageTimeout(g_hWndToolTip, TTM_UPDATETIPTEXT, 0, (LPARAM)&ti, SMTO_ABORTIFHUNG, 2000, &dwResult);
+		SendMessageTimeout(tip_hwnd, TTM_UPDATETIPTEXT, 0, (LPARAM)&ti, SMTO_ABORTIFHUNG, 2000, &dwResult);
 
 
 	RECT ttw = {0};
-	GetWindowRect(g_hWndToolTip, &ttw); // Must be called this late to ensure the tooltip has been created by above.
+	GetWindowRect(tip_hwnd, &ttw); // Must be called this late to ensure the tooltip has been created by above.
 	int tt_width = ttw.right - ttw.left;
 	int tt_height = ttw.bottom - ttw.top;
 	if (pt.x + tt_width >= dtw.right)
@@ -361,10 +714,10 @@ ResultType Line::ToolTip(char *aText, char *aX, char *aY)
 		}
 	}
 
-	SendMessageTimeout(g_hWndToolTip, TTM_TRACKPOSITION, 0, (LPARAM)MAKELONG(pt.x, pt.y), SMTO_ABORTIFHUNG, 2000, &dwResult);
+	SendMessageTimeout(tip_hwnd, TTM_TRACKPOSITION, 0, (LPARAM)MAKELONG(pt.x, pt.y), SMTO_ABORTIFHUNG, 2000, &dwResult);
 	// And do a TTM_TRACKACTIVATE even if the tooltip window already existed upon entry to this function,
 	// so that in case it was hidden or dismissed while its HWND still exists, it will be shown again:
-	SendMessageTimeout(g_hWndToolTip, TTM_TRACKACTIVATE, TRUE, (LPARAM)&ti, SMTO_ABORTIFHUNG, 2000, &dwResult);
+	SendMessageTimeout(tip_hwnd, TTM_TRACKACTIVATE, TRUE, (LPARAM)&ti, SMTO_ABORTIFHUNG, 2000, &dwResult);
 	return OK;
 }
 
@@ -401,7 +754,7 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 	if (trans_cmd == TRANS_CMD_INVALID)
 		return output_var->Assign();
 
-	char buf[32], *cp;
+	char buf[32];
 	int value32;
 	INT64 value64;
 	double value_double1, value_double2, multiplier;
@@ -458,10 +811,105 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 			return output_var->Assign();
 		else
 		{
-			*buf = value32;
+			*buf = value32;  // Store ASCII value as a single-character string.
 			*(buf + 1) = '\0';
 			return output_var->Assign(buf);
 		}
+
+	case TRANS_CMD_HTML:
+	{
+		// These are the encoding-neutral translations for ASC 128 through 255 as shown by Dreamweaver.
+		// It's possible that using just the &#number convention (e.g. &#128 through &#255;) would be
+		// more appropriate for some users, but that mode can be added in the future if it is ever
+		// needed (by passing a mode setting for aValue2):
+		// ÄÅÇÉÑÖÜáàâäãåçéèêëíìîïñóòôöõúùûü†°¢£§•¶ß®©™´¨≠ÆØ∞±≤≥¥µ∂∑∏π∫ªºΩæø
+		// ¿¡¬√ƒ≈∆«»… ÀÃÕŒœ–—“”‘’÷◊ÿŸ⁄€‹›ﬁﬂ‡·‚„‰ÂÊÁËÈÍÎÏÌÓÔÒÚÛÙıˆ˜¯˘˙˚¸˝˛ˇ
+		static const char *html[128] = {
+			  "&euro;", "&#129;", "&sbquo;", "&fnof;", "&bdquo;", "&hellip;", "&dagger;", "&Dagger;"
+			, "&circ;", "&permil;", "&Scaron;", "&lsaquo;", "&OElig;", "&#141;", "&#381;", "&#143;"
+			, "&#144;", "&lsquo;", "&rsquo;", "&ldquo;", "&rdquo;", "&bull;", "&ndash;", "&mdash;"
+			, "&tilde;", "&trade;", "&scaron;", "&rsaquo;", "&oelig;", "&#157;", "&#382;", "&Yuml;"
+			, "&nbsp;", "&iexcl;", "&cent;", "&pound;", "&curren;", "&yen;", "&brvbar;", "&sect;"
+			, "&uml;", "&copy;", "&ordf;", "&laquo;", "&not;", "&shy;", "&reg;", "&macr;"
+			, "&deg;", "&plusmn;", "&sup2;", "&sup3;", "&acute;", "&micro;", "&para;", "&middot;"
+			, "&cedil;", "&sup1;", "&ordm;", "&raquo;", "&frac14;", "&frac12;", "&frac34;", "&iquest;"
+			, "&Agrave;", "&Aacute;", "&Acirc;", "&Atilde;", "&Auml;", "&Aring;", "&AElig;", "&Ccedil;"
+			, "&Egrave;", "&Eacute;", "&Ecirc;", "&Euml;", "&Igrave;", "&Iacute;", "&Icirc;", "&Iuml;"
+			, "&ETH;", "&Ntilde;", "&Ograve;", "&Oacute;", "&Ocirc;", "&Otilde;", "&Ouml;", "&times;"
+			, "&Oslash;", "&Ugrave;", "&Uacute;", "&Ucirc;", "&Uuml;", "&Yacute;", "&THORN;", "&szlig;"
+			, "&agrave;", "&aacute;", "&acirc;", "&atilde;", "&auml;", "&aring;", "&aelig;", "&ccedil;"
+			, "&egrave;", "&eacute;", "&ecirc;", "&euml;", "&igrave;", "&iacute;", "&icirc;", "&iuml;"
+			, "&eth;", "&ntilde;", "&ograve;", "&oacute;", "&ocirc;", "&otilde;", "&ouml;", "&divide;"
+			, "&oslash;", "&ugrave;", "&uacute;", "&ucirc;", "&uuml;", "&yacute;", "&thorn;", "&yuml;"
+		};
+
+		// Determine how long the result string will be so that the output variable can be expanded
+		// to handle it:
+		VarSizeType length;
+		UCHAR *ucp;
+		for (length = 0, ucp = (UCHAR *)aValue1; *ucp; ++ucp)
+		{
+			switch(*ucp)
+			{
+			case '\"':  // &quot;
+				length += 6;
+				break;
+			case '&': // &amp;
+			case '\n': // <br>\n
+				length += 5;
+			case '<': // &lt;
+			case '>': // &gt;
+				length += 4;
+			default:
+				if (*ucp > 127)
+					length += (VarSizeType)strlen(html[*ucp - 128]);
+				else
+					++length;
+			}
+		}
+
+		// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
+		// this call will set up the clipboard for writing:
+		if (output_var->Assign(NULL, length) != OK)
+			return FAIL;  // It already displayed the error.
+		char *contents = output_var->Contents();  // For performance and tracking.
+
+		// Translate the text to HTML:
+		for (ucp = (UCHAR *)aValue1; *ucp; ++ucp)
+		{
+			switch(*ucp)
+			{
+			case '\"':  // &quot;
+				strcpy(contents, "&quot;");
+				contents += 6;
+				break;
+			case '&': // &amp;
+				strcpy(contents, "&amp;");
+				contents += 5;
+				break;
+			case '\n': // <br>\n
+				strcpy(contents, "<br>\n");
+				contents += 5;
+				break;
+			case '<': // &lt;
+				strcpy(contents, "&lt;");
+				contents += 4;
+				break;
+			case '>': // &gt;
+				strcpy(contents, "&gt;");
+				contents += 4;
+				break;
+			default:
+				if (*ucp > 127)
+					for (char *dp = (char *)html[*ucp - 128]; *dp; ++dp)
+						*contents++ = *dp;
+				else
+					*contents++ = *ucp;
+			}
+		}
+		*contents = '\0';  // Terminate the string.
+		return output_var->Close();  // In case it's the clipboard.
+	}
 
 	case TRANS_CMD_MOD:
 		if (   !(value_double2 = ATOF(aValue2))   ) // Divide by zero, set it to be blank to indicate the problem.
@@ -528,17 +976,19 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 		return output_var->Assign((INT64)qmathFloor(ATOF(aValue1)));
 
 	case TRANS_CMD_ABS:
+	{
 		// Seems better to convert as string to avoid loss of 64-bit integer precision
 		// that would be caused by conversion to double.  I think this will work even
 		// for negative hex numbers that are close to the 64-bit limit since they too have
 		// a minus sign when generated by the script (e.g. -0x1).
 		//result_double = qmathFabs(ATOF(aValue1));
 		//ASSIGN_BASED_ON_TYPE_SINGLE
-		cp = omit_leading_whitespace(aValue1); // i.e. caller doesn't have to have ltrimmed it.
+		char *cp = omit_leading_whitespace(aValue1); // i.e. caller doesn't have to have ltrimmed it.
 		if (*cp == '-')
 			return output_var->Assign(cp + 1);  // Omit the first minus sign (simple conversion only).
 		// Otherwise, no minus sign, so just omit the leading whitespace for consistency:
 		return output_var->Assign(cp);
+	}
 
 	case TRANS_CMD_SIN:
 		return output_var->Assign(qmathSin(ATOF(aValue1)));
@@ -1311,6 +1761,48 @@ ResultType Line::ControlMove(char *aControl, char *aX, char *aY, char *aWidth, c
 
 	DoControlDelay
 	return g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+}
+
+
+
+ResultType Line::ControlGetPos(char *aControl, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
+{
+	Var *output_var_x = ResolveVarOfArg(0);  // Ok if NULL.
+	Var *output_var_y = ResolveVarOfArg(1);  // Ok if NULL.
+	Var *output_var_width = ResolveVarOfArg(2);  // Ok if NULL.
+	Var *output_var_height = ResolveVarOfArg(3);  // Ok if NULL.
+
+	DETERMINE_TARGET_WINDOW
+	HWND control_window = target_window ? ControlExist(target_window, aControl) : NULL;
+	if (!control_window)
+	{
+		if (output_var_x)
+			output_var_x->Assign();
+		if (output_var_y)
+			output_var_y->Assign();
+		if (output_var_width)
+			output_var_width->Assign();
+		if (output_var_height)
+			output_var_height->Assign();
+		return OK;
+	}
+
+	RECT parent_rect, child_rect;
+	// Realistically never fails since DETERMINE_TARGET_WINDOW and ControlExist should always yield
+	// valid window handles:
+	GetWindowRect(target_window, &parent_rect);
+	GetWindowRect(control_window, &child_rect);
+
+	if (output_var_x && !output_var_x->Assign(child_rect.left - parent_rect.left))
+		return FAIL;
+	if (output_var_y && !output_var_y->Assign(child_rect.top - parent_rect.top))
+		return FAIL;
+	if (output_var_width && !output_var_width->Assign(child_rect.right - child_rect.left))
+		return FAIL;
+	if (output_var_height && !output_var_height->Assign(child_rect.bottom - child_rect.top))
+		return FAIL;
+
+	return OK;
 }
 
 
@@ -2477,6 +2969,7 @@ ResultType Line::PixelGetColor(int aX, int aY)
 LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lParam)
 {
     char buf_temp[2048];  // For various uses.
+	int i;
 
 	TRANSLATE_AHK_MSG(iMsg, wParam)
 	
@@ -2848,14 +3341,16 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		return 0;
 
 	case WM_SYSCOMMAND:
-		if (wParam == SC_CLOSE && hWnd == g_hWnd) // i.e. behave this way only for main window.
+		if ((wParam == SC_CLOSE || wParam == SC_MINIMIZE) && hWnd == g_hWnd) // i.e. behave this way only for main window.
 		{
 			// The user has either clicked the window's "X" button, chosen "Close"
 			// from the system (upper-left icon) menu, or pressed Alt-F4.  In all
 			// these cases, we want to hide the window rather than actually closing
 			// it.  If the user really wishes to exit the program, a File->Exit
 			// menu option may be available, or use the Tray Icon, or launch another
-			// instance which will close the previous, etc.
+			// instance which will close the previous, etc.  UPDATE: SC_MINIMIZE is
+			// now handled this way also so that owned windows (such as Splash and
+			// Progress) won't be hidden when the main window is hidden.
 			ShowWindow(g_hWnd, SW_HIDE);
 			return 0;
 		}
@@ -2930,64 +3425,121 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		// the CreateWindowEx or CreateWindow function returns a NULL handle.
 		return 0;
 
-	// Can't do this without ruining MsgBox()'s ShowWindow().
-	// UPDATE: It doesn't do that anymore so leave this enabled for now.
+	case WM_ERASEBKGND:
+	case WM_CTLCOLORSTATIC:
+	case WM_PAINT:
 	case WM_SIZE:
 	{
-		if (hWnd == g_hWnd)
+		if (iMsg == WM_SIZE)
 		{
-			if (wParam == SIZE_MINIMIZED)
-				// Minimizing the main window hides it.
-				ShowWindow(g_hWnd, SW_HIDE);
-			else
-				MoveWindow(g_hWndEdit, 0, 0, LOWORD(lParam), HIWORD(lParam), TRUE);
-			return 0; // The correct return value for this msg.
-		}
-
-		if (wParam == SIZE_MINIMIZED)
-			break;  // Let DefWindowProc() handle it, though this situation should not occur normally.
-
-		int i;
-		for (i = 0; i < MAX_PROGRESS_WINDOWS; ++i)
-			if (g_Progress[i].hwnd == hWnd)
-				break;
-		if (i == MAX_PROGRESS_WINDOWS) // It's not a progress window.
-			// Let DefWindowProc() handle it (should probably never happen since currently the only
-			// other type of window is SplashText, which never receive this msg?)
-			break;
-
-		ProgressType &prog = g_Progress[i];
-
-		// Allow any width/height to be specified so that the window can be "rolled up" to its title bar.
-		int new_width = LOWORD(lParam);
-		int new_height = HIWORD(lParam);
-		if (new_width != prog.width || new_height != prog.height)
-		{
-			RECT rect;
-			GetClientRect(prog.hwnd, &rect); // to determine the available width so that control's can be centered.
-			// The Y offset for each control should match those used in Progress():
-			if (new_width != prog.width)
+			if (hWnd == g_hWnd)
 			{
-				MoveWindow(prog.hwnd_text1, PROGRESS_TEXT_MARGIN, 4, rect.right - rect.left - (PROGRESS_TEXT_MARGIN * 2)
-					, 24, FALSE);
-				MoveWindow(prog.hwnd_bar, PROGRESS_BAR_MARGIN, 30, rect.right - rect.left - (PROGRESS_BAR_MARGIN * 2)
-					, PROGRESS_BAR_HEIGHT, FALSE);
+				if (wParam == SIZE_MINIMIZED)
+					// Minimizing the main window hides it.
+					ShowWindow(g_hWnd, SW_HIDE);
+				else
+					MoveWindow(g_hWndEdit, 0, 0, LOWORD(lParam), HIWORD(lParam), TRUE);
+				return 0; // The correct return value for this msg.
 			}
-			// Move the window unconditionally because otherwise the text won't get recentered when only
-			// the width of the window changes:
-			MoveWindow(prog.hwnd_text2, PROGRESS_TEXT_MARGIN, 55, rect.right - rect.left - (PROGRESS_TEXT_MARGIN * 2)
-				, (rect.bottom - rect.top) - 55, FALSE);  // Negative height seems handled okay.
-			// Specifying repaint == true in MoveWindow() is not always enough refresh the text, so this
-			// is done instead:
-			InvalidateRect(prog.hwnd, &rect, TRUE);
-			// If the user resizes the window, have that size retained (remembered) until the script
-			// explicitly changes it or the script destroys the window.
-			prog.width = new_width;
-			prog.height = new_height;
+			if (hWnd == g_hWndSplash || wParam == SIZE_MINIMIZED)
+				break;  // Let DefWindowProc() handle it for splash window and Progress windows.
 		}
-		return 0;  // i.e. completely handled here.
-	}
+		else
+			if (hWnd == g_hWnd || hWnd == g_hWndSplash)
+				break; // Let DWP handle it.
 
+		for (i = 0; i < MAX_SPLASHIMAGE_WINDOWS; ++i)
+			if (g_SplashImage[i].hwnd == hWnd)
+				break;
+		bool is_splashimage = (i < MAX_SPLASHIMAGE_WINDOWS);
+		if (!is_splashimage)
+		{
+			for (i = 0; i < MAX_PROGRESS_WINDOWS; ++i)
+				if (g_Progress[i].hwnd == hWnd)
+					break;
+			if (i == MAX_PROGRESS_WINDOWS) // It's not a progress window either.
+				// Let DefWindowProc() handle it (should probably never happen since currently the only
+				// other type of window is SplashText, which never receive this msg?)
+				break;
+		}
+
+		SplashType &splash = is_splashimage ? g_SplashImage[i] : g_Progress[i];
+		RECT client_rect;
+
+		switch (iMsg)
+		{
+		case WM_SIZE:
+		{
+			// Allow any width/height to be specified so that the window can be "rolled up" to its title bar.
+			int new_width = LOWORD(lParam);
+			int new_height = HIWORD(lParam);
+			if (new_width != splash.width || new_height != splash.height)
+			{
+				GetClientRect(splash.hwnd, &client_rect);
+				int control_width = client_rect.right - (splash.margin_x * 2);
+				SPLASH_CALC_YPOS
+				// The Y offset for each control should match those used in Splash():
+				if (new_width != splash.width)
+				{
+					if (splash.hwnd_text1) // This control doesn't exist if the main text was originally blank.
+						MoveWindow(splash.hwnd_text1, PROGRESS_MAIN_POS, FALSE);
+					if (splash.hwnd_bar)
+						MoveWindow(splash.hwnd_bar, PROGRESS_BAR_POS, FALSE);
+					splash.width = new_width;
+				}
+				// Move the window EVEN IF new_height == splash.height because otherwise the text won't
+				// get re-centered when only the width of the window changes:
+				MoveWindow(splash.hwnd_text2, PROGRESS_SUB_POS, FALSE); // Negative height seems handled okay.
+				// Specifying true for "repaint" in MoveWindow() is not always enough refresh the text correctly,
+				// so this is done instead:
+				InvalidateRect(splash.hwnd, &client_rect, TRUE);
+				// If the user resizes the window, have that size retained (remembered) until the script
+				// explicitly changes it or the script destroys the window.
+				splash.height = new_height;
+			}
+			return 0;  // i.e. completely handled here.
+		}
+		case WM_CTLCOLORSTATIC:
+			if (!splash.hbrush && splash.color_text == CLR_DEFAULT) // Let DWP handle it.
+				break;
+			// Since we're processing this msg and not DWP, must set background color unconditionally,
+			// otherwise plain white will likely be used:
+			SetBkColor((HDC)wParam, splash.hbrush ? splash.color_bk : GetSysColor(COLOR_BTNFACE));
+			if (splash.color_text != CLR_DEFAULT)
+				SetTextColor((HDC)wParam, splash.color_text);
+			// Always return a real HBRUSH so that Windows knows we altered the HDC for it to use:
+			return splash.hbrush ? (LRESULT)splash.hbrush : (LRESULT)GetSysColorBrush(COLOR_BTNFACE);
+		case WM_ERASEBKGND:
+			if (!splash.hbrush) // Let DWP handle it.
+				break;
+			RECT clipbox;
+			GetClipBox((HDC)wParam, &clipbox);
+			FillRect((HDC)wParam, &clipbox, splash.hbrush);
+			return 1; // "An application should return nonzero if it erases the background."
+		case WM_PAINT:
+			if (!is_splashimage) // Let DWP handle it.
+				break;
+			if (splash.pic) // And since there is a pic, its object_width/height should already be valid.
+			{
+				PAINTSTRUCT ps;
+				HDC hdc = BeginPaint(hWnd, &ps);
+				// MSDN: get width and height of picture
+				long hm_width;
+				long hm_height;
+				splash.pic->get_Width(&hm_width);
+				splash.pic->get_Height(&hm_height);
+				GetClientRect(splash.hwnd, &client_rect);
+				// MSDN: display picture using IPicture::Render
+				splash.pic->Render(hdc, splash.margin_x
+					, splash.margin_y + (splash.text1_height ? (splash.text1_height + splash.margin_y) : 0)
+					, splash.object_width, splash.object_height, 0, hm_height, hm_width, -hm_height, &client_rect);
+				EndPaint(hWnd, &ps);
+			}
+			break;
+		} // switch()
+		break; // Let DWP handle it.
+	}
+		
 	case WM_SETFOCUS:
 		if (hWnd == g_hWnd)
 		{
@@ -3288,13 +3840,13 @@ BOOL CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 		}
 		else
 		{
-	  		GetWindowRect(GetDesktopWindow(), &rect);
+			SystemParametersInfo(SPI_GETWORKAREA, 0, &rect, 0);  // Get Desktop rect excluding task bar.
   			if (CURR_INPUTBOX.xpos == INPUTBOX_DEFAULT) // Center horizontally.
-				new_xpos = (rect.right - rect.left - new_width) / 2;
+				new_xpos = (rect.right - new_width) / 2;
 			else
 				new_xpos = CURR_INPUTBOX.xpos;
   			if (CURR_INPUTBOX.ypos == INPUTBOX_DEFAULT) // Center vertically.
-				new_ypos = (rect.bottom - rect.top - new_height) / 2;
+				new_ypos = (rect.bottom - new_height) / 2;
 			else
 				new_ypos = CURR_INPUTBOX.ypos;
 		}
@@ -4152,7 +4704,7 @@ flags can be a combination of:
 	TOKEN_PRIVILEGES	tkp; 
 
 	// If we are running NT/2k/XP, make sure we have rights to shutdown
-	if (g_os.IsWinNT())
+	if (g_os.IsWinNT()) // NT/2k/XP/2003 and family
 	{
 		// Get a token for this process.
  		if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken)) 
@@ -4195,7 +4747,7 @@ flags can be a combination of:
 BOOL Util_ShutdownHandler(HWND hwnd, DWORD lParam)
 {
 	// if the window is me, don't terminate!
-	if (hwnd != g_hWnd && hwnd != g_hWndSplash && hwnd != g_hWndToolTip)
+	if (hwnd != g_hWnd && hwnd != g_hWndSplash)
 		Util_WinKill(hwnd);
 
 	// Continue the enumeration.
@@ -4329,6 +4881,119 @@ ResultType Line::StringSplit(char *aArrayName, char *aInputString, char *aDelimi
 
 
 
+ResultType Line::SplitPath(char *aFileSpec)
+{
+	Var *output_var_name = ResolveVarOfArg(1);  // i.e. Param #2. Ok if NULL.
+	Var *output_var_dir = ResolveVarOfArg(2);  // Ok if NULL.
+	Var *output_var_ext = ResolveVarOfArg(3);  // Ok if NULL.
+	Var *output_var_name_no_ext = ResolveVarOfArg(4);  // Ok if NULL.
+	Var *output_var_drive = ResolveVarOfArg(5);  // Ok if NULL.
+
+	// Differences between _splitpath() and the method used here:
+	// _splitpath() doesn't include drive in output_var_dir, it includes a trailing
+	// backslash, it includes the . in the extension, it considers ":" to be a filename.
+	// _splitpath(pathname, drive, dir, file, ext);
+	//char sdrive[16], sdir[MAX_PATH], sname[MAX_PATH], sext[MAX_PATH];
+	//_splitpath(aFileSpec, sdrive, sdir, sname, sext);
+	//if (output_var_name_no_ext)
+	//	output_var_name_no_ext->Assign(sname);
+	//strcat(sname, sext);
+	//if (output_var_name)
+	//	output_var_name->Assign(sname);
+	//if (output_var_dir)
+	//	output_var_dir->Assign(sdir);
+	//if (output_var_ext)
+	//	output_var_ext->Assign(sext);
+	//if (output_var_drive)
+	//	output_var_drive->Assign(sdrive);
+	//return OK;
+
+	// Don't use _splitpath() since it supposedly doesn't handle UNC paths correctly,
+	// and anyway we need more info than it provides.  Also note that it is possible
+	// for a file to begin with space(s) or a dot (if created programmatically), so
+	// don't trim or omit leading space unless it's known to be an absolute path.
+
+	// Note that "C:Some File.txt" is a valid filename in some contexts, which the below
+	// tries to take into account.  However, there will be no way for this command to
+	// return a path that differentiates between "C:Some File.txt" and "C:\Some File.txt"
+	// since the first backslash is not included with the returned path, even if it's
+	// the root directory (i.e. "C:" is returned in both cases).  The "C:Filename"
+	// convention is pretty rare, and anyway this trait can be detected via something like
+	// IfInString, Filespec, :, IfNotInString, Filespec, :\, MsgBox Drive with no absolute path.
+	char *name_delimiter = strrchr(aFileSpec, '\\');
+	if (!name_delimiter)
+		if (   !(name_delimiter = strrchr(aFileSpec, ':'))   )
+			name_delimiter = NULL;
+
+	char *name = name_delimiter ? name_delimiter + 1 : aFileSpec; // If no delimiter, name is the entire string.
+	char *ext_dot = strrchr(name, '.');
+
+	if (output_var_name && !output_var_name->Assign(name))
+		return FAIL;
+
+	if (output_var_dir)
+	{
+		if (!name_delimiter)
+			output_var_dir->Assign(); // Shouldn't fail.
+		else if (*name_delimiter == '\\')
+		{
+			if (!output_var_dir->Assign(aFileSpec, (VarSizeType)(name_delimiter - aFileSpec)))
+				return FAIL;
+		}
+		else // *name_delimiter == ':', e.g. "C:Some File.txt".  If aFileSpec starts with just ":",
+			 // the dir returned here will also start with just ":" since that's rare & illegal anyway.
+			if (!output_var_dir->Assign(aFileSpec, (VarSizeType)(name_delimiter - aFileSpec + 1)))
+				return FAIL;
+	}
+
+	if (output_var_ext)
+	{
+		// Note that the OS doesn't allow filenames to end in a period.
+		if (!ext_dot)
+			output_var_ext->Assign();
+		else
+			if (!output_var_ext->Assign(ext_dot + 1)) // Can be empty string if filename ends in just a dot.
+				return FAIL;
+	}
+
+	if (output_var_name_no_ext && !output_var_name_no_ext->Assign(name, (VarSizeType)(ext_dot ? ext_dot - name : strlen(name))))
+		return FAIL;
+
+	if (output_var_drive)
+	{
+		char *drive = omit_leading_whitespace(aFileSpec);
+		if (!*drive)
+			output_var_drive->Assign();
+		else
+		{
+			// UNCs are detected with this approach so that double sets of backslashes -- which sometimes
+			// occur by accident in "built filespecs" and are tolerated by the OS -- are not falsely
+			// detected as UNCs.
+			if (*drive == '\\' && *(drive + 1) == '\\')
+			{
+				char *drive_end = strchr(drive + 2, '\\');
+				if (drive_end)
+					output_var_drive->Assign(drive, (VarSizeType)(drive_end - drive));
+				else
+					output_var_drive->Assign(drive); // Assume the entire string is the server name.
+			}
+			else if (*(drive + 1) == ':') // It's an absolute path.
+				// Assign letter and colon for consistency with server naming convention above.
+				// i.e. so that server name and drive can be used without having to worry about
+				// whether it needs a colon added or not.
+				output_var_drive->Assign(drive, 2);
+			else // It's debatable, but it seems best to return a blank drive if a aFileSpec is a relative path.
+				 // rather than trying to use GetFullPathName() on a potentially non-existent file/dir.
+				 // _splitpath() doesn't fetch the drive letter of relative paths either.
+				output_var_drive->Assign();
+		}
+	}
+
+	return OK;
+}
+
+
+
 int SortWithOptions(const void *a1, const void *a2)
 // Decided to just have one sort function since there are so many permutations.  The performance
 // will be a little bit worse, but it seems simpler to implement and maintain.
@@ -4424,6 +5089,8 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 			g_SortCaseSensitive = true;
 			break;
 		case 'D':
+			if (!*(cp + 1)) // Avoids out-of-bounds when the loop's own ++cp is done.
+				break;
 			++cp;
 			if (*cp)
 				delimiter = *cp;
@@ -5688,6 +6355,8 @@ ResultType Line::FileCreateDir(char *aDirSpec)
 	if (last_backslash)
 	{
 		char parent_dir[MAX_PATH * 2];
+		if (strlen(aDirSpec) >= sizeof(parent_dir)) // avoid overflow
+			return OK; // Let ErrorLevel tell the story.
 		strlcpy(parent_dir, aDirSpec, last_backslash - aDirSpec + 1); // Omits the last backslash.
 		FileCreateDir(parent_dir); // Recursively create all needed ancestor directories.
 		if (*g_ErrorLevel->Contents() == *ERRORLEVEL_ERROR)
@@ -6154,38 +6823,25 @@ ResultType Line::FileGetTime(char *aFilespec, char aWhichTime)
 	if (!aFilespec || !*aFilespec)
 		return OK;  // Let ErrorLevel indicate an error, since this is probably not what the user intended.
 
-	// Open existing file.  Uses CreateFile() rather than OpenFile for an expectation
-	// of greater compatibility for all files, and folder support too.
-	// FILE_FLAG_NO_BUFFERING might improve performance because all we're doing is
-	// fetching one of the file's attributes.  FILE_FLAG_BACKUP_SEMANTICS must be
-	// used, otherwise fetching the time of a directory under NT and beyond will
-	// not succeed.  Win95 (not sure about Win98/ME) does not support this, but it
-	// should be harmless to specify it even if the OS is Win95:
-	HANDLE file_handle = CreateFile(aFilespec, GENERIC_READ, FILE_SHARE_READ, (LPSECURITY_ATTRIBUTES)NULL
-		, OPEN_EXISTING, FILE_FLAG_NO_BUFFERING | FILE_FLAG_BACKUP_SEMANTICS, NULL);
-	if (file_handle == INVALID_HANDLE_VALUE)
+	// Don't use CreateFile() & FileGetSize() size they will fail to work on a file that's in use.
+	// Research indicates that this method has no disadvantages compared to the other method.
+	WIN32_FIND_DATA found_file;
+	HANDLE file_search = FindFirstFile(aFilespec, &found_file);
+	if (file_search == INVALID_HANDLE_VALUE)
 		return OK;  // Let ErrorLevel Tell the story.
-
-	FILETIME ftCreationTime, ftLastAccessTime, ftLastWriteTime;
-	if (GetFileTime(file_handle, &ftCreationTime, &ftLastAccessTime, &ftLastWriteTime))
-		CloseHandle(file_handle);
-	else
-	{
-		CloseHandle(file_handle);
-		return OK;  // Let ErrorLevel Tell the story.
-	}
+	FindClose(file_search);
 
 	FILETIME local_file_time;
 	switch (toupper(aWhichTime))
 	{
 	case 'C': // File's creation time.
-		FileTimeToLocalFileTime(&ftCreationTime, &local_file_time);
+		FileTimeToLocalFileTime(&found_file.ftCreationTime, &local_file_time);
 		break;
 	case 'A': // File's last access time.
-		FileTimeToLocalFileTime(&ftLastAccessTime, &local_file_time);
+		FileTimeToLocalFileTime(&found_file.ftLastAccessTime, &local_file_time);
 		break;
 	default:  // 'M', unspecified, or some other value.  Use the file's modification time.
-		FileTimeToLocalFileTime(&ftLastWriteTime, &local_file_time);
+		FileTimeToLocalFileTime(&found_file.ftLastWriteTime, &local_file_time);
 	}
 
     g_ErrorLevel->Assign(ERRORLEVEL_NONE);  // Indicate success.
@@ -6283,6 +6939,14 @@ int Line::FileSetTime(char *aYYYYMMDD, char *aFilePattern, char aWhichTime
 				continue;
 
 		snprintf(target_filespec, sizeof(target_filespec), "%s%s", file_path, current_file.cFileName);
+
+		// Open existing file.  Uses CreateFile() rather than OpenFile for an expectation
+		// of greater compatibility for all files, and folder support too.
+		// FILE_FLAG_NO_BUFFERING might improve performance because all we're doing is
+		// changing one of the file's attributes.  FILE_FLAG_BACKUP_SEMANTICS must be
+		// used, otherwise changing the time of a directory under NT and beyond will
+		// not succeed.  Win95 (not sure about Win98/ME) does not support this, but it
+		// should be harmless to specify it even if the OS is Win95:
 		hFile = CreateFile(target_filespec, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE
 			, (LPSECURITY_ATTRIBUTES)NULL, OPEN_EXISTING
 			, FILE_FLAG_NO_BUFFERING | FILE_FLAG_BACKUP_SEMANTICS, NULL);
@@ -6291,6 +6955,7 @@ int Line::FileSetTime(char *aYYYYMMDD, char *aFilePattern, char aWhichTime
 			++failure_count;
 			continue;
 		}
+
 		switch (toupper(aWhichTime))
 		{
 		case 'C': // File's creation time.
@@ -6353,21 +7018,15 @@ ResultType Line::FileGetSize(char *aFilespec, char *aGranularity)
 	if (!aFilespec || !*aFilespec)
 		return OK;  // Let ErrorLevel indicate an error, since this is probably not what the user intended.
 
-	// Open existing file.  Uses CreateFile() rather than OpenFile for an expectation
-	// of greater compatibility for all files, and folder support too.
-	// FILE_FLAG_NO_BUFFERING might improve performance because all we're doing is
-	// fetching one of the file's attributes.  FILE_FLAG_BACKUP_SEMANTICS must be
-	// used, otherwise fetching the time of a directory under NT and beyond will
-	// not succeed.  Win95 (not sure about Win98/ME) does not support this, but it
-	// should be harmless to specify it even if the OS is Win95:
-	HANDLE file_handle = CreateFile(aFilespec, GENERIC_READ, FILE_SHARE_READ, (LPSECURITY_ATTRIBUTES)NULL
-		, OPEN_EXISTING, FILE_FLAG_NO_BUFFERING | FILE_FLAG_BACKUP_SEMANTICS, NULL);
-	if (file_handle == INVALID_HANDLE_VALUE)
+	// Don't use CreateFile() & FileGetSize() size they will fail to work on a file that's in use.
+	// Research indicates that this method has no disadvantages compared to the other method.
+	WIN32_FIND_DATA found_file;
+	HANDLE file_search = FindFirstFile(aFilespec, &found_file);
+	if (file_search == INVALID_HANDLE_VALUE)
 		return OK;  // Let ErrorLevel Tell the story.
-	unsigned __int64 size = GetFileSize64(file_handle);
-	if (size == ULLONG_MAX) // failure
-		return OK;  // Let ErrorLevel Tell the story.
-	CloseHandle(file_handle);
+	FindClose(file_search);
+
+	unsigned __int64 size = (found_file.nFileSizeHigh * (unsigned __int64)MAXDWORD) + found_file.nFileSizeLow;
 
 	switch(toupper(*aGranularity))
 	{
@@ -7285,12 +7944,14 @@ ArgTypeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_WINGET:
 		case ACT_WINGETTEXT:
 		case ACT_WINGETPOS:
+		case ACT_CONTROLGETPOS:
 		case ACT_PIXELGETCOLOR:
 		case ACT_PIXELSEARCH:
 		case ACT_INPUT:
 			return ARG_TYPE_OUTPUT_VAR;
 
 		case ACT_SORT:
+		case ACT_SPLITPATH:
 		case ACT_IFINSTRING:
 		case ACT_IFNOTINSTRING:
 		case ACT_IFEQUAL:
@@ -7323,18 +7984,38 @@ ArgTypeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 
 		case ACT_MOUSEGETPOS:
 		case ACT_WINGETPOS:
+		case ACT_CONTROLGETPOS:
 		case ACT_PIXELSEARCH:
+		case ACT_SPLITPATH:
 			return ARG_TYPE_OUTPUT_VAR;
 		}
 		break;
 
 	case 2:  // Arg #3
-		if (aActionType == ACT_WINGETPOS || aActionType == ACT_MOUSEGETPOS)
+		switch(aActionType)
+		{
+		case ACT_WINGETPOS:
+		case ACT_CONTROLGETPOS:
+		case ACT_MOUSEGETPOS:
+		case ACT_SPLITPATH:
 			return ARG_TYPE_OUTPUT_VAR;
+		}
 		break;
 
 	case 3:  // Arg #4
-		if (aActionType == ACT_WINGETPOS || aActionType == ACT_MOUSEGETPOS)
+		switch(aActionType)
+		{
+		case ACT_WINGETPOS:
+		case ACT_CONTROLGETPOS:
+		case ACT_MOUSEGETPOS:
+		case ACT_SPLITPATH:
+			return ARG_TYPE_OUTPUT_VAR;
+		}
+		break;
+
+	case 4:  // Arg #5
+	case 5:  // Arg #6 
+		if (aActionType == ACT_SPLITPATH)
 			return ARG_TYPE_OUTPUT_VAR;
 		break;
 	}
@@ -7398,6 +8079,7 @@ ResultType Line::CheckForMandatoryArgs()
 		return OK;
 	case ACT_MOUSEGETPOS:
 	case ACT_WINGETPOS:
+	case ACT_CONTROLGETPOS: // But don't bother valididing ACT_SPLITPATH this way since too rare to worry about.
 		if (!ARG_HAS_VAR(1) && !ARG_HAS_VAR(2) && !ARG_HAS_VAR(3) && !ARG_HAS_VAR(4))
 			return LineError(ERR_MISSING_OUTPUT_VAR);
 		return OK;

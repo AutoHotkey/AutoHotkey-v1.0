@@ -31,7 +31,7 @@ bool g_DestroyWindowCalled = false;
 HWND g_hWnd = NULL;
 HWND g_hWndEdit = NULL;
 HWND g_hWndSplash = NULL;
-HWND g_hWndToolTip = NULL;
+HFONT g_hFontSplash = NULL;  // So that font can be deleted on program close.
 HACCEL g_hAccelTable = NULL;
 
 modLR_type g_modifiersLR_logical = 0;
@@ -94,7 +94,9 @@ int g_nInputBoxes = 0;
 int g_nFileDialogs = 0;
 int g_nFolderDialogs = 0;
 InputBoxType g_InputBox[MAX_INPUTBOXES];
-ProgressType g_Progress[MAX_PROGRESS_WINDOWS] = {{0}};
+SplashType g_Progress[MAX_PROGRESS_WINDOWS] = {{0}};
+SplashType g_SplashImage[MAX_SPLASHIMAGE_WINDOWS] = {{0}};
+HWND g_hWndToolTip[MAX_TOOLTIPS] = {NULL};
 
 // Init not needed for these:
 bool g_SortCaseSensitive;
@@ -236,8 +238,9 @@ Action g_act[] =
 	, {"InputBox", 1, 11, {5, 6, 7, 8, 10, 0}} // Output var, title, prompt, hide-text (e.g. passwords), width, height, X, Y, Font (e.g. courier:8 maybe), Timeout, Default
 	, {"SplashTextOn", 0, 4, {1, 2, 0}} // Width, height, title, text
 	, {"SplashTextOff", 0, 0, NULL}
-	, {"Progress", 0, 5, NULL}  // Off|Percent|Options, SubText, MainText, Title, FutureUse
-	, {"ToolTip", 0, 3, {2, 3, 0}}  // Text, X, Y.  If all 3 are omitted, the Tooltip is turned off.
+	, {"Progress", 0, 6, NULL}  // Off|Percent|Options, SubText, MainText, Title, Font, FutureUse
+	, {"SplashImage", 0, 7, NULL}  // Off|ImageFile, |Options, SubText, MainText, Title, Font, FutureUse
+	, {"ToolTip", 0, 4, {2, 3, 4, 0}}  // Text, X, Y, ID.  If Text is omitted, the Tooltip is turned off.
 	, {"TrayTip", 0, 4, {3, 4, 0}}  // Title, Text, Timeout, Options
 
 	, {"Input", 0, 4, NULL}  // OutputVar, Options, EndKeys, MatchList.
@@ -246,7 +249,7 @@ Action g_act[] =
 
 	, {"StringLeft", 3, 3, {3, 0}}  // output var, input var, number of chars to extract
 	, {"StringRight", 3, 3, {3, 0}} // same
-	, {"StringMid", 4, 4, {3, 4, 0}} // Output Variable, Input Variable, Start char, Number of chars to extract
+	, {"StringMid", 4, 5, {3, 4, 0}} // Output Variable, Input Variable, Start char, Number of chars to extract, L
 	, {"StringTrimLeft", 3, 3, {3, 0}}  // output var, input var, number of chars to trim
 	, {"StringTrimRight", 3, 3, {3, 0}} // same
 	, {"StringLower", 2, 3, NULL} // output var, input var, T = Title Case
@@ -255,6 +258,7 @@ Action g_act[] =
 	, {"StringGetPos", 3, 4, NULL}  // Output Variable, Input Variable, Search Text, R or Right (from right)
 	, {"StringReplace", 3, 5, NULL} // Output Variable, Input Variable, Search String, Replace String, do-all.
 	, {"StringSplit", 2, 5, NULL} // Output Array, Input Variable, Delimiter List (optional), Omit List, Future Use
+	, {"SplitPath", 1, 6, NULL} // InputFilespec, OutName, OutDir, OutExt, OutNameNoExt, OutDrive
 	, {"Sort", 1, 2, NULL} // OutputVar (it's also the input var), Options
 
 	, {"EnvSet", 1, 2, NULL} // EnvVar, Value
@@ -274,6 +278,7 @@ Action g_act[] =
 	, {"ControlSend", 0, 6, NULL} // Control, Chars-to-Send, std. 4 window params.
 	, {"ControlClick", 0, 8, {5, 0}} // Control, WinTitle, WinText, WhichButton, ClickCount, Hold/Release, ExcludeTitle, ExcludeText
 	, {"ControlMove", 0, 9, {2, 3, 4, 5, 0}} // Control, x, y, w, h, WinTitle, WinText, ExcludeTitle, ExcludeText
+	, {"ControlGetPos", 0, 9, NULL} // Four optional output vars: xpos, ypos, width, height, control, std. 4 window params.
 	, {"ControlFocus", 0, 5, NULL}     // Control, std. 4 window params
 	, {"ControlGetFocus", 1, 5, NULL}  // OutputVar, std. 4 window params
 	, {"ControlSetText", 0, 6, NULL}   // Control, new text, std. 4 window params

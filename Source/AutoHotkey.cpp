@@ -43,9 +43,9 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 #else
 	#ifdef _DEBUG
 	//char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
-	char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
+	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
 	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\Menu command COMPREHENSIVE TEST.ahk";
-	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\ToolTip follows mouse.ahk";
+	char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\SplitPath.ahk";
 	#else
 	char *script_filespec = NAME_P ".ini";  // Use this extension for better file association with editor(s).
 	#endif

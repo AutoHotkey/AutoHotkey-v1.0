@@ -109,8 +109,10 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 
 		mCustomIcon = new_icon;
 		mCustomIconNumber = icon_number;
+		// Allocate the full MAX_PATH in case the contents grow longer later.
+		// SimpleHeap improves avg. case mem load:
 		if (!mCustomIconFile)
-			mCustomIconFile = SimpleHeap::Malloc(MAX_PATH); // SimpleHeap improves avg. case mem load.
+			mCustomIconFile = SimpleHeap::Malloc(MAX_PATH);
 		if (mCustomIconFile)
 		{
 			// Get the full path in case it's a relative path.  This is documented and it's done in case
@@ -934,7 +936,32 @@ ResultType UserMenu::Display(bool aForceToForeground)
 	//	g_WinActivateForce = original_setting;
 	//}
 	//else
-		SetForegroundWindow(g_hWnd);
+	if (!SetForegroundWindow(g_hWnd))
+	{
+		// The below fixes the problem where the menu cannot be canceled by clicking outside of
+		// it (due to the main window not being active).  That usually happens the first time the
+		// menu is displayed after the script launches.  0 is not enough sleep time, but 10 is:
+		SLEEP_WITHOUT_INTERRUPTION(10);
+		SetForegroundWindow(g_hWnd);  // 2nd time always seems to work for this particular window.
+		// OLDER NOTES:
+		// Always bring main window to foreground right before TrackPopupMenu(), even if window is hidden.
+		// UPDATE: This is a problem because SetForegroundWindowEx() will restore the window if it's hidden,
+		// but restoring also shows the window if it's hidden.  Could re-hide it... but the question here
+		// is can a minimized window be the foreground window?  If not, how to explain why
+		// SetForegroundWindow() always seems to work for the purpose of displaying the tray menu?
+		//if (aForceToForeground)
+		//{
+		//	// Seems best to avoid using the script's current setting of #WinActivateForce.  Instead, always
+		//	// try the gentle approach first since it is unlikely that displaying a menu will cause the
+		//	// "flashing task bar button" problem?
+		//	bool original_setting = g_WinActivateForce;
+		//	g_WinActivateForce = false;
+		//	SetForegroundWindowEx(g_hWnd);
+		//	g_WinActivateForce = original_setting;
+		//}
+		//else
+		//...
+	}
 	g_MenuIsVisible = MENU_VISIBLE_POPUP;
 	TrackPopupMenuEx(mMenu, TPM_LEFTALIGN | TPM_LEFTBUTTON, pt.x, pt.y, g_hWnd, NULL);
 	g_MenuIsVisible = MENU_VISIBLE_NONE;
