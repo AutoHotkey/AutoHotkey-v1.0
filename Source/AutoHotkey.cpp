@@ -44,9 +44,8 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	#ifdef _DEBUG
 	//char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
 	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
-	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\New Text Document.ahk";
-	char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\GUIAlphaTest\\Comprehensive Demo.ahk";
-	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\GUIAlphaTest\\Simple InputBox.ahk";
+	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\LoopReg - simple example from help file.ahk";
+	char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\GUI Demo.ahk";
 	#else
 	char *script_filespec = NAME_P ".ini";  // Use this extension for better file association with editor(s).
 	#endif
@@ -153,9 +152,9 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 
 	// Unless explicitly set to be non-SingleInstance via SINGLE_INSTANCE_OFF or a special kind of
 	// SingleInstance such as SINGLE_INSTANCE_REPLACE and SINGLE_INSTANCE_IGNORE, persistent scripts
-	// and those that contain hotkeys/hotstrings are automatically SINGLE_INSTANCE as of v1.0.16:
+	// and those that contain hotkeys/hotstrings are automatically SINGLE_INSTANCE_PROMPT as of v1.0.16:
 	if (g_AllowOnlyOneInstance == ALLOW_MULTI_INSTANCE && IS_PERSISTENT)
-		g_AllowOnlyOneInstance = SINGLE_INSTANCE;
+		g_AllowOnlyOneInstance = SINGLE_INSTANCE_PROMPT;
 
 	HWND w_existing = NULL;
 	UserMessages reason_to_close_prior = (UserMessages)0;

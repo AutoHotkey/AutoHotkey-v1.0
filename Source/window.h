@@ -41,7 +41,6 @@ if (USE_FOREGROUND_WINDOW(title, text, exclude_title, exclude_text))\
 	SET_TARGET_TO_ALLOWABLE_FOREGROUND\
 }
 
-#define pWin ((WindowInfoPackage *)lParam)
 #define SEARCH_PHRASE_SIZE 1024
 // Info from AutoIt3 source: GetWindowText fails under 95 if >65535, WM_GETTEXT randomly fails if > 32767.
 // My: And since 32767 is what AutoIt3 passes to the API functions as the size (not the length, i.e.
@@ -78,6 +77,28 @@ struct WindowInfoPackage // A simple struct to help with EnumWindows().
 		// Can't use initializer list for these:
 		*title = *text = *exclude_title = *exclude_text = '\0';
 	}
+};
+
+struct control_list_type
+{
+	// For something this simple, a macro is probably a lot less overhead that making this struct
+	// non-POD and giving it a constructor:
+	#define CL_INIT_CONTROL_LIST(cl) \
+		cl.is_first_iteration = true;\
+		cl.total_classes = 0;\
+		cl.total_length = 0;\
+		cl.buf_free_spot = cl.class_buf; // Points to the next available/writable place in the buf.
+	bool is_first_iteration;  // Must be initialized to true by caller.
+	int total_classes;        // Must be initialized to 0.
+	VarSizeType total_length; // Must be initialized to 0.
+	VarSizeType capacity;     // Must be initialized to size of the below buffer.
+	char *target_buf;         // Caller sets it to NULL if only the total_length is to be retrieved.
+	#define CL_CLASS_BUF_SIZE (32 * 1024) // Even if class names average 50 chars long, this supports 655 of them.
+	char class_buf[CL_CLASS_BUF_SIZE];
+	char *buf_free_spot;      // Must be initialized to point to the beginning of class_buf.
+	#define CL_MAX_CLASSES 500  // The number of distinct class names that can be supported in a single window.
+	char *class_name[CL_MAX_CLASSES]; // Array of distinct class names, stored consecutively in class_buf.
+	int class_count[CL_MAX_CLASSES];  // The quantity found for each of the above classes.
 };
 
 struct pid_and_hwnd_type

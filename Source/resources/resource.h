@@ -2,6 +2,7 @@
 // Microsoft Visual C++ generated include file.
 // Used by AutoHotkey.rc
 //
+#define VS_VERSION_INFO                 1
 #define IDS_PROJNAME                    100
 #define IDR_WMDMLOGGER                  101
 #define IDI_MAIN                        159
@@ -27,27 +28,27 @@
 #define IDS_DEF_SHRINKTOSIZE            303
 #define IDS_DEF_LOGENABLED              304
 #define IDS_MUTEX_TIMEOUT               401
-#define ID_VIEW_KEYHISTORY              32789
-#define ID_FILE_EXIT                    32790
-#define ID_VIEW_LINES                   32795
-#define ID_VIEW_VARIABLES               32796
-#define ID_VIEW_HOTKEYS                 32797
-#define ID_FILE_WINDOWSPY               32798
-#define ID_FILE_PAUSE                   32799
-#define ID_FILE_SUSPEND                 32800
-#define ID_VIEW_REFRESH                 32806
-#define ID_HELP_USERMANUAL              32809
-#define ID_FILE_RELOADSCRIPT            32814
-#define ID_FILE_EDITSCRIPT              32815
-#define ID_HELP_WEBSITE                 32821
-#define ID_HELP_EMAIL                   32823
+#define ID_FILE_RELOADSCRIPT            65400
+#define ID_FILE_EDITSCRIPT              65401
+#define ID_FILE_WINDOWSPY               65402
+#define ID_FILE_PAUSE                   65403
+#define ID_FILE_SUSPEND                 65404
+#define ID_FILE_EXIT                    65405
+#define ID_VIEW_LINES                   65406
+#define ID_VIEW_VARIABLES               65407
+#define ID_VIEW_HOTKEYS                 65408
+#define ID_VIEW_KEYHISTORY              65409
+#define ID_VIEW_REFRESH                 65410
+#define ID_HELP_USERMANUAL              65411
+#define ID_HELP_WEBSITE                 65412
+#define ID_HELP_EMAIL                   65413
 
 // Next default values for new objects
 // 
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        233
-#define _APS_NEXT_COMMAND_VALUE         32824
+#define _APS_NEXT_COMMAND_VALUE         65414
 #define _APS_NEXT_CONTROL_VALUE         206
 #define _APS_NEXT_SYMED_VALUE           101
 #endif

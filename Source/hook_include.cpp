@@ -1389,6 +1389,19 @@ LRESULT AllowIt(HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, vk_type vk, s
 		// must also be reset -- not just because it's correct but because CollectInput() relies on it.
 	}
 
+	// Bug-fix for v1.0.20: The below section was moved out of LowLevelKeybdProc() to here because
+	// alt_tab_menu_is_visible should not be set to true prior to knowing whether the current tab-down
+	// event will be suppressed.  This is because if it is suppressed, the menu will not become visible
+	// after all since the system will never see the tab-down event.
+	// Having this extra check here, in addition to the other(s) that set alt_tab_menu_is_visible to be
+	// true, allows AltTab and ShiftAltTab hotkeys to function even when the AltTab menu was invoked by
+	// means other than an AltTabMenu or AltTabAndMenu hotkey.  The alt-tab menu becomes visible only
+	// under these exact conditions, at least under WinXP:
+	if (vk == VK_TAB && !key_up && !alt_tab_menu_is_visible
+		&& ((g_modifiersLR_logical & MOD_LALT) || (g_modifiersLR_logical & MOD_RALT))
+		&& !(g_modifiersLR_logical & MOD_LCONTROL) && !(g_modifiersLR_logical & MOD_RCONTROL))
+		alt_tab_menu_is_visible = true;
+
 	if (!kvk[vk].as_modifiersLR)
 		return CallNextHookEx(hhk, code, wParam, lParam);
 
@@ -1483,10 +1496,10 @@ LRESULT CALLBACK LowLevelKeybdProc(int code, WPARAM wParam, LPARAM lParam)
 	if (pEvent->dwExtraInfo == KEY_PHYS_IGNORE)
 		pEvent->flags &= ~LLKHF_INJECTED;
 
-// Make all keybd events physical to try to fool the system into accepting CTRL-ALT-DELETE.
-// This didn't work, which implies that Ctrl-Alt-Delete is trapped at a lower level than
-// this hook (folks have said that it's trapped in the keyboard driver itself):
-//pEvent->flags &= ~LLKHF_INJECTED;
+	// Make all keybd events physical to try to fool the system into accepting CTRL-ALT-DELETE.
+	// This didn't work, which implies that Ctrl-Alt-Delete is trapped at a lower level than
+	// this hook (folks have said that it's trapped in the keyboard driver itself):
+	//pEvent->flags &= ~LLKHF_INJECTED;
 
 	// Note: Some scan codes are shared by more than one key (e.g. Numpad7 and NumpadHome).  This is why
 	// the keyboard hook must be able to handle hotkeys by either their virtual key or their scan code.
@@ -1535,6 +1548,10 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	// may be important:
 	if (code != HC_ACTION)
 		return AllowKeyToGoToSystem;
+
+	// Make all mouse events physical to try to simulate mouse clicks in games that normally ignore
+	// artificial input.
+	//pEvent->flags &= ~LLMHF_INJECTED;
 
 	if (!(pEvent->flags & LLMHF_INJECTED)) // Physical mouse movement or button action (uses LLMHF vs. LLKHF).
 		g_TimeLastInputPhysical = pEvent->time;
@@ -1631,15 +1648,6 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		case VK_PRIOR:  case VK_NUMPAD9: pad_state[PAD_NUMPAD9] = !key_up; break;
 		}
 	}
-
-	// Having this extra check here, in addition to the other(s) that set alt_tab_menu_is_visible to be
-	// true, allows AltTab and ShiftAltTab hotkeys to function even when the AltTab menu was invoked by
-	// means other than an AltTabMenu or AltTabAndMenu hotkey.  The alt-tab menu becomes visible only
-	// under these exact conditions, at least under WinXP:
-	if (vk == VK_TAB && !key_up && !alt_tab_menu_is_visible
-		&& ((g_modifiersLR_logical & MOD_LALT) || (g_modifiersLR_logical & MOD_RALT))
-		&& !(g_modifiersLR_logical & MOD_LCONTROL) && !(g_modifiersLR_logical & MOD_RCONTROL))
-		alt_tab_menu_is_visible = true;
 
 	// Track physical state of keyboard & mouse buttons since GetAsyncKeyState() doesn't seem
 	// to do so, at least under WinXP.  Also, if it's a modifier, let another section handle it
@@ -2270,10 +2278,27 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 			// Hotkeys are not defined to modify themselves, so look for a match accordingly.
 			modifiersLRnew &= ~pThisKey->as_modifiersLR;
 		GET_HOTKEY_ID_AND_FLAGS(ksc[sc].sc_takes_precedence ? Kscm(modifiersLRnew, sc) : Kvkm(modifiersLRnew, vk));
-		if (hotkey_id == HOTKEY_ID_INVALID && alt_tab_menu_is_visible)
+		// Bug fix for v1.0.20: The below second attempt is no longer made if the current keystroke
+		// is a tab-down/up  This is because doing so causes any naked TAB that has been defined as
+		// a hook hotkey to incorrectly fire when the user holds down ALT and presses tab two or more
+		// times to advance through the alt-tab menu.  Here is the sequence:
+		// $TAB is defined as a hotkey in the script.
+		// User holds down ALT and presses TAB two or more times.
+		// The Alt-tab menu becomes visible on the first TAB keystroke.
+		// The $TAB hotkey fires on the second keystroke because of the below (now-fixed) logic.
+		// By the way, the overall idea behind the below might be considered faulty because
+		// you could argue that non-modified hotkeys should never be allowed to fire while ALT is
+		// down just because the alt-tab menu is visible.  However, it seems justified because
+		// the benefit (which I believe was originally and particularly that an unmodified mouse button
+		// or wheel hotkey could be used to advance through the menu even though ALT is artificially
+		// down due to support displaying the menu) outweighs the cost, which seems low since
+		// it would be rare that anyone would press another hotkey while they are navigating through
+		// the Alt-Tab menu.
+		if (hotkey_id == HOTKEY_ID_INVALID && alt_tab_menu_is_visible && vk != VK_TAB)
 		{
 			// Try again, this time without the ALT key in case the user is trying to
-			// activate an alt-tab related key:
+			// activate an alt-tab related key (i.e. a special hotkey action such as AltTab
+			// that relies on the Alt key being logically but not physically down).
 			modifiersLRnew &= ~(MOD_LALT | MOD_RALT);
 			GET_HOTKEY_ID_AND_FLAGS(ksc[sc].sc_takes_precedence ? Kscm(modifiersLRnew, sc) : Kvkm(modifiersLRnew, vk));
 		}

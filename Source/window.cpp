@@ -725,22 +725,25 @@ BOOL CALLBACK EnumParentFind(HWND aWnd, LPARAM lParam)
 		// allow it to continue instead:
 		//return TRUE;
 		*win_title = '\0';
+
+	WindowInfoPackage &wip = *((WindowInfoPackage *)lParam);  // For performance and convenience.
+
 	// strstr() and related std C functions -- as well as the custom stristr(), will always
 	// find the empty string in any string, which is what we want in case title is the empty string.
-	if (!IsTitleMatch(aWnd, win_title, pWin->title, pWin->exclude_title))
+	if (!IsTitleMatch(aWnd, win_title, wip.title, wip.exclude_title))
 		// Since title doesn't match there's no point in checking the text of this HWND.
 		// Just continue finding more top-level (parent) windows:
 		return TRUE;
 
 	// Disqualify this window if the caller provided us a list of unwanted windows:
-	if (pWin->already_visited_count && pWin->already_visited)
-		for (int i = 0; i < pWin->already_visited_count; ++i)
-			if (aWnd == pWin->already_visited[i])
+	if (wip.already_visited_count && wip.already_visited)
+		for (int i = 0; i < wip.already_visited_count; ++i)
+			if (aWnd == wip.already_visited[i])
 				return TRUE; // Not a match, so skip this one and keep searching.
 
 	// Otherwise, the title matches.  If text is specified, the child windows of this parent
 	// must be searched to try to find a match for it:
-	if (*pWin->text || *pWin->exclude_text)
+	if (*wip.text || *wip.exclude_text)
 	{
 		// Search for the specfied text among the children of this window.
 		// EnumChildWindows() will return FALSE (failure) in at least two common conditions:
@@ -748,9 +751,9 @@ BOOL CALLBACK EnumParentFind(HWND aWnd, LPARAM lParam)
 		// 2) The specified parent has no children.
 		// Since in both these cases GetLastError() returns ERROR_SUCCESS, we discard the return
 		// value and just check the struct's child_hwnd to determine whether a match has been found:
-		pWin->child_hwnd = NULL;  // Init prior to each call, in case find_last_match is true.
+		wip.child_hwnd = NULL;  // Init prior to each call, in case find_last_match is true.
 		EnumChildWindows(aWnd, EnumChildFind, lParam);
-		if (!pWin->child_hwnd)
+		if (!wip.child_hwnd)
 			// This parent has no matching child, or no children at all, so search for more parents:
 			return TRUE;
 	}
@@ -758,20 +761,20 @@ BOOL CALLBACK EnumParentFind(HWND aWnd, LPARAM lParam)
 	// Otherwise, a complete match has been found.  Set this output value for the caller.
 	// If find_last_match is true, this value will stay in effect unless overridden
 	// by another matching window:
-	pWin->parent_hwnd = aWnd;
-	++pWin->match_count;  // This must be done prior to the pWin->array_start section below.
+	wip.parent_hwnd = aWnd;
+	++wip.match_count;  // This must be done prior to the wip.array_start section below.
 
-	if (pWin->array_start)
+	if (wip.array_start)
 	{
 		// Make it longer than Max var name so that FindOrAddVar() will be able to spot and report
 		// var names that are too long:
 		char var_name[MAX_VAR_NAME_LENGTH + 20];
-		snprintf(var_name, sizeof(var_name), "%s%u", pWin->array_start->mName, pWin->match_count);
+		snprintf(var_name, sizeof(var_name), "%s%u", wip.array_start->mName, wip.match_count);
 		// To help performance (in case the linked list of variables is huge), tell it where
 		// to start the search.  Use the base array name rather than the preceding element because,
 		// for example, Array19 is alphabetially less than Array2, so we can't rely on the
 		// numerical ordering:
-		Var *array_item = g_script.FindOrAddVar(var_name, VAR_NAME_LENGTH_DEFAULT, pWin->array_start);
+		Var *array_item = g_script.FindOrAddVar(var_name, VAR_NAME_LENGTH_DEFAULT, wip.array_start);
 		if (array_item)
 			array_item->AssignHWND(aWnd);  // Failure not checked since very rare, and way to report it yet.
 		// else no error reporting currently, since should be very rare.
@@ -780,7 +783,7 @@ BOOL CALLBACK EnumParentFind(HWND aWnd, LPARAM lParam)
 
 	// If find_last_match is true, continue searching.  Otherwise, this first match is the one
 	// that's desired so stop here:
-	return pWin->find_last_match;  // Returning a bool in lieu of BOOL is safe in this case.
+	return wip.find_last_match;  // Returning a bool in lieu of BOOL is safe in this case.
 }
 
 
@@ -797,19 +800,22 @@ BOOL CALLBACK EnumChildFind(HWND aWnd, LPARAM lParam)
 		return TRUE;  // This child/control is hidden and user doesn't want it considered, so skip it.
 	if (!GetWindowTextByTitleMatchMode(aWnd, win_text, sizeof(win_text)))
 		return TRUE;  // Even if can't get the text of some window, for some reason, keep enumerating.
+
+	WindowInfoPackage &wip = *((WindowInfoPackage *)lParam);  // For performance and convenience.
+
 	// Below: Tell it to find match anywhere in the child-window text, rather than just
 	// in the leading part, because this is how AutoIt2 and AutoIt3 operate:
-	if (*pWin->exclude_text && strstr(win_text, pWin->exclude_text))
+	if (*wip.exclude_text && strstr(win_text, wip.exclude_text))
 		// Since this child window contains the specified ExcludeText, the parent window is
 		// always a non-match:
 		return FALSE;
-	if (IsTextMatch(win_text, pWin->text, FIND_ANYWHERE))
+	if (IsTextMatch(win_text, wip.text, FIND_ANYWHERE))
 	{
 		// Match found, so stop searching.
 		//char class_name[64];
 		//GetClassName(aWnd, class_name, sizeof(class_name));
 		//MsgBox(class_name);
-		pWin->child_hwnd = aWnd;
+		wip.child_hwnd = aWnd;
 		return FALSE;
 	}
 	// Since this child doesn't match, make sure none of its children (recursive)
@@ -824,7 +830,7 @@ BOOL CALLBACK EnumChildFind(HWND aWnd, LPARAM lParam)
 	// EnumChildWindows() enumerates those windows as well."
 	//EnumChildWindows(aWnd, EnumChildFind, lParam);
 	// If matching HWND still hasn't been found, return TRUE to keep searching:
-	//return pWin->child_hwnd == NULL;
+	//return wip.child_hwnd == NULL;
 	return TRUE; // Keep searching.
 }
 
@@ -1034,7 +1040,8 @@ BOOL CALLBACK EnumControlFind(HWND aWnd, LPARAM lParam)
 // source code.
 {
 	char buf[WINDOW_TEXT_SIZE];
-	if (*pWin->title) // Caller told us to search by class name and number.
+	WindowInfoPackage &wip = *((WindowInfoPackage *)lParam);  // For performance and convenience.
+	if (*wip.title) // Caller told us to search by class name and number.
 	{
 		GetClassName(aWnd, buf, sizeof(buf));
 		// Below: i.e. this control's title (e.g. List) in contained entirely
@@ -1047,14 +1054,14 @@ BOOL CALLBACK EnumControlFind(HWND aWnd, LPARAM lParam)
 		// more certain to work even though it's a little ugly.  It's also
 		// necessary to do this in a way functionally identical to the below
 		// so that Window Spy's sequence numbers match the ones generated here:
-		if (!strnicmp(pWin->title, buf, strlen(buf)))
+		if (!strnicmp(wip.title, buf, strlen(buf)))
 		{
 			// Use this var, initialized to zero by constructor, to accumulate the found-count:
-			++pWin->already_visited_count;
-			snprintfcat(buf, sizeof(buf), "%u", pWin->already_visited_count); // Append the count to the class.
-			if (!stricmp(buf, pWin->title)) // It matches name and number.
+			++wip.already_visited_count;
+			snprintfcat(buf, sizeof(buf), "%u", wip.already_visited_count); // Append the count to the class.
+			if (!stricmp(buf, wip.title)) // It matches name and number.
 			{
-				pWin->child_hwnd = aWnd; // save this in here for return to the caller.
+				wip.child_hwnd = aWnd; // save this in here for return to the caller.
 				return FALSE; // stop the enumeration.
 			}
 		}
@@ -1081,9 +1088,9 @@ BOOL CALLBACK EnumControlFind(HWND aWnd, LPARAM lParam)
 		// helps increase selectivity, which is helpful due to how common short or ambiguous
 		// control names tend to be:
 		GetWindowText(aWnd, buf, sizeof(buf));
-		if (IsTextMatch(buf, pWin->text))
+		if (IsTextMatch(buf, wip.text))
 		{
-			pWin->child_hwnd = aWnd; // save this in here for return to the caller.
+			wip.child_hwnd = aWnd; // save this in here for return to the caller.
 			return FALSE;
 		}
 	}
@@ -1290,12 +1297,12 @@ HWND FindOurTopDialog()
 BOOL CALLBACK EnumDialog(HWND aWnd, LPARAM lParam)
 // lParam should be a pointer to a ProcessId (ProcessIds are always non-zero?)
 // To continue enumeration, the function must return TRUE; to stop enumeration, it must return FALSE. 
-#define pThing ((pid_and_hwnd_type *)lParam)
 {
-	if (!lParam || !pThing->pid) return FALSE;
+	pid_and_hwnd_type &pah = *((pid_and_hwnd_type *)lParam);  // For performance and convenience.
+	if (!lParam || !pah.pid) return FALSE;
 	DWORD pid;
 	GetWindowThreadProcessId(aWnd, &pid);
-	if (pid == pThing->pid)
+	if (pid == pah.pid)
 	{
 		char buf[32];
 		GetClassName(aWnd, buf, sizeof(buf));
@@ -1303,7 +1310,7 @@ BOOL CALLBACK EnumDialog(HWND aWnd, LPARAM lParam)
 		// other things that use modal dialogs:
 		if(!strcmp(buf, "#32770"))
 		{
-			pThing->hwnd = aWnd;  // An output value for the caller.
+			pah.hwnd = aWnd;  // An output value for the caller.
 			return FALSE;  // We're done.
 		}
 	}

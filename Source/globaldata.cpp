@@ -241,21 +241,22 @@ Action g_act[] =
 	, {"Repeat", 0, 1, {1, 0}}  // Iteration Count: was mandatory in AutoIt2 but doesn't seem necessary here.
 	, {"Else", 0, 0, NULL}
 
-	// Comparison operators take 1 param (if they're being compared to blank) or 2.
-	// For example, it's okay (though probably useless) to compare a string to the empty
-	// string this way: "If var1 >=".  Note: Line::ToText() relies on the below names:
-	, {"=", 1, 2, NULL}, {"<>", 1, 2, NULL}, {">", 1, 2, NULL}
-	, {">=", 1, 2, NULL}, {"<", 1, 2, NULL}, {"<=", 1, 2, NULL}
 	, {"between", 1, 3, NULL}, {"not between", 1, 3, NULL}  // Min 1 to allow #2 and #3 to be the empty string.
 	, {"in", 2, 2, NULL}, {"not in", 2, 2, NULL}
 	, {"contains", 2, 2, NULL}, {"not contains", 2, 2, NULL}  // Very similar to "in" and "not in"
 	, {"is", 2, 2, NULL}, {"is not", 2, 2, NULL}
 
+	// Comparison operators take 1 param (if they're being compared to blank) or 2.
+	// For example, it's okay (though probably useless) to compare a string to the empty
+	// string this way: "If var1 >=".  Note: Line::ToText() relies on the below names:
+	, {"=", 1, 2, NULL}, {"<>", 1, 2, NULL}, {">", 1, 2, NULL}
+	, {">=", 1, 2, NULL}, {"<", 1, 2, NULL}, {"<=", 1, 2, NULL}
+
 	// For these, allow a minimum of zero, otherwise, the first param (WinTitle) would
 	// be considered mandatory-non-blank by default.  It's easier to make all the params
 	// optional and validate elsewhere that at least one of the four isn't blank.
 	// Also, All the IFs must be physically adjacent to each other in this array
-	// so that ACT_IF_FIRST and ACT_IF_LAST can be used to detect if a command is an IF:
+	// so that ACT_FIRST_IF and ACT_LAST_IF can be used to detect if a command is an IF:
 	, {"IfWinExist", 0, 4, NULL}, {"IfWinNotExist", 0, 4, NULL}  // Title, text, exclude-title, exclude-text
 	// Passing zero params results in activating the LastUsed window:
 	, {"IfWinActive", 0, 4, NULL}, {"IfWinNotActive", 0, 4, NULL} // same
@@ -463,6 +464,8 @@ Action g_act[] =
 	, {"Reload", 0, 0, NULL}
 	, {"Menu", 2, 6, NULL}  // tray, add, name, label, options, future use
 	, {"Gui", 1, 4, NULL}  // Cmd/Add, ControlType, Options, Text
+	, {"GuiControl", 0, 3, NULL} // Sub-cmd (defaults to "contents"), ControlName/ID, Text
+	, {"GuiControlGet", 1, 4, NULL} // OutputVar, Sub-cmd (defaults to "contents"), ControlName/ID (defaults to control assoc. with OutputVar), Text/FutureUse
 
 	, {"ExitApp", 0, 1, NULL}  // Optional exit-code
 	, {"Shutdown", 1, 1, {1, 0}} // Seems best to make the first param (the flag/code) mandatory.

@@ -77,6 +77,10 @@ Script::Script()
 		mTrayMenu->mIncludeStandardItems = true;
 
 #ifdef _DEBUG
+	if (ID_FILE_EXIT < ID_MAIN_FIRST) // Not a very thorough check.
+		ScriptError("DEBUG: ID_FILE_EXIT is too large (conflicts with IDs reserved via ID_USER_FIRST).");
+	if (MAX_CONTROLS_PER_GUI > 1000)
+		ScriptError("DEBUG: MAX_CONTROLS_PER_GUI is too large (conflicts with IDs reserved via ID_USER_FIRST).");
 	int LargestMaxParams, i, j;
 	ActionTypeType *np;
 	// Find the Largest value of MaxParams used by any command and make sure it
@@ -1457,7 +1461,7 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 	}
 	if (IS_DIRECTIVE_MATCH("#SingleInstance"))
 	{
-		g_AllowOnlyOneInstance = SINGLE_INSTANCE;
+		g_AllowOnlyOneInstance = SINGLE_INSTANCE_PROMPT; // Set default.
 		if (*directive_end && *(cp = omit_leading_whitespace(directive_end)))
 		{
 			if (*cp == g_delimiter)
@@ -1583,12 +1587,12 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 	if (IS_DIRECTIVE_MATCH("#MaxMem"))
 	{
 		RETURN_IF_NO_CHAR
-		value = ATOI(cp);  // cp was set to the right position by the above macro
-		if (value > 4095)  // Don't exceed capacity of VarSizeType, which is currently a DWORD (4 gig).
-			value = 4095;  // Don't use 4096 since that might be a special/reserved value for some functions.
-		else if (value < 1)
-			value = 1;
-		g_MaxVarCapacity = (VarSizeType)value * 1024 * 1024;
+		double valuef = ATOF(cp);  // cp was set to the right position by the above macro
+		if (valuef > 4095)  // Don't exceed capacity of VarSizeType, which is currently a DWORD (4 gig).
+			valuef = 4095;  // Don't use 4096 since that might be a special/reserved value for some functions.
+		else if (valuef  < 1)
+			valuef = 1;
+		g_MaxVarCapacity = (VarSizeType)(valuef * 1024 * 1024);
 		return CONDITION_TRUE;
 	}
 	if (IS_DIRECTIVE_MATCH("#MaxThreads"))
@@ -2248,10 +2252,10 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 		// If this weren't done, the command would more often forgive improper syntax
 		// and not report a load-time error, even though it's pretty obvious that a load-time
 		// error should have been reported:
-		const int max_msgbox_delimiters = 20;
-		char *delimiter[max_msgbox_delimiters];
+		#define MAX_MSGBOX_DELIMITERS 20
+		char *delimiter[MAX_MSGBOX_DELIMITERS];
 		int delimiter_count;
-		for (mark = delimiter_count = 0; action_args[mark] && delimiter_count < max_msgbox_delimiters;)
+		for (mark = delimiter_count = 0; action_args[mark] && delimiter_count < MAX_MSGBOX_DELIMITERS;)
 		{
 			for (; action_args[mark]; ++mark)
 				if (action_args[mark] == g_delimiter && !literal_map[mark]) // Match found: a non-literal delimiter.
@@ -2268,34 +2272,62 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 			// If the first apparent arg is not a non-blank pure number or there are apparently
 			// only 2 args present (i.e. 1 delimiter in the arg list), assume the command is being
 			// used in its 1-parameter mode:
-			if (delimiter_count <= 1)
+			if (delimiter_count <= 1) // 2 parameters or less.
 				// Force it to be 1-param mode.  In other words, we want to make MsgBox a very forgiving
 				// command and have it rarely if ever report syntax errors:
 				max_params_override = 1;
 			else // It has more than 3 apparent params, but is the first param even numeric?
 			{
 				*delimiter[0] = '\0'; // Temporarily terminate action_args at the first delimiter.
+				// Note: If it's a number inside a variable reference, it's still considered 1-parameter
+				// mode to avoid ambiguity (unlike the new deref checking for param #4 mentioned below,
+				// there seems to be too much ambiguity in this case to justify trying to figure out
+				// if the first parameter is a pure deref, and thus that the command should use
+				// 3-param or 4-param mode instead).
 				if (!IsPureNumeric(action_args)) // No floats allowed.  Allow all-whitespace for aut2 compatibility.
 					max_params_override = 1;
 				*delimiter[0] = g_delimiter; // Restore the string.
 				if (!max_params_override)
 				{
+					// IMPORATANT: The MsgBox cmd effectively has 3 parameter modes:
+					// 1-parameter (where all commas in the 1st parameter are automatically literal)
+					// 3-parameter (where all commas in the 3rd parameter are automatically literal)
+					// 4-parameter (whether the 4th parameter is the timeout value)
+					// Thus, the below must be done in a way that recognizes & supports all 3 modes.
 					// The above has determined that the cmd isn't in 1-parameter mode.
 					// If at this point it has exactly 3 apparent params, allow the command to be
 					// processed normally without an override.  Otherwise, do more checking:
-					if (delimiter_count > 2) // i.e. 3 or more delimiters, which means 4 or more params.
+					if (delimiter_count == 3) // i.e. 3 delimiters, which means 4 params.
 					{
-						// If the last parameter isn't blank or pure numeric (i.e. even if it's a pure
+						// If the 4th parameter isn't blank or pure numeric (i.e. even if it's a pure
 						// deref, since trying to figure out what's a pure deref is somewhat complicated
 						// at this early stage of parsing), assume the user didn't intend it to be the
-						// MsgBox timeout (since that feature is rarely used):
-						if (!IsPureNumeric(delimiter[delimiter_count-1] + 1, false, true, true))
-							// Not blank and not a int or float.
-							max_params_override = 3;
+						// MsgBox timeout (since that feature is rarely used), instead intending it
+						// to be part of parameter #3.
+						if (!IsPureNumeric(delimiter[2] + 1, false, true, true))
+						{
+							// Not blank and not a int or float.  Update for v1.0.20: Check if it's a
+							// single deref.  If so, assume that deref contains the timeout and thus
+							// 4-param mode is in effect.  This allows the timeout to be contained in
+							// a variable, which was requested by one user:
+							char *cp = omit_leading_whitespace(delimiter[2] + 1);
+							// Relies on short-circuit boolean order:
+							if (*cp != g_DerefChar || literal_map[cp - action_args]) // not a proper deref char.
+								max_params_override = 3;
+							// else since it does start with a real deref symbol, it must end with one otherwise
+							// that will be caught later on as a syntax error anyway.  Therefore, don't override
+							// max_params, just let it be parsed as 4 parameters.
+						}
 						// If it has more than 4 params or it has exactly 4 but the 4th isn't blank,
 						// pure numeric, or a deref: assume it's being used in 3-parameter mode and
 						// that all the other delimiters were intended to be literal.
 					}
+					else if (delimiter_count > 3) // i.e. 4 or more delimiters, which means 5 or more params.
+						// Since it has too many delimiters to be 4-param mode, Assume it's 3-param mode
+						// so that non-escaped commas in parameters 4 and beyond will be all treated as
+						// strings that are part of parameter #3.
+						max_params_override = 3;
+					//else if 3 params or less: Don't override via max_params_override, just parse it normally.
 				}
 			}
 		}
@@ -2493,7 +2525,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 	//////////////////////////////////////////////////////////////////////////////////////////////////
 	// The check below: Don't bother if this IF (e.g. IfWinActive) has zero params or if the
 	// subaction was already found above:
-	if (nArgs && !subaction_type && !suboldaction_type && ACT_IS_IF(action_type))
+	if (nArgs && !subaction_type && !suboldaction_type && ACT_IS_IF_OLD(action_type))
 	{
 		char *delimiter;
 		char *last_arg = arg[nArgs - 1];
@@ -3408,6 +3440,12 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_GUI:
+		// By design, scripts that use the GUI cmd anywhere are persistent.  Doing this here
+		// also allows WinMain() to later detect whether this script should become #SingleInstance.
+		// Note: Don't directly change g_AllowOnlyOneInstance here in case the  remainder of the
+		// script-loading process comes across any explicit uses of #SinngleInstance,
+		// in which case it would take precedence.
+		g_persistent = true;
 		if (line->mArgc > 0 && !line->ArgHasDeref(1))
 		{
 			GuiCommands gui_cmd = line->ConvertGuiCommand(LINE_RAW_ARG1);
@@ -3455,7 +3493,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			case CONTROL_CMD_CHOOSESTRING:
 			case CONTROL_CMD_EDITPASTE:
 				if (control_cmd != CONTROL_CMD_TABLEFT && control_cmd != CONTROL_CMD_TABRIGHT && !*LINE_RAW_ARG2)
-					return ScriptError("Parameter #2 must not be blank in this case.", LINE_RAW_ARG2);
+					return ScriptError("Parameter #2 must not be blank in this case.");
 				break;
 			default: // All commands except the above should have a blank Value parameter.
 				if (*LINE_RAW_ARG2)
@@ -3475,12 +3513,61 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			case CONTROLGET_CMD_FINDSTRING:
 			case CONTROLGET_CMD_LINE:
 				if (!*LINE_RAW_ARG3)
-					return ScriptError("Parameter #3 must not be blank in this case.", LINE_RAW_ARG3);
+					return ScriptError("Parameter #3 must not be blank in this case.");
 				break;
 			default: // All commands except the above should have a blank Value parameter.
 				if (*LINE_RAW_ARG3)
 					return ScriptError("Parameter #3 must be blank in this case.", LINE_RAW_ARG3);
 			}
+		}
+		break;
+
+	case ACT_GUICONTROL:
+		if (!*LINE_RAW_ARG2) // ControlID
+			return ScriptError("Parameter #2 must not be blank.");
+		if (line->mArgc > 0 && !line->ArgHasDeref(1))
+		{
+			GuiControlCmds guicontrol_cmd = line->ConvertGuiControlCmd(LINE_RAW_ARG1);
+			switch (guicontrol_cmd)
+			{
+			case GUICONTROL_CMD_INVALID:
+				return ScriptError(ERR_GUICONTROLCOMMAND, LINE_RAW_ARG1);
+			case GUICONTROL_CMD_CONTENTS:
+			case GUICONTROL_CMD_MOVE:
+			case GUICONTROL_CMD_CHOOSE:
+			case GUICONTROL_CMD_CHOOSESTRING:
+				if (!*LINE_RAW_ARG3)
+					return ScriptError("Parameter #3 must not be blank in this case.");
+				break;
+			default: // All commands except the above should have a blank Text parameter.
+				if (*LINE_RAW_ARG3)
+					return ScriptError("Parameter #3 must be blank in this case.", LINE_RAW_ARG3);
+			}
+		}
+		break;
+
+	case ACT_GUICONTROLGET:
+		if (line->mArgc > 1 && !line->ArgHasDeref(2))
+		{
+			GuiControlGetCmds guicontrolget_cmd = line->ConvertGuiControlGetCmd(LINE_RAW_ARG2);
+			// This first check's error messages take precedence over the next check's:
+			switch (guicontrolget_cmd)
+			{
+			case GUICONTROLGET_CMD_INVALID:
+				return ScriptError(ERR_GUICONTROLGETCOMMAND, LINE_RAW_ARG2);
+			case GUICONTROLGET_CMD_CONTENTS:
+				break; // Do nothing, since Param4 is optional in this case.
+			default: // All commands except the above should have a blank parameter here.
+				if (*LINE_RAW_ARG4) // Currently true for all, since it's a FutureUse param.
+					return ScriptError("Parameter #4 must be blank in this case.", LINE_RAW_ARG4);
+			}
+			if (guicontrolget_cmd == GUICONTROLGET_CMD_FOCUS)
+			{
+				if (*LINE_RAW_ARG3)
+					return ScriptError("Parameter #3 must be blank in this case.", LINE_RAW_ARG3);
+			}
+			// else it can be optionally blank, in which case the output variable is used as the
+			// ControlID also.
 		}
 		break;
 
@@ -3503,7 +3590,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		{
 			ProcessCmds process_cmd = line->ConvertProcessCmd(LINE_RAW_ARG1);
 			if (process_cmd != PROCESS_CMD_PRIORITY && !*LINE_RAW_ARG2)
-				return ScriptError("Parameter #2 must not be blank in this case.", LINE_RAW_ARG2);
+				return ScriptError("Parameter #2 must not be blank in this case.");
 			switch (process_cmd)
 			{
 			case PROCESS_CMD_INVALID:
@@ -4032,6 +4119,7 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, Var *aVarPrev)
 	else if (!stricmp(new_name, "A_TimeSinceThisHotkey")) var_type = VAR_TIMESINCETHISHOTKEY;
 	else if (!stricmp(new_name, "A_TimeSincePriorHotkey")) var_type = VAR_TIMESINCEPRIORHOTKEY;
 	else if (!stricmp(new_name, "A_EndChar")) var_type = VAR_ENDCHAR;
+	else if (!stricmp(new_name, "A_GuiControlEvent")) var_type = VAR_GUICONTROLEVENT;
 
 	else if (!stricmp(new_name, "A_TimeIdle")) var_type = VAR_TIMEIDLE;
 	else if (!stricmp(new_name, "A_TimeIdlePhysical")) var_type = VAR_TIMEIDLEPHYSICAL;
@@ -5005,16 +5093,24 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
 			bool continue_main_loop = false; // Init prior to below call.
 			jump_to_line = NULL; // Init prior to below call.
 
+			// This must be a variable in this function's stack because registry loops and file-pattern
+			// loops can be intrinsically recursive, in which case not only does it need to pass on the
+			// correct/current iteration to the instance it calls, it must also receive back the updated
+			// count when it is returned to.  This is also related to the loop-recursion bugfix documented
+			// for v1.0.20: fixes A_Index so that it doesn't wrongly reset to 0 inside recursive file-loops
+			// and registry loops:
+			__int64 script_iteration = 0;
+
 			if (attr == ATTR_LOOP_PARSE)
 			{
 				// The phrase "csv" is unique enough since user can always rearrange the letters
 				// to do a literal parse using C, S, and V as delimiters:
 				if (stricmp(LINE_ARG3, "CSV"))
 					result = line->PerformLoopParse(aCurrentFile, aCurrentRegItem, aCurrentReadFile
-						, continue_main_loop, jump_to_line);
+						, continue_main_loop, jump_to_line, script_iteration);
 				else
 					result = line->PerformLoopParseCSV(aCurrentFile, aCurrentRegItem, aCurrentReadFile
-						, continue_main_loop, jump_to_line);
+						, continue_main_loop, jump_to_line, script_iteration);
 			}
 			else if (attr == ATTR_LOOP_READ_FILE)
 			{
@@ -5038,7 +5134,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
 					}
 					FILE *write_file = *write_filespec ? fopen(write_filespec, open_as_binary ? "ab" : "a") : NULL;
 					result = line->PerformLoopReadFile(aCurrentFile, aCurrentRegItem, aCurrentField
-						, continue_main_loop, jump_to_line, read_file, write_file);
+						, continue_main_loop, jump_to_line, read_file, write_file, script_iteration);
 					fclose(read_file);
 					if (write_file)
 						fclose(write_file);
@@ -5063,7 +5159,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
 					// root_key_type needs to be passed in order to support GetLoopRegKey():
 					result = line->PerformLoopReg(aCurrentFile, aCurrentReadFile, aCurrentField
 						, continue_main_loop, jump_to_line, file_loop_mode, recurse_subfolders
-						, root_key_type, root_key, LINE_ARG2);
+						, root_key_type, root_key, LINE_ARG2, script_iteration);
 					if (is_remote_registry)
 						RegCloseKey(root_key);
 				}
@@ -5078,7 +5174,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
 			else // All other loops types are handled this way:
 				result = line->PerformLoop(aCurrentFile, aCurrentRegItem, aCurrentReadFile
 					, aCurrentField, continue_main_loop, jump_to_line, attr, file_loop_mode, recurse_subfolders
-					, LINE_ARG1, iteration_limit, is_infinite);
+					, LINE_ARG1, iteration_limit, is_infinite, script_iteration);
 
 			if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT)
 				return result;
@@ -5531,7 +5627,8 @@ inline ResultType Line::EvaluateCondition()
 ResultType Line::PerformLoop(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
 	, LoopReadFileStruct *apCurrentReadFile, char *aCurrentField, bool &aContinueMainLoop
 	, Line *&aJumpToLine, AttributeType aAttr, FileLoopModeType aFileLoopMode
-	, bool aRecurseSubfolders, char *aFilePattern, __int64 aIterationLimit, bool aIsInfinite)
+	, bool aRecurseSubfolders, char *aFilePattern, __int64 aIterationLimit, bool aIsInfinite
+	, __int64 &aIndex)
 // Note: Even if aFilePattern is just a directory (i.e. with not wildcard pattern), it seems best
 // not to append "\\*.*" to it because the pattern might be a script variable that the user wants
 // to conditionally resolve to various things at runtime.  In other words, it's valid to have
@@ -5576,7 +5673,7 @@ ResultType Line::PerformLoop(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCu
 
 	ResultType result;
 	Line *jump_to_line = NULL;
-	for (__int64 i = 0; aIsInfinite || file_found || i < aIterationLimit; ++i)
+	for (; aIsInfinite || file_found || aIndex < aIterationLimit; ++aIndex)
 	{
 		// Execute once the body of the loop (either just one statement or a block of statements).
 		// Preparser has ensured that every LOOP has a non-NULL next line.
@@ -5585,7 +5682,7 @@ ResultType Line::PerformLoop(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCu
 		result = mNextLine->ExecUntil(ONLY_ONE_LINE, &jump_to_line
 			, file_found ? &new_current_file : apCurrentFile // inner loop's file takes precedence over outer's.
 			, apCurrentRegItem, apCurrentReadFile, aCurrentField
-			, i + 1);  // i+1, since 1 is the first iteration as reported to the script.
+			, aIndex + 1);  // i+1, since 1 is the first iteration as reported to the script.
 		if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT || result == LOOP_BREAK)
 		{
 			#define CLOSE_FILE_SEARCH \
@@ -5679,7 +5776,7 @@ ResultType Line::PerformLoop(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCu
 		// above, if its name matches the original search pattern):
 		result = PerformLoop(NULL, apCurrentRegItem, apCurrentReadFile, aCurrentField
 			, aContinueMainLoop, aJumpToLine, aAttr, aFileLoopMode, aRecurseSubfolders, file_path
-			, aIterationLimit, aIsInfinite);
+			, aIterationLimit, aIsInfinite, aIndex);
 		// result should never be LOOP_CONTINUE because the above call to PerformLoop() should have
 		// handled that case.  However, it can be LOOP_BREAK if it encoutered the break command.
 		if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT || result == LOOP_BREAK)
@@ -5703,7 +5800,7 @@ ResultType Line::PerformLoop(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCu
 
 ResultType Line::PerformLoopReg(WIN32_FIND_DATA *apCurrentFile, LoopReadFileStruct *apCurrentReadFile
 	, char *aCurrentField, bool &aContinueMainLoop, Line *&aJumpToLine, FileLoopModeType aFileLoopMode
-	, bool aRecurseSubfolders, HKEY aRootKeyType, HKEY aRootKey, char *aRegSubkey)
+	, bool aRecurseSubfolders, HKEY aRootKeyType, HKEY aRootKey, char *aRegSubkey, __int64 &aIndex)
 // aRootKeyType is the type of root key, independent of whether it's local or remote.
 // This is used because there's no easy way to determine which root key a remote HKEY
 // refers to.
@@ -5736,7 +5833,7 @@ ResultType Line::PerformLoopReg(WIN32_FIND_DATA *apCurrentFile, LoopReadFileStru
 	#define MAKE_SCRIPT_LOOP_PROCESS_THIS_ITEM \
 	{\
 		result = mNextLine->ExecUntil(ONLY_ONE_LINE, &jump_to_line, apCurrentFile\
-			, &reg_item, apCurrentReadFile, aCurrentField, ++script_iteration);\
+			, &reg_item, apCurrentReadFile, aCurrentField, ++aIndex);\
 		if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT || result == LOOP_BREAK)\
 		{\
 			RegCloseKey(hRegKey);\
@@ -5755,7 +5852,6 @@ ResultType Line::PerformLoopReg(WIN32_FIND_DATA *apCurrentFile, LoopReadFileStru
 	}
 
 	DWORD name_size;
-	__int64 script_iteration = 0;
 
 	// First enumerate the values, which are analogous to files in the file system.
 	// Later, the subkeys ("subfolders") will be done:
@@ -5810,7 +5906,7 @@ ResultType Line::PerformLoopReg(WIN32_FIND_DATA *apCurrentFile, LoopReadFileStru
 					, *reg_item.subkey ? "\\" : "", reg_item.name);
 				// This section is very similar to the one in PerformLoop(), so see it for comments:
 				result = PerformLoopReg(apCurrentFile, apCurrentReadFile, aCurrentField, aContinueMainLoop
-					, aJumpToLine, aFileLoopMode, aRecurseSubfolders, aRootKeyType, aRootKey, subkey_full_path);
+					, aJumpToLine, aFileLoopMode, aRecurseSubfolders, aRootKeyType, aRootKey, subkey_full_path, aIndex);
 				if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT || result == LOOP_BREAK)
 				{
 					RegCloseKey(hRegKey);
@@ -5831,7 +5927,7 @@ ResultType Line::PerformLoopReg(WIN32_FIND_DATA *apCurrentFile, LoopReadFileStru
 
 
 ResultType Line::PerformLoopParse(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
-	, LoopReadFileStruct *apCurrentReadFile, bool &aContinueMainLoop, Line *&aJumpToLine)
+	, LoopReadFileStruct *apCurrentReadFile, bool &aContinueMainLoop, Line *&aJumpToLine, __int64 &aIndex)
 {
 	if (!*ARG2) // Since the input variable's contents are blank, the loop will execute zero times.
 		return OK;
@@ -5876,9 +5972,8 @@ ResultType Line::PerformLoopParse(WIN32_FIND_DATA *apCurrentFile, RegItemStruct 
 	Line *jump_to_line;
 	char *field, *field_end, saved_char;
 	size_t field_length;
-	__int64 script_iteration;
 
-	for (script_iteration = 0, field = buf;;)
+	for (field = buf;;)
 	{ 
 		if (*delimiters)
 		{
@@ -5914,7 +6009,7 @@ ResultType Line::PerformLoopParse(WIN32_FIND_DATA *apCurrentFile, RegItemStruct 
 
 		// See comments in PerformLoop() for details about this section.
 		result = mNextLine->ExecUntil(ONLY_ONE_LINE, &jump_to_line, apCurrentFile, apCurrentRegItem
-			, apCurrentReadFile, field, ++script_iteration);
+			, apCurrentReadFile, field, ++aIndex);
 
 		if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT || result == LOOP_BREAK)
 		{
@@ -5943,7 +6038,7 @@ ResultType Line::PerformLoopParse(WIN32_FIND_DATA *apCurrentFile, RegItemStruct 
 
 
 ResultType Line::PerformLoopParseCSV(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
-	, LoopReadFileStruct *apCurrentReadFile, bool &aContinueMainLoop, Line *&aJumpToLine)
+	, LoopReadFileStruct *apCurrentReadFile, bool &aContinueMainLoop, Line *&aJumpToLine, __int64 &aIndex)
 // This function is similar to PerformLoopParse() so the two should be maintained together.
 // See PerformLoopParse() for comments about the below (comments have been mostly stripped
 // from this function).
@@ -5971,10 +6066,9 @@ ResultType Line::PerformLoopParseCSV(WIN32_FIND_DATA *apCurrentFile, RegItemStru
 	Line *jump_to_line;
 	char *field, *field_end, saved_char;
 	size_t field_length;
-	__int64 script_iteration;
 	bool field_is_enclosed_in_quotes;
 
-	for (script_iteration = 0, field = buf;;)
+	for (field = buf;;)
 	{
 		if (*field == '"')
 		{
@@ -6031,7 +6125,7 @@ ResultType Line::PerformLoopParseCSV(WIN32_FIND_DATA *apCurrentFile, RegItemStru
 
 		// See comments in PerformLoop() for details about this section.
 		result = mNextLine->ExecUntil(ONLY_ONE_LINE, &jump_to_line, apCurrentFile, apCurrentRegItem
-			, apCurrentReadFile, field, ++script_iteration);
+			, apCurrentReadFile, field, ++aIndex);
 
 		if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT || result == LOOP_BREAK)
 		{
@@ -6073,21 +6167,22 @@ ResultType Line::PerformLoopParseCSV(WIN32_FIND_DATA *apCurrentFile, RegItemStru
 
 
 ResultType Line::PerformLoopReadFile(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
-	, char *aCurrentField, bool &aContinueMainLoop, Line *&aJumpToLine, FILE *aReadFile, FILE *aWriteFile)
+	, char *aCurrentField, bool &aContinueMainLoop, Line *&aJumpToLine, FILE *aReadFile, FILE *aWriteFile
+	, __int64 &aIndex)
 {
 	LoopReadFileStruct loop_info(aReadFile, aWriteFile);
 	size_t line_length;
 	ResultType result;
 	Line *jump_to_line;
 
-	for (__int64 script_iteration = 0; fgets(loop_info.mCurrentLine, sizeof(loop_info.mCurrentLine), loop_info.mReadFile);)
+	for (; fgets(loop_info.mCurrentLine, sizeof(loop_info.mCurrentLine), loop_info.mReadFile);)
 	{ 
 		line_length = strlen(loop_info.mCurrentLine);
 		if (line_length && loop_info.mCurrentLine[line_length - 1] == '\n') // Remove newlines like FileReadLine does.
 			loop_info.mCurrentLine[--line_length] = '\0';
 		// See comments in PerformLoop() for details about this section.
 		result = mNextLine->ExecUntil(ONLY_ONE_LINE, &jump_to_line, apCurrentFile, apCurrentRegItem
-			, &loop_info, aCurrentField, ++script_iteration);
+			, &loop_info, aCurrentField, ++aIndex);
 		if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT || result == LOOP_BREAK)
 			return result;
 		if (jump_to_line == this)
@@ -7615,6 +7710,12 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	case ACT_GUI:
 		return g_script.PerformGui(FOUR_ARGS);
 
+	case ACT_GUICONTROL:
+		return GuiControl(THREE_ARGS);
+
+	case ACT_GUICONTROLGET:
+		return GuiControlGet(ARG2, ARG3, ARG4);
+
 	case ACT_SETCONTROLDELAY: g.ControlDelay = ATOI(ARG1); return OK;
 	case ACT_SETWINDELAY: g.WinDelay = ATOI(ARG1); return OK;
 	case ACT_SETKEYDELAY: g.KeyDelay = ATOI(ARG1); return OK;
@@ -8288,6 +8389,24 @@ VarSizeType Script::ScriptGetCursor(char *aBuf)
 			break;
 
 	strlcpy(aBuf, cursor_name[a], SMALL_STRING_LENGTH + 1);  // If a is out-of-bounds, "Unknown" will be used.
+	return (VarSizeType)strlen(aBuf);
+}
+
+
+
+VarSizeType Script::GetGuiControlEvent(char *aBuf)
+// We're returning the length of the var's contents, not the size.
+{
+	static char *names[] = GUI_EVENT_NAMES;
+	if (!aBuf)
+		// This check is done in case a bogus AHK_GUI_ACTION message is received that contains
+		// a event_type value that would otherwise crash the program:
+		return (g.GuiEvent < GUI_EVENT_ILLEGAL) ? (VarSizeType)strlen(names[g.GuiEvent]) : 0;
+	// Otherwise:
+	if (g.GuiEvent < GUI_EVENT_ILLEGAL)
+		strcpy(aBuf, names[g.GuiEvent]);
+	else
+		*aBuf = '\0';
 	return (VarSizeType)strlen(aBuf);
 }
 

@@ -1932,7 +1932,7 @@ ResultType Line::ControlGetFocus(char *aTitle, char *aText, char *aExcludeTitle,
 	if (!cah.hwnd)
 		return OK;  // Let ErrorLevel and the blank output variable tell the story.
 
-	char class_name[1024];
+	char class_name[WINDOW_CLASS_SIZE];
 	cah.class_name = class_name;
 	if (!GetClassName(cah.hwnd, class_name, sizeof(class_name) - 3)) // -3 to allow room for sequence number.
 		return OK;  // Let ErrorLevel and the blank output variable tell the story.
@@ -1952,16 +1952,16 @@ ResultType Line::ControlGetFocus(char *aTitle, char *aText, char *aExcludeTitle,
 
 BOOL CALLBACK EnumChildFindSeqNum(HWND aWnd, LPARAM lParam)
 {
-	#define CAH ((class_and_hwnd_type *)lParam)
-	char class_name[1024];
+	class_and_hwnd_type &cah = *((class_and_hwnd_type *)lParam);  // For performance and convenience.
+	char class_name[WINDOW_CLASS_SIZE];
 	if (!GetClassName(aWnd, class_name, sizeof(class_name)))
 		return TRUE;  // Continue the enumeration.
-	if (!strcmp(class_name, CAH->class_name)) // Class names match.
+	if (!strcmp(class_name, cah.class_name)) // Class names match.
 	{
-		++CAH->class_count;
-		if (aWnd == CAH->hwnd)  // The caller-specified window has been found.
+		++cah.class_count;
+		if (aWnd == cah.hwnd)  // The caller-specified window has been found.
 		{
-			CAH->is_found = true;
+			cah.is_found = true;
 			return FALSE;
 		}
 	}
@@ -2079,6 +2079,9 @@ ResultType Line::ControlGetText(char *aControl, char *aTitle, char *aText
 ResultType Line::Control(char *aCmd, char *aValue, char *aControl, char *aTitle, char *aText
 	, char *aExcludeTitle, char *aExcludeText)
 // This function has been adapted from the AutoIt3 source.
+// ATTACH_THREAD_INPUT has been tested to see if they help any of these work with controls
+// in MSIE (whose Internet Explorer_TridentCmboBx2 does not respond to "Control Choose" but
+// does respond to "Control Focus").  But it didn't help.
 {
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR);  // Set default since there are many points of return.
 	ControlCmds control_cmd = ConvertControlCmd(aCmd);
@@ -2802,7 +2805,7 @@ ResultType Line::WinGetClass(char *aTitle, char *aText, char *aExcludeTitle, cha
 	DETERMINE_TARGET_WINDOW
 	if (!target_window)
 		return output_var->Assign();
-	char class_name[1024];
+	char class_name[WINDOW_CLASS_SIZE];
 	if (!GetClassName(target_window, class_name, sizeof(class_name)))
 		return output_var->Assign();
 	return output_var->Assign(class_name);
@@ -2899,9 +2902,131 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 		strlcpy(wip.exclude_text, aExcludeText, sizeof(wip.exclude_text));
 		EnumWindows(EnumParentFind, (LPARAM)&wip);
 		return output_var->Assign(wip.match_count);
+
+	case WINGET_CMD_CONTROLLIST:
+		if (!target_window_determined)
+			target_window = WinExist(aTitle, aText, aExcludeTitle, aExcludeText);
+		if (target_window)
+		{
+			return WinGetControlList(output_var, target_window);
+		}
+		else
+			return output_var->Assign();
 	}
 
 	return FAIL;  // Never executed (increases maintainability and avoids compiler warning).
+}
+
+
+
+ResultType Line::WinGetControlList(Var *aOutputVar, HWND aTargetWindow)
+// Caller must ensure that aOutputVar and aTargetWindow are non-NULL and valid.
+// Every control is fetched rather than just a list of distinct class names (possibly with a
+// second script array containing the quantity of each class) because it's conceivable that the
+// z-order of the controls will be useful information to some script authors.
+// A delimited list is used rather than the array technique used by "WinGet, OutputVar, List" because:
+// 1) It allows the flexibility of searching the list more easily with something like IfInString.
+// 2) It seems rather rare that the count of items in the list would be useful info to a script author
+//    (the count can be derived with a parsing loop if it's ever needed).
+// 3) It saves memory since script arrays are permanent and since each array element would incur
+//    the overhead of being a script variable, not to mention that each variable has a minimum
+//    capacity (additional overhead) of 64 bytes.
+{
+	control_list_type cl; // A big struct containing room to store class names and counts for each.
+	CL_INIT_CONTROL_LIST(cl)
+	cl.target_buf = NULL;  // First pass: Signal it not not to write to the buf, but instead only calculate the length.
+	EnumChildWindows(aTargetWindow, EnumChildGetControlList, (LPARAM)&cl);
+	if (!cl.total_length) // No controls in the window.
+		return aOutputVar->Assign();
+	// This adjustment was added because someone reported that max variable capacity was being
+	// exceeded in some cases (perhaps custom controls that retrieve large amounts of text
+	// from the disk in response to the "get text" message):
+	if (cl.total_length >= g_MaxVarCapacity) // Allow the command to succeed by truncating the text.
+		cl.total_length = g_MaxVarCapacity - 1;
+	// Set up the var, enlarging it if necessary.  If the aOutputVar is of type VAR_CLIPBOARD,
+	// this call will set up the clipboard for writing:
+	if (aOutputVar->Assign(NULL, (VarSizeType)cl.total_length) != OK)
+		return FAIL;  // It already displayed the error.
+	// Fetch the text directly into the var.  Also set the length explicitly
+	// in case actual size written was off from the esimated size (in case the list of
+	// controls changed in the split second between pass #1 and pass #2):
+	CL_INIT_CONTROL_LIST(cl)
+	cl.target_buf = aOutputVar->Contents();  // Second pass: Write to the buffer.
+	cl.capacity = aOutputVar->Capacity(); // Because granted capacity might be a little larger than we asked for.
+	EnumChildWindows(aTargetWindow, EnumChildGetControlList, (LPARAM)&cl);
+	aOutputVar->Length() = (VarSizeType)cl.total_length;  // In case it wound up being smaller than expected.
+	if (!cl.total_length) // Something went wrong, so make sure its terminated just in case.
+		*aOutputVar->Contents() = '\0';  // Safe because Assign() gave us a non-constant memory area.
+	return aOutputVar->Close();  // In case it's the clipboard.
+}
+
+
+
+BOOL CALLBACK EnumChildGetControlList(HWND aWnd, LPARAM lParam)
+{
+	// Note: IsWindowVisible(aWnd) is not checked because although Window Spy does not reveal
+	// hidden controls if the mouse happens to be hovering over one, it does include them in its
+	// sequence numbering (which is a relieve, since results are probably much more consistent
+	// then, esp. for apps that hide and unhide controls in response to actions on other controls).
+	char class_name[WINDOW_CLASS_SIZE + 5];  // +5 to allow room for the sequence number to be appended later below.
+	int class_name_length = GetClassName(aWnd, class_name, WINDOW_CLASS_SIZE); // Don't include the +5 in this.
+	if (!class_name_length)
+		return TRUE; // Probably very rare. Continue enumeration since Window Spy doesn't even check for failure.
+	// It has been verified that GetClassName()'s returned length does not count the terminator.
+
+	control_list_type &cl = *((control_list_type *)lParam);  // For performance and convenience.
+
+	// Check if this class already exists in the class array:
+	int class_index;
+	for (class_index = 0; class_index < cl.total_classes; ++class_index)
+		if (!stricmp(cl.class_name[class_index], class_name))
+			break;
+	if (class_index < cl.total_classes) // Match found.
+	{
+		++cl.class_count[class_index]; // Increment the number of controls of this class that have been found so far.
+		if (cl.class_count[class_index] > 99999) // Sanity check; prevents buffer overflow or number truncation in class_name.
+			return TRUE;  // Continue the enumeration.
+	}
+	else // No match found, so create new entry if there's room.
+	{
+		if (cl.total_classes == CL_MAX_CLASSES // No pointers left.
+			|| CL_CLASS_BUF_SIZE - (cl.buf_free_spot - cl.class_buf) - 1 < class_name_length) // Insuff. room in buf.
+			return TRUE; // Very rare. Continue the enumeration so that class names already found can be collected.
+		// Otherwise:
+		cl.class_name[class_index] = cl.buf_free_spot;  // Set this pointer to its place in the buffer.
+		strcpy(cl.class_name[class_index], class_name); // Copy the string into this place.
+		cl.buf_free_spot += class_name_length + 1;  // +1 because every string in the buf needs its own terminator.
+		cl.class_count[class_index] = 1;  // Indicate that the quantity of this class so far is 1.
+		++cl.total_classes;
+	}
+
+	_itoa(cl.class_count[class_index], class_name + class_name_length, 10); // Append the seq. number to class_name.
+	class_name_length = (int)strlen(class_name);  // Update the length.
+	int extra_length;
+	if (cl.is_first_iteration)
+	{
+		extra_length = 0; // All items except the first are preceded by a delimiting LF.
+		cl.is_first_iteration = false;
+	}
+	else
+		extra_length = 1;
+	if (cl.target_buf)
+	{
+		if ((int)(cl.capacity - cl.total_length - extra_length - 1) < class_name_length)
+			// No room in target_buf (i.e. don't write a partial item to the buffer).
+			return TRUE;  // Rare: it should only happen if size in pass #2 differed from that calc'd in pass #1.
+		if (extra_length)
+		{
+			cl.target_buf[cl.total_length] = '\n'; // Replace previous item's terminator with newline.
+			cl.total_length += extra_length;
+		}
+		strcpy(cl.target_buf + cl.total_length, class_name); // Write class name + seq. number.
+		cl.total_length += class_name_length;
+	}
+	else // Caller only wanted the total length calculated.
+		cl.total_length += class_name_length + extra_length;
+
+	return TRUE; // Continue enumeration through all the windows.
 }
 
 
@@ -2946,7 +3071,7 @@ ResultType Line::WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char
 	// in certain circumstances, see MS docs):
 	sab.buf = output_var->Contents();
 	sab.total_length = 0; // Init
-	sab.capacity = output_var->Capacity(); // Because capacity might be a little larger than we asked for.
+	sab.capacity = output_var->Capacity(); // Because granted capacity might be a little larger than we asked for.
 	EnumChildWindows(target_window, EnumChildGetText, (LPARAM)&sab);
 
 	output_var->Length() = (VarSizeType)sab.total_length;  // In case it wound up being smaller than expected.
@@ -2964,27 +3089,27 @@ BOOL CALLBACK EnumChildGetText(HWND aWnd, LPARAM lParam)
 {
 	if (!g.DetectHiddenText && !IsWindowVisible(aWnd))
 		return TRUE;  // This child/control is hidden and user doesn't want it considered, so skip it.
-	#define psab ((length_and_buf_type *)lParam)
+	length_and_buf_type &lab = *((length_and_buf_type *)lParam);  // For performance and convenience.
 	int length;
-	if (psab->buf)
-		length = GetWindowTextTimeout(aWnd, psab->buf + psab->total_length
-			, (int)(psab->capacity - psab->total_length)); // Not +1.
+	if (lab.buf)
+		length = GetWindowTextTimeout(aWnd, lab.buf + lab.total_length
+			, (int)(lab.capacity - lab.total_length)); // Not +1.
 	else
 		length = GetWindowTextTimeout(aWnd);
-	psab->total_length += length;
+	lab.total_length += length;
 	if (length)
 	{
-		if (psab->buf)
+		if (lab.buf)
 		{
-			if (psab->capacity - psab->total_length > 2) // Must be >2 due to zero terminator.
+			if (lab.capacity - lab.total_length > 2) // Must be >2 due to zero terminator.
 			{
-				strcpy(psab->buf + psab->total_length, "\r\n"); // Something to delimit each control's text.
-				psab->total_length += 2;
+				strcpy(lab.buf + lab.total_length, "\r\n"); // Something to delimit each control's text.
+				lab.total_length += 2;
 			}
 			// else don't increment total_length
 		}
 		else
-			psab->total_length += 2; // Since buf is NULL, accumulate the size that *would* be needed.
+			lab.total_length += 2; // Since buf is NULL, accumulate the size that *would* be needed.
 	}
 	return TRUE; // Continue enumeration through all the windows.
 }
@@ -3404,7 +3529,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 	case WM_COMMAND:
 		if (HandleMenuItem(LOWORD(wParam), INT_MAX)) // It was handled fully. INT_MAX says "no gui window".
 			return 0; // If an application processes this message, it should return zero.
-		break; // Otherwise, let DefWindowProc() try to handle it.
+		break; // Otherwise, let DefWindowProc() try to handle it (this actually seems to happen normally sometimes).
 
 	case AHK_NOTIFYICON:  // Tray icon clicked on.
 	{
@@ -3659,7 +3784,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			// If we're here, it means our thread called DestroyWindow() directly or indirectly
 			// (currently, it's only called directly).  By returning, our thread should resume
 			// execution at the statement after DestroyWindow() in whichever caller called that:
-			return 0;  // Verified correct.
+			return 0;  // "If an application processes this message, it should return zero."
 		}
 		// Otherwise, some window of ours other than our main window was destroyed
 		// (perhaps the splash window).  Let DefWindowProc() handle it:
@@ -4532,9 +4657,9 @@ ResultType Line::MouseClickDrag(vk_type aVK, int aX1, int aY1, int aX2, int aY2,
 {
 	// Autoit3: Check for x without y
 	// MY: In case this was called from a source that didn't already validate this:
-	if (   (aX1 == INT_MIN && aY1 != INT_MIN) || (aX1 != INT_MIN && aY1 == INT_MIN)   )
+	if (   (aX1 == COORD_UNSPECIFIED && aY1 != COORD_UNSPECIFIED) || (aX1 != COORD_UNSPECIFIED && aY1 == COORD_UNSPECIFIED)   )
 		return FAIL;
-	if (   (aX2 == INT_MIN && aY2 != INT_MIN) || (aX2 != INT_MIN && aY2 == INT_MIN)   )
+	if (   (aX2 == COORD_UNSPECIFIED && aY2 != COORD_UNSPECIFIED) || (aX2 != COORD_UNSPECIFIED && aY2 == COORD_UNSPECIFIED)   )
 		return FAIL;
 
 	// Move the mouse to the start position if we're not starting in the current position:
@@ -4623,7 +4748,7 @@ ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aS
 {
 	// Autoit3: Check for x without y
 	// MY: In case this was called from a source that didn't already validate this:
-	if (   (aX == INT_MIN && aY != INT_MIN) || (aX != INT_MIN && aY == INT_MIN)   )
+	if (   (aX == COORD_UNSPECIFIED && aY != COORD_UNSPECIFIED) || (aX != COORD_UNSPECIFIED && aY == COORD_UNSPECIFIED)   )
 		// This was already validated during load so should never happen
 		// unless this function was called directly from somewhere else
 		// in the app, rather than by a script line:
@@ -4943,7 +5068,7 @@ ResultType Line::MouseGetPos()
 
 	class_and_hwnd_type cah;
 	cah.hwnd = child_under_cursor;  // This is the specific control we need to find the sequence number of.
-	char class_name[1024];
+	char class_name[WINDOW_CLASS_SIZE];
 	cah.class_name = class_name;
 	if (!GetClassName(cah.hwnd, class_name, sizeof(class_name) - 3))  // -3 to allow room for sequence number.
 		return output_var_child->Assign();
@@ -4961,7 +5086,7 @@ ResultType Line::MouseGetPos()
 
 BOOL CALLBACK EnumChildFindPoint(HWND aWnd, LPARAM lParam)
 {
-	#define PAH ((point_and_hwnd_type *)lParam)
+	point_and_hwnd_type &pah = *((point_and_hwnd_type *)lParam);  // For performance and convenience.
 	if (!IsWindowVisible(aWnd)) // Omit hidden controls, like Window Spy does.
 		return TRUE;
 	RECT rect;
@@ -4970,7 +5095,7 @@ BOOL CALLBACK EnumChildFindPoint(HWND aWnd, LPARAM lParam)
 	// The given point must be inside aWnd's bounds.  Then, if there is no hwnd found yet or if aWnd
 	// is entirely contained within the previously found hwnd, update to a "better" found window like
 	// Window Spy.  This overcomes the limitations of WindowFromPoint() and ChildWindowFromPoint():
-	if (PAH->pt.x >= rect.left && PAH->pt.x <= rect.right && PAH->pt.y >= rect.top && PAH->pt.y <= rect.bottom)
+	if (pah.pt.x >= rect.left && pah.pt.x <= rect.right && pah.pt.y >= rect.top && pah.pt.y <= rect.bottom)
 	{
 		// If the window's center is closer to the given point, break the tie and have it take
 		// precedence.  This solves the problem where a particular control from a set of overlapping
@@ -4980,27 +5105,27 @@ BOOL CALLBACK EnumChildFindPoint(HWND aWnd, LPARAM lParam)
 		double center_y = rect.top + (double)(rect.bottom - rect.top) / 2;
 		// Taking the absolute value first is not necessary because it seems that qmathHypot()
 		// takes the square root of the sum of the squares, which handles negatives correctly:
-		double distance = qmathHypot(PAH->pt.x - center_x, PAH->pt.y - center_y);
-		//double distance = qmathSqrt(qmathPow(PAH->pt.x - center_x, 2) + qmathPow(PAH->pt.y - center_y, 2));
-		bool update_it = !PAH->hwnd_found;
+		double distance = qmathHypot(pah.pt.x - center_x, pah.pt.y - center_y);
+		//double distance = qmathSqrt(qmathPow(pah.pt.x - center_x, 2) + qmathPow(pah.pt.y - center_y, 2));
+		bool update_it = !pah.hwnd_found;
 		if (!update_it)
 		{
 			// If the new window's rect is entirely contained within the old found-window's rect, update
 			// even if the distance is greater.  Conversely, if the new window's rect entirely encloses
 			// the old window's rect, do not update even if the distance is less:
-			if (rect.left >= PAH->rect_found.left && rect.right <= PAH->rect_found.right
-				&& rect.top >= PAH->rect_found.top && rect.bottom <= PAH->rect_found.bottom)
+			if (rect.left >= pah.rect_found.left && rect.right <= pah.rect_found.right
+				&& rect.top >= pah.rect_found.top && rect.bottom <= pah.rect_found.bottom)
 				update_it = true; // New is entirely enclosed by old: update to the New.
-			else if (   distance < PAH->distance &&
-				(PAH->rect_found.left < rect.left || PAH->rect_found.right > rect.right
-					|| PAH->rect_found.top < rect.top || PAH->rect_found.bottom > rect.bottom)   )
+			else if (   distance < pah.distance &&
+				(pah.rect_found.left < rect.left || pah.rect_found.right > rect.right
+					|| pah.rect_found.top < rect.top || pah.rect_found.bottom > rect.bottom)   )
 				update_it = true; // New doesn't entirely enclose old and new's center is closer to the point.
 		}
 		if (update_it)
 		{
-			PAH->hwnd_found = aWnd;
-			PAH->rect_found = rect;
-			PAH->distance = distance;
+			pah.hwnd_found = aWnd;
+			pah.rect_found = rect;
+			pah.distance = distance;
 		}
 	}
 	return TRUE; // Continue enumeration all the way through.
@@ -8425,6 +8550,7 @@ ArgTypeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_CONTROLGETFOCUS:
 		case ACT_CONTROLGETTEXT:
 		case ACT_CONTROLGET:
+		case ACT_GUICONTROLGET:
 		case ACT_STATUSBARGETTEXT:
 		case ACT_INPUTBOX:
 		case ACT_RANDOM:

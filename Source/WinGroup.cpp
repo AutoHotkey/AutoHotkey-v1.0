@@ -421,7 +421,9 @@ BOOL CALLBACK EnumParentFindAnyExcept(HWND aWnd, LPARAM lParam)
 		// return "Program Manager" (something with a blank title I think):
 		return TRUE;
 
-	for (WindowSpec *win = pWin->win_spec;;)
+	WindowInfoPackage &wip = *((WindowInfoPackage *)lParam);  // For performance and convenience.
+
+	for (WindowSpec *win = wip.win_spec;;)
 	{
 		// For each window in the linked list, check if aWnd is a match
 		// for it:
@@ -434,14 +436,14 @@ BOOL CALLBACK EnumParentFindAnyExcept(HWND aWnd, LPARAM lParam)
 		// Otherwise, no match, keep checking until aWnd has been compared against
 		// all the WindowSpecs in the group:
 		win = win->mNextWindow;
-		if (win == pWin->win_spec)
+		if (win == wip.win_spec)
 		{
 			// We've made one full circuit of the circular linked list without
 			// finding a match.  So aWnd is the one we're looking for unless
 			// it's in the list of exceptions:
-			if (pWin->already_visited_count && pWin->already_visited)
-				for (int i = 0; i < pWin->already_visited_count; ++i)
-					if (aWnd == pWin->already_visited[i])
+			if (wip.already_visited_count && wip.already_visited)
+				for (int i = 0; i < wip.already_visited_count; ++i)
+					if (aWnd == wip.already_visited[i])
 						return TRUE; // It's an exception, so keep searching.
 			// Otherwise, this window meets the criteria, so return it to the caller and
 			// stop the enumeration.  UPDATE: Rather than stopping the enumeration,
@@ -450,8 +452,8 @@ BOOL CALLBACK EnumParentFindAnyExcept(HWND aWnd, LPARAM lParam)
 			// beginning, the windows will occur in the same order that they did
 			// the first time, rather than going backwards through the sequence
 			// (which is counterintuitive for the user):
-			pWin->parent_hwnd = aWnd;
-			return pWin->find_last_match; // bool vs. BOOL should be okay in this case.
+			wip.parent_hwnd = aWnd;
+			return wip.find_last_match; // bool vs. BOOL should be okay in this case.
 		}
 	}
 }
@@ -479,7 +481,9 @@ BOOL CALLBACK EnumParentCloseAny(HWND aWnd, LPARAM lParam)
 		// Skip this too because never want to close it as part of a group close.
 		return TRUE;
 
-	for (WindowSpec *win = pWin->win_spec;;)
+	WindowInfoPackage &wip = *((WindowInfoPackage *)lParam);  // For performance and convenience.
+
+	for (WindowSpec *win = wip.win_spec;;)
 	{
 		// For each window in the linked list, check if aWnd is a match
 		// for it:
@@ -487,14 +491,14 @@ BOOL CALLBACK EnumParentCloseAny(HWND aWnd, LPARAM lParam)
 			if (HasMatchingChild(aWnd, win->mText, win->mExcludeText))
 			{
 				// Match found, so aWnd is a member of the group.
-				pWin->parent_hwnd = aWnd;  // So that the caller knows we closed at least one.
+				wip.parent_hwnd = aWnd;  // So that the caller knows we closed at least one.
 				PostMessage(aWnd, WM_CLOSE, 0, 0);  // Ask it nicely to close.
 				return TRUE; // Continue the enumeration.
 			}
 		// Otherwise, no match, keep checking until aWnd has been compared against
 		// all the WindowSpecs in the group:
 		win = win->mNextWindow;
-		if (win == pWin->win_spec)
+		if (win == wip.win_spec)
 			// We've made one full circuit of the circular linked list without
 			// finding a match, so aWnd is not a member of the group and
 			// should not be closed.

@@ -52,7 +52,7 @@ enum VarTypes
 , VAR_LOOPREADLINE, VAR_LOOPFIELD, VAR_INDEX
 , VAR_THISMENUITEM, VAR_THISMENUITEMPOS, VAR_THISMENU, VAR_THISHOTKEY, VAR_PRIORHOTKEY
 , VAR_TIMESINCETHISHOTKEY, VAR_TIMESINCEPRIORHOTKEY
-, VAR_ENDCHAR
+, VAR_ENDCHAR, VAR_GUICONTROLEVENT
 , VAR_TIMEIDLE, VAR_TIMEIDLEPHYSICAL
 , VAR_SPACE, VAR_TAB
 };
@@ -72,11 +72,11 @@ private:
 	VarSizeType mLength;   // How much is actually stored in it currently, excluding the zero terminator.
 	VarSizeType mCapacity; // In bytes.  Includes the space for the zero terminator.
 	AllocMethodType mHowAllocated;
-	static char sEmptyString[1]; // A special, non-constant memory area for empty variables.
 public:
 	char *mName;    // The name of the var.
 	VarTypeType mType;
 	Var *mNextVar;  // Next item in linked list.
+	static char sEmptyString[1]; // A special, non-constant memory area for empty variables.
 
 	// Convert to unsigned 64-bit to support for 64-bit pointers.  Since most script operations --
 	// such as addition and comparison -- read strings in as signed 64-bit, it is documented that

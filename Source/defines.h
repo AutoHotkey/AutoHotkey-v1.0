@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.19"
+#define NAME_VERSION "1.0.20"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -100,7 +100,7 @@ enum ResultType {FAIL = 0, OK, WARN = OK, CRITICAL_ERROR
 enum ExitReasons {EXIT_NONE, EXIT_CRITICAL, EXIT_ERROR, EXIT_DESTROY, EXIT_LOGOFF, EXIT_SHUTDOWN
 	, EXIT_WM_QUIT, EXIT_WM_CLOSE, EXIT_MENU, EXIT_EXIT, EXIT_RELOAD, EXIT_SINGLEINSTANCE};
 
-enum SingleInstanceType {ALLOW_MULTI_INSTANCE, SINGLE_INSTANCE, SINGLE_INSTANCE_REPLACE
+enum SingleInstanceType {ALLOW_MULTI_INSTANCE, SINGLE_INSTANCE_PROMPT, SINGLE_INSTANCE_REPLACE
 	, SINGLE_INSTANCE_IGNORE, SINGLE_INSTANCE_OFF}; // ALLOW_MULTI_INSTANCE must be zero.
 
 enum MenuTypeType {MENU_TYPE_NONE, MENU_TYPE_POPUP, MENU_TYPE_BAR}; // NONE must be zero.
@@ -126,8 +126,8 @@ enum ToggleValueType {TOGGLE_INVALID = 0, TOGGLED_ON, TOGGLED_OFF, ALWAYS_ON, AL
 #define MAX_PROGRESS_WINDOWS_STR "10" // Keep this in sync with above.
 #define MAX_SPLASHIMAGE_WINDOWS 10
 #define MAX_SPLASHIMAGE_WINDOWS_STR "10" // Keep this in sync with above.
-#define MAX_GUI_WINDOWS 5  // Increasing this will impact performance for routines that search through them all.
-#define MAX_GUI_WINDOWS_STR "5" // Keep this in sync with above.
+#define MAX_GUI_WINDOWS 10  // Increasing this will impact performance for routines that search through them all.
+#define MAX_GUI_WINDOWS_STR "10" // Keep this in sync with above.
 #define MAX_TOOLTIPS 20
 #define MAX_TOOLTIPS_STR "20"   // Keep this in sync with above.
 #define MAX_FILEDIALOGS 4
@@ -245,6 +245,13 @@ struct Action
 // because it's used as a local (stack) var by at least one recursive function:
 enum TitleMatchModes {MATCHMODE_INVALID = FAIL, FIND_IN_LEADING_PART, FIND_ANYWHERE, FIND_EXACT, FIND_FAST, FIND_SLOW};
 
+typedef UINT GuiEventType; // Made a UINT vs. enum so that illegal/underflow/overflow values are easier to detect.
+#define GUI_EVENT_NONE        0 // NONE must be zero for any uses of ZeroMemory(), etc.
+#define GUI_EVENT_NORMAL      1
+#define GUI_EVENT_DBLCLK      2
+#define GUI_EVENT_ILLEGAL     3 // This item must always be last, and it must be 1 greater than the previous.
+#define GUI_EVENT_NAMES {"", "Normal", "DoubleClick"}  // THIS MUST BE KEPT IN SYNC WITH THE ABOVE.
+
 // Bitwise flags for the UCHAR CoordMode:
 #define COORD_MODE_PIXEL   0x01
 #define COORD_MODE_MOUSE   0x02
@@ -265,6 +272,8 @@ struct global_struct
 	bool AllowThisThreadToBeInterrupted;  // Whether this thread can be interrupted by custom menu items, hotkeys, or timers.
 	int UninterruptedLineCount; // Stored as a g-struct attribute in case OnExit sub interrupts it while uninterruptible.
 	int Priority;  // This thread's priority relative to others.
+	GuiEventType GuiEvent; // This thread's triggering event, e.g. DblClk vs. normal click.
+	int DefaultGuiIndex;  // This thread's default GUI window, used except when specified "Gui, 2:Add, ..."
 	int WinDelay;  // negative values may be used as special flags.
 	int ControlDelay;  // negative values may be used as special flags.
 	int KeyDelay;  // negative values may be used as special flags.
@@ -314,6 +323,8 @@ inline void global_init(global_struct *gp)
 	gp->AllowThisThreadToBeInterrupted = true; // Separate from g_AllowInterruption so that they can have independent values.
 	#define PRIORITY_MINIMUM INT_MIN
 	gp->Priority = 0;
+	gp->GuiEvent = GUI_EVENT_NONE;
+	gp->DefaultGuiIndex = 0;
 	gp->WinDelay = 100;  // AutoIt3's default is 250, which seems a little too high nowadays.
 	gp->ControlDelay = 20;
 	gp->KeyDelay = 10;   // AutoIt3's default.

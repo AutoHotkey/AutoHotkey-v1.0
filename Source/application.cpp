@@ -204,10 +204,12 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 	GuiType *pgui;
 	bool *pgui_label_is_running;
 	Label *gui_label;
+	DWORD tick_before, tick_after;
 	MSG msg;
 
 	for (;;)
 	{
+		tick_before = GetTickCount();
 		if (aSleepDuration > 0 && !empty_the_queue_via_peek)
 		{
 			// Use GetMessage() whenever possible -- rather than PeekMessage() or a technique such
@@ -224,13 +226,29 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 				//MsgBox("GetMessage() unexpectedly returned an error.  Press OK to continue running.");
 				continue;
 			}
-			// else let any WM_QUIT be handled below.
+			//else let any WM_QUIT be handled below.
+			// The below was added for v1.0.20 to solve the following issue: If BatchLines is 10ms
+			// (its default) and there are one or more 10ms script-timers active, those timers will
+			// actually only run about every 20ms.  In addition to solving that problem, the below
+			// might also improve reponsiveness of hotkeys, menus, buttons, etc. when the CPU is
+			// under heavy load:
+			tick_after = GetTickCount();
+			if (tick_after - tick_before > 3)  // 3 is somewhat arbitrary, just want to make sure it rested for a meaningful amount of time.
+				g_script.mLastScriptRest = tick_after;
 		}
 		else // aSleepDuration <= 0 || empty_the_queue_via_peek
 		{
 			// In the above cases, we don't want to be stuck in GetMessage() for even 10ms:
 			if (!PeekMessage(&msg, NULL, 0, MSG_FILTER_MAX, PM_REMOVE)) // No more messages
 			{
+				// Since the Peek() didn't find any messages, our timeslice was probably just
+				// yielded if the CPU is under heavy load.  If so, it seems best to count that as
+				// a "rest" so that 10ms script-timers will run closer to the desired frequency
+				// (see above comment for more details).
+				// These next few lines exact match the ones above, so keep them in sync:
+				tick_after = GetTickCount();
+				if (tick_after - tick_before > 3)
+					g_script.mLastScriptRest = tick_after;
 				// It is not necessary to actually do the Sleep(0) when aSleepDuration == 0
 				// because the most recent PeekMessage() has just yielded our prior timeslice.
 				// This is because when Peek() doesn't find any messages, it automatically
@@ -247,64 +265,80 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 					// received any messages during the up-to-20ms delay (perhaps even more)
 					// that just occurred.  It's done this way to minimize keyboard/mouse
 					// lag (if the hooks are installed) that will occur if any key or
-					// mouse events are generated during that 20ms:
+					// mouse events are generated during that 20ms.  Note: It seems that
+					// the OS knows not to yield our timeslice twice in a row: once for
+					// the Sleep(0) above and once for the upcoming PeekMessage() (if that
+					// PeekMessage() finds no messages), so it does not seem necessary
+					// to check HIWORD(GetQueueStatus(QS_ALLEVENTS)).  This has been confirmed
+					// via the following test, which shows that while BurnK6 (CPU maxing program)
+					// is foreground, a Sleep(0) really does a Sleep(60).  But when it's not
+					// foreground, it only does a Sleep(20).  This behavior is UNAFFECTED by
+					// the added presence of of a HIWORD(GetQueueStatus(QS_ALLEVENTS)) check here:
+					//SplashTextOn,,, xxx
+					//WinWait, xxx  ; set last found window
+					//Loop
+					//{
+					//	start = %a_tickcount%
+					//	Sleep, 0
+					//	elapsed = %a_tickcount%
+					//	elapsed -= %start%
+					//	WinSetTitle, %elapsed%
+					//}
 					continue;
 				}
-				else // aSleepDuration is non-zero or we already did the Sleep(0)
-				{
-					// Macro notes:
-					// Must decrement prior to every RETURN to balance it.
-					// Do this prior to checking whether timer should be killed, below.
-					// Kill the timer only if we're about to return OK to the caller since the caller
-					// would still need the timer if FAIL was returned above.  But don't kill it if
-					// there are any enabled timed subroutines, because the current policy it to keep
-					// the main timer always-on in those cases.  UPDATE: Also avoid killing the timer
-					// if there are any script threads running.  To do so might cause a problem such
-					// as in this example scenario: MsgSleep() is called for any reason with a delay
-					// large enough to require the timer.  The timer is set.  But a msg arrives that
-					// MsgSleep() dispatches to MainWindowProc().  If it's a hotkey or custom menu,
-					// MsgSleep() is called recursively with a delay of -1.  But when it finishes via
-					// IsCycleComplete(), the timer would be wrongly killed because the underlying
-					// instance of MsgSleep still needs it.  Above is even more wide-spread because if
-					// MsgSleep() is called recursively for any reason, even with a duration >10, it will
-					// wrongly kill the timer upon returning, in some cases.  For example, if the first call to
-					// MsgSleep(-1) finds a hotkey or menu item msg, and executes the corresponding subroutine,
-					// that subroutine could easily call MsgSleep(10+) for any number of reasons, which
-					// would then kill the timer.
-					// Also require that aSleepDuration > 0 so that MainWindowProc()'s receipt of a
-					// WM_HOTKEY msg, to which it responds by turning on the main timer if the script
-					// is uninterruptible, is not defeated here.  In other words, leave the timer on so
-					// that when the script becomes interruptible once again, the hotkey will take effect
-					// almost immediately rather than having to wait for the displayed dialog to be
-					// dismissed (if there is one).
-					// If timer doesn't exist, the new-thread-launch routine of MsgSleep() relies on this
-					// to turn it back on whenever a layer beneath us needs it.  Since the timer
-					// is never killed while g_script.mTimerEnabledCount is >0, it shouldn't be necessary
-					// to check g_script.mTimerEnabledCount here.
-					#define RETURN_FROM_MSGSLEEP(return_value) \
+				// Otherwise: aSleepDuration is non-zero or we already did the Sleep(0)
+				// Macro notes:
+				// Must decrement prior to every RETURN to balance it.
+				// Do this prior to checking whether timer should be killed, below.
+				// Kill the timer only if we're about to return OK to the caller since the caller
+				// would still need the timer if FAIL was returned above.  But don't kill it if
+				// there are any enabled timed subroutines, because the current policy it to keep
+				// the main timer always-on in those cases.  UPDATE: Also avoid killing the timer
+				// if there are any script threads running.  To do so might cause a problem such
+				// as in this example scenario: MsgSleep() is called for any reason with a delay
+				// large enough to require the timer.  The timer is set.  But a msg arrives that
+				// MsgSleep() dispatches to MainWindowProc().  If it's a hotkey or custom menu,
+				// MsgSleep() is called recursively with a delay of -1.  But when it finishes via
+				// IsCycleComplete(), the timer would be wrongly killed because the underlying
+				// instance of MsgSleep still needs it.  Above is even more wide-spread because if
+				// MsgSleep() is called recursively for any reason, even with a duration >10, it will
+				// wrongly kill the timer upon returning, in some cases.  For example, if the first call to
+				// MsgSleep(-1) finds a hotkey or menu item msg, and executes the corresponding subroutine,
+				// that subroutine could easily call MsgSleep(10+) for any number of reasons, which
+				// would then kill the timer.
+				// Also require that aSleepDuration > 0 so that MainWindowProc()'s receipt of a
+				// WM_HOTKEY msg, to which it responds by turning on the main timer if the script
+				// is uninterruptible, is not defeated here.  In other words, leave the timer on so
+				// that when the script becomes interruptible once again, the hotkey will take effect
+				// almost immediately rather than having to wait for the displayed dialog to be
+				// dismissed (if there is one).
+				// If timer doesn't exist, the new-thread-launch routine of MsgSleep() relies on this
+				// to turn it back on whenever a layer beneath us needs it.  Since the timer
+				// is never killed while g_script.mTimerEnabledCount is >0, it shouldn't be necessary
+				// to check g_script.mTimerEnabledCount here.
+				#define RETURN_FROM_MSGSLEEP(return_value) \
+				{\
+					if (this_layer_needs_timer)\
+						--g_nLayersNeedingTimer;\
+					if (g_MainTimerExists)\
 					{\
-						if (this_layer_needs_timer)\
-							--g_nLayersNeedingTimer;\
-						if (g_MainTimerExists)\
-						{\
-							if (aSleepDuration > 0 && !g_nLayersNeedingTimer && !g_script.mTimerEnabledCount && !Hotkey::sJoyHotkeyCount)\
-								KILL_MAIN_TIMER \
-						}\
-						else if (g_nLayersNeedingTimer)\
-							SET_MAIN_TIMER \
-						return return_value;\
-					}
-					// Function should always return OK in this case.  Also, was_interrupted
-					// will always be false because if this "aSleepDuration <= 0" call
-					// really was interrupted, it would already have returned in the
-					// hotkey cases of the switch().  UPDATE: was_interrupted can now
-					// be true since the hotkey case in the switch() doesn't return,
-					// relying on us to do it after making sure the queue is empty.
-					// The below is checked here rather than in IsCycleComplete() because
-					// that function is sometimes called more than once prior to returning
-					// (e.g. empty_the_queue_via_peek) and we only want this to be decremented once:
-					RETURN_FROM_MSGSLEEP(IsCycleComplete(aSleepDuration, start_time, allow_early_return))
+						if (aSleepDuration > 0 && !g_nLayersNeedingTimer && !g_script.mTimerEnabledCount && !Hotkey::sJoyHotkeyCount)\
+							KILL_MAIN_TIMER \
+					}\
+					else if (g_nLayersNeedingTimer)\
+						SET_MAIN_TIMER \
+					return return_value;\
 				}
+				// Function should always return OK in this case.  Also, was_interrupted
+				// will always be false because if this "aSleepDuration <= 0" call
+				// really was interrupted, it would already have returned in the
+				// hotkey cases of the switch().  UPDATE: was_interrupted can now
+				// be true since the hotkey case in the switch() doesn't return,
+				// relying on us to do it after making sure the queue is empty.
+				// The below is checked here rather than in IsCycleComplete() because
+				// that function is sometimes called more than once prior to returning
+				// (e.g. empty_the_queue_via_peek) and we only want this to be decremented once:
+				RETURN_FROM_MSGSLEEP(IsCycleComplete(aSleepDuration, start_time, allow_early_return))
 			}
 			// else Peek() found a message, so process it below.
 		}
@@ -312,8 +346,10 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 		// If this message might be for one of our GUI windows, check that before doing anything
 		// else with the message.  This must be done first because some of the standard controls
 		// also use WM_USER messages, so we must not assume they're generic thread messages just
-		// because they're >= WM_USER.  The exception is AHK_GUI_ACTION should always be handled here:
-		if (msg.hwnd && msg.hwnd != g_hWnd && msg.message != AHK_GUI_ACTION)
+		// because they're >= WM_USER.  The exception is AHK_GUI_ACTION should always be handled
+		// here rather than by IsDialogMessage().  Note: sObjectCount is checked first to help
+		// performance, since all messages must come through this bottleneck.
+		if (GuiType::sObjectCount && msg.hwnd && msg.hwnd != g_hWnd && msg.message != AHK_GUI_ACTION)
 		{
 			for (i = 0; i < MAX_GUI_WINDOWS; ++i)
 				// Note: indications are that IsDialogMessage() should not be called with NULL as
@@ -645,7 +681,13 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 					// check IsWindow/IsWindowVisible/DetectHiddenWindows since g_ValidLastUsedWindow
 					// takes care of that whenever the script actually tries to use the last found window.
 					if (g_gui[msg.wParam])
+					{
 						g.hWndLastUsed = g_gui[msg.wParam]->mHwnd; // OK if NULL.
+						g.DefaultGuiIndex = (int)msg.wParam;
+						// This flags GUI menu items as being GUI so that the script has a way of detecting
+						// whether a given submenu's item was selected from inside a menu bar vs. a popup:
+						g.GuiEvent = GUI_EVENT_NORMAL;
+					}
 				}
 				menu_item->mLabel->mJumpToLine->ExecUntil(UNTIL_RETURN);
 				break;
@@ -655,6 +697,9 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 				break;
 
 			case AHK_GUI_ACTION:
+				// This indicates whether a double-click or other non-standard event launched it:
+				g.GuiEvent = (GuiEventType)msg.lParam;
+				g.DefaultGuiIndex = pgui->mWindowIndex; // GUI threads default to operating upon their own window.
 				g_ErrorLevel->Assign(); // Reset for potential future uses (may help avoid breaking existing scripts if ErrorLevel is ever set).
 				// Set last found window (as documented).  It's not necessary to check IsWindow/IsWindowVisible/
 				// DetectHiddenWindows since g_ValidLastUsedWindow takes care of that whenever the script
@@ -816,6 +861,9 @@ ResultType IsCycleComplete(int aSleepDuration, DWORD aStartTime, bool aAllowEarl
 		// due to the 10ms granularity limit of SetTimer):
 		return FAIL; // Tell the caller to wait some more.
 
+	// Update for v1.0.20: In spite of the new resets of mLinesExecutedThisCycle that now appear
+	// in MsgSleep(), it seems best to retain this reset here for peace of mind, maintainability,
+	// and because it might be necessary in some cases (a full study was not done):
 	// Reset counter for the caller of our caller, any time the thread
 	// has had a chance to be idle (even if that idle time was done at a deeper
 	// recursion level and not by this one), since the CPU will have been

@@ -791,6 +791,8 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight)
 	// "Copy the image. Necessary, because upon pic's release the handle is destroyed."
 	// MSDN: CopyImage(): "[If either width or height] is zero, then the returned image will have the
 	// same width/height as the original."
+	// Note also that CopyImage() seems to provide better scaling quality than using MoveWindow()
+	// (followed by redrawing the parent window) on the static control that contains it:
 	HBITMAP hbitmap_new = (HBITMAP)CopyImage(hbitmap, IMAGE_BITMAP, aWidth, aHeight
 		, (aWidth || aHeight) ? 0 : LR_COPYRETURNORG); // Produce original size if no scaling is needed.
 	pic->Release();

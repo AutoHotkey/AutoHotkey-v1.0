@@ -441,26 +441,31 @@ int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, modLR_type aModifiers
 
 	mod_type modifiers_specified = aModifiers | ConvertModifiersLR(aModifiersLRPersistent);
 
-	for (int i = 0; i < aRepeatCount; ++i)
+	if (VK_IS_MOUSE(aVK))
+		Line::MouseClick(aVK, COORD_UNSPECIFIED, COORD_UNSPECIFIED, aRepeatCount); // It will do its own MouseDelay.
+	else
 	{
-		LONG_OPERATION_UPDATE_FOR_SENDKEYS
-		// These modifiers above stay in effect for each of these keypresses.
-		// Always on the first iteration, and thereafter only if the send won't be essentially
-		// instantaneous.  The modifiers are checked before every key is sent because
-		// if a high repeat-count was specified, the user may have time to release one or more
-		// of the modifier keys that were used to trigger a hotkey.  That physical release
-		// will cause a key-up event which will cause the state of the modifiers, as seen
-		// by the system, to change.  Example: If user releases control-key during the operation,
-		// some of the D's won't be control-D's:
-		// ^c::Send,^{d 15}
-		// Also: Seems best to do SetModifierState() even if Keydelay < 0:
-		// Update: If this key is itself a modifier, don't change the state of the other
-		// modifier keys just for it, since most of the time that is unnecessary and in
-		// some cases, the extra generated keystrokes would cause complications/side-effects.
-		if (!aKeyAsModifiersLR)
-			// See keyboard.h for explantion of KEY_IGNORE:
-			SetModifierState(modifiers_specified, GetModifierLRState(), KEY_IGNORE);
-		KeyEvent(aEventType, aVK, aSC, aTargetWindow, true);
+		for (int i = 0; i < aRepeatCount; ++i)
+		{
+			LONG_OPERATION_UPDATE_FOR_SENDKEYS
+			// These modifiers above stay in effect for each of these keypresses.
+			// Always on the first iteration, and thereafter only if the send won't be essentially
+			// instantaneous.  The modifiers are checked before every key is sent because
+			// if a high repeat-count was specified, the user may have time to release one or more
+			// of the modifier keys that were used to trigger a hotkey.  That physical release
+			// will cause a key-up event which will cause the state of the modifiers, as seen
+			// by the system, to change.  Example: If user releases control-key during the operation,
+			// some of the D's won't be control-D's:
+			// ^c::Send,^{d 15}
+			// Also: Seems best to do SetModifierState() even if Keydelay < 0:
+			// Update: If this key is itself a modifier, don't change the state of the other
+			// modifier keys just for it, since most of the time that is unnecessary and in
+			// some cases, the extra generated keystrokes would cause complications/side-effects.
+			if (!aKeyAsModifiersLR)
+				// See keyboard.h for explantion of KEY_IGNORE:
+				SetModifierState(modifiers_specified, GetModifierLRState(), KEY_IGNORE);
+			KeyEvent(aEventType, aVK, aSC, aTargetWindow, true);
+		}
 	}
 
 	// The final iteration by the above loop does its key delay prior to us changing the
