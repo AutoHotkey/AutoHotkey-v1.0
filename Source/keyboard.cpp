@@ -55,11 +55,22 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 	// keys that are also logically down (it's possible for a key to be down physically
 	// but not logically such as well R-control, for example, is a suffix hotkey and the
 	// user is physically holding it down):
-	modLR_type modifiersLR_down_physically_and_logically;
+	modLR_type modifiersLR_down_physically_and_logically, modifiersLR_down_physically_but_not_logically;
 	if (g_hhkLowLevelKeybd)
+	{
 		// Since hook is installed, use its more reliable tracking to determine which
 		// modifiers are down.
+		// Update: modifiersLR_down_physically_but_not_logically is now used to distinguish
+		// between the following two cases, allowing modifiers to be properly restored to
+		// the down position when the hook is installed:
+		// 1) naked modifier key used only as suffix: when the user phys. presses it, it isn't
+		//    logically down because the hook suppressed it.
+		// 2) A modifier that is a prefix, that triggers a hotkey via a suffix, and that hotkey sends
+		//    that modifier.  The modifier will go back up after the SEND, so the key will be physically
+		//    down but not logically.
+		modifiersLR_down_physically_but_not_logically = g_modifiersLR_physical & ~g_modifiersLR_logical;
 		modifiersLR_down_physically_and_logically = g_modifiersLR_physical & g_modifiersLR_logical; // intersect
+	}
 	else // Use best-guess instead.
 	{
 		// Even if TickCount has wrapped due to system being up more than about 49 days,
@@ -284,9 +295,17 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 	{
 		// If possible, update the set of modifier keys that are being physically held down.
 		// This is done because the user may have released some keys during the send operation
-		// (especially if KeyDelay > 0 and the Send is a large one):
+		// (especially if KeyDelay > 0 and the Send is a large one).
+		// Update: Include all keys that are phsyically down except those that were down
+		// physically but not logically at the *start* of the send operation (since the send
+		// operation may have changed the logical state).  In other words, we want to restore
+		// the keys to their former logical-down position to match the fact that the user is still
+		// holding them down physically.  The previously-down keys we don't do this for are those 
+		// that were physically but not logically down, such as a naked Control key that's used
+		// as a suffix without being a prefix.  See above comments for more details:
 		if (g_hhkLowLevelKeybd)
-			modifiersLR_down_physically_and_logically = g_modifiersLR_physical & g_modifiersLR_logical; // intersect
+			modifiersLR_down_physically_and_logically = g_modifiersLR_physical
+				& ~modifiersLR_down_physically_but_not_logically; // intersect
 		// Restore the state of the modifiers to be those believed to be physically held down
 		// by the user.  Do not restore any that were logically "persistent", as detected upon
 		// entrance to this function (e.g. due to something such as a prior "Send, {LWinDown}"),
@@ -390,7 +409,9 @@ int SendKeySpecial(char aChar, mod_type aModifiers, mod_type aModifiersPersisten
 {
 	if (aRepeatCount <= 0) return aRepeatCount;
 	// My: It looks like the "Pƒ" in the below belongs there, as does "­½", which
-	// seems to be a single unit of some kind.
+	// seems to be a single unit of some kind.  Also, it seems that Alt+146 and
+	// Alt+0198 (must have the zero) both yield Æ ... while Alt+145 and Alt+0230
+	// both yield æ.
 	// AutoIt3: Note that the cent and yen symbol are missing and replaced with space - 
 	// this will never be matched as this function will never be called with a space char
 	char szSpecials[] = "ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ £ PƒáíóúñÑªº¿¬­½¼¡«»";
@@ -409,42 +430,53 @@ int SendKeySpecial(char aChar, mod_type aModifiers, mod_type aModifiersPersisten
 		};
 
 	int ascii, ascii_diadic, pair_index;
+	bool needs_leading_zero = false;  // Set default.
 
-	// AutoIt3: // simulation using {ASC nnn}
-	// Only the char code between {asc 128} and {asc 175} can be sent
-	char *cp = strchr(szSpecials, aChar);
-	if (cp)
+	switch(aChar)
 	{
-		if (aTargetWindow)
-			// For now, don't support the ASC method for sending directly to windows.
-			// AutoIt3 takes a stab at supporting it, by activating the parent window I think,
-			// but this seems pointless to me.  So for now, the user shouldn't be using the
-			// ControlSend command to send anything that requires the ASC method:
-			return 0;
-		ascii = 128 + (int)(cp - szSpecials);
+	case 'ø': ascii = 248; needs_leading_zero = true; break;
+	case 'Ø': ascii = 216; needs_leading_zero = true; break;
+	default: ascii = 0;
 	}
-	else // ASCII codes between 192 and 255 inclusive (a total of 64 characters).
+
+	if (ascii == 0)
 	{
-		ascii = 0;  // Set as indicator that the below alternate method will be used instead.
-		if (aChar >= 'À')
+		// AutoIt3: // simulation using {ASC nnn}
+		// Only the char code between {asc 128} and {asc 175} can be sent
+		char *cp = strchr(szSpecials, aChar);
+		if (cp)
 		{
-			pair_index = aChar - 'À'; // 'À' expressed as a signed char is -64.
-			// Sanity check to prevent any chance of buffer underrun or overrun (probably impossible
-			// given the above checks):
-			if (pair_index < 0 || pair_index >= sizeof(diadic))
+			if (aTargetWindow)
+				// For now, don't support the ASC method for sending directly to windows.
+				// AutoIt3 takes a stab at supporting it, by activating the parent window I think,
+				// but this seems pointless to me.  So for now, the user shouldn't be using the
+				// ControlSend command to send anything that requires the ASC method:
 				return 0;
-			if (diadic[pair_index] == ' ') // This is one of the ASCII codes between 192 and 256 than CAN'T be sent.
-				return 0;
-			// else AutoIt3: something can be try to send diadic followed by non accent char
-			// The diadic itself might require the ASC method:
-			if (cp = strchr(szSpecials, diadic[pair_index]))
+			ascii = 128 + (int)(cp - szSpecials);
+		}
+		else // ASCII codes between 192 and 255 inclusive (a total of 64 characters).
+		{
+			ascii = 0;  // Set as indicator that the below alternate method will be used instead.
+			if (aChar >= 'À')
 			{
-				if (aTargetWindow) // Not supported, see above.
+				pair_index = aChar - 'À'; // 'À' expressed as a signed char is -64.
+				// Sanity check to prevent any chance of buffer underrun or overrun (probably impossible
+				// given the above checks):
+				if (pair_index < 0 || pair_index >= sizeof(diadic))
 					return 0;
-				ascii_diadic = 128 + (int)(cp - szSpecials);
+				if (diadic[pair_index] == ' ') // This is one of the ASCII codes between 192 and 256 than CAN'T be sent.
+					return 0;
+				// else AutoIt3: something can be try to send diadic followed by non accent char
+				// The diadic itself might require the ASC method:
+				if (cp = strchr(szSpecials, diadic[pair_index]))
+				{
+					if (aTargetWindow) // Not supported, see above.
+						return 0;
+					ascii_diadic = 128 + (int)(cp - szSpecials);
+				}
+				else
+					ascii_diadic = 0;
 			}
-			else
-				ascii_diadic = 0;
 		}
 	}
 
@@ -459,7 +491,7 @@ int SendKeySpecial(char aChar, mod_type aModifiers, mod_type aModifiersPersisten
 		}
 		if (ascii) // Method #1
 		{
-			keys_sent += SendASC(ascii, aTargetWindow); // aTargetWindow is always NULL, it's just for maintainability.
+			keys_sent += SendASC(ascii, aTargetWindow, needs_leading_zero); // aTargetWindow is always NULL, it's just for maintainability.
 			DoKeyDelay();
 		}
 		else // Method #2
@@ -478,7 +510,7 @@ int SendKeySpecial(char aChar, mod_type aModifiers, mod_type aModifiersPersisten
 
 
 
-int SendASC(int aAscii, HWND aTargetWindow)
+int SendASC(int aAscii, HWND aTargetWindow, bool aSendLeadingZero)
 // Returns the number of keys sent (doesn't need to be exact).
 {
 	// This is just here to catch bugs in callers who do it wrong.  See notes in SendKeys() for explanation:
@@ -506,6 +538,12 @@ int SendASC(int aAscii, HWND aTargetWindow)
 	if (!(GetModifierState() & MOD_ALT)) // Neither ALT key is down.
 	{
 		KeyEvent(KEYDOWN, VK_MENU);
+		++keys_sent;
+	}
+
+	if (aSendLeadingZero)
+	{
+		KeyEvent(KEYDOWNANDUP, VK_NUMPAD0);
 		++keys_sent;
 	}
 

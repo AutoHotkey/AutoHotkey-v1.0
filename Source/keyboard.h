@@ -191,7 +191,7 @@ int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, mod_type aModifiersPe
 	, int aRepeatCount, KeyEventTypes aEventType, HWND aTargetWindow = NULL);
 int SendKeySpecial(char aChar, mod_type aModifiers, mod_type aModifiersPersistent
 	, int aRepeatCount, KeyEventTypes aEventType, HWND aTargetWindow);
-int SendASC(int aAscii, HWND aTargetWindow);
+int SendASC(int aAscii, HWND aTargetWindow, bool aSendLeadingZero = false);
 int SendChar(char aChar, mod_type aModifiers, KeyEventTypes aEventType, HWND aTargetWindow);
 
 

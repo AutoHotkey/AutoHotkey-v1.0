@@ -275,8 +275,14 @@ ResultType Script::CreateWindows(HINSTANCE aInstance)
 	//UpdateWindow(g_hWnd);  // Not necessary because it's empty.
 	// Should do at least one call.  But sometimes SW_HIDE will be ignored the first time
 	// (see MSDN docs), so do two calls to be sure the window is really hidden:
+	//ShowWindow(g_hWnd, SW_HIDE);
+	//ShowWindow(g_hWnd, SW_HIDE); // 2nd call to be safe.
+	// Update: Doing it this way prevents the launch of the program from "stealing focus"
+	// (changing the foreground window to be nothing).  This allows scripts launched from the
+	// start menu, for example, to immediately operate on the window that was foreground
+	// prior to the start menu having been displayed:
+	ShowWindow(g_hWnd, SW_MINIMIZE);
 	ShowWindow(g_hWnd, SW_HIDE);
-	ShowWindow(g_hWnd, SW_HIDE); // 2nd call to be safe.
 
 	g_hAccelTable = LoadAccelerators(aInstance, MAKEINTRESOURCE(IDR_ACCELERATOR1));
 
@@ -303,7 +309,7 @@ ResultType Script::CreateWindows(HINSTANCE aInstance)
 		if (!Shell_NotifyIcon(NIM_ADD, &mNIC))
 		{
 			mNIC.hWnd = NULL;  // Set this as an indicator that tray icon is not installed.
-			return FAIL;
+			return OK;  // But don't return FAIL (in case the user is using a different shell or something).
 		}
 	}
 	return OK;
