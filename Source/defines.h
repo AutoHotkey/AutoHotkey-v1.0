@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.22"
+#define NAME_VERSION "1.0.23"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -128,6 +128,7 @@ enum ToggleValueType {TOGGLE_INVALID = 0, TOGGLED_ON, TOGGLED_OFF, ALWAYS_ON, AL
 #define MAX_SPLASHIMAGE_WINDOWS_STR "10" // Keep this in sync with above.
 #define MAX_GUI_WINDOWS 10  // Increasing this will impact performance for routines that search through them all.
 #define MAX_GUI_WINDOWS_STR "10" // Keep this in sync with above.
+#define MAX_CONTROLS_PER_GUI 500
 #define MAX_TOOLTIPS 20
 #define MAX_TOOLTIPS_STR "20"   // Keep this in sync with above.
 #define MAX_FILEDIALOGS 4
@@ -245,6 +246,7 @@ struct Action
 // because it's used as a local (stack) var by at least one recursive function:
 enum TitleMatchModes {MATCHMODE_INVALID = FAIL, FIND_IN_LEADING_PART, FIND_ANYWHERE, FIND_EXACT, FIND_FAST, FIND_SLOW};
 
+typedef UINT GuiIndexType; // Some things rely on it being unsigned to avoid the need to check for less-than-zero.
 typedef UINT GuiEventType; // Made a UINT vs. enum so that illegal/underflow/overflow values are easier to detect.
 #define GUI_EVENT_NONE        0 // NONE must be zero for any uses of ZeroMemory(), etc.
 #define GUI_EVENT_NORMAL      1
@@ -252,11 +254,13 @@ typedef UINT GuiEventType; // Made a UINT vs. enum so that illegal/underflow/ove
 #define GUI_EVENT_ILLEGAL     3 // This item must always be last, and it must be 1 greater than the previous.
 #define GUI_EVENT_NAMES {"", "Normal", "DoubleClick"}  // THIS MUST BE KEPT IN SYNC WITH THE ABOVE.
 
-// Bitwise flags for the UCHAR CoordMode:
+// Bitwise flags:
+typedef UCHAR CoordModeAttribType;
 #define COORD_MODE_PIXEL   0x01
 #define COORD_MODE_MOUSE   0x02
 #define COORD_MODE_TOOLTIP 0x04
 #define COORD_MODE_CARET   0x08
+#define COORD_MODE_MENU    0x10
 
 // Each instance of this struct generally corresponds to a quasi-thread.  The function that creates
 // a new thread typically saves the old thread's struct values on its stack so that they can later
@@ -273,6 +277,7 @@ struct global_struct
 	int UninterruptedLineCount; // Stored as a g-struct attribute in case OnExit sub interrupts it while uninterruptible.
 	int Priority;  // This thread's priority relative to others.
 	GuiEventType GuiEvent; // This thread's triggering event, e.g. DblClk vs. normal click.
+	GuiIndexType GuiWindowIndex, GuiControlIndex; // The GUI window index and control index that launched this thread.
 	int DefaultGuiIndex;  // This thread's default GUI window, used except when specified "Gui, 2:Add, ..."
 	int WinDelay;  // negative values may be used as special flags.
 	int ControlDelay;  // negative values may be used as special flags.
@@ -325,6 +330,8 @@ inline void global_init(global_struct *gp)
 	#define PRIORITY_MINIMUM INT_MIN
 	gp->Priority = 0;
 	gp->GuiEvent = GUI_EVENT_NONE;
+	gp->GuiWindowIndex = MAX_GUI_WINDOWS;       // Default it to out-of-bounds.
+	gp->GuiControlIndex = MAX_CONTROLS_PER_GUI; // Same.
 	gp->DefaultGuiIndex = 0;
 	gp->WinDelay = 100;  // AutoIt3's default is 250, which seems a little too high nowadays.
 	gp->ControlDelay = 20;

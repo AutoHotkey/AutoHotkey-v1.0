@@ -231,6 +231,9 @@ inline char *trim (char *aStr)
 
 
 
+// Transformation is the same in either direction because the end bytes are swapped
+// and the middle byte is left as-is:
+#define bgr_to_rgb(aBGR) rgb_to_bgr(aBGR)
 inline COLORREF rgb_to_bgr(DWORD aRGB)
 // Fancier methods seem prone to problems due to byte alignment or compiler issues.
 {
@@ -473,10 +476,12 @@ char *ConvertFilespecToCorrectCase(char *aFullFileSpec);
 void AssignColor(char *aColorName, COLORREF &aColor, HBRUSH &aBrush);
 COLORREF ColorNameToBGR(char *aColorName);
 HRESULT MySetWindowTheme(HWND hwnd, LPCWSTR pszSubAppName, LPCWSTR pszSubIdList);
+//HRESULT MyEnableThemeDialogTexture(HWND hwnd, DWORD dwFlags);
 char *ConvertEscapeSequences(char *aBuf, char aEscapeChar);
 POINT CenterWindow(int aWidth, int aHeight);
 bool FontExist(HDC aHdc, char *aTypeface);
 void GetVirtualDesktopRect(RECT &aRect);
+ResultType RegReadString(HKEY aRootKey, char *aSubkey, char *aValueName, char *aBuf, size_t aBufSize);
 HBITMAP LoadPicture(char *aFilespec, int aWidth = 0, int aHeight = 0);
 int CALLBACK FontEnumProc(ENUMLOGFONTEX *lpelfe, NEWTEXTMETRICEX *lpntme, DWORD FontType, LPARAM lParam);
 bool IsStringInList(char *aStr, char *aList, bool aFindExactMatch, bool aCaseSensitive);

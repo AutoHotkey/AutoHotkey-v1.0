@@ -84,6 +84,7 @@ private:
 	sc_type mModifierSC; // If mModifierVK is zero, this scan code, if non-zero, will be used as the modifier.
 	modLR_type mModifiersConsolidated; // The combination of mModifierVK, mModifierSC, mModifiersLR, modifiers
 	HotkeyTypes mType;
+	bool mUnregisterDuringThread; // Whether this hotkey should be unregistered during the execution of its own subroutine.
 	bool mIsRegistered;  // Whether this hotkey has been successfully registered.
 	bool mEnabled;
 	HookActionType mHookAction;
@@ -126,6 +127,7 @@ private:
 		if (!PerformIsAllowed() || !mJumpToLabel)
 			return FAIL;
 		ResultType result;
+		bool unregistered_during_thread;
 		++mExistingThreads;  // This is the thread count for this particular hotkey only.
 		for (;;)
 		{
@@ -136,7 +138,16 @@ private:
 			// in which case we would want SendKeys() to take not of these modifiers even
 			// if it was called from an ExecUntil() other than ours here:
 			g_script.mThisHotkeyModifiersLR = mModifiersConsolidated;
+			// For v1.0.23, the below allows the $ hotkey prefix to unregister the hotkey on
+			// Windows 9x, which allows the send command to send the hotkey itself without
+			// causing an infinite loop of keystrokes.  For simplicity, the hotkey is kept
+			// unregistered during the entire duration of the thread, rather than trying to
+			// selectively do it before and after each Send command of the thread:
+			if (unregistered_during_thread = (mUnregisterDuringThread && mIsRegistered)) // Assign.
+				Unregister(); // This takes care of other details for us.
 			result = mJumpToLabel->mJumpToLine->ExecUntil(UNTIL_RETURN);
+			if (unregistered_during_thread)
+				Register();
 			if (result == FAIL)
 			{
 				mRunAgainAfterFinished = false;  // Ensure this is reset due to the error.
@@ -163,6 +174,8 @@ private:
 
 	ResultType Enable()
 	{
+		if (mEnabled) // Added for v1.0.23 to greatly improve performance when hotkey is already in the right state.
+			return OK;
 		mEnabled = true;
 		// For now, call AllDeactivate() for cases such as the following:
 		// the newly added hotkey has an interaction/dependency
@@ -178,6 +191,8 @@ private:
 
 	ResultType Disable()
 	{
+		if (!mEnabled) // Added for v1.0.23 to greatly improve performance when hotkey is already in the right state.
+			return OK;
 		mEnabled = false;
 		// AllDeactivate() is done in case this is the last hook hotkey (mouse or keyboard hook) and
 		// the hook(s) are no longer needed:

@@ -596,7 +596,7 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 	if (!aSplashImage && splash.object_height > 0) // Progress window
 	{
 		// CREATE Progress control (always starts off at its default percentage of zero):
-		if (splash.hwnd_bar = CreateWindowEx(WS_EX_CLIENTEDGE, "msctls_progress32", NULL, WS_CHILD|WS_VISIBLE|PBS_SMOOTH
+		if (splash.hwnd_bar = CreateWindowEx(WS_EX_CLIENTEDGE, PROGRESS_CLASS, NULL, WS_CHILD|WS_VISIBLE|PBS_SMOOTH
 			, PROGRESS_BAR_POS, splash.hwnd, NULL, NULL, NULL))
 		{
 			SendMessage(splash.hwnd_bar, PBM_SETRANGE, 0, MAKELONG(0, 100));
@@ -2747,13 +2747,13 @@ ResultType Line::WinSet(char *aAttrib, char *aValue, char *aTitle, char *aText
 		return OK;
 
 	int value;
-	int target_window_long;
+	DWORD exstyle;
 
 	switch (attrib)
 	{
 	case WINSET_ALWAYSONTOP:
 	{
-		if (   !(target_window_long = GetWindowLong(target_window, GWL_EXSTYLE))   )
+		if (   !(exstyle = GetWindowLong(target_window, GWL_EXSTYLE))   )
 			return OK;
 		HWND topmost_or_not;
 		switch(ConvertOnOffToggle(aValue))
@@ -2761,7 +2761,7 @@ ResultType Line::WinSet(char *aAttrib, char *aValue, char *aTitle, char *aText
 		case TOGGLED_ON: topmost_or_not = HWND_TOPMOST; break;
 		case TOGGLED_OFF: topmost_or_not = HWND_NOTOPMOST; break;
 		case NEUTRAL: // parameter was blank, so it defaults to TOGGLE.
-		case TOGGLE: topmost_or_not = (target_window_long & WS_EX_TOPMOST) ? HWND_NOTOPMOST : HWND_TOPMOST; break;
+		case TOGGLE: topmost_or_not = (exstyle & WS_EX_TOPMOST) ? HWND_NOTOPMOST : HWND_TOPMOST; break;
 		default: return OK;
 		}
 		// SetWindowLong() didn't seem to work, at least not on some windows.  But this does:
@@ -2769,34 +2769,104 @@ ResultType Line::WinSet(char *aAttrib, char *aValue, char *aTitle, char *aText
 		break;
 	}
 
+	// Note that WINSET_TOP is not offered as an option since testing reveals it has no effect on
+	// top level (parent) windows, perhaps due to the anti focus-stealing measures in the OS.
+	case WINSET_BOTTOM:
+		// Note: SWP_NOACTIVATE must be specified otherwise the target window often/always fails to go
+		// to the bottom:
+		SetWindowPos(target_window, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+		break;
+
 	case WINSET_TRANSPARENT:
-		if (!g_os.IsWin2000orLater())
-			return OK;  // Do nothing on OSes that don't support it.
-		value = ATOI(aValue);
-		// A little debatable, but this behavior seems best, at least in some cases:
-		if (value < 0)
-			value = 0;
-		else if (value > 255)
-			value = 255;
-		// Must fetch it at runtime, otherwise the program can't even be launched on Win9x/NT:
+	case WINSET_TRANSCOLOR:
+		// It appears that turning on WS_EX_LAYERED in an attempt to retrieve the window's
+		// former transparency setting does not work.  The OS probably does not store the
+		// former transparency level (i.e. it forgets it the moment the WS_EX_LAYERED exstyle
+		// is turned off).  This is true even if the following are done after the SetWindowLong():
+		//MySetLayeredWindowAttributes(target_window, 0, 0, 0)
+		// or:
+		//if (MyGetLayeredWindowAttributes(target_window, &color, &alpha, &flags))
+		//	MySetLayeredWindowAttributes(target_window, color, alpha, flags);
+		// Misc. note: The above call to MyGetLayeredWindowAttributes() returned 0 (failure),
+		// probably because of this from MSDN: "GetLayeredWindowAttributes can be called only if the
+		// application has previously called SetLayeredWindowAttributes on the window. The function
+		// will fail if the layered window was setup with UpdateLayeredWindow."  Strangely however,
+		// GetLastError() returns ERROR_SUCCESS.  Also strange is that GetLayeredWindowAttributes()
+		// fails even when Set() was previously called on that same window and it is currently
+		// transparent -- perhaps this happens when our thread doesn't own the window?
+		// Bottom line: The above is why there is currently no "on" or "toggle" sub-command, just "Off".
+		// Must fetch it at runtime, otherwise the program can't even be launched on Win9x/NT.
+		// Also, since the color of an HBRUSH can't be easily determined (since it can be a pattern and
+		// since there seem to be no easy API calls to discover the colors of pixels in an HBRUSH,
+		// the following is not yet implemented: Use window's own class background color (via
+		// GetClassLong) if aValue is entirely blank.
 		typedef BOOL (WINAPI *MySetLayeredWindowAttributesType)(HWND, COLORREF, BYTE, DWORD);
 		static MySetLayeredWindowAttributesType MySetLayeredWindowAttributes = (MySetLayeredWindowAttributesType)
 			GetProcAddress(GetModuleHandle("User32.dll"), "SetLayeredWindowAttributes");
-		if (MySetLayeredWindowAttributes)
+		if (!MySetLayeredWindowAttributes || !(exstyle = GetWindowLong(target_window, GWL_EXSTYLE)))
+			return OK;  // Do nothing on OSes that don't support it.
+		if (!stricmp(aValue, "Off"))
+			// One user reported that turning off the attribute helps window's scrolling performance.
+			SetWindowLong(target_window, GWL_EXSTYLE, exstyle & ~WS_EX_LAYERED);
+		else
 		{
-			// NOTE: It seems best never to remove the WS_EX_LAYERED attribute, even if the value is 255
-			// (non-transparent), since the window might have had that attribute previously and may need
-			// it to function properly.  For example, an app may support making its own windows transparent
-			// but might not expect to have to turn WS_EX_LAYERED back on if we turned it off.  One drawback
-			// of this is a quote from somewhere that might or might not be accurate: "To make this window
-			// completely opaque again, remove the WS_EX_LAYERED bit by calling SetWindowLong and then ask
-			// the window to repaint. Removing the bit is desired to let the system know that it can free up
-			// some memory associated with layering and redirection."
-			SetWindowLong(target_window, GWL_EXSTYLE, GetWindowLong(target_window, GWL_EXSTYLE) | WS_EX_LAYERED);
-			MySetLayeredWindowAttributes(target_window, 0, value, LWA_ALPHA);
+			if (attrib == WINSET_TRANSPARENT)
+			{
+				// Update to the below for v1.0.23: WS_EX_LAYERED can now be removed via the above:
+				// NOTE: It seems best never to remove the WS_EX_LAYERED attribute, even if the value is 255
+				// (non-transparent), since the window might have had that attribute previously and may need
+				// it to function properly.  For example, an app may support making its own windows transparent
+				// but might not expect to have to turn WS_EX_LAYERED back on if we turned it off.  One drawback
+				// of this is a quote from somewhere that might or might not be accurate: "To make this window
+				// completely opaque again, remove the WS_EX_LAYERED bit by calling SetWindowLong and then ask
+				// the window to repaint. Removing the bit is desired to let the system know that it can free up
+				// some memory associated with layering and redirection."
+				value = ATOI(aValue);
+				// A little debatable, but this behavior seems best, at least in some cases:
+				if (value < 0)
+					value = 0;
+				else if (value > 255)
+					value = 255;
+				SetWindowLong(target_window, GWL_EXSTYLE, exstyle | WS_EX_LAYERED);
+				MySetLayeredWindowAttributes(target_window, 0, value, LWA_ALPHA);
+			}
+			else // attrib == WINSET_TRANSCOLOR
+			{
+				// The reason WINSET_TRANSCOLOR accepts both the color and an optional transparency settings
+				// is that calling SetLayeredWindowAttributes() with only the LWA_COLORKEY flag causes the
+				// window to lose its current transparency setting in favor of the transparent color.  This
+				// is true even though the LWA_ALPHA flag was not specified, which seems odd and is a little
+				// disappointing, but that's the way it is on XP at least.
+				char aValue_copy[256];
+				strlcpy(aValue_copy, aValue, sizeof(aValue_copy)); // Make a modifiable copy.
+				char *space_pos = StrChrAny(aValue_copy, " \t"); // Space or tab.
+				if (space_pos)
+				{
+					*space_pos = '\0';
+					++space_pos;  // Point it to the second substring.
+				}
+				COLORREF color = ColorNameToBGR(aValue_copy);
+				if (color == CLR_NONE) // A matching color name was not found, so assume it's in hex format.
+					// It seems strtol() automatically handles the optional leading "0x" if present:
+					color = rgb_to_bgr(strtol(aValue_copy, NULL, 16));
+				DWORD flags;
+				if (   space_pos && *(space_pos = omit_leading_whitespace(space_pos))   ) // Relies on short-circuit boolean.
+				{
+					value = ATOI(space_pos);  // To keep it simple, don't bother with 0 to 255 range validation in this case.
+					flags = LWA_COLORKEY|LWA_ALPHA;  // i.e. set both the trans-color and the transparency level.
+				}
+				else
+				{
+					value = 0;  // Init to avoid possible compiler warning.
+					flags = LWA_COLORKEY;
+				}
+				SetWindowLong(target_window, GWL_EXSTYLE, exstyle | WS_EX_LAYERED);
+				MySetLayeredWindowAttributes(target_window, color, value, flags);
+			}
 		}
 		break;
-	}
+
+	} // switch()
 	return OK;
 }
 
@@ -2977,6 +3047,16 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 		if (!target_window_determined)
 			target_window = WinExist(aTitle, aText, aExcludeTitle, aExcludeText);
 		return target_window ? WinGetControlList(output_var, target_window) : output_var->Assign();
+
+	case WINGET_CMD_STYLE:
+	case WINGET_CMD_EXSTYLE:
+		if (!target_window_determined)
+			target_window = WinExist(aTitle, aText, aExcludeTitle, aExcludeText);
+		if (!target_window)
+			return output_var->Assign();
+		char buf[32];
+		sprintf(buf, "0x%08X", GetWindowLong(target_window, cmd == WINGET_CMD_STYLE ? GWL_STYLE : GWL_EXSTYLE));
+		return output_var->Assign(buf);
 	}
 
 	return FAIL;  // Never executed (increases maintainability and avoids compiler warning).
@@ -3418,8 +3498,10 @@ BOOL CALLBACK EnumMonitorProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMoni
 
 
 
-ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int aColor, int aVariation)
+ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int aColor, int aVariation, bool aUseRGB)
 {
+	if (aUseRGB)
+		aColor = rgb_to_bgr(aColor);
 	Var *output_var_x = ResolveVarOfArg(0);  // Ok if NULL.
 	Var *output_var_y = ResolveVarOfArg(1);  // Ok if NULL.
 
@@ -3718,7 +3800,7 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int a
 
 
 
-ResultType Line::PixelGetColor(int aX, int aY)
+ResultType Line::PixelGetColor(int aX, int aY, bool aUseRGB)
 // This has been adapted from the AutoIt3 source.
 {
 	Var *output_var = ResolveVarOfArg(0);
@@ -3743,8 +3825,9 @@ ResultType Line::PixelGetColor(int aX, int aY)
 	// look at a hex BGR value to get some idea of the hue.  In addition, the result
 	// is zero padded to make it easier to convert to RGB and more consistent in
 	// appearance:
+	COLORREF color = GetPixel(hdc, aX, aY);
 	char buf[32];
-	sprintf(buf, "0x%06X", GetPixel(hdc, aX, aY));
+	sprintf(buf, "0x%06X", aUseRGB ? bgr_to_rgb(color) : color);
 	ReleaseDC(NULL, hdc);
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 	return output_var->Assign(buf);

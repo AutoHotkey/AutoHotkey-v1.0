@@ -1686,6 +1686,7 @@ void init_sc_to_vk()
 
 
 char *SCToKeyName(sc_type aSC, char *aBuf, size_t aBuf_size)
+// Always produces a non-empty string.
 {
 	for (int i = 0; i < g_key_to_sc_count; ++i)
 	{
@@ -1703,6 +1704,7 @@ char *SCToKeyName(sc_type aSC, char *aBuf, size_t aBuf_size)
 
 
 char *VKToKeyName(vk_type aVK, sc_type aSC, char *aBuf, size_t aBuf_size)
+// Caller may omit aSC and it will be derived if needed.
 {
 	for (int i = 0; i < g_key_to_vk_count; ++i)
 	{

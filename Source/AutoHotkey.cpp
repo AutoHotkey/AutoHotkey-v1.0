@@ -42,11 +42,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	// ICC_TAB_CLASSES provides Tab control and ToolTip support.  Although testing has yet to reveal any
 	// problem if this option is omitted for tooltips, it lends peace of mind (perhaps this is only needed
 	// when tooltips are used in conjunction with with SysTabControl32?)
-	icce.dwICC = ICC_TAB_CLASSES|ICC_HOTKEY_CLASS;
-	// Various others, such as the below, should be enabled when the corresponding feature is available for GUI:
-	//| ICC_UPDOWN_CLASS   // up-down control
-	//| ICC_PROGRESS_CLASS // progress bar
-	//| ICC_DATE_CLASSES;  // date and time picker
+	icce.dwICC = ICC_TAB_CLASSES|ICC_HOTKEY_CLASS|ICC_BAR_CLASSES|ICC_PROGRESS_CLASS|ICC_DATE_CLASSES;
 	InitCommonControlsEx(&icce);
 
 	if (!GetCurrentDirectory(sizeof(g_WorkingDir), g_WorkingDir)) // Needed for the FileSelectFile() workaround.
@@ -62,8 +58,9 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	#ifdef _DEBUG
 	//char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
 	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
-	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\KeyDelay PressDuration.ahk";
+	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\Gui On-screen display (OSD).ahk";
 	char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\GUI Demo.ahk";
+	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\New Text Document.ahk";
 	#else
 	char *script_filespec = NAME_P ".ini";  // Use this extension for better file association with editor(s).
 	#endif

@@ -204,7 +204,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 	GuiType *pgui;   // This is just a temp variable and should not be referred to once the below has been determined.
 	HWND focused_control, focused_parent;
 	GuiControlType *pcontrol, *ptab_control;
-	UINT gui_index;  // Don't use pgui because pointer can become invalid if ExecUntil() executes "Gui Destroy".
+	GuiIndexType gui_index;  // Don't use pgui because pointer can become invalid if ExecUntil() executes "Gui Destroy".
 	bool *pgui_label_is_running;
 	Label *gui_label;
 	DWORD tick_before, tick_after;
@@ -360,7 +360,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 					|| msg.wParam == VK_LEFT || msg.wParam == VK_RIGHT)
 				&& (focused_control = GetFocus()) && (focused_parent = GetParent(focused_control))
 				&& (pgui = GuiType::FindGui(focused_parent)) && pgui->mTabControlCount
-				&& (pcontrol = pgui->FindControl(focused_control))   )
+				&& (pcontrol = pgui->FindControl(focused_control)) && pcontrol->type != GUI_CONTROL_HOTKEY   )
 			{
 				ptab_control = NULL; // Set default.
 				if (pcontrol->type == GUI_CONTROL_TAB) // The focused control is a tab control itself.
@@ -383,7 +383,8 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 				// If focus is in a multiline edit control, don't act upon Control-Tab (and
 				// shift-control-tab -> for simplicity & consistency) since Control-Tab is a special
 				// keystroke that inserts a literal tab in the edit control:
-				if (   (GetKeyState(VK_CONTROL) & 0x8000) // Even if other modifiers are down, it still qualifies.
+				if (   msg.wParam != VK_LEFT && msg.wParam != VK_RIGHT
+					&& (GetKeyState(VK_CONTROL) & 0x8000) // Even if other modifiers are down, it still qualifies.
 					&& (msg.wParam != VK_TAB || pcontrol->type != GUI_CONTROL_EDIT
 						|| !(GetWindowLong(pcontrol->hwnd, GWL_STYLE) & ES_MULTILINE))   )
 				{
@@ -757,6 +758,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 						// This flags GUI menu items as being GUI so that the script has a way of detecting
 						// whether a given submenu's item was selected from inside a menu bar vs. a popup:
 						g.GuiEvent = GUI_EVENT_NORMAL;
+						g.GuiWindowIndex = (GuiIndexType)msg.wParam; // But leave GuiControl at its default, which flags this event as from a menu item.
 					}
 				}
 				menu_item->mLabel->mJumpToLine->ExecUntil(UNTIL_RETURN);
@@ -769,6 +771,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 			case AHK_GUI_ACTION:
 				// This indicates whether a double-click or other non-standard event launched it:
 				g.GuiEvent = (GuiEventType)msg.lParam;
+				g.GuiWindowIndex = pgui->mWindowIndex; // g.GuiControlIndex is conditionally set later below.
 				g.DefaultGuiIndex = pgui->mWindowIndex; // GUI threads default to operating upon their own window.
 				g_ErrorLevel->Assign(); // Reset for potential future uses (may help avoid breaking existing scripts if ErrorLevel is ever set).
 				// Set last found window (as documented).  It's not necessary to check IsWindow/IsWindowVisible/
@@ -776,10 +779,14 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 				// actually tries to use the last found window:
 				g.hWndLastUsed = pgui->mHwnd; // OK if NULL.
 
-				if (pgui_label_is_running)
+				if (pgui_label_is_running) // i.e. GuiClose, GuiEscape, and related window-level events.
 					*pgui_label_is_running = true;
-				else
+					// and leave g.GuiControlIndex at its default
+				else // It's a control, so set its attribute.
+				{
 					pgui->mControl[msg.wParam].attrib |= GUI_CONTROL_ATTRIB_LABEL_IS_RUNNING;
+					g.GuiControlIndex = (GuiIndexType)msg.wParam;
+				}
 
 				gui_label->mJumpToLine->ExecUntil(UNTIL_RETURN);
 

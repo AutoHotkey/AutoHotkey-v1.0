@@ -758,6 +758,7 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 	, mModifierSC(0)
 	, mModifiersConsolidated(0)
 	, mType(HK_UNDETERMINED)
+	, mUnregisterDuringThread(false)
 	, mIsRegistered(false)
 	, mEnabled(true)
 	, mHookAction(aHookAction)
@@ -956,7 +957,9 @@ char *Hotkey::TextToModifiers(char *aText)
 			mNoSuppress |= NO_SUPPRESS_SUFFIX;
 			break;
 		case '$':
-			if (!g_os.IsWin9x())
+			if (g_os.IsWin9x())
+				mUnregisterDuringThread = true;
+			else
 				mType = HK_KEYBD_HOOK;
 			// else ignore the flag and try to register normally, which in most cases seems better
 			// than disabling the hotkey.

@@ -324,7 +324,7 @@ Action g_act[] =
 	, {"Control", 1, 7, NULL}   // Command, Value, Control, std. 4 window params
 	, {"ControlGet", 2, 8, NULL}   // Output-var, Command, Value, Control, std. 4 window params
 
-	, {"CoordMode", 1, 2, NULL} // Pixel|Mouse|ToolTip, screen|relative
+	, {"CoordMode", 1, 2, NULL} // Attribute, screen|relative
 	, {"SetDefaultMouseSpeed", 1, 1, {1, 0}} // speed (numeric)
 	, {"MouseMove", 2, 4, {1, 2, 3, 0}} // x, y, speed, option
 	, {"MouseClick", 1, 7, {2, 3, 4, 5, 0}} // which-button, x, y, ClickCount, speed, d=hold-down/u=release, Relative
@@ -386,8 +386,8 @@ Action g_act[] =
 	, {"PostMessage", 1, 8}  // msg, wParam, lParam, Control, WinTitle, WinText, ExcludeTitle, ExcludeText
 	, {"SendMessage", 1, 8}  // msg, wParam, lParam, Control, WinTitle, WinText, ExcludeTitle, ExcludeText
 
-	, {"PixelGetColor", 3, 3, {2, 3, 0}} // OutputVar, X-coord, Y-coord
-	, {"PixelSearch", 0, 8, {3, 4, 5, 6, 7, 8, 0}} // OutputX, OutputY, left, top, right, bottom, Color, Variation
+	, {"PixelGetColor", 3, 4, {2, 3, 0}} // OutputVar, X-coord, Y-coord [, RGB]
+	, {"PixelSearch", 0, 9, {3, 4, 5, 6, 7, 8, 0}} // OutputX, OutputY, left, top, right, bottom, Color, Variation [, RGB]
 	//, {"ImageSearch", 0, 7, {3, 4, 5, 6, 0}} // OutputX, OutputY, left, top, right, bottom, ImageFile
 	// Note in the above: 0 min args so that the output vars can be optional.
 

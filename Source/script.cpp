@@ -3019,6 +3019,10 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			return ScriptError("If not blank, parameter #2 must be 1, WAIT, or a variable reference.", LINE_RAW_ARG2);
 		break;
 
+	case ACT_PIXELGETCOLOR:
+		if (*LINE_RAW_ARG4 && !line->ArgHasDeref(4) && stricmp(LINE_RAW_ARG4, "RGB"))
+			return ScriptError("Parameter #4 must be blank or the word RGB.", LINE_RAW_ARG4);
+
 	case ACT_PIXELSEARCH:
 		if (*LINE_RAW_ARG8 && !line->ArgHasDeref(8))
 		{
@@ -3027,17 +3031,13 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				return ScriptError("Parameter #8 must be number between 0 and 255, blank, or a variable reference."
 					, LINE_RAW_ARG8);
 		}
+		if (*LINE_RAW_ARG9 && !line->ArgHasDeref(9) && stricmp(LINE_RAW_ARG9, "RGB"))
+			return ScriptError("Parameter #9 must be blank or the word RGB.", LINE_RAW_ARG9);
 		break;
 
 	case ACT_COORDMODE:
-		if (*LINE_RAW_ARG1 && !line->ArgHasDeref(1) && stricmp(LINE_RAW_ARG1, "Pixel")
-			&& stricmp(LINE_RAW_ARG1, "Mouse") && stricmp(LINE_RAW_ARG1, "ToolTip") && stricmp(LINE_RAW_ARG1, "Caret"))
-			return ScriptError("Parameter #1 must be a variable reference or the word PIXEL, MOUSE, TOOLTIP, or CARET."
-				, LINE_RAW_ARG1);
-		if (*LINE_RAW_ARG2 && !line->ArgHasDeref(2) && stricmp(LINE_RAW_ARG2, "Screen")
-			&& stricmp(LINE_RAW_ARG2, "Relative"))
-			return ScriptError("Parameter #2 must be blank, a variable reference, or the word SCREEN or RELATIVE."
-				, LINE_RAW_ARG2);
+		if (*LINE_RAW_ARG1 && !line->ArgHasDeref(1) && !line->ConvertCoordModeAttrib(LINE_RAW_ARG1))
+			return ScriptError(ERR_COORDMODE, LINE_RAW_ARG1);
 		break;
 
 	case ACT_SETDEFAULTMOUSESPEED:
@@ -3392,7 +3392,6 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			case MENU_CMD_INVALID:
 				return ScriptError(ERR_MENUCOMMAND, LINE_RAW_ARG2);
 
-			case MENU_CMD_SHOW:
 			case MENU_CMD_NODEFAULT:
 			case MENU_CMD_STANDARD:
 			case MENU_CMD_NOSTANDARD:
@@ -3432,6 +3431,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 
 			// These have a highly variable number of parameters, or are too rarely used
 			// to warrant detailed load-time checking, so are not validated here:
+			//case MENU_CMD_SHOW:
 			//case MENU_CMD_ADD:
 			//case MENU_CMD_COLOR:
 			//case MENU_CMD_ICON:
@@ -3651,9 +3651,17 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 							, LINE_RAW_ARG2);
 				}
 				break;
+			case WINSET_TRANSCOLOR:
+				if (!*LINE_RAW_ARG2)
+					return ScriptError("Parameter #2 must not be blank in this case.");
+				break;
 			case WINSET_ALWAYSONTOP:
 				if (line->mArgc > 1 && !line->ArgHasDeref(2) && !line->ConvertOnOffToggle(LINE_RAW_ARG2))
 					return ScriptError(ERR_ON_OFF_TOGGLE, LINE_RAW_ARG2);
+				break;
+			case WINSET_BOTTOM:
+				if (*LINE_RAW_ARG2)
+					return ScriptError("Parameter #2 must be blank in this case.");
 				break;
 			case WINSET_INVALID:
 				return ScriptError(ERR_WINSET, LINE_RAW_ARG1);
@@ -4115,6 +4123,9 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, Var *aVarPrev)
 
 		else if (!stricmp(new_name, "A_OStype")) var_type = VAR_OSTYPE;
 		else if (!stricmp(new_name, "A_OSversion")) var_type = VAR_OSVERSION;
+		else if (!stricmp(new_name, "A_WinDir")) var_type = VAR_WINDIR;
+		else if (!stricmp(new_name, "A_ProgramFiles")) var_type = VAR_PROGRAMFILES;
+
 		else if (!stricmp(new_name, "A_IsAdmin")) var_type = VAR_ISADMIN;
 		else if (!stricmp(new_name, "A_Cursor")) var_type = VAR_CURSOR;
 		else if (!stricmp(new_name, "A_CaretX")) var_type = VAR_CARETX;
@@ -4156,6 +4167,8 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, Var *aVarPrev)
 		else if (!stricmp(new_name, "A_TimeSinceThisHotkey")) var_type = VAR_TIMESINCETHISHOTKEY;
 		else if (!stricmp(new_name, "A_TimeSincePriorHotkey")) var_type = VAR_TIMESINCEPRIORHOTKEY;
 		else if (!stricmp(new_name, "A_EndChar")) var_type = VAR_ENDCHAR;
+		else if (!stricmp(new_name, "A_Gui")) var_type = VAR_GUI;
+		else if (!stricmp(new_name, "A_GuiControl")) var_type = VAR_GUICONTROL;
 		else if (!stricmp(new_name, "A_GuiControlEvent")) var_type = VAR_GUICONTROLEVENT;
 
 		else if (!stricmp(new_name, "A_TimeIdle")) var_type = VAR_TIMEIDLE;
@@ -6712,11 +6725,11 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		return SysGet(ARG2, ARG3);
 
 	case ACT_PIXELSEARCH:
-		return PixelSearch(ATOI(ARG3), ATOI(ARG4), ATOI(ARG5), ATOI(ARG6), ATOI(ARG7), ATOI(ARG8));
+		return PixelSearch(ATOI(ARG3), ATOI(ARG4), ATOI(ARG5), ATOI(ARG6), ATOI(ARG7), ATOI(ARG8), !stricmp(ARG9, "RGB"));
 	//case ACT_IMAGESEARCH:
 	//	return ImageSearch(ATOI(ARG3), ATOI(ARG4), ATOI(ARG5), ATOI(ARG6), ARG7);
 	case ACT_PIXELGETCOLOR:
-		return PixelGetColor(ATOI(ARG2), ATOI(ARG3));
+		return PixelGetColor(ATOI(ARG2), ATOI(ARG3), !stricmp(ARG4, "RGB"));
 	case ACT_WINMINIMIZEALL: // From AutoIt3 source:
 		PostMessage(FindWindow("Shell_TrayWnd", NULL), WM_COMMAND, 419, 0);
 		DoWinDelay;
@@ -7594,8 +7607,8 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		// happen, the window updates eventually, after the download starts, at least on
 		// my system.  Update: Might as well do it since it's a little nicer this way
 		// (the text appears more quickly when the command after the splash is something
-		// that might keep our thread tied up and unable to check messages):
-		MsgSleep(-1);
+		// that might keep our thread tied up and unable to check messages).
+		SLEEP_WITHOUT_INTERRUPTION(-1)
 		return OK;
 	}
 	case ACT_SPLASHTEXTOFF:
@@ -7693,14 +7706,15 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			screen_mode = false;
 		else  // Since validated at load-time, too rare to return FAIL for.
 			return OK;
-		if (!stricmp(ARG1, "Pixel"))
-			if (screen_mode) g.CoordMode |= COORD_MODE_PIXEL; else g.CoordMode &= ~COORD_MODE_PIXEL;
-		else if (!stricmp(ARG1, "Mouse"))
-			if (screen_mode) g.CoordMode |= COORD_MODE_MOUSE; else g.CoordMode &= ~COORD_MODE_MOUSE;
-		else if (!stricmp(ARG1, "ToolTip"))
-			if (screen_mode) g.CoordMode |= COORD_MODE_TOOLTIP; else g.CoordMode &= ~COORD_MODE_TOOLTIP;
-		else if (!stricmp(ARG1, "Caret"))
-			if (screen_mode) g.CoordMode |= COORD_MODE_CARET; else g.CoordMode &= ~COORD_MODE_CARET;
+		CoordModeAttribType attrib = ConvertCoordModeAttrib(ARG1);
+		if (attrib)
+		{
+			if (screen_mode)
+				g.CoordMode |= attrib;
+			else
+				g.CoordMode &= ~attrib;
+		}
+		//else too rare to report an error, since load-time validation normally catches it.
 		return OK;
 	}
 
@@ -8337,6 +8351,131 @@ ResultType Line::Deref(Var *aOutputVar, char *aBuf)
 
 
 
+VarSizeType Script::GetBatchLines(char *aBuf)
+{
+	// The BatchLine value can be either a numerical string or a string that ends in "ms".
+	char buf[256];
+	char *target_buf = aBuf ? aBuf : buf;
+	if (g.IntervalBeforeRest >= 0) // Have this new method take precedence, if it's in use by the script.
+		sprintf(target_buf, "%dms", g.IntervalBeforeRest); // Not snprintf().
+	else
+		ITOA64(g.LinesPerCycle, target_buf);
+	return (VarSizeType)strlen(target_buf);
+}
+
+VarSizeType Script::GetTitleMatchMode(char *aBuf)
+{
+	if (!aBuf)
+		return MAX_NUMBER_LENGTH;  // Just in case it's ever allowed to go beyond 3
+	_itoa(g.TitleMatchMode, aBuf, 10);  // Always output as decimal vs. hex in this case.
+	return (VarSizeType)strlen(aBuf);
+}
+
+VarSizeType Script::GetTitleMatchModeSpeed(char *aBuf)
+{
+	if (!aBuf)
+		return 4;
+	// For backward compatibility (due to StringCaseSense), never change the case used here:
+	strcpy(aBuf, g.TitleFindFast ? "Fast" : "Slow");
+	return 4;  // Always length 4
+}
+
+VarSizeType Script::GetDetectHiddenWindows(char *aBuf)
+{
+	if (!aBuf)
+		return 3;  // Room for either On or Off
+	// For backward compatibility (due to StringCaseSense), never change the case used here:
+	strcpy(aBuf, g.DetectHiddenWindows ? "On" : "Off");
+	return 3;
+}
+
+VarSizeType Script::GetDetectHiddenText(char *aBuf)
+{
+	if (!aBuf)
+		return 3;  // Room for either On or Off
+	// For backward compatibility (due to StringCaseSense), never change the case used here:
+	strcpy(aBuf, g.DetectHiddenText ? "On" : "Off");
+	return 3;
+}
+
+VarSizeType Script::GetAutoTrim(char *aBuf)
+{
+	if (!aBuf)
+		return 3;  // Room for either On or Off
+	// For backward compatibility (due to StringCaseSense), never change the case used here:
+	strcpy(aBuf, g.AutoTrim ? "On" : "Off");
+	return 3;
+}
+
+VarSizeType Script::GetStringCaseSense(char *aBuf)
+{
+	if (!aBuf)
+		return 3;  // Room for either On or Off
+	// For backward compatibility (due to StringCaseSense), never change the case used here:
+	strcpy(aBuf, g.StringCaseSense ? "On" : "Off");
+	return 3;
+}
+
+VarSizeType Script::GetFormatInteger(char *aBuf)
+{
+	if (!aBuf)
+		return 1;
+	// For backward compatibility (due to StringCaseSense), never change the case used here:
+	*aBuf = g.FormatIntAsHex ? 'H' : 'D';
+	*(aBuf + 1) = '\0';
+	return 1;
+}
+
+VarSizeType Script::GetFormatFloat(char *aBuf)
+{
+	if (!aBuf)
+		return (VarSizeType)strlen(g.FormatFloat);  // Include the extra chars since this is just an estimate.
+	strlcpy(aBuf, g.FormatFloat + 1, strlen(g.FormatFloat + 1));   // Omit the leading % and the trailing 'f'.
+	return (VarSizeType)strlen(aBuf);
+}
+
+VarSizeType Script::GetKeyDelay(char *aBuf)
+{
+	if (!aBuf)
+		return MAX_NUMBER_LENGTH;
+	_itoa(g.KeyDelay, aBuf, 10);  // Always output as decimal vs. hex in this case.
+	return (VarSizeType)strlen(aBuf);
+}
+
+VarSizeType Script::GetWinDelay(char *aBuf)
+{
+	if (!aBuf)
+		return MAX_NUMBER_LENGTH;
+	_itoa(g.WinDelay, aBuf, 10);  // Always output as decimal vs. hex in this case.
+	return (VarSizeType)strlen(aBuf);
+}
+
+VarSizeType Script::GetControlDelay(char *aBuf)
+{
+	if (!aBuf)
+		return MAX_NUMBER_LENGTH;
+	_itoa(g.ControlDelay, aBuf, 10);  // Always output as decimal vs. hex in this case.
+	return (VarSizeType)strlen(aBuf);
+}
+
+VarSizeType Script::GetMouseDelay(char *aBuf)
+{
+	if (!aBuf)
+		return MAX_NUMBER_LENGTH;
+	_itoa(g.MouseDelay, aBuf, 10);  // Always output as decimal vs. hex in this case.
+	return (VarSizeType)strlen(aBuf);
+}
+
+VarSizeType Script::GetDefaultMouseSpeed(char *aBuf)
+{
+	if (!aBuf)
+		return MAX_NUMBER_LENGTH;  // Just in case it's ever allowed to go beyond 100.
+	_itoa(g.DefaultMouseSpeed, aBuf, 10);  // Always output as decimal vs. hex in this case.
+	return (VarSizeType)strlen(aBuf);
+}
+
+
+
 VarSizeType Script::GetIconHidden(char *aBuf)
 {
 	if (aBuf)
@@ -8392,6 +8531,37 @@ VarSizeType Script::GetIconNumber(char *aBuf)
 	return (VarSizeType)strlen(aBuf);
 }
 
+
+
+VarSizeType Script::GetExitReason(char *aBuf)
+{
+	char *str;
+	switch(mExitReason)
+	{
+	case EXIT_LOGOFF: str = "Logoff"; break;
+	case EXIT_SHUTDOWN: str = "Shutdown"; break;
+	// Since the below are all relatively rare, except WM_CLOSE perhaps, they are all included
+	// as one word to cut down on the number of possible words (it's easier to write OnExit
+	// routines to cover all possibilities if there are fewer of them).
+	case EXIT_WM_QUIT:
+	case EXIT_CRITICAL:
+	case EXIT_DESTROY:
+	case EXIT_WM_CLOSE: str = "Close"; break;
+	case EXIT_ERROR: str = "Error"; break;
+	case EXIT_MENU: str = "Menu"; break;  // Standard menu, not a user-defined menu.
+	case EXIT_EXIT: str = "Exit"; break;  // ExitApp or Exit command.
+	case EXIT_RELOAD: str = "Reload"; break;
+	case EXIT_SINGLEINSTANCE: str = "Single"; break;
+	default:  // EXIT_NONE or unknown value (unknown would be considered a bug if it ever happened).
+		str = "";
+	}
+	if (aBuf)
+		strcpy(aBuf, str);
+	return (VarSizeType)strlen(str);
+}
+
+
+
 VarSizeType Script::GetTimeIdlePhysical(char *aBuf)
 // This is here rather than in script.h with the others because it depends on
 // hotkey.h and globaldata.h, which can't be easily included in script.h due to
@@ -8404,6 +8574,179 @@ VarSizeType Script::GetTimeIdlePhysical(char *aBuf)
 		return MAX_NUMBER_LENGTH;
 	ITOA64(GetTickCount() - g_TimeLastInputPhysical, aBuf);
 	return (VarSizeType)strlen(aBuf);
+}
+
+
+
+VarSizeType Script::GetSpace(VarTypeType aType, char *aBuf)
+{
+	if (!aBuf) return 1;  // i.e. the length of a single space char.
+	*(aBuf++) = aType == VAR_SPACE ? ' ' : '\t';
+	*aBuf = '\0';
+	return 1;
+}
+
+VarSizeType Script::GetAhkVersion(char *aBuf)
+{
+	if (aBuf)
+		strcpy(aBuf, NAME_VERSION);
+	return (VarSizeType)strlen(NAME_VERSION);
+}
+
+
+
+// Confirmed: The below will all automatically use the local time (not UTC) when 3rd param is NULL.
+VarSizeType Script::GetMMMM(char *aBuf)
+{
+	return (VarSizeType)(GetDateFormat(LOCALE_USER_DEFAULT, 0, NULL, "MMMM", aBuf, aBuf ? 999 : 0) - 1);
+}
+
+VarSizeType Script::GetMMM(char *aBuf)
+{
+	return (VarSizeType)(GetDateFormat(LOCALE_USER_DEFAULT, 0, NULL, "MMM", aBuf, aBuf ? 999 : 0) - 1);
+}
+
+VarSizeType Script::GetDDDD(char *aBuf)
+{
+	return (VarSizeType)(GetDateFormat(LOCALE_USER_DEFAULT, 0, NULL, "dddd", aBuf, aBuf ? 999 : 0) - 1);
+}
+
+VarSizeType Script::GetDDD(char *aBuf)
+{
+	return (VarSizeType)(GetDateFormat(LOCALE_USER_DEFAULT, 0, NULL, "ddd", aBuf, aBuf ? 999 : 0) - 1);
+}
+
+
+
+VarSizeType Script::MyGetTickCount(char *aBuf)
+{
+	// UPDATE: The below comments are now obsolete in light of having switched over to
+	// using 64-bit integers (which aren't that much slower than 32-bit on 32-bit hardware):
+	// Known limitation:
+	// Although TickCount is an unsigned value, I'm not sure that our EnvSub command
+	// will properly be able to compare two tick-counts if either value is larger than
+	// INT_MAX.  So if the system has been up for more than about 25 days, there might be
+	// problems if the user tries compare two tick-counts in the script using EnvSub.
+	// UPDATE: It seems better to store all unsigned values as signed within script
+	// variables.  Otherwise, when the var's value is next accessed and converted using
+	// ATOI(), the outcome won't be as useful.  In other words, since the negative value
+	// will be properly converted by ATOI(), comparing two negative tickcounts works
+	// correctly (confirmed).  Even if one of them is negative and the other positive,
+	// it will probably work correctly due to the nature of implicit unsigned math.
+	// Thus, we use %d vs. %u in the snprintf() call below.
+	if (!aBuf)
+		return MAX_NUMBER_LENGTH; // Especially in this case, since tick might change between 1st & 2nd calls.
+	ITOA64(GetTickCount(), aBuf);
+	return (VarSizeType)strlen(aBuf);
+}
+
+
+
+VarSizeType Script::GetNow(char *aBuf)
+{
+	if (!aBuf)
+		return DATE_FORMAT_LENGTH;
+	SYSTEMTIME st;
+	GetLocalTime(&st);
+	SystemTimeToYYYYMMDD(aBuf, st, false);
+	return (VarSizeType)strlen(aBuf);
+}
+
+VarSizeType Script::GetNowUTC(char *aBuf)
+{
+	if (!aBuf)
+		return DATE_FORMAT_LENGTH;
+	SYSTEMTIME st;
+	GetSystemTime(&st);
+	SystemTimeToYYYYMMDD(aBuf, st, false);
+	return (VarSizeType)strlen(aBuf);
+}
+
+
+
+VarSizeType Script::GetOSType(char *aBuf)
+{
+	char *type = g_os.IsWinNT() ? "WIN32_NT" : "WIN32_WINDOWS";
+	if (aBuf)
+		strcpy(aBuf, type);
+	return (VarSizeType)strlen(type); // Return length of type, not aBuf.
+}
+
+VarSizeType Script::GetOSVersion(char *aBuf)
+// Adapted from AutoIt3 source.
+{
+	char *version;
+	if (g_os.IsWinNT())
+	{
+		if (g_os.IsWinXP())
+			version = "WIN_XP";
+		else
+		{
+			if (g_os.IsWin2000())
+				version = "WIN_2000";
+			else
+				version = "WIN_NT4";
+		}
+	}
+	else
+	{
+		if (g_os.IsWin95())
+			version = "WIN_95";
+		else
+		{
+			if (g_os.IsWin98())
+				version = "WIN_98";
+			else
+				version = "WIN_ME";
+		}
+	}
+	if (aBuf)
+		strcpy(aBuf, version);
+	return (VarSizeType)strlen(version); // Always return length of version, not aBuf.
+}
+
+VarSizeType Script::GetProgramFiles(char *aBuf)
+{
+	char buf[MAX_PATH];
+	RegReadString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion", "ProgramFilesDir", buf, MAX_PATH);
+	if (aBuf)
+		strcpy(aBuf, buf);
+	return (VarSizeType)strlen(buf);
+}
+
+
+
+VarSizeType Script::GetIsAdmin(char *aBuf)
+// Adapted from AutoIt3 source.
+{
+	if (!aBuf)
+		return 1;  // The length of the string "1" or "0".
+	char result = '0';  // Default.
+	if (g_os.IsWin9x())
+		result = '1';
+	else
+	{
+		SC_HANDLE h = OpenSCManager(NULL, NULL, SC_MANAGER_LOCK);
+		if (h)
+		{
+			SC_LOCK lock = LockServiceDatabase(h);
+			if (lock)
+			{
+				UnlockServiceDatabase(lock);
+				result = '1';
+			}
+			else
+			{
+				DWORD lastErr = GetLastError();
+				if (lastErr == ERROR_SERVICE_DATABASE_LOCKED)
+					result = '1';
+			}
+			CloseServiceHandle(h);
+		}
+	}
+	aBuf[0] = result;
+	aBuf[1] = '\0';
+	return 1; // Length of aBuf.
 }
 
 
@@ -8450,40 +8793,6 @@ VarSizeType Script::ScriptGetCursor(char *aBuf)
 			break;
 
 	strlcpy(aBuf, cursor_name[a], SMALL_STRING_LENGTH + 1);  // If a is out-of-bounds, "Unknown" will be used.
-	return (VarSizeType)strlen(aBuf);
-}
-
-VarSizeType Script::GetScreenWidth(char *aBuf)
-{
-	if (!aBuf)
-		return MAX_NUMBER_LENGTH;
-	ITOA(GetSystemMetrics(SM_CXSCREEN), aBuf);
-	return (VarSizeType)strlen(aBuf);
-}
-
-VarSizeType Script::GetScreenHeight(char *aBuf)
-{
-	if (!aBuf)
-		return MAX_NUMBER_LENGTH;
-	ITOA(GetSystemMetrics(SM_CYSCREEN), aBuf);
-	return (VarSizeType)strlen(aBuf);
-}
-
-
-
-VarSizeType Script::GetGuiControlEvent(char *aBuf)
-// We're returning the length of the var's contents, not the size.
-{
-	static char *names[] = GUI_EVENT_NAMES;
-	if (!aBuf)
-		// This check is done in case a bogus AHK_GUI_ACTION message is received that contains
-		// a event_type value that would otherwise crash the program:
-		return (g.GuiEvent < GUI_EVENT_ILLEGAL) ? (VarSizeType)strlen(names[g.GuiEvent]) : 0;
-	// Otherwise:
-	if (g.GuiEvent < GUI_EVENT_ILLEGAL)
-		strcpy(aBuf, names[g.GuiEvent]);
-	else
-		*aBuf = '\0';
 	return (VarSizeType)strlen(aBuf);
 }
 
@@ -8554,6 +8863,24 @@ VarSizeType Script::ScriptGetCaret(VarTypeType aVarType, char *aBuf)
 
 
 
+VarSizeType Script::GetScreenWidth(char *aBuf)
+{
+	if (!aBuf)
+		return MAX_NUMBER_LENGTH;
+	ITOA(GetSystemMetrics(SM_CXSCREEN), aBuf);
+	return (VarSizeType)strlen(aBuf);
+}
+
+VarSizeType Script::GetScreenHeight(char *aBuf)
+{
+	if (!aBuf)
+		return MAX_NUMBER_LENGTH;
+	ITOA(GetSystemMetrics(SM_CYSCREEN), aBuf);
+	return (VarSizeType)strlen(aBuf);
+}
+
+
+
 VarSizeType Script::GetIP(int aAdapterIndex, char *aBuf)
 // Adapted from the AutoIt3 source.
 {
@@ -8588,6 +8915,464 @@ VarSizeType Script::GetIP(int aAdapterIndex, char *aBuf)
 	}
 
 	WSACleanup();
+	return (VarSizeType)strlen(aBuf);
+}
+
+
+
+VarSizeType Script::GetFilename(char *aBuf)
+{
+	if (aBuf)
+		strcpy(aBuf, mFileName);
+	return (VarSizeType)strlen(mFileName);
+}
+
+VarSizeType Script::GetFileDir(char *aBuf)
+{
+	char str[MAX_PATH * 2] = "";  // Set default.
+	strlcpy(str, mFileDir, sizeof(str));
+	size_t length = strlen(str); // Needed not just for AutoIt2.
+	// If it doesn't already have a final backslash, namely due to it being a root directory,
+	// provide one so that it is backward compatible with AutoIt v2:
+	if (mIsAutoIt2 && length && str[length - 1] != '\\')
+	{
+		str[length++] = '\\';
+		str[length] = '\0';
+	}
+	if (aBuf)
+		strcpy(aBuf, str);
+	return (VarSizeType)length;
+}
+
+VarSizeType Script::GetFilespec(char *aBuf)
+{
+	if (aBuf)
+		sprintf(aBuf, "%s\\%s", mFileDir, mFileName);
+	return (VarSizeType)(strlen(mFileDir) + strlen(mFileName) + 1);
+}
+
+
+
+VarSizeType Script::GetLoopFileName(char *aBuf)
+{
+	char *str = "";  // Set default.
+	if (mLoopFile)
+	{
+		// The loop handler already prepended the script's directory in here for us:
+		if (str = strrchr(mLoopFile->cFileName, '\\'))
+			++str;
+		else // No backslash, so just make it the entire file name.
+			str = mLoopFile->cFileName;
+	}
+	if (aBuf)
+		strcpy(aBuf, str);
+	return (VarSizeType)strlen(str);
+}
+
+VarSizeType Script::GetLoopFileShortName(char *aBuf)
+{
+	char *str = "";  // Set default.
+	if (mLoopFile)
+	{
+		if (   !*(str = mLoopFile->cAlternateFileName)   )
+			// Files whose long name is shorter than the 8.3 usually don't have value stored here,
+			// so use the long name whenever a short name is unavailable for any reason (could
+			// also happen if NTFS has short-name generation disabled?)
+			return GetLoopFileName(aBuf);
+	}
+	if (aBuf)
+		strcpy(aBuf, str);
+	return (VarSizeType)strlen(str);
+}
+
+VarSizeType Script::GetLoopFileDir(char *aBuf)
+{
+	char *str = "";  // Set default.
+	char *last_backslash = NULL;
+	if (mLoopFile)
+	{
+		// The loop handler already prepended the script's directory in here for us.
+		// But if the loop had a relative path in its FilePattern, there might be
+		// only a relative directory here, or no directory at all if the current
+		// file is in the origin/root dir of the search:
+		if (last_backslash = strrchr(mLoopFile->cFileName, '\\'))
+		{
+			*last_backslash = '\0'; // Temporarily terminate.
+			str = mLoopFile->cFileName;
+		}
+		else // No backslash, so there is no directory in this case.
+			str = "";
+	}
+	VarSizeType length = (VarSizeType)strlen(str);
+	if (!aBuf)
+	{
+		if (last_backslash)
+			*last_backslash = '\\';  // Restore the orginal value.
+		return length;
+	}
+	strcpy(aBuf, str);
+	if (last_backslash)
+		*last_backslash = '\\';  // Restore the orginal value.
+	return length;
+}
+
+VarSizeType Script::GetLoopFileFullPath(char *aBuf)
+{
+	char *str = "";  // Set default.
+	if (mLoopFile)
+		// The loop handler already prepended the script's directory in here for us:
+		str = mLoopFile->cFileName;
+	if (aBuf)
+		strcpy(aBuf, str);
+	return (VarSizeType)strlen(str);
+}
+
+VarSizeType Script::GetLoopFileTimeModified(char *aBuf)
+{
+	char str[64] = "";  // Set default.
+	if (mLoopFile)
+		FileTimeToYYYYMMDD(str, mLoopFile->ftLastWriteTime, true);
+	if (aBuf)
+		strcpy(aBuf, str);
+	return (VarSizeType)strlen(str);
+}
+
+VarSizeType Script::GetLoopFileTimeCreated(char *aBuf)
+{
+	char str[64] = "";  // Set default.
+	if (mLoopFile)
+		FileTimeToYYYYMMDD(str, mLoopFile->ftCreationTime, true);
+	if (aBuf)
+		strcpy(aBuf, str);
+	return (VarSizeType)strlen(str);
+}
+
+VarSizeType Script::GetLoopFileTimeAccessed(char *aBuf)
+{
+	char str[64] = "";  // Set default.
+	if (mLoopFile)
+		FileTimeToYYYYMMDD(str, mLoopFile->ftLastAccessTime, true);
+	if (aBuf)
+		strcpy(aBuf, str);
+	return (VarSizeType)strlen(str);
+}
+
+VarSizeType Script::GetLoopFileAttrib(char *aBuf)
+{
+	char str[64] = "";  // Set default.
+	if (mLoopFile)
+		FileAttribToStr(str, mLoopFile->dwFileAttributes);
+	if (aBuf)
+		strcpy(aBuf, str);
+	return (VarSizeType)strlen(str);
+}
+
+VarSizeType Script::GetLoopFileSize(char *aBuf, int aDivider)
+{
+	// Don't use MAX_NUMBER_LENGTH in case user has selected a very long float format via SetFormat.
+	char str[128];
+	char *target_buf = aBuf ? aBuf : str;
+	*target_buf = '\0';  // Set default.
+	if (mLoopFile)
+	{
+		// It's a documented limitation that the size will show as negative if
+		// greater than 2 gig, and will be wrong if greater than 4 gig.  For files
+		// that large, scripts should use the KB version of this function instead.
+		// If a file is over 4gig, set the value to be the maximum size (-1 when
+		// expressed as a signed integer, since script variables are based entirely
+		// on 32-bit signed integers due to the use of ATOI(), etc.).  UPDATE: 64-bit
+		// ints are now standard, so the above is unnecessary:
+		//sprintf(str, "%d%", mLoopFile->nFileSizeHigh ? -1 : (int)mLoopFile->nFileSizeLow);
+		ULARGE_INTEGER ul;
+		ul.HighPart = mLoopFile->nFileSizeHigh;
+		ul.LowPart = mLoopFile->nFileSizeLow;
+		ITOA64((__int64)(aDivider ? ((unsigned __int64)ul.QuadPart / aDivider) : ul.QuadPart), target_buf);
+	}
+	return (VarSizeType)strlen(target_buf);
+}
+
+VarSizeType Script::GetLoopRegType(char *aBuf)
+{
+	char str[256] = "";  // Set default.
+	if (mLoopRegItem)
+		Line::RegConvertValueType(str, sizeof(str), mLoopRegItem->type);
+	if (aBuf)
+		strcpy(aBuf, str);
+	return (VarSizeType)strlen(str);
+}
+
+VarSizeType Script::GetLoopRegKey(char *aBuf)
+{
+	char str[256] = "";  // Set default.
+	if (mLoopRegItem)
+		// Use root_key_type, not root_key (which might be a remote vs. local HKEY):
+		Line::RegConvertRootKey(str, sizeof(str), mLoopRegItem->root_key_type);
+	if (aBuf)
+		strcpy(aBuf, str);
+	return (VarSizeType)strlen(str);
+}
+
+VarSizeType Script::GetLoopRegSubKey(char *aBuf)
+{
+	char *str = "";  // Set default.
+	if (mLoopRegItem)
+		str = mLoopRegItem->subkey;
+	if (aBuf)
+		strcpy(aBuf, str);
+	return (VarSizeType)strlen(str);
+}
+
+VarSizeType Script::GetLoopRegName(char *aBuf)
+{
+	char *str = "";  // Set default.
+	if (mLoopRegItem)
+		str = mLoopRegItem->name; // This can be either the name of a subkey or the name of a value.
+	if (aBuf)
+		strcpy(aBuf, str);
+	return (VarSizeType)strlen(str);
+}
+
+VarSizeType Script::GetLoopRegTimeModified(char *aBuf)
+{
+	char str[64] = "";  // Set default.
+	// Only subkeys (not values) have a time.  In addition, Win9x doesn't support retrieval
+	// of the time (nor does it store it), so make the var blank in that case:
+	if (mLoopRegItem && mLoopRegItem->type == REG_SUBKEY && !g_os.IsWin9x())
+		FileTimeToYYYYMMDD(str, mLoopRegItem->ftLastWriteTime, true);
+	if (aBuf)
+		strcpy(aBuf, str);
+	return (VarSizeType)strlen(str);
+}
+
+VarSizeType Script::GetLoopReadLine(char *aBuf)
+{
+	char *str = "";  // Set default.
+	if (mLoopReadFile)
+		str = mLoopReadFile->mCurrentLine;
+	if (aBuf)
+		strcpy(aBuf, str);
+	return (VarSizeType)strlen(str);
+}
+
+VarSizeType Script::GetLoopField(char *aBuf)
+{
+	char *str = "";  // Set default.
+	if (mLoopField)
+		str = mLoopField;
+	if (aBuf)
+		strcpy(aBuf, str);
+	return (VarSizeType)strlen(str);
+}
+
+VarSizeType Script::GetLoopIndex(char *aBuf)
+{
+	if (!aBuf)
+		return MAX_NUMBER_LENGTH;
+	ITOA64(mLoopIteration, aBuf);
+	return (VarSizeType)strlen(aBuf);
+}
+
+
+
+VarSizeType Script::GetThisMenuItem(char *aBuf)
+{
+	if (aBuf)
+		strcpy(aBuf, mThisMenuItemName);
+	return (VarSizeType)strlen(mThisMenuItemName);
+}
+
+VarSizeType Script::GetThisMenuItemPos(char *aBuf)
+{
+	if (!aBuf)
+		return MAX_NUMBER_LENGTH;
+	// The menu item's position is discovered through this process -- rather than doing
+	// something higher performance such as storing the menu handle or pointer to menu/item
+	// object in g_script -- because those things tend to be volatile.  For example, a menu
+	// or menu item object might be destroyed between the time the user selects it and the
+	// time this variable is referenced in the script.  Thus, by definition, this variable
+	// contains the CURRENT position of the most recently selected menu item within its
+	// CURRENT menu.
+	if (*mThisMenuName && *mThisMenuItemName)
+	{
+		UserMenu *menu = FindMenu(mThisMenuName);
+		if (menu)
+		{
+			// If the menu does not physically exist yet (perhaps due to being destroyed as a result
+			// of DeleteAll, Delete, or some other operation), create it so that the position of the
+			// item can be determined.  This is done for consistency in behavior.
+			if (!menu->mMenu)
+				menu->Create();
+			UINT menu_item_pos = menu->GetItemPos(mThisMenuItemName);
+			if (menu_item_pos < UINT_MAX) // Success
+			{
+				UTOA(menu_item_pos + 1, aBuf);  // Add one to convert from zero-based to 1-based.
+				return (VarSizeType)strlen(aBuf);
+			}
+		}
+	}
+	// Otherwise:
+	*aBuf = '\0';
+	return 0;
+}
+
+VarSizeType Script::GetThisMenu(char *aBuf)
+{
+	if (aBuf)
+		strcpy(aBuf, mThisMenuName);
+	return (VarSizeType)strlen(mThisMenuName);
+}
+
+VarSizeType Script::GetThisHotkey(char *aBuf)
+{
+	if (aBuf)
+		strcpy(aBuf, mThisHotkeyName);
+	return (VarSizeType)strlen(mThisHotkeyName);
+}
+
+VarSizeType Script::GetPriorHotkey(char *aBuf)
+{
+	if (aBuf)
+		strcpy(aBuf, mPriorHotkeyName);
+	return (VarSizeType)strlen(mPriorHotkeyName);
+}
+
+VarSizeType Script::GetTimeSinceThisHotkey(char *aBuf)
+{
+	if (!aBuf)
+		return MAX_NUMBER_LENGTH;
+	// It must be the type of hotkey that has a label because we want the TimeSinceThisHotkey
+	// value to be "in sync" with the value of ThisHotkey itself (i.e. use the same method
+	// to determine which hotkey is the "this" hotkey):
+	if (*mThisHotkeyName)
+		// Even if GetTickCount()'s TickCount has wrapped around to zero and the timestamp hasn't,
+		// DWORD math still gives the right answer as long as the number of days between
+		// isn't greater than about 49.  See MyGetTickCount() for explanation of %d vs. %u.
+		// Update: Using 64-bit ints now, so above is obsolete:
+		//snprintf(str, sizeof(str), "%d", (DWORD)(GetTickCount() - mThisHotkeyStartTime));
+		ITOA64((__int64)(GetTickCount() - mThisHotkeyStartTime), aBuf)  // No semicolon
+	else
+		strcpy(aBuf, "-1");
+	return (VarSizeType)strlen(aBuf);
+}
+
+VarSizeType Script::GetTimeSincePriorHotkey(char *aBuf)
+{
+	if (!aBuf)
+		return MAX_NUMBER_LENGTH;
+	if (*mPriorHotkeyName)
+		// See MyGetTickCount() for explanation for explanation:
+		//snprintf(str, sizeof(str), "%d", (DWORD)(GetTickCount() - mPriorHotkeyStartTime));
+		ITOA64((__int64)(GetTickCount() - mPriorHotkeyStartTime), aBuf)
+	else
+		strcpy(aBuf, "-1");
+	return (VarSizeType)strlen(aBuf);
+}
+
+VarSizeType Script::GetEndChar(char *aBuf)
+{
+	if (!aBuf)
+		return 1;
+	*aBuf = mEndChar;
+	*(aBuf + 1) = '\0';
+	return 1;
+}
+
+
+
+VarSizeType Script::GetGui(char *aBuf)
+// We're returning the length of the var's contents, not the size.
+{
+	if (g.GuiWindowIndex == MAX_GUI_WINDOWS) // The current thread was not launched as a result of GUI action.
+	{
+		if (aBuf)
+			*aBuf = '\0';
+		return 0;
+	}
+	char buf[MAX_NUMBER_LENGTH + 1];
+	_itoa(g.GuiWindowIndex + 1, buf, 10);  // Always stored as decimal vs. hex, regardless of script settings.
+	if (aBuf)
+		strcpy(aBuf, buf);
+	return (VarSizeType)strlen(buf);
+}
+
+
+
+VarSizeType Script::GetGuiControl(char *aBuf)
+// We're returning the length of the var's contents, not the size.
+{
+	GuiType *pgui;
+	// Note that other logic ensures that g.GuiControlIndex is out-of-bounds whenever g.GuiWindowIndex is.
+	// That is why g.GuiWindowIndex is not checked to make sure it's less than MAX_GUI_WINDOWS.
+	// Relies on short-circuit boolean order:
+	if (g.GuiControlIndex == MAX_CONTROLS_PER_GUI // A non-GUI thread or one triggered by GuiClose/Escape or Gui menu bar.
+		|| !(pgui = g_gui[g.GuiWindowIndex]) // Gui Window no longer exists.
+		|| g.GuiControlIndex >= pgui->mControlCount) // Gui control no longer exists, perhaps because window was destroyed and recreated with fewer controls.
+	{
+		if (aBuf)
+			*aBuf = '\0';
+		return 0;
+	}
+	GuiControlType &control = pgui->mControl[g.GuiControlIndex]; // For performance and convenience.
+    if (aBuf)
+	{
+		// Caller has already ensured aBuf is large enough.
+		if (control.output_var)
+			return (VarSizeType)strlen(strcpy(aBuf, control.output_var->mName));
+		else // Fall back to getting the leading characters of its caption (most often used for buttons).
+			#define A_GUICONTROL_TEXT_LENGTH (MAX_ALLOC_SIMPLE - 1)
+			return GetWindowText(control.hwnd, aBuf, A_GUICONTROL_TEXT_LENGTH + 1); // +1 is verified correct.
+	}
+	// Otherwise, just return the length:
+	if (control.output_var)
+		return (VarSizeType)strlen(control.output_var->mName);
+	// Otherwise: Fall back to getting the leading characters of its caption (most often used for buttons)
+	VarSizeType length = GetWindowTextLength(control.hwnd);
+	return (length > A_GUICONTROL_TEXT_LENGTH) ? A_GUICONTROL_TEXT_LENGTH : length;
+}
+
+
+
+VarSizeType Script::GetGuiControlEvent(char *aBuf)
+// We're returning the length of the var's contents, not the size.
+{
+	static char *names[] = GUI_EVENT_NAMES;
+	if (!aBuf)
+		return (g.GuiEvent < GUI_EVENT_ILLEGAL) ? (VarSizeType)strlen(names[g.GuiEvent]) : 1;
+	// Otherwise:
+	if (g.GuiEvent < GUI_EVENT_ILLEGAL)
+	{
+		strcpy(aBuf, names[g.GuiEvent]);
+		return (VarSizeType)strlen(aBuf);
+	}
+	// Otherwise, g.GuiEvent is assumed to be an ASCII value, such as a digit.  This supports Slider controls.
+	{
+		*aBuf++ = (char)(UCHAR)g.GuiEvent;
+		*aBuf = '\0';
+		return 1;
+	}
+}
+
+
+
+VarSizeType Script::GetTimeIdle(char *aBuf)
+{
+	if (!aBuf)
+		return MAX_NUMBER_LENGTH;
+	*aBuf = '\0';  // Set default.
+	if (g_os.IsWin2000orLater()) // Checked in case the function is present but "not implemented".
+	{
+		// Must fetch it at runtime, otherwise the program can't even be launched on Win9x/NT:
+		typedef BOOL (WINAPI *MyGetLastInputInfoType)(PLASTINPUTINFO);
+		static MyGetLastInputInfoType MyGetLastInputInfo = (MyGetLastInputInfoType)
+			GetProcAddress(GetModuleHandle("User32.dll"), "GetLastInputInfo");
+		if (MyGetLastInputInfo)
+		{
+			LASTINPUTINFO lii;
+			lii.cbSize = sizeof(lii);
+			if (MyGetLastInputInfo(&lii))
+				ITOA64(GetTickCount() - lii.dwTime, aBuf);
+		}
+	}
 	return (VarSizeType)strlen(aBuf);
 }
 

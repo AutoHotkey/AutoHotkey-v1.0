@@ -194,7 +194,7 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 	switch(menu_command)
 	{
 	case MENU_CMD_SHOW:
-		return menu->Display();
+		return menu->Display(true, *aParam3 ? ATOI(aParam3) : COORD_UNSPECIFIED, *aParam4 ? ATOI(aParam4) : COORD_UNSPECIFIED);
 	case MENU_CMD_ADD:
 		if (*aParam3) // Since a menu item name was given, it's not a separator line.
 			break;    // Let a later switch() handle it.
@@ -1122,7 +1122,7 @@ ResultType UserMenu::Destroy()
 
 
 
-ResultType UserMenu::Display(bool aForceToForeground)
+ResultType UserMenu::Display(bool aForceToForeground, int aX, int aY)
 // aForceToForeground defaults to true because when a menu is displayed spontanesouly rather than
 // in response to the user right-clicking the tray icon, I believe that the OS will revert to its
 // behavior of "resisting" a window that tries to "steal focus".  I believe this resistance does
@@ -1144,8 +1144,33 @@ ResultType UserMenu::Display(bool aForceToForeground)
 		CheckMenuItem(mMenu, ID_TRAY_SUSPEND, g_IsSuspended ? MF_CHECKED : MF_UNCHECKED);
 		CheckMenuItem(mMenu, ID_TRAY_PAUSE, g.IsPaused ? MF_CHECKED : MF_UNCHECKED);
 	}
+
 	POINT pt;
-	GetCursorPos(&pt);
+	if (aX == COORD_UNSPECIFIED || aY == COORD_UNSPECIFIED)
+		GetCursorPos(&pt);
+	if (!(aX == COORD_UNSPECIFIED && aY == COORD_UNSPECIFIED)) // At least one was specified.
+	{
+		if (aX != COORD_UNSPECIFIED)
+			pt.x = aX;
+		if (aY != COORD_UNSPECIFIED)
+			pt.y = aY;
+		// The below section is very similar to the one is MouseMove():
+		if (!(g.CoordMode & COORD_MODE_MENU))  // Using coords relative to the active window (rather than screen).
+		{
+			HWND fore = GetForegroundWindow();
+			// Revert to screen coordinates if the foreground window is minimized.  Although it might be
+			// impossible for a visible window to be both foreground and minmized, it seems that hidden
+			// windows -- such as the script's own main window when activated for the purpose of showing
+			// a popup menu -- can be foreground while simulateously being minimized.
+			RECT rect;
+			if (fore && !IsIconic(fore) && GetWindowRect(fore, &rect))
+			{
+				pt.x += rect.left;
+				pt.y += rect.top;
+			}
+		}
+	}
+
 	// Always bring main window to foreground right before TrackPopupMenu(), even if window is hidden.
 	// UPDATE: This is a problem because SetForegroundWindowEx() will restore the window if it's hidden,
 	// but restoring also shows the window if it's hidden.  Could re-hide it... but the question here

@@ -175,7 +175,8 @@
 			<Tool
 				Name="VCPreLinkEventTool"/>
 			<Tool
-				Name="VCResourceCompilerTool"/>
+				Name="VCResourceCompilerTool"
+				PreprocessorDefinitions="AUTOHOTKEYSC"/>
 			<Tool
 				Name="VCWebServiceProxyGeneratorTool"/>
 			<Tool

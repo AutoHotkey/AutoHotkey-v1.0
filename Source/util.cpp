@@ -731,6 +731,20 @@ void GetVirtualDesktopRect(RECT &aRect)
 
 
 
+ResultType RegReadString(HKEY aRootKey, char *aSubkey, char *aValueName, char *aBuf, size_t aBufSize)
+{
+	*aBuf = '\0'; // Set default output parameter.
+	HKEY hkey;
+	if (RegOpenKeyEx(aRootKey, aSubkey, 0, KEY_QUERY_VALUE, &hkey) != ERROR_SUCCESS)
+		return FAIL;
+	DWORD buf_size = (DWORD)aBufSize; // Caller's value might be a constant memory area, so need a modifiable copy.
+	LONG result = RegQueryValueEx(hkey, aValueName, NULL, NULL, (LPBYTE)aBuf, &buf_size);
+	RegCloseKey(hkey);
+	return (result == ERROR_SUCCESS) ? OK : FAIL;
+}	
+
+
+
 HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight)
 // Based on code sample at http://www.codeguru.com/Cpp/G-M/bitmap/article.php/c4935/
 // Loads a JPG/GIF/BMP and returns an HBITMAP to the caller (which it may call DeleteObject() upon,
@@ -902,6 +916,26 @@ HRESULT MySetWindowTheme(HWND hwnd, LPCWSTR pszSubAppName, LPCWSTR pszSubIdList)
 	}
 	return hresult;
 }
+
+
+
+//HRESULT MyEnableThemeDialogTexture(HWND hwnd, DWORD dwFlags)
+//{
+//	// The library must be loaded dynamically, otherwise the app will not launch on OSes older than XP.
+//	// Theme DLL is normally available only on XP+, but an attempt to load it is made unconditionally
+//	// in case older OSes can ever have it.
+//	HRESULT hresult = !S_OK; // Set default as "failure".
+//	HINSTANCE hinstTheme = LoadLibrary("UxTheme.dll");
+//	if (hinstTheme)
+//	{
+//		typedef HRESULT (WINAPI *MyEnableThemeDialogTextureType)(HWND, DWORD);
+//  		MyEnableThemeDialogTextureType DynEnableThemeDialogTexture = (MyEnableThemeDialogTextureType)GetProcAddress(hinstTheme, "EnableThemeDialogTexture");
+//		if (DynEnableThemeDialogTexture)
+//			hresult = DynEnableThemeDialogTexture(hwnd, dwFlags);
+//		FreeLibrary(hinstTheme);
+//	}
+//	return hresult;
+//}
 
 
 

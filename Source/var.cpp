@@ -414,9 +414,12 @@ VarSizeType Var::Get(char *aBuf)
 
 	case VAR_EXITREASON: if (!aBuf) return g_script.GetExitReason(); aBuf += g_script.GetExitReason(aBuf); break;
 
-	case VAR_OSTYPE: if (!aBuf) return GetOSType(); aBuf += GetOSType(aBuf); break;
-	case VAR_OSVERSION: if (!aBuf) return GetOSVersion(); aBuf += GetOSVersion(aBuf); break;
-	case VAR_ISADMIN: if (!aBuf) return GetIsAdmin(); aBuf += GetIsAdmin(aBuf); break;
+	case VAR_OSTYPE: if (!aBuf) return g_script.GetOSType(); aBuf += g_script.GetOSType(aBuf); break;
+	case VAR_OSVERSION: if (!aBuf) return g_script.GetOSVersion(); aBuf += g_script.GetOSVersion(aBuf); break;
+	case VAR_WINDIR: if (!aBuf) return GetWindowsDirectory(buf_temp, 0) - 1; aBuf += GetWindowsDirectory(aBuf, MAX_PATH); break;  // Sizes/lengths/-1/etc. verified correct.
+	case VAR_PROGRAMFILES: if (!aBuf) return g_script.GetProgramFiles(); aBuf += g_script.GetProgramFiles(aBuf); break;
+
+	case VAR_ISADMIN: if (!aBuf) return g_script.GetIsAdmin(); aBuf += g_script.GetIsAdmin(aBuf); break;
 	case VAR_CURSOR: if (!aBuf) return g_script.ScriptGetCursor(); aBuf += g_script.ScriptGetCursor(aBuf); break;
 	case VAR_CARETX: if (!aBuf) return g_script.ScriptGetCaret(VAR_CARETX); aBuf += g_script.ScriptGetCaret(VAR_CARETX, aBuf); break;
 	case VAR_CARETY: if (!aBuf) return g_script.ScriptGetCaret(VAR_CARETY); aBuf += g_script.ScriptGetCaret(VAR_CARETY, aBuf); break;
@@ -463,6 +466,9 @@ VarSizeType Var::Get(char *aBuf)
 	case VAR_TIMESINCETHISHOTKEY: if (!aBuf) return g_script.GetTimeSinceThisHotkey(); else aBuf += g_script.GetTimeSinceThisHotkey(aBuf); break;
 	case VAR_TIMESINCEPRIORHOTKEY: if (!aBuf) return g_script.GetTimeSincePriorHotkey(); else aBuf += g_script.GetTimeSincePriorHotkey(aBuf); break;
 	case VAR_ENDCHAR: if (!aBuf) return g_script.GetEndChar(); else aBuf += g_script.GetEndChar(aBuf); break;
+
+	case VAR_GUI: if (!aBuf) return g_script.GetGui(); else aBuf += g_script.GetGui(aBuf); break;
+	case VAR_GUICONTROL: if (!aBuf) return g_script.GetGuiControl(); else aBuf += g_script.GetGuiControl(aBuf); break;
 	case VAR_GUICONTROLEVENT: if (!aBuf) return g_script.GetGuiControlEvent(); else aBuf += g_script.GetGuiControlEvent(aBuf); break;
 
 	case VAR_TIMEIDLE: if (!aBuf) return g_script.GetTimeIdle(); else aBuf += g_script.GetTimeIdle(aBuf); break;

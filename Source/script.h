@@ -211,6 +211,9 @@ enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
 
 #define GUI_INDEX_TO_ID(index) (index + CONTROL_ID_FIRST)
 #define GUI_ID_TO_INDEX(id) (id - CONTROL_ID_FIRST)
+#define GUI_HWND_TO_INDEX(hwnd) GUI_ID_TO_INDEX(GetDlgCtrlID(hwnd))
+// Testing shows that GetDlgCtrlID() is dramatically faster than looping through a GUI window's control
+// array to find a matching HWND.
 
 
 #define ERR_ABORT_NO_SPACES "The current thread will exit."
@@ -248,7 +251,7 @@ enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
 #define ERR_MENUTRAY "Supported only for the tray menu."
 #define ERR_CONTROLCOMMAND "Parameter #1 is not a valid Control command."
 #define ERR_CONTROLGETCOMMAND "Parameter #2 is not a valid ControlGet command."
-#define ERR_GUICONTROLCOMMAND "Parameter #1 is not a valid GuiControl command."
+#define ERR_GUICONTROLCOMMAND "Parameter #1 is not a valid GuiControl command. Be sure to include a +/- sign if required."
 #define ERR_GUICONTROLGETCOMMAND "Parameter #2 is not a valid GuiControlGet command."
 #define ERR_DRIVECOMMAND "Parameter #1 is not a valid Drive command."
 #define ERR_DRIVEGETCOMMAND "Parameter #2 is not a valid DriveGet command."
@@ -256,6 +259,7 @@ enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
 #define ERR_WINSET "Parameter #1 is not a valid WinSet attribute."
 #define ERR_WINGET "Parameter #2 is not a valid WinGet command."
 #define ERR_SYSGET "Parameter #2 is not a valid SysGet command."
+#define ERR_COORDMODE "Parameter #1 is not valid."
 #define ERR_IFMSGBOX "This line specifies an invalid MsgBox result."
 #define ERR_REG_KEY "The key name must be either HKEY_LOCAL_MACHINE, HKEY_USERS, HKEY_CURRENT_USER, HKEY_CLASSES_ROOT, HKEY_CURRENT_CONFIG, or the abbreviations for these."
 #define ERR_REG_VALUE_TYPE "The value type must be either REG_SZ, REG_EXPAND_SZ, REG_MULTI_SZ, REG_DWORD, or REG_BINARY."
@@ -451,6 +455,7 @@ enum JoyControls {JOYCTRL_INVALID, JOYCTRL_XPOS, JOYCTRL_YPOS, JOYCTRL_ZPOS
 
 enum WinGetCmds {WINGET_CMD_INVALID, WINGET_CMD_ID, WINGET_CMD_IDLAST, WINGET_CMD_PID, WINGET_CMD_PROCESSNAME
 	, WINGET_CMD_COUNT, WINGET_CMD_LIST, WINGET_CMD_MINMAX, WINGET_CMD_CONTROLLIST
+	, WINGET_CMD_STYLE, WINGET_CMD_EXSTYLE
 };
 
 enum SysGetCmds {SYSGET_CMD_INVALID, SYSGET_CMD_METRICS, SYSGET_CMD_MONITORCOUNT, SYSGET_CMD_MONITORPRIMARY
@@ -481,6 +486,7 @@ enum GuiCommands {GUI_CMD_INVALID, GUI_CMD_OPTIONS, GUI_CMD_ADD, GUI_CMD_MENU, G
 enum GuiControlCmds {GUICONTROL_CMD_INVALID, GUICONTROL_CMD_OPTIONS, GUICONTROL_CMD_CONTENTS, GUICONTROL_CMD_TEXT
 	, GUICONTROL_CMD_MOVE, GUICONTROL_CMD_FOCUS, GUICONTROL_CMD_ENABLE, GUICONTROL_CMD_DISABLE
 	, GUICONTROL_CMD_SHOW, GUICONTROL_CMD_HIDE, GUICONTROL_CMD_CHOOSE, GUICONTROL_CMD_CHOOSESTRING
+	, GUICONTROL_CMD_FONT
 };
 
 enum GuiControlGetCmds {GUICONTROLGET_CMD_INVALID, GUICONTROLGET_CMD_CONTENTS, GUICONTROLGET_CMD_POS
@@ -500,11 +506,12 @@ typedef UCHAR GuiControls;
 #define GUI_CONTROL_COMBOBOX     8
 #define GUI_CONTROL_LISTBOX      9
 #define GUI_CONTROL_EDIT         10
-#define GUI_CONTROL_TAB          11
-
-// Keep the below macro in sync with the above:
-#define GUI_CONTROL_TYPE_CAN_BE_FOCUSED(type) (type != GUI_CONTROL_TEXT && type != GUI_CONTROL_PIC)
-
+#define GUI_CONTROL_HOTKEY       11
+#define GUI_CONTROL_SLIDER       12
+#define GUI_CONTROL_PROGRESS     13
+#define GUI_CONTROL_TAB          14 // Keep below flush with above as a reminder to keep it in sync:
+#define GUI_CONTROL_TYPE_CAN_BE_FOCUSED(type) !(type == GUI_CONTROL_TEXT || type == GUI_CONTROL_PIC \
+	|| type == GUI_CONTROL_GROUPBOX || type == GUI_CONTROL_PROGRESS)
 
 enum ThreadCommands {THREAD_CMD_INVALID, THREAD_CMD_PRIORITY, THREAD_CMD_INTERRUPT};
 
@@ -531,7 +538,7 @@ enum DriveGetCmds {DRIVEGET_CMD_INVALID, DRIVEGET_CMD_LIST, DRIVEGET_CMD_FILESYS
 	, DRIVEGET_CMD_SETLABEL, DRIVEGET_CMD_SERIAL, DRIVEGET_CMD_TYPE, DRIVEGET_CMD_STATUS
 	, DRIVEGET_CMD_STATUSCD, DRIVEGET_CMD_CAPACITY};
 
-enum WinSetAttributes {WINSET_INVALID, WINSET_TRANSPARENT, WINSET_ALWAYSONTOP};
+enum WinSetAttributes {WINSET_INVALID, WINSET_TRANSPARENT, WINSET_TRANSCOLOR, WINSET_ALWAYSONTOP, WINSET_BOTTOM};
 
 
 
@@ -682,9 +689,9 @@ private:
 	ResultType WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType WinGetPos(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType SysGet(char *aCmd, char *aValue);
-	ResultType PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int aColor, int aVariation);
+	ResultType PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int aColor, int aVariation, bool aUseRGB);
 	//ResultType ImageSearch(int aLeft, int aTop, int aRight, int aBottom, char *aImageFile);
-	ResultType PixelGetColor(int aX, int aY);
+	ResultType PixelGetColor(int aX, int aY, bool aUseRGB);
 
 	static ResultType SetToggleState(vk_type aVK, ToggleValueType &ForceLock, char *aToggleText);
 public:
@@ -1156,6 +1163,8 @@ public:
 		if (!stricmp(aBuf, "List")) return WINGET_CMD_LIST;
 		if (!stricmp(aBuf, "MinMax")) return WINGET_CMD_MINMAX;
 		if (!stricmp(aBuf, "ControlList")) return WINGET_CMD_CONTROLLIST;
+		if (!stricmp(aBuf, "Style")) return WINGET_CMD_STYLE;
+		if (!stricmp(aBuf, "ExStyle")) return WINGET_CMD_EXSTYLE;
 		return WINGET_CMD_INVALID;
 	}
 
@@ -1254,7 +1263,7 @@ public:
 		if (!stricmp(aBuf, "Add")) return GUI_CMD_ADD;
 		if (!stricmp(aBuf, "Show")) return GUI_CMD_SHOW;
 		if (!stricmp(aBuf, "Submit")) return GUI_CMD_SUBMIT;
-		if (!stricmp(aBuf, "Cancel")) return GUI_CMD_CANCEL;
+		if (!stricmp(aBuf, "Cancel") || !stricmp(aBuf, "Hide")) return GUI_CMD_CANCEL;
 		if (!stricmp(aBuf, "Destroy")) return GUI_CMD_DESTROY;
 		if (!stricmp(aBuf, "Menu")) return GUI_CMD_MENU;
 		if (!stricmp(aBuf, "Font")) return GUI_CMD_FONT;
@@ -1284,6 +1293,7 @@ public:
 		if (!stricmp(aBuf, "Hide")) return GUICONTROL_CMD_HIDE;
 		if (!stricmp(aBuf, "Choose")) return GUICONTROL_CMD_CHOOSE;
 		if (!stricmp(aBuf, "ChooseString")) return GUICONTROL_CMD_CHOOSESTRING;
+		if (!stricmp(aBuf, "Font")) return GUICONTROL_CMD_FONT;
 		return GUICONTROL_CMD_INVALID;
 	}
 
@@ -1310,9 +1320,12 @@ public:
 		if (!stricmp(aBuf, "ListBox")) return GUI_CONTROL_LISTBOX;
 		if (!stricmp(aBuf, "Edit")) return GUI_CONTROL_EDIT;
 		// Keep those seldom used at the bottom for performance:
+		if (!stricmp(aBuf, "Slider")) return GUI_CONTROL_SLIDER;
+		if (!stricmp(aBuf, "Progress")) return GUI_CONTROL_PROGRESS;
 		if (!stricmp(aBuf, "Tab")) return GUI_CONTROL_TAB;
 		if (!stricmp(aBuf, "GroupBox")) return GUI_CONTROL_GROUPBOX;
 		if (!stricmp(aBuf, "Pic") || !stricmp(aBuf, "Picture")) return GUI_CONTROL_PIC;
+		if (!stricmp(aBuf, "Hotkey")) return GUI_CONTROL_HOTKEY;
 		return GUI_CONTROL_INVALID;
 	}
 
@@ -1402,7 +1415,9 @@ public:
 	{
 		if (!aBuf || !*aBuf) return WINSET_INVALID;
 		if (!stricmp(aBuf, "Trans") || !stricmp(aBuf, "Transparent")) return WINSET_TRANSPARENT;
+		if (!stricmp(aBuf, "TransColor")) return WINSET_TRANSCOLOR;
 		if (!stricmp(aBuf, "AlwaysOnTop") || !stricmp(aBuf, "Topmost")) return WINSET_ALWAYSONTOP;
+		if (!stricmp(aBuf, "Bottom")) return WINSET_BOTTOM;
 		return WINSET_INVALID;
 	}
 
@@ -1519,6 +1534,17 @@ public:
 			if (!stricmp(aBuf, "WheelUp") || !stricmp(aBuf, "WU")) return VK_WHEEL_UP;
 			if (!stricmp(aBuf, "WheelDown") || !stricmp(aBuf, "WD")) return VK_WHEEL_DOWN;
 		}
+		return 0;
+	}
+
+	static CoordModeAttribType ConvertCoordModeAttrib(char *aBuf)
+	{
+		if (!aBuf || !*aBuf) return 0;
+		if (!stricmp(aBuf, "Pixel")) return COORD_MODE_PIXEL;
+		if (!stricmp(aBuf, "Mouse")) return COORD_MODE_MOUSE;
+		if (!stricmp(aBuf, "ToolTip")) return COORD_MODE_TOOLTIP;
+		if (!stricmp(aBuf, "Caret")) return COORD_MODE_CARET;
+		if (!stricmp(aBuf, "Menu")) return COORD_MODE_MENU;
 		return 0;
 	}
 
@@ -1677,7 +1703,7 @@ public:
 	void ApplyColor(bool aApplyToSubmenus);
 	ResultType AppendStandardItems();
 	ResultType Destroy();
-	ResultType Display(bool aForceToForeground = true);
+	ResultType Display(bool aForceToForeground = true, int aX = COORD_UNSPECIFIED, int aY = COORD_UNSPECIFIED);
 	UINT GetSubmenuPos(HMENU ahMenu);
 	UINT GetItemPos(char *aMenuItemName);
 	bool ContainsMenu(UserMenu *aMenu);
@@ -1723,19 +1749,6 @@ struct FontType
 	HFONT hfont;
 };
 
-struct GuiControlOptionsType
-{
-	DWORD style_add, style_remove, exstyle_add, exstyle_remove;
-	int x, y, width, height;  // Position info.
-	float row_count;
-	int choice;  // Which item of a DropDownList/ComboBox/ListBox to initially choose.
-	int limit;   // The max number of characters to permit in an edit or combobox's edit.
-	int hscroll_pixels;  // The number of pixels for a listbox's horizontal scrollbar to be able to scroll.
-	int checked; // When zeroed, struct contains default starting state of checkbox/radio, i.e. BST_UNCHECKED.
-	char password_char; // When zeroed, indicates "use default password" for an edit control with the password style.
-	bool start_new_section;
-};
-
 typedef UCHAR TabControlIndexType;
 typedef UCHAR TabIndexType;
 // Keep the below in sync with the size of the types above:
@@ -1747,14 +1760,16 @@ struct GuiControlType
 	// Keep any fields that are smaller than 4 bytes adjacent to each other.  This conserves memory
 	// due to byte-alignment.  It has been verified to save 4 bytes per struct in this case:
 	GuiControls type;
-	#define GUI_CONTROL_ATTRIB_IMPLICIT_CANCEL    0x01
-	#define GUI_CONTROL_ATTRIB_ALTSUBMIT          0x02
-	#define GUI_CONTROL_ATTRIB_LABEL_IS_RUNNING   0x04
-	#define GUI_CONTROL_ATTRIB_EXPLICITLY_HIDDEN  0x08
-	#define GUI_CONTROL_ATTRIB_DEFAULT_BACKGROUND 0x10
+	#define GUI_CONTROL_ATTRIB_IMPLICIT_CANCEL     0x01
+	#define GUI_CONTROL_ATTRIB_ALTSUBMIT           0x02
+	#define GUI_CONTROL_ATTRIB_LABEL_IS_RUNNING    0x04
+	#define GUI_CONTROL_ATTRIB_EXPLICITLY_HIDDEN   0x08
+	#define GUI_CONTROL_ATTRIB_EXPLICITLY_DISABLED 0x10
+	#define GUI_CONTROL_ATTRIB_BACKGROUND_DEFAULT  0x20 // i.e. Don't conform to window/control background color; use default instead.
+	#define GUI_CONTROL_ATTRIB_BACKGROUND_TRANS    0x40 // i.e. Leave this control's background transparent.
 	UCHAR attrib; // A field of option flags/bits defined above.
 	TabControlIndexType tab_control_index; // Which tab control this control belongs to, if any.
-	TabIndexType tab_index;
+	TabIndexType tab_index; // For type==TAB, this stores the tab control's index.  For other types, it stores the page.
 	Var *output_var;
 	Label *jump_to_label;
 	union
@@ -1764,6 +1779,27 @@ struct GuiControlType
 		// Note: Pic controls cannot obey the text color, but they can obey the window's background
 		// color if the picture's background is transparent (at least in the case of icons on XP).
 	};
+	#define USES_FONT_AND_TEXT_COLOR(type) !(type == GUI_CONTROL_PIC || type == GUI_CONTROL_SLIDER || type == GUI_CONTROL_PROGRESS)
+};
+
+struct GuiControlOptionsType
+{
+	DWORD style_add, style_remove, exstyle_add, exstyle_remove;
+	int x, y, width, height;  // Position info.
+	float row_count;
+	int choice;  // Which item of a DropDownList/ComboBox/ListBox to initially choose.
+	int range_min, range_max;  // Allowable range, such as for a slider control.
+	int tick_interval; // The interval at which to draw tickmarks for a slider control.
+	int line_size, page_size; // Also for slider.
+	int thickness;  // Thickness of slider's thumb.
+	int tip_side; // Which side of the control to display the tip on (0 to use default side).
+	GuiControlType *buddy1, *buddy2;
+	COLORREF progress_color_bk;
+	int limit;   // The max number of characters to permit in an edit or combobox's edit.
+	int hscroll_pixels;  // The number of pixels for a listbox's horizontal scrollbar to be able to scroll.
+	int checked; // When zeroed, struct contains default starting state of checkbox/radio, i.e. BST_UNCHECKED.
+	char password_char; // When zeroed, indicates "use default password" for an edit control with the password style.
+	bool start_new_section;
 };
 
 LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lParam);
@@ -1772,7 +1808,6 @@ LRESULT CALLBACK TabWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 class GuiType
 {
 public:
-	#define MAX_CONTROLS_PER_GUI 500
 	#define GUI_STANDARD_WIDTH_MULTIPLIER 15 // This times font size = width, if all other means of determining it are exhausted.
 	#define GUI_STANDARD_WIDTH (GUI_STANDARD_WIDTH_MULTIPLIER * sFont[mCurrentFontIndex].point_size)
 	// Update for v1.0.21: Reduced it to 8 vs. 9 because 8 causes the height each edit (with the
@@ -1783,10 +1818,10 @@ public:
 	// Control IDs are higher than their index in the array by the below amount.  This offset is
 	// necessary because windows that behave like dialogs automatically return IDOK and IDCANCEL in
 	// response to certain types of standard actions:
-	UINT mWindowIndex;
-	UINT mControlCount;
+	GuiIndexType mWindowIndex;
+	GuiIndexType mControlCount;
 	GuiControlType mControl[MAX_CONTROLS_PER_GUI];
-	UINT mDefaultButtonIndex; // Index vs. pointer is needed for some things.
+	GuiIndexType mDefaultButtonIndex; // Index vs. pointer is needed for some things.
 	Label *mLabelForClose, *mLabelForEscape;
 	bool mLabelForCloseIsRunning, mLabelForEscapeIsRunning;
 	DWORD mStyle, mExStyle; // Style of window.
@@ -1848,13 +1883,14 @@ public:
 		//ZeroMemory(mControl, sizeof(mControl));
 	}
 
-	static ResultType Destroy(UINT aWindowIndex);
+	static ResultType Destroy(GuiIndexType aWindowIndex);
 	ResultType Create();
 	static void UpdateMenuBars(HMENU aMenu);
 	ResultType AddControl(GuiControls aControlType, char *aOptions, char *aText);
 	ResultType ParseOptions(char *aOptions);
 	ResultType ControlParseOptions(char *aOptions, GuiControlOptionsType &aOpt, GuiControlType &aControl
-		, UINT aControlIndex = -1); // aControlIndex is not needed upon control creation.
+		, GuiIndexType aControlIndex = -1); // aControlIndex is not needed upon control creation.
+	void ControlInitOptions(GuiControlOptionsType &aOpt, GuiControlType &aControl);
 	void ControlAddContents(GuiControlType &aControl, char *aContent, int aChoice);
 	ResultType Show(char *aOptions, char *aTitle);
 	ResultType Clear();
@@ -1878,16 +1914,27 @@ public:
 		return NULL;
 	}
 
-	UINT FindControl(char *aControlID);
-	GuiControlType *FindControl(HWND aHwnd);
-	int FindGroup(UINT aControlIndex, UINT &aGroupStart, UINT &aGroupEnd);
+	GuiIndexType FindControl(char *aControlID);
+	GuiControlType *FindControl(HWND aHwnd)
+	{
+		GuiIndexType index = GUI_HWND_TO_INDEX(aHwnd);
+		return (index < mControlCount) ? &mControl[index] : NULL;
+	}
+	int FindGroup(GuiIndexType aControlIndex, GuiIndexType &aGroupStart, GuiIndexType &aGroupEnd);
 
 	ResultType SetCurrentFont(char *aOptions, char *aFontName);
 	static int FindOrCreateFont(char *aOptions = "", char *aFontName = "", FontType *aFoundationFont = NULL
 		, COLORREF *aColor = NULL);
 	static int FindFont(FontType &aFont);
 
-	void Event(UINT aControlIndex, UINT aNotifyCode);
+	void Event(GuiIndexType aControlIndex, UINT aNotifyCode);
+
+	static WORD TextToHotkey(char *aText);
+	static char *HotkeyToText(WORD aHotkey, char *aBuf);
+	int ControlGetDefaultSliderThickness(DWORD aStyle, int aThumbThickness);
+	void ControlSetSliderOptions(GuiControlType &aControl, GuiControlOptionsType &aOpt);
+	void ControlSetProgressOptions(GuiControlType &aControl, GuiControlOptionsType &aOpt, DWORD aStyle);
+	bool ControlOverrideBkColor(GuiControlType &aControl);
 
 	void ControlUpdateCurrentTab(GuiControlType &aTabControl, bool aFocusFirstControl);
 	GuiControlType *FindTabControl(TabControlIndexType aTabControlIndex);
@@ -2042,606 +2089,82 @@ public:
 
 	ResultType PerformGui(char *aCommand, char *aControlType, char *aOptions, char *aParam4);
 
-	VarSizeType GetBatchLines(char *aBuf = NULL)
-	{
-		// The BatchLine value can be either a numerical string or a string that ends in "ms".
-		char buf[256];
-		char *target_buf = aBuf ? aBuf : buf;
-		if (g.IntervalBeforeRest >= 0) // Have this new method take precedence, if it's in use by the script.
-			sprintf(target_buf, "%dms", g.IntervalBeforeRest); // Not snprintf().
-		else
-			ITOA64(g.LinesPerCycle, target_buf);
-		return (VarSizeType)strlen(target_buf);
-	}
-
-	VarSizeType GetTitleMatchMode(char *aBuf = NULL)
-	{
-		if (!aBuf)
-			return MAX_NUMBER_LENGTH;  // Just in case it's ever allowed to go beyond 3
-		_itoa(g.TitleMatchMode, aBuf, 10);  // Always output as decimal vs. hex in this case.
-		return (VarSizeType)strlen(aBuf);
-	}
-
-	VarSizeType GetTitleMatchModeSpeed(char *aBuf = NULL)
-	{
-		if (!aBuf)
-			return 4;
-		// For backward compatibility (due to StringCaseSense), never change the case used here:
-		strcpy(aBuf, g.TitleFindFast ? "Fast" : "Slow");
-		return 4;  // Always length 4
-	}
-
-	VarSizeType GetDetectHiddenWindows(char *aBuf = NULL)
-	{
-		if (!aBuf)
-			return 3;  // Room for either On or Off
-		// For backward compatibility (due to StringCaseSense), never change the case used here:
-		strcpy(aBuf, g.DetectHiddenWindows ? "On" : "Off");
-		return 3;
-	}
-
-	VarSizeType GetDetectHiddenText(char *aBuf = NULL)
-	{
-		if (!aBuf)
-			return 3;  // Room for either On or Off
-		// For backward compatibility (due to StringCaseSense), never change the case used here:
-		strcpy(aBuf, g.DetectHiddenText ? "On" : "Off");
-		return 3;
-	}
-
-	VarSizeType GetAutoTrim(char *aBuf = NULL)
-	{
-		if (!aBuf)
-			return 3;  // Room for either On or Off
-		// For backward compatibility (due to StringCaseSense), never change the case used here:
-		strcpy(aBuf, g.AutoTrim ? "On" : "Off");
-		return 3;
-	}
-
-	VarSizeType GetStringCaseSense(char *aBuf = NULL)
-	{
-		if (!aBuf)
-			return 3;  // Room for either On or Off
-		// For backward compatibility (due to StringCaseSense), never change the case used here:
-		strcpy(aBuf, g.StringCaseSense ? "On" : "Off");
-		return 3;
-	}
-
-	VarSizeType GetFormatInteger(char *aBuf = NULL)
-	{
-		if (!aBuf)
-			return 1;
-		// For backward compatibility (due to StringCaseSense), never change the case used here:
-		*aBuf = g.FormatIntAsHex ? 'H' : 'D';
-		*(aBuf + 1) = '\0';
-		return 1;
-	}
-
-	VarSizeType GetFormatFloat(char *aBuf = NULL)
-	{
-		if (!aBuf)
-			return (VarSizeType)strlen(g.FormatFloat);  // Include the extra chars since this is just an estimate.
-		strlcpy(aBuf, g.FormatFloat + 1, strlen(g.FormatFloat + 1));   // Omit the leading % and the trailing 'f'.
-		return (VarSizeType)strlen(aBuf);
-	}
-
-	VarSizeType GetKeyDelay(char *aBuf = NULL)
-	{
-		if (!aBuf)
-			return MAX_NUMBER_LENGTH;
-		_itoa(g.KeyDelay, aBuf, 10);  // Always output as decimal vs. hex in this case.
-		return (VarSizeType)strlen(aBuf);
-	}
-
-	VarSizeType GetWinDelay(char *aBuf = NULL)
-	{
-		if (!aBuf)
-			return MAX_NUMBER_LENGTH;
-		_itoa(g.WinDelay, aBuf, 10);  // Always output as decimal vs. hex in this case.
-		return (VarSizeType)strlen(aBuf);
-	}
-
-	VarSizeType GetControlDelay(char *aBuf = NULL)
-	{
-		if (!aBuf)
-			return MAX_NUMBER_LENGTH;
-		_itoa(g.ControlDelay, aBuf, 10);  // Always output as decimal vs. hex in this case.
-		return (VarSizeType)strlen(aBuf);
-	}
-
-	VarSizeType GetMouseDelay(char *aBuf = NULL)
-	{
-		if (!aBuf)
-			return MAX_NUMBER_LENGTH;
-		_itoa(g.MouseDelay, aBuf, 10);  // Always output as decimal vs. hex in this case.
-		return (VarSizeType)strlen(aBuf);
-	}
-
-	VarSizeType GetDefaultMouseSpeed(char *aBuf = NULL)
-	{
-		if (!aBuf)
-			return MAX_NUMBER_LENGTH;  // Just in case it's ever allowed to go beyond 100.
-		_itoa(g.DefaultMouseSpeed, aBuf, 10);  // Always output as decimal vs. hex in this case.
-		return (VarSizeType)strlen(aBuf);
-	}
-
-	VarSizeType GetExitReason(char *aBuf = NULL)
-	{
-		char *str;
-		switch(mExitReason)
-		{
-		case EXIT_LOGOFF: str = "Logoff"; break;
-		case EXIT_SHUTDOWN: str = "Shutdown"; break;
-		// Since the below are all relatively rare, except WM_CLOSE perhaps, they are all included
-		// as one word to cut down on the number of possible words (it's easier to write OnExit
-		// routines to cover all possibilities if there are fewer of them).
-		case EXIT_WM_QUIT:
-		case EXIT_CRITICAL:
-		case EXIT_DESTROY:
-		case EXIT_WM_CLOSE: str = "Close"; break;
-		case EXIT_ERROR: str = "Error"; break;
-		case EXIT_MENU: str = "Menu"; break;  // Standard menu, not a user-defined menu.
-		case EXIT_EXIT: str = "Exit"; break;  // ExitApp or Exit command.
-		case EXIT_RELOAD: str = "Reload"; break;
-		case EXIT_SINGLEINSTANCE: str = "Single"; break;
-		default:  // EXIT_NONE or unknown value (unknown would be considered a bug if it ever happened).
-			str = "";
-		}
-		if (aBuf)
-			strcpy(aBuf, str);
-		return (VarSizeType)strlen(str);
-	}
-
-
-	VarSizeType GetFilename(char *aBuf = NULL)
-	{
-		if (aBuf)
-			strcpy(aBuf, mFileName);
-		return (VarSizeType)strlen(mFileName);
-	}
-	VarSizeType GetFileDir(char *aBuf = NULL)
-	{
-		char str[MAX_PATH * 2] = "";  // Set default.
-		strlcpy(str, mFileDir, sizeof(str));
-		size_t length = strlen(str); // Needed not just for AutoIt2.
-		// If it doesn't already have a final backslash, namely due to it being a root directory,
-		// provide one so that it is backward compatible with AutoIt v2:
-		if (mIsAutoIt2 && length && str[length - 1] != '\\')
-		{
-			str[length++] = '\\';
-			str[length] = '\0';
-		}
-		if (aBuf)
-			strcpy(aBuf, str);
-		return (VarSizeType)length;
-	}
-	VarSizeType GetFilespec(char *aBuf = NULL)
-	{
-		if (aBuf)
-			sprintf(aBuf, "%s\\%s", mFileDir, mFileName);
-		return (VarSizeType)(strlen(mFileDir) + strlen(mFileName) + 1);
-	}
-
-	VarSizeType GetLoopFileName(char *aBuf = NULL)
-	{
-		char *str = "";  // Set default.
-		if (mLoopFile)
-		{
-			// The loop handler already prepended the script's directory in here for us:
-			if (str = strrchr(mLoopFile->cFileName, '\\'))
-				++str;
-			else // No backslash, so just make it the entire file name.
-				str = mLoopFile->cFileName;
-		}
-		if (aBuf)
-			strcpy(aBuf, str);
-		return (VarSizeType)strlen(str);
-	}
-	VarSizeType GetLoopFileShortName(char *aBuf = NULL)
-	{
-		char *str = "";  // Set default.
-		if (mLoopFile)
-		{
-			if (   !*(str = mLoopFile->cAlternateFileName)   )
-				// Files whose long name is shorter than the 8.3 usually don't have value stored here,
-				// so use the long name whenever a short name is unavailable for any reason (could
-				// also happen if NTFS has short-name generation disabled?)
-				return GetLoopFileName(aBuf);
-		}
-		if (aBuf)
-			strcpy(aBuf, str);
-		return (VarSizeType)strlen(str);
-	}
-	VarSizeType GetLoopFileDir(char *aBuf = NULL)
-	{
-		char *str = "";  // Set default.
-		char *last_backslash = NULL;
-		if (mLoopFile)
-		{
-			// The loop handler already prepended the script's directory in here for us.
-			// But if the loop had a relative path in its FilePattern, there might be
-			// only a relative directory here, or no directory at all if the current
-			// file is in the origin/root dir of the search:
-			if (last_backslash = strrchr(mLoopFile->cFileName, '\\'))
-			{
-				*last_backslash = '\0'; // Temporarily terminate.
-				str = mLoopFile->cFileName;
-			}
-			else // No backslash, so there is no directory in this case.
-				str = "";
-		}
-		VarSizeType length = (VarSizeType)strlen(str);
-		if (!aBuf)
-		{
-			if (last_backslash)
-				*last_backslash = '\\';  // Restore the orginal value.
-			return length;
-		}
-		strcpy(aBuf, str);
-		if (last_backslash)
-			*last_backslash = '\\';  // Restore the orginal value.
-		return length;
-	}
-	VarSizeType GetLoopFileFullPath(char *aBuf = NULL)
-	{
-		char *str = "";  // Set default.
-		if (mLoopFile)
-			// The loop handler already prepended the script's directory in here for us:
-			str = mLoopFile->cFileName;
-		if (aBuf)
-			strcpy(aBuf, str);
-		return (VarSizeType)strlen(str);
-	}
-	VarSizeType GetLoopFileTimeModified(char *aBuf = NULL)
-	{
-		char str[64] = "";  // Set default.
-		if (mLoopFile)
-			FileTimeToYYYYMMDD(str, mLoopFile->ftLastWriteTime, true);
-		if (aBuf)
-			strcpy(aBuf, str);
-		return (VarSizeType)strlen(str);
-	}
-	VarSizeType GetLoopFileTimeCreated(char *aBuf = NULL)
-	{
-		char str[64] = "";  // Set default.
-		if (mLoopFile)
-			FileTimeToYYYYMMDD(str, mLoopFile->ftCreationTime, true);
-		if (aBuf)
-			strcpy(aBuf, str);
-		return (VarSizeType)strlen(str);
-	}
-	VarSizeType GetLoopFileTimeAccessed(char *aBuf = NULL)
-	{
-		char str[64] = "";  // Set default.
-		if (mLoopFile)
-			FileTimeToYYYYMMDD(str, mLoopFile->ftLastAccessTime, true);
-		if (aBuf)
-			strcpy(aBuf, str);
-		return (VarSizeType)strlen(str);
-	}
-	VarSizeType GetLoopFileAttrib(char *aBuf = NULL)
-	{
-		char str[64] = "";  // Set default.
-		if (mLoopFile)
-			FileAttribToStr(str, mLoopFile->dwFileAttributes);
-		if (aBuf)
-			strcpy(aBuf, str);
-		return (VarSizeType)strlen(str);
-	}
-	VarSizeType GetLoopFileSize(char *aBuf, int aDivider)
-	{
-		// Don't use MAX_NUMBER_LENGTH in case user has selected a very long float format via SetFormat.
-		char str[128];
-		char *target_buf = aBuf ? aBuf : str;
-		*target_buf = '\0';  // Set default.
-		if (mLoopFile)
-		{
-			// It's a documented limitation that the size will show as negative if
-			// greater than 2 gig, and will be wrong if greater than 4 gig.  For files
-			// that large, scripts should use the KB version of this function instead.
-			// If a file is over 4gig, set the value to be the maximum size (-1 when
-			// expressed as a signed integer, since script variables are based entirely
-			// on 32-bit signed integers due to the use of ATOI(), etc.).  UPDATE: 64-bit
-			// ints are now standard, so the above is unnecessary:
-			//sprintf(str, "%d%", mLoopFile->nFileSizeHigh ? -1 : (int)mLoopFile->nFileSizeLow);
-			ULARGE_INTEGER ul;
-			ul.HighPart = mLoopFile->nFileSizeHigh;
-			ul.LowPart = mLoopFile->nFileSizeLow;
-			ITOA64((__int64)(aDivider ? ((unsigned __int64)ul.QuadPart / aDivider) : ul.QuadPart), target_buf);
-		}
-		return (VarSizeType)strlen(target_buf);
-	}
-
-	VarSizeType GetLoopRegType(char *aBuf = NULL)
-	{
-		char str[256] = "";  // Set default.
-		if (mLoopRegItem)
-			Line::RegConvertValueType(str, sizeof(str), mLoopRegItem->type);
-		if (aBuf)
-			strcpy(aBuf, str);
-		return (VarSizeType)strlen(str);
-	}
-	VarSizeType GetLoopRegKey(char *aBuf = NULL)
-	{
-		char str[256] = "";  // Set default.
-		if (mLoopRegItem)
-			// Use root_key_type, not root_key (which might be a remote vs. local HKEY):
-			Line::RegConvertRootKey(str, sizeof(str), mLoopRegItem->root_key_type);
-		if (aBuf)
-			strcpy(aBuf, str);
-		return (VarSizeType)strlen(str);
-	}
-	VarSizeType GetLoopRegSubKey(char *aBuf = NULL)
-	{
-		char *str = "";  // Set default.
-		if (mLoopRegItem)
-			str = mLoopRegItem->subkey;
-		if (aBuf)
-			strcpy(aBuf, str);
-		return (VarSizeType)strlen(str);
-	}
-	VarSizeType GetLoopRegName(char *aBuf = NULL)
-	{
-		char *str = "";  // Set default.
-		if (mLoopRegItem)
-			str = mLoopRegItem->name; // This can be either the name of a subkey or the name of a value.
-		if (aBuf)
-			strcpy(aBuf, str);
-		return (VarSizeType)strlen(str);
-	}
-	VarSizeType GetLoopRegTimeModified(char *aBuf = NULL)
-	{
-		char str[64] = "";  // Set default.
-		// Only subkeys (not values) have a time.  In addition, Win9x doesn't support retrieval
-		// of the time (nor does it store it), so make the var blank in that case:
-		if (mLoopRegItem && mLoopRegItem->type == REG_SUBKEY && !g_os.IsWin9x())
-			FileTimeToYYYYMMDD(str, mLoopRegItem->ftLastWriteTime, true);
-		if (aBuf)
-			strcpy(aBuf, str);
-		return (VarSizeType)strlen(str);
-	}
-
-
-	VarSizeType GetLoopReadLine(char *aBuf = NULL)
-	{
-		char *str = "";  // Set default.
-		if (mLoopReadFile)
-			str = mLoopReadFile->mCurrentLine;
-		if (aBuf)
-			strcpy(aBuf, str);
-		return (VarSizeType)strlen(str);
-	}
-
-	VarSizeType GetLoopField(char *aBuf = NULL)
-	{
-		char *str = "";  // Set default.
-		if (mLoopField)
-			str = mLoopField;
-		if (aBuf)
-			strcpy(aBuf, str);
-		return (VarSizeType)strlen(str);
-	}
-
-	VarSizeType GetLoopIndex(char *aBuf = NULL)
-	{
-		if (!aBuf)
-			return MAX_NUMBER_LENGTH;
-		ITOA64(mLoopIteration, aBuf);
-		return (VarSizeType)strlen(aBuf);
-	}
-
-
-	VarSizeType GetThisMenuItem(char *aBuf = NULL)
-	{
-		if (aBuf)
-			strcpy(aBuf, mThisMenuItemName);
-		return (VarSizeType)strlen(mThisMenuItemName);
-	}
-	VarSizeType GetThisMenuItemPos(char *aBuf = NULL)
-	{
-		if (!aBuf)
-			return MAX_NUMBER_LENGTH;
-		// The menu item's position is discovered through this process -- rather than doing
-		// something higher performance such as storing the menu handle or pointer to menu/item
-		// object in g_script -- because those things tend to be volatile.  For example, a menu
-		// or menu item object might be destroyed between the time the user selects it and the
-		// time this variable is referenced in the script.  Thus, by definition, this variable
-		// contains the CURRENT position of the most recently selected menu item within its
-		// CURRENT menu.
-		if (*mThisMenuName && *mThisMenuItemName)
-		{
-			UserMenu *menu = FindMenu(mThisMenuName);
-			if (menu)
-			{
-				// If the menu does not physically exist yet (perhaps due to being destroyed as a result
-				// of DeleteAll, Delete, or some other operation), create it so that the position of the
-				// item can be determined.  This is done for consistency in behavior.
-				if (!menu->mMenu)
-					menu->Create();
-				UINT menu_item_pos = menu->GetItemPos(mThisMenuItemName);
-				if (menu_item_pos < UINT_MAX) // Success
-				{
-					UTOA(menu_item_pos + 1, aBuf);  // Add one to convert from zero-based to 1-based.
-					return (VarSizeType)strlen(aBuf);
-				}
-			}
-		}
-		// Otherwise:
-		*aBuf = '\0';
-		return 0;
-	}
-	VarSizeType GetThisMenu(char *aBuf = NULL)
-	{
-		if (aBuf)
-			strcpy(aBuf, mThisMenuName);
-		return (VarSizeType)strlen(mThisMenuName);
-	}
-	VarSizeType GetThisHotkey(char *aBuf = NULL)
-	{
-		if (aBuf)
-			strcpy(aBuf, mThisHotkeyName);
-		return (VarSizeType)strlen(mThisHotkeyName);
-	}
-	VarSizeType GetPriorHotkey(char *aBuf = NULL)
-	{
-		if (aBuf)
-			strcpy(aBuf, mPriorHotkeyName);
-		return (VarSizeType)strlen(mPriorHotkeyName);
-	}
-	VarSizeType GetTimeSinceThisHotkey(char *aBuf = NULL)
-	{
-		if (!aBuf)
-			return MAX_NUMBER_LENGTH;
-		// It must be the type of hotkey that has a label because we want the TimeSinceThisHotkey
-		// value to be "in sync" with the value of ThisHotkey itself (i.e. use the same method
-		// to determine which hotkey is the "this" hotkey):
-		if (*mThisHotkeyName)
-			// Even if GetTickCount()'s TickCount has wrapped around to zero and the timestamp hasn't,
-			// DWORD math still gives the right answer as long as the number of days between
-			// isn't greater than about 49.  See MyGetTickCount() for explanation of %d vs. %u.
-			// Update: Using 64-bit ints now, so above is obsolete:
-			//snprintf(str, sizeof(str), "%d", (DWORD)(GetTickCount() - mThisHotkeyStartTime));
-			ITOA64((__int64)(GetTickCount() - mThisHotkeyStartTime), aBuf)  // No semicolon
-		else
-			strcpy(aBuf, "-1");
-		return (VarSizeType)strlen(aBuf);
-	}
-	VarSizeType GetTimeSincePriorHotkey(char *aBuf = NULL)
-	{
-		if (!aBuf)
-			return MAX_NUMBER_LENGTH;
-		if (*mPriorHotkeyName)
-			// See MyGetTickCount() for explanation for explanation:
-			//snprintf(str, sizeof(str), "%d", (DWORD)(GetTickCount() - mPriorHotkeyStartTime));
-			ITOA64((__int64)(GetTickCount() - mPriorHotkeyStartTime), aBuf)
-		else
-			strcpy(aBuf, "-1");
-		return (VarSizeType)strlen(aBuf);
-	}
-
-	VarSizeType GetEndChar(char *aBuf = NULL)
-	{
-		if (!aBuf)
-			return 1;
-		*aBuf = mEndChar;
-		*(aBuf + 1) = '\0';
-		return 1;
-	}
-
-	// Interdependency problems require these to be defined elsewhere:
-	VarSizeType GetIconHidden(char *aBuf = NULL);
-	VarSizeType GetIconTip(char *aBuf = NULL);
-	VarSizeType GetIconFile(char *aBuf = NULL);
-	VarSizeType GetIconNumber(char *aBuf = NULL);
-
-	VarSizeType MyGetTickCount(char *aBuf = NULL)
-	{
-		// UPDATE: The below comments are now obsolete in light of having switched over to
-		// using 64-bit integers (which aren't that much slower than 32-bit on 32-bit hardware):
-		// Known limitation:
-		// Although TickCount is an unsigned value, I'm not sure that our EnvSub command
-		// will properly be able to compare two tick-counts if either value is larger than
-		// INT_MAX.  So if the system has been up for more than about 25 days, there might be
-		// problems if the user tries compare two tick-counts in the script using EnvSub.
-		// UPDATE: It seems better to store all unsigned values as signed within script
-		// variables.  Otherwise, when the var's value is next accessed and converted using
-		// ATOI(), the outcome won't be as useful.  In other words, since the negative value
-		// will be properly converted by ATOI(), comparing two negative tickcounts works
-		// correctly (confirmed).  Even if one of them is negative and the other positive,
-		// it will probably work correctly due to the nature of implicit unsigned math.
-		// Thus, we use %d vs. %u in the snprintf() call below.
-		if (!aBuf)
-			return MAX_NUMBER_LENGTH; // Especially in this case, since tick might change between 1st & 2nd calls.
-		ITOA64(GetTickCount(), aBuf);
-		return (VarSizeType)strlen(aBuf);
-	}
-	VarSizeType GetTimeIdle(char *aBuf = NULL)
-	{
-		if (!aBuf)
-			return MAX_NUMBER_LENGTH;
-		*aBuf = '\0';  // Set default.
-		if (g_os.IsWin2000orLater()) // Checked in case the function is present but "not implemented".
-		{
-			// Must fetch it at runtime, otherwise the program can't even be launched on Win9x/NT:
-			typedef BOOL (WINAPI *MyGetLastInputInfoType)(PLASTINPUTINFO);
-			static MyGetLastInputInfoType MyGetLastInputInfo = (MyGetLastInputInfoType)
-				GetProcAddress(GetModuleHandle("User32.dll"), "GetLastInputInfo");
-			if (MyGetLastInputInfo)
-			{
-				LASTINPUTINFO lii;
-				lii.cbSize = sizeof(lii);
-				if (MyGetLastInputInfo(&lii))
-					ITOA64(GetTickCount() - lii.dwTime, aBuf);
-			}
-		}
-		return (VarSizeType)strlen(aBuf);
-	}
-
-	VarSizeType GetNow(char *aBuf = NULL)
-	{
-		if (!aBuf)
-			return DATE_FORMAT_LENGTH;
-		SYSTEMTIME st;
-		GetLocalTime(&st);
-		SystemTimeToYYYYMMDD(aBuf, st, false);
-		return (VarSizeType)strlen(aBuf);
-	}
-
-	VarSizeType GetNowUTC(char *aBuf = NULL)
-	{
-		if (!aBuf)
-			return DATE_FORMAT_LENGTH;
-		SYSTEMTIME st;
-		GetSystemTime(&st);
-		SystemTimeToYYYYMMDD(aBuf, st, false);
-		return (VarSizeType)strlen(aBuf);
-	}
-
-	VarSizeType GetTimeIdlePhysical(char *aBuf = NULL);
-	VarSizeType ScriptGetCursor(char *aBuf = NULL);
-	VarSizeType GetScreenWidth(char *aBuf = NULL);
-	VarSizeType GetScreenHeight(char *aBuf = NULL);
-	VarSizeType GetGuiControlEvent(char *aBuf = NULL);
-	VarSizeType ScriptGetCaret(VarTypeType aVarType, char *aBuf = NULL);
-	VarSizeType GetIP(int aAdapterIndex, char *aBuf = NULL);
-
-	VarSizeType GetSpace(VarTypeType aType, char *aBuf = NULL)
-	{
-		if (!aBuf) return 1;  // i.e. the length of a single space char.
-		*(aBuf++) = aType == VAR_SPACE ? ' ' : '\t';
-		*aBuf = '\0';
-		return 1;
-	}
-
-	VarSizeType GetAhkVersion(char *aBuf = NULL)
-	{
-		if (aBuf)
-			strcpy(aBuf, NAME_VERSION);
-		return (VarSizeType)strlen(NAME_VERSION);
-	}
-
-	// Confirmed: The below will all automatically use the local time (not UTC) when 3rd param is NULL.
-	VarSizeType GetMMMM(char *aBuf = NULL)
-	{
-		return (VarSizeType)(GetDateFormat(LOCALE_USER_DEFAULT, 0, NULL, "MMMM", aBuf, aBuf ? 999 : 0) - 1);
-	}
-	VarSizeType GetMMM(char *aBuf = NULL)
-	{
-		return (VarSizeType)(GetDateFormat(LOCALE_USER_DEFAULT, 0, NULL, "MMM", aBuf, aBuf ? 999 : 0) - 1);
-	}
-	VarSizeType GetDDDD(char *aBuf = NULL)
-	{
-		return (VarSizeType)(GetDateFormat(LOCALE_USER_DEFAULT, 0, NULL, "dddd", aBuf, aBuf ? 999 : 0) - 1);
-	}
-	VarSizeType GetDDD(char *aBuf = NULL)
-	{
-		return (VarSizeType)(GetDateFormat(LOCALE_USER_DEFAULT, 0, NULL, "ddd", aBuf, aBuf ? 999 : 0) - 1);
-	}
-
 	// Call this SciptError to avoid confusion with Line's error-displaying functions:
 	ResultType ScriptError(char *aErrorText, char *aExtraInfo = ""); // , ResultType aErrorType = FAIL);
 
 	#define SOUNDPLAY_ALIAS "AHK_PlayMe"  // Used by destructor and SoundPlay().
+
+	VarSizeType GetBatchLines(char *aBuf = NULL);
+	VarSizeType GetTitleMatchMode(char *aBuf = NULL);
+	VarSizeType GetTitleMatchModeSpeed(char *aBuf = NULL);
+	VarSizeType GetDetectHiddenWindows(char *aBuf = NULL);
+	VarSizeType GetDetectHiddenText(char *aBuf = NULL);
+	VarSizeType GetAutoTrim(char *aBuf = NULL);
+	VarSizeType GetStringCaseSense(char *aBuf = NULL);
+	VarSizeType GetFormatInteger(char *aBuf = NULL);
+	VarSizeType GetFormatFloat(char *aBuf = NULL);
+	VarSizeType GetKeyDelay(char *aBuf = NULL);
+	VarSizeType GetWinDelay(char *aBuf = NULL);
+	VarSizeType GetControlDelay(char *aBuf = NULL);
+	VarSizeType GetMouseDelay(char *aBuf = NULL);
+	VarSizeType GetDefaultMouseSpeed(char *aBuf = NULL);
+	VarSizeType GetIconHidden(char *aBuf = NULL);
+	VarSizeType GetIconTip(char *aBuf = NULL);
+	VarSizeType GetIconFile(char *aBuf = NULL);
+	VarSizeType GetIconNumber(char *aBuf = NULL);
+	VarSizeType GetExitReason(char *aBuf = NULL);
+	VarSizeType GetTimeIdlePhysical(char *aBuf = NULL);
+	VarSizeType GetSpace(VarTypeType aType, char *aBuf = NULL);
+	VarSizeType GetAhkVersion(char *aBuf = NULL);
+	VarSizeType GetMMMM(char *aBuf = NULL);
+	VarSizeType GetMMM(char *aBuf = NULL);
+	VarSizeType GetDDDD(char *aBuf = NULL);
+	VarSizeType GetDDD(char *aBuf = NULL);
+	VarSizeType MyGetTickCount(char *aBuf = NULL);
+	VarSizeType GetNow(char *aBuf = NULL);
+	VarSizeType GetNowUTC(char *aBuf = NULL);
+	VarSizeType GetOSType(char *aBuf = NULL);
+	VarSizeType GetOSVersion(char *aBuf = NULL);
+	VarSizeType GetProgramFiles(char *aBuf = NULL);
+	VarSizeType GetIsAdmin(char *aBuf = NULL);
+	VarSizeType ScriptGetCursor(char *aBuf = NULL);
+	VarSizeType ScriptGetCaret(VarTypeType aVarType, char *aBuf = NULL);
+	VarSizeType GetScreenWidth(char *aBuf = NULL);
+	VarSizeType GetScreenHeight(char *aBuf = NULL);
+	VarSizeType GetIP(int aAdapterIndex, char *aBuf = NULL);
+	VarSizeType GetFilename(char *aBuf = NULL);
+	VarSizeType GetFileDir(char *aBuf = NULL);
+	VarSizeType GetFilespec(char *aBuf = NULL);
+	VarSizeType GetLoopFileName(char *aBuf = NULL);
+	VarSizeType GetLoopFileShortName(char *aBuf = NULL);
+	VarSizeType GetLoopFileDir(char *aBuf = NULL);
+	VarSizeType GetLoopFileFullPath(char *aBuf = NULL);
+	VarSizeType GetLoopFileTimeModified(char *aBuf = NULL);
+	VarSizeType GetLoopFileTimeCreated(char *aBuf = NULL);
+	VarSizeType GetLoopFileTimeAccessed(char *aBuf = NULL);
+	VarSizeType GetLoopFileAttrib(char *aBuf = NULL);
+	VarSizeType GetLoopFileSize(char *aBuf, int aDivider);
+	VarSizeType GetLoopRegType(char *aBuf = NULL);
+	VarSizeType GetLoopRegKey(char *aBuf = NULL);
+	VarSizeType GetLoopRegSubKey(char *aBuf = NULL);
+	VarSizeType GetLoopRegName(char *aBuf = NULL);
+	VarSizeType GetLoopRegTimeModified(char *aBuf = NULL);
+	VarSizeType GetLoopReadLine(char *aBuf = NULL);
+	VarSizeType GetLoopField(char *aBuf = NULL);
+	VarSizeType GetLoopIndex(char *aBuf = NULL);
+	VarSizeType GetThisMenuItem(char *aBuf = NULL);
+	VarSizeType GetThisMenuItemPos(char *aBuf = NULL);
+	VarSizeType GetThisMenu(char *aBuf = NULL);
+	VarSizeType GetThisHotkey(char *aBuf = NULL);
+	VarSizeType GetPriorHotkey(char *aBuf = NULL);
+	VarSizeType GetTimeSinceThisHotkey(char *aBuf = NULL);
+	VarSizeType GetTimeSincePriorHotkey(char *aBuf = NULL);
+	VarSizeType GetEndChar(char *aBuf = NULL);
+	VarSizeType GetGui(char *aBuf = NULL);
+	VarSizeType GetGuiControl(char *aBuf = NULL);
+	VarSizeType GetGuiControlEvent(char *aBuf = NULL);
+	VarSizeType GetTimeIdle(char *aBuf = NULL);
+
 	Script();
 	~Script();
 	// Note that the anchors to any linked lists will be lost when this
