@@ -23,7 +23,7 @@ GNU General Public License for more details.
 #include "keyboard.h" // for modLR_type
 #include "var.h" // for a script's variables.
 #include "WinGroup.h" // for a script's Window Groups.
-#include "C:\A-Source\AutoHotkey\VC++\AutoHotkeyNT\resource.h"  // For tray icon.
+#include "resources\resource.h"  // For tray icon.
 
 // Max size of most strings, such as those passed to ShellExecute(), including zero terminator:
 #define MAX_EXEC_STRING 2048
@@ -79,7 +79,7 @@ enum enum_act {
 , ACT_STRINGTRIMLEFT, ACT_STRINGTRIMRIGHT
 , ACT_STRINGLEN, ACT_STRINGGETPOS, ACT_STRINGREPLACE
 , ACT_RUN, ACT_RUNWAIT
-, ACT_SEND, ACT_CONTROLSEND, ACT_CONTROLLEFTCLICK, ACT_CONTROLGETTEXT
+, ACT_SEND, ACT_CONTROLSEND, ACT_CONTROLLEFTCLICK, ACT_CONTROLSETTEXT, ACT_CONTROLGETTEXT
 , ACT_SETDEFAULTMOUSESPEED, ACT_MOUSEMOVE, ACT_MOUSECLICK, ACT_MOUSECLICKDRAG, ACT_MOUSEGETPOS
 , ACT_STATUSBARGETTEXT
 , ACT_STATUSBARWAIT
@@ -97,12 +97,13 @@ enum enum_act {
 , ACT_WINSETTITLE, ACT_WINGETTITLE, ACT_WINGETPOS, ACT_WINGETTEXT
 // Keep rarely used actions near the bottom for parsing/performance reasons:
 , ACT_GROUPADD, ACT_GROUPACTIVATE, ACT_GROUPDEACTIVATE, ACT_GROUPCLOSE, ACT_GROUPCLOSEALL
+, ACT_DRIVESPACEFREE
 , ACT_FILEAPPEND, ACT_FILEREADLINE, ACT_FILECOPY, ACT_FILEMOVE, ACT_FILEDELETE
 , ACT_FILECREATEDIR, ACT_FILEREMOVEDIR
 , ACT_FILETOGGLEHIDDEN, ACT_FILESETDATEMODIFIED, ACT_FILESELECTFILE
 , ACT_REGREAD, ACT_REGWRITE, ACT_REGDELETE
 , ACT_SETTITLEMATCHMODE, ACT_SETKEYDELAY, ACT_SETWINDELAY, ACT_SETBATCHLINES
-, ACT_STRINGCASESENSE, ACT_DETECTHIDDENWINDOWS, ACT_DETECTHIDDENTEXT
+, ACT_AUTOTRIM, ACT_STRINGCASESENSE, ACT_DETECTHIDDENWINDOWS, ACT_DETECTHIDDENTEXT
 , ACT_SETNUMLOCKSTATE, ACT_SETSCROLLLOCKSTATE, ACT_SETCAPSLOCKSTATE, ACT_SETSTORECAPSLOCKMODE
 , ACT_FORCE_KEYBD_HOOK
 , ACT_KEYLOG, ACT_LISTLINES, ACT_LISTVARS, ACT_LISTHOTKEYS
@@ -133,6 +134,9 @@ enum enum_act_old {
 
 #define ERR_ABORT "  The current hotkey subroutine (or the entire script if"\
 	" this isn't a hotkey subroutine) will be aborted."
+#define WILL_EXIT "The program will exit."
+#define OLD_STILL_IN_EFFECT "The new config file was not loaded; the old config will remain in effect."
+#define PLEASE_REPORT "  Please report this as a bug."
 #define ERR_UNRECOGNIZED_ACTION "This line does not contain a recognized action."
 #define ERR_MISSING_OUTPUT_VAR "This command requires that at least one of its output variables be provided."
 #define ERR_ELSE_WITH_NO_IF "This ELSE doesn't appear to belong to any IF-statement."
@@ -141,6 +145,8 @@ enum enum_act_old {
 #define ERR_LOOP_FILE_MODE "This line specifies an invalid file-loop mode."
 #define ERR_ON_OFF "If not blank, the value must be either ON, OFF, or a dereferenced variable."
 #define ERR_ON_OFF_ALWAYS "If not blank, the value must be either ON, OFF, ALWAYSON, ALWAYSOFF, or a dereferenced variable."
+#define ERR_TITLEMATCHMODE "TitleMatchMode must be either 1, 2, slow, fast, or a dereferenced variable."
+#define ERR_TITLEMATCHMODE2 "The variable does not contain a valid TitleMatchMode (the value must be either 1, 2, slow, or fast)." ERR_ABORT
 #define ERR_IFMSGBOX "This line specifies an invalid MsgBox result."
 #define ERR_RUN_SHOW_MODE "The 3rd parameter must be either blank or one of these words: min, max, hide."
 #define ERR_MOUSE_BUTTON "This line specifies an invalid mouse button."
@@ -148,9 +154,8 @@ enum enum_act_old {
 #define ERR_MOUSE_SPEED "The Mouse Speed must be a number between 0 and " MAX_MOUSE_SPEED_STR ", or a dereferenced variable."
 #define ERR_MEM_ASSIGN "Out of memory while assigning to this variable." ERR_ABORT
 #define ERR_VAR_IS_RESERVED "This variable is reserved and cannot be assigned to."
-#define PLEASE_REPORT "  Please report this as a bug."
-#define WILL_EXIT "The program will exit."
-#define OLD_STILL_IN_EFFECT "The new config file was not loaded; the old config will remain in effect."
+#define ERR_DEFINE_CHAR "The character being defined must not be identical to another special or reserved character."
+#define ERR_DEFINE_COMMENT "The comment flag must not be one of the hotkey definition symbols (e.g. ! ^ + $ * < >)."
 
 //----------------------------------------------------------------------------------
 
@@ -166,10 +171,9 @@ struct InputBoxType
 
 typedef UINT LineNumberType;
 
-// -2 for the beginning and ending DEREF_CHARs:
+// -2 for the beginning and ending g_DerefChars:
 #define MAX_VAR_NAME_LENGTH (UCHAR_MAX - 2)
 #define MAX_DEREFS_PER_ARG 512
-#define DEREF_CHAR '%'
 typedef UCHAR DerefLengthType;
 struct DerefType
 {
@@ -213,6 +217,7 @@ private:
 	ResultType EvaluateCondition();
 	ResultType Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurrentFile = NULL);
 	ResultType PerformAssign();
+	ResultType DriveSpaceFree(char *aPath);
 	ResultType FileSelectFile(char *aOptions, char *aWorkingDir);
 	ResultType FileCreateDir(char *aDirSpec);
 	ResultType FileReadLine(char *aFilespec, char *aLineNumber);
@@ -246,6 +251,8 @@ private:
 	ResultType ControlSend(char *aControl, char *aKeysToSend, char *aTitle, char *aText
 		, char *aExcludeTitle, char *aExcludeText, modLR_type aModifiersLR);
 	ResultType ControlLeftClick(char *aControl, char *aTitle, char *aText
+		, char *aExcludeTitle, char *aExcludeText);
+	ResultType ControlSetText(char *aControl, char *aNewText, char *aTitle, char *aText
 		, char *aExcludeTitle, char *aExcludeText);
 	ResultType ControlGetText(char *aControl, char *aTitle, char *aText
 		, char *aExcludeTitle, char *aExcludeText);
@@ -314,6 +321,7 @@ public:
 	#define SAVED_ARG2 (mArgc > 1 ? arg[1] : "")
 	#define SAVED_ARG3 (mArgc > 2 ? arg[2] : "")
 	#define SAVED_ARG4 (mArgc > 3 ? arg[3] : "")
+	#define SAVED_ARG5 (mArgc > 4 ? arg[4] : "")
 	#define ARG1 (mArgc > 0 ? sArgDeref[0] : "")
 	#define ARG2 (mArgc > 1 ? sArgDeref[1] : "")
 	#define ARG3 (mArgc > 2 ? sArgDeref[2] : "")
@@ -363,8 +371,8 @@ public:
 	ResultType CheckForMandatoryArgs();
 
 	bool ArgHasDeref(int aArgNum)
-	// This function should always be called in lieu of doing something like "strchr(arg.text, DEREF_CHAR)"
-	// because that method is unreliable due to the possible presence of literal (escaped) DEREF_CHARs
+	// This function should always be called in lieu of doing something like "strchr(arg.text, g_DerefChar)"
+	// because that method is unreliable due to the possible presence of literal (escaped) g_DerefChars
 	// in the text.
 	// aArgNum starts at 1 (for the first arg), so zero is invalid).
 	{
@@ -435,6 +443,16 @@ public:
 			return (aArgNum == 1 || aArgNum == 2);
 		}
 		return false;  // Since above didn't return, negative is not allowed.
+	}
+
+	static TitleMatchModes ConvertTitleMatchMode(char *aBuf)
+	{
+		if (!aBuf || !*aBuf) return MATCHMODE_INVALID;
+		if (*aBuf == '1' && !*(aBuf + 1)) return FIND_IN_LEADING_PART;
+		if (*aBuf == '2' && !*(aBuf + 1)) return FIND_ANYWHERE;
+		if (!stricmp(aBuf, "FAST")) return FIND_FAST;
+		if (!stricmp(aBuf, "SLOW")) return FIND_SLOW;
+		return MATCHMODE_INVALID;
 	}
 
 	static ToggleValueType ConvertOnOff(char *aBuf, ToggleValueType aDefault = TOGGLE_INVALID)
@@ -579,8 +597,9 @@ private:
 	LineNumberType mFileLineCount;  // How many physical lines are in the file.
 	NOTIFYICONDATA mNIC; // For ease of adding and deleting our tray icon.
 
-	size_t GetLine(char *aBuf, int aMaxCharsToRead, FILE *fp);
 	int CloseAndReturn(FILE *fp, int return_value);
+	size_t GetLine(char *aBuf, int aMaxCharsToRead, FILE *fp);
+	ResultType IsPreprocessorDirective(char *aBuf);
 
 	ResultType ParseAndAddLine(char *aLineText, char *aActionName = NULL, char *aEndMarker = NULL
 		, char *aLiteralMap = NULL, size_t aLiteralMapLength = 0
@@ -606,6 +625,7 @@ public:
 	char *mFileSpec; // Will hold the full filespec, for convenience.
 	char *mFileDir;  // Will hold the directory containing the script file.
 	char *mFileName; // Will hold the script's naked file name.
+	char *mOurEXE; // Will hold this app's module name (e.g. C:\Program Files\AutoHotkey.exe).
 	char *mMainWindowTitle; // Will hold our main window's title, for consistency & convenience.
 	bool mIsReadyToExecute;
 	bool mIsRestart; // The app is restarting rather than starting from scratch.
@@ -633,12 +653,9 @@ public:
 
 	ResultType Reload()
 	{
-		char module_spec[MAX_PATH];
-		if (!GetModuleFileName(NULL, module_spec, sizeof(module_spec))) // Probably can't realistically fail.
-			return FAIL;
 		char arg_string[MAX_PATH + 512];
 		snprintf(arg_string, sizeof(arg_string), "/restart %s", mFileSpec);
-		Script::ActionExec(module_spec, arg_string); // It will tell our process to stop.
+		Script::ActionExec(mOurEXE, arg_string); // It will tell our process to stop.
 		return OK;
 	}
 

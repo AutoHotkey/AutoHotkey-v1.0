@@ -1,0 +1,30 @@
+Microsoft Visual Studio Solution File, Format Version 8.00
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "AutoHotkey", "AutoHotkey.vcproj", "{76EFDEE3-81CF-4ADA-94DC-EA5509FF6FFC}"
+	ProjectSection(ProjectDependencies) = postProject
+	EndProjectSection
+EndProject
+Global
+	GlobalSection(SourceCodeControl) = preSolution
+		SccNumberOfProjects = 2
+		SccLocalPath0 = .
+		CanCheckoutShared = false
+		SolutionUniqueID = {B0ADBC10-B553-4F85-B5DD-0BECAD09EFD2}
+		SccProjectUniqueName1 = AutoHotkey.vcproj
+		SccLocalPath1 = .
+		CanCheckoutShared = false
+	EndGlobalSection
+	GlobalSection(SolutionConfiguration) = preSolution
+		Debug = Debug
+		Release = Release
+	EndGlobalSection
+	GlobalSection(ProjectConfiguration) = postSolution
+		{76EFDEE3-81CF-4ADA-94DC-EA5509FF6FFC}.Debug.ActiveCfg = Debug|Win32
+		{76EFDEE3-81CF-4ADA-94DC-EA5509FF6FFC}.Debug.Build.0 = Debug|Win32
+		{76EFDEE3-81CF-4ADA-94DC-EA5509FF6FFC}.Release.ActiveCfg = Release|Win32
+		{76EFDEE3-81CF-4ADA-94DC-EA5509FF6FFC}.Release.Build.0 = Release|Win32
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+	EndGlobalSection
+	GlobalSection(ExtensibilityAddIns) = postSolution
+	EndGlobalSection
+EndGlobal

@@ -43,7 +43,7 @@ Script::Script()
 	, mFirstVar(NULL), mLastVar(NULL)
 	, mLineCount(0), mLabelCount(0), mVarCount(0), mGroupCount(0)
 	, mFileLineCount(0)
-	, mFileSpec(""), mFileDir(""), mFileName(""), mMainWindowTitle("")
+	, mFileSpec(""), mFileDir(""), mFileName(""), mOurEXE(""), mMainWindowTitle("")
 	, mIsReadyToExecute(false)
 	, mIsRestart(false)
 	, mIsAutoIt2(false)
@@ -111,14 +111,15 @@ ResultType Script::Init(char *aScriptFilename, bool aIsRestart)
 	if (   mIsAutoIt2 = (filename_length >= 4 && !stricmp(filename_marker + filename_length - 4, ".aut"))   )
 	{
 		// Set the old/AutoIt2 defaults for maximum safety and compatibilility:
+		g_AllowSameLineComments = false;
 		g_EscapeChar = '\\';
-		g.TitleMatchMode = FIND_IN_LEADING_PART_FAST; // This is probably AutoIt2's method.
+		g.TitleFindFast = true; // In case the normal default is false.
 		g.DetectHiddenText = false;
 		g.DefaultMouseSpeed = 1;  // Make the mouse fast like AutoIt2, but not quite insta-move.
 		g.KeyDelay = 20;
 		g.WinDelay = 500;
 		g.LinesPerCycle = 1;
-		// Reduce max params so that any non escaped delimiters the user may be using literall
+		// Reduce max params so that any non escaped delimiters the user may be using literally
 		// in "window text" will still be considered literal, rather than as delimiters for
 		// args that are not supported by AutoIt2, such as exclude-title, exclude-text, MsgBox
 		// timeout, etc.  Note: Don't need to change IfWinExist and such because those already
@@ -145,6 +146,9 @@ ResultType Script::Init(char *aScriptFilename, bool aIsRestart)
 	snprintf(buf, sizeof(buf), "%s\\%s - %s", mFileDir, mFileName, NAME_PV);
 	if (   !(mMainWindowTitle = SimpleHeap::Malloc(buf))   )
 		return FAIL;  // It already displayed the error for us.
+	if (GetModuleFileName(NULL, buf, sizeof(buf))) // realistically, probably can't fail.
+		if (   !(mOurEXE = SimpleHeap::Malloc(buf))   )
+			return FAIL;  // It already displayed the error for us.
 	return OK;
 }
 
@@ -239,7 +243,7 @@ ResultType Script::CreateWindows(HINSTANCE aInstance)
 	strlcpy(mNIC.szTip, mFileName ? mFileName : NAME_P, sizeof(mNIC.szTip));
 	if (!Shell_NotifyIcon(NIM_ADD, &mNIC))
 	{
-		mNIC.hWnd = NULL;  // Set this as an indicator that it tray icon is not installed.
+		mNIC.hWnd = NULL;  // Set this as an indicator that tray icon is not installed.
 		return FAIL;
 	}
 	return OK;
@@ -413,7 +417,7 @@ int Script::LoadFromFile()
 			// This is to avoid problems where a legitimate action-line ends in a colon,
 			// such as WinActivate, SomeTitle:
 			// We allow hotkeys to violate this since they may contain commas, and since a normal
-			// action-line is unlikely to ever end in a double-colon:
+			// script line (i.e. just a plain command) is unlikely to ever end in a double-colon:
 			for (cp = buf, is_label = true; *cp; ++cp)
 				if (isspace(*cp) || *cp == g_delimiter || *cp == g_EscapeChar)
 				{
@@ -427,6 +431,18 @@ int Script::LoadFromFile()
 			if (AddLabel(buf) != OK)
 				return CloseAndReturn(fp, -1);
 			continue;
+		}
+		// It's not a label.
+		if (*buf == '#')
+		{
+			switch(IsPreprocessorDirective(buf))
+			{
+			case CONDITION_TRUE:
+				continue;
+			case FAIL:
+				return CloseAndReturn(fp, -1); // It already reported the error.
+			// Otherwise it's CONDITION_FALSE.  Do nothing.
+			}
 		}
 		// Otherwise it's just a normal script line:
 		if (ParseAndAddLine(buf) != OK)
@@ -527,7 +543,7 @@ size_t Script::GetLine(char *aBuf, int aMaxCharsToRead, FILE *fp)
 	// allow these types of comments if the script is considers to be the AutoIt2
 	// style, to improve compatibility with old scripts that may use non-escaped
 	// comment-flags as literal characters rather than comments:
-	if (!mIsAutoIt2)
+	if (g_AllowSameLineComments)
 	{
 		char *cp, *prevp;
 		for (cp = strstr(aBuf, g_CommentFlag); cp; cp = strstr(cp + g_CommentFlagLength, g_CommentFlag))
@@ -557,6 +573,95 @@ size_t Script::GetLine(char *aBuf, int aMaxCharsToRead, FILE *fp)
 	}
 
 	return strlen(aBuf);  // Return an updated length due to trim().
+}
+
+
+
+inline ResultType Script::IsPreprocessorDirective(char *aBuf)
+// Returns CONDITION_TRUE, CONDITION_FALSE, or FAIL.
+// Note: Don't assume that every line in the script that starts with '#' is a directive
+// because hotkeys can legitimately start with that as well.  i.e., the following line should
+// not be unconditionally ignored, just because it starts with '#', since it is a valid hotkey:
+// #y::run, notepad
+{
+	char end_flags[] = {' ', '\t', g_delimiter, '\0'}; // '\0' must be last.
+	char *cp;
+	// Use strnicmp() so that a match is found as long as aBuf starts with the string in question.
+	// e.g. so that "#SingleInstance, on" will still work too, but
+	// "#a::run, something, "#SingleInstance" (i.e. a hotkey) will not be falsely detected
+	// due to using a more lenient function such as stristr():
+	#define IF_IS_DIRECTIVE_MATCH(directive) if (!strnicmp(aBuf, directive, strlen(directive)))
+	IF_IS_DIRECTIVE_MATCH("#SingleInstance")
+	{
+		g_AllowOnlyOneInstance = true;
+		return CONDITION_TRUE;
+	}
+	IF_IS_DIRECTIVE_MATCH("#AllowSameLineComments")  // i.e. There's no way to turn it off, only on.
+	{
+		g_AllowSameLineComments = true;
+		return CONDITION_TRUE;
+	}
+
+	// For the below series, it seems okay to allow the comment flag to contain other reserved chars,
+	// such as DerefChar, since comments are evaluated, and then taken out of the game at an earlier
+	// stage than DerefChar and the other special chars.
+	IF_IS_DIRECTIVE_MATCH("#CommentFlag")
+	{
+		#define RETURN_IF_NO_CHAR \
+		if (   !(cp = StrChrAny(aBuf, end_flags))   )\
+			return CONDITION_TRUE;\
+		if (   !*(cp = omit_leading_whitespace(cp))   )\
+			return CONDITION_TRUE;
+		RETURN_IF_NO_CHAR
+		if (!*(cp + 1))  // i.e. the length is 1
+		{
+			// Don't allow '#' since it's the preprocessor directive symbol being used here.
+			if (*cp == '#' || *cp == g_DerefChar || *cp == g_EscapeChar || *cp == g_delimiter)
+				return ScriptError(ERR_DEFINE_CHAR);
+			// Exclude hotkey definition chars, such as ^ and !, because otherwise
+			// the following example wouldn't work:
+			// User defines ! as the comment flag.
+			// The following hotkey would never be in effect since it's considered to
+			// be commented out:
+			// !^a::run,notepad
+			if (*cp == '!' || *cp == '^' || *cp == '+' || *cp == '$' || *cp == '*' || *cp == '<' || *cp == '>')
+				// Note that '#' is already covered by the other stmt. above.
+				return ScriptError(ERR_DEFINE_COMMENT);
+		}
+		strlcpy(g_CommentFlag, cp, MAX_COMMENT_FLAG_LENGTH + 1);
+		g_CommentFlagLength = strlen(g_CommentFlag);  // Keep this in sync with above.
+		return CONDITION_TRUE;
+	}
+	IF_IS_DIRECTIVE_MATCH("#EscapeChar")
+	{
+		RETURN_IF_NO_CHAR
+		if (   *cp == '#' || *cp == g_DerefChar || *cp == g_delimiter
+			|| (g_CommentFlagLength == 1 && *cp == *g_CommentFlag)   )
+			return ScriptError(ERR_DEFINE_CHAR);
+		g_EscapeChar = *cp;
+		return CONDITION_TRUE;
+	}
+	IF_IS_DIRECTIVE_MATCH("#DerefChar")
+	{
+		RETURN_IF_NO_CHAR
+		if (   *cp == '#' || *cp == g_EscapeChar || *cp == g_delimiter
+			|| (g_CommentFlagLength == 1 && *cp == *g_CommentFlag)   )
+			return ScriptError(ERR_DEFINE_CHAR);
+		g_DerefChar = *cp;
+		return CONDITION_TRUE;
+	}
+	IF_IS_DIRECTIVE_MATCH("#Delimiter")
+	{
+		RETURN_IF_NO_CHAR
+		if (   *cp == '#' || *cp == g_EscapeChar || *cp == g_DerefChar
+			|| (g_CommentFlagLength == 1 && *cp == *g_CommentFlag)   )
+			return ScriptError(ERR_DEFINE_CHAR);
+		g_delimiter = *cp;
+		return CONDITION_TRUE;
+	}
+
+	// Otherwise:
+	return CONDITION_FALSE;
 }
 
 
@@ -661,7 +766,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 		// Resolve escaped sequences and make a map of which characters in the string should
 		// be interpreted literally rather than as their native function.  In other words,
 		// convert any escape sequences in order from left to right (this order is important,
-		// e.g. ``% should evaluate to `DEREF_CHAR not `LITERAL_PERCENT.  This part must be
+		// e.g. ``% should evaluate to `g_DerefChar not `LITERAL_PERCENT.  This part must be
 		// done *after* checking for comment-flags that appear to the right of a valid line, above.
 		// How literal comment-flags (e.g. semicolons) work:
 		//string1; string2 <-- not a problem since string2 won't be considered a comment by the above.
@@ -669,7 +774,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 		//string1 `; string 2  <-- since esc seq. is resolved *after* checking for comments, this behaves as intended.
 		// Current limitation: a comment-flag longer than 1 can't be escaped, so if "//" were used,
 		// as a comment flag, it could never have whitespace to the left of it if it were meant to be literal.
-		// Note: This section resolves all escape sequences except those involving DEREF_CHAR, which
+		// Note: This section resolves all escape sequences except those involving g_DerefChar, which
 		// are handled by a later section.
 		char c;
 		int i;
@@ -692,14 +797,14 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 			// Replace escape-sequence with its single-char value.  This is done event if the pair isn't
 			// a recognizable escape sequence (e.g. `? becomes ?), which is the Microsoft approach
 			// and might not be a bad way of handing things.  There are some exceptions, however.
-			// The first of these exceptions (DEREF_CHAR) is mandatory because that char must be
-			// handled at a later stage or escaped DEREF_CHARs won't work right.  The others are
-			// questionable, and might be worth further consideration.  UPDATE: DEREF_CHAR is now
+			// The first of these exceptions (g_DerefChar) is mandatory because that char must be
+			// handled at a later stage or escaped g_DerefChars won't work right.  The others are
+			// questionable, and might be worth further consideration.  UPDATE: g_DerefChar is now
 			// done here because otherwise, examples such as this fail:
 			// - The escape char is backslash.
 			// - any instances of \\%, such as c:\\%var% , will not work because the first escape
 			// sequence (\\) is resolved to a single literal backslash.  But then when \% is encountered
-			// by the section that resolves escape sequences for DEREF_CHAR, the backslash is seen
+			// by the section that resolves escape sequences for g_DerefChar, the backslash is seen
 			// as an escape char rather than a literal backslash, which is not correct.  Thus, we
 			// resolve all escapes sequences HERE in one go, from left to right.
 			if (c != '\0' && c != ' ' && c != '\t')
@@ -1202,7 +1307,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			////////////////////////////////////////////////////
 			// Build the list of dereferenced vars for this arg.
 			////////////////////////////////////////////////////
-			// Now that any escaped DEREF_CHARs have been marked, scan new_arg.text to
+			// Now that any escaped g_DerefChars have been marked, scan new_arg.text to
 			// determine where the variable dereferences are (if any).  In addition to helping
 			// runtime performance, this also serves to validate the script at load-time
 			// so that some errors can be caught early.  Note: new_arg[i].text is scanned rather
@@ -1212,9 +1317,9 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			// For each dereference:
 			for (j = 0; ; ++j)  // Increment to skip over the symbol just found by the inner for().
 			{
-				// Find next non-literal DEREF_CHAR:
+				// Find next non-literal g_DerefChar:
 				for (; new_arg[i].text[j]
-					&& (new_arg[i].text[j] != DEREF_CHAR || (aArgMap && aArgMap[i][j])); ++j);
+					&& (new_arg[i].text[j] != g_DerefChar || (aArgMap && aArgMap[i][j])); ++j);
 				if (!new_arg[i].text[j])
 					break;
 				// else: Match was found; this is the deref's open-symbol.
@@ -1222,17 +1327,17 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					return ScriptError("The maximum number of variable dereferences has been"
 						" exceeded in this parameter.", new_arg[i].text);
 				deref[deref_count].marker = new_arg[i].text + j;  // Store the deref's starting location.
-				// Find next DEREF_CHAR, even if it's a literal.
-				for (++j; new_arg[i].text[j] && new_arg[i].text[j] != DEREF_CHAR; ++j);
+				// Find next g_DerefChar, even if it's a literal.
+				for (++j; new_arg[i].text[j] && new_arg[i].text[j] != g_DerefChar; ++j);
 				if (!new_arg[i].text[j])
 					return ScriptError("This parameter contains a variable name"
 						" that is missing its ending dereference symbol.", new_arg[i].text);
 				// Otherwise: Match was found; this should be the deref's close-symbol.
-				if (aArgMap && aArgMap[i][j])  // But it's mapped as literal DEREF_CHAR.
+				if (aArgMap && aArgMap[i][j])  // But it's mapped as literal g_DerefChar.
 					return ScriptError("This parmeter contains a variable name with"
 						" an escaped dereference symbol, which is not allowed.", new_arg[i].text);
 				deref_string_length = new_arg[i].text + j - deref[deref_count].marker + 1;
-				if (deref_string_length - 2 > MAX_VAR_NAME_LENGTH) // -2 for the opening & closing DEREF_CHARs
+				if (deref_string_length - 2 > MAX_VAR_NAME_LENGTH) // -2 for the opening & closing g_DerefChars
 					return ScriptError("This parmeter contains a variable name that is too long."
 						, new_arg[i].text);
 				deref[deref_count].length = (DerefLengthType)deref_string_length;
@@ -1251,8 +1356,9 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			case ACT_DETECTHIDDENWINDOWS:
 			case ACT_DETECTHIDDENTEXT:
 			case ACT_SETSTORECAPSLOCKMODE:
+			case ACT_AUTOTRIM:
 			case ACT_STRINGCASESENSE:
-				if (i != 0) break;  // Should never happen in these cases.
+			if (i != 0) break;  // Should never happen in these cases.
 				if (!deref_count)
 					if (!Line::ConvertOnOff(new_arg[i].text))
 						return ScriptError(ERR_ON_OFF, g_act[aActionType].Name);
@@ -1301,17 +1407,6 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			case ACT_SETDEFAULTMOUSESPEED:
 				if (i != 0) break; // i.e. 1st param
 				VALIDATE_MOUSE_SPEED
-
-			case ACT_SETTITLEMATCHMODE:
-				if (i != 0) break;
-				if (!deref_count)
-				{
-					value = atoi(new_arg[i].text);
-					if (value < 1 || value > 4)
-						return ScriptError("The TitleMatchMode must be between 1 and 4, or a dereferenced variable."
-							, new_arg[i].text);
-				}
-				break;
 
 			case ACT_FILECOPY:
 			case ACT_FILEMOVE:
@@ -1431,6 +1526,10 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	///////////////////////////////////////////////////////////////////
 	switch(aActionType)
 	{
+	case ACT_SETTITLEMATCHMODE:
+		if (line->mArgc > 0 && !line->ArgHasDeref(1) && !line->ConvertTitleMatchMode(LINE_RAW_ARG1))
+			return ScriptError(ERR_TITLEMATCHMODE, LINE_RAW_ARG1);
+		break;
 	case ACT_MSGBOX:
 		if (line->mArgc > 1) // i.e. this MsgBox is using the 4-param style.
 			if (!line->ArgHasDeref(1)) // i.e. if it's a deref, we won't try to validate it now.
@@ -2799,29 +2898,29 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			switch(mActionType)
 			{
 			case ACT_WINWAIT:
-				#define FOUR_SAVED_ARGS SAVED_ARG1, SAVED_ARG2, SAVED_ARG3, SAVED_ARG4
-				if (WinExist(FOUR_SAVED_ARGS, false, true))
+				#define SAVED_WIN_ARGS SAVED_ARG1, SAVED_ARG2, SAVED_ARG4, SAVED_ARG5
+				if (WinExist(SAVED_WIN_ARGS, false, true))
 				{
 					DoWinDelay;
 					return OK;
 				}
 				break;
 			case ACT_WINWAITCLOSE:
-				if (!WinExist(FOUR_SAVED_ARGS))
+				if (!WinExist(SAVED_WIN_ARGS))
 				{
 					DoWinDelay;
 					return OK;
 				}
 				break;
 			case ACT_WINWAITACTIVE:
-				if (WinActive(FOUR_SAVED_ARGS))
+				if (WinActive(SAVED_WIN_ARGS))
 				{
 					DoWinDelay;
 					return OK;
 				}
 				break;
 			case ACT_WINWAITNOTACTIVE:
-				if (!WinActive(FOUR_SAVED_ARGS))
+				if (!WinActive(SAVED_WIN_ARGS))
 				{
 					DoWinDelay;
 					return OK;
@@ -2843,7 +2942,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 				if (exit_code != STATUS_PENDING)
 				{
 					CloseHandle(running_process);
-					g_ErrorLevel->Assign(exit_code); // Assign it as a signed int, since that is more typical?
+					g_ErrorLevel->Assign((int)exit_code); // Use signed vs. unsigned, since that is more typical?
 					return OK;
 				}
 				break;
@@ -2870,6 +2969,8 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		return ControlSend(SIX_ARGS, aModifiersLR);
 	case ACT_CONTROLLEFTCLICK:
 		return ControlLeftClick(FIVE_ARGS);
+	case ACT_CONTROLSETTEXT:
+		return ControlSetText(SIX_ARGS);
 	case ACT_CONTROLGETTEXT:
 		return ControlGetText(ARG2, ARG3, ARG4, ARG5, ARG6);
 	case ACT_STATUSBARGETTEXT:
@@ -2921,7 +3022,6 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		if (!target_window)
 			return OK;
 
-		bool window_is_hung = false; // Init; important for below.
 		switch (mActionType)
 		{
 			// SW_FORCEMINIMIZE: supported only in Windows 2000/XP and beyond: "Minimizes a window,
@@ -2935,22 +3035,33 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			// this way.
 			// Note: The use of IsHungAppWindow() (supported under Win2k+) is discouraged by MS,
 			// so we won't use it here even though it probably performs much better.
-			case ACT_WINMINIMIZE: nCmdShow = g_os.IsWin2000orLater()
-				? ((window_is_hung = IsWindowHung(target_window)) ? SW_FORCEMINIMIZE : SW_MINIMIZE)
-				: SW_MINIMIZE; break;
-			case ACT_WINMAXIMIZE: nCmdShow = SW_MAXIMIZE; break;
+			#define SW_INVALID -1
+			case ACT_WINMINIMIZE:
+				if (g_os.IsWin2000orLater())
+					nCmdShow = IsWindowHung(target_window) ? SW_FORCEMINIMIZE : SW_MINIMIZE;
+				else
+					// If it's not Win2k or later, don't attempt to minimize hung windows because I
+					// have an 80% expectation (i.e. untested) that our thread would hang because
+					// the call to ShowWindow() would never return.  I have confirmed that SW_MINIMIZE
+					// can lock up our thread on WinXP, which is why we revert to SW_FORCEMINIMIZE
+					// above.
+					nCmdShow = IsWindowHung(target_window) ? SW_INVALID : SW_MINIMIZE;
+				break;
+			case ACT_WINMAXIMIZE: nCmdShow = IsWindowHung(target_window) ? SW_INVALID : SW_MAXIMIZE; break;
+			case ACT_WINRESTORE:  nCmdShow = IsWindowHung(target_window) ? SW_INVALID : SW_RESTORE;  break;
+			// Seems safe to assume it's not hung in these cases, since I'm inclined to believe
+			// (untested) that hiding and showing a hung window won't lock up our thread, and
+			// there's a chance they may be effective even against hung windows, unlike the
+			// others above (except ACT_WINMINIMIZE, which has a special FORCE method):
 			case ACT_WINHIDE: nCmdShow = SW_HIDE; break;
 			case ACT_WINSHOW: nCmdShow = SW_SHOW; break;
-			case ACT_WINRESTORE: nCmdShow = SW_RESTORE; break;
 		}
-		// If it's not Win2k or later, don't attempt to minimize hung windows because I
-		// have an 80% expectation (i.e. untested) that our thread would hang because
-		// the call to ShowWindow() would never return.  UPDATE:  Trying ShowWindowAsync()
+		// UPDATE:  Trying ShowWindowAsync()
 		// now, which should avoid the problems with hanging.  UPDATE #2: Went back to
 		// not using Async() because sometimes the script lines that come after the one
 		// that is doing this action here rely on this action having been completed
 		// (e.g. a window being maximized prior to clicking somewhere inside it).
-		if (!window_is_hung || mActionType != ACT_WINMINIMIZE || g_os.IsWin2000orLater())
+		if (nCmdShow != SW_INVALID)
 		{
 			// I'm not certain that SW_FORCEMINIMIZE works with ShowWindowAsync(), but
 			// it probably does since there's absolutely no mention to the contrary
@@ -3168,11 +3279,12 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			else
 				StrReplace(OUTPUT_VAR->Contents(), ARG3, ARG4, g.StringCaseSense);
 
-		if (g_script.mIsAutoIt2)
-		{
-			trim(OUTPUT_VAR->Contents());  // Since this is how AutoIt2 behaves.
-			OUTPUT_VAR->Length() = (VarSizeType)strlen(OUTPUT_VAR->Contents());
-		}
+		// UPDATE: This is NOT how AutoIt2 behaves, so don't do it:
+		//if (g_script.mIsAutoIt2)
+		//{
+		//	trim(OUTPUT_VAR->Contents());  // Since this is how AutoIt2 behaves.
+		//	OUTPUT_VAR->Length() = (VarSizeType)strlen(OUTPUT_VAR->Contents());
+		//}
 
 		// Consider the above to have been always successful unless the below returns an error:
 		return OUTPUT_VAR->Close();  // In case it's the clipboard.
@@ -3212,6 +3324,8 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		// Note: This line's args have not yet been dereferenced in this case.  The below
 		// function will handle that if it is needed.
 		return PerformAssign();  // It will report any errors for us.
+	case ACT_DRIVESPACEFREE:
+		return DriveSpaceFree(ARG2);
 	case ACT_FILESELECTFILE:
 		return FileSelectFile(ARG2, ARG3);
 	case ACT_FILECREATEDIR:
@@ -3505,11 +3619,22 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			g.DefaultMouseSpeed = DEFAULT_MOUSE_SPEED;
 		return OK;
 	case ACT_SETTITLEMATCHMODE:
-		g.TitleMatchMode = (TitleMatchModes)atoi(ARG1);
-		// In case it was a deref, force it to be some default value if it's out of range:
-		if (g.TitleMatchMode < 1 || g.TitleMatchMode > 4)
-			g.TitleMatchMode = FIND_ANYWHERE; // The safest default?
-		return OK;
+		switch (ConvertTitleMatchMode(ARG1))
+		{
+		case FIND_IN_LEADING_PART:
+			g.TitleFindAnywhere = false;
+			return OK;
+		case FIND_ANYWHERE:
+			g.TitleFindAnywhere = true;
+			return OK;
+		case FIND_FAST:
+			g.TitleFindFast = true;
+			return OK;
+		case FIND_SLOW:
+			g.TitleFindFast = false;
+			return OK;
+		}
+		return LineError(ERR_TITLEMATCHMODE2, FAIL, ARG1);
 	case ACT_SETWINDELAY: g.WinDelay = atoi(ARG1); return OK;
 	case ACT_SETKEYDELAY: g.KeyDelay = atoi(ARG1); return OK;
 	case ACT_SETBATCHLINES:
@@ -3527,6 +3652,10 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_SETSTORECAPSLOCKMODE:
 		if (   (toggle = ConvertOnOff(ARG1, NEUTRAL)) != NEUTRAL   )
 			g.StoreCapslockMode = (toggle == TOGGLED_ON);
+		return OK;
+	case ACT_AUTOTRIM:
+		if (   (toggle = ConvertOnOff(ARG1, NEUTRAL)) != NEUTRAL   )
+			g.AutoTrim = (toggle == TOGGLED_ON);
 		return OK;
 	case ACT_STRINGCASESENSE:
 		if (   (toggle = ConvertOnOff(ARG1, NEUTRAL)) != NEUTRAL   )
@@ -4019,10 +4148,10 @@ ResultType Script::ScriptError(char *aErrorText, char *aExtraInfo)
 
 void Script::ShowInEditor()
 {
-	TitleMatchModes old_mode = 	g.TitleMatchMode;
-	g.TitleMatchMode = FIND_ANYWHERE_FAST;
+	bool old_mode = g.TitleFindAnywhere;
+	g.TitleFindAnywhere = true;
 	HWND editor = WinExist(mFileName);
-	g.TitleMatchMode = old_mode;
+	g.TitleFindAnywhere = old_mode;
 	if (!editor)
 		return;
 	char buf[256];

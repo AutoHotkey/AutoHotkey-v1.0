@@ -33,8 +33,8 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 
 	// Set defaults, to be overridden by command line args we receive:
 #ifdef _DEBUG
-	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Find.aut";
-	char *script_filespec = "C:\\Util\\AutoHotkey.ini";
+	char *script_filespec = "C:\\A-Source\\AutoHotkey\\Find.aut";
+	//char *script_filespec = "C:\\Util\\AutoHotkey.ini";
 	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
 #else
 	char *script_filespec = NAME_P ".ini";  // Use this extension for better file associate with editor(s).
@@ -60,6 +60,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 			script_filespec = __argv[i];
 	}
 
+	global_init(&g);  // Set defaults prior to the below, since below might override them for AutoIt2 scripts.
 	if (g_script.Init(script_filespec, restart_mode) != OK)  // Set up the basics of the script, using the above.
 		return CRITICAL_ERROR;
 
@@ -73,10 +74,20 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	//CreateMutex(NULL, TRUE, script_filespec); // script_filespec seems a good choice for uniqueness.
 	//if (!g_ForceLaunch && !restart_mode && GetLastError() == ERROR_ALREADY_EXISTS)
 
+	// Init global arrays after chances to exit have passed:
+	init_vk_to_sc();
+	init_sc_to_vk();
+
+	int load_result = g_script.LoadFromFile();
+	if (load_result < 0) // Error during load (was already displayed by the function call).
+		return CRITICAL_ERROR;  // Should return this value because PostQuitMessage() also uses it.
+	if (!load_result) // No lines were loaded, so we're done.
+		return 0;
+
 	// Note: the title below must be constructed the same was as is done by our
 	// CreateWindows(), which is why it's standardized in g_script.mMainWindowTitle:
 	HWND w_existing = FindWindow(WINDOW_CLASS_NAME, g_script.mMainWindowTitle);
-	if (w_existing && !restart_mode && !g_ForceLaunch)
+	if (g_AllowOnlyOneInstance && w_existing && !restart_mode && !g_ForceLaunch)
 	{
 		// Use a more unique title for this dialog so that subsequent executions of this
 		// program can easily find it (though they currently don't):
@@ -87,18 +98,6 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 			PostMessage(w_existing, WM_CLOSE, 0, 0);
 		return 0;
 	}
-
-	// Init globals after the initial check above:
-	global_init(&g);
-	// Init global arrays:
-	init_vk_to_sc();
-	init_sc_to_vk();
-
-	int load_result = g_script.LoadFromFile();
-	if (load_result < 0) // Error during load (was already displayed by the function call).
-		return CRITICAL_ERROR;  // Should return this value because PostQuitMessage() also uses it.
-	if (!load_result) // No lines were loaded, so we're done.
-		return 0;
 
 	if (restart_mode && w_existing)
 	{

@@ -18,7 +18,7 @@ GNU General Public License for more details.
 #include "globaldata.h" // for access to g_clip, the "g" global struct, etc.
 #include "window.h" // for serveral MsgBox and window functions
 #include "util.h" // for strlcpy()
-#include "C:\A-Source\AutoHotkey\VC++\AutoHotkeyNT\resource.h"  // For ID_TRAY_OPEN.
+#include "resources\resource.h"  // For ID_TRAY_OPEN.
 
 
 static UINT_PTR g_MainTimerID = 0;

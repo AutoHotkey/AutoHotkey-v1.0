@@ -51,7 +51,13 @@ ResultType MsgSleep(int aSleepDuration = INTERVAL_UNSPECIFIED, MessageMode aMode
 
 // This macro is used to Sleep without the possibility of a new hotkey subroutine being launched.
 // It should be used when an operation needs to sleep, but doesn't want to be interrupted (suspended)
-// by any hotkeys the user might press during that time:
+// by any hotkeys the user might press during that time.  Reasons why the caller wouldn't want to
+// be suspended:
+// 1) If it's doing something with a window -- such as sending keys or clicking the mouse or trying
+//    to activate it -- that might get messed up if a new hotkey fires in the middle of the operation.
+// 2) If its a command that's still using some of its parameters that might reside in the deref buffer.
+//    In this case, the launching of a new hotkey would likely overwrite those values, causing
+//    unpredictable behavior.
 #define SLEEP_AND_IGNORE_HOTKEYS(aSleepTime) \
 {\
 	g_IgnoreHotkeys = true;\

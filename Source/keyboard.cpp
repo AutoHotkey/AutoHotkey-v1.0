@@ -78,8 +78,13 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 			keys_sent = 0;
 			// Formerly -1, but seems safer to do zero to prevent the keyboard buffer
 			// of other apps from filling up (Sleep(0) should give them a chance 
-			// to process their message queues?):
-			MsgSleep(0);
+			// to process their message queues?)  Also, ignore any hotkeys that are
+			// pressed during a Send operation to reduce the chance of interference,
+			// or keystrokes gettings sent to the wrong window.  In addition, the
+			// starting of a new hotkey subroutine might cause the Deref buffer to
+			// be overwritten, which would be bad if the aKeys param's memory is
+			// stored there:
+			SLEEP_AND_IGNORE_HOTKEYS(0)
 		}
 		// No, it's much better to allow literal spaces even though {SPACE} is also
 		// supported:
@@ -144,8 +149,7 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 				for (i = 0; i < repeat_count; ++i)
 				{
 					KeyEvent(special_key > 0 ? KEYDOWN : KEYUP, abs(special_key), sc, aTargetWindow);
-					if (g.KeyDelay >= 0)
-						MsgSleep(g.KeyDelay);
+					DoKeyDelay
 				}
 			}
 
@@ -158,8 +162,7 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 					// A comment from AutoIt3: ASCII 0 is 48, NUMPAD0 is 96, add on 48 to the ASCII
 					KeyEvent(KEYDOWNANDUP, *cp + 48);
 				KeyEvent(KEYUP, VK_MENU);
-				if (g.KeyDelay >= 0)
-					MsgSleep(g.KeyDelay);
+				DoKeyDelay
 			}
 			// If what's between {} is unrecognized, such as {Bogus}, it's safest not to send
 			// the contents literally since that's almost certainly not what the user intended.
@@ -238,7 +241,7 @@ return;
 			// in case some huge block of text (such as what's on clipboard) is being
 			// sent, during which time the program would otherwise be unresponsive:
 			keys_sent = 0;
-			MsgSleep(0);
+			SLEEP_AND_IGNORE_HOTKEYS(0)
 		}
 		// The modifiers above stay in effect for each of these keypresses.
 		// Always on the first iteration, and thereafter only if the send won't be essentially
@@ -290,8 +293,12 @@ return;
 			SetModifierLRState(modifiersLRsave, modifiersLRnow);  // restore original values before sleeping.
 			// Do this even if this is the last key in a repeated series because
 			// another Send command may exist in the script immediately after
-			// this one:
-			MsgSleep(g.KeyDelay);
+			// this one.  Also, ignore any hotkeys that are pressed during a Send
+			// operation to reduce the chance of interference, or keystrokes gettings
+			// sent to the wrong window.  In addition, the starting of a new hotkey
+			// subroutine might cause the Deref buffer to be overwritten, which would
+			// be bad if the aKeys param's memory is stored there:
+			SLEEP_AND_IGNORE_HOTKEYS(g.KeyDelay)
 		}
 	}
 	// Always restore the modifier state here because this is now the only

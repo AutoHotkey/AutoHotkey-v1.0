@@ -31,6 +31,8 @@ extern modLR_type g_modifiersLRg;  // From GetKeyState().
 extern HHOOK g_hhkLowLevelKeybd;
 extern HHOOK g_hhkLowLevelMouse;
 extern bool g_ForceLaunch;
+extern bool g_AllowOnlyOneInstance;
+extern bool g_AllowSameLineComments;
 extern char g_LastPerformedHotkeyType;
 extern bool g_IgnoreHotkeys;
 extern int g_nSuspendedSubroutines;
@@ -42,6 +44,7 @@ extern int g_nFileDialogs;
 extern InputBoxType g_InputBox[MAX_INPUTBOXES];
 
 extern char g_delimiter;
+extern char g_DerefChar;
 extern char g_EscapeChar;
 
 // Global objects:

@@ -199,9 +199,10 @@ ResultType WinGroup::Activate(bool aStartWithMostRecent, WindowSpec *aWinSpec, v
 			, !aStartWithMostRecent || group_is_active
 			, sAlreadyVisited, sAlreadyVisitedCount)   )
 		{
-			DoWinDelay;
 			// We found a window to activate, so we're done.
+			// Probably best to do this before WinDelay in case another hotkey fires during the delay:
 			MarkAsVisited(activate_win);
+			DoWinDelay;
 			//MsgBox(win->mText, 0, win->mTitle);
 			break;
 		}
@@ -295,8 +296,9 @@ ResultType WinGroup::Deactivate(bool aStartWithMostRecent)
 			wip.parent_hwnd = first_visible_owned;
 		}
 		SetForegroundWindowEx(wip.parent_hwnd);
-		DoWinDelay;
+		// Probably best to do this before WinDelay in case another hotkey fires during the delay:
 		MarkAsVisited(wip.parent_hwnd);
+		DoWinDelay;
 	}
 	else // No window was found to activate (they have all been visited).
 	{

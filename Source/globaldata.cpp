@@ -34,6 +34,8 @@ modLR_type g_modifiersLRg = 0;
 HHOOK g_hhkLowLevelKeybd = NULL;
 HHOOK g_hhkLowLevelMouse = NULL;
 bool g_ForceLaunch = false;
+bool g_AllowOnlyOneInstance = false;
+bool g_AllowSameLineComments = true;
 char g_LastPerformedHotkeyType = HK_NORMAL;
 bool g_IgnoreHotkeys = false;
 int g_nSuspendedSubroutines = 0;
@@ -45,6 +47,7 @@ int g_nFileDialogs = 0;
 InputBoxType g_InputBox[MAX_INPUTBOXES];
 
 char g_delimiter = ',';
+char g_DerefChar = '%';
 char g_EscapeChar = '`';
 
 // Global objects:
@@ -96,6 +99,10 @@ sc2_type g_vk_to_sc[VK_MAX + 1] = {{0}};
 // 3) If the new command has any params that are output or input vars, change Line::ArgIsVar().
 // 4) Add any desired load-time validation in Script::AddLine() in an appropriate section.
 // 5) Implement the command in Line::Perform() or Line::EvaluateCondition (if it's an IF).
+//    If the command waits for anything (e.g. calls MsgSleep()), be sure to make a local
+//    copy of any ARG values that are needed during the wait period, because if another hotkey
+//    subroutine suspends the current one while its waiting, it could also overwrite the ARG
+//    deref buffer with its own values.
 
 Action g_act[] =
 {
@@ -157,6 +164,7 @@ Action g_act[] =
 	// optional and validate elsewhere that the 2nd one specifically isn't blank:
 	, {"ControlSend", 0, 6, NULL} // Control, Chars-to-Send, std. 4 window params.
 	, {"ControlLeftClick", 0, 5, NULL} // Control, std. 4 window params
+	, {"ControlSetText", 1, 6, NULL} // Control, new text, std. 4 window params
 	, {"ControlGetText", 1, 6, NULL} // Output-var, Control, std. 4 window params
 
 	, {"SetDefaultMouseSpeed", 1, 1, {1, 0}} // speed (numeric)
@@ -208,6 +216,8 @@ Action g_act[] =
 	, {"GroupActivate", 1, 2, NULL}, {"GroupDeactivate", 1, 2, NULL}
 	, {"GroupClose", 1, 2, NULL}, {"GroupCloseAll", 1, 1, NULL}
 
+	, {"DriveSpaceFree", 2, 2, NULL} // Output-var, path (e.g. c:\)
+
 	, {"FileAppend", 2, 2, NULL} // text, filename
 	, {"FileReadLine", 3, 3, {3, 0}} // Output variable, filename, line-number
 	, {"FileCopy", 2, 3, {3, 0}} // source, dest, flag
@@ -223,10 +233,11 @@ Action g_act[] =
 	, {"RegWrite", 4, 5, NULL} // ValueType, RegKey, RegSubKey, ValueName, Value (set to blank if omitted?)
 	, {"RegDelete", 3, 3, NULL} // RegKey, RegSubKey, ValueName
 
-	, {"SetTitleMatchMode", 1, 1, {1, 0}} // Numeric.
+	, {"SetTitleMatchMode", 1, 1, NULL} // Allowed values: 1, 2, slow, fast
 	, {"SetKeyDelay", 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)
 	, {"SetWinDelay", 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)
 	, {"SetBatchLines", 1, 1, {1, 0}} // Number of script lines to execute before sleeping.
+	, {"AutoTrim", 1, 1, NULL} // On/Off
 	, {"StringCaseSense", 1, 1, NULL} // On/Off
 	, {"DetectHiddenWindows", 1, 1, NULL} // On/Off
 	, {"DetectHiddenText", 1, 1, NULL} // On/Off

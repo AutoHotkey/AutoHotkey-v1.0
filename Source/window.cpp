@@ -75,7 +75,9 @@ inline HWND AttemptSetForeground(HWND aTargetWnd, HWND aForeWnd, char *aTargetTi
 // Otherwise, on success, it returns either aTargetWnd or an HWND owned by aTargetWnd.
 #define LOGF "c:\\AutoHotkey SetForegroundWindowEx.txt"
 {
+#ifdef _DEBUG
 	if (!aTargetTitle) aTargetTitle = "";
+#endif
 	// Probably best not to trust its return value.  It's been shown to be unreliable at times.
 	// Example: I've confirmed that SetForegroundWindow() sometimes (perhaps about 10% of the time)
 	// indicates failure even though it succeeds.  So we specifically check to see if it worked,
@@ -86,20 +88,27 @@ inline HWND AttemptSetForeground(HWND aTargetWnd, HWND aForeWnd, char *aTargetTi
 	// even though it will soon become active on its own.  Also, SetForegroundWindow() sometimes
 	// indicates failure even though it succeeded, usually because the window didn't become
 	// active immediately -- perhaps because the system was under load -- but did soon become
-	// active on its own (after, say, 50ms or so).
-	BOOL result = SetForegroundWindow(aTargetWnd);
+	// active on its own (after, say, 50ms or so).  UPDATE: If SetForegroundWindow() is called
+	// on a hung window, at least when AttachThreadInput is in effect and that window has
+	// a modal dialog (such as MSIE's find dialog), this call might never return, locking up
+	// our thread.  So now we do this fast-check for whether the window is hung first (and
+	// this call is indeed very fast: its worst case is at least 30x faster than the worst-case
+	// performance of the ABORT-IF-HUNG method used with SendMessageTimeout:
+	BOOL result = IsWindowHung(aTargetWnd) ? NULL : SetForegroundWindow(aTargetWnd);
 	// Note: Increasing the sleep time below did not help with occurrences of "indicated success
 	// even though it failed", at least with metapad.exe being activated while command prompt
 	// and/or AutoIt2's InputBox were active or present on the screen:
-	MsgSleep(SLEEP_INTERVAL); // Specify param so that it will try to specifically sleep that long.
+	SLEEP_AND_IGNORE_HOTKEYS(SLEEP_INTERVAL); // Specify param so that it will try to specifically sleep that long.
 	HWND new_fore_window = GetForegroundWindow();
 	if (new_fore_window == aTargetWnd)
 	{
+#ifdef _DEBUG
 		if (!result)
 		{
 			FileAppend(LOGF, "SetForegroundWindow() indicated failure even though it succeeded: ", false);
 			FileAppend(LOGF, aTargetTitle);
 		}
+#endif
 		return aTargetWnd;
 	}
 	if (new_fore_window != aForeWnd && aTargetWnd == GetWindow(new_fore_window, GW_OWNER))
@@ -108,11 +117,13 @@ inline HWND AttemptSetForeground(HWND aTargetWnd, HWND aForeWnd, char *aTargetTi
 		// made the foreground window, at least if the windows it owns are visible.
 		return new_fore_window;
 	// Otherwise, failure:
+#ifdef _DEBUG
 	if (result)
 	{
 		FileAppend(LOGF, "SetForegroundWindow() indicated success even though it failed: ", false);
 		FileAppend(LOGF, aTargetTitle);
 	}
+#endif
 	return NULL;
 }	
 
@@ -124,8 +135,10 @@ HWND SetForegroundWindowEx(HWND aWnd)
 {
 	if (!aWnd) return NULL;  // When called this way (as it is sometimes), do nothing.
 
-char win_name[64];
-GetWindowText(aWnd, win_name, sizeof(win_name));
+#ifdef _DEBUG
+	char win_name[64];
+	GetWindowText(aWnd, win_name, sizeof(win_name));
+#endif
 
 	HWND orig_foreground_wnd = GetForegroundWindow();
 	// Autoit3: If there is not any foreground window, then input focus is on the TaskBar.
@@ -160,7 +173,12 @@ GetWindowText(aWnd, win_name, sizeof(win_name));
 	if (g_os.IsWin95() || (!g_os.IsWin9x() && !g_os.IsWin2000orLater()))  // Win95 or NT
 		// Try a simple approach first for these two OS's, since they don't have
 		// any restrictions on focus stealing:
-		if (new_foreground_wnd = AttemptSetForeground(aWnd, orig_foreground_wnd, win_name))
+#ifdef _DEBUG
+#define IF_ATTEMPT_SET_FORE if (new_foreground_wnd = AttemptSetForeground(aWnd, orig_foreground_wnd, win_name))
+#else
+#define IF_ATTEMPT_SET_FORE if (new_foreground_wnd = AttemptSetForeground(aWnd, orig_foreground_wnd, ""))
+#endif
+		IF_ATTEMPT_SET_FORE
 			return new_foreground_wnd;
 		// Otherwise continue with the more drastic methods below.
 
@@ -182,7 +200,10 @@ GetWindowText(aWnd, win_name, sizeof(win_name));
 	// below.  So that's another reason to just keep it simple and do it this way
 	// only.
 
-char buf[1024];
+#ifdef _DEBUG
+	char buf[1024];
+#endif
+
 	bool is_attached_my_to_fore = false, is_attached_fore_to_target = false;
 	DWORD fore_thread, my_thread, target_thread;
 	if (orig_foreground_wnd) // Might be NULL from above.
@@ -224,14 +245,16 @@ char buf[1024];
 	// vary depending on how fast the CPU is:
 	for (int i = 0; i < 5; ++i)
 	{
-		if (new_foreground_wnd = AttemptSetForeground(aWnd, orig_foreground_wnd, win_name))
+		IF_ATTEMPT_SET_FORE
 		{
+#ifdef _DEBUG
 			if (i > 0) // More than one attempt was needed.
 			{
 				snprintf(buf, sizeof(buf), "AttachThreadInput attempt #%d indicated success: %s"
 					, i + 1, win_name);
 				FileAppend(LOGF, buf);
 			}
+#endif
 			break;
 		}
 	}
@@ -278,7 +301,11 @@ char buf[1024];
 		//KeyEvent(KEYUP, VK_TAB);
 		//KeyEvent(KEYUP, VK_MENU);
 		// Also replacing "2-alts" with "alt-tab" below, for now:
-		if (new_foreground_wnd = AttemptSetForeground(aWnd, orig_foreground_wnd, win_name))
+
+		IF_ATTEMPT_SET_FORE
+#ifndef _DEBUG
+			0; // Do nothing.
+#else
 			FileAppend(LOGF, "2-alts ok: ", false);
 		else
 		{
@@ -294,6 +321,7 @@ char buf[1024];
 			FileAppend(LOGF, ".  Was trying to activate: ", false);
 		}
 		FileAppend(LOGF, win_name);
+#endif
 	} // if()
 
 	// Very important to detach any threads whose inputs were attached above,
@@ -432,6 +460,11 @@ HWND WinClose(char *aTitle, char *aText, int aTimeToWaitForClose
 	// UPDATE: It seems better just to always do one unspecified-interval sleep
 	// rather than MsgSleep(0), which often returns immediately, probably having
 	// no effect.
+
+	// Remember that once the first call to MsgSleep() is done, a new hotkey subroutine
+	// may fire and suspend what we're doing here.  Such a subroutine might also overwrite
+	// the values our params, some of which may be in the deref buffer.  So be sure not
+	// to refer to those strings once MsgSleep() has been done, below:
 
 	// This is the same basic code used for ACT_WINWAITCLOSE and such:
 	for (;;)
@@ -690,18 +723,16 @@ ResultType StatusBarUtil(Var *aOutputVar, HWND aControlWindow, int aPartNumber
 		LPVOID pMem;
 		if (g_os.IsWinNT())
 		{
-			// AutoIt3: Dynamic functions to retain 95 compatibility
-			typedef LPVOID (WINAPI *MyVirtualAllocEx)(HANDLE, LPVOID, SIZE_T, DWORD, DWORD);
-			typedef BOOL (WINAPI *MyVirtualFreeEx)(HANDLE, LPVOID, SIZE_T, DWORD);
-			MyVirtualAllocEx lpfnAlloc;
-			MyVirtualFreeEx lpfnFree;
-
 			DWORD dwPid;
 			GetWindowThreadProcessId(aControlWindow, &dwPid);
 			HANDLE hProcess = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE, FALSE, dwPid);
 			if (hProcess)
 			{
-				lpfnAlloc = (MyVirtualAllocEx)GetProcAddress(GetModuleHandle("kernel32.dll"), "VirtualAllocEx");
+				// AutoIt3: Dynamic functions to retain 95 compatibility
+				typedef LPVOID (WINAPI *MyVirtualAllocEx)(HANDLE, LPVOID, SIZE_T, DWORD, DWORD);
+				// Static for performance, since value should be always the same.
+				static MyVirtualAllocEx lpfnAlloc = (MyVirtualAllocEx)GetProcAddress(GetModuleHandle("kernel32.dll")
+					, "VirtualAllocEx");
 				pMem = lpfnAlloc(hProcess, NULL, sizeof(buf), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 
 				for (;;)
@@ -737,7 +768,11 @@ ResultType StatusBarUtil(Var *aOutputVar, HWND aControlWindow, int aPartNumber
 					SB_SLEEP_IF_NEEDED
 				}
 
-				lpfnFree = (MyVirtualFreeEx)GetProcAddress(GetModuleHandle("kernel32.dll"), "VirtualFreeEx");
+				// AutoIt3: Dynamic functions to retain 95 compatibility
+				typedef BOOL (WINAPI *MyVirtualFreeEx)(HANDLE, LPVOID, SIZE_T, DWORD);
+				// Static for performance, since value should be always the same.
+				static MyVirtualFreeEx lpfnFree = (MyVirtualFreeEx)GetProcAddress(GetModuleHandle("kernel32.dll")
+					, "VirtualFreeEx");
 				lpfnFree(hProcess, pMem, 0, MEM_RELEASE); // Size 0 is used with MEM_RELEASE.
 				CloseHandle(hProcess);
 			} // if (hProcess)
@@ -1146,7 +1181,9 @@ HWND GetTopChild(HWND aParent)
 
 bool IsWindowHung(HWND aWnd)
 {
-	if (!aWnd) return 0;
+	if (!aWnd) return false;
+
+	// OLD, SLOWER METHOD:
 	// Don't want to use a long delay because then our messages wouldn't get processed
 	// in a timely fashion.  But I'm not entirely sure if the 10ms delay used below
 	// is even used by the function in this case?  Also, the docs aren't clear on whether
@@ -1158,10 +1195,51 @@ bool IsWindowHung(HWND aWnd)
 	// in the last 5 seconds, I think it may take the remainder of the 5 seconds for the OS
 	// to notice it.  However, allowing it the option of sleeping up to 5 seconds seems
 	// really bad, since keyboard and mouse input would probably be frozen (actually it
-	// would just be really laggy because the OS would bypass the hook) during that time).
-	// So some compromise value seems in order.  50ms seems about right.
+	// would just be really laggy because the OS would bypass the hook during that time).
+	// So some compromise value seems in order.  500ms seems about right.  UPDATE: Some
+	// windows might need longer than 500ms because their threads are engaged in
+	// heavy operations.  Since this method is only used as a fallback method now,
+	// it seems best to give them the full 5000ms default, which is what (all?) Windows
+	// OSes use as a cutoff to determine whether a window is "not responding":
 	DWORD dwResult;
-	return !SendMessageTimeout(aWnd, WM_NULL, (WPARAM)0, (LPARAM)0, SMTO_ABORTIFHUNG, 50, &dwResult);
+	#define Slow_IsWindowHung !SendMessageTimeout(aWnd, WM_NULL, (WPARAM)0, (LPARAM)0\
+		, SMTO_ABORTIFHUNG, 5000, &dwResult)
+
+	// NEW, FASTER METHOD:
+	// This newer method's worst-case performance is at least 30x faster than the worst-case
+	// performance of the old method that  uses SendMessageTimeout().
+	// And an even worse case can be envisioned which makes the use of this method
+	// even more compelling: If the OS considers a window NOT to be hung, but the
+	// window's message pump is sluggish about responding to the SendMessageTimeout() (perhaps
+	// taking 2000ms or more to respond due to heavy disk I/O or other activity), the old method
+	// will take several seconds to return, causing mouse and keyboard lag if our hook(s)
+	// are installed; not to mention making our app's windows, tray menu, and other GUI controls
+	// unresponsive during that time).  But I believe in this case the new method will return
+	// instantly, since the OS has been keeping track in the background, and can tell us
+	// immediately that the window isn't hung.
+	// Here are some seemingly contradictory statements uttered by MSDN.  Perhaps they're
+	// not contradictory if the first sentence really means "by a different thread of the same
+	// process":
+	// "If the specified window was created by a different thread, the system switches to that
+	// thread and calls the appropriate window procedure.  Messages sent between threads are
+	// processed only when the receiving thread executes message retrieval code. The sending
+	// thread is blocked until the receiving thread processes the message."
+	if (g_os.IsWin9x())
+	{
+		typedef BOOL (WINAPI *MyIsHungThread)(DWORD);
+		static MyIsHungThread IsHungThread = (MyIsHungThread)GetProcAddress(GetModuleHandle("User32.dll")
+			, "IsHungThread");
+		// When function not available, fall back to the old method:
+		return IsHungThread ? IsHungThread(GetWindowThreadProcessId(aWnd, NULL)) : Slow_IsWindowHung;
+	}
+	else // Otherwise: NT/2k/XP/2003 or some later OS (e.g. 64 bit?), so try to use the newer method.
+	{
+		typedef BOOL (WINAPI *MyIsHungAppWindow)(HWND);
+		static MyIsHungAppWindow IsHungAppWindow = (MyIsHungAppWindow)GetProcAddress(GetModuleHandle("User32.dll")
+			, "IsHungAppWindow");
+		// When function not available, fall back to the old method:
+		return IsHungAppWindow ? IsHungAppWindow(aWnd) : Slow_IsWindowHung;
+	}
 }
 
 
@@ -1194,11 +1272,16 @@ int GetWindowTextTimeout(HWND aWnd, char *aBuf, int aBufSize, UINT aTimeout)
 	LRESULT lresult;
 	if (aBuf)
 	{
-		// Below showed that GetWindowText() is dramatically faster than either SendMessage()
+		// Below demonstrated that GetWindowText() is dramatically faster than either SendMessage()
 		// or SendMessageTimeout() (noticeably faster when you have hotkeys that activate
 		// windows, or toggle between two windows):
 		//return GetWindowText(aWnd, aBuf, aBufSize);
 		//return (int)SendMessage(aWnd, WM_GETTEXT, (WPARAM)aBufSize, (LPARAM)aBuf);
+
+		// Don't bother calling IsWindowHung() because the below call will return
+		// nearly instantly if the OS already "knows" that the target window has
+		// be unresponsive for 5 seconds or so (i.e. it keeps track of such things
+		// on an ongoing basis, at least XP seems to).
 		lresult = SendMessageTimeout(aWnd, WM_GETTEXT, (WPARAM)aBufSize, (LPARAM)aBuf
 			, SMTO_ABORTIFHUNG, aTimeout, &result);
 		// Just to make sure because MSDN docs aren't clear that it will always be terminated:

@@ -131,19 +131,36 @@ bool IsWindowHung(HWND aWnd);
 // Whenever using SendMessageTimeout(), our app will be unresponsive until
 // the call returns, since our message loop isn't running.  In addition,
 // if the keyboard or mouse hook is installed, the events will lag during
-// this call.  So keep the timeout value fairly short:
-int GetWindowTextTimeout(HWND aWnd, char *aBuf = NULL, int aBufSize = 0, UINT aTimeout = 50);
+// this call.  So keep the timeout value fairly short.  UPDATE: Need a longer
+// timeout because otherwise searching will be inconsistent / unreliable for the
+// slow Title Match method, since some apps are lazy about keeping their
+// message pumps running, such as during long disk I/O operations, and thus
+// may sometimes (randomly) take a long time to respond to the WM_GETTEXT message.
+// 5000 seems about the largest value that should ever be needed since this is what
+// Windows uses as the cutoff for determining if a window has become "unresponsive":
+int GetWindowTextTimeout(HWND aWnd, char *aBuf = NULL, int aBufSize = 0, UINT aTimeout = 5000);
 void SetForegroundLockTimeout();
 
 
 inline int GetWindowTextByTitleMatchMode(HWND aWnd, char *aBuf = NULL, int aBufSize = 0)
 {
-	if (g.TitleMatchMode == FIND_IN_LEADING_PART || g.TitleMatchMode == FIND_ANYWHERE)
+	// Due to potential key and mouse lag caused by GetWindowTextTimeout() preventing us
+	// from pumping messages for up to several seconds at a time (only if the user has specified
+	// that the hook(s) be installed), it might be best to always attempt GetWindowText() prior
+	// to the GetWindowTextTimeout().  Only if GetWindowText() gets 0 length would we try the other
+	// method (and of course, don't bother using GetWindowTextTimeout() at all if "fast" mode is in
+	// effect).  The problem with this is that many controls always return 0 length regardless of
+	// which method is used, so this would slow things down a little (but not too badly since
+	// GetWindowText() is so much faster than GetWindowTextTimeout()).  Another potential problem
+	// is that some controls may return less text, or different text, when used with the fast mode
+	// vs. the slow mode (unverified).  So it seems best NOT to do this and stick with the simple
+	// approach below.
+	if (g.TitleFindFast)
+		return GetWindowText(aWnd, aBuf, aBufSize);
+	else
 		// We're using the slower method that is able to get text from more types of
 		// controls (e.g. large edit controls).
 		return GetWindowTextTimeout(aWnd, aBuf, aBufSize);
-	else // use the fast method
-		return GetWindowText(aWnd, aBuf, aBufSize);
 }
 
 
@@ -163,7 +180,7 @@ inline HWND HasMatchingChild(HWND aWnd, char *aText, char *aExcludeText)
 }
 
 inline bool IsTextMatch(char *aHaystack, char *aNeedle, char *aExcludeText = ""
-	, bool aFindAnywhere = TITLE_MATCH_ANYWHERE)
+	, bool aFindAnywhere = g.TitleFindAnywhere)
 // To help performance, it's the caller's responsibility to ensure that all params are not NULL.
 // Use the AutoIt2 convention (same in AutoIt3?) of making searches for window titles
 // and text case sensitive: "N.B. Windows titles and text are CASE SENSITIVE!"

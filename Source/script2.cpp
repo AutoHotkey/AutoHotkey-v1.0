@@ -18,7 +18,7 @@ GNU General Public License for more details.
 #include "script.h"
 #include "window.h" // for IF_USE_FOREGROUND_WINDOW
 #include "application.h" // for MsgSleep()
-#include "C:\A-Source\AutoHotkey\VC++\AutoHotkeyNT\resource.h"  // For InputBox.
+#include "resources\resource.h"  // For InputBox.
 
 
 ////////////////////
@@ -66,6 +66,7 @@ ResultType Line::ControlSend(char *aControl, char *aKeysToSend, char *aTitle, ch
 	if (!control_window)
 		return OK;
 	SendKeys(aKeysToSend, aModifiersLR, control_window);
+	// But don't do WinDelay because KeyDelay should have been in effect for the above.
 	return OK;
 }
 
@@ -82,6 +83,28 @@ ResultType Line::ControlLeftClick(char *aControl, char *aTitle, char *aText
 		return OK;
 	PostMessage(control_window, WM_LBUTTONDOWN, MK_LBUTTON, 0);
 	PostMessage(control_window, WM_LBUTTONUP, 0, 0);
+	DoWinDelay;  // It seems safer and more flexible to do this even for Control commands.
+	return OK;
+}
+
+
+
+ResultType Line::ControlSetText(char *aControl, char *aNewText, char *aTitle, char *aText
+	, char *aExcludeTitle, char *aExcludeText)
+{
+	DETERMINE_TARGET_WINDOW
+	if (!target_window)
+		return OK;
+	HWND control_window = ControlExist(target_window, aControl);
+	if (!control_window)
+		return OK;
+	// SendMessage must be used, not PostMessage(), at least for some (probably most) apps.
+	// Also: No need to call IsWindowHung() because SendMessageTimeout() should return
+	// immediately if the OS already "knows" the window is hung:
+	DWORD result;
+	SendMessageTimeout(control_window, WM_SETTEXT, (WPARAM)0, (LPARAM)aNewText
+		, SMTO_ABORTIFHUNG, 5000, &result);
+	DoWinDelay;  // It seems safer and more flexible to do this even for Control commands.
 	return OK;
 }
 
@@ -326,6 +349,8 @@ ResultType Line::WinGetPos(char *aTitle, char *aText, char *aExcludeTitle, char 
 
 LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lParam)
 {
+	char buf[2048], *last_backslash;  // For various uses.
+
 	switch (iMsg)
 	{
 	case WM_COMMAND: // If an application processes this message, it should return zero.
@@ -337,10 +362,10 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			return 0;
 		case ID_TRAY_EDITSCRIPT:
 		{
-			TitleMatchModes old_mode = g.TitleMatchMode;
-			g.TitleMatchMode = FIND_ANYWHERE_FAST;
-			HWND hwnd = WinExist(g_script.mFileName);
-			g.TitleMatchMode = old_mode;
+			bool old_mode = g.TitleFindAnywhere;
+			g.TitleFindAnywhere = true;
+			HWND hwnd = WinExist(g_script.mFileName, "", g_script.mMainWindowTitle); // Exclude our own main.
+			g.TitleFindAnywhere = old_mode;
 			if (hwnd)
 				SetForegroundWindowEx(hwnd);
 			else
@@ -352,26 +377,28 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			g_script.Reload();
 			return 0;
 		case ID_TRAY_WINDOWSPY:
-		{
-			char buf[MAX_PATH + 512];
-			if (!GetModuleFileName(NULL, buf, sizeof(buf))) // realistically, probably can't fail.
-				break;
-			char *last_backslash = strrchr(buf, '\\');
+			strlcpy(buf, g_script.mOurEXE, sizeof(buf)); // Make a modifiable copy.
+			last_backslash = strrchr(buf, '\\');
 			if (!last_backslash)
 				break;
 			last_backslash[1] = '\0';
 			snprintfcat(buf, sizeof(buf), "AU3_Spy.exe");
 			Script::ActionExec(buf, "");
 			return 0;
-		}
 		case ID_TRAY_HELP:
-			MsgBox("Help's placeholder.");
+			strlcpy(buf, g_script.mOurEXE, sizeof(buf)); // Make a modifiable copy.
+			last_backslash = strrchr(buf, '\\');
+			if (!last_backslash)
+				break;
+			last_backslash[1] = '\0';
+			snprintfcat(buf, sizeof(buf), "README.htm");
+			Script::ActionExec(buf, "");
 			return 0;
 		case ID_TRAY_SUSPEND:
 			// Maybe can use CheckMenuItem() with this, somehow.
 			return 0;
 		case ID_TRAY_EXIT:
-			g_script.ExitApp();
+			g_script.ExitApp();  // More reliable than PostQuitMessage(), which has been known to fail in rare cases.
 			return 0;
 		} // Inner switch()
 		break;
@@ -762,7 +789,7 @@ ResultType Line::MouseClickDrag(vk_type aVK, int aX1, int aY1, int aX2, int aY2,
 
 	// Always sleep a certain minimum amount of time between events to improve reliability,
 	// but allow the user to specify a higher time if desired:
-	#define MOUSE_SLEEP MsgSleep(g.KeyDelay > 10 ? g.KeyDelay : 10)
+	#define MOUSE_SLEEP SLEEP_AND_IGNORE_HOTKEYS(g.KeyDelay > 10 ? g.KeyDelay : 10)
 
 	// Do the drag operation
 	switch (aVK)
@@ -1043,8 +1070,10 @@ ResultType Line::PerformAssign()
 
 	if (target_is_involved_in_source)
 		// It was already dereferenced above, so use ARG2, which points to the
-		// derefed contents of ARG2 (i.e. the data to be assigned):
-		return OUTPUT_VAR->Assign(ARG2, space_needed - 1, g_script.mIsAutoIt2);
+		// derefed contents of ARG2 (i.e. the data to be assigned).
+		// Seems better to trim even if not AutoIt2, since that's currently the only way easy way
+		// to trim things:
+		return OUTPUT_VAR->Assign(ARG2, space_needed - 1, g.AutoTrim); // , g_script.mIsAutoIt2);
 
 	// Otherwise:
 	// If we're here, OUTPUT_VAR->mType must be clipboard or normal because otherwise
@@ -1063,9 +1092,9 @@ ResultType Line::PerformAssign()
 	// That might happen due to a failure or size discrepancy between the
 	// deref size-estimate and the actual deref itself:
 	OUTPUT_VAR->Length() = (VarSizeType)(ExpandArg(OUTPUT_VAR->Contents(), 1) - OUTPUT_VAR->Contents() - 1);
-	if (g_script.mIsAutoIt2)
+	if (g.AutoTrim)
 	{
-		trim(OUTPUT_VAR->Contents());  // Since this is how AutoIt2 behaves.
+		trim(OUTPUT_VAR->Contents());
 		OUTPUT_VAR->Length() = (VarSizeType)strlen(OUTPUT_VAR->Contents());
 	}
 	return OUTPUT_VAR->Close();  // i.e. Consider this function to be always successful unless this fails.
@@ -1178,6 +1207,61 @@ void Util_WinKill(HWND hWnd)
 	}
 
 } // Util_WinKill()
+
+
+
+ResultType Line::DriveSpaceFree(char *aPath)
+// Adapted from the AutoIt3 source.
+// Because of NTFS's ability to mount volumes into a directory, a path might not necessarily
+// have the same amount of free space as its root drive.  However, I'm not sure if this
+// method here actually takes that into account.
+{
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
+	OUTPUT_VAR->Assign(); // Init to empty string regardless of whether we succeed here.
+
+	if (!aPath || !*aPath) return OK;  // Let ErrorLevel tell the story.  Below relies on this check.
+
+	char buf[MAX_PATH * 2];
+	strlcpy(buf, aPath, sizeof(buf));
+	size_t length = strlen(buf);
+	if (buf[length - 1] != '\\') // AutoIt3: Attempt to fix the parameter passed.
+	{
+		if (length + 1 >= sizeof(buf)) // No room to fix it.
+			return OK; // Let ErrorLevel tell the story.
+		buf[length++] = '\\';
+		buf[length] = '\0';
+	}
+
+	SetErrorMode(SEM_FAILCRITICALERRORS);  // AutoIt3: So a:\ does not ask for disk
+
+#ifdef _MSC_VER									// AutoIt3: Need a MinGW solution for __int64
+	ULARGE_INTEGER	uiTotal, uiFree, uiUsed;
+	DWORD			dwSectPerClust, dwBytesPerSect, dwFreeClusters, dwTotalClusters;
+	static FARPROC  pGetDiskFreeSpaceEx = GetProcAddress(GetModuleHandle("kernel32.dll"), "GetDiskFreeSpaceExA");
+	int				test = ERROR_SUCCESS;
+
+	// MSDN: "The GetDiskFreeSpaceEx function returns correct values for all volumes, including those
+	// that are greater than 2 gigabytes."
+	if (pGetDiskFreeSpaceEx)  // Function is available (unpatched Win95 and WinNT might not have it).
+	{
+		if (!GetDiskFreeSpaceEx(buf,&uiFree,&uiTotal,&uiUsed)) // AutoIt3 just calls it by name like this.
+			return OK; // Let ErrorLevel tell the story.
+		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+		// Casting this way limits us to 2,097,152 gigabytes in size:
+		return OUTPUT_VAR->Assign(   (int)((__int64)(uiFree.QuadPart) / (__int64)(1024*1024))   );
+	}
+	else
+	{
+		if (!GetDiskFreeSpace(buf, &dwSectPerClust, &dwBytesPerSect, &dwFreeClusters, &dwTotalClusters))
+			return OK; // Let ErrorLevel tell the story.
+		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+		return OUTPUT_VAR->Assign(   (int)((__int64)(dwFreeClusters * dwSectPerClust * dwBytesPerSect)
+			/ (__int64)(1024*1024))   );
+	}
+#endif	
+
+	return OK;
+}
 
 
 
@@ -1314,6 +1398,11 @@ ResultType Line::FileReadLine(char *aFilespec, char *aLineNumber)
 	if (!fp)
 		return OK;  // Return OK because g_ErrorLevel tells the story.
 
+	// Remember that once the first call to MsgSleep() is done, a new hotkey subroutine
+	// may fire and suspend what we're doing here.  Such a subroutine might also overwrite
+	// the values our params, some of which may be in the deref buffer.  So be sure not
+	// to refer to those strings once MsgSleep() has been done, below:
+
 	// If the keyboard or mouse hook is installed, pause periodically during potentially long
 	// operations such as this one, to give the msg pump a chance to process keyboard and
 	// mouse events so that they don't lag.
@@ -1345,7 +1434,7 @@ ResultType Line::FileReadLine(char *aFilespec, char *aLineNumber)
 	for (UINT i = 0; i < line_number; ++i)
 	{
 		if (i && !(i % line_interval))
-			MsgSleep(sleep_duration); // See above comment.
+			MsgSleep(sleep_duration); // See above comment. Also, it seems okay to allow new hotkeys during the sleep.
 		if (fgets(buf, sizeof(buf) - 1, fp) == NULL) // end-of-file or error
 		{
 			fclose(fp);
@@ -1782,6 +1871,7 @@ ArgPurposeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_INPUTBOX:
 		case ACT_RANDOM:
 		case ACT_REGREAD:
+		case ACT_DRIVESPACEFREE:
 		case ACT_FILEREADLINE:
 		case ACT_FILESELECTFILE:
 		case ACT_MOUSEGETPOS:

@@ -205,7 +205,7 @@ ResultType Clipboard::Commit()
 // was already physically open, this function will close it as part of the commit (since
 // whoever had it open before can't use the prior contents, since they're invalid).
 {
-	if (!mIsOpen && !Open(20)) // Make a lot of attempts.
+	if (!mIsOpen && !Open(30, 20)) // Make a lot of attempts.
 		AbortWrite("Clipboard::Commit(): Could not open clipboard after many timed attempts.");
 	if (!EmptyClipboard())
 		AbortWrite("Clipboard::Commit(): EmptyClipboard() failed.");
@@ -323,7 +323,10 @@ ResultType Clipboard::Open(int aAttempts, int aRetryInterval)
 			mIsOpen = true;
 			return OK;
 		}
-		MsgSleep(aRetryInterval);
+		// Use SLEEP_AND_IGNORE_HOTKEYS to prevent MainWindowProc() from accepting new hotkeys
+		// during our operation, since a new hotkey subroutine might interfere with
+		// what we're doing here (e.g. if it tries to use the clipboard):
+		SLEEP_AND_IGNORE_HOTKEYS(aRetryInterval)
 	}
 	return FAIL;
 }

@@ -49,7 +49,7 @@ GNU General Public License for more details.
 
 #define NAME_P "AutoHotkey"
 #define WINDOW_CLASS_NAME NAME_P
-#define NAME_VERSION "0.207"
+#define NAME_VERSION "0.208"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // FAIL = 0 to remind that FAIL should have the value zero instead of something arbitrary
@@ -108,11 +108,11 @@ struct Action
 
 // Same reason as above struct.  It's best to keep this struct as small as possible
 // because it's used as a local (stack) var by at least one recursive function:
-enum TitleMatchModes {FIND_IN_LEADING_PART = 1, FIND_ANYWHERE, FIND_IN_LEADING_PART_FAST, FIND_ANYWHERE_FAST};
-#define TITLE_MATCH_ANYWHERE (g.TitleMatchMode == FIND_ANYWHERE || g.TitleMatchMode == FIND_ANYWHERE_FAST)
+enum TitleMatchModes {MATCHMODE_INVALID = FAIL, FIND_IN_LEADING_PART, FIND_ANYWHERE, FIND_FAST, FIND_SLOW};
 struct global_struct
 {
-	TitleMatchModes TitleMatchMode;
+	bool TitleFindAnywhere;  // Whether match can be found anywhere in a window title, rather than leading part.
+	bool TitleFindFast; // Whether to use the fast mode of searching window text, or the more thorough slow mode.
 	bool DetectHiddenWindows; // Whether to detect the titles of hidden parent windows.
 	bool DetectHiddenText;    // Whether to detect the text of hidden child windows.
 	UINT LinesPerCycle;
@@ -120,6 +120,7 @@ struct global_struct
 	int KeyDelay;  // negative values may be used as special flags.
 	UCHAR DefaultMouseSpeed;
 	bool StoreCapslockMode;
+	bool AutoTrim;
 	bool StringCaseSense;
 	char ErrorLevel[128]; // Big in case user put something bigger than a number in g_ErrorLevel.
 	HWND hWndLastUsed;  // In many cases, it's better to use g_ValidLastUsedWindow when referring to this.
@@ -136,8 +137,9 @@ inline void global_init(global_struct *gp)
 	// to save and restore their values when one hotkey interrupts another, going into
 	// deeper recursion.  When the interrupting subroutine returns, the former
 	// subroutine's values for these are restored prior to resuming execution:
-	gp->TitleMatchMode = FIND_IN_LEADING_PART;  // Default to the method that works best with Aut3 Spy.
-	gp->DetectHiddenWindows = false;  // Unlike AutoIt.  This seems like a more intuitive default.
+	gp->TitleFindAnywhere = false; // Standard default for AutoIt2 and 3: Leading part of window title must match.
+	gp->TitleFindFast = true; // Since it's so much faster in many cases.
+	gp->DetectHiddenWindows = false;  // Same as AutoIt2 but unlike AutoIt3; seems like a more intuitive default.
 	gp->DetectHiddenText = true;  // Unlike AutoIt, which defaults to false.  This setting performs better.
 	// Not sure what the optimal default is.  1 seems too low (scripts would be very slow by default):
 	#define DEFAULT_BATCH_LINES 10
@@ -151,8 +153,9 @@ inline void global_init(global_struct *gp)
 	#define COORD_UNSPECIFIED (INT_MIN)
 	gp->DefaultMouseSpeed = DEFAULT_MOUSE_SPEED;
 	gp->StoreCapslockMode = true;  // AutoIt2 (and probably 3's) default, and it makes a lot of sense.
+	gp->AutoTrim = true;  // AutoIt2's default, and overall the best default in most cases.
 	gp->StringCaseSense = false;  // AutoIt2 default, and it does seem best.
-	*gp->ErrorLevel = '\0'; // This isn't the actual ErrorLevel, but rather used to save and restore it.
+	*gp->ErrorLevel = '\0'; // This isn't the actual ErrorLevel: it's used to save and restore it.
 	gp->hWndLastUsed = gp->hWndToRestore = NULL;
 	gp->MsgBoxResult = 0;
 	gp->WaitingForDialog = false;

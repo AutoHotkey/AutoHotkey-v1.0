@@ -384,7 +384,7 @@ ResultType Var::ValidateName(char *aName)
 		// future use as special symbols)
 		// These are especially illegal because they might someday be used as operators:
 		//		+ - * / ^ = | & ! > <
-		if (   IS_SPACE_OR_TAB(*cp) || *cp == g_delimiter || *cp == DEREF_CHAR
+		if (   IS_SPACE_OR_TAB(*cp) || *cp == g_delimiter || *cp == g_DerefChar
 			|| (ispunct(*cp) && *cp != '_')   )
 			return g_script.ScriptError("This variable name contains an illegal character.", aName);
 	}
