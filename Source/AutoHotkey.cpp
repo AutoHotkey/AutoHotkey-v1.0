@@ -61,7 +61,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\GUI Demo.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\Expressions.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\New Text Document.ahk";
-		char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\MouseGetPos of control under cursor.ahk";
+		char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\bug - StringReplace's fast mode omits the end of the string after the last replacement.ahk";
 	#else
 		char *script_filespec = NAME_P ".ini";  // Use this extension for better file association with editor(s).
 	#endif

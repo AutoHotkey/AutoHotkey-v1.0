@@ -381,7 +381,7 @@ ResultType Script::CreateWindows()
 		, g_hInstance // passed into WinMain
 		, NULL))   ) // lpParam
 	{
-		MsgBox("CreateWindow() failed.");
+		MsgBox("CreateWindow"); // Short msg since so rare.
 		return FAIL;
 	}
 #ifdef AUTOHOTKEYSC
@@ -403,7 +403,7 @@ ResultType Script::CreateWindows()
 		| ES_LEFT | ES_MULTILINE | ES_READONLY | WS_VSCROLL // | WS_HSCROLL (saves space)
 		, 0, 0, 0, 0, g_hWnd, (HMENU)1, g_hInstance, NULL))  )
 	{
-		MsgBox("CreateWindow() for the edit-window child failed.");
+		MsgBox("CreateWindow"); // Short msg since so rare.
 		return FAIL;
 	}
 

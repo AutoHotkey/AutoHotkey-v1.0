@@ -746,7 +746,10 @@ char *StrReplaceAll(char *aBuf, char *aOld, char *aNew, bool aAlwaysUseSlow, boo
 					found += length_of_old;
 					cp = found; // Since "found" is about to be altered by strstr, cp serves as a placeholder for use by the next iteration.
 				}
-				*dp = '\0';  // Final terminator.
+
+				// Fixed for v1.0.25.11: Copy the remaining characters after the last replacement (if any).
+				// Due to the check above, it is known there was more than zero replacements.
+				strcpy(dp, cp); // This also unconditionally terminates dp at the right place.
 
 				// Copy the result back into the caller's original buf (with added complexity by the caller, this step
 				// could be avoided):
