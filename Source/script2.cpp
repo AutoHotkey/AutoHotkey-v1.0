@@ -29,16 +29,6 @@ GNU General Public License for more details.
 // Window related //
 ////////////////////
 
-// Note that there's no action after the IF_USE_FOREGROUND_WINDOW line because that macro handles the action:
-#define DETERMINE_TARGET_WINDOW \
-	HWND target_window;\
-	IF_USE_FOREGROUND_WINDOW(aTitle, aText, aExcludeTitle, aExcludeText)\
-	else if (*aTitle || *aText || *aExcludeTitle || *aExcludeText)\
-		target_window = WinExist(aTitle, aText, aExcludeTitle, aExcludeText);\
-	else\
-		target_window = g_ValidLastUsedWindow;
-
-
 ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *aTitle, char *aFontName
 	, char *aImageFile, bool aSplashImage)
 // Parts of this have been adapted from the AutoIt3 source.
@@ -46,7 +36,9 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 	int window_index = 0;  // Set the default window to operate upon (the first).
 	char *options, *image_filename = aImageFile;  // Set default.
 	bool turn_off = false;
-	int percent = -1;  // Must be set to -1 in the case of SplashImage.
+	int bar_pos;
+	bool bar_pos_has_been_set = false;
+	bool options_consist_of_bar_pos_only = false;
 
 	if (aSplashImage)
 	{
@@ -94,8 +86,12 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 		turn_off = !stricmp(options, "Off");
 		// Allow floats at runtime for flexibility (i.e. in case aOptions was in a variable reference).
 		// But still use ATOI for the conversion:
-		if (!turn_off && IsPureNumeric(options, false, false, true))
-			percent = ATOI(options);
+		if (!turn_off && IsPureNumeric(options, true, false, true)) // Negatives are allowed as of v1.0.25.
+		{
+			bar_pos = ATOI(options);
+			bar_pos_has_been_set = true;
+			options_consist_of_bar_pos_only = true;
+		}
 		//else leave it set to the default.
 	}
 
@@ -107,20 +103,20 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 	if (splash.hwnd && !IsWindow(splash.hwnd))
 		splash.hwnd = NULL;
 
-	if (!turn_off && splash.hwnd && !*image_filename && (percent >= 0 || !*options)) // The "modify existing window" mode is in effect.
+	if (!turn_off && splash.hwnd && !*image_filename && (options_consist_of_bar_pos_only || !*options)) // The "modify existing window" mode is in effect.
 	{
-		// If there is an existing window, just update its percentage (progress bar position) and text.
+		// If there is an existing window, just update its bar position and text.
 		// If not, do nothing since we don't have the original text of the window to recreate it.
 		// Since this is our thread's window, it shouldn't be necessary to use SendMessageTimeout()
 		// since the window cannot be hung if our thread is active.  Also, setting a text item
 		// from non-blank to blank is not supported so that elements can be omitted from an update
 		// command without changing the text that's in the window.  The script can specify %a_space%
 		// to explicitly make an element blank.
-		if (!aSplashImage && percent >= 0 && splash.percent != percent)
+		if (!aSplashImage && bar_pos_has_been_set && splash.bar_pos != bar_pos) // Avoid unnecessary redrawing.
 		{
-			splash.percent = percent;
+			splash.bar_pos = bar_pos;
 			if (splash.hwnd_bar)
-				SendMessage(splash.hwnd_bar, PBM_SETPOS, (WPARAM)percent, 0);
+				SendMessage(splash.hwnd_bar, PBM_SETPOS, (WPARAM)bar_pos, 0);
 		}
 		// SendMessage() vs. SetWindowText() is used for controls so that tabs are expanded.
 		// For simplicity, the hwnd_text1 control is not expanded dynamically if it is currently of
@@ -163,6 +159,7 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 	int exstyle = WS_EX_TOPMOST;
 	int xpos = COORD_UNSPECIFIED;
 	int ypos = COORD_UNSPECIFIED;
+	int range_min = 0, range_max = 0;  // For progress bars.
 	int font_size1 = 0; // 0 is the flag to "use default size".
 	int font_size2 = 0;
 	int font_weight1 = FW_DONTCARE;  // Flag later logic to use default.
@@ -191,7 +188,7 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 	else // Displaying only a naked image, so don't use borders.
 		splash.margin_x = splash.margin_y = 0;
 
-	for (char *cp = options; *cp; ++cp)
+	for (char *cp2, *cp = options; *cp; ++cp)
 	{
 		switch(toupper(*cp))
 		{
@@ -276,6 +273,24 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 				style |= WS_SIZEBOX;
 			if (*(cp + 1) == '2')
 				style |= WS_SIZEBOX|WS_MINIMIZEBOX|WS_MAXIMIZEBOX|WS_SYSMENU;
+			break;
+		case 'P': // Starting position of progress bar [v1.0.25]
+			bar_pos = atoi(cp + 1);
+			bar_pos_has_been_set = true;
+			break;
+		case 'R': // Range of progress bar [v1.0.25]
+			if (!*(cp + 1)) // Ignore it because we don't want cp to ever point to the NULL terminator due to the loop's increment.
+				break;
+			++cp;  // Now it points to range_min.
+			range_min = ATOI(cp);
+			if (cp2 = strchr(cp + 1, '-'))  // +1 to omit the min's minus sign, if it has one.
+			{
+				cp = cp2;
+				if (!*(cp + 1)) // Ignore it because we don't want cp to ever point to the NULL terminator due to the loop's increment.
+					break;
+				++cp; // Now it points to range_max, which can be negative as in this example: R-100--50
+				range_max = ATOI(cp);
+			}
 			break;
 		case 'T': // Give it a task bar button by making it a non-owned window.
 			owned = false;
@@ -596,12 +611,21 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 
 	if (!aSplashImage && splash.object_height > 0) // Progress window
 	{
-		// CREATE Progress control (always starts off at its default percentage of zero):
+		// CREATE Progress control (always starts off at its default position as determined by OS/common controls):
 		if (splash.hwnd_bar = CreateWindowEx(WS_EX_CLIENTEDGE, PROGRESS_CLASS, NULL, WS_CHILD|WS_VISIBLE|PBS_SMOOTH
 			, PROGRESS_BAR_POS, splash.hwnd, NULL, NULL, NULL))
 		{
-			SendMessage(splash.hwnd_bar, PBM_SETRANGE, 0, MAKELONG(0, 100));
-			SendMessage(splash.hwnd_bar, PBM_SETSTEP, 1, 0); // set some characteristics
+			if (range_min || range_max) // i.e. if both are zero, leave it at the default range, which is 0-100.
+			{
+				if (range_min >= 0 && range_min <= 0xFFFF && range_max >= 0 && range_max <= 0xFFFF)
+					// Since the values fall within the bounds for Win95/NT to support, use the old method
+					// in case Win95/NT lacks MSIE 3.0:
+					SendMessage(splash.hwnd_bar, PBM_SETRANGE, 0, MAKELPARAM(range_min, range_max));
+				else
+					SendMessage(splash.hwnd_bar, PBM_SETRANGE32, range_min, range_max);
+			}
+
+
 			if (bar_color != CLR_DEFAULT)
 			{
 				// Remove visual styles so that specified color will be obeyed:
@@ -610,13 +634,13 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 			}
 			if (splash.color_bk != CLR_DEFAULT)
 				SendMessage(splash.hwnd_bar, PBM_SETBKCOLOR, 0, splash.color_bk); // Set color.
-			if (percent > 0)
-			{
+			if (bar_pos_has_been_set) // Note that the window is not yet visible at this stage.
 				// This happens when the window doesn't exist and a command such as the following is given:
-				// Progress, 50 [, ...]
-				splash.percent = percent;
-				SendMessage(splash.hwnd_bar, PBM_SETPOS, (WPARAM)percent, 0);
-			}
+				// Progress, 50 [, ...].  As of v1.0.25, it also happens via the new 'P' option letter:
+				SendMessage(splash.hwnd_bar, PBM_SETPOS, (WPARAM)bar_pos, 0);
+			else // Ask the control its starting/default position in case a custom range is in effect.
+				bar_pos = (int)SendMessage(splash.hwnd_bar, PBM_GETPOS, 0, 0);
+			splash.bar_pos = bar_pos; // Save the current position to avoid redraws when future positions are identical to current.
 		}
 	}
 
@@ -843,7 +867,7 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 	INT64 value64;
 	double value_double1, value_double2, multiplier;
 	double result_double;
-	pure_numeric_type value1_is_pure_numeric, value2_is_pure_numeric;
+	SymbolType value1_is_pure_numeric, value2_is_pure_numeric;
 
 	#undef DETERMINE_NUMERIC_TYPES
 	#define DETERMINE_NUMERIC_TYPES \
@@ -1063,9 +1087,10 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 		// a negative is undefined).  In addition, qmathPow() doesn't support negatives, returning
 		// an unexpectedly large value or -1.#IND00 instead.
 		value_double1 = ATOF(aValue1);
-		if (value_double1 < 0)
-			return output_var->Assign();  // Return a consistent result (blank) rather than something that varies.
 		value_double2 = ATOF(aValue2);
+		// Zero raised to a negative power is undefined, similar to division-by-zero, and thus treated as a failure.
+		if (value_double1 < 0 || (value_double1 == 0.0 && value_double2 < 0))
+			return output_var->Assign();  // Return a consistent result (blank) rather than something that varies.
 		result_double = qmathPow(value_double1, value_double2);
 		ASSIGN_BASED_ON_TYPE_POW
 
@@ -1172,7 +1197,11 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 			// Treat it as a 64-bit signed value, since no other aspects of the program
 			// (e.g. IfEqual) will recognize an unsigned 64 bit number.
 			return output_var->Assign(~value64);
-		else // Treat it as a 32-bit unsigned value when inverting and assigning:
+		else
+			// Treat it as a 32-bit unsigned value when inverting and assigning.  This is
+			// because assigning it as a signed value would "convert" it into a 64-bit
+			// value, which in turn is caused by the fact that the script sees all negative
+			// numbers as 64-bit values (e.g. -1 is 0xFFFFFFFFFFFFFFFF).
 			return output_var->Assign(~(DWORD)value64);
 
 	case TRANS_CMD_BITSHIFTLEFT:  // Equivalent to multiplying by 2^value2
@@ -1304,7 +1333,7 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 		if (!g_input.match)
 		{
 			if (   !(g_input.match = (char **)malloc(INPUT_ARRAY_BLOCK_SIZE * sizeof(char *)))   )
-				return LineError("Out of mem #1");  // Short msg. since so rare.
+				return LineError(ERR_OUTOFMEM);  // Short msg. since so rare.
 			g_input.MatchCountMax = INPUT_ARRAY_BLOCK_SIZE;
 		}
 		// If needed, create or enlarge the buffer that contains all the match phrases:
@@ -1318,7 +1347,7 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 			if (   !(g_input.MatchBuf = (char *)malloc(g_input.MatchBufSize))   )
 			{
 				g_input.MatchBufSize = 0;
-				return LineError("Out of mem #2");  // Short msg. since so rare.
+				return LineError(ERR_OUTOFMEM);  // Short msg. since so rare.
 			}
 		}
 		// Copy aMatchList into the match buffer:
@@ -1358,7 +1387,7 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 					// Expand the array by one block:
 					if (   !(realloc_temp = (char **)realloc(g_input.match  // Must use a temp variable.
 						, (g_input.MatchCountMax + INPUT_ARRAY_BLOCK_SIZE) * sizeof(char *)))   )
-						return LineError("Out of mem #3");  // Short msg. since so rare.
+						return LineError(ERR_OUTOFMEM);  // Short msg. since so rare.
 					g_input.match = realloc_temp;
 					g_input.MatchCountMax += INPUT_ARRAY_BLOCK_SIZE;
 				}
@@ -1541,12 +1570,12 @@ ResultType Line::PerformShowWindow(ActionTypeType aActionType, char *aTitle, cha
 	, char *aExcludeTitle, char *aExcludeText)
 {
 	// By design, the WinShow command must always unhide a hidden window, even if the user has
-	// specified that hidden windows should not be detected.  So set this now so that the
-	// DETERMINE_TARGET_WINDOW macro will make its calls in the right mode:
+	// specified that hidden windows should not be detected.  So set this now so that
+	// DetermineTargetWindow() will make its calls in the right mode:
 	bool need_restore = (aActionType == ACT_WINSHOW && !g.DetectHiddenWindows);
 	if (need_restore)
 		g.DetectHiddenWindows = true;
-	DETERMINE_TARGET_WINDOW
+	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	if (need_restore)
 		g.DetectHiddenWindows = false;
 	if (!target_window)
@@ -1617,7 +1646,7 @@ ResultType Line::WinMove(char *aTitle, char *aText, char *aX, char *aY
 {
 	// So that compatibility is retained, don't set ErrorLevel for commands that are native to AutoIt2
 	// but that AutoIt2 doesn't use ErrorLevel with (such as this one).
-	DETERMINE_TARGET_WINDOW
+	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	if (!target_window)
 		return OK;
 	// Adapted from the AutoIt3 source:
@@ -1646,7 +1675,7 @@ ResultType Line::WinMenuSelectItem(char *aTitle, char *aText, char *aMenu1, char
 	char *menu_param[] = {aMenu1, aMenu2, aMenu3, aMenu4, aMenu5, aMenu6, aMenu7, NULL};
 
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
-	DETERMINE_TARGET_WINDOW
+	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	if (!target_window)
 		return OK;  // Let ErrorLevel tell the story.
 
@@ -1691,14 +1720,14 @@ ResultType Line::WinMenuSelectItem(char *aTitle, char *aText, char *aMenu1, char
 			{
 				GetMenuString(hMenu, pos, menu_text, sizeof(menu_text) - 1, MF_BYPOSITION);
 				match_found = !strnicmp(menu_text, menu_param[i], strlen(menu_param[i]));
-				//match_found = stristr(menu_text, menu_param[i]);
+				//match_found = strcasestr(menu_text, menu_param[i]);
 				if (!match_found)
 				{
 					// Try again to find a match, this time without the ampersands used to indicate
 					// a menu item's shortcut key:
-					StrReplace(menu_text, "&", "");
+					StrReplaceAll(menu_text, "&", "", true);
 					match_found = !strnicmp(menu_text, menu_param[i], strlen(menu_param[i]));
-					//match_found = stristr(menu_text, menu_param[i]);
+					//match_found = strcasestr(menu_text, menu_param[i]);
 				}
 				if (match_found)
 				{
@@ -1728,7 +1757,7 @@ ResultType Line::ControlSend(char *aControl, char *aKeysToSend, char *aTitle, ch
 	, char *aExcludeTitle, char *aExcludeText, bool aSendRaw)
 {
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
-	DETERMINE_TARGET_WINDOW
+	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	if (!target_window)
 		return OK;
 	HWND control_window = stricmp(aControl, "ahk_parent") ? ControlExist(target_window, aControl)
@@ -1746,7 +1775,7 @@ ResultType Line::ControlClick(vk_type aVK, int aClickCount, char *aOptions, char
 	, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
 {
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
-	DETERMINE_TARGET_WINDOW
+	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	if (!target_window)
 		return OK;
 
@@ -1945,7 +1974,7 @@ ResultType Line::ControlClick(vk_type aVK, int aClickCount, char *aOptions, char
 ResultType Line::ControlMove(char *aControl, char *aX, char *aY, char *aWidth, char *aHeight
 	, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
 {
-	DETERMINE_TARGET_WINDOW
+	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	if (!target_window)
 		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
 	HWND control_window = ControlExist(target_window, aControl);
@@ -2009,7 +2038,7 @@ ResultType Line::ControlGetPos(char *aControl, char *aTitle, char *aText, char *
 	Var *output_var_width = ResolveVarOfArg(2);  // Ok if NULL.
 	Var *output_var_height = ResolveVarOfArg(3);  // Ok if NULL.
 
-	DETERMINE_TARGET_WINDOW
+	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	HWND control_window = target_window ? ControlExist(target_window, aControl) : NULL;
 	if (!control_window)
 	{
@@ -2025,7 +2054,7 @@ ResultType Line::ControlGetPos(char *aControl, char *aTitle, char *aText, char *
 	}
 
 	RECT parent_rect, child_rect;
-	// Realistically never fails since DETERMINE_TARGET_WINDOW and ControlExist should always yield
+	// Realistically never fails since DetermineTargetWindow() and ControlExist() should always yield
 	// valid window handles:
 	GetWindowRect(target_window, &parent_rect);
 	GetWindowRect(control_window, &child_rect);
@@ -2051,7 +2080,7 @@ ResultType Line::ControlGetFocus(char *aTitle, char *aText, char *aExcludeTitle,
 		return FAIL;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 	output_var->Assign();  // Set default: blank for the output variable.
-	DETERMINE_TARGET_WINDOW
+	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	if (!target_window)
 		return OK;  // Let ErrorLevel and the blank output variable tell the story.
 
@@ -2112,7 +2141,7 @@ ResultType Line::ControlFocus(char *aControl, char *aTitle, char *aText
 	, char *aExcludeTitle, char *aExcludeText)
 {
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
-	DETERMINE_TARGET_WINDOW
+	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	if (!target_window)
 		return OK;
 	HWND control_window = ControlExist(target_window, aControl);
@@ -2145,7 +2174,7 @@ ResultType Line::ControlSetText(char *aControl, char *aNewText, char *aTitle, ch
 	, char *aExcludeTitle, char *aExcludeText)
 {
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
-	DETERMINE_TARGET_WINDOW
+	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	if (!target_window)
 		return OK;
 	HWND control_window = ControlExist(target_window, aControl);
@@ -2170,7 +2199,7 @@ ResultType Line::ControlGetText(char *aControl, char *aTitle, char *aText
 	if (!output_var)
 		return FAIL;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR);  // Set default.
-	DETERMINE_TARGET_WINDOW
+	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	HWND control_window = target_window ? ControlExist(target_window, aControl) : NULL;
 	// Even if control_window is NULL, we want to continue on so that the output
 	// param is set to be the empty string, which is the proper thing to do
@@ -2229,7 +2258,7 @@ ResultType Line::Control(char *aCmd, char *aValue, char *aControl, char *aTitle,
 	if (control_cmd == CONTROL_CMD_INVALID)
 		return OK;  // Let ErrorLevel tell the story.
 
-	DETERMINE_TARGET_WINDOW
+	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	if (!target_window)
 		return OK;  // Let ErrorLevel tell the story.
 	HWND control_window = ControlExist(target_window, aControl);
@@ -2440,7 +2469,7 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 	if (control_cmd == CONTROLGET_CMD_INVALID)
 		return output_var->Assign();  // Let ErrorLevel tell the story.
 
-	DETERMINE_TARGET_WINDOW
+	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	if (!target_window)
 		return output_var->Assign();  // Let ErrorLevel tell the story.
 	HWND control_window = ControlExist(target_window, aControl);
@@ -2658,7 +2687,7 @@ ResultType Line::StatusBarGetText(char *aPart, char *aTitle, char *aText
 	if (!output_var)
 		return FAIL;
 	// Note: ErrorLevel is handled by StatusBarUtil(), below.
-	DETERMINE_TARGET_WINDOW
+	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	HWND control_window = target_window ? ControlExist(target_window, "msctls_statusbar321") : NULL;
 	// Call this even if control_window is NULL because in that case, it will set the output var to
 	// be blank for us:
@@ -2672,7 +2701,7 @@ ResultType Line::StatusBarWait(char *aTextToWaitFor, char *aSeconds, char *aPart
 	, char *aInterval, char *aExcludeTitle, char *aExcludeText)
 {
 	// Note: ErrorLevel is handled by StatusBarUtil(), below.
-	DETERMINE_TARGET_WINDOW
+	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	// Make a copy of any memory areas that are volatile (due to Deref buf being overwritten
 	// if a new hotkey subroutine is launched while we are waiting) but whose contents we
 	// need to refer to while we are waiting:
@@ -2690,7 +2719,7 @@ ResultType Line::StatusBarWait(char *aTextToWaitFor, char *aSeconds, char *aPart
 ResultType Line::ScriptPostMessage(char *aMsg, char *awParam, char *alParam, char *aControl
 	, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
 {
-	DETERMINE_TARGET_WINDOW
+	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	if (!target_window)
 		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
 	HWND control_window = *aControl ? ControlExist(target_window, aControl) : target_window;
@@ -2709,7 +2738,7 @@ ResultType Line::ScriptPostMessage(char *aMsg, char *awParam, char *alParam, cha
 ResultType Line::ScriptSendMessage(char *aMsg, char *awParam, char *alParam, char *aControl
 	, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
 {
-	DETERMINE_TARGET_WINDOW
+	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	if (!target_window)
 		return g_ErrorLevel->Assign("FAIL"); // Need a special value to distinguish this from numeric reply-values.
 	HWND control_window = *aControl ? ControlExist(target_window, aControl) : target_window;
@@ -2842,7 +2871,7 @@ ResultType Line::WinSet(char *aAttrib, char *aValue, char *aTitle, char *aText
 		return LineError(ERR_WINSET, FAIL, aAttrib);
 
 	// Since this is a macro, avoid repeating it for every case of the switch():
-	DETERMINE_TARGET_WINDOW
+	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	if (!target_window)
 		return OK;
 
@@ -2976,7 +3005,7 @@ ResultType Line::WinSetTitle(char *aTitle, char *aText, char *aNewTitle, char *a
 // Like AutoIt, this function and others like it always return OK, even if the target window doesn't
 // exist or there action doesn't actually succeed.
 {
-	DETERMINE_TARGET_WINDOW
+	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	if (!target_window)
 		return OK;
 	SetWindowText(target_window, aNewTitle);
@@ -2990,7 +3019,7 @@ ResultType Line::WinGetTitle(char *aTitle, char *aText, char *aExcludeTitle, cha
 	Var *output_var = ResolveVarOfArg(0);
 	if (!output_var)
 		return FAIL;
-	DETERMINE_TARGET_WINDOW
+	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	// Even if target_window is NULL, we want to continue on so that the output
 	// param is set to be the empty string, which is the proper thing to do
 	// rather than leaving whatever was in there before.
@@ -3022,7 +3051,7 @@ ResultType Line::WinGetClass(char *aTitle, char *aText, char *aExcludeTitle, cha
 	Var *output_var = ResolveVarOfArg(0);
 	if (!output_var)
 		return FAIL;
-	DETERMINE_TARGET_WINDOW
+	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	if (!target_window)
 		return output_var->Assign();
 	char class_name[WINDOW_CLASS_SIZE];
@@ -3282,7 +3311,7 @@ ResultType Line::WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char
 	if (!output_var)
 		return FAIL;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
-	DETERMINE_TARGET_WINDOW
+	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	// Even if target_window is NULL, we want to continue on so that the output
 	// variables are set to be the empty string, which is the proper thing to do
 	// rather than leaving whatever was in there before:
@@ -3294,7 +3323,7 @@ ResultType Line::WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char
 	sab.total_length = sab.capacity = 0; // Init
 	EnumChildWindows(target_window, EnumChildGetText, (LPARAM)&sab);
 
-	if (!sab.total_length)
+	if (!sab.total_length) // No text in window.
 	{
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 		return output_var->Assign(); // Tell it not to free the memory by omitting all params.
@@ -3302,8 +3331,8 @@ ResultType Line::WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char
 	// This adjustment was added because someone reported that max variable capacity was being
 	// exceeded in some cases (perhaps custom controls that retrieve large amounts of text
 	// from the disk in response to the "get text" message):
-	if (sab.total_length >= g_MaxVarCapacity) // Allow the command to succeed by truncating the text.
-		sab.total_length = g_MaxVarCapacity - 1;
+	if (sab.total_length >= g_MaxVarCapacity)    // Allow the command to succeed by truncating the text.
+		sab.total_length = g_MaxVarCapacity - 1; // And this length will be used to limit the retrieval capacity below.
 
 	// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
 	// this call will set up the clipboard for writing:
@@ -3313,13 +3342,21 @@ ResultType Line::WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char
 	// Fetch the text directly into the var.  Also set the length explicitly
 	// in case actual size written was off from the esimated size (since
 	// GetWindowTextLength() can return more space that will actually be required
-	// in certain circumstances, see MS docs):
+	// in certain circumstances, see MSDN):
 	sab.buf = output_var->Contents();
 	sab.total_length = 0; // Init
-	sab.capacity = output_var->Capacity(); // Because granted capacity might be a little larger than we asked for.
-	EnumChildWindows(target_window, EnumChildGetText, (LPARAM)&sab);
+	// Note: The capacity member below exists because granted capacity might be a little larger than we asked for,
+	// which allows the actual text fetched to be larger than the length estimate retrieved by the first pass
+	// (which generally shouldn't happen since MSDN docs say that the actual length can be less, but never greater,
+	// than the estimate length):
+	sab.capacity = output_var->Capacity(); // Capacity includes the zero terminator, i.e. it's the size of the memory area.
+	EnumChildWindows(target_window, EnumChildGetText, (LPARAM)&sab); // Get the text.
 
-	output_var->Length() = (VarSizeType)sab.total_length;  // In case it wound up being smaller than expected.
+	// Length is set explicitly below in case it wound up being smaller than expected/estimated.
+	// MSDN says that can happen generally, and also specifically because: "ANSI applications may have
+	// the string in the buffer reduced in size (to a minimum of half that of the wParam value) due to
+	// conversion from ANSI to Unicode."
+	output_var->Length() = (VarSizeType)sab.total_length;
 	if (sab.total_length)
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 	else
@@ -3338,7 +3375,7 @@ BOOL CALLBACK EnumChildGetText(HWND aWnd, LPARAM lParam)
 	int length;
 	if (lab.buf)
 		length = GetWindowTextTimeout(aWnd, lab.buf + lab.total_length
-			, (int)(lab.capacity - lab.total_length)); // Not +1.
+			, (int)(lab.capacity - lab.total_length)); // Not +1.  Verified correct because WM_GETTEXT accepts size of buffer, not its length.
 	else
 		length = GetWindowTextTimeout(aWnd);
 	lab.total_length += length;
@@ -3368,7 +3405,7 @@ ResultType Line::WinGetPos(char *aTitle, char *aText, char *aExcludeTitle, char 
 	Var *output_var_width = ResolveVarOfArg(2);  // Ok if NULL.
 	Var *output_var_height = ResolveVarOfArg(3);  // Ok if NULL.
 
-	DETERMINE_TARGET_WINDOW
+	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	// Even if target_window is NULL, we want to continue on so that the output
 	// variables are set to be the empty string, which is the proper thing to do
 	// rather than leaving whatever was in there before.
@@ -4401,7 +4438,7 @@ bool HandleMenuItem(WORD aMenuItemID, WPARAM aGuiIndex)
 	case ID_TRAY_RELOADSCRIPT:
 	case ID_FILE_RELOADSCRIPT:
 		if (!g_script.Reload(false))
-			MsgBox("The script could not be reloaded." PLEASE_REPORT);
+			MsgBox("The script could not be reloaded.");
 		return true;
 	case ID_TRAY_WINDOWSPY:
 	case ID_FILE_WINDOWSPY:
@@ -5171,7 +5208,7 @@ ResultType Line::MouseClickDrag(vk_type aVK, int aX1, int aY1, int aX2, int aY2,
 
 
 
-ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aSpeed, char aEventType
+ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aSpeed, KeyEventTypes aEventType
 	, bool aMoveRelative)
 // Note: This is based on code in the AutoIt3 source.
 {
@@ -5188,12 +5225,6 @@ ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aS
 		// in the case where the number of clicks is a dereferenced script variable
 		// that may sometimes (by intent) resolve to zero or negative:
 		return OK;
-
-	// The chars 'U' (up) and 'D' (down), if specified, will restrict the clicks
-	// to being only DOWN or UP (so that the mouse button can be held down, for
-	// example):
-	if (aEventType)
-		aEventType = toupper(aEventType);
 
 	// Do we need to move the mouse?
 	if (aX != COORD_UNSPECIFIED && aY != COORD_UNSPECIFIED) // Otherwise don't bother.
@@ -5238,12 +5269,12 @@ ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aS
 		// needed if we were to include MOUSEEVENTF_MOVE in the dwFlags parameter, which
 		// we don't since we've already moved the mouse (above) if that was needed:
 		case VK_LBUTTON:
-			if (aEventType != 'U')
+			if (aEventType != KEYUP) // It's either KEYDOWN or KEYDOWNANDUP.
 			{
 				MouseEvent(MOUSEEVENTF_LEFTDOWN);
 				MOUSE_SLEEP;
 			}
-			if (aEventType != 'D')
+			if (aEventType != KEYDOWN) // It's either KEYUP or KEYDOWNANDUP.
 			{
 				MouseEvent(MOUSEEVENTF_LEFTUP);
 				// It seems best to always do this one too in case the script line that caused
@@ -5254,48 +5285,48 @@ ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aS
 			}
 			break;
 		case VK_RBUTTON:
-			if (aEventType != 'U')
+			if (aEventType != KEYUP) // It's either KEYDOWN or KEYDOWNANDUP.
 			{
 				MouseEvent(MOUSEEVENTF_RIGHTDOWN);
 				MOUSE_SLEEP;
 			}
-			if (aEventType != 'D')
+			if (aEventType != KEYDOWN) // It's either KEYUP or KEYDOWNANDUP.
 			{
 				MouseEvent(MOUSEEVENTF_RIGHTUP);
 				MOUSE_SLEEP;
 			}
 			break;
 		case VK_MBUTTON:
-			if (aEventType != 'U')
+			if (aEventType != KEYUP) // It's either KEYDOWN or KEYDOWNANDUP.
 			{
 				MouseEvent(MOUSEEVENTF_MIDDLEDOWN);
 				MOUSE_SLEEP;
 			}
-			if (aEventType != 'D')
+			if (aEventType != KEYDOWN) // It's either KEYUP or KEYDOWNANDUP.
 			{
 				MouseEvent(MOUSEEVENTF_MIDDLEUP);
 				MOUSE_SLEEP;
 			}
 			break;
 		case VK_XBUTTON1:
-			if (aEventType != 'U')
+			if (aEventType != KEYUP) // It's either KEYDOWN or KEYDOWNANDUP.
 			{
 				MouseEvent(MOUSEEVENTF_XDOWN, 0, 0, XBUTTON1);
 				MOUSE_SLEEP;
 			}
-			if (aEventType != 'D')
+			if (aEventType != KEYDOWN) // It's either KEYUP or KEYDOWNANDUP.
 			{
 				MouseEvent(MOUSEEVENTF_XUP, 0, 0, XBUTTON1);
 				MOUSE_SLEEP;
 			}
 			break;
 		case VK_XBUTTON2:
-			if (aEventType != 'U')
+			if (aEventType != KEYUP) // It's either KEYDOWN or KEYDOWNANDUP.
 			{
 				MouseEvent(MOUSEEVENTF_XDOWN, 0, 0, XBUTTON2);
 				MOUSE_SLEEP;
 			}
-			if (aEventType != 'D')
+			if (aEventType != KEYDOWN) // It's either KEYUP or KEYDOWNANDUP.
 			{
 				MouseEvent(MOUSEEVENTF_XUP, 0, 0, XBUTTON2);
 				MOUSE_SLEEP;
@@ -5903,19 +5934,45 @@ ResultType Line::PerformAssign()
 	// The prior content of the clipboard remains available in its other memory area
 	// until Commit() is called (i.e. long enough for our purposes):
 	bool target_is_involved_in_source = false;
+	bool source_is_being_appended_to_target = false; // v1.0.25
 	if (output_var->mType != VAR_CLIPBOARD && mArgc > 1)
+	{
 		// It has a second arg, which in this case is the value to be assigned to the var.
 		// Examine any derefs that the second arg has to see if output_var is mentioned:
 		for (DerefType *deref = mArg[1].deref; deref && deref->marker; ++deref)
-			if (deref->var == output_var)
+		{
+			if (source_is_being_appended_to_target)
 			{
-				target_is_involved_in_source = true;
-				break;
+				// Check if target is mentioned more than once in source, e.g. Var = %Var%Some Text%Var%
+				// would be disqualified for the "fast append" method because %Var% occurs more than once.
+				if (deref->var == output_var)
+				{
+					source_is_being_appended_to_target = false;
+					break;
+				}
 			}
+			else
+			{
+				if (deref->var == output_var)
+				{
+					target_is_involved_in_source = true;
+					// The below disqualifies both of the following cases from the simple-append mode:
+					// Var = %OtherVar%%Var%   ; Var is not the first item as required.
+					// Var = LiteralText%Var%  ; Same.
+					if (deref->marker == mArg[1].text)
+						source_is_being_appended_to_target = true;
+						// And continue the loop to ensure that Var is not referenced more than once,
+						// e.g. Var = %Var%%Var% would be disqualified.
+					else
+						break;
+				}
+			}
+		}
+	}
 
 	// Note: It might be possible to improve performance in the case where
 	// the target variable is large enough to accommodate the new source data
-	// by moving memory around inside it.  For example: Var1 = xxxxxVar1
+	// by moving memory around inside it.  For example, Var1 = xxxxxVar1
 	// could be handled by moving the memory in Var1 to make room to insert
 	// the literal string.  In addition to being quicker than the ExpandArgs()
 	// method, this approach would avoid the possibility of needing to expand the
@@ -5924,9 +5981,10 @@ ResultType Line::PerformAssign()
 	// For example, something like this would probably be much easier to
 	// implement by using ExpandArgs(): Var1 = xxxx Var1 Var2 Var1 xxxx.
 	// So the main thing to be possibly later improved here is the case where
-	// output_var is mentioned only once in the deref list:
+	// output_var is mentioned only once in the deref list (which as of v1.0.25,
+	// has been partially done via the concatenation improvement, e.g. Var = %Var%Text).
 	VarSizeType space_needed;
-	if (target_is_involved_in_source)
+	if (target_is_involved_in_source && !source_is_being_appended_to_target)
 	{
 		if (ExpandArgs() != OK)
 			return FAIL;
@@ -5946,6 +6004,20 @@ ResultType Line::PerformAssign()
 	if (space_needed <= 1) // Variable is being assigned the empty string (or a deref that resolves to it).
 		return output_var->Assign("");  // If the var is of large capacity, this will also free its memory.
 
+	if (source_is_being_appended_to_target)
+	{
+		if (space_needed > output_var->Capacity())
+		{
+			// Since expanding the size of output_var while preserving its existing contents would
+			// likely be a slow operation, revert to the normal method rather than the fast-append
+			// mode.  Expand the args then continue on normally to the below.
+			if (ExpandArgs() != OK)
+				return FAIL;
+		}
+		else // there's enough capacity in output_var to accept the text to be appended.
+			target_is_involved_in_source = false;  // Tell the below not to consider expanding the args.
+	}
+
 	if (target_is_involved_in_source)
 		// It was already dereferenced above, so use ARG2, which points to the
 		// derefed contents of ARG2 (i.e. the data to be assigned).
@@ -5958,8 +6030,10 @@ ResultType Line::PerformAssign()
 	// the validation during load would have prevented the script from loading:
 
 	// First set everything up for the operation.  If output_var is the clipboard, this
-	// will prepare the clipboard for writing:
-	if (output_var->Assign(NULL, space_needed - 1) != OK)
+	// will prepare the clipboard for writing.  Update: If source is being appended
+	// to target using the simple method, we know output_var isn't the clipboard because the
+	// logic at the top of this function ensures that.
+	if (!source_is_being_appended_to_target && output_var->Assign(NULL, space_needed - 1) != OK)
 		return FAIL;
 	// Expand Arg2 directly into the var.  Also set the length explicitly
 	// in case actual size written was off from the esimated size, perhaps
@@ -5969,17 +6043,16 @@ ResultType Line::PerformAssign()
 	// the mem that has already been allocated for the new clipboard contents
 	// That might happen due to a failure or size discrepancy between the
 	// deref size-estimate and the actual deref itself:
-	char *one_beyond_contents_end = ExpandArg(output_var->Contents(), 1);
+	char *contents = output_var->Contents();
+	char *one_beyond_contents_end = ExpandArg(contents, 1); // This knows not to copy the first var-ref onto itself (for when source_is_being_appended_to_target is true).
 	if (!one_beyond_contents_end)
 		return FAIL;  // ExpandArg() will have already displayed the error.
 	// Set the length explicitly rather than using space_needed because GetExpandedArgSize()
 	// sometimes returns a larger size than is actually needed (e.g. for ScriptGetCursor()):
-	output_var->Length() = (VarSizeType)(one_beyond_contents_end - output_var->Contents() - 1);
-	if (g.AutoTrim)
-	{
-		trim(output_var->Contents());
-		output_var->Length() = (VarSizeType)strlen(output_var->Contents());
-	}
+	size_t length = one_beyond_contents_end - contents - 1;
+	// v1.0.25: Passing the precalculated length to trim() greatly improves performance,
+	// especially for concat loops involving things like Var = %Var%String:
+	output_var->Length() = (VarSizeType)(g.AutoTrim ? trim(contents, length) : length);
 	return output_var->Close();  // i.e. Consider this function to be always successful unless this fails.
 }
 
@@ -6316,10 +6389,13 @@ int SortWithOptions(const void *a1, const void *a2)
 	{
 		// For now, assume both are numbers.  If one of them isn't, it will be sorted as a zero.
 		// Thus, all non-numeric items should wind up in a sequential, unsorted group.
-		// Resolve only once since parts of the ATOI() macro are inline:
-		__int64 item1_int = ATOI64(sort_item1);
-		__int64 item2_int = ATOI64(sort_item2);
-		return (int)(g_SortReverse ? item2_int - item1_int : item1_int - item2_int);
+		// Resolve only once since parts of the ATOF() macro are inline:
+		double item1_minus_2 = ATOF(sort_item1) - ATOF(sort_item2);
+		if (!item1_minus_2) // Exactly equal.
+			return 0;
+		// Otherwise, it's either greater or less than zero:
+		int result = (item1_minus_2 > 0.0) ? 1 : -1;
+		return g_SortReverse ? -result : result;
 	}
 	// Otherwise, it's a non-numeric sort.
 	if (g_SortReverse)
@@ -6401,6 +6477,7 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 	bool allow_last_item_to_be_blank = false, terminate_last_item_with_delimiter = false;
 	bool sort_by_naked_filename = false;
 	bool sort_random = false;
+	bool omit_dupes = false;
 	char *cp;
 
 	for (cp = aOptions; *cp; ++cp)
@@ -6436,6 +6513,9 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 			}
 			else
 				g_SortReverse = true;
+			break;
+		case 'U':  // Unique.
+			omit_dupes = true;
 			break;
 		case 'Z':
 			// By setting this to true, the final item in the list, if it ends in a delimiter,
@@ -6487,7 +6567,7 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 	size_t item_size = unit_size * sizeof(char *);
 	char **item = (char **)malloc((item_count + 1) * item_size);
 	if (!item)
-		return LineError("Out of mem");  // Short msg. since so rare.
+		return LineError(ERR_OUTOFMEM);  // Short msg. since so rare.
 
 	// If sort_random is in effect, the above has created an array twice the normal size.
 	// This allows the random numbers to be interleaved inside the array as though it
@@ -6556,31 +6636,72 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 	if (output_var->Assign(NULL, (VarSizeType)aContents_length) != OK) // Might fail due to clipboard problem.
 		return FAIL;
 
-	char *source, *dest;
-	char *pos_of_original_last_item_in_dest = NULL;  // Set default in case original last item is still the last item.
+	// Set default in case original last item is still the last item, or if last item was omitted due to being a dupe:
+	char *pos_of_original_last_item_in_dest = NULL;
 	size_t i, item_count_less_1 = item_count - 1;
+	DWORD omit_dupe_count = 0;
+	bool keep_this_item;
+	char *source, *dest;
+	char *item_prev = NULL;
 
 	// Copy the sorted result back into output_var.  Do all except the last item, since the last
 	// item gets special treatment depending on the options that were specified.  The call to
 	// output_var->Contents() below should never fail due to the above having prepped it:
 	item_curr = item; // i.e. Don't use [] indexing for the reason described higher above (same applies to item += unit_size below).
-	for (dest = output_var->Contents(), i = 0; i < item_count_less_1; ++i, item_curr += unit_size)
+	for (dest = output_var->Contents(), i = 0; i < item_count; ++i, item_curr += unit_size)
 	{
-		if (*item_curr == original_last_item)
-			pos_of_original_last_item_in_dest = dest;
-		for (source = *item_curr; *source;)
-			*dest++ = *source++;
-		*dest++ = delimiter;  // Put each item's delimiter back in so that format is the same as the original.
+		keep_this_item = true;  // Set default.
+		if (omit_dupes && item_prev)
+		{
+			// Update to the comment below: Exact dupes will still be removed when sort_by_naked_filename
+			// or g_SortColumnOffset is in effect because duplicate lines would still be adjacent to
+			// each other even in these modes.  There doesn't appear to be any exceptions, even if
+			// some items in the list are sorted as blanks due to being shorter than the specified 
+			// g_SortColumnOffset.
+			// As documented, special dupe-checking modes are not offered when sort_by_naked_filename
+			// is in effect, or g_SortColumnOffset is greater than 1.  That's because the need for such
+			// a thing seems too rare (and the result too strange) to justify the extra code size.
+			// However, adjacent dupes are still removed when any of the above modes are in effect,
+			// or when the "random" mode is in effect.  This might have some usefulness; for example,
+			// if a list of songs is sorted in random order, but it contains "favorite" songs listed twice,
+			// the dupe-removal feature would remove duplicate songs if they happen to be sorted
+			// to lie adjacent to each other, which would be useful to prevent the same song from
+			// playing twice in a row.
+			if (g_SortNumeric && !g_SortColumnOffset)
+				// if g_SortColumnOffset is zero, fall back to the normal dupe checking in case its
+				// ever useful to anyone.  This is done because numbers in an offset column are not supported
+				// since the extra code size doensn't seem justified given the rarity of the need.
+				keep_this_item = (ATOF(*item_curr) != ATOF(item_prev));
+			else
+				keep_this_item = g_SortCaseSensitive ? strcmp(*item_curr, item_prev) : stricmp(*item_curr, item_prev);
+				// Permutations of sorting case sensitive vs. eliminating duplicates based on case sensitivity:
+				// 1) Sort is not case sens, but dupes are: Won't work because sort didn't necessarily put
+				//    same-case dupes adjacent to each other.
+				// 2) Converse: probably not reliable because there could be unrelated items in between
+				//    two strings that are duplicates but weren't sorted adjacently due to their case.
+				// 3) Both are case sensitive: seems okay
+				// 4) Both are not case sensitive: seems okay
+				// In light of the above, using the g_SortCaseSensitive flag to control the behavior of
+				// both sorting and dupe-removal seems best.
+		}
+		if (keep_this_item)
+		{
+			if (*item_curr == original_last_item && i < item_count_less_1) // i.e. If last item is still last, don't update the below.
+				pos_of_original_last_item_in_dest = dest;
+			for (source = *item_curr; *source;)
+				*dest++ = *source++;
+			// If we're at the last item and the original list's last item had a terminating delimiter
+			// and the specified options said to treat it not as a delimiter but as a final char of sorts,
+			// include it after the item that is now last so that the overall layout is the same:
+			if (i < item_count_less_1 || terminate_last_item_with_delimiter)
+				*dest++ = delimiter;  // Put each item's delimiter back in so that format is the same as the original.
+			item_prev = *item_curr; // Since the item just processed above isn't a dupe, save this item to compare against the next item.
+		}
+		else // This item is a duplicate of the previous item.
+			++omit_dupe_count;
+			// But don't change the value of item_prev.
 	}
 
-	// Copy the last item:
-	for (source = *item_curr; *source;)
-		*dest++ = *source++;
-	// If the original list's last item had a terminating delimiter and the specified options said
-	// to treat it not as a delimiter but as a final char of sorts, include it after the item that
-	// is now last so that the overall layout is the same:
-	if (terminate_last_item_with_delimiter)
-		*dest++ = delimiter;
 	*dest = '\0';  // Terminate the variable's contents.
 
 	// Check if special handling is needed due to the following situation:
@@ -6591,24 +6712,41 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 	// This happens pretty often, such as when the clipboard contains files.
 	// In the future, an option letter can be added to turn off this workaround,
 	// but it seems unlikely that anyone would ever want to:
-	if (delimiter == '\n' && !terminate_last_item_with_delimiter && *(dest - 1) == '\r'
-		&& pos_of_original_last_item_in_dest)
+	if (delimiter == '\n' && !terminate_last_item_with_delimiter && *(dest - 1) == '\r')
 	{
-		if (cp = strchr(pos_of_original_last_item_in_dest, delimiter))  // Assign
+		if (pos_of_original_last_item_in_dest)
 		{
-			// Remove the offending '\r':
+			if (cp = strchr(pos_of_original_last_item_in_dest, delimiter))  // Assign
+			{
+				// Remove the offending '\r':
+				--dest;
+				*dest = '\0';
+				// And insert it where it belongs:
+				memmove(cp + 1, cp, dest - cp + 1);  // memmove() allows source & dest to overlap.
+				*cp = '\r';
+			}
+		}
+		else if (omit_dupe_count)
+		{
+			// The item that was originally last was probably omitted from the sorted list.
+			// But in that case, it seems best to remove the final \r completely, because
+			// it doesn't belong as the final character, nor is there a place to move it
+			// to because the line it belongs with doesn't exist in the string.
 			--dest;
 			*dest = '\0';
-			// And insert it where it belongs:
-			memmove(cp + 1, cp, dest - cp + 1);  // memmove() allows source & dest to overlap.
-			*cp = '\r';
 		}
+		//else do nothing
 	}
 
-	// Free the memory used for the sort:
-	free(item);
+	free(item); // Free the memory used for the sort.
 
-	// It is not necessary to set output_var->Length() here because its length hasn't changed
+	if (omit_dupes)
+	{
+		if (omit_dupe_count) // Update the length to actual whenever at least one dupe was omitted.
+			output_var->Length() = (VarSizeType)strlen(output_var->Contents());
+		g_ErrorLevel->Assign(omit_dupe_count); // ErrorLevel is set only when dupe-mode is in effect.
+	}
+	//else it is not necessary to set output_var->Length() here because its length hasn't changed
 	// since it was originally set by the above call "output_var->Assign(NULL..."
 	return output_var->Close();  // Close in case it's the clipboard.
 }
@@ -6863,7 +7001,7 @@ ResultType Line::DriveSpace(char *aPath, bool aGetFreeSpace)
 
 	if (!aPath || !*aPath) return OK;  // Let ErrorLevel tell the story.  Below relies on this check.
 
-	char buf[MAX_PATH * 2];
+	char buf[MAX_PATH + 1];  // +1 to allow appending of backslash.
 	strlcpy(buf, aPath, sizeof(buf));
 	size_t length = strlen(buf);
 	if (buf[length - 1] != '\\') // AutoIt3: Attempt to fix the parameter passed.
@@ -6998,6 +7136,14 @@ ResultType Line::DriveLock(char aDriveLetter, bool aLockIt)
 
 	if (g_os.IsWin9x())
 	{
+		// blisteringhot@hotmail.com has confirmed that the code below works on Win98 with an IDE CD Drive:
+		// System:  Win98 IDE CdRom (my ejecter is CloseTray)
+		// I get a blue screen when I try to eject after using the test script.
+		// "eject request to drive in use"
+		// It asks me to Ok or Esc, Ok is default.
+		//	-probably a bit scary for a novice.
+		// BUT its locked alright!"
+
 		// Use the Windows 9x method.  The code below is based on an example posted by Microsoft.
 		// Note: The presence of the code below does not add a detectible amount to the EXE size
 		// (probably because it's mostly defines and data types).
@@ -7371,8 +7517,10 @@ ResultType Line::SoundSetGet(char *aSetting, DWORD aComponentType, int aComponen
 		return g_ErrorLevel->Assign("Component Doesn't Support This Control Type");
 	}
 
-	// Does user want to adjust the current setting by a certain amount?:
-	bool adjust_current_setting = aSetting && (*aSetting == '-' || *aSetting == '+');
+	// Does user want to adjust the current setting by a certain amount?
+	// For v1.0.25, the first char of RAW_ARG is also checked in case this is an expression intended
+	// to be a positive offset, such as +(var + 10)
+	bool adjust_current_setting = aSetting && (*aSetting == '-' || *aSetting == '+' || *RAW_ARG1 == '+');
 
 	// These are used in more than once place, so always initialize them here:
 	MIXERCONTROLDETAILS mcd = {0};
@@ -7417,8 +7565,10 @@ ResultType Line::SoundSetGet(char *aSetting, DWORD aComponentType, int aComponen
 			{
 				// Make it a big int so that overflow/underflow can be detected:
 				__int64 vol_new = mcdMeter.dwValue + specified_vol;
-				if (vol_new < mc.Bounds.dwMinimum) vol_new = mc.Bounds.dwMinimum;
-				else if (vol_new > mc.Bounds.dwMaximum) vol_new = mc.Bounds.dwMaximum;
+				if (vol_new < mc.Bounds.dwMinimum)
+					vol_new = mc.Bounds.dwMinimum;
+				else if (vol_new > mc.Bounds.dwMaximum)
+					vol_new = mc.Bounds.dwMaximum;
 				mcdMeter.dwValue = (DWORD)vol_new;
 			}
 			else
@@ -7487,7 +7637,9 @@ ResultType Line::SoundSetWaveVolume(char *aVolume, HWAVEOUT aDeviceID)
 	int specified_vol_per_channel = (int)(0xFFFF * (volume / 100));
 	DWORD vol_new;
 
-	if (*aVolume == '-' || *aVolume == '+') // User wants to adjust the current level by a certain amount.
+	// For v1.0.25, the first char of RAW_ARG is also checked in case this is an expression intended
+	// to be a positive offset, such as +(var + 10)
+	if (*aVolume == '-' || *aVolume == '+' || *RAW_ARG1 == '+') // User wants to adjust the current level by a certain amount.
 	{
 		DWORD current_vol;
 		if (waveOutGetVolume(aDeviceID, &current_vol) != MMSYSERR_NOERROR)
@@ -7499,10 +7651,14 @@ ResultType Line::SoundSetWaveVolume(char *aVolume, HWAVEOUT aDeviceID)
 		vol_left += specified_vol_per_channel;
 		vol_right += specified_vol_per_channel;
 		// Handle underflow or overflow:
-		if (vol_left < 0) vol_left = 0;
-		else if (vol_left > 0xFFFF) vol_left = 0xFFFF;
-		if (vol_right < 0) vol_right = 0;
-		else if (vol_right > 0xFFFF) vol_right = 0xFFFF;
+		if (vol_left < 0)
+			vol_left = 0;
+		else if (vol_left > 0xFFFF)
+			vol_left = 0xFFFF;
+		if (vol_right < 0)
+			vol_right = 0;
+		else if (vol_right > 0xFFFF)
+			vol_right = 0xFFFF;
 		vol_new = MAKELONG((WORD)vol_left, (WORD)vol_right);  // Left is low-order, right is high-order.
 	}
 	else // User wants the volume level set to an absolute level (i.e. ignore its current level).
@@ -7521,7 +7677,7 @@ ResultType Line::SoundPlay(char *aFilespec, bool aSleepUntilDone)
 	// Adapted from the AutoIt3 source.
 	// See http://msdn.microsoft.com/library/default.asp?url=/library/en-us/multimed/htm/_win32_play.asp
 	// for some documentation mciSendString() and related.
-	char buf[MAX_PATH * 2];
+	char buf[MAX_PATH * 2]; // Allow room for filename and commands.
 	mciSendString("status " SOUNDPLAY_ALIAS " mode", buf, sizeof(buf), NULL);
 	if (*buf) // "playing" or "stopped" (so close it before trying to re-open with a new aFilespec).
 		mciSendString("close " SOUNDPLAY_ALIAS, NULL, 0, NULL);
@@ -7671,7 +7827,7 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 	// may be a string that's too long.
 	char file_buf[65535] = ""; // Set default.
 
-	char working_dir[MAX_PATH * 2];
+	char working_dir[MAX_PATH];
 	if (!aWorkingDir || !*aWorkingDir)
 		*working_dir = '\0';
 	else
@@ -7735,7 +7891,7 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 			// that separates the allowed file extensions.  The API docs specify that there
 			// should be no spaces in the pattern itself, even though it's okay if they exist
 			// in the displayed name of the file-type:
-			StrReplace(pattern, " ", "");
+			StrReplaceAll(pattern, " ", "", true);
 			// Also include the All Files (*.*) filter, since there doesn't seem to be much
 			// point to making this an option.  This is because the user could always type
 			// *.* and press ENTER in the filename field and achieve the same result:
@@ -7766,14 +7922,28 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 	// In addition, it does not prevent the CWD from changing while the user navigates from folder to
 	// folder in the dialog, except perhaps on Win9x.
 
-	bool always_use_save_dialog;
-	if (toupper(*aOptions) == 'S')
+	// For v1.0.26, the new "M" letter is used for a new multi-select method since the old multi-select
+	// is faulty in the following ways:
+	// 1) If the user selects a single file in a multi-select dialog, the result is inconsistent: it
+	//    contains the full path and name of that single file rather than the folder followed by the
+	//    single file name as most users would expect.  To make matters worse, it includes a linefeed
+	//    after that full path in name, which makes it difficult for a script to determine whether
+	//    only a single file was selected.
+	// 2) The last item in the list is terminated by a linefeed, which is not as easily used with a
+	//    parsing loop as shown in example in the help file.
+	bool always_use_save_dialog = false; // Set default.
+	bool new_multi_select_method = false; // Set default.
+	switch (toupper(*aOptions))
 	{
-		always_use_save_dialog = true;
+	case 'M':
 		++aOptions;
+		new_multi_select_method = true;
+		break;
+	case 'S': // Have a "Save" button rather than an "Open" button.
+		++aOptions;
+		always_use_save_dialog = true;
+		break;
 	}
-	else
-		always_use_save_dialog = false;
 
 	int options = ATOI(aOptions);
 	ofn.Flags = OFN_HIDEREADONLY | OFN_EXPLORER | OFN_NODEREFERENCELINKS;
@@ -7781,7 +7951,7 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 		ofn.Flags |= OFN_OVERWRITEPROMPT;
 	if (options & 0x08)
 		ofn.Flags |= OFN_CREATEPROMPT;
-	if (options & 0x04)
+	if (new_multi_select_method || (options & 0x04))
 		ofn.Flags |= OFN_ALLOWMULTISELECT;
 	if (options & 0x02)
 		ofn.Flags |= OFN_PATHMUSTEXIST;
@@ -7826,20 +7996,52 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 
 	if (ofn.Flags & OFN_ALLOWMULTISELECT)
 	{
-		// Replace all the zero terminators with a delimiter, except the one for the last file
-		// (the last file should be followed by two sequential zero terminators).
-		// Use a delimiter that can't be confused with a real character inside a filename, i.e.
-		// not a comma.  We only have room for one without getting into the complexity of having
-		// to expand the string, so \r\n is disqualified for now.
-		for (char *cp = ofn.lpstrFile;;)
+		char *cp;
+		if (new_multi_select_method) // v1.0.26+ method.
 		{
-			for (; *cp; ++cp); // Find the next terminator.
-			*cp = '\n'; // Replace zero-delimiter with a visible/printable delimiter, for the user.
-			if (!*(cp + 1)) // This is the last file because it's double-terminated, so we're done.
-				break;
+			// If the first terminator in file_buf is also the last, the user selected only
+			// a single file:
+			size_t length = strlen(file_buf);
+			if (!file_buf[length + 1]) // The list contains only a single file (full path and name).
+			{
+				// v1.0.26: To make the result of selecting one file the same as selecting multiple files
+				// -- and thus easier to work with in a script -- convert the result into the multi-file
+				// format (folder as first item and naked filename as second):
+				if (cp = strrchr(file_buf, '\\'))
+					*cp = '\n';
+			}
+			else // More than one file was selected.
+			{
+				// Use the same method as the old multi-select format except don't provide a
+				// linefeed after the final item.  That final linefeed would make parsing via
+				// a parsing loop more complex because a parsing loop would see a blank item
+				// at the end of the list:
+				for (cp = file_buf;;)
+				{
+					for (; *cp; ++cp); // Find the next terminator.
+					if (!*(cp + 1)) // This is the last file because it's double-terminated, so we're done.
+						break;
+					*cp = '\n'; // Replace zero-delimiter with a visible/printable delimiter, for the user.
+				}
+			}
+		}
+		else  // Old multi-select method is in effect (kept for backward compatibility).
+		{
+			// Replace all the zero terminators with a delimiter, except the one for the last file
+			// (the last file should be followed by two sequential zero terminators).
+			// Use a delimiter that can't be confused with a real character inside a filename, i.e.
+			// not a comma.  We only have room for one without getting into the complexity of having
+			// to expand the string, so \r\n is disqualified for now.
+			for (cp = file_buf;;)
+			{
+				for (; *cp; ++cp); // Find the next terminator.
+				*cp = '\n'; // Replace zero-delimiter with a visible/printable delimiter, for the user.
+				if (!*(cp + 1)) // This is the last file because it's double-terminated, so we're done.
+					break;
+			}
 		}
 	}
-	return output_var->Assign(ofn.lpstrFile);
+	return output_var->Assign(file_buf);
 }
 
 
@@ -8089,19 +8291,142 @@ ResultType Line::FileCreateDir(char *aDirSpec)
 	char *last_backslash = strrchr(aDirSpec, '\\');
 	if (last_backslash)
 	{
-		char parent_dir[MAX_PATH * 2];
+		char parent_dir[MAX_PATH];
 		if (strlen(aDirSpec) >= sizeof(parent_dir)) // avoid overflow
 			return OK; // Let ErrorLevel tell the story.
 		strlcpy(parent_dir, aDirSpec, last_backslash - aDirSpec + 1); // Omits the last backslash.
 		FileCreateDir(parent_dir); // Recursively create all needed ancestor directories.
 		if (*g_ErrorLevel->Contents() == *ERRORLEVEL_ERROR)
-			return OK; // Return OK because ERRORLEVEL_ERROR is the indicator of failure.
+			return OK; // Let ERRORLEVEL_ERROR tell the story.
 	}
 
 	// The above has recursively created all parent directories of aDirSpec if needed.
 	// Now we can create aDirSpec.  Be sure to explicitly set g_ErrorLevel since it's value
 	// is now indeterminate due to action above:
 	return g_ErrorLevel->Assign(CreateDirectory(aDirSpec, NULL) ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
+}
+
+
+
+ResultType Line::FileRead(char *aFilespec)
+// Returns OK or FAIL.  Will almost always return OK because if an error occurs,
+// the script's ErrorLevel variable will be set accordingly.  However, if some
+// kind of unexpected and more serious error occurs, such as variable-out-of-memory,
+// that will cause FAIL to be returned.
+{
+	Var *output_var = ResolveVarOfArg(0);
+	if (!output_var)
+		return FAIL;
+
+	// Init output var to be blank as an additional indicator of failure (or empty file).
+	// Caller must check ErrorLevel to distinguish between an empty file and an error.
+	output_var->Assign();
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
+
+	// Set default options:
+	bool translate_crlf_to_lf = false;
+
+	// It's done as asterisk+option letter to permit future expansion.  A plain asterisk such as used
+	// by the FileAppend command would create ambiguity if there was ever an effort to add other asterisk-
+	// prefixed options later:
+	char *cp = omit_leading_whitespace(aFilespec); // omit leading whitespace only temporarily in case aFilespec contains literal whitespace we want to retain.
+	if (*cp == '*')
+	{
+		++cp;
+		if (toupper(*cp) == 'T') // Text mode.
+            translate_crlf_to_lf = true;
+		// Note: because it's possible for filenames to start with a space (even though Explorer itself
+		// won't let you create them that way), allow exactly one space between end of option and the
+		// filename itself:
+		aFilespec = cp;  // aFilespec is now the option letter after the asterisk, or empty string if there was none.
+		if (*aFilespec)
+		{
+			++aFilespec;
+			// Now it's the space or tab (if there is one) after the option letter.  It seems best for
+			// future expansion to assume that this is a space or tab even if it's really the start of
+			// the filename.  For example, in the future, multiletter optios might be wanted, in which
+			// case allowing the omission of the space or tab between *t and the start of the filename
+			// would cause the following to be ambiguous:
+			// FileRead, OutputVar, *delimC:\File.txt
+			// (assuming *delim would accept an optional arg immediately following it).
+			// Enforcing this format also simplifies parsing in the future, if there are ever multiple options.
+			// It also conforms to the precedent/behavior of GuiControl when it accepts picture sizing options
+			// such as *w/h and *x/y
+			if (*aFilespec)
+				++aFilespec; // And now it's the start of the filename.  This behavior is as documented in the help file.
+		}
+	}
+
+	// It seems more flexible to allow other processes to read and write the file while we're reading it.
+	// For example, this allows the file to be appended to during the read operation, which could be
+	// desirable, espcially it's a very large log file that would take a long time to read.
+	// MSDN: "To enable other processes to share the object while your process has it open, use a combination
+	// of one or more of [FILE_SHARE_READ, FILE_SHARE_WRITE]."
+	HANDLE handle = CreateFile(aFilespec, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING
+		, FILE_FLAG_SEQUENTIAL_SCAN, NULL); // MSDN says that FILE_FLAG_SEQUENTIAL_SCAN will often improve performance in this case.
+	if (!handle)
+		return OK; // Let ErrorLevel tell the story.
+
+	// The program is currently compiled with a 2GB address limit, so loading files larger than that
+	// would probably fail or perhaps crash the program.  Therefore, just putting a basic 1.5 GB sanity
+	// limit on the file here, for now.  Note: a variable can still be operated upon without necessarily
+	// using the deref buffer, since that buffer only comes into play when there is no other way to
+	// manipulate the variable.  In other words, the deref buffer won't necessarily grow to be the same
+	// size as the file, which if it happened for a 1GB file would exceed the 2GB address limit.
+	// That is why a smaller limit such as 800 MB seems too severe:
+	unsigned __int64 bytes_to_read = GetFileSize64(handle);
+	if (bytes_to_read > 1024*1024*1024) // Also note that bytes_to_read==ULLONG_MAX means GetFileSize64() failed.
+	{
+		CloseHandle(handle);
+		return OK; // Let ErrorLevel tell the story.
+	}
+
+	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Set default for this point forward to be "success".
+
+	if (!bytes_to_read)
+	{
+		CloseHandle(handle);
+		return OK; // And ErrorLevel will indicate success (a zero length file results in empty output_var).
+	}
+
+	// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
+	// this call will set up the clipboard for writing:
+	if (output_var->Assign(NULL, (VarSizeType)bytes_to_read) != OK) // Probably due to "out of memory".
+	{
+		CloseHandle(handle);
+		return FAIL;  // It already displayed the error. ErrorLevel doesn't matter now because the current quasi-thread will be aborted.
+	}
+	char *output_buf = output_var->Contents();
+
+	DWORD bytes_actually_read;
+	BOOL result = ReadFile(handle, output_buf, (DWORD)bytes_to_read, &bytes_actually_read, NULL);
+	CloseHandle(handle);
+
+	if (result)
+	{
+		output_buf[bytes_actually_read] = '\0';  // Ensure text is terminated where indicated.
+		// Since a larger string is being replaced with a smaller, there's a good chance the 2 GB
+		// address limit will not be exceeded by StrReplaceAll even if if the file is close to the
+		// 1 GB limit as described above:
+		if (translate_crlf_to_lf)
+			StrReplaceAll(output_buf, "\r\n", "\n", false); // Safe only because larger string is being replaced with smaller.
+		output_var->Length() = (VarSizeType)strlen(output_buf); // Explicitly calculate in case any binary zeros were read.
+	}
+	else
+	{
+		// ReadFile() failed.  Since MSDN does not document what is in the buffer at this stage,
+		// or whether what's in it is even null-termianted, or even whether bytes_to_read contains
+		// a valid value, it seems best to abort the entire operation rather than try to put partial
+		// file contents into output_var.  ErrorLevel will indicate the failure.
+		// Since ReadFile() failed, to avoid complications or side-effects in functions such as Var::Close(),
+		// avoid storing a potentially non-terminated string in the variable.
+		*output_buf = '\0';
+		output_var->Length() = 0;
+		g_ErrorLevel->Assign(ERRORLEVEL_ERROR);  // Override the success default that was set in the middle of this function.
+	}
+
+	// ErrorLevel, as set in various places above, indicates success or failure.
+	return output_var->Close();  // In case it's the clipboard.
 }
 
 
@@ -8159,38 +8484,65 @@ ResultType Line::FileReadLine(char *aFilespec, char *aLineNumber)
 
 
 
-ResultType Line::FileAppend(char *aFilespec, char *aBuf, FILE *aTargetFileAlreadyOpen)
+ResultType Line::FileAppend(char *aFilespec, char *aBuf, LoopReadFileStruct *aCurrentReadFile)
 {
-	if (!aTargetFileAlreadyOpen && (!aFilespec || !*aFilespec)) // Nothing to write to (caller relies on this check).
-		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
-
-	// Don't do this because want to allow "nothing" to be written to a file in case the
+	// The below is avoided because want to allow "nothing" to be written to a file in case the
 	// user is doing this to reset it's timestamp:
 	//if (!aBuf || !*aBuf)
 	//	return g_ErrorLevel->Assign(ERRORLEVEL_NONE);
 
-	FILE *fp;
-	if (aTargetFileAlreadyOpen)
-		fp = aTargetFileAlreadyOpen;
-	else
+	if (aCurrentReadFile) // It always takes precedence over aFilespec.
+		aFilespec = aCurrentReadFile->mWriteFileName;
+	if (!*aFilespec) // Nothing to write to (caller relies on this check).
+		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+
+	FILE *fp = aCurrentReadFile ? aCurrentReadFile->mWriteFile : NULL;
+	bool file_was_already_open = fp;
+
+	bool open_as_binary = (*aFilespec == '*');
+	if (open_as_binary)
+		// Do not do this because it's possible for filenames to start with a space
+		// (even though Explorer itself won't let you create them that way):
+		//write_filespec = omit_leading_whitespace(write_filespec + 1);
+		// Instead just do this:
+		++aFilespec;
+	else if (!file_was_already_open) // As of 1.0.25, auto-detect binary if that mode wasn't explicitly specified.
+		// Auto-detection avoids the need to have to translate \r\n to \n when reading
+		// a file via the FileRead command.  This seems extremely unlikely to break any
+		// existing scripts because the intentional use of \r\r\n in a text file (two
+		// consecutive carriage returns) -- which would happen if \r\n were written in
+		// text mode -- is so rare as to be close to non-existent.  If this behavior
+		// is ever specifically needed, the script can explicitly places some \r\r\n's
+		// in the file and then write it as binary mode.
+		open_as_binary = strstr(aBuf, "\r\n");
+		// Due to "else if", the above will not turn off binary mode if binary was explicitly specified.
+		// That is useful to write Unix style text files whose lines end in solitary linefeeds.
+
+	// Check if the file needes to be opened.  As of 1.0.25, this is done here rather than
+	// at the time the loop first begins so that:
+	// 1) Binary mode can be auto-detected if the first block of text appended to the file
+	//    contains any \r\n's.
+	// 2) To avoid opening the file if the file-reading loop has zero iterations (i.e. it's
+	//    opened only upon first actual use to help performance and avoid changing the
+	//    file-modification time when no actual text will be appended).
+	if (!file_was_already_open)
 	{
-		bool open_as_binary = false;
-		if (*aFilespec == '*')
-		{
-			open_as_binary = true;
-			// Do not do this because I think it's possible for filenames to start with a space
-			// (even though Explorer itself won't let you create them that way):
-			//aFilespec = omit_leading_whitespace(aFilespec + 1);
-			// Instead just do this:
-			++aFilespec;
-		}
+		// Open the output file (if one was specified).  Unlike the input file, this is not
+		// a critical error if it fails.  We want it to be non-critical so that FileAppend
+		// commands in the body of the loop will set ErrorLevel to indicate the problem:
 		if (   !(fp = fopen(aFilespec, open_as_binary ? "ab" : "a"))   )
 			return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+		if (aCurrentReadFile)
+			aCurrentReadFile->mWriteFile = fp;
 	}
+
+	// Write to the file:
 	g_ErrorLevel->Assign(fputs(aBuf, fp) ? ERRORLEVEL_ERROR : ERRORLEVEL_NONE); // fputs() returns 0 on success.
-	if (!aTargetFileAlreadyOpen)
+
+	if (!aCurrentReadFile)
 		fclose(fp);
 	// else it's the caller's responsibility, or it's caller's, to close it.
+
 	return OK;
 }
 
@@ -8210,8 +8562,12 @@ ResultType Line::FileDelete(char *aFilePattern)
 	}
 
 	// Otherwise aFilePattern contains wildcards, so we'll search for all matches and delete them.
-	char file_path[MAX_PATH * 2];  // Give extra room in case OS supports extra-long filenames?
-	char target_filespec[MAX_PATH * 2];
+	// Testing shows that the ANSI version of FindFirstFile() will not accept a path+pattern longer
+	// than 256 or so, even if the pattern would match files whose names are short enough to be legal.
+	// Therefore, as of v1.0.25, there is also a hard limit of MAX_PATH on all these variables.
+	// MSDN confirms this in a vague way: "In the ANSI version of FindFirstFile(), [plpFileName] is
+	// limited to MAX_PATH characters."
+	char file_path[MAX_PATH], target_filespec[MAX_PATH];
 	if (strlen(aFilePattern) >= sizeof(file_path))
 		return OK; // Return OK because this is non-critical.  Let the above ErrorLevel indicate the problem.
 	strlcpy(file_path, aFilePattern, sizeof(file_path));
@@ -8388,12 +8744,15 @@ int Line::FileSetAttrib(char *aAttributes, char *aFilePattern, FileLoopModeType 
 	// be overwritten by the interrupting subroutine:
 	char attributes[64];
 	strlcpy(attributes, aAttributes, sizeof(attributes));
-	char file_pattern[MAX_PATH * 2];  // In case OS supports extra-long filenames.
+
+	// Testing shows that the ANSI version of FindFirstFile() will not accept a path+pattern longer
+	// than 256 or so, even if the pattern would match files whose names are short enough to be legal.
+	// Therefore, as of v1.0.25, there is also a hard limit of MAX_PATH on all these variables.
+	// MSDN confirms this in a vague way: "In the ANSI version of FindFirstFile(), [plpFileName] is
+	// limited to MAX_PATH characters."
+	char file_pattern[MAX_PATH], file_path[MAX_PATH], target_filespec[MAX_PATH];
 	strlcpy(file_pattern, aFilePattern, sizeof(file_pattern));
 
-	// Give extra room in some of these vars, in case OS supports extra-long filenames:
-	char file_path[MAX_PATH * 2];
-	char target_filespec[MAX_PATH * 2];
 	if (strlen(file_pattern) >= sizeof(file_path))
 		return 0; // Let the above ErrorLevel indicate the problem.
 	strlcpy(file_path, file_pattern, sizeof(file_path));
@@ -8517,11 +8876,12 @@ int Line::FileSetAttrib(char *aAttributes, char *aFilePattern, FileLoopModeType 
 
 	if (aDoRecurse)
 	{
-		// Now that the base directory of aFilePattern has been processed, recurse into
-		// any subfolders to look for the same pattern.  Create a new pattern (don't reuse
-		// file_pattern since naked_filename_or_pattern points into it) to be *.* so that
-		// we can find all subfolders, not just those matching the original pattern:
-		char all_file_pattern[MAX_PATH * 2];  // In case OS supports extra-long filenames.
+		// Testing shows that the ANSI version of FindFirstFile() will not accept a path+pattern longer
+		// than 256 or so, even if the pattern would match files whose names are short enough to be legal.
+		// Therefore, as of v1.0.25, there is also a hard limit of MAX_PATH on all these variables.
+		// MSDN confirms this in a vague way: "In the ANSI version of FindFirstFile(), [plpFileName] is
+		// limited to MAX_PATH characters."
+		char all_file_pattern[MAX_PATH];
 		snprintf(all_file_pattern, sizeof(all_file_pattern), "%s*.*", file_path);
 		file_search = FindFirstFile(all_file_pattern, &current_file);
 		file_found = (file_search != INVALID_HANDLE_VALUE);
@@ -8614,7 +8974,7 @@ int Line::FileSetTime(char *aYYYYMMDD, char *aFilePattern, char aWhichTime
 	// be overwritten by the interrupting subroutine:
 	char yyyymmdd[64]; // Even do this one since its value is passed recursively in calls to self.
 	strlcpy(yyyymmdd, aYYYYMMDD, sizeof(yyyymmdd));
-	char file_pattern[MAX_PATH * 2];  // In case OS supports extra-long filenames.
+	char file_pattern[MAX_PATH];
 	strlcpy(file_pattern, aFilePattern, sizeof(file_pattern));
 
 	FILETIME ft, ftUTC;
@@ -8631,9 +8991,7 @@ int Line::FileSetTime(char *aYYYYMMDD, char *aFilePattern, char aWhichTime
 		GetSystemTimeAsFileTime(&ftUTC);
 
 	// This following section is very similar to that in FileSetAttrib and FileDelete:
-	// Give extra room in some of these vars, in case OS supports extra-long filenames:
-	char file_path[MAX_PATH * 2];
-	char target_filespec[MAX_PATH * 2];
+	char file_path[MAX_PATH], target_filespec[MAX_PATH];
 	if (strlen(aFilePattern) >= sizeof(file_path))
 		return 0; // Return OK because this is non-critical.  Let the above ErrorLevel indicate the problem.
 	strlcpy(file_path, aFilePattern, sizeof(file_path));
@@ -8687,7 +9045,7 @@ int Line::FileSetTime(char *aYYYYMMDD, char *aFilePattern, char aWhichTime
 		// FILE_FLAG_NO_BUFFERING might improve performance because all we're doing is
 		// changing one of the file's attributes.  FILE_FLAG_BACKUP_SEMANTICS must be
 		// used, otherwise changing the time of a directory under NT and beyond will
-		// not succeed.  Win95 (not sure about Win98/ME) does not support this, but it
+		// not succeed.  Win95 (not sure about Win98/Me) does not support this, but it
 		// should be harmless to specify it even if the OS is Win95:
 		hFile = CreateFile(target_filespec, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE
 			, (LPSECURITY_ATTRIBUTES)NULL, OPEN_EXISTING
@@ -8722,7 +9080,12 @@ int Line::FileSetTime(char *aYYYYMMDD, char *aFilePattern, char aWhichTime
 	// call itself, so see comments there for details:
 	if (aDoRecurse) 
 	{
-		char all_file_pattern[MAX_PATH * 2];
+		// Testing shows that the ANSI version of FindFirstFile() will not accept a path+pattern longer
+		// than 256 or so, even if the pattern would match files whose names are short enough to be legal.
+		// Therefore, as of v1.0.25, there is also a hard limit of MAX_PATH on all these variables.
+		// MSDN confirms this in a vague way: "In the ANSI version of FindFirstFile(), [plpFileName] is
+		// limited to MAX_PATH characters."
+		char all_file_pattern[MAX_PATH];
 		snprintf(all_file_pattern, sizeof(all_file_pattern), "%s*.*", file_path);
 		file_search = FindFirstFile(all_file_pattern, &current_file);
 		file_found = (file_search != INVALID_HANDLE_VALUE);
@@ -9505,6 +9868,20 @@ ResultType Line::SetToggleState(vk_type aVK, ToggleValueType &ForceLock, char *a
 // Misc lower level functions //
 ////////////////////////////////
 
+HWND Line::DetermineTargetWindow(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
+{
+	HWND target_window; // A variable of this name is used by the macros below.
+	IF_USE_FOREGROUND_WINDOW(aTitle, aText, aExcludeTitle, aExcludeText)
+	else if (*aTitle || *aText || *aExcludeTitle || *aExcludeText)
+		target_window = WinExist(aTitle, aText, aExcludeTitle, aExcludeText);
+	else
+		target_window = g_ValidLastUsedWindow;
+	return target_window;
+}
+
+
+
+#ifndef AUTOHOTKEYSC
 int Line::ConvertEscapeChar(char *aFilespec, char aOldChar, char aNewChar, bool aFromAutoIt2)
 {
 	if (!aFilespec || !*aFilespec) return 1;  // Non-zero is failure in this case.
@@ -9519,7 +9896,7 @@ int Line::ConvertEscapeChar(char *aFilespec, char aOldChar, char aNewChar, bool 
 		MsgBox(aFilespec, 0, "Could not open source file for conversion:");
 		return 1; // Failure
 	}
-	char new_filespec[MAX_PATH * 2];
+	char new_filespec[MAX_PATH + 10];  // +10 in case StrReplace below would otherwise overflow the buffer.
 	strlcpy(new_filespec, aFilespec, sizeof(new_filespec));
 	StrReplace(new_filespec, CONVERSION_FLAG, "-NEW" EXT_AUTOHOTKEY, false);
 	FILE *f2 = fopen(new_filespec, "w");
@@ -9609,226 +9986,7 @@ size_t Line::ConvertEscapeCharGetLine(char *aBuf, int aMaxCharsToRead, FILE *fp)
 	}
 	return strlen(aBuf);
 }
-
-
-
-ArgTypeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
-{
-	switch(aArgIndex)
-	{
-	case 0:  // Arg #1
-		switch(aActionType)
-		{
-		case ACT_ASSIGN:
-		case ACT_ADD:
-		case ACT_SUB:
-		case ACT_MULT:
-		case ACT_DIV:
-		case ACT_TRANSFORM:
-		case ACT_STRINGLEFT:
-		case ACT_STRINGRIGHT:
-		case ACT_STRINGMID:
-		case ACT_STRINGTRIMLEFT:
-		case ACT_STRINGTRIMRIGHT:
-		case ACT_STRINGLOWER:
-		case ACT_STRINGUPPER:
-		case ACT_STRINGLEN:
-		case ACT_STRINGREPLACE:
-		case ACT_STRINGGETPOS:
-		case ACT_GETKEYSTATE:
-		case ACT_CONTROLGETFOCUS:
-		case ACT_CONTROLGETTEXT:
-		case ACT_CONTROLGET:
-		case ACT_GUICONTROLGET:
-		case ACT_STATUSBARGETTEXT:
-		case ACT_INPUTBOX:
-		case ACT_RANDOM:
-		case ACT_INIREAD:
-		case ACT_REGREAD:
-		case ACT_DRIVESPACEFREE:
-		case ACT_DRIVEGET:
-		case ACT_SOUNDGET:
-		case ACT_SOUNDGETWAVEVOLUME:
-		case ACT_FILEREADLINE:
-		case ACT_FILEGETATTRIB:
-		case ACT_FILEGETTIME:
-		case ACT_FILEGETSIZE:
-		case ACT_FILEGETVERSION:
-		case ACT_FILESELECTFILE:
-		case ACT_FILESELECTFOLDER:
-		case ACT_MOUSEGETPOS:
-		case ACT_WINGETTITLE:
-		case ACT_WINGETCLASS:
-		case ACT_WINGET:
-		case ACT_WINGETTEXT:
-		case ACT_WINGETPOS:
-		case ACT_SYSGET:
-		case ACT_CONTROLGETPOS:
-		case ACT_PIXELGETCOLOR:
-		case ACT_PIXELSEARCH:
-		//case ACT_IMAGESEARCH:
-		case ACT_INPUT:
-		case ACT_FORMATTIME:
-			return ARG_TYPE_OUTPUT_VAR;
-
-		case ACT_SORT:
-		case ACT_SPLITPATH:
-		case ACT_IFINSTRING:
-		case ACT_IFNOTINSTRING:
-		case ACT_IFEQUAL:
-		case ACT_IFNOTEQUAL:
-		case ACT_IFGREATER:
-		case ACT_IFGREATEROREQUAL:
-		case ACT_IFLESS:
-		case ACT_IFLESSOREQUAL:
-		case ACT_IFBETWEEN:
-		case ACT_IFNOTBETWEEN:
-		case ACT_IFIN:
-		case ACT_IFNOTIN:
-		case ACT_IFCONTAINS:
-		case ACT_IFNOTCONTAINS:
-		case ACT_IFIS:
-		case ACT_IFISNOT:
-			return ARG_TYPE_INPUT_VAR;
-		}
-		break;
-
-	case 1:  // Arg #2
-		switch(aActionType)
-		{
-		case ACT_STRINGLEFT:
-		case ACT_STRINGRIGHT:
-		case ACT_STRINGMID:
-		case ACT_STRINGTRIMLEFT:
-		case ACT_STRINGTRIMRIGHT:
-		case ACT_STRINGLOWER:
-		case ACT_STRINGUPPER:
-		case ACT_STRINGLEN:
-		case ACT_STRINGREPLACE:
-		case ACT_STRINGGETPOS:
-		case ACT_STRINGSPLIT:
-			return ARG_TYPE_INPUT_VAR;
-
-		case ACT_MOUSEGETPOS:
-		case ACT_WINGETPOS:
-		case ACT_CONTROLGETPOS:
-		case ACT_PIXELSEARCH:
-		//case ACT_IMAGESEARCH:
-		case ACT_SPLITPATH:
-		case ACT_FILEGETSHORTCUT:
-			return ARG_TYPE_OUTPUT_VAR;
-		}
-		break;
-
-	case 2:  // Arg #3
-		switch(aActionType)
-		{
-		case ACT_WINGETPOS:
-		case ACT_CONTROLGETPOS:
-		case ACT_MOUSEGETPOS:
-		case ACT_SPLITPATH:
-		case ACT_FILEGETSHORTCUT:
-			return ARG_TYPE_OUTPUT_VAR;
-		}
-		break;
-
-	case 3:  // Arg #4
-		switch(aActionType)
-		{
-		case ACT_WINGETPOS:
-		case ACT_CONTROLGETPOS:
-		case ACT_MOUSEGETPOS:
-		case ACT_SPLITPATH:
-		case ACT_FILEGETSHORTCUT:
-		case ACT_RUN:
-			return ARG_TYPE_OUTPUT_VAR;
-		}
-		break;
-
-	case 4:  // Arg #5
-	case 5:  // Arg #6
-		if (aActionType == ACT_SPLITPATH || aActionType == ACT_FILEGETSHORTCUT)
-			return ARG_TYPE_OUTPUT_VAR;
-		break;
-
-	case 6:  // Arg #7
-	case 7:  // Arg #8
-		if (aActionType == ACT_FILEGETSHORTCUT)
-			return ARG_TYPE_OUTPUT_VAR;
-	}
-	// Otherwise:
-	return ARG_TYPE_NORMAL;
-}
-
-
-
-ResultType Line::CheckForMandatoryArgs()
-{
-	switch(mActionType)
-	{
-	// For these, although we validate that at least one is non-blank here, it's okay at
-	// runtime for them all to resolve to be blank, without an error being reported.
-	// It's probably more flexible that way since the commands are equipped to handle
-	// all-blank params.
-	// Not these because they can be used with the "last-used window" mode:
-	//case ACT_IFWINEXIST:
-	//case ACT_IFWINNOTEXIST:
-	case ACT_WINACTIVATEBOTTOM:
-		if (!*RAW_ARG1 && !*RAW_ARG2 && !*RAW_ARG3 && !*RAW_ARG4)
-			return LineError(ERR_WINDOW_PARAM);
-		return OK;
-	// Not these because they can have their window params all-blank to work in "last-used window" mode:
-	//case ACT_IFWINACTIVE:
-	//case ACT_IFWINNOTACTIVE:
-	//case ACT_WINACTIVATE:
-	//case ACT_WINWAITCLOSE:
-	//case ACT_WINWAITACTIVE:
-	//case ACT_WINWAITNOTACTIVE:
-	case ACT_WINWAIT:
-		if (!*RAW_ARG1 && !*RAW_ARG2 && !*RAW_ARG4 && !*RAW_ARG5) // ARG3 is omitted because it's the timeout.
-			return LineError(ERR_WINDOW_PARAM);
-		return OK;
-	// Note: For ACT_WINMOVE, don't validate anything for mandatory args so that its two modes of
-	// operation can be supported: 2-param mode and normal-param mode.
-	case ACT_GROUPADD:
-		if (!*RAW_ARG2 && !*RAW_ARG3 && !*RAW_ARG5 && !*RAW_ARG6) // ARG4 is the JumpToLine
-			return LineError(ERR_WINDOW_PARAM);
-		return OK;
-	case ACT_CONTROLSEND:
-	case ACT_CONTROLSENDRAW:
-		// Window params can all be blank in this case, but characters to send should
-		// be non-blank (but it's ok if its a dereferenced var that resolves to blank
-		// at runtime):
-		if (!*RAW_ARG2)
-			return LineError("Parameter #2 must not be blank.");
-		return OK;
-	case ACT_WINMENUSELECTITEM:
-		// Window params can all be blank in this case, but the first menu param should
-		// be non-blank (but it's ok if its a dereferenced var that resolves to blank
-		// at runtime):
-		if (!*RAW_ARG3)
-			return LineError("Parameter #3 must not be blank.");
-		return OK;
-	case ACT_MOUSECLICKDRAG:
-		// Even though we check for blanks at load-time, we don't bother to do so at runtime
-		// (i.e. if a dereferenced var resolved to blank, it will be treated as a zero):
-		if (!*RAW_ARG4 || !*RAW_ARG5)
-			return LineError("Parameters 4 and 5 must specify a non-blank destination for the drag.");
-		return OK;
-	case ACT_MOUSEGETPOS:
-	case ACT_WINGETPOS:
-	case ACT_CONTROLGETPOS: // But don't bother valididing ACT_SPLITPATH this way since too rare to worry about.
-		if (!ARG_HAS_VAR(1) && !ARG_HAS_VAR(2) && !ARG_HAS_VAR(3) && !ARG_HAS_VAR(4))
-			return LineError(ERR_MISSING_OUTPUT_VAR);
-		return OK;
-	case ACT_PIXELSEARCH:
-	//case ACT_IMAGESEARCH:
-		if (!*RAW_ARG3 || !*RAW_ARG4 || !*RAW_ARG5 || !*RAW_ARG6 || !*RAW_ARG7)
-			return LineError("Parameters 3 through 7 must not be blank.");
-		return OK;
-	}
-	return OK;  // For when the command isn't mentioned in the switch().
-}
+#endif  // The functions above are not needed by the self-contained version.
 
 
 

@@ -31,7 +31,7 @@ char *SimpleHeap::Malloc(char *aBuf)
 		return new_buf; // Return the constant empty string to the caller.
 	if (   !(new_buf = SimpleHeap::Malloc(strlen(aBuf) + 1))   ) // +1 for the zero terminator.
 	{
-		g_script.ScriptError("SimpleHeap::Malloc(buf): Out of memory.", aBuf);
+		g_script.ScriptError(ERR_OUTOFMEM, aBuf);
 		return NULL;
 	}
 	strcpy(new_buf, aBuf);

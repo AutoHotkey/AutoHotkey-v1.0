@@ -127,7 +127,7 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt)
 			return g_clip.PrepareForWrite(space_needed) ? OK : FAIL;
 
 	if (space_needed > g_MaxVarCapacity)
-		return g_script.ScriptError("Variable is too large (see #MaxMem in the help file)." ERR_ABORT);
+		return g_script.ScriptError(ERR_MEM_LIMIT_REACHED);
 
 	if (space_needed <= 1) // Variable is being assigned the empty string (or a deref that resolves to it).
 	{
@@ -193,7 +193,7 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt)
 			if (space_needed <= MAX_ALLOC_SIMPLE)
 			{
 				if (   !(mContents = SimpleHeap::Malloc(MAX_ALLOC_SIMPLE))   )
-					return g_script.ScriptError(ERR_MEM_ASSIGN);
+					return FAIL; // It already displayed the error.
 				mHowAllocated = ALLOC_SIMPLE;
 				mCapacity = MAX_ALLOC_SIMPLE;
 				break;
@@ -224,9 +224,12 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt)
 				alloc_size += (64 * 1024);
 			if (alloc_size > g_MaxVarCapacity)
 				alloc_size = g_MaxVarCapacity;  // which has already been verified to be enough.
+			mHowAllocated = ALLOC_MALLOC; // This should be done first because even if the below fails, the old value of mContents (e.g. SimpleHeap) is lost.
 			if (   !(mContents = (char *)malloc(alloc_size))   )
-				return g_script.ScriptError(ERR_MEM_ASSIGN);
-			mHowAllocated = ALLOC_MALLOC;
+			{
+				mCapacity = 0;  // Added for v1.0.25.
+				return g_script.ScriptError(ERR_OUTOFMEM ERR_ABORT); // ERR_ABORT since an error is most likely to occur at runtime.
+			}
 			mCapacity = (VarSizeType)alloc_size;
 			break;
 		}
@@ -276,7 +279,10 @@ VarSizeType Var::Get(char *aBuf)
 // Returns the length of this var's contents.  In addition, if aBuf isn't NULL, it will
 // copy the contents into aBuf.
 {
-	if (aBuf) *aBuf = '\0';  // Init early to get it out of the way, in case of early return.
+	// For v1.0.25, don't do this because in some cases the existing contents of aBuf will not
+	// be altered.  Instead, it will be set to blank as needed further below.
+	//if (aBuf) *aBuf = '\0';  // Init early to get it out of the way, in case of early return.
+
 	char *aBuf_orig = aBuf;
 
 	DWORD result;
@@ -302,7 +308,7 @@ VarSizeType Var::Get(char *aBuf)
 			// buffer even if it doesn't find the env. var:
 			if (   result = GetEnvironmentVariable(mName, buf_temp, sizeof(buf_temp))   )
 			{
-				// This env. var does exist.
+				// This env. var exists.
 				if (!aBuf)
 					return result - 1;  // since GetEnvironmentVariable() returns total size needed in this case.
 				// The caller has ensured, probably via previous call to this function with aBuf == NULL,
@@ -315,7 +321,11 @@ VarSizeType Var::Get(char *aBuf)
 				break;
 			}
 			else // No matching env. var.
-				return 0; // aBuf, if non-NULL, has already been set to empty string above.
+			{
+				if (aBuf)
+					*aBuf = '\0';
+				return 0;
+			}
 		}
 		// otherwise, it has non-zero length (set by user), so it takes precedence over any existing env. var.
 		if (!aBuf)
@@ -333,7 +343,11 @@ VarSizeType Var::Get(char *aBuf)
 		//elapsed_time -= %start_time%
 		//msgbox, elapsed_time = %elapsed_time%
 		//return
-		if (mLength > 100000)
+		if (aBuf == mContents)
+			// When we're called from ExpandArg() that was called from PerformAssign(), PerformAssign()
+			// relies on this check to avoid the overhead of copying a variables contents onto itself.
+			aBuf += mLength;
+		else if (mLength > 100000)
 		{
 			// Faster for large vars, but large vars aren't typical:
 			CopyMemory(aBuf, mContents, mLength);
@@ -342,11 +356,13 @@ VarSizeType Var::Get(char *aBuf)
 		else
 			for (char *cp = mContents; *cp; *aBuf++ = *cp++);
 		break;
+
 	// Built-in vars with volatile contents:
 	case VAR_CLIPBOARD:
 	{
 		VarSizeType size = (VarSizeType)g_clip.Get(aBuf); // It will also copy into aBuf if it's non-NULL.
 		if (size == CLIPBOARD_FAILURE)
+		{
 			// Above already displayed the error, so just return.
 			// If we were called only to determine the size, the
 			// next call to g_clip.Get() will not put anything into
@@ -362,7 +378,10 @@ VarSizeType Var::Get(char *aBuf)
 			// be extremely rare.  And the user will be notified
 			// with a MsgBox anyway, during which the subroutine
 			// will be suspended:
+			if (aBuf)
+				*aBuf = '\0';  // Init early to get it out of the way, in case of early return.
 			return 0;
+		}
 		if (!aBuf)
 			return size;
 		aBuf += size;
@@ -381,7 +400,7 @@ VarSizeType Var::Get(char *aBuf)
 			{
 				// This is just a warning because this function isn't set up to cause a true
 				// failure.  So don't append ERR_ABORT to the below string:
-				g_script.ScriptError("GetCurrentDirectory() failed.");
+				g_script.ScriptError("GetCurrentDirectory."); // Short msg since probably can't realistically fail.
 				// Probably safer to return something so that caller reserves enough space for it
 				// in case the call works the next time?:
 				return MAX_PATH;
@@ -456,6 +475,7 @@ VarSizeType Var::Get(char *aBuf)
 	case VAR_LOOPFILESHORTNAME: if (!aBuf) return g_script.GetLoopFileShortName(); else aBuf += g_script.GetLoopFileShortName(aBuf); break;
 	case VAR_LOOPFILEDIR: if (!aBuf) return g_script.GetLoopFileDir(); else aBuf += g_script.GetLoopFileDir(aBuf); break;
 	case VAR_LOOPFILEFULLPATH: if (!aBuf) return g_script.GetLoopFileFullPath(); else aBuf += g_script.GetLoopFileFullPath(aBuf); break;
+	case VAR_LOOPFILESHORTPATH: if (!aBuf) return g_script.GetLoopFileShortPath(); else aBuf += g_script.GetLoopFileShortPath(aBuf); break;
 	case VAR_LOOPFILETIMEMODIFIED: if (!aBuf) return g_script.GetLoopFileTimeModified(); else aBuf += g_script.GetLoopFileTimeModified(aBuf); break;
 	case VAR_LOOPFILETIMECREATED: if (!aBuf) return g_script.GetLoopFileTimeCreated(); else aBuf += g_script.GetLoopFileTimeCreated(aBuf); break;
 	case VAR_LOOPFILETIMEACCESSED: if (!aBuf) return g_script.GetLoopFileTimeAccessed(); else aBuf += g_script.GetLoopFileTimeAccessed(aBuf); break;
@@ -550,23 +570,23 @@ VarSizeType Var::Get(char *aBuf)
 		break; // outer switch()
 	}
 
-	*aBuf = '\0';  // Not counted as part of the length, so don't increment aBuf.
+	*aBuf = '\0'; // Terminate the buffer in case above didn't.  Not counted as part of the length, so don't increment aBuf.
 	return (VarSizeType)(aBuf - aBuf_orig);  // This is how many were written, not including the zero terminator.
 }
 
 
 
-ResultType Var::ValidateName(char *aName, bool aIsRuntime)
+ResultType Var::ValidateName(char *aName, bool aIsRuntime, bool aDisplayError)
 // Returns OK or FAIL.
 {
-	if (!aName || !*aName) return FAIL;
+	if (!*aName) return FAIL;
 	// Seems best to disallow variables that start with numbers so that more advanced
 	// parsing (e.g. expressions) can be more easily added in the future.  UPDATE: For
 	// backward compatibility with AutoIt2's technique of storing command line args in
 	// a numically-named var (e.g. %1% is the first arg), decided not to do this:
 	//if (*aName >= '0' && *aName <= '9')
 	//	return g_script.ScriptError("This variable name starts with a number, which is not allowed.", aName);
-	for (char *cp = aName; *cp; ++cp)
+	for (char c, *cp = aName; *cp; ++cp)
 	{
 		// ispunct(): @ # $ _ [ ] ? ! % & " ' ( ) * + - ^ . / \ : ; , < = > ` ~ | { }
 		// Of the above, it seems best to disallow the following:
@@ -588,15 +608,19 @@ ResultType Var::ValidateName(char *aName, bool aIsRuntime)
 		// {} reserved: blocks
 		// | future: "or" or "bitwise or"
 		// ~ future: "bitwise not"
-		if (IS_SPACE_OR_TAB(*cp) || *cp == g_delimiter || *cp == g_DerefChar
-			|| *cp == '!' || *cp == '%' || *cp == '&' || *cp == '"' || *cp == '\'' || *cp == '(' || *cp == ')'
-			|| *cp == '*' || *cp == '+' || *cp == '-' || *cp == '^' || *cp == '.' || *cp == '/' || *cp == '\\'
-			|| *cp == ':' || *cp == ';' || *cp == ',' || *cp == '<' || *cp == '=' || *cp == '>'
-			|| *cp == '`' || *cp == '~' || *cp == '|' || *cp == '{' || *cp == '}')
-			if (aIsRuntime)
-				return g_script.ScriptError("This variable name contains an illegal character." ERR_ABORT, aName);
+		c = *cp;  // For performance.
+		if (IS_SPACE_OR_TAB(c) || c == g_delimiter || c == g_DerefChar
+			|| c == '!' || c == '%' || c == '&' || c == '"' || c == '\'' || c == '(' || c == ')'
+			|| c == '*' || c == '+' || c == '-' || c == '^' || c == '.' || c == '/' || c == '\\'
+			|| c == ':' || c == ';' || c == ',' || c == '<' || c == '=' || c == '>'
+			|| c == '`' || c == '~' || c == '|' || c == '{' || c == '}')
+			if (aDisplayError)
+				if (aIsRuntime)
+					return g_script.ScriptError("This variable name contains an illegal character." ERR_ABORT, aName);
+				else
+					return g_script.ScriptError("This variable name contains an illegal character.", aName);
 			else
-				return g_script.ScriptError("This variable name contains an illegal character.", aName);
+				return FAIL;
 	}
 	// Otherwise:
 	return OK;

@@ -237,7 +237,7 @@ HWND SetForegroundWindowEx(HWND aWnd)
 		// almost always succeeds whereas the one-attach method hardly ever succeeds the first
 		// time (resulting in a flashing taskbar button due to having to invoke a second attempt)
 		// when one window is quickly activated after another was just activated.
-		// AutoIt3: Attach all our input threads, will cause SetForeground to work under 98/ME.
+		// AutoIt3: Attach all our input threads, will cause SetForeground to work under 98/Me.
 		// MSDN docs: The AttachThreadInput function fails if either of the specified threads
 		// does not have a message queue (My: ok here, since any window's thread MUST have a
 		// message queue).  [It] also fails if a journal record hook is installed.  ... Note
@@ -732,7 +732,7 @@ BOOL CALLBACK EnumParentFind(HWND aWnd, LPARAM lParam)
 
 	WindowInfoPackage &wip = *((WindowInfoPackage *)lParam);  // For performance and convenience.
 
-	// strstr() and related std C functions -- as well as the custom stristr(), will always
+	// strstr() and related std C functions -- as well as the custom strcasestr(), will always
 	// find the empty string in any string, which is what we want in case title is the empty string.
 	if (!IsTitleMatch(aWnd, win_title, wip.title, wip.exclude_title))
 		// Since title doesn't match there's no point in checking the text of this HWND.

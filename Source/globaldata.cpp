@@ -78,7 +78,8 @@ int g_nThreads = 0;
 int g_nPausedThreads = 0;
 bool g_UnpauseWhenResumed = false;  // Start off "false" because the Unpause mode must be explicitly triggered.
 
-// g_MaxVarCapacity is used to prevent a buggy script from consuming all available system RAM.
+// g_MaxVarCapacity is used to prevent a buggy script from consuming all available system RAM. It is defined
+// as the maximum memory size of a variable, including the string's zero terminator.
 // The chosen default seems big enough to be flexible, yet small enough to not be a problem on 99% of systems:
 VarSizeType g_MaxVarCapacity = 64 * 1024 * 1024;
 UCHAR g_MaxThreadsPerHotkey = 1;
@@ -202,16 +203,11 @@ sc2_type g_vk_to_sc[VK_ARRAY_COUNT] = {{0}};
 //    not zero).  That subarray should be terminated with an explicit zero to be safe and
 //    so that the compiler will complain if the sub-array size needs to be increased to
 //    accommodate all the elements in the new sub-array, including room for it's 0 terminator.
-//    If any of the numeric params allow negative or float values, add an entries to
-//    ArgAllowsNegative() and ArgAllowsFloat().  But if negative occurs during runtime and you don't
-//    want it to be reported as a runtime error (i.e. the command will deal with it), there's a case
-//    statement near the runtime call to ArgAllowsNegative() that should be adjusted to grant a waiver.
-//    If any of the params are mandatory (can't be blank), add an entry to CheckForMandatoryArgs().
 //    Note: If you use a value for MinParams than is greater than zero, remember than any params
 //    beneath that threshold will also be required to be non-blank (i.e. user can't omit them even
 //    if later, non-blank params are provided).
 // 3) If the new command has any params that are output or input vars, change Line::ArgIsVar().
-// 4) Add any desired load-time validation in Script::AddLine() in an appropriate section.
+// 4) Add any desired load-time validation in Script::AddLine() in an syntax-checking section.
 // 5) Implement the command in Line::Perform() or Line::EvaluateCondition (if it's an IF).
 //    If the command waits for anything (e.g. calls MsgSleep()), be sure to make a local
 //    copy of any ARG values that are needed during the wait period, because if another hotkey
@@ -220,12 +216,13 @@ sc2_type g_vk_to_sc[VK_ARRAY_COUNT] = {{0}};
 
 Action g_act[] =
 {
-	{"<invalid command>", 0, 0, NULL}  // ACT_INVALID.  Give it a name in case it's ever displayed.
+	{"", 0, 0, NULL}  // ACT_INVALID.
 
 	// ACT_ASSIGN, ACT_ADD/SUB/MULT/DIV: Give them names for display purposes.
 	// Note: Line::ToText() relies on the below names being the correct symbols for the operation:
 	// 1st param is the target, 2nd (optional) is the value:
-	, {"=", 1, 2, NULL} // For this one, omitting the second param sets the var to be empty.
+	, {"=", 1, 2, NULL}    // For this one, omitting the second param sets the var to be empty.
+	, {":=", 1, 2, {2, 0}} // Same.  Param #2 is flagged as numeric so that expression detection is automatic.
 
 	// Subtraction(but not addition) allow 2nd to be blank due to 3rd param.
 	// Also, it seems ok to allow date-time operations with += and -=, even though these
@@ -250,6 +247,7 @@ Action g_act[] =
 	, {"in", 2, 2, NULL}, {"not in", 2, 2, NULL}
 	, {"contains", 2, 2, NULL}, {"not contains", 2, 2, NULL}  // Very similar to "in" and "not in"
 	, {"is", 2, 2, NULL}, {"is not", 2, 2, NULL}
+	, {"", 1, 1, {1, 0}} // ACT_IFEXPR's name should be "" so that Line::ToText() will properly display it.
 
 	// Comparison operators take 1 param (if they're being compared to blank) or 2.
 	// For example, it's okay (though probably useless) to compare a string to the empty
@@ -309,6 +307,7 @@ Action g_act[] =
 	, {"GetKeyState", 2, 3, NULL} // OutputVar, key name, mode (optional) P = Physical, T = Toggle
 	, {"Send", 1, 1, NULL} // But that first param can be a deref that resolves to a blank param
 	, {"SendRaw", 1, 1, NULL} // But that first param can be a deref that resolves to a blank param
+
 	// For these, the "control" param can be blank.  The window's first visible control will
 	// be used.  For this first one, allow a minimum of zero, otherwise, the first param (control)
 	// would be considered mandatory-non-blank by default.  It's easier to make all the params
@@ -364,9 +363,10 @@ Action g_act[] =
 	, {"WinMinimizeAll", 0, 0, NULL}, {"WinMinimizeAllUndo", 0, 0, NULL}
 	, {"WinClose", 0, 5, {3, 0}} // title, text, time-to-wait-for-close (0 = 500ms), exclude title/text
 	, {"WinKill", 0, 5, {3, 0}} // same as WinClose.
-	, {"WinMove", 0, 8, {3, 4, 5, 6, 0}} // title, text, xpos, ypos, width, height, exclude-title, exclude_text
-	// Note for WinMove: xpos/ypos/width/height can be the string "default", but that is explicitly
-	// checked for, even though it is required it to be numeric in the definition here.
+	, {"WinMove", 0, 8, {1, 2, 3, 4, 5, 6, 0}} // title, text, xpos, ypos, width, height, exclude-title, exclude_text
+	// Note for WinMove: title/text are marked as numeric because in two-param mode, they are the X/Y params.
+	// This helps speed up loading expression-detection.  Also, xpos/ypos/width/height can be the string "default",
+	// but that is explicitly checked for, even though it is required it to be numeric in the definition here.
 	, {"WinMenuSelectItem", 0, 11, NULL} // WinTitle, WinText, Menu name, 6 optional sub-menu names, ExcludeTitle/Text
 
 	, {"Process", 1, 3, NULL}  // Sub-cmd, PID/name, Param3 (use minimum of 1 param so that 2nd can be blank)
@@ -384,8 +384,8 @@ Action g_act[] =
 
 	, {"SysGet", 2, 4, NULL} // Output-var/array, sub-cmd or sys-metrics-number, input-value1, future-use
 
-	, {"PostMessage", 1, 8}  // msg, wParam, lParam, Control, WinTitle, WinText, ExcludeTitle, ExcludeText
-	, {"SendMessage", 1, 8}  // msg, wParam, lParam, Control, WinTitle, WinText, ExcludeTitle, ExcludeText
+	, {"PostMessage", 1, 8, NULL}  // msg, wParam, lParam, Control, WinTitle, WinText, ExcludeTitle, ExcludeText
+	, {"SendMessage", 1, 8, NULL}  // msg, wParam, lParam, Control, WinTitle, WinText, ExcludeTitle, ExcludeText
 
 	, {"PixelGetColor", 3, 4, {2, 3, 0}} // OutputVar, X-coord, Y-coord [, RGB]
 	, {"PixelSearch", 0, 9, {3, 4, 5, 6, 7, 8, 0}} // OutputX, OutputY, left, top, right, bottom, Color, Variation [, RGB]
@@ -409,6 +409,7 @@ Action g_act[] =
 	, {"SoundPlay", 1, 2, NULL} // Filename [, wait]
 
 	, {"FileAppend", 1, 2, NULL} // text, filename (which can be omitted in a read-file loop).
+	, {"FileRead", 2, 2, NULL} // Output variable, filename
 	, {"FileReadLine", 3, 3, NULL} // Output variable, filename, line-number (custom validation, not numeric validation)
 	, {"FileDelete", 1, 1, NULL} // filename or pattern
 	, {"FileRecycle", 1, 1, NULL} // filename or pattern
@@ -491,7 +492,7 @@ int g_ActionCount = sizeof(g_act) / sizeof(Action);
 
 Action g_old_act[] =
 {
-	{"<invalid command>", 0, 0, NULL}  // OLD_INVALID.  Give it a name in case it's ever displayed.
+	{"", 0, 0, NULL}  // OLD_INVALID.
 	, {"SetEnv", 1, 2, NULL}
 	, {"EnvAdd", 2, 3, {2, 0}}, {"EnvSub", 1, 3, {2, 0}} // EnvSub (but not Add) allow 2nd to be blank due to 3rd param.
 	, {"EnvMult", 2, 2, {2, 0}}, {"EnvDiv", 2, 2, {2, 0}}

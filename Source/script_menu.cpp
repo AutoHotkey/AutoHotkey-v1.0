@@ -208,7 +208,7 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 		if (*aParam3) // Since a menu item name was given, it's not a separator line.
 			break;    // Let a later switch() handle it.
 		if (!menu->AddItem("", 0, NULL, NULL, ""))
-			RETURN_MENU_ERROR("Out of mem.", "");  // Out of mem should be the only possibility in this case.
+			RETURN_MENU_ERROR(ERR_OUTOFMEM, "");  // Out of mem should be the only possibility in this case.
 		return OK;
 	case MENU_CMD_DELETE:
 		if (*aParam3) // Since a menu item name was given, an item is being deleted, not the whole menu.

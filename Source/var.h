@@ -49,7 +49,7 @@ enum VarTypes
 , VAR_SCREENWIDTH, VAR_SCREENHEIGHT
 , VAR_IPADDRESS1, VAR_IPADDRESS2, VAR_IPADDRESS3, VAR_IPADDRESS4
 , VAR_SCRIPTNAME, VAR_SCRIPTDIR, VAR_SCRIPTFULLPATH
-, VAR_LOOPFILENAME, VAR_LOOPFILESHORTNAME, VAR_LOOPFILEDIR, VAR_LOOPFILEFULLPATH
+, VAR_LOOPFILENAME, VAR_LOOPFILESHORTNAME, VAR_LOOPFILEDIR, VAR_LOOPFILEFULLPATH, VAR_LOOPFILESHORTPATH
 , VAR_LOOPFILETIMEMODIFIED, VAR_LOOPFILETIMECREATED, VAR_LOOPFILETIMEACCESSED
 , VAR_LOOPFILEATTRIB, VAR_LOOPFILESIZE, VAR_LOOPFILESIZEKB, VAR_LOOPFILESIZEMB
 , VAR_LOOPREGTYPE, VAR_LOOPREGKEY, VAR_LOOPREGSUBKEY, VAR_LOOPREGNAME, VAR_LOOPREGTIMEMODIFIED
@@ -64,10 +64,10 @@ enum VarTypes
 
 typedef UCHAR VarTypeType;     // UCHAR vs. VarTypes to save memory.
 typedef UCHAR AllocMethodType; // UCHAR vs. AllocMethod to save memory.
-typedef DWORD VarSizeType;  // Up to 4 gig if sizeof(UINT) is 4.  See next line.
+typedef DWORD VarSizeType;     // Up to 4 gig if sizeof(UINT) is 4.  See next line.
 #define VARSIZE_MAX MAXDWORD
 #define VARSIZE_ERROR VARSIZE_MAX
-#define MAX_FORMATTED_NUMBER_LENGTH 255
+#define MAX_FORMATTED_NUMBER_LENGTH 255 // Large enough to allow custom zero or space-padding via %10.2f, etc.  But not too large because some things might rely on this being fairly small.
 
 class Var
 {
@@ -107,8 +107,8 @@ public:
 	ResultType Assign(double aValueToAssign);
 	ResultType Assign(char *aBuf = NULL, VarSizeType aLength = VARSIZE_MAX, bool aTrimIt = false);
 	VarSizeType Get(char *aBuf = NULL);
-	static ResultType ValidateName(char *aName, bool aIsRuntime = false);
-	VarSizeType Capacity() {return mCapacity;}
+	static ResultType ValidateName(char *aName, bool aIsRuntime = false, bool aDisplayError = true);
+	VarSizeType Capacity() {return mCapacity;} // Capacity includes the zero terminator.
 	char *ToText(char *aBuf, size_t aBufSize, bool aAppendNewline)
 	// Translates this var into its text equivalent, putting the result into aBuf andp
 	// returning the position in aBuf of its new string terminator.
@@ -141,7 +141,10 @@ public:
 		return "Unsupported script variable type.";
 	}
 
-	VarSizeType &Length() // Returns a reference so that caller can use this function as an lvalue.
+	VarSizeType &Length()
+	// This should not be called to discover a non-NORMAL var's length because the length
+	// of most such variables aren't knowable without calling Get() on them.
+	// Returns a reference so that caller can use this function as an lvalue.
 	{
 		if (mType == VAR_NORMAL)
 			return mLength;

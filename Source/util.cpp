@@ -41,7 +41,7 @@ int GetYDay(int aMon, int aDay, bool aIsLeapYear)
 
 
 int GetISOWeekNumber(char *aBuf, int aYear, int aYDay, int aWDay)
-// Caller must ensure that aBuf is of size 7 or greater, that aYear is the correct year (e.g. 2005),
+// Caller must ensure that aBuf is of size 7 or greater, that aYear is a valid year (e.g. 2005),
 // that aYDay is between 1 and 366, and that aWDay is between 0 and 6 (day of the week).
 // Produces the week number in YYYYNN format, e.g. 200501.
 // Note that year is also returned because it isn't necessarily the same as aTime's calendar year.
@@ -172,31 +172,28 @@ ResultType YYYYMMDDToSystemTime(char *aYYYYMMDD, SYSTEMTIME &aSystemTime, bool a
 
 char *FileTimeToYYYYMMDD(char *aBuf, FILETIME &aTime, bool aConvertToLocalTime)
 {
+	FILETIME ft;
+	if (aConvertToLocalTime)
+		FileTimeToLocalFileTime(&aTime, &ft); // MSDN says that target cannot be the same var as source.
+	else
+		memcpy(&ft, &aTime, sizeof(FILETIME));  // memcpy() might be less code size that a struct assignment, ft = aTime.
 	SYSTEMTIME st;
-	if (FileTimeToSystemTime(&aTime, &st))
-		return SystemTimeToYYYYMMDD(aBuf, st, aConvertToLocalTime);
+	if (FileTimeToSystemTime(&ft, &st))
+		return SystemTimeToYYYYMMDD(aBuf, st);
 	*aBuf = '\0';
 	return aBuf;
 }
 
 
 
-char *SystemTimeToYYYYMMDD(char *aBuf, SYSTEMTIME &aTime, bool aConvertToLocalTime)
+char *SystemTimeToYYYYMMDD(char *aBuf, SYSTEMTIME &aTime)
+// Remember not to offer a "aConvertToLocalTime" option, because calling SystemTimeToTzSpecificLocalTime()
+// on Win9x apparently results in an invalid time because the function is implemented only as a stub on
+// those OSes.
 {
-	SYSTEMTIME st;
-	if (aConvertToLocalTime)
-	{
-		if (!SystemTimeToTzSpecificLocalTime(NULL, &aTime, &st)) // realistically: probably never fails
-		{
-			*aBuf = '\0';
-			return aBuf;
-		}
-	}
-	else
-		CopyMemory(&st, &aTime, sizeof(st));
 	sprintf(aBuf, "%04d%02d%02d" "%02d%02d%02d"
-		, st.wYear, st.wMonth, st.wDay
-		, st.wHour, st.wMinute, st.wSecond);
+		, aTime.wYear, aTime.wMonth, aTime.wDay
+		, aTime.wHour, aTime.wMinute, aTime.wSecond);
 	return aBuf;
 }
 
@@ -256,7 +253,7 @@ __int64 FileTimeSecondsUntil(FILETIME *pftStart, FILETIME *pftEnd)
 
 
 
-pure_numeric_type IsPureNumeric(char *aBuf, bool aAllowNegative, bool aAllowAllWhitespace
+SymbolType IsPureNumeric(char *aBuf, bool aAllowNegative, bool aAllowAllWhitespace
 	, bool aAllowFloat, bool aAllowImpure)
 // Making this non-inline reduces the size of the compressed EXE by only 2K.  Since this function
 // is called so often, it seems preferable to keep it inline for performance.
@@ -425,7 +422,6 @@ int strlicmp(char *aBuf1, char *aBuf2, UINT aLength1, UINT aLength2)
 char *strrstr(char *aStr, char *aPattern, bool aCaseSensitive, int aOccurrence)
 // Returns NULL if not found, otherwise the address of the found string.
 {
-	if (!aStr || !aPattern) return NULL;
 	if (aOccurrence <= 0) return NULL;
 	size_t aStr_length = strlen(aStr);
 	if (!*aPattern)
@@ -491,152 +487,367 @@ char *strrstr(char *aStr, char *aPattern, bool aCaseSensitive, int aOccurrence)
 		} // for() innermost
 		if (found) // Although the above found a match, it wasn't the right one, so resume searching.
 			match_starting_pos = full_match - 1;
-		else // the pattern broke odwn, so resume searching at THIS position.
+		else // the pattern broke down, so resume searching at THIS position.
 			match_starting_pos = last_char_match - 1;  // Don't go back by more than 1.
 	} // while() find next match
 }
 
 
 
-char *stristr(char *aStr, char *aPattern)
-// Case insensitive version of strstr().
-{
-	if (!aStr || !aPattern) return NULL;
-	if (!*aPattern) return aStr; // The empty string is found in every string.
+char *strcasestr (const char *phaystack, const char *pneedle)
+	// To make this work with MS Visual C++, this version uses tolower/toupper() in place of
+	// _tolower/_toupper(), since apparently in GNU C, the underscore macros are identical
+	// to the non-underscore versions; but in MS the underscore ones do an unconditional
+	// conversion (mangling non-alphabetic characters such as the zero terminator).  MSDN:
+	// tolower: Converts c to lowercase if appropriate
+	// _tolower: Converts c to lowercase
 
-	char *pptr, *sptr;
-	size_t slen, plen;
+	// Return the offset of one string within another.
+	// Copyright (C) 1994,1996,1997,1998,1999,2000 Free Software Foundation, Inc.
+	// This file is part of the GNU C Library.
+
+	// The GNU C Library is free software; you can redistribute it and/or
+	// modify it under the terms of the GNU Lesser General Public
+	// License as published by the Free Software Foundation; either
+	// version 2.1 of the License, or (at your option) any later version.
+
+	// The GNU C Library is distributed in the hope that it will be useful,
+	// but WITHOUT ANY WARRANTY; without even the implied warranty of
+	// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+	// Lesser General Public License for more details.
+
+	// You should have received a copy of the GNU Lesser General Public
+	// License along with the GNU C Library; if not, write to the Free
+	// Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+	// 02111-1307 USA.
+
+	// My personal strstr() implementation that beats most other algorithms.
+	// Until someone tells me otherwise, I assume that this is the
+	// fastest implementation of strstr() in C.
+	// I deliberately chose not to comment it.  You should have at least
+	// as much fun trying to understand it, as I had to write it :-).
+	// Stephen R. van den Berg, berg@pool.informatik.rwth-aachen.de
+
+	// Faster looping by precalculating bl, bu, cl, cu before looping.
+	// 2004 Apr 08	Jose Da Silva, digital@joescat@com
+{
+	register const unsigned char *haystack, *needle;
+	register unsigned bl, bu, cl, cu;
 	
-	for (pptr  = aPattern, slen  = strlen(aStr), plen  = strlen(aPattern);
-	     // while string length not shorter than aPattern length
-	     slen >= plen;
-	     ++aStr, --slen)
+	haystack = (const unsigned char *) phaystack;
+	needle = (const unsigned char *) pneedle;
+
+	bl = tolower (*needle);
+	if (bl != '\0')
 	{
-		// find start of aPattern in string
-		// MY: There's no need to check for end of "aStr" because slen keeps getting decremented.
-		while (toupper(*aStr) != toupper(*aPattern))
+		// Scan haystack until the first character of needle is found:
+		bu = toupper (bl);
+		haystack--;				/* possible ANSI violation */
+		do
 		{
-			++aStr;
-			--slen;
-			if (slen < plen) // aPattern longer than remaining part of string
-				return NULL;
+			cl = *++haystack;
+			if (cl == '\0')
+				goto ret0;
 		}
+		while ((cl != bl) && (cl != bu));
+
+		// See if the rest of needle is a one-for-one match with this part of haystack:
+		cl = tolower (*++needle);
+		if (cl == '\0')  // Since needle consists of only one character, it is already a match as found above.
+			goto foundneedle;
+		cu = toupper (cl);
+		++needle;
+		goto jin;
 		
-		// MY: Can't start at "aStr + 1" because simple case where aPattern of length 1 would not be found.
-		sptr = aStr;
-		pptr = aPattern;
-		
-		// MY: No need to check for end of "sptr" because previous loop already verified that
-		// there are enough characters remaining in "sptr" to support all those in "pptr".
-		// For compatibility with stricmp() and the fact that IFEQUAL, IFINSTRING and some other
-		// commands all use the C libraries for insensitive searches, it seems best not to do
-		// this to support accented letters and other letters whose ASCII value is above 127.
-		// Some reasons for this:
-		// 1) It might break existing scripts that rely on old behavior of StringReplace and Input
-		//    and any other command that calls this function.
-		// 2) Performance is worse, perhaps a lot due to API locale-detection overhead.
-		//    (this is true at least for lstricmp() vs. stricmp(), but maybe not the below)
-		//while (   (char)CharUpper((LPTSTR)(UCHAR)*sptr) == (char)CharUpper((LPTSTR)(UCHAR)*pptr)   )
-		while (toupper(*sptr) == toupper(*pptr))
+		for (;;)
 		{
-			++sptr;
-			++pptr;
-			if (!*pptr) // Pattern was found.
-				return aStr;
-		}
-	}
-	return NULL;
+			register unsigned a;
+			register const unsigned char *rhaystack, *rneedle;
+			do
+			{
+				a = *++haystack;
+				if (a == '\0')
+					goto ret0;
+				if ((a == bl) || (a == bu))
+					break;
+				a = *++haystack;
+				if (a == '\0')
+					goto ret0;
+shloop:
+				;
+			}
+			while ((a != bl) && (a != bu));
+
+jin:
+			a = *++haystack;
+			if (a == '\0')  // Remaining part of haystack is shorter than needle.  No match.
+				goto ret0;
+
+			if ((a != cl) && (a != cu)) // This promising candidate is not a complete match.
+				goto shloop;            // Start looking for another match on the first char of needle.
+			
+			rhaystack = haystack-- + 1;
+			rneedle = needle;
+			a = tolower (*rneedle);
+			
+			if (tolower (*rhaystack) == (int) a)
+			do
+			{
+				if (a == '\0')
+					goto foundneedle;
+				++rhaystack;
+				a = tolower (*++needle);
+				if (tolower (*rhaystack) != (int) a)
+					break;
+				if (a == '\0')
+					goto foundneedle;
+				++rhaystack;
+				a = tolower (*++needle);
+			}
+			while (tolower (*rhaystack) == (int) a);
+			
+			needle = rneedle;		/* took the register-poor approach */
+			
+			if (a == '\0')
+				break;
+		} // for(;;)
+	} // if (bl != '\0')
+foundneedle:
+	return (char*) haystack;
+ret0:
+	return 0;
 }
 
 
-// Note: This function is from someone/somewhere, I don't remember who to give credit to.
-// 
-// StrReplace: Replace OldStr by NewStr in string Str.
-//
-// Str should have enough allocated space for the replacement, no check
-// is made for this. Str and OldStr/NewStr should not overlap.
+
+char *StrReplace(char *aBuf, char *aOld, char *aNew, bool aCaseSensitive)
+// Replaces first occurrence of aOld with aNew in string aBuf.  Caller must ensure that
+// all parameters are non-NULL (though they can be the empty string).  It must also ensure that
+// aBuf has enough allocated space for the replacement since no check is made for this.
+// Finally, aOld/aNew should not be inside the same memory area as aBuf.
 // The empty string ("") is found at the beginning of every string.
-//
-// Returns: pointer to first location behind where NewStr was inserted
-// or NULL if OldStr was not found.
-// This is useful for multiple replacements, see example in main() below
-// (be careful not to replace the empty string this way !)
-char *StrReplace(char *Str, char *OldStr, char *NewStr, bool aCaseSensitive)
+// Returns NULL if aOld was not found.  Otherwise, returns address of first location
+// behind where aNew was inserted.  This is useful for multiple replacements (though performance
+// would be bad since length of old/new and Buf has to be recalculated with strlen() for each
+// call, rather than just once for all calls).
 {
-	if (!Str || !*Str) return NULL; // Nothing to do in this case.
-	if (!OldStr || !*OldStr) return NULL;  // Don't even think about it.
-	if (!NewStr) NewStr = "";  // In case it's called explicitly with a NULL.
-	size_t OldLen, NewLen;
-	char *p, *q;
-	if (   NULL == (p = (aCaseSensitive ? strstr(Str, OldStr) : stristr(Str, OldStr)))   )
-		return p;
-	OldLen = strlen(OldStr);
-	NewLen = strlen(NewStr);
-	memmove(q = p+NewLen, p+OldLen, strlen(p+OldLen)+1);
-	memcpy(p, NewStr, NewLen);
-	return q;
+	// Nothing to do if aBuf is blank.  If aOld is blank, that is not supported because it
+	// would be an infinite loop.
+	if (!*aBuf || !*aOld)
+		return NULL;
+	char *found = (aCaseSensitive ? strstr(aBuf, aOld) : strcasestr(aBuf, aOld));
+	if (!found)
+		return NULL;
+	size_t length_of_old = strlen(aOld);
+	size_t length_of_new = strlen(aNew);
+	char *the_part_of_aBuf_to_remain_unaltered = found + length_of_new;
+	// The check below can greatly improve performance if old and new strings happen to be same length
+	// (especially if this function is called thousands of times in a loop to replace multiple strings):
+	if (length_of_old != length_of_new)
+		// Since new string can't fit exactly in place of old string, adjust the target area to
+		// accept exactly the right length so that the rest of the string stays unaltered:
+		memmove(the_part_of_aBuf_to_remain_unaltered, found + length_of_old, strlen(found + length_of_old) + 1); // +1 to include the terminator.
+	memcpy(found, aNew, length_of_new); // Perform the replacement.
+	return the_part_of_aBuf_to_remain_unaltered;
 }
 
 
 
-char *StrReplaceAll(char *Str, char *OldStr, char *NewStr, bool aCaseSensitive)
+char *StrReplaceAll(char *aBuf, char *aOld, char *aNew, bool aAlwaysUseSlow, bool aCaseSensitive, DWORD aReplacementsNeeded)
+// Replaces all occurrences of aOld with aNew inside aBuf, and returns aBuf.
 {
-	if (!Str || !*Str) return NULL; // Nothing to do in this case.
-	if (!OldStr || !*OldStr) return NULL;  // Avoid replacing the empty string: probably infinite loop.
-	if (!NewStr) NewStr = "";  // In case it's called explicitly with a NULL.
-	char *ptr;
-	//This doesn't quite work when doing a simple replacement such as ".." with ". .".
-	//In the above example, "..." would be changed to ". .." rather than ". . ." as it should be.
-	//Therefore, use a less efficient,but more accurate method instead.  UPDATE: But this method
-	//can cause an infinite loop if the new string is a superset of the old string, so don't use
-	//it after all.
-	//for ( ; ptr = StrReplace(Str, OldStr, NewStr); );
-	for (ptr = Str; ptr = StrReplace(ptr, OldStr, NewStr, aCaseSensitive); );
-	return Str;
+	// Nothing to do if aBuf is blank.  If aOld is blank, that is not supported because it
+	// would be an infinite loop.
+	if (!*aBuf || !*aOld)
+		return aBuf;
+	// When the replacement string is equal in length to the search string, StrReplace()
+	// already contains an enhancement to avoid the memmove() (though some implementations of
+	// memmove() might already check if source and dest are the same and if so, return
+	// immediately, in which case the extra check wouldn't be needed).
+	// When replacement string is longer than search string, I don't know if there is
+	// a simple algorithm to avoid a memmove() for each replacement.   One obvious way would
+	// be to allocate a temporary memory area and build an entirely new string in place of
+	// the old one.  Obviously that would only be better if the system had the memory to spare
+	// and didn't have to swap to allocate it.  So such an algorithm should probably be offered
+	// only as an option (in the future), especially since it wouldn't help performance much
+	// unless many replacements are needed within the target string.
+	size_t length_of_old = strlen(aOld);
+	size_t length_of_new = strlen(aNew);
+	size_t buf_length = strlen(aBuf);
+	if (length_of_old == length_of_new)
+		aAlwaysUseSlow = true; // Use slow mode because it's just as fast in this case, while avoiding the extra memory allocation.
+
+	if (!aAlwaysUseSlow) // Auto-detect whether to use fast mode.
+	{
+		// The fast method is much faster when many replacements are needed because it avoids
+		// a memmove() to shift the remainder of the buffer up against the area of memory that
+		// will be replaced (which for the slow method is done for every replacement).  The savings
+		// can be enormous if aBuf is very large, assuming the system has the memory to spare.
+		char *cp, *dp;
+		UINT replacements_needed;
+		if (aReplacementsNeeded < UINT_MAX) // Caller provided the count to avoid us having to calculate it again.
+			replacements_needed = aReplacementsNeeded;
+		else
+			for (replacements_needed = 0, cp = aBuf; cp = (aCaseSensitive ? strstr(cp, aOld) : strcasestr(cp, aOld)); cp += length_of_old)
+				++replacements_needed;
+		if (!replacements_needed) // aBuf already contains the correct contents.
+			return aBuf;
+		// Fall back to the slow method unless the fast method's performance gain is worth the risk of
+		// stressing the system (in case it's low on memory).
+		// Testing shows that the below cutoffs seem approximately correct based on the fact that the
+		// slow method's execution time is proportional to both buf_length and replacements_needed.
+		// By contrast, the fast method takes about the same amount of time for a given buf_length
+		// regardless of how many replacements are needed.  Here are the test results (not rigorously
+		// conducted -- they were done only to get a idea of the shape of the curve):
+		//1415 KB with 5 evenly spaced replacements: slow and fast are about the same speed.
+		//2800 KB with 10 replacements: 110ms vs. 90ms
+		//5600 KB with 10 replacements: 220ms vs. 175ms
+		//Same but with 20 replacements: 335 vs. 195 (at this point, the slow method is taking more than 50% longer)
+		//Same but with 40 replacements: 525 vs. 185 (fast method is more than twice as fast)
+		//475KB with 6200 replacements: 3055 vs. 25  (the difference becomes dramatic for thousands of replacements).
+		//150 KB with 2000 replacements: 91 vs. 0ms
+		//293 KB with 100,000 replacements: 14000 vs. 30
+		//146 KB with 50,000 replacements: 2954 vs 20
+		//30KB with 10000 replacements: 60 vs. 0
+		if (replacements_needed > 20 && buf_length > 5000) // Also fall back to slow method if buffer is of trivial size, since there isn't much difference in that case.
+		{
+			// Allocate the memory:
+			size_t buf_size = buf_length + replacements_needed*(length_of_new - length_of_old) + 1; // +1 for zero terminator.
+			char *buf = (char *)malloc(buf_size);
+			if (buf)
+			{
+				// Perform the replacement:
+				cp = aBuf; // Source.
+				dp = buf;  // Destination.
+				size_t chars_to_copy;
+				for (char *found = aBuf; found = (aCaseSensitive ? strstr(found, aOld) : strcasestr(found, aOld));)
+				{
+					// memcpy() might contain optimizations that make it faster than a char-moving loop such as memmove().
+					// This is because memmove() or a simple *dp++ = *cp++ loop of our own allows the source and dest
+					// to overlap.  Since they don't in this case, a CPU instruction might be used to copy a block of
+					// memory much more quickly:
+					chars_to_copy = found - cp;
+					if (chars_to_copy) // Copy the part of the source string up to the position of this match.
+					{
+						memcpy(dp, cp, chars_to_copy);
+						dp += chars_to_copy;
+					}
+					if (length_of_new) // Insert the replacement string in place of the old string.
+					{
+						memcpy(dp, aNew, length_of_new);
+						dp += length_of_new;
+					}
+					//else omit it altogether; that is, replace every aOld with the empty string.
+
+					// Set up "found" for the next search to be done by the for-loop.  For consistency, like
+					// the "slow" method, overlapping matches are not detected.  For example, the replacement
+					// of all occurrences of ".." with ". ." would transform an aBuf of "..." into ". ..",
+					// not ". . .":
+					found += length_of_old;
+					cp = found; // Since "found" is about to be altered by strstr, cp serves as a placeholder for use by the next iteration.
+				}
+				*dp = '\0';  // Final terminator.
+
+				// Copy the result back into the caller's original buf (with added complexity by the caller, this step
+				// could be avoided):
+				memcpy(aBuf, buf, buf_size); // Include the zero terminator. Caller has already ensured that aBuf is large enough.
+				free(buf);
+				return aBuf;
+			}
+			//else not enough memory, so fall through to the slow method below.
+		}
+		// else only 1 replacement needed, so the slow mode should be about the same speed while requiring less memory.
+	}
+
+	// Since the above didn't return, either the slow method was originally in effect or it's being
+	// used because the fast method could not allocate enough memory or isn't worth the cost.
+	// The below doesn't quite work when doing a simple replacement such as ".." with ". .".
+	// In the above example, "..." would be changed to ". .." rather than ". . ." as it should be.
+	// Therefore, use a less efficient, but more accurate method instead.  UPDATE: But this method
+	// can cause an infinite loop if the new string is a superset of the old string, so don't use
+	// it after all.
+	//for ( ; ptr = StrReplace(aBuf, aOld, aNew, aCaseSensitive); ); // Note that this very different from the below.
+
+	// Don't call StrReplace() because its call of strlen() within the call to memmove() signficantly
+	// reduces performance (a typical replacement of \r\n with \n in an aBuf of size 2 MB is close to
+	// twice as fast due to the avoidance of a call to strlen() inside the loop).  Reproducing the code
+	// here has the additional advantage that the lengths of aOld and aNew need be calculated only once
+	// at the beginning rather than having StrReplace() do it every time, which can be a very large
+	// savings if aOld and/or aNew happen to be very long strings (unusual).
+	int length_to_add = (int)(length_of_new - length_of_old);  // Can be negative.
+	char *found, *search_area;
+	for (search_area = aBuf; found = aCaseSensitive ? strstr(search_area, aOld) : strcasestr(search_area, aOld);)
+	{
+		search_area = found + length_of_new;  // The next search should start at this position when all is adjusted below.
+		// The check below can greatly improve performance if old and new strings happen to be same length:
+		if (length_of_old != length_of_new)
+		{
+			// Since new string can't fit exactly in place of old string, adjust the target area to
+			// accept exactly the right length so that the rest of the string stays unaltered:
+			memmove(search_area, found + length_of_old
+				, buf_length - (found - aBuf) - length_of_old + 1); // +1 to include zero terminator.
+			// Above: Calculating length vs. using strlen() makes overall speed of the operation about
+			// twice as fast for some typical test cases in a 2 MB buffer such as replacing \r\n with \n.
+		}
+		memcpy(found, aNew, length_of_new); // Perform the replacement.
+		// Must keep buf_length updated as we go, for use with memmove() above:
+		buf_length += length_to_add; // Note that length_to_add will be negative if aNew is shorter than aOld.
+	}
+
+	return aBuf;
 }
 
 
 
-char *StrReplaceAllSafe(char *Str, size_t Str_size, char *OldStr, char *NewStr, bool aCaseSensitive)
+char *StrReplaceAllSafe(char *aBuf, size_t aBuf_size, char *aOld, char *aNew, bool aCaseSensitive)
 // Similar to above but checks to ensure that the size of the buffer isn't exceeded.
 {
-	if (!Str || !*Str) return NULL; // Nothing to do in this case.
-	if (!OldStr || !*OldStr) return NULL;  // Avoid replacing the empty string: probably infinite loop.
-	if (!NewStr) NewStr = "";  // In case it's called explicitly with a NULL.
+	// Nothing to do if aBuf is blank.  If aOld is blank, that is not supported because it
+	// would be an infinite loop.
+	if (!*aBuf || !*aOld)
+		return NULL;
 	char *ptr;
-	int length_increase = (int)(strlen(NewStr) - strlen(OldStr));  // Can be negative.
-	for (ptr = Str;; )
+	int length_increase = (int)(strlen(aNew) - strlen(aOld));  // Can be negative.
+	for (ptr = aBuf;; )
 	{
-		if (length_increase > 0) // Make sure there's enough room in Str first.
-			if ((int)(Str_size - strlen(Str) - 1) < length_increase)
+		if (length_increase > 0) // Make sure there's enough room in aBuf first.
+			if ((int)(aBuf_size - strlen(aBuf) - 1) < length_increase)
 				break;  // Not enough room to do the next replacement.
-		if (   !(ptr = StrReplace(ptr, OldStr, NewStr, aCaseSensitive))   )
+		if (   !(ptr = StrReplace(ptr, aOld, aNew, aCaseSensitive))   )
 			break;
 	}
-	return Str;
+	return aBuf;
 }
 
 
 
 char *TranslateLFtoCRLF(char *aString)
-// Translates any naked LFs in aString to CRLF, copying the result into a malloc'd buffer
-// (which the caller must free when it's done with it).  Any CRLFs originally present in aString
-// are not changed (i.e. they don't become CRCRLF).
+// Translates any naked LFs in aString to CRLF.  If there are non, the original string is returned.
+// Otherwise, the translated versionis copied into a malloc'd buffer, which the caller must free
+// when it's done with it).  Any CRLFs originally present in aString are not changed (i.e. they
+// don't become CRCRLF).
 {
 	UINT naked_LF_count = 0;
 	size_t length = 0;
 	char *cp;
+
 	for (cp = aString; *cp; ++cp)
 	{
 		++length;
 		if (*cp == '\n' && (cp == aString || *(cp - 1) != '\r')) // Relies on short-circuit boolean order.
 			++naked_LF_count;
 	}
+
+	if (!naked_LF_count)
+		return aString;  // The original string is returned, which the caller must check for (vs. new string).
+
+	// Allocate the new memory that will become the caller's responsibility:
 	char *buf = (char *)malloc(length + naked_LF_count + 1);  // +1 for zero terminator.
 	if (!buf)
 		return NULL;
+
 	// Now perform the translation.
-	char *dp = buf;
+	char *dp = buf; // Destination.
 	for (cp = aString; *cp; ++cp)
 	{
 		if (*cp == '\n' && (cp == aString || *(cp - 1) != '\r')) // Relies on short-circuit boolean order.
@@ -644,6 +855,7 @@ char *TranslateLFtoCRLF(char *aString)
 		*dp++ = *cp;
 	}
 	*dp = '\0';  // Final terminator.
+
 	return buf;  // Caller must free it when it's done with it.
 }
 
@@ -670,6 +882,8 @@ bool DoesFilePatternExist(char *aFilePattern)
 }
 
 
+
+#ifdef _DEBUG
 ResultType FileAppend(char *aFilespec, char *aLine, bool aAppendNewline)
 {
 	if (!aFilespec || !aLine) return FAIL;
@@ -683,6 +897,7 @@ ResultType FileAppend(char *aFilespec, char *aLine, bool aAppendNewline)
 	fclose(fp);
 	return OK;
 }
+#endif
 
 
 
@@ -694,16 +909,14 @@ char *ConvertFilespecToCorrectCase(char *aFullFileSpec)
 // only easy way is to call FindFirstFile() on each directory that composes aFullFileSpec,
 // which is what is done here.
 {
-	// Longer in case of UNCs and such, which might be longer than MAX_PATH:
-	#define WORK_AREA_SIZE (MAX_PATH * 2)
 	if (!aFullFileSpec || !*aFullFileSpec) return aFullFileSpec;
 	size_t length = strlen(aFullFileSpec);
-	if (length < 2 || length >= WORK_AREA_SIZE) return aFullFileSpec;
+	if (length < 2 || length >= MAX_PATH) return aFullFileSpec;
 	// Start with something easy, the drive letter:
 	if (aFullFileSpec[1] == ':')
 		aFullFileSpec[0] = toupper(aFullFileSpec[0]);
 	// else it might be a UNC that has no drive letter.
-	char built_filespec[WORK_AREA_SIZE], *dir_start, *dir_end;
+	char built_filespec[MAX_PATH], *dir_start, *dir_end;
 	if (dir_start = strchr(aFullFileSpec, ':'))
 		// MSDN: "To examine any directory other than a root directory, use an appropriate
 		// path to that directory, with no trailing backslash. For example, an argument of
@@ -788,18 +1001,15 @@ char *FileAttribToStr(char *aBuf, DWORD aAttr)
 
 
 
-//unsigned __int64 GetFileSize64(HANDLE aFileHandle)
-//// Code adapted from someone's on the Usenet.
-//{
-//    ULARGE_INTEGER ui = {0};
-//    ui.LowPart = GetFileSize(aFileHandle, &ui.HighPart);
-//    if(ui.LowPart == MAXDWORD && GetLastError() != NO_ERROR)
-//    {
-//        // the caller should use GetLastError() to test for error
-//        return ULLONG_MAX;
-//    }
-//    return (unsigned __int64)ui.QuadPart;
-//}
+unsigned __int64 GetFileSize64(HANDLE aFileHandle)
+// Returns ULLONG_MAX on failure.  Otherwise, it returns the actual file size.
+{
+    ULARGE_INTEGER ui = {0};
+    ui.LowPart = GetFileSize(aFileHandle, &ui.HighPart);
+    if (ui.LowPart == MAXDWORD && GetLastError() != NO_ERROR)
+        return ULLONG_MAX;
+    return (unsigned __int64)ui.QuadPart;
+}
 
 
 
@@ -1383,7 +1593,7 @@ bool IsStringInList(char *aStr, char *aList, bool aFindExactMatch, bool aCaseSen
 						return true;
 				}
 				else // Not case sensitive
-					if (stristr(aStr, buf)) // Match found
+					if (strcasestr(aStr, buf)) // Match found
 						return true;
 			}
 		}

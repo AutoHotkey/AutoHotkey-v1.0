@@ -231,9 +231,9 @@ void ToggleNumlockWin9x();
 //void CapslockOffWin9x();
 
 modLR_type SetModifierState(mod_type aModifiersNew, modLR_type aModifiersLRnow, HWND aTargetWindow
-	, DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER);
+	, bool aDisguiseWinAlt, DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER);
 modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLRnow, HWND aTargetWindow
-	, DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER);
+	, bool aDisguiseWinAlt, DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER);
 void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLRnow, KeyEventTypes aEventType
 	, HWND aTargetWindow, DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER);
 
@@ -273,8 +273,8 @@ char *VKToKeyName(vk_type aVK, sc_type aSC, char *aBuf, size_t aBuf_size);
 sc_type TextToSC(char *aText);
 vk_type TextToVK(char *aText, mod_type *pModifiers = NULL, bool aExcludeThoseHandledByScanCode = false
 	, bool aAllowExplicitVK = true);
-int TextToSpecial(char *aText, UINT aTextLength, modLR_type &aModifiersLR, mod_type &aModifiers
-	, bool aUpdatePersistent);
+vk_type TextToSpecial(char *aText, UINT aTextLength, KeyEventTypes &aEventTypem, modLR_type &aModifiersLR
+	, mod_type &aModifiers, bool aUpdatePersistent);
 
 #ifdef ENABLE_KEY_HISTORY_FILE
 ResultType KeyHistoryToFile(char *aFilespec = NULL, char aType = '\0', bool aKeyUp = false

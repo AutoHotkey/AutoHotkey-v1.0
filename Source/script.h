@@ -61,14 +61,17 @@ enum enum_act {
 // Seems best to make this one zero so that it will be the ZeroMemory() default within
 // any POD structures that contain an action_type field:
   ACT_INVALID = FAIL  // These should both be zero for initialization and function-return-value purposes.
-, ACT_ASSIGN, ACT_ADD, ACT_SUB, ACT_MULT, ACT_DIV
+, ACT_ASSIGN, ACT_ASSIGNEXPR, ACT_ADD, ACT_SUB, ACT_MULT, ACT_DIV
 , ACT_ASSIGN_FIRST = ACT_ASSIGN, ACT_ASSIGN_LAST = ACT_DIV
 , ACT_REPEAT // Never parsed directly, only provided as a translation target for the old command (see other notes).
 , ACT_ELSE   // Parsed at a lower level than most commands to support same-line ELSE-actions (e.g. "else if").
 , ACT_IFBETWEEN, ACT_IFNOTBETWEEN, ACT_IFIN, ACT_IFNOTIN, ACT_IFCONTAINS, ACT_IFNOTCONTAINS, ACT_IFIS, ACT_IFISNOT
+, ACT_IFEXPR  // i.e. if (expr)
  // *** *** *** KEEP ALL OLD-STYLE/AUTOIT V2 IFs AFTER THIS (v1.0.20 bug fix). *** *** ***
  , ACT_FIRST_IF_ALLOWING_SAME_LINE_ACTION
  // *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***
+ // ACT_IS_IF_OLD() relies upon ACT_IFEQUAL through ACT_IFLESSOREQUAL being adjacent to one another
+ // and it relies upon the fact that ACT_IFEQUAL is first in the series and ACT_IFLESSOREQUAL last.
 , ACT_IFEQUAL = ACT_FIRST_IF_ALLOWING_SAME_LINE_ACTION, ACT_IFNOTEQUAL, ACT_IFGREATER, ACT_IFGREATEROREQUAL
 , ACT_IFLESS, ACT_IFLESSOREQUAL
 , ACT_FIRST_COMMAND // i.e the above aren't considered commands for parsing/searching purposes.
@@ -76,7 +79,7 @@ enum enum_act {
 , ACT_IFWINNOTEXIST, ACT_IFWINACTIVE, ACT_IFWINNOTACTIVE
 , ACT_IFINSTRING, ACT_IFNOTINSTRING
 , ACT_IFEXIST, ACT_IFNOTEXIST, ACT_IFMSGBOX
-, ACT_FIRST_IF = ACT_IFBETWEEN, ACT_LAST_IF = ACT_IFMSGBOX  // Keep this updated with any new IFs that are added.
+, ACT_FIRST_IF = ACT_IFBETWEEN, ACT_LAST_IF = ACT_IFMSGBOX  // Keep this range updated with any new IFs that are added.
 , ACT_MSGBOX, ACT_INPUTBOX, ACT_SPLASHTEXTON, ACT_SPLASHTEXTOFF, ACT_PROGRESS, ACT_SPLASHIMAGE
 , ACT_TOOLTIP, ACT_TRAYTIP, ACT_INPUT
 , ACT_TRANSFORM, ACT_STRINGLEFT, ACT_STRINGRIGHT, ACT_STRINGMID
@@ -108,7 +111,7 @@ enum enum_act {
 , ACT_GROUPADD, ACT_GROUPACTIVATE, ACT_GROUPDEACTIVATE, ACT_GROUPCLOSE
 , ACT_DRIVESPACEFREE, ACT_DRIVE, ACT_DRIVEGET
 , ACT_SOUNDGET, ACT_SOUNDSET, ACT_SOUNDGETWAVEVOLUME, ACT_SOUNDSETWAVEVOLUME, ACT_SOUNDPLAY
-, ACT_FILEAPPEND, ACT_FILEREADLINE, ACT_FILEDELETE, ACT_FILERECYCLE, ACT_FILERECYCLEEMPTY
+, ACT_FILEAPPEND, ACT_FILEREAD, ACT_FILEREADLINE, ACT_FILEDELETE, ACT_FILERECYCLE, ACT_FILERECYCLEEMPTY
 , ACT_FILEINSTALL, ACT_FILECOPY, ACT_FILEMOVE, ACT_FILECOPYDIR, ACT_FILEMOVEDIR
 , ACT_FILECREATEDIR, ACT_FILEREMOVEDIR
 , ACT_FILEGETATTRIB, ACT_FILESETATTRIB, ACT_FILEGETTIME, ACT_FILESETTIME
@@ -139,6 +142,7 @@ enum enum_act {
 enum enum_act_old {
   OLD_INVALID = FAIL  // These should both be zero for initialization and function-return-value purposes.
   , OLD_SETENV, OLD_ENVADD, OLD_ENVSUB, OLD_ENVMULT, OLD_ENVDIV
+  // ACT_IS_IF_OLD() relies on the items in this next line being adjacent to one another and in this order:
   , OLD_IFEQUAL, OLD_IFNOTEQUAL, OLD_IFGREATER, OLD_IFGREATEROREQUAL, OLD_IFLESS, OLD_IFLESSOREQUAL
   , OLD_LEFTCLICK, OLD_RIGHTCLICK, OLD_LEFTCLICKDRAG, OLD_RIGHTCLICKDRAG
   , OLD_HIDEAUTOITWIN, OLD_REPEAT, OLD_ENDREPEAT
@@ -153,9 +157,15 @@ enum enum_act_old {
 #define ACT_IS_ALWAYS_ALLOWED(ActionType) (ActionType == ACT_EXITAPP || ActionType == ACT_PAUSE \
 	|| ActionType == ACT_EDIT || ActionType == ACT_RELOAD || ActionType == ACT_KEYHISTORY \
 	|| ActionType == ACT_LISTLINES || ActionType == ACT_LISTVARS || ActionType == ACT_LISTHOTKEYS)
-#define ACT_IS_IF(ActionType) (ActionType >= ACT_FIRST_IF && ActionType <= ACT_LAST_IF)
-#define ACT_IS_IF_OLD(ActionType) (ActionType >= ACT_FIRST_IF_ALLOWING_SAME_LINE_ACTION && ActionType <= ACT_LAST_IF)
 #define ACT_IS_ASSIGN(ActionType) (ActionType >= ACT_ASSIGN_FIRST && ActionType <= ACT_ASSIGN_LAST)
+#define ACT_IS_IF(ActionType) (ActionType >= ACT_FIRST_IF && ActionType <= ACT_LAST_IF)
+#define ACT_IS_IF_OLD(ActionType, OldActionType) (ActionType >= ACT_FIRST_IF_ALLOWING_SAME_LINE_ACTION && ActionType <= ACT_LAST_IF) \
+	&& (ActionType < ACT_IFEQUAL || ActionType > ACT_IFLESSOREQUAL || (OldActionType >= OLD_IFEQUAL && OldActionType <= OLD_IFLESSOREQUAL))
+	// All the checks above must be done so that cmds such as IfMsgBox (which are both "old" and "new")
+	// can support parameters on the same line or on the next line.  For example, both of the above are allowed:
+	// IfMsgBox, No, Gosub, XXX
+	// IfMsgBox, No
+	//     Gosub, XXX
 
 #define ATTACH_THREAD_INPUT \
 	bool threads_are_attached = false;\
@@ -220,10 +230,11 @@ enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
 #define ERR_ABORT "  " ERR_ABORT_NO_SPACES
 #define WILL_EXIT "The program will exit."
 #define OLD_STILL_IN_EFFECT "The script was not reloaded; the old version will remain in effect."
-#define PLEASE_REPORT "  Please report this as a bug."
 #define ERR_UNRECOGNIZED_ACTION "This line does not contain a recognized action."
 #define ERR_MISSING_OUTPUT_VAR "This command requires that at least one of its output variables be provided."
 #define ERR_ELSE_WITH_NO_IF "This ELSE doesn't appear to belong to any IF-statement."
+#define ERR_OUTOFMEM "Out of memory."
+#define ERR_MEM_LIMIT_REACHED "Memory limit reached (see #MaxMem in the help file)." ERR_ABORT
 #define ERR_SETTIMER "This timer's target label does not exist."
 #define ERR_ONEXIT_LABEL "Parameter #1 is not a valid label."
 #define ERR_HOTKEY_LABEL "Parameter #2 is not a valid label or action."
@@ -261,8 +272,8 @@ enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
 #define ERR_SYSGET "Parameter #2 is not a valid SysGet command."
 #define ERR_COORDMODE "Parameter #1 is not valid."
 #define ERR_IFMSGBOX "This line specifies an invalid MsgBox result."
-#define ERR_REG_KEY "The key name must be either HKEY_LOCAL_MACHINE, HKEY_USERS, HKEY_CURRENT_USER, HKEY_CLASSES_ROOT, HKEY_CURRENT_CONFIG, or the abbreviations for these."
-#define ERR_REG_VALUE_TYPE "The value type must be either REG_SZ, REG_EXPAND_SZ, REG_MULTI_SZ, REG_DWORD, or REG_BINARY."
+#define ERR_REG_KEY "Invalid registry root key."
+#define ERR_REG_VALUE_TYPE "Invalid registry value type."
 #define ERR_COMPARE_TIMES "Parameter #3 must be either blank, a variable reference, or one of these words: Seconds, Minutes, Hours, Days."
 #define ERR_INVALID_DATETIME "This date-time string contains at least one invalid component."
 #define ERR_FILE_TIME "Parameter #3 must be either blank, M, C, A, or a variable reference."
@@ -271,12 +282,11 @@ enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
 #define ERR_MOUSE_UPDOWN "Parameter #6 must be either blank, D, U, or a variable reference."
 #define ERR_DIVIDEBYZERO "This line would attempt to divide by zero."
 #define ERR_PERCENT "Parameter #1 must be a number between -100 and 100 (inclusive), or a variable reference."
-#define ERR_MOUSE_SPEED "The Mouse Speed must be a number between 0 and " MAX_MOUSE_SPEED_STR ", blank, or a variable reference."
-#define ERR_MEM_ASSIGN "Out of memory while assigning to this variable." ERR_ABORT
+#define ERR_MOUSE_SPEED "Mouse speed must be between 0 and " MAX_MOUSE_SPEED_STR "."
 #define ERR_VAR_IS_RESERVED "This variable is reserved and cannot be assigned to."
 #define ERR_DEFINE_CHAR "The character being defined must not be identical to another special or reserved character."
 #define ERR_INCLUDE_FILE "A filename must be specified for #Include."
-#define ERR_DEFINE_COMMENT "The comment flag must not be one of the hotkey definition symbols (e.g. ! ^ + $ ~ * < >)."
+#define ERR_DEFINE_COMMENT "Comment flag must not be one of the hotkey definition symbols (e.g. ! ^ + $ ~ * < >)."
 
 //----------------------------------------------------------------------------------
 
@@ -309,7 +319,7 @@ struct SplashType
 {
 	int width;
 	int height;
-	int percent;  // The position of the progress bar.
+	int bar_pos;  // The amount of progress of the bar (it's position).
 	int margin_x; // left/right margin
 	int margin_y; // top margin
 	int text1_height; // Height of main text control.
@@ -363,7 +373,7 @@ typedef UINT LineNumberType;
 // -2 for the beginning and ending g_DerefChars:
 #define MAX_VAR_NAME_LENGTH (UCHAR_MAX - 2)
 #define MAX_DEREFS_PER_ARG 512
-typedef UCHAR DerefLengthType;
+typedef UINT DerefLengthType;  // Formerly UCHAR, but since UCHAR doesn't actually save memory yet, a UINT for performance reasons.
 struct DerefType
 {
 	char *marker;
@@ -374,14 +384,16 @@ struct DerefType
 };
 
 typedef UCHAR ArgTypeType;  // UCHAR vs. an enum, to save memory.
-#define ARG_TYPE_NORMAL     (UCHAR)0
-#define ARG_TYPE_INPUT_VAR  (UCHAR)1
-#define ARG_TYPE_OUTPUT_VAR (UCHAR)2
+#define ARG_TYPE_NORMAL     (UCHAR)0  // Formerly (UCHAR)0
+#define ARG_TYPE_INPUT_VAR  (UCHAR)1  // Formerly (UCHAR)1
+#define ARG_TYPE_OUTPUT_VAR (UCHAR)2  // Formerly (UCHAR)2
 struct ArgStruct
 {
-	// Keep any fields that aren't an even multiple of 4 adjacent to each other.  This conserves memory
-	// due to byte-alignment:
 	ArgTypeType type;
+	bool is_expression; // Whether this ARG is known to contain an expression.
+	// Above are kept adjacent to each other to conserve memory (any fields that aren't an even
+	// multiple of 4, if adjacent to each other, consume less memory due to default byte alignment
+	// setting [which helps performance]).
 	char *text;
 	DerefType *deref;  // Will hold a NULL-terminated array of var-deref locations within <text>.
 };
@@ -423,11 +435,14 @@ struct RegItemStruct
 struct LoopReadFileStruct
 {
 	FILE *mReadFile, *mWriteFile;
+	char mWriteFileName[MAX_PATH];
 	#define READ_FILE_LINE_SIZE (64 * 1024)  // This is also used by FileReadLine().
 	char mCurrentLine[READ_FILE_LINE_SIZE];
-	LoopReadFileStruct(FILE *aReadFile, FILE *aWriteFile)
-		: mReadFile(aReadFile), mWriteFile(aWriteFile)
+	LoopReadFileStruct(FILE *aReadFile, char *aWriteFileName)
+		: mReadFile(aReadFile), mWriteFile(NULL) // mWriteFile is opened by FileAppend() only upon first use.
 	{
+		// Use our own buffer because caller's is volatile due to possibly being in the deref buffer:
+		strlcpy(mWriteFileName, aWriteFileName, sizeof(mWriteFileName));
 		*mCurrentLine = '\0';
 	}
 };
@@ -582,10 +597,9 @@ private:
 	ResultType Line::PerformLoopParseCSV(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
 		, LoopReadFileStruct *apCurrentReadFile, bool &aContinueMainLoop, Line *&aJumpToLine, __int64 &aIndex);
 	ResultType PerformLoopReadFile(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
-		, char *aCurrentField, bool &aContinueMainLoop, Line *&aJumpToLine, FILE *aReadFile, FILE *aWriteFile
+		, char *aCurrentField, bool &aContinueMainLoop, Line *&aJumpToLine, FILE *aReadFile, char *aWriteFileName
 		, __int64 &aIndex);
-	ResultType Perform(WIN32_FIND_DATA *aCurrentFile = NULL, RegItemStruct *aCurrentRegItem = NULL
-		, LoopReadFileStruct *aCurrentReadFile = NULL);
+	ResultType Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aCurrentRegItem, LoopReadFileStruct *aCurrentReadFile);
 	ResultType FormatTime(char *aYYYYMMDD, char *aFormat);
 	ResultType PerformAssign();
 	ResultType StringSplit(char *aArrayName, char *aInputString, char *aDelimiterList, char *aOmitList);
@@ -617,8 +631,9 @@ private:
 	ResultType FileCreateShortcut(char *aTargetFile, char *aShortcutFile, char *aWorkingDir, char *aArgs
 		, char *aDescription, char *aIconFile, char *aHotkey, char *aIconNumber, char *aRunState);
 	ResultType FileCreateDir(char *aDirSpec);
+	ResultType FileRead(char *aFilespec);
 	ResultType FileReadLine(char *aFilespec, char *aLineNumber);
-	ResultType FileAppend(char *aFilespec, char *aBuf, FILE *aTargetFileAlreadyOpen = NULL);
+	ResultType FileAppend(char *aFilespec, char *aBuf, LoopReadFileStruct *aCurrentReadFile);
 	ResultType FileDelete(char *aFilePattern);
 	ResultType FileRecycle(char *aFilePattern);
 	ResultType FileRecycleEmpty(char *aDriveLetter);
@@ -740,6 +755,15 @@ public:
 	#define LINE_RAW_ARG7 (line->mArgc > 6 ? line->mArg[6].text : "")
 	#define LINE_RAW_ARG8 (line->mArgc > 7 ? line->mArg[7].text : "")
 	#define LINE_RAW_ARG9 (line->mArgc > 8 ? line->mArg[8].text : "")
+	#define NEW_RAW_ARG1 (aArgc > 0 ? new_arg[0].text : "") // Helps performance to use this vs. LINE_RAW_ARG where possible.
+	#define NEW_RAW_ARG2 (aArgc > 1 ? new_arg[1].text : "")
+	#define NEW_RAW_ARG3 (aArgc > 2 ? new_arg[2].text : "")
+	#define NEW_RAW_ARG4 (aArgc > 3 ? new_arg[3].text : "")
+	#define NEW_RAW_ARG5 (aArgc > 4 ? new_arg[4].text : "")
+	#define NEW_RAW_ARG6 (aArgc > 5 ? new_arg[5].text : "")
+	#define NEW_RAW_ARG7 (aArgc > 6 ? new_arg[6].text : "")
+	#define NEW_RAW_ARG8 (aArgc > 7 ? new_arg[7].text : "")
+	#define NEW_RAW_ARG9 (aArgc > 8 ? new_arg[8].text : "")
 	#define LINE_ARG1 (line->mArgc > 0 ? line->sArgDeref[0] : "")
 	#define LINE_ARG2 (line->mArgc > 1 ? line->sArgDeref[1] : "")
 	#define LINE_ARG3 (line->mArgc > 2 ? line->sArgDeref[2] : "")
@@ -806,7 +830,7 @@ public:
 		, int aX1, int aY1, int aX2, int aY2, int aSpeed, bool aMoveRelative);
 	static ResultType MouseClick(vk_type aVK // Which button.
 		, int aX = COORD_UNSPECIFIED, int aY = COORD_UNSPECIFIED // These values signal us not to move the mouse.
-		, int aClickCount = 1, int aSpeed = DEFAULT_MOUSE_SPEED, char aEventType = '\0', bool aMoveRelative = false);
+		, int aClickCount = 1, int aSpeed = DEFAULT_MOUSE_SPEED, KeyEventTypes aEventType = KEYDOWNANDUP, bool aMoveRelative = false);
 	static void MouseMove(int aX, int aY, int aSpeed = DEFAULT_MOUSE_SPEED, bool aMoveRelative = false);
 	ResultType MouseGetPos();
 	static void MouseEvent(DWORD aEventFlags, DWORD aX = 0, DWORD aY = 0, DWORD aData = 0)
@@ -821,10 +845,21 @@ public:
 		, LoopReadFileStruct *aCurrentReadFile = NULL, char *aCurrentField = NULL
 		, __int64 aCurrentLoopIteration = 0); // Use signed, since script/ITOA64 aren't designed to work with unsigned.
 
+	// The characters common to both EXP_TELLTALES and EXP_OPERAND_TERMINATORS:
+	#define EXP_COMMON "<>=*/&|^~!()"
+	// Characters whose presence in a mandatory-numeric param make it an expression for certain.
+	// + and - are not included here because legacy numeric parameters can contain unary plus or minus,
+	// e.g. WinMove, -%x%, -%y%:
+	#define EXP_TELLTALES "\"" EXP_COMMON
+	// Characters that mark the end of an operand inside an expression.  Double-quote must not be included:
+	#define EXP_OPERAND_TERMINATORS "\t +-" EXP_COMMON
+	#define EXP_ILLEGAL_CHARS ",'\\:;`{}" // Characters illegal in an expression.
+
 	Var *ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary = true);
 	ResultType ExpandArgs();
 	VarSizeType GetExpandedArgSize(bool aCalcDerefBufSize);
 	char *ExpandArg(char *aBuf, int aArgIndex);
+	char *ExpandExpression(char *aBuf, int aArgIndex);
 	ResultType Deref(Var *aOutputVar, char *aBuf);
 
 	bool FileIsFilteredOut(WIN32_FIND_DATA &aCurrentFile, FileLoopModeType aFileLoopMode, char *aFilePath);
@@ -832,28 +867,189 @@ public:
 	Line *GetJumpTarget(bool aIsDereferenced);
 	ResultType IsJumpValid(Line *aDestination);
 
-	static ArgTypeType ArgIsVar(ActionTypeType aActionType, int aArgIndex);
+	HWND DetermineTargetWindow(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
+
+#ifndef AUTOHOTKEYSC
 	static int ConvertEscapeChar(char *aFilespec, char aOldChar, char aNewChar, bool aFromAutoIt2 = false);
 	static size_t ConvertEscapeCharGetLine(char *aBuf, int aMaxCharsToRead, FILE *fp);
-	ResultType CheckForMandatoryArgs();
+#endif  // The functions above are not needed by the self-contained version.
+
+	
+	// This is in the .h file so that it's more likely the compiler's cost/benefit estimate will
+	// make it inline (since it is called from only one place).  Inline would be good since it
+	// is called frequently during script loading and is difficult to macro-ize in a way that
+	// retains readability.
+	static ArgTypeType ArgIsVar(ActionTypeType aActionType, int aArgIndex)
+	{
+		switch(aArgIndex)
+		{
+		case 0:  // Arg #1
+			switch(aActionType)
+			{
+			case ACT_ASSIGN:
+			case ACT_ASSIGNEXPR:
+			case ACT_ADD:
+			case ACT_SUB:
+			case ACT_MULT:
+			case ACT_DIV:
+			case ACT_TRANSFORM:
+			case ACT_STRINGLEFT:
+			case ACT_STRINGRIGHT:
+			case ACT_STRINGMID:
+			case ACT_STRINGTRIMLEFT:
+			case ACT_STRINGTRIMRIGHT:
+			case ACT_STRINGLOWER:
+			case ACT_STRINGUPPER:
+			case ACT_STRINGLEN:
+			case ACT_STRINGREPLACE:
+			case ACT_STRINGGETPOS:
+			case ACT_GETKEYSTATE:
+			case ACT_CONTROLGETFOCUS:
+			case ACT_CONTROLGETTEXT:
+			case ACT_CONTROLGET:
+			case ACT_GUICONTROLGET:
+			case ACT_STATUSBARGETTEXT:
+			case ACT_INPUTBOX:
+			case ACT_RANDOM:
+			case ACT_INIREAD:
+			case ACT_REGREAD:
+			case ACT_DRIVESPACEFREE:
+			case ACT_DRIVEGET:
+			case ACT_SOUNDGET:
+			case ACT_SOUNDGETWAVEVOLUME:
+			case ACT_FILEREAD:
+			case ACT_FILEREADLINE:
+			case ACT_FILEGETATTRIB:
+			case ACT_FILEGETTIME:
+			case ACT_FILEGETSIZE:
+			case ACT_FILEGETVERSION:
+			case ACT_FILESELECTFILE:
+			case ACT_FILESELECTFOLDER:
+			case ACT_MOUSEGETPOS:
+			case ACT_WINGETTITLE:
+			case ACT_WINGETCLASS:
+			case ACT_WINGET:
+			case ACT_WINGETTEXT:
+			case ACT_WINGETPOS:
+			case ACT_SYSGET:
+			case ACT_CONTROLGETPOS:
+			case ACT_PIXELGETCOLOR:
+			case ACT_PIXELSEARCH:
+			//case ACT_IMAGESEARCH:
+			case ACT_INPUT:
+			case ACT_FORMATTIME:
+				return ARG_TYPE_OUTPUT_VAR;
+
+			case ACT_SORT:
+			case ACT_SPLITPATH:
+			case ACT_IFINSTRING:
+			case ACT_IFNOTINSTRING:
+			case ACT_IFEQUAL:
+			case ACT_IFNOTEQUAL:
+			case ACT_IFGREATER:
+			case ACT_IFGREATEROREQUAL:
+			case ACT_IFLESS:
+			case ACT_IFLESSOREQUAL:
+			case ACT_IFBETWEEN:
+			case ACT_IFNOTBETWEEN:
+			case ACT_IFIN:
+			case ACT_IFNOTIN:
+			case ACT_IFCONTAINS:
+			case ACT_IFNOTCONTAINS:
+			case ACT_IFIS:
+			case ACT_IFISNOT:
+				return ARG_TYPE_INPUT_VAR;
+			}
+			break;
+
+		case 1:  // Arg #2
+			switch(aActionType)
+			{
+			case ACT_STRINGLEFT:
+			case ACT_STRINGRIGHT:
+			case ACT_STRINGMID:
+			case ACT_STRINGTRIMLEFT:
+			case ACT_STRINGTRIMRIGHT:
+			case ACT_STRINGLOWER:
+			case ACT_STRINGUPPER:
+			case ACT_STRINGLEN:
+			case ACT_STRINGREPLACE:
+			case ACT_STRINGGETPOS:
+			case ACT_STRINGSPLIT:
+				return ARG_TYPE_INPUT_VAR;
+
+			case ACT_MOUSEGETPOS:
+			case ACT_WINGETPOS:
+			case ACT_CONTROLGETPOS:
+			case ACT_PIXELSEARCH:
+			//case ACT_IMAGESEARCH:
+			case ACT_SPLITPATH:
+			case ACT_FILEGETSHORTCUT:
+				return ARG_TYPE_OUTPUT_VAR;
+			}
+			break;
+
+		case 2:  // Arg #3
+			switch(aActionType)
+			{
+			case ACT_WINGETPOS:
+			case ACT_CONTROLGETPOS:
+			case ACT_MOUSEGETPOS:
+			case ACT_SPLITPATH:
+			case ACT_FILEGETSHORTCUT:
+				return ARG_TYPE_OUTPUT_VAR;
+			}
+			break;
+
+		case 3:  // Arg #4
+			switch(aActionType)
+			{
+			case ACT_WINGETPOS:
+			case ACT_CONTROLGETPOS:
+			case ACT_MOUSEGETPOS:
+			case ACT_SPLITPATH:
+			case ACT_FILEGETSHORTCUT:
+			case ACT_RUN:
+				return ARG_TYPE_OUTPUT_VAR;
+			}
+			break;
+
+		case 4:  // Arg #5
+		case 5:  // Arg #6
+			if (aActionType == ACT_SPLITPATH || aActionType == ACT_FILEGETSHORTCUT)
+				return ARG_TYPE_OUTPUT_VAR;
+			break;
+
+		case 6:  // Arg #7
+		case 7:  // Arg #8
+			if (aActionType == ACT_FILEGETSHORTCUT)
+				return ARG_TYPE_OUTPUT_VAR;
+		}
+		// Otherwise:
+		return ARG_TYPE_NORMAL;
+	}
+
+
 
 	bool ArgHasDeref(int aArgNum)
 	// This function should always be called in lieu of doing something like "strchr(arg.text, g_DerefChar)"
 	// because that method is unreliable due to the possible presence of literal (escaped) g_DerefChars
 	// in the text.
-	// aArgNum starts at 1 (for the first arg), so zero is invalid).
+	// Caller must ensure that aArgNum should be 1 or greater.
 	{
+#ifdef _DEBUG
 		if (!aArgNum)
 		{
 			LineError("BAD", WARN);
 			++aArgNum;  // But let it continue.
 		}
-		if (aArgNum > mArgc) // arg doesn't exist
+#endif
+		if (aArgNum > mArgc) // Arg doesn't exist.
 			return false;
-		if (mArg[aArgNum - 1].type != ARG_TYPE_NORMAL) // Always do this check prior to the next.
-			return false;
+		ArgStruct &arg = mArg[aArgNum - 1]; // For performance.
+		// Return false if it's not of a type caller wants deemed to have derefs.
 		// Relies on short-circuit boolean evaluation order to prevent NULL-deref:
-		return mArg[aArgNum - 1].deref && mArg[aArgNum - 1].deref[0].marker;
+		return (arg.type == ARG_TYPE_NORMAL) ? arg.deref && arg.deref[0].marker : false;
 	}
 
 	ResultType ArgMustBeDereferenced(Var *aVar, int aArgIndexToExclude)
@@ -890,89 +1086,7 @@ public:
 		return CONDITION_FALSE;
 	}
 
-	bool ArgAllowsNegative(int aArgNum)
-	// aArgNum starts at 1 (for the first arg), so zero is invalid.
-	{
-		if (!aArgNum)
-		{
-			LineError("BAD");
-			++aArgNum;  // But let it continue.
-		}
-		switch(mActionType)
-		{
-		case ACT_ADD:
-		case ACT_SUB:
-		case ACT_MULT:
-		case ACT_DIV:
-		case ACT_SETKEYDELAY:
-		case ACT_SETMOUSEDELAY:
-		case ACT_SETWINDELAY:
-		case ACT_SETCONTROLDELAY:
-		case ACT_RANDOM:
-		case ACT_WINMOVE:
-		case ACT_CONTROLMOVE:
-		case ACT_PIXELGETCOLOR:
-		case ACT_SETTIMER:
-		case ACT_THREAD:
-			return true;
 
-		case ACT_TOOLTIP:    // Seems best to allow negative even though the tip will be put in a visible region.
-		case ACT_MOUSECLICK: // Since mouse coords are relative to the foreground window, they can be negative.
-			return (aArgNum == 2 || aArgNum == 3);
-		case ACT_MOUSECLICKDRAG:
-			return (aArgNum >= 2 && aArgNum <= 5);  // Allow dragging to/from negative coordinates.
-		case ACT_MOUSEMOVE:
-			return (aArgNum == 1 || aArgNum == 2);
-		case ACT_PIXELSEARCH:
-		//case ACT_IMAGESEARCH:
-			return (aArgNum >= 3 || aArgNum <= 7); // i.e. Color values can be negative, but the last param cannot.
-		case ACT_INPUTBOX:
-			return (aArgNum == 7 || aArgNum == 8); // X & Y coords, even if they're absolute vs. relative.
-
-		case ACT_SOUNDSET:
-		case ACT_SOUNDSETWAVEVOLUME:
-			return aArgNum == 1;
-		}
-		return false;  // Since above didn't return, negative is not allowed.
-	}
-
-	bool ArgAllowsFloat(int aArgNum)
-	// aArgNum starts at 1 (for the first arg), so zero is invalid.
-	{
-		if (!aArgNum)
-		{
-			LineError("BAD");
-			++aArgNum;  // But let it continue.
-		}
-		switch(mActionType)
-		{
-		case ACT_RANDOM:
-		case ACT_MSGBOX:
-		case ACT_WINCLOSE:
-		case ACT_WINKILL:
-		case ACT_WINWAIT:
-		case ACT_WINWAITCLOSE:
-		case ACT_WINWAITACTIVE:
-		case ACT_WINWAITNOTACTIVE:
-		case ACT_STATUSBARWAIT:
-		case ACT_CLIPWAIT:
-		// For these, allow even the variable (the first arg) to to be a float so that
-		// the runtime checks won't catch it as an error:
-		case ACT_ADD:
-		case ACT_SUB:
-		case ACT_MULT:
-		case ACT_DIV:
-			return true;
-
-		case ACT_SOUNDSET:
-		case ACT_SOUNDSETWAVEVOLUME:
-			return aArgNum == 1;
-
-		case ACT_INPUTBOX:
-			return aArgNum == 10;
-		}
-		return false;  // Since above didn't return, negative is not allowed.
-	}
 
 	static HKEY RegConvertRootKey(char *aBuf, bool *aIsRemoteRegistry = NULL)
 	{
@@ -1531,12 +1645,12 @@ public:
 	// Returns the matching WinShow mode, or SW_SHOWNORMAL if none.
 	// These are also the modes that AutoIt3 uses.
 	{
-		// For v1.0.19, this was made more permissive (the use of stristr vs. stricmp) to support
+		// For v1.0.19, this was made more permissive (the use of strcasestr vs. stricmp) to support
 		// the optional word ErrorLevel inside this parameter:
 		if (!aBuf || !*aBuf) return SW_SHOWNORMAL;
-		if (stristr(aBuf, "MIN")) return SW_MINIMIZE;
-		if (stristr(aBuf, "MAX")) return SW_MAXIMIZE;
-		if (stristr(aBuf, "HIDE")) return SW_HIDE;
+		if (strcasestr(aBuf, "MIN")) return SW_MINIMIZE;
+		if (strcasestr(aBuf, "MAX")) return SW_MAXIMIZE;
+		if (strcasestr(aBuf, "HIDE")) return SW_HIDE;
 		return SW_SHOWNORMAL;
 	}
 
@@ -1597,7 +1711,7 @@ public:
 
 	static char *LogToText(char *aBuf, size_t aBufSize);
 	char *VicinityToText(char *aBuf, size_t aBufSize, int aMaxLines = 15);
-	char *ToText(char *aBuf, size_t aBufSize, DWORD aElapsed = 0);
+	char *ToText(char *aBuf, size_t aBufSize, bool aCRLF, DWORD aElapsed = 0);
 
 	static void ToggleSuspendState();
 	ResultType ChangePauseState(ToggleValueType aChangeTo);
@@ -1760,13 +1874,13 @@ struct FontType
 {
 	#define MAX_FONT_NAME_LENGTH 63  // Longest name I've seen is 29 chars, "Franklin Gothic Medium Italic".
 	char name[MAX_FONT_NAME_LENGTH + 1];
-	int point_size; // Decided to use int vs. float to simplify the code in many places. Fractional sizes seem rarely needed.
-	int weight;
 	// Keep any fields that aren't an even multiple of 4 adjacent to each other.  This conserves memory
 	// due to byte-alignment:
 	bool italic;
 	bool underline;
 	bool strikeout;
+	int point_size; // Decided to use int vs. float to simplify the code in many places. Fractional sizes seem rarely needed.
+	int weight;
 	HFONT hfont;
 };
 
@@ -1868,7 +1982,7 @@ public:
 	HDROP mHdrop;                 // Used for drag and drop operations.
 	int mMarginX, mMarginY, mPrevX, mPrevY, mPrevWidth, mPrevHeight, mMaxExtentRight, mMaxExtentDown
 		, mSectionX, mSectionY, mMaxExtentRightSection, mMaxExtentDownSection;
-	bool mFirstShowing, mDestroyWindowHasBeenCalled;
+	bool mFirstShowing, mShowIsInProgress, mDestroyWindowHasBeenCalled;
 
 	#define MAX_GUI_FONTS 100
 	static FontType sFont[MAX_GUI_FONTS];
@@ -1906,7 +2020,7 @@ public:
 		, mMaxExtentRight(0), mMaxExtentDown(0)
 		, mSectionX(COORD_UNSPECIFIED), mSectionY(COORD_UNSPECIFIED)
 		, mMaxExtentRightSection(COORD_UNSPECIFIED), mMaxExtentDownSection(COORD_UNSPECIFIED)
-		, mFirstShowing(true), mDestroyWindowHasBeenCalled(false)
+		, mFirstShowing(true), mShowIsInProgress(false), mDestroyWindowHasBeenCalled(false)
 	{
 		// The array of controls is left unitialized to catch bugs.  Each control's attributes should be
 		// fully populated when it is created.
@@ -2024,6 +2138,7 @@ private:
 	ResultType ParseAndAddLine(char *aLineText, char *aActionName = NULL
 		, char *aEndMarker = NULL, char *aLiteralMap = NULL, size_t aLiteralMapLength = 0
 		, ActionTypeType aActionType = ACT_INVALID, ActionTypeType aOldActionType = OLD_INVALID);
+	ResultType ParseDerefs(char *aArgText, char *aArgMap, DerefType *aDeref, int &aDerefCount);
 	char *ParseActionType(char *aBufTarget, char *aBufSource, bool aDisplayErrors);
 	static ActionTypeType ConvertActionType(char *aActionTypeString);
 	static ActionTypeType ConvertOldActionType(char *aActionTypeString);
@@ -2186,6 +2301,7 @@ public:
 	VarSizeType GetLoopFileShortName(char *aBuf = NULL);
 	VarSizeType GetLoopFileDir(char *aBuf = NULL);
 	VarSizeType GetLoopFileFullPath(char *aBuf = NULL);
+	VarSizeType GetLoopFileShortPath(char *aBuf = NULL);
 	VarSizeType GetLoopFileTimeModified(char *aBuf = NULL);
 	VarSizeType GetLoopFileTimeCreated(char *aBuf = NULL);
 	VarSizeType GetLoopFileTimeAccessed(char *aBuf = NULL);

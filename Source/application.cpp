@@ -208,6 +208,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 	bool *pgui_label_is_running;
 	Label *gui_label;
 	HDROP hdrop_to_free;
+	DWORD drop_count;
 	DWORD tick_before, tick_after;
 	MSG msg;
 
@@ -542,9 +543,11 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 					break;
 				case AHK_GUI_DROPFILES: // This is the signal to run the window's DropFiles label.
 					hdrop_to_free = pgui->mHdrop; // This variable simplifies the code further below.
-					if (   !(gui_label = pgui->mLabelForDropFiles)   ) // In case it became NULL since the msg was posted.
+					if (   !(gui_label = pgui->mLabelForDropFiles) // In case it became NULL since the msg was posted.
+						|| !hdrop_to_free // Checked just in case, so that the below can query it.
+						|| !(drop_count = DragQueryFile(hdrop_to_free, 0xFFFFFFFF, NULL, 0))   ) // Probably impossible, but if it ever can happen, seems best to ignore it.
 					{
-						if (hdrop_to_free)
+						if (hdrop_to_free) // Checked again in case short-circuit boolean above never checked it.
 						{
 							DragFinish(hdrop_to_free); // Since the drop-thread will not be launched, free the memory.
 							pgui->mHdrop = NULL; // Indicate that this GUI window is ready for another drop.
@@ -810,6 +813,8 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 					// described at MSDN, even if the window has WS_POPUP style.  Therefore, ErrorLevel will
 					// probably never contain those values, and as a result they are not documented in the help file.
 					g_ErrorLevel->Assign((DWORD)pgui->mSizeType);
+				else if (msg.wParam == AHK_GUI_DROPFILES)
+					g_ErrorLevel->Assign(drop_count);
 				else // Reset for potential future uses (may help avoid breaking existing scripts if ErrorLevel is ever set).
 					g_ErrorLevel->Assign();
 				// Set last found window (as documented).  It's not necessary to check IsWindow/IsWindowVisible/

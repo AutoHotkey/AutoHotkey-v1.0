@@ -83,6 +83,7 @@
 				PreprocessorDefinitions="WIN32;NDEBUG;_WINDOWS"
 				StringPooling="TRUE"
 				ExceptionHandling="FALSE"
+				BasicRuntimeChecks="0"
 				RuntimeLibrary="4"
 				BufferSecurityCheck="FALSE"
 				UsePrecompiledHeader="3"

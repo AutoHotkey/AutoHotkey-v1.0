@@ -56,13 +56,13 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	char *script_filespec = __argv[0];  // i.e. the EXE name.  This is just a placeholder for now.
 #else
 	#ifdef _DEBUG
-	//char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
-	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
-	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\Gui On-screen display (OSD).ahk";
-	char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\GUI Demo.ahk";
-	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\Gui picture test picture reloading.ahk";
+		//char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
+		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
+		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\GUI Demo.ahk";
+		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\Expressions.ahk";
+		char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\New Text Document.ahk";
 	#else
-	char *script_filespec = NAME_P ".ini";  // Use this extension for better file association with editor(s).
+		char *script_filespec = NAME_P ".ini";  // Use this extension for better file association with editor(s).
 	#endif
 #endif
 
@@ -155,7 +155,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	{
 		// Realistically, this should never happen.  But it simplifies the code in many other
 		// places if we make sure the KeyHistory array isn't NULL right away:
-		MsgBox("Out of memory for key history.");
+		MsgBox(ERR_OUTOFMEM);
 		return CRITICAL_ERROR;
 	}
 

@@ -162,71 +162,97 @@ inline size_t omit_trailing_any(char *aBuf, char *aOmitList, char *aBuf_marker)
 
 
 
-inline char *ltrim(char *aStr)
+inline size_t ltrim(char *aStr, size_t aLength = -1)
+// Caller must ensure that aStr is not NULL.
+// v1.0.25: Returns the length if it was discovered as a result of the operation, or aLength otherwise.
+// This greatly improves the performance of PerformAssign().
 // NOTE: THIS VERSION trims only tabs and spaces.  It specifically avoids
 // trimming newlines because some callers want to retain those.
 {
-	if (!aStr || !*aStr) return aStr;
+	if (!*aStr) return 0;
 	char *ptr;
 	// Find the first non-whitespace char (which might be the terminator):
 	for (ptr = aStr; IS_SPACE_OR_TAB(*ptr); ++ptr);
-	memmove(aStr, ptr, strlen(ptr) + 1); // +1 to include the '\0'.  memmove() permits source & dest to overlap.
-	return aStr;
+	// v1.0.25: If no trimming needed, don't do the memmove.  This seems to make a big difference
+	// in the performance of critical sections of the program such as PerformAssign():
+	size_t offset;
+	if (offset = ptr - aStr) // Assign.
+	{
+		if (aLength == -1)
+			aLength = strlen(ptr); // Set aLength as new/trimmed length, for use below and also as the return value.
+		else // v1.0.26 bug-fix: Must adjust the length provided by caller to reflect what we did here.
+			aLength -= offset;
+		memmove(aStr, ptr, aLength + 1); // +1 to include the '\0'.  memmove() permits source & dest to overlap.
+	}
+	return aLength;
 }
 
-inline char *rtrim(char *aStr)
-// NOTE: THIS VERSION trims only tabs and spaces.  It specifically avoids
-// trimming newlines because some callers want to retain those.
+inline size_t rtrim(char *aStr, size_t aLength = -1)
+// Caller must ensure that aStr is not NULL.
+// v1.0.25: Always returns the new length of the string.  This greatly improves the performance of
+// PerformAssign().
+// NOTE: THIS VERSION trims only tabs and spaces.  It specifically avoids trimming newlines because
+// some callers want to retain those.
 {
-	if (!aStr || !*aStr) return aStr; // Must do this prior to below.
+	if (!*aStr) return 0; // The below relies upon this check having been done.
 	// It's done this way in case aStr just happens to be address 0x00 (probably not possible
 	// on Intel & Intel-clone hardware) because otherwise --cp would decrement, causing an
 	// underflow since pointers are probably considered unsigned values, which would
 	// probably cause an infinite loop.  Extremely unlikely, but might as well try
 	// to be thorough:
-	for (char *cp = aStr + strlen(aStr) - 1; ; --cp)
+	if (aLength == -1)
+		aLength = strlen(aStr); // Set aLength for use below and also as the return value.
+	for (char *cp = aStr + aLength - 1; ; --cp, --aLength)
 	{
 		if (!IS_SPACE_OR_TAB(*cp))
 		{
 			*(cp + 1) = '\0';
-			return aStr;
+			return aLength;
 		}
-		if (cp == aStr)
+		// Otherwise, it is a space or tab...
+		if (cp == aStr) // ... and we're now at the first character of the string...
 		{
-			if (IS_SPACE_OR_TAB(*cp))
-				*cp = '\0';
-			return aStr;
+			if (IS_SPACE_OR_TAB(*cp)) // ... and that first character is also a space or tab...
+				*cp = '\0'; // ... so the entire string is made empty...
+			return aLength; // ... and we return in any case.
 		}
+		// else it's a space or tab, and there are still more characters to check.  Let the loop
+		// do its decrements.
 	}
 }
 
-inline char *rtrim_with_nbsp(char *aStr)
+inline void rtrim_with_nbsp(char *aStr)
+// Caller must ensure that aStr is not NULL.
 // Same as rtrim but also gets rid of those annoying nbsp (non breaking space) chars that sometimes
 // wind up on the clipboard when copied from an HTML document, and thus get pasted into the text
 // editor as part of the code (such as the sample code in some of the examples).
 {
-	if (!aStr || !*aStr) return aStr;
+	if (!*aStr) return;
 	for (char *cp = aStr + strlen(aStr) - 1; ; --cp)
 	{
 		if (!IS_SPACE_OR_TAB_OR_NBSP(*cp))
 		{
 			*(cp + 1) = '\0';
-			return aStr;
+			return;
 		}
 		if (cp == aStr)
 		{
 			if (IS_SPACE_OR_TAB_OR_NBSP(*cp))
 				*cp = '\0';
-			return aStr;
+			return;
 		}
 	}
 }
 
-inline char *trim (char *aStr)
+inline size_t trim(char *aStr, size_t aLength = -1)
+// Caller must ensure that aStr is not NULL.
 // NOTE: THIS VERSION trims only tabs and spaces.  It specifically avoids
 // trimming newlines because some callers want to retain those.
 {
-	return ltrim(rtrim(aStr));
+	aLength = ltrim(aStr, aLength);  // It may return -1 to indicate that it still doesn't know the length.
+    return rtrim(aStr, aLength);
+	// v1.0.25: rtrim() always returns the new length of the string.  This greatly improves the
+	// performance of PerformAssign() and possibly other things.
 }
 
 
@@ -284,12 +310,12 @@ inline bool IsHex(char *aBuf)
 	{\
 		if (g.FormatIntAsHex)\
 		{\
-			char *buf_temp = buf;\
+			char *our_buf_temp = buf;\
 			if (value < 0)\
-				*buf_temp++ = '-';\
-			*buf_temp++ = '0';\
-			*buf_temp++ = 'x';\
-			_itoa(value < 0 ? -(int)value : value, buf_temp, 16);\
+				*our_buf_temp++ = '-';\
+			*our_buf_temp++ = '0';\
+			*our_buf_temp++ = 'x';\
+			_itoa(value < 0 ? -(int)value : value, our_buf_temp, 16);\
 		}\
 		else\
 			_itoa(value, buf, 10);\
@@ -298,12 +324,12 @@ inline bool IsHex(char *aBuf)
 	{\
 		if (g.FormatIntAsHex)\
 		{\
-			char *buf_temp = buf;\
+			char *our_buf_temp = buf;\
 			if (value < 0)\
-				*buf_temp++ = '-';\
-			*buf_temp++ = '0';\
-			*buf_temp++ = 'x';\
-			_i64toa(value < 0 ? -(__int64)value : value, buf_temp, 16);\
+				*our_buf_temp++ = '-';\
+			*our_buf_temp++ = '0';\
+			*our_buf_temp++ = 'x';\
+			_i64toa(value < 0 ? -(__int64)value : value, our_buf_temp, 16);\
 		}\
 		else\
 			_i64toa(value, buf, 10);\
@@ -369,14 +395,52 @@ int GetISOWeekNumber(char *aBuf, int aYear, int aYDay, int aWDay);
 ResultType YYYYMMDDToFileTime(char *aYYYYMMDD, FILETIME &aFileTime);
 ResultType YYYYMMDDToSystemTime(char *aYYYYMMDD, SYSTEMTIME &aSystemTime, bool aDoValidate);
 char *FileTimeToYYYYMMDD(char *aBuf, FILETIME &aTime, bool aConvertToLocalTime = false);
-char *SystemTimeToYYYYMMDD(char *aBuf, SYSTEMTIME &aTime, bool aConvertToLocalTime = false);
+char *SystemTimeToYYYYMMDD(char *aBuf, SYSTEMTIME &aTime);
 __int64 YYYYMMDDSecondsUntil(char *aYYYYMMDDStart, char *aYYYYMMDDEnd, bool &aFailed);
 __int64 FileTimeSecondsUntil(FILETIME *pftStart, FILETIME *pftEnd);
 
-// Callers rely on PURE_NOT_NUMERIC being zero/false, so order is important:
-enum pure_numeric_type {PURE_NOT_NUMERIC, PURE_INTEGER, PURE_FLOAT};
+enum SymbolType // For use with ExpandExpression() and IsPureNumeric().
+{
+	// The sPrecedence array in ExpandExpression() must be kept in sync with any additions, removals,
+	// or re-ordering of the below.  Also, callers rely on PURE_NOT_NUMERIC being zero/false,
+	// so that should be listed first.  Finally, IS_OPERAND() relies on all operand types being
+	// at the beginning of the list:
+	  PURE_NOT_NUMERIC, PURE_INTEGER, PURE_FLOAT
+	, SYM_STRING = PURE_NOT_NUMERIC, SYM_INTEGER = PURE_INTEGER, SYM_FLOAT = PURE_FLOAT // Specific operand types.
+	, SYM_OPERAND // Generic/undetermined type of operand.
+	, SYM_OPERAND_END // Marks the symbol after the last operand.  This value is used below.
+	, SYM_BEGIN = SYM_OPERAND_END  // SYM_BEGIN is a special marker to simplify the code.
+	, SYM_OPAREN, SYM_CPAREN  // Open and close parentheses.
+	, SYM_OR, SYM_AND, SYM_LOWNOT  // LOWNOT is the word "not", the low precedence counterpart of !
+	, SYM_EQUAL, SYM_EQUALCASE, SYM_NOTEQUAL // =, ==, <>
+	, SYM_GT, SYM_LT, SYM_GTOE, SYM_LTOE  // >, <, >=, <=
+	, SYM_BITOR // Seems more intuitive to have these higher in prec. than the above, unlike C and Perl, but like Python.
+	, SYM_BITXOR
+	, SYM_BITAND
+	, SYM_BITSHIFTLEFT, SYM_BITSHIFTRIGHT // << >>
+	, SYM_PLUS, SYM_MINUS
+	, SYM_TIMES, SYM_DIVIDE
+	, SYM_NEGATIVE, SYM_HIGHNOT, SYM_BITNOT // Unary minus (unary plus is handled without needing a value here), !, and ~.
+	, SYM_POWER    // See below for why this takes precedence over negative.
+	, SYM_COUNT    // Must be last.
+};
+#define IS_OPERAND(symbol) (symbol < SYM_OPERAND_END)
 
-pure_numeric_type IsPureNumeric(char *aBuf, bool aAllowNegative = false
+struct map_item
+{
+	#define EXP_RAW          0  // The "5 + " in the following: 5 + y - %z% * Array%i%
+	#define EXP_DEREF_SINGLE 1  // The y in the above.
+	#define EXP_DEREF_DOUBLE 2  // The %z% and %i% in the above.
+	int type;
+	char *marker;
+};
+struct ExprTokenType  // Something in the compiler hates the name TokenType, so using a different name.
+{
+	SymbolType symbol;
+	union {__int64 value_int64; double value_double; char *marker;}; // Depends on the value of symbol, above.
+};
+
+SymbolType IsPureNumeric(char *aBuf, bool aAllowNegative = false
 	, bool aAllowAllWhitespace = true, bool aAllowFloat = false, bool aAllowImpure = false);
 
 int snprintf(char *aBuf, size_t aBufSize, const char *aFormat, ...);
@@ -385,16 +449,19 @@ int snprintfcat(char *aBuf, size_t aBufSize, const char *aFormat, ...);
 //int strlcmp (char *aBuf1, char *aBuf2, UINT aLength1 = UINT_MAX, UINT aLength2 = UINT_MAX);
 int strlicmp(char *aBuf1, char *aBuf2, UINT aLength1 = UINT_MAX, UINT aLength2 = UINT_MAX);
 char *strrstr(char *aStr, char *aPattern, bool aCaseSensitive = true, int aOccurrence = 1);
-char *stristr(char *aStr, char *aPattern);
-char *StrReplace(char *Str, char *OldStr, char *NewStr = "", bool aCaseSensitive = true);
-char *StrReplaceAll(char *Str, char *OldStr, char *NewStr = "", bool aCaseSensitive = true);
-char *StrReplaceAllSafe(char *Str, size_t Str_size, char *OldStr, char *NewStr = "", bool aCaseSensitive = true);
+char *strcasestr (const char *phaystack, const char *pneedle);
+char *StrReplace(char *aBuf, char *aOld, char *aNew, bool aCaseSensitive = true);
+char *StrReplaceAll(char *aBuf, char *aOld, char *aNew, bool aAlwaysUseSlow, bool aCaseSensitive = true
+	, DWORD aReplacementsNeeded = UINT_MAX); // Caller can provide this value to avoid having to calculate it again.
+char *StrReplaceAllSafe(char *aBuf, size_t aBuf_size, char *aOld, char *aNew, bool aCaseSensitive = true);
 char *TranslateLFtoCRLF(char *aString);
 bool DoesFilePatternExist(char *aFilePattern);
-ResultType FileAppend(char *aFilespec, char *aLine, bool aAppendNewline = true);
+#ifdef _DEBUG
+	ResultType FileAppend(char *aFilespec, char *aLine, bool aAppendNewline = true);
+#endif
 char *ConvertFilespecToCorrectCase(char *aFullFileSpec);
 char *FileAttribToStr(char *aBuf, DWORD aAttr);
-//unsigned __int64 GetFileSize64(HANDLE aFileHandle);
+unsigned __int64 GetFileSize64(HANDLE aFileHandle);
 char *GetLastErrorText(char *aBuf, size_t aBuf_size);
 void AssignColor(char *aColorName, COLORREF &aColor, HBRUSH &aBrush);
 COLORREF ColorNameToBGR(char *aColorName);

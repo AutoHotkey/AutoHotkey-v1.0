@@ -207,10 +207,13 @@ ResultType Clipboard::Commit(UINT aFormat)
 // whoever had it open before can't use the prior contents, since they're invalid).
 {
 	if (!mIsOpen && !Open())
-		AbortWrite("Could not open clipboard for writing after many timed attempts."
+		return AbortWrite("Could not open clipboard for writing after many timed attempts."
 			" Another program is probably holding it open.");
 	if (!EmptyClipboard())
-		AbortWrite("EmptyClipboard"); // Short error message since so rare.
+	{
+		Close();
+		return AbortWrite("EmptyClipboard"); // Short error message since so rare.
+	}
 	if (mClipMemNew)
 	{
 		bool new_is_empty = false;
@@ -237,7 +240,10 @@ ResultType Clipboard::Commit(UINT aFormat)
 				// Thus, we relinquish the memory because we shouldn't be looking at it anymore:
 				mClipMemNew = NULL;
 			else
-				AbortWrite("SetClipboardData"); // Short error message since so rare.
+			{
+				Close();
+				return AbortWrite("SetClipboardData"); // Short error message since so rare.
+			}
 	}
 	// else we will close it after having done only the EmptyClipboard(), above.
 	// Note: Decided not to update mLength for performance reasons (in case clipboard is huge).

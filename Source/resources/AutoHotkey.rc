@@ -149,14 +149,13 @@ END
 // Version
 //
 
+// For v1.0.25+, someone suggested having the version number included in
+// the resource even for compiled scripts.  That seems like a good idea (so
+// that there's a way to tell which version they were compiled with):
+
 VS_VERSION_INFO VERSIONINFO
-#ifdef AUTOHOTKEYSC
- FILEVERSION 0,0,0,0
- PRODUCTVERSION 0,0,0,0
-#else
- FILEVERSION 1,0,24,0
- PRODUCTVERSION 1,0,24,0
-#endif
+ FILEVERSION 1,0,25,05
+ PRODUCTVERSION 1,0,25,05
  FILEFLAGSMASK 0x17L
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -173,20 +172,20 @@ BEGIN
         BEGIN
 #ifdef AUTOHOTKEYSC
             VALUE "FileDescription", ""
-            VALUE "FileVersion", "0, 0, 0, 0"
+            VALUE "FileVersion", "1, 0, 25, 05"
             VALUE "InternalName", ""
             VALUE "LegalCopyright", ""
             VALUE "OriginalFilename", ""
             VALUE "ProductName", ""
-            VALUE "ProductVersion", "0, 0, 0, 0"
+            VALUE "ProductVersion", "1, 0, 25, 05"
 #else
             VALUE "FileDescription", "AutoHotkey"
-            VALUE "FileVersion", "1, 0, 24, 0"
+            VALUE "FileVersion", "1, 0, 25, 05"
             VALUE "InternalName", "AutoHotkey"
-            VALUE "LegalCopyright", "Copyright (C) 2004"
+            VALUE "LegalCopyright", "Copyright (C) 2005"
             VALUE "OriginalFilename", "AutoHotkey.rc"
             VALUE "ProductName", "AutoHotkey"
-            VALUE "ProductVersion", "1, 0, 24, 0"
+            VALUE "ProductVersion", "1, 0, 25, 05"
 #endif
         END
     END

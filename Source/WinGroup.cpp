@@ -61,7 +61,7 @@ ResultType WinGroup::AddWindow(char *aTitle, char *aText, void *aJumpToLine
 
 	WindowSpec *the_new_win = new WindowSpec(new_title, new_text, aJumpToLine, new_exclude_title, new_exclude_text);
 	if (the_new_win == NULL)
-		return g_script.ScriptError("WinGroup::AddWindow(): Out of memory.");
+		return g_script.ScriptError(ERR_OUTOFMEM);
 	if (mFirstWindow == NULL)
 		mFirstWindow = mLastWindow = the_new_win;
 	else

@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.24"
+#define NAME_VERSION "1.0.25.05"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -237,13 +237,11 @@ struct Action
 	// Array indicating which args must be purely numeric.  The first arg is
 	// number 1, the second 2, etc (i.e. it doesn't start at zero).  The list
 	// is ended with a zero, much like a string.  The compiler will notify us
-	// (verified) if the number of elements ever needs to be increased:
+	// (verified) if MAX_NUMERIC_PARAMS ever needs to be increased:
 	#define MAX_NUMERIC_PARAMS 7
 	ActionTypeType NumericParams[MAX_NUMERIC_PARAMS];
 };
 
-// Same reason as above struct.  It's best to keep this struct as small as possible
-// because it's used as a local (stack) var by at least one recursive function:
 enum TitleMatchModes {MATCHMODE_INVALID = FAIL, FIND_IN_LEADING_PART, FIND_ANYWHERE, FIND_EXACT, FIND_FAST, FIND_SLOW};
 
 typedef UINT GuiIndexType; // Some things rely on it being unsigned to avoid the need to check for less-than-zero.
@@ -263,6 +261,8 @@ typedef UCHAR CoordModeAttribType;
 #define COORD_MODE_CARET   0x08
 #define COORD_MODE_MENU    0x10
 
+// Same reason as above struct.  It's best to keep this struct as small as possible
+// because it's used as a local (stack) var by at least one recursive function:
 // Each instance of this struct generally corresponds to a quasi-thread.  The function that creates
 // a new thread typically saves the old thread's struct values on its stack so that they can later
 // be copied back into the g struct when the thread is resumed:

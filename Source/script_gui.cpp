@@ -248,10 +248,13 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 		switch (control.type)
 		{
 		case GUI_CONTROL_EDIT:
+			// Note that TranslateLFtoCRLF() will return the original buffer we gave it if no translation
+			// is needed.  Otherwise, it will return a new buffer which we are responsible for freeing
+			// when done (or NULL if it failed to allocate the memory).
 			malloc_buf = (*aParam3 && (GetWindowLong(control.hwnd, GWL_STYLE) & ES_MULTILINE))
-				? TranslateLFtoCRLF(aParam3) : NULL; // Automatic translation, as documented.
-			SetWindowText(control.hwnd,  malloc_buf ? malloc_buf : aParam3);
-			if (malloc_buf)
+				? TranslateLFtoCRLF(aParam3) : aParam3; // Automatic translation, as documented.
+			SetWindowText(control.hwnd,  malloc_buf ? malloc_buf : aParam3); // malloc_buf is checked again in case the mem alloc failed.
+			if (malloc_buf && malloc_buf != aParam3)
 				free(malloc_buf);
 			return OK;
 
@@ -1304,10 +1307,10 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		// more friendly to omit them in the automatic-label label name.  Note that a button
 		// or menu item can contain a literal ampersand by using two ampersands, such as
 		// "Save && Exit" (in this example, the auto-label would be named "ButtonSaveExit").
-		StrReplaceAll(label_name, " ", "");
-		StrReplaceAll(label_name, "&", "");
-		StrReplaceAll(label_name, "\r", ""); // Done separate from \n in case they're ever unpaired.
-		StrReplaceAll(label_name, "\n", "");
+		StrReplaceAll(label_name, " ", "", true);
+		StrReplaceAll(label_name, "&", "", true);
+		StrReplaceAll(label_name, "\r", "", true); // Done separate from \n in case they're ever unpaired.
+		StrReplaceAll(label_name, "\n", "", true);
 		control.jump_to_label = g_script.FindLabel(label_name);  // OK if NULL (the button will do nothing).
 	}
 
@@ -2061,12 +2064,15 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 				// But no attempt is made to turn off WS_VSCROLL or ES_WANTRETURN since those might have some
 				// usefulness even in a single-line edit?  In any case, it seems too overprotective to do so.
 		}
-		// malloc() is done because I think edit controls in NT/2k/XP support more than 64K?
+		// malloc() is done because edit controls in NT/2k/XP support more than 64K.
 		// Mem alloc errors are so rare (since the text is usually less than 32K/64K) that no error is displayed.
 		// Instead, the un-translated text is put in directly.  Also, translation is not done for
 		// single-line edits since they can't display linebreaks correctly anyway.
-		malloc_buf = (*aText && (style & ES_MULTILINE)) ? TranslateLFtoCRLF(aText) : NULL;
-		if (control.hwnd = CreateWindowEx(exstyle, "edit", malloc_buf ? malloc_buf : aText, style
+		// Note that TranslateLFtoCRLF() will return the original buffer we gave it if no translation
+		// is needed.  Otherwise, it will return a new buffer which we are responsible for freeing
+		// when done (or NULL if it failed to allocate the memory).
+		malloc_buf = (*aText && (style & ES_MULTILINE)) ? TranslateLFtoCRLF(aText) : aText;
+		if (control.hwnd = CreateWindowEx(exstyle, "edit", malloc_buf ? malloc_buf : aText, style  // malloc_buf is checked again in case mem alloc failed.
 			, opt.x, opt.y, opt.width, opt.height, mHwnd, control_id, g_hInstance, NULL))
 		{
 			// As documented in MSDN, setting a password char will have no effect for multi-line edits
@@ -2088,7 +2094,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			if (opt.tabstop_count)
 				SendMessage(control.hwnd, EM_SETTABSTOPS, opt.tabstop_count, (LPARAM)opt.tabstop);
 		}
-		if (malloc_buf)
+		if (malloc_buf && malloc_buf != aText)
 			free(malloc_buf);
 		break;
 
@@ -2168,7 +2174,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			SetWindowLong(control.hwnd, GWL_WNDPROC, (LONG)TabWindowProc);
 			// Doesn't work to remove theme background from tab:
 			//MyEnableThemeDialogTexture(control.hwnd, ETDT_DISABLE);
-			// This attempt to apply theme to the entire dialog window also have no effect, probably
+			// This attempt to apply theme to the entire dialog window also has no effect, probably
 			// because ETDT_ENABLETAB only works with true dialog windows (e.g. CreateDialog()):
 			//MyEnableThemeDialogTexture(mHwnd, ETDT_ENABLETAB);
 			// The above require the following line:
@@ -2240,13 +2246,13 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			SetWindowLong(control.hwnd, GWL_STYLE, style);
 		opt.height = rect.bottom - rect.top;  // Update opt.height for here and for later use below.
 		// The below is commented out because TabCtrl_AdjustRect() is unable to cope with tabs on
-		// the left or right sides.  It would be rarely used anyway:
+		// the left or right sides.  It would be rarely used anyway.
 		//if (style & TCS_VERTICAL && width_was_originally_unspecified)
 		//	// Also make the interior wider in this case, to make the interior as large as intended.
 		//	// It is a known limitation that this adjustment does not occur when the script did not
 		//	// specify a row_count or omitted height and row_count.
 		//	opt.width = rect.right - rect.left;
-		MoveWindow(control.hwnd, opt.x, opt.y, opt.width, opt.height, TRUE); // Repaint, since it might be visible.
+		MoveWindow(control.hwnd, opt.x, opt.y, opt.width, opt.height, TRUE); // Repaint, since parent might be visible.
 	}
 
 	if (retrieve_dimensions) // Update to actual size for use later below.
@@ -2832,7 +2838,7 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 					if (var)
 					{
 						// Below relies on GuiIndexType underflow:
-						for (GuiIndexType u = mControlCount - 1; u < mControlCount; --u) // Search in reverse for expected better performance.
+						for (GuiIndexType u = mControlCount - 1; u < mControlCount; --u) // Search in reverse for better avg-case performance.
 							if (mControl[u].output_var == var)
 								if (which_buddy == '1')
 									aOpt.buddy1 = &mControl[u];
@@ -3707,6 +3713,26 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 	if (!mHwnd)
 		return OK;  // Make this a harmless attempt.
 
+	// In the future, it seems best to rely on mShowIsInProgress to prevent the Window Proc from ever
+	// doing a MsgSleep() to launch a script subroutine.  This is because if anything we do in this
+	// function results in a launch of the Window Proc (such as MoveWindow and ShowWindow), our
+	// activity here might be interrupted in a destructive way.  For example, if a script subroutine
+	// is launched while we're in the middle of something here, our activity is suspended until
+	// the subroutine completes and the call stack collapses back to here.  But if that subroutine
+	// recursively calls us while the prior call is still in progress, the mShowIsInProgress would
+	// be set to false when that layer completes, leaving it false when it really should be true
+	// because our layer isn't done yet.
+	mShowIsInProgress = true; // Signal WM_SIZE to queue the GuiSize launch.  We'll unqueue via MsgSleep() when we're done.
+
+	// Change the title to get that out of the way.  But in any case, the title must be changed before the
+	// following:
+	// 1) Before the window is shown (to make transition a little nicer).
+	// 2) v1.0.25: Before MoveWindow(), because otherwise the GuiSize label (if any) will be launched
+	//    while the the window still has its old title (or no title, if this is the first showing), which
+	//    would not be desirable 99% of the time.
+	if (*aText)
+		SetWindowText(mHwnd, aText);
+
 	int x = COORD_UNSPECIFIED;
 	int y = COORD_UNSPECIFIED;
 	int width = COORD_UNSPECIFIED;
@@ -3880,10 +3906,6 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 			, width, height, is_visible);  // Do repaint if visible.
 	}
 
-	// Change the title before displaying it (makes transition a little nicer):
-	if (*aText)
-		SetWindowText(mHwnd, aText);
-
 	if (!is_visible)
 		ShowWindow(mHwnd, SW_SHOW);
 	if (mHwnd != GetForegroundWindow()) // Normally it will be foreground since the template has this property.
@@ -3919,11 +3941,6 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 				break;
 			}
 	}
-	// This is done for the same reason it's done for ACT_SPLASHTEXTON.  If it weren't done, whenever
-	// a command that blocks (fully uses) the main thread such as "Drive Eject" immediately follows
-	// "Gui Show", the GUI window might not appear until afterward because our thread never had a
-	// chance to call its WindowProc with all the messages needed to actually show the window:
-	SLEEP_WITHOUT_INTERRUPTION(-1)
 
 	// Since this is the first showing, if the focus wound up on a tab control itself as a result of
 	// the above, focus the first control of that tab since that is traditional.  HOWEVER, do not
@@ -3938,6 +3955,21 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 	}
 
 	mFirstShowing = false;
+
+	// It seems best to reset this prior to SLEEP below, but after the above line (for code clarity) since
+	// otherwise it might get stuck in a true state if the SLEEP results in the launch of a script
+	// subroutine that takes a long time to complete:
+	mShowIsInProgress = false;
+
+	// Update for v1.0.25: The below is now done last to prevent the GuiSize label (if any) from launching
+	// while this function is still incomplete; in other words, don't allow the GuiSize label to launch
+	// until after all of the above members and actions have been completed.
+	// This is done for the same reason it's done for ACT_SPLASHTEXTON.  If it weren't done, whenever
+	// a command that blocks (fully uses) the main thread such as "Drive Eject" immediately follows
+	// "Gui Show", the GUI window might not appear until afterward because our thread never had a
+	// chance to call its WindowProc with all the messages needed to actually show the window:
+	SLEEP_WITHOUT_INTERRUPTION(-1)
+
 	return OK;
 }
 
@@ -4343,7 +4375,10 @@ ResultType GuiType::ControlGetContents(Var &aOutputVar, GuiControlType &aControl
 		*aOutputVar.Contents() = '\0';  // Safe because Assign() gave us a non-constant memory area.
 	else if (aControl.type == GUI_CONTROL_EDIT) // Auto-translate CRLF to LF for better compatibility with other script commands.
 	{
-		StrReplaceAll(aOutputVar.Contents(), "\r\n", "\n");
+		// Since edit controls tend to have many hard returns in them, use "true" for the last param to
+		// enhance performance.  This performance gain is extreme when the control contains thousands
+		// of CRLFs:
+		StrReplaceAll(aOutputVar.Contents(), "\r\n", "\n", false);
 		aOutputVar.Length() = (VarSizeType)strlen(aOutputVar.Contents());
 	}
 	return aOutputVar.Close();  // In case it's the clipboard.
@@ -4676,7 +4711,13 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 			pgui->mSizeType = wParam;
 			pgui->mSizeWidthHeight = lParam; // A slight aid to performance to only divide it into halves upon demand (later).
 			POST_AHK_GUI_ACTION(pgui->mHwnd, AHK_GUI_SIZE, GUI_EVENT_NORMAL);
-			MsgSleep(-1); // See Gui::Event() for details about this.
+			if (!pgui->mShowIsInProgress) // v1.0.25
+				MsgSleep(-1); // See Gui::Event() for details about this.
+			//else don't do the MsgSleep now.  Let Gui::Show() do it so that the launch of the GuiSize
+			// label does not occur until after Show() has unhidden the window and completely finished
+			// its various other activities.  This avoids the need to turn on DetectHiddenWindows in the
+			// script for the first launch of GuiSize.  It also avoids an unnecessary MsgSleep() call,
+			// since Gui::Show() will be doing that for us.
 		}
 		return 0; // "If an application processes this message, it should return zero."
 		// Testing shows that the window still resizes correctly (controls are revealed as the window
