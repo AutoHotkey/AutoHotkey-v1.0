@@ -21,7 +21,7 @@ GNU General Public License for more details.
 #include "defines.h"
 
 #define IS_SPACE_OR_TAB(c) (c == ' ' || c == '\t')
-
+#define IS_SPACE_OR_TAB_OR_NBSP(c) (c == ' ' || c == '\t' || c == -96) // Use a negative to support signed chars.
 
 //inline int iround(double x)  // Taken from someone's "Snippets".
 //{
@@ -210,6 +210,28 @@ inline char *rtrim(char *aStr)
 		if (cp == aStr)
 		{
 			if (IS_SPACE_OR_TAB(*cp))
+				*cp = '\0';
+			return aStr;
+		}
+	}
+}
+
+inline char *rtrim_with_nbsp(char *aStr)
+// Same as rtrim but also gets rid of those annoying nbsp (non breaking space) chars that sometimes
+// wind up on the clipboard when copied from an HTML document, and thus get pasted into the text
+// editor as part of the code (such as the sample code in some of the examples).
+{
+	if (!aStr || !*aStr) return aStr;
+	for (char *cp = aStr + strlen(aStr) - 1; ; --cp)
+	{
+		if (!IS_SPACE_OR_TAB_OR_NBSP(*cp))
+		{
+			*(cp + 1) = '\0';
+			return aStr;
+		}
+		if (cp == aStr)
+		{
+			if (IS_SPACE_OR_TAB_OR_NBSP(*cp))
 				*cp = '\0';
 			return aStr;
 		}

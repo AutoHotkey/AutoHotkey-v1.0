@@ -111,7 +111,7 @@ inline HWND AttemptSetForeground(HWND aTargetWnd, HWND aForeWnd, char *aTargetTi
 	// Note: Increasing the sleep time below did not help with occurrences of "indicated success
 	// even though it failed", at least with metapad.exe being activated while command prompt
 	// and/or AutoIt2's InputBox were active or present on the screen:
-	SLEEP_AND_IGNORE_HOTKEYS(SLEEP_INTERVAL); // Specify param so that it will try to specifically sleep that long.
+	SLEEP_WITHOUT_INTERRUPTION(SLEEP_INTERVAL); // Specify param so that it will try to specifically sleep that long.
 	HWND new_fore_window = GetForegroundWindow();
 	if (new_fore_window == aTargetWnd)
 	{
@@ -487,7 +487,7 @@ HWND WinClose(char *aTitle, char *aText, int aTimeToWaitForClose
 	{
 		// Seems best to always do the first one regardless of the value 
 		// of aTimeToWaitForClose:
-		MsgSleep(INTERVAL_UNSPECIFIED, RETURN_AFTER_MESSAGES, false);
+		MsgSleep(INTERVAL_UNSPECIFIED);
 		if (!IsWindow(target_window)) // It's gone, so we're done.
 			return target_window;
 		// Must cast to int or any negative result will be lost due to DWORD type:
@@ -819,7 +819,7 @@ ResultType StatusBarUtil(Var *aOutputVar, HWND aControlWindow, int aPartNumber
 					if (!IsWindow(aControlWindow))\
 						break;\
 					if (WAIT_INDEFINITELY || (int)(aWaitTime - (GetTickCount() - start_time)) > SLEEP_INTERVAL_HALF)\
-						MsgSleep(aCheckInterval, RETURN_AFTER_MESSAGES, false);\
+						MsgSleep(aCheckInterval);\
 					else\
 					{\
 						g_ErrorLevel->Assign(ERRORLEVEL_ERROR);\
@@ -1031,16 +1031,6 @@ int MsgBox(char *aText, UINT uType, char *aTitle, double aTimeout)
 
 	uType |= MB_SETFOREGROUND;  // Always do these so that caller doesn't have to specify.
 
-	// UPDATE: Rather than creating the timer above, it's enough just to queue up a single
-	// message that MessageBox's message pump will forward to our main window proc
-	// once the messagebox window has been displayed.  This avoids the overhead of creating
-	// and destroying the timer.  My only concern about this is that on some OS's, or on
-	// slower CPUs, the message may be received too soon (before the MessageBox window
-	// actually exists) resulting in our window proc not being able to ensure that it's
-	// the foreground window.  That seems unlikely, however, since MessageBox() likely
-	// ensures its window really exists before dispatching messages:
-	PostMessage(g_hWnd, AHK_DIALOG, (WPARAM)aTimeout, (LPARAM)0);
-
 	// In the below, make the MsgBox owned by the topmost window rather than our main
 	// window, in case there's another modal dialog already displayed.  The forces the
 	// user to deal with the modal dialogs starting with the most recent one, which
@@ -1105,14 +1095,11 @@ int MsgBox(char *aText, UINT uType, char *aTitle, double aTimeout)
 	// the way it is now in the sense that the user can dismiss the messageboxes out of
 	// order, which might (in rare cases) be desireable.
 
-	g.WaitingForDialog = true;
+	PREPARE_FOR_DIALOG(aTimeout)
+
 	++g_nMessageBoxes;  // This value will also be used as the Timer ID if there's a timeout.
-	//if (   !(g.MsgBoxResult = MessageBox(NULL, text, title, uType))   )
-		// Try once more because sometimes it fails if the main window was displayed immediately
-		// before it:
-		g.MsgBoxResult = MessageBox(NULL, text, title, uType);
+	g.MsgBoxResult = MessageBox(NULL, text, title, uType);
 	--g_nMessageBoxes;
-	g.WaitingForDialog = false;  // IsCycleComplete() relies on this.
 
 //	if (!g_nMessageBoxes)
 //		ShowWindowAsync(g_hWnd, SW_HIDE);  // Hide the main window if it no longer has any child windows.

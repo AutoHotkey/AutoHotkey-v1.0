@@ -34,7 +34,6 @@ HACCEL g_hAccelTable = NULL;
 
 modLR_type g_modifiersLR_logical = 0;
 modLR_type g_modifiersLR_physical = 0;
-modLR_type g_modifiersLR_get = 0;
 
 // Used by the hook to track physical state of all virtual keys, since GetAsyncKeyState() does
 // not work as advertised, at least under WinXP:
@@ -49,11 +48,14 @@ bool g_AllowOnlyOneInstance = false;
 bool g_NoTrayIcon = false;
 bool g_AllowSameLineComments = true;
 char g_LastPerformedHotkeyType = HK_NORMAL;
-bool g_IsIdle = false;  // Set false as the initial state for use during the auto-execute part of the script.
-bool g_IsSuspended = false;  // Make this separate from g_IgnoreHotkeys since that is frequently turned off & on.
-bool g_IgnoreHotkeys = false;
-int g_nInterruptedSubroutines = 0;
-int g_nPausedSubroutines = 0;
+bool g_MainTimerExists = false;
+bool g_UninterruptibleTimerExists = false;
+bool g_AutoExecTimerExists = false;
+bool g_IsSuspended = false;  // Make this separate from g_AllowInterruption since that is frequently turned off & on.
+bool g_AllowInterruption = true;
+bool g_AllowInterruptionForSub = true; // Separate from g_AllowInterruption so that they can have independent values.
+int g_nThreads = 0;
+int g_nPausedThreads = 0;
 bool g_UnpauseWhenResumed = false;  // Start off "false" because the Unpause mode must be explicitly triggered.
 
 UCHAR g_MaxThreadsPerHotkey = 1;
@@ -228,7 +230,9 @@ Action g_act[] =
 
 	, {"Sleep", 1, 1, {1, 0}} // Sleep time in ms (numeric)
 	, {"Random", 1, 3, {2, 3, 0}} // Output var, Min, Max (Note: MinParams is 1 so that param2 can be blank).
-	, {"Goto", 1, 1, NULL}, {"Gosub", 1, 1, NULL} // Label (or dereference that resolves to a label).
+	, {"Goto", 1, 1, NULL}
+	, {"Gosub", 1, 1, NULL}     // Label (or dereference that resolves to a label).
+	, {"SetTimer", 1, 2, NULL}  // Label (or dereference that resolves to a label), period (or ON/OFF)
 	, {"Return", 0, 0, NULL}, {"Exit", 0, 1, {1, 0}} // ExitCode (currently ignored)
 	, {"Loop", 0, 4, NULL} // Iteration Count or FilePattern or root key name [,subkey name], FileLoopMode, Recurse? (custom validation for these last two)
 	, {"Break", 0, 0, NULL}, {"Continue", 0, 0, NULL}
@@ -316,7 +320,8 @@ Action g_act[] =
 	, {"SetMouseDelay", 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)
 	, {"SetWinDelay", 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)
 	, {"SetControlDelay", 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)
-	, {"SetBatchLines", 1, 1, {1, 0}} // Number of script lines to execute before sleeping.
+	, {"SetBatchLines", 1, 1, NULL} // Can be non-numeric, such as 15ms, or a number (to indicate line count).
+	, {"SetInterrupt", 1, 2, {1, 2, 0}} // Interval (in milliseconds), number of uninterruptible lines.
 	, {"SetTitleMatchMode", 1, 1, NULL} // Allowed values: 1, 2, slow, fast
 	, {"SetFormat", 1, 2, {2, 0}} // OptionName, FormatString
 

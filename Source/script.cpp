@@ -41,17 +41,18 @@ Script::Script()
 	: mFirstLine(NULL), mLastLine(NULL), mCurrLine(NULL)
 	, mLoopFile(NULL), mLoopRegItem(NULL), mLoopReadFile(NULL), mLoopField(NULL), mLoopIteration(0)
 	, mThisHotkeyLabel(NULL), mPriorHotkeyLabel(NULL), mPriorHotkeyStartTime(0)
-	, mAutoStartLabel(NULL), mFirstLabel(NULL), mLastLabel(NULL)
+	, mFirstLabel(NULL), mLastLabel(NULL)
+	, mFirstTimer(NULL), mLastTimer(NULL)
 	, mFirstVar(NULL), mLastVar(NULL)
-	, mLineCount(0), mLabelCount(0), mVarCount(0), mGroupCount(0)
+	, mLineCount(0), mLabelCount(0), mTimerEnabledCount(0), mTimerCount(0), mVarCount(0), mGroupCount(0)
 	, mCurrFileNumber(0), mCurrLineNumber(0), mNoHotkeyLabels(true)
 	, mFileSpec(""), mFileDir(""), mFileName(""), mOurEXE(""), mOurEXEDir(""), mMainWindowTitle("")
-	, mIsReadyToExecute(false)
+	, mIsReadyToExecute(false), AutoExecSectionIsRunning(false)
 	, mIsRestart(false)
 	, mIsAutoIt2(false)
-	, mLinesExecutedThisCycle(0)
-	, mLastSleepTime(GetTickCount())
+	, mLinesExecutedThisCycle(0), mUninterruptedLineCount(0)
 {
+	mLastScriptRest = mLastPeekTime = GetTickCount();
 	ZeroMemory(&mNIC, sizeof(mNIC));  // Constructor initializes this, to be safe.
 	mNIC.hWnd = NULL;  // Set this as an indicator that it tray icon is not installed.
 #ifdef _DEBUG
@@ -127,6 +128,7 @@ ResultType Script::Init(char *aScriptFilename, bool aIsRestart)
 		g.KeyDelay = 20;
 		g.WinDelay = 500;
 		g.LinesPerCycle = 1;
+		g.IntervalBeforeRest = -1;  // i.e. this method is disabled by default for AutoIt2 scripts.
 		// Reduce max params so that any non escaped delimiters the user may be using literally
 		// in "window text" will still be considered literal, rather than as delimiters for
 		// args that are not supported by AutoIt2, such as exclude-title, exclude-text, MsgBox
@@ -317,6 +319,49 @@ ResultType Script::CreateWindows(HINSTANCE aInstance)
 
 
 
+ResultType Script::AutoExecSection()
+{
+	if (!mIsReadyToExecute)
+		return FAIL;
+	if (mFirstLine != NULL)
+	{
+		// Choose a timeout that's a reasonable compromise between the following competing priorities:
+		// 1) That we want hotkeys to be responsive as soon as possible after the program launches
+		//    in case the user launches by pressing ENTER on a script, for example, and then immediately
+		//    tries to use a hotkey.  In addition, we want any timed subroutines to start running ASAP
+		//    because in rare cases the user might rely upon that happening.
+		// 2) To support the case when the auto-execute section never finishes (such as when it contains
+		//    an infinite loop to do background processing), yet we still want to allow the script
+		//    to put custom defaults into effect globally (for things such as KeyDelay).
+		// Obviously, the above approach has its flaws; there are ways to construct a script that would
+		// result in unexpected behavior.  However, the combination of this approach with the fact that
+		// the global defaults are updated *again* when/if the auto-execute section finally completes
+		// raises the expectation of proper behavior to a very high level.  In any case, I'm not sure there
+		// is any better approach that wouldn't break existing scripts or require a redesign of some kind.
+		// If this method proves unreliable due to disk activity slowing the program down to a crawl during
+		// the critical milliseconds after launch, one thing that might fix that is to have ExecUntil()
+		// be forced to run a minimum of, say, 100 lines (if there are that many) before allowing the
+		// timer expiration to have its effect.  But that's getting complicated and I'd rather not do it
+		// unless someone actually reports that such a thing ever happens.  Still, to reduce the chance
+		// of such a thing ever happening, it seems best to boost the timeout from 50 up to 100:
+		SET_AUTOEXEC_TIMER(100);
+		AutoExecSectionIsRunning = true;
+		g_AllowInterruptionForSub = false; // See AutoExecSectionTimeout() for why this var is used.
+		++g_nThreads;
+		ResultType result = mFirstLine->ExecUntil(UNTIL_RETURN, 0);
+		--g_nThreads;
+		g_AllowInterruptionForSub = true;  // In case it finishes before the AutoExecSectionTimeout() timer expires.
+		AutoExecSectionIsRunning = false;
+		// If it hasn't already been killed, kill it now so that it won't update the AutoExec globals again
+		// (though there's a double check in AutoExecSectionTimeout() to make sure they aren't updated again):
+		KILL_AUTOEXEC_TIMER
+		return result;
+	}
+	return OK;
+}
+
+
+
 void Script::UpdateTrayIcon()
 {
 	if (!mNIC.hWnd) // tray icon is not installed
@@ -411,6 +456,9 @@ void Script::ExitApp(char *aBuf, int aExitCode)
 // make the situation even worse.
 {
 	if (!aBuf) aBuf = "";
+	// MSDN: "Before terminating, an application must call the UnhookWindowsHookEx function to free
+	// system resources associated with the hook."
+	RemoveAllHooks();
 	if (mNIC.hWnd) // Tray icon is installed.
 		Shell_NotifyIcon(NIM_DELETE, &mNIC); // Remove it.
 	if (*aBuf)
@@ -421,7 +469,9 @@ void Script::ExitApp(char *aBuf, int aExitCode)
 		// To avoid chance of more errors, don't use MsgBox():
 		MessageBox(g_hWnd, buf, g_script.mFileSpec, MB_OK | MB_SETFOREGROUND | MB_APPLMODAL);
 	}
+#ifdef ENABLE_KEY_HISTORY_FILE
 	KeyHistoryToFile();  // Close the KeyHistory file if it's open.
+#endif
 	PostQuitMessage(aExitCode); // This might be needed to prevent hang-on-exit.
 	Hotkey::AllDestructAndExit(*aBuf ? CRITICAL_ERROR : aExitCode); // Terminate the application.
 	// Not as reliable: PostQuitMessage(CRITICAL_ERROR);
@@ -433,7 +483,7 @@ LineNumberType Script::LoadFromFile()
 // Returns the number of non-comment lines that were loaded, or LOADING_FAILED on error.
 {
 	mNoHotkeyLabels = true;  // Indicate that there are no hotkey labels, since we're (re)loading the entire file.
-	mIsReadyToExecute = false;
+	mIsReadyToExecute = AutoExecSectionIsRunning = false;
 	if (!mFileSpec || !*mFileSpec) return LOADING_FAILED;
 
 #ifndef AUTOHOTKEYSC  // Not in stand-alone mode, so read an external script file.
@@ -935,10 +985,10 @@ size_t Script::GetLine(char *aBuf, int aMaxCharsToRead, FILE *fp)
 				*aBuf = '\0';
 				return 0;
 			}
-			if (IS_SPACE_OR_TAB(*prevp)) // consider it to be a valid comment flag
+			if (IS_SPACE_OR_TAB_OR_NBSP(*prevp)) // consider it to be a valid comment flag
 			{
 				*prevp = '\0';
-				rtrim(aBuf); // Since it's our responsibility to return a fully trimmed string.
+				rtrim_with_nbsp(aBuf); // Since it's our responsibility to return a fully trimmed string.
 				break; // Once the first valid comment-flag is found, nothing after it can matter.
 			}
 			else // No whitespace to the left.
@@ -1166,6 +1216,69 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 
 
 
+ResultType Script::UpdateOrCreateTimer(Label *aLabel, int aPeriod, bool aEnable)
+// Caller should specific a negative aPeriod to prevent the timer's period from being changed
+// (i.e. if caller just wants to turn on or off an existing timer).  But if it does this
+// for a non-existent timer, that timer will be created with the default period as specfied in
+// the constructor.
+{
+	ScriptTimer *timer;
+	for (timer = mFirstTimer; timer != NULL; timer = timer->mNextTimer)
+		if (timer->mLabel == aLabel) // Match found.
+			break;
+	if (!timer)  // Timer doesn't exist, so create it.
+	{
+		if (   !(timer = new ScriptTimer(aLabel))   )
+			return ScriptError("UpdateOrCreateTimer(): Out of memory.");
+		if (!mFirstTimer)
+			mFirstTimer = mLastTimer = timer;
+		else
+		{
+			mLastTimer->mNextTimer = timer;
+			// This must be done after the above:
+			mLastTimer = timer;
+		}
+		++mTimerCount;
+	}
+	// Update its members:
+	if (aEnable && !timer->mEnabled) // Must check both or the below count will be wrong.
+	{
+		timer->mEnabled = true;
+		++mTimerEnabledCount;
+		SET_MAIN_TIMER  // Ensure the timer is always running when there is at least one enabled timed subroutine.
+	}
+	else if (!aEnable && timer->mEnabled) // Must check both or the below count will be wrong.
+	{
+		timer->mEnabled = false;
+		--mTimerEnabledCount;
+		// If there are now no enabled timed subroutines, kill the main timer since there's no other
+		// reason for it to exist if we're here.   This is because or direct or indirect caller is
+		// currently always ExecUntil(), which doesn't need the timer while its running except to
+		// support timed subroutines:
+		if (!mTimerEnabledCount)
+			KILL_MAIN_TIMER
+	}
+	if (aPeriod >= 0) // Caller wanted us to update this member.
+		timer->mPeriod = aPeriod;  // It shouldn't hurt anything if this happens to be zero or negative.
+
+	if (aEnable)
+		// Caller relies on us updating mTimeLastRun in this case.  This is done because it's more
+		// flexible, e.g. a user might want to create a timer that is triggered 5 seconds from now.
+		// In such a case, we don't want the timer's first triggering to occur immediately.
+		// Instead, we want it to occur only when the full 5 seconds have elapsed:
+		timer->mTimeLastRun = GetTickCount();
+
+    // Below is obsolete, see above for why:
+	// We don't have to kill or set the main timer because the only way this function is called
+	// is directly from the execution of a script line inside ExecUntil(), in which case:
+	// 1) KILL_MAIN_TIMER is never needed because the timer shouldn't exist while in ExecUntil().
+	// 2) SET_MAIN_TIMER is never needed because it will be set automatically the next time ExecUntil()
+	//    calls MsgSleep().
+	return OK;
+}
+
+
+
 Label *Script::FindLabel(char *aLabelName)
 // Returns the label whose name matches aLabelName, or NULL if not found.
 {
@@ -1204,8 +1317,6 @@ ResultType Script::AddLabel(char *aLabelName)
 		// This must be done after the above:
 		mLastLabel = the_new_label;
 	}
-	if (!stricmp(aLabelName, "A_AutoStart"))
-		g_script.mAutoStartLabel = the_new_label; // Stored for performance reasons, in case script has many labels.
 	++mLabelCount;
 	return OK;
 }
@@ -2059,35 +2170,32 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		bool allow_negative, allow_float;
 		for (ActionTypeType *np = g_act[aActionType].NumericParams; *np; ++np)
 		{
-			if (line->mArgc >= *np)  // The arg exists.
+			if (line->mArgc >= *np && !line->ArgHasDeref(*np)) // Arg exists & it's not a deref (derefs are at runtime).
 			{
-				if (!line->ArgHasDeref(*np)) // i.e. if it's a deref, we won't try to validate it now.
+				allow_negative = line->ArgAllowsNegative(*np);
+				allow_float = line->ArgAllowsFloat(*np);
+				if (!IsPureNumeric(line->mArg[*np - 1].text, allow_negative, true, allow_float))
 				{
-					allow_negative = line->ArgAllowsNegative(*np);
-					allow_float = line->ArgAllowsFloat(*np);
-					if (!IsPureNumeric(line->mArg[*np - 1].text, allow_negative, true, allow_float))
+					if (aActionType == ACT_WINMOVE)
 					{
-						if (aActionType == ACT_WINMOVE)
-						{
-							if (stricmp(line->mArg[*np - 1].text, "default"))
-							{
-								snprintf(error_msg, sizeof(error_msg), "\"%s\" requires parameter #%u to be"
-									" either %snumeric, a variable reference, blank, or the word Default."
-									, g_act[line->mActionType].Name, *np, allow_negative ? "" : "non-negative ");
-								return ScriptError(error_msg, line->mArg[*np - 1].text);
-							}
-							// else don't bother removing the word "default" since it won't save
-							// any mem and since the command handler for ACT_WINMOVE must still
-							// be able to understand the word "default" anyway, since that word
-							// might be contained in a dereferenced variable.
-						}
-						else
+						if (stricmp(line->mArg[*np - 1].text, "default"))
 						{
 							snprintf(error_msg, sizeof(error_msg), "\"%s\" requires parameter #%u to be"
-								" either %snumeric, blank (if blank is allowed), or a variable reference."
+								" either %snumeric, a variable reference, blank, or the word Default."
 								, g_act[line->mActionType].Name, *np, allow_negative ? "" : "non-negative ");
 							return ScriptError(error_msg, line->mArg[*np - 1].text);
 						}
+						// else don't bother removing the word "default" since it won't save
+						// any mem and since the command handler for ACT_WINMOVE must still
+						// be able to understand the word "default" anyway, since that word
+						// might be contained in a dereferenced variable.
+					}
+					else
+					{
+						snprintf(error_msg, sizeof(error_msg), "\"%s\" requires parameter #%u to be"
+							" either %snumeric, blank (if blank is allowed), or a variable reference."
+							, g_act[line->mActionType].Name, *np, allow_negative ? "" : "non-negative ");
+						return ScriptError(error_msg, line->mArg[*np - 1].text);
 					}
 				}
 			}
@@ -2110,6 +2218,15 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_SETSTORECAPSLOCKMODE:
 		if (line->mArgc > 0 && !line->ArgHasDeref(1) && !line->ConvertOnOff(LINE_RAW_ARG1))
 			return ScriptError(ERR_ON_OFF, LINE_RAW_ARG1);
+		break;
+
+	case ACT_SETBATCHLINES:
+		if (line->mArgc > 0 && !line->ArgHasDeref(1))
+		{
+			if (!stristr(LINE_RAW_ARG1, "ms") && !IsPureNumeric(LINE_RAW_ARG1, true, false))
+				return ScriptError("Parameter #1 must be an integer, an interval string such as 15ms,"
+					" or a variable reference.", LINE_RAW_ARG1);
+		}
 		break;
 
 	case ACT_SUSPEND:
@@ -2620,7 +2737,8 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 			// people who should know what they're doing.  In any case, when the caller of this
 			// function called it to resolve an output variable, it will see tha the result is
 			// NULL and terminate the current subroutine.
-			#define DYNAMIC_TOO_LONG "This dynamically built variable name is too long."
+			#define DYNAMIC_TOO_LONG "This dynamically built variable name is too long." \
+				"  If this variable was not intended to be dynamic, remove the % symbols from it."
 			LineError(DYNAMIC_TOO_LONG, FAIL, mArg[aArgIndex].text);
 			return NULL;
 		}
@@ -3259,12 +3377,26 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 				// Since the jump-point contains a deref, it must be resolved at runtime:
 				line->mRelatedLine = NULL;
 			else
-				if (!line->SetJumpTarget(false))
+				if (!line->GetJumpTarget(false))
 					return NULL; // Error was already displayed by called function.
 			break;
+
+		case ACT_SETTIMER:
+			if (!line->ArgHasDeref(1))
+				if (   !(line->mAttribute = FindLabel(LINE_RAW_ARG1))   )
+					return line->PreparseError(ERR_SETTIMER);
+			if (*LINE_RAW_ARG2 && !line->ArgHasDeref(2))
+				if (!Line::ConvertOnOff(LINE_RAW_ARG2) && !IsPureNumeric(LINE_RAW_ARG2))
+					return line->PreparseError("If not blank or a variable reference, parameter #2"
+						" must be either a positive integer or the word ON or OFF.");
+			break;
+
 		case ACT_GROUPADD: // This must be done here because it relies on all other lines already having been added.
 			if (*LINE_RAW_ARG4 && !line->ArgHasDeref(4))
 			{
+				// If the label name was contained in a variable, that label is now resolved and cannot
+				// be changed.  This is in contrast to something like "Gosub, %MyLabel%" where a change in
+				// the value of MyLabel will change the behavior of the Gosub at runtime:
 				Label *label = FindLabel(LINE_RAW_ARG4);
 				if (!label)
 					return line->PreparseError(ERR_GROUPADD_LABEL);
@@ -3276,6 +3408,7 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 				//return IsJumpValid(label->mJumpToLine);
 			}
 			break;
+
 		case ACT_ELSE:
 			// Should never happen because the part that handles the if's, above, should find
 			// all the elses and handle them.  UPDATE: This happens if there's
@@ -3351,10 +3484,10 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 		*apJumpToLine = NULL;
 
 	Line *jump_to_line; // Don't use *apJumpToLine because it might not exist.
+	Line *jump_target;  // For use with Gosub & Goto
 	ResultType if_condition, result;
-	int sleep_duration;
-	bool do_sleep;
-	DWORD time_since_last_sleep;
+	DWORD tick_now;
+	MSG msg;
 
 	for (Line *line = this; line != NULL;)
 	{
@@ -3362,85 +3495,89 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 		// the clipboard via Var::Contents(), we close it here for performance reasons (see notes
 		// in Clipboard::Open() for details):
 		CLOSE_CLIPBOARD_IF_OPEN;
-		g_script.mCurrLine = line;  // Simplifies error reporting when we get deep into function calls.
-		line->Log();  // Maintains a circular queue of the lines most recently executed.
+
+		// The below must be done at least when Hotkey::HookIsActive() is true, but is currently
+		// always done since it's a very low overhead call, and has the side-benefit of making
+		// the app maximally responsive when the script is busy during high BatchLines.
+		// This low-overhead call achieves at least two purposes optimally:
+		// 1) Keyboard and mouse lag is minimized when the hook(s) are installed, since this single
+		//    Peek() is apparently enough to route all pending input to the hooks (though it's inexplicable
+		//    why calling MsgSleep(-1) does not achieve this goal, since it too does a Peek().
+		//    Nevertheless, that is the testing result that was obtained: the mouse cursor lagged
+		//    in tight script loops even when MsgSleep(-1) or (0) was called ever 10ms or so.
+		// 2) The app is maximally responsive while executing with a high or infinite BatchLines.
+		// 3) Hotkeys are maximally responsive.  For example, if a user has game hotkeys, using
+		//    a GetTickCount() method (which very slightly improves performance by cutting back on
+		//    the number of Peek() calls) would introduce up to 10ms of delay before the hotkey
+		//    finally takes effect.  10ms can be significant in games, where ping (latency) itself
+		//    can sometimes be only 10 or 20ms.
+		// 4) Timed subroutines are run as consistently as possible (to help with this, a check
+		//    similar to the below is also done for single commmands that take a long time, such
+		//    as URLDownloadToFile, FileSetAttrib, etc.
+		// UPDATE: It looks like PeekMessage() yields CPU time automatically, similar to a
+		// Sleep(0).  Since this would make scripts slow to a crawl, only do the Peek() every 5ms
+		// or so (though the timer grandurity is 10ms on mosts OSes, so that's the true interval):
+		tick_now = GetTickCount();  // Store for use later, in case the Peek() isn't done.
+		if (tick_now - g_script.mLastPeekTime > 5)
+		{
+			if (PeekMessage(&msg, NULL, 0, 0, PM_NOREMOVE))
+				MsgSleep(-1);  // Process the message(s).
+			// Since the above Peek() might yield, and thus take a long time to return,
+			// must update tick_now again to avoid having to Peek() immediately after the next
+			// script line is executed:
+			tick_now = GetTickCount();
+			g_script.mLastPeekTime = tick_now; // Perversely, the code may run faster when this isn't combined with the above.
+		}
+
+		// If interruptions are currently forbidden, it's our responsibility to check if the number
+		// of lines that have been run since this quasi-thread started now indicate that
+		// interruptibility should be reenabled.  But if UninterruptedLineCountMax is negative, don't
+		// bother checking because this quasi-thread will stay non-interruptible until it finishes:
+		if (!g_AllowInterruptionForSub && g.UninterruptedLineCountMax >= 0)
+		{
+			// Note that there is a timer that handles the UninterruptibleTime setting, so we don't
+			// have handle that setting here.  But that timer is killed by the DISABLE_UNINTERRUPTIBLE
+			// macro we call below.  This is because we don't want the timer to "fire" after we've
+			// already met the conditions which allow interruptibility to be restored, because if
+			// it did, it might interfere with the fact that some other code might already be using
+			// g_AllowInterruptionForSub again for its own purpose:
+			if (g_script.mUninterruptedLineCount > g.UninterruptedLineCountMax)
+				DISABLE_UNINTERRUPTIBLE_SUB
+			else
+				// Incrementing this unconditionally makes it a cruder measure than g.LinesPerCycle,
+				// but it seems okay to be less accurate for this purpose:
+				++g_script.mUninterruptedLineCount;
+		}
 
 		// The below handles the message-loop checking regardless of whether
 		// aMode is ONLY_ONE_LINE (i.e. recursed) or not (i.e. we're using
 		// the for-loop to execute the script linearly):
-		if (g.LinesPerCycle > 0 && g_script.mLinesExecutedThisCycle >= g.LinesPerCycle)
-		{
-			// Sleep in between batches of lines, like AutoIt, to reduce
-			// the chance that a maxed CPU will interfere with time-critical
-			// apps such as games, video capture, or video playback.  Also,
-			// check the message queue to see if the program has been asked
-			// to exit by some outside force, or whether the user pressed
-			// another hotkey to interrupt this one.  In the case of exit,
-			// this call will never return.  Note: MsgSleep() will reset
+		if ((g.LinesPerCycle >= 0 && g_script.mLinesExecutedThisCycle >= g.LinesPerCycle)
+			|| (g.IntervalBeforeRest >= 0 && tick_now - g_script.mLastScriptRest >= (DWORD)g.IntervalBeforeRest))
+			// Sleep in between batches of lines, like AutoIt, to reduce the chance that
+			// a maxed CPU will interfere with time-critical apps such as games,
+			// video capture, or video playback.  Note: MsgSleep() will reset
 			// mLinesExecutedThisCycle for us:
-			do_sleep = true;
-			sleep_duration = INTERVAL_UNSPECIFIED;  // Exact length of sleep unimportant.
-		}
-		else
-		{
-			// DWORD math ensures the correct answer even if latest tickcount has wrapped around past zero:
-			time_since_last_sleep = GetTickCount() - g_script.mLastSleepTime;
-			// Testing reveals that a value of 5 vs. 15 produces smoother mouse cursor movement while a
-			// tight script loop is running with the mouse hook installed.  It also reduces CPU
-			// utilitization from 60% to around 50% on my system (not important -- what is important
-			// is that even a slow CPU should have enough time to run hundreds/thousands/millions of
-			// script lines in 5ms [which is really 10ms on most systems due to timer granularity]).
-			// In other words, having this forced sleep in here reduces the script speed by half
-			// of what it would be if it were allowed to max the CPU.  This 50% reduction seems a fair
-			// trade since most people would not want the the keyboard and mouse to lag at all while
-			// scripts are running at "infinite" speed.  In any case, this is only done if the hook(s)
-			// are installed.  Non-hook scripts are allowed the leeway to not sleep at all.
-			// Update: Using 15 vs. 5 now, because 5 might be resulting in a lot more sleeps that
-			// are needed, such as in the case where our calls to GetTickCount() somehow get synchronized
-			// with the system timer, making our retrieved value out-of-date almost the instant
-			// it is retrieved (i.e. if the tick-count is about to be incremented by the system the
-			// instant after we call GetTickCount().  Not sure how that happens, but see notes in
-			// LONG_OPERATION_INIT for details, where it really did happen repeatedly in testing).
-			// UPDATE: The mouse cursor lag is just a little bit too noticeable when using a value of
-			// 15, so reverting back to a value below 10.  8 might be a little better than 5 in rare
-			// cases (I know the timer granularity is 10 on NT/2K/XP and 98SE/ME, but not 95, but still.)
-			// The synchornization issue observed in LONG_OPERATION_INIT has never been observed to
-			// affect this method anyway.  Until it is observed to be a problem, it seems best to minimize
-			// lag as a top priority:
-			if (Hotkey::HookIsActive() && time_since_last_sleep > 8)
-			{
-				// Try to reduce keyboard & mouse lag by forcing the process into the GetMessage()
-				// state regardless of how high the value of BatchLines is.  The GetMessage() state
-				// is the only means by which key & mouse events are ever sent to the hooks:
-				do_sleep = true;
-				sleep_duration = INTERVAL_UNSPECIFIED;
-			}
-			else if (time_since_last_sleep > 200)
-			{
-				// Do a minimal message check at least a few times a second so that the program's
-				// windows and controls, such as the tray icon menu and the main window, continue
-				// to be responsive even if BatchLines is very high or infinite:
-				do_sleep = true;
-				sleep_duration = -1;  // No sleep, just check messages.
-				// Force an update since MsgSleep() won't do it for -1 sleep time:
-				g_script.mLastSleepTime = GetTickCount();
-			}
-			else
-				do_sleep = false;
-		}
-
-		if (do_sleep)
-			MsgSleep(sleep_duration);
+			MsgSleep(10);  // Don't use INTERVAL_UNSPECIFIED, which wouldn't sleep at all if there's a msg waiting.
 
 		// At this point, a pause may have been triggered either by the above MsgSleep()
 		// or due to the action of a command (e.g. Pause, or perhaps tray menu "pause" was selected during Sleep):
 		for (;;)
 		{
 			if (g.IsPaused)
-				MsgSleep(INTERVAL_UNSPECIFIED, RETURN_AFTER_MESSAGES, false);
+				MsgSleep(INTERVAL_UNSPECIFIED);  // Must check often to periodically run timed subroutines.
 			else
 				break;
 		}
+
+		// Do these only after the above has had its opportunity to spend a significant amount
+		// of time doing what it needed to do.  i.e. do these immediately before the line will actually be run:
+        g_script.mCurrLine = line;  // Simplifies error reporting when we get deep into function calls.
+
+		// Maintain a circular queue of the lines most recently executed:
+		sLog[sLogNext++] = line; // The code actually runs faster this way than if this were combined with the above.
+		if (sLogNext >= LINE_LOG_SIZE)
+			sLogNext = 0;
 
 		// Do this only after the opportunity to Sleep (above) has passed, but before
 		// calling ExpandArgs() below, because any of the MsgSleep's above or any of
@@ -3607,8 +3744,12 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 			// A single goto can cause an infinite loop if misused, so be sure to do this to
 			// prevent the program from hanging:
 			++g_script.mLinesExecutedThisCycle;
-			if (line->mRelatedLine == NULL)
-				if (!line->SetJumpTarget(true))
+			if (   !(jump_target = line->mRelatedLine)   )
+				// The label is a dereference, otherwise it would have been resolved at load-time.
+				// So send true because we don't want to update its mRelatedLine.  This is because
+				// we want to resolve the label every time through the loop in case the variable
+				// that contains the label changes, e.g. Gosub, %MyLabel%
+				if (   !(jump_target = line->GetJumpTarget(true))   )
 					return FAIL; // Error was already displayed by called function.
 			// One or both of these lines can be NULL.  But the preparser should have
 			// ensured that all we need to do is a simple compare to determine
@@ -3616,26 +3757,30 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 			// (i.e. if this Goto's target is not in our nesting level, it MUST be the
 			// caller's responsibility to either handle it or pass it on to its
 			// caller).
-			if (aMode == ONLY_ONE_LINE || line->mParentLine != line->mRelatedLine->mParentLine)
+			if (aMode == ONLY_ONE_LINE || line->mParentLine != jump_target->mParentLine)
 			{
 				if (apJumpToLine != NULL)
-					*apJumpToLine = line->mRelatedLine; // Tell the caller to handle this jump.
+					*apJumpToLine = jump_target; // Tell the caller to handle this jump.
 				return OK;
 			}
 			// Otherwise, we will handle this Goto since it's in our nesting layer:
-			line = line->mRelatedLine;
+			line = jump_target;
 			break;  // Resume looping starting at the above line.
 		case ACT_GOSUB:
 			// A single gosub can cause an infinite loop if misused (i.e. recusive gosubs),
 			// so be sure to do this to prevent the program from hanging:
 			++g_script.mLinesExecutedThisCycle;
-			if (line->mRelatedLine == NULL)
-				if (!line->SetJumpTarget(true))
+			if (   !(jump_target = line->mRelatedLine)   )
+				// The label is a dereference, otherwise it would have been resolved at load-time.
+				// So send true because we don't want to update its mRelatedLine.  This is because
+				// we want to resolve the label every time through the loop in case the variable
+				// that contains the label changes, e.g. Gosub, %MyLabel%
+				if (   !(jump_target = line->GetJumpTarget(true))   )
 					return FAIL; // Error was already displayed by called function.
 			// I'm pretty sure it's not valid for this call to ExecUntil() to tell us to jump
 			// somewhere, because the called function, or a layer even deeper, should handle
 			// the goto prior to returning to us?  So the last param is omitted:
-			result = line->mRelatedLine->ExecUntil(UNTIL_RETURN, aModifiersLR, NULL, aCurrentFile
+			result = jump_target->ExecUntil(UNTIL_RETURN, aModifiersLR, NULL, aCurrentFile
 				, aCurrentRegItem, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
 			// Must do these return conditions in this specific order:
 			if (result == FAIL || result == EARLY_EXIT)
@@ -4768,11 +4913,22 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_SHUTDOWN:
 		return Util_Shutdown(atoi(ARG1)) ? OK : FAIL;
 	case ACT_SLEEP:
+	{
 		// Only support 32-bit values for this command, since it seems unlikely anyone would to have
 		// it sleep more than 24.8 days or so.  It also helps performance on 32-bit hardware because
 		// MsgSleep() is so heavily called and checks the value of the first parameter frequently:
-		MsgSleep(atoi(ARG1));
+		int sleep_time = atoi(ARG1);
+
+		// Do a true sleep on Win9x because the MsgSleep() method is very inaccurate on Win9x
+		// for some reason (a MsgSleep(1) causes a sleep between 10 and 55ms, for example).
+		// But only do so for short sleeps, for which the user has a greater expectation of
+		// accuracy:
+		if (sleep_time < 25 && g_os.IsWin9x())
+			Sleep(sleep_time);
+		else
+			MsgSleep(sleep_time);
 		return OK;
+	}
 	case ACT_ENVSET:
 		// MSDN: "If [the 2nd] parameter is NULL, the variable is deleted from the current process’s environment."
 		// My: Though it seems okay, for now, just to set it to be blank if the user omitted the 2nd param or
@@ -4937,10 +5093,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 
 			// Must cast to int or any negative result will be lost due to DWORD type:
 			if (wait_indefinitely || (int)(sleep_duration - (GetTickCount() - start_time)) > SLEEP_INTERVAL_HALF)
-				// Last param 0 because we don't want it to restore the
-				// current active window after the time expires (in case
-				// our subroutine is suspended).  INTERVAL_UNSPECIFIED performs better:
-				MsgSleep(INTERVAL_UNSPECIFIED, RETURN_AFTER_MESSAGES, false);
+				MsgSleep(INTERVAL_UNSPECIFIED); // INTERVAL_UNSPECIFIED performs better.
 			else
 			{
 				g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Since it timed out, we override the default with this.
@@ -5004,6 +5157,41 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_WINSHOW:
 	case ACT_WINRESTORE:
 		return PerformShowWindow(mActionType, FOUR_ARGS);
+
+	case ACT_SETTIMER: // A timer is being created, changed, or enabled/disabled.
+	{
+		// Note that only one timer per label is allowed because the label is the unique identifier
+		// that allows us to figure out whether to "update or create" when searching the list of timers.
+		Label *target_label = (Label *)mAttribute;
+		if (!target_label) // Since it wasn't resolved at load-time, the label name must be a variable reference.
+			if (   !(target_label = g_script.FindLabel(ARG1))   )
+				return LineError(ERR_SETTIMER ERR_ABORT, FAIL, ARG1);
+		// And don't update mAttribute (leave it NULL) because we want ARG1 to be dynamically resolved
+		// every time the command is executed (in case the contents of the referenced variable change).
+		// In the data structure that holds the timers, we store the target label rather than the target
+		// line so that a label can be registered independently as a timers even if there another label
+		// that points to the same line such as in this example:
+		// Label1::
+		// Label2::
+		// ...
+		// return
+		if (*ARG2)
+		{
+			toggle = Line::ConvertOnOff(ARG2);
+			if (!toggle && !IsPureNumeric(ARG2, true, true, true)) // Allow it to be neg. or floating point at runtime.
+				return LineError("Parameter #2 must be either a pure number or the word ON or OFF.", FAIL, ARG2);
+		}
+		else
+			toggle = TOGGLE_INVALID;
+		switch(toggle)
+		{
+		case TOGGLED_ON:  g_script.UpdateOrCreateTimer(target_label, -1, true); break;
+		case TOGGLED_OFF: g_script.UpdateOrCreateTimer(target_label, -1, false); break;
+		// Timer is always (re)enabled when ARG2 is blank or specifies a numeric period:
+		default: g_script.UpdateOrCreateTimer(target_label, atoi(ARG2), true); // Read any float as an int.
+		}
+		return OK;
+	}
 
 	case ACT_GROUPADD: // Adding a WindowSpec *to* a group, not adding a group.
 	{
@@ -5269,17 +5457,42 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			switch (toupper(*ARG3))
 			{
 			case 'T': // Whether a toggleable key such as CapsLock is currently turned on.
-				return output_var->Assign((GetKeyState(vk) & 0x00000001) ? "D" : "U");
+				// Under Win9x, at least certain versions and for certain hardware, this
+				// doesn't seem to be always accurate, especially when the key has just
+				// been toggled and the user hasn't pressed any other key since then.
+				// I tried using GetKeyboardState() instead, but it produces the same
+				// result.  Therefore, I've documented this as a limitation in the help file.
+				// In addition, this was attempted but it didn't seem to help:
+				//if (g_os.IsWin9x())
+				//{
+				//	DWORD my_thread  = GetCurrentThreadId();
+				//	DWORD fore_thread = GetWindowThreadProcessId(GetForegroundWindow(), NULL);
+				//	bool is_attached_my_to_fore = false;
+				//	if (fore_thread && fore_thread != my_thread)
+				//		is_attached_my_to_fore = AttachThreadInput(my_thread, fore_thread, TRUE) != 0;
+				//	output_var->Assign(IsKeyToggledOn(vk) ? "D" : "U");
+				//	if (is_attached_my_to_fore)
+				//		AttachThreadInput(my_thread, fore_thread, FALSE);
+				//	return OK;
+				//}
+				//else
+				return output_var->Assign(IsKeyToggledOn(vk) ? "D" : "U");
 			case 'P': // Physical state of key.
 				if (g_hhkLowLevelKeybd)
 					// Since the hook is installed, use its value rather than that from
 					// GetAsyncKeyState(), which doesn't seem to work as advertised, at
 					// least under WinXP:
 					return output_var->Assign(g_PhysicalKeyState[vk] ? "D" : "U");
-				else
+				else // Even for Win9x, it seems slightly better to call this rather than IsKeyDown9x():
 					return output_var->Assign(IsPhysicallyDown(vk) ? "D" : "U");
-			default: // Logical state of key
-				return output_var->Assign((GetKeyState(vk) & 0x8000) ? "D" : "U");
+			default: // Logical state of key.
+				if (g_os.IsWin9x())
+					return output_var->Assign(IsKeyDown9x(vk) ? "D" : "U"); // This seems more likely to be reliable.
+				else
+					// On XP/2K/NT at least, a key can be physically down even if it isn't logically down,
+					// which is why the below specifically calls IsKeyDownNT() rather than some more
+					// comprehensive method such as consulting the physical key state as tracked by the hook:
+					return output_var->Assign(IsKeyDownNT(vk) ? "D" : "U");
 			}
 		}
 		return output_var->Assign("");
@@ -5568,6 +5781,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	}
 
 	case ACT_KEYHISTORY:
+#ifdef ENABLE_KEY_HISTORY_FILE
 		if (*ARG1 || *ARG2)
 		{
 			switch (ConvertOnOffToggle(ARG1))
@@ -5593,6 +5807,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 				KeyHistoryToFile(ARG2);
 			return OK;
 		}
+#endif
 		// Otherwise:
 		return ShowMainWindow(MAIN_MODE_KEYHISTORY);
 	case ACT_LISTLINES:
@@ -5790,13 +6005,34 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_SETWINDELAY: g.WinDelay = atoi(ARG1); return OK;
 	case ACT_SETKEYDELAY: g.KeyDelay = atoi(ARG1); return OK;
 	case ACT_SETMOUSEDELAY: g.MouseDelay = atoi(ARG1); return OK;
+
 	case ACT_SETBATCHLINES:
-		// This value is signed 64-bits to support variable reference (i.e. containing a large int)
-		// the user might throw at it:
-		if (   !(g.LinesPerCycle = _atoi64(ARG1))   )
-			// Don't interpret zero as "infinite" because zero can accidentally
-			// occur if the dereferenced var was blank:
-			g.LinesPerCycle = DEFAULT_BATCH_LINES;
+		// This below ensures that IntervalBeforeRest and LinesPerCycle aren't both in effect simultaneously
+		// (i.e. that both aren't greater than -1), even though ExecUntil() has code to prevent a double-sleep
+		// even if that were to happen.
+		if (stristr(ARG1, "ms")) // This detection isn't perfect, but it doesn't seem necessary to be too demanding.
+		{
+			g.LinesPerCycle = -1;  // Disable the old BatchLines method in favor of the new one below.
+			g.IntervalBeforeRest = atoi(ARG1);  // If negative, script never rests.  If 0, it rests after every line.
+		}
+		else
+		{
+			g.IntervalBeforeRest = -1;  // Disable the new method in favor of the old one below:
+			// This value is signed 64-bits to support variable reference (i.e. containing a large int)
+			// the user might throw at it:
+			if (   !(g.LinesPerCycle = _atoi64(ARG1))   )
+				// Don't interpret zero as "infinite" because zero can accidentally
+				// occur if the dereferenced var was blank:
+				g.LinesPerCycle = DEFAULT_BATCH_LINES;
+		}
+		return OK;
+
+	case ACT_SETINTERRUPT:
+		// If either one is blank, leave that setting as it was before.
+		if (*ARG1)
+			g.UninterruptibleTime = atoi(ARG1);  // 32-bit (for compatibility with DWORDs returned by GetTickCount).
+		if (*ARG2)
+			g.UninterruptedLineCountMax = atoi(ARG2);  // 32-bit also, to help performance (since huge values seem unnecessary).
 		return OK;
 
 	////////////////////////////////////////////////////////////////////////////////////////
@@ -6326,10 +6562,13 @@ char *Line::ToText(char *aBuf, size_t aBufSize, bool aAppendNewline)
 
 void Line::ToggleSuspendState()
 {
-	if (g_IsSuspended) // toggle off the suspension
+	if (g_IsSuspended) // turn off the suspension
 		Hotkey::AllActivate();
 	else // suspend
-		Hotkey::AllDeactivate(true);
+		Hotkey::AllDeactivate(true); // This will also reset the RunAgainAfterFinished flags for all those deactivated.
+		// It seems unnecessary, and possibly undesirable, to purge any pending hotkey msgs from the msg queue.
+		// Even if there are some, it's possible that they are exempt from suspension so we wouldn't want to
+		// globally purge all messages anyway.
 	g_IsSuspended = !g_IsSuspended;
 	g_script.UpdateTrayIcon();
 	CheckMenuItem(GetMenu(g_hWnd), ID_FILE_SUSPEND, g_IsSuspended ? MF_CHECKED : MF_UNCHECKED);
@@ -6346,32 +6585,43 @@ ResultType Line::ChangePauseState(ToggleValueType aChangeTo)
 	{
 	case TOGGLED_ON:
 		// Pause the current subroutine (which by definition isn't paused since it had to be 
-		// active to call us):
-		g.IsPaused = true;
-		++g_nPausedSubroutines;
-		g_script.UpdateTrayIcon();
+		// active to call us).  It seems best not to attempt to change the Hotkey mRunAgainAfterFinished
+		// attribute for the current hotkey (assuming it's even a hotkey that got us here) or
+		// for them all.  This is because it's conceivable that this Pause command occurred
+		// in a background thread, such as a timed subroutine, in which case we wouldn't want the
+		// pausing of that thread to affect anything else the user might be doing with hotkeys.
+		// UPDATE: The above is flawed because by definition the script's quasi-thread that got
+		// us here is now active.  Since it is active, the script will immediately become dormant
+		// when this is executed, waiting for the user to press a hotkey to launch a new
+		// quasi-thread.  Thus, it seems best to reset all the mRunAgainAfterFinished flags
+		// in case we are in a hotkey subroutine and in case this hotkey has a buffered repeat-again
+		// action pending, which the user probably wouldn't want to happen after the script is unpaused:
+		#define PAUSE_CURRENT_THREAD \
+		{\
+			Hotkey::ResetRunAgainAfterFinished();\
+			g.IsPaused = true;\
+			++g_nPausedThreads;\
+			g_script.UpdateTrayIcon();\
+		}
+		PAUSE_CURRENT_THREAD
 		return OK;
 	case TOGGLED_OFF:
 		// Unpause the uppermost underlying paused subroutine.  If none of the interrupted subroutines
 		// are paused, do nothing. This relies on the fact that the current script subroutine,
 		// which got us here, cannot itself be currently paused by definition:
-		if (g_nPausedSubroutines > 0)
+		if (g_nPausedThreads > 0)
 			g_UnpauseWhenResumed = true;
 		return OK;
 	case NEUTRAL: // the user omitted the parameter entirely, which is considered the same as "toggle"
 	case TOGGLE:
 		// See TOGGLED_OFF comment above:
-		if (g_nPausedSubroutines > 0)
+		if (g_nPausedThreads > 0)
 			g_UnpauseWhenResumed = true;
 		else
-		{
 			// Since there are no underlying paused subroutines, pause the current subroutine.
 			// There must be a current subroutine (i.e. the script can't be idle) because the
 			// it's the one that called us directly, and we know it's not paused:
-			g.IsPaused = true;
-			++g_nPausedSubroutines;
-			g_script.UpdateTrayIcon();
-		}
+			PAUSE_CURRENT_THREAD
 		return OK;
 	default: // TOGGLE_INVALID or some other disallowed value.
 		// We know it's a variable because otherwise the loading validation would have caught it earlier:
@@ -6449,7 +6699,7 @@ ResultType Line::LineError(char *aErrorText, ResultType aErrorType, char *aExtra
 			, sizeof(buf) - (buf_marker - buf));
 	//buf_marker += strlen(buf_marker);
 	g_script.mCurrLine = this;  // This needs to be set in some cases where the caller didn't.
-	g_script.ShowInEditor();
+	//g_script.ShowInEditor();
 	MsgBox(buf);
 	if (aErrorType == CRITICAL_ERROR && g_script.mIsReadyToExecute)
 		// Also ask the main message loop function to quit and announce to the system that
@@ -6503,62 +6753,9 @@ ResultType Script::ScriptError(char *aErrorText, char *aExtraInfo)
 		, aErrorText
 		, mIsRestart ? OLD_STILL_IN_EFFECT : WILL_EXIT
 		);
-	ShowInEditor();
+	//ShowInEditor();
 	MsgBox(buf);
 	return FAIL; // See above for why it's better to return FAIL than CRITICAL_ERROR.
-}
-
-
-
-void Script::ShowInEditor()
-{
-	// IN LIGHT OF the addition of #include, this function will probably need to be revised so that
-	// it targets the correct file that is the source of the error.
-	// Disabled for now:
-	return;
-
-#ifdef AUTOHOTKEYSC
-	return;
-#endif
-
-	bool old_mode = g.TitleFindAnywhere;
-	g.TitleFindAnywhere = true;
-	HWND editor = WinExist(mFileName);
-	g.TitleFindAnywhere = old_mode;
-	if (!editor)
-		return;
-	char buf[256];
-	GetWindowText(editor, buf, sizeof(buf));
-	if (!stristr(buf, "metapad") && !stristr(buf, "notepad"))
-		return;
-	SetForegroundWindowEx(editor);  // This does a little bit of waiting for the window to become active.
-	MsgSleep(100);  // Give it some extra time in case window animation is turned on.
-	if (editor != GetForegroundWindow())
-		return;
-	strlcpy(buf, "^g", sizeof(buf));  // SendKeys requires it to be modifiable.
-	SendKeys(buf);
-	HWND goto_window;
-	int i;
-	for (i = 0; i < 25; ++i)
-	{
-		if (goto_window = WinActive("Go", "&Line")) // Works with both metapad and notepad.
-			break;
-		MsgSleep(20);
-	}
-	if (!goto_window)
-		return;
-	snprintf(buf, sizeof(buf), "%d{ENTER}", mCurrLine ? mCurrLine->mLineNumber : mCurrLineNumber);
-	SendKeys(buf);
-	for (i = 0; i < 25; ++i)
-	{
-		MsgSleep(20); // It seems to need a certain minimum amount of time, so Sleep() before checking.
-		if (editor == GetForegroundWindow())
-			break;
-	}
-	if (editor != GetForegroundWindow())
-		return;
-	strlcpy(buf, "{home}+{end}", sizeof(buf));  // SendKeys requires it to be modifiable.
-	SendKeys(buf);
 }
 
 
@@ -6606,6 +6803,8 @@ char *Script::ListKeyHistory(char *aBuf, size_t aBufSize)
 		"\r\nKeybd hook: %s"
 		"\r\nMouse hook: %s"
 		"\r\nLast hotkey type: %s"
+		"\r\nEnabled Timers: %u of %u"
+		//"\r\nInterruptible?: %s"
 		"\r\nInterrupted threads: %d%s"
 		"\r\nPaused threads: %d"
 		"\r\nModifiers (GetKeyState() now) = %s"
@@ -6615,10 +6814,12 @@ char *Script::ListKeyHistory(char *aBuf, size_t aBufSize)
 		, g_hhkLowLevelKeybd == NULL ? "no" : "yes"
 		, g_hhkLowLevelMouse == NULL ? "no" : "yes"
 		, g_LastPerformedHotkeyType == HK_KEYBD_HOOK ? "keybd hook" : "not keybd hook"
-		, g_nInterruptedSubroutines
-		, g_nInterruptedSubroutines ? " (preempted: they will resume when the current thread finishes)" : ""
-		, g_nPausedSubroutines
-		, ModifiersLRToText(GetModifierLRStateSimple(), LRtext));
+		, mTimerEnabledCount, mTimerCount
+		//, INTERRUPTIBLE ? "yes" : "no"
+		, g_nThreads > 1 ? g_nThreads - 1 : 0
+		, g_nThreads > 1 ? " (preempted: they will resume when the current thread finishes)" : ""
+		, g_nPausedThreads
+		, ModifiersLRToText(GetModifierLRState(true), LRtext));
 	aBuf += strlen(aBuf);
 	GetHookStatus(aBuf, BUF_SPACE_REMAINING);
 	aBuf += strlen(aBuf);

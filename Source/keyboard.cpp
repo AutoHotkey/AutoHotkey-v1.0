@@ -33,7 +33,14 @@ inline void DoKeyDelay(int aDelay = g.KeyDelay)
 {
 	if (aDelay < 0) // To support user-specified KeyDelay of -1 (fastest send rate).
 		return;
-	SLEEP_AND_IGNORE_HOTKEYS(aDelay);
+	if (g_os.IsWin9x())
+	{
+		// Do a true sleep on Win9x because the MsgSleep() method is very inaccurate on Win9x
+		// for some reason (a MsgSleep(1) causes a sleep between 10 and 55ms, for example):
+		Sleep(aDelay);
+		return;
+	}
+	SLEEP_WITHOUT_INTERRUPTION(aDelay);
 }
 
 
@@ -120,8 +127,19 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 
 	// The default behavior is to turn the capslock key off prior to sending any keys
 	// because otherwise lowercase letters would come through as uppercase:
-	ToggleValueType prior_capslock_state = g.StoreCapslockMode ? ToggleKeyState(VK_CAPITAL, TOGGLED_OFF)
-		: TOGGLE_INVALID;
+	ToggleValueType prior_capslock_state;
+	if (threads_are_attached || !g_os.IsWin9x())
+		// Only under either of the above conditions can the state of Capslock be reliably
+		// retrieved and changed:
+		prior_capslock_state = g.StoreCapslockMode ? ToggleKeyState(VK_CAPITAL, TOGGLED_OFF) : TOGGLE_INVALID;
+	else // OS is Win9x and threads are not attached.
+	{
+		// Attempt to turn off capslock, but never attempt to turn it back on because we can't
+		// reliably detect whether it was on beforehand.  Update: This didn't do any good, so
+		// it's disabled for now:
+		//CapslockOffWin9x();
+		prior_capslock_state = TOGGLE_INVALID;
+	}
 
 	char single_char_string[2];
 	vk_type vk = 0;
@@ -205,7 +223,6 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 			if (vk || sc)
 			{
 				if (repeat_count)
-				{
 					// Note: modifiers_persistent stays in effect (pressed down) even if the key
 					// being sent includes that same modifier.  Surprisingly, this is how AutoIt2
 					// behaves also, which is good.  Example: Send, {AltDown}!f  ; this will cause
@@ -213,11 +230,6 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 					// by Alt.
 					SendKey(vk, sc, modifiers_for_next_key, modifiers_persistent, repeat_count
 						, event_type, aTargetWindow);
-					// If KeyDelay > 0, the above will have done a qualified sleep (one longer than zero).
-					// So update here and in other places to avoid double-sleep when KeyDelay > 0:
-					#define IF_UPDATE_TIME_OF_LAST_SLEEP if (g.KeyDelay > 0) time_of_last_sleep = GetTickCount();
-					IF_UPDATE_TIME_OF_LAST_SLEEP
-				}
 				modifiers_for_next_key = 0;  // reset after each, and even if no valid vk was found (should be just like AutoIt).
 				aKeys = end_pos;  // In prep for aKeys++ at the bottom of the loop.
 				break;
@@ -231,7 +243,6 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 				{
 					SendKeySpecial(aKeys[1], modifiers_for_next_key, modifiers_persistent, repeat_count
 						, event_type, aTargetWindow);
-					IF_UPDATE_TIME_OF_LAST_SLEEP
 				}
 				modifiers_for_next_key = 0;  // reset after each, and even if no valid vk was found (should be just like AutoIt).
 				aKeys = end_pos;  // In prep for aKeys++ at the bottom of the loop.
@@ -247,7 +258,7 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 					// should have maximum flexibility (i.e. nothing extra should be done so that the
 					// user can have more control):
 					KeyEvent(special_key > 0 ? KEYDOWN : KEYUP, abs(special_key), 0, aTargetWindow, true);
-					IF_UPDATE_TIME_OF_LAST_SLEEP else LONG_OPERATION_UPDATE_FOR_SENDKEYS // KeyEvent() may have slept.
+					LONG_OPERATION_UPDATE_FOR_SENDKEYS
 				}
 			else // Check if it's "{ASC nnnn}"
 			{
@@ -258,7 +269,6 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 					SendASC(omit_leading_whitespace(aKeys + 4), aTargetWindow); // aTargetWindow is always NULL, it's just for maintainability.
 					// Do this only once at the end of the sequence:
 					DoKeyDelay();
-					IF_UPDATE_TIME_OF_LAST_SLEEP
 				}
 			}
 			// If what's between {} is unrecognized, such as {Bogus}, it's safest not to send
@@ -282,7 +292,6 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 				SendKey(vk, sc, modifiers_for_next_key, modifiers_persistent, 1, KEYDOWNANDUP, aTargetWindow);
 			else // Try to send it by alternate means.
 				SendKeySpecial(*aKeys, modifiers_for_next_key, modifiers_persistent, 1, KEYDOWNANDUP, aTargetWindow);
-			IF_UPDATE_TIME_OF_LAST_SLEEP
 			modifiers_for_next_key = 0;  // Safest to reset this regardless of whether a key was sent.
 			// break;  Not needed in "default".
 		} // switch()
@@ -321,7 +330,8 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 	if (prior_capslock_state == TOGGLED_ON) // The current user setting requires us to turn it back on.
 		ToggleKeyState(VK_CAPITAL, TOGGLED_ON);
 
-	// Might be better to do this after changing capslock state:
+	// Might be better to do this after changing capslock state, since having the threads attached
+	// tends to help with updating the global state of keys (perhaps only under Win9x in this case):
 	if (threads_are_attached)
 		AttachThreadInput(my_thread, target_thread, FALSE);
 }
@@ -376,7 +386,6 @@ int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, mod_type aModifiersPe
 		// Also: Seems best to do SetModifierState() even if Keydelay < 0:
 		SetModifierState(aModifiers | aModifiersPersistent, GetModifierLRState());
 		KeyEvent(aEventType, aVK, aSC, aTargetWindow, true);
-		IF_UPDATE_TIME_OF_LAST_SLEEP  // Update this if KeyEvent(), above, did a qualified sleep.
 	}
 
 	// The final iteration by the above loop does its key delay prior to us changing the
@@ -485,7 +494,6 @@ int SendKeySpecial(char aChar, mod_type aModifiers, mod_type aModifiersPersisten
 		{
 			SendASC(ascii, aTargetWindow); // aTargetWindow is always NULL, it's just for maintainability.
 			DoKeyDelay();
-			IF_UPDATE_TIME_OF_LAST_SLEEP
 		}
 		else // Method #2
 		{
@@ -495,7 +503,6 @@ int SendKeySpecial(char aChar, mod_type aModifiers, mod_type aModifiersPersisten
 				SendChar(diadic[pair_index], aModifiers | aModifiersPersistent, KEYDOWNANDUP, aTargetWindow);
 			SendChar(letter[pair_index], aModifiers | aModifiersPersistent, aEventType, aTargetWindow);
 			DoKeyDelay();
-			IF_UPDATE_TIME_OF_LAST_SLEEP
 		}
 	}
 	SetModifierState(aModifiersPersistent, GetModifierLRState()); // See notes in SendKey().
@@ -712,6 +719,10 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 				, LOBYTE(aSC)  // naked scan code (the 0xE0 prefix, if any, is omitted)
 				, (HIBYTE(aSC) ? KEYEVENTF_EXTENDEDKEY : 0)
 				, aExtraInfo);
+
+			if (aVK == VK_NUMLOCK && g_os.IsWin9x()) // Under Win9x, Numlock needs special treatment.
+				ToggleNumlockWin9x();
+
 			if (!g_hhkLowLevelKeybd) // Hook isn't logging, so we'll log just the keys we send, here.
 			{
 				#define UpdateKeyEventHistory(aKeyUp) \
@@ -750,33 +761,63 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 
 
 
-ToggleValueType ToggleKeyState(vk_type vk, ToggleValueType aToggleValue)
-// Toggle the given vk (which should be either capslock, numlock, or scrolllock) into its other state.
-// For performance, it is the caller's responsibility to ensure that <vk> is one of these keys.
-// Returns the state the key was in before it was changed.
+ToggleValueType ToggleKeyState(vk_type aVK, ToggleValueType aToggleValue)
+// Toggle the given aVK into another state.  For performance, it is the caller's responsibility to
+// ensure that aVK is a toggleable key such as capslock, numlock, or scrolllock.
+// Returns the state the key was in before it was changed (but it's only a best-guess under Win9x).
 {
-	if (aToggleValue == NEUTRAL)  // Toggle from off to on, or vice versa.
-	{
-		KeyEvent(KEYDOWNANDUP, vk);
-		return NEUTRAL; // for performance, since in this case the caller shouldn't care about the return value.
-	}
 	// Can't use GetAsyncKeyState() because it doesn't have this info:
-	ToggleValueType starting_state = (GetKeyState(vk) & 0x00000001) ? TOGGLED_ON : TOGGLED_OFF;
+	ToggleValueType starting_state = IsKeyToggledOn(aVK) ? TOGGLED_ON : TOGGLED_OFF;
 	if (aToggleValue != TOGGLED_ON && aToggleValue != TOGGLED_OFF) // Shouldn't be called this way.
 		return starting_state;
-	if (starting_state == aToggleValue) // It's already in the desired state.
+	if (starting_state == aToggleValue) // It's already in the desired state, so just return the state.
 		return starting_state;
-	// Since it's not already in the desired state, toggle it:
-	if (vk == VK_NUMLOCK)
+	if (aVK == VK_NUMLOCK)
+	{
+		if (g_os.IsWin9x())
+		{
+			// For Win9x, we want to set the state unconditionally to be sure it's right.  This is because
+			// the retrieval of the Capslock state, for example, is unreliable, at least under Win98se
+			// (probably due to lack of an AttachThreadInput() having been done).  Although the
+			// SetKeyboardState() method used by ToggleNumlockWin9x is not required for caps & scroll lock keys,
+			// it is required for Numlock:
+			ToggleNumlockWin9x();
+			return starting_state;  // Best guess, but might be wrong.
+		}
+		// Otherwise, NT/2k/XP:
 		// Sending an extra up-event first seems to prevent the problem where the Numlock
 		// key's indicator light doesn't change to reflect its true state (and maybe its
 		// true state doesn't change either).  This problem tends to happen when the key
 		// is pressed while the hook is forcing it to be either ON or OFF (or it suppresses
 		// it because it's a hotkey).  Needs more testing on diff. keyboards & OSes:
-		KeyEvent(KEYUP, vk);
-	KeyEvent(KEYDOWNANDUP, vk);
+		KeyEvent(KEYUP, aVK);
+	}
+	// Since it's not already in the desired state, toggle it:
+	KeyEvent(KEYDOWNANDUP, aVK);
 	return starting_state;
 }
+
+
+
+void ToggleNumlockWin9x()
+// Numlock requires a special method to toggle the state and its indicator light under Win9x.
+// Capslock and Scrolllock do not need this method, since keybd_event() works for them.
+{
+	BYTE state[256];
+	GetKeyboardState((PBYTE)&state);
+	state[VK_NUMLOCK] ^= 0x01;  // Toggle the low-order bit to the opposite state.
+	SetKeyboardState((PBYTE)&state);
+}
+
+
+
+//void CapslockOffWin9x()
+//{
+//	BYTE state[256];
+//	GetKeyboardState((PBYTE)&state);
+//	state[VK_CAPITAL] &= ~0x01;
+//	SetKeyboardState((PBYTE)&state);
+//}
 
 
 
@@ -986,14 +1027,14 @@ inline mod_type GetModifierState()
 
 
 
-inline modLR_type GetModifierLRState()
+inline modLR_type GetModifierLRState(bool aExplicitlyGet)
 // Try to report a more reliable state of the modifier keys than GetKeyboardState
 // alone could.
 {
 	// Rather than old/below method, in light of the fact that new low-level hook is being tried,
 	// try relying on only the hook's tracked value rather than calling Get() (if if the hook
 	// is active:
-	if (g_hhkLowLevelKeybd)
+	if (g_hhkLowLevelKeybd && !aExplicitlyGet)
 		return g_modifiersLR_logical;
 
 	// I decided to call GetKeyboardState() rather than tracking the state of these keys with the
@@ -1014,29 +1055,31 @@ inline modLR_type GetModifierLRState()
 	// cases where GetKeyboardState() is incorrect (at least under WinXP) when GetKeyState(),
 	// in its place, yields the correct info.  Very strange.
 
-	g_modifiersLR_get = 0; // Init so that all keys are set to off/up.
+	modLR_type modifiersLR = 0;  // Allows all to default to up/off to simplify the below.
 	if (g_os.IsWin9x())
 	{
 		// Assume it's the left key since there's no way to tell which of the pair it
 		// is? (unless the hook is installed, in which case it's value would have already
 		// been returned, above).
-		if (GetKeyState(VK_SHIFT) & 0x8000) g_modifiersLR_get |= MOD_LSHIFT;
-		if (GetKeyState(VK_CONTROL) & 0x8000) g_modifiersLR_get |= MOD_LCONTROL;
-		if (GetKeyState(VK_MENU) & 0x8000) g_modifiersLR_get |= MOD_LALT;
+		if (IsKeyDown9x(VK_SHIFT)) modifiersLR |= MOD_LSHIFT;
+		if (IsKeyDown9x(VK_CONTROL)) modifiersLR |= MOD_LCONTROL;
+		if (IsKeyDown9x(VK_MENU)) modifiersLR |= MOD_LALT;
+		if (IsKeyDown9x(VK_LWIN)) modifiersLR |= MOD_LWIN;
+		if (IsKeyDown9x(VK_RWIN)) modifiersLR |= MOD_RWIN;
 	}
 	else
 	{
-		if (GetKeyState(VK_LSHIFT) & 0x8000) g_modifiersLR_get |= MOD_LSHIFT;
-		if (GetKeyState(VK_RSHIFT) & 0x8000) g_modifiersLR_get |= MOD_RSHIFT;
-		if (GetKeyState(VK_LCONTROL) & 0x8000) g_modifiersLR_get |= MOD_LCONTROL;
-		if (GetKeyState(VK_RCONTROL) & 0x8000) g_modifiersLR_get |= MOD_RCONTROL;
-		if (GetKeyState(VK_LMENU) & 0x8000) g_modifiersLR_get |= MOD_LALT;
-		if (GetKeyState(VK_RMENU) & 0x8000) g_modifiersLR_get |= MOD_RALT;
+		if (IsKeyDownNT(VK_LSHIFT)) modifiersLR |= MOD_LSHIFT;
+		if (IsKeyDownNT(VK_RSHIFT)) modifiersLR |= MOD_RSHIFT;
+		if (IsKeyDownNT(VK_LCONTROL)) modifiersLR |= MOD_LCONTROL;
+		if (IsKeyDownNT(VK_RCONTROL)) modifiersLR |= MOD_RCONTROL;
+		if (IsKeyDownNT(VK_LMENU)) modifiersLR |= MOD_LALT;
+		if (IsKeyDownNT(VK_RMENU)) modifiersLR |= MOD_RALT;
+		if (IsKeyDownNT(VK_LWIN)) modifiersLR |= MOD_LWIN;
+		if (IsKeyDownNT(VK_RWIN)) modifiersLR |= MOD_RWIN;
 	}
-	if (GetKeyState(VK_LWIN) & 0x8000) g_modifiersLR_get |= MOD_LWIN;
-	if (GetKeyState(VK_RWIN) & 0x8000) g_modifiersLR_get |= MOD_RWIN;
 
-	return g_modifiersLR_get;
+	return modifiersLR;
 
 	// Only consider a modifier key to be really down if both the hook's tracking of it
 	// and GetKeyboardState() agree that it should be down.  The should minimize the impact
@@ -1049,34 +1092,6 @@ inline modLR_type GetModifierLRState()
 	// if the keyboard hook is active.  Bitwise and is used because generally it's safer
 	// to assume a modifier key is up, when in doubt (e.g. to avoid firing unwanted hotkeys):
 //	return g_hhkLowLevelKeybd ? (g_modifiersLR_logical & g_modifiersLR_get) : g_modifiersLR_get;
-}
-
-
-
-modLR_type GetModifierLRStateSimple()
-{
-	modLR_type modifiersLR = 0;  // Allows all to default to up/off to simplify the below.
-	if (g_os.IsWin9x())
-	{
-		// Assume it's the left key since there's no way to tell which of the pair it
-		// is? (unless the hook is installed, in which case it's value would have already
-		// been returned, above).
-		if (GetKeyState(VK_SHIFT) & 0x8000) modifiersLR |= MOD_LSHIFT;
-		if (GetKeyState(VK_CONTROL) & 0x8000) modifiersLR |= MOD_LCONTROL;
-		if (GetKeyState(VK_MENU) & 0x8000) modifiersLR |= MOD_LALT;
-	}
-	else
-	{
-		if (GetKeyState(VK_LSHIFT) & 0x8000) modifiersLR |= MOD_LSHIFT;
-		if (GetKeyState(VK_RSHIFT) & 0x8000) modifiersLR |= MOD_RSHIFT;
-		if (GetKeyState(VK_LCONTROL) & 0x8000) modifiersLR |= MOD_LCONTROL;
-		if (GetKeyState(VK_RCONTROL) & 0x8000) modifiersLR |= MOD_RCONTROL;
-		if (GetKeyState(VK_LMENU) & 0x8000) modifiersLR |= MOD_LALT;
-		if (GetKeyState(VK_RMENU) & 0x8000) modifiersLR |= MOD_RALT;
-	}
-	if (GetKeyState(VK_LWIN) & 0x8000) modifiersLR |= MOD_LWIN;
-	if (GetKeyState(VK_RWIN) & 0x8000) modifiersLR |= MOD_RWIN;
-	return modifiersLR;
 }
 
 
@@ -1242,7 +1257,7 @@ void init_vk_to_sc()
 	g_vk_to_sc[VK_APPS].a |= 0x0100;  // Application key on keyboards with LWIN/RWIN/Apps.  Not listed in MSDN?
 	g_vk_to_sc[VK_RMENU].a |= 0x0100;
 	g_vk_to_sc[VK_RCONTROL].a |= 0x0100;
-	g_vk_to_sc[VK_RSHIFT].a |= 0x0100; // WinXP needs this to be extended for KeyboardEvent() to work properly.
+	g_vk_to_sc[VK_RSHIFT].a |= 0x0100; // WinXP needs this to be extended for keybd_event() to work properly.
 	g_vk_to_sc[VK_CANCEL].a |= 0x0100; // Ctrl-break
 	g_vk_to_sc[VK_SNAPSHOT].a |= 0x0100;  // PrintScreen
 	g_vk_to_sc[VK_NUMLOCK].a |= 0x0100;
@@ -1442,6 +1457,7 @@ int TextToSpecial(char *aText, UINT aTextLength, mod_type &aModifiers)
 
 
 
+#ifdef ENABLE_KEY_HISTORY_FILE
 ResultType KeyHistoryToFile(char *aFilespec, char aType, bool aKeyUp, vk_type aVK, sc_type aSC)
 {
 	static char target_filespec[MAX_PATH] = "";
@@ -1509,6 +1525,7 @@ ResultType KeyHistoryToFile(char *aFilespec, char aType, bool aKeyUp, vk_type aV
 	fputs(buf, fp);
 	return OK;
 }
+#endif
 
 
 

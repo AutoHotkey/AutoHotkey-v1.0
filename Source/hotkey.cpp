@@ -291,11 +291,16 @@ ResultType Hotkey::AllDeactivate(bool aExcludeSuspendHotkeys)
 			sWhichHookActive = RemoveAllHooks();
 	// Unregister all hotkeys except when aExcludeSuspendHotkeys is true.  In that case, don't
 	// unregister those whose subroutines have ACT_SUSPEND as their first line.  This allows
-	// such hotkeys to stay in effect so that the user can press them to turn off the suspension:
+	// such hotkeys to stay in effect so that the user can press them to turn off the suspension.
+	// This also resets the mRunAgainAfterFinished flag for each hotkey that is being deactivated
+	// here, including hook hotkeys:
 	for (int i = 0; i < sHotkeyCount; ++i)
 		if (!(aExcludeSuspendHotkeys && shk[i]->mJumpToLabel
 			&& shk[i]->mJumpToLabel->mJumpToLine->mActionType == ACT_SUSPEND))
+		{
 			shk[i]->Unregister();
+			shk[i]->mRunAgainAfterFinished = false;  // ACT_SUSPEND, at least, relies on us to do this.
+		}
 	return OK;
 }
 
@@ -386,7 +391,7 @@ void Hotkey::AllDestructAndExit(int aExitCode)
 
 
 ResultType Hotkey::PerformID(HotkeyIDType aHotkeyID)
-// Returns OK, FAIL, or CRITICAL_ERROR.
+// Returns OK or FAIL.
 {
 	// Currently, hotkey_id can't be < 0 due to its type, so we only check if it's too large:
 	if (aHotkeyID >= sHotkeyCount)
@@ -436,11 +441,17 @@ ResultType Hotkey::PerformID(HotkeyIDType aHotkeyID)
 				" Do you want to continue (choose NO to exit the program)?"  // In case its stuck in a loop.
 				, g_MaxHotkeysPerInterval, g_HotkeyThrottleInterval
 				, g_MaxHotkeysPerInterval, g_HotkeyThrottleInterval);
-			// This is now needed since hotkeys can still fire while a messagebox is displayed:
-			g_IgnoreHotkeys = true;
+
+			// Turn off any RunAgain flags that may be on, which in essense is the same as de-buffering
+			// any pending hotkey keystrokes that haven't yet been fired:
+			ResetRunAgainAfterFinished();
+
+			// This is now needed since hotkeys can still fire while a messagebox is displayed.
+			// Seems safest to do this even if it isn't always necessary:
+			g_AllowInterruption = false;
 			if (MsgBox(error_text, MB_YESNO) == IDNO)
 				g_script.ExitApp();
-			g_IgnoreHotkeys = false;
+			g_AllowInterruption = true;
 		}
 		// The display_warning var is needed due to the fact that there's an OR in this condition:
 		if (display_warning || time_until_now > (DWORD)g_HotkeyThrottleInterval)
@@ -496,7 +507,7 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 	, mJumpToLabel(aJumpToLabel)
 	, mExistingThreads(0)
 	, mMaxThreads(g_MaxThreadsPerHotkey)  // The value of g_MaxThreadsPerHotkey can vary during load-time.
-	, mConstructedOK(false)
+	, mRunAgainAfterFinished(false), mRunAgainTime(0), mConstructedOK(false)
 
 // It's better to receive the hotkey_id as a param, since only the caller has better knowledge and
 // verification of the fact that this hotkey's id is always set equal to it's index in the array

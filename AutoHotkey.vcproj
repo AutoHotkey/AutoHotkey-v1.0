@@ -92,6 +92,7 @@
 				Name="VCCustomBuildTool"/>
 			<Tool
 				Name="VCLinkerTool"
+				AdditionalOptions="/SAFESEH:NO"
 				AdditionalDependencies="winmm.lib version.lib"
 				OutputFile="$(OutDir)/AutoHotkey.exe"
 				LinkIncremental="1"
@@ -106,7 +107,8 @@
 			<Tool
 				Name="VCMIDLTool"/>
 			<Tool
-				Name="VCPostBuildEventTool"/>
+				Name="VCPostBuildEventTool"
+				CommandLine="upx --best --compress-icons=0 release\AutoHotkey.exe"/>
 			<Tool
 				Name="VCPreBuildEventTool"/>
 			<Tool

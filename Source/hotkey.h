@@ -78,6 +78,8 @@ private:
 	HookActionType mHookAction;
 	Label *mJumpToLabel;
 	UCHAR mExistingThreads, mMaxThreads;
+	bool mRunAgainAfterFinished;
+	DWORD mRunAgainTime;
 	bool mConstructedOK;
 
 	// Something in the compiler is currently preventing me from using HookType in place of UCHAR:
@@ -87,7 +89,8 @@ private:
 	ResultType TextInterpret();
 	char *TextToModifiers(char *aText);
 	int TextToKey(char *aText, bool aIsModifier);
-	ResultType Perform()
+
+	bool PerformIsAllowed()
 	{
 		// For now, attempts to launch another simultaneous instance of this subroutine
 		// are ignored if MaxThreadsPerHotkey (for this particular hotkey) has been reached.
@@ -96,14 +99,40 @@ private:
 		// the number of currently active threads drops below the max.  But doing such
 		// might make "infinite key loops" harder to catch because the rate of incoming hotkeys
 		// would be slowed down to prevent the subroutines from running concurrently:
-		if (mExistingThreads >= mMaxThreads && mJumpToLabel
-			&& !ACT_IS_ALWAYS_ALLOWED(mJumpToLabel->mJumpToLine->mActionType))
-			return OK;
-		++mExistingThreads;
-		ResultType result = mJumpToLabel->mJumpToLine->ExecUntil(UNTIL_RETURN, mModifiersConsolidated);
-		--mExistingThreads;
-		return result;
+		return mExistingThreads < mMaxThreads
+			|| (mJumpToLabel && ACT_IS_ALWAYS_ALLOWED(mJumpToLabel->mJumpToLine->mActionType));
 	}
+
+	ResultType Perform() // Returns OK or FAIL.
+	{
+		if (!PerformIsAllowed())
+			return FAIL;
+		++mExistingThreads;
+		for (;;)
+		{
+			if (mJumpToLabel->mJumpToLine->ExecUntil(UNTIL_RETURN, mModifiersConsolidated) == FAIL)
+			{
+				mRunAgainAfterFinished = false;  // Ensure this is reset due to the error.
+				return FAIL;
+			}
+			if (mRunAgainAfterFinished)
+			{
+				// But MsgSleep() can change it back to true again, when called by the above call
+				// to ExecUntil(), to keep it auto-repeating:
+				mRunAgainAfterFinished = false;  // i.e. this "run again" ticket has now been used up.
+				// And if it was posted too long ago, don't do it.  This is because most users wouldn't
+				// want a buffered hotkey to stay pending for a long time after it was pressed, because
+				// that might lead to unexpected behavior:
+				if (GetTickCount() - mRunAgainTime > 1000)
+					break;
+			}
+			else
+				break;
+		}
+		--mExistingThreads;
+		return OK;
+	}
+
 	ResultType Register();
 	ResultType Unregister();
 	static ResultType AllDestruct();
@@ -126,17 +155,38 @@ public:
 	static ResultType PerformID(HotkeyIDType aHotkeyID);
 	static ResultType AllDeactivate(bool aExcludeSuspendHotkeys = false);
 	static void AllActivate();
-	static void RequireHook(HookType aWhichHook) {sWhichHookNeeded |= aWhichHook;  sWhichHookAlways |= aWhichHook;}
+	static void RequireHook(HookType aWhichHook) {sWhichHookAlways |= aWhichHook;}
 	static HookType HookIsActive() {return sWhichHookActive;} // Returns bitwise values: HOOK_MOUSE, HOOK_KEYBD.
+
+	static bool PerformIsAllowed(HotkeyIDType aHotkeyID)
+	{
+		return (aHotkeyID >= 0 && aHotkeyID < sHotkeyCount) ? shk[aHotkeyID]->PerformIsAllowed() : false;
+	}
+
+	static void RunAgainAfterFinished(HotkeyIDType aHotkeyID)
+	{
+		if (aHotkeyID >= 0 && aHotkeyID < sHotkeyCount)
+		{
+			shk[aHotkeyID]->mRunAgainAfterFinished = true;
+			shk[aHotkeyID]->mRunAgainTime = GetTickCount();
+			// Above: The time this event was buffered, to make sure it doesn't get too old.
+		}
+	}
+
+	static void ResetRunAgainAfterFinished()  // For all hotkeys.
+	{
+		for (int i = 0; i < sHotkeyCount; ++i)
+			shk[i]->mRunAgainAfterFinished = false;
+	}
 
 	static char GetType(HotkeyIDType aHotkeyID)
 	{
-		return(aHotkeyID >= 0 && aHotkeyID < sHotkeyCount) ? shk[aHotkeyID]->mType : -1;
+		return (aHotkeyID >= 0 && aHotkeyID < sHotkeyCount) ? shk[aHotkeyID]->mType : -1;
 	}
 
 	static Label *GetLabel(HotkeyIDType aHotkeyID)
 	{
-		return(aHotkeyID >= 0 && aHotkeyID < sHotkeyCount) ? shk[aHotkeyID]->mJumpToLabel : NULL;
+		return (aHotkeyID >= 0 && aHotkeyID < sHotkeyCount) ? shk[aHotkeyID]->mJumpToLabel : NULL;
 	}
 	static ActionTypeType GetTypeOfFirstLine(HotkeyIDType aHotkeyID)
 	{

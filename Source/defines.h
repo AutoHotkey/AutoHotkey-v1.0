@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.05"
+#define NAME_VERSION "1.0.06"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -45,7 +45,7 @@ GNU General Public License for more details.
 // the same process. Also, because class names occupy space in the system's private atom table, you
 // should keep class name strings as short a possible:
 #define WINDOW_CLASS_MAIN "AutoHotkey"
-#define WINDOW_CLASS_SPLASH NAME_P "AutoHotkey2"
+#define WINDOW_CLASS_SPLASH "AutoHotkey2"
 
 #define EXT_AUTOIT2 ".aut"
 #define EXT_AUTOHOTKEY ".ahk"
@@ -148,68 +148,25 @@ typedef UCHAR HookType;
 // this instance's MsgSleep()).  However, it doesn't seem to be that much of a consequence
 // since the exact interval period of the MsgSleep()'s isn't that important.  It's also
 // pretty unlikely that the interrupting subroutine will also just happen to call the same
-// function rather than some other:
-#define LONG_OPERATION_INIT \
-	static DWORD time_of_last_sleep;\
-	time_of_last_sleep = GetTickCount();\
-	DWORD how_often_to_sleep, time_now;\
-	int sleep_duration;\
-	if (Hotkey::HookIsActive())\
-	{\
-		how_often_to_sleep = 18;\
-		sleep_duration = 5;\
-	}\
-	else\
-	{\
-		how_often_to_sleep = 200;\
-		sleep_duration = -1;\
-	}
+// function rather than some other.  UPDATE: These macros were greatly simplified when
+// it was discovered that PeekMessage(), when called directly as below, is enough to prevent
+// keyboard and mouse lag when the hooks are installed:
+#define LONG_OPERATION_INIT MSG msg;
 
 // This is the same as the above except it also handled bytes_to_read for URLDownloadToFile():
 #define LONG_OPERATION_INIT_FOR_URL \
-	static DWORD time_of_last_sleep;\
-	time_of_last_sleep = GetTickCount();\
-	DWORD bytes_to_read, how_often_to_sleep, time_now;\
-	int sleep_duration;\
-	if (Hotkey::HookIsActive())\
-	{\
-		bytes_to_read = 1024;\
-		how_often_to_sleep = 8;\
-		sleep_duration = 10;\
-	}\
-	else\
-	{\
-		bytes_to_read = sizeof(bufData);\
-		how_often_to_sleep = 200;\
-		sleep_duration = -1;\
-	}
+	MSG msg;\
+	DWORD bytes_to_read = Hotkey::HookIsActive() ? 1024 : sizeof(bufData);
 
-// In the below macro (which is used in conjunction with the above), DWORD math gives
-// the right answer even if time_now has just recently wrapped around to zero.
-// MsgSleep() is used rather than SLEEP_AND_IGNORE_HOTKEYS to allow other hotkeys to
+// MsgSleep() is used rather than SLEEP_WITHOUT_INTERRUPTION to allow other hotkeys to
 // launch and interrupt (suspend) the operation.  It seems best to allow that, since
 // the user may want to press some fast window activation hotkeys, for example,
 // during the operation.  The operation will be resumed after the interrupting subroutine
 // finishes:
-#define LONG_OPERATION_UPDATE \
-	time_now = GetTickCount();\
-	if ((time_now - time_of_last_sleep) > how_often_to_sleep)\
-	{\
-		MsgSleep(sleep_duration);\
-		time_of_last_sleep = time_now;\
-	}
+#define LONG_OPERATION_UPDATE if (PeekMessage(&msg, NULL, 0, 0, PM_NOREMOVE)) MsgSleep(-1);
 
-// Same as the above except for SendKeys() and related functions (uses SLEEP_AND_IGNORE_HOTKEYS):
-#define LONG_OPERATION_UPDATE_FOR_SENDKEYS \
-{\
-	time_now = GetTickCount();\
-	if ((time_now - time_of_last_sleep) > how_often_to_sleep)\
-	{\
-		SLEEP_AND_IGNORE_HOTKEYS(sleep_duration);\
-		time_of_last_sleep = time_now;\
-	}\
-}
-
+// Same as the above except for SendKeys() and related functions (uses SLEEP_WITHOUT_INTERRUPTION):
+#define LONG_OPERATION_UPDATE_FOR_SENDKEYS  if (PeekMessage(&msg, NULL, 0, 0, PM_NOREMOVE)) SLEEP_WITHOUT_INTERRUPTION(-1);
 
 
 // Defining these here avoids awkwardness due to the fact that globaldata.cpp
@@ -240,6 +197,9 @@ struct global_struct
 	bool DetectHiddenWindows; // Whether to detect the titles of hidden parent windows.
 	bool DetectHiddenText;    // Whether to detect the text of hidden child windows.
 	__int64 LinesPerCycle; // Use 64-bits for this so that user can specify really large values.
+	int UninterruptedLineCountMax; // 32-bit for performance (since huge values seem unnecessary here).
+	int UninterruptibleTime;
+	int IntervalBeforeRest;
 	int WinDelay;  // negative values may be used as special flags.
 	int ControlDelay;  // negative values may be used as special flags.
 	int KeyDelay;  // negative values may be used as special flags.
@@ -251,9 +211,8 @@ struct global_struct
 	char FormatFloat[32];
 	char ErrorLevel[128]; // Big in case user put something bigger than a number in g_ErrorLevel.
 	HWND hWndLastUsed;  // In many cases, it's better to use g_ValidLastUsedWindow when referring to this.
-	HWND hWndToRestore;
+	//HWND hWndToRestore;
 	int MsgBoxResult;  // Which button was pressed in the most recent MsgBox.
-	bool WaitingForDialog;
 	bool IsPaused;
 };
 
@@ -262,11 +221,10 @@ inline void global_clear_state(global_struct *gp)
 {
 	*gp->ErrorLevel = '\0'; // This isn't the actual ErrorLevel: it's used to save and restore it.
 	// But don't reset g_ErrorLevel itself because we want to handle that conditional behavior elsewhere.
-	gp->hWndLastUsed = gp->hWndToRestore = NULL;
+	gp->hWndLastUsed = NULL;
+	//gp->hWndToRestore = NULL;
 	gp->MsgBoxResult = 0;
-	gp->WaitingForDialog = false;
 	gp->IsPaused = false;
-
 }
 
 inline void global_init(global_struct *gp)
@@ -285,6 +243,9 @@ inline void global_init(global_struct *gp)
 	// Not sure what the optimal default is.  1 seems too low (scripts would be very slow by default):
 	#define DEFAULT_BATCH_LINES 10
 	gp->LinesPerCycle = DEFAULT_BATCH_LINES;
+	gp->UninterruptedLineCountMax = 1000;  // High by default, since we want UninterruptibleTime usually to occur 1st.
+	gp->UninterruptibleTime = 15;  // Seems more likely to truly wait than 10 would, due to timer granularity.
+	gp->IntervalBeforeRest = -1;  // i.e. this new method is disabled by default.
 	gp->WinDelay = 100;  // AutoIt3's default is 250, which seems a little too high nowadays.
 	gp->ControlDelay = 20;
 	gp->KeyDelay = 10;   // AutoIt3's default.

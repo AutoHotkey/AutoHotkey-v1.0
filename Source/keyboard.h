@@ -22,6 +22,11 @@ GNU General Public License for more details.
 // The max number of keystrokes to Send prior to taking a break to pump messages:
 #define MAX_LUMP_KEYS 50
 
+// Logging keys to a file is disabled in the main version in an effort to prevent
+// AutoHotkey from being branded as a key logger or trojan by various security firms and
+// security software. Uncomment this line to re-enabled logging of keys to a file:
+// #define ENABLE_KEY_HISTORY_FILE
+
 // Maybe define more of these later, perhaps with ifndef (since they should be in the normal header, and probably
 // will be eventually):
 // ALREADY DEFINED: #define VK_HELP 0x2F
@@ -206,17 +211,30 @@ int SendChar(char aChar, mod_type aModifiers, KeyEventTypes aEventType, HWND aTa
 ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC = 0, HWND aTargetWindow = NULL
 	, bool aDoKeyDelay = false);
 
-ToggleValueType ToggleKeyState(vk_type vk, ToggleValueType aToggleValue);
+ToggleValueType ToggleKeyState(vk_type aVK, ToggleValueType aToggleValue);
+void ToggleNumlockWin9x();
+//void CapslockOffWin9x();
 
 modLR_type SetModifierState(mod_type aModifiersNew, modLR_type aModifiersLRnow);
 modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLRnow);
 void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLRnow, KeyEventTypes aKeyUp);
 
 mod_type GetModifierState();
-modLR_type GetModifierLRState();
-modLR_type GetModifierLRStateSimple();
+modLR_type GetModifierLRState(bool aExplicitlyGet = false);
 
-// Doesn't always seem to work as advertised, at least under WinXP:
+// The IsKeyDown9x() method is needed because GetKeyState() does not return the proper
+// state under Win9x, at least for the modifier keys under certain conditions.  The
+// AutoIt3 author indicates that GetAsyncKeyState() is also unreliable and he uses
+// this same method, so it seems best for now.  Specify GetAsyncKeyState() first due
+// to performance of short-circuit boolean:
+#define IsKeyDown9x(vk) (   (GetAsyncKeyState(vk) & 0x80000000) || ((GetKeyState(vk) & 0x8000))   )
+#define IsKeyDownNT(vk) (GetKeyState(vk) & 0x8000)
+#define IsKeyToggledOn(vk) (GetKeyState(vk) & 0x01)
+
+// GetAsyncKeyState() doesn't always seem to work as advertised, at least under WinXP
+// (the docs imply that it's supposed to fetch the *physical* state of the key).  But for now,
+// this is used for the script's GetKeyState command in case Windows 2003 or later operating
+// systems wind up implementing it properly:
 #define IsPhysicallyDown(vk) (GetAsyncKeyState(vk) & 0x80000000)
 
 #define VK_IS_MOUSE(vk) (vk == VK_LBUTTON || vk == VK_RBUTTON || vk == VK_MBUTTON\

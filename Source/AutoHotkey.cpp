@@ -40,11 +40,11 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 #else
 	#ifdef _DEBUG
 	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Find.aut";
-	//char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
+	char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
 	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test.ahk";
-	char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
+	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
 	#else
-	char *script_filespec = NAME_P ".ini";  // Use this extension for better file associate with editor(s).
+	char *script_filespec = NAME_P ".ini";  // Use this extension for better file association with editor(s).
 	#endif
 #endif
 
@@ -107,7 +107,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	global_init(&g);  // Set defaults prior to the below, since below might override them for AutoIt2 scripts.
 	if (g_script.Init(script_filespec, restart_mode) != OK)  // Set up the basics of the script, using the above.
 		return CRITICAL_ERROR;
-	// Set g_default now, reflecting any changes made to "g" above, in case ExecuteFromLine1(), below,
+	// Set g_default now, reflecting any changes made to "g" above, in case AutoExecSection(), below,
 	// never returns, perhaps because it contains an infinite loop (intentional or not):
 	CopyMemory(&g_default, &g, sizeof(global_struct));
 
@@ -205,11 +205,17 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	// even if the top part is something that's very involved and requires user
 	// interaction:
 	Hotkey::AllActivate();           // We want these active now in case auto-execute never returns (e.g. loop)
-	g_script.ExecuteFromLine1();     // Run the auto-execute part at the top of the script.
+	g_script.AutoExecSection();   // Run the auto-execute part at the top of the script.
 	if (!Hotkey::sHotkeyCount)       // No hotkeys are in effect.
 		if (!Hotkey::HookIsActive()) // And the user hasn't requested a hook to be activated.
 			g_script.ExitApp();      // We're done.
 
+	// The below is done even if AutoExecSectionTimeout() already set the values once.
+	// This is because when the AutoExecute section finally does finish, by definition it's
+	// supposed to store the global settings that are currently in effect as the default values.
+	// In other words, the only purpose of AutoExecSectionTimeout() is to handle cases where
+	// the AutoExecute section takes a long time to complete, or never completes (perhaps because
+	// it is being used by the script as a "backround thread" of sorts):
 	// Save the values of KeyDelay, WinDelay etc. in case they were changed by the auto-execute part
 	// of the script.  These new defaults will be put into effect whenever a new hotkey subroutine
 	// is launched.  Each launched subroutine may then change the values for its own purposes without
@@ -224,17 +230,6 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	// ErrorLevel set by another).  This reset was also done by LoadFromFile(), but we do it again
 	// here in case the auto-exectute section changed it:
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE);
-
-	// The A_AutoStart label is run only for persistent scripts (i.e. those that have hotkeys
-	// or that have a hook installed, perhaps to support Numlock always-on, for example).
-	// Its purpose is to launch a background "thread" (usually an infinite loop), not unlike ADLIB
-	// (but more limited since if interrupted, it will be suspended).  The reason for not launching
-	// infinite background loops from the auto-execute section is that the above call to
-	// ExecuteFromLine1() would never return in that case, which would disrupt all of the tasks
-	// done between ExecuteFromLine1() and here, such as setting the global defaults for things such
-	// as KeyDelay:
-	if (g_script.mAutoStartLabel)
-		g_script.mAutoStartLabel->mJumpToLine->ExecUntil(UNTIL_RETURN); // It's okay if this never returns.
 
 	// Call it in this special mode to kick off the main event loop.
 	// Be sure to pass something >0 for the first param or it will

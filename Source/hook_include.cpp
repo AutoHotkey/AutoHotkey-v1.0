@@ -923,7 +923,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	// i.e. it could be the counterpart key, such as End vs. NumpadEnd, located elsewhere on
 	// the keyboard, but we're not interested in those.  Also, Numlock must be ON because
 	// otherwise the driver will not generate those false-physical shift key events:
-	if (!(sc & 0x100) && (GetKeyState(VK_NUMLOCK) & 0x00000001))
+	if (!(sc & 0x100) && (IsKeyToggledOn(VK_NUMLOCK)))
 	{
 		switch(vk)
 		{

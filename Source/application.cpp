@@ -22,27 +22,7 @@ GNU General Public License for more details.
 #include "resources\resource.h"  // For ID_TRAY_OPEN.
 
 
-static UINT_PTR g_MainTimerID = 0;
-// Must be non-zero, so start at 1.  The first timers in the series are used by the
-// MessageBoxes:
-//enum OurTimers {TIMER_ID_MAIN = MAX_MSGBOXES + 2};  // +2 to give an extra margin of safety.
-
-#define KILL_MAIN_TIMER \
-if (g_MainTimerID && KillTimer(NULL, g_MainTimerID))\
-	g_MainTimerID = 0;
-
-// Realistically, SetTimer() called this way should never fail?  But the
-// event loop can't function properly without it, at least when there
-// are suspended subroutines.
-// MSDN docs for SetTimer(): "Windows 2000/XP: If uElapse is less than 10,
-// the timeout is set to 10."
-#define SET_MAIN_TIMER \
-if (!g_MainTimerID && !(g_MainTimerID = (BOOL)SetTimer(NULL, 0, SLEEP_INTERVAL, (TIMERPROC)NULL)))\
-	g_script.ExitApp("SetTimer() unexpectedly failed.");
-
-
-
-ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWindow)
+ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 // Returns a non-meaningful value (so that it can return the result of something, thus
 // effectively ignoring the result).  Callers should ignore it.  aSleepDuration can be
 // zero to do a true Sleep(0), or less than 0 to avoid sleeping or waiting at all
@@ -99,8 +79,10 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 	// inside GetMessage() as possible, since it's the keystroke/mouse engine
 	// whenever the hooks are installed.  Any time we're not in GetMessage() for
 	// any length of time (say, more than 20ms), keystrokes and mouse events
-	// will be lagged.  PeekMessage is probably almost as good, but it probably
-	// only clears out any waiting keys prior to returning.
+	// will be lagged.  PeekMessage() is probably almost as good, but it probably
+	// only clears out any waiting keys prior to returning.  CONFIRMED: PeekMessage()
+	// definitely routes to the hook, perhaps only if called regularly (i.e. a single
+	// isolated call might not help much).
 
 	// This var allows us to suspend the currently-running subroutine and run any
 	// hotkey events waiting in the message queue (if there are more than one, they
@@ -143,9 +125,27 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 	// Record the start time when the caller first called us so we can keep
 	// track of how much time remains to sleep (in case the caller's subroutine
 	// is suspended until a new subroutine is finished).  But for small sleep
-	// intervals, don't worry about it:
+	// intervals, don't worry about it.
 	// Note: QueryPerformanceCounter() has very high overhead compared to GetTickCount():
 	DWORD start_time = allow_early_return ? 0 : GetTickCount();
+
+	// This check is also done even if the main timer will be set (below) so that
+	// an initial check is done rather than waiting 10ms more for the first timer
+	// message to come in.  Some of our many callers would want this, and although some
+	// would not need it, there are so many callers that it seems best to just do it
+	// unconditionally, especially since it's not a high overhead call (e.g. it returns
+	// immediately if the tickcount is still the same as when it was last run).
+	// Another reason for doing this check immediately is that our msg queue might
+	// contains a time-consuming msg prior to our WM_TIMER msg, e.g. a hotkey msg.
+	// In that case, the hotkey would be processed and launched without us first having
+	// emptied the queue to discover the WM_TIMER msg.  In other words, WM_TIMER msgs
+	// might get buried in the queue behind others, so doing this check here should help
+	// ensure that timed subroutines are checked often enough to keep them running at
+	// their specified frequencies.
+	// Note that ExecUntil() no longer needs to call us solely for prevention of lag
+	// caused by the keyboard & mouse hooks, so checking the timers early, rather than
+	// immediately going into the GetMessage() state, should not be a problem:
+	CHECK_SCRIPT_TIMERS_IF_NEEDED
 
 	// Because this function is called recursively: for now, no attempt is
 	// made to improve performance by setting the timer interval to be
@@ -163,59 +163,47 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 	// time is beyond our finish time.  In addition, having more timers
 	// might be worse for overall system performance than having a single
 	// timer that pulses very frequently (because the system must keep
-	// them all up-to-date):
-	bool timer_is_needed = aSleepDuration > 0 && aMode == RETURN_AFTER_MESSAGES;
-	if (timer_is_needed)
+	// them all up-to-date).  UPDATE: Timer is now also needed whenever an
+	// aSleepDuration greater than 0 is about to be done and there are some
+	// script timers that need to be watched (this happens when aMode == WAIT_FOR_MESSAGES).
+	// UPDATE: Make this a macro so that it is dynamically resolved every time, in case
+	// the value of g_script.mTimerEnabledCount changes on-the-fly.
+	// UPDATE #2: The below has been changed in light of the fact that the main timer is
+	// now kept always-on whenever there is at least one enabled timed subroutine.
+	// This policy simplifies ExecUntil() and long-running commands such as FileSetAttrib:
+	bool we_turned_on_main_timer = aSleepDuration > 0 && aMode == RETURN_AFTER_MESSAGES && !g_MainTimerExists;
+	if (we_turned_on_main_timer)
 		SET_MAIN_TIMER
-
-	// Remove any WM_TIMER messages that are already in our queue because we don't
-	// want encounter them so early.  This is because most callers would want us to yield
-	// at least a little bit of time to other processes that need it, rather
-	// than returning early without our thread having been idle at all inside
-	// GetMessage().  This is because GetMessage() will put our thread to sleep in
-	// a way vastly more effective than Sleep()... a way that will wake up our thread
-	// almost the instant a message arrives for us (except when other processe(s)
-	// have the CPU maxed), or the instant any keyboard or mouse events occur if our keybd
-	// or mouse hook is installed (but in that case, our thread is apparently used by
-	// GetMessage() itself to call the hook functions without us having to do anything).
-	// If there are other CPU-intensive processes using all of their timeslices, I think
-	// it might be 20ms, 40ms, or more during which our thread is suspended by the OS's
-	// round-robin scheduler.  That's one way (and there are probably others) that there
-	// could be many WM_TIMER messages already the queue.
-	PurgeTimerMessages();
+	// Even if the above didn't turn on the timer, it may already be on due to g_script.mTimerEnabledCount
+	// being greater than zero.
 
 	// Only used when aMode == RETURN_AFTER_MESSAGES:
 	// True if the current subroutine was interrupted by another:
-	bool was_interrupted = false;
+	//bool was_interrupted = false;
 	bool sleep0_was_done = false;
 	bool empty_the_queue_via_peek = false;
-	int n_existing_threads;
 
 	HWND fore_window;
 	DWORD fore_pid;
 	char fore_class_name[32];
-
 	MSG msg;
+
 	for (;;)
 	{
-		// The script is idle (doing nothing and having no dialogs or suspended subroutines)
-		// whenever the aMode is the one set when we were first called by WinMain().  All
-		// other callers call this function with the other mode, and the script should not
-		// be considered idle in those cases:
-		g_IsIdle = (aMode == WAIT_FOR_MESSAGES);
-
 		if (aSleepDuration > 0 && !empty_the_queue_via_peek)
 		{
-			// Use GetMessage() whenever possible, rather than PeekMessage() or a technique such
-			// MsgWaitForMultipleObjects() because it's the "engine" that passes all keyboard
+			// Use GetMessage() whenever possible -- rather than PeekMessage() or a technique such
+			// MsgWaitForMultipleObjects() -- because it's the "engine" that passes all keyboard
 			// and mouse events immediately to the low-level keyboard and mouse hooks
 			// (if they're installed).  Otherwise, there's greater risk of keyboard/mouse lag.
-			if (GetMessage(&msg, NULL, 0, 0) == -1) // -1 is an error, 0 means WM_QUIT
+			// PeekMessage(), depending on how, and how often it's called, will also do this, but
+			// I'm not as confident in it.
+			if (GetMessage(&msg, NULL, 0, MSG_FILTER_MAX) == -1) // -1 is an error, 0 means WM_QUIT
 			{
 				// This probably can't happen since the above GetMessage() is getting any
 				// message belonging to a thread we already know exists (i.e. the one we're
-				// in now):
-				MsgBox("GetMessage() unexpectedly returned an error.  Press OK to continue running.");
+				// in now).
+				//MsgBox("GetMessage() unexpectedly returned an error.  Press OK to continue running.");
 				continue;
 			}
 			// else let any WM_QUIT be handled below.
@@ -224,7 +212,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 		{
 			// aSleepDuration <= 0 or "empty_the_queue_via_peek" is true, so we don't want
 			// to be stuck in GetMessage() for even 10ms:
-			if (!PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) // No more messages
+			if (!PeekMessage(&msg, NULL, 0, MSG_FILTER_MAX, PM_REMOVE)) // No more messages
 			{
 				// Since we're here, it means this recursion layer/instance of this
 				// function didn't encounter any hotkey messages because if it had,
@@ -243,20 +231,22 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 					Sleep(0);
 					sleep0_was_done = true;
 					// Now start a new iteration of the loop that will see if we
-					// received any messages during the up-to-20ms delay that
-					// just occurred.  It's done this way to minimize keyboard/mouse
+					// received any messages during the up-to-20ms delay (perhaps even more)
+					// that just occurred.  It's done this way to minimize keyboard/mouse
 					// lag (if the hooks are installed) that will occur if any key or
 					// mouse events are generated during that 20ms:
 					continue;
 				}
 				else // aSleepDuration is non-zero or we already did the Sleep(0)
+				{
 					// Function should always return OK in this case.  Also, was_interrupted
 					// will always be false because if this "aSleepDuration <= 0" call
 					// really was interrupted, it would already have returned in the
 					// hotkey cases of the switch().  UPDATE: was_interrupted can now
 					// be true since the hotkey case in the switch() doesn't return,
 					// relying on us to do it after making sure the queue is empty:
-					return IsCycleComplete(aSleepDuration, start_time, allow_early_return, was_interrupted);
+					return IsCycleComplete(aSleepDuration, start_time, allow_early_return);
+				}
 			}
 			// else Peek() found a message, so process it below.
 		}
@@ -270,8 +260,11 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 			// no new dialogs (e.g. MessageBox) can be created (perhaps no new
 			// windows of any kind):
 			g_script.ExitApp();
-			break;
+			continue;
 		case WM_TIMER:
+			if (msg.lParam) // Since this WM_TIMER is intended for a TimerProc, dispatch the msg instead.
+				break;
+			CHECK_SCRIPT_TIMERS_IF_NEEDED
 			if (aMode == WAIT_FOR_MESSAGES)
 				// Timer should have already been killed if we're in this state.
 				// But there might have been some WM_TIMER msgs already in the queue
@@ -279,14 +272,14 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 				// a caller is calling us with this aMode even though there
 				// are suspended subroutines (currently never happens).
 				// In any case, these are always ignored in this mode because
-				// the caller doesn't want us to ever return:
-				break;
-			if (aSleepDuration <= 0)
-				// This case is also handled specially above, so ignore WM_TIMER
-				// messages, which might occur due to the hotkey case of the switch()
-				// doing on final iteration in peek-mode (and perhaps in other ways):
-				break;
-			// Otherwise amode == RETURN_AFTER_MESSAGES:
+				// the caller doesn't want us to ever return.  UPDATE: This can now
+				// happen if there are any enabled timed subroutines we need to keep an
+				// eye on, which is why the mTimerEnabledCount value is checked above
+				// prior to starting a new iteration.
+				continue;
+			if (aSleepDuration <= 0) // In this case, WM_TIMER messages have already fulfilled their function, above.
+				continue;
+			// Otherwise aMode == RETURN_AFTER_MESSAGES:
 			// Realistically, there shouldn't be any more messages in our queue
 			// right now because the queue was stripped of WM_TIMER messages
 			// prior to the start of the loop, which means this WM_TIMER
@@ -298,34 +291,19 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 			// in preparation for ending this instance/layer, only to be possibly,
 			// but extremely rarely, interrupted/recursed yet again if that final
 			// peek were to detect a recursable message):
-			if (IsCycleComplete(aSleepDuration, start_time, allow_early_return, was_interrupted))
+			if (IsCycleComplete(aSleepDuration, start_time, allow_early_return))
 				return OK;
 			// Otherwise, stay in the blessed GetMessage() state until
 			// the time has expired:
-			break;
-		case AHK_HOOK_TEST_MSG:
-		{
-			char dlg_text[512];
-			snprintf(dlg_text, sizeof(dlg_text), "TEST MSG: %d (0x%X)  %d (0x%X)"
-				"\nCurrent Thread: 0x%X"
-				, msg.wParam, msg.wParam, msg.lParam, msg.lParam
-				, GetCurrentThreadId());
-			MsgBox(dlg_text);
-			break;
-		}
+			continue;
+
 		case WM_HOTKEY: // As a result of this app having previously called RegisterHotkey().
 		case AHK_HOOK_HOTKEY:  // Sent from this app's keyboard or mouse hook.
-			if (g_IgnoreHotkeys)
-				break;
-			if (aMode == RETURN_AFTER_MESSAGES)
-				// Adjust by +1 to convert g_nInterruptedSubroutines into the total number of
-				// hotkey "threads" that currently exist:
-				n_existing_threads = g_nInterruptedSubroutines + 1;
-			else // There shouldn't be any interrupted subroutines in this case, nor should there be any threads.
-				n_existing_threads = 0;
-			if (   n_existing_threads >= g_MaxThreadsTotal
+			// MSG_FILTER_MAX should prevent us from receiving these messages whenever
+			// g_AllowInterruption or g_AllowInterruptionForSub is false.
+			if (g_nThreads >= g_MaxThreadsTotal
 				&& !(ACT_IS_ALWAYS_ALLOWED(Hotkey::GetTypeOfFirstLine((HotkeyIDType)msg.wParam))
-					&& n_existing_threads < MAX_THREADS_LIMIT)   )
+					&& g_nThreads < MAX_THREADS_LIMIT)   )
 				// Allow only a limited number of recursion levels to avoid any chance of
 				// stack overflow.  So ignore this message.  Later, can devise some way
 				// to support "queuing up" these hotkey firings for use later when there
@@ -335,11 +313,41 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 				// might also make "infinite key loops" harder to catch because the rate
 				// of incoming hotkeys would be slowed down to prevent the subroutines from
 				// running concurrently.
-				break;
+				continue;
+				// It seems best not to buffer the key in the above case, since it might be a
+				// while before the number of threads drops low enough.
+
+			// Due to the key-repeat feature and the fact that most scripts use a value of 1
+			// for their #MaxThreadsPerHotkey, this check will often help average performance
+			// by avoiding a lot of unncessary overhead that would otherwise occur:
+			if (!Hotkey::PerformIsAllowed((HotkeyIDType)msg.wParam))
+			{
+				// The key is buffered in this case to boost the responsiveness of hotkeys
+				// that are being held down by the user to activate the keyboard's key-repeat
+				// feature.  This way, there will always be one extra event waiting in the queue,
+				// which will be fired almost the instant the previous iteration of the subroutine
+				// finishes (this above descript applies only when MaxThreadsPerHotkey is 1,
+				// which it usually is).
+				Hotkey::RunAgainAfterFinished((HotkeyIDType)msg.wParam);
+				continue;
+			}
+
+			// Always kill the main timer, for performance reasons and for simplicity of design,
+			// prior to embarking on new subroutine whose duration may be long (e.g. if BatchLines
+			// is very high or infinite, the called subroutine may not return to us for seconds,
+			// minutes, or more; during which time we don't want the timer running because it will
+			// only fill up the queue with WM_TIMER messages and thus hurt performance).
+			// UPDATE: But don't kill it if it should be always-on to support the existence of
+			// at least one enabled timed subroutine:
+			if (!g_script.mTimerEnabledCount)
+				KILL_MAIN_TIMER;
+
 			if (aMode == RETURN_AFTER_MESSAGES)
 			{
-				was_interrupted = true;
-				++g_nInterruptedSubroutines;
+				// Assert: g_nThreads should be greater than 0 in this mode, which means
+				// that there must be another thread besides the one we're about to create.
+				// That thread will be interrupted and suspended to allow this new one to run.
+				//was_interrupted = true;
 				// Save the current foreground window in case the subroutine that's about
 				// to be suspended is working with it.  Then, when the subroutine is
 				// resumed, we can ensure this window is the foreground one.  UPDATE:
@@ -350,7 +358,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 				// since the suspended subroutine resumes and would reassert its foreground
 				// window:
 				//g.hWndToRestore = aRestoreActiveWindow ? GetForegroundWindow() : NULL;
-				g.hWndToRestore = NULL;
+
 				// Also save the ErrorLevel of the subroutine that's about to be suspended.
 				// Current limitation: If the user put something big in ErrorLevel (very unlikely
 				// given its nature, but allowed) it will be truncated by this, if too large.
@@ -362,71 +370,68 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 				// to launch a new subroutine.
 			}
 
-			// Always kill the main timer, for performance reasons and for simplicity of design,
-			// prior to embarking on new subroutine whose duration may be long (e.g. if BatchLines
-			// is very high or infinite, the called subroutine may not return to us for seconds,
-			// minutes, or more; during which time we don't want the timer running because it will
-			// only fill up the queue with WM_TIMER messages and thus hurt performance.
-			KILL_MAIN_TIMER;
-
 			// Make every newly launched subroutine start off with the global default values that
 			// the user set up in the auto-execute part of the script (e.g. KeyDelay, WinDelay, etc.).
 			// However, we do not set ErrorLevel to NONE here because it's more flexible that way
 			// (i.e. the user may want one hotkey subroutine to use the value of ErrorLevel set by another):
 			CopyMemory(&g, &g_default, sizeof(global_struct));
 
-			// Always reset these two, after the saving to global_saved and restoring to defaults above,
-			// regardless of aMode:
-			g.hWndLastUsed = NULL;
-			g_script.mLinesExecutedThisCycle = 0;  // Doing this is somewhat debatable.
-			g_IsIdle = false;  // Make sure the state is correct since we're about to launch a subroutine.
-
 			// Just prior to launching the hotkey, update these values to support built-in
 			// variables such as A_TimeSincePriorHotkey:
 			g_script.mPriorHotkeyLabel = g_script.mThisHotkeyLabel;
 			g_script.mPriorHotkeyStartTime = g_script.mThisHotkeyStartTime;
 			g_script.mThisHotkeyLabel = Hotkey::GetLabel((HotkeyIDType)msg.wParam);
-			// Since we're here, we already had the opportunity to Sleep, which is why
-			// g_script.mLastSleepTime is also set to GetTickCount().  Doing this prevents
-			// an unnecessary 10ms sleep from being invoked by ExecUntil():
-			g_script.mThisHotkeyStartTime = g_script.mLastSleepTime = GetTickCount(); // Do this last, right before the PerformID().
+
+			// If the current quasi-thread is paused, the thread we're about to launch
+			// will not be, so the icon needs to be checked:
+			g_script.UpdateTrayIcon();
+
+			ENABLE_UNINTERRUPTIBLE_SUB
+
+			// Do this last, right before the PerformID():
+			// It seems best to reset these unconditionally, because the user has pressed a hotkey
+			// so would expect maximum responsiveness, rather than the risk that a "rest" will be
+			// done immediately by ExecUntil() just because mLinesExecutedThisCycle happens to be
+			// large some prior subroutine.  The same applies to mLastScriptRest, which is why
+			// that is reset also:
+			g_script.mLinesExecutedThisCycle = 0;
+			g_script.mThisHotkeyStartTime = g_script.mLastScriptRest = GetTickCount();
 
 			// Perform the new hotkey's subroutine:
-			if (Hotkey::PerformID((HotkeyIDType)msg.wParam) == CRITICAL_ERROR)
-				// The above should have already displayed the error.  Rather than
-				// calling PostQuitMessage(CRITICAL_ERROR) (in case the above didn't),
-				// it seems best just to exit here directly, since there may be messages
-				// in our queue waiting and we don't want to process them:
-				g_script.ExitApp(NULL, CRITICAL_ERROR);
+			++g_nThreads;
+			Hotkey::PerformID((HotkeyIDType)msg.wParam);
+			--g_nThreads;
+
+			DISABLE_UNINTERRUPTIBLE_SUB
 			g_LastPerformedHotkeyType = Hotkey::GetType((HotkeyIDType)msg.wParam); // For use with the KeyHistory cmd.
 
 			if (aMode == RETURN_AFTER_MESSAGES)
 			{
-				if (g_nInterruptedSubroutines > 0) // Check just in case because never want it to go negative.
-					--g_nInterruptedSubroutines;
-				// Restore the global values for the subroutine that was interrupted:
-				// Resume the original subroutine by returning, even if there
-				// are still messages waiting in the queue.  Always return OK
-				// to the caller because CRITICAL_ERROR was handled above:
-				CopyMemory(&g, &global_saved, sizeof(global_struct));
-				g_ErrorLevel->Assign(g.ErrorLevel);  // Restore the variable from the stored value.
-				// Last param of below call tells it never to restore, because the final
-				// loop iteration will do that if it's appropriate (i.e. avoid doing it
-				// twice in case the final peek-iteration discovers a recursable action):
-				if (g_UnpauseWhenResumed && g.IsPaused)
-				{
-					g_UnpauseWhenResumed = false;  // We've "used up" this unpause ticket.
-					g.IsPaused = false;
-					--g_nPausedSubroutines;
-				}
-				// else if it it's paused, it will automatically be resumed in a paused state
-				// because when we return from this function, we should be returning to
+				// The unpause logic is done immediately after the most recently suspended thread's
+				// global settings are restored so that that thread is set up properly to be resumed.
+				// Comments about macro:
+				//    g_UnpauseWhenResumed = false --> because we've "used up" this unpause ticket.
+				//    g_ErrorLevel->Assign(g.ErrorLevel) --> restores the variable from the stored value.
+				// If the thread to be resumed has not been unpaused, it will automatically be resumed in
+				// a paused state because when we return from this function, we should be returning to
 				// an instance of ExecUntil() (our caller), which should be in a pause loop still.
 				// But always update the tray icon in case the paused state of the subroutine
-				// we're about to resume is different from our previous paused state:
-				g_script.UpdateTrayIcon();
+				// we're about to resume is different from our previous paused state.  Do this even
+				// when the macro is used by CheckScriptTimers(), which although it might not techically
+				// need it, lends maintainability and peace of mind:
+				#define RESUME_UNDERLYING_THREAD \
+					CopyMemory(&g, &global_saved, sizeof(global_struct));\
+					g_ErrorLevel->Assign(g.ErrorLevel);\
+					if (g_UnpauseWhenResumed && g.IsPaused)\
+					{\
+						g_UnpauseWhenResumed = false;\
+						g.IsPaused = false;\
+						--g_nPausedThreads;\
+					}\
+					g_script.UpdateTrayIcon();
+				RESUME_UNDERLYING_THREAD
 
-				if (IsCycleComplete(aSleepDuration, start_time, allow_early_return, was_interrupted, true))
+				if (IsCycleComplete(aSleepDuration, start_time, allow_early_return))
 				{
 					// Check for messages once more in case the subroutine that just completed
 					// above didn't check them that recently.  This is done to minimize the time
@@ -439,76 +444,90 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 					// is resumed-after-suspension:
 					empty_the_queue_via_peek = true;
 					allow_early_return = true;
-					// Now it just falls out of the switch() and the loop does another iteration.
+					continue;  // i.e. end the switch() and have the loop do another iteration.
 				}
-				else
-					if (timer_is_needed)  // Turn the timer back on if it is needed.
-						SET_MAIN_TIMER
-						// and stay in the blessed GetMessage() state until the time has expired.
+				if (we_turned_on_main_timer) // Ensure the timer is back on since we still need it here.
+					SET_MAIN_TIMER // This won't do anything if it's already on.
+					// and stay in the blessed GetMessage() state until the time has expired.
 			}
-			break;
-		default:
-			// This is done here rather than as a case of the switch() because making
-			// it a case would prevent all keyboard input from being dispatched, and we
-			// need it to be dispatched for the cursor to be keyboard-controllable in
-			// the edit window:
-			if (msg.hwnd == g_hWndEdit && msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE)
+			continue;
+
+#ifdef _DEBUG
+		case AHK_HOOK_TEST_MSG:
+		{
+			char dlg_text[512];
+			snprintf(dlg_text, sizeof(dlg_text), "TEST MSG: %d (0x%X)  %d (0x%X)"
+				"\nCurrent Thread: 0x%X"
+				, msg.wParam, msg.wParam, msg.lParam, msg.lParam
+				, GetCurrentThreadId());
+			MsgBox(dlg_text);
+			continue;
+		}
+#endif
+
+		case WM_KEYDOWN:
+			if (msg.hwnd == g_hWndEdit && msg.wParam == VK_ESCAPE)
+			{
 				// This won't work if a MessageBox() window is displayed because its own internal
 				// message pump will dispatch the message to our edit control, which will just
 				// ignore it.  And avoiding setting the focus to the edit control won't work either
 				// because the user can simply click in the window to set the focus.  But for now,
 				// this is better than nothing:
 				ShowWindow(g_hWnd, SW_HIDE);  // And it's okay if this msg gets dispatched also.
-			// This little part is from the Miranda source code.  But it doesn't seem
-			// to provide any additional functionality: You still can't use keyboard
-			// keys to navigate in the dialog unless it's the topmost dialog.
-			// UPDATE: The reason it doens't work for non-topmost MessageBoxes is that
-			// this message pump isn't even the one running.  It's the pump of the
-			// top-most MessageBox itself, which apparently doesn't properly dispatch
-			// all types of messages to other MessagesBoxes.  However, keeping this
-			// here is probably a good idea because testing reveals that it does
-			// sometimes receive messages intended for MessageBox windows (which makes
-			// sense because our message pump here retrieves all thread messages).
-			// It might cause problems to dispatch such messages directly, since
-			// IsDialogMessage() is supposed to be used in lieu of DispatchMessage()
-			// for these types of messages:
-			if ((fore_window = GetForegroundWindow()) != NULL)  // There is a foreground window.
-			{
-				GetWindowThreadProcessId(fore_window, &fore_pid);
-				if (fore_pid == GetCurrentProcessId())  // It belongs to our process.
-				{
-					GetClassName(fore_window, fore_class_name, sizeof(fore_class_name));
-					if (!strcmp(fore_class_name, "#32770"))  // MessageBox(), InputBox(), or FileSelectFile() window.
-						if (IsDialogMessage(fore_window, &msg))  // This message is for it, so let it process it.
-							continue;  // This message is done.
-				}
+				continue;
 			}
-			// Translate keyboard input for any of our thread's windows that need it:
-			if (!g_hAccelTable || !TranslateAccelerator(g_hWnd, g_hAccelTable, &msg))
-			{
-				TranslateMessage(&msg);
-				// This just routes the message to the WindowProc() of the
-				// window the message was intended for (e.g. if our main window is visible
-				// or if we have a dialog window... though I think IsDialog() is supposed
-				// to be used for those, not Dispatch():
-				DispatchMessage(&msg);
-			}
+			// Otherwise, break so that the messages will get dispatched.  We need the other
+			// WM_KEYDOWN msgs to be dispatched so that the cursor is keyboard-controllable in
+			// the edit window:
+			break;
 		} // switch()
+
+		// If a "continue" statement wasn't encountered somewhere in the switch(), we want to
+		// process this message in a more generic way:
+		// This little part is from the Miranda source code.  But it doesn't seem
+		// to provide any additional functionality: You still can't use keyboard
+		// keys to navigate in the dialog unless it's the topmost dialog.
+		// UPDATE: The reason it doens't work for non-topmost MessageBoxes is that
+		// this message pump isn't even the one running.  It's the pump of the
+		// top-most MessageBox itself, which apparently doesn't properly dispatch
+		// all types of messages to other MessagesBoxes.  However, keeping this
+		// here is probably a good idea because testing reveals that it does
+		// sometimes receive messages intended for MessageBox windows (which makes
+		// sense because our message pump here retrieves all thread messages).
+		// It might cause problems to dispatch such messages directly, since
+		// IsDialogMessage() is supposed to be used in lieu of DispatchMessage()
+		// for these types of messages:
+		if ((fore_window = GetForegroundWindow()) != NULL)  // There is a foreground window.
+		{
+			GetWindowThreadProcessId(fore_window, &fore_pid);
+			if (fore_pid == GetCurrentProcessId())  // It belongs to our process.
+			{
+				GetClassName(fore_window, fore_class_name, sizeof(fore_class_name));
+				if (!strcmp(fore_class_name, "#32770"))  // MessageBox(), InputBox(), or FileSelectFile() window.
+					if (IsDialogMessage(fore_window, &msg))  // This message is for it, so let it process it.
+						continue;  // This message is done, so start a new iteration to get another msg.
+			}
+		}
+		// Translate keyboard input for any of our thread's windows that need it:
+		if (!g_hAccelTable || !TranslateAccelerator(g_hWnd, g_hAccelTable, &msg))
+		{
+			TranslateMessage(&msg);
+			DispatchMessage(&msg); // This is needed to send keyboard input to various windows and for some WM_TIMERs.
+		}
 	} // infinite-loop
 }
 
 
 
-ResultType IsCycleComplete(int aSleepDuration, DWORD aStartTime, bool aAllowEarlyReturn
-	, bool aWasInterrupted, bool aNeverRestoreWnd)
+ResultType IsCycleComplete(int aSleepDuration, DWORD aStartTime, bool aAllowEarlyReturn)
 // This function is used just to make MsgSleep() more readable/understandable.
 {
 	// Note: Even if TickCount has wrapped due to system being up more than about 49 days,
 	// DWORD math still gives the right answer as long as aStartTime itself isn't more
 	// than about 49 days ago. Note: must cast to int or any negative result will be lost
 	// due to DWORD type:
-	DWORD time_now = GetTickCount();
-	if (!aAllowEarlyReturn && (int)(aSleepDuration - (time_now - aStartTime)) > SLEEP_INTERVAL_HALF)
+	DWORD tick_now = GetTickCount();
+	if (!aAllowEarlyReturn && (int)(aSleepDuration - (tick_now - aStartTime)) > SLEEP_INTERVAL_HALF)
 		// Early return isn't allowed and the time remaining is large enough that we need to
 		// wait some more (small amounts of remaining time can't be effectively waited for
 		// due to the 10ms granularity limit of SetTimer):
@@ -519,48 +538,140 @@ ResultType IsCycleComplete(int aSleepDuration, DWORD aStartTime, bool aAllowEarl
 	// recursion level and not by this one), since the CPU will have been
 	// given a rest, which is the main (perhaps only?) reason for using BatchLines
 	// (e.g. to be more friendly toward time-critical apps such as games,
-	// video capture, video playback):
+	// video capture, video playback).  UPDATE: mLastScriptRest is also reset
+	// here because it has a very similar purpose.
 	if (aSleepDuration >= 0)
+	{
 		g_script.mLinesExecutedThisCycle = 0;
-
-	// Normally only update g_script.mLastSleepTime when a non-zero MsgSleep() has
-	// occurred.  This is because lesser sleeps never put us into the GetMessage()
-	// state, and thus the keyboard & mouse hooks might cause key/mouse lag if
-	// we fail call GetMessage() consistently every 10 to 50ms.
-	if (aSleepDuration > 0)
-		g_script.mLastSleepTime = time_now;
+		g_script.mLastScriptRest = tick_now;
+	}
 
 	// Kill the timer only if we're about to return OK to the caller since the caller
-	// would still need the timer if FAIL was returned above.
-	// Note: Since we're here, g_MainTimerID should be true.
-	KILL_MAIN_TIMER
+	// would still need the timer if FAIL was returned above.  But don't kill it if
+	// there are any enabled timed subroutines, because the current policy it to keep
+	// the main timer always-on in those cases:
+	if (!g_script.mTimerEnabledCount)
+		KILL_MAIN_TIMER
 
-	// Check g.WaitingForDialog because don't want to restore the foreground
-	// window for a subroutine that was waiting for user-input in a MessageBox
-	// or InputBox window.  This is because that subroutine was obviously not
-	// "working with" any window, and it's far better to avoid restoring when
-	// there's any doubt:
-	if (g.hWndToRestore != NULL && !aNeverRestoreWnd && aWasInterrupted
-		&& aSleepDuration <= SLEEP_INTERVAL && !g.WaitingForDialog && !g_TrayMenuIsVisible)
-	{
-		// If the suspended subroutine was suspended during a very short rest period,
-		// it probably didn't expect the active window to change.  So restore it
-		// to the foreground.  This is a little bit iffy because the suspended
-		// subroutine might not even have been using the active window, and restoring
-		// it this way might then be incorrect.  However, one case it does make sense
-		// (and there are probably others) is during a Send command that gets interrupted.
-		// The old window should be reactivated to avoid the keystrokes going to the wrong
-		// window.  I've tested it with this case and the Send command works well even when
-		// interrupted by another hotkey that changes the active window.
-		// But, this all needs more review to determine what would be correct most often to do:
-		SetForegroundWindowEx(g.hWndToRestore);
-
-		// e.g. In case window animation is on and it takes a while to actually be active.
-		// Note: this is indirectly recursive, but doesn't seem capable of causing
-		// an infinite loop & stack fault:
-		DoWinDelay;
-	}
 	return OK;
+}
+
+
+
+void CheckScriptTimers()
+// Caller should already have checked the value of g_script.mTimerEnabledCount to ensure it's
+// greater than zero, since we don't check that here (for performance).
+// This function will go through the list of timed subroutines only once and then return to its caller.
+// It does it only once so that it won't keep a thread beneath it permanently suspended if the sum
+// total of all timer durations is too large to be run at their specified frequencies.
+// This function is allowed to be called reentrantly, which handles certain situations better:
+// 1) A hotkey subroutine interrupted and "buried" one of the timer subroutines in the stack.
+//    In this case, we don't want all the timers blocked just because that one is, so reentrant
+//    calls from ExecUntil() are allowed, and they might discover other timers to run.
+// 2) If the script is idle but one of the timers winds up taking a long time to execute (perhaps
+//    it gets stuck in a long WinWait), we want a reentrant call (from MsgSleep() in this example)
+//    to launch any other enabled timers concurrently with the first, so that they're not neglected
+//    just because one of the timers happens to be long-running.
+// Of course, it's up to the user to design timers so that they don't cause problems when they
+// interrupted hotkey subroutines, or when they themselves are interrupted by hotkey subroutines
+// or other timer subroutines.
+{
+
+	// When this is true, such as during a SendKeys() operation, it seems best not to launch any new
+	// timed subroutines.  The reasons for this are similar to the reasons for not allowing hotkeys
+	// to fire during such times.  Those reasons are discussed in other comments.  In addition,
+	// it seems best as a policy not to allow timed subroutines to run while the script's current
+	// quasi-thread is paused.  Doing so would make the tray icon flicker (were it even updated below,
+	// which it currently isn't) and in any case is probably not what the user would want.  Most of the
+	// time, the user would want all timed subroutines stopped while the current thread is paused.
+	// And even if this weren't true, the confusion caused by the subroutines still running even when
+	// the current thread is paused isn't worth defaulting to the opposite approach.  In the future,
+	// and if there's demand, perhaps a config option can added that allows a different default behavior.
+	// UPDATE: It seems slightly better (more consistent) to disallow all timed subroutines whenever
+	// there is even one paused thread anywhere in the "stack":
+	if (!INTERRUPTIBLE || g_nPausedThreads > 0 || g_nThreads >= g_MaxThreadsTotal)
+		return; // Above: To be safe (prevent stack faults) don't allow max threads to be exceeded.
+
+	ScriptTimer *timer;
+	UINT n_ran_subroutines;
+	DWORD tick_start;
+	global_struct global_saved;
+
+	// Note: It seems inconsequential if a subroutine that the below loop executes causes a
+	// new timer to be added to the linked list while the loop is still enumerating the timers.
+
+	for (n_ran_subroutines = 0, timer = g_script.mFirstTimer; timer != NULL; timer = timer->mNextTimer)
+	{
+		// Call GetTickCount() every time in case a previous iteration of the loop took a long
+		// time to execute:
+		if (timer->mEnabled && timer->mExistingThreads < 1
+			&& (tick_start = GetTickCount()) - timer->mTimeLastRun >= (DWORD)timer->mPeriod)
+		{
+			if (!n_ran_subroutines)
+			{
+				// Since this is the first subroutine that will be launched during this call to
+				// this function, we know it will wind up running at least one subroutine, so
+				// certain changes are made:
+				// Increment the count of quasi-threads only once because this instance of this
+				// function will never create more than 1 thread (i.e. if there is more than one
+				// enabled timer subroutine, the will always be run sequentially by this instance).
+				// If g_nThreads is zero, incremented it will also effectively mark the script as
+				// non-idle, the main consequence being that an otherwise-idle script can be paused
+				// if the user happens to do it at the moment a timed subroutine is running, which
+				// seems best since some timed subroutines might take a long time to run:
+				++g_nThreads;
+
+				// Next, save the current state of the globals so that they can be restored just prior
+				// to returning to our caller:
+				strlcpy(g.ErrorLevel, g_ErrorLevel->Contents(), sizeof(g.ErrorLevel)); // Save caller's errorlevel.
+				CopyMemory(&global_saved, &g, sizeof(global_struct));
+				// But never kill the main timer, since the mere fact that we're here means that
+				// there's at least one enabled timed subroutine.  Though later, performance can
+				// be optimized by killing it if there's exactly one enabled subroutine, or if
+				// all the subroutines are already in a running state (due to being buried beneath
+				// the current quasi-thread).  However, that might introduce unwanted complexity
+				// in other places that would need to start up the timer again because we stopped it, etc.
+			}
+
+			// This should slightly increase the expectation that any short timed subroutine will
+			// run all the way through to completion rather than being interrupted by the press of
+			// a hotkey, and thus potentially buried in the stack:
+			g_script.mLinesExecutedThisCycle = 0;
+
+			// This next line is necessary in case a prior iteration of our loop invoked a different
+			// timed subroutine that changed any of the global struct's values.  In other words, make
+			// every newly launched subroutine start off with the global default values that
+			// the user set up in the auto-execute part of the script (e.g. KeyDelay, WinDelay, etc.).
+			// However, we do not set ErrorLevel to NONE here because it's more flexible that way
+			// (i.e. the user may want one hotkey subroutine to use the value of ErrorLevel set by another):
+			CopyMemory(&g, &g_default, sizeof(global_struct));
+
+			ENABLE_UNINTERRUPTIBLE_SUB
+
+			++timer->mExistingThreads;
+			timer->mLabel->mJumpToLine->ExecUntil(UNTIL_RETURN, 0);
+			--timer->mExistingThreads;
+
+			DISABLE_UNINTERRUPTIBLE_SUB
+
+
+			// Seems better to store the start time rather than the finish time, though it's clearly
+			// debatable.  The reason is that it's sometimes more important to ensure that a given
+			// timed subroutine is *begun* at the specified interval, rather than assuming that
+			// the specified interval is the time between when the prior run finished and the new
+			// one began.  This should make timers behave more consistently (i.e. how long a timed
+			// subroutine takes to run SHOULD NOT affect its *apparent* frequency, which is number
+			// of times per second or per minute that we actually attempt to run it):
+			timer->mTimeLastRun = tick_start;
+			++n_ran_subroutines;
+		}
+	}
+
+	if (n_ran_subroutines) // Since at least one subroutine was run above, restore various values for our caller.
+	{
+		--g_nThreads;  // Since this instance of this function only had one thread in use at a time.
+		RESUME_UNDERLYING_THREAD // For explanation, see comments where the macro is defined.
+	}
 }
 
 
@@ -576,4 +687,48 @@ VOID CALLBACK DialogTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
 	// the MessageBox() returns 0:
 	EndDialog(hWnd, AHK_TIMEOUT);
 	KillTimer(hWnd, idEvent);
+}
+
+
+
+VOID CALLBACK AutoExecSectionTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
+// See the comments in AutoHotkey.cpp for an explanation of this function.
+{
+	// Since this was called, it means the AutoExec section hasn't yet finished (otherwise
+	// this timer would have been killed before we got here).  UPDATE: I don't think this is
+	// necessarily true.  I think it's possible for the WM_TIMER msg (since even TimerProc()
+	// timers use WM_TIMER msgs) to be still buffered in the queue even though its timer
+	// has been killed (killing the timer does not auto-purge any pending messages for
+	// that timer, and it is risky/problematic to try to do so manually).  Therefore, although
+	// we kill the timer here, we also do a double check further below to make sure
+	// the desired action hasn't already occurred.  Finally, the macro is used here because
+	// it's possible that the timer has already been killed, so we don't want to risk any
+	// problems that might arise from killing a non-existent timer (which this prevents):
+	KILL_AUTOEXEC_TIMER
+
+	// This is a double-check because it's possible for the WM_TIMER message to have
+	// been received (thus calling this TimerProc() function) even though the timer
+	// was already killed by AutoExecSection().  In that case, we don't want to update
+	// the global defaults again because the g struct might have incorrect/unintended
+	// values by now:
+	if (!g_script.AutoExecSectionIsRunning)
+		return;
+
+	// Otherwise:
+	CopyMemory(&g_default, &g, sizeof(global_struct));
+	global_clear_state(&g_default);  // Only clear g_default, not g.
+	// And since the AutoExecute is taking a long time (or might never complete), we now
+	// allow interruptions such as hotkeys and timed subroutines. Use g_AllowInterruptionForSub
+	// vs. g_AllowInterruption in case commands in the AutoExecute section need exclusive use
+	// of g_AllowInterruption (i.e. they might change its value to false and then back to true,
+	// which would interfere with our use of that var):
+	g_AllowInterruptionForSub = true;
+}
+
+
+
+VOID CALLBACK UninteruptibleTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
+{
+	KILL_UNINTERRUPTIBLE_TIMER // Best to use the macro so that g_UninterruptibleTimerExists is reset to false.
+	g_AllowInterruptionForSub = true;
 }

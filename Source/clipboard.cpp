@@ -326,10 +326,11 @@ ResultType Clipboard::Open(int aAttempts, int aRetryInterval)
 			mIsOpen = true;
 			return OK;
 		}
-		// Use SLEEP_AND_IGNORE_HOTKEYS to prevent MainWindowProc() from accepting new hotkeys
+		// Use SLEEP_WITHOUT_INTERRUPTION to prevent MainWindowProc() from accepting new hotkeys
 		// during our operation, since a new hotkey subroutine might interfere with
-		// what we're doing here (e.g. if it tries to use the clipboard):
-		SLEEP_AND_IGNORE_HOTKEYS(aRetryInterval)
+		// what we're doing here (e.g. if it tries to use the clipboard, or perhaps overwrites
+		// the deref buffer if this object's caller gave it any pointers into that memory area):
+		SLEEP_WITHOUT_INTERRUPTION(aRetryInterval)
 	}
 	return FAIL;
 }

@@ -30,7 +30,6 @@ extern HINSTANCE g_hInstance;
 
 extern modLR_type g_modifiersLR_logical;   // Tracked by hook (if hook is active).
 extern modLR_type g_modifiersLR_physical;  // Same as above except it's which modifiers are PHYSICALLY down.
-extern modLR_type g_modifiersLR_get;  // From GetKeyState().
 
 extern bool g_PhysicalKeyState[VK_MAX + 1];
 
@@ -45,11 +44,14 @@ extern bool g_AllowOnlyOneInstance;
 extern bool g_NoTrayIcon;
 extern bool g_AllowSameLineComments;
 extern char g_LastPerformedHotkeyType;
-extern bool g_IsIdle;
-extern bool g_IgnoreHotkeys;
+extern bool g_AllowInterruption;
+extern bool g_AllowInterruptionForSub;
+extern bool g_MainTimerExists;
+extern bool g_UninterruptibleTimerExists;
+extern bool g_AutoExecTimerExists;
 extern bool g_IsSuspended;
-extern int g_nInterruptedSubroutines;
-extern int g_nPausedSubroutines;
+extern int g_nThreads;
+extern int g_nPausedThreads;
 extern bool g_UnpauseWhenResumed;
 
 // This value is the absolute limit:
@@ -117,7 +119,10 @@ inline VarSizeType GetBatchLines(char *aBuf = NULL)
 {
 	char buf[256];
 	char *target_buf = aBuf ? aBuf : buf;
-	ITOA64(g.LinesPerCycle, target_buf);
+	if (g.IntervalBeforeRest >= 0) // Have this new method take precedence, if it's in use by the script.
+		sprintf(target_buf, "%dms", g.IntervalBeforeRest); // Not snprintf().
+	else
+		ITOA64(g.LinesPerCycle, target_buf);
 	return (VarSizeType)strlen(target_buf);
 }
 

@@ -853,6 +853,14 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 {
 	char buf_temp[2048];  // For various uses.
 
+	// Static so that WM_ENTERMENULOOP & WM_EXITMENULOOP can work with it.
+	// Relies on the fact that ENTER always precedes EXIT, and that an EXIT always
+	// eventually follows an ENTER.  But since the tray menu also generates these messages,
+	// must use a separate variable for that to prevent the ENTERMENULOOP message
+	// from overwriting the value established earlier when the tray menu was first opened.
+	static bool static_was_interruptible_before;
+	bool tray_was_interruptible_before;
+
 	switch (iMsg)
 	{
 	case WM_COMMAND: // If an application processes this message, it should return zero.
@@ -902,7 +910,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			return 0;
 		case ID_TRAY_PAUSE:
 		case ID_FILE_PAUSE:
-			if (!g.IsPaused && g_IsIdle)
+			if (!g.IsPaused && g_nThreads < 1)
 			{
 				MsgBox("The script cannot be paused while it is doing nothing.  If you wish to prevent new"
 					" hotkey subroutines from running, use Suspend instead.");
@@ -910,9 +918,9 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 				return 0;
 			}
 			if (g.IsPaused)
-				--g_nPausedSubroutines;
+				--g_nPausedThreads;
 			else
-				++g_nPausedSubroutines;
+				++g_nPausedThreads;
 			g.IsPaused = !g.IsPaused;
 			g_script.UpdateTrayIcon();
 			CheckMenuItem(GetMenu(g_hWnd), ID_FILE_PAUSE, g.IsPaused ? MF_CHECKED : MF_UNCHECKED);
@@ -1005,16 +1013,41 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			// which is probably a good idea since most hotkeys change the foreground window and if that
 			// happens, the menu cannot be dismissed (ever?) except by selecting one of the items in the
 			// menu (which is often undesirable).
+			// This next macro is used to prevent timed subroutines from running while the tray menu
+			// or main menu is in use.  This is documented behavior, and is desirable most of the time
+			// anyway.  But not to do this would produce strange effects because any timed subroutine
+			// that took a long time to run might keep us away from the "menu loop", which would result
+			// in the menu becoming temporarily unreponsive while the user is in it (and probably other
+			// undesired effects):
+			#define MENU_NO_INTERRUPT(was_interruptible_before) \
+			{\
+				was_interruptible_before = g_AllowInterruption;\
+				if (was_interruptible_before)\
+					g_AllowInterruption = false;\
+			}
+			MENU_NO_INTERRUPT(tray_was_interruptible_before)
 			g_TrayMenuIsVisible = true;
 			TrackPopupMenuEx(hMenu, TPM_LEFTALIGN | TPM_LEFTBUTTON,	pt.x, pt.y, hWnd, NULL);
 			g_TrayMenuIsVisible = false;
 			DestroyMenu(hMenu);
 			PostMessage(hWnd, WM_NULL, 0, 0); // MSDN recommends this to prevent menu from closing on 2nd click.
+			#define MENU_RESTORE_INTERRUPT(was_interruptible_before) if (was_interruptible_before) g_AllowInterruption = true;
+			MENU_RESTORE_INTERRUPT(tray_was_interruptible_before)
 			return 0;
 		}
 		} // Inner switch()
 		break;
 	} // case AHK_NOTIFYICON
+
+	case WM_ENTERMENULOOP:
+		// One of the menus in the menu bar has been displayed, and the we know the user is is still in
+		// the menu bar, even moving to different menus and/or menu items, until WM_EXITMENULOOP is received.
+		MENU_NO_INTERRUPT(static_was_interruptible_before)
+		break; // Let DefWindowProc() handle it from here.
+
+	case WM_EXITMENULOOP:
+		MENU_RESTORE_INTERRUPT(static_was_interruptible_before)
+		break; // Let DefWindowProc() handle it from here.
 
 	case AHK_DIALOG:  // User defined msg sent from MsgBox() or FileSelectFile().
 	{
@@ -1023,18 +1056,6 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		// do this rather than incurring the delay and overhead of a MsgSleep() call:
 		CLOSE_CLIPBOARD_IF_OPEN;
 		
-		// Since we're here, it means the modal dialog's pump is now running and the script
-		// that displayed the dialog is waiting for the dialog to finish.  Because of this,
-		// the main timer should not be left enabled because otherwise timer messages will
-		// just pile up in our thread's message queue (since our main msg pump isn't running),
-		// which probably hurts performance.  The main timer is owned by the thread rather
-		// than the main window because there seems to be cases where the timer message
-		// is sent directly to this procedure, bypassing the main msg pump entirely,
-		// which is not what we want.  UPDATE: Handling of the timer has been simplified,
-		// so it should now be impossible for the timer to be active if we're here, so
-		// this isn't necessary:
-		//PURGE_AND_KILL_MAIN_TIMER
-
 		// Ensure that the app's top-most window (the modal dialog) is the system's
 		// foreground window.  This doesn't use FindWindow() since it can hang in rare
 		// cases.  And GetActiveWindow, GetTopWindow, GetWindow, etc. don't seem appropriate.
@@ -1058,7 +1079,10 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			//SendMessage(top_box, WM_SETICON, ICON_SMALL, main_icon);
 
 			if ((UINT)wParam > 0)
-				// Caller told us to establish a timeout for this modal dialog (currently always MessageBox):
+				// Caller told us to establish a timeout for this modal dialog (currently always MessageBox).
+				// In addition to any other reasons, the first param of the below must not be NULL because
+				// that would cause the 2nd param to be ignored.  We want the 2nd param to be the actual
+				// ID assigned to this timer.
 				SetTimer(top_box, g_nMessageBoxes, (UINT)wParam * 1000, DialogTimeout);
 		}
 		// else: if !top_box: no error reporting currently.
@@ -1068,17 +1092,19 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 	case WM_HOTKEY: // As a result of this app having previously called RegisterHotkey().
 	case AHK_HOOK_HOTKEY:  // Sent from this app's keyboard or mouse hook.
 	{
-		if (g_IgnoreHotkeys)
-			// Used to prevent runaway hotkeys, or too many happening due to key-repeat feature.
-			// It can also be used to prevent a call to MsgSleep() from accepting new hotkeys
-			// in cases where the caller's activity might be interferred with by the launch
-			// of a new hotkey subroutine, such as reading or writing to the clipboard:
-			return 0;
 		// Post it to the thread, just in case the OS tries to be "helpful" and
 		// directly call the WindowProc (i.e. this function) rather than actually
 		// posting the message.  We don't want to be called, we want the main loop
 		// to handle this message:
 		PostThreadMessage(GetCurrentThreadId(), iMsg, wParam, lParam);
+		// The message is posted unconditionally (above), but the processing of it will be deferred
+		// if hotkeys are not allowed to be activated right now:
+		if (!INTERRUPTIBLE)
+			// Used to prevent runaway hotkeys, or too many happening due to key-repeat feature.
+			// It can also be used to prevent a call to MsgSleep() from accepting new hotkeys
+			// in cases where the caller's activity might be interferred with by the launch
+			// of a new hotkey subroutine, such as reading or writing to the clipboard:
+			return 0;
 		if (g_TrayMenuIsVisible || (iMsg == AHK_HOOK_HOTKEY && lParam && g_hWnd == GetForegroundWindow()))
 		{
 			// Ok this is a little strange, but the thought here is that if the tray menu is
@@ -1094,7 +1120,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			// when it doesn't need to be, and then might have some undesirable side-effect
 			// since I believe it has other purposes besides dismissing menus).  But such
 			// side effects should be minimal since WM_CANCELMODE mode is only set if
-			// this AutoHotkey instance's own main window is active:
+			// this AutoHotkey instance's own main window is active (foreground):
 			SendMessage(hWnd, WM_CANCELMODE, 0, 0);
 			// The menu is now gone because the above should have called this function
 			// recursively to close the it.  Now, rather than continuing in this
@@ -1115,16 +1141,22 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			// In keeping with the above, don't return:
 			//return 0;
 		}
-		MsgSleep();  // Now call the main loop to handle the message we just posted (and any others).
+		// Now call the main loop to handle the message we just posted (and any others):
+		MsgSleep(-1);
 		return 0; // Not sure if this is the correct return value.  It probably doesn't matter.
 	}
 
+	case WM_TIMER:
+		// Since we're here, the receipt of this msg indicates that g_script.mTimerEnabledCount > 0,
+		// so it performs a little better to call it directly vs. CHECK_SCRIPT_TIMERS_IF_NEEDED:
+		CheckScriptTimers();
+		return 0;
+
 	case AHK_KEYHISTORY:
-		// Logging keys to a file is disabled in the main version in an effort to prevent
-		// AutoHotkey from being branded as a key logger or trojan by various security firms and
-		// security software. Uncomment out the next 2 lines to re-enabled logging of keys to a file:
-		//KeyHistoryToFile(NULL, ((KeyHistoryItem *)wParam)->event_type, ((KeyHistoryItem *)wParam)->key_up
-		//	, ((KeyHistoryItem *)wParam)->vk, ((KeyHistoryItem *)wParam)->sc);
+#ifdef ENABLE_KEY_HISTORY_FILE
+		KeyHistoryToFile(NULL, ((KeyHistoryItem *)wParam)->event_type, ((KeyHistoryItem *)wParam)->key_up
+			, ((KeyHistoryItem *)wParam)->vk, ((KeyHistoryItem *)wParam)->sc);
+#endif
 		return 0;
 
 	case WM_SYSCOMMAND:
@@ -1140,6 +1172,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			return 0;
 		}
 		break;
+
 	case WM_DESTROY:
 		// MSDN: If an application processes this message, it should return zero.
 		if (hWnd == g_hWnd) // i.e. not the SplashText window or anything other than the main.
@@ -1173,6 +1206,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		// (perhaps the splash window):
 		// Let DefWindowProc() handle it:
 		break;
+
 	case WM_CREATE:
 		// MSDN: If an application processes this message, it should return zero to continue
 		// creation of the window. If the application returns 1, the window is destroyed and
@@ -1332,13 +1366,13 @@ ResultType InputBox(Var *aOutputVar, char *aTitle, char *aText, bool aHideInput,
 	g_InputBox[g_nInputBoxes].ypos = aY;
 	g_InputBox[g_nInputBoxes].output_var = aOutputVar;
 	g_InputBox[g_nInputBoxes].password_char = aHideInput ? '*' : '\0';
-	g.WaitingForDialog = true;
-	++g_nInputBoxes;
+
 	// Specify NULL as the owner since we want to be able to have the main window in the foreground
 	// even if there are InputBox windows:
+	++g_nInputBoxes;
 	int result = (int)DialogBox(g_hInstance, MAKEINTRESOURCE(IDD_INPUTBOX), NULL, InputBoxProc);
 	--g_nInputBoxes;
-	g.WaitingForDialog = false;  // IsCycleComplete() relies on this.
+
 	if (result == -1)
 	{
 		MsgBox("The InputBox window could not be displayed.");
@@ -1622,8 +1656,17 @@ ResultType Line::MouseClickDrag(vk_type aVK, int aX1, int aY1, int aX2, int aY2,
 	//	aSpeed = 2;
 
 	// Always sleep a certain minimum amount of time between events to improve reliability,
-	// but allow the user to specify a higher time if desired:
-	#define MOUSE_SLEEP if (g.MouseDelay >= 0) SLEEP_AND_IGNORE_HOTKEYS(g.MouseDelay)
+	// but allow the user to specify a higher time if desired.  Note that for Win9x,
+	// a true Sleep() is done because it is much more accurate than the MsgSleep() method,
+	// at least on Win98SE when short sleeps are done:
+	#define MOUSE_SLEEP \
+		if (g.MouseDelay >= 0)\
+		{\
+			if (g.MouseDelay < 25 && g_os.IsWin9x())\
+				Sleep(g.MouseDelay);\
+			else\
+				SLEEP_WITHOUT_INTERRUPTION(g.MouseDelay)\
+		}
 
 	// Do the drag operation
 	switch (aVK)
@@ -2722,19 +2765,14 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 	if (options & 0x01)
 		ofn.Flags |= OFN_FILEMUSTEXIST;
 
-	// This will attempt to force it to the foreground after it has been displayed, since the
-	// dialog often will flash in the task bar instead of becoming foreground.
-	// See MsgBox() for details:
-	PostMessage(g_hWnd, AHK_DIALOG, (WPARAM)0, (LPARAM)0); // Must pass 0 for WPARAM in this case.
+	PREPARE_FOR_DIALOG(0) // Must pass 0 for WPARAM in this case.
 
-	g.WaitingForDialog = true;
 	++g_nFileDialogs;
 	// Below: OFN_CREATEPROMPT doesn't seem to work with GetSaveFileName(), so always
 	// use GetOpenFileName() in that case:
 	BOOL result = (ofn.Flags & OFN_OVERWRITEPROMPT) && !(ofn.Flags & OFN_CREATEPROMPT)
 		? GetSaveFileName(&ofn) : GetOpenFileName(&ofn);
 	--g_nFileDialogs;
-	g.WaitingForDialog = false;  // IsCycleComplete() relies on this.
 
 	if (!result) // User pressed CANCEL vs. OK to dismiss the dialog or there was a problem displaying it.
 		// It seems best to clear the variable in these cases, since this is a scripting
@@ -2820,16 +2858,11 @@ ResultType Line::FileSelectFolder(char *aRootDir, bool aAllowCreateFolder, char 
 	char Result[2048];
 	browseInfo.pszDisplayName = Result;  // This will hold the user's choice.
 
-	// This will attempt to force it to the foreground after it has been displayed, since the
-	// dialog often will flash in the task bar instead of becoming foreground.
-	// See MsgBox() for details:
-	PostMessage(g_hWnd, AHK_DIALOG, (WPARAM)0, (LPARAM)0); // Must pass 0 for WPARAM in this case.
+	PREPARE_FOR_DIALOG(0) // Must pass 0 for WPARAM in this case.
 
-	g.WaitingForDialog = true;
 	++g_nFolderDialogs;
 	LPITEMIDLIST lpItemIDList = SHBrowseForFolder(&browseInfo);  // Spawn Dialog
 	--g_nFolderDialogs;
-	g.WaitingForDialog = false;  // IsCycleComplete() relies on this.
 
 	if (!lpItemIDList)
 		return OK;  // Let ErrorLevel tell the story.
@@ -4595,17 +4628,23 @@ bool Line::FileIsFilteredOut(WIN32_FIND_DATA &aCurrentFile, FileLoopModeType aFi
 
 
 
-ResultType Line::SetJumpTarget(bool aIsDereferenced)
+Line *Line::GetJumpTarget(bool aIsDereferenced)
 {
-	Label *label = g_script.FindLabel(aIsDereferenced ? ARG1 : RAW_ARG1);
+	#define TARGET_LABEL (aIsDereferenced ? ARG1 : RAW_ARG1)
+	Label *label = g_script.FindLabel(TARGET_LABEL);
 	if (!label)
+	{
 		if (aIsDereferenced)
-			return LineError("This Goto/Gosub's target label does not exist.");
+			LineError("This Goto/Gosub's target label does not exist." ERR_ABORT, FAIL, TARGET_LABEL);
 		else
-			return LineError("This Goto/Gosub's target label does not exist." ERR_ABORT);
-	mRelatedLine = label->mJumpToLine; // The script loader has ensured that this can't be NULL.
+			LineError("This Goto/Gosub's target label does not exist.", FAIL, TARGET_LABEL);
+		return NULL;
+	}
+	if (!aIsDereferenced)
+		mRelatedLine = label->mJumpToLine; // The script loader has ensured that label->mJumpToLine isn't NULL.
+	// else don't update it, because that would permanently resolve the jump target, and we want it to stay dynamic.
 	// Seems best to do this even for GOSUBs even though it's a bit weird:
-	return IsJumpValid(label->mJumpToLine);
+	return IsJumpValid(label->mJumpToLine) ? label->mJumpToLine : NULL;
 	// Any error msg was already displayed by the above call.
 }
 

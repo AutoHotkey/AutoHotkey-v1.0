@@ -90,7 +90,7 @@ enum enum_act {
 , ACT_STATUSBARWAIT
 , ACT_CLIPWAIT
 , ACT_SLEEP, ACT_RANDOM
-, ACT_GOTO, ACT_GOSUB, ACT_RETURN, ACT_EXIT
+, ACT_GOTO, ACT_GOSUB, ACT_SETTIMER, ACT_RETURN, ACT_EXIT
 , ACT_LOOP, ACT_BREAK, ACT_CONTINUE
 , ACT_BLOCK_BEGIN, ACT_BLOCK_END
 , ACT_WINACTIVATE, ACT_WINACTIVATEBOTTOM
@@ -113,7 +113,7 @@ enum enum_act {
 , ACT_FILESELECTFILE, ACT_FILESELECTFOLDER, ACT_FILECREATESHORTCUT
 , ACT_INIREAD, ACT_INIWRITE, ACT_INIDELETE
 , ACT_REGREAD, ACT_REGWRITE, ACT_REGDELETE
-, ACT_SETKEYDELAY, ACT_SETMOUSEDELAY, ACT_SETWINDELAY, ACT_SETCONTROLDELAY, ACT_SETBATCHLINES
+, ACT_SETKEYDELAY, ACT_SETMOUSEDELAY, ACT_SETWINDELAY, ACT_SETCONTROLDELAY, ACT_SETBATCHLINES, ACT_SETINTERRUPT
 , ACT_SETTITLEMATCHMODE, ACT_SETFORMAT
 , ACT_SUSPEND, ACT_PAUSE
 , ACT_AUTOTRIM, ACT_STRINGCASESENSE, ACT_DETECTHIDDENWINDOWS, ACT_DETECTHIDDENTEXT, ACT_BLOCKINPUT
@@ -161,21 +161,22 @@ enum enum_act_old {
 #define ERR_UNRECOGNIZED_ACTION "This line does not contain a recognized action."
 #define ERR_MISSING_OUTPUT_VAR "This command requires that at least one of its output variables be provided."
 #define ERR_ELSE_WITH_NO_IF "This ELSE doesn't appear to belong to any IF-statement."
+#define ERR_SETTIMER "This timer's target label does not exist."
 #define ERR_GROUPADD_LABEL "The target label in parameter #4 does not exist."
 #define ERR_WINDOW_PARAM "This command requires that at least one of its window parameters be non-blank."
-#define ERR_LOOP_FILE_MODE "If not blank, parameter #2 must be either 0, 1, 2, or a variable reference."
-#define ERR_LOOP_REG_MODE  "If not blank, parameter #3 must be either 0, 1, 2, or a variable reference."
-#define ERR_ON_OFF "If not blank, the value must be either ON, OFF, or a variable reference."
-#define ERR_ON_OFF_ALWAYS "If not blank, the value must be either ON, OFF, ALWAYSON, ALWAYSOFF, or a variable reference."
-#define ERR_ON_OFF_TOGGLE "If not blank, the value must be either ON, OFF, TOGGLE, or a variable reference."
-#define ERR_ON_OFF_TOGGLE_PERMIT "If not blank, the value must be either ON, OFF, TOGGLE, PERMIT, or a variable reference."
+#define ERR_LOOP_FILE_MODE "If not blank or a variable reference, parameter #2 must be either 0, 1, 2."
+#define ERR_LOOP_REG_MODE  "If not blank or a variable reference, parameter #3 must be either 0, 1, 2."
+#define ERR_ON_OFF "If not blank or a variable reference, the value must be either ON or OFF."
+#define ERR_ON_OFF_ALWAYS "If not blank or a variable reference, the value must be either ON, OFF, ALWAYSON, or ALWAYSOFF."
+#define ERR_ON_OFF_TOGGLE "If not blank or a variable reference, the value must be either ON, OFF, or TOGGLE."
+#define ERR_ON_OFF_TOGGLE_PERMIT "If not blank or a variable reference, the value must be either ON, OFF, TOGGLE, or PERMIT."
 #define ERR_TITLEMATCHMODE "TitleMatchMode must be either 1, 2, slow, fast, or a variable reference."
 #define ERR_TITLEMATCHMODE2 "The variable does not contain a valid TitleMatchMode (the value must be either 1, 2, slow, or fast)." ERR_ABORT
 #define ERR_IFMSGBOX "This line specifies an invalid MsgBox result."
 #define ERR_REG_KEY "The key name must be either HKEY_LOCAL_MACHINE, HKEY_USERS, HKEY_CURRENT_USER, HKEY_CLASSES_ROOT, or HKEY_CURRENT_CONFIG."
 #define ERR_REG_VALUE_TYPE "The value type must be either REG_SZ, REG_EXPAND_SZ, REG_MULTI_SZ, REG_DWORD, or REG_BINARY."
-#define ERR_RUN_SHOW_MODE "Parameter #3 must be either blank or one of these words: min, max, hide."
-#define ERR_COMPARE_TIMES "Parameter #3 must be either blank, Seconds, Minutes, Hours, Days, or a variable reference."
+#define ERR_RUN_SHOW_MODE "Parameter #3 must be either blank, a variable reference, or one of these words: MIN, MAX, HIDE."
+#define ERR_COMPARE_TIMES "Parameter #3 must be either blank, a variable reference, or one of these words: Seconds, Minutes, Hours, Days."
 #define ERR_INVALID_DATETIME "This date-time string contains at least one invalid component."
 #define ERR_FILE_TIME "Parameter #3 must be either blank, M, C, A, or a variable reference."
 #define ERR_MOUSE_BUTTON "This line specifies an invalid mouse button."
@@ -524,7 +525,7 @@ public:
 
 	bool FileIsFilteredOut(WIN32_FIND_DATA &aCurrentFile, FileLoopModeType aFileLoopMode, char *aFilePath);
 
-	ResultType SetJumpTarget(bool aIsDereferenced);
+	Line *GetJumpTarget(bool aIsDereferenced);
 	ResultType IsJumpValid(Line *aDestination);
 
 	static ArgTypeType ArgIsVar(ActionTypeType aActionType, int aArgIndex);
@@ -601,10 +602,10 @@ public:
 		case ACT_SETMOUSEDELAY:
 		case ACT_SETWINDELAY:
 		case ACT_SETCONTROLDELAY:
-		case ACT_SETBATCHLINES:
 		case ACT_SETFORMAT:
 		case ACT_RANDOM:
 		case ACT_WINMOVE:
+		case ACT_SETINTERRUPT:
 			return true;
 
 		// Since mouse coords are relative to the foreground window, they can be negative:
@@ -930,13 +931,6 @@ public:
 		return FAIL; // Otherwise, one is blank but the other isn't, which is not allowed.
 	}
 
-	void Log()
-	{
-		// Probably doesn't need to be thread-safe or recursion-safe?
-		sLog[sLogNext++] = this;
-		if (sLogNext >= LINE_LOG_SIZE)
-			sLogNext = 0;
-	}
 	static char *LogToText(char *aBuf, size_t aBufSize);
 	char *VicinityToText(char *aBuf, size_t aBufSize, int aMaxLines = 15);
 	char *ToText(char *aBuf, size_t aBufSize, bool aAppendNewline = false);
@@ -974,6 +968,28 @@ public:
 		: mName(aLabelName) // Caller gave us a pointer to dynamic memory for this.
 		, mJumpToLine(NULL)
 		, mPrevLabel(NULL), mNextLabel(NULL)
+	{}
+	void *operator new(size_t aBytes) {return SimpleHeap::Malloc(aBytes);}
+	void *operator new[](size_t aBytes) {return SimpleHeap::Malloc(aBytes);}
+	void operator delete(void *aPtr) {}
+	void operator delete[](void *aPtr) {}
+};
+
+
+
+class ScriptTimer
+{
+public:
+	Label *mLabel;
+	int mPeriod;
+	UCHAR mExistingThreads;  // Whether this timer is already running its subroutine.
+	DWORD mTimeLastRun;  // TickCount
+	bool mEnabled;
+	ScriptTimer *mNextTimer;  // Next items in linked list
+	ScriptTimer(Label *aLabel)
+		#define DEFAULT_TIMER_PERIOD 250
+		: mLabel(aLabel), mPeriod(DEFAULT_TIMER_PERIOD), mExistingThreads(0), mTimeLastRun(0)
+		, mEnabled(false), mNextTimer(NULL)  // Note that mEnabled must default to false for the counts to be right.
 	{}
 	void *operator new(size_t aBytes) {return SimpleHeap::Malloc(aBytes);}
 	void *operator new[](size_t aBytes) {return SimpleHeap::Malloc(aBytes);}
@@ -1030,7 +1046,11 @@ private:
 		, AttributeType aLoopTypeParse = ATTR_NONE);
 public:
 	Line *mCurrLine;  // Seems better to make this public than make Line our friend.
-	Label *mThisHotkeyLabel, *mPriorHotkeyLabel, *mAutoStartLabel;
+	Label *mThisHotkeyLabel, *mPriorHotkeyLabel;
+
+	ScriptTimer *mFirstTimer, *mLastTimer;  // The first and last script timers in the linked list.
+	UINT mTimerCount, mTimerEnabledCount;
+
 	WIN32_FIND_DATA *mLoopFile;  // The file of the current file-loop, if applicable.
 	RegItemStruct *mLoopRegItem; // The registry subkey or value of the current registry enumeration loop.
 	LoopReadFileStruct *mLoopReadFile;  // The file whose contents are currently being read by a File-Read Loop.
@@ -1044,30 +1064,27 @@ public:
 	char *mOurEXEDir;  // Same as above but just the containing diretory (for convenience).
 	char *mMainWindowTitle; // Will hold our main window's title, for consistency & convenience.
 	bool mIsReadyToExecute;
+	bool AutoExecSectionIsRunning;
 	bool mIsRestart; // The app is restarting rather than starting from scratch.
 	bool mIsAutoIt2; // Whether this script is considered to be an AutoIt2 script.
 	__int64 mLinesExecutedThisCycle; // Use 64-bit to match the type of g.LinesPerCycle
-	DWORD mLastSleepTime; // Track MsgSleep() from any and all sources to pump messages more consistently.
+	int mUninterruptedLineCount; // Similar in purpose to the above, but only 32-bit.
+	DWORD mLastScriptRest, mLastPeekTime;
+;
 
 	ResultType Init(char *aScriptFilename, bool aIsRestart);
 	ResultType CreateWindows(HINSTANCE hInstance);
+	ResultType AutoExecSection();
 	void UpdateTrayIcon();
 	ResultType Edit();
 	ResultType Reload(bool aDisplayErrors);
 	void ExitApp(char *aBuf = NULL, int ExitCode = 0);
 	LineNumberType LoadFromFile();
 	ResultType LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude);
+	ResultType UpdateOrCreateTimer(Label *aLabel, int aFreq, bool aEnable);
 	#define VAR_NAME_LENGTH_DEFAULT 0
 	Var *FindOrAddVar(char *aVarName, size_t aVarNameLength = VAR_NAME_LENGTH_DEFAULT, Var *aSearchStart = NULL);
 	Var *FindVar(char *aVarName, size_t aVarNameLength = 0, Var **apVarPrev = NULL, Var *aSearchStart = NULL);
-	ResultType ExecuteFromLine1()
-	{
-		if (!mIsReadyToExecute)
-			return FAIL;
-		if (mFirstLine != NULL)
-			return mFirstLine->ExecUntil(UNTIL_RETURN, 0);
-		return OK;
-	}
 	WinGroup *FindOrAddGroup(char *aGroupName);
 	ResultType AddGroup(char *aGroupName);
 	Label *FindLabel(char *aLabelName);
@@ -1403,7 +1420,6 @@ public:
 
 	// Call this SciptError to avoid confusion with Line's error-displaying functions:
 	ResultType ScriptError(char *aErrorText, char *aExtraInfo = "");
-	void ShowInEditor();
 
 	Script();
 	// Note that the anchors to any linked lists will be lost when this

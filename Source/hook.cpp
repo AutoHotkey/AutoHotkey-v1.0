@@ -299,9 +299,12 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 {
 	HookType hooks_currently_active = GetActiveHooks();
 
-	if (!aHK || !aHK_count || (!aWhichHook && !aWhichHookAlways))
+	if (!aWhichHook && !aWhichHookAlways)
 		// Deinstall all hooks and free the memory in any of these cases (though it's currently never
-		// called this way):
+		// called this way).  NOTE: Even if aHK_count is zero, still want to install the hook(s)
+		// whenever aWhichHookAlways specifies that the should be.  This is done so that the
+		// #InstallKeybdHook and #InstallMouseHook directives can have the hooks installed just
+		// for use with the KeyHistory feature, for example.
 		return RemoveAllHooks();
 
 	// Even if aWhichHook == hooks_currently_active, we still need to continue in case
@@ -577,7 +580,7 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 	// Note: the values of g_ForceNum/Caps/ScrollLock are TOGGLED_ON/OFF or neutral, never ALWAYS_ON/ALWAYS_OFF:
 	bool force_CapsNumScroll = g_ForceNumLock != NEUTRAL || g_ForceCapsLock != NEUTRAL || g_ForceScrollLock != NEUTRAL;
 
-	if (!hk_sorted_count && !force_CapsNumScroll && !aWhichHookAlways)
+	if (!keybd_hook_hotkey_count && !mouse_hook_hotkey_count && !force_CapsNumScroll && !aWhichHookAlways)
 		// Since there are no hotkeys whatsover (not even an AlwaysOn/Off toggleable key),
 		// remove all hooks and free the memory.  Currently, this should only happen if
 		// aActivateOnlySuspendHotkeys is true (i.e. there were no Suspend-type hotkeys to
@@ -585,7 +588,7 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 		// AlwaysOn/Off feature is not disabled, by design:
 		return RemoveAllHooks();
 
-	if (hk_sorted_count) // else it's zero, which at this stage should mean that AlwaysOn/Off has been specified for at least one key.
+	if (hk_sorted_count)
 	{
 		// It's necessary to get them into this order to avoid problems that would be caused by
 		// AllowExtraModifiers:
@@ -706,7 +709,8 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 			// because we don't know the current physical state of the keyboard and such:
 			ZeroMemory(g_PhysicalKeyState, sizeof(g_PhysicalKeyState));
 			pPrefixKey = NULL;
-			g_modifiersLR_logical = g_modifiersLR_physical = g_modifiersLR_get = 0;
+			g_modifiersLR_physical = 0;  // Best to make this zero, otherwise keys might get stuck down after a Send.
+			g_modifiersLR_logical = GetModifierLRState(true);
 			disguise_next_lwin_up = disguise_next_rwin_up = disguise_next_lalt_up = disguise_next_ralt_up
 				= alt_tab_menu_is_visible = false;
 			ZeroMemory(pad_state, sizeof(pad_state));
