@@ -201,7 +201,8 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 	ActionTypeType type_of_first_line;
 	int priority;
 	Hotstring *hs;
-	GuiType *pgui;
+	GuiType *pgui;   // This is just a temp variable and should not be referred to once the below has been determined.
+	UINT gui_index;  // Don't use pgui because pointer can become invalid if ExecUntil() executes "Gui Destroy".
 	bool *pgui_label_is_running;
 	Label *gui_label;
 	DWORD tick_before, tick_after;
@@ -456,6 +457,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 				// the action):
 				if (   !(pgui = GuiType::FindGui(msg.hwnd))   ) // No associated GUI object, so ignore this event.
 					continue;
+				gui_index = pgui->mWindowIndex;  // Needed in case ExecUntil() performs "Gui Destroy" further below.
 				if (msg.wParam == AHK_GUI_CLOSE) // This is the signal to run the window's OnClose label.
 				{
 					if (   !(gui_label = pgui->mLabelForClose)   ) // In case it became NULL since the msg was posted.
@@ -475,13 +477,13 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 					if (   !(gui_label = pgui->mControl[msg.wParam].jump_to_label)   )
 					{
 						// On if there's no label is the implicit action considered.
-						// If there is no implicit action either, this will take no action:
-						pgui->PerformImplicitAction(pgui->mControl[msg.wParam].implicit_action);  // Don't start a new thread for implicit/simple actions.
+						if (pgui->mControl[msg.wParam].attrib & GUI_CONTROL_ATTRIB_IMPLICIT_CANCEL)
+							pgui->Cancel();
 						continue; // Fully handled by the above; or there was no label.
 						// This event might lack both a label and an action if its control was changed to be
 						// non-actionable since the time the msg was posted.
 					}
-					pgui_label_is_running = &pgui->mControl[msg.wParam].label_is_running;
+					pgui_label_is_running = NULL; // This signals below to use alternate variable.
 				}
 				break;
 			}
@@ -539,8 +541,14 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 				// would want to see the effects of faulty design (e.g. long running timers or
 				// hotkeys that interrupt gui threads) rather than having events for later,
 				// when they might suddenly take effect unexpectedly:
-				if (*pgui_label_is_running)
-					continue;
+				if (pgui_label_is_running)
+				{
+					if (*pgui_label_is_running)
+						continue;
+				}
+				else // A control's label.
+					if (pgui->mControl[msg.wParam].attrib & GUI_CONTROL_ATTRIB_LABEL_IS_RUNNING)
+						continue;
 				priority = 0;  // Always use default for now.
 				break;
 			default: // hotkey
@@ -705,9 +713,24 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 				// DetectHiddenWindows since g_ValidLastUsedWindow takes care of that whenever the script
 				// actually tries to use the last found window:
 				g.hWndLastUsed = pgui->mHwnd; // OK if NULL.
-				*pgui_label_is_running = true;
+
+				if (pgui_label_is_running)
+					*pgui_label_is_running = true;
+				else
+					pgui->mControl[msg.wParam].attrib |= GUI_CONTROL_ATTRIB_LABEL_IS_RUNNING;
+
 				gui_label->mJumpToLine->ExecUntil(UNTIL_RETURN);
-				*pgui_label_is_running = false;
+
+				// Bug-fix for v1.0.22: If the above ExecUntil() performed a "Gui Destroy", the
+				// pointers below are now invalid so should not be dereferenced:
+				if (g_gui[gui_index])
+				{
+					if (pgui_label_is_running)
+						*pgui_label_is_running = false;
+					else
+						pgui->mControl[msg.wParam].attrib &= ~GUI_CONTROL_ATTRIB_LABEL_IS_RUNNING;
+				}
+
 				break;
 
 			default: // hotkey

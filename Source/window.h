@@ -101,6 +101,14 @@ struct control_list_type
 	int class_count[CL_MAX_CLASSES];  // The quantity found for each of the above classes.
 };
 
+struct MonitorInfoPackage // A simple struct to help with EnumDisplayMonitors().
+{
+	int count;
+	#define COUNT_ALL_MONITORS INT_MIN  // A special value that can be assigned to the below.
+	int monitor_number_to_find;  // If this is left as zero, it will find the primary monitor by default.
+	MONITORINFOEX monitor_info_ex;
+};
+
 struct pid_and_hwnd_type
 {
 	DWORD pid;

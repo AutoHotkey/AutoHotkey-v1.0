@@ -206,6 +206,7 @@ struct input_type
 	bool BackspaceIsUndo;
 	bool CaseSensitive;
 	bool IgnoreAHKInput; // Whether input from any AHK script is ignored for the purpose of finding a match.
+	bool TranscribeModifiedKeys; // Whether the input command will attempt to transcribe modified keys such as ^c.
 	bool Visible;
 	bool FindAnywhere;
 	char *buffer; // Stores the user's actual input.

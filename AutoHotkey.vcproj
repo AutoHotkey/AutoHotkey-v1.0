@@ -36,7 +36,7 @@
 				Name="VCCustomBuildTool"/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="wsock32.lib winmm.lib version.lib"
+				AdditionalDependencies="wsock32.lib winmm.lib version.lib comctl32.lib"
 				OutputFile="$(OutDir)/AutoHotkey.exe"
 				LinkIncremental="2"
 				GenerateDebugInformation="TRUE"
@@ -94,7 +94,7 @@
 			<Tool
 				Name="VCLinkerTool"
 				AdditionalOptions="/SAFESEH:NO"
-				AdditionalDependencies="wsock32.lib winmm.lib version.lib"
+				AdditionalDependencies="wsock32.lib winmm.lib version.lib comctl32.lib"
 				OutputFile="$(OutDir)/AutoHotkey.exe"
 				LinkIncremental="1"
 				GenerateDebugInformation="FALSE"
@@ -154,7 +154,7 @@
 				Name="VCCustomBuildTool"/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="wsock32.lib winmm.lib version.lib $(InputDir)\source\lib\exearc_read_mt.lib"
+				AdditionalDependencies="wsock32.lib winmm.lib version.lib comctl32.lib $(InputDir)\source\lib\exearc_read_mt.lib"
 				OutputFile="$(OutDir)/AutoHotkeySC.bin"
 				LinkIncremental="1"
 				IgnoreDefaultLibraryNames="LIBCMT"
@@ -343,6 +343,9 @@
 			Name="Resource Files"
 			Filter="rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx"
 			UniqueIdentifier="{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}">
+			<File
+				RelativePath=".\source\resources\AutoHotkey.exe.manifest">
+			</File>
 			<File
 				RelativePath=".\source\resources\AutoHotkey.rc">
 			</File>

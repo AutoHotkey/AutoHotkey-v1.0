@@ -102,11 +102,11 @@ enum enum_act {
 , ACT_WINMINIMIZEALL, ACT_WINMINIMIZEALLUNDO
 , ACT_WINCLOSE, ACT_WINKILL, ACT_WINMOVE, ACT_WINMENUSELECTITEM, ACT_PROCESS
 , ACT_WINSET, ACT_WINSETTITLE, ACT_WINGETTITLE, ACT_WINGETCLASS, ACT_WINGET, ACT_WINGETPOS, ACT_WINGETTEXT
-, ACT_POSTMESSAGE, ACT_SENDMESSAGE
+, ACT_SYSGET, ACT_POSTMESSAGE, ACT_SENDMESSAGE
 // Keep rarely used actions near the bottom for parsing/performance reasons:
 , ACT_PIXELGETCOLOR, ACT_PIXELSEARCH //, ACT_IMAGESEARCH
 , ACT_GROUPADD, ACT_GROUPACTIVATE, ACT_GROUPDEACTIVATE, ACT_GROUPCLOSE
-, ACT_DRIVESPACEFREE, ACT_DRIVEGET
+, ACT_DRIVESPACEFREE, ACT_DRIVE, ACT_DRIVEGET
 , ACT_SOUNDGET, ACT_SOUNDSET, ACT_SOUNDGETWAVEVOLUME, ACT_SOUNDSETWAVEVOLUME, ACT_SOUNDPLAY
 , ACT_FILEAPPEND, ACT_FILEREADLINE, ACT_FILEDELETE, ACT_FILERECYCLE, ACT_FILERECYCLEEMPTY
 , ACT_FILEINSTALL, ACT_FILECOPY, ACT_FILEMOVE, ACT_FILECOPYDIR, ACT_FILEMOVEDIR
@@ -210,6 +210,7 @@ enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
 	, ID_MAIN_FIRST = 65400, ID_MAIN_LAST = 65534}; // These should match the range used by resource.h
 
 #define GUI_INDEX_TO_ID(index) (index + CONTROL_ID_FIRST)
+#define GUI_ID_TO_INDEX(id) (id - CONTROL_ID_FIRST)
 
 
 #define ERR_ABORT_NO_SPACES "The current thread will exit."
@@ -249,10 +250,12 @@ enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
 #define ERR_CONTROLGETCOMMAND "Parameter #2 is not a valid ControlGet command."
 #define ERR_GUICONTROLCOMMAND "Parameter #1 is not a valid GuiControl command."
 #define ERR_GUICONTROLGETCOMMAND "Parameter #2 is not a valid GuiControlGet command."
-#define ERR_DRIVECOMMAND "Parameter #2 is not a valid DriveGet command."
+#define ERR_DRIVECOMMAND "Parameter #1 is not a valid Drive command."
+#define ERR_DRIVEGETCOMMAND "Parameter #2 is not a valid DriveGet command."
 #define ERR_PROCESSCOMMAND "Parameter #1 is not a valid Process command."
 #define ERR_WINSET "Parameter #1 is not a valid WinSet attribute."
 #define ERR_WINGET "Parameter #2 is not a valid WinGet command."
+#define ERR_SYSGET "Parameter #2 is not a valid SysGet command."
 #define ERR_IFMSGBOX "This line specifies an invalid MsgBox result."
 #define ERR_REG_KEY "The key name must be either HKEY_LOCAL_MACHINE, HKEY_USERS, HKEY_CURRENT_USER, HKEY_CLASSES_ROOT, HKEY_CURRENT_CONFIG, or the abbreviations for these."
 #define ERR_REG_VALUE_TYPE "The value type must be either REG_SZ, REG_EXPAND_SZ, REG_MULTI_SZ, REG_DWORD, or REG_BINARY."
@@ -344,6 +347,7 @@ VOID CALLBACK InputBoxTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);
 BOOL CALLBACK EnumChildFindSeqNum(HWND aWnd, LPARAM lParam);
 BOOL CALLBACK EnumChildFindPoint(HWND aWnd, LPARAM lParam);
 BOOL CALLBACK EnumChildGetControlList(HWND aWnd, LPARAM lParam);
+BOOL CALLBACK EnumMonitorProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM lParam);
 BOOL CALLBACK EnumChildGetText(HWND aWnd, LPARAM lParam);
 LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lParam);
 bool HandleMenuItem(WORD aMenuItemID, WPARAM aGuiIndex);
@@ -360,6 +364,8 @@ struct DerefType
 {
 	char *marker;
 	Var *var;
+	// Keep any fields that aren't an even multiple of 4 adjacent to each other.  This conserves memory
+	// due to byte-alignment:
 	DerefLengthType length;
 };
 
@@ -369,6 +375,8 @@ typedef UCHAR ArgTypeType;  // UCHAR vs. an enum, to save memory.
 #define ARG_TYPE_OUTPUT_VAR (UCHAR)2
 struct ArgStruct
 {
+	// Keep any fields that aren't an even multiple of 4 adjacent to each other.  This conserves memory
+	// due to byte-alignment:
 	ArgTypeType type;
 	char *text;
 	DerefType *deref;  // Will hold a NULL-terminated array of var-deref locations within <text>.
@@ -442,7 +450,11 @@ enum JoyControls {JOYCTRL_INVALID, JOYCTRL_XPOS, JOYCTRL_YPOS, JOYCTRL_ZPOS
 #define IS_JOYSTICK_BUTTON(joy) (joy >= JOYCTRL_1 && joy <= JOYCTRL_BUTTON_MAX)
 
 enum WinGetCmds {WINGET_CMD_INVALID, WINGET_CMD_ID, WINGET_CMD_IDLAST, WINGET_CMD_PID
-	, WINGET_CMD_COUNT, WINGET_CMD_LIST, WINGET_CMD_CONTROLLIST
+	, WINGET_CMD_COUNT, WINGET_CMD_LIST, WINGET_CMD_MINMAX, WINGET_CMD_CONTROLLIST
+};
+
+enum SysGetCmds {SYSGET_CMD_INVALID, SYSGET_CMD_METRICS, SYSGET_CMD_MONITORCOUNT, SYSGET_CMD_MONITORPRIMARY
+	, SYSGET_CMD_MONITORAREA, SYSGET_CMD_MONITORWORKAREA, SYSGET_CMD_MONITORNAME
 };
 
 enum TransformCmds {TRANS_CMD_INVALID, TRANS_CMD_ASC, TRANS_CMD_CHR, TRANS_CMD_DEREF, TRANS_CMD_HTML
@@ -462,7 +474,7 @@ enum MenuCommands {MENU_CMD_INVALID, MENU_CMD_SHOW, MENU_CMD_USEERRORLEVEL
 };
 
 enum GuiCommands {GUI_CMD_INVALID, GUI_CMD_OPTIONS, GUI_CMD_ADD, GUI_CMD_MENU, GUI_CMD_SHOW
-	, GUI_CMD_SUBMIT, GUI_CMD_CANCEL, GUI_CMD_DESTROY, GUI_CMD_FONT, GUI_CMD_COLOR
+	, GUI_CMD_SUBMIT, GUI_CMD_CANCEL, GUI_CMD_DESTROY, GUI_CMD_FONT, GUI_CMD_COLOR, GUI_CMD_FLASH
 };
 
 enum GuiControlCmds {GUICONTROL_CMD_INVALID, GUICONTROL_CMD_OPTIONS, GUICONTROL_CMD_CONTENTS
@@ -489,12 +501,6 @@ typedef UCHAR GuiControls;
 #define GUI_CONTROL_EDIT         10
 
 
-// Not done as an enum so that it can be a UCHAR type, which saves memory in the arrays of controls:
-typedef UCHAR GuiImplicitActions;
-#define GUI_IMPLICIT_NONE   0  // This should be zero due to use of things like ZeroMemory() on the struct.
-#define GUI_IMPLICIT_CANCEL 1
-#define GUI_IMPLICIT_CLEAR  2
-
 enum ThreadCommands {THREAD_CMD_INVALID, THREAD_CMD_PRIORITY, THREAD_CMD_INTERRUPT};
 
 #define PROCESS_PRIORITY_LETTERS "LBNAHR"
@@ -511,10 +517,13 @@ enum ControlCmds {CONTROL_CMD_INVALID, CONTROL_CMD_CHECK, CONTROL_CMD_UNCHECK
 enum ControlGetCmds {CONTROLGET_CMD_INVALID, CONTROLGET_CMD_CHECKED, CONTROLGET_CMD_ENABLED
 	, CONTROLGET_CMD_VISIBLE, CONTROLGET_CMD_TAB, CONTROLGET_CMD_FINDSTRING
 	, CONTROLGET_CMD_CHOICE, CONTROLGET_CMD_LINECOUNT, CONTROLGET_CMD_CURRENTLINE
-	, CONTROLGET_CMD_CURRENTCOL, CONTROLGET_CMD_LINE, CONTROLGET_CMD_SELECTED};
+	, CONTROLGET_CMD_CURRENTCOL, CONTROLGET_CMD_LINE, CONTROLGET_CMD_SELECTED
+	, CONTROLGET_CMD_STYLE, CONTROLGET_CMD_EXSTYLE};
 
-enum DriveCmds {DRIVE_CMD_INVALID, DRIVE_CMD_LIST, DRIVE_CMD_FILESYSTEM, DRIVE_CMD_LABEL
-	, DRIVE_CMD_SETLABEL, DRIVE_CMD_SERIAL, DRIVE_CMD_TYPE, DRIVE_CMD_STATUS, DRIVE_CMD_CAPACITY};
+enum DriveCmds {DRIVE_CMD_INVALID, DRIVE_CMD_EJECT, DRIVE_CMD_LABEL};
+
+enum DriveGetCmds {DRIVEGET_CMD_INVALID, DRIVEGET_CMD_LIST, DRIVEGET_CMD_FILESYSTEM, DRIVEGET_CMD_LABEL
+	, DRIVEGET_CMD_SETLABEL, DRIVEGET_CMD_SERIAL, DRIVEGET_CMD_TYPE, DRIVEGET_CMD_STATUS, DRIVEGET_CMD_CAPACITY};
 
 enum WinSetAttributes {WINSET_INVALID, WINSET_TRANSPARENT, WINSET_ALWAYSONTOP};
 
@@ -558,6 +567,7 @@ private:
 	double ScriptGetJoyState(JoyControls aJoy, int aJoystickID, Var *aOutputVar);
 
 	ResultType DriveSpace(char *aPath, bool aGetFreeSpace);
+	ResultType Drive(char *aCmd, char *aValue, char *aValue2);
 	ResultType DriveGet(char *aCmd, char *aValue);
 	ResultType SoundSetGet(char *aSetting, DWORD aComponentType, int aComponentInstance
 		, DWORD aControlType, UINT aMixerID);
@@ -665,14 +675,20 @@ private:
 	ResultType WinGetControlList(Var *aOutputVar, HWND aTargetWindow);
 	ResultType WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType WinGetPos(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
+	ResultType SysGet(char *aCmd, char *aValue);
 	ResultType PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int aColor, int aVariation);
 	//ResultType ImageSearch(int aLeft, int aTop, int aRight, int aBottom, char *aImageFile);
 	ResultType PixelGetColor(int aX, int aY);
 
 	static ResultType SetToggleState(vk_type aVK, ToggleValueType &ForceLock, char *aToggleText);
 public:
+	// Keep any fields that aren't an even multiple of 4 adjacent to each other.  This conserves memory
+	// due to byte-alignment:
 	ActionTypeType mActionType; // What type of line this is.
 	UCHAR mFileNumber;  // Which file the line came from.  0 is the first, and it's the main script file.
+	ArgCountType mArgc; // How many arguments exist in mArg[].
+
+	ArgStruct *mArg; // Will be used to hold a dynamic array of dynamic Args.
 	LineNumberType mLineNumber;  // The line number in the file from which the script was loaded, for debugging.
 	AttributeType mAttribute;
 	Line *mPrevLine, *mNextLine; // The prev & next lines adjacent to this one in the linked list; NULL if none.
@@ -743,8 +759,6 @@ public:
 	// Uses arg number (i.e. the first arg is 1, not 0).  Caller must ensure that ArgNum >= 1 and that
 	// the arg in question is an input or output variable (since that isn't checked there):
 	#define ARG_HAS_VAR(ArgNum) (mArgc >= ArgNum && (*mArg[ArgNum-1].text || mArg[ArgNum-1].deref))
-	ArgCountType mArgc; // How many arguments exist in mArg[].
-	ArgStruct *mArg; // Will be used to hold a dynamic array of dynamic Args.
 
 	// Shouldn't go much higher than 200 since the main window's Edit control is currently limited
 	// to 32K to be compatible with the Win9x limit.  Avg. line length is probably under 100 for
@@ -1133,8 +1147,21 @@ public:
 		if (!stricmp(aBuf, "PID")) return WINGET_CMD_PID;
 		if (!stricmp(aBuf, "Count")) return WINGET_CMD_COUNT;
 		if (!stricmp(aBuf, "List")) return WINGET_CMD_LIST;
+		if (!stricmp(aBuf, "MinMax")) return WINGET_CMD_MINMAX;
 		if (!stricmp(aBuf, "ControlList")) return WINGET_CMD_CONTROLLIST;
 		return WINGET_CMD_INVALID;
+	}
+
+	static SysGetCmds ConvertSysGetCmd(char *aBuf)
+	{
+		if (!aBuf || !*aBuf) return SYSGET_CMD_INVALID;
+		if (IsPureNumeric(aBuf)) return SYSGET_CMD_METRICS;
+		if (!stricmp(aBuf, "MonitorCount")) return SYSGET_CMD_MONITORCOUNT;
+		if (!stricmp(aBuf, "MonitorPrimary")) return SYSGET_CMD_MONITORPRIMARY;
+		if (!stricmp(aBuf, "Monitor")) return SYSGET_CMD_MONITORAREA; // Called "Monitor" vs. "MonitorArea" to make it easier to remember.
+		if (!stricmp(aBuf, "MonitorWorkArea")) return SYSGET_CMD_MONITORWORKAREA;
+		if (!stricmp(aBuf, "MonitorName")) return SYSGET_CMD_MONITORNAME;
+		return SYSGET_CMD_INVALID;
 	}
 
 	static TransformCmds ConvertTransformCmd(char *aBuf)
@@ -1225,6 +1252,7 @@ public:
 		if (!stricmp(aBuf, "Menu")) return GUI_CMD_MENU;
 		if (!stricmp(aBuf, "Font")) return GUI_CMD_FONT;
 		if (!stricmp(aBuf, "Color")) return GUI_CMD_COLOR;
+		if (!stricmp(aBuf, "Flash")) return GUI_CMD_FLASH;
 		return GUI_CMD_INVALID;
 	}
 
@@ -1332,21 +1360,31 @@ public:
 		if (!stricmp(aBuf, "CurrentCol")) return CONTROLGET_CMD_CURRENTCOL;
 		if (!stricmp(aBuf, "Line")) return CONTROLGET_CMD_LINE;
 		if (!stricmp(aBuf, "Selected")) return CONTROLGET_CMD_SELECTED;
+		if (!stricmp(aBuf, "Style")) return CONTROLGET_CMD_STYLE;
+		if (!stricmp(aBuf, "ExStyle")) return CONTROLGET_CMD_EXSTYLE;
 		return CONTROLGET_CMD_INVALID;
 	}
 
 	static DriveCmds ConvertDriveCmd(char *aBuf)
 	{
 		if (!aBuf || !*aBuf) return DRIVE_CMD_INVALID;
-		if (!stricmp(aBuf, "List")) return DRIVE_CMD_LIST;
-		if (!stricmp(aBuf, "FileSystem") || !stricmp(aBuf, "FS")) return DRIVE_CMD_FILESYSTEM;
+		if (!stricmp(aBuf, "Eject")) return DRIVE_CMD_EJECT;
 		if (!stricmp(aBuf, "Label")) return DRIVE_CMD_LABEL;
-		if (!strnicmp(aBuf, "SetLabel:", 9)) return DRIVE_CMD_SETLABEL;  // Uses strnicmp() vs. stricmp().
-		if (!stricmp(aBuf, "Serial")) return DRIVE_CMD_SERIAL;
-		if (!stricmp(aBuf, "Type")) return DRIVE_CMD_TYPE;
-		if (!stricmp(aBuf, "Status")) return DRIVE_CMD_STATUS;
-		if (!stricmp(aBuf, "Capacity") || !stricmp(aBuf, "Cap")) return DRIVE_CMD_CAPACITY;
 		return DRIVE_CMD_INVALID;
+	}
+
+	static DriveGetCmds ConvertDriveGetCmd(char *aBuf)
+	{
+		if (!aBuf || !*aBuf) return DRIVEGET_CMD_INVALID;
+		if (!stricmp(aBuf, "List")) return DRIVEGET_CMD_LIST;
+		if (!stricmp(aBuf, "FileSystem") || !stricmp(aBuf, "FS")) return DRIVEGET_CMD_FILESYSTEM;
+		if (!stricmp(aBuf, "Label")) return DRIVEGET_CMD_LABEL;
+		if (!strnicmp(aBuf, "SetLabel:", 9)) return DRIVEGET_CMD_SETLABEL;  // Uses strnicmp() vs. stricmp().
+		if (!stricmp(aBuf, "Serial")) return DRIVEGET_CMD_SERIAL;
+		if (!stricmp(aBuf, "Type")) return DRIVEGET_CMD_TYPE;
+		if (!stricmp(aBuf, "Status")) return DRIVEGET_CMD_STATUS;
+		if (!stricmp(aBuf, "Capacity") || !stricmp(aBuf, "Cap")) return DRIVEGET_CMD_CAPACITY;
+		return DRIVEGET_CMD_INVALID;
 	}
 
 	static WinSetAttributes ConvertWinSetAttribute(char *aBuf)
@@ -1586,6 +1624,8 @@ class UserMenu
 public:
 	char *mName;  // Dynamically allocated.
 	UserMenuItem *mFirstMenuItem, *mLastMenuItem, *mDefault;
+	// Keep any fields that aren't an even multiple of 4 adjacent to each other.  This conserves memory
+	// due to byte-alignment:
 	bool mIncludeStandardItems;
 	UINT mMenuItemCount;  // The count of user-defined menu items (doesn't include the standard items, if present).
 	UserMenu *mNextMenu;  // Next item in linked list
@@ -1644,6 +1684,8 @@ public:
 	UserMenu *mSubmenu;
 	UserMenu *mMenu;  // The menu to which this item belongs.  Needed to support script var A_ThisMenu.
 	int mPriority;
+	// Keep any fields that aren't an even multiple of 4 adjacent to each other.  This conserves memory
+	// due to byte-alignment:
 	bool mEnabled, mChecked;
 	UserMenuItem *mNextMenuItem;  // Next item in linked list
 
@@ -1662,20 +1704,39 @@ struct FontType
 	char name[MAX_FONT_NAME_LENGTH + 1];
 	int point_size; // Decided to use int vs. float to simplify the code in many places. Fractional sizes seem rarely needed.
 	int weight;
+	// Keep any fields that aren't an even multiple of 4 adjacent to each other.  This conserves memory
+	// due to byte-alignment:
 	bool italic;
 	bool underline;
 	bool strikeout;
 	HFONT hfont;
 };
 
+struct GuiControlOptionsType
+{
+	DWORD style_add, style_remove, exstyle_add, exstyle_remove;
+	int x, y, width, height;  // Position info.
+	float row_count;
+	int choice;  // Which item of a DropDownList/ComboBox/ListBox to initially choose.
+	int limit;   // The max number of characters to permit in an edit or combobox's edit.
+	int hscroll_pixels;  // The number of pixels for a listbox's horizontal scrollbar to be able to scroll.
+	int checked; // When zeroed, struct contains default starting state of checkbox/radio, i.e. BST_UNCHECKED.
+	char password_char; // When zeroed, indicates "use default password" for an edit control with the password style.
+	bool start_new_section;
+};
+
 struct GuiControlType
 {
 	HWND hwnd;
+	// Keep any fields that are smaller than 4 bytes adjacent to each other.  This conserves memory
+	// due to byte-alignment.  It has been verified to save 4 bytes per struct in this case:
 	GuiControls type;
+	UCHAR attrib; // A field of option flags/bits defined above.
 	Var *output_var;
 	Label *jump_to_label;
-	bool label_is_running;
-	GuiImplicitActions implicit_action;
+	#define GUI_CONTROL_ATTRIB_IMPLICIT_CANCEL  0x01
+	#define GUI_CONTROL_ATTRIB_ALTSUBMIT        0x02
+	#define GUI_CONTROL_ATTRIB_LABEL_IS_RUNNING 0x04 // The next should be 0x08, 0x10, etc.
 	COLORREF color; // Color of the control's text.
 	HBITMAP hbitmap; // For PIC controls, stores the bitmap.  Might also have uses for future types of controls.
 };
@@ -1688,21 +1749,10 @@ public:
 	#define MAX_CONTROLS_PER_GUI 500
 	#define GUI_STANDARD_WIDTH_MULTIPLIER 15 // This times font size = width, if all other means of determining it are exhausted.
 	#define GUI_STANDARD_WIDTH (GUI_STANDARD_WIDTH_MULTIPLIER * sFont[mCurrentFontIndex].point_size)
-	// Edits are known to have exactly 8 pixels of non-editable vertical space within their
-	// boundaries.  But add one extra so that letters like 'g' don't hit bottom.  Other controls,
-	// such as DropDownList, probably use the same spacing:
-	#define GUI_CTL_VERTICAL_DEADSPACE 9 
-	// Below: ES_MULTILINE is required for any CRLFs in the default value to display correctly.
-	// If ES_MULTILINE is in effect: "If you do not specify ES_AUTOHSCROLL, the control automatically
-	// wraps words to the beginning of the next line when necessary."
-	// Also, ES_AUTOVSCROLL seems to have no additional effect, perhaps because this window type
-	// is considered to be a dialog. MSDN: "When the multiline edit control is not in a dialog box
-	// and the ES_AUTOVSCROLL style is specified, the edit control shows as many lines as possible
-	// and scrolls vertically when the user presses the ENTER key. If you do not specify ES_AUTOVSCROLL,
-	// the edit control shows as many lines as possible and beeps if the user presses the ENTER key when
-	// no more lines can be displayed."
-	#define GUI_EDIT_DEFAULT_STYLE_MULTI (WS_VSCROLL|ES_MULTILINE|ES_WANTRETURN)
-	#define GUI_EDIT_DEFAULT_STYLE_SINGLE ES_AUTOHSCROLL
+	// Update for v1.0.21: Reduced it to 8 vs. 9 because 8 causes the height each edit (with the
+	// default style) to exactly match that of a Combo or DropDownList.  This type of spacing seems
+	// to be what other apps use too, and seems to make edits stand out a little nicer:
+	#define GUI_CTL_VERTICAL_DEADSPACE 8
 	HWND mHwnd;
 	// Control IDs are higher than their index in the array by the below amount.  This offset is
 	// necessary because windows that behave like dialogs automatically return IDOK and IDCANCEL in
@@ -1713,8 +1763,9 @@ public:
 	UINT mDefaultButtonIndex; // Index vs. pointer is needed for some things.
 	Label *mLabelForClose, *mLabelForEscape;
 	bool mLabelForCloseIsRunning, mLabelForEscapeIsRunning;
-	DWORD mStyle; // Style of window.
+	DWORD mStyle, mExStyle; // Style of window.
 	bool mInRadioGroup; // Whether the control currently being created is inside a prior radio-group.
+	bool mUseTheme;  // Whether XP theme and styles should be applied to the parent window and subsequently added controls.
 	HWND mOwner;  // The window that owns this one, if any.  Note that Windows provides no way to change owners after window creation.
 	int mCurrentFontIndex;
 	COLORREF mCurrentColor;       // The default color of text in controls.
@@ -1739,11 +1790,17 @@ public:
 
 	GuiType(int aWindowIndex) // Constructor
 		: mHwnd(NULL), mWindowIndex(aWindowIndex), mControlCount(0)
-		, mDefaultButtonIndex(UINT_MAX), mLabelForClose(NULL), mLabelForEscape(NULL)
+		, mDefaultButtonIndex(-1), mLabelForClose(NULL), mLabelForEscape(NULL)
 		, mLabelForCloseIsRunning(false), mLabelForEscapeIsRunning(false)
-		// The styles DS_CENTER and DS_3DLOOK appear to be ineffectual in this case:
-		, mStyle(WS_CAPTION|WS_MINIMIZEBOX|WS_SYSMENU) // WS_CLIPSIBLINGS, WS_CLIPCHILDREN, WS_POPUP (doesn't seem helpful currently)
-		, mInRadioGroup(false), mOwner(NULL)
+		// The styles DS_CENTER and DS_3DLOOK appear to be ineffectual in this case.
+		// Also note that WS_CLIPSIBLINGS winds up on the window even if unspecified, which is a strong hint
+		// that it should always be used for top level windows across all OSes.  Usenet posts confirm this.
+		// Also, it seems safer to have WS_POPUP under a vague feeling that it seems to apply to dialog
+		// style windows such as this one, and the fact that it also allows the window's caption to be
+		// removed, which implies that POPUP windows are more flexible than OVERLAPPED windows.
+		, mStyle(WS_POPUP|WS_CLIPSIBLINGS|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX) // WS_CLIPCHILDREN (doesn't seem helpful currently)
+		, mExStyle(0)
+		, mInRadioGroup(false), mUseTheme(true), mOwner(NULL)
 		, mCurrentFontIndex(FindOrCreateFont()) // Omit params to tell it to find or create DEFAULT_GUI_FONT.
 		, mCurrentColor(CLR_DEFAULT)
 		, mBackgroundColorWin(CLR_DEFAULT), mBackgroundBrushWin(NULL)
@@ -1765,16 +1822,18 @@ public:
 	ResultType Create();
 	static void UpdateMenuBars(HMENU aMenu);
 	ResultType AddControl(GuiControls aControlType, char *aOptions, char *aText);
+	ResultType ParseOptions(char *aOptions);
+	ResultType ControlParseOptions(char *aOptions, GuiControlOptionsType &aOpt, GuiControlType &aControl
+		, UINT aControlIndex = -1); // aControlIndex is not needed upon control creation.
 	void AddControlContent(GuiControlType &aControl, char *aContent, int aChoice);
 	void Event(UINT aControlIndex, WORD aNotifyCode);
 	ResultType Show(char *aOptions, char *aTitle);
-	ResultType PerformImplicitAction(GuiImplicitActions aImplicitAction);
 	ResultType Clear();
 	ResultType Cancel();
 	ResultType Close(); // Due to SC_CLOSE, etc.
 	ResultType Escape(); // Similar to close, except typically called when the user presses ESCAPE.
 	ResultType Submit(bool aHideIt);
-	static ResultType ControlGetContents(Var &aOutputVar, GuiControlType aControl, bool aGetText);
+	static ResultType ControlGetContents(Var &aOutputVar, GuiControlType aControl, char *aMode = "");
 	UINT FindControl(char *aControlID);
 	int FindGroup(UINT aControlIndex, UINT &aGroupStart, UINT &aGroupEnd);
 	ResultType SetCurrentFont(char *aOptions, char *aFontName);
@@ -2506,6 +2565,8 @@ public:
 
 	VarSizeType GetTimeIdlePhysical(char *aBuf = NULL);
 	VarSizeType ScriptGetCursor(char *aBuf = NULL);
+	VarSizeType GetScreenWidth(char *aBuf = NULL);
+	VarSizeType GetScreenHeight(char *aBuf = NULL);
 	VarSizeType GetGuiControlEvent(char *aBuf = NULL);
 	VarSizeType ScriptGetCaret(VarTypeType aVarType, char *aBuf = NULL);
 	VarSizeType GetIP(int aAdapterIndex, char *aBuf = NULL);

@@ -858,7 +858,13 @@ inline bool CollectInput(LPARAM lParam, vk_type vk, sc_type sc, bool key_up, boo
 		}
 	}
 
-	if (g_modifiersLR_physical && g_modifiersLR_physical != MOD_LSHIFT && g_modifiersLR_physical != MOD_RSHIFT
+	// Don't unconditionally transcribe modified keys such as Ctrl-C because calling ToAsciiEx() on
+	// some such keys (e.g. Ctrl-LeftArrow or RightArrow if I recall correctly), disrupts the native
+	// function of those keys.  That is the reason for the existence of the
+	// g_input.TranscribeModifiedKeys option.
+	if (g_modifiersLR_physical
+		&& !(g_input.status == INPUT_IN_PROGRESS && g_input.TranscribeModifiedKeys)
+		&& g_modifiersLR_physical != MOD_LSHIFT && g_modifiersLR_physical != MOD_RSHIFT
 		&& g_modifiersLR_physical != (MOD_LSHIFT & MOD_RSHIFT)
 		&& !((g_modifiersLR_physical & (MOD_LALT | MOD_RALT)) && (g_modifiersLR_physical & (MOD_LCONTROL | MOD_RCONTROL))))
 		// Since in some keybd layouts, AltGr (Ctrl+Alt) will produce valid characters (such as the @ symbol,
@@ -880,10 +886,9 @@ inline bool CollectInput(LPARAM lParam, vk_type vk, sc_type sc, bool key_up, boo
 	static sc_type pending_dead_key_sc = 0; // Need to track this separately because sometimes default mapping isn't correct.
 	static bool pending_dead_key_used_shift = false;
 
-	// Above is done before below in case ^backspace or other modified version of backspace is a hotkey,
-	// in which case we wouldn't want it to be treated as a real backspace here.  Another reason to do
+	// v1.0.21: Only true (unmodified) backspaces are recognized by the below.  Another reason to do
 	// this is that ^backspace has a native function (delete word) different than backspace in many editors.
-	if (vk == VK_BACK) // Backspace
+	if (vk == VK_BACK && !g_modifiersLR_physical) // Backspace
 	{
 		// Note that it might have been in progress upon entry to this function but now isn't due to
 		// INPUT_TERMINATED_BY_ENDKEY above:
@@ -1005,8 +1010,9 @@ inline bool CollectInput(LPARAM lParam, vk_type vk, sc_type sc, bool key_up, boo
 		else if (HS_BUF_SIZE - g_HSBufLength < 3) // Not enough room for up-to-2 chars.
 		{
 			// Make room in buffer by removing chars from the front that are no longer needed for HS detection:
-			g_HSBufLength = (int)strlen(g_HSBuf + HS_BUF_DELETE_COUNT) + 1;  // The new length.
-			memmove(g_HSBuf, g_HSBuf + HS_BUF_DELETE_COUNT, g_HSBufLength);
+			// Bug-fixed the below for v1.0.21:
+			g_HSBufLength = (int)strlen(g_HSBuf + HS_BUF_DELETE_COUNT);  // The new length.
+			memmove(g_HSBuf, g_HSBuf + HS_BUF_DELETE_COUNT, g_HSBufLength + 1); // +1 to include the zero terminator.
 		}
 
 		g_HSBuf[g_HSBufLength++] = ch[0];

@@ -230,12 +230,12 @@ ToggleValueType ToggleKeyState(vk_type aVK, ToggleValueType aToggleValue);
 void ToggleNumlockWin9x();
 //void CapslockOffWin9x();
 
-modLR_type SetModifierState(mod_type aModifiersNew, modLR_type aModifiersLRnow
-, DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER);
-modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLRnow
+modLR_type SetModifierState(mod_type aModifiersNew, modLR_type aModifiersLRnow, HWND aTargetWindow
+	, DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER);
+modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLRnow, HWND aTargetWindow
 	, DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER);
 void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLRnow, KeyEventTypes aEventType
-	, DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER);
+	, HWND aTargetWindow, DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER);
 
 mod_type GetModifierState();
 modLR_type GetModifierLRState(bool aExplicitlyGet = false);
@@ -271,8 +271,10 @@ void init_sc_to_vk();
 char *SCToKeyName(sc_type aSC, char *aBuf, size_t aBuf_size);
 char *VKToKeyName(vk_type aVK, sc_type aSC, char *aBuf, size_t aBuf_size);
 sc_type TextToSC(char *aText);
-vk_type TextToVK(char *aText, mod_type *pModifiers = NULL, bool aExcludeThoseHandledByScanCode = false);
-int TextToSpecial(char *aText, UINT aTextLength, modLR_type &aModifiersLR, mod_type &aModifiers);
+vk_type TextToVK(char *aText, mod_type *pModifiers = NULL, bool aExcludeThoseHandledByScanCode = false
+	, bool aAllowExplicitVK = true);
+int TextToSpecial(char *aText, UINT aTextLength, modLR_type &aModifiersLR, mod_type &aModifiers
+	, bool aUpdatePersistent);
 
 #ifdef ENABLE_KEY_HISTORY_FILE
 ResultType KeyHistoryToFile(char *aFilespec = NULL, char aType = '\0', bool aKeyUp = false

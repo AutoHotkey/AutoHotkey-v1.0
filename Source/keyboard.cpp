@@ -240,7 +240,7 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 					}
 				}
 
-				vk = TextToVK(aKeys + 1, &modifiers_for_next_key, true);
+				vk = TextToVK(aKeys + 1, &modifiers_for_next_key, true, false); // false must be passed due to below.
 				sc = vk ? 0 : TextToSC(aKeys + 1);  // If sc is 0, it will be resolved by KeyEvent() later.
 				if (!vk && !sc && toupper(*(aKeys + 1)) == 'V' && toupper(*(aKeys + 2)) == 'K')
 				{
@@ -261,15 +261,22 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 					{
 						if (key_as_modifiersLR = KeyToModifiersLR(vk, sc)) // Assign
 						{
-							if (event_type == KEYDOWN) // i.e. make {Shift down} have the same effect {ShiftDown}
-								modifiers_persistent = ConvertModifiersLR(g_modifiersLR_persistent |= key_as_modifiersLR);
-							else if (event_type == KEYUP)
-								modifiers_persistent = ConvertModifiersLR(g_modifiersLR_persistent &= ~key_as_modifiersLR);
-							// else must never change modifiers_persistent in response to KEYDOWNANDUP
-							// because that would break existing scripts.  This is because that same
-							// modifier key may have been pushed down via {ShiftDown} rather than "{Shift Down}".
-							// In other words, {Shift} should never undo the effects of a prior {ShiftDown}
-							// or {Shift down}.
+							if (!aTargetWindow)
+							{
+								if (event_type == KEYDOWN) // i.e. make {Shift down} have the same effect {ShiftDown}
+									modifiers_persistent = ConvertModifiersLR(g_modifiersLR_persistent |= key_as_modifiersLR);
+								else if (event_type == KEYUP)
+									modifiers_persistent = ConvertModifiersLR(g_modifiersLR_persistent &= ~key_as_modifiersLR);
+								// else must never change modifiers_persistent in response to KEYDOWNANDUP
+								// because that would break existing scripts.  This is because that same
+								// modifier key may have been pushed down via {ShiftDown} rather than "{Shift Down}".
+								// In other words, {Shift} should never undo the effects of a prior {ShiftDown}
+								// or {Shift down}.
+							}
+							//else don't add this event to modifiers_persistent because it will not be
+							// manifest via keybd_event.  Instead, it will done via less intrusively
+							// (less interference with foreground window) via SetKeyboardState() and
+							// PostMessage().  This change is for v1.0.21 and has been documented.
 						}
 						// Below: modifiers_persistent stays in effect (pressed down) even if the key
 						// being sent includes that same modifier.  Surprisingly, this is how AutoIt2
@@ -296,8 +303,11 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 					break;
 				}
 
-				// Otherwise, since no vk was found, check it against list of special keys:
-				int special_key = TextToSpecial(aKeys + 1, (UINT)key_text_length, g_modifiersLR_persistent, modifiers_persistent);
+				// Otherwise, since no vk was found, check it against list of special keys.
+				// See comment above "else must never change modifiers_persistent" about why
+				// aTargetWindow != NULL is used below:
+				int special_key = TextToSpecial(aKeys + 1, (UINT)key_text_length, g_modifiersLR_persistent
+					, modifiers_persistent, !aTargetWindow);
 				if (special_key)
 					for (UINT i = 0; i < repeat_count; ++i)
 					{
@@ -307,7 +317,7 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 						KeyEvent(special_key > 0 ? KEYDOWN : KEYUP, abs(special_key), 0, aTargetWindow, true);
 						LONG_OPERATION_UPDATE_FOR_SENDKEYS
 					}
-				else // Check if it's "{ASC nnnn}"
+				else // Check if it's "{ASC nnnnn}"
 				{
 					// Include the trailing space in "ASC " to increase uniqueness (selectivity).
 					// Also, sending the ASC sequence to window doesn't work, so don't even try:
@@ -377,7 +387,7 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 		// because these keys being put back down match the physical pressing of those same keys by the
 		// user, and we want such modifiers to be taken into account for the purpose of deciding whether
 		// other hotkeys should fire (or the same one again if auto-repeating):
-		SetModifierLRStateSpecific(keys_to_press_down, modifiersLR_current, KEYDOWN);
+		SetModifierLRStateSpecific(keys_to_press_down, modifiersLR_current, KEYDOWN, aTargetWindow);
 		if (g_KeybdHook)
 		{
 			// Ensure that g_modifiersLR_logical_non_ignored does not contain any down-modifiers
@@ -441,8 +451,13 @@ int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, modLR_type aModifiers
 
 	mod_type modifiers_specified = aModifiers | ConvertModifiersLR(aModifiersLRPersistent);
 
-	if (VK_IS_MOUSE(aVK))
+	// Sending mouse clicks via ControlSend is not supported, so in that case fall back to the
+	// old method of sending the VK directly (which probably has no effect 99% of the time):
+	if (VK_IS_MOUSE(aVK) && !aTargetWindow)
+	{
+		SetModifierState(modifiers_specified, GetModifierLRState(), aTargetWindow, KEY_IGNORE);
 		Line::MouseClick(aVK, COORD_UNSPECIFIED, COORD_UNSPECIFIED, aRepeatCount); // It will do its own MouseDelay.
+	}
 	else
 	{
 		for (int i = 0; i < aRepeatCount; ++i)
@@ -463,7 +478,7 @@ int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, modLR_type aModifiers
 			// some cases, the extra generated keystrokes would cause complications/side-effects.
 			if (!aKeyAsModifiersLR)
 				// See keyboard.h for explantion of KEY_IGNORE:
-				SetModifierState(modifiers_specified, GetModifierLRState(), KEY_IGNORE);
+				SetModifierState(modifiers_specified, GetModifierLRState(), aTargetWindow, KEY_IGNORE);
 			KeyEvent(aEventType, aVK, aSC, aTargetWindow, true);
 		}
 	}
@@ -501,7 +516,7 @@ int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, modLR_type aModifiers
 		//    during the course of a SendKeys() operation.  Since the persistent modifiers were
 		//    (by definition) already in effect prior to the Send, putting them back down for the
 		//    purpose of firing hook hotkeys does not seem unreasonable, and may in fact add value:
-		SetModifierLRState(aModifiersLRPersistent, GetModifierLRState());
+		SetModifierLRState(aModifiersLRPersistent, GetModifierLRState(), aTargetWindow);
 	return aRepeatCount;
 }
 
@@ -550,8 +565,8 @@ int SendKeySpecial(char aChar, mod_type aModifiers, modLR_type aModifiersLRPersi
 	// Without the below method, only the following of the above can be produced:
 	// ƒ¡¢£¥¦§ª«¬°±²µ¶·º»¼½¿AAAAÄÅÆÇEÉEEIIIIÑOOOOÖUUUÜYßàáâaäåæçèéêëìíîïñòóôoö÷ùúûüyÿ
 	// The above has been tested on both Win98SE (but not the Win98 command prompt) and WinXP and seems
-	// to work okay.  And since it uses ANSI keypad method, it should work on nearly all language keyboards.
-	if (aChar < 0) // Try using ANSI, which should be standard in Windows on nearly all language keyboards?
+	// to work okay.  And since it uses ANSI keypad method, it should work on nearly all languages/layouts.
+	if (aChar < 0) // Try using ANSI, which should be standard in Windows on nearly all language/layouts?
 		snprintf(asc_string, sizeof(asc_string), "0%d", (int)(UCHAR)aChar);  // Must have leading zero.
 
 	int asc_int = 0;
@@ -575,7 +590,7 @@ int SendKeySpecial(char aChar, mod_type aModifiers, modLR_type aModifiersLRPersi
 			DoKeyDelay();
 		}
 		// See notes in SendKey():
-		SetModifierLRState(aModifiersLRPersistent, GetModifierLRState());
+		SetModifierLRState(aModifiersLRPersistent, GetModifierLRState(), aTargetWindow);
 		return aRepeatCount;
 	}
 
@@ -672,7 +687,7 @@ int SendKeySpecial(char aChar, mod_type aModifiers, modLR_type aModifiersLRPersi
 		DoKeyDelay();
 	}
 	// See notes in SendKey():
-	SetModifierLRState(aModifiersLRPersistent, GetModifierLRState());
+	SetModifierLRState(aModifiersLRPersistent, GetModifierLRState(), aTargetWindow);
 	return aRepeatCount;
 }
 
@@ -710,7 +725,7 @@ int SendASC(char *aAscii, HWND aTargetWindow)
 		// for a suffix key that has more than one set of triggering modifiers
 		// (for when the user is holding down that suffix to auto-repeat it --
 		// see keyboard.h for details):
-		SetModifierLRStateSpecific(modifiersLR_to_release, GetModifierLRState(), KEYUP, KEY_IGNORE);
+		SetModifierLRStateSpecific(modifiersLR_to_release, GetModifierLRState(), KEYUP, aTargetWindow, KEY_IGNORE);
 
 	int keys_sent = 0;  // Track this value and return it to the caller.
 
@@ -759,7 +774,7 @@ int SendChar(char aChar, mod_type aModifiers, KeyEventTypes aEventType, HWND aTa
 		aModifiers |= MOD_ALT;
 
 	// It's the caller's responsibility to restore the modifiers if it needs to:
-	SetModifierState(aModifiers, GetModifierLRState(), KEY_IGNORE);
+	SetModifierState(aModifiers, GetModifierLRState(), aTargetWindow, KEY_IGNORE);
 	KeyEvent(aEventType, LOBYTE(mod_plus_vk), 0, aTargetWindow, true);
 	return 1;
 }
@@ -826,6 +841,17 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 		}
 	}
 
+	// aTargetWindow is almost always passed in as NULL by our caller, even if the overall command
+	// being executed is ControlSend.  This is because of the following reasons:
+	// 1) Modifiers need to be logically changed via keybd_event() when using ControlSend against
+	//    a cmd-prompt, console, or possibly other types of windows.
+	// 2) If a hotkey triggered the ControlSend that got us here and that hotkey is a naked modifier
+	//    such as RAlt:: or modified modifier such as ^#LShift, that modifier would otherwise auto-repeat
+	//    an possibly interfere with the send operation.  This auto-repeat occurs because unlike a normal
+	//    send, there are no calls to keybd_event() (keybd_event() stop the auto-repeat as a side-effect).
+	// One exception to this is something like "ControlSend, Edit1, {Control down}", which explicitly
+	// calls us with a target window.  This exception is by design and has been bug-fixed and documented
+	// in ControlSend for v1.0.21:
 	if (aTargetWindow && KeyToModifiersLR(aVK, aSC))
 	{
 		// When sending modifier keystrokes directly to a window, use the AutoIt3 SetKeyboardState()
@@ -1027,7 +1053,7 @@ void SetKeyState (vk_type vk, int aKeyUp)
 
 
 
-modLR_type SetModifierState(mod_type aModifiersNew, modLR_type aModifiersLRnow, DWORD aExtraInfo)
+modLR_type SetModifierState(mod_type aModifiersNew, modLR_type aModifiersLRnow, HWND aTargetWindow, DWORD aExtraInfo)
 // Returns the new modifierLR state (i.e. the state after the action here has occurred).
 {
 	// Can't do this because the two values aren't compatible (one is LR and the other neutral):
@@ -1064,12 +1090,15 @@ MsgBox(error_text);
 	if (modifiersLRnew == aModifiersLRnow)  // They're already in the right state.
 		return modifiersLRnew;
 	// Otherwise, change the state:
-	return SetModifierLRState(modifiersLRnew, aModifiersLRnow, aExtraInfo);
+	return SetModifierLRState(modifiersLRnew, aModifiersLRnow, aTargetWindow, aExtraInfo);
 }
 
 
 
-modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLRnow, DWORD aExtraInfo)
+modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLRnow, HWND aTargetWindow, DWORD aExtraInfo)
+// Note that by design and as documented for ControlSend, aTargetWindow is not used as the target for the
+// various calls to KeyEvent() here.  It is only used as a workaround for the GUI window issue described
+// at the bottom.
 {
 /*
 char buf[2048];
@@ -1093,6 +1122,9 @@ FileAppend("c:\\templog.txt", buf);
 	// Decided not to Sleep() between keystrokes, even zero, out of concern that this
 	// would result in a significant delay (perhaps more than 10ms) while the system
 	// is under load.
+
+	if (aModifiersLRnow == modifiersLRnew) // They're already in the right state, so avoid doing all the checks.
+		return aModifiersLRnow;
 
 	if ((aModifiersLRnow & MOD_LCONTROL) && !(modifiersLRnew & MOD_LCONTROL))
 		KeyEvent(KEYUP, VK_LCONTROL, 0, NULL, false, aExtraInfo);
@@ -1162,31 +1194,51 @@ FileAppend("c:\\templog.txt", buf);
 	else if (!(aModifiersLRnow & MOD_RSHIFT) && (modifiersLRnew & MOD_RSHIFT))
 		KeyEvent(KEYDOWN, VK_RSHIFT, 0, NULL, false, aExtraInfo);
 
+	// Since the above didn't return early, keybd_event() has been used to change the state
+	// of at least one modifier.  As a result, if the caller gave a non-NULL aTargetWindow,
+	// it wants us to check if that window belongs to our thread.  If it does, we should do
+	// a short msg queue check to prevent an apparent synchronization problem when using
+	// ControlSend against the script's own GUI or other windows.  Here is an example of a
+	// line whose modifier would not be in effect in time for its keystroke to be modified
+	// by it:
+	// ControlSend, Edit1, ^{end}, Test Window
+	// Update: Another bug-fix for v1.0.21, as was the above: If the keyboard hook is installed,
+	// the modifier keystrokes must have a way to get routed through the hook BEFORE the
+	// keystrokes get sent via PostMessage().  If not, the correct modifier state will usually
+	// not be in effect (or at least not be in sync) for the keys sent via PostMessage() afterward:
+	if (aTargetWindow) // ControlSend mode is in effect.
+	{
+		if (g_KeybdHook)  // This check must come first (it should take precedence if both conditions are true).
+			// -1 has been verified to be insufficient, at least for the very first letter sent if it is
+			// supposed to be capitalized:
+			SLEEP_WITHOUT_INTERRUPTION(0)
+		else if (GetWindowThreadProcessId(aTargetWindow, NULL) == GetCurrentThreadId())
+			SLEEP_WITHOUT_INTERRUPTION(-1)
+	}
+
 	return modifiersLRnew;
 }
 
 
 
 void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLRnow, KeyEventTypes aEventType
-	, DWORD aExtraInfo)
-// Press or release only the specific keys whose bits are set to 1
-// in aModifiersLR.
-// Technically, there is no need to release both keys of a pair
-// if both are down because all current OS's see, for example,
-// that both ALT keys are UP if either one goes up, regardless
-// of whether the other is still down.  But that behavior may
-// change in future OS's.
+	, HWND aTargetWindow, DWORD aExtraInfo)
+// Press or release only the specific keys whose bits are set to 1 in aModifiersLR.
+// Technically, there is no need to release both keys of a pair if both are down because all
+// current OS's see, for example, that both ALT keys are UP if either one goes up, regardless
+// of whether the other is still down.  But that behavior may change in future OS's.
 // Notes for the down-version, which was previously a sep. function:
-// Similar to the reasoning described in SetModifierLRStateUp.
-// Previously, this only put the keys back down if the user is still
-// physically holding them down (e.g. in case the Send command took a
-// long time to finish, during which time the hotkey combo was released).
-// However, it turns out that GetAsyncKeyState() does not work
-// as advertised, at least on my XP system with the std. keyboard driver
-// for an MS Natural Elite.  On mine, and possibly all other XP/2k/NT
-// systems, GetAsyncKeyState() reports the key is up after
-// any keybd_event() put them up, even if the key is physically down!
+// Similar to the reasoning described in SetModifierLRStateUp.  Previously, this only put the
+// keys back down if the user is still physically holding them down (e.g. in case the Send
+// command took a long time to finish, during which time the hotkey combo was released).
+// However, it turns out that GetAsyncKeyState() does not work as advertised, at least on my
+// XP system with the std. keyboard driver for an MS Natural Elite.  On mine, and possibly all
+// other XP/2k/NT systems, GetAsyncKeyState() reports the key is up after any keybd_event() put
+// them up, even if the key is physically down.
 {
+	if (!aModifiersLR) // Nothing to do (especially avoids the aTargetWindow check at the bottom).
+		return;
+
 	if (aEventType && aEventType != KEYUP) aEventType = KEYUP;  // In case caller called it wrong.
 
 	if (aModifiersLR & MOD_LSHIFT)
@@ -1231,6 +1283,10 @@ void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLR
 		if (shift_not_down_now)
 			KeyEvent(KEYUP, VK_SHIFT, 0, NULL, false, aExtraInfo);
 	}
+
+	// See comments at the bottom of SetModifierLRState() about this:
+	if (aTargetWindow && GetWindowThreadProcessId(aTargetWindow, NULL) == GetCurrentThreadId())
+		SLEEP_WITHOUT_INTERRUPTION(-1)
 }
 
 
@@ -1242,7 +1298,7 @@ inline mod_type GetModifierState()
 
 
 
-inline modLR_type GetModifierLRState(bool aExplicitlyGet)
+modLR_type GetModifierLRState(bool aExplicitlyGet)
 // Try to report a more reliable state of the modifier keys than GetKeyboardState
 // alone could.
 {
@@ -1638,7 +1694,7 @@ sc_type TextToSC(char *aText)
 
 
 
-vk_type TextToVK(char *aText, mod_type *pModifiers, bool aExcludeThoseHandledByScanCode)
+vk_type TextToVK(char *aText, mod_type *pModifiers, bool aExcludeThoseHandledByScanCode, bool aAllowExplicitVK)
 // If modifiers_p is non-NULL, place the modifiers that are needed to realize the key in there.
 // e.g. M is really +m (shift-m), # is really shift-3.
 {
@@ -1677,6 +1733,9 @@ vk_type TextToVK(char *aText, mod_type *pModifiers, bool aExcludeThoseHandledByS
 //	if (strlen(text) == 1 && toupper(*text) >= 'A' && toupper(*text) <= 'Z')
 //		return toupper(*text);  // VK is the same as the ASCII code in this case, maybe for other chars too?
 
+	if (aAllowExplicitVK && toupper(*aText) == 'V' && toupper(*(aText + 1)) == 'K')
+		return (vk_type)strtol(aText + 2, NULL, 16);  // Convert from hex.
+
 	for (int i = 0; i < g_key_to_vk_count; ++i)
 		if (!stricmp(g_key_to_vk[i].key_name, aText))
 			return g_key_to_vk[i].vk;
@@ -1692,7 +1751,7 @@ vk_type TextToVK(char *aText, mod_type *pModifiers, bool aExcludeThoseHandledByS
 
 
 
-int TextToSpecial(char *aText, UINT aTextLength, modLR_type &aModifiersLR, mod_type &aModifiers)
+int TextToSpecial(char *aText, UINT aTextLength, modLR_type &aModifiersLR, mod_type &aModifiers, bool aUpdatePersistent)
 // Returns vk for key-down, negative vk for key-up, or zero if no translation.
 // We also update whatever's in *pModifiers and *pModifiersLR to reflect the type of key-action
 // specified in <aText>.  This makes it so that {altdown}{esc}{altup} behaves the same as !{esc}.
@@ -1703,9 +1762,12 @@ int TextToSpecial(char *aText, UINT aTextLength, modLR_type &aModifiersLR, mod_t
 
 	if (!strlicmp(aText, "ALTDOWN", aTextLength))
 	{
-		if (!(aModifiersLR & (MOD_LALT | MOD_RALT))) // i.e. do nothing if either left or right is already present.
-			aModifiersLR |= MOD_LALT; // If neither is down, use the left one because it's more compatible.
-		aModifiers |= MOD_ALT;
+		if (aUpdatePersistent)
+		{
+			if (!(aModifiersLR & (MOD_LALT | MOD_RALT))) // i.e. do nothing if either left or right is already present.
+				aModifiersLR |= MOD_LALT; // If neither is down, use the left one because it's more compatible.
+			aModifiers |= MOD_ALT;
+		}
 		return VK_MENU;
 	}
 	if (!strlicmp(aText, "ALTUP", aTextLength))
@@ -1713,60 +1775,87 @@ int TextToSpecial(char *aText, UINT aTextLength, modLR_type &aModifiersLR, mod_t
 		// Unlike for Lwin/Rwin, it seems best to have these neutral keys (e.g. ALT vs. LALT or RALT)
 		// restore either or both of the ALT keys into the up position.  The user can use {LAlt Up}
 		// to be more specific and avoid this behavior:
-		aModifiersLR &= ~(MOD_LALT | MOD_RALT);
-		aModifiers &= ~MOD_ALT;
+		if (aUpdatePersistent)
+		{
+			aModifiersLR &= ~(MOD_LALT | MOD_RALT);
+			aModifiers &= ~MOD_ALT;
+		}
 		return -VK_MENU;
 	}
 	if (!strlicmp(aText, "SHIFTDOWN", aTextLength))
 	{
-		if (!(aModifiersLR & (MOD_LSHIFT | MOD_RSHIFT))) // i.e. do nothing if either left or right is already present.
-			aModifiersLR |= MOD_LSHIFT; // If neither is down, use the left one because it's more compatible.
-		aModifiers |= MOD_SHIFT;
+		if (aUpdatePersistent)
+		{
+			if (!(aModifiersLR & (MOD_LSHIFT | MOD_RSHIFT))) // i.e. do nothing if either left or right is already present.
+				aModifiersLR |= MOD_LSHIFT; // If neither is down, use the left one because it's more compatible.
+			aModifiers |= MOD_SHIFT;
+		}
 		return VK_SHIFT;
 	}
 	if (!strlicmp(aText, "SHIFTUP", aTextLength))
 	{
-		aModifiersLR &= ~(MOD_LSHIFT | MOD_RSHIFT); // See "ALTUP" for explanation.
-		aModifiers &= ~MOD_SHIFT;
+		if (aUpdatePersistent)
+		{
+			aModifiersLR &= ~(MOD_LSHIFT | MOD_RSHIFT); // See "ALTUP" for explanation.
+			aModifiers &= ~MOD_SHIFT;
+		}
 		return -VK_SHIFT;
 	}
 	if (!strlicmp(aText, "CTRLDOWN", aTextLength) || !strlicmp(aText, "CONTROLDOWN", aTextLength))
 	{
-		if (!(aModifiersLR & (MOD_LCONTROL | MOD_RCONTROL))) // i.e. do nothing if either left or right is already present.
-			aModifiersLR |= MOD_LCONTROL; // If neither is down, use the left one because it's more compatible.
-		aModifiers |= MOD_CONTROL;
+		if (aUpdatePersistent)
+		{
+			if (!(aModifiersLR & (MOD_LCONTROL | MOD_RCONTROL))) // i.e. do nothing if either left or right is already present.
+				aModifiersLR |= MOD_LCONTROL; // If neither is down, use the left one because it's more compatible.
+			aModifiers |= MOD_CONTROL;
+		}
 		return VK_CONTROL;
 	}
 	if (!strlicmp(aText, "CTRLUP", aTextLength) || !strlicmp(aText, "CONTROLUP", aTextLength))
 	{
-		aModifiersLR &= ~(MOD_LCONTROL | MOD_RCONTROL); // See "ALTUP" for explanation.
-		aModifiers &= ~MOD_CONTROL;
+		if (aUpdatePersistent)
+		{
+			aModifiersLR &= ~(MOD_LCONTROL | MOD_RCONTROL); // See "ALTUP" for explanation.
+			aModifiers &= ~MOD_CONTROL;
+		}
 		return -VK_CONTROL;
 	}
 	if (!strlicmp(aText, "LWINDOWN", aTextLength))
 	{
-		aModifiersLR |= MOD_LWIN;
-		aModifiers |= MOD_WIN;
+		if (aUpdatePersistent)
+		{
+			aModifiersLR |= MOD_LWIN;
+			aModifiers |= MOD_WIN;
+		}
 		return VK_LWIN;
 	}
 	if (!strlicmp(aText, "LWINUP", aTextLength))
 	{
-		aModifiersLR &= ~MOD_LWIN;
-		if (!(aModifiersLR & MOD_RWIN))  // If both WIN keys are now up, the neutral modifier also is set to up.
-			aModifiers &= ~MOD_WIN;
+		if (aUpdatePersistent)
+		{
+			aModifiersLR &= ~MOD_LWIN;
+			if (!(aModifiersLR & MOD_RWIN))  // If both WIN keys are now up, the neutral modifier also is set to up.
+				aModifiers &= ~MOD_WIN;
+		}
 		return -VK_LWIN;
 	}
 	if (!strlicmp(aText, "RWINDOWN", aTextLength))
 	{
-		aModifiersLR |= MOD_RWIN;
-		aModifiers |= MOD_WIN;
+		if (aUpdatePersistent)
+		{
+			aModifiersLR |= MOD_RWIN;
+			aModifiers |= MOD_WIN;
+		}
 		return VK_RWIN;
 	}
 	if (!strlicmp(aText, "RWINUP", aTextLength))
 	{
-		aModifiersLR &= ~MOD_RWIN;
-		if (!(aModifiersLR & MOD_LWIN))  // If both WIN keys are now up, the neutral modifier also is set to up.
-			aModifiers &= ~MOD_WIN;
+		if (aUpdatePersistent)
+		{
+			aModifiersLR &= ~MOD_RWIN;
+			if (!(aModifiersLR & MOD_LWIN))  // If both WIN keys are now up, the neutral modifier also is set to up.
+				aModifiers &= ~MOD_WIN;
+		}
 		return -VK_RWIN;
 	}
 	return 0;

@@ -31,6 +31,24 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 {
 	// Init any globals not in "struct g" that need it:
 	g_hInstance = hInstance;
+
+	// There is a strong indication from discussions on the Usenet that not calling InitCommonControls()
+	// or InitCommonControlsEx() prior to displaying a MsgBox, other dialog, or other API window/control
+	// might prevent that feature from working properly (i.e. the MsgBox might never appear).  This is
+	// solely due to the fact that the exe.manifest file is present, which causes XP visual styles
+	// to be automatically called up when the app runs on XP:
+	INITCOMMONCONTROLSEX icce; // The struct consists of only 2 DWORDs so it's not that wasteful to have it here in WinMain().
+	icce.dwSize = sizeof(INITCOMMONCONTROLSEX);
+	// ICC_TAB_CLASSES provides Tab control and ToolTip support.  Although testing has yet to reveal any
+	// problem if this option is omitted for tooltips, it lends peace of mind (perhaps this is only needed
+	// when tooltips are used in conjunction with with SysTabControl32?)
+	icce.dwICC = ICC_TAB_CLASSES|ICC_HOTKEY_CLASS;
+	// Various others, such as the below, should be enabled when the corresponding feature is available for GUI:
+	//| ICC_UPDOWN_CLASS   // up-down control
+	//| ICC_PROGRESS_CLASS // progress bar
+	//| ICC_DATE_CLASSES;  // date and time picker
+	InitCommonControlsEx(&icce);
+
 	if (!GetCurrentDirectory(sizeof(g_WorkingDir), g_WorkingDir)) // Needed for the FileSelectFile() workaround.
 		*g_WorkingDir = '\0';
 	g_WorkingDirOrig = SimpleHeap::Malloc(g_WorkingDir); // Needed by the Reload command.
@@ -44,8 +62,8 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	#ifdef _DEBUG
 	//char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
 	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
-	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\LoopReg - simple example from help file.ahk";
-	char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\GUI Demo.ahk";
+	char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\bug - GuiEscape.ahk";
+	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\GUI Demo.ahk";
 	#else
 	char *script_filespec = NAME_P ".ini";  // Use this extension for better file association with editor(s).
 	#endif

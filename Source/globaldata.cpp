@@ -193,6 +193,9 @@ sc2_type g_vk_to_sc[VK_ARRAY_COUNT] = {{0}};
 // STEPS TO ADD A NEW COMMAND:
 // 1) Add an entry to the command enum in script.h.
 // 2) Add an entry to the below array (it's position here MUST exactly match that in the enum).
+//    The first item is the command name, the second is the minimum number of parameters (e.g.
+//    if you enter 3, the first 3 args are mandatory) and the third is the maximum number of
+//    parameters (the user need not escape commas within the last parameter).
 //    The subarray should indicate the param numbers that must be numeric (first param is numbered 1,
 //    not zero).  That subarray should be terminated with an explicit zero to be safe and
 //    so that the compiler will complain if the sub-array size needs to be increased to
@@ -376,6 +379,9 @@ Action g_act[] =
 	, {"WinGet", 1, 6, NULL} // Output-var/array, cmd (if omitted, defaults to ID), std. 4 window params
 	, {"WinGetPos", 0, 8, NULL} // Four optional output vars: xpos, ypos, width, height.  Std. 4 window params.
 	, {"WinGetText", 1, 5, NULL} // Output var, std 4 window params.
+
+	, {"SysGet", 2, 4, NULL} // Output-var/array, sub-cmd or sys-metrics-number, input-value1, future-use
+
 	, {"PostMessage", 1, 8}  // msg, wParam, lParam, Control, WinTitle, WinText, ExcludeTitle, ExcludeText
 	, {"SendMessage", 1, 8}  // msg, wParam, lParam, Control, WinTitle, WinText, ExcludeTitle, ExcludeText
 
@@ -391,6 +397,7 @@ Action g_act[] =
 	, {"GroupClose", 1, 2, NULL}
 
 	, {"DriveSpaceFree", 2, 2, NULL} // Output-var, path (e.g. c:\)
+	, {"Drive", 1, 3, NULL} // Sub-command, Value1 (can be blank for Eject), Value2
 	, {"DriveGet", 0, 3, NULL} // Output-var (optional in at least one case), Command, Value
 
 	, {"SoundGet", 1, 4, {4, 0}} // OutputVar, ComponentType (default=master), ControlType (default=vol), Mixer/Device Number

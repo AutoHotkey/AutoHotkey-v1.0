@@ -420,6 +420,9 @@ VarSizeType Var::Get(char *aBuf)
 	case VAR_CURSOR: if (!aBuf) return g_script.ScriptGetCursor(); aBuf += g_script.ScriptGetCursor(aBuf); break;
 	case VAR_CARETX: if (!aBuf) return g_script.ScriptGetCaret(VAR_CARETX); aBuf += g_script.ScriptGetCaret(VAR_CARETX, aBuf); break;
 	case VAR_CARETY: if (!aBuf) return g_script.ScriptGetCaret(VAR_CARETY); aBuf += g_script.ScriptGetCaret(VAR_CARETY, aBuf); break;
+	case VAR_SCREENWIDTH: if (!aBuf) return g_script.GetScreenWidth(); aBuf += g_script.GetScreenWidth(aBuf); break;
+	case VAR_SCREENHEIGHT: if (!aBuf) return g_script.GetScreenHeight(); aBuf += g_script.GetScreenHeight(aBuf); break;
+
 	case VAR_IPADDRESS1:
 	case VAR_IPADDRESS2:
 	case VAR_IPADDRESS3:

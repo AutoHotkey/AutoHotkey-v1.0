@@ -3465,9 +3465,14 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				break;
 			case GUI_CMD_SUBMIT:
 			case GUI_CMD_MENU:
+			case GUI_CMD_FLASH:
 				if (line->mArgc > 2)
 					return ScriptError("Parameter #3 and beyond should be omitted in this case.", LINE_RAW_ARG3);
 				break;
+			// No action for these since they have a varying number of optional params:
+			//case GUI_CMD_SHOW:
+			//case GUI_CMD_FONT:
+			//case GUI_CMD_COLOR: No load-time param validation to avoid larger EXE size.
 			}
 		}
 		break;
@@ -3533,6 +3538,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			case GUICONTROL_CMD_INVALID:
 				return ScriptError(ERR_GUICONTROLCOMMAND, LINE_RAW_ARG1);
 			case GUICONTROL_CMD_CONTENTS:
+				break; // Do nothing for the above commands since Param3 is options.
 			case GUICONTROL_CMD_MOVE:
 			case GUICONTROL_CMD_CHOOSE:
 			case GUICONTROL_CMD_CHOOSESTRING:
@@ -3571,15 +3577,30 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		}
 		break;
 
-	case ACT_DRIVEGET:
-		if (!line->ArgHasDeref(2))  // Don't check "line->mArgc > 1" because of DRIVE_CMD_SETLABEL's param format.
+	case ACT_DRIVE:
+		if (line->mArgc > 0 && !line->ArgHasDeref(1))
 		{
-			DriveCmds drive_cmd = line->ConvertDriveCmd(LINE_RAW_ARG2);
+			DriveCmds drive_cmd = line->ConvertDriveCmd(LINE_RAW_ARG1);
 			if (!drive_cmd)
-				return ScriptError(ERR_DRIVECOMMAND, LINE_RAW_ARG2);
-			if (drive_cmd != DRIVE_CMD_LIST && !*LINE_RAW_ARG3)
+				return ScriptError(ERR_DRIVECOMMAND, LINE_RAW_ARG1);
+			if (drive_cmd != DRIVE_CMD_EJECT && !*LINE_RAW_ARG2)
+				return ScriptError("Parameter #2 must not be blank in this case.");
+			// For DRIVE_CMD_LABEL: Note that is is possible and allowed for the new label to be blank.
+			// Not currently done since all sub-commands take a mandatory or optional ARG3:
+			//if (drive_cmd != ... && *LINE_RAW_ARG3)
+			//	return ScriptError("Parameter #3 must be blank in this case.", LINE_RAW_ARG3);
+		}
+		break;
+
+	case ACT_DRIVEGET:
+		if (!line->ArgHasDeref(2))  // Don't check "line->mArgc > 1" because of DRIVEGET_CMD_SETLABEL's param format.
+		{
+			DriveGetCmds drive_get_cmd = line->ConvertDriveGetCmd(LINE_RAW_ARG2);
+			if (!drive_get_cmd)
+				return ScriptError(ERR_DRIVEGETCOMMAND, LINE_RAW_ARG2);
+			if (drive_get_cmd != DRIVEGET_CMD_LIST && !*LINE_RAW_ARG3)
 				return ScriptError("Parameter #3 must not be blank in this case.");
-			if (drive_cmd != DRIVE_CMD_SETLABEL && (line->mArgc < 1 || line->mArg[0].type == ARG_TYPE_NORMAL))
+			if (drive_get_cmd != DRIVEGET_CMD_SETLABEL && (line->mArgc < 1 || line->mArg[0].type == ARG_TYPE_NORMAL))
 				// The output variable has been omitted.
 				return ScriptError("Parameter #1 must not be blank in this case.");
 		}
@@ -3643,6 +3664,11 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			return ScriptError(ERR_WINGET, LINE_RAW_ARG2);
 		break;
 
+	case ACT_SYSGET:
+		if (!line->ArgHasDeref(2) && !line->ConvertSysGetCmd(LINE_RAW_ARG2))
+			return ScriptError(ERR_SYSGET, LINE_RAW_ARG2);
+		break;
+
 	case ACT_INPUTBOX:
 		if (*LINE_RAW_ARG9)  // && !line->ArgHasDeref(9)
 			return ScriptError("Parameter #9 is for future use and should be left blank.", LINE_RAW_ARG9);
@@ -3673,7 +3699,11 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 	case ACT_GETKEYSTATE:
 		if (line->mArgc > 1 && !line->ArgHasDeref(2) && !TextToVK(LINE_RAW_ARG2) && !Line::ConvertJoy(LINE_RAW_ARG2))
-			return ScriptError("This is not a valid key, mouse, or joystick name.", LINE_RAW_ARG2);
+			return ScriptError("This is not a valid key, mouse, or joystick button.", LINE_RAW_ARG2);
+		break;
+	case ACT_KEYWAIT:
+		if (line->mArgc > 0 && !line->ArgHasDeref(1) && !TextToVK(LINE_RAW_ARG1) && !Line::ConvertJoy(LINE_RAW_ARG1))
+			return ScriptError("This is not a valid key, mouse, or joystick button.", LINE_RAW_ARG1);
 		break;
 	case ACT_DIV:
 		if (!line->ArgHasDeref(2)) // i.e. if it's a deref, we won't try to validate it now.
@@ -3997,7 +4027,7 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, Var *aVarPrev)
 // This function should probably not be called by anyone except FindOrAddVar, which has already done
 // the dupe-checking and is also providing us with the insertion point so that the list stays sorted.
 // Returns the address of the new variable or NULL on failure.
-// The caller must already have verfied that this isn't a duplicate var.
+// The caller must already have verified that this isn't a duplicate var.
 {
 	if (!aVarName || !*aVarName) return NULL;  // Should never happen, so just silently indicate failure.
 	if (!aVarNameLength) // Caller didn't specify, so use the entire string.
@@ -4031,101 +4061,106 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, Var *aVarPrev)
 		// to bother varying the error message to include ERR_ABORT if this occurs during runtime.
 		return NULL;
 
-	VarTypeType var_type;
-	// Keeping the most common ones near the top helps performance a little:
-	if (!stricmp(new_name, "clipboard")) var_type = VAR_CLIPBOARD;
-	else if (!stricmp(new_name, "A_YYYY") || !stricmp(new_name, "A_Year")) var_type = VAR_YYYY;
-	else if (!stricmp(new_name, "A_MMMM")) var_type = VAR_MMMM;  // Long name of month.
-	else if (!stricmp(new_name, "A_MMM")) var_type = VAR_MMM; // 3-char abbrev. month name.
-	else if (!stricmp(new_name, "A_MM") || !stricmp(new_name, "A_Mon")) var_type = VAR_MM;  // 01 thru 12
-	else if (!stricmp(new_name, "A_DDDD")) var_type = VAR_DDDD; // Name of weekday, e.g. Sunday
-	else if (!stricmp(new_name, "A_DDD")) var_type = VAR_DDD;   // Abbrev., e.g. Sun
-	else if (!stricmp(new_name, "A_DD") || !stricmp(new_name, "A_Mday")) var_type = VAR_DD; // 01 thru 31
-	else if (!stricmp(new_name, "A_Wday")) var_type = VAR_WDAY;
-	else if (!stricmp(new_name, "A_Yday")) var_type = VAR_YDAY;
+	VarTypeType var_type = VAR_NORMAL;  // Set default.
+	if (!stricmp(new_name, "clipboard"))
+		var_type = VAR_CLIPBOARD;
+	else if (toupper(*new_name) == 'A' && *(new_name + 1) == '_')  // This check helps average performance.
+	{
+		// Keeping the most common ones near the top helps performance a little:
+		if (!stricmp(new_name, "A_YYYY") || !stricmp(new_name, "A_Year")) var_type = VAR_YYYY;
+		else if (!stricmp(new_name, "A_MMMM")) var_type = VAR_MMMM;  // Long name of month.
+		else if (!stricmp(new_name, "A_MMM")) var_type = VAR_MMM; // 3-char abbrev. month name.
+		else if (!stricmp(new_name, "A_MM") || !stricmp(new_name, "A_Mon")) var_type = VAR_MM;  // 01 thru 12
+		else if (!stricmp(new_name, "A_DDDD")) var_type = VAR_DDDD; // Name of weekday, e.g. Sunday
+		else if (!stricmp(new_name, "A_DDD")) var_type = VAR_DDD;   // Abbrev., e.g. Sun
+		else if (!stricmp(new_name, "A_DD") || !stricmp(new_name, "A_Mday")) var_type = VAR_DD; // 01 thru 31
+		else if (!stricmp(new_name, "A_Wday")) var_type = VAR_WDAY;
+		else if (!stricmp(new_name, "A_Yday")) var_type = VAR_YDAY;
 
-	else if (!stricmp(new_name, "A_Hour")) var_type = VAR_HOUR;
-	else if (!stricmp(new_name, "A_Min")) var_type = VAR_MIN;
-	else if (!stricmp(new_name, "A_Sec")) var_type = VAR_SEC;
-	else if (!stricmp(new_name, "A_TickCount")) var_type = VAR_TICKCOUNT;
-	else if (!stricmp(new_name, "A_Now")) var_type = VAR_NOW;
-	else if (!stricmp(new_name, "A_NowUTC")) var_type = VAR_NOWUTC;
+		else if (!stricmp(new_name, "A_Hour")) var_type = VAR_HOUR;
+		else if (!stricmp(new_name, "A_Min")) var_type = VAR_MIN;
+		else if (!stricmp(new_name, "A_Sec")) var_type = VAR_SEC;
+		else if (!stricmp(new_name, "A_TickCount")) var_type = VAR_TICKCOUNT;
+		else if (!stricmp(new_name, "A_Now")) var_type = VAR_NOW;
+		else if (!stricmp(new_name, "A_NowUTC")) var_type = VAR_NOWUTC;
 
-	else if (!stricmp(new_name, "A_WorkingDir")) var_type = VAR_WORKINGDIR;
-	else if (!stricmp(new_name, "A_ScriptName")) var_type = VAR_SCRIPTNAME;
-	else if (!stricmp(new_name, "A_ScriptDir")) var_type = VAR_SCRIPTDIR;
-	else if (!stricmp(new_name, "A_ScriptFullPath")) var_type = VAR_SCRIPTFULLPATH;
+		else if (!stricmp(new_name, "A_WorkingDir")) var_type = VAR_WORKINGDIR;
+		else if (!stricmp(new_name, "A_ScriptName")) var_type = VAR_SCRIPTNAME;
+		else if (!stricmp(new_name, "A_ScriptDir")) var_type = VAR_SCRIPTDIR;
+		else if (!stricmp(new_name, "A_ScriptFullPath")) var_type = VAR_SCRIPTFULLPATH;
 
-	else if (!stricmp(new_name, "A_BatchLines") || !stricmp(new_name, "A_NumBatchLines")) var_type = VAR_BATCHLINES;
-	else if (!stricmp(new_name, "A_TitleMatchMode")) var_type = VAR_TITLEMATCHMODE;
-	else if (!stricmp(new_name, "A_TitleMatchModeSpeed")) var_type = VAR_TITLEMATCHMODESPEED;
-	else if (!stricmp(new_name, "A_DetectHiddenWindows")) var_type = VAR_DETECTHIDDENWINDOWS;
-	else if (!stricmp(new_name, "A_DetectHiddenText")) var_type = VAR_DETECTHIDDENTEXT;
-	else if (!stricmp(new_name, "A_AutoTrim")) var_type = VAR_AUTOTRIM;
-	else if (!stricmp(new_name, "A_StringCaseSense")) var_type = VAR_STRINGCASESENSE;
-	else if (!stricmp(new_name, "A_FormatInteger")) var_type = VAR_FORMATINTEGER;
-	else if (!stricmp(new_name, "A_FormatFloat")) var_type = VAR_FORMATFLOAT;
-	else if (!stricmp(new_name, "A_KeyDelay")) var_type = VAR_KEYDELAY;
-	else if (!stricmp(new_name, "A_WinDelay")) var_type = VAR_WINDELAY;
-	else if (!stricmp(new_name, "A_ControlDelay")) var_type = VAR_CONTROLDELAY;
-	else if (!stricmp(new_name, "A_MouseDelay")) var_type = VAR_MOUSEDELAY;
-	else if (!stricmp(new_name, "A_DefaultMouseSpeed")) var_type = VAR_DEFAULTMOUSESPEED;
+		else if (!stricmp(new_name, "A_BatchLines") || !stricmp(new_name, "A_NumBatchLines")) var_type = VAR_BATCHLINES;
+		else if (!stricmp(new_name, "A_TitleMatchMode")) var_type = VAR_TITLEMATCHMODE;
+		else if (!stricmp(new_name, "A_TitleMatchModeSpeed")) var_type = VAR_TITLEMATCHMODESPEED;
+		else if (!stricmp(new_name, "A_DetectHiddenWindows")) var_type = VAR_DETECTHIDDENWINDOWS;
+		else if (!stricmp(new_name, "A_DetectHiddenText")) var_type = VAR_DETECTHIDDENTEXT;
+		else if (!stricmp(new_name, "A_AutoTrim")) var_type = VAR_AUTOTRIM;
+		else if (!stricmp(new_name, "A_StringCaseSense")) var_type = VAR_STRINGCASESENSE;
+		else if (!stricmp(new_name, "A_FormatInteger")) var_type = VAR_FORMATINTEGER;
+		else if (!stricmp(new_name, "A_FormatFloat")) var_type = VAR_FORMATFLOAT;
+		else if (!stricmp(new_name, "A_KeyDelay")) var_type = VAR_KEYDELAY;
+		else if (!stricmp(new_name, "A_WinDelay")) var_type = VAR_WINDELAY;
+		else if (!stricmp(new_name, "A_ControlDelay")) var_type = VAR_CONTROLDELAY;
+		else if (!stricmp(new_name, "A_MouseDelay")) var_type = VAR_MOUSEDELAY;
+		else if (!stricmp(new_name, "A_DefaultMouseSpeed")) var_type = VAR_DEFAULTMOUSESPEED;
 
-	else if (!stricmp(new_name, "A_IconHidden")) var_type = VAR_ICONHIDDEN;
-	else if (!stricmp(new_name, "A_IconTip")) var_type = VAR_ICONTIP;
-	else if (!stricmp(new_name, "A_IconFile")) var_type = VAR_ICONFILE;
-	else if (!stricmp(new_name, "A_IconNumber")) var_type = VAR_ICONNUMBER;
+		else if (!stricmp(new_name, "A_IconHidden")) var_type = VAR_ICONHIDDEN;
+		else if (!stricmp(new_name, "A_IconTip")) var_type = VAR_ICONTIP;
+		else if (!stricmp(new_name, "A_IconFile")) var_type = VAR_ICONFILE;
+		else if (!stricmp(new_name, "A_IconNumber")) var_type = VAR_ICONNUMBER;
 
-	else if (!stricmp(new_name, "A_ExitReason")) var_type = VAR_EXITREASON;
+		else if (!stricmp(new_name, "A_ExitReason")) var_type = VAR_EXITREASON;
 
-	else if (!stricmp(new_name, "A_OStype")) var_type = VAR_OSTYPE;
-	else if (!stricmp(new_name, "A_OSversion")) var_type = VAR_OSVERSION;
-	else if (!stricmp(new_name, "A_IsAdmin")) var_type = VAR_ISADMIN;
-	else if (!stricmp(new_name, "A_Cursor")) var_type = VAR_CURSOR;
-	else if (!stricmp(new_name, "A_CaretX")) var_type = VAR_CARETX;
-	else if (!stricmp(new_name, "A_CaretY")) var_type = VAR_CARETY;
-	else if (!stricmp(new_name, "A_IPAddress1")) var_type = VAR_IPADDRESS1;
-	else if (!stricmp(new_name, "A_IPAddress2")) var_type = VAR_IPADDRESS2;
-	else if (!stricmp(new_name, "A_IPAddress3")) var_type = VAR_IPADDRESS3;
-	else if (!stricmp(new_name, "A_IPAddress4")) var_type = VAR_IPADDRESS4;
+		else if (!stricmp(new_name, "A_OStype")) var_type = VAR_OSTYPE;
+		else if (!stricmp(new_name, "A_OSversion")) var_type = VAR_OSVERSION;
+		else if (!stricmp(new_name, "A_IsAdmin")) var_type = VAR_ISADMIN;
+		else if (!stricmp(new_name, "A_Cursor")) var_type = VAR_CURSOR;
+		else if (!stricmp(new_name, "A_CaretX")) var_type = VAR_CARETX;
+		else if (!stricmp(new_name, "A_CaretY")) var_type = VAR_CARETY;
+		else if (!stricmp(new_name, "A_ScreenWidth")) var_type = VAR_SCREENWIDTH;
+		else if (!stricmp(new_name, "A_ScreenHeight")) var_type = VAR_SCREENHEIGHT;
+		else if (!stricmp(new_name, "A_IPAddress1")) var_type = VAR_IPADDRESS1;
+		else if (!stricmp(new_name, "A_IPAddress2")) var_type = VAR_IPADDRESS2;
+		else if (!stricmp(new_name, "A_IPAddress3")) var_type = VAR_IPADDRESS3;
+		else if (!stricmp(new_name, "A_IPAddress4")) var_type = VAR_IPADDRESS4;
 
-	else if (!stricmp(new_name, "A_LoopFileName")) var_type = VAR_LOOPFILENAME;
-	else if (!stricmp(new_name, "A_LoopFileShortName")) var_type = VAR_LOOPFILESHORTNAME;
-	else if (!stricmp(new_name, "A_LoopFileDir")) var_type = VAR_LOOPFILEDIR;
-	else if (!stricmp(new_name, "A_LoopFileFullPath")) var_type = VAR_LOOPFILEFULLPATH;
-	else if (!stricmp(new_name, "A_LoopFileTimeModified")) var_type = VAR_LOOPFILETIMEMODIFIED;
-	else if (!stricmp(new_name, "A_LoopFileTimeCreated")) var_type = VAR_LOOPFILETIMECREATED;
-	else if (!stricmp(new_name, "A_LoopFileTimeAccessed")) var_type = VAR_LOOPFILETIMEACCESSED;
-	else if (!stricmp(new_name, "A_LoopFileAttrib")) var_type = VAR_LOOPFILEATTRIB;
-	else if (!stricmp(new_name, "A_LoopFileSize")) var_type = VAR_LOOPFILESIZE;
-	else if (!stricmp(new_name, "A_LoopFileSizeKB")) var_type = VAR_LOOPFILESIZEKB;
-	else if (!stricmp(new_name, "A_LoopFileSizeMB")) var_type = VAR_LOOPFILESIZEMB;
+		else if (!stricmp(new_name, "A_LoopFileName")) var_type = VAR_LOOPFILENAME;
+		else if (!stricmp(new_name, "A_LoopFileShortName")) var_type = VAR_LOOPFILESHORTNAME;
+		else if (!stricmp(new_name, "A_LoopFileDir")) var_type = VAR_LOOPFILEDIR;
+		else if (!stricmp(new_name, "A_LoopFileFullPath")) var_type = VAR_LOOPFILEFULLPATH;
+		else if (!stricmp(new_name, "A_LoopFileTimeModified")) var_type = VAR_LOOPFILETIMEMODIFIED;
+		else if (!stricmp(new_name, "A_LoopFileTimeCreated")) var_type = VAR_LOOPFILETIMECREATED;
+		else if (!stricmp(new_name, "A_LoopFileTimeAccessed")) var_type = VAR_LOOPFILETIMEACCESSED;
+		else if (!stricmp(new_name, "A_LoopFileAttrib")) var_type = VAR_LOOPFILEATTRIB;
+		else if (!stricmp(new_name, "A_LoopFileSize")) var_type = VAR_LOOPFILESIZE;
+		else if (!stricmp(new_name, "A_LoopFileSizeKB")) var_type = VAR_LOOPFILESIZEKB;
+		else if (!stricmp(new_name, "A_LoopFileSizeMB")) var_type = VAR_LOOPFILESIZEMB;
 
-	else if (!stricmp(new_name, "A_LoopRegType")) var_type = VAR_LOOPREGTYPE;
-	else if (!stricmp(new_name, "A_LoopRegKey")) var_type = VAR_LOOPREGKEY;
-	else if (!stricmp(new_name, "A_LoopRegSubKey")) var_type = VAR_LOOPREGSUBKEY;
-	else if (!stricmp(new_name, "A_LoopRegName")) var_type = VAR_LOOPREGNAME;
-	else if (!stricmp(new_name, "A_LoopRegTimeModified")) var_type = VAR_LOOPREGTIMEMODIFIED;
+		else if (!stricmp(new_name, "A_LoopRegType")) var_type = VAR_LOOPREGTYPE;
+		else if (!stricmp(new_name, "A_LoopRegKey")) var_type = VAR_LOOPREGKEY;
+		else if (!stricmp(new_name, "A_LoopRegSubKey")) var_type = VAR_LOOPREGSUBKEY;
+		else if (!stricmp(new_name, "A_LoopRegName")) var_type = VAR_LOOPREGNAME;
+		else if (!stricmp(new_name, "A_LoopRegTimeModified")) var_type = VAR_LOOPREGTIMEMODIFIED;
 
-	else if (!stricmp(new_name, "A_LoopReadLine")) var_type = VAR_LOOPREADLINE;
-	else if (!stricmp(new_name, "A_LoopField")) var_type = VAR_LOOPFIELD;
-	else if (!stricmp(new_name, "A_Index")) var_type = VAR_INDEX;  // A short name since it maybe be typed so often.
+		else if (!stricmp(new_name, "A_LoopReadLine")) var_type = VAR_LOOPREADLINE;
+		else if (!stricmp(new_name, "A_LoopField")) var_type = VAR_LOOPFIELD;
+		else if (!stricmp(new_name, "A_Index")) var_type = VAR_INDEX;  // A short name since it maybe be typed so often.
 
-	else if (!stricmp(new_name, "A_ThisMenuItem")) var_type = VAR_THISMENUITEM;
-	else if (!stricmp(new_name, "A_ThisMenuItemPos")) var_type = VAR_THISMENUITEMPOS;
-	else if (!stricmp(new_name, "A_ThisMenu")) var_type = VAR_THISMENU;
-	else if (!stricmp(new_name, "A_ThisHotkey")) var_type = VAR_THISHOTKEY;
-	else if (!stricmp(new_name, "A_PriorHotkey")) var_type = VAR_PRIORHOTKEY;
-	else if (!stricmp(new_name, "A_TimeSinceThisHotkey")) var_type = VAR_TIMESINCETHISHOTKEY;
-	else if (!stricmp(new_name, "A_TimeSincePriorHotkey")) var_type = VAR_TIMESINCEPRIORHOTKEY;
-	else if (!stricmp(new_name, "A_EndChar")) var_type = VAR_ENDCHAR;
-	else if (!stricmp(new_name, "A_GuiControlEvent")) var_type = VAR_GUICONTROLEVENT;
+		else if (!stricmp(new_name, "A_ThisMenuItem")) var_type = VAR_THISMENUITEM;
+		else if (!stricmp(new_name, "A_ThisMenuItemPos")) var_type = VAR_THISMENUITEMPOS;
+		else if (!stricmp(new_name, "A_ThisMenu")) var_type = VAR_THISMENU;
+		else if (!stricmp(new_name, "A_ThisHotkey")) var_type = VAR_THISHOTKEY;
+		else if (!stricmp(new_name, "A_PriorHotkey")) var_type = VAR_PRIORHOTKEY;
+		else if (!stricmp(new_name, "A_TimeSinceThisHotkey")) var_type = VAR_TIMESINCETHISHOTKEY;
+		else if (!stricmp(new_name, "A_TimeSincePriorHotkey")) var_type = VAR_TIMESINCEPRIORHOTKEY;
+		else if (!stricmp(new_name, "A_EndChar")) var_type = VAR_ENDCHAR;
+		else if (!stricmp(new_name, "A_GuiControlEvent")) var_type = VAR_GUICONTROLEVENT;
 
-	else if (!stricmp(new_name, "A_TimeIdle")) var_type = VAR_TIMEIDLE;
-	else if (!stricmp(new_name, "A_TimeIdlePhysical")) var_type = VAR_TIMEIDLEPHYSICAL;
-	else if (!stricmp(new_name, "A_Space")) var_type = VAR_SPACE;
-	else if (!stricmp(new_name, "A_Tab")) var_type = VAR_TAB;
-	else var_type = VAR_NORMAL;
+		else if (!stricmp(new_name, "A_TimeIdle")) var_type = VAR_TIMEIDLE;
+		else if (!stricmp(new_name, "A_TimeIdlePhysical")) var_type = VAR_TIMEIDLEPHYSICAL;
+		else if (!stricmp(new_name, "A_Space")) var_type = VAR_SPACE;
+		else if (!stricmp(new_name, "A_Tab")) var_type = VAR_TAB;
+	}
 
 	Var *the_new_var = new Var(new_name, var_type);
 	if (the_new_var == NULL)
@@ -6669,6 +6704,10 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		return WinGetText(ARG2, ARG3, ARG4, ARG5);
 	case ACT_WINGETPOS:
 		return WinGetPos(ARG5, ARG6, ARG7, ARG8);
+
+	case ACT_SYSGET:
+		return SysGet(ARG2, ARG3);
+
 	case ACT_PIXELSEARCH:
 		return PixelSearch(ATOI(ARG3), ATOI(ARG4), ATOI(ARG5), ATOI(ARG6), ATOI(ARG7), ATOI(ARG8));
 	//case ACT_IMAGESEARCH:
@@ -7115,6 +7154,9 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 
 	case ACT_DRIVESPACEFREE:
 		return DriveSpace(ARG2, true);
+
+	case ACT_DRIVE:
+		return Drive(THREE_ARGS);
 
 	case ACT_DRIVEGET:
 		return DriveGet(ARG2, ARG3);
@@ -8389,6 +8431,22 @@ VarSizeType Script::ScriptGetCursor(char *aBuf)
 			break;
 
 	strlcpy(aBuf, cursor_name[a], SMALL_STRING_LENGTH + 1);  // If a is out-of-bounds, "Unknown" will be used.
+	return (VarSizeType)strlen(aBuf);
+}
+
+VarSizeType Script::GetScreenWidth(char *aBuf)
+{
+	if (!aBuf)
+		return MAX_NUMBER_LENGTH;
+	ITOA(GetSystemMetrics(SM_CXSCREEN), aBuf);
+	return (VarSizeType)strlen(aBuf);
+}
+
+VarSizeType Script::GetScreenHeight(char *aBuf)
+{
+	if (!aBuf)
+		return MAX_NUMBER_LENGTH;
+	ITOA(GetSystemMetrics(SM_CYSCREEN), aBuf);
 	return (VarSizeType)strlen(aBuf);
 }
 

@@ -159,7 +159,7 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 	bool centered_main = true;  // Whether the main text is centered.
 	bool centered_sub = true;   // Whether the sub text is centered.
 	int style = WS_DISABLED|WS_POPUP|WS_CAPTION;  // WS_CAPTION implies WS_BORDER
-	int xstyle = WS_EX_TOPMOST;
+	int exstyle = WS_EX_TOPMOST;
 	int xpos = COORD_UNSPECIFIED;
 	int ypos = COORD_UNSPECIFIED;
 	int font_size1 = 0; // 0 is the flag to "use default size".
@@ -198,7 +198,7 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 			// Decided against this enforcement.  In the enhancement mentioned below is ever done (unlikely),
 			// it seems that A1 can turn always-on-top on and A0 or A by itself can turn it off:
 			//if (*(cp + 1) == '0') // The zero is required to allow for future enhancement: modify attrib. of existing window.
-			xstyle &= ~WS_EX_TOPMOST;
+			exstyle &= ~WS_EX_TOPMOST;
 			break;
 		case 'B': // Borderless and/or Titleless
 			style &= ~WS_CAPTION;
@@ -523,12 +523,12 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 	// Based on the client area determined above, expand the main_rect to include title bar, borders, etc.
 	// If the window has a border or caption this also changes top & left *slightly* from zero.
 	RECT main_rect = client_rect;
-	AdjustWindowRectEx(&main_rect, style, FALSE, xstyle);
+	AdjustWindowRectEx(&main_rect, style, FALSE, exstyle);
 	int main_width = main_rect.right - main_rect.left;  // main.left might be slightly less than zero.
 	int main_height = main_rect.bottom - main_rect.top; // main.top might be slightly less than zero.
 
 	RECT work_rect;
-	SystemParametersInfo(SPI_GETWORKAREA, 0, &work_rect, 0);  // Get Desktop rect excluding task bar.
+	SystemParametersInfo(SPI_GETWORKAREA, 0, &work_rect, 0);  // Get desktop rect excluding task bar.
 	int work_width = work_rect.right - work_rect.left;  // Note that "left" won't be zero if task bar is on left!
 	int work_height = work_rect.bottom - work_rect.top;  // Note that "top" won't be zero if task bar is on top!
 
@@ -559,7 +559,7 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 	//    prevent their owners from ever becoming active).
 	// However, it seems likely that some users would want the above to be configurable,
 	// so now there is an option to change this behavior.
-	if (!(splash.hwnd = CreateWindowEx(xstyle, WINDOW_CLASS_SPLASH, aTitle, style, xpos, ypos
+	if (!(splash.hwnd = CreateWindowEx(exstyle, WINDOW_CLASS_SPLASH, aTitle, style, xpos, ypos
 		, main_width, main_height, owned ? g_hWnd : NULL, NULL, g_hInstance, NULL)))
 		return FAIL;  // No error msg since so rare.
 
@@ -596,28 +596,34 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 	if (!aSplashImage && splash.object_height > 0) // Progress window
 	{
 		// CREATE Progress control (always starts off at its default percentage of zero):
-		splash.hwnd_bar = CreateWindowEx(WS_EX_CLIENTEDGE, "msctls_progress32", NULL, WS_CHILD|WS_VISIBLE|PBS_SMOOTH
-			, PROGRESS_BAR_POS, splash.hwnd, NULL, NULL, NULL);
-		SendMessage(splash.hwnd_bar, PBM_SETRANGE, 0, MAKELONG(0, 100));
-		SendMessage(splash.hwnd_bar, PBM_SETSTEP, 1, 0); // set some characteristics
-		if (bar_color != CLR_DEFAULT)
-			SendMessage(splash.hwnd_bar, PBM_SETBARCOLOR, 0, bar_color); // Set color.
-		if (splash.color_bk != CLR_DEFAULT)
-			SendMessage(splash.hwnd_bar, PBM_SETBKCOLOR, 0, splash.color_bk); // Set color.
-		if (percent > 0)
+		if (splash.hwnd_bar = CreateWindowEx(WS_EX_CLIENTEDGE, "msctls_progress32", NULL, WS_CHILD|WS_VISIBLE|PBS_SMOOTH
+			, PROGRESS_BAR_POS, splash.hwnd, NULL, NULL, NULL))
 		{
-			// This happens when the window doesn't exist and a command such as the following is given:
-			// Progress, 50 [, ...]
-			splash.percent = percent;
-			SendMessage(splash.hwnd_bar, PBM_SETPOS, (WPARAM)percent, 0);
+			SendMessage(splash.hwnd_bar, PBM_SETRANGE, 0, MAKELONG(0, 100));
+			SendMessage(splash.hwnd_bar, PBM_SETSTEP, 1, 0); // set some characteristics
+			if (bar_color != CLR_DEFAULT)
+			{
+				// Remove visual styles so that specified color will be obeyed:
+				MySetWindowTheme(splash.hwnd_bar, L"", L"");
+				SendMessage(splash.hwnd_bar, PBM_SETBARCOLOR, 0, bar_color); // Set color.
+			}
+			if (splash.color_bk != CLR_DEFAULT)
+				SendMessage(splash.hwnd_bar, PBM_SETBKCOLOR, 0, splash.color_bk); // Set color.
+			if (percent > 0)
+			{
+				// This happens when the window doesn't exist and a command such as the following is given:
+				// Progress, 50 [, ...]
+				splash.percent = percent;
+				SendMessage(splash.hwnd_bar, PBM_SETPOS, (WPARAM)percent, 0);
+			}
 		}
 	}
 
 	// CREATE Sub label
-	splash.hwnd_text2 = CreateWindowEx(0, "static", aSubText
+	if (splash.hwnd_text2 = CreateWindowEx(0, "static", aSubText
 		, WS_CHILD|WS_VISIBLE|SS_NOPREFIX|(centered_sub ? SS_CENTER : SS_LEFT)
-		, PROGRESS_SUB_POS, splash.hwnd, NULL, g_hInstance, NULL);
-	SendMessage(splash.hwnd_text2, WM_SETFONT, (WPARAM)(splash.hfont2 ? splash.hfont2 : hfont_default), MAKELPARAM(TRUE, 0));
+		, PROGRESS_SUB_POS, splash.hwnd, NULL, g_hInstance, NULL))
+		SendMessage(splash.hwnd_text2, WM_SETFONT, (WPARAM)(splash.hfont2 ? splash.hfont2 : hfont_default), MAKELPARAM(TRUE, 0));
 
 	// Show it without activating it.  Even with options that allow the window to be activated (such
 	// as movable), it seems best to do this to prevent changing the current foreground window, which
@@ -662,8 +668,10 @@ ResultType Line::ToolTip(char *aText, char *aX, char *aY, char *aID)
 	// interfering with double clicks, so it seems it must be the displaying of the ToolTip
 	// window itself.
 
+
+	// Use virtual destop so that tooltip can move onto non-primary monitor in a multi-monitor system:
 	RECT dtw;
-	GetWindowRect(GetDesktopWindow(), &dtw);
+	GetVirtualDesktopRect(dtw);
 
 	bool one_or_both_coords_unspecified = !*aX || !*aY;
 	POINT pt, pt_cursor;
@@ -720,24 +728,50 @@ ResultType Line::ToolTip(char *aText, char *aX, char *aY, char *aID)
 		tip_hwnd = g_hWndToolTip[window_index] = CreateWindowEx(WS_EX_TOPMOST, TOOLTIPS_CLASS, NULL, TTS_NOPREFIX | TTS_ALWAYSTIP
 			, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, NULL, NULL, NULL, NULL);
 		SendMessage(tip_hwnd, TTM_ADDTOOL, 0, (LPARAM)(LPTOOLINFO)&ti);
-		SendMessage(tip_hwnd, TTM_SETMAXTIPWIDTH, 0, (LPARAM)dtw.right);
+		// v1.0.21: GetSystemMetrics(SM_CXSCREEN) is used for the maximum width because even on a
+		// multi-monitor system, most users would not want a tip window to stretch across multiple monitors:
+		SendMessage(tip_hwnd, TTM_SETMAXTIPWIDTH, 0, (LPARAM)GetSystemMetrics(SM_CXSCREEN));
 		// Must do these next two when the window is first created, otherwise GetWindowRect() below will retrieve
 		// a tooltip window size that is quite a bit taller than it winds up being:
 		SendMessage(tip_hwnd, TTM_TRACKPOSITION, 0, (LPARAM)MAKELONG(pt.x, pt.y));
 		SendMessage(tip_hwnd, TTM_TRACKACTIVATE, TRUE, (LPARAM)&ti);
 	}
-	else
-		SendMessage(tip_hwnd, TTM_UPDATETIPTEXT, 0, (LPARAM)&ti);
+	// Bugfix for v1.0.21: The below is now called unconditionally, even if the above newly created the window.
+	// If this is not done, the tip window will fail to appear the first time it is invoked, at least when
+	// all of the following are true:
+	// 1) Windows XP;
+	// 2) Common controls v6 (via manifest);
+	// 3) "Control Panel >> Display >> Effects >> Use transition >> Fade effect" setting is in effect.
+	SendMessage(tip_hwnd, TTM_UPDATETIPTEXT, 0, (LPARAM)&ti);
 
 
 	RECT ttw = {0};
 	GetWindowRect(tip_hwnd, &ttw); // Must be called this late to ensure the tooltip has been created by above.
 	int tt_width = ttw.right - ttw.left;
 	int tt_height = ttw.bottom - ttw.top;
+
+	// v1.0.21: Revised for multi-monitor support.  I read somewhere that dtw.left can be negative (perhaps
+	// if the secondary monitor is to the left of the primary).  So it seems best to assume it is possible:
 	if (pt.x + tt_width >= dtw.right)
 		pt.x = dtw.right - tt_width - 1;
 	if (pt.y + tt_height >= dtw.bottom)
 		pt.y = dtw.bottom - tt_height - 1;
+	// It seems best not to have each of the below paired with the above.  This is because it allows
+	// the flexibility to explicitly move the tooltip above or to the left of the screen.  Such a feat
+	// should only be possible if done via explicitly passed-in negative coordinates for aX and/or aY.
+	// In other words, it should be impossible for a tooltip window to follow the mouse cursor somewhere
+	// off the virtual screen because:
+	// 1) The mouse cursor is normally trapped within the bounds of the virtual screen.
+	// 2) The tooltip window defaults to appearing South-East of the cursor.  It can only appear
+	//    in some other quadrant if jammed against the right or bottom edges of the screen, in which
+	//    case it can't be partially above or to the left of the virtual screen unless it's really
+	//    huge, which seems very unlikely given that it's limited to the maximum width of the
+	//    primary display as set by TTM_SETMAXTIPWIDTH above.
+	//else if (pt.x < dtw.left) // Should be impossible for this to happen due to mouse being off the screen.
+	//	pt.x = dtw.left;      // But could happen if user explicitly passed in a coord that was too negative.
+	//...
+	//else if (pt.y < dtw.top)
+	//	pt.y = dtw.top;
 
 	if (one_or_both_coords_unspecified)
 	{
@@ -1321,6 +1355,7 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 	g_input.BackspaceIsUndo = true;
 	g_input.CaseSensitive = false;
 	g_input.IgnoreAHKInput = false;
+	g_input.TranscribeModifiedKeys = false;
 	g_input.Visible = false;
 	g_input.FindAnywhere = false;
 	int timeout = 0;  // Set default.
@@ -1341,6 +1376,9 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 			break;
 		case 'I':
 			g_input.IgnoreAHKInput = true;
+			break;
+		case 'M':
+			g_input.TranscribeModifiedKeys = true;
 			break;
 		case 'L':
 			// Use atoi() vs. ATOI() to avoid interpreting something like 0x01C as hex
@@ -2493,6 +2531,18 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 		output_var->Assign(dyn_buf + start);
 		free(dyn_buf);
 		break;
+
+	case CONTROLGET_CMD_STYLE:
+		// Seems best to always format as hex, since it has more human-readable meaning then:
+		sprintf(buf, "0x%08X", GetWindowLong(control_window, GWL_STYLE));
+		output_var->Assign(buf);
+		break;
+
+	case CONTROLGET_CMD_EXSTYLE:
+		// Seems best to always format as hex, since it has more human-readable meaning then:
+		sprintf(buf, "0x%08X", GetWindowLong(control_window, GWL_EXSTYLE));
+		output_var->Assign(buf);
+		break;
 	}
 
 	// Note that ControlDelay is not done for the Get type commands, because it seems unnecessary.
@@ -2895,7 +2945,7 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 		// Otherwise, the target window(s) have not yet been determined and a special method
 		// is required to gather them.
 		wip.find_last_match = true;
-		wip.array_start = output_var;  // Give it the position in the var list of where the array will be.
+		wip.array_start = output_var;  // Give it the position in the var list of where the array-element vars will be.
 		strlcpy(wip.title, aTitle, sizeof(wip.title));
 		strlcpy(wip.text, aText, sizeof(wip.text));
 		strlcpy(wip.exclude_title, aExcludeTitle, sizeof(wip.exclude_title));
@@ -2903,15 +2953,22 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 		EnumWindows(EnumParentFind, (LPARAM)&wip);
 		return output_var->Assign(wip.match_count);
 
+	case WINGET_CMD_MINMAX:
+		if (!target_window_determined)
+			target_window = WinExist(aTitle, aText, aExcludeTitle, aExcludeText);
+		// Testing shows that it's not possible for a minimized window to also be maximized (under
+		// the theory that upon restoration, it *would* be maximized.  This is unfortunate if there
+		// is no other way to determine what the restoration size and maxmized state will be for a
+		// minimized window.
+		if (target_window)
+			return output_var->Assign(IsZoomed(target_window) ? 1 : (IsIconic(target_window) ? -1 : 0));
+		else
+			return output_var->Assign();
+
 	case WINGET_CMD_CONTROLLIST:
 		if (!target_window_determined)
 			target_window = WinExist(aTitle, aText, aExcludeTitle, aExcludeText);
-		if (target_window)
-		{
-			return WinGetControlList(output_var, target_window);
-		}
-		else
-			return output_var->Assign();
+		return target_window ? WinGetControlList(output_var, target_window) : output_var->Assign();
 	}
 
 	return FAIL;  // Never executed (increases maintainability and avoids compiler warning).
@@ -3173,6 +3230,182 @@ ResultType Line::WinGetPos(char *aTitle, char *aText, char *aExcludeTitle, char 
 				result = FAIL;
 
 	return result;
+}
+
+
+
+ResultType Line::SysGet(char *aCmd, char *aValue)
+// Thanks to Gregory F. Hogg of Hogg's Software for providing sample code on which this function
+// is based.
+{
+	// For simplicity and array look-up performance, this is done even for sub-commands that output to an array:
+	Var *output_var = ResolveVarOfArg(0);
+	if (!output_var)
+		return FAIL;
+
+	SysGetCmds cmd = ConvertSysGetCmd(aCmd);
+	// Since command names are validated at load-time, this only happens if the command name
+	// was contained in a variable reference.  But for simplicity of design here, return
+	// failure in this case (unlike other functions similar to this one):
+	if (cmd == SYSGET_CMD_INVALID)
+		return LineError(ERR_SYSGET ERR_ABORT, FAIL, aCmd);
+
+	MonitorInfoPackage mip = {0};  // Improves maintainability to initialize unconditionally, here.
+	mip.monitor_info_ex.cbSize = sizeof(MONITORINFOEX); // Also improves maintainability.
+
+	// EnumDisplayMonitors() must be dynamically loaded; otherwise, the app won't launch at all on Win95/NT.
+	typedef BOOL (WINAPI* EnumDisplayMonitorsType)(HDC, LPCRECT, MONITORENUMPROC, LPARAM);
+	static EnumDisplayMonitorsType MyEnumDisplayMonitors = (EnumDisplayMonitorsType)
+		GetProcAddress(GetModuleHandle("user32.dll"), "EnumDisplayMonitors");
+
+	switch(cmd)
+	{
+	case SYSGET_CMD_METRICS: // In this case, aCmd is the value itself.
+		return output_var->Assign(GetSystemMetrics(ATOI(aCmd)));  // Input and output are both signed integers.
+
+	// For the next few cases, I'm not sure if it is possible to have zero monitors.  Obviously it's possible
+	// to not have a monitor turned on or not connected at all.  But it seems likely that these various API
+	// functions will provide a "default monitor" in the absence of a physical monitor connected to the
+	// system.  To be safe, all of the below will assume that zero is possible, at least on some OSes or
+	// under some conditions.  However, on Win95/NT, "1" is assumed since there is probably no way to tell
+	// for sure if there are zero monitors except via GetSystemMetrics(SM_CMONITORS), which is a different
+	// animal as described below.
+	case SYSGET_CMD_MONITORCOUNT:
+		// Don't use GetSystemMetrics(SM_CMONITORS) because of this:
+		// MSDN: "GetSystemMetrics(SM_CMONITORS) counts only display monitors. This is different from
+		// EnumDisplayMonitors, which enumerates display monitors and also non-display pseudo-monitors."
+		if (!MyEnumDisplayMonitors) // Since system only supports 1 monitor, the first must be primary.
+			return output_var->Assign(1); // Assign as 1 vs. "1" to use hexidecimal display if that is in effect.
+		mip.monitor_number_to_find = COUNT_ALL_MONITORS;
+		MyEnumDisplayMonitors(NULL, NULL, EnumMonitorProc, (LPARAM)&mip);
+		return output_var->Assign(mip.count); // Will assign zero if the API ever returns a legitimate zero.
+
+	// Even if the first monitor to be retrieved by the EnumProc is always the primary (which is doubtful
+	// since there's no mention of this in the MSDN docs) it seems best to have this sub-cmd in case that
+	// policy ever changes:
+	case SYSGET_CMD_MONITORPRIMARY:
+		if (!MyEnumDisplayMonitors) // Since system only supports 1 monitor, the first must be primary.
+			return output_var->Assign(1); // Assign as 1 vs. "1" to use hexidecimal display if that is in effect.
+		// The mip struct's values have already initalized correctly for the below:
+		MyEnumDisplayMonitors(NULL, NULL, EnumMonitorProc, (LPARAM)&mip);
+		return output_var->Assign(mip.count); // Will assign zero if the API ever returns a legitimate zero.
+
+	case SYSGET_CMD_MONITORAREA:
+	case SYSGET_CMD_MONITORWORKAREA:
+		Var *output_var_left, *output_var_top, *output_var_right, *output_var_bottom;
+		// Make it longer than max var name so that FindOrAddVar() will be able to spot and report
+		// var names that are too long:
+		char var_name[MAX_VAR_NAME_LENGTH + 20];
+		// To help performance (in case the linked list of variables is huge), tell FindOrAddVar where
+		// to start the search.  Use the base array name rather than the preceding element because,
+		// for example, Array19 is alphabetially less than Array2, so we can't rely on the
+		// numerical ordering:
+		snprintf(var_name, sizeof(var_name), "%sLeft", output_var->mName);
+		if (   !(output_var_left = g_script.FindOrAddVar(var_name, VAR_NAME_LENGTH_DEFAULT, output_var))   )
+			return FAIL;  // It already reported the error.
+		snprintf(var_name, sizeof(var_name), "%sTop", output_var->mName);
+		if (   !(output_var_top = g_script.FindOrAddVar(var_name, VAR_NAME_LENGTH_DEFAULT, output_var))   )
+			return FAIL;
+		snprintf(var_name, sizeof(var_name), "%sRight", output_var->mName);
+		if (   !(output_var_right = g_script.FindOrAddVar(var_name, VAR_NAME_LENGTH_DEFAULT, output_var))   )
+			return FAIL;
+		snprintf(var_name, sizeof(var_name), "%sBottom", output_var->mName);
+		if (   !(output_var_bottom = g_script.FindOrAddVar(var_name, VAR_NAME_LENGTH_DEFAULT, output_var))   )
+			return FAIL;
+
+		RECT monitor_rect;
+		if (MyEnumDisplayMonitors)
+		{
+			mip.monitor_number_to_find = ATOI(aValue);  // If this returns 0, it will default to the primary monitor.
+			MyEnumDisplayMonitors(NULL, NULL, EnumMonitorProc, (LPARAM)&mip);
+			if (!mip.count || (mip.monitor_number_to_find && mip.monitor_number_to_find != mip.count))
+			{
+				// With the exception of the caller having specified a non-existent monitor number, all of
+				// the ways the above can happen are probably impossible in practice.  Make all the variables
+				// blank vs. zero to indicate the problem.
+				output_var_left->Assign();
+				output_var_top->Assign();
+				output_var_right->Assign();
+				output_var_bottom->Assign();
+				return OK;
+			}
+			// Otherwise:
+			monitor_rect = (cmd == SYSGET_CMD_MONITORAREA) ? mip.monitor_info_ex.rcMonitor : mip.monitor_info_ex.rcWork;
+		}
+		else // Win95/NT: Since system only supports 1 monitor, the first must be primary.
+		{
+			if (cmd == SYSGET_CMD_MONITORAREA)
+			{
+				monitor_rect.left = 0;
+				monitor_rect.top = 0;
+				monitor_rect.right = GetSystemMetrics(SM_CXSCREEN);
+				monitor_rect.bottom = GetSystemMetrics(SM_CYSCREEN);
+			}
+			else // Work area
+				SystemParametersInfo(SPI_GETWORKAREA, 0, &monitor_rect, 0);  // Get desktop rect excluding task bar.
+		}
+		output_var_left->Assign(monitor_rect.left);
+		output_var_top->Assign(monitor_rect.top);
+		output_var_right->Assign(monitor_rect.right);
+		output_var_bottom->Assign(monitor_rect.bottom);
+		return OK;
+
+	case SYSGET_CMD_MONITORNAME:
+		if (MyEnumDisplayMonitors)
+		{
+			mip.monitor_number_to_find = ATOI(aValue);  // If this returns 0, it will default to the primary monitor.
+			MyEnumDisplayMonitors(NULL, NULL, EnumMonitorProc, (LPARAM)&mip);
+			if (!mip.count || (mip.monitor_number_to_find && mip.monitor_number_to_find != mip.count))
+				// With the exception of the caller having specified a non-existent monitor number, all of
+				// the ways the above can happen are probably impossible in practice.  Make the variable
+				// blank to indicate the problem:
+				return output_var->Assign();
+			else
+				return output_var->Assign(mip.monitor_info_ex.szDevice);
+		}
+		else // Win95/NT: There is probably no way to find out the name of the monitor.
+			return output_var->Assign();
+	} // switch()
+
+	return FAIL;  // Never executed (increases maintainability and avoids compiler warning).
+}
+
+
+
+BOOL CALLBACK EnumMonitorProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM lParam)
+{
+	MonitorInfoPackage &mip = *((MonitorInfoPackage *)lParam);  // For performance and convenience.
+	if (mip.monitor_number_to_find == COUNT_ALL_MONITORS)
+	{
+		++mip.count;
+		return TRUE;  // Enumerate all monitors so that they can be counted.
+	}
+	// GetMonitorInfo() must be dynamically loaded; otherwise, the app won't launch at all on Win95/NT.
+	typedef BOOL (WINAPI* GetMonitorInfoType)(HMONITOR, LPMONITORINFO);
+	static GetMonitorInfoType MyGetMonitorInfo = (GetMonitorInfoType)
+		GetProcAddress(GetModuleHandle("user32.dll"), "GetMonitorInfoA");
+	if (!MyGetMonitorInfo) // Shouldn't normally happen since caller wouldn't have called us if OS is Win95/NT. 
+		return FALSE;
+	if (!MyGetMonitorInfo(hMonitor, &mip.monitor_info_ex)) // Failed.  Probably very rare.
+		return FALSE; // Due to the complexity of needing to stop at the correct monitor number, do not continue.
+		// In the unlikely event that the above fails when the caller wanted us to find the primary
+		// monitor, the caller will think the primary is the previously found monitor (if any).
+		// This is just documented here as a known limitation since this combination of circumstances
+		// is probably impossible.
+	++mip.count; // So that caller can detect failure, increment only now that failure conditions have been checked.
+	if (mip.monitor_number_to_find) // Caller gave a specific monitor number, so don't search for the primary monitor.
+	{
+		if (mip.count == mip.monitor_number_to_find) // Since the desired monitor has been found, must not continue.
+			return FALSE;
+	}
+	else // Caller wants the primary monitor found.
+		// MSDN docs are unclear that MONITORINFOF_PRIMARY is a bitwise value, but the name "dwFlags" implies so:
+		if (mip.monitor_info_ex.dwFlags & MONITORINFOF_PRIMARY)
+			return FALSE;  // Primary has been found and "count" contains its number. Must not continue the enumeration.
+			// Above assumes that it is impossible to not have a primary monitor in a system that has at least
+			// one monitor.  MSDN certainly implies this through multiple references to the primary monitor.
+	// Otherwise, continue the enumeration:
+	return TRUE;
 }
 
 
@@ -3485,7 +3718,6 @@ ResultType Line::PixelGetColor(int aX, int aY)
 		return FAIL;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 	output_var->Assign(); // Init to empty string regardless of whether we succeed here.
-
 	if (!(g.CoordMode & COORD_MODE_PIXEL)) // Using relative vs. screen coordinates.
 	{
 		// Convert from relative to absolute (screen) coordinates:
@@ -3495,17 +3727,19 @@ ResultType Line::PixelGetColor(int aX, int aY)
 		aX += rect.left;
 		aY += rect.top;
 	}
-
 	HDC hdc = GetDC(NULL);
 	if (!hdc)
 		return OK;  // Let ErrorLevel tell the story.
-	// Assign the value as an 32-bit int since I believe that's how Window Spy reports color values:
-	ResultType result = output_var->Assign((int)GetPixel(hdc, aX, aY));
+	// Assign the value as an 32-bit int to match Window Spy reports color values.
+	// Update for v1.0.21: Assigning in hex format seems much better, since it's easy to
+	// look at a hex BGR value to get some idea of the hue.  In addition, the result
+	// is zero padded to make it easier to convert to RGB and more consistent in
+	// appearance:
+	char buf[32];
+	sprintf(buf, "0x%06X", GetPixel(hdc, aX, aY));
 	ReleaseDC(NULL, hdc);
-
-	if (result == OK)
-		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-	return result;  // i.e. only return failure if something unexpected happens when assigning to the variable.
+	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+	return output_var->Assign(buf);
 }
 
 
@@ -4922,6 +5156,16 @@ void Line::MouseMove(int aX, int aY, int aSpeed, bool aMoveRelative)
 		rect.bottom = rect.left = rect.right = rect.top = 0;  // Arbitrary defaults.
 
 	// AutoIt3: Convert our coords to MOUSEEVENTF_ABSOLUTE coords
+	// v1.0.21: No actual change was made, but the below comments were added:
+	// Jack Horsfield reports that MouseMove works properly on his multi-monitor system which has
+	// its secondary display to the right of the primary.  He said that MouseClick is able to click on
+	// windows that exist entirely on the secondary display. That's a bit baffling because the below
+	// formula should yield a value greater than 65535 when the destination coordinates are to
+	// the right of the primary display (due to the fact that GetDesktopWindow() called above yields
+	// the rect for the primary display only).  Chances are, mouse_event() in Win2k/XP (and possibly
+	// Win98, but that is far more doubtful given some of the things mentioned on MSDN) has been
+	// enhanced (undocumented) to support values greater than 65535 (and perhaps even negative by
+	// taking advantage of DWORD overflow?)
 	aX = ((65535 * aX) / (rect.right - 1)) + 1;
 	aY = ((65535 * aY) / (rect.bottom - 1)) + 1;
 
@@ -4939,6 +5183,7 @@ void Line::MouseMove(int aX, int aY, int aSpeed, bool aMoveRelative)
 
 	// AutoIt3: So, it's a more gradual speed that is needed :)
 	GetCursorPos(&ptCur);
+	// Convert to MOUSEEVENTF_ABSOLUTE coords
 	xCur = ((ptCur.x * 65535) / (rect.right - 1)) + 1;
 	yCur = ((ptCur.y * 65535) / (rect.bottom - 1)) + 1;
 
@@ -5814,23 +6059,22 @@ ResultType Line::GetKeyJoyState(char *aKeyName, char *aOption)
 	{
 		if (   !(joy = (JoyControls)ConvertJoy(aKeyName, &joystick_id))   )
 			return output_var->Assign("");
+		// Since the above didn't return, joy contains a valid joystick button/control ID:
+		ScriptGetJoyState(joy, joystick_id, output_var);
+		// Always returns OK since ScriptGetJoyState() returns FAIL and sets output_var to be blank if
+		// the result is indeterminate or there was a problem reading the joystick.  We don't want
+		// such a failure to be considered a "critical failure" that will exit the current quasi-thread.
+		return OK;
 	}
-	else // There is a virtual key (not a joystick control).
+	// Otherwise: There is a virtual key (not a joystick control).
+	KeyStateTypes key_state_type;
+	switch (toupper(*aOption))
 	{
-		KeyStateTypes key_state_type;
-		switch (toupper(*aOption))
-		{
-		case 'T': key_state_type = KEYSTATE_TOGGLE; break; // Whether a toggleable key such as CapsLock is currently turned on.
-		case 'P': key_state_type = KEYSTATE_PHYSICAL; break; // Physical state of key.
-		default: key_state_type = KEYSTATE_LOGICAL;
-		}
-		return output_var->Assign(ScriptGetKeyState(vk, key_state_type) ? "D" : "U");
+	case 'T': key_state_type = KEYSTATE_TOGGLE; break; // Whether a toggleable key such as CapsLock is currently turned on.
+	case 'P': key_state_type = KEYSTATE_PHYSICAL; break; // Physical state of key.
+	default: key_state_type = KEYSTATE_LOGICAL;
 	}
-	// Since the above didn't return, joy contains a valid joystick button/control ID:
-	ScriptGetJoyState(joy, joystick_id, output_var);
-	// Always returns OK since ScriptGetJoyState() returns FAIL and sets output_var to be blank if
-	// the result is indeterminate or there was a problem reading the joystick.
-	return OK;
+	return output_var->Assign(ScriptGetKeyState(vk, key_state_type) ? "D" : "U");
 }
 
 
@@ -6062,7 +6306,7 @@ ResultType Line::DriveSpace(char *aPath, bool aGetFreeSpace)
 		buf[length] = '\0';
 	}
 
-	SetErrorMode(SEM_FAILCRITICALERRORS);  // AutoIt3: So a:\ does not ask for disk
+	SetErrorMode(SEM_FAILCRITICALERRORS);  // So that a floppy drive doesn't prompt for a disk
 
 #ifdef _MSC_VER									// AutoIt3: Need a MinGW solution for __int64
 	// The program won't launch at all on Win95a (original Win95) unless the function address is resolved
@@ -6099,18 +6343,16 @@ ResultType Line::DriveSpace(char *aPath, bool aGetFreeSpace)
 
 
 
-ResultType Line::DriveGet(char *aCmd, char *aValue)
-// This function has been adapted from the AutoIt3 source.
+ResultType Line::Drive(char *aCmd, char *aValue, char *aValue2) // aValue not aValue1, for use with a shared macro.
 {
 	DriveCmds drive_cmd = ConvertDriveCmd(aCmd);
-	if (drive_cmd == DRIVE_CMD_CAPACITY)
-		return DriveSpace(aValue, false);
 
 	char path[MAX_PATH + 1];  // +1 to allow room for trailing backslash in case it needs to be added.
 	size_t path_length;
 
 	// Notes about the below macro:
-	// Leave space for the backslash in case its needed:
+	// It is used by both Drive() and DriveGet().
+	// Leave space for the backslash in case its needed.
 	// au3: attempt to fix the parameter passed (backslash may be needed in some OSes).
 	#define DRIVE_SET_PATH \
 		strlcpy(path, aValue, sizeof(path) - 1);\
@@ -6118,10 +6360,78 @@ ResultType Line::DriveGet(char *aCmd, char *aValue)
 		if (path_length && path[path_length - 1] != '\\')\
 			path[path_length++] = '\\';
 
-	if (drive_cmd == DRIVE_CMD_SETLABEL)
+	switch(drive_cmd)
+	{
+	case DRIVE_CMD_INVALID:
+		// Since command names are validated at load-time, this only happens if the command name
+		// was contained in a variable reference.  Since that is very rare, just set ErrorLevel
+		// and return:
+		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+
+	case DRIVE_CMD_EJECT:
+		// Don't do DRIVE_SET_PATH in this case since trailing backslash might prevent it from
+		// working on some OSes.
+		// It seems best not to do the below check since:
+		// 1) aValue usually lacks a trailing backslash so that it will work correctly with "open c: type cdaudio".
+		//    That lack might prevent DriveGetType() from working on some OSes.
+		// 2) It's conceivable that tray eject/retract might work on certain types of drives even though
+		//    they aren't of type DRIVE_CDROM.
+		// 3) One or both of the calls to mciSendString() will simply fail if the drive isn't of the right type.
+		//if (GetDriveType(aValue) != DRIVE_CDROM) // Testing reveals that the below method does not work on Network CD/DVD drives.
+		//	return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+		char mci_string[256];
+		MCIERROR error;
+		// Note: The following comment is obsolete because research of MSDN indicates that there is no way
+		// not to wait when the tray must be physically opened or closed, at least on Windows XP.  Omitting
+		// the word "wait" from both "close cd wait" and "set cd door open/closed wait" does not help, nor
+		// does replacing wait with the word notify in "set cdaudio door open/closed wait".  Obsolete:
+		// By default, don't wait for the operation to complete since that will cause keyboard/mouse lag
+		// if the keyboard/mouse hooks are installed.  That limitation will be resolved when/if the
+		// hooks get a dedicated thread.
+		// The word "wait" is always specified with these operations to ensure consistent behavior across
+		// all OSes (on the off-chance that the absence of "wait" really avoids waiting on Win9x or future
+		// OSes, or perhaps under certain conditions or for certain types of drives).  See above comment
+		// for details.
+		if (!*aValue) // When drive is omitted, operate upon default CD/DVD drive.
+		{
+			snprintf(mci_string, sizeof(mci_string), "set cdaudio door %s wait", ATOI(aValue2) == 1 ? "closed" : "open");
+			error = mciSendString(mci_string, NULL, 0, NULL); // Open or close the tray.
+			return g_ErrorLevel->Assign(error ? ERRORLEVEL_ERROR : ERRORLEVEL_NONE); // Indicate success or failure.
+		}
+		snprintf(mci_string, sizeof(mci_string), "open %s type cdaudio alias cd wait", aValue);
+		if (mciSendString(mci_string, NULL, 0, NULL)) // Error.
+			return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+		snprintf(mci_string, sizeof(mci_string), "set cd door %s wait", ATOI(aValue2) == 1 ? "closed" : "open");
+		error = mciSendString(mci_string, NULL, 0, NULL); // Open or close the tray.
+		mciSendString("close cd wait", NULL, 0, NULL);
+		return g_ErrorLevel->Assign(error ? ERRORLEVEL_ERROR : ERRORLEVEL_NONE); // Indicate success or failure.
+
+	case DRIVE_CMD_LABEL: // Note that is is possible and allowed for the new label to be blank.
+		DRIVE_SET_PATH
+		SetErrorMode(SEM_FAILCRITICALERRORS);  // So that a floppy drive doesn't prompt for a disk
+		return g_ErrorLevel->Assign(SetVolumeLabel(path, aValue2) ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
+
+	} // switch()
+
+	return FAIL;  // Should never be executed.  Helps catch bugs.
+}
+
+
+
+ResultType Line::DriveGet(char *aCmd, char *aValue)
+// This function has been adapted from the AutoIt3 source.
+{
+	DriveGetCmds drive_get_cmd = ConvertDriveGetCmd(aCmd);
+	if (drive_get_cmd == DRIVEGET_CMD_CAPACITY)
+		return DriveSpace(aValue, false);
+
+	char path[MAX_PATH + 1];  // +1 to allow room for trailing backslash in case it needs to be added.
+	size_t path_length;
+
+	if (drive_get_cmd == DRIVEGET_CMD_SETLABEL) // The is retained for backward compatibility even though the Drive cmd is normally used.
 	{
 		DRIVE_SET_PATH
-		SetErrorMode(SEM_FAILCRITICALERRORS);		// So a:\ does not ask for disk
+		SetErrorMode(SEM_FAILCRITICALERRORS);  // So that a floppy drive doesn't prompt for a disk
 		char *new_label = omit_leading_whitespace(aCmd + 9);  // Example: SetLabel:MyLabel
 		return g_ErrorLevel->Assign(SetVolumeLabel(path, new_label) ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
 	}
@@ -6132,16 +6442,16 @@ ResultType Line::DriveGet(char *aCmd, char *aValue)
 	if (!output_var)
 		return FAIL;
 
-	switch(drive_cmd)
+	switch(drive_get_cmd)
 	{
 
-	case DRIVE_CMD_INVALID:
+	case DRIVEGET_CMD_INVALID:
 		// Since command names are validated at load-time, this only happens if the command name
 		// was contained in a variable reference.  Since that is very rare, just set ErrorLevel
 		// and return:
 		return output_var->Assign();  // Let ErrorLevel tell the story.
 
-	case DRIVE_CMD_LIST:
+	case DRIVEGET_CMD_LIST:
 	{
 		UINT uiFlag, uiTemp;
 
@@ -6160,7 +6470,7 @@ ResultType Line::DriveGet(char *aCmd, char *aValue)
 		UCHAR letter;
 		char buf[128], *buf_ptr;
 
-		SetErrorMode(SEM_FAILCRITICALERRORS);		// So a:\ does not ask for disk
+		SetErrorMode(SEM_FAILCRITICALERRORS);  // So that a floppy drive doesn't prompt for a disk
 
 		for (found_drives_count = 0, letter = 'A'; letter <= 'Z'; ++letter)
 		{
@@ -6180,31 +6490,31 @@ ResultType Line::DriveGet(char *aCmd, char *aValue)
 		break;
 	}
 
-	case DRIVE_CMD_FILESYSTEM:
-	case DRIVE_CMD_LABEL:
-	case DRIVE_CMD_SERIAL:
+	case DRIVEGET_CMD_FILESYSTEM:
+	case DRIVEGET_CMD_LABEL:
+	case DRIVEGET_CMD_SERIAL:
 	{
 		char label[256];
 		char file_system[256];
 		DRIVE_SET_PATH
-		SetErrorMode(SEM_FAILCRITICALERRORS);		// So a:\ does not ask for disk
+		SetErrorMode(SEM_FAILCRITICALERRORS);  // So that a floppy drive doesn't prompt for a disk
 		DWORD dwVolumeSerial, dwMaxCL, dwFSFlags;
 		if (!GetVolumeInformation(path, label, sizeof(label) - 1, &dwVolumeSerial, &dwMaxCL
 			, &dwFSFlags, file_system, sizeof(file_system) - 1))
 			return output_var->Assign(); // Let ErrorLevel tell the story.
-		switch(drive_cmd)
+		switch(drive_get_cmd)
 		{
-		case DRIVE_CMD_FILESYSTEM: output_var->Assign(file_system); break;
-		case DRIVE_CMD_LABEL: output_var->Assign(label); break;
-		case DRIVE_CMD_SERIAL: output_var->Assign(dwVolumeSerial); break;
+		case DRIVEGET_CMD_FILESYSTEM: output_var->Assign(file_system); break;
+		case DRIVEGET_CMD_LABEL: output_var->Assign(label); break;
+		case DRIVEGET_CMD_SERIAL: output_var->Assign(dwVolumeSerial); break;
 		}
 		break;
 	}
 
-	case DRIVE_CMD_TYPE:
+	case DRIVEGET_CMD_TYPE:
 	{
 		DRIVE_SET_PATH
-		SetErrorMode(SEM_FAILCRITICALERRORS);	// So a:\ does not ask for disk
+		SetErrorMode(SEM_FAILCRITICALERRORS);  // So that a floppy drive doesn't prompt for a disk
 		UINT uiType = GetDriveType(path);
 		switch (uiType)
 		{
@@ -6232,12 +6542,12 @@ ResultType Line::DriveGet(char *aCmd, char *aValue)
 		break;
 	}
 
-	case DRIVE_CMD_STATUS:
+	case DRIVEGET_CMD_STATUS:
 	{
 		DRIVE_SET_PATH
 		DWORD dwSectPerClust, dwBytesPerSect, dwFreeClusters, dwTotalClusters;
 		DWORD last_error = ERROR_SUCCESS;
-		SetErrorMode(SEM_FAILCRITICALERRORS);		// So a:\ does not ask for disk
+		SetErrorMode(SEM_FAILCRITICALERRORS);  // So that a floppy drive doesn't prompt for a disk
 		if (   !(GetDiskFreeSpace(path, &dwSectPerClust, &dwBytesPerSect, &dwFreeClusters, &dwTotalClusters))   )
 			last_error = GetLastError();
 		switch (last_error)
@@ -8573,6 +8883,7 @@ ArgTypeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_WINGET:
 		case ACT_WINGETTEXT:
 		case ACT_WINGETPOS:
+		case ACT_SYSGET:
 		case ACT_CONTROLGETPOS:
 		case ACT_PIXELGETCOLOR:
 		case ACT_PIXELSEARCH:

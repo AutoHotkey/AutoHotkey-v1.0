@@ -714,6 +714,22 @@ int CALLBACK FontEnumProc(ENUMLOGFONTEX *lpelfe, NEWTEXTMETRICEX *lpntme, DWORD 
 
 
 
+void GetVirtualDesktopRect(RECT &aRect)
+{
+	aRect.right = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+	if (aRect.right) // A non-zero value indicates the OS supports multiple monitors or at least SM_CXVIRTUALSCREEN.
+	{
+		aRect.left = GetSystemMetrics(SM_XVIRTUALSCREEN);  // Might be negative or greater than zero.
+		aRect.right += aRect.left;
+		aRect.top = GetSystemMetrics(SM_YVIRTUALSCREEN);   // Might be negative or greater than zero.
+		aRect.bottom = aRect.top + GetSystemMetrics(SM_CYVIRTUALSCREEN);
+	}
+	else // Win95/NT do not support SM_CXVIRTUALSCREEN and such, so zero was returned.
+		GetWindowRect(GetDesktopWindow(), &aRect);
+}
+
+
+
 HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight)
 // Based on code sample at http://www.codeguru.com/Cpp/G-M/bitmap/article.php/c4935/
 // Loads a JPG/GIF/BMP and returns an HBITMAP to the caller (which it may call DeleteObject() upon,
@@ -798,6 +814,26 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight)
 	pic->Release();
 	DeleteObject(hbitmap);
 	return hbitmap_new;
+}
+
+
+
+HRESULT MySetWindowTheme(HWND hwnd, LPCWSTR pszSubAppName, LPCWSTR pszSubIdList)
+{
+	// The library must be loaded dynamically, otherwise the app will not launch on OSes older than XP.
+	// Theme DLL is normally available only on XP+, but an attempt to load it is made unconditionally
+	// in case older OSes can ever have it.
+	HRESULT hresult = !S_OK; // Set default as "failure".
+	HINSTANCE hinstTheme = LoadLibrary("UxTheme.dll");
+	if (hinstTheme)
+	{
+		typedef HRESULT (WINAPI *MySetWindowThemeType)(HWND, LPCWSTR, LPCWSTR);
+  		MySetWindowThemeType DynSetWindowTheme = (MySetWindowThemeType)GetProcAddress(hinstTheme, "SetWindowTheme");
+		if (DynSetWindowTheme)
+			hresult = DynSetWindowTheme(hwnd, pszSubAppName, pszSubIdList);
+		FreeLibrary(hinstTheme);
+	}
+	return hresult;
 }
 
 
