@@ -427,9 +427,8 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 			continue;
 
 		// So aHK[i] is a hook hotkey.  But if the caller specified true for aActivateOnlySuspendHotkeys,
-		// we won't include it unless the first line of its subroutine is the SUSPEND command:
-		if (aActivateOnlySuspendHotkeys
-			&& !(aHK[i]->mJumpToLabel && aHK[i]->mJumpToLabel->mJumpToLine->mActionType == ACT_SUSPEND))
+		// we won't include it unless it's exempt from suspension:
+		if (aActivateOnlySuspendHotkeys && !aHK[i]->IsExemptFromSuspend())
 			continue;
 
 		// Rule out the possibility of obnoxious values right away, preventing array-out-of bounds, etc.:

@@ -295,8 +295,7 @@ ResultType Hotkey::AllDeactivate(bool aExcludeSuspendHotkeys)
 	// This also resets the mRunAgainAfterFinished flag for each hotkey that is being deactivated
 	// here, including hook hotkeys:
 	for (int i = 0; i < sHotkeyCount; ++i)
-		if (!(aExcludeSuspendHotkeys && shk[i]->mJumpToLabel
-			&& shk[i]->mJumpToLabel->mJumpToLine->mActionType == ACT_SUSPEND))
+		if (!aExcludeSuspendHotkeys || !shk[i]->IsExemptFromSuspend())
 		{
 			shk[i]->Unregister();
 			shk[i]->mRunAgainAfterFinished = false;  // ACT_SUSPEND, at least, relies on us to do this.
@@ -481,7 +480,7 @@ ResultType Hotkey::AddHotkey(Label *aJumpToLabel, HookActionType aHookAction)
 		return FAIL;
 	if (!shk[sNextID]->mConstructedOK) // This really shouldn't happen?.
 	{
-		delete shk[sNextID];
+		delete shk[sNextID];  // Currently doesn't actually do anything due to SimpleHeap.
 		return FAIL;
 	}
 	++sNextID;
@@ -621,21 +620,21 @@ ResultType Hotkey::TextInterpret()
 {
 	char *term2;
 	if (   !(term2 = stristr(mJumpToLabel->mName, COMPOSITE_DELIMITER))   )
-		return TextToKey(TextToModifiers(mJumpToLabel->mName), false) ? OK : FAIL;
+		return TextToKey(TextToModifiers(mJumpToLabel->mName), false);
     char *end_of_term1 = omit_trailing_whitespace(mJumpToLabel->mName, term2) + 1;
 	// Temporarily terminate the string so that the 2nd term is hidden:
 	char ctemp = *end_of_term1;
 	*end_of_term1 = '\0';
-	int result = TextToKey(mJumpToLabel->mName, true);
+	ResultType result = TextToKey(mJumpToLabel->mName, true);
 	*end_of_term1 = ctemp;  // Undo the termination.
-	if (!result)
+	if (result == FAIL)
 		return FAIL;
 	term2 += strlen(COMPOSITE_DELIMITER);
 	term2 = omit_leading_whitespace(term2);
 	// Even though modifiers on keys already modified by a mModifierVK are not supported, call
 	// TextToModifiers() anyway to use its output (for consistency).  The modifiers it sets
 	// are currently ignored because the mModifierVK takes precedence.
-	return TextToKey(TextToModifiers(term2), false) ? OK : FAIL;
+	return TextToKey(TextToModifiers(term2), false);
 }
 
 
@@ -754,15 +753,23 @@ char *Hotkey::TextToModifiers(char *aText)
 
 
 
-int Hotkey::TextToKey(char *aText, bool aIsModifier)
-// Takes input param aText to support receiving only a subset of this.text.
+ResultType Hotkey::TextToKey(char *aText, bool aIsModifier)
+// Takes input param aText to support receiving only a subset of mJumpToLabel->mName.
 // In private members, sets the values of vk/sc or ModifierVK/ModifierSC depending on aIsModifier.
 // It may also merge new modifiers into the existing value of modifiers, so the caller
 // should never reset modifiers after calling this.
-// Returns non-zero on success.
+// Returns OK or FAIL.
 {
 	char error_text[512];
-	if (!aText || !*aText) return 0;
+	if (!aText || !*aText)
+	{
+		// Use the label name since aText is empty
+		snprintf(error_text, sizeof(error_text), "\"%s\" is not a valid hotkey."
+			"  Note that shifted hotkeys such as # and ? should be defined as +3 and +/, respectively."
+			, mJumpToLabel->mName);
+		MsgBox(error_text);
+		return FAIL;
+	}
 
 	// Init in case of early return:
 	if (aIsModifier)
@@ -780,23 +787,25 @@ int Hotkey::TextToKey(char *aText, bool aIsModifier)
 		if (aIsModifier && (temp_vk == VK_WHEEL_DOWN || temp_vk == VK_WHEEL_UP))
 		{
 			// Can't display mJumpToLabel->mName because our caller temporarily truncated it in the middle:
-			snprintf(error_text, sizeof(error_text), "Warning: \"%s\" is not allowed to be used as a prefix key."
-				"  This hotkey has not been enabled.", aText);
+			snprintf(error_text, sizeof(error_text), "\"%s\" is not allowed to be used as a prefix key.", aText);
 			MsgBox(error_text);
-			return 0;
+			return FAIL;
 		}
 		is_mouse = VK_IS_MOUSE(temp_vk);
 		if (modifiers & MOD_SHIFT)
 			if (temp_vk >= 'A' && temp_vk <= 'Z')  // VK of an alpha char is the same as the ASCII code of its uppercase version.
-				modifiers &= ~MOD_SHIFT;  // Making alpha chars case insensitive seems much more friendly.
+				modifiers &= ~MOD_SHIFT;
+				// Above: Making alpha chars case insensitive seems much more friendly.  In other words,
+				// if the user defines ^Z as a hotkey, it will really be ^z, not ^+z.  By removing SHIFT
+				// from the modifiers here, we're only removing it from our modifiers, not the global
+				// modifiers that have already been set elsewhere for this key (e.g. +Z will still be +z).
 	}
-	else // no VK was found
+	else // no VK was found.  Is there a scan code?
 		if (   !(temp_sc = TextToSC(aText))   )
 		{
-			snprintf(error_text, sizeof(error_text), "Warning: \"%s\" is an invalid key name."
-				"  This hotkey has not been enabled.", aText);
+			snprintf(error_text, sizeof(error_text), "\"%s\" is not a valid key name within a hotkey label.", aText);
 			MsgBox(error_text);
-			return 0;
+			return FAIL;
 		}
 
 
@@ -820,7 +829,7 @@ scan code array).
 		mModifierSC = temp_sc;
 		if (!is_mouse)
 			mType = HK_KEYBD_HOOK;  // Always use the hook for keys that have a mModifierVK or SC
-		return mModifierVK || mModifierSC;
+		return OK;
 	}
 	else
 	{
@@ -847,7 +856,7 @@ scan code array).
 				// on them, I'm 99% sure I tried it and the hotkeys don't really work.
 				mType = HK_KEYBD_HOOK;
 		}
-		return mVK || mSC;
+		return OK;
 	}
 }
 

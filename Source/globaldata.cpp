@@ -54,6 +54,7 @@ bool g_AutoExecTimerExists = false;
 bool g_IsSuspended = false;  // Make this separate from g_AllowInterruption since that is frequently turned off & on.
 bool g_AllowInterruption = true;
 bool g_AllowInterruptionForSub = true; // Separate from g_AllowInterruption so that they can have independent values.
+int g_nLayersNeedingTimer = 0;
 int g_nThreads = 0;
 int g_nPausedThreads = 0;
 bool g_UnpauseWhenResumed = false;  // Start off "false" because the Unpause mode must be explicitly triggered.
@@ -115,12 +116,14 @@ sc2_type g_vk_to_sc[VK_MAX + 1] = {{0}};
 // STEPS TO ADD A NEW COMMAND:
 // 1) Add an entry to the command enum in script.h.
 // 2) Add an entry to the below array (it's position here MUST exactly match that in the enum).
-//    The subarray should indicate the param numbers that must be numeric (first param is 1,
+//    The subarray should indicate the param numbers that must be numeric (first param is numbered 1,
 //    not zero).  That subarray should be terminated with an explicit zero to be safe and
 //    so that the compiler will complain if the sub-array size needs to be increased to
 //    accommodate all the elements in the new sub-array, including room for it's 0 terminator.
 //    If any of the numeric params allow negative or float values, add an entries to
-//    ArgAllowsNegative() and ArgAllowsFloat().
+//    ArgAllowsNegative() and ArgAllowsFloat().  But if negative occurs during runtime and you don't
+//    want it to be reported as a runtime error (i.e. the command will deal with it), there's a case
+//    statement near the runtime call to ArgAllowsNegative() that should be adjusted to grant a waiver.
 //    If any of the params are mandatory (can't be blank), add an entry to CheckForMandatoryArgs().
 //    Note: If you use a value for MinParams than is greater than zero, remember than any params
 //    beneath that threshold will also be required to be non-blank (i.e. user can't omit them even
@@ -343,6 +346,7 @@ Action g_act[] =
 
 	, {"Edit", 0, 0, NULL}
 	, {"Reload", 0, 0, NULL}
+	, {"Menu", 2, 5, NULL}  // Example: Menu, tray, add, name, label, FutureUse (thread priority?)
 	, {"ExitApp", 0, 1, NULL}  // Optional exit-code
 	, {"Shutdown", 1, 1, {1, 0}} // Seems best to make the first param (the flag/code) mandatory.
 };
@@ -573,7 +577,10 @@ int g_key_to_sc_count = sizeof(g_key_to_sc) / sizeof(key_to_sc_type);
 
 KeyHistoryItem *g_KeyHistory = NULL; // Array is allocated during startup.
 int g_KeyHistoryNext = 0;
+
+#ifdef ENABLE_KEY_HISTORY_FILE
 bool g_KeyHistoryToFile = false;
+#endif
 
 // These must be global also, since both the keyboard and mouse hook functions,
 // in addition to KeyEvent() when it's logging keys with only the mouse hook installed,

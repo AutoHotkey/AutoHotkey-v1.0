@@ -54,23 +54,6 @@ END
 // Menu
 //
 
-IDR_MENU_TRAY MENU 
-BEGIN
-    POPUP "Tray"
-    BEGIN
-        MENUITEM "&Open",                       ID_TRAY_OPEN
-        MENUITEM "&Help",                       ID_TRAY_HELP
-        MENUITEM SEPARATOR
-        MENUITEM "&Window Spy",                 ID_TRAY_WINDOWSPY
-        MENUITEM "&Reload This Script",         ID_TRAY_RELOADSCRIPT
-        MENUITEM "&Edit This Script",           ID_TRAY_EDITSCRIPT
-        MENUITEM SEPARATOR
-        MENUITEM "&Suspend Hotkeys",            ID_TRAY_SUSPEND
-        MENUITEM "&Pause Script",               ID_TRAY_PAUSE
-        MENUITEM "E&xit",                       ID_TRAY_EXIT
-    END
-END
-
 IDR_MENU_MAIN MENU 
 BEGIN
     POPUP "&File"
@@ -139,8 +122,8 @@ END
 //
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,0,6,0
- PRODUCTVERSION 1,0,6,0
+ FILEVERSION 1,0,7,0
+ PRODUCTVERSION 1,0,7,0
  FILEFLAGSMASK 0x17L
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -156,12 +139,12 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "FileDescription", "AutoHotkey"
-            VALUE "FileVersion", "1, 0, 6, 0"
+            VALUE "FileVersion", "1, 0, 7, 0"
             VALUE "InternalName", "AutoHotkey"
             VALUE "LegalCopyright", "Copyright (C) 2004"
             VALUE "OriginalFilename", "AutoHotkey.rc"
             VALUE "ProductName", " AutoHotkey"
-            VALUE "ProductVersion", "1, 0, 6, 0"
+            VALUE "ProductVersion", "1, 0, 7, 0"
         END
     END
     BLOCK "VarFileInfo"

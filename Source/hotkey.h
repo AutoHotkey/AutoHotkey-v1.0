@@ -88,7 +88,17 @@ private:
 
 	ResultType TextInterpret();
 	char *TextToModifiers(char *aText);
-	int TextToKey(char *aText, bool aIsModifier);
+	ResultType TextToKey(char *aText, bool aIsModifier);
+
+	bool IsExemptFromSuspend()
+	{
+		// Hotkey subroutines whose first line is the Suspend command are exempt from
+		// being suspended themselves except when their first parameter is the literal
+		// word "on":
+		return mJumpToLabel && mJumpToLabel->mJumpToLine->mActionType == ACT_SUSPEND
+			&& (!mJumpToLabel->mJumpToLine->mArgc || mJumpToLabel->mJumpToLine->ArgHasDeref(1)
+				|| stricmp(mJumpToLabel->mJumpToLine->mArg[0].text, "on"));
+	}
 
 	bool PerformIsAllowed()
 	{
@@ -107,7 +117,7 @@ private:
 	{
 		if (!PerformIsAllowed())
 			return FAIL;
-		++mExistingThreads;
+		++mExistingThreads;  // This is the thread count for this particular hotkey only.
 		for (;;)
 		{
 			if (mJumpToLabel->mJumpToLine->ExecUntil(UNTIL_RETURN, mModifiersConsolidated) == FAIL)

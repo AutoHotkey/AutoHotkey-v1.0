@@ -79,8 +79,6 @@ ResultType Line::IniDelete(char *aFilespec, char *aSection, char *aKey)
 
 ResultType Line::RegRead(HKEY aRootKey, char *aRegSubkey, char *aValueName)
 {
-	// $var = RegRead(key, valuename)
-
 	Var *output_var = ResolveVarOfArg(0);
 	if (!output_var)
 		return FAIL;
@@ -99,7 +97,7 @@ ResultType Line::RegRead(HKEY aRootKey, char *aRegSubkey, char *aValueName)
 	if ( RegOpenKeyEx(aRootKey, aRegSubkey, 0, KEY_READ, &hRegKey) != ERROR_SUCCESS )
 		return OK;  // Let ErrorLevel tell the story.
 
-	// Read the value and determine the type
+	// Read the value and determine the type.  If aValueName is the empty string, the key's default value is used.
 	if ( RegQueryValueEx(hRegKey, aValueName, NULL, &dwType, NULL, NULL) != ERROR_SUCCESS )
 	{
 		RegCloseKey(hRegKey);
@@ -232,9 +230,8 @@ ResultType Line::RegRead(HKEY aRootKey, char *aRegSubkey, char *aValueName)
 
 
 ResultType Line::RegWrite(DWORD aValueType, HKEY aRootKey, char *aRegSubkey, char *aValueName, char *aValue)
+// If aValueName is the empty string, the key's default value is used.
 {
-	// $var = RegWrite(key, valuename, type, value)
-
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 
 	HKEY	hRegKey;
@@ -397,8 +394,6 @@ bool Line::RegRemoveSubkeys(HKEY hRegKey)
 
 ResultType Line::RegDelete(HKEY aRootKey, char *aRegSubkey, char *aValueName)
 {
-	// $var = RegDelete(key[, valuename])
-
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 
 	HKEY	hRegKey;
@@ -422,8 +417,10 @@ ResultType Line::RegDelete(HKEY aRootKey, char *aRegSubkey, char *aValueName)
 	}
 	else
 	{
-		// Remove Value
-		LONG lRes = RegDeleteValue(hRegKey, aValueName);
+		// Remove Value.  The special phrase "ahk_default" indicates that the key's default
+		// value (displayed as "(Default)" by RegEdit) should be deleted.  This is done to
+		// distinguish a blank (which deletes the entire subkey) from the default item.
+		LONG lRes = RegDeleteValue(hRegKey, stricmp(aValueName, "ahk_default") ? aValueName : "");
 		RegCloseKey(hRegKey);
 		if (lRes != ERROR_SUCCESS)
 			return OK;  // Let ErrorLevel tell the story.

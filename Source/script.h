@@ -119,7 +119,7 @@ enum enum_act {
 , ACT_AUTOTRIM, ACT_STRINGCASESENSE, ACT_DETECTHIDDENWINDOWS, ACT_DETECTHIDDENTEXT, ACT_BLOCKINPUT
 , ACT_SETNUMLOCKSTATE, ACT_SETSCROLLLOCKSTATE, ACT_SETCAPSLOCKSTATE, ACT_SETSTORECAPSLOCKMODE
 , ACT_KEYHISTORY, ACT_LISTLINES, ACT_LISTVARS, ACT_LISTHOTKEYS
-, ACT_EDIT, ACT_RELOAD
+, ACT_EDIT, ACT_RELOAD, ACT_MENU
 , ACT_EXITAPP
 , ACT_SHUTDOWN
 // Make these the last ones before the count so they will be less often processed.  This helps
@@ -142,6 +142,28 @@ enum enum_act {
 #define ACT_IS_IF(ActionType) (ActionType >= ACT_IF_FIRST && ActionType <= ACT_IF_LAST)
 #define ACT_IS_ASSIGN(ActionType) (ActionType >= ACT_ASSIGN_FIRST && ActionType <= ACT_ASSIGN_LAST)
 
+// The starting ID is arbitrary, but it seems best to avoid low IDs to avoid any chance of
+// a conflict with system menu id's, for example (though this is unlikely since I believe
+// they all  generate WM_SYSCOMMAND vs. WM_COMMAND).  Also need to avoid a conflict with the
+// main menu's IDs in resource.h.  ID_TRAY_USER is the id of the first user defined menu item
+// (i.e. if the script uses the MENU command to customize the tray menu).
+enum TrayMenuItems {ID_TRAY_OPEN = 16000, ID_TRAY_HELP, ID_TRAY_WINDOWSPY, ID_TRAY_RELOADSCRIPT
+	, ID_TRAY_EDITSCRIPT, ID_TRAY_SUSPEND, ID_TRAY_PAUSE, ID_TRAY_EXIT, ID_TRAY_USER};
+
+// These next macros are used to prevent timed subroutines from running while the tray menu
+// or main menu is in use.  This is documented behavior, and is desirable most of the time
+// anyway.  But not to do this would produce strange effects because any timed subroutine
+// that took a long time to run might keep us away from the "menu loop", which would result
+// in the menu becoming temporarily unreponsive while the user is in it (and probably other
+// undesired effects):
+#define MENU_NO_INTERRUPT(was_interruptible_before) \
+{\
+	was_interruptible_before = g_AllowInterruption;\
+	if (was_interruptible_before)\
+		g_AllowInterruption = false;\
+}
+#define MENU_RESTORE_INTERRUPT(was_interruptible_before) if (was_interruptible_before) g_AllowInterruption = true;
+
 enum enum_act_old {
   OLD_INVALID = FAIL  // These should both be zero for initialization and function-return-value purposes.
   , OLD_SETENV, OLD_ENVADD, OLD_ENVSUB, OLD_ENVMULT, OLD_ENVDIV
@@ -162,6 +184,7 @@ enum enum_act_old {
 #define ERR_MISSING_OUTPUT_VAR "This command requires that at least one of its output variables be provided."
 #define ERR_ELSE_WITH_NO_IF "This ELSE doesn't appear to belong to any IF-statement."
 #define ERR_SETTIMER "This timer's target label does not exist."
+#define ERR_MENULABEL "This menu item's target label does not exist."
 #define ERR_GROUPADD_LABEL "The target label in parameter #4 does not exist."
 #define ERR_WINDOW_PARAM "This command requires that at least one of its window parameters be non-blank."
 #define ERR_LOOP_FILE_MODE "If not blank or a variable reference, parameter #2 must be either 0, 1, 2."
@@ -171,9 +194,11 @@ enum enum_act_old {
 #define ERR_ON_OFF_TOGGLE "If not blank or a variable reference, the value must be either ON, OFF, or TOGGLE."
 #define ERR_ON_OFF_TOGGLE_PERMIT "If not blank or a variable reference, the value must be either ON, OFF, TOGGLE, or PERMIT."
 #define ERR_TITLEMATCHMODE "TitleMatchMode must be either 1, 2, slow, fast, or a variable reference."
-#define ERR_TITLEMATCHMODE2 "The variable does not contain a valid TitleMatchMode (the value must be either 1, 2, slow, or fast)." ERR_ABORT
+#define ERR_TITLEMATCHMODE2 "The variable does not contain a valid TitleMatchMode." ERR_ABORT
+#define ERR_MENUCOMMAND "Parameter #2 is not a valid menu command."
+#define ERR_MENUCOMMAND2 "Parameter #2's variable does not contain a valid menu command." ERR_ABORT
 #define ERR_IFMSGBOX "This line specifies an invalid MsgBox result."
-#define ERR_REG_KEY "The key name must be either HKEY_LOCAL_MACHINE, HKEY_USERS, HKEY_CURRENT_USER, HKEY_CLASSES_ROOT, or HKEY_CURRENT_CONFIG."
+#define ERR_REG_KEY "The key name must be either HKEY_LOCAL_MACHINE, HKEY_USERS, HKEY_CURRENT_USER, HKEY_CLASSES_ROOT, HKEY_CURRENT_CONFIG, or the abbreviations for these."
 #define ERR_REG_VALUE_TYPE "The value type must be either REG_SZ, REG_EXPAND_SZ, REG_MULTI_SZ, REG_DWORD, or REG_BINARY."
 #define ERR_RUN_SHOW_MODE "Parameter #3 must be either blank, a variable reference, or one of these words: MIN, MAX, HIDE."
 #define ERR_COMPARE_TIMES "Parameter #3 must be either blank, a variable reference, or one of these words: Seconds, Minutes, Hours, Days."
@@ -301,6 +326,13 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 enum MainWindowModes {MAIN_MODE_NO_CHANGE, MAIN_MODE_LINES, MAIN_MODE_VARS
 	, MAIN_MODE_HOTKEYS, MAIN_MODE_KEYHISTORY, MAIN_MODE_REFRESH};
 ResultType ShowMainWindow(MainWindowModes aMode = MAIN_MODE_NO_CHANGE);
+
+enum MenuCommands {MENU_COMMAND_INVALID, MENU_COMMAND_ADD
+	, MENU_COMMAND_CHECK, MENU_COMMAND_UNCHECK, MENU_COMMAND_TOGGLECHECK
+	, MENU_COMMAND_ENABLE, MENU_COMMAND_DISABLE, MENU_COMMAND_TOGGLEENABLE
+	, MENU_COMMAND_STANDARD, MENU_COMMAND_NOSTANDARD
+	, MENU_COMMAND_DEFAULT, MENU_COMMAND_NODEFAULT
+	, MENU_COMMAND_DELETE, MENU_COMMAND_DELETEALL};
 
 bool Util_Shutdown(int nFlag);
 BOOL Util_ShutdownHandler(HWND hwnd, DWORD lParam);
@@ -529,7 +561,7 @@ public:
 	ResultType IsJumpValid(Line *aDestination);
 
 	static ArgTypeType ArgIsVar(ActionTypeType aActionType, int aArgIndex);
-	static int ConvertEscapeChar(char *aFilespec, char aOldChar, char aNewChar);
+	static int ConvertEscapeChar(char *aFilespec, char aOldChar, char aNewChar, bool aFromAutoIt2 = false);
 	static size_t ConvertEscapeCharGetLine(char *aBuf, int aMaxCharsToRead, FILE *fp);
 	ResultType CheckForMandatoryArgs();
 
@@ -606,6 +638,7 @@ public:
 		case ACT_RANDOM:
 		case ACT_WINMOVE:
 		case ACT_SETINTERRUPT:
+		case ACT_PIXELGETCOLOR:
 			return true;
 
 		// Since mouse coords are relative to the foreground window, they can be negative:
@@ -615,8 +648,6 @@ public:
 			return (aArgNum >= 2 && aArgNum <= 5);  // Allow dragging to/from negative coordinates.
 		case ACT_MOUSEMOVE:
 			return (aArgNum == 1 || aArgNum == 2);
-		case ACT_PIXELGETCOLOR:
-			return (aArgNum == 2 || aArgNum == 3);
 		case ACT_PIXELSEARCH:
 			return (aArgNum >= 3 || aArgNum <= 7); // i.e. Color values can be negative, but the last param cannot.
 		case ACT_INPUTBOX:
@@ -688,11 +719,11 @@ public:
 		if (aIsRemoteRegistry) // Caller wanted the below put into the output parameter.
 			*aIsRemoteRegistry = (colon_pos != NULL);
 		HKEY root_key = NULL; // Set default.
-		if (!stricmp(key_name, "HKEY_LOCAL_MACHINE"))  root_key = HKEY_LOCAL_MACHINE;
-		if (!stricmp(key_name, "HKEY_CLASSES_ROOT"))   root_key = HKEY_CLASSES_ROOT;
-		if (!stricmp(key_name, "HKEY_CURRENT_CONFIG")) root_key = HKEY_CURRENT_CONFIG;
-		if (!stricmp(key_name, "HKEY_CURRENT_USER"))   root_key = HKEY_CURRENT_USER;
-		if (!stricmp(key_name, "HKEY_USERS"))          root_key = HKEY_USERS;
+		if (!stricmp(key_name, "HKEY_LOCAL_MACHINE") || !stricmp(key_name, "HKLM"))  root_key = HKEY_LOCAL_MACHINE;
+		if (!stricmp(key_name, "HKEY_CLASSES_ROOT") || !stricmp(key_name, "HKCR"))   root_key = HKEY_CLASSES_ROOT;
+		if (!stricmp(key_name, "HKEY_CURRENT_CONFIG") || !stricmp(key_name, "HKCC")) root_key = HKEY_CURRENT_CONFIG;
+		if (!stricmp(key_name, "HKEY_CURRENT_USER") || !stricmp(key_name, "HKCU"))   root_key = HKEY_CURRENT_USER;
+		if (!stricmp(key_name, "HKEY_USERS") || !stricmp(key_name, "HKU"))           root_key = HKEY_USERS;
 		if (!root_key)  // Invalid or unsupported root key name.
 			return NULL;
 		if (!aIsRemoteRegistry || !colon_pos) // Either caller didn't want it opened, or it doesn't need to be.
@@ -812,6 +843,26 @@ public:
 		if (!stricmp(aBuf, "SLOW")) return FIND_SLOW;
 		return MATCHMODE_INVALID;
 	}
+
+	static MenuCommands ConvertMenuCommand(char *aBuf)
+	{
+		if (!aBuf || !*aBuf) return MENU_COMMAND_INVALID;
+		if (!stricmp(aBuf, "Add")) return MENU_COMMAND_ADD;
+		if (!stricmp(aBuf, "Check")) return MENU_COMMAND_CHECK;
+		if (!stricmp(aBuf, "Uncheck")) return MENU_COMMAND_UNCHECK;
+		if (!stricmp(aBuf, "ToggleCheck")) return MENU_COMMAND_TOGGLECHECK;
+		if (!stricmp(aBuf, "Enable")) return MENU_COMMAND_ENABLE;
+		if (!stricmp(aBuf, "Disable")) return MENU_COMMAND_DISABLE;
+		if (!stricmp(aBuf, "ToggleEnable")) return MENU_COMMAND_TOGGLEENABLE;
+		if (!stricmp(aBuf, "Standard")) return MENU_COMMAND_STANDARD;
+		if (!stricmp(aBuf, "NoStandard")) return MENU_COMMAND_NOSTANDARD;
+		if (!stricmp(aBuf, "Default")) return MENU_COMMAND_DEFAULT;
+		if (!stricmp(aBuf, "NoDefault")) return MENU_COMMAND_NODEFAULT;
+		if (!stricmp(aBuf, "Delete")) return MENU_COMMAND_DELETE;
+		if (!stricmp(aBuf, "DeleteAll")) return MENU_COMMAND_DELETEALL;
+		return MENU_COMMAND_INVALID;
+	}
+
 
 	static ToggleValueType ConvertOnOff(char *aBuf, ToggleValueType aDefault = TOGGLE_INVALID)
 	// Returns aDefault if aBuf isn't either ON, OFF, or blank.
@@ -999,6 +1050,30 @@ public:
 
 
 
+class UserMenuItem
+{
+public:
+	#define MAX_MENU_LENGTH 100
+	char mName[MAX_MENU_LENGTH + 1];
+	UINT mMenuID;
+	Label *mLabel;
+	bool mEnabled, mChecked;
+	UserMenuItem *mNextMenuItem;  // Next items in linked list
+
+	UserMenuItem(char *aName, UINT aMenuID, Label *aLabel, HMENU aMenu) // Constructor
+		: mMenuID(aMenuID), mLabel(aLabel), mEnabled(true), mChecked(false), mNextMenuItem(NULL)
+	{
+		strlcpy(mName, aName, sizeof(mName));
+		if (aMenu)
+			AppendMenu(aMenu, *aName ? MF_STRING : MF_SEPARATOR, aMenuID, aName);
+	}
+
+	// Don't overload new and delete operators in this case since we want to use real dynamic memory
+	// (since menus can be read in from a file, destroyed and recreated, over and over).
+};
+
+
+
 class Script
 {
 private:
@@ -1016,6 +1091,7 @@ private:
 	bool mNoHotkeyLabels;
 
 	NOTIFYICONDATA mNIC; // For ease of adding and deleting our tray icon.
+	HMENU mTrayMenu; // Our tray menu, which should be destroyed upon exiting the program.
 
 #ifdef AUTOHOTKEYSC
 	ResultType CloseAndReturn(HS_EXEArc_Read *fp, UCHAR *aBuf, ResultType return_value);
@@ -1044,12 +1120,17 @@ private:
 	Line *PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode = NORMAL_MODE, AttributeType aLoopTypeFile = ATTR_NONE
 		, AttributeType aLoopTypeReg = ATTR_NONE, AttributeType aLoopTypeRead = ATTR_NONE
 		, AttributeType aLoopTypeParse = ATTR_NONE);
+	HMENU CreateTrayMenu();
+	void AppendStandardTrayItems();
 public:
 	Line *mCurrLine;  // Seems better to make this public than make Line our friend.
 	Label *mThisHotkeyLabel, *mPriorHotkeyLabel;
 
 	ScriptTimer *mFirstTimer, *mLastTimer;  // The first and last script timers in the linked list.
 	UINT mTimerCount, mTimerEnabledCount;
+
+	UserMenuItem *mFirstMenuItem, *mLastMenuItem;
+	UINT mMenuItemCount;
 
 	WIN32_FIND_DATA *mLoopFile;  // The file of the current file-loop, if applicable.
 	RegItemStruct *mLoopRegItem; // The registry subkey or value of the current registry enumeration loop.
@@ -1070,12 +1151,16 @@ public:
 	__int64 mLinesExecutedThisCycle; // Use 64-bit to match the type of g.LinesPerCycle
 	int mUninterruptedLineCount; // Similar in purpose to the above, but only 32-bit.
 	DWORD mLastScriptRest, mLastPeekTime;
-;
 
+	bool mTrayIncludeStandard;  // Whether to include the tray menu's standard items in the menu.
+	UserMenuItem *mTrayMenuDefault;
+    
 	ResultType Init(char *aScriptFilename, bool aIsRestart);
 	ResultType CreateWindows(HINSTANCE hInstance);
 	ResultType AutoExecSection();
 	void UpdateTrayIcon();
+	void DisplayTrayMenu();
+	ResultType PerformMenu(char *aWhichMenu, char *aCommand, char *aMenuItemName, char *aLabel);
 	ResultType Edit();
 	ResultType Reload(bool aDisplayErrors);
 	void ExitApp(char *aBuf = NULL, int ExitCode = 0);
@@ -1093,6 +1178,15 @@ public:
 	char *ListVars(char *aBuf, size_t aBufSize);
 	char *ListKeyHistory(char *aBuf, size_t aBufSize);
 
+	UserMenuItem *FindMenuItemByID(UINT aID)
+	{
+		for (UserMenuItem *menu_item = mFirstMenuItem; menu_item != NULL; menu_item = menu_item->mNextMenuItem)
+			if (menu_item->mMenuID == aID)
+				return menu_item;
+		return NULL;
+	}
+
+
 	VarSizeType GetFilename(char *aBuf = NULL)
 	{
 		if (aBuf)
@@ -1101,9 +1195,19 @@ public:
 	}
 	VarSizeType GetFileDir(char *aBuf = NULL)
 	{
+		char str[MAX_PATH * 2] = "";  // Set default.
+		strlcpy(str, mFileDir, sizeof(str));
+		size_t length = strlen(str); // Needed not just for AutoIt2.
+		// If it doesn't already have a final backslash, namely due to it being a root directory,
+		// provide one so that it is backward compatible with AutoIt v2:
+		if (mIsAutoIt2 && length && str[length - 1] != '\\')
+		{
+			str[length++] = '\\';
+			str[length] = '\0';
+		}
 		if (aBuf)
-			strcpy(aBuf, mFileDir);
-		return (VarSizeType)strlen(mFileDir);
+			strcpy(aBuf, str);
+		return (VarSizeType)length;
 	}
 	VarSizeType GetFilespec(char *aBuf = NULL)
 	{

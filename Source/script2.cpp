@@ -264,6 +264,12 @@ ResultType Line::ControlClick(vk_type aVK, int aClickCount, char aEventType, cha
 	if (!control_window)
 		return OK;
 
+	if (aClickCount <= 0)
+		// Allow this to simply "do nothing", because it increases flexibility
+		// in the case where the number of clicks is a dereferenced script variable
+		// that may sometimes (by intent) resolve to zero or negative:
+		return g_ErrorLevel->Assign(ERRORLEVEL_NONE);
+
 	// The chars 'U' (up) and 'D' (down), if specified, will restrict the clicks
 	// to being only DOWN or UP (so that the mouse button can be held down, for
 	// example):
@@ -859,12 +865,13 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 	// must use a separate variable for that to prevent the ENTERMENULOOP message
 	// from overwriting the value established earlier when the tray menu was first opened.
 	static bool static_was_interruptible_before;
-	bool tray_was_interruptible_before;
 
+	TRANSLATE_AHK_MSG(iMsg, wParam)
+	
 	switch (iMsg)
 	{
 	case WM_COMMAND: // If an application processes this message, it should return zero.
-		// See if an item was selected from the tray menu:
+		// See if an item was selected from the tray menu or main menu:
 		switch (LOWORD(wParam))
 		{
 		case ID_TRAY_OPEN:
@@ -952,89 +959,84 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			if (!g_script.ActionExec("mailto:support@autohotkey.com", "", NULL, false))
 				MsgBox("Could not open URL mailto:support@autohotkey.com in default e-mail client.");
 			return 0;
+		default:
+		{
+			// See if this command ID is one of the user's custom menu items.  Due to the possibility
+			// that some items have been deleted from the menu, can't rely on comparing
+			// LOWORD(wParam) to g_script.mMenuItemCount in any way.  Just look up the ID to make sure
+			// there really is a menu item for it:
+			if (g_script.FindMenuItemByID(LOWORD(wParam)))
+			{
+				// It seems best to treat the selection of a custom menu item in a way similar
+				// to how hotkeys are handled by the hook.
+				// Post it to the thread, just in case the OS tries to be "helpful" and
+				// directly call the WindowProc (i.e. this function) rather than actually
+				// posting the message.  We don't want to be called, we want the main loop
+				// to handle this message:
+				#define HANDLE_USER_MENU(menu_id) \
+				{\
+					POST_AHK_USER_MENU(menu_id) \
+					MsgSleep(-1);\
+				}
+				HANDLE_USER_MENU(LOWORD(wParam))  // Send the menu's cmd ID.
+				// Try to maintain a list here of all the ways the script can be uninterruptible
+				// at this moment in time, and whether that uninterruptibility should be overridden here:
+				// 1) YES: g_TrayMenuIsVisible == true (which in turn means that the script is marked
+				//    uninterruptible to prevent timed subroutines from running and possibly
+				//    interfering with menu navigation): Seems impossible because apparently 
+				//    the WM_RBUTTONDOWN must first be returned from before we're called directly
+				//    with the WM_COMMAND message corresponding to the menu item chosen by the user.
+				//    In other words, g_TrayMenuIsVisible will be false and the script thus will
+				//    not be uninterruptible, at least not solely for that reason.
+				// 2) YES: A new hotkey or timed subroutine was just launched and it's still in its
+				//    grace period.  In this case, ExecUntil()'s call of PeekMessage() every 10ms
+				//    or so will catch the item we just posted.  But it seems okay to interrupt
+				//    here directly in most such cases.  ENABLE_UNINTERRUPTIBLE_SUB: Newly launched
+				//    timed subroutine or hotkey subroutine.
+				// 3) YES: Script is engaged in an uninterruptible activity such as SendKeys().  In this
+				//    case, since the user has managed to get the tray menu open, it's probably
+				//    best to process the menu item with the same priority as if any other menu
+				//    item had been selected, interrupting even a critical operation since that's
+				//    probably what the user would want.  SLEEP_WITHOUT_INTERRUPTION: SendKeys,
+				//    Mouse input, Clipboard open, SetForegroundWindowEx().
+				// 4) YES: AutoExecSection(): Since its grace period is only 100ms, doesn't seem to be
+				//    a problem.  In any case, the timer would fire and briefly interrupt the menu
+				//    subroutine we're trying to launch here even if a menu item were somehow
+				//    activated in the first 100ms.
+				//
+				// IN LIGHT OF THE ABOVE, it seems best not to do the below.  In addition, the msg
+				// filtering done by MsgSleep when the script is uninterruptible now excludes the
+				// AHK_USER_MENU message (i.e. that message is always retrieved and acted upon,
+				// even when the script is uninterruptible):
+				//if (!INTERRUPTIBLE)
+				//	return 0;  // Leave the message buffered until later.
+				// Now call the main loop to handle the message we just posted (and any others):
+				return 0;
+			}
+			// else do nothing, let DefWindowProc() try to handle it.
+		}
 		} // Inner switch()
 		break;
 
-	case AHK_NOTIFYICON:  // Tray icon clicked on.
+	case AHK_NOTIFYICON:  // Tray icon clicked on.  Note that wParam has been set to 0 by TRANSLATE_AHK_MSG.
 	{
         switch(lParam)
         {
 // Don't allow the main window to be opened this way by a compiled EXE, since it will display
-// the lines most recently executed (and many people who compile scripts don't want their users
+// the lines most recently executed, and many people who compile scripts don't want their users
 // to see the contents of the script:
-#ifndef AUTOHOTKEYSC
 		case WM_LBUTTONDBLCLK:
-			ShowMainWindow();
-			return 0;
+			if (g_script.mTrayMenuDefault)
+				HANDLE_USER_MENU(g_script.mTrayMenuDefault->mMenuID)
+#ifndef AUTOHOTKEYSC
+			else if (g_script.mTrayIncludeStandard)
+				ShowMainWindow();
+			// else do nothing.
 #endif
+			return 0;
 		case WM_RBUTTONDOWN:
-		{
-			HMENU hMenu = LoadMenu(g_hInstance, MAKEINTRESOURCE(IDR_MENU_TRAY));
-			// TrackPopupMenu cannot display the menu bar so get
-			// the handle to the first shortcut menu.
-			if (!hMenu)
-				return 0;
- 			if (   !(hMenu = GetSubMenu(hMenu, 0))   )  // It seems this must be done prior to some of the below.
-				return 0;
-#ifdef AUTOHOTKEYSC
-			DeleteMenu(hMenu, ID_TRAY_OPEN, MF_BYCOMMAND);
-			DeleteMenu(hMenu, ID_TRAY_HELP, MF_BYCOMMAND);
-			DeleteMenu(hMenu, ID_TRAY_WINDOWSPY, MF_BYCOMMAND);
-			// Doesn't make sense to have this option since script can't
-			// be edited once it's inside the EXE:
-			DeleteMenu(hMenu, ID_TRAY_RELOADSCRIPT, MF_BYCOMMAND);
-			DeleteMenu(hMenu, ID_TRAY_EDITSCRIPT, MF_BYCOMMAND);
-			// Delete the left-over menu separators.  This isn't a very
-			// maintainable way to do it, but I'm doing something wrong
-			// with the other method, so using this for now:
-			DeleteMenu(hMenu, 1, MF_BYPOSITION);
-			DeleteMenu(hMenu, 0, MF_BYPOSITION);
-			// Trying to code this is a way that easier to maintain:
-			//int menu_item_count = GetMenuItemCount(hMenu);
-			//MENUITEMINFO mii;
-			//for (int i = 0; i < menu_item_count; ++i)
-			//{
-			//	if (GetMenuItemInfo(hMenu, i, TRUE, &mii))
-			//		if (mii.fType == MFT_SEPARATOR)
-			//			DeleteMenu(hMenu, i, MF_BYPOSITION);
-			//}
-#else
-			SetMenuDefaultItem(hMenu, ID_TRAY_OPEN, FALSE);
-#endif
-			CheckMenuItem(hMenu, ID_TRAY_SUSPEND, g_IsSuspended ? MF_CHECKED : MF_UNCHECKED);
-			CheckMenuItem(hMenu, ID_TRAY_PAUSE, g.IsPaused ? MF_CHECKED : MF_UNCHECKED);
-			POINT pt;
-			GetCursorPos(&pt);
-			SetForegroundWindow(hWnd); // Always call this right before TrackPopupMenu(), even window if hidden.
-			// Set this so that if a new recursion layer is triggered by TrackPopupMenuEx's having
-			// dispatched a hotkey message to our main window proc, IsCycleComplete() knows that
-			// this layer here does not need to have its original foreground window restored to the foreground.
-			// Also, this allows our main Window Proc to close the popup menu upon receive of any hotkey,
-			// which is probably a good idea since most hotkeys change the foreground window and if that
-			// happens, the menu cannot be dismissed (ever?) except by selecting one of the items in the
-			// menu (which is often undesirable).
-			// This next macro is used to prevent timed subroutines from running while the tray menu
-			// or main menu is in use.  This is documented behavior, and is desirable most of the time
-			// anyway.  But not to do this would produce strange effects because any timed subroutine
-			// that took a long time to run might keep us away from the "menu loop", which would result
-			// in the menu becoming temporarily unreponsive while the user is in it (and probably other
-			// undesired effects):
-			#define MENU_NO_INTERRUPT(was_interruptible_before) \
-			{\
-				was_interruptible_before = g_AllowInterruption;\
-				if (was_interruptible_before)\
-					g_AllowInterruption = false;\
-			}
-			MENU_NO_INTERRUPT(tray_was_interruptible_before)
-			g_TrayMenuIsVisible = true;
-			TrackPopupMenuEx(hMenu, TPM_LEFTALIGN | TPM_LEFTBUTTON,	pt.x, pt.y, hWnd, NULL);
-			g_TrayMenuIsVisible = false;
-			DestroyMenu(hMenu);
-			PostMessage(hWnd, WM_NULL, 0, 0); // MSDN recommends this to prevent menu from closing on 2nd click.
-			#define MENU_RESTORE_INTERRUPT(was_interruptible_before) if (was_interruptible_before) g_AllowInterruption = true;
-			MENU_RESTORE_INTERRUPT(tray_was_interruptible_before)
+			g_script.DisplayTrayMenu();
 			return 0;
-		}
 		} // Inner switch()
 		break;
 	} // case AHK_NOTIFYICON
@@ -1078,12 +1080,18 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			// without adding any significant benefit:
 			//SendMessage(top_box, WM_SETICON, ICON_SMALL, main_icon);
 
-			if ((UINT)wParam > 0)
+			int timeout = (int)lParam;
+			if (timeout < 0)
+				// MsgBox's smart comma handling will usually prevent this (considering a negative to be part
+				// of the text).  But if it does happen, timeout after a short time, which may signal the user
+				// that the script passed a bad parameter:
+				timeout = 100;
+			if (timeout) // Only when non-zero.
 				// Caller told us to establish a timeout for this modal dialog (currently always MessageBox).
 				// In addition to any other reasons, the first param of the below must not be NULL because
 				// that would cause the 2nd param to be ignored.  We want the 2nd param to be the actual
 				// ID assigned to this timer.
-				SetTimer(top_box, g_nMessageBoxes, (UINT)wParam * 1000, DialogTimeout);
+				SetTimer(top_box, g_nMessageBoxes, (UINT)timeout, DialogTimeout);
 		}
 		// else: if !top_box: no error reporting currently.
 		return 0;
@@ -1100,11 +1108,18 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		// The message is posted unconditionally (above), but the processing of it will be deferred
 		// if hotkeys are not allowed to be activated right now:
 		if (!INTERRUPTIBLE)
+		{
 			// Used to prevent runaway hotkeys, or too many happening due to key-repeat feature.
 			// It can also be used to prevent a call to MsgSleep() from accepting new hotkeys
 			// in cases where the caller's activity might be interferred with by the launch
-			// of a new hotkey subroutine, such as reading or writing to the clipboard:
+			// of a new hotkey subroutine, such as reading or writing to the clipboard.
+			// Also turn on the timer so that if a dialog happens to be displayed currently,
+			// the hotkey we just posted won't be delayed until after the dialog is gone,
+			// i.e we want this hotkey to fire the moment the script becomes interruptible again.
+			// See comments in the WM_TIMER case of this function for more explanation.
+			SET_MAIN_TIMER
 			return 0;
+		}
 		if (g_TrayMenuIsVisible || (iMsg == AHK_HOOK_HOTKEY && lParam && g_hWnd == GetForegroundWindow()))
 		{
 			// Ok this is a little strange, but the thought here is that if the tray menu is
@@ -1148,15 +1163,34 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 
 	case WM_TIMER:
 		// Since we're here, the receipt of this msg indicates that g_script.mTimerEnabledCount > 0,
-		// so it performs a little better to call it directly vs. CHECK_SCRIPT_TIMERS_IF_NEEDED:
-		CheckScriptTimers();
-		return 0;
-
-	case AHK_KEYHISTORY:
-#ifdef ENABLE_KEY_HISTORY_FILE
-		KeyHistoryToFile(NULL, ((KeyHistoryItem *)wParam)->event_type, ((KeyHistoryItem *)wParam)->key_up
-			, ((KeyHistoryItem *)wParam)->vk, ((KeyHistoryItem *)wParam)->sc);
-#endif
+		// so it performs a little better to call it directly vs. CHECK_SCRIPT_TIMERS_IF_NEEDED.
+		// UPDATE: The WM_HOTKEY case of this function now also turns on the main timer in some
+		// cases so that hotkeys that are pressed while the script is both displaying a dialog
+		// and is uninterruptible will not get stuck in the buffer until the dialog is dismissed.
+		// Therefore, just do a quick msg check, which will also handle the script timers for us:
+		//CheckScriptTimers();
+		// More explanation:
+		// At first I was concerned that the moment ExecUntil() or anyone does a Sleep(10+) (due to
+		// SetBatchLines or whatever), the timer would be disabled by IsCycleComplete() upon return.
+		// But realistically, I don't think the following conditions can ever be true simultaneously?:
+		// 1) The timer is not enabled.
+		// 2) The script is not interruptible.
+		// 3) A dialog is displayed (it's msg pump is routing hotkey presses to MainWindowProc())
+		// I don't think it's possible (or realistically likely) for all of the above to be true, since
+		// for example the script can only be uninterruptible while it's idle-waiting-for-dialog
+		// (which is the only time hotkey presses get caught by its msg pump rather than ours, and thus
+		// get routed to MainWindowProc() rather than get caught directly by MsgSleep()) if there are
+		// timed subroutines, in which case the timer is already running anyway.  But that's just it:
+		// when there are timed subroutines, hotkeys would get blocked if they happened to be pressed at
+		// an instant when the script is uninterruptible during a short timed subroutine (and maybe even
+		// a short hotkey subroutine) that never has a chance to do any MsgSleep()'s (and this would be
+		// even more likely if the user increased the uninterruptible time via a setting).  That is why
+		// MsgSleep() is called in lieu of a direct call to CheckScriptTimers().  So the issue is that
+		// it's unlikely that the SET_TIMER statement in the WM_HOTKEY case will ever actually turn on
+		// the timer since it will already be on in nearly all such cases (i.e. so it's really just a
+		// safety check).  And the overhead of calling MsgSleep(-1) vs. CheckScriptTimers() here isn't
+		// too much of a worry since scripts don't spend most of their time waiting for dialogs:
+		MsgSleep(-1);
 		return 0;
 
 	case WM_SYSCOMMAND:
@@ -1717,7 +1751,7 @@ ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aS
 	if (aClickCount <= 0)
 		// Allow this to simply "do nothing", because it increases flexibility
 		// in the case where the number of clicks is a dereferenced script variable
-		// that may sometimes (by intent) resolve to zero:
+		// that may sometimes (by intent) resolve to zero or negative:
 		return OK;
 
 	// The chars 'U' (up) and 'D' (down), if specified, will restrict the clicks
@@ -1795,7 +1829,7 @@ void Line::MouseMove(int aX, int aY, int aSpeed)
 	int		delta;
 	const	int	nMinSpeed = 32;
 
-	if (aSpeed < 0)
+	if (aSpeed < 0) // This can happen during script's runtime due to MouseClick's speed being a var containing a neg.
 		aSpeed = 0;  // 0 is the fastest.
 	else
 		if (aSpeed > MAX_MOUSE_SPEED)
@@ -2765,7 +2799,7 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 	if (options & 0x01)
 		ofn.Flags |= OFN_FILEMUSTEXIST;
 
-	PREPARE_FOR_DIALOG(0) // Must pass 0 for WPARAM in this case.
+	POST_AHK_DIALOG(0) // Must pass 0 for timeout in this case.
 
 	++g_nFileDialogs;
 	// Below: OFN_CREATEPROMPT doesn't seem to work with GetSaveFileName(), so always
@@ -2858,7 +2892,7 @@ ResultType Line::FileSelectFolder(char *aRootDir, bool aAllowCreateFolder, char 
 	char Result[2048];
 	browseInfo.pszDisplayName = Result;  // This will hold the user's choice.
 
-	PREPARE_FOR_DIALOG(0) // Must pass 0 for WPARAM in this case.
+	POST_AHK_DIALOG(0) // Must pass 0 for timeout in this case.
 
 	++g_nFolderDialogs;
 	LPITEMIDLIST lpItemIDList = SHBrowseForFolder(&browseInfo);  // Spawn Dialog
@@ -4337,7 +4371,7 @@ ResultType Line::SetToggleState(vk_type aVK, ToggleValueType &ForceLock, char *a
 // Misc lower level functions //
 ////////////////////////////////
 
-int Line::ConvertEscapeChar(char *aFilespec, char aOldChar, char aNewChar)
+int Line::ConvertEscapeChar(char *aFilespec, char aOldChar, char aNewChar, bool aFromAutoIt2)
 {
 	if (!aFilespec || !*aFilespec) return 1;  // Non-zero is failure in this case.
 	if (aOldChar == aNewChar)
@@ -4364,6 +4398,7 @@ int Line::ConvertEscapeChar(char *aFilespec, char aOldChar, char aNewChar)
 
 	char buf[LINE_SIZE], *cp, next_char;
 	size_t line_count, buf_length;
+
 	for (line_count = 0;;)
 	{
 		if (   -1 == (buf_length = ConvertEscapeCharGetLine(buf, (int)(sizeof(buf) - 1), f1))   )
@@ -4407,6 +4442,15 @@ int Line::ConvertEscapeChar(char *aFilespec, char aOldChar, char aNewChar)
 				// convert it anyway because it's more failsafe to do so (the script parser will
 				// handle such things much better than we can when the script is run):
 				*cp = aNewChar;
+		}
+		// Before the line is written, also do some conversions if the source file is known to
+		// be an AutoIt2 script:
+		if (aFromAutoIt2)
+		{
+			// This will not fix all possible uses of A_ScriptDir, just those that are dereferences.
+			// For example, this would not be fixed: StringLen, length, a_ScriptDir
+			StrReplaceAllSafe(buf, sizeof(buf), "%A_ScriptDir%", "%A_ScriptDir%\\", false);
+			// Later can add some other, similar conversions here.
 		}
 		fputs(buf, f2);
 	}

@@ -171,11 +171,17 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 	// UPDATE #2: The below has been changed in light of the fact that the main timer is
 	// now kept always-on whenever there is at least one enabled timed subroutine.
 	// This policy simplifies ExecUntil() and long-running commands such as FileSetAttrib:
-	bool we_turned_on_main_timer = aSleepDuration > 0 && aMode == RETURN_AFTER_MESSAGES && !g_MainTimerExists;
-	if (we_turned_on_main_timer)
-		SET_MAIN_TIMER
-	// Even if the above didn't turn on the timer, it may already be on due to g_script.mTimerEnabledCount
-	// being greater than zero.
+	#define THIS_LAYER_NEEDS_TIMER (aSleepDuration > 0 && g_nThreads > 0) // Also used by IsCycleComplete().
+	if (THIS_LAYER_NEEDS_TIMER)
+	{
+		++g_nLayersNeedingTimer;  // IsCycleComplete() is responsible for decrementing this for us.
+		if (!g_MainTimerExists)
+			SET_MAIN_TIMER
+		// Reasons why the timer might already have been on:
+		// 1) g_script.mTimerEnabledCount is greater than zero.
+		// 2) another instance of MsgSleep() (beneath us in the stack) needs it (see the comments
+		//    in IsCycleComplete() near KILL_MAIN_TIMER for details).
+	}
 
 	// Only used when aMode == RETURN_AFTER_MESSAGES:
 	// True if the current subroutine was interrupted by another:
@@ -186,6 +192,8 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 	HWND fore_window;
 	DWORD fore_pid;
 	char fore_class_name[32];
+	UserMenuItem *menu_item;
+	ActionTypeType type_of_first_line;
 	MSG msg;
 
 	for (;;)
@@ -251,6 +259,8 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 			// else Peek() found a message, so process it below.
 		}
 
+		TRANSLATE_AHK_MSG(msg.message, msg.wParam)
+
 		switch(msg.message)
 		{
 		case WM_QUIT:
@@ -299,28 +309,51 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 
 		case WM_HOTKEY: // As a result of this app having previously called RegisterHotkey().
 		case AHK_HOOK_HOTKEY:  // Sent from this app's keyboard or mouse hook.
-			// MSG_FILTER_MAX should prevent us from receiving these messages whenever
-			// g_AllowInterruption or g_AllowInterruptionForSub is false.
-			if (g_nThreads >= g_MaxThreadsTotal
-				&& !(ACT_IS_ALWAYS_ALLOWED(Hotkey::GetTypeOfFirstLine((HotkeyIDType)msg.wParam))
-					&& g_nThreads < MAX_THREADS_LIMIT)   )
-				// Allow only a limited number of recursion levels to avoid any chance of
-				// stack overflow.  So ignore this message.  Later, can devise some way
-				// to support "queuing up" these hotkey firings for use later when there
-				// is "room" to run them, but that might cause complications because in
-				// some cases, the user didn't intend to hit the key twice (e.g. due to
-				// "fat fingers") and would have preferred to have it ignored.  Doing such
-				// might also make "infinite key loops" harder to catch because the rate
-				// of incoming hotkeys would be slowed down to prevent the subroutines from
-				// running concurrently.
-				continue;
-				// It seems best not to buffer the key in the above case, since it might be a
-				// while before the number of threads drops low enough.
+		case AHK_USER_MENU:  // The user selected a custom menu item.
+			// MSG_FILTER_MAX should prevent us from receiving these messages (except AHK_USER_MENU)
+			// whenever g_AllowInterruption or g_AllowInterruptionForSub is false.
+			if (msg.message == AHK_USER_MENU) // user-defined menu item
+			{
+				if (   !(menu_item = g_script.FindMenuItemByID((UINT)msg.lParam))   ) // Item not found.
+					continue; // ignore the msg
+				// And just in case a menu item that lacks a label (such as a separator) is ever
+				// somehow selected (perhaps via someone sending direct messages to us, bypassing
+				// the menu):
+				if (!menu_item->mLabel)
+					continue;
+			}
+			if (g_nThreads >= g_MaxThreadsTotal)
+			{
+				// The below allows 1 thread beyond the limit in case the script's configured
+				// #MaxThreads is exactly equal to the absolute limit.  This is because we want
+				// subroutines whose first line is something like ExitApp to take effect even
+				// when we're at the absolute limit:
+				if (g_nThreads > MAX_THREADS_LIMIT)
+					continue;
+
+				if (msg.message == AHK_USER_MENU) // user-defined menu item
+					type_of_first_line = menu_item->mLabel->mJumpToLine->mActionType;
+				else // hotkey
+					type_of_first_line = Hotkey::GetTypeOfFirstLine((HotkeyIDType)msg.wParam);
+				if (!ACT_IS_ALWAYS_ALLOWED(type_of_first_line))
+					// Allow only a limited number of recursion levels to avoid any chance of
+					// stack overflow.  So ignore this message.  Later, can devise some way
+					// to support "queuing up" these hotkey firings for use later when there
+					// is "room" to run them, but that might cause complications because in
+					// some cases, the user didn't intend to hit the key twice (e.g. due to
+					// "fat fingers") and would have preferred to have it ignored.  Doing such
+					// might also make "infinite key loops" harder to catch because the rate
+					// of incoming hotkeys would be slowed down to prevent the subroutines from
+					// running concurrently.
+					continue;
+				// If the above "continued", it seems best not to buffer the key since it might be a
+				// while before the number of threads drops back below the limit.
+			}
 
 			// Due to the key-repeat feature and the fact that most scripts use a value of 1
 			// for their #MaxThreadsPerHotkey, this check will often help average performance
 			// by avoiding a lot of unncessary overhead that would otherwise occur:
-			if (!Hotkey::PerformIsAllowed((HotkeyIDType)msg.wParam))
+			if (msg.message != AHK_USER_MENU && !Hotkey::PerformIsAllowed((HotkeyIDType)msg.wParam))
 			{
 				// The key is buffered in this case to boost the responsiveness of hotkeys
 				// that are being held down by the user to activate the keyboard's key-repeat
@@ -376,11 +409,14 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 			// (i.e. the user may want one hotkey subroutine to use the value of ErrorLevel set by another):
 			CopyMemory(&g, &g_default, sizeof(global_struct));
 
-			// Just prior to launching the hotkey, update these values to support built-in
-			// variables such as A_TimeSincePriorHotkey:
-			g_script.mPriorHotkeyLabel = g_script.mThisHotkeyLabel;
-			g_script.mPriorHotkeyStartTime = g_script.mThisHotkeyStartTime;
-			g_script.mThisHotkeyLabel = Hotkey::GetLabel((HotkeyIDType)msg.wParam);
+			if (msg.message != AHK_USER_MENU)
+			{
+				// Just prior to launching the hotkey, update these values to support built-in
+				// variables such as A_TimeSincePriorHotkey:
+				g_script.mPriorHotkeyLabel = g_script.mThisHotkeyLabel;
+				g_script.mPriorHotkeyStartTime = g_script.mThisHotkeyStartTime;
+				g_script.mThisHotkeyLabel = Hotkey::GetLabel((HotkeyIDType)msg.wParam);
+			}
 
 			// If the current quasi-thread is paused, the thread we're about to launch
 			// will not be, so the icon needs to be checked:
@@ -390,20 +426,28 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 
 			// Do this last, right before the PerformID():
 			// It seems best to reset these unconditionally, because the user has pressed a hotkey
-			// so would expect maximum responsiveness, rather than the risk that a "rest" will be
-			// done immediately by ExecUntil() just because mLinesExecutedThisCycle happens to be
+			// or selected a custom menu item, so would expect maximum responsiveness (e.g. in a game
+			// where split second timing can matter) rather than the risk that a "rest" will be done
+			// immediately by ExecUntil() just because mLinesExecutedThisCycle happens to be
 			// large some prior subroutine.  The same applies to mLastScriptRest, which is why
 			// that is reset also:
 			g_script.mLinesExecutedThisCycle = 0;
-			g_script.mThisHotkeyStartTime = g_script.mLastScriptRest = GetTickCount();
+			g_script.mLastScriptRest = GetTickCount();
+			if (msg.message != AHK_USER_MENU)
+				g_script.mThisHotkeyStartTime = g_script.mLastScriptRest;
 
 			// Perform the new hotkey's subroutine:
 			++g_nThreads;
-			Hotkey::PerformID((HotkeyIDType)msg.wParam);
+			if (msg.message == AHK_USER_MENU)
+				menu_item->mLabel->mJumpToLine->ExecUntil(UNTIL_RETURN, 0);
+			else
+				Hotkey::PerformID((HotkeyIDType)msg.wParam);
 			--g_nThreads;
 
 			DISABLE_UNINTERRUPTIBLE_SUB
-			g_LastPerformedHotkeyType = Hotkey::GetType((HotkeyIDType)msg.wParam); // For use with the KeyHistory cmd.
+
+			if (msg.message != AHK_USER_MENU)
+				g_LastPerformedHotkeyType = Hotkey::GetType((HotkeyIDType)msg.wParam); // For use with the KeyHistory cmd.
 
 			if (aMode == RETURN_AFTER_MESSAGES)
 			{
@@ -440,15 +484,15 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 					// layer/instance so that it will use peek-mode.  UPDATE: Don't change the
 					// value of aSleepDuration to -1 because IsCycleComplete() needs to know the
 					// original sleep time specified by the caller to determine whether
-					// to restore the caller's active window after the caller's subroutine
-					// is resumed-after-suspension:
+					// to decrement g_nLayersNeedingTimer:
 					empty_the_queue_via_peek = true;
 					allow_early_return = true;
-					continue;  // i.e. end the switch() and have the loop do another iteration.
+					// And now let it fall through to the "continue" statement below.
 				}
-				if (we_turned_on_main_timer) // Ensure the timer is back on since we still need it here.
+				else if (THIS_LAYER_NEEDS_TIMER) // Ensure the timer is back on since we still need it here.
 					SET_MAIN_TIMER // This won't do anything if it's already on.
-					// and stay in the blessed GetMessage() state until the time has expired.
+				// and now if the cycle isn't complete, stay in the blessed GetMessage() state until the time
+				// has expired.
 			}
 			continue;
 
@@ -546,12 +590,42 @@ ResultType IsCycleComplete(int aSleepDuration, DWORD aStartTime, bool aAllowEarl
 		g_script.mLastScriptRest = tick_now;
 	}
 
+	if (THIS_LAYER_NEEDS_TIMER) // Since MsgSleep() incremented this, must decrement here to balance it.
+		--g_nLayersNeedingTimer; // Do this prior to checking whether timer should be killed, below.
+
 	// Kill the timer only if we're about to return OK to the caller since the caller
 	// would still need the timer if FAIL was returned above.  But don't kill it if
 	// there are any enabled timed subroutines, because the current policy it to keep
-	// the main timer always-on in those cases:
-	if (!g_script.mTimerEnabledCount)
-		KILL_MAIN_TIMER
+	// the main timer always-on in those cases.  UPDATE: Also avoid killing the timer
+	// if there are any script threads running.  To do so might cause a problem such
+	// as in this example scenario: MsgSleep() is called for any reason with a delay
+	// large enough to require the timer.  The timer is set.  But a msg arrives that
+	// MsgSleep() dispatches to MainWindowProc().  If it's a hotkey or custom menu,
+	// MsgSleep() is called recursively with a delay of -1.  But when it finishes via
+	// IsCycleComplete(), the timer would be wrongly killed because the underlying
+	// instance of MsgSleep still needs it.  Above is even more wide-spread because if
+	// MsgSleep() is called recursively for any reason, even with a duration >10, it will
+	// wrongly kill the timer upon returning, in some cases.  For example, if the first call to
+	// MsgSleep(-1) finds a hotkey or menu item msg, and executes the corresponding subroutine,
+	// that subroutine could easily call MsgSleep(10+) for any number of reasons, which
+	// would then kill the timer:
+	if (g_MainTimerExists)
+	{
+		// Also require that aSleepDuration > 0 so that MainWindowProc()'s receipt of a
+		// WM_HOTKEY msg, to which it responds by turning on the main timer if the script
+		// is uninterruptible, is not defeated here.  In other words, leave the timer on so
+		// that when the script becomes interruptible once again, the hotkey will take effect
+		// almost immediately rather than having to wait for the displayed dialog to be
+		// dismissed (if there is one):
+		if (aSleepDuration > 0 && !g_nLayersNeedingTimer && !g_script.mTimerEnabledCount)
+			KILL_MAIN_TIMER
+	}
+	else // It doesn't exist (MsgSleep() relies on us to do this check)
+		// Ensure the timer is back on whenever a layer beneath us needs it.  Since the timer
+		// is never killed while g_script.mTimerEnabledCount is >0, it shouldn't be necessary
+		// to check g_script.mTimerEnabledCount here:
+		if (g_nLayersNeedingTimer)
+			SET_MAIN_TIMER // This won't do anything if it's already on.
 
 	return OK;
 }

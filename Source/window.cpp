@@ -1004,8 +1004,6 @@ int MsgBox(char *aText, UINT uType, char *aTitle, double aTimeout)
 	// Set these in case the caller explicitly called it with a NULL, overriding the default:
 	if (!aText)
 		aText = "";
-	if (!*aText && !(uType & 0x07)) // No text specified and this dialog is the one with the "OK" button.
-		aText = "Press OK to continue.";
 	if (!aTitle || !*aTitle)
 		// If available, the script's filename seems a much better title in case the user has
 		// more than one script running:
@@ -1095,7 +1093,7 @@ int MsgBox(char *aText, UINT uType, char *aTitle, double aTimeout)
 	// the way it is now in the sense that the user can dismiss the messageboxes out of
 	// order, which might (in rare cases) be desireable.
 
-	PREPARE_FOR_DIALOG(aTimeout)
+	POST_AHK_DIALOG((int)(aTimeout * 1000))
 
 	++g_nMessageBoxes;  // This value will also be used as the Timer ID if there's a timeout.
 	g.MsgBoxResult = MessageBox(NULL, text, title, uType);

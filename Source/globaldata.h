@@ -50,6 +50,7 @@ extern bool g_MainTimerExists;
 extern bool g_UninterruptibleTimerExists;
 extern bool g_AutoExecTimerExists;
 extern bool g_IsSuspended;
+extern int g_nLayersNeedingTimer;
 extern int g_nThreads;
 extern int g_nPausedThreads;
 extern bool g_UnpauseWhenResumed;
@@ -109,10 +110,13 @@ extern int g_key_to_sc_count;
 
 extern KeyHistoryItem *g_KeyHistory;
 extern int g_KeyHistoryNext;
-extern bool g_KeyHistoryToFile;
 extern DWORD g_HistoryTickNow;
 extern DWORD g_HistoryTickPrev;
 extern DWORD g_TimeLastInputPhysical;
+
+#ifdef ENABLE_KEY_HISTORY_FILE
+extern bool g_KeyHistoryToFile;
+#endif
 
 
 inline VarSizeType GetBatchLines(char *aBuf = NULL)

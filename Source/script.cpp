@@ -42,15 +42,18 @@ Script::Script()
 	, mLoopFile(NULL), mLoopRegItem(NULL), mLoopReadFile(NULL), mLoopField(NULL), mLoopIteration(0)
 	, mThisHotkeyLabel(NULL), mPriorHotkeyLabel(NULL), mPriorHotkeyStartTime(0)
 	, mFirstLabel(NULL), mLastLabel(NULL)
-	, mFirstTimer(NULL), mLastTimer(NULL)
+	, mFirstTimer(NULL), mLastTimer(NULL), mTimerEnabledCount(0), mTimerCount(0)
+	, mFirstMenuItem(NULL), mLastMenuItem(NULL), mMenuItemCount(0)
 	, mFirstVar(NULL), mLastVar(NULL)
-	, mLineCount(0), mLabelCount(0), mTimerEnabledCount(0), mTimerCount(0), mVarCount(0), mGroupCount(0)
+	, mLineCount(0), mLabelCount(0), mVarCount(0), mGroupCount(0)
 	, mCurrFileNumber(0), mCurrLineNumber(0), mNoHotkeyLabels(true)
 	, mFileSpec(""), mFileDir(""), mFileName(""), mOurEXE(""), mOurEXEDir(""), mMainWindowTitle("")
 	, mIsReadyToExecute(false), AutoExecSectionIsRunning(false)
 	, mIsRestart(false)
 	, mIsAutoIt2(false)
 	, mLinesExecutedThisCycle(0), mUninterruptedLineCount(0)
+	, mTrayMenu(NULL) // The menu will be created the first time the user invokes it.
+	, mTrayIncludeStandard(true), mTrayMenuDefault(NULL)
 {
 	mLastScriptRest = mLastPeekTime = GetTickCount();
 	ZeroMemory(&mNIC, sizeof(mNIC));  // Constructor initializes this, to be safe.
@@ -303,7 +306,7 @@ ResultType Script::CreateWindows(HINSTANCE aInstance)
 		// for compatibility with VC++ 6.x.  This is also what AutoIt3 uses:
 		mNIC.cbSize				= sizeof(NOTIFYICONDATA);  // NOTIFYICONDATA_V1_SIZE
 		mNIC.hWnd				= g_hWnd;
-		mNIC.uID				= 0;  // Icon ID (can be anything, like Timer IDs?)
+		mNIC.uID				= AHK_NOTIFYICON; // This is also used for the ID, see TRANSLATE_AHK_MSG for details.
 		mNIC.uFlags				= NIF_MESSAGE | NIF_TIP | NIF_ICON;
 		mNIC.uCallbackMessage	= AHK_NOTIFYICON;
 		mNIC.hIcon				= LoadIcon(aInstance, MAKEINTRESOURCE(IDI_MAIN));
@@ -390,6 +393,312 @@ void Script::UpdateTrayIcon()
 
 
 
+void Script::DisplayTrayMenu()
+{
+	if (!mTrayMenu) // Probably because this is the first time the user has opened the menu.
+		if (!CreateTrayMenu())
+			return;
+
+#ifndef AUTOHOTKEYSC
+	// These are okay even if the menu items don't exist (perhaps because the user customized the menu):
+	CheckMenuItem(mTrayMenu, ID_TRAY_SUSPEND, g_IsSuspended ? MF_CHECKED : MF_UNCHECKED);
+	CheckMenuItem(mTrayMenu, ID_TRAY_PAUSE, g.IsPaused ? MF_CHECKED : MF_UNCHECKED);
+#endif
+
+	POINT pt;
+	GetCursorPos(&pt);
+	SetForegroundWindow(g_hWnd); // Always call this right before TrackPopupMenu(), even if window is hidden.
+
+	// Set this so that if a new recursion layer is triggered by TrackPopupMenuEx's having
+	// dispatched a hotkey message to our main window proc, IsCycleComplete() knows that
+	// this layer here does not need to have its original foreground window restored to the foreground.
+	// Also, this allows our main Window Proc to close the popup menu upon receive of any hotkey,
+	// which is probably a good idea since most hotkeys change the foreground window and if that
+	// happens, the menu cannot be dismissed (ever?) except by selecting one of the items in the
+	// menu (which is often undesirable).
+	bool tray_was_interruptible_before;
+	MENU_NO_INTERRUPT(tray_was_interruptible_before)
+
+	g_TrayMenuIsVisible = true;
+	TrackPopupMenuEx(mTrayMenu, TPM_LEFTALIGN | TPM_LEFTBUTTON, pt.x, pt.y, g_hWnd, NULL);
+	g_TrayMenuIsVisible = false;
+	
+	PostMessage(g_hWnd, WM_NULL, 0, 0); // MSDN recommends this to prevent menu from closing on 2nd click.
+	MENU_RESTORE_INTERRUPT(tray_was_interruptible_before)
+}
+
+
+
+ResultType Script::PerformMenu(char *aWhichMenu, char *aCommand, char *aMenuItemName, char *aLabel)
+{
+	if (stricmp(aWhichMenu, "tray"))
+		return ScriptError("Parameter #1 must be the word TRAY." ERR_ABORT);
+
+	MenuCommands menu_command = Line::ConvertMenuCommand(aCommand);
+	if (menu_command == MENU_COMMAND_INVALID)
+		return ScriptError(ERR_MENUCOMMAND2, aCommand);
+
+	bool menu_item_needed = (menu_command != MENU_COMMAND_DELETEALL && menu_command != MENU_COMMAND_NODEFAULT
+		 && menu_command != MENU_COMMAND_STANDARD && menu_command != MENU_COMMAND_NOSTANDARD
+		 && menu_command != MENU_COMMAND_ADD); // Don't need a menu item for this one if it's a separator.
+
+	if ((!aMenuItemName || !*aMenuItemName) && menu_item_needed)
+		return ScriptError("When the command is used this way, the menu item name must not be blank." ERR_ABORT);
+
+	// Seems best to avoid performance enhancers such as (Label *)mAttribute here, since the "Menu"
+	// command has so many modes of operation that would be difficult to parse at load-time:
+	Label *target_label = NULL;  // Set default.
+	if (menu_command == MENU_COMMAND_ADD && (!aLabel || !*aLabel)) // All the label to default to the menu name.
+		aLabel = aMenuItemName;
+	if (aLabel && *aLabel) // Even for MENU_COMMAND_ADD it can be blank if a separator is being added.
+		if (   !(target_label = g_script.FindLabel(aLabel))   )
+			return ScriptError(ERR_MENULABEL ERR_ABORT, aLabel);
+
+	// Now that most opportunities to return an error have passed, create the menu if needed:
+	if (!mTrayMenu) // Probably because this is the first time the script has accessed the menu.
+		if (!CreateTrayMenu())
+			return FAIL;  // Realistically never happens, so no error is dislayed.
+
+	// Find aMenuItemName in the linked list:
+	UserMenuItem *menu_item = NULL, *menu_item_prev = NULL;
+	// The below IF statement avoids searching if it's a separator being used with the ADD command:
+	if ((menu_item_needed || menu_command == MENU_COMMAND_ADD) && aMenuItemName && *aMenuItemName)
+		for (menu_item = mFirstMenuItem; menu_item != NULL; menu_item_prev = menu_item, menu_item = menu_item->mNextMenuItem)
+			if (!stricmp(menu_item->mName, aMenuItemName)) // Match found (case insensitive).
+				break;
+
+	if (!menu_item)  // aMenuItemName doesn't exist, so create it (but only if the command is ADD).
+	{
+		if (menu_command != MENU_COMMAND_ADD)
+		{
+			if (menu_item_needed)
+				// Seems best not to create menu items on-demand like this because they might get put into
+				// an incorrect position (i.e. it seems better than menu changes be kept separate from menu additions):
+				return ScriptError("The specified menu item cannot be changed because it doesn't exist." ERR_ABORT, aMenuItemName);
+			// else do nothing, since we don't need a menu item to operate upon.
+		}
+		else // Adding a new item that doesn't yet exist.
+		{
+			// Need to find a menuID that isn't already in use by one of the other menu items.
+			// Can't use (ID_TRAY_USER + mMenuItemCount) because a menu item in the middle of
+			// the list may have been deleted, in which case that value would already be in
+			// use by the last item.  But we can accelerate the peformance of the below
+			// by starting at an ID we expect to be available most of the time, and continue
+			// looking from there.  UPDATE: It seems best not to accelerate this way because
+			// if during a script instance's lifetime a lot of deletes and adds are done, it's
+			// possible that we could run out of IDs.  So start check at the very first one
+			// to ensure that none are permanently "wasted":
+			UINT candidate_id = ID_TRAY_USER;
+			bool id_in_use;
+			UserMenuItem *mi;
+			for (candidate_id = ID_TRAY_USER; ; ++candidate_id)
+			{
+				id_in_use = false;  // Reset the default each iteration (overridden if the below finds a match).
+				for (mi = mFirstMenuItem; mi; mi = mi->mNextMenuItem)
+				{
+					if (mi->mMenuID == candidate_id)
+					{
+						id_in_use = true;
+						break;
+					}
+				}
+				if (!id_in_use) // Break before the loop increments candidate_id.
+					break;
+			}
+			if (   !(menu_item = new UserMenuItem(aMenuItemName, candidate_id, target_label, mTrayMenu))   )
+				return ScriptError("Out of memory while adding menu item.", aMenuItemName);
+			if (!mFirstMenuItem)
+				mFirstMenuItem = mLastMenuItem = menu_item;
+			else
+			{
+				mLastMenuItem->mNextMenuItem = menu_item;
+				// This must be done after the above:
+				mLastMenuItem = menu_item;
+			}
+			++mMenuItemCount;  // Only after memory has been successfully allocated.
+		}
+	}
+
+	switch (menu_command)
+	{
+	case MENU_COMMAND_ADD:
+		// The above has already created it for us if it needed to be (it might have already existed if the
+		// user was using the ADD command just to update a menu item's label):
+		menu_item->mLabel = target_label;  // This will be NULL if this menu item is a separator.
+		return OK;
+	case MENU_COMMAND_CHECK:
+		menu_item->mChecked = true;
+		CheckMenuItem(mTrayMenu, menu_item->mMenuID, MF_CHECKED);
+		return OK;
+	case MENU_COMMAND_UNCHECK:
+		menu_item->mChecked = false;
+		CheckMenuItem(mTrayMenu, menu_item->mMenuID, MF_UNCHECKED);
+		return OK;
+	case MENU_COMMAND_TOGGLECHECK:
+		menu_item->mChecked = !menu_item->mChecked;
+		CheckMenuItem(mTrayMenu, menu_item->mMenuID, menu_item->mChecked ? MF_CHECKED : MF_UNCHECKED);
+		return OK;
+	case MENU_COMMAND_ENABLE:
+		menu_item->mEnabled = true;
+		EnableMenuItem(mTrayMenu, menu_item->mMenuID, MF_BYCOMMAND | MF_ENABLED); // Automatically ungrays it too.
+		return OK;
+	case MENU_COMMAND_DISABLE: // Disables and grays the item.
+		menu_item->mEnabled = false;
+		EnableMenuItem(mTrayMenu, menu_item->mMenuID, MF_BYCOMMAND | MF_DISABLED | MF_GRAYED);
+		return OK;
+	case MENU_COMMAND_TOGGLEENABLE:
+		menu_item->mEnabled = !menu_item->mEnabled;
+		EnableMenuItem(mTrayMenu, menu_item->mMenuID, menu_item->mEnabled ? (MF_BYCOMMAND | MF_ENABLED)
+			: MF_BYCOMMAND | MF_DISABLED | MF_GRAYED);
+		return OK;
+	case MENU_COMMAND_DEFAULT:
+		mTrayMenuDefault = menu_item;
+		SetMenuDefaultItem(mTrayMenu, menu_item->mMenuID, FALSE); // This also ensures that only one is default at a time.
+		return OK;
+	case MENU_COMMAND_NODEFAULT:
+		mTrayMenuDefault = NULL;
+#ifdef AUTOHOTKEYSC
+		SetMenuDefaultItem(mTrayMenu, -1, TRUE); // Necessary for proper operation of the self-contained version.
+#else
+		SetMenuDefaultItem(mTrayMenu, mTrayIncludeStandard ? ID_TRAY_OPEN : -1, FALSE);
+#endif
+		return OK;
+	case MENU_COMMAND_STANDARD:
+		if (!mTrayIncludeStandard)
+		{
+			// Only do this if it was false beforehand so that the standard menu items will be appended
+			// to whatever the user has already added to the menu (increases flexibility).
+			mTrayIncludeStandard = true;
+			AppendStandardTrayItems();
+		}
+		return OK;
+	case MENU_COMMAND_NOSTANDARD:
+		if (mTrayIncludeStandard)
+		{
+			// Only do this if it was true beforehand since otherwise there's no point.
+			mTrayIncludeStandard = false; // Must set this before calling the below.
+			CreateTrayMenu();
+		}
+		return OK;
+	case MENU_COMMAND_DELETE:
+		// Remove this menu item from the linked list:
+		if (menu_item == mLastMenuItem)
+			mLastMenuItem = menu_item_prev; // Can be NULL if the list will now be empty.
+		if (menu_item_prev) // there is another item prior to menu_item in the linked list.
+			menu_item_prev->mNextMenuItem = menu_item->mNextMenuItem; // Can be NULL if menu_item was the last one.
+		else // menu_item was the first one in the list.
+			mFirstMenuItem = menu_item->mNextMenuItem; // Can be NULL if the list will now be empty.
+		if (mTrayMenuDefault == menu_item) // should do this before freeing menu_item's memory.
+		{
+#ifndef AUTOHOTKEYSC  // i.e. this is not done for the self-contained version, since it lacks that menu item.
+			SetMenuDefaultItem(mTrayMenu, mTrayIncludeStandard ? ID_TRAY_OPEN : -1, FALSE);
+#endif
+			mTrayMenuDefault = NULL;
+		}
+		DeleteMenu(mTrayMenu, menu_item->mMenuID, MF_BYCOMMAND);
+		delete menu_item; // Do this last when its contents are no longer needed.
+		--mMenuItemCount;
+		return OK;
+	case MENU_COMMAND_DELETEALL:
+		if (!mFirstMenuItem)
+			return OK;  // If there are no user-defined menu items, it's already in the "reset" state.
+		// I think DestroyMenu() can fail if an attempt is made to destroy the menu while it is being
+		// displayed (but even if it doesn't fail, it seems very bad to try to destroy it then, which
+		// is why g_TrayMenuIsVisible is checked just to be sure).
+		// But this all should be impossible in our case because the script is in an uninterruptible state
+		// while the menu is displayed, which in addition to pausing the current thread (which happens
+		// anyway), no new timed or hotkey subroutines can be launched.  Thus, this should rarely if
+		// ever happen, which is why no error message is given here:
+		if (g_TrayMenuIsVisible || !DestroyMenu(mTrayMenu))
+			return OK;
+		else
+			mTrayMenu = NULL;
+		mTrayMenuDefault = NULL;  // i.e. there can't be a user-defined default item anymore.
+		// Remove all menu items from the linked list and from the menu.  First destroy the menu since
+		// it's probably better to start off fresh than have the destructor individually remove each
+		// menu item as the items in the linked list are deleted:
+		for (menu_item = mFirstMenuItem; menu_item;)
+		{
+			UserMenuItem *menu_item_to_delete = menu_item;
+			menu_item = menu_item->mNextMenuItem;
+			delete menu_item_to_delete;
+		}
+		mFirstMenuItem = mLastMenuItem = NULL;
+		mMenuItemCount = 0;
+		return OK;
+	}
+	return FAIL;  // Should never be reached, but avoids compiler warning.
+}
+
+
+
+HMENU Script::CreateTrayMenu()
+{
+	if (mTrayMenu) // Destroy any old one first (MENU_COMMAND_NOSTANDARD relies on this).
+		DestroyMenu(mTrayMenu);
+	if (   !(mTrayMenu = CreatePopupMenu())   )
+		return NULL;
+
+	// If if the below is true we want to have created the menu so that it won't be NULL for things
+	// that try to access it, which might lead to problems.  But not attempt is made to remove the
+	// tray icon itself in this case, since the user may still want that due to its color changing
+	// to indicate status, or just to know that the script is really running still.  In any case,
+	// #NoTrayIcon can be used to entirely hide the icon:
+	if (!mTrayIncludeStandard && !mMenuItemCount)
+	{
+		// It seems best not to do this for two reasons:
+		// 1) Allows the tray icon to be shown even at time when the user wants it to have no menu at all
+		//    (i.e. avoids the need for #NoTrayIcon just to disable the entire menu).
+		// 2) It adds complexity because there would be a 3rd state: Standard, NoStandard, and
+		//    NoStandardWithExit.  This might be inconsequential, but would requir testing.
+		//AppendMenu(mTrayMenu, MF_STRING, ID_TRAY_EXIT, "E&xit");
+		return mTrayMenu;
+	}
+
+	// By default, the standard menu items are added first, since the users would probably want
+	// their own user defined menus at the bottom where they're easier to reach:
+	if (mTrayIncludeStandard)
+		AppendStandardTrayItems();
+
+	// Now append all of the user defined items:
+	UINT flags;
+	for (UserMenuItem *menu_item = mFirstMenuItem; menu_item != NULL; menu_item = menu_item->mNextMenuItem)
+	{
+		flags = *menu_item->mName ? MF_STRING : MF_SEPARATOR;
+		if (!menu_item->mEnabled)
+			flags |= (MF_DISABLED | MF_GRAYED);
+		if (menu_item->mChecked)
+			flags |= MF_CHECKED;
+		AppendMenu(mTrayMenu, flags, menu_item->mMenuID, menu_item->mName);
+	}
+	if (mTrayMenuDefault)
+		SetMenuDefaultItem(mTrayMenu, mTrayMenuDefault->mMenuID, FALSE); // This also ensures that only one is default at a time.
+
+	return mTrayMenu;
+}
+
+
+
+void Script::AppendStandardTrayItems()
+{
+#ifndef AUTOHOTKEYSC
+	AppendMenu(mTrayMenu, MF_STRING, ID_TRAY_OPEN, "&Open");
+	AppendMenu(mTrayMenu, MF_STRING, ID_TRAY_HELP, "&Help");
+	AppendMenu(mTrayMenu, MF_SEPARATOR, 0, NULL);
+	AppendMenu(mTrayMenu, MF_STRING, ID_TRAY_WINDOWSPY, "&Window Spy");
+	AppendMenu(mTrayMenu, MF_STRING, ID_TRAY_RELOADSCRIPT, "&Reload This Script");
+	AppendMenu(mTrayMenu, MF_STRING, ID_TRAY_EDITSCRIPT, "&Edit This Script");
+	AppendMenu(mTrayMenu, MF_SEPARATOR, 0, NULL);
+	if (!mTrayMenuDefault) // No user-defined default menu item, so use the standard one.
+		SetMenuDefaultItem(mTrayMenu, ID_TRAY_OPEN, FALSE); // Seems to have no function other than appearance.
+#endif
+	AppendMenu(mTrayMenu, MF_STRING, ID_TRAY_SUSPEND, "&Suspend Hotkeys");
+	AppendMenu(mTrayMenu, MF_STRING, ID_TRAY_PAUSE, "&Pause Script");
+	AppendMenu(mTrayMenu, MF_STRING, ID_TRAY_EXIT, "E&xit");
+}
+
+
+
 ResultType Script::Edit()
 {
 	// This is here in case a compiled script ever uses the Edit command.  Since the "Edit This
@@ -461,6 +770,11 @@ void Script::ExitApp(char *aBuf, int aExitCode)
 	RemoveAllHooks();
 	if (mNIC.hWnd) // Tray icon is installed.
 		Shell_NotifyIcon(NIM_DELETE, &mNIC); // Remove it.
+	if (mTrayMenu) // Since it's not associated with a window, we must free the resources for this menu.
+	{
+		DestroyMenu(mTrayMenu);
+		mTrayMenu = NULL;
+	}
 	if (*aBuf)
 	{
 		char buf[1024];
@@ -503,6 +817,8 @@ LineNumberType Script::LoadFromFile()
 			return LOADING_FAILED;
 		}
 		fprintf(fp2, "; " NAME_P " script file\n"
+			"\n"
+			"#SingleInstance  ;Allow only one instance of this script to run at a time.\n"
 			"\n"
 			//"; Uncomment out the below line to try out a sample of an Alt-tab\n"
 			//"; substitute (currently not supported in Win9x):\n"
@@ -730,8 +1046,8 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			}
 
 		// Note that there may be an action following the HOTKEY_FLAG (on the same line).
-		hotkey_flag = strstr(buf, HOTKEY_FLAG);
-		is_label = (hotkey_flag != NULL);
+		hotkey_flag = strstr(buf, HOTKEY_FLAG); // Find the first one from the left, in case there's more than 1.
+		is_label = (hotkey_flag != NULL && hotkey_flag != buf);  // i.e. a naked "::" is treated as a normal label.
 		if (is_label) // It's a label and a hotkey.
 		{
 			*hotkey_flag = '\0'; // Terminate so that buf is now the label itself.
@@ -2281,12 +2597,16 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_REGREAD:
-		if (line->mArgc > 4) // The obsolete 5-param method is being used, wherein ValueType is the 2nd param.
+		// The below has two checks in case the user is using the 5-param method with the 5th parameter
+		// being blank to indicate that the key's "default" value should be read.  For example:
+		// RegRead, OutVar, REG_SZ, HKEY_CURRENT_USER, Software\Winamp,
+		if (line->mArgc > 4 || line->RegConvertValueType(LINE_RAW_ARG2))
 		{
+			// The obsolete 5-param method is being used, wherein ValueType is the 2nd param.
 			if (!line->ArgHasDeref(3) && *LINE_RAW_ARG3 && !line->RegConvertRootKey(LINE_RAW_ARG3))
 				return ScriptError(ERR_REG_KEY, LINE_RAW_ARG3);
 		}
-		else
+		else // 4-param method.
 			if (line->mArgc > 1 && !line->ArgHasDeref(2) && *LINE_RAW_ARG2 && !line->RegConvertRootKey(LINE_RAW_ARG2))
 				return ScriptError(ERR_REG_KEY, LINE_RAW_ARG2);
 		break;
@@ -2517,6 +2837,13 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		// the 'f' to make it a valid format specifier string:
 		if (line->mArgc > 1 && !line->ArgHasDeref(2) && strlen(LINE_RAW_ARG2) >= sizeof(g.FormatFloat) - 2)
 			return ScriptError("Parameter #2 is too long.", LINE_RAW_ARG1);
+		break;
+
+	case ACT_MENU:
+		if (line->mArgc > 0 && !line->ArgHasDeref(1) && stricmp(LINE_RAW_ARG1, "tray"))
+			return ScriptError("Parameter #1 must be the word TRAY or a variable reference.", LINE_RAW_ARG1);
+		if (line->mArgc > 1 && !line->ArgHasDeref(2) && !line->ConvertMenuCommand(LINE_RAW_ARG2))
+			return ScriptError(ERR_MENUCOMMAND, LINE_RAW_ARG2);
 		break;
 
 	case ACT_MSGBOX:
@@ -3345,8 +3672,10 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 
 		case ACT_REGREAD:
 		case ACT_REGWRITE: // Unknown loops get the benefit of the doubt.
-			if (aLoopTypeReg != ATTR_LOOP_REG && aLoopTypeReg != ATTR_LOOP_UNKNOWN && line->mArgc < 4)
-				return line->PreparseError("When not enclosed in a registry-loop, this command requires 4 parameters.");
+			// Note that these two cmds only require 3 params because the ValueName param can be blank
+			// or omitted to indicate that the key's "default value" should be retrieved or written to:
+			if (aLoopTypeReg != ATTR_LOOP_REG && aLoopTypeReg != ATTR_LOOP_UNKNOWN && line->mArgc < 3)
+				return line->PreparseError("When not enclosed in a registry-loop, this command requires 3 parameters.");
 			break;
 		case ACT_REGDELETE:
 			if (aLoopTypeReg != ATTR_LOOP_REG && aLoopTypeReg != ATTR_LOOP_UNKNOWN && line->mArgc < 2)
@@ -3486,8 +3815,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 	Line *jump_to_line; // Don't use *apJumpToLine because it might not exist.
 	Line *jump_target;  // For use with Gosub & Goto
 	ResultType if_condition, result;
-	DWORD tick_now;
-	MSG msg;
+	LONG_OPERATION_INIT
 
 	for (Line *line = this; line != NULL;)
 	{
@@ -3517,17 +3845,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 		// UPDATE: It looks like PeekMessage() yields CPU time automatically, similar to a
 		// Sleep(0).  Since this would make scripts slow to a crawl, only do the Peek() every 5ms
 		// or so (though the timer grandurity is 10ms on mosts OSes, so that's the true interval):
-		tick_now = GetTickCount();  // Store for use later, in case the Peek() isn't done.
-		if (tick_now - g_script.mLastPeekTime > 5)
-		{
-			if (PeekMessage(&msg, NULL, 0, 0, PM_NOREMOVE))
-				MsgSleep(-1);  // Process the message(s).
-			// Since the above Peek() might yield, and thus take a long time to return,
-			// must update tick_now again to avoid having to Peek() immediately after the next
-			// script line is executed:
-			tick_now = GetTickCount();
-			g_script.mLastPeekTime = tick_now; // Perversely, the code may run faster when this isn't combined with the above.
-		}
+		LONG_OPERATION_UPDATE
 
 		// If interruptions are currently forbidden, it's our responsibility to check if the number
 		// of lines that have been run since this quasi-thread started now indicate that
@@ -3902,6 +4220,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 
 			if (line->mActionType == ACT_REPEAT && !iteration_limit)
 				is_infinite = true;  // Because a 0 means infinite in AutoIt2 for the REPEAT command.
+			// else if it's negative, zero iterations will be performed automatically.
 
 			FileLoopModeType file_loop_mode;
 			if (attr == ATTR_LOOP_FILE)
@@ -4871,10 +5190,10 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			// Also, do not use RegCloseKey() on this, even if it's a remote key, since our caller handles that:
 			return RegRead(aCurrentRegItem->root_key, aCurrentRegItem->subkey, aCurrentRegItem->name);
 		// Otherwise:
-		if (mArgc < 5) // The new 4-parameter mode.
-			result = RegRead(root_key = RegConvertRootKey(ARG2, &is_remote_registry), ARG3, ARG4);
-		else // In 5-parameter mode, Arg2 is unused; it's only for backward compatibility with AutoIt2.
+		if (mArgc > 4 || RegConvertValueType(ARG2)) // The obsolete 5-param method (ARG2 is unused).
 			result = RegRead(root_key = RegConvertRootKey(ARG3, &is_remote_registry), ARG4, ARG5);
+		else
+			result = RegRead(root_key = RegConvertRootKey(ARG2, &is_remote_registry), ARG3, ARG4);
 		if (is_remote_registry && root_key) // Never try to close local root keys, which the OS keeps always-open.
 			RegCloseKey(root_key);
 		return result;
@@ -5543,6 +5862,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		// Note: This line's args have not yet been dereferenced in this case.  The below
 		// function will handle that if it is needed.
 		return PerformAssign();  // It will report any errors for us.
+
 	case ACT_DRIVESPACEFREE:
 		return DriveSpaceFree(ARG2);
 
@@ -5816,6 +6136,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		return ShowMainWindow(MAIN_MODE_VARS);
 	case ACT_LISTHOTKEYS:
 		return ShowMainWindow(MAIN_MODE_HOTKEYS);
+
 	case ACT_MSGBOX:
 	{
 		int result;
@@ -5824,7 +6145,12 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		// current script subroutine.  For example, if the script contains an IfMsgBox after,
 		// this line, it's result would be unpredictable and might cause the subroutine to perform
 		// the opposite action from what was intended (e.g. Delete vs. don't delete a file).
-		result = (mArgc == 1) ? MsgBox(ARG1) : MsgBox(ARG3, atoi(ARG1), ARG2, atof(ARG4));
+		if (!mArgc) // When called explicitly with zero params, it displays this default msg.
+			result = MsgBox("Press OK to continue.");
+		else if (mArgc == 1) // In the special 1-parameter mode, the first param is the prompt.
+			result = MsgBox(ARG1);
+		else
+			result = MsgBox(ARG3, atoi(ARG1), ARG2, atof(ARG4));
 		// Above allows backward compatibility with AutoIt2's param ordering while still
 		// permitting the new method of allowing only a single param.
 		if (!result)
@@ -5956,13 +6282,16 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		return OK;
 	case ACT_MOUSEGETPOS:
 		return MouseGetPos();
+
 //////////////////////////////////////////////////////////////////////////
+
 	case ACT_SETDEFAULTMOUSESPEED:
 		g.DefaultMouseSpeed = atoi(ARG1);
 		// In case it was a deref, force it to be some default value if it's out of range:
 		if (g.DefaultMouseSpeed < 0 || g.DefaultMouseSpeed > MAX_MOUSE_SPEED)
 			g.DefaultMouseSpeed = DEFAULT_MOUSE_SPEED;
 		return OK;
+
 	case ACT_SETTITLEMATCHMODE:
 		switch (ConvertTitleMatchMode(ARG1))
 		{
@@ -5980,6 +6309,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			return OK;
 		}
 		return LineError(ERR_TITLEMATCHMODE2, FAIL, ARG1);
+
 	case ACT_SETFORMAT:
 	{
 		// For now, it doesn't seem necessary to have runtime validation of the first parameter.
@@ -6001,6 +6331,10 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		sprintf(g.FormatFloat, "%%%s%sf", ARG2, dot_pos ? "" : ".");
 		return OK;
 	}
+
+	case ACT_MENU:
+		return g_script.PerformMenu(FOUR_ARGS);
+
 	case ACT_SETCONTROLDELAY: g.ControlDelay = atoi(ARG1); return OK;
 	case ACT_SETWINDELAY: g.WinDelay = atoi(ARG1); return OK;
 	case ACT_SETKEYDELAY: g.KeyDelay = atoi(ARG1); return OK;
@@ -6272,6 +6606,13 @@ ResultType Line::ExpandArgs()
 					case ACT_SUB:
 					case ACT_MULT:
 					case ACT_DIV:
+					case ACT_STRINGLEFT:
+					case ACT_STRINGRIGHT:
+					case ACT_STRINGMID:
+					case ACT_STRINGTRIMLEFT:
+					case ACT_STRINGTRIMRIGHT:
+					case ACT_CONTROLCLICK:
+					case ACT_MOUSECLICK: // Allow even the Speed param to be negative, just to simplify.
 						// Don't report runtime errors for these (only loadtime) because they
 						// indicate failure in a quieter, different way:
 						break;

@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.06"
+#define NAME_VERSION "1.0.07"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -151,23 +151,50 @@ typedef UCHAR HookType;
 // function rather than some other.  UPDATE: These macros were greatly simplified when
 // it was discovered that PeekMessage(), when called directly as below, is enough to prevent
 // keyboard and mouse lag when the hooks are installed:
-#define LONG_OPERATION_INIT MSG msg;
+#define LONG_OPERATION_INIT MSG msg; DWORD tick_now;
 
 // This is the same as the above except it also handled bytes_to_read for URLDownloadToFile():
 #define LONG_OPERATION_INIT_FOR_URL \
-	MSG msg;\
+	MSG msg; DWORD tick_now;\
 	DWORD bytes_to_read = Hotkey::HookIsActive() ? 1024 : sizeof(bufData);
 
 // MsgSleep() is used rather than SLEEP_WITHOUT_INTERRUPTION to allow other hotkeys to
 // launch and interrupt (suspend) the operation.  It seems best to allow that, since
 // the user may want to press some fast window activation hotkeys, for example,
 // during the operation.  The operation will be resumed after the interrupting subroutine
-// finishes:
-#define LONG_OPERATION_UPDATE if (PeekMessage(&msg, NULL, 0, 0, PM_NOREMOVE)) MsgSleep(-1);
+// finishes.
+// Notes applying to the macro:
+// Store tick_now for use later, in case the Peek() isn't done, though not all callers need it later.
+// ...
+// Since the Peek() might (must?) yield, and thus take a long time to return even when no msg is found,
+// must update tick_now again to avoid having to Peek() immediately after the next iteration:
+// ...
+// Perversely, the code may run faster when "g_script.mLastPeekTime = tick_now" is a sep. operation rather
+// than combined in a chained assignment statement.
+#define LONG_OPERATION_UPDATE \
+{\
+	tick_now = GetTickCount();\
+	if (tick_now - g_script.mLastPeekTime > 5)\
+	{\
+		if (PeekMessage(&msg, NULL, 0, 0, PM_NOREMOVE))\
+			MsgSleep(-1);\
+		tick_now = GetTickCount();\
+		g_script.mLastPeekTime = tick_now;\
+	}\
+}
 
-// Same as the above except for SendKeys() and related functions (uses SLEEP_WITHOUT_INTERRUPTION):
-#define LONG_OPERATION_UPDATE_FOR_SENDKEYS  if (PeekMessage(&msg, NULL, 0, 0, PM_NOREMOVE)) SLEEP_WITHOUT_INTERRUPTION(-1);
-
+// Same as the above except for SendKeys() and related functions (uses SLEEP_WITHOUT_INTERRUPTION vs. MsgSleep):
+#define LONG_OPERATION_UPDATE_FOR_SENDKEYS \
+{\
+	tick_now = GetTickCount();\
+	if (tick_now - g_script.mLastPeekTime > 5)\
+	{\
+		if (PeekMessage(&msg, NULL, 0, 0, PM_NOREMOVE))\
+			SLEEP_WITHOUT_INTERRUPTION(-1) \
+		tick_now = GetTickCount();\
+		g_script.mLastPeekTime = tick_now;\
+	}\
+}
 
 // Defining these here avoids awkwardness due to the fact that globaldata.cpp
 // does not (for design reasons) include globaldata.h:

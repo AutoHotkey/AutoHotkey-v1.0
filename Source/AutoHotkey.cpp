@@ -40,7 +40,8 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 #else
 	#ifdef _DEBUG
 	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Find.aut";
-	char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
+	//char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
+	char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\Menu command COMPREHENSIVE TEST.ahk";
 	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test.ahk";
 	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
 	#else
@@ -100,7 +101,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		char *cp = script_filespec + filespec_length - CONVERSION_FLAG_LENGTH;
 		// Now cp points to the first dot in the CONVERSION_FLAG of script_filespec (if it has one).
 		if (!stricmp(cp, CONVERSION_FLAG))
-			return Line::ConvertEscapeChar(script_filespec, '\\', '`');
+			return Line::ConvertEscapeChar(script_filespec, '\\', '`', true);
 	}
 #endif
 
@@ -135,7 +136,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	{
 		// Realistically, this should never happen.  But it simplifies the code in many other
 		// places if we make sure the KeyHistory array isn't NULL right away:
-		MsgBox("Could not allocate mem for key history." PLEASE_REPORT);
+		MsgBox("Out of memory for key history.");
 		return CRITICAL_ERROR;
 	}
 
@@ -205,7 +206,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	// even if the top part is something that's very involved and requires user
 	// interaction:
 	Hotkey::AllActivate();           // We want these active now in case auto-execute never returns (e.g. loop)
-	g_script.AutoExecSection();   // Run the auto-execute part at the top of the script.
+	g_script.AutoExecSection();      // Run the auto-execute part at the top of the script.
 	if (!Hotkey::sHotkeyCount)       // No hotkeys are in effect.
 		if (!Hotkey::HookIsActive()) // And the user hasn't requested a hook to be activated.
 			g_script.ExitApp();      // We're done.

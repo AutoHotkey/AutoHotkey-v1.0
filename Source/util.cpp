@@ -366,6 +366,27 @@ char *StrReplaceAll(char *Str, char *OldStr, char *NewStr, bool aCaseSensitive)
 
 
 
+char *StrReplaceAllSafe(char *Str, size_t Str_size, char *OldStr, char *NewStr, bool aCaseSensitive)
+// Similar to above but checks to ensure that the size of the buffer isn't exceeded.
+{
+	if (!Str || !*Str) return NULL; // Nothing to do in this case.
+	if (!OldStr || !*OldStr) return NULL;  // Avoid replacing the empty string: probably infinite loop.
+	if (!NewStr) NewStr = "";  // In case it's called explicitly with a NULL.
+	char *ptr;
+	int length_increase = (int)(strlen(NewStr) - strlen(OldStr));  // Can be negative.
+	for (ptr = Str;; )
+	{
+		if (length_increase > 0) // Make sure there's enough room in Str first.
+			if ((int)(Str_size - strlen(Str) - 1) < length_increase)
+				break;  // Not enough room to do the next replacement.
+		if (   !(ptr = StrReplace(ptr, OldStr, NewStr, aCaseSensitive))   )
+			break;
+	}
+	return Str;
+}
+
+
+
 bool DoesFilePatternExist(char *aFilePattern)
 {
 	// Taken from the AutoIt3 source:

@@ -183,9 +183,18 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 			if (!end_pos)
 				break;  // do nothing, just ignore it and continue.
 			size_t key_text_length = end_pos - aKeys - 1;
-			size_t key_name_length = key_text_length; // Set default.
 			if (!key_text_length)
-				break;  // do nothing: let it proceed to the }, which will then be ignored.
+			{
+				if (end_pos[1] == '}')
+				{
+					// The literal string "{}}" has been encountered, which is interpreted as a single "}".
+					++end_pos;
+					key_text_length = 1;
+				}
+				else // Empty braces {} were encountered.
+					break;  // do nothing: let it proceed to the }, which will then be ignored.
+			}
+			size_t key_name_length = key_text_length; // Set default.
 
 			*end_pos = '\0';  // temporarily terminate the string here.
 			UINT repeat_count = 1;
@@ -392,7 +401,8 @@ int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, mod_type aModifiersPe
 	// modifiers below.  This is a good thing because otherwise the modifiers would sometimes
 	// be released so soon after the keys they modify that the modifiers are not in effect.
 	// This can be seen sometimes when/ ctrl-shift-tabbing back through a multi-tabbed dialog:
-	// The last ^+{tab} will usually not take effect because the CTRL key was released too quickly.
+	// The last ^+{tab} might otherwise not take effect because the CTRL key would be released
+	// too quickly.
 
 	// Release any modifiers that were pressed down just for the sake of the above
 	// event (i.e. leave any persistent modifiers pressed down).  The caller should
@@ -1323,8 +1333,14 @@ void init_sc_to_vk()
 	sc_type sc;
 	for (sc = 0; sc < SC_MAX; ++sc)
 		if (!g_sc_to_vk[sc].a)
-			// Only pass the LOBYTE because I think it fails to work properly otherwise:
-			g_sc_to_vk[sc].a = MapVirtualKey((BYTE)sc, 3);
+			// Only pass the LOBYTE because I think it fails to work properly otherwise.
+			// Also, DO NOT pass 3 for the 2nd param of MapVirtualKey() because apparently
+			// that is not compatible with Win9x so it winds up returning zero for keys
+			// such as UP, LEFT, HOME, and PGUP (maybe other sorts of keys too).  This
+			// should be okay even on XP because the left/right specific keys have already
+			// been resolved above so don't need to be looked up here (LWIN and RWIN
+			// each have their own VK's so shouldn't be problem for the below call to resolve):
+			g_sc_to_vk[sc].a = MapVirtualKey((BYTE)sc, 1);
 }
 
 

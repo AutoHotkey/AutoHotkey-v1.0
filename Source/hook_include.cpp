@@ -655,9 +655,17 @@ void UpdateKeyState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppressed)
 	// the log file.  This is done so that we can return sooner, which reduces the keyboard
 	// and mouse lag that would otherwise be caused by us not being in a pumping-messages state.
 	// IN ADDITION, this method may also help to keep the keystrokes in order (due to recursive
-	// calls to the hook via keybd_event(), etc), I'm not sure:
+	// calls to the hook via keybd_event(), etc), I'm not sure.  UPDATE: No, that seems impossible
+	// when you think about it.  Also, to simplify this the function is now called directly rather
+	// than posting a message to avoid complications that might be caused by the script being
+	// uninterruptible for a long period (rare), which would thus cause the posted msg to stay
+	// buffered for a long time:
+#ifdef ENABLE_KEY_HISTORY_FILE
 	if (g_KeyHistoryToFile && pKeyHistoryCurr)
-		PostMessage(g_hWnd, AHK_KEYHISTORY, (WPARAM)pKeyHistoryCurr, 0);
+		KeyHistoryToFile(NULL, pKeyHistoryCurr->event_type, pKeyHistoryCurr->key_up
+			, pKeyHistoryCurr->vk, pKeyHistoryCurr->sc);  // A fairly low overhead operation.
+#endif
+
 	return 1;
 }
 
@@ -690,8 +698,12 @@ inline LRESULT AllowIt(HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, sc_typ
 				return SuppressThisKey;
 
 	// Do these here since the above "return SuppressThisKey" will have already done it in that case.
+#ifdef ENABLE_KEY_HISTORY_FILE
 	if (g_KeyHistoryToFile && pKeyHistoryCurr)
-		PostMessage(g_hWnd, AHK_KEYHISTORY, (WPARAM)pKeyHistoryCurr, 0);
+		KeyHistoryToFile(NULL, pKeyHistoryCurr->event_type, pKeyHistoryCurr->key_up
+			, pKeyHistoryCurr->vk, pKeyHistoryCurr->sc);  // A fairly low overhead operation.
+#endif
+
 	UpdateKeyState(lParam, sc, key_up, false);
 
 	// Win-L uses logical keys, unlike Ctrl-Alt-Del which uses physical keys (i.e. Win-L can be simulated,
@@ -795,8 +807,11 @@ inline LRESULT AllowIt(HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, sc_typ
 #define AllowKeyToGoToSystem AllowIt(g_hhkLowLevelMouse, code, wParam, lParam, pKeyHistoryCurr)
 inline LRESULT AllowIt(HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, KeyHistoryItem *pKeyHistoryCurr)
 {
+#ifdef ENABLE_KEY_HISTORY_FILE
 	if (g_KeyHistoryToFile && pKeyHistoryCurr)
-		PostMessage(g_hWnd, AHK_KEYHISTORY, (WPARAM)pKeyHistoryCurr, 0);
+		KeyHistoryToFile(NULL, pKeyHistoryCurr->event_type, pKeyHistoryCurr->key_up
+			, pKeyHistoryCurr->vk, pKeyHistoryCurr->sc);  // A fairly low overhead operation.
+#endif
 	return CallNextHookEx(hhk, code, wParam, lParam);
 }
 #endif
@@ -1377,7 +1392,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 			// the LL hook will have suppressed this key, it seems that the OS's alt-tab menu uses
 			// some weird method (apparently not GetAsyncState(), because then our attempt to put
 			// it up would fail) to determine whether the shift-key is down, so we need to still do this:
-			if (hotkey_id == HOTKEY_ID_ALT_TAB) // i.e. it's not shift-alt-tab
+			else if (hotkey_id == HOTKEY_ID_ALT_TAB) // i.e. it's not shift-alt-tab
 			{
 				// Force it to be alt-tab as the user intended.  Must check by SC rather than VK
 				// because currently the SC takes precedence for these keys, and thus vk would
@@ -1411,6 +1426,16 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 				// VK_CONTROL instead of the left/right specific key of the pair:
 				KeyEvent(KEYUP, (g_modifiersLR_logical & MOD_RCONTROL) ? VK_RCONTROL : VK_LCONTROL);
 			KeyEvent(KEYDOWNANDUP, VK_TAB);
+			if (hotkey_id == HOTKEY_ID_ALT_TAB_SHIFT && pPrefixKey->it_put_shift_down
+				&& ((vk >= VK_NUMPAD0 && vk <= VK_NUMPAD9) || vk == VK_DECIMAL)) // dual-state numpad key.
+			{
+				// In this case, if there is a numpad key involved, it's best to put the shift key
+				// back up in between every alt-tab to avoid problems caused due to the fact that
+				// the shift key being down would CHANGE the VK being received when the key is
+				// released (due to the fact that SHIFT temporarily disables numlock).
+				KeyEvent(KEYUP, VK_SHIFT);
+				pPrefixKey->it_put_shift_down = false;  // Reset for next time since we put it back up already.
+			}
 			pKeyHistoryCurr->event_type = 'h'; // h = hook hotkey (not one registered with RegisterHotkey)
 			return SuppressThisKey;
 		} // end of alt-tab section.

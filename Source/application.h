@@ -61,7 +61,7 @@ enum OurTimers {TIMER_ID_MAIN = MAX_MSGBOXES + 2, TIMER_ID_UNINTERRUPTIBLE, TIME
 // the timeout is set to 10."
 #define SET_MAIN_TIMER \
 if (!g_MainTimerExists && !(g_MainTimerExists = SetTimer(g_hWnd, TIMER_ID_MAIN, SLEEP_INTERVAL, (TIMERPROC)NULL)))\
-	g_script.ExitApp("SetTimer() unexpectedly failed.");
+	g_script.ExitApp("SetTimer"); // Just a brief msg to cut down on mem overhead, since it should basically never happen.
 
 // When someone calls SET_UNINTERRUPTIBLE_TIMER, by definition the current script subroutine is
 // becoming non-interruptible.  Therefore, their should never be a need to have more than one
@@ -95,20 +95,6 @@ if (g_UninterruptibleTimerExists && KillTimer(g_hWnd, TIMER_ID_UNINTERRUPTIBLE))
 #define KILL_AUTOEXEC_TIMER \
 if (g_AutoExecTimerExists && KillTimer(g_hWnd, TIMER_ID_AUTOEXEC))\
 	g_AutoExecTimerExists = false;
-
-
-// Notes about the below macros:
-// Post a special msg that will attempt to force it to the foreground after it has been displayed,
-// since the dialog often will flash in the task bar instead of becoming foreground.
-// It's enough just to queue up a single message that dialog's message pump will forward to our
-// main window proc once the dialog window has been displayed.  This avoids the overhead of creating
-// and destroying the timer (although the timer may be needed anyway if any timed subroutines are
-// enabled).  My only concern about this is that on some OS's, or on slower CPUs, the message may be
-// received too soon (before the dialog window actually exists) resulting in our window proc not
-// being able to ensure that it's the foreground window.  That seems unlikely, however, since
-// MessageBox() and the other dialog invocating API calls (for FileSelectFile/Folder) likely
-// ensures its window really exists before dispatching messages.
-#define PREPARE_FOR_DIALOG(wParam) PostMessage(g_hWnd, AHK_DIALOG, (WPARAM)wParam, (LPARAM)0);
 
 
 // Callers should note that using INTERVAL_UNSPECIFIED might not rest the CPU at all if there is

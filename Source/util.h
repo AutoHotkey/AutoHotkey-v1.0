@@ -356,6 +356,7 @@ char *strrstr(char *aStr, char *aPattern, bool aCaseSensitive = true);
 char *stristr(char *aStr, char *aPattern);
 char *StrReplace(char *Str, char *OldStr, char *NewStr = "", bool aCaseSensitive = true);
 char *StrReplaceAll(char *Str, char *OldStr, char *NewStr = "", bool aCaseSensitive = true);
+char *StrReplaceAllSafe(char *Str, size_t Str_size, char *OldStr, char *NewStr = "", bool aCaseSensitive = true);
 bool DoesFilePatternExist(char *aFilePattern);
 ResultType FileAppend(char *aFilespec, char *aLine, bool aAppendNewline = true);
 char *ConvertFilespecToCorrectCase(char *aFullFileSpec);
