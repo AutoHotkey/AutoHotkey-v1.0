@@ -6,6 +6,37 @@
 <br>
 <br>
 
+</font><font size=4><b>0.216 BETA - December 29, 2003</b></font><font size=3><br><br>
+
+Fixed a bug introduced in a prior version that prevented new hotkeys from firing if the script had a MsgBox or other dialog displayed on the screen.<br>
+<br>
+Fixed PixelSearch to accept negative coordinates without complaining.<br>
+<br>
+Changed the behavior of scripts so that the default values of things such as KeyDelay and WinDelay will go into effect for every newly launched hotkey subroutine.  You can use the auto-execute section -- which consists of the commands at the top of the script that occur prior to the first hotkey label -- to change any of the defaults that you wish.  So now, when you press a hotkey, the subroutine will always start off fresh with the default values of the following:<br>
+DetectHiddenWindows<br>
+DetectHiddenText<br>
+SetTitleMatchMode<br>
+SetBatchLines<br>
+SetWinDelay<br>
+SetKeyDelay<br>
+SetDefaultMouseSpeed<br>
+SetStoreCapslockMode<br>
+AutoTrim<br>
+StringCaseSense<br>
+<br>
+Added StringUpper and StringLower.  Example: StringUpper, OutputVar, InputVar<br>
+Note: As with all such commands, InputVar and OutputVar are allowed to be the same variable.<br>
+<br>
+Added the following built-in variables:<br>
+A_ThisHotkey: This is the label name (e.g. #c) of the hotkey subroutine most recently launched.  It's blank if none.<br>
+A_PriorHotkey: Same as above except for the subroutine that ran prior to this one.<br>
+A_TimeSinceThisHotkey: Milliseconds since the most recently launched hotkey subroutine began.  It's -1 if A_ThisHotkey is blank.<br>
+A_TimeSincePriorHotkey: Milliseconds since the prior hotkey subroutine was launched.  It's -1 if A_PriorHotkey is blank.<br>
+A_TickCount: Milliseconds since the computer was last restarted.  If this value ever exceeds 4294967295 (49.7 days), it will reset back to zero and begin counting from there.<br>
+ 
+<br><hr><br>
+
+
 </font><font size=4><b>0.215 BETA - December 18, 2003</b></font><font size=3><br><br>
 
 Fixed a possible crash in variable assignments that involve more than one source.  e.g. statements such as clipboard = %clipboard%%SomeVar%<br>

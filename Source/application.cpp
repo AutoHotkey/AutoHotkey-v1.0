@@ -348,8 +348,21 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 			// prior to embarking on new subroutine whose duration may be long (e.g. if BatchLines
 			// is very high or infinite, the called subroutine may not return to us for seconds,
 			// minutes, or more; during which time we don't want the timer running because it will
-			// only fill up the queue with WM_MESSAGEs and thus hurt performance.
+			// only fill up the queue with WM_TIMER messages and thus hurt performance.
 			KILL_MAIN_TIMER;
+
+			// Make every newly launched subroutine start off with the global default values that
+			// the user set up in the auto-execute part of the script (e.g. KeyDelay, WinDelay, etc.).
+			// However, we do not set ErrorLevel to NONE here because it's more flexible that way
+			// (i.e. the user may want one hotkey subroutine to use the value of ErrorLevel set by another):
+			CopyMemory(&g, &g_default, sizeof(global_struct));
+
+			// Just prior to launching the hotkey, update these values to support built-in
+			// variables such as A_TimeSincePriorHotkey:
+			g_script.mPriorHotkeyLabel = g_script.mThisHotkeyLabel;
+			g_script.mPriorHotkeyStartTime = g_script.mThisHotkeyStartTime;
+			g_script.mThisHotkeyLabel = Hotkey::GetLabel((HotkeyIDType)msg.wParam);
+			g_script.mThisHotkeyStartTime = GetTickCount();
 
 			// Perform the new hotkey's subroutine:
 			if (Hotkey::PerformID((HotkeyIDType)msg.wParam) == CRITICAL_ERROR)
@@ -358,7 +371,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 				// it seems best just to exit here directly, since there may be messages
 				// in our queue waiting and we don't want to process them:
 				g_script.ExitApp(NULL, CRITICAL_ERROR);
-			g_LastPerformedHotkeyType = Hotkey::GetType((HotkeyIDType)msg.wParam); // For stats.
+			g_LastPerformedHotkeyType = Hotkey::GetType((HotkeyIDType)msg.wParam); // For use with the Keylog cmd.
 
 			if (aMode == RETURN_AFTER_MESSAGES)
 			{

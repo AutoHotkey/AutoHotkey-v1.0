@@ -317,6 +317,11 @@ VarSizeType Var::Get(char *aBuf)
 	case VAR_SCRIPTNAME: if (!aBuf) return g_script.GetFilename(); else aBuf += g_script.GetFilename(aBuf); break;
 	case VAR_SCRIPTDIR: if (!aBuf) return g_script.GetFileDir(); else aBuf += g_script.GetFileDir(aBuf); break;
 	case VAR_SCRIPTFULLPATH: if (!aBuf) return g_script.GetFilespec(); else aBuf += g_script.GetFilespec(aBuf); break;
+	case VAR_THISHOTKEY:  if (!aBuf) return g_script.GetThisHotkey(); else aBuf += g_script.GetThisHotkey(aBuf); break;
+	case VAR_PRIORHOTKEY:  if (!aBuf) return g_script.GetPriorHotkey(); else aBuf += g_script.GetPriorHotkey(aBuf); break;
+	case VAR_TIMESINCETHISHOTKEY:  if (!aBuf) return g_script.GetTimeSinceThisHotkey(); else aBuf += g_script.GetTimeSinceThisHotkey(aBuf); break;
+	case VAR_TIMESINCEPRIORHOTKEY:  if (!aBuf) return g_script.GetTimeSincePriorHotkey(); else aBuf += g_script.GetTimeSincePriorHotkey(aBuf); break;
+	case VAR_TICKCOUNT:  if (!aBuf) return g_script.MyGetTickCount(); else aBuf += g_script.MyGetTickCount(aBuf); break;
 	// Built-in volatile time vars:
 	case VAR_YEAR: if (!aBuf) return 4; // else fall through, which admittedly is somewhat inefficient here.
 	case VAR_MON:

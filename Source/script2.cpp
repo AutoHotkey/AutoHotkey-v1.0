@@ -801,7 +801,6 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 	case WM_HOTKEY: // As a result of this app having previously called RegisterHotkey().
 	case AHK_HOOK_HOTKEY:  // Sent from this app's keyboard or mouse hook.
 	{
-		return 0;
 		if (IGNORE_THIS_HOTKEY((HotkeyIDType)wParam))
 			// Used to prevent runaway hotkeys, or too many happening due to key-repeat feature.
 			// It can also be used to prevent a call to MsgSleep() from accepting new hotkeys
@@ -2332,6 +2331,8 @@ ArgPurposeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_STRINGMID:
 		case ACT_STRINGTRIMLEFT:
 		case ACT_STRINGTRIMRIGHT:
+		case ACT_STRINGLOWER:
+		case ACT_STRINGUPPER:
 		case ACT_STRINGLEN:
 		case ACT_STRINGREPLACE:
 		case ACT_STRINGGETPOS:
@@ -2372,6 +2373,8 @@ ArgPurposeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_STRINGMID:
 		case ACT_STRINGTRIMLEFT:
 		case ACT_STRINGTRIMRIGHT:
+		case ACT_STRINGLOWER:
+		case ACT_STRINGUPPER:
 		case ACT_STRINGLEN:
 		case ACT_STRINGREPLACE:
 		case ACT_STRINGGETPOS:

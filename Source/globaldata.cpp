@@ -76,7 +76,7 @@ OS_Version g_os;  // OS version object, courtesy of AutoIt3.
 
 DWORD g_OriginalTimeout;
 
-global_struct g;
+global_struct g, g_default;
 
 ToggleValueType g_ForceKeybdHook = TOGGLED_OFF;
 ToggleValueType g_ForceNumLock = NEUTRAL;
@@ -168,6 +168,8 @@ Action g_act[] =
 	, {"StringMid", 4, 4, {3, 4, 0}} // Output Variable, Input Variable, Start char, Number of chars to extract
 	, {"StringTrimLeft", 3, 3, {3, 0}}  // output var, input var, number of chars to trim
 	, {"StringTrimRight", 3, 3, {3, 0}} // same
+	, {"StringLower", 2, 2, NULL} // output var, input var
+	, {"StringUpper", 2, 2, NULL} // output var, input var
 	, {"StringLen", 2, 2, NULL} // output var, input var
 	, {"StringGetPos", 3, 4, NULL}  // Output Variable, Input Variable, Search Text, R or Right (from right)
 	, {"StringReplace", 3, 5, NULL} // Output Variable, Input Variable, Search String, Replace String, do-all.

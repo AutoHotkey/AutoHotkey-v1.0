@@ -119,7 +119,12 @@ public:
 
 	static char GetType(HotkeyIDType aHotkeyID)
 	{
-		return(aHotkeyID >= 0 && aHotkeyID < sNextID) ? shk[aHotkeyID]->mType : -1;
+		return(aHotkeyID >= 0 && aHotkeyID < sHotkeyCount) ? shk[aHotkeyID]->mType : -1;
+	}
+
+	static Label *GetLabel(HotkeyIDType aHotkeyID)
+	{
+		return(aHotkeyID >= 0 && aHotkeyID < sHotkeyCount) ? shk[aHotkeyID]->mJumpToLabel : NULL;
 	}
 
 	static int FindHotkeyBySC(sc2_type aSC2, mod_type aModifiers, modLR_type aModifiersLR);

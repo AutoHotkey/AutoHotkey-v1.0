@@ -37,7 +37,7 @@ GNU General Public License for more details.
 
 #define NAME_P "AutoHotkey"
 #define WINDOW_CLASS_NAME NAME_P
-#define NAME_VERSION "0.215"
+#define NAME_VERSION "0.216"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 #define EXT_AUTOIT2 ".aut"
@@ -137,6 +137,16 @@ struct global_struct
 	DWORD StartTime;   // When when this subroutine was started.
 };
 
+inline void global_clear_state(global_struct *gp)
+// Reset those values which represent the condition or state of previously executed commands.
+{
+	*gp->ErrorLevel = '\0'; // This isn't the actual ErrorLevel: it's used to save and restore it.
+	// But don't reset g_ErrorLevel itself because we want to handle that conditional behavior elsewhere.
+	gp->hWndLastUsed = gp->hWndToRestore = NULL;
+	gp->MsgBoxResult = 0;
+	gp->WaitingForDialog = false;
+}
+
 inline void global_init(global_struct *gp)
 // This isn't made a real constructor to avoid the overhead, since there are times when we
 // want to declare a local var of type global_struct without having it initialized.
@@ -145,6 +155,7 @@ inline void global_init(global_struct *gp)
 	// to save and restore their values when one hotkey interrupts another, going into
 	// deeper recursion.  When the interrupting subroutine returns, the former
 	// subroutine's values for these are restored prior to resuming execution:
+	global_clear_state(gp);
 	gp->TitleFindAnywhere = false; // Standard default for AutoIt2 and 3: Leading part of window title must match.
 	gp->TitleFindFast = true; // Since it's so much faster in many cases.
 	gp->DetectHiddenWindows = false;  // Same as AutoIt2 but unlike AutoIt3; seems like a more intuitive default.
@@ -163,10 +174,6 @@ inline void global_init(global_struct *gp)
 	gp->StoreCapslockMode = true;  // AutoIt2 (and probably 3's) default, and it makes a lot of sense.
 	gp->AutoTrim = true;  // AutoIt2's default, and overall the best default in most cases.
 	gp->StringCaseSense = false;  // AutoIt2 default, and it does seem best.
-	*gp->ErrorLevel = '\0'; // This isn't the actual ErrorLevel: it's used to save and restore it.
-	gp->hWndLastUsed = gp->hWndToRestore = NULL;
-	gp->MsgBoxResult = 0;
-	gp->WaitingForDialog = false;
 }
 
 #endif

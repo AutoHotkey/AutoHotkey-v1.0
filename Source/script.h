@@ -76,7 +76,7 @@ enum enum_act {
 , ACT_IF_FIRST = ACT_IFEQUAL, ACT_IF_LAST = ACT_IFMSGBOX  // Keep this updated with any new IFs that are added.
 , ACT_MSGBOX, ACT_INPUTBOX, ACT_SPLASHTEXTON, ACT_SPLASHTEXTOFF
 , ACT_STRINGLEFT, ACT_STRINGRIGHT, ACT_STRINGMID
-, ACT_STRINGTRIMLEFT, ACT_STRINGTRIMRIGHT
+, ACT_STRINGTRIMLEFT, ACT_STRINGTRIMRIGHT, ACT_STRINGLOWER, ACT_STRINGUPPER
 , ACT_STRINGLEN, ACT_STRINGGETPOS, ACT_STRINGREPLACE
 , ACT_ENVSET
 , ACT_RUN, ACT_RUNWAIT
@@ -472,6 +472,8 @@ public:
 			return (aArgNum == 1 || aArgNum == 2);
 		case ACT_PIXELGETCOLOR:
 			return (aArgNum == 2 || aArgNum == 3);
+		case ACT_PIXELSEARCH:
+			return (aArgNum >= 3 || aArgNum <= 7); // Not sure if color can be negative, so allowing it for now.
 		}
 		return false;  // Since above didn't return, negative is not allowed.
 	}
@@ -653,10 +655,12 @@ private:
 		, AttributeType aLoopType = ATTR_NONE);
 public:
 	Line *mCurrLine;  // Seems better to make this public than make Line our friend.
+	Label *mThisHotkeyLabel, *mPriorHotkeyLabel;
+	DWORD mThisHotkeyStartTime, mPriorHotkeyStartTime;  // Tickcount timestamp of when its subroutine began.
 	char *mFileSpec; // Will hold the full filespec, for convenience.
 	char *mFileDir;  // Will hold the directory containing the script file.
 	char *mFileName; // Will hold the script's naked file name.
-	char *mOurEXE; // Will hold this app's module name (e.g. C:\Program Files\AutoHotkey.exe).
+	char *mOurEXE; // Will hold this app's module name (e.g. C:\Program Files\AutoHotkey\AutoHotkey.exe).
 	char *mMainWindowTitle; // Will hold our main window's title, for consistency & convenience.
 	bool mIsReadyToExecute;
 	bool mIsRestart; // The app is restarting rather than starting from scratch.
@@ -704,6 +708,75 @@ public:
 		VarSizeType length = (VarSizeType)(strlen(mFileDir) + strlen(mFileName) + 1);
 		if (!aBuf) return length;
 		sprintf(aBuf, "%s\\%s", mFileDir, mFileName);
+		aBuf += length;
+		return length;
+	}
+	int GetThisHotkey(char *aBuf = NULL)
+	{
+		char *str = "";  // Set default.
+		if (mThisHotkeyLabel)
+			str = mThisHotkeyLabel->mName;
+		VarSizeType length = (VarSizeType)strlen(str);
+		if (!aBuf) return length;
+		strcpy(aBuf, str);
+		aBuf += length;
+		return length;
+	}
+	int GetPriorHotkey(char *aBuf = NULL)
+	{
+		char *str = "";  // Set default.
+		if (mPriorHotkeyLabel)
+			str = mPriorHotkeyLabel->mName;
+		VarSizeType length = (VarSizeType)strlen(str);
+		if (!aBuf) return length;
+		strcpy(aBuf, str);
+		aBuf += length;
+		return length;
+	}
+	int GetTimeSinceThisHotkey(char *aBuf = NULL)
+	{
+		char str[128];
+		// It must be the type of hotkey that has a label because we want the TimeSinceThisHotkey
+		// value to be "in sync" with the value of ThisHotkey itself (i.e. use the same method
+		// to determine which hotkey is the "this" hotkey):
+		if (mThisHotkeyLabel)
+			// Even if GetTickCount()'s TickCount has wrapped around to zero and the timestamp hasn't,
+			// DWORD math still gives the right answer as long as the number of days between
+			// isn't greater than about 49:
+			snprintf(str, sizeof(str), "%u", (DWORD)(GetTickCount() - mThisHotkeyStartTime));
+		else
+			strcpy(str, "-1");
+		VarSizeType length = (VarSizeType)strlen(str);
+		if (!aBuf) return length;
+		strcpy(aBuf, str);
+		aBuf += length;
+		return length;
+	}
+	int GetTimeSincePriorHotkey(char *aBuf = NULL)
+	{
+		char str[128];
+		if (mPriorHotkeyLabel)
+			snprintf(str, sizeof(str), "%u", (DWORD)(GetTickCount() - mPriorHotkeyStartTime));
+		else
+			strcpy(str, "-1");
+		VarSizeType length = (VarSizeType)strlen(str);
+		if (!aBuf) return length;
+		strcpy(aBuf, str);
+		aBuf += length;
+		return length;
+	}
+	int MyGetTickCount(char *aBuf = NULL)
+	{
+		// Known limitation:
+		// Although TickCount is an unsigned value, I'm not sure that our EnvSub command
+		// will properly be able to compare two tick-counts if either value is larger than
+		// INT_MAX.  So if the system has been up for more than about 25 days, there might be
+		// problems if the user tries compare two tick-counts in the script using EnvSub:
+		char str[128];
+		snprintf(str, sizeof(str), "%u", GetTickCount());
+		VarSizeType length = (VarSizeType)strlen(str);
+		if (!aBuf) return length;
+		strcpy(aBuf, str);
 		aBuf += length;
 		return length;
 	}

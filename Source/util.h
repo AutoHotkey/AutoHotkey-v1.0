@@ -24,6 +24,26 @@ GNU General Public License for more details.
 #define IS_SPACE_OR_TAB(c) (c == ' ' || c == '\t')
 
 
+inline char *strupr(char *str)
+{
+	char *temp = str;
+	if (str)
+		for ( ; *str; ++str)
+			*str = toupper(*str);
+	return temp;
+}
+
+
+inline char *strlwr(char *str)
+{
+	char *temp = str;
+	if (str)
+		for ( ; *str; ++str)
+			*str = tolower(*str);
+	return temp;
+}
+
+
 inline size_t strnlen(char *aBuf, size_t aMax)
 // Returns the length of aBuf or aMax, whichever is least.
 // But it does so efficiently, in case aBuf is huge.

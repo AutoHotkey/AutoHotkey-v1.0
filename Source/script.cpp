@@ -40,6 +40,7 @@ static size_t g_CommentFlagLength = strlen(g_CommentFlag); // pre-calculated for
 
 Script::Script()
 	: mFirstLine(NULL), mLastLine(NULL), mCurrLine(NULL)
+	, mThisHotkeyLabel(NULL), mPriorHotkeyLabel(NULL), mPriorHotkeyStartTime(0)
 	, mFirstLabel(NULL), mLastLabel(NULL)
 	, mFirstVar(NULL), mLastVar(NULL)
 	, mLineCount(0), mLabelCount(0), mVarCount(0), mGroupCount(0)
@@ -1824,6 +1825,11 @@ ResultType Script::AddVar(char *aVarName, size_t aVarNameLength)
 	else if (!stricmp(new_name, "a_NumBatchLines")) var_type = VAR_NUMBATCHLINES;
 	else if (!stricmp(new_name, "a_OStype")) var_type = VAR_OSTYPE;
 	else if (!stricmp(new_name, "a_OSversion")) var_type = VAR_OSVERSION;
+	else if (!stricmp(new_name, "a_ThisHotkey")) var_type = VAR_THISHOTKEY;
+	else if (!stricmp(new_name, "a_PriorHotkey")) var_type = VAR_PRIORHOTKEY;
+	else if (!stricmp(new_name, "a_TimeSinceThisHotkey")) var_type = VAR_TIMESINCETHISHOTKEY;
+	else if (!stricmp(new_name, "a_TimeSincePriorHotkey")) var_type = VAR_TIMESINCEPRIORHOTKEY;
+	else if (!stricmp(new_name, "a_TickCount")) var_type = VAR_TICKCOUNT;
 	else var_type = VAR_NORMAL;
 
 	Var *the_new_var = new Var(new_name, var_type);
@@ -3261,6 +3267,20 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		if (chars_to_extract > (int)source_length) // This could be intentional, so don't display an error.
 			chars_to_extract = (int)source_length;
 		return OUTPUT_VAR->Assign(ARG2, (VarSizeType)(source_length - chars_to_extract)); // It already displayed any error.
+	case ACT_STRINGLOWER:
+	case ACT_STRINGUPPER:
+		space_needed = (VarSizeType)(strlen(ARG2) + 1);
+		// Set up the var, enlarging it if necessary.  If the OUTPUT_VAR is of type VAR_CLIPBOARD,
+		// this call will set up the clipboard for writing:
+		if (OUTPUT_VAR->Assign(NULL, space_needed - 1) != OK)
+			return FAIL;
+		// Copy the input variable's text directly into the output variable:
+		strlcpy(OUTPUT_VAR->Contents(), ARG2, space_needed);
+		if (mActionType == ACT_STRINGLOWER)
+			strlwr(OUTPUT_VAR->Contents());
+		else
+			strupr(OUTPUT_VAR->Contents());
+		return OUTPUT_VAR->Close();  // In case it's the clipboard.
 	case ACT_STRINGLEN:
 		return OUTPUT_VAR->Assign((int)strlen(ARG2)); // It already displayed any error.
 	case ACT_STRINGGETPOS:

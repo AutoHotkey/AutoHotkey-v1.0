@@ -149,6 +149,20 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		if (!Hotkey::HookIsActive()) // And the user hasn't requested a hook to be activated.
 			g_script.ExitApp();      // We're done.
 
+	// Save the values of KeyDelay, WinDelay etc. in case they were changed by the auto-execute part
+	// of the script.  These new defaults will be put into effect whenever a new hotkey subroutine
+	// is launched.  Each launched subroutine may then change the values for its own purposes without
+	// affecting the settings for other subroutines:
+	global_clear_state(&g);  // Start with a "clean slate" in both g and g_default.
+	CopyMemory(&g_default, &g, sizeof(global_struct));
+	// After this point, the values in g_default should never be changed.
+
+	// It seems best to set ErrorLevel to NONE after the auto-execute part of the script is done.
+	// However, we do not set it to NONE right before launching each new hotkey subroutine because
+	// it's more flexible that way (i.e. the user may want one hotkey subroutine to use the value of
+	// ErrorLevel set by another):
+	g_ErrorLevel->Assign(ERRORLEVEL_NONE);
+
 	// Call it in this special mode to kick off the main event loop.
 	// Be sure to pass something >0 for the first param or it will
 	// return (and we never want this to return):

@@ -67,7 +67,7 @@ extern OS_Version g_os;
 
 extern DWORD g_OriginalTimeout;
 
-extern global_struct g;
+extern global_struct g, g_default;
 // This macro is defined because sometimes g.hWndLastUsed will be out-of-date and the window
 // may have been destroyed.  It also returns NULL if the current settings indicate that
 // hidden windows should be ignored:
