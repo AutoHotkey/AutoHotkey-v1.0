@@ -31,6 +31,7 @@ GNU General Public License for more details.
 
 #include "os_version.h" // For the global OS_Version object
 EXTERN_OSVER; // For the access to the g_os version object without having to include globaldata.h
+EXTERN_G;
 
 // AutoIt2 supports lines up to 16384 characters long, and we want to be able to do so too
 // so that really long lines from aut2 scripts, such as a chain of IF commands, can be
@@ -81,7 +82,7 @@ enum enum_act {
 , ACT_STRINGTRIMLEFT, ACT_STRINGTRIMRIGHT, ACT_STRINGLOWER, ACT_STRINGUPPER
 , ACT_STRINGLEN, ACT_STRINGGETPOS, ACT_STRINGREPLACE, ACT_STRINGSPLIT
 , ACT_ENVSET, ACT_ENVUPDATE
-, ACT_RUN, ACT_RUNWAIT, ACT_URLDOWNLOADTOFILE
+, ACT_RUNAS, ACT_RUN, ACT_RUNWAIT, ACT_URLDOWNLOADTOFILE
 , ACT_GETKEYSTATE
 , ACT_SEND, ACT_CONTROLSEND, ACT_CONTROLCLICK, ACT_CONTROLGETFOCUS, ACT_CONTROLFOCUS
 , ACT_CONTROLSETTEXT, ACT_CONTROLGETTEXT
@@ -99,7 +100,8 @@ enum enum_act {
 , ACT_WINHIDE, ACT_WINSHOW
 , ACT_WINMINIMIZEALL, ACT_WINMINIMIZEALLUNDO
 , ACT_WINCLOSE, ACT_WINKILL, ACT_WINMOVE, ACT_WINMENUSELECTITEM
-, ACT_WINSETTITLE, ACT_WINGETTITLE, ACT_WINGETPOS, ACT_WINGETTEXT
+, ACT_WINSET, ACT_WINSETTITLE, ACT_WINGETTITLE, ACT_WINGETPOS, ACT_WINGETTEXT
+, ACT_POSTMESSAGE, ACT_SENDMESSAGE
 // Keep rarely used actions near the bottom for parsing/performance reasons:
 , ACT_PIXELGETCOLOR, ACT_PIXELSEARCH
 , ACT_GROUPADD, ACT_GROUPACTIVATE, ACT_GROUPDEACTIVATE, ACT_GROUPCLOSE
@@ -133,6 +135,15 @@ enum enum_act {
 // , ACT_COUNT
 };
 
+enum enum_act_old {
+  OLD_INVALID = FAIL  // These should both be zero for initialization and function-return-value purposes.
+  , OLD_SETENV, OLD_ENVADD, OLD_ENVSUB, OLD_ENVMULT, OLD_ENVDIV
+  , OLD_IFEQUAL, OLD_IFNOTEQUAL, OLD_IFGREATER, OLD_IFGREATEROREQUAL, OLD_IFLESS, OLD_IFLESSOREQUAL
+  , OLD_LEFTCLICK, OLD_RIGHTCLICK, OLD_LEFTCLICKDRAG, OLD_RIGHTCLICKDRAG
+  , OLD_REPEAT, OLD_ENDREPEAT
+  , OLD_WINGETACTIVETITLE, OLD_WINGETACTIVESTATS
+};
+
 // It seems best not to include ACT_SUSPEND in the below, since the user may have marked
 // a large number of subroutines as "Suspend, Permit".  Even PAUSE is iffy, since the user
 // may be using it as "Pause, off/toggle", but it seems best to support PAUSE:
@@ -150,32 +161,8 @@ enum enum_act {
 enum TrayMenuItems {ID_TRAY_OPEN = 16000, ID_TRAY_HELP, ID_TRAY_WINDOWSPY, ID_TRAY_RELOADSCRIPT
 	, ID_TRAY_EDITSCRIPT, ID_TRAY_SUSPEND, ID_TRAY_PAUSE, ID_TRAY_EXIT, ID_TRAY_USER};
 
-// These next macros are used to prevent timed subroutines from running while the tray menu
-// or main menu is in use.  This is documented behavior, and is desirable most of the time
-// anyway.  But not to do this would produce strange effects because any timed subroutine
-// that took a long time to run might keep us away from the "menu loop", which would result
-// in the menu becoming temporarily unreponsive while the user is in it (and probably other
-// undesired effects):
-#define MENU_NO_INTERRUPT(was_interruptible_before) \
-{\
-	was_interruptible_before = g_AllowInterruption;\
-	if (was_interruptible_before)\
-		g_AllowInterruption = false;\
-}
-#define MENU_RESTORE_INTERRUPT(was_interruptible_before) if (was_interruptible_before) g_AllowInterruption = true;
 
-enum enum_act_old {
-  OLD_INVALID = FAIL  // These should both be zero for initialization and function-return-value purposes.
-  , OLD_SETENV, OLD_ENVADD, OLD_ENVSUB, OLD_ENVMULT, OLD_ENVDIV
-  , OLD_IFEQUAL, OLD_IFNOTEQUAL, OLD_IFGREATER, OLD_IFGREATEROREQUAL, OLD_IFLESS, OLD_IFLESSOREQUAL
-  , OLD_LEFTCLICK, OLD_RIGHTCLICK, OLD_LEFTCLICKDRAG, OLD_RIGHTCLICKDRAG
-  , OLD_REPEAT, OLD_ENDREPEAT
-  , OLD_WINGETACTIVETITLE, OLD_WINGETACTIVESTATS
-};
-
-
-#define ERR_ABORT_NO_SPACES "The current hotkey subroutine (or the entire script if"\
-	" this isn't a hotkey subroutine) will be aborted."
+#define ERR_ABORT_NO_SPACES "The current thread will exit."
 #define ERR_ABORT "  " ERR_ABORT_NO_SPACES
 #define WILL_EXIT "The program will exit."
 #define OLD_STILL_IN_EFFECT "The script was not reloaded; the old version will remain in effect."
@@ -189,14 +176,15 @@ enum enum_act_old {
 #define ERR_WINDOW_PARAM "This command requires that at least one of its window parameters be non-blank."
 #define ERR_LOOP_FILE_MODE "If not blank or a variable reference, parameter #2 must be either 0, 1, 2."
 #define ERR_LOOP_REG_MODE  "If not blank or a variable reference, parameter #3 must be either 0, 1, 2."
-#define ERR_ON_OFF "If not blank or a variable reference, the value must be either ON or OFF."
-#define ERR_ON_OFF_ALWAYS "If not blank or a variable reference, the value must be either ON, OFF, ALWAYSON, or ALWAYSOFF."
-#define ERR_ON_OFF_TOGGLE "If not blank or a variable reference, the value must be either ON, OFF, or TOGGLE."
-#define ERR_ON_OFF_TOGGLE_PERMIT "If not blank or a variable reference, the value must be either ON, OFF, TOGGLE, or PERMIT."
+#define ERR_ON_OFF "If not blank or a variable reference, this parameter must be either ON or OFF."
+#define ERR_ON_OFF_ALWAYS "If not blank or a variable reference, this parameter must be either ON, OFF, ALWAYSON, or ALWAYSOFF."
+#define ERR_ON_OFF_TOGGLE "If not blank or a variable reference, this parameter must be either ON, OFF, or TOGGLE."
+#define ERR_ON_OFF_TOGGLE_PERMIT "If not blank or a variable reference, this parameter must be either ON, OFF, TOGGLE, or PERMIT."
 #define ERR_TITLEMATCHMODE "TitleMatchMode must be either 1, 2, slow, fast, or a variable reference."
 #define ERR_TITLEMATCHMODE2 "The variable does not contain a valid TitleMatchMode." ERR_ABORT
 #define ERR_MENUCOMMAND "Parameter #2 is not a valid menu command."
 #define ERR_MENUCOMMAND2 "Parameter #2's variable does not contain a valid menu command." ERR_ABORT
+#define ERR_WINSET "Parameter #1 is not a valid WinSet attribute."
 #define ERR_IFMSGBOX "This line specifies an invalid MsgBox result."
 #define ERR_REG_KEY "The key name must be either HKEY_LOCAL_MACHINE, HKEY_USERS, HKEY_CURRENT_USER, HKEY_CLASSES_ROOT, HKEY_CURRENT_CONFIG, or the abbreviations for these."
 #define ERR_REG_VALUE_TYPE "The value type must be either REG_SZ, REG_EXPAND_SZ, REG_MULTI_SZ, REG_DWORD, or REG_BINARY."
@@ -327,12 +315,14 @@ enum MainWindowModes {MAIN_MODE_NO_CHANGE, MAIN_MODE_LINES, MAIN_MODE_VARS
 	, MAIN_MODE_HOTKEYS, MAIN_MODE_KEYHISTORY, MAIN_MODE_REFRESH};
 ResultType ShowMainWindow(MainWindowModes aMode = MAIN_MODE_NO_CHANGE);
 
-enum MenuCommands {MENU_COMMAND_INVALID, MENU_COMMAND_ADD
+enum MenuCommands {MENU_COMMAND_INVALID, MENU_COMMAND_ADD, MENU_COMMAND_RENAME
 	, MENU_COMMAND_CHECK, MENU_COMMAND_UNCHECK, MENU_COMMAND_TOGGLECHECK
 	, MENU_COMMAND_ENABLE, MENU_COMMAND_DISABLE, MENU_COMMAND_TOGGLEENABLE
 	, MENU_COMMAND_STANDARD, MENU_COMMAND_NOSTANDARD
 	, MENU_COMMAND_DEFAULT, MENU_COMMAND_NODEFAULT
 	, MENU_COMMAND_DELETE, MENU_COMMAND_DELETEALL};
+
+enum WinSetAttributes {WINSET_INVALID, WINSET_TRANSPARENT, WINSET_ALWAYSONTOP};
 
 bool Util_Shutdown(int nFlag);
 BOOL Util_ShutdownHandler(HWND hwnd, DWORD lParam);
@@ -439,6 +429,12 @@ private:
 		, char *aExcludeTitle, char *aExcludeText);
 	ResultType StatusBarWait(char *aTextToWaitFor, char *aSeconds, char *aPart, char *aTitle, char *aText
 		, char *aInterval, char *aExcludeTitle, char *aExcludeText);
+	ResultType ScriptPostMessage(char *aMsg, char *awParam, char *alParam, char *aControl
+		, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
+	ResultType ScriptSendMessage(char *aMsg, char *awParam, char *alParam, char *aControl
+		, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
+	ResultType WinSet(char *aAttrib, char *aValue, char *aTitle, char *aText
+		, char *aExcludeTitle, char *aExcludeText);
 	ResultType WinSetTitle(char *aTitle, char *aText, char *aNewTitle
 		, char *aExcludeTitle = "", char *aExcludeText = "");
 	ResultType WinGetTitle(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
@@ -634,7 +630,6 @@ public:
 		case ACT_SETMOUSEDELAY:
 		case ACT_SETWINDELAY:
 		case ACT_SETCONTROLDELAY:
-		case ACT_SETFORMAT:
 		case ACT_RANDOM:
 		case ACT_WINMOVE:
 		case ACT_SETINTERRUPT:
@@ -680,7 +675,6 @@ public:
 		case ACT_WINWAITNOTACTIVE:
 		case ACT_STATUSBARWAIT:
 		case ACT_CLIPWAIT:
-		case ACT_SETFORMAT:
 		// For these, allow even the variable (the first arg) to to be a float so that
 		// the runtime checks won't catch it as an error:
 		case ACT_ADD:
@@ -789,7 +783,7 @@ public:
 		{
 			if (colon_pos)
 			{
-				*aInstanceNumber = atoi(colon_pos + 1);
+				*aInstanceNumber = ATOI(colon_pos + 1);
 				if (*aInstanceNumber < 1)
 					*aInstanceNumber = 1;
 			}
@@ -848,6 +842,7 @@ public:
 	{
 		if (!aBuf || !*aBuf) return MENU_COMMAND_INVALID;
 		if (!stricmp(aBuf, "Add")) return MENU_COMMAND_ADD;
+		if (!stricmp(aBuf, "Rename")) return MENU_COMMAND_RENAME;
 		if (!stricmp(aBuf, "Check")) return MENU_COMMAND_CHECK;
 		if (!stricmp(aBuf, "Uncheck")) return MENU_COMMAND_UNCHECK;
 		if (!stricmp(aBuf, "ToggleCheck")) return MENU_COMMAND_TOGGLECHECK;
@@ -861,6 +856,14 @@ public:
 		if (!stricmp(aBuf, "Delete")) return MENU_COMMAND_DELETE;
 		if (!stricmp(aBuf, "DeleteAll")) return MENU_COMMAND_DELETEALL;
 		return MENU_COMMAND_INVALID;
+	}
+
+	static WinSetAttributes ConvertWinSetAttribute(char *aBuf)
+	{
+		if (!aBuf || !*aBuf) return WINSET_INVALID;
+		if (!stricmp(aBuf, "Trans") || !stricmp(aBuf, "Transparent")) return WINSET_TRANSPARENT;
+		if (!stricmp(aBuf, "AlwaysOnTop") || !stricmp(aBuf, "Topmost")) return WINSET_ALWAYSONTOP;
+		return WINSET_INVALID;
 	}
 
 
@@ -1152,6 +1155,9 @@ public:
 	int mUninterruptedLineCount; // Similar in purpose to the above, but only 32-bit.
 	DWORD mLastScriptRest, mLastPeekTime;
 
+	#define RUNAS_ITEM_SIZE (257 * sizeof(wchar_t))
+	wchar_t *mRunAsUser, *mRunAsPass, *mRunAsDomain; // Memory is allocated at runtime, upon first use.
+
 	bool mTrayIncludeStandard;  // Whether to include the tray menu's standard items in the menu.
 	UserMenuItem *mTrayMenuDefault;
     
@@ -1174,7 +1180,7 @@ public:
 	ResultType AddGroup(char *aGroupName);
 	Label *FindLabel(char *aLabelName);
 	ResultType ActionExec(char *aAction, char *aParams = NULL, char *aWorkingDir = NULL
-		, bool aDisplayErrors = true, char *aRunShowMode = NULL, HANDLE *aProcess = NULL);
+		, bool aDisplayErrors = true, char *aRunShowMode = NULL, HANDLE *aProcess = NULL, bool aUseRunAs = false);
 	char *ListVars(char *aBuf, size_t aBufSize);
 	char *ListKeyHistory(char *aBuf, size_t aBufSize);
 
@@ -1327,7 +1333,7 @@ public:
 			// that large, scripts should use the KB version of this function instead.
 			// If a file is over 4gig, set the value to be the maximum size (-1 when
 			// expressed as a signed integer, since script variables are based entirely
-			// on 32-bit signed integers due to the use of atoi(), etc.).  UPDATE: 64-bit
+			// on 32-bit signed integers due to the use of ATOI(), etc.).  UPDATE: 64-bit
 			// ints are now standard, so the above is unnecessary:
 			//sprintf(str, "%d%", mLoopFile->nFileSizeHigh ? -1 : (int)mLoopFile->nFileSizeLow);
 			ULARGE_INTEGER ul;
@@ -1448,7 +1454,7 @@ public:
 			// isn't greater than about 49.  See MyGetTickCount() for explanation of %d vs. %u.
 			// Update: Using 64-bit ints now, so above is obsolete:
 			//snprintf(str, sizeof(str), "%d", (DWORD)(GetTickCount() - mThisHotkeyStartTime));
-			ITOA64((__int64)(GetTickCount() - mThisHotkeyStartTime), str);
+			ITOA64((__int64)(GetTickCount() - mThisHotkeyStartTime), str)  // No semicolon
 		else
 			strcpy(str, "-1");
 		if (aBuf)
@@ -1461,7 +1467,7 @@ public:
 		if (mPriorHotkeyLabel)
 			// See MyGetTickCount() for explanation for explanation:
 			//snprintf(str, sizeof(str), "%d", (DWORD)(GetTickCount() - mPriorHotkeyStartTime));
-			ITOA64((__int64)(GetTickCount() - mPriorHotkeyStartTime), str);
+			ITOA64((__int64)(GetTickCount() - mPriorHotkeyStartTime), str)
 		else
 			strcpy(str, "-1");
 		if (aBuf)
@@ -1479,8 +1485,8 @@ public:
 		// problems if the user tries compare two tick-counts in the script using EnvSub.
 		// UPDATE: It seems better to store all unsigned values as signed within script
 		// variables.  Otherwise, when the var's value is next accessed and converted using
-		// atoi(), the outcome won't be as useful.  In other words, since the negative value
-		// will be properly converted by atoi(), comparing two negative tickcounts works
+		// ATOI(), the outcome won't be as useful.  In other words, since the negative value
+		// will be properly converted by ATOI(), comparing two negative tickcounts works
 		// correctly (confirmed).  Even if one of them is negative and the other positive,
 		// it will probably work correctly due to the nature of implicit unsigned math.
 		// Thus, we use %d vs. %u in the snprintf() call below.

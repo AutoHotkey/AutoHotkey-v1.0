@@ -506,6 +506,7 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 	, mJumpToLabel(aJumpToLabel)
 	, mExistingThreads(0)
 	, mMaxThreads(g_MaxThreadsPerHotkey)  // The value of g_MaxThreadsPerHotkey can vary during load-time.
+	, mMaxThreadsBuffer(g_MaxThreadsBuffer) // same comment as above
 	, mRunAgainAfterFinished(false), mRunAgainTime(0), mConstructedOK(false)
 
 // It's better to receive the hotkey_id as a param, since only the caller has better knowledge and
@@ -1006,7 +1007,7 @@ char *Hotkey::ToText(char *aBuf, size_t aBufSize, bool aAppendNewline)
 	char *aBuf_orig = aBuf;
 	char existing_threads_str[128];
 	if (mExistingThreads)
-		ITOA(mExistingThreads, existing_threads_str);
+		_itoa(mExistingThreads, existing_threads_str, 10);
 	else
 		*existing_threads_str = '\0'; // Make it blank to avoid clutter in the hotkey display.
 	snprintf(aBuf, BUF_SPACE_REMAINING, "%s%s\t%s\t%s"

@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.07"
+#define NAME_VERSION "1.0.08"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -51,11 +51,6 @@ GNU General Public License for more details.
 #define EXT_AUTOHOTKEY ".ahk"
 #define CONVERSION_FLAG (EXT_AUTOIT2 EXT_AUTOHOTKEY)
 #define CONVERSION_FLAG_LENGTH 8
-
-// 10 is the number base system:
-#define ITOA(value, buf) _itoa(value, buf, 10)
-#define UTOA(value, buf) _ultoa(value, buf, 10)
-#define ITOA64(value, buf) _i64toa(value, buf, 10)
 
 // Items that may be needed for VC++ 6.X:
 #ifndef SPI_GETFOREGROUNDLOCKTIMEOUT
@@ -93,6 +88,8 @@ enum ResultType {FAIL = 0, OK, WARN = OK, CRITICAL_ERROR
 	, LOOP_BREAK, LOOP_CONTINUE
 	, EARLY_RETURN, EARLY_EXIT};
 
+enum MenuVisibleType {MENU_VISIBLE_NONE, MENU_VISIBLE_TRAY, MENU_VISIBLE_MAIN}; // NONE must be zero.
+
 // These are used for things that can be turned on, off, or left at a
 // neutral default value that is neither on nor off.  INVALID must
 // be zero:
@@ -119,6 +116,7 @@ typedef UCHAR HookType;
 #define HOOK_MOUSE 0x02
 #define HOOK_FAIL  0xFF
 
+#define EXTERN_G extern global_struct g
 #define EXTERN_OSVER extern OS_Version g_os
 #define EXTERN_CLIPBOARD extern Clipboard g_clip
 #define CLOSE_CLIPBOARD_IF_OPEN	if (g_clip.mIsOpen) g_clip.Close()
@@ -236,6 +234,7 @@ struct global_struct
 	bool AutoTrim;
 	bool StringCaseSense;
 	char FormatFloat[32];
+	bool FormatIntAsHex;
 	char ErrorLevel[128]; // Big in case user put something bigger than a number in g_ErrorLevel.
 	HWND hWndLastUsed;  // In many cases, it's better to use g_ValidLastUsedWindow when referring to this.
 	//HWND hWndToRestore;
@@ -287,6 +286,7 @@ inline void global_init(global_struct *gp)
 	gp->AutoTrim = true;  // AutoIt2's default, and overall the best default in most cases.
 	gp->StringCaseSense = false;  // AutoIt2 default, and it does seem best.
 	strcpy(gp->FormatFloat, "%0.6f");
+	gp->FormatIntAsHex = false;
 	// For FormatFloat:
 	// I considered storing more than 6 digits to the right of the decimal point (which is the default
 	// for most Unices and MSVC++ it seems).  But going beyond that makes things a little weird for many

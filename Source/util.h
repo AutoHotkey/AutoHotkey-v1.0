@@ -245,26 +245,108 @@ inline char *trim (char *aStr)
 	return ltrim(rtrim(aStr));
 }
 
+			
+
+inline bool IsHex(char *aBuf)
+// Note: AHK support for hex ints reduces performance by only 10% for decimal ints, even in the tightest
+// of math loops that have SetBatchLines set to -1.
+{
+	aBuf = omit_leading_whitespace(aBuf); // i.e. caller doesn't have to have ltrimmed.
+	if (!*aBuf)
+		return false;
+	if (*aBuf == '-' || *aBuf == '+')
+		++aBuf;
+	// The "0x" prefix must be followed by at least one hex digit, otherwise it's not considered hex:
+	#define IS_HEX(buf) (*buf == '0' && (*(buf + 1) == 'x' || *(buf + 1) == 'X') && isxdigit(*(buf + 2)))
+	return IS_HEX(aBuf);
+}
+
+
+
+// A more complex macro is used for ATOI64(), since it is more often called from places where
+// performance matters (e.g. ACT_ADD).  It adds about 500 bytes to the code size in exchance for
+// a 8% faster math loops.  But it's probably about 8% slower when used with hex integers, but
+// those are so rare that the speed-up seems worth the extra code size:
+//#define ATOI64(buf) _strtoi64(buf, NULL, 0) // formerly used _atoi64()
+#define ATOI64(buf) (IsHex(buf) ? _strtoi64(buf, NULL, 16) : _atoi64(buf))
+#define ATOI(buf) strtol(buf, NULL, 0) // Use zero as last param to support both hex & dec.
+
+// Unlike some Unix versions of strtod(), the VC++ version does not seem to handle hex strings
+// such as "0xFF" automatically.  So this macro must check for hex because some callers rely on that.
+// Also, it uses _strtoi64() vs. strtol() so that more of a double's capacity can be utilized:
+#define ATOF(buf) (IsHex(buf) ? (double)_strtoi64(buf, NULL, 16) : atof(buf))
+
+// Negative hex numbers need special handling, otherwise something like zero minus one would create
+// a huge 0xffffffffffffffff value, which would subsequently not be read back in correctly as
+// a negative number (but UTOA() doesn't need this since there can't be negatives in that case).
+#define ITOA(value, buf) \
+	{\
+		if (g.FormatIntAsHex)\
+		{\
+			char *buf_temp = buf;\
+			if (value < 0)\
+				*buf_temp++ = '-';\
+			*buf_temp++ = '0';\
+			*buf_temp++ = 'x';\
+			_itoa(value < 0 ? -(int)value : value, buf_temp, 16);\
+		}\
+		else\
+			_itoa(value, buf, 10);\
+	}
+#define ITOA64(value, buf) \
+	{\
+		if (g.FormatIntAsHex)\
+		{\
+			char *buf_temp = buf;\
+			if (value < 0)\
+				*buf_temp++ = '-';\
+			*buf_temp++ = '0';\
+			*buf_temp++ = 'x';\
+			_i64toa(value < 0 ? -(__int64)value : value, buf_temp, 16);\
+		}\
+		else\
+			_i64toa(value, buf, 10);\
+	}
+#define UTOA(value, buf) \
+	{\
+		if (g.FormatIntAsHex)\
+		{\
+			*buf = '0';\
+			*(buf + 1) = 'x';\
+			_ultoa(value, buf + 2, 16);\
+		}\
+		else\
+			_ultoa(value, buf, 10);\
+	}
+
+
 
 // Callers rely on PURE_NOT_NUMERIC being zero/false, so order is important:
 enum pure_numeric_type {PURE_NOT_NUMERIC, PURE_INTEGER, PURE_FLOAT};
 inline pure_numeric_type IsPureNumeric(char *aBuf, bool aAllowNegative = false
 	, bool aAllowAllWhitespace = true, bool aAllowFloat = false, bool aAllowImpure = false)
+// Making this non-inline reduces the size of the compressed EXE by only 2K.  Since this function
+// is called so often, it seems preferable to keep it inline for performance.
 // String can contain whitespace.
 {
 	aBuf = omit_leading_whitespace(aBuf); // i.e. caller doesn't have to have ltrimmed, only rtrimmed.
 	if (!*aBuf) // The string is empty or consists entirely of whitespace.
 		return aAllowAllWhitespace ? PURE_INTEGER : PURE_NOT_NUMERIC;
 
-	// It's debatable, but it seems best to allow leading plus signs, e.g. +123.0, since
-	// atoi() properly parses them and this is also the way that AutoIt2 likely works:
-	if (*aBuf == '+')
-		++aBuf;
-	else if (*aBuf == '-')
+	if (*aBuf == '-')
+	{
 		if (aAllowNegative)
 			++aBuf;
 		else
 			return PURE_NOT_NUMERIC;
+	}
+	else if (*aBuf == '+')
+		++aBuf;
+
+	// Relies on short circuit boolean order to prevent reading beyond the end of the string:
+	bool is_hex = IS_HEX(aBuf);
+	if (is_hex)
+		aBuf += 2;  // Skip over the 0x prefix.
 
 	// Set defaults:
 	bool has_decimal_point = false;
@@ -274,14 +356,18 @@ inline pure_numeric_type IsPureNumeric(char *aBuf, bool aAllowNegative = false
 	{
 		if (*aBuf == '.')
 		{
-			if (!aAllowFloat || has_decimal_point) // i.e. if aBuf contains 2 decimal points, it can't be a valid number.
+			if (!aAllowFloat || has_decimal_point || is_hex)
+				// i.e. if aBuf contains 2 decimal points, it can't be a valid number.
+				// Note that decimal points are allowed in hexadecimal strings, e.g. 0xFF.EE.
+				// But since that format doesn't seem to be supported by VC++'s atof() and probably
+				// related functions, and since it's extremely rare, it seems best not to support it.
 				return PURE_NOT_NUMERIC;
 			else
 				has_decimal_point = true;
 		}
 		else
 		{
-			if (*aBuf < '0' || *aBuf > '9') // And since we're here, it's not '.' either.
+			if (is_hex ? !isxdigit(*aBuf) : (*aBuf < '0' || *aBuf > '9')) // And since we're here, it's not '.' either.
 				if (aAllowImpure) // Since aStr starts with a number (as verified above), it is considered a number.
 				{
 					if (has_at_least_one_digit)
@@ -336,6 +422,19 @@ inline char *strcatmove(char *aDst, char *aSrc)
 	if (!aDst || !aSrc || !*aSrc) return aDst;
 	char *aDst_end = aDst + strlen(aDst);
 	return (char *)memmove(aDst_end, aSrc, strlen(aSrc) + 1);  // Add 1 to include aSrc's terminator.
+}
+
+
+inline char *GetLastErrorText(char *aBuf, size_t aBuf_size)
+{
+	if (!aBuf || !aBuf_size) return aBuf;
+	if (aBuf_size == 1)
+	{
+		*aBuf = '\0';
+		return aBuf;
+	}
+	FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM, NULL, GetLastError(), 0, aBuf, (DWORD)aBuf_size - 1, NULL);
+	return aBuf;
 }
 
 

@@ -52,6 +52,7 @@ Script::Script()
 	, mIsRestart(false)
 	, mIsAutoIt2(false)
 	, mLinesExecutedThisCycle(0), mUninterruptedLineCount(0)
+	, mRunAsUser(NULL), mRunAsPass(NULL), mRunAsDomain(NULL)
 	, mTrayMenu(NULL) // The menu will be created the first time the user invokes it.
 	, mTrayIncludeStandard(true), mTrayMenuDefault(NULL)
 {
@@ -309,7 +310,7 @@ ResultType Script::CreateWindows(HINSTANCE aInstance)
 		mNIC.uID				= AHK_NOTIFYICON; // This is also used for the ID, see TRANSLATE_AHK_MSG for details.
 		mNIC.uFlags				= NIF_MESSAGE | NIF_TIP | NIF_ICON;
 		mNIC.uCallbackMessage	= AHK_NOTIFYICON;
-		mNIC.hIcon				= LoadIcon(aInstance, MAKEINTRESOURCE(IDI_MAIN));
+		mNIC.hIcon				= LoadIcon(aInstance, MAKEINTRESOURCE(g_IconTray));
 		strlcpy(mNIC.szTip, mFileName ? mFileName : NAME_P, sizeof(mNIC.szTip));
 		if (!Shell_NotifyIcon(NIM_ADD, &mNIC))
 		{
@@ -379,9 +380,9 @@ void Script::UpdateTrayIcon()
 	else if (g.IsPaused)
 		icon = IDI_PAUSE;
 	else if (g_IsSuspended)
-		icon = IDI_SUSPEND;
+		icon = g_IconTraySuspend;
 	else
-		icon = IDI_MAIN;
+		icon = g_IconTray;
 	mNIC.hIcon = LoadIcon(g_hInstance, MAKEINTRESOURCE(icon));
 	if (Shell_NotifyIcon(NIM_MODIFY, &mNIC))
 	{
@@ -409,22 +410,11 @@ void Script::DisplayTrayMenu()
 	GetCursorPos(&pt);
 	SetForegroundWindow(g_hWnd); // Always call this right before TrackPopupMenu(), even if window is hidden.
 
-	// Set this so that if a new recursion layer is triggered by TrackPopupMenuEx's having
-	// dispatched a hotkey message to our main window proc, IsCycleComplete() knows that
-	// this layer here does not need to have its original foreground window restored to the foreground.
-	// Also, this allows our main Window Proc to close the popup menu upon receive of any hotkey,
-	// which is probably a good idea since most hotkeys change the foreground window and if that
-	// happens, the menu cannot be dismissed (ever?) except by selecting one of the items in the
-	// menu (which is often undesirable).
-	bool tray_was_interruptible_before;
-	MENU_NO_INTERRUPT(tray_was_interruptible_before)
-
-	g_TrayMenuIsVisible = true;
+	g_MenuIsVisible = MENU_VISIBLE_TRAY;
 	TrackPopupMenuEx(mTrayMenu, TPM_LEFTALIGN | TPM_LEFTBUTTON, pt.x, pt.y, g_hWnd, NULL);
-	g_TrayMenuIsVisible = false;
+	g_MenuIsVisible = MENU_VISIBLE_NONE;
 	
 	PostMessage(g_hWnd, WM_NULL, 0, 0); // MSDN recommends this to prevent menu from closing on 2nd click.
-	MENU_RESTORE_INTERRUPT(tray_was_interruptible_before)
 }
 
 
@@ -437,6 +427,13 @@ ResultType Script::PerformMenu(char *aWhichMenu, char *aCommand, char *aMenuItem
 	MenuCommands menu_command = Line::ConvertMenuCommand(aCommand);
 	if (menu_command == MENU_COMMAND_INVALID)
 		return ScriptError(ERR_MENUCOMMAND2, aCommand);
+
+	char *new_name = "";
+	if (menu_command == MENU_COMMAND_RENAME) // aLabel contains the menu item's new name in this case.
+	{
+		new_name = aLabel;
+		aLabel = "";
+	}
 
 	bool menu_item_needed = (menu_command != MENU_COMMAND_DELETEALL && menu_command != MENU_COMMAND_NODEFAULT
 		 && menu_command != MENU_COMMAND_STANDARD && menu_command != MENU_COMMAND_NOSTANDARD
@@ -460,7 +457,7 @@ ResultType Script::PerformMenu(char *aWhichMenu, char *aCommand, char *aMenuItem
 			return FAIL;  // Realistically never happens, so no error is dislayed.
 
 	// Find aMenuItemName in the linked list:
-	UserMenuItem *menu_item = NULL, *menu_item_prev = NULL;
+	UserMenuItem *mi, *menu_item = NULL, *menu_item_prev = NULL;
 	// The below IF statement avoids searching if it's a separator being used with the ADD command:
 	if ((menu_item_needed || menu_command == MENU_COMMAND_ADD) && aMenuItemName && *aMenuItemName)
 		for (menu_item = mFirstMenuItem; menu_item != NULL; menu_item_prev = menu_item, menu_item = menu_item->mNextMenuItem)
@@ -490,7 +487,6 @@ ResultType Script::PerformMenu(char *aWhichMenu, char *aCommand, char *aMenuItem
 			// to ensure that none are permanently "wasted":
 			UINT candidate_id = ID_TRAY_USER;
 			bool id_in_use;
-			UserMenuItem *mi;
 			for (candidate_id = ID_TRAY_USER; ; ++candidate_id)
 			{
 				id_in_use = false;  // Reset the default each iteration (overridden if the below finds a match).
@@ -525,6 +521,44 @@ ResultType Script::PerformMenu(char *aWhichMenu, char *aCommand, char *aMenuItem
 		// The above has already created it for us if it needed to be (it might have already existed if the
 		// user was using the ADD command just to update a menu item's label):
 		menu_item->mLabel = target_label;  // This will be NULL if this menu item is a separator.
+		return OK;
+	case MENU_COMMAND_RENAME:
+		if (*new_name)
+		{
+			for (mi = mFirstMenuItem; mi != NULL; mi = mi->mNextMenuItem)
+				if (!stricmp(mi->mName, new_name)) // Match found (case insensitive).
+					return ScriptError("The menu item's new name must not match that of an existing item." ERR_ABORT
+						, new_name);
+		}
+		else // converting into a separator
+		{
+			// Notes about the below macro:
+			// ID_TRAY_OPEN is not set to be the default for the self-contained version,since it lacks that menu item.
+#ifdef AUTOHOTKEYSC
+			#define CHANGE_DEFAULT_IF_NEEDED \
+				if (mTrayMenuDefault == menu_item)\
+				{\
+					SetMenuDefaultItem(mTrayMenu, -1, TRUE);\
+					mTrayMenuDefault = NULL;\
+				}
+#else
+			#define CHANGE_DEFAULT_IF_NEEDED \
+				if (mTrayMenuDefault == menu_item)\
+				{\
+					SetMenuDefaultItem(mTrayMenu, mTrayIncludeStandard ? ID_TRAY_OPEN : -1, FALSE);\
+					mTrayMenuDefault = NULL;\
+				}
+#endif
+				CHANGE_DEFAULT_IF_NEEDED
+		}
+		// If new_name is blank, convert this item into a separator (though there's currently no way to
+		// change it back).  It doesn't seem necessary to alter the mLabel, mEnabled, and mChecked
+		// attributes in this case:
+		ModifyMenu(mTrayMenu, menu_item->mMenuID, MF_BYCOMMAND | (*new_name ? MF_STRING : MF_SEPARATOR)
+			| (menu_item->mChecked ? MF_CHECKED : MF_UNCHECKED)
+			| (menu_item->mEnabled ? MF_ENABLED : (MF_DISABLED | MF_GRAYED))
+			, menu_item->mMenuID, new_name);
+		strlcpy(menu_item->mName, new_name, sizeof(menu_item->mName));
 		return OK;
 	case MENU_COMMAND_CHECK:
 		menu_item->mChecked = true;
@@ -588,13 +622,7 @@ ResultType Script::PerformMenu(char *aWhichMenu, char *aCommand, char *aMenuItem
 			menu_item_prev->mNextMenuItem = menu_item->mNextMenuItem; // Can be NULL if menu_item was the last one.
 		else // menu_item was the first one in the list.
 			mFirstMenuItem = menu_item->mNextMenuItem; // Can be NULL if the list will now be empty.
-		if (mTrayMenuDefault == menu_item) // should do this before freeing menu_item's memory.
-		{
-#ifndef AUTOHOTKEYSC  // i.e. this is not done for the self-contained version, since it lacks that menu item.
-			SetMenuDefaultItem(mTrayMenu, mTrayIncludeStandard ? ID_TRAY_OPEN : -1, FALSE);
-#endif
-			mTrayMenuDefault = NULL;
-		}
+		CHANGE_DEFAULT_IF_NEEDED  // Should do this before freeing menu_item's memory.
 		DeleteMenu(mTrayMenu, menu_item->mMenuID, MF_BYCOMMAND);
 		delete menu_item; // Do this last when its contents are no longer needed.
 		--mMenuItemCount;
@@ -604,12 +632,12 @@ ResultType Script::PerformMenu(char *aWhichMenu, char *aCommand, char *aMenuItem
 			return OK;  // If there are no user-defined menu items, it's already in the "reset" state.
 		// I think DestroyMenu() can fail if an attempt is made to destroy the menu while it is being
 		// displayed (but even if it doesn't fail, it seems very bad to try to destroy it then, which
-		// is why g_TrayMenuIsVisible is checked just to be sure).
+		// is why g_MenuIsVisible is checked just to be sure).
 		// But this all should be impossible in our case because the script is in an uninterruptible state
 		// while the menu is displayed, which in addition to pausing the current thread (which happens
 		// anyway), no new timed or hotkey subroutines can be launched.  Thus, this should rarely if
 		// ever happen, which is why no error message is given here:
-		if (g_TrayMenuIsVisible || !DestroyMenu(mTrayMenu))
+		if (g_MenuIsVisible || !DestroyMenu(mTrayMenu))
 			return OK;
 		else
 			mTrayMenu = NULL;
@@ -816,22 +844,40 @@ LineNumberType Script::LoadFromFile()
 				" or has insufficient permissions.");
 			return LOADING_FAILED;
 		}
-		fprintf(fp2, "; " NAME_P " script file\n"
-			"\n"
-			"#SingleInstance  ;Allow only one instance of this script to run at a time.\n"
-			"\n"
-			//"; Uncomment out the below line to try out a sample of an Alt-tab\n"
-			//"; substitute (currently not supported in Win9x):\n"
-			//";RControl & RShift::AltTab\n"
-			"; Sample hotkey:\n"
-			"#z::  ; This hotkey is Win-Z (hold down Windows key and press Z).\n"
-			"MsgBox, Hotkey was pressed.`n`nNote: MsgBox has a new single-parameter mode now."
-				"  The title of this window defaults to the script's filename.\n"
-			"return\n"
-			"\n"
-			"; After you finish editing this file, save it and run the EXE again\n"
-			"; (it will open files of this name by default).\n"
-			);
+		fprintf(fp2,
+"; IMPORTANT INFO ABOUT GETTING STARTED: Lines that start with a\n"
+"; semicolon, such as this one, are comments.  They are not executed.\n"
+"\n"
+"; This script is a .INI file because it is a special script that is\n"
+"; automatically launched when you run the program directly. By contrast,\n"
+"; text files that end in .ahk are associated with the program, which\n"
+"; means that they can be launched simply by double-clicking them.\n"
+"; You can have as many .ahk files as you want, located in any folder.\n"
+"; You can also run more than one .ahk file simultaneously and each will\n"
+"; get its own tray icon.\n"
+"\n"
+"; QUICK-START TUTORIAL: If you've never used an automation language such\n"
+"; as AutoIt, please read the quick-start tutorial in the help file.  It\n"
+"; will help you begin scripting your own macros and hotkeys right away.\n"
+"\n"
+"; SAMPLE HOTKEYS: Below are two sample hotkeys.  The first is Win+Z and it\n"
+"; launches a web site in the default browser.  The second is Control+Alt+N\n"
+"; and it launches a new Notepad window (or activates an existing one).  To\n"
+"; try out these hotkeys, run AutoHotkey again, which will load this file.\n"
+"\n"
+"#z::Run, www.autohotkey.com\n"
+"\n"
+"^!n::\n"
+"IfWinExist, Untitled - Notepad\n"
+"\tWinActivate\n"
+"else\n"
+"\tRun, Notepad\n"
+"return\n"
+"\n"
+"\n"
+"; Note: From now on whenever you run AutoHotkey directly, this script\n"
+"; will be loaded.  So feel free to customize it to suit your needs.\n"
+);
 		fclose(fp2);
 		// One or both of the below would probably fail -- at least on Win95 -- if mFileSpec ever
 		// has spaces in it (since it's passed as the entire param string).  So enclose the filename
@@ -1387,7 +1433,12 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 		if (g_os.IsWin9x())
 			MsgBox("#InstallKeybdHook is not supported on Windows 95/98/ME.  This line will be ignored.");
 		else
+		{
 			Hotkey::RequireHook(HOOK_KEYBD);
+			if (*directive_end && *(cp = omit_leading_whitespace(directive_end)))
+				if (!stricmp(cp, "force"))
+					sWhichHookSkipWarning |= HOOK_KEYBD;
+		}
 		return CONDITION_TRUE;
 	}
 	if (IS_DIRECTIVE_MATCH("#InstallMouseHook"))
@@ -1395,19 +1446,34 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 		if (g_os.IsWin9x())
 			MsgBox("#InstallMouseHook is not supported on Windows 95/98/ME.  This line will be ignored.");
 		else
+		{
 			Hotkey::RequireHook(HOOK_MOUSE);
+			if (*directive_end && *(cp = omit_leading_whitespace(directive_end)))
+				if (!stricmp(cp, "force"))
+					sWhichHookSkipWarning |= HOOK_MOUSE;
+		}
+		return CONDITION_TRUE;
+	}
+	if (IS_DIRECTIVE_MATCH("#MaxThreadsBuffer"))
+	{
+		// Set the default mode that will be used if there's no parameter at all:
+		g_MaxThreadsBuffer = true;
+		RETURN_IF_NO_CHAR
+		if (Line::ConvertOnOff(cp) == TOGGLED_OFF)
+			g_MaxThreadsBuffer = false;
+		// else leave the default to "true" as set above.
 		return CONDITION_TRUE;
 	}
 	if (IS_DIRECTIVE_MATCH("#HotkeyModifierTimeout"))
 	{
 		RETURN_IF_NO_CHAR
-		g_HotkeyModifierTimeout = atoi(cp);  // cp was set to the right position by the above macro
+		g_HotkeyModifierTimeout = ATOI(cp);  // cp was set to the right position by the above macro
 		return CONDITION_TRUE;
 	}
 	if (IS_DIRECTIVE_MATCH("#MaxThreads"))
 	{
 		RETURN_IF_NO_CHAR
-		value = atoi(cp);  // cp was set to the right position by the above macro
+		value = ATOI(cp);  // cp was set to the right position by the above macro
 		if (value > MAX_THREADS_LIMIT) // For now, keep this limited to prevent stack overflow due to too many pseudo-threads.
 			value = MAX_THREADS_LIMIT;
 		else if (value < 1)
@@ -1419,7 +1485,7 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 	{
 		RETURN_IF_NO_CHAR
 		// Use value as a temp holder since it's int vs. UCHAR and can thus detect very large or negative values:
-		value = atoi(cp);  // cp was set to the right position by the above macro
+		value = ATOI(cp);  // cp was set to the right position by the above macro
 		if (value > MAX_THREADS_LIMIT) // For now, keep this limited to prevent stack overflow due to too many pseudo-threads.
 			value = MAX_THREADS_LIMIT;
 		else if (value < 1)
@@ -1430,7 +1496,7 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 	if (IS_DIRECTIVE_MATCH("#HotkeyInterval"))
 	{
 		RETURN_IF_NO_CHAR
-		g_HotkeyThrottleInterval = atoi(cp);  // cp was set to the right position by the above macro
+		g_HotkeyThrottleInterval = ATOI(cp);  // cp was set to the right position by the above macro
 		if (g_HotkeyThrottleInterval < 10) // values under 10 wouldn't be useful due to timer granularity.
 			g_HotkeyThrottleInterval = 10;
 		return CONDITION_TRUE;
@@ -1438,7 +1504,7 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 	if (IS_DIRECTIVE_MATCH("#MaxHotkeysPerInterval"))
 	{
 		RETURN_IF_NO_CHAR
-		g_MaxHotkeysPerInterval = atoi(cp);  // cp was set to the right position by the above macro
+		g_MaxHotkeysPerInterval = ATOI(cp);  // cp was set to the right position by the above macro
 		if (g_MaxHotkeysPerInterval <= 0) // sanity check
 			g_MaxHotkeysPerInterval = 1;
 		return CONDITION_TRUE;
@@ -1957,7 +2023,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 			else // It has more than 3 apparent params, but is the first param even numeric?
 			{
 				*delimiter[0] = '\0'; // Temporarily terminate action_args at the first delimiter.
-				if (!IsPureNumeric(action_args, false, false, false)) // No floats allowed in this case.
+				if (!IsPureNumeric(action_args)) // No floats allowed.  Allow all-whitespace for aut2 compatibility.
 					max_params_override = 1;
 				*delimiter[0] = g_delimiter; // Restore the string.
 				if (!max_params_override)
@@ -2567,7 +2633,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_FILEREADLINE:
 		if (line->mArgc > 2 && !line->ArgHasDeref(3))
 		{
-			if (!IsPureNumeric(LINE_RAW_ARG3, false, false, false) || !_atoi64(LINE_RAW_ARG3))
+			if (!IsPureNumeric(LINE_RAW_ARG3, false, false, false) || !ATOI64(LINE_RAW_ARG3))
 				// This error is caught at load-time, but at runtime it's not considered
 				// an error (i.e. if a variable resolves to zero or less, StringMid will
 				// automatically consider it to be 1, though FileReadLine would consider
@@ -2632,7 +2698,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_SOUNDSET:
 		if (aActionType == ACT_SOUNDSET && line->mArgc > 0 && !line->ArgHasDeref(1))
 		{
-			value_float = atof(LINE_RAW_ARG1);
+			value_float = ATOF(LINE_RAW_ARG1);
 			if (value_float < -100 || value_float > 100)
 				return ScriptError(ERR_PERCENT, LINE_RAW_ARG1);
 		}
@@ -2645,7 +2711,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_SOUNDSETWAVEVOLUME:
 		if (line->mArgc > 0 && !line->ArgHasDeref(1))
 		{
-			value_float = atof(LINE_RAW_ARG1);
+			value_float = ATOF(LINE_RAW_ARG1);
 			if (value_float < -100 || value_float > 100)
 				return ScriptError(ERR_PERCENT, LINE_RAW_ARG1);
 		}
@@ -2660,7 +2726,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_PIXELSEARCH:
 		if (line->mArgc > 7 && !line->ArgHasDeref(8) && *LINE_RAW_ARG8)
 		{
-			value = atoi(LINE_RAW_ARG8);
+			value = ATOI(LINE_RAW_ARG8);
 			if (value < 0 || value > 255)
 				return ScriptError("Parameter #8 must be number between 0 and 255, blank, or a variable reference."
 					, LINE_RAW_ARG8);
@@ -2670,7 +2736,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_MOUSEMOVE:
 		if (line->mArgc > 2 && !line->ArgHasDeref(3) && *LINE_RAW_ARG3)
 		{
-			value = atoi(LINE_RAW_ARG3);
+			value = ATOI(LINE_RAW_ARG3);
 			if (value < 0 || value > MAX_MOUSE_SPEED)
 				return ScriptError(ERR_MOUSE_SPEED, LINE_RAW_ARG3);
 		}
@@ -2680,7 +2746,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_MOUSECLICK:
 		if (line->mArgc > 4 && !line->ArgHasDeref(5) && *LINE_RAW_ARG5)
 		{
-			value = atoi(LINE_RAW_ARG5);
+			value = ATOI(LINE_RAW_ARG5);
 			if (value < 0 || value > MAX_MOUSE_SPEED)
 				return ScriptError(ERR_MOUSE_SPEED, LINE_RAW_ARG5);
 		}
@@ -2697,7 +2763,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_MOUSECLICKDRAG:
 		if (line->mArgc > 5 && !line->ArgHasDeref(6) && *LINE_RAW_ARG6)
 		{
-			value = atoi(LINE_RAW_ARG6);
+			value = ATOI(LINE_RAW_ARG6);
 			if (value < 0 || value > MAX_MOUSE_SPEED)
 				return ScriptError(ERR_MOUSE_SPEED, LINE_RAW_ARG6);
 		}
@@ -2712,7 +2778,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_SETDEFAULTMOUSESPEED:
 		if (line->mArgc > 0 && !line->ArgHasDeref(1) && *LINE_RAW_ARG1)
 		{
-			value = atoi(LINE_RAW_ARG1);
+			value = ATOI(LINE_RAW_ARG1);
 			if (value < 0 || value > MAX_MOUSE_SPEED)
 				return ScriptError(ERR_MOUSE_SPEED, LINE_RAW_ARG1);
 		}
@@ -2819,7 +2885,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_FILESELECTFILE:
 		if (line->mArgc > 1 && !line->ArgHasDeref(2) && *LINE_RAW_ARG2)
 		{
-			value = atoi(LINE_RAW_ARG2);
+			value = ATOI(LINE_RAW_ARG2);
 			if (value < 0 || value > 31)
 				return ScriptError("Paremeter #2 must be either blank, a variable reference,"
 					" or a number between 0 and 31 inclusive.", LINE_RAW_ARG2);
@@ -2831,12 +2897,28 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			return ScriptError(ERR_TITLEMATCHMODE, LINE_RAW_ARG1);
 		break;
 	case ACT_SETFORMAT:
-		if (line->mArgc > 0 && !line->ArgHasDeref(1) && stricmp(LINE_RAW_ARG1, "float"))
-			return ScriptError("Parameter #1 must be the word FLOAT or a variable reference.", LINE_RAW_ARG1);
+		if (line->mArgc > 0 && !line->ArgHasDeref(1))
+		{
+            if (!stricmp(LINE_RAW_ARG1, "float"))
+			{
+				if (line->mArgc > 1 && !line->ArgHasDeref(2))
+				{
+					if (!IsPureNumeric(LINE_RAW_ARG2, true, false, true))
+						return ScriptError("Parameter #2 must be numeric when used with FLOAT.", LINE_RAW_ARG2);
+					if (strlen(LINE_RAW_ARG2) >= sizeof(g.FormatFloat) - 2)
+						return ScriptError("Parameter #2 is too long for use with FLOAT.", LINE_RAW_ARG2);
+				}
+			}
+			else if (!stricmp(LINE_RAW_ARG1, "integer"))
+			{
+				if (line->mArgc > 1 && !line->ArgHasDeref(2) && toupper(*LINE_RAW_ARG2) != 'H' && toupper(*LINE_RAW_ARG2) != 'D')
+					return ScriptError("Parameter #2 must be either H or D when used with INTEGER.", LINE_RAW_ARG2);
+			}
+			else
+				return ScriptError("Parameter #1 must be a variable reference or the word INTEGER or FLOAT.", LINE_RAW_ARG1);
+		}
 		// Size must be less than sizeof() minus 2 because need room to prepend the '%' and append
 		// the 'f' to make it a valid format specifier string:
-		if (line->mArgc > 1 && !line->ArgHasDeref(2) && strlen(LINE_RAW_ARG2) >= sizeof(g.FormatFloat) - 2)
-			return ScriptError("Parameter #2 is too long.", LINE_RAW_ARG1);
 		break;
 
 	case ACT_MENU:
@@ -2846,10 +2928,34 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			return ScriptError(ERR_MENUCOMMAND, LINE_RAW_ARG2);
 		break;
 
+	case ACT_WINSET:
+		if (line->mArgc > 0 && !line->ArgHasDeref(1))
+		{
+			switch(line->ConvertWinSetAttribute(LINE_RAW_ARG1))
+			{
+			case WINSET_TRANSPARENT:
+				if (line->mArgc > 1 && !line->ArgHasDeref(2))
+				{
+					value = ATOI(LINE_RAW_ARG2);
+					if (value < 0 || value > 255)
+						return ScriptError("Parameter #2 must be between 0 and 255 when used with TRANSPARENT."
+							, LINE_RAW_ARG2);
+				}
+				break;
+			case WINSET_ALWAYSONTOP:
+				if (line->mArgc > 1 && !line->ArgHasDeref(2) && !line->ConvertOnOffToggle(LINE_RAW_ARG2))
+					return ScriptError(ERR_ON_OFF_TOGGLE, LINE_RAW_ARG2);
+				break;
+			case WINSET_INVALID:
+				return ScriptError(ERR_WINSET, LINE_RAW_ARG1);
+			}
+		}
+		break;
+
 	case ACT_MSGBOX:
 		if (line->mArgc > 1) // i.e. this MsgBox is using the 3-param or 4-param style.
 			if (!line->ArgHasDeref(1)) // i.e. if it's a deref, we won't try to validate it now.
-				if (!IsPureNumeric(LINE_RAW_ARG1))
+				if (!IsPureNumeric(LINE_RAW_ARG1)) // Allow it to be entirely whitespace to indicate 0, like Aut2.
 					return ScriptError("When used with more than one parameter, MsgBox requires that"
 						" the 1st parameter be numeric or a variable reference.", LINE_RAW_ARG1);
 		if (line->mArgc > 3)
@@ -2875,7 +2981,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 	case ACT_DIV:
 		if (!line->ArgHasDeref(2)) // i.e. if it's a deref, we won't try to validate it now.
-			if (!_atoi64(LINE_RAW_ARG2))
+			if (!ATOI64(LINE_RAW_ARG2))
 				return ScriptError("This line would attempt to divide by zero.");
 		break;
 	case ACT_GROUPADD:
@@ -3088,6 +3194,14 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 		LineError(DYNAMIC_TOO_LONG, FAIL, mArg[aArgIndex].text);
 		return NULL;
 	}
+	
+	if (!vni)
+	{
+		LineError("This dynamic variable is blank.  If this variable was not intended to be dynamic,"
+			" remove the % symbols from it.", FAIL, mArg[aArgIndex].text);
+		return NULL;
+	}
+
 	// Terminate the buffer, even if nothing was written into it:
 	var_name[vni] = '\0';
 
@@ -4216,7 +4330,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 			if (!is_infinite)
 				// Must be set to zero at least for ATTR_LOOP_FILE:
 				iteration_limit = (attr == ATTR_LOOP_FILE || attr == ATTR_LOOP_REG || attr == ATTR_LOOP_READ_FILE
-					||  attr == ATTR_LOOP_PARSE) ? 0 : _atoi64(LINE_ARG1);
+					||  attr == ATTR_LOOP_PARSE) ? 0 : ATOI64(LINE_ARG1);
 
 			if (line->mActionType == ACT_REPEAT && !iteration_limit)
 				is_infinite = true;  // Because a 0 means infinite in AutoIt2 for the REPEAT command.
@@ -4360,9 +4474,9 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 			else
 				// This has been tested and it does return the error code indicated in ARG1, if present
 				// (otherwise it returns 0, naturally) as expected:
-				g_script.ExitApp(NULL, atoi(LINE_ARG1));  // Seems more reliable than PostQuitMessage().
+				g_script.ExitApp(NULL, ATOI(LINE_ARG1));  // Seems more reliable than PostQuitMessage().
 		case ACT_EXITAPP: // Unconditional exit.
-			g_script.ExitApp(NULL, atoi(LINE_ARG1));  // Seems more reliable than PostQuitMessage().
+			g_script.ExitApp(NULL, ATOI(LINE_ARG1));  // Seems more reliable than PostQuitMessage().
 		case ACT_BLOCK_BEGIN:
 			// Don't count block-begin/end against the total since they should be nearly instantaneous:
 			//++g_script.mLinesExecutedThisCycle;
@@ -4534,9 +4648,9 @@ inline ResultType Line::EvaluateCondition()
 		IF_EITHER_IS_NON_NUMERIC
 			if_condition = !STRING_COMPARE;
 		else IF_EITHER_IS_FLOAT  // It might perform better to only do float conversions & math when necessary.
-			if_condition = atof(ARG1) == atof(ARG2);
+			if_condition = ATOF(ARG1) == ATOF(ARG2);
 		else
-			if_condition = _atoi64(ARG1) == _atoi64(ARG2);
+			if_condition = ATOI64(ARG1) == ATOI64(ARG2);
 
 		break;
 	case ACT_IFNOTEQUAL:
@@ -4544,45 +4658,45 @@ inline ResultType Line::EvaluateCondition()
 		IF_EITHER_IS_NON_NUMERIC
 			if_condition = STRING_COMPARE;
 		else IF_EITHER_IS_FLOAT  // It might perform better to only do float conversions & math when necessary.
-			if_condition = atof(ARG1) != atof(ARG2);
+			if_condition = ATOF(ARG1) != ATOF(ARG2);
 		else
-			if_condition = _atoi64(ARG1) != _atoi64(ARG2);
+			if_condition = ATOI64(ARG1) != ATOI64(ARG2);
 		break;
 	case ACT_IFLESS:
 		DETERMINE_NUMERIC_TYPES
 		IF_EITHER_IS_NON_NUMERIC
 			if_condition = STRING_COMPARE < 0;
 		else IF_EITHER_IS_FLOAT  // It might perform better to only do float conversions & math when necessary.
-			if_condition = atof(ARG1) < atof(ARG2);
+			if_condition = ATOF(ARG1) < ATOF(ARG2);
 		else
-			if_condition = _atoi64(ARG1) < _atoi64(ARG2);
+			if_condition = ATOI64(ARG1) < ATOI64(ARG2);
 		break;
 	case ACT_IFLESSOREQUAL:
 		DETERMINE_NUMERIC_TYPES
 		IF_EITHER_IS_NON_NUMERIC
 			if_condition = STRING_COMPARE <= 0;
 		else IF_EITHER_IS_FLOAT  // It might perform better to only do float conversions & math when necessary.
-			if_condition = atof(ARG1) <= atof(ARG2);
+			if_condition = ATOF(ARG1) <= ATOF(ARG2);
 		else
-			if_condition = _atoi64(ARG1) <= _atoi64(ARG2);
+			if_condition = ATOI64(ARG1) <= ATOI64(ARG2);
 		break;
 	case ACT_IFGREATER:
 		DETERMINE_NUMERIC_TYPES
 		IF_EITHER_IS_NON_NUMERIC
 			if_condition = STRING_COMPARE > 0;
 		else IF_EITHER_IS_FLOAT  // It might perform better to only do float conversions & math when necessary.
-			if_condition = atof(ARG1) > atof(ARG2);
+			if_condition = ATOF(ARG1) > ATOF(ARG2);
 		else
-			if_condition = _atoi64(ARG1) > _atoi64(ARG2);
+			if_condition = ATOI64(ARG1) > ATOI64(ARG2);
 		break;
 	case ACT_IFGREATEROREQUAL:
 		DETERMINE_NUMERIC_TYPES
 		IF_EITHER_IS_NON_NUMERIC
 			if_condition = STRING_COMPARE >= 0;
 		else IF_EITHER_IS_FLOAT  // It might perform better to only do float conversions & math when necessary.
-			if_condition = atof(ARG1) >= atof(ARG2);
+			if_condition = ATOF(ARG1) >= ATOF(ARG2);
 		else
-			if_condition = _atoi64(ARG1) >= _atoi64(ARG2);
+			if_condition = ATOI64(ARG1) >= ATOI64(ARG2);
 		break;
 
 	case ACT_IFIS:
@@ -5168,7 +5282,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_WINCLOSE:
 	case ACT_WINKILL:
 	{
-		int wait_time = *ARG3 ? (int)(1000 * atof(ARG3)) : DEFAULT_WINCLOSE_WAIT;
+		int wait_time = *ARG3 ? (int)(1000 * ATOF(ARG3)) : DEFAULT_WINCLOSE_WAIT;
 		if (!wait_time) // 0 is defined as 500ms, which seems more useful than a true zero.
 			wait_time = 500;
 		if (WinClose(ARG1, ARG2, wait_time, ARG4, ARG5, mActionType == ACT_WINKILL))
@@ -5230,13 +5344,13 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		return result;
 
 	case ACT_SHUTDOWN:
-		return Util_Shutdown(atoi(ARG1)) ? OK : FAIL;
+		return Util_Shutdown(ATOI(ARG1)) ? OK : FAIL;
 	case ACT_SLEEP:
 	{
 		// Only support 32-bit values for this command, since it seems unlikely anyone would to have
 		// it sleep more than 24.8 days or so.  It also helps performance on 32-bit hardware because
 		// MsgSleep() is so heavily called and checks the value of the first parameter frequently:
-		int sleep_time = atoi(ARG1);
+		int sleep_time = ATOI(ARG1);
 
 		// Do a true sleep on Win9x because the MsgSleep() method is very inaccurate on Win9x
 		// for some reason (a MsgSleep(1) causes a sleep between 10 and 55ms, for example).
@@ -5284,10 +5398,34 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_URLDOWNLOADTOFILE:
 		return URLDownloadToFile(TWO_ARGS);
 
+	case ACT_RUNAS:
+		if (!g_os.IsWin2000orLater()) // Do nothing if the OS doesn't support it.
+			return OK;
+		if (mArgc < 1)
+		{
+			if (!g_script.mRunAsUser) // memory not yet allocated so nothing needs to be done.
+				return OK;
+			*g_script.mRunAsUser = *g_script.mRunAsPass = *g_script.mRunAsDomain = 0; // wide-character terminator.
+			return OK;
+		}
+		// Otherwise, the credentials are being set or updated:
+		if (!g_script.mRunAsUser) // allocate memory (only needed the first time this is done).
+		{
+			// It's more memory efficient to allocate a single block and divide it up.
+			// This memory is freed automatically by the OS upon program termination.
+			if (   !(g_script.mRunAsUser = (wchar_t *)malloc(3 * RUNAS_ITEM_SIZE))   )
+				return LineError("RunAs: Out of memory." ERR_ABORT);
+			g_script.mRunAsPass = g_script.mRunAsUser + RUNAS_ITEM_SIZE;
+			g_script.mRunAsDomain = g_script.mRunAsPass + RUNAS_ITEM_SIZE;
+			mbstowcs(g_script.mRunAsUser, ARG1, RUNAS_ITEM_SIZE);
+			mbstowcs(g_script.mRunAsPass, ARG2, RUNAS_ITEM_SIZE);
+			mbstowcs(g_script.mRunAsDomain, ARG3, RUNAS_ITEM_SIZE);
+		}
+		return OK;
 	case ACT_RUN:
-		return g_script.ActionExec(ARG1, NULL, ARG2, true, ARG3);  // Be sure to pass NULL for 2nd param.
+		return g_script.ActionExec(ARG1, NULL, ARG2, true, ARG3, NULL, true);  // Be sure to pass NULL for 2nd param.
 	case ACT_RUNWAIT:
-		if (!g_script.ActionExec(ARG1, NULL, ARG2, true, ARG3, &running_process))
+		if (!g_script.ActionExec(ARG1, NULL, ARG2, true, ARG3, &running_process, true))
 			return FAIL;
 		// else fall through to the below.
 	case ACT_CLIPWAIT:
@@ -5305,7 +5443,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			// Since the param containing the timeout value isn't blank, it must be numeric,
 			// otherwise, the loading validation would have prevented the script from loading.
 			wait_indefinitely = false;
-			sleep_duration = (int)(atof(mActionType == ACT_CLIPWAIT ? ARG1 : ARG3) * 1000); // Can be zero.
+			sleep_duration = (int)(ATOF(mActionType == ACT_CLIPWAIT ? ARG1 : ARG3) * 1000); // Can be zero.
 			if (sleep_duration <= 0)
 				// Waiting 500ms in place of a "0" seems more useful than a true zero, which
 				// doens't need to be supported because it's the same thing as something like
@@ -5436,7 +5574,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		}
 		else // Default button when the param is blank or an reference to an empty var.
 			vk = VK_LBUTTON;
-		return ControlClick(vk, *ARG5 ? atoi(ARG5) : 1, *ARG6, ARG1, ARG2, ARG3, ARG7, ARG8);
+		return ControlClick(vk, *ARG5 ? ATOI(ARG5) : 1, *ARG6, ARG1, ARG2, ARG3, ARG7, ARG8);
 	case ACT_CONTROLGETFOCUS:
 		return ControlGetFocus(ARG2, ARG3, ARG4, ARG5);
 	case ACT_CONTROLFOCUS:
@@ -5449,6 +5587,12 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		return StatusBarGetText(ARG2, ARG3, ARG4, ARG5, ARG6);
 	case ACT_STATUSBARWAIT:
 		return StatusBarWait(EIGHT_ARGS);
+	case ACT_POSTMESSAGE:
+		return ScriptPostMessage(EIGHT_ARGS);
+	case ACT_SENDMESSAGE:
+		return ScriptSendMessage(EIGHT_ARGS);
+	case ACT_WINSET:
+		return WinSet(SIX_ARGS);
 	case ACT_WINSETTITLE:
 		return mArgc > 1 ? WinSetTitle(FIVE_ARGS) : WinSetTitle("", "", ARG1);
 	case ACT_WINGETTITLE:
@@ -5458,9 +5602,9 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_WINGETPOS:
 		return WinGetPos(ARG5, ARG6, ARG7, ARG8);
 	case ACT_PIXELSEARCH:
-		return PixelSearch(atoi(ARG3), atoi(ARG4), atoi(ARG5), atoi(ARG6), atoi(ARG7), atoi(ARG8));
+		return PixelSearch(ATOI(ARG3), ATOI(ARG4), ATOI(ARG5), ATOI(ARG6), ATOI(ARG7), ATOI(ARG8));
 	case ACT_PIXELGETCOLOR:
-		return PixelGetColor(atoi(ARG2), atoi(ARG3));
+		return PixelGetColor(ATOI(ARG2), ATOI(ARG3));
 	case ACT_WINMINIMIZEALL: // From AutoIt3 source:
 		PostMessage(FindWindow("Shell_TrayWnd", NULL), WM_COMMAND, 419, 0);
 		DoWinDelay;
@@ -5507,7 +5651,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		case TOGGLED_ON:  g_script.UpdateOrCreateTimer(target_label, -1, true); break;
 		case TOGGLED_OFF: g_script.UpdateOrCreateTimer(target_label, -1, false); break;
 		// Timer is always (re)enabled when ARG2 is blank or specifies a numeric period:
-		default: g_script.UpdateOrCreateTimer(target_label, atoi(ARG2), true); // Read any float as an int.
+		default: g_script.UpdateOrCreateTimer(target_label, ATOI(ARG2), true); // Read any float as an int.
 		}
 		return OK;
 	}
@@ -5566,7 +5710,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_STRINGLEFT:
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
-		chars_to_extract = atoi(ARG3); // Use 32-bit signed to detect negatives and fit it VarSizeType.
+		chars_to_extract = ATOI(ARG3); // Use 32-bit signed to detect negatives and fit it VarSizeType.
 		if (chars_to_extract < 0)
 			// For these we don't report an error, since it might be intentional for
 			// it to be called this way, in which case it will do nothing other than
@@ -5582,7 +5726,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_STRINGRIGHT:
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
-		chars_to_extract = atoi(ARG3); // Use 32-bit signed to detect negatives and fit it VarSizeType.
+		chars_to_extract = ATOI(ARG3); // Use 32-bit signed to detect negatives and fit it VarSizeType.
 		if (chars_to_extract < 0)
 			chars_to_extract = 0;
 		source_length = strlen(ARG2);
@@ -5594,13 +5738,13 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_STRINGMID:
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
-		start_char_num = atoi(ARG3);
+		start_char_num = ATOI(ARG3);
 		if (start_char_num <= 0)
 			// It's somewhat debatable, but it seems best not to report an error in this and
 			// other cases.  The result here is probably enough to speak for itself, for script
 			// debugging purposes:
 			start_char_num = 1; // 1 is the position of the first char, unlike StringGetPos.
-		chars_to_extract = atoi(ARG4); // Use 32-bit signed to detect negatives and fit it VarSizeType.
+		chars_to_extract = ATOI(ARG4); // Use 32-bit signed to detect negatives and fit it VarSizeType.
 		if (chars_to_extract < 0)
 			chars_to_extract = 0;
 		// Assign() is capable of doing what we want in this case.
@@ -5613,7 +5757,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_STRINGTRIMLEFT:
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
-		chars_to_extract = atoi(ARG3); // Use 32-bit signed to detect negatives and fit it VarSizeType.
+		chars_to_extract = ATOI(ARG3); // Use 32-bit signed to detect negatives and fit it VarSizeType.
 		if (chars_to_extract < 0)
 			chars_to_extract = 0;
 		source_length = strlen(ARG2);
@@ -5624,7 +5768,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_STRINGTRIMRIGHT:
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
-		chars_to_extract = atoi(ARG3); // Use 32-bit signed to detect negatives and fit it VarSizeType.
+		chars_to_extract = ATOI(ARG3); // Use 32-bit signed to detect negatives and fit it VarSizeType.
 		if (chars_to_extract < 0)
 			chars_to_extract = 0;
 		source_length = strlen(ARG2);
@@ -5797,13 +5941,23 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 				//else
 				return output_var->Assign(IsKeyToggledOn(vk) ? "D" : "U");
 			case 'P': // Physical state of key.
-				if (g_hhkLowLevelKeybd)
-					// Since the hook is installed, use its value rather than that from
-					// GetAsyncKeyState(), which doesn't seem to work as advertised, at
-					// least under WinXP:
-					return output_var->Assign(g_PhysicalKeyState[vk] ? "D" : "U");
-				else // Even for Win9x, it seems slightly better to call this rather than IsKeyDown9x():
-					return output_var->Assign(IsPhysicallyDown(vk) ? "D" : "U");
+				if (VK_IS_MOUSE(vk)) // mouse button
+				{
+					if (g_hhkLowLevelMouse) // mouse hook is installed, so use it's tracking of physical state.
+						return output_var->Assign(g_PhysicalKeyState[vk] ? "D" : "U");
+					else // Even for Win9x, it seems slightly better to call this rather than IsKeyDown9x():
+						return output_var->Assign(IsPhysicallyDown(vk) ? "D" : "U");
+				}
+				else // keyboard
+				{
+					if (g_hhkLowLevelKeybd)
+						// Since the hook is installed, use its value rather than that from
+						// GetAsyncKeyState(), which doesn't seem to return the physical state
+						// as expected/advertised, least under WinXP:
+						return output_var->Assign(g_PhysicalKeyState[vk] ? "D" : "U");
+					else // Even for Win9x, it seems slightly better to call this rather than IsKeyDown9x():
+						return output_var->Assign(IsPhysicallyDown(vk) ? "D" : "U");
+				}
 			default: // Logical state of key.
 				if (g_os.IsWin9x())
 					return output_var->Assign(IsKeyDown9x(vk) ? "D" : "U"); // This seems more likely to be reliable.
@@ -5824,8 +5978,8 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			|| IsPureNumeric(ARG3, true, false, true) == PURE_FLOAT;
 		if (use_float)
 		{
-			double rand_min = *ARG2 ? atof(ARG2) : 0;
-			double rand_max = *ARG3 ? atof(ARG3) : INT_MAX;
+			double rand_min = *ARG2 ? ATOF(ARG2) : 0;
+			double rand_max = *ARG3 ? ATOF(ARG3) : INT_MAX;
 			// Seems best not to use ErrorLevel for this command at all, since silly cases
 			// such as Max > Min are too rare.  Swap the two values instead.
 			if (rand_min > rand_max)
@@ -5838,8 +5992,8 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		}
 		else // Avoid using floating point, where possible, which may improve speed a lot more than expected.
 		{
-			int rand_min = *ARG2 ? atoi(ARG2) : 0;
-			int rand_max = *ARG3 ? atoi(ARG3) : INT_MAX;
+			int rand_min = *ARG2 ? ATOI(ARG2) : 0;
+			int rand_max = *ARG3 ? ATOI(ARG3) : INT_MAX;
 			// Seems best not to use ErrorLevel for this command at all, since silly cases
 			// such as Max > Min are too rare.  Swap the two values instead.
 			if (rand_min > rand_max)
@@ -5867,7 +6021,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		return DriveSpaceFree(ARG2);
 
 	case ACT_SOUNDGET:
-		device_id = *ARG4 ? atoi(ARG4) - 1 : 0;
+		device_id = *ARG4 ? ATOI(ARG4) - 1 : 0;
 		if (device_id < 0)
 			device_id = 0;
 		instance_number = 1;  // Set default.
@@ -5877,7 +6031,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			, (UINT)device_id);
 
 	case ACT_SOUNDSET:
-		device_id = *ARG4 ? atoi(ARG4) - 1 : 0; // For the command syntax, 1 is the first device, not 0.
+		device_id = *ARG4 ? ATOI(ARG4) - 1 : 0; // For the command syntax, 1 is the first device, not 0.
 		if (device_id < 0)
 			device_id = 0;
 		instance_number = 1;  // Set default.
@@ -5887,13 +6041,13 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			, (UINT)device_id);
 
 	case ACT_SOUNDGETWAVEVOLUME:
-		device_id = *ARG2 ? atoi(ARG2) - 1 : 0;
+		device_id = *ARG2 ? ATOI(ARG2) - 1 : 0;
 		if (device_id < 0)
 			device_id = 0;
 		return SoundGetWaveVolume((HWAVEOUT)device_id);
 
 	case ACT_SOUNDSETWAVEVOLUME:
-		device_id = *ARG2 ? atoi(ARG2) - 1 : 0;
+		device_id = *ARG2 ? ATOI(ARG2) - 1 : 0;
 		if (device_id < 0)
 			device_id = 0;
 		return SoundSetWaveVolume(ARG1, (HWAVEOUT)device_id);
@@ -5957,7 +6111,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_FILESELECTFILE:
 		return FileSelectFile(ARG2, ARG3, ARG4, ARG5);
 	case ACT_FILESELECTFOLDER:
-		return FileSelectFolder(ARG2, *ARG3 ? (atoi(ARG3) != 0) : true, ARG4);
+		return FileSelectFolder(ARG2, *ARG3 ? (ATOI(ARG3) != 0) : true, ARG4);
 	case ACT_FILECREATESHORTCUT:
 		return FileCreateShortcut(SEVEN_ARGS);
 
@@ -5971,8 +6125,15 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		#define DETERMINE_NUMERIC_TYPES \
 			value_is_pure_numeric = IsPureNumeric(ARG2, true, false, true, true);\
 			var_is_pure_numeric = IsPureNumeric(output_var->Contents(), true, false, true, true);
-//		#define IF_EITHER_IS_NON_NUMERIC if (!value_is_pure_numeric || !var_is_pure_numeric)
-		#define IF_EITHER_IS_FLOAT if (value_is_pure_numeric == PURE_FLOAT || var_is_pure_numeric == PURE_FLOAT)
+
+		// Some performance can be gained by relying on the fact that short-circuit boolean
+		// can skip the "var_is_pure_numeric" check whenever value_is_pure_numeric == PURE_FLOAT.
+		// This is because var_is_pure_numeric is never directly needed here (unlike EvaluateCondition()).
+		// However, benchmarks show that this makes such a small difference that it's not worth the
+		// loss of maintainability and the slightly larger code size due to macro expansion:
+		//#undef IF_EITHER_IS_FLOAT
+		//#define IF_EITHER_IS_FLOAT if (value_is_pure_numeric == PURE_FLOAT \
+		//	|| IsPureNumeric(output_var->Contents(), true, false, true, true) == PURE_FLOAT)
 
 		DETERMINE_NUMERIC_TYPES
 
@@ -5983,7 +6144,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			else
 			{
 				// Use double to support a floating point value for days, hours, minutes, etc:
-				double nUnits = atof(ARG2);  // atof() returns a double, at least on MSVC++ 7.x
+				double nUnits = ATOF(ARG2);  // ATOF() returns a double, at least on MSVC++ 7.x
 				FILETIME ft, ftNowUTC;
 				if (*output_var->Contents())
 				{
@@ -6027,9 +6188,9 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		else // The command is being used to do normal math (not date-time).
 		{
 			IF_EITHER_IS_FLOAT
-				return output_var->Assign(atof(output_var->Contents()) + atof(ARG2));  // Overload: Assigns a double.
+				return output_var->Assign(ATOF(output_var->Contents()) + ATOF(ARG2));  // Overload: Assigns a double.
 			else // Non-numeric variables or values are considered to be zero for the purpose of the calculation.
-				return output_var->Assign(_atoi64(output_var->Contents()) + _atoi64(ARG2));  // Overload: Assigns an int.
+				return output_var->Assign(ATOI64(output_var->Contents()) + ATOI64(ARG2));  // Overload: Assigns an int.
 		}
 		return OK;  // Never executed.
 	case ACT_SUB:
@@ -6060,9 +6221,9 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		{
 			DETERMINE_NUMERIC_TYPES
 			IF_EITHER_IS_FLOAT
-				return output_var->Assign(atof(output_var->Contents()) - atof(ARG2));  // Overload: Assigns a double.
+				return output_var->Assign(ATOF(output_var->Contents()) - ATOF(ARG2));  // Overload: Assigns a double.
 			else // Non-numeric variables or values are considered to be zero for the purpose of the calculation.
-				return output_var->Assign(_atoi64(output_var->Contents()) - _atoi64(ARG2));  // Overload: Assigns an INT.
+				return output_var->Assign(ATOI64(output_var->Contents()) - ATOI64(ARG2));  // Overload: Assigns an INT.
 			break;
 		}
 
@@ -6074,9 +6235,9 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			return FAIL;
 		DETERMINE_NUMERIC_TYPES
 		IF_EITHER_IS_FLOAT
-			return output_var->Assign(atof(output_var->Contents()) * atof(ARG2));  // Overload: Assigns a double.
+			return output_var->Assign(ATOF(output_var->Contents()) * ATOF(ARG2));  // Overload: Assigns a double.
 		else // Non-numeric variables or values are considered to be zero for the purpose of the calculation.
-			return output_var->Assign(_atoi64(output_var->Contents()) * _atoi64(ARG2));  // Overload: Assigns an INT.
+			return output_var->Assign(ATOI64(output_var->Contents()) * ATOI64(ARG2));  // Overload: Assigns an INT.
 
 	case ACT_DIV:
 	{
@@ -6085,18 +6246,18 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		DETERMINE_NUMERIC_TYPES
 		IF_EITHER_IS_FLOAT
 		{
-			double ARG2_as_float = atof(ARG2);  // Since atof() returns double, at least on MSVC++ 7.x
+			double ARG2_as_float = ATOF(ARG2);  // Since ATOF() returns double, at least on MSVC++ 7.x
 			// It's a little iffy to compare floats this way, but what's the alternative?:
 			if (ARG2_as_float == (double)0.0)
 				return LineError("This line would attempt to divide by zero." ERR_ABORT, FAIL, ARG2);
-			return output_var->Assign(atof(output_var->Contents()) / ARG2_as_float);  // Overload: Assigns a double.
+			return output_var->Assign(ATOF(output_var->Contents()) / ARG2_as_float);  // Overload: Assigns a double.
 		}
 		else // Non-numeric variables or values are considered to be zero for the purpose of the calculation.
 		{
-			__int64 ARG2_as_int = _atoi64(ARG2);
+			__int64 ARG2_as_int = ATOI64(ARG2);
 			if (!ARG2_as_int)
 				return LineError("This line would attempt to divide by zero." ERR_ABORT, FAIL, ARG2);
-			return output_var->Assign(_atoi64(output_var->Contents()) / ARG2_as_int);  // Overload: Assigns an INT.
+			return output_var->Assign(ATOI64(output_var->Contents()) / ARG2_as_int);  // Overload: Assigns an INT.
 		}
 	}
 
@@ -6150,7 +6311,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		else if (mArgc == 1) // In the special 1-parameter mode, the first param is the prompt.
 			result = MsgBox(ARG1);
 		else
-			result = MsgBox(ARG3, atoi(ARG1), ARG2, atof(ARG4));
+			result = MsgBox(ARG3, ATOI(ARG1), ARG2, ATOF(ARG4));
 		// Above allows backward compatibility with AutoIt2's param ordering while still
 		// permitting the new method of allowing only a single param.
 		if (!result)
@@ -6168,16 +6329,16 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
 		return InputBox(output_var, ARG2, ARG3, toupper(*ARG4) == 'H' // 4th is whether to hide input.
-			, *ARG5 ? atoi(ARG5) : INPUTBOX_DEFAULT
-			, *ARG6 ? atoi(ARG6) : INPUTBOX_DEFAULT
-			, *ARG7 ? atoi(ARG7) : INPUTBOX_DEFAULT
-			, *ARG8 ? atoi(ARG8) : INPUTBOX_DEFAULT);
+			, *ARG5 ? ATOI(ARG5) : INPUTBOX_DEFAULT
+			, *ARG6 ? ATOI(ARG6) : INPUTBOX_DEFAULT
+			, *ARG7 ? ATOI(ARG7) : INPUTBOX_DEFAULT
+			, *ARG8 ? ATOI(ARG8) : INPUTBOX_DEFAULT);
 
 	case ACT_SPLASHTEXTON:
 	{
 		// The SplashText command has been adapted from the AutoIt3 source.
-		int W = *ARG1 ? atoi(ARG1) : 200;  // AutoIt3 default is 500.
-		int H = *ARG2 ? atoi(ARG2) : 0;
+		int W = *ARG1 ? ATOI(ARG1) : 200;  // AutoIt3 default is 500.
+		int H = *ARG2 ? ATOI(ARG2) : 0;
 		// Above: AutoIt3 default is 400 but I like 0 better because the default might
 		// be accidentally triggered sometimes if the params are used wrong, or are blank
 		// derefs.  In such cases, 400 would create a large topmost, unmovable, unclosable
@@ -6260,25 +6421,25 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			return LineError(ERR_MOUSE_COORD ERR_ABORT, FAIL, ARG4);
 		// If no starting coords are specified, we tell the function to start at the
 		// current mouse position:
-		x = *ARG2 ? atoi(ARG2) : COORD_UNSPECIFIED;
-		y = *ARG3 ? atoi(ARG3) : COORD_UNSPECIFIED;
-		MouseClickDrag(vk, x, y, atoi(ARG4), atoi(ARG5), *ARG6 ? atoi(ARG6) : g.DefaultMouseSpeed);
+		x = *ARG2 ? ATOI(ARG2) : COORD_UNSPECIFIED;
+		y = *ARG3 ? ATOI(ARG3) : COORD_UNSPECIFIED;
+		MouseClickDrag(vk, x, y, ATOI(ARG4), ATOI(ARG5), *ARG6 ? ATOI(ARG6) : g.DefaultMouseSpeed);
 		return OK;
 	case ACT_MOUSECLICK:
 		if (   !(vk = ConvertMouseButton(ARG1))   )
 			return LineError(ERR_MOUSE_BUTTON ERR_ABORT, FAIL, ARG1);
 		if (!ValidateMouseCoords(ARG2, ARG3))
 			return LineError(ERR_MOUSE_COORD ERR_ABORT, FAIL, ARG2);
-		x = *ARG2 ? atoi(ARG2) : COORD_UNSPECIFIED;
-		y = *ARG3 ? atoi(ARG3) : COORD_UNSPECIFIED;
-		MouseClick(vk, x, y, *ARG4 ? atoi(ARG4) : 1, *ARG5 ? atoi(ARG5) : g.DefaultMouseSpeed, *ARG6);
+		x = *ARG2 ? ATOI(ARG2) : COORD_UNSPECIFIED;
+		y = *ARG3 ? ATOI(ARG3) : COORD_UNSPECIFIED;
+		MouseClick(vk, x, y, *ARG4 ? ATOI(ARG4) : 1, *ARG5 ? ATOI(ARG5) : g.DefaultMouseSpeed, *ARG6);
 		return OK;
 	case ACT_MOUSEMOVE:
 		if (!ValidateMouseCoords(ARG1, ARG2))
 			return LineError(ERR_MOUSE_COORD ERR_ABORT, FAIL, ARG1);
-		x = *ARG1 ? atoi(ARG1) : COORD_UNSPECIFIED;
-		y = *ARG2 ? atoi(ARG2) : COORD_UNSPECIFIED;
-		MouseMove(x, y, *ARG3 ? atoi(ARG3) : g.DefaultMouseSpeed);
+		x = *ARG1 ? ATOI(ARG1) : COORD_UNSPECIFIED;
+		y = *ARG2 ? ATOI(ARG2) : COORD_UNSPECIFIED;
+		MouseMove(x, y, *ARG3 ? ATOI(ARG3) : g.DefaultMouseSpeed);
 		return OK;
 	case ACT_MOUSEGETPOS:
 		return MouseGetPos();
@@ -6286,7 +6447,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 //////////////////////////////////////////////////////////////////////////
 
 	case ACT_SETDEFAULTMOUSESPEED:
-		g.DefaultMouseSpeed = atoi(ARG1);
+		g.DefaultMouseSpeed = (UCHAR)ATOI(ARG1);
 		// In case it was a deref, force it to be some default value if it's out of range:
 		if (g.DefaultMouseSpeed < 0 || g.DefaultMouseSpeed > MAX_MOUSE_SPEED)
 			g.DefaultMouseSpeed = DEFAULT_MOUSE_SPEED;
@@ -6311,34 +6472,50 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		return LineError(ERR_TITLEMATCHMODE2, FAIL, ARG1);
 
 	case ACT_SETFORMAT:
-	{
 		// For now, it doesn't seem necessary to have runtime validation of the first parameter.
 		// Just ignore the command if it's not valid:
-		if (stricmp(ARG1, "float"))
-			return OK;
-		// -2 to allow room for the letter 'f' and the '%' that will be added:
-		if (strlen(ARG2) >= sizeof(g.FormatFloat) - 2) // A variable that resolved to something too long.
-			return OK; // Seems best not to bother with a runtime error for something so rare.
-		// Make sure the formatted string wouldn't exceed the buffer size:
-		__int64 width = _atoi64(ARG2);
-		char *dot_pos = strchr(ARG2, '.');
-		__int64 precision = dot_pos ? _atoi64(dot_pos + 1) : 0;
-		if (width + precision + 2 > MAX_FORMATTED_NUMBER_LENGTH) // +2 to allow room for decimal point itself and a safety margin.
-			return OK; // Don't change it.
-		// Create as "%ARG2f".  Add a dot if none was specified so that "0" is the same as "0.", which
-		// seems like the most user-friendly approach; it's also easier to document in the help file.
-		// Note that %f can handle doubles in MSVC++:
-		sprintf(g.FormatFloat, "%%%s%sf", ARG2, dot_pos ? "" : ".");
+		if (!stricmp(ARG1, "float"))
+		{
+			// -2 to allow room for the letter 'f' and the '%' that will be added:
+			if (strlen(ARG2) >= sizeof(g.FormatFloat) - 2) // A variable that resolved to something too long.
+				return OK; // Seems best not to bother with a runtime error for something so rare.
+			// Make sure the formatted string wouldn't exceed the buffer size:
+			__int64 width = ATOI64(ARG2);
+			char *dot_pos = strchr(ARG2, '.');
+			__int64 precision = dot_pos ? ATOI64(dot_pos + 1) : 0;
+			if (width + precision + 2 > MAX_FORMATTED_NUMBER_LENGTH) // +2 to allow room for decimal point itself and a safety margin.
+				return OK; // Don't change it.
+			// Create as "%ARG2f".  Add a dot if none was specified so that "0" is the same as "0.", which
+			// seems like the most user-friendly approach; it's also easier to document in the help file.
+			// Note that %f can handle doubles in MSVC++:
+			sprintf(g.FormatFloat, "%%%s%sf", ARG2, dot_pos ? "" : ".");
+		}
+		else if (!stricmp(ARG1, "integer"))
+		{
+			switch(*ARG2)
+			{
+			case 'd':
+			case 'D':
+				g.FormatIntAsHex = false;
+				break;
+			case 'h':
+			case 'H':
+				g.FormatIntAsHex = true;
+				break;
+			// Otherwise, since the first letter isn't recongized, do nothing since 99% of the time such a
+			// probably would be caught at load-time.
+			}
+		}
+		// Otherwise, ignore invalid type at runtime since 99% of the time it would be caught at load-time:
 		return OK;
-	}
 
 	case ACT_MENU:
 		return g_script.PerformMenu(FOUR_ARGS);
 
-	case ACT_SETCONTROLDELAY: g.ControlDelay = atoi(ARG1); return OK;
-	case ACT_SETWINDELAY: g.WinDelay = atoi(ARG1); return OK;
-	case ACT_SETKEYDELAY: g.KeyDelay = atoi(ARG1); return OK;
-	case ACT_SETMOUSEDELAY: g.MouseDelay = atoi(ARG1); return OK;
+	case ACT_SETCONTROLDELAY: g.ControlDelay = ATOI(ARG1); return OK;
+	case ACT_SETWINDELAY: g.WinDelay = ATOI(ARG1); return OK;
+	case ACT_SETKEYDELAY: g.KeyDelay = ATOI(ARG1); return OK;
+	case ACT_SETMOUSEDELAY: g.MouseDelay = ATOI(ARG1); return OK;
 
 	case ACT_SETBATCHLINES:
 		// This below ensures that IntervalBeforeRest and LinesPerCycle aren't both in effect simultaneously
@@ -6347,14 +6524,14 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		if (stristr(ARG1, "ms")) // This detection isn't perfect, but it doesn't seem necessary to be too demanding.
 		{
 			g.LinesPerCycle = -1;  // Disable the old BatchLines method in favor of the new one below.
-			g.IntervalBeforeRest = atoi(ARG1);  // If negative, script never rests.  If 0, it rests after every line.
+			g.IntervalBeforeRest = ATOI(ARG1);  // If negative, script never rests.  If 0, it rests after every line.
 		}
 		else
 		{
 			g.IntervalBeforeRest = -1;  // Disable the new method in favor of the old one below:
 			// This value is signed 64-bits to support variable reference (i.e. containing a large int)
 			// the user might throw at it:
-			if (   !(g.LinesPerCycle = _atoi64(ARG1))   )
+			if (   !(g.LinesPerCycle = ATOI64(ARG1))   )
 				// Don't interpret zero as "infinite" because zero can accidentally
 				// occur if the dereferenced var was blank:
 				g.LinesPerCycle = DEFAULT_BATCH_LINES;
@@ -6364,9 +6541,9 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_SETINTERRUPT:
 		// If either one is blank, leave that setting as it was before.
 		if (*ARG1)
-			g.UninterruptibleTime = atoi(ARG1);  // 32-bit (for compatibility with DWORDs returned by GetTickCount).
+			g.UninterruptibleTime = ATOI(ARG1);  // 32-bit (for compatibility with DWORDs returned by GetTickCount).
 		if (*ARG2)
-			g.UninterruptedLineCountMax = atoi(ARG2);  // 32-bit also, to help performance (since huge values seem unnecessary).
+			g.UninterruptedLineCountMax = ATOI(ARG2);  // 32-bit also, to help performance (since huge values seem unnecessary).
 		return OK;
 
 	////////////////////////////////////////////////////////////////////////////////////////
@@ -6592,7 +6769,7 @@ ResultType Line::ExpandArgs()
 				// an integer.  This is because the user may have done some math on a variable
 				// such as SleepTime, such as dividing it, and thereby winding up with a float.
 				// Rather than forcing the user to truncate SleepTime into an Int, it seems
-				// best just to let atoi() convert the float into an int in these cases.
+				// best just to let ATOI() convert the float into an int in these cases.
 				// Note: The above only applies here, at runtime.  Incorrect literal floats are
 				// still flagged as load-time errors:
 				//allow_float = ArgAllowsFloat(*np);
@@ -7172,7 +7349,7 @@ char *Script::ListKeyHistory(char *aBuf, size_t aBufSize)
 
 
 ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, bool aDisplayErrors
-	, char *aRunShowMode, HANDLE *aProcess)
+	, char *aRunShowMode, HANDLE *aProcess, bool aUseRunAs)
 // Caller should specify NULL for aParams if it wants us to attempt to parse out params from
 // within aAction.  Caller may specify empty string ("") instead to specify no params at all.
 // Remember that aAction and aParams can both be NULL, so don't dereference without checking first.
@@ -7189,7 +7366,7 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 	if (strlen(aAction) >= LINE_SIZE) // This can happen if user runs the contents of a very large variable.
 	{
         if (aDisplayErrors)
-			ScriptError("The string to be run is too long.");
+			ScriptError("The string to be run is too long." ERR_ABORT);
 		return FAIL;
 	}
 
@@ -7310,6 +7487,15 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 	// no new process handle will be available even though the launch was successful:
 	bool success = false;
 	HANDLE new_process = NULL;  // This will hold the handle to the newly created process.
+	char system_error_text[512] = "";
+
+	bool use_runas = aUseRunAs && mRunAsUser && (*mRunAsUser || *mRunAsPass || *mRunAsDomain);
+	if (use_runas && shell_action_is_system_verb)
+	{
+		if (aDisplayErrors)
+			ScriptError("System verbs aren't supported when RunAs is in effect." ERR_ABORT);
+		return FAIL;
+	}
 
 	// If the caller originally gave us NULL for aParams, always try CreateProcess() before
 	// trying ShellExecute().  This is because ShellExecute() is usually a lot slower.
@@ -7335,33 +7521,111 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 		else
         	strlcpy(command_line, aAction, sizeof(command_line)); // i.e. we're running the original action from caller.
 
-		// MSDN: "If [lpCurrentDirectory] is NULL, the new process is created with the same
-		// current drive and directory as the calling process." (i.e. since caller may have
-		// specified a NULL aWorkingDir).  Also, we pass NULL in for the first param so that
-		// it will behave the following way (hopefully under all OSes): "the first white-space – delimited
-		// token of the command line specifies the module name. If you are using a long file name that
-		// contains a space, use quoted strings to indicate where the file name ends and the arguments
-		// begin (see the explanation for the lpApplicationName parameter). If the file name does not
-		// contain an extension, .exe is appended. Therefore, if the file name extension is .com,
-		// this parameter must include the .com extension. If the file name ends in a period (.) with
-		// no extension, or if the file name contains a path, .exe is not appended. If the file name does
-		// not contain a directory path, the system searches for the executable file in the following
-		// sequence...".
-		// Provide the app name (first param) if possible, for greater expected reliability.
-		// UPDATE: Don't provide the module name because if it's enclosed in double quotes,
-		// CreateProcess() will fail, at least under XP:
-		//if (CreateProcess(aParams && *aParams ? aAction : NULL
-		if (CreateProcess(NULL, command_line, NULL, NULL, FALSE, 0, NULL, aWorkingDir, &si, &pi))
+		if (use_runas)
 		{
-			success = true;
-			new_process = pi.hProcess;
+			// This block has been adapted from the AutoIt3 source.
+			typedef BOOL (WINAPI *MyCreateProcessWithLogonW)(
+				LPCWSTR lpUsername,                 // user's name
+				LPCWSTR lpDomain,                   // user's domain
+				LPCWSTR lpPassword,                 // user's password
+				DWORD dwLogonFlags,                 // logon option
+				LPCWSTR lpApplicationName,          // executable module name
+				LPWSTR lpCommandLine,               // command-line string
+				DWORD dwCreationFlags,              // creation flags
+				LPVOID lpEnvironment,               // new environment block
+				LPCWSTR lpCurrentDirectory,         // current directory name
+				LPSTARTUPINFOW lpStartupInfo,       // startup information
+				LPPROCESS_INFORMATION lpProcessInfo // process information
+				);
+			// Get a handle to the DLL module that contains CreateProcessWithLogonW
+			HINSTANCE hinstLib = LoadLibrary("advapi32.dll");
+			if (!hinstLib)
+			{
+				if (aDisplayErrors)
+					ScriptError("RunAs: Could not load advapi32.dll." ERR_ABORT);
+				return FAIL;
+			}
+			MyCreateProcessWithLogonW lpfnDLLProc = (MyCreateProcessWithLogonW)GetProcAddress(hinstLib, "CreateProcessWithLogonW");
+			if (!lpfnDLLProc)
+			{
+				FreeLibrary(hinstLib);
+				if (aDisplayErrors)
+					ScriptError("RunAs: Bad CreateProcessWithLogonW." ERR_ABORT);
+				return FAIL;
+			}
+			// Set up wide char version that we need for CreateProcessWithLogon
+			// init structure for running programs (wide char version)
+			STARTUPINFOW wsi;
+			wsi.cb			= sizeof(STARTUPINFOW);
+			wsi.lpReserved	= NULL;
+			wsi.lpDesktop	= NULL;
+			wsi.lpTitle		= NULL;
+			wsi.dwFlags		= STARTF_USESHOWWINDOW;
+			wsi.cbReserved2	= 0;
+			wsi.lpReserved2	= NULL;
+			wsi.wShowWindow = si.wShowWindow;				// Default is same as si
+
+			// Convert to wide character format:
+			wchar_t command_line_wide[LINE_SIZE], working_dir_wide[MAX_PATH];
+			mbstowcs(command_line_wide, command_line, sizeof(command_line_wide));
+			if (aWorkingDir && *aWorkingDir)
+				mbstowcs(working_dir_wide, aWorkingDir, sizeof(working_dir_wide));
+			else
+				*working_dir_wide = 0;  // wide-char terminator.
+
+			if (lpfnDLLProc(mRunAsUser, mRunAsDomain, mRunAsPass, LOGON_WITH_PROFILE, 0
+				, command_line_wide, 0, 0, *working_dir_wide ? working_dir_wide : NULL, &wsi, &pi))
+			{
+				success = true;
+				if (pi.hThread)
+					CloseHandle(pi.hThread); // Required to avoid memory leak.
+				new_process = pi.hProcess;
+			}
+			else
+				GetLastErrorText(system_error_text, sizeof(system_error_text));
+			FreeLibrary(hinstLib);
 		}
-//else
-//MsgBox(command_line);
+		else
+		{
+			// MSDN: "If [lpCurrentDirectory] is NULL, the new process is created with the same
+			// current drive and directory as the calling process." (i.e. since caller may have
+			// specified a NULL aWorkingDir).  Also, we pass NULL in for the first param so that
+			// it will behave the following way (hopefully under all OSes): "the first white-space – delimited
+			// token of the command line specifies the module name. If you are using a long file name that
+			// contains a space, use quoted strings to indicate where the file name ends and the arguments
+			// begin (see the explanation for the lpApplicationName parameter). If the file name does not
+			// contain an extension, .exe is appended. Therefore, if the file name extension is .com,
+			// this parameter must include the .com extension. If the file name ends in a period (.) with
+			// no extension, or if the file name contains a path, .exe is not appended. If the file name does
+			// not contain a directory path, the system searches for the executable file in the following
+			// sequence...".
+			// Provide the app name (first param) if possible, for greater expected reliability.
+			// UPDATE: Don't provide the module name because if it's enclosed in double quotes,
+			// CreateProcess() will fail, at least under XP:
+			//if (CreateProcess(aParams && *aParams ? aAction : NULL
+			if (CreateProcess(NULL, command_line, NULL, NULL, FALSE, 0, NULL, aWorkingDir, &si, &pi))
+			{
+				success = true;
+				if (pi.hThread)
+					CloseHandle(pi.hThread); // Required to avoid memory leak.
+				new_process = pi.hProcess;
+			}
+			else
+				GetLastErrorText(system_error_text, sizeof(system_error_text));
+		}
 	}
 
 	if (!success) // Either the above wasn't attempted, or the attempt failed.  So try ShellExecute().
 	{
+		if (use_runas)
+		{
+			// Since CreateProcessWithLogonW() was either not attempted or did not work, it's probably
+			// best to display an error rather than trying to run it without the RunAs settings.
+			// This policy encourages users to have RunAs in effect only when necessary:
+			if (aDisplayErrors)
+				ScriptError("Launch Error (possibly related to RunAs)." ERR_ABORT, system_error_text);
+			return FAIL;
+		}
 		SHELLEXECUTEINFO sei = {0};
 		sei.cbSize = sizeof(sei);
 		// Below: "indicate that the hProcess member receives the process handle" and not to display error dialog:
@@ -7387,6 +7651,8 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 			new_process = sei.hProcess;
 			success = true;
 		}
+		else
+			GetLastErrorText(system_error_text, sizeof(system_error_text));
 	}
 
 	if (!success) // The above attempt(s) to launch failed.
@@ -7409,12 +7675,14 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 				, verb_text
 				, shell_params, strlen(shell_params) > 400 ? "..." : ""
 				);
-			ScriptError(error_text);
+			ScriptError(error_text, system_error_text);
 		}
 		return FAIL;
 	}
 
-	if (aProcess) // The caller wanted the process handle, so provide it.
+	if (aProcess) // The caller wanted the process handle and it must eventually call CloseHandle().
 		*aProcess = new_process;
+	else if (new_process) // It can be NULL in the case of launching things like "find D:\" or "www.yahoo.com"
+		CloseHandle(new_process); // Required to avoid memory leak.
 	return OK;
 }

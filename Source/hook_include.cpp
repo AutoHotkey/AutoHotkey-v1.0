@@ -792,7 +792,7 @@ inline LRESULT AllowIt(HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, sc_typ
 		// pretty rare anyway, and I have more confidence in the reliability of putting
 		// the shift key down every time.
 		KeyEvent(KEYDOWN, VK_SHIFT);
-		KeyEvent(key_up ? KEYUP : KEYDOWN, (vk_type)pEvent->vkCode);
+		KeyEvent(key_up ? KEYUP : KEYDOWN, (vk_type)pEvent->vkCode, sc);
 		KeyEvent(KEYUP, VK_SHIFT);
 		// Suppress.  Technically, should do "return SuppressThisKey" so that KeyHistory indicates
 		// that this key was suppressed, but that would make the source a lot messier:
@@ -829,6 +829,10 @@ LRESULT CALLBACK LowLevelKeybdProc(int code, WPARAM wParam, LPARAM lParam)
 // This didn't work, which implies that Ctrl-Alt-Delete is trapped at a lower level than
 // this hook (folks have said that it's trapped in the keyboard driver itself):
 //pEvent->flags &= ~LLKHF_INJECTED;
+
+	// Note: Some scan codes are shared by more than one key (e.g. Numpad7 and NumpadHome).  This is why
+	// the keyboard hook must be able to handle hotkeys by either their virtual key or their scan code.
+	// i.e. if sc were always used in preference to vk, we wouldn't be able to distinguish between such keys.
 
 	bool key_up = (wParam == WM_KEYUP || wParam == WM_SYSKEYUP);
 	vk_type vk = (vk_type)pEvent->vkCode;
@@ -1020,19 +1024,10 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		// down-event wasn't suppressed (probably due to the fact that this win
 		// key is a prefix but not a suffix):
 		KeyEvent(KEYDOWN, VK_SHIFT);
-		KeyEvent(KEYUP, vk);
+		KeyEvent(KEYUP, vk, sc);
 		KeyEvent(KEYUP, VK_SHIFT);
 		return SuppressThisKey;
 	}
-
-	// Do this only after the old value of vk is no longer needed:
-	if (ksc[sc].sc_takes_precedence)
-		// Force the use of the scan code so that extended key can be distinguished from its normal counterpart.
-		// e.g. NumpadEnter vs. Enter.
-		// UPDATE: Another, possibly better reason this is essential is that some scan codes are
-		// shared by more than one key (e.g. Numpad7 and NumpadHome).  If sc were always used in
-		// preference to vk, we wouldn't be able to distinguish between such keys.
-		vk = 0;
 
 #else // Mouse hook
 	if (!vk) // No mapping for this key, so currently there's no way to process it.
@@ -1047,7 +1042,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	// the array element in kvk or ksc that corresponds to the vk or sc, respectively.
 	// If vk is non-zero, it always takes precedence over sc:
 #ifdef INCLUDE_KEYBD_HOOK
-	key_type *pThisKey = vk ? (kvk + vk) : (ksc + sc);
+	key_type *pThisKey = ksc[sc].sc_takes_precedence ? (ksc + sc) : (kvk + vk);
 #else
 	key_type *pThisKey = kvk + vk;
 #endif
@@ -1225,9 +1220,9 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 			// will see all three events in the right order:
 			if (pThisKey->was_just_used == AS_PREFIX_FOR_HOTKEY)
 			{
-				KeyEvent(KEYUP, vk);  // vk can't be zero for us to have reached this point.
-				KeyEvent(KEYDOWN, vk);
-				KeyEvent(KEYUP, vk);
+				KeyEvent(KEYUP, vk, sc);
+				KeyEvent(KEYDOWN, vk, sc);
+				KeyEvent(KEYUP, vk, sc);
 				return SuppressThisKey;
 			}
 
@@ -1345,7 +1340,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 			//	return SuppressThisKey;
 
 			// Not sure if it's necessary to set this in this case.  Review.
-			if (!key_up) // Don't do this for key-up events that triggered an action.
+			if (!key_up) // i.e. don't do this for key-up events that triggered an action.
 				pThisKey->down_performed_action = true;
 		
 			if (   !(g_modifiersLR_logical & MOD_LALT) && !(g_modifiersLR_logical & MOD_RALT)   )  // Neither alt-key is down.
@@ -1368,7 +1363,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 				// to allow the alt-tab menu to appear.  This doesn't need to be done for any other
 				// modifier than Control, nor any normal key since I don't think normal keys
 				// being in a down-state causes any problems with alt-tab:
-				KeyEvent(KEYUP, 0, sc); // Later this may change to use the VK rather than SC, see above.
+				KeyEvent(KEYUP, vk, sc);
 #endif
 			// Update the prefix key's
 			// flag to indicate that it was this key that originally caused the alt-key to go down,
@@ -1394,15 +1389,12 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 			// it up would fail) to determine whether the shift-key is down, so we need to still do this:
 			else if (hotkey_id == HOTKEY_ID_ALT_TAB) // i.e. it's not shift-alt-tab
 			{
-				// Force it to be alt-tab as the user intended.  Must check by SC rather than VK
-				// because currently the SC takes precedence for these keys, and thus vk would
-				// have been set to zero (this behavior may change in the future for the Win2k/NT/XP
-				// version only):
+				// Force it to be alt-tab as the user intended.
 #ifdef INCLUDE_KEYBD_HOOK
 				if (vk == VK_LSHIFT || vk == VK_RSHIFT || vk == VK_SHIFT)  // Needed.  See above comments.
 					// If a shift key is the suffix key, this must be done every time,
 					// not just the first:
-					KeyEvent(KEYUP, 0, sc); // Later this may change to use the VK rather than SC, see above.
+					KeyEvent(KEYUP, vk, sc);
 				// UPDATE: Don't do "else" because sometimes the opposite key may be down, so the
 				// below needs to be unconditional:
 				//else
@@ -1447,13 +1439,13 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 #ifdef INCLUDE_KEYBD_HOOK
 		if (pThisKey->as_modifiersLR)
 			modifiersLRnew &= ~pThisKey->as_modifiersLR;
-		GET_HOTKEY_ID_AND_FLAGS(vk ? Kvkm(modifiersLRnew, vk) : Kscm(modifiersLRnew, sc));
+		GET_HOTKEY_ID_AND_FLAGS(ksc[sc].sc_takes_precedence ? Kscm(modifiersLRnew, sc) : Kvkm(modifiersLRnew, vk));
 		if (hotkey_id == HOTKEY_ID_INVALID && alt_tab_menu_is_visible)
 		{
 			// Try again, this time without the ALT key in case the user is trying to
 			// activate an alt-tab related key:
 			modifiersLRnew &= ~(MOD_LALT | MOD_RALT);
-			GET_HOTKEY_ID_AND_FLAGS(vk ? Kvkm(modifiersLRnew, vk) : Kscm(modifiersLRnew, sc));
+			GET_HOTKEY_ID_AND_FLAGS(ksc[sc].sc_takes_precedence ? Kscm(modifiersLRnew, sc) : Kvkm(modifiersLRnew, vk));
 		}
 #else // Mouse hook:
 		GET_HOTKEY_ID_AND_FLAGS(Kvkm(g_modifiersLR_logical, vk));
@@ -1583,7 +1575,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 						// LWin/RWin is down, and sending an up event might risk triggering
 						// the start menu in certain hotkey configurations.  This policy
 						// might not be the right one for everyone, however:
-						KeyEvent(KEYUP, vk);
+						KeyEvent(KEYUP, vk); // Can't send sc here since it's not defined for the mouse hook.
 					alt_tab_menu_is_visible = false;
 					break;
 				}
@@ -1704,7 +1696,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 				// (in fact, it might not solve any at all):
 				// || vk == VK_LMENU || vk == VK_RMENU || vk == VK_MENU   
 				)
-				KeyEvent(KEYUP, vk);
+				KeyEvent(KEYUP, vk); // Can't send sc here since it's not defined for the mouse hook.
 
 			// Even when the menu is visible, it's possible that neither of the ALT keys
 			// is down, at least under XP (probably NT and 2k also).  Not sure about Win9x:
@@ -1778,9 +1770,9 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 				// and has the added benefit of allowing the key to be toggled if
 				// a modifier is held down before it (e.g. alt-CapsLock would then
 				// be able to toggle the CapsLock key):
-				KeyEvent(KEYUP, vk);
-				KeyEvent(KEYDOWN, vk);
-				KeyEvent(KEYUP, vk);
+				KeyEvent(KEYUP, vk, sc);
+				KeyEvent(KEYDOWN, vk, sc);
+				KeyEvent(KEYUP, vk, sc);
 				return SuppressThisKey;
 			}
 
@@ -1807,7 +1799,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 			// function, send a down event to make up for the fact that the original down event was
 			// suppressed (since key-up hotkeys' down events are always suppressed because they
 			// are also prefix keys by definition).
-			KeyEvent(KEYDOWN, vk);
+			KeyEvent(KEYDOWN, vk, sc);
 			// Now allow the up-event to go through.  The DOWN should always wind up taking effect
 			// before the UP because the above should already have "finished" by now, since
 			// it resulted in a recursive call to this function (using our current thread
@@ -1831,7 +1823,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 			// function, substitute an DOWN+UP pair of events for this event, since we want the
 			// DOWN to precede the UP.  It's necessary to send the UP because the user's physical UP
 			// will be suppressed automatically when this function is called for that event.
-			KeyEvent(KEYDOWNANDUP, vk);
+			KeyEvent(KEYDOWNANDUP, vk, sc);
 			// Now let it just fall through to suppress this down event, because we can't use it
 			// since doing so would result in the UP event having preceded the DOWN, which would
 			// be the wrong order.

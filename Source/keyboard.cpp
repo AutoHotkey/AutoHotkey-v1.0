@@ -216,7 +216,7 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 						event_type = KEYUP;
 					else
 					{
-						repeat_count = atoi(next_word);
+						repeat_count = ATOI(next_word);
 						if (repeat_count < 0) // But seems best to allow zero itself, for possibly use with environment vars
 							repeat_count = 0;
 					}
@@ -470,7 +470,7 @@ int SendKeySpecial(char aChar, mod_type aModifiers, mod_type aModifiersPersisten
 				// but this seems pointless to me.  So for now, the user shouldn't be using the
 				// ControlSend command to send anything that requires the ASC method:
 				return 0;
-			ITOA(128 + (int)(cp - szSpecials), ascii);
+			_itoa(128 + (int)(cp - szSpecials), ascii, 10);
 		}
 		else // ASCII codes between 192 and 255 inclusive (a total of 64 characters).
 		{
@@ -490,7 +490,7 @@ int SendKeySpecial(char aChar, mod_type aModifiers, mod_type aModifiersPersisten
 				{
 					if (aTargetWindow) // Not supported, see above.
 						return 0;
-					ITOA(128 + (int)(cp - szSpecials), ascii_diadic);
+					_itoa(128 + (int)(cp - szSpecials), ascii_diadic, 10);
 				}
 				// else leave ascii_diadic set to empty string.
 			}
@@ -529,7 +529,7 @@ int SendASC(char *aAscii, HWND aTargetWindow)
 	// This is just here to catch bugs in callers who do it wrong.  See notes in SendKeys() for explanation:
 	if (aTargetWindow) return 0;
 
-	int value = atoi(aAscii);
+	int value = ATOI(aAscii);
 	if (value < 0 || value > 255) return 0; // Sanity check.
 
 	// Known issue: If the hotkey that triggers this Send command is CONTROL-ALT
@@ -1351,6 +1351,13 @@ sc_type TextToSC(char *aText)
 	for (int i = 0; i < g_key_to_sc_count; ++i)
 		if (!stricmp(g_key_to_sc[i].key_name, aText))
 			return g_key_to_sc[i].sc;
+	// Do this only after the above, in case any valid key names ever start with SC:
+	if (toupper(*aText) == 'S' && toupper(*(aText + 1)) == 'C')
+	{
+		int sc; // UINT in case sscanf() requires a larger storage area than sc_type (even though it is currently UINT).
+		sscanf(aText + 2, "%X", &sc); // Convert hexadecimal text string to word/UINT/sc_type.
+		return sc;
+	}
 	return 0; // I don't think zero is a valid scan code, but might want to confirm.
 }
 

@@ -135,10 +135,10 @@ ResultType Line::WinMove(char *aTitle, char *aText, char *aX, char *aY
 	RECT rect;
 	GetWindowRect(target_window, &rect);
 	MoveWindow(target_window
-		, *aX && stricmp(aX, "default") ? atoi(aX) : rect.left  // X-position
-		, *aY && stricmp(aY, "default") ? atoi(aY) : rect.top   // Y-position
-		, *aWidth && stricmp(aWidth, "default") ? atoi(aWidth) : rect.right - rect.left
-		, *aHeight && stricmp(aHeight, "default") ? atoi(aHeight) : rect.bottom - rect.top
+		, *aX && stricmp(aX, "default") ? ATOI(aX) : rect.left  // X-position
+		, *aY && stricmp(aY, "default") ? ATOI(aY) : rect.top   // Y-position
+		, *aWidth && stricmp(aWidth, "default") ? ATOI(aWidth) : rect.right - rect.left
+		, *aHeight && stricmp(aHeight, "default") ? ATOI(aHeight) : rect.bottom - rect.top
 		, TRUE);  // Do repaint.
 	DoWinDelay;
 	return OK;  // Always successful, like AutoIt.
@@ -179,7 +179,7 @@ ResultType Line::WinMenuSelectItem(char *aTitle, char *aText, char *aMenu1, char
 		if (!hMenu)  // The nesting of submenus ended prior to the end of the list of menu search terms.
 			return OK;  // Let ErrorLevel tell the story.
 		menu_param_length = strlen(menu_param[i]);
-		target_menu_pos = (menu_param[i][menu_param_length - 1] == '&') ? atoi(menu_param[i]) - 1 : -1;
+		target_menu_pos = (menu_param[i][menu_param_length - 1] == '&') ? ATOI(menu_param[i]) - 1 : -1;
 		if (target_menu_pos >= 0)
 		{
 			if (target_menu_pos >= menu_item_count)  // Invalid menu position (doesn't exist).
@@ -242,7 +242,8 @@ ResultType Line::ControlSend(char *aControl, char *aKeysToSend, char *aTitle, ch
 	DETERMINE_TARGET_WINDOW
 	if (!target_window)
 		return OK;
-	HWND control_window = ControlExist(target_window, aControl);
+	HWND control_window = stricmp(aControl, "ahk_parent") ? ControlExist(target_window, aControl)
+		: target_window;
 	if (!control_window)
 		return OK;
 	SendKeys(aKeysToSend, aModifiersLR, control_window);
@@ -516,7 +517,7 @@ ResultType Line::StatusBarGetText(char *aPart, char *aTitle, char *aText
 	HWND control_window = target_window ? ControlExist(target_window, "msctls_statusbar321") : NULL;
 	// Call this even if control_window is NULL because in that case, it will set the output var to
 	// be blank for us:
-	StatusBarUtil(output_var, control_window, atoi(aPart)); // It will handle any zero part# for us.
+	StatusBarUtil(output_var, control_window, ATOI(aPart)); // It will handle any zero part# for us.
 	return OK; // Even if it fails, seems best to return OK so that subroutine can continue.
 }
 
@@ -533,10 +534,120 @@ ResultType Line::StatusBarWait(char *aTextToWaitFor, char *aSeconds, char *aPart
 	char text_to_wait_for[4096];
 	strlcpy(text_to_wait_for, aTextToWaitFor, sizeof(text_to_wait_for));
 	HWND control_window = target_window ? ControlExist(target_window, "msctls_statusbar321") : NULL;
-	StatusBarUtil(NULL, control_window, atoi(aPart) // It will handle a NULL control_window or zero part# for us.
-		, text_to_wait_for, *aSeconds ? (int)(atof(aSeconds)*1000) : -1 // Blank->indefinite.  0 means 500ms.
-		, atoi(aInterval));
+	StatusBarUtil(NULL, control_window, ATOI(aPart) // It will handle a NULL control_window or zero part# for us.
+		, text_to_wait_for, *aSeconds ? (int)(ATOF(aSeconds)*1000) : -1 // Blank->indefinite.  0 means 500ms.
+		, ATOI(aInterval));
 	return OK; // Even if it fails, seems best to return OK so that subroutine can continue.
+}
+
+
+
+ResultType Line::ScriptPostMessage(char *aMsg, char *awParam, char *alParam, char *aControl
+	, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
+{
+	DETERMINE_TARGET_WINDOW
+	if (!target_window)
+		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+	HWND control_window = *aControl ? ControlExist(target_window, aControl) : target_window;
+	if (!control_window)
+		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+	// Use ATOI64 to support unsigned (i.e. UINT, LPARAM, and WPARAM are all 32-bit unsigned values).
+	// ATOI64 also supports hex strings in the script, such as 0xFF, which is why it's commonly
+	// used in functions such as this:
+	g_ErrorLevel->Assign(PostMessage(target_window, (UINT)ATOI64(aMsg), (LPARAM)ATOI64(awParam)
+		, (WPARAM)ATOI64(alParam)) ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
+	// By design (since this is a power user feature), no ControlDelay is done here.
+	return OK;
+}
+
+
+
+ResultType Line::ScriptSendMessage(char *aMsg, char *awParam, char *alParam, char *aControl
+	, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
+{
+	DETERMINE_TARGET_WINDOW
+	if (!target_window)
+		return g_ErrorLevel->Assign("FAIL"); // Need a special value to distinguish this from numeric reply-values.
+	HWND control_window = *aControl ? ControlExist(target_window, aControl) : target_window;
+	if (!control_window)
+		return g_ErrorLevel->Assign("FAIL");
+	// Use ATOI64 to support unsigned (i.e. UINT, LPARAM, and WPARAM are all 32-bit unsigned values).
+	// ATOI64 also supports hex strings in the script, such as 0xFF, which is why it's commonly
+	// used in functions such as this:
+	DWORD dwResult;
+	if (!SendMessageTimeout(target_window, (UINT)ATOI64(aMsg), (WPARAM)ATOI64(awParam), (LPARAM)ATOI64(alParam)
+		, SMTO_ABORTIFHUNG, 2000, &dwResult))
+		return g_ErrorLevel->Assign("FAIL"); // Need a special value to distinguish this from numeric reply-values.
+	// By design (since this is a power user feature), no ControlDelay is done here.
+	return g_ErrorLevel->Assign((UINT)dwResult); // UINT seems best most of the time?
+}
+
+
+
+ResultType Line::WinSet(char *aAttrib, char *aValue, char *aTitle, char *aText
+	, char *aExcludeTitle, char *aExcludeText)
+{
+	WinSetAttributes attrib = ConvertWinSetAttribute(aAttrib);
+	if (attrib == WINSET_INVALID)
+		return LineError(ERR_WINSET, FAIL, aAttrib);
+
+	// Since this is a macro, avoid repeating it for every case of the switch():
+	DETERMINE_TARGET_WINDOW
+	if (!target_window)
+		return OK;
+
+	int value;
+	int target_window_long;
+
+	switch (attrib)
+	{
+	case WINSET_ALWAYSONTOP:
+	{
+		if (   !(target_window_long = GetWindowLong(target_window, GWL_EXSTYLE))   )
+			return OK;
+		HWND topmost_or_not;
+		switch(ConvertOnOffToggle(aValue))
+		{
+		case TOGGLED_ON: topmost_or_not = HWND_TOPMOST; break;
+		case TOGGLED_OFF: topmost_or_not = HWND_NOTOPMOST; break;
+		case NEUTRAL: // parameter was blank, so it defaults to TOGGLE.
+		case TOGGLE: topmost_or_not = (target_window_long & WS_EX_TOPMOST) ? HWND_NOTOPMOST : HWND_TOPMOST; break;
+		default: return OK;
+		}
+		// SetWindowLong() didn't seem to work, at least not on some windows.  But this does:
+		SetWindowPos(target_window, topmost_or_not, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+		break;
+	}
+
+	case WINSET_TRANSPARENT:
+		if (!g_os.IsWin2000orLater())
+			return OK;  // Do nothing on OSes that don't support it.
+		value = ATOI(aValue);
+		// A little debatable, but this behavior seems best, at least in some cases:
+		if (value < 0)
+			value = 0;
+		else if (value > 255)
+			value = 255;
+		// Must fetch it at runtime, otherwise the program can't even be launched on Win9x/NT:
+		typedef BOOL (WINAPI *MySetLayeredWindowAttributesType)(HWND, COLORREF, BYTE, DWORD);
+		static MySetLayeredWindowAttributesType MySetLayeredWindowAttributes = (MySetLayeredWindowAttributesType)
+			GetProcAddress(GetModuleHandle("User32.dll"), "SetLayeredWindowAttributes");
+		if (MySetLayeredWindowAttributes)
+		{
+			// NOTE: It seems best never to remove the WS_EX_LAYERED attribute, even if the value is 255
+			// (non-transparent), since the window might have had that attribute previously and may need
+			// it to function properly.  For example, an app may support making its own windows transparent
+			// but might not expect to have to turn WS_EX_LAYERED back on if we turned it off.  One drawback
+			// of this is a quote from somewhere that might or might not be accurate: "To make this window
+			// completely opaque again, remove the WS_EX_LAYERED bit by calling SetWindowLong and then ask
+			// the window to repaint. Removing the bit is desired to let the system know that it can free up
+			// some memory associated with layering and redirection."
+			SetWindowLong(target_window, GWL_EXSTYLE, GetWindowLong(target_window, GWL_EXSTYLE) | WS_EX_LAYERED);
+			MySetLayeredWindowAttributes(target_window, 0, value, LWA_ALPHA);
+		}
+		break;
+	}
+	return OK;
 }
 
 
@@ -981,12 +1092,12 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 				HANDLE_USER_MENU(LOWORD(wParam))  // Send the menu's cmd ID.
 				// Try to maintain a list here of all the ways the script can be uninterruptible
 				// at this moment in time, and whether that uninterruptibility should be overridden here:
-				// 1) YES: g_TrayMenuIsVisible == true (which in turn means that the script is marked
+				// 1) YES: g_MenuIsVisible is true (which in turn means that the script is marked
 				//    uninterruptible to prevent timed subroutines from running and possibly
 				//    interfering with menu navigation): Seems impossible because apparently 
 				//    the WM_RBUTTONDOWN must first be returned from before we're called directly
 				//    with the WM_COMMAND message corresponding to the menu item chosen by the user.
-				//    In other words, g_TrayMenuIsVisible will be false and the script thus will
+				//    In other words, g_MenuIsVisible will be false and the script thus will
 				//    not be uninterruptible, at least not solely for that reason.
 				// 2) YES: A new hotkey or timed subroutine was just launched and it's still in its
 				//    grace period.  In this case, ExecUntil()'s call of PeekMessage() every 10ms
@@ -1044,11 +1155,16 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 	case WM_ENTERMENULOOP:
 		// One of the menus in the menu bar has been displayed, and the we know the user is is still in
 		// the menu bar, even moving to different menus and/or menu items, until WM_EXITMENULOOP is received.
-		MENU_NO_INTERRUPT(static_was_interruptible_before)
+		// Note: It seems that when window's menu bar is being displayed/navigated by the user, our thread
+		// is tied up in a message loop other than our own.  In other words, it's very similar to the
+		// TrackPopupMenuEx() call used to handle the tray menu, which is why g_MenuIsVisible can be used
+		// for both types of menus to indicate to MainWindowProc() that timed subroutines should not be
+		// checked or allowed to launch during such times:
+		g_MenuIsVisible = MENU_VISIBLE_MAIN;
 		break; // Let DefWindowProc() handle it from here.
 
 	case WM_EXITMENULOOP:
-		MENU_RESTORE_INTERRUPT(static_was_interruptible_before)
+		g_MenuIsVisible = MENU_VISIBLE_NONE;
 		break; // Let DefWindowProc() handle it from here.
 
 	case AHK_DIALOG:  // User defined msg sent from MsgBox() or FileSelectFile().
@@ -1120,7 +1236,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			SET_MAIN_TIMER
 			return 0;
 		}
-		if (g_TrayMenuIsVisible || (iMsg == AHK_HOOK_HOTKEY && lParam && g_hWnd == GetForegroundWindow()))
+		if (g_MenuIsVisible == MENU_VISIBLE_TRAY || (iMsg == AHK_HOOK_HOTKEY && lParam && g_hWnd == GetForegroundWindow()))
 		{
 			// Ok this is a little strange, but the thought here is that if the tray menu is
 			// displayed, it should be closed prior to executing any new hotkey.  This is
@@ -1135,12 +1251,14 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			// when it doesn't need to be, and then might have some undesirable side-effect
 			// since I believe it has other purposes besides dismissing menus).  But such
 			// side effects should be minimal since WM_CANCELMODE mode is only set if
-			// this AutoHotkey instance's own main window is active (foreground):
+			// this AutoHotkey instance's own main window is active (foreground).  UPDATE:
+			// Testing shows that it is not necessary to do this when the MAIN MENU is displayed,
+			// so it's safer not to do it in that case:
 			SendMessage(hWnd, WM_CANCELMODE, 0, 0);
 			// The menu is now gone because the above should have called this function
 			// recursively to close the it.  Now, rather than continuing in this
 			// recursion layer, it seems best to return to the caller so that the menu
-			// will be destroyed and g_TrayMenuIsVisible set to false.  After that is done,
+			// will be destroyed and g_MenuIsVisible updated.  After that is done,
 			// the next call to MsgSleep() should notice the hotkey we posted above and
 			// act upon it.
 			// The above section has been tested and seems to work as expected.
@@ -1148,11 +1266,11 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			// the caller to which we return is the MsgBox's msg pump, and that pump
 			// ignores any messages for our thread so they just sit there.  So instead
 			// of returning, call MsgSleep() without resetting the value of
-			// g_TrayMenuIsVisible (so that it can use it).  When MsgSleep() returns,
+			// g_MenuIsVisible (so that it can use it).  When MsgSleep() returns,
 			// we will return to our caller, which in this case should be TrackPopupMenuEx's
 			// msg pump.  That pump should immediately return also since we've already
-			// closed the menu.  And we will let it set the value of g_TrayMenuIsVisible
-			// to false at that time rather than doing it here or in IsCycleComplete().
+			// closed the menu.  And we will let it set the value of g_MenuIsVisible
+			// to "none" at that time rather than doing it here or in IsCycleComplete().
 			// In keeping with the above, don't return:
 			//return 0;
 		}
@@ -1186,11 +1304,32 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		// a short hotkey subroutine) that never has a chance to do any MsgSleep()'s (and this would be
 		// even more likely if the user increased the uninterruptible time via a setting).  That is why
 		// MsgSleep() is called in lieu of a direct call to CheckScriptTimers().  So the issue is that
-		// it's unlikely that the SET_TIMER statement in the WM_HOTKEY case will ever actually turn on
-		// the timer since it will already be on in nearly all such cases (i.e. so it's really just a
+		// it's unlikely that the SET_MAIN_TIMER statement in the WM_HOTKEY case will ever actually turn
+		// on the timer since it will already be on in nearly all such cases (i.e. so it's really just a
 		// safety check).  And the overhead of calling MsgSleep(-1) vs. CheckScriptTimers() here isn't
-		// too much of a worry since scripts don't spend most of their time waiting for dialogs:
-		MsgSleep(-1);
+		// too much of a worry since scripts don't spend most of their time waiting for dialogs.
+		// UPDATE: Do not call MsgSleep() while the tray menu is visible because that causes long delays
+		// sometime when the user is trying to select a menu (the user's click is ignored and the menu
+		// stays visible).  I think this is because MsgSleep()'s PeekMessage() intercepts the user's
+		// clicks and is unable to route them to TrackPopupMenuEx()'s message loop, which is the only
+		// place they can be properly processed.  UPDATE: This also needs to be done when the MAIN MENU
+		// is visible, because testing shows that that menu would otherwise become sluggish too, perhaps
+		// more rarely, when timers are running.  UPDATE: It seems pointless to call MsgSleep() (and harmful
+		// in the case where g_MenuIsVisible is true) if the script is not interruptible, so it's now called
+		// only when interrupts are possible (this also covers g_MenuIsVisible).
+		// Other background info:
+		// Checking g_MenuIsVisible here prevents timed subroutines from running while the tray menu
+		// or main menu is in use.  This is documented behavior, and is desirable most of the time
+		// anyway.  But not to do this would produce strange effects because any timed subroutine
+		// that took a long time to run might keep us away from the "menu loop", which would result
+		// in the menu becoming temporarily unreponsive while the user is in it (and probably other
+		// undesired effects).
+		// Also, this allows MainWindowProc() to close the popup menu upon receive of any hotkey,
+		// which is probably a good idea since most hotkeys change the foreground window and if that
+		// happens, the menu cannot be dismissed (ever?) except by selecting one of the items in the
+		// menu (which is often undesirable).
+		if (INTERRUPTIBLE)
+			MsgSleep(-1);
 		return 0;
 
 	case WM_SYSCOMMAND:
@@ -2322,7 +2461,7 @@ ResultType Line::SoundSetGet(char *aSetting, DWORD aComponentType, int aComponen
 	if (SOUND_MODE_IS_SET)
 	{
 		output_var = NULL; // To help catch bugs.
-		setting_percent = atof(aSetting);
+		setting_percent = ATOF(aSetting);
 		if (setting_percent < -100)
 			setting_percent = -100;
 		else if (setting_percent > 100)
@@ -2525,7 +2664,7 @@ ResultType Line::SoundGetWaveVolume(HWAVEOUT aDeviceID)
 
 ResultType Line::SoundSetWaveVolume(char *aVolume, HWAVEOUT aDeviceID)
 {
-	double volume = atof(aVolume);
+	double volume = ATOF(aVolume);
 	if (volume < -100)
 		volume = -100;
 	else if (volume > 100)
@@ -2786,7 +2925,7 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 	// Specifying NULL will make it default to the last used directory (at least in Win2k):
 	ofn.lpstrInitialDir = (aWorkingDir && *aWorkingDir) ? aWorkingDir : NULL;
 
-	int options = atoi(aOptions);
+	int options = ATOI(aOptions);
 	ofn.Flags = OFN_HIDEREADONLY | OFN_EXPLORER | OFN_NODEREFERENCELINKS;
 	if (options & 0x10)
 		ofn.Flags |= OFN_OVERWRITEPROMPT;
@@ -3005,7 +3144,7 @@ ResultType Line::FileReadLine(char *aFilespec, char *aLineNumber)
 	if (!output_var)
 		return FAIL;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
-	__int64 line_number = _atoi64(aLineNumber);
+	__int64 line_number = ATOI64(aLineNumber);
 	if (line_number <= 0)
 		return OK;  // Return OK because g_ErrorLevel tells the story.
 	FILE *fp = fopen(aFilespec, "r");
@@ -3634,14 +3773,14 @@ ResultType Line::FileGetSize(char *aFilespec, char *aGranularity)
 	// There's not much sense in putting values larger than 2 gig into the var as a text string
 	// containing a positive number because such a var could never be properly handled by anything
 	// that compares to it (e.g. IfGreater) or does math on it (e.g. EnvAdd), since those operations
-	// use atoi() to convert the string.  So as a future enhancement (unless the whole program is
+	// use ATOI() to convert the string.  So as a future enhancement (unless the whole program is
 	// revamped to use 64bit ints or something) might add an optional param to the end to indicate
 	// size should be returned in K(ilobyte) or M(egabyte).  However, this is sorta bad too since
 	// adding a param can break existing scripts which use filenames containing commas (delimiters)
 	// with this command.  Therefore, I think I'll just add the K/M param now.
 	// Also, the above assigns an int because unsigned ints should never be stored in script
 	// variables.  This is because an unsigned variable larger than INT_MAX would not be properly
-	// converted by atoi(), which is current standard method for variables to be auto-converted
+	// converted by ATOI(), which is current standard method for variables to be auto-converted
 	// from text back to a number whenever that is needed.
 }
 

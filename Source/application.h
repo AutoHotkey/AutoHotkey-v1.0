@@ -124,8 +124,8 @@ ResultType MsgSleep(int aSleepDuration = INTERVAL_UNSPECIFIED, MessageMode aMode
 // the case where an uninterruptible operation such as SendKeys() happens to occur
 // while g_AllowInterruptionForSub is true, in which case we would want the completion
 // of that operation to affect only the status of g_AllowInterruption, not
-// g_AllowInterruptionForSub:
-#define INTERRUPTIBLE (g_AllowInterruptionForSub && g_AllowInterruption)
+// g_AllowInterruptionForSub.
+#define INTERRUPTIBLE (g_AllowInterruptionForSub && g_AllowInterruption && !g_MenuIsVisible)
 
 // To reduce the expectation that a newly launched hotkey or timed subroutine will
 // be immediately interrupted by a timed subroutine or hotkey, interruptions are
@@ -225,7 +225,7 @@ if (g.UninterruptibleTime && g.UninterruptedLineCountMax)\
 			MsgSleep(g.ControlDelay);\
 	}
 
-ResultType IsCycleComplete(int aSleepDuration, DWORD aStartTime, bool aAllowEarlyReturn);
+ResultType IsCycleComplete(int aSleepDuration, DWORD aStartTime, bool aAllowEarlyReturn, MessageMode aMode);
 
 void CheckScriptTimers();
 #define CHECK_SCRIPT_TIMERS_IF_NEEDED if (g_script.mTimerEnabledCount) CheckScriptTimers();

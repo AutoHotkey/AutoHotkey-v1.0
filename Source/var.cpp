@@ -23,12 +23,12 @@ GNU General Public License for more details.
 char Var::sEmptyString[] = ""; // Used to as a non-constant empty string so that callers can write to it.
 
 
-ResultType Var::Assign(int aValueToAssign)
-// Returns OK or FAIL.
+ResultType Var::Assign(int aValueToAssign) // For some reason, these functions are actually faster when not inline.
 {
 	char value_string[256];
 	// ITOA() seems to perform quite a bit better than sprintf() in this case:
-	return Assign(ITOA(aValueToAssign, value_string));
+	ITOA(aValueToAssign, value_string);
+	return Assign(value_string);
 	//snprintf(value_string, sizeof(value_string), "%d", aValueToAssign);
 	//return Assign(value_string);
 }
@@ -39,7 +39,8 @@ ResultType Var::Assign(UINT aValueToAssign)
 // Returns OK or FAIL.
 {
 	char value_string[256];
-	return Assign(UTOA(aValueToAssign, value_string));
+	UTOA(aValueToAssign, value_string)
+	return Assign(value_string);
 }
 
 
@@ -48,7 +49,8 @@ ResultType Var::Assign(__int64 aValueToAssign)
 // Returns OK or FAIL.
 {
 	char value_string[256];
-	return Assign(ITOA64(aValueToAssign, value_string));
+	ITOA64(aValueToAssign, value_string);
+	return Assign(value_string);
 }
 
 

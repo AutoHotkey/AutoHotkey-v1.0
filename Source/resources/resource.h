@@ -20,6 +20,8 @@
 #define IDI_PAUSE_SUSPEND               208
 #define IDR_MENU_MAIN                   211
 #define IDR_ACCELERATOR1                212
+#define IDI_TRAY_WIN9X                  228
+#define IDI_TRAY_WIN9X_SUSPEND          229
 #define IDS_DEF_LOGFILE                 301
 #define IDS_DEF_MAXSIZE                 302
 #define IDS_DEF_SHRINKTOSIZE            303
@@ -44,7 +46,7 @@
 // 
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
-#define _APS_NEXT_RESOURCE_VALUE        214
+#define _APS_NEXT_RESOURCE_VALUE        230
 #define _APS_NEXT_COMMAND_VALUE         32824
 #define _APS_NEXT_CONTROL_VALUE         205
 #define _APS_NEXT_SYMED_VALUE           101

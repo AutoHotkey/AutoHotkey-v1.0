@@ -41,7 +41,8 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	#ifdef _DEBUG
 	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Find.aut";
 	//char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
-	char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\Menu command COMPREHENSIVE TEST.ahk";
+	char *script_filespec = "C:\\Program Files\\AutoHotkey\\AutoHotkey.ini";
+	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\Menu command COMPREHENSIVE TEST.ahk";
 	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test.ahk";
 	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
 	#else

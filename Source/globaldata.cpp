@@ -26,10 +26,10 @@ GNU General Public License for more details.
 // state, don't keep anything in the global_struct except those things
 // which are necessary to save and restore (even though it would clean
 // up the code and might make maintaining it easier):
+HINSTANCE g_hInstance = NULL; // Set by WinMain().
 HWND g_hWnd = NULL;
 HWND g_hWndEdit = NULL;
 HWND g_hWndSplash = NULL;
-HINSTANCE g_hInstance = NULL; // Set by WinMain().
 HACCEL g_hAccelTable = NULL;
 
 modLR_type g_modifiersLR_logical = 0;
@@ -42,6 +42,7 @@ bool g_PhysicalKeyState[VK_MAX + 1] = {false};
 int g_HotkeyModifierTimeout = 50;  // Reduced from 100, which was a little too large for fast typists.
 HHOOK g_hhkLowLevelKeybd = NULL;
 HHOOK g_hhkLowLevelMouse = NULL;
+HookType sWhichHookSkipWarning = 0;
 bool g_ForceLaunch = false;
 bool g_WinActivateForce = false;
 bool g_AllowOnlyOneInstance = false;
@@ -68,8 +69,9 @@ int g_MaxThreadsTotal = 10;
 // to keep these values conservative:
 int g_MaxHotkeysPerInterval = 50;
 int g_HotkeyThrottleInterval = 2000; // Milliseconds.
+bool g_MaxThreadsBuffer = false;  // This feature usually does more harm than good, so it defaults to OFF.
 
-bool g_TrayMenuIsVisible = false;
+MenuVisibleType g_MenuIsVisible = MENU_VISIBLE_NONE;
 int g_nMessageBoxes = 0;
 int g_nInputBoxes = 0;
 int g_nFileDialogs = 0;
@@ -87,6 +89,18 @@ Var *g_ErrorLevel = NULL; // Allows us (in addition to the user) to set this var
 // copying contents in or out without having to close & reopen the clipboard in between):
 Clipboard g_clip;
 OS_Version g_os;  // OS version object, courtesy of AutoIt3.
+
+// THIS MUST BE DONE AFTER the g_os object is initialized above:
+// These are conditional because on these OSes, only standard-palette 16-color icons are supported,
+// which would cause the normal icons to look mostly gray when used with in the tray.  So we use
+// special 16x16x16 icons, but only for the tray because these OSes display the nicer icons okay
+// in places other than the tray.  Also note that the red icons look okay, at least on Win98,
+// because they are "red enough" not to suffer the graying effect from the palette shifting done
+// by the OS:
+int g_IconTray = (g_os.IsWin95() || g_os.IsWin98() || g_os.IsWinNT4() || g_os.IsWin2000())
+	? IDI_TRAY_WIN9X : IDI_MAIN;
+int g_IconTraySuspend = (g_os.IsWin95() || g_os.IsWin98() || g_os.IsWinNT4() || g_os.IsWin2000())
+	? IDI_TRAY_WIN9X_SUSPEND : IDI_SUSPEND;
 
 DWORD g_OriginalTimeout;
 
@@ -205,7 +219,9 @@ Action g_act[] =
 	, {"EnvSet", 1, 2, NULL} // EnvVar, Value
 	, {"EnvUpdate", 0, 0, NULL}
 
-	, {"Run", 1, 3, NULL}, {"RunWait", 1, 3, NULL}  // TargetFile, Working Dir, WinShow-Mode
+	, {"RunAs", 0, 3, NULL} // user, pass, domain (0 params can be passed to disable the feature)
+	, {"Run", 1, 3, NULL}
+	, {"RunWait", 1, 3, NULL}  // TargetFile, Working Dir, WinShow-Mode
 	, {"URLDownloadToFile", 2, 2, NULL} // URL, save-as-filename
 
 	, {"GetKeyState", 2, 3, NULL} // OutputVar, key name, mode (optional) P = Physical, T = Toggle
@@ -259,6 +275,7 @@ Action g_act[] =
 	// checked for in spite of requiring it to be numeric in the definition here.
 	, {"WinMenuSelectItem", 0, 11, NULL} // WinTitle, WinText, Menu name, 6 optional sub-menu names, ExcludeTitle/Text
 
+	, {"WinSet", 1, 6, NULL} // attribute, setting, title, text, exclude-title, exclude-text
 	// WinSetTitle: Allow a minimum of zero params so that title isn't forced to be non-blank.
 	// Also, if the user passes only one param, the title of the "last used" window will be
 	// set to the string in the first param:
@@ -266,6 +283,8 @@ Action g_act[] =
 	, {"WinGetTitle", 1, 5, NULL} // Output-var, std. 4 window params
 	, {"WinGetPos", 0, 8, NULL} // Four optional output vars: xpos, ypos, width, height.  Std. 4 window params.
 	, {"WinGetText", 1, 5, NULL} // Output var, std 4 window params.
+	, {"PostMessage", 1, 8}  // msg, wParam, lParam, Control, WinTitle, WinText, ExcludeTitle, ExcludeText
+	, {"SendMessage", 1, 8}  // msg, wParam, lParam, Control, WinTitle, WinText, ExcludeTitle, ExcludeText
 
 	, {"PixelGetColor", 3, 3, {2, 3, 0}} // OutputVar, X-coord, Y-coord
 	, {"PixelSearch", 0, 8, {3, 4, 5, 6, 7, 8, 0}} // OutputX, OutputY, left, top, right, bottom, Color, Variation
@@ -326,7 +345,7 @@ Action g_act[] =
 	, {"SetBatchLines", 1, 1, NULL} // Can be non-numeric, such as 15ms, or a number (to indicate line count).
 	, {"SetInterrupt", 1, 2, {1, 2, 0}} // Interval (in milliseconds), number of uninterruptible lines.
 	, {"SetTitleMatchMode", 1, 1, NULL} // Allowed values: 1, 2, slow, fast
-	, {"SetFormat", 1, 2, {2, 0}} // OptionName, FormatString
+	, {"SetFormat", 1, 2, NULL} // Float|Integer, FormatString (for float) or H|D (for int)
 
 	, {"Suspend", 0, 1, NULL} // On/Off/Toggle/Permit/Blank (blank is the same as toggle)
 	, {"Pause", 0, 1, NULL} // On/Off/Toggle/Blank (blank is the same as toggle)

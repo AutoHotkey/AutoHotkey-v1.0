@@ -351,6 +351,12 @@
 			<File
 				RelativePath=".\source\resources\icon_suspend.ico">
 			</File>
+			<File
+				RelativePath=".\source\resources\icon_tray_win9x.ico">
+			</File>
+			<File
+				RelativePath=".\source\resources\icon_tray_win9x_suspend.ico">
+			</File>
 		</Filter>
 	</Files>
 	<Globals>

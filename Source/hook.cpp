@@ -443,12 +443,17 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 			++mouse_hook_hotkey_count;
 
 		if (!aHK[i]->mVK)
+		{
 			// scan codes don't need something like the switch stmt below because they can't be neutral.
 			// In other words, there's no scan code equivalent for something like VK_CONTROL.
 			// In addition, SC_LCONTROL, for example, doesn't also need to change the kvk array
 			// for VK_LCONTROL because the hook knows to give the scan code precedence, and thus
 			// look it up only in the ksc array in that case.
 			pThisKey = ksc + aHK[i]->mSC;
+			// For some scan codes this was already set above.  But to support explicit scan code hotkeys,
+			// such as "SC102::MsgBox", make sure it's set for every hotkey that uses an explicit scan code.
+			pThisKey->sc_takes_precedence = true;
+		}
 		else
 		{
 			pThisKey = kvk + aHK[i]->mVK;
@@ -684,13 +689,15 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 		if (!keybd_hook_mutex) // else we already have ownership of the mutex so no need for this check.
 		{
 			keybd_hook_mutex = CreateMutex(NULL, FALSE, NAME_P "KeybdHook");
-			if (aWarnIfHooksAlreadyInstalled && GetLastError() == ERROR_ALREADY_EXISTS)
+			if (aWarnIfHooksAlreadyInstalled && !(sWhichHookSkipWarning & HOOK_KEYBD)
+				&& GetLastError() == ERROR_ALREADY_EXISTS)
 			{
 				int result = MsgBox("Another instance of this program already has the KEYBOARD hook"
 					" installed (perhaps because some of its hotkeys require it)."
 					"  Installing it a second time might produce unexpected behavior.  Do it anyway?"
 					"\n\nChoose NO to exit the program."
-					"\n\nYou can disable this warning by starting the program with /force as a parameter."
+					"\n\nYou can disable this warning by adding this line to the script:"
+					"\n#InstallKeybdHook force"
 					, MB_YESNO);
 				if (result != IDYES)
 					g_script.ExitApp();
@@ -741,13 +748,15 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 		if (!mouse_hook_mutex) // else we already have ownership of the mutex so no need for this check.
 		{
 			mouse_hook_mutex = CreateMutex(NULL, FALSE, NAME_P "MouseHook");
-			if (aWarnIfHooksAlreadyInstalled && GetLastError() == ERROR_ALREADY_EXISTS)
+			if (aWarnIfHooksAlreadyInstalled && !(sWhichHookSkipWarning & HOOK_MOUSE)
+				&& GetLastError() == ERROR_ALREADY_EXISTS)
 			{
 				int result = MsgBox("Another instance of this program already has the MOUSE hook"
 					" installed (perhaps because some of its hotkeys require it)."
 					"  Installing it a second time might produce unexpected behavior.  Do it anyway?"
 					"\n\nChoose NO to exit the program."
-					"\n\nYou can disable this warning by starting the program with /force as a parameter."
+					"\n\nYou can disable this warning by adding this line to the script:"
+					"\n#InstallMouseHook force"
 					, MB_YESNO);
 				if (result != IDYES)
 					g_script.ExitApp();

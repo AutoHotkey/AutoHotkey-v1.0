@@ -22,11 +22,11 @@ GNU General Public License for more details.
 #include "script.h" // For the global script object and g_ErrorLevel
 #include "os_version.h" // For the global OS_Version object
 
+extern HINSTANCE g_hInstance;
 extern HWND g_hWnd;  // The main window
 extern HWND g_hWndEdit;  // The edit window, child of main.
 extern HWND g_hWndSplash;  // The SplashText window.
 extern HACCEL g_hAccelTable; // Accelerator table for main menu shortcut keys.
-extern HINSTANCE g_hInstance;
 
 extern modLR_type g_modifiersLR_logical;   // Tracked by hook (if hook is active).
 extern modLR_type g_modifiersLR_physical;  // Same as above except it's which modifiers are PHYSICALLY down.
@@ -38,6 +38,7 @@ extern int g_HotkeyModifierTimeout;
 
 extern HHOOK g_hhkLowLevelKeybd;
 extern HHOOK g_hhkLowLevelMouse;
+extern HookType sWhichHookSkipWarning;
 extern bool g_ForceLaunch;
 extern bool g_WinActivateForce;
 extern bool g_AllowOnlyOneInstance;
@@ -62,8 +63,9 @@ extern UCHAR g_MaxThreadsPerHotkey;
 extern int g_MaxThreadsTotal;
 extern int g_MaxHotkeysPerInterval;
 extern int g_HotkeyThrottleInterval;
+extern bool g_MaxThreadsBuffer;
 
-extern bool g_TrayMenuIsVisible;
+extern MenuVisibleType g_MenuIsVisible;
 extern int g_nMessageBoxes;
 extern int g_nInputBoxes;
 extern int g_nFileDialogs;
@@ -80,9 +82,14 @@ extern Var *g_ErrorLevel;
 EXTERN_CLIPBOARD;
 EXTERN_OSVER;
 
+extern int g_IconTray;
+extern int g_IconTraySuspend;
+
 extern DWORD g_OriginalTimeout;
 
-extern global_struct g, g_default;
+EXTERN_G;
+extern global_struct g_default;
+
 // This macro is defined because sometimes g.hWndLastUsed will be out-of-date and the window
 // may have been destroyed.  It also returns NULL if the current settings indicate that
 // hidden windows should be ignored:

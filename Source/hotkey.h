@@ -78,6 +78,7 @@ private:
 	HookActionType mHookAction;
 	Label *mJumpToLabel;
 	UCHAR mExistingThreads, mMaxThreads;
+	bool mMaxThreadsBuffer;
 	bool mRunAgainAfterFinished;
 	DWORD mRunAgainTime;
 	bool mConstructedOK;
@@ -175,7 +176,7 @@ public:
 
 	static void RunAgainAfterFinished(HotkeyIDType aHotkeyID)
 	{
-		if (aHotkeyID >= 0 && aHotkeyID < sHotkeyCount)
+		if (aHotkeyID >= 0 && aHotkeyID < sHotkeyCount && shk[aHotkeyID]->mMaxThreadsBuffer) // short-circuit order
 		{
 			shk[aHotkeyID]->mRunAgainAfterFinished = true;
 			shk[aHotkeyID]->mRunAgainTime = GetTickCount();

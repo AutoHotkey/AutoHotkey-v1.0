@@ -170,8 +170,12 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 	// the value of g_script.mTimerEnabledCount changes on-the-fly.
 	// UPDATE #2: The below has been changed in light of the fact that the main timer is
 	// now kept always-on whenever there is at least one enabled timed subroutine.
-	// This policy simplifies ExecUntil() and long-running commands such as FileSetAttrib:
-	#define THIS_LAYER_NEEDS_TIMER (aSleepDuration > 0 && g_nThreads > 0) // Also used by IsCycleComplete().
+	// This policy simplifies ExecUntil() and long-running commands such as FileSetAttrib.
+	// UPDATE #3: Use aMode == RETURN_AFTER_MESSAGES, not g_nThreads > 0, because the
+	// "Edit This Script" menu item (and possibly other places) might result in an indirect
+	// call to us and we will need the timer to avoid getting stuck in the GetMessageState()
+	// with hotkeys being disallowed due to filtering:
+	#define THIS_LAYER_NEEDS_TIMER (aSleepDuration > 0 && aMode == RETURN_AFTER_MESSAGES)
 	if (THIS_LAYER_NEEDS_TIMER)
 	{
 		++g_nLayersNeedingTimer;  // IsCycleComplete() is responsible for decrementing this for us.
@@ -253,7 +257,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 					// hotkey cases of the switch().  UPDATE: was_interrupted can now
 					// be true since the hotkey case in the switch() doesn't return,
 					// relying on us to do it after making sure the queue is empty:
-					return IsCycleComplete(aSleepDuration, start_time, allow_early_return);
+					return IsCycleComplete(aSleepDuration, start_time, allow_early_return, aMode);
 				}
 			}
 			// else Peek() found a message, so process it below.
@@ -301,7 +305,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 			// in preparation for ending this instance/layer, only to be possibly,
 			// but extremely rarely, interrupted/recursed yet again if that final
 			// peek were to detect a recursable message):
-			if (IsCycleComplete(aSleepDuration, start_time, allow_early_return))
+			if (IsCycleComplete(aSleepDuration, start_time, allow_early_return, aMode))
 				return OK;
 			// Otherwise, stay in the blessed GetMessage() state until
 			// the time has expired:
@@ -475,7 +479,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 					g_script.UpdateTrayIcon();
 				RESUME_UNDERLYING_THREAD
 
-				if (IsCycleComplete(aSleepDuration, start_time, allow_early_return))
+				if (IsCycleComplete(aSleepDuration, start_time, allow_early_return, aMode))
 				{
 					// Check for messages once more in case the subroutine that just completed
 					// above didn't check them that recently.  This is done to minimize the time
@@ -563,7 +567,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 
 
 
-ResultType IsCycleComplete(int aSleepDuration, DWORD aStartTime, bool aAllowEarlyReturn)
+ResultType IsCycleComplete(int aSleepDuration, DWORD aStartTime, bool aAllowEarlyReturn, MessageMode aMode)
 // This function is used just to make MsgSleep() more readable/understandable.
 {
 	// Note: Even if TickCount has wrapped due to system being up more than about 49 days,
