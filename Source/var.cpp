@@ -391,7 +391,29 @@ VarSizeType Var::Get(char *aBuf)
 		// Otherwise:
 		aBuf += GetCurrentDirectory(9999, aBuf);  // Caller has already ensured it's large enough.
 		break;
-	case VAR_NUMBATCHLINES: if (!aBuf) return GetBatchLines(); aBuf += GetBatchLines(aBuf); break;
+
+	case VAR_BATCHLINES: if (!aBuf) return g_script.GetBatchLines(); aBuf += g_script.GetBatchLines(aBuf); break;
+	case VAR_TITLEMATCHMODE: if (!aBuf) return g_script.GetTitleMatchMode(); else aBuf += g_script.GetTitleMatchMode(aBuf); break;
+	case VAR_TITLEMATCHMODESPEED: if (!aBuf) return g_script.GetTitleMatchModeSpeed(); else aBuf += g_script.GetTitleMatchModeSpeed(aBuf); break;
+	case VAR_DETECTHIDDENWINDOWS: if (!aBuf) return g_script.GetDetectHiddenWindows(); else aBuf += g_script.GetDetectHiddenWindows(aBuf); break;
+	case VAR_DETECTHIDDENTEXT: if (!aBuf) return g_script.GetDetectHiddenText(); else aBuf += g_script.GetDetectHiddenText(aBuf); break;
+	case VAR_AUTOTRIM: if (!aBuf) return g_script.GetAutoTrim(); else aBuf += g_script.GetAutoTrim(aBuf); break;
+	case VAR_STRINGCASESENSE: if (!aBuf) return g_script.GetStringCaseSense(); else aBuf += g_script.GetStringCaseSense(aBuf); break;
+	case VAR_FORMATINTEGER: if (!aBuf) return g_script.GetFormatInteger(); else aBuf += g_script.GetFormatInteger(aBuf); break;
+	case VAR_FORMATFLOAT: if (!aBuf) return g_script.GetFormatFloat(); else aBuf += g_script.GetFormatFloat(aBuf); break;
+	case VAR_KEYDELAY: if (!aBuf) return g_script.GetKeyDelay(); else aBuf += g_script.GetKeyDelay(aBuf); break;
+	case VAR_WINDELAY: if (!aBuf) return g_script.GetWinDelay(); else aBuf += g_script.GetWinDelay(aBuf); break;
+	case VAR_CONTROLDELAY: if (!aBuf) return g_script.GetControlDelay(); else aBuf += g_script.GetControlDelay(aBuf); break;
+	case VAR_MOUSEDELAY: if (!aBuf) return g_script.GetMouseDelay(); else aBuf += g_script.GetMouseDelay(aBuf); break;
+	case VAR_DEFAULTMOUSESPEED: if (!aBuf) return g_script.GetDefaultMouseSpeed(); else aBuf += g_script.GetDefaultMouseSpeed(aBuf); break;
+
+	case VAR_ICONHIDDEN: if (!aBuf) return g_script.GetIconHidden(); else aBuf += g_script.GetIconHidden(aBuf); break;
+	case VAR_ICONTIP: if (!aBuf) return g_script.GetIconTip(); else aBuf += g_script.GetIconTip(aBuf); break;
+	case VAR_ICONFILE: if (!aBuf) return g_script.GetIconFile(); else aBuf += g_script.GetIconFile(aBuf); break;
+	case VAR_ICONNUMBER: if (!aBuf) return g_script.GetIconNumber(); else aBuf += g_script.GetIconNumber(aBuf); break;
+
+	case VAR_EXITREASON: if (!aBuf) return g_script.GetExitReason(); aBuf += g_script.GetExitReason(aBuf); break;
+
 	case VAR_OSTYPE: if (!aBuf) return GetOSType(); aBuf += GetOSType(aBuf); break;
 	case VAR_OSVERSION: if (!aBuf) return GetOSVersion(); aBuf += GetOSVersion(aBuf); break;
 	case VAR_ISADMIN: if (!aBuf) return GetIsAdmin(); aBuf += GetIsAdmin(aBuf); break;
@@ -428,11 +450,13 @@ VarSizeType Var::Get(char *aBuf)
 	case VAR_LOOPFIELD: if (!aBuf) return g_script.GetLoopField(); else aBuf += g_script.GetLoopField(aBuf); break;
 	case VAR_INDEX: if (!aBuf) return g_script.GetLoopIndex(); else aBuf += g_script.GetLoopIndex(aBuf); break;
 
+	case VAR_THISMENUITEM: if (!aBuf) return g_script.GetThisMenuItem(); else aBuf += g_script.GetThisMenuItem(aBuf); break;
+	case VAR_THISMENU: if (!aBuf) return g_script.GetThisMenu(); else aBuf += g_script.GetThisMenu(aBuf); break;
 	case VAR_THISHOTKEY: if (!aBuf) return g_script.GetThisHotkey(); else aBuf += g_script.GetThisHotkey(aBuf); break;
 	case VAR_PRIORHOTKEY: if (!aBuf) return g_script.GetPriorHotkey(); else aBuf += g_script.GetPriorHotkey(aBuf); break;
 	case VAR_TIMESINCETHISHOTKEY: if (!aBuf) return g_script.GetTimeSinceThisHotkey(); else aBuf += g_script.GetTimeSinceThisHotkey(aBuf); break;
 	case VAR_TIMESINCEPRIORHOTKEY: if (!aBuf) return g_script.GetTimeSincePriorHotkey(); else aBuf += g_script.GetTimeSincePriorHotkey(aBuf); break;
-	case VAR_TICKCOUNT: if (!aBuf) return g_script.MyGetTickCount(); else aBuf += g_script.MyGetTickCount(aBuf); break;
+
 	case VAR_TIMEIDLE: if (!aBuf) return g_script.GetTimeIdle(); else aBuf += g_script.GetTimeIdle(aBuf); break;
 	case VAR_TIMEIDLEPHYSICAL: if (!aBuf) return g_script.GetTimeIdlePhysical(); else aBuf += g_script.GetTimeIdlePhysical(aBuf); break;
 
@@ -442,6 +466,9 @@ VarSizeType Var::Get(char *aBuf)
 	case VAR_TAB:
 	case VAR_SPACE: if (!aBuf) return g_script.GetSpace(mType); else aBuf += g_script.GetSpace(mType, aBuf); break;
 
+	case VAR_TICKCOUNT: if (!aBuf) return g_script.MyGetTickCount(); else aBuf += g_script.MyGetTickCount(aBuf); break;
+	case VAR_NOW: if (!aBuf) return g_script.GetNow(); else aBuf += g_script.GetNow(aBuf); break;
+	case VAR_NOWUTC: if (!aBuf) return g_script.GetNowUTC(); else aBuf += g_script.GetNowUTC(aBuf); break;
 	case VAR_YEAR: if (!aBuf) return 4; // else fall through, which admittedly is somewhat inefficient here.
 	case VAR_MON:
 	case VAR_MDAY:

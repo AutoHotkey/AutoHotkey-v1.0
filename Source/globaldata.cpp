@@ -27,6 +27,7 @@ GNU General Public License for more details.
 // which are necessary to save and restore (even though it would clean
 // up the code and might make maintaining it easier):
 HINSTANCE g_hInstance = NULL; // Set by WinMain().
+bool g_DestroyWindowCalled = false;
 HWND g_hWnd = NULL;
 HWND g_hWndEdit = NULL;
 HWND g_hWndSplash = NULL;
@@ -36,6 +37,7 @@ HACCEL g_hAccelTable = NULL;
 modLR_type g_modifiersLR_logical = 0;
 modLR_type g_modifiersLR_logical_non_ignored = 0;
 modLR_type g_modifiersLR_physical = 0;
+modLR_type g_modifiersLR_persistent = 0;
 
 #ifdef FUTURE_USE_MOUSE_BUTTONS_LOGICAL
 WORD g_mouse_buttons_logical = 0;
@@ -92,6 +94,12 @@ int g_nInputBoxes = 0;
 int g_nFileDialogs = 0;
 int g_nFolderDialogs = 0;
 InputBoxType g_InputBox[MAX_INPUTBOXES];
+
+// Init not needed for these:
+bool g_SortCaseSensitive;
+bool g_SortNumeric;
+bool g_SortReverse;
+int g_SortColumnOffset;
 
 char g_delimiter = ',';
 char g_DerefChar = '%';
@@ -283,8 +291,10 @@ Action g_act[] =
 
 	, {"Sleep", 1, 1, {1, 0}} // Sleep time in ms (numeric)
 	, {"Random", 1, 3, {2, 3, 0}} // Output var, Min, Max (Note: MinParams is 1 so that param2 can be blank).
+
 	, {"Goto", 1, 1, NULL}
 	, {"Gosub", 1, 1, NULL}   // Label (or dereference that resolves to a label).
+	, {"OnExit", 0, 2, NULL}  // Optional label, future use (since labels are allowed to contain commas)
 	, {"Hotkey", 1, 3, NULL}  // Mod+Keys, Label/Action (blank to avoid changing curr. label), Options
 	, {"SetTimer", 1, 2, NULL}  // Label (or dereference that resolves to a label), period (or ON/OFF)
 	, {"Return", 0, 0, NULL}, {"Exit", 0, 1, {1, 0}} // ExitCode (currently ignored)
@@ -406,7 +416,7 @@ Action g_act[] =
 
 	, {"Edit", 0, 0, NULL}
 	, {"Reload", 0, 0, NULL}
-	, {"Menu", 2, 5, NULL}  // Example: Menu, tray, add, name, label, FutureUse (thread priority?)
+	, {"Menu", 2, 5, NULL}  // tray, add, name, label, FutureUse (thread priority?)
 
 	, {"ExitApp", 0, 1, NULL}  // Optional exit-code
 	, {"Shutdown", 1, 1, {1, 0}} // Seems best to make the first param (the flag/code) mandatory.

@@ -206,21 +206,35 @@ int SendChar(char aChar, mod_type aModifiers, KeyEventTypes aEventType, HWND aTa
 // be used as a pointer value by any apps that send keybd events whose ExtraInfo is really
 // a pointer value (hard to imagine?):
 #define KEY_IGNORE 0xFFC3D44F
-#define KEY_IGNORE_PHYS (KEY_IGNORE - 1)  // Same as above but marked as physical for other instances of the hook.
+#define KEY_PHYS_IGNORE (KEY_IGNORE - 1)  // Same as above but marked as physical for other instances of the hook.
 #define KEY_IGNORE_ALL_EXCEPT_MODIFIER (KEY_IGNORE - 2)  // Non-physical and ignored only if it's not a modifier.
+
+// The default in the below is KEY_IGNORE_ALL_EXCEPT_MODIFIER, which causes standard calls to
+// KeyEvent() to update g_modifiersLR_logical_non_ignored the same way it updates g_modifiersLR_logical.
+// This is done because only the Send command has a realistic chance of interfering with (or being
+// interfered with by) hook hotkeys (namely the modifiers used to decide whether to trigger them).
+// There are two types of problems:
+// 1) Hotkeys not firing due to Send having temporarily released one of that hotkey's modifiers that
+//    the user is still holding down.  This causes the hotkey's suffix to flow through to the system,
+//    which is usually undesirable.  This happens when the user is holding down a hotkey to auto-repeat
+//    it, and perhaps other times.
+// 2) The wrong hotkey firing because Send has temporarily put a modifier into effect and (once again)
+//    the user is holding down the hotkey to auto-repeat it.  If the Send's temp-down modifier happens
+//    to make the hotkey suffix match a different set of modifiers, the wrong hotkey would fire.
 ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC = 0, HWND aTargetWindow = NULL
-	, bool aDoKeyDelay = false, DWORD aExtraInfo = KEY_IGNORE);
-#define KEYEVENT_PHYS(event_type, vk, sc) KeyEvent(event_type, vk, sc, NULL, false, KEY_IGNORE_PHYS)
-#define KEYEVENT_NO_IGNORE_MODIFIER(event_type, vk, sc) KeyEvent(event_type, vk, sc, NULL, false, KEY_IGNORE_ALL_EXCEPT_MODIFIER)
+	, bool aDoKeyDelay = false, DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER);
+#define KEYEVENT_PHYS(event_type, vk, sc) KeyEvent(event_type, vk, sc, NULL, false, KEY_PHYS_IGNORE)
 
 ToggleValueType ToggleKeyState(vk_type aVK, ToggleValueType aToggleValue);
 void ToggleNumlockWin9x();
 //void CapslockOffWin9x();
 
-modLR_type SetModifierState(mod_type aModifiersNew, modLR_type aModifiersLRnow);
-modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLRnow, DWORD aExtraInfo = KEY_IGNORE);
+modLR_type SetModifierState(mod_type aModifiersNew, modLR_type aModifiersLRnow
+, DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER);
+modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLRnow
+	, DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER);
 void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLRnow, KeyEventTypes aKeyUp
-	, DWORD aExtraInfo = KEY_IGNORE);
+	, DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER);
 
 mod_type GetModifierState();
 modLR_type GetModifierLRState(bool aExplicitlyGet = false);

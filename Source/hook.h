@@ -25,7 +25,7 @@ GNU General Public License for more details.
 // If this is a problem, try making the msg have an ID less than WM_USER via a technique such as that used
 // for AHK_USER_MENU (perhaps WM_COMMNOTIFY can be "overloaded" to contain more than one type of msg):
 enum UserMessages {AHK_HOOK_HOTKEY = WM_USER, AHK_HOOK_TEST_MSG, AHK_USER_MENU, AHK_DIALOG, AHK_NOTIFYICON
-	, AHK_RETURN_PID};
+	, AHK_RETURN_PID, AHK_EXIT_BY_RELOAD, AHK_EXIT_BY_SINGLEINSTANCE};
 // NOTE: TRY NEVER TO CHANGE the specific numbers of the above messages, since some users might be
 // using the Post/SendMessage commands to automate AutoHotkey itself.  Here is the original order
 // that should be maintained:
@@ -44,6 +44,7 @@ enum UserMessages {AHK_HOOK_HOTKEY = WM_USER, AHK_HOOK_TEST_MSG, AHK_USER_MENU, 
 	} // In the above, wparam is made zero to help catch bugs.
 
 // And these macros are kept here so that all this trickery is centrally located and thus more maintainable:
+#define ASK_INSTANCE_TO_CLOSE(window, reason) PostMessage(window, WM_COMMNOTIFY, reason, 0);
 #define POST_AHK_USER_MENU(menu) PostThreadMessage(GetCurrentThreadId(), WM_COMMNOTIFY, AHK_USER_MENU, menu);
 #define POST_AHK_DIALOG(timeout) PostMessage(g_hWnd, WM_COMMNOTIFY, AHK_DIALOG, (LPARAM)timeout);
 // Notes about POST_AHK_DIALOG above:

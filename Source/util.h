@@ -275,6 +275,7 @@ inline bool IsHex(char *aBuf)
 // octal, which is undesirable.
 //#define ATOI(buf) strtol(buf, NULL, 0) // Use zero as last param to support both hex & dec.
 #define ATOI(buf) (IsHex(buf) ? strtol(buf, NULL, 16) : atoi(buf))
+#define ATOU(buf) (strtoul(buf, NULL, IsHex(buf) ? 16 : 10))
 
 // Unlike some Unix versions of strtod(), the VC++ version does not seem to handle hex strings
 // such as "0xFF" automatically.  So this macro must check for hex because some callers rely on that.
@@ -455,9 +456,10 @@ inline char *GetLastErrorText(char *aBuf, size_t aBuf_size)
 
 char *FileAttribToStr(char *aBuf, DWORD aAttr);
 
-#define DATE_FORMAT "YYYYMMDDHHMISS"
+#define DATE_FORMAT_LENGTH 14 // "YYYYMMDDHHMISS"
 ResultType YYYYMMDDToFileTime(char *YYYYMMDD, FILETIME *pftDateTime);
-char *FileTimeToYYYYMMDD(char *aYYYYMMDD, FILETIME *pftDateTime, bool aConvertToLocalTime = false);
+char *FileTimeToYYYYMMDD(char *aBuf, FILETIME &aTime, bool aConvertToLocalTime = false);
+char *SystemTimeToYYYYMMDD(char *aBuf, SYSTEMTIME &aTime, bool aConvertToLocalTime = false);
 __int64 YYYYMMDDSecondsUntil(char *aYYYYMMDDStart, char *aYYYYMMDDEnd, bool &aFailed);
 __int64 FileTimeSecondsUntil(FILETIME *pftStart, FILETIME *pftEnd);
 

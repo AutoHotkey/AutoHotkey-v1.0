@@ -699,7 +699,7 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 					"\n#InstallKeybdHook force"
 					, MB_YESNO);
 				if (result != IDYES)
-					g_script.ExitApp();
+					g_script.ExitApp(EXIT_CRITICAL);
 				// Note: It's not necessary to ever close the Mutex with CloseHandle() because:
 				// "The system closes the handle automatically when the process terminates.
 				// The mutex object is destroyed when its last handle has been closed."
@@ -760,7 +760,7 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 					"\n#InstallMouseHook force"
 					, MB_YESNO);
 				if (result != IDYES)
-					g_script.ExitApp();
+					g_script.ExitApp(EXIT_CRITICAL);
 			}
 		}
 #endif

@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.12"
+#define NAME_VERSION "1.0.13"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -89,10 +89,13 @@ enum ResultType {FAIL = 0, OK, WARN = OK, CRITICAL_ERROR
 	, LOOP_BREAK, LOOP_CONTINUE
 	, EARLY_RETURN, EARLY_EXIT};
 
+enum ExitReasons {EXIT_NONE, EXIT_CRITICAL, EXIT_ERROR, EXIT_DESTROY, EXIT_LOGOFF, EXIT_SHUTDOWN
+	, EXIT_WM_QUIT, EXIT_WM_CLOSE, EXIT_MENU, EXIT_EXIT, EXIT_RELOAD, EXIT_SINGLEINSTANCE};
+
 enum SingleInstanceType {ALLOW_MULTI_INSTANCE, SINGLE_INSTANCE, SINGLE_INSTANCE_REPLACE
 	, SINGLE_INSTANCE_IGNORE}; // ALLOW_MULTI_INSTANCE must be zero.
 
-enum MenuVisibleType {MENU_VISIBLE_NONE, MENU_VISIBLE_TRAY, MENU_VISIBLE_MAIN}; // NONE must be zero.
+enum MenuVisibleType {MENU_VISIBLE_NONE, MENU_VISIBLE_POPUP, MENU_VISIBLE_MAIN}; // NONE must be zero.
 
 // These are used for things that can be turned on, off, or left at a
 // neutral default value that is neither on nor off.  INVALID must
@@ -113,6 +116,9 @@ enum ToggleValueType {TOGGLE_INVALID = 0, TOGGLED_ON, TOGGLED_OFF, ALWAYS_ON, AL
 #define MAX_INPUTBOXES 4
 #define MAX_FILEDIALOGS 4
 #define MAX_FOLDERDIALOGS 4
+#define MAX_NUMBER_LENGTH 20
+// Above is the maximum length of a 64-bit number when expressed as decimal or hex string.
+// e.g. -9223372036854775808 or (unsigned) 18446744073709551616
 
 // Bitwise storage of boolean flags.  This section is kept in this file because
 // of mutual dependency problems between hook.h and other header files:

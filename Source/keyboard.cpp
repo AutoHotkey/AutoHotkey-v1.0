@@ -104,9 +104,16 @@ void SendKeys(char *aKeys, HWND aTargetWindow)
 	// we will not attempt to change (e.g. "Send, A" will not release the LWin
 	// before sending "A" if this value indicates that LWin is down).  The below sets
 	// the value to be all the down-keys in modifiersLR_current except any that are physically
-	// down due to the hotkey itself:
-	modLR_type modifiersLR_persistent = modifiersLR_current & ~modifiersLR_down_physically_and_logically;
-	mod_type modifiers_persistent = ConvertModifiersLR(modifiersLR_persistent);
+	// down due to the hotkey itself.  UPDATE: To improve the above, we now exclude from
+	// the set of persistent modifiers any that weren't made persistent by this script.
+	// Such a policy seems likely to do more good than harm as there have been cases where
+	// a modifier was detected as persistent just because #HotkeyModifier had timed out
+	// while the user was still holding down the key, but then when the user released it,
+	// this logic here would think it's still persistent and push it back down again
+	// to enforce it as "always-down" during the send operation.  Thus, the key would
+	// basically get stuck down even after the send was over:
+	g_modifiersLR_persistent &= modifiersLR_current & ~modifiersLR_down_physically_and_logically;
+	mod_type modifiers_persistent = ConvertModifiersLR(g_modifiersLR_persistent);
 	// The above two variables should be kept in sync with each other from now on.
 
 //MsgBox(GetTickCount() - g_script.mThisHotkeyStartTime);
@@ -114,7 +121,7 @@ void SendKeys(char *aKeys, HWND aTargetWindow)
 //MsgBox(ModifiersLRToText(aModifiersLR, mod_str));
 //MsgBox(ModifiersLRToText(modifiersLR_current, mod_str));
 //MsgBox(ModifiersLRToText(modifiersLR_down_physically_and_logically, mod_str));
-//MsgBox(ModifiersLRToText(modifiersLR_persistent, mod_str));
+//MsgBox(ModifiersLRToText(g_modifiersLR_persistent, mod_str));
 
 	// Might be better to do this prior to changing capslock state:
 	bool threads_are_attached = false; // Set default.
@@ -152,10 +159,6 @@ void SendKeys(char *aKeys, HWND aTargetWindow)
 	for (; *aKeys; ++aKeys)
 	{
 		LONG_OPERATION_UPDATE_FOR_SENDKEYS
-		// No, it's much better to allow literal spaces even though {SPACE} is also
-		// supported:
-		//if (IS_SPACE_OR_TAB(*aKeys))
-		//	continue;
 		switch (*aKeys)
 		{
 		case '^':
@@ -240,9 +243,9 @@ void SendKeys(char *aKeys, HWND aTargetWindow)
 					if (key_as_modifiersLR = KeyToModifiersLR(vk, sc)) // Assign
 					{
 						if (event_type == KEYDOWN) // i.e. make {Shift down} have the same effect {ShiftDown}
-							modifiers_persistent = ConvertModifiersLR(modifiersLR_persistent |= key_as_modifiersLR);
+							modifiers_persistent = ConvertModifiersLR(g_modifiersLR_persistent |= key_as_modifiersLR);
 						else if (event_type == KEYUP)
-							modifiers_persistent = ConvertModifiersLR(modifiersLR_persistent &= ~key_as_modifiersLR);
+							modifiers_persistent = ConvertModifiersLR(g_modifiersLR_persistent &= ~key_as_modifiersLR);
 						// else must never change modifiers_persistent in response to KEYDOWNANDUP
 						// because that would break existing scripts.  This is because that same
 						// modifier key may have been pushed down via {ShiftDown} rather than "{Shift Down}".
@@ -254,7 +257,7 @@ void SendKeys(char *aKeys, HWND aTargetWindow)
 					// behaves also, which is good.  Example: Send, {AltDown}!f  ; this will cause
 					// Alt to still be down after the command is over, even though F is modified
 					// by Alt.
-					SendKey(vk, sc, modifiers_for_next_key, modifiersLR_persistent, repeat_count
+					SendKey(vk, sc, modifiers_for_next_key, g_modifiersLR_persistent, repeat_count
 						, event_type, key_as_modifiersLR, aTargetWindow);
 				}
 				modifiers_for_next_key = 0;  // reset after each, and even if no valid vk was found (should be just like AutoIt).
@@ -267,7 +270,7 @@ void SendKeys(char *aKeys, HWND aTargetWindow)
 			if (key_name_length == 1)
 			{
 				if (repeat_count)
-					SendKeySpecial(aKeys[1], modifiers_for_next_key, modifiersLR_persistent, repeat_count
+					SendKeySpecial(aKeys[1], modifiers_for_next_key, g_modifiersLR_persistent, repeat_count
 						, event_type, aTargetWindow);
 				modifiers_for_next_key = 0;  // reset after each, and even if no valid vk was found (should be just like AutoIt).
 				aKeys = end_pos;  // In prep for aKeys++ at the bottom of the loop.
@@ -275,7 +278,7 @@ void SendKeys(char *aKeys, HWND aTargetWindow)
 			}
 
 			// Otherwise, since no vk was found, check it against list of special keys:
-			int special_key = TextToSpecial(aKeys + 1, (UINT)key_text_length, modifiersLR_persistent, modifiers_persistent);
+			int special_key = TextToSpecial(aKeys + 1, (UINT)key_text_length, g_modifiersLR_persistent, modifiers_persistent);
 			if (special_key)
 				for (UINT i = 0; i < repeat_count; ++i)
 				{
@@ -314,9 +317,9 @@ void SendKeys(char *aKeys, HWND aTargetWindow)
 			vk = TextToVK(single_char_string, &modifiers_for_next_key, true);
 			sc = 0;
 			if (vk)
-				SendKey(vk, sc, modifiers_for_next_key, modifiersLR_persistent, 1, KEYDOWNANDUP, 0, aTargetWindow);
+				SendKey(vk, sc, modifiers_for_next_key, g_modifiersLR_persistent, 1, KEYDOWNANDUP, 0, aTargetWindow);
 			else // Try to send it by alternate means.
-				SendKeySpecial(*aKeys, modifiers_for_next_key, modifiersLR_persistent, 1, KEYDOWNANDUP, aTargetWindow);
+				SendKeySpecial(*aKeys, modifiers_for_next_key, g_modifiersLR_persistent, 1, KEYDOWNANDUP, aTargetWindow);
 			modifiers_for_next_key = 0;  // Safest to reset this regardless of whether a key was sent.
 			// break;  Not needed in "default".
 		} // switch()
@@ -353,7 +356,19 @@ void SendKeys(char *aKeys, HWND aTargetWindow)
 		// because these keys being put back down match the physical pressing of those same keys by the
 		// user, and we want such modifiers to be taken into account for the purpose of deciding whether
 		// other hotkeys should fire (or the same one again if auto-repeating):
-		SetModifierLRStateSpecific(keys_to_press_down, modifiersLR_current, KEYDOWN, KEY_IGNORE_ALL_EXCEPT_MODIFIER);
+		SetModifierLRStateSpecific(keys_to_press_down, modifiersLR_current, KEYDOWN);
+		if (g_KeybdHook)
+		{
+			// Ensure that g_modifiersLR_logical_non_ignored does not contain any down-modifiers
+			// that aren't down in g_modifiersLR_logical.  This is done mostly for peace-of-mind,
+			// since there mind be ways, via combinations of physical user input and the Send
+			// commands own input (overlap and interference) for one to get out of sync with the
+			// other.  The below uses ^ to find the differences between the two, then uses & to
+			// find which are down in non_ignored that aren't in logical, then inverts those bits
+			// in g_modifiersLR_logical_non_ignored, which sets those keys to be in the up position:
+			g_modifiersLR_logical_non_ignored &= ~((g_modifiersLR_logical ^ g_modifiersLR_logical_non_ignored)
+				& g_modifiersLR_logical_non_ignored);
+		}
 	}
 
 	if (prior_capslock_state == TOGGLED_ON) // The current user setting requires us to turn it back on.
@@ -417,9 +432,10 @@ int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, modLR_type aModifiers
 		// Also: Seems best to do SetModifierState() even if Keydelay < 0:
 		// Update: If this key is itself a modifier, don't change the state of the other
 		// modifier keys just for it, since most of the time that is unnecessary and in
-		// some cases, the extra generated keystrokes would cause complications/side-effects:
+		// some cases, the extra generated keystrokes would cause complications/side-effects.
 		if (!aKeyAsModifiersLR)
-			SetModifierState(modifiers_specified, GetModifierLRState());
+			// See keyboard.h for explantion of KEY_IGNORE:
+			SetModifierState(modifiers_specified, GetModifierLRState(), KEY_IGNORE);
 		KeyEvent(aEventType, aVK, aSC, aTargetWindow, true);
 	}
 
@@ -456,7 +472,7 @@ int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, modLR_type aModifiers
 		//    during the course of a SendKeys() operation.  Since the persistent modifiers were
 		//    (by definition) already in effect prior to the Send, putting them back down for the
 		//    purpose of firing hook hotkeys does not seem unreasonable, and may in fact add value:
-		SetModifierLRState(aModifiersLRPersistent, GetModifierLRState(), KEY_IGNORE_ALL_EXCEPT_MODIFIER);
+		SetModifierLRState(aModifiersLRPersistent, GetModifierLRState());
 	return aRepeatCount;
 }
 
@@ -469,101 +485,165 @@ int SendKeySpecial(char aChar, mod_type aModifiers, modLR_type aModifiersLRPersi
 // This function uses some of the same code as SendKey() above, so maintain them together.
 {
 	if (aRepeatCount <= 0) return aRepeatCount;
-	// My: It looks like the "Pƒ" in the below belongs there, as does "­½", which
-	// seems to be a single unit of some kind.  Also, it seems that Alt+146 and
-	// Alt+0198 (must have the zero) both yield Æ ... while Alt+145 and Alt+0230
-	// both yield æ.
-	// AutoIt3: Note that the cent and yen symbol are missing and replaced with space - 
-	// this will never be matched as this function will never be called with a space char
 
-	LONG_OPERATION_INIT
+	static char cAnsiToAscii [128] =
+	{ 
+// 80   €            ‚      ƒ      „      …      †      ‡      ˆ      ‰      Š      ‹      Œ            Ž      
+        0,     0,     0,  '\x9f',   0,     0,     0,     0,     0,     0,     0,     0,     0,     0,     0,     0,
+// 90         ‘      ’      “      ”     •:f9    –      —      ˜      ™      š      ›      œ            ž      Ÿ
+        0,     0,     0,     0,     0  ,   0  ,   0,     0,     0,     0,     0,     0,     0,     0,     0,     0,
+// A0          ¡      ¢      £      ¤      ¥      ¦      §      ¨      ©      ª      «      ¬      ­      ®      ¯
+        0,  '\xad','\x9b','\x9c',   0  ,'\x9d','\xb3','\x15',   0  ,   0  ,'\xa6','\xae','\xaa',   0  ,   0 ,    0,
+// B0   °      ±      ²      ³      ´      µ      ¶      ·      ¸      ¹      º      »      ¼      ½      ¾      ¿
+     '\xf8','\xf1','\xfd',   0  ,   0  ,'\xe6' ,'\x14','\xfa',   0     ,0  ,'\xa7','\xaf','\xac','\xab',   0  ,'\xa8',
+// C0   À      Á      Â      Ã      Ä      Å      Æ      Ç      È      É      Ê      Ë      Ì      Í      Î      Ï
+     '\x62','\x22','\x32','\x42','\x8e','\x8f','\x92','\x80','\x64','\x90','\x34','\x54','\x66','\x26','\x36','\x56',
+// D0   Ð      Ñ      Ò      Ó      Ô      Õ      Ö      ×      Ø      Ù      Ú      Û      Ü      Ý      Þ      ß
+        0,  '\xa5','\x68','\x28','\x38','\x48','\x99',   0  ,   0  ,'\x6a','\x2a','\x3a','\x9a','\x2c',   0  ,'\xe1',
+// E0   à      á      â      ã      ä      å      æ      ç      è      é      ê      ë      ì      í      î      ï
+     '\x85','\xa0','\x83','\x41','\x84','\x86','\x91','\x87','\x8a','\x82','\x88','\x89','\x8d','\xa1','\x8c','\x8b',
+// F0   ð      ñ      ò      ó      ô      õ      ö      ÷      ø      ù      ú      û      ü      ý      þ      ÿ
+        0,  '\xa4','\x95','\xa2','\x93','\x47','\x94','\xf6',   0  ,'\x97','\xa3','\x96','\x81','\x2b',   0  ,'\x98'
+	};
 
-	char szSpecials[] = "ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ £ PƒáíóúñÑªº¿¬­½¼¡«»";
-	// simulation using diadic keystroke
-	char diadic[64] =
-/*192 */ {	'`', '´', '^', '~', '¨', 'º', ' ', ' ', '`', '´', '^', '¨', '`', '´', '^', '¨',
-/*208 */	' ', '~', '`', '´', '^', '~', '¨', ' ', ' ', '`', '´', '^', '¨', '´', ' ', ' ',
-/*224 */	'`', '´', '^', '~', '¨', 'º', ' ', ' ', '`', '´', '^', '¨', '`', '´', '^', '¨',
-/*240 */	' ', '~', '`', '´', '^', '~', '¨', ' ', ' ', '`', '´', '^', '¨', '´', ' ', '¨'
-		};
-	char letter[64] =
-/*192 */ {	'A', 'A', 'A', 'A', 'A', 'A', ' ', ' ', 'E', 'E', 'E', 'E', 'I', 'I', 'I', 'I',
-/*208 */	' ', 'N', 'O', 'O', 'O', 'O', 'O', ' ', ' ', 'U', 'U', 'U', 'U', 'Y', ' ', ' ',
-/*224 */	'a', 'a', 'a', 'a', 'a', 'a', ' ', ' ', 'e', 'e', 'e', 'e', 'i', 'i', 'i', 'i',
-/*240 */	' ', 'n', 'o', 'o', 'o', 'o', 'o', ' ', ' ', 'u', 'u', 'u', 'u', 'y', ' ', 'y'
-		};
+//                               0   1   2   3   4   5   6   7   8   9   A   B   C   D   E   F
+	static char g_cDiadicLetter[16] = {' ','a','A','e','E','i','I','o','O','u','U','y','Y','n','N',' '};
 
-	int pair_index;
-	char ascii[8] = "", ascii_diadic[8] = "";  // Make it a string since leading zeros in it are significant.
+	mod_type modifiers_specified = aModifiers | ConvertModifiersLR(aModifiersLRPersistent);
 
-	switch(aChar)
+	char asc_string[16] = "";
+
+	// At the very least, this section should be kept to provide support for Daish ø & Ø chars.
+	// However, it also extends support for many other chars that the AutoIt3's method cannot produce.
+	// Most of these might be symbols, but some are probably useful to some people.
+	// Here is the complete list of all ANSI chars above 127 (also known as "extended ASCII"?):
+	// €‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ ¡¢£¤¥¦§¨©ª«¬­®¯°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ
+	// Without the below method, only the following of the above can be produced:
+	// ƒ¡¢£¥¦§ª«¬°±²µ¶·º»¼½¿AAAAÄÅÆÇEÉEEIIIIÑOOOOÖUUUÜYßàáâaäåæçèéêëìíîïñòóôoö÷ùúûüyÿ
+	// The above has been tested on both Win98SE (but not the Win98 command prompt) and WinXP and seems
+	// to work okay.  And since it uses ANSI keypad method, it should work on nearly all language keyboards.
+	if (aChar < 0) // Try using ANSI, which should be standard in Windows on nearly all language keyboards?
+		snprintf(asc_string, sizeof(asc_string), "0%d", (int)(UCHAR)aChar);  // Must have leading zero.
+
+	int asc_int = 0;
+	if (!*asc_string)
 	{
-	case 'ø': strlcpy(ascii, "0248", sizeof(ascii)); break;  // Must have leading zero.
-	case 'Ø': strlcpy(ascii, "0216", sizeof(ascii)); break;  // Must have leading zero.
+		asc_int = cAnsiToAscii[(int)((aChar - 128) & 0xff)] & 0xff;
+		if (asc_int && (asc_int < 32 || asc_int >= 128))  // CHANGED FROM AU3: No sense in sending {Asc 0}.
+			// simulation using {ASC nnn}
+			// Only the char code between whose corresponding value
+			// in cAnsiToAscii[] >= 128 can be sent directly
+			_itoa(asc_int, asc_string, 10);
 	}
 
-	if (!*ascii)
+	if (*asc_string)
 	{
-		// AutoIt3: // simulation using {ASC nnn}
-		// Only the char code between {asc 128} and {asc 175} can be sent
-		char *cp = strchr(szSpecials, aChar);
-		if (cp)
+		LONG_OPERATION_INIT
+		for (int i = 0; i < aRepeatCount; ++i)
 		{
-			if (aTargetWindow)
-				// For now, don't support the ASC method for sending directly to windows.
-				// AutoIt3 takes a stab at supporting it, by activating the parent window I think,
-				// but this seems pointless to me.  So for now, the user shouldn't be using the
-				// ControlSend command to send anything that requires the ASC method:
-				return 0;
-			_itoa(128 + (int)(cp - szSpecials), ascii, 10);
+			LONG_OPERATION_UPDATE_FOR_SENDKEYS
+			SendASC(asc_string, aTargetWindow); // aTargetWindow is always NULL, it's just for maintainability.
+			DoKeyDelay();
 		}
-		else // ASCII codes between 192 and 255 inclusive (a total of 64 characters).
+		// See notes in SendKey():
+		SetModifierLRState(aModifiersLRPersistent, GetModifierLRState());
+		return aRepeatCount;
+	}
+
+	// Otherwise:
+	// simulation using diadic keystroke
+	// pick up the diadic char according to cTradAnsiLetter
+	// 0-3 part is the index in szDiadic defining the first character to be sent
+	//        this implementation will allow to change the szDiadic value
+	//			and if set to blank not to send the diadic char
+	//			This will allow to treat without extra char when language keyboard
+	//			does not support this diadic char Ex; ~ in german
+
+	// List of Diadic characters will be updated according to keyboard layout
+	//                     0   1   2   3   4   5   6   7
+	static char g_cDiadic[8] = {' ',' ','´','^','~','¨','`',' '};
+	static g_cDiadic_initialized = false;
+	if (!g_cDiadic_initialized)
+	{
+		g_cDiadic_initialized = true;
+		char szKLID[KL_NAMELENGTH];
+		GetKeyboardLayoutName(szKLID);		// Get input locale identifier name
+		//	update Diadics char according to keyboard possibility
+		for (int i=1; i<=7; ++i)
+		{	// check VK code to check if diadic char can be sent
+			// English keyboard cannot sent diadics char
+			if ( VkKeyScan(g_cDiadic[i]) == -1 || (strcmp(&szKLID[6], "09") == 0) )
+				g_cDiadic[i] = ' ';				// reset Diadic setting
+		}
+		// need to check if a German keyboard  in use
+		// because ~ does not work as a diadic char
+		if (strcmp(&szKLID[6], "07") == 0)	// german keyboard
+			g_cDiadic[4] = ' ';
+	}
+
+	char asc_string1[16] = "";
+	bool send1 = false;
+	char ch1 = g_cDiadic[asc_int >> 4];
+	if (ch1 != ' ')		// something can be try to send diadic followed by non accent char
+	{
+		if (VkKeyScan(ch1) != -1)
+			send1 = true;
+		else
 		{
-			// Leave ascii as empty string to indicate to the below that the alternate method will be used instead.
-			if (aChar >= 'À')
+			int asc_int1 = cAnsiToAscii[(int)((ch1 - 128) & 0xff)] & 0xff;
+			if (asc_int1 < 32 || asc_int1 >= 128)
 			{
-				pair_index = aChar - 'À'; // 'À' expressed as a signed char is -64.
-				// Sanity check to prevent any chance of buffer underrun or overrun (probably impossible
-				// given the above checks):
-				if (pair_index < 0 || pair_index >= sizeof(diadic))
-					return 0;
-				if (diadic[pair_index] == ' ') // This is one of the ASCII codes between 192 and 256 than CAN'T be sent.
-					return 0;
-				// else AutoIt3: something can be try to send diadic followed by non accent char
-				// The diadic itself might require the ASC method:
-				if (cp = strchr(szSpecials, diadic[pair_index]))
-				{
-					if (aTargetWindow) // Not supported, see above.
-						return 0;
-					_itoa(128 + (int)(cp - szSpecials), ascii_diadic, 10);
-				}
-				// else leave ascii_diadic set to empty string.
+				_itoa(asc_int1, asc_string1, 10);
+				send1 = true;
 			}
 		}
 	}
 
-	mod_type modifiers_specified = aModifiers | ConvertModifiersLR(aModifiersLRPersistent);
+	// pick up the basic letter according to cTradAnsiLetter
+	// 4-7 part is the index in szDiadic defining the second character to be sent
+	char asc_string2[16] = "";
+	bool send2 = false;
+	char ch2 = g_cDiadicLetter[asc_int & 0x0f];
+	if (ch2 != ' ')		// something can be try to send diadic followed by non accent char
+	{
+		if (VkKeyScan(ch2) != -1)
+			send2 = true;
+		else
+		{
+			int asc_int2 = cAnsiToAscii[(int)((ch2 - 128) & 0xff)] & 0xff;
+			if (asc_int2 < 32 || asc_int2 >= 128)
+			{
+				_itoa(asc_int2, asc_string2, 10);
+				send2 = true;
+			}
+		}
+	}
 
+	if (!send1 && !send2) // Can't simulate aChar.
+		return 0;
+
+	LONG_OPERATION_INIT
 	for (int i = 0; i < aRepeatCount; ++i)
 	{
 		LONG_OPERATION_UPDATE_FOR_SENDKEYS
-		if (*ascii) // Method #1
+		if (send1)
 		{
-			SendASC(ascii, aTargetWindow); // aTargetWindow is always NULL, it's just for maintainability.
-			DoKeyDelay();
-		}
-		else // Method #2
-		{
-			if (*ascii_diadic)
-				SendASC(ascii_diadic, aTargetWindow); // aTargetWindow is always NULL, it's just for maintainability.
+			if (*asc_string1)
+				SendASC(asc_string1, aTargetWindow); // aTargetWindow is always NULL, it's just for maintainability.
 			else
-				SendChar(diadic[pair_index], modifiers_specified, KEYDOWNANDUP, aTargetWindow);
-			SendChar(letter[pair_index], modifiers_specified, aEventType, aTargetWindow);
-			DoKeyDelay();
+				SendChar(ch1, modifiers_specified, KEYDOWNANDUP, aTargetWindow);
 		}
+		if (send2)
+		{
+			if (*asc_string2)
+				SendASC(asc_string2, aTargetWindow); // aTargetWindow is always NULL, it's just for maintainability.
+			else
+				SendChar(ch2, modifiers_specified, KEYDOWNANDUP, aTargetWindow);
+		}
+		DoKeyDelay();
 	}
 	// See notes in SendKey():
-	SetModifierLRState(aModifiersLRPersistent, GetModifierLRState(), KEY_IGNORE_ALL_EXCEPT_MODIFIER);
+	SetModifierLRState(aModifiersLRPersistent, GetModifierLRState());
 	return aRepeatCount;
 }
 
@@ -578,7 +658,10 @@ int SendASC(char *aAscii, HWND aTargetWindow)
 	if (aTargetWindow) return 0;
 
 	int value = ATOI(aAscii);
-	if (value < 0 || value > 255) return 0; // Sanity check.
+
+	// This is not correct because it is possible to generate unicode characters by typing
+	// Alt+256 and beyond:
+	// if (value < 0 || value > 255) return 0; // Sanity check.
 
 	// Known issue: If the hotkey that triggers this Send command is CONTROL-ALT
 	// (and maybe either CTRL or ALT separately, as well), the {ASC nnnn} method
@@ -593,8 +676,12 @@ int SendASC(char *aAscii, HWND aTargetWindow)
 	if (modifiersLR_to_release)
 		// Note: It seems best never to put them back down, because the act of doing so
 		// may do more harm than good (i.e. the keystrokes may caused unexpected
-		// side-effects:
-		SetModifierLRStateSpecific(modifiersLR_to_release, GetModifierLRState(), KEYUP);
+		// side-effects.  Specify KEY_IGNORE so that this action does not affect the
+		// modifiers that the hook uses to determine which hotkey should be triggered
+		// for a suffix key that has more than one set of triggering modifiers
+		// (for when the user is holding down that suffix to auto-repeat it --
+		// see keyboard.h for details):
+		SetModifierLRStateSpecific(modifiersLR_to_release, GetModifierLRState(), KEYUP, KEY_IGNORE);
 
 	int keys_sent = 0;  // Track this value and return it to the caller.
 
@@ -610,7 +697,8 @@ int SendASC(char *aAscii, HWND aTargetWindow)
 		// A comment from AutoIt3: ASCII 0 is 48, NUMPAD0 is 96, add on 48 to the ASCII.
 		// Also, don't do WinDelay after each keypress in this case because it would make
 		// such keys take up to 3 or 4 times as long to send (AutoIt3 avoids doing the
-		// delay also):
+		// delay also).  Note that strings longer than 4 digits are allowed because
+		// some or all OSes support Unicode characters 0 through 65535.
 		KeyEvent(KEYDOWNANDUP, *cp + 48);
 		++keys_sent;
 	}
@@ -642,7 +730,7 @@ int SendChar(char aChar, mod_type aModifiers, KeyEventTypes aEventType, HWND aTa
 		aModifiers |= MOD_ALT;
 
 	// It's the caller's responsibility to restore the modifiers if it needs to:
-	SetModifierState(aModifiers, GetModifierLRState());
+	SetModifierState(aModifiers, GetModifierLRState(), KEY_IGNORE);
 	KeyEvent(aEventType, LOBYTE(mod_plus_vk), 0, aTargetWindow, true);
 	return 1;
 }
@@ -891,7 +979,7 @@ void SetKeyState (vk_type vk, int aKeyUp)
 
 
 
-modLR_type SetModifierState(mod_type aModifiersNew, modLR_type aModifiersLRnow)
+modLR_type SetModifierState(mod_type aModifiersNew, modLR_type aModifiersLRnow, DWORD aExtraInfo)
 // Returns the new modifierLR state (i.e. the state after the action here has occurred).
 {
 	// Can't do this because the two values aren't compatible (one is LR and the other neutral):
@@ -928,7 +1016,7 @@ MsgBox(error_text);
 	if (modifiersLRnew == aModifiersLRnow)  // They're already in the right state.
 		return modifiersLRnew;
 	// Otherwise, change the state:
-	return SetModifierLRState(modifiersLRnew, aModifiersLRnow);
+	return SetModifierLRState(modifiersLRnew, aModifiersLRnow, aExtraInfo);
 }
 
 

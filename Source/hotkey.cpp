@@ -390,6 +390,11 @@ ResultType Hotkey::AllDestruct()
 
 void Hotkey::AllDestructAndExit(int aExitCode)
 {
+	// Might be needed to prevent hang-on-exit.  Once this is done, no message boxes or other dialogs
+	// can be displayed.  MSDN: "The exit value returned to the system must be the wParam parameter
+	// of the WM_QUIT message."  In our case, PostQuiteMessage() should announce the same exit code
+	// that we will eventually call exit() with:
+	PostQuitMessage(aExitCode);
 	AllDestruct();
 	// Do this only at the last possible moment prior to exit() because otherwise
 	// it may free memory that is still in use by objects that depend on it.
@@ -434,22 +439,6 @@ void Hotkey::AllDestructAndExit(int aExitCode)
 	#pragma warning( default : 4312 ) 
 #endif
 */
-	// To help reliability of the exit() call further below:  Apparently, this doesn't actually close the
-	// windows (at least on WinXP), since our thread is needed for that and it's tied up here (i.e. it
-	// can't yet return to the original MessageBox() and its message loop).  However, by queuing up
-	// these close messages for the dialogs, there is a higher expecatation of a clean exit (I have
-	// on occasion observed the program's window and tray menu to be destroyed upon exit, but for the
-	// process to still exist.  This and the addition of PostQuitMessage() by the caller is an attempt
-	// to fix that):
-	pid_and_hwnd_type pid_and_hwnd;
-	pid_and_hwnd.pid = GetCurrentProcessId();
-	pid_and_hwnd.hwnd = NULL; // The below will make it non-NULL if it closed at least one window.
-	EnumWindows(EnumDialogClose, (LPARAM)&pid_and_hwnd);
-	if (pid_and_hwnd.hwnd) // It closed at least one dialog.
-		// Allow a tiny bit of time for the OS to do any cleanup of the dialogs.  Don't call
-		// MsgSleep() because our caller would not expect or want that complication while we're trying
-		// to terminate the application:
-		Sleep(10);
 	// I know this isn't the preferred way to exit the program.  However, due to unusual
 	// conditions such as the script having MsgBoxes or other dialogs displayed on the screen
 	// at the time the user exits (in which case our main event loop would be "buried" underneath
@@ -523,7 +512,7 @@ ResultType Hotkey::PerformID(HotkeyIDType aHotkeyID)
 		dialog_is_displayed = true;
 		g_AllowInterruption = false;
 		if (MsgBox(error_text, MB_YESNO) == IDNO)
-			g_script.ExitApp();
+			g_script.ExitApp(EXIT_CRITICAL); // Might not actually Exit if there's an OnExit subroutine.
 		g_AllowInterruption = true;
 		dialog_is_displayed = false;
 	}
@@ -665,7 +654,9 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, Label *aJumpToLabel, HookActionTyp
 			max_threads_buffer = (*(cp + 1) != '0');  // i.e. if the char is NULL or something other than '0'.
 			break;
 		case 'T':
-			max_threads_per_hotkey = ATOI(cp + 1);
+			// Use atoi() vs. ATOI() to avoid interpreting something like 0x01B as hex
+			// when in fact the B was meant to be an option letter:
+			max_threads_per_hotkey = atoi(cp + 1);
 			if (max_threads_per_hotkey > MAX_THREADS_LIMIT)
 				// For now, keep this limited to prevent stack overflow due to too many pseudo-threads.
 				max_threads_per_hotkey = MAX_THREADS_LIMIT;

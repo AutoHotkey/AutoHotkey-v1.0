@@ -276,13 +276,11 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 		switch(msg.message)
 		{
 		case WM_QUIT:
-			// Any other cleanup needed before this?  If the app owns any windows,
-			// they're cleanly destroyed upon termination?
-			// Note: If PostQuitMessage() was called to generate this message,
-			// no new dialogs (e.g. MessageBox) can be created (perhaps no new
-			// windows of any kind):
-			g_script.ExitApp();
-			continue;
+			// The app normally terminates before WM_QUIT is ever seen here because of the way
+			// WM_CLOSE is handled by MainWindowProc().  However, this is kept here in case anything
+			// external ever explicitly posts a WM_QUIT to our thread's queue:
+			g_script.ExitApp(EXIT_WM_QUIT);
+			continue; // Since ExitApp() won't necessarily exit.
 		case WM_TIMER:
 			if (msg.lParam) // Since this WM_TIMER is intended for a TimerProc, dispatch the msg instead.
 				break;
@@ -427,7 +425,13 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 			// (i.e. the user may want one hotkey subroutine to use the value of ErrorLevel set by another):
 			CopyMemory(&g, &g_default, sizeof(global_struct));
 
-			if (msg.message != AHK_USER_MENU)
+			if (msg.message == AHK_USER_MENU)
+			{
+				// Safer to make a full copies than point to something potentially volatile.
+				strlcpy(g_script.mThisMenuItem, menu_item->mName, sizeof(g_script.mThisMenuItem));
+				strlcpy(g_script.mThisMenu, menu_item->mMenu->mName, sizeof(g_script.mThisMenu));
+			}
+			else // Hotkey
 			{
 				// Just prior to launching the hotkey, update these values to support built-in
 				// variables such as A_TimeSincePriorHotkey:
@@ -488,28 +492,6 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 
 			if (aMode == RETURN_AFTER_MESSAGES)
 			{
-				// The unpause logic is done immediately after the most recently suspended thread's
-				// global settings are restored so that that thread is set up properly to be resumed.
-				// Comments about macro:
-				//    g_UnpauseWhenResumed = false --> because we've "used up" this unpause ticket.
-				//    g_ErrorLevel->Assign(g.ErrorLevel) --> restores the variable from the stored value.
-				// If the thread to be resumed has not been unpaused, it will automatically be resumed in
-				// a paused state because when we return from this function, we should be returning to
-				// an instance of ExecUntil() (our caller), which should be in a pause loop still.
-				// But always update the tray icon in case the paused state of the subroutine
-				// we're about to resume is different from our previous paused state.  Do this even
-				// when the macro is used by CheckScriptTimers(), which although it might not techically
-				// need it, lends maintainability and peace of mind:
-				#define RESUME_UNDERLYING_THREAD \
-					CopyMemory(&g, &global_saved, sizeof(global_struct));\
-					g_ErrorLevel->Assign(g.ErrorLevel);\
-					if (g_UnpauseWhenResumed && g.IsPaused)\
-					{\
-						g_UnpauseWhenResumed = false;\
-						g.IsPaused = false;\
-						--g_nPausedThreads;\
-					}\
-					g_script.UpdateTrayIcon();
 				RESUME_UNDERLYING_THREAD
 
 				if (IsCycleComplete(aSleepDuration, start_time, allow_early_return))

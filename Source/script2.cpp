@@ -440,7 +440,7 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 	{
 		// If needed, create the array of pointers that points into MatchBuf to each match phrase:
 		if (!g_input.match && !(g_input.match = (char **)malloc(INPUT_ARRAY_BLOCK_SIZE * sizeof(char *))))
-			return LineError("Out of mem #1.");  // Short msg. since so rare.
+			return LineError("Out of mem #1");  // Short msg. since so rare.
 		else
 			g_input.MatchCountMax = INPUT_ARRAY_BLOCK_SIZE;
 		// If needed, create or enlarge the buffer that contains all the match phrases:
@@ -454,7 +454,7 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 			if (   !(g_input.MatchBuf = (char *)malloc(g_input.MatchBufSize))   )
 			{
 				g_input.MatchBufSize = 0;
-				return LineError("Out of mem #2.");  // Short msg. since so rare.
+				return LineError("Out of mem #2");  // Short msg. since so rare.
 			}
 		}
 		// Copy aMatchList into the match buffer:
@@ -464,7 +464,7 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 			if (*source == ',')  // Each comma becomes the terminator of the previous key phrase.
 			{
 				*dest = '\0';
-				if (strlen(g_input.match[g_input.MatchCount])) // i.e. omit empty strings from the match list.
+				if (*g_input.match[g_input.MatchCount]) // i.e. omit empty strings from the match list.
 					++g_input.MatchCount;
 				if (*(source + 1)) // There is a next element.
 				{
@@ -473,7 +473,7 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 						// Expand the array by one block:
 						if (   !(g_input.match = (char **)realloc(g_input.match
 							, (g_input.MatchCountMax + INPUT_ARRAY_BLOCK_SIZE) * sizeof(char *)))   )
-							return LineError("Out of mem #3.");  // Short msg. since so rare.
+							return LineError("Out of mem #3");  // Short msg. since so rare.
 						else
 							g_input.MatchCountMax += INPUT_ARRAY_BLOCK_SIZE;
 					}
@@ -484,7 +484,7 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 				*dest = *source;
 		}
 		*dest = '\0';  // Terminate the last item.
-		if (strlen(g_input.match[g_input.MatchCount])) // i.e. omit empty strings from the match list.
+		if (*g_input.match[g_input.MatchCount]) // i.e. omit empty strings from the match list.
 			++g_input.MatchCount;
 	}
 
@@ -545,11 +545,16 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 			g_input.IgnoreAHKInput = true;
 			break;
 		case 'L':
-			g_input.BufferLengthMax = ATOI(cp + 1);
+			// Use atoi() vs. ATOI() to avoid interpreting something like 0x01C as hex
+			// when in fact the C was meant to be an option letter:
+			g_input.BufferLengthMax = atoi(cp + 1);
 			if (g_input.BufferLengthMax > INPUT_BUFFER_SIZE - 1)
 				g_input.BufferLengthMax = INPUT_BUFFER_SIZE - 1;
 			break;
 		case 'T':
+			// Although ATOF() supports hex, it's been documented in the help file that hex should
+			// not be used (see comment above) so if someone does it anyway, some option letters
+			// might be misinterpreted:
 			timeout = (int)(ATOF(cp + 1) * 1000);
 			break;
 		case 'V':
@@ -2265,8 +2270,8 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			return 0;
 		case ID_TRAY_EXIT:
 		case ID_FILE_EXIT:
-			g_script.ExitApp();  // More reliable than PostQuitMessage(), which has been known to fail in rare cases.
-			return 0;
+			g_script.ExitApp(EXIT_MENU);  // More reliable than PostQuitMessage(), which has been known to fail in rare cases.
+			return 0; // If there is an OnExit subroutine, the above might not actually exit.
 		case ID_VIEW_LINES:
 			ShowMainWindow(MAIN_MODE_LINES);
 			return 0;
@@ -2357,20 +2362,20 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 // the lines most recently executed, and many people who compile scripts don't want their users
 // to see the contents of the script:
 		case WM_LBUTTONDBLCLK:
-			if (g_script.mTrayMenuDefault)
-				HANDLE_USER_MENU(g_script.mTrayMenuDefault->mMenuID)
+			if (g_script.mTrayMenu->mDefault)
+				HANDLE_USER_MENU(g_script.mTrayMenu->mDefault->mMenuID)
 #ifdef AUTOHOTKEYSC
-			else if (g_script.mTrayIncludeStandard && g_AllowMainWindow)
+			else if (g_script.mTrayMenu->mIncludeStandardItems && g_AllowMainWindow)
 				ShowMainWindow();
 			// else do nothing.
 #else
-			else if (g_script.mTrayIncludeStandard)
+			else if (g_script.mTrayMenu->mIncludeStandardItems)
 				ShowMainWindow();
 			// else do nothing.
 #endif
 			return 0;
 		case WM_RBUTTONDOWN:
-			g_script.DisplayTrayMenu();
+			g_script.mTrayMenu->Display(false);
 			return 0;
 		} // Inner switch()
 		break;
@@ -2455,7 +2460,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			SET_MAIN_TIMER
 			return 0;
 		}
-		if (g_MenuIsVisible == MENU_VISIBLE_TRAY || (iMsg == AHK_HOOK_HOTKEY && lParam && g_hWnd == GetForegroundWindow()))
+		if (g_MenuIsVisible == MENU_VISIBLE_POPUP || (iMsg == AHK_HOOK_HOTKEY && lParam && g_hWnd == GetForegroundWindow()))
 		{
 			// Ok this is a little strange, but the thought here is that if the tray menu is
 			// displayed, it should be closed prior to executing any new hotkey.  This is
@@ -2565,38 +2570,67 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		}
 		break;
 
-	case WM_DESTROY:
-		// MSDN: If an application processes this message, it should return zero.
+	case WM_CLOSE:
+	case WM_ENDSESSION:
+	case AHK_EXIT_BY_RELOAD:
+	case AHK_EXIT_BY_SINGLEINSTANCE:
 		if (hWnd == g_hWnd) // i.e. not the SplashText window or anything other than the main.
 		{
-			// Once we do this, it appears that no new dialogs can be created
-			// (perhaps no new windows of any kind?).  Also: Even if this function
-			// was called by MessageBox()'s message loop, it appears that when we
-			// call PostQuitMessage(), the MessageBox routine sees it and knows
-			// to destroy itself, thus cascading the Quit state through any other
-			// underlying MessageBoxes that may exist, until finally we wind up
-			// back at our main message loop, which handles the WM_QUIT posted here.
-			// Update: It seems that the "reload" feature, when it sends the WM_CLOSE
-			// directly to this instance's main window, requires more than just a
-			// PostQuitMessage(0).  Otherwise, this instance will not cleanly exist
-			// whenever it's displaying a MsgBox at the time the other instance
-			// tells us to close.  This is probably because in the case of a MsgBox
-			// or other dialog being displayed, our caller IS that dialog's message
-			// loop function.  When the quit message is posted, that dialog, and
-			// perhaps any others that exist, are closed.  But our main event
-			// loop never receives the quit notification or something?  This is
-			// worth further review in the future, but for now, stick with what
-			// works.  The OS should be able to clean up any open file handles,
-			// allocated memory, and it should also destroy any remaining windows cleanly
-			// for us, much better than we ourselves might be able to do given the wide
-			// variety places this function can be called from:
-			//PostQuitMessage(0);
-			g_script.ExitApp();
-			return 0;
+			// Receiving this msg is fairly unusual since SC_CLOSE is intercepted and redefined above.
+			// However, it does happen if an external app is asking us to close, such as another
+			// instance of this same script during the Reload command.  So treat it in a way similar
+			// to the user having chosen Exit from the menu.
+
+			// Leave it up to ExitApp() to decide whether to terminate based upon whether
+			// there is an OnExit subroutine, whether that subroutine is already running at
+			// the time a new WM_CLOSE is received, etc.  It's also its responsibility to call
+			// DestroyWindow() upon termination so that the WM_DESTROY message winds up being
+			// received and process in this function (which is probably necessary for a clean
+			// termination of the app and all its windows):
+			switch (iMsg)
+			{
+			case WM_CLOSE:
+				g_script.ExitApp(EXIT_WM_CLOSE);
+				break;
+			case WM_ENDSESSION: // MSDN: "A window receives this message through its WindowProc function."
+				if (wParam) // the session is being ended (otherwise, a prior WM_QUERYENDSESSION was aborted).
+					g_script.ExitApp(lParam & ENDSESSION_LOGOFF ? EXIT_LOGOFF : EXIT_SHUTDOWN);
+				break;
+			case AHK_EXIT_BY_RELOAD:
+				g_script.ExitApp(EXIT_RELOAD);
+				break;
+			case AHK_EXIT_BY_SINGLEINSTANCE:
+				g_script.ExitApp(EXIT_SINGLEINSTANCE);
+				break;
+			}
+			return 0;  // Verified correct.
 		}
 		// Otherwise, some window of ours other than our main window was destroyed
-		// (perhaps the splash window):
-		// Let DefWindowProc() handle it:
+		// (perhaps the splash window).  Let DefWindowProc() handle it:
+		break;
+
+	case WM_DESTROY:
+		if (hWnd == g_hWnd) // i.e. not the SplashText window or anything other than the main.
+		{
+			if (!g_DestroyWindowCalled)
+				// This is done because I believe it's possible for a WM_DESTROY message to be received
+				// even though we didn't call DestroyWindow() ourselves (e.g. via DefWindowProc() receiving
+				// and acting upon a WM_CLOSE or us calling DestroyWindow() directly) -- perhaps the window
+				// is being forcibly closed or something else abnormal happened.  Make a best effort to run
+				// the OnExit subroutine, if present, even without a main window (testing on an earlier
+				// versions shows that most commands work fine without the window). Pass the empty string
+				// to tell it to terminate after running the OnExit subroutine:
+				g_script.ExitApp(EXIT_DESTROY, "");
+			// Do not do PostQuitMessage() here because we don't know the proper exit code.
+			// MSDN: "The exit value returned to the system must be the wParam parameter of
+			// the WM_QUIT message."
+			// If we're here, it means our thread called DestroyWindow() directly or indirectly
+			// (currently, it's only called directly).  By returning, our thread should resume
+			// execution at the statement after DestroyWindow() in whichever caller called that:
+			return 0;  // Verified correct.
+		}
+		// Otherwise, some window of ours other than our main window was destroyed
+		// (perhaps the splash window).  Let DefWindowProc() handle it:
 		break;
 
 	case WM_CREATE:
@@ -2944,7 +2978,8 @@ BOOL CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 		// Setting the small icon puts it in the upper left corner of the dialog window.
 		// Setting the big icon makes the dialog show up correctly in the Alt-Tab menu.
-		LPARAM main_icon = (LPARAM)LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_MAIN));
+		LPARAM main_icon = (LPARAM)(g_script.mCustomIcon ? g_script.mCustomIcon
+			: LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_MAIN)));
 		SendMessage(hWndDlg, WM_SETICON, ICON_SMALL, main_icon);
 		SendMessage(hWndDlg, WM_SETICON, ICON_BIG, main_icon);
 
@@ -3870,77 +3905,253 @@ ResultType Line::StringSplit(char *aArrayName, char *aInputString, char *aDelimi
 
 
 
-ResultType Line::ScriptSort(char *aOptions)
+int SortWithOptions(const void *a1, const void *a2)
+// Decided to just have one sort function since there are so many permutations.  The performance
+// will be a little bit worse, but it seems simpler to implement and maintain.
+// This function's input parameters are pointers to the elements of the array.  Snce those elements
+// are themselves pointers, the input parameters are therefore pointers to pointers (handles).
 {
-	return OK;
+	char *sort_item1 = *(char **)a1;
+	char *sort_item2 = *(char **)a2;
+	if (g_SortColumnOffset > 0)
+	{
+		// Adjust each string (even for numerical sort) to be the right column position,
+		// or the position of its zero terminator if the column offset goes beyond its length:
+		size_t length = strlen(sort_item1);
+		sort_item1 += (size_t)g_SortColumnOffset > length ? length : g_SortColumnOffset;
+		length = strlen(sort_item2);
+		sort_item2 += (size_t)g_SortColumnOffset > length ? length : g_SortColumnOffset;
+	}
+	if (g_SortNumeric) // Takes precedence over g_SortCaseSensitive
+	{
+		// For now, assume both are numbers.  If one of them isn't, it will be sorted as a zero.
+		// Thus, all non-numeric items should wind up in a sequential, unsorted group.
+		// Resolve since parts of the ATOI() macro are inline:
+		__int64 item1_int = ATOI64(sort_item1);
+		__int64 item2_int = ATOI64(sort_item2);
+		return (int)(g_SortReverse ? item2_int - item1_int : item1_int - item2_int);
+	}
+	// Otherwise, it's a non-numeric sort.
+	if (g_SortReverse)
+		return g_SortCaseSensitive ? strcmp(sort_item2, sort_item1) : stricmp(sort_item2, sort_item1);
+	else
+		return g_SortCaseSensitive ? strcmp(sort_item1, sort_item2) : stricmp(sort_item1, sort_item2);
+}
 
-	//Var *output_var = ResolveVarOfArg(0);
-	//if (!output_var)
-	//	return FAIL;
 
-	//char *var_contents = output_var->Contents();  // In case it's the clipboard.
-	//if (!*var_contents) // Variable is empty, nothing to sort.
-	//	return OK;
 
-	//size_t var_length = strlen(var_contents); // Explicitly calculate because confidence in Var->mLength is only 99%
-	//size_t space_needed = var_length + 1;  // +1 for the final item's zero terminator.
-	//char *buf = (char *)malloc(space_needed);
-	//if (!buf)
-	//	return LineError("Out of mem");  // Short msg. since so rare.
+int SortByNakedFilename(const void *a1, const void *a2)
+// See comments in prior function for details.
+{
+	char *sort_item1 = *(char **)a1;
+	char *sort_item2 = *(char **)a2;
+	char *cp;
+	if (cp = strrchr(sort_item1, '\\'))  // Assign
+		sort_item1 = cp + 1;
+	if (cp = strrchr(sort_item2, '\\'))  // Assign
+		sort_item2 = cp + 1;
+	if (g_SortReverse)
+		return g_SortCaseSensitive ? strcmp(sort_item2, sort_item1) : stricmp(sort_item2, sort_item1);
+	else
+		return g_SortCaseSensitive ? strcmp(sort_item1, sort_item2) : stricmp(sort_item1, sort_item2);
+}
 
-	//g_input.MatchCount = 0;  // Set default.
-	//if (*aMatchList)
-	//{
-	//	// If needed, create the array of pointers that points into MatchBuf to each match phrase:
-	//	if (!g_input.match && !(g_input.match = (char **)malloc(INPUT_ARRAY_BLOCK_SIZE * sizeof(char *))))
-	//		return LineError("Out of mem #1.");  // Short msg. since so rare.
-	//	else
-	//		g_input.MatchCountMax = INPUT_ARRAY_BLOCK_SIZE;
-	//	// If needed, create or enlarge the buffer that contains all the match phrases:
-	//	size_t aMatchList_length = strlen(aMatchList);
-	//	size_t space_needed = aMatchList_length + 1;  // +1 for the final zero terminator.
-	//	if (space_needed > g_input.MatchBufSize)
-	//	{
-	//		g_input.MatchBufSize = (UINT)(space_needed > 4096 ? space_needed : 4096);
-	//		if (g_input.MatchBuf) // free the old one since it's too small.
-	//			free(g_input.MatchBuf);
-	//		if (   !(g_input.MatchBuf = (char *)malloc(g_input.MatchBufSize))   )
-	//		{
-	//			g_input.MatchBufSize = 0;
-	//			return LineError("Out of mem #2.");  // Short msg. since so rare.
-	//		}
-	//	}
-	//	// Copy aMatchList into the match buffer:
-	//	char *source, *dest;
-	//	for (source = aMatchList, dest = g_input.match[g_input.MatchCount] = g_input.MatchBuf; *source; ++source, ++dest)
-	//	{
-	//		if (*source == ',')  // Each comma becomes the terminator of the previous key phrase.
-	//		{
-	//			*dest = '\0';
-	//			if (strlen(g_input.match[g_input.MatchCount])) // i.e. omit empty strings from the match list.
-	//				++g_input.MatchCount;
-	//			if (*(source + 1)) // There is a next element.
-	//			{
-	//				if (g_input.MatchCount >= g_input.MatchCountMax) // Rarely needed, so just realloc() to expand.
-	//				{
-	//					// Expand the array by one block:
-	//					if (   !(g_input.match = (char **)realloc(g_input.match
-	//						, (g_input.MatchCountMax + INPUT_ARRAY_BLOCK_SIZE) * sizeof(char *)))   )
-	//						return LineError("Out of mem #3.");  // Short msg. since so rare.
-	//					else
-	//						g_input.MatchCountMax += INPUT_ARRAY_BLOCK_SIZE;
-	//				}
-	//				g_input.match[g_input.MatchCount] = dest + 1;
-	//			}
-	//		}
-	//		else // Not a comma, so just copy it over.
-	//			*dest = *source;
-	//	}
-	//	*dest = '\0';  // Terminate the last item.
-	//	if (strlen(g_input.match[g_input.MatchCount])) // i.e. omit empty strings from the match list.
-	//		++g_input.MatchCount;
-	//}
 
+
+ResultType Line::PerformSort(char *aContents, char *aOptions)
+// Caller must ensure that aContents is modifiable (ArgMustBeDereferenced() currently ensures this).
+// It seems best to treat ACT_SORT's var to be an input vs. output var because if
+// it's an environment variable or the clipboard, the input variable handler will
+// automatically resolve it to be ARG1 (i.e. put its contents into the deref buf).
+// This is especially necessary if the clipboard contains files, in which case
+// output_var->Get(), not Contents(),  must be used to resolve the filenames into text.
+// And on average, using the deref buffer for this operation will not be wasteful in
+// terms of expanding it unnecessarily, because usually the contents will have been
+// already (or will soon be) in the deref buffer as a result of commands before
+// or after the Sort command in the script.
+{
+	if (!*aContents) // Variable is empty, nothing to sort.
+		return OK;
+
+	Var *output_var = ResolveVarOfArg(0); // The input var (ARG1) is also the output var in this case.
+	if (!output_var)
+		return FAIL;
+
+	// Do nothing for reserved variables, since most of them are read-only and besides, none
+	// of them (realistically) should ever need sorting:
+	if (VAR_IS_RESERVED(output_var))
+		return OK;
+
+	// Resolve options.  Set defaults first:
+	char delimiter = '\n';
+	g_SortCaseSensitive = false;
+	g_SortNumeric = false;
+	g_SortReverse = false;
+	g_SortColumnOffset = 0;
+	bool allow_last_item_to_be_blank = false, terminate_last_item_with_delimiter = false;
+	bool sort_by_naked_filename = false;
+	char *cp;
+
+	for (cp = aOptions; *cp; ++cp)
+	{
+		switch(toupper(*cp))
+		{
+		case 'C':
+			g_SortCaseSensitive = true;
+			break;
+		case 'D':
+			++cp;
+			if (*cp)
+				delimiter = *cp;
+			break;
+		case 'N':
+			g_SortNumeric = true;
+			break;
+		case 'P':
+			// Use atoi() vs. ATOI() to avoid interpreting something like 0x01C as hex
+			// when in fact the C was meant to be an option letter:
+			g_SortColumnOffset = atoi(cp + 1);
+			if (g_SortColumnOffset < 1)
+				g_SortColumnOffset = 1;
+			--g_SortColumnOffset;  // Convert to zero-based.
+			break;
+		case 'R':
+			g_SortReverse = true;
+			break;
+		case 'Z':
+			// By setting this to true, the final item in the list, if it ends in a delimiter,
+			// is considered to be followed by a blank item:
+			allow_last_item_to_be_blank = true;
+			break;
+		case '\\':
+			sort_by_naked_filename = true;
+		}
+	}
+
+	// size_t helps performance and should be plenty of capacity for many years of advancement.
+	// In addition, things like realloc() can't accept anything larger than size_t anyway,
+	// so there's no point making this 64-bit until size_t itself becomes 64-bit:
+	size_t item_count;
+
+	// Explicitly calculate the length in case it's the clipboard or an environment var.
+	// (in which case Length() does not contain the current length).  While calculating
+	// the length, also check how many delimiters are present:
+	for (item_count = 1, cp = aContents; *cp; ++cp)  // Start at 1 since item_count is delimiter_count+1
+		if (*cp == delimiter)
+			++item_count;
+	size_t aContents_length = cp - aContents;
+
+	// Last item is a delimiter, which means the last item is technically a blank item.
+	// However, if the options specify not to allow that, don't count that blank item as
+	// an item:
+	if (!allow_last_item_to_be_blank && cp > aContents && *(cp - 1) == delimiter)
+	{
+		terminate_last_item_with_delimiter = true; // So don't consider it to *be* an item.
+		--item_count;
+	}
+
+	if (item_count == 1) // 1 item is already sorted
+		// Put the exact contents back into the output_var, which is necessary in case
+		// the variable was an environment variable or the clipboard-containing-files,
+		// since in those cases we want the behavior to be consistent regardless of
+		// whether there's only 1 item or more than one:
+		// Clipboard-contains-files: The single file should be translated into its
+		// text equivalent.  Var was an environment variable: the corresponding script
+		// variable should be assigned the contents, so it will basically "take over"
+		// for the environment variable.
+		return output_var->Assign(aContents);
+
+	// Create the array of pointers that points into aContents to each delimited item.
+	// Use item_count + 1 to allow space for the last (blank) item in case
+	// allow_last_item_to_be_blank is false:
+	char **item = (char **)malloc((item_count + 1) * sizeof(char *));
+	if (!item)
+		return LineError("Out of mem");  // Short msg. since so rare.
+
+	// Scan aContents and do the following:
+	// 1) Replace each delimiter with a terminator so that the individual items can be seen
+	//    as real strings by the SortWithOptions() and when copying the sorted results back
+	//    into output_vav.  It is safe change aContents in this way because
+	//    ArgMustBeDereferenced() has ensured that those contents are in the deref buffer.
+	// 2) Store a marker/pointer to each item (string) in aContents so that we know where
+	//    each item begins for sorting and recopying purposes.
+	for (item_count = 0, cp = item[0] = aContents; *cp; ++cp)
+	{
+		if (*cp == delimiter)  // Each delimiter char becomes the terminator of the previous key phrase.
+		{
+			*cp = '\0';  // Terminate the item that appears before this delimiter.
+			item[++item_count] = cp + 1; // Make a pointer to the next item's place in aContents.
+		}
+	}
+	// Add the last item to the count only if it wasn't disqualified earlier:
+	if (!terminate_last_item_with_delimiter)
+		++item_count;
+	char *original_last_item = item[item_count - 1];  // The location of the last item before it gets sorted.
+
+	// Now aContents has been divided up based on delimiter.  Sort the array of pointers
+	// so that they indicate the correct ordering to copy aContents into output_var:
+	qsort((void *)item, item_count, sizeof(item[0]), sort_by_naked_filename ? SortByNakedFilename : SortWithOptions);
+
+	// Copy the sorted pointers back into output_var, which might not already be sized correctly
+	// if it's the clipboard or it was an environment variable when it came in as the input.
+	// If output_var is the clipboard, this call will set up the clipboard for writing:
+	if (output_var->Assign(NULL, (VarSizeType)aContents_length) != OK) // Might fail due to clipboard problem.
+		return FAIL;
+
+	char *source, *dest;
+	char *pos_of_original_last_item_in_dest = NULL;  // Set default in case original last item is still the last item.
+	size_t i, item_count_less_1 = item_count - 1;
+
+	// Copy the sorted result back into output_var.  Do all except the last item, since the last
+	// item gets special treatment depending on the options that were specified.  The call to
+	// output_var->Contents() below should never fail due to the above having prepped it:
+	for (dest = output_var->Contents(), i = 0; i < item_count_less_1; ++i)
+	{
+		if (item[i] == original_last_item)
+			pos_of_original_last_item_in_dest = dest;
+		for (source = item[i]; *source;)
+			*dest++ = *source++;
+		*dest++ = delimiter;  // Put each item's delimiter back in so that format is the same as the original.
+	}
+
+	// Copy the last item:
+	for (source = item[item_count_less_1]; *source;)
+		*dest++ = *source++;
+	// If the original list's last item had a terminating delimiter and the specified options said
+	// to treat it not as a delimiter but as a final char of sorts, include it after the item that
+	// is now last so that the overall layout is the same:
+	if (terminate_last_item_with_delimiter)
+		*dest++ = delimiter;
+	*dest = '\0';  // Terminate the variable's contents.
+
+	// Check if special handling is needed due to the following situation:
+	// Delimiter is LF but the contents are lines delimited by CRLF, not just LF
+	// and the original/unsorted list's last item was not terminated by an
+	// "allowed delimiter".  The symptoms of this are that after the sort, the
+	// last item will end in \r when it should end in no delimiter at all.
+	// This happens pretty often, such as when the clipboard contains files.
+	// In the future, an option letter can be added to turn off this workaround,
+	// but it seems unlikely that anyone would ever want to:
+	if (delimiter == '\n' && !terminate_last_item_with_delimiter && *(dest - 1) == '\r'
+		&& pos_of_original_last_item_in_dest)
+	{
+		if (cp = strchr(pos_of_original_last_item_in_dest, delimiter))  // Assign
+		{
+			// Remove the offending '\r':
+			--dest;
+			*dest = '\0';
+			// And insert it where it belongs:
+			memmove(cp + 1, cp, dest - cp + 1);  // memmove() allows source & dest to overlap.
+			*cp = '\r';
+		}
+	}
+
+	// Free the memory used for the sort:
+	free(item);
+
+	// It is not necessary to set output_var->Length() here because its length hasn't changed
+	// since it was originally set by the above call "output_var->Assign(NULL..."
+	return output_var->Close();  // Close in case it's the clipboard.
 }
 
 
@@ -5548,7 +5759,7 @@ ResultType Line::FileGetTime(char *aFilespec, char aWhichTime)
 
     g_ErrorLevel->Assign(ERRORLEVEL_NONE);  // Indicate success.
 	char local_file_time_string[128];
-	return output_var->Assign(FileTimeToYYYYMMDD(local_file_time_string, &local_file_time));
+	return output_var->Assign(FileTimeToYYYYMMDD(local_file_time_string, local_file_time));
 }
 
 
@@ -6617,7 +6828,6 @@ ArgTypeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_STRINGLEN:
 		case ACT_STRINGREPLACE:
 		case ACT_STRINGGETPOS:
-		case ACT_SORT:
 		case ACT_GETKEYSTATE:
 		case ACT_CONTROLGETFOCUS:
 		case ACT_CONTROLGETTEXT:
@@ -6649,6 +6859,7 @@ ArgTypeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_INPUT:
 			return ARG_TYPE_OUTPUT_VAR;
 
+		case ACT_SORT:
 		case ACT_IFINSTRING:
 		case ACT_IFNOTINSTRING:
 		case ACT_IFEQUAL:

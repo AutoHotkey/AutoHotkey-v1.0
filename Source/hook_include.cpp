@@ -37,7 +37,15 @@ key is actually down at the moment of consideration.
 	#undef pEvent
 	#define pEvent ((PMSLLHOOKSTRUCT)lParam)
 #endif
-#define IS_IGNORED (pEvent->dwExtraInfo == KEY_IGNORE || pEvent->dwExtraInfo == KEY_IGNORE_PHYS \
+
+
+// KEY_PHYS_IGNORE events must be mostly ignored because currently there is no way for a given
+// hook instance to detect if it sent the event or some other instance.  Therefore, to treat
+// such events as true physical events might cause infinite loops or other side-effects in
+// the instance that generated the event.  More review of this is needed if KEY_PHYS_IGNORE
+// events ever need to be treated as true physical events by the instances of the hook that
+// didn't originate them:
+#define IS_IGNORED (pEvent->dwExtraInfo == KEY_IGNORE || pEvent->dwExtraInfo == KEY_PHYS_IGNORE \
 	|| pEvent->dwExtraInfo == KEY_IGNORE_ALL_EXCEPT_MODIFIER)
 
 
@@ -209,8 +217,12 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppres
 	// non-English or non-std keyboards.
 
 	// Below excludes KEY_IGNORE_ALL_EXCEPT_MODIFIER since that type of event should not
-	// be ignored by this function:
-	bool is_not_ignored = pEvent->dwExtraInfo != KEY_IGNORE && pEvent->dwExtraInfo != KEY_IGNORE_PHYS;
+	// be ignored by this function.  UPDATE: KEY_PHYS_IGNORE is now considered to be something
+	// that should not be ignored because if more than one instance has the hook installed,
+	// it is possible for g_modifiersLR_logical_non_ignored to say that a key is down in one
+	// instance when that instance's g_modifiersLR_logical doesn't say it's down, which is
+	// definitely wrong.  So is now omitted from the below:
+	bool is_not_ignored = pEvent->dwExtraInfo != KEY_IGNORE;
 
 	switch (pEvent->vkCode)
 	{
@@ -230,8 +242,15 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppres
 				// to ensure that g_modifiersLR_logical_non_ignored never says a key is down when
 				// g_modifiersLR_logical says its up, which might otherwise happen in cases such
 				// as alt-tab.  See this comment further below, where the operative word is "relied":
-				// "key pushed ALT down, or relied upon it already being down, so go up"
-				g_modifiersLR_logical_non_ignored &= ~MOD_LSHIFT;
+				// "key pushed ALT down, or relied upon it already being down, so go up".  UPDATE:
+				// The above is no longer a concern because KeyEvent() now defaults to the mode
+				// which causes our var "is_not_ignored" to be true here.  Only the Send command
+				// overrides this default, and it takes responsibility for ensuring that the older
+				// comment above never happens by forcing any down-modifiers to be up if they're
+				// not logically down as reflected in g_modifiersLR_logical.  There's more
+				// explanation for g_modifiersLR_logical_non_ignored in keyboard.h:
+				if (is_not_ignored)
+					g_modifiersLR_logical_non_ignored &= ~MOD_LSHIFT;
 			}
 			if (EventIsPhysical(lParam, sc, key_up)) // Note that ignored events can be physical via KEYEVENT_PHYS()
 			{
@@ -262,7 +281,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppres
 			if (!aIsSuppressed)
 			{
 				g_modifiersLR_logical &= ~MOD_RSHIFT;
-				g_modifiersLR_logical_non_ignored &= ~MOD_RSHIFT;
+				if (is_not_ignored)
+					g_modifiersLR_logical_non_ignored &= ~MOD_RSHIFT;
 			}
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
@@ -292,7 +312,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppres
 			if (!aIsSuppressed)
 			{
 				g_modifiersLR_logical &= ~MOD_LCONTROL;
-				g_modifiersLR_logical_non_ignored &= ~MOD_LCONTROL;
+				if (is_not_ignored)
+					g_modifiersLR_logical_non_ignored &= ~MOD_LCONTROL;
 			}
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
@@ -322,7 +343,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppres
 			if (!aIsSuppressed)
 			{
 				g_modifiersLR_logical &= ~MOD_RCONTROL;
-				g_modifiersLR_logical_non_ignored &= ~MOD_RCONTROL;
+				if (is_not_ignored)
+					g_modifiersLR_logical_non_ignored &= ~MOD_RCONTROL;
 			}
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
@@ -352,7 +374,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppres
 			if (!aIsSuppressed)
 			{
 				g_modifiersLR_logical &= ~MOD_LALT;
-				g_modifiersLR_logical_non_ignored &= ~MOD_LALT;
+				if (is_not_ignored)
+					g_modifiersLR_logical_non_ignored &= ~MOD_LALT;
 			}
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
@@ -382,7 +405,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppres
 			if (!aIsSuppressed)
 			{
 				g_modifiersLR_logical &= ~MOD_RALT;
-				g_modifiersLR_logical_non_ignored &= ~MOD_RALT;
+				if (is_not_ignored)
+					g_modifiersLR_logical_non_ignored &= ~MOD_RALT;
 			}
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
@@ -412,7 +436,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppres
 			if (!aIsSuppressed)
 			{
 				g_modifiersLR_logical &= ~MOD_LWIN;
-				g_modifiersLR_logical_non_ignored &= ~MOD_LWIN;
+				if (is_not_ignored)
+					g_modifiersLR_logical_non_ignored &= ~MOD_LWIN;
 			}
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
@@ -441,7 +466,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppres
 			if (!aIsSuppressed)
 			{
 				g_modifiersLR_logical &= ~MOD_RWIN;
-				g_modifiersLR_logical_non_ignored &= ~MOD_RWIN;
+				if (is_not_ignored)
+					g_modifiersLR_logical_non_ignored &= ~MOD_RWIN;
 			}
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
@@ -715,8 +741,7 @@ void UpdateKeyState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppressed)
 		// indicator light can't be toggled after the program is exitted unless the
 		// key is pressed twice:
 		KeyEvent(KEYUP, VK_NUMLOCK);
-		KeyEvent(KEYDOWN, VK_NUMLOCK);
-		KeyEvent(KEYUP, VK_NUMLOCK);
+		KeyEvent(KEYDOWNANDUP, VK_NUMLOCK);
 		KeyEvent(KEYDOWN, VK_NUMLOCK);
 	}
 	UpdateKeyState(lParam, sc, key_up, true);
@@ -1068,7 +1093,7 @@ LRESULT CALLBACK LowLevelKeybdProc(int code, WPARAM wParam, LPARAM lParam)
 	// This is done for cases when the hook is installed multiple times and one instance of
 	// it wants to inform the others that this event should be considered physical for the
 	// purpose of updating modifier and key states:
-	if (pEvent->dwExtraInfo == KEY_IGNORE_PHYS)
+	if (pEvent->dwExtraInfo == KEY_PHYS_IGNORE)
 		pEvent->flags &= ~LLKHF_INJECTED;
 
 // Make all keybd events physical to try to fool the system into accepting CTRL-ALT-DELETE.
@@ -1239,21 +1264,41 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	// physically down even if it isn't logically down):
 	if (!kvk[vk].as_modifiersLR && EventIsPhysical(lParam, sc, key_up))
 		g_PhysicalKeyState[vk] = key_up ? 0 : STATE_DOWN;
+	// Pointer to the key record for the current key event.  Establishes pThisKey as a pointer to
+	// the array element in kvk or ksc that corresponds to the vk or sc, respectively.
+	// If vk is non-zero, it always takes precedence over sc:
+	key_type *pThisKey = ksc[sc].sc_takes_precedence ? (ksc + sc) : (kvk + vk);
 
 #else // Mouse hook.
 	if (EventIsPhysical(lParam, key_up))
 		g_PhysicalKeyState[vk] = key_up ? 0 : STATE_DOWN;
+	key_type *pThisKey = kvk + vk;
 #endif
 
 	// Do this after above since AllowKeyToGoToSystem requires that sc be properly determined.
-	// Another reason to do it after the above is due to the fact that KEY_IGNORE_PHYS permits
+	// Another reason to do it after the above is due to the fact that KEY_PHYS_IGNORE permits
 	// an ignored key to be considered physical input, which is handled above:
 	if (is_ignored)
+	{
 		// This is a key sent by our own app that we want to ignore.
 		// It's important never to change this to call the SuppressKey function because
 		// that function would cause an infinite loop when the Numlock key is pressed,
 		// which would likely hang the entire system:
+		// UPDATE: This next part is for cases where more than one script is using the hook
+		// simultaneously.  In such cases, it desirable for the KEYEVENT_PHYS() of one
+		// instance to affect the down-state of the current prefix-key in the other
+		// instances.  This check is done here -- even though there may be a better way to
+		// implement it -- to minimize the chance of side-effects that a more fundamental
+		// change might cause (i.e. a more fundamental change would require a lot more
+		// testing, though it might also fix more things):
+		if (pEvent->dwExtraInfo == KEY_PHYS_IGNORE && key_up && pPrefixKey == pThisKey)
+		{
+			pThisKey->is_down = false;
+			pThisKey->down_performed_action = false;  // Seems best, but only for PHYS_IGNORE.
+			pPrefixKey = NULL;
+		}
 		return AllowKeyToGoToSystem;
+	}
 
 #ifdef INCLUDE_KEYBD_HOOK
 	// Do this only after the above because the SuppressThisKey macro relies
@@ -1299,34 +1344,25 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 //PostMessage(g_hWnd, AHK_HOOK_TEST_MSG, vk, sc);
 //return AllowKeyToGoToSystem;
 
-	// Pointer to the key record for the current key event.  Establishes pThisKey as a pointer to
-	// the array element in kvk or ksc that corresponds to the vk or sc, respectively.
-	// If vk is non-zero, it always takes precedence over sc:
 #ifdef INCLUDE_KEYBD_HOOK
-	key_type *pThisKey = ksc[sc].sc_takes_precedence ? (ksc + sc) : (kvk + vk);
+	if (pPrefixKey && pPrefixKey != pThisKey && !key_up && !pThisKey->as_modifiersLR)
+		// Any key-down event (other than those already ignored and returned from,
+		// above) should probably be considered an attempt by the user to use the
+		// prefix key that's currently being held down as a "modifier".  That way,
+		// if pPrefixKey happens to also be a suffix, its suffix action won't fire
+		// when the key is released, which is probably the correct thing to do 90%
+		// or more of the time.  But don't consider the modifiers themselves to have
+		// been modified by  prefix key, since that is almost never desirable:
+		pPrefixKey->was_just_used = AS_PREFIX;
 #else
-	key_type *pThisKey = kvk + vk;
-#endif
-
-	// Update: The below is now done only for keyboard hook, not the mouse.  This is because
+	// Update: The above is now done only for keyboard hook, not the mouse.  This is because
 	// most people probably would not want a prefix key's suffix-action to be stopped
 	// from firing just because a non-hotkey mouse button was pressed while the key
 	// was held down (i.e. for games).  Update #2: A small exception to this has been made:
 	// Prefix keys that are also modifiers (ALT/SHIFT/CTRL/WIN) will now not fire their
 	// suffix action on key-up if they modified a mouse button event (since Ctrl-LeftClick,
 	// for example, is a valid native action and we don't want to give up that flexibility).
-#ifdef INCLUDE_KEYBD_HOOK
-	// This relies upon the above check having returned if the condition was met,
-	// since it doesn't ensure that pThisKey != pPrefixKey:
-	if (pPrefixKey && !key_up && !pThisKey->as_modifiersLR)
-		// Any key-down event (other than those already ignored and returned from,
-		// above) should probably be considered an attempt by the user to use the
-		// prefix key that's currently being held down as a "modifier".  That way, if pPrefixKey
-		// happens to also be a suffix, its suffix action won't fire when the key is released,
-		// which is probably the correct thing to do 90% or more of the time:
-		pPrefixKey->was_just_used = AS_PREFIX;
-#else
-	if (pPrefixKey && !key_up && pPrefixKey->as_modifiersLR) // See explanation above.
+	if (pPrefixKey && pPrefixKey != pThisKey && !key_up && pPrefixKey->as_modifiersLR)
 		pPrefixKey->was_just_used = AS_PREFIX;
 #endif
 	// WinAPI docs state that for both virtual keys and scan codes:
@@ -1341,7 +1377,6 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	if (!pThisKey->used_as_prefix && !pThisKey->used_as_suffix)
 		return AllowKeyToGoToSystem;
 
-	modLR_type modifiersLRnew;
 	int down_performed_action, was_down_before_up;
 	if (key_up)
 	{
@@ -1354,7 +1389,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	}
 	pThisKey->is_down = !key_up;
 
-#ifdef INCLUDE_KEYBD_HOOK  // Mouse Hook
+#ifdef INCLUDE_KEYBD_HOOK
 	// The below was added to fix hotkeys that have a neutral suffix such as "Control & LShift".
 	// It may also fix other things and help future enhancements:
 	if (pThisKey->as_modifiersLR)
@@ -1382,6 +1417,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		g_modifiersLR_logical = g_modifiersLR_logical_non_ignored = GetModifierLRState();
 #endif
 
+	modLR_type modifiersLRnew;
 	HotkeyIDType hotkey_id = HOTKEY_ID_INVALID;  // Set default.
 	bool no_suppress = false;  // Hotkeys are normally suppressed, so set this behavior as default.
 	#define GET_HOTKEY_ID_AND_FLAGS(id_with_flags) \
@@ -1397,25 +1433,33 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	///////////////////////////////////////////////////////////////////////////////////////
 	if (pThisKey->used_as_prefix && !key_up && (!pPrefixKey || !pThisKey->used_as_suffix || pThisKey == pPrefixKey))
 	{
-		// Override any other prefix key that might be in effect with this one, in case the
-		// prior one, due to be old for example, was invalid somehow.  UPDATE: It seems better
-		// to leave the old one in effect to support the case where one prefix key is modifying
-		// a second one in its role as a suffix.  In other words, if key1 is a prefix and
-		// key2 is both a prefix and a suffix, we want to leave key1 in effect as a prefix,
-		// rather than key2.  Hence, a null-check was added in the above if-stmt:
-		pPrefixKey = pThisKey;
-		// It should be safe to init this because even if the current key is repeating,
-		// it should be impossible to receive here the key-downs that occurred after
-		// the first, because there's a return-on-repeat check farther above (update: that check
-		// is gone now).  Even if that check weren't done, it's safe to reinitialize this to zero
-		// because on most (all?) keyboards & OSs, the moment the user presses another key while
-		// this one is held down, the key-repeating ceases and does not resume for
-		// this key (though the second key will begin to repeat if it too is held down).
-		// In other words, the fear that this would be wrongly initialized and thus cause
-		// this prefix's suffix-action to fire upon key-release seems unfounded.
-		// It seems easier (and may perform better than alternative ways) to init this
-		// here rather than say, upon the release of the prefix key:
-		pPrefixKey->was_just_used = 0;
+		// This check is necessary in cases such as the following, in which the "A" key continues
+		// to repeat becauses pressing a mouse button (unlike pressing a keyboard key) does not
+		// stop the prefix key from repeating:
+		// $a::send, a
+		// a & lbutton::
+		if (pThisKey != pPrefixKey)
+		{
+			// Override any other prefix key that might be in effect with this one, in case the
+			// prior one, due to be old for example, was invalid somehow.  UPDATE: It seems better
+			// to leave the old one in effect to support the case where one prefix key is modifying
+			// a second one in its role as a suffix.  In other words, if key1 is a prefix and
+			// key2 is both a prefix and a suffix, we want to leave key1 in effect as a prefix,
+			// rather than key2.  Hence, a null-check was added in the above if-stmt:
+			pPrefixKey = pThisKey;
+			// It should be safe to init this because even if the current key is repeating,
+			// it should be impossible to receive here the key-downs that occurred after
+			// the first, because there's a return-on-repeat check farther above (update: that check
+			// is gone now).  Even if that check weren't done, it's safe to reinitialize this to zero
+			// because on most (all?) keyboards & OSs, the moment the user presses another key while
+			// this one is held down, the key-repeating ceases and does not resume for
+			// this key (though the second key will begin to repeat if it too is held down).
+			// In other words, the fear that this would be wrongly initialized and thus cause
+			// this prefix's suffix-action to fire upon key-release seems unfounded.
+			// It seems easier (and may perform better than alternative ways) to init this
+			// here rather than say, upon the release of the prefix key:
+			pPrefixKey->was_just_used = 0;
+		}
 
 		// This new section was added May 30, 2004, to fix scenarios such as the following example:
 		// a & b::Msgbox a & b
@@ -1565,7 +1609,9 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 			// the state of the Capslock key should not be changed when the hotkey is pressed.
 			// Do this check prior to the below check (give it precedence).
 			if (pThisKey->was_just_used)  // AS_PREFIX or AS_PREFIX_FOR_HOTKEY.
-#ifdef INCLUDE_KEYBD_HOOK
+#ifndef INCLUDE_KEYBD_HOOK // Mouse hook
+				return (pThisKey->no_suppress & NO_SUPPRESS_PREFIX) ? AllowKeyToGoToSystem : SuppressThisKey;
+#else // Keyboard hook
 			{
 				if (pThisKey->as_modifiersLR)
 					return (pThisKey->was_just_used == AS_PREFIX_FOR_HOTKEY) ? AllowKeyToGoToSystemButDisguiseWinAlt
@@ -1575,8 +1621,6 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 				else
 					return SuppressThisKey;
 			}
-#else // Mouse hook.
-				return (pThisKey->no_suppress & NO_SUPPRESS_PREFIX) ? AllowKeyToGoToSystem : SuppressThisKey;
 #endif
 
 		// Since above didn't return, this key-up for this prefix key wasn't used in it's role
@@ -1757,16 +1801,16 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 				// below needs to be unconditional:
 				//else
 #endif
-					if ((g_modifiersLR_logical & MOD_LSHIFT) || (g_modifiersLR_logical & MOD_RSHIFT))
-						KeyEvent(KEYUP, (g_modifiersLR_logical & MOD_RSHIFT) ? VK_RSHIFT : VK_LSHIFT);
+				if ((g_modifiersLR_logical & MOD_LSHIFT) || (g_modifiersLR_logical & MOD_RSHIFT))
 					// In this case, it's not necessary to put the shift key back down because the
 					// alt-tab menu only disappears after the prefix key has been released (and it's
 					// not realistic that a user would try to trigger another hotkey while the
 					// alt-tab menu is visible).  In other words, the user will be releasing the
-					// shift key anyway as part of the alt-tab process, so it's not necessary to do
-					// it here (the shift stays in effect as a prefix for us here because it's
-					// sent as an ignore event -- but the prefix will be correctly canceled when
-					// the user releases the shift key).
+					// shift key anyway as part of the alt-tab process, so it's not necessary to put
+					// it back down for the user here (the shift stays in effect as a prefix for us
+					// here because it's sent as an ignore event -- but the prefix will be correctly
+					// canceled when the user releases the shift key).
+					KeyEvent(KEYUP, (g_modifiersLR_logical & MOD_RSHIFT) ? VK_RSHIFT : VK_LSHIFT);
 			}
 			if ((g_modifiersLR_logical & MOD_LCONTROL) || (g_modifiersLR_logical & MOD_RCONTROL))
 				// Any down control key prevents alt-tab from working.  This is similar to

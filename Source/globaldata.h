@@ -23,6 +23,7 @@ GNU General Public License for more details.
 #include "os_version.h" // For the global OS_Version object
 
 extern HINSTANCE g_hInstance;
+extern bool g_DestroyWindowCalled;
 extern HWND g_hWnd;  // The main window
 extern HWND g_hWndEdit;  // The edit window, child of main.
 extern HWND g_hWndSplash;  // The SplashText window.
@@ -32,6 +33,7 @@ extern HACCEL g_hAccelTable; // Accelerator table for main menu shortcut keys.
 extern modLR_type g_modifiersLR_logical;   // Tracked by hook (if hook is active).
 extern modLR_type g_modifiersLR_logical_non_ignored;
 extern modLR_type g_modifiersLR_physical;  // Same as above except it's which modifiers are PHYSICALLY down.
+extern modLR_type g_modifiersLR_persistent; // Maintained by SendKeys().
 
 #ifdef FUTURE_USE_MOUSE_BUTTONS_LOGICAL
 extern WORD g_mouse_buttons_logical; // A bitwise combination of MK_LBUTTON, etc.
@@ -87,6 +89,11 @@ extern int g_nInputBoxes;
 extern int g_nFileDialogs;
 extern int g_nFolderDialogs;
 extern InputBoxType g_InputBox[MAX_INPUTBOXES];
+
+extern bool g_SortCaseSensitive;
+extern bool g_SortNumeric;
+extern bool g_SortReverse;
+extern int g_SortColumnOffset;
 
 extern char g_delimiter;
 extern char g_DerefChar;
@@ -145,17 +152,6 @@ extern DWORD g_TimeLastInputPhysical;
 extern bool g_KeyHistoryToFile;
 #endif
 
-
-inline VarSizeType GetBatchLines(char *aBuf = NULL)
-{
-	char buf[256];
-	char *target_buf = aBuf ? aBuf : buf;
-	if (g.IntervalBeforeRest >= 0) // Have this new method take precedence, if it's in use by the script.
-		sprintf(target_buf, "%dms", g.IntervalBeforeRest); // Not snprintf().
-	else
-		ITOA64(g.LinesPerCycle, target_buf);
-	return (VarSizeType)strlen(target_buf);
-}
 
 inline VarSizeType GetOSType(char *aBuf = NULL)
 {

@@ -61,7 +61,7 @@ enum OurTimers {TIMER_ID_MAIN = MAX_MSGBOXES + 2, TIMER_ID_UNINTERRUPTIBLE, TIME
 // the timeout is set to 10."
 #define SET_MAIN_TIMER \
 if (!g_MainTimerExists && !(g_MainTimerExists = SetTimer(g_hWnd, TIMER_ID_MAIN, SLEEP_INTERVAL, (TIMERPROC)NULL)))\
-	g_script.ExitApp("SetTimer"); // Just a brief msg to cut down on mem overhead, since it should basically never happen.
+	g_script.ExitApp(EXIT_CRITICAL, "SetTimer"); // Just a brief msg to cut down on mem overhead, since it should basically never happen.
 
 // When someone calls SET_UNINTERRUPTIBLE_TIMER, by definition the current script subroutine is
 // becoming non-interruptible.  Therefore, their should never be a need to have more than one
@@ -78,11 +78,11 @@ if (!g_MainTimerExists && !(g_MainTimerExists = SetTimer(g_hWnd, TIMER_ID_MAIN, 
 // even though the program is still responsive).
 #define SET_UNINTERRUPTIBLE_TIMER(aTimeoutValue) \
 if (!g_UninterruptibleTimerExists && !(g_UninterruptibleTimerExists = SetTimer(g_hWnd, TIMER_ID_UNINTERRUPTIBLE, aTimeoutValue, UninteruptibleTimeout)))\
-	g_script.ExitApp("SetTimer() unexpectedly failed.");
+	g_script.ExitApp(EXIT_CRITICAL, "SetTimer() unexpectedly failed.");
 
 #define SET_AUTOEXEC_TIMER(aTimeoutValue) \
 if (!g_AutoExecTimerExists && !(g_AutoExecTimerExists = SetTimer(g_hWnd, TIMER_ID_AUTOEXEC, aTimeoutValue, AutoExecSectionTimeout)))\
-	g_script.ExitApp("SetTimer() unexpectedly failed.");
+	g_script.ExitApp(EXIT_CRITICAL, "SetTimer() unexpectedly failed.");
 
 #define SET_INPUT_TIMER(aTimeoutValue) \
 	if (!g_InputTimerExists)\
@@ -205,6 +205,32 @@ if (g.UninterruptibleTime && g.UninterruptedLineCountMax)\
 	g_AllowInterruptionForSub = true;\
 	KILL_UNINTERRUPTIBLE_TIMER \
 }
+
+
+// The unpause logic is done immediately after the most recently suspended thread's
+// global settings are restored so that that thread is set up properly to be resumed.
+// Comments about macro:
+//    g_UnpauseWhenResumed = false --> because we've "used up" this unpause ticket.
+//    g_ErrorLevel->Assign(g.ErrorLevel) --> restores the variable from the stored value.
+// If the thread to be resumed has not been unpaused, it will automatically be resumed in
+// a paused state because when we return from this function, we should be returning to
+// an instance of ExecUntil() (our caller), which should be in a pause loop still.
+// But always update the tray icon in case the paused state of the subroutine
+// we're about to resume is different from our previous paused state.  Do this even
+// when the macro is used by CheckScriptTimers(), which although it might not techically
+// need it, lends maintainability and peace of mind:
+#define RESUME_UNDERLYING_THREAD \
+	CopyMemory(&g, &global_saved, sizeof(global_struct));\
+	g_ErrorLevel->Assign(g.ErrorLevel);\
+	if (g_UnpauseWhenResumed && g.IsPaused)\
+	{\
+		g_UnpauseWhenResumed = false;\
+		g.IsPaused = false;\
+		--g_nPausedThreads;\
+		CheckMenuItem(GetMenu(g_hWnd), ID_FILE_PAUSE, MF_UNCHECKED);\
+	}\
+	g_script.UpdateTrayIcon();
+
 
 // Have this be dynamically resolved each time.  For example, when MsgSleep() uses this
 // while in mode WAIT_FOR_MESSSAGES, its msg loop should use this macro in case the

@@ -91,7 +91,7 @@ enum enum_act {
 , ACT_STATUSBARWAIT
 , ACT_CLIPWAIT
 , ACT_SLEEP, ACT_RANDOM
-, ACT_GOTO, ACT_GOSUB, ACT_HOTKEY, ACT_SETTIMER, ACT_RETURN, ACT_EXIT
+, ACT_GOTO, ACT_GOSUB, ACT_ONEXIT, ACT_HOTKEY, ACT_SETTIMER, ACT_RETURN, ACT_EXIT
 , ACT_LOOP, ACT_BREAK, ACT_CONTINUE
 , ACT_BLOCK_BEGIN, ACT_BLOCK_END
 , ACT_WINACTIVATE, ACT_WINACTIVATEBOTTOM
@@ -182,7 +182,10 @@ enum TrayMenuItems {ID_TRAY_OPEN = 16000, ID_TRAY_HELP, ID_TRAY_WINDOWSPY, ID_TR
 #define ERR_MISSING_OUTPUT_VAR "This command requires that at least one of its output variables be provided."
 #define ERR_ELSE_WITH_NO_IF "This ELSE doesn't appear to belong to any IF-statement."
 #define ERR_SETTIMER "This timer's target label does not exist."
+#define ERR_ONEXIT_LABEL "Parameter #1 is not a valid label."
 #define ERR_HOTKEY_LABEL "Parameter #2 is not a valid label or action."
+#define ERR_MENU "Menu does not exist."
+#define ERR_SUBMENU "Submenu does not exist."
 #define ERR_MENULABEL "This menu item's target label does not exist."
 #define ERR_GROUPADD_LABEL "The target label in parameter #4 does not exist."
 #define ERR_WINDOW_PARAM "This command requires that at least one of its window parameters be non-blank."
@@ -196,7 +199,8 @@ enum TrayMenuItems {ID_TRAY_OPEN = 16000, ID_TRAY_HELP, ID_TRAY_WINDOWSPY, ID_TR
 #define ERR_TITLEMATCHMODE2 "The variable does not contain a valid TitleMatchMode." ERR_ABORT
 #define ERR_TRANSFORMCOMMAND "Parameter #2 is not a valid transform command."
 #define ERR_MENUCOMMAND "Parameter #2 is not a valid menu command."
-#define ERR_MENUCOMMAND2 "Parameter #2's variable does not contain a valid menu command." ERR_ABORT
+#define ERR_MENUCOMMAND2 "Parameter #2's variable does not contain a valid menu command."
+#define ERR_MENUTRAY "Supported only for the tray menu."
 #define ERR_CONTROLCOMMAND "Parameter #1 is not a valid Control command."
 #define ERR_CONTROLGETCOMMAND "Parameter #2 is not a valid ControlGet command."
 #define ERR_DRIVECOMMAND "Parameter #2 is not a valid DriveGet command."
@@ -367,13 +371,12 @@ enum TransformCmds {TRANS_CMD_INVALID, TRANS_CMD_ASC, TRANS_CMD_CHR, TRANS_CMD_M
 	, TRANS_CMD_BITSHIFTLEFT, TRANS_CMD_BITSHIFTRIGHT
 };
 
-enum MenuCommands {MENU_COMMAND_INVALID, MENU_COMMAND_ADD, MENU_COMMAND_RENAME
-	, MENU_COMMAND_CHECK, MENU_COMMAND_UNCHECK, MENU_COMMAND_TOGGLECHECK
-	, MENU_COMMAND_ENABLE, MENU_COMMAND_DISABLE, MENU_COMMAND_TOGGLEENABLE
-	, MENU_COMMAND_STANDARD, MENU_COMMAND_NOSTANDARD
-	, MENU_COMMAND_DEFAULT, MENU_COMMAND_NODEFAULT
-	, MENU_COMMAND_DELETE, MENU_COMMAND_DELETEALL
-	, MENU_COMMAND_ICON, MENU_COMMAND_NOICON, MENU_COMMAND_MAINWINDOW, MENU_COMMAND_NOMAINWINDOW
+enum MenuCommands {MENU_CMD_INVALID, MENU_CMD_SHOW, MENU_CMD_USEERRORLEVEL
+	, MENU_CMD_ADD, MENU_CMD_RENAME, MENU_CMD_CHECK, MENU_CMD_UNCHECK, MENU_CMD_TOGGLECHECK
+	, MENU_CMD_ENABLE, MENU_CMD_DISABLE, MENU_CMD_TOGGLEENABLE
+	, MENU_CMD_STANDARD, MENU_CMD_NOSTANDARD, MENU_CMD_DEFAULT, MENU_CMD_NODEFAULT
+	, MENU_CMD_DELETE, MENU_CMD_DELETEALL, MENU_CMD_TIP, MENU_CMD_ICON, MENU_CMD_NOICON
+	, MENU_CMD_MAINWINDOW, MENU_CMD_NOMAINWINDOW
 };
 
 enum ControlCmds {CONTROL_CMD_INVALID, CONTROL_CMD_CHECK, CONTROL_CMD_UNCHECK
@@ -424,7 +427,7 @@ private:
 		, LoopReadFileStruct *aCurrentReadFile = NULL);
 	ResultType PerformAssign();
 	ResultType StringSplit(char *aArrayName, char *aInputString, char *aDelimiterList, char *aOmitList);
-	ResultType ScriptSort(char *aOptions);
+	ResultType PerformSort(char *aContents, char *aOptions);
 	ResultType ScriptGetKeyState(char *aKeyName, char *aOption);
 	ResultType DriveSpace(char *aPath, bool aGetFreeSpace);
 	ResultType DriveGet(char *aCmd, char *aValue);
@@ -677,6 +680,8 @@ public:
 	ResultType ArgMustBeDereferenced(Var *aVar, int aArgIndexToExclude)
 	// Returns CONDITION_TRUE, CONDITION_FALSE, or FAIL.
 	{
+		if (mActionType == ACT_SORT) // See PerformSort() for why it's always dereferenced.
+			return CONDITION_TRUE;
 		if (aVar->mType == VAR_CLIPBOARD)
 			// Even if the clipboard is both an input and an output var, it still
 			// doesn't need to be dereferenced into the temp buffer because the
@@ -1024,26 +1029,29 @@ public:
 
 	static MenuCommands ConvertMenuCommand(char *aBuf)
 	{
-		if (!aBuf || !*aBuf) return MENU_COMMAND_INVALID;
-		if (!stricmp(aBuf, "Add")) return MENU_COMMAND_ADD;
-		if (!stricmp(aBuf, "Rename")) return MENU_COMMAND_RENAME;
-		if (!stricmp(aBuf, "Check")) return MENU_COMMAND_CHECK;
-		if (!stricmp(aBuf, "Uncheck")) return MENU_COMMAND_UNCHECK;
-		if (!stricmp(aBuf, "ToggleCheck")) return MENU_COMMAND_TOGGLECHECK;
-		if (!stricmp(aBuf, "Enable")) return MENU_COMMAND_ENABLE;
-		if (!stricmp(aBuf, "Disable")) return MENU_COMMAND_DISABLE;
-		if (!stricmp(aBuf, "ToggleEnable")) return MENU_COMMAND_TOGGLEENABLE;
-		if (!stricmp(aBuf, "Standard")) return MENU_COMMAND_STANDARD;
-		if (!stricmp(aBuf, "NoStandard")) return MENU_COMMAND_NOSTANDARD;
-		if (!stricmp(aBuf, "Default")) return MENU_COMMAND_DEFAULT;
-		if (!stricmp(aBuf, "NoDefault")) return MENU_COMMAND_NODEFAULT;
-		if (!stricmp(aBuf, "Delete")) return MENU_COMMAND_DELETE;
-		if (!stricmp(aBuf, "DeleteAll")) return MENU_COMMAND_DELETEALL;
-		if (!stricmp(aBuf, "Icon")) return MENU_COMMAND_ICON;
-		if (!stricmp(aBuf, "NoIcon")) return MENU_COMMAND_NOICON;
-		if (!stricmp(aBuf, "MainWindow")) return MENU_COMMAND_MAINWINDOW;
-		if (!stricmp(aBuf, "NoMainWindow")) return MENU_COMMAND_NOMAINWINDOW;
-		return MENU_COMMAND_INVALID;
+		if (!aBuf || !*aBuf) return MENU_CMD_INVALID;
+		if (!stricmp(aBuf, "Show")) return MENU_CMD_SHOW;
+		if (!stricmp(aBuf, "UseErrorLevel")) return MENU_CMD_USEERRORLEVEL;
+		if (!stricmp(aBuf, "Add")) return MENU_CMD_ADD;
+		if (!stricmp(aBuf, "Rename")) return MENU_CMD_RENAME;
+		if (!stricmp(aBuf, "Check")) return MENU_CMD_CHECK;
+		if (!stricmp(aBuf, "Uncheck")) return MENU_CMD_UNCHECK;
+		if (!stricmp(aBuf, "ToggleCheck")) return MENU_CMD_TOGGLECHECK;
+		if (!stricmp(aBuf, "Enable")) return MENU_CMD_ENABLE;
+		if (!stricmp(aBuf, "Disable")) return MENU_CMD_DISABLE;
+		if (!stricmp(aBuf, "ToggleEnable")) return MENU_CMD_TOGGLEENABLE;
+		if (!stricmp(aBuf, "Standard")) return MENU_CMD_STANDARD;
+		if (!stricmp(aBuf, "NoStandard")) return MENU_CMD_NOSTANDARD;
+		if (!stricmp(aBuf, "Default")) return MENU_CMD_DEFAULT;
+		if (!stricmp(aBuf, "NoDefault")) return MENU_CMD_NODEFAULT;
+		if (!stricmp(aBuf, "Delete")) return MENU_CMD_DELETE;
+		if (!stricmp(aBuf, "DeleteAll")) return MENU_CMD_DELETEALL;
+		if (!stricmp(aBuf, "Tip")) return MENU_CMD_TIP;
+		if (!stricmp(aBuf, "Icon")) return MENU_CMD_ICON;
+		if (!stricmp(aBuf, "NoIcon")) return MENU_CMD_NOICON;
+		if (!stricmp(aBuf, "MainWindow")) return MENU_CMD_MAINWINDOW;
+		if (!stricmp(aBuf, "NoMainWindow")) return MENU_CMD_NOMAINWINDOW;
+		return MENU_CMD_INVALID;
 	}
 
 	static ControlCmds ConvertControlCmd(char *aBuf)
@@ -1300,22 +1308,84 @@ public:
 
 
 
+#define MAX_MENU_LENGTH 100 // For both menu and menu item names.
+class UserMenuItem;  // Forward declaration since classes use each other (i.e. a menu *item* can have a submenu).
+class UserMenu
+{
+public:
+	char mName[MAX_MENU_LENGTH + 1];
+	UserMenuItem *mFirstMenuItem, *mLastMenuItem, *mDefault;
+	bool mIncludeStandardItems;
+	UINT mMenuItemCount;  // The count of user-defined menu items (doesn't include the standard items, if present).
+	UserMenu *mNextMenu;  // Next item in linked list
+	HMENU mMenu;
+
+	// Don't overload new and delete operators in this case since we want to use real dynamic memory
+	// (since menus can be read in from a file, destroyed and recreated, over and over).
+
+	UserMenu(char *aName) // Constructor
+		: mFirstMenuItem(NULL), mLastMenuItem(NULL), mDefault(NULL), mIncludeStandardItems(false)
+		, mMenuItemCount(0), mNextMenu(NULL), mMenu(NULL)
+	{
+		strlcpy(mName, aName, sizeof(mName));
+	}
+
+	~UserMenu() // Destructor
+	{
+		// The below accomplishes the following:
+		// 1) Destroys the OS menu to free resources, which (if program is exiting) ensures a clean exit.
+		// 2) Destructs the individual menu items, since they are separately dynamic.
+		DeleteAllItems();
+	}
+
+	ResultType AddItem(char *aName, UINT aMenuID, Label *aLabel, UserMenu *aSubmenu);
+	ResultType DeleteItem(UserMenuItem *aMenuItem, UserMenuItem *aMenuItemPrev);
+	ResultType DeleteAllItems();
+	ResultType ModifyItem(UserMenuItem *aMenuItem, Label *aLabel, UserMenu *aSubmenu);
+	ResultType RenameItem(UserMenuItem *aMenuItem, char *aNewName);
+	ResultType CheckItem(UserMenuItem *aMenuItem);
+	ResultType UncheckItem(UserMenuItem *aMenuItem);
+	ResultType ToggleCheckItem(UserMenuItem *aMenuItem);
+	ResultType EnableItem(UserMenuItem *aMenuItem);
+	ResultType DisableItem(UserMenuItem *aMenuItem);
+	ResultType ToggleEnableItem(UserMenuItem *aMenuItem);
+	ResultType SetDefault(UserMenuItem *aMenuItem = NULL);
+	ResultType IncludeStandardItems();
+	ResultType ExcludeStandardItems();
+	ResultType Create();
+	ResultType AppendStandardItems();
+	ResultType Destroy();
+	ResultType Display(bool aForceToForeground = true);
+	UINT GetSubmenuPos(HMENU ahMenu);
+	bool ContainsMenu(UserMenu *aMenu);
+};
+
+
+
 class UserMenuItem
 {
 public:
-	#define MAX_MENU_LENGTH 100
 	char mName[MAX_MENU_LENGTH + 1];
 	UINT mMenuID;
 	Label *mLabel;
+	UserMenu *mSubmenu;
+	UserMenu *mMenu;  // The menu to which this item belongs.  Needed to support script var A_ThisMenu.
 	bool mEnabled, mChecked;
-	UserMenuItem *mNextMenuItem;  // Next items in linked list
+	UserMenuItem *mNextMenuItem;  // Next item in linked list
 
-	UserMenuItem(char *aName, UINT aMenuID, Label *aLabel, HMENU aMenu) // Constructor
-		: mMenuID(aMenuID), mLabel(aLabel), mEnabled(true), mChecked(false), mNextMenuItem(NULL)
+	// Constructor:
+	UserMenuItem(char *aName, UINT aMenuID, Label *aLabel, UserMenu *aSubmenu, UserMenu *aMenu)
+		: mMenuID(aMenuID), mLabel(aLabel), mSubmenu(aSubmenu), mMenu(aMenu)
+		, mEnabled(true), mChecked(false), mNextMenuItem(NULL)
 	{
 		strlcpy(mName, aName, sizeof(mName));
-		if (aMenu)
-			AppendMenu(aMenu, *aName ? MF_STRING : MF_SEPARATOR, aMenuID, aName);
+		if (aMenu->mMenu)
+		{
+			if (aSubmenu) // Ensure the menu is created so that AppendMenu() will function properly.
+				aSubmenu->Create();
+			AppendMenu(aMenu->mMenu, (*aName ? MF_STRING : MF_SEPARATOR) | (aSubmenu ? MF_POPUP : 0)
+				, aSubmenu ? (UINT_PTR)aSubmenu->mMenu : aMenuID, aName);
+		}
 	}
 
 	// Don't overload new and delete operators in this case since we want to use real dynamic memory
@@ -1328,14 +1398,14 @@ class Script
 {
 private:
 	friend class Hotkey;
-	Line *mFirstLine, *mLastLine;  // The first and last lines in the linked list.
+	Line *mFirstLine, *mLastLine;     // The first and last lines in the linked list.
 	Label *mFirstLabel, *mLastLabel;  // The first and last labels in the linked list.
 	Var *mFirstVar, *mLastVar;  // The first and last variables in the linked list.
 	WinGroup *mFirstGroup, *mLastGroup;  // The first and last variables in the linked list.
 	UINT mLineCount, mLabelCount, mVarCount, mGroupCount;
 
 #ifdef AUTOHOTKEYSC
-	bool mCustomIcon; // Whether the compiled script uses a custom icon.
+	bool mCompiledHasCustomIcon; // Whether the compiled script uses a custom icon.
 #endif;
 
 	// These two track the file number and line number in that file of the line currently being loaded,
@@ -1343,9 +1413,11 @@ private:
 	UCHAR mCurrFileNumber;
 	LineNumberType mCurrLineNumber;
 	bool mNoHotkeyLabels;
+	bool mMenuUseErrorLevel;  // Whether runtime errors should be displayed by the Menu command, vs. ErrorLevel.
 
+	#define UPDATE_TIP_FIELD strlcpy(mNIC.szTip, (mTrayIconTip && *mTrayIconTip) ? mTrayIconTip \
+		: (mFileName ? mFileName : NAME_P), sizeof(mNIC.szTip));
 	NOTIFYICONDATA mNIC; // For ease of adding and deleting our tray icon.
-	HMENU mTrayMenu; // Our tray menu, which should be destroyed upon exiting the program.
 
 #ifdef AUTOHOTKEYSC
 	ResultType CloseAndReturn(HS_EXEArc_Read *fp, UCHAR *aBuf, ResultType return_value);
@@ -1374,36 +1446,20 @@ private:
 	Line *PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode = NORMAL_MODE, AttributeType aLoopTypeFile = ATTR_NONE
 		, AttributeType aLoopTypeReg = ATTR_NONE, AttributeType aLoopTypeRead = ATTR_NONE
 		, AttributeType aLoopTypeParse = ATTR_NONE);
-	HMENU CreateTrayMenu();
-	ResultType DestroyTrayMenu()
-	{
-		if (mTrayMenu)
-		{
-			// I think DestroyMenu() can fail if an attempt is made to destroy the menu while it is being
-			// displayed (but even if it doesn't fail, it seems very bad to try to destroy it then, which
-			// is why g_MenuIsVisible is checked just to be sure).
-			// But this all should be impossible in our case because the script is in an uninterruptible state
-			// while the menu is displayed, which in addition to pausing the current thread (which happens
-			// anyway), no new timed or hotkey subroutines can be launched.  Thus, this should rarely if
-			// ever happen, which is why no error message is given here:
-			//if (g_MenuIsVisible)
-			//	return FAIL;
-			if (!DestroyMenu(mTrayMenu))
-				return FAIL;
-			mTrayMenu = NULL;
-		}
-		return OK;
-	}
-	void AppendStandardTrayItems();
+
 public:
 	Line *mCurrLine;  // Seems better to make this public than make Line our friend.
+	char mThisMenuItem[MAX_MENU_LENGTH + 1];
+	char mThisMenu[MAX_MENU_LENGTH + 1];
 	char *mThisHotkeyName, *mPriorHotkeyName;
+	Label *mOnExitLabel;  // The label to run when the script terminates (NULL if none).
+	ExitReasons mExitReason;
 
 	ScriptTimer *mFirstTimer, *mLastTimer;  // The first and last script timers in the linked list.
 	UINT mTimerCount, mTimerEnabledCount;
 
-	UserMenuItem *mFirstMenuItem, *mLastMenuItem;
-	UINT mMenuItemCount;
+	UserMenu *mFirstMenu, *mLastMenu;
+	UINT mMenuCount;
 
 	WIN32_FIND_DATA *mLoopFile;  // The file of the current file-loop, if applicable.
 	RegItemStruct *mLoopRegItem; // The registry subkey or value of the current registry enumeration loop.
@@ -1429,19 +1485,22 @@ public:
 	#define RUNAS_ITEM_SIZE (257 * sizeof(wchar_t))
 	wchar_t *mRunAsUser, *mRunAsPass, *mRunAsDomain; // Memory is allocated at runtime, upon first use.
 
-	bool mTrayIncludeStandard;  // Whether to include the tray menu's standard items in the menu.
-	UserMenuItem *mTrayMenuDefault;
+	HICON mCustomIcon;  // NULL unless the script has loaded a custom icon during its runtime.
+	char *mCustomIconFile; // Filename of icon.  Allocated on first use.
+	char *mTrayIconTip;  // Custom tip text for tray icon.  Allocated on first use.
+	UINT mCustomIconNumber; // The number of the icon inside the above file.
+
+	UserMenu *mTrayMenu; // Our tray menu, which should be destroyed upon exiting the program.
     
 	ResultType Init(char *aScriptFilename, bool aIsRestart);
 	ResultType CreateWindows();
 	void CreateTrayIcon();
 	void UpdateTrayIcon(bool aForceUpdate = false);
-	void DisplayTrayMenu();
 	ResultType AutoExecSection();
-	ResultType PerformMenu(char *aWhichMenu, char *aCommand, char *aMenuItemName, char *aLabel);
 	ResultType Edit();
 	ResultType Reload(bool aDisplayErrors);
-	void ExitApp(char *aBuf = NULL, int ExitCode = 0);
+	ResultType ExitApp(ExitReasons aExitReason, char *aBuf = NULL, int ExitCode = 0);
+	void TerminateApp(int aExitCode);
 	LineNumberType LoadFromFile();
 	ResultType LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude);
 	ResultType UpdateOrCreateTimer(Label *aLabel, int aFreq, bool aEnable);
@@ -1456,12 +1515,169 @@ public:
 	char *ListVars(char *aBuf, size_t aBufSize);
 	char *ListKeyHistory(char *aBuf, size_t aBufSize);
 
+	ResultType PerformMenu(char *aMenu, char *aCommand, char *aParam3, char *aParam4);
+	UserMenu *FindMenu(char *aMenuName);
+	UserMenu *AddMenu(char *aMenuName);
+	ResultType ScriptDeleteMenu(UserMenu *aMenu);
 	UserMenuItem *FindMenuItemByID(UINT aID)
 	{
-		for (UserMenuItem *menu_item = mFirstMenuItem; menu_item != NULL; menu_item = menu_item->mNextMenuItem)
-			if (menu_item->mMenuID == aID)
-				return menu_item;
+		UserMenuItem *mi;
+		for (UserMenu *m = mFirstMenu; m; m = m->mNextMenu)
+			for (mi = m->mFirstMenuItem; mi; mi = mi->mNextMenuItem)
+				if (mi->mMenuID == aID)
+					return mi;
 		return NULL;
+	}
+
+
+	VarSizeType GetBatchLines(char *aBuf = NULL)
+	{
+		// The BatchLine value can be either a numerical string or a string that ends in "ms".
+		char buf[256];
+		char *target_buf = aBuf ? aBuf : buf;
+		if (g.IntervalBeforeRest >= 0) // Have this new method take precedence, if it's in use by the script.
+			sprintf(target_buf, "%dms", g.IntervalBeforeRest); // Not snprintf().
+		else
+			ITOA64(g.LinesPerCycle, target_buf);
+		return (VarSizeType)strlen(target_buf);
+	}
+
+	VarSizeType GetTitleMatchMode(char *aBuf = NULL)
+	{
+		if (!aBuf)
+			return MAX_NUMBER_LENGTH;  // Just in case it's ever allowed to go beyond 3
+		_itoa(g.TitleMatchMode, aBuf, 10);  // Always output as decimal vs. hex in this case.
+		return (VarSizeType)strlen(aBuf);
+	}
+
+	VarSizeType GetTitleMatchModeSpeed(char *aBuf = NULL)
+	{
+		if (!aBuf)
+			return 4;
+		// For backward compatibility (due to StringCaseSense), never change the case used here:
+		strcpy(aBuf, g.TitleFindFast ? "Fast" : "Slow");
+		return 4;  // Always length 4
+	}
+
+	VarSizeType GetDetectHiddenWindows(char *aBuf = NULL)
+	{
+		if (!aBuf)
+			return 3;  // Room for either On or Off
+		// For backward compatibility (due to StringCaseSense), never change the case used here:
+		strcpy(aBuf, g.DetectHiddenWindows ? "On" : "Off");
+		return 3;
+	}
+
+	VarSizeType GetDetectHiddenText(char *aBuf = NULL)
+	{
+		if (!aBuf)
+			return 3;  // Room for either On or Off
+		// For backward compatibility (due to StringCaseSense), never change the case used here:
+		strcpy(aBuf, g.DetectHiddenText ? "On" : "Off");
+		return 3;
+	}
+
+	VarSizeType GetAutoTrim(char *aBuf = NULL)
+	{
+		if (!aBuf)
+			return 3;  // Room for either On or Off
+		// For backward compatibility (due to StringCaseSense), never change the case used here:
+		strcpy(aBuf, g.AutoTrim ? "On" : "Off");
+		return 3;
+	}
+
+	VarSizeType GetStringCaseSense(char *aBuf = NULL)
+	{
+		if (!aBuf)
+			return 3;  // Room for either On or Off
+		// For backward compatibility (due to StringCaseSense), never change the case used here:
+		strcpy(aBuf, g.StringCaseSense ? "On" : "Off");
+		return 3;
+	}
+
+	VarSizeType GetFormatInteger(char *aBuf = NULL)
+	{
+		if (!aBuf)
+			return 1;
+		// For backward compatibility (due to StringCaseSense), never change the case used here:
+		*aBuf = g.FormatIntAsHex ? 'H' : 'D';
+		*(aBuf + 1) = '\0';
+		return 1;
+	}
+
+	VarSizeType GetFormatFloat(char *aBuf = NULL)
+	{
+		if (!aBuf)
+			return (VarSizeType)strlen(g.FormatFloat);  // Include the extra chars since this is just an estimate.
+		strlcpy(aBuf, g.FormatFloat + 1, strlen(g.FormatFloat + 1));   // Omit the leading % and the trailing 'f'.
+		return (VarSizeType)strlen(aBuf);
+	}
+
+	VarSizeType GetKeyDelay(char *aBuf = NULL)
+	{
+		if (!aBuf)
+			return MAX_NUMBER_LENGTH;
+		_itoa(g.KeyDelay, aBuf, 10);  // Always output as decimal vs. hex in this case.
+		return (VarSizeType)strlen(aBuf);
+	}
+
+	VarSizeType GetWinDelay(char *aBuf = NULL)
+	{
+		if (!aBuf)
+			return MAX_NUMBER_LENGTH;
+		_itoa(g.WinDelay, aBuf, 10);  // Always output as decimal vs. hex in this case.
+		return (VarSizeType)strlen(aBuf);
+	}
+
+	VarSizeType GetControlDelay(char *aBuf = NULL)
+	{
+		if (!aBuf)
+			return MAX_NUMBER_LENGTH;
+		_itoa(g.ControlDelay, aBuf, 10);  // Always output as decimal vs. hex in this case.
+		return (VarSizeType)strlen(aBuf);
+	}
+
+	VarSizeType GetMouseDelay(char *aBuf = NULL)
+	{
+		if (!aBuf)
+			return MAX_NUMBER_LENGTH;
+		_itoa(g.MouseDelay, aBuf, 10);  // Always output as decimal vs. hex in this case.
+		return (VarSizeType)strlen(aBuf);
+	}
+
+	VarSizeType GetDefaultMouseSpeed(char *aBuf = NULL)
+	{
+		if (!aBuf)
+			return MAX_NUMBER_LENGTH;  // Just in case it's ever allowed to go beyond 100.
+		_itoa(g.DefaultMouseSpeed, aBuf, 10);  // Always output as decimal vs. hex in this case.
+		return (VarSizeType)strlen(aBuf);
+	}
+
+	VarSizeType GetExitReason(char *aBuf = NULL)
+	{
+		char *str;
+		switch(mExitReason)
+		{
+		case EXIT_LOGOFF: str = "Logoff"; break;
+		case EXIT_SHUTDOWN: str = "Shutdown"; break;
+		// Since the below are all relatively rare, except WM_CLOSE perhaps, they are all included
+		// as one word to cut down on the number of possible words (it's easier to write OnExit
+		// routines to cover all possibilities if there are fewer of them).
+		case EXIT_WM_QUIT:
+		case EXIT_CRITICAL:
+		case EXIT_DESTROY:
+		case EXIT_WM_CLOSE: str = "Close"; break;
+		case EXIT_ERROR: str = "Error"; break;
+		case EXIT_MENU: str = "Menu"; break;  // Standard menu, not a user-defined menu.
+		case EXIT_EXIT: str = "Exit"; break;  // ExitApp or Exit command.
+		case EXIT_RELOAD: str = "Reload"; break;
+		case EXIT_SINGLEINSTANCE: str = "Single"; break;
+		default:  // EXIT_NONE or unknown value (unknown would be considered a bug if it ever happened).
+			str = "";
+		}
+		if (aBuf)
+			strcpy(aBuf, str);
+		return (VarSizeType)strlen(str);
 	}
 
 
@@ -1561,7 +1777,7 @@ public:
 	{
 		char str[64] = "";  // Set default.
 		if (mLoopFile)
-			FileTimeToYYYYMMDD(str, &mLoopFile->ftLastWriteTime, true);
+			FileTimeToYYYYMMDD(str, mLoopFile->ftLastWriteTime, true);
 		if (aBuf)
 			strcpy(aBuf, str);
 		return (VarSizeType)strlen(str);
@@ -1570,7 +1786,7 @@ public:
 	{
 		char str[64] = "";  // Set default.
 		if (mLoopFile)
-			FileTimeToYYYYMMDD(str, &mLoopFile->ftCreationTime, true);
+			FileTimeToYYYYMMDD(str, mLoopFile->ftCreationTime, true);
 		if (aBuf)
 			strcpy(aBuf, str);
 		return (VarSizeType)strlen(str);
@@ -1579,7 +1795,7 @@ public:
 	{
 		char str[64] = "";  // Set default.
 		if (mLoopFile)
-			FileTimeToYYYYMMDD(str, &mLoopFile->ftLastAccessTime, true);
+			FileTimeToYYYYMMDD(str, mLoopFile->ftLastAccessTime, true);
 		if (aBuf)
 			strcpy(aBuf, str);
 		return (VarSizeType)strlen(str);
@@ -1595,6 +1811,7 @@ public:
 	}
 	VarSizeType GetLoopFileSize(char *aBuf, int aDivider)
 	{
+		// Don't use MAX_NUMBER_LENGTH in case user has selected a very long float format via SetFormat.
 		char str[128];
 		char *target_buf = aBuf ? aBuf : str;
 		*target_buf = '\0';  // Set default.
@@ -1659,7 +1876,7 @@ public:
 		// Only subkeys (not values) have a time.  In addition, Win9x doesn't support retrieval
 		// of the time (nor does it store it), so make the var blank in that case:
 		if (mLoopRegItem && mLoopRegItem->type == REG_SUBKEY && !g_os.IsWin9x())
-			FileTimeToYYYYMMDD(str, &mLoopRegItem->ftLastWriteTime, true);
+			FileTimeToYYYYMMDD(str, mLoopRegItem->ftLastWriteTime, true);
 		if (aBuf)
 			strcpy(aBuf, str);
 		return (VarSizeType)strlen(str);
@@ -1688,14 +1905,25 @@ public:
 
 	VarSizeType GetLoopIndex(char *aBuf = NULL)
 	{
-		char str[64];
-		ITOA64(mLoopIteration, str);
-		if (aBuf)
-			strcpy(aBuf, str);
-		return (VarSizeType)strlen(str);
+		if (!aBuf)
+			return MAX_NUMBER_LENGTH;
+		ITOA64(mLoopIteration, aBuf);
+		return (VarSizeType)strlen(aBuf);
 	}
 
 
+	VarSizeType GetThisMenuItem(char *aBuf = NULL)
+	{
+		if (aBuf)
+			strcpy(aBuf, mThisMenuItem);
+		return (VarSizeType)strlen(mThisMenuItem);
+	}
+	VarSizeType GetThisMenu(char *aBuf = NULL)
+	{
+		if (aBuf)
+			strcpy(aBuf, mThisMenu);
+		return (VarSizeType)strlen(mThisMenu);
+	}
 	VarSizeType GetThisHotkey(char *aBuf = NULL)
 	{
 		if (aBuf)
@@ -1710,7 +1938,8 @@ public:
 	}
 	VarSizeType GetTimeSinceThisHotkey(char *aBuf = NULL)
 	{
-		char str[128];
+		if (!aBuf)
+			return MAX_NUMBER_LENGTH;
 		// It must be the type of hotkey that has a label because we want the TimeSinceThisHotkey
 		// value to be "in sync" with the value of ThisHotkey itself (i.e. use the same method
 		// to determine which hotkey is the "this" hotkey):
@@ -1720,26 +1949,30 @@ public:
 			// isn't greater than about 49.  See MyGetTickCount() for explanation of %d vs. %u.
 			// Update: Using 64-bit ints now, so above is obsolete:
 			//snprintf(str, sizeof(str), "%d", (DWORD)(GetTickCount() - mThisHotkeyStartTime));
-			ITOA64((__int64)(GetTickCount() - mThisHotkeyStartTime), str)  // No semicolon
+			ITOA64((__int64)(GetTickCount() - mThisHotkeyStartTime), aBuf)  // No semicolon
 		else
-			strcpy(str, "-1");
-		if (aBuf)
-			strcpy(aBuf, str);
-		return (VarSizeType)strlen(str);
+			strcpy(aBuf, "-1");
+		return (VarSizeType)strlen(aBuf);
 	}
 	VarSizeType GetTimeSincePriorHotkey(char *aBuf = NULL)
 	{
-		char str[128];
+		if (!aBuf)
+			return MAX_NUMBER_LENGTH;
 		if (*mPriorHotkeyName)
 			// See MyGetTickCount() for explanation for explanation:
 			//snprintf(str, sizeof(str), "%d", (DWORD)(GetTickCount() - mPriorHotkeyStartTime));
-			ITOA64((__int64)(GetTickCount() - mPriorHotkeyStartTime), str)
+			ITOA64((__int64)(GetTickCount() - mPriorHotkeyStartTime), aBuf)
 		else
-			strcpy(str, "-1");
-		if (aBuf)
-			strcpy(aBuf, str);
-		return (VarSizeType)strlen(str);
+			strcpy(aBuf, "-1");
+		return (VarSizeType)strlen(aBuf);
 	}
+
+	// Interdependency problems require these to be defined elsewhere:
+	VarSizeType GetIconHidden(char *aBuf = NULL);
+	VarSizeType GetIconTip(char *aBuf = NULL);
+	VarSizeType GetIconFile(char *aBuf = NULL);
+	VarSizeType GetIconNumber(char *aBuf = NULL);
+
 	VarSizeType MyGetTickCount(char *aBuf = NULL)
 	{
 		// UPDATE: The below comments are now obsolete in light of having switched over to
@@ -1756,15 +1989,16 @@ public:
 		// correctly (confirmed).  Even if one of them is negative and the other positive,
 		// it will probably work correctly due to the nature of implicit unsigned math.
 		// Thus, we use %d vs. %u in the snprintf() call below.
-		char str[128];
-		ITOA64(GetTickCount(), str);
-		if (aBuf)
-			strcpy(aBuf, str);
-		return (VarSizeType)strlen(str);
+		if (!aBuf)
+			return MAX_NUMBER_LENGTH; // Especially in this case, since tick might change between 1st & 2nd calls.
+		ITOA64(GetTickCount(), aBuf);
+		return (VarSizeType)strlen(aBuf);
 	}
 	VarSizeType GetTimeIdle(char *aBuf = NULL)
 	{
-		char str[128] = ""; // Set default.
+		if (!aBuf)
+			return MAX_NUMBER_LENGTH;
+		*aBuf = '\0';  // Set default.
 		if (g_os.IsWin2000orLater())
 		{
 			// Must fetch it at runtime, otherwise the program can't even be launched on Win9x/NT:
@@ -1776,12 +2010,30 @@ public:
 				LASTINPUTINFO lii;
 				lii.cbSize = sizeof(lii);
 				if (MyGetLastInputInfo(&lii))
-					ITOA64(GetTickCount() - lii.dwTime, str);
+					ITOA64(GetTickCount() - lii.dwTime, aBuf);
 			}
 		}
-		if (aBuf)
-			strcpy(aBuf, str);
-		return (VarSizeType)strlen(str);
+		return (VarSizeType)strlen(aBuf);
+	}
+
+	VarSizeType GetNow(char *aBuf = NULL)
+	{
+		if (!aBuf)
+			return DATE_FORMAT_LENGTH;
+		SYSTEMTIME st;
+		GetLocalTime(&st);
+		SystemTimeToYYYYMMDD(aBuf, st, false);
+		return (VarSizeType)strlen(aBuf);
+	}
+
+	VarSizeType GetNowUTC(char *aBuf = NULL)
+	{
+		if (!aBuf)
+			return DATE_FORMAT_LENGTH;
+		SYSTEMTIME st;
+		GetSystemTime(&st);
+		SystemTimeToYYYYMMDD(aBuf, st, false);
+		return (VarSizeType)strlen(aBuf);
 	}
 
 	VarSizeType GetTimeIdlePhysical(char *aBuf = NULL);

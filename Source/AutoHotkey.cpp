@@ -44,7 +44,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	#ifdef _DEBUG
 	//char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
 	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
-	char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\Hotkey command.ahk";
+	char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\Menu command COMPREHENSIVE TEST.ahk";
 	#else
 	char *script_filespec = NAME_P ".ini";  // Use this extension for better file association with editor(s).
 	#endif
@@ -148,7 +148,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		return 0;
 
 	HWND w_existing = NULL;
-	bool close_prior_instance = false;
+	UserMessages reason_to_close_prior = (UserMessages)0;
 	if (g_AllowOnlyOneInstance && !restart_mode && !g_ForceLaunch)
 	{
 		// Note: the title below must be constructed the same was as is done by our
@@ -162,31 +162,39 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 					"  Replace it with this instance?", MB_YESNO, g_script.mFileName) == IDNO)
 					return 0;
 			// Otherwise:
-			close_prior_instance = true;
+			reason_to_close_prior = AHK_EXIT_BY_SINGLEINSTANCE;
 		}
 	}
-	if (!close_prior_instance && restart_mode)
+	if (!reason_to_close_prior && restart_mode)
 		if (w_existing = FindWindow(WINDOW_CLASS_MAIN, g_script.mMainWindowTitle))
-			close_prior_instance = true;
-	if (close_prior_instance)
+			reason_to_close_prior = AHK_EXIT_BY_RELOAD;
+	if (reason_to_close_prior)
 	{
-		// Now that the script has been validated and is ready to run,
-		// close the prior instance.  We wait until now to do this so
-		// that the prior instance's "restart" hotkey will still be
-		// available to use again after the user has fixed the script.
-		PostMessage(w_existing, WM_CLOSE, 0, 0);
+		// Now that the script has been validated and is ready to run, close the prior instance.
+		// We wait until now to do this so that the prior instance's "restart" hotkey will still
+		// be available to use again after the user has fixed the script.  UPDATE: We now inform
+		// the prior instance of why it is being asked to close so that it can make that reason
+		// available to the OnExit subroutine via a built-in variable:
+		ASK_INSTANCE_TO_CLOSE(w_existing, reason_to_close_prior);
+		//PostMessage(w_existing, WM_CLOSE, 0, 0);
+
 		// Wait for it to close before we continue, so that it will deinstall any
 		// hooks and unregister any hotkeys it has:
-		for (int nInterval = 0; nInterval < 100; ++nInterval)
+		int interval_count;
+		for (interval_count = 0; ; ++interval_count)
 		{
 			Sleep(20);  // No need to use MsgSleep() in this case.
 			if (!IsWindow(w_existing))
 				break;  // done waiting.
-		}
-		if (IsWindow(w_existing))
-		{
-			MsgBox("Could not close the previous instance of this script."  PLEASE_REPORT);
-			return CRITICAL_ERROR;
+			if (interval_count == 100)
+			{
+				// This can happen if the previous instance has an OnExit subroutine that takes a long
+				// time to finish, or if it's waiting for a network drive to timeout or some other
+				// operation in which it's thread is occupied.
+				if (MsgBox("Could not close the previous instance of this script.  Keep waiting?", 4) == IDNO)
+					return CRITICAL_ERROR;
+				interval_count = 0;
+			}
 		}
 		// Give it a small amount of additional time to completely terminate, even though
 		// its main window has already been destroyed:
@@ -210,11 +218,12 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	g_script.mIsReadyToExecute = true; // This is done only now for error reporting purposes in Hotkey.cpp.
 	if (Hotkey::sJoyHotkeyCount)       // Joystick hotkeys require the timer to be always on.
 		SET_MAIN_TIMER
-	g_script.AutoExecSection();        // Run the auto-execute part at the top of the script.
-	if (!Hotkey::sHotkeyCount)         // No hotkeys are in effect.
-		if (!Hotkey::HookIsActive())   // And the user hasn't requested a hook to be activated.
-			if (!g_persistent)         // And the script doesn't contain the #Persistent directive.
-				g_script.ExitApp();    // We're done.
+	// Run the auto-execute part at the top of the script:
+	ResultType result = g_script.AutoExecSection();
+	// If no hotkeys are in effect, the user hasn't requested a hook to be activated, and the script
+	// doesn't contain the #Persistent directive we're done unless the OnExit subroutine doesn't exit:
+	if (!Hotkey::sHotkeyCount && !Hotkey::HookIsActive() && !g_persistent)
+		g_script.ExitApp(result == FAIL ? EXIT_ERROR : EXIT_EXIT);
 
 	// The below is done even if AutoExecSectionTimeout() already set the values once.
 	// This is because when the AutoExecute section finally does finish, by definition it's

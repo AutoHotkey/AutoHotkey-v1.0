@@ -76,20 +76,34 @@ ResultType YYYYMMDDToFileTime(char *aYYYYMMDD, FILETIME *pftDateTime)
 
 
 
-char *FileTimeToYYYYMMDD(char *aYYYYMMDD, FILETIME *pftDateTime, bool aConvertToLocalTime)
+char *FileTimeToYYYYMMDD(char *aBuf, FILETIME &aTime, bool aConvertToLocalTime)
 {
-	if (!aYYYYMMDD || !pftDateTime) return NULL;
-	FILETIME local_file_time;
+	SYSTEMTIME st;
+	if (FileTimeToSystemTime(&aTime, &st))
+		return SystemTimeToYYYYMMDD(aBuf, st, aConvertToLocalTime);
+	*aBuf = '\0';
+	return aBuf;
+}
+
+
+
+char *SystemTimeToYYYYMMDD(char *aBuf, SYSTEMTIME &aTime, bool aConvertToLocalTime)
+{
+	SYSTEMTIME st;
 	if (aConvertToLocalTime)
-		FileTimeToLocalFileTime(pftDateTime, &local_file_time);
+	{
+		if (!SystemTimeToTzSpecificLocalTime(NULL, &aTime, &st)) // realistically: probably never fails
+		{
+			*aBuf = '\0';
+			return aBuf;
+		}
+	}
 	else
-		CopyMemory(&local_file_time, pftDateTime, sizeof(local_file_time));
-	SYSTEMTIME st = {0};
-	FileTimeToSystemTime(&local_file_time, &st);
-	sprintf(aYYYYMMDD, "%04d%02d%02d" "%02d%02d%02d"
+		CopyMemory(&st, &aTime, sizeof(st));
+	sprintf(aBuf, "%04d%02d%02d" "%02d%02d%02d"
 		, st.wYear, st.wMonth, st.wDay
 		, st.wHour, st.wMinute, st.wSecond);
-	return aYYYYMMDD;
+	return aBuf;
 }
 
 
