@@ -1141,15 +1141,34 @@ int TextToSpecial(char *aText, UINT aTextLength, mod_type &aModifiers)
 ResultType KeyLogToFile(char *aFilespec, char aType, bool aKeyUp, vk_type aVK, sc_type aSC)
 {
 	static char target_filespec[MAX_PATH] = "";
+	static FILE *fp = NULL;
 	static HWND last_foreground_window = NULL;
 	static DWORD last_tickcount = GetTickCount();
 
-	if (aFilespec && *aFilespec)
+	if (!aFilespec && !aVK && !aSC) // Caller is signaling to close the file if it's open.
+	{
+		if (fp)
+		{
+			fclose(fp);
+			fp = NULL;
+		}
+		return OK;
+	}
+
+	if (aFilespec && *aFilespec && stricmp(aFilespec, target_filespec)) // Target filename has changed.
+	{
+		if (fp)
+		{
+			fclose(fp);
+			fp = NULL;  // To indicate to future calls to this function that it's closed.
+		}
 		strlcpy(target_filespec, aFilespec, sizeof(target_filespec));
-	if (aFilespec && !aVK && !aSC) // Caller didn't want us to log anything this time.
+	}
+
+	if (!aVK && !aSC) // Caller didn't want us to log anything this time.
 		return OK;
 	if (!*target_filespec)
-		return OK; // No file to log to.
+		return OK; // No target filename has ever been specified, so don't even attempt to open the file.
 
 	if (!aVK)
 		aVK = g_sc_to_vk[aSC].a;
@@ -1170,7 +1189,7 @@ ResultType KeyLogToFile(char *aFilespec, char aType, bool aKeyUp, vk_type aVK, s
 		last_foreground_window = curr_foreground_window;
 	}
 
-	snprintf(buf, sizeof(buf), "%02X" "\t%03X" "\t%0.1f" "\t%c" "\t%c" "\t%s" "%s%s"
+	snprintf(buf, sizeof(buf), "%02X" "\t%03X" "\t%0.2f" "\t%c" "\t%c" "\t%s" "%s%s\n"
 		, aVK, aSC
 		, (float)(curr_tickcount - last_tickcount) / (float)1000
 		, aType
@@ -1180,7 +1199,11 @@ ResultType KeyLogToFile(char *aFilespec, char aType, bool aKeyUp, vk_type aVK, s
 		, log_changed_window ? win_title : ""
 		);
 	last_tickcount = curr_tickcount;
-	return FileAppend(target_filespec, buf);
+	if (!fp)
+		if (   !(fp = fopen(target_filespec, "a"))   )
+			return OK;
+	fputs(buf, fp);
+	return OK;
 }
 
 

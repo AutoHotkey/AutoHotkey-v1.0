@@ -22,6 +22,7 @@ GNU General Public License for more details.
 // Initialize static members:
 bool Hotkey::sHotkeysAreLocked = false;
 HookType Hotkey::sWhichHookNeeded = 0;
+HookType Hotkey::sWhichHookAlways = 0;
 HookType Hotkey::sWhichHookActive = 0;
 DWORD Hotkey::sTimePrev = {0};
 DWORD Hotkey::sTimeNow = {0};
@@ -215,7 +216,7 @@ void Hotkey::AllActivate()
 	// now require one of the hooks that hadn't been required before (rare).
 	// So for now, when in restart mode, just acquire the mutex but don't display
 	// any warning if another instance also has the mutex:
-	sWhichHookActive = ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded
+	sWhichHookActive = ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways
 		, (!g_ForceLaunch && !g_script.mIsRestart) || sHotkeysAreLocked, false);
 
 	// Signal that no new hotkeys should be defined after this point (i.e. that the definition
@@ -231,7 +232,7 @@ ResultType Hotkey::AllDeactivate(bool aExcludeSuspendHotkeys)
 	if (!sHotkeysAreLocked) // The hotkey definition stage hasn't yet been run, so there's no need.
 		return OK;
 	if (aExcludeSuspendHotkeys)
-		sWhichHookActive = ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, false, true);
+		sWhichHookActive = ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways, false, true);
 	else // remove all hooks
 		if (sWhichHookActive)
 			sWhichHookActive = RemoveAllHooks();

@@ -37,7 +37,7 @@ GNU General Public License for more details.
 
 #define NAME_P "AutoHotkey"
 #define WINDOW_CLASS_NAME NAME_P
-#define NAME_VERSION "0.218"
+#define NAME_VERSION "0.219"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 #define EXT_AUTOIT2 ".aut"
@@ -84,6 +84,7 @@ enum ToggleValueType {TOGGLE_INVALID = 0, TOGGLED_ON, TOGGLED_OFF, ALWAYS_ON, AL
 #define MAX_MSGBOXES 7
 #define MAX_INPUTBOXES 4
 #define MAX_FILEDIALOGS 4
+#define MAX_FOLDERDIALOGS 4
 
 // Bitwise storage of boolean flags.  This section is kept in this file because
 // of mutual dependency problems between hook.h and other header files:

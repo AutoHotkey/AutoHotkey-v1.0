@@ -23,52 +23,13 @@ GNU General Public License for more details.
 #include "util.h"
 
 
-ResultType FileSetDateModified(char *aFilespec, char *aYYYYMMDD)
-{
-	if (!aFilespec || !*aFilespec) return FAIL;
-	if (!aYYYYMMDD) aYYYYMMDD = "";  // In case caller explicitily called it with NULL.
-
-	FILETIME ftLastWriteTime, ftLastWriteTimeUTC;
-	if (*aYYYYMMDD)
-	{
-		// Convert the arg into the time struct as local (non-UTC) time:
-		if (!YYYYMMDDToFileTime(aYYYYMMDD, &ftLastWriteTime))
-			return FAIL;
-		// Convert from local to UTC:
-		LocalFileTimeToFileTime(&ftLastWriteTime, &ftLastWriteTimeUTC);
-	}
-	else
-		// Put the current UTC time into the struct.
-		GetSystemTimeAsFileTime(&ftLastWriteTimeUTC);
-
-	// Open existing file.  Uses CreateFile() rather than OpenFile for an expectation
-	// of greater compatibility for all files, and folder support too.
-	// FILE_FLAG_NO_BUFFERING might improve performance because all we're doing is
-	// changing one of the file's attributes.  FILE_FLAG_BACKUP_SEMANTICS must be
-	// used, otherwise changing the time of a directory under NT and beyond will
-	// not succeed.  Win95 (not sure about Win98/ME) does not support this, but it
-	// should be harmless to specify it even if the OS is Win95:
-	HANDLE hFile = CreateFile(aFilespec, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE
-		, (LPSECURITY_ATTRIBUTES)NULL, OPEN_EXISTING, FILE_FLAG_NO_BUFFERING | FILE_FLAG_BACKUP_SEMANTICS
-		, NULL);
-
-	if (hFile == INVALID_HANDLE_VALUE)
-		return FAIL;
-
-	BOOL result = SetFileTime(hFile, NULL, NULL, &ftLastWriteTimeUTC);
-	CloseHandle(hFile);
-	return result ? OK : FAIL;
-}
-
-
 
 ResultType YYYYMMDDToFileTime(char *aYYYYMMDD, FILETIME *pftDateTime)
 {
 	if (!aYYYYMMDD || !pftDateTime) return FAIL;
 	if (!*aYYYYMMDD) return FAIL;
  
-	SYSTEMTIME st;
-	ZeroMemory(&st, sizeof(st));
+	SYSTEMTIME st = {0};
 	int nAssigned = sscanf(aYYYYMMDD, "%4d%2d%2d%2d%2d%2d", &st.wYear, &st.wMonth, &st.wDay
 		, &st.wHour, &st.wMinute, &st.wSecond);
 
@@ -91,6 +52,34 @@ ResultType YYYYMMDDToFileTime(char *aYYYYMMDD, FILETIME *pftDateTime)
 	if (!SystemTimeToFileTime(&st, pftDateTime)) // The wDayOfWeek member of the <st> structure is ignored.
 		return FAIL;
 	return OK;
+}
+
+
+
+char *FileTimeToYYYYMMDD(char *aYYYYMMDD, FILETIME *pftDateTime)
+{
+	if (!aYYYYMMDD || !pftDateTime) return NULL;
+	SYSTEMTIME st = {0};
+	FileTimeToSystemTime(pftDateTime, &st);
+	sprintf(aYYYYMMDD, "%04d%02d%02d" "%02d%02d%02d"
+		, st.wYear, st.wMonth, st.wDay
+		, st.wHour, st.wMinute, st.wSecond);
+	return aYYYYMMDD;
+}
+
+
+
+unsigned __int64 GetFileSize64(HANDLE aFileHandle)
+// Code adapted from someone's on the Usenet.
+{
+    ULARGE_INTEGER ul = {0};
+    ul.LowPart = GetFileSize(aFileHandle, &ul.HighPart);
+    if(ul.LowPart == 0xFFFFFFFF && GetLastError() != NO_ERROR)
+    {
+        // the caller should use GetLastError() to test for error
+        return 0xFFFFFFFFFFFFFFFF;
+    }
+    return (unsigned __int64)ul.QuadPart;
 }
 
 
@@ -357,7 +346,7 @@ ResultType FileAppend(char *aFilespec, char *aLine, bool aAppendNewline)
 	FILE *fp = fopen(aFilespec, "a");
 	if (fp == NULL)
 		return FAIL;
-	fprintf(fp, aLine);
+	fputs(aLine, fp);
 	if (aAppendNewline)
 		putc('\n', fp);
 	fclose(fp);

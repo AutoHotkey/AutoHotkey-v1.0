@@ -56,6 +56,7 @@ extern bool g_TrayMenuIsVisible;
 extern int g_nMessageBoxes;
 extern int g_nInputBoxes;
 extern int g_nFileDialogs;
+extern int g_nFolderDialogs;
 extern InputBoxType g_InputBox[MAX_INPUTBOXES];
 
 extern char g_delimiter;

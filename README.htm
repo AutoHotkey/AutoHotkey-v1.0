@@ -116,7 +116,7 @@ body {
 1) Append a .ahk to the end of an existing .aut file, so that filename now ends in ".aut.ahk"<br>
 2) Run this file with AutoHotkey, which, rather than than running the file, will create a new file in the same directory that ends in "-NEW.ahk". This is the converted version. The original version will be unchanged.<br>
 3) If you were using #DerefChar in the script, remove it from the converted version.</p>
-  <p>A script compiler (makes an EXE from a script) is now available by popular demand. It was a lot easier than I thought, thanks to Jon's (AutoIt author's) open &amp; modular coding style. It's available on the <a href="download">download</a> page. Note: Presently, .aut scripts are not supported because there's no way for the compiled script to figure out whether to run in AutoIt2 mode (backslash as escape char) or AutoHotkey mode ([`] as escape char). So if necessary, first auto-convert your .aut file to .ahk by renaming it to &quot;whatever.aut.ahk&quot; and then running it with AutoHotkey.exe. See above for details. </p>
+  <p>A script compiler (makes an EXE from a script) is now available by popular demand. It was a lot easier than I thought, thanks to Jon's (AutoIt author's) open &amp; modular coding style. It's available on the <a href="../download">download</a> page. Note: Presently, .aut scripts are not supported because there's no way for the compiled script to figure out whether to run in AutoIt2 mode (backslash as escape char) or AutoHotkey mode ([`] as escape char). So if necessary, first auto-convert your .aut file to .ahk by renaming it to &quot;whatever.aut.ahk&quot; and then running it with AutoHotkey.exe. See above for details. </p>
   <p>Scripts support command line parameters. The format is:<br>
   AutoHotkey.exe [switches] [Script Filename] [Script Parameters]<br>
   CompiledScript.exe [switches] [Script Parameters]<br>
@@ -272,9 +272,9 @@ Note: The output variables are optional. In addition, ShadesOfVariationToAllow i
   <p>KeyLog: logging keys &amp; mouse buttons to a file or displays the last 50 key/mouse events in the main window. Examples:
   <PRE>
 KeyLog ; When given no params, it just displays a window showing the last 50 events.
-KeyLog, C:\Keylog.txt ; Specify the filename and turn on file logging.
-KeyLog, off ; Turn off file logging.
+KeyLog, on, C:\Keylog.txt ; Specify the filename and turn on file logging.
 KeyLog, on ; Turn on file logging to the filename specified by a prior use of this command.
+KeyLog, off ; Turn off file logging.
 Keylog, toggle ; Toggle logging (set it to the opposite of its previous state).
 
 
@@ -378,8 +378,16 @@ HideAutoItDebug</p>
   GroupDeactivate: See above.<br>
   GroupClose: Close the active window if it&rsquo;s a member of the group.<br>
   GroupCloseAll: Close the entire group.</p>
-  <p>FileToggleHidden: filespec (if omitted, will use file-loop's current file)</p>
-  <p>FileSetDateModified: filespec, datetime (YYYYMMDDHH24MISS)</p>
+  <p> Added the following commands. Click a link for details:<br>
+    <a href="/docs/commands/ControlGetFocus.htm">ControlGetFocus </a><br>
+    <a href="/docs/commands/FileSelectFolder.htm">FileSelectFolder </a><br>
+    <a href="/docs/commands/FileGetAttrib.htm">FileGetAttrib </a><br>
+    <a href="/docs/commands/FileSetAttrib.htm">FileSetAttrib </a><br>
+    <a href="/docs/commands/FileGetTime.htm">FileGetTime </a><br>
+    <a href="/docs/commands/FileSetTime.htm">FileSetTime </a><br>
+    <a href="/docs/commands/FileGetSize.htm">FileGetSize </a><br>
+    <a href="/docs/commands/FileGetVersion.htm">FileGetVersion </a><br>
+</p>
   <p>DetectHiddenWindows: Defaults to off (i.e. hidden windows are not detected, except by WinShow).</p>
   <p>SetNumlockState: On/Off/AlwaysOn/AlwaysOff or blank (unspecified) to return to normal.<br>
   SetScrollLockState: same<br>

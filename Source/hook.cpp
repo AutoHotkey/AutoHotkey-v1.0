@@ -289,20 +289,27 @@ HookType RemoveAllHooks()
 
 
 
-HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHooks, bool aWarnIfHooksAlreadyInstalled
-	, bool aActivateOnlySuspendHotkeys)
+HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, HookType aWhichHookAlways
+	, bool aWarnIfHooksAlreadyInstalled, bool aActivateOnlySuspendHotkeys)
 // The input params are unnecessary because could just access directly by using Hotkey::shk[].
 // But aHK is a little more concise.
+// aWhichHookAlways was added to force the hooks to be installed (or stay installed) in the case
+// of #InstallKeybdHook and #InstallMouseHook.  This is so that these two commands will always
+// still be in effect even if hotkeys are suspended, so that key logging can take place via the
+// hooks.
 // Returns the set of hooks that are active after processing is complete.
 {
 	HookType hooks_currently_active = GetActiveHooks();
-	if (aWhichHooks == hooks_currently_active && !aActivateOnlySuspendHotkeys) // Nothing needs to be done.
-		return hooks_currently_active;
 
-	if (!aHK || !aHK_count || !aWhichHooks)
+	if (!aHK || !aHK_count || (!aWhichHook && !aWhichHookAlways))
 		// Deinstall all hooks and free the memory in any of these cases (though it's currently never
 		// called this way):
 		return RemoveAllHooks();
+
+	// Even if aWhichHook == hooks_currently_active, we still need to continue in case
+	// this is a suspend or unsuspend operation.  In both of those cases, though the
+	// hook(s) may already be installed, the hotkey configuration probably needs to be
+	// updated.
 
 	// Now we know that at least one of the hooks is a candidate for activation.
 	// Set up the arrays process all of the hook hotkeys even if the corresponding hook won't
@@ -572,7 +579,7 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHooks, boo
 	// Note: the values of g_ForceNum/Caps/ScrollLock are TOGGLED_ON/OFF or neutral, never ALWAYS_ON/ALWAYS_OFF:
 	bool force_CapsNumScroll = g_ForceNumLock != NEUTRAL || g_ForceCapsLock != NEUTRAL || g_ForceScrollLock != NEUTRAL;
 
-	if (!hk_sorted_count && !force_CapsNumScroll)
+	if (!hk_sorted_count && !force_CapsNumScroll && !aWhichHookAlways)
 		// Since there are no hotkeys whatsover (not even an AlwaysOn/Off toggleable key),
 		// remove all hooks and free the memory.  Currently, this should only happen if
 		// aActivateOnlySuspendHotkeys is true (i.e. there were no Suspend-type hotkeys to
@@ -671,7 +678,8 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHooks, boo
 
 	// Install any hooks that aren't already installed:
 	// Even if OS is Win9x, try LL hooks anyway.  This will probably fail on WinNT if it doesn't have SP3+
-	if (!g_hhkLowLevelKeybd && (aWhichHooks & HOOK_KEYBD) && (keybd_hook_hotkey_count || force_CapsNumScroll))
+	if (!g_hhkLowLevelKeybd && ((aWhichHook & HOOK_KEYBD) || (aWhichHookAlways & HOOK_KEYBD))
+		&& (keybd_hook_hotkey_count || force_CapsNumScroll))
 	{
 		if (!keybd_hook_mutex) // else we already have ownership of the mutex so no need for this check.
 		{
@@ -715,13 +723,15 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHooks, boo
 		}
 	}
 	else
-		// Deinstall hook if the caller omitted it from aWhichHooks, or if it had no
+		// Deinstall hook if the caller omitted it from aWhichHook, or if it had no
 		// corresponding hotkeys (currently the latter only happens in the case of
 		// aActivateOnlySuspendHotkeys == TRUE):
-		if (g_hhkLowLevelKeybd && (!(aWhichHooks & HOOK_KEYBD) || !(keybd_hook_hotkey_count || force_CapsNumScroll)))
+		if (g_hhkLowLevelKeybd && !(aWhichHookAlways & HOOK_KEYBD)
+			&& (!(aWhichHook & HOOK_KEYBD) || !(keybd_hook_hotkey_count || force_CapsNumScroll)))
 			hooks_currently_active = RemoveKeybdHook();
 
-	if (!g_hhkLowLevelMouse && (aWhichHooks & HOOK_MOUSE) && mouse_hook_hotkey_count)
+	if (!g_hhkLowLevelMouse && ((aWhichHook & HOOK_MOUSE) || (aWhichHookAlways & HOOK_MOUSE))
+		&& mouse_hook_hotkey_count)
 	{
 		if (!mouse_hook_mutex) // else we already have ownership of the mutex so no need for this check.
 		{
@@ -761,10 +771,11 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHooks, boo
 		}
 	}
 	else
-		// Deinstall hook if the caller omitted it from aWhichHooks, or if it had no
+		// Deinstall hook if the caller omitted it from aWhichHook, or if it had no
 		// corresponding hotkeys (currently the latter only happens in the case of
 		// aActivateOnlySuspendHotkeys == TRUE):
-		if (g_hhkLowLevelMouse && (!(aWhichHooks & HOOK_MOUSE) || !mouse_hook_hotkey_count))
+		if (g_hhkLowLevelMouse && !(aWhichHookAlways & HOOK_MOUSE)
+			&& (!(aWhichHook & HOOK_MOUSE) || !mouse_hook_hotkey_count))
 			hooks_currently_active = RemoveMouseHook();
 
 	return hooks_currently_active;

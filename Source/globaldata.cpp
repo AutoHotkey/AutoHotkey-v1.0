@@ -64,6 +64,7 @@ bool g_TrayMenuIsVisible = false;
 int g_nMessageBoxes = 0;
 int g_nInputBoxes = 0;
 int g_nFileDialogs = 0;
+int g_nFolderDialogs = 0;
 InputBoxType g_InputBox[MAX_INPUTBOXES];
 
 char g_delimiter = ',';
@@ -190,6 +191,7 @@ Action g_act[] =
 	// optional and validate elsewhere that the 2nd one specifically isn't blank:
 	, {"ControlSend", 0, 6, NULL} // Control, Chars-to-Send, std. 4 window params.
 	, {"ControlLeftClick", 0, 5, NULL} // Control, std. 4 window params
+	, {"ControlGetFocus", 1, 5, NULL}  // OutputVar, std. 4 window params
 	, {"ControlFocus", 0, 5, NULL}     // Control, std. 4 window params
 	, {"ControlSetText", 1, 6, NULL}   // Control, new text, std. 4 window params
 	, {"ControlGetText", 1, 6, NULL}   // Output-var, Control, std. 4 window params
@@ -258,9 +260,16 @@ Action g_act[] =
 	, {"FileDelete", 1, 1, NULL} // filename
 	, {"FileCreateDir", 1, 1, NULL} // dir name
 	, {"FileRemoveDir", 1, 1, NULL} // dir name
-	, {"FileToggleHidden", 0, 1, NULL} // filespec (if omitted, will use file-loop's current file)
-	, {"FileSetDateModified", 0, 2, {2, 0}} // filespec, datetime (YYYYMMDDHH24MISS)
+
+	, {"FileGetAttrib", 1, 2, NULL} // OutputVar, Filespec (if blank, uses loop's current file)
+	, {"FileSetAttrib", 1, 3, NULL} // Attribute(s), FilePattern, OperateOnFolders?
+	, {"FileGetTime", 1, 3, NULL} // OutputVar, Filespec, WhichTime (modified/created/accessed)
+	, {"FileSetTime", 0, 4, {1, 0}} // datetime (YYYYMMDDHH24MISS), FilePattern, WhichTime, OperateOnFolders?
+	, {"FileGetSize", 1, 3, NULL} // OutputVar, Filespec, B|K|M (bytes, kb, or mb)
+	, {"FileGetVersion", 1, 2, NULL} // OutputVar, Filespec
+
 	, {"FileSelectFile", 1, 3, {2, 0}} // output var, flag, working dir
+	, {"FileSelectFolder", 1, 4, NULL} // output var, root directory, allow create folder (0=no, 1=yes), greeting
 
 	, {"IniRead", 4, 5, NULL}   // OutputVar, Filespec, Section, Key, Default (value to return if key not found)
 	, {"IniWrite", 4, 4, NULL}  // Value, Filespec, Section, Key
@@ -287,7 +296,7 @@ Action g_act[] =
 	, {"SetStoreCapslockMode", 1, 1, NULL} // On/Off
 	, {"ForceHotkey", 1, 1, NULL} // On/Off
 
-	, {"KeyLog", 0, 1, NULL}, {"ListLines", 0, 0, NULL}
+	, {"KeyLog", 0, 2, NULL}, {"ListLines", 0, 0, NULL}
 	, {"ListVars", 0, 0, NULL}, {"ListHotkeys", 0, 0, NULL}
 
 	, {"Edit", 0, 0, NULL}

@@ -24,8 +24,33 @@ body {
   <div id="globalNav">    <a href="http://www.autohotkey.com">home</a> | <a href="../docs/index.htm"></a><a href="../download">download</a> | <a href="../docs">documentation</a> | <a href="../support">support</a></div> 
 </div> 
 
-<p><br>
-  </font><b>0.218 BETA - January 7, 2004</b></p>
+<p>  <b>0.219 BETA - January 12, 2004</b></p>
+<p>Fixed the Suspend command so that when suspension is turned off, all hotkeys are re-enabled.  Previously, hotkeys handled by the hook were sometimes left disabled.</p>
+<p>Changed the Suspend command so that the keyboard and mouse hooks are never removed if the corresponding directives (#InstallKeybdHook and #InstallMouseHook) are present in the script.</p>
+<p>Changed InputBox: For non-AutoIt2 (.aut) scripts, it now sets ErrorLevel to 1 and the output variable to the value entered if the user presses the Cancel button. For AutoIt2 scripts, the behavior is the same: ErrorLevel is not changed and the output variable is set to blank whenever the user presses Cancel, even if text was entered.</p>
+<p>Changed FileDelete to set ErrorLevel to be the number of files that could not be deleted (if a wildcard pattern was given).</p>
+<p>Changed the Keylog command so that the filename is specified in the second parameter. So now it works this way:<br>
+  KeyLog ; same as before (display short log in window)<br>
+  KeyLog, on, c:\Keylog.txt ; Turn on logging, optionally specifying the file to log to.<br>
+  KeyLog, off ; Turn off logging.<br>
+  KeyLog, toggle [, filename] ; Toggles to the opposite state (on or off).</p>
+<p>Improved the performance of KeyLog when it logs to a file by having it leave the file open rather than closing and reopening it for every key/mouse event. This should also reduce wear &amp; tear on the drive. The only disadvantage is that viewing a log file that is open for logging might show contents that are out-of-date due to file buffering. To work around this, temporarily turn off logging before viewing the file.</p>
+<p>Improved the performance of Run and RunWait by having them attempt CreateProcess() prior to ShellExecute(), rather than the other way around. I believe CreateProcess() is much faster.</p>
+<p>Removed the commands FileToggleHidden and FileSetDateModified. See below for their replacements.</p>
+<p>Added the following commands. Click a link for details:<br>
+  <a href="/docs/commands/ControlGetFocus.htm">ControlGetFocus</a><br>
+  <a href="/docs/commands/FileSelectFolder.htm">FileSelectFolder</a><br>
+  <a href="/docs/commands/FileGetAttrib.htm">FileGetAttrib</a><br>
+  <a href="/docs/commands/FileSetAttrib.htm">FileSetAttrib</a><br>
+  <a href="/docs/commands/FileGetTime.htm">FileGetTime</a><br>
+  <a href="/docs/commands/FileSetTime.htm">FileSetTime</a><br>
+  <a href="/docs/commands/FileGetSize.htm">FileGetSize</a><br>
+  <a href="/docs/commands/FileGetVersion.htm">FileGetVersion</a><br>
+</p>
+<hr>
+
+
+<p></font><b>0.218 BETA - January 7, 2004</b></p>
 <p>  Added a script compiler (makes an EXE from a script) by popular demand.  It was a lot easier than I thought, thanks to Jon's (AutoIt author's) open &amp; modular coding style. It's available on the <a href="../download">download</a> page. Note: Presently, .aut scripts are not supported because there's no way for the compiled script to figure out whether to run in AutoIt2 mode (backslash as escape char) or AutoHotkey mode ([`] as escape char). So if necessary, first <a href="#AutoConvert">auto-convert</a> your .aut file to .ahk by renaming it to &quot;whatever.aut.ahk&quot; and then running it with AutoHotkey.exe.</p>
 <p>Added support for command line parameters becoming script variables. The command line format is:<br>
   AutoHotkey.exe [switches] [Script Filename] [Script Parameters]<br>
@@ -232,7 +257,7 @@ Minor: Changed WinClose to use the WM_CLOSE vs. SC_CLOSE (alt-F4) method so that
 <a name="AutoConvert"></a>There's now an automated way to convert a .aut file to .ahk so that you can take full advantage of the new features (some new features -- such as the new params available in some commands -- are disabled in .aut scripts to improve compatibility with AutoIt2).  The conversion will simply make the escape character ` instead of \.  This is harder than it sounds due to the precise ordering of escape sequences in each line, which is why you just can't do a Search & Replace in a text editor.  This automated way should take care of all the details:<br>
 1) Append a .ahk to the end of an existing .aut file, so that filename now ends in ".aut.ahk"<br>
 2) Run this file with AutoHotkey, which, rather than than running the file, will create a new file in the same directory that ends in "-NEW.ahk".  This is the converted version.  The original version will be unchanged.<br>
-3) If you were using #DerefChar in the script, remove it from the converted version.<br>
+3) If you were using #EscapeChar in the script, remove it from the converted version.<br>
 <br>
 After converting a script from .aut to .ahk, the main problem areas to check for are commands that accept additional params in .ahk files but not in .aut files.  If you used any non-escaped commas in the param that was formerly the last param (in AutoIt2) but is now not the last param, those commas will be interpreted as delimiters.<br>
 <br>
@@ -482,7 +507,7 @@ Note that some or all of the last four params can be omitted.  If all of them ar
 <br>
 #CommentFlag: Allows you to change the comment-flag from the default of semicolon to a string of your choice.  The string can be up to 15 characters long.  Example: #CommentFlag //  ; Change to C++ style.<br>
 <br>
-#EscapeChar: The escape character is normally “`” but this allows you to change it to AutoIt2’s escape character (backslash) or some other char of your choice.  Note that by default, scripts that end in .aut will use the backslash for their escape char.<br>
+#EscapeChar: The escape character is normally accent “`” but this allows you to change it to AutoIt2’s escape character (backslash) or some other char of your choice.  Note that by default, scripts that end in .aut will use the backslash for their escape char.<br>
 <br>
 #DerefChar: The deref char is normally % (e.g. Sleep, %SleepTime%).  You can change it to some other character with this.<br>
 <br>

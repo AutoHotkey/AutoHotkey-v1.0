@@ -36,8 +36,9 @@ key is actually down at the moment of consideration.
 	// Testing reveals that the driver-generated physical shift-key events occur very quickly before or
 	// after the key they are designed to "help".  Thus a value of 12 should cover just about everything
 	// (the tickcount/sleep timer granularity is usually 10 on WinNT/2k/XP, and maybe close to that on Win98
-	// as well):
-	#define SHIFT_KEY_WORKAROUND_TIMEOUT 12
+	// as well).  I'm (maybe temporarily) increasing the value to 120 to try to isolate why this still
+	// doesn't work for some people:
+	#define SHIFT_KEY_WORKAROUND_TIMEOUT 120
 #else // Mouse Hook:
 	#undef pEvent
 	#define pEvent ((PMSLLHOOKSTRUCT)lParam)

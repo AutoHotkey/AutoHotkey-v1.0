@@ -15,6 +15,7 @@ GNU General Public License for more details.
 */
 
 #include <windows.h>
+#include <shlobj.h>  // for SHGetMalloc()
 #include "script.h"
 #include "window.h" // for IF_USE_FOREGROUND_WINDOW
 #include "application.h" // for MsgSleep()
@@ -260,6 +261,79 @@ ResultType Line::ControlLeftClick(char *aControl, char *aTitle, char *aText
 
 
 
+ResultType Line::ControlGetFocus(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
+{
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
+	OUTPUT_VAR->Assign();  // Set default: blank for the output variable.
+	DETERMINE_TARGET_WINDOW
+	if (!target_window)
+		return OK;  // Let ErrorLevel and the blank output variable tell the story.
+
+	// Unlike many of the other Control commands, this one requires AttachThreadInput():
+	bool is_attached_my_to_fore = false, is_attached_fore_to_target = false;
+	DWORD fore_thread, my_thread, target_thread;
+	fore_thread = GetWindowThreadProcessId(GetForegroundWindow(), NULL);
+	my_thread  = GetCurrentThreadId();
+	target_thread = GetWindowThreadProcessId(target_window, NULL);
+	if (fore_thread && my_thread != fore_thread)
+		is_attached_my_to_fore = AttachThreadInput(my_thread, fore_thread, TRUE) != 0;
+	if (fore_thread && target_thread && fore_thread != target_thread)
+		is_attached_fore_to_target = AttachThreadInput(fore_thread, target_thread, TRUE) != 0;
+
+	class_and_hwnd_type cah;
+	cah.hwnd = GetFocus();  // Do this now that our thread is attached to the target window's.
+
+	// Very important to detach any threads whose inputs were attached above,
+	// prior to returning, otherwise the next attempt to attach thread inputs
+	// for these particular windows may result in a hung thread or other
+	// undesirable effect:
+	if (is_attached_my_to_fore)
+		AttachThreadInput(my_thread, fore_thread, FALSE);
+	if (is_attached_fore_to_target)
+		AttachThreadInput(fore_thread, target_thread, FALSE);
+
+	if (!cah.hwnd)
+		return OK;  // Let ErrorLevel and the blank output variable tell the story.
+
+	char class_name[1024];
+	cah.class_name = class_name;
+	if (!GetClassName(cah.hwnd, class_name, sizeof(class_name)))
+		return OK;  // Let ErrorLevel and the blank output variable tell the story.
+	
+	cah.class_count = 0;  // Init for the below.
+	cah.is_found = false; // Same.
+	EnumChildWindows(target_window, EnumChildFocusFind, (LPARAM)&cah);
+	if (!cah.is_found)
+		return OK;  // Let ErrorLevel and the blank output variable tell the story.
+	// Append the class sequence number onto the class name set the output param to be that value:
+	size_t class_name_length = strlen(class_name);
+	snprintf(class_name + class_name_length, sizeof(class_name) - class_name_length - 1, "%d", cah.class_count);
+	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+	return OUTPUT_VAR->Assign(class_name);
+}
+
+
+
+BOOL CALLBACK EnumChildFocusFind(HWND aWnd, LPARAM lParam)
+{
+	#define cah ((class_and_hwnd_type *)lParam)
+	char class_name[1024];
+	if (!GetClassName(aWnd, class_name, sizeof(class_name)))
+		return TRUE;  // Continue the enumeration.
+	if (!strcmp(class_name, cah->class_name)) // Class names match.
+	{
+		++cah->class_count;
+		if (aWnd == cah->hwnd)  // The caller-specified window has been found.
+		{
+			cah->is_found = true;
+			return FALSE;
+		}
+	}
+	return TRUE; // Continue enumeration until a match is found or there aren't any windows remaining.
+}
+
+
+
 ResultType Line::ControlFocus(char *aControl, char *aTitle, char *aText
 	, char *aExcludeTitle, char *aExcludeText)
 {
@@ -279,9 +353,9 @@ ResultType Line::ControlFocus(char *aControl, char *aTitle, char *aText
 	fore_thread = GetWindowThreadProcessId(GetForegroundWindow(), NULL);
 	my_thread  = GetCurrentThreadId();
 	target_thread = GetWindowThreadProcessId(target_window, NULL);
-	if (my_thread != fore_thread)
+	if (fore_thread && my_thread != fore_thread)
 		is_attached_my_to_fore = AttachThreadInput(my_thread, fore_thread, TRUE) != 0;
-	if (fore_thread != target_thread)
+	if (fore_thread && target_thread && fore_thread != target_thread)
 		is_attached_fore_to_target = AttachThreadInput(fore_thread, target_thread, TRUE) != 0;
 
 	if (SetFocus(control_window))
@@ -1127,8 +1201,19 @@ INT_PTR CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lPa
 				return_value = (WORD)FAIL;
 			else
 			{
+				// For AutoIt2 (.aut) script:
+				// If the user presses the cancel button, we set the output variable to be blank so
+				// that there is a way to detect that the cancel button was pressed.  This is because
+				// the InputBox command does not set ErrorLevel for .aut scripts (to maximize backward
+				// compatibility).
+				// For non-AutoIt2 scripts: The output variable is set to whatever the user entered,
+				// even if the user pressed the cancel button.  This allows the cancel button to specify
+				// that a different operation should be performed on the entered text.
+				#define SET_OUTPUT_VAR_TO_BLANK (LOWORD(wParam) == IDCANCEL && g_script.mIsAutoIt2)
 				#define INPUTBOX_VAR CURR_INPUTBOX.output_var
-				VarSizeType space_needed = (LOWORD(wParam) == IDCANCEL) ? 1 : GetWindowTextLength(hControl) + 1;
+				if (!g_script.mIsAutoIt2)
+					g_ErrorLevel->Assign(LOWORD(wParam) == IDCANCEL ? ERRORLEVEL_ERROR : ERRORLEVEL_NONE);
+				VarSizeType space_needed = SET_OUTPUT_VAR_TO_BLANK ? 1 : GetWindowTextLength(hControl) + 1;
 				// Set up the var, enlarging it if necessary.  If the OUTPUT_VAR is of type VAR_CLIPBOARD,
 				// this call will set up the clipboard for writing:
 				if (INPUTBOX_VAR->Assign(NULL, space_needed - 1) != OK)
@@ -1145,7 +1230,7 @@ INT_PTR CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lPa
 				else
 				{
 					// Write to the variable:
-					if (LOWORD(wParam) == IDCANCEL)
+					if (SET_OUTPUT_VAR_TO_BLANK)
 						// It's length was already set by the above call to Assign().
 						*INPUTBOX_VAR->Contents() = '\0';
 					else
@@ -1785,6 +1870,84 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir)
 
 
 
+ResultType Line::FileSelectFolder(char *aRootDir, bool aAllowCreateFolder, char *aGreeting)
+// Adapted from the AutoIt3 source.
+{
+	if (!aRootDir) aRootDir = "";
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
+	if (!OUTPUT_VAR->Assign())  // Initialize the output variable.
+		return FAIL;
+
+	if (g_nFolderDialogs >= MAX_FOLDERDIALOGS)
+	{
+		// Have a maximum to help prevent runaway hotkeys due to key-repeat feature, etc.
+		MsgBox("The maximum number of Folder Dialogs has been reached." ERR_ABORT);
+		return FAIL;
+	}
+
+	LPMALLOC pMalloc;
+    if (SHGetMalloc(&pMalloc) != NOERROR)	// Initialize
+		return OK;  // Let ErrorLevel tell the story.
+
+	BROWSEINFO browseInfo;
+	if (*aRootDir)
+	{
+		IShellFolder *pDF;
+		if (SHGetDesktopFolder(&pDF) == NOERROR)
+		{
+			LPITEMIDLIST pIdl = NULL;
+			ULONG        chEaten;
+			ULONG        dwAttributes;
+			OLECHAR olePath[MAX_PATH];			// wide-char version of path name
+			MultiByteToWideChar(CP_ACP, MB_PRECOMPOSED, aRootDir, -1, olePath, sizeof(olePath));
+			pDF->ParseDisplayName(NULL, NULL, olePath, &chEaten, &pIdl, &dwAttributes);
+			pDF->Release();
+			browseInfo.pidlRoot = pIdl;
+		}
+	}
+	else
+		browseInfo.pidlRoot = NULL;  // Since aRootDir, this should make it use "My Computer" as the root dir.
+
+	int iImage = 0;
+	browseInfo.iImage = iImage;
+	browseInfo.hwndOwner = NULL;  // i.e. no need to have main window forced into the background for this.
+	char greeting[1024];
+	if (aGreeting && *aGreeting)
+		strlcpy(greeting, aGreeting, sizeof(greeting));
+	else
+		snprintf(greeting, sizeof(greeting), "Select Folder - %s", g_script.mFileName);
+	browseInfo.lpszTitle = greeting;
+	browseInfo.lpfn = NULL;
+	browseInfo.ulFlags = 0x0040 | (aAllowCreateFolder ? 0 : 0x0200);
+
+	char Result[2048];
+	browseInfo.pszDisplayName = Result;  // This will hold the user's choice.
+
+	// This will attempt to force it to the foreground after it has been displayed, since the
+	// dialog often will flash in the task bar instead of becoming foreground.
+	// See MsgBox() for details:
+	PostMessage(g_hWnd, AHK_DIALOG, (WPARAM)0, (LPARAM)0); // Must pass 0 for WPARAM in this case.
+
+	g.WaitingForDialog = true;
+	++g_nFolderDialogs;
+	LPITEMIDLIST lpItemIDList = SHBrowseForFolder(&browseInfo);  // Spawn Dialog
+	--g_nFolderDialogs;
+	g.WaitingForDialog = false;  // IsCycleComplete() relies on this.
+
+	if (!lpItemIDList)
+		return OK;  // Let ErrorLevel tell the story.
+
+	*Result = '\0';  // Reuse this var, this time to old the result of the below:
+	SHGetPathFromIDList(lpItemIDList, Result);
+	pMalloc->Free(lpItemIDList);
+	pMalloc->Release();
+
+	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+	return OUTPUT_VAR->Assign(Result);
+}
+
+
+
 ResultType Line::FileCreateDir(char *aDirSpec)
 {
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
@@ -1932,8 +2095,10 @@ ResultType Line::FileDelete(char *aFilePattern)
 		return OK; // Return OK because this is non-critical.  Let the above ErrorLevel indicate the problem.
 	strlcpy(file_path, aFilePattern, sizeof(file_path));
 	char *last_backslash = strrchr(file_path, '\\');
+	// Remove the filename and/or wildcard part.   But leave the trailing backslash on it for
+	// consistency with below:
 	if (last_backslash)
-		*(last_backslash + 1) = '\0'; // Leave the trailing backslash on it for consistency with below.
+		*(last_backslash + 1) = '\0';
 	else // Use current working directory, e.g. if user specified only *.*
 		*file_path = '\0';
 
@@ -1953,8 +2118,7 @@ ResultType Line::FileDelete(char *aFilePattern)
 
 	if (file_search != INVALID_HANDLE_VALUE) // In case the loop had zero iterations.
 		FindClose(file_search);
-	if (!failure_count)
-		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+	g_ErrorLevel->Assign(failure_count); // i.e. indicate success if there were no failures.
 	return OK;
 }
 
@@ -1971,6 +2135,7 @@ ResultType Line::FileMove(char *aSource, char *aDest, char *aFlag)
 }
 
 
+
 ResultType Line::FileCopy(char *aSource, char *aDest, char *aFlag)
 // Adapted from the AutoIt3 source.
 {
@@ -1981,6 +2146,387 @@ ResultType Line::FileCopy(char *aSource, char *aDest, char *aFlag)
 	return OK;
 }
 
+
+
+ResultType Line::FileGetAttrib(char *aFilespec)
+{
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default
+	OUTPUT_VAR->Assign(); // Init to be blank, in case of failure.
+
+	if (!aFilespec || !*aFilespec)
+		return OK;  // Let ErrorLevel indicate an error, since this is probably not what the user intended.
+
+	DWORD attr = GetFileAttributes(aFilespec);
+	if (attr == 0xFFFFFFFF)  // Failure, probably because file doesn't exist.
+		return OK;  // Let ErrorLevel tell the story.
+
+	char attr_string[128] = "";
+	size_t attr_string_length = 0;
+
+	if (attr & FILE_ATTRIBUTE_READONLY)
+		attr_string[attr_string_length++] = 'R';
+	if (attr & FILE_ATTRIBUTE_ARCHIVE)
+		attr_string[attr_string_length++] = 'A';
+	if (attr & FILE_ATTRIBUTE_SYSTEM)
+		attr_string[attr_string_length++] = 'S';
+	if (attr & FILE_ATTRIBUTE_HIDDEN)
+		attr_string[attr_string_length++] = 'H';
+	if (attr & FILE_ATTRIBUTE_NORMAL)
+		attr_string[attr_string_length++] = 'N';
+	if (attr & FILE_ATTRIBUTE_DIRECTORY)
+		attr_string[attr_string_length++] = 'D';
+	if (attr & FILE_ATTRIBUTE_OFFLINE)
+		attr_string[attr_string_length++] = 'O';
+	if (attr & FILE_ATTRIBUTE_COMPRESSED)
+		attr_string[attr_string_length++] = 'C';
+	if (attr & FILE_ATTRIBUTE_TEMPORARY)
+		attr_string[attr_string_length++] = 'T';
+
+	attr_string[attr_string_length] = '\0';  // Perform the final termination.
+	g_ErrorLevel->Assign(ERRORLEVEL_NONE);
+	return OUTPUT_VAR->Assign(attr_string);
+}
+
+
+
+ResultType Line::FileSetAttrib(char *aAttributes, char *aFilePattern, bool aOperateOnFolders)
+{
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default
+	if (!aFilePattern || !*aFilePattern)
+		return OK;  // Let ErrorLevel indicate an error, since this is probably not what the user intended.
+
+	// Give extra room in some of these vars, in case OS supports extra-long files:
+	char file_path[MAX_PATH * 2];
+	char target_filespec[MAX_PATH * 2];
+	if (strlen(aFilePattern) >= sizeof(file_path))
+		return OK; // Return OK because this is non-critical.  Let the above ErrorLevel indicate the problem.
+	strlcpy(file_path, aFilePattern, sizeof(file_path));
+	char *last_backslash = strrchr(file_path, '\\');
+	// Remove the filename and/or wildcard part.   But leave the trailing backslash on it for
+	// consistency with below:
+	if (last_backslash)
+		*(last_backslash + 1) = '\0';
+	else // Use current working directory, e.g. if user specified only *.*
+		*file_path = '\0';
+
+	if (!StrChrAny(aFilePattern, "?*"))
+		aOperateOnFolders = true; // Since no wildcards, always operate on this single item even if it's a folder.
+
+	WIN32_FIND_DATA current_file;
+	HANDLE file_search = FindFirstFile(aFilePattern, &current_file);
+	bool file_found = (file_search != INVALID_HANDLE_VALUE);
+	int failure_count = 0;
+	char *cp;
+	enum attrib_modes {ATTRIB_MODE_NONE, ATTRIB_MODE_ADD, ATTRIB_MODE_REMOVE, ATTRIB_MODE_TOGGLE};
+	attrib_modes mode = ATTRIB_MODE_NONE;
+
+	for (; file_found; file_found = FindNextFile(file_search, &current_file))
+	{
+		if (!aOperateOnFolders && (current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+			continue;
+		for (cp = aAttributes; *cp; ++cp)
+		{
+			switch (toupper(*cp))
+			{
+			case '+': mode = ATTRIB_MODE_ADD; break;
+			case '-': mode = ATTRIB_MODE_REMOVE; break;
+			case '^': mode = ATTRIB_MODE_TOGGLE; break;
+			// Note that D (directory) and C (compressed) are currently not supported:
+			case 'R':
+				if (mode == ATTRIB_MODE_ADD)
+					current_file.dwFileAttributes |= FILE_ATTRIBUTE_READONLY;
+				else if (mode == ATTRIB_MODE_REMOVE)
+					current_file.dwFileAttributes &= ~FILE_ATTRIBUTE_READONLY;
+				else if (mode == ATTRIB_MODE_TOGGLE)
+					current_file.dwFileAttributes ^= FILE_ATTRIBUTE_READONLY;
+				break;
+			case 'A':
+				if (mode == ATTRIB_MODE_ADD)
+					current_file.dwFileAttributes |= FILE_ATTRIBUTE_ARCHIVE;
+				else if (mode == ATTRIB_MODE_REMOVE)
+					current_file.dwFileAttributes &= ~FILE_ATTRIBUTE_ARCHIVE;
+				else if (mode == ATTRIB_MODE_TOGGLE)
+					current_file.dwFileAttributes ^= FILE_ATTRIBUTE_ARCHIVE;
+				break;
+			case 'S':
+				if (mode == ATTRIB_MODE_ADD)
+					current_file.dwFileAttributes |= FILE_ATTRIBUTE_SYSTEM;
+				else if (mode == ATTRIB_MODE_REMOVE)
+					current_file.dwFileAttributes &= ~FILE_ATTRIBUTE_SYSTEM;
+				else if (mode == ATTRIB_MODE_TOGGLE)
+					current_file.dwFileAttributes ^= FILE_ATTRIBUTE_SYSTEM;
+				break;
+			case 'H':
+				if (mode == ATTRIB_MODE_ADD)
+					current_file.dwFileAttributes |= FILE_ATTRIBUTE_HIDDEN;
+				else if (mode == ATTRIB_MODE_REMOVE)
+					current_file.dwFileAttributes &= ~FILE_ATTRIBUTE_HIDDEN;
+				else if (mode == ATTRIB_MODE_TOGGLE)
+					current_file.dwFileAttributes ^= FILE_ATTRIBUTE_HIDDEN;
+				break;
+			case 'N':  // Docs say it's valid only when used alone.  But let the API handle it if this is not so.
+				if (mode == ATTRIB_MODE_ADD)
+					current_file.dwFileAttributes |= FILE_ATTRIBUTE_NORMAL;
+				else if (mode == ATTRIB_MODE_REMOVE)
+					current_file.dwFileAttributes &= ~FILE_ATTRIBUTE_NORMAL;
+				else if (mode == ATTRIB_MODE_TOGGLE)
+					current_file.dwFileAttributes ^= FILE_ATTRIBUTE_NORMAL;
+				break;
+			case 'O':
+				if (mode == ATTRIB_MODE_ADD)
+					current_file.dwFileAttributes |= FILE_ATTRIBUTE_OFFLINE;
+				else if (mode == ATTRIB_MODE_REMOVE)
+					current_file.dwFileAttributes &= ~FILE_ATTRIBUTE_OFFLINE;
+				else if (mode == ATTRIB_MODE_TOGGLE)
+					current_file.dwFileAttributes ^= FILE_ATTRIBUTE_OFFLINE;
+				break;
+			case 'T':
+				if (mode == ATTRIB_MODE_ADD)
+					current_file.dwFileAttributes |= FILE_ATTRIBUTE_TEMPORARY;
+				else if (mode == ATTRIB_MODE_REMOVE)
+					current_file.dwFileAttributes &= ~FILE_ATTRIBUTE_TEMPORARY;
+				else if (mode == ATTRIB_MODE_TOGGLE)
+					current_file.dwFileAttributes ^= FILE_ATTRIBUTE_TEMPORARY;
+				break;
+			}
+		}
+		snprintf(target_filespec, sizeof(target_filespec), "%s%s", file_path, current_file.cFileName);
+		if (!SetFileAttributes(target_filespec, current_file.dwFileAttributes))
+			++failure_count;
+	}
+
+	if (file_search != INVALID_HANDLE_VALUE) // In case the loop had zero iterations.
+		FindClose(file_search);
+	g_ErrorLevel->Assign(failure_count); // i.e. indicate success if there were no failures.
+	return OK;
+}
+
+
+
+ResultType Line::FileGetTime(char *aFilespec, char *aWhichTime)
+// Adapted from the AutoIt3 source.
+{
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default
+	OUTPUT_VAR->Assign(); // Init to be blank, in case of failure.
+
+	if (!aFilespec || !*aFilespec)
+		return OK;  // Let ErrorLevel indicate an error, since this is probably not what the user intended.
+
+	// Open existing file.  Uses CreateFile() rather than OpenFile for an expectation
+	// of greater compatibility for all files, and folder support too.
+	// FILE_FLAG_NO_BUFFERING might improve performance because all we're doing is
+	// fetching one of the file's attributes.  FILE_FLAG_BACKUP_SEMANTICS must be
+	// used, otherwise fetching the time of a directory under NT and beyond will
+	// not succeed.  Win95 (not sure about Win98/ME) does not support this, but it
+	// should be harmless to specify it even if the OS is Win95:
+	HANDLE file_handle = CreateFile(aFilespec, GENERIC_READ, FILE_SHARE_READ, (LPSECURITY_ATTRIBUTES)NULL
+		, OPEN_EXISTING, FILE_FLAG_NO_BUFFERING | FILE_FLAG_BACKUP_SEMANTICS, NULL);
+	if (file_handle == INVALID_HANDLE_VALUE)
+		return OK;  // Let ErrorLevel Tell the story.
+
+	FILETIME ftCreationTime, ftLastAccessTime, ftLastWriteTime;
+	if (GetFileTime(file_handle, &ftCreationTime, &ftLastAccessTime, &ftLastWriteTime))
+		CloseHandle(file_handle);
+	else
+	{
+		CloseHandle(file_handle);
+		return OK;  // Let ErrorLevel Tell the story.
+	}
+
+	FILETIME local_file_time;
+	switch (toupper(*aWhichTime))
+	{
+	case 'C': // File's creation time.
+		FileTimeToLocalFileTime(&ftCreationTime, &local_file_time);
+		break;
+	case 'A': // File's last access time.
+		FileTimeToLocalFileTime(&ftLastAccessTime, &local_file_time);
+		break;
+	default:  // 'M', unspecified, or some other value.  Use the file's modification time.
+		FileTimeToLocalFileTime(&ftLastWriteTime, &local_file_time);
+	}
+
+    g_ErrorLevel->Assign(ERRORLEVEL_NONE);  // Indicate success.
+	char local_file_time_string[128];
+	return OUTPUT_VAR->Assign(FileTimeToYYYYMMDD(local_file_time_string, &local_file_time));
+}
+
+
+
+ResultType Line::FileSetTime(char *aYYYYMMDD, char *aFilePattern, char *aWhichTime, bool aOperateOnFolders)
+{
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default
+	if (!aFilePattern || !*aFilePattern)
+		return OK;  // Let ErrorLevel indicate an error, since this is probably not what the user intended.
+
+	FILETIME ft, ftUTC;
+	if (*aYYYYMMDD)
+	{
+		// Convert the arg into the time struct as local (non-UTC) time:
+		if (!YYYYMMDDToFileTime(aYYYYMMDD, &ft))
+			return OK;  // Let ErrorLevel tell the story.
+		// Convert from local to UTC:
+		if (!LocalFileTimeToFileTime(&ft, &ftUTC))
+			return OK;  // Let ErrorLevel tell the story.
+	}
+	else // User wants to use the current time (i.e. now) as the new timestamp.
+		GetSystemTimeAsFileTime(&ftUTC);
+
+	// This following section is very similar to that in FileSetAttrib and FileDelete:
+	// Give extra room in some of these vars, in case OS supports extra-long files:
+	char file_path[MAX_PATH * 2];
+	char target_filespec[MAX_PATH * 2];
+	if (strlen(aFilePattern) >= sizeof(file_path))
+		return OK; // Return OK because this is non-critical.  Let the above ErrorLevel indicate the problem.
+	strlcpy(file_path, aFilePattern, sizeof(file_path));
+	char *last_backslash = strrchr(file_path, '\\');
+	// Remove the filename and/or wildcard part.   But leave the trailing backslash on it for
+	// consistency with below:
+	if (last_backslash)
+		*(last_backslash + 1) = '\0';
+	else // Use current working directory, e.g. if user specified only *.*
+		*file_path = '\0';
+
+	if (!StrChrAny(aFilePattern, "?*"))
+		aOperateOnFolders = true; // Since no wildcards, always operate on this single item even if it's a folder.
+
+	WIN32_FIND_DATA current_file;
+	HANDLE file_search = FindFirstFile(aFilePattern, &current_file);
+	bool file_found = (file_search != INVALID_HANDLE_VALUE);
+	int failure_count = 0;
+	HANDLE hFile;
+
+	for (; file_found; file_found = FindNextFile(file_search, &current_file))
+	{
+		if (!aOperateOnFolders && (current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+			continue;
+		snprintf(target_filespec, sizeof(target_filespec), "%s%s", file_path, current_file.cFileName);
+		hFile = CreateFile(target_filespec, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE
+			, (LPSECURITY_ATTRIBUTES)NULL, OPEN_EXISTING
+			, FILE_FLAG_NO_BUFFERING | FILE_FLAG_BACKUP_SEMANTICS, NULL);
+		if (hFile == INVALID_HANDLE_VALUE)
+		{
+			++failure_count;
+			continue;
+		}
+		switch (toupper(*aWhichTime))
+		{
+		case 'C': // File's creation time.
+			if (!SetFileTime(hFile, &ftUTC, NULL, NULL))
+				++failure_count;
+			break;
+		case 'A': // File's last access time.
+			if (!SetFileTime(hFile, NULL, &ftUTC, NULL))
+				++failure_count;
+			break;
+		default:  // 'M', unspecified, or some other value.  Use the file's modification time.
+			if (!SetFileTime(hFile, NULL, NULL, &ftUTC))
+				++failure_count;
+		}
+		CloseHandle(hFile);
+	}
+
+	if (file_search != INVALID_HANDLE_VALUE) // In case the loop had zero iterations.
+		FindClose(file_search);
+	g_ErrorLevel->Assign(failure_count); // i.e. indicate success if there were no failures.
+	return OK;
+}
+
+
+
+ResultType Line::FileGetSize(char *aFilespec, char *aGranularity)
+// Adapted from the AutoIt3 source.
+{
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default
+	OUTPUT_VAR->Assign(); // Init to be blank, in case of failure.
+
+	if (!aFilespec || !*aFilespec)
+		return OK;  // Let ErrorLevel indicate an error, since this is probably not what the user intended.
+
+	// Open existing file.  Uses CreateFile() rather than OpenFile for an expectation
+	// of greater compatibility for all files, and folder support too.
+	// FILE_FLAG_NO_BUFFERING might improve performance because all we're doing is
+	// fetching one of the file's attributes.  FILE_FLAG_BACKUP_SEMANTICS must be
+	// used, otherwise fetching the time of a directory under NT and beyond will
+	// not succeed.  Win95 (not sure about Win98/ME) does not support this, but it
+	// should be harmless to specify it even if the OS is Win95:
+	HANDLE file_handle = CreateFile(aFilespec, GENERIC_READ, FILE_SHARE_READ, (LPSECURITY_ATTRIBUTES)NULL
+		, OPEN_EXISTING, FILE_FLAG_NO_BUFFERING | FILE_FLAG_BACKUP_SEMANTICS, NULL);
+	if (file_handle == INVALID_HANDLE_VALUE)
+		return OK;  // Let ErrorLevel Tell the story.
+	unsigned __int64 size = GetFileSize64(file_handle);
+	if (size == 0xFFFFFFFFFFFFFFFF) // failure
+		return OK;  // Let ErrorLevel Tell the story.
+	CloseHandle(file_handle);
+
+	switch(toupper(*aGranularity))
+	{
+	case 'K': // KB
+		size /= 1024;
+		break;
+	case 'M': // MB
+		size /= (1024 * 1024);
+		break;
+	// default: // i.e. either 'B' for bytes, or blank, or some other unknown value, so default to bytes.
+		// do nothing
+	}
+
+    g_ErrorLevel->Assign(ERRORLEVEL_NONE);  // Indicate success.
+	return OUTPUT_VAR->Assign((int)size);
+	// Currently, the above is basically subject to a 2 gig limit, I believe, after which the
+	// size will appear to be negative.  Beyond a 4 gig limit, the value will probably wrap around
+	// to zero and start counting from there as file sizes grow beyond 4 gig.
+	// There's not much sense in putting values larger than 2 gig into the var as a text string
+	// containing a positive number because such a var could never be properly handled by anything
+	// that compares to it (e.g. IfGreater) or does math on it (e.g. EnvAdd), since those operations
+	// use atoi() to convert the string.  So as a future enhancement (unless the whole program is
+	// revamped to use 64bit ints or something) might add an optional param to the end to indicate
+	// size should be returned in K(ilobyte) or M(egabyte).  However, this is sorta bad too since
+	// adding a param can break existing scripts which use filenames containing commas (delimiters)
+	// with this command.  Therefore, I think I'll just add the K/M param now.
+}
+
+
+
+ResultType Line::FileGetVersion(char *aFilespec)
+// Adapted from the AutoIt3 source.
+{
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default
+	OUTPUT_VAR->Assign(); // Init to be blank, in case of failure.
+
+	if (!aFilespec || !*aFilespec)
+		return OK;  // Let ErrorLevel indicate an error, since this is probably not what the user intended.
+
+	DWORD dwUnused, dwSize;
+	if (   !(dwSize = GetFileVersionInfoSize(aFilespec, &dwUnused))   )
+		return OK;  // Let ErrorLevel tell the story.
+
+	BYTE *pInfo = (BYTE*)malloc(dwSize);  // Allocate the size retrieved by the above.
+
+	// Read the version resource
+	GetFileVersionInfo((LPSTR)aFilespec, 0, dwSize, (LPVOID)pInfo);
+
+	// Locate the fixed information
+	VS_FIXEDFILEINFO *pFFI;
+	UINT uSize;
+	if (!VerQueryValue(pInfo, "\\", (LPVOID *)&pFFI, &uSize))
+	{
+		free(pInfo);
+		return OK;  // Let ErrorLevel tell the story.
+	}
+
+	// extract the fields you want from pFFI
+	UINT iFileMS = (UINT)pFFI->dwFileVersionMS;
+	UINT iFileLS = (UINT)pFFI->dwFileVersionLS;
+	char version_string[128];  // AutoIt3: 43+1 is the maximum size, but leave a little room to increase confidence.
+	snprintf(version_string, sizeof(version_string), "%u.%u.%u.%u"
+		, (iFileMS >> 16), (iFileMS & 0xFFFF), (iFileLS >> 16), (iFileLS & 0xFFFF));
+
+	free(pInfo);
+
+    g_ErrorLevel->Assign(ERRORLEVEL_NONE);  // Indicate success.
+	return OUTPUT_VAR->Assign(version_string);
+}
 
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -2402,6 +2948,7 @@ ArgPurposeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_STRINGREPLACE:
 		case ACT_STRINGGETPOS:
 		case ACT_GETKEYSTATE:
+		case ACT_CONTROLGETFOCUS:
 		case ACT_CONTROLGETTEXT:
 		case ACT_STATUSBARGETTEXT:
 		case ACT_INPUTBOX:
@@ -2410,7 +2957,12 @@ ArgPurposeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_REGREAD:
 		case ACT_DRIVESPACEFREE:
 		case ACT_FILEREADLINE:
+		case ACT_FILEGETATTRIB:
+		case ACT_FILEGETTIME:
+		case ACT_FILEGETSIZE:
+		case ACT_FILEGETVERSION:
 		case ACT_FILESELECTFILE:
+		case ACT_FILESELECTFOLDER:
 		case ACT_MOUSEGETPOS:
 		case ACT_WINGETTITLE:
 		case ACT_WINGETTEXT:

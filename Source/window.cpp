@@ -247,9 +247,9 @@ HWND SetForegroundWindowEx(HWND aWnd)
 		// using it for now:
 		//if (my_thread != target_thread) // Don't attempt the call otherwise.
 		//	AttachThreadInput(my_thread, target_thread, TRUE);
-		if (my_thread != fore_thread)
+		if (fore_thread && my_thread != fore_thread)
 			is_attached_my_to_fore = AttachThreadInput(my_thread, fore_thread, TRUE) != 0;
-		if (fore_thread != target_thread)
+		if (fore_thread && target_thread && fore_thread != target_thread)
 			is_attached_fore_to_target = AttachThreadInput(fore_thread, target_thread, TRUE) != 0;
 	}
 

@@ -84,7 +84,8 @@ enum enum_act {
 , ACT_ENVSET, ACT_ENVUPDATE
 , ACT_RUN, ACT_RUNWAIT
 , ACT_GETKEYSTATE
-, ACT_SEND, ACT_CONTROLSEND, ACT_CONTROLLEFTCLICK, ACT_CONTROLFOCUS, ACT_CONTROLSETTEXT, ACT_CONTROLGETTEXT
+, ACT_SEND, ACT_CONTROLSEND, ACT_CONTROLLEFTCLICK, ACT_CONTROLGETFOCUS, ACT_CONTROLFOCUS
+, ACT_CONTROLSETTEXT, ACT_CONTROLGETTEXT
 , ACT_SETDEFAULTMOUSESPEED, ACT_MOUSEMOVE, ACT_MOUSECLICK, ACT_MOUSECLICKDRAG, ACT_MOUSEGETPOS
 , ACT_STATUSBARGETTEXT
 , ACT_STATUSBARWAIT
@@ -106,7 +107,9 @@ enum enum_act {
 , ACT_DRIVESPACEFREE, ACT_SOUNDSETWAVEVOLUME
 , ACT_FILEAPPEND, ACT_FILEREADLINE, ACT_FILECOPY, ACT_FILEMOVE, ACT_FILEDELETE
 , ACT_FILECREATEDIR, ACT_FILEREMOVEDIR
-, ACT_FILETOGGLEHIDDEN, ACT_FILESETDATEMODIFIED, ACT_FILESELECTFILE
+, ACT_FILEGETATTRIB, ACT_FILESETATTRIB, ACT_FILEGETTIME, ACT_FILESETTIME
+, ACT_FILEGETSIZE, ACT_FILEGETVERSION
+, ACT_FILESELECTFILE, ACT_FILESELECTFOLDER
 , ACT_INIREAD, ACT_INIWRITE, ACT_INIDELETE
 , ACT_REGREAD, ACT_REGWRITE, ACT_REGDELETE
 , ACT_SETTITLEMATCHMODE, ACT_SETKEYDELAY, ACT_SETWINDELAY, ACT_SETBATCHLINES, ACT_SUSPEND, ACT_PAUSE
@@ -159,10 +162,11 @@ enum enum_act_old {
 #define ERR_TITLEMATCHMODE2 "The variable does not contain a valid TitleMatchMode (the value must be either 1, 2, slow, or fast)." ERR_ABORT
 #define ERR_IFMSGBOX "This line specifies an invalid MsgBox result."
 #define ERR_RUN_SHOW_MODE "The 3rd parameter must be either blank or one of these words: min, max, hide."
+#define ERR_FILE_TIME "Parameter #3 must be either blank, M, C, A, or a dereferenced variable."
 #define ERR_MOUSE_BUTTON "This line specifies an invalid mouse button."
 #define ERR_MOUSE_COORD "The X & Y coordinates must be either both absent or both present."
 #define ERR_PERCENT "The parameter must be a percentage between 0 and 100, or a dereferenced variable."
-#define ERR_MOUSE_SPEED "The Mouse Speed must be a number between 0 and " MAX_MOUSE_SPEED_STR ", or a dereferenced variable."
+#define ERR_MOUSE_SPEED "The Mouse Speed must be a number between 0 and " MAX_MOUSE_SPEED_STR ", blank, or a dereferenced variable."
 #define ERR_MEM_ASSIGN "Out of memory while assigning to this variable." ERR_ABORT
 #define ERR_VAR_IS_RESERVED "This variable is reserved and cannot be assigned to."
 #define ERR_DEFINE_CHAR "The character being defined must not be identical to another special or reserved character."
@@ -205,6 +209,7 @@ typedef char *ArgPurposeType;
 
 ResultType InputBox(Var *aOutputVar, char *aTitle = "", char *aText = "", bool aHideInput = false);
 INT_PTR CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
+BOOL CALLBACK EnumChildFocusFind(HWND aWnd, LPARAM lParam);
 BOOL CALLBACK EnumChildGetText(HWND aWnd, LPARAM lParam);
 LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lParam);
 ResultType ShowMainWindow(char *aContents = NULL, bool aJumpToBottom = false);
@@ -230,6 +235,7 @@ private:
 	ResultType PerformAssign();
 	ResultType DriveSpaceFree(char *aPath);
 	ResultType FileSelectFile(char *aOptions, char *aWorkingDir);
+	ResultType FileSelectFolder(char *aRootDir, bool aAllowCreateFolder, char *aGreeting);
 	ResultType FileCreateDir(char *aDirSpec);
 	ResultType FileReadLine(char *aFilespec, char *aLineNumber);
 	ResultType FileAppend(char *aFilespec, char *aBuf);
@@ -241,6 +247,12 @@ private:
 	static void Util_ExpandFilenameWildcardPart(const char *szSource, const char *szDest, char *szExpandedDest);
 	static bool Util_DoesFileExist(const char *szFilename);
 
+	ResultType FileGetAttrib(char *aFilespec);
+	ResultType FileSetAttrib(char *aAttributes, char *aFilePattern, bool aOperateOnFolders);
+	ResultType FileGetTime(char *aWhichTime, char *aFilespec);
+	ResultType FileSetTime(char *aWhichTime, char *aYYYYMMDD, char *aFilePattern, bool aOperateOnFolders);
+	ResultType FileGetSize(char *aFilespec, char *aGranularity);
+	ResultType FileGetVersion(char *aFilespec);
 
 	ResultType IniRead(char *aFilespec, char *aSection, char *aKey, char *aDefault);
 	ResultType IniWrite(char *aValue, char *aFilespec, char *aSection, char *aKey);
@@ -271,6 +283,7 @@ private:
 		, char *aExcludeTitle, char *aExcludeText, modLR_type aModifiersLR);
 	ResultType ControlLeftClick(char *aControl, char *aTitle, char *aText
 		, char *aExcludeTitle, char *aExcludeText);
+	ResultType ControlGetFocus(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType ControlFocus(char *aControl, char *aTitle, char *aText
 		, char *aExcludeTitle, char *aExcludeText);
 	ResultType ControlSetText(char *aControl, char *aNewText, char *aTitle, char *aText
@@ -344,6 +357,9 @@ public:
 	#define LINE_RAW_ARG3 (line->mArgc > 2 ? line->mArg[2].text : "")
 	#define LINE_RAW_ARG4 (line->mArgc > 3 ? line->mArg[3].text : "")
 	#define LINE_RAW_ARG5 (line->mArgc > 4 ? line->mArg[4].text : "")
+	#define LINE_RAW_ARG6 (line->mArgc > 5 ? line->mArg[5].text : "")
+	#define LINE_RAW_ARG7 (line->mArgc > 6 ? line->mArg[6].text : "")
+	#define LINE_RAW_ARG8 (line->mArgc > 7 ? line->mArg[7].text : "")
 	#define LINE_ARG1 (line->mArgc > 0 ? line->sArgDeref[0] : "")
 	#define LINE_ARG2 (line->mArgc > 1 ? line->sArgDeref[1] : "")
 	#define SAVED_ARG1 (mArgc > 0 ? arg[0] : "")
@@ -782,8 +798,8 @@ public:
 		if (mThisHotkeyLabel)
 			// Even if GetTickCount()'s TickCount has wrapped around to zero and the timestamp hasn't,
 			// DWORD math still gives the right answer as long as the number of days between
-			// isn't greater than about 49:
-			snprintf(str, sizeof(str), "%u", (DWORD)(GetTickCount() - mThisHotkeyStartTime));
+			// isn't greater than about 49.  See MyGetTickCount() for explanation of %d vs. %u:
+			snprintf(str, sizeof(str), "%d", (DWORD)(GetTickCount() - mThisHotkeyStartTime));
 		else
 			strcpy(str, "-1");
 		VarSizeType length = (VarSizeType)strlen(str);
@@ -796,7 +812,8 @@ public:
 	{
 		char str[128];
 		if (mPriorHotkeyLabel)
-			snprintf(str, sizeof(str), "%u", (DWORD)(GetTickCount() - mPriorHotkeyStartTime));
+			// See MyGetTickCount() for explanation of %d vs. %u:
+			snprintf(str, sizeof(str), "%d", (DWORD)(GetTickCount() - mPriorHotkeyStartTime));
 		else
 			strcpy(str, "-1");
 		VarSizeType length = (VarSizeType)strlen(str);
@@ -811,9 +828,15 @@ public:
 		// Although TickCount is an unsigned value, I'm not sure that our EnvSub command
 		// will properly be able to compare two tick-counts if either value is larger than
 		// INT_MAX.  So if the system has been up for more than about 25 days, there might be
-		// problems if the user tries compare two tick-counts in the script using EnvSub:
+		// problems if the user tries compare two tick-counts in the script using EnvSub.
+		// UPDATE: It seems better to store all unsigned values as signed within script
+		// variables.  Otherwise, when the var's value is next accessed and converted using
+		// atoi(), the outcome won't be as useful.  In other words, since the negative value
+		// will be properly converted by atoi(), it's possible that comparing two tickcounts,
+		// even if one or more of them is negative, will then work correctly due to the nature
+		// of implicit unsigned math.  This needs further study & testing:
 		char str[128];
-		snprintf(str, sizeof(str), "%u", GetTickCount());
+		snprintf(str, sizeof(str), "%d", GetTickCount());
 		VarSizeType length = (VarSizeType)strlen(str);
 		if (!aBuf) return length;
 		strcpy(aBuf, str);

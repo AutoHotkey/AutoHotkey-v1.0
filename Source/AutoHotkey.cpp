@@ -58,33 +58,28 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	bool switch_processing_is_complete = false;
 	for (int i = 1, script_param_num = 1; i < __argc; ++i) // Start at 1 because 0 contains the program name.
 	{
-		if (switch_processing_is_complete)
+		if (switch_processing_is_complete) // All args are now considered to be input parameters for the script.
 		{
-			// All args after the script filespec are considered to be parameters for the script:
 			snprintf(var_name, sizeof(var_name), "%d", script_param_num);
 			if (var = g_script.FindOrAddVar(var_name))
 				var->Assign(__argv[i]);
 			++script_param_num;
 		}
-		else if (*__argv[i] == '/')
-		{
-			switch(toupper(__argv[i][1]))
-			{
-			case 'R': // Reload
-				restart_mode = true;
-				break;
-			case 'F': // Force the keybd/mouse hook(s) to be installed again even if another instance already did.
-				g_ForceLaunch = true;
-				break;
-			}
-		}
-		else // since this param does not start with the backslash, the end of the [Switches] section has been reached.
+		// Insist that switches be an exact match for the allowed values to cut down on ambiguity.
+		// For example, if the user runs "CompiledScript.exe /find", we want /find to be considered
+		// an input parameter for the script rather than a switch:
+		else if (   (__argv[i][0] == '/' && toupper(__argv[i][1]) == 'R') || !stricmp(__argv[i], "/restart")   )
+			restart_mode = true;
+		else if (   (__argv[i][0] == '/' && toupper(__argv[i][1]) == 'F') || !stricmp(__argv[i], "/force")   )
+			// Force the keybd/mouse hook(s) to be installed again even if another instance already did.
+			g_ForceLaunch = true;
+		else // since this is not a recognized switch, the end of the [Switches] section has been reached (by design).
 		{
 			switch_processing_is_complete = true;  // No more switches allowed after this point.
 #ifdef AUTOHOTKEYSC
 			--i; // Make the loop process this item again so that it will be treated as a script param.
 #else
-			script_filespec = __argv[i];
+			script_filespec = __argv[i];  // The first unrecognized switch must be the script filespec, by design.
 #endif
 		}
 	}
@@ -103,6 +98,9 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	global_init(&g);  // Set defaults prior to the below, since below might override them for AutoIt2 scripts.
 	if (g_script.Init(script_filespec, restart_mode) != OK)  // Set up the basics of the script, using the above.
 		return CRITICAL_ERROR;
+	// Set g_default now, reflecting any changes made to "g" above, in case ExecuteFromLine1(), below,
+	// never returns, perhaps because it contains an infinite loop (intentional or not):
+	CopyMemory(&g_default, &g, sizeof(global_struct));
 
 	// Could use CreateMutex() but that seems pointless because we have to discover the
 	// hWnd of the existing process so that we can close or restart it, so we would have
@@ -179,7 +177,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	// top part (the auto-execute part) of the script so that they will be in effect
 	// even if the top part is something that's very involved and requires user
 	// interaction:
-	Hotkey::AllActivate();
+	Hotkey::AllActivate();           // We want these active now in case auto-execute never returns (e.g. loop)
 	g_script.ExecuteFromLine1();     // Run the auto-execute part at the top of the script.
 	if (!Hotkey::sHotkeyCount)       // No hotkeys are in effect.
 		if (!Hotkey::HookIsActive()) // And the user hasn't requested a hook to be activated.

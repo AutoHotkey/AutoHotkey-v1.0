@@ -373,6 +373,7 @@ void Script::ExitApp(char *aBuf, int ExitCode)
 		// To avoid chance of more errors, don't use MsgBox():
 		MessageBox(g_hWnd, buf, g_script.mFileSpec, MB_OK | MB_SETFOREGROUND | MB_APPLMODAL);
 	}
+	KeyLogToFile();  // Close the KeyLog file if it's open.
 	Hotkey::AllDestructAndExit(*aBuf ? CRITICAL_ERROR : ExitCode); // Terminate the application.
 	// Not as reliable: PostQuitMessage(CRITICAL_ERROR);
 }
@@ -1533,7 +1534,6 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	char error_msg[1024];
 	ArgPurposeType arg_purpose;
 	Var *target_var;
-	int value;  // For temp use during validation.
 
 	//////////////////////////////////////////////////////////
 	// Build the new arg list in dynamic memory.
@@ -1641,127 +1641,6 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				++deref_count;
 			} // for each dereference.
 
-			///////////////////
-			// More validation.
-			///////////////////
-			switch(aActionType)
-			{
-			case ACT_DETECTHIDDENWINDOWS:
-			case ACT_DETECTHIDDENTEXT:
-			case ACT_SETSTORECAPSLOCKMODE:
-			case ACT_AUTOTRIM:
-			case ACT_STRINGCASESENSE:
-				if (i != 0) break;  // Should never happen in these cases.
-				if (!deref_count)
-					if (!Line::ConvertOnOff(new_arg[i].text))
-						return ScriptError(ERR_ON_OFF, g_act[aActionType].Name);
-				break;
-
-			case ACT_SUSPEND:
-				if (i != 0) break;  // Should never happen in this cases.
-				if (!deref_count)
-					if (!Line::ConvertOnOffTogglePermit(new_arg[i].text))
-						return ScriptError(ERR_ON_OFF_TOGGLE_PERMIT, g_act[aActionType].Name);
-				break;
-
-			case ACT_PAUSE:
-				if (i != 0) break;  // Should never happen in this cases.
-				if (!deref_count)
-					if (!Line::ConvertOnOffToggle(new_arg[i].text))
-						return ScriptError(ERR_ON_OFF_TOGGLE, g_act[aActionType].Name);
-				break;
-
-			case ACT_SETNUMLOCKSTATE:
-			case ACT_SETSCROLLLOCKSTATE:
-			case ACT_SETCAPSLOCKSTATE:
-				if (i != 0) break;  // Should never happen in these cases.
-				if (!deref_count)
-					if (!Line::ConvertOnOffAlways(new_arg[i].text))
-						return ScriptError(ERR_ON_OFF_ALWAYS, g_act[aActionType].Name);
-				break;
-
-			case ACT_STRINGMID:
-			case ACT_FILEREADLINE:
-				if (i != 2) break; // i.e. 3rd param
-				if (!deref_count)
-				{
-					value = atoi(new_arg[i].text);
-					if (value <= 0)
-						// This error is caught at load-time, but at runtime it's not considered
-						// an error (i.e. if a variable resolves to zero or less, StringMid will
-						// automatically consider it to be 1, though FileReadLine should consider
-						// it an error):
-						return ScriptError("The 3rd parameter be greater than zero.", new_arg[i].text);
-				}
-				break;
-
-			case ACT_SOUNDSETWAVEVOLUME:
-				if (i != 0) break; // i.e. 1st param
-				if (!deref_count)
-				{
-					value = atoi(new_arg[i].text);
-					if (value < 0 || value > 100)
-						return ScriptError(ERR_PERCENT, new_arg[i].text);
-				}
-				break;
-
-			case ACT_PIXELSEARCH:
-				if (i != 7) break; // i.e. 8th param
-				if (!deref_count)
-				{
-					value = atoi(new_arg[i].text);
-					if (value < 0 || value > 255)
-						return ScriptError("Parameter #8 must be number between 0 and 255, or a dereferenced variable.", new_arg[i].text);
-				}
-				break;
-
-			case ACT_MOUSEMOVE:
-				if (i != 2) break; // i.e. 3rd param
-				#define VALIDATE_MOUSE_SPEED if (!deref_count)\
-				{\
-					value = atoi(new_arg[i].text);\
-					if (value < 0 || value > MAX_MOUSE_SPEED)\
-						return ScriptError(ERR_MOUSE_SPEED, new_arg[i].text);\
-				}
-				VALIDATE_MOUSE_SPEED
-				break;
-			case ACT_MOUSECLICK:
-				if (i != 4) break; // i.e. 5th param
-				VALIDATE_MOUSE_SPEED
-				break;
-			case ACT_MOUSECLICKDRAG:
-				if (i != 5) break; // i.e. 6th param
-				VALIDATE_MOUSE_SPEED
-				break;
-			case ACT_SETDEFAULTMOUSESPEED:
-				if (i != 0) break; // i.e. 1st param
-				VALIDATE_MOUSE_SPEED
-				break;
-
-			case ACT_FILECOPY:
-			case ACT_FILEMOVE:
-				if (i != 2) break; // i.e. 3rd param
-				if (!deref_count)
-				{
-					value = atoi(new_arg[i].text);
-					if (value != 0 && value != 1)
-						return ScriptError("The 3rd parameter must be either blank, 0, 1, or a dereferenced variable."
-							, new_arg[i].text);
-				}
-				break;
-			case ACT_FILESELECTFILE:
-				if (i != 1) break; // i.e. 2nd param
-				if (!deref_count)
-				{
-					value = atoi(new_arg[i].text);
-					if (value < 0 || value > 31)
-						return ScriptError("The 2nd parameter must be either blank, a dereferenced variable,"
-							" or a number between 0 and 31.", new_arg[i].text);
-				}
-				break;
-
-			} // switch()
-
 			//////////////////////////////////////////////////////////////
 			// Allocate mem for this arg's list of dereferenced variables.
 			//////////////////////////////////////////////////////////////
@@ -1854,8 +1733,177 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	///////////////////////////////////////////////////////////////////
 	// Do any post-add validation & handling for specific action types.
 	///////////////////////////////////////////////////////////////////
+	int value;  // For temp use during validation.
 	switch(aActionType)
 	{
+	case ACT_DETECTHIDDENWINDOWS:
+	case ACT_DETECTHIDDENTEXT:
+	case ACT_SETSTORECAPSLOCKMODE:
+	case ACT_AUTOTRIM:
+	case ACT_STRINGCASESENSE:
+		if (line->mArgc > 0 && !line->ArgHasDeref(1) && !line->ConvertOnOff(LINE_RAW_ARG1))
+			return ScriptError(ERR_ON_OFF, LINE_RAW_ARG1);
+		break;
+
+	case ACT_SUSPEND:
+		if (line->mArgc > 0 && !line->ArgHasDeref(1) && !line->ConvertOnOffTogglePermit(LINE_RAW_ARG1))
+			return ScriptError(ERR_ON_OFF_TOGGLE_PERMIT, LINE_RAW_ARG1);
+		break;
+
+	case ACT_PAUSE:
+	case ACT_KEYLOG:
+		if (line->mArgc > 0 && !line->ArgHasDeref(1) && !line->ConvertOnOffToggle(LINE_RAW_ARG1))
+			return ScriptError(ERR_ON_OFF_TOGGLE, LINE_RAW_ARG1);
+		break;
+
+	case ACT_SETNUMLOCKSTATE:
+	case ACT_SETSCROLLLOCKSTATE:
+	case ACT_SETCAPSLOCKSTATE:
+		if (line->mArgc > 0 && !line->ArgHasDeref(1) && !line->ConvertOnOffAlways(LINE_RAW_ARG1))
+			return ScriptError(ERR_ON_OFF_ALWAYS, LINE_RAW_ARG1);
+		break;
+
+	case ACT_STRINGMID:
+	case ACT_FILEREADLINE:
+		if (line->mArgc > 2 && !line->ArgHasDeref(3))
+		{
+			value = atoi(LINE_RAW_ARG3);
+			if (value <= 0)
+				// This error is caught at load-time, but at runtime it's not considered
+				// an error (i.e. if a variable resolves to zero or less, StringMid will
+				// automatically consider it to be 1, though FileReadLine would consider
+				// it an error):
+				return ScriptError("Parameter #3 must be greater than zero or a dereferenced variable."
+					, LINE_RAW_ARG3);
+		}
+		break;
+
+	case ACT_SOUNDSETWAVEVOLUME:
+		if (line->mArgc > 0 && !line->ArgHasDeref(1))
+		{
+			value = atoi(LINE_RAW_ARG1);
+			if (value < 0 || value > 100)
+				return ScriptError(ERR_PERCENT, LINE_RAW_ARG1);
+		}
+		break;
+
+	case ACT_PIXELSEARCH:
+		if (line->mArgc > 7 && !line->ArgHasDeref(8) && *LINE_RAW_ARG8)
+		{
+			value = atoi(LINE_RAW_ARG8);
+			if (value < 0 || value > 255)
+				return ScriptError("Parameter #8 must be number between 0 and 255, blank, or a dereferenced variable."
+					, LINE_RAW_ARG8);
+		}
+		break;
+
+	case ACT_MOUSEMOVE:
+		if (line->mArgc > 2 && !line->ArgHasDeref(3) && *LINE_RAW_ARG3)
+		{
+			value = atoi(LINE_RAW_ARG3);
+			if (value < 0 || value > MAX_MOUSE_SPEED)
+				return ScriptError(ERR_MOUSE_SPEED, LINE_RAW_ARG3);
+		}
+		if (!line->ValidateMouseCoords(LINE_RAW_ARG1, LINE_RAW_ARG2))
+			return ScriptError(ERR_MOUSE_COORD, LINE_RAW_ARG1);
+		break;
+	case ACT_MOUSECLICK:
+		if (line->mArgc > 4 && !line->ArgHasDeref(5) && *LINE_RAW_ARG5)
+		{
+			value = atoi(LINE_RAW_ARG5);
+			if (value < 0 || value > MAX_MOUSE_SPEED)
+				return ScriptError(ERR_MOUSE_SPEED, LINE_RAW_ARG5);
+		}
+		// Check that the button is valid (e.g. left/right/middle):
+		if (!line->ArgHasDeref(1))
+			if (!line->ConvertMouseButton(LINE_RAW_ARG1))
+				return ScriptError(ERR_MOUSE_BUTTON, LINE_RAW_ARG1);
+		if (!line->ValidateMouseCoords(LINE_RAW_ARG2, LINE_RAW_ARG3))
+			return ScriptError(ERR_MOUSE_COORD, LINE_RAW_ARG2);
+		break;
+	case ACT_MOUSECLICKDRAG:
+		if (line->mArgc > 5 && !line->ArgHasDeref(6) && *LINE_RAW_ARG6)
+		{
+			value = atoi(LINE_RAW_ARG6);
+			if (value < 0 || value > MAX_MOUSE_SPEED)
+				return ScriptError(ERR_MOUSE_SPEED, LINE_RAW_ARG6);
+		}
+		if (!line->ArgHasDeref(1))
+			if (!line->ConvertMouseButton(LINE_RAW_ARG1))
+				return ScriptError(ERR_MOUSE_BUTTON, LINE_RAW_ARG1);
+		if (!line->ValidateMouseCoords(LINE_RAW_ARG2, LINE_RAW_ARG3))
+			return ScriptError(ERR_MOUSE_COORD, LINE_RAW_ARG2);
+		if (!line->ValidateMouseCoords(LINE_RAW_ARG4, LINE_RAW_ARG5))
+			return ScriptError(ERR_MOUSE_COORD, LINE_RAW_ARG4);
+		break;
+	case ACT_SETDEFAULTMOUSESPEED:
+		if (line->mArgc > 0 && !line->ArgHasDeref(1) && *LINE_RAW_ARG1)
+		{
+			value = atoi(LINE_RAW_ARG1);
+			if (value < 0 || value > MAX_MOUSE_SPEED)
+				return ScriptError(ERR_MOUSE_SPEED, LINE_RAW_ARG1);
+		}
+		break;
+
+	case ACT_FILECOPY:
+	case ACT_FILEMOVE:
+	case ACT_FILESETATTRIB:
+	case ACT_FILESELECTFOLDER:
+		if (line->mArgc > 2 && !line->ArgHasDeref(3) && *LINE_RAW_ARG3)
+		{
+			value = atoi(LINE_RAW_ARG3);
+			if (value != 0 && value != 1)
+				return ScriptError("Parameter #3 must be either blank, 0, 1, or a dereferenced variable."
+					, LINE_RAW_ARG3);
+		}
+		if (aActionType == ACT_FILESETATTRIB)
+		{
+			if (line->mArgc > 0 && !line->ArgHasDeref(1) && *LINE_RAW_ARG1)
+			{
+				for (char *cp = LINE_RAW_ARG1; *cp; ++cp)
+					if (!strchr("+-^RASHNOT", toupper(*cp)))
+						return ScriptError("Parameter #1 contains unsupported file-attribute letters or symbols."
+							, LINE_RAW_ARG1);
+			}
+		}
+		break;
+
+	case ACT_FILEGETTIME:
+		if (line->mArgc > 2 && !line->ArgHasDeref(3) && *LINE_RAW_ARG3)
+			if (strlen(LINE_RAW_ARG3) > 1 || !strchr("MCA", toupper(*LINE_RAW_ARG3)))
+				return ScriptError(ERR_FILE_TIME, LINE_RAW_ARG3);
+		break;
+
+	case ACT_FILESETTIME:
+		if (line->mArgc > 2 && !line->ArgHasDeref(3) && *LINE_RAW_ARG3)
+			if (strlen(LINE_RAW_ARG3) > 1 || !strchr("MCA", toupper(*LINE_RAW_ARG3)))
+				return ScriptError(ERR_FILE_TIME, LINE_RAW_ARG3);
+		if (line->mArgc > 3 && !line->ArgHasDeref(4) && *LINE_RAW_ARG4)
+		{
+			value = atoi(LINE_RAW_ARG4);
+			if (value != 0 && value != 1)
+				return ScriptError("Parameter #4 must be either blank, 0, 1, or a dereferenced variable."
+					, LINE_RAW_ARG4);
+		}
+		break;
+
+	case ACT_FILEGETSIZE:
+		if (line->mArgc > 2 && !line->ArgHasDeref(3) && *LINE_RAW_ARG3)
+			if (strlen(LINE_RAW_ARG3) > 1 || !strchr("BKM", toupper(*LINE_RAW_ARG3))) // Allow B=Bytes as undocumented.
+				return ScriptError("Parameter #3 must be either blank, K, M, or a dereferenced variable."
+					, LINE_RAW_ARG3);
+		break;
+
+	case ACT_FILESELECTFILE:
+		if (line->mArgc > 1 && !line->ArgHasDeref(2) && *LINE_RAW_ARG2)
+		{
+			value = atoi(LINE_RAW_ARG2);
+			if (value < 0 || value > 31)
+				return ScriptError("Paremeter #2 must be either blank, a dereferenced variable,"
+					" or a number between 0 and 31 inclusive.", LINE_RAW_ARG2);
+		}
+		break;
+
 	case ACT_SETTITLEMATCHMODE:
 		if (line->mArgc > 0 && !line->ArgHasDeref(1) && !line->ConvertTitleMatchMode(LINE_RAW_ARG1))
 			return ScriptError(ERR_TITLEMATCHMODE, LINE_RAW_ARG1);
@@ -1889,30 +1937,17 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			if (   !(line->mAttribute = FindOrAddGroup(LINE_RAW_ARG1))   )
 				return FAIL;  // The above already displayed the error.
 		break;
+
 	case ACT_RUN:
 	case ACT_RUNWAIT:
 		if (*LINE_RAW_ARG3 && !line->ArgHasDeref(3))
 			if (line->ConvertRunMode(LINE_RAW_ARG3) == SW_SHOWNORMAL)
 				return ScriptError(ERR_RUN_SHOW_MODE, LINE_RAW_ARG3);
 		break;
-	case ACT_MOUSECLICK:
-	case ACT_MOUSECLICKDRAG:
-		// Check that the button is valid (e.g. left/right/middle):
-		if (!line->ArgHasDeref(1))
-			if (!line->ConvertMouseButton(LINE_RAW_ARG1))
-				return ScriptError(ERR_MOUSE_BUTTON, LINE_RAW_ARG1);
-		if (!line->ValidateMouseCoords(LINE_RAW_ARG2, LINE_RAW_ARG3))
-			return ScriptError(ERR_MOUSE_COORD, LINE_RAW_ARG2);
-		if (aActionType == ACT_MOUSECLICKDRAG)
-			if (!line->ValidateMouseCoords(LINE_RAW_ARG4, LINE_RAW_ARG5))
-				return ScriptError(ERR_MOUSE_COORD, LINE_RAW_ARG4);
-		break;
-	case ACT_MOUSEMOVE:
-		if (!line->ValidateMouseCoords(LINE_RAW_ARG1, LINE_RAW_ARG2))
-			return ScriptError(ERR_MOUSE_COORD, LINE_RAW_ARG1);
-		break;
+
 	case ACT_REPEAT: // These types of loops are always "NORMAL".
 		line->mAttribute = ATTR_LOOP_NORMAL;
+
 	case ACT_LOOP:
 		// If possible, determine the type of loop so that the preparser can better
 		// validate some things:
@@ -2394,10 +2429,14 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 			if (!aLoopType)
 				return line->PreparseError("This break or continue statement is not enclosed by a loop.");
 			break;
-		case ACT_FILESETDATEMODIFIED:
-		case ACT_FILETOGGLEHIDDEN:
-			if (aLoopType != ATTR_LOOP_FILE && aLoopType != ATTR_LOOP_UNKNOWN && !*LINE_RAW_ARG1)
-				return line->PreparseError("When not enclosed in a file-loop, this command requires more parameters.");
+		case ACT_FILEGETATTRIB:
+		case ACT_FILESETATTRIB:
+		case ACT_FILEGETSIZE:
+		case ACT_FILEGETVERSION:
+		case ACT_FILEGETTIME:
+		case ACT_FILESETTIME:
+			if (aLoopType != ATTR_LOOP_FILE && aLoopType != ATTR_LOOP_UNKNOWN && !*LINE_RAW_ARG2)
+				return line->PreparseError("When not enclosed in a file-loop, this command requires a 2nd parameter.");
 			break;
 		case ACT_GOTO:  // These two must be done here (i.e. *after* all the script lines have been added),
 		case ACT_GOSUB: // so that labels both above and below each Gosub/Goto can be resolved.
@@ -3337,10 +3376,14 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 				// exists (is there any other way?):
 				// MSDN: "Warning: If a process happens to return STILL_ACTIVE (259) as an error code,
 				// applications that test for this value could end up in an infinite loop."
-				GetExitCodeProcess(running_process, &exit_code);
+				if (running_process)
+					GetExitCodeProcess(running_process, &exit_code);
+				else // it can be NULL in the case of launching things like "find D:\" or "www.yahoo.com"
+					exit_code = 0;
 				if (exit_code != STATUS_PENDING)
 				{
-					CloseHandle(running_process);
+					if (running_process)
+						CloseHandle(running_process);
 					g_ErrorLevel->Assign((int)exit_code); // Use signed vs. unsigned, since that is more typical?
 					return OK;
 				}
@@ -3370,6 +3413,8 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		return ControlSend(SIX_ARGS, aModifiersLR);
 	case ACT_CONTROLLEFTCLICK:
 		return ControlLeftClick(FIVE_ARGS);
+	case ACT_CONTROLGETFOCUS:
+		return ControlGetFocus(ARG2, ARG3, ARG4, ARG5);
 	case ACT_CONTROLFOCUS:
 		return ControlFocus(FIVE_ARGS);
 	case ACT_CONTROLSETTEXT:
@@ -3708,24 +3753,42 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		return OK;
 	}
 
-	case ACT_FILESELECTFILE:
-		return FileSelectFile(ARG2, ARG3);
+	case ACT_FILEAPPEND:
+		return this->FileAppend(ARG2, ARG1);  // To avoid ambiguity in case there's another FileAppend().
+	case ACT_FILEREADLINE:
+		return FileReadLine(ARG2, ARG3);
+	case ACT_FILECOPY:
+		return FileCopy(THREE_ARGS);
+	case ACT_FILEMOVE:
+		return FileMove(THREE_ARGS);
+	case ACT_FILEDELETE:
+		return FileDelete(ARG1);
 	case ACT_FILECREATEDIR:
 		return FileCreateDir(ARG1);
 	case ACT_FILEREMOVEDIR:
 		if (!*ARG1) // Consider an attempt to create or remove a blank dir to be an error.
 			return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
 		return g_ErrorLevel->Assign(RemoveDirectory(ARG1) ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
-	case ACT_FILEREADLINE:
-		return FileReadLine(ARG2, ARG3);
-	case ACT_FILEAPPEND:
-		return this->FileAppend(ARG2, ARG1);  // To avoid ambiguity in case there's another FileAppend().
-	case ACT_FILEDELETE:
-		return FileDelete(ARG1);
-	case ACT_FILEMOVE:
-		return FileMove(THREE_ARGS);
-	case ACT_FILECOPY:
-		return FileCopy(THREE_ARGS);
+
+	case ACT_FILEGETATTRIB:
+		// The specified ARG, if non-blank, takes precedence over the file-loop's file (if any):
+		#define USE_FILE_LOOP_FILE_IF_ARG_BLANK(arg) (*arg ? arg : (aCurrentFile ? aCurrentFile->cFileName : ""))
+		return FileGetAttrib(USE_FILE_LOOP_FILE_IF_ARG_BLANK(ARG2));
+	case ACT_FILESETATTRIB:
+		return FileSetAttrib(ARG1, USE_FILE_LOOP_FILE_IF_ARG_BLANK(ARG2), *ARG3 == '1');
+	case ACT_FILEGETTIME:
+		return FileGetTime(USE_FILE_LOOP_FILE_IF_ARG_BLANK(ARG2), ARG3);
+	case ACT_FILESETTIME:
+		return FileSetTime(ARG1, USE_FILE_LOOP_FILE_IF_ARG_BLANK(ARG2), ARG3, *ARG4 == '1');
+	case ACT_FILEGETSIZE:
+		return FileGetSize(USE_FILE_LOOP_FILE_IF_ARG_BLANK(ARG2), ARG3);
+	case ACT_FILEGETVERSION:
+		return FileGetVersion(USE_FILE_LOOP_FILE_IF_ARG_BLANK(ARG2));
+
+	case ACT_FILESELECTFILE:
+		return FileSelectFile(ARG2, ARG3);
+	case ACT_FILESELECTFOLDER:
+		return FileSelectFolder(ARG2, *ARG3 ? (atoi(ARG3) != 0) : true, ARG4);
 
 	// Like AutoIt2, if either OUTPUT_VAR or ARG1 aren't purely numeric, they
 	// will be considered to be zero for all of the below math functions:
@@ -3756,60 +3819,31 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		return OK;
 	}
 
-	case ACT_FILETOGGLEHIDDEN:
-	{
-		// If there is a non-empty first param, it takes precedence over
-		// a non-NULL aCurrentFile:
-		char *filespec = ARG1;
-		if (!*filespec && aCurrentFile)
-			filespec = aCurrentFile->cFileName;
-		if (!*filespec)
-			// It's probably a deref'd var, otherwise the loader would have caught it.
-			// It's probably best to abort the script/subroutine in case it's a loop
-			// with many iterations, each of which would likely fail:
-			return LineError("The filename provided is blank." ERR_ABORT);
-		DWORD attr = GetFileAttributes(filespec);
-		if (attr == 0xFFFFFFFF)  // failed
-			return LineError("GetFileAttributes() failed.", WARN, filespec);
-		if (attr & FILE_ATTRIBUTE_HIDDEN)
-			attr &= ~FILE_ATTRIBUTE_HIDDEN;
-		else
-			attr |= FILE_ATTRIBUTE_HIDDEN;
-		if (!SetFileAttributes(filespec, attr))
-			return LineError("SetFileAttributes() failed.", WARN, filespec);
-		return OK; // Always successful from a script-execution standpoint.
-	}
-	case ACT_FILESETDATEMODIFIED:
-	{
-		// If there is a non-empty first param, it takes precedence over
-		// a non-NULL aCurrentFile:
-		char *filespec = ARG1;
-		if (!*filespec && aCurrentFile)
-			filespec = aCurrentFile->cFileName;
-		if (!*filespec)
-			// It's probably a deref'd var, otherwise the loader would have caught it.
-			// It's probably best to abort the script/subroutine in case it's a loop
-			// with many iterations, each of which would likely fail:
-			return LineError("The filename provided is blank." ERR_ABORT);
-		if (!FileSetDateModified(filespec, ARG2))
-			return LineError("This file or folder's modification date could not be changed.", WARN, filespec);
-		return OK;
-	}
 	case ACT_KEYLOG:
 	{
-		if (*ARG1)
+		if (*ARG1 || *ARG2)
 		{
-			if (!stricmp(ARG1, "Off"))
-				g_KeyLogToFile = false;
-			else if (!stricmp(ARG1, "On"))
-				g_KeyLogToFile = true;
-			else if (!stricmp(ARG1, "Toggle"))
-				g_KeyLogToFile = !g_KeyLogToFile;
-			else // Assume the param is the target file to which to log the keys:
+			switch (ConvertOnOffToggle(ARG1))
 			{
+			case NEUTRAL:
+			case TOGGLE:
+				g_KeyLogToFile = !g_KeyLogToFile;
+				if (!g_KeyLogToFile)
+					KeyLogToFile();  // Signal it to close the file, if it's open.
+				break;
+			case TOGGLED_ON:
 				g_KeyLogToFile = true;
-				KeyLogToFile(ARG1);
+				break;
+			case TOGGLED_OFF:
+				g_KeyLogToFile = false;
+				KeyLogToFile();  // Signal it to close the file, if it's open.
+				break;
+			// We know it's a variable because otherwise the loading validation would have caught it earlier:
+			case TOGGLE_INVALID:
+				return LineError("The variable in param #1 does not resolve to an allowed value.", FAIL, ARG1);
 			}
+			if (*ARG2) // The user also specified a filename, so update the target filename.
+				KeyLogToFile(ARG2);
 			return OK;
 		}
 		// I was initially concerned that GetWindowText() can hang if the target window is
@@ -4706,9 +4740,9 @@ char *Script::ListVars(char *aBuf, size_t aBufSize)
 ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, bool aDisplayErrors
 	, char *aRunShowMode, HANDLE *aProcess)
 // Remember that aAction and aParams can both be NULL, so don't dereference without checking first.
-// Note: Action & Params are parsed at runtime, here, rather than at load-time because the
-// Run or RunWait command might contain a deferenced variable, and such can only be resolved
-// at runtime.
+// Note: For the Run & RunWait commands, aParams should always be NULL.  Params are parsed out of
+// the aActionString at runtime, here, rather than at load-time because Run & RunWait might contain
+// deferenced variable(s), which can only be resolved at runtime.
 {
 	if (aProcess) // Init output param if the caller gave us memory to store it.
 		*aProcess = NULL;
@@ -4834,79 +4868,100 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 		}
 	}
 
-	SHELLEXECUTEINFO sei;
-	ZeroMemory(&sei, sizeof(SHELLEXECUTEINFO));
-	sei.cbSize = sizeof(sei);
-	// Below: "indicate that the hProcess member receives the process handle" and not to display error dialog:
-	sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
-	sei.lpDirectory = aWorkingDir; // OK if NULL or blank; that will cause current dir to be used.
-	sei.nShow = (aRunShowMode && *aRunShowMode) ? Line::ConvertRunMode(aRunShowMode) : SW_SHOWNORMAL;
-	// Check for special actions that are known to be system verbs:
-	if (action_is_system_verb)
+	// This is distinct from new_process being non-NULL because the two aren't always the
+	// same.  For example, if the user does "Run, find D:\" or "RunWait, www.yahoo.com",
+	// no new process handle will be available even though the launch was successful:
+	bool success = false;
+	HANDLE new_process = NULL;  // This will hold the handle to the newly created process.
+
+	// If the caller originally gave us NULL for aParams, always try CreateProcess() before
+	// trying ShellExecute().  This is because ShellExecute() is usually a lot slower.
+	// The only exception is if the action appears to be a verb such as open, edit, or find.
+	// In that case, we'll also skip the CreateProcess() attempt and do only the ShellExecute().
+	// If the user really meant to launch find.bat or find.exe, for example, he should add
+	// the extension (e.g. .exe) to differentiate "find" from "find.exe":
+	if (   !action_is_system_verb && (!aParams_orig || !*aParams_orig)   )
 	{
-		sei.lpVerb = aAction;
-		if (!stricmp(aAction, "properties"))
-			sei.fMask |= SEE_MASK_INVOKEIDLIST;  // Need to use this for the "properties" verb to work reliably.
-		sei.lpFile = aParams;
-		sei.lpParameters = NULL;
-	}
-	else
-	{
-		sei.lpVerb = "open";
-		sei.lpFile = aAction;
-		sei.lpParameters = aParams;
+		aAction = action; // same
+		aParams = "";     // same
+		STARTUPINFO si = {0};  // Zero fill to be safer.
+		si.cb = sizeof(si);
+		si.lpReserved = si.lpDesktop = si.lpTitle = NULL;
+		si.lpReserved2 = NULL;
+		si.dwFlags = STARTF_USESHOWWINDOW;  // This tells it to use the value of wShowWindow below.
+		si.wShowWindow = (aRunShowMode && *aRunShowMode) ? Line::ConvertRunMode(aRunShowMode) : SW_SHOWNORMAL;
+		PROCESS_INFORMATION pi = {0};
+		// Since CreateProcess() requires that the 2nd param be modifiable, ensure that it is
+		// (even if this is ANSI and not Unicode; it's just safer):
+		strlcpy(action, aAction_orig, sizeof(action)); // i.e. we're running the original action from caller.
+		// MSDN: "If [lpCurrentDirectory] is NULL, the new process is created with the same
+		// current drive and directory as the calling process." (i.e. since caller may have
+		// specified a NULL aWorkingDir):
+		if (CreateProcess(NULL, aAction, NULL, NULL, FALSE, 0, NULL, aWorkingDir, &si, &pi))
+		{
+			success = true;
+			new_process = pi.hProcess;
+		}
 	}
 
-	if (!ShellExecuteEx(&sei) || LOBYTE(LOWORD(sei.hInstApp)) <= 32) // Relies on short-circuit boolean order.
+	if (!success) // Either the above wasn't attempted, or the attempt failed.  So try ShellExecute().
 	{
-		bool success = false;  // Init.
-		// Fall back to the AutoIt method of using CreateProcess(), but only if caller didn't
-		// originally give us some params (since in that case, ShellExecuteEx() should have worked
-		// -- not to mention that CreateProcess() doesn't handle params as a separate string):
-		if (!aParams_orig || !*aParams_orig)
+		SHELLEXECUTEINFO sei = {0};
+		sei.cbSize = sizeof(sei);
+		// Below: "indicate that the hProcess member receives the process handle" and not to display error dialog:
+		sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
+		sei.lpDirectory = aWorkingDir; // OK if NULL or blank; that will cause current dir to be used.
+		sei.nShow = (aRunShowMode && *aRunShowMode) ? Line::ConvertRunMode(aRunShowMode) : SW_SHOWNORMAL;
+		if (action_is_system_verb)
 		{
-			sei.lpVerb = "";  // Set it for use in error reporting.
-			aAction = action; // same
-			aParams = "";     // same
-			STARTUPINFO si = {0};  // Zero fill to be safer.
-			si.cb = sizeof(si);
-			si.lpReserved = si.lpDesktop = si.lpTitle = NULL;
-			si.lpReserved2 = NULL;
-			si.dwFlags = STARTF_USESHOWWINDOW;  // Tell it to use the value of wShowWindow below.
-			si.wShowWindow = sei.nShow;
-			PROCESS_INFORMATION pi = {0};
-			// Since CreateProcess() requires that the 2nd param be modifiable, ensure that it is
-			// (even if this is ANSI and not Unicode; it's just safer):
-			strlcpy(action, aAction_orig, sizeof(action)); // i.e. we're running the original action from caller.
-			// MSDN: "If [lpCurrentDirectory] is NULL, the new process is created with the same
-			// current drive and directory as the calling process." (i.e. since caller may have
-			// specified a NULL aWorkingDir):
-			success = CreateProcess(NULL, aAction, NULL, NULL, FALSE, 0, NULL, aWorkingDir, &si, &pi);
-			sei.hProcess = success ? pi.hProcess : NULL;  // Set this value for use later on.
+			sei.lpVerb = aAction;
+			if (!stricmp(aAction, "properties"))
+				sei.fMask |= SEE_MASK_INVOKEIDLIST;  // Need to use this for the "properties" verb to work reliably.
+			sei.lpFile = aParams;
+			sei.lpParameters = NULL;
 		}
+		else
+		{
+			sei.lpVerb = "open";
+			sei.lpFile = aAction;
+			sei.lpParameters = aParams;
+		}
+		if (ShellExecuteEx(&sei) && LOBYTE(LOWORD(sei.hInstApp)) > 32) // Relies on short-circuit boolean order.
+		{
+			new_process = sei.hProcess;
+			success = true;
+		}
+	}
 
-		if (!success)
+	if (!success) // The above attempt(s) to launch failed.
+	{
+		if (aDisplayErrors)
 		{
-			if (aDisplayErrors)
-			{
-				char error_text[2048], verb_text[128];
-				if (*sei.lpVerb && stricmp(sei.lpVerb, "open"))
-					snprintf(verb_text, sizeof(verb_text), "\nVerb: <%s>", sei.lpVerb);
-				else // Don't bother showing it if it's just "open".
-					*verb_text = '\0';
-				// Use format specifier to make sure it doesn't get too big for the error
-				// function to display.  Also, due to above having tried CreateProcess()
-				// as a last resort, aParams will always be blank so don't bother displaying it:
-				snprintf(error_text, sizeof(error_text)
-					, "Failed attempt to launch program or document:\nAction: <%-1.400s%s>%s"
-					, aAction, strlen(aAction) > 400 ? "..." : "", verb_text);
-				ScriptError(error_text);
-			}
-			return FAIL;
+			char error_text[2048], verb_text[128];
+			if (action_is_system_verb && stricmp(aAction, "open"))  // It's a verb, but not the default "open" verb.
+				snprintf(verb_text, sizeof(verb_text), "\nVerb: <%s>", aAction);
+			else // Don't bother showing it if it's just "open".
+				*verb_text = '\0';
+			// Use format specifier to make sure it doesn't get too big for the error
+			// function to display.  Also, due to above having tried CreateProcess()
+			// as a last resort, aParams will always be blank so don't bother displaying it:
+			if (!aParams)
+				aParams = "";
+			snprintf(error_text, sizeof(error_text)
+				, "Failed attempt to launch program or document:"
+				"\nAction: <%-0.400s%s>"
+				"%s"
+				"\nParams: <%-0.400s%s>"
+				, aAction, strlen(aAction) > 400 ? "..." : ""
+				, verb_text
+				, aParams, strlen(aParams) > 400 ? "..." : ""
+				);
+			ScriptError(error_text);
 		}
+		return FAIL;
 	}
 
 	if (aProcess) // The caller wanted the process handle, so provide it.
-		*aProcess = sei.hProcess;
+		*aProcess = new_process;
 	return OK;
 }

@@ -86,6 +86,14 @@ struct length_and_buf_type
 	char *buf;
 };
 
+struct class_and_hwnd_type
+{
+	char *class_name;
+	bool is_found;
+	int class_count;
+	HWND hwnd;
+};
+
 
 HWND WinActivate(char *aTitle, char *aText = "", char *aExcludeTitle = "", char *aExcludeText = ""
 	, bool aFindLastMatch = false

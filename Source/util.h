@@ -204,11 +204,11 @@ inline char *strcatmove(char *aDst, char *aSrc)
 }
 
 
-
 #define DATE_FORMAT "YYYYMMDDHHMISS"
-ResultType FileSetDateModified(char *aFilespec, char *aYYYYMMDD = "");
 ResultType YYYYMMDDToFileTime(char *YYYYMMDD, FILETIME *pftDateTime);
+char *FileTimeToYYYYMMDD(char *aYYYYMMDD, FILETIME *pftDateTime);
 
+unsigned __int64 GetFileSize64(HANDLE aFileHandle);
 int snprintfcat(char *aBuf, size_t aBufSize, const char *aFormat, ...);
 int strlcmp (char *aBuf1, char *aBuf2, UINT aLength1 = UINT_MAX, UINT aLength2 = UINT_MAX);
 int strlicmp(char *aBuf1, char *aBuf2, UINT aLength1 = UINT_MAX, UINT aLength2 = UINT_MAX);

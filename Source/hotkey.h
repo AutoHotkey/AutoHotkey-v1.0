@@ -56,6 +56,7 @@ private:
 	// within static data and methods to retain the indexing/performance method:
 	static bool sHotkeysAreLocked; // Whether the definition-stage of hotkey creation is finished.
 	static HookType sWhichHookNeeded;
+	static HookType sWhichHookAlways;
 	static HookType sWhichHookActive;
 	static DWORD sTimePrev;
 	static DWORD sTimeNow;
@@ -79,7 +80,7 @@ private:
 	bool mConstructedOK;
 
 	// Something in the compiler is currently preventing me from using HookType in place of UCHAR:
-	friend UCHAR ChangeHookState(Hotkey *aHK[], int aHK_count, UCHAR aWhichHooks, bool aWarnIfHooksAlreadyInstalled
+	friend UCHAR ChangeHookState(Hotkey *aHK[], int aHK_count, UCHAR aWhichHook, UCHAR aWhichHookAlways, bool aWarnIfHooksAlreadyInstalled
 		, bool aActivateOnlySuspendHotkeys);
 
 	ResultType TextInterpret();
@@ -108,7 +109,7 @@ public:
 	static ResultType PerformID(HotkeyIDType aHotkeyID);
 	static ResultType AllDeactivate(bool aExcludeSuspendHotkeys = false);
 	static void AllActivate();
-	static void RequireHook(HookType aWhichHook) {sWhichHookNeeded |= aWhichHook;}
+	static void RequireHook(HookType aWhichHook) {sWhichHookNeeded |= aWhichHook;  sWhichHookAlways |= aWhichHook;}
 	static HookType HookIsActive() {return sWhichHookActive;} // Returns bitwise values: HOOK_MOUSE, HOOK_KEYBD.
 
 	static char GetType(HotkeyIDType aHotkeyID)
