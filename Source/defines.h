@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.03"
+#define NAME_VERSION "1.0.04"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -122,6 +122,94 @@ typedef UCHAR HookType;
 #define EXTERN_CLIPBOARD extern Clipboard g_clip
 #define CLOSE_CLIPBOARD_IF_OPEN	if (g_clip.mIsOpen) g_clip.Close()
 #define CLIPBOARD_CONTAINS_ONLY_FILES (!IsClipboardFormatAvailable(CF_TEXT) && IsClipboardFormatAvailable(CF_HDROP))
+
+
+// These macros used to keep app responsive during a long operation.  They may prove to
+// be unnecessary if a 2nd thread can be dedicated to checking the message loop, which might
+// then prevent keyboard and mouse lag whenever either of the hooks is installed.
+// The sleep duration must be greater than zero when the hooks are installed, so that
+// MsgSleep() will enter the GetMessage() state, which is the only state that seems to
+// pass off keyboard & mouse input to the hooks.
+// A value of 8 for how_often_to_sleep seems best if avoiding keyboard/mouse lag is
+// top priority.  UPDATE: 18 is now being used because 8 sometimes causes a delay after every keystroke
+// (and perhaps ever file in FileSetAttrib() and such), possibly because the system's tickcount
+// gets synchronized exactly with the calls to GetTickCount, which means that the first tick
+// is fetched less than 1ms before the system is about to update to a new tickcount.  In any case,
+// 18 seems like a good trade-off of performance vs. lag (lag is barely noticeable).
+// For example, a value of 15 (or maybe it was 25) makes the mouse cursor
+// move with an almost imperceptible jumpiness.  Of course, the granularity of GetTickCount()
+// is usually 10ms, so it's best to choose a value such as 8, 18, 28, etc. to be sure
+// that the proper interval is really being used.
+// Making time_of_last_sleep static so that recursive functions, such as FileSetAttrib(),
+// will sleep as often as intended even if the target files require frequent recursion.
+// Making this static is not friendly to reentrant calls to the function (i.e. calls maded
+// as a consequence of the current script subroutine being interrupted by another during
+// this instance's MsgSleep()).  However, it doesn't seem to be that much of a consequence
+// since the exact interval period of the MsgSleep()'s isn't that important.  It's also
+// pretty unlikely that the interrupting subroutine will also just happen to call the same
+// function rather than some other:
+#define LONG_OPERATION_INIT \
+	static DWORD time_of_last_sleep;\
+	time_of_last_sleep = GetTickCount();\
+	DWORD how_often_to_sleep, time_now;\
+	int sleep_duration;\
+	if (Hotkey::HookIsActive())\
+	{\
+		how_often_to_sleep = 18;\
+		sleep_duration = 5;\
+	}\
+	else\
+	{\
+		how_often_to_sleep = 200;\
+		sleep_duration = -1;\
+	}
+
+// This is the same as the above except it also handled bytes_to_read for URLDownloadToFile():
+#define LONG_OPERATION_INIT_FOR_URL \
+	static DWORD time_of_last_sleep;\
+	time_of_last_sleep = GetTickCount();\
+	DWORD bytes_to_read, how_often_to_sleep, time_now;\
+	int sleep_duration;\
+	if (Hotkey::HookIsActive())\
+	{\
+		bytes_to_read = 1024;\
+		how_often_to_sleep = 8;\
+		sleep_duration = 10;\
+	}\
+	else\
+	{\
+		bytes_to_read = sizeof(bufData);\
+		how_often_to_sleep = 200;\
+		sleep_duration = -1;\
+	}
+
+// In the below macro (which is used in conjunction with the above), DWORD math gives
+// the right answer even if time_now has just recently wrapped around to zero.
+// MsgSleep() is used rather than SLEEP_AND_IGNORE_HOTKEYS to allow other hotkeys to
+// launch and interrupt (suspend) the operation.  It seems best to allow that, since
+// the user may want to press some fast window activation hotkeys, for example,
+// during the operation.  The operation will be resumed after the interrupting subroutine
+// finishes:
+#define LONG_OPERATION_UPDATE \
+	time_now = GetTickCount();\
+	if ((time_now - time_of_last_sleep) > how_often_to_sleep)\
+	{\
+		MsgSleep(sleep_duration);\
+		time_of_last_sleep = time_now;\
+	}
+
+// Same as the above except for SendKeys() and related functions (uses SLEEP_AND_IGNORE_HOTKEYS):
+#define LONG_OPERATION_UPDATE_FOR_SENDKEYS \
+{\
+	time_now = GetTickCount();\
+	if ((time_now - time_of_last_sleep) > how_often_to_sleep)\
+	{\
+		SLEEP_AND_IGNORE_HOTKEYS(sleep_duration);\
+		time_of_last_sleep = time_now;\
+	}\
+}
+
+
 
 // Defining these here avoids awkwardness due to the fact that globaldata.cpp
 // does not (for design reasons) include globaldata.h:

@@ -79,7 +79,7 @@ enum enum_act {
 , ACT_STRINGTRIMLEFT, ACT_STRINGTRIMRIGHT, ACT_STRINGLOWER, ACT_STRINGUPPER
 , ACT_STRINGLEN, ACT_STRINGGETPOS, ACT_STRINGREPLACE
 , ACT_ENVSET, ACT_ENVUPDATE
-, ACT_RUN, ACT_RUNWAIT
+, ACT_RUN, ACT_RUNWAIT, ACT_URLDOWNLOADTOFILE
 , ACT_GETKEYSTATE
 , ACT_SEND, ACT_CONTROLSEND, ACT_CONTROLCLICK, ACT_CONTROLGETFOCUS, ACT_CONTROLFOCUS
 , ACT_CONTROLSETTEXT, ACT_CONTROLGETTEXT
@@ -101,7 +101,8 @@ enum enum_act {
 // Keep rarely used actions near the bottom for parsing/performance reasons:
 , ACT_PIXELGETCOLOR, ACT_PIXELSEARCH
 , ACT_GROUPADD, ACT_GROUPACTIVATE, ACT_GROUPDEACTIVATE, ACT_GROUPCLOSE
-, ACT_DRIVESPACEFREE, ACT_SOUNDSETWAVEVOLUME, ACT_SOUNDPLAY
+, ACT_DRIVESPACEFREE
+, ACT_SOUNDGET, ACT_SOUNDSET, ACT_SOUNDGETWAVEVOLUME, ACT_SOUNDSETWAVEVOLUME, ACT_SOUNDPLAY
 , ACT_FILEAPPEND, ACT_FILEREADLINE, ACT_FILEDELETE
 , ACT_FILEINSTALL, ACT_FILECOPY, ACT_FILEMOVE, ACT_FILECOPYDIR, ACT_FILEMOVEDIR
 , ACT_FILECREATEDIR, ACT_FILEREMOVEDIR
@@ -178,7 +179,7 @@ enum enum_act_old {
 #define ERR_MOUSE_BUTTON "This line specifies an invalid mouse button."
 #define ERR_MOUSE_COORD "The X & Y coordinates must be either both absent or both present."
 #define ERR_MOUSE_UPDOWN "Parameter #6 must be either blank, D, U, or a variable reference."
-#define ERR_PERCENT "The parameter must be a number between 0 and 100 (inclusive), or a variable reference."
+#define ERR_PERCENT "Parameter #1 must be a number between -100 and 100 (inclusive), or a variable reference."
 #define ERR_MOUSE_SPEED "The Mouse Speed must be a number between 0 and " MAX_MOUSE_SPEED_STR ", blank, or a variable reference."
 #define ERR_MEM_ASSIGN "Out of memory while assigning to this variable." ERR_ABORT
 #define ERR_VAR_IS_RESERVED "This variable is reserved and cannot be assigned to."
@@ -231,15 +232,15 @@ struct ArgStruct
 #define REG_SUBKEY -2 // Custom type, not standard in Windows.
 struct RegItemStruct
 {
-	HKEY root_key;
+	HKEY root_key_type, root_key;  // root_key_type is always a local HKEY, whereas root_key can be a remote handle.
 	char subkey[MAX_PATH];  // The branch of the registry where this subkey or value is located.
 	char name[MAX_VALUE_NAME]; // The subkey or value name.
 	DWORD type; // Value Type (e.g REG_DWORD). This is the length used by MSDN in their example code.
 	FILETIME ftLastWriteTime; // Non-initialized.
 	void InitForValues() {ftLastWriteTime.dwHighDateTime = ftLastWriteTime.dwLowDateTime = 0;}
 	void InitForSubkeys() {type = REG_SUBKEY;}  // To distinguish REG_DWORD and such from the subkeys themselves.
-	RegItemStruct(HKEY aRootKey, char *aSubKey)
-		: root_key(aRootKey), type(REG_NONE)
+	RegItemStruct(HKEY aRootKeyType, HKEY aRootKey, char *aSubKey)
+		: root_key_type(aRootKeyType), root_key(aRootKey), type(REG_NONE)
 	{
 		*name = '\0';
 		// Make a local copy on the caller's stack so that if the current script subroutine is
@@ -292,12 +293,17 @@ private:
 		, bool aRecurseSubfolders, char *aFilePattern, __int64 aIterationLimit, bool aIsInfinite);
 	ResultType PerformLoopReg(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrentFile
 		, bool &aContinueMainLoop, Line *&aJumpToLine, FileLoopModeType aFileLoopMode
-		, bool aRecurseSubfolders, HKEY aRootKey, char *aRegSubkey);
+		, bool aRecurseSubfolders, HKEY aRootKeyType, HKEY aRootKey, char *aRegSubkey);
 	ResultType Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurrentFile = NULL
 		, RegItemStruct *aCurrentRegItem = NULL);
 	ResultType PerformAssign();
 	ResultType DriveSpaceFree(char *aPath);
+	ResultType SoundSetGet(char *aSetting, DWORD aComponentType, int aComponentInstance
+		, DWORD aControlType, UINT aMixerID);
+	ResultType SoundGetWaveVolume(HWAVEOUT aDeviceID);
+	ResultType SoundSetWaveVolume(char *aVolume, HWAVEOUT aDeviceID);
 	ResultType SoundPlay(char *aFilespec, bool aSleepUntilDone);
+	ResultType URLDownloadToFile(char *aURL, char *aFilespec);
 	ResultType FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeting, char *aFilter);
 	ResultType FileSelectFolder(char *aRootDir, bool aAllowCreateFolder, char *aGreeting);
 	ResultType FileCreateShortcut(char *aTargetFile, char *aShortcutFile, char *aWorkingDir, char *aArgs
@@ -553,6 +559,7 @@ public:
 		case ACT_RANDOM:
 		case ACT_WINMOVE:
 			return true;
+
 		// Since mouse coords are relative to the foreground window, they can be negative:
 		case ACT_MOUSECLICK:
 			return (aArgNum == 2 || aArgNum == 3);
@@ -564,6 +571,10 @@ public:
 			return (aArgNum == 2 || aArgNum == 3);
 		case ACT_PIXELSEARCH:
 			return (aArgNum >= 3 || aArgNum <= 7); // i.e. Color values can be negative, but the last param cannot.
+
+		case ACT_SOUNDSET:
+		case ACT_SOUNDSETWAVEVOLUME:
+			return aArgNum == 1;
 		}
 		return false;  // Since above didn't return, negative is not allowed.
 	}
@@ -596,19 +607,57 @@ public:
 		case ACT_MULT:
 		case ACT_DIV:
 			return true;
+		case ACT_SOUNDSET:
+		case ACT_SOUNDSETWAVEVOLUME:
+			return aArgNum == 1;
 		}
 		return false;  // Since above didn't return, negative is not allowed.
 	}
 
-	static HKEY RegConvertRootKey(char *aBuf)
+	static HKEY RegConvertRootKey(char *aBuf, bool *aIsRemoteRegistry = NULL)
 	{
-		if (!stricmp(aBuf, "HKEY_LOCAL_MACHINE"))  return HKEY_LOCAL_MACHINE;
-		if (!stricmp(aBuf, "HKEY_CLASSES_ROOT"))   return HKEY_CLASSES_ROOT;
-		if (!stricmp(aBuf, "HKEY_CURRENT_CONFIG")) return HKEY_CURRENT_CONFIG;
-		if (!stricmp(aBuf, "HKEY_CURRENT_USER"))   return HKEY_CURRENT_USER;
-		if (!stricmp(aBuf, "HKEY_USERS"))          return HKEY_USERS;
-		return NULL; // Invalid or unsupported root key name.
+		// Even if the computer name is a single letter, it seems like using a colon as delimiter is ok
+		// (e.g. a:HKEY_LOCAL_MACHINE), since we wouldn't expect the root key to be used as a filename
+		// in that exact way, i.e. a drive letter should be followed by a backslash 99% of the time in
+		// this context.
+		// Research indicates that colon is an illegal char in a computer name (at least for NT,
+		// and by extension probably all other OSes).  So it should be safe to use it as a delimiter
+		// for the remote registry feature.  But just in case, get the right-most one,
+		// e.g. Computer:01:HKEY_LOCAL_MACHINE  ; the first colon is probably illegal on all OSes.
+		// Additional notes from the Internet:
+		// "A Windows NT computer name can be up to 15 alphanumeric characters with no blank spaces
+		// and must be unique on the network. It can contain the following special characters:
+		// ! @ # $ % ^ & ( ) -   ' { } .
+		// It may not contain:
+		// \ * + = | : ; " ? ,
+		// The following is a list of illegal characters in a computer name:
+		// regEx.Pattern = "`|~|!|@|#|\$|\^|\&|\*|\(|\)|\=|\+|{|}|\\|;|:|'|<|>|/|\?|\||%"
+
+		char *colon_pos = strrchr(aBuf, ':');
+		char *key_name = colon_pos ? omit_leading_whitespace(colon_pos + 1) : aBuf;
+		if (aIsRemoteRegistry) // Caller wanted the below put into the output parameter.
+			*aIsRemoteRegistry = (colon_pos != NULL);
+		HKEY root_key = NULL; // Set default.
+		if (!stricmp(key_name, "HKEY_LOCAL_MACHINE"))  root_key = HKEY_LOCAL_MACHINE;
+		if (!stricmp(key_name, "HKEY_CLASSES_ROOT"))   root_key = HKEY_CLASSES_ROOT;
+		if (!stricmp(key_name, "HKEY_CURRENT_CONFIG")) root_key = HKEY_CURRENT_CONFIG;
+		if (!stricmp(key_name, "HKEY_CURRENT_USER"))   root_key = HKEY_CURRENT_USER;
+		if (!stricmp(key_name, "HKEY_USERS"))          root_key = HKEY_USERS;
+		if (!root_key)  // Invalid or unsupported root key name.
+			return NULL;
+		if (!aIsRemoteRegistry || !colon_pos) // Either caller didn't want it opened, or it doesn't need to be.
+			return root_key; // If it's a remote key, this value should only be used by the caller as an indicator.
+		// Otherwise, it's a remote computer whose registry the caller wants us to open:
+		// It seems best to require the two leading backslashes in case the computer name contains
+		// spaces (just in case spaces are allowed on some OSes or perhaps for Unix interoperability, etc.).
+		// Therefore, make no attempt to trim leading and trailing spaces from the computer name:
+		char computer_name[128];
+		strlcpy(computer_name, aBuf, sizeof(computer_name));
+		computer_name[colon_pos - aBuf] = '\0';
+		HKEY remote_key;
+		return (RegConnectRegistry(computer_name, root_key, &remote_key) == ERROR_SUCCESS) ? remote_key : NULL;
 	}
+
 	static char *RegConvertRootKey(char *aBuf, size_t aBufSize, HKEY aRootKey)
 	{
 		// switch() doesn't directly support expression of type HKEY:
@@ -650,6 +699,59 @@ public:
 		default: if (aBufSize) *aBuf = '\0'; return aBuf;  // Make it be the empty string for REG_NONE and anything else.
 		}
 	}
+
+	static DWORD SoundConvertComponentType(char *aBuf, int *aInstanceNumber = NULL)
+	{
+		char *colon_pos = strchr(aBuf, ':');
+		UINT length_to_check = (UINT)(colon_pos ? colon_pos - aBuf : strlen(aBuf));
+		if (aInstanceNumber) // Caller wanted the below put into the output parameter.
+		{
+			if (colon_pos)
+			{
+				*aInstanceNumber = atoi(colon_pos + 1);
+				if (*aInstanceNumber < 1)
+					*aInstanceNumber = 1;
+			}
+			else
+				*aInstanceNumber = 1;
+		}
+		if (!strlicmp(aBuf, "Master", length_to_check)) return MIXERLINE_COMPONENTTYPE_DST_SPEAKERS;
+		if (!strlicmp(aBuf, "Speakers", length_to_check)) return MIXERLINE_COMPONENTTYPE_DST_SPEAKERS;
+		if (!strlicmp(aBuf, "Digital", length_to_check)) return MIXERLINE_COMPONENTTYPE_SRC_DIGITAL;
+		if (!strlicmp(aBuf, "Line", length_to_check)) return MIXERLINE_COMPONENTTYPE_SRC_LINE;
+		if (!strlicmp(aBuf, "Microphone", length_to_check)) return MIXERLINE_COMPONENTTYPE_SRC_MICROPHONE;
+		if (!strlicmp(aBuf, "Synth", length_to_check)) return MIXERLINE_COMPONENTTYPE_SRC_SYNTHESIZER;
+		if (!strlicmp(aBuf, "CD", length_to_check)) return MIXERLINE_COMPONENTTYPE_SRC_COMPACTDISC;
+		if (!strlicmp(aBuf, "Telephone", length_to_check)) return MIXERLINE_COMPONENTTYPE_SRC_TELEPHONE;
+		if (!strlicmp(aBuf, "PCSpeaker", length_to_check)) return MIXERLINE_COMPONENTTYPE_SRC_PCSPEAKER;
+		if (!strlicmp(aBuf, "Wave", length_to_check)) return MIXERLINE_COMPONENTTYPE_SRC_WAVEOUT;
+		if (!strlicmp(aBuf, "Aux", length_to_check)) return MIXERLINE_COMPONENTTYPE_SRC_AUXILIARY;
+		if (!strlicmp(aBuf, "Analog", length_to_check)) return MIXERLINE_COMPONENTTYPE_SRC_ANALOG;
+		return MIXERLINE_COMPONENTTYPE_DST_UNDEFINED;
+	}
+	static DWORD SoundConvertControlType(char *aBuf)
+	{
+		// These are the types that seem to correspond to actual sound attributes.  Some of the values
+		// are not included here, such as MIXERCONTROL_CONTROLTYPE_FADER, which seems to be a type of
+		// sound control rather than a quality of the sound itself.  For performance, put the most
+		// often used ones up top:
+		if (!stricmp(aBuf, "Vol")) return MIXERCONTROL_CONTROLTYPE_VOLUME;
+		if (!stricmp(aBuf, "Volume")) return MIXERCONTROL_CONTROLTYPE_VOLUME;
+		if (!stricmp(aBuf, "OnOff")) return MIXERCONTROL_CONTROLTYPE_ONOFF;
+		if (!stricmp(aBuf, "Mute")) return MIXERCONTROL_CONTROLTYPE_MUTE;
+		if (!stricmp(aBuf, "Mono")) return MIXERCONTROL_CONTROLTYPE_MONO;
+		if (!stricmp(aBuf, "Loudness")) return MIXERCONTROL_CONTROLTYPE_LOUDNESS;
+		if (!stricmp(aBuf, "StereoEnh")) return MIXERCONTROL_CONTROLTYPE_STEREOENH;
+		if (!stricmp(aBuf, "BassBoost")) return MIXERCONTROL_CONTROLTYPE_BASS_BOOST;
+		if (!stricmp(aBuf, "Pan")) return MIXERCONTROL_CONTROLTYPE_PAN;
+		if (!stricmp(aBuf, "QSoundPan")) return MIXERCONTROL_CONTROLTYPE_QSOUNDPAN;
+		if (!stricmp(aBuf, "Bass")) return MIXERCONTROL_CONTROLTYPE_BASS;
+		if (!stricmp(aBuf, "Treble")) return MIXERCONTROL_CONTROLTYPE_TREBLE;
+		if (!stricmp(aBuf, "Equalizer")) return MIXERCONTROL_CONTROLTYPE_EQUALIZER;
+		#define MIXERCONTROL_CONTROLTYPE_INVALID 0 // 0 seems like a safe "undefined" indicator for this type.
+		return MIXERCONTROL_CONTROLTYPE_INVALID;
+	}
+
 
 	static TitleMatchModes ConvertTitleMatchMode(char *aBuf)
 	{
@@ -846,6 +948,7 @@ private:
 	// which simplifies calls to ScriptError() and LineError() (reduces the number of params that must be passed):
 	UCHAR mCurrFileNumber;
 	LineNumberType mCurrLineNumber;
+	bool mNoHotkeyLabels;
 
 	NOTIFYICONDATA mNIC; // For ease of adding and deleting our tray icon.
 
@@ -1073,7 +1176,8 @@ public:
 	{
 		char str[256] = "";  // Set default.
 		if (mLoopRegItem)
-			Line::RegConvertRootKey(str, sizeof(str), mLoopRegItem->root_key);
+			// Use root_key_type, not root_key (which might be a remote vs. local HKEY):
+			Line::RegConvertRootKey(str, sizeof(str), mLoopRegItem->root_key_type);
 		if (aBuf)
 			strcpy(aBuf, str);
 		return (VarSizeType)strlen(str);
@@ -1181,6 +1285,28 @@ public:
 			strcpy(aBuf, str);
 		return (VarSizeType)strlen(str);
 	}
+	VarSizeType GetTimeIdle(char *aBuf = NULL)
+	{
+		char str[128] = ""; // Set default.
+		if (g_os.IsWin2000orLater())
+		{
+			// Must fetch it at runtime, otherwise the program can't even be launched on Win9x/NT:
+			typedef BOOL (WINAPI *MyGetLastInputInfoType)(PLASTINPUTINFO);
+			static MyGetLastInputInfoType MyGetLastInputInfo = (MyGetLastInputInfoType)
+				GetProcAddress(GetModuleHandle("User32.dll"), "GetLastInputInfo");
+			if (MyGetLastInputInfo)
+			{
+				LASTINPUTINFO lii;
+				lii.cbSize = sizeof(lii);
+				if (MyGetLastInputInfo(&lii))
+					ITOA64(GetTickCount() - lii.dwTime, str);
+			}
+		}
+		if (aBuf)
+			strcpy(aBuf, str);
+		return (VarSizeType)strlen(str);
+	}
+
 	VarSizeType GetSpace(VarTypeType aType, char *aBuf = NULL)
 	{
 		if (!aBuf) return 1;  // i.e. the length of a single space char.

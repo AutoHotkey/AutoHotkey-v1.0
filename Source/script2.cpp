@@ -15,6 +15,7 @@ GNU General Public License for more details.
 */
 
 #include "stdafx.h" // pre-compiled headers
+#include <wininet.h> // For URLDownloadToFile().
 #include "script.h"
 #include "window.h" // for IF_USE_FOREGROUND_WINDOW
 #include "application.h" // for MsgSleep()
@@ -872,6 +873,8 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			return 0;
 		case ID_TRAY_WINDOWSPY:
 		case ID_FILE_WINDOWSPY:
+			// Even if this is the self-contained version (AUTOHOTKEYSC), attempt to launch anyway in
+			// case the user has put a copy of WindowSpy in the same dir with the compiled script:
 			// ActionExec()'s CreateProcess() is currently done in a way that prefers enclosing double quotes:
 			snprintf(buf_temp, sizeof(buf_temp), "\"%sAU3_Spy.exe\"", g_script.mOurEXEDir);
 			if (!g_script.ActionExec(buf_temp, "", NULL, false))
@@ -879,6 +882,8 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			return 0;
 		case ID_TRAY_HELP:
 		case ID_HELP_USERMANUAL:
+			// Even if this is the self-contained version (AUTOHOTKEYSC), attempt to launch anyway in
+			// case the user has put a copy of the help file in the same dir with the compiled script:
 			// ActionExec()'s CreateProcess() is currently done in a way that prefers enclosing double quotes.
 			// Also, for this one I saw it report failure once on Win98SE even though the help file did
 			// wind up getting launched.  Couldn't repeat it.  So in reponse to that try explicit "hh.exe":
@@ -1131,12 +1136,27 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			// call PostQuitMessage(), the MessageBox routine sees it and knows
 			// to destroy itself, thus cascading the Quit state through any other
 			// underlying MessageBoxes that may exist, until finally we wind up
-			// back at our main message loop, which handles the WM_QUIT:
-			PostQuitMessage(0);
+			// back at our main message loop, which handles the WM_QUIT posted here.
+			// Update: It seems that the "reload" feature, when it sends the WM_CLOSE
+			// directly to this instance's main window, requires more than just a
+			// PostQuitMessage(0).  Otherwise, this instance will not cleanly exist
+			// whenever it's displaying a MsgBox at the time the other instance
+			// tells us to close.  This is probably because in the case of a MsgBox
+			// or other dialog being displayed, our caller IS that dialog's message
+			// loop function.  When the quit message is posted, that dialog, and
+			// perhaps any others that exist, are closed.  But our main event
+			// loop never receives the quit notification or something?  This is
+			// worth further review in the future, but for now, stick with what
+			// works.  The OS should be able to clean up any open file handles,
+			// allocated memory, and it should also destroy any remaining windows cleanly
+			// for us, much better than we ourselves might be able to do given the wide
+			// variety places this function can be called from:
+			//PostQuitMessage(0);
+			g_script.ExitApp();
 			return 0;
 		}
 		// Otherwise, some window of ours other than our main window was destroyed
-		// (impossible if we're here?)
+		// (perhaps the splash window):
 		// Let DefWindowProc() handle it:
 		break;
 	case WM_CREATE:
@@ -1958,6 +1978,258 @@ ResultType Line::DriveSpaceFree(char *aPath)
 
 
 
+ResultType Line::SoundSetGet(char *aSetting, DWORD aComponentType, int aComponentInstance
+	, DWORD aControlType, UINT aMixerID)
+// If the caller specifies NULL for aSetting, the mode will be "Get".  Otherwise, it will be "Set".
+{
+	#define SOUND_MODE_IS_SET aSetting // Boolean: i.e. if it's not NULL, the mode is "SET".
+	double setting_percent;
+	Var *output_var;
+	if (SOUND_MODE_IS_SET)
+	{
+		output_var = NULL; // To help catch bugs.
+		setting_percent = atof(aSetting);
+		if (setting_percent < -100)
+			setting_percent = -100;
+		else if (setting_percent > 100)
+			setting_percent = 100;
+	}
+	else // The mode is GET.
+	{
+		if (   !(output_var = ResolveVarOfArg(0))   )
+			return FAIL;  // Don't bother setting ErrorLevel if there's a critical error like this.
+		output_var->Assign(); // Init to empty string regardless of whether we succeed here.
+	}
+
+	// Rare, since load-time validation would have caught problems unless the params were variable references.
+	// Text values for ErrorLevels should be kept below 64 characters in length so that the variable doesn't
+	// have to be expanded with a different memory allocation method:
+	if (aControlType == MIXERCONTROL_CONTROLTYPE_INVALID || aComponentType == MIXERLINE_COMPONENTTYPE_DST_UNDEFINED)
+		return g_ErrorLevel->Assign("Invalid Control Type or Component Type");
+	
+	// Open the specified mixer ID:
+	HMIXER hMixer;
+    if (mixerOpen(&hMixer, aMixerID, 0, 0, 0) != MMSYSERR_NOERROR)
+		return g_ErrorLevel->Assign("Can't Open Specified Mixer");
+
+	// Find out how many destinations are available on this mixer (should always be at least one):
+	int dest_count;
+	MIXERCAPS mxcaps;
+	if (mixerGetDevCaps((UINT_PTR)hMixer, &mxcaps, sizeof(mxcaps)) == MMSYSERR_NOERROR)
+		dest_count = mxcaps.cDestinations;
+	else
+		dest_count = 1;  // Assume it has one so that we can try to proceed anyway.
+
+	// Find specified line (aComponentType + aComponentInstance):
+	MIXERLINE ml = {0};
+    ml.cbStruct = sizeof(ml);
+	if (aComponentInstance == 1)  // Just get the first line of this type, the easy way.
+	{
+		ml.dwComponentType = aComponentType;
+		if (mixerGetLineInfo((HMIXEROBJ)hMixer, &ml, MIXER_GETLINEINFOF_COMPONENTTYPE) != MMSYSERR_NOERROR)
+		{
+			mixerClose(hMixer);
+			return g_ErrorLevel->Assign("Mixer Doesn't Support This Component Type");
+		}
+	}
+	else
+	{
+		// Search through each source of each destination, looking for the indicated instance
+		// number for the indicated component type:
+		int source_count;
+		bool found = false;
+		for (int d = 0, found_instance = 0; d < dest_count && !found; ++d)
+		{
+			ml.dwDestination = d;
+			if (mixerGetLineInfo((HMIXEROBJ)hMixer, &ml, MIXER_GETLINEINFOF_DESTINATION) != MMSYSERR_NOERROR)
+				// Keep trying in case the others can be retrieved.
+				continue;
+			source_count = ml.cConnections;  // Make a copy of this value so that the struct can be reused.
+			for (int s = 0; s < source_count && !found; ++s)
+			{
+				ml.dwDestination = d; // Set it again in case it was changed.
+				ml.dwSource = s;
+				if (mixerGetLineInfo((HMIXEROBJ)hMixer, &ml, MIXER_GETLINEINFOF_SOURCE) != MMSYSERR_NOERROR)
+					// Keep trying in case the others can be retrieved.
+					continue;
+				// This line can be used to show a soundcard's component types (match them against mmsystem.h):
+				//MsgBox(ml.dwComponentType);
+				if (ml.dwComponentType == aComponentType)
+				{
+					++found_instance;
+					if (found_instance == aComponentInstance)
+						found = true;
+				}
+			} // inner for()
+		} // outer for()
+		if (!found)
+		{
+			mixerClose(hMixer);
+			return g_ErrorLevel->Assign("Mixer Doesn't Have That Many of That Component Type");
+		}
+	}
+
+	// Find the mixer control (aControlType) for the above component:
+    MIXERCONTROL mc = {0};
+    mc.cbStruct = sizeof(mc);
+    MIXERLINECONTROLS mlc = {0};
+	mlc.cbStruct = sizeof(mlc);
+	mlc.pamxctrl = &mc;
+	mlc.cbmxctrl = sizeof(mc);
+	mlc.dwLineID = ml.dwLineID;
+	mlc.dwControlType = aControlType;
+	mlc.cControls = 1;
+	if (mixerGetLineControls((HMIXEROBJ)hMixer, &mlc, MIXER_GETLINECONTROLSF_ONEBYTYPE) != MMSYSERR_NOERROR)
+	{
+		mixerClose(hMixer);
+		return g_ErrorLevel->Assign("Component Doesn't Support This Control Type");
+	}
+
+	// Does user want to adjust the current setting by a certain amount?:
+	bool adjust_current_setting = aSetting && (*aSetting == '-' || *aSetting == '+');
+
+	// These are used in more than once place, so always initialize them here:
+	MIXERCONTROLDETAILS mcd = {0};
+    MIXERCONTROLDETAILS_UNSIGNED mcdMeter;
+	mcd.cbStruct = sizeof(MIXERCONTROLDETAILS);
+	mcd.dwControlID = mc.dwControlID;
+	mcd.cChannels = 1; // MSDN: "when an application needs to get and set all channels as if they were uniform"
+	mcd.paDetails = &mcdMeter;
+	mcd.cbDetails = sizeof(mcdMeter);
+
+	// Get the current setting of the control, if necessary:
+	if (!SOUND_MODE_IS_SET || adjust_current_setting)
+	{
+		if (mixerGetControlDetails((HMIXEROBJ)hMixer, &mcd, MIXER_GETCONTROLDETAILSF_VALUE) != MMSYSERR_NOERROR)
+		{
+			mixerClose(hMixer);
+			return g_ErrorLevel->Assign("Can't Get Current Setting");
+		}
+	}
+
+	if (SOUND_MODE_IS_SET)
+	{
+		switch (aControlType)
+		{
+		case MIXERCONTROL_CONTROLTYPE_ONOFF:
+		case MIXERCONTROL_CONTROLTYPE_MUTE:
+		case MIXERCONTROL_CONTROLTYPE_MONO:
+		case MIXERCONTROL_CONTROLTYPE_LOUDNESS:
+		case MIXERCONTROL_CONTROLTYPE_STEREOENH:
+		case MIXERCONTROL_CONTROLTYPE_BASS_BOOST:
+			if (adjust_current_setting) // The user wants this toggleable control to be toggled to its opposite state:
+				mcdMeter.dwValue = (mcdMeter.dwValue > mc.Bounds.dwMinimum) ? mc.Bounds.dwMinimum : mc.Bounds.dwMaximum;
+			else // Set the value according to whether the user gave us a setting that is greater than zero:
+				mcdMeter.dwValue = (setting_percent > 0.0) ? mc.Bounds.dwMaximum : mc.Bounds.dwMinimum;
+			break;
+		default: // For all others, assume the control can have more than just ON/OFF as its allowed states.
+		{
+			// Make this an __int64 vs. DWORD to avoid underflow (so that a setting_percent of -100
+			// is supported whenenver the difference between Min and Max is large, such as MAXDWORD):
+			__int64 specified_vol = (__int64)((mc.Bounds.dwMaximum - mc.Bounds.dwMinimum) * (setting_percent / 100.0));
+			if (adjust_current_setting)
+			{
+				// Make it a big int so that overflow/underflow can be detected:
+				__int64 vol_new = mcdMeter.dwValue + specified_vol;
+				if (vol_new < mc.Bounds.dwMinimum) vol_new = mc.Bounds.dwMinimum;
+				else if (vol_new > mc.Bounds.dwMaximum) vol_new = mc.Bounds.dwMaximum;
+				mcdMeter.dwValue = (DWORD)vol_new;
+			}
+			else
+				mcdMeter.dwValue = (DWORD)specified_vol; // Due to the above, it's known to be positive in this case.
+		}
+		} // switch()
+
+		MMRESULT result = mixerSetControlDetails((HMIXEROBJ)hMixer, &mcd, MIXER_GETCONTROLDETAILSF_VALUE);
+		mixerClose(hMixer);
+		return g_ErrorLevel->Assign(result == MMSYSERR_NOERROR ? ERRORLEVEL_NONE : "Can't Change Setting");
+	}
+
+	// Otherwise, the mode is "Get":
+	mixerClose(hMixer);
+	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+
+	switch (aControlType)
+	{
+	case MIXERCONTROL_CONTROLTYPE_ONOFF:
+	case MIXERCONTROL_CONTROLTYPE_MUTE:
+	case MIXERCONTROL_CONTROLTYPE_MONO:
+	case MIXERCONTROL_CONTROLTYPE_LOUDNESS:
+	case MIXERCONTROL_CONTROLTYPE_STEREOENH:
+	case MIXERCONTROL_CONTROLTYPE_BASS_BOOST:
+		return output_var->Assign(mcdMeter.dwValue ? "On" : "Off");
+	default: // For all others, assume the control can have more than just ON/OFF as its allowed states.
+		// The MSDN docs imply that values fetched via the above method do not distinguish between
+		// left and right volume levels, unlike waveOutGetVolume():
+		return output_var->Assign(   ((double)100 * (mcdMeter.dwValue - (DWORD)mc.Bounds.dwMinimum))
+			/ (mc.Bounds.dwMaximum - mc.Bounds.dwMinimum)   );
+	}
+}
+
+
+
+ResultType Line::SoundGetWaveVolume(HWAVEOUT aDeviceID)
+{
+	Var *output_var = ResolveVarOfArg(0);
+	if (!output_var)
+		return FAIL;
+	output_var->Assign(); // Init to empty string regardless of whether we succeed here.
+
+	DWORD current_vol;
+	if (waveOutGetVolume(aDeviceID, &current_vol) != MMSYSERR_NOERROR)
+		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+
+	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+
+	// Return only the left channel volume level (in case right is different, or device is mono vs. stereo).
+	// MSDN: "If a device does not support both left and right volume control, the low-order word
+	// of the specified location contains the mono volume level.
+	return output_var->Assign((double)(LOWORD(current_vol) * 100) / 0xFFFF);
+}
+
+
+
+ResultType Line::SoundSetWaveVolume(char *aVolume, HWAVEOUT aDeviceID)
+{
+	double volume = atof(aVolume);
+	if (volume < -100)
+		volume = -100;
+	else if (volume > 100)
+		volume = 100;
+
+	// Make this an int vs. WORD so that negative values are supported (e.g. adjust volume by -10%).
+	int specified_vol_per_channel = (int)(0xFFFF * (volume / 100));
+	DWORD vol_new;
+
+	if (*aVolume == '-' || *aVolume == '+') // User wants to adjust the current level by a certain amount.
+	{
+		DWORD current_vol;
+		if (waveOutGetVolume(aDeviceID, &current_vol) != MMSYSERR_NOERROR)
+			return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+		// Adjust left & right independently so that we at least attempt to retain the user's
+		// balance setting (if overflow or underflow occurs, the relative balance might be lost):
+		int vol_left = LOWORD(current_vol); // Make them ints so that overflow/underflow can be detected.
+		int vol_right = HIWORD(current_vol);
+		vol_left += specified_vol_per_channel;
+		vol_right += specified_vol_per_channel;
+		// Handle underflow or overflow:
+		if (vol_left < 0) vol_left = 0;
+		else if (vol_left > 0xFFFF) vol_left = 0xFFFF;
+		if (vol_right < 0) vol_right = 0;
+		else if (vol_right > 0xFFFF) vol_right = 0xFFFF;
+		vol_new = MAKELONG((WORD)vol_left, (WORD)vol_right);  // Left is low-order, right is high-order.
+	}
+	else // User wants the volume level set to an absolute level (i.e. ignore its current level).
+		vol_new = MAKELONG((WORD)specified_vol_per_channel, (WORD)specified_vol_per_channel);
+
+	if (waveOutSetVolume(aDeviceID, vol_new) == MMSYSERR_NOERROR)
+		return g_ErrorLevel->Assign(ERRORLEVEL_NONE);
+	else
+		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+}
+
+
+
 ResultType Line::SoundPlay(char *aFilespec, bool aSleepUntilDone)
 {
 	// Adapted from the AutoIt3 source.
@@ -2002,6 +2274,102 @@ ResultType Line::SoundPlay(char *aFilespec, bool aSleepUntilDone)
 		MsgSleep(20);
 	}
 	return OK;
+}
+
+
+
+ResultType Line::URLDownloadToFile(char *aURL, char *aFilespec)
+// This has been adapted from the AutoIt3 source.
+{
+typedef HINTERNET (WINAPI *MyInternetOpen)(LPCTSTR, DWORD, LPCTSTR, LPCTSTR, DWORD dwFlags);
+typedef HINTERNET (WINAPI *MyInternetOpenUrl)(HINTERNET hInternet, LPCTSTR, LPCTSTR, DWORD, DWORD, LPDWORD);
+typedef BOOL (WINAPI *MyInternetCloseHandle)(HINTERNET);
+typedef BOOL (WINAPI *MyInternetReadFile)(HINTERNET, LPVOID, DWORD, LPDWORD);
+
+#ifndef INTERNET_OPEN_TYPE_PRECONFIG_WITH_NO_AUTOPROXY
+	#define INTERNET_OPEN_TYPE_PRECONFIG_WITH_NO_AUTOPROXY 4
+#endif
+
+	HINTERNET				hInet;
+	HINTERNET				hFile;
+	BYTE					bufData[8192];
+	DWORD					dwBytesRead;
+	FILE					*fptr;
+	MyInternetOpen			lpfnInternetOpen;
+	MyInternetOpenUrl		lpfnInternetOpenUrl;
+	MyInternetCloseHandle	lpfnInternetCloseHandle;
+	MyInternetReadFile		lpfnInternetReadFile;
+	HINSTANCE				hinstLib;
+
+	// Check that we have IE3 and access to wininet.dll
+	hinstLib = LoadLibrary("wininet.dll");
+	if (hinstLib == NULL)
+		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+
+	// Get the address of all the functions we require
+ 	lpfnInternetOpen		= (MyInternetOpen)GetProcAddress(hinstLib, "InternetOpenA");
+	lpfnInternetOpenUrl		= (MyInternetOpenUrl)GetProcAddress(hinstLib, "InternetOpenUrlA");
+	lpfnInternetCloseHandle	= (MyInternetCloseHandle)GetProcAddress(hinstLib, "InternetCloseHandle");
+	lpfnInternetReadFile	= (MyInternetReadFile)GetProcAddress(hinstLib, "InternetReadFile");
+
+	// Open the internet session
+	hInet = lpfnInternetOpen(NULL, INTERNET_OPEN_TYPE_PRECONFIG_WITH_NO_AUTOPROXY, NULL, NULL, 0);
+	if (hInet == NULL)
+	{
+		FreeLibrary(hinstLib);					// Free the DLL module.
+		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+	}
+
+	// Open the required URL
+	hFile = lpfnInternetOpenUrl(hInet, aURL, NULL, 0, 0, 0);
+	if (hFile == NULL)
+	{
+		lpfnInternetCloseHandle(hInet);
+		FreeLibrary(hinstLib);					// Free the DLL module.
+		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+	}
+
+	// Open our output file
+	fptr = fopen(aFilespec, "wb");	// Open in binary write/destroy mode
+	if (fptr == NULL)
+	{
+		lpfnInternetCloseHandle(hFile);
+		lpfnInternetCloseHandle(hInet);
+		FreeLibrary(hinstLib);					// Free the DLL module.
+		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+	}
+
+	LONG_OPERATION_INIT_FOR_URL  // Added for AutoHotkey
+
+	// Read the file
+	dwBytesRead = 1;
+	while (dwBytesRead)
+	{
+		if ( lpfnInternetReadFile(hFile, (LPVOID)bufData, bytes_to_read, &dwBytesRead) == FALSE )
+		{
+			lpfnInternetCloseHandle(hFile);
+			lpfnInternetCloseHandle(hInet);
+			FreeLibrary(hinstLib);				// Free the DLL module.
+			fclose(fptr);
+			DeleteFile(aFilespec);				// Output is trashed - delete
+			return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+		}
+
+		LONG_OPERATION_UPDATE // Added for AutoHotkey
+
+		if (dwBytesRead)
+			fwrite(bufData, dwBytesRead, 1, fptr);
+	}
+
+	// Close internet session
+	lpfnInternetCloseHandle(hFile);
+	lpfnInternetCloseHandle(hInet);
+	FreeLibrary(hinstLib);					// Free the DLL module.
+
+	// Close output file
+	fclose(fptr);
+
+	return g_ErrorLevel->Assign(ERRORLEVEL_NONE);  // Indicate success.
 }
 
 
@@ -2326,43 +2694,17 @@ ResultType Line::FileReadLine(char *aFilespec, char *aLineNumber)
 	// to refer to those strings once MsgSleep() has been done, below.  Alternatively,
 	// a copy of such params can be made using our own stack space.
 
-	// If the keyboard or mouse hook is installed, pause periodically during potentially long
-	// operations such as this one, to give the msg pump a chance to process keyboard and
-	// mouse events so that they don't lag.
-	// 10000 causes barely perceptible lag when moving mouse cursor on Athlon XP 3000+,
-	// so 1000 should be good for most CPUs.  Note: Tried PeekMessage(PM_NOREMOVE),
-	// with and without WaitMessage(), but it didn't work.  So it seems necessary
-	// to actually get into the GetMessage() wait-state.  One possibly drawback to this,
-	// though likely extremely rare, is that a hotkey may fire while we're in the middle
-	// of reading a file.  If that hotkey doesn't return in a reasonable amount of time,
-	// the file we're reading will stay open for as long as this subroutine is suspended.
-	// Pretty darn rare, and arguably the correct behavior in any case, so doesn't seem
-	// cause for concern.  UPDATE: It seems best to do MsgSleep() periodically (though less
-	// often) even if the hook isn't installed, so that the program will still be responsive
-	// (e.g. its tray menu and other hotkeys) while conducting a file operation that takes
-	// a very long time:
-	int batch_size, sleep_duration;
-	if (Hotkey::HookIsActive())
-	{
-		batch_size = 1000;
-		sleep_duration = 10;
-	}
-	else
-	{
-		batch_size = 1000; // Lowered this from 10000 to 1000 for slower CPUs.
-		sleep_duration = -1; // Since all we want to do is check messages.
-	}
+	LONG_OPERATION_INIT
 
 	char buf[64 * 1024];
 	for (__int64 i = 0; i < line_number; ++i)
 	{
-		if (i && !(i % batch_size))
-			MsgSleep(sleep_duration); // See above comment. Also, it seems okay to allow new hotkeys during the sleep.
 		if (fgets(buf, sizeof(buf) - 1, fp) == NULL) // end-of-file or error
 		{
 			fclose(fp);
 			return OK;  // Return OK because g_ErrorLevel tells the story.
 		}
+		LONG_OPERATION_UPDATE
 	}
 	fclose(fp);
 
@@ -2426,6 +2768,8 @@ ResultType Line::FileDelete(char *aFilePattern)
 	else // Use current working directory, e.g. if user specified only *.*
 		*file_path = '\0';
 
+	LONG_OPERATION_INIT
+
 	WIN32_FIND_DATA current_file;
 	HANDLE file_search = FindFirstFile(aFilePattern, &current_file);
 	bool file_found = (file_search != INVALID_HANDLE_VALUE);
@@ -2433,6 +2777,7 @@ ResultType Line::FileDelete(char *aFilePattern)
 
 	for (; file_found; file_found = FindNextFile(file_search, &current_file))
 	{
+		LONG_OPERATION_UPDATE
 		if (current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) // skip any matching directories.
 			continue;
 		snprintf(target_filespec, sizeof(target_filespec), "%s%s", file_path, current_file.cFileName);
@@ -2514,17 +2859,8 @@ int Line::FileSetAttrib(char *aAttributes, char *aFilePattern, FileLoopModeType 
 	, bool aDoRecurse, bool aCalledRecursively)
 // Returns the number of files and folders that could not be changed due to an error.
 {
-	// Making this static is not friendly to reentrant calls to this function (i.e. calls maded
-	// as a consequence of the current script subroutine being interrupted by another during
-	// this instance's MsgSleep()).  However, it doesn't seem to be that much of a consequence
-	// since the exact interval period of the MsgSleep()'s isn't that important.  It's also
-	// pretty unlikely that the interrupting subroutine will also just happen to call this
-	// function rather than some other.  On the other hand, we don't do failure_count as a
-	// static because we want its value to be 100% accurate even if reentrancy occurs:
-	static int files_considered;
 	if (!aCalledRecursively)  // i.e. Only need to do this if we're not called by ourself:
 	{
-		files_considered = 0;
 		g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default
 		if (!aFilePattern || !*aFilePattern)
 			return 0;  // Let ErrorLevel indicate an error, since this is probably not what the user intended.
@@ -2566,17 +2902,7 @@ int Line::FileSetAttrib(char *aAttributes, char *aFilePattern, FileLoopModeType 
 		// Since no wildcards, always operate on this single item even if it's a folder.
 		aOperateOnFolders = FILE_LOOP_FILES_AND_FOLDERS;
 
-	int batch_size, sleep_duration;
-	if (Hotkey::HookIsActive())
-	{
-		batch_size = 100; // i.e. try to minimize keyboard & mouse lag by sleeping more often.
-		sleep_duration = 10;
-	}
-	else
-	{
-		batch_size = 100; // Lowered this from 1000 to 100 for slower CPUs.
-		sleep_duration = -1; // Since all we want to do is check messages.
-	}
+	LONG_OPERATION_INIT
 
 	WIN32_FIND_DATA current_file;
 	HANDLE file_search = FindFirstFile(file_pattern, &current_file);
@@ -2586,10 +2912,9 @@ int Line::FileSetAttrib(char *aAttributes, char *aFilePattern, FileLoopModeType 
 	enum attrib_modes {ATTRIB_MODE_NONE, ATTRIB_MODE_ADD, ATTRIB_MODE_REMOVE, ATTRIB_MODE_TOGGLE};
 	attrib_modes mode = ATTRIB_MODE_NONE;
 
-	for (; file_found; file_found = FindNextFile(file_search, &current_file), ++files_considered)
+	for (; file_found; file_found = FindNextFile(file_search, &current_file))
 	{
-		if (files_considered && !(files_considered % batch_size))
-			MsgSleep(sleep_duration); // Allows the program to be responsive even during a very long operation.
+		LONG_OPERATION_UPDATE
 		if (current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
 		{
 			if (!strcmp(current_file.cFileName, "..") || !strcmp(current_file.cFileName, "."))
@@ -2686,10 +3011,9 @@ int Line::FileSetAttrib(char *aAttributes, char *aFilePattern, FileLoopModeType 
 		snprintf(all_file_pattern, sizeof(all_file_pattern), "%s*.*", file_path);
 		file_search = FindFirstFile(all_file_pattern, &current_file);
 		file_found = (file_search != INVALID_HANDLE_VALUE);
-		for (; file_found; file_found = FindNextFile(file_search, &current_file), ++files_considered)
+		for (; file_found; file_found = FindNextFile(file_search, &current_file))
 		{
-			if (files_considered && !(files_considered % batch_size))
-				MsgSleep(sleep_duration); // Allows the program to be responsive even during a very long operation.
+			LONG_OPERATION_UPDATE
 			if (!(current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
 				continue;
 			if (!strcmp(current_file.cFileName, "..") || !strcmp(current_file.cFileName, "."))
@@ -2774,17 +3098,8 @@ int Line::FileSetTime(char *aYYYYMMDD, char *aFilePattern, char aWhichTime
 // Current limitation: It will not recurse into subfolders unless their names also match
 // aFilePattern.
 {
-	// Making this static is not friendly to reentrant calls to this function (i.e. calls maded
-	// as a consequence of the current script subroutine being interrupted by another during
-	// this instance's MsgSleep()).  However, it doesn't seem to be that much of a consequence
-	// since the exact interval period of the MsgSleep()'s isn't that important.  It's also
-	// pretty unlikely that the interrupting subroutine will also just happen to call this
-	// function rather than some other.  On the other hand, we don't do failure_count as a
-	// static because we want its value to be 100% accurate even if reentrancy occurs:
-	static int files_considered;
 	if (!aCalledRecursively)  // i.e. Only need to do this if we're not called by ourself:
 	{
-		files_considered = 0;
 		g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default
 		if (!aFilePattern || !*aFilePattern)
 			return 0;  // Let ErrorLevel indicate an error, since this is probably not what the user intended.
@@ -2840,17 +3155,7 @@ int Line::FileSetTime(char *aYYYYMMDD, char *aFilePattern, char aWhichTime
 		// Since no wildcards, always operate on this single item even if it's a folder.
 		aOperateOnFolders = FILE_LOOP_FILES_AND_FOLDERS;
 
-	int batch_size, sleep_duration;
-	if (Hotkey::HookIsActive())
-	{
-		batch_size = 100; // i.e. try to minimize keyboard & mouse lag by sleeping more often.
-		sleep_duration = 10;
-	}
-	else
-	{
-		batch_size = 100; // Lowered this from 1000 to 100 for slower CPUs.
-		sleep_duration = -1; // Since all we want to do is check messages.
-	}
+	LONG_OPERATION_INIT
 
 	WIN32_FIND_DATA current_file;
 	HANDLE file_search = FindFirstFile(aFilePattern, &current_file);
@@ -2858,10 +3163,9 @@ int Line::FileSetTime(char *aYYYYMMDD, char *aFilePattern, char aWhichTime
 	int failure_count = 0;
 	HANDLE hFile;
 
-	for (; file_found; file_found = FindNextFile(file_search, &current_file), ++files_considered)
+	for (; file_found; file_found = FindNextFile(file_search, &current_file))
 	{
-		if (files_considered && !(files_considered % batch_size))
-			MsgSleep(sleep_duration); // Allows the program to be responsive even during a very long operation.
+		LONG_OPERATION_UPDATE
 		if (current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
 		{
 			if (!strcmp(current_file.cFileName, "..") || !strcmp(current_file.cFileName, "."))
@@ -2912,10 +3216,9 @@ int Line::FileSetTime(char *aYYYYMMDD, char *aFilePattern, char aWhichTime
 		snprintf(all_file_pattern, sizeof(all_file_pattern), "%s*.*", file_path);
 		file_search = FindFirstFile(all_file_pattern, &current_file);
 		file_found = (file_search != INVALID_HANDLE_VALUE);
-		for (; file_found; file_found = FindNextFile(file_search, &current_file), ++files_considered)
+		for (; file_found; file_found = FindNextFile(file_search, &current_file))
 		{
-			if (files_considered && !(files_considered % batch_size))
-				MsgSleep(sleep_duration);
+			LONG_OPERATION_UPDATE
 			if (!(current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
 				continue;
 			if (!strcmp(current_file.cFileName, "..") || !strcmp(current_file.cFileName, "."))
@@ -3272,9 +3575,11 @@ int Line::Util_CopyFile(const char *szInputSource, const char *szInputDest, bool
 
 	// AutoHotkey:
 	int failure_count = 0;
+	LONG_OPERATION_INIT
 
 	while (hSearch != INVALID_HANDLE_VALUE && bLoop == true)
 	{
+		LONG_OPERATION_UPDATE  // AutoHotkey
 		bFound = true;							// Found at least one match
 
 		// Make sure the returned handle is a file and not a directory before we
@@ -3849,6 +4154,8 @@ ArgTypeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_INIREAD:
 		case ACT_REGREAD:
 		case ACT_DRIVESPACEFREE:
+		case ACT_SOUNDGET:
+		case ACT_SOUNDGETWAVEVOLUME:
 		case ACT_FILEREADLINE:
 		case ACT_FILEGETATTRIB:
 		case ACT_FILEGETTIME:

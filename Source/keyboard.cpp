@@ -47,6 +47,10 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 {
 	if (!aKeys || !*aKeys) return;
 
+	// Maybe best to call immediately so that the amount of time during which we haven't been pumping
+	// messsages is more accurate:
+	LONG_OPERATION_INIT
+
 	modLR_type modifiersLR_current = GetModifierLRState(); // Current "logical" modifier state.
 
 	// Make a best guess of what the physical state of the keys is prior to starting,
@@ -123,24 +127,9 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 	vk_type vk = 0;
 	sc_type sc = 0;
 	mod_type modifiers_for_next_key = 0;
-	for (UINT keys_sent = 0; *aKeys; ++aKeys)
+	for (; *aKeys; ++aKeys)
 	{
-		if (keys_sent >= MAX_LUMP_KEYS && g.KeyDelay < 0)
-		{
-			// For safety, in this case only do a check for messages
-			// in case some huge block of text (such as what's on clipboard) is being
-			// sent, during which time the program would otherwise be unresponsive:
-			keys_sent = 0;
-			// Formerly -1, but seems safer to do zero to prevent the keyboard buffer
-			// of other apps from filling up (Sleep(0) should give them a chance 
-			// to process their message queues?)  Also, ignore any hotkeys that are
-			// pressed during a Send operation to reduce the chance of interference,
-			// or keystrokes getting sent to the wrong window.  In addition, the
-			// starting of a new hotkey subroutine might cause the Deref buffer to
-			// be overwritten, which would be bad if the aKeys param's memory is
-			// stored there:
-			DoKeyDelay(0);
-		}
+		LONG_OPERATION_UPDATE_FOR_SENDKEYS
 		// No, it's much better to allow literal spaces even though {SPACE} is also
 		// supported:
 		//if (IS_SPACE_OR_TAB(*aKeys))
@@ -216,13 +205,19 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 			if (vk || sc)
 			{
 				if (repeat_count)
+				{
 					// Note: modifiers_persistent stays in effect (pressed down) even if the key
 					// being sent includes that same modifier.  Surprisingly, this is how AutoIt2
 					// behaves also, which is good.  Example: Send, {AltDown}!f  ; this will cause
 					// Alt to still be down after the command is over, even though F is modified
 					// by Alt.
-					keys_sent += SendKey(vk, sc, modifiers_for_next_key, modifiers_persistent
-						, repeat_count, event_type, aTargetWindow);
+					SendKey(vk, sc, modifiers_for_next_key, modifiers_persistent, repeat_count
+						, event_type, aTargetWindow);
+					// If KeyDelay > 0, the above will have done a qualified sleep (one longer than zero).
+					// So update here and in other places to avoid double-sleep when KeyDelay > 0:
+					#define IF_UPDATE_TIME_OF_LAST_SLEEP if (g.KeyDelay > 0) time_of_last_sleep = GetTickCount();
+					IF_UPDATE_TIME_OF_LAST_SLEEP
+				}
 				modifiers_for_next_key = 0;  // reset after each, and even if no valid vk was found (should be just like AutoIt).
 				aKeys = end_pos;  // In prep for aKeys++ at the bottom of the loop.
 				break;
@@ -233,8 +228,11 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 			if (key_name_length == 1)
 			{
 				if (repeat_count)
-					keys_sent += SendKeySpecial(aKeys[1], modifiers_for_next_key, modifiers_persistent
-						, repeat_count, event_type, aTargetWindow);
+				{
+					SendKeySpecial(aKeys[1], modifiers_for_next_key, modifiers_persistent, repeat_count
+						, event_type, aTargetWindow);
+					IF_UPDATE_TIME_OF_LAST_SLEEP
+				}
 				modifiers_for_next_key = 0;  // reset after each, and even if no valid vk was found (should be just like AutoIt).
 				aKeys = end_pos;  // In prep for aKeys++ at the bottom of the loop.
 				break;
@@ -244,19 +242,23 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 			int special_key = TextToSpecial(aKeys + 1, (UINT)key_text_length, modifiers_persistent);
 			if (special_key)
 				for (UINT i = 0; i < repeat_count; ++i)
+				{
 					// Don't tell it to save & restore modifiers because special keys like this one
 					// should have maximum flexibility (i.e. nothing extra should be done so that the
 					// user can have more control):
 					KeyEvent(special_key > 0 ? KEYDOWN : KEYUP, abs(special_key), 0, aTargetWindow, true);
+					IF_UPDATE_TIME_OF_LAST_SLEEP else LONG_OPERATION_UPDATE_FOR_SENDKEYS // KeyEvent() may have slept.
+				}
 			else // Check if it's "{ASC nnnn}"
 			{
 				// Include the trailing space in "ASC " to increase uniqueness (selectivity).
 				// Also, sending the ASC sequence to window doesn't work, so don't even try:
 				if (key_text_length > 4 && !strnicmp(aKeys + 1, "ASC ", 4) && !aTargetWindow)
 				{
-					keys_sent += SendASC(omit_leading_whitespace(aKeys + 4), aTargetWindow); // aTargetWindow is always NULL, it's just for maintainability.
+					SendASC(omit_leading_whitespace(aKeys + 4), aTargetWindow); // aTargetWindow is always NULL, it's just for maintainability.
 					// Do this only once at the end of the sequence:
 					DoKeyDelay();
+					IF_UPDATE_TIME_OF_LAST_SLEEP
 				}
 			}
 			// If what's between {} is unrecognized, such as {Bogus}, it's safest not to send
@@ -277,9 +279,10 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 			vk = TextToVK(single_char_string, &modifiers_for_next_key, true);
 			sc = 0;
 			if (vk)
-				keys_sent += SendKey(vk, sc, modifiers_for_next_key, modifiers_persistent, 1, KEYDOWNANDUP, aTargetWindow);
+				SendKey(vk, sc, modifiers_for_next_key, modifiers_persistent, 1, KEYDOWNANDUP, aTargetWindow);
 			else // Try to send it by alternate means.
-				keys_sent += SendKeySpecial(*aKeys, modifiers_for_next_key, modifiers_persistent, 1, KEYDOWNANDUP, aTargetWindow);
+				SendKeySpecial(*aKeys, modifiers_for_next_key, modifiers_persistent, 1, KEYDOWNANDUP, aTargetWindow);
+			IF_UPDATE_TIME_OF_LAST_SLEEP
 			modifiers_for_next_key = 0;  // Safest to reset this regardless of whether a key was sent.
 			// break;  Not needed in "default".
 		} // switch()
@@ -339,6 +342,10 @@ int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, mod_type aModifiersPe
 	if (!aVK && !aSC) return 0;
 	if (aRepeatCount <= 0) return aRepeatCount;
 
+	// Maybe best to call immediately so that the amount of time during which we haven't been pumping
+	// messsages is more accurate:
+	LONG_OPERATION_INIT
+
 	// I thought maybe it might be best not to release unwanted modifier keys that are already down
 	// (perhaps via something like "Send, {altdown}{esc}{altup}"), but that harms the case where
 	// modifier keys are down somehow, unintentionally: The send command wouldn't behave as expected.
@@ -354,20 +361,9 @@ int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, mod_type aModifiersPe
 	// UPDATE: Not saving and restoring at all anymore, due to interference (side-effects)
 	// caused by the extra keybd events.
 
-	UINT keys_sent;
-	int i;
-	for (keys_sent = i = 0; i < aRepeatCount; ++i, ++keys_sent)
+	for (int i = 0; i < aRepeatCount; ++i)
 	{
-		if (keys_sent >= MAX_LUMP_KEYS && g.KeyDelay < 0)
-		{
-			// Even though this kind of thing is done in the caller, do it again here
-			// in case aRepeatCount is larger than MAX_LUMP_KEYS (probably very rare).
-			// For safety, in this case only do a check for messages  in case some huge
-			// block of text (such as what's on clipboard) is being sent, during which
-			// time the program would otherwise be unresponsive:
-			keys_sent = 0;
-			DoKeyDelay(0);
-		}
+		LONG_OPERATION_UPDATE_FOR_SENDKEYS
 		// These modifiers above stay in effect for each of these keypresses.
 		// Always on the first iteration, and thereafter only if the send won't be essentially
 		// instantaneous.  The modifiers are checked before every key is sent because
@@ -380,6 +376,7 @@ int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, mod_type aModifiersPe
 		// Also: Seems best to do SetModifierState() even if Keydelay < 0:
 		SetModifierState(aModifiers | aModifiersPersistent, GetModifierLRState());
 		KeyEvent(aEventType, aVK, aSC, aTargetWindow, true);
+		IF_UPDATE_TIME_OF_LAST_SLEEP  // Update this if KeyEvent(), above, did a qualified sleep.
 	}
 
 	// The final iteration by the above loop does its key delay prior to us changing the
@@ -414,6 +411,9 @@ int SendKeySpecial(char aChar, mod_type aModifiers, mod_type aModifiersPersisten
 	// both yield æ.
 	// AutoIt3: Note that the cent and yen symbol are missing and replaced with space - 
 	// this will never be matched as this function will never be called with a space char
+
+	LONG_OPERATION_INIT
+
 	char szSpecials[] = "ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ £ PƒáíóúñÑªº¿¬­½¼¡«»";
 	// simulation using diadic keystroke
 	char diadic[64] =
@@ -478,28 +478,24 @@ int SendKeySpecial(char aChar, mod_type aModifiers, mod_type aModifiersPersisten
 		}
 	}
 
-	UINT keys_sent;
-	int i;
-	for (keys_sent = i = 0; i < aRepeatCount; ++i)
+	for (int i = 0; i < aRepeatCount; ++i)
 	{
-		if (keys_sent >= MAX_LUMP_KEYS && g.KeyDelay < 0) // See notes in SendKey().
-		{
-			keys_sent = 0;
-			DoKeyDelay(0);
-		}
+		LONG_OPERATION_UPDATE_FOR_SENDKEYS
 		if (*ascii) // Method #1
 		{
-			keys_sent += SendASC(ascii, aTargetWindow); // aTargetWindow is always NULL, it's just for maintainability.
+			SendASC(ascii, aTargetWindow); // aTargetWindow is always NULL, it's just for maintainability.
 			DoKeyDelay();
+			IF_UPDATE_TIME_OF_LAST_SLEEP
 		}
 		else // Method #2
 		{
 			if (*ascii_diadic)
-				keys_sent += SendASC(ascii_diadic, aTargetWindow); // aTargetWindow is always NULL, it's just for maintainability.
+				SendASC(ascii_diadic, aTargetWindow); // aTargetWindow is always NULL, it's just for maintainability.
 			else
-				keys_sent += SendChar(diadic[pair_index], aModifiers | aModifiersPersistent, KEYDOWNANDUP, aTargetWindow);
-			keys_sent += SendChar(letter[pair_index], aModifiers | aModifiersPersistent, aEventType, aTargetWindow);
+				SendChar(diadic[pair_index], aModifiers | aModifiersPersistent, KEYDOWNANDUP, aTargetWindow);
+			SendChar(letter[pair_index], aModifiers | aModifiersPersistent, aEventType, aTargetWindow);
 			DoKeyDelay();
+			IF_UPDATE_TIME_OF_LAST_SLEEP
 		}
 	}
 	SetModifierState(aModifiersPersistent, GetModifierLRState()); // See notes in SendKey().
@@ -535,7 +531,7 @@ int SendASC(char *aAscii, HWND aTargetWindow)
 		// side-effects:
 		SetModifierLRStateSpecific(modifiersLR_to_release, GetModifierLRState(), KEYUP);
 
-	int keys_sent = 0;
+	int keys_sent = 0;  // Track this value and return it to the caller.
 
 	if (!(GetModifierState() & MOD_ALT)) // Neither ALT key is down.
 	{

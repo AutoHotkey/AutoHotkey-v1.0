@@ -691,6 +691,21 @@ inline LRESULT AllowIt(HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, sc_typ
 		PostMessage(g_hWnd, AHK_KEYHISTORY, (WPARAM)pKeyHistoryCurr, 0);
 	UpdateKeyState(lParam, sc, key_up, false);
 
+	if (   pEvent->vkCode == 'L' && !key_up && (g_modifiersLR_logical == MOD_LWIN
+		|| g_modifiersLR_logical == MOD_RWIN || g_modifiersLR_logical == (MOD_RWIN | MOD_RWIN))   )
+	{
+		// Since the user has pressed Win-L with *no* other modifier keys held down, and since
+		// this key isn't being suppressed (since we're here in this function), the computer
+		// is about to be locked.  When that happens, the hook is apparently disabled or
+		// deinstalled until the user logs back in.  Because it is disabled, it will not be
+		// notified when the user releases the LWIN or RWIN key, so we should assume that
+		// it's now not in the down position.  This avoids it being thought to be down when the
+		// user logs back in, which might cause hook hotkeys to accidentally fire.
+		g_modifiersLR_logical = g_modifiersLR_physical = 0; // We already know that *only* the WIN key is down.
+		// Indicate that the windows keys and the 'L' key are not down, in preparation for re-logon:
+		g_PhysicalKeyState[pEvent->vkCode] = g_PhysicalKeyState[VK_LWIN] = g_PhysicalKeyState[VK_RWIN] = 0;
+	}
+
 	if (!kvk[(vk_type)pEvent->vkCode].as_modifiersLR)
 		return CallNextHookEx(hhk, code, wParam, lParam);
 

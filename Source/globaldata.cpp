@@ -191,7 +191,7 @@ Action g_act[] =
 	, {"StringTrimLeft", 3, 3, {3, 0}}  // output var, input var, number of chars to trim
 	, {"StringTrimRight", 3, 3, {3, 0}} // same
 	, {"StringLower", 2, 2, NULL} // output var, input var
-	, {"StringUpper", 2, 2, NULL} // output var, input var
+	, {"StringUpper", 2, 3, NULL} // output var, input var, T = Title Case
 	, {"StringLen", 2, 2, NULL} // output var, input var
 	, {"StringGetPos", 3, 4, NULL}  // Output Variable, Input Variable, Search Text, R or Right (from right)
 	, {"StringReplace", 3, 5, NULL} // Output Variable, Input Variable, Search String, Replace String, do-all.
@@ -200,6 +200,8 @@ Action g_act[] =
 	, {"EnvUpdate", 0, 0, NULL}
 
 	, {"Run", 1, 3, NULL}, {"RunWait", 1, 3, NULL}  // TargetFile, Working Dir, WinShow-Mode
+	, {"URLDownloadToFile", 2, 2, NULL} // URL, save-as-filename
+
 	, {"GetKeyState", 2, 3, NULL} // OutputVar, key name, mode (optional) P = Physical, T = Toggle
 	, {"Send", 1, 1, NULL} // But that first param can be a deref that resolves to a blank param
 	// For these, the "control" param can be blank.  The window's first visible control will
@@ -268,7 +270,11 @@ Action g_act[] =
 	, {"GroupClose", 1, 2, NULL}
 
 	, {"DriveSpaceFree", 2, 2, NULL} // Output-var, path (e.g. c:\)
-	, {"SoundSetWaveVolume", 1, 1, {1, 0}} // Volume percent-level (0-100)
+
+	, {"SoundGet", 1, 4, {4, 0}} // OutputVar, ComponentType (default=master), ControlType (default=vol), Mixer/Device Number
+	, {"SoundSet", 1, 4, {1, 4, 0}} // Volume percent-level (0-100), ComponentType, ControlType (default=vol), Mixer/Device Number
+	, {"SoundGetWaveVolume", 1, 2, {2, 0}} // OutputVar, Mixer/Device Number
+	, {"SoundSetWaveVolume", 1, 2, {1, 2, 0}} // Volume percent-level (0-100), Device Number (1 is the first)
 	, {"SoundPlay", 1, 2, NULL} // Filename [, wait]
 
 	, {"FileAppend", 2, 2, NULL} // text, filename

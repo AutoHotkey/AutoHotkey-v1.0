@@ -48,6 +48,33 @@ inline char *strlwr(char *str)
 }
 
 
+
+inline char *StrToTitleCase(char *aStr)
+{
+	if (!aStr) return aStr;
+	char *aStr_orig = aStr;	
+	for (bool convert_next_alpha_char_to_upper = true; *aStr; ++aStr)
+	{
+		if (IsCharAlpha(*aStr)) // Use this to better support chars from non-English languages.
+		{
+			if (convert_next_alpha_char_to_upper)
+			{
+				*aStr = toupper(*aStr);
+				convert_next_alpha_char_to_upper = false;
+			}
+			else
+				*aStr = tolower(*aStr);
+		}
+		else
+			if (isspace(*aStr))
+				convert_next_alpha_char_to_upper = true;
+		// Otherwise, it's a digit, punctuation mark, etc. so nothing needs to be done.
+	}
+	return aStr_orig;
+}
+
+
+
 inline size_t strnlen(char *aBuf, size_t aMax)
 // Returns the length of aBuf or aMax, whichever is least.
 // But it does so efficiently, in case aBuf is huge.

@@ -44,7 +44,7 @@ Script::Script()
 	, mFirstLabel(NULL), mLastLabel(NULL)
 	, mFirstVar(NULL), mLastVar(NULL)
 	, mLineCount(0), mLabelCount(0), mVarCount(0), mGroupCount(0)
-	, mCurrFileNumber(0), mCurrLineNumber(0)
+	, mCurrFileNumber(0), mCurrLineNumber(0), mNoHotkeyLabels(true)
 	, mFileSpec(""), mFileDir(""), mFileName(""), mOurEXE(""), mOurEXEDir(""), mMainWindowTitle("")
 	, mIsReadyToExecute(false)
 	, mIsRestart(false)
@@ -432,6 +432,7 @@ void Script::ExitApp(char *aBuf, int aExitCode)
 LineNumberType Script::LoadFromFile()
 // Returns the number of non-comment lines that were loaded, or LOADING_FAILED on error.
 {
+	mNoHotkeyLabels = true;  // Indicate that there are no hotkey labels, since we're (re)loading the entire file.
 	mIsReadyToExecute = false;
 	if (!mFileSpec || !*mFileSpec) return LOADING_FAILED;
 
@@ -704,8 +705,12 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			// So if Exit is encountered before the first hotkey, don't add the return?
 			// Even though wrong, the return is harmless because it's never executed?  Except when
 			// falling through from above into a hotkey (which probably isn't very valid anyway)?
-			if (mFirstLabel == NULL)
+			// Update: Below must check if there are any true hotkey labels, not just regular labels.
+			// Otherwise, a normal (non-hotkey) label in the autoexecute section would count and
+			// thus the RETURN would never be added here, even though it should be:
+			if (mNoHotkeyLabels)
 			{
+				mNoHotkeyLabels = false;
 				if (AddLine(ACT_RETURN) != OK)
 					return CloseAndReturn(fp, script_buf, FAIL);
 				mCurrLine = NULL;  // To signify that we're in transition, trying to load a new one.
@@ -2086,6 +2091,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	// Do any post-add validation & handling for specific action types.
 	///////////////////////////////////////////////////////////////////
 	int value;    // For temp use during validation.
+	double value_float;
 	FILETIME ft;  // same.
 	switch(aActionType)
 	{
@@ -2172,11 +2178,25 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			return ScriptError(ERR_REG_KEY, LINE_RAW_ARG1);
 		break;
 
+	case ACT_SOUNDGET:
+	case ACT_SOUNDSET:
+		if (aActionType == ACT_SOUNDSET && line->mArgc > 0 && !line->ArgHasDeref(1))
+		{
+			value_float = atof(LINE_RAW_ARG1);
+			if (value_float < -100 || value_float > 100)
+				return ScriptError(ERR_PERCENT, LINE_RAW_ARG1);
+		}
+		if (line->mArgc > 1 && !line->ArgHasDeref(2) && *LINE_RAW_ARG2 && !line->SoundConvertComponentType(LINE_RAW_ARG2))
+			return ScriptError("Parameter #2 specifies an invalid component type.", LINE_RAW_ARG2);
+		if (line->mArgc > 2 && !line->ArgHasDeref(3) && *LINE_RAW_ARG3 && !line->SoundConvertControlType(LINE_RAW_ARG3))
+			return ScriptError("Parameter #3 specifies an invalid control type.", LINE_RAW_ARG3);
+		break;
+
 	case ACT_SOUNDSETWAVEVOLUME:
 		if (line->mArgc > 0 && !line->ArgHasDeref(1))
 		{
-			value = atoi(LINE_RAW_ARG1);
-			if (value < 0 || value > 100)
+			value_float = atof(LINE_RAW_ARG1);
+			if (value_float < -100 || value_float > 100)
 				return ScriptError(ERR_PERCENT, LINE_RAW_ARG1);
 		}
 		break;
@@ -2720,6 +2740,7 @@ ResultType Script::AddVar(char *aVarName, size_t aVarNameLength)
 	else if (!stricmp(new_name, "a_TimeSinceThisHotkey")) var_type = VAR_TIMESINCETHISHOTKEY;
 	else if (!stricmp(new_name, "a_TimeSincePriorHotkey")) var_type = VAR_TIMESINCEPRIORHOTKEY;
 	else if (!stricmp(new_name, "a_TickCount")) var_type = VAR_TICKCOUNT;
+	else if (!stricmp(new_name, "a_TimeIdle")) var_type = VAR_TIMEIDLE;
 	else if (!stricmp(new_name, "a_Space")) var_type = VAR_SPACE;
 	else if (!stricmp(new_name, "a_Tab")) var_type = VAR_TAB;
 	else var_type = VAR_NORMAL;
@@ -3242,8 +3263,20 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 			// of what it would be if it were allowed to max the CPU.  This 50% reduction seems a fair
 			// trade since most people would not want the the keyboard and mouse to lag at all while
 			// scripts are running at "infinite" speed.  In any case, this is only done if the hook(s)
-			// are installed.  Non-hook scripts are allowed the leeway to not sleep at all:
-			if (Hotkey::HookIsActive() && time_since_last_sleep > 5)
+			// are installed.  Non-hook scripts are allowed the leeway to not sleep at all.
+			// Update: Using 15 vs. 5 now, because 5 might be resulting in a lot more sleeps that
+			// are needed, such as in the case where our calls to GetTickCount() somehow get synchronized
+			// with the system timer, making our retrieved value out-of-date almost the instant
+			// it is retrieved (i.e. if the tick-count is about to be incremented by the system the
+			// instant after we call GetTickCount().  Not sure how that happens, but see notes in
+			// LONG_OPERATION_INIT for details, where it really did happen repeatedly in testing).
+			// UPDATE: The mouse cursor lag is just a little bit too noticeable when using a value of
+			// 15, so reverting back to a value below 10.  8 might be a little better than 5 in rare
+			// cases (I know the timer granularity is 10 on NT/2K/XP and 98SE/ME, but not 95, but still.)
+			// The synchornization issue observed in LONG_OPERATION_INIT has never been observed to
+			// affect this method anyway.  Until it is observed to be a problem, it seems best to minimize
+			// lag as a top priority:
+			if (Hotkey::HookIsActive() && time_since_last_sleep > 8)
 			{
 				// Try to reduce keyboard & mouse lag by forcing the process into the GetMessage()
 				// state regardless of how high the value of BatchLines is.  The GetMessage() state
@@ -3525,21 +3558,22 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 			// no matching Gosub" error, because RETURN effectively exits the
 			// script, going back into the message event loop in WinMain()?
 			return OK;
+
 		case ACT_REPEAT:
 		case ACT_LOOP:
 		{
 			AttributeType attr = line->mAttribute;
-			HKEY reg_root_key = NULL;
+			HKEY root_key_type = NULL; // This will hold the type of root key, independent of whether it is local or remote.
 			if (attr == ATTR_LOOP_REG)
-				reg_root_key = RegConvertRootKey(LINE_ARG1);
+				root_key_type = RegConvertRootKey(LINE_ARG1);
 			else if (attr == ATTR_LOOP_UNKNOWN || attr == ATTR_NONE)
+			{
 				// Since it couldn't be determined at load-time (probably due to derefs),
 				// determine whether it's a file-loop, registry-loop or a normal/counter loop.
 				// But don't change the value of line->mAttribute because that's our
 				// indicator of whether this needs to be evaluated every time for
 				// this particular loop (since the nature of the loop can change if the
 				// contents of the variables dereferenced for this line change during runtime):
-			{
 				switch (line->mArgc)
 				{
 				case 0:
@@ -3553,13 +3587,13 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 						attr = ATTR_LOOP_NORMAL;
 					else
 					{
-						reg_root_key = RegConvertRootKey(LINE_ARG1);
-						attr = reg_root_key ? ATTR_LOOP_REG : ATTR_LOOP_FILE;
+						root_key_type = RegConvertRootKey(LINE_ARG1);
+						attr = root_key_type ? ATTR_LOOP_REG : ATTR_LOOP_FILE;
 					}
 					break;
 				default: // 2 or more args.
-					reg_root_key = RegConvertRootKey(LINE_ARG1);
-					attr = reg_root_key ? ATTR_LOOP_REG : ATTR_LOOP_FILE;
+					root_key_type = RegConvertRootKey(LINE_ARG1);
+					attr = root_key_type ? ATTR_LOOP_REG : ATTR_LOOP_FILE;
 				}
 			}
 
@@ -3592,11 +3626,34 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 			bool continue_main_loop = false; // Init prior to below call.
 			jump_to_line = NULL; // Init prior to below call.
 			if (attr == ATTR_LOOP_REG)
-				result = line->PerformLoopReg(aModifiersLR, aCurrentFile, continue_main_loop, jump_to_line
-					, file_loop_mode, recurse_subfolders, reg_root_key, LINE_ARG2);
+			{
+				// This isn't the most efficient way to do things (e.g. the repeated calls to
+				// RegConvertRootKey()), but it the simplest way for now.  Optimization can
+				// be done at a later time:
+				bool is_remote_registry;
+				// This will open the key if it's remote:
+				HKEY root_key = RegConvertRootKey(LINE_ARG1, &is_remote_registry);
+				if (root_key)
+				{
+					// root_key_type needs to be passed in order to support GetLoopRegKey():
+					result = line->PerformLoopReg(aModifiersLR, aCurrentFile, continue_main_loop, jump_to_line
+						, file_loop_mode, recurse_subfolders, root_key_type, root_key, LINE_ARG2);
+					if (is_remote_registry)
+						RegCloseKey(root_key);
+				}
+				else
+					// The open of a remote key failed (we know it's remote otherwise it should have
+					// failed earlier rather than here).  So just set result to OK since no ErrorLevel
+					// setting is supported with loops (since that seems like it would be an overuse
+					// of ErrorLevel, perhaps changing its value too often when the user would want
+					// it saved.  But in any case, changing that now might break existing scripts.
+					result = OK;
+
+			}
 			else // All other loops types are handled this way:
 				result = line->PerformLoop(aModifiersLR, aCurrentFile, aCurrentRegItem, continue_main_loop, jump_to_line
 					, attr, file_loop_mode, recurse_subfolders, LINE_ARG1, iteration_limit, is_infinite);
+
 			if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT)
 				return result;
 			// else result can be LOOP_BREAK or OK, but not LOOP_CONTINUE.
@@ -3916,14 +3973,14 @@ inline ResultType Line::EvaluateCondition()
 			// Like AutoIt3, the empty string is considered to be alphabetic, which is only slightly debatable.
 			if_condition = true;
 			for (cp = ARG1; *cp; ++cp)
-				if (!IsCharAlpha(*cp)) // Use this for to better support chars from non-English languages.
+				if (!IsCharAlpha(*cp)) // Use this to better support chars from non-English languages.
 					if_condition = false;
 			break;
 		case VAR_TYPE_ALNUM:
 			// Like AutoIt3, the empty string is considered to be alphabetic, which is only slightly debatable.
 			if_condition = true;
 			for (cp = ARG1; *cp; ++cp)
-				if (!IsCharAlphaNumeric(*cp)) // Use this for to better support chars from non-English languages.
+				if (!IsCharAlphaNumeric(*cp)) // Use this to better support chars from non-English languages.
 					if_condition = false;
 			break;
 		case VAR_TYPE_SPACE:
@@ -4128,9 +4185,12 @@ ResultType Line::PerformLoop(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrent
 
 ResultType Line::PerformLoopReg(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrentFile
 	, bool &aContinueMainLoop, Line *&aJumpToLine, FileLoopModeType aFileLoopMode
-	, bool aRecurseSubfolders, HKEY aRootKey, char *aRegSubkey)
+	, bool aRecurseSubfolders, HKEY aRootKeyType, HKEY aRootKey, char *aRegSubkey)
+// aRootKeyType is the type of root key, independent of whether it's local or remote.
+// This is used because there's no easy way to determine which root key a remote HKEY
+// refers to.
 {
-	RegItemStruct reg_item(aRootKey, aRegSubkey);
+	RegItemStruct reg_item(aRootKeyType, aRootKey, aRegSubkey);
 	HKEY hRegKey;
 
 	// Open the specified subkey.  Be sure to only open with the minimum permission level so that
@@ -4227,7 +4287,7 @@ ResultType Line::PerformLoopReg(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurr
 				snprintf(subkey_full_path, sizeof(subkey_full_path), "%s\\%s", reg_item.subkey, reg_item.name);
 				// This section is very similar to the one in PerformLoop(), so see it for comments:
 				result = PerformLoopReg(aModifiersLR, apCurrentFile, aContinueMainLoop, aJumpToLine
-					, aFileLoopMode, aRecurseSubfolders, aRootKey, subkey_full_path);
+					, aFileLoopMode, aRecurseSubfolders, aRootKeyType, aRootKey, subkey_full_path);
 				if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT || result == LOOP_BREAK)
 				{
 					RegCloseKey(hRegKey);
@@ -4269,6 +4329,12 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	size_t source_length; // For String commands.
 	pure_numeric_type var_is_pure_numeric, value_is_pure_numeric; // For math operations.
 	vk_type vk; // For mouse commands and GetKeyState.
+	int instance_number;  // For sound commands.
+	DWORD component_type; // For sound commands.
+	__int64 device_id;  // For sound commands.  __int64 helps avoid compiler warning for some conversions.
+	bool is_remote_registry; // For Registry commands.
+	HKEY root_key; // For Registry commands.
+	ResultType result;  // General purpose.
 	HANDLE running_process; // For RUNWAIT
 	DWORD exit_code; // For RUNWAIT
 
@@ -4314,20 +4380,29 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_REGREAD:
 		if (mArgc < 2 && aCurrentRegItem) // Uses the registry loop's current item.
 			// If aCurrentRegItem->name specifies a subkey rather than a value name, do this anyway
-			// so that it will set ErrorLevel to ERROR and set the output variable to be blank:
+			// so that it will set ErrorLevel to ERROR and set the output variable to be blank.
+			// Also, do not use RegCloseKey() on this, even if it's a remote key, since our caller handles that:
 			return RegRead(aCurrentRegItem->root_key, aCurrentRegItem->subkey, aCurrentRegItem->name);
-		else if (mArgc < 5) // The new 4-parameter mode.
-			return RegRead(RegConvertRootKey(ARG2), ARG3, ARG4);
+		// Otherwise:
+		if (mArgc < 5) // The new 4-parameter mode.
+			result = RegRead(root_key = RegConvertRootKey(ARG2, &is_remote_registry), ARG3, ARG4);
 		else // In 5-parameter mode, Arg2 is unused; it's only for backward compatibility with AutoIt2.
-			return RegRead(RegConvertRootKey(ARG3), ARG4, ARG5);
+			result = RegRead(root_key = RegConvertRootKey(ARG3, &is_remote_registry), ARG4, ARG5);
+		if (is_remote_registry && root_key) // Never try to close local root keys, which the OS keeps always-open.
+			RegCloseKey(root_key);
+		return result;
 	case ACT_REGWRITE:
 		if (mArgc < 2 && aCurrentRegItem) // Uses the registry loop's current item.
 			// If aCurrentRegItem->name specifies a subkey rather than a value name, do this anyway
 			// so that it will set ErrorLevel to ERROR.  An error will also be indicated if
 			// aCurrentRegItem->type is an unsupported type:
 			return RegWrite(aCurrentRegItem->type, aCurrentRegItem->root_key, aCurrentRegItem->subkey, aCurrentRegItem->name, ARG1);
-		else
-			return RegWrite(RegConvertValueType(ARG1), RegConvertRootKey(ARG2), ARG3, ARG4, ARG5);
+		// Otherwise:
+		result = RegWrite(RegConvertValueType(ARG1), root_key = RegConvertRootKey(ARG2, &is_remote_registry)
+			, ARG3, ARG4, ARG5);
+		if (is_remote_registry && root_key) // Never try to close local root keys, which the OS keeps always-open.
+			RegCloseKey(root_key);
+		return result;
 	case ACT_REGDELETE:
 		if (mArgc < 1 && aCurrentRegItem) // Uses the registry loop's current item.
 		{
@@ -4342,8 +4417,11 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			else
 				return RegDelete(aCurrentRegItem->root_key, aCurrentRegItem->subkey, aCurrentRegItem->name);
 		}
-		else
-			return RegDelete(RegConvertRootKey(ARG1), ARG2, ARG3);
+		// Otherwise:
+		result = RegDelete(root_key = RegConvertRootKey(ARG1, &is_remote_registry), ARG2, ARG3);
+		if (is_remote_registry && root_key) // Never try to close local root keys, which the OS always keeps open.
+			RegCloseKey(root_key);
+		return result;
 
 	case ACT_SHUTDOWN:
 		return Util_Shutdown(atoi(ARG1)) ? OK : FAIL;
@@ -4385,6 +4463,10 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
 		return OK;
 	}
+
+	case ACT_URLDOWNLOADTOFILE:
+		return URLDownloadToFile(TWO_ARGS);
+
 	case ACT_RUN:
 		return g_script.ActionExec(ARG1, NULL, ARG2, true, ARG3);  // Be sure to pass NULL for 2nd param.
 	case ACT_RUNWAIT:
@@ -4705,7 +4787,9 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			return FAIL;
 		// Copy the input variable's text directly into the output variable:
 		strlcpy(output_var->Contents(), ARG2, space_needed);
-		if (mActionType == ACT_STRINGLOWER)
+		if (*ARG3 && toupper(*ARG3) == 'T' && !*(ARG3 + 1)) // Convert to title case
+			StrToTitleCase(output_var->Contents());
+		else if (mActionType == ACT_STRINGLOWER)
 			strlwr(output_var->Contents());
 		else
 			strupr(output_var->Contents());
@@ -4893,24 +4977,42 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		return PerformAssign();  // It will report any errors for us.
 	case ACT_DRIVESPACEFREE:
 		return DriveSpaceFree(ARG2);
+
+	case ACT_SOUNDGET:
+		device_id = *ARG4 ? atoi(ARG4) - 1 : 0;
+		if (device_id < 0)
+			device_id = 0;
+		instance_number = 1;  // Set default.
+		component_type = *ARG2 ? SoundConvertComponentType(ARG2, &instance_number) : MIXERLINE_COMPONENTTYPE_DST_SPEAKERS;
+		return SoundSetGet(NULL, component_type, instance_number  // Which instance of this component, 1 = first
+			, *ARG3 ? SoundConvertControlType(ARG3) : MIXERCONTROL_CONTROLTYPE_VOLUME  // Default
+			, (UINT)device_id);
+
+	case ACT_SOUNDSET:
+		device_id = *ARG4 ? atoi(ARG4) - 1 : 0; // For the command syntax, 1 is the first device, not 0.
+		if (device_id < 0)
+			device_id = 0;
+		instance_number = 1;  // Set default.
+		component_type = *ARG2 ? SoundConvertComponentType(ARG2, &instance_number) : MIXERLINE_COMPONENTTYPE_DST_SPEAKERS;
+		return SoundSetGet(ARG1, component_type, instance_number  // Which instance of this component, 1 = first
+			, *ARG3 ? SoundConvertControlType(ARG3) : MIXERCONTROL_CONTROLTYPE_VOLUME  // Default
+			, (UINT)device_id);
+
+	case ACT_SOUNDGETWAVEVOLUME:
+		device_id = *ARG2 ? atoi(ARG2) - 1 : 0;
+		if (device_id < 0)
+			device_id = 0;
+		return SoundGetWaveVolume((HWAVEOUT)device_id);
+
 	case ACT_SOUNDSETWAVEVOLUME:
-	{
-		// Adapted from the AutoIt3 source.
-		int volume = atoi(ARG1);
-		if (volume < 0 || volume > 100)
-		{
-			g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
-			return OK;  // Let ErrorLevel tell the story.
-		}
-		WORD wVolume = 0xFFFF * volume / 100;
-		if (waveOutSetVolume(0, MAKELONG(wVolume, wVolume)) == MMSYSERR_NOERROR)
-			g_ErrorLevel->Assign(ERRORLEVEL_NONE);
-		else
-			g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
-		return OK;
-	}
+		device_id = *ARG2 ? atoi(ARG2) - 1 : 0;
+		if (device_id < 0)
+			device_id = 0;
+		return SoundSetWaveVolume(ARG1, (HWAVEOUT)device_id);
+
 	case ACT_SOUNDPLAY:
 		return SoundPlay(ARG1, *ARG2 && !stricmp(ARG2, "wait") || !stricmp(ARG2, "1"));
+
 	case ACT_FILEAPPEND:
 		return this->FileAppend(ARG2, ARG1);  // To avoid ambiguity in case there's another FileAppend().
 	case ACT_FILEREADLINE:
