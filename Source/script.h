@@ -401,8 +401,8 @@ enum JoyControls {JOYCTRL_INVALID, JOYCTRL_XPOS, JOYCTRL_YPOS, JOYCTRL_ZPOS
 
 enum WinGetCmds {WINGET_CMD_INVALID, WINGET_CMD_ID, WINGET_CMD_IDLAST, WINGET_CMD_COUNT, WINGET_CMD_LIST};
 
-enum TransformCmds {TRANS_CMD_INVALID, TRANS_CMD_ASC, TRANS_CMD_CHR, TRANS_CMD_HTML, TRANS_CMD_MOD
-	, TRANS_CMD_POW, TRANS_CMD_EXP, TRANS_CMD_SQRT, TRANS_CMD_LOG, TRANS_CMD_LN
+enum TransformCmds {TRANS_CMD_INVALID, TRANS_CMD_ASC, TRANS_CMD_CHR, TRANS_CMD_DEREF, TRANS_CMD_HTML
+	, TRANS_CMD_MOD, TRANS_CMD_POW, TRANS_CMD_EXP, TRANS_CMD_SQRT, TRANS_CMD_LOG, TRANS_CMD_LN
 	, TRANS_CMD_ROUND, TRANS_CMD_CEIL, TRANS_CMD_FLOOR, TRANS_CMD_ABS
 	, TRANS_CMD_SIN, TRANS_CMD_COS, TRANS_CMD_TAN, TRANS_CMD_ASIN, TRANS_CMD_ACOS, TRANS_CMD_ATAN
 	, TRANS_CMD_BITAND, TRANS_CMD_BITOR, TRANS_CMD_BITXOR, TRANS_CMD_BITNOT
@@ -692,6 +692,7 @@ public:
 	ResultType ExpandArgs();
 	VarSizeType GetExpandedArgSize(bool aCalcDerefBufSize);
 	char *ExpandArg(char *aBuf, int aArgIndex);
+	ResultType Deref(Var *aOutputVar, char *aBuf);
 
 	bool FileIsFilteredOut(WIN32_FIND_DATA &aCurrentFile, FileLoopModeType aFileLoopMode, char *aFilePath);
 
@@ -1048,6 +1049,7 @@ public:
 		if (!aBuf || !*aBuf) return TRANS_CMD_INVALID;
 		if (!stricmp(aBuf, "Asc")) return TRANS_CMD_ASC;
 		if (!stricmp(aBuf, "Chr")) return TRANS_CMD_CHR;
+		if (!stricmp(aBuf, "Deref")) return TRANS_CMD_DEREF;
 		if (!stricmp(aBuf, "HTML")) return TRANS_CMD_HTML;
 		if (!stricmp(aBuf, "Mod")) return TRANS_CMD_MOD;
 		if (!stricmp(aBuf, "Pow")) return TRANS_CMD_POW;
@@ -1538,6 +1540,7 @@ public:
 	char *mLoopField;  // The field of the current string-parsing loop.
 	__int64 mLoopIteration; // Signed, since script/ITOA64 aren't designed to handle unsigned.
 	DWORD mThisHotkeyStartTime, mPriorHotkeyStartTime;  // Tickcount timestamp of when its subroutine began.
+	char mEndChar;  // The ending character pressed to trigger the most recent non-auto-replace hotstring.
 	modLR_type mThisHotkeyModifiersLR;
 	char *mFileSpec; // Will hold the full filespec, for convenience.
 	char *mFileDir;  // Will hold the directory containing the script file.
@@ -2048,6 +2051,15 @@ public:
 		return (VarSizeType)strlen(aBuf);
 	}
 
+	VarSizeType GetEndChar(char *aBuf = NULL)
+	{
+		if (!aBuf)
+			return 1;
+		*aBuf = mEndChar;
+		*(aBuf + 1) = '\0';
+		return 1;
+	}
+
 	// Interdependency problems require these to be defined elsewhere:
 	VarSizeType GetIconHidden(char *aBuf = NULL);
 	VarSizeType GetIconTip(char *aBuf = NULL);
@@ -2080,7 +2092,7 @@ public:
 		if (!aBuf)
 			return MAX_NUMBER_LENGTH;
 		*aBuf = '\0';  // Set default.
-		if (g_os.IsWin2000orLater())
+		if (g_os.IsWin2000orLater()) // Checked in case the function is present but "not implemented".
 		{
 			// Must fetch it at runtime, otherwise the program can't even be launched on Win9x/NT:
 			typedef BOOL (WINAPI *MyGetLastInputInfoType)(PLASTINPUTINFO);
@@ -2119,6 +2131,7 @@ public:
 
 	VarSizeType GetTimeIdlePhysical(char *aBuf = NULL);
 	VarSizeType ScriptGetCursor(char *aBuf = NULL);
+	VarSizeType ScriptGetCaret(VarTypeType aVarType, char *aBuf = NULL);
 	VarSizeType GetIP(int aAdapterIndex, char *aBuf = NULL);
 
 	VarSizeType GetSpace(VarTypeType aType, char *aBuf = NULL)

@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.16"
+#define NAME_VERSION "1.0.17"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -177,11 +177,6 @@ typedef UCHAR HookType;
 // keyboard and mouse lag when the hooks are installed:
 #define LONG_OPERATION_INIT MSG msg; DWORD tick_now;
 
-// This is the same as the above except it also handled bytes_to_read for URLDownloadToFile():
-#define LONG_OPERATION_INIT_FOR_URL \
-	MSG msg; DWORD tick_now;\
-	DWORD bytes_to_read = Hotkey::HookIsActive() ? 1024 : sizeof(bufData);
-
 // MsgSleep() is used rather than SLEEP_WITHOUT_INTERRUPTION to allow other hotkeys to
 // launch and interrupt (suspend) the operation.  It seems best to allow that, since
 // the user may want to press some fast window activation hotkeys, for example,
@@ -243,9 +238,10 @@ struct Action
 enum TitleMatchModes {MATCHMODE_INVALID = FAIL, FIND_IN_LEADING_PART, FIND_ANYWHERE, FIND_EXACT, FIND_FAST, FIND_SLOW};
 
 // Bitwise flags for the UCHAR CoordMode:
-#define COORD_MODE_PIXEL 0x1
-#define COORD_MODE_MOUSE 0x2
-#define COORD_MODE_TOOLTIP 0x4
+#define COORD_MODE_PIXEL   0x01
+#define COORD_MODE_MOUSE   0x02
+#define COORD_MODE_TOOLTIP 0x04
+#define COORD_MODE_CARET   0x08
 
 // Each instance of this struct generally corresponds to a quasi-thread.  The function that creates
 // a new thread typically saves the old thread's struct values on its stack so that they can later

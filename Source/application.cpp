@@ -344,7 +344,9 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 				if (*hs->mReplacement) // Fully handled by the above.
 					continue;
 				// Otherwise, continue on and let a new thread be created to handle this hotstring.
-				// Any required backspacing will be done shortly when the hotstring subroutine is launched.
+				// But first, since this isn't an auto-replace hotstring, set this value to support
+				// the built-in variable A_EndChar:
+				g_script.mEndChar = (char)LOWORD(msg.lParam);
 			}
 			if (msg.message == AHK_USER_MENU) // user-defined menu item
 			{

@@ -134,6 +134,22 @@ struct key_type
 	bool sc_takes_precedence; // used only by the scan code array: this scan code should take precedence over vk.
 };
 
+#define RESET_KEYTYPE_ATTRIB(item) \
+{\
+	item.nModifierVK = 0;\
+	item.nModifierSC = 0;\
+	item.used_as_prefix = false;\
+	item.used_as_suffix = false;\
+	item.no_suppress = false;\
+	item.sc_takes_precedence = false;\
+}
+
+#define RESET_KEYTYPE_STATE(item) \
+{\
+	item.is_down = item.it_put_alt_down = item.it_put_shift_down = item.down_performed_action = false;\
+	item.was_just_used = 0;\
+}
+
 
 
 // Since index zero is a placeholder for the invalid virtual key or scan code, add one to each MAX value
@@ -214,7 +230,8 @@ HookType RemoveMouseHook();
 HookType GetActiveHooks();
 HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, HookType aWhichHookAlways
 , bool aWarnIfHooksAlreadyInstalled, bool aActivateOnlySuspendHotkeys = false);
-void ResetHook(HookType aWhichHook = (HOOK_KEYBD | HOOK_MOUSE));
+void ResetHook(bool aAllModifiersUp = false, HookType aWhichHook = (HOOK_KEYBD | HOOK_MOUSE)
+	, bool aResetKVKandKSC = false);
 
 char *GetHookStatus(char *aBuf, size_t aBufSize);
 

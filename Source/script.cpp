@@ -42,7 +42,7 @@ Script::Script()
 	: mFirstLine(NULL), mLastLine(NULL), mCurrLine(NULL)
 	, mLoopFile(NULL), mLoopRegItem(NULL), mLoopReadFile(NULL), mLoopField(NULL), mLoopIteration(0)
 	, mThisHotkeyName(""), mPriorHotkeyName(""), mThisHotkeyStartTime(0), mPriorHotkeyStartTime(0)
-	, mThisHotkeyModifiersLR(0)
+	, mEndChar(0), mThisHotkeyModifiersLR(0)
 	, mOnExitLabel(NULL), mExitReason(EXIT_NONE)
 	, mFirstLabel(NULL), mLastLabel(NULL)
 	, mFirstTimer(NULL), mLastTimer(NULL), mTimerEnabledCount(0), mTimerCount(0)
@@ -2640,11 +2640,11 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				for (++j; new_arg[i].text[j] && new_arg[i].text[j] != g_DerefChar; ++j);
 				if (!new_arg[i].text[j])
 					return ScriptError("This parameter contains a variable name"
-						" that is missing its ending dereference symbol.", new_arg[i].text);
+						" that is missing its ending percent sign.", new_arg[i].text);
 				// Otherwise: Match was found; this should be the deref's close-symbol.
 				if (aArgMap && aArgMap[i] && aArgMap[i][j])  // But it's mapped as literal g_DerefChar.
 					return ScriptError("This parmeter contains a variable name with"
-						" an escaped dereference symbol, which is not allowed.", new_arg[i].text);
+						" an escaped percent sign, which is not allowed.", new_arg[i].text);
 				deref_string_length = new_arg[i].text + j - deref[deref_count].marker + 1;
 				if (deref_string_length == 2) // The percent signs were empty, e.g. %%
 					return ScriptError("This parmeter contains an empty variable reference (%%).", new_arg[i].text);
@@ -2896,8 +2896,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 
 	case ACT_COORDMODE:
 		if (*LINE_RAW_ARG1 && !line->ArgHasDeref(1) && stricmp(LINE_RAW_ARG1, "Pixel")
-			&& stricmp(LINE_RAW_ARG1, "Mouse") && stricmp(LINE_RAW_ARG1, "ToolTip"))
-			return ScriptError("Parameter #1 must be a variable reference or the word PIXEL, MOUSE, or TOOLTIP."
+			&& stricmp(LINE_RAW_ARG1, "Mouse") && stricmp(LINE_RAW_ARG1, "ToolTip") && stricmp(LINE_RAW_ARG1, "Caret"))
+			return ScriptError("Parameter #1 must be a variable reference or the word PIXEL, MOUSE, TOOLTIP, or CARET."
 				, LINE_RAW_ARG1);
 		if (*LINE_RAW_ARG2 && !line->ArgHasDeref(2) && stricmp(LINE_RAW_ARG2, "Screen")
 			&& stricmp(LINE_RAW_ARG2, "Relative"))
@@ -3148,6 +3148,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				// The following are not listed above because no validation of Paramter #3 is needed:
 				// TRANS_CMD_ASC
 				// TRANS_CMD_HTML
+				// TRANS_CMD_DEREF
 				}
 			}
 
@@ -3155,6 +3156,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			{
 			case TRANS_CMD_ASC:
 			case TRANS_CMD_CHR:
+			case TRANS_CMD_DEREF:
 			case TRANS_CMD_HTML:
 			case TRANS_CMD_EXP:
 			case TRANS_CMD_SQRT:
@@ -3211,6 +3213,13 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					if (!IsPureNumeric(LINE_RAW_ARG3, false, false) || value < 0 || value > 255)
 						return ScriptError("Parameter #3 must be between 0 and 255 inclusive.", LINE_RAW_ARG3);
 				}
+				break;
+			case TRANS_CMD_DEREF:
+				// Seems best to issue a warning for this, since it's hard to imagine anyone ever intentionally
+				// doing it under any circumstances:
+				if (!line->ArgHasDeref(3))
+					return ScriptError("Because parameter #3 contains no variable reference(s), "
+						"this line serves no purpose.", LINE_RAW_ARG3);
 				break;
 			case TRANS_CMD_MOD:
 				if (!line->ArgHasDeref(4) && !ATOI64(LINE_RAW_ARG4)) // Parameter is omitted or something that resolves to zero.
@@ -3832,6 +3841,8 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, Var *aVarPrev)
 	else if (!stricmp(new_name, "A_OSversion")) var_type = VAR_OSVERSION;
 	else if (!stricmp(new_name, "A_IsAdmin")) var_type = VAR_ISADMIN;
 	else if (!stricmp(new_name, "A_Cursor")) var_type = VAR_CURSOR;
+	else if (!stricmp(new_name, "A_CaretX")) var_type = VAR_CARETX;
+	else if (!stricmp(new_name, "A_CaretY")) var_type = VAR_CARETY;
 	else if (!stricmp(new_name, "A_IPAddress1")) var_type = VAR_IPADDRESS1;
 	else if (!stricmp(new_name, "A_IPAddress2")) var_type = VAR_IPADDRESS2;
 	else if (!stricmp(new_name, "A_IPAddress3")) var_type = VAR_IPADDRESS3;
@@ -3865,6 +3876,7 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, Var *aVarPrev)
 	else if (!stricmp(new_name, "A_PriorHotkey")) var_type = VAR_PRIORHOTKEY;
 	else if (!stricmp(new_name, "A_TimeSinceThisHotkey")) var_type = VAR_TIMESINCETHISHOTKEY;
 	else if (!stricmp(new_name, "A_TimeSincePriorHotkey")) var_type = VAR_TIMESINCEPRIORHOTKEY;
+	else if (!stricmp(new_name, "A_EndChar")) var_type = VAR_ENDCHAR;
 
 	else if (!stricmp(new_name, "A_TimeIdle")) var_type = VAR_TIMEIDLE;
 	else if (!stricmp(new_name, "A_TimeIdlePhysical")) var_type = VAR_TIMEIDLEPHYSICAL;
@@ -5598,8 +5610,11 @@ ResultType Line::PerformLoopReg(WIN32_FIND_DATA *apCurrentFile, LoopReadFileStru
 			if (aRecurseSubfolders) // Now recurse into the subkey, regardless of whether it was processed above.
 			{
 				// Build the new subkey name using the an area of memory on the stack that we won't need
-				// after the recusive call returns to us:
-				snprintf(subkey_full_path, sizeof(subkey_full_path), "%s\\%s", reg_item.subkey, reg_item.name);
+				// after the recusive call returns to us.  Omit the leading backslash if subkey is blank,
+				// which supports recursively searching the contents of keys contained within a root key
+				// (fixed for v1.0.17):
+				snprintf(subkey_full_path, sizeof(subkey_full_path), "%s%s%s", reg_item.subkey
+					, *reg_item.subkey ? "\\" : "", reg_item.name);
 				// This section is very similar to the one in PerformLoop(), so see it for comments:
 				result = PerformLoopReg(apCurrentFile, apCurrentReadFile, aCurrentField, aContinueMainLoop
 					, aJumpToLine, aFileLoopMode, aRecurseSubfolders, aRootKeyType, aRootKey, subkey_full_path);
@@ -7249,6 +7264,8 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			if (screen_mode) g.CoordMode |= COORD_MODE_MOUSE; else g.CoordMode &= ~COORD_MODE_MOUSE;
 		else if (!stricmp(ARG1, "ToolTip"))
 			if (screen_mode) g.CoordMode |= COORD_MODE_TOOLTIP; else g.CoordMode &= ~COORD_MODE_TOOLTIP;
+		else if (!stricmp(ARG1, "Caret"))
+			if (screen_mode) g.CoordMode |= COORD_MODE_CARET; else g.CoordMode &= ~COORD_MODE_CARET;
 		return OK;
 	}
 
@@ -7442,8 +7459,8 @@ ResultType Line::ExpandArgs()
 		return FAIL;  // It will have already displayed the error.
 
 	if (space_needed > DEREF_BUF_MAX)
-		return LineError("Dereferencing the variables in this line's parameters"
-			" would exceed the allowed size of the temp buffer." ERR_ABORT);
+		// Dereferencing the variables in this line's parameters would exceed the allowed size of the temp buffer:
+		return LineError("Variables too large" ERR_ABORT); // Short msg since so rare.
 
 	// Only allocate the buf at the last possible moment,
 	// when it's sure the buffer will be used (improves performance when only a short
@@ -7749,6 +7766,113 @@ inline char *Line::ExpandArg(char *aBuf, int aArgIndex)
 
 
 
+ResultType Line::Deref(Var *aOutputVar, char *aBuf)
+// Similar to ExpandArg(), except it parses and expands all variable references contained in aBuf.
+{
+	// This transient variable is used resolving environment variables that don't already exist
+	// in the script's variable list (due to the fact that they aren't directly referenced elsewhere
+	// in the script):
+	char var_name[MAX_VAR_NAME_LENGTH + 1] = "";
+	Var temp_var(var_name);
+	Var *var;
+	VarSizeType expanded_length;
+	size_t var_name_length;
+	char *cp, *cp1, *dest;
+
+	// Do two passes:
+	// #1: Calculate the space needed so that aOutputVar can be given more capacity if necessary.
+	// #2: Expand the contents of aBuf into aOutputVar.
+
+	for (int which_pass = 0; which_pass < 2; ++which_pass)
+	{
+		if (which_pass) // Start of second pass.
+		{
+			// Set up aOutputVar, enlarging it if necessary.  If it is of type VAR_CLIPBOARD,
+			// this call will set up the clipboard for writing:
+			if (aOutputVar->Assign(NULL, expanded_length) != OK)
+				return FAIL;
+			dest = aOutputVar->Contents();  // Init, and for performance.
+		}
+		else // First pass.
+			expanded_length = 0; // Init prior to accumulation.
+
+		for (cp = aBuf; ; ++cp)  // Increment to skip over the deref/escape just found by the inner for().
+		{
+			// Find the next escape char or deref symbol:
+			for (; *cp && *cp != g_EscapeChar && *cp != g_DerefChar; ++cp)
+			{
+				if (which_pass) // 2nd pass
+					*dest++ = *cp;  // Copy all non-variable-ref characters literally.
+				else // just accumulate the length
+					++expanded_length;
+			}
+			if (!*cp) // End of string while scanning/copying.  The current pass is now complete.
+				break;
+			if (*cp == g_EscapeChar)
+			{
+				if (which_pass) // 2nd pass
+				{
+					cp1 = cp + 1;
+					switch (*cp1) // See ConvertEscapeSequences() for more details.
+					{
+						// Only lowercase is recognized for these:
+						case 'a': *dest = '\a'; break;  // alert (bell) character
+						case 'b': *dest = '\b'; break;  // backspace
+						case 'f': *dest = '\f'; break;  // formfeed
+						case 'n': *dest = '\n'; break;  // newline
+						case 'r': *dest = '\r'; break;  // carriage return
+						case 't': *dest = '\t'; break;  // horizontal tab
+						case 'v': *dest = '\v'; break;  // vertical tab
+						default:  *dest = *cp1; // Other characters are resolved just as they are.
+					}
+					++dest;
+				}
+				else
+					++expanded_length;
+				// Increment cp here and it will be incremented again by the outer loop, i.e. +2.
+				// In other words, skip over the escape character, treating it and its target character
+				// as a single character.
+				++cp;
+				continue;
+			}
+			// Otherwise, it's a dereference symbol, so calculate the size of that variable's contents
+			// and add that to expanded_length (or copy the contents into aOutputVar if this is the
+			// second pass).
+			// Find the reference's ending symbol (don't bother with catching escaped deref chars here
+			// -- e.g. %MyVar`% --  since it seems too troublesome to justify given how extremely rarely
+			// it would be an issue):
+			for (cp1 = cp + 1; *cp1 && *cp1 != g_DerefChar; ++cp1);
+			if (!*cp1)    // Since end of string was found, this deref is not correctly terminated.
+				continue; // For consistency, omit it entirely.
+			var_name_length = cp1 - cp - 1;
+			if (var_name_length && var_name_length <= MAX_VAR_NAME_LENGTH)
+			{
+				strlcpy(var_name, cp + 1, var_name_length + 1);  // +1 to convert var_name_length to size.
+				if (   !(var = g_script.FindVar(var_name, var_name_length))   )
+					// Variable doesn't exist, but since it might be an environment variable never referenced
+					// directly elsewhere in the script, do special handling:
+					var = &temp_var;  // Relies on the fact that var_temp.mName *is* the var_name pointer.
+				// Don't allow the output variable to be read into itself this way because its contents
+				if (var != aOutputVar)
+				{
+					if (which_pass) // 2nd pass
+						dest += var->Get(dest);
+					else // just accumulate the length
+						expanded_length += var->Get(); // Add in the length of the variable's contents.
+				}
+			}
+			// else since the variable name between the deref symbols is blank or too long: for consistency in behavior,
+			// it seems best to omit the dereference entirely (don't put it into aOutputVar).
+			cp = cp1; // For the next loop iteration, continue at the char after this reference's final deref symbol.
+		} // for()
+	} // for() (first and second passes)
+
+	*dest = '\0';  // Terminate the output variable.
+	return aOutputVar->Close();  // In case it's the clipboard.
+}
+
+
+
 VarSizeType Script::GetIconHidden(char *aBuf)
 {
 	if (aBuf)
@@ -7862,6 +7986,61 @@ VarSizeType Script::ScriptGetCursor(char *aBuf)
 			break;
 
 	strlcpy(aBuf, cursor_name[a], SMALL_STRING_LENGTH + 1);  // If a is out-of-bounds, "Unknown" will be used.
+	return (VarSizeType)strlen(aBuf);
+}
+
+
+
+VarSizeType Script::ScriptGetCaret(VarTypeType aVarType, char *aBuf)
+{
+	if (!aBuf)
+		return MAX_NUMBER_LENGTH;
+
+	// These static variables are used to keep the X and Y coordinates in sync with each other, as a snapshot
+	// of where the caret was at one precise instant in time.  This is because the X and Y vars are resolved
+	// separately by the script, and due to split second timing, they might otherwise not be accurate with
+	// respect to each other.  This method also helps performance since it avoids unnecessary calls to
+	// ATTACH_THREAD_INPUT.
+	static HWND sForeWinPrev = NULL;
+	static DWORD sTimestamp = GetTickCount();
+	static POINT sPoint;
+
+	// I believe only the foreground window can have a caret position due to relationship with focused control.
+	HWND target_window = GetForegroundWindow(); // Variable must be named target_window for ATTACH_THREAD_INPUT.
+	DWORD now_tick = GetTickCount();
+
+	if (target_window != sForeWinPrev || now_tick - sTimestamp > 5) // Different window or too much time has passed.
+	{
+		// Update static variables for the next caller:
+		sForeWinPrev = target_window;
+		sTimestamp = now_tick;
+		if (!target_window) // No window is in the foreground.
+		{
+			*aBuf = '\0';
+			return 0;
+		}
+		// Otherwise:
+		ATTACH_THREAD_INPUT  // au3: Doesn't work without attaching.
+		BOOL result = GetCaretPos(&sPoint);
+		HWND focused_control = GetFocus();  // Also relies on threads being attached.
+		DETACH_THREAD_INPUT
+		if (!result)
+		{
+			*aBuf = '\0';
+			return 0;
+		}
+		ClientToScreen(focused_control ? focused_control : target_window, &sPoint);
+		if (!(g.CoordMode & COORD_MODE_TOOLTIP))  // Using the default, which is coordinates relative to window.
+		{
+			// Convert screen coordinates to window coordinates:
+			RECT rect;
+			GetWindowRect(target_window, &rect);
+			sPoint.x -= rect.left;
+			sPoint.y -= rect.top;
+		}
+	}
+	// Now the above has ensured that sPoint contains coordinates that are up-to-date enough to be used.
+	_itoa(aVarType == VAR_CARETX ? sPoint.x : sPoint.y, aBuf, 10);  // Always output as decimal vs. hex in this case.
 	return (VarSizeType)strlen(aBuf);
 }
 
@@ -8050,6 +8229,7 @@ char *Line::ToText(char *aBuf, size_t aBufSize, DWORD aElapsed)
 void Line::ToggleSuspendState()
 {
 	g_IsSuspended = !g_IsSuspended;
+	Hotstring::SuspendAll(g_IsSuspended);  // Must do this prior to AllActivate() to avoid incorrect removal of hook.
 	if (g_IsSuspended)
 		Hotkey::AllDeactivate(true); // This will also reset the RunAgainAfterFinished flags for all those deactivated.
 		// It seems unnecessary, and possibly undesirable, to purge any pending hotkey msgs from the msg queue.
@@ -8061,7 +8241,6 @@ void Line::ToggleSuspendState()
 		// from registered to hook due to an interdependency with a newly added hotkey.  There are comments
 		// in AllActivate() that describe these interdependencies:
 		Hotkey::AllActivate();
-	Hotstring::SuspendAll(g_IsSuspended);
 	g_script.UpdateTrayIcon();
 	CheckMenuItem(GetMenu(g_hWnd), ID_FILE_SUSPEND, g_IsSuspended ? MF_CHECKED : MF_UNCHECKED);
 }
@@ -8128,21 +8307,14 @@ ResultType Line::BlockInput(bool aEnable)
 // Adapted from the AutoIt3 source.
 // Always returns OK for caller convenience.
 {
-	// Must be running 2000/ win98 for this function to be successful
-	// We must dynamically load the function to retain compatibility with Win95
-    // Get a handle to the DLL module that contains BlockInput
-	HINSTANCE hinstLib = LoadLibrary("user32.dll");
-    // If the handle is valid, try to get the function address.
-	if (hinstLib != NULL)
-	{
-		typedef void (CALLBACK *BlockInput)(BOOL);
-		BlockInput lpfnDLLProc = (BlockInput)GetProcAddress(hinstLib, "BlockInput");
-		if (lpfnDLLProc != NULL)
-			(*lpfnDLLProc)(aEnable ? TRUE : FALSE);
-		// Free the DLL module.
-		FreeLibrary(hinstLib);
-	}
-	return OK;
+	// Must be running Win98/2000+ for this function to be successful.
+	// We must dynamically load the function to retain compatibility with Win95 (program won't launch
+	// at all otherwise).
+	typedef void (CALLBACK *BlockInput)(BOOL);
+	static BlockInput lpfnDLLProc = (BlockInput)GetProcAddress(GetModuleHandle("User32.dll"), "BlockInput");
+	if (lpfnDLLProc)
+		(*lpfnDLLProc)(aEnable ? TRUE : FALSE);
+	return OK;  // By design, it never returns FAIL.
 }
 
 

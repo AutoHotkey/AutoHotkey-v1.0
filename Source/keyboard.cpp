@@ -1582,7 +1582,7 @@ vk_type TextToVK(char *aText, mod_type *pModifiers, bool aExcludeThoseHandledByS
 	{
 		SHORT mod_plus_vk = VkKeyScan(*aText);
 		char keyscan_modifiers = HIBYTE(mod_plus_vk);
-		if (keyscan_modifiers == -1) // No translation could be made.
+		if (keyscan_modifiers == -1 && LOBYTE(mod_plus_vk) == -1) // No translation could be made.
 			return 0;
 
 		// The win docs for VkKeyScan() are a bit confusing, referring to flag "bits" when it should really

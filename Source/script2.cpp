@@ -624,7 +624,14 @@ ResultType Line::ToolTip(char *aText, char *aX, char *aY, char *aID)
 
 	// Destroy windows except the first (for performance) so that resources/mem are conserved.
 	// The first window will be hidden by the TTM_UPDATETIPTEXT message if aText is blank.
-	if (window_index > 0 && !*aText)
+	// UPDATE: For simplicity, destroy even the first in this way, because otherwise a script
+	// that turns off a non-existent first tooltip window then later turns it on will cause
+	// the window to appear in an incorrect position.  Example:
+	// ToolTip
+	// ToolTip, text, 388, 24
+	// Sleep, 1000
+	// ToolTip, text, 388, 24
+	if (!*aText)
 	{
 		if (tip_hwnd && IsWindow(tip_hwnd))
 			DestroyWindow(tip_hwnd);
@@ -838,6 +845,9 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 			*(buf + 1) = '\0';
 			return output_var->Assign(buf);
 		}
+
+	case TRANS_CMD_DEREF:
+		return Deref(output_var, aValue1);
 
 	case TRANS_CMD_HTML:
 	{
@@ -1209,31 +1219,50 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 		}
 		// Copy aMatchList into the match buffer:
 		char *source, *dest;
-		for (source = aMatchList, dest = g_input.match[g_input.MatchCount] = g_input.MatchBuf; *source; ++source, ++dest)
+		for (source = aMatchList, dest = g_input.match[g_input.MatchCount] = g_input.MatchBuf
+			; *source; ++source)
 		{
-			if (*source == ',')  // Each comma becomes the terminator of the previous key phrase.
+			if (*source != ',') // Not a comma, so just copy it over.
 			{
-				*dest = '\0';
-				if (*g_input.match[g_input.MatchCount]) // i.e. omit empty strings from the match list.
-					++g_input.MatchCount;
-				if (*(source + 1)) // There is a next element.
+				*dest++ = *source;
+				continue;
+			}
+			// Otherwise: it's a comma, which becomes the terminator of the previous key phrase unless
+			// it's a double comma, in which case it's considered to be part of the previous phrase
+			// rather than the next.
+			if (*(source + 1) == ',') // double comma
+			{
+				*dest++ = *source;
+				++source;  // Omit the second comma of the pair, i.e. each pair becomes a single literal comma.
+				continue;
+			}
+			// Otherwise, this is a delimiting comma.
+			*dest = '\0';
+			// If the previous item is blank -- which I think can only happen now if the MatchList
+			// begins with an orphaned comma (since two adjacent commas resolve to one literal comma)
+			// -- don't add it to the match list:
+			if (*g_input.match[g_input.MatchCount])
+			{
+				++g_input.MatchCount;
+				g_input.match[g_input.MatchCount] = ++dest;
+				*dest = '\0';  // Init to prevent crash on ophaned comma such as "btw,otoh,"
+			}
+			if (*(source + 1)) // There is a next element.
+			{
+				if (g_input.MatchCount >= g_input.MatchCountMax) // Rarely needed, so just realloc() to expand.
 				{
-					if (g_input.MatchCount >= g_input.MatchCountMax) // Rarely needed, so just realloc() to expand.
-					{
-						// Expand the array by one block:
-						if (   !(realloc_temp = (char **)realloc(g_input.match  // Must use a temp variable.
-							, (g_input.MatchCountMax + INPUT_ARRAY_BLOCK_SIZE) * sizeof(char *)))   )
-							return LineError("Out of mem #3");  // Short msg. since so rare.
-						g_input.match = realloc_temp;
-						g_input.MatchCountMax += INPUT_ARRAY_BLOCK_SIZE;
-					}
-					g_input.match[g_input.MatchCount] = dest + 1;
+					// Expand the array by one block:
+					if (   !(realloc_temp = (char **)realloc(g_input.match  // Must use a temp variable.
+						, (g_input.MatchCountMax + INPUT_ARRAY_BLOCK_SIZE) * sizeof(char *)))   )
+						return LineError("Out of mem #3");  // Short msg. since so rare.
+					g_input.match = realloc_temp;
+					g_input.MatchCountMax += INPUT_ARRAY_BLOCK_SIZE;
 				}
 			}
-			else // Not a comma, so just copy it over.
-				*dest = *source;
-		}
+		} // for()
 		*dest = '\0';  // Terminate the last item.
+		// This check is necessary for only a single isolated case: When the match list
+		// consists of nothing except a single comma.  See above comment for details:
 		if (*g_input.match[g_input.MatchCount]) // i.e. omit empty strings from the match list.
 			++g_input.MatchCount;
 	}
@@ -4612,11 +4641,17 @@ void Line::MouseMove(int aX, int aY, int aSpeed, bool aMoveRelative)
 		aX += ptCur.x;
 		aY += ptCur.y;
 	}
-	else
+	else if (!(g.CoordMode & COORD_MODE_MOUSE))  // Moving mouse relative to the active window (rather than screen).
 	{
-		if (!(g.CoordMode & COORD_MODE_MOUSE) && GetWindowRect(GetForegroundWindow(), &rect))
+		HWND fore = GetForegroundWindow();
+		// Revert to screen coordinates if the foreground window is minimized.  Although it might be
+		// impossible for a visible window to be both foreground and minmized, it seems that hidden
+		// windows -- such as the script's own main window when activated for the purpose of showing
+		// a popup menu -- can be foreground while simulateously being minimized.  This fixes an
+		// issue where the mouse will move to the upper-left corner of the screen rather than the
+		// intended coordinates (v1.0.17):
+		if (fore && !IsIconic(fore) && GetWindowRect(fore, &rect))
 		{
-			// Relative vs. screen coords.
 			aX += rect.left;
 			aY += rect.top;
 		}
@@ -6186,57 +6221,49 @@ ResultType Line::SoundPlay(char *aFilespec, bool aSleepUntilDone)
 ResultType Line::URLDownloadToFile(char *aURL, char *aFilespec)
 // This has been adapted from the AutoIt3 source.
 {
-typedef HINTERNET (WINAPI *MyInternetOpen)(LPCTSTR, DWORD, LPCTSTR, LPCTSTR, DWORD dwFlags);
-typedef HINTERNET (WINAPI *MyInternetOpenUrl)(HINTERNET hInternet, LPCTSTR, LPCTSTR, DWORD, DWORD, LPDWORD);
-typedef BOOL (WINAPI *MyInternetCloseHandle)(HINTERNET);
-typedef BOOL (WINAPI *MyInternetReadFile)(HINTERNET, LPVOID, DWORD, LPDWORD);
-
-#ifndef INTERNET_OPEN_TYPE_PRECONFIG_WITH_NO_AUTOPROXY
-	#define INTERNET_OPEN_TYPE_PRECONFIG_WITH_NO_AUTOPROXY 4
-#endif
-
-	HINTERNET				hInet;
-	HINTERNET				hFile;
-	BYTE					bufData[8192];
-	DWORD					dwBytesRead;
-	FILE					*fptr;
-	MyInternetOpen			lpfnInternetOpen;
-	MyInternetOpenUrl		lpfnInternetOpenUrl;
-	MyInternetCloseHandle	lpfnInternetCloseHandle;
-	MyInternetReadFile		lpfnInternetReadFile;
-	HINSTANCE				hinstLib;
-
 	// Check that we have IE3 and access to wininet.dll
-	hinstLib = LoadLibrary("wininet.dll");
-	if (hinstLib == NULL)
+	HINSTANCE hinstLib = LoadLibrary("wininet.dll");
+	if (!hinstLib)
 		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
 
-	// Get the address of all the functions we require
- 	lpfnInternetOpen		= (MyInternetOpen)GetProcAddress(hinstLib, "InternetOpenA");
-	lpfnInternetOpenUrl		= (MyInternetOpenUrl)GetProcAddress(hinstLib, "InternetOpenUrlA");
-	lpfnInternetCloseHandle	= (MyInternetCloseHandle)GetProcAddress(hinstLib, "InternetCloseHandle");
-	lpfnInternetReadFile	= (MyInternetReadFile)GetProcAddress(hinstLib, "InternetReadFile");
+	typedef HINTERNET (WINAPI *MyInternetOpen)(LPCTSTR, DWORD, LPCTSTR, LPCTSTR, DWORD dwFlags);
+	typedef HINTERNET (WINAPI *MyInternetOpenUrl)(HINTERNET hInternet, LPCTSTR, LPCTSTR, DWORD, DWORD, LPDWORD);
+	typedef BOOL (WINAPI *MyInternetCloseHandle)(HINTERNET);
+	typedef BOOL (WINAPI *MyInternetReadFileEx)(HINTERNET, LPINTERNET_BUFFERS, DWORD, DWORD);
+
+	#ifndef INTERNET_OPEN_TYPE_PRECONFIG_WITH_NO_AUTOPROXY
+		#define INTERNET_OPEN_TYPE_PRECONFIG_WITH_NO_AUTOPROXY 4
+	#endif
+
+	// Get the address of all the functions we require.  It's done this way in case the system
+	// lacks MSIE v3.0+, in which case the app would probably refuse to launch at all:
+ 	MyInternetOpen lpfnInternetOpen = (MyInternetOpen)GetProcAddress(hinstLib, "InternetOpenA");
+	MyInternetOpenUrl lpfnInternetOpenUrl = (MyInternetOpenUrl)GetProcAddress(hinstLib, "InternetOpenUrlA");
+	MyInternetCloseHandle lpfnInternetCloseHandle = (MyInternetCloseHandle)GetProcAddress(hinstLib, "InternetCloseHandle");
+	MyInternetReadFileEx lpfnInternetReadFileEx = (MyInternetReadFileEx)GetProcAddress(hinstLib, "InternetReadFileExA");
+	if (!lpfnInternetOpen || !lpfnInternetOpenUrl || !lpfnInternetCloseHandle || !lpfnInternetReadFileEx)
+		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
 
 	// Open the internet session
-	hInet = lpfnInternetOpen(NULL, INTERNET_OPEN_TYPE_PRECONFIG_WITH_NO_AUTOPROXY, NULL, NULL, 0);
-	if (hInet == NULL)
+	HINTERNET hInet = lpfnInternetOpen(NULL, INTERNET_OPEN_TYPE_PRECONFIG_WITH_NO_AUTOPROXY, NULL, NULL, 0);
+	if (!hInet)
 	{
-		FreeLibrary(hinstLib);					// Free the DLL module.
+		FreeLibrary(hinstLib);
 		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
 	}
 
 	// Open the required URL
-	hFile = lpfnInternetOpenUrl(hInet, aURL, NULL, 0, 0, 0);
-	if (hFile == NULL)
+	HINTERNET hFile = lpfnInternetOpenUrl(hInet, aURL, NULL, 0, 0, 0);
+	if (!hFile)
 	{
 		lpfnInternetCloseHandle(hInet);
-		FreeLibrary(hinstLib);					// Free the DLL module.
+		FreeLibrary(hinstLib);
 		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
 	}
 
 	// Open our output file
-	fptr = fopen(aFilespec, "wb");	// Open in binary write/destroy mode
-	if (fptr == NULL)
+	FILE *fptr = fopen(aFilespec, "wb");	// Open in binary write/destroy mode
+	if (!fptr)
 	{
 		lpfnInternetCloseHandle(hFile);
 		lpfnInternetCloseHandle(hInet);
@@ -6244,37 +6271,43 @@ typedef BOOL (WINAPI *MyInternetReadFile)(HINTERNET, LPVOID, DWORD, LPDWORD);
 		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
 	}
 
-	LONG_OPERATION_INIT_FOR_URL  // Added for AutoHotkey
+	BYTE bufData[1024 * 8];
+	INTERNET_BUFFERS buffers = {0};
+	buffers.dwStructSize = sizeof(INTERNET_BUFFERS);
+	buffers.lpvBuffer = bufData;
+	buffers.dwBufferLength = sizeof(bufData);
 
-	// Read the file
-	dwBytesRead = 1;
-	while (dwBytesRead)
+	LONG_OPERATION_INIT
+
+	// Read the file.  I don't think synchronous transfers typically generate the pseudo-error
+	// ERROR_IO_PENDING, so that is not checked here.  That's probably just for async transfers.
+	// IRF_NO_WAIT is used to avoid requiring the call to block until the buffer is full.  By
+	// having it return the moment there is any data in the buffer, the program is made more
+	// responsive, especially when the download is very slow and/or one of the hooks is installed:
+	BOOL result;
+	while (result = lpfnInternetReadFileEx(hFile, &buffers, IRF_NO_WAIT, NULL)) // Assign
 	{
-		if ( lpfnInternetReadFile(hFile, (LPVOID)bufData, bytes_to_read, &dwBytesRead) == FALSE )
-		{
-			lpfnInternetCloseHandle(hFile);
-			lpfnInternetCloseHandle(hInet);
-			FreeLibrary(hinstLib);				// Free the DLL module.
-			fclose(fptr);
-			DeleteFile(aFilespec);				// Output is trashed - delete
-			return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
-		}
-
-		LONG_OPERATION_UPDATE // Added for AutoHotkey
-
-		if (dwBytesRead)
-			fwrite(bufData, dwBytesRead, 1, fptr);
+		if (!buffers.dwBufferLength) // Transfer is complete.
+			break;
+		LONG_OPERATION_UPDATE  // Done in between the net-read and the file-write to improve avg. responsiveness.
+		fwrite(bufData, buffers.dwBufferLength, 1, fptr);
+		buffers.dwBufferLength = sizeof(bufData);  // Reset buffer capacity for next iteration.
 	}
 
-	// Close internet session
+	// Close internet session:
 	lpfnInternetCloseHandle(hFile);
 	lpfnInternetCloseHandle(hInet);
-	FreeLibrary(hinstLib);					// Free the DLL module.
-
-	// Close output file
+	FreeLibrary(hinstLib); // Only after the above.
+	// Close output file:
 	fclose(fptr);
 
-	return g_ErrorLevel->Assign(ERRORLEVEL_NONE);  // Indicate success.
+	if (result)
+		return g_ErrorLevel->Assign(ERRORLEVEL_NONE);  // Indicate success.
+	else // An error occurred during the transfer.
+	{
+		DeleteFile(aFilespec);  // delete damaged/incomplete file
+		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+	}
 }
 
 
@@ -6808,6 +6841,8 @@ ResultType Line::FileRecycle(char *aFilePattern)
 ResultType Line::FileRecycleEmpty(char *aDriveLetter)
 // Adapted from the AutoIt3 source.
 {
+	// Not using GetModuleHandle() because there is doubt that SHELL32 (unlike USER32/KERNEL32), is
+	// always automatically present in every process (e.g. if shell is something other than Explorer):
 	HINSTANCE hinstLib = LoadLibrary("shell32.dll");
 	if (!hinstLib)
 		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
@@ -6815,10 +6850,17 @@ ResultType Line::FileRecycleEmpty(char *aDriveLetter)
 	typedef HRESULT (WINAPI *MySHEmptyRecycleBin)(HWND, LPCTSTR, DWORD);
  	MySHEmptyRecycleBin lpfnEmpty = (MySHEmptyRecycleBin)GetProcAddress(hinstLib, "SHEmptyRecycleBinA");
 	if (!lpfnEmpty)
+	{
+		FreeLibrary(hinstLib);
 		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+	}
 	const char *szPath = *aDriveLetter ? aDriveLetter : NULL;
 	if (lpfnEmpty(NULL, szPath, SHERB_NOCONFIRMATION | SHERB_NOPROGRESSUI | SHERB_NOSOUND) != S_OK)
+	{
+		FreeLibrary(hinstLib);
 		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+	}
+	FreeLibrary(hinstLib);
 	return g_ErrorLevel->Assign(ERRORLEVEL_NONE);
 }
 

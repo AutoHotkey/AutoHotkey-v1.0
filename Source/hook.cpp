@@ -21,8 +21,7 @@ GNU General Public License for more details.
 #include "util.h" // for snprintfcat()
 #include "window.h" // for MsgBox()
 
-// Declare static variables (global to only this file/module, i.e. no
-// external linkage):
+// Declare static variables (global to only this file/module, i.e. no external linkage):
 
 // Whether to disguise the next up-event for lwin/rwin to suppress Start Menu.
 // These are made global, rather than static inside the hook function, so that
@@ -33,9 +32,10 @@ static bool disguise_next_rwin_up = false;
 static bool disguise_next_lalt_up = false;
 static bool disguise_next_ralt_up = false;
 static bool alt_tab_menu_is_visible = false;
+static vk_type vk_to_ignore_next_time_down = 0;
 
 #ifdef HOOK_WARNING
-static HANDLE keybd_hook_mutex = NULL;
+static HANDLE keybd_hook_mutex = NULL; 
 static HANDLE mouse_hook_mutex = NULL;
 #endif
 
@@ -347,63 +347,66 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 			// a hook:
 			return 0;
 		}
+
+		// Done once immediately after allocation to init attributes such as pForceToggle and as_modifiersLR,
+		// which are zero for most keys:
+		ZeroMemory(kvk, VK_ARRAY_COUNT * sizeof(key_type));
+		ZeroMemory(ksc, SC_ARRAY_COUNT * sizeof(key_type));
+
+		// Below is also a one-time-only init:
+		// This attribute is exists for performance reasons (avoids a function call in the hook
+		// procedure to determine this value):
+		kvk[VK_CONTROL].as_modifiersLR = MOD_LCONTROL | MOD_RCONTROL;
+		kvk[VK_LCONTROL].as_modifiersLR = MOD_LCONTROL;
+		kvk[VK_RCONTROL].as_modifiersLR = MOD_RCONTROL;
+		kvk[VK_MENU].as_modifiersLR = MOD_LALT | MOD_RALT;
+		kvk[VK_LMENU].as_modifiersLR = MOD_LALT;
+		kvk[VK_RMENU].as_modifiersLR = MOD_RALT;
+		kvk[VK_SHIFT].as_modifiersLR = MOD_LSHIFT | MOD_RSHIFT;
+		kvk[VK_LSHIFT].as_modifiersLR = MOD_LSHIFT;
+		kvk[VK_RSHIFT].as_modifiersLR = MOD_RSHIFT;
+		kvk[VK_LWIN].as_modifiersLR = MOD_LWIN;
+		kvk[VK_RWIN].as_modifiersLR = MOD_RWIN;
+
+		// This is a bit iffy because it's far from certain that these particular scan codes
+		// are really modifier keys on anything but a standard English keyboard.  However,
+		// at the very least the Win9x version must rely on something like this because a
+		// low-level hook can't be used under Win9x, and a high-level hook doesn't receive
+		// the left/right VKs at all (so the scan code must be used to tell them apart).
+		// However: it might be possible under Win9x to use MapVirtualKey() or some similar
+		// function to verify, at runtime, that the expected scan codes really do map to the
+		// expected VK.  If not, perhaps MapVirtualKey() or such can be used to search through
+		// every scan code to find out which map to VKs that are modifiers.  Any such keys
+		// found can then be initialized similar to below:
+		ksc[SC_LCONTROL].as_modifiersLR = MOD_LCONTROL;
+		ksc[SC_RCONTROL].as_modifiersLR = MOD_RCONTROL;
+		ksc[SC_LALT].as_modifiersLR = MOD_LALT;
+		ksc[SC_RALT].as_modifiersLR = MOD_RALT;
+		ksc[SC_LSHIFT].as_modifiersLR = MOD_LSHIFT;
+		ksc[SC_RSHIFT].as_modifiersLR = MOD_RSHIFT;
+		ksc[SC_LWIN].as_modifiersLR = MOD_LWIN;
+		ksc[SC_RWIN].as_modifiersLR = MOD_RWIN;
+
+		// Use the address rather than the value, so that if the global var's value
+		// changes during runtime, ours will too:
+		kvk[VK_SCROLL].pForceToggle = &g_ForceScrollLock;
+		kvk[VK_CAPITAL].pForceToggle = &g_ForceCapsLock;
+		kvk[VK_NUMLOCK].pForceToggle = &g_ForceNumLock;
 	}
 
-	// Very important to initialize in this case.  Don't use sizeof(kvk/ksc) because kvk and ksc
-	// are just pointers in the WinNT/2k/XP version, not static arrays as in Win9x version.
-	// Also: Not using a constructor and initializer list for this because there may be times
-	// in future versions of this (e.g. hook is installed and deinstalled more than once
-	// during the lifetime of the process) when we want to explicitly initialize the data
-	// in the struct.  Since I don't think you can explicitly call an object's constructor
-	// (and even if you could, you'd have loop through every array element), it seems best
-	// to do it this way.  This also initializes any pointers to NULL rather than a
-	// bitwise-zero for compatibility with any conceivable hardware:
-	ZeroMemory(kvk, VK_ARRAY_COUNT * sizeof(key_type));
-	ZeroMemory(ksc, SC_ARRAY_COUNT * sizeof(key_type));
+	// Init only those attributes which reflect the hotkey's definition, not those that reflect
+	// the key's current status (since those are intialized only if the hook state is changing
+	// from OFF to ON (later below):
 	int i;
 	for (i = 0; i < VK_ARRAY_COUNT; ++i)
-		kvk[i].pForceToggle = NULL;
+		RESET_KEYTYPE_ATTRIB(kvk[i])
 	for (i = 0; i < SC_ARRAY_COUNT; ++i)
-		ksc[i].pForceToggle = NULL;
+		RESET_KEYTYPE_ATTRIB(ksc[i]) // Note: ksc not kvk.
 
-	// This attribute is exists for performance reasons (avoids a function call in the hook
-	// procedure to determine this value):
-	kvk[VK_CONTROL].as_modifiersLR = MOD_LCONTROL | MOD_RCONTROL;
-	kvk[VK_LCONTROL].as_modifiersLR = MOD_LCONTROL;
-	kvk[VK_RCONTROL].as_modifiersLR = MOD_RCONTROL;
-	kvk[VK_MENU].as_modifiersLR = MOD_LALT | MOD_RALT;
-	kvk[VK_LMENU].as_modifiersLR = MOD_LALT;
-	kvk[VK_RMENU].as_modifiersLR = MOD_RALT;
-	kvk[VK_SHIFT].as_modifiersLR = MOD_LSHIFT | MOD_RSHIFT;
-	kvk[VK_LSHIFT].as_modifiersLR = MOD_LSHIFT;
-	kvk[VK_RSHIFT].as_modifiersLR = MOD_RSHIFT;
-	kvk[VK_LWIN].as_modifiersLR = MOD_LWIN;
-	kvk[VK_RWIN].as_modifiersLR = MOD_RWIN;
-
-	// Use the address rather than the value, so that if the global var's value
-	// changes during runtime, ours will too:
-	kvk[VK_SCROLL].pForceToggle = &g_ForceScrollLock;
-	kvk[VK_CAPITAL].pForceToggle = &g_ForceCapsLock;
-	kvk[VK_NUMLOCK].pForceToggle = &g_ForceNumLock;
-
-	// This is a bit iffy because it's far from certain that these particular scan codes
-	// are really modifier keys on anything but a standard English keyboard.  However,
-	// at the very least the Win9x version must rely on something like this because a
-	// low-level hook can't be used under Win9x, and a high-level hook doesn't receive
-	// the left/right VKs at all (so the scan code must be used to tell them apart).
-	// However: it might be possible under Win9x to use MapVirtualKey() or some similar
-	// function to verify, at runtime, that the expected scan codes really do map to the
-	// expected VK.  If not, perhaps MapVirtualKey() or such can be used to search through
-	// every scan code to find out which map to VKs that are modifiers.  Any such keys
-	// found can then be initialized similar to below:
-	ksc[SC_LCONTROL].as_modifiersLR = MOD_LCONTROL;
-	ksc[SC_RCONTROL].as_modifiersLR = MOD_RCONTROL;
-	ksc[SC_LALT].as_modifiersLR = MOD_LALT;
-	ksc[SC_RALT].as_modifiersLR = MOD_RALT;
-	ksc[SC_LSHIFT].as_modifiersLR = MOD_LSHIFT;
-	ksc[SC_RSHIFT].as_modifiersLR = MOD_RSHIFT;
-	ksc[SC_LWIN].as_modifiersLR = MOD_LWIN;
-	ksc[SC_RWIN].as_modifiersLR = MOD_RWIN;
+	// Indicate here which scan codes should override their virtual keys:
+	for (i = 0; i < g_key_to_sc_count; ++i)
+		if (g_key_to_sc[i].sc > 0 && g_key_to_sc[i].sc <= SC_MAX)
+			ksc[g_key_to_sc[i].sc].sc_takes_precedence = true;
 
 	// These have to be initialized with with element value INVALID.
 	// Don't use FillMemory because the array elements are too big (bigger than bytes):
@@ -411,11 +414,6 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 		kvkm[i] = HOTKEY_ID_INVALID;
 	for (i = 0; i < KSCM_SIZE; ++i)
 		kscm[i] = HOTKEY_ID_INVALID;
-
-	// Indicate here which scan codes should override their virtual keys:
-	for (i = 0; i < g_key_to_sc_count; ++i)
-		if (g_key_to_sc[i].sc > 0 && g_key_to_sc[i].sc <= SC_MAX)
-			ksc[g_key_to_sc[i].sc].sc_takes_precedence = true;
 
 	hk_sorted_type hk_sorted[MAX_HOTKEYS];
 	ZeroMemory(hk_sorted, sizeof(hk_sorted));
@@ -714,7 +712,7 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 		if (g_KeybdHook = SetWindowsHookEx(WH_KEYBOARD_LL, LowLevelKeybdProc, g_hInstance, 0))
 		{
 			hooks_currently_active |= HOOK_KEYBD;
-			ResetHook(HOOK_KEYBD);
+			ResetHook(false, HOOK_KEYBD, true);
 		}
 		else
 		{
@@ -762,7 +760,7 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 		if (g_MouseHook = SetWindowsHookEx(WH_MOUSE_LL, LowLevelMouseProc, g_hInstance, 0))
 		{
 			hooks_currently_active |= HOOK_MOUSE;
-			ResetHook(HOOK_MOUSE);
+			ResetHook(false, HOOK_MOUSE, true);
 		}
 		else
 		{
@@ -787,7 +785,7 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 
 
 
-void ResetHook(HookType aWhichHook)
+void ResetHook(bool aAllModifiersUp, HookType aWhichHook, bool aResetKVKandKSC)
 {
 	if (aWhichHook & HOOK_MOUSE)
 	{
@@ -802,6 +800,17 @@ void ResetHook(HookType aWhichHook)
 		// These are not really valid, since they can't be in a physically down state, but it's
 		// probably better to have a false value in them:
 		g_PhysicalKeyState[VK_WHEEL_DOWN] = g_PhysicalKeyState[VK_WHEEL_UP] = 0;
+
+		if (aResetKVKandKSC)
+		{
+			RESET_KEYTYPE_STATE(kvk[VK_LBUTTON])
+			RESET_KEYTYPE_STATE(kvk[VK_RBUTTON])
+			RESET_KEYTYPE_STATE(kvk[VK_MBUTTON])
+			RESET_KEYTYPE_STATE(kvk[VK_XBUTTON1])
+			RESET_KEYTYPE_STATE(kvk[VK_XBUTTON2])
+			RESET_KEYTYPE_STATE(kvk[VK_WHEEL_DOWN])
+			RESET_KEYTYPE_STATE(kvk[VK_WHEEL_UP])
+		}
 	}
 
 	if (aWhichHook & HOOK_KEYBD)
@@ -812,19 +821,30 @@ void ResetHook(HookType aWhichHook)
 		// because we don't know the current physical state of the keyboard and such:
 
 		g_modifiersLR_physical = 0;  // Best to make this zero, otherwise keys might get stuck down after a Send.
-		g_modifiersLR_logical = g_modifiersLR_logical_non_ignored = GetModifierLRState(true);
+		g_modifiersLR_logical = g_modifiersLR_logical_non_ignored = (aAllModifiersUp ? 0 : GetModifierLRState(true));
 
 		ZeroMemory(g_PhysicalKeyState, sizeof(g_PhysicalKeyState));
 		pPrefixKey = NULL;
 
 		disguise_next_lwin_up = disguise_next_rwin_up = disguise_next_lalt_up = disguise_next_ralt_up
 			= alt_tab_menu_is_visible = false;
+		vk_to_ignore_next_time_down = 0;
 
 		ZeroMemory(pad_state, sizeof(pad_state));
 
 		*g_HSBuf = '\0';
 		g_HSBufLength = 0;
 		g_HShwnd = GetForegroundWindow(); // Not needed by some callers, but shouldn't hurt even then.
+
+		if (aResetKVKandKSC)
+		{
+			int i;
+			for (i = 0; i < VK_ARRAY_COUNT; ++i)
+				if (!VK_IS_MOUSE(i))  // Don't do mouse VKs since those must be handled by the mouse section.
+					RESET_KEYTYPE_STATE(kvk[i])
+			for (i = 0; i < SC_ARRAY_COUNT; ++i)
+				RESET_KEYTYPE_STATE(ksc[i])
+		}
 	}
 }
 

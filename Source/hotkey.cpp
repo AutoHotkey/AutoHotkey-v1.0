@@ -1397,7 +1397,7 @@ ResultType Hotstring::Perform()
 
 
 void Hotstring::DoReplace(LPARAM alParam)
-// aEndChar is the char from the set of EndChars that the user had to press to trigger the hotkey.
+// LOWORD(alParam) is the char from the set of EndChars that the user had to press to trigger the hotkey.
 // This is not applicable if mEndCharRequired is false, in which case caller should have passed zero.
 {
 	char SendBuf[LINE_SIZE + 20] = "";  // Allow extra room for the optional backspaces.
@@ -1417,7 +1417,7 @@ void Hotstring::DoReplace(LPARAM alParam)
 			*start_of_replacement++ = '\b';  // Use raw backspaces, not {BS n}, in case the send will be raw.
 		*start_of_replacement = '\0';
 	}
-	if (*mReplacement) // replacement text is entirely handled here
+	if (*mReplacement)
 	{
 		snprintf(start_of_replacement, sizeof(SendBuf) - (start_of_replacement - SendBuf), "%s", mReplacement);
 		CaseConformModes case_conform_mode = (CaseConformModes)HIWORD(alParam);
@@ -1425,21 +1425,18 @@ void Hotstring::DoReplace(LPARAM alParam)
 			CharUpper(start_of_replacement);
 		else if (case_conform_mode == CASE_CONFORM_FIRST_CAP)
 			*start_of_replacement = (char)CharUpper((LPTSTR)(UCHAR)*start_of_replacement);
-		char end_char = (char)LOWORD(alParam);
-		if (end_char && !mOmitEndChar) // Append the final character (since it was excluded from any case conversion above).
-		{
-			size_t length = strlen(start_of_replacement);
-			start_of_replacement[length++] = end_char;
-			start_of_replacement[length] = '\0';
-		}
 	}
+	int old_delay = g.KeyDelay;
+	g.KeyDelay = mKeyDelay; // This is relatively safe since SendKeys() normally can't be interrupted by a new thread.
 	if (*SendBuf)
-	{
-		int old_delay = g.KeyDelay;
-		g.KeyDelay = mKeyDelay;
 		SendKeys(SendBuf, mSendRaw);
-		g.KeyDelay = old_delay;
+	if (   *mReplacement && !mOmitEndChar && (*SendBuf = (char)LOWORD(alParam))   ) // Assign
+	{
+		// Send the final character in raw mode so that chars such as !{} are sent properly.
+		SendBuf[1] = '\0'; // Terminate.
+		SendKeys(SendBuf, true);
 	}
+	g.KeyDelay = old_delay;  // Restore
 }
 
 
