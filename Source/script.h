@@ -113,11 +113,11 @@ enum enum_act {
 , ACT_FILECREATEDIR, ACT_FILEREMOVEDIR
 , ACT_FILEGETATTRIB, ACT_FILESETATTRIB, ACT_FILEGETTIME, ACT_FILESETTIME
 , ACT_FILEGETSIZE, ACT_FILEGETVERSION
-, ACT_SETWORKINGDIR, ACT_FILESELECTFILE, ACT_FILESELECTFOLDER, ACT_FILECREATESHORTCUT
+, ACT_SETWORKINGDIR, ACT_FILESELECTFILE, ACT_FILESELECTFOLDER, ACT_FILEGETSHORTCUT, ACT_FILECREATESHORTCUT
 , ACT_INIREAD, ACT_INIWRITE, ACT_INIDELETE
 , ACT_REGREAD, ACT_REGWRITE, ACT_REGDELETE
 , ACT_SETKEYDELAY, ACT_SETMOUSEDELAY, ACT_SETWINDELAY, ACT_SETCONTROLDELAY, ACT_SETBATCHLINES
-, ACT_SETTITLEMATCHMODE, ACT_SETFORMAT
+, ACT_SETTITLEMATCHMODE, ACT_SETFORMAT, ACT_FORMATTIME
 , ACT_SUSPEND, ACT_PAUSE
 , ACT_AUTOTRIM, ACT_STRINGCASESENSE, ACT_DETECTHIDDENWINDOWS, ACT_DETECTHIDDENTEXT, ACT_BLOCKINPUT
 , ACT_SETNUMLOCKSTATE, ACT_SETSCROLLLOCKSTATE, ACT_SETCAPSLOCKSTATE, ACT_SETSTORECAPSLOCKMODE
@@ -211,7 +211,7 @@ enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
 
 #define GUI_INDEX_TO_ID(index) (index + CONTROL_ID_FIRST)
 #define GUI_ID_TO_INDEX(id) (id - CONTROL_ID_FIRST)
-#define GUI_HWND_TO_INDEX(hwnd) GUI_ID_TO_INDEX(GetDlgCtrlID(hwnd))
+#define GUI_HWND_TO_INDEX(hwnd) GUI_ID_TO_INDEX(GetDlgCtrlID(hwnd)) // Returns -1 on failure (e.g. HWND not found)	
 // Testing shows that GetDlgCtrlID() is dramatically faster than looping through a GUI window's control
 // array to find a matching HWND.
 
@@ -462,7 +462,8 @@ enum SysGetCmds {SYSGET_CMD_INVALID, SYSGET_CMD_METRICS, SYSGET_CMD_MONITORCOUNT
 	, SYSGET_CMD_MONITORAREA, SYSGET_CMD_MONITORWORKAREA, SYSGET_CMD_MONITORNAME
 };
 
-enum TransformCmds {TRANS_CMD_INVALID, TRANS_CMD_ASC, TRANS_CMD_CHR, TRANS_CMD_DEREF, TRANS_CMD_HTML
+enum TransformCmds {TRANS_CMD_INVALID, TRANS_CMD_ASC, TRANS_CMD_CHR, TRANS_CMD_DEREF
+	, TRANS_CMD_UNICODE, TRANS_CMD_HTML
 	, TRANS_CMD_MOD, TRANS_CMD_POW, TRANS_CMD_EXP, TRANS_CMD_SQRT, TRANS_CMD_LOG, TRANS_CMD_LN
 	, TRANS_CMD_ROUND, TRANS_CMD_CEIL, TRANS_CMD_FLOOR, TRANS_CMD_ABS
 	, TRANS_CMD_SIN, TRANS_CMD_COS, TRANS_CMD_TAN, TRANS_CMD_ASIN, TRANS_CMD_ACOS, TRANS_CMD_ATAN
@@ -475,12 +476,12 @@ enum MenuCommands {MENU_CMD_INVALID, MENU_CMD_SHOW, MENU_CMD_USEERRORLEVEL
 	, MENU_CMD_ENABLE, MENU_CMD_DISABLE, MENU_CMD_TOGGLEENABLE
 	, MENU_CMD_STANDARD, MENU_CMD_NOSTANDARD, MENU_CMD_COLOR, MENU_CMD_DEFAULT, MENU_CMD_NODEFAULT
 	, MENU_CMD_DELETE, MENU_CMD_DELETEALL, MENU_CMD_TIP, MENU_CMD_ICON, MENU_CMD_NOICON
-	, MENU_CMD_MAINWINDOW, MENU_CMD_NOMAINWINDOW
+	, MENU_CMD_CLICK, MENU_CMD_MAINWINDOW, MENU_CMD_NOMAINWINDOW
 };
 
 enum GuiCommands {GUI_CMD_INVALID, GUI_CMD_OPTIONS, GUI_CMD_ADD, GUI_CMD_MENU, GUI_CMD_SHOW
-	, GUI_CMD_SUBMIT, GUI_CMD_CANCEL, GUI_CMD_DESTROY, GUI_CMD_FONT, GUI_CMD_TAB, GUI_CMD_COLOR
-	, GUI_CMD_FLASH
+	, GUI_CMD_SUBMIT, GUI_CMD_CANCEL, GUI_CMD_DESTROY, GUI_CMD_FONT, GUI_CMD_TAB, GUI_CMD_DEFAULT
+	, GUI_CMD_COLOR, GUI_CMD_FLASH
 };
 
 enum GuiControlCmds {GUICONTROL_CMD_INVALID, GUICONTROL_CMD_OPTIONS, GUICONTROL_CMD_CONTENTS, GUICONTROL_CMD_TEXT
@@ -532,7 +533,7 @@ enum ControlGetCmds {CONTROLGET_CMD_INVALID, CONTROLGET_CMD_CHECKED, CONTROLGET_
 	, CONTROLGET_CMD_CURRENTCOL, CONTROLGET_CMD_LINE, CONTROLGET_CMD_SELECTED
 	, CONTROLGET_CMD_STYLE, CONTROLGET_CMD_EXSTYLE};
 
-enum DriveCmds {DRIVE_CMD_INVALID, DRIVE_CMD_EJECT, DRIVE_CMD_LABEL};
+enum DriveCmds {DRIVE_CMD_INVALID, DRIVE_CMD_EJECT, DRIVE_CMD_LOCK, DRIVE_CMD_UNLOCK, DRIVE_CMD_LABEL};
 
 enum DriveGetCmds {DRIVEGET_CMD_INVALID, DRIVEGET_CMD_LIST, DRIVEGET_CMD_FILESYSTEM, DRIVEGET_CMD_LABEL
 	, DRIVEGET_CMD_SETLABEL, DRIVEGET_CMD_SERIAL, DRIVEGET_CMD_TYPE, DRIVEGET_CMD_STATUS
@@ -544,6 +545,21 @@ enum WinSetAttributes {WINSET_INVALID, WINSET_TRANSPARENT, WINSET_TRANSCOLOR, WI
 
 class Line
 {
+public:
+	// AutoIt3 functions:
+	static bool Util_CopyDir (const char *szInputSource, const char *szInputDest, bool bOverwrite);
+	static bool Util_MoveDir (const char *szInputSource, const char *szInputDest, bool bOverwrite);
+	static bool Util_RemoveDir (const char *szInputSource, bool bRecurse);
+	static int Util_CopyFile(const char *szInputSource, const char *szInputDest, bool bOverwrite, bool bMove);
+	static void Util_ExpandFilenameWildcard(const char *szSource, const char *szDest, char *szExpandedDest);
+	static void Util_ExpandFilenameWildcardPart(const char *szSource, const char *szDest, char *szExpandedDest);
+	static bool Util_CreateDir(const char *szDirName);
+	static bool Util_DoesFileExist(const char *szFilename);
+	static bool Util_IsDir(const char *szPath);
+	static void Util_GetFullPathName(const char *szIn, char *szOut);
+	static void Util_StripTrailingDir(char *szPath);
+	static bool Util_IsDifferentVolumes(const char *szPath1, const char *szPath2);
+
 private:
 	static char *sDerefBuf;  // Buffer to hold the values of any args that need to be dereferenced.
 	static char *sDerefBufMarker;  // Location of next free byte.
@@ -570,6 +586,7 @@ private:
 		, __int64 &aIndex);
 	ResultType Perform(WIN32_FIND_DATA *aCurrentFile = NULL, RegItemStruct *aCurrentRegItem = NULL
 		, LoopReadFileStruct *aCurrentReadFile = NULL);
+	ResultType FormatTime(char *aYYYYMMDD, char *aFormat);
 	ResultType PerformAssign();
 	ResultType StringSplit(char *aArrayName, char *aInputString, char *aDelimiterList, char *aOmitList);
 	ResultType SplitPath(char *aFileSpec);
@@ -581,6 +598,7 @@ private:
 
 	ResultType DriveSpace(char *aPath, bool aGetFreeSpace);
 	ResultType Drive(char *aCmd, char *aValue, char *aValue2);
+	ResultType DriveLock(char aDriveLetter, bool aLockIt);
 	ResultType DriveGet(char *aCmd, char *aValue);
 	ResultType SoundSetGet(char *aSetting, DWORD aComponentType, int aComponentInstance
 		, DWORD aControlType, UINT aMixerID);
@@ -595,8 +613,9 @@ private:
 	#define FSF_EDITBOX      0x02
 	ResultType FileSelectFolder(char *aRootDir, DWORD aOptions, char *aGreeting);
 
+	ResultType FileGetShortcut(char *aShortcutFile);
 	ResultType FileCreateShortcut(char *aTargetFile, char *aShortcutFile, char *aWorkingDir, char *aArgs
-		, char *aDescription, char *aIconFile, char *aHotkey);
+		, char *aDescription, char *aIconFile, char *aHotkey, char *aIconNumber, char *aRunState);
 	ResultType FileCreateDir(char *aDirSpec);
 	ResultType FileReadLine(char *aFilespec, char *aLineNumber);
 	ResultType FileAppend(char *aFilespec, char *aBuf, FILE *aTargetFileAlreadyOpen = NULL);
@@ -604,20 +623,6 @@ private:
 	ResultType FileRecycle(char *aFilePattern);
 	ResultType FileRecycleEmpty(char *aDriveLetter);
 	ResultType FileInstall(char *aSource, char *aDest, char *aFlag);
-
-	// AutoIt3 functions:
-	bool Util_CopyDir (const char *szInputSource, const char *szInputDest, bool bOverwrite);
-	bool Util_MoveDir (const char *szInputSource, const char *szInputDest, bool bOverwrite);
-	bool Util_RemoveDir (const char *szInputSource, bool bRecurse);
-	int Util_CopyFile(const char *szInputSource, const char *szInputDest, bool bOverwrite, bool bMove);
-	void Util_ExpandFilenameWildcard(const char *szSource, const char *szDest, char *szExpandedDest);
-	void Util_ExpandFilenameWildcardPart(const char *szSource, const char *szDest, char *szExpandedDest);
-	bool Util_CreateDir(const char *szDirName);
-	bool Util_DoesFileExist(const char *szFilename);
-	bool Util_IsDir(const char *szPath);
-	void Util_GetFullPathName(const char *szIn, char *szOut);
-	void Util_StripTrailingDir(char *szPath);
-	bool Util_IsDifferentVolumes(const char *szPath1, const char *szPath2);
 
 	ResultType FileGetAttrib(char *aFilespec);
 	int FileSetAttrib(char *aAttributes, char *aFilePattern, FileLoopModeType aOperateOnFolders
@@ -786,6 +791,16 @@ public:
 	#define MAX_SCRIPT_FILES (UCHAR_MAX + 1)
 	static char *sSourceFile[MAX_SCRIPT_FILES];
 	static int nSourceFiles; // An int vs. UCHAR so that it can be exactly 256 without overflowing.
+
+	static void FreeDerefBuf()
+	{
+		if (sDerefBuf)
+		{
+			free(sDerefBuf);
+			sDerefBuf = NULL;
+			sDerefBufSize = 0;
+		}
+	}
 
 	static ResultType MouseClickDrag(vk_type aVK // Which button.
 		, int aX1, int aY1, int aX2, int aY2, int aSpeed, bool aMoveRelative);
@@ -1186,6 +1201,7 @@ public:
 		if (!stricmp(aBuf, "Asc")) return TRANS_CMD_ASC;
 		if (!stricmp(aBuf, "Chr")) return TRANS_CMD_CHR;
 		if (!stricmp(aBuf, "Deref")) return TRANS_CMD_DEREF;
+		if (!stricmp(aBuf, "Unicode")) return TRANS_CMD_UNICODE;
 		if (!stricmp(aBuf, "HTML")) return TRANS_CMD_HTML;
 		if (!stricmp(aBuf, "Mod")) return TRANS_CMD_MOD;
 		if (!stricmp(aBuf, "Pow")) return TRANS_CMD_POW;
@@ -1235,6 +1251,7 @@ public:
 		if (!stricmp(aBuf, "Tip")) return MENU_CMD_TIP;
 		if (!stricmp(aBuf, "Icon")) return MENU_CMD_ICON;
 		if (!stricmp(aBuf, "NoIcon")) return MENU_CMD_NOICON;
+		if (!stricmp(aBuf, "Click")) return MENU_CMD_CLICK;
 		if (!stricmp(aBuf, "MainWindow")) return MENU_CMD_MAINWINDOW;
 		if (!stricmp(aBuf, "NoMainWindow")) return MENU_CMD_NOMAINWINDOW;
 		return MENU_CMD_INVALID;
@@ -1268,6 +1285,7 @@ public:
 		if (!stricmp(aBuf, "Menu")) return GUI_CMD_MENU;
 		if (!stricmp(aBuf, "Font")) return GUI_CMD_FONT;
 		if (!stricmp(aBuf, "Tab")) return GUI_CMD_TAB;
+		if (!stricmp(aBuf, "Default")) return GUI_CMD_DEFAULT;
 		if (!stricmp(aBuf, "Color")) return GUI_CMD_COLOR;
 		if (!stricmp(aBuf, "Flash")) return GUI_CMD_FLASH;
 		return GUI_CMD_INVALID;
@@ -1392,6 +1410,8 @@ public:
 	{
 		if (!aBuf || !*aBuf) return DRIVE_CMD_INVALID;
 		if (!stricmp(aBuf, "Eject")) return DRIVE_CMD_EJECT;
+		if (!stricmp(aBuf, "Lock")) return DRIVE_CMD_LOCK;
+		if (!stricmp(aBuf, "Unlock")) return DRIVE_CMD_UNLOCK;
 		if (!stricmp(aBuf, "Label")) return DRIVE_CMD_LABEL;
 		return DRIVE_CMD_INVALID;
 	}
@@ -1664,6 +1684,7 @@ public:
 	// Keep any fields that aren't an even multiple of 4 adjacent to each other.  This conserves memory
 	// due to byte-alignment:
 	bool mIncludeStandardItems;
+	int mClickCount; // How many clicks it takes to trigger the default menu item.  2 = double-click
 	UINT mMenuItemCount;  // The count of user-defined menu items (doesn't include the standard items, if present).
 	UserMenu *mNextMenu;  // Next item in linked list
 	HMENU mMenu;
@@ -1676,7 +1697,7 @@ public:
 
 	UserMenu(char *aName) // Constructor
 		: mName(aName), mFirstMenuItem(NULL), mLastMenuItem(NULL), mDefault(NULL)
-		, mIncludeStandardItems(false), mMenuItemCount(0), mNextMenu(NULL), mMenu(NULL)
+		, mIncludeStandardItems(false), mClickCount(2), mMenuItemCount(0), mNextMenu(NULL), mMenu(NULL)
 		, mMenuType(MENU_TYPE_POPUP) // The MENU_TYPE_NONE flag is not used in this context.  Default = POPUP.
 		, mBrush(NULL), mColor(CLR_DEFAULT)
 	{
@@ -1767,6 +1788,7 @@ struct GuiControlType
 	#define GUI_CONTROL_ATTRIB_EXPLICITLY_DISABLED 0x10
 	#define GUI_CONTROL_ATTRIB_BACKGROUND_DEFAULT  0x20 // i.e. Don't conform to window/control background color; use default instead.
 	#define GUI_CONTROL_ATTRIB_BACKGROUND_TRANS    0x40 // i.e. Leave this control's background transparent.
+	#define GUI_CONTROL_ATTRIB_ALTBEHAVIOR         0x80 // For sliders: Reverse/Invert the value.
 	UCHAR attrib; // A field of option flags/bits defined above.
 	TabControlIndexType tab_control_index; // Which tab control this control belongs to, if any.
 	TabIndexType tab_index; // For type==TAB, this stores the tab control's index.  For other types, it stores the page.
@@ -1798,7 +1820,11 @@ struct GuiControlOptionsType
 	int limit;   // The max number of characters to permit in an edit or combobox's edit.
 	int hscroll_pixels;  // The number of pixels for a listbox's horizontal scrollbar to be able to scroll.
 	int checked; // When zeroed, struct contains default starting state of checkbox/radio, i.e. BST_UNCHECKED.
+	int icon_number; // Which icon of a multi-icon file to use.  Zero means use-default, i.e. the first icon.
 	char password_char; // When zeroed, indicates "use default password" for an edit control with the password style.
+	#define MAX_EDIT_TABSTOPS 50
+	UINT tabstop[MAX_EDIT_TABSTOPS]; // Array of tabstops for the interior of a multi-line edit control.
+	UINT tabstop_count;  // The number of entries in the above array.
 	bool start_new_section;
 };
 
@@ -1822,8 +1848,10 @@ public:
 	GuiIndexType mControlCount;
 	GuiControlType mControl[MAX_CONTROLS_PER_GUI];
 	GuiIndexType mDefaultButtonIndex; // Index vs. pointer is needed for some things.
-	Label *mLabelForClose, *mLabelForEscape;
-	bool mLabelForCloseIsRunning, mLabelForEscapeIsRunning;
+	Label *mLabelForClose, *mLabelForEscape, *mLabelForSize, *mLabelForDropFiles;
+	bool mLabelForCloseIsRunning, mLabelForEscapeIsRunning, mLabelForSizeIsRunning; // DropFiles doesn't need one of these.
+	WPARAM mSizeType; // And it does not need to be initalized since its contents are documented as being defined only in the GuiSize subroutine.
+	LPARAM mSizeWidthHeight; // Same comment as above.
 	DWORD mStyle, mExStyle; // Style of window.
 	bool mInRadioGroup; // Whether the control currently being created is inside a prior radio-group.
 	bool mUseTheme;  // Whether XP theme and styles should be applied to the parent window and subsequently added controls.
@@ -1837,6 +1865,7 @@ public:
 	HBRUSH mBackgroundBrushWin;   // Brush corresponding to the above.
 	COLORREF mBackgroundColorCtl; // Background color for controls.
 	HBRUSH mBackgroundBrushCtl;   // Brush corresponding to the above.
+	HDROP mHdrop;                 // Used for drag and drop operations.
 	int mMarginX, mMarginY, mPrevX, mPrevY, mPrevWidth, mPrevHeight, mMaxExtentRight, mMaxExtentDown
 		, mSectionX, mSectionY, mMaxExtentRightSection, mMaxExtentDownSection;
 	bool mFirstShowing, mDestroyWindowHasBeenCalled;
@@ -1854,8 +1883,8 @@ public:
 
 	GuiType(int aWindowIndex) // Constructor
 		: mHwnd(NULL), mWindowIndex(aWindowIndex), mControlCount(0)
-		, mDefaultButtonIndex(-1), mLabelForClose(NULL), mLabelForEscape(NULL)
-		, mLabelForCloseIsRunning(false), mLabelForEscapeIsRunning(false)
+		, mDefaultButtonIndex(-1), mLabelForClose(NULL), mLabelForEscape(NULL), mLabelForSize(NULL), mLabelForDropFiles(NULL)
+		, mLabelForCloseIsRunning(false), mLabelForEscapeIsRunning(false), mLabelForSizeIsRunning(false)
 		// The styles DS_CENTER and DS_3DLOOK appear to be ineffectual in this case.
 		// Also note that WS_CLIPSIBLINGS winds up on the window even if unspecified, which is a strong hint
 		// that it should always be used for top level windows across all OSes.  Usenet posts confirm this.
@@ -1870,6 +1899,7 @@ public:
 		, mCurrentColor(CLR_DEFAULT)
 		, mBackgroundColorWin(CLR_DEFAULT), mBackgroundBrushWin(NULL)
 		, mBackgroundColorCtl(CLR_DEFAULT), mBackgroundBrushCtl(NULL)
+		, mHdrop(NULL)
 		, mMarginX(COORD_UNSPECIFIED), mMarginY(COORD_UNSPECIFIED) // These will be set when the first control is added.
 		, mPrevX(0), mPrevY(0)
 		, mPrevWidth(0), mPrevHeight(0) // Needs to be zero for first control to start off at right offset.
@@ -1898,7 +1928,7 @@ public:
 	ResultType Close(); // Due to SC_CLOSE, etc.
 	ResultType Escape(); // Similar to close, except typically called when the user presses ESCAPE.
 	ResultType Submit(bool aHideIt);
-	static ResultType ControlGetContents(Var &aOutputVar, GuiControlType &aControl, char *aMode = "");
+	ResultType ControlGetContents(Var &aOutputVar, GuiControlType &aControl, char *aMode = "");
 
 	static GuiType *FindGui(HWND aHwnd) // Find which GUI object owns the specified window.
 	{
@@ -1917,7 +1947,15 @@ public:
 	GuiIndexType FindControl(char *aControlID);
 	GuiControlType *FindControl(HWND aHwnd)
 	{
-		GuiIndexType index = GUI_HWND_TO_INDEX(aHwnd);
+		GuiIndexType index = GUI_HWND_TO_INDEX(aHwnd); // Retrieves -1 on failure, which will be out of bounds when converted to unsigned.
+		if (index < mControlCount)
+			return &mControl[index];
+		// Otherwise: Since ComboBoxes (and possibly other future control types) have children, try looking
+		// up aHwnd's parent to see if its a known control of this dialog.  Some callers rely on us making
+		// this extra effort:
+		if (   !(aHwnd = GetParent(aHwnd))   )
+			return NULL;
+		index = GUI_HWND_TO_INDEX(aHwnd);
 		return (index < mControlCount) ? &mControl[index] : NULL;
 	}
 	int FindGroup(GuiIndexType aControlIndex, GuiIndexType &aGroupStart, GuiIndexType &aGroupEnd);
@@ -1931,8 +1969,10 @@ public:
 
 	static WORD TextToHotkey(char *aText);
 	static char *HotkeyToText(WORD aHotkey, char *aBuf);
+	void ControlCheckRadioButton(GuiControlType &aControl, GuiIndexType aControlIndex, WPARAM aCheckType);
 	int ControlGetDefaultSliderThickness(DWORD aStyle, int aThumbThickness);
 	void ControlSetSliderOptions(GuiControlType &aControl, GuiControlOptionsType &aOpt);
+	int ControlInvertSliderIfNeeded(GuiControlType &aControl, int aPosition);
 	void ControlSetProgressOptions(GuiControlType &aControl, GuiControlOptionsType &aOpt, DWORD aStyle);
 	bool ControlOverrideBkColor(GuiControlType &aControl);
 
@@ -2125,7 +2165,14 @@ public:
 	VarSizeType GetNowUTC(char *aBuf = NULL);
 	VarSizeType GetOSType(char *aBuf = NULL);
 	VarSizeType GetOSVersion(char *aBuf = NULL);
+	VarSizeType GetLanguage(char *aBuf = NULL);
+	VarSizeType GetUserOrComputer(bool aGetUser, char *aBuf = NULL);
 	VarSizeType GetProgramFiles(char *aBuf = NULL);
+	VarSizeType GetDesktop(bool aGetCommon, char *aBuf = NULL);
+	VarSizeType GetStartMenu(bool aGetCommon, char *aBuf = NULL);
+	VarSizeType GetPrograms(bool aGetCommon, char *aBuf = NULL);
+	VarSizeType GetStartup(bool aGetCommon, char *aBuf = NULL);
+	VarSizeType GetMyDocuments(char *aBuf = NULL);
 	VarSizeType GetIsAdmin(char *aBuf = NULL);
 	VarSizeType ScriptGetCursor(char *aBuf = NULL);
 	VarSizeType ScriptGetCaret(VarTypeType aVarType, char *aBuf = NULL);
@@ -2160,7 +2207,7 @@ public:
 	VarSizeType GetTimeSinceThisHotkey(char *aBuf = NULL);
 	VarSizeType GetTimeSincePriorHotkey(char *aBuf = NULL);
 	VarSizeType GetEndChar(char *aBuf = NULL);
-	VarSizeType GetGui(char *aBuf = NULL);
+	VarSizeType GetGui(VarTypeType aVarType, char *aBuf = NULL);
 	VarSizeType GetGuiControl(char *aBuf = NULL);
 	VarSizeType GetGuiControlEvent(char *aBuf = NULL);
 	VarSizeType GetTimeIdle(char *aBuf = NULL);

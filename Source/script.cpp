@@ -840,14 +840,13 @@ LineNumberType Script::LoadFromFile()
 		// Initialize the random number generator:
 		// Note: On 32-bit hardware, the generator module uses only 2506 bytes of static
 		// data, so it doesn't seem worthwhile to put it in a class (so that the mem is
-		// only allocated on first use of the generator).
-		// This part is taken from the AutoIt3 source.  No comments were given there,
-		// so I'm not sure if this initialization method is better than using
-		// GetTickCount(), but I doubt it matters as long as it's at least 99.9999%
-		// likely to be a different seed every time the program starts:
-		struct _timeb timebuffer;
-		_ftime(&timebuffer);
-		init_genrand(timebuffer.millitm * (int)time(NULL));
+		// only allocated on first use of the generator).  For v1.0.24, _ftime() is not
+		// used since it could be as large as 0.5 KB of non-compressed code.  A simple call to
+		// GetSystemTimeAsFileTime() seems just as good or better, since it produces
+		// a FILETIME, which is "the number of 100-nanosecond intervals since January 1, 1601."
+		FILETIME ft;
+		GetSystemTimeAsFileTime(&ft);
+		init_genrand(ft.dwLowDateTime); // Use the low-order DWORD since the high-order one rarely changes.
 		return mLineCount; // The count of runnable lines that were loaded, which might be zero.
 	}
 	else
@@ -2764,8 +2763,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					break;
 				// else: Match was found; this is the deref's open-symbol.
 				if (deref_count >= MAX_DEREFS_PER_ARG)
-					return ScriptError("The maximum number of variable dereferences has been"
-						" exceeded in this parameter.", new_arg[i].text);
+					return ScriptError("Too many var refs.", new_arg[i].text); // Short msg since so rare.
 				deref[deref_count].marker = new_arg[i].text + j;  // Store the deref's starting location.
 				// Find next g_DerefChar, even if it's a literal.
 				for (++j; new_arg[i].text[j] && new_arg[i].text[j] != g_DerefChar; ++j);
@@ -2882,7 +2880,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	///////////////////////////////////////////////////////////////////
 	int value;    // For temp use during validation.
 	double value_float;
-	FILETIME ft;  // same.
+	SYSTEMTIME st;  // same.
 	switch(aActionType)
 	{
 	case ACT_AUTOTRIM:
@@ -3113,7 +3111,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				if (!strchr("SMHD", toupper(*LINE_RAW_ARG3)))  // (S)econds, (M)inutes, (H)ours, or (D)ays
 					return ScriptError(ERR_COMPARE_TIMES, LINE_RAW_ARG3);
 			if (aActionType == ACT_SUB && *LINE_RAW_ARG2 && !line->ArgHasDeref(2))
-				if (!YYYYMMDDToFileTime(LINE_RAW_ARG2, &ft))
+				if (!YYYYMMDDToSystemTime(LINE_RAW_ARG2, st, true))
 					return ScriptError(ERR_INVALID_DATETIME, LINE_RAW_ARG2);
 		}
 		break;
@@ -3172,7 +3170,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 
 	case ACT_FILESETTIME:
 		if (*LINE_RAW_ARG1 && !line->ArgHasDeref(1))
-			if (!YYYYMMDDToFileTime(LINE_RAW_ARG1, &ft))
+			if (!YYYYMMDDToSystemTime(LINE_RAW_ARG1, st, true))
 				return ScriptError(ERR_INVALID_DATETIME, LINE_RAW_ARG1);
 		if (*LINE_RAW_ARG3 && !line->ArgHasDeref(3))
 			if (strlen(LINE_RAW_ARG3) > 1 || !strchr("MCA", toupper(*LINE_RAW_ARG3)))
@@ -3210,6 +3208,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		if (line->mArgc > 0 && !line->ArgHasDeref(1) && !line->ConvertTitleMatchMode(LINE_RAW_ARG1))
 			return ScriptError(ERR_TITLEMATCHMODE, LINE_RAW_ARG1);
 		break;
+
 	case ACT_SETFORMAT:
 		if (line->mArgc > 0 && !line->ArgHasDeref(1))
 		{
@@ -3241,6 +3240,23 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			TransformCmds trans_cmd = line->ConvertTransformCmd(LINE_RAW_ARG2);
 			if (trans_cmd == TRANS_CMD_INVALID)
 				return ScriptError(ERR_TRANSFORMCOMMAND, LINE_RAW_ARG2);
+			if (trans_cmd == TRANS_CMD_UNICODE && !*line->mArg[0].text) // blank text means output-var is not a dynamically built one.
+			{
+				// If the output var isn't the clipboard, the mode is "retrieve clipboard text as UTF-8".
+				// Therefore, Param#3 should be blank in that case to avoid unnecessary fetching of the
+				// entire clipboard contents as plain text when in fact the command itself will be
+				// directly accessing the clipboard rather than relying on the automatic parameter and
+				// deref handling.
+				if (VAR(line->mArg[0])->mType == VAR_CLIPBOARD)
+				{
+					if (line->mArgc < 3)
+						return ScriptError("Parameter #3 must not be blank in this case.");
+				}
+				else
+					if (line->mArgc > 2)
+						return ScriptError("Parameter #3 must be blank in this case.", LINE_RAW_ARG3);
+				break; // This type has been fully checked above.
+			}
 			if (!line->ArgHasDeref(3))
 			{
 				switch(trans_cmd)
@@ -3280,8 +3296,9 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 						return ScriptError("Parameter #3 must be a positive integer in this case.", LINE_RAW_ARG3);
 					break;
 
-				// The following are not listed above because no validation of Paramter #3 is needed:
+				// The following are not listed above because no validation of Paramter #3 is needed at this stage:
 				// TRANS_CMD_ASC
+				// TRANS_CMD_UNICODE
 				// TRANS_CMD_HTML
 				// TRANS_CMD_DEREF
 				}
@@ -3292,6 +3309,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			case TRANS_CMD_ASC:
 			case TRANS_CMD_CHR:
 			case TRANS_CMD_DEREF:
+			case TRANS_CMD_UNICODE:
 			case TRANS_CMD_HTML:
 			case TRANS_CMD_EXP:
 			case TRANS_CMD_SQRT:
@@ -3376,6 +3394,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			case MENU_CMD_NOICON:
 			case MENU_CMD_MAINWINDOW:
 			case MENU_CMD_NOMAINWINDOW:
+			case MENU_CMD_CLICK:
 			{
 				bool is_tray = true;  // Assume true if unknown.
 				if (line->mArgc > 0 && !line->ArgHasDeref(1))
@@ -3414,6 +3433,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			case MENU_CMD_DEFAULT:
 			case MENU_CMD_DELETE:
 			case MENU_CMD_TIP:
+			case MENU_CMD_CLICK:
 				if (   menu_cmd != MENU_CMD_RENAME && (*LINE_RAW_ARG4 || *LINE_RAW_ARG5 || *LINE_RAW_ARG6)   )
 					return ScriptError("Parameter #4 and beyond should be omitted in this case.", LINE_RAW_ARG4);
 				switch(menu_cmd)
@@ -3460,6 +3480,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				break;
 			case GUI_CMD_CANCEL:
 			case GUI_CMD_DESTROY:
+			case GUI_CMD_DEFAULT:
 				if (line->mArgc > 1)
 					return ScriptError("Parameter #2 and beyond should be omitted in this case.", LINE_RAW_ARG2);
 				break;
@@ -4086,6 +4107,7 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, Var *aVarPrev)
 		else if (!stricmp(new_name, "A_DD") || !stricmp(new_name, "A_Mday")) var_type = VAR_DD; // 01 thru 31
 		else if (!stricmp(new_name, "A_Wday")) var_type = VAR_WDAY;
 		else if (!stricmp(new_name, "A_Yday")) var_type = VAR_YDAY;
+		else if (!stricmp(new_name, "A_Yweek")) var_type = VAR_YWEEK;
 
 		else if (!stricmp(new_name, "A_Hour")) var_type = VAR_HOUR;
 		else if (!stricmp(new_name, "A_Min")) var_type = VAR_MIN;
@@ -4123,8 +4145,21 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, Var *aVarPrev)
 
 		else if (!stricmp(new_name, "A_OStype")) var_type = VAR_OSTYPE;
 		else if (!stricmp(new_name, "A_OSversion")) var_type = VAR_OSVERSION;
+		else if (!stricmp(new_name, "A_Language")) var_type = VAR_LANGUAGE;
+		else if (!stricmp(new_name, "A_ComputerName")) var_type = VAR_COMPUTERNAME;
+		else if (!stricmp(new_name, "A_UserName")) var_type = VAR_USERNAME;
+
 		else if (!stricmp(new_name, "A_WinDir")) var_type = VAR_WINDIR;
 		else if (!stricmp(new_name, "A_ProgramFiles")) var_type = VAR_PROGRAMFILES;
+		else if (!stricmp(new_name, "A_Desktop")) var_type = VAR_DESKTOP;
+		else if (!stricmp(new_name, "A_DesktopCommon")) var_type = VAR_DESKTOPCOMMON;
+		else if (!stricmp(new_name, "A_StartMenu")) var_type = VAR_STARTMENU;
+		else if (!stricmp(new_name, "A_StartMenuCommon")) var_type = VAR_STARTMENUCOMMON;
+		else if (!stricmp(new_name, "A_Programs")) var_type = VAR_PROGRAMS;
+		else if (!stricmp(new_name, "A_ProgramsCommon")) var_type = VAR_PROGRAMSCOMMON;
+		else if (!stricmp(new_name, "A_Startup")) var_type = VAR_STARTUP;
+		else if (!stricmp(new_name, "A_StartupCommon")) var_type = VAR_STARTUPCOMMON;
+		else if (!stricmp(new_name, "A_MyDocuments")) var_type = VAR_MYDOCUMENTS;
 
 		else if (!stricmp(new_name, "A_IsAdmin")) var_type = VAR_ISADMIN;
 		else if (!stricmp(new_name, "A_Cursor")) var_type = VAR_CURSOR;
@@ -4170,6 +4205,8 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, Var *aVarPrev)
 		else if (!stricmp(new_name, "A_Gui")) var_type = VAR_GUI;
 		else if (!stricmp(new_name, "A_GuiControl")) var_type = VAR_GUICONTROL;
 		else if (!stricmp(new_name, "A_GuiControlEvent")) var_type = VAR_GUICONTROLEVENT;
+		else if (!stricmp(new_name, "A_GuiWidth")) var_type = VAR_GUIWIDTH;
+		else if (!stricmp(new_name, "A_GuiHeight")) var_type = VAR_GUIHEIGHT;
 
 		else if (!stricmp(new_name, "A_TimeIdle")) var_type = VAR_TIMEIDLE;
 		else if (!stricmp(new_name, "A_TimeIdlePhysical")) var_type = VAR_TIMEIDLEPHYSICAL;
@@ -5581,11 +5618,11 @@ inline ResultType Line::EvaluateCondition()
 			break;
 		case VAR_TYPE_TIME:
 		{
-			FILETIME ft;
+			SYSTEMTIME st;
 			// Also insist on numeric, because even though YYYYMMDDToFileTime() will properly convert a
 			// non-conformant string such as "2004.4", for future compatibility, we don't want to
 			// report that such strings are valid times:
-			if_condition = IsPureNumeric(ARG1, false, false, false) && YYYYMMDDToFileTime(ARG1, &ft);
+			if_condition = IsPureNumeric(ARG1, false, false, false) && YYYYMMDDToSystemTime(ARG1, st, true);
 			break;
 		}
 		case VAR_TYPE_DIGIT:
@@ -7300,8 +7337,11 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		return FileSelectFile(ARG2, ARG3, ARG4, ARG5);
 	case ACT_FILESELECTFOLDER:
 		return FileSelectFolder(ARG2, (DWORD)(*ARG3 ? ATOI(ARG3) : FSF_ALLOW_CREATE), ARG4);
+
+	case ACT_FILEGETSHORTCUT:
+		return FileGetShortcut(ARG1);
 	case ACT_FILECREATESHORTCUT:
-		return FileCreateShortcut(SEVEN_ARGS);
+		return FileCreateShortcut(NINE_ARGS);
 
 	// Like AutoIt2, if either output_var or ARG1 aren't purely numeric, they
 	// will be considered to be zero for all of the below math functions:
@@ -7336,7 +7376,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 				FILETIME ft, ftNowUTC;
 				if (*output_var->Contents())
 				{
-					if (!YYYYMMDDToFileTime(output_var->Contents(), &ft))
+					if (!YYYYMMDDToFileTime(output_var->Contents(), ft))
 						return output_var->Assign(""); // Set to blank to indicate the problem.
 				}
 				else // The output variable is currently blank, so substitute the current time for it.
@@ -7774,6 +7814,9 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		// Otherwise, ignore invalid type at runtime since 99% of the time it would be caught at load-time:
 		return OK;
 
+	case ACT_FORMATTIME:
+		return FormatTime(ARG2, ARG3);
+
 	case ACT_MENU:
 		return g_script.PerformMenu(FIVE_ARGS);
 
@@ -7931,7 +7974,7 @@ ResultType Line::ExpandArgs()
 	// First pass: determine how must space will be needed to do all the args and allocate
 	// more memory if needed.  Second pass: dereference the args into the buffer.
 
-	size_t space_needed = GetExpandedArgSize(true);  // First pass.
+	size_t space_needed = GetExpandedArgSize(true);  // First pass. It takes into account the same things as 2nd pass.
 	if (space_needed == VARSIZE_ERROR)
 		return FAIL;  // It will have already displayed the error.
 
@@ -7946,10 +7989,10 @@ ResultType Line::ExpandArgs()
 	{
 		// K&R: Integer division truncates the fractional part:
 		size_t increments_needed = space_needed / DEREF_BUF_EXPAND_INCREMENT;
-		if (space_needed % DEREF_BUF_EXPAND_INCREMENT)  // Need one more if above division did truncate it.
+		if (space_needed % DEREF_BUF_EXPAND_INCREMENT)  // Need one more if above division truncated it.
 			++increments_needed;
 		sDerefBufSize = increments_needed * DEREF_BUF_EXPAND_INCREMENT;
-		if (sDerefBuf != NULL)
+		if (sDerefBuf)
 			// Do a free() and malloc(), which should be far more efficient than realloc(),
 			// especially if there is a large amount of memory involved here:
 			free(sDerefBuf);
@@ -7966,6 +8009,13 @@ ResultType Line::ExpandArgs()
 	// the fact that its prior contents become invalid once this function is called.
 	// It's also necessary due to the fact that all the old memory is discarded by
 	// the above if more space was needed to accommodate this line:
+
+	// (Re)set the timer unconditionally so that it starts counting again from time zero.
+	// In other words, we only want the timer to fire when the large deref buffer has been
+	// unused/idle for a straight 10 seconds.
+	if (sDerefBufSize > 4*1024*1024)
+		SET_DEREF_TIMER(10000)
+
 	Var *the_only_var_of_this_arg;
 	for (int iArg = 0; iArg < mArgc && iArg < MAX_ARGS; ++iArg) // Second pass.
 	{
@@ -8705,10 +8755,105 @@ VarSizeType Script::GetOSVersion(char *aBuf)
 	return (VarSizeType)strlen(version); // Always return length of version, not aBuf.
 }
 
+VarSizeType Script::GetLanguage(char *aBuf)
+// Registry locations from J-Paul Mesnage.
+{
+	char buf[MAX_PATH];
+	if (g_os.IsWinNT())  // NT/2k/XP+
+	{
+		if (g_os.IsWin2000orLater())
+			RegReadString(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Nls\\Language", "InstallLanguage", buf, MAX_PATH);
+		else // NT4
+			RegReadString(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Nls\\Language", "Default", buf, MAX_PATH);
+	}
+	else // Win9x
+	{
+		RegReadString(HKEY_USERS, ".DEFAULT\\Control Panel\\Desktop\\ResourceLocale", "", buf, MAX_PATH);
+		memmove(buf, buf + 4, strlen(buf + 4) + 1); // +1 to include the zero terminator.
+	}
+	if (aBuf)
+		strcpy(aBuf, buf);
+	return (VarSizeType)strlen(buf);
+}
+
+VarSizeType Script::GetUserOrComputer(bool aGetUser, char *aBuf)
+{
+	char buf[MAX_PATH];  // Doesn't use MAX_COMPUTERNAME_LENGTH + 1 in case longer names are allowed in the future.
+	DWORD buf_size = MAX_PATH;
+	if (   !(aGetUser ? GetUserName(buf, &buf_size) : GetComputerName(buf, &buf_size))   )
+		*buf = '\0';
+	if (aBuf)
+		strcpy(aBuf, buf);
+	return (VarSizeType)strlen(buf);
+}
+
+
+
 VarSizeType Script::GetProgramFiles(char *aBuf)
 {
 	char buf[MAX_PATH];
 	RegReadString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion", "ProgramFilesDir", buf, MAX_PATH);
+	if (aBuf)
+		strcpy(aBuf, buf);
+	return (VarSizeType)strlen(buf);
+}
+
+VarSizeType Script::GetDesktop(bool aGetCommon, char *aBuf)
+{
+	char buf[MAX_PATH] = "";
+	if (aGetCommon)
+		RegReadString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Desktop", buf, MAX_PATH);
+	if (!*buf) // Either the above failed or we were told to get the user/private dir instead.
+		RegReadString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Desktop", buf, MAX_PATH);
+	if (aBuf)
+		strcpy(aBuf, buf);
+	return (VarSizeType)strlen(buf);
+}
+
+VarSizeType Script::GetStartMenu(bool aGetCommon, char *aBuf)
+{
+	char buf[MAX_PATH] = "";
+	if (aGetCommon)
+		RegReadString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Start Menu", buf, MAX_PATH);
+	if (!*buf) // Either the above failed or we were told to get the user/private dir instead.
+		RegReadString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Start Menu", buf, MAX_PATH);
+	if (aBuf)
+		strcpy(aBuf, buf);
+	return (VarSizeType)strlen(buf);
+}
+
+VarSizeType Script::GetPrograms(bool aGetCommon, char *aBuf)
+{
+	char buf[MAX_PATH] = "";
+	if (aGetCommon)
+		RegReadString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Programs", buf, MAX_PATH);
+	if (!*buf) // Either the above failed or we were told to get the user/private dir instead.
+		RegReadString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Programs", buf, MAX_PATH);
+	if (aBuf)
+		strcpy(aBuf, buf);
+	return (VarSizeType)strlen(buf);
+}
+
+VarSizeType Script::GetStartup(bool aGetCommon, char *aBuf)
+{
+	char buf[MAX_PATH] = "";
+	if (aGetCommon)
+		RegReadString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Startup", buf, MAX_PATH);
+	if (!*buf) // Either the above failed or we were told to get the user/private dir instead.
+		RegReadString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Startup", buf, MAX_PATH);
+	if (aBuf)
+		strcpy(aBuf, buf);
+	return (VarSizeType)strlen(buf);
+}
+
+VarSizeType Script::GetMyDocuments(char *aBuf)
+{
+	char buf[MAX_PATH];
+	RegReadString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Personal", buf, MAX_PATH);
+	// Since it is common (such as in networked environments) to have My Documents on the root of a drive
+	// (such as a mapped drive letter), remove the backslash from something like M:\ because M: is more
+	// appropriate for most uses:
+	Line::Util_StripTrailingDir(buf);
 	if (aBuf)
 		strcpy(aBuf, buf);
 	return (VarSizeType)strlen(buf);
@@ -9279,17 +9424,37 @@ VarSizeType Script::GetEndChar(char *aBuf)
 
 
 
-VarSizeType Script::GetGui(char *aBuf)
+VarSizeType Script::GetGui(VarTypeType aVarType, char *aBuf)
 // We're returning the length of the var's contents, not the size.
 {
-	if (g.GuiWindowIndex == MAX_GUI_WINDOWS) // The current thread was not launched as a result of GUI action.
+	if (g.GuiWindowIndex >= MAX_GUI_WINDOWS) // The current thread was not launched as a result of GUI action.
 	{
 		if (aBuf)
 			*aBuf = '\0';
 		return 0;
 	}
+
+	GuiType *pgui;
 	char buf[MAX_NUMBER_LENGTH + 1];
-	_itoa(g.GuiWindowIndex + 1, buf, 10);  // Always stored as decimal vs. hex, regardless of script settings.
+
+	switch (aVarType)
+	{
+	case VAR_GUI:
+		_itoa(g.GuiWindowIndex + 1, buf, 10);  // Always stored as decimal vs. hex, regardless of script settings.
+		break;
+	case VAR_GUIWIDTH:
+	case VAR_GUIHEIGHT:
+		if (   !(pgui = g_gui[g.GuiWindowIndex])   ) // Gui window doesn't currently exist, so return a blank.
+		{
+			if (aBuf)
+				*aBuf = '\0';
+			return 0;
+		}
+		// Otherwise:
+		_itoa(aVarType == VAR_GUIWIDTH ? LOWORD(pgui->mSizeWidthHeight) : HIWORD(pgui->mSizeWidthHeight), buf, 10);
+		// Above is always stored as decimal vs. hex, regardless of script settings.
+		break;
+	}
 	if (aBuf)
 		strcpy(aBuf, buf);
 	return (VarSizeType)strlen(buf);
@@ -9304,7 +9469,7 @@ VarSizeType Script::GetGuiControl(char *aBuf)
 	// Note that other logic ensures that g.GuiControlIndex is out-of-bounds whenever g.GuiWindowIndex is.
 	// That is why g.GuiWindowIndex is not checked to make sure it's less than MAX_GUI_WINDOWS.
 	// Relies on short-circuit boolean order:
-	if (g.GuiControlIndex == MAX_CONTROLS_PER_GUI // A non-GUI thread or one triggered by GuiClose/Escape or Gui menu bar.
+	if (g.GuiControlIndex >= MAX_CONTROLS_PER_GUI // Must check this first due to short-circuit boolean.  A non-GUI thread or one triggered by GuiClose/Escape or Gui menu bar.
 		|| !(pgui = g_gui[g.GuiWindowIndex]) // Gui Window no longer exists.
 		|| g.GuiControlIndex >= pgui->mControlCount) // Gui control no longer exists, perhaps because window was destroyed and recreated with fewer controls.
 	{
@@ -9335,6 +9500,57 @@ VarSizeType Script::GetGuiControl(char *aBuf)
 VarSizeType Script::GetGuiControlEvent(char *aBuf)
 // We're returning the length of the var's contents, not the size.
 {
+	if (g.GuiEvent == GUI_EVENT_DROPFILES)
+	{
+		GuiType *pgui;
+		UINT u, file_count;
+		// GUI_EVENT_DROPFILES should mean that g.GuiWindowIndex < MAX_GUI_WINDOWS, but the below will double check
+		// that in case g.GuiEvent can ever be set to that value as a result of receiving a bogus message in the queue.
+		if (g.GuiWindowIndex >= MAX_GUI_WINDOWS  // The current thread was not launched as a result of GUI action or this is a bogus msg.
+			|| !(pgui = g_gui[g.GuiWindowIndex]) // Gui window no longer exists.  Relies on short-circuit boolean.
+			|| !pgui->mHdrop // No HDROP (probably impossible unless g.GuiEvent was given a bogus value somehow).
+			|| !(file_count = DragQueryFile(pgui->mHdrop, 0xFFFFFFFF, NULL, 0))) // No files in the drop (not sure if this is possible).
+			// All of the above rely on short-circuit boolean order.
+		{
+			// Make the dropped-files list blank since there is no HDROP to query (or no files in it).
+			if (aBuf)
+				*aBuf = '\0';
+			return 0;
+		}
+		// Above has ensured that file_count > 0
+		if (aBuf)
+		{
+			char *cp = aBuf;
+			for (u = 0; u < file_count; ++u)
+			{
+				cp += DragQueryFile(pgui->mHdrop, u, cp, MAX_PATH); // MAX_PATH is arbitrary since aBuf is already known to be large enough.
+				if (u < file_count - 1) // i.e omit the LF after the last file to make parsing via "Loop, Parse" easier.
+					*cp++ = '\n';
+				// Although the transcription of files on the clipboard into their text filenames is done
+				// with \r\n (so that they're in the right format to be pasted to other apps as a plain text
+				// list), it seems best to use a plain linefeed for dropped files since they won't be going
+				// onto the clipboard nearly as often, and `n is easier to parse.  Also, a script array isn't
+				// used because large file lists would then consume a lot more of memory because arrays
+				// are permanent once created, and also there would be wasted space due to the part of each
+				// variable's capacity not used by the filename.
+			}
+			// No need for final termination of string because the last item lacks a newline.
+			return (VarSizeType)(cp - aBuf); // This is the length of what's in the buffer.
+		}
+		else
+		{
+			VarSizeType total_length = 0;
+			for (u = 0; u < file_count; ++u)
+				total_length += DragQueryFile(pgui->mHdrop, u, NULL, 0);
+				// Above: MSDN: "If the lpszFile buffer address is NULL, the return value is the required size,
+				// in characters, of the buffer, not including the terminating null character."
+			return total_length + file_count - 1; // Include space for a linefeed after each filename except the last.
+		}
+		// Don't call DragFinish() because this variable might be referred to again before this thread
+		// is done.  DragFinish() is called by MsgSleep() when the current thread finishes.
+	}
+
+	// Otherwise, this event is not GUI_EVENT_DROPFILES, so use standard modes of operation.
 	static char *names[] = GUI_EVENT_NAMES;
 	if (!aBuf)
 		return (g.GuiEvent < GUI_EVENT_ILLEGAL) ? (VarSizeType)strlen(names[g.GuiEvent]) : 1;
@@ -9344,7 +9560,7 @@ VarSizeType Script::GetGuiControlEvent(char *aBuf)
 		strcpy(aBuf, names[g.GuiEvent]);
 		return (VarSizeType)strlen(aBuf);
 	}
-	// Otherwise, g.GuiEvent is assumed to be an ASCII value, such as a digit.  This supports Slider controls.
+	else // g.GuiEvent is assumed to be an ASCII value, such as a digit.  This supports Slider controls.
 	{
 		*aBuf++ = (char)(UCHAR)g.GuiEvent;
 		*aBuf = '\0';

@@ -19,7 +19,7 @@ GNU General Public License for more details.
 #include "globaldata.h" // for g.KeyDelay
 #include "application.h" // for MsgSleep()
 #include "util.h"  // for strlicmp()
-#include "window.h" // for MsgBox() (debug)
+#include "window.h" // for IsWindowHung()
 
 
 inline void DoKeyDelay(int aDelay = g.KeyDelay)

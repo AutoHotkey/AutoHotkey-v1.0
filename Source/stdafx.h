@@ -37,8 +37,6 @@ GNU General Public License for more details.
 	// C RunTime Header Files
 	#include <stdio.h>
 	#include <stdlib.h>
-	#include <time.h> // for the c-lib time functions, to support A_YDAY, etc.
-	#include <sys/timeb.h> // for _timeb struct
 	#include <stdarg.h> // used by snprintfcat()
 	#include <limits.h>  // for UINT_MAX, UCHAR_MAX, etc.
 	//#include <malloc.h>

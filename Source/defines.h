@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.23"
+#define NAME_VERSION "1.0.24"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -252,6 +252,7 @@ typedef UINT GuiEventType; // Made a UINT vs. enum so that illegal/underflow/ove
 #define GUI_EVENT_NORMAL      1
 #define GUI_EVENT_DBLCLK      2
 #define GUI_EVENT_ILLEGAL     3 // This item must always be last, and it must be 1 greater than the previous.
+#define GUI_EVENT_DROPFILES   4 // A special value separate from the above and yet less than ASCII values of '1' through '9' used by Slider controls.
 #define GUI_EVENT_NAMES {"", "Normal", "DoubleClick"}  // THIS MUST BE KEPT IN SYNC WITH THE ABOVE.
 
 // Bitwise flags:
@@ -277,8 +278,8 @@ struct global_struct
 	int UninterruptedLineCount; // Stored as a g-struct attribute in case OnExit sub interrupts it while uninterruptible.
 	int Priority;  // This thread's priority relative to others.
 	GuiEventType GuiEvent; // This thread's triggering event, e.g. DblClk vs. normal click.
-	GuiIndexType GuiWindowIndex, GuiControlIndex; // The GUI window index and control index that launched this thread.
-	int DefaultGuiIndex;  // This thread's default GUI window, used except when specified "Gui, 2:Add, ..."
+	GuiIndexType GuiWindowIndex, GuiDefaultWindowIndex, GuiControlIndex; // The GUI window index and control index that launched this thread.
+	// Above: GuiDefaultWindowIndex is the thread's default GUI window, used except when specified "Gui, 2:Add, ..."
 	int WinDelay;  // negative values may be used as special flags.
 	int ControlDelay;  // negative values may be used as special flags.
 	int KeyDelay;  // negative values may be used as special flags.
@@ -308,6 +309,11 @@ inline void global_clear_state(global_struct *gp)
 	gp->MsgBoxResult = 0;
 	gp->IsPaused = false;
 	gp->UninterruptedLineCount = 0;
+	gp->GuiDefaultWindowIndex = 0;
+	// Above line is done because allowing it to be permanently changed by the auto-exec section
+	// seems like it would cause more confusion that it's worth.  A change to the global default
+	// or even an override/always-use-this-window-number mode can be added if there is ever a
+	// demand for it.
 }
 
 inline void global_init(global_struct *gp)
@@ -330,9 +336,11 @@ inline void global_init(global_struct *gp)
 	#define PRIORITY_MINIMUM INT_MIN
 	gp->Priority = 0;
 	gp->GuiEvent = GUI_EVENT_NONE;
-	gp->GuiWindowIndex = MAX_GUI_WINDOWS;       // Default it to out-of-bounds.
+	// For these, indexes rather than pointers are stored because handles can become invalid during the
+	// lifetime of a thread (while it's suspended, or if it destroys the control or window that created itself):
+	gp->GuiWindowIndex = MAX_GUI_WINDOWS;  // Default them to out-of-bounds.
 	gp->GuiControlIndex = MAX_CONTROLS_PER_GUI; // Same.
-	gp->DefaultGuiIndex = 0;
+	gp->GuiDefaultWindowIndex = 0;
 	gp->WinDelay = 100;  // AutoIt3's default is 250, which seems a little too high nowadays.
 	gp->ControlDelay = 20;
 	gp->KeyDelay = 10;   // AutoIt3's default.

@@ -23,10 +23,11 @@ GNU General Public License for more details.
 
 class Clipboard
 {
-private:
+public:
 	HGLOBAL mClipMemNow, mClipMemNew;
 	char *mClipMemNowLocked, *mClipMemNewLocked;
 	size_t mLength;  // Last-known length of the clipboard contents.
+	bool mIsOpen;  // Whether the clipboard is physically open due to action by this class.
 
 	// It seems best to default to many attempts, because a failure
 	// to open the clipboard may result in the early termination
@@ -35,9 +36,6 @@ private:
 	// number of attempts from 20 to 40 because Jason (Payam) reported
 	// that he was getting an error on rare occasions (but not reproducible).
 	ResultType Open(int aAttempts = 40, int aRetryInterval = 20);
-
-public:
-	bool mIsOpen;  // Whether the clipboard is physically open due to action by this class.
 
 	// Below: Whether the clipboard is ready to be written to.  Note that the clipboard is not
 	// usually physically open even when this is true, unless the caller specifically opened
@@ -49,8 +47,8 @@ public:
 
 	ResultType Set(char *aBuf = NULL, UINT aLength = UINT_MAX); //, bool aTrimIt = false);
 	char *PrepareForWrite(size_t aAllocSize);
-	ResultType Commit();
-	ResultType AbortWrite(char *aErrorMessage);
+	ResultType Commit(UINT aFormat = CF_TEXT);
+	ResultType AbortWrite(char *aErrorMessage = "");
 	ResultType Close(char *aErrorMessage = NULL);
 	char *Contents()
 	{
@@ -64,7 +62,7 @@ public:
 			// just do this for now, to remind the caller that in these cases, it should
 			// call Get(buf), providing the target buf so that we have some memory to
 			// transcribe the (potentially huge) list of files into:
-			return IsClipboardFormatAvailable(CF_HDROP) ? "<< Clipboard Contains File(s) >>" : "";
+			return IsClipboardFormatAvailable(CF_HDROP) ? "<<>>" : "";
 		else
 			// Some callers may rely upon receiving empty string rather than NULL on failure:
 			return (Get() == CLIPBOARD_FAILURE) ? "" : mClipMemNowLocked;

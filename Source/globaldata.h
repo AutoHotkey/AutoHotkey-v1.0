@@ -67,6 +67,7 @@ extern bool g_MainTimerExists;
 extern bool g_UninterruptibleTimerExists;
 extern bool g_AutoExecTimerExists;
 extern bool g_InputTimerExists;
+extern bool g_DerefTimerExists;
 extern bool g_SoundWasPlayed;
 extern bool g_IsSuspended;
 extern int g_nLayersNeedingTimer;

@@ -70,7 +70,8 @@
 			OutputDirectory="Release"
 			IntermediateDirectory="Release"
 			ConfigurationType="1"
-			CharacterSet="2">
+			CharacterSet="2"
+			WholeProgramOptimization="FALSE">
 			<Tool
 				Name="VCCLCompilerTool"
 				Optimization="2"
@@ -132,7 +133,8 @@
 			OutputDirectory="$(ConfigurationName)"
 			IntermediateDirectory="$(ConfigurationName)"
 			ConfigurationType="1"
-			CharacterSet="2">
+			CharacterSet="2"
+			WholeProgramOptimization="FALSE">
 			<Tool
 				Name="VCCLCompilerTool"
 				Optimization="2"
@@ -155,6 +157,7 @@
 			<Tool
 				Name="VCLinkerTool"
 				AdditionalDependencies="wsock32.lib winmm.lib version.lib comctl32.lib $(InputDir)\source\lib\exearc_read_mt.lib"
+				ShowProgress="0"
 				OutputFile="$(OutDir)/AutoHotkeySC.bin"
 				LinkIncremental="1"
 				IgnoreDefaultLibraryNames="LIBCMT"

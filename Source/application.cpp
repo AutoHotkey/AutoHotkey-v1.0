@@ -207,6 +207,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 	GuiIndexType gui_index;  // Don't use pgui because pointer can become invalid if ExecUntil() executes "Gui Destroy".
 	bool *pgui_label_is_running;
 	Label *gui_label;
+	HDROP hdrop_to_free;
 	DWORD tick_before, tick_after;
 	MSG msg;
 
@@ -358,7 +359,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 			if (   msg.message == WM_KEYDOWN
 				&& (msg.wParam == VK_NEXT || msg.wParam == VK_PRIOR || msg.wParam == VK_TAB
 					|| msg.wParam == VK_LEFT || msg.wParam == VK_RIGHT)
-				&& (focused_control = GetFocus()) && (focused_parent = GetParent(focused_control))
+				&& (focused_control = GetFocus()) && (focused_parent = GetNonChildParent(focused_control))
 				&& (pgui = GuiType::FindGui(focused_parent)) && pgui->mTabControlCount
 				&& (pcontrol = pgui->FindControl(focused_control)) && pcontrol->type != GUI_CONTROL_HOTKEY   )
 			{
@@ -485,6 +486,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 		case AHK_GUI_ACTION:   // The user pressed a button on a GUI window, or some other actionable event.
 			// MSG_FILTER_MAX should prevent us from receiving these messages (except AHK_USER_MENU)
 			// whenever g_AllowInterruption or g.AllowThisThreadToBeInterrupted is false.
+			hdrop_to_free = NULL;  // Set default for this message's processing (simplifies code).
 			switch(msg.message)
 			{
 			case AHK_USER_MENU: // user-defined menu item
@@ -521,20 +523,39 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 				if (   !(pgui = GuiType::FindGui(msg.hwnd))   ) // No associated GUI object, so ignore this event.
 					continue;
 				gui_index = pgui->mWindowIndex;  // Needed in case ExecUntil() performs "Gui Destroy" further below.
-				if (msg.wParam == AHK_GUI_CLOSE) // This is the signal to run the window's OnClose label.
+				switch(msg.wParam)
 				{
+				case AHK_GUI_CLOSE:  // This is the signal to run the window's OnClose label.
 					if (   !(gui_label = pgui->mLabelForClose)   ) // In case it became NULL since the msg was posted.
 						continue;
 					pgui_label_is_running = &pgui->mLabelForCloseIsRunning;
-				}
-				else if (msg.wParam == AHK_GUI_ESCAPE) // This is the signal to run the window's OnEscape label.
-				{
+					break;
+				case AHK_GUI_ESCAPE: // This is the signal to run the window's OnEscape label.
 					if (   !(gui_label = pgui->mLabelForEscape)   ) // In case it became NULL since the msg was posted.
 						continue;
 					pgui_label_is_running = &pgui->mLabelForEscapeIsRunning;
-				}
-				else // This is an action from a particular control in the GUI window.
-				{
+					break;
+				case AHK_GUI_SIZE: // This is the signal to run the window's OnEscape label.
+					if (   !(gui_label = pgui->mLabelForSize)   ) // In case it became NULL since the msg was posted.
+						continue;
+					pgui_label_is_running = &pgui->mLabelForSizeIsRunning;
+					break;
+				case AHK_GUI_DROPFILES: // This is the signal to run the window's DropFiles label.
+					hdrop_to_free = pgui->mHdrop; // This variable simplifies the code further below.
+					if (   !(gui_label = pgui->mLabelForDropFiles)   ) // In case it became NULL since the msg was posted.
+					{
+						if (hdrop_to_free)
+						{
+							DragFinish(hdrop_to_free); // Since the drop-thread will not be launched, free the memory.
+							pgui->mHdrop = NULL; // Indicate that this GUI window is ready for another drop.
+						}
+						continue;
+					}
+					// It is not necessary to check if the label is running in this case because
+					// the caller who posted this message to us has ensured that it isn't running.
+					pgui_label_is_running = NULL;
+					break;
+				default: // This is an action from a particular control in the GUI window.
 					if (msg.wParam >= pgui->mControlCount) // Index beyond the quantity of controls, so ignore this event.
 						continue;
 					if (   !(gui_label = pgui->mControl[msg.wParam].jump_to_label)   )
@@ -547,18 +568,12 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 						// non-actionable since the time the msg was posted.
 					}
 					pgui_label_is_running = NULL; // This signals below to use alternate variable.
-				}
-				break;
-			}
+				} // switch(msg.wParam)
+				break; // case AHK_GUI_ACTION
+			} // switch(msg.message)
 
 			if (g_nThreads >= g_MaxThreadsTotal)
 			{
-				// The below allows 1 thread beyond the limit in case the script's configured
-				// #MaxThreads is exactly equal to the absolute limit.  This is because we want
-				// subroutines whose first line is something like ExitApp to take effect even
-				// when we're at the absolute limit:
-				if (g_nThreads > MAX_THREADS_LIMIT)
-					continue;
 				switch(msg.message)
 				{
 				case AHK_USER_MENU: // user-defined menu item
@@ -573,7 +588,12 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 				default: // hotkey
 					type_of_first_line = Hotkey::GetTypeOfFirstLine((HotkeyIDType)msg.wParam);
 				}
-				if (!ACT_IS_ALWAYS_ALLOWED(type_of_first_line))
+				// The below allows 1 thread beyond the limit in case the script's configured
+				// #MaxThreads is exactly equal to the absolute limit.  This is because we want
+				// subroutines whose first line is something like ExitApp to take effect even
+				// when we're at the absolute limit:
+				if (g_nThreads > MAX_THREADS_LIMIT || !ACT_IS_ALWAYS_ALLOWED(type_of_first_line))
+				{
 					// Allow only a limited number of recursion levels to avoid any chance of
 					// stack overflow.  So ignore this message.  Later, can devise some way
 					// to support "queuing up" these launch-thread events for use later when
@@ -583,7 +603,13 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 					// might also make "infinite key loops" harder to catch because the rate
 					// of incoming hotkeys would be slowed down to prevent the subroutines from
 					// running concurrently.
+					if (hdrop_to_free) // This is only non-NULL when pgui is non-NULL.
+					{
+						DragFinish(hdrop_to_free); // Since the drop-thread will not be launched, free the memory.
+						pgui->mHdrop = NULL; // Indicate that this GUI window is ready for another drop.
+					}
 					continue;
+				}
 				// If the above "continued", it seems best not to re-queue/buffer the key since
 				// it might be a while before the number of threads drops back below the limit.
 			}
@@ -609,7 +635,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 					if (*pgui_label_is_running)
 						continue;
 				}
-				else // A control's label.
+				else if (msg.wParam != AHK_GUI_DROPFILES) // A control's label.
 					if (pgui->mControl[msg.wParam].attrib & GUI_CONTROL_ATTRIB_LABEL_IS_RUNNING)
 						continue;
 				priority = 0;  // Always use default for now.
@@ -632,8 +658,15 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 				priority = Hotkey::GetPriority((HotkeyIDType)msg.wParam);
 			}
 
-			if (priority < g.Priority)
+			if (priority < g.Priority) // Ignore this event because its priority is too low.
+			{
+				if (hdrop_to_free) // This is only non-NULL when pgui is non-NULL.
+				{
+					DragFinish(hdrop_to_free); // Since the drop-thread will not be launched, free the memory.
+					pgui->mHdrop = NULL; // Indicate that this GUI window is ready for another drop.
+				}
 				continue;
+			}
 
 			// Always kill the main timer, for performance reasons and for simplicity of design,
 			// prior to embarking on new subroutine whose duration may be long (e.g. if BatchLines
@@ -754,11 +787,10 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 					if (g_gui[msg.wParam])
 					{
 						g.hWndLastUsed = g_gui[msg.wParam]->mHwnd; // OK if NULL.
-						g.DefaultGuiIndex = (int)msg.wParam;
 						// This flags GUI menu items as being GUI so that the script has a way of detecting
 						// whether a given submenu's item was selected from inside a menu bar vs. a popup:
 						g.GuiEvent = GUI_EVENT_NORMAL;
-						g.GuiWindowIndex = (GuiIndexType)msg.wParam; // But leave GuiControl at its default, which flags this event as from a menu item.
+						g.GuiWindowIndex = g.GuiDefaultWindowIndex = (GuiIndexType)msg.wParam; // But leave GuiControl at its default, which flags this event as from a menu item.
 					}
 				}
 				menu_item->mLabel->mJumpToLine->ExecUntil(UNTIL_RETURN);
@@ -770,19 +802,32 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 
 			case AHK_GUI_ACTION:
 				// This indicates whether a double-click or other non-standard event launched it:
-				g.GuiEvent = (GuiEventType)msg.lParam;
+				g.GuiEvent = (msg.wParam == AHK_GUI_DROPFILES) ? GUI_EVENT_DROPFILES : (GuiEventType)msg.lParam;
 				g.GuiWindowIndex = pgui->mWindowIndex; // g.GuiControlIndex is conditionally set later below.
-				g.DefaultGuiIndex = pgui->mWindowIndex; // GUI threads default to operating upon their own window.
-				g_ErrorLevel->Assign(); // Reset for potential future uses (may help avoid breaking existing scripts if ErrorLevel is ever set).
+				g.GuiDefaultWindowIndex = pgui->mWindowIndex; // GUI threads default to operating upon their own window.
+				if (msg.wParam == AHK_GUI_SIZE)
+					// Note that SIZE_MAXSHOW/SIZE_MAXHIDE don't seem to ever be received under the conditions
+					// described at MSDN, even if the window has WS_POPUP style.  Therefore, ErrorLevel will
+					// probably never contain those values, and as a result they are not documented in the help file.
+					g_ErrorLevel->Assign((DWORD)pgui->mSizeType);
+				else // Reset for potential future uses (may help avoid breaking existing scripts if ErrorLevel is ever set).
+					g_ErrorLevel->Assign();
 				// Set last found window (as documented).  It's not necessary to check IsWindow/IsWindowVisible/
 				// DetectHiddenWindows since g_ValidLastUsedWindow takes care of that whenever the script
 				// actually tries to use the last found window:
-				g.hWndLastUsed = pgui->mHwnd; // OK if NULL.
+				g.hWndLastUsed = pgui->mHwnd;
 
 				if (pgui_label_is_running) // i.e. GuiClose, GuiEscape, and related window-level events.
 					*pgui_label_is_running = true;
 					// and leave g.GuiControlIndex at its default
-				else // It's a control, so set its attribute.
+				else if (msg.wParam == AHK_GUI_DROPFILES)
+				{
+					g.GuiControlIndex = (GuiIndexType)msg.lParam; // Index is in lParam vs. wParam in this case.
+					// Visually indicate that drops aren't allowed while and existing drop is still being processed:
+					pgui->mExStyle &= ~WS_EX_ACCEPTFILES; // Update the member in case it is referenced during the drop.
+					SetWindowLong(pgui->mHwnd, GWL_EXSTYLE, pgui->mExStyle);
+				}
+				else // It's a control's action, so set its attribute.
 				{
 					pgui->mControl[msg.wParam].attrib |= GUI_CONTROL_ATTRIB_LABEL_IS_RUNNING;
 					g.GuiControlIndex = (GuiIndexType)msg.wParam;
@@ -791,12 +836,25 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 				gui_label->mJumpToLine->ExecUntil(UNTIL_RETURN);
 
 				// Bug-fix for v1.0.22: If the above ExecUntil() performed a "Gui Destroy", the
-				// pointers below are now invalid so should not be dereferenced:
+				// pointers below are now invalid so should not be dereferenced.  In such a case,
+				// hdrop_to_free will already have been freed as part of the window destruction
+				// process, so don't do it here.  g_gui[gui_index] is checked to ensure the window
+				// still exists:
 				if (g_gui[gui_index])
 				{
 					if (pgui_label_is_running)
 						*pgui_label_is_running = false;
-					else
+					else if (msg.wParam == AHK_GUI_DROPFILES)
+					{
+						if (hdrop_to_free) // This is only non-NULL when pgui is non-NULL.
+						{
+							DragFinish(hdrop_to_free); // Since the DropFiles quasi-thread is finished, free the HDROP resources.
+							pgui->mHdrop = NULL; // Indicate that this GUI window is ready for another drop.
+						}
+						pgui->mExStyle |= WS_EX_ACCEPTFILES;
+						SetWindowLong(pgui->mHwnd, GWL_EXSTYLE, pgui->mExStyle);
+					}
+					else // It's a control's action, so set its attribute.
 						pgui->mControl[msg.wParam].attrib &= ~GUI_CONTROL_ATTRIB_LABEL_IS_RUNNING;
 				}
 
@@ -1211,4 +1269,16 @@ VOID CALLBACK InputTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
 {
 	KILL_INPUT_TIMER
 	g_input.status = INPUT_TIMED_OUT;
+}
+
+
+
+VOID CALLBACK DerefTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
+{
+	KILL_DEREF_TIMER
+	Line::FreeDerefBuf();
+	// Freeing the buffer should be safe even if the script's current quasi-thread is in the middle
+	// of executing a command, since commands are all designed to make only temporary use of the
+	// deref buffer (they make copies of anything they need prior to calling MsgSleep() or anything
+	// else that might pump messages and thus result in a call to us here).
 }

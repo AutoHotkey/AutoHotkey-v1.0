@@ -1704,7 +1704,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	// Do this only after the above because the SuppressThisKey macro relies
 	// on the vk variable being available.  It also relies upon the fact that sc has
 	// already been properly determined:
-	// In rare cases it may be necessary to suppress both left and right, which is why
+	// In rare cases it may be necessary to disguise both left and right, which is why
 	// it's not done as a generic windows key:
 	if (   key_up && ((disguise_next_lwin_up && vk == VK_LWIN) || (disguise_next_rwin_up && vk == VK_RWIN)
 		 || (disguise_next_lalt_up && vk == VK_LMENU) || (disguise_next_ralt_up && vk == VK_RMENU))   )
@@ -1727,7 +1727,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		// held down for it, the Start Menu or foreground window's menu bar won't be invoked.
 		// It's necessary to send an up-event so that it's state, as seen by the system,
 		// is put back into the up position, which would be needed if its previous
-		// down-event wasn't suppressed (probably due to the fact that this win
+		// down-event wasn't suppressed (probably due to the fact that this win or alt
 		// key is a prefix but not a suffix):
 		KeyEvent(KEYDOWN, VK_SHIFT);
 		KEYEVENT_PHYS(KEYUP, vk, sc); // Mark it as physical for any other hook instances.

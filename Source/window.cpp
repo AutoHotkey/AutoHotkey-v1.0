@@ -421,6 +421,10 @@ HWND WinClose(char *aTitle, char *aText, int aTimeToWaitForClose
 
 	if (aKillIfHung) // This part is based on the AutoIt3 source.
 	{
+		// Update: Another reason not to wait a long time with the below is that WinKill
+		// is normally only used when the target window is suspected of being hung.  It
+		// seems bad to wait something like 2 seconds in such a case, when the caller
+		// probably already knows it's hung.
 		// AutoIt3 waits for 500ms.  But because this app is much more sensitive to being
 		// in a "not-pumping-messages" state, due to the keyboard & mouse hooks, it seems
 		// better to wait for less (e.g. in case the user is gaming and there's a script
@@ -856,8 +860,14 @@ ResultType StatusBarUtil(Var *aOutputVar, HWND aControlWindow, int aPartNumber
 	// Whenever using SendMessageTimeout(), our app will be unresponsive until
 	// the call returns, since our message loop isn't running.  In addition,
 	// if the keyboard or mouse hook is installed, the input events will lag during
-	// this call.  So keep the timeout value fairly short:
-	#define SB_TIMEOUT 100
+	// this call.  So keep the timeout value fairly short.  Update for v1.0.24:
+	// There have been at least two reports of the StatusBarWait command ending
+	// prematurely with an ErrorLevel of 2.  The most likely culprit is the below,
+	// which has now been increased from 100 to 2000, since it seems preferable
+	// to have mouse lag in exchange for better bar-waiting reliability.  The
+	// mouse/keybd lag issue will hopefully go away someday anyway, when the hooks
+	// get a dedicated thread:
+	#define SB_TIMEOUT 2000
 
 	// AutoIt3: How many parts does this bar have?
 	DWORD nParts = 0;

@@ -44,7 +44,7 @@
 */
 
 #include "StdAfx.h"								// Pre-compiled headers
-//#include <time.h>
+//#include <time.h> // Don't rely on any of these functions due to their code size.
 #include "mt19937ar-cok.h"
 
 // Period parameters 
@@ -124,7 +124,8 @@ static void next_state(void)
 
     // if init_genrand() has not been called, a default initial seed is used     
     if (initf==0) 
-		init_genrand((unsigned long)time(NULL));  // get timer value
+		//init_genrand((unsigned long)time(NULL));  // get timer value
+		init_genrand(GetTickCount()); // Avoiding the c-lib time functions reduces code size for AHK.
 
     left = N;
     next = state;

@@ -117,7 +117,7 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt)
 			// needed because the clipboard is never assigned something that needs
 			// to be trimmed in this way (i.e. PerformAssign handles the trimming
 			// on its own for the clipboard, due to the fact that dereferencing
-			// into the temp buf is unnecessary when the clipboard is the target:
+			// into the temp buf is unnecessary when the clipboard is the target):
 			return g_clip.Set(aBuf, aLength); //, aTrimIt);
 		else
 			// We open it for write now, because some caller's don't call
@@ -214,10 +214,14 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt)
 			// free's and malloc's we expect to have to do in the future for this var:
 			if (alloc_size < MAX_PATH)
 				alloc_size = MAX_PATH;  // An amount that will fit all standard filenames seems good.
-			else if (alloc_size < (64 * 1024))
+			else if (alloc_size < (160 * 1024)) // MAX_PATH to 160 KB or less -> 10% extra.
 				alloc_size = (size_t)(alloc_size * 1.1);
-			else
-				alloc_size += (8 * 1024);
+			else if (alloc_size < (1600 * 1024))  // 160 to 1600 KB -> 16 KB extra
+				alloc_size += (16 * 1024); 
+			else if (alloc_size < (6400 * 1024)) // 1600 to 6400 KB -> 1% extra
+				alloc_size = (size_t)(alloc_size * 1.01);
+			else  // 6400 KB or more: Cap the extra margin at some reasonable compromise of speed vs. mem usage: 64 KB
+				alloc_size += (64 * 1024);
 			if (alloc_size > g_MaxVarCapacity)
 				alloc_size = g_MaxVarCapacity;  // which has already been verified to be enough.
 			if (   !(mContents = (char *)malloc(alloc_size))   )
@@ -277,8 +281,7 @@ VarSizeType Var::Get(char *aBuf)
 
 	DWORD result;
 	static DWORD timestamp_tick = 0, now_tick; // static should be thread + recursion safe in this case.
-	static time_t tloc;
-	static tm *now = NULL;
+	static SYSTEMTIME st_static = {0};
 
 	// Just a fake buffer to pass to some API functions in lieu of a NULL, to avoid
 	// any chance of misbehavior:
@@ -416,8 +419,21 @@ VarSizeType Var::Get(char *aBuf)
 
 	case VAR_OSTYPE: if (!aBuf) return g_script.GetOSType(); aBuf += g_script.GetOSType(aBuf); break;
 	case VAR_OSVERSION: if (!aBuf) return g_script.GetOSVersion(); aBuf += g_script.GetOSVersion(aBuf); break;
+	case VAR_LANGUAGE: if (!aBuf) return g_script.GetLanguage(); aBuf += g_script.GetLanguage(aBuf); break;
+	case VAR_COMPUTERNAME: if (!aBuf) return g_script.GetUserOrComputer(false); aBuf += g_script.GetUserOrComputer(false, aBuf); break;
+	case VAR_USERNAME: if (!aBuf) return g_script.GetUserOrComputer(true); aBuf += g_script.GetUserOrComputer(true, aBuf); break;
+
 	case VAR_WINDIR: if (!aBuf) return GetWindowsDirectory(buf_temp, 0) - 1; aBuf += GetWindowsDirectory(aBuf, MAX_PATH); break;  // Sizes/lengths/-1/etc. verified correct.
 	case VAR_PROGRAMFILES: if (!aBuf) return g_script.GetProgramFiles(); aBuf += g_script.GetProgramFiles(aBuf); break;
+	case VAR_DESKTOP: if (!aBuf) return g_script.GetDesktop(false); aBuf += g_script.GetDesktop(false, aBuf); break;
+	case VAR_DESKTOPCOMMON: if (!aBuf) return g_script.GetDesktop(true); aBuf += g_script.GetDesktop(true, aBuf); break;
+	case VAR_STARTMENU: if (!aBuf) return g_script.GetStartMenu(false); aBuf += g_script.GetStartMenu(false, aBuf); break;
+	case VAR_STARTMENUCOMMON: if (!aBuf) return g_script.GetStartMenu(true); aBuf += g_script.GetStartMenu(true, aBuf); break;
+	case VAR_PROGRAMS: if (!aBuf) return g_script.GetPrograms(false); aBuf += g_script.GetPrograms(false, aBuf); break;
+	case VAR_PROGRAMSCOMMON: if (!aBuf) return g_script.GetPrograms(true); aBuf += g_script.GetPrograms(true, aBuf); break;
+	case VAR_STARTUP: if (!aBuf) return g_script.GetStartup(false); aBuf += g_script.GetStartup(false, aBuf); break;
+	case VAR_STARTUPCOMMON: if (!aBuf) return g_script.GetStartup(true); aBuf += g_script.GetStartup(true, aBuf); break;
+	case VAR_MYDOCUMENTS: if (!aBuf) return g_script.GetMyDocuments(); aBuf += g_script.GetMyDocuments(aBuf); break;
 
 	case VAR_ISADMIN: if (!aBuf) return g_script.GetIsAdmin(); aBuf += g_script.GetIsAdmin(aBuf); break;
 	case VAR_CURSOR: if (!aBuf) return g_script.ScriptGetCursor(); aBuf += g_script.ScriptGetCursor(aBuf); break;
@@ -467,9 +483,12 @@ VarSizeType Var::Get(char *aBuf)
 	case VAR_TIMESINCEPRIORHOTKEY: if (!aBuf) return g_script.GetTimeSincePriorHotkey(); else aBuf += g_script.GetTimeSincePriorHotkey(aBuf); break;
 	case VAR_ENDCHAR: if (!aBuf) return g_script.GetEndChar(); else aBuf += g_script.GetEndChar(aBuf); break;
 
-	case VAR_GUI: if (!aBuf) return g_script.GetGui(); else aBuf += g_script.GetGui(aBuf); break;
 	case VAR_GUICONTROL: if (!aBuf) return g_script.GetGuiControl(); else aBuf += g_script.GetGuiControl(aBuf); break;
 	case VAR_GUICONTROLEVENT: if (!aBuf) return g_script.GetGuiControlEvent(); else aBuf += g_script.GetGuiControlEvent(aBuf); break;
+	case VAR_GUI:
+	case VAR_GUIWIDTH:
+	case VAR_GUIHEIGHT: // All of the above use the below.
+		if (!aBuf) return g_script.GetGui(mType); else aBuf += g_script.GetGui(mType, aBuf); break;
 
 	case VAR_TIMEIDLE: if (!aBuf) return g_script.GetTimeIdle(); else aBuf += g_script.GetTimeIdle(aBuf); break;
 	case VAR_TIMEIDLEPHYSICAL: if (!aBuf) return g_script.GetTimeIdlePhysical(); else aBuf += g_script.GetTimeIdlePhysical(aBuf); break;
@@ -495,40 +514,39 @@ VarSizeType Var::Get(char *aBuf)
 	case VAR_DD:
 	case VAR_HOUR:
 	case VAR_MIN:
-	case VAR_SEC:  if (!aBuf) return 2; // length 2 for this and the above.
-	case VAR_WDAY: if (!aBuf) return 1; // else fall through.
-	case VAR_YDAY: // variable length, so fall through.
-		// Using GetTickCount() because it's very low overhead compared to the
-		// other time functions:
+	case VAR_SEC:   if (!aBuf) return 2; // length 2 for this and the above.
+	case VAR_WDAY:  if (!aBuf) return 1; // else fall through.
+	case VAR_YWEEK: if (!aBuf) return 6; // else fall through.
+	case VAR_YDAY:  if (!aBuf) return 3; // Always return maximum allowed length as the estimate.
+		// The current time is refreshed only if it's been a certain number of milliseconds since
+		// the last fetch of one of these built-in time variables.  This keeps the variables in
+		// sync with one another when they are used consecutively such as this example:
+		// Var = %A_Hour%:%A_Min%:%A_Sec%
+		// Using GetTickCount() because it's very low overhead compared to the other time functions:
 		now_tick = GetTickCount();
-		if (now_tick - timestamp_tick > 50 || now == NULL)
+		if (now_tick - timestamp_tick > 50 || !st_static.wYear)
 		{
-			// Use c-lib vs. WinAPI since it provides YDAY (day of year).
-			// Note: localtime() may internally call malloc(), but should do
-			// so only once for the entire life of the program.  i.e. it should
-			// return the same address every time (it might just be using a static).
-			time(&tloc);
-			now = localtime(&tloc);  // This is struct-pointer holding all the time elements we need.
+			GetLocalTime(&st_static);
 			timestamp_tick = now_tick;
 		}
 		switch (mType)
 		{
-		case VAR_YYYY: aBuf += sprintf(aBuf, "%d", now->tm_year + 1900); break;
-		case VAR_MM:  aBuf += sprintf(aBuf, "%02d", now->tm_mon + 1); break;
-		case VAR_DD: aBuf += sprintf(aBuf, "%02d", now->tm_mday); break;
-		case VAR_HOUR: aBuf += sprintf(aBuf, "%02d", now->tm_hour); break;
-		case VAR_MIN:  aBuf += sprintf(aBuf, "%02d", now->tm_min); break;
-		case VAR_SEC:  aBuf += sprintf(aBuf, "%02d", now->tm_sec); break;
-		case VAR_WDAY: aBuf += sprintf(aBuf, "%d", now->tm_wday + 1); break;
-		case VAR_YDAY:
-			// All the others except this one would have returned if aBuf is NULL.
-			if (!aBuf)
-				if (now->tm_yday + 1 < 10) return 1;
-				else if (now->tm_yday + 1 < 100) return 2;
-				else return 3;
-			aBuf += sprintf(aBuf, "%d", now->tm_yday + 1);
+		case VAR_YYYY:  aBuf += sprintf(aBuf, "%d", st_static.wYear); break;
+		case VAR_MM:    aBuf += sprintf(aBuf, "%02d", st_static.wMonth); break;
+		case VAR_DD:    aBuf += sprintf(aBuf, "%02d", st_static.wDay); break;
+		case VAR_HOUR:  aBuf += sprintf(aBuf, "%02d", st_static.wHour); break;
+		case VAR_MIN:   aBuf += sprintf(aBuf, "%02d", st_static.wMinute); break;
+		case VAR_SEC:   aBuf += sprintf(aBuf, "%02d", st_static.wSecond); break;
+		case VAR_WDAY:  aBuf += sprintf(aBuf, "%d", st_static.wDayOfWeek + 1); break;
+		case VAR_YWEEK:
+			aBuf += GetISOWeekNumber(aBuf, st_static.wYear
+				, GetYDay(st_static.wMonth, st_static.wDay, IS_LEAP_YEAR(st_static.wYear))
+				, st_static.wDayOfWeek);
 			break;
-		}
+		case VAR_YDAY:
+			aBuf += sprintf(aBuf, "%d", GetYDay(st_static.wMonth, st_static.wDay, IS_LEAP_YEAR(st_static.wYear)));
+			break;
+		} // inner switch()
 		break; // outer switch()
 	}
 

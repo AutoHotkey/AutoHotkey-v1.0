@@ -102,7 +102,7 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 		// Specifying size 32x32 probably saves memory if the icon file is large:
 		//HICON new_icon = LoadImage(NULL, aParam3, IMAGE_ICON, 32, 32, LR_LOADFROMFILE);
 		HICON new_icon = ExtractIcon(g_hInstance, aParam3, icon_number - 1);
-		if (!new_icon)
+		if (!new_icon || new_icon == (HICON)1) // 1 means "incorrect file type".
 			RETURN_MENU_ERROR("Icon could not be loaded.", aParam3);
 		if (mCustomIcon) // Destroy the old one first to free its resources.
 			DestroyIcon(mCustomIcon);
@@ -141,6 +141,15 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 			// for example, and we don't want to lose that ordering in case the script turns
 			// the icon back on at some future time during this session.
 		}
+		return OK;
+
+	case MENU_CMD_CLICK:
+		RETURN_IF_NOT_TRAY;
+		mTrayMenu->mClickCount = ATOI(aParam3);
+		if (mTrayMenu->mClickCount < 1)
+			mTrayMenu->mClickCount = 1;  // Single-click to activate menu's default item.
+		else if (mTrayMenu->mClickCount > 2)
+			mTrayMenu->mClickCount = 2;  // Double-click.
 		return OK;
 
 	case MENU_CMD_MAINWINDOW:

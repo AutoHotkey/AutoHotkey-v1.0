@@ -69,6 +69,7 @@ bool g_MainTimerExists = false;
 bool g_UninterruptibleTimerExists = false;
 bool g_AutoExecTimerExists = false;
 bool g_InputTimerExists = false;
+bool g_DerefTimerExists = false;
 bool g_SoundWasPlayed = false;
 bool g_IsSuspended = false;  // Make this separate from g_AllowInterruption since that is frequently turned off & on.
 bool g_AllowInterruption = true;
@@ -281,7 +282,7 @@ Action g_act[] =
 
 	, {"Input", 0, 4, NULL}  // OutputVar, Options, EndKeys, MatchList.
 
-	, {"Transform", 3, 4, NULL}  // output var, operation, value1, value2
+	, {"Transform", 2, 4, NULL}  // output var, operation, value1, value2
 
 	, {"StringLeft", 3, 3, {3, 0}}  // output var, input var, number of chars to extract
 	, {"StringRight", 3, 3, {3, 0}} // same
@@ -431,7 +432,8 @@ Action g_act[] =
 	, {"FileSelectFile", 1, 5, NULL} // output var, options, working dir, greeting, filter
 	, {"FileSelectFolder", 1, 4, NULL} // output var, root directory, allow create folder (0=no, 1=yes), greeting
 
-	, {"FileCreateShortcut", 2, 7, NULL} // file, lnk [, workdir, args, desc, icon, hotkey]
+	, {"FileGetShortcut", 1, 8, NULL} // Filespec, OutTarget, OutDir, OutArg, OutDescrip, OutIcon, OutIconIndex, OutShowState.
+	, {"FileCreateShortcut", 2, 9, {8, 9, 0}} // file, lnk [, workdir, args, desc, icon, hotkey, icon_number, run_state]
 
 	, {"IniRead", 4, 5, NULL}   // OutputVar, Filespec, Section, Key, Default (value to return if key not found)
 	, {"IniWrite", 4, 4, NULL}  // Value, Filespec, Section, Key
@@ -451,6 +453,7 @@ Action g_act[] =
 	, {"SetBatchLines", 1, 1, NULL} // Can be non-numeric, such as 15ms, or a number (to indicate line count).
 	, {"SetTitleMatchMode", 1, 1, NULL} // Allowed values: 1, 2, slow, fast
 	, {"SetFormat", 1, 2, NULL} // Float|Integer, FormatString (for float) or H|D (for int)
+	, {"FormatTime", 1, 3, NULL} // OutputVar, YYYYMMDDHH24MISS, Format (format is last to avoid having to escape commas in it).
 
 	, {"Suspend", 0, 1, NULL} // On/Off/Toggle/Permit/Blank (blank is the same as toggle)
 	, {"Pause", 0, 1, NULL} // On/Off/Toggle/Blank (blank is the same as toggle)

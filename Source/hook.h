@@ -57,8 +57,10 @@ enum UserMessages {AHK_HOOK_HOTKEY = WM_USER, AHK_HOTSTRING, AHK_USER_MENU, AHK_
 		wparam = 0;\
 	} // In the above, wparam is made zero to help catch bugs.
 
-#define AHK_GUI_CLOSE -1
-#define AHK_GUI_ESCAPE -2
+#define AHK_GUI_CLOSE     -1
+#define AHK_GUI_ESCAPE    -2
+#define AHK_GUI_SIZE      -3
+#define AHK_GUI_DROPFILES -4
 
 // And these macros are kept here so that all this trickery is centrally located and thus more maintainable:
 #define ASK_INSTANCE_TO_CLOSE(window, reason) PostMessage(window, WM_COMMNOTIFY, reason, 0);

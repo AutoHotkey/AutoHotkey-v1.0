@@ -18,61 +18,153 @@ GNU General Public License for more details.
 #include <olectl.h> // for OleLoadPicture()
 #include <Gdiplus.h> // Used by LoadPicture().
 #include "util.h"
+#include "globaldata.h"
 
 
-char *FileAttribToStr(char *aBuf, DWORD aAttr)
+int GetYDay(int aMon, int aDay, bool aIsLeapYear)
+// Returns a number between 1 and 366.
+// Caller must verify that aMon is a number between 1 and 12, and aDay is a number between 1 and 31.
 {
-	if (!aBuf) return aBuf;
-	int length = 0;
-	if (aAttr & FILE_ATTRIBUTE_READONLY)
-		aBuf[length++] = 'R';
-	if (aAttr & FILE_ATTRIBUTE_ARCHIVE)
-		aBuf[length++] = 'A';
-	if (aAttr & FILE_ATTRIBUTE_SYSTEM)
-		aBuf[length++] = 'S';
-	if (aAttr & FILE_ATTRIBUTE_HIDDEN)
-		aBuf[length++] = 'H';
-	if (aAttr & FILE_ATTRIBUTE_NORMAL)
-		aBuf[length++] = 'N';
-	if (aAttr & FILE_ATTRIBUTE_DIRECTORY)
-		aBuf[length++] = 'D';
-	if (aAttr & FILE_ATTRIBUTE_OFFLINE)
-		aBuf[length++] = 'O';
-	if (aAttr & FILE_ATTRIBUTE_COMPRESSED)
-		aBuf[length++] = 'C';
-	if (aAttr & FILE_ATTRIBUTE_TEMPORARY)
-		aBuf[length++] = 'T';
-	aBuf[length] = '\0';  // Perform the final termination.
-	return aBuf;
+	--aMon;  // Convert to zero-based.
+	if (aIsLeapYear)
+	{
+		int leap_offset[12] = {0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335};
+		return leap_offset[aMon] + aDay;
+	}
+	else
+	{
+		int normal_offset[12] = {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334};
+		return normal_offset[aMon] + aDay;
+	}
 }
 
 
 
-ResultType YYYYMMDDToFileTime(char *aYYYYMMDD, FILETIME *pftDateTime)
+int GetISOWeekNumber(char *aBuf, int aYear, int aYDay, int aWDay)
+// Caller must ensure that aBuf is of size 7 or greater, that aYear is the correct year (e.g. 2005),
+// that aYDay is between 1 and 366, and that aWDay is between 0 and 6 (day of the week).
+// Produces the week number in YYYYNN format, e.g. 200501.
+// Note that year is also returned because it isn't necessarily the same as aTime's calendar year.
+// Based on Linux glibc source code (GPL).
 {
-	if (!aYYYYMMDD || !pftDateTime) return FAIL;
-	if (!*aYYYYMMDD) return FAIL;
- 
-	SYSTEMTIME st = {0};
-	int nAssigned = sscanf(aYYYYMMDD, "%4d%2d%2d%2d%2d%2d", &st.wYear, &st.wMonth, &st.wDay
-		, &st.wHour, &st.wMinute, &st.wSecond);
+	--aYDay;  // Convert to zero based.
+	#define ISO_WEEK_START_WDAY 1 // Monday
+	#define ISO_WEEK1_WDAY 4      // Thursday
+	#define ISO_WEEK_DAYS(yday, wday) (yday - (yday - wday + ISO_WEEK1_WDAY + ((366 / 7 + 2) * 7)) % 7 \
+		+ ISO_WEEK1_WDAY - ISO_WEEK_START_WDAY);
 
-	switch (nAssigned) // Supply default values for those components entirely omitted.
+	int year = aYear;
+	int days = ISO_WEEK_DAYS(aYDay, aWDay);
+
+	if (days < 0) // This ISO week belongs to the previous year.
 	{
-	case 0: return FAIL;
-	case 1: st.wMonth = 1; // None of these cases does a "break", they just fall through to set default values.
-	case 2: st.wDay = 1;   // Day of month.
-	case 3: st.wHour = 0;  // Midnight.
-	case 4: st.wMinute = 0;
-	case 5: st.wSecond = 0;
+		--year;
+		days = ISO_WEEK_DAYS(aYDay + (365 + IS_LEAP_YEAR(year)), aWDay);
+	}
+	else
+	{
+		int d = ISO_WEEK_DAYS(aYDay - (365 + IS_LEAP_YEAR(year)), aWDay);
+		if (0 <= d) // This ISO week belongs to the next year.
+		{
+			++year;
+			days = d;
+		}
 	}
 
-	st.wMilliseconds = 0;
+	// Use snprintf() for safety; that is, in case year contains a value longer than 4 digits.
+	// This also adds the leading zeros in front of year and week number, if needed.
+	snprintf(aBuf, 7, "%04d%02d", year, (days / 7) + 1);
+	aBuf[6] = '\0';  // Must terminate in this case due to an issue explained in the snprintf() section.
+	return 6; // The length of the string produced.
+}
 
+
+
+ResultType YYYYMMDDToFileTime(char *aYYYYMMDD, FILETIME &aFileTime)
+{
+	SYSTEMTIME st;
+	YYYYMMDDToSystemTime(aYYYYMMDD, st, false);  // "false" because it's validated below.
 	// This will return failure if aYYYYMMDD contained any invalid elements, such as an
-	// explicit zero for the day of the month:
-	if (!SystemTimeToFileTime(&st, pftDateTime)) // The wDayOfWeek member of the <st> structure is ignored.
-		return FAIL;
+	// explicit zero for the day of the month.  It also reports failure if st.wYear is
+	// less than 1601, which for simplicity is enforced globally throughout the program
+	// since none of the Windows API calls seem to support earlier years.
+	return SystemTimeToFileTime(&st, &aFileTime) ? OK : FAIL; // The st.wDayOfWeek member is ignored.
+}
+
+
+
+ResultType YYYYMMDDToSystemTime(char *aYYYYMMDD, SYSTEMTIME &aSystemTime, bool aDoValidate)
+// Caller must ensure that aYYYYMMDD is non-NULL.  If aDoValidate is false, OK is always
+// returned and aSystemTime might contain invalid elements.  Otherwise, FAIL will be returned
+// if the date and time contains any invalid elements, or if the year is less than 1601
+// (Windows generally does not support earlier years).
+{
+	// sscanf() is avoided because it adds 2 KB to the compressed EXE size.
+	char temp[16];
+	size_t length = strlen(aYYYYMMDD); // Use this rather than incrementing the pointer in case there are ever partial fields such as 20051 vs. 200501.
+
+	strlcpy(temp, aYYYYMMDD, 5);
+	aSystemTime.wYear = atoi(temp);
+
+	if (length > 4) // It has a month component.
+	{
+		strlcpy(temp, aYYYYMMDD + 4, 3);
+		aSystemTime.wMonth = atoi(temp);  // Unlike "struct tm", SYSTEMTIME uses 1 for January, not 0.
+	}
+	else
+		aSystemTime.wMonth = 1;
+
+	if (length > 6) // It has a day-of-month component.
+	{
+		strlcpy(temp, aYYYYMMDD + 6, 3);
+		aSystemTime.wDay = atoi(temp);
+	}
+	else
+		aSystemTime.wDay = 1;
+
+	if (length > 8) // It has an hour component.
+	{
+		strlcpy(temp, aYYYYMMDD + 8, 3);
+		aSystemTime.wHour = atoi(temp);
+	}
+	else
+		aSystemTime.wHour = 0;   // Midnight.
+
+	if (length > 10) // It has a minutes component.
+	{
+		strlcpy(temp, aYYYYMMDD + 10, 3);
+		aSystemTime.wMinute = atoi(temp);
+	}
+	else
+		aSystemTime.wMinute = 0;
+
+	if (length > 12) // It has a seconds component.
+	{
+		strlcpy(temp, aYYYYMMDD + 12, 3);
+		aSystemTime.wSecond = atoi(temp);
+	}
+	else
+		aSystemTime.wSecond = 0;
+
+	aSystemTime.wMilliseconds = 0;  // Always set to zero in this case.
+
+	// Day-of-week code by Tomohiko Sakamoto:
+	static int t[] = {0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4};
+	int y = aSystemTime.wYear;
+	y -= aSystemTime.wMonth < 3;
+	aSystemTime.wDayOfWeek = (y + y/4 - y/100 + y/400 + t[aSystemTime.wMonth-1] + aSystemTime.wDay) % 7;
+
+	if (aDoValidate)
+	{
+		FILETIME ft;
+		// This will return failure if aYYYYMMDD contained any invalid elements, such as an
+		// explicit zero for the day of the month.  It also reports failure if st.wYear is
+		// less than 1601, which for simplicity is enforced globally throughout the program
+		// since none of the Windows API calls seem to support earlier years.
+		return SystemTimeToFileTime(&aSystemTime, &ft) ? OK : FAIL;
+		// Above: The st.wDayOfWeek member is ignored, but that's okay since on the YYYYMMDDHH24MISS part
+		// needs valiation.
+	}
 	return OK;
 }
 
@@ -121,7 +213,7 @@ __int64 YYYYMMDDSecondsUntil(char *aYYYYMMDDStart, char *aYYYYMMDDEnd, bool &aFa
 
 	if (*aYYYYMMDDStart)
 	{
-		if (!YYYYMMDDToFileTime(aYYYYMMDDStart, &ftStart))
+		if (!YYYYMMDDToFileTime(aYYYYMMDDStart, ftStart))
 			return 0;
 	}
 	else // Use the current time in its place.
@@ -131,7 +223,7 @@ __int64 YYYYMMDDSecondsUntil(char *aYYYYMMDDStart, char *aYYYYMMDDEnd, bool &aFa
 	}
 	if (*aYYYYMMDDEnd)
 	{
-		if (!YYYYMMDDToFileTime(aYYYYMMDDEnd, &ftEnd))
+		if (!YYYYMMDDToFileTime(aYYYYMMDDEnd, ftEnd))
 			return 0;
 	}
 	else // Use the current time in its place.
@@ -164,18 +256,78 @@ __int64 FileTimeSecondsUntil(FILETIME *pftStart, FILETIME *pftEnd)
 
 
 
-//unsigned __int64 GetFileSize64(HANDLE aFileHandle)
-//// Code adapted from someone's on the Usenet.
-//{
-//    ULARGE_INTEGER ui = {0};
-//    ui.LowPart = GetFileSize(aFileHandle, &ui.HighPart);
-//    if(ui.LowPart == MAXDWORD && GetLastError() != NO_ERROR)
-//    {
-//        // the caller should use GetLastError() to test for error
-//        return ULLONG_MAX;
-//    }
-//    return (unsigned __int64)ui.QuadPart;
-//}
+pure_numeric_type IsPureNumeric(char *aBuf, bool aAllowNegative, bool aAllowAllWhitespace
+	, bool aAllowFloat, bool aAllowImpure)
+// Making this non-inline reduces the size of the compressed EXE by only 2K.  Since this function
+// is called so often, it seems preferable to keep it inline for performance.
+// String can contain whitespace.
+{
+	aBuf = omit_leading_whitespace(aBuf); // i.e. caller doesn't have to have ltrimmed, only rtrimmed.
+	if (!*aBuf) // The string is empty or consists entirely of whitespace.
+		return aAllowAllWhitespace ? PURE_INTEGER : PURE_NOT_NUMERIC;
+
+	if (*aBuf == '-')
+	{
+		if (aAllowNegative)
+			++aBuf;
+		else
+			return PURE_NOT_NUMERIC;
+	}
+	else if (*aBuf == '+')
+		++aBuf;
+
+	// Relies on short circuit boolean order to prevent reading beyond the end of the string:
+	bool is_hex = IS_HEX(aBuf);
+	if (is_hex)
+		aBuf += 2;  // Skip over the 0x prefix.
+
+	// Set defaults:
+	bool has_decimal_point = false;
+	bool has_at_least_one_digit = false; // i.e. a string consisting of only "+", "-" or "." is not considered numeric.
+
+	for (; *aBuf && !IS_SPACE_OR_TAB(*aBuf); ++aBuf)
+	{
+		if (*aBuf == '.')
+		{
+			if (!aAllowFloat || has_decimal_point || is_hex)
+				// i.e. if aBuf contains 2 decimal points, it can't be a valid number.
+				// Note that decimal points are allowed in hexadecimal strings, e.g. 0xFF.EE.
+				// But since that format doesn't seem to be supported by VC++'s atof() and probably
+				// related functions, and since it's extremely rare, it seems best not to support it.
+				return PURE_NOT_NUMERIC;
+			else
+				has_decimal_point = true;
+		}
+		else
+		{
+			if (is_hex ? !isxdigit(*aBuf) : (*aBuf < '0' || *aBuf > '9')) // And since we're here, it's not '.' either.
+				if (aAllowImpure) // Since aStr starts with a number (as verified above), it is considered a number.
+				{
+					if (has_at_least_one_digit)
+						return has_decimal_point ? PURE_FLOAT : PURE_INTEGER;
+					else // i.e. the strings "." and "-" are not considered to be numeric by themselves.
+						return PURE_NOT_NUMERIC;
+				}
+				else
+					return PURE_NOT_NUMERIC;
+			else
+				has_at_least_one_digit = true;
+		}
+	}
+	if (*aBuf) // The loop was broken because a space or tab was encountered.
+		if (*omit_leading_whitespace(aBuf)) // But that space or tab is followed by something other than whitespace.
+			if (!aAllowImpure) // e.g. "123 456" is not a valid pure number.
+				return PURE_NOT_NUMERIC;
+			// else fall through to the bottom logic.
+		// else since just whitespace at the end, the number qualifies as pure, so fall through.
+		// (it would already have returned in the loop if it was impure)
+	// else since end of string was encountered, the number qualifies as pure, so fall through.
+	// (it would already have returned in the loop if it was impure).
+	if (has_at_least_one_digit)
+		return has_decimal_point ? PURE_FLOAT : PURE_INTEGER;
+	else
+		return PURE_NOT_NUMERIC; // i.e. the strings "+" "-" and "." are not numeric by themselves.
+}
 
 
 
@@ -186,8 +338,7 @@ int snprintf(char *aBuf, size_t aBufSize, const char *aFormat, ...)
 // printed (not including the trailing '\0' used to end output to strings)
 // or a negative value if an output error occurs, except for snprintf()
 // and vsnprintf(), which return the number of characters that would have
-// been printed if the size were unlimited (again, not including the final
-// '\0')."
+// been printed if the size were unlimited (again, not including the final '\0')."
 {
 	if (!aBuf || !aFormat) return -1;  // But allow aBufSize to be zero so that the proper return value is provided.
 	if (aBufSize) // avoid underflow
@@ -609,6 +760,63 @@ char *ConvertFilespecToCorrectCase(char *aFullFileSpec)
 
 
 
+char *FileAttribToStr(char *aBuf, DWORD aAttr)
+{
+	if (!aBuf) return aBuf;
+	int length = 0;
+	if (aAttr & FILE_ATTRIBUTE_READONLY)
+		aBuf[length++] = 'R';
+	if (aAttr & FILE_ATTRIBUTE_ARCHIVE)
+		aBuf[length++] = 'A';
+	if (aAttr & FILE_ATTRIBUTE_SYSTEM)
+		aBuf[length++] = 'S';
+	if (aAttr & FILE_ATTRIBUTE_HIDDEN)
+		aBuf[length++] = 'H';
+	if (aAttr & FILE_ATTRIBUTE_NORMAL)
+		aBuf[length++] = 'N';
+	if (aAttr & FILE_ATTRIBUTE_DIRECTORY)
+		aBuf[length++] = 'D';
+	if (aAttr & FILE_ATTRIBUTE_OFFLINE)
+		aBuf[length++] = 'O';
+	if (aAttr & FILE_ATTRIBUTE_COMPRESSED)
+		aBuf[length++] = 'C';
+	if (aAttr & FILE_ATTRIBUTE_TEMPORARY)
+		aBuf[length++] = 'T';
+	aBuf[length] = '\0';  // Perform the final termination.
+	return aBuf;
+}
+
+
+
+//unsigned __int64 GetFileSize64(HANDLE aFileHandle)
+//// Code adapted from someone's on the Usenet.
+//{
+//    ULARGE_INTEGER ui = {0};
+//    ui.LowPart = GetFileSize(aFileHandle, &ui.HighPart);
+//    if(ui.LowPart == MAXDWORD && GetLastError() != NO_ERROR)
+//    {
+//        // the caller should use GetLastError() to test for error
+//        return ULLONG_MAX;
+//    }
+//    return (unsigned __int64)ui.QuadPart;
+//}
+
+
+
+char *GetLastErrorText(char *aBuf, size_t aBuf_size)
+{
+	if (!aBuf || !aBuf_size) return aBuf;
+	if (aBuf_size == 1)
+	{
+		*aBuf = '\0';
+		return aBuf;
+	}
+	FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM, NULL, GetLastError(), 0, aBuf, (DWORD)aBuf_size - 1, NULL);
+	return aBuf;
+}
+
+
+
 void AssignColor(char *aColorName, COLORREF &aColor, HBRUSH &aBrush)
 // Assign the color indicated in aColorName (either a name or a hex RGB value) to both
 // aColor and aBrush, deleting any prior handle in aBrush first.  If the color cannot
@@ -733,7 +941,7 @@ void GetVirtualDesktopRect(RECT &aRect)
 
 ResultType RegReadString(HKEY aRootKey, char *aSubkey, char *aValueName, char *aBuf, size_t aBufSize)
 {
-	*aBuf = '\0'; // Set default output parameter.
+	*aBuf = '\0'; // Set default output parameter.  Some callers rely on this being set even if failure occurs.
 	HKEY hkey;
 	if (RegOpenKeyEx(aRootKey, aSubkey, 0, KEY_QUERY_VALUE, &hkey) != ERROR_SUCCESS)
 		return FAIL;
@@ -745,142 +953,256 @@ ResultType RegReadString(HKEY aRootKey, char *aSubkey, char *aValueName, char *a
 
 
 
-HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight)
-// Based on code sample at http://www.codeguru.com/Cpp/G-M/bitmap/article.php/c4935/
-// Loads a JPG/GIF/BMP and returns an HBITMAP to the caller (which it may call DeleteObject() upon,
-// though upon program termination all such handles are freed automatically).  The image is scaled
-// to the specified width and height.  If zero is specified for either, the image's actual size
-// will be used for that dimension.  If -1 is specified for one, that dimension will be kept
-// proportional to the other dimension's size so that the original aspect ratio is retained.
+HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, int aIconIndex, bool aUseGDIPlusIfAvailable)
+// Loads a JPG/GIF/BMP/ICO/etc. and returns an HBITMAP or HICON to the caller (which it may call
+// DeleteObject()/DestroyIcon() upon, though upon program termination all such handles are freed
+// automatically).  The image is scaled to the specified width and height.  If zero is specified
+// for either, the image's actual size will be used for that dimension.  If -1 is specified for one,
+// that dimension will be kept proportional to the other dimension's size so that the original
+// aspect ratio is retained.
+// .ico/.cur/.ani files are normally loaded as HICON (unless aUseGDIPlusIfAvailable is true of something
+// else unusual happened such as file contents not matching file's extension).  This is done to preserve
+// any properties that HICONs have but HBITMAPs lack, namely the ability to be animated and perhaps other things.
 // Returns NULL on failure.
 {
 	HBITMAP hbitmap = NULL;
-	IPicture *pic = NULL;
-	HINSTANCE hinstGDI = NULL;
+	aImageType = -1; // The type of image inside hbitmap.  Set default value for output parameter as "unknown".
 
-	// Find out the file type.  This method is not foolproof since all it does is look at the
-	// file's extension, not its contents.  However, it doesn't need to be 100% accurate because
-	// its only purpose is to detect whether the higher-overhead calls to GdiPlus can be avoided.
-	bool file_type_is_always_supported = false; // Assume false in the absence of a dot/period in the filename.
 	char *file_ext = strrchr(aFilespec, '.');
 	if (file_ext)
-	{
 		++file_ext;
-		file_type_is_always_supported = !(stricmp(file_ext, "jpg") && stricmp(file_ext, "jpeg")
-			&& stricmp(file_ext, "gif") && stricmp(file_ext, "bmp"));
-	}
 
-	// If it is suspected that the file type isn't supported, try to use GdiPlus if available.
-	// If it's not available, fall back to the old method in case the filename doesn't properly
-	// reflect its true contents (i.e. in case it really is a JPG/GIF/BMP internally).
-	// If the below LoadLibrary() succeeds, either the OS is XP+ or the GdiPlus extensions have been
-	// installed on an older OS:
-	if (!file_type_is_always_supported && (hinstGDI = LoadLibrary("GdiPlus.dll"))) // Assign. Relies on short-circuit boolean.
+	// Must use ExtractIcon() if either of the following is true:
+	// 1) Caller gave an explicit icon index, i.e. it wants us to use ExtractIcon() even for the first icon.
+	// 2) The target file is an EXE or DLL (LoadImage() is documented not to work on those file types).
+	bool ExtractIcon_was_used = aIconIndex >= 0 || (file_ext && (!stricmp(file_ext, "exe") || !stricmp(file_ext, "dll")));
+	if (ExtractIcon_was_used)
 	{
-		// LPVOID and "int" are used to avoid compiler errors caused by... namespace issues?
-		typedef int (WINAPI *GdiplusStartupType)(ULONG_PTR*, LPVOID, LPVOID);
-		typedef VOID (WINAPI *GdiplusShutdownType)(ULONG_PTR);
-		typedef int (WINGDIPAPI *GdipCreateBitmapFromFileType)(LPVOID, LPVOID);
-		typedef int (WINGDIPAPI *GdipCreateHBITMAPFromBitmapType)(LPVOID, LPVOID, DWORD);
-		typedef int (WINGDIPAPI *GdipDisposeImageType)(LPVOID);
-		GdiplusStartupType DynGdiplusStartup = (GdiplusStartupType)GetProcAddress(hinstGDI, "GdiplusStartup");
-  		GdiplusShutdownType DynGdiplusShutdown = (GdiplusShutdownType)GetProcAddress(hinstGDI, "GdiplusShutdown");
-  		GdipCreateBitmapFromFileType DynGdipCreateBitmapFromFile = (GdipCreateBitmapFromFileType)GetProcAddress(hinstGDI, "GdipCreateBitmapFromFile");
-  		GdipCreateHBITMAPFromBitmapType DynGdipCreateHBITMAPFromBitmap = (GdipCreateHBITMAPFromBitmapType)GetProcAddress(hinstGDI, "GdipCreateHBITMAPFromBitmap");
-  		GdipDisposeImageType DynGdipDisposeImage = (GdipDisposeImageType)GetProcAddress(hinstGDI, "GdipDisposeImage");
-
-		ULONG_PTR token;
-		Gdiplus::GdiplusStartupInput gdi_input;
-		Gdiplus::GpBitmap *pgdi_bitmap;
-		if (DynGdiplusStartup && DynGdiplusStartup(&token, &gdi_input, NULL) == Gdiplus::Ok)
-		{
-			wchar_t filespec_wide[MAX_PATH];
-			mbstowcs(filespec_wide, aFilespec, sizeof(filespec_wide));
-			if (DynGdipCreateBitmapFromFile(filespec_wide, &pgdi_bitmap) == Gdiplus::Ok)
-			{
-				if (DynGdipCreateHBITMAPFromBitmap(pgdi_bitmap, &hbitmap, CLR_DEFAULT) != Gdiplus::Ok)
-					hbitmap = NULL; // Set to NULL to be sure.
-				DynGdipDisposeImage(pgdi_bitmap); // This was tested once to make sure it really returns Gdiplus::Ok.
-			}
-			// The current thought is that shutting it down every time conserves resources.  If so, it
-			// seems justified since it is probably called infrequently by most scripts:
-			DynGdiplusShutdown(token);
-		}
-		FreeLibrary(hinstGDI);
-	}
-
-	else // Using old picture loading method.
-	{
-		HANDLE hfile = CreateFile(aFilespec, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
-		if (hfile == INVALID_HANDLE_VALUE)
-			return NULL;
-		DWORD size = GetFileSize(hfile, NULL);
-		HGLOBAL hglobal = GlobalAlloc(GMEM_MOVEABLE, size);
-		if (!hglobal)
-		{
-			CloseHandle(hfile);
-			return NULL;
-		}
-		LPVOID hlocked = GlobalLock(hglobal);
-		if (!hlocked)
-		{
-			CloseHandle(hfile);
-			GlobalFree(hglobal);
-			return NULL;
-		}
-		// Read the file into memory:
-		ReadFile(hfile, hlocked, size, &size, NULL);
-		GlobalUnlock(hglobal);
-		CloseHandle(hfile);
-		LPSTREAM stream;
-		if (FAILED(CreateStreamOnHGlobal(hglobal, FALSE, &stream)) || !stream)  // Relies on short-circuit boolean order.
-		{
-			GlobalFree(hglobal);
-			return NULL;
-		}
-		// Specify TRUE to have it do the GlobalFree() for us.  But since the call might fail, it seems best
-		// to free the mem ourselves to avoid uncertainy over what it does on failure:
-		if (FAILED(OleLoadPicture(stream, 0, FALSE, IID_IPicture, (void **)&pic)))
-			pic = NULL;
-		stream->Release();
-		GlobalFree(hglobal);
-		if (!pic)
-			return NULL;
-		pic->get_Handle((OLE_HANDLE *)&hbitmap);
-		// Above: MSDN: "The caller is responsible for this handle upon successful return. The variable is set
-		// to NULL on failure."
-		if (!hbitmap)
-		{
-			pic->Release();
-			return NULL;
-		}
-		// Don't pic->Release() yet because that will also destroy/invalidate hbitmap handle.
-	}
-	BITMAP bitmap;
-	// Adjust things if "keep aspect ratio" is in effect:
-	if (aHeight == -1 && aWidth > 0)
-	{
-		// Caller wants aHeight calculated based on the specified aWidth (keep aspect ratio).
-		GetObject(hbitmap, sizeof(BITMAP), &bitmap);
-		if (bitmap.bmWidth) // Avoid any chance of divide-by-zero.
-			aHeight = (int)(((double)bitmap.bmHeight / bitmap.bmWidth) * aWidth + .5); // Round.
-	}
-	else if (aWidth == -1 && aHeight > 0)
-	{
-		// Caller wants aWidth calculated based on the specified aHeight (keep aspect ratio).
-		GetObject(hbitmap, sizeof(BITMAP), &bitmap);
-		if (bitmap.bmHeight) // Avoid any chance of divide-by-zero.
-			aWidth = (int)(((double)bitmap.bmWidth / bitmap.bmHeight) * aHeight + .5); // Round.
-	}
-	HBITMAP hbitmap_new; // To hold the scaled image (if scaling is needed).
-	if (hinstGDI) // Using GDI+ method.
-	{
-		if (!aWidth && !aHeight) // No scaling needed.
+		aImageType = IMAGE_ICON;
+		if (aIconIndex < 0)
+			aIconIndex = 0;  // Use the default, which is the first icon.
+		hbitmap = (HBITMAP)ExtractIcon(g_hInstance, aFilespec, aIconIndex); // Return value of 1 means "incorrect file type".
+		if (!hbitmap || hbitmap == (HBITMAP)1 || (!aWidth && !aHeight)) // Couldn't load icon, or could but no resizing is needed.
 			return hbitmap;
-		hbitmap_new = (HBITMAP)CopyImage(hbitmap, IMAGE_BITMAP, aWidth, aHeight, 0);
-		DeleteObject(hbitmap); // Delete the original to avoid cascading resource usage.
+		//else continue on below so that the icon can be resized to the caller's specified dimensions.
 	}
-	else // Using old method.
+
+	// Make an initial guess of the type of image if the above didn't already determine the type:
+	if (aImageType < 0)
+	{
+		if (file_ext) // Assume generic file-loading method if there's no file extension.
+		{
+			if (!stricmp(file_ext, "ico"))
+				aImageType = IMAGE_ICON;
+			else if (!stricmp(file_ext, "cur") || !stricmp(file_ext, "ani"))
+				aImageType = IMAGE_CURSOR;
+			else if (!stricmp(file_ext, "bmp"))
+				aImageType = IMAGE_BITMAP;
+			//else for other extensions, leave set to "unknown" so that the below knows to use IPic or GDI+ to load it.
+		}
+		//else same comment as above.
+	}
+
+	if ((aWidth == -1 || aHeight == -1) && (!aWidth || !aHeight))
+		aWidth = aHeight = 0; // i.e. One dimension is zero and the other is -1, which resolves to the same as "keep original size".
+	bool keep_aspect_ratio = (aWidth == -1 || aHeight == -1);
+
+	HINSTANCE hinstGDI = NULL;
+	if (aUseGDIPlusIfAvailable && !(hinstGDI = LoadLibrary("GdiPlus.dll")))
+		aUseGDIPlusIfAvailable = false; // Override this value as a signal for the section below.
+
+	if (!hbitmap && aImageType >= 0 && !aUseGDIPlusIfAvailable)
+	{
+		// Since image hasn't yet be loaded and since the file type appears to be one supported by
+		// LoadImage() [icon/cursor/bitmap], attempt that first.  If it fails, fall back to the other
+		// methods below in case the file's internal contents differ from what the file extension indicates.
+		int desired_width, desired_height;
+		if (keep_aspect_ratio)
+			desired_width = desired_height = 0; // Load image at its actual size.  It will be rescaled to retain aspect ratio later below.
+		else
+		{
+			desired_width = aWidth;
+			desired_height = aHeight;
+		}
+		// LR_CREATEDIBSECTION applies only when aImageType == IMAGE_BITMAP, but seems appropriate in that case:
+		if (hbitmap = (HBITMAP)LoadImage(NULL, aFilespec, aImageType, desired_width, desired_height
+			, LR_LOADFROMFILE | LR_CREATEDIBSECTION))
+		{
+			// The above might have loaded an HICON vs. an HBITMAP (it has been confirmed that LoadImage()
+			// will return an HICON vs. HBITMAP is aImageType is IMAGE_ICON/CURSOR).  Note that HICON and
+			// HCURSOR are identical for most/all Windows API uses.  Also note that LoadImage() will load
+			// an icon as a bitmap if the file contains an icon but IMAGE_BITMAP was passed in (at least
+			// on Windows XP).
+			if (!keep_aspect_ratio) // No further resizing is needed.
+				return hbitmap;
+			// Otherwise, continue on so that the image can be resized via a second call to LoadImage().
+		}
+		//else continue on so that the other methods are attempted in case file's contents differ
+		// from what the file extension indicates, or in case the other methods can be successful
+		// even when the above failed.
+	}
+
+	IPicture *pic = NULL; // Also used to detect whether IPic method was used to load the image.
+
+	if (!hbitmap) // Above hasn't loaded the image yet, so use the fall-back methods.
+	{
+		// At this point, regardless of the image type being loaded (even an icon), it will
+		// definitely be converted to a Bitmap below.  So set the type:
+		aImageType = IMAGE_BITMAP;
+		// Find out if this file type is supported by the non-GDI+ method.  This check is not foolproof
+		// since all it does is look at the file's extension, not its contents.  However, it doesn't
+		// need to be 100% accurate because its only purpose is to detect whether the higher-overhead
+		// calls to GdiPlus can be avoided.
+		if (aUseGDIPlusIfAvailable || !file_ext || (stricmp(file_ext, "jpg")
+			&& stricmp(file_ext, "jpeg") && stricmp(file_ext, "gif"))) // Non-standard file type (BMP is already handled above).
+			if (!hinstGDI) // We don't yet have a handle from an earlier call to LoadLibary().
+				hinstGDI = LoadLibrary("GdiPlus.dll");
+		// If it is suspected that the file type isn't supported, try to use GdiPlus if available.
+		// If it's not available, fall back to the old method in case the filename doesn't properly
+		// reflect its true contents (i.e. in case it really is a JPG/GIF/BMP internally).
+		// If the below LoadLibrary() succeeds, either the OS is XP+ or the GdiPlus extensions have been
+		// installed on an older OS.  Below relies on short-circuit boolean.
+		if (hinstGDI)
+		{
+			// LPVOID and "int" are used to avoid compiler errors caused by... namespace issues?
+			typedef int (WINAPI *GdiplusStartupType)(ULONG_PTR*, LPVOID, LPVOID);
+			typedef VOID (WINAPI *GdiplusShutdownType)(ULONG_PTR);
+			typedef int (WINGDIPAPI *GdipCreateBitmapFromFileType)(LPVOID, LPVOID);
+			typedef int (WINGDIPAPI *GdipCreateHBITMAPFromBitmapType)(LPVOID, LPVOID, DWORD);
+			typedef int (WINGDIPAPI *GdipDisposeImageType)(LPVOID);
+			GdiplusStartupType DynGdiplusStartup = (GdiplusStartupType)GetProcAddress(hinstGDI, "GdiplusStartup");
+  			GdiplusShutdownType DynGdiplusShutdown = (GdiplusShutdownType)GetProcAddress(hinstGDI, "GdiplusShutdown");
+  			GdipCreateBitmapFromFileType DynGdipCreateBitmapFromFile = (GdipCreateBitmapFromFileType)GetProcAddress(hinstGDI, "GdipCreateBitmapFromFile");
+  			GdipCreateHBITMAPFromBitmapType DynGdipCreateHBITMAPFromBitmap = (GdipCreateHBITMAPFromBitmapType)GetProcAddress(hinstGDI, "GdipCreateHBITMAPFromBitmap");
+  			GdipDisposeImageType DynGdipDisposeImage = (GdipDisposeImageType)GetProcAddress(hinstGDI, "GdipDisposeImage");
+
+			ULONG_PTR token;
+			Gdiplus::GdiplusStartupInput gdi_input;
+			Gdiplus::GpBitmap *pgdi_bitmap;
+			if (DynGdiplusStartup && DynGdiplusStartup(&token, &gdi_input, NULL) == Gdiplus::Ok)
+			{
+				wchar_t filespec_wide[MAX_PATH];
+				mbstowcs(filespec_wide, aFilespec, sizeof(filespec_wide));
+				if (DynGdipCreateBitmapFromFile(filespec_wide, &pgdi_bitmap) == Gdiplus::Ok)
+				{
+					if (DynGdipCreateHBITMAPFromBitmap(pgdi_bitmap, &hbitmap, CLR_DEFAULT) != Gdiplus::Ok)
+						hbitmap = NULL; // Set to NULL to be sure.
+					DynGdipDisposeImage(pgdi_bitmap); // This was tested once to make sure it really returns Gdiplus::Ok.
+				}
+				// The current thought is that shutting it down every time conserves resources.  If so, it
+				// seems justified since it is probably called infrequently by most scripts:
+				DynGdiplusShutdown(token);
+			}
+			FreeLibrary(hinstGDI);
+		}
+		else // Using old picture loading method.
+		{
+			// Based on code sample at http://www.codeguru.com/Cpp/G-M/bitmap/article.php/c4935/
+			HANDLE hfile = CreateFile(aFilespec, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
+			if (hfile == INVALID_HANDLE_VALUE)
+				return NULL;
+			DWORD size = GetFileSize(hfile, NULL);
+			HGLOBAL hglobal = GlobalAlloc(GMEM_MOVEABLE, size);
+			if (!hglobal)
+			{
+				CloseHandle(hfile);
+				return NULL;
+			}
+			LPVOID hlocked = GlobalLock(hglobal);
+			if (!hlocked)
+			{
+				CloseHandle(hfile);
+				GlobalFree(hglobal);
+				return NULL;
+			}
+			// Read the file into memory:
+			ReadFile(hfile, hlocked, size, &size, NULL);
+			GlobalUnlock(hglobal);
+			CloseHandle(hfile);
+			LPSTREAM stream;
+			if (FAILED(CreateStreamOnHGlobal(hglobal, FALSE, &stream)) || !stream)  // Relies on short-circuit boolean order.
+			{
+				GlobalFree(hglobal);
+				return NULL;
+			}
+			// Specify TRUE to have it do the GlobalFree() for us.  But since the call might fail, it seems best
+			// to free the mem ourselves to avoid uncertainy over what it does on failure:
+			if (FAILED(OleLoadPicture(stream, 0, FALSE, IID_IPicture, (void **)&pic)))
+				pic = NULL;
+			stream->Release();
+			GlobalFree(hglobal);
+			if (!pic)
+				return NULL;
+			pic->get_Handle((OLE_HANDLE *)&hbitmap);
+			// Above: MSDN: "The caller is responsible for this handle upon successful return. The variable is set
+			// to NULL on failure."
+			if (!hbitmap)
+			{
+				pic->Release();
+				return NULL;
+			}
+			// Don't pic->Release() yet because that will also destroy/invalidate hbitmap handle.
+		} // IPicture method was used.
+	} // IPicture or GDIPlus was used to load the image, not a simple LoadImage() or ExtractIcon().
+
+	// Above has ensured that hbitmap is now not NULL.
+	// Adjust things if "keep aspect ratio" is in effect:
+	if (keep_aspect_ratio)
+	{
+		HBITMAP hbitmap_to_analyze;
+		ICONINFO ii; // Must be declared at this scope level.
+		if (aImageType == IMAGE_BITMAP)
+			hbitmap_to_analyze = hbitmap;
+		else // icon or cursor
+		{
+			if (GetIconInfo((HICON)hbitmap, &ii)) // Works on cursors too.
+				hbitmap_to_analyze = ii.hbmMask; // Use Mask because MSDN implies hbmColor can be NULL for monochrome cursors and such.
+			else
+			{
+				DestroyIcon((HICON)hbitmap);
+				return NULL; // No need to call pic->Release() because since it's an icon, we know IPicture wasn't used (it only loads bitmaps).
+			}
+		}
+		// Above has ensured that hbitmap_to_analyze is now not NULL.  Find bitmap's dimensions.
+		BITMAP bitmap;
+		GetObject(hbitmap_to_analyze, sizeof(BITMAP), &bitmap); // Realistically shouldn't fail at this stage.
+		if (aHeight == -1)
+		{
+			// Caller wants aHeight calculated based on the specified aWidth (keep aspect ratio).
+			if (bitmap.bmWidth) // Avoid any chance of divide-by-zero.
+				aHeight = (int)(((double)bitmap.bmHeight / bitmap.bmWidth) * aWidth + .5); // Round.
+		}
+		else
+		{
+			// Caller wants aWidth calculated based on the specified aHeight (keep aspect ratio).
+			if (bitmap.bmHeight) // Avoid any chance of divide-by-zero.
+				aWidth = (int)(((double)bitmap.bmWidth / bitmap.bmHeight) * aHeight + .5); // Round.
+		}
+		if (aImageType != IMAGE_BITMAP)
+		{
+			// It's our reponsibility to delete these two when they're no longer needed:
+			DeleteObject(ii.hbmColor);
+			DeleteObject(ii.hbmMask);
+			// If LoadImage() vs. ExtractIcon() was used originally, call LoadImage() again because
+			// I haven't found any other way to retain an animated cursor's animation (and perhaps
+			// other icon/cursor attributes) when resizing the icon/cursor (CopyImage() doesn't
+			// retain animation):
+			if (!ExtractIcon_was_used)
+			{
+				DestroyIcon((HICON)hbitmap); // Destroy the original HICON.
+				// Load a new one, but at the size newly calculated above.
+				// Due to an apparent bug in Windows 9x (at least Win98se), the below call will probably
+				// crash the program with a "divide error" if the specified aWidth and/or aHeight are
+				// greater than 90.  Since I don't know whether this affects all versions of Windows 9x, and
+				// all animated cursors, it seems best just to document it here and in the help file rather
+				// than limiting the dimensions of .ani (and maybe .cur) files for certain operating systems.
+				return (HBITMAP)LoadImage(NULL, aFilespec, aImageType, aWidth, aHeight, LR_LOADFROMFILE);
+			}
+		}
+	}
+
+	HBITMAP hbitmap_new; // To hold the scaled image (if scaling is needed).
+	if (pic) // IPicture method was used.
 	{
 		// The below statement is confirmed by having tested that DeleteObject(hbitmap) fails
 		// if called after pic->Release():
@@ -889,10 +1211,40 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight)
 		// same width/height as the original."
 		// Note also that CopyImage() seems to provide better scaling quality than using MoveWindow()
 		// (followed by redrawing the parent window) on the static control that contains it:
-		hbitmap_new = (HBITMAP)CopyImage(hbitmap, IMAGE_BITMAP, aWidth, aHeight
+		hbitmap_new = (HBITMAP)CopyImage(hbitmap, IMAGE_BITMAP, aWidth, aHeight // We know it's IMAGE_BITMAP in this case.
 			, (aWidth || aHeight) ? 0 : LR_COPYRETURNORG); // Produce original size if no scaling is needed.
 		pic->Release();
 		// No need to call DeleteObject(hbitmap), see above.
+	}
+	else // GDIPlus or a simple method such as LoadImage or ExtractIcon was used.
+	{
+		if (!aWidth && !aHeight) // No resizing needed.
+			return hbitmap;
+		// The following will also handle HICON/HCURSOR correctly if aImageType == IMAGE_ICON/CURSOR.
+		// Also, LR_COPYRETURNORG|LR_COPYDELETEORG is used because it might allow the animation of
+		// a cursor to be retained if the specified size happens to match the actual size of the
+		// cursor.  This is because normally, it seems that CopyImage() omits cursor animation
+		// from the new object.  MSDN: "LR_COPYRETURNORG returns the original hImage if it satisfies
+		// the criteria for the copy—that is, correct dimensions and color depth—in which case the
+		// LR_COPYDELETEORG flag is ignored. If this flag is not specified, a new object is always created."
+		hbitmap_new = (HBITMAP)CopyImage(hbitmap, aImageType, aWidth, aHeight, LR_COPYRETURNORG | LR_COPYDELETEORG);
+		// Above's LR_COPYDELETEORG deletes the original to avoid cascading resource usage.  MSDN's
+		// LoadImage() docs say:
+		// "When you are finished using a bitmap, cursor, or icon you loaded without specifying the
+		// LR_SHARED flag, you can release its associated memory by calling one of [the three functions]."
+		// Therefore, it seems best to call the right function even though DeleteObject might work on
+		// all of them on some or all current OSes.  UPDATE: Evidence indicates that DestroyIcon()
+		// will also destroy cursors, probably because icons and cursors are literally identical in
+		// every functional way.  One piece of evidence:
+		//> No stack trace, but I know the exact source file and line where the call
+		//> was made. But still, it is annoying when you see 'DestroyCursor' even though
+		//> there is 'DestroyIcon'.
+		// Can't be helped. Icons and cursors are the same thing (Tim Robinson (MVP, Windows SDK)).
+		// Finally, the reason this is important is that it eliminates one handle type
+		// that we would otherwise have to track.  For example, if a gui window is destroyed and
+		// and recreated multiple times, its bitmap and icon handles should all be destroyed each time.
+		// Otherwise, resource usage would cascade upwards until the script finally terminated, at
+		// which time all such handles are freed automatically.
 	}
 	return hbitmap_new;
 }

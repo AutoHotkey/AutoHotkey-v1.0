@@ -65,19 +65,18 @@ size_t Clipboard::Get(char *aBuf)
 			return 0;
 		if (!Open())
 		{
-			Close("Clipboard::Get(): Could not open clipboard after many timed attempts."
-				" Another program is probably holding it open.");
+			Close("Could not open clipboard for reading after many timed attempts. Another program is probably holding it open.");
 			return CLIPBOARD_FAILURE;
 		}
 		if (   !(mClipMemNow = GetClipboardData(clipboard_contains_files ? CF_HDROP : CF_TEXT))   )
 		{
 			// Realistically, the above never fails?
-			Close("Clipboard::Get(): GetClipboardData() unexpectedly failed.");
+			Close("GetClipboardData"); // Short error message since so rare.
 			return CLIPBOARD_FAILURE;
 		}
 		if (   !(mClipMemNowLocked = (char *)GlobalLock(mClipMemNow))   )
 		{
-			Close("Clipboard::Get(): GlobalLock() unexpectedly failed.");
+			Close("GlobalLock");  // Short error message since so rare.
 			return CLIPBOARD_FAILURE;
 		}
 		// Otherwise: Update length after every successful new open&lock:
@@ -99,7 +98,7 @@ size_t Clipboard::Get(char *aBuf)
 		if (mLength >= CLIPBOARD_FAILURE)
 		{
 			// Not likely in the near future; but here for completeness:
-			Close("Clipboard::Get(): The clipboard is too large (over 4GB in size).");
+			Close("Clipboard too large"); // Over 4GB in size.
 			return CLIPBOARD_FAILURE;
 		}
 	}
@@ -186,13 +185,13 @@ char *Clipboard::PrepareForWrite(size_t aAllocSize)
 	// with 16-bit Windows. They are ignored.": GMEM_DDESHARE
 	if (   !(mClipMemNew = GlobalAlloc(GMEM_MOVEABLE, aAllocSize))   )
 	{
-		g_script.ScriptError("Clipboard::PrepareForWrite(): GlobalAlloc() failed.");
+		g_script.ScriptError("GlobalAlloc");  // Short error message since so rare.
 		return NULL;
 	}
 	if (   !(mClipMemNewLocked = (char *)GlobalLock(mClipMemNew))   )
 	{
 		mClipMemNew = GlobalFree(mClipMemNew);  // This keeps mClipMemNew in sync with its state.
-		g_script.ScriptError("Clipboard::PrepareForWrite(): GlobalLock() failed.");
+		g_script.ScriptError("GlobalLock"); // Short error message since so rare.
 		return NULL;
 	}
 	*mClipMemNewLocked = '\0'; // Init for caller.
@@ -201,17 +200,17 @@ char *Clipboard::PrepareForWrite(size_t aAllocSize)
 
 
 
-ResultType Clipboard::Commit()
+ResultType Clipboard::Commit(UINT aFormat)
 // If this is called while mClipMemNew is NULL, the clipboard will be set to be truly
 // empty, which is different from writing an empty string to it.  Note: If the clipboard
 // was already physically open, this function will close it as part of the commit (since
 // whoever had it open before can't use the prior contents, since they're invalid).
 {
 	if (!mIsOpen && !Open())
-		AbortWrite("Clipboard::Commit(): Could not open clipboard after many timed attempts."
+		AbortWrite("Could not open clipboard for writing after many timed attempts."
 			" Another program is probably holding it open.");
 	if (!EmptyClipboard())
-		AbortWrite("Clipboard::Commit(): EmptyClipboard() failed.");
+		AbortWrite("EmptyClipboard"); // Short error message since so rare.
 	if (mClipMemNew)
 	{
 		bool new_is_empty = false;
@@ -231,14 +230,14 @@ ResultType Clipboard::Commit()
 			// of it to the system:
 			mClipMemNew = GlobalFree(mClipMemNew);
 		else
-			if (SetClipboardData(CF_TEXT, mClipMemNew))
+			if (SetClipboardData(aFormat, mClipMemNew))
 				// In any of the failure conditions above, Close() ensures that mClipMemNew is
 				// freed if it was allocated.  But now that we're here, the memory should not be
 				// freed because it is owned by the clipboard (it will free it at the appropriate time).
 				// Thus, we relinquish the memory because we shouldn't be looking at it anymore:
 				mClipMemNew = NULL;
 			else
-				AbortWrite("Clipboard::Commit(): SetClipboardData() failed.");
+				AbortWrite("SetClipboardData"); // Short error message since so rare.
 	}
 	// else we will close it after having done only the EmptyClipboard(), above.
 	// Note: Decided not to update mLength for performance reasons (in case clipboard is huge).
@@ -253,8 +252,6 @@ ResultType Clipboard::Commit()
 ResultType Clipboard::AbortWrite(char *aErrorMessage)
 // Always returns FAIL.
 {
-	if (!aErrorMessage)
-		aErrorMessage = "Clipboard::AbortWrite() was called due to an unknown error.";
 	// Since we were called in conjunction with an aborted attempt to Commit(), always
 	// ensure the clipboard is physically closed because even an attempt to Commit()
 	// should physically close it:
@@ -268,7 +265,7 @@ ResultType Clipboard::AbortWrite(char *aErrorMessage)
 	if (mClipMemNew)
 		mClipMemNew = GlobalFree(mClipMemNew);
 	// Caller needs us to always return FAIL:
-	return g_script.ScriptError(aErrorMessage);
+	return *aErrorMessage ? g_script.ScriptError(aErrorMessage) : FAIL;
 }
 
 

@@ -47,7 +47,8 @@ enum MessageMode {RETURN_AFTER_MESSAGES, WAIT_FOR_MESSAGES};
 
 // The first timers in the series are used by the MessageBoxes.  Start at +2 to give
 // an extra margin of safety:
-enum OurTimers {TIMER_ID_MAIN = MAX_MSGBOXES + 2, TIMER_ID_UNINTERRUPTIBLE, TIMER_ID_AUTOEXEC, TIMER_ID_INPUT};
+enum OurTimers {TIMER_ID_MAIN = MAX_MSGBOXES + 2, TIMER_ID_UNINTERRUPTIBLE, TIMER_ID_AUTOEXEC
+	, TIMER_ID_INPUT, TIMER_ID_DEREF};
 
 // MUST MAKE main timer and uninterruptible timers associated with our main window so that
 // MainWindowProc() will be able to process them when it is called by the DispatchMessage()
@@ -96,6 +97,13 @@ if (!g_UninterruptibleTimerExists && !(g_UninterruptibleTimerExists = SetTimer(g
 #define SET_INPUT_TIMER(aTimeoutValue) \
 	if (!g_InputTimerExists)\
 		g_InputTimerExists = SetTimer(g_hWnd, TIMER_ID_INPUT, aTimeoutValue, InputTimeout);
+
+// For this one, SetTimer() is called unconditionally because our caller wants the timer reset
+// (as though it were killed and recreated) uncondtionally.  MSDN's comments are a little vague
+// about this, but testing shows that calling SetTimer() against an existing timer does completely
+// reset it as though it were killed and recreated.  Note also that g_hWnd is used vs. NULL so that
+// the timer will fire even when a msg pump other than our own is running, such as that of a MsgBox.
+#define SET_DEREF_TIMER(aTimeoutValue) g_DerefTimerExists = SetTimer(g_hWnd, TIMER_ID_DEREF, aTimeoutValue, DerefTimeout);
 
 #define KILL_MAIN_TIMER \
 if (g_MainTimerExists && KillTimer(g_hWnd, TIMER_ID_MAIN))\
@@ -154,6 +162,9 @@ if (g_MainTimerExists && KillTimer(g_hWnd, TIMER_ID_MAIN))\
 if (g_InputTimerExists && KillTimer(g_hWnd, TIMER_ID_INPUT))\
 	g_InputTimerExists = false;
 
+#define KILL_DEREF_TIMER \
+if (g_DerefTimerExists && KillTimer(g_hWnd, TIMER_ID_DEREF))\
+	g_DerefTimerExists = false;
 
 // Callers should note that using INTERVAL_UNSPECIFIED might not rest the CPU at all if there is
 // already at least one msg waiting in our thread's msg queue:
@@ -338,5 +349,6 @@ VOID CALLBACK MsgBoxTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);
 VOID CALLBACK AutoExecSectionTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);
 VOID CALLBACK UninteruptibleTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);
 VOID CALLBACK InputTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);
+VOID CALLBACK DerefTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);
 
 #endif

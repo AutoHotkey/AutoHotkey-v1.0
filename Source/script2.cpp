@@ -17,12 +17,13 @@ GNU General Public License for more details.
 #include "stdafx.h" // pre-compiled headers
 #include <wininet.h> // For URLDownloadToFile().
 #include <olectl.h> // for OleLoadPicture()
+#include <winioctl.h> // For PREVENT_MEDIA_REMOVAL and CD lock/unlock.
 #include "qmath.h" // Used by Transform() [math.h incurs 2k larger code size just for ceil() & floor()]
+#include "mt19937ar-cok.h" // for sorting in random order
 #include "script.h"
 #include "window.h" // for IF_USE_FOREGROUND_WINDOW
 #include "application.h" // for MsgSleep()
 #include "resources\resource.h"  // For InputBox.
-
 
 ////////////////////
 // Window related //
@@ -902,6 +903,56 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 	case TRANS_CMD_DEREF:
 		return Deref(output_var, aValue1);
 
+	case TRANS_CMD_UNICODE:
+		int char_count;
+		if (output_var->mType == VAR_CLIPBOARD)
+		{
+			// Since the output var is the clipboard, the mode is autodetected as the following:
+			// Convert aValue1 from UTF-8 to Unicode and put the result onto the clipboard.
+			// MSDN: "Windows 95: Under the Microsoft Layer for Unicode, MultiByteToWideChar also
+			// supports CP_UTF7 and CP_UTF8."
+			// First, get the number of characters needed for the buffer size.  This count includes
+			// room for the terminating char:
+			if (   !(char_count = MultiByteToWideChar(CP_UTF8, 0, aValue1, -1, NULL, 0))   )
+				return output_var->Assign(); // Make clipboard blank to indicate failure.
+			LPVOID clip_buf = g_clip.PrepareForWrite(char_count * sizeof(WCHAR));
+			if (!clip_buf)
+				return output_var->Assign(); // Make clipboard blank to indicate failure.
+			// Perform the conversion:
+			if (!MultiByteToWideChar(CP_UTF8, 0, aValue1, -1, (LPWSTR)clip_buf, char_count))
+			{
+				g_clip.AbortWrite();
+				return output_var->Assign(); // Make clipboard blank to indicate failure.
+			}
+			return g_clip.Commit(CF_UNICODETEXT); // Save as type Unicode. It will display any error that occurs.
+		}
+		// Otherwise, going in the reverse direction: convert the clipboard contents to UTF-8 and put
+		// the result into a normal variable.
+		if (!IsClipboardFormatAvailable(CF_UNICODETEXT) || !g_clip.Open()) // Relies on short-circuit boolean order.
+			return output_var->Assign(); // Make the (non-clipboard) output_var blank to indicate failure.
+		if (   !(g_clip.mClipMemNow = GetClipboardData(CF_UNICODETEXT)) // Relies on short-circuit boolean order.
+			|| !(g_clip.mClipMemNowLocked = (char *)GlobalLock(g_clip.mClipMemNow))
+			|| !(char_count = WideCharToMultiByte(CP_UTF8, 0, (LPCWSTR)g_clip.mClipMemNowLocked, -1, NULL, 0, NULL, NULL))   )
+		{
+			// Above finds out how large the contents will be when converted to UTF-8.
+			// In this case, it failed to determine the count, perhaps due to Win95 lacking Unicode layer, etc.
+			g_clip.Close();
+			return output_var->Assign(); // Make the (non-clipboard) output_var blank to indicate failure.
+		}
+		// Othewise, it found the count.  Set up the output variable, enlarging yit if needed:
+		if (output_var->Assign(NULL, char_count - 1) != OK) // Don't combine this with the above or below it can return FAIL.
+		{
+			g_clip.Close();
+			return FAIL;  // It already displayed the error.
+		}
+		// Perform the conversion:
+		char_count = WideCharToMultiByte(CP_UTF8, 0, (LPCWSTR)g_clip.mClipMemNowLocked, -1, output_var->Contents(), char_count, NULL, NULL);
+		g_clip.Close(); // Close the clipboard and free the memory.
+		output_var->Close();  // In case it's the clipboard, though currently it can't be since that would auto-detect as the reverse direction.
+		if (!char_count)
+			return output_var->Assign(); // Make non-clipboard output_var blank to indicate failure.
+		return OK;
+
 	case TRANS_CMD_HTML:
 	{
 		// These are the encoding-neutral translations for ASC 128 through 255 as shown by Dreamweaver.
@@ -1547,7 +1598,7 @@ ResultType Line::PerformShowWindow(ActionTypeType aActionType, char *aTitle, cha
 		// it probably does since there's absolutely no mention to the contrary
 		// anywhere on MS's site or on the web.  But clearly, if it does work, it
 		// does so only because Async() doesn't really post the message to the thread's
-		// queue, instead opting for more agressive measures.  Thus, it seems best
+		// queue, instead opting for more aggresive measures.  Thus, it seems best
 		// to do it this way to have maximum confidence in it:
 		//if (nCmdShow == SW_FORCEMINIMIZE) // Safer not to use ShowWindowAsync() in this case.
 			ShowWindow(target_window, nCmdShow);
@@ -1698,20 +1749,12 @@ ResultType Line::ControlClick(vk_type aVK, int aClickCount, char *aOptions, char
 	DETERMINE_TARGET_WINDOW
 	if (!target_window)
 		return OK;
-	HWND control_window = ControlExist(target_window, aControl);
-	if (!control_window)
-		return OK;
-
-	if (aClickCount <= 0)
-		// Allow this to simply "do nothing", because it increases flexibility
-		// in the case where the number of clicks is a dereferenced script variable
-		// that may sometimes (by intent) resolve to zero or negative:
-		return g_ErrorLevel->Assign(ERRORLEVEL_NONE);
 
 	// Set the defaults that will be in effect unless overridden by options:
 	KeyEventTypes event_type = KEYDOWNANDUP;
-	int xpos = COORD_UNSPECIFIED;
-	int ypos = COORD_UNSPECIFIED;
+	bool position_mode = false;
+	// These default coords can be overridden either by aOptions or aControl's X/Y mode:
+	POINT click = {COORD_UNSPECIFIED, COORD_UNSPECIFIED};
 
 	for (char *cp = aOptions; *cp; ++cp)
 	{
@@ -1723,20 +1766,77 @@ ResultType Line::ControlClick(vk_type aVK, int aClickCount, char *aOptions, char
 		case 'U':
 			event_type = KEYUP;
 			break;
+		case 'P':
+			if (!strnicmp(cp, "Pos", 3))
+			{
+				cp += 2;  // Add 2 vs. 3 to skip over the rest of the letters in this option word.
+				position_mode = true;
+			}
+			break;
 		// For the below:
 		// Use atoi() vs. ATOI() to avoid interpreting something like 0x01D as hex
 		// when in fact the D was meant to be an option letter:
 		case 'X':
-			xpos = atoi(cp + 1);
+			click.x = atoi(cp + 1); // Will be overridden later below if it turns out that position_mode is in effect.
 			break;
 		case 'Y':
-			ypos = atoi(cp + 1);
+			click.y = atoi(cp + 1); // Will be overridden later below if it turns out that position_mode is in effect.
 			break;
 		}
 	}
 
+	HWND control_window = position_mode ? NULL : ControlExist(target_window, aControl);
+	if (!control_window) // Even if position_mode is false, the below is still attempted, as documented.
+	{
+		// New section for v1.0.24.  But only after the above fails to find a control do we consider
+		// whether aControl contains X and Y coordinates.  That way, if a control class happens to be
+		// named something like "X1 Y1", it will still be found by giving precedence to class names.
+		point_and_hwnd_type pah = {0};
+		// Parse the X an Y coordinates in a strict way to reduce ambiguity with control names and also
+		// to keep the code simple.
+		char *cp = omit_leading_whitespace(aControl);
+		if (toupper(*cp) != 'X')
+			return OK; // Let ErrorLevel tell the story.
+		++cp;
+		if (!*cp)
+			return OK;
+		pah.pt.x = ATOI(cp);
+		if (   !(cp = StrChrAny(cp, " \t"))   ) // Find next space or tab (there must be one for it to be considered valid).
+			return OK;
+		cp = omit_leading_whitespace(cp + 1);
+		if (!*cp || toupper(*cp) != 'Y')
+			return OK;
+		++cp;
+		if (!*cp)
+			return OK;
+		pah.pt.y = ATOI(cp);
+		// The passed-in coordinates are always relative to target_window's upper left corner because offering
+		// an option for absolute/screen coordinates doesn't seem useful.
+		RECT rect;
+		GetWindowRect(target_window, &rect);
+		pah.pt.x += rect.left; // Convert to screen coordinates.
+		pah.pt.y += rect.top;
+		EnumChildWindows(target_window, EnumChildFindPoint, (LPARAM)&pah); // Find topmost control containing point.
+		// If no control is at this point, try posting the mouse event message(s) directly to the
+		// parent window to increase the flexibility of this feature:
+		control_window = pah.hwnd_found ? pah.hwnd_found : target_window;
+		// Convert click's target coordinates to be relative to the client area of the control or
+		// parent window because that is the format required by messages such as WM_LBUTTONDOWN
+		// used later below:
+		click = pah.pt;
+		ScreenToClient(control_window, &click);
+	}
+
+	// This is done this late because it seems better to set an ErrorLevel of 1 whenever the target
+	// window or control isn't found, or any other error condition occurs above:
+	if (aClickCount <= 0)
+		// Allow this to simply "do nothing", because it increases flexibility
+		// in the case where the number of clicks is a dereferenced script variable
+		// that may sometimes (by intent) resolve to zero or negative:
+		return g_ErrorLevel->Assign(ERRORLEVEL_NONE);
+
 	RECT rect;
-	if (xpos == COORD_UNSPECIFIED || ypos == COORD_UNSPECIFIED)
+	if (click.x == COORD_UNSPECIFIED || click.y == COORD_UNSPECIFIED)
 	{
 		// AutoIt3: Get the dimensions of the control so we can click the centre of it
 		// (maybe safer and more natural than 0,0).
@@ -1744,12 +1844,12 @@ ResultType Line::ControlClick(vk_type aVK, int aClickCount, char *aOptions, char
 		// clicking at 0,0 might activate a part of the control that is not even visible:
 		if (!GetWindowRect(control_window, &rect))
 			return OK;  // Let ErrorLevel tell the story.
-		if (xpos == COORD_UNSPECIFIED)
-			xpos = (rect.right - rect.left) / 2;
-		if (ypos == COORD_UNSPECIFIED)
-			ypos = (rect.bottom - rect.top) / 2;
+		if (click.x == COORD_UNSPECIFIED)
+			click.x = (rect.right - rect.left) / 2;
+		if (click.y == COORD_UNSPECIFIED)
+			click.y = (rect.bottom - rect.top) / 2;
 	}
-	LPARAM lparam = MAKELPARAM(xpos, ypos);
+	LPARAM lparam = MAKELPARAM(click.x, click.y);
 
 	UINT msg_down, msg_up;
 	WPARAM wparam;
@@ -2795,7 +2895,7 @@ ResultType Line::WinSet(char *aAttrib, char *aValue, char *aTitle, char *aText
 		// fails even when Set() was previously called on that same window and it is currently
 		// transparent -- perhaps this happens when our thread doesn't own the window?
 		// Bottom line: The above is why there is currently no "on" or "toggle" sub-command, just "Off".
-		// Must fetch it at runtime, otherwise the program can't even be launched on Win9x/NT.
+		// Also, must fetch the below at runtime, otherwise the program can't even be launched on Win9x/NT.
 		// Also, since the color of an HBRUSH can't be easily determined (since it can be a pattern and
 		// since there seem to be no easy API calls to discover the colors of pixels in an HBRUSH,
 		// the following is not yet implemented: Use window's own class background color (via
@@ -3863,6 +3963,10 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 // Don't allow the main window to be opened this way by a compiled EXE, since it will display
 // the lines most recently executed, and many people who compile scripts don't want their users
 // to see the contents of the script:
+		case WM_LBUTTONDOWN:
+			if (g_script.mTrayMenu->mClickCount != 1) // Activating tray menu's default item requires double-click.
+				break; // Let default proc handle it (since that's what used to happen, it seems safest).
+			//else fall through to the next case.
 		case WM_LBUTTONDBLCLK:
 			if (g_script.mTrayMenu->mDefault)
 				HANDLE_USER_MENU(g_script.mTrayMenu->mDefault->mMenuID, -1)
@@ -5421,6 +5525,8 @@ ResultType Line::MouseGetPos()
 
 
 BOOL CALLBACK EnumChildFindPoint(HWND aWnd, LPARAM lParam)
+// This is called by more than one caller.  It finds the most appropriate child window that contains
+// the specified point (the point should be in screen coordinates).
 {
 	point_and_hwnd_type &pah = *((point_and_hwnd_type *)lParam);  // For performance and convenience.
 	if (!IsWindowVisible(aWnd)) // Omit hidden controls, like Window Spy does.
@@ -5460,7 +5566,7 @@ BOOL CALLBACK EnumChildFindPoint(HWND aWnd, LPARAM lParam)
 		if (update_it)
 		{
 			pah.hwnd_found = aWnd;
-			pah.rect_found = rect;
+			pah.rect_found = rect; // And at least one caller uses this returned rect.
 			pah.distance = distance;
 		}
 	}
@@ -5472,6 +5578,314 @@ BOOL CALLBACK EnumChildFindPoint(HWND aWnd, LPARAM lParam)
 ///////////////////////////////
 // Related to other commands //
 ///////////////////////////////
+
+ResultType Line::FormatTime(char *aYYYYMMDD, char *aFormat)
+// The compressed code size of this function is about 1 KB (2 KB uncompressed), which compares
+// favorably to using setlocale()+strftime(), which together are about 8 KB of compressed code
+// (setlocale() seems to be needed to put the user's or system's locale into effect for strftime()).
+// setlocale() weighs in at about 6.5 KB compressed (14 KB uncompressed).
+{
+	Var *output_var = ResolveVarOfArg(0);
+	if (!output_var)
+		return FAIL;
+
+	#define FT_MAX_INPUT_CHARS 2000  // In preparation for future use of TCHARs, since GetDateFormat() uses char-count not size.
+	// Input/format length is restricted since it must be translated and expanded into a new format
+	// string that uses single quotes around non-alphanumeric characters such as punctuation:
+	if (strlen(aFormat) > FT_MAX_INPUT_CHARS)
+		return output_var->Assign();
+
+	// Worst case expansion: .d.d.d.d. (9 chars) --> '.'d'.'d'.'d'.'d'.' (19 chars)
+	// Buffer below is sized to a little more than twice as big as the largest allowed format,
+	// which avoids having to constantly check for buffer overflow while translating aFormat
+	// into format_buf:
+	#define FT_MAX_OUTPUT_CHARS (2*FT_MAX_INPUT_CHARS + 10)
+	char format_buf[FT_MAX_OUTPUT_CHARS + 1];
+	char output_buf[FT_MAX_OUTPUT_CHARS + 1]; // The size of this is somewhat arbitrary, but buffer overflow is checked so it's safe.
+
+	char yyyymmdd[256] = ""; // Large enough to hold date/time and any options that follow it (note that D and T options can appear multiple times).
+
+	SYSTEMTIME st;
+	char *options = NULL;
+
+	if (!*aYYYYMMDD) // Use current local time by default.
+		GetLocalTime(&st);
+	else
+	{
+		strlcpy(yyyymmdd, omit_leading_whitespace(aYYYYMMDD), sizeof(yyyymmdd)); // Make a modifiable copy.
+		if (*yyyymmdd < '0' || *yyyymmdd > '9') // First character isn't a digit, therefore...
+		{
+			// ... options are present without date (since yyyymmdd [if present] must come before options).
+			options = yyyymmdd;
+			GetLocalTime(&st);  // Use current local time by default.
+		}
+		else // Since the string starts with a digit, rules say it must be a YYYYMMDD string, possibly followed by options.
+		{
+			// Find first space or tab because YYYYMMDD portion might contain only the leading part of date/timestamp.
+			if (options = StrChrAny(yyyymmdd, " \t")) // Find space or tab.
+			{
+				*options = '\0'; // Terminate yyyymmdd at the end of the YYYYMMDDHH24MISS string.
+				options = omit_leading_whitespace(++options); // Point options to the right place (can be empty string).
+			}
+			//else leave options set to NULL to indicate that there are none.
+
+			// Pass "false" for validatation so that times can still be reported even if the year
+			// is prior to 1601.  If the time and/or date is invalid, GetTimeFormat() and GetDateFormat()
+			// will refuse to produce anything, which is documented behavior:
+			YYYYMMDDToSystemTime(yyyymmdd, st, false);
+		}
+	}
+	
+	// Set defaults.  Some can be overridden by options (if there are any options).
+	LCID lcid = LOCALE_USER_DEFAULT;
+	DWORD date_flags = 0, time_flags = 0;
+	bool date_flags_specified = false, time_flags_specified = false, reverse_date_time = false;
+	#define FT_FORMAT_NONE 0
+	#define FT_FORMAT_TIME 1
+	#define FT_FORMAT_DATE 2
+	int format_type1 = FT_FORMAT_NONE;
+	char *format2_marker = NULL; // Will hold the location of the first char of the second format (if present).
+	bool do_null_format2 = false;  // Will be changed to true if a default date *and* time should be used.
+
+	if (options) // Parse options.
+	{
+		char *option_end, orig_char;
+		for (char *next_option = options; *next_option; next_option = omit_leading_whitespace(option_end))
+		{
+			// Find the end of this option item:
+			if (   !(option_end = StrChrAny(next_option, " \t"))   )  // Space or tab.
+				option_end = next_option + strlen(next_option); // Set to position of zero terminator instead.
+
+			// Permanently terminate in between options to help eliminate ambiguity for words contained
+			// inside other words, and increase confidence in decimal and hexadecimal conversion.
+			orig_char = *option_end;
+			*option_end = '\0';
+
+			++next_option;
+			switch (toupper(next_option[-1]))
+			{
+			case 'D':
+				date_flags_specified = true;
+				date_flags |= ATOU(next_option); // ATOU() for unsigned.
+				break;
+			case 'T':
+				time_flags_specified = true;
+				time_flags |= ATOU(next_option); // ATOU() for unsigned.
+				break;
+			case 'R':
+				reverse_date_time = true;
+				break;
+			case 'L':
+				lcid = !stricmp(next_option, "Sys") ? LOCALE_SYSTEM_DEFAULT : (LCID)ATOI64(next_option);
+				break;
+			// If not one of the above, such as zero terminator or a number, just ignore it.
+			}
+
+			*option_end = orig_char; // Undo the temporary termination so that loop's omit_leading() will work.
+		} // for() each item in option list
+	} // Parse options.
+
+	if (!*aFormat)
+	{
+		aFormat = NULL; // Tell GetDateFormat() and GetTimeFormat() to use default for the specified locale.
+		if (!date_flags_specified) // No preference was given, so use long (which seems generally more useful).
+			date_flags |= DATE_LONGDATE;
+		if (!time_flags_specified)
+			time_flags |= TIME_NOSECONDS;  // Seems more desirable/typical to default to no seconds.
+		// Put the time first by default, though this is debatable (Metapad does it and I like it).
+		format_type1 = reverse_date_time ? FT_FORMAT_DATE : FT_FORMAT_TIME;
+		do_null_format2 = true;
+	}
+	else // aFormat is non-blank.
+	{
+		// Omit whitespace only for consideration of special keywords.  Whitespace is later kept for
+		// a normal format string such as %A_Space%MM/dd/yy:
+		char *candidate = omit_leading_whitespace(aFormat);
+		if (!stricmp(candidate, "YWeek"))
+		{
+			GetISOWeekNumber(output_buf, st.wYear, GetYDay(st.wMonth, st.wDay, IS_LEAP_YEAR(st.wYear)), st.wDayOfWeek);
+			return output_var->Assign(output_buf);
+		}
+		if (!stricmp(candidate, "YDay") || !stricmp(candidate, "YDay0"))
+		{
+			int yday = GetYDay(st.wMonth, st.wDay, IS_LEAP_YEAR(st.wYear));
+			if (!stricmp(candidate, "YDay"))
+				return output_var->Assign(yday); // Assign with no leading zeroes, also will be in hex format if that format is in effect.
+			// Otherwise:
+			sprintf(output_buf, "%03d", yday);
+			return output_var->Assign(output_buf);
+		}
+		if (!stricmp(candidate, "WDay"))
+			return output_var->Assign(st.wDayOfWeek + 1);  // Convert to 1-based for compatibility with A_WDay.
+
+		// Since above didn't return, check for those that require a call to GetTimeFormat/GetDateFormat
+		// further below:
+		if (!stricmp(candidate, "ShortDate"))
+		{
+			aFormat = NULL;
+			date_flags |= DATE_SHORTDATE;
+			date_flags &= ~(DATE_LONGDATE | DATE_YEARMONTH); // If present, these would prevent it from working.
+		}
+		else if (!stricmp(candidate, "LongDate"))
+		{
+			aFormat = NULL;
+			date_flags |= DATE_LONGDATE;
+			date_flags &= ~(DATE_SHORTDATE | DATE_YEARMONTH); // If present, these would prevent it from working.
+		}
+		else if (!stricmp(candidate, "YearMonth"))
+		{
+			aFormat = NULL;
+			date_flags |= DATE_YEARMONTH;
+			date_flags &= ~(DATE_SHORTDATE | DATE_LONGDATE); // If present, these would prevent it from working.
+		}
+		else if (!stricmp(candidate, "Time"))
+		{
+			format_type1 = FT_FORMAT_TIME;
+			aFormat = NULL;
+			if (!time_flags_specified)
+				time_flags |= TIME_NOSECONDS;  // Seems more desirable/typical to default to no seconds.
+		}
+		else // Assume normal format string.
+		{
+			char *cp = aFormat, *dp = format_buf;   // Initialize source and destination pointers.
+			bool inside_their_quotes = false; // Whether we are inside a single-quoted string in the source.
+			bool inside_our_quotes = false;   // Whether we are inside a single-quoted string of our own making in dest.
+			for (; *cp; ++cp) // Transcribe aFormat into format_buf and also check for which comes first: date or time.
+			{
+				if (*cp == '\'') // Note that '''' (four consecutive quotes) is a single literal quote, which this logic handles okay.
+				{
+					if (inside_our_quotes)
+					{
+						// Upon encountering their quotes while we're still in ours, merge theirs with ours and
+						// remark it as theirs.  This is done to avoid having two back-to-back quoted sections,
+						// which would result in an unwanted literal single quote.  Example:
+						// 'Some string'':' (the two quotes in the middle would be seen as a literal quote).
+						inside_our_quotes = false;
+						inside_their_quotes = true;
+						continue;
+					}
+					if (inside_their_quotes)
+					{
+						// If next char needs to be quoted, don't close out this quote section because that
+						// would introduce two consecutive quotes, which would be interpreted as a single
+						// literal quote if its enclosed by two outer single quotes.  Instead convert this
+						// quoted section over to "ours":
+						if (cp[1] && !IsCharAlphaNumeric(cp[1]) && cp[1] != '\'') // Also consider single quotes to be theirs due to this example: dddd:''''y
+							inside_our_quotes = true;
+							// And don't do "*dp++ = *cp"
+						else // there's no next-char or it's alpha-numeric, so it doesn't need to be inside quotes.
+							*dp++ = *cp; // Close out their quoted section.
+					}
+					else // They're starting a new quoted section, so just transcribe this single quote as-is.
+						*dp++ = *cp;
+					inside_their_quotes = !inside_their_quotes; // Must be done after the above.
+					continue;
+				}
+				// Otherwise, it's not a single quote.
+				if (inside_their_quotes) // *cp is inside a single-quoted string, so it can be part of format/picture
+					*dp++ = *cp; // Transcribe as-is.
+				else
+				{
+					if (IsCharAlphaNumeric(*cp))
+					{
+						if (inside_our_quotes)
+						{
+							*dp++ = '\''; // Close out the previous quoted section, since this char should not be a part of it.
+							inside_our_quotes = false;
+						}
+						if (strchr("dMyg", *cp)) // A format unique to Date is present.
+						{
+							if (!format_type1)
+								format_type1 = FT_FORMAT_DATE;
+							else if (format_type1 == FT_FORMAT_TIME && !format2_marker) // type2 should only be set if different than type1.
+							{
+								*dp++ = '\0';  // Terminate the first section and (below) indicate that there's a second.
+								format2_marker = dp;  // Point it to the location in format_buf where the split should occur.
+							}
+						}
+						else if (strchr("hHmst", *cp)) // A format unique to Time is present.
+						{
+							if (!format_type1)
+								format_type1 = FT_FORMAT_TIME;
+							else if (format_type1 == FT_FORMAT_DATE && !format2_marker) // type2 should only be set if different than type1.
+							{
+								*dp++ = '\0';  // Terminate the first section and (below) indicate that there's a second.
+								format2_marker = dp;  // Point it to the location in format_buf where the split should occur.
+							}
+						}
+						// For consistency, transcribe all AlphaNumeric chars not inside single quotes as-is
+						// (numbers are transcribed in case they are ever used as part of pic/format).
+						*dp++ = *cp;
+					}
+					else // Not alphanumeric, so enclose this and any other non-alphanumeric characters in single quotes.
+					{
+						if (!inside_our_quotes)
+						{
+							*dp++ = '\''; // Create a new quoted section of our own, since this char should be inside quotes to be understood.
+							inside_our_quotes = true;
+						}
+						*dp++ = *cp;  // Add this character between the quotes, since it's of the right "type".
+					}
+				}
+			} // for()
+			if (inside_our_quotes)
+				*dp++ = '\'';  // Close out our quotes.
+			*dp = '\0'; // Final terminator.
+			aFormat = format_buf; // Point it to the freshly translated format string, for use below.
+		} // aFormat contains normal format/pic string.
+	} // aFormat isn't blank.
+
+	// If there are no date or time formats present, still do the transcription so that
+	// any quoted strings and whatnot are resolved.  This increases runtime flexibility.
+	// The below is also relied upon by "LongDate" and "ShortDate" above:
+	if (!format_type1)
+		format_type1 = FT_FORMAT_DATE;
+
+	// MSDN: Time: "The function checks each of the time values to determine that it is within the
+	// appropriate range of values. If any of the time values are outside the correct range, the
+	// function fails, and sets the last-error to ERROR_INVALID_PARAMETER. 
+	// Dates: "...year, month, day, and day of week. If the day of the week is incorrect, the
+	// function uses the correct value, and returns no error. If any of the other date values
+	// are outside the correct range, the function fails, and sets the last-error to ERROR_INVALID_PARAMETER.
+
+	if (format_type1 == FT_FORMAT_DATE) // DATE comes first.
+	{
+		if (!GetDateFormat(lcid, date_flags, &st, aFormat, output_buf, FT_MAX_OUTPUT_CHARS))
+			*output_buf = '\0';  // Ensure it's still the empty string, then try to continue to get the second half (if there is one).
+	}
+	else // TIME comes first.
+		if (!GetTimeFormat(lcid, time_flags, &st, aFormat, output_buf, FT_MAX_OUTPUT_CHARS))
+			*output_buf = '\0';  // Ensure it's still the empty string, then try to continue to get the second half (if there is one).
+
+	if (format2_marker || do_null_format2) // There is also a second format present.
+	{
+		size_t output_buf_length = strlen(output_buf);
+		char *output_buf_marker = output_buf + output_buf_length;
+		char *format2;
+		if (do_null_format2)
+		{
+			format2 = NULL;
+			*output_buf_marker++ = ' '; // Provide a space between time and date.
+			++output_buf_length;
+		}
+		else
+			format2 = format2_marker;
+
+		int buf_remaining_size = (int)(FT_MAX_OUTPUT_CHARS - output_buf_length);
+		int result;
+
+		if (format_type1 == FT_FORMAT_DATE) // DATE came first, so this one is TIME.
+			result = GetTimeFormat(lcid, time_flags, &st, format2, output_buf_marker, buf_remaining_size);
+		else
+			result = GetDateFormat(lcid, date_flags, &st, format2, output_buf_marker, buf_remaining_size);
+		if (!result)
+			output_buf[output_buf_length] = '\0'; // Ensure the first part is still terminated and just return that rather than nothing.
+	}
+
+	return output_var->Assign(output_buf);
+}
+
+
 
 ResultType Line::PerformAssign()
 // Returns OK or FAIL.
@@ -5631,10 +6045,8 @@ flags can be a combination of:
 
 
 
-///////////////////////////////////////////////////////////////////////////////
-// FROM AUTOIT3
-///////////////////////////////////////////////////////////////////////////////
 BOOL Util_ShutdownHandler(HWND hwnd, DWORD lParam)
+// From AutoIt3.
 {
 	// if the window is me, don't terminate!
 	if (hwnd != g_hWnd && hwnd != g_hWndSplash)
@@ -5647,10 +6059,8 @@ BOOL Util_ShutdownHandler(HWND hwnd, DWORD lParam)
 
 
 
-///////////////////////////////////////////////////////////////////////////////
-// FROM AUTOIT3
-///////////////////////////////////////////////////////////////////////////////
 void Util_WinKill(HWND hWnd)
+// From AutoIt3.
 {
 	DWORD      pid = 0;
 	LRESULT    lResult;
@@ -5906,7 +6316,7 @@ int SortWithOptions(const void *a1, const void *a2)
 	{
 		// For now, assume both are numbers.  If one of them isn't, it will be sorted as a zero.
 		// Thus, all non-numeric items should wind up in a sequential, unsorted group.
-		// Resolve since parts of the ATOI() macro are inline:
+		// Resolve only once since parts of the ATOI() macro are inline:
 		__int64 item1_int = ATOI64(sort_item1);
 		__int64 item2_int = ATOI64(sort_item2);
 		return (int)(g_SortReverse ? item2_int - item1_int : item1_int - item2_int);
@@ -5934,6 +6344,26 @@ int SortByNakedFilename(const void *a1, const void *a2)
 		return g_SortCaseSensitive ? strcmp(sort_item2, sort_item1) : stricmp(sort_item2, sort_item1);
 	else
 		return g_SortCaseSensitive ? strcmp(sort_item1, sort_item2) : stricmp(sort_item1, sort_item2);
+}
+
+
+
+struct sort_rand_type
+{
+	char *cp; // This must be the first member of the struct, otherwise the array trickery in PerformSort will fail.
+	// Below must be the same size in bytes as the above, which is why it's maintained as a union with
+	// a char* rather than a plain int (though currently they would be the same size anyway).
+	union
+	{
+		char *noname;
+		int rand;
+	};
+};
+
+int SortRandom(const void *a1, const void *a2)
+// See comments in prior function for details.
+{
+	return ((sort_rand_type *)a1)->rand - ((sort_rand_type *)a2)->rand;
 }
 
 
@@ -5970,6 +6400,7 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 	g_SortColumnOffset = 0;
 	bool allow_last_item_to_be_blank = false, terminate_last_item_with_delimiter = false;
 	bool sort_by_naked_filename = false;
+	bool sort_random = false;
 	char *cp;
 
 	for (cp = aOptions; *cp; ++cp)
@@ -5998,7 +6429,13 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 			--g_SortColumnOffset;  // Convert to zero-based.
 			break;
 		case 'R':
-			g_SortReverse = true;
+			if (!strnicmp(cp, "Random", 6))
+			{
+				sort_random = true;
+				cp += 5; // Point it to the last char so that the loop's ++cp will point to the character after it.
+			}
+			else
+				g_SortReverse = true;
 			break;
 		case 'Z':
 			// By setting this to true, the final item in the list, if it ends in a delimiter,
@@ -6046,9 +6483,17 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 	// Create the array of pointers that points into aContents to each delimited item.
 	// Use item_count + 1 to allow space for the last (blank) item in case
 	// allow_last_item_to_be_blank is false:
-	char **item = (char **)malloc((item_count + 1) * sizeof(char *));
+	int unit_size = sort_random ? 2 : 1;
+	size_t item_size = unit_size * sizeof(char *);
+	char **item = (char **)malloc((item_count + 1) * item_size);
 	if (!item)
 		return LineError("Out of mem");  // Short msg. since so rare.
+
+	// If sort_random is in effect, the above has created an array twice the normal size.
+	// This allows the random numbers to be interleaved inside the array as though it
+	// were an array consisting of sort_rand_type (which it actually is when viewed that way).
+	// Because of this, the array should be accessed through pointer addition rather than
+	// indexing via [].
 
 	// Scan aContents and do the following:
 	// 1) Replace each delimiter with a terminator so that the individual items can be seen
@@ -6057,22 +6502,53 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 	//    ArgMustBeDereferenced() has ensured that those contents are in the deref buffer.
 	// 2) Store a marker/pointer to each item (string) in aContents so that we know where
 	//    each item begins for sorting and recopying purposes.
-	for (item_count = 0, cp = item[0] = aContents; *cp; ++cp)
+	char **item_curr = item; // i.e. Don't use [] indexing for the reason in the paragraph previous to above.
+	for (item_count = 0, cp = *item_curr = aContents; *cp; ++cp)
 	{
 		if (*cp == delimiter)  // Each delimiter char becomes the terminator of the previous key phrase.
 		{
 			*cp = '\0';  // Terminate the item that appears before this delimiter.
-			item[++item_count] = cp + 1; // Make a pointer to the next item's place in aContents.
+			++item_count;
+			if (sort_random)
+				*(item_curr + 1) = (char *)genrand_int31(); // i.e. the randoms are in the odd fields, the pointers in the even.
+				// For the above:
+				// I don't know the exact reasons, but using genrand_int31() is much more random than
+				// using genrand_int32() in this case.  Perhaps it is some kind of statistical/cyclical
+				// anomaly in the random number generator.  Or perhaps it's something to do with integer
+				// underflow/overflow in SortRandom().  In any case, the problem can be proven via the
+				// following script, which shows a sharply non-random distribution when genrand_int32()
+				// is used:
+				//count = 0
+				//Loop 10000
+				//{
+				//	var = 1`n2`n3`n4`n5`n
+				//	Sort, Var, Random
+				//	StringLeft, Var1, Var, 1
+				//	if Var1 = 5  ; Change this value to 1 to see the opposite problem.
+				//		count += 1
+				//}
+				//Msgbox %count%
+			item_curr += unit_size; // i.e. Don't use [] indexing for the reason described above.
+			*item_curr = cp + 1; // Make a pointer to the next item's place in aContents.
 		}
 	}
 	// Add the last item to the count only if it wasn't disqualified earlier:
 	if (!terminate_last_item_with_delimiter)
+	{
 		++item_count;
-	char *original_last_item = item[item_count - 1];  // The location of the last item before it gets sorted.
+		if (sort_random) // Provide a random number for the last item.
+			*(item_curr + 1) = (char *)genrand_int31(); // i.e. the randoms are in the odd fields, the pointers in the even.
+	}
+	else // Since the final item is not included in the count, point item_curr to the one before the last, for use below.
+		item_curr -= unit_size;
+	char *original_last_item = *item_curr;  // The location of the last item before it gets sorted.
 
 	// Now aContents has been divided up based on delimiter.  Sort the array of pointers
 	// so that they indicate the correct ordering to copy aContents into output_var:
-	qsort((void *)item, item_count, sizeof(item[0]), sort_by_naked_filename ? SortByNakedFilename : SortWithOptions);
+	if (sort_random) // Takes precedence over all other options.
+		qsort((void *)item, item_count, item_size, SortRandom);
+	else
+		qsort((void *)item, item_count, item_size, sort_by_naked_filename ? SortByNakedFilename : SortWithOptions);
 
 	// Copy the sorted pointers back into output_var, which might not already be sized correctly
 	// if it's the clipboard or it was an environment variable when it came in as the input.
@@ -6087,17 +6563,18 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 	// Copy the sorted result back into output_var.  Do all except the last item, since the last
 	// item gets special treatment depending on the options that were specified.  The call to
 	// output_var->Contents() below should never fail due to the above having prepped it:
-	for (dest = output_var->Contents(), i = 0; i < item_count_less_1; ++i)
+	item_curr = item; // i.e. Don't use [] indexing for the reason described higher above (same applies to item += unit_size below).
+	for (dest = output_var->Contents(), i = 0; i < item_count_less_1; ++i, item_curr += unit_size)
 	{
-		if (item[i] == original_last_item)
+		if (*item_curr == original_last_item)
 			pos_of_original_last_item_in_dest = dest;
-		for (source = item[i]; *source;)
+		for (source = *item_curr; *source;)
 			*dest++ = *source++;
 		*dest++ = delimiter;  // Put each item's delimiter back in so that format is the same as the original.
 	}
 
 	// Copy the last item:
-	for (source = item[item_count_less_1]; *source;)
+	for (source = *item_curr; *source;)
 		*dest++ = *source++;
 	// If the original list's last item had a terminating delimiter and the specified options said
 	// to treat it not as a delimiter but as a final char of sorts, include it after the item that
@@ -6459,6 +6936,10 @@ ResultType Line::Drive(char *aCmd, char *aValue, char *aValue2) // aValue not aV
 		// and return:
 		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
 
+	case DRIVE_CMD_LOCK:
+	case DRIVE_CMD_UNLOCK:
+		return g_ErrorLevel->Assign(DriveLock(*aValue, drive_cmd == DRIVE_CMD_LOCK) ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR); // Indicate success or failure.
+
 	case DRIVE_CMD_EJECT:
 		// Don't do DRIVE_SET_PATH in this case since trailing backslash might prevent it from
 		// working on some OSes.
@@ -6505,6 +6986,87 @@ ResultType Line::Drive(char *aCmd, char *aValue, char *aValue2) // aValue not aV
 	} // switch()
 
 	return FAIL;  // Should never be executed.  Helps catch bugs.
+}
+
+
+
+ResultType Line::DriveLock(char aDriveLetter, bool aLockIt)
+{
+	HANDLE hdevice;
+	DWORD unused;
+	BOOL result;
+
+	if (g_os.IsWin9x())
+	{
+		// Use the Windows 9x method.  The code below is based on an example posted by Microsoft.
+		// Note: The presence of the code below does not add a detectible amount to the EXE size
+		// (probably because it's mostly defines and data types).
+		#pragma pack(1)
+		typedef struct _DIOC_REGISTERS
+		{
+			DWORD reg_EBX;
+			DWORD reg_EDX;
+			DWORD reg_ECX;
+			DWORD reg_EAX;
+			DWORD reg_EDI;
+			DWORD reg_ESI;
+			DWORD reg_Flags;
+		} DIOC_REGISTERS, *PDIOC_REGISTERS;
+		typedef struct _PARAMBLOCK
+		{
+			BYTE Operation;
+			BYTE NumLocks;
+		} PARAMBLOCK, *PPARAMBLOCK;
+		#pragma pack()
+
+		// MS: Prepare for lock or unlock IOCTL call
+		#define CARRY_FLAG 0x1
+		#define VWIN32_DIOC_DOS_IOCTL 1
+		#define LOCK_MEDIA   0
+		#define UNLOCK_MEDIA 1
+		#define STATUS_LOCK  2
+		PARAMBLOCK pb = {0};
+		pb.Operation = aLockIt ? LOCK_MEDIA : UNLOCK_MEDIA;
+		
+		DIOC_REGISTERS regs = {0};
+		regs.reg_EAX = 0x440D;
+		regs.reg_EBX = toupper(aDriveLetter) - 'A' + 1; // Convert to drive index. 0 = default, 1 = A, 2 = B, 3 = C
+		regs.reg_ECX = 0x0848; // MS: Lock/unlock media
+		regs.reg_EDX = (DWORD)&pb;
+		
+		// MS: Open VWIN32
+		hdevice = CreateFile("\\\\.\\vwin32", 0, 0, NULL, 0, FILE_FLAG_DELETE_ON_CLOSE, NULL);
+		if (hdevice == INVALID_HANDLE_VALUE)
+			return FAIL;
+		
+		// MS: Call VWIN32
+		result = DeviceIoControl(hdevice, VWIN32_DIOC_DOS_IOCTL, &regs, sizeof(regs), &regs, sizeof(regs), &unused, 0);
+		if (result)
+			result = !(regs.reg_Flags & CARRY_FLAG);
+	}
+	else // NT4/2k/XP or later
+	{
+		// The calls below cannot work on Win9x (as documented by MSDN's PREVENT_MEDIA_REMOVAL).
+		// Don't even attempt them on Win9x because they might blow up.
+		char filename[64];
+		sprintf(filename, "\\\\.\\%c:", aDriveLetter);
+		// FILE_READ_ATTRIBUTES is not enough; it yields "Access Denied" error.  So apparently all or part
+		// of the sub-attributes in GENERIC_READ are needed.  An MSDN example implies that GENERIC_WRITE is
+		// only needed for GetDriveType() == DRIVE_REMOVABLE drives, and maybe not even those when all we
+		// want to do is lock/unlock the drive (that example did quite a bit more).  In any case, research
+		// indicates that all CD/DVD drives are ever considered DRIVE_CDROM, not DRIVE_REMOVABLE.
+		// Due to this and the unlikelihood that GENERIC_WRITE is ever needed anyway, GetDriveType() is
+		// not called for the purpose of conditionally adding the GENERIC_WRITE attribute.
+		hdevice = CreateFile(filename, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+		if (hdevice == INVALID_HANDLE_VALUE)
+			return FAIL;
+		PREVENT_MEDIA_REMOVAL pmr;
+		pmr.PreventMediaRemoval = aLockIt;
+		result = DeviceIoControl(hdevice, IOCTL_STORAGE_MEDIA_REMOVAL, &pmr, sizeof(PREVENT_MEDIA_REMOVAL)
+			, NULL, 0, &unused, NULL);
+	}
+	CloseHandle(hdevice);
+	return result ? OK : FAIL;
 }
 
 
@@ -7360,8 +7922,105 @@ ResultType Line::FileSelectFolder(char *aRootDir, DWORD aOptions, char *aGreetin
 
 
 
+ResultType Line::FileGetShortcut(char *aShortcutFile)
+// Adapted from AutoIt3 source code, credited to Holger <Holger.Kotsch at GMX de>.
+{
+	// These might be omitted in the parameter list, so it's okay if they resolve to NULL.
+	Var *output_var_target = ResolveVarOfArg(1);
+	Var *output_var_dir = ResolveVarOfArg(2);
+	Var *output_var_arg = ResolveVarOfArg(3);
+	Var *output_var_desc = ResolveVarOfArg(4);
+	Var *output_var_icon = ResolveVarOfArg(5);
+	Var *output_var_icon_idx = ResolveVarOfArg(6);
+	Var *output_var_show_state = ResolveVarOfArg(7);
+
+	// For consistency with the behavior of other commands, the output variables are initialized to blank
+	// so that there is another way to detect failure:
+	if (output_var_target) output_var_target->Assign();
+	if (output_var_dir) output_var_dir->Assign();
+	if (output_var_arg) output_var_arg->Assign();
+	if (output_var_desc) output_var_desc->Assign();
+	if (output_var_icon) output_var_icon->Assign();
+	if (output_var_icon_idx) output_var_icon_idx->Assign();
+	if (output_var_show_state) output_var_show_state->Assign();
+
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
+
+	if (!Util_DoesFileExist(aShortcutFile))
+		return OK;  // Let ErrorLevel tell the story.
+
+	CoInitialize(NULL);
+	IShellLink *psl;
+
+	if (SUCCEEDED(CoCreateInstance(CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER, IID_IShellLink, (LPVOID *)&psl)))
+	{
+		IPersistFile *ppf;
+		if (SUCCEEDED(psl->QueryInterface(IID_IPersistFile, (LPVOID *)&ppf)))
+		{
+			WORD wsz[MAX_PATH+1];
+			MultiByteToWideChar(CP_ACP, 0, aShortcutFile, -1, (LPWSTR)wsz, MAX_PATH);
+			if (SUCCEEDED(ppf->Load((const WCHAR*)wsz, 0)))
+			{
+				char buf[MAX_PATH+1];
+				int icon_index, show_cmd;
+
+				if (output_var_target)
+				{
+					psl->GetPath(buf, MAX_PATH, NULL, SLGP_UNCPRIORITY);
+					output_var_target->Assign(buf);
+				}
+				if (output_var_dir)
+				{
+					psl->GetWorkingDirectory(buf, MAX_PATH);
+					output_var_dir->Assign(buf);
+				}
+				if (output_var_arg)
+				{
+					psl->GetArguments(buf, MAX_PATH);
+					output_var_arg->Assign(buf);
+				}
+				if (output_var_desc)
+				{
+					psl->GetDescription(buf, MAX_PATH); // Testing shows that the OS limits it to 260 characters.
+					output_var_desc->Assign(buf);
+				}
+				if (output_var_icon || output_var_icon_idx)
+				{
+					psl->GetIconLocation(buf, MAX_PATH, &icon_index);
+					if (output_var_icon)
+						output_var_icon->Assign(buf);
+					if (output_var_icon_idx)
+						if (*buf)
+							output_var_icon_idx->Assign(icon_index + 1);  // Convert from 0-based to 1-based for consistency with the Menu command, etc.
+						else
+							output_var_icon_idx->Assign(); // Make it blank to indicate that there is none.
+				}
+				if (output_var_show_state)
+				{
+					psl->GetShowCmd(&show_cmd);
+					output_var_show_state->Assign(show_cmd);
+					// For the above, decided not to translate them to Max/Min/Normal since other
+					// show-state numbers might be supported in the future (or are already).  In other
+					// words, this allows the flexibilty to specify some number other than 1/3/7 when
+					// creating the shortcut in case it happens to work.  Of course, that applies only
+					// to FileCreateShortcut, not here.  But it's done here so that this command is
+					// compatible with that one.
+				}
+				g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+			}
+			ppf->Release();
+		}
+		psl->Release();
+	}
+	CoUninitialize();
+
+	return OK;  // ErrorLevel might still indicate failture if one of the above calls failed.
+}
+
+
+
 ResultType Line::FileCreateShortcut(char *aTargetFile, char *aShortcutFile, char *aWorkingDir, char *aArgs
-	, char *aDescription, char *aIconFile, char *aHotkey)
+	, char *aDescription, char *aIconFile, char *aHotkey, char *aIconNumber, char *aRunState)
 // Adapted from the AutoIt3 source.
 {
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
@@ -7371,15 +8030,15 @@ ResultType Line::FileCreateShortcut(char *aTargetFile, char *aShortcutFile, char
 	if (SUCCEEDED(CoCreateInstance(CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER, IID_IShellLink, (LPVOID *)&psl)))
 	{
 		psl->SetPath(aTargetFile);
-		if (aWorkingDir && *aWorkingDir)
+		if (*aWorkingDir)
 			psl->SetWorkingDirectory(aWorkingDir);
-		if (aArgs && *aArgs)
+		if (*aArgs)
 			psl->SetArguments(aArgs);
-		if (aDescription && *aDescription)
+		if (*aDescription)
 			psl->SetDescription(aDescription);
-		if (aIconFile && *aIconFile)
-			psl->SetIconLocation(aIconFile, 0);
-		if (aHotkey && *aHotkey)
+		if (*aIconFile)
+			psl->SetIconLocation(aIconFile, *aIconNumber ? ATOI(aIconNumber) - 1 : 0); // Doesn't seem necessary to validate aIconNumber as not being negative, etc.
+		if (*aHotkey)
 		{
 			// If badly formatted, it's not a critical error, just continue.
 			// Currently, only shortcuts with a CTRL+ALT are supported.
@@ -7389,6 +8048,8 @@ ResultType Line::FileCreateShortcut(char *aTargetFile, char *aShortcutFile, char
 				// Vk in low 8 bits, mods in high 8:
 				psl->SetHotkey(   (WORD)vk | ((WORD)(HOTKEYF_CONTROL | HOTKEYF_ALT) << 8)   );
 		}
+		if (*aRunState)
+			psl->SetShowCmd(ATOI(aRunState)); // No validation is done since there's a chance other numbers might be valid now or in the future.
 
 		IPersistFile *ppf;
 		WORD wsz[MAX_PATH];
@@ -7960,7 +8621,7 @@ int Line::FileSetTime(char *aYYYYMMDD, char *aFilePattern, char aWhichTime
 	if (*yyyymmdd)
 	{
 		// Convert the arg into the time struct as local (non-UTC) time:
-		if (!YYYYMMDDToFileTime(yyyymmdd, &ft))
+		if (!YYYYMMDDToFileTime(yyyymmdd, ft))
 			return 0;  // Let ErrorLevel tell the story.
 		// Convert from local to UTC:
 		if (!LocalFileTimeToFileTime(&ft, &ftUTC))
@@ -8755,20 +9416,13 @@ void Line::Util_GetFullPathName(const char *szIn, char *szOut)
 
 
 
-///////////////////////////////////////////////////////////////////////////////
-// TAKEN FROM THE AUTOIT3 SOURCE
-///////////////////////////////////////////////////////////////////////////////
-// Util_StripTrailingDir()
-//
-// Makes sure a filename does not have a trailing //
-//
-///////////////////////////////////////////////////////////////////////////////
-
 void Line::Util_StripTrailingDir(char *szPath)
+// Makes sure a filename does not have a trailing //
 {
-	if (szPath[strlen(szPath)-1] == '\\')
-		szPath[strlen(szPath)-1] = '\0';
-} // Util_StripTrailingDir
+	size_t index = strlen(szPath) - 1;
+	if (szPath[index] == '\\')
+		szPath[index] = '\0';
+}
 
 
 
@@ -9014,6 +9668,7 @@ ArgTypeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_PIXELSEARCH:
 		//case ACT_IMAGESEARCH:
 		case ACT_INPUT:
+		case ACT_FORMATTIME:
 			return ARG_TYPE_OUTPUT_VAR;
 
 		case ACT_SORT:
@@ -9060,6 +9715,7 @@ ArgTypeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_PIXELSEARCH:
 		//case ACT_IMAGESEARCH:
 		case ACT_SPLITPATH:
+		case ACT_FILEGETSHORTCUT:
 			return ARG_TYPE_OUTPUT_VAR;
 		}
 		break;
@@ -9071,6 +9727,7 @@ ArgTypeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_CONTROLGETPOS:
 		case ACT_MOUSEGETPOS:
 		case ACT_SPLITPATH:
+		case ACT_FILEGETSHORTCUT:
 			return ARG_TYPE_OUTPUT_VAR;
 		}
 		break;
@@ -9082,16 +9739,22 @@ ArgTypeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_CONTROLGETPOS:
 		case ACT_MOUSEGETPOS:
 		case ACT_SPLITPATH:
+		case ACT_FILEGETSHORTCUT:
 		case ACT_RUN:
 			return ARG_TYPE_OUTPUT_VAR;
 		}
 		break;
 
 	case 4:  // Arg #5
-	case 5:  // Arg #6 
-		if (aActionType == ACT_SPLITPATH)
+	case 5:  // Arg #6
+		if (aActionType == ACT_SPLITPATH || aActionType == ACT_FILEGETSHORTCUT)
 			return ARG_TYPE_OUTPUT_VAR;
 		break;
+
+	case 6:  // Arg #7
+	case 7:  // Arg #8
+		if (aActionType == ACT_FILEGETSHORTCUT)
+			return ARG_TYPE_OUTPUT_VAR;
 	}
 	// Otherwise:
 	return ARG_TYPE_NORMAL;

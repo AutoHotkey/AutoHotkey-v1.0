@@ -68,12 +68,12 @@ inline size_t strnlen(char *aBuf, size_t aMax)
 
 
 inline char *StrChrAny(char *aStr, char *aCharList)
+// Returns the position of the first char in aStr that is of any one of
+// the characters listed in aCharList.  Returns NULL if not found.
 // Update: Yes, this seems identical to strpbrk().  However, since the corresponding code would
 // have to be added to the EXE regardless of which was used, there doesn't seem to be much
 // advantage to switching (especially since if the two differ in behavior at all, things might
 // get broken).  Another reason is the name "strpbrk()" is not as easy to remember.
-// Returns the position of the first char in aStr that is of any one of
-// the characters listed in aCharList.  Returns NULL if not found.
 {
 	if (aStr == NULL || aCharList == NULL) return NULL;
 	if (!*aStr || !*aCharList) return NULL;
@@ -332,82 +332,6 @@ inline bool IsHex(char *aBuf)
 	}
 
 
-// Callers rely on PURE_NOT_NUMERIC being zero/false, so order is important:
-enum pure_numeric_type {PURE_NOT_NUMERIC, PURE_INTEGER, PURE_FLOAT};
-inline pure_numeric_type IsPureNumeric(char *aBuf, bool aAllowNegative = false
-	, bool aAllowAllWhitespace = true, bool aAllowFloat = false, bool aAllowImpure = false)
-// Making this non-inline reduces the size of the compressed EXE by only 2K.  Since this function
-// is called so often, it seems preferable to keep it inline for performance.
-// String can contain whitespace.
-{
-	aBuf = omit_leading_whitespace(aBuf); // i.e. caller doesn't have to have ltrimmed, only rtrimmed.
-	if (!*aBuf) // The string is empty or consists entirely of whitespace.
-		return aAllowAllWhitespace ? PURE_INTEGER : PURE_NOT_NUMERIC;
-
-	if (*aBuf == '-')
-	{
-		if (aAllowNegative)
-			++aBuf;
-		else
-			return PURE_NOT_NUMERIC;
-	}
-	else if (*aBuf == '+')
-		++aBuf;
-
-	// Relies on short circuit boolean order to prevent reading beyond the end of the string:
-	bool is_hex = IS_HEX(aBuf);
-	if (is_hex)
-		aBuf += 2;  // Skip over the 0x prefix.
-
-	// Set defaults:
-	bool has_decimal_point = false;
-	bool has_at_least_one_digit = false; // i.e. a string consisting of only "+", "-" or "." is not considered numeric.
-
-	for (; *aBuf && !IS_SPACE_OR_TAB(*aBuf); ++aBuf)
-	{
-		if (*aBuf == '.')
-		{
-			if (!aAllowFloat || has_decimal_point || is_hex)
-				// i.e. if aBuf contains 2 decimal points, it can't be a valid number.
-				// Note that decimal points are allowed in hexadecimal strings, e.g. 0xFF.EE.
-				// But since that format doesn't seem to be supported by VC++'s atof() and probably
-				// related functions, and since it's extremely rare, it seems best not to support it.
-				return PURE_NOT_NUMERIC;
-			else
-				has_decimal_point = true;
-		}
-		else
-		{
-			if (is_hex ? !isxdigit(*aBuf) : (*aBuf < '0' || *aBuf > '9')) // And since we're here, it's not '.' either.
-				if (aAllowImpure) // Since aStr starts with a number (as verified above), it is considered a number.
-				{
-					if (has_at_least_one_digit)
-						return has_decimal_point ? PURE_FLOAT : PURE_INTEGER;
-					else // i.e. the strings "." and "-" are not considered to be numeric by themselves.
-						return PURE_NOT_NUMERIC;
-				}
-				else
-					return PURE_NOT_NUMERIC;
-			else
-				has_at_least_one_digit = true;
-		}
-	}
-	if (*aBuf) // The loop was broken because a space or tab was encountered.
-		if (*omit_leading_whitespace(aBuf)) // But that space or tab is followed by something other than whitespace.
-			if (!aAllowImpure) // e.g. "123 456" is not a valid pure number.
-				return PURE_NOT_NUMERIC;
-			// else fall through to the bottom logic.
-		// else since just whitespace at the end, the number qualifies as pure, so fall through.
-		// (it would already have returned in the loop if it was impure)
-	// else since end of string was encountered, the number qualifies as pure, so fall through.
-	// (it would already have returned in the loop if it was impure).
-	if (has_at_least_one_digit)
-		return has_decimal_point ? PURE_FLOAT : PURE_INTEGER;
-	else
-		return PURE_NOT_NUMERIC; // i.e. the strings "+" "-" and "." are not numeric by themselves.
-}
-
-
 
 inline void strlcpy (char *aDst, const char *aSrc, size_t aDstSize)
 // Same as strncpy() but guarantees null-termination of aDst upon return.
@@ -425,40 +349,36 @@ inline void strlcpy (char *aDst, const char *aSrc, size_t aDstSize)
 
 
 
-inline char *strcatmove(char *aDst, char *aSrc)
-// Same as strcat() but allows aSrc and aDst to overlap.
-// Unlike strcat(), it doesn't return aDst.  Instead, it returns the position
-// in aDst where aSrc was appended.
-{
-	if (!aDst || !aSrc || !*aSrc) return aDst;
-	char *aDst_end = aDst + strlen(aDst);
-	return (char *)memmove(aDst_end, aSrc, strlen(aSrc) + 1);  // Add 1 to include aSrc's terminator.
-}
+//inline char *strcatmove(char *aDst, char *aSrc)
+//// Same as strcat() but allows aSrc and aDst to overlap.
+//// Unlike strcat(), it doesn't return aDst.  Instead, it returns the position
+//// in aDst where aSrc was appended.
+//{
+//	if (!aDst || !aSrc || !*aSrc) return aDst;
+//	char *aDst_end = aDst + strlen(aDst);
+//	return (char *)memmove(aDst_end, aSrc, strlen(aSrc) + 1);  // Add 1 to include aSrc's terminator.
+//}
 
 
-inline char *GetLastErrorText(char *aBuf, size_t aBuf_size)
-{
-	if (!aBuf || !aBuf_size) return aBuf;
-	if (aBuf_size == 1)
-	{
-		*aBuf = '\0';
-		return aBuf;
-	}
-	FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM, NULL, GetLastError(), 0, aBuf, (DWORD)aBuf_size - 1, NULL);
-	return aBuf;
-}
-
-
-char *FileAttribToStr(char *aBuf, DWORD aAttr);
 
 #define DATE_FORMAT_LENGTH 14 // "YYYYMMDDHHMISS"
-ResultType YYYYMMDDToFileTime(char *YYYYMMDD, FILETIME *pftDateTime);
+#define IS_LEAP_YEAR(year) ((year) % 4 == 0 && ((year) % 100 != 0 || (year) % 400 == 0))
+
+int GetYDay(int aMon, int aDay, bool aIsLeapYear);
+int GetISOWeekNumber(char *aBuf, int aYear, int aYDay, int aWDay);
+ResultType YYYYMMDDToFileTime(char *aYYYYMMDD, FILETIME &aFileTime);
+ResultType YYYYMMDDToSystemTime(char *aYYYYMMDD, SYSTEMTIME &aSystemTime, bool aDoValidate);
 char *FileTimeToYYYYMMDD(char *aBuf, FILETIME &aTime, bool aConvertToLocalTime = false);
 char *SystemTimeToYYYYMMDD(char *aBuf, SYSTEMTIME &aTime, bool aConvertToLocalTime = false);
 __int64 YYYYMMDDSecondsUntil(char *aYYYYMMDDStart, char *aYYYYMMDDEnd, bool &aFailed);
 __int64 FileTimeSecondsUntil(FILETIME *pftStart, FILETIME *pftEnd);
 
-//unsigned __int64 GetFileSize64(HANDLE aFileHandle);
+// Callers rely on PURE_NOT_NUMERIC being zero/false, so order is important:
+enum pure_numeric_type {PURE_NOT_NUMERIC, PURE_INTEGER, PURE_FLOAT};
+
+pure_numeric_type IsPureNumeric(char *aBuf, bool aAllowNegative = false
+	, bool aAllowAllWhitespace = true, bool aAllowFloat = false, bool aAllowImpure = false);
+
 int snprintf(char *aBuf, size_t aBufSize, const char *aFormat, ...);
 int snprintfcat(char *aBuf, size_t aBufSize, const char *aFormat, ...);
 // Not currently used by anything, so commented out to possibly reduce code size:
@@ -473,6 +393,9 @@ char *TranslateLFtoCRLF(char *aString);
 bool DoesFilePatternExist(char *aFilePattern);
 ResultType FileAppend(char *aFilespec, char *aLine, bool aAppendNewline = true);
 char *ConvertFilespecToCorrectCase(char *aFullFileSpec);
+char *FileAttribToStr(char *aBuf, DWORD aAttr);
+//unsigned __int64 GetFileSize64(HANDLE aFileHandle);
+char *GetLastErrorText(char *aBuf, size_t aBuf_size);
 void AssignColor(char *aColorName, COLORREF &aColor, HBRUSH &aBrush);
 COLORREF ColorNameToBGR(char *aColorName);
 HRESULT MySetWindowTheme(HWND hwnd, LPCWSTR pszSubAppName, LPCWSTR pszSubIdList);
@@ -482,7 +405,8 @@ POINT CenterWindow(int aWidth, int aHeight);
 bool FontExist(HDC aHdc, char *aTypeface);
 void GetVirtualDesktopRect(RECT &aRect);
 ResultType RegReadString(HKEY aRootKey, char *aSubkey, char *aValueName, char *aBuf, size_t aBufSize);
-HBITMAP LoadPicture(char *aFilespec, int aWidth = 0, int aHeight = 0);
+HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, int aIconIndex
+	, bool aUseGDIPlusIfAvailable);
 int CALLBACK FontEnumProc(ENUMLOGFONTEX *lpelfe, NEWTEXTMETRICEX *lpntme, DWORD FontType, LPARAM lParam);
 bool IsStringInList(char *aStr, char *aList, bool aFindExactMatch, bool aCaseSensitive);
 

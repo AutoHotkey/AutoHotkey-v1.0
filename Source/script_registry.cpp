@@ -305,7 +305,7 @@ ResultType Line::RegWrite(DWORD aValueType, HKEY aRootKey, char *aRegSubkey, cha
 
 	case REG_DWORD:
 		if (*aValue)
-			sscanf(aValue, "%u", &dwBuf);
+			dwBuf = ATOU(aValue);  // Changed to ATOU() for v1.0.24 so that hex values are supported.
 		else // Default to 0 when blank.
 			dwBuf = 0;
 		if (RegSetValueEx(hRegKey, aValueName, 0, REG_DWORD, (CONST BYTE *)&dwBuf, sizeof(dwBuf) ) == ERROR_SUCCESS)
