@@ -6280,45 +6280,111 @@ ResultType Line::SplitPath(char *aFileSpec)
 	Var *output_var_name_no_ext = ResolveVarOfArg(4);  // Ok if NULL.
 	Var *output_var_drive = ResolveVarOfArg(5);  // Ok if NULL.
 
-	// Differences between _splitpath() and the method used here:
-	// _splitpath() doesn't include drive in output_var_dir, it includes a trailing
-	// backslash, it includes the . in the extension, it considers ":" to be a filename.
-	// _splitpath(pathname, drive, dir, file, ext);
-	//char sdrive[16], sdir[MAX_PATH], sname[MAX_PATH], sext[MAX_PATH];
-	//_splitpath(aFileSpec, sdrive, sdir, sname, sext);
-	//if (output_var_name_no_ext)
-	//	output_var_name_no_ext->Assign(sname);
-	//strcat(sname, sext);
-	//if (output_var_name)
-	//	output_var_name->Assign(sname);
-	//if (output_var_dir)
-	//	output_var_dir->Assign(sdir);
-	//if (output_var_ext)
-	//	output_var_ext->Assign(sext);
-	//if (output_var_drive)
-	//	output_var_drive->Assign(sdrive);
-	//return OK;
+	// For URLs, "drive" is defined as the server name, e.g. http://somedomain.com
+	char *name = "", *name_delimiter = NULL, *drive_end = NULL; // Set defaults to improve maintainability.
+	char *drive = omit_leading_whitespace(aFileSpec); // i.e. whitespace is considered for everything except the drive letter or server name, so that a pathless filename can have leading whitespace.
+	char *colon_double_slash = strstr(aFileSpec, "://");
 
-	// Don't use _splitpath() since it supposedly doesn't handle UNC paths correctly,
-	// and anyway we need more info than it provides.  Also note that it is possible
-	// for a file to begin with space(s) or a dot (if created programmatically), so
-	// don't trim or omit leading space unless it's known to be an absolute path.
+	if (colon_double_slash) // This is a URL such as ftp://... or http://...
+	{
+		if (   !(drive_end = strchr(colon_double_slash + 3, '/'))   )
+		{
+			if (   !(drive_end = strchr(colon_double_slash + 3, '\\'))   ) // Try backslash so that things like file://C:\Folder\File.txt are supported.
+				drive_end = colon_double_slash + strlen(colon_double_slash); // Set it to the position of the zero terminator instead.
+				// And because there is no filename, leave name and name_delimiter set to their defaults.
+			//else there is a backslash, e.g. file://C:\Folder\File.txt, so treat that backslash as the end of the drive name.
+		}
+		name_delimiter = drive_end; // Set default, to be possibly overridden below.
+		// Above has set drive_end to one of the following:
+		// 1) The slash that occurs to the right of the doubleslash in a URL.
+		// 2) The backslash that occurs to the right of the doubleslash in a URL.
+		// 3) The zero terminator if there is no slash or backslash to the right of the doubleslash.
+		if (*drive_end) // A slash or backslash exists to the right of the server name.
+		{
+			if (*(drive_end + 1))
+			{
+				// Find the rightmost slash.  At this stage, this is known to find the correct slash.
+				// In the case of a file at the root of a domain such as http://domain.com/root_file.htm,
+				// the directory consists of only the domain name, e.g. http://domain.com.  This is because
+				// the directory always the "drive letter" by design, since that is more often what the
+				// caller wants.  A script can use StringReplace to remove the drive/server portion from
+				// the directory, if desired.
+				name_delimiter = strrchr(aFileSpec, '/');
+				if (name_delimiter == colon_double_slash + 2) // To reach this point, it must have a backslash, something like file://c:\folder\file.txt
+					name_delimiter = strrchr(aFileSpec, '\\'); // Will always be found.
+				name = name_delimiter + 1; // This will be the empty string for something like http://domain.com/dir/
+			}
+			//else something like http://domain.com/, so leave name and name_delimiter set to their defaults.
+		}
+		//else something like http://domain.com, so leave name and name_delimiter set to their defaults.
+	}
+	else // It's not a URL, just a file specification such as c:\my folder\my file.txt, or \\server01\folder\file.txt
+	{
+		// Differences between _splitpath() and the method used here:
+		// _splitpath() doesn't include drive in output_var_dir, it includes a trailing
+		// backslash, it includes the . in the extension, it considers ":" to be a filename.
+		// _splitpath(pathname, drive, dir, file, ext);
+		//char sdrive[16], sdir[MAX_PATH], sname[MAX_PATH], sext[MAX_PATH];
+		//_splitpath(aFileSpec, sdrive, sdir, sname, sext);
+		//if (output_var_name_no_ext)
+		//	output_var_name_no_ext->Assign(sname);
+		//strcat(sname, sext);
+		//if (output_var_name)
+		//	output_var_name->Assign(sname);
+		//if (output_var_dir)
+		//	output_var_dir->Assign(sdir);
+		//if (output_var_ext)
+		//	output_var_ext->Assign(sext);
+		//if (output_var_drive)
+		//	output_var_drive->Assign(sdrive);
+		//return OK;
 
-	// Note that "C:Some File.txt" is a valid filename in some contexts, which the below
-	// tries to take into account.  However, there will be no way for this command to
-	// return a path that differentiates between "C:Some File.txt" and "C:\Some File.txt"
-	// since the first backslash is not included with the returned path, even if it's
-	// the root directory (i.e. "C:" is returned in both cases).  The "C:Filename"
-	// convention is pretty rare, and anyway this trait can be detected via something like
-	// IfInString, Filespec, :, IfNotInString, Filespec, :\, MsgBox Drive with no absolute path.
-	char *name_delimiter = strrchr(aFileSpec, '\\');
-	if (!name_delimiter)
-		if (   !(name_delimiter = strrchr(aFileSpec, '/'))   ) // As of v1.0.25.06, also support forward slash so that URLs can be split.
-			if (   !(name_delimiter = strrchr(aFileSpec, ':'))   )
-				name_delimiter = NULL;
+		// Don't use _splitpath() since it supposedly doesn't handle UNC paths correctly,
+		// and anyway we need more info than it provides.  Also note that it is possible
+		// for a file to begin with space(s) or a dot (if created programmatically), so
+		// don't trim or omit leading space unless it's known to be an absolute path.
 
-	char *name = name_delimiter ? name_delimiter + 1 : aFileSpec; // If no delimiter, name is the entire string.
-	char *ext_dot = strrchr(name, '.');
+		// Note that "C:Some File.txt" is a valid filename in some contexts, which the below
+		// tries to take into account.  However, there will be no way for this command to
+		// return a path that differentiates between "C:Some File.txt" and "C:\Some File.txt"
+		// since the first backslash is not included with the returned path, even if it's
+		// the root directory (i.e. "C:" is returned in both cases).  The "C:Filename"
+		// convention is pretty rare, and anyway this trait can be detected via something like
+		// IfInString, Filespec, :, IfNotInString, Filespec, :\, MsgBox Drive with no absolute path.
+
+		// UNCs are detected with this approach so that double sets of backslashes -- which sometimes
+		// occur by accident in "built filespecs" and are tolerated by the OS -- are not falsely
+		// detected as UNCs.
+		if (*drive == '\\' && *(drive + 1) == '\\') // Relies on short-circuit evaluation order.
+		{
+			if (   !(drive_end = strchr(drive + 2, '\\'))   )
+				drive_end = drive + strlen(drive); // Set it to the position of the zero terminator instead.
+		}
+		else if (*(drive + 1) == ':') // It's an absolute path.
+			// Assign letter and colon for consistency with server naming convention above.
+			// i.e. so that server name and drive can be used without having to worry about
+			// whether it needs a colon added or not.
+			drive_end = drive + 2;
+		else
+			// It's debatable, but it seems best to return a blank drive if a aFileSpec is a relative path.
+			// rather than trying to use GetFullPathName() on a potentially non-existent file/dir.
+			// _splitpath() doesn't fetch the drive letter of relative paths either.  This also reports
+			// a blank drive for something like file://C:\My Folder\My File.txt, which seems too rarely
+			// to justify a special mode.
+			drive_end = drive = ""; // This is necessary to allow Assign() to work correctly later below, since it interprets a length of zero as "use string's entire length".
+
+		if (   !(name_delimiter = strrchr(aFileSpec, '\\'))   ) // No backslash.
+			if (   !(name_delimiter = strrchr(aFileSpec, ':'))   ) // No colon.
+				name_delimiter = NULL; // Indicate that there is no directory.
+
+		name = name_delimiter ? name_delimiter + 1 : aFileSpec; // If no delimiter, name is the entire string.
+	}
+
+	// The above has now set the following variables:
+	// name: As an empty string or the actual name of the file, including extension.
+	// name_delimiter: As NULL if there is no directory, otherwise, the end of the directory's name.
+	// drive: As the start of the drive/server name, e.g. C:, \\Workstation01, http://domain.com, etc.
+	// drive_end: As the position after the drive's last character, either a zero terminator, slash, or backslash.
 
 	if (output_var_name && !output_var_name->Assign(name))
 		return FAIL;
@@ -6338,6 +6404,7 @@ ResultType Line::SplitPath(char *aFileSpec)
 				return FAIL;
 	}
 
+	char *ext_dot = strrchr(name, '.');
 	if (output_var_ext)
 	{
 		// Note that the OS doesn't allow filenames to end in a period.
@@ -6351,37 +6418,8 @@ ResultType Line::SplitPath(char *aFileSpec)
 	if (output_var_name_no_ext && !output_var_name_no_ext->Assign(name, (VarSizeType)(ext_dot ? ext_dot - name : strlen(name))))
 		return FAIL;
 
-	if (output_var_drive)
-	{
-		char *drive = omit_leading_whitespace(aFileSpec);
-		if (!*drive)
-			output_var_drive->Assign();
-		else
-		{
-			// UNCs are detected with this approach so that double sets of backslashes -- which sometimes
-			// occur by accident in "built filespecs" and are tolerated by the OS -- are not falsely
-			// detected as UNCs.
-			if (*drive == '\\' && *(drive + 1) == '\\')
-			{
-				char *drive_end = strchr(drive + 2, '\\');
-				if (drive_end)
-					output_var_drive->Assign(drive, (VarSizeType)(drive_end - drive));
-				else
-					output_var_drive->Assign(drive); // Assume the entire string is the server name.
-			}
-			else if (*(drive + 1) == ':') // It's an absolute path.
-				// Assign letter and colon for consistency with server naming convention above.
-				// i.e. so that server name and drive can be used without having to worry about
-				// whether it needs a colon added or not.
-				output_var_drive->Assign(drive, 2);
-			else // It's debatable, but it seems best to return a blank drive if a aFileSpec is a relative path.
-				 // rather than trying to use GetFullPathName() on a potentially non-existent file/dir.
-				 // _splitpath() doesn't fetch the drive letter of relative paths either.  This also reports
-				 // a blank drive for something like file://C:\My Folder\My File.txt, which seems too rarely
-				 // to justify a special mode.
-				output_var_drive->Assign();
-		}
-	}
+	if (output_var_drive && !output_var_drive->Assign(drive, (VarSizeType)(drive_end - drive)))
+		return FAIL;
 
 	return OK;
 }
@@ -7942,7 +7980,7 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 	// In addition, it does not prevent the CWD from changing while the user navigates from folder to
 	// folder in the dialog, except perhaps on Win9x.
 
-	// For v1.0.26, the new "M" letter is used for a new multi-select method since the old multi-select
+	// For v1.0.25.05, the new "M" letter is used for a new multi-select method since the old multi-select
 	// is faulty in the following ways:
 	// 1) If the user selects a single file in a multi-select dialog, the result is inconsistent: it
 	//    contains the full path and name of that single file rather than the folder followed by the
@@ -7955,7 +7993,7 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 	bool new_multi_select_method = false; // Set default.
 	switch (toupper(*aOptions))
 	{
-	case 'M':
+	case 'M':  // Multi-select.
 		++aOptions;
 		new_multi_select_method = true;
 		break;
@@ -8017,27 +8055,29 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 	if (ofn.Flags & OFN_ALLOWMULTISELECT)
 	{
 		char *cp;
-		if (new_multi_select_method) // v1.0.26+ method.
+		if (new_multi_select_method) // v1.0.25.05+ method.
 		{
 			// If the first terminator in file_buf is also the last, the user selected only
 			// a single file:
 			size_t length = strlen(file_buf);
 			if (!file_buf[length + 1]) // The list contains only a single file (full path and name).
 			{
-				// v1.0.26: To make the result of selecting one file the same as selecting multiple files
+				// v1.0.25.05: To make the result of selecting one file the same as selecting multiple files
 				// -- and thus easier to work with in a script -- convert the result into the multi-file
 				// format (folder as first item and naked filename as second):
 				if (cp = strrchr(file_buf, '\\'))
 				{
 					*cp = '\n';
 					// If the folder is the root folder, add a backslash so that selecting a single
-					// file yields the same reported folder as selecting multiple files:
+					// file yields the same reported folder as selecting multiple files.  One reason
+					// for doing it this way is that SetCurrentDirectory() requires a backslash after
+					// a root folder to succeed.  This allows a script to use SetWorkingDir to change
+					// to the selected folder before operating on each of the selected/naked filenames.
 					if (cp - file_buf == 2 && *(cp - 1) == ':') // e.g. "C:"
 					{
-						memmove(cp + 1, cp, strlen(cp) + 1); // Make room to insert backslash.
+						memmove(cp + 1, cp, strlen(cp) + 1); // Make room to insert backslash (since only one file was selcted, the buf is large enough).
 						*cp = '\\';
 					}
-
 				}
 			}
 			else // More than one file was selected.

@@ -2457,7 +2457,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 			// Instead, disguise the key now with a CTRL keystroke. Note that this is not done for
 			// mouse buttons that use the WIN key as a prefix because it does not work reliably for them
 			// (i.e. sometimes the Start Menu appears, even if two CTRL keystrokes are sent rather than one).
-			// Therefore, as of v1.0.26, mouse button hotkeys that use only the WIN key as a modifier cause
+			// Therefore, as of v1.0.25.05, mouse button hotkeys that use only the WIN key as a modifier cause
 			// the keyboard hook to be installed.  This determine is made during the hotkey loading stage.
 			KeyEvent(KEYDOWNANDUP, VK_CONTROL);
 	else if ((g_modifiersLR_logical & MOD_RALT) && !kvk[VK_RMENU].used_as_prefix)

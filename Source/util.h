@@ -180,7 +180,7 @@ inline size_t ltrim(char *aStr, size_t aLength = -1)
 	{
 		if (aLength == -1)
 			aLength = strlen(ptr); // Set aLength as new/trimmed length, for use below and also as the return value.
-		else // v1.0.26 bug-fix: Must adjust the length provided by caller to reflect what we did here.
+		else // v1.0.25.05 bug-fix: Must adjust the length provided by caller to reflect what we did here.
 			aLength -= offset;
 		memmove(aStr, ptr, aLength + 1); // +1 to include the '\0'.  memmove() permits source & dest to overlap.
 	}

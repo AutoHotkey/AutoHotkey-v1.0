@@ -241,8 +241,8 @@ void Hotkey::AllActivate()
 				// are composite hotkeys such as "RButton & Space" or "Space & RButton" need
 				// the keyboard hook:
 				if (   hot.mModifierSC || hot.mSC // i.e. since it's an SC, the modifying key isn't a mouse button.
-					|| (hot.mHookAction) // v1.0.26: At least some alt-tab actions require the keyboard hook. For example, a script consisting only of "MButton::AltTabAndMenu" would not work properly otherwise.
-					// v1.0.26: The line below was added to prevent the Start Menu from appearing, which
+					|| (hot.mHookAction) // v1.0.25.05: At least some alt-tab actions require the keyboard hook. For example, a script consisting only of "MButton::AltTabAndMenu" would not work properly otherwise.
+					// v1.0.25.05: The line below was added to prevent the Start Menu from appearing, which
 					// requires the keyboard hook. ALT hotkeys don't need it because the mouse hook sends
 					// a CTRL keystroke to disguise them, a trick that is unfortunately not reliable for
 					// when it happens while the while key is down (though it does disguise a Win-up).
@@ -1479,11 +1479,12 @@ ResultType Hotstring::AddHotstring(Label *aJumpToLabel, char *aOptions, char *aH
 // should end in a colon, which marks the end of the options list.  aHotstring is the hotstring itself
 // (e.g. "ahk"), which does not have to be unique, unlike the label name, which was made unique by also
 // including any options in with the label name (e.g. ::ahk:: is a different label than :c:ahk::).
+// Caller has also ensured that aHotstring is not blank.
 {
 	// The length is limited for performance reasons, notably so that the hook does not have to move
 	// memory around in the buffer it uses to watch for hotstrings:
 	if (strlen(aHotstring) > MAX_HOTSTRING_LENGTH)
-		return g_script.ScriptError("A hotstring itself must not be longer than " MAX_HOTSTRING_LENGTH_STR
+		return g_script.ScriptError("A hotstring abbreviation must not be longer than " MAX_HOTSTRING_LENGTH_STR
 			" characters.", aHotstring);
 
 	if (!shs)
@@ -1530,7 +1531,7 @@ Hotstring::Hotstring(Label *aJumpToLabel, char *aOptions, char *aHotstring, char
 	, mConstructedOK(false)
 {
 	// Insist on certain qualities so that they never need to be checked other than here:
-	if (!mJumpToLabel || !*aHotstring)
+	if (!mJumpToLabel) // Caller has already ensured that aHotstring is not blank.
 		return;
 
 	ParseOptions(aOptions, mPriority, mKeyDelay, mCaseSensitive, mConformToCase, mDoBackspace, mOmitEndChar

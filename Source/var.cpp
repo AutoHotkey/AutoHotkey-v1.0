@@ -387,6 +387,15 @@ VarSizeType Var::Get(char *aBuf)
 		aBuf += size;
 		break;
 	}
+
+	case VAR_TRUE:
+	case VAR_FALSE:
+		if (aBuf)
+			*aBuf++ = (mType == VAR_TRUE) ? '1': '0'; // It will be terminated later below.
+		else
+			return 1; // The length of the value.
+		break;
+
 	case VAR_WORKINGDIR:
 		// Use GetCurrentDirectory() vs. g_WorkingDir because any in-progrses FileSelectFile()
 		// dialog is able to keep functioning even when it's quasi-thread is suspended.  The

@@ -1205,6 +1205,15 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 
 			if (hotstring_start)
 			{
+				if (!*hotstring_start)
+				{
+					// The following error message won't indicate the correct line number because
+					// the hotstring (as a label) does not actually exist as a line.  But it seems
+					// best to report it this way in case the hotstring is inside a #Include file,
+					// so that the correct file name and approximate line number are shown:
+					ScriptError("This hotstring is missing its abbreviation.", hotkey_flag);
+					return CloseAndReturn(fp, script_buf, FAIL);
+				}
 				// In the case of hotstrings, hotstring_start is the beginning of the hotstring itself,
 				// i.e. the character after the second colon.  hotstring_options is NULL if no options,
 				// otherwise it's the first character in the options list (option string is not terminated,
@@ -4483,9 +4492,8 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, Var *aVarPrev)
 		return NULL;
 
 	VarTypeType var_type = VAR_NORMAL;  // Set default.
-	if (!stricmp(new_name, "clipboard"))
-		var_type = VAR_CLIPBOARD;
-	else if (toupper(*new_name) == 'A' && *(new_name + 1) == '_')  // This check helps average performance.
+
+	if (toupper(*new_name) == 'A' && *(new_name + 1) == '_')  // This check helps average performance.
 	{
 		// Keeping the most common ones near the top helps performance a little:
 		if (!stricmp(new_name, "A_YYYY") || !stricmp(new_name, "A_Year")) var_type = VAR_YYYY;
@@ -4605,6 +4613,10 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, Var *aVarPrev)
 		else if (!stricmp(new_name, "A_Tab")) var_type = VAR_TAB;
 		else if (!stricmp(new_name, "A_AhkVersion")) var_type = VAR_AHKVERSION;
 	}
+	else if (!stricmp(new_name, "true")) var_type = VAR_TRUE;
+	else if (!stricmp(new_name, "false")) var_type = VAR_FALSE;
+	else if (!stricmp(new_name, "clipboard")) var_type = VAR_CLIPBOARD;
+	//else leave it set to the starting default, VAR_NORMAL.
 
 	Var *the_new_var = new Var(new_name, var_type);
 	if (the_new_var == NULL)
@@ -9276,8 +9288,7 @@ double_deref:
 			op_length = op_end - cp;
 			infix[infix_count].marker = (!op_length || !(found_var = g_script.FindVar(cp, op_length)) // i.e. don't call FindVar with zero for length, since that's a special mode.
 				|| found_var->mType != VAR_NORMAL // Relies on short-circuit boolean order.
-				|| (!found_var->Length() // i.e. it might be an environment variable.
-					&& GetEnvironmentVariable(found_var->mName, buf_temp, 1))) // Pass 1 to force it to report whether the env. var exists (even if env var empty).
+				|| !found_var->Length()) // i.e. it's either an environment variable or a zero-length variable.  But either way it's treated as a blank string.
 					? "" // Var is not found, not a normal var, or it *is* an environment variable.
 					: found_var->Contents(); // This operand becomes the variable's contents.
 					// "" is used above, rather than a real empty string residing within limits of
