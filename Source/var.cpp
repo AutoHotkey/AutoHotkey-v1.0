@@ -109,6 +109,11 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt)
 
 	size_t space_needed = aLength + 1; // For the zero terminator.
 
+	// For simplicity, this is done unconditionally even though it should be needed only
+	// when do_assign is true. It's the caller's responsibility to set mIsBinaryClip to
+	// true (if appropriate) after calling Var::Close().
+	mIsBinaryClip = false;
+
 	if (mType == VAR_CLIPBOARD)
 		if (do_assign)
 			// Just return the result of this.  Note: The clipboard var's attributes,
@@ -347,14 +352,14 @@ VarSizeType Var::Get(char *aBuf)
 			// When we're called from ExpandArg() that was called from PerformAssign(), PerformAssign()
 			// relies on this check to avoid the overhead of copying a variables contents onto itself.
 			aBuf += mLength;
-		else if (mLength > 100000)
+		else if (mLength < 100000)
+			for (char *cp = mContents; *cp; *aBuf++ = *cp++);
+		else
 		{
 			// Faster for large vars, but large vars aren't typical:
 			CopyMemory(aBuf, mContents, mLength);
 			aBuf += mLength;
 		}
-		else
-			for (char *cp = mContents; *cp; *aBuf++ = *cp++);
 		break;
 
 	// Built-in vars with volatile contents:
@@ -558,9 +563,10 @@ VarSizeType Var::Get(char *aBuf)
 	case VAR_HOUR:
 	case VAR_MIN:
 	case VAR_SEC:   if (!aBuf) return 2; // length 2 for this and the above.
+	case VAR_MSEC:  // Fall through to returning "3" in the next line.
+	case VAR_YDAY:  if (!aBuf) return 3; // Always return maximum allowed length as the estimate.
 	case VAR_WDAY:  if (!aBuf) return 1; // else fall through.
 	case VAR_YWEEK: if (!aBuf) return 6; // else fall through.
-	case VAR_YDAY:  if (!aBuf) return 3; // Always return maximum allowed length as the estimate.
 		// The current time is refreshed only if it's been a certain number of milliseconds since
 		// the last fetch of one of these built-in time variables.  This keeps the variables in
 		// sync with one another when they are used consecutively such as this example:
@@ -580,6 +586,7 @@ VarSizeType Var::Get(char *aBuf)
 		case VAR_HOUR:  aBuf += sprintf(aBuf, "%02d", st_static.wHour); break;
 		case VAR_MIN:   aBuf += sprintf(aBuf, "%02d", st_static.wMinute); break;
 		case VAR_SEC:   aBuf += sprintf(aBuf, "%02d", st_static.wSecond); break;
+		case VAR_MSEC:  aBuf += sprintf(aBuf, "%03d", st_static.wMilliseconds); break;
 		case VAR_WDAY:  aBuf += sprintf(aBuf, "%d", st_static.wDayOfWeek + 1); break;
 		case VAR_YWEEK:
 			aBuf += GetISOWeekNumber(aBuf, st_static.wYear
@@ -591,6 +598,11 @@ VarSizeType Var::Get(char *aBuf)
 			break;
 		} // inner switch()
 		break; // outer switch()
+
+	case VAR_CLIPBOARDALL: // This variable directly handled at a higher level and is not supported at the Get() level.
+		if (!aBuf)
+			return 0;
+		//else continue onward to reset the buffer and return the length of zero.
 	}
 
 	*aBuf = '\0'; // Terminate the buffer in case above didn't.  Not counted as part of the length, so don't increment aBuf.

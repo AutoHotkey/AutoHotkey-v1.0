@@ -1302,6 +1302,14 @@ ResultType Hotkey::Unregister()
 
 
 
+void Hotkey::InstallKeybdHook()
+{
+	sWhichHookAlways |= HOOK_KEYBD;
+	sWhichHookActive = ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways, false);
+}
+
+
+
 int Hotkey::FindHotkeyByName(char *aName)
 // Returns the the HotkeyID if found, HOTKEY_ID_INVALID otherwise.
 {

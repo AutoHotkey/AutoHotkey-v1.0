@@ -186,23 +186,42 @@ void SetModifierAsPrefix(vk_type aVK, sc_type aSC, bool aAlwaysSetAsPrefix = fal
 		switch (aVK)
 		{
 		case VK_MENU:
-			// Since the user is configuring both the left and right
-			// counterparts of a key to perform a suffix action,
-			// it seems best to always consider those keys to be
-			// prefixes so that their suffix action will only fire
-			// when the key is released.  That way, those keys can
-			// still be used as normal modifiers.
-			kvk[VK_MENU].used_as_prefix = kvk[VK_LMENU].used_as_prefix = kvk[VK_RMENU].used_as_prefix
-				= ksc[SC_LALT].used_as_prefix = ksc[SC_RALT].used_as_prefix = true;
-			break;
 		case VK_SHIFT:
-			kvk[VK_SHIFT].used_as_prefix = kvk[VK_LSHIFT].used_as_prefix = kvk[VK_RSHIFT].used_as_prefix
-				= ksc[SC_LSHIFT].used_as_prefix = ksc[SC_RSHIFT].used_as_prefix = true;
-			break;
 		case VK_CONTROL:
-			kvk[VK_CONTROL].used_as_prefix = kvk[VK_LCONTROL].used_as_prefix = kvk[VK_RCONTROL].used_as_prefix
-				= ksc[SC_LCONTROL].used_as_prefix = ksc[SC_RCONTROL].used_as_prefix = true;
+			// Since the user is configuring both the left and right counterparts of a key to perform a suffix action,
+			// it seems best to always consider those keys to be prefixes so that their suffix action will only fire
+			// when the key is released.  That way, those keys can still be used as normal modifiers.
+			// UPDATE for v1.0.29: But don't do it if there is a corresponding key-up hotkey for this neutral
+			// modifier, which allows a remap such as the following to succeed:
+			// Control::Send {LWin down}
+			// Control up::Send {LWin up}
+			if (!aAlwaysSetAsPrefix)
+			{
+				for (int i = 0; i < Hotkey::sHotkeyCount; ++i)
+				{
+					Hotkey &h = *Hotkey::shk[i]; // For performance and convenience.
+					if (h.mVK == aVK && h.mKeyUp && !h.mModifiersConsolidatedLR && !h.mModifierVK && !h.mModifierSC
+						&& h.mEnabled)
+						return; // Since caller didn't specify aAlwaysSetAsPrefix==true, don't make this key a prefix.
+				}
+			}
+			switch (aVK)
+			{
+			case VK_MENU:
+				kvk[VK_MENU].used_as_prefix = kvk[VK_LMENU].used_as_prefix = kvk[VK_RMENU].used_as_prefix
+					= ksc[SC_LALT].used_as_prefix = ksc[SC_RALT].used_as_prefix = true;
+				break;
+			case VK_SHIFT:
+				kvk[VK_SHIFT].used_as_prefix = kvk[VK_LSHIFT].used_as_prefix = kvk[VK_RSHIFT].used_as_prefix
+					= ksc[SC_LSHIFT].used_as_prefix = ksc[SC_RSHIFT].used_as_prefix = true;
+				break;
+			case VK_CONTROL:
+				kvk[VK_CONTROL].used_as_prefix = kvk[VK_LCONTROL].used_as_prefix = kvk[VK_RCONTROL].used_as_prefix
+					= ksc[SC_LCONTROL].used_as_prefix = ksc[SC_RCONTROL].used_as_prefix = true;
+				break;
+			}
 			break;
+
 		default:  // vk is a left/right modifier key such as VK_LCONTROL or VK_LWIN:
 			if (aAlwaysSetAsPrefix)
 				kvk[aVK].used_as_prefix = true;
@@ -500,15 +519,21 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 				// in case future changes ever ruin that assumption:
 				kvk[VK_LMENU].used_as_suffix = kvk[VK_RMENU].used_as_suffix
 					= ksc[SC_LALT].used_as_suffix = ksc[SC_RALT].used_as_suffix = true;
+				kvk[VK_LMENU].used_as_key_up = kvk[VK_RMENU].used_as_key_up
+					= ksc[SC_LALT].used_as_key_up = ksc[SC_RALT].used_as_key_up = hk.mKeyUp;
 				break;
 			case VK_SHIFT:
 				// The neutral key itself is also set to be a suffix further below.
 				kvk[VK_LSHIFT].used_as_suffix = kvk[VK_RSHIFT].used_as_suffix
 					= ksc[SC_LSHIFT].used_as_suffix = ksc[SC_RSHIFT].used_as_suffix = true;
+				kvk[VK_LSHIFT].used_as_key_up = kvk[VK_RSHIFT].used_as_key_up
+					= ksc[SC_LSHIFT].used_as_key_up = ksc[SC_RSHIFT].used_as_key_up = hk.mKeyUp;
 				break;
 			case VK_CONTROL:
 				kvk[VK_LCONTROL].used_as_suffix = kvk[VK_RCONTROL].used_as_suffix
 					= ksc[SC_LCONTROL].used_as_suffix = ksc[SC_RCONTROL].used_as_suffix = true;
+				kvk[VK_LCONTROL].used_as_key_up = kvk[VK_RCONTROL].used_as_key_up
+					= ksc[SC_LCONTROL].used_as_key_up = ksc[SC_RCONTROL].used_as_key_up = hk.mKeyUp;
 				break;
 			// Later might want to add cases for VK_LCONTROL and such, but for right now,
 			// these keys should never come up since they're done by scan code?
@@ -554,8 +579,7 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 		// other hotkey.  This processing might be later combined with the hotkeys activation function
 		// to eliminate redundancy / improve efficiency, but then that function would probably need to
 		// init everything else here as well:
-		if (pThisKey->as_modifiersLR && !hk.mModifiers && !hk.mModifiersLR
-			&& !hk.mModifierVK && !hk.mModifierSC)
+		if (pThisKey->as_modifiersLR && !hk.mModifiersConsolidatedLR && !hk.mModifierVK && !hk.mModifierSC)
 			SetModifierAsPrefix(hk.mVK, hk.mSC);
 
 		if (hk.mModifierVK)

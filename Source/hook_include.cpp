@@ -838,24 +838,36 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 		}
 	}
 
-	// Reset hotstring detection if the user seems to be navigating within an editor.  This is done
-	// so that hotstrings do not fire in unexpected places.
-	if (do_monitor_hotstring && g_HSBufLength)
+	// Fix for v1.0.29: Among other things, this resolves the problem where an Input command without
+	// the Visible option in effect would capture uppercase and other shifted characters as unshifted:
+	switch (vk)
 	{
-		switch (vk)
+	case VK_LSHIFT:
+	case VK_RSHIFT:
+	case VK_LCONTROL:
+	case VK_RCONTROL:
+	case VK_LMENU:
+	case VK_RMENU:
+	case VK_LWIN:
+	case VK_RWIN:
+		return true; // "true" because the above should never be suppressed, nor do they need further processing below.
+
+	case VK_LEFT:
+	case VK_RIGHT:
+	case VK_DOWN:
+	case VK_UP:
+	case VK_NEXT:
+	case VK_PRIOR:
+	case VK_HOME:
+	case VK_END:
+		// Reset hotstring detection if the user seems to be navigating within an editor.  This is done
+		// so that hotstrings do not fire in unexpected places.
+		if (do_monitor_hotstring && g_HSBufLength)
 		{
-		case VK_LEFT:
-		case VK_RIGHT:
-		case VK_DOWN:
-		case VK_UP:
-		case VK_NEXT:
-		case VK_PRIOR:
-		case VK_HOME:
-		case VK_END:
 			*g_HSBuf = '\0';
 			g_HSBufLength = 0;
-			break;
 		}
+		break;
 	}
 
 	// Don't unconditionally transcribe modified keys such as Ctrl-C because calling ToAsciiEx() on

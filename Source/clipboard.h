@@ -21,6 +21,10 @@ GNU General Public License for more details.
 #include "defines.h"
 
 
+#define CANT_OPEN_CLIPBOARD_READ "Can't open clipboard for reading."
+#define CANT_OPEN_CLIPBOARD_WRITE "Can't open clipboard for writing."
+
+
 class Clipboard
 {
 public:

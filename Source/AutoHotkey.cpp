@@ -52,9 +52,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	// Set defaults, to be overridden by command line args we receive:
 	bool restart_mode = false;
 
-#ifdef AUTOHOTKEYSC
-	char *script_filespec = __argv[0];  // i.e. the EXE name.  This is just a placeholder for now.
-#else
+#ifndef AUTOHOTKEYSC
 	#ifdef _DEBUG
 		//char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
@@ -125,8 +123,15 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 #endif
 
 	global_init(&g);  // Set defaults prior to the below, since below might override them for AutoIt2 scripts.
+
+// Set up the basics of the script:
+#ifdef AUTOHOTKEYSC
+	if (g_script.Init("", restart_mode) != OK) 
+#else
 	if (g_script.Init(script_filespec, restart_mode) != OK)  // Set up the basics of the script, using the above.
+#endif
 		return CRITICAL_ERROR;
+
 	// Set g_default now, reflecting any changes made to "g" above, in case AutoExecSection(), below,
 	// never returns, perhaps because it contains an infinite loop (intentional or not):
 	CopyMemory(&g_default, &g, sizeof(global_struct));

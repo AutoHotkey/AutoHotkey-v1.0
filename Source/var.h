@@ -35,9 +35,11 @@ enum VarTypes
 {
   VAR_NORMAL // It's probably best of this one is first (zero).
 , VAR_CLIPBOARD
+, VAR_LAST_UNRESERVED = VAR_CLIPBOARD  // Keep this in sync with any changes to the set of unreserved variables.
+, VAR_CLIPBOARDALL // Must be reserved because it's not designed to be writable.
 , VAR_TRUE, VAR_FALSE
 , VAR_YYYY, VAR_MM, VAR_MMMM, VAR_MMM, VAR_DD, VAR_YDAY, VAR_YWEEK, VAR_WDAY, VAR_DDDD, VAR_DDD
-, VAR_HOUR, VAR_MIN, VAR_SEC, VAR_TICKCOUNT, VAR_NOW, VAR_NOWUTC
+, VAR_HOUR, VAR_MIN, VAR_SEC, VAR_MSEC, VAR_TICKCOUNT, VAR_NOW, VAR_NOWUTC
 , VAR_WORKINGDIR, VAR_BATCHLINES
 , VAR_TITLEMATCHMODE, VAR_TITLEMATCHMODESPEED, VAR_DETECTHIDDENWINDOWS, VAR_DETECTHIDDENTEXT
 , VAR_AUTOTRIM, VAR_STRINGCASESENSE, VAR_FORMATINTEGER, VAR_FORMATFLOAT
@@ -62,7 +64,7 @@ enum VarTypes
 , VAR_TIMEIDLE, VAR_TIMEIDLEPHYSICAL
 , VAR_SPACE, VAR_TAB, VAR_AHKVERSION
 };
-#define VAR_IS_RESERVED(var) (var->mType != VAR_NORMAL && var->mType != VAR_CLIPBOARD)
+#define VAR_IS_RESERVED(var) (var->mType > VAR_LAST_UNRESERVED)
 
 typedef UCHAR VarTypeType;     // UCHAR vs. VarTypes to save memory.
 typedef UCHAR AllocMethodType; // UCHAR vs. AllocMethod to save memory.
@@ -79,6 +81,7 @@ private:
 	VarSizeType mCapacity; // In bytes.  Includes the space for the zero terminator.
 	AllocMethodType mHowAllocated; // Keep adjacent/contiguous with the below.
 public:
+	bool mIsBinaryClip; // If more attributes are ever needed, this can be made a UCHAR or SHORT to contain a bit field.
 	VarTypeType mType;  // Keep adjacent/contiguous with the above.
 	// Testing shows that due to data alignment, keeping mType adjacent to the other less-than-4-size member
 	// above it reduces size of each object by 4 bytes.
@@ -140,7 +143,7 @@ public:
 			// a pointer to its contents returned to the caller:
 			return g_clip.Contents();
 		// For reserved vars.  Probably better than returning NULL:
-		return "Unsupported script variable type.";
+		return "Unsupported var type";
 	}
 
 	VarSizeType &Length()
@@ -150,21 +153,23 @@ public:
 	{
 		if (mType == VAR_NORMAL)
 			return mLength;
-		static VarSizeType length; // Must be static so that caller can use its contents.
-		if (mType == VAR_CLIPBOARD)
-			// Since the length of the clipboard isn't normally tracked, we just return a
-			// temporary storage area for the caller to use.  Note: This approach is probably
-			// not thread-safe, but currently there's only one thread so it's not an issue.
-			return length;
+		// Since the length of the clipboard isn't normally tracked, we just return a
+		// temporary storage area for the caller to use.  Note: This approach is probably
+		// not thread-safe, but currently there's only one thread so it's not an issue.
 		// For reserved vars do the same thing as above, but this function should never
 		// be called for them:
-		return length;  // Should never be reached?
+		static VarSizeType length; // Must be static so that caller can use its contents.
+		return length;
 	}
 
 	ResultType Close()
 	{
 		if (mType == VAR_CLIPBOARD && g_clip.IsReadyForWrite())
 			return g_clip.Commit(); // Writes the new clipboard contents to the clipboard and closes it.
+		// mIsBinaryClip is also reset here for cases where a caller uses a variable without having
+		// called Assign() to resize it first, which can happen if the variable's capacity is already
+		// sufficient to hold the desired contents.
+		mIsBinaryClip = false; // Caller should override this, if desired, after closing the variable.
 		return OK; // In all other cases.
 	}
 
@@ -174,6 +179,7 @@ public:
 		, mLength(0)
 		, mCapacity(0)
 		, mHowAllocated(ALLOC_NONE)
+		, mIsBinaryClip(false)
 		, mType(aType)
 		// This initial empty-string value may be relied upon (i.e. don't make it NULL).
 		// In addition, it's safer to make it modifiable rather than a constant such

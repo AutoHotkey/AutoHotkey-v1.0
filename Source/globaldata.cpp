@@ -334,7 +334,7 @@ Action g_act[] =
 
 	, {"StatusBarGetText", 1, 6, {2, 0}} // Output-var, part# (numeric), std. 4 window params
 	, {"StatusBarWait", 0, 8, {2, 3, 6, 0}} // Wait-text(blank ok),seconds,part#,title,text,interval,exclude-title,exclude-text
-	, {"ClipWait", 0, 1, {1, 0}} // Seconds-to-wait (0 = 500ms)
+	, {"ClipWait", 0, 2, {1, 2, 0}} // Seconds-to-wait (0 = 500ms), 1|0: Wait for any format, not just text/files
 	, {"KeyWait", 1, 2, NULL} // KeyName, Options
 
 	, {"Sleep", 1, 1, {1, 0}} // Sleep time in ms (numeric)
@@ -385,8 +385,8 @@ Action g_act[] =
 
 	, {"SysGet", 2, 4, NULL} // Output-var/array, sub-cmd or sys-metrics-number, input-value1, future-use
 
-	, {"PostMessage", 1, 8, NULL}  // msg, wParam, lParam, Control, WinTitle, WinText, ExcludeTitle, ExcludeText
-	, {"SendMessage", 1, 8, NULL}  // msg, wParam, lParam, Control, WinTitle, WinText, ExcludeTitle, ExcludeText
+	, {"PostMessage", 1, 8, {1, 2, 3, 0}}  // msg, wParam, lParam, Control, WinTitle, WinText, ExcludeTitle, ExcludeText
+	, {"SendMessage", 1, 8, {1, 2, 3, 0}}  // msg, wParam, lParam, Control, WinTitle, WinText, ExcludeTitle, ExcludeText
 
 	, {"PixelGetColor", 3, 4, {2, 3, 0}} // OutputVar, X-coord, Y-coord [, RGB]
 	, {"PixelSearch", 0, 9, {3, 4, 5, 6, 7, 8, 0}} // OutputX, OutputY, left, top, right, bottom, Color, Variation [, RGB]

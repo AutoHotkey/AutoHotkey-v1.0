@@ -586,6 +586,7 @@ private:
 	// Static because only one line can be Expanded at a time (not to mention the fact that we
 	// wouldn't want the size of each line to be expanded by this size):
 	static char *sArgDeref[MAX_ARGS];
+	static Var *sArgVar[MAX_ARGS];
 
 	ResultType EvaluateCondition();
 	ResultType PerformLoop(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
@@ -637,6 +638,8 @@ private:
 	ResultType FileRead(char *aFilespec);
 	ResultType FileReadLine(char *aFilespec, char *aLineNumber);
 	ResultType FileAppend(char *aFilespec, char *aBuf, LoopReadFileStruct *aCurrentReadFile);
+	ResultType WriteClipboardToFile(char *aFilespec);
+	ResultType ReadClipboardFromFile(HANDLE hfile);
 	ResultType FileDelete(char *aFilePattern);
 	ResultType FileRecycle(char *aFilePattern);
 	ResultType FileRecycleEmpty(char *aDriveLetter);

@@ -73,53 +73,11 @@ private:
 	static HookType sWhichHookActive;
 	static DWORD sTimePrev;
 	static DWORD sTimeNow;
-	static Hotkey *shk[MAX_HOTKEYS];
 	static HotkeyIDType sNextID;
-
-	HotkeyIDType mID;  // Must be unique for each hotkey of a given thread.
-	HookActionType mHookAction;
-
-	char *mName; // Points to the label name for static hotkeys, or a dynamically-allocated string for dynamic hotkeys.
-	sc_type mSC; // Scan code.  All vk's have a scan code, but not vice versa.
-	sc_type mModifierSC; // If mModifierVK is zero, this scan code, if non-zero, will be used as the modifier.
-	mod_type mModifiers;  // MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, or some additive or bitwise-or combination of these.
-	modLR_type mModifiersLR;  // Left-right centric versions of the above.
-	modLR_type mModifiersConsolidatedLR; // The combination of mModifierVK, mModifierSC, mModifiersLR, modifiers
-
-	// Keep single-byte attributes adjacent to each other to conserve memory within byte-aligned class/struct:
-	vk_type mVK; // virtual-key code, e.g. VK_TAB, VK_LWIN, VK_LMENU, VK_APPS, VK_F10.  If zero, use sc below.
-	vk_type mModifierVK; // Any other virtual key that must be pressed down in order to activate "vk" itself.
-	HotkeyTypeType mType;
-	#define NO_SUPPRESS_SUFFIX 0x01 // Bitwise: Bit #1
-	#define NO_SUPPRESS_PREFIX 0x02 // Bitwise: Bit #2
-	#define NO_SUPPRESS_NEXT_UP_EVENT 0x04 // Bitwise: Bit #3
-	UCHAR mNoSuppress;  // Normally 0, but can be overridden by using the hotkey tilde (~) prefix.
-	bool mAllowExtraModifiers;  // False if the hotkey should not fire when extraneous modifiers are held down.
-	bool mKeyUp; // A hotkey that should fire on key-up.
-	bool mUnregisterDuringThread; // Whether this hotkey should be unregistered during the execution of its own subroutine.
-	bool mIsRegistered;  // Whether this hotkey has been successfully registered.
-	bool mEnabled;
-	bool mMaxThreadsBuffer;
-	bool mRunAgainAfterFinished;
-	bool mConstructedOK;
-	UCHAR mExistingThreads, mMaxThreads;
-
-	Label *mJumpToLabel;
-	int mPriority;
-	DWORD mRunAgainTime;
-
-	// Something in the compiler is currently preventing me from using HookType in place of UCHAR:
-	friend UCHAR ChangeHookState(Hotkey *aHK[], int aHK_count, UCHAR aWhichHook, UCHAR aWhichHookAlways
-		, bool aWarnIfHooksAlreadyInstalled);
 
 	ResultType TextInterpret(char *aName);
 	char *TextToModifiers(char *aText);
 	ResultType TextToKey(char *aText, char *aHotkeyName, bool aIsModifier);
-
-	bool IsExemptFromSuspend()
-	{
-		return mJumpToLabel && mJumpToLabel->IsExemptFromSuspend();
-	}
 
 	bool PerformIsAllowed()
 	{
@@ -226,7 +184,41 @@ private:
 	// objects.  This allow proper tracking of which OS hotkey IDs have been used.
 	Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction, char *aName = NULL);
 	~Hotkey() {if (mIsRegistered) Unregister();}
+
 public:
+	static Hotkey *shk[MAX_HOTKEYS];
+	HotkeyIDType mID;  // Must be unique for each hotkey of a given thread.
+	HookActionType mHookAction;
+
+	char *mName; // Points to the label name for static hotkeys, or a dynamically-allocated string for dynamic hotkeys.
+	sc_type mSC; // Scan code.  All vk's have a scan code, but not vice versa.
+	sc_type mModifierSC; // If mModifierVK is zero, this scan code, if non-zero, will be used as the modifier.
+	mod_type mModifiers;  // MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, or some additive or bitwise-or combination of these.
+	modLR_type mModifiersLR;  // Left-right centric versions of the above.
+	modLR_type mModifiersConsolidatedLR; // The combination of mModifierVK, mModifierSC, mModifiersLR, modifiers
+
+	// Keep single-byte attributes adjacent to each other to conserve memory within byte-aligned class/struct:
+	vk_type mVK; // virtual-key code, e.g. VK_TAB, VK_LWIN, VK_LMENU, VK_APPS, VK_F10.  If zero, use sc below.
+	vk_type mModifierVK; // Any other virtual key that must be pressed down in order to activate "vk" itself.
+	HotkeyTypeType mType;
+	#define NO_SUPPRESS_SUFFIX 0x01 // Bitwise: Bit #1
+	#define NO_SUPPRESS_PREFIX 0x02 // Bitwise: Bit #2
+	#define NO_SUPPRESS_NEXT_UP_EVENT 0x04 // Bitwise: Bit #3
+	UCHAR mNoSuppress;  // Normally 0, but can be overridden by using the hotkey tilde (~) prefix.
+	bool mAllowExtraModifiers;  // False if the hotkey should not fire when extraneous modifiers are held down.
+	bool mKeyUp; // A hotkey that should fire on key-up.
+	bool mUnregisterDuringThread; // Whether this hotkey should be unregistered during the execution of its own subroutine.
+	bool mIsRegistered;  // Whether this hotkey has been successfully registered.
+	bool mEnabled;
+	bool mMaxThreadsBuffer;
+	bool mRunAgainAfterFinished;
+	bool mConstructedOK;
+	UCHAR mExistingThreads, mMaxThreads;
+
+	Label *mJumpToLabel;
+	int mPriority;
+	DWORD mRunAgainTime;
+
 	// Make sHotkeyCount an alias for sNextID.  Make it const to enforce modifying the value in only one way:
 	static const HotkeyIDType &sHotkeyCount;
 	static bool sJoystickHasHotkeys[MAX_JOYSTICKS];
@@ -243,10 +235,11 @@ public:
 	static void RequireHook(HookType aWhichHook) {sWhichHookAlways |= aWhichHook;}
 	static HookType HookIsActive() {return sWhichHookActive;} // Returns bitwise values: HOOK_MOUSE, HOOK_KEYBD.
 
-	static void InstallKeybdHook()
+	static void InstallKeybdHook();
+
+	bool IsExemptFromSuspend()
 	{
-		sWhichHookAlways |= HOOK_KEYBD;
-		sWhichHookActive = ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways, false);
+		return mJumpToLabel && mJumpToLabel->IsExemptFromSuspend();
 	}
 
 	static bool PerformIsAllowed(HotkeyIDType aHotkeyID)

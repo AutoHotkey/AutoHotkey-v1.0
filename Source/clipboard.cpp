@@ -43,7 +43,7 @@ size_t Clipboard::Get(char *aBuf)
 	UINT i, file_count = 0;
 	BOOL clipboard_contains_text = IsClipboardFormatAvailable(CF_TEXT);
 	BOOL clipboard_contains_files = IsClipboardFormatAvailable(CF_HDROP);
-	if (!clipboard_contains_text && !clipboard_contains_files)
+	if (!(clipboard_contains_text || clipboard_contains_files))
 		return 0;
 
 	if (!mIsOpen)
@@ -65,7 +65,9 @@ size_t Clipboard::Get(char *aBuf)
 			return 0;
 		if (!Open())
 		{
-			Close("Could not open clipboard for reading after many timed attempts. Another program is probably holding it open.");
+			// Since this should be very rare, a shorter message is now used.  Formerly, it was
+			// "Could not open clipboard for reading after many timed attempts. Another program is probably holding it open."
+			Close(CANT_OPEN_CLIPBOARD_READ);
 			return CLIPBOARD_FAILURE;
 		}
 		if (   !(mClipMemNow = GetClipboardData(clipboard_contains_files ? CF_HDROP : CF_TEXT))   )
@@ -207,8 +209,9 @@ ResultType Clipboard::Commit(UINT aFormat)
 // whoever had it open before can't use the prior contents, since they're invalid).
 {
 	if (!mIsOpen && !Open())
-		return AbortWrite("Could not open clipboard for writing after many timed attempts."
-			" Another program is probably holding it open.");
+		// Since this should be very rare, a shorter message is now used.  Formerly, it was
+		// "Could not open clipboard for writing after many timed attempts.  Another program is probably holding it open."
+		return AbortWrite(CANT_OPEN_CLIPBOARD_WRITE);
 	if (!EmptyClipboard())
 	{
 		Close();

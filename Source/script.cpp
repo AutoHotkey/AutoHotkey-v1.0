@@ -204,17 +204,26 @@ Script::~Script()
 
 ResultType Script::Init(char *aScriptFilename, bool aIsRestart)
 // Returns OK or FAIL.
+// Caller has provided an empty string for aScriptFilename if this is a compiled script.
 {
 	mIsRestart = aIsRestart;
-	if (!aScriptFilename || !*aScriptFilename) return FAIL;
 	char buf[2048]; // Just to make sure we have plenty of room to do things with.
 	char *filename_marker;
+#ifdef AUTOHOTKEYSC
+	// Fix for v1.0.29: Override the caller's use of __argv[0] by using GetModuleFileName(),
+	// so that when the script is started from the command line but the user didn't type the
+	// extension, the extension will be included.  This necessary because otherwise
+	// #SingleInstance wouldn't be able to detect duplicate versions in every case.
+	// It also provides more consistency.
+	GetModuleFileName(NULL, buf, sizeof(buf));
+#else
 	// In case the script is a relative filespec (relative to current working dir):
 	if (!GetFullPathName(aScriptFilename, sizeof(buf), buf, &filename_marker))
 	{
 		MsgBox("GetFullPathName"); // Short msg since so rare.
 		return FAIL;
 	}
+#endif
 	// Using the correct case not only makes it look better in title bar & tray tool tip,
 	// it also helps with the detection of "this script already running" since otherwise
 	// it might not find the dupe if the same script name is launched with different
@@ -2844,6 +2853,29 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					// (e.g. array%i%) can be partially resolved.
 				}
 			}
+			else // this_new_arg.type == ARG_TYPE_NORMAL (excluding those input/output_vars that were converted to normal because they were blank, above).
+			{
+				// v1.0.29: Allow expressions in any parameter that starts with % followed by a space
+				// or tab. This should be unambiguous because spaces and tabs are illegal in variable names.
+				// Since there's little if any benefit to allowing input and output variables to be
+				// dynamically built via expression, for now it is disallowed.  If ever allow it,
+				// need to review other sections to ensure they will tolerate it.  Also, the following
+				// would probably need revision to get it to be detected as an output-variable:
+				// % Array%i% = value
+				if (*this_aArg == g_DerefChar && !*this_aArgMap // It's a non-literal deref character.
+					&& IS_SPACE_OR_TAB(this_aArg[1])) // Followed by a space or tab.
+				{
+					this_new_arg.is_expression = true;
+					// Omit the asterisk and the space after it from further consideration.
+					this_aArg += 2;
+					this_aArgMap += 2;
+					// ACT_ASSIGN isn't capable of dealing with expressions because ExecUntil() does not
+					// call ExpandArgs() automatically for it.  Thus its function, PerformAssign(), would
+					// not be given the expanded result of the expression.
+					if (aActionType == ACT_ASSIGN)
+						aActionType = ACT_ASSIGNEXPR;
+				}
+			}
 
 			// Below will set the new var to be the constant empty string if the
 			// source var is NULL or blank.
@@ -2914,13 +2946,14 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 							// 1%y%.0 ; i.e. at a tens/hundreds place and make it a floating point.  In addition,
 							//          1%y% could be an array, so best not to tag that as non-expression.
 							//          For that matter, %y%.0 could be an obscure kind of reverse-notation array itself.
+							//          However, as of v1.0.29, things like %y%000 are allowed, e.g. Sleep %Seconds%000
 							// 0x%y%  ; i.e. make it hex (too rare to check for, plus it could be an array).
 							// %y%%z% ; i.e. concatenate two numbers to make a larger number (too rare to check for)
 							cp = this_new_arg.text + (*this_new_arg.text == '-' || *this_new_arg.text == '+'); // i.e. +1 if second term evaluates to true.
 							if (*cp != g_DerefChar // If no deref, for simplicity assume it's an expression since any such non-numeric item would be extremely rare in pre-expression era.
 								|| !this_aArgMap || *(this_aArgMap + (cp != this_new_arg.text)) // There's no literal-map or this deref char is not really a deref char because it's marked as a literal.
 								|| !(cp = strchr(cp + 1, g_DerefChar)) // There is no next deref char.
-								|| *(cp + 1)) // But that next deref char is not the last deref char, which means this is not a single isolated deref.
+								|| (*(cp + 1) && !IsPureNumeric(cp + 1, false, true, true))) // But that next deref char is not the last char, which means this is not a single isolated deref. v1.0.29: Allow things like Sleep %Var%000.
 								// Above does not need to check whether last deref char is marked literal in the
 								// arg map because if it is, it would mean the first deref char lacks a matching
 								// close-symbol, which will be caught as a syntax error below regardless of whether
@@ -3133,9 +3166,26 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				// This policy is basically saying that expressions are allowed to evaluate to strings
 				// everywhere appropriate, but that at the moment the only appropriate place is x := y
 				// because all other expressions should resolve to a numeric value by virtue of the fact
-				// that they *are* numeric parameters.
+				// that they *are* numeric parameters.  ValidateName() serves to eliminate cases where
+				// a single deref is accompanied by literal numbers, strings, or operators, e.g.
+				// Var := X + 1 ... Var := Var2 "xyz" ... Var := -Var2
 				else if (deref_count == 1 && Var::ValidateName(this_new_arg.text, false, false)) // Single isolated deref.
+				{
+					// For the future, could consider changing ACT_ASSIGN here to ACT_ASSIGNEXPR because
+					// the latter probably performs better in this case.  However, the way ValidateName()
+					// is used above is probably not correct/sufficient to exclude cases to which this
+					// method should not be applied, such as Var := abc%Var2%.  In any case, some careful
+					// review of PerformAssign() should be done to guage side-effects and determine
+					// whether the performance boost is really that signficant given that PerformAssign()
+					// is already boosted by the fact that it's exempt from automatic ExpandArgs() in
+					// ExecUntil().
 					this_new_arg.is_expression = false;
+					// The following is needed to allow "Var := ClipboardAll" to work because that
+					// method is handled correctly only by ACT_ASSIGN. Everything else is left as
+					// ACT_ASSIGNEXPR because it probably performs better than ACT_ASSIGN in these cases:
+					if (aActionType == ACT_ASSIGNEXPR && deref[0].var->mType == VAR_CLIPBOARDALL)
+						aActionType = ACT_ASSIGN;
+				}
 				else if (deref_count && !StrChrAny(this_new_arg.text, EXP_OPERAND_TERMINATORS))
 				{
 					// Adjust if any of the following special cases apply:
@@ -4593,7 +4643,8 @@ VarTypes Script::GetVarType(char *aVarName)
 	{
 		if (!stricmp(aVarName, "true")) return VAR_TRUE;
 		if (!stricmp(aVarName, "false")) return VAR_FALSE;
-		if (!stricmp(aVarName, "clipboard")) return VAR_CLIPBOARD;
+		if (!stricmp(aVarName, "Clipboard")) return VAR_CLIPBOARD;
+		if (!stricmp(aVarName, "ClipboardAll")) return VAR_CLIPBOARDALL;
 		// Otherwise:
 		return VAR_NORMAL;
 	}
@@ -4615,6 +4666,7 @@ VarTypes Script::GetVarType(char *aVarName)
 	if (!stricmp(aVarName, "A_Hour")) return VAR_HOUR;
 	if (!stricmp(aVarName, "A_Min")) return VAR_MIN;
 	if (!stricmp(aVarName, "A_Sec")) return VAR_SEC;
+	if (!stricmp(aVarName, "A_MSec")) return VAR_MSEC;
 	if (!stricmp(aVarName, "A_TickCount")) return VAR_TICKCOUNT;
 	if (!stricmp(aVarName, "A_Now")) return VAR_NOW;
 	if (!stricmp(aVarName, "A_NowUTC")) return VAR_NOWUTC;
@@ -5209,6 +5261,7 @@ char *Line::sDerefBuf = NULL;  // Buffer to hold the values of any args that nee
 char *Line::sDerefBufMarker = NULL;
 size_t Line::sDerefBufSize = 0;
 char *Line::sArgDeref[MAX_ARGS]; // No init needed.
+Var *Line::sArgVar[MAX_ARGS]; // Same.
 
 
 ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_DATA *aCurrentFile
@@ -7098,8 +7151,10 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			sleep_duration = 0; // Just to catch any bugs.
 		}
 
-		if (mActionType != ACT_RUNWAIT) // Set default error-level unless overridden below.
-			g_ErrorLevel->Assign(ERRORLEVEL_NONE);
+		if (mActionType != ACT_RUNWAIT)
+			g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Set default ErrorLevel to be possibly overridden later on.
+
+		bool any_clipboard_format = (mActionType == ACT_CLIPWAIT && ATOI64(ARG2) == 1);
 
 		// Right before starting the wait-loop, make a copy of our args using the stack
 		// space in our recursion layer.  This is done in case other hotkey subroutine(s)
@@ -7156,8 +7211,14 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			case ACT_CLIPWAIT:
 				// Seems best to consider CF_HDROP to be a non-empty clipboard, since we
 				// support the implicit conversion of that format to text:
-				if (IsClipboardFormatAvailable(CF_TEXT) || IsClipboardFormatAvailable(CF_HDROP))
-					return OK;
+				if (any_clipboard_format)
+				{
+					if (CountClipboardFormats())
+						return OK;
+				}
+				else
+					if (IsClipboardFormatAvailable(CF_TEXT) || IsClipboardFormatAvailable(CF_HDROP))
+						return OK;
 				break;
 			case ACT_KEYWAIT:
 				if (vk) // Waiting for key or mouse button, not joystick.
@@ -7536,7 +7597,9 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		// variable to be checked.  ExpandArgs() has already taken care of resolving that,
 		// so the only way to avoid strlen() would be to avoid the call to ExpandArgs()
 		// in ExecUntil(), and instead resolve the variable name here directly.
-		return output_var->Assign((__int64)strlen(ARG2)); // It already displayed any error.
+		return output_var->Assign((__int64)(mArgc > 1 && sArgVar[1] && sArgVar[1]->mIsBinaryClip
+			? sArgVar[1]->Length() + 1 // +1 to include the entire 4-byte terminator, which seems best in this case.
+			: strlen(ARG2))); // It already displayed any error.
 
 	case ACT_STRINGGETPOS:
 	{
@@ -7731,6 +7794,14 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		return PerformAssign();  // It will report any errors for us.
 
 	case ACT_ASSIGNEXPR:
+		// sArgVar is used to enhance performance, which would otherwise be poor for dynamic variables
+		// such as Var:=Array%i% because Array%i% would have to be resolved twice (once here and once
+		// previously by ExpandArgs()) just to find out if it's mIsBinaryClip).
+		if (mArgc > 1 && sArgVar[1] && (sArgVar[1]->mIsBinaryClip || sArgVar[1]->mType == VAR_CLIPBOARDALL)) // Relies on short-circuit boolean order.
+			return PerformAssign();  // Performance should be good in this case since mIsBinaryClip implies a single isolated deref, which thus would never have been copied into the deref buffer.
+		// Note that simple assignments such as Var:="xyz" or Var:=Var2 are resolved to be
+		// non-expressions at load-time.  In these cases, ARG2 would have been expanded
+		// normally rather than evaluated as an expression.
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
 		return output_var->Assign(ARG2); // ARG2 now contains the evaluated result of the expression.
@@ -8519,7 +8590,7 @@ ResultType Line::ExpandArgs()
 	// First pass: determine how much space will be needed to do all the args and allocate
 	// more memory if needed.  Second pass: dereference the args into the buffer.
 
-	size_t space_needed = GetExpandedArgSize(true);  // First pass. It takes into account the same things as 2nd pass.
+	size_t space_needed = GetExpandedArgSize(true); // First pass. It takes into account the same things as 2nd pass.
 	if (space_needed == VARSIZE_ERROR)
 		return FAIL;  // It will have already displayed the error.
 
@@ -8565,6 +8636,7 @@ ResultType Line::ExpandArgs()
 	for (int iArg = 0; iArg < mArgc && iArg < MAX_ARGS; ++iArg) // Second pass.  For each arg:
 	{
 		ArgStruct &this_arg = mArg[iArg]; // For performance and convenience.
+		sArgVar[iArg] = NULL; // Set default.
 
 		// Load-time routines have already ensured that an arg can be an expression only if
 		// it's not an input or output var.
@@ -8605,8 +8677,10 @@ ResultType Line::ExpandArgs()
 				the_only_var_of_this_arg = this_arg.deref[0].var;
 		}
 
+		// Check the value of the_only_var_of_this_arg again in case the above changed it:
 		if (the_only_var_of_this_arg) // This arg resolves to only a single, naked var.
 		{
+			sArgVar[iArg] = the_only_var_of_this_arg; // For now, this is done regardless of whether it must be dereferenced.
 			switch(ArgMustBeDereferenced(the_only_var_of_this_arg, iArg))
 			{
 			case CONDITION_FALSE:
@@ -8736,8 +8810,7 @@ inline VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize)
 			// NOTE: Get() (with no params) can retrieve a size larger that what winds up actually
 			// being needed, so our callers should be aware that that can happen.
 		}
-		// +1 for this arg's zero terminator in the buffer:
-		++space;
+		++space; // +1 for this arg's zero terminator in the buffer.
 		if (this_arg.is_expression) // Space is needed for the result of the expression or the expanded expression itself, whichever is greater.
 			space_needed += (space > MAX_FORMATTED_NUMBER_LENGTH) ? space : MAX_FORMATTED_NUMBER_LENGTH + 1;
 		else
@@ -8797,7 +8870,7 @@ inline char *Line::ExpandArg(char *aBuf, int aArgIndex)
 // if there are more args, since the zero terminator must normally be retained
 // between args).
 {
-	// This should never be called if the given arg is an output var, but we check just in case:
+	// This should never be called if the given arg is an output var, so flag that in DEBUG mode:
 	if (mArg[aArgIndex].type == ARG_TYPE_OUTPUT_VAR)
 	{
 #ifdef _DEBUG
@@ -8915,11 +8988,10 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 
 /////////////////////////////////////////
 
-	// Although having a precedence array is probably not strictly required (since the order of evaluation
-	// of operators of equal precedence doesn't seem to matter for any of the operators in the list),
-	// it probably helps performance by avoiding unnecessary pushing and popping of operators to the stack.
-	// This array must be kept in sync with "enum SymbolType".  Also, dimensioning explicitly by SYM_COUNT
-	// helps enforce that at compile-time:
+	// Having a precedence array is required at least for SYM_POWER (since the order of evaluation
+	// of something like 2**1**2 does matter).  It also helps performance by avoiding unnecessary pushing
+	// and popping of operators to the stack. This array must be kept in sync with "enum SymbolType".
+	// Also, dimensioning explicitly by SYM_COUNT helps enforce that at compile-time:
 	static int sPrecedence[SYM_COUNT] =
 	{
 		  0, 0, 0, 0, 0 // SYM_STRING, SYM_INTEGER, SYM_FLOAT, SYM_OPERAND, SYM_BEGIN (SYM_BEGIN must be lowest precedence).
@@ -8943,7 +9015,7 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 	// However, this rule requires a small workaround in the postfix-builder to allow 2**-2 to be
 	// evaluated as 2**(-2) rather than being seen as an error.
 	// On a related note, the right-to-left tradition of of something like 2**3**4 is not implemented.
-	// Instead, the expression is evaluated in left-to-right (like other operators) to simplify the code.
+	// Instead, the expression is evaluated from left-to-right (like other operators) to simplify the code.
 
 	#define MAX_TOKENS 512 // Max number of operators/operands.  Seems enough to handle anything realistic, while conserving call-stack space.
 	ExprTokenType infix[MAX_TOKENS], postfix[MAX_TOKENS], stack[MAX_TOKENS];
@@ -9793,7 +9865,7 @@ double_deref:
 					this_token.symbol = SYM_INTEGER; // Must be done only after the switch() above.
 			}
 
-			else // Since one or both operands is floating point (or this is the division of two integers), the result will be floating point.
+			else // Since one or both operands are floating point (or this is the division of two integers), the result will be floating point.
 			{
 				// For these two, use ATOF vs. atof so that if one of them is an integer to be converted
 				// to a float for the purpose of this calculation, hex will be supported:
