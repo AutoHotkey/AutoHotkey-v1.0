@@ -206,18 +206,21 @@ int SendChar(char aChar, mod_type aModifiers, KeyEventTypes aEventType, HWND aTa
 // be used as a pointer value by any apps that send keybd events whose ExtraInfo is really
 // a pointer value (hard to imagine?):
 #define KEY_IGNORE 0xFFC3D44F
-#define KEY_IGNORE_PHYS (KEY_IGNORE - 1)  // Same as above marked as physical for other instances of the hook.
+#define KEY_IGNORE_PHYS (KEY_IGNORE - 1)  // Same as above but marked as physical for other instances of the hook.
+#define KEY_IGNORE_ALL_EXCEPT_MODIFIER (KEY_IGNORE - 2)  // Non-physical and ignored only if it's not a modifier.
 ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC = 0, HWND aTargetWindow = NULL
 	, bool aDoKeyDelay = false, DWORD aExtraInfo = KEY_IGNORE);
 #define KEYEVENT_PHYS(event_type, vk, sc) KeyEvent(event_type, vk, sc, NULL, false, KEY_IGNORE_PHYS)
+#define KEYEVENT_NO_IGNORE_MODIFIER(event_type, vk, sc) KeyEvent(event_type, vk, sc, NULL, false, KEY_IGNORE_ALL_EXCEPT_MODIFIER)
 
 ToggleValueType ToggleKeyState(vk_type aVK, ToggleValueType aToggleValue);
 void ToggleNumlockWin9x();
 //void CapslockOffWin9x();
 
 modLR_type SetModifierState(mod_type aModifiersNew, modLR_type aModifiersLRnow);
-modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLRnow);
-void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLRnow, KeyEventTypes aKeyUp);
+modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLRnow, DWORD aExtraInfo = KEY_IGNORE);
+void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLRnow, KeyEventTypes aKeyUp
+	, DWORD aExtraInfo = KEY_IGNORE);
 
 mod_type GetModifierState();
 modLR_type GetModifierLRState(bool aExplicitlyGet = false);

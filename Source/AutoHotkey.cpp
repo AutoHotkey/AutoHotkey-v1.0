@@ -43,8 +43,8 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 #else
 	#ifdef _DEBUG
 	//char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
-	char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
-	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\Transform.ahk";
+	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
+	char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\Hotkey command.ahk";
 	#else
 	char *script_filespec = NAME_P ".ini";  // Use this extension for better file association with editor(s).
 	#endif
@@ -206,14 +206,15 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	// top part (the auto-execute part) of the script so that they will be in effect
 	// even if the top part is something that's very involved and requires user
 	// interaction:
-	Hotkey::AllActivate(true);       // We want these active now in case auto-execute never returns (e.g. loop)
-	if (Hotkey::sJoyHotkeyCount)     // Joystick hotkeys requir the timer to be always on.
+	Hotkey::AllActivate(true);         // We want these active now in case auto-execute never returns (e.g. loop)
+	g_script.mIsReadyToExecute = true; // This is done only now for error reporting purposes in Hotkey.cpp.
+	if (Hotkey::sJoyHotkeyCount)       // Joystick hotkeys require the timer to be always on.
 		SET_MAIN_TIMER
-	g_script.AutoExecSection();      // Run the auto-execute part at the top of the script.
-	if (!Hotkey::sHotkeyCount)       // No hotkeys are in effect.
-		if (!Hotkey::HookIsActive()) // And the user hasn't requested a hook to be activated.
-			if (!g_persistent)       // And the script doesn't contain the #Persistent directive.
-				g_script.ExitApp();  // We're done.
+	g_script.AutoExecSection();        // Run the auto-execute part at the top of the script.
+	if (!Hotkey::sHotkeyCount)         // No hotkeys are in effect.
+		if (!Hotkey::HookIsActive())   // And the user hasn't requested a hook to be activated.
+			if (!g_persistent)         // And the script doesn't contain the #Persistent directive.
+				g_script.ExitApp();    // We're done.
 
 	// The below is done even if AutoExecSectionTimeout() already set the values once.
 	// This is because when the AutoExecute section finally does finish, by definition it's

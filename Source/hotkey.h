@@ -39,8 +39,9 @@ EXTERN_SCRIPT;  // For g_script.
 #define HOTKEY_ID_ALT_TAB_AND_MENU     0x3FFB
 #define HOTKEY_ID_ALT_TAB_MENU_DISMISS 0x3FFA
 #define HOTKEY_ID_MAX                  0x3FF9  // 16377 hotkeys
-#define HOTKEY_ID_ON                   0x01  // This and the next are used only for convenience by ConvertAltTab().
+#define HOTKEY_ID_ON                   0x01  // This and the next 2 are used only for convenience by ConvertAltTab().
 #define HOTKEY_ID_OFF                  0x02
+#define HOTKEY_ID_TOGGLE               0x03
 
 #define COMPOSITE_DELIMITER " & "
 #define COMPOSITE_DELIMITER_LENGTH 3
@@ -184,7 +185,7 @@ private:
 		mEnabled = false;
 		// AllDeactivate() is done in case this is the last hook hotkey (mouse or keyboard hook) and
 		// the hook(s) are no longer needed:
-		AllDeactivate(false, TYPE_IS_HOOK(mType));
+		AllDeactivate(false, TYPE_IS_HOOK(mType), true);
 		AllActivate(true);
 		return OK;
 	}
@@ -195,8 +196,8 @@ private:
 
 	void *operator new(size_t aBytes) {return SimpleHeap::Malloc(aBytes);}
 	void *operator new[](size_t aBytes) {return SimpleHeap::Malloc(aBytes);}
-	void operator delete(void *aPtr) {}
-	void operator delete[](void *aPtr) {}
+	void operator delete(void *aPtr) {SimpleHeap::Delete(aPtr);}  // Deletes aPtr if it was the most recently allocated.
+	void operator delete[](void *aPtr) {SimpleHeap::Delete(aPtr);}
 
 	// For now, constructor & destructor are private so that only static methods can create new
 	// objects.  This allow proper tracking of which OS hotkey IDs have been used.
@@ -214,7 +215,7 @@ public:
 	static ResultType AddHotkey(Label *aJumpToLabel, HookActionType aHookAction, char *aName = NULL);
 	static ResultType PerformID(HotkeyIDType aHotkeyID);
 	static void TriggerJoyHotkeys(int aJoystickID, DWORD aButtonsNewlyDown);
-	static ResultType AllDeactivate(bool aObeySuspend, bool aChangeHookStatus = true);
+	static ResultType AllDeactivate(bool aObeySuspend, bool aChangeHookStatus = true, bool aKeepHookIfNeeded = false);
 	static void AllActivate(bool aOverrideLock);
 	static void RequireHook(HookType aWhichHook) {sWhichHookAlways |= aWhichHook;}
 	static HookType HookIsActive() {return sWhichHookActive;} // Returns bitwise values: HOOK_MOUSE, HOOK_KEYBD.
@@ -281,6 +282,7 @@ public:
 		{
 			if (!stricmp(aBuf, "On")) return HOTKEY_ID_ON;
 			if (!stricmp(aBuf, "Off")) return HOTKEY_ID_OFF;
+			if (!stricmp(aBuf, "Toggle")) return HOTKEY_ID_TOGGLE;
 		}
 		return 0;
 	}

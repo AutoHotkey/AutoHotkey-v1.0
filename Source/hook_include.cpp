@@ -37,7 +37,8 @@ key is actually down at the moment of consideration.
 	#undef pEvent
 	#define pEvent ((PMSLLHOOKSTRUCT)lParam)
 #endif
-#define IS_IGNORED (pEvent->dwExtraInfo == KEY_IGNORE || pEvent->dwExtraInfo == KEY_IGNORE_PHYS)
+#define IS_IGNORED (pEvent->dwExtraInfo == KEY_IGNORE || pEvent->dwExtraInfo == KEY_IGNORE_PHYS \
+	|| pEvent->dwExtraInfo == KEY_IGNORE_ALL_EXCEPT_MODIFIER)
 
 
 #ifdef INCLUDE_KEYBD_HOOK
@@ -128,7 +129,7 @@ inline IsDualStateNumpadKey(vk_type aVK, sc_type aSC)
 	if (aSC & 0x100)  // If it's extended, it can't be a numpad key.
 		return false;
 
-	switch(aVK)
+	switch (aVK)
 	{
 	// It seems best to exclude the VK_DECIMAL and VK_NUMPAD0 through VK_NUMPAD9 from the below
 	// list because the callers want to know whether this is a numpad key being *modified* by
@@ -206,6 +207,11 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppres
 	// Since low-level (but not high level) keyboard hook supports left/right VKs, use
 	// them in pref. to scan code because it's much more likely to be compatible with
 	// non-English or non-std keyboards.
+
+	// Below excludes KEY_IGNORE_ALL_EXCEPT_MODIFIER since that type of event should not
+	// be ignored by this function:
+	bool is_not_ignored = pEvent->dwExtraInfo != KEY_IGNORE && pEvent->dwExtraInfo != KEY_IGNORE_PHYS;
+
 	switch (pEvent->vkCode)
 	{
 	// Normally (for physical key presses) the vk will be left/right specific.  However,
@@ -218,8 +224,16 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppres
 		if (key_up)
 		{
 			if (!aIsSuppressed)
+			{
 				g_modifiersLR_logical &= ~MOD_LSHIFT;
-			if (EventIsPhysical(lParam, sc, key_up))
+				// Even if is_not_ignored == true, this is updated unconditionally on key-up events
+				// to ensure that g_modifiersLR_logical_non_ignored never says a key is down when
+				// g_modifiersLR_logical says its up, which might otherwise happen in cases such
+				// as alt-tab.  See this comment further below, where the operative word is "relied":
+				// "key pushed ALT down, or relied upon it already being down, so go up"
+				g_modifiersLR_logical_non_ignored &= ~MOD_LSHIFT;
+			}
+			if (EventIsPhysical(lParam, sc, key_up)) // Note that ignored events can be physical via KEYEVENT_PHYS()
 			{
 				g_modifiersLR_physical &= ~MOD_LSHIFT;
 				g_PhysicalKeyState[VK_LSHIFT] = 0;
@@ -229,7 +243,11 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppres
 		else
 		{
 			if (!aIsSuppressed)
+			{
 				g_modifiersLR_logical |= MOD_LSHIFT;
+				if (is_not_ignored)
+					g_modifiersLR_logical_non_ignored |= MOD_LSHIFT;
+			}
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical |= MOD_LSHIFT;
@@ -242,7 +260,10 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppres
 		if (key_up)
 		{
 			if (!aIsSuppressed)
+			{
 				g_modifiersLR_logical &= ~MOD_RSHIFT;
+				g_modifiersLR_logical_non_ignored &= ~MOD_RSHIFT;
+			}
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical &= ~MOD_RSHIFT;
@@ -253,7 +274,11 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppres
 		else
 		{
 			if (!aIsSuppressed)
+			{
 				g_modifiersLR_logical |= MOD_RSHIFT;
+				if (is_not_ignored)
+					g_modifiersLR_logical_non_ignored |= MOD_RSHIFT;
+			}
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical |= MOD_RSHIFT;
@@ -265,7 +290,10 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppres
 		if (key_up)
 		{
 			if (!aIsSuppressed)
+			{
 				g_modifiersLR_logical &= ~MOD_LCONTROL;
+				g_modifiersLR_logical_non_ignored &= ~MOD_LCONTROL;
+			}
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical &= ~MOD_LCONTROL;
@@ -276,7 +304,11 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppres
 		else
 		{
 			if (!aIsSuppressed)
+			{
 				g_modifiersLR_logical |= MOD_LCONTROL;
+				if (is_not_ignored)
+					g_modifiersLR_logical_non_ignored |= MOD_LCONTROL;
+			}
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical |= MOD_LCONTROL;
@@ -288,7 +320,10 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppres
 		if (key_up)
 		{
 			if (!aIsSuppressed)
+			{
 				g_modifiersLR_logical &= ~MOD_RCONTROL;
+				g_modifiersLR_logical_non_ignored &= ~MOD_RCONTROL;
+			}
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical &= ~MOD_RCONTROL;
@@ -299,7 +334,11 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppres
 		else
 		{
 			if (!aIsSuppressed)
+			{
 				g_modifiersLR_logical |= MOD_RCONTROL;
+				if (is_not_ignored)
+					g_modifiersLR_logical_non_ignored |= MOD_RCONTROL;
+			}
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical |= MOD_RCONTROL;
@@ -311,7 +350,10 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppres
 		if (key_up)
 		{
 			if (!aIsSuppressed)
+			{
 				g_modifiersLR_logical &= ~MOD_LALT;
+				g_modifiersLR_logical_non_ignored &= ~MOD_LALT;
+			}
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical &= ~MOD_LALT;
@@ -322,7 +364,11 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppres
 		else
 		{
 			if (!aIsSuppressed)
+			{
 				g_modifiersLR_logical |= MOD_LALT;
+				if (is_not_ignored)
+					g_modifiersLR_logical_non_ignored |= MOD_LALT;
+			}
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical |= MOD_LALT;
@@ -334,7 +380,10 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppres
 		if (key_up)
 		{
 			if (!aIsSuppressed)
+			{
 				g_modifiersLR_logical &= ~MOD_RALT;
+				g_modifiersLR_logical_non_ignored &= ~MOD_RALT;
+			}
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical &= ~MOD_RALT;
@@ -345,7 +394,11 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppres
 		else
 		{
 			if (!aIsSuppressed)
+			{
 				g_modifiersLR_logical |= MOD_RALT;
+				if (is_not_ignored)
+					g_modifiersLR_logical_non_ignored |= MOD_RALT;
+			}
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical |= MOD_RALT;
@@ -357,7 +410,10 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppres
 		if (key_up)
 		{
 			if (!aIsSuppressed)
+			{
 				g_modifiersLR_logical &= ~MOD_LWIN;
+				g_modifiersLR_logical_non_ignored &= ~MOD_LWIN;
+			}
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical &= ~MOD_LWIN;
@@ -367,7 +423,11 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppres
 		else
 		{
 			if (!aIsSuppressed)
+			{
 				g_modifiersLR_logical |= MOD_LWIN;
+				if (is_not_ignored)
+					g_modifiersLR_logical_non_ignored |= MOD_LWIN;
+			}
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical |= MOD_LWIN;
@@ -379,7 +439,10 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppres
 		if (key_up)
 		{
 			if (!aIsSuppressed)
+			{
 				g_modifiersLR_logical &= ~MOD_RWIN;
+				g_modifiersLR_logical_non_ignored &= ~MOD_RWIN;
+			}
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical &= ~MOD_RWIN;
@@ -389,7 +452,11 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppres
 		else
 		{
 			if (!aIsSuppressed)
+			{
 				g_modifiersLR_logical |= MOD_RWIN;
+				if (is_not_ignored)
+					g_modifiersLR_logical_non_ignored |= MOD_RWIN;
+			}
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical |= MOD_RWIN;
@@ -401,147 +468,149 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppres
 	// This should rarely if ever occur under WinNT/2k/XP -- perhaps only if an app calls keybd_event()
 	// and explicitly specifies one of these VKs to be sent.  UPDATE: THIS DOES HAPPEN ON WINDOWS NT.
 	// So apparently, NT works with the neutral VKs for modifiers rather than the left/right specific
-	// ones like 2k/XP:
-	case VK_SHIFT:
-		if (sc == SC_RSHIFT)
-			if (key_up)
-			{
-				if (!aIsSuppressed)
-					g_modifiersLR_logical &= ~MOD_RSHIFT;
-				if (EventIsPhysical(lParam, sc, key_up))
-				{
-					g_modifiersLR_physical &= ~MOD_RSHIFT;
-					g_PhysicalKeyState[VK_RSHIFT] = 0;
-					g_PhysicalKeyState[VK_SHIFT] = g_PhysicalKeyState[VK_LSHIFT];
-				}
-			}
-			else
-			{
-				if (!aIsSuppressed)
-					g_modifiersLR_logical |= MOD_RSHIFT;
-				if (EventIsPhysical(lParam, sc, key_up))
-				{
-					g_modifiersLR_physical |= MOD_RSHIFT;
-					g_PhysicalKeyState[VK_RSHIFT] = g_PhysicalKeyState[VK_SHIFT] = STATE_DOWN;
-				}
-			}
-		else // Assume the left even if scan code doesn't match what would be expected.
-		// Else even if it's not SC_LSHIFT, assume that it's the left-shift key anyway
-		// (since one of them has to be the event, have to choose one):
-			if (key_up)
-			{
-				if (!aIsSuppressed)
-					g_modifiersLR_logical &= ~MOD_LSHIFT;
-				if (EventIsPhysical(lParam, sc, key_up))
-				{
-					g_modifiersLR_physical &= ~MOD_LSHIFT;
-					g_PhysicalKeyState[VK_LSHIFT] = 0;
-					g_PhysicalKeyState[VK_SHIFT] = g_PhysicalKeyState[VK_RSHIFT];
-				}
-			}
-			else
-			{
-				if (!aIsSuppressed)
-					g_modifiersLR_logical |= MOD_LSHIFT;
-				if (EventIsPhysical(lParam, sc, key_up))
-				{
-					g_modifiersLR_physical |= MOD_LSHIFT;
-					g_PhysicalKeyState[VK_LSHIFT] = g_PhysicalKeyState[VK_SHIFT] = STATE_DOWN;
-				}
-			}
-		break;
-	case VK_CONTROL:
-		if (sc == SC_RCONTROL)
-			if (key_up)
-			{
-				if (!aIsSuppressed)
-					g_modifiersLR_logical &= ~MOD_RCONTROL;
-				if (EventIsPhysical(lParam, sc, key_up))
-				{
-					g_modifiersLR_physical &= ~MOD_RCONTROL;
-					g_PhysicalKeyState[VK_RCONTROL] = 0;
-					g_PhysicalKeyState[VK_CONTROL] = g_PhysicalKeyState[VK_LCONTROL];
-				}
-			}
-			else
-			{
-				if (!aIsSuppressed)
-					g_modifiersLR_logical |= MOD_RCONTROL;
-				if (EventIsPhysical(lParam, sc, key_up))
-				{
-					g_modifiersLR_physical |= MOD_RCONTROL;
-					g_PhysicalKeyState[VK_RCONTROL] = g_PhysicalKeyState[VK_CONTROL] = STATE_DOWN;
-				}
-			}
-		else // Assume the left even if scan code doesn't match what would be expected.
-			if (key_up)
-			{
-				if (!aIsSuppressed)
-					g_modifiersLR_logical &= ~MOD_LCONTROL;
-				if (EventIsPhysical(lParam, sc, key_up))
-				{
-					g_modifiersLR_physical &= ~MOD_LCONTROL;
-					g_PhysicalKeyState[VK_LCONTROL] = 0;
-					g_PhysicalKeyState[VK_CONTROL] = g_PhysicalKeyState[VK_RCONTROL];
-				}
-			}
-			else
-			{
-				if (!aIsSuppressed)
-					g_modifiersLR_logical |= MOD_LCONTROL;
-				if (EventIsPhysical(lParam, sc, key_up))
-				{
-					g_modifiersLR_physical |= MOD_LCONTROL;
-					g_PhysicalKeyState[VK_LCONTROL] = g_PhysicalKeyState[VK_CONTROL] = STATE_DOWN;
-				}
-			}
-		break;
-	case VK_MENU:
-		if (sc == SC_RALT)
-			if (key_up)
-			{
-				if (!aIsSuppressed)
-					g_modifiersLR_logical &= ~MOD_RALT;
-				if (EventIsPhysical(lParam, sc, key_up))
-				{
-					g_modifiersLR_physical &= ~MOD_RALT;
-					g_PhysicalKeyState[VK_RMENU] = 0;
-					g_PhysicalKeyState[VK_MENU] = g_PhysicalKeyState[VK_LMENU];
-				}
-			}
-			else
-			{
-				if (!aIsSuppressed)
-					g_modifiersLR_logical |= MOD_RALT;
-				if (EventIsPhysical(lParam, sc, key_up))
-				{
-					g_modifiersLR_physical |= MOD_RALT;
-					g_PhysicalKeyState[VK_RMENU] = g_PhysicalKeyState[VK_MENU] = STATE_DOWN;
-				}
-			}
-		else // Assume the left even if scan code doesn't match what would be expected.
-			if (key_up)
-			{
-				if (!aIsSuppressed)
-					g_modifiersLR_logical &= ~MOD_LALT;
-				if (EventIsPhysical(lParam, sc, key_up))
-				{
-					g_modifiersLR_physical &= ~MOD_LALT;
-					g_PhysicalKeyState[VK_LMENU] = 0;
-					g_PhysicalKeyState[VK_MENU] = g_PhysicalKeyState[VK_RMENU];
-				}
-			}
-			else
-			{
-				if (!aIsSuppressed)
-					g_modifiersLR_logical |= MOD_LALT;
-				if (EventIsPhysical(lParam, sc, key_up))
-				{
-					g_modifiersLR_physical |= MOD_LALT;
-					g_PhysicalKeyState[VK_LMENU] = g_PhysicalKeyState[VK_MENU] = STATE_DOWN;
-				}
-			}
-		break;
+	// ones like 2k/XP.  UPDATE: This section is no longer needed because the keyboard hook translates
+	// neutral modifier events into left/right-specific events early on (before we're ever called).
+	// ALSO NOTE: The below has not yet been changed to keep g_modifiersLR_logical_non_ignored updated.
+	//case VK_SHIFT:
+	//	if (sc == SC_RSHIFT)
+	//		if (key_up)
+	//		{
+	//			if (!aIsSuppressed)
+	//				g_modifiersLR_logical &= ~MOD_RSHIFT;
+	//			if (EventIsPhysical(lParam, sc, key_up))
+	//			{
+	//				g_modifiersLR_physical &= ~MOD_RSHIFT;
+	//				g_PhysicalKeyState[VK_RSHIFT] = 0;
+	//				g_PhysicalKeyState[VK_SHIFT] = g_PhysicalKeyState[VK_LSHIFT];
+	//			}
+	//		}
+	//		else
+	//		{
+	//			if (!aIsSuppressed)
+	//				g_modifiersLR_logical |= MOD_RSHIFT;
+	//			if (EventIsPhysical(lParam, sc, key_up))
+	//			{
+	//				g_modifiersLR_physical |= MOD_RSHIFT;
+	//				g_PhysicalKeyState[VK_RSHIFT] = g_PhysicalKeyState[VK_SHIFT] = STATE_DOWN;
+	//			}
+	//		}
+	//	else // Assume the left even if scan code doesn't match what would be expected.
+	//	// Else even if it's not SC_LSHIFT, assume that it's the left-shift key anyway
+	//	// (since one of them has to be the event, have to choose one):
+	//		if (key_up)
+	//		{
+	//			if (!aIsSuppressed)
+	//				g_modifiersLR_logical &= ~MOD_LSHIFT;
+	//			if (EventIsPhysical(lParam, sc, key_up))
+	//			{
+	//				g_modifiersLR_physical &= ~MOD_LSHIFT;
+	//				g_PhysicalKeyState[VK_LSHIFT] = 0;
+	//				g_PhysicalKeyState[VK_SHIFT] = g_PhysicalKeyState[VK_RSHIFT];
+	//			}
+	//		}
+	//		else
+	//		{
+	//			if (!aIsSuppressed)
+	//				g_modifiersLR_logical |= MOD_LSHIFT;
+	//			if (EventIsPhysical(lParam, sc, key_up))
+	//			{
+	//				g_modifiersLR_physical |= MOD_LSHIFT;
+	//				g_PhysicalKeyState[VK_LSHIFT] = g_PhysicalKeyState[VK_SHIFT] = STATE_DOWN;
+	//			}
+	//		}
+	//	break;
+	//case VK_CONTROL:
+	//	if (sc == SC_RCONTROL)
+	//		if (key_up)
+	//		{
+	//			if (!aIsSuppressed)
+	//				g_modifiersLR_logical &= ~MOD_RCONTROL;
+	//			if (EventIsPhysical(lParam, sc, key_up))
+	//			{
+	//				g_modifiersLR_physical &= ~MOD_RCONTROL;
+	//				g_PhysicalKeyState[VK_RCONTROL] = 0;
+	//				g_PhysicalKeyState[VK_CONTROL] = g_PhysicalKeyState[VK_LCONTROL];
+	//			}
+	//		}
+	//		else
+	//		{
+	//			if (!aIsSuppressed)
+	//				g_modifiersLR_logical |= MOD_RCONTROL;
+	//			if (EventIsPhysical(lParam, sc, key_up))
+	//			{
+	//				g_modifiersLR_physical |= MOD_RCONTROL;
+	//				g_PhysicalKeyState[VK_RCONTROL] = g_PhysicalKeyState[VK_CONTROL] = STATE_DOWN;
+	//			}
+	//		}
+	//	else // Assume the left even if scan code doesn't match what would be expected.
+	//		if (key_up)
+	//		{
+	//			if (!aIsSuppressed)
+	//				g_modifiersLR_logical &= ~MOD_LCONTROL;
+	//			if (EventIsPhysical(lParam, sc, key_up))
+	//			{
+	//				g_modifiersLR_physical &= ~MOD_LCONTROL;
+	//				g_PhysicalKeyState[VK_LCONTROL] = 0;
+	//				g_PhysicalKeyState[VK_CONTROL] = g_PhysicalKeyState[VK_RCONTROL];
+	//			}
+	//		}
+	//		else
+	//		{
+	//			if (!aIsSuppressed)
+	//				g_modifiersLR_logical |= MOD_LCONTROL;
+	//			if (EventIsPhysical(lParam, sc, key_up))
+	//			{
+	//				g_modifiersLR_physical |= MOD_LCONTROL;
+	//				g_PhysicalKeyState[VK_LCONTROL] = g_PhysicalKeyState[VK_CONTROL] = STATE_DOWN;
+	//			}
+	//		}
+	//	break;
+	//case VK_MENU:
+	//	if (sc == SC_RALT)
+	//		if (key_up)
+	//		{
+	//			if (!aIsSuppressed)
+	//				g_modifiersLR_logical &= ~MOD_RALT;
+	//			if (EventIsPhysical(lParam, sc, key_up))
+	//			{
+	//				g_modifiersLR_physical &= ~MOD_RALT;
+	//				g_PhysicalKeyState[VK_RMENU] = 0;
+	//				g_PhysicalKeyState[VK_MENU] = g_PhysicalKeyState[VK_LMENU];
+	//			}
+	//		}
+	//		else
+	//		{
+	//			if (!aIsSuppressed)
+	//				g_modifiersLR_logical |= MOD_RALT;
+	//			if (EventIsPhysical(lParam, sc, key_up))
+	//			{
+	//				g_modifiersLR_physical |= MOD_RALT;
+	//				g_PhysicalKeyState[VK_RMENU] = g_PhysicalKeyState[VK_MENU] = STATE_DOWN;
+	//			}
+	//		}
+	//	else // Assume the left even if scan code doesn't match what would be expected.
+	//		if (key_up)
+	//		{
+	//			if (!aIsSuppressed)
+	//				g_modifiersLR_logical &= ~MOD_LALT;
+	//			if (EventIsPhysical(lParam, sc, key_up))
+	//			{
+	//				g_modifiersLR_physical &= ~MOD_LALT;
+	//				g_PhysicalKeyState[VK_LMENU] = 0;
+	//				g_PhysicalKeyState[VK_MENU] = g_PhysicalKeyState[VK_RMENU];
+	//			}
+	//		}
+	//		else
+	//		{
+	//			if (!aIsSuppressed)
+	//				g_modifiersLR_logical |= MOD_LALT;
+	//			if (EventIsPhysical(lParam, sc, key_up))
+	//			{
+	//				g_modifiersLR_physical |= MOD_LALT;
+	//				g_PhysicalKeyState[VK_LMENU] = g_PhysicalKeyState[VK_MENU] = STATE_DOWN;
+	//			}
+	//		}
+	//	break;
 	}
 }
 
@@ -866,7 +935,7 @@ LRESULT AllowIt(HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, sc_type sc, b
 		// Update: I've received an indication from a single Win2k user (unconfirmed from anyone
 		// else) that the Win-L hotkey doesn't work on Win2k.  AutoIt3 docs confirm this.
 		// Thus, it probably doesn't work on NT either.  So it's been changed to happen only on XP:
-		g_modifiersLR_logical = g_modifiersLR_physical = 0; // We already know that *only* the WIN key is down.
+		g_modifiersLR_logical = g_modifiersLR_logical_non_ignored = g_modifiersLR_physical = 0; // We already know that *only* the WIN key is down.
 		// Indicate that the windows keys and the 'L' key are not down, in preparation for re-logon:
 		g_PhysicalKeyState[(vk_type)pEvent->vkCode] = g_PhysicalKeyState[VK_LWIN] = g_PhysicalKeyState[VK_RWIN] = 0;
 	}
@@ -899,7 +968,7 @@ LRESULT AllowIt(HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, sc_type sc, b
 		// all hook tracking of the modifiers to the "up" position.  The user can always press them
 		// down again upon return.  It also seems best to reset both logical and physical, just for
 		// peace of mind and simplicity:
-		g_modifiersLR_logical = g_modifiersLR_physical = 0;
+		g_modifiersLR_logical = g_modifiersLR_logical_non_ignored = g_modifiersLR_physical = 0;
 		// Indicate that the windows keys and the 'L' key are not down, in preparation for re-logon:
 		g_PhysicalKeyState[(vk_type)pEvent->vkCode] = g_PhysicalKeyState[VK_LCONTROL] = g_PhysicalKeyState[VK_RCONTROL]
 			= g_PhysicalKeyState[VK_LMENU] = g_PhysicalKeyState[VK_RMENU] = 0;
@@ -990,9 +1059,10 @@ LRESULT AllowIt(HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, KeyHistoryIte
 #ifdef INCLUDE_KEYBD_HOOK
 LRESULT CALLBACK LowLevelKeybdProc(int code, WPARAM wParam, LPARAM lParam)
 {
-	KeyHistoryItem *pKeyHistoryCurr = NULL;
 	if (code != HC_ACTION)  // MSDN docs specify that Both LL keybd & mouse hook should return in this case.
 		return CallNextHookEx(g_KeybdHook, code, wParam, lParam);
+
+	KeyHistoryItem *pKeyHistoryCurr = NULL; // Needs to be done early.
 
 	// Change the event to be physical if that is indicated in its dwExtraInfo attribute.
 	// This is done for cases when the hook is installed multiple times and one instance of
@@ -1029,6 +1099,19 @@ LRESULT CALLBACK LowLevelKeybdProc(int code, WPARAM wParam, LPARAM lParam)
 	// scan code is sent with VK_RSHIFT key-up event:
 	if ((pEvent->flags & LLKHF_EXTENDED)) // && vk != VK_RSHIFT)
 		sc |= 0x100;
+
+	// The below must be done prior to any returns that indirectly call UpdateModifierState():
+	// Update: It seems best to do the below unconditionally, even if the OS is Win2k or WinXP,
+	// since it seems like this translation will add value even in those cases:
+	// To help ensure consistency with Windows XP and 2k, for which this hook has been primarily
+	// designed and tested, translate neutral modifier keys into their left/right specific VKs,
+	// since beardboy's testing shows that NT receives the neutral keys like Win9x does:
+	switch (vk)
+	{
+	case VK_CONTROL: vk = (sc == SC_RCONTROL) ? VK_RCONTROL : VK_LCONTROL; break;
+	case VK_MENU: vk = (sc == SC_RALT) ? VK_RMENU : VK_LMENU; break;
+	case VK_SHIFT: vk = (sc == SC_RSHIFT) ? VK_RSHIFT : VK_LSHIFT; break;
+	}
 
 #else // Mouse Hook:
 LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
@@ -1121,7 +1204,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	// otherwise the driver will not generate those false-physical shift key events:
 	if (!(sc & 0x100) && (IsKeyToggledOn(VK_NUMLOCK)))
 	{
-		switch(vk)
+		switch (vk)
 		{
 		case VK_DELETE: case VK_DECIMAL: pad_state[PAD_DECIMAL] = !key_up; break;
 		case VK_INSERT: case VK_NUMPAD0: pad_state[PAD_NUMPAD0] = !key_up; break;
@@ -1178,9 +1261,8 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	// already been properly determined:
 	// In rare cases it may be necessary to suppress both left and right, which is why
 	// it's not done as a generic windows key:
-	if (key_up && ((disguise_next_lwin_up && vk == VK_LWIN) || (disguise_next_rwin_up && vk == VK_RWIN)
-		 || (disguise_next_lalt_up && (vk == VK_LMENU || vk == VK_MENU))
-		 || (disguise_next_ralt_up && vk == VK_RMENU)))
+	if (   key_up && ((disguise_next_lwin_up && vk == VK_LWIN) || (disguise_next_rwin_up && vk == VK_RWIN)
+		 || (disguise_next_lalt_up && vk == VK_LMENU) || (disguise_next_ralt_up && vk == VK_RMENU))   )
 	{
 		// Do this first to avoid problems with reentrancy.
 		switch (vk)
@@ -1191,8 +1273,8 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		// due to the nature of this type of hook on NT/2k/XP and beyond.  Later, this can be furher
 		// optimized to check the scan code and such (what's being done here isn't that essential to
 		// start with, so it's not a high priority -- but when it is done, be sure to review the
-		// above IF statement also):
-		case VK_MENU:
+		// above IF statement also).  UPDATE: Teh above is no longer a concern since neutral keys
+		// are translated above into their left/right-specific counterpart:
 		case VK_LMENU: disguise_next_lalt_up = false; break;
 		case VK_RMENU: disguise_next_ralt_up = false; break;
 		}
@@ -1225,15 +1307,6 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 #else
 	key_type *pThisKey = kvk + vk;
 #endif
-	// Doing this check and returning early should help average performance whenever a prefix key
-	// is repeating due to being held down.  Don't suppress the repeated down-event for a modifier
-	// key in case it's relevant in games or other apps where the key-repeat feature is relied upon:
-	if (pPrefixKey == pThisKey && !key_up)
-#ifdef INCLUDE_KEYBD_HOOK
-		return pThisKey->as_modifiersLR ? AllowKeyToGoToSystem : SuppressThisKey;
-#else
-		return SuppressThisKey;
-#endif
 
 	// Update: The below is now done only for keyboard hook, not the mouse.  This is because
 	// most people probably would not want a prefix key's suffix-action to be stopped
@@ -1245,7 +1318,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 #ifdef INCLUDE_KEYBD_HOOK
 	// This relies upon the above check having returned if the condition was met,
 	// since it doesn't ensure that pThisKey != pPrefixKey:
-	if (pPrefixKey != NULL && !key_up && !pThisKey->as_modifiersLR)
+	if (pPrefixKey && !key_up && !pThisKey->as_modifiersLR)
 		// Any key-down event (other than those already ignored and returned from,
 		// above) should probably be considered an attempt by the user to use the
 		// prefix key that's currently being held down as a "modifier".  That way, if pPrefixKey
@@ -1253,7 +1326,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		// which is probably the correct thing to do 90% or more of the time:
 		pPrefixKey->was_just_used = AS_PREFIX;
 #else
-	if (pPrefixKey != NULL && !key_up && pPrefixKey->as_modifiersLR) // See explanation above.
+	if (pPrefixKey && !key_up && pPrefixKey->as_modifiersLR) // See explanation above.
 		pPrefixKey->was_just_used = AS_PREFIX;
 #endif
 	// WinAPI docs state that for both virtual keys and scan codes:
@@ -1268,6 +1341,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	if (!pThisKey->used_as_prefix && !pThisKey->used_as_suffix)
 		return AllowKeyToGoToSystem;
 
+	modLR_type modifiersLRnew;
 	int down_performed_action, was_down_before_up;
 	if (key_up)
 	{
@@ -1280,11 +1354,48 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	}
 	pThisKey->is_down = !key_up;
 
+#ifdef INCLUDE_KEYBD_HOOK  // Mouse Hook
+	// The below was added to fix hotkeys that have a neutral suffix such as "Control & LShift".
+	// It may also fix other things and help future enhancements:
+	if (pThisKey->as_modifiersLR)
+	{
+		switch (vk)
+		{
+		// The neutral modifier "Win" is not currently supported.
+		case VK_LCONTROL:
+		case VK_RCONTROL: kvk[VK_CONTROL].is_down = !key_up; break;
+		case VK_LMENU:
+		case VK_RMENU: kvk[VK_MENU].is_down = !key_up; break;
+		case VK_LSHIFT:
+		case VK_RSHIFT: kvk[VK_SHIFT].is_down = !key_up; break;
+		// No longer possible because vk is translated early on from neutral to left-right specific:
+		// I don't think these ever happen with physical keyboard input, but it might with artificial input:
+		//case VK_CONTROL: kvk[sc == SC_RCONTROL ? VK_RCONTROL : VK_LCONTROL].is_down = !key_up; break;
+		//case VK_MENU: kvk[sc == SC_RALT ? VK_RMENU : VK_LMENU].is_down = !key_up; break;
+		//case VK_SHIFT: kvk[sc == SC_RSHIFT ? VK_RSHIFT : VK_LSHIFT].is_down = !key_up; break;
+		}
+	}
+#else  // Mouse Hook
+// If the mouse hook is installed without the keyboard hook, update g_modifiersLR_logical
+// manually so that it can be referred to by the mouse hook after this point:
+	if (!g_KeybdHook)
+		g_modifiersLR_logical = g_modifiersLR_logical_non_ignored = GetModifierLRState();
+#endif
+
+	HotkeyIDType hotkey_id = HOTKEY_ID_INVALID;  // Set default.
+	bool no_suppress = false;  // Hotkeys are normally suppressed, so set this behavior as default.
+	#define GET_HOTKEY_ID_AND_FLAGS(id_with_flags) \
+		hotkey_id = id_with_flags;\
+		no_suppress = hotkey_id & HOTKEY_NO_SUPPRESS;\
+		hotkey_id &= HOTKEY_ID_MASK
+
 	///////////////////////////////////////////////////////////////////////////////////////
 	// CASE #1 of 4: PREFIX key has been pressed down.  But use it in this capacity only if
-	// no other prefix is already in effect or if this key isn't a suffix:
+	// no other prefix is already in effect or if this key isn't a suffix.  Update: Or if
+	// this key-down is the same as the prefix already down, since we want to be able to
+	// a prefix when it's being used in its role as a modified suffix (see below comments).
 	///////////////////////////////////////////////////////////////////////////////////////
-	if (pThisKey->used_as_prefix && !key_up && (pPrefixKey == NULL || !pThisKey->used_as_suffix))
+	if (pThisKey->used_as_prefix && !key_up && (!pPrefixKey || !pThisKey->used_as_suffix || pThisKey == pPrefixKey))
 	{
 		// Override any other prefix key that might be in effect with this one, in case the
 		// prior one, due to be old for example, was invalid somehow.  UPDATE: It seems better
@@ -1295,9 +1406,9 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		pPrefixKey = pThisKey;
 		// It should be safe to init this because even if the current key is repeating,
 		// it should be impossible to receive here the key-downs that occurred after
-		// the first, because there's a return-on-repeat check farther above.  Even
-		// if that check weren't done, it's safe to reinitialize this to zero because
-		// on most (all?) keyboards & OSs, the moment the user presses another key while
+		// the first, because there's a return-on-repeat check farther above (update: that check
+		// is gone now).  Even if that check weren't done, it's safe to reinitialize this to zero
+		// because on most (all?) keyboards & OSs, the moment the user presses another key while
 		// this one is held down, the key-repeating ceases and does not resume for
 		// this key (though the second key will begin to repeat if it too is held down).
 		// In other words, the fear that this would be wrongly initialized and thus cause
@@ -1305,30 +1416,60 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		// It seems easier (and may perform better than alternative ways) to init this
 		// here rather than say, upon the release of the prefix key:
 		pPrefixKey->was_just_used = 0;
-		// In this case, a key-down event can't trigger a suffix, so return immediately:
-#ifdef INCLUDE_KEYBD_HOOK
-		return (pThisKey->as_modifiersLR || (pThisKey->no_suppress & NO_SUPPRESS_PREFIX)
-			// The order on this line important; it relies on short-circuit boolean:
-			|| (pThisKey->pForceToggle != NULL && *pThisKey->pForceToggle == NEUTRAL))
-			? AllowKeyToGoToSystem : SuppressThisKey;
-#else
-		return (pThisKey->no_suppress & NO_SUPPRESS_PREFIX) ? AllowKeyToGoToSystem : SuppressThisKey;
-#endif
-	}
 
-#ifndef INCLUDE_KEYBD_HOOK  // Mouse Hook
-// If the mouse hook is installed without the keyboard hook, update g_modifiersLR_logical
-// manually so that it can be referred to by the mouse hook after this point:
-if (!g_KeybdHook)
-	g_modifiersLR_logical = GetModifierLRState();
+		// This new section was added May 30, 2004, to fix scenarios such as the following example:
+		// a & b::Msgbox a & b
+		// $^a::MsgBox a
+		// Previously, the ^a hotkey would only fire on key-up (unless it was registered, in which
+		// case it worked as intended on the down-event).  When the user presses a, it's okay (and
+		// probably desirable) to have recorded that event as a prefix-key-down event (above).
+		// But in addition to that, we now check if this is a normal, modified hotkey that should
+		// fire now rather than waiting for the key-up event.  This is done because it makes sense,
+		// it's more correct, and also it makes the behavior of a hooked ^a hotkey consistent with
+		// that of a registered ^a:
+
+		// no_ignore is always used when considering whether a key combination is in place to
+		// trigger a hotkey:
+#ifdef INCLUDE_KEYBD_HOOK
+		modifiersLRnew = g_modifiersLR_logical_non_ignored;
+		if (pThisKey->as_modifiersLR)
+			// Hotkeys are not defined to modify themselves, so look for a match accordingly.
+			modifiersLRnew &= ~pThisKey->as_modifiersLR;
+		// For this case to be checked, there must be at least one modifier key currently down (other
+		// than this key itself if it's a modifier), because if there isn't and this prefix is also
+		// a suffix, its suffix action should only fire on key-up (i.e. not here, but later on):
+		if (modifiersLRnew)
+			GET_HOTKEY_ID_AND_FLAGS(ksc[sc].sc_takes_precedence ? Kscm(modifiersLRnew, sc) : Kvkm(modifiersLRnew, vk));
+		// Alt-tab need not be checked here (like it is in the similar section below that calls 
+		// GET_HOTKEY_ID_AND_FLAGS) because all such hotkeys use (or were converted at load-time to use)
+		// a modifier_vk, not a set of modifiers or modifierlr's:
+		//if (hotkey_id == HOTKEY_ID_INVALID && alt_tab_menu_is_visible)
+		//...
+#else // Mouse hook:
+		if (g_modifiersLR_logical_non_ignored) // See above for explanation.
+			GET_HOTKEY_ID_AND_FLAGS(Kvkm(g_modifiersLR_logical_non_ignored, vk));
 #endif
+
+		if (hotkey_id == HOTKEY_ID_INVALID)
+		{
+			// In this case, a key-down event can't trigger a suffix, so return immediately:
+#ifdef INCLUDE_KEYBD_HOOK
+			return (pThisKey->as_modifiersLR || (pThisKey->no_suppress & NO_SUPPRESS_PREFIX)
+				// The order on this line important; it relies on short-circuit boolean:
+				|| (pThisKey->pForceToggle && *pThisKey->pForceToggle == NEUTRAL))
+				? AllowKeyToGoToSystem : SuppressThisKey;
+#else
+			return (pThisKey->no_suppress & NO_SUPPRESS_PREFIX) ? AllowKeyToGoToSystem : SuppressThisKey;
+#endif
+		}
+	}
 
 	//////////////////////////////////////////////////////////////////////////////////
 	// CASE #2 of 4: SUFFIX key (that's not a prefix, or is one but has just been used
 	// in its capacity as a suffix instead) has been released.
 	// This is done before Case #3 for performance reasons.
 	//////////////////////////////////////////////////////////////////////////////////
-	if (pThisKey->used_as_suffix && pPrefixKey != pThisKey && key_up)
+	if (pThisKey->used_as_suffix && pPrefixKey != pThisKey && key_up) // Since key_up, hotkey_id == INVALID.
 	{
 		// If it did perform an action, suppress this key-up event.  Do this even
 		// if this key is a modifier because it's previous key-down would have
@@ -1358,7 +1499,7 @@ if (!g_KeybdHook)
 	//////////////////////////////////////////////
 	// CASE #3 of 4: PREFIX key has been released.
 	//////////////////////////////////////////////
-	if (   (pThisKey->used_as_prefix) && key_up   )
+	if (   (pThisKey->used_as_prefix) && key_up   )  // Since key_up, hotkey_id == INVALID.
 	{
 		if (pPrefixKey == pThisKey)
 			pPrefixKey = NULL;
@@ -1383,7 +1524,7 @@ if (!g_KeybdHook)
 		}
 		// The order of expressions in this IF is important; it relies on short-circuit boolean:
 #ifdef INCLUDE_KEYBD_HOOK
-		if (pThisKey->pForceToggle != NULL && *pThisKey->pForceToggle == NEUTRAL)
+		if (pThisKey->pForceToggle && *pThisKey->pForceToggle == NEUTRAL)
 		{
 			// It's done this way because CapsLock, for example, is a key users often
 			// press quickly while typing.  I suspect many users are like me in that
@@ -1400,8 +1541,7 @@ if (!g_KeybdHook)
 			if (pThisKey->was_just_used == AS_PREFIX_FOR_HOTKEY)
 			{
 				KEYEVENT_PHYS(KEYUP, vk, sc); // Mark it as physical for any other hook instances.
-				KeyEvent(KEYDOWN, vk, sc);
-				KeyEvent(KEYUP, vk, sc);
+				KeyEvent(KEYDOWNANDUP, vk, sc);
 				return SuppressThisKey;
 			}
 
@@ -1442,7 +1582,7 @@ if (!g_KeybdHook)
 		// Since above didn't return, this key-up for this prefix key wasn't used in it's role
 		// as a prefix.  If it's not a suffix, we're done, so just return.  Don't do
 		// "DisguiseWinAlt" because we want the key's native key-up function to take effect.
-		// Also, Allow key-ups for toggleable keys that the user wants to be toggleable to
+		// Also, allow key-ups for toggleable keys that the user wants to be toggleable to
 		// go through to the system, because the prior key-down for this prefix key
 		// wouldn't have been suppressed and thus this up-event goes with it (and this
 		// up-even is also needed by the OS, at least WinXP, to properly set the indicator
@@ -1451,7 +1591,7 @@ if (!g_KeybdHook)
 #ifdef INCLUDE_KEYBD_HOOK
 			return (pThisKey->as_modifiersLR || (pThisKey->no_suppress & NO_SUPPRESS_PREFIX)
 				// The order on this line important; it relies on short-circuit boolean:
-				|| (pThisKey->pForceToggle != NULL && *pThisKey->pForceToggle == NEUTRAL))
+				|| (pThisKey->pForceToggle && *pThisKey->pForceToggle == NEUTRAL))
 				? AllowKeyToGoToSystem : SuppressThisKey;
 #else
 			return (pThisKey->no_suppress & NO_SUPPRESS_PREFIX) ? AllowKeyToGoToSystem : SuppressThisKey;
@@ -1475,22 +1615,16 @@ if (!g_KeybdHook)
 
 	////////////////////////////////////////////////////////////////////////////////////////////////////
 	// CASE #4 of 4: SUFFIX key has been pressed down (or released if it's a key-up event, in which case
-	// it fell through from CASE #3 above).
+	// it fell through from CASE #3 above).  Update: This case can also happen if it fell through
+	// from case #1 (i.e. it already determined the value of hotkey_id).
 	////////////////////////////////////////////////////////////////////////////////////////////////////
-	int i;
-	HotkeyIDType hotkey_id = HOTKEY_ID_INVALID;  // Set default.
-	bool no_suppress = false;  // Hotkeys are normally suppressed, so set this behavior as default.
-	#define GET_HOTKEY_ID_AND_FLAGS(id_with_flags) \
-		hotkey_id = id_with_flags;\
-		no_suppress = hotkey_id & HOTKEY_NO_SUPPRESS;\
-		hotkey_id &= HOTKEY_ID_MASK
-
-	if (pPrefixKey != NULL && !key_up) // This check helps performance by avoiding all the below checking.
+	if (pPrefixKey && !key_up && hotkey_id == HOTKEY_ID_INVALID) // Helps performance by avoiding all the below checking.
 	{
 		// Action here is considered first, and takes precedence since a suffix's ModifierVK/SC should
 		// take effect regardless of whether any win/ctrl/alt/shift modifiers are currently down, even if
 		// those modifiers themselves form another valid hotkey with this suffix.  In other words,
 		// ModifierVK/SC combos take precedence over normally-modified combos:
+		int i;
 		for (i = 0; i < pThisKey->nModifierVK; ++i)
 			if (kvk[pThisKey->ModifierVK[i].vk].is_down)
 			{
@@ -1503,6 +1637,7 @@ if (!g_KeybdHook)
 				break;
 			}
  		if (hotkey_id == HOTKEY_ID_INVALID)  // Now check scan codes since above didn't find one.
+		{
 			for (i = 0; i < pThisKey->nModifierSC; ++i)
 				if (ksc[pThisKey->ModifierSC[i].sc].is_down)
 				{
@@ -1511,6 +1646,48 @@ if (!g_KeybdHook)
 					GET_HOTKEY_ID_AND_FLAGS(pThisKey->ModifierSC[i].id_with_flags);
 					break;
 				}
+		}
+		if (hotkey_id == HOTKEY_ID_INVALID)
+		{
+			// Search again, but this time do it with pThisKey translated into its neutral counterpart.
+			// This avoids the need to display a warning dialog for an example such as the following,
+			// which was previously unsupported:
+			// AppsKey & Control::MsgBox %A_ThisHotkey%
+			// Note: If vk was a neutral modifier when it first came in (e.g. due to NT4), it was already
+			// translated early on (above) to be non-neutral.
+			vk_type vk_neutral = 0;  // Set default.  Note that VK_LWIN/VK_RWIN have no neutral VK.
+			switch (vk)
+			{
+			case VK_LCONTROL:
+			case VK_RCONTROL: vk_neutral = VK_CONTROL; break;
+			case VK_LMENU:
+			case VK_RMENU:    vk_neutral = VK_MENU; break;
+			case VK_LSHIFT:
+			case VK_RSHIFT:   vk_neutral = VK_SHIFT; break;
+			}
+			if (vk_neutral)
+			{
+				// These next two for() loops are nearly the same as the ones above, so see comments there
+				// and maintain them together:
+				for (i = 0; i < kvk[vk_neutral].nModifierVK; ++i)
+					if (kvk[kvk[vk_neutral].ModifierVK[i].vk].is_down)
+					{
+						pPrefixKey = kvk + kvk[vk_neutral].ModifierVK[i].vk;
+						pPrefixKey->was_just_used = AS_PREFIX_FOR_HOTKEY;
+						GET_HOTKEY_ID_AND_FLAGS(kvk[vk_neutral].ModifierVK[i].id_with_flags);
+						break;
+					}
+ 				if (hotkey_id == HOTKEY_ID_INVALID)  // Now check scan codes since above didn't find one.
+					for (i = 0; i < kvk[vk_neutral].nModifierSC; ++i)
+						if (ksc[kvk[vk_neutral].ModifierSC[i].sc].is_down)
+						{
+							pPrefixKey = ksc + kvk[vk_neutral].ModifierSC[i].sc;
+							pPrefixKey->was_just_used = AS_PREFIX_FOR_HOTKEY;
+							GET_HOTKEY_ID_AND_FLAGS(kvk[vk_neutral].ModifierSC[i].id_with_flags);
+							break;
+						}
+			}
+		}
 
 		// Alt-tab: handled directly here rather than via posting a message back to the main window.
 		// In part, this is because it would be difficult to design a way to tell the main window when
@@ -1538,7 +1715,7 @@ if (!g_KeybdHook)
 				KeyEvent(KEYDOWN, VK_MENU);
 				// And leave it down until a key-up event on the prefix key occurs.
 #ifdef INCLUDE_KEYBD_HOOK
-			if (vk == VK_LCONTROL || vk == VK_RCONTROL || vk == VK_CONTROL)
+			if (vk == VK_LCONTROL || vk == VK_RCONTROL)
 				// Even though this suffix key would have been suppressed, it seems that the
 				// OS's alt-tab functionality sees that it's down somehow and thus this is necessary
 				// to allow the alt-tab menu to appear.  This doesn't need to be done for any other
@@ -1572,7 +1749,7 @@ if (!g_KeybdHook)
 			{
 				// Force it to be alt-tab as the user intended.
 #ifdef INCLUDE_KEYBD_HOOK
-				if (vk == VK_LSHIFT || vk == VK_RSHIFT || vk == VK_SHIFT)  // Needed.  See above comments.
+				if (vk == VK_LSHIFT || vk == VK_RSHIFT)  // Needed.  See above comments. vk == VK_SHIFT not needed.
 					// If a shift key is the suffix key, this must be done every time,
 					// not just the first:
 					KeyEvent(KEYUP, vk, sc);
@@ -1616,9 +1793,10 @@ if (!g_KeybdHook)
 
 	if (hotkey_id == HOTKEY_ID_INVALID)  // Keep checking since above didn't find one.
 	{
-		modLR_type modifiersLRnew = g_modifiersLR_logical;
+		modifiersLRnew = g_modifiersLR_logical_non_ignored;
 #ifdef INCLUDE_KEYBD_HOOK
 		if (pThisKey->as_modifiersLR)
+			// Hotkeys are not defined to modify themselves, so look for a match accordingly.
 			modifiersLRnew &= ~pThisKey->as_modifiersLR;
 		GET_HOTKEY_ID_AND_FLAGS(ksc[sc].sc_takes_precedence ? Kscm(modifiersLRnew, sc) : Kvkm(modifiersLRnew, vk));
 		if (hotkey_id == HOTKEY_ID_INVALID && alt_tab_menu_is_visible)
@@ -1629,7 +1807,7 @@ if (!g_KeybdHook)
 			GET_HOTKEY_ID_AND_FLAGS(ksc[sc].sc_takes_precedence ? Kscm(modifiersLRnew, sc) : Kvkm(modifiersLRnew, vk));
 		}
 #else // Mouse hook:
-		GET_HOTKEY_ID_AND_FLAGS(Kvkm(g_modifiersLR_logical, vk));
+		GET_HOTKEY_ID_AND_FLAGS(Kvkm(g_modifiersLR_logical_non_ignored, vk));
 		if (hotkey_id == HOTKEY_ID_INVALID && alt_tab_menu_is_visible)
 		{
 			modifiersLRnew &= ~(MOD_LALT | MOD_RALT);
@@ -1659,12 +1837,14 @@ if (!g_KeybdHook)
 				// previous down-event for it (in its role as a prefix) would not
 				// have been suppressed:
 #ifdef INCLUDE_KEYBD_HOOK
-				return (pThisKey->as_modifiersLR 
+				// NO_SUPPRESS_PREFIX can occur if it fell through from Case #3 but the right
+				// modifier keys aren't down to have triggered a key-up hotkey:
+				return (pThisKey->as_modifiersLR || (pThisKey->no_suppress & NO_SUPPRESS_PREFIX)
 					// The order on this line important; it relies on short-circuit boolean:
-					|| (pThisKey->pForceToggle != NULL && *pThisKey->pForceToggle == NEUTRAL))
+					|| (pThisKey->pForceToggle && *pThisKey->pForceToggle == NEUTRAL))
 					? AllowKeyToGoToSystem : SuppressThisKey;
 #else
-				return SuppressThisKey;
+				return (pThisKey->no_suppress & NO_SUPPRESS_PREFIX) ? AllowKeyToGoToSystem : SuppressThisKey;
 #endif
 			// For execution to have reached this point, the current key must be both a prefix and
 			// suffix, but be acting in its capacity as a suffix.  Since no hotkey action will fire,
@@ -1719,7 +1899,7 @@ if (!g_KeybdHook)
 			disguise_next_ralt_up = true;
 	}
 
-	switch(hotkey_id)
+	switch (hotkey_id)
 	{
 		case HOTKEY_ID_ALT_TAB_MENU_DISMISS: // This case must occur before HOTKEY_ID_ALT_TAB_MENU due to non-break.
 			if (!alt_tab_menu_is_visible)
@@ -1768,9 +1948,9 @@ if (!g_KeybdHook)
 				// Unlike CONTROL, SHIFT, AND ALT, the LWIN/RWIN keys don't seem to need any
 				// special handling to make them work with the alt-tab features.
 
-				bool vk_is_alt = vk == VK_LMENU || vk == VK_RMENU || vk == VK_MENU;
-				bool vk_is_shift = vk == VK_LSHIFT || vk == VK_RSHIFT || vk == VK_SHIFT;
-				bool vk_is_control = vk == VK_LCONTROL || vk == VK_RCONTROL || vk == VK_CONTROL;
+				bool vk_is_alt = vk == VK_LMENU || vk == VK_RMENU;  // Tranlated & no longer needed: || vk == VK_MENU;
+				bool vk_is_shift = vk == VK_LSHIFT || vk == VK_RSHIFT;  // || vk == VK_SHIFT;
+				bool vk_is_control = vk == VK_LCONTROL || vk == VK_RCONTROL;  // || vk == VK_CONTROL;
 
 				vk_type which_shift_down = 0;
 				if (g_modifiersLR_logical & MOD_LSHIFT)
@@ -1828,7 +2008,7 @@ if (!g_KeybdHook)
 				// Only put it put it back down if it wasn't the hotkey itself, because
 				// the system would never have known it was down because the down-event
 				// on the hotkey would have been suppressed.  And since the up-event
-				// will also be suppressed, putting it down like this will result in
+				// will also be suppressed, putting it down like this would result in
 				// it being permanently down even after the user releases the key!:
 				if (shift_put_up && !vk_is_shift) // Must do this regardless of the value of key_up.
 					KeyEvent(KEYDOWN, which_shift_down);
@@ -1871,19 +2051,15 @@ if (!g_KeybdHook)
 			// after putting them up since that would probably cause them to become
 			// stuck down due to the fact that the user's physical release of the
 			// key will be suppressed (since it's a hotkey):
-			if (    !key_up && (vk == VK_LCONTROL || vk == VK_RCONTROL || vk == VK_CONTROL
-				|| vk == VK_LSHIFT || vk == VK_RSHIFT || vk == VK_SHIFT)
+			if (!key_up && (vk == VK_LCONTROL || vk == VK_RCONTROL || vk == VK_LSHIFT || vk == VK_RSHIFT))
 				// Don't do the ALT key because it causes more problems than it solves
-				// (in fact, it might not solve any at all):
-				// || vk == VK_LMENU || vk == VK_RMENU || vk == VK_MENU   
-				)
+				// (in fact, it might not solve any at all).
 				KeyEvent(KEYUP, vk); // Can't send sc here since it's not defined for the mouse hook.
 
 			// Even when the menu is visible, it's possible that neither of the ALT keys
 			// is down, at least under XP (probably NT and 2k also).  Not sure about Win9x:
 			if (   !((g_modifiersLR_logical & MOD_LALT) || (g_modifiersLR_logical & MOD_RALT))
-				|| (key_up && (vk == VK_LMENU || vk == VK_RMENU || vk == VK_MENU))
-				)
+				|| (key_up && (vk == VK_LMENU || vk == VK_RMENU))   )
 				KeyEvent(KEYDOWN, VK_MENU);
 				// And never put it back up because that would dismiss the menu.
 			// Otherwise, use keystrokes to navigate through the menu:
@@ -1935,27 +2111,25 @@ if (!g_KeybdHook)
 	pKeyHistoryCurr->event_type = 'h'; // h = hook hotkey (not one registered with RegisterHotkey)
 
 #ifdef INCLUDE_KEYBD_HOOK
-	if (pThisKey->pForceToggle != NULL) // Key is a toggleable key.
+	if (key_up && pThisKey->used_as_prefix && pThisKey->pForceToggle) // Key is a toggleable key.
 		if (*pThisKey->pForceToggle == NEUTRAL) // Dereference to get the global var's value.
-			if (pThisKey->used_as_prefix && key_up)
-			{
-				// In this case, since all the above conditions are true, the key-down
-				// event for this key-up (which fired a hotkey) would not have been
-				// suppressed.  Thus, we should toggle the state of the key back
-				// the what it was before the user pressed it (due to the policy that
-				// the natural function of a key should never take effect when that
-				// key is used as a hotkey suffix).  You could argue that instead
-				// of doing this, we should *pForceToggle's value to make the
-				// key untoggleable whenever it's both a prefix and a naked
-				// (key-up triggered) suffix.  However, this isn't too much harder
-				// and has the added benefit of allowing the key to be toggled if
-				// a modifier is held down before it (e.g. alt-CapsLock would then
-				// be able to toggle the CapsLock key):
-				KEYEVENT_PHYS(KEYUP, vk, sc); // Mark it as physical for any other hook instances.
-				KeyEvent(KEYDOWN, vk, sc);
-				KeyEvent(KEYUP, vk, sc);
-				return SuppressThisKey;
-			}
+		{
+			// In this case, since all the above conditions are true, the key-down
+			// event for this key-up (which fired a hotkey) would not have been
+			// suppressed.  Thus, we should toggle the state of the key back
+			// the what it was before the user pressed it (due to the policy that
+			// the natural function of a key should never take effect when that
+			// key is used as a hotkey suffix).  You could argue that instead
+			// of doing this, we should *pForceToggle's value to make the
+			// key untoggleable whenever it's both a prefix and a naked
+			// (key-up triggered) suffix.  However, this isn't too much harder
+			// and has the added benefit of allowing the key to be toggled if
+			// a modifier is held down before it (e.g. alt-CapsLock would then
+			// be able to toggle the CapsLock key):
+			KEYEVENT_PHYS(KEYUP, vk, sc); // Mark it as physical for any other hook instances.
+			KeyEvent(KEYDOWNANDUP, vk, sc);
+			return SuppressThisKey;
+		}
 
 	if (pThisKey->as_modifiersLR && key_up)
 		// Since this hotkey is fired on a key-up event, and since it's a modifier, must
@@ -1967,12 +2141,6 @@ if (!g_KeybdHook)
 
 	if (key_up)
 	{
-		// Currently not supporting the mouse buttons for this method, becuase KeyEvent()
-		// doesn't support the translation of a mouse-VK into a mouse_event() call.
-		// Such a thing might not work anyway because the hook probably received extra
-		// info such as the location where the mouse click should occur and other things.
-		// That info plus anything else relevant in MSLLHOOKSTRUCT would have to be
-		// translated into the correct info for a call to mouse_event().
 		if (no_suppress) // Plus we know it's not a modifier since otherwise it would've returned above.
 		{
 			// Since this hotkey is firing on key-up but the user specified not to suppress its native
@@ -1987,6 +2155,13 @@ if (!g_KeybdHook)
 				// before the UP because the above should already have "finished" by now, since
 				// it resulted in a recursive call to this function (using our current thread
 				// rather than some other re-entrant thread):
+//#else // Mouse hook.
+// Currently not supporting the mouse buttons for the above method, becuase KeyEvent()
+// doesn't support the translation of a mouse-VK into a mouse_event() call.
+// Such a thing might not work anyway because the hook probably received extra
+// info such as the location where the mouse click should occur and other things.
+// That info plus anything else relevant in MSLLHOOKSTRUCT would have to be
+// translated into the correct info for a call to mouse_event().
 #endif
 			return AllowKeyToGoToSystem;
 		}
@@ -1997,7 +2172,11 @@ if (!g_KeybdHook)
 		pThisKey->down_performed_action = true;
 		// Also update this in case the currently-down Prefix key is both a modifier
 		// and a normal prefix key (in which case it isn't stored in pThisKey's array
-		// of VK and SC prefixes, so this value wouldn't have yet been set):
+		// of VK and SC prefixes, so this value wouldn't have yet been set).
+		// Update: The below is done even if pPrefixKey != pThisKey, which happens
+		// when we reached this point after having fallen through from Case #1 above.
+		// The reason for this is that we just fired a hotkey action for this key,
+		// so we don't want it's action to fire again upon key-up:
 		if (pPrefixKey)
 			pPrefixKey->was_just_used = AS_PREFIX_FOR_HOTKEY;
 		if (no_suppress) // Plus we know it's not a modifier since otherwise it would've returned above.

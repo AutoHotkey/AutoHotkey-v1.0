@@ -534,18 +534,54 @@ HWND WinActive(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeTex
 		// User passed no params, so use the window most recently found by WinExist().
 		return (fore_win == g_ValidLastUsedWindow) ? fore_win : NULL;
 
-	char active_win_title[WINDOW_TEXT_SIZE];
+	char win_title[WINDOW_TEXT_SIZE];
+
+	if (!strnicmp(aTitle, AHK_ID_FLAG, AHK_ID_FLAG_LENGTH))
+	{
+		// Use ATOU64() so that the full unsigned capacity of a 32-bit address can be read back in,
+		// and so that 64-bit memory addresses will be supported if the compiler uses them:
+		target_window = (HWND)ATOU64(aTitle + AHK_ID_FLAG_LENGTH);
+		if (target_window != fore_win || !IsWindow(target_window)) // g.DetectHiddenWindows was already checked above.
+			return NULL;
+		// Check if this specific window is excluded due to its title.
+		// This section is similar to the one in WinExist(), so maintain them together:
+		if (*aExcludeTitle)
+		{
+			if (GetWindowText(target_window, win_title, sizeof(win_title)))
+			{
+				switch(g.TitleMatchMode)
+				{
+				case FIND_ANYWHERE:
+					if (strstr(win_title, aExcludeTitle))
+						return NULL;
+					break;
+				case FIND_IN_LEADING_PART:
+					if (!strncmp(win_title, aExcludeTitle, strlen(aExcludeTitle)))
+						return NULL;
+					break;
+				default:
+					if (!strcmp(win_title, aExcludeTitle))
+						return NULL;
+				}
+			}
+		}
+		if (HasMatchingChild(target_window, aText, aExcludeText))
+			UPDATE_AND_RETURN_LAST_USED_WINDOW(target_window)
+		else
+			return NULL;
+	}
+
+	// Otherwise:
 	// Don't use GetWindowTextByTitleMatchMode() because Aut3 uses the same fast
 	// method as below for window titles:
-	if (!GetWindowText(fore_win, active_win_title, sizeof(active_win_title)))
+	if (!GetWindowText(fore_win, win_title, sizeof(win_title)))
 		// UPDATE: This method effectively prevented windows without titles, such as
 		// "ahk_class Shell_TrayWnd", from ever been findable by the script.  So now
 		// allow it to continue instead:
 		//return NULL;
-		*active_win_title = '\0';
+		*win_title = '\0';
 
-	if (!IsTitleMatch(fore_win, active_win_title, aTitle, aExcludeTitle))
-		// Active window's title doesn't match.
+	if (!IsTitleMatch(fore_win, win_title, aTitle, aExcludeTitle)) // Active window's title doesn't match.
 		return NULL;
 
 	// Otherwise confirm the match by ensuring that active window has a child that contains <aText>.
@@ -560,7 +596,10 @@ HWND WinActive(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeTex
 
 HWND WinExist(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
 	, bool aFindLastMatch, bool aUpdateLastUsed
-	, HWND aAlreadyVisited[], int aAlreadyVisitedCount)
+	, HWND aAlreadyVisited[], int aAlreadyVisitedCount, bool aReturnTheCount)
+// If caller specifies true for aReturnTheCount, the count of how many windows match the
+// given parameters will be returned, in which case aUpdateLastUsed is always considered
+// to be false regardless of what was passed.
 {
 	// Seems okay to allow both title and text to be NULL or empty.  It would then find the first window
 	// of any kind (and there's probably always at least one, even on a blank desktop).
@@ -575,6 +614,9 @@ HWND WinExist(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
 		// User asked us if the "active" window exists, which is true if it's not a
 		// hidden window or DetectHiddenWindows is ON:
 		SET_TARGET_TO_ALLOWABLE_FOREGROUND
+		if (aReturnTheCount)
+			return (HWND)(target_window ? 1 : 0);
+		// Otherwise:
 		// Updating LastUsed to be hwnd even if it's NULL seems best for consistency?
 		// UPDATE: No, it's more flexible not to never set it to NULL, because there
 		// will be times when the old value is still useful:
@@ -582,14 +624,61 @@ HWND WinExist(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
 	}
 
 	if (!*aTitle && !*aText && !*aExcludeTitle && !*aExcludeText)
+	{
 		// User passed no params, so use the window most recently found by WinExist().
 		// It's correct to do this even in this function because it's called by
 		// WINWAITCLOSE and IFWINEXIST specifically to discover if the Last-Used
 		// window still exists.
+		target_window = g_ValidLastUsedWindow;
+		if (aReturnTheCount)
+			return (HWND)(target_window ? 1 : 0);
 		return g_ValidLastUsedWindow;
+	}
 
+	if (!strnicmp(aTitle, AHK_ID_FLAG, AHK_ID_FLAG_LENGTH)) // In this case aFindLastMatch is ignored.
+	{
+		// Use ATOU64() so that the full unsigned capacity of a 32-bit address can be read back in,
+		// and so that 64-bit memory addresses will be supported if the compiler uses them:
+		target_window = (HWND)ATOU64(aTitle + AHK_ID_FLAG_LENGTH);
+		if (   !IsWindow(target_window) || (!g.DetectHiddenWindows && !IsWindowVisible(target_window))   )
+			return NULL; // NULL will be interpreted as zero in the case of aReturnTheCount.
+
+		// Check if this specific window is excluded due to its title.
+		// This section is similar to the one in WinActive(), so maintain them together:
+		if (*aExcludeTitle)
+		{
+			char win_title[WINDOW_TEXT_SIZE];
+			if (GetWindowText(target_window, win_title, sizeof(win_title)))
+			{
+				switch(g.TitleMatchMode)
+				{
+				case FIND_ANYWHERE:
+					if (strstr(win_title, aExcludeTitle))
+						return NULL; // NULL will be interpreted as zero in the case of aReturnTheCount.
+					break;
+				case FIND_IN_LEADING_PART:
+					if (!strncmp(win_title, aExcludeTitle, strlen(aExcludeTitle)))
+						return NULL;
+					break;
+				default:
+					if (!strcmp(win_title, aExcludeTitle))
+						return NULL;
+				}
+			}
+		}
+		if (HasMatchingChild(target_window, aText, aExcludeText))
+		{
+			if (aReturnTheCount) // The last found window is never updated in this case.
+				return (HWND)1;
+			UPDATE_AND_RETURN_LAST_USED_WINDOW(target_window)
+		}
+		else
+			return NULL; // NULL will be interpreted as zero in the case of aReturnTheCount.
+	}
+
+	// Otherwise (the above didn't return):
 	WindowInfoPackage wip;
-	wip.find_last_match = aFindLastMatch;
+	wip.find_last_match = aFindLastMatch || aReturnTheCount; // aReturnTheCount implies aFindLastMatch
 	strlcpy(wip.title, aTitle, sizeof(wip.title));
 	strlcpy(wip.text, aText, sizeof(wip.text));
 	strlcpy(wip.exclude_title, aExcludeTitle, sizeof(wip.exclude_title));
@@ -601,6 +690,8 @@ HWND WinExist(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
 	// the enumeration prematurely by returning false to its caller.  Otherwise (the enumeration went
 	// through every window), it returns TRUE:
 	EnumWindows(EnumParentFind, (LPARAM)&wip);
+	if (aReturnTheCount) // The last found window is never updated in this case.
+		return (HWND)wip.match_count;
 	UPDATE_AND_RETURN_LAST_USED_WINDOW(wip.parent_hwnd);
 }
 
@@ -658,7 +749,7 @@ BOOL CALLBACK EnumParentFind(HWND aWnd, LPARAM lParam)
 		// value and just check the struct's child_hwnd to determine whether a match has been found:
 		pWin->child_hwnd = NULL;  // Init prior to each call, in case find_last_match is true.
 		EnumChildWindows(aWnd, EnumChildFind, lParam);
-		if (pWin->child_hwnd == NULL)
+		if (!pWin->child_hwnd)
 			// This parent has no matching child, or no children at all, so search for more parents:
 			return TRUE;
 	}
@@ -667,6 +758,24 @@ BOOL CALLBACK EnumParentFind(HWND aWnd, LPARAM lParam)
 	// If find_last_match is true, this value will stay in effect unless overridden
 	// by another matching window:
 	pWin->parent_hwnd = aWnd;
+	++pWin->match_count;  // This must be done prior to the pWin->array_start section below.
+
+	if (pWin->array_start)
+	{
+		// Make it longer than Max var name so that FindOrAddVar() will be able to spot and report
+		// var names that are too long:
+		char var_name[MAX_VAR_NAME_LENGTH + 20];
+		snprintf(var_name, sizeof(var_name), "%s%u", pWin->array_start->mName, pWin->match_count);
+		// To help performance (in case the linked list of variables is huge), tell it where
+		// to start the search.  Use the base array name rather than the preceding element because,
+		// for example, Array19 is alphabetially less than Array2, so we can't rely on the
+		// numerical ordering:
+		Var *array_item = g_script.FindOrAddVar(var_name, VAR_NAME_LENGTH_DEFAULT, pWin->array_start);
+		if (array_item)
+			array_item->AssignHWND(aWnd);  // Failure not checked since very rare, and way to report it yet.
+		// else no error reporting currently, since should be very rare.
+		return TRUE;  // Always do the entire enumeration when caller wants windows saved to an array.
+	}
 
 	// If find_last_match is true, continue searching.  Otherwise, this first match is the one
 	// that's desired so stop here:
@@ -689,7 +798,11 @@ BOOL CALLBACK EnumChildFind(HWND aWnd, LPARAM lParam)
 		return TRUE;  // Even if can't get the text of some window, for some reason, keep enumerating.
 	// Below: Tell it to find match anywhere in the child-window text, rather than just
 	// in the leading part, because this is how AutoIt2 and AutoIt3 operate:
-	if (IsTextMatch(win_text, pWin->text, pWin->exclude_text, FIND_ANYWHERE))
+	if (*pWin->exclude_text && strstr(win_text, pWin->exclude_text))
+		// Since this child window contains the specified ExcludeText, the parent window is
+		// always a non-match:
+		return FALSE;
+	if (IsTextMatch(win_text, pWin->text, FIND_ANYWHERE))
 	{
 		// Match found, so stop searching.
 		//char class_name[64];
@@ -776,7 +889,7 @@ ResultType StatusBarUtil(Var *aOutputVar, HWND aControlWindow, int aPartNumber
 			start_time = GetTickCount();
 
 		LPVOID pMem;
-		if (g_os.IsWinNT())
+		if (g_os.IsWinNT())  // NT/2k/XP/2003 and family
 		{
 			DWORD dwPid;
 			GetWindowThreadProcessId(aControlWindow, &dwPid);
@@ -1252,6 +1365,37 @@ BOOL CALLBACK EnumParentFindOwned(HWND aWnd, LPARAM lParam)
 		return FALSE; // Match found, we're done.
 	}
 	return TRUE;  // Continue enumerating.
+}
+
+
+
+HWND GetNonChildParent(HWND aWnd)
+// Returns the first ancestor of aWnd that isn't itself a child.  aWnd itself is returned if
+// it is not a child.  Returns NULL only if aWnd is NULL.  Also, it should always succeed
+// based on the axiom that any window with the WS_CHILD (aka WS_CHILDWINDOW) style must have
+// a non-child ancestor somewhere up the line.
+// This function doesn't do anything special with owned vs. unowned windows.  Despite what MSDN
+// says, GetParent() does not return the owner window, at least in some cases on Windows XP
+// (e.g. BulletProof FTP Server). It returns NULL instead. In any case, it seems best not to
+// worry about owner windows for this function's caller (MouseGetPos()), since it might be
+// desirable for that command to return the owner window even though it can't actually be
+// activated.  This is because attempts to activate an owner window should automatically cause
+// the OS to activate the topmost owned window instead.  In addition, the owner window may
+// contain the actual title or text that the user is interested in.  UPDATE: Due to the fact
+// that this function retrieves the first parent that's not a child window, it's likely that
+// that window isn't its owner anyway (since the owner problem usually applies to a parent
+// window being owned by some controlling window behind it).
+{
+	if (!aWnd) return aWnd;
+	HWND parent, parent_prev;
+	for (parent_prev = aWnd; ; parent_prev = parent)
+	{
+		if (!(GetWindowLong(parent_prev, GWL_STYLE) & WS_CHILD))  // Found the first non-child parent, so return it.
+			return parent_prev;
+		// Because Windows 95 doesn't support GetAncestor(), we'll use GetParent() instead:
+		if (   !(parent = GetParent(parent_prev))   )
+			return parent_prev;  // This will return aWnd if aWnd has no parents.
+	}
 }
 
 

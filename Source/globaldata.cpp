@@ -34,6 +34,7 @@ HWND g_hWndToolTip = NULL;
 HACCEL g_hAccelTable = NULL;
 
 modLR_type g_modifiersLR_logical = 0;
+modLR_type g_modifiersLR_logical_non_ignored = 0;
 modLR_type g_modifiersLR_physical = 0;
 
 #ifdef FUTURE_USE_MOUSE_BUTTONS_LOGICAL
@@ -243,6 +244,7 @@ Action g_act[] =
 	, {"StringGetPos", 3, 4, NULL}  // Output Variable, Input Variable, Search Text, R or Right (from right)
 	, {"StringReplace", 3, 5, NULL} // Output Variable, Input Variable, Search String, Replace String, do-all.
 	, {"StringSplit", 2, 5, NULL} // Output Array, Input Variable, Delimiter List (optional), Omit List, Future Use
+	, {"Sort", 1, 2, NULL} // OutputVar (it's also the input var), Options
 
 	, {"EnvSet", 1, 2, NULL} // EnvVar, Value
 	, {"EnvUpdate", 0, 0, NULL}
@@ -273,7 +275,7 @@ Action g_act[] =
 	, {"MouseMove", 2, 4, {1, 2, 3, 0}} // x, y, speed, option
 	, {"MouseClick", 1, 7, {2, 3, 4, 5, 0}} // which-button, x, y, ClickCount, speed, d=hold-down/u=release, Relative
 	, {"MouseClickDrag", 1, 7, {2, 3, 4, 5, 6, 0}} // which-button, x1, y1, x2, y2, speed, Relative
-	, {"MouseGetPos", 0, 2, NULL} // 2 optional output variables: one for xpos, and one for ypos. MinParams must be 0.
+	, {"MouseGetPos", 0, 3, NULL} // 3 optional output vars: xpos, ypos, WindowID. MinParams must be 0.
 
 	, {"StatusBarGetText", 1, 6, {2, 0}} // Output-var, part# (numeric), std. 4 window params
 	, {"StatusBarWait", 0, 8, {2, 3, 6, 0}} // Wait-text(blank ok),seconds,part#,title,text,interval,exclude-title,exclude-text
@@ -315,6 +317,7 @@ Action g_act[] =
 	, {"WinSetTitle", 0, 5, NULL} // title, text, newtitle, exclude-title, exclude-text
 	, {"WinGetTitle", 1, 5, NULL} // Output-var, std. 4 window params
 	, {"WinGetClass", 1, 5, NULL} // Output-var, std. 4 window params
+	, {"WinGet", 1, 6, NULL} // Output-var/array, cmd (if omitted, defaults to ID), std. 4 window params
 	, {"WinGetPos", 0, 8, NULL} // Four optional output vars: xpos, ypos, width, height.  Std. 4 window params.
 	, {"WinGetText", 1, 5, NULL} // Output var, std 4 window params.
 	, {"PostMessage", 1, 8}  // msg, wParam, lParam, Control, WinTitle, WinText, ExcludeTitle, ExcludeText

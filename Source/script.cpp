@@ -1056,7 +1056,6 @@ LineNumberType Script::LoadFromFile()
 			return LOADING_FAILED; // Error.  Above already displayed it for us.
 		// Initialize the var state to zero right before running anything in the script:
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE);
-		mIsReadyToExecute = true;
 
 		// Initialize the random number generator:
 		// Note: On 32-bit hardware, the generator module uses only 2506 bytes of static
@@ -2542,7 +2541,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 // Returns OK or FAIL.
 {
 	if (aActionType == ACT_INVALID)
-		return ScriptError("AddLine() called incorrectly.", aArgc > 0 ? aArg[0] : "");
+		return ScriptError("BAD AddLine", aArgc > 0 ? aArg[0] : "");
 
 	char error_msg[1024];
 	Var *target_var;
@@ -2560,7 +2559,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	else
 	{
 		if (   !(new_arg = (ArgStruct *)SimpleHeap::Malloc(aArgc * sizeof(ArgStruct)))   )
-			return ScriptError("AddLine(): Out of memory.");
+			return ScriptError("AddLine: Out of memory.");
 		int i, j;
 		for (i = 0; i < aArgc; ++i)
 		{
@@ -2571,7 +2570,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			// Before allocating memory for this Arg's text, first check if it's a pure
 			// variable.  If it is, we store it differently (and there's no need to resolve
 			// escape sequences in these cases, since var names can't contain them):
-			if (aActionType == ACT_LOOP && i == 1 && new_arg[0].text && !stricmp(new_arg[0].text, "Parse"))
+			if (aActionType == ACT_LOOP && i == 1 && aArg[0] && !stricmp(aArg[0], "Parse")) // Verified.
+				// i==1 --> 2nd arg's type is based on 1st arg's text.
 				new_arg[i].type = ARG_TYPE_INPUT_VAR;
 			else
 				new_arg[i].type = Line::ArgIsVar(aActionType, i);
@@ -2688,7 +2688,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				// +1 for the "NULL-item" terminator:
 				new_arg[i].deref = (DerefType *)SimpleHeap::Malloc((deref_count + 1) * sizeof(DerefType));
 				if (!new_arg[i].deref)
-					return ScriptError("AddLine(): Out of memory.");
+					return ScriptError("AddLine: Out of memory.");
 				for (j = 0; j < deref_count; ++j)
 				{
 					new_arg[i].deref[j].marker = deref[j].marker;
@@ -2713,7 +2713,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	//////////////////////////////////////////////////////////////////////////////////////
 	Line *line = new Line(mCurrFileNumber, mCurrLineNumber, aActionType, new_arg, aArgc);
 	if (line == NULL)
-		return ScriptError("AddLine(): Out of memory.");
+		return ScriptError("AddLine: Out of memory.");
 	line->mPrevLine = mLastLine;  // Whether NULL or not.
 	if (mFirstLine == NULL)
 		mFirstLine = mLastLine = line;
@@ -3297,6 +3297,11 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				// The output variable has been omitted.
 				return ScriptError("Parameter #1 should not be blank in this case.");
 		}
+		break;
+
+	case ACT_WINGET:
+		if (!line->ArgHasDeref(2) && !line->ConvertWinGetCmd(LINE_RAW_ARG2)) // It's okay if ARG2 is blank.
+			return ScriptError(ERR_WINGET, LINE_RAW_ARG2);
 		break;
 
 	case ACT_WINSET:
@@ -4883,9 +4888,9 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
 			else
 				// This has been tested and it does return the error code indicated in ARG1, if present
 				// (otherwise it returns 0, naturally) as expected:
-				g_script.ExitApp(NULL, ATOI(LINE_ARG1));  // Seems more reliable than PostQuitMessage().
+				g_script.ExitApp(NULL, ATOI(LINE_ARG1));  // Seems more reliable than PostQuitMessage() in this case.
 		case ACT_EXITAPP: // Unconditional exit.
-			g_script.ExitApp(NULL, ATOI(LINE_ARG1));  // Seems more reliable than PostQuitMessage().
+			g_script.ExitApp(NULL, ATOI(LINE_ARG1));  // Seems more reliable than PostQuitMessage() in this case.
 		case ACT_BLOCK_BEGIN:
 			// Don't count block-begin/end against the total since they should be nearly instantaneous:
 			//++g_script.mLinesExecutedThisCycle;
@@ -6159,6 +6164,8 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		return WinGetTitle(ARG2, ARG3, ARG4, ARG5);
 	case ACT_WINGETCLASS:
 		return WinGetClass(ARG2, ARG3, ARG4, ARG5);
+	case ACT_WINGET:
+		return WinGet(ARG2, ARG3, ARG4, ARG5, ARG6);
 	case ACT_WINGETTEXT:
 		return WinGetText(ARG2, ARG3, ARG4, ARG5);
 	case ACT_WINGETPOS:
@@ -6185,7 +6192,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 
 	case ACT_HOTKEY:
 	{
-		HookActionType hook_action;
+		HookActionType hook_action = 0; // Set default.
 		// Since it wasn't resolved at load-time, it must be a variable reference or a special value:
 		if (   !(target_label = (Label *)mAttribute)   )
 			if (   !(hook_action = Hotkey::ConvertAltTab(ARG2, true))   )
@@ -6502,6 +6509,9 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 
 	case ACT_STRINGSPLIT:
 		return StringSplit(ARG1, ARG2, ARG3, ARG4);
+
+	case ACT_SORT:
+		return ScriptSort(ARG2);
 
 	case ACT_GETKEYSTATE:
 		return ScriptGetKeyState(ARG2, ARG3);
@@ -7949,7 +7959,7 @@ ResultType Line::LineError(char *aErrorText, ResultType aErrorType, char *aExtra
 
 
 
-ResultType Script::ScriptError(char *aErrorText, char *aExtraInfo)
+ResultType Script::ScriptError(char *aErrorText, char *aExtraInfo) //, ResultType aErrorType)
 // Even though this is a Script method, including it here since it shares
 // a common theme with the other error-displaying functions:
 {

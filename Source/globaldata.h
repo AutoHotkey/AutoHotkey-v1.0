@@ -30,6 +30,7 @@ extern HWND g_hWndToolTip;  // The tooltip window.
 extern HACCEL g_hAccelTable; // Accelerator table for main menu shortcut keys.
 
 extern modLR_type g_modifiersLR_logical;   // Tracked by hook (if hook is active).
+extern modLR_type g_modifiersLR_logical_non_ignored;
 extern modLR_type g_modifiersLR_physical;  // Same as above except it's which modifiers are PHYSICALLY down.
 
 #ifdef FUTURE_USE_MOUSE_BUTTONS_LOGICAL

@@ -323,7 +323,17 @@ inline bool IsHex(char *aBuf)
 		else\
 			_ultoa(value, buf, 10);\
 	}
-
+#define UTOA64(value, buf) \
+	{\
+		if (g.FormatIntAsHex)\
+		{\
+			*buf = '0';\
+			*(buf + 1) = 'x';\
+			_ui64toa(value, buf + 2, 16);\
+		}\
+		else\
+			_ui64toa(value, buf, 10);\
+	}
 
 
 // Callers rely on PURE_NOT_NUMERIC being zero/false, so order is important:

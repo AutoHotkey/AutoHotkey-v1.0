@@ -190,6 +190,9 @@ LRESULT CALLBACK LowLevelKeybdProc(int code, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam);
 
 HookType RemoveAllHooks();
+HookType RemoveKeybdHook();
+HookType RemoveMouseHook();
+HookType GetActiveHooks();
 HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, HookType aWhichHookAlways
 , bool aWarnIfHooksAlreadyInstalled, bool aActivateOnlySuspendHotkeys = false);
 

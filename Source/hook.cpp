@@ -224,14 +224,17 @@ void SetModifierAsPrefix(vk_type aVK, sc_type aSC, bool aAlwaysSetAsPrefix = fal
 
 
 
-inline HookType GetActiveHooks()
+HookType RemoveAllHooks()
 {
-	HookType hooks_currently_active = 0;
-	if (g_KeybdHook)
-		hooks_currently_active |= HOOK_KEYBD;
-	if (g_MouseHook)
-		hooks_currently_active |= HOOK_MOUSE;
-	return hooks_currently_active;
+	RemoveKeybdHook();
+	RemoveMouseHook();
+	if (kvk) delete [] kvk;
+	if (ksc) delete [] ksc;
+	if (kvkm) delete [] kvkm;
+	if (kscm) delete [] kscm;
+	kvk = ksc = NULL;
+	kvkm = kscm = NULL;
+	return 0;
 }
 
 
@@ -274,17 +277,14 @@ HookType RemoveMouseHook()
 
 
 
-HookType RemoveAllHooks()
+HookType GetActiveHooks()
 {
-	RemoveKeybdHook();
-	RemoveMouseHook();
-	if (kvk) delete [] kvk;
-	if (ksc) delete [] ksc;
-	if (kvkm) delete [] kvkm;
-	if (kscm) delete [] kscm;
-	kvk = ksc = NULL;
-	kvkm = kscm = NULL;
-	return 0;
+	HookType hooks_currently_active = 0;
+	if (g_KeybdHook)
+		hooks_currently_active |= HOOK_KEYBD;
+	if (g_MouseHook)
+		hooks_currently_active |= HOOK_MOUSE;
+	return hooks_currently_active;
 }
 
 
@@ -327,13 +327,13 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 	// performance would be slightly worse for the "average" script).  Presumably, the
 	// caller is requesting the keyboard hook with zero hotkeys to support the forcing
 	// of Num/Caps/ScrollLock always on or off (a fairly rare situation, probably):
-	if (kvk == NULL)  // Since its an initialzied global, this indicates that all 4 objects are not yet allocated.
+	if (!kvk)  // Since its an initialzied global, this indicates that all 4 objects are not yet allocated.
 	{
-		if (NULL != (kvk = new key_type[VK_ARRAY_COUNT]))
-			if (NULL != (ksc = new key_type[SC_ARRAY_COUNT]))
-				if (NULL != (kvkm = new HotkeyIDType[KVKM_SIZE]))
+		if (kvk = new key_type[VK_ARRAY_COUNT])
+			if (ksc = new key_type[SC_ARRAY_COUNT])
+				if (kvkm = new HotkeyIDType[KVKM_SIZE])
 					kscm = new HotkeyIDType[KSCM_SIZE];
-		if (kvk == NULL || ksc == NULL || kvkm == NULL || kscm == NULL) // at least one of the allocations failed
+		if (!kvk || !ksc || !kvkm || !kscm) // at least one of the allocations failed
 		{
 			// Keep all 4 objects in sync with one another (i.e. either all allocated, or all not allocated):
 			if (kvk) delete [] kvk;
@@ -425,8 +425,7 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 	{
 		// If it's not a hook hotkey (e.g. it was already registered with RegisterHotkey() or it's a joystick
 		// hotkey) don't process it here:
-		if ((aHK[i]->mType != HK_KEYBD_HOOK && aHK[i]->mType != HK_MOUSE_HOOK && aHK[i]->mType != HK_BOTH_HOOKS)
-			|| !aHK[i]->mEnabled)
+		if (!TYPE_IS_HOOK(aHK[i]->mType) || !aHK[i]->mEnabled)
 			continue;
 
 		// So aHK[i] is a hook hotkey.  But if the caller specified true for aActivateOnlySuspendHotkeys,
@@ -717,7 +716,7 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 			ZeroMemory(g_PhysicalKeyState, sizeof(g_PhysicalKeyState));
 			pPrefixKey = NULL;
 			g_modifiersLR_physical = 0;  // Best to make this zero, otherwise keys might get stuck down after a Send.
-			g_modifiersLR_logical = GetModifierLRState(true);
+			g_modifiersLR_logical = g_modifiersLR_logical_non_ignored = GetModifierLRState(true);
 			disguise_next_lwin_up = disguise_next_rwin_up = disguise_next_lalt_up = disguise_next_ralt_up
 				= alt_tab_menu_is_visible = false;
 			ZeroMemory(pad_state, sizeof(pad_state));
@@ -814,7 +813,7 @@ char *GetHookStatus(char *aBuf, size_t aBufSize)
 		"Prefix key is down: %s\r\n"
 		, ModifiersLRToText(g_modifiersLR_logical, LRhText)
 		, ModifiersLRToText(g_modifiersLR_physical, LRpText)
-		, pPrefixKey == NULL ? "no" : "yes");
+		, pPrefixKey ? "yes" : "no");
 
 	if (!g_KeybdHook)
 		snprintfcat(aBuf, aBufSize, "\r\n"

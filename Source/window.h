@@ -52,6 +52,8 @@ if (USE_FOREGROUND_WINDOW(title, text, exclude_title, exclude_text))\
 #define WINDOW_CLASS_SIZE 1024  // Haven't found anything that documents how long one can be, so use this.
 #define AHK_CLASS_FLAG "ahk_class"
 #define AHK_CLASS_FLAG_LENGTH 9  // The length of the above string.
+#define AHK_ID_FLAG "ahk_id"
+#define AHK_ID_FLAG_LENGTH 6  // The length of the above string.
 
 struct WindowInfoPackage // A simple struct to help with EnumWindows().
 {
@@ -61,15 +63,17 @@ struct WindowInfoPackage // A simple struct to help with EnumWindows().
 	char exclude_text[SEARCH_PHRASE_SIZE];
 	// Whether to keep searching even after a match is found, so that last one is found.
 	bool find_last_match;
-		// Above made into int vs. FindMatchType so it can be used for other purposes.
+	int match_count;
 	HWND parent_hwnd, child_hwnd; // Returned to the caller, but the caller should initialize it to NULL beforehand.
 	HWND *already_visited; // Array of HWNDs to exclude from consideration.
 	int already_visited_count;
 	WindowSpec *win_spec; // Linked list.
+	Var *array_start; // Used by WinGet() to fetch an array of matching HWNDs.
 	WindowInfoPackage::WindowInfoPackage()
 		: find_last_match(false) // default
+		, match_count(0)
 		, parent_hwnd(NULL), child_hwnd(NULL), already_visited(NULL), already_visited_count(0)
-		, win_spec(NULL)
+		, win_spec(NULL), array_start(NULL)
 	{
 		// Can't use initializer list for these:
 		*title = *text = *exclude_title = *exclude_text = '\0';
@@ -114,7 +118,7 @@ HWND WinActive(char *aTitle, char *aText = "", char *aExcludeTitle = "", char *a
 
 HWND WinExist(char *aTitle, char *aText = "", char *aExcludeTitle = "", char *aExcludeText = ""
 	, bool aFindLastMatch = false, bool aUpdateLastUsed = false
-	, HWND aAlreadyVisited[] = NULL, int aAlreadyVisitedCount = 0);
+	, HWND aAlreadyVisited[] = NULL, int aAlreadyVisitedCount = 0, bool aReturnTheCount = false);
 
 BOOL CALLBACK EnumParentFind(HWND hwnd, LPARAM lParam);
 BOOL CALLBACK EnumChildFind(HWND hwnd, LPARAM lParam);
@@ -139,6 +143,7 @@ BOOL CALLBACK EnumDialogClose(HWND hwnd, LPARAM lParam);
 
 HWND WindowOwnsOthers(HWND aWnd);
 BOOL CALLBACK EnumParentFindOwned(HWND aWnd, LPARAM lParam);
+HWND GetNonChildParent(HWND aWnd);
 HWND GetTopChild(HWND aParent);
 bool IsWindowHung(HWND aWnd);
 
@@ -198,21 +203,17 @@ inline HWND HasMatchingChild(HWND aWnd, char *aText, char *aExcludeText)
 	return wip.child_hwnd; // Returns non-NULL on success.
 }
 
-inline bool IsTextMatch(char *aHaystack, char *aNeedle, char *aExcludeText = ""
-	, TitleMatchModes aTitleMatchMode = g.TitleMatchMode)
+inline bool IsTextMatch(char *aHaystack, char *aNeedle, TitleMatchModes aTitleMatchMode = g.TitleMatchMode)
 // To help performance, it's the caller's responsibility to ensure that all params are not NULL.
 // Use the AutoIt2 convention (same in AutoIt3?) of making searches for window titles
 // and text case sensitive: "N.B. Windows titles and text are CASE SENSITIVE!"
 {
 	if (aTitleMatchMode == FIND_ANYWHERE)
-		return (!*aNeedle || strstr(aHaystack, aNeedle)) // Either one of these makes half a match.
-			&& (!*aExcludeText || !strstr(aHaystack, aExcludeText));  // And this is the other half.
+		return !*aNeedle || strstr(aHaystack, aNeedle);
 	else if (aTitleMatchMode == FIND_IN_LEADING_PART)
-		return (!*aNeedle || !strncmp(aHaystack, aNeedle, strlen(aNeedle)))
-			&& (!*aExcludeText || strncmp(aHaystack, aExcludeText, strlen(aExcludeText)));
+		return !*aNeedle || !strncmp(aHaystack, aNeedle, strlen(aNeedle));
 	else // Exact match.
-		return (!*aNeedle || !strcmp(aHaystack, aNeedle))
-			&& (!*aExcludeText || strcmp(aHaystack, aExcludeText));
+		return !*aNeedle || !strcmp(aHaystack, aNeedle);
 }
 
 inline bool IsTitleMatch(HWND aWnd, char *aHaystack, char *aNeedle, char *aExcludeTitle)

@@ -1812,6 +1812,95 @@ ResultType Line::WinGetClass(char *aTitle, char *aText, char *aExcludeTitle, cha
 
 
 
+ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
+{
+	Var *output_var = ResolveVarOfArg(0);  // This is done even for WINGET_CMD_LIST.
+	if (!output_var)
+		return FAIL;
+
+	WinGetCmds cmd = ConvertWinGetCmd(aCmd);
+	// Since command names are validated at load-time, this only happens if the command name
+	// was contained in a variable reference.  But for simplicity of design here, return
+	// failure in this case (unlike other functions similar to this one):
+	if (cmd == WINGET_CMD_INVALID)
+		return LineError(ERR_WINGET ERR_ABORT, FAIL, aCmd);
+
+	bool target_window_determined = true;  // Set default.
+	HWND target_window;
+	IF_USE_FOREGROUND_WINDOW(aTitle, aText, aExcludeTitle, aExcludeText)
+	else if (!*aTitle && !*aText && !*aExcludeTitle && !*aExcludeText)
+		target_window = g_ValidLastUsedWindow;
+	else
+		target_window_determined = false;  // A different method is required.
+
+	// Used with WINGET_CMD_LIST to create an array (if needed).  Make it longer than Max var name
+	// so that FindOrAddVar() will be able to spot and report var names that are too long:
+	char var_name[MAX_VAR_NAME_LENGTH + 20];
+	Var *array_item;
+	WindowInfoPackage wip;
+
+	switch(cmd)
+	{
+	case WINGET_CMD_ID:
+	case WINGET_CMD_IDLAST:
+		if (target_window_determined)
+		{
+			if (target_window)
+				return output_var->AssignHWND(target_window);
+			else
+				return output_var->Assign();
+		}
+		// Otherwise:
+		if (   !(target_window = WinExist(aTitle, aText, aExcludeTitle, aExcludeText, cmd == WINGET_CMD_IDLAST))   )
+			return output_var->Assign();
+		return output_var->AssignHWND(target_window);
+
+	case WINGET_CMD_COUNT:
+		if (target_window_determined) // target_window (if non-NULL) represents exactly 1 window in this case.
+			return output_var->Assign(target_window ? "1" : "0");
+		// Otherwise, have WinExist() get the count for us:
+		return output_var->Assign((DWORD)WinExist(aTitle, aText, aExcludeTitle, aExcludeText, true, false, NULL, 0, true));
+
+	case WINGET_CMD_LIST:
+		// Retrieves a list of HWNDs for the windows that match the given criteria and stores them in
+		// an array.  The number of items in the array is stored in the base array name (unlike
+		// StringSplit, which stores them in array element #0).  This is done for performance reasons
+		// (so that element #0 doesn't have to be looked up at runtime), but mostly because of the
+		// complexity of resolving a parameter than can be either an output-var or an array name at
+		// load-time -- namely that if param #1 were allowed to be an array name, there is ambiguity
+		// about where the name of the array is actually stored depending on whether param#1 was literal
+		// text or a deref.  So it's easier and performs better just to do it this way, even though it
+		// breaks from the StringSplit tradition:
+		if (target_window_determined)
+		{
+			if (!target_window)
+				return output_var->Assign("0"); // 0 windows found
+			// Otherwise, since the target window has been determined, we know that it is
+			// the only window to be put into the array:
+			snprintf(var_name, sizeof(var_name), "%s1", output_var->mName);
+			if (   !(array_item = g_script.FindOrAddVar(var_name))   )  // Find or create element #1.
+				return FAIL;  // It will have already displayed the error.
+			if (!array_item->AssignHWND(target_window))
+				return FAIL;
+			return output_var->Assign("1");  // 1 window found
+		}
+		// Otherwise, the target window(s) have not yet been determined and a special method
+		// is required to gather them.
+		wip.find_last_match = true;
+		wip.array_start = output_var;  // Give it the position in the var list of where the array will be.
+		strlcpy(wip.title, aTitle, sizeof(wip.title));
+		strlcpy(wip.text, aText, sizeof(wip.text));
+		strlcpy(wip.exclude_title, aExcludeTitle, sizeof(wip.exclude_title));
+		strlcpy(wip.exclude_text, aExcludeText, sizeof(wip.exclude_text));
+		EnumWindows(EnumParentFind, (LPARAM)&wip);
+		return output_var->Assign(wip.match_count);
+	}
+
+	return FAIL;  // Never executed (increases maintainability and avoids compiler warning).
+}
+
+
+
 ResultType Line::WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
 {
 	Var *output_var = ResolveVarOfArg(0);
@@ -3441,25 +3530,40 @@ ResultType Line::MouseGetPos()
 	// warned:
 	Var *output_var_x = ResolveVarOfArg(0);  // Ok if NULL.
 	Var *output_var_y = ResolveVarOfArg(1);  // Ok if NULL.
+	Var *output_var_hwnd = ResolveVarOfArg(2);  // Ok if NULL.
 
-	POINT pt;
-	GetCursorPos(&pt);  // Realistically, can't fail?
-	HWND fore_win = GetForegroundWindow();
+	POINT point;
+	GetCursorPos(&point);  // Realistically, can't fail?
 
 	RECT rect = {0};  // ensure it's initialized for later calculations.
-	if (fore_win && !(g.CoordMode & COORD_MODE_MOUSE)) // Using relative vs. absolute coordinates.
+	if (!(g.CoordMode & COORD_MODE_MOUSE)) // Using relative vs. absolute coordinates.
+	{
+		HWND fore_win = GetForegroundWindow();
 		GetWindowRect(fore_win, &rect);  // If this call fails, above default values will be used.
-
-	ResultType result = OK; // Set default;
+	}
 
 	if (output_var_x) // else the user didn't want the X coordinate, just the Y.
-		if (!output_var_x->Assign(pt.x - rect.left))
-			result = FAIL;
+		if (!output_var_x->Assign(point.x - rect.left))
+			return FAIL;
 	if (output_var_y) // else the user didn't want the Y coordinate, just the X.
-		if (!output_var_y->Assign(pt.y - rect.top))
-			result = FAIL;
+		if (!output_var_y->Assign(point.y - rect.top))
+			return FAIL;
 
-	return result;
+	if (!output_var_hwnd)
+		return OK;
+
+	// This is the child window.  Despite what MSDN says, WindowFromPoint() appears to fetch
+	// a non-NULL value even when the mouse is hovering over a disabled control (at least on XP).
+	HWND window_under_cursor = WindowFromPoint(point);
+	if (!window_under_cursor)
+		return output_var_hwnd->Assign();
+	window_under_cursor = GetNonChildParent(window_under_cursor);  // Find the first ancestor that isn't a child.
+	// Testing reveals that an invisible parent window never obscure another window beneath it as seen by
+	// WindowFromPoint().  In other words, the below never happens, so there's no point in having it as a
+	// documented feature:
+	//if (!g.DetectHiddenWindows && !IsWindowVisible(window_under_cursor))
+	//	return output_var_hwnd->Assign();
+	return output_var_hwnd->AssignHWND(window_under_cursor);
 }
 
 
@@ -3588,7 +3692,7 @@ flags can be a combination of:
 	HANDLE				hToken; 
 	TOKEN_PRIVILEGES	tkp; 
 
-	// If we are running NT, make sure we have rights to shutdown
+	// If we are running NT/2k/XP, make sure we have rights to shutdown
 	if (g_os.IsWinNT())
 	{
 		// Get a token for this process.
@@ -3685,7 +3789,7 @@ ResultType Line::StringSplit(char *aArrayName, char *aInputString, char *aDelimi
 		return FAIL;  // It will have already displayed the error.
 
 	if (!*aInputString) // The input variable is blank, thus there will be zero elements.
-		return array0->Assign((int)0);  // Store the count in the 0th element.
+		return array0->Assign("0");  // Store the count in the 0th element.
 
 	DWORD next_element_number;
 	Var *next_element;
@@ -3762,6 +3866,81 @@ ResultType Line::StringSplit(char *aArrayName, char *aInputString, char *aDelimi
 		++next_element_number; // Only increment this if above didn't "continue".
 	}
 	return array0->Assign(next_element_number - 1); // Store the count of how many items were stored in the array.
+}
+
+
+
+ResultType Line::ScriptSort(char *aOptions)
+{
+	return OK;
+
+	//Var *output_var = ResolveVarOfArg(0);
+	//if (!output_var)
+	//	return FAIL;
+
+	//char *var_contents = output_var->Contents();  // In case it's the clipboard.
+	//if (!*var_contents) // Variable is empty, nothing to sort.
+	//	return OK;
+
+	//size_t var_length = strlen(var_contents); // Explicitly calculate because confidence in Var->mLength is only 99%
+	//size_t space_needed = var_length + 1;  // +1 for the final item's zero terminator.
+	//char *buf = (char *)malloc(space_needed);
+	//if (!buf)
+	//	return LineError("Out of mem");  // Short msg. since so rare.
+
+	//g_input.MatchCount = 0;  // Set default.
+	//if (*aMatchList)
+	//{
+	//	// If needed, create the array of pointers that points into MatchBuf to each match phrase:
+	//	if (!g_input.match && !(g_input.match = (char **)malloc(INPUT_ARRAY_BLOCK_SIZE * sizeof(char *))))
+	//		return LineError("Out of mem #1.");  // Short msg. since so rare.
+	//	else
+	//		g_input.MatchCountMax = INPUT_ARRAY_BLOCK_SIZE;
+	//	// If needed, create or enlarge the buffer that contains all the match phrases:
+	//	size_t aMatchList_length = strlen(aMatchList);
+	//	size_t space_needed = aMatchList_length + 1;  // +1 for the final zero terminator.
+	//	if (space_needed > g_input.MatchBufSize)
+	//	{
+	//		g_input.MatchBufSize = (UINT)(space_needed > 4096 ? space_needed : 4096);
+	//		if (g_input.MatchBuf) // free the old one since it's too small.
+	//			free(g_input.MatchBuf);
+	//		if (   !(g_input.MatchBuf = (char *)malloc(g_input.MatchBufSize))   )
+	//		{
+	//			g_input.MatchBufSize = 0;
+	//			return LineError("Out of mem #2.");  // Short msg. since so rare.
+	//		}
+	//	}
+	//	// Copy aMatchList into the match buffer:
+	//	char *source, *dest;
+	//	for (source = aMatchList, dest = g_input.match[g_input.MatchCount] = g_input.MatchBuf; *source; ++source, ++dest)
+	//	{
+	//		if (*source == ',')  // Each comma becomes the terminator of the previous key phrase.
+	//		{
+	//			*dest = '\0';
+	//			if (strlen(g_input.match[g_input.MatchCount])) // i.e. omit empty strings from the match list.
+	//				++g_input.MatchCount;
+	//			if (*(source + 1)) // There is a next element.
+	//			{
+	//				if (g_input.MatchCount >= g_input.MatchCountMax) // Rarely needed, so just realloc() to expand.
+	//				{
+	//					// Expand the array by one block:
+	//					if (   !(g_input.match = (char **)realloc(g_input.match
+	//						, (g_input.MatchCountMax + INPUT_ARRAY_BLOCK_SIZE) * sizeof(char *)))   )
+	//						return LineError("Out of mem #3.");  // Short msg. since so rare.
+	//					else
+	//						g_input.MatchCountMax += INPUT_ARRAY_BLOCK_SIZE;
+	//				}
+	//				g_input.match[g_input.MatchCount] = dest + 1;
+	//			}
+	//		}
+	//		else // Not a comma, so just copy it over.
+	//			*dest = *source;
+	//	}
+	//	*dest = '\0';  // Terminate the last item.
+	//	if (strlen(g_input.match[g_input.MatchCount])) // i.e. omit empty strings from the match list.
+	//		++g_input.MatchCount;
+	//}
+
 }
 
 
@@ -6438,6 +6617,7 @@ ArgTypeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_STRINGLEN:
 		case ACT_STRINGREPLACE:
 		case ACT_STRINGGETPOS:
+		case ACT_SORT:
 		case ACT_GETKEYSTATE:
 		case ACT_CONTROLGETFOCUS:
 		case ACT_CONTROLGETTEXT:
@@ -6461,6 +6641,7 @@ ArgTypeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_MOUSEGETPOS:
 		case ACT_WINGETTITLE:
 		case ACT_WINGETCLASS:
+		case ACT_WINGET:
 		case ACT_WINGETTEXT:
 		case ACT_WINGETPOS:
 		case ACT_PIXELGETCOLOR:
@@ -6506,7 +6687,7 @@ ArgTypeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		break;
 
 	case 2:  // Arg #3
-		if (aActionType == ACT_WINGETPOS)
+		if (aActionType == ACT_WINGETPOS || aActionType == ACT_MOUSEGETPOS)
 			return ARG_TYPE_OUTPUT_VAR;
 		break;
 
@@ -6574,7 +6755,7 @@ ResultType Line::CheckForMandatoryArgs()
 			return LineError("Parameters 4 and 5 must specify a non-blank destination for the drag.");
 		return OK;
 	case ACT_MOUSEGETPOS:
-		if (!ARG_HAS_VAR(1) && !ARG_HAS_VAR(2))
+		if (!ARG_HAS_VAR(1) && !ARG_HAS_VAR(2) && !ARG_HAS_VAR(3))
 			return LineError(ERR_MISSING_OUTPUT_VAR);
 		return OK;
 	case ACT_WINGETPOS:

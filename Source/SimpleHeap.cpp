@@ -21,6 +21,7 @@ GNU General Public License for more details.
 // Static member data:
 SimpleHeap *SimpleHeap::sFirst = NULL;
 SimpleHeap *SimpleHeap::sLast  = NULL;
+char *SimpleHeap::sMostRecentlyAllocated = NULL;
 UINT SimpleHeap::sBlockCount   = 0;
 
 char *SimpleHeap::Malloc(char *aBuf)
@@ -58,10 +59,25 @@ char *SimpleHeap::Malloc(size_t aSize)
 	if (aSize > sLast->mSpaceAvailable)
 		if (NULL == (sLast->mNextBlock = new SimpleHeap))
 			return NULL;
-	char *return_address = sLast->mFreeMarker;
+	char *return_address = sMostRecentlyAllocated = sLast->mFreeMarker;
 	sLast->mFreeMarker += aSize;
 	sLast->mSpaceAvailable -= aSize;
 	return return_address;
+}
+
+
+
+void SimpleHeap::Delete(void *aPtr)
+// If aPtr is the most recently allocated area of memory by SimpleHeap, this will reclaim that
+// memory.  Otherwise, the caller should realize that the memory cannot be reclaimed (i.e. potential
+// memory leak unless caller handles things right).
+{
+	if (aPtr != sMostRecentlyAllocated || !sMostRecentlyAllocated)
+		return;
+	size_t sMostRecentlyAllocated_size = sLast->mFreeMarker - sMostRecentlyAllocated;
+	sLast->mFreeMarker -= sMostRecentlyAllocated_size;
+	sLast->mSpaceAvailable += sMostRecentlyAllocated_size;
+	sMostRecentlyAllocated = NULL; // i.e. no support for anything other than a one-time delete of an item just added.
 }
 
 

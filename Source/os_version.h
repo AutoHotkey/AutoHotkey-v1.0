@@ -33,7 +33,7 @@ public:
 	OS_Version() { Init(); }									// Constructor
 	void	Init(void);											// Call first before use
 
-	bool	IsWinNT(void) {return m_bWinNT;}					// Returns true if NT
+	bool	IsWinNT(void) {return m_bWinNT;}					// Returns true if NT/2k/XP and family.
 	bool	IsWin9x(void) {return m_bWin9x;}					// Returns true if 9x
 
 	bool	IsWinNT4(void) {return m_bWinNT4;}					// Returns true if WinNT 4

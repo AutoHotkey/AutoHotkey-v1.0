@@ -349,7 +349,11 @@ void SendKeys(char *aKeys, HWND aTargetWindow)
 		// since their state should already been correct if things above are designed right:
 		modifiersLR_current = GetModifierLRState();
 		modLR_type keys_to_press_down = modifiersLR_down_physically_and_logically & ~modifiersLR_current;
-		SetModifierLRStateSpecific(keys_to_press_down, modifiersLR_current, KEYDOWN);
+		// Use KEY_IGNORE_ALL_EXCEPT_MODIFIER to tell the hook to adjust g_modifiersLR_logical_non_ignored
+		// because these keys being put back down match the physical pressing of those same keys by the
+		// user, and we want such modifiers to be taken into account for the purpose of deciding whether
+		// other hotkeys should fire (or the same one again if auto-repeating):
+		SetModifierLRStateSpecific(keys_to_press_down, modifiersLR_current, KEYDOWN, KEY_IGNORE_ALL_EXCEPT_MODIFIER);
 	}
 
 	if (prior_capslock_state == TOGGLED_ON) // The current user setting requires us to turn it back on.
@@ -434,7 +438,25 @@ int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, modLR_type aModifiers
 	// changed the value of the modifiers (i.e. aVk/aSC is a modifier).  Admittedly,
 	// that would be pretty strange but it seems the most correct thing to do.
 	if (!aKeyAsModifiersLR) // See prior use of this var for explanation.
-		SetModifierLRState(aModifiersLRPersistent, GetModifierLRState());
+		// It seems best not to use KEY_IGNORE_ALL_EXCEPT_MODIFIER in this case, though there's
+		// a slight chance that a script or two might be broken by not doing so.  The chance
+		// is very slight because the only thing KEY_IGNORE_ALL_EXCEPT_MODIFIER would allow is
+		// something like the following example.  Note that the hotkey below must be a hook
+		// hotkey (even more rare) because registered hotkeys will still see the logical modifier
+		// state and thus fire regardless of whether g_modifiersLR_logical_non_ignored says that
+		// they shouldn't:
+		// #b::Send, {CtrlDown}{AltDown}
+		// $^!a::MsgBox You pressed the A key after pressing the B key.
+		// In the above, making ^!a a hook hotkey prevents it from working in conjunction with #b.
+		// UPDATE: It seems slightly better to have it be KEY_IGNORE_ALL_EXCEPT_MODIFIER for these reasons:
+		// 1) Persistent modifiers are fairly rare.  When they're in effect, it's usually for a reason
+		//    and probably a pretty good one and from a user who knows what they're doing.
+		// 2) The condition that g_modifiersLR_logical_non_ignored was added to fix occurs only when
+		//    the user physically presses a suffix key (or auto-repeats one by holding it down)
+		//    during the course of a SendKeys() operation.  Since the persistent modifiers were
+		//    (by definition) already in effect prior to the Send, putting them back down for the
+		//    purpose of firing hook hotkeys does not seem unreasonable, and may in fact add value:
+		SetModifierLRState(aModifiersLRPersistent, GetModifierLRState(), KEY_IGNORE_ALL_EXCEPT_MODIFIER);
 	return aRepeatCount;
 }
 
@@ -540,7 +562,8 @@ int SendKeySpecial(char aChar, mod_type aModifiers, modLR_type aModifiersLRPersi
 			DoKeyDelay();
 		}
 	}
-	SetModifierLRState(aModifiersLRPersistent, GetModifierLRState()); // See notes in SendKey().
+	// See notes in SendKey():
+	SetModifierLRState(aModifiersLRPersistent, GetModifierLRState(), KEY_IGNORE_ALL_EXCEPT_MODIFIER);
 	return aRepeatCount;
 }
 
@@ -910,7 +933,7 @@ MsgBox(error_text);
 
 
 
-modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLRnow)
+modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLRnow, DWORD aExtraInfo)
 {
 /*
 char buf[2048];
@@ -936,22 +959,22 @@ FileAppend("c:\\templog.txt", buf);
 	// is under load.
 
 	if ((aModifiersLRnow & MOD_LCONTROL) && !(modifiersLRnew & MOD_LCONTROL))
-		KeyEvent(KEYUP, VK_LCONTROL);
+		KeyEvent(KEYUP, VK_LCONTROL, 0, NULL, false, aExtraInfo);
 	else if (!(aModifiersLRnow & MOD_LCONTROL) && (modifiersLRnew & MOD_LCONTROL))
-		KeyEvent(KEYDOWN, VK_LCONTROL);
+		KeyEvent(KEYDOWN, VK_LCONTROL, 0, NULL, false, aExtraInfo);
 	if ((aModifiersLRnow & MOD_RCONTROL) && !(modifiersLRnew & MOD_RCONTROL))
-		KeyEvent(KEYUP, VK_RCONTROL);
+		KeyEvent(KEYUP, VK_RCONTROL, 0, NULL, false, aExtraInfo);
 	else if (!(aModifiersLRnow & MOD_RCONTROL) && (modifiersLRnew & MOD_RCONTROL))
-		KeyEvent(KEYDOWN, VK_RCONTROL);
+		KeyEvent(KEYDOWN, VK_RCONTROL, 0, NULL, false, aExtraInfo);
 	
 	if ((aModifiersLRnow & MOD_LALT) && !(modifiersLRnew & MOD_LALT))
-		KeyEvent(KEYUP, VK_LMENU);
+		KeyEvent(KEYUP, VK_LMENU, 0, NULL, false, aExtraInfo);
 	else if (!(aModifiersLRnow & MOD_LALT) && (modifiersLRnew & MOD_LALT))
-		KeyEvent(KEYDOWN, VK_LMENU);
+		KeyEvent(KEYDOWN, VK_LMENU, 0, NULL, false, aExtraInfo);
 	if ((aModifiersLRnow & MOD_RALT) && !(modifiersLRnew & MOD_RALT))
-		KeyEvent(KEYUP, VK_RMENU);
+		KeyEvent(KEYUP, VK_RMENU, 0, NULL, false, aExtraInfo);
 	else if (!(aModifiersLRnow & MOD_RALT) && (modifiersLRnew & MOD_RALT))
-		KeyEvent(KEYDOWN, VK_RMENU);
+		KeyEvent(KEYDOWN, VK_RMENU, 0, NULL, false, aExtraInfo);
 
 	// Use this to determine whether to put the shift key down temporarily
 	// ourselves.  It would be bad not to check this because then, in these
@@ -963,52 +986,53 @@ FileAppend("c:\\templog.txt", buf);
 	if ((aModifiersLRnow & MOD_LWIN) && !(modifiersLRnew & MOD_LWIN))
 	{
 		if (shift_not_down_now)  // Prevents Start Menu from appearing.
-			KeyEvent(KEYDOWN, VK_SHIFT);
-		KeyEvent(KEYUP, VK_LWIN);
+			KeyEvent(KEYDOWN, VK_SHIFT, 0, NULL, false, aExtraInfo);
+		KeyEvent(KEYUP, VK_LWIN, 0, NULL, false, aExtraInfo);
 		if (shift_not_down_now)
-			KeyEvent(KEYUP, VK_SHIFT);
+			KeyEvent(KEYUP, VK_SHIFT, 0, NULL, false, aExtraInfo);
 	}
 	else if (!(aModifiersLRnow & MOD_LWIN) && (modifiersLRnew & MOD_LWIN))
 	{
 		if (shift_not_down_now)  // Prevents Start Menu from appearing.
-			KeyEvent(KEYDOWN, VK_SHIFT);
-		KeyEvent(KEYDOWN, VK_LWIN);
-		if (shift_not_down_now)
-			KeyEvent(KEYUP, VK_SHIFT);
+			KeyEvent(KEYDOWN, VK_SHIFT, 0, NULL, false, aExtraInfo);
+		KeyEvent(KEYDOWN, VK_LWIN, 0, NULL, false, aExtraInfo);
+		if (shift_not_down_now, 0, NULL, false, aExtraInfo)
+			KeyEvent(KEYUP, VK_SHIFT, 0, NULL, false, aExtraInfo);
 	}
 	if ((aModifiersLRnow & MOD_RWIN) && !(modifiersLRnew & MOD_RWIN))
 	{
 		if (shift_not_down_now)
-			KeyEvent(KEYDOWN, VK_SHIFT);
-		KeyEvent(KEYUP, VK_RWIN);
+			KeyEvent(KEYDOWN, VK_SHIFT, 0, NULL, false, aExtraInfo);
+		KeyEvent(KEYUP, VK_RWIN, 0, NULL, false, aExtraInfo);
 		if (shift_not_down_now)
-			KeyEvent(KEYUP, VK_SHIFT);
+			KeyEvent(KEYUP, VK_SHIFT, 0, NULL, false, aExtraInfo);
 	}
 	else if (!(aModifiersLRnow & MOD_RWIN) && (modifiersLRnew & MOD_RWIN))
 	{
 		if (shift_not_down_now)
-			KeyEvent(KEYDOWN, VK_SHIFT);
-		KeyEvent(KEYDOWN, VK_RWIN);
+			KeyEvent(KEYDOWN, VK_SHIFT, 0, NULL, false, aExtraInfo);
+		KeyEvent(KEYDOWN, VK_RWIN, 0, NULL, false, aExtraInfo);
 		if (shift_not_down_now)
-			KeyEvent(KEYUP, VK_SHIFT);
+			KeyEvent(KEYUP, VK_SHIFT, 0, NULL, false, aExtraInfo);
 	}
 	
 	// Do SHIFT last because the above relies upon its prior state
 	if ((aModifiersLRnow & MOD_LSHIFT) && !(modifiersLRnew & MOD_LSHIFT))
-		KeyEvent(KEYUP, VK_LSHIFT);
+		KeyEvent(KEYUP, VK_LSHIFT, 0, NULL, false, aExtraInfo);
 	else if (!(aModifiersLRnow & MOD_LSHIFT) && (modifiersLRnew & MOD_LSHIFT))
-		KeyEvent(KEYDOWN, VK_LSHIFT);
+		KeyEvent(KEYDOWN, VK_LSHIFT, 0, NULL, false, aExtraInfo);
 	if ((aModifiersLRnow & MOD_RSHIFT) && !(modifiersLRnew & MOD_RSHIFT))
-		KeyEvent(KEYUP, VK_RSHIFT);
+		KeyEvent(KEYUP, VK_RSHIFT, 0, NULL, false, aExtraInfo);
 	else if (!(aModifiersLRnow & MOD_RSHIFT) && (modifiersLRnew & MOD_RSHIFT))
-		KeyEvent(KEYDOWN, VK_RSHIFT);
+		KeyEvent(KEYDOWN, VK_RSHIFT, 0, NULL, false, aExtraInfo);
 
 	return modifiersLRnew;
 }
 
 
 
-void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLRnow, KeyEventTypes aKeyUp)
+void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLRnow, KeyEventTypes aKeyUp
+	, DWORD aExtraInfo)
 // Press or release only the specific keys whose bits are set to 1
 // in aModifiersLR.
 // Technically, there is no need to release both keys of a pair
@@ -1028,29 +1052,29 @@ void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLR
 // any keybd_event() put them up, even if the key is physically down!
 {
 	if (aKeyUp && aKeyUp != KEYUP) aKeyUp = KEYUP;  // In case caller called it wrong.
-	if (aModifiersLR & MOD_LSHIFT) KeyEvent(aKeyUp, VK_LSHIFT);
-	if (aModifiersLR & MOD_RSHIFT) KeyEvent(aKeyUp, VK_RSHIFT);
-	if (aModifiersLR & MOD_LCONTROL) KeyEvent(aKeyUp, VK_LCONTROL);
-	if (aModifiersLR & MOD_RCONTROL) KeyEvent(aKeyUp, VK_RCONTROL);
-	if (aModifiersLR & MOD_LALT) KeyEvent(aKeyUp, VK_LMENU);
-	if (aModifiersLR & MOD_RALT) KeyEvent(aKeyUp, VK_RMENU);
+	if (aModifiersLR & MOD_LSHIFT) KeyEvent(aKeyUp, VK_LSHIFT, 0, NULL, false, aExtraInfo);
+	if (aModifiersLR & MOD_RSHIFT) KeyEvent(aKeyUp, VK_RSHIFT, 0, NULL, false, aExtraInfo);
+	if (aModifiersLR & MOD_LCONTROL) KeyEvent(aKeyUp, VK_LCONTROL, 0, NULL, false, aExtraInfo);
+	if (aModifiersLR & MOD_RCONTROL) KeyEvent(aKeyUp, VK_RCONTROL, 0, NULL, false, aExtraInfo);
+	if (aModifiersLR & MOD_LALT) KeyEvent(aKeyUp, VK_LMENU, 0, NULL, false, aExtraInfo);
+	if (aModifiersLR & MOD_RALT) KeyEvent(aKeyUp, VK_RMENU, 0, NULL, false, aExtraInfo);
 
 	bool shift_not_down_now = !((aModifiersLRnow & MOD_LSHIFT) || (aModifiersLRnow & MOD_RSHIFT));
 	if (aModifiersLR & MOD_LWIN)
 	{
 		if (shift_not_down_now)  // Prevents Start Menu from appearing.
-			KeyEvent(KEYDOWN, VK_SHIFT);
-		KeyEvent(aKeyUp, VK_LWIN);
+			KeyEvent(KEYDOWN, VK_SHIFT, 0, NULL, false, aExtraInfo);
+		KeyEvent(aKeyUp, VK_LWIN, 0, NULL, false, aExtraInfo);
 		if (shift_not_down_now)
-			KeyEvent(KEYUP, VK_SHIFT);
+			KeyEvent(KEYUP, VK_SHIFT, 0, NULL, false, aExtraInfo);
 	}
 	if (aModifiersLR & MOD_RWIN)
 	{
 		if (shift_not_down_now)  // Prevents Start Menu from appearing.
-			KeyEvent(KEYDOWN, VK_SHIFT);
-		KeyEvent(aKeyUp, VK_RWIN);
+			KeyEvent(KEYDOWN, VK_SHIFT, 0, NULL, false, aExtraInfo);
+		KeyEvent(aKeyUp, VK_RWIN, 0, NULL, false, aExtraInfo);
 		if (shift_not_down_now)
-			KeyEvent(KEYUP, VK_SHIFT);
+			KeyEvent(KEYUP, VK_SHIFT, 0, NULL, false, aExtraInfo);
 	}
 }
 

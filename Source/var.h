@@ -73,9 +73,26 @@ public:
 	VarTypeType mType;
 	Var *mNextVar;  // Next item in linked list.
 
+	// Convert to unsigned 64-bit to support for 64-bit pointers.  Since most script operations --
+	// such as addition and comparison -- read strings in as signed 64-bit, it is documented that
+	// math and other numerical operations should never be performed on these while they exist
+	// as strings in script variables:
+	//#define ASSIGN_HWND_TO_VAR(var, hwnd) var->Assign((unsigned __int64)hwnd)
+	// UPDATE: Always assign as hex for better compatibility with Spy++ and other apps that
+	// report window handles:
+	ResultType AssignHWND(HWND aWnd)
+	{
+		char buf[64];
+		*buf = '0';
+		*(buf + 1) = 'x';
+		_ui64toa((unsigned __int64)aWnd, buf + 2, 16);
+		return Assign(buf);
+	}
+
 	ResultType Assign(int aValueToAssign);
 	ResultType Assign(DWORD aValueToAssign);
 	ResultType Assign(__int64 aValueToAssign);
+	//ResultType Assign(unsigned __int64 aValueToAssign);
 	ResultType Assign(double aValueToAssign);
 	ResultType Assign(char *aBuf = NULL, VarSizeType aLength = VARSIZE_MAX, bool aTrimIt = false);
 	VarSizeType Get(char *aBuf = NULL);

@@ -54,6 +54,19 @@ ResultType Var::Assign(__int64 aValueToAssign)
 }
 
 
+// Currently not needed:
+//ResultType Var::Assign(unsigned __int64 aValueToAssign)
+//// Since most script features that "read in" a number from a string (such as addition and comparison)
+//// read the strings as signed values, this function here should only be used when it is documented
+//// that math and comparisons should not be performed on such values.
+//// Returns OK or FAIL.
+//{
+//	char value_string[256];
+//	UTOA64(aValueToAssign, value_string);
+//	return Assign(value_string);
+//}
+
+
 
 ResultType Var::Assign(double aValueToAssign)
 // It's best to call this method -- rather than manually converting to double -- so that the

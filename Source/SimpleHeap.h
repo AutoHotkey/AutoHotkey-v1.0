@@ -40,6 +40,7 @@ private:
 	size_t mSpaceAvailable;
 	static UINT sBlockCount;
 	static SimpleHeap *sFirst, *sLast;  // The first and last objects in the linked list.
+	static char *sMostRecentlyAllocated; // For use with Delete().
 	SimpleHeap *mNextBlock;  // The object after this one in the linked list; NULL if none.
 
 	SimpleHeap();  // Private constructor, since we want only the static methods to be able to create new objects.
@@ -48,7 +49,7 @@ public:
 	static UINT GetBlockCount() {return sBlockCount;}
 	static char *Malloc(char *aBuf); // Return a block of memory to the caller and copy aBuf into it.
 	static char *Malloc(size_t aSize); // Return a block of memory to the caller.
-	static void Delete(char *aPtr) {return;} // Does nothing.  Allows the caller to have a placeholder.
+	static void Delete(void *aPtr);
 	static void DeleteAll();
 };
 

@@ -80,7 +80,7 @@ enum enum_act {
 , ACT_MSGBOX, ACT_INPUTBOX, ACT_SPLASHTEXTON, ACT_SPLASHTEXTOFF, ACT_TOOLTIP, ACT_TRAYTIP, ACT_INPUT
 , ACT_TRANSFORM, ACT_STRINGLEFT, ACT_STRINGRIGHT, ACT_STRINGMID
 , ACT_STRINGTRIMLEFT, ACT_STRINGTRIMRIGHT, ACT_STRINGLOWER, ACT_STRINGUPPER
-, ACT_STRINGLEN, ACT_STRINGGETPOS, ACT_STRINGREPLACE, ACT_STRINGSPLIT
+, ACT_STRINGLEN, ACT_STRINGGETPOS, ACT_STRINGREPLACE, ACT_STRINGSPLIT, ACT_SORT
 , ACT_ENVSET, ACT_ENVUPDATE
 , ACT_RUNAS, ACT_RUN, ACT_RUNWAIT, ACT_URLDOWNLOADTOFILE
 , ACT_GETKEYSTATE
@@ -100,7 +100,7 @@ enum enum_act {
 , ACT_WINHIDE, ACT_WINSHOW
 , ACT_WINMINIMIZEALL, ACT_WINMINIMIZEALLUNDO
 , ACT_WINCLOSE, ACT_WINKILL, ACT_WINMOVE, ACT_WINMENUSELECTITEM
-, ACT_WINSET, ACT_WINSETTITLE, ACT_WINGETTITLE, ACT_WINGETCLASS, ACT_WINGETPOS, ACT_WINGETTEXT
+, ACT_WINSET, ACT_WINSETTITLE, ACT_WINGETTITLE, ACT_WINGETCLASS, ACT_WINGET, ACT_WINGETPOS, ACT_WINGETTEXT
 , ACT_POSTMESSAGE, ACT_SENDMESSAGE
 // Keep rarely used actions near the bottom for parsing/performance reasons:
 , ACT_PIXELGETCOLOR, ACT_PIXELSEARCH
@@ -200,6 +200,7 @@ enum TrayMenuItems {ID_TRAY_OPEN = 16000, ID_TRAY_HELP, ID_TRAY_WINDOWSPY, ID_TR
 #define ERR_CONTROLCOMMAND "Parameter #1 is not a valid Control command."
 #define ERR_CONTROLGETCOMMAND "Parameter #2 is not a valid ControlGet command."
 #define ERR_DRIVECOMMAND "Parameter #2 is not a valid DriveGet command."
+#define ERR_WINGET "Parameter #2 is not a valid WinGet command."
 #define ERR_WINSET "Parameter #1 is not a valid WinSet attribute."
 #define ERR_IFMSGBOX "This line specifies an invalid MsgBox result."
 #define ERR_REG_KEY "The key name must be either HKEY_LOCAL_MACHINE, HKEY_USERS, HKEY_CURRENT_USER, HKEY_CLASSES_ROOT, HKEY_CURRENT_CONFIG, or the abbreviations for these."
@@ -356,6 +357,8 @@ enum JoyControls {JOYCTRL_INVALID, JOYCTRL_XPOS, JOYCTRL_YPOS, JOYCTRL_ZPOS
 , JOYCTRL_BUTTON_MAX = JOYCTRL_32
 };
 
+enum WinGetCmds {WINGET_CMD_INVALID, WINGET_CMD_ID, WINGET_CMD_IDLAST, WINGET_CMD_COUNT, WINGET_CMD_LIST};
+
 enum TransformCmds {TRANS_CMD_INVALID, TRANS_CMD_ASC, TRANS_CMD_CHR, TRANS_CMD_MOD
 	, TRANS_CMD_POW, TRANS_CMD_EXP, TRANS_CMD_SQRT, TRANS_CMD_LOG, TRANS_CMD_LN
 	, TRANS_CMD_ROUND, TRANS_CMD_CEIL, TRANS_CMD_FLOOR, TRANS_CMD_ABS
@@ -421,6 +424,7 @@ private:
 		, LoopReadFileStruct *aCurrentReadFile = NULL);
 	ResultType PerformAssign();
 	ResultType StringSplit(char *aArrayName, char *aInputString, char *aDelimiterList, char *aOmitList);
+	ResultType ScriptSort(char *aOptions);
 	ResultType ScriptGetKeyState(char *aKeyName, char *aOption);
 	ResultType DriveSpace(char *aPath, bool aGetFreeSpace);
 	ResultType DriveGet(char *aCmd, char *aValue);
@@ -520,6 +524,7 @@ private:
 		, char *aExcludeTitle = "", char *aExcludeText = "");
 	ResultType WinGetTitle(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType WinGetClass(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
+	ResultType WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType WinGetPos(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int aColor, int aVariation);
@@ -658,7 +663,7 @@ public:
 	{
 		if (!aArgNum)
 		{
-			LineError("ArgHasDeref() called with a zero (bad habit to get into).", WARN);
+			LineError("BAD", WARN);
 			++aArgNum;  // But let it continue.
 		}
 		if (aArgNum > mArgc) // arg doesn't exist
@@ -706,7 +711,7 @@ public:
 	{
 		if (!aArgNum)
 		{
-			LineError("ArgAllowsNegative() called with a zero (bad habit to get into).");
+			LineError("BAD");
 			++aArgNum;  // But let it continue.
 		}
 		switch(mActionType)
@@ -751,7 +756,7 @@ public:
 	{
 		if (!aArgNum)
 		{
-			LineError("ArgAllowsFloat() called with a zero (bad habit to get into).");
+			LineError("BAD");
 			++aArgNum;  // But let it continue.
 		}
 		switch(mActionType)
@@ -975,6 +980,16 @@ public:
 		if (!stricmp(aBuf, "FAST")) return FIND_FAST;
 		if (!stricmp(aBuf, "SLOW")) return FIND_SLOW;
 		return MATCHMODE_INVALID;
+	}
+
+	static WinGetCmds ConvertWinGetCmd(char *aBuf)
+	{
+		if (!aBuf || !*aBuf) return WINGET_CMD_ID;  // If blank, return the default command.
+		if (!stricmp(aBuf, "ID")) return WINGET_CMD_ID;
+		if (!stricmp(aBuf, "IDLast")) return WINGET_CMD_IDLAST;
+		if (!stricmp(aBuf, "Count")) return WINGET_CMD_COUNT;
+		if (!stricmp(aBuf, "List")) return WINGET_CMD_LIST;
+		return WINGET_CMD_INVALID;
 	}
 
 	static TransformCmds ConvertTransformCmd(char *aBuf)
@@ -1782,7 +1797,7 @@ public:
 	}
 
 	// Call this SciptError to avoid confusion with Line's error-displaying functions:
-	ResultType ScriptError(char *aErrorText, char *aExtraInfo = "");
+	ResultType ScriptError(char *aErrorText, char *aExtraInfo = ""); // , ResultType aErrorType = FAIL);
 
 	#define SOUNDPLAY_ALIAS "AHK_PlayMe"  // Used by destructor and SoundPlay().
 	Script();
