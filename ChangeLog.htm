@@ -6,6 +6,49 @@
 <br>
 <br>
 
+</font><font size=4><b>0.213 BETA - December 15, 2003</b></font><font size=3><br><br>
+ 
+Fixed hotkeys that have LWin/RWin (windows key) as a modifier and that use the Send command: In some cases, the windows key was incorrectly put into the down position after the Send.  [Thanks to Robert Yaklin for discovering this.]  On a related note, you do not need to use the Sleep command to allow the user time to release the modifier keys (Ctrl/Alt/Shift/Win) with hotkeys that use the Send command.  The Send command knows to change the modifiers to what they need to be for every key that will be sent.<br>
+<br>
+Fixed hotkeys that override Windows hotkeys such as Win-E and Win-R so that the Start Menu doesn't appear when the Windows key is released.<br>
+<br>
+Added PixelGetColor and PixelSearch, which mirror AutoIt3's commands of the same name.  These can help with detecting the state of non-standard controls and with the automation of full-screen apps such as games.  See docs for details.<br>
+<br>
+Minor: Undid the previous change mentioned below having to do with "escape chars at the end of a line or that escape a whitespace char".  To conform to AutoIt2 behavior, escape chars that don't escape anything are now removed (i.e. made invisible).<br>
+<br>
+Minor: Changed WinClose to use the WM_CLOSE vs. SC_CLOSE (alt-F4) method so that it's like AutoIt2 and AutoIt3.  The new method is a little less gentle to the target window than the previous method, but it's likely to work on more types of windows.<br>
+<br>
+There's now an automated way to convert a .aut file to .ahk so that you can take full advantage of the new features (some new features -- such as the new params available in some commands -- are disabled in .aut scripts to improve compatibility with AutoIt2).  The conversion will simply make the escape character ` instead of \.  This is harder than it sounds due to the precise ordering of escape sequences in each line, which is why you just can't do a Search & Replace in a text editor.  This automated way should take care of all the details:<br>
+1) Append a .ahk to the end of an existing .aut file, so that filename now ends in ".aut.ahk"<br>
+2) Run this file with AutoHotkey, which, rather than than running the file, will create a new file in the same directory that ends in "-NEW.ahk".  This is the converted version.  The original version will be unchanged.<br>
+3) If you were using #DerefChar in the script, remove it from the converted version.<br>
+<br>
+After converting a script from .aut to .ahk, the main problem areas to check for are commands that accept additional params in .ahk files but not in .aut files.  If you used any non-escaped commas in the param that was formerly the last param (in AutoIt2) but is now not the last param, those commas will be interpreted as delimiters.<br>
+<br>
+Example:<br>
+Msgbox, 0, Title, Text, with, commas<br>
+<br>
+In the above, the string "Text, with, commas" would be interpreted as the last arg by AutoIt2.  But since AutoHotkey supports a new param for the timeout of the MsgBox, the string "with, commas" would be interpreted as the timeout value (which would be caught as a load-time error in this case).<br>
+<br>
+Example #2:<br>
+WinActivate, title, text with literal comma, here.<br>
+<br>
+The above would be a problem after conversion; The string "here." would be interpreted as the new "exclude title" param.<br>
+<br>
+Here is a list of commands that both accept new params and that might be problematic:<br>
+MsgBox<br>
+StringReplace<br>
+StringGetPos<br>
+WinClose/Kill/Activate/Minimize/Maximize/Restore/Hide/Show<br>
+WinSetTitle/WinGetTitle<br>
+<br>
+Note #1: Even though they accept new params in .ahk files, commands such as IfWinExist are not troublesome with respect to the above because the program can tell the difference between the AutoIt2 and AutoHotkey methods.  The WinWait family of commands should also not be a problem.<br>
+<br>
+Note #2: As always, AutoHotkey can run most AutoIt2 (.aut) files directly, without the need to convert to a .ahk file.<br>
+ 
+<br><hr><br>
+
+
 </font><font size=4><b>0.212 BETA - December 8, 2003</b></font><font size=3><br><br>
 
 Added support for a command being on the same line as its ELSE.  Examples:<br>

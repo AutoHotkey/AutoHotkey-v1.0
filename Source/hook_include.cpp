@@ -28,18 +28,14 @@ every prefix key is tracked independently, rather than calling the WinAPI to det
 key is actually down at the moment of consideration.
 */
 
-#ifdef INCLUDE_KEYBD_HOOK
-// pEvent is used for convenience in the functions below:
-#undef pEvent
-#define pEvent ((PKBDLLHOOKSTRUCT)lParam)
-#undef SuppressThisKey
-#define SuppressThisKey SuppressThisKeyFunc(lParam, key_up, pKeyLogCurr)
-inline LRESULT SuppressThisKeyFunc(LPARAM lParam, bool key_up, KeyLogItem *pKeyLogCurr)
 
+// pEvent is a macro for convenience and readability:
+#ifdef INCLUDE_KEYBD_HOOK
+	#undef pEvent
+	#define pEvent ((PKBDLLHOOKSTRUCT)lParam)
 #else // Mouse Hook:
-#define pEvent ((PMSLLHOOKSTRUCT)lParam)
-#define SuppressThisKey SuppressThisKeyFunc(pKeyLogCurr)
-inline LRESULT SuppressThisKeyFunc(KeyLogItem *pKeyLogCurr)
+	#undef pEvent
+	#define pEvent ((PMSLLHOOKSTRUCT)lParam)
 #endif
 
 // MSDN: "The keyboard input can come from the local keyboard driver or from calls to the keybd_event
@@ -47,78 +43,10 @@ inline LRESULT SuppressThisKeyFunc(KeyLogItem *pKeyLogCurr)
 // My: This also applies to mouse events, so use it for them too:
 #define EVENT_IS_PHYSICAL !(pEvent->flags & LLKHF_INJECTED)
 
-{
-	if (pKeyLogCurr->event_type == ' ') // then it hasn't been already set somewhere else
-		pKeyLogCurr->event_type = 's';
-	// This handles the troublesome Numlock key, which on some (most/all?) keyboards
-	// will change state independent of the keyboard's indicator light even if its
-	// keydown and up events are suppressed.  This is certainly true on the
-	// MS Natural Elite keyboard using default drivers on WinXP.  SetKeyboardState()
-	// doesn't resolve this, so the only alternative to the below is to use the
-	// Win9x method of setting the Numlock state explicitly whenever the key is released.
-	// That might be complicated by the fact that the unexpected state change described
-	// here can't be detected by GetKeyboardState() and such (it sees the state indicated
-	// by the numlock light on the keyboard, which is wrong).  In addition, doing it this
-	// way allows Numlock to be a prefix key for something like Numpad7, which would
-	// otherwise be impossible because Numpad7 would become NumpadHome the moment
-	// Numlock was pressed down.  Note: this problem doesn't appear to affect Capslock
-	// or Scrolllock for some reason, possibly hardware or driver related.
-	// Note: the check for KEYIGNORE isn't strictly necessary, but here just for safety
-	// in case this is ever called for a key that should be ignored.  If that were
-	// to happen and we didn't check for it, and endless loop of keyboard events
-	// might be caused due to the keybd events sent below.
-#ifdef INCLUDE_KEYBD_HOOK
-	if (pEvent->vkCode == VK_NUMLOCK && !key_up && pEvent->dwExtraInfo != KEYIGNORE)
-	{
-		// This seems to undo the faulty indicator light problem and toggle
-		// the key back to the state it was in prior to when the user pressed it.
-		// Originally, I had two keydowns and before that some keyups too, but
-		// testing reveals that only a single key-down is needed.  UPDATE:
-		// It appears that all 4 of these key events are needed to make it work
-		// in every situation, especially the case when ForceNumlock is on but
-		// numlock isn't used for any hotkeys.
-		// Note: The only side-effect I've discovered of this method is that the
-		// indicator light can't be toggled after the program is exitted unless the
-		// key is pressed twice:
-		KeyEvent(KEYUP, VK_NUMLOCK);
-		KeyEvent(KEYDOWN, VK_NUMLOCK);
-		KeyEvent(KEYUP, VK_NUMLOCK);
-		KeyEvent(KEYDOWN, VK_NUMLOCK);
-	}
-#endif
-	return 1;
-}
-
-
 
 #ifdef INCLUDE_KEYBD_HOOK
-#undef AllowKeyToGoToSystem
-#define AllowKeyToGoToSystem AllowIt(g_hhkLowLevelKeybd, code, wParam, lParam, sc, key_up, pKeyLogCurr)
-#define AllowKeyToGoToSystemButDisguiseWinKey AllowIt(g_hhkLowLevelKeybd, code, wParam, lParam \
-	, sc, key_up, pKeyLogCurr, true)
-inline LRESULT AllowIt (HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, sc_type sc, bool key_up
-	, KeyLogItem *pKeyLogCurr, bool DisguiseWinKey = false)
+inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 {
-	// In this function, always use pEvent->vkCode rather than accepting vk as a param
-	// from the caller because the caller's vk may have been set to zero to allow
-	// the key's scan code to take precedence.
-
-	// Prevent toggleable keys from being toggled (if the user wanted that) by suppressing it.
-	// Seems best to suppress key-up events as well as key-down, since a key-up by itself,
-	// if seen by the system, doesn't make much sense and might have unwanted side-effects
-	// in rare cases (e.g. if the foreground app takes note of these types of key events).
-	// Don't do this for ignored keys because that could cause an endless loop of
-	// numlock events due to the keybd events that SuppressThisKey sends.
-	// It's a little more readable and comfortable not to rely on short-circuit
-	// booleans and instead do these conditions as separate IF statements.
-	if (pEvent->dwExtraInfo != KEYIGNORE)
-		if (kvk[(vk_type)(pEvent->vkCode)].pForceToggle != NULL) // Key is a toggleable key.
-			// Dereference to get the global var's value:
-			if (*(kvk[(vk_type)(pEvent->vkCode)].pForceToggle) != NEUTRAL) // Prevent toggle.
-				return SuppressThisKey;
-
-	if (!kvk[(vk_type)pEvent->vkCode].as_modifiersLR)
-		return CallNextHookEx(hhk, code, wParam, lParam);
 	// This part is done even if the key is being ignored because we always want their status
 	// to be correct *regardless* of whether the key is ignored.  This is especially important
 	// in cases such as Shift-Alt-Tab and Alt-Tab both have substitutes.  NOTE: We don't want
@@ -435,6 +363,101 @@ inline LRESULT AllowIt (HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, sc_ty
 			}
 		break;
 	}
+}
+#endif
+
+
+
+#ifdef INCLUDE_KEYBD_HOOK
+	#undef SuppressThisKey
+	#define SuppressThisKey SuppressThisKeyFunc(lParam, sc, key_up, pKeyLogCurr)
+	inline LRESULT SuppressThisKeyFunc(LPARAM lParam, sc_type sc, bool key_up, KeyLogItem *pKeyLogCurr)
+#else // Mouse Hook:
+	#undef SuppressThisKey
+	#define SuppressThisKey SuppressThisKeyFunc(pKeyLogCurr)
+	inline LRESULT SuppressThisKeyFunc(KeyLogItem *pKeyLogCurr)
+#endif
+{
+	if (pKeyLogCurr->event_type == ' ') // then it hasn't been already set somewhere else
+		pKeyLogCurr->event_type = 's';
+	// This handles the troublesome Numlock key, which on some (most/all?) keyboards
+	// will change state independent of the keyboard's indicator light even if its
+	// keydown and up events are suppressed.  This is certainly true on the
+	// MS Natural Elite keyboard using default drivers on WinXP.  SetKeyboardState()
+	// doesn't resolve this, so the only alternative to the below is to use the
+	// Win9x method of setting the Numlock state explicitly whenever the key is released.
+	// That might be complicated by the fact that the unexpected state change described
+	// here can't be detected by GetKeyboardState() and such (it sees the state indicated
+	// by the numlock light on the keyboard, which is wrong).  In addition, doing it this
+	// way allows Numlock to be a prefix key for something like Numpad7, which would
+	// otherwise be impossible because Numpad7 would become NumpadHome the moment
+	// Numlock was pressed down.  Note: this problem doesn't appear to affect Capslock
+	// or Scrolllock for some reason, possibly hardware or driver related.
+	// Note: the check for KEYIGNORE isn't strictly necessary, but here just for safety
+	// in case this is ever called for a key that should be ignored.  If that were
+	// to happen and we didn't check for it, and endless loop of keyboard events
+	// might be caused due to the keybd events sent below.
+#ifdef INCLUDE_KEYBD_HOOK
+	if (pEvent->vkCode == VK_NUMLOCK && !key_up && pEvent->dwExtraInfo != KEYIGNORE)
+	{
+		// This seems to undo the faulty indicator light problem and toggle
+		// the key back to the state it was in prior to when the user pressed it.
+		// Originally, I had two keydowns and before that some keyups too, but
+		// testing reveals that only a single key-down is needed.  UPDATE:
+		// It appears that all 4 of these key events are needed to make it work
+		// in every situation, especially the case when ForceNumlock is on but
+		// numlock isn't used for any hotkeys.
+		// Note: The only side-effect I've discovered of this method is that the
+		// indicator light can't be toggled after the program is exitted unless the
+		// key is pressed twice:
+		KeyEvent(KEYUP, VK_NUMLOCK);
+		KeyEvent(KEYDOWN, VK_NUMLOCK);
+		KeyEvent(KEYUP, VK_NUMLOCK);
+		KeyEvent(KEYDOWN, VK_NUMLOCK);
+	}
+
+	// Currrently SuppressThisKey is only called with a modifier in the rare case
+	// when disguise_next_lwin/rwin_up is in effect.  But there may be other cases in the
+	// future, so we need to make sure the physical state of the modifiers is updated
+	// in our tracking system even though the key is being suppressed:
+	if (kvk[(vk_type)pEvent->vkCode].as_modifiersLR)
+		UpdateModifierState(lParam, sc, key_up);
+#endif
+	return 1;
+}
+
+
+
+#ifdef INCLUDE_KEYBD_HOOK
+#undef AllowKeyToGoToSystem
+#define AllowKeyToGoToSystem AllowIt(g_hhkLowLevelKeybd, code, wParam, lParam, sc, key_up, pKeyLogCurr)
+#define AllowKeyToGoToSystemButDisguiseWinKey AllowIt(g_hhkLowLevelKeybd, code, wParam, lParam \
+	, sc, key_up, pKeyLogCurr, true)
+inline LRESULT AllowIt (HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, sc_type sc, bool key_up
+	, KeyLogItem *pKeyLogCurr, bool DisguiseWinKey = false)
+{
+	// In this function, always use pEvent->vkCode rather than accepting vk as a param
+	// from the caller because the caller's vk may have been set to zero to allow
+	// the key's scan code to take precedence.
+
+	// Prevent toggleable keys from being toggled (if the user wanted that) by suppressing it.
+	// Seems best to suppress key-up events as well as key-down, since a key-up by itself,
+	// if seen by the system, doesn't make much sense and might have unwanted side-effects
+	// in rare cases (e.g. if the foreground app takes note of these types of key events).
+	// Don't do this for ignored keys because that could cause an endless loop of
+	// numlock events due to the keybd events that SuppressThisKey sends.
+	// It's a little more readable and comfortable not to rely on short-circuit
+	// booleans and instead do these conditions as separate IF statements.
+	if (pEvent->dwExtraInfo != KEYIGNORE)
+		if (kvk[(vk_type)(pEvent->vkCode)].pForceToggle != NULL) // Key is a toggleable key.
+			// Dereference to get the global var's value:
+			if (*(kvk[(vk_type)(pEvent->vkCode)].pForceToggle) != NEUTRAL) // Prevent toggle.
+				return SuppressThisKey;
+
+	if (!kvk[(vk_type)pEvent->vkCode].as_modifiersLR)
+		return CallNextHookEx(hhk, code, wParam, lParam);
+
+	UpdateModifierState(lParam, sc, key_up);  // Update our tracking of LWIN/RWIN/RSHIFT etc.
 
 	// Don't do it this way because then the alt key itself can't be reliable used as "AltTabMenu"
 	// (due to ShiftAltTab causing alt_tab_menu_is_visible to become false):
@@ -573,8 +596,10 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	pKeyLogCurr->event_type = (pEvent->dwExtraInfo == KEYIGNORE ? 'i' : ' ');
 
 	// Track physical state of keyboard & mouse buttons since GetAsyncKeyState() doesn't seem
-	// to do so, at least under WinXP:
-	if (EVENT_IS_PHYSICAL && !kvk[vk].as_modifiersLR) // If it's a modifier, let another section handle it.
+	// to do so, at least under WinXP.  Also, if it's a modifier, let another section handle it
+	// because it's not as simple as just setting the value to true or false (e.g. if LShift
+	// goes up, the state of VK_SHIFT should stay down if VK_RSHIFT is down, or up otherwise):
+	if (EVENT_IS_PHYSICAL && !kvk[vk].as_modifiersLR)
 		g_PhysicalKeyState[vk] = !key_up;
 
 	// Do this after above since AllowKeyToGoToSystem requires that sc be properly determined:
@@ -692,8 +717,10 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	}
 	pThisKey->is_down = !key_up;
 
+	///////////////////////////////////////////////////////////////////////////////////////
 	// CASE #1 of 4: PREFIX key has been pressed down.  But use it in this capacity only if
 	// no other prefix is already in effect or if this key isn't a suffix:
+	///////////////////////////////////////////////////////////////////////////////////////
 	if (pThisKey->used_as_prefix && !key_up && (pPrefixKey == NULL || !pThisKey->used_as_suffix))
 	{
 		// Override any other prefix key that might be in effect with this one, in case the
@@ -726,9 +753,11 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 #endif
 	}
 
+	//////////////////////////////////////////////////////////////////////////////////
 	// CASE #2 of 4: SUFFIX key (that's not a prefix, or is one but has just been used
 	// in its capacity as a suffix instead) has been released.
 	// This is done before Case #3 for performance reasons.
+	//////////////////////////////////////////////////////////////////////////////////
 	if (pThisKey->used_as_suffix && pPrefixKey != pThisKey && key_up)
 	{
 		// If it did perform an action, suppress this key-up event.  Do this even
@@ -762,7 +791,9 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		return AllowKeyToGoToSystem;
 	}
 
+	//////////////////////////////////////////////
 	// CASE #3 of 4: PREFIX key has been released.
+	//////////////////////////////////////////////
 	if (   (pThisKey->used_as_prefix) && key_up   )
 	{
 		if (pPrefixKey == pThisKey)
@@ -876,8 +907,10 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		// returning, so that the key's own suffix action will be considered.
 	}
 
+	////////////////////////////////////////////////////////////////////////////////////////////////////
 	// CASE #4 of 4: SUFFIX key has been pressed down (or released if it's a key-up event, in which case
 	// it fell through from CASE #3 above).
+	////////////////////////////////////////////////////////////////////////////////////////////////////
 	int i;
 	HotkeyIDType hotkey_id = HOTKEY_ID_INVALID;  // Set default.
 	bool no_suppress = false;  // Hotkeys are normally suppressed, so set this behavior as default.
@@ -1089,7 +1122,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	// suppress the next win-up
 	// event so that the start menu won't appear (if other modifiers are present,
 	// there's no need to do this because the Start Menu doesn't appear, at least on WinXP).
-	if (!(g_modifiersLR_logical & ~(MOD_LWIN | MOD_RWIN)))  // Only lwin, rwin, or both are present in g_modifiersLR_logical
+	if (!(g_modifiersLR_logical & ~(MOD_LWIN | MOD_RWIN))) // Only lwin, rwin, or both are currently down.
 	{
 		// If it's used as a prefix, there's no need (and it would probably break something)
 		// to disguise the key this way since the prefix-handling logic already does that
@@ -1371,6 +1404,11 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	{
 		// Do this only for DOWN (not UP) events that triggered an action:
 		pThisKey->down_performed_action = true;
+		// Also update this in case the currently-down Prefix key is both a modifier
+		// and a normal prefix key (in which case it isn't stored in pThisKey's array
+		// of VK and SC prefixes, so this value wouldn't have yet been set):
+		if (pPrefixKey)
+			pPrefixKey->was_just_used = AS_PREFIX_FOR_HOTKEY;
 #ifdef INCLUDE_KEYBD_HOOK
 		if (no_suppress) // Plus we know it's not a modifier since otherwise it would've returned above.
 			// Since this hotkey is firing on key-down but the user specified not to suppress its native

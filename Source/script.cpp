@@ -108,7 +108,7 @@ ResultType Script::Init(char *aScriptFilename, bool aIsRestart)
 		return FAIL;  // It already displayed the error for us.
 	filename_marker[-1] = '\0'; // Terminate buf in this position to divide the string.
 	size_t filename_length = strlen(filename_marker);
-	if (   mIsAutoIt2 = (filename_length >= 4 && !stricmp(filename_marker + filename_length - 4, ".aut"))   )
+	if (   mIsAutoIt2 = (filename_length >= 4 && !stricmp(filename_marker + filename_length - 4, EXT_AUTOIT2))   )
 	{
 		// Set the old/AutoIt2 defaults for maximum safety and compatibilility:
 		g_AllowSameLineComments = false;
@@ -125,6 +125,11 @@ ResultType Script::Init(char *aScriptFilename, bool aIsRestart)
 		// timeout, etc.  Note: Don't need to change IfWinExist and such because those already
 		// have special handling to recognize whether exclude-title is really a valid command
 		// instead (e.g. IfWinExist, title, text, Gosub, something).
+
+		// NOTE: DO NOT ADD the IfWin command series to this section, since there is special handling
+		// for parsing those commands to figure out whether they're being used in the old AutoIt2
+		// style or the new Exclude Title/Text mode.
+
 		g_act[ACT_MSGBOX].MaxParams -= 1;
 		g_act[ACT_STRINGREPLACE].MaxParams -= 1;
 		g_act[ACT_STRINGGETPOS].MaxParams -= 1;
@@ -307,15 +312,17 @@ int Script::LoadFromFile()
 			return -1;
 		fprintf(fp2, "; " NAME_P " config file\n"
 			"\n"
-			"MsgBox, MsgBox has a new single-parameter mode now."
-			"  The title of this dialog defaults to the script's filename.\n"
-			"\n"
-			"; Uncomment out the below line to try out a sample of an Alt-tab\n"
-			"; substitute (currently not supported in Win9x):\n"
-			";RControl & RShift::AltTab\n"
+			//"; Uncomment out the below line to try out a sample of an Alt-tab\n"
+			//"; substitute (currently not supported in Win9x):\n"
+			//";RControl & RShift::AltTab\n"
+			"; Sample hotkey:\n"
+			"#z::  ; This hotkey is Win-Z (hold down Windows key and press Z).\n"
+			"MsgBox, Hotkey was pressed.`n`nNote: MsgBox has a new single-parameter mode now."
+				"  The title of this window defaults to the script's filename.\n"
+			"return\n"
 			"\n"
 			"; After you finish editing this file, save it and run the EXE again\n"
-			"; (it will open files of this name by default)."
+			"; (it will open files of this name by default).\n"
 			);
 		fclose(fp2);
 		// One or both of the below would probably fail if mFileSpec ever has spaces in it
@@ -338,7 +345,7 @@ int Script::LoadFromFile()
 	HookActionType hook_action;
 	size_t buf_length;
 	bool is_label, section_comment = false;
-	for (mFileLineCount = 0, mIsReadyToExecute = false; ; ) // Init in case this func ever called more than once.
+	for (mFileLineCount = 0, mIsReadyToExecute = false;;) // Init in case this func ever called more than once.
 	{
 		mCurrLine = NULL;  // To signify that we're in transition, trying to load a new one.
 		if (   -1 == (buf_length = GetLine(buf, (int)(sizeof(buf) - 1), fp))   )
@@ -823,9 +830,9 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 	// Now the above has ensured that action_args is the first parameter itself, or empty-string if none.
 	// If action_args now starts with a delimiter, it means that the first param is blank/empty.
 
-	/////////////////////////////////////////////////////////////////////////////////////////////
-	// Handle escaped-sequences (escaped delimiters and all others except variable deref symbols.
-	/////////////////////////////////////////////////////////////////////////////////////////////
+	//////////////////////////////////////////////////////////////////////////////////////////////
+	// Handle escaped-sequences (escaped delimiters and all others except variable deref symbols).
+	//////////////////////////////////////////////////////////////////////////////////////////////
 	// The size of this relies on the fact that caller made sure that aLineText isn't
 	// longer than LINE_SIZE.  Also, it seems safer to use char rather than bool, even
 	// though on most compilers they're the same size.  Char is always of size 1, but bool
@@ -888,11 +895,15 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 			// by the section that resolves escape sequences for g_DerefChar, the backslash is seen
 			// as an escape char rather than a literal backslash, which is not correct.  Thus, we
 			// resolve all escapes sequences HERE in one go, from left to right.
-			if (c == '\0' || c == ' ' || c == '\t')
-				// AutoIt2 definitely treats an escape char that occurs at the very end of
-				// a line as literal.  It seems best to also do it for these other cases too.
-				literal_map[i] = 1;  // In the map, mark this char as literal.
-			else
+
+			// AutoIt2 definitely treats an escape char that occurs at the very end of
+			// a line as literal.  It seems best to also do it for these other cases too.
+			// UPDATE: I cannot reproduce the above behavior in AutoIt2.  Maybe it only
+			// does it for some commands or maybe I was mistaken.  So for now, this part
+			// is disabled:
+			//if (c == '\0' || c == ' ' || c == '\t')
+			//	literal_map[i] = 1;  // In the map, mark this char as literal.
+			//else
 			{
 				// So these are also done as well, and don't need an explicit check:
 				// g_EscapeChar , g_delimiter , (when g_CommentFlagLength > 1 ??): *g_CommentFlag
@@ -1586,7 +1597,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 							{
 								snprintf(error_msg, sizeof(error_msg), "\"%s\" requires parameter #%u to be"
 									" either %s numeric, a dereferenced variable, blank, or the word Default."
-									, g_act[line->mActionType].Name, *np, allow_negative ? "" : " non-negative");
+									, g_act[line->mActionType].Name, *np, allow_negative ? "" : "non-negative");
 								return ScriptError(error_msg, line->mArg[*np - 1].text);
 							}
 							// else don't bother removing the word "default" since it won't save
@@ -1598,7 +1609,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 						{
 							snprintf(error_msg, sizeof(error_msg), "\"%s\" requires parameter #%u to be"
 								" either %s numeric, blank (if blank is allowed), or a dereferenced variable."
-								, g_act[line->mActionType].Name, *np, allow_negative ? "" : " non-negative");
+								, g_act[line->mActionType].Name, *np, allow_negative ? "" : "non-negative");
 							return ScriptError(error_msg, line->mArg[*np - 1].text);
 						}
 					}
@@ -1924,8 +1935,13 @@ Line *Script::PreparseBlocks(Line *aStartingLine, int aFindBlockEnd, Line *aPare
 			// Some insane limit too large to ever likely be exceeded, yet small enough not
 			// to be a risk of stack overflow when recursing in ExecUntil().  Mostly, this is
 			// here to reduce the chance of a program crash if a binary file, a corrupted file,
-			// or something unexpected has been loaded as a script when it shouldn't have been:
-			if (nest_level > 100)
+			// or something unexpected has been loaded as a script when it shouldn't have been.
+			// Update: Increased the limit from 100 to 1000 so that large "else if" ladders
+			// can be constructed.  Going much larger than 1000 seems unwise since ExecUntil()
+			// will have to recurse for each nest-level, possibly resulting in stack overflow
+			// if things get too deep (though I think most/all(?) versions of Windows will
+			// dynamically grow the stack to try to keep up:
+			if (nest_level > 1000)
 			{
 				abort = true; // So that the caller doesn't also report an error.
 				return line->PreparseError("Nesting this deep might cause a stack overflow so is not allowed.");
@@ -3074,6 +3090,10 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		return WinGetText(ARG2, ARG3, ARG4, ARG5);
 	case ACT_WINGETPOS:
 		return WinGetPos(ARG5, ARG6, ARG7, ARG8);
+	case ACT_PIXELSEARCH:
+		return PixelSearch(atoi(ARG3), atoi(ARG4), atoi(ARG5), atoi(ARG6), atoi(ARG7));
+	case ACT_PIXELGETCOLOR:
+		return PixelGetColor(atoi(ARG2), atoi(ARG3));
 	case ACT_WINMINIMIZEALL: // From AutoIt3 source:
 		PostMessage(FindWindow("Shell_TrayWnd", NULL), WM_COMMAND, 419, 0);
 		DoWinDelay;

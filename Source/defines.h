@@ -37,8 +37,13 @@ GNU General Public License for more details.
 
 #define NAME_P "AutoHotkey"
 #define WINDOW_CLASS_NAME NAME_P
-#define NAME_VERSION "0.212"
+#define NAME_VERSION "0.213"
 #define NAME_PV NAME_P " v" NAME_VERSION
+
+#define EXT_AUTOIT2 ".aut"
+#define EXT_AUTOHOTKEY ".ahk"
+#define CONVERSION_FLAG (EXT_AUTOIT2 EXT_AUTOHOTKEY)
+#define CONVERSION_FLAG_LENGTH 8
 
 // This is not the best way to do this, but it does make MS compilers more
 // like MinGW and other Gnu-ish compilers.  Also, I'm not sure what (if

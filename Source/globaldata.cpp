@@ -227,6 +227,9 @@ Action g_act[] =
 	, {"WinGetPos", 0, 8, NULL} // Four optional output vars: xpos, ypos, width, height.  Std. 4 window params.
 	, {"WinGetText", 1, 5, NULL} // Output var, std 4 window params.
 
+	, {"PixelGetColor", 3, 3, {2, 3, 0}} // OutputVar, X-coord, Y-coord
+	, {"PixelSearch", 7, 7, {3, 4, 5, 6, 7, 0}} // OutputX, OutputY, left, top, right, bottom, color
+
 	// Below: Group name, wintitle, what label to Gosub if no instances of the window exist, exclude-title/text:
 	// See above for why minimum is 1 vs. 2:
 	, {"GroupAdd", 1, 6, NULL}

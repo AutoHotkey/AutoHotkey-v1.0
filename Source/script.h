@@ -96,6 +96,7 @@ enum enum_act {
 , ACT_WINCLOSE, ACT_WINKILL, ACT_WINMOVE
 , ACT_WINSETTITLE, ACT_WINGETTITLE, ACT_WINGETPOS, ACT_WINGETTEXT
 // Keep rarely used actions near the bottom for parsing/performance reasons:
+, ACT_PIXELGETCOLOR, ACT_PIXELSEARCH
 , ACT_GROUPADD, ACT_GROUPACTIVATE, ACT_GROUPDEACTIVATE, ACT_GROUPCLOSE, ACT_GROUPCLOSEALL
 , ACT_DRIVESPACEFREE
 , ACT_FILEAPPEND, ACT_FILEREADLINE, ACT_FILECOPY, ACT_FILEMOVE, ACT_FILEDELETE
@@ -267,6 +268,8 @@ private:
 	ResultType WinGetTitle(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType WinGetPos(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
+	ResultType PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int aColor);
+	ResultType PixelGetColor(int aX, int aY);
 
 	static ResultType SetToggleState(vk_type aVK, ToggleValueType &ForceLock, char *aToggleText);
 	static ResultType MouseClickDrag(vk_type aVK // Which button.
@@ -347,6 +350,7 @@ public:
 	#define EIGHT_ARGS ARG1, ARG2, ARG3, ARG4, ARG5, ARG6, ARG7, ARG8
 	#define VAR(arg) ((Var *)arg.deref)
 	#define OUTPUT_VAR VAR(mArg[0])
+	#define OUTPUT_VAR2 VAR(mArg[1])
 	#define ARG_IS_VAR(arg) ((arg.text == Line::sArgIsInputVar || arg.text == Line::sArgIsOutputVar) ? VAR(arg) : NULL)
 	#define ARG_IS_INPUT_VAR(arg) ((arg.text == Line::sArgIsInputVar) ? VAR(arg) : NULL)
 	#define ARG_IS_OUTPUT_VAR(arg) ((arg.text == Line::sArgIsOutputVar) ? VAR(arg) : NULL)
@@ -376,6 +380,8 @@ public:
 	ResultType IsJumpValid(Line *aDestination);
 
 	static ArgPurposeType ArgIsVar(ActionTypeType aActionType, int aArgIndex);
+	static int ConvertEscapeChar(char *aFilespec, char aOldChar, char aNewChar);
+	static size_t ConvertEscapeCharGetLine(char *aBuf, int aMaxCharsToRead, FILE *fp);
 	ResultType CheckForMandatoryArgs();
 
 	bool ArgHasDeref(int aArgNum)

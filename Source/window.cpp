@@ -451,9 +451,11 @@ HWND WinClose(char *aTitle, char *aText, int aTimeToWaitForClose
 		// for windows that handle Alt-F4 manually?)  But on the upside, this is nicer
 		// for apps that upon receiving Alt-F4 do some behavior other than closing, such
 		// as minimizing to the tray.  Such apps might shut down entirely if they received
-		// a true WM_CLOSE, which is probably not what the user would want:
-		PostMessage(target_window, WM_SYSCOMMAND, SC_CLOSE, 0);
-		// PostMessage(target_window, WM_CLOSE, 0, 0);
+		// a true WM_CLOSE, which is probably not what the user would want.
+		// Update: Swithced back to using WM_CLOSE so that instances of AutoHotkey
+		// can be terminated via another instances use of the WinClose command:
+		//PostMessage(target_window, WM_SYSCOMMAND, SC_CLOSE, 0);
+		PostMessage(target_window, WM_CLOSE, 0, 0);
 
 	// Slight delay.  Might help avoid user having to modify script to use WinWaitClose()
 	// in many cases.  UPDATE: But this does a Sleep(0), which won't yield the remainder

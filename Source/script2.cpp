@@ -421,6 +421,78 @@ ResultType Line::WinGetPos(char *aTitle, char *aText, char *aExcludeTitle, char 
 
 
 
+ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int aColor)
+{
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
+	OUTPUT_VAR->Assign();  // Init to empty string regardless of whether we succeed here.
+	OUTPUT_VAR2->Assign(); // Same.
+
+	// Always adjust coords to reflect the position of the foreground window because AutoHotkey
+	// doesn't yet support AutoIt3's absolute-screen-coords mode:
+	RECT rect;
+	GetWindowRect(GetForegroundWindow(), &rect);
+	aLeft   += rect.left;
+	aTop    += rect.top;
+	aRight  += rect.left;  // Add left vs. right because we're adjusting based on the position of the window.
+	aBottom += rect.top;   // Same.
+
+	HDC hdc = GetDC(NULL);
+	if (!hdc)
+		return OK;  // Let ErrorLevel tell the story.
+
+	int q, r;
+	ResultType result = OK;
+	for (q = aLeft; q <= aRight; ++q)
+	{
+		for (r = aTop; r <= aBottom; ++r)
+		{
+			if (GetPixel(hdc, q, r) == aColor) // Found the pixel
+			{
+				ReleaseDC(NULL, hdc);
+				// Adjust coords to make them relative to the position of the target window:
+				if (!OUTPUT_VAR->Assign(q - rect.left))
+					result = FAIL;
+				if (!OUTPUT_VAR2->Assign(r - rect.top))
+					result = FAIL;
+				if (result == OK)
+					g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+				return result;
+			}
+		}
+	}
+
+	// If the above didn't return, the pixel wasn't found in the specified region.
+	// So leave ErrorLevel set to "error" to indicate that:
+	ReleaseDC(NULL, hdc);
+	return OK;
+}
+
+
+
+ResultType Line::PixelGetColor(int aX, int aY)
+// This has been adapted from the AutoIt3 source.
+{
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
+	OUTPUT_VAR->Assign(); // Init to empty string regardless of whether we succeed here.
+
+	RECT rect;
+	GetWindowRect(GetForegroundWindow(), &rect);
+	aX += rect.left;
+	aY += rect.top;
+
+	HDC hdc = GetDC(NULL);
+	if (!hdc)
+		return OK;  // Let ErrorLevel tell the story.
+	ResultType result = OUTPUT_VAR->Assign((int)GetPixel(hdc, aX, aY));
+	ReleaseDC(NULL, hdc);
+
+	if (result == OK)
+		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+	return result;  // i.e. only return failure if something unexpected happens when assigning to the variable.
+}
+
+
+
 /////////////////
 // Main Window //
 /////////////////
@@ -1970,6 +2042,103 @@ ResultType Line::SetToggleState(vk_type aVK, ToggleValueType &ForceLock, char *a
 // Misc lower level functions //
 ////////////////////////////////
 
+int Line::ConvertEscapeChar(char *aFilespec, char aOldChar, char aNewChar)
+{
+	if (!aFilespec || !*aFilespec) return 1;  // Non-zero is failure in this case.
+	if (aOldChar == aNewChar)
+	{
+		MsgBox("Conversion: The OldChar must not be the same as the NewChar.");
+		return 1;
+	}
+	FILE *f1 = fopen(aFilespec, "r");
+	if (!f1)
+	{
+		MsgBox(aFilespec, 0, "Could not open source file for conversion:");
+		return 1; // Failure
+	}
+	char new_filespec[MAX_PATH * 2];
+	strlcpy(new_filespec, aFilespec, sizeof(new_filespec));
+	StrReplace(new_filespec, CONVERSION_FLAG, "-NEW" EXT_AUTOHOTKEY, false);
+	FILE *f2 = fopen(new_filespec, "w");
+	if (!f2)
+	{
+		fclose(f1);
+		MsgBox(new_filespec, 0, "Could not open target file for conversion:");
+		return 1; // Failure
+	}
+
+	char buf[LINE_SIZE], *cp, next_char;
+	size_t line_count, buf_length;
+	for (line_count = 0;;)
+	{
+		if (   -1 == (buf_length = ConvertEscapeCharGetLine(buf, (int)(sizeof(buf) - 1), f1))   )
+			break;
+		++line_count;
+
+		for (cp = buf; ; ++cp)  // Increment to skip over the symbol just found by the inner for().
+		{
+			for (; *cp && *cp != aOldChar && *cp != aNewChar; ++cp);  // Find the next escape char.
+
+			if (!*cp) // end of string.
+				break;
+
+			if (*cp == aNewChar)
+			{
+				if (buf_length < sizeof(buf) - 1)  // buffer safety check
+				{
+					// Insert another of the same char to make it a pair, so that it becomes the
+					// literal version of this new escape char (e.g. ` --> ``)
+					MoveMemory(cp + 1, cp, strlen(cp) + 1);
+					*cp = aNewChar;
+					// Increment so that the loop will resume checking at the char after this new pair.
+					// Example: `` becomes ````
+					++cp;  // Only +1 because the outer for-loop will do another increment.
+					++buf_length;
+				}
+				continue;
+			}
+
+			// Otherwise *cp == aOldChar:
+			next_char = *(cp + 1);
+			if (next_char == aOldChar)
+			{
+				// This is a double-escape (e.g. \\ in AutoIt2).  Replace it with a single
+				// character of the same type:
+				MoveMemory(cp, cp + 1, strlen(cp + 1) + 1);
+				--buf_length;
+			}
+			else
+				// It's just a normal escape sequence.  Even if it's not a valid escape sequence,
+				// convert it anyway because it's more failsafe to do so (the script parser will
+				// handle such things much better than we can when the script is run):
+				*cp = aNewChar;
+		}
+		fputs(buf, f2);
+	}
+
+	fclose(f1);
+	fclose(f2);
+	MsgBox("The file was successfully converted.");
+	return 0;  // Return 0 on success in this case.
+}
+
+
+
+size_t Line::ConvertEscapeCharGetLine(char *aBuf, int aMaxCharsToRead, FILE *fp)
+{
+	if (!aBuf || !fp) return -1;
+	if (aMaxCharsToRead <= 0) return 0;
+	if (feof(fp)) return -1; // Previous call to this function probably already read the last line.
+	if (fgets(aBuf, aMaxCharsToRead, fp) == NULL) // end-of-file or error
+	{
+		*aBuf = '\0';  // Reset since on error, contents added by fgets() are indeterminate.
+		return -1;
+	}
+	return strlen(aBuf);
+}
+
+
+
 ArgPurposeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 {
 	switch(aArgIndex)
@@ -2003,6 +2172,8 @@ ArgPurposeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_WINGETTITLE:
 		case ACT_WINGETTEXT:
 		case ACT_WINGETPOS:
+		case ACT_PIXELGETCOLOR:
+		case ACT_PIXELSEARCH:
 			return (ArgPurposeType)IS_OUTPUT_VAR;
 
 		case ACT_IFINSTRING:
@@ -2032,6 +2203,7 @@ ArgPurposeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 
 		case ACT_MOUSEGETPOS:
 		case ACT_WINGETPOS:
+		case ACT_PIXELSEARCH:
 			return (ArgPurposeType)IS_OUTPUT_VAR;
 		}
 		break;
@@ -2105,6 +2277,7 @@ ResultType Line::CheckForMandatoryArgs()
 		if (!VARRAW_ARG1 && !VARRAW_ARG2 && !VARRAW_ARG3 && !VARRAW_ARG4)
 			return LineError(ERR_MISSING_OUTPUT_VAR);
 		return OK;
+	// case ACT_PIXELSEARCH:  This is not needed here since both output vars are mandatory in the cmd array.
 	}
 	return OK;  // For when the command isn't mentioned in the switch().
 }

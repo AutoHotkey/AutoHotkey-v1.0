@@ -60,6 +60,15 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 			script_filespec = __argv[i];
 	}
 
+	size_t filespec_length = strlen(script_filespec);
+	if (filespec_length >= CONVERSION_FLAG_LENGTH)
+	{
+		char *cp = script_filespec + filespec_length - CONVERSION_FLAG_LENGTH;
+		// Now cp points to the first dot in the CONVERSION_FLAG of script_filespec (if it has one).
+		if (!stricmp(cp, CONVERSION_FLAG))
+			return Line::ConvertEscapeChar(script_filespec, '\\', '`');
+	}
+
 	global_init(&g);  // Set defaults prior to the below, since below might override them for AutoIt2 scripts.
 	if (g_script.Init(script_filespec, restart_mode) != OK)  // Set up the basics of the script, using the above.
 		return CRITICAL_ERROR;
