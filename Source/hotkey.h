@@ -19,6 +19,7 @@ GNU General Public License for more details.
 
 #include "keyboard.h"
 #include "script.h"  // For which label (and in turn which line) in the script to jump to.
+EXTERN_SCRIPT;  // For g_script.
 
 // Due to control/alt/shift modifiers, quite a lot of hotkey combinations are possible, so support any
 // conceivable use.  Note: Increasing this value will increase the memory required (i.e. any arrays
@@ -118,13 +119,22 @@ private:
 	{
 		if (!PerformIsAllowed())
 			return FAIL;
+		ResultType result;
 		++mExistingThreads;  // This is the thread count for this particular hotkey only.
 		for (;;)
 		{
-			if (mJumpToLabel->mJumpToLine->ExecUntil(UNTIL_RETURN, mModifiersConsolidated) == FAIL)
+			// This is stored as an attribute of the script (semi-globally) rather than passed
+			// as a param to ExecUntil (and from their on to any calls to SendKeys() that it
+			// makes) because it's possible for SendKeys to be called asynchronously, namely
+			// by a timed subroutine, while #HotkeyModifierTimeout is still in effect,
+			// in which case we would want SendKeys() to take not of these modifiers even
+			// if it was called from an ExecUntil() other than ours here:
+			g_script.mThisHotkeyModifiersLR = mModifiersConsolidated;
+			result = mJumpToLabel->mJumpToLine->ExecUntil(UNTIL_RETURN);
+			if (result == FAIL)
 			{
 				mRunAgainAfterFinished = false;  // Ensure this is reset due to the error.
-				return FAIL;
+				break;
 			}
 			if (mRunAgainAfterFinished)
 			{
@@ -136,12 +146,13 @@ private:
 				// that might lead to unexpected behavior:
 				if (GetTickCount() - mRunAgainTime > 1000)
 					break;
+				// else don't break, but continue the loop until the flag becomes false.
 			}
 			else
 				break;
 		}
 		--mExistingThreads;
-		return OK;
+		return (result == FAIL) ? FAIL : OK;
 	}
 
 	ResultType Register();

@@ -40,12 +40,16 @@ static size_t g_CommentFlagLength = strlen(g_CommentFlag); // pre-calculated for
 Script::Script()
 	: mFirstLine(NULL), mLastLine(NULL), mCurrLine(NULL)
 	, mLoopFile(NULL), mLoopRegItem(NULL), mLoopReadFile(NULL), mLoopField(NULL), mLoopIteration(0)
-	, mThisHotkeyLabel(NULL), mPriorHotkeyLabel(NULL), mPriorHotkeyStartTime(0)
+	, mThisHotkeyLabel(NULL), mPriorHotkeyLabel(NULL), mThisHotkeyStartTime(0), mPriorHotkeyStartTime(0)
+	, mThisHotkeyModifiersLR(0)
 	, mFirstLabel(NULL), mLastLabel(NULL)
 	, mFirstTimer(NULL), mLastTimer(NULL), mTimerEnabledCount(0), mTimerCount(0)
 	, mFirstMenuItem(NULL), mLastMenuItem(NULL), mMenuItemCount(0)
 	, mFirstVar(NULL), mLastVar(NULL)
 	, mLineCount(0), mLabelCount(0), mVarCount(0), mGroupCount(0)
+#ifdef AUTOHOTKEYSC
+	, mCustomIcon(false)
+#endif;
 	, mCurrFileNumber(0), mCurrLineNumber(0), mNoHotkeyLabels(true)
 	, mFileSpec(""), mFileDir(""), mFileName(""), mOurEXE(""), mOurEXEDir(""), mMainWindowTitle("")
 	, mIsReadyToExecute(false), AutoExecSectionIsRunning(false)
@@ -84,6 +88,28 @@ Script::Script()
 	if (sizeof(ActionTypeType) == 1 && g_ActionCount > 256)
 		ScriptError("DEBUG: Since there are now more than 256 Action Types, the ActionTypeType"
 			" typedef must be changed.");
+#endif
+}
+
+
+
+Script::~Script()
+{
+	// MSDN: "Before terminating, an application must call the UnhookWindowsHookEx function to free
+	// system resources associated with the hook."
+	RemoveAllHooks();
+	if (g_hWndToolTip)  // Since this window is unowned, it should be destroyed to avoid resource leak.
+		DestroyWindow(g_hWndToolTip);
+	if (mNIC.hWnd) // Tray icon is installed.
+		Shell_NotifyIcon(NIM_DELETE, &mNIC); // Remove it.
+	if (mTrayMenu) // Since it's not associated with a window, we must free the resources for this menu.
+	{
+		DestroyMenu(mTrayMenu);
+		mTrayMenu = NULL;
+	}
+
+#ifdef ENABLE_KEY_HISTORY_FILE
+	KeyHistoryToFile();  // Close the KeyHistory file if it's open.
 #endif
 }
 
@@ -204,17 +230,17 @@ ResultType Script::Init(char *aScriptFilename, bool aIsRestart)
 
 	
 
-ResultType Script::CreateWindows(HINSTANCE aInstance)
+ResultType Script::CreateWindows()
 // Returns OK or FAIL.
 {
 	if (!mMainWindowTitle || !*mMainWindowTitle) return FAIL;  // Init() must be called before this function.
 	// Register a window class for the main window:
-	HICON hIcon = LoadIcon(aInstance, MAKEINTRESOURCE(IDI_MAIN)); // LoadIcon((HINSTANCE) NULL, IDI_APPLICATION)
+	HICON hIcon = LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_MAIN)); // LoadIcon((HINSTANCE) NULL, IDI_APPLICATION)
 	WNDCLASSEX wc;
 	ZeroMemory(&wc, sizeof(wc));
 	wc.cbSize = sizeof(wc);
 	wc.lpszClassName = WINDOW_CLASS_MAIN;
-	wc.hInstance = aInstance;
+	wc.hInstance = g_hInstance;
 	wc.lpfnWndProc = MainWindowProc;
 	// Provided from some example code:
 	wc.style = 0;  // Aut3: CS_HREDRAW | CS_VREDRAW
@@ -255,17 +281,31 @@ ResultType Script::CreateWindows(HINSTANCE aInstance)
 		, CW_USEDEFAULT // height
 		, NULL // parent window
 		, NULL // Identifies a menu, or specifies a child-window identifier depending on the window style
-		, aInstance // passed into WinMain
+		, g_hInstance // passed into WinMain
 		, NULL))   ) // lpParam
 	{
 		MsgBox("CreateWindow() failed.");
 		return FAIL;
 	}
+#ifdef AUTOHOTKEYSC
+	HMENU menu = GetMenu(g_hWnd);
+	// Disable the Edit menu item, since it does nothing for a compiled script:
+	EnableMenuItem(menu, ID_FILE_EDITSCRIPT, MF_DISABLED | MF_GRAYED);
+	if (!g_AllowMainWindow)
+	{
+		EnableMenuItem(menu, ID_VIEW_KEYHISTORY, MF_DISABLED | MF_GRAYED);
+		EnableMenuItem(menu, ID_VIEW_LINES, MF_DISABLED | MF_GRAYED);
+		EnableMenuItem(menu, ID_VIEW_VARIABLES, MF_DISABLED | MF_GRAYED);
+		EnableMenuItem(menu, ID_VIEW_HOTKEYS, MF_DISABLED | MF_GRAYED);
+		// But leave the ID_VIEW_REFRESH menu item enabled because if the script contains a
+		// command such as ListLines in it, Refresh can be validly used.
+	}
+#endif
 
 	// AutoIt3: Add read-only edit control to our main window:
 	if (    !(g_hWndEdit = CreateWindow("edit", NULL, WS_CHILD | WS_VISIBLE | WS_BORDER
 		| ES_LEFT | ES_MULTILINE | ES_READONLY | WS_VSCROLL // | WS_HSCROLL (saves space)
-		, 0, 0, 0, 0, g_hWnd, (HMENU)1, aInstance, NULL))  )
+		, 0, 0, 0, 0, g_hWnd, (HMENU)1, g_hInstance, NULL))  )
 	{
 		MsgBox("CreateWindow() for the edit-window child failed.");
 		return FAIL;
@@ -290,35 +330,103 @@ ResultType Script::CreateWindows(HINSTANCE aInstance)
 	ShowWindow(g_hWnd, SW_MINIMIZE);
 	ShowWindow(g_hWnd, SW_HIDE);
 
-	g_hAccelTable = LoadAccelerators(aInstance, MAKEINTRESOURCE(IDR_ACCELERATOR1));
+	g_hAccelTable = LoadAccelerators(g_hInstance, MAKEINTRESOURCE(IDR_ACCELERATOR1));
 
-	////////////////////
-	// Set up tray icon.
-	////////////////////
 	if (g_NoTrayIcon)
 		mNIC.hWnd = NULL;  // Set this as an indicator that tray icon is not installed.
 	else
-	{
-		ZeroMemory(&mNIC, sizeof(mNIC));  // To be safe.
-		// Using NOTIFYICONDATA_V2_SIZE vs. sizeof(NOTIFYICONDATA) improves compatibility with Win9x maybe.
-		// MSDN: "Using [NOTIFYICONDATA_V2_SIZE] for cbSize will allow your application to use NOTIFYICONDATA
-		// with earlier Shell32.dll versions, although without the version 6.0 enhancements."
-		// Update: Using V2 gives an compile error so trying V1.  Update: Trying sizeof(NOTIFYICONDATA)
-		// for compatibility with VC++ 6.x.  This is also what AutoIt3 uses:
-		mNIC.cbSize				= sizeof(NOTIFYICONDATA);  // NOTIFYICONDATA_V1_SIZE
-		mNIC.hWnd				= g_hWnd;
-		mNIC.uID				= AHK_NOTIFYICON; // This is also used for the ID, see TRANSLATE_AHK_MSG for details.
-		mNIC.uFlags				= NIF_MESSAGE | NIF_TIP | NIF_ICON;
-		mNIC.uCallbackMessage	= AHK_NOTIFYICON;
-		mNIC.hIcon				= LoadIcon(aInstance, MAKEINTRESOURCE(g_IconTray));
-		strlcpy(mNIC.szTip, mFileName ? mFileName : NAME_P, sizeof(mNIC.szTip));
-		if (!Shell_NotifyIcon(NIM_ADD, &mNIC))
-		{
-			mNIC.hWnd = NULL;  // Set this as an indicator that tray icon is not installed.
-			return OK;  // But don't return FAIL (in case the user is using a different shell or something).
-		}
-	}
+		// Even if the below fails, don't return FAIL in case the user is using a different shell
+		// or something.  In other words, it is expected to fail under certain circumstances and
+		// we want to tolerate that:
+		CreateTrayIcon();
 	return OK;
+}
+
+
+
+void Script::CreateTrayIcon()
+// It is the caller's responsibility to ensure that the previous icon is first freed/destroyed
+// before calling us to install a new one.  However, that is probably not needed if the Explorer
+// crashed, since the memory used by the tray icon was probably destroyed along with it.
+{
+	ZeroMemory(&mNIC, sizeof(mNIC));  // To be safe.
+	// Using NOTIFYICONDATA_V2_SIZE vs. sizeof(NOTIFYICONDATA) improves compatibility with Win9x maybe.
+	// MSDN: "Using [NOTIFYICONDATA_V2_SIZE] for cbSize will allow your application to use NOTIFYICONDATA
+	// with earlier Shell32.dll versions, although without the version 6.0 enhancements."
+	// Update: Using V2 gives an compile error so trying V1.  Update: Trying sizeof(NOTIFYICONDATA)
+	// for compatibility with VC++ 6.x.  This is also what AutoIt3 uses:
+	mNIC.cbSize				= sizeof(NOTIFYICONDATA);  // NOTIFYICONDATA_V1_SIZE
+	mNIC.hWnd				= g_hWnd;
+	mNIC.uID				= AHK_NOTIFYICON; // This is also used for the ID, see TRANSLATE_AHK_MSG for details.
+	mNIC.uFlags				= NIF_MESSAGE | NIF_TIP | NIF_ICON;
+	mNIC.uCallbackMessage	= AHK_NOTIFYICON;
+#ifdef AUTOHOTKEYSC
+	// i.e. don't override the user's custom icon:
+	mNIC.hIcon				= LoadIcon(g_hInstance, MAKEINTRESOURCE(mCustomIcon ? IDI_MAIN : g_IconTray));
+#else
+	mNIC.hIcon				= LoadIcon(g_hInstance, MAKEINTRESOURCE(g_IconTray));
+#endif
+	strlcpy(mNIC.szTip, mFileName ? mFileName : NAME_P, sizeof(mNIC.szTip));
+	// If we were called due to an Explorer crash, I don't think it's necessary to call
+	// Shell_NotifyIcon() to remove the old tray icon because it was likely destroyed
+	// along with Explorer.  So just add it unconditionally:
+	if (!Shell_NotifyIcon(NIM_ADD, &mNIC))
+		mNIC.hWnd = NULL;  // Set this as an indicator that tray icon is not installed.
+}
+
+
+
+void Script::UpdateTrayIcon(bool aForceUpdate)
+{
+	if (!mNIC.hWnd) // tray icon is not installed
+		return;
+	static bool icon_shows_paused = false;
+	static bool icon_shows_suspended = false;
+	if (!aForceUpdate && g.IsPaused == icon_shows_paused && g_IsSuspended == icon_shows_suspended)
+		return; // it's already in the right state
+	int icon;
+	if (g.IsPaused && g_IsSuspended)
+		icon = IDI_PAUSE_SUSPEND;
+	else if (g.IsPaused)
+		icon = IDI_PAUSE;
+	else if (g_IsSuspended)
+		icon = g_IconTraySuspend;
+	else
+#ifdef AUTOHOTKEYSC
+		icon = mCustomIcon ? IDI_MAIN : g_IconTray;  // i.e. don't override the user's custom icon.
+#else
+		icon = g_IconTray;
+#endif
+	mNIC.hIcon = LoadIcon(g_hInstance, MAKEINTRESOURCE(icon));
+	if (Shell_NotifyIcon(NIM_MODIFY, &mNIC))
+	{
+		icon_shows_paused = g.IsPaused;
+		icon_shows_suspended = g_IsSuspended;
+	}
+	// else do nothing, just leave it in the same state.
+}
+
+
+
+void Script::DisplayTrayMenu()
+{
+	if (!mTrayMenu) // Probably because this is the first time the user has opened the menu.
+		if (!CreateTrayMenu())
+			return;
+
+	// These are okay even if the menu items don't exist (perhaps because the user customized the menu):
+	CheckMenuItem(mTrayMenu, ID_TRAY_SUSPEND, g_IsSuspended ? MF_CHECKED : MF_UNCHECKED);
+	CheckMenuItem(mTrayMenu, ID_TRAY_PAUSE, g.IsPaused ? MF_CHECKED : MF_UNCHECKED);
+
+	POINT pt;
+	GetCursorPos(&pt);
+	SetForegroundWindow(g_hWnd); // Always call this right before TrackPopupMenu(), even if window is hidden.
+
+	g_MenuIsVisible = MENU_VISIBLE_TRAY;
+	TrackPopupMenuEx(mTrayMenu, TPM_LEFTALIGN | TPM_LEFTBUTTON, pt.x, pt.y, g_hWnd, NULL);
+	g_MenuIsVisible = MENU_VISIBLE_NONE;
+	
+	PostMessage(g_hWnd, WM_NULL, 0, 0); // MSDN recommends this to prevent menu from closing on 2nd click.
 }
 
 
@@ -352,7 +460,7 @@ ResultType Script::AutoExecSection()
 		AutoExecSectionIsRunning = true;
 		g_AllowInterruptionForSub = false; // See AutoExecSectionTimeout() for why this var is used.
 		++g_nThreads;
-		ResultType result = mFirstLine->ExecUntil(UNTIL_RETURN, 0);
+		ResultType result = mFirstLine->ExecUntil(UNTIL_RETURN);
 		--g_nThreads;
 		g_AllowInterruptionForSub = true;  // In case it finishes before the AutoExecSectionTimeout() timer expires.
 		AutoExecSectionIsRunning = false;
@@ -366,59 +474,6 @@ ResultType Script::AutoExecSection()
 
 
 
-void Script::UpdateTrayIcon()
-{
-	if (!mNIC.hWnd) // tray icon is not installed
-		return;
-	static bool icon_shows_paused = false;
-	static bool icon_shows_suspended = false;
-	if (g.IsPaused == icon_shows_paused && g_IsSuspended == icon_shows_suspended) // it's already in the right state
-		return;
-	int icon;
-	if (g.IsPaused && g_IsSuspended)
-		icon = IDI_PAUSE_SUSPEND;
-	else if (g.IsPaused)
-		icon = IDI_PAUSE;
-	else if (g_IsSuspended)
-		icon = g_IconTraySuspend;
-	else
-		icon = g_IconTray;
-	mNIC.hIcon = LoadIcon(g_hInstance, MAKEINTRESOURCE(icon));
-	if (Shell_NotifyIcon(NIM_MODIFY, &mNIC))
-	{
-		icon_shows_paused = g.IsPaused;
-		icon_shows_suspended = g_IsSuspended;
-	}
-	// else do nothing, just leave it in the same state.
-}
-
-
-
-void Script::DisplayTrayMenu()
-{
-	if (!mTrayMenu) // Probably because this is the first time the user has opened the menu.
-		if (!CreateTrayMenu())
-			return;
-
-#ifndef AUTOHOTKEYSC
-	// These are okay even if the menu items don't exist (perhaps because the user customized the menu):
-	CheckMenuItem(mTrayMenu, ID_TRAY_SUSPEND, g_IsSuspended ? MF_CHECKED : MF_UNCHECKED);
-	CheckMenuItem(mTrayMenu, ID_TRAY_PAUSE, g.IsPaused ? MF_CHECKED : MF_UNCHECKED);
-#endif
-
-	POINT pt;
-	GetCursorPos(&pt);
-	SetForegroundWindow(g_hWnd); // Always call this right before TrackPopupMenu(), even if window is hidden.
-
-	g_MenuIsVisible = MENU_VISIBLE_TRAY;
-	TrackPopupMenuEx(mTrayMenu, TPM_LEFTALIGN | TPM_LEFTBUTTON, pt.x, pt.y, g_hWnd, NULL);
-	g_MenuIsVisible = MENU_VISIBLE_NONE;
-	
-	PostMessage(g_hWnd, WM_NULL, 0, 0); // MSDN recommends this to prevent menu from closing on 2nd click.
-}
-
-
-
 ResultType Script::PerformMenu(char *aWhichMenu, char *aCommand, char *aMenuItemName, char *aLabel)
 {
 	if (stricmp(aWhichMenu, "tray"))
@@ -428,6 +483,92 @@ ResultType Script::PerformMenu(char *aWhichMenu, char *aCommand, char *aMenuItem
 	if (menu_command == MENU_COMMAND_INVALID)
 		return ScriptError(ERR_MENUCOMMAND2, aCommand);
 
+	UserMenuItem *mi, *menu_item_to_delete;  // For generic use in loops.
+
+	// Handle early on anything that doesn't require mTrayMenu to be created:
+	switch(menu_command)
+	{
+	case MENU_COMMAND_NOSTANDARD:
+		if (mTrayIncludeStandard) // i.e only do this if it was true beforehand since otherwise there's no point.
+		{
+			mTrayIncludeStandard = false;
+			DestroyTrayMenu(); // It will be recreated automatically the next time the user displays it.
+			// Realistically, the above should never fail, so we always return OK below.
+		}
+		return OK;
+
+	case MENU_COMMAND_DELETEALL:
+		if (!mFirstMenuItem)
+			return OK;  // If there are no user-defined menu items, it's already in the correct state.
+		DestroyTrayMenu();  // It will be recreated automatically the next time the user displays it.
+		// Remove all menu items from the linked list and from the menu.  First destroy the menu since
+		// it's probably better to start off fresh than have the destructor individually remove each
+		// menu item as the items in the linked list are deleted:
+		for (mi = mFirstMenuItem; mi;)
+		{
+			menu_item_to_delete = mi;
+			mi = mi->mNextMenuItem;
+			delete menu_item_to_delete;
+		}
+		mFirstMenuItem = mLastMenuItem = NULL;
+		mMenuItemCount = 0;
+		mTrayMenuDefault = NULL;  // i.e. there can't be a *user-defined* default item anymore.
+		return OK;
+
+	case MENU_COMMAND_ICON:
+		g_NoTrayIcon = false;
+		if (!mNIC.hWnd) // The icon doesn't exist, so create it.
+		{
+			CreateTrayIcon();
+			UpdateTrayIcon(true);  // Force the icon into the correct pause/suspend state.
+		}
+		return OK;
+
+	case MENU_COMMAND_NOICON:
+		g_NoTrayIcon = true;
+		if (mNIC.hWnd) // Since it exists, destroy it.
+		{
+			Shell_NotifyIcon(NIM_DELETE, &mNIC); // Remove it.
+			mNIC.hWnd = NULL;  // Set this as an indicator that tray icon is not installed.
+			// but don't do DestroyMenu() on mTrayMenu (if non-NULL) since it may have been
+			// changed by the user to have the custom items on top of the standard items,
+			// for example, and we don't want to lose that ordering in case the script turns
+			// the icon back on at some future time during this session.
+		}
+		return OK;
+
+	case MENU_COMMAND_MAINWINDOW:
+#ifdef AUTOHOTKEYSC
+		if (!g_AllowMainWindow)
+		{
+			g_AllowMainWindow = true;
+			// Rather than using InsertMenu() to insert the item in the right position,
+			// which makes the code rather unmaintainable, it seems best just to recreate
+			// the entire menu.  This will result in the standard menu items going back
+			// up to the top of the menu if the user previously had them at the bottom,
+			// but it seems too rare to worry about, especially since it's easy to
+			// work around that:
+			if (mTrayIncludeStandard)
+				DestroyTrayMenu(); // It will be recreated automatically the next time the user displays it.
+			// else there's no need.
+		}
+#endif
+        return OK;
+
+	case MENU_COMMAND_NOMAINWINDOW:
+#ifdef AUTOHOTKEYSC
+		if (g_AllowMainWindow)
+		{
+			g_AllowMainWindow = false;
+			// See comments in the prior case above for why it's done this way vs. using DeleteMenu():
+			if (mTrayIncludeStandard)
+				DestroyTrayMenu(); // It will be recreated automatically the next time the user displays it.
+			// else there's no need.
+		}
+#endif
+		return OK;
+	} // switch()
+
 	char *new_name = "";
 	if (menu_command == MENU_COMMAND_RENAME) // aLabel contains the menu item's new name in this case.
 	{
@@ -435,8 +576,9 @@ ResultType Script::PerformMenu(char *aWhichMenu, char *aCommand, char *aMenuItem
 		aLabel = "";
 	}
 
-	bool menu_item_needed = (menu_command != MENU_COMMAND_DELETEALL && menu_command != MENU_COMMAND_NODEFAULT
-		 && menu_command != MENU_COMMAND_STANDARD && menu_command != MENU_COMMAND_NOSTANDARD
+	// Some of the commands were already completed handled and returned from, above, so do not need
+	// to be included here:
+	bool menu_item_needed = (menu_command != MENU_COMMAND_NODEFAULT && menu_command != MENU_COMMAND_STANDARD
 		 && menu_command != MENU_COMMAND_ADD); // Don't need a menu item for this one if it's a separator.
 
 	if ((!aMenuItemName || !*aMenuItemName) && menu_item_needed)
@@ -448,16 +590,17 @@ ResultType Script::PerformMenu(char *aWhichMenu, char *aCommand, char *aMenuItem
 	if (menu_command == MENU_COMMAND_ADD && (!aLabel || !*aLabel)) // All the label to default to the menu name.
 		aLabel = aMenuItemName;
 	if (aLabel && *aLabel) // Even for MENU_COMMAND_ADD it can be blank if a separator is being added.
-		if (   !(target_label = g_script.FindLabel(aLabel))   )
+		if (   !(target_label = FindLabel(aLabel))   )
 			return ScriptError(ERR_MENULABEL ERR_ABORT, aLabel);
 
-	// Now that most opportunities to return an error have passed, create the menu if needed:
+	// Now that most opportunities to return an error have passed, create the menu if needed, since
+	// all the commands that haven't already been fully handled above will need it:
 	if (!mTrayMenu) // Probably because this is the first time the script has accessed the menu.
 		if (!CreateTrayMenu())
 			return FAIL;  // Realistically never happens, so no error is dislayed.
 
 	// Find aMenuItemName in the linked list:
-	UserMenuItem *mi, *menu_item = NULL, *menu_item_prev = NULL;
+	UserMenuItem *menu_item = NULL, *menu_item_prev = NULL; // Set defaults.
 	// The below IF statement avoids searching if it's a separator being used with the ADD command:
 	if ((menu_item_needed || menu_command == MENU_COMMAND_ADD) && aMenuItemName && *aMenuItemName)
 		for (menu_item = mFirstMenuItem; menu_item != NULL; menu_item_prev = menu_item, menu_item = menu_item->mNextMenuItem)
@@ -522,6 +665,7 @@ ResultType Script::PerformMenu(char *aWhichMenu, char *aCommand, char *aMenuItem
 		// user was using the ADD command just to update a menu item's label):
 		menu_item->mLabel = target_label;  // This will be NULL if this menu item is a separator.
 		return OK;
+
 	case MENU_COMMAND_RENAME:
 		if (*new_name)
 		{
@@ -538,7 +682,7 @@ ResultType Script::PerformMenu(char *aWhichMenu, char *aCommand, char *aMenuItem
 			#define CHANGE_DEFAULT_IF_NEEDED \
 				if (mTrayMenuDefault == menu_item)\
 				{\
-					SetMenuDefaultItem(mTrayMenu, -1, TRUE);\
+					SetMenuDefaultItem(mTrayMenu, mTrayIncludeStandard && g_AllowMainWindow ? ID_TRAY_OPEN : -1, FALSE);\
 					mTrayMenuDefault = NULL;\
 				}
 #else
@@ -560,43 +704,53 @@ ResultType Script::PerformMenu(char *aWhichMenu, char *aCommand, char *aMenuItem
 			, menu_item->mMenuID, new_name);
 		strlcpy(menu_item->mName, new_name, sizeof(menu_item->mName));
 		return OK;
+
 	case MENU_COMMAND_CHECK:
 		menu_item->mChecked = true;
 		CheckMenuItem(mTrayMenu, menu_item->mMenuID, MF_CHECKED);
 		return OK;
+
 	case MENU_COMMAND_UNCHECK:
 		menu_item->mChecked = false;
 		CheckMenuItem(mTrayMenu, menu_item->mMenuID, MF_UNCHECKED);
 		return OK;
+
 	case MENU_COMMAND_TOGGLECHECK:
 		menu_item->mChecked = !menu_item->mChecked;
 		CheckMenuItem(mTrayMenu, menu_item->mMenuID, menu_item->mChecked ? MF_CHECKED : MF_UNCHECKED);
 		return OK;
+
 	case MENU_COMMAND_ENABLE:
 		menu_item->mEnabled = true;
 		EnableMenuItem(mTrayMenu, menu_item->mMenuID, MF_BYCOMMAND | MF_ENABLED); // Automatically ungrays it too.
 		return OK;
+
 	case MENU_COMMAND_DISABLE: // Disables and grays the item.
 		menu_item->mEnabled = false;
 		EnableMenuItem(mTrayMenu, menu_item->mMenuID, MF_BYCOMMAND | MF_DISABLED | MF_GRAYED);
 		return OK;
+
 	case MENU_COMMAND_TOGGLEENABLE:
 		menu_item->mEnabled = !menu_item->mEnabled;
 		EnableMenuItem(mTrayMenu, menu_item->mMenuID, menu_item->mEnabled ? (MF_BYCOMMAND | MF_ENABLED)
 			: MF_BYCOMMAND | MF_DISABLED | MF_GRAYED);
 		return OK;
+
 	case MENU_COMMAND_DEFAULT:
 		mTrayMenuDefault = menu_item;
 		SetMenuDefaultItem(mTrayMenu, menu_item->mMenuID, FALSE); // This also ensures that only one is default at a time.
 		return OK;
+
 	case MENU_COMMAND_NODEFAULT:
 		mTrayMenuDefault = NULL;
 #ifdef AUTOHOTKEYSC
-		SetMenuDefaultItem(mTrayMenu, -1, TRUE); // Necessary for proper operation of the self-contained version.
+		// Necessary for proper operation of the self-contained version:
+		SetMenuDefaultItem(mTrayMenu, g_AllowMainWindow && mTrayIncludeStandard ? ID_TRAY_OPEN : -1, FALSE);
 #else
 		SetMenuDefaultItem(mTrayMenu, mTrayIncludeStandard ? ID_TRAY_OPEN : -1, FALSE);
 #endif
 		return OK;
+
 	case MENU_COMMAND_STANDARD:
 		if (!mTrayIncludeStandard)
 		{
@@ -606,14 +760,7 @@ ResultType Script::PerformMenu(char *aWhichMenu, char *aCommand, char *aMenuItem
 			AppendStandardTrayItems();
 		}
 		return OK;
-	case MENU_COMMAND_NOSTANDARD:
-		if (mTrayIncludeStandard)
-		{
-			// Only do this if it was true beforehand since otherwise there's no point.
-			mTrayIncludeStandard = false; // Must set this before calling the below.
-			CreateTrayMenu();
-		}
-		return OK;
+
 	case MENU_COMMAND_DELETE:
 		// Remove this menu item from the linked list:
 		if (menu_item == mLastMenuItem)
@@ -627,34 +774,8 @@ ResultType Script::PerformMenu(char *aWhichMenu, char *aCommand, char *aMenuItem
 		delete menu_item; // Do this last when its contents are no longer needed.
 		--mMenuItemCount;
 		return OK;
-	case MENU_COMMAND_DELETEALL:
-		if (!mFirstMenuItem)
-			return OK;  // If there are no user-defined menu items, it's already in the "reset" state.
-		// I think DestroyMenu() can fail if an attempt is made to destroy the menu while it is being
-		// displayed (but even if it doesn't fail, it seems very bad to try to destroy it then, which
-		// is why g_MenuIsVisible is checked just to be sure).
-		// But this all should be impossible in our case because the script is in an uninterruptible state
-		// while the menu is displayed, which in addition to pausing the current thread (which happens
-		// anyway), no new timed or hotkey subroutines can be launched.  Thus, this should rarely if
-		// ever happen, which is why no error message is given here:
-		if (g_MenuIsVisible || !DestroyMenu(mTrayMenu))
-			return OK;
-		else
-			mTrayMenu = NULL;
-		mTrayMenuDefault = NULL;  // i.e. there can't be a user-defined default item anymore.
-		// Remove all menu items from the linked list and from the menu.  First destroy the menu since
-		// it's probably better to start off fresh than have the destructor individually remove each
-		// menu item as the items in the linked list are deleted:
-		for (menu_item = mFirstMenuItem; menu_item;)
-		{
-			UserMenuItem *menu_item_to_delete = menu_item;
-			menu_item = menu_item->mNextMenuItem;
-			delete menu_item_to_delete;
-		}
-		mFirstMenuItem = mLastMenuItem = NULL;
-		mMenuItemCount = 0;
-		return OK;
-	}
+
+	} // switch()
 	return FAIL;  // Should never be reached, but avoids compiler warning.
 }
 
@@ -662,8 +783,8 @@ ResultType Script::PerformMenu(char *aWhichMenu, char *aCommand, char *aMenuItem
 
 HMENU Script::CreateTrayMenu()
 {
-	if (mTrayMenu) // Destroy any old one first (MENU_COMMAND_NOSTANDARD relies on this).
-		DestroyMenu(mTrayMenu);
+	if (!DestroyTrayMenu()) // Destroy any old one first (MENU_COMMAND_NOSTANDARD relies on this).
+		return mTrayMenu;  // Return the old one if it couldn't be destroyed (probably very rare).
 	if (   !(mTrayMenu = CreatePopupMenu())   )
 		return NULL;
 
@@ -709,7 +830,14 @@ HMENU Script::CreateTrayMenu()
 
 void Script::AppendStandardTrayItems()
 {
-#ifndef AUTOHOTKEYSC
+#ifdef AUTOHOTKEYSC
+	if (g_AllowMainWindow)
+	{
+		AppendMenu(mTrayMenu, MF_STRING, ID_TRAY_OPEN, "&Open");
+		if (!mTrayMenuDefault) // No user-defined default menu item, so use the standard one.
+			SetMenuDefaultItem(mTrayMenu, ID_TRAY_OPEN, FALSE); // Seems to have no function other than appearance.
+	}
+#else
 	AppendMenu(mTrayMenu, MF_STRING, ID_TRAY_OPEN, "&Open");
 	AppendMenu(mTrayMenu, MF_STRING, ID_TRAY_HELP, "&Help");
 	AppendMenu(mTrayMenu, MF_SEPARATOR, 0, NULL);
@@ -729,11 +857,11 @@ void Script::AppendStandardTrayItems()
 
 ResultType Script::Edit()
 {
-	// This is here in case a compiled script ever uses the Edit command.  Since the "Edit This
-	// Script" menu item is not available for compiled scripts, it can't be called from there.
 #ifdef AUTOHOTKEYSC
 	return OK; // Do nothing.
-#endif
+#else
+	// This is here in case a compiled script ever uses the Edit command.  Since the "Edit This
+	// Script" menu item is not available for compiled scripts, it can't be called from there.
 	bool old_mode = g.TitleFindAnywhere;
 	g.TitleFindAnywhere = true;
 	HWND hwnd = WinExist(mFileName, "", mMainWindowTitle); // Exclude our own main.
@@ -760,10 +888,11 @@ ResultType Script::Edit()
 			// even without double quotes around them, it seems safer and more correct to always
 			// enclose the filename in double quotes for maximum compatibility with all OSes:
 			if (!ActionExec("notepad.exe", buf, mFileDir, false))
-				MsgBox("Could not open the file for editing using the associated \"edit\" action or Notepad.");
+				MsgBox("Could not open file for editing using the associated \"edit\" action or Notepad.");
 		}
 	}
 	return OK;
+#endif
 }
 
 
@@ -790,19 +919,10 @@ ResultType Script::Reload(bool aDisplayErrors)
 void Script::ExitApp(char *aBuf, int aExitCode)
 // Normal exit (if aBuf is NULL), or a way to exit immediately on error.  This is mostly
 // for times when it would be unsafe to call MsgBox() due to the possibility that it would
-// make the situation even worse.
+// make the situation even worse.  Note that g_script's destructor takes care of most other
+// cleanup work, such as destroying tray icons, menus, and unowned windows such as ToolTip.
 {
 	if (!aBuf) aBuf = "";
-	// MSDN: "Before terminating, an application must call the UnhookWindowsHookEx function to free
-	// system resources associated with the hook."
-	RemoveAllHooks();
-	if (mNIC.hWnd) // Tray icon is installed.
-		Shell_NotifyIcon(NIM_DELETE, &mNIC); // Remove it.
-	if (mTrayMenu) // Since it's not associated with a window, we must free the resources for this menu.
-	{
-		DestroyMenu(mTrayMenu);
-		mTrayMenu = NULL;
-	}
 	if (*aBuf)
 	{
 		char buf[1024];
@@ -811,9 +931,6 @@ void Script::ExitApp(char *aBuf, int aExitCode)
 		// To avoid chance of more errors, don't use MsgBox():
 		MessageBox(g_hWnd, buf, g_script.mFileSpec, MB_OK | MB_SETFOREGROUND | MB_APPLMODAL);
 	}
-#ifdef ENABLE_KEY_HISTORY_FILE
-	KeyHistoryToFile();  // Close the KeyHistory file if it's open.
-#endif
 	PostQuitMessage(aExitCode); // This might be needed to prevent hang-on-exit.
 	Hotkey::AllDestructAndExit(*aBuf ? CRITICAL_ERROR : aExitCode); // Terminate the application.
 	// Not as reliable: PostQuitMessage(CRITICAL_ERROR);
@@ -1010,7 +1127,11 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 		return FAIL;
 	}
 	// AutoIt3: Read the script (the func allocates the memory for the buffer :) )
-	if ( oRead.FileExtractToMem(">AUTOHOTKEY SCRIPT<", &script_buf, &nDataSize) != HS_EXEARC_E_OK)
+	if (oRead.FileExtractToMem(">AUTOHOTKEY SCRIPT<", &script_buf, &nDataSize) == HS_EXEARC_E_OK)
+		mCustomIcon = false;
+	else if (oRead.FileExtractToMem(">AHK WITH ICON<", &script_buf, &nDataSize) == HS_EXEARC_E_OK)
+		mCustomIcon = true;
+	else
 	{
 		oRead.Close();							// Close the archive
 		MsgBox("Could not extract the script from the EXE into memory.", 0, aFileSpec);
@@ -1392,9 +1513,21 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 		g_WinActivateForce = true;
 		return CONDITION_TRUE;
 	}
+	if (IS_DIRECTIVE_MATCH("#Persistent"))
+	{
+		g_persistent = true;
+		return CONDITION_TRUE;
+	}
 	if (IS_DIRECTIVE_MATCH("#SingleInstance"))
 	{
-		g_AllowOnlyOneInstance = true;
+		g_AllowOnlyOneInstance = SINGLE_INSTANCE;
+		if (*directive_end && *(cp = omit_leading_whitespace(directive_end)))
+		{
+			if (*cp == g_delimiter)
+				cp = omit_leading_whitespace(cp + 1);
+			if (!stricmp(cp, "force"))
+				g_AllowOnlyOneInstance = SINGLE_INSTANCE_NO_PROMPT;
+		}
 		return CONDITION_TRUE;
 	}
 	if (IS_DIRECTIVE_MATCH("#NoTrayIcon"))
@@ -1412,16 +1545,12 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 		// Set the default mode that will be used if there's no parameter at all:
 		g_ForceKeybdHook = true;
 		#define RETURN_IF_NO_CHAR \
-		if (!*directive_end)\
-			return CONDITION_TRUE;\
-		if (   !*(cp = omit_leading_whitespace(directive_end))   )\
-			return CONDITION_TRUE;\
-		if (*cp == g_delimiter)\
-		{\
-			++cp;\
-			if (   !*(cp = omit_leading_whitespace(cp))   )\
+			if (!*directive_end)\
 				return CONDITION_TRUE;\
-		}
+			if (   !*(cp = omit_leading_whitespace(directive_end))   )\
+				return CONDITION_TRUE;\
+			if (*cp == g_delimiter && !*(cp = omit_leading_whitespace(cp + 1))   )\
+				return CONDITION_TRUE;
 		RETURN_IF_NO_CHAR
 		if (Line::ConvertOnOff(cp) == TOGGLED_OFF)
 			g_ForceKeybdHook = false;
@@ -1430,27 +1559,39 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 	}
 	if (IS_DIRECTIVE_MATCH("#InstallKeybdHook"))
 	{
-		if (g_os.IsWin9x())
-			MsgBox("#InstallKeybdHook is not supported on Windows 95/98/ME.  This line will be ignored.");
-		else
+		// It seems best not to report this warning because a user may want to use partial functionality
+		// of a script on Win9x:
+		//MsgBox("#InstallKeybdHook is not supported on Windows 95/98/ME.  This line will be ignored.");
+		if (!g_os.IsWin9x())
 		{
 			Hotkey::RequireHook(HOOK_KEYBD);
+#ifdef HOOK_WARNING
 			if (*directive_end && *(cp = omit_leading_whitespace(directive_end)))
+			{
+				if (*cp == g_delimiter)
+					cp = omit_leading_whitespace(cp + 1);
 				if (!stricmp(cp, "force"))
 					sWhichHookSkipWarning |= HOOK_KEYBD;
+			}
+#endif
 		}
 		return CONDITION_TRUE;
 	}
 	if (IS_DIRECTIVE_MATCH("#InstallMouseHook"))
 	{
-		if (g_os.IsWin9x())
-			MsgBox("#InstallMouseHook is not supported on Windows 95/98/ME.  This line will be ignored.");
-		else
+		// It seems best not to report this warning because a user may want to use partial functionality
+		// of a script on Win9x:
+		//MsgBox("#InstallMouseHook is not supported on Windows 95/98/ME.  This line will be ignored.");
+		if (!g_os.IsWin9x())
 		{
 			Hotkey::RequireHook(HOOK_MOUSE);
+#ifdef HOOK_WARNING
 			if (*directive_end && *(cp = omit_leading_whitespace(directive_end)))
+			{
 				if (!stricmp(cp, "force"))
 					sWhichHookSkipWarning |= HOOK_MOUSE;
+			}
+#endif
 		}
 		return CONDITION_TRUE;
 	}
@@ -1562,7 +1703,10 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 	{
 		// This macro will skip over any leading delimiter than may be present, e.g. #Delimiter, ^
 		// This should be okay since the user shouldn't be attempting to change the delimiter
-		// to what it already is, and even if this is attempted, it would just be ignored:
+		// to what it already is, and even if this is attempted, it would just be ignored.
+		// For example, "#Delimiter ," isn't meaningful if the delimiter already is a comma,
+		// which is good because the RETURN_IF_NO_CHAR macro would assume that the comma
+		// is accidental (not a symbol) and try to find the symbol after it.
 		RETURN_IF_NO_CHAR
 		if (   *cp == '#' || *cp == g_EscapeChar || *cp == g_DerefChar || *cp == '.'
 			|| (g_CommentFlagLength == 1 && *cp == *g_CommentFlag)   )
@@ -2644,9 +2788,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_STRINGGETPOS:
-		if (   line->mArgc > 3 && !line->ArgHasDeref(4) && *LINE_RAW_ARG4
-			&& (strlen(LINE_RAW_ARG4) > 1 || (toupper(*LINE_RAW_ARG4) != 'R' && *LINE_RAW_ARG4 != '1'))   )
-			return ScriptError("If not blank, parameter #4 must be 1, R, or a variable reference.", LINE_RAW_ARG4);
+		if (line->mArgc > 3 && !line->ArgHasDeref(4) && *LINE_RAW_ARG4 && !strchr("LR1", toupper(*LINE_RAW_ARG4)))
+			return ScriptError("If not blank or a variable reference, parameter #4 must be 1 or start with the letter L or R.", LINE_RAW_ARG4);
 		break;
 
 	case ACT_STRINGREPLACE:
@@ -2815,8 +2958,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_FILESELECTFOLDER:
 		if (line->mArgc > 2 && !line->ArgHasDeref(3) && *LINE_RAW_ARG3)
 		{
-			if (strlen(LINE_RAW_ARG3) > 1 || (*LINE_RAW_ARG3 != '0' && *LINE_RAW_ARG3 != '1'))
-				return ScriptError("Parameter #3 must be either blank, 0, 1, or a variable reference."
+			if (strlen(LINE_RAW_ARG3) > 1 || *LINE_RAW_ARG3 < '0' || *LINE_RAW_ARG3 > '3')
+				return ScriptError("Parameter #3 must be either blank, 0, 1, 2, 3, or a variable reference."
 					, LINE_RAW_ARG3);
 		}
 		if (aActionType == ACT_FILEINSTALL)
@@ -2926,6 +3069,47 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			return ScriptError("Parameter #1 must be the word TRAY or a variable reference.", LINE_RAW_ARG1);
 		if (line->mArgc > 1 && !line->ArgHasDeref(2) && !line->ConvertMenuCommand(LINE_RAW_ARG2))
 			return ScriptError(ERR_MENUCOMMAND, LINE_RAW_ARG2);
+		break;
+
+	case ACT_CONTROL:
+		if (line->mArgc > 0 && !line->ArgHasDeref(1))
+		{
+			ControlCmds control_cmd = line->ConvertControlCmd(LINE_RAW_ARG1);
+			switch (control_cmd)
+			{
+			case CONTROL_CMD_INVALID:
+				return ScriptError(ERR_CONTROLCOMMAND, LINE_RAW_ARG1);
+			case CONTROL_CMD_TABLEFT:
+			case CONTROL_CMD_TABRIGHT:
+			case CONTROL_CMD_ADD:
+			case CONTROL_CMD_DELETE:
+			case CONTROL_CMD_CHOOSE:
+			case CONTROL_CMD_CHOOSESTRING:
+			case CONTROL_CMD_EDITPASTE:
+				break;
+			default: // All commands except the above should have a blank Value parameter.
+				if (line->mArgc > 1 && *LINE_RAW_ARG2)
+					return ScriptError("Parameter #2 should be blank or omitted in this case.", LINE_RAW_ARG2);
+			}
+		}
+		break;
+
+	case ACT_CONTROLGET:
+		if (line->mArgc > 1 && !line->ArgHasDeref(2))
+		{
+			ControlGetCmds control_get_cmd = line->ConvertControlGetCmd(LINE_RAW_ARG2);
+			switch (control_get_cmd)
+			{
+			case CONTROLGET_CMD_INVALID:
+				return ScriptError(ERR_CONTROLGETCOMMAND, LINE_RAW_ARG2);
+			case CONTROLGET_CMD_FINDSTRING:
+			case CONTROLGET_CMD_LINE:
+				break;
+			default: // All commands except the above should have a blank Value parameter.
+				if (line->mArgc > 2 && *LINE_RAW_ARG3)
+					return ScriptError("Parameter #3 should be blank or omitted in this case.", LINE_RAW_ARG3);
+			}
+		}
 		break;
 
 	case ACT_WINSET:
@@ -3910,9 +4094,9 @@ size_t Line::sDerefBufSize = 0;
 char *Line::sArgDeref[MAX_ARGS]; // No init needed.
 
 
-ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **apJumpToLine
-	, WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aCurrentRegItem, LoopReadFileStruct *aCurrentReadFile
-	, char *aCurrentField, __int64 aCurrentLoopIteration)
+ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_DATA *aCurrentFile
+	, RegItemStruct *aCurrentRegItem, LoopReadFileStruct *aCurrentReadFile, char *aCurrentField
+	, __int64 aCurrentLoopIteration)
 // Start executing at "this" line, stop when aMode indicates.
 // RECURSIVE: Handles all lines that involve flow-control.
 // aMode can be UNTIL_RETURN, UNTIL_BLOCK_END, ONLY_ONE_LINE.
@@ -4057,7 +4241,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 			{
 				// line->mNextLine has already been verified non-NULL by the pre-parser, so
 				// this dereference is safe:
-				result = line->mNextLine->ExecUntil(ONLY_ONE_LINE, aModifiersLR, &jump_to_line, aCurrentFile
+				result = line->mNextLine->ExecUntil(ONLY_ONE_LINE, &jump_to_line, aCurrentFile
 					, aCurrentRegItem, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
 				if (jump_to_line == line)
 					// Since this IF's ExecUntil() encountered a Goto whose target is the IF
@@ -4135,7 +4319,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 				if (line->mActionType == ACT_ELSE) // This IF has an else.
 				{
 					// Preparser has ensured that every ELSE has a non-NULL next line:
-					result = line->mNextLine->ExecUntil(ONLY_ONE_LINE, aModifiersLR, &jump_to_line, aCurrentFile
+					result = line->mNextLine->ExecUntil(ONLY_ONE_LINE, &jump_to_line, aCurrentFile
 						, aCurrentRegItem, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
 					if (aMode == ONLY_ONE_LINE && jump_to_line != NULL && apJumpToLine != NULL)
 						// The above call to ExecUntil() told us to jump somewhere.  But since we're in
@@ -4212,8 +4396,8 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 			// I'm pretty sure it's not valid for this call to ExecUntil() to tell us to jump
 			// somewhere, because the called function, or a layer even deeper, should handle
 			// the goto prior to returning to us?  So the last param is omitted:
-			result = jump_target->ExecUntil(UNTIL_RETURN, aModifiersLR, NULL, aCurrentFile
-				, aCurrentRegItem, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
+			result = jump_target->ExecUntil(UNTIL_RETURN, NULL, aCurrentFile, aCurrentRegItem
+				, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
 			// Must do these return conditions in this specific order:
 			if (result == FAIL || result == EARLY_EXIT)
 				return result;
@@ -4245,8 +4429,8 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 					// crazy place:
 					return FAIL;
 				// This section is just like the Gosub code above, so maintain them together.
-				result = jump_to_line->ExecUntil(UNTIL_RETURN, aModifiersLR, NULL, aCurrentFile
-					, aCurrentRegItem, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
+				result = jump_to_line->ExecUntil(UNTIL_RETURN, NULL, aCurrentFile, aCurrentRegItem
+					, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
 				if (result == FAIL || result == EARLY_EXIT)
 					return result;
 				if (aMode == ONLY_ONE_LINE)
@@ -4356,8 +4540,16 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 			jump_to_line = NULL; // Init prior to below call.
 
 			if (attr == ATTR_LOOP_PARSE)
-				result = line->PerformLoopParse(aModifiersLR, aCurrentFile, aCurrentRegItem, aCurrentReadFile
-					, continue_main_loop, jump_to_line);
+			{
+				// The phrase "csv" is unique enough since user can always rearrange the letters
+				// to do a literal parse using C, S, and V as delimiters:
+				if (stricmp(LINE_ARG3, "CSV"))
+					result = line->PerformLoopParse(aCurrentFile, aCurrentRegItem, aCurrentReadFile
+						, continue_main_loop, jump_to_line);
+				else
+					result = line->PerformLoopParseCSV(aCurrentFile, aCurrentRegItem, aCurrentReadFile
+						, continue_main_loop, jump_to_line);
+			}
 			else if (attr == ATTR_LOOP_READ_FILE)
 			{
 				// Open the input file:
@@ -4379,7 +4571,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 						++write_filespec;
 					}
 					FILE *write_file = *write_filespec ? fopen(write_filespec, open_as_binary ? "ab" : "a") : NULL;
-					result = line->PerformLoopReadFile(aModifiersLR, aCurrentFile, aCurrentRegItem, aCurrentField
+					result = line->PerformLoopReadFile(aCurrentFile, aCurrentRegItem, aCurrentField
 						, continue_main_loop, jump_to_line, read_file, write_file);
 					fclose(read_file);
 					if (write_file)
@@ -4403,7 +4595,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 				if (root_key)
 				{
 					// root_key_type needs to be passed in order to support GetLoopRegKey():
-					result = line->PerformLoopReg(aModifiersLR, aCurrentFile, aCurrentReadFile, aCurrentField
+					result = line->PerformLoopReg(aCurrentFile, aCurrentReadFile, aCurrentField
 						, continue_main_loop, jump_to_line, file_loop_mode, recurse_subfolders
 						, root_key_type, root_key, LINE_ARG2);
 					if (is_remote_registry)
@@ -4418,7 +4610,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 					result = OK;
 			}
 			else // All other loops types are handled this way:
-				result = line->PerformLoop(aModifiersLR, aCurrentFile, aCurrentRegItem, aCurrentReadFile
+				result = line->PerformLoop(aCurrentFile, aCurrentRegItem, aCurrentReadFile
 					, aCurrentField, continue_main_loop, jump_to_line, attr, file_loop_mode, recurse_subfolders
 					, LINE_ARG1, iteration_limit, is_infinite);
 
@@ -4481,8 +4673,8 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 			// Don't count block-begin/end against the total since they should be nearly instantaneous:
 			//++g_script.mLinesExecutedThisCycle;
 			// In this case, line->mNextLine is already verified non-NULL by the pre-parser:
-			result = line->mNextLine->ExecUntil(UNTIL_BLOCK_END, aModifiersLR, &jump_to_line, aCurrentFile
-				, aCurrentRegItem, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
+			result = line->mNextLine->ExecUntil(UNTIL_BLOCK_END, &jump_to_line, aCurrentFile, aCurrentRegItem
+				, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
 			if (jump_to_line == line)
 				// Since this Block-begin's ExecUntil() encountered a Goto whose target is the
 				// block-begin itself, continue with the for-loop without moving to a different
@@ -4541,7 +4733,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 			return line->LineError("This ELSE is unexpected." PLEASE_REPORT ERR_ABORT);
 		default:
 			++g_script.mLinesExecutedThisCycle;
-			result = line->Perform(aModifiersLR, aCurrentFile, aCurrentRegItem, aCurrentReadFile);
+			result = line->Perform(aCurrentFile, aCurrentRegItem, aCurrentReadFile);
 			if (result == FAIL || aMode == ONLY_ONE_LINE)
 				// Thus, Perform() should be designed to only return FAIL if it's an
 				// error that would make it unsafe to proceed the subroutine
@@ -4780,9 +4972,9 @@ inline ResultType Line::EvaluateCondition()
 
 
 
-ResultType Line::PerformLoop(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrentFile
-	, RegItemStruct *apCurrentRegItem, LoopReadFileStruct *apCurrentReadFile, char *aCurrentField
-	, bool &aContinueMainLoop, Line *&aJumpToLine, AttributeType aAttr, FileLoopModeType aFileLoopMode
+ResultType Line::PerformLoop(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
+	, LoopReadFileStruct *apCurrentReadFile, char *aCurrentField, bool &aContinueMainLoop
+	, Line *&aJumpToLine, AttributeType aAttr, FileLoopModeType aFileLoopMode
 	, bool aRecurseSubfolders, char *aFilePattern, __int64 aIterationLimit, bool aIsInfinite)
 // Note: Even if aFilePattern is just a directory (i.e. with not wildcard pattern), it seems best
 // not to append "\\*.*" to it because the pattern might be a script variable that the user wants
@@ -4834,7 +5026,7 @@ ResultType Line::PerformLoop(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrent
 		// Preparser has ensured that every LOOP has a non-NULL next line.
 		// apCurrentFile is sent as an arg so that more than one nested/recursive
 		// file-loop can be supported:
-		result = mNextLine->ExecUntil(ONLY_ONE_LINE, aModifiersLR, &jump_to_line
+		result = mNextLine->ExecUntil(ONLY_ONE_LINE, &jump_to_line
 			, file_found ? &new_current_file : apCurrentFile // inner loop's file takes precedence over outer's.
 			, apCurrentRegItem, apCurrentReadFile, aCurrentField
 			, i + 1);  // i+1, since 1 is the first iteration as reported to the script.
@@ -4929,7 +5121,7 @@ ResultType Line::PerformLoop(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrent
 		// its first loop iteration.  This is because this directory is being recursed into, not
 		// processed itself as a file-loop item (since this was already done in the first loop,
 		// above, if its name matches the original search pattern):
-		result = PerformLoop(aModifiersLR, NULL, apCurrentRegItem, apCurrentReadFile, aCurrentField
+		result = PerformLoop(NULL, apCurrentRegItem, apCurrentReadFile, aCurrentField
 			, aContinueMainLoop, aJumpToLine, aAttr, aFileLoopMode, aRecurseSubfolders, file_path
 			, aIterationLimit, aIsInfinite);
 		// result should never be LOOP_CONTINUE because the above call to PerformLoop() should have
@@ -4953,9 +5145,9 @@ ResultType Line::PerformLoop(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrent
 
 
 
-ResultType Line::PerformLoopReg(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrentFile
-	, LoopReadFileStruct *apCurrentReadFile, char *aCurrentField, bool &aContinueMainLoop, Line *&aJumpToLine
-	, FileLoopModeType aFileLoopMode, bool aRecurseSubfolders, HKEY aRootKeyType, HKEY aRootKey, char *aRegSubkey)
+ResultType Line::PerformLoopReg(WIN32_FIND_DATA *apCurrentFile, LoopReadFileStruct *apCurrentReadFile
+	, char *aCurrentField, bool &aContinueMainLoop, Line *&aJumpToLine, FileLoopModeType aFileLoopMode
+	, bool aRecurseSubfolders, HKEY aRootKeyType, HKEY aRootKey, char *aRegSubkey)
 // aRootKeyType is the type of root key, independent of whether it's local or remote.
 // This is used because there's no easy way to determine which root key a remote HKEY
 // refers to.
@@ -4987,7 +5179,7 @@ ResultType Line::PerformLoopReg(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurr
 	// Note that &reg_item is passed to ExecUntil() rather than 
 	#define MAKE_SCRIPT_LOOP_PROCESS_THIS_ITEM \
 	{\
-		result = mNextLine->ExecUntil(ONLY_ONE_LINE, aModifiersLR, &jump_to_line, apCurrentFile\
+		result = mNextLine->ExecUntil(ONLY_ONE_LINE, &jump_to_line, apCurrentFile\
 			, &reg_item, apCurrentReadFile, aCurrentField, ++script_iteration);\
 		if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT || result == LOOP_BREAK)\
 		{\
@@ -5058,9 +5250,8 @@ ResultType Line::PerformLoopReg(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurr
 				// after the recusive call returns to us:
 				snprintf(subkey_full_path, sizeof(subkey_full_path), "%s\\%s", reg_item.subkey, reg_item.name);
 				// This section is very similar to the one in PerformLoop(), so see it for comments:
-				result = PerformLoopReg(aModifiersLR, apCurrentFile, apCurrentReadFile, aCurrentField
-					, aContinueMainLoop, aJumpToLine, aFileLoopMode, aRecurseSubfolders, aRootKeyType
-					, aRootKey, subkey_full_path);
+				result = PerformLoopReg(apCurrentFile, apCurrentReadFile, aCurrentField, aContinueMainLoop
+					, aJumpToLine, aFileLoopMode, aRecurseSubfolders, aRootKeyType, aRootKey, subkey_full_path);
 				if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT || result == LOOP_BREAK)
 				{
 					RegCloseKey(hRegKey);
@@ -5080,9 +5271,8 @@ ResultType Line::PerformLoopReg(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurr
 
 
 
-ResultType Line::PerformLoopParse(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrentFile
-	, RegItemStruct *apCurrentRegItem, LoopReadFileStruct *apCurrentReadFile
-	, bool &aContinueMainLoop, Line *&aJumpToLine)
+ResultType Line::PerformLoopParse(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
+	, LoopReadFileStruct *apCurrentReadFile, bool &aContinueMainLoop, Line *&aJumpToLine)
 {
 	if (!*ARG2) // Since the input variable's contents are blank, the loop will execute zero times.
 		return OK;
@@ -5162,8 +5352,8 @@ ResultType Line::PerformLoopParse(modLR_type aModifiersLR, WIN32_FIND_DATA *apCu
 		}
 
 		// See comments in PerformLoop() for details about this section.
-		result = mNextLine->ExecUntil(ONLY_ONE_LINE, aModifiersLR, &jump_to_line, apCurrentFile
-			, apCurrentRegItem, apCurrentReadFile, field, ++script_iteration);
+		result = mNextLine->ExecUntil(ONLY_ONE_LINE, &jump_to_line, apCurrentFile, apCurrentRegItem
+			, apCurrentReadFile, field, ++script_iteration);
 
 		if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT || result == LOOP_BREAK)
 		{
@@ -5191,9 +5381,138 @@ ResultType Line::PerformLoopParse(modLR_type aModifiersLR, WIN32_FIND_DATA *apCu
 
 
 
-ResultType Line::PerformLoopReadFile(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrentFile
-	, RegItemStruct *apCurrentRegItem, char *aCurrentField, bool &aContinueMainLoop, Line *&aJumpToLine
-	, FILE *aReadFile, FILE *aWriteFile)
+ResultType Line::PerformLoopParseCSV(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
+	, LoopReadFileStruct *apCurrentReadFile, bool &aContinueMainLoop, Line *&aJumpToLine)
+// This function is similar to PerformLoopParse() so the two should be maintained together.
+// See PerformLoopParse() for comments about the below (comments have been mostly stripped
+// from this function).
+{
+	if (!*ARG2) // Since the input variable's contents are blank, the loop will execute zero times.
+		return OK;
+
+	char stack_buf[16384], *buf;
+	size_t space_needed = strlen(ARG2) + 1;  // +1 for the zero terminator.
+	if (space_needed <= sizeof(stack_buf))
+		buf = stack_buf;
+	else
+	{
+		if (   !(buf = (char *)malloc(space_needed))   )
+			return LineError("Failed to make a temp copy of the input variable.", FAIL, ARG2);
+	}
+	strcpy(buf, ARG2); // Make the copy.
+
+	#define FREE_PARSE_MEMORY if (buf != stack_buf) free(buf)
+
+	char omit_list[512];
+	strlcpy(omit_list, ARG4, sizeof(omit_list));
+
+	ResultType result;
+	Line *jump_to_line;
+	char *field, *field_end, saved_char;
+	size_t field_length;
+	__int64 script_iteration;
+	bool field_is_enclosed_in_quotes;
+
+	for (script_iteration = 0, field = buf;;)
+	{
+		if (*field == '"')
+		{
+			// For each field, check if the optional leading double-quote is present.  If it is,
+			// skip over it since we always know it's the one that marks the beginning of
+			// the that field.  This assumes that a field containing escaped double-quote is
+			// always contained in double quotes, which is how Excel does it.  For example:
+			// """string with escaped quotes""" resolves to a literal quoted string:
+			field_is_enclosed_in_quotes = true;
+			++field;
+		}
+		else
+			field_is_enclosed_in_quotes = false;
+
+		for (field_end = field;;)
+		{
+			if (   !(field_end = strchr(field_end, field_is_enclosed_in_quotes ? '"' : ','))   )
+			{
+				// This is the last field in the string, so set field_end to the position of
+				// the zero terminator instead:
+				field_end = field + strlen(field);
+				break;
+			}
+			if (field_is_enclosed_in_quotes)
+			{
+				// The quote discovered above marks the end of the string if it isn't followed
+				// by another quote.  But if it is a pair of quotes, replace it with a single
+				// literal double-quote and then keep searching for the real ending quote:
+				if (field_end[1] == '"')  // A pair of quotes was encountered.
+				{
+					memmove(field_end, field_end + 1, strlen(field_end + 1) + 1); // +1 to include terminator.
+					++field_end; // Skip over the literal double quote that we just produced.
+					continue; // Keep looking for the "real" ending quote.
+				}
+				// Otherwise, this quote marks the end of the field, so just fall through and break.
+			}
+			// else field is not enclosed in quotes, so the comma discovered above must be a delimiter.
+			break;
+		}
+
+		saved_char = *field_end; // This can be the terminator, a comma, or a double-quote.
+		*field_end = '\0';  // Terminate here so that GetLoopField() will see the correct substring.
+
+		if (*omit_list && *field)
+		{
+			// Process the omit list.
+			field = omit_leading_any(field, omit_list, field_end - field);
+			if (*field) // i.e. the above didn't remove all the chars due to them all being in the omit-list.
+			{
+				field_length = omit_trailing_any(field, omit_list, field_end - 1);
+				field[field_length] = '\0';  // Terminate here, but don't update field_end, since we need its pos.
+			}
+		}
+
+		// See comments in PerformLoop() for details about this section.
+		result = mNextLine->ExecUntil(ONLY_ONE_LINE, &jump_to_line, apCurrentFile, apCurrentRegItem
+			, apCurrentReadFile, field, ++script_iteration);
+
+		if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT || result == LOOP_BREAK)
+		{
+			FREE_PARSE_MEMORY;
+			return result;
+		}
+		if (jump_to_line == this)
+		{
+			aContinueMainLoop = true;
+			break;
+		}
+		if (jump_to_line)
+		{
+			aJumpToLine = jump_to_line;
+			break;
+		}
+
+		if (!saved_char) // The last item in the list has just been processed, so the loop is done.
+			break;
+		if (saved_char == ',') // Set "field" to be the position of the next field.
+			field = field_end + 1;
+		else // saved_char must be a double-quote char.
+		{
+			field = field_end + 1;
+			if (!*field) // No more fields occur after this one.
+				break;
+			// Find the next comma, which must be a real delimiter since we're in between fields:
+			if (   !(field = strchr(field, ','))   ) // No more fields.
+				break;
+			// Set it to be the first character of the next field, which might be a double-quote
+			// or another comma (if the field is empty).
+			++field;
+		}
+	}
+	FREE_PARSE_MEMORY;
+	return OK;
+}
+
+
+
+ResultType Line::PerformLoopReadFile(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
+	, char *aCurrentField, bool &aContinueMainLoop, Line *&aJumpToLine, FILE *aReadFile, FILE *aWriteFile)
 {
 	LoopReadFileStruct loop_info(aReadFile, aWriteFile);
 	size_t line_length;
@@ -5206,8 +5525,8 @@ ResultType Line::PerformLoopReadFile(modLR_type aModifiersLR, WIN32_FIND_DATA *a
 		if (line_length && loop_info.mCurrentLine[line_length - 1] == '\n') // Remove newlines like FileReadLine does.
 			loop_info.mCurrentLine[--line_length] = '\0';
 		// See comments in PerformLoop() for details about this section.
-		result = mNextLine->ExecUntil(ONLY_ONE_LINE, aModifiersLR, &jump_to_line, apCurrentFile
-			, apCurrentRegItem, &loop_info, aCurrentField, ++script_iteration);
+		result = mNextLine->ExecUntil(ONLY_ONE_LINE, &jump_to_line, apCurrentFile, apCurrentRegItem
+			, &loop_info, aCurrentField, ++script_iteration);
 		if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT || result == LOOP_BREAK)
 			return result;
 		if (jump_to_line == this)
@@ -5226,8 +5545,8 @@ ResultType Line::PerformLoopReadFile(modLR_type aModifiersLR, WIN32_FIND_DATA *a
 
 
 
-inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurrentFile
-	, RegItemStruct *aCurrentRegItem, LoopReadFileStruct *aCurrentReadFile)
+inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aCurrentRegItem
+	, LoopReadFileStruct *aCurrentReadFile)
 // Performs only this line's action.
 // Returns OK or FAIL.
 // The function should not be called to perform any flow-control actions such as
@@ -5565,7 +5884,8 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_WINMENUSELECTITEM:
 		return WinMenuSelectItem(ELEVEN_ARGS);
 	case ACT_CONTROLSEND:
-		return ControlSend(SIX_ARGS, aModifiersLR);
+		return ControlSend(SIX_ARGS);
+
 	case ACT_CONTROLCLICK:
 		if (*ARG4)
 		{
@@ -5575,6 +5895,9 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		else // Default button when the param is blank or an reference to an empty var.
 			vk = VK_LBUTTON;
 		return ControlClick(vk, *ARG5 ? ATOI(ARG5) : 1, *ARG6, ARG1, ARG2, ARG3, ARG7, ARG8);
+
+	case ACT_CONTROLMOVE:
+		return ControlMove(NINE_ARGS);
 	case ACT_CONTROLGETFOCUS:
 		return ControlGetFocus(ARG2, ARG3, ARG4, ARG5);
 	case ACT_CONTROLFOCUS:
@@ -5583,6 +5906,10 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		return ControlSetText(SIX_ARGS);
 	case ACT_CONTROLGETTEXT:
 		return ControlGetText(ARG2, ARG3, ARG4, ARG5, ARG6);
+	case ACT_CONTROL:
+		return Control(SEVEN_ARGS);
+	case ACT_CONTROLGET:
+		return ControlGet(ARG2, ARG3, ARG4, ARG5, ARG6, ARG7, ARG8);
 	case ACT_STATUSBARGETTEXT:
 		return StatusBarGetText(ARG2, ARG3, ARG4, ARG5, ARG6);
 	case ACT_STATUSBARWAIT:
@@ -5804,27 +6131,45 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	{
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
-		g_ErrorLevel->Assign(ERRORLEVEL_NONE);  // Set default.
-		bool search_from_the_right = (toupper(*ARG4) == 'R' || *ARG4 == '1');
-		int pos;  // An int, not size_t, so that it can be negative.
-		if (!*ARG3) // It might be intentional, in obscure cases, to search for the empty string.
-			pos = 0; // Empty string is always found immediately (first char from left).
-		else
+		bool search_from_the_right = toupper(*ARG4) == 'R' || *ARG4 == '1';
+		int i, pos = -1, occurrence_number = 1; // Set defaults.
+		if (strchr("LR", toupper(*ARG4)))
+			occurrence_number = *(ARG4 + 1) ? ATOI(ARG4 + 1) : 1;
+		// Intentionally allow occurrence_number to resolve to a negative, for scripting flexibililty:
+		if (occurrence_number > 0)
 		{
-			char *found;
-			if (search_from_the_right)
-				found = strrstr(ARG2, ARG3, g.StringCaseSense);
-			else
-				found = g.StringCaseSense ? strstr(ARG2, ARG3) : stristr(ARG2, ARG3);
-			if (found)
-				pos = (int)(found - ARG2);
+			if (!*ARG3) // It might be intentional, in obscure cases, to search for the empty string.
+				pos = 0;
+				// Above: empty string is always found immediately (first char from left) regardless
+				// of whether search_from_the_right is true.  This is because it's too rare to
+				// worry about giving it any more explicit handling based on search_from_the_right.
 			else
 			{
-				pos = -1;  // Another indicator in addition to the below.
-				g_ErrorLevel->Assign(ERRORLEVEL_ERROR);  // So that it behaves like AutoIt2.
+				char *found, *search_str = ARG3;
+				size_t search_str_length = strlen(search_str);
+				if (search_from_the_right)
+					// Want it to behave like in this example: If searching for the 2nd occurrence of
+					// FF in the string FFFF, it should find the first two F's, not the middle two:
+					found = strrstr(ARG2, search_str, g.StringCaseSense, occurrence_number);
+				else
+				{
+					// Want it to behave like in this example: If searching for the 2nd occurrence of
+					// FF in the string FFFF, it should find position 3 (the 2nd pair), not position 2:
+					for (i = 1, found = ARG2; ; ++i, found += search_str_length)
+					{
+						if (   !(found = g.StringCaseSense ? strstr(found, search_str) : stristr(found, search_str))   )
+							break;
+						if (i == occurrence_number)
+							break;
+					}
+				}
+				if (found)
+					pos = (int)(found - ARG2);
+				// else leave pos set to its default value, -1.
 			}
 		}
-		return output_var->Assign(pos); // It already displayed any error that may have occurred.
+		g_ErrorLevel->Assign(pos < 0 ? ERRORLEVEL_ERROR : ERRORLEVEL_NONE);
+		return output_var->Assign(pos); // Assign() already displayed any error that may have occurred.
 	}
 
 	case ACT_STRINGREPLACE:
@@ -6066,6 +6411,12 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_FILEDELETE:
 		return FileDelete(ARG1);
 
+	case ACT_FILERECYCLE:
+		return FileRecycle(ARG1);
+
+	case ACT_FILERECYCLEEMPTY:
+		return FileRecycleEmpty(ARG1);
+
 	case ACT_FILEINSTALL:
 		return FileInstall(THREE_ARGS);
 
@@ -6111,7 +6462,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_FILESELECTFILE:
 		return FileSelectFile(ARG2, ARG3, ARG4, ARG5);
 	case ACT_FILESELECTFOLDER:
-		return FileSelectFolder(ARG2, *ARG3 ? (ATOI(ARG3) != 0) : true, ARG4);
+		return FileSelectFolder(ARG2, (DWORD)(*ARG3 ? ATOI(ARG3) : FSF_ALLOW_CREATE), ARG4);
 	case ACT_FILECREATESHORTCUT:
 		return FileCreateShortcut(SEVEN_ARGS);
 
@@ -6290,13 +6641,13 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		}
 #endif
 		// Otherwise:
-		return ShowMainWindow(MAIN_MODE_KEYHISTORY);
+		return ShowMainWindow(MAIN_MODE_KEYHISTORY, false); // Pass "unrestricted" when the command is explicitly used in the script.
 	case ACT_LISTLINES:
-		return ShowMainWindow(MAIN_MODE_LINES);
+		return ShowMainWindow(MAIN_MODE_LINES, false); // Pass "unrestricted" when the command is explicitly used in the script.
 	case ACT_LISTVARS:
-		return ShowMainWindow(MAIN_MODE_VARS);
+		return ShowMainWindow(MAIN_MODE_VARS, false); // Pass "unrestricted" when the command is explicitly used in the script.
 	case ACT_LISTHOTKEYS:
-		return ShowMainWindow(MAIN_MODE_HOTKEYS);
+		return ShowMainWindow(MAIN_MODE_HOTKEYS, false); // Pass "unrestricted" when the command is explicitly used in the script.
 
 	case ACT_MSGBOX:
 	{
@@ -6329,10 +6680,14 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
 		return InputBox(output_var, ARG2, ARG3, toupper(*ARG4) == 'H' // 4th is whether to hide input.
-			, *ARG5 ? ATOI(ARG5) : INPUTBOX_DEFAULT
-			, *ARG6 ? ATOI(ARG6) : INPUTBOX_DEFAULT
-			, *ARG7 ? ATOI(ARG7) : INPUTBOX_DEFAULT
-			, *ARG8 ? ATOI(ARG8) : INPUTBOX_DEFAULT);
+			, *ARG5 ? ATOI(ARG5) : INPUTBOX_DEFAULT  // Width
+			, *ARG6 ? ATOI(ARG6) : INPUTBOX_DEFAULT  // Height
+			, *ARG7 ? ATOI(ARG7) : INPUTBOX_DEFAULT  // Xpos
+			, *ARG8 ? ATOI(ARG8) : INPUTBOX_DEFAULT  // Ypos
+			// ARG9: future use for Font name & size, e.g. "Courier:8"
+			, ATOF(ARG10)  // Timeout
+			, ARG11  // Initial default string for the edit field.
+			);
 
 	case ACT_SPLASHTEXTON:
 	{
@@ -6374,7 +6729,9 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		// Doesn't seem necessary to have it owned by the main window, but neither
 		// does doing so seem to cause any harm.  Feels safer to have it be
 		// an independent window.  Update: Must make it owned by the parent window
-		// otherwise it will get its own tray icon, which is usually undesirable:
+		// otherwise it will get its own task-bar icon, which is usually undesirable.
+		// In addition, making it an owned window should automatically cause it to be
+		// destroyed when it's parent window is.
 		g_hWndSplash = CreateWindowEx(WS_EX_TOPMOST, WINDOW_CLASS_SPLASH, ARG3  // ARG3 is the window title
 			, WS_DISABLED|WS_POPUP|WS_CAPTION, xpos, ypos, W, H
 			, g_hWnd, (HMENU)NULL, g_hInstance, NULL);
@@ -6409,8 +6766,12 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_SPLASHTEXTOFF:
 		DESTROY_SPLASH
 		return OK;
+
+	case ACT_TOOLTIP:
+		return ToolTip(THREE_ARGS);
+
 	case ACT_SEND:
-		SendKeys(ARG1, aModifiersLR);
+		SendKeys(ARG1);
 		return OK;
 	case ACT_MOUSECLICKDRAG:
 		if (   !(vk = ConvertMouseButton(ARG1))   )
@@ -6760,7 +7121,7 @@ ResultType Line::ExpandArgs()
     // during load:
 	if (g_act[mActionType].NumericParams)
 	{
-		bool allow_negative;
+		bool allow_negative, display_the_error;
 		for (ActionTypeType *np = g_act[mActionType].NumericParams; *np; ++np)
 		{
 			if (mArgc >= *np) // The arg exists.
@@ -6776,7 +7137,7 @@ ResultType Line::ExpandArgs()
 				allow_negative = ArgAllowsNegative(*np);
 				if (!IsPureNumeric(sArgDeref[*np - 1], allow_negative, true, true))
 				{
-
+					display_the_error = true;  // Set default, which is to display the error.
 					switch(mActionType)
 					{
 					case ACT_ADD:
@@ -6788,12 +7149,20 @@ ResultType Line::ExpandArgs()
 					case ACT_STRINGMID:
 					case ACT_STRINGTRIMLEFT:
 					case ACT_STRINGTRIMRIGHT:
-					case ACT_CONTROLCLICK:
-					case ACT_MOUSECLICK: // Allow even the Speed param to be negative, just to simplify.
 						// Don't report runtime errors for these (only loadtime) because they
 						// indicate failure in a quieter, different way:
+						display_the_error = false;
+						break;
+					case ACT_CONTROLCLICK:
+						if (*np == 5) // Make only param #5 (click count) exempt from error reporting.
+							display_the_error = false;
+						break;
+					case ACT_MOUSECLICK:
+						if (*np == 4) // Make only param #4 (click count) exempt from error reporting.
+							display_the_error = false;
 						break;
 					case ACT_WINMOVE:
+						display_the_error = false;  // Since we're doing a custom error msg for this one.
 						if (stricmp(sArgDeref[*np - 1], "default"))
 							return LineError("This parameter of this line doesn't resolve to either a"
 								" numeric value or the word Default as required.", FAIL, sArgDeref[*np - 1]);
@@ -6801,7 +7170,9 @@ ResultType Line::ExpandArgs()
 						// because sArgDeref[*np - 1] might point directly to the contents of
 						// a variable and we don't want to modify it in that case.
 						break;
-					default:
+					}
+					if (display_the_error)
+					{
 						if (allow_negative)
 							return LineError("This parameter of this line doesn't resolve to a"
 								" numeric value as required.", FAIL, sArgDeref[*np - 1]);
@@ -7314,17 +7685,31 @@ char *Script::ListKeyHistory(char *aBuf, size_t aBufSize)
 		GetWindowText(target_window, win_title, sizeof(win_title));
 	else
 		*win_title = '\0';
-	char LRtext[128];
+
+	char timer_list[128] = "";
+	for (ScriptTimer *timer = mFirstTimer; timer != NULL; timer = timer->mNextTimer)
+		if (timer->mEnabled)
+			snprintfcat(timer_list, sizeof(timer_list) - 3, "%s ", timer->mLabel->mName); // Allow room for "..."
+	if (*timer_list)
+	{
+		size_t length = strlen(timer_list);
+		if (length > (sizeof(timer_list) - 5))
+			strlcpy(timer_list + length, "...", sizeof(timer_list) - length);
+		else if (timer_list[length - 1] == ' ')
+			timer_list[--length] = '\0';  // Remove the last space if there was room enough for it to have been added.
+	}
+
+	char LRtext[256];
 	snprintf(aBuf, aBufSize,
 		"Window: %s"
 		//"\r\nBlocks: %u"
 		"\r\nKeybd hook: %s"
 		"\r\nMouse hook: %s"
 		"\r\nLast hotkey type: %s"
-		"\r\nEnabled Timers: %u of %u"
+		"\r\nEnabled Timers: %u of %u (%s)"
 		//"\r\nInterruptible?: %s"
 		"\r\nInterrupted threads: %d%s"
-		"\r\nPaused threads: %d"
+		"\r\nPaused threads: %d of %d (%d layers)"
 		"\r\nModifiers (GetKeyState() now) = %s"
 		"\r\n"
 		, win_title
@@ -7332,11 +7717,11 @@ char *Script::ListKeyHistory(char *aBuf, size_t aBufSize)
 		, g_hhkLowLevelKeybd == NULL ? "no" : "yes"
 		, g_hhkLowLevelMouse == NULL ? "no" : "yes"
 		, g_LastPerformedHotkeyType == HK_KEYBD_HOOK ? "keybd hook" : "not keybd hook"
-		, mTimerEnabledCount, mTimerCount
+		, mTimerEnabledCount, mTimerCount, timer_list
 		//, INTERRUPTIBLE ? "yes" : "no"
 		, g_nThreads > 1 ? g_nThreads - 1 : 0
 		, g_nThreads > 1 ? " (preempted: they will resume when the current thread finishes)" : ""
-		, g_nPausedThreads
+		, g_nPausedThreads, g_nThreads, g_nLayersNeedingTimer
 		, ModifiersLRToText(GetModifierLRState(true), LRtext));
 	aBuf += strlen(aBuf);
 	GetHookStatus(aBuf, BUF_SPACE_REMAINING);
@@ -7646,7 +8031,7 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 			sei.lpFile = shell_action;
 			sei.lpParameters = shell_params;
 		}
-		if (ShellExecuteEx(&sei) && LOBYTE(LOWORD(sei.hInstApp)) > 32) // Relies on short-circuit boolean order.
+		if (ShellExecuteEx(&sei)) // Relies on short-circuit boolean order.
 		{
 			new_process = sei.hProcess;
 			success = true;

@@ -39,12 +39,10 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	char *script_filespec = __argv[0];  // i.e. the EXE name.  This is just a placeholder for now.
 #else
 	#ifdef _DEBUG
-	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Find.aut";
 	//char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
-	char *script_filespec = "C:\\Program Files\\AutoHotkey\\AutoHotkey.ini";
 	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\Menu command COMPREHENSIVE TEST.ahk";
-	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test.ahk";
-	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
+	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\Window Class.ahk";
+	char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
 	#else
 	char *script_filespec = NAME_P ".ini";  // Use this extension for better file association with editor(s).
 	#endif
@@ -158,11 +156,12 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 			// Use a more unique title for this dialog so that subsequent executions of this
 			// program can easily find it (though they currently don't):
 			//#define NAME_ALREADY_RUNNING NAME_PV " script already running"
-			if (MsgBox("An older instance of this #SingleInstance script is already running."
-				"  Replace it with this instance?", MB_YESNO, g_script.mFileName) == IDNO)
-				return 0;
-			else
-				close_prior_instance = true;
+			if (g_AllowOnlyOneInstance != SINGLE_INSTANCE_NO_PROMPT)
+				if (MsgBox("An older instance of this #SingleInstance script is already running."
+					"  Replace it with this instance?", MB_YESNO, g_script.mFileName) == IDNO)
+					return 0;
+			// Otherwise:
+			close_prior_instance = true;
 		}
 	}
 	if (!close_prior_instance && restart_mode)
@@ -199,7 +198,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 
 	// Create all our windows and the tray icon.  This is done after all other chances
 	// to return early due to an error have passed, above.
-	if (g_script.CreateWindows(hInstance) != OK)
+	if (g_script.CreateWindows() != OK)
 		return CRITICAL_ERROR;
 
 	// Activate the hotkeys and any hooks that are required prior to executing the
@@ -210,7 +209,8 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	g_script.AutoExecSection();      // Run the auto-execute part at the top of the script.
 	if (!Hotkey::sHotkeyCount)       // No hotkeys are in effect.
 		if (!Hotkey::HookIsActive()) // And the user hasn't requested a hook to be activated.
-			g_script.ExitApp();      // We're done.
+			if (!g_persistent)       // And the script doesn't contain the #Persistent directive.
+				g_script.ExitApp();      // We're done.
 
 	// The below is done even if AutoExecSectionTimeout() already set the values once.
 	// This is because when the AutoExecute section finally does finish, by definition it's

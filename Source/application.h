@@ -225,12 +225,12 @@ if (g.UninterruptibleTime && g.UninterruptedLineCountMax)\
 			MsgSleep(g.ControlDelay);\
 	}
 
-ResultType IsCycleComplete(int aSleepDuration, DWORD aStartTime, bool aAllowEarlyReturn, MessageMode aMode);
+ResultType IsCycleComplete(int aSleepDuration, DWORD aStartTime, bool aAllowEarlyReturn);
 
 void CheckScriptTimers();
 #define CHECK_SCRIPT_TIMERS_IF_NEEDED if (g_script.mTimerEnabledCount) CheckScriptTimers();
 
-VOID CALLBACK DialogTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);
+VOID CALLBACK MsgBoxTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);
 VOID CALLBACK AutoExecSectionTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);
 VOID CALLBACK UninteruptibleTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);
 

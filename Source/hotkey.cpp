@@ -73,7 +73,8 @@ void Hotkey::AllActivate()
 			// such as <^Control and ^LControl are not currently validated and might
 			// yield unpredictable results:
 			if (modifiersLR = KeyToModifiersLR(shk[i]->mVK, shk[i]->mSC, &is_neutral))
-				// This hotkey's action-key is itself a modifier.
+				// This hotkey's action-key is itself a modifier, so ensure that it's not defined
+				// to modify itself.  Other sections might rely on us doing this:
 				if (is_neutral)
 					// Since the action-key is a neutral modifier (not left or right specific),
 					// turn off any neutral modifiers that may be on:
@@ -532,6 +533,28 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 		return;
 
 	char error_text[512];
+	if ((mModifierVK || mModifierSC))
+	{
+		bool is_neutral;
+		if (KeyToModifiersLR(mVK, mSC, &is_neutral))
+			if (is_neutral)
+			{
+				// In the future, this warning might be removed by directly supporting a neutral
+				// suffix key.  But it's fairly difficult to implement in a maintainable way;
+				// These are the only ways I can think of:
+				// 1) Create two hotkey entries for every such instance;
+				// 2) Have ChangeHookState() create two kvk/ksc(?) entries;
+				// 3) Have the hook search for the suffix key by first looking up the left/right
+				//    specific modifier (i.e. just as it came in) and then if that fails, trying
+				//    to look it up by the neutral VK.
+				snprintf(error_text, sizeof(error_text), "Warning: The following hotkey uses a neutral"
+					" modifier key as a suffix.  Instead, use the left/right specific key,"
+					" e.g. LShift vs. Shift.\n\nThis hotkey has not been enabled:\n%s"
+					, mJumpToLabel->mName);
+				MsgBox(error_text);
+				return;  // Key is invalid so don't give it an ID.
+			}
+	}
 	if (   (mHookAction == HOTKEY_ID_ALT_TAB || mHookAction == HOTKEY_ID_ALT_TAB_SHIFT)
 		&& !mModifierVK && !mModifierSC   )
 	{

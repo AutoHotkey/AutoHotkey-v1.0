@@ -540,7 +540,7 @@ HWND WinActive(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeTex
 	if (!GetWindowText(fore_win, active_win_title, sizeof(active_win_title)))
 		return NULL;
 
-	if (!IsTextMatch(active_win_title, aTitle, aExcludeTitle))
+	if (!IsTitleMatch(fore_win, active_win_title, aTitle, aExcludeTitle))
 		// Active window's title doesn't match.
 		return NULL;
 
@@ -626,7 +626,7 @@ BOOL CALLBACK EnumParentFind(HWND aWnd, LPARAM lParam)
 		return TRUE;  // Even if can't get the text of some window, for some reason, keep enumerating.
 	// strstr() and related std C functions -- as well as the custom stristr(), will always
 	// find the empty string in any string, which is what we want in case title is the empty string.
-	if (!IsTextMatch(win_title, pWin->title, pWin->exclude_title))
+	if (!IsTitleMatch(aWnd, win_title, pWin->title, pWin->exclude_title))
 		// Since title doesn't match there's no point in checking the text of this HWND.
 		// Just continue finding more top-level (parent) windows:
 		return TRUE;
@@ -1091,13 +1091,28 @@ int MsgBox(char *aText, UINT uType, char *aTitle, double aTimeout)
 	// an issue since the only disadvantage is that the keyboard can't be use to
 	// to navigate in MessageBoxes other than the most recent.  And it's actually better
 	// the way it is now in the sense that the user can dismiss the messageboxes out of
-	// order, which might (in rare cases) be desireable.
+	// order, which might (in rare cases) be desirable.
 
-	POST_AHK_DIALOG((int)(aTimeout * 1000))
+	if (aTimeout > 2147483) // This is approximately the max number of seconds that SetTimer can handle.
+		aTimeout = 2147483;
+	if (aTimeout < 0) // But it can be equal to zero to indicate no timeout at all.
+		aTimeout = 0.1;  // A value that might cue the user that something is wrong.
+	// For the above:
+	// MsgBox's smart comma handling will usually prevent negatives due to the fact that it considers
+	// a negative to be part of the text param.  But if it does happen, timeout after a short time,
+	// which may signal the user that the script passed a bad parameter.
+
+	POST_AHK_DIALOG((DWORD)(aTimeout * 1000))
 
 	++g_nMessageBoxes;  // This value will also be used as the Timer ID if there's a timeout.
 	g.MsgBoxResult = MessageBox(NULL, text, title, uType);
 	--g_nMessageBoxes;
+
+	// If there's a timer, kill it for performance reasons since it's no longer needed.
+	// Actually, this isn't easy to do because we don't know what the HWND of the MsgBox
+	// window was, so don't bother:
+	//if (aTimeout != 0.0)
+	//	KillTimer(...);
 
 //	if (!g_nMessageBoxes)
 //		ShowWindowAsync(g_hWnd, SW_HIDE);  // Hide the main window if it no longer has any child windows.
@@ -1114,8 +1129,7 @@ int MsgBox(char *aText, UINT uType, char *aTitle, double aTimeout)
 	// Unfortunately, it appears that MessageBox() will return zero rather
 	// than AHK_TIMEOUT that was specified in EndDialog() at least under WinXP.
 	if (!g.MsgBoxResult && aTimeout > 0)
-		// Assume it timed out rather than failed, since failure should be
-		// VERY rare.
+		// Assume it timed out rather than failed, since failure should be VERY rare.
 		g.MsgBoxResult = AHK_TIMEOUT;
 	// else let the caller handle the display of the error message because only it knows
 	// whether to also tell the user something like "the script will not continue".

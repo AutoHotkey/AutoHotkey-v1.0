@@ -30,6 +30,7 @@ HINSTANCE g_hInstance = NULL; // Set by WinMain().
 HWND g_hWnd = NULL;
 HWND g_hWndEdit = NULL;
 HWND g_hWndSplash = NULL;
+HWND g_hWndToolTip = NULL;
 HACCEL g_hAccelTable = NULL;
 
 modLR_type g_modifiersLR_logical = 0;
@@ -42,11 +43,17 @@ bool g_PhysicalKeyState[VK_MAX + 1] = {false};
 int g_HotkeyModifierTimeout = 50;  // Reduced from 100, which was a little too large for fast typists.
 HHOOK g_hhkLowLevelKeybd = NULL;
 HHOOK g_hhkLowLevelMouse = NULL;
-HookType sWhichHookSkipWarning = 0;
+#ifdef HOOK_WARNING
+	HookType sWhichHookSkipWarning = 0;
+#endif
 bool g_ForceLaunch = false;
 bool g_WinActivateForce = false;
-bool g_AllowOnlyOneInstance = false;
+SingleInstanceType g_AllowOnlyOneInstance = ALLOW_MULTI_INSTANCE;
+bool g_persistent = false;  // Whether the script should stay running even after the auto-exec section finishes.
 bool g_NoTrayIcon = false;
+#ifdef AUTOHOTKEYSC
+	bool g_AllowMainWindow = false;
+#endif
 bool g_AllowSameLineComments = true;
 char g_LastPerformedHotkeyType = HK_NORMAL;
 bool g_MainTimerExists = false;
@@ -200,9 +207,10 @@ Action g_act[] =
 	// IfMsgBox must be physically adjacent to the other IFs in this array:
 	, {"IfMsgBox", 1, 1, NULL} // MsgBox result (e.g. OK, YES, NO)
 	, {"MsgBox", 0, 4, {4, 0}} // Text (if only 1 param) or: Mode-flag, Title, Text, Timeout.
-	, {"InputBox", 1, 8, {5, 6, 7, 8, 0}} // Output var, title, prompt, hide-text (e.g. passwords), width, height, X, Y
+	, {"InputBox", 1, 11, {5, 6, 7, 8, 10, 0}} // Output var, title, prompt, hide-text (e.g. passwords), width, height, X, Y, Font (e.g. courier:8 maybe), Timeout, Default
 	, {"SplashTextOn", 0, 4, {1, 2, 0}} // Width, height, title, text
 	, {"SplashTextOff", 0, 0, NULL}
+	, {"ToolTip", 0, 3, {2, 3, 0}}  // Text, X, Y.  If all 3 are omitted, the Tooltip is turned off.
 
 	, {"StringLeft", 3, 3, {3, 0}}  // output var, input var, number of chars to extract
 	, {"StringRight", 3, 3, {3, 0}} // same
@@ -232,10 +240,13 @@ Action g_act[] =
 	// optional and validate elsewhere that the 2nd one specifically isn't blank:
 	, {"ControlSend", 0, 6, NULL} // Control, Chars-to-Send, std. 4 window params.
 	, {"ControlClick", 0, 8, {5, 0}} // Control, WinTitle, WinText, WhichButton, ClickCount, Hold/Release, ExcludeTitle, ExcludeText
-	, {"ControlGetFocus", 1, 5, NULL}  // OutputVar, std. 4 window params
+	, {"ControlMove", 0, 9, {2, 3, 4, 5, 0}} // Control, x, y, w, h, WinTitle, WinText, ExcludeTitle, ExcludeText
 	, {"ControlFocus", 0, 5, NULL}     // Control, std. 4 window params
+	, {"ControlGetFocus", 1, 5, NULL}  // OutputVar, std. 4 window params
 	, {"ControlSetText", 1, 6, NULL}   // Control, new text, std. 4 window params
 	, {"ControlGetText", 1, 6, NULL}   // Output-var, Control, std. 4 window params
+	, {"Control", 1, 7, NULL}   // Command, Value, Control, std. 4 window params
+	, {"ControlGet", 2, 8, NULL}   // Output-var, Command, Value, Control, std. 4 window params
 
 	, {"SetDefaultMouseSpeed", 1, 1, {1, 0}} // speed (numeric)
 	, {"MouseMove", 2, 3, {1, 2, 3, 0}} // x, y, speed
@@ -306,7 +317,9 @@ Action g_act[] =
 
 	, {"FileAppend", 1, 2, NULL} // text, filename (which can be omitted in a read-file loop).
 	, {"FileReadLine", 3, 3, NULL} // Output variable, filename, line-number (custom validation, not numeric validation)
-	, {"FileDelete", 1, 1, NULL} // filename
+	, {"FileDelete", 1, 1, NULL} // filename or pattern
+	, {"FileRecycle", 1, 1, NULL} // filename or pattern
+	, {"FileRecycleEmpty", 0, 1, NULL} // optional drive letter (all bins will be emptied if absent.
 	, {"FileInstall", 2, 3, {3, 0}} // source, dest, flag (1/0, where 1=overwrite)
 	, {"FileCopy", 2, 3, {3, 0}} // source, dest, flag
 	, {"FileMove", 2, 3, {3, 0}} // source, dest, flag

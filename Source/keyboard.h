@@ -191,10 +191,10 @@ struct sc2_type
 
 enum KeyEventTypes {KEYDOWN, KEYUP, KEYDOWNANDUP};
 
-void SendKeys(char *aKeys, modLR_type aModifiersLR = 0, HWND aTargetWindow = NULL);
-int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, mod_type aModifiersPersistent
-	, int aRepeatCount, KeyEventTypes aEventType, HWND aTargetWindow = NULL);
-int SendKeySpecial(char aChar, mod_type aModifiers, mod_type aModifiersPersistent
+void SendKeys(char *aKeys, HWND aTargetWindow = NULL);
+int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, modLR_type aModifiersLRPersistent
+	, int aRepeatCount, KeyEventTypes aEventType, modLR_type aKeyAsModifiersLR, HWND aTargetWindow);
+int SendKeySpecial(char aChar, mod_type aModifiers, modLR_type aModifiersLRPersistent
 	, int aRepeatCount, KeyEventTypes aEventType, HWND aTargetWindow);
 int SendASC(char *aAscii, HWND aTargetWindow);
 int SendChar(char aChar, mod_type aModifiers, KeyEventTypes aEventType, HWND aTargetWindow);
@@ -204,9 +204,7 @@ int SendChar(char aChar, mod_type aModifiers, KeyEventTypes aEventType, HWND aTa
 // the app are running, they will all ignore each other's keyboard & mouse events.  Also,
 // a value close to UINT_MAX might be a little better since it's might be less likely to
 // be used as a pointer value by any apps that send keybd events whose ExtraInfo is really
-// a pointer value (hard to imagine?).  Also, the param aSaveAndRestoreModifierState is needed
-// to differentiate the zero-default value of aModifiersLR from a true zero, which has real
-// meaning (it turns off all modifiers):
+// a pointer value (hard to imagine?):
 #define KEYIGNORE 0xFFC3D44F
 ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC = 0, HWND aTargetWindow = NULL
 	, bool aDoKeyDelay = false);
@@ -252,7 +250,7 @@ void init_vk_to_sc();
 void init_sc_to_vk();
 sc_type TextToSC(char *aText);
 vk_type TextToVK(char *aText, mod_type *pModifiers = NULL, bool aExcludeThoseHandledByScanCode = false);
-int TextToSpecial(char *aText, UINT aTextLength, mod_type &aModifiers);
+int TextToSpecial(char *aText, UINT aTextLength, modLR_type &aModifiersLR, mod_type &aModifiers);
 
 #ifdef ENABLE_KEY_HISTORY_FILE
 ResultType KeyHistoryToFile(char *aFilespec = NULL, char aType = '\0', bool aKeyUp = false

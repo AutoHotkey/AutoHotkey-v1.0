@@ -77,15 +77,15 @@ enum enum_act {
 , ACT_IFINSTRING, ACT_IFNOTINSTRING
 , ACT_IFEXIST, ACT_IFNOTEXIST, ACT_IFMSGBOX
 , ACT_IF_FIRST = ACT_IFEQUAL, ACT_IF_LAST = ACT_IFMSGBOX  // Keep this updated with any new IFs that are added.
-, ACT_MSGBOX, ACT_INPUTBOX, ACT_SPLASHTEXTON, ACT_SPLASHTEXTOFF
+, ACT_MSGBOX, ACT_INPUTBOX, ACT_SPLASHTEXTON, ACT_SPLASHTEXTOFF, ACT_TOOLTIP
 , ACT_STRINGLEFT, ACT_STRINGRIGHT, ACT_STRINGMID
 , ACT_STRINGTRIMLEFT, ACT_STRINGTRIMRIGHT, ACT_STRINGLOWER, ACT_STRINGUPPER
 , ACT_STRINGLEN, ACT_STRINGGETPOS, ACT_STRINGREPLACE, ACT_STRINGSPLIT
 , ACT_ENVSET, ACT_ENVUPDATE
 , ACT_RUNAS, ACT_RUN, ACT_RUNWAIT, ACT_URLDOWNLOADTOFILE
 , ACT_GETKEYSTATE
-, ACT_SEND, ACT_CONTROLSEND, ACT_CONTROLCLICK, ACT_CONTROLGETFOCUS, ACT_CONTROLFOCUS
-, ACT_CONTROLSETTEXT, ACT_CONTROLGETTEXT
+, ACT_SEND, ACT_CONTROLSEND, ACT_CONTROLCLICK, ACT_CONTROLMOVE, ACT_CONTROLFOCUS, ACT_CONTROLGETFOCUS
+, ACT_CONTROLSETTEXT, ACT_CONTROLGETTEXT, ACT_CONTROL, ACT_CONTROLGET
 , ACT_SETDEFAULTMOUSESPEED, ACT_MOUSEMOVE, ACT_MOUSECLICK, ACT_MOUSECLICKDRAG, ACT_MOUSEGETPOS
 , ACT_STATUSBARGETTEXT
 , ACT_STATUSBARWAIT
@@ -107,7 +107,7 @@ enum enum_act {
 , ACT_GROUPADD, ACT_GROUPACTIVATE, ACT_GROUPDEACTIVATE, ACT_GROUPCLOSE
 , ACT_DRIVESPACEFREE
 , ACT_SOUNDGET, ACT_SOUNDSET, ACT_SOUNDGETWAVEVOLUME, ACT_SOUNDSETWAVEVOLUME, ACT_SOUNDPLAY
-, ACT_FILEAPPEND, ACT_FILEREADLINE, ACT_FILEDELETE
+, ACT_FILEAPPEND, ACT_FILEREADLINE, ACT_FILEDELETE, ACT_FILERECYCLE, ACT_FILERECYCLEEMPTY
 , ACT_FILEINSTALL, ACT_FILECOPY, ACT_FILEMOVE, ACT_FILECOPYDIR, ACT_FILEMOVEDIR
 , ACT_FILECREATEDIR, ACT_FILEREMOVEDIR
 , ACT_FILEGETATTRIB, ACT_FILESETATTRIB, ACT_FILEGETTIME, ACT_FILESETTIME
@@ -184,6 +184,8 @@ enum TrayMenuItems {ID_TRAY_OPEN = 16000, ID_TRAY_HELP, ID_TRAY_WINDOWSPY, ID_TR
 #define ERR_TITLEMATCHMODE2 "The variable does not contain a valid TitleMatchMode." ERR_ABORT
 #define ERR_MENUCOMMAND "Parameter #2 is not a valid menu command."
 #define ERR_MENUCOMMAND2 "Parameter #2's variable does not contain a valid menu command." ERR_ABORT
+#define ERR_CONTROLCOMMAND "Parameter #1 is not a valid Control command."
+#define ERR_CONTROLGETCOMMAND "Parameter #2 is not a valid ControlGet command."
 #define ERR_WINSET "Parameter #1 is not a valid WinSet attribute."
 #define ERR_IFMSGBOX "This line specifies an invalid MsgBox result."
 #define ERR_REG_KEY "The key name must be either HKEY_LOCAL_MACHINE, HKEY_USERS, HKEY_CURRENT_USER, HKEY_CLASSES_ROOT, HKEY_CURRENT_CONFIG, or the abbreviations for these."
@@ -205,6 +207,16 @@ enum TrayMenuItems {ID_TRAY_OPEN = 16000, ID_TRAY_HELP, ID_TRAY_WINDOWSPY, ID_TR
 
 //----------------------------------------------------------------------------------
 
+bool Util_Shutdown(int nFlag);
+BOOL Util_ShutdownHandler(HWND hwnd, DWORD lParam);
+void Util_WinKill(HWND hWnd);
+
+enum MainWindowModes {MAIN_MODE_NO_CHANGE, MAIN_MODE_LINES, MAIN_MODE_VARS
+	, MAIN_MODE_HOTKEYS, MAIN_MODE_KEYHISTORY, MAIN_MODE_REFRESH};
+ResultType ShowMainWindow(MainWindowModes aMode = MAIN_MODE_NO_CHANGE, bool aRestricted = true);
+ResultType GetAHKInstallDir(char *aBuf);
+
+
 struct InputBoxType
 {
 	char *title;
@@ -215,6 +227,8 @@ struct InputBoxType
 	int ypos;
 	Var *output_var;
 	char password_char;
+	char *default_string;
+	DWORD timeout;
 	HWND hwnd;
 };
 
@@ -225,6 +239,15 @@ inline void swap(T &v1, T &v2) {
 	v1=v2;
 	v2=tmp;
 }
+
+#define INPUTBOX_DEFAULT INT_MIN
+ResultType InputBox(Var *aOutputVar, char *aTitle, char *aText, bool aHideInput
+	, int aWidth, int aHeight, int aX, int aY, double aTimeout, char *aDefault);
+BOOL CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
+VOID CALLBACK InputBoxTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);
+BOOL CALLBACK EnumChildFocusFind(HWND aWnd, LPARAM lParam);
+BOOL CALLBACK EnumChildGetText(HWND aWnd, LPARAM lParam);
+LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lParam);
 
 
 typedef UINT LineNumberType;
@@ -302,31 +325,30 @@ struct LoopReadFileStruct
 typedef UCHAR ArgCountType;
 #define MAX_ARGS 20
 
-#define INPUTBOX_DEFAULT INT_MIN
-ResultType InputBox(Var *aOutputVar, char *aTitle = "", char *aText = "", bool aHideInput = false
-	, int aWidth = INPUTBOX_DEFAULT, int aHeight = INPUTBOX_DEFAULT
-	, int aX = INPUTBOX_DEFAULT, int aY = INPUTBOX_DEFAULT);
-BOOL CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
-BOOL CALLBACK EnumChildFocusFind(HWND aWnd, LPARAM lParam);
-BOOL CALLBACK EnumChildGetText(HWND aWnd, LPARAM lParam);
-LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lParam);
-
-enum MainWindowModes {MAIN_MODE_NO_CHANGE, MAIN_MODE_LINES, MAIN_MODE_VARS
-	, MAIN_MODE_HOTKEYS, MAIN_MODE_KEYHISTORY, MAIN_MODE_REFRESH};
-ResultType ShowMainWindow(MainWindowModes aMode = MAIN_MODE_NO_CHANGE);
 
 enum MenuCommands {MENU_COMMAND_INVALID, MENU_COMMAND_ADD, MENU_COMMAND_RENAME
 	, MENU_COMMAND_CHECK, MENU_COMMAND_UNCHECK, MENU_COMMAND_TOGGLECHECK
 	, MENU_COMMAND_ENABLE, MENU_COMMAND_DISABLE, MENU_COMMAND_TOGGLEENABLE
 	, MENU_COMMAND_STANDARD, MENU_COMMAND_NOSTANDARD
 	, MENU_COMMAND_DEFAULT, MENU_COMMAND_NODEFAULT
-	, MENU_COMMAND_DELETE, MENU_COMMAND_DELETEALL};
+	, MENU_COMMAND_DELETE, MENU_COMMAND_DELETEALL
+	, MENU_COMMAND_ICON, MENU_COMMAND_NOICON, MENU_COMMAND_MAINWINDOW, MENU_COMMAND_NOMAINWINDOW
+};
+
+enum ControlCmds {CONTROL_CMD_INVALID, CONTROL_CMD_CHECK, CONTROL_CMD_UNCHECK
+	, CONTROL_CMD_ENABLE, CONTROL_CMD_DISABLE, CONTROL_CMD_SHOW, CONTROL_CMD_HIDE
+	, CONTROL_CMD_SHOWDROPDOWN, CONTROL_CMD_HIDEDROPDOWN
+	, CONTROL_CMD_TABLEFT, CONTROL_CMD_TABRIGHT
+	, CONTROL_CMD_ADD, CONTROL_CMD_DELETE, CONTROL_CMD_CHOOSE
+	, CONTROL_CMD_CHOOSESTRING, CONTROL_CMD_EDITPASTE};
+
+enum ControlGetCmds {CONTROLGET_CMD_INVALID, CONTROLGET_CMD_CHECKED, CONTROLGET_CMD_ENABLED
+	, CONTROLGET_CMD_VISIBLE, CONTROLGET_CMD_TAB, CONTROLGET_CMD_FINDSTRING
+	, CONTROLGET_CMD_CHOICE, CONTROLGET_CMD_LINECOUNT, CONTROLGET_CMD_CURRENTLINE
+	, CONTROLGET_CMD_CURRENTCOL, CONTROLGET_CMD_LINE, CONTROLGET_CMD_SELECTED};
 
 enum WinSetAttributes {WINSET_INVALID, WINSET_TRANSPARENT, WINSET_ALWAYSONTOP};
 
-bool Util_Shutdown(int nFlag);
-BOOL Util_ShutdownHandler(HWND hwnd, DWORD lParam);
-void Util_WinKill(HWND hWnd);
 
 
 class Line
@@ -341,22 +363,21 @@ private:
 	static char *sArgDeref[MAX_ARGS];
 
 	ResultType EvaluateCondition();
-	ResultType PerformLoop(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
+	ResultType PerformLoop(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
 		, LoopReadFileStruct *apCurrentReadFile, char *aCurrentField, bool &aContinueMainLoop, Line *&aJumpToLine
 		, AttributeType aAttr, FileLoopModeType aFileLoopMode, bool aRecurseSubfolders, char *aFilePattern
 		, __int64 aIterationLimit, bool aIsInfinite);
-	ResultType PerformLoopReg(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrentFile
-		, LoopReadFileStruct *apCurrentReadFile, char *aCurrentField
-		, bool &aContinueMainLoop, Line *&aJumpToLine, FileLoopModeType aFileLoopMode
+	ResultType PerformLoopReg(WIN32_FIND_DATA *apCurrentFile, LoopReadFileStruct *apCurrentReadFile
+		, char *aCurrentField, bool &aContinueMainLoop, Line *&aJumpToLine, FileLoopModeType aFileLoopMode
 		, bool aRecurseSubfolders, HKEY aRootKeyType, HKEY aRootKey, char *aRegSubkey);
-	ResultType PerformLoopParse(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrentFile
-		, RegItemStruct *apCurrentRegItem, LoopReadFileStruct *apCurrentReadFile
-		, bool &aContinueMainLoop, Line *&aJumpToLine);
-	ResultType PerformLoopReadFile(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrentFile
-		, RegItemStruct *apCurrentRegItem, char *aCurrentField, bool &aContinueMainLoop, Line *&aJumpToLine
-		, FILE *aReadFile, FILE *aWriteFile);
-	ResultType Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurrentFile = NULL
-		, RegItemStruct *aCurrentRegItem = NULL, LoopReadFileStruct *aCurrentReadFile = NULL);
+	ResultType PerformLoopParse(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
+		, LoopReadFileStruct *apCurrentReadFile, bool &aContinueMainLoop, Line *&aJumpToLine);
+	ResultType Line::PerformLoopParseCSV(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
+		, LoopReadFileStruct *apCurrentReadFile, bool &aContinueMainLoop, Line *&aJumpToLine);
+	ResultType PerformLoopReadFile(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
+		, char *aCurrentField, bool &aContinueMainLoop, Line *&aJumpToLine, FILE *aReadFile, FILE *aWriteFile);
+	ResultType Perform(WIN32_FIND_DATA *aCurrentFile = NULL, RegItemStruct *aCurrentRegItem = NULL
+		, LoopReadFileStruct *aCurrentReadFile = NULL);
 	ResultType PerformAssign();
 	ResultType StringSplit(char *aArrayName, char *aInputString, char *aDelimiterList, char *aOmitList);
 	ResultType DriveSpaceFree(char *aPath);
@@ -367,13 +388,20 @@ private:
 	ResultType SoundPlay(char *aFilespec, bool aSleepUntilDone);
 	ResultType URLDownloadToFile(char *aURL, char *aFilespec);
 	ResultType FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeting, char *aFilter);
-	ResultType FileSelectFolder(char *aRootDir, bool aAllowCreateFolder, char *aGreeting);
+
+	// Bitwise flags:
+	#define FSF_ALLOW_CREATE 0x01
+	#define FSF_EDITBOX      0x02
+	ResultType FileSelectFolder(char *aRootDir, DWORD aOptions, char *aGreeting);
+
 	ResultType FileCreateShortcut(char *aTargetFile, char *aShortcutFile, char *aWorkingDir, char *aArgs
 		, char *aDescription, char *aIconFile, char *aHotkey);
 	ResultType FileCreateDir(char *aDirSpec);
 	ResultType FileReadLine(char *aFilespec, char *aLineNumber);
 	ResultType FileAppend(char *aFilespec, char *aBuf, FILE *aTargetFileAlreadyOpen = NULL);
 	ResultType FileDelete(char *aFilePattern);
+	ResultType FileRecycle(char *aFilePattern);
+	ResultType FileRecycleEmpty(char *aDriveLetter);
 	ResultType FileInstall(char *aSource, char *aDest, char *aFlag);
 
 	// AutoIt3 functions:
@@ -409,14 +437,17 @@ private:
 
 	ResultType PerformShowWindow(ActionTypeType aActionType, char *aTitle = "", char *aText = ""
 		, char *aExcludeTitle = "", char *aExcludeText = "");
+	ResultType ToolTip(char *aText, char *aX, char *aY);
 	ResultType WinMove(char *aTitle, char *aText, char *aX, char *aY
 		, char *aWidth = "", char *aHeight = "", char *aExcludeTitle = "", char *aExcludeText = "");
 	ResultType WinMenuSelectItem(char *aTitle, char *aText, char *aMenu1, char *aMenu2
 		, char *aMenu3, char *aMenu4, char *aMenu5, char *aMenu6, char *aMenu7
 		, char *aExcludeTitle, char *aExcludeText);
 	ResultType ControlSend(char *aControl, char *aKeysToSend, char *aTitle, char *aText
-		, char *aExcludeTitle, char *aExcludeText, modLR_type aModifiersLR);
+		, char *aExcludeTitle, char *aExcludeText);
 	ResultType ControlClick(vk_type aVK, int aClickCount, char aEventType, char *aControl
+		, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
+	ResultType ControlMove(char *aControl, char *aX, char *aY, char *aWidth, char *aHeight
 		, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType ControlGetFocus(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType ControlFocus(char *aControl, char *aTitle, char *aText
@@ -424,6 +455,10 @@ private:
 	ResultType ControlSetText(char *aControl, char *aNewText, char *aTitle, char *aText
 		, char *aExcludeTitle, char *aExcludeText);
 	ResultType ControlGetText(char *aControl, char *aTitle, char *aText
+		, char *aExcludeTitle, char *aExcludeText);
+	ResultType Control(char *aCmd, char *aValue, char *aControl, char *aTitle, char *aText
+		, char *aExcludeTitle, char *aExcludeText);
+	ResultType ControlGet(char *aCommand, char *aValue, char *aControl, char *aTitle, char *aText
 		, char *aExcludeTitle, char *aExcludeText);
 	ResultType StatusBarGetText(char *aPart, char *aTitle, char *aText
 		, char *aExcludeTitle, char *aExcludeText);
@@ -541,7 +576,7 @@ public:
 	static char *sSourceFile[MAX_SCRIPT_FILES];
 	static int nSourceFiles; // An int vs. UCHAR so that it can be exactly 256 without overflowing.
 
-	ResultType ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR = 0, Line **apJumpToLine = NULL
+	ResultType ExecUntil(ExecUntilMode aMode, Line **apJumpToLine = NULL
 		, WIN32_FIND_DATA *aCurrentFile = NULL, RegItemStruct *aCurrentRegItem = NULL
 		, LoopReadFileStruct *aCurrentReadFile = NULL, char *aCurrentField = NULL
 		, __int64 aCurrentLoopIteration = 0); // Use signed, since script/ITOA64 aren't designed to work with unsigned.
@@ -632,8 +667,10 @@ public:
 		case ACT_SETCONTROLDELAY:
 		case ACT_RANDOM:
 		case ACT_WINMOVE:
+		case ACT_CONTROLMOVE:
 		case ACT_SETINTERRUPT:
 		case ACT_PIXELGETCOLOR:
+		case ACT_TOOLTIP:  // Seems best to allow negative for this one even though the tip will be put in a visible region.
 			return true;
 
 		// Since mouse coords are relative to the foreground window, they can be negative:
@@ -682,9 +719,13 @@ public:
 		case ACT_MULT:
 		case ACT_DIV:
 			return true;
+
 		case ACT_SOUNDSET:
 		case ACT_SOUNDSETWAVEVOLUME:
 			return aArgNum == 1;
+
+		case ACT_INPUTBOX:
+			return aArgNum == 10;
 		}
 		return false;  // Since above didn't return, negative is not allowed.
 	}
@@ -855,7 +896,49 @@ public:
 		if (!stricmp(aBuf, "NoDefault")) return MENU_COMMAND_NODEFAULT;
 		if (!stricmp(aBuf, "Delete")) return MENU_COMMAND_DELETE;
 		if (!stricmp(aBuf, "DeleteAll")) return MENU_COMMAND_DELETEALL;
+		if (!stricmp(aBuf, "Icon")) return MENU_COMMAND_ICON;
+		if (!stricmp(aBuf, "NoIcon")) return MENU_COMMAND_NOICON;
+		if (!stricmp(aBuf, "MainWindow")) return MENU_COMMAND_MAINWINDOW;
+		if (!stricmp(aBuf, "NoMainWindow")) return MENU_COMMAND_NOMAINWINDOW;
 		return MENU_COMMAND_INVALID;
+	}
+
+	static ControlCmds ConvertControlCmd(char *aBuf)
+	{
+		if (!aBuf || !*aBuf) return CONTROL_CMD_INVALID;
+		if (!stricmp(aBuf, "Check")) return CONTROL_CMD_CHECK;
+		if (!stricmp(aBuf, "Uncheck")) return CONTROL_CMD_UNCHECK;
+		if (!stricmp(aBuf, "Enable")) return CONTROL_CMD_ENABLE;
+		if (!stricmp(aBuf, "Disable")) return CONTROL_CMD_DISABLE;
+		if (!stricmp(aBuf, "Show")) return CONTROL_CMD_SHOW;
+		if (!stricmp(aBuf, "Hide")) return CONTROL_CMD_HIDE;
+		if (!stricmp(aBuf, "ShowDropDown")) return CONTROL_CMD_SHOWDROPDOWN;
+		if (!stricmp(aBuf, "HideDropDown")) return CONTROL_CMD_HIDEDROPDOWN;
+		if (!stricmp(aBuf, "TabLeft")) return CONTROL_CMD_TABLEFT;
+		if (!stricmp(aBuf, "TabRight")) return CONTROL_CMD_TABRIGHT;
+		if (!stricmp(aBuf, "Add")) return CONTROL_CMD_ADD;
+		if (!stricmp(aBuf, "Delete")) return CONTROL_CMD_DELETE;
+		if (!stricmp(aBuf, "Choose")) return CONTROL_CMD_CHOOSE;
+		if (!stricmp(aBuf, "ChooseString")) return CONTROL_CMD_CHOOSESTRING;
+		if (!stricmp(aBuf, "EditPaste")) return CONTROL_CMD_EDITPASTE;
+		return CONTROL_CMD_INVALID;
+	}
+
+	static ControlGetCmds ConvertControlGetCmd(char *aBuf)
+	{
+		if (!aBuf || !*aBuf) return CONTROLGET_CMD_INVALID;
+		if (!stricmp(aBuf, "Checked")) return CONTROLGET_CMD_CHECKED;
+		if (!stricmp(aBuf, "Enabled")) return CONTROLGET_CMD_ENABLED;
+		if (!stricmp(aBuf, "Visible")) return CONTROLGET_CMD_VISIBLE;
+		if (!stricmp(aBuf, "Tab")) return CONTROLGET_CMD_TAB;
+		if (!stricmp(aBuf, "FindString")) return CONTROLGET_CMD_FINDSTRING;
+		if (!stricmp(aBuf, "Choice")) return CONTROLGET_CMD_CHOICE;
+		if (!stricmp(aBuf, "LineCount")) return CONTROLGET_CMD_LINECOUNT;
+		if (!stricmp(aBuf, "CurrentLine")) return CONTROLGET_CMD_CURRENTLINE;
+		if (!stricmp(aBuf, "CurrentCol")) return CONTROLGET_CMD_CURRENTCOL;
+		if (!stricmp(aBuf, "Line")) return CONTROLGET_CMD_LINE;
+		if (!stricmp(aBuf, "Selected")) return CONTROLGET_CMD_SELECTED;
+		return CONTROLGET_CMD_INVALID;
 	}
 
 	static WinSetAttributes ConvertWinSetAttribute(char *aBuf)
@@ -955,9 +1038,9 @@ public:
 	// Returns the matching VK, or zero if none.
 	{
 		if (!aBuf || !*aBuf) return 0;
-		if (!stricmp(aBuf, "LEFT")) return VK_LBUTTON;
-		if (!stricmp(aBuf, "RIGHT")) return VK_RBUTTON;
-		if (!stricmp(aBuf, "MIDDLE")) return VK_MBUTTON;
+		if (!stricmp(aBuf, "LEFT") || !stricmp(aBuf, "L")) return VK_LBUTTON;
+		if (!stricmp(aBuf, "RIGHT") || !stricmp(aBuf, "R")) return VK_RBUTTON;
+		if (!stricmp(aBuf, "MIDDLE") || !stricmp(aBuf, "M")) return VK_MBUTTON;
 		return 0;
 	}
 
@@ -1087,6 +1170,10 @@ private:
 	WinGroup *mFirstGroup, *mLastGroup;  // The first and last variables in the linked list.
 	UINT mLineCount, mLabelCount, mVarCount, mGroupCount;
 
+#ifdef AUTOHOTKEYSC
+	bool mCustomIcon; // Whether the compiled script uses a custom icon.
+#endif;
+
 	// These two track the file number and line number in that file of the line currently being loaded,
 	// which simplifies calls to ScriptError() and LineError() (reduces the number of params that must be passed):
 	UCHAR mCurrFileNumber;
@@ -1124,6 +1211,25 @@ private:
 		, AttributeType aLoopTypeReg = ATTR_NONE, AttributeType aLoopTypeRead = ATTR_NONE
 		, AttributeType aLoopTypeParse = ATTR_NONE);
 	HMENU CreateTrayMenu();
+	ResultType DestroyTrayMenu()
+	{
+		if (mTrayMenu)
+		{
+			// I think DestroyMenu() can fail if an attempt is made to destroy the menu while it is being
+			// displayed (but even if it doesn't fail, it seems very bad to try to destroy it then, which
+			// is why g_MenuIsVisible is checked just to be sure).
+			// But this all should be impossible in our case because the script is in an uninterruptible state
+			// while the menu is displayed, which in addition to pausing the current thread (which happens
+			// anyway), no new timed or hotkey subroutines can be launched.  Thus, this should rarely if
+			// ever happen, which is why no error message is given here:
+			//if (g_MenuIsVisible)
+			//	return FAIL;
+			if (!DestroyMenu(mTrayMenu))
+				return FAIL;
+			mTrayMenu = NULL;
+		}
+		return OK;
+	}
 	void AppendStandardTrayItems();
 public:
 	Line *mCurrLine;  // Seems better to make this public than make Line our friend.
@@ -1141,6 +1247,7 @@ public:
 	char *mLoopField;  // The field of the current string-parsing loop.
 	__int64 mLoopIteration; // Signed, since script/ITOA64 aren't designed to handle unsigned.
 	DWORD mThisHotkeyStartTime, mPriorHotkeyStartTime;  // Tickcount timestamp of when its subroutine began.
+	modLR_type mThisHotkeyModifiersLR;
 	char *mFileSpec; // Will hold the full filespec, for convenience.
 	char *mFileDir;  // Will hold the directory containing the script file.
 	char *mFileName; // Will hold the script's naked file name.
@@ -1162,10 +1269,11 @@ public:
 	UserMenuItem *mTrayMenuDefault;
     
 	ResultType Init(char *aScriptFilename, bool aIsRestart);
-	ResultType CreateWindows(HINSTANCE hInstance);
-	ResultType AutoExecSection();
-	void UpdateTrayIcon();
+	ResultType CreateWindows();
+	void CreateTrayIcon();
+	void UpdateTrayIcon(bool aForceUpdate = false);
 	void DisplayTrayMenu();
+	ResultType AutoExecSection();
 	ResultType PerformMenu(char *aWhichMenu, char *aCommand, char *aMenuItemName, char *aLabel);
 	ResultType Edit();
 	ResultType Reload(bool aDisplayErrors);
@@ -1532,6 +1640,7 @@ public:
 	ResultType ScriptError(char *aErrorText, char *aExtraInfo = "");
 
 	Script();
+	~Script();
 	// Note that the anchors to any linked lists will be lost when this
 	// object goes away, so for now, be sure the destructor is only called
 	// when the program is about to be exited, which will thereby reclaim

@@ -254,24 +254,78 @@ int strlicmp(char *aBuf1, char *aBuf2, UINT aLength1, UINT aLength2)
 
 
 
-char *strrstr(char *aStr, char *aPattern, bool aCaseSensitive)
-// Not an efficient implementation, but a simple one.
+char *strrstr(char *aStr, char *aPattern, bool aCaseSensitive, int aOccurrence)
+// Returns NULL if not found, otherwise the address of the found string.
 {
 	if (!aStr || !aPattern) return NULL;
-	if (!*aPattern) return aStr + strlen(aStr); // The empty string is found in every string.
-	char *found, *found_prev;
-	if (aCaseSensitive)
+	if (aOccurrence <= 0) return NULL;
+	size_t aStr_length = strlen(aStr);
+	if (!*aPattern)
+		// The empty string is found in every string, and since we're searching from the right, return
+		// the position of the zero terminator to indicate the situation:
+		return aStr + aStr_length;
+
+	size_t aPattern_length = strlen(aPattern);
+	char aPattern_last_char = aPattern[aPattern_length - 1];
+	char aPattern_last_char_upper = toupper(aPattern_last_char);
+
+	int occurrence = 0;
+	char *match_starting_pos = aStr + aStr_length - 1;
+
+	// Keep finding matches from the right until the Nth occurrence (specified by the caller) is found.
+	for (;;)
 	{
-		for (found_prev = found = strstr(aStr, aPattern); found; found = strstr(++found, aPattern))
-			found_prev = found;
-		return found_prev;
-	}
-	else // Not case sensitive.
-	{
-		for (found_prev = found = stristr(aStr, aPattern); found; found = stristr(++found, aPattern))
-			found_prev = found;
-		return found_prev;
-	}
+		if (match_starting_pos < aStr)
+			return NULL;  // No further matches are possible.
+		// Find (from the right) the first occurrence of aPattern's last char:
+		char *last_char_match;
+		for (last_char_match = match_starting_pos; last_char_match >= aStr; --last_char_match)
+		{
+			if (aCaseSensitive)
+			{
+				if (*last_char_match == aPattern_last_char)
+					break;
+			}
+			else
+			{
+				if (toupper(*last_char_match) == aPattern_last_char_upper)
+					break;
+			}
+		}
+
+		if (last_char_match < aStr) // No further matches are possible.
+			return NULL;
+
+		// Now that aPattern's last character has been found in aStr, ensure the rest of aPattern
+		// exists in aStr to the left of last_char_match:
+		char *full_match, *cp;
+		bool found;
+		for (found = false, cp = aPattern + aPattern_length - 2, full_match = last_char_match - 1;; --cp, --full_match)
+		{
+			if (cp < aPattern) // The complete pattern has been found at the position in full_match + 1.
+			{
+				++full_match; // Adjust for the prior iteration's decrement.
+				if (++occurrence == aOccurrence)
+					return full_match;
+				found = true;
+				break;
+			}
+			if (full_match < aStr) // Only after checking the above is this checked.
+				break;
+			if (aCaseSensitive)
+			{
+				if (*full_match != *cp)
+					break;
+			}
+			else
+				if (toupper(*full_match) != toupper(*cp))
+					break;
+		} // for() innermost
+		if (found) // Although the above found a match, it wasn't the right one, so resume searching.
+			match_starting_pos = full_match - 1;
+		else // the pattern broke odwn, so resume searching at THIS position.
+			match_starting_pos = last_char_match - 1;  // Don't go back by more than 1.
+	} // while() find next match
 }
 
 

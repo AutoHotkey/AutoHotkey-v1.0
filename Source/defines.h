@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.08"
+#define NAME_VERSION "1.0.09"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -88,6 +88,8 @@ enum ResultType {FAIL = 0, OK, WARN = OK, CRITICAL_ERROR
 	, LOOP_BREAK, LOOP_CONTINUE
 	, EARLY_RETURN, EARLY_EXIT};
 
+enum SingleInstanceType {ALLOW_MULTI_INSTANCE, SINGLE_INSTANCE, SINGLE_INSTANCE_NO_PROMPT}; // First must be zero.
+
 enum MenuVisibleType {MENU_VISIBLE_NONE, MENU_VISIBLE_TRAY, MENU_VISIBLE_MAIN}; // NONE must be zero.
 
 // These are used for things that can be turned on, off, or left at a
@@ -101,8 +103,9 @@ enum ToggleValueType {TOGGLE_INVALID = 0, TOGGLED_ON, TOGGLED_OFF, ALWAYS_ON, AL
 
 // MsgBox timeout value.  This can't be zero because that is used as a failure indicator:
 // Also, this define is in this file to prevent problems with mutual
-// dependency between script.h and window.h:
-#define AHK_TIMEOUT -1
+// dependency between script.h and window.h.  Update: It can't be -1 either because
+// that value is used to indicate failure by DialogBox():
+#define AHK_TIMEOUT -2
 // And these to prevent mutual dependency problem between window.h and globaldata.h:
 #define MAX_MSGBOXES 7
 #define MAX_INPUTBOXES 4
@@ -119,6 +122,7 @@ typedef UCHAR HookType;
 #define EXTERN_G extern global_struct g
 #define EXTERN_OSVER extern OS_Version g_os
 #define EXTERN_CLIPBOARD extern Clipboard g_clip
+#define EXTERN_SCRIPT extern Script g_script
 #define CLOSE_CLIPBOARD_IF_OPEN	if (g_clip.mIsOpen) g_clip.Close()
 #define CLIPBOARD_CONTAINS_ONLY_FILES (!IsClipboardFormatAvailable(CF_TEXT) && IsClipboardFormatAvailable(CF_HDROP))
 

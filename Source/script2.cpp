@@ -48,6 +48,64 @@ GNU General Public License for more details.
 
 
 
+ResultType Line::ToolTip(char *aText, char *aX, char *aY)
+// Adapted from the AutoIt3 source.
+// au3: Creates a tooltip with the specified text at any location on the screen.
+// The window isn't created until it's first needed, so no resources are used until then.
+// Also, the window is destroyed in AutoIt_Script's destructor so no resource leaks occur.
+{
+	TOOLINFO ti;
+	ti.cbSize	= sizeof(ti);
+	ti.uFlags	= TTF_TRACK;
+	ti.hwnd		= NULL;
+	ti.hinst	= NULL;
+	ti.uId		= 0;
+	ti.lpszText	= aText;
+	ti.rect.left = ti.rect.top = ti.rect.right	= ti.rect.bottom = 0;
+	
+	// Set default values for the tip as the current mouse position
+	POINT pt;
+	GetCursorPos(&pt);
+	pt.x += 16;  // Set default spot to be near the mouse cursor.
+	pt.y += 16;
+
+	if (*aX || *aY)
+	{
+		// Convert from relative to absolute (screen) coordinates:
+		RECT rect;
+		if (!GetWindowRect(GetForegroundWindow(), &rect))
+			return OK;  // Don't bother setting ErrorLevel with this command.
+		if (*aX)
+			pt.x = ATOI(aX) + rect.left;
+		if (*aY)
+			pt.y = ATOI(aY) + rect.top;
+	}
+
+	DWORD dwResult;
+
+	if (!g_hWndToolTip)
+	{
+		// This this window has no owner, it won't be automatically destroyed when its owner is.
+		// Thus, it should be destroyed upon program termination.
+		g_hWndToolTip = CreateWindowEx(WS_EX_TOPMOST, TOOLTIPS_CLASS, NULL, TTS_NOPREFIX | TTS_ALWAYSTIP,
+			CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, NULL, NULL, NULL, NULL);
+
+		SendMessageTimeout(g_hWndToolTip, TTM_ADDTOOL, 0, (LPARAM)(LPTOOLINFO)&ti, SMTO_ABORTIFHUNG, 2000, &dwResult);
+	}
+	else
+		SendMessageTimeout(g_hWndToolTip, TTM_UPDATETIPTEXT, 0, (LPARAM)&ti, SMTO_ABORTIFHUNG, 2000, &dwResult);
+
+	RECT dtw;
+	GetWindowRect(GetDesktopWindow(), &dtw);
+
+	SendMessageTimeout(g_hWndToolTip, TTM_SETMAXTIPWIDTH, 0, (LPARAM)dtw.right, SMTO_ABORTIFHUNG, 2000, &dwResult);
+	SendMessageTimeout(g_hWndToolTip, TTM_TRACKPOSITION, 0, (LPARAM)MAKELONG(pt.x, pt.y), SMTO_ABORTIFHUNG, 2000, &dwResult);
+	SendMessageTimeout(g_hWndToolTip, TTM_TRACKACTIVATE, TRUE, (LPARAM)&ti, SMTO_ABORTIFHUNG, 2000, &dwResult);
+	return OK;
+}
+
+
+
 ResultType Line::PerformShowWindow(ActionTypeType aActionType, char *aTitle, char *aText
 	, char *aExcludeTitle, char *aExcludeText)
 {
@@ -133,7 +191,8 @@ ResultType Line::WinMove(char *aTitle, char *aText, char *aX, char *aY
 		return OK;
 	// Adapted from the AutoIt3 source:
 	RECT rect;
-	GetWindowRect(target_window, &rect);
+	if (!GetWindowRect(target_window, &rect))
+		return OK;  // Can't set errorlevel, see above.
 	MoveWindow(target_window
 		, *aX && stricmp(aX, "default") ? ATOI(aX) : rect.left  // X-position
 		, *aY && stricmp(aY, "default") ? ATOI(aY) : rect.top   // Y-position
@@ -236,7 +295,7 @@ ResultType Line::WinMenuSelectItem(char *aTitle, char *aText, char *aMenu1, char
 
 
 ResultType Line::ControlSend(char *aControl, char *aKeysToSend, char *aTitle, char *aText
-	, char *aExcludeTitle, char *aExcludeText, modLR_type aModifiersLR)
+	, char *aExcludeTitle, char *aExcludeText)
 {
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 	DETERMINE_TARGET_WINDOW
@@ -246,7 +305,7 @@ ResultType Line::ControlSend(char *aControl, char *aKeysToSend, char *aTitle, ch
 		: target_window;
 	if (!control_window)
 		return OK;
-	SendKeys(aKeysToSend, aModifiersLR, control_window);
+	SendKeys(aKeysToSend, control_window);
 	// But don't do WinDelay because KeyDelay should have been in effect for the above.
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 	return OK;
@@ -282,7 +341,8 @@ ResultType Line::ControlClick(vk_type aVK, int aClickCount, char aEventType, cha
 	// My: In addition, this is probably better for some large controls (e.g. SysListView32) because
 	// clicking/ at 0,0 might activate a part of the control that is not even visible:
 	RECT rect;
-	GetWindowRect(control_window, &rect);
+	if (!GetWindowRect(control_window, &rect))
+		return OK;  // Let ErrorLevel tell the story.
 	LPARAM lparam = MAKELPARAM( (rect.right - rect.left) / 2, (rect.bottom - rect.top) / 2);
 
 	UINT msg_down, msg_up;
@@ -332,6 +392,66 @@ ResultType Line::ControlClick(vk_type aVK, int aClickCount, char aEventType, cha
 
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 	return OK;
+}
+
+
+
+ResultType Line::ControlMove(char *aControl, char *aX, char *aY, char *aWidth, char *aHeight
+	, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
+{
+	DETERMINE_TARGET_WINDOW
+	if (!target_window)
+		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+	HWND control_window = ControlExist(target_window, aControl);
+	if (!control_window)
+		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+
+	POINT point;
+	point.x = *aX ? ATOI(aX) : COORD_UNSPECIFIED;
+	point.y = *aY ? ATOI(aY) : COORD_UNSPECIFIED;
+
+	// First convert the user's given coordinates -- which by default are relative to the window's
+	// upper left corner -- to screen coordinates:
+	if (point.x != COORD_UNSPECIFIED || point.y != COORD_UNSPECIFIED)
+	{
+		RECT rect;
+		if (!GetWindowRect(target_window, &rect))
+			return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+		if (point.x != COORD_UNSPECIFIED)
+			point.x += rect.left;
+		if (point.y != COORD_UNSPECIFIED)
+			point.y += rect.top;
+	}
+
+	// If either coordinate is unspecified, put the control's current screen coordinate(s)
+	// into point:
+	RECT control_rect;
+	if (!GetWindowRect(control_window, &control_rect))
+		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+	if (point.x == COORD_UNSPECIFIED)
+		point.x = control_rect.left;
+	if (point.y == COORD_UNSPECIFIED)
+		point.y = control_rect.top;
+
+	// Use the immediate parent since controls can themselves have child controls:
+	HWND immediate_parent = GetParent(control_window);
+	if (!immediate_parent)
+		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+
+	// Convert from absolute screen coordinates to coordinates used with MoveWindow(),
+	// which are relative to control_window's parent's client area:
+	if (!ScreenToClient(immediate_parent, &point))
+		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+
+	MoveWindow(control_window
+		, point.x
+		, point.y
+		, *aWidth ? ATOI(aWidth) : control_rect.right - control_rect.left
+		, *aHeight ? ATOI(aHeight) : control_rect.bottom - control_rect.top
+		, TRUE);  // Do repaint.
+
+	DoControlDelay
+	return g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 }
 
 
@@ -463,7 +583,7 @@ ResultType Line::ControlGetText(char *aControl, char *aTitle, char *aText
 	Var *output_var = ResolveVarOfArg(0);
 	if (!output_var)
 		return FAIL;
-	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR);  // Set default.
 	DETERMINE_TARGET_WINDOW
 	HWND control_window = target_window ? ControlExist(target_window, aControl) : NULL;
 	// Even if control_window is NULL, we want to continue on so that the output
@@ -502,6 +622,423 @@ ResultType Line::ControlGetText(char *aControl, char *aTitle, char *aText
 	// Consider the above to be always successful, even if the window wasn't found, except
 	// when below returns an error:
 	return output_var->Close();  // In case it's the clipboard.
+}
+
+
+
+ResultType Line::Control(char *aCmd, char *aValue, char *aControl, char *aTitle, char *aText
+	, char *aExcludeTitle, char *aExcludeText)
+// This function has been adapted from the AutoIt3 source.
+{
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR);  // Set default since there are many points of return.
+	ControlCmds control_cmd = ConvertControlCmd(aCmd);
+	// Since command names are validated at load-time, this only happens if the command name
+	// was contained in a variable reference.  Since that is very rare, just set ErrorLevel
+	// and return:
+	if (control_cmd == CONTROL_CMD_INVALID)
+		return OK;  // Let ErrorLevel tell the story.
+
+	DETERMINE_TARGET_WINDOW
+	if (!target_window)
+		return OK;  // Let ErrorLevel tell the story.
+	HWND control_window = ControlExist(target_window, aControl);
+	if (!control_window)
+		return OK;  // Let ErrorLevel tell the story.
+
+	HWND immediate_parent;  // Possibly not the same as target_window since controls can themselves have children.
+	int control_id, control_index;
+	DWORD dwResult, new_button_state;
+	UINT msg, x_msg, y_msg;
+	RECT rect;
+	LPARAM lparam;
+	vk_type vk;
+	int key_count;
+
+	switch(control_cmd)
+	{
+	case CONTROL_CMD_CHECK: // au3: Must be a Button
+	case CONTROL_CMD_UNCHECK:
+	{ // Need braces for ATTACH_THREAD_INPUT macro.
+		new_button_state = (control_cmd == CONTROL_CMD_CHECK) ? BST_CHECKED : BST_UNCHECKED;
+		if (!SendMessageTimeout(control_window, BM_GETCHECK, 0, 0, SMTO_ABORTIFHUNG, 2000, &dwResult))
+			return OK;  // Let ErrorLevel tell the story.
+		if (dwResult == new_button_state) // It's already in the right state, so don't press it.
+			break;
+		// MSDN docs for BM_CLICK (and au3 author says it applies to this situation also):
+		// "If the button is in a dialog box and the dialog box is not active, the BM_CLICK message
+		// might fail. To ensure success in this situation, call the SetActiveWindow function to activate
+		// the dialog box before sending the BM_CLICK message to the button."
+		ATTACH_THREAD_INPUT
+		SetActiveWindow(target_window);
+		if (!GetWindowRect(control_window, &rect))	// au3: Code to primary click the centre of the control
+			rect.bottom = rect.left = rect.right = rect.top = 0;
+		lparam = MAKELPARAM((rect.right - rect.left) / 2, (rect.bottom - rect.top) / 2);
+		PostMessage(control_window, WM_LBUTTONDOWN, MK_LBUTTON, lparam);
+		PostMessage(control_window, WM_LBUTTONUP, 0, lparam);
+		DETACH_THREAD_INPUT
+		break;
+	}
+
+	case CONTROL_CMD_ENABLE:
+		EnableWindow(control_window, TRUE);
+		break;
+
+	case CONTROL_CMD_DISABLE:
+		EnableWindow(control_window, FALSE);
+		break;
+
+	case CONTROL_CMD_SHOW:
+		ShowWindow(control_window, SW_SHOWNOACTIVATE); // SW_SHOWNOACTIVATE is what au3 uses.
+		break;
+
+	case CONTROL_CMD_HIDE:
+		ShowWindow(control_window, SW_HIDE);
+		break;
+
+	case CONTROL_CMD_SHOWDROPDOWN:
+	case CONTROL_CMD_HIDEDROPDOWN:
+		// CB_SHOWDROPDOWN: Although the return value (dwResult) is always TRUE, SendMessageTimeout()
+		// will return failure if it times out:
+		if (!SendMessageTimeout(control_window, CB_SHOWDROPDOWN
+			, (WPARAM)(control_cmd == CONTROL_CMD_SHOWDROPDOWN ? TRUE : FALSE)
+			, 0, SMTO_ABORTIFHUNG, 2000, &dwResult))
+			return OK;  // Let ErrorLevel tell the story.
+		break;
+
+	case CONTROL_CMD_TABLEFT:
+	case CONTROL_CMD_TABRIGHT: // must be a Tab Control
+		key_count = *aValue ? ATOI(aValue) : 1;
+		vk = (control_cmd == CONTROL_CMD_TABLEFT) ? VK_LEFT : VK_RIGHT;
+		lparam = (LPARAM)(g_vk_to_sc[vk].a << 16);
+		for (int i = 0; i < key_count; ++i)
+		{
+			// DoControlDelay isn't done for every iteration because it seems likely that
+			// the Sleep(0) will take care of things.
+			PostMessage(control_window, WM_KEYDOWN, vk, lparam | 0x00000001);
+			SLEEP_WITHOUT_INTERRUPTION(0); // Au3 uses a Sleep(0).
+			PostMessage(control_window, WM_KEYUP, vk, lparam | 0xC0000001);
+		}
+		break;
+
+	case CONTROL_CMD_ADD:
+		if (!strnicmp(aControl, "Combo", 5))
+			msg = CB_ADDSTRING;
+		else if (!strnicmp(aControl, "List", 4))
+			msg = LB_ADDSTRING;
+		else
+			return OK;  // Must be ComboBox or ListBox.  Let ErrorLevel tell the story.
+		if (!SendMessageTimeout(control_window, msg, 0, (LPARAM)aValue, SMTO_ABORTIFHUNG, 2000, &dwResult))
+			return OK;  // Let ErrorLevel tell the story.
+		if (dwResult == CB_ERR || dwResult == CB_ERRSPACE) // General error or insufficient space to store it.
+			// CB_ERR == LB_ERR
+			return OK;  // Let ErrorLevel tell the story.
+		break;
+
+	case CONTROL_CMD_DELETE:
+		if (!*aValue)
+			return OK;
+		control_index = ATOI(aValue) - 1;
+		if (control_index < 0)
+			return OK;
+		if (!strnicmp(aControl, "Combo", 5))
+			msg = CB_DELETESTRING;
+		else if (!strnicmp(aControl, "List", 4))
+			msg = LB_DELETESTRING;
+		else
+			return OK;  // Must be ComboBox or ListBox.  Let ErrorLevel tell the story.
+		if (!SendMessageTimeout(control_window, msg, (WPARAM)control_index, 0, SMTO_ABORTIFHUNG, 2000, &dwResult))
+			return OK;  // Let ErrorLevel tell the story.
+		if (dwResult == CB_ERR)  // CB_ERR == LB_ERR
+			return OK;  // Let ErrorLevel tell the story.
+		break;
+
+	case CONTROL_CMD_CHOOSE:
+		if (!*aValue)
+			return OK;
+		control_index = ATOI(aValue) - 1;
+		if (control_index <= 0)
+			return OK;  // Let ErrorLevel tell the story.
+		if (!strnicmp(aControl, "Combo", 5))
+		{
+			msg = CB_SETCURSEL;
+			x_msg = CBN_SELCHANGE;
+			y_msg = CBN_SELENDOK;
+		}
+		else if (!strnicmp(aControl, "List" ,4))
+		{
+			msg = LB_SETCURSEL;
+			x_msg = LBN_SELCHANGE;
+			y_msg = LBN_DBLCLK;
+		}
+		else
+			return OK;  // Must be ComboBox or ListBox.  Let ErrorLevel tell the story.
+		if (!SendMessageTimeout(control_window, msg, control_index, 0, SMTO_ABORTIFHUNG, 2000, &dwResult))
+			return OK;  // Let ErrorLevel tell the story.
+		if (dwResult == CB_ERR)  // CB_ERR == LB_ERR
+			return OK;
+		if (   !(immediate_parent = GetParent(control_window))   )
+			return OK;
+		if (   !(control_id = GetDlgCtrlID(control_window))   )
+			return OK;
+		if (!SendMessageTimeout(immediate_parent, WM_COMMAND, (WPARAM)MAKELONG(control_id, x_msg)
+			, (LPARAM)control_window, SMTO_ABORTIFHUNG, 2000, &dwResult))
+			return OK;
+		if (!SendMessageTimeout(immediate_parent, WM_COMMAND, (WPARAM)MAKELONG(control_id, y_msg)
+			, (LPARAM)control_window, SMTO_ABORTIFHUNG, 2000, &dwResult))
+			return OK;
+		// Otherwise break and do the end-function processing.
+		break;
+
+	case CONTROL_CMD_CHOOSESTRING:
+		if (!strnicmp(aControl, "ComboBox",8))
+		{
+			msg = CB_SELECTSTRING;
+			x_msg = CBN_SELCHANGE;
+			y_msg = CBN_SELENDOK;
+		}
+		else if (!strnicmp(aControl, "ListBox", 7))
+		{
+			msg = LB_SELECTSTRING;
+			x_msg = LBN_SELCHANGE;
+			y_msg = LBN_DBLCLK;
+		}
+		else
+			return OK;  // Must be ComboBox or ListBox.  Let ErrorLevel tell the story.
+		if (!SendMessageTimeout(control_window, msg, 1, (LPARAM)aValue, SMTO_ABORTIFHUNG, 2000, &dwResult))
+			return OK;  // Let ErrorLevel tell the story.
+		if (dwResult == CB_ERR)  // CB_ERR == LB_ERR
+			return OK;
+		if (   !(immediate_parent = GetParent(control_window))   )
+			return OK;
+		if (   !(control_id = GetDlgCtrlID(control_window))   )
+			return OK;
+		if (!SendMessageTimeout(immediate_parent, WM_COMMAND, (WPARAM)MAKELONG(control_id, x_msg)
+			, (LPARAM)control_window, SMTO_ABORTIFHUNG, 2000, &dwResult))
+			return OK;
+		if (!SendMessageTimeout(immediate_parent, WM_COMMAND, (WPARAM)MAKELONG(control_id, y_msg)
+			, (LPARAM)control_window, SMTO_ABORTIFHUNG, 2000, &dwResult))
+			return OK;
+		// Otherwise break and do the end-function processing.
+		break;
+
+	case CONTROL_CMD_EDITPASTE:
+		if (!SendMessageTimeout(control_window, EM_REPLACESEL, TRUE, (LPARAM)aValue, SMTO_ABORTIFHUNG, 2000, &dwResult))
+			return OK;  // Let ErrorLevel tell the story.
+		// Note: dwResult is not used by EM_REPLACESEL since it doesn't return a value.
+		break;
+	} // switch()
+
+	DoControlDelay;  // Seems safest to do this for all of these commands.
+	return g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+}
+
+
+
+ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTitle, char *aText
+	, char *aExcludeTitle, char *aExcludeText)
+// This function has been adapted from the AutoIt3 source.
+{
+	Var *output_var = ResolveVarOfArg(0);
+	if (!output_var)
+		return FAIL;
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR);  // Set default since there are many points of return.
+	ControlGetCmds control_cmd = ConvertControlGetCmd(aCmd);
+	// Since command names are validated at load-time, this only happens if the command name
+	// was contained in a variable reference.  Since that is very rare, just set ErrorLevel
+	// and return:
+	if (control_cmd == CONTROLGET_CMD_INVALID)
+		return output_var->Assign();  // Let ErrorLevel tell the story.
+
+	DETERMINE_TARGET_WINDOW
+	if (!target_window)
+		return output_var->Assign();  // Let ErrorLevel tell the story.
+	HWND control_window = ControlExist(target_window, aControl);
+	if (!control_window)
+		return output_var->Assign();  // Let ErrorLevel tell the story.
+
+	DWORD dwResult, index, length, start, end;
+	UINT msg, x_msg, y_msg;
+	int control_index;
+	char *dyn_buf, buf[32768];  // 32768 is the size Au3 uses for GETLINE and such.
+
+	switch(control_cmd)
+	{
+	case CONTROLGET_CMD_CHECKED: //Must be a Button
+		if (!SendMessageTimeout(control_window, BM_GETCHECK, 0, 0, SMTO_ABORTIFHUNG, 2000, &dwResult))
+			return output_var->Assign();
+		output_var->Assign(dwResult == BST_CHECKED ? "1" : "0");
+		break;
+
+	case CONTROLGET_CMD_ENABLED:
+		output_var->Assign(IsWindowEnabled(control_window) ? "1" : "0");
+		break;
+
+	case CONTROLGET_CMD_VISIBLE:
+		output_var->Assign(IsWindowVisible(control_window) ? "1" : "0");
+		break;
+
+	case CONTROLGET_CMD_TAB: // must be a Tab Control
+		if (!SendMessageTimeout(control_window, TCM_GETCURSEL, 0, 0, SMTO_ABORTIFHUNG, 2000, &index))
+			return output_var->Assign();
+		if (index == -1)
+			return output_var->Assign();
+		output_var->Assign((UINT)index + 1);
+		break;
+
+	case CONTROLGET_CMD_FINDSTRING:
+		if (!strnicmp(aControl, "Combo", 5))
+			msg = CB_FINDSTRINGEXACT;
+		else if (!strnicmp(aControl, "List", 4))
+			msg = LB_FINDSTRINGEXACT;
+		else // Must be ComboBox or ListBox
+			return output_var->Assign();  // Let ErrorLevel tell the story.
+		if (!SendMessageTimeout(control_window, msg, 1, (LPARAM)aValue, SMTO_ABORTIFHUNG, 2000, &index))
+			return output_var->Assign();
+		if (index == CB_ERR)  // CB_ERR == LB_ERR
+			return output_var->Assign();
+		output_var->Assign((UINT)index + 1);
+		break;
+
+	case CONTROLGET_CMD_CHOICE:
+		if (!strnicmp(aControl, "ComboBox", 8))
+		{
+			msg = CB_GETCURSEL;
+			x_msg = CB_GETLBTEXTLEN;
+			y_msg = CB_GETLBTEXT;
+		}
+		else if (!strnicmp(aControl, "ListBox" ,7))
+		{
+			msg = LB_GETCURSEL;
+			x_msg = LB_GETTEXTLEN;
+			y_msg = LB_GETTEXT;
+		}
+		else // Must be ComboBox or ListBox
+			return output_var->Assign();  // Let ErrorLevel tell the story.
+		if (!SendMessageTimeout(control_window, msg, 0, 0, SMTO_ABORTIFHUNG, 2000, &index))
+			return output_var->Assign();
+		if (index == CB_ERR)  // CB_ERR == LB_ERR
+			return output_var->Assign();
+		if (!SendMessageTimeout(control_window, x_msg, (WPARAM)index, 0, SMTO_ABORTIFHUNG, 2000, &length))
+			return output_var->Assign();
+		if (length == CB_ERR)  // CB_ERR == LB_ERR
+			return output_var->Assign();
+		++length;
+		if (   !(dyn_buf = (char *)calloc(256 + length, 1))   )
+			return output_var->Assign();
+		if (!SendMessageTimeout(control_window, y_msg, (WPARAM)index, (LPARAM)dyn_buf, SMTO_ABORTIFHUNG, 2000, &length))
+		{
+			free(dyn_buf);
+			return output_var->Assign();
+		}
+		if (length == CB_ERR)  // CB_ERR == LB_ERR
+		{
+			free(dyn_buf);
+			return output_var->Assign();
+		}
+		output_var->Assign(dyn_buf);
+		free(dyn_buf);
+		break;
+
+	case CONTROLGET_CMD_LINECOUNT:  //Must be an Edit
+		// MSDN: "If the control has no text, the return value is 1. The return value will never be less than 1."
+		if (!SendMessageTimeout(control_window, EM_GETLINECOUNT, 0, 0, SMTO_ABORTIFHUNG, 2000, &dwResult))
+			return output_var->Assign();
+		output_var->Assign((UINT)dwResult);
+		break;
+
+	case CONTROLGET_CMD_CURRENTLINE:
+		if (!SendMessageTimeout(control_window, EM_LINEFROMCHAR, -1, 0, SMTO_ABORTIFHUNG, 2000, &dwResult))
+			return output_var->Assign();
+		output_var->Assign((UINT)dwResult + 1);
+		break;
+
+	case CONTROLGET_CMD_CURRENTCOL:
+	{
+		if (!SendMessageTimeout(control_window, EM_GETSEL, (WPARAM)&start, (LPARAM)&end, SMTO_ABORTIFHUNG, 2000, &dwResult))
+			return output_var->Assign();
+		// The dwResult from the above is not useful and is not checked.
+		DWORD line_number;
+		if (!SendMessageTimeout(control_window, EM_LINEFROMCHAR, (WPARAM)start, 0, SMTO_ABORTIFHUNG, 2000, &line_number))
+			return output_var->Assign();
+		if (!line_number) // Since we're on line zero, the column number is simply start+1.
+		{
+			output_var->Assign((UINT)start + 1);  // +1 to convert from zero based.
+			break;
+		}
+		// Au3: Decrement the character index until the row changes.  Difference between this
+		// char index and original is the column:
+		DWORD start_orig = start;  // Au3: the character index
+		for (;;)
+		{
+			if (!SendMessageTimeout(control_window, EM_LINEFROMCHAR, (WPARAM)start, 0, SMTO_ABORTIFHUNG, 2000, &dwResult))
+				return output_var->Assign();
+			if (dwResult != line_number)
+				break;
+			--start;
+		}
+		output_var->Assign((int)(start_orig - start));
+		break;
+	}
+
+	case CONTROLGET_CMD_LINE:
+		if (!*aValue)
+			return output_var->Assign();
+		control_index = ATOI(aValue) - 1;
+		if (control_index <= 0)
+			return output_var->Assign();  // Let ErrorLevel tell the story.
+		*((LPINT)buf) = sizeof(buf);  // EM_GETLINE requires first word of string to be set to its size.
+		if (!SendMessageTimeout(control_window, EM_GETLINE, (WPARAM)control_index, (LPARAM)buf, SMTO_ABORTIFHUNG, 2000, &dwResult))
+			return output_var->Assign();
+		if (!dwResult) // due to the specified line number being greater than the number of lines in the edit control.
+			return output_var->Assign();
+		buf[dwResult] = '\0'; // Ensure terminated since the API might not do it in some cases.
+		output_var->Assign(buf);
+		break;
+
+	case CONTROLGET_CMD_SELECTED: //Must be an Edit
+		// Note: The RichEdit controls of certain apps such as Metapad don't return the right selection
+		// with this technique.  Au3 has the same problem with them, so for now it's just documented here
+		// as a limitation.
+		if (!SendMessageTimeout(control_window, EM_GETSEL, (WPARAM)&start,(LPARAM)&end, SMTO_ABORTIFHUNG, 2000, &dwResult))
+			return output_var->Assign();
+		// The above sets start to be the zero-based position of the start of the selection (similar for end).
+		// If there is no selection, start and end will be equal, at least in the edit controls I tried it with.
+		// The dwResult from the above is not useful and is not checked.
+		if (start == end) // Unlike Au3, it seems best to consider a blank selection to be a non-error.
+		{
+			output_var->Assign();
+			break;
+		}
+		if (!SendMessageTimeout(control_window, WM_GETTEXTLENGTH, 0, 0, SMTO_ABORTIFHUNG, 2000, &length))
+			return output_var->Assign();
+		if (!length)
+			// Since the above didn't return for start == end, this is an error because
+			// we have a selection of non-zero length, but no text to go with it!
+			return output_var->Assign();
+		if (   !(dyn_buf = (char *)calloc(256 + length, 1))   )
+			return output_var->Assign();
+		if (!SendMessageTimeout(control_window, WM_GETTEXT, (WPARAM)(length + 1), (LPARAM)dyn_buf, SMTO_ABORTIFHUNG, 2000, &length))
+		{
+			free(dyn_buf);
+			return output_var->Assign();
+		}
+		if (!length || end > length)
+		{
+			// The first check above is reveals a problem (ErrorLevel = 1) since the length
+			// is unexpectedly zero (above implied it shouldn't be).  The second check is also
+			// a problem because the end of the selection should not be beyond length of text
+			// that was retrieved.
+			free(dyn_buf);
+			return output_var->Assign();
+		}
+		dyn_buf[end] = '\0'; // Terminate the string at the end of the selection.
+		output_var->Assign(dyn_buf + start);
+		free(dyn_buf);
+		break;
+	}
+
+	// Note that ControlDelay is not done for the Get type commands, because it seems unnecessary.
+	return g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 }
 
 
@@ -554,7 +1091,7 @@ ResultType Line::ScriptPostMessage(char *aMsg, char *awParam, char *alParam, cha
 	// Use ATOI64 to support unsigned (i.e. UINT, LPARAM, and WPARAM are all 32-bit unsigned values).
 	// ATOI64 also supports hex strings in the script, such as 0xFF, which is why it's commonly
 	// used in functions such as this:
-	g_ErrorLevel->Assign(PostMessage(target_window, (UINT)ATOI64(aMsg), (LPARAM)ATOI64(awParam)
+	g_ErrorLevel->Assign(PostMessage(control_window, (UINT)ATOI64(aMsg), (LPARAM)ATOI64(awParam)
 		, (WPARAM)ATOI64(alParam)) ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
 	// By design (since this is a power user feature), no ControlDelay is done here.
 	return OK;
@@ -575,7 +1112,7 @@ ResultType Line::ScriptSendMessage(char *aMsg, char *awParam, char *alParam, cha
 	// ATOI64 also supports hex strings in the script, such as 0xFF, which is why it's commonly
 	// used in functions such as this:
 	DWORD dwResult;
-	if (!SendMessageTimeout(target_window, (UINT)ATOI64(aMsg), (WPARAM)ATOI64(awParam), (LPARAM)ATOI64(alParam)
+	if (!SendMessageTimeout(control_window, (UINT)ATOI64(aMsg), (WPARAM)ATOI64(awParam), (LPARAM)ATOI64(alParam)
 		, SMTO_ABORTIFHUNG, 2000, &dwResult))
 		return g_ErrorLevel->Assign("FAIL"); // Need a special value to distinguish this from numeric reply-values.
 	// By design (since this is a power user feature), no ControlDelay is done here.
@@ -852,7 +1389,8 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int a
 	// Always adjust coords to reflect the position of the foreground window because AutoHotkey
 	// doesn't yet support AutoIt3's absolute-screen-coords mode:
 	RECT rect;
-	GetWindowRect(GetForegroundWindow(), &rect);
+	if (!GetWindowRect(GetForegroundWindow(), &rect))
+		return OK;  // Let ErrorLevel tell the story.
 	aLeft   += rect.left;
 	aTop    += rect.top;
 	aRight  += rect.left;  // Add left vs. right because we're adjusting based on the position of the window.
@@ -943,8 +1481,10 @@ ResultType Line::PixelGetColor(int aX, int aY)
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 	output_var->Assign(); // Init to empty string regardless of whether we succeed here.
 
+	// Convert from relative to absolute (screen) coordinates:
 	RECT rect;
-	GetWindowRect(GetForegroundWindow(), &rect);
+	if (!GetWindowRect(GetForegroundWindow(), &rect))
+		return OK;  // Let ErrorLevel tell the story.
 	aX += rect.left;
 	aY += rect.top;
 
@@ -968,14 +1508,7 @@ ResultType Line::PixelGetColor(int aX, int aY)
 
 LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lParam)
 {
-	char buf_temp[2048];  // For various uses.
-
-	// Static so that WM_ENTERMENULOOP & WM_EXITMENULOOP can work with it.
-	// Relies on the fact that ENTER always precedes EXIT, and that an EXIT always
-	// eventually follows an ENTER.  But since the tray menu also generates these messages,
-	// must use a separate variable for that to prevent the ENTERMENULOOP message
-	// from overwriting the value established earlier when the tray menu was first opened.
-	static bool static_was_interruptible_before;
+    char buf_temp[2048];  // For various uses.
 
 	TRANSLATE_AHK_MSG(iMsg, wParam)
 	
@@ -999,27 +1532,40 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			return 0;
 		case ID_TRAY_WINDOWSPY:
 		case ID_FILE_WINDOWSPY:
-			// Even if this is the self-contained version (AUTOHOTKEYSC), attempt to launch anyway in
-			// case the user has put a copy of WindowSpy in the same dir with the compiled script:
 			// ActionExec()'s CreateProcess() is currently done in a way that prefers enclosing double quotes:
-			snprintf(buf_temp, sizeof(buf_temp), "\"%sAU3_Spy.exe\"", g_script.mOurEXEDir);
+			*buf_temp = '"';
+			// Try GetAHKInstallDir() first so that compiled scripts running on machines that happen
+			// to have AHK installed will still be able to fetch the help file:
+			if (GetAHKInstallDir(buf_temp + 1))
+				snprintfcat(buf_temp, sizeof(buf_temp), "\\AU3_Spy.exe\"");
+			else
+				// Even if this is the self-contained version (AUTOHOTKEYSC), attempt to launch anyway in
+				// case the user has put a copy of WindowSpy in the same dir with the compiled script:
+				// ActionExec()'s CreateProcess() is currently done in a way that prefers enclosing double quotes:
+				snprintfcat(buf_temp, sizeof(buf_temp), "%sAU3_Spy.exe\"", g_script.mOurEXEDir);
 			if (!g_script.ActionExec(buf_temp, "", NULL, false))
-				MsgBox("Could not launch Window Spy.");
+				MsgBox(buf_temp, 0, "Could not launch Window Spy:");
 			return 0;
 		case ID_TRAY_HELP:
 		case ID_HELP_USERMANUAL:
-			// Even if this is the self-contained version (AUTOHOTKEYSC), attempt to launch anyway in
-			// case the user has put a copy of the help file in the same dir with the compiled script:
-			// ActionExec()'s CreateProcess() is currently done in a way that prefers enclosing double quotes.
-			// Also, for this one I saw it report failure once on Win98SE even though the help file did
-			// wind up getting launched.  Couldn't repeat it.  So in reponse to that try explicit "hh.exe":
-			snprintf(buf_temp, sizeof(buf_temp), "\"%sAutoHotkey.chm\"", g_script.mOurEXEDir);
+			// ActionExec()'s CreateProcess() is currently done in a way that prefers enclosing double quotes:
+			*buf_temp = '"';
+			// Try GetAHKInstallDir() first so that compiled scripts running on machines that happen
+			// to have AHK installed will still be able to fetch the help file:
+			if (GetAHKInstallDir(buf_temp + 1))
+				snprintfcat(buf_temp, sizeof(buf_temp), "\\AutoHotkey.chm\"");
+			else
+				// Even if this is the self-contained version (AUTOHOTKEYSC), attempt to launch anyway in
+				// case the user has put a copy of the help file in the same dir with the compiled script:
+				// Also, for this one I saw it report failure once on Win98SE even though the help file did
+				// wind up getting launched.  Couldn't repeat it.  So in reponse to that try explicit "hh.exe":
+				snprintfcat(buf_temp, sizeof(buf_temp), "%sAutoHotkey.chm\"", g_script.mOurEXEDir);
 			if (!g_script.ActionExec("hh.exe", buf_temp, NULL, false))
 			{
 				// Try it without the hh.exe in case .CHM is associate with some other application
 				// in some OSes:
 				if (!g_script.ActionExec(buf_temp, "", NULL, false)) // Use "" vs. NULL to specify that there are no params at all.
-					MsgBox("Could not launch help file.");
+					MsgBox(buf_temp, 0, "Could not launch help file:");
 			}
 			return 0;
 		case ID_TRAY_SUSPEND:
@@ -1139,7 +1685,11 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		case WM_LBUTTONDBLCLK:
 			if (g_script.mTrayMenuDefault)
 				HANDLE_USER_MENU(g_script.mTrayMenuDefault->mMenuID)
-#ifndef AUTOHOTKEYSC
+#ifdef AUTOHOTKEYSC
+			else if (g_script.mTrayIncludeStandard && g_AllowMainWindow)
+				ShowMainWindow();
+			// else do nothing.
+#else
 			else if (g_script.mTrayIncludeStandard)
 				ShowMainWindow();
 			// else do nothing.
@@ -1196,18 +1746,13 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			// without adding any significant benefit:
 			//SendMessage(top_box, WM_SETICON, ICON_SMALL, main_icon);
 
-			int timeout = (int)lParam;
-			if (timeout < 0)
-				// MsgBox's smart comma handling will usually prevent this (considering a negative to be part
-				// of the text).  But if it does happen, timeout after a short time, which may signal the user
-				// that the script passed a bad parameter:
-				timeout = 100;
-			if (timeout) // Only when non-zero.
+			UINT timeout = (UINT)lParam;  // Caller has ensured that this is non-negative.
+			if (timeout)
 				// Caller told us to establish a timeout for this modal dialog (currently always MessageBox).
 				// In addition to any other reasons, the first param of the below must not be NULL because
 				// that would cause the 2nd param to be ignored.  We want the 2nd param to be the actual
 				// ID assigned to this timer.
-				SetTimer(top_box, g_nMessageBoxes, (UINT)timeout, DialogTimeout);
+				SetTimer(top_box, g_nMessageBoxes, (UINT)timeout, MsgBoxTimeout);
 		}
 		// else: if !top_box: no error reporting currently.
 		return 0;
@@ -1411,12 +1956,22 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 
 	} // end main switch
 
+	// Detect Explorer crashes so that tray icon can be recreated.  I think this only works on Win98
+	// and beyond, since the feature was never properly implemented in Win95:
+	static UINT WM_TASKBARCREATED = RegisterWindowMessage("TaskbarCreated");
+	if (iMsg == WM_TASKBARCREATED && !g_NoTrayIcon)
+	{
+		g_script.CreateTrayIcon();
+		g_script.UpdateTrayIcon(true);  // Force the icon into the correct pause/suspend state.
+		// And now pass this iMsg on to DefWindowProc() in case it does anything with it.
+	}
+
 	return DefWindowProc(hWnd, iMsg, wParam, lParam);
 }
 
 
 
-ResultType ShowMainWindow(MainWindowModes aMode)
+ResultType ShowMainWindow(MainWindowModes aMode, bool aRestricted)
 // Always returns OK for caller convenience.
 {
 	// 32767 might be the limit for an edit control, at least under Win95.
@@ -1425,6 +1980,25 @@ ResultType ShowMainWindow(MainWindowModes aMode)
 	char buf_temp[32767] = "";
 	bool jump_to_bottom = false;  // Set default behavior for edit control.
 	static MainWindowModes current_mode = MAIN_MODE_NO_CHANGE;
+
+#ifdef AUTOHOTKEYSC
+	// If we were called from a restricted place, such as via the Tray Menu or the Main Menu,
+	// don't allow potentially sensitive info such as script lines and variables to be shown.
+	// This is done so that scripts can be compiled more securely, making it difficult for anyone
+	// to use ListLines to see the author's source code.  Rather than make exceptions for things
+	// like KeyHistory, it seems best to forbit all information reporting except in cases where
+	// existing info in the main window -- which must have gotten their via an allowed command
+	// such as ListLines encountered in the script -- is being refreshed.  This is because in
+	// that case, the script author has given de facto permission for that loophole (and it's
+	// a pretty small one, not easy to exploit):
+	if (aRestricted && !g_AllowMainWindow && (current_mode == MAIN_MODE_NO_CHANGE || aMode != MAIN_MODE_REFRESH))
+	{
+		SendMessage(g_hWndEdit, WM_SETTEXT, 0, (LPARAM)
+			"Script info will not be shown because the \"Menu, Tray, MainWindow\"\r\n"
+			"command option was not enabled in the original script.");
+		return OK;
+	}
+#endif
 
 	// If the window is empty, caller wants us to default it to showing the most recently
 	// executed script lines:
@@ -1501,12 +2075,31 @@ ResultType ShowMainWindow(MainWindowModes aMode)
 
 
 
+ResultType GetAHKInstallDir(char *aBuf)
+// Caller must ensure that aBuf is at least MAX_PATH in capacity.
+{
+	*aBuf = '\0';  // Init in case of failure.  Some callers may rely on this.
+	HKEY hRegKey;
+	if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, "SOFTWARE\\AutoHotkey", 0, KEY_READ, &hRegKey) != ERROR_SUCCESS)
+		return FAIL;
+	DWORD aBuf_size = MAX_PATH;
+	if (RegQueryValueEx(hRegKey, "InstallDir", NULL, NULL, (LPBYTE)aBuf, &aBuf_size) != ERROR_SUCCESS)
+	{
+		RegCloseKey(hRegKey);
+		return FAIL;
+	}
+	RegCloseKey(hRegKey);
+	return OK;
+}
+
+
+
 //////////////
 // InputBox //
 //////////////
 
 ResultType InputBox(Var *aOutputVar, char *aTitle, char *aText, bool aHideInput, int aWidth, int aHeight
-	, int aX, int aY)
+	, int aX, int aY, double aTimeout, char *aDefault)
 {
 	// Note: for maximum compatibility with existing AutoIt2 scripts, do not
 	// set ErrorLevel to ERRORLEVEL_ERROR when the user presses cancel.  Instead,
@@ -1518,19 +2111,31 @@ ResultType InputBox(Var *aOutputVar, char *aTitle, char *aText, bool aHideInput,
 		return FAIL;
 	}
 	if (!aOutputVar) return FAIL;
-	if (!aText) aText = "";
-	if (!aTitle || !*aTitle)
+	if (!*aTitle)
 		// If available, the script's filename seems a much better title in case the user has
 		// more than one script running:
 		aTitle = (g_script.mFileName && *g_script.mFileName) ? g_script.mFileName : NAME_PV;
 	// Limit the size of what we were given to prevent unreasonably huge strings from
-	// possibly causing a failure in CreateDialog():
+	// possibly causing a failure in CreateDialog().  This copying method is always done because:
+	// Make a copy of all string parameters, using the stack, because they may reside in the deref buffer
+	// and other commands (such as those in timed/hotkey subroutines) maybe overwrite the deref buffer.
+	// This is not strictly necessary since InputBoxProc() is called immediately and makes instantaneous
+	// and one-time use of these strings (not needing them after that), but it feels safer:
 	char title[DIALOG_TITLE_SIZE];
-	char text[2048];  // Probably can't fit more due to the limited size of the dialog's text area.
+	char text[4096];  // Size was increased in light of the fact that dialog can be made larger now.
+	char default_string[4096];
 	strlcpy(title, aTitle, sizeof(title));
 	strlcpy(text, aText, sizeof(text));
+	strlcpy(default_string, aDefault, sizeof(default_string));
 	g_InputBox[g_nInputBoxes].title = title;
 	g_InputBox[g_nInputBoxes].text = text;
+	g_InputBox[g_nInputBoxes].default_string = default_string;
+
+	if (aTimeout > 2147483) // This is approximately the max number of seconds that SetTimer can handle.
+		aTimeout = 2147483;
+	if (aTimeout < 0) // But it can be equal to zero to indicate no timeout at all.
+		aTimeout = 0.1;  // A value that might cue the user that something is wrong.
+	g_InputBox[g_nInputBoxes].timeout = (DWORD)(aTimeout * 1000);  // Convert to ms
 
 	// Allow 0 width or height (hides the window):
 	g_InputBox[g_nInputBoxes].width = aWidth != INPUTBOX_DEFAULT && aWidth < 0 ? 0 : aWidth;
@@ -1540,20 +2145,43 @@ ResultType InputBox(Var *aOutputVar, char *aTitle, char *aText, bool aHideInput,
 	g_InputBox[g_nInputBoxes].output_var = aOutputVar;
 	g_InputBox[g_nInputBoxes].password_char = aHideInput ? '*' : '\0';
 
-	// Specify NULL as the owner since we want to be able to have the main window in the foreground
+	// Specify NULL as the owner window since we want to be able to have the main window in the foreground
 	// even if there are InputBox windows:
 	++g_nInputBoxes;
 	int result = (int)DialogBox(g_hInstance, MAKEINTRESOURCE(IDD_INPUTBOX), NULL, InputBoxProc);
 	--g_nInputBoxes;
 
-	if (result == -1)
+	// See the comments in InputBoxProc() for why ErrorLevel is set here rather than there.
+	switch(result)
 	{
+	case AHK_TIMEOUT:
+		// In this case the TimerProc already set the output variable to be what the user
+		// entered.  Set ErrorLevel (in this case) even for AutoIt2 scripts since the script
+		// is explicitly using a new feature:
+		return g_ErrorLevel->Assign("2");
+	case IDOK:
+	case IDCANCEL:
+		// For AutoIt2 (.aut) scripts:
+		// If the user pressed the cancel button, InputBoxProc() set the output variable to be blank so
+		// that there is a way to detect that the cancel button was pressed.  This is because
+		// the InputBox command does not set ErrorLevel for .aut scripts (to maximize backward
+		// compatibility), except when the command times out (see the help file for details).
+		// For non-AutoIt2 scripts: The output variable is set to whatever the user entered,
+		// even if the user pressed the cancel button.  This allows the cancel button to specify
+		// that a different operation should be performed on the entered text:
+		if (!g_script.mIsAutoIt2)
+			return g_ErrorLevel->Assign(result == IDCANCEL ? ERRORLEVEL_ERROR : ERRORLEVEL_NONE);
+		// else don't change the value of ErrorLevel at all to retain compatibility.
+		break;
+	case -1:
 		MsgBox("The InputBox window could not be displayed.");
+		// No need to set ErrorLevel since this is a runtime error that will kill the current quasi-thread.
+		return FAIL;
+	case FAIL:
 		return FAIL;
 	}
-	// In other failure cases than the above, the error should have already been displayed
-	// by InputBoxProc():
-	return result == FAIL ? FAIL : OK;  // OK if user pressed the OK or Cancel button.
+
+	return OK;
 }
 
 
@@ -1566,7 +2194,7 @@ BOOL CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 {
 	HWND hControl;
 
-	// Set default array index for g_InputBox[]:
+	// Set default array index for g_InputBox[].  Caller has ensured that g_nInputBoxes > 0:
 	int target_index = g_nInputBoxes - 1;
 	#define CURR_INPUTBOX g_InputBox[target_index]
 
@@ -1579,7 +2207,6 @@ BOOL CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 		// anything that might take a relatively long time (e.g. SetForegroundWindowEx()):
 		CLOSE_CLIPBOARD_IF_OPEN;
 
-		// Caller has ensured that g_nInputBoxes > 0:
 		CURR_INPUTBOX.hwnd = hWndDlg;
 
 		if (CURR_INPUTBOX.password_char)
@@ -1624,6 +2251,9 @@ BOOL CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 		// This may also needed to make it redraw in some OSes or some conditions:
 		GetClientRect(hWndDlg, &rect);  // Not to be confused with GetWindowRect().
 		SendMessage(hWndDlg, WM_SIZE, SIZE_RESTORED, rect.right + (rect.bottom<<16));
+		
+		if (*CURR_INPUTBOX.default_string)
+			SetDlgItemText(hWndDlg, IDC_INPUTEDIT, CURR_INPUTBOX.default_string);
 
 		if (hWndDlg != GetForegroundWindow()) // Normally it will be foreground since the template has this property.
 			SetForegroundWindowEx(hWndDlg);   // Try to force it to the foreground.
@@ -1633,6 +2263,14 @@ BOOL CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 		LPARAM main_icon = (LPARAM)LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_MAIN));
 		SendMessage(hWndDlg, WM_SETICON, ICON_SMALL, main_icon);
 		SendMessage(hWndDlg, WM_SETICON, ICON_BIG, main_icon);
+
+		// For the timeout, use a timer ID that doesn't conflict with MsgBox's IDs (which are the
+		// integers 1 through the max allowed number of msgboxes).  Use +3 vs. +1 for a margin of safety
+		// (e.g. in case a few extra MsgBoxes can be created directly by the program and not by
+		// the script):
+		#define INPUTBOX_TIMER_ID_OFFSET (MAX_MSGBOXES + 3)
+		if (CURR_INPUTBOX.timeout)
+			SetTimer(hWndDlg, INPUTBOX_TIMER_ID_OFFSET + target_index, CURR_INPUTBOX.timeout, InputBoxTimeout);
 
 		return TRUE; // i.e. let the system set the keyboard focus to the first visible control.
 	}
@@ -1741,7 +2379,7 @@ BOOL CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 		case IDOK:
 		case IDCANCEL:
 		{
-			WORD return_value = LOWORD(wParam);  // Set default, i.e. ID_OK or ID_CANCEL
+			WORD return_value = LOWORD(wParam);  // Set default, i.e. IDOK or IDCANCEL
 			if (   !(hControl = GetDlgItem(hWndDlg, IDC_INPUTEDIT))   )
 				return_value = (WORD)FAIL;
 			else
@@ -1750,14 +2388,17 @@ BOOL CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 				// If the user presses the cancel button, we set the output variable to be blank so
 				// that there is a way to detect that the cancel button was pressed.  This is because
 				// the InputBox command does not set ErrorLevel for .aut scripts (to maximize backward
-				// compatibility).
+				// compatibility), except in the case of a timeout.
 				// For non-AutoIt2 scripts: The output variable is set to whatever the user entered,
 				// even if the user pressed the cancel button.  This allows the cancel button to specify
 				// that a different operation should be performed on the entered text.
+				// NOTE: ErrorLevel must not be set here because it's possible that the user has
+				// dismissed a dialog that's underneath another, active dialog, or that's currently
+				// suspended due to a timed/hotkey subroutine running on top of it.  In other words,
+				// it's only safe to set ErrorLevel when the call to DialogProc() returns in InputBox().
 				#define SET_OUTPUT_VAR_TO_BLANK (LOWORD(wParam) == IDCANCEL && g_script.mIsAutoIt2)
-				#define INPUTBOX_VAR CURR_INPUTBOX.output_var
-				if (!g_script.mIsAutoIt2)
-					g_ErrorLevel->Assign(LOWORD(wParam) == IDCANCEL ? ERRORLEVEL_ERROR : ERRORLEVEL_NONE);
+				#undef INPUTBOX_VAR
+				#define INPUTBOX_VAR (CURR_INPUTBOX.output_var)
 				VarSizeType space_needed = SET_OUTPUT_VAR_TO_BLANK ? 1 : GetWindowTextLength(hControl) + 1;
 				// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
 				// this call will set up the clipboard for writing:
@@ -1786,9 +2427,16 @@ BOOL CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 							// There was no text to get or GetWindowText() failed.
 							*INPUTBOX_VAR->Contents() = '\0';  // Safe because Assign() gave us a non-constant memory area.
 					}
-					return_value = (WORD)INPUTBOX_VAR->Close();  // In case it's the clipboard.
+					if (INPUTBOX_VAR->Close() != OK)  // In case it's the clipboard.
+						return_value = (WORD)FAIL;
 				}
 			}
+			// Since the user pressed a button to dismiss the dialog:
+			// Kill its timer for performance reasons (might degrade perf. a little since OS has
+			// to keep track of it as long as it exists).  InputBoxTimeout() already handles things
+			// right even if we don't do this:
+			if (CURR_INPUTBOX.timeout) // It has a timer.
+				KillTimer(hWndDlg, INPUTBOX_TIMER_ID_OFFSET + target_index);
 			EndDialog(hWndDlg, return_value);
 			return TRUE;
 		} // case
@@ -1796,6 +2444,57 @@ BOOL CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 	} // Outer switch()
 	// Otherwise, let the dialog handler do its default action:
 	return FALSE;
+}
+
+
+
+VOID CALLBACK InputBoxTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
+{
+	// First check if the window has already been destroyed.  There are quite a few ways this can
+	// happen, and in all of them we want to make sure not to do things such as calling EndDialog()
+	// again or updating the output variable.  Reasons:
+	// 1) The user has already pressed the OK or Cancel button (the timer isn't killed there because
+	//    it relies on us doing this check here).  In this case, EndDialog() has already been called
+	//    (with the proper result value) and the script's output variable has already been set.
+	// 2) Even if we were to kill the timer when the user presses a button to dismiss the dialog,
+	//    this IsWindow() check would still be needed here because TimerProc()'s are called via
+	//    WM_TIMER messages, some of which might still be in our msg queue even after the timer
+	//    has been killed.  In other words, split second timing issues may cause this TimerProc()
+	//    to fire even if the timer were killed when the user dismissed the dialog.
+	// UPDATE: For performance reasons, the timer is now killed when the user presses a button,
+	// so case #1 is obsolete (but kept here for background/insight).
+	if (IsWindow(hWnd))
+	{
+		// This is the element in the array that corresponds to the InputBox for which
+		// this function has just been called.
+		int target_index = idEvent - INPUTBOX_TIMER_ID_OFFSET;
+		// Even though the dialog has timed out, we still want to write anything the user
+		// had a chance to enter into the output var.  This is because it's conceivable that
+		// someone might want a short timeout just to enter something quick and let the
+		// timeout dismiss the dialog for them (i.e. so that they don't have to press enter
+		// or a button:
+		HWND hControl = GetDlgItem(hWnd, IDC_INPUTEDIT);
+		if (hControl)
+		{
+			#undef INPUTBOX_VAR
+			#define INPUTBOX_VAR (g_InputBox[target_index].output_var)
+			VarSizeType space_needed = GetWindowTextLength(hControl) + 1;
+			// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
+			// this call will set up the clipboard for writing:
+			if (INPUTBOX_VAR->Assign(NULL, space_needed - 1) == OK)
+			{
+				// Write to the variable:
+				INPUTBOX_VAR->Length() = (VarSizeType)GetWindowText(hControl
+					, INPUTBOX_VAR->Contents(), space_needed);
+				if (!INPUTBOX_VAR->Length())
+					// There was no text to get or GetWindowText() failed.
+					*INPUTBOX_VAR->Contents() = '\0';  // Safe because Assign() gave us a non-constant memory area.
+				INPUTBOX_VAR->Close();  // In case it's the clipboard.
+			}
+		}
+		EndDialog(hWnd, AHK_TIMEOUT);
+	}
+	KillTimer(hWnd, idEvent);
 }
 
 
@@ -1974,12 +2673,15 @@ void Line::MouseMove(int aX, int aY, int aSpeed)
 		if (aSpeed > MAX_MOUSE_SPEED)
 			aSpeed = MAX_MOUSE_SPEED;
 
-	GetWindowRect(GetForegroundWindow(), &rect);
-	aX += rect.left; 
-	aY += rect.top;
+	if (GetWindowRect(GetForegroundWindow(), &rect))
+	{
+		aX += rect.left; 
+		aY += rect.top;
+	}
 
 	// AutoIt3: Get size of desktop
-	GetWindowRect(GetDesktopWindow(), &rect);
+	if (!GetWindowRect(GetDesktopWindow(), &rect)) // Might fail if there is no desktop (e.g. user not logged in).
+		rect.bottom = rect.left = rect.right = rect.top;  // Arbitrary defaults.
 
 	// AutoIt3: Convert our coords to mouse_event coords
 	aX = ((65535 * aX) / (rect.right - 1)) + 1;
@@ -2068,13 +2770,12 @@ ResultType Line::MouseGetPos()
 	Var *output_var_y = ResolveVarOfArg(1);  // Ok if NULL.
 
 	RECT rect;
+	rect.bottom = rect.left = rect.right = rect.top = 0; // ensure it's initialized for later calculations.
 	POINT pt;
 	GetCursorPos(&pt);  // Realistically, can't fail?
 	HWND fore_win = GetForegroundWindow();
 	if (fore_win)
-		GetWindowRect(fore_win, &rect);
-	else // ensure it's initialized for later calculations:
-		rect.bottom = rect.left = rect.right = rect.top = 0;
+		GetWindowRect(fore_win, &rect);  // If this call fails, above default values will be used.
 
 	ResultType result = OK; // Set default;
 
@@ -2256,7 +2957,7 @@ flags can be a combination of:
 BOOL Util_ShutdownHandler(HWND hwnd, DWORD lParam)
 {
 	// if the window is me, don't terminate!
-	if (hwnd != g_hWnd && hwnd != g_hWndSplash)
+	if (hwnd != g_hWnd && hwnd != g_hWndSplash && hwnd != g_hWndToolTip)
 		Util_WinKill(hwnd);
 
 	// Continue the enumeration.
@@ -2863,8 +3564,37 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 	// Large in case more than one file is allowed to be selected.
 	// The call to GetOpenFileName() may fail if the first character of the buffer isn't NULL
 	// because it then thinks the buffer contains the default filename, which if it's uninitialized
-	// may be a string that's too long:
-	char file_buf[65535] = "";
+	// may be a string that's too long.
+	char file_buf[65535] = ""; // Set default.
+
+	char working_dir[MAX_PATH * 2];
+	if (!aWorkingDir || !*aWorkingDir)
+		*working_dir = '\0';
+	else
+	{
+		strlcpy(working_dir, aWorkingDir, sizeof(working_dir));
+		DWORD attr = GetFileAttributes(working_dir);
+		if (attr == 0xFFFFFFFF || !(attr & FILE_ATTRIBUTE_DIRECTORY))
+		{
+			// Above condition indicates it's either an existing file or an invalid
+			// folder/filename (one that doesn't currently exist).  In light of this,
+			// it seems best to assume it's a file because the user may want to
+			// provide a default SAVE filename, and it would be normal for such
+			// a file not to already exist.
+			char *last_backslash = strrchr(working_dir, '\\');
+			if (last_backslash)
+			{
+				strlcpy(file_buf, last_backslash + 1, sizeof(file_buf)); // Set the default filename.
+				*last_backslash = '\0'; // Make the working directory just the file's path.
+			}
+			else // the entire working_dir string is the default file.
+			{
+				strlcpy(file_buf, working_dir, sizeof(file_buf));
+				*working_dir = '\0';  // This signals it to use the default directory.
+			}
+		}
+		// else it is a directory, so just leave working_dir set as it was initially.
+	}
 
 	char greeting[1024];
 	if (aGreeting && *aGreeting)
@@ -2916,14 +3646,18 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 	OPENFILENAME ofn;
 	// This init method is used in more than one example:
 	ZeroMemory(&ofn, sizeof(ofn));
-	ofn.lStructSize = sizeof(ofn);
+	// OPENFILENAME_SIZE_VERSION_400 must be used for 9x/NT otherwise the dialog will not appear!
+	// MSDN: "In an application that is compiled with WINVER and _WIN32_WINNT >= 0x0500, use
+	// OPENFILENAME_SIZE_VERSION_400 for this member.  Windows 2000/XP: Use sizeof(OPENFILENAME)
+	// for this parameter."
+	ofn.lStructSize = g_os.IsWin2000orLater() ? sizeof(OPENFILENAME) : OPENFILENAME_SIZE_VERSION_400;
 	ofn.hwndOwner = NULL; // i.e. no need to have main window forced into the background for this.
 	ofn.lpstrTitle = greeting;
 	ofn.lpstrFilter = *filter ? filter : "All Files (*.*)\0*.*\0Text Documents (*.txt)\0*.txt\0";
 	ofn.lpstrFile = file_buf;
 	ofn.nMaxFile = sizeof(file_buf) - 1; // -1 to be extra safe, like AutoIt3.
 	// Specifying NULL will make it default to the last used directory (at least in Win2k):
-	ofn.lpstrInitialDir = (aWorkingDir && *aWorkingDir) ? aWorkingDir : NULL;
+	ofn.lpstrInitialDir = *working_dir ? working_dir : NULL;
 
 	int options = ATOI(aOptions);
 	ofn.Flags = OFN_HIDEREADONLY | OFN_EXPLORER | OFN_NODEREFERENCELINKS;
@@ -2975,7 +3709,7 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 
 
 
-ResultType Line::FileSelectFolder(char *aRootDir, bool aAllowCreateFolder, char *aGreeting)
+ResultType Line::FileSelectFolder(char *aRootDir, DWORD aOptions, char *aGreeting)
 // Adapted from the AutoIt3 source.
 {
 	Var *output_var = ResolveVarOfArg(0);
@@ -3026,7 +3760,7 @@ ResultType Line::FileSelectFolder(char *aRootDir, bool aAllowCreateFolder, char 
 		snprintf(greeting, sizeof(greeting), "Select Folder - %s", g_script.mFileName);
 	browseInfo.lpszTitle = greeting;
 	browseInfo.lpfn = NULL;
-	browseInfo.ulFlags = 0x0040 | (aAllowCreateFolder ? 0 : 0x0200);
+	browseInfo.ulFlags = 0x0040 | ((aOptions & FSF_ALLOW_CREATE) ? 0 : 0x200) | ((aOptions & (DWORD)FSF_EDITBOX) ? BIF_EDITBOX : 0);
 
 	char Result[2048];
 	browseInfo.pszDisplayName = Result;  // This will hold the user's choice.
@@ -3273,6 +4007,57 @@ ResultType Line::FileDelete(char *aFilePattern)
 		FindClose(file_search);
 	g_ErrorLevel->Assign(failure_count); // i.e. indicate success if there were no failures.
 	return OK;
+}
+
+
+
+ResultType Line::FileRecycle(char *aFilePattern)
+// Adapted from the AutoIt3 source.
+{
+	if (!aFilePattern || !*aFilePattern)
+		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);  // Since this is probably not what the user intended.
+
+	SHFILEOPSTRUCT FileOp;
+	char szFileTemp[_MAX_PATH+2];
+
+	// au3: Get the fullpathname - required for UNDO to work
+	Util_GetFullPathName(aFilePattern, szFileTemp);
+
+	// au3: We must also make it a double nulled string *sigh*
+	szFileTemp[strlen(szFileTemp)+1] = '\0';	
+
+	// au3: set to known values - Corrects crash
+	FileOp.hNameMappings = NULL;
+	FileOp.lpszProgressTitle = NULL;
+	FileOp.fAnyOperationsAborted = FALSE;
+	FileOp.hwnd = NULL;
+	FileOp.pTo = NULL;
+
+	FileOp.pFrom = szFileTemp;
+	FileOp.wFunc = FO_DELETE;
+	FileOp.fFlags = FOF_SILENT | FOF_ALLOWUNDO | FOF_NOCONFIRMATION;
+
+	// SHFileOperation() returns 0 on success:
+	return g_ErrorLevel->Assign(SHFileOperation(&FileOp) ? ERRORLEVEL_ERROR : ERRORLEVEL_NONE);
+}
+
+
+
+ResultType Line::FileRecycleEmpty(char *aDriveLetter)
+// Adapted from the AutoIt3 source.
+{
+	HINSTANCE hinstLib = LoadLibrary("shell32.dll");
+	if (!hinstLib)
+		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+	// au3: Get the address of all the functions we require
+	typedef HRESULT (WINAPI *MySHEmptyRecycleBin)(HWND, LPCTSTR, DWORD);
+ 	MySHEmptyRecycleBin lpfnEmpty = (MySHEmptyRecycleBin)GetProcAddress(hinstLib, "SHEmptyRecycleBinA");
+	if (!lpfnEmpty)
+		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+	const char *szPath = *aDriveLetter ? aDriveLetter : NULL;
+	if (lpfnEmpty(NULL, szPath, SHERB_NOCONFIRMATION | SHERB_NOPROGRESSUI | SHERB_NOSOUND) != S_OK)
+		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+	return g_ErrorLevel->Assign(ERRORLEVEL_NONE);
 }
 
 
@@ -4642,6 +5427,7 @@ ArgTypeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_GETKEYSTATE:
 		case ACT_CONTROLGETFOCUS:
 		case ACT_CONTROLGETTEXT:
+		case ACT_CONTROLGET:
 		case ACT_STATUSBARGETTEXT:
 		case ACT_INPUTBOX:
 		case ACT_RANDOM:

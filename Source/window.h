@@ -49,6 +49,9 @@ if (USE_FOREGROUND_WINDOW(title, text, exclude_title, exclude_text))\
 // Note: MSDN says (for functions like GetWindowText): "Specifies the maximum number of characters to
 // copy to the buffer, including the NULL character. If the text exceeds this limit, it is truncated."
 #define WINDOW_TEXT_SIZE 32767
+#define WINDOW_CLASS_SIZE 1024  // Haven't found anything that documents how long one can be, so use this.
+#define AHK_CLASS_FLAG "ahk_class"
+#define AHK_CLASS_FLAG_LENGTH 9  // The length of the above string.
 
 struct WindowInfoPackage // A simple struct to help with EnumWindows().
 {
@@ -207,6 +210,35 @@ inline bool IsTextMatch(char *aHaystack, char *aNeedle, char *aExcludeText = ""
 	// Otherwise, search the leading part only:
 	return (!*aNeedle || !strncmp(aHaystack, aNeedle, strlen(aNeedle)))
 		&& (!*aExcludeText || strncmp(aHaystack, aExcludeText, strlen(aExcludeText)));
+}
+
+inline bool IsTitleMatch(HWND aWnd, char *aHaystack, char *aNeedle, char *aExcludeText)
+// To help performance, it's the caller's responsibility to ensure that all params are not NULL.
+// Use the AutoIt2 convention (same in AutoIt3?) of making searches for window titles
+// and text case sensitive.
+{
+	if (strnicmp(aNeedle, AHK_CLASS_FLAG, AHK_CLASS_FLAG_LENGTH)) // aNeedle doesn't specify a class name.
+	{
+		if (g.TitleFindAnywhere)
+			return (!*aNeedle || strstr(aHaystack, aNeedle)) // Either one of these makes half a match.
+				&& (!*aExcludeText || !strstr(aHaystack, aExcludeText));  // And this is the other half.
+		// Otherwise, search the leading part only:
+		return (!*aNeedle || !strncmp(aHaystack, aNeedle, strlen(aNeedle)))
+			&& (!*aExcludeText || strncmp(aHaystack, aExcludeText, strlen(aExcludeText)));
+	}
+	// Otherwise, aNeedle specifies a class name rather than a window title.
+	aNeedle = omit_leading_whitespace(aNeedle + AHK_CLASS_FLAG_LENGTH);
+	char fore_class[WINDOW_CLASS_SIZE];
+	if (!GetClassName(aWnd, fore_class, WINDOW_CLASS_SIZE - 1)) // Assume its not a match.
+		return false;
+	// To be a match, the class names must match exactly (case sensitive).  This seems best to
+	// avoid problems with ambiguity, since some apps might use very short class names that
+	// overlap with more "official" classnames, or vice versa.  User can always define a Window
+	// Group to operate upon more than one class simultaneously.
+	// The other requirement for a match is that ExcludeTitle not be found in aHaystack.
+	return !strcmp(fore_class, aNeedle) && (!*aExcludeText
+		|| (g.TitleFindAnywhere ? !strstr(aHaystack, aExcludeText)
+			: strncmp(aHaystack, aExcludeText, strlen(aExcludeText))));
 }
 
 #endif

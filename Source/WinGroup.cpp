@@ -372,7 +372,7 @@ inline WindowSpec *WinGroup::IsMember(HWND aWnd)
 	{
 		for (WindowSpec *win = mFirstWindow;;)
 		{
-			if (IsTextMatch(fore_title, win->mTitle, win->mExcludeTitle))
+			if (IsTitleMatch(aWnd, fore_title, win->mTitle, win->mExcludeTitle))
 				if (HasMatchingChild(aWnd, win->mText, win->mExcludeText))
 					return win;
 			// Otherwise, no match, so go onto the next one:
@@ -421,7 +421,7 @@ BOOL CALLBACK EnumParentFindAnyExcept(HWND aWnd, LPARAM lParam)
 	{
 		// For each window in the linked list, check if aWnd is a match
 		// for it:
-		if (IsTextMatch(win_title, win->mTitle, win->mExcludeTitle))
+		if (IsTitleMatch(aWnd, win_title, win->mTitle, win->mExcludeTitle))
 			if (HasMatchingChild(aWnd, win->mText, win->mExcludeText))
 				// Match found, so aWnd is a member of the group.
 				// But we want to find non-members only, so keep
@@ -470,11 +470,12 @@ BOOL CALLBACK EnumParentCloseAny(HWND aWnd, LPARAM lParam)
 	if (!stricmp(win_title, "Program Manager"))
 		// Skip this too because never want to close it as part of a group close.
 		return TRUE;
+
 	for (WindowSpec *win = pWin->win_spec;;)
 	{
 		// For each window in the linked list, check if aWnd is a match
 		// for it:
-		if (IsTextMatch(win_title, win->mTitle, win->mExcludeTitle))
+		if (IsTitleMatch(aWnd, win_title, win->mTitle, win->mExcludeTitle))
 			if (HasMatchingChild(aWnd, win->mText, win->mExcludeText))
 			{
 				// Match found, so aWnd is a member of the group.

@@ -451,7 +451,7 @@ int snprintf(char *aBuf, size_t aBufSize, const char *aFormat, ...);
 int snprintfcat(char *aBuf, size_t aBufSize, const char *aFormat, ...);
 int strlcmp (char *aBuf1, char *aBuf2, UINT aLength1 = UINT_MAX, UINT aLength2 = UINT_MAX);
 int strlicmp(char *aBuf1, char *aBuf2, UINT aLength1 = UINT_MAX, UINT aLength2 = UINT_MAX);
-char *strrstr(char *aStr, char *aPattern, bool aCaseSensitive = true);
+char *strrstr(char *aStr, char *aPattern, bool aCaseSensitive = true, int aOccurrence = 1);
 char *stristr(char *aStr, char *aPattern);
 char *StrReplace(char *Str, char *OldStr, char *NewStr = "", bool aCaseSensitive = true);
 char *StrReplaceAll(char *Str, char *OldStr, char *NewStr = "", bool aCaseSensitive = true);

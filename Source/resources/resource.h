@@ -48,7 +48,7 @@
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        230
 #define _APS_NEXT_COMMAND_VALUE         32824
-#define _APS_NEXT_CONTROL_VALUE         205
+#define _APS_NEXT_CONTROL_VALUE         206
 #define _APS_NEXT_SYMED_VALUE           101
 #endif
 #endif

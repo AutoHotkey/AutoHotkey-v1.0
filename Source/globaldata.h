@@ -26,6 +26,7 @@ extern HINSTANCE g_hInstance;
 extern HWND g_hWnd;  // The main window
 extern HWND g_hWndEdit;  // The edit window, child of main.
 extern HWND g_hWndSplash;  // The SplashText window.
+extern HWND g_hWndToolTip;  // The tooltip window.
 extern HACCEL g_hAccelTable; // Accelerator table for main menu shortcut keys.
 
 extern modLR_type g_modifiersLR_logical;   // Tracked by hook (if hook is active).
@@ -38,11 +39,17 @@ extern int g_HotkeyModifierTimeout;
 
 extern HHOOK g_hhkLowLevelKeybd;
 extern HHOOK g_hhkLowLevelMouse;
-extern HookType sWhichHookSkipWarning;
+#ifdef HOOK_WARNING
+	extern HookType sWhichHookSkipWarning;
+#endif
 extern bool g_ForceLaunch;
 extern bool g_WinActivateForce;
-extern bool g_AllowOnlyOneInstance;
+extern SingleInstanceType g_AllowOnlyOneInstance;
+extern bool g_persistent;
 extern bool g_NoTrayIcon;
+#ifdef AUTOHOTKEYSC
+	extern bool g_AllowMainWindow;
+#endif
 extern bool g_AllowSameLineComments;
 extern char g_LastPerformedHotkeyType;
 extern bool g_AllowInterruption;
@@ -77,8 +84,8 @@ extern char g_DerefChar;
 extern char g_EscapeChar;
 
 // Global objects:
-extern Script g_script;
 extern Var *g_ErrorLevel;
+EXTERN_SCRIPT;
 EXTERN_CLIPBOARD;
 EXTERN_OSVER;
 

@@ -175,8 +175,8 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 	// "Edit This Script" menu item (and possibly other places) might result in an indirect
 	// call to us and we will need the timer to avoid getting stuck in the GetMessageState()
 	// with hotkeys being disallowed due to filtering:
-	#define THIS_LAYER_NEEDS_TIMER (aSleepDuration > 0 && aMode == RETURN_AFTER_MESSAGES)
-	if (THIS_LAYER_NEEDS_TIMER)
+	bool this_layer_needs_timer = (aSleepDuration > 0 && aMode == RETURN_AFTER_MESSAGES);
+	if (this_layer_needs_timer)
 	{
 		++g_nLayersNeedingTimer;  // IsCycleComplete() is responsible for decrementing this for us.
 		if (!g_MainTimerExists)
@@ -190,7 +190,6 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 	// Only used when aMode == RETURN_AFTER_MESSAGES:
 	// True if the current subroutine was interrupted by another:
 	//bool was_interrupted = false;
-	bool sleep0_was_done = false;
 	bool empty_the_queue_via_peek = false;
 
 	HWND fore_window;
@@ -220,45 +219,35 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 			}
 			// else let any WM_QUIT be handled below.
 		}
-		else
+		else // aSleepDuration <= 0 || empty_the_queue_via_peek
 		{
-			// aSleepDuration <= 0 or "empty_the_queue_via_peek" is true, so we don't want
-			// to be stuck in GetMessage() for even 10ms:
+			// In the above cases, we don't want to be stuck in GetMessage() for even 10ms:
 			if (!PeekMessage(&msg, NULL, 0, MSG_FILTER_MAX, PM_REMOVE)) // No more messages
 			{
-				// Since we're here, it means this recursion layer/instance of this
-				// function didn't encounter any hotkey messages because if it had,
-				// it would have already returned due to the WM_HOTKEY cases below.
-				// So there should be no need to restore the value of global variables?
-				if (aSleepDuration == 0 && !sleep0_was_done)
-				{
-					// Support a true Sleep(0) because it's the only way to yield
-					// CPU time in this exact way.  It's used for things like
-					// "SetKeyDelay, 0", which is defined as a Sleep(0) between
-					// every keystroke
-					// Out msg queue is empty, so do the sleep now, which might
-					// yield the rest of our entire timeslice (probably 20ms
-					// since we likely haven't used much of it) if the CPU is
-					// under load:
-					Sleep(0);
-					sleep0_was_done = true;
-					// Now start a new iteration of the loop that will see if we
-					// received any messages during the up-to-20ms delay (perhaps even more)
-					// that just occurred.  It's done this way to minimize keyboard/mouse
-					// lag (if the hooks are installed) that will occur if any key or
-					// mouse events are generated during that 20ms:
-					continue;
+				// It is not necessary to actually do the Sleep(0) when aSleepDuration == 0
+				// because the most recent PeekMessage() has just yielded our prior timeslice.
+				// This is because when Peek() doesn't find any messages, it automatically
+				// behaves as though it did a Sleep(0).
+
+				// Macro notes:
+				// Must decrement prior to every RETURN to balance it.
+				// Do this prior to checking whether timer should be killed, below:
+				#define RETURN_FROM_MSGSLEEP(return_value) \
+				{\
+					if (this_layer_needs_timer)\
+						--g_nLayersNeedingTimer;\
+					return return_value;\
 				}
-				else // aSleepDuration is non-zero or we already did the Sleep(0)
-				{
-					// Function should always return OK in this case.  Also, was_interrupted
-					// will always be false because if this "aSleepDuration <= 0" call
-					// really was interrupted, it would already have returned in the
-					// hotkey cases of the switch().  UPDATE: was_interrupted can now
-					// be true since the hotkey case in the switch() doesn't return,
-					// relying on us to do it after making sure the queue is empty:
-					return IsCycleComplete(aSleepDuration, start_time, allow_early_return, aMode);
-				}
+				// Function should always return OK in this case.  Also, was_interrupted
+				// will always be false because if this "aSleepDuration <= 0" call
+				// really was interrupted, it would already have returned in the
+				// hotkey cases of the switch().  UPDATE: was_interrupted can now
+				// be true since the hotkey case in the switch() doesn't return,
+				// relying on us to do it after making sure the queue is empty.
+				// The below is checked here rather than in IsCycleComplete() because
+				// that function is sometimes called more than once prior to returning
+				// (e.g. empty_the_queue_via_peek) and we only want this to be decremented once:
+				RETURN_FROM_MSGSLEEP(IsCycleComplete(aSleepDuration, start_time, allow_early_return))
 			}
 			// else Peek() found a message, so process it below.
 		}
@@ -305,8 +294,8 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 			// in preparation for ending this instance/layer, only to be possibly,
 			// but extremely rarely, interrupted/recursed yet again if that final
 			// peek were to detect a recursable message):
-			if (IsCycleComplete(aSleepDuration, start_time, allow_early_return, aMode))
-				return OK;
+			if (IsCycleComplete(aSleepDuration, start_time, allow_early_return))
+				RETURN_FROM_MSGSLEEP(OK)
 			// Otherwise, stay in the blessed GetMessage() state until
 			// the time has expired:
 			continue;
@@ -443,7 +432,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 			// Perform the new hotkey's subroutine:
 			++g_nThreads;
 			if (msg.message == AHK_USER_MENU)
-				menu_item->mLabel->mJumpToLine->ExecUntil(UNTIL_RETURN, 0);
+				menu_item->mLabel->mJumpToLine->ExecUntil(UNTIL_RETURN);
 			else
 				Hotkey::PerformID((HotkeyIDType)msg.wParam);
 			--g_nThreads;
@@ -479,7 +468,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 					g_script.UpdateTrayIcon();
 				RESUME_UNDERLYING_THREAD
 
-				if (IsCycleComplete(aSleepDuration, start_time, allow_early_return, aMode))
+				if (IsCycleComplete(aSleepDuration, start_time, allow_early_return))
 				{
 					// Check for messages once more in case the subroutine that just completed
 					// above didn't check them that recently.  This is done to minimize the time
@@ -493,7 +482,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 					allow_early_return = true;
 					// And now let it fall through to the "continue" statement below.
 				}
-				else if (THIS_LAYER_NEEDS_TIMER) // Ensure the timer is back on since we still need it here.
+				else if (this_layer_needs_timer) // Ensure the timer is back on since we still need it here.
 					SET_MAIN_TIMER // This won't do anything if it's already on.
 				// and now if the cycle isn't complete, stay in the blessed GetMessage() state until the time
 				// has expired.
@@ -567,7 +556,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 
 
 
-ResultType IsCycleComplete(int aSleepDuration, DWORD aStartTime, bool aAllowEarlyReturn, MessageMode aMode)
+ResultType IsCycleComplete(int aSleepDuration, DWORD aStartTime, bool aAllowEarlyReturn)
 // This function is used just to make MsgSleep() more readable/understandable.
 {
 	// Note: Even if TickCount has wrapped due to system being up more than about 49 days,
@@ -593,9 +582,6 @@ ResultType IsCycleComplete(int aSleepDuration, DWORD aStartTime, bool aAllowEarl
 		g_script.mLinesExecutedThisCycle = 0;
 		g_script.mLastScriptRest = tick_now;
 	}
-
-	if (THIS_LAYER_NEEDS_TIMER) // Since MsgSleep() incremented this, must decrement here to balance it.
-		--g_nLayersNeedingTimer; // Do this prior to checking whether timer should be killed, below.
 
 	// Kill the timer only if we're about to return OK to the caller since the caller
 	// would still need the timer if FAIL was returned above.  But don't kill it if
@@ -727,7 +713,7 @@ void CheckScriptTimers()
 			ENABLE_UNINTERRUPTIBLE_SUB
 
 			++timer->mExistingThreads;
-			timer->mLabel->mJumpToLine->ExecUntil(UNTIL_RETURN, 0);
+			timer->mLabel->mJumpToLine->ExecUntil(UNTIL_RETURN);
 			--timer->mExistingThreads;
 
 			DISABLE_UNINTERRUPTIBLE_SUB
@@ -754,7 +740,7 @@ void CheckScriptTimers()
 
 
 
-VOID CALLBACK DialogTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
+VOID CALLBACK MsgBoxTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
 {
 	// Unfortunately, it appears that MessageBox() will return zero rather
 	// than AHK_TIMEOUT, specified below -- at least under WinXP.  This
@@ -762,8 +748,14 @@ VOID CALLBACK DialogTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
 	// timed out (destroyed) by this function and one that couldn't be
 	// created in the first place due to some other error.  But since
 	// MessageBox() errors are rare, we assume that they timed out if
-	// the MessageBox() returns 0:
-	EndDialog(hWnd, AHK_TIMEOUT);
+	// the MessageBox() returns 0.  UPDATE: Due to the fact that TimerProc()'s
+	// are called via WM_TIMER messages in our msg queue, make sure that the
+	// window really exists before calling EndDialog(), because if it doesn't,
+	// chances are that EndDialog() was already called with another value.
+	// UPDATE #2: Actually that isn't strictly needed because MessageBox()
+	// ignores the AHK_TIMEOUT value we send here.  But it feels safer:
+	if (IsWindow(hWnd))
+		EndDialog(hWnd, AHK_TIMEOUT);
 	KillTimer(hWnd, idEvent);
 }
 

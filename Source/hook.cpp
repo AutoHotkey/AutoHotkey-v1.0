@@ -34,8 +34,10 @@ static bool disguise_next_lalt_up = false;
 static bool disguise_next_ralt_up = false;
 static bool alt_tab_menu_is_visible = false;
 
+#ifdef HOOK_WARNING
 static HANDLE keybd_hook_mutex = NULL;
 static HANDLE mouse_hook_mutex = NULL;
+#endif
 
 // The prefix key that's currently down (i.e. in effect).
 // It's tracked this way, rather than as a count of the number of prefixes currently down, out of
@@ -244,11 +246,13 @@ HookType RemoveKeybdHook()
 		if (UnhookWindowsHookEx(g_hhkLowLevelKeybd))
 		{
 			g_hhkLowLevelKeybd = NULL;
+#ifdef HOOK_WARNING
 			if (keybd_hook_mutex)
 			{
 				CloseHandle(keybd_hook_mutex);
 				keybd_hook_mutex = NULL;  // Keep this in sync with the above, since this can be run more than once.
 			}
+#endif
 		}
 	return GetActiveHooks();
 }
@@ -261,11 +265,13 @@ HookType RemoveMouseHook()
 		if (UnhookWindowsHookEx(g_hhkLowLevelMouse))
 		{
 			g_hhkLowLevelMouse = NULL;
+#ifdef HOOK_WARNING
 			if (mouse_hook_mutex)
 			{
 				CloseHandle(mouse_hook_mutex);
 				mouse_hook_mutex = NULL;  // Keep this in sync with the above, since this can be run more than once.
 			}
+#endif
 		}
 	return GetActiveHooks();
 }
@@ -686,6 +692,7 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 	if (   !g_hhkLowLevelKeybd && ((aWhichHookAlways & HOOK_KEYBD)
 		|| ((aWhichHook & HOOK_KEYBD) && (keybd_hook_hotkey_count || force_CapsNumScroll)))   )
 	{
+#ifdef HOOK_WARNING
 		if (!keybd_hook_mutex) // else we already have ownership of the mutex so no need for this check.
 		{
 			keybd_hook_mutex = CreateMutex(NULL, FALSE, NAME_P "KeybdHook");
@@ -706,6 +713,7 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 				// The mutex object is destroyed when its last handle has been closed."
 			}
 		}
+#endif
 		if (g_hhkLowLevelKeybd = SetWindowsHookEx(WH_KEYBOARD_LL, LowLevelKeybdProc, g_hInstance, 0))
 		{
 			hooks_currently_active |= HOOK_KEYBD;
@@ -745,6 +753,7 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 	if (   !g_hhkLowLevelMouse && ((aWhichHookAlways & HOOK_MOUSE)
 		|| ((aWhichHook & HOOK_MOUSE) && mouse_hook_hotkey_count))   )
 	{
+#ifdef HOOK_WARNING
 		if (!mouse_hook_mutex) // else we already have ownership of the mutex so no need for this check.
 		{
 			mouse_hook_mutex = CreateMutex(NULL, FALSE, NAME_P "MouseHook");
@@ -762,6 +771,7 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 					g_script.ExitApp();
 			}
 		}
+#endif
 		if (g_hhkLowLevelMouse = SetWindowsHookEx(WH_MOUSE_LL, LowLevelMouseProc, g_hInstance, 0))
 		{
 			hooks_currently_active |= HOOK_MOUSE;
