@@ -59,8 +59,9 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		//char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\GUI Demo.ahk";
-		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\Expressions.ahk";
-		char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\New Text Document.ahk";
+		char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\Expressions.ahk";
+		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\New Text Document.ahk";
+		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\PixelSearch - Test inverted coordinates.ahk";
 	#else
 		char *script_filespec = NAME_P ".ini";  // Use this extension for better file association with editor(s).
 	#endif
@@ -182,8 +183,9 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 			if (g_AllowOnlyOneInstance == SINGLE_INSTANCE_IGNORE)
 				return 0;
 			if (g_AllowOnlyOneInstance != SINGLE_INSTANCE_REPLACE)
-				if (MsgBox("An older instance of this #SingleInstance script is already running."
-					"  Replace it with this instance?", MB_YESNO, g_script.mFileName) == IDNO)
+				if (MsgBox("An older instance of this script is already running.  Replace it with this"
+					" instance?\nNote: To avoid this message, see #SingleInstance in the help file."
+					, MB_YESNO, g_script.mFileName) == IDNO)
 					return 0;
 			// Otherwise:
 			reason_to_close_prior = AHK_EXIT_BY_SINGLEINSTANCE;

@@ -3642,7 +3642,6 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int a
 	Var *output_var_x = ResolveVarOfArg(0);  // Ok if NULL.
 	Var *output_var_y = ResolveVarOfArg(1);  // Ok if NULL.
 
-	g_ErrorLevel->Assign(ERRORLEVEL_ERROR2); // Set default ErrorLevel.  2 means error other than "color not found".
 	if (output_var_x)
 		output_var_x->Assign();  // Init to empty string regardless of whether we succeed here.
 	if (output_var_y)
@@ -3652,7 +3651,7 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int a
 	if (!(g.CoordMode & COORD_MODE_PIXEL)) // Using relative vs. screen coordinates.
 	{
 		if (!GetWindowRect(GetForegroundWindow(), &rect))
-			return OK;  // Let ErrorLevel tell the story.
+			return g_ErrorLevel->Assign(ERRORLEVEL_ERROR2); // 2 means error other than "color not found".
 		aLeft   += rect.left;
 		aTop    += rect.top;
 		aRight  += rect.left;  // Add left vs. right because we're adjusting based on the position of the window.
@@ -3661,7 +3660,7 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int a
 
 	HDC hdc = GetDC(NULL);
 	if (!hdc)
-		return OK;  // Let ErrorLevel tell the story.
+		g_ErrorLevel->Assign(ERRORLEVEL_ERROR2); // 2 means error other than "color not found".
 
 	if (aVariation < 0) aVariation = 0;
 	if (aVariation > 255) aVariation = 255;
@@ -3692,45 +3691,63 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int a
 	int xpos, ypos, color;
 	BYTE red, green, blue;
 	bool match_found;
-	ResultType result = OK;
-	for (xpos = aLeft; xpos <= aRight; ++xpos)
+
+	// If the caller gives us inverted X or Y coordinates, conduct the search in reverse order.
+	// This feature was requested; it was put into effect for v1.0.25.06.
+	bool right_to_left = aLeft > aRight;
+	bool bottom_to_top = aTop > aBottom;
+
+	for (match_found = false, xpos = aLeft  // It starts at aLeft even if right_to_left is true.
+		; (right_to_left ? (xpos >= aRight) : (xpos <= aRight)) // Verified correct.
+		; xpos += right_to_left ? -1 : 1)
 	{
-		for (ypos = aTop; ypos <= aBottom; ++ypos)
+		for (ypos = aTop  // It starts at aTop even if bottom_to_top is true.
+			; bottom_to_top ? (ypos >= aBottom) : (ypos <= aBottom) // Verified correct.
+			; ypos += bottom_to_top ? -1 : 1)
 		{
 			color = GetPixel(hdc, xpos, ypos);
 			if (aVariation <= 0)  // User wanted an exact match.
-				match_found = (color == aColor);
+			{
+				if (color == aColor)
+				{
+					match_found = true;
+					break;
+				}
+			}
 			else  // User specified that some variation in each of the RGB components is allowable.
 			{
 				red = GetRValue(color);
 				green = GetGValue(color);
 				blue = GetBValue(color);
-				match_found = (red >= red_low && red <= red_high
-					&& green >= green_low && green <= green_high
-					&& blue >= blue_low && blue <= blue_high);
-			}
-			if (match_found) // This pixel matches one of the specified color(s).
-			{
-				ReleaseDC(NULL, hdc);
-				// Adjust coords to make them relative to the position of the target window
-				// (rect will contain zero values if this doesn't need to be done):
-				xpos -= rect.left;
-				ypos -= rect.top;
-				if (output_var_x && !output_var_x->Assign(xpos))
-					result = FAIL;
-				if (output_var_y && !output_var_y->Assign(ypos))
-					result = FAIL;
-				if (result == OK)
-					g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-				return result;
+				if (red >= red_low && red <= red_high && green >= green_low && green <= green_high
+					&& blue >= blue_low && blue <= blue_high)
+				{
+					match_found = true;
+					break;
+				}
 			}
 		}
+		// Check this here rather than in the outer loop's top line because otherwise the loop's
+		// increment would make xpos too big by 1:
+		if (match_found)
+			break;
 	}
 
-	// If the above didn't return, the pixel wasn't found in the specified region.
-	// So leave ErrorLevel set to "error" to indicate that:
 	ReleaseDC(NULL, hdc);
-	return g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // This value indicates "color not found".
+
+	if (!match_found)
+		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // This value indicates "color not found".
+
+	// Otherwise, this pixel matches one of the specified color(s).
+	ReleaseDC(NULL, hdc);
+	// Adjust coords to make them relative to the position of the target window
+	// (rect will contain zero values if this doesn't need to be done):
+	if (output_var_x && !output_var_x->Assign(xpos - rect.left))
+		return FAIL;
+	if (output_var_y && !output_var_y->Assign(ypos - rect.top))
+		return FAIL;
+	// Since above didn't return:
+	return g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 }
 
 
@@ -6296,8 +6313,9 @@ ResultType Line::SplitPath(char *aFileSpec)
 	// IfInString, Filespec, :, IfNotInString, Filespec, :\, MsgBox Drive with no absolute path.
 	char *name_delimiter = strrchr(aFileSpec, '\\');
 	if (!name_delimiter)
-		if (   !(name_delimiter = strrchr(aFileSpec, ':'))   )
-			name_delimiter = NULL;
+		if (   !(name_delimiter = strrchr(aFileSpec, '/'))   ) // As of v1.0.25.06, also support forward slash so that URLs can be split.
+			if (   !(name_delimiter = strrchr(aFileSpec, ':'))   )
+				name_delimiter = NULL;
 
 	char *name = name_delimiter ? name_delimiter + 1 : aFileSpec; // If no delimiter, name is the entire string.
 	char *ext_dot = strrchr(name, '.');
@@ -6309,7 +6327,7 @@ ResultType Line::SplitPath(char *aFileSpec)
 	{
 		if (!name_delimiter)
 			output_var_dir->Assign(); // Shouldn't fail.
-		else if (*name_delimiter == '\\')
+		else if (*name_delimiter == '\\' || *name_delimiter == '/')
 		{
 			if (!output_var_dir->Assign(aFileSpec, (VarSizeType)(name_delimiter - aFileSpec)))
 				return FAIL;
@@ -6358,7 +6376,9 @@ ResultType Line::SplitPath(char *aFileSpec)
 				output_var_drive->Assign(drive, 2);
 			else // It's debatable, but it seems best to return a blank drive if a aFileSpec is a relative path.
 				 // rather than trying to use GetFullPathName() on a potentially non-existent file/dir.
-				 // _splitpath() doesn't fetch the drive letter of relative paths either.
+				 // _splitpath() doesn't fetch the drive letter of relative paths either.  This also reports
+				 // a blank drive for something like file://C:\My Folder\My File.txt, which seems too rarely
+				 // to justify a special mode.
 				output_var_drive->Assign();
 		}
 	}
@@ -6437,7 +6457,7 @@ struct sort_rand_type
 };
 
 int SortRandom(const void *a1, const void *a2)
-// See comments in prior function for details.
+// See comments in prior functions for details.
 {
 	return ((sort_rand_type *)a1)->rand - ((sort_rand_type *)a2)->rand;
 }
@@ -8008,7 +8028,17 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 				// -- and thus easier to work with in a script -- convert the result into the multi-file
 				// format (folder as first item and naked filename as second):
 				if (cp = strrchr(file_buf, '\\'))
+				{
 					*cp = '\n';
+					// If the folder is the root folder, add a backslash so that selecting a single
+					// file yields the same reported folder as selecting multiple files:
+					if (cp - file_buf == 2 && *(cp - 1) == ':') // e.g. "C:"
+					{
+						memmove(cp + 1, cp, strlen(cp) + 1); // Make room to insert backslash.
+						*cp = '\\';
+					}
+
+				}
 			}
 			else // More than one file was selected.
 			{

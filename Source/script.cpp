@@ -768,9 +768,9 @@ LineNumberType Script::LoadFromFile()
 "; You can also run more than one .ahk file simultaneously and each will\n"
 "; get its own tray icon.\n"
 "\n"
-"; QUICK-START TUTORIAL: If you've never used an automation language such\n"
-"; as AutoIt, please read the quick-start tutorial in the help file.  It\n"
-"; will help you begin scripting your own macros and hotkeys right away.\n"
+"; Please read the QUICK-START TUTORIAL near the top of the help file.\n"
+"; It explains how to perform common automation tasks such as sending\n"
+"; keystrokes and mouse clicks.  It also explains how to use hotkeys.\n"
 "\n"
 "; SAMPLE HOTKEYS: Below are two sample hotkeys.  The first is Win+Z and it\n"
 "; launches a web site in the default browser.  The second is Control+Alt+N\n"
@@ -3053,8 +3053,14 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					if (!*cp)
 					{
 						this_new_arg.is_expression = false;
-						if (aActionType == ACT_ASSIGNEXPR)
-							aActionType = ACT_ASSIGN; // Convert to simple assignment.
+						// Bugfix for 1.0.25.06: The below has been disabled because:
+						// 1) It yields inconsistent results due to AutoTrim.  For example, the assignment
+						//    x := "  string" should retain the leading spaces unconditionally, since any
+						//    more complex expression would.  But if := were converted to = in this case,
+						//    AutoTrim would be in effect for it, which is undesirable.
+						// 2) It's not necessary in since ASSIGNEXPR handles both expressions and non-expressions.
+						//if (aActionType == ACT_ASSIGNEXPR)
+						//	aActionType = ACT_ASSIGN; // Convert to simple assignment.
 						*(--cp) = '\0'; // Remove the ending quote.
 						memmove(this_new_arg.text, this_new_arg.text + 1, cp - this_new_arg.text); // Remove the starting quote.
 						// Convert all pairs of quotes into single literal quotes:
@@ -8697,7 +8703,7 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 	map_item map[MAX_DEREFS_PER_ARG*2 + 1];
 	int map_count = 0;
 	// Above sizes the map to "times 2 plus 1" to handle worst case, which is -y + 1 (raw+deref+raw).
-	// Thus, if this particular arg has the maximum number of derefs, the number of/ map markers
+	// Thus, if this particular arg has the maximum number of derefs, the number of map markers
 	// needed would be twice that, plus one for the last raw text's marker.
 
 	///////////////////////////////////////////////////////////////////////////////////////
@@ -8756,8 +8762,8 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 	// Although having a precedence array is probably not strictly required (since the order of evaluation
 	// of operators of equal precedence doesn't seem to matter for any of the operators in the list),
 	// it probably helps performance by avoiding unnecessary pushing and popping of operators to the stack.
-	// This array must be kept in sync with "enum SymbolType".  Dimensioning explicitly by SYM_COUNT helps
-	// enforce that at compile-time:
+	// This array must be kept in sync with "enum SymbolType".  Also, dimensioning explicitly by SYM_COUNT
+	// helps enforce that at compile-time:
 	static int sPrecedence[SYM_COUNT] =
 	{
 		  0, 0, 0, 0, 0 // SYM_STRING, SYM_INTEGER, SYM_FLOAT, SYM_OPERAND, SYM_BEGIN (SYM_BEGIN must be lowest precedence).
@@ -8777,10 +8783,10 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 		, 14            // SYM_POWER (see note below).
 	};
 	// Most programming languages give exponentiation a higher precedence than unary minus and !/not.
-	// For example, -2^2 is evaluated as -(2^2), not (-2)^2 (the latter is unsupported by qmathPow anyway).
-	// However, this rule requires a small workaround in the postfix-builder to allow 2^-2 to be
-	// evaluated as 2^(-2) rather than being seen as an error.
-	// On a related note, the right-to-left tradition of of something like 2^3^4 is not implemented.
+	// For example, -2**2 is evaluated as -(2**2), not (-2)**2 (the latter is unsupported by qmathPow anyway).
+	// However, this rule requires a small workaround in the postfix-builder to allow 2**-2 to be
+	// evaluated as 2**(-2) rather than being seen as an error.
+	// On a related note, the right-to-left tradition of of something like 2**3**4 is not implemented.
 	// Instead, the expression is evaluated in left-to-right (like other operators) to simplify the code.
 
 	#define MAX_TOKENS 512 // Max number of operators/operands.  Seems enough to handle anything realistic, while conserving call-stack space.
@@ -8815,7 +8821,7 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 		// (without enclosing double quotes, since those are only needed for raw string literals).
 		// An EXP_DEREF_SINGLE item cannot extend beyond into the map item to its right, since such
 		// a condition can never occur due to load-time preparsing (e.g. the x and y in x+y are two
-		// separate items because there's an operator between them. Even a fault expression such as
+		// separate items because there's an operator between them). Even a concat expression such as
 		// (x y) would still have x and y separate because the space between them counts as a raw
 		// map item, which keeps them separate.
 		if (this_item.type == EXP_DEREF_SINGLE)
@@ -8844,10 +8850,10 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 							, item_end - this_item.marker);
 					else
 						prev_infix_item.marker = this_item.marker; // i.e. consider the double to be an empty string for this concat.
+						// And prev_infix_item.symbol should already be set to SYM_OPERAND at this stage.
 					continue;
 					// Currently, attempts to concat something onto a double-deref, or a double onto
-					// something, simply fail during the eval-postfix phase since the stack winds
-					// up with more than one unevaluated item left on it.  This is by design.
+					// something, treat the double as an empty string, as documented.
 				}
 			}
 			// Since above didn't "continue":
@@ -8882,7 +8888,7 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 			// space, the entire thing would be one operand so it wouldn't matter (though in this case, it
 			// would form an invalid var-name since dashes can't exist in them, which is caught later).
 			cp = this_item.marker; // Set for use by the label below.
-			goto double_deref; // For performance.
+			goto double_deref;
 		}
 
 		// RAW is of lower precedence than the above, so is checked last.  For example, if a single
@@ -9035,7 +9041,7 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 				++cp; // Omit the starting-quote from consideration, and from the operand's eventual contents.
 				for (op_end = cp;; ++op_end)
 				{
-					if (!*op_end) // No matching end-quote. Probably impossible to load-time validation.
+					if (!*op_end) // No matching end-quote. Probably impossible due to load-time validation.
 						goto fail;
 					if (*op_end == '"') // If not followed immediately by another, this is the end of it.
 					{
@@ -9063,7 +9069,10 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 							// Below recomputes strlen(cp) in case StrReplaceAll, above, changed it:
 							memmove(prev_infix_item.marker + strlen(prev_infix_item.marker), cp, strlen(cp) + 1);
 						else
+						{
 							prev_infix_item.marker = cp; // i.e. consider the double deref to be the empty string for this concat.
+							prev_infix_item.symbol = SYM_STRING; // Indicate that it's a literal string.
+						}
 						--infix_count; // Counteract the loops ++infix_count.
 						cp = op_end + 1; // Set it up for the next iteration (terminate_string_here is not needed).
 						continue;
@@ -9165,8 +9174,9 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 							// the end of this newly concatenated string:
 							*(temp + op_length) = '\0';
 						}
-						else
+						else // It's a concat onto a double deref, so treat the double as an empty string.
 							prev_infix_item.marker = cp;
+							// And prev_infix_item.symbol should already be set to SYM_OPERAND at this stage.
 						--infix_count; // Counteract the loops ++infix_count.
 						cp = op_end; // Have the loop process whatever lies at op_end and beyond.
 						// Not necessary to do terminate_string_here because the following is currently
@@ -9204,37 +9214,6 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 		continue;  // To avoid falling into the label below.
 
 double_deref:
-		// Callers of this label have set cp to the start of the variable name and op_end to the
-		// position of the character after the last one in the name.  The below does not validate
-		// that the variable name is legal.  Instead, it just tries to look up an existing variable.
-		// If there is no such variable, it is considered to be the empty string (which seems better
-		// than causing the entire expression to evaluate to blank) to indicate the problem.
-		// The same thing happens if this is the clipboard because temporary memory would be
-		// needed somewhere if the clipboard contains files that need to be expanded to text.
-		// Finally, all other non-normal variables (such as reserved variables) are also failure
-		// conditions because they would need to be fetched into some kind of temp. memory somewhere.
-		// Next condition:
-		// An environment variable might not have an entry in the script's variable list if it is
-		// only ever referred to dynamically, never directly by name.  In that case, FindVar() below
-		// will not find it in the list.  But if it is found in the list, it seems best to make it
-		// blank so that the behavior for env. vars is always the same.  Related: all other aspects
-		// of script behavior treat variables of length zero as the contents of the corresponding
-		// environment variable (if one exists).
-		op_length = op_end - cp;
-		infix[infix_count].marker = (!op_length || !(found_var = g_script.FindVar(cp, op_length)) // i.e. don't call FindVar with zero for length, since that's a special mode.
-			|| found_var->mType != VAR_NORMAL // Relies on short-circuit boolean order.
-			|| (!found_var->Length() // i.e. it might be an environment variable.
-				&& GetEnvironmentVariable(found_var->mName, buf_temp, 1))) // Pass 1 to force it to report whether the env. var exists (even if env var empty).
-				? "" // Var is not found, not a normal var, or it *is* an environment variable.
-				: found_var->Contents(); // This operand becomes the variable's contents.
-				// "" is used above, rather than a real empty string residing within limits of
-				// the expression's text, so that attempts to concat this item will fail in the
-				// same way that other concats involving double derefs fail.
-		// If this item is the empty string or consists entirely of whitespace, it will be treated
-		// as a string-operand rather than a number:
-		infix[infix_count].symbol = SYM_OPERAND;
-		++infix_count;
-
 		if (*item_end && op_end >= item_end) // This operand includes this map item and one or more to its right, so adjust map_index accordingly.
 		{
 			// Find the map item containing the end of this operand.  If the loop ends when
@@ -9271,6 +9250,44 @@ double_deref:
 			//else do nothing since map_index is now set to the final map item of this operand, and that
 			// map item is fully consumed by this operand and needs no further processing.
 		} // This map item stretches into others to its right.
+
+		// Check if this double is being concatenated onto a previous operand.  If so, it is not
+		// currently supported so this double-deref will be treated as an empty string, as documented.
+		// Example 1: Var := "abc" %naked_double_ref%
+		// Example 2: Var := "abc" Array%Index%
+		if (!infix_count || !IS_OPERAND(infix[infix_count - 1].symbol)) // Relies on short-circuit boolean order.
+		{
+			// Callers of this label have set cp to the start of the variable name and op_end to the
+			// position of the character after the last one in the name.  The below does not validate
+			// that the variable name is legal.  Instead, it just tries to look up an existing variable.
+			// If there is no such variable, it is considered to be the empty string (which seems better
+			// than causing the entire expression to evaluate to blank) to indicate the problem.
+			// The same thing happens if this is the clipboard because temporary memory would be
+			// needed somewhere if the clipboard contains files that need to be expanded to text.
+			// Finally, all other non-normal variables (such as reserved variables) are also failure
+			// conditions because they would need to be fetched into some kind of temp. memory somewhere.
+			// Next condition:
+			// An environment variable might not have an entry in the script's variable list if it is
+			// only ever referred to dynamically, never directly by name.  In that case, FindVar() below
+			// will not find it in the list.  But if it is found in the list, it seems best to make it
+			// blank so that the behavior for env. vars is always the same.  Related: all other aspects
+			// of script behavior treat variables of length zero as the contents of the corresponding
+			// environment variable (if one exists).
+			op_length = op_end - cp;
+			infix[infix_count].marker = (!op_length || !(found_var = g_script.FindVar(cp, op_length)) // i.e. don't call FindVar with zero for length, since that's a special mode.
+				|| found_var->mType != VAR_NORMAL // Relies on short-circuit boolean order.
+				|| (!found_var->Length() // i.e. it might be an environment variable.
+					&& GetEnvironmentVariable(found_var->mName, buf_temp, 1))) // Pass 1 to force it to report whether the env. var exists (even if env var empty).
+					? "" // Var is not found, not a normal var, or it *is* an environment variable.
+					: found_var->Contents(); // This operand becomes the variable's contents.
+					// "" is used above, rather than a real empty string residing within limits of
+					// the expression's text, so that attempts to concat this item will fail in the
+					// same way that other concats involving double derefs fail.
+			// If this item is the empty string or consists entirely of whitespace, it will be treated
+			// as a string-operand rather than a number:
+			infix[infix_count].symbol = SYM_OPERAND;
+			++infix_count;
+		}
 	} // for each map item
 
 	////////////////////////////
@@ -9399,8 +9416,20 @@ double_deref:
 				this_token.value_double = -(right.symbol == SYM_OPERAND ? atof(right.marker) : right.value_double);
 			else if (right_is_number == PURE_INTEGER)
 				this_token.value_int64 = -(right.symbol == SYM_OPERAND ? ATOI64(right.marker) : right.value_int64);
-			else // String.  Seems best to consider the application of unary minus to a string, even a quoted string literal such as "15", to be a failure.
-				goto fail;
+			else // String.
+			{
+				// Seems best to consider the application of unary minus to a string, even a quoted string
+				// literal such as "15", to be a failure.  UPDATE: For v1.0.25.06, invalid operations like
+				// this instead treat the operand as an empty string.  This avoids aborting a long, complex
+				// expression entirely just because on of its operands is invalid.  However, the net effect
+				// in most cases might be the same, since the empty string is a non-numeric result and thus
+				// will cause any operator it is involved with to treat its other operand as a string too.
+				// And the result of a math operation on two strings is typically an empty string.
+				this_token.marker = "";
+				this_token.symbol = SYM_STRING;
+				break;
+			}
+			// Since above didn't "break":
 			this_token.symbol = right_is_number; // Convert generic SYM_OPERAND into a specific type: float or int.
 			break;
 
@@ -9425,12 +9454,17 @@ double_deref:
 
 		case SYM_BITNOT: // The tilde (~) operator.
 			if (right_is_number == PURE_FLOAT)
-				// Overwrite this_token's union with a float. No need to have the overhead of ATOF() since it can't be hex.
-				this_token.value_int64 = right.symbol == SYM_OPERAND ? ATOI64(right.marker) : (__int64)right.value_double;
-			else if (right_is_number == PURE_INTEGER)
+				// Overwrite this_token's union with a float. No need to have the overhead of ATOI64() since PURE_FLOAT can't be hex.
+				this_token.value_int64 = right.symbol == SYM_OPERAND ? _atoi64(right.marker) : (__int64)right.value_double;
+			else if (right_is_number == PURE_INTEGER) // But in this case, it can be hex, so use ATOI64().
 				this_token.value_int64 = right.symbol == SYM_OPERAND ? ATOI64(right.marker) : right.value_int64;
 			else // String.  Seems best to consider the application of unary minus to a string, even a quoted string literal such as "15", to be a failure.
-				goto fail;
+			{
+				this_token.marker = "";
+				this_token.symbol = SYM_STRING;
+				break;
+			}
+			// Since above didn't "break":
 			// Note that it is not legal to perform ~, &, |, or ^ on doubles.  Because of this, and also to
 			// conform to the behavior of the Transform command, any floating point operand is truncated to
 			// an integer above.
@@ -9519,8 +9553,12 @@ double_deref:
 				case SYM_GTOE:      this_token.value_int64 = STRING_COMPARE >= 0; break;
 				case SYM_LTOE:      this_token.value_int64 = STRING_COMPARE <= 0; break;
 				default:
-					goto fail; // Other operators do not support string operands.
+					// Other operators do not support string operands, so the result is an empty string.
+					this_token.marker = "";
+					this_token.symbol = SYM_STRING;
+					goto push_this_result;
 				}
+				// Since above didn't "goto":
 				this_token.symbol = SYM_INTEGER; // Boolean result is treated as an integer.  Must be done only after the switch() above.
 			}
 
@@ -9581,7 +9619,12 @@ double_deref:
 					// an unexpectedly large value or -1.#IND00 instead.  Also note that zero raised to
 					// a negative power is undefined, similar to division-by-zero, and thus treated as a failure.
 					if (left_int64 < 0 || (!left_int64 && right_int64 < 0)) // See comments at TRANS_CMD_POW about this.
-						goto fail; // Return a consistent result rather than something that varies.
+					{
+						// Return a consistent result rather than something that varies:
+						this_token.marker = "";
+						this_token.symbol = SYM_STRING;
+						goto push_this_result;
+					}
 					if (right_int64 < 0)
 					{
 						this_token.value_double = qmathPow((double)left_int64, (double)right_int64);
@@ -9620,7 +9663,16 @@ double_deref:
 				case SYM_PLUS:     this_token.value_double = left_double + right_double; break;
 				case SYM_MINUS:	   this_token.value_double = left_double - right_double; break;
 				case SYM_TIMES:    this_token.value_double = left_double * right_double; break;
-				case SYM_DIVIDE:   if (right_double == 0.0) goto fail; this_token.value_double = left_double / right_double; break;
+				case SYM_DIVIDE:
+					if (right_double == 0.0)
+					{
+						this_token.marker = "";
+						this_token.symbol = SYM_STRING;
+						goto push_this_result;
+					}
+					// Otherwise:
+					this_token.value_double = left_double / right_double;
+					break;
 				case SYM_EQUALCASE: // Same behavior as SYM_EQUAL for numeric operands.
 				case SYM_EQUAL:    this_token.value_double = left_double == right_double; break;
 				case SYM_NOTEQUAL: this_token.value_double = left_double != right_double; break;
@@ -9630,7 +9682,12 @@ double_deref:
 				case SYM_LTOE:     this_token.value_double = left_double <= right_double; break;
 				case SYM_POWER: // See the other SYM_POWER higher above for explanation of the below:
 					if (left_double < 0 || (left_double == 0.0 && right_double < 0))
-						goto fail;
+					{
+						this_token.marker = "";
+						this_token.symbol = SYM_STRING;
+						goto push_this_result;
+					}
+					// Otherwise:
 					this_token.value_double = qmathPow(left_double, right_double);
 					break;
 				}
@@ -9638,6 +9695,7 @@ double_deref:
 			} // Result is floating point.
 		} // switch() operator type
 
+push_this_result:
 		STACK_PUSH(this_token); // Push the result onto the stack for use as an operand by a future operator.
 	} // For each item in the postfix array.
 
