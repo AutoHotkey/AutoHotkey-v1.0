@@ -91,7 +91,7 @@ struct hk_sorted_type
 	sc_type sc;
 	mod_type modifiers;
 	modLR_type modifiersLR;
-	char AllowExtraModifiers;
+	bool AllowExtraModifiers;
 };
 
 
@@ -305,9 +305,15 @@ HookType HookInit(Hotkey *aHK[], int aHK_count, HookType aHooksToActivate)
 	ZeroMemory(ksc, KSC_SIZE * sizeof(key_type));
 	int i;
 	for (i = 0; i < KVK_SIZE; ++i)
+	{
+		kvk[i].do_suppress = true; // Set default
 		kvk[i].pForceToggle = NULL;
+	}
 	for (i = 0; i < KSC_SIZE; ++i)
+	{
+		ksc[i].do_suppress = true; // Set default
 		ksc[i].pForceToggle = NULL;
+	}
 
 	// This attribute is exists for performance reasons (avoids a function call in the hook
 	// procedure to determine this value):
@@ -431,6 +437,16 @@ HookType HookInit(Hotkey *aHK[], int aHK_count, HookType aHooksToActivate)
 		}
 
 		pThisKey->used_as_suffix = true;
+
+		// Due to the fact that the hook does handle things as hotkeys, but rather at
+		// a lower level (prefixes and suffixes), there's no easy way to support toggling
+		// suppression for individual hotkeys (perhaps the simplest way to do so would be
+		// to create a new array of structs to contain the list of which hotkey_id's are
+		// special/non-suppressed).  So for now, once a suffix key has had its suppression
+		// turned off, it stays off.  But currently, this is inconsequential I think, since
+		// only the naked (unmodified) key, when used as a hotkey, supports non-suppression:
+		if (!aHK[i]->mDoSuppress)
+			pThisKey->do_suppress = false;
 
 		// If this is a naked (unmodified) modifier key, make it a prefix if it ever modifies any
 		// other hotkey.  This processing might be later combined with the hotkeys activation function

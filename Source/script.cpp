@@ -255,7 +255,7 @@ ResultType Script::Reload()
 {
 	char arg_string[MAX_PATH + 512], current_dir[MAX_PATH];
 	GetCurrentDirectory(sizeof(current_dir), current_dir);  // In case the user launched it in a non-default dir.
-	snprintf(arg_string, sizeof(arg_string), "/restart %s", mFileSpec);
+	snprintf(arg_string, sizeof(arg_string), "/restart \"%s\"", mFileSpec);
 	g_script.ActionExec(mOurEXE, arg_string, current_dir); // It will tell our process to stop.
 	return OK;
 }
@@ -318,6 +318,9 @@ int Script::LoadFromFile()
 			"; (it will open files of this name by default)."
 			);
 		fclose(fp2);
+		// One or both of the below would probably fail if mFileSpec ever has spaces in it
+		// (since it's passed as the entire param string).  If that ever happens, enclosing
+		// the filename in double quotes should do the trick:
 		if (!ActionExec("edit", mFileSpec, mFileDir, false))
 			if (!ActionExec("Notepad.exe", mFileSpec, mFileDir, false))
 			{
@@ -639,7 +642,8 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 			// The following hotkey would never be in effect since it's considered to
 			// be commented out:
 			// !^a::run,notepad
-			if (*cp == '!' || *cp == '^' || *cp == '+' || *cp == '$' || *cp == '*' || *cp == '<' || *cp == '>')
+			if (*cp == '!' || *cp == '^' || *cp == '+' || *cp == '$' || *cp == '~' || *cp == '*'
+				|| *cp == '<' || *cp == '>')
 				// Note that '#' is already covered by the other stmt. above.
 				return ScriptError(ERR_DEFINE_COMMENT);
 		}
@@ -2801,7 +2805,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	int start_char_num, chars_to_extract;  // For String commands.
 	size_t source_length; // For String commands.
 	int math_result; // For math operations.
-	vk_type vk; // For mouse commands.
+	vk_type vk; // For mouse commands and GetKeyState.
 	HWND target_window;
 	HANDLE running_process; // For RUNWAIT
 	DWORD exit_code; // For RUNWAIT
@@ -3306,6 +3310,11 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		return OUTPUT_VAR->Close();  // In case it's the clipboard.
 	}
 
+	case ACT_GETKEYSTATE:
+		if (vk = TextToVK(ARG2, NULL))
+			return OUTPUT_VAR->Assign((GetKeyState(vk) & 0x8000) ? "D" : "U");
+		return OUTPUT_VAR->Assign("");
+
 	case ACT_RANDOM:
 	{
 		int rand_min = *ARG2 ? atoi(ARG2) : 0;
@@ -3616,7 +3625,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			return LineError(ERR_MOUSE_COORD ERR_ABORT, FAIL, ARG2);
 		x = *ARG2 ? atoi(ARG2) : COORD_UNSPECIFIED;
 		y = *ARG3 ? atoi(ARG3) : COORD_UNSPECIFIED;
-		MouseClick(vk, x, y, *ARG4 ? atoi(ARG4) : 1, *ARG5 ? atoi(ARG5) : g.DefaultMouseSpeed);
+		MouseClick(vk, x, y, *ARG4 ? atoi(ARG4) : 1, *ARG5 ? atoi(ARG5) : g.DefaultMouseSpeed, *ARG6);
 		return OK;
 	case ACT_MOUSEMOVE:
 		if (!ValidateMouseCoords(ARG1, ARG2))

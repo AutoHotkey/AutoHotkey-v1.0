@@ -379,8 +379,14 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 				SetForegroundWindowEx(hwnd);
 			else
 				if (!g_script.ActionExec("edit", g_script.mFileSpec, g_script.mFileDir, false))
-					if (!g_script.ActionExec("notepad.exe", g_script.mFileSpec, g_script.mFileDir, false))
+				{
+					// Even though notepad properly handles filenames with spaces in them under WinXP,
+					// even without double quotes around them, it seems safer and more correct to always
+					// enclose the filename in double quotes for maximum compatibility with all OSes:
+					snprintf(buf, sizeof(buf), "\"%s\"", g_script.mFileSpec);
+					if (!g_script.ActionExec("notepad.exe", buf, g_script.mFileDir, false))
 						MsgBox("Could not open the file for editing using the associated \"edit\" action or Notepad.");
+				}
 			return 0;
 		}
 		case ID_TRAY_RELOADSCRIPT:
@@ -812,25 +818,25 @@ ResultType Line::MouseClickDrag(vk_type aVK, int aX1, int aY1, int aX2, int aY2,
 	switch (aVK)
 	{
 	case VK_LBUTTON:
-		mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+		MouseEvent(MOUSEEVENTF_LEFTDOWN);
 		MOUSE_SLEEP;
 		MouseMove(aX2, aY2, aSpeed);
 		MOUSE_SLEEP;
-		mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+		MouseEvent(MOUSEEVENTF_LEFTUP);
 		break;
 	case VK_RBUTTON:
-		mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0);
+		MouseEvent(MOUSEEVENTF_RIGHTDOWN);
 		MOUSE_SLEEP;
 		MouseMove(aX2, aY2, aSpeed);
 		MOUSE_SLEEP;
-		mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0);
+		MouseEvent(MOUSEEVENTF_RIGHTUP);
 		break;
 	case VK_MBUTTON:
-		mouse_event(MOUSEEVENTF_MIDDLEDOWN, 0, 0, 0, 0);
+		MouseEvent(MOUSEEVENTF_MIDDLEDOWN);
 		MOUSE_SLEEP;
 		MouseMove(aX2, aY2, aSpeed);
 		MOUSE_SLEEP;
-		mouse_event(MOUSEEVENTF_MIDDLEUP, 0, 0, 0, 0);
+		MouseEvent(MOUSEEVENTF_MIDDLEUP);
 		break;
 	}
 	// It seems best to always do this one too in case the script line that caused
@@ -843,7 +849,7 @@ ResultType Line::MouseClickDrag(vk_type aVK, int aX1, int aY1, int aX2, int aY2,
 
 
 
-ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aSpeed)
+ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aSpeed, char aEventType)
 // Note: This is based on code in the AutoIt3 source.
 {
 	// Autoit3: Check for x without y
@@ -860,6 +866,11 @@ ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aS
 		// that may sometimes (by intent) resolve to zero:
 		return OK;
 
+	// The chars 'U' (up) and 'D' (down), if specified, will restrict the clicks
+	// to being only DOWN or UP (so that the mouse button can be held down, for
+	// example):
+	aEventType = toupper(aEventType);
+
 	// Do we need to move the mouse?
 	if (aX != COORD_UNSPECIFIED && aY != COORD_UNSPECIFIED) // Otherwise don't bother.
 		MouseMove(aX, aY, aSpeed);
@@ -873,26 +884,46 @@ ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aS
 		switch (aVK)
 		{
 		case VK_LBUTTON:
-			mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
-			MOUSE_SLEEP;
-			mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+			if (aEventType != 'U')
+			{
+				MouseEvent(MOUSEEVENTF_LEFTDOWN);
+				MOUSE_SLEEP;
+			}
+			if (aEventType != 'D')
+			{
+				MouseEvent(MOUSEEVENTF_LEFTUP);
+				// It seems best to always do this one too in case the script line that caused
+				// us to be called here is followed immediately by another script line which
+				// is either another mouse click or something that relies upon the mouse click
+				// having been completed:
+				MOUSE_SLEEP;
+			}
 			break;
 		case VK_RBUTTON:
-			mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0);
-			MOUSE_SLEEP;
-			mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0);
+			if (aEventType != 'U')
+			{
+				MouseEvent(MOUSEEVENTF_RIGHTDOWN);
+				MOUSE_SLEEP;
+			}
+			if (aEventType != 'D')
+			{
+				MouseEvent(MOUSEEVENTF_RIGHTUP);
+				MOUSE_SLEEP;
+			}
 			break;
 		case VK_MBUTTON:
-			mouse_event(MOUSEEVENTF_MIDDLEDOWN, 0, 0, 0, 0);
-			MOUSE_SLEEP;
-			mouse_event(MOUSEEVENTF_MIDDLEUP, 0, 0, 0, 0);
+			if (aEventType != 'U')
+			{
+				MouseEvent(MOUSEEVENTF_MIDDLEDOWN);
+				MOUSE_SLEEP;
+			}
+			if (aEventType != 'D')
+			{
+				MouseEvent(MOUSEEVENTF_MIDDLEUP);
+				MOUSE_SLEEP;
+			}
 			break;
 		}
-		// It seems best to always do this one too in case the script line that caused
-		// us to be called here is followed immediately by another script line which
-		// is either another mouse click or something that relies upon the mouse click
-		// having been completed:
-		MOUSE_SLEEP;
 	}
 
 	return OK;
@@ -930,7 +961,7 @@ void Line::MouseMove(int aX, int aY, int aSpeed)
 	// AutoIt3: Are we slowly moving or insta-moving?
 	if (aSpeed == 0)
 	{
-		mouse_event(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, aX, aY, 0, 0);
+		MouseEvent(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, aX, aY);
 		MOUSE_SLEEP; // Should definitely do this in case the action immediately after this is a click.
 		return;
 	}
@@ -990,7 +1021,7 @@ void Line::MouseMove(int aX, int aY, int aSpeed)
 					yCur -= delta;
 			}
 
-		mouse_event(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, xCur, yCur, 0, 0);
+		MouseEvent(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, xCur, yCur);
 		MOUSE_SLEEP;
 	}
 }
@@ -1883,6 +1914,7 @@ ArgPurposeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_STRINGLEN:
 		case ACT_STRINGREPLACE:
 		case ACT_STRINGGETPOS:
+		case ACT_GETKEYSTATE:
 		case ACT_CONTROLGETTEXT:
 		case ACT_STATUSBARGETTEXT:
 		case ACT_INPUTBOX:

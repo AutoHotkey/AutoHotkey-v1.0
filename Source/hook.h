@@ -69,6 +69,7 @@ struct key_type
 	modLR_type as_modifiersLR; // If this key is a modifier, this will have the corresponding bit(s) for that key.
 	bool used_as_prefix;  // whether a given virtual key or scan code is even used by a hotkey.
 	bool used_as_suffix;  // whether a given virtual key or scan code is even used by a hotkey.
+	bool do_suppress; // Normally true for all keys; if false hotkey events won't be hidden from the system.
 	bool is_down; // this key is currently down.
 	bool it_put_alt_down;  // this key resulted in ALT being pushed down (due to alt-tab).
 	bool it_put_shift_down;  // this key resulted in SHIFT being pushed down (due to shift-alt-tab).
@@ -84,7 +85,7 @@ struct key_type
 
 //-------------------------------------------
 
-#define MAX_LOGGED_KEYS 20
+#define MAX_LOGGED_KEYS 50
 struct KeyLogItem
 {
 	vk_type vk;

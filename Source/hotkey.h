@@ -62,6 +62,7 @@ private:
 	mod_type mModifiers;  // MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, or some additive or bitwise-or combination of these.
 	modLR_type mModifiersLR;  // Left-right centric versions of the above.
 	bool mAllowExtraModifiers;  // False if the hotkey should not fire when extraneous modifiers are held down.
+	bool mDoSuppress;  // Normally true, but can be overridden by using the hotkey ~ prefix.
 	vk_type mModifierVK; // Any other virtual key that must be pressed down in order to activate "vk" itself.
 	sc_type mModifierSC; // If mModifierVK is zero, this scan code, if non-zero, will be used as the modifier.
 	modLR_type mModifiersConsolidated; // The combination of mModifierVK, mModifierSC, mModifiersLR, modifiers

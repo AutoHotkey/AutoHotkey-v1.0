@@ -364,19 +364,22 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 #else
 		return SuppressThisKey;
 #endif
+
+	// Update: The below is now done only for keyboard hook, not the mouse.  This is because
+	// most people probably would not want a prefix key's suffix-action to be stopped
+	// from firing just because a non-hotkey mouse button was pressed while the key
+	// was held down (i.e. for games).
+#ifdef INCLUDE_KEYBD_HOOK
 	// This relies upon the above check having returned if the condition was met,
 	// since it doesn't ensure that pThisKey != pPrefixKey:
-	if (pPrefixKey != NULL && !key_up
-#ifdef INCLUDE_KEYBD_HOOK
-		&& !pThisKey->as_modifiersLR
-#endif
-	)
+	if (pPrefixKey != NULL && !key_up && !pThisKey->as_modifiersLR)
 		// Any key-down event (other than those already ignored and returned from,
 		// above) should probably be considered an attempt by the user to use the
 		// prefix key that's currently being held down as a "modifier".  That way, if pPrefixKey
 		// happens to also be a suffix, its suffix action won't fire when the key is released,
 		// which is probably the correct thing to do 90% or more of the time:
 		pPrefixKey->was_just_used = AS_PREFIX;
+#endif
 	// WinAPI docs state that for both virtual keys and scan codes:
 	// "If there is no translation, the return value is zero."
 	// Therefore, zero is never a key that can be validly configured (and likely it's never received here anyway).
@@ -449,7 +452,15 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		// Toggleable keys are also suppressed here on key-up because their
 		// previous key-down event would have been suppressed in order for
 		// down_performed_action to be true:
-		if (down_performed_action)
+		if (down_performed_action && (pThisKey->do_suppress || g_modifiersLRh || pPrefixKey))
+			// Above: i.e. Only allow "non-suppression" of a hotkey if it's
+			// an unmodified hotkey.  The above is crude because some users (rare?)
+			// might release the modifier keys prior to releasing the suffix
+			// key itself, which would cause this to be unreliable.  The whole
+			// point to this is that we want to suppress ^RButton, for example,
+			// even in cases where ~RButton is also defined as a hotkey (since
+			// the vast majority of hotkeys should be suppressed/hidden from the
+			// system to avoid unwanted sideeffects when launching the hotkey):
 			return SuppressThisKey;
 		// Otherwise let it be processed normally:
 		return AllowKeyToGoToSystem;
@@ -661,7 +672,9 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 					// If a shift key is the suffix key, this must be done every time,
 					// not just the first:
 					KeyEvent(KEYUP, 0, sc); // Later this may change to use the VK rather than SC, see above.
-				else
+				// UPDATE: Don't do "else" because sometimes the opposite key may be down, so the
+				// below needs to be unconditional:
+				//else
 #endif
 					if ((g_modifiersLRh & MOD_LSHIFT) || (g_modifiersLRh & MOD_RSHIFT))
 						KeyEvent(KEYUP, (g_modifiersLRh & MOD_RSHIFT) ? VK_RSHIFT : VK_LSHIFT);
@@ -1022,5 +1035,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	if (!key_up) // i.e. don't do this for key-up events that triggered an action.
 		pThisKey->down_performed_action = true;
 
-	return SuppressThisKey;
+	// There's a note above about "do_suppress" to explain why g_modifiersLRh and pPrefixKey
+	// are also checked here:
+	return (pThisKey->do_suppress || g_modifiersLRh || pPrefixKey) ? SuppressThisKey : AllowKeyToGoToSystem;
 }

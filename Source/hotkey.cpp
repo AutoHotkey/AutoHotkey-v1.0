@@ -381,6 +381,7 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 	, mModifiers(0)
 	, mModifiersLR(0)
 	, mAllowExtraModifiers(false)
+	, mDoSuppress(true)
 	, mModifierVK(0)
 	, mModifierSC(0)
 	, mModifiersConsolidated(0)
@@ -472,7 +473,7 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 	}
 
 	if (mType != HK_MOUSE_HOOK)  // Don't let a mouse key ever be affected by these checks.
-		if (g_ForceKeybdHook == TOGGLED_ON || mModifiersLR || mAllowExtraModifiers || aHookAction)
+		if (g_ForceKeybdHook == TOGGLED_ON || mModifiersLR || mAllowExtraModifiers || !mDoSuppress || aHookAction)
 			mType = HK_KEYBD_HOOK;
 
 	// Currently, these take precedence over each other in the following order, so don't
@@ -549,6 +550,9 @@ char *Hotkey::TextToModifiers(char *aText)
 			break;
 		case '*':
 			mAllowExtraModifiers = true;
+			break;
+		case '~':
+			mDoSuppress = false;
 			break;
 		case '$':
 			mType = HK_KEYBD_HOOK;

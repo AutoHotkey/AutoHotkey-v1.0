@@ -77,6 +77,7 @@ enum enum_act {
 , ACT_STRINGTRIMLEFT, ACT_STRINGTRIMRIGHT
 , ACT_STRINGLEN, ACT_STRINGGETPOS, ACT_STRINGREPLACE
 , ACT_RUN, ACT_RUNWAIT
+, ACT_GETKEYSTATE
 , ACT_SEND, ACT_CONTROLSEND, ACT_CONTROLLEFTCLICK, ACT_CONTROLSETTEXT, ACT_CONTROLGETTEXT
 , ACT_SETDEFAULTMOUSESPEED, ACT_MOUSEMOVE, ACT_MOUSECLICK, ACT_MOUSECLICKDRAG, ACT_MOUSEGETPOS
 , ACT_STATUSBARGETTEXT
@@ -153,7 +154,7 @@ enum enum_act_old {
 #define ERR_MEM_ASSIGN "Out of memory while assigning to this variable." ERR_ABORT
 #define ERR_VAR_IS_RESERVED "This variable is reserved and cannot be assigned to."
 #define ERR_DEFINE_CHAR "The character being defined must not be identical to another special or reserved character."
-#define ERR_DEFINE_COMMENT "The comment flag must not be one of the hotkey definition symbols (e.g. ! ^ + $ * < >)."
+#define ERR_DEFINE_COMMENT "The comment flag must not be one of the hotkey definition symbols (e.g. ! ^ + $ ~ * < >)."
 
 //----------------------------------------------------------------------------------
 
@@ -269,9 +270,15 @@ private:
 		, int aX1, int aY1, int aX2, int aY2, int aSpeed);
 	static ResultType MouseClick(vk_type aVK // Which button.
 		, int aX = COORD_UNSPECIFIED, int aY = COORD_UNSPECIFIED // These values signal us not to move the mouse.
-		, int aClickCount = 1, int aSpeed = DEFAULT_MOUSE_SPEED);
+		, int aClickCount = 1, int aSpeed = DEFAULT_MOUSE_SPEED, char aEventType = '\0');
 	static void MouseMove(int aX, int aY, int aSpeed = DEFAULT_MOUSE_SPEED);
 	ResultType MouseGetPos();
+	static void MouseEvent(DWORD aEventFlags, DWORD aX = 0, DWORD aY = 0)
+	// A small inline to help us remember to use KEYIGNORE so that our own mouse
+	// events won't be falsely detected as hotkeys by the hooks (if they are installed).
+	{
+		mouse_event(aEventFlags, aX, aY, 0, KEYIGNORE);
+	}
 
 public:
 	#define LINE_LOG_SIZE 50

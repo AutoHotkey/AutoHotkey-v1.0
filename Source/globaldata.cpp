@@ -157,6 +157,7 @@ Action g_act[] =
 	, {"StringReplace", 3, 5, NULL} // Output Variable, Input Variable, Search String, Replace String, do-all.
 
 	, {"Run", 1, 3, NULL}, {"RunWait", 1, 3, NULL}  // TargetFile, Working Dir, WinShow-Mode
+	, {"GetKeyState", 2, 2, NULL} // OutputVar, key name
 	, {"Send", 1, 1, NULL} // But that first param can be a deref that resolves to a blank param
 	// For these, the "control" param can be blank.  The window's first visible control will
 	// be used.  For this first one, allow a minimum of zero, otherwise, the first param (control)
@@ -169,7 +170,7 @@ Action g_act[] =
 
 	, {"SetDefaultMouseSpeed", 1, 1, {1, 0}} // speed (numeric)
 	, {"MouseMove", 2, 3, {1, 2, 3, 0}} // x, y, speed
-	, {"MouseClick", 1, 5, {2, 3, 4, 5, 0}} // which-button, x, y, ClickCount, speed
+	, {"MouseClick", 1, 6, {2, 3, 4, 5, 0}} // which-button, x, y, ClickCount, speed, d=hold-down/u=release
 	, {"MouseClickDrag", 1, 6, {2, 3, 4, 5, 6, 0}} // which-button, x1, y1, x2, y2, speed
 	, {"MouseGetPos", 0, 2, NULL} // 2 optional output variables: one for xpos, and one for ypos. MinParams must be 0.
 

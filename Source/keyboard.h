@@ -187,7 +187,13 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR = 0, HWND aTargetWindow = NUL
 void SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, int aRepeatCount, HWND aTargetWindow = NULL);
 
 enum KeyEventTypes {KEYDOWN, KEYUP, KEYDOWNANDUP};
-#define KEYIGNORE 0xA1C3D44F
+
+// A pseudo-random value.  It's best that this be constant so that if multiple instances of
+// the app are running, they will all ignore each other's keyboard & mouse events.  Also,
+// a value close to UINT_MAX might be a little better since it's might be less likely to
+// be used as a pointer value by any apps that send keybd events whose ExtraInfo is really
+// a pointer value (hard to imagine?):
+#define KEYIGNORE 0xFFC3D44F
 ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC = 0
 	, HWND aTargetWindow = NULL, DWORD aExtraInfo = KEYIGNORE);
 
