@@ -306,12 +306,14 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 		}
 		case WM_HOTKEY: // As a result of this app having previously called RegisterHotkey().
 		case AHK_HOOK_HOTKEY:  // Sent from this app's keyboard or mouse hook.
+			if (g_IgnoreHotkeys || g_IsSuspended)
+				break;
+			if (g_nSuspendedSubroutines >= 10)
+				// Allow only a limited number of levels of recursion, to avoid
+				// any chance of stack overflow.  So ignore this message:
+				break;
 			if (aMode == RETURN_AFTER_MESSAGES)
 			{
-				if (g_nSuspendedSubroutines >= 10)
-					// Allow only a limited number of levels of recursion, to avoid
-					// any chance of stack overflow.  So ignore this message:
-					break;
 				was_interrupted = true;
 				++g_nSuspendedSubroutines;
 				// Save the current foreground window in case the subroutine that's about
@@ -423,7 +425,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 				if (fore_pid == GetCurrentProcessId())  // It belongs to our process.
 				{
 					GetClassName(fore_window, fore_class_name, sizeof(fore_class_name));
-					if (!strcmp(fore_class_name, "#32770"))  // It's a MessageBox() or InputBox() window.
+					if (!strcmp(fore_class_name, "#32770"))  // MessageBox(), InputBox(), or FileSelectFile() window.
 						if (IsDialogMessage(fore_window, &msg))  // This message is for it, so let it process it.
 							continue;  // This message is done.
 				}

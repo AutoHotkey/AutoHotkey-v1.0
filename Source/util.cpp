@@ -19,7 +19,6 @@ GNU General Public License for more details.
 	#include <stdio.h>
 	#include <stdlib.h>
 #endif
-#include <ctype.h> // for isspace()
 #include <stdarg.h>
 #include "util.h"
 

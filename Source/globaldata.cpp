@@ -37,6 +37,7 @@ bool g_ForceLaunch = false;
 bool g_AllowOnlyOneInstance = false;
 bool g_AllowSameLineComments = true;
 char g_LastPerformedHotkeyType = HK_NORMAL;
+bool g_IsSuspended = false;  // Make this separate from g_IgnoreHotkeys since that is frequently turned off & on.
 bool g_IgnoreHotkeys = false;
 int g_nSuspendedSubroutines = 0;
 
@@ -61,7 +62,6 @@ OS_Version g_os;  // OS version object, courtesy of AutoIt3.
 DWORD g_OriginalTimeout;
 
 global_struct g;
-//SetForegroundWinEx g_oSetForeWinEx;		// Foreground window hack object
 
 ToggleValueType g_ForceKeybdHook = TOGGLED_OFF;
 ToggleValueType g_ForceNumLock = NEUTRAL;

@@ -88,7 +88,7 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 		}
 		// No, it's much better to allow literal spaces even though {SPACE} is also
 		// supported:
-		//if (isspace(*aKeys))
+		//if (IS_SPACE_OR_TAB(*aKeys))
 		//	continue;
 		switch (*aKeys)
 		{

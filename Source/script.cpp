@@ -251,6 +251,17 @@ ResultType Script::CreateWindows(HINSTANCE aInstance)
 
 
 
+ResultType Script::Reload()
+{
+	char arg_string[MAX_PATH + 512], current_dir[MAX_PATH];
+	GetCurrentDirectory(sizeof(current_dir), current_dir);  // In case the user launched it in a non-default dir.
+	snprintf(arg_string, sizeof(arg_string), "/restart %s", mFileSpec);
+	g_script.ActionExec(mOurEXE, arg_string, current_dir); // It will tell our process to stop.
+	return OK;
+}
+
+
+
 void Script::ExitApp(char *aBuf, int ExitCode)
 // Normal exit (if aBuf is NULL), or a way to exit immediately on error.  This is mostly
 // for times when it would be unsafe to call MsgBox() due to the possibility that it would
@@ -307,8 +318,12 @@ int Script::LoadFromFile()
 			"; (it will open files of this name by default)."
 			);
 		fclose(fp2);
-		if (!ActionExec(mFileSpec, ""))
-			return -1;
+		if (!ActionExec("edit", mFileSpec, mFileDir, false))
+			if (!ActionExec("Notepad.exe", mFileSpec, mFileDir, false))
+			{
+				MsgBox("The new config file was created, but could not be opened with the default editor or with Notepad.");
+				return -1;
+			}
 		// future: have it wait for the process to close, then try to open the config file again:
 		return 0;
 	}
@@ -419,7 +434,7 @@ int Script::LoadFromFile()
 			// We allow hotkeys to violate this since they may contain commas, and since a normal
 			// script line (i.e. just a plain command) is unlikely to ever end in a double-colon:
 			for (cp = buf, is_label = true; *cp; ++cp)
-				if (isspace(*cp) || *cp == g_delimiter || *cp == g_EscapeChar)
+				if (IS_SPACE_OR_TAB(*cp) || *cp == g_delimiter || *cp == g_EscapeChar)
 				{
 					is_label = false;
 					break;
@@ -2835,9 +2850,9 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		MsgSleep(atoi(ARG1));
 		return OK;
 	case ACT_RUN:
-		return Script::ActionExec(ARG1, NULL, ARG2, ARG3);  // Be sure to pass NULL for 2nd param.
+		return g_script.ActionExec(ARG1, NULL, ARG2, true, ARG3);  // Be sure to pass NULL for 2nd param.
 	case ACT_RUNWAIT:
-		if (!Script::ActionExec(ARG1, NULL, ARG2, ARG3, &running_process))
+		if (!g_script.ActionExec(ARG1, NULL, ARG2, true, ARG3, &running_process))
 			return FAIL;
 		// else fall through to the below.
 	case ACT_CLIPWAIT:
@@ -4208,9 +4223,12 @@ char *Script::ListVars(char *aBuf, size_t aBufSize)
 
 
 
-ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir
+ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, bool aDisplayErrors
 	, char *aRunShowMode, HANDLE *aProcess)
 // Remember that aAction and aParams can both be NULL, so don't dereference without checking first.
+// Note: Action & Params are parsed at runtime, here, rather than at load-time because the
+// Run or RunWait command might contain a deferenced variable, and such can only be resolved
+// at runtime.
 {
 	if (aProcess) // Init output param if the caller gave us memory to store it.
 		*aProcess = NULL;
@@ -4218,26 +4236,52 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir
 	// Launching nothing is always a success:
 	if (!aAction || !*aAction) return OK;
 
-	if (!aParams) // Caller wants us to try to parse params out of aAction.
+	if (strlen(aAction) >= LINE_SIZE) // This can happen if user runs the contents of a very large variable.
+	{
+        if (aDisplayErrors)
+			ScriptError("The string to be run is too long.");
+		return FAIL;
+	}
+
+	// Make sure this is set to NULL because CreateProcess() won't work if it's the empty string:
+	if (aWorkingDir && !*aWorkingDir)
+		aWorkingDir = NULL;
+
+	// Save the originals for later use:
+	char *aAction_orig = aAction;
+	char *aParams_orig = aParams;
+
+	#define IS_VERB(str) (   !stricmp(str, "find") || !stricmp(str, "explore") || !stricmp(str, "open")\
+		|| !stricmp(str, "edit") || !stricmp(str, "print") || !stricmp(str, "properties")   )
+	bool action_is_system_verb = false;
+
+	// Declare these here to ensure they're in scope for the entire function, since their
+	// contents may be referred to indirectly:
+	char action[LINE_SIZE], *first_phrase, *first_phrase_end, *second_phrase;
+
+	// CreateProcess() requires that it be modifiable, so ensure that it is just in case
+	// this function is ever changed to use CreateProcess() even when the caller gave
+	// use some params:
+	strlcpy(action, aAction, sizeof(action));
+	aAction = action;
+
+	if (aParams) // Caller specified the params (even an empty string counts, for this purpose).
+		action_is_system_verb = IS_VERB(aAction);
+	else // Caller wants us to try to parse params out of aAction.
 	{
 		aParams = "";  // Set default to be empty string in case the below doesn't find any params.
-		// Make aAction be a modifiable string:
-		char action[MAX_EXEC_STRING];
-		strlcpy(action, aAction, sizeof(action));
-		aAction = action;
 
 		// Find out the "first phrase" in the string.  This is done to support the special "find" and "explore"
 		// operations as well as minmize the chance that executable names intended by the user to be parameters
 		// will not be considered to be the program to run (e.g. for use with a compiler, perhaps).
-		char first_phrase[MAX_EXEC_STRING], *first_phrase_end, *second_phrase;
 		if (*aAction == '\"')
 		{
-			strlcpy(first_phrase, aAction + 1, sizeof(first_phrase));  // Omit the double-quotes, for use with ProcessCreate() and such.
+			first_phrase = aAction + 1;  // Omit the double-quotes, for use with ProcessCreate() and such.
 			first_phrase_end = strchr(first_phrase, '\"');
 		}
 		else
 		{
-			strlcpy(first_phrase, aAction, sizeof(first_phrase));
+			first_phrase = aAction;
 			// Set first_phrase_end to be the location of the first whitespace char, if
 			// one exists:
 			first_phrase_end = StrChrAny(first_phrase, " \t"); // Find space or tab.
@@ -4252,10 +4296,10 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir
 		}
 		else // the entire string is considered to be the first_phrase, and there's no second:
 			second_phrase = NULL;
-		if (!stricmp(first_phrase, "find") || !stricmp(first_phrase, "explore"))
+		if (action_is_system_verb = IS_VERB(first_phrase))
 		{
 			aAction = first_phrase;
-			aParams = second_phrase;
+			aParams = second_phrase ? second_phrase : "";
 		}
 		else
 		{
@@ -4271,6 +4315,9 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir
 	// It's important that it finds the first occurrence of an executable extension in case there are other
 	// occurrences in the parameters.  Also, .pif and .lnk are currently not considered executables for this purpose
 	// since they probably don't accept parameters:
+			strlcpy(action, aAction_orig, sizeof(action));  // Restore the original value in case it was changed.
+			aAction = action;  // Reset it to its original value, in case it was changed; and ensure it's modifiable.
+			aParams = ""; // Init.
 			char *action_extension;
 			if (   !(action_extension = stristr(aAction, ".exe "))   )
 				if (   !(action_extension = stristr(aAction, ".exe\""))   )
@@ -4309,14 +4356,17 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir
 
 	SHELLEXECUTEINFO sei;
 	ZeroMemory(&sei, sizeof(SHELLEXECUTEINFO));
-	sei.cbSize = sizeof(SHELLEXECUTEINFO);
+	sei.cbSize = sizeof(sei);
 	// Below: "indicate that the hProcess member receives the process handle" and not to display error dialog:
 	sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
-	sei.lpDirectory = aWorkingDir; // OK if NULL or blank.
+	sei.lpDirectory = aWorkingDir; // OK if NULL or blank; that will cause current dir to be used.
 	sei.nShow = (aRunShowMode && *aRunShowMode) ? Line::ConvertRunMode(aRunShowMode) : SW_SHOWNORMAL;
-	if (!stricmp(aAction, "find") || !stricmp(aAction, "explore")) // Special actions that are verbs.
+	// Check for special actions that are known to be system verbs:
+	if (action_is_system_verb)
 	{
 		sei.lpVerb = aAction;
+		if (!stricmp(aAction, "properties"))
+			sei.fMask |= SEE_MASK_INVOKEIDLIST;  // Need to use this for the "properties" verb to work reliably.
 		sei.lpFile = aParams;
 		sei.lpParameters = NULL;
 	}
@@ -4327,14 +4377,53 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir
 		sei.lpParameters = aParams;
 	}
 
-	if (!ShellExecuteEx(&sei) || LOBYTE(LOWORD(sei.hInstApp)) <= 32)
+	if (!ShellExecuteEx(&sei) || LOBYTE(LOWORD(sei.hInstApp)) <= 32) // Relies on short-circuit boolean order.
 	{
-		char error_text[MAX_EXEC_STRING + 1024];
-		snprintf(error_text, sizeof(error_text)
-			, "Failed attempt to launch program or document:\nAction: <%s>\nParams: <%s>"
-			, aAction, aParams);
-		MsgBox(error_text);
-		return FAIL;
+		bool success = false;  // Init.
+		// Fall back to the AutoIt method of using CreateProcess(), but only if caller didn't
+		// originally give us some params (since in that case, ShellExecuteEx() should have worked
+		// -- not to mention that CreateProcess() doesn't handle params as a separate string):
+		if (!aParams_orig || !*aParams_orig)
+		{
+			sei.lpVerb = "";  // Set it for use in error reporting.
+			aAction = action; // same
+			aParams = "";     // same
+			STARTUPINFO si = {0};  // Zero fill to be safer.
+			si.cb = sizeof(si);
+			si.lpReserved = si.lpDesktop = si.lpTitle = NULL;
+			si.lpReserved2 = NULL;
+			si.dwFlags = STARTF_USESHOWWINDOW;  // Tell it to use the value of wShowWindow below.
+			si.wShowWindow = sei.nShow;
+			PROCESS_INFORMATION pi = {0};
+			// Since CreateProcess() requires that the 2nd param be modifiable, ensure that it is
+			// (even if this is ANSI and not Unicode; it's just safer):
+			strlcpy(action, aAction_orig, sizeof(action)); // i.e. we're running the original action from caller.
+			// MSDN: "If [lpCurrentDirectory] is NULL, the new process is created with the same
+			// current drive and directory as the calling process." (i.e. since caller may have
+			// specified a NULL aWorkingDir):
+			success = CreateProcess(NULL, aAction, NULL, NULL, FALSE, 0, NULL, aWorkingDir, &si, &pi);
+			sei.hProcess = success ? pi.hProcess : NULL;  // Set this value for use later on.
+		}
+
+		if (!success)
+		{
+			if (aDisplayErrors)
+			{
+				char error_text[2048], verb_text[128];
+				if (*sei.lpVerb && stricmp(sei.lpVerb, "open"))
+					snprintf(verb_text, sizeof(verb_text), "\nVerb: <%s>", sei.lpVerb);
+				else // Don't bother showing it if it's just "open".
+					*verb_text = '\0';
+				// Use format specifier to make sure it doesn't get too big for the error
+				// function to display.  Also, due to above having tried CreateProcess()
+				// as a last resort, aParams will always be blank so don't bother displaying it:
+				snprintf(error_text, sizeof(error_text)
+					, "Failed attempt to launch program or document:\nAction: <%-1.400s%s>%s"
+					, aAction, strlen(aAction) > 400 ? "..." : "", verb_text);
+				ScriptError(error_text);
+			}
+			return FAIL;
+		}
 	}
 
 	if (aProcess) // The caller wanted the process handle, so provide it.

@@ -36,7 +36,7 @@ inline size_t strnlen(char *aBuf, size_t aMax)
 
 
 
-inline char *StrChrAny (char *aStr, char *aCharList)
+inline char *StrChrAny(char *aStr, char *aCharList)
 // Returns the position of the first char in aStr that is of any one of
 // the characters listed in aCharList.  Returns NULL if not found.
 {

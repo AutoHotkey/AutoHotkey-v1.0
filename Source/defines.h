@@ -49,7 +49,7 @@ GNU General Public License for more details.
 
 #define NAME_P "AutoHotkey"
 #define WINDOW_CLASS_NAME NAME_P
-#define NAME_VERSION "0.208"
+#define NAME_VERSION "0.209"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // FAIL = 0 to remind that FAIL should have the value zero instead of something arbitrary

@@ -367,10 +367,18 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			HWND hwnd = WinExist(g_script.mFileName, "", g_script.mMainWindowTitle); // Exclude our own main.
 			g.TitleFindAnywhere = old_mode;
 			if (hwnd)
+			{
+				char class_name[32];
+				GetClassName(hwnd, class_name, sizeof(class_name));
+				if (!strcmp(class_name, "#32770"))  // MessageBox(), InputBox(), or FileSelectFile() window.
+					hwnd = NULL;  // Exclude it from consideration.
+			}
+			if (hwnd)  // File appears to already be open for editing, so use the current window.
 				SetForegroundWindowEx(hwnd);
 			else
-				if (!Script::ActionExec(g_script.mFileSpec, ""))
-					MsgBox("Perhaps the file extension isn't associated with an application.");
+				if (!g_script.ActionExec("edit", g_script.mFileSpec, g_script.mFileDir, false))
+					if (!g_script.ActionExec("notepad.exe", g_script.mFileSpec, g_script.mFileDir, false))
+						MsgBox("Could not open the file for editing using the associated \"edit\" action or Notepad.");
 			return 0;
 		}
 		case ID_TRAY_RELOADSCRIPT:
@@ -383,7 +391,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 				break;
 			last_backslash[1] = '\0';
 			snprintfcat(buf, sizeof(buf), "AU3_Spy.exe");
-			Script::ActionExec(buf, "");
+			g_script.ActionExec(buf, "");
 			return 0;
 		case ID_TRAY_HELP:
 			strlcpy(buf, g_script.mOurEXE, sizeof(buf)); // Make a modifiable copy.
@@ -392,10 +400,10 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 				break;
 			last_backslash[1] = '\0';
 			snprintfcat(buf, sizeof(buf), "README.htm");
-			Script::ActionExec(buf, "");
+			g_script.ActionExec(buf, "");
 			return 0;
 		case ID_TRAY_SUSPEND:
-			// Maybe can use CheckMenuItem() with this, somehow.
+			g_IsSuspended = !g_IsSuspended;
 			return 0;
 		case ID_TRAY_EXIT:
 			g_script.ExitApp();  // More reliable than PostQuitMessage(), which has been known to fail in rare cases.
@@ -415,7 +423,11 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			HMENU hMenu = LoadMenu(g_hInstance, MAKEINTRESOURCE(IDR_MENU1));
 			// TrackPopupMenu cannot display the menu bar so get
 			// the handle to the first shortcut menu.
- 			hMenu = GetSubMenu(hMenu, 0);
+			if (!hMenu)
+				return 0;
+			CheckMenuItem(hMenu, ID_TRAY_SUSPEND, g_IsSuspended ? MF_CHECKED : MF_UNCHECKED);
+ 			if (   !(hMenu = GetSubMenu(hMenu, 0))   )
+				return 0;
 			SetMenuDefaultItem(hMenu, ID_TRAY_OPEN, FALSE);
 			POINT pt;
 			GetCursorPos(&pt);
@@ -472,7 +484,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 	case WM_HOTKEY: // As a result of this app having previously called RegisterHotkey().
 	case AHK_HOOK_HOTKEY:  // Sent from this app's keyboard or mouse hook.
 	{
-		if (g_IgnoreHotkeys)
+		if (g_IgnoreHotkeys || g_IsSuspended)
 			// Used to prevent runaway hotkeys, or too many happening due to key-repeat feature.
 			// It can also be used to prevent a call to MsgSleep() from accepting new hotkeys
 			// in cases where the caller's activity might be interferred with by the launch
@@ -635,7 +647,10 @@ ResultType InputBox(Var *aOutputVar, char *aTitle, char *aText, bool aHideInput)
 	}
 	if (!aOutputVar) return FAIL;
 	if (!aText) aText = "";
-	if (!aTitle || !*aTitle) aTitle = NAME_PV;
+	if (!aTitle || !*aTitle)
+		// If available, the script's filename seems a much better title in case the user has
+		// more than one script running:
+		aTitle = (g_script.mFileName && *g_script.mFileName) ? g_script.mFileName : NAME_PV;
 	// Limit the size of what we were given to prevent unreasonably huge strings from
 	// possibly causing a failure in CreateDialog():
 	char title[DIALOG_TITLE_SIZE];

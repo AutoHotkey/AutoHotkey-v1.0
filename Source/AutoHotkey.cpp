@@ -33,8 +33,8 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 
 	// Set defaults, to be overridden by command line args we receive:
 #ifdef _DEBUG
-	char *script_filespec = "C:\\A-Source\\AutoHotkey\\Find.aut";
-	//char *script_filespec = "C:\\Util\\AutoHotkey.ini";
+	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Find.aut";
+	char *script_filespec = "C:\\Util\\AutoHotkey.ini";
 	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
 #else
 	char *script_filespec = NAME_P ".ini";  // Use this extension for better file associate with editor(s).

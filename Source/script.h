@@ -25,8 +25,6 @@ GNU General Public License for more details.
 #include "WinGroup.h" // for a script's Window Groups.
 #include "resources\resource.h"  // For tray icon.
 
-// Max size of most strings, such as those passed to ShellExecute(), including zero terminator:
-#define MAX_EXEC_STRING 2048
 // AutoIt2 supports lines up to 16384 characters long, and we want to be able to do so too
 // so that really long lines from aut2 scripts, such as a chain of IF commands, can be
 // brought in and parsed:
@@ -634,6 +632,7 @@ public:
 
 	ResultType Init(char *aScriptFilename, bool aIsRestart);
 	ResultType CreateWindows(HINSTANCE hInstance);
+	ResultType Reload();
 	void ExitApp(char *aBuf = NULL, int ExitCode = 0);
 	int LoadFromFile();
 	ResultType ExecuteFromLine1()
@@ -647,17 +646,9 @@ public:
 	WinGroup *FindOrAddGroup(char *aGroupName);
 	ResultType AddGroup(char *aGroupName);
 	Label *FindLabel(char *aLabelName);
-	static ResultType ActionExec(char *aAction, char *aParams = NULL, char *aWorkingDir = NULL
-		, char *aRunShowMode = NULL, HANDLE *aProcess = NULL);
+	ResultType ActionExec(char *aAction, char *aParams = NULL, char *aWorkingDir = NULL
+		, bool aDisplayErrors = true, char *aRunShowMode = NULL, HANDLE *aProcess = NULL);
 	char *ListVars(char *aBuf, size_t aBufSize);
-
-	ResultType Reload()
-	{
-		char arg_string[MAX_PATH + 512];
-		snprintf(arg_string, sizeof(arg_string), "/restart %s", mFileSpec);
-		Script::ActionExec(mOurEXE, arg_string); // It will tell our process to stop.
-		return OK;
-	}
 
 	int GetFilename(char *aBuf = NULL)
 	{

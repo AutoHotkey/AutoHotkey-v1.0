@@ -35,6 +35,7 @@ extern bool g_AllowOnlyOneInstance;
 extern bool g_AllowSameLineComments;
 extern char g_LastPerformedHotkeyType;
 extern bool g_IgnoreHotkeys;
+extern bool g_IsSuspended;
 extern int g_nSuspendedSubroutines;
 
 extern bool g_TrayMenuIsVisible;
@@ -86,7 +87,7 @@ extern int KeyLogNext;
 
 inline int GetBatchLines(char *aBuf = NULL)
 {
-	char buf[2];  // In case some implementations aren't tolerant of a NULL pointer.
+	char buf[2];  // In case some implementations of snprintf() aren't tolerant of a NULL pointer.
 	return snprintf(aBuf ? aBuf : buf, aBuf ? 999 : 0, "%u", g.LinesPerCycle);
 }
 
