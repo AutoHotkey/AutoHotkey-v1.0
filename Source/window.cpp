@@ -646,8 +646,9 @@ HWND WinExist(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
 		// of any reasonable script ever passing that value in as a real target window,
 		// which should thus minimize the chance of a crash due to calling various API functions
 		// with invalid window handles.
-		if (   !(IsWindow(target_window) || target_window == HWND_BROADCAST)
-			|| (!g.DetectHiddenWindows && !IsWindowVisible(target_window))   )
+		if (target_window != HWND_BROADCAST // It's not exempt from the other checks on the two lines below.
+			&& (!IsWindow(target_window)    // And it's either: 1) not a valid window...
+			|| !(g.DetectHiddenWindows || IsWindowVisible(target_window)))) // ...or 2) the window is not detectible.
 			return NULL; // NULL will be interpreted as zero in the case of aReturnTheCount.
 
 		// Check if this specific window is excluded due to its title.

@@ -1092,9 +1092,17 @@ ResultType UserMenu::Destroy()
 		// As a precaution, don't allow a menu to be destroyed if a window is using it as its
 		// menu bar. That might have bad side-effects on some OSes, especially older ones:
 		if (mMenuType == MENU_TYPE_BAR && GuiType::sObjectCount)
-			for (int i = 0; i < MAX_GUI_WINDOWS; ++i)
-				if (g_gui[i] && g_gui[i]->mHwnd && GetMenu(g_gui[i]->mHwnd) == mMenu)
-					return FAIL; // A GUI window is using this menu, so don't destroy the menu.
+		{
+			int i, object_count;
+			for (i = 0, object_count = 0; i < MAX_GUI_WINDOWS; ++i)
+				if (g_gui[i])
+				{
+					if (g_gui[i]->mHwnd && GetMenu(g_gui[i]->mHwnd) == mMenu)
+						return FAIL; // A GUI window is using this menu, so don't destroy the menu.
+					if (GuiType::sObjectCount == ++object_count) // No need to keep searching.
+						break;
+				}
+		}
 		DestroyMenu(mMenu);
 	}
 	mMenu = NULL; // This must be done immediately after destroying the menu to prevent recursion problems below.

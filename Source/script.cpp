@@ -81,7 +81,7 @@ Script::Script()
 #ifdef _DEBUG
 	if (ID_FILE_EXIT < ID_MAIN_FIRST) // Not a very thorough check.
 		ScriptError("DEBUG: ID_FILE_EXIT is too large (conflicts with IDs reserved via ID_USER_FIRST).");
-	if (MAX_CONTROLS_PER_GUI > 1000)
+	if (MAX_CONTROLS_PER_GUI > ID_USER_FIRST - 3)
 		ScriptError("DEBUG: MAX_CONTROLS_PER_GUI is too large (conflicts with IDs reserved via ID_USER_FIRST).");
 	int LargestMaxParams, i, j;
 	ActionTypeType *np;
@@ -207,7 +207,7 @@ ResultType Script::Init(char *aScriptFilename, bool aIsRestart)
 {
 	mIsRestart = aIsRestart;
 	if (!aScriptFilename || !*aScriptFilename) return FAIL;
-	char buf[2048]; // Just make sure we have plenty of room to do things with.
+	char buf[2048]; // Just to make sure we have plenty of room to do things with.
 	char *filename_marker;
 	// In case the script is a relative filespec (relative to current working dir):
 	if (!GetFullPathName(aScriptFilename, sizeof(buf), buf, &filename_marker))
@@ -4616,6 +4616,11 @@ VarTypes Script::GetVarType(char *aVarName)
 	if (!stricmp(aVarName, "A_ScriptDir")) return VAR_SCRIPTDIR;
 	if (!stricmp(aVarName, "A_ScriptFullPath")) return VAR_SCRIPTFULLPATH;
 
+// A_IsCompiled is undefined in uncompiled scripts.
+#ifdef AUTOHOTKEYSC
+	if (!stricmp(aVarName, "A_IsCompiled")) return VAR_ISCOMPILED;
+#endif
+
 	if (!stricmp(aVarName, "A_BatchLines") || !stricmp(aVarName, "A_NumBatchLines")) return VAR_BATCHLINES;
 	if (!stricmp(aVarName, "A_TitleMatchMode")) return VAR_TITLEMATCHMODE;
 	if (!stricmp(aVarName, "A_TitleMatchModeSpeed")) return VAR_TITLEMATCHMODESPEED;
@@ -4630,6 +4635,7 @@ VarTypes Script::GetVarType(char *aVarName)
 	if (!stricmp(aVarName, "A_ControlDelay")) return VAR_CONTROLDELAY;
 	if (!stricmp(aVarName, "A_MouseDelay")) return VAR_MOUSEDELAY;
 	if (!stricmp(aVarName, "A_DefaultMouseSpeed")) return VAR_DEFAULTMOUSESPEED;
+	if (!stricmp(aVarName, "A_IsSuspended")) return VAR_ISSUSPENDED;
 
 	if (!stricmp(aVarName, "A_IconHidden")) return VAR_ICONHIDDEN;
 	if (!stricmp(aVarName, "A_IconTip")) return VAR_ICONTIP;
@@ -6903,6 +6909,10 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			RegCloseKey(root_key);
 		return result;
 
+	case ACT_OUTPUTDEBUG:
+		OutputDebugString(ARG1); // It does not return a value for the purpose of setting ErrorLevel.
+		return OK;
+
 	case ACT_SHUTDOWN:
 		return Util_Shutdown(ATOI(ARG1)) ? OK : FAIL; // Range of ARG1 is not validated in case other values are supported in the future.
 
@@ -6995,14 +7005,14 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	case ACT_RUNWAIT:
 		if (strcasestr(ARG3, "UseErrorLevel"))
 		{
-			if (!g_script.ActionExec(ARG1, NULL, ARG2, false, ARG3, &running_process, true, NULL))
+			if (!g_script.ActionExec(ARG1, NULL, ARG2, false, ARG3, &running_process, true, ResolveVarOfArg(3)))
 				return g_ErrorLevel->Assign("ERROR"); // See above comment for explanation.
 			//else fall through to the waiting-phase of the operation.
 			// Above: The special string ERROR is used, rather than a number like 1, because currently
 			// RunWait might in the future be able to return any value, including 259 (STATUS_PENDING).
 		}
 		else // If launch fails, display warning dialog and terminate current thread.
-			if (!g_script.ActionExec(ARG1, NULL, ARG2, true, ARG3, &running_process, true, NULL))
+			if (!g_script.ActionExec(ARG1, NULL, ARG2, true, ARG3, &running_process, true, ResolveVarOfArg(3)))
 				return FAIL;
 			//else fall through to the waiting-phase of the operation.
 
@@ -10323,11 +10333,13 @@ VarSizeType Script::GetOSType(char *aBuf)
 VarSizeType Script::GetOSVersion(char *aBuf)
 // Adapted from AutoIt3 source.
 {
-	char *version;
+	char *version = "";  // Init in case OS is something later than Win2003.
 	if (g_os.IsWinNT())
 	{
 		if (g_os.IsWinXP())
 			version = "WIN_XP";
+		else if (g_os.IsWin2003())
+			version = "WIN_2003";
 		else
 		{
 			if (g_os.IsWin2000())

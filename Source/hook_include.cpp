@@ -1194,7 +1194,7 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 					{
 						// It's not a replacement, but we're doing backspaces, so adjust buf for backspaces
 						// and the fact that the final char of the HS (if no end char) or the end char
-						// (if end char requird) will have been suppressed and never made it to the
+						// (if end char required) will have been suppressed and never made it to the
 						// active window.  A simpler way to understand is to realize that the buffer now
 						// contains (for recognition purposes, in its right side) the hotstring and its
 						// end char (if applicable), so remove both:
@@ -1638,7 +1638,10 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 			// to negative/positive number won't be correct.  Also, I think the delta
 			// can be greater than 120 only if the system can't keep up with how fast
 			// the wheel is being turned (thus not generating an event for every
-			// turn-click)?:
+			// turn-click)?  UPDATE: Although I haven't seen it yet, evidence from users
+			// suggests that some mice produce large deltas because their wheels have
+			// extremely fine/smooth motion.  If the user turns such a wheel quickly,
+			// that is mostly likely to produce a delta greater than standard 120.
 			wheel_delta = GET_WHEEL_DELTA_WPARAM(event.mouseData);
 			vk = wheel_delta < 0 ? VK_WHEEL_DOWN : VK_WHEEL_UP;
 			key_up = false; // Always consider wheel movements to be "key down" events.

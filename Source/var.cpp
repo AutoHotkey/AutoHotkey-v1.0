@@ -437,6 +437,11 @@ VarSizeType Var::Get(char *aBuf)
 	case VAR_CONTROLDELAY: if (!aBuf) return g_script.GetControlDelay(); else aBuf += g_script.GetControlDelay(aBuf); break;
 	case VAR_MOUSEDELAY: if (!aBuf) return g_script.GetMouseDelay(); else aBuf += g_script.GetMouseDelay(aBuf); break;
 	case VAR_DEFAULTMOUSESPEED: if (!aBuf) return g_script.GetDefaultMouseSpeed(); else aBuf += g_script.GetDefaultMouseSpeed(aBuf); break;
+	case VAR_ISSUSPENDED:
+		if (!aBuf)
+			return 1;
+		*aBuf++ = g_IsSuspended ? '1' : '0'; // Let the bottom of the function terminate the string.
+		break;
 
 	case VAR_ICONHIDDEN: if (!aBuf) return g_script.GetIconHidden(); else aBuf += g_script.GetIconHidden(aBuf); break;
 	case VAR_ICONTIP: if (!aBuf) return g_script.GetIconTip(); else aBuf += g_script.GetIconTip(aBuf); break;
@@ -479,6 +484,14 @@ VarSizeType Var::Get(char *aBuf)
 	case VAR_SCRIPTNAME: if (!aBuf) return g_script.GetFilename(); else aBuf += g_script.GetFilename(aBuf); break;
 	case VAR_SCRIPTDIR: if (!aBuf) return g_script.GetFileDir(); else aBuf += g_script.GetFileDir(aBuf); break;
 	case VAR_SCRIPTFULLPATH: if (!aBuf) return g_script.GetFilespec(); else aBuf += g_script.GetFilespec(aBuf); break;
+
+#ifdef AUTOHOTKEYSC
+	case VAR_ISCOMPILED:
+		if (!aBuf)
+			return 1;
+		*aBuf++ = '1'; // Let the bottom of the function terminate the string.
+		break;
+#endif
 
 	case VAR_LOOPFILENAME: if (!aBuf) return g_script.GetLoopFileName(); else aBuf += g_script.GetLoopFileName(aBuf); break;
 	case VAR_LOOPFILESHORTNAME: if (!aBuf) return g_script.GetLoopFileShortName(); else aBuf += g_script.GetLoopFileShortName(aBuf); break;

@@ -70,6 +70,13 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 		// Otherwise: Create the object and (later) its window, since all the other sub-commands below need it:
 		if (   !(g_gui[window_index] = new GuiType(window_index))   )
 			return FAIL; // No error displayed since extremely rare.
+		if (   !(g_gui[window_index]->mControl = (GuiControlType *)malloc(GUI_CONTROL_BLOCK_SIZE * sizeof(GuiControlType)))   )
+		{
+			delete g_gui[window_index];
+			g_gui[window_index] = NULL;
+			return FAIL; // No error displayed since extremely rare.
+		}
+		g_gui[window_index]->mControlCapacity = GUI_CONTROL_BLOCK_SIZE;
 		// Probably better to increment here rather than in constructor in case GuiType objects
 		// are ever created outside of the g_gui array (such as for temp local variables):
 		++GuiType::sObjectCount; // This count is maintained to help performance in the main event loop and other places.
@@ -898,15 +905,22 @@ ResultType GuiType::Destroy(GuiIndexType aWindowIndex)
 	if (!g_gui[aWindowIndex]) // It's already in the right state.
 		return OK;
 	GuiType &gui = *g_gui[aWindowIndex];  // For performance and convenience.
-	GuiIndexType u;
+	GuiIndexType u, object_count;
 	if (gui.mHwnd)
 	{
 		// First destroy any windows owned by this window, since they will be auto-destroyed
 		// anyway due to their being owned.  By destroying them explicitly, the Destroy()
 		// function is called recursively which keeps everything relatively neat.
-		for (u = 0; u < MAX_GUI_WINDOWS; ++u)
-			if (g_gui[u] && g_gui[u]->mOwner == gui.mHwnd)
-				GuiType::Destroy(u);
+		for (u = 0, object_count = 0; u < MAX_GUI_WINDOWS; ++u)
+		{
+			if (g_gui[u])
+			{
+				if (g_gui[u]->mOwner == gui.mHwnd)
+					GuiType::Destroy(u);
+				if (sObjectCount == ++object_count) // No need to keep searching.
+					break;
+			}
+		}
 		if (IsWindow(gui.mHwnd)) // If WM_DESTROY called us, the window might already be partially destroyed.
 		{
 			// If this window is using a menu bar but that menu is also used by some other window, first
@@ -954,7 +968,8 @@ ResultType GuiType::Destroy(GuiIndexType aWindowIndex)
 	// Not necessary since the object itself is about to be destroyed:
 	//gui.mHwnd = NULL;
 	//gui.mControlCount = 0; // All child windows (controls) are automatically destroyed with parent.
-	delete g_gui[aWindowIndex]; // After this, the gui var itself is invalid so should not be referenced.
+	free(gui.mControl); // Free the control array, which was previously malloc'd.
+	delete g_gui[aWindowIndex]; // After this, the var "gui" is invalid so should not be referenced, i.e. the next line.
 	g_gui[aWindowIndex] = NULL;
 	--sObjectCount; // This count is maintained to help performance in the main event loop and other places.
 	// For simplicity and performance, any fonts used by a destroyed window are destroyed
@@ -1058,25 +1073,33 @@ void GuiType::UpdateMenuBars(HMENU aMenu)
 // use aMenu as a menu bar.  For example, if a menu item has been disabled, the grey-color
 // won't show up immediately unless the window is refreshed.
 {
-	for (int i = 0; i < MAX_GUI_WINDOWS; ++i)
-		if (g_gui[i] && g_gui[i]->mHwnd && GetMenu(g_gui[i]->mHwnd) == aMenu && IsWindowVisible(g_gui[i]->mHwnd))
+	int i, object_count;
+	for (i = 0, object_count = 0; i < MAX_GUI_WINDOWS; ++i)
+	{
+		if (g_gui[i])
 		{
-			// Neither of the below two calls by itself is enough for all types of changes.
-			// Thought it's possible that every type of change only needs one or the other, both
-			// are done for simplicity:
-			// This first line is necessary at least for cases where the height of the menu bar
-			// (the number of rows needed to display all its items) has changed as a result
-			// of the caller's change.  In addition, I believe SetWindowPos() must be called
-			// before RedrawWindow() to prevent artifacts in some cases:
-			SetWindowPos(g_gui[i]->mHwnd, NULL, 0, 0, 0, 0, SWP_DRAWFRAME|SWP_FRAMECHANGED|SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE);
-			// This line is necessary at least when a single new menu item has been added:
-			RedrawWindow(g_gui[i]->mHwnd, NULL, NULL, RDW_INVALIDATE|RDW_FRAME|RDW_UPDATENOW);
-			// RDW_UPDATENOW: Seems best so that the window is in an visible updated state when function
-			// returns.  This is because if the menu bar happens to be two rows or its size is changed
-			// in any other way, the window dimensions themselves might change, and the caller might
-			// rely on such a change being visibly finished for PixelGetColor, etc.
-			//Not enough: UpdateWindow(g_gui[i]->mHwnd);
+			if (g_gui[i]->mHwnd && GetMenu(g_gui[i]->mHwnd) == aMenu && IsWindowVisible(g_gui[i]->mHwnd))
+			{
+				// Neither of the below two calls by itself is enough for all types of changes.
+				// Thought it's possible that every type of change only needs one or the other, both
+				// are done for simplicity:
+				// This first line is necessary at least for cases where the height of the menu bar
+				// (the number of rows needed to display all its items) has changed as a result
+				// of the caller's change.  In addition, I believe SetWindowPos() must be called
+				// before RedrawWindow() to prevent artifacts in some cases:
+				SetWindowPos(g_gui[i]->mHwnd, NULL, 0, 0, 0, 0, SWP_DRAWFRAME|SWP_FRAMECHANGED|SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE);
+				// This line is necessary at least when a single new menu item has been added:
+				RedrawWindow(g_gui[i]->mHwnd, NULL, NULL, RDW_INVALIDATE|RDW_FRAME|RDW_UPDATENOW);
+				// RDW_UPDATENOW: Seems best so that the window is in an visible updated state when function
+				// returns.  This is because if the menu bar happens to be two rows or its size is changed
+				// in any other way, the window dimensions themselves might change, and the caller might
+				// rely on such a change being visibly finished for PixelGetColor, etc.
+				//Not enough: UpdateWindow(g_gui[i]->mHwnd);
+			}
+			if (sObjectCount == ++object_count) // No need to keep searching.
+				break;
 		}
+	}
 }
 
 
@@ -1084,8 +1107,21 @@ void GuiType::UpdateMenuBars(HMENU aMenu)
 ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *aText)
 // Caller must have ensured that mHwnd is non-NULL (i.e. that the parent window already exists).
 {
+	#define TOO_MANY_CONTROLS "Too many controls." ERR_ABORT // Short msg since so rare.
 	if (mControlCount >= MAX_CONTROLS_PER_GUI)
-		return g_script.ScriptError("Too many controls." ERR_ABORT); // Short msg since so rare.
+		return g_script.ScriptError(TOO_MANY_CONTROLS);
+	if (mControlCount >= mControlCapacity) // The section below on the above check already having been done.
+	{
+		// realloc() to keep the array contiguous, which allows better-performing methods to be
+		// used to access the list of controls in various places.
+		// Expand the array by one block:
+		GuiControlType *realloc_temp;  // Needed since realloc returns NULL on failure but leaves original block allocated!
+		if (   !(realloc_temp = (GuiControlType *)realloc(mControl
+			, (mControlCapacity + GUI_CONTROL_BLOCK_SIZE) * sizeof(GuiControlType)))   )
+			return g_script.ScriptError(TOO_MANY_CONTROLS); // A non-specific msg since this error is so rare.
+		mControl = realloc_temp;
+		mControlCapacity += GUI_CONTROL_BLOCK_SIZE;
+	}
 	if (aControlType == GUI_CONTROL_TAB && mTabControlCount == MAX_TAB_CONTROLS)
 		return g_script.ScriptError("Too many tab controls." ERR_ABORT); // Short msg since so rare.
 
@@ -3596,8 +3632,13 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 			//	// i.e. SetWindowLong() cannot manifest the above style after the window exists.
 		}
 
+		bool style_change_ok;
+		bool style_needed_changing = false; // Set default.
+
 		if (current_style != new_style)
 		{
+			style_needed_changing = true; // Either style or exstyle is changing.
+			style_change_ok = false; // Starting assumption.
 			switch (aControl.type)
 			{
 			case GUI_CONTROL_BUTTON:
@@ -3639,18 +3680,41 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 					SendMessage(aControl.hwnd, LB_SETHORIZONTALEXTENT, 0, 0);
 				break;
 			} // switch()
+			SetLastError(0); // Prior to SetWindowLong(), as recommended by MSDN.
 			// Call this even for buttons because BM_SETSTYLE only handles the LOWORD part of the style:
-			SetWindowLong(aControl.hwnd, GWL_STYLE, new_style);
-			// Redrawing the controls is required in some cases, such as a checkbox losing its 3-state
-			// style while it has a gray checkmark in it (which incidentally in this case only changes
-			// the appearance of the control, not the internal stored value in this case).
-			InvalidateRect(aControl.hwnd, NULL, TRUE);
+			if (SetWindowLong(aControl.hwnd, GWL_STYLE, new_style) || !GetLastError()) // This is the precise way to detect success according to MSDN.
+			{
+				// Even if it indicated success, sometimes it failed anyway.  Find out for sure:
+				if (GetWindowLong(aControl.hwnd, GWL_STYLE) != current_style)
+					style_change_ok = true; // Even a partial change counts as a success.
+			}
 		}
 
 		DWORD current_exstyle = GetWindowLong(aControl.hwnd, GWL_EXSTYLE);
 		DWORD new_exstyle = (current_exstyle | aOpt.exstyle_add) & ~aOpt.exstyle_remove;
 		if (current_exstyle != new_exstyle)
-			SetWindowLong(aControl.hwnd, GWL_EXSTYLE, new_exstyle);
+		{
+			if (!style_needed_changing)
+			{
+				style_needed_changing = true; // Either style or exstyle is changing.
+				style_change_ok = false; // Starting assumption.
+			}
+			//ELSE don't change the value of style_change_ok because we want it to retain the value set by
+			// the GWL_STYLE change above; i.e. a partial success on either style or exstyle counts as a full
+			// success.
+			SetLastError(0); // Prior to SetWindowLong(), as recommended by MSDN.
+			if (SetWindowLong(aControl.hwnd, GWL_EXSTYLE, new_exstyle) || !GetLastError()) // This is the precise way to detect success according to MSDN.
+			{
+				// Even if it indicated success, sometimes it failed anyway.  Find out for sure:
+				if (GetWindowLong(aControl.hwnd, GWL_EXSTYLE) != current_exstyle)
+					style_change_ok = true; // Even a partial change counts as a success.
+			}
+		}
+
+  		// Redrawing the controls is required in some cases, such as a checkbox losing its 3-state
+		// style while it has a gray checkmark in it (which incidentally in this case only changes
+		// the appearance of the control, not the internal stored value in this case).
+		bool do_invalidate_rect = style_needed_changing && style_change_ok; // Set default.
 
 		// Do the below only after applying the styles above since part of it requires that the style be
 		// updated and applied above.
@@ -3671,11 +3735,17 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 				SendMessage(aControl.hwnd, EM_SETTABSTOPS, aOpt.tabstop_count, (LPARAM)aOpt.tabstop);
 				// MSDN: "If the application is changing the tab stops for text already in the edit control,
 				// it should call the InvalidateRect function to redraw the edit control window."
-				InvalidateRect(aControl.hwnd, NULL, TRUE); // Assume there's text in the control.
+				do_invalidate_rect = true; // Override the default.
 			}
 			break;
 		}
-	}
+
+		if (do_invalidate_rect)
+			InvalidateRect(aControl.hwnd, NULL, TRUE); // Assume there's text in the control.
+
+		if (style_needed_changing && !style_change_ok) // Override the default errorlevel set by our caller, GuiControl().
+			g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+	} // aControl.hwnd is not NULL
 
 	return OK;
 }
@@ -4166,7 +4236,16 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 		// that property, probably to aid accessibility.
 		GuiControlType *focused_control = FindControl(focused_control_hwnd);
 		if (focused_control && focused_control->type == GUI_CONTROL_TAB)
+		{
+			// v1.0.27: The following must be done, at least in some cases, because otherwise
+			// controls outside of the tab control will not get drawn correctly.  I suspect this
+			// is because at the exact moment execution reaches the line below, the window is in
+			// a transitional state, with some WM_PAINT and other messages waiting in the queue
+			// for it.  If those messages are not processed prior to ControlUpdateCurrentTab()'s
+			// use of WM_SETREDRAW, they might get dropped out of the queue and lost.
+			UpdateWindow(mHwnd);
 			ControlUpdateCurrentTab(*focused_control, true);
+		}
 	}
 
 	mFirstGuiShowCmd = false;

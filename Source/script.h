@@ -118,7 +118,7 @@ enum enum_act {
 , ACT_FILEGETSIZE, ACT_FILEGETVERSION
 , ACT_SETWORKINGDIR, ACT_FILESELECTFILE, ACT_FILESELECTFOLDER, ACT_FILEGETSHORTCUT, ACT_FILECREATESHORTCUT
 , ACT_INIREAD, ACT_INIWRITE, ACT_INIDELETE
-, ACT_REGREAD, ACT_REGWRITE, ACT_REGDELETE
+, ACT_REGREAD, ACT_REGWRITE, ACT_REGDELETE, ACT_OUTPUTDEBUG
 , ACT_SETKEYDELAY, ACT_SETMOUSEDELAY, ACT_SETWINDELAY, ACT_SETCONTROLDELAY, ACT_SETBATCHLINES
 , ACT_SETTITLEMATCHMODE, ACT_SETFORMAT, ACT_FORMATTIME
 , ACT_SUSPEND, ACT_PAUSE
@@ -211,7 +211,7 @@ enum enum_act_old {
 // 65300 to 65399: Standard tray menu items.
 // 65400 to 65534: main menu items (might be best to leave 65535 unused in case it ever has special meaning)
 enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
-	, ID_USER_FIRST = 1003  // The first ID available for user defined menu items. Do not change this (see above for why).
+	, ID_USER_FIRST = MAX_CONTROLS_PER_GUI + 3 // The first ID available for user defined menu items. Do not change this (see above for why).
 	, ID_USER_LAST = 65299  // The last. Especially do not change this due to scripts using Post/SendMessage to automate AutoHotkey.
 	, ID_TRAY_FIRST, ID_TRAY_OPEN = ID_TRAY_FIRST
 	, ID_TRAY_HELP, ID_TRAY_WINDOWSPY, ID_TRAY_RELOADSCRIPT
@@ -1013,6 +1013,7 @@ public:
 			case ACT_SPLITPATH:
 			case ACT_FILEGETSHORTCUT:
 			case ACT_RUN:
+			case ACT_RUNWAIT:
 				return ARG_TYPE_OUTPUT_VAR;
 			}
 			break;
@@ -1942,7 +1943,8 @@ public:
 	// response to certain types of standard actions:
 	GuiIndexType mWindowIndex;
 	GuiIndexType mControlCount;
-	GuiControlType mControl[MAX_CONTROLS_PER_GUI];
+	GuiIndexType mControlCapacity; // How many controls can fit into the current memory size of mControl.
+	GuiControlType *mControl; // Will become an array of controls when the window is first created.
 	GuiIndexType mDefaultButtonIndex; // Index vs. pointer is needed for some things.
 	Label *mLabelForClose, *mLabelForEscape, *mLabelForSize, *mLabelForDropFiles;
 	bool mLabelForCloseIsRunning, mLabelForEscapeIsRunning, mLabelForSizeIsRunning; // DropFiles doesn't need one of these.
@@ -1978,7 +1980,7 @@ public:
 	// copy constructor, copy assignment operator, or a destructor, then it very likely will require all three.
 
 	GuiType(int aWindowIndex) // Constructor
-		: mHwnd(NULL), mWindowIndex(aWindowIndex), mControlCount(0)
+		: mHwnd(NULL), mWindowIndex(aWindowIndex), mControlCount(0), mControlCapacity(0)
 		, mDefaultButtonIndex(-1), mLabelForClose(NULL), mLabelForEscape(NULL), mLabelForSize(NULL), mLabelForDropFiles(NULL)
 		, mLabelForCloseIsRunning(false), mLabelForEscapeIsRunning(false), mLabelForSizeIsRunning(false)
 		// The styles DS_CENTER and DS_3DLOOK appear to be ineffectual in this case.
@@ -2033,11 +2035,20 @@ public:
 		EXTERN_GUI;
 		if (!sObjectCount)
 			return NULL;
+
 		// The loop will usually find it on the first iteration since the #1 window is default
 		// and thus most commonly used.
-		for (int i = 0; i < MAX_GUI_WINDOWS; ++i)
-			if (g_gui[i] && g_gui[i]->mHwnd == aHwnd)
-				return g_gui[i];
+		int i, object_count;
+		for (i = 0, object_count = 0; i < MAX_GUI_WINDOWS; ++i)
+		{
+			if (g_gui[i])
+			{
+				if (g_gui[i]->mHwnd == aHwnd)
+					return g_gui[i];
+				if (sObjectCount == ++object_count) // No need to keep searching.
+					break;
+			}
+		}
 		return NULL;
 	}
 

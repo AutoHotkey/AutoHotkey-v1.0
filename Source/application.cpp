@@ -193,7 +193,8 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 	bool sleep0_was_done = false;
 	bool empty_the_queue_via_peek = false;
 
-	int i;
+	int i, object_count;
+	bool msg_was_handled;
 	HWND fore_window;
 	DWORD fore_pid;
 	char fore_class_name[32];
@@ -412,7 +413,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 				}
 				//else fall through to the below.
 			}
-			for (i = 0; i < MAX_GUI_WINDOWS; ++i)
+			for (i = 0, object_count = 0, msg_was_handled = false; i < MAX_GUI_WINDOWS; ++i)
 			{
 				// Note: indications are that IsDialogMessage() should not be called with NULL as
 				// its first parameter (perhaps as an attempt to get allow dialogs owned by our
@@ -421,10 +422,18 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 				// Also, can't call IsDialogMessage against msg.hwnd because that is not a complete
 				// solution: at the very least, tab key navigation will not work in GUI windows.
 				// There are probably other side-effects as well.
-				if (g_gui[i] && g_gui[i]->mHwnd && IsDialogMessage(g_gui[i]->mHwnd, &msg))
-					break;
+				if (g_gui[i])
+				{
+					if (g_gui[i]->mHwnd && IsDialogMessage(g_gui[i]->mHwnd, &msg))
+					{
+						msg_was_handled = true;
+						break;
+					}
+					if (GuiType::sObjectCount == ++object_count) // No need to keep searching.
+						break;
+				}
 			}
-			if (i < MAX_GUI_WINDOWS) // This message was handled by IsDialogMessage() above.
+			if (msg_was_handled) // This message was handled by IsDialogMessage() above.
 				continue; // Continue with the main message loop.
 		}
 

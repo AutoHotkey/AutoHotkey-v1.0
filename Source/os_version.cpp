@@ -131,6 +131,7 @@ void OS_Version::Init(void)
 	m_bWinNT4	= false;	m_bWinNT4orLater	= false;
 	m_bWin2000	= false;	m_bWin2000orLater	= false;
 	m_bWinXP	= false;	m_bWinXPorLater		= false;
+	m_bWin2003  = false;
 
 	m_bWin98	= false;	m_bWin98orLater		= false;
 	m_bWin95	= false;	m_bWin95orLater		= false;
@@ -151,11 +152,18 @@ void OS_Version::Init(void)
 
 			case 5:								// Win2000 / XP
 				m_bWinNT4orLater = true;
-
+				m_bWin2000orLater = true;
 				if ( m_dwMinorVersion == 0 )	// Win2000
-					m_bWin2000 = m_bWin2000orLater = true;
-				else							// WinXP
-					m_bWinXP = m_bWinXPorLater = m_bWin2000orLater = true;
+					m_bWin2000 = true;
+				else // minor is 1 (XP), 2 (2003), or beyond.
+				{
+					m_bWinXPorLater = true;
+					if ( m_dwMinorVersion == 1 )
+						m_bWinXP = true;
+					else if ( m_dwMinorVersion == 2 )
+						m_bWin2003 = true;
+					//else it's something later than XP/2003, so there is nothing more to be done.
+				}
 				break;
 
 		} // End Switch

@@ -2863,7 +2863,7 @@ ResultType Line::ScriptSendMessage(char *aMsg, char *awParam, char *alParam, cha
 	// used in functions such as this:
 	DWORD dwResult;
 	if (!SendMessageTimeout(control_window, (UINT)ATOI64(aMsg), (WPARAM)ATOI64(awParam), (LPARAM)ATOI64(alParam)
-		, SMTO_ABORTIFHUNG, 2000, &dwResult))
+		, SMTO_ABORTIFHUNG, 5000, &dwResult)) // Increased from 2000 in v1.0.27.
 		return g_ErrorLevel->Assign("FAIL"); // Need a special value to distinguish this from numeric reply-values.
 	// By design (since this is a power user feature), no ControlDelay is done here.
 	return g_ErrorLevel->Assign(dwResult); // UINT seems best most of the time?
@@ -3845,7 +3845,7 @@ BOOL CALLBACK EnumMonitorProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMoni
 
 
 
-DWORD *getbits(HBITMAP ahImage, HDC hdc, LONG &aWidth, LONG &aHeight, bool &aIs16Bit)
+LPCOLORREF getbits(HBITMAP ahImage, HDC hdc, LONG &aWidth, LONG &aHeight, bool &aIs16Bit)
 // Helper function used by PixelSearch below.
 // Returns an array of pixels to the caller, which it must free when done.  Returns NULL on failure,
 // in which case the contents of the output parameters is indeterminate.
@@ -3858,7 +3858,7 @@ DWORD *getbits(HBITMAP ahImage, HDC hdc, LONG &aWidth, LONG &aHeight, bool &aIs1
 	// might still be NULL.  Therefore, all of the following must be initialized so that the "end"
 	// label can detect them:
 	HGDIOBJ tdc_orig_select = NULL;
-	DWORD *image_pixel = NULL;
+	LPCOLORREF image_pixel = NULL;
 	bool success = false;
 
 	// Confirmed:
@@ -3922,7 +3922,7 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, COLOR
 	, int aVariation, char *aOptions)
 // Caller has ensured that aColor is in BGR format unless caller passed true for aUseRGB, in which case
 // it's in RGB format.
-// Author: The fast-mode PixelSearch is largely the work of Aurelian Maga.
+// Author: The fast-mode PixelSearch was created by Aurelian Maga.
 {
 	// For maintainability, get options and RGB/BGR conversion out of the way early.
 	bool fast_mode = strcasestr(aOptions, "Fast");
@@ -3991,7 +3991,7 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, COLOR
 		// Therefore, all of the following must be initialized so that the "fast_end" label can detect them:
 		HDC sdc = NULL;
 		HBITMAP hbitmap_screen = NULL;
-		DWORD *screen_pixel = NULL;
+		LPCOLORREF screen_pixel = NULL;
 		HGDIOBJ sdc_orig_select = NULL;
 
 		// Some explanation for the method below is contained in this quote from the newsgroups:
@@ -4185,7 +4185,7 @@ fast_end:
 
 
 ResultType Line::ImageSearch(int aLeft, int aTop, int aRight, int aBottom, char *aImageFile)
-// Author: The fast-mode PixelSearch is largely the work of Aurelian Maga.
+// Author: ImageSearch was created by Aurelian Maga.
 {
 	// Many of the following sections are similar to those in PixelSearch(), so they should be
 	// maintained together.
@@ -4240,7 +4240,7 @@ ResultType Line::ImageSearch(int aLeft, int aTop, int aRight, int aBottom, char 
 	// label can detect them:
 	HDC sdc = NULL;
 	HBITMAP hbitmap_screen = NULL;
-	DWORD *image_pixel = NULL, *screen_pixel = NULL;
+	LPCOLORREF image_pixel = NULL, screen_pixel = NULL;
 	HGDIOBJ sdc_orig_select = NULL;
 	bool found = false; // Must init here for use by "goto end".
     

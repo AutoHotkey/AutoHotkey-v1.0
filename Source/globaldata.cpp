@@ -301,7 +301,7 @@ Action g_act[] =
 
 	, {"RunAs", 0, 3, NULL} // user, pass, domain (0 params can be passed to disable the feature)
 	, {"Run", 1, 4, NULL}      // TargetFile, Working Dir, WinShow-Mode/UseErrorLevel, OutputVarPID
-	, {"RunWait", 1, 3, NULL}  // TargetFile, Working Dir, WinShow-Mode/UseErrorLevel
+	, {"RunWait", 1, 4, NULL}  // TargetFile, Working Dir, WinShow-Mode/UseErrorLevel, OutputVarPID
 	, {"URLDownloadToFile", 2, 2, NULL} // URL, save-as-filename
 
 	, {"GetKeyState", 2, 3, NULL} // OutputVar, key name, mode (optional) P = Physical, T = Toggle
@@ -446,6 +446,8 @@ Action g_act[] =
 	, {"RegRead", 1, 5, NULL} // output var, (ValueType [optional]), RegKey, RegSubkey, ValueName
 	, {"RegWrite", 0, 5, NULL} // ValueType, RegKey, RegSubKey, ValueName, Value (set to blank if omitted?)
 	, {"RegDelete", 0, 3, NULL} // RegKey, RegSubKey, ValueName
+
+	, {"OutputDebug", 1, 1, NULL}
 
 	, {"SetKeyDelay", 0, 2, {1, 2, 0}} // Delay in ms (numeric, negative allowed), PressDuration
 	, {"SetMouseDelay", 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)

@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.26.01"
+#define NAME_VERSION "1.0.27.00"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -126,9 +126,15 @@ enum ToggleValueType {TOGGLE_INVALID = 0, TOGGLED_ON, TOGGLED_OFF, ALWAYS_ON, AL
 #define MAX_PROGRESS_WINDOWS_STR "10" // Keep this in sync with above.
 #define MAX_SPLASHIMAGE_WINDOWS 10
 #define MAX_SPLASHIMAGE_WINDOWS_STR "10" // Keep this in sync with above.
-#define MAX_GUI_WINDOWS 10  // Increasing this will impact performance for routines that search through them all.
-#define MAX_GUI_WINDOWS_STR "10" // Keep this in sync with above.
-#define MAX_CONTROLS_PER_GUI 1000 // Can't go any higher than 1000 without running into ID_USER_FIRST.
+#define MAX_GUI_WINDOWS 99  // Things that parse the "NN:" prefix for Gui/GuiControl might rely on this being 2-digit.
+#define MAX_GUI_WINDOWS_STR "99" // Keep this in sync with above.
+
+// IMPORTANT: Before ever changing the below, note that it will impact the IDs of menu items created
+// with the MENU command, as well as the number of such menu items that are possible (currently about
+// 65500-11000=54500). See comments at ID_USER_FIRST for details:
+#define GUI_CONTROL_BLOCK_SIZE 1000
+#define MAX_CONTROLS_PER_GUI (GUI_CONTROL_BLOCK_SIZE * 11) // Some things rely on this being an even multiple of GUI_CONTROL_BLOCK_SIZE.
+
 #define MAX_TOOLTIPS 20
 #define MAX_TOOLTIPS_STR "20"   // Keep this in sync with above.
 #define MAX_FILEDIALOGS 4
@@ -341,9 +347,9 @@ inline void global_init(global_struct *gp)
 	gp->GuiWindowIndex = MAX_GUI_WINDOWS;  // Default them to out-of-bounds.
 	gp->GuiControlIndex = MAX_CONTROLS_PER_GUI; // Same.
 	gp->GuiDefaultWindowIndex = 0;
-	gp->WinDelay = 100;  // AutoIt3's default is 250, which seems a little too high nowadays.
+	gp->WinDelay = 100;
 	gp->ControlDelay = 20;
-	gp->KeyDelay = 10;   // AutoIt3's default.
+	gp->KeyDelay = 10;
 	gp->PressDuration = -1;
 	gp->MouseDelay = 10;
 	// AutoIt3's default:
