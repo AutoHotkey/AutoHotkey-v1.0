@@ -1027,7 +1027,6 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 			char *cphs, *cpbuf, *cpcase_start, *cpcase_end;
 			int characters_with_case;
 			bool first_char_with_case_is_upper, first_char_with_case_has_gone_by;
-			Hotstring *hs;
 			CaseConformModes case_conform_mode;
 
 			// Searching through the hot strings in the original, physical order is the documented
@@ -1035,12 +1034,12 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 			// be triggered.
 			for (HotstringIDType u = 0; u < Hotstring::sHotstringCount; ++u)
 			{
-				hs = shs[u];  // For performance and convenience.
-				if (hs->mSuspended)
+				Hotstring &hs = *shs[u];  // For performance and convenience.
+				if (hs.mSuspended)
 					continue;
-				if (hs->mEndCharRequired)
+				if (hs.mEndCharRequired)
 				{
-					if (g_HSBufLength <= hs->mStringLength) // Ensure the string is long enough for loop below.
+					if (g_HSBufLength <= hs.mStringLength) // Ensure the string is long enough for loop below.
 						continue;
 					if (!strchr(g_EndChars, g_HSBuf[g_HSBufLength - 1])) // It's not an end-char, so no match.
 						continue;
@@ -1048,15 +1047,15 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 				}
 				else // No ending char required.
 				{
-					if (g_HSBufLength < hs->mStringLength) // Ensure the string is long enough for loop below.
+					if (g_HSBufLength < hs.mStringLength) // Ensure the string is long enough for loop below.
 						continue;
 					cpbuf = g_HSBuf + g_HSBufLength - 1; // Init once for both loops.
 				}
-				cphs = hs->mString + hs->mStringLength - 1; // Init once for both loops.
+				cphs = hs.mString + hs.mStringLength - 1; // Init once for both loops.
 				// Check if this item is a match:
-				if (hs->mCaseSensitive)
+				if (hs.mCaseSensitive)
 				{
-					for (; cphs >= hs->mString; --cpbuf, --cphs)
+					for (; cphs >= hs.mString; --cpbuf, --cphs)
 						if (*cpbuf != *cphs)
 							break;
 				}
@@ -1076,13 +1075,13 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 					// best to stick to toupper() (note that the Input command's searching loops
 					// [further below] also use toupper() via stricmp().  One justification for
 					// this is that it is rare to have diacritic letters in hotstrings, and even
-					// rarer that someone would require them to be case insenstive.  There
+					// rarer that someone would require them to be case insensitive.  There
 					// are ways to script hotstring variants to work around this limitation.
-					for (; cphs >= hs->mString; --cpbuf, --cphs)
+					for (; cphs >= hs.mString; --cpbuf, --cphs)
 						if (toupper(*cpbuf) != toupper(*cphs))
 							break;
 				// Relies on short-circuit boolean order:
-				if (cphs < hs->mString && (hs->mDetectWhenInsideWord || cpbuf < g_HSBuf || !IsCharAlphaNumeric(*cpbuf)))
+				if (cphs < hs.mString && (hs.mDetectWhenInsideWord || cpbuf < g_HSBuf || !IsCharAlphaNumeric(*cpbuf)))
 				{
 					// MATCH FOUND
 					// Since default KeyDelay is 0, and since that is expected to be typical, it seems
@@ -1092,19 +1091,19 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 					// not be returning to our caller in a timely fashion, which would case the OS to
 					// think the hook is unreponsive, which in turn would cause it to timeout and
 					// route the key through anyway (testing confirms this).
-					if (!hs->mConformToCase)
+					if (!hs.mConformToCase)
 						case_conform_mode = CASE_CONFORM_NONE;
 					else
 					{
 						// Find out what case the user typed the string in so that we can have the
 						// replacement produced in similar case:
 						cpcase_end = g_HSBuf + g_HSBufLength;
-						if (hs->mEndCharRequired)
+						if (hs.mEndCharRequired)
 							--cpcase_end;
 						// Bug-fix for v1.0.19: First find out how many of the characters in the abbreviation
 						// have upper and lowercase versions (i.e. exclude digits, punctuation, etc):
 						for (characters_with_case = 0, first_char_with_case_is_upper = first_char_with_case_has_gone_by = false
-							, cpcase_start = cpcase_end - hs->mStringLength
+							, cpcase_start = cpcase_end - hs.mStringLength
 							; cpcase_start < cpcase_end; ++cpcase_start)
 							if (IsCharLower(*cpcase_start) || IsCharUpper(*cpcase_start)) // A case-potential char.
 							{
@@ -1134,7 +1133,7 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 								// Bug-fix for v1.0.19: Changed !IsCharUpper() below to IsCharLower() so that
 								// caseless characters such as the @ symbol do not disqualify an abbreviation
 								// from being considered "all uppercase":
-								for (cpcase_start = cpcase_end - hs->mStringLength; cpcase_start < cpcase_end; ++cpcase_start)
+								for (cpcase_start = cpcase_end - hs.mStringLength; cpcase_start < cpcase_end; ++cpcase_start)
 									if (IsCharLower(*cpcase_start)) // Use IsCharLower to better support chars from non-English languages.
 										break; // Any lowercase char disqualifies CASE_CONFORM_ALL_CAPS.
 								if (cpcase_start == cpcase_end) // All case-possible characters are uppercase.
@@ -1147,10 +1146,10 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 					// Put the end char in the LOWORD and the case_conform_mode in the HIWORD.
 					// Casting to UCHAR might be necessary to avoid problems when MAKELONG
 					// casts a signed char to an unsigned WORD:
-					PostMessage(g_hWnd, AHK_HOTSTRING, u, MAKELONG(hs->mEndCharRequired
+					PostMessage(g_hWnd, AHK_HOTSTRING, u, MAKELONG(hs.mEndCharRequired
 						? (UCHAR)g_HSBuf[g_HSBufLength - 1] : 0, case_conform_mode));
 					// Clean up:
-					if (*hs->mReplacement)
+					if (*hs.mReplacement)
 					{
 						// Since the buffer no longer reflects what is actually on screen to the left
 						// of the caret position (since a replacement is about to be done), reset the
@@ -1158,7 +1157,7 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 						// of another hot string adjacent to the one just typed).  The end-char
 						// sent by DoReplace() won't be captured (since it's "ignored input", which
 						// is why it's put into the buffer manually here):
-						if (hs->mEndCharRequired)
+						if (hs.mEndCharRequired)
 						{
 							*g_HSBuf = g_HSBuf[g_HSBufLength - 1];
 							g_HSBufLength = 1;
@@ -1167,7 +1166,7 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 							g_HSBufLength = 0;
 						g_HSBuf[g_HSBufLength] = '\0';
 					}
-					else if (hs->mDoBackspace)
+					else if (hs.mDoBackspace)
 					{
 						// It's not a replacement, but we're doing backspaces, so adjust buf for backspaces
 						// and the fact that the final char of the HS (if no end char) or the end char
@@ -1175,12 +1174,12 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 						// active window.  A simpler way to understand is to realize that the buffer now
 						// contains (for recognition purposes, in its right side) the hotstring and its
 						// end char (if applicable), so remove both:
-						g_HSBufLength -= hs->mStringLength;
-						if (hs->mEndCharRequired)
+						g_HSBufLength -= hs.mStringLength;
+						if (hs.mEndCharRequired)
 							--g_HSBufLength;
 						g_HSBuf[g_HSBufLength] = '\0';
 					}
-					if (hs->mDoBackspace)
+					if (hs.mDoBackspace)
 						// Have caller suppress this final key pressed by the user, since it would have
 						// to be backspaced over anyway.  Even if there is a visible Input command in
 						// progress, this should still be okay since the input will still see the key,

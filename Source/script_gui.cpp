@@ -2117,6 +2117,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		if (control.hwnd = CreateWindowEx(exstyle, TRACKBAR_CLASS, "", style
 			, opt.x, opt.y, opt.width, opt.height, mHwnd, control_id, g_hInstance, NULL))
 		{
+			ControlSetSliderOptions(control, opt); // Fix for v1.0.25.08: This must be done prior to the below.
 			// The control automatically deals with out-of-range values by setting slider to min or max.
 			// MSDN: "If this value is outside the control's maximum and minimum range, the position
 			// is set to the maximum or minimum value."
@@ -2124,7 +2125,6 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 				SendMessage(control.hwnd, TBM_SETPOS, TRUE, ControlInvertSliderIfNeeded(control, ATOI(aText)));
 				// Above msg has no return value.
 			//else leave it at the OS's default starting position (probably always the far left or top of the range).
-			ControlSetSliderOptions(control, opt);
 		}
 		break;
 

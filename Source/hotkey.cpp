@@ -1465,6 +1465,17 @@ void Hotstring::DoReplace(LPARAM alParam)
 	{
 		// Send the final character in raw mode so that chars such as !{} are sent properly.
 		SendBuf[1] = '\0'; // Terminate.
+		// Fix for v1.0.25.08: CollectInput() translates the user's Enter keystrokes into `n
+		// instead of `r for use with the Input command. Since the an Input command may be in progress
+		// while monitoring hotstrings, it is probably best not to try to change things in the hook
+		// (unless the policy of translating Enter to `n is someday reversed).  Instead, any `n
+		// received here, which corresponds to the user's physical press of Enter or Shift-Enter
+		// (Ctrl-Enter doesn't seem to have an ascii counterpart), is translated back to `r.  This
+		// prevents the user's Enter keystroke (which would be the end-char that triggers this
+		// hotstring) from being translated into Ctrl-Enter.  Ctrl-Enter has a different effect in
+		// most word processors than Enter, producing a page break or something else undesirable.
+		if (*SendBuf == '\n')
+			*SendBuf = '\r';
 		SendKeys(SendBuf, true);
 	}
 	g.KeyDelay = old_delay;  // Restore
