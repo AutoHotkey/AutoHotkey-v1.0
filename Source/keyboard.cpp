@@ -63,9 +63,9 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 	else // Use best-guess instead:a
 	{
 		// Even if TickCount has wrapped due to system being up more than about 49 days,
-		// DWORD math still gives the right answer as long as g.StartTime itself isn't more
-		// than about 49 days ago:
-		if ((GetTickCount() - g.StartTime) < (DWORD)g_HotkeyModifierTimeout) // Elapsed time < timeout-value
+		// DWORD math still gives the right answer as long as g_script.mThisHotkeyStartTime
+		// itself isn't more than about 49 days ago:
+		if ((GetTickCount() - g_script.mThisHotkeyStartTime) < (DWORD)g_HotkeyModifierTimeout) // Elapsed time < timeout-value
 			modifiersLR_down_physically = modifiersLR_current & aModifiersLR; // Bitwise AND is set intersection.
 		else
 			// Since too much time as passed since the user pressed the hotkey, it seems best,
@@ -85,7 +85,7 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 	modLR_type modifiersLR_persistent = modifiersLR_current & ~modifiersLR_down_physically;
 	mod_type modifiers_persistent = ConvertModifiersLR(modifiersLR_persistent);
 
-//MsgBox(GetTickCount() - g.StartTime);
+//MsgBox(GetTickCount() - g_script.mThisHotkeyStartTime);
 //char mod_str[256];
 //MsgBox(ModifiersLRToText(aModifiersLR, mod_str));
 //MsgBox(ModifiersLRToText(modifiersLR_current, mod_str));
@@ -276,7 +276,7 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 	// user resumes typing:
 	if (g_hhkLowLevelKeybd
 		|| g_HotkeyModifierTimeout < 0 // User specified that the below should always be done.
-		|| (GetTickCount() - g.StartTime) < (DWORD)g_HotkeyModifierTimeout) // Elapsed time < timeout-value
+		|| (GetTickCount() - g_script.mThisHotkeyStartTime) < (DWORD)g_HotkeyModifierTimeout) // Elapsed time < timeout-value
 	{
 		// If possible, update the set of modifier keys that are being physically held down.
 		// This is done because the user may have released some keys during the send operation

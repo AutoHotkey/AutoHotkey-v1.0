@@ -147,32 +147,31 @@ inline char *trim (char *aStr)
 }
 
 
-
-inline bool IsPureNumeric(char *aBuf, bool aAllowNegative = false, bool aAllowAllWhitespace = true)
+// Callers rely on PURE_NOT_NUMERIC being zero/false, so order is important:
+enum pure_numeric_type {PURE_NOT_NUMERIC, PURE_INTEGER, PURE_FLOAT};
+inline pure_numeric_type IsPureNumeric(char *aBuf, bool aAllowNegative = false
+	, bool aAllowAllWhitespace = true, bool aAllowFloat = false)
 // String can contain whitespace.
 {
-	if (!aBuf || !*aBuf) return true;
-	aBuf = omit_leading_whitespace(aBuf);
-	if (!*aBuf && !aAllowAllWhitespace) // The string consists entirely of whitespace.
-		return false;
+	aBuf = omit_leading_whitespace(aBuf); // i.e. caller doesn't have to have ltrimmed, only rtrimmed.
+	if (!*aBuf) // The string is empty or consists entirely of whitespace.
+		return aAllowAllWhitespace ? PURE_INTEGER : PURE_NOT_NUMERIC;
 	if (aAllowNegative && *aBuf == '-')
 		++aBuf;
-	for (; *aBuf >= '0' && *aBuf <= '9'; ++aBuf);
-	aBuf = omit_leading_whitespace(aBuf);
-	return *aBuf == '\0';  // true if all chars in string are digits.
-}
-
-
-
-inline int PureNumberToInt(char *aBuf)
-// If aBuf doesn't contain something purely numeric, zero will be returned.
-// This is how AutoIt2 treats add/subtract/divide/multiply when the target
-// is something non-numeric (it takes it to zero).
-{
-	if (!aBuf || !*aBuf) return 0;
-	if (IsPureNumeric(aBuf, true))
-		return atoi(aBuf);
-	return 0;
+	bool is_float;
+	for (is_float = false; *aBuf; ++aBuf)
+	{
+		if (*aBuf == '.')
+			if (!aAllowFloat || is_float) // if aBuf contains 2 decimal points, it can't be a valid number.
+				return PURE_NOT_NUMERIC;
+			else
+				is_float = true;
+		else
+			if (*aBuf < '0' || *aBuf > '9')
+				return PURE_NOT_NUMERIC;
+	}
+	// Since the above didn't return, it must be a float or an integer:
+	return is_float ? PURE_FLOAT : PURE_INTEGER;
 }
 
 
@@ -209,8 +208,8 @@ char *FileAttribToStr(char *aBuf, DWORD aAttr);
 #define DATE_FORMAT "YYYYMMDDHHMISS"
 ResultType YYYYMMDDToFileTime(char *YYYYMMDD, FILETIME *pftDateTime);
 char *FileTimeToYYYYMMDD(char *aYYYYMMDD, FILETIME *pftDateTime, bool aConvertToLocalTime = false);
-unsigned __int64 FileTimeSecondsUntil(FILETIME *pftStart, FILETIME *pftEnd);
-unsigned __int64 YYYYMMDDSecondsUntil(char *aYYYYMMDDStart, char *aYYYYMMDDEnd);
+__int64 YYYYMMDDSecondsUntil(char *aYYYYMMDDStart, char *aYYYYMMDDEnd, bool &aFailed);
+__int64 FileTimeSecondsUntil(FILETIME *pftStart, FILETIME *pftEnd);
 
 unsigned __int64 GetFileSize64(HANDLE aFileHandle);
 int snprintfcat(char *aBuf, size_t aBufSize, const char *aFormat, ...);
@@ -220,8 +219,6 @@ char *strrstr(char *aStr, char *aPattern, bool aCaseSensitive = true);
 char *stristr(char *aStr, char *aPattern);
 char *StrReplace(char *Str, char *OldStr, char *NewStr = "", bool aCaseSensitive = true);
 char *StrReplaceAll(char *Str, char *OldStr, char *NewStr = "", bool aCaseSensitive = true);
-//void DisplayError (DWORD Error);
-// UINT FileTimeTenthsOfSecondUntil (FILETIME *pftStart, FILETIME *pftEnd);
 bool DoesFilePatternExist(char *aFilePattern);
 ResultType FileAppend(char *aFilespec, char *aLine, bool aAppendNewline = true);
 char *ConvertFilespecToCorrectCase(char *aFullFileSpec);

@@ -123,23 +123,27 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	if (!load_result) // No lines were loaded, so we're done.
 		return 0;
 
-	// Note: the title below must be constructed the same was as is done by our
-	// CreateWindows(), which is why it's standardized in g_script.mMainWindowTitle:
-	HWND w_existing = FindWindow(WINDOW_CLASS_NAME, g_script.mMainWindowTitle);
+	HWND w_existing = NULL;
 	bool close_prior_instance = false;
-	if (g_AllowOnlyOneInstance && w_existing && !restart_mode && !g_ForceLaunch)
+	if (g_AllowOnlyOneInstance && !restart_mode && !g_ForceLaunch)
 	{
-		// Use a more unique title for this dialog so that subsequent executions of this
-		// program can easily find it (though they currently don't):
-		//#define NAME_ALREADY_RUNNING NAME_PV " script already running"
-		if (MsgBox("An older instance of this #SingleInstance script is already running."
-			"  Replace it with this instance?", MB_YESNO, g_script.mFileName) == IDNO)
-			return 0;
-		else
-			close_prior_instance = true;
+		// Note: the title below must be constructed the same was as is done by our
+		// CreateWindows(), which is why it's standardized in g_script.mMainWindowTitle:
+		if (w_existing = FindWindow(WINDOW_CLASS_NAME, g_script.mMainWindowTitle))
+		{
+			// Use a more unique title for this dialog so that subsequent executions of this
+			// program can easily find it (though they currently don't):
+			//#define NAME_ALREADY_RUNNING NAME_PV " script already running"
+			if (MsgBox("An older instance of this #SingleInstance script is already running."
+				"  Replace it with this instance?", MB_YESNO, g_script.mFileName) == IDNO)
+				return 0;
+			else
+				close_prior_instance = true;
+		}
 	}
-	if (!close_prior_instance && restart_mode && w_existing)
-		close_prior_instance = true;
+	if (!close_prior_instance && restart_mode)
+		if (w_existing = FindWindow(WINDOW_CLASS_NAME, g_script.mMainWindowTitle))
+			close_prior_instance = true;
 	if (close_prior_instance)
 	{
 		// Now that the script has been validated and is ready to run,

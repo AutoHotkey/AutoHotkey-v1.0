@@ -604,10 +604,10 @@ void UpdateKeyState(LPARAM lParam, sc_type sc, bool key_up)
 #ifdef INCLUDE_KEYBD_HOOK
 #undef AllowKeyToGoToSystem
 #define AllowKeyToGoToSystem AllowIt(g_hhkLowLevelKeybd, code, wParam, lParam, sc, key_up, pKeyLogCurr)
-#define AllowKeyToGoToSystemButDisguiseWinKey AllowIt(g_hhkLowLevelKeybd, code, wParam, lParam \
+#define AllowKeyToGoToSystemButDisguiseWinAlt AllowIt(g_hhkLowLevelKeybd, code, wParam, lParam \
 	, sc, key_up, pKeyLogCurr, true)
 inline LRESULT AllowIt(HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, sc_type sc, bool key_up
-	, KeyLogItem *pKeyLogCurr, bool DisguiseWinKey = false)
+	, KeyLogItem *pKeyLogCurr, bool DisguiseWinAlt = false)
 {
 	// In this function, always use pEvent->vkCode rather than accepting vk as a param
 	// from the caller because the caller's vk may have been set to zero to allow
@@ -651,7 +651,8 @@ inline LRESULT AllowIt(HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, sc_typ
 		// display the Alt-tab menu, we would incorrectly believe the menu to be displayed:
 		alt_tab_menu_is_visible = false;
 
-	if (DisguiseWinKey && key_up && (pEvent->vkCode == VK_LWIN || pEvent->vkCode == VK_RWIN))
+	if (DisguiseWinAlt && key_up && (pEvent->vkCode == VK_LWIN || pEvent->vkCode == VK_RWIN
+		 || pEvent->vkCode == VK_LMENU || pEvent->vkCode == VK_RMENU || pEvent->vkCode == VK_MENU))
 	{
 		// I think the best way to do this is to suppress the given key-event and substitute
 		// some new events to replace it.  This is because otherwise we would probably have to
@@ -807,17 +808,28 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	// already been properly determined:
 	// In rare cases it may be necessary to suppress both left and right, which is why
 	// it's not done as a generic windows key:
-	if (key_up && ((disguise_next_lwin_up && vk == VK_LWIN) || (disguise_next_rwin_up && vk == VK_RWIN)))
+	if (key_up && ((disguise_next_lwin_up && vk == VK_LWIN) || (disguise_next_rwin_up && vk == VK_RWIN)
+		 || (disguise_next_lalt_up && (vk == VK_LMENU || vk == VK_MENU))
+		 || (disguise_next_ralt_up && vk == VK_RMENU)))
 	{
 		// Do this first to avoid problems with reentrancy.
-		if (vk == VK_LWIN)
-			disguise_next_lwin_up = false;
-		else
-			disguise_next_rwin_up = false;
+		switch (vk)
+		{
+		case VK_LWIN: disguise_next_lwin_up = false; break;
+		case VK_RWIN: disguise_next_rwin_up = false; break;
+		// For now, assume VK_MENU the left alt key.  This neutral key is probably never received anyway
+		// due to the nature of this type of hook on NT/2k/XP and beyond.  Later, this can be furher
+		// optimized to check the scan code and such (what's being done here isn't that essential to
+		// start with, so it's not a high priority -- but when it is done, be sure to review the
+		// above IF statement also):
+		case VK_MENU:
+		case VK_LMENU: disguise_next_lalt_up = false; break;
+		case VK_RMENU: disguise_next_ralt_up = false; break;
+		}
 		// Send our own up-event to replace this one.  But since ours has the shift-key
-		// held down for it, the start menu won't be invoked.  It's necessary to send
-		// and up-event for lwin/rwin so that it's state, as seen by the system,
-		// is put back into the up position, which would happen if its previous
+		// held down for it, the Start Menu or foreground window's menu bar won't be invoked.
+		// It's necessary to send an up-event so that it's state, as seen by the system,
+		// is put back into the up position, which would be needed if its previous
 		// down-event wasn't suppressed (probably due to the fact that this win
 		// key is a prefix but not a suffix):
 		KeyEvent(KEYDOWN, VK_SHIFT);
@@ -1055,7 +1067,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 #ifdef INCLUDE_KEYBD_HOOK
 			{
 				if (pThisKey->as_modifiersLR)
-					return (pThisKey->was_just_used == AS_PREFIX_FOR_HOTKEY) ? AllowKeyToGoToSystemButDisguiseWinKey
+					return (pThisKey->was_just_used == AS_PREFIX_FOR_HOTKEY) ? AllowKeyToGoToSystemButDisguiseWinAlt
 						: AllowKeyToGoToSystem;  // i.e. don't disguise Windows key if it didn't fire a hotkey.
 				else
 					return SuppressThisKey;
@@ -1066,7 +1078,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 
 		// Since above didn't return, this key-up for this prefix key wasn't used in it's role
 		// as a prefix.  If it's not a suffix, we're done, so just return.  Don't do
-		// "DisguiseWinKey" because we want the winkey's native key-up function to take effect.
+		// "DisguiseWinAlt" because we want the key's native key-up function to take effect.
 		// Also, Allow key-ups for toggleable keys that the user wants to be toggleable to
 		// go through to the system, because the prior key-down for this prefix key
 		// wouldn't have been suppressed and thus this up-event goes with it (and this
@@ -1321,8 +1333,22 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		if ((g_modifiersLR_logical & MOD_LWIN) && !kvk[VK_LWIN].used_as_prefix)
 			disguise_next_lwin_up = true;
 		if ((g_modifiersLR_logical & MOD_RWIN) && !kvk[VK_RWIN].used_as_prefix)
-			disguise_next_lwin_up = true;
+			disguise_next_rwin_up = true;
 	}
+	// For maximum reliability on the maximum range of systems, it seems best to do the above
+	// for ALT keys also, to prevent them from invoking the icon menu or menu bar of the
+	// foreground window (rarer than the Start Menu problem, above, I think):
+	else if (!(g_modifiersLR_logical & ~(MOD_LALT | MOD_RALT))) // Only lalt, ralt, or both are currently down.
+	{
+		// If it's used as a prefix, there's no need (and it would probably break something)
+		// to disguise the key this way since the prefix-handling logic already does that
+		// whenever necessary:
+		if ((g_modifiersLR_logical & MOD_LALT) && !kvk[VK_LMENU].used_as_prefix)
+			disguise_next_lalt_up = true;
+		if ((g_modifiersLR_logical & MOD_RALT) && !kvk[VK_RMENU].used_as_prefix)
+			disguise_next_ralt_up = true;
+	}
+
 
 	// UPDATE to below: Since this function is only called from a single thread (namely ours),
 	// albeit recursively, it's apparently not reentrant (unless our own main app itself becomes
@@ -1571,7 +1597,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		// not suppress the key because otherwise the system's state for this modifier
 		// key would be stuck down due to the fact that the previous down-event for this
 		// key (which is presumably a prefix *and* a suffix) was not suppressed:
-		return AllowKeyToGoToSystemButDisguiseWinKey;
+		return AllowKeyToGoToSystemButDisguiseWinAlt;
 #endif
 
 	if (key_up)

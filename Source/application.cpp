@@ -362,7 +362,6 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 			// Always reset these two, after the saving to global_saved and restoring to defaults above,
 			// regardless of aMode:
 			g.hWndLastUsed = NULL;
-			g.StartTime = GetTickCount();
 			g_script.mLinesExecutedThisCycle = 0;  // Doing this is somewhat debatable.
 			g_IsIdle = false;  // Make sure the state is correct since we're about to launch a subroutine.
 
@@ -371,7 +370,10 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 			g_script.mPriorHotkeyLabel = g_script.mThisHotkeyLabel;
 			g_script.mPriorHotkeyStartTime = g_script.mThisHotkeyStartTime;
 			g_script.mThisHotkeyLabel = Hotkey::GetLabel((HotkeyIDType)msg.wParam);
-			g_script.mThisHotkeyStartTime = GetTickCount();
+			// Since we're here, we already had the opportunity to Sleep, which is why
+			// g_script.mLastSleepTime is also set to GetTickCount().  Doing this prevents
+			// an unnecessary 10ms sleep from being invoked by ExecUntil():
+			g_script.mThisHotkeyStartTime = g_script.mLastSleepTime = GetTickCount(); // Do this last, right before the PerformID().
 
 			// Perform the new hotkey's subroutine:
 			if (Hotkey::PerformID((HotkeyIDType)msg.wParam) == CRITICAL_ERROR)

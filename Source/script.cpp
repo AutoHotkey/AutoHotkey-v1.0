@@ -57,7 +57,7 @@ Script::Script()
 #ifdef _DEBUG
 	int LargestMaxParams, i, j;
 	ActionTypeType *np;
-	// Find the Larged value of MaxParams used by any command and make sure it
+	// Find the Largest value of MaxParams used by any command and make sure it
 	// isn't something larger than expected by the parsing routines:
 	for (LargestMaxParams = i = 0; i < g_ActionCount; ++i)
 	{
@@ -920,6 +920,9 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 		if (!*(cp + 1))  // i.e. the length is 1
 		{
 			// Don't allow '#' since it's the preprocessor directive symbol being used here.
+			// Seems ok to allow "." to be the comment flag, since other constraints mandate
+			// that at least one space or tab occur to its left for it to be considered a
+			// comment marker.
 			if (*cp == '#' || *cp == g_DerefChar || *cp == g_EscapeChar || *cp == g_delimiter)
 				return ScriptError(ERR_DEFINE_CHAR);
 			// Exclude hotkey definition chars, such as ^ and !, because otherwise
@@ -940,7 +943,8 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 	IF_IS_DIRECTIVE_MATCH("#EscapeChar")
 	{
 		RETURN_IF_NO_CHAR
-		if (   *cp == '#' || *cp == g_DerefChar || *cp == g_delimiter
+		// Don't allow '.' since that can be part of literal floating point numbers:
+		if (   *cp == '#' || *cp == g_DerefChar || *cp == g_delimiter || *cp == '.'
 			|| (g_CommentFlagLength == 1 && *cp == *g_CommentFlag)   )
 			return ScriptError(ERR_DEFINE_CHAR);
 		g_EscapeChar = *cp;
@@ -949,7 +953,7 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 	IF_IS_DIRECTIVE_MATCH("#DerefChar")
 	{
 		RETURN_IF_NO_CHAR
-		if (   *cp == '#' || *cp == g_EscapeChar || *cp == g_delimiter
+		if (   *cp == '#' || *cp == g_EscapeChar || *cp == g_delimiter || *cp == '.'
 			|| (g_CommentFlagLength == 1 && *cp == *g_CommentFlag)   )
 			return ScriptError(ERR_DEFINE_CHAR);
 		g_DerefChar = *cp;
@@ -958,7 +962,7 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 	IF_IS_DIRECTIVE_MATCH("#Delimiter")
 	{
 		RETURN_IF_NO_CHAR
-		if (   *cp == '#' || *cp == g_EscapeChar || *cp == g_DerefChar
+		if (   *cp == '#' || *cp == g_EscapeChar || *cp == g_DerefChar || *cp == '.'
 			|| (g_CommentFlagLength == 1 && *cp == *g_CommentFlag)   )
 			return ScriptError(ERR_DEFINE_CHAR);
 		g_delimiter = *cp;
@@ -1304,7 +1308,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 			else // It has more than 3 apparent params, but is the first param even numeric?
 			{
 				*delimiter[0] = '\0'; // Temporarily terminate action_args at the first delimiter.
-				if (!IsPureNumeric(action_args, false, false))
+				if (!IsPureNumeric(action_args, false, false, false)) // No floats allowed in this case.
 					max_params_override = 1;
 				*delimiter[0] = g_delimiter; // Restore the string.
 				if (!max_params_override)
@@ -1318,7 +1322,8 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 						// deref, since trying to figure out what's a pure deref is somewhat complicated
 						// at this early stage of parsing), assume the user didn't intend it to be the
 						// MsgBox timeout (since that feature is rarely used):
-						if (!IsPureNumeric(delimiter[delimiter_count-1] + 1)) // Not blank and not a number.
+						if (!IsPureNumeric(delimiter[delimiter_count-1] + 1, false, true, true))
+							// Not blank and not a int or float.
 							max_params_override = 3;
 						// If it has more than 4 params or it has exactly 4 but the 4th isn't blank,
 						// pure numeric, or a deref: assume it's being used in 3-parameter mode and
@@ -1814,7 +1819,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		return FAIL;  // It displayed the error for us.
 	if (g_act[aActionType].NumericParams)
 	{
-		bool allow_negative;
+		bool allow_negative, allow_float;
 		for (ActionTypeType *np = g_act[aActionType].NumericParams; *np; ++np)
 		{
 			if (line->mArgc >= *np)  // The arg exists.
@@ -1822,14 +1827,15 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				if (!line->ArgHasDeref(*np)) // i.e. if it's a deref, we won't try to validate it now.
 				{
 					allow_negative = line->ArgAllowsNegative(*np);
-					if (!IsPureNumeric(line->mArg[*np - 1].text, allow_negative))
+					allow_float = line->ArgAllowsFloat(*np);
+					if (!IsPureNumeric(line->mArg[*np - 1].text, allow_negative, true, allow_float))
 					{
 						if (aActionType == ACT_WINMOVE)
 						{
 							if (stricmp(line->mArg[*np - 1].text, "default"))
 							{
 								snprintf(error_msg, sizeof(error_msg), "\"%s\" requires parameter #%u to be"
-									" either %snumeric, a dereferenced variable, blank, or the word Default."
+									" either %snumeric, a variable reference, blank, or the word Default."
 									, g_act[line->mActionType].Name, *np, allow_negative ? "" : "non-negative ");
 								return ScriptError(error_msg, line->mArg[*np - 1].text);
 							}
@@ -1841,7 +1847,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 						else
 						{
 							snprintf(error_msg, sizeof(error_msg), "\"%s\" requires parameter #%u to be"
-								" either %snumeric, blank (if blank is allowed), or a dereferenced variable."
+								" either %snumeric, blank (if blank is allowed), or a variable reference."
 								, g_act[line->mActionType].Name, *np, allow_negative ? "" : "non-negative ");
 							return ScriptError(error_msg, line->mArg[*np - 1].text);
 						}
@@ -1854,7 +1860,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	///////////////////////////////////////////////////////////////////
 	// Do any post-add validation & handling for specific action types.
 	///////////////////////////////////////////////////////////////////
-	int value;  // For temp use during validation.
+	int value;    // For temp use during validation.
+	FILETIME ft;  // same.
 	switch(aActionType)
 	{
 	case ACT_DETECTHIDDENWINDOWS:
@@ -1888,13 +1895,12 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_FILEREADLINE:
 		if (line->mArgc > 2 && !line->ArgHasDeref(3))
 		{
-			value = atoi(LINE_RAW_ARG3);
-			if (value <= 0)
+			if (!IsPureNumeric(LINE_RAW_ARG3, false, false, false) || !_atoi64(LINE_RAW_ARG3))
 				// This error is caught at load-time, but at runtime it's not considered
 				// an error (i.e. if a variable resolves to zero or less, StringMid will
 				// automatically consider it to be 1, though FileReadLine would consider
 				// it an error):
-				return ScriptError("Parameter #3 must be a number greater than zero or a dereferenced variable."
+				return ScriptError("Parameter #3 must be a number greater than zero or a variable reference."
 					, LINE_RAW_ARG3);
 		}
 		break;
@@ -1902,14 +1908,37 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_STRINGGETPOS:
 		if (   line->mArgc > 3 && !line->ArgHasDeref(4) && *LINE_RAW_ARG4
 			&& (strlen(LINE_RAW_ARG4) > 1 || (toupper(*LINE_RAW_ARG4) != 'R' && *LINE_RAW_ARG4 != '1'))   )
-			return ScriptError("If not blank, parameter #4 must be 1, R, or a dereferenced variable.", LINE_RAW_ARG4);
+			return ScriptError("If not blank, parameter #4 must be 1, R, or a variable reference.", LINE_RAW_ARG4);
 		break;
 
 	case ACT_STRINGREPLACE:
 		if (line->mArgc > 4 && !line->ArgHasDeref(5) && *LINE_RAW_ARG5
 			&& ((!*(LINE_RAW_ARG5 + 1) && *LINE_RAW_ARG5 != '1' && toupper(*LINE_RAW_ARG5) != 'A')
 			|| (*(LINE_RAW_ARG5 + 1) && stricmp(LINE_RAW_ARG5, "all"))))
-			return ScriptError("If not blank, parameter #5 must be 1, A, ALL, or a dereferenced variable.", LINE_RAW_ARG5);
+			return ScriptError("If not blank, parameter #5 must be 1, A, ALL, or a variable reference.", LINE_RAW_ARG5);
+		break;
+
+	case ACT_REGREAD:
+		if (line->mArgc > 4) // The obsolete 5-param method is being used, wherein ValueType is the 2nd param.
+		{
+			if (!line->ArgHasDeref(3) && *LINE_RAW_ARG3 && !line->ValidateRegKey(LINE_RAW_ARG3))
+				return ScriptError(ERR_REG_KEY, LINE_RAW_ARG3);
+		}
+		else
+			if (line->mArgc > 1 && !line->ArgHasDeref(2) && *LINE_RAW_ARG2 && !line->ValidateRegKey(LINE_RAW_ARG2))
+				return ScriptError(ERR_REG_KEY, LINE_RAW_ARG2);
+		break;
+
+	case ACT_REGWRITE:
+		if (line->mArgc > 0 && !line->ArgHasDeref(1) && *LINE_RAW_ARG1 && !line->ValidateRegValueType(LINE_RAW_ARG1))
+			return ScriptError(ERR_REG_VALUE_TYPE, LINE_RAW_ARG1);
+		if (line->mArgc > 1 && !line->ArgHasDeref(2) && *LINE_RAW_ARG2 && !line->ValidateRegKey(LINE_RAW_ARG2))
+			return ScriptError(ERR_REG_KEY, LINE_RAW_ARG2);
+		break;
+
+	case ACT_REGDELETE:
+		if (line->mArgc > 0 && !line->ArgHasDeref(1) && *LINE_RAW_ARG1 && !line->ValidateRegKey(LINE_RAW_ARG1))
+			return ScriptError(ERR_REG_KEY, LINE_RAW_ARG1);
 		break;
 
 	case ACT_SOUNDSETWAVEVOLUME:
@@ -1924,7 +1953,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_SOUNDPLAY:
 		if (line->mArgc > 1 && !line->ArgHasDeref(2) && *LINE_RAW_ARG2
 			&& stricmp(LINE_RAW_ARG2, "wait") && stricmp(LINE_RAW_ARG2, "1"))
-			return ScriptError("If not blank, parameter #2 must be 1, WAIT, or a dereferenced variable.", LINE_RAW_ARG2);
+			return ScriptError("If not blank, parameter #2 must be 1, WAIT, or a variable reference.", LINE_RAW_ARG2);
 		break;
 
 	case ACT_PIXELSEARCH:
@@ -1932,7 +1961,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		{
 			value = atoi(LINE_RAW_ARG8);
 			if (value < 0 || value > 255)
-				return ScriptError("Parameter #8 must be number between 0 and 255, blank, or a dereferenced variable."
+				return ScriptError("Parameter #8 must be number between 0 and 255, blank, or a variable reference."
 					, LINE_RAW_ARG8);
 		}
 		break;
@@ -1987,9 +2016,15 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 
 	case ACT_ADD:
 	case ACT_SUB:
-		if (line->mArgc > 2 && !line->ArgHasDeref(3) && *LINE_RAW_ARG3)
-			if (!strchr("SMHD", toupper(*LINE_RAW_ARG3)))  // (S)econds, (M)inutes, (H)ours, or (D)ays
-				return ScriptError(ERR_COMPARE_TIMES, LINE_RAW_ARG3);
+		if (line->mArgc > 2)
+		{
+			if (!line->ArgHasDeref(3) && *LINE_RAW_ARG3)
+				if (!strchr("SMHD", toupper(*LINE_RAW_ARG3)))  // (S)econds, (M)inutes, (H)ours, or (D)ays
+					return ScriptError(ERR_COMPARE_TIMES, LINE_RAW_ARG3);
+			if (aActionType == ACT_SUB && !line->ArgHasDeref(2) && *LINE_RAW_ARG2)
+				if (!YYYYMMDDToFileTime(LINE_RAW_ARG2, &ft))
+					return ScriptError(ERR_INVALID_DATETIME, LINE_RAW_ARG2);
+		}
 		break;
 
 	case ACT_FILECOPY:
@@ -1998,7 +2033,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		if (line->mArgc > 2 && !line->ArgHasDeref(3) && *LINE_RAW_ARG3)
 		{
 			if (strlen(LINE_RAW_ARG3) > 1 || (*LINE_RAW_ARG3 != '0' && *LINE_RAW_ARG3 != '1'))
-				return ScriptError("Parameter #3 must be either blank, 0, 1, or a dereferenced variable."
+				return ScriptError("Parameter #3 must be either blank, 0, 1, or a variable reference."
 					, LINE_RAW_ARG3);
 		}
 		break;
@@ -2012,11 +2047,11 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 						, LINE_RAW_ARG1);
 		}
 		if (line->mArgc > 2 && !line->ArgHasDeref(3) && line->ConvertLoopMode(LINE_RAW_ARG3) == FILE_LOOP_INVALID)
-			return ScriptError("If not blank, parameter #3 must be either 0, 1, 2, or a dereferenced variable."
+			return ScriptError("If not blank, parameter #3 must be either 0, 1, 2, or a variable reference."
 				, LINE_RAW_ARG3);
 		if (line->mArgc > 3 && !line->ArgHasDeref(4) && *LINE_RAW_ARG4)
 			if (strlen(LINE_RAW_ARG4) > 1 || (*LINE_RAW_ARG4 != '0' && *LINE_RAW_ARG4 != '1'))
-				return ScriptError("Parameter #4 must be either blank, 0, 1, or a dereferenced variable."
+				return ScriptError("Parameter #4 must be either blank, 0, 1, or a variable reference."
 					, LINE_RAW_ARG4);
 		break;
 
@@ -2027,22 +2062,25 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_FILESETTIME:
+		if (line->mArgc > 0 && !line->ArgHasDeref(1) && *LINE_RAW_ARG1)
+			if (!YYYYMMDDToFileTime(LINE_RAW_ARG1, &ft))
+				return ScriptError(ERR_INVALID_DATETIME, LINE_RAW_ARG1);
 		if (line->mArgc > 2 && !line->ArgHasDeref(3) && *LINE_RAW_ARG3)
 			if (strlen(LINE_RAW_ARG3) > 1 || !strchr("MCA", toupper(*LINE_RAW_ARG3)))
 				return ScriptError(ERR_FILE_TIME, LINE_RAW_ARG3);
 		if (line->mArgc > 3 && !line->ArgHasDeref(4) && line->ConvertLoopMode(LINE_RAW_ARG4) == FILE_LOOP_INVALID)
-			return ScriptError("If not blank, parameter #4 must be either 0, 1, 2, or a dereferenced variable."
+			return ScriptError("If not blank, parameter #4 must be either 0, 1, 2, or a variable reference."
 				, LINE_RAW_ARG4);
 		if (line->mArgc > 4 && !line->ArgHasDeref(5) && *LINE_RAW_ARG5)
 			if (strlen(LINE_RAW_ARG5) > 1 || (*LINE_RAW_ARG5 != '0' && *LINE_RAW_ARG5 != '1'))
-				return ScriptError("Parameter #5 must be either blank, 0, 1, or a dereferenced variable."
+				return ScriptError("Parameter #5 must be either blank, 0, 1, or a variable reference."
 					, LINE_RAW_ARG5);
 		break;
 
 	case ACT_FILEGETSIZE:
 		if (line->mArgc > 2 && !line->ArgHasDeref(3) && *LINE_RAW_ARG3)
 			if (strlen(LINE_RAW_ARG3) > 1 || !strchr("BKM", toupper(*LINE_RAW_ARG3))) // Allow B=Bytes as undocumented.
-				return ScriptError("Parameter #3 must be either blank, K, M, or a dereferenced variable."
+				return ScriptError("Parameter #3 must be either blank, K, M, or a variable reference."
 					, LINE_RAW_ARG3);
 		break;
 
@@ -2051,7 +2089,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		{
 			value = atoi(LINE_RAW_ARG2);
 			if (value < 0 || value > 31)
-				return ScriptError("Paremeter #2 must be either blank, a dereferenced variable,"
+				return ScriptError("Paremeter #2 must be either blank, a variable reference,"
 					" or a number between 0 and 31 inclusive.", LINE_RAW_ARG2);
 		}
 		break;
@@ -2060,12 +2098,26 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		if (line->mArgc > 0 && !line->ArgHasDeref(1) && !line->ConvertTitleMatchMode(LINE_RAW_ARG1))
 			return ScriptError(ERR_TITLEMATCHMODE, LINE_RAW_ARG1);
 		break;
+	case ACT_SETFORMAT:
+		if (line->mArgc > 0 && !line->ArgHasDeref(1) && stricmp(LINE_RAW_ARG1, "float"))
+			return ScriptError("Parameter #1 must be the word FLOAT or a variable reference.", LINE_RAW_ARG1);
+		// Size must be less than sizeof() minus 2 because need room to prepend the '%' and append
+		// the 'f' to make it a valid format specifier string:
+		if (line->mArgc > 1 && !line->ArgHasDeref(2) && strlen(LINE_RAW_ARG2) >= sizeof(g.FormatFloat) - 2)
+			return ScriptError("Parameter #2 is too long.", LINE_RAW_ARG1);
+		break;
+
 	case ACT_MSGBOX:
-		if (line->mArgc > 1) // i.e. this MsgBox is using the 4-param style.
+		if (line->mArgc > 1) // i.e. this MsgBox is using the 3-param or 4-param style.
 			if (!line->ArgHasDeref(1)) // i.e. if it's a deref, we won't try to validate it now.
 				if (!IsPureNumeric(LINE_RAW_ARG1))
 					return ScriptError("When used with more than one parameter, MsgBox requires that"
-						" the first parameter be numeric or a dereferenced variable.", LINE_RAW_ARG1);
+						" the 1st parameter be numeric or a variable reference.", LINE_RAW_ARG1);
+		if (line->mArgc > 3)
+			if (!line->ArgHasDeref(4)) // i.e. if it's a deref, we won't try to validate it now.
+				if (!IsPureNumeric(LINE_RAW_ARG4, false, true, true))
+					return ScriptError("MsgBox requires that the 4th parameter, if present, be numeric & positive,"
+						" or a variable reference.", LINE_RAW_ARG4);
 		break;
 	case ACT_IFMSGBOX:
 		if (line->mArgc > 0 && !line->ArgHasDeref(1) && !line->ConvertMsgBoxResult(LINE_RAW_ARG1))
@@ -2077,7 +2129,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 	case ACT_DIV:
 		if (!line->ArgHasDeref(2)) // i.e. if it's a deref, we won't try to validate it now.
-			if (!atoi(LINE_RAW_ARG2))
+			if (!_atoi64(LINE_RAW_ARG2))
 				return ScriptError("This line would attempt to divide by zero.");
 		break;
 	case ACT_GROUPADD:
@@ -2096,13 +2148,13 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		{
 			if (line->mArgc > 1 && !line->ArgHasDeref(2) && *LINE_RAW_ARG2)
 				if (strlen(LINE_RAW_ARG2) > 1 || toupper(*LINE_RAW_ARG2) != 'R')
-					return ScriptError("Parameter #2 must be either blank, R, or a dereferenced variable."
+					return ScriptError("Parameter #2 must be either blank, R, or a variable reference."
 						, LINE_RAW_ARG2);
 		}
 		else if (aActionType == ACT_GROUPCLOSE)
 			if (line->mArgc > 1 && !line->ArgHasDeref(2) && *LINE_RAW_ARG2)
 				if (strlen(LINE_RAW_ARG2) > 1 || !strchr("RA", toupper(*LINE_RAW_ARG2)))
-					return ScriptError("Parameter #2 must be either blank, R, A, or a dereferenced variable."
+					return ScriptError("Parameter #2 must be either blank, R, A, or a variable reference."
 						, LINE_RAW_ARG2);
 		break;
 
@@ -2128,7 +2180,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			if (line->ArgHasDeref(1)) // Impossible to know now what type of loop (only at runtime).
 				line->mAttribute = ATTR_LOOP_UNKNOWN;
 			else
-				line->mAttribute = IsPureNumeric(LINE_RAW_ARG1, true) ? ATTR_LOOP_NORMAL : ATTR_LOOP_FILE;
+				line->mAttribute = IsPureNumeric(LINE_RAW_ARG1, false) ? ATTR_LOOP_NORMAL : ATTR_LOOP_FILE;
 			break;
 		default:  // has 2 or more args.
 			line->mAttribute = ATTR_LOOP_FILE;
@@ -2137,7 +2189,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				return ScriptError(ERR_LOOP_FILE_MODE, LINE_RAW_ARG2);
 			if (line->mArgc > 2 && !line->ArgHasDeref(3) && *LINE_RAW_ARG3)
 				if (strlen(LINE_RAW_ARG3) > 1 || (*LINE_RAW_ARG3 != '0' && *LINE_RAW_ARG3 != '1'))
-					return ScriptError("Parameter #3 must be either blank, 0, 1, or a dereferenced variable."
+					return ScriptError("Parameter #3 must be either blank, 0, 1, or a variable reference."
 						, LINE_RAW_ARG3);
 		}
 		break; // Outer switch().
@@ -2369,6 +2421,7 @@ ResultType Script::AddVar(char *aVarName, size_t aVarNameLength)
 	else if (!stricmp(new_name, "a_LoopFileAttrib")) var_type = VAR_LOOPFILEATTRIB;
 	else if (!stricmp(new_name, "a_LoopFileSize")) var_type = VAR_LOOPFILESIZE;
 	else if (!stricmp(new_name, "a_LoopFileSizeKB")) var_type = VAR_LOOPFILESIZEKB;
+	else if (!stricmp(new_name, "a_LoopFileSizeMB")) var_type = VAR_LOOPFILESIZEMB;
 
 	else if (!stricmp(new_name, "a_ThisHotkey")) var_type = VAR_THISHOTKEY;
 	else if (!stricmp(new_name, "a_PriorHotkey")) var_type = VAR_PRIORHOTKEY;
@@ -2443,7 +2496,7 @@ ResultType Script::AddGroup(char *aGroupName)
 
 
 
-Line *Script::PreparseBlocks(Line *aStartingLine, int aFindBlockEnd, Line *aParentLine)
+Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aParentLine)
 // aFindBlockEnd should be true, only when this function is called
 // by itself.  The end of this function relies upon this definition.
 // Will return NULL to the top-level caller if there's an error, or if
@@ -3166,6 +3219,9 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 				switch (line->mArgc)
 				{
 				case 0: attr = ATTR_LOOP_NORMAL; break;
+				// Unlike at loadtime, allow it to be negative at runtime in case it was a variable
+				// reference that resolved to a negative number, to indicate that 0 iterations
+				// should be performed:
 				case 1: attr = IsPureNumeric(LINE_ARG1, true) ? ATTR_LOOP_NORMAL : ATTR_LOOP_FILE; break;
 				default: attr = ATTR_LOOP_FILE; break;  // 2 or more args.
 				}
@@ -3173,11 +3229,11 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 
 			bool recurse_subfolders = (attr == ATTR_LOOP_FILE && *LINE_ARG3 == '1' && !*(LINE_ARG3 + 1));
 
-			int iteration_limit = 0;
+			__int64 iteration_limit = 0;
 			bool is_infinite = line->mArgc < 1;
 			if (!is_infinite)
 				// Must be set to zero for ATTR_LOOP_FILE:
-				iteration_limit = (attr == ATTR_LOOP_FILE) ? 0 : atoi(LINE_ARG1);
+				iteration_limit = (attr == ATTR_LOOP_FILE) ? 0 : _atoi64(LINE_ARG1);
 
 			if (line->mActionType == ACT_REPEAT && !iteration_limit)
 				is_infinite = true;  // Because a 0 means infinite in AutoIt2 for the REPEAT command.
@@ -3350,7 +3406,9 @@ inline ResultType Line::EvaluateCondition()
 		return LineError("EvaluateCondition() was called with a line that isn't a condition."
 			PLEASE_REPORT ERR_ABORT);
 
+	pure_numeric_type var_is_pure_numeric, value_is_pure_numeric;
 	int if_condition;
+
 	switch (mActionType)
 	{
 	// For ACT_IFWINEXIST and ACT_IFWINNOTEXIST, although we validate that at least one
@@ -3386,6 +3444,7 @@ inline ResultType Line::EvaluateCondition()
 	case ACT_IFNOTINSTRING:
 		if_condition = STRING_SEARCH == NULL;
 		break;
+
 	case ACT_IFEQUAL:
 		// For now, these seem to be the best rules to follow:
 		// 1) If either one is non-empty and non-numeric, they're compared as strings.
@@ -3402,43 +3461,69 @@ inline ResultType Line::EvaluateCondition()
 		// the two items will be compared as strings.  UPDATE: Altered it again because it
 		// seems best to consider blanks to always be non-numeric (i.e. if either var is blank,
 		// they will be compared as strings rather than as numbers):
-		#define BOTH_ARE_NUMERIC (*ARG1 && *ARG2 && IsPureNumeric(ARG1, true) && IsPureNumeric(ARG2, true))
 		#define STRING_COMPARE (g.StringCaseSense ? strcmp(ARG1, ARG2) : stricmp(ARG1, ARG2))
-		if (BOTH_ARE_NUMERIC)
-			if_condition = atoi(ARG1) == atoi(ARG2);
-		else
+		#undef DETERMINE_NUMERIC_TYPES
+		#define DETERMINE_NUMERIC_TYPES \
+			value_is_pure_numeric = IsPureNumeric(ARG2, true, false, true);\
+			var_is_pure_numeric = IsPureNumeric(ARG1, true, false, true);
+		#define IF_EITHER_IS_NON_NUMERIC if (!value_is_pure_numeric || !var_is_pure_numeric)
+		#define IF_EITHER_IS_FLOAT if (value_is_pure_numeric == PURE_FLOAT || var_is_pure_numeric == PURE_FLOAT)
+
+		DETERMINE_NUMERIC_TYPES
+		IF_EITHER_IS_NON_NUMERIC
 			if_condition = !STRING_COMPARE;
+		else IF_EITHER_IS_FLOAT  // It might perform better to only do float conversions & math when necessary.
+			if_condition = atof(ARG1) == atof(ARG2);
+		else
+			if_condition = _atoi64(ARG1) == _atoi64(ARG2);
+
 		break;
 	case ACT_IFNOTEQUAL:
-		if (BOTH_ARE_NUMERIC)
-			if_condition = atoi(ARG1) != atoi(ARG2);
-		else
+		DETERMINE_NUMERIC_TYPES
+		IF_EITHER_IS_NON_NUMERIC
 			if_condition = STRING_COMPARE;
+		else IF_EITHER_IS_FLOAT  // It might perform better to only do float conversions & math when necessary.
+			if_condition = atof(ARG1) != atof(ARG2);
+		else
+			if_condition = _atoi64(ARG1) != _atoi64(ARG2);
 		break;
 	case ACT_IFLESS:
-		if (BOTH_ARE_NUMERIC)
-			if_condition = atoi(ARG1) < atoi(ARG2);
-		else
+		DETERMINE_NUMERIC_TYPES
+		IF_EITHER_IS_NON_NUMERIC
 			if_condition = STRING_COMPARE < 0;
+		else IF_EITHER_IS_FLOAT  // It might perform better to only do float conversions & math when necessary.
+			if_condition = atof(ARG1) < atof(ARG2);
+		else
+			if_condition = _atoi64(ARG1) < _atoi64(ARG2);
 		break;
 	case ACT_IFLESSOREQUAL:
-		if (BOTH_ARE_NUMERIC)
-			if_condition = atoi(ARG1) <= atoi(ARG2);
-		else
+		DETERMINE_NUMERIC_TYPES
+		IF_EITHER_IS_NON_NUMERIC
 			if_condition = STRING_COMPARE <= 0;
+		else IF_EITHER_IS_FLOAT  // It might perform better to only do float conversions & math when necessary.
+			if_condition = atof(ARG1) <= atof(ARG2);
+		else
+			if_condition = _atoi64(ARG1) <= _atoi64(ARG2);
 		break;
 	case ACT_IFGREATER:
-		if (BOTH_ARE_NUMERIC)
-			if_condition = atoi(ARG1) > atoi(ARG2);
-		else
+		DETERMINE_NUMERIC_TYPES
+		IF_EITHER_IS_NON_NUMERIC
 			if_condition = STRING_COMPARE > 0;
+		else IF_EITHER_IS_FLOAT  // It might perform better to only do float conversions & math when necessary.
+			if_condition = atof(ARG1) > atof(ARG2);
+		else
+			if_condition = _atoi64(ARG1) > _atoi64(ARG2);
 		break;
 	case ACT_IFGREATEROREQUAL:
-		if (BOTH_ARE_NUMERIC)
-			if_condition = atoi(ARG1) >= atoi(ARG2);
-		else
+		DETERMINE_NUMERIC_TYPES
+		IF_EITHER_IS_NON_NUMERIC
 			if_condition = STRING_COMPARE >= 0;
+		else IF_EITHER_IS_FLOAT  // It might perform better to only do float conversions & math when necessary.
+			if_condition = atof(ARG1) >= atof(ARG2);
+		else
+			if_condition = _atoi64(ARG1) >= _atoi64(ARG2);
 		break;
+
 	case ACT_IFMSGBOX:
 	{
 		int mb_result = ConvertMsgBoxResult(ARG1);
@@ -3458,7 +3543,7 @@ inline ResultType Line::EvaluateCondition()
 ResultType Line::PerformLoop(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrentFile
 	, bool &aContinueMainLoop, Line *&aJumpToLine
 	, AttributeType aAttr, FileLoopModeType aFileLoopMode, bool aRecurseSubfolders, char *aFilePattern
-	, int aIterationLimit, bool aIsInfinite)
+	, __int64 aIterationLimit, bool aIsInfinite)
 // Note: Even if aFilePattern is just a directory (i.e. with not wildcard pattern), it seems best
 // not to append "\\*.*" to it because the pattern might be a script variable that the user wants
 // to conditionally resolve to various things at runtime.  In other words, it's valid to have
@@ -3503,7 +3588,7 @@ ResultType Line::PerformLoop(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrent
 
 	ResultType result;
 	Line *jump_to_line = NULL;
-	for (int i = 0; aIsInfinite || file_found || i < aIterationLimit; ++i)
+	for (__int64 i = 0; aIsInfinite || file_found || i < aIterationLimit; ++i)
 	{
 		// Execute once the body of the loop (either just one statement or a block of statements).
 		// Preparser has ensured that every LOOP has a non-NULL next line.
@@ -3643,9 +3728,10 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	VarSizeType space_needed; // For the commands that assign directly to an output var.
 	ToggleValueType toggle;  // For commands that use on/off/neutral.
 	int x, y;   // For mouse commands.
-	int start_char_num, chars_to_extract;  // For String commands.
+	// Use signed values for these in case they're really given an explicit negative value:
+	int start_char_num, chars_to_extract; // For String commands.
 	size_t source_length; // For String commands.
-	int math_result; // For math operations.
+	pure_numeric_type var_is_pure_numeric, value_is_pure_numeric; // For math operations.
 	vk_type vk; // For mouse commands and GetKeyState.
 	HWND target_window;
 	HANDLE running_process; // For RUNWAIT
@@ -3675,7 +3761,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_WINCLOSE:
 	case ACT_WINKILL:
 	{
-		int wait_time = *ARG3 ? (1000 * atoi(ARG3)) : DEFAULT_WINCLOSE_WAIT;
+		int wait_time = *ARG3 ? (int)(1000 * atof(ARG3)) : DEFAULT_WINCLOSE_WAIT;
 		if (!wait_time) // 0 is defined as 500ms, which seems more useful than a true zero.
 			wait_time = 500;
 		if (WinClose(ARG1, ARG2, wait_time, ARG4, ARG5, mActionType == ACT_WINKILL))
@@ -3703,6 +3789,9 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_SHUTDOWN:
 		return Util_Shutdown(atoi(ARG1)) ? OK : FAIL;
 	case ACT_SLEEP:
+		// Only support 32-bit values for this command, since it seems unlikely anyone would to have
+		// it sleep more than 24.8 days or so.  It also helps performance on 32-bit hardware because
+		// MsgSleep() is so heavily called and checks the value of the first parameter frequently:
 		MsgSleep(atoi(ARG1));
 		return OK;
 	case ACT_ENVSET:
@@ -3758,7 +3847,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			// Since the param containing the timeout value isn't blank, it must be numeric,
 			// otherwise, the loading validation would have prevented the script from loading.
 			wait_indefinitely = false;
-			sleep_duration = atoi(mActionType == ACT_CLIPWAIT ? ARG1 : ARG3) * 1000; // Can be zero.
+			sleep_duration = (int)(atof(mActionType == ACT_CLIPWAIT ? ARG1 : ARG3) * 1000); // Can be zero.
 			if (sleep_duration <= 0)
 				// Waiting 500ms in place of a "0" seems more useful than a true zero, which
 				// doens't need to be supported because it's the same thing as something like
@@ -3849,7 +3938,15 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 				{
 					if (running_process)
 						CloseHandle(running_process);
-					g_ErrorLevel->Assign((int)exit_code); // Use signed vs. unsigned, since that is more typical?
+					// Use signed vs. unsigned, since that is more typical?  No, it seems better
+					// to use unsigned now that script variables store 64-bit ints.  This is because
+					// GetExitCodeProcess() yields a DWORD, implying that the value should be unsigned.
+					// Unsigned also is more useful in cases where an app returns a (potentially large)
+					// count of something as its result.  However, if this is done, it won't be easy
+					// to check against a return value of -1, for example, which I suspect many apps
+					// return.  AutoIt3 (and probably 2) use a signed int as well, so that is another
+					// reason to keep it this way:
+					g_ErrorLevel->Assign((int)exit_code);
 					return OK;
 				}
 				break;
@@ -3970,7 +4067,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_STRINGLEFT:
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
-		chars_to_extract = atoi(ARG3);
+		chars_to_extract = atoi(ARG3); // Use 32-bit signed to detect negatives and fit it VarSizeType.
 		if (chars_to_extract < 0)
 			// For these we don't report an error, since it might be intentional for
 			// it to be called this way, in which case it will do nothing other than
@@ -3985,7 +4082,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_STRINGRIGHT:
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
-		chars_to_extract = atoi(ARG3);
+		chars_to_extract = atoi(ARG3); // Use 32-bit signed to detect negatives and fit it VarSizeType.
 		if (chars_to_extract < 0)
 			chars_to_extract = 0;
 		source_length = strlen(ARG2);
@@ -4002,19 +4099,19 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			// other cases.  The result here is probably enough to speak for itself, for script
 			// debugging purposes:
 			start_char_num = 1; // 1 is the position of the first char, unlike StringGetPos.
-		chars_to_extract = atoi(ARG4);
+		chars_to_extract = atoi(ARG4); // Use 32-bit signed to detect negatives and fit it VarSizeType.
 		if (chars_to_extract < 0)
 			chars_to_extract = 0;
 		// Assign() is capable of doing what we want in this case.
 		// It will display any error that occurs:
-		if (strlen(ARG2) < (size_t)start_char_num)
+		if ((int)strlen(ARG2) < start_char_num)
 			return output_var->Assign();  // Set it to be blank in this case.
 		else
 			return output_var->Assign(ARG2 + start_char_num - 1, chars_to_extract);
 	case ACT_STRINGTRIMLEFT:
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
-		chars_to_extract = atoi(ARG3);
+		chars_to_extract = atoi(ARG3); // Use 32-bit signed to detect negatives and fit it VarSizeType.
 		if (chars_to_extract < 0)
 			chars_to_extract = 0;
 		source_length = strlen(ARG2);
@@ -4024,7 +4121,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_STRINGTRIMRIGHT:
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
-		chars_to_extract = atoi(ARG3);
+		chars_to_extract = atoi(ARG3); // Use 32-bit signed to detect negatives and fit it VarSizeType.
 		if (chars_to_extract < 0)
 			chars_to_extract = 0;
 		source_length = strlen(ARG2);
@@ -4050,7 +4147,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_STRINGLEN:
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
-		return output_var->Assign((int)strlen(ARG2)); // It already displayed any error.
+		return output_var->Assign((__int64)strlen(ARG2)); // It already displayed any error.
 	case ACT_STRINGGETPOS:
 	{
 		if (   !(output_var = ResolveVarOfArg(0))   )
@@ -4186,32 +4283,42 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	{
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
-		int rand_min = *ARG2 ? atoi(ARG2) : 0;
-		int rand_max = *ARG3 ? atoi(ARG3) : INT_MAX;
-		// Seems best not to use ErrorLevel for this command at all, since silly cases
-		// such as Max > Min are too rare.  Swap the two values instead.
-		if (rand_min > rand_max)
+		bool use_float = IsPureNumeric(ARG2, true, false, true) == PURE_FLOAT
+			|| IsPureNumeric(ARG3, true, false, true) == PURE_FLOAT;
+		if (use_float)
 		{
-			int rand_swap = rand_min;
-			rand_min = rand_max;
-			rand_max = rand_swap;
+			double rand_min = *ARG2 ? atof(ARG2) : 0;
+			double rand_max = *ARG3 ? atof(ARG3) : INT_MAX;
+			// Seems best not to use ErrorLevel for this command at all, since silly cases
+			// such as Max > Min are too rare.  Swap the two values instead.
+			if (rand_min > rand_max)
+			{
+				double rand_swap = rand_min;
+				rand_min = rand_max;
+				rand_max = rand_swap;
+			}
+			return output_var->Assign((genrand_real1() * (rand_max - rand_min)) + rand_min);
 		}
-
-		// Adapted from the AutoIt3 source:
-#ifdef _MSC_VER
-		// AutoIt3: __int64 is needed here to do the proper conversion from unsigned long to signed long
-		int our_rand = int(__int64(genrand_int32()%(unsigned long)(rand_max - rand_min + 1)) + rand_min);
-#else
-		// My: Something seems fishy with this part, so if ever compile this on a non-MSC
-		// compiler, might want to review:
-		// AutoIt3: What to do when I do not have __int64
-		// store in double (15 digits of precision will store 10 digit long)
-		// Converting through a double is a lot slow than using __int64
-		double fTemp;
-		fTemp = fmod(genrand_int32(), rand_max - rand_min + 1) + rand_min;
-		int our_rand = int(fTemp);
-#endif
-		return output_var->Assign(our_rand); // It already displayed any error that may have occurred.
+		else // Avoid using floating point, where possible, which may improve speed a lot more than expected.
+		{
+			int rand_min = *ARG2 ? atoi(ARG2) : 0;
+			int rand_max = *ARG3 ? atoi(ARG3) : INT_MAX;
+			// Seems best not to use ErrorLevel for this command at all, since silly cases
+			// such as Max > Min are too rare.  Swap the two values instead.
+			if (rand_min > rand_max)
+			{
+				int rand_swap = rand_min;
+				rand_min = rand_max;
+				rand_max = rand_swap;
+			}
+			// Do NOT use genrand_real1() to generate random integers because of cases like
+			// min=0 and max=1: we want an even distribution of 1's and 0's in that case, not
+			// something skewed that might result due to rounding/truncation issues caused by
+			// the float method used above:
+			// AutoIt3: __int64 is needed here to do the proper conversion from unsigned long to signed long:
+			return output_var->Assign(   (int)(__int64(genrand_int32()
+				% ((__int64)rand_max - rand_min + 1)) + rand_min)   );
+		}
 	}
 
 	case ACT_ASSIGN:
@@ -4282,92 +4389,154 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_ADD:
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
-		if (*ARG3 && strchr("SMHD", toupper(*ARG3))) // the command is being used to add date-time values.
+
+		#undef DETERMINE_NUMERIC_TYPES
+		#define DETERMINE_NUMERIC_TYPES \
+			value_is_pure_numeric = IsPureNumeric(ARG2, true, false, true);\
+			var_is_pure_numeric = IsPureNumeric(output_var->Contents(), true, false, true);
+		#define IF_EITHER_IS_NON_NUMERIC if (!value_is_pure_numeric || !var_is_pure_numeric)
+		#define IF_EITHER_IS_FLOAT if (value_is_pure_numeric == PURE_FLOAT || var_is_pure_numeric == PURE_FLOAT)
+
+		DETERMINE_NUMERIC_TYPES
+
+		if (*ARG3 && strchr("SMHD", toupper(*ARG3))) // the command is being used to add a value to a date-time.
 		{
-			FILETIME ft, ftNowUTC;
-			if (*output_var->Contents())
-				YYYYMMDDToFileTime(output_var->Contents(), &ft);
-			else // The output variable is currently blank, so substitute the current time for it.
+			if (!value_is_pure_numeric) // Adding blank or something non-numeric to a datetime sets var to be blank.
+				return output_var->Assign("");
+			else
 			{
-				GetSystemTimeAsFileTime(&ftNowUTC);
-				FileTimeToLocalFileTime(&ftNowUTC, &ft);  // Convert UTC to local time.
+				// Use double to support a floating point value for days, hours, minutes, etc:
+				double nUnits = atof(ARG2);  // atof() returns a double, at least on MSVC++ 7.x
+				FILETIME ft, ftNowUTC;
+				if (*output_var->Contents())
+				{
+					if (!YYYYMMDDToFileTime(output_var->Contents(), &ft))
+						return output_var->Assign(""); // Set to blank to indicate the problem.
+				}
+				else // The output variable is currently blank, so substitute the current time for it.
+				{
+					GetSystemTimeAsFileTime(&ftNowUTC);
+					FileTimeToLocalFileTime(&ftNowUTC, &ft);  // Convert UTC to local time.
+				}
+				// Convert to 10ths of a microsecond (the units of the FILETIME struct):
+				switch (toupper(*ARG3))
+				{
+				case 'S': // Seconds
+					nUnits *= (double)10000000;
+					break;
+				case 'M': // Minutes
+					nUnits *= ((double)10000000 * 60);
+					break;
+				case 'H': // Hours
+					nUnits *= ((double)10000000 * 60 * 60);
+					break;
+				case 'D': // Days
+					nUnits *= ((double)10000000 * 60 * 60 * 24);
+					break;
+				}
+				// Convert ft struct to a 64-bit variable (maybe there's some way to avoid these conversions):
+				ULARGE_INTEGER ul;
+				ul.LowPart = ft.dwLowDateTime;
+				ul.HighPart = ft.dwHighDateTime;
+				// Add the specified amount of time to the result value:
+				ul.QuadPart += (__int64)nUnits;  // Seems ok to cast/truncate in light of the *=10000000 above.
+				// Convert back into ft struct:
+				ft.dwLowDateTime = ul.LowPart;
+				ft.dwHighDateTime = ul.HighPart;
+				FileTimeToYYYYMMDD(buf_temp, &ft, false);
+				return output_var->Assign(buf_temp);
 			}
-			unsigned __int64 nUnits = PureNumberToInt(ARG2);
-			// Convert to 10ths of a microsecond, which is the units of the FILETIME struct:
-			switch (toupper(*ARG3))
-			{
-			case 'S': // Seconds
-				nUnits *= (unsigned __int64)10000000;
-				break;
-			case 'M': // Minutes
-				nUnits *= ((unsigned __int64)10000000 * 60);
-				break;
-			case 'H': // Hours
-				nUnits *= ((unsigned __int64)10000000 * 60 * 60);
-				break;
-			case 'D': // Days
-				nUnits *= ((unsigned __int64)10000000 * 60 * 60 * 24);
-				break;
-			}
-			// Convert ft struct to a 64-bit variable (maybe there's some way to avoid these conversions):
-			LARGE_INTEGER li;
-			li.LowPart = ft.dwLowDateTime;
-			li.HighPart = ft.dwHighDateTime;
-			// Add the specified amount of time to the result value:
-			li.QuadPart += nUnits;
-			// Convert back into ft struct:
-			ft.dwLowDateTime = li.LowPart;
-			ft.dwHighDateTime = li.HighPart;
-			FileTimeToYYYYMMDD(buf_temp, &ft, false);
 		}
 		else // The command is being used to do normal math (not date-time).
-			sprintf(buf_temp, "%d", PureNumberToInt(output_var->Contents()) + PureNumberToInt(ARG2));
-		output_var->Assign(buf_temp);
-		return OK;
+		{
+			// If either VAR or VALUE is non-numeric, AutoIt2 is documented as setting the variable
+			// to be zero (but it doesn't actually behave this way as of version 2.64).
+			// Due to this AutoIt2 oversight, it seems best to use different behavior: set the var
+			// to be blank so that a legitmately created zero (such as by adding 1 to a variable that
+			// contains -1) can be differentiated from an operation that involved non-numeric
+			// values.  This behavior is used as an easy way to determine whether a variable
+			// contains a pure numeric value (i.e. rather than having a separate command such as
+			// "if IsPureNumber, variable"):
+			IF_EITHER_IS_NON_NUMERIC
+				return output_var->Assign("");
+			else IF_EITHER_IS_FLOAT
+				return output_var->Assign(atof(output_var->Contents()) + atof(ARG2));  // Overload: Assigns a double.
+			else
+				return output_var->Assign(_atoi64(output_var->Contents()) + _atoi64(ARG2));  // Overload: Assigns an int.
+		}
+		return OK;  // Never executed.
 	case ACT_SUB:
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
-		switch (toupper(*ARG3))
+
+		if (*ARG3 && strchr("SMHD", toupper(*ARG3))) // the command is being used to subtract date-time values.
 		{
-		// If ARG2 is blank, it will default to the current time:
-		case 'S': // Seconds
-			math_result = (int)YYYYMMDDSecondsUntil(ARG2, output_var->Contents());
-			break;
-		case 'M': // Minutes
-			math_result = (int)YYYYMMDDSecondsUntil(ARG2, output_var->Contents())/60;
-			break;
-		case 'H': // Hours
-			math_result = (int)YYYYMMDDSecondsUntil(ARG2, output_var->Contents())/(60*60);
-			break;
-		case 'D': // Days
-			math_result = (int)YYYYMMDDSecondsUntil(ARG2, output_var->Contents())/(60*60*24);
-			break;
-		default: // '\0' or ARG3 was a deref that resolved to some illegal value.
-			math_result = PureNumberToInt(output_var->Contents()) - PureNumberToInt(ARG2);
+			bool failed;
+			// If either ARG2 or output_var->Contents() is blank, it will default to the current time:
+			__int64 time_until = YYYYMMDDSecondsUntil(ARG2, output_var->Contents(), failed);
+			if (failed) // Usually caused by an invalid component in the date-time string.
+				return output_var->Assign("");
+			switch (toupper(*ARG3))
+			{
+			// Do nothing in the case of 'S' (seconds).  Otherwise:
+			case 'M': time_until /= 60; break; // Minutes
+			case 'H': time_until /= 60 * 60; break; // Hours
+			case 'D': time_until /= 60 * 60 * 24; break; // Days
+			}
+			// Only now that any division has been performed (to reduce the magnitude of
+			// time_until) do we cast down into an int, which is the standard size
+			// used for non-float results (the result is always non-float for subtraction
+			// of two date-times):
+			return output_var->Assign(time_until); // Assign as signed 64-bit.
+		}
+		else
+		{
+			DETERMINE_NUMERIC_TYPES
+			IF_EITHER_IS_NON_NUMERIC
+				return output_var->Assign("");
+			else IF_EITHER_IS_FLOAT
+				return output_var->Assign(atof(output_var->Contents()) - atof(ARG2));  // Overload: Assigns a double.
+			else
+				return output_var->Assign(_atoi64(output_var->Contents()) - _atoi64(ARG2));  // Overload: Assigns an INT.
 			break;
 		}
-		sprintf(buf_temp, "%d", math_result);
-		output_var->Assign(buf_temp);
-		return OK;
+
+		// If above didn't return, buf_temp now has the value to store:
+		return output_var->Assign(buf_temp);
+
 	case ACT_MULT:
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
-		math_result = PureNumberToInt(output_var->Contents()) * PureNumberToInt(ARG2);
-		sprintf(buf_temp, "%d", math_result);
-		output_var->Assign(buf_temp);
-		return OK;
+		DETERMINE_NUMERIC_TYPES
+		IF_EITHER_IS_NON_NUMERIC
+			return output_var->Assign("");
+		else IF_EITHER_IS_FLOAT
+			return output_var->Assign(atof(output_var->Contents()) * atof(ARG2));  // Overload: Assigns a double.
+		else
+			return output_var->Assign(_atoi64(output_var->Contents()) * _atoi64(ARG2));  // Overload: Assigns an INT.
+
 	case ACT_DIV:
 	{
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
-		int value = PureNumberToInt(ARG2);
-		if (!value)
-			return LineError("This line would attempt to divide by zero (or a value that resolves"
-				" to zero because it's non-numeric)." ERR_ABORT, FAIL, ARG2);
-		math_result = PureNumberToInt(output_var->Contents()) / value;
-		sprintf(buf_temp, "%d", math_result);
-		output_var->Assign(buf_temp);
-		return OK;
+		DETERMINE_NUMERIC_TYPES
+		IF_EITHER_IS_NON_NUMERIC
+			return output_var->Assign("");
+		else IF_EITHER_IS_FLOAT
+		{
+			double ARG2_as_float = atof(ARG2);  // Since atof() returns double, at least on MSVC++ 7.x
+			// It's a little iffy to compare floats this way, but what's the alternative?:
+			if (ARG2_as_float == (double)0.0)
+				return LineError("This line would attempt to divide by zero." ERR_ABORT, FAIL, ARG2);
+			return output_var->Assign(atof(output_var->Contents()) / ARG2_as_float);  // Overload: Assigns a double.
+		}
+		else
+		{
+			__int64 ARG2_as_int = _atoi64(ARG2);
+			if (!ARG2_as_int)
+				return LineError("This line would attempt to divide by zero." ERR_ABORT, FAIL, ARG2);
+			return output_var->Assign(_atoi64(output_var->Contents()) / ARG2_as_int);  // Overload: Assigns an INT.
+		}
 	}
 
 	case ACT_KEYLOG:
@@ -4472,7 +4641,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		// current script subroutine.  For example, if the script contains an IfMsgBox after,
 		// this line, it's result would be unpredictable and might cause the subroutine to perform
 		// the opposite action from what was intended (e.g. Delete vs. don't delete a file).
-		result = (mArgc == 1) ? MsgBox(ARG1) : MsgBox(ARG3, atoi(ARG1), ARG2, atoi(ARG4));
+		result = (mArgc == 1) ? MsgBox(ARG1) : MsgBox(ARG3, atoi(ARG1), ARG2, atof(ARG4));
 		// Above allows backward compatibility with AutoIt2's param ordering while still
 		// permitting the new method of allowing only a single param.
 		if (!result)
@@ -4622,11 +4791,31 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			return OK;
 		}
 		return LineError(ERR_TITLEMATCHMODE2, FAIL, ARG1);
+	case ACT_SETFORMAT:
+	{
+		// For now, it doesn't seem necessary to have runtime validation of the first parameter.
+		// Just ignore the command if it's not valid:
+		if (stricmp(ARG1, "float"))
+			return OK;
+		// -2 to allow room for the letter 'f' and the '%' that will be added:
+		if (strlen(ARG2) >= sizeof(g.FormatFloat) - 2) // A variable that resolved to something too long.
+			return OK; // Seems best not to bother with a runtime error for something so rare.
+		// Make sure the formatted string wouldn't exceed the buffer size:
+		__int64 width = _atoi64(ARG2);
+		char *dot_pos = strchr(ARG2, '.');
+		__int64 precision = dot_pos ? _atoi64(dot_pos + 1) : 0;
+		if (width + precision + 2 > MAX_FORMATTED_NUMBER_LENGTH) // +2 to allow room for decimal point itself and a safety margin.
+			return OK; // Don't change it.
+		sprintf(g.FormatFloat, "%%%sf", ARG2); // Create as "%ARG2f": %f can handle doubles in MSVC++.
+		return OK;
+	}
 	case ACT_SETCONTROLDELAY: g.ControlDelay = atoi(ARG1); return OK;
 	case ACT_SETWINDELAY: g.WinDelay = atoi(ARG1); return OK;
 	case ACT_SETKEYDELAY: g.KeyDelay = atoi(ARG1); return OK;
 	case ACT_SETBATCHLINES:
-		if (   !(g.LinesPerCycle = atoi(ARG1))   )
+		// This value is signed 64-bits to support variable reference (i.e. containing a large int)
+		// the user might throw at it:
+		if (   !(g.LinesPerCycle = _atoi64(ARG1))   )
 			// Don't interpret zero as "infinite" because zero can accidentally
 			// occur if the dereferenced var was blank:
 			g.LinesPerCycle = DEFAULT_BATCH_LINES;
@@ -4829,20 +5018,36 @@ ResultType Line::ExpandArgs()
 		{
 			if (mArgc >= *np) // The arg exists.
 			{
+				// It seems best to always allow floating point, even for commands that expect
+				// an integer.  This is because the user may have done some math on a variable
+				// such as SleepTime, such as dividing it, and thereby winding up with a float.
+				// Rather than forcing the user to truncate SleepTime into an Int, it seems
+				// best just to let atoi() convert the float into an int in these cases.
+				// Note: The above only applies here, at runtime.  Incorrect literal floats are
+				// still flagged as load-time errors:
+				//allow_float = ArgAllowsFloat(*np);
 				allow_negative = ArgAllowsNegative(*np);
-				if (!IsPureNumeric(sArgDeref[*np - 1], allow_negative))
+				if (!IsPureNumeric(sArgDeref[*np - 1], allow_negative, true, true))
 				{
-					if (mActionType == ACT_WINMOVE)
+
+					switch(mActionType)
 					{
+					case ACT_ADD:
+					case ACT_SUB:
+					case ACT_MULT:
+					case ACT_DIV:
+						// Don't report runtime errors for these (only loadtime) because they
+						// indicate failure in a quieter, different way:
+						break;
+					case ACT_WINMOVE:
 						if (stricmp(sArgDeref[*np - 1], "default"))
 							return LineError("This parameter of this line doesn't resolve to either a"
 								" numeric value or the word Default as required.", FAIL, sArgDeref[*np - 1]);
 						// else don't attempt to set the deref to be blank, to make parsing simpler,
 						// because sArgDeref[*np - 1] might point directly to the contents of
 						// a variable and we don't want to modify it in that case.
-					}
-					else
-					{
+						break;
+					default:
 						if (allow_negative)
 							return LineError("This parameter of this line doesn't resolve to a"
 								" numeric value as required.", FAIL, sArgDeref[*np - 1]);

@@ -30,6 +30,8 @@ GNU General Public License for more details.
 // time it's called (currently it can be only called once):
 static bool disguise_next_lwin_up = false;
 static bool disguise_next_rwin_up = false;
+static bool disguise_next_lalt_up = false;
+static bool disguise_next_ralt_up = false;
 static bool alt_tab_menu_is_visible = false;
 
 static HANDLE keybd_hook_mutex = NULL;
@@ -706,7 +708,8 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 			ZeroMemory(g_PhysicalKeyState, sizeof(g_PhysicalKeyState));
 			pPrefixKey = NULL;
 			g_modifiersLR_logical = g_modifiersLR_physical = g_modifiersLR_get = 0;
-			disguise_next_lwin_up = disguise_next_rwin_up = alt_tab_menu_is_visible = false;
+			disguise_next_lwin_up = disguise_next_rwin_up = disguise_next_lalt_up = disguise_next_ralt_up
+				= alt_tab_menu_is_visible = false;
 		}
 		else
 		{

@@ -42,7 +42,7 @@ enum VarTypes
 , VAR_SCRIPTNAME, VAR_SCRIPTDIR, VAR_SCRIPTFULLPATH
 , VAR_LOOPFILENAME, VAR_LOOPFILESHORTNAME, VAR_LOOPFILEDIR, VAR_LOOPFILEFULLPATH
 , VAR_LOOPFILETIMEMODIFIED, VAR_LOOPFILETIMECREATED, VAR_LOOPFILETIMEACCESSED
-, VAR_LOOPFILEATTRIB, VAR_LOOPFILESIZE, VAR_LOOPFILESIZEKB
+, VAR_LOOPFILEATTRIB, VAR_LOOPFILESIZE, VAR_LOOPFILESIZEKB, VAR_LOOPFILESIZEMB
 , VAR_THISHOTKEY, VAR_PRIORHOTKEY, VAR_TIMESINCETHISHOTKEY, VAR_TIMESINCEPRIORHOTKEY
 , VAR_TICKCOUNT
 , VAR_SPACE
@@ -51,8 +51,9 @@ enum VarTypes
 
 typedef UCHAR VarTypeType;     // UCHAR vs. VarTypes to save memory.
 typedef UCHAR AllocMethodType; // UCHAR vs. AllocMethod to save memory.
-typedef UINT VarSizeType;  // Up to 4 gig if sizeof(UINT) is 4.
-#define VARSIZE_MAX UINT_MAX
+typedef DWORD VarSizeType;  // Up to 4 gig if sizeof(UINT) is 4.  See next line.
+#define VARSIZE_MAX MAXDWORD
+#define MAX_FORMATTED_NUMBER_LENGTH 255
 
 class Var
 {
@@ -67,6 +68,8 @@ public:
 	Var *mNextVar;  // Next item in linked list.
 
 	ResultType Assign(int aValueToAssign);
+	ResultType Assign(__int64 aValueToAssign);
+	ResultType Assign(double aValueToAssign);
 	ResultType Assign(char *aBuf = NULL, VarSizeType aLength = VARSIZE_MAX, bool aTrimIt = false);
 	VarSizeType Get(char *aBuf = NULL);
 	static ResultType ValidateName(char *aName);

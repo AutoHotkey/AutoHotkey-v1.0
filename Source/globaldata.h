@@ -102,24 +102,23 @@ extern int g_KeyLogNext;
 extern bool g_KeyLogToFile;
 
 
-inline int GetBatchLines(char *aBuf = NULL)
+inline VarSizeType GetBatchLines(char *aBuf = NULL)
 {
-	char buf[2];  // In case some implementations of snprintf() aren't tolerant of a NULL pointer.
-	return snprintf(aBuf ? aBuf : buf, aBuf ? 999 : 0, "%u", g.LinesPerCycle);
+	char buf[256];
+	char *target_buf = aBuf ? aBuf : buf;
+	ITOA64(g.LinesPerCycle, target_buf);
+	return (VarSizeType)strlen(target_buf);
 }
 
-inline int GetOSType(char *aBuf = NULL)
+inline VarSizeType GetOSType(char *aBuf = NULL)
 {
-	char *type;
-	type = g_os.IsWinNT() ? "WIN32_NT" : "WIN32_WINDOWS";
-	int length = (int)strlen(type);
-	if (!aBuf)
-		return length;
-	strcpy(aBuf, type);
-	return length;
+	char *type = g_os.IsWinNT() ? "WIN32_NT" : "WIN32_WINDOWS";
+	if (aBuf)
+		strcpy(aBuf, type);
+	return (VarSizeType)strlen(type); // Return length of type, not aBuf.
 }
 
-inline int GetOSVersion(char *aBuf = NULL)
+inline VarSizeType GetOSVersion(char *aBuf = NULL)
 // Adapted from AutoIt3 source.
 {
 	char *version;
@@ -147,11 +146,9 @@ inline int GetOSVersion(char *aBuf = NULL)
 				version = "WIN_ME";
 		}
 	}
-	int length = (int)strlen(version);
-	if (!aBuf)
-		return length;
-	strcpy(aBuf, version);
-	return length;
+	if (aBuf)
+		strcpy(aBuf, version);
+	return (VarSizeType)strlen(version); // Always return length of version, not aBuf.
 }
 
 #endif

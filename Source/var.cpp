@@ -24,7 +24,30 @@ ResultType Var::Assign(int aValueToAssign)
 // Returns OK or FAIL.
 {
 	char value_string[256];
-	snprintf(value_string, sizeof(value_string), "%d", aValueToAssign);
+	// ITOA() seems to perform quite a bit better than sprintf() in this case:
+	return Assign(ITOA(aValueToAssign, value_string));
+	//snprintf(value_string, sizeof(value_string), "%d", aValueToAssign);
+	//return Assign(value_string);
+}
+
+
+
+ResultType Var::Assign(__int64 aValueToAssign)
+// Returns OK or FAIL.
+{
+	char value_string[256];
+	return Assign(ITOA64(aValueToAssign, value_string));
+}
+
+
+
+ResultType Var::Assign(double aValueToAssign)
+// It's best to call this method -- rather than manually converting to double -- so that the
+// digits/formatting/precision is consistent throughout the program.
+// Returns OK or FAIL.
+{
+	char value_string[MAX_FORMATTED_NUMBER_LENGTH + 1];
+	snprintf(value_string, sizeof(value_string), g.FormatFloat, aValueToAssign); // "%0.6f"; %f can handle doubles in MSVC++.
 	return Assign(value_string);
 }
 
@@ -241,15 +264,25 @@ VarSizeType Var::Get(char *aBuf)
 	case VAR_NORMAL:
 		if (!mLength) // If the var is empty, check to see if it's really an env. var.
 		{
-			// Calling it twice seems like the safest way, because can't be completely
-			// sure it won't act upon our (possibly undersized) buffer even if it doesn't
-			// find the env. var:
+			// Regardless of whether aBuf is NULL or not, we don't know at this stage
+			// whether mName is the name of a valid environment variable.  Therefore,
+			// GetEnvironmentVariable() is currently called once in the case where
+			// aBuf is NULL and twice in the case where it's not.  There may be some
+			// way to reduce it to one call always, but that is an optimization for
+			// the future.  Another reason: Calling it twice seems safer, because we can't
+			// be completely sure that it wouldn't act up our (possibly undersized) aBuf
+			// buffer even if it doesn't find the env. var:
 			if (   result = GetEnvironmentVariable(mName, buf_temp, sizeof(buf_temp))   )
 			{
 				// This env. var does exist.
 				if (!aBuf)
 					return result - 1;  // since GetEnvironmentVariable() returns total size needed in this case.
-				aBuf += GetEnvironmentVariable(mName, aBuf, (64*1024)); // But OS currently limits size to 32K.
+				// The caller has ensured, probably via previous call to this function with aBuf == NULL,
+				// that aBuf is large enough to hold the result.  Also, don't use a size greater than
+				// 32767 because that may cause it to fail on Win95 (tested by Robert Yalkin).
+				// According to MSDN, 32767 is exactly large enough to handle the largest variable plus
+				// its zero terminator:
+				aBuf += GetEnvironmentVariable(mName, aBuf, 32767);
 				break;
 			}
 			else // No matching env. var.
@@ -346,8 +379,9 @@ VarSizeType Var::Get(char *aBuf)
 	case VAR_LOOPFILETIMECREATED: if (!aBuf) return g_script.GetLoopFileTimeCreated(); else aBuf += g_script.GetLoopFileTimeCreated(aBuf); break;
 	case VAR_LOOPFILETIMEACCESSED: if (!aBuf) return g_script.GetLoopFileTimeAccessed(); else aBuf += g_script.GetLoopFileTimeAccessed(aBuf); break;
 	case VAR_LOOPFILEATTRIB: if (!aBuf) return g_script.GetLoopFileAttrib(); else aBuf += g_script.GetLoopFileAttrib(aBuf); break;
-	case VAR_LOOPFILESIZE: if (!aBuf) return g_script.GetLoopFileSize(); else aBuf += g_script.GetLoopFileSize(aBuf); break;
-	case VAR_LOOPFILESIZEKB: if (!aBuf) return g_script.GetLoopFileSizeKB(); else aBuf += g_script.GetLoopFileSizeKB(aBuf); break;
+	case VAR_LOOPFILESIZE: if (!aBuf) return g_script.GetLoopFileSize(NULL, 0); else aBuf += g_script.GetLoopFileSize(aBuf, 0); break;
+	case VAR_LOOPFILESIZEKB: if (!aBuf) return g_script.GetLoopFileSize(NULL, 1024); else aBuf += g_script.GetLoopFileSize(aBuf, 1024); break;
+	case VAR_LOOPFILESIZEMB: if (!aBuf) return g_script.GetLoopFileSize(NULL, 1024*1024); else aBuf += g_script.GetLoopFileSize(aBuf, 1024*1024); break;
 
 	case VAR_THISHOTKEY: if (!aBuf) return g_script.GetThisHotkey(); else aBuf += g_script.GetThisHotkey(aBuf); break;
 	case VAR_PRIORHOTKEY: if (!aBuf) return g_script.GetPriorHotkey(); else aBuf += g_script.GetPriorHotkey(aBuf); break;

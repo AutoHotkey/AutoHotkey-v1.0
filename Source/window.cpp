@@ -978,7 +978,7 @@ int MsgBox(int aValue)
 
 
 
-int MsgBox(char *aText, UINT uType, char *aTitle, UINT aTimeout)
+int MsgBox(char *aText, UINT uType, char *aTitle, double aTimeout)
 // Returns FAIL if the attempt failed because of too many existing MessageBox windows,
 // or if MessageBox() itself failed.
 {

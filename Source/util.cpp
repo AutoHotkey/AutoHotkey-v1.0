@@ -55,7 +55,7 @@ ResultType YYYYMMDDToFileTime(char *aYYYYMMDD, FILETIME *pftDateTime)
 	int nAssigned = sscanf(aYYYYMMDD, "%4d%2d%2d%2d%2d%2d", &st.wYear, &st.wMonth, &st.wDay
 		, &st.wHour, &st.wMinute, &st.wSecond);
 
-	switch (nAssigned)
+	switch (nAssigned) // Supply default values for those components entirely omitted.
 	{
 	case 0: return FAIL;
 	case 1: st.wMonth = 1; // None of these cases does a "break", they just fall through to set default values.
@@ -65,12 +65,10 @@ ResultType YYYYMMDDToFileTime(char *aYYYYMMDD, FILETIME *pftDateTime)
 	case 5: st.wSecond = 0;
 	}
 
-	if (!st.wMonth)
-		st.wMonth = 1;
-	if (!st.wDay)
-		st.wDay = 1;
-	if (!st.wHour)
 	st.wMilliseconds = 0;
+
+	// This will return failure if aYYYYMMDD contained any invalid elements, such as an
+	// explicit zero for the day of the month:
 	if (!SystemTimeToFileTime(&st, pftDateTime)) // The wDayOfWeek member of the <st> structure is ignored.
 		return FAIL;
 	return OK;
@@ -96,26 +94,11 @@ char *FileTimeToYYYYMMDD(char *aYYYYMMDD, FILETIME *pftDateTime, bool aConvertTo
 
 
 
-unsigned __int64 FileTimeSecondsUntil(FILETIME *pftStart, FILETIME *pftEnd)
-// Returns the number of seconds from pftStart until pftEnd.
-{
-	if (!pftStart || !pftEnd) return 0;
-
-	// The calculation is done this way for compilers that don't support 64-bit math operations (not sure which):
-	LARGE_INTEGER liStart, liEnd;
-	liStart.LowPart = pftStart->dwLowDateTime;
-	liStart.HighPart = pftStart->dwHighDateTime;
-	liEnd.LowPart = pftEnd->dwLowDateTime;
-	liEnd.HighPart = pftEnd->dwHighDateTime;
-	return (liEnd.QuadPart - liStart.QuadPart) / 10000000; // Convert from tenths-of-microsecond.
-}
-
-
-
-unsigned __int64 YYYYMMDDSecondsUntil(char *aYYYYMMDDStart, char *aYYYYMMDDEnd)
+__int64 YYYYMMDDSecondsUntil(char *aYYYYMMDDStart, char *aYYYYMMDDEnd, bool &aFailed)
 // Returns the number of seconds from aYYYYMMDDStart until aYYYYMMDDEnd.
 // If aYYYYMMDDStart is blank, the current time will be used in its place.
 {
+	aFailed = true;  // Set default for output parameter, in case of early return.
 	if (!aYYYYMMDDStart || !aYYYYMMDDEnd) return 0;
 
 	FILETIME ftStart, ftEnd, ftNowUTC;
@@ -140,7 +123,24 @@ unsigned __int64 YYYYMMDDSecondsUntil(char *aYYYYMMDDStart, char *aYYYYMMDDEnd)
 		GetSystemTimeAsFileTime(&ftNowUTC);
 		FileTimeToLocalFileTime(&ftNowUTC, &ftEnd);  // Convert UTC to local time.
 	}
+	aFailed = false;  // Indicate success.
 	return FileTimeSecondsUntil(&ftStart, &ftEnd);
+}
+
+
+
+__int64 FileTimeSecondsUntil(FILETIME *pftStart, FILETIME *pftEnd)
+// Returns the number of seconds from pftStart until pftEnd.
+{
+	if (!pftStart || !pftEnd) return 0;
+
+	// The calculation is done this way for compilers that don't support 64-bit math operations (not sure which):
+	ULARGE_INTEGER uiStart, uiEnd;
+	uiStart.LowPart = pftStart->dwLowDateTime;
+	uiStart.HighPart = pftStart->dwHighDateTime;
+	uiEnd.LowPart = pftEnd->dwLowDateTime;
+	uiEnd.HighPart = pftEnd->dwHighDateTime;
+	return (__int64)((uiEnd.QuadPart - uiStart.QuadPart) / 10000000); // Convert from tenths-of-microsecond.
 }
 
 
@@ -148,14 +148,14 @@ unsigned __int64 YYYYMMDDSecondsUntil(char *aYYYYMMDDStart, char *aYYYYMMDDEnd)
 unsigned __int64 GetFileSize64(HANDLE aFileHandle)
 // Code adapted from someone's on the Usenet.
 {
-    ULARGE_INTEGER ul = {0};
-    ul.LowPart = GetFileSize(aFileHandle, &ul.HighPart);
-    if(ul.LowPart == 0xFFFFFFFF && GetLastError() != NO_ERROR)
+    ULARGE_INTEGER ui = {0};
+    ui.LowPart = GetFileSize(aFileHandle, &ui.HighPart);
+    if(ui.LowPart == MAXDWORD && GetLastError() != NO_ERROR)
     {
         // the caller should use GetLastError() to test for error
-        return 0xFFFFFFFFFFFFFFFF;
+        return ULLONG_MAX;
     }
-    return (unsigned __int64)ul.QuadPart;
+    return (unsigned __int64)ui.QuadPart;
 }
 
 
@@ -341,58 +341,6 @@ char *StrReplaceAll(char *Str, char *OldStr, char *NewStr, bool aCaseSensitive)
 }
 
 
-/*
-int os_is_windows9x()
-{
-	OSVERSIONINFO osvi;
-	ZeroMemory(&osvi, sizeof(OSVERSIONINFO));
-	osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFO);
-	if (!GetVersionEx(&osvi))
-		// Safer to assume true on failure, and this can also indicate a failure code if caller wants:
-		return -1;
-	return (osvi.dwPlatformId == VER_PLATFORM_WIN32_WINDOWS) ? 1 : 0;
-}
-*/
-
-/*
-void DisplayError (DWORD Error)
-// Seems safer to have the caller send LastError to us, just in case any of the strange calls
-// here ever wipe out the value of LastError before we would be able to properly use it.
-{
-	LPVOID lpMsgBuf;
-	if (   !FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM
-		, NULL, Error, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), // Default language
-		(LPTSTR) &lpMsgBuf,	0, NULL)   )
-		return;
-	// Display the string.  Uses NULL HWND for the first param, for now.
-	MessageBox(NULL, (char *)lpMsgBuf, "Error", MB_OK | MB_ICONINFORMATION | MB_SYSTEMMODAL | MB_SETFOREGROUND);
-	// Free the buffer.
-	LocalFree(lpMsgBuf);
-}
-*/
-
-/*
-UINT FileTimeTenthsOfSecondUntil (FILETIME *pftStart, FILETIME *pftEnd)
-// Returns the number of tenths of a second from pftStart until pftEnd.
-// It will return a negative if pftStart is after pftEnd.
-// One of the reasons for deci rather than milli is that an UINT (32-bit) can
-// only handle about 49 days worth of milliseconds.  So if the difference is greater than
-// that, it would be truncated.  I'm not sure which compilers can support long ints or
-// long long ints that are greater than 32-bits in size.
-{
-	if (!pftStart || !pftEnd) return 0;
-
-	// The calculation is done this way for compilers that don't support 64-bit math operations (not sure which):
-	LARGE_INTEGER liStart, liEnd;
-	liStart.LowPart = pftStart->dwLowDateTime;
-	liStart.HighPart = pftStart->dwHighDateTime;
-	liEnd.LowPart = pftEnd->dwLowDateTime;
-	liEnd.HighPart = pftEnd->dwHighDateTime;
-	if ((liEnd.QuadPart - liStart.QuadPart) / 1000000 > 0xFFFFFFFF)
-		return 0xFFFFFFFF;
-	return (UINT)((liEnd.QuadPart - liStart.QuadPart) / 1000000); // Convert from tenths-of-microsecond.
-}
-*/
 
 bool DoesFilePatternExist(char *aFilePattern)
 {

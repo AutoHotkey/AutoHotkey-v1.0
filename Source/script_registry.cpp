@@ -119,7 +119,35 @@ ResultType Line::RegRead(char *aRegKey, char *aRegSubkey, char *aValueName)
 			RegQueryValueEx(hRegKey, aValueName, NULL, NULL, (LPBYTE)&dwBuf, &dwRes);
 			RegCloseKey(hRegKey);
 			g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-			return output_var->Assign((int)dwBuf);
+			return output_var->Assign((__int64)dwBuf);
+
+		case REG_BINARY:
+		{
+			dwRes = sizeof(szRegBuffer);
+			RegQueryValueEx(hRegKey, aValueName, NULL, NULL, (LPBYTE)szRegBuffer, &dwRes);
+
+			// Set up the variable to receive the contents, enlarging it if necessary.
+			// AutoIt3: Each byte will turned into 2 digits, plus a final null:
+			if (output_var->Assign(NULL, (VarSizeType)(dwRes * 2)) != OK)
+				return FAIL;
+			char *buf = output_var->Contents();
+			*buf = '\0';
+
+			int j = 0;
+			DWORD i, n; // i and n must be unsigned to work
+			char szHexData[] = "0123456789ABCDEF";  // Access to local vars might be faster than static ones.
+			for (i = 0; i < dwRes; ++i)
+			{
+				n = szRegBuffer[i];				// Get the value and convert to 2 digit hex
+				buf[j + 1] = szHexData[n % 16];
+				n /= 16;
+				buf[j] = szHexData[n % 16];
+				j += 2;
+			}
+			buf[j] = '\0';					// Terminate
+			return output_var->Close();  // In case it's the clipboard.
+			break;
+		}
 	}
 
 	// Since above didn't return, this is an unsupported value type.
@@ -178,7 +206,51 @@ ResultType Line::RegWrite(char *aValueType, char *aRegKey, char *aRegSubkey, cha
 		return OK;
 	}
 
-	// If we reached here then the requested type was not known
+	// REG_BINARY - eeek
+	if (!stricmp(aValueType, "REG_BINARY"))
+	{
+		int nLen = (int)strlen(aValue);
+
+		// Stringlength must be a multiple of 2 
+		if (nLen % 2)
+		{
+			RegCloseKey(hRegKey);
+			return OK;  // Let ErrorLevel tell the story.
+		}
+
+		// Really crappy hex conversion
+		int j = 0, i = 0, nVal, nMult;
+		while (i < nLen && j < sizeof(szRegBuffer))
+		{
+			nVal = 0;
+			for (nMult = 16; nMult >= 0; nMult = nMult - 15)
+			{
+				if (aValue[i] >= '0' && aValue[i] <= '9')
+					nVal += (aValue[i] - '0') * nMult;
+				else if (aValue[i] >= 'A' && aValue[i] <= 'F')
+					nVal += (((aValue[i] - 'A'))+10) * nMult;
+				else if (aValue[i] >= 'a' && aValue[i] <= 'f')
+					nVal += (((aValue[i] - 'a'))+10) * nMult;
+				else
+				{
+					RegCloseKey(hRegKey);
+					return OK;  // Let ErrorLevel tell the story.
+				}
+				++i;
+			}
+			szRegBuffer[j++] = (char)nVal;
+		}
+
+		if (RegSetValueEx(hRegKey, aValueName, 0, REG_BINARY, (CONST BYTE *)szRegBuffer, (DWORD)j) == ERROR_SUCCESS)
+			g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+		// else keep the default failure value for ErrorLevel
+	
+		RegCloseKey(hRegKey);
+		return OK;
+	}
+
+	// If we reached here then the requested type was not known.
+	// Let ErrorLevel tell the story.
 	RegCloseKey(hRegKey);
 	return OK;
 } // RegWrite()

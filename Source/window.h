@@ -129,7 +129,7 @@ BOOL CALLBACK EnumControlFind(HWND aWnd, LPARAM lParam);
 #define MSGBOX_TEXT_SIZE (1024 * 8)
 #define DIALOG_TITLE_SIZE 1024
 int MsgBox(int aValue);
-int MsgBox(char *aText = "", UINT uType = MSGBOX_NORMAL, char *aTitle = NULL, UINT aTimeout = 0);
+int MsgBox(char *aText = "", UINT uType = MSGBOX_NORMAL, char *aTitle = NULL, double aTimeout = 0);
 HWND WinActivateOurTopDialog();
 BOOL CALLBACK EnumDialog(HWND hwnd, LPARAM lParam);
 

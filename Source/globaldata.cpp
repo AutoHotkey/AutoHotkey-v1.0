@@ -112,7 +112,8 @@ sc2_type g_vk_to_sc[VK_MAX + 1] = {{0}};
 //    not zero).  That subarray should be terminated with an explicit zero to be safe and
 //    so that the compiler will complain if the sub-array size needs to be increased to
 //    accommodate all the elements in the new sub-array, including room for it's 0 terminator.
-//    If any of the numeric params allow negative values, add an entry to ArgAllowsNegative().
+//    If any of the numeric params allow negative or float values, add an entries to
+//    ArgAllowsNegative() and ArgAllowsFloat().
 //    If any of the params are mandatory (can't be blank), add an entry to CheckForMandatoryArgs().
 //    Note: If you use a value for MinParams than is greater than zero, remember than any params
 //    beneath that threshold will also be required to be non-blank (i.e. user can't omit them even
@@ -286,15 +287,17 @@ Action g_act[] =
 	, {"IniWrite", 4, 4, NULL}  // Value, Filespec, Section, Key
 	, {"IniDelete", 3, 3, NULL} // Filespec, Section, Key
 
-	, {"RegRead", 1, 5, NULL} // output var, ValueType (optional), RegKey, RegSubkey, ValueName
+	, {"RegRead", 1, 5, NULL} // output var, (ValueType [optional]), RegKey, RegSubkey, ValueName
 	, {"RegWrite", 4, 5, NULL} // ValueType, RegKey, RegSubKey, ValueName, Value (set to blank if omitted?)
 	, {"RegDelete", 2, 3, NULL} // RegKey, RegSubKey, ValueName
 
-	, {"SetTitleMatchMode", 1, 1, NULL} // Allowed values: 1, 2, slow, fast
 	, {"SetKeyDelay", 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)
 	, {"SetWinDelay", 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)
 	, {"SetControlDelay", 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)
 	, {"SetBatchLines", 1, 1, {1, 0}} // Number of script lines to execute before sleeping.
+	, {"SetTitleMatchMode", 1, 1, NULL} // Allowed values: 1, 2, slow, fast
+	, {"SetFormat", 1, 2, {2, 0}} // OptionName, FormatString
+
 	, {"Suspend", 0, 1, NULL} // On/Off/Toggle/Permit/Blank (blank is the same as toggle)
 	, {"Pause", 0, 1, NULL} // On/Off/Toggle/Blank (blank is the same as toggle)
 	, {"AutoTrim", 1, 1, NULL} // On/Off

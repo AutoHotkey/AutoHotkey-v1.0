@@ -102,7 +102,8 @@ enum enum_act {
 , ACT_FILESELECTFILE, ACT_FILESELECTFOLDER
 , ACT_INIREAD, ACT_INIWRITE, ACT_INIDELETE
 , ACT_REGREAD, ACT_REGWRITE, ACT_REGDELETE
-, ACT_SETTITLEMATCHMODE, ACT_SETKEYDELAY, ACT_SETWINDELAY, ACT_SETCONTROLDELAY, ACT_SETBATCHLINES
+, ACT_SETKEYDELAY, ACT_SETWINDELAY, ACT_SETCONTROLDELAY, ACT_SETBATCHLINES
+, ACT_SETTITLEMATCHMODE, ACT_SETFORMAT
 , ACT_SUSPEND, ACT_PAUSE
 , ACT_AUTOTRIM, ACT_STRINGCASESENSE, ACT_DETECTHIDDENWINDOWS, ACT_DETECTHIDDENTEXT
 , ACT_SETNUMLOCKSTATE, ACT_SETSCROLLLOCKSTATE, ACT_SETCAPSLOCKSTATE, ACT_SETSTORECAPSLOCKMODE
@@ -136,28 +137,31 @@ enum enum_act_old {
 #define ERR_ABORT "  The current hotkey subroutine (or the entire script if"\
 	" this isn't a hotkey subroutine) will be aborted."
 #define WILL_EXIT "The program will exit."
-#define OLD_STILL_IN_EFFECT "The new config file was not loaded; the old config will remain in effect."
+#define OLD_STILL_IN_EFFECT "The script was not reloaded; the old version will remain in effect."
 #define PLEASE_REPORT "  Please report this as a bug."
 #define ERR_UNRECOGNIZED_ACTION "This line does not contain a recognized action."
 #define ERR_MISSING_OUTPUT_VAR "This command requires that at least one of its output variables be provided."
 #define ERR_ELSE_WITH_NO_IF "This ELSE doesn't appear to belong to any IF-statement."
 #define ERR_GROUPADD_LABEL "The target label in parameter #4 does not exist."
 #define ERR_WINDOW_PARAM "This command requires that at least one of its window parameters be non-blank."
-#define ERR_LOOP_FILE_MODE "If not blank, parameter #2 must be either 0, 1, 2, or a dereferenced variable."
-#define ERR_ON_OFF "If not blank, the value must be either ON, OFF, or a dereferenced variable."
-#define ERR_ON_OFF_ALWAYS "If not blank, the value must be either ON, OFF, ALWAYSON, ALWAYSOFF, or a dereferenced variable."
-#define ERR_ON_OFF_TOGGLE "If not blank, the value must be either ON, OFF, TOGGLE, or a dereferenced variable."
-#define ERR_ON_OFF_TOGGLE_PERMIT "If not blank, the value must be either ON, OFF, TOGGLE, PERMIT, or a dereferenced variable."
-#define ERR_TITLEMATCHMODE "TitleMatchMode must be either 1, 2, slow, fast, or a dereferenced variable."
+#define ERR_LOOP_FILE_MODE "If not blank, parameter #2 must be either 0, 1, 2, or a variable reference."
+#define ERR_ON_OFF "If not blank, the value must be either ON, OFF, or a variable reference."
+#define ERR_ON_OFF_ALWAYS "If not blank, the value must be either ON, OFF, ALWAYSON, ALWAYSOFF, or a variable reference."
+#define ERR_ON_OFF_TOGGLE "If not blank, the value must be either ON, OFF, TOGGLE, or a variable reference."
+#define ERR_ON_OFF_TOGGLE_PERMIT "If not blank, the value must be either ON, OFF, TOGGLE, PERMIT, or a variable reference."
+#define ERR_TITLEMATCHMODE "TitleMatchMode must be either 1, 2, slow, fast, or a variable reference."
 #define ERR_TITLEMATCHMODE2 "The variable does not contain a valid TitleMatchMode (the value must be either 1, 2, slow, or fast)." ERR_ABORT
 #define ERR_IFMSGBOX "This line specifies an invalid MsgBox result."
-#define ERR_RUN_SHOW_MODE "The 3rd parameter must be either blank or one of these words: min, max, hide."
-#define ERR_COMPARE_TIMES "Parameter #3 must be either blank, Seconds, Minutes, Hours, Days, or a dereferenced variable."
-#define ERR_FILE_TIME "Parameter #3 must be either blank, M, C, A, or a dereferenced variable."
+#define ERR_REG_KEY "The key name must be either HKEY_LOCAL_MACHINE, HKEY_USERS, HKEY_CURRENT_USER, HKEY_CLASSES_ROOT, or HKEY_CURRENT_CONFIG."
+#define ERR_REG_VALUE_TYPE "The value type must be either REG_SZ, REG_EXPAND_SZ, REG_DWORD, or REG_BINARY."
+#define ERR_RUN_SHOW_MODE "Parameter #3 must be either blank or one of these words: min, max, hide."
+#define ERR_COMPARE_TIMES "Parameter #3 must be either blank, Seconds, Minutes, Hours, Days, or a variable reference."
+#define ERR_INVALID_DATETIME "This date-time string contains at least one invalid component."
+#define ERR_FILE_TIME "Parameter #3 must be either blank, M, C, A, or a variable reference."
 #define ERR_MOUSE_BUTTON "This line specifies an invalid mouse button."
 #define ERR_MOUSE_COORD "The X & Y coordinates must be either both absent or both present."
-#define ERR_PERCENT "The parameter must be a percentage between 0 and 100, or a dereferenced variable."
-#define ERR_MOUSE_SPEED "The Mouse Speed must be a number between 0 and " MAX_MOUSE_SPEED_STR ", blank, or a dereferenced variable."
+#define ERR_PERCENT "The parameter must be a percentage between 0 and 100, or a variable reference."
+#define ERR_MOUSE_SPEED "The Mouse Speed must be a number between 0 and " MAX_MOUSE_SPEED_STR ", blank, or a variable reference."
 #define ERR_MEM_ASSIGN "Out of memory while assigning to this variable." ERR_ABORT
 #define ERR_VAR_IS_RESERVED "This variable is reserved and cannot be assigned to."
 #define ERR_DEFINE_CHAR "The character being defined must not be identical to another special or reserved character."
@@ -229,7 +233,7 @@ private:
 	ResultType PerformLoop(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrentFile
 		, bool &aContinueMainLoop, Line *&aJumpToLine
 		, AttributeType aAttr, FileLoopModeType aFileLoopMode, bool aRecurseSubfolders, char *aFilePattern
-		, int aIterationLimit, bool aIsInfinite);
+		, __int64 aIterationLimit, bool aIsInfinite);
 	ResultType Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurrentFile = NULL);
 	ResultType PerformAssign();
 	ResultType DriveSpaceFree(char *aPath);
@@ -477,6 +481,7 @@ public:
 		case ACT_SETWINDELAY:
 		case ACT_SETCONTROLDELAY:
 		case ACT_SETBATCHLINES:
+		case ACT_SETFORMAT:
 		case ACT_RANDOM:
 		case ACT_WINMOVE:
 			return true;
@@ -491,6 +496,38 @@ public:
 			return (aArgNum == 2 || aArgNum == 3);
 		case ACT_PIXELSEARCH:
 			return (aArgNum >= 3 || aArgNum <= 7); // i.e. Color values can be negative, but the last param cannot.
+		}
+		return false;  // Since above didn't return, negative is not allowed.
+	}
+
+	bool ArgAllowsFloat(int aArgNum)
+	// aArgNum starts at 1 (for the first arg), so zero is invalid.
+	{
+		if (!aArgNum)
+		{
+			LineError("ArgAllowsFloat() called with a zero (bad habit to get into).");
+			++aArgNum;  // But let it continue.
+		}
+		switch(mActionType)
+		{
+		case ACT_RANDOM:
+		case ACT_MSGBOX:
+		case ACT_WINCLOSE:
+		case ACT_WINKILL:
+		case ACT_WINWAIT:
+		case ACT_WINWAITCLOSE:
+		case ACT_WINWAITACTIVE:
+		case ACT_WINWAITNOTACTIVE:
+		case ACT_STATUSBARWAIT:
+		case ACT_CLIPWAIT:
+		case ACT_SETFORMAT:
+		// For these, allow even the variable (the first arg) to to be a float so that
+		// the runtime checks won't catch it as an error:
+		case ACT_ADD:
+		case ACT_SUB:
+		case ACT_MULT:
+		case ACT_DIV:
+			return true;
 		}
 		return false;  // Since above didn't return, negative is not allowed.
 	}
@@ -607,6 +644,25 @@ public:
 		return FAIL; // Otherwise, one is blank but the other isn't, which is not allowed.
 	}
 
+	static ResultType ValidateRegKey(char *aKeyName)
+	{
+		if (!stricmp(aKeyName, "HKEY_LOCAL_MACHINE")) return OK;
+		if (!stricmp(aKeyName, "HKEY_USERS")) return OK;
+		if (!stricmp(aKeyName, "HKEY_CURRENT_USER")) return OK;
+		if (!stricmp(aKeyName, "HKEY_CLASSES_ROOT")) return OK;
+		if (!stricmp(aKeyName, "HKEY_CURRENT_CONFIG")) return OK;
+		return FAIL;
+	}
+
+	static ResultType ValidateRegValueType(char *aValueType)
+	{
+		if (!stricmp(aValueType, "REG_SZ")) return OK;
+		if (!stricmp(aValueType, "REG_EXPAND_SZ")) return OK;
+		if (!stricmp(aValueType, "REG_DWORD")) return OK;
+		if (!stricmp(aValueType, "REG_BINARY")) return OK;
+		return FAIL;
+	}
+
 	void Log()
 	{
 		// Probably doesn't need to be thread-safe or recursion-safe?
@@ -694,7 +750,7 @@ private:
 	// if aStartingLine is allowed to be NULL (for recursive calls).  If they
 	// were member functions of class Line, a check for NULL would have to
 	// be done before dereferencing any line's mNextLine, for example:
-	Line *PreparseBlocks(Line *aStartingLine, int aFindBlockEnd = 0, Line *aParentLine = NULL);
+	Line *PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd = false, Line *aParentLine = NULL);
 	Line *PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode = NORMAL_MODE
 		, AttributeType aLoopType = ATTR_NONE);
 public:
@@ -710,7 +766,7 @@ public:
 	bool mIsReadyToExecute;
 	bool mIsRestart; // The app is restarting rather than starting from scratch.
 	bool mIsAutoIt2; // Whether this script is considered to be an AutoIt2 script.
-	LineNumberType mLinesExecutedThisCycle; // Not tracking this separately for every recursed subroutine.
+	__int64 mLinesExecutedThisCycle; // Use 64-bit to match the type of g.LinesPerCycle
 	DWORD mLastSleepTime; // Track MsgSleep() from any and all sources to pump messages more consistently.
 
 	ResultType Init(char *aScriptFilename, bool aIsRestart);
@@ -737,32 +793,26 @@ public:
 		, bool aDisplayErrors = true, char *aRunShowMode = NULL, HANDLE *aProcess = NULL);
 	char *ListVars(char *aBuf, size_t aBufSize);
 
-	int GetFilename(char *aBuf = NULL)
+	VarSizeType GetFilename(char *aBuf = NULL)
 	{
-		VarSizeType length = (VarSizeType)strlen(mFileName);
-		if (!aBuf) return length;
-		strcpy(aBuf, mFileName);
-		aBuf += length;
-		return length;
+		if (aBuf)
+			strcpy(aBuf, mFileName);
+		return (VarSizeType)strlen(mFileName);
 	}
-	int GetFileDir(char *aBuf = NULL)
+	VarSizeType GetFileDir(char *aBuf = NULL)
 	{
-		VarSizeType length = (VarSizeType)strlen(mFileDir);
-		if (!aBuf) return length;
-		strcpy(aBuf, mFileDir);
-		aBuf += length;
-		return length;
+		if (aBuf)
+			strcpy(aBuf, mFileDir);
+		return (VarSizeType)strlen(mFileDir);
 	}
-	int GetFilespec(char *aBuf = NULL)
+	VarSizeType GetFilespec(char *aBuf = NULL)
 	{
-		VarSizeType length = (VarSizeType)(strlen(mFileDir) + strlen(mFileName) + 1);
-		if (!aBuf) return length;
-		sprintf(aBuf, "%s\\%s", mFileDir, mFileName);
-		aBuf += length;
-		return length;
+		if (aBuf)
+			sprintf(aBuf, "%s\\%s", mFileDir, mFileName);
+		return (VarSizeType)(strlen(mFileDir) + strlen(mFileName) + 1);
 	}
 
-	int GetLoopFileName(char *aBuf = NULL)
+	VarSizeType GetLoopFileName(char *aBuf = NULL)
 	{
 		char *str = "";  // Set default.
 		if (mLoopFile)
@@ -773,13 +823,11 @@ public:
 			else // No backslash, so just make it the entire file name.
 				str = mLoopFile->cFileName;
 		}
-		VarSizeType length = (VarSizeType)strlen(str);
-		if (!aBuf) return length;
-		strcpy(aBuf, str);
-		aBuf += length;
-		return length;
+		if (aBuf)
+			strcpy(aBuf, str);
+		return (VarSizeType)strlen(str);
 	}
-	int GetLoopFileShortName(char *aBuf = NULL)
+	VarSizeType GetLoopFileShortName(char *aBuf = NULL)
 	{
 		char *str = "";  // Set default.
 		if (mLoopFile)
@@ -790,13 +838,11 @@ public:
 				// also happen if NTFS has short-name generation disabled?)
 				return GetLoopFileName(aBuf);
 		}
-		VarSizeType length = (VarSizeType)strlen(str);
-		if (!aBuf) return length;
-		strcpy(aBuf, str);
-		aBuf += length;
-		return length;
+		if (aBuf)
+			strcpy(aBuf, str);
+		return (VarSizeType)strlen(str);
 	}
-	int GetLoopFileDir(char *aBuf = NULL)
+	VarSizeType GetLoopFileDir(char *aBuf = NULL)
 	{
 		char *str = "";  // Set default.
 		char *last_backslash = NULL;
@@ -815,125 +861,98 @@ public:
 			return length;
 		}
 		strcpy(aBuf, str);
-		aBuf += length;
 		if (last_backslash)
 			*last_backslash = '\\';  // Restore the orginal value.
 		return length;
 	}
-	int GetLoopFileFullPath(char *aBuf = NULL)
+	VarSizeType GetLoopFileFullPath(char *aBuf = NULL)
 	{
 		char *str = "";  // Set default.
 		if (mLoopFile)
 			// The loop handler already prepended the script's directory in here for us:
 			str = mLoopFile->cFileName;
-		VarSizeType length = (VarSizeType)strlen(str);
-		if (!aBuf) return length;
-		strcpy(aBuf, str);
-		aBuf += length;
-		return length;
+		if (aBuf)
+			strcpy(aBuf, str);
+		return (VarSizeType)strlen(str);
 	}
-	int GetLoopFileTimeModified(char *aBuf = NULL)
+	VarSizeType GetLoopFileTimeModified(char *aBuf = NULL)
 	{
 		char str[64] = "";  // Set default.
 		if (mLoopFile)
 			FileTimeToYYYYMMDD(str, &mLoopFile->ftLastWriteTime, true);
-		VarSizeType length = (VarSizeType)strlen(str);
-		if (!aBuf) return length;
-		strcpy(aBuf, str);
-		aBuf += length;
-		return length;
+		if (aBuf)
+			strcpy(aBuf, str);
+		return (VarSizeType)strlen(str);
 	}
-	int GetLoopFileTimeCreated(char *aBuf = NULL)
+	VarSizeType GetLoopFileTimeCreated(char *aBuf = NULL)
 	{
 		char str[64] = "";  // Set default.
 		if (mLoopFile)
 			FileTimeToYYYYMMDD(str, &mLoopFile->ftCreationTime, true);
-		VarSizeType length = (VarSizeType)strlen(str);
-		if (!aBuf) return length;
-		strcpy(aBuf, str);
-		aBuf += length;
-		return length;
+		if (aBuf)
+			strcpy(aBuf, str);
+		return (VarSizeType)strlen(str);
 	}
-	int GetLoopFileTimeAccessed(char *aBuf = NULL)
+	VarSizeType GetLoopFileTimeAccessed(char *aBuf = NULL)
 	{
 		char str[64] = "";  // Set default.
 		if (mLoopFile)
 			FileTimeToYYYYMMDD(str, &mLoopFile->ftLastAccessTime, true);
-		VarSizeType length = (VarSizeType)strlen(str);
-		if (!aBuf) return length;
-		strcpy(aBuf, str);
-		aBuf += length;
-		return length;
+		if (aBuf)
+			strcpy(aBuf, str);
+		return (VarSizeType)strlen(str);
 	}
-	int GetLoopFileAttrib(char *aBuf = NULL)
+	VarSizeType GetLoopFileAttrib(char *aBuf = NULL)
 	{
 		char str[64] = "";  // Set default.
 		if (mLoopFile)
 			FileAttribToStr(str, mLoopFile->dwFileAttributes);
-		VarSizeType length = (VarSizeType)strlen(str);
-		if (!aBuf) return length;
-		strcpy(aBuf, str);
-		aBuf += length;
-		return length;
+		if (aBuf)
+			strcpy(aBuf, str);
+		return (VarSizeType)strlen(str);
 	}
-	int GetLoopFileSize(char *aBuf = NULL)
+	VarSizeType GetLoopFileSize(char *aBuf, int aDivider)
 	{
-		char str[64] = "";  // Set default.
+		char str[128];
+		char *target_buf = aBuf ? aBuf : str;
+		*target_buf = '\0';  // Set default.
 		if (mLoopFile)
+		{
 			// It's a documented limitation that the size will show as negative if
 			// greater than 2 gig, and will be wrong if greater than 4 gig.  For files
 			// that large, scripts should use the KB version of this function instead.
 			// If a file is over 4gig, set the value to be the maximum size (-1 when
 			// expressed as a signed integer, since script variables are based entirely
-			// on 32-bit signed integers due to the use of atoi(), etc.):
-			sprintf(str, "%d%", mLoopFile->nFileSizeHigh ? -1 : (int)mLoopFile->nFileSizeLow);
-		VarSizeType length = (VarSizeType)strlen(str);
-		if (!aBuf) return length;
-		strcpy(aBuf, str);
-		aBuf += length;
-		return length;
-	}
-	int GetLoopFileSizeKB(char *aBuf = NULL)
-	{
-		char str[128] = "";  // Set default.
-		if (mLoopFile)
-		{
+			// on 32-bit signed integers due to the use of atoi(), etc.).  UPDATE: 64-bit
+			// ints are now standard, so the above is unnecessary:
+			//sprintf(str, "%d%", mLoopFile->nFileSizeHigh ? -1 : (int)mLoopFile->nFileSizeLow);
 			ULARGE_INTEGER ul;
-			ul.LowPart = mLoopFile->nFileSizeLow;
 			ul.HighPart = mLoopFile->nFileSizeHigh;
-			// Always use signed (%d) vs. unsigned (%u).  See comment in GetLoopFileSize():
-			sprintf(str, "%d%", (int)((unsigned __int64)ul.QuadPart/1024));
+			ul.LowPart = mLoopFile->nFileSizeLow;
+			ITOA64((__int64)(aDivider ? ((unsigned __int64)ul.QuadPart / aDivider) : ul.QuadPart), target_buf);
 		}
-		VarSizeType length = (VarSizeType)strlen(str);
-		if (!aBuf) return length;
-		strcpy(aBuf, str);
-		aBuf += length;
-		return length;
+		return (VarSizeType)strlen(target_buf);
 	}
 
-	int GetThisHotkey(char *aBuf = NULL)
+	VarSizeType GetThisHotkey(char *aBuf = NULL)
 	{
 		char *str = "";  // Set default.
 		if (mThisHotkeyLabel)
 			str = mThisHotkeyLabel->mName;
-		VarSizeType length = (VarSizeType)strlen(str);
-		if (!aBuf) return length;
-		strcpy(aBuf, str);
-		aBuf += length;
-		return length;
+		if (aBuf)
+			strcpy(aBuf, str);
+		return (VarSizeType)strlen(str);
 	}
-	int GetPriorHotkey(char *aBuf = NULL)
+	VarSizeType GetPriorHotkey(char *aBuf = NULL)
 	{
 		char *str = "";  // Set default.
 		if (mPriorHotkeyLabel)
 			str = mPriorHotkeyLabel->mName;
-		VarSizeType length = (VarSizeType)strlen(str);
-		if (!aBuf) return length;
-		strcpy(aBuf, str);
-		aBuf += length;
-		return length;
+		if (aBuf)
+			strcpy(aBuf, str);
+		return (VarSizeType)strlen(str);
 	}
-	int GetTimeSinceThisHotkey(char *aBuf = NULL)
+	VarSizeType GetTimeSinceThisHotkey(char *aBuf = NULL)
 	{
 		char str[128];
 		// It must be the type of hotkey that has a label because we want the TimeSinceThisHotkey
@@ -942,32 +961,33 @@ public:
 		if (mThisHotkeyLabel)
 			// Even if GetTickCount()'s TickCount has wrapped around to zero and the timestamp hasn't,
 			// DWORD math still gives the right answer as long as the number of days between
-			// isn't greater than about 49.  See MyGetTickCount() for explanation of %d vs. %u:
-			snprintf(str, sizeof(str), "%d", (DWORD)(GetTickCount() - mThisHotkeyStartTime));
+			// isn't greater than about 49.  See MyGetTickCount() for explanation of %d vs. %u.
+			// Update: Using 64-bit ints now, so above is obsolete:
+			//snprintf(str, sizeof(str), "%d", (DWORD)(GetTickCount() - mThisHotkeyStartTime));
+			ITOA64((__int64)(GetTickCount() - mThisHotkeyStartTime), str);
 		else
 			strcpy(str, "-1");
-		VarSizeType length = (VarSizeType)strlen(str);
-		if (!aBuf) return length;
-		strcpy(aBuf, str);
-		aBuf += length;
-		return length;
+		if (aBuf)
+			strcpy(aBuf, str);
+		return (VarSizeType)strlen(str);
 	}
-	int GetTimeSincePriorHotkey(char *aBuf = NULL)
+	VarSizeType GetTimeSincePriorHotkey(char *aBuf = NULL)
 	{
 		char str[128];
 		if (mPriorHotkeyLabel)
-			// See MyGetTickCount() for explanation of %d vs. %u:
-			snprintf(str, sizeof(str), "%d", (DWORD)(GetTickCount() - mPriorHotkeyStartTime));
+			// See MyGetTickCount() for explanation for explanation:
+			//snprintf(str, sizeof(str), "%d", (DWORD)(GetTickCount() - mPriorHotkeyStartTime));
+			ITOA64((__int64)(GetTickCount() - mPriorHotkeyStartTime), str);
 		else
 			strcpy(str, "-1");
-		VarSizeType length = (VarSizeType)strlen(str);
-		if (!aBuf) return length;
-		strcpy(aBuf, str);
-		aBuf += length;
-		return length;
+		if (aBuf)
+			strcpy(aBuf, str);
+		return (VarSizeType)strlen(str);
 	}
-	int MyGetTickCount(char *aBuf = NULL)
+	VarSizeType MyGetTickCount(char *aBuf = NULL)
 	{
+		// UPDATE: The below comments are now obsolete in light of having switched over to
+		// using 64-bit integers (which aren't that much slower than 32-bit on 32-bit hardware):
 		// Known limitation:
 		// Although TickCount is an unsigned value, I'm not sure that our EnvSub command
 		// will properly be able to compare two tick-counts if either value is larger than
@@ -981,14 +1001,12 @@ public:
 		// it will probably work correctly due to the nature of implicit unsigned math.
 		// Thus, we use %d vs. %u in the snprintf() call below.
 		char str[128];
-		snprintf(str, sizeof(str), "%d", GetTickCount());
-		VarSizeType length = (VarSizeType)strlen(str);
-		if (!aBuf) return length;
-		strcpy(aBuf, str);
-		aBuf += length;
-		return length;
+		ITOA64(GetTickCount(), str);
+		if (aBuf)
+			strcpy(aBuf, str);
+		return (VarSizeType)strlen(str);
 	}
-	int GetSpace(char *aBuf = NULL)
+	VarSizeType GetSpace(char *aBuf = NULL)
 	{
 		if (!aBuf) return 1;  // i.e. the length of a single space char.
 		*(aBuf++) = ' ';

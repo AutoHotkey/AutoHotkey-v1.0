@@ -34,13 +34,17 @@ GNU General Public License for more details.
 
 #define NAME_P "AutoHotkey"
 #define WINDOW_CLASS_NAME NAME_P
-#define NAME_VERSION "0.2.21"
+#define NAME_VERSION "0.2.22"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 #define EXT_AUTOIT2 ".aut"
 #define EXT_AUTOHOTKEY ".ahk"
 #define CONVERSION_FLAG (EXT_AUTOIT2 EXT_AUTOHOTKEY)
 #define CONVERSION_FLAG_LENGTH 8
+
+// 10 is the number base system:
+#define ITOA(value, buf) _itoa(value, buf, 10)
+#define ITOA64(value, buf) _i64toa(value, buf, 10)
 
 // This is not the best way to do this, but it does make MS compilers more
 // like MinGW and other Gnu-ish compilers.  Also, I'm not sure what (if
@@ -146,7 +150,7 @@ struct global_struct
 	bool TitleFindFast; // Whether to use the fast mode of searching window text, or the more thorough slow mode.
 	bool DetectHiddenWindows; // Whether to detect the titles of hidden parent windows.
 	bool DetectHiddenText;    // Whether to detect the text of hidden child windows.
-	UINT LinesPerCycle;
+	__int64 LinesPerCycle; // Use 64-bits for this so that user can specify really large values.
 	int WinDelay;  // negative values may be used as special flags.
 	int ControlDelay;  // negative values may be used as special flags.
 	int KeyDelay;  // negative values may be used as special flags.
@@ -154,13 +158,13 @@ struct global_struct
 	bool StoreCapslockMode;
 	bool AutoTrim;
 	bool StringCaseSense;
+	char FormatFloat[32];
 	char ErrorLevel[128]; // Big in case user put something bigger than a number in g_ErrorLevel.
 	HWND hWndLastUsed;  // In many cases, it's better to use g_ValidLastUsedWindow when referring to this.
 	HWND hWndToRestore;
 	int MsgBoxResult;  // Which button was pressed in the most recent MsgBox.
 	bool WaitingForDialog;
 	bool IsPaused;
-	DWORD StartTime;   // When when this subroutine was started.
 };
 
 inline void global_clear_state(global_struct *gp)
@@ -203,6 +207,16 @@ inline void global_init(global_struct *gp)
 	gp->StoreCapslockMode = true;  // AutoIt2 (and probably 3's) default, and it makes a lot of sense.
 	gp->AutoTrim = true;  // AutoIt2's default, and overall the best default in most cases.
 	gp->StringCaseSense = false;  // AutoIt2 default, and it does seem best.
+	strcpy(gp->FormatFloat, "%0.6f");
+	// For FormatFloat:
+	// I considered storing more than 6 digits to the right of the decimal point (which is the default
+	// for most Unices and MSVC++ it seems).  But going beyond that makes things a little weird for many
+	// numbers, due to the inherent imprecision of floating point storage.  For example, 83648.4 divided
+	// by 2 shows up as 41824.200000 with 6 digits, but might show up 41824.19999999999700000000 with
+	// 20 digits.  The extra zeros could be chopped off the end easily enough, but even so, going beyond
+	// 6 digits seems to do more harm than good for the avg. user, overall.  A default of 6 is used here
+	// in case other/future compilers have a different default (for backward compatibility, we want
+	// 6 to always be in effect as the default for future releases).
 }
 
 #endif

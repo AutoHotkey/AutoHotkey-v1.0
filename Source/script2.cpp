@@ -481,7 +481,7 @@ ResultType Line::StatusBarWait(char *aTextToWaitFor, char *aSeconds, char *aPart
 	strlcpy(text_to_wait_for, aTextToWaitFor, sizeof(text_to_wait_for));
 	HWND control_window = target_window ? ControlExist(target_window, "msctls_statusbar321") : NULL;
 	StatusBarUtil(NULL, control_window, atoi(aPart) // It will handle a NULL control_window or zero part# for us.
-		, text_to_wait_for, *aSeconds ? atoi(aSeconds)*1000 : -1 // Blank->indefinite.  0 means 500ms.
+		, text_to_wait_for, *aSeconds ? (int)(atof(aSeconds)*1000) : -1 // Blank->indefinite.  0 means 500ms.
 		, atoi(aInterval));
 	return OK; // Even if it fails, seems best to return OK so that subroutine can continue.
 }
@@ -635,7 +635,7 @@ ResultType Line::WinGetPos(char *aTitle, char *aText, char *aExcludeTitle, char 
 	if (output_var_x)
 		if (target_window)
 		{
-			if (!output_var_x->Assign((int)rect.left))  // X position
+			if (!output_var_x->Assign(rect.left))  // X position
 				result = FAIL;
 		}
 		else
@@ -644,7 +644,7 @@ ResultType Line::WinGetPos(char *aTitle, char *aText, char *aExcludeTitle, char 
 	if (output_var_y)
 		if (target_window)
 		{
-			if (!output_var_y->Assign((int)rect.top))  // Y position
+			if (!output_var_y->Assign(rect.top))  // Y position
 				result = FAIL;
 		}
 		else
@@ -653,7 +653,7 @@ ResultType Line::WinGetPos(char *aTitle, char *aText, char *aExcludeTitle, char 
 	if (output_var_width) // else user didn't want this value saved to an output param
 		if (target_window)
 		{
-			if (!output_var_width->Assign((int)rect.right - rect.left))  // Width
+			if (!output_var_width->Assign(rect.right - rect.left))  // Width
 				result = FAIL;
 		}
 		else
@@ -662,7 +662,7 @@ ResultType Line::WinGetPos(char *aTitle, char *aText, char *aExcludeTitle, char 
 	if (output_var_height)
 		if (target_window)
 		{
-			if (!output_var_height->Assign((int)rect.bottom - rect.top))  // Height
+			if (!output_var_height->Assign(rect.bottom - rect.top))  // Height
 				result = FAIL;
 		}
 		else
@@ -787,6 +787,7 @@ ResultType Line::PixelGetColor(int aX, int aY)
 	HDC hdc = GetDC(NULL);
 	if (!hdc)
 		return OK;  // Let ErrorLevel tell the story.
+	// Assign the value as an 32-bit int since I believe that's how Window Spy reports color values:
 	ResultType result = output_var->Assign((int)GetPixel(hdc, aX, aY));
 	ReleaseDC(NULL, hdc);
 
@@ -1549,10 +1550,10 @@ ResultType Line::MouseGetPos()
 	ResultType result = OK; // Set default;
 
 	if (output_var_x) // else the user didn't want the X coordinate, just the Y.
-		if (!output_var_x->Assign((int)(pt.x - rect.left)))
+		if (!output_var_x->Assign(pt.x - rect.left))
 			result = FAIL;
 	if (output_var_y) // else the user didn't want the Y coordinate, just the X.
-		if (!output_var_y->Assign((int)(pt.y - rect.top)))
+		if (!output_var_y->Assign(pt.y - rect.top))
 			result = FAIL;
 
 	return result;
@@ -1802,15 +1803,15 @@ ResultType Line::DriveSpaceFree(char *aPath)
 			return OK; // Let ErrorLevel tell the story.
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 		// Casting this way limits us to 2,097,152 gigabytes in size:
-		return output_var->Assign(   (int)((unsigned __int64)(uiFree.QuadPart) / (unsigned __int64)(1024*1024))   );
+		return output_var->Assign(   (__int64)((unsigned __int64)uiFree.QuadPart / (1024*1024))   );
 	}
 	else
 	{
 		if (!GetDiskFreeSpace(buf, &dwSectPerClust, &dwBytesPerSect, &dwFreeClusters, &dwTotalClusters))
 			return OK; // Let ErrorLevel tell the story.
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-		return output_var->Assign(   (int)((unsigned __int64)(dwFreeClusters * dwSectPerClust * dwBytesPerSect)
-			/ (unsigned __int64)(1024*1024))   );
+		return output_var->Assign(   (__int64)((unsigned __int64)(dwFreeClusters * dwSectPerClust * dwBytesPerSect)
+			/ (1024*1024))   );
 	}
 #endif	
 
@@ -2080,7 +2081,7 @@ ResultType Line::FileReadLine(char *aFilespec, char *aLineNumber)
 	if (!output_var)
 		return FAIL;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
-	UINT line_number = atoi(aLineNumber);
+	__int64 line_number = _atoi64(aLineNumber);
 	if (line_number <= 0)
 		return OK;  // Return OK because g_ErrorLevel tells the story.
 	FILE *fp = fopen(aFilespec, "r");
@@ -2108,22 +2109,22 @@ ResultType Line::FileReadLine(char *aFilespec, char *aLineNumber)
 	// often) even if the hook isn't installed, so that the program will still be responsive
 	// (e.g. its tray menu and other hotkeys) while conducting a file operation that takes
 	// a very long time:
-	int line_interval, sleep_duration;
+	int batch_size, sleep_duration;
 	if (Hotkey::HookIsActive())
 	{
-		line_interval = 1000;
+		batch_size = 1000;
 		sleep_duration = 10;
 	}
 	else
 	{
-		line_interval = 10000;
+		batch_size = 1000; // Lowered this from 10000 to 1000 for slower CPUs.
 		sleep_duration = -1; // Since all we want to do is check messages.
 	}
 
 	char buf[64 * 1024];
-	for (UINT i = 0; i < line_number; ++i)
+	for (__int64 i = 0; i < line_number; ++i)
 	{
-		if (i && !(i % line_interval))
+		if (i && !(i % batch_size))
 			MsgSleep(sleep_duration); // See above comment. Also, it seems okay to allow new hotkeys during the sleep.
 		if (fgets(buf, sizeof(buf) - 1, fp) == NULL) // end-of-file or error
 		{
@@ -2264,8 +2265,6 @@ ResultType Line::FileGetAttrib(char *aFilespec)
 int Line::FileSetAttrib(char *aAttributes, char *aFilePattern, FileLoopModeType aOperateOnFolders
 	, bool aDoRecurse, bool aCalledRecursively)
 // Returns the number of files and folders that could not be changed due to an error.
-// Current limitation: It will not recurse into subfolders unless their names also match
-// aFilePattern.
 {
 	// Making this static is not friendly to reentrant calls to this function (i.e. calls maded
 	// as a consequence of the current script subroutine being interrupted by another during
@@ -2327,7 +2326,7 @@ int Line::FileSetAttrib(char *aAttributes, char *aFilePattern, FileLoopModeType 
 	}
 	else
 	{
-		batch_size = 1000;
+		batch_size = 100; // Lowered this from 1000 to 100 for slower CPUs.
 		sleep_duration = -1; // Since all we want to do is check messages.
 	}
 
@@ -2601,7 +2600,7 @@ int Line::FileSetTime(char *aYYYYMMDD, char *aFilePattern, char aWhichTime
 	}
 	else
 	{
-		batch_size = 1000;
+		batch_size = 100; // Lowered this from 1000 to 100 for slower CPUs.
 		sleep_duration = -1; // Since all we want to do is check messages.
 	}
 
@@ -2712,7 +2711,7 @@ ResultType Line::FileGetSize(char *aFilespec, char *aGranularity)
 	if (file_handle == INVALID_HANDLE_VALUE)
 		return OK;  // Let ErrorLevel Tell the story.
 	unsigned __int64 size = GetFileSize64(file_handle);
-	if (size == 0xFFFFFFFFFFFFFFFF) // failure
+	if (size == ULLONG_MAX) // failure
 		return OK;  // Let ErrorLevel Tell the story.
 	CloseHandle(file_handle);
 
@@ -2729,7 +2728,9 @@ ResultType Line::FileGetSize(char *aFilespec, char *aGranularity)
 	}
 
     g_ErrorLevel->Assign(ERRORLEVEL_NONE);  // Indicate success.
-	return output_var->Assign((int)(size > MAXDWORD ? -1 : size));
+	return output_var->Assign((__int64)(size > ULLONG_MAX ? -1 : size)); // i.e. don't allow it to wrap around.
+	// The below comment is obsolete in light of the switch to 64-bit integers.  But it might
+	// be good to keep for background:
 	// Currently, the above is basically subject to a 2 gig limit, I believe, after which the
 	// size will appear to be negative.  Beyond a 4 gig limit, the value will probably wrap around
 	// to zero and start counting from there as file sizes grow beyond 4 gig (UPDATE: The size
