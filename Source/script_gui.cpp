@@ -2188,6 +2188,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		if (control.hwnd = CreateWindowEx(exstyle, PROGRESS_CLASS, "", style
 			, opt.x, opt.y, opt.width, opt.height, mHwnd, control_id, g_hInstance, NULL))
 		{
+			ControlSetProgressOptions(control, opt, style); // Fix for v1.0.27.01: This must be done prior to the below.
 			// This has been confirmed though testing, even when the range is dynamically changed
 			// after the control is created to something that no longer includes the bar's current
 			// position: The control automatically deals with out-of-range values by setting bar to
@@ -2195,7 +2196,6 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			if (*aText)
 				SendMessage(control.hwnd, PBM_SETPOS, ATOI(aText), 0);
 			//else leave it at the OS's default starting position (probably always the far left or top of the range).
-			ControlSetProgressOptions(control, opt, style);
 			do_strip_theme = false;  // The above would have already stripped it if needed, so don't do it again.
 		}
 		break;
@@ -2534,12 +2534,18 @@ ResultType GuiType::ParseOptions(char *aOptions, bool &aSetLastFoundWindow)
 	// and there's no point in redrawing/updating the window for each one:
 	if (mHwnd && (mStyle != style_orig || mExStyle != exstyle_orig))
 	{
+		// v1.0.27.01: Must do this prior to SetWindowLong() because sometimes SetWindowLong()
+		// traumatizes the window (such as "Gui -Caption"), making it effectively invisible
+		// even though its non-functional remnant is still on the screen:
+		bool is_visible = IsWindowVisible(mHwnd) && !IsIconic(mHwnd);
+
 		// Since window already exists but its style has changed, attempt to update it dynamically.
 		if (mStyle != style_orig)
 			SetWindowLong(mHwnd, GWL_STYLE, mStyle);
 		if (mExStyle != exstyle_orig)
 			SetWindowLong(mHwnd, GWL_EXSTYLE, mExStyle);
-		if (IsWindowVisible(mHwnd) && !IsIconic(mHwnd))
+
+		if (is_visible)
 		{
 			// Hiding then showing is the only way I've discovered to make it update.  If the window
 			// is not updated, a strange effect occurs where the window is still visible but can no

@@ -2860,12 +2860,6 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 			// the ALT key is physically down even though it is not logically down:
 			// RAlt::Send f  ; Actually triggers !f, which activates the FILE menu if the active window has one.
 			// RAlt::Send {PgDn}  ; Fails to work because ALT-PgDn usually does nothing.
-			// NOTE: The above is something of a separate issue than the "Alt triggers the menu
-			// bar" problem noted in the FAQ, since that has to do with the fact that modifiers
-			// are never suppressed if they are prefixes, and thus cause the menu bar to be
-			// activated.  Some other type of workaround would be needed for that, but such
-			// a workaround might not be possible without breaking some existing scripts that
-			// rely on the current ALT key prefix behavior).
 			KeyEvent(KEYUP, vk, sc);
 #endif
 	}

@@ -437,6 +437,14 @@ ResultType Script::CreateWindows()
 		SetWindowLong(g_hWnd, GWL_EXSTYLE, 0); // Give the main window back its taskbar button.
 	}
 
+	// Note: When the window is not minimized, task manager reports that a simple script (such as
+	// one consisting only of the single line "#Persistent") uses 2600 KB of memory vs. ~452 KB if
+	// it were immediately minimized.  That is probably just due to the vagaries of how the OS
+	// manages windows and memory and probably doesn't actually impact system performance to the
+	// degree indicated.  In other words, it's hard to imagine that the failure to do
+	// ShowWidnow(g_hWnd, SW_MINIMIZE) unconditionally upon startup (which causes the side effects
+	// discussed further above) significantly increases the actual memory load on the system.
+
 	g_hAccelTable = LoadAccelerators(g_hInstance, MAKEINTRESOURCE(IDR_ACCELERATOR1));
 
 	if (g_NoTrayIcon)

@@ -760,6 +760,7 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 	, mModifiers(0)
 	, mModifiersLR(0)
 	, mAllowExtraModifiers(false)
+	, mKeyUp(false)
 	, mNoSuppress(0)  // Default is to suppress both prefixes and suffixes.
 	, mModifierVK(0)
 	, mModifierSC(0)
@@ -861,7 +862,7 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 		}
 
 		if (mType != HK_MOUSE_HOOK && mType != HK_JOYSTICK)
-			if ((g_ForceKeybdHook || mModifiersLR || mAllowExtraModifiers || mNoSuppress || aHookAction)
+			if ((g_ForceKeybdHook || mModifiersLR || mAllowExtraModifiers || mNoSuppress || aHookAction || mKeyUp)
 				&& !g_os.IsWin9x())
 				// Do this for both NO_SUPPRESS_SUFFIX and NO_SUPPRESS_PREFIX.  In the case of
 				// NO_SUPPRESS_PREFIX, the hook is needed anyway since the only way to get
@@ -907,7 +908,7 @@ ResultType Hotkey::TextInterpret(char *aName)
 	char hotkey_name[256];
 	strlcpy(hotkey_name, aName, sizeof(hotkey_name));
 	char *term1 = hotkey_name;
-	char *term2 = strcasestr(term1, COMPOSITE_DELIMITER);
+	char *term2 = strstr(term1, COMPOSITE_DELIMITER);
 	if (!term2)
 		return TextToKey(TextToModifiers(term1), aName, false);
 	if (*term1 == '~')
@@ -1050,6 +1051,7 @@ char *Hotkey::TextToModifiers(char *aText)
 
 
 ResultType Hotkey::TextToKey(char *aText, char *aHotkeyName, bool aIsModifier)
+// Caller must ensure that aText is a modifiable string.
 // Takes input param aText to support receiving only a subset of mName.
 // In private members, sets the values of vk/sc or ModifierVK/ModifierSC depending on aIsModifier.
 // It may also merge new modifiers into the existing value of modifiers, so the caller
@@ -1072,20 +1074,26 @@ ResultType Hotkey::TextToKey(char *aText, char *aHotkeyName, bool aIsModifier)
 		return FAIL;
 	}
 
-	// Init in case of early return:
-	if (aIsModifier)
-		mModifierVK = mModifierSC = 0;
-	else
-		mVK = mSC = 0;
-
-	vk_type temp_vk = 0;
+	vk_type temp_vk; // No need to initialize this one.
 	sc_type temp_sc = 0;
 	mod_type modifiers = 0;
 	modLR_type modifiersLR = 0;
 	bool is_mouse = false;
 	int joystick_id;
 
-	if (temp_vk = TextToVK(aText, &modifiers, true))
+	if (!aIsModifier)
+	{
+		// Previous steps should make it unnecessary to call omit_leading_whitespace(aText).
+		char *cp = StrChrAny(aText, " \t"); // Find first space or tab.
+		if (cp && !stricmp(omit_leading_whitespace(cp), "Up"))
+		{
+			// This is a key-up hotkey, such as "Ctrl Up::".
+			mKeyUp = true;
+			*cp = '\0'; // Terminate at the first space so that the word "up" is removed from further consideration by us and callers.
+		}
+	}
+
+	if (temp_vk = TextToVK(aText, &modifiers, true)) // Assign.
 	{
 		if (aIsModifier && (temp_vk == VK_WHEEL_DOWN || temp_vk == VK_WHEEL_UP))
 		{
