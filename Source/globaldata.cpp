@@ -314,6 +314,7 @@ Action g_act[] =
 	, {"StringCaseSense", 1, 1, NULL} // On/Off
 	, {"DetectHiddenWindows", 1, 1, NULL} // On/Off
 	, {"DetectHiddenText", 1, 1, NULL} // On/Off
+	, {"BlockInput", 1, 1, NULL} // On/Off
 
 	, {"SetNumlockState", 0, 1, NULL} // On/Off/AlwaysOn/AlwaysOff or blank (unspecified) to return to normal.
 	, {"SetScrollLockState", 0, 1, NULL} // same

@@ -580,7 +580,11 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 
 #ifdef AUTOHOTKEYSC
 	HS_EXEArc_Read oRead;
-	// AutoIt3: Open the archive in this compiled exe
+	// AutoIt3: Open the archive in this compiled exe.
+	// Jon gave me some details about why a password isn't needed: "The code in those libararies will
+	// only allow files to be extracted from the exe is is bound to (i.e the script that it was
+	// compiled with).  There are various checks and CRCs to make sure that it can't be used to read
+	// the files from any other exe that is passed."
 	if ( oRead.Open(aFileSpec, "") != HS_EXEARC_E_OK)
 	{
 		MsgBox("Could not open the script inside the EXE.", 0, aFileSpec);
@@ -695,8 +699,11 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			// Even though wrong, the return is harmless because it's never executed?  Except when
 			// falling through from above into a hotkey (which probably isn't very valid anyway)?
 			if (mFirstLabel == NULL)
+			{
 				if (AddLine(ACT_RETURN) != OK)
 					return CloseAndReturn(fp, script_buf, FAIL);
+				mCurrLine = NULL;  // To signify that we're in transition, trying to load a new one.
+			}
 			if (AddLabel(buf) != OK) // Always add a label before adding the first line of its section.
 				return CloseAndReturn(fp, script_buf, FAIL);
 			if (*hotkey_flag) // This hotkey's action is on the same line as its label.
@@ -797,6 +804,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			// figure out the proper use of escaped characters:
 			if (AddLine(ACT_ELSE) != OK)
 				return CloseAndReturn(fp, script_buf, FAIL);
+			mCurrLine = NULL;  // To signify that we're in transition, trying to load a new one.
 			action_end = omit_leading_whitespace(action_end); // Now action_end is the word after the ELSE.
 			if (*action_end && ParseAndAddLine(action_end) != OK)
 				return CloseAndReturn(fp, script_buf, FAIL);
@@ -2075,11 +2083,12 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	FILETIME ft;  // same.
 	switch(aActionType)
 	{
-	case ACT_DETECTHIDDENWINDOWS:
-	case ACT_DETECTHIDDENTEXT:
-	case ACT_SETSTORECAPSLOCKMODE:
 	case ACT_AUTOTRIM:
 	case ACT_STRINGCASESENSE:
+	case ACT_DETECTHIDDENWINDOWS:
+	case ACT_DETECTHIDDENTEXT:
+	case ACT_BLOCKINPUT:
+	case ACT_SETSTORECAPSLOCKMODE:
 		if (line->mArgc > 0 && !line->ArgHasDeref(1) && !line->ConvertOnOff(LINE_RAW_ARG1))
 			return ScriptError(ERR_ON_OFF, LINE_RAW_ARG1);
 		break;
@@ -5131,6 +5140,10 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		if (   (toggle = ConvertOnOff(ARG1, NEUTRAL)) != NEUTRAL   )
 			g.DetectHiddenText = (toggle == TOGGLED_ON);
 		return OK;
+	case ACT_BLOCKINPUT:
+		if (   (toggle = ConvertOnOff(ARG1, NEUTRAL)) != NEUTRAL   )
+			BlockInput(toggle == TOGGLED_ON);
+		return OK;
 
 	////////////////////////////////////////////////////////////////////////////////////////
 	// For these, it seems best not to report an error during runtime if there's
@@ -5600,6 +5613,29 @@ ResultType Line::ChangePauseState(ToggleValueType aChangeTo)
 		// We know it's a variable because otherwise the loading validation would have caught it earlier:
 		return LineError("The variable in param #1 does not resolve to an allowed value.", FAIL, ARG1);
 	}
+}
+
+
+
+ResultType Line::BlockInput(bool aEnable)
+// Adapted from the AutoIt3 source.
+// Always returns OK for caller convenience.
+{
+	// Must be running 2000/ win98 for this function to be successful
+	// We must dynamically load the function to retain compatibility with Win95
+    // Get a handle to the DLL module that contains BlockInput
+	HINSTANCE hinstLib = LoadLibrary("user32.dll");
+    // If the handle is valid, try to get the function address.
+	if (hinstLib != NULL)
+	{
+		typedef void (CALLBACK *BlockInput)(BOOL);
+		BlockInput lpfnDLLProc = (BlockInput)GetProcAddress(hinstLib, "BlockInput");
+		if (lpfnDLLProc != NULL)
+			(*lpfnDLLProc)(aEnable ? TRUE : FALSE);
+		// Free the DLL module.
+		FreeLibrary(hinstLib);
+	}
+	return OK;
 }
 
 

@@ -135,12 +135,15 @@ __int64 FileTimeSecondsUntil(FILETIME *pftStart, FILETIME *pftEnd)
 	if (!pftStart || !pftEnd) return 0;
 
 	// The calculation is done this way for compilers that don't support 64-bit math operations (not sure which):
+	// Note: This must be LARGE vs. ULARGE because we want the calculation to be signed for cases where
+	// pftStart is greater than pftEnd:
 	ULARGE_INTEGER uiStart, uiEnd;
 	uiStart.LowPart = pftStart->dwLowDateTime;
 	uiStart.HighPart = pftStart->dwHighDateTime;
 	uiEnd.LowPart = pftEnd->dwLowDateTime;
 	uiEnd.HighPart = pftEnd->dwHighDateTime;
-	return (__int64)((uiEnd.QuadPart - uiStart.QuadPart) / 10000000); // Convert from tenths-of-microsecond.
+	// Must do at least the inner cast to avoid losing negative results:
+	return (__int64)((__int64)(uiEnd.QuadPart - uiStart.QuadPart) / 10000000); // Convert from tenths-of-microsecond.
 }
 
 

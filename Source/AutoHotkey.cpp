@@ -58,7 +58,8 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	char var_name[32]; // Small size since only numbers will be used (e.g. %1%, %2%).
 	Var *var;
 	bool switch_processing_is_complete = false;
-	for (int i = 1, script_param_num = 1; i < __argc; ++i) // Start at 1 because 0 contains the program name.
+	int script_param_num = 1;
+	for (int i = 1; i < __argc; ++i) // Start at 1 because 0 contains the program name.
 	{
 		if (switch_processing_is_complete) // All args are now considered to be input parameters for the script.
 		{
@@ -85,6 +86,10 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 #endif
 		}
 	}
+
+	// Like AutoIt2, store the number of script parameters in the script variable %0%, even if it's zero:
+	if (var = g_script.FindOrAddVar("0"))
+		var->Assign(script_param_num - 1);
 
 #ifndef AUTOHOTKEYSC
 	size_t filespec_length = strlen(script_filespec);

@@ -178,7 +178,7 @@ inline bool EventIsPhysical(LPARAM lParam, bool key_up)
 
 
 #ifdef INCLUDE_KEYBD_HOOK
-void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
+void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppressed)
 {
 	// This part is done even if the key is being ignored because we always want their status
 	// to be correct *regardless* of whether the key is ignored.  This is especially important
@@ -200,7 +200,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 	case VK_LSHIFT:
 		if (key_up)
 		{
-			g_modifiersLR_logical &= ~MOD_LSHIFT;
+			if (!aIsSuppressed)
+				g_modifiersLR_logical &= ~MOD_LSHIFT;
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical &= ~MOD_LSHIFT;
@@ -210,7 +211,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		}
 		else
 		{
-			g_modifiersLR_logical |= MOD_LSHIFT;
+			if (!aIsSuppressed)
+				g_modifiersLR_logical |= MOD_LSHIFT;
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical |= MOD_LSHIFT;
@@ -222,7 +224,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 	case VK_RSHIFT:
 		if (key_up)
 		{
-			g_modifiersLR_logical &= ~MOD_RSHIFT;
+			if (!aIsSuppressed)
+				g_modifiersLR_logical &= ~MOD_RSHIFT;
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical &= ~MOD_RSHIFT;
@@ -232,7 +235,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		}
 		else
 		{
-			g_modifiersLR_logical |= MOD_RSHIFT;
+			if (!aIsSuppressed)
+				g_modifiersLR_logical |= MOD_RSHIFT;
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical |= MOD_RSHIFT;
@@ -243,7 +247,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 	case VK_LCONTROL:
 		if (key_up)
 		{
-			g_modifiersLR_logical &= ~MOD_LCONTROL;
+			if (!aIsSuppressed)
+				g_modifiersLR_logical &= ~MOD_LCONTROL;
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical &= ~MOD_LCONTROL;
@@ -253,7 +258,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		}
 		else
 		{
-			g_modifiersLR_logical |= MOD_LCONTROL;
+			if (!aIsSuppressed)
+				g_modifiersLR_logical |= MOD_LCONTROL;
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical |= MOD_LCONTROL;
@@ -264,7 +270,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 	case VK_RCONTROL:
 		if (key_up)
 		{
-			g_modifiersLR_logical &= ~MOD_RCONTROL;
+			if (!aIsSuppressed)
+				g_modifiersLR_logical &= ~MOD_RCONTROL;
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical &= ~MOD_RCONTROL;
@@ -274,7 +281,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		}
 		else
 		{
-			g_modifiersLR_logical |= MOD_RCONTROL;
+			if (!aIsSuppressed)
+				g_modifiersLR_logical |= MOD_RCONTROL;
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical |= MOD_RCONTROL;
@@ -285,7 +293,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 	case VK_LMENU:
 		if (key_up)
 		{
-			g_modifiersLR_logical &= ~MOD_LALT;
+			if (!aIsSuppressed)
+				g_modifiersLR_logical &= ~MOD_LALT;
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical &= ~MOD_LALT;
@@ -295,7 +304,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		}
 		else
 		{
-			g_modifiersLR_logical |= MOD_LALT;
+			if (!aIsSuppressed)
+				g_modifiersLR_logical |= MOD_LALT;
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical |= MOD_LALT;
@@ -306,7 +316,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 	case VK_RMENU:
 		if (key_up)
 		{
-			g_modifiersLR_logical &= ~MOD_RALT;
+			if (!aIsSuppressed)
+				g_modifiersLR_logical &= ~MOD_RALT;
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical &= ~MOD_RALT;
@@ -316,7 +327,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		}
 		else
 		{
-			g_modifiersLR_logical |= MOD_RALT;
+			if (!aIsSuppressed)
+				g_modifiersLR_logical |= MOD_RALT;
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical |= MOD_RALT;
@@ -327,7 +339,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 	case VK_LWIN:
 		if (key_up)
 		{
-			g_modifiersLR_logical &= ~MOD_LWIN;
+			if (!aIsSuppressed)
+				g_modifiersLR_logical &= ~MOD_LWIN;
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical &= ~MOD_LWIN;
@@ -336,7 +349,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		}
 		else
 		{
-			g_modifiersLR_logical |= MOD_LWIN;
+			if (!aIsSuppressed)
+				g_modifiersLR_logical |= MOD_LWIN;
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical |= MOD_LWIN;
@@ -347,7 +361,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 	case VK_RWIN:
 		if (key_up)
 		{
-			g_modifiersLR_logical &= ~MOD_RWIN;
+			if (!aIsSuppressed)
+				g_modifiersLR_logical &= ~MOD_RWIN;
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical &= ~MOD_RWIN;
@@ -356,7 +371,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		}
 		else
 		{
-			g_modifiersLR_logical |= MOD_RWIN;
+			if (!aIsSuppressed)
+				g_modifiersLR_logical |= MOD_RWIN;
 			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical |= MOD_RWIN;
@@ -371,7 +387,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		if (sc == SC_RSHIFT)
 			if (key_up)
 			{
-				g_modifiersLR_logical &= ~MOD_RSHIFT;
+				if (!aIsSuppressed)
+					g_modifiersLR_logical &= ~MOD_RSHIFT;
 				if (EventIsPhysical(lParam, sc, key_up))
 				{
 					g_modifiersLR_physical &= ~MOD_RSHIFT;
@@ -381,7 +398,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 			}
 			else
 			{
-				g_modifiersLR_logical |= MOD_RSHIFT;
+				if (!aIsSuppressed)
+					g_modifiersLR_logical |= MOD_RSHIFT;
 				if (EventIsPhysical(lParam, sc, key_up))
 				{
 					g_modifiersLR_physical |= MOD_RSHIFT;
@@ -393,7 +411,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		// (since one of them has to be the event, have to choose one):
 			if (key_up)
 			{
-				g_modifiersLR_logical &= ~MOD_LSHIFT;
+				if (!aIsSuppressed)
+					g_modifiersLR_logical &= ~MOD_LSHIFT;
 				if (EventIsPhysical(lParam, sc, key_up))
 				{
 					g_modifiersLR_physical &= ~MOD_LSHIFT;
@@ -403,7 +422,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 			}
 			else
 			{
-				g_modifiersLR_logical |= MOD_LSHIFT;
+				if (!aIsSuppressed)
+					g_modifiersLR_logical |= MOD_LSHIFT;
 				if (EventIsPhysical(lParam, sc, key_up))
 				{
 					g_modifiersLR_physical |= MOD_LSHIFT;
@@ -415,7 +435,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		if (sc == SC_RCONTROL)
 			if (key_up)
 			{
-				g_modifiersLR_logical &= ~MOD_RCONTROL;
+				if (!aIsSuppressed)
+					g_modifiersLR_logical &= ~MOD_RCONTROL;
 				if (EventIsPhysical(lParam, sc, key_up))
 				{
 					g_modifiersLR_physical &= ~MOD_RCONTROL;
@@ -425,7 +446,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 			}
 			else
 			{
-				g_modifiersLR_logical |= MOD_RCONTROL;
+				if (!aIsSuppressed)
+					g_modifiersLR_logical |= MOD_RCONTROL;
 				if (EventIsPhysical(lParam, sc, key_up))
 				{
 					g_modifiersLR_physical |= MOD_RCONTROL;
@@ -435,7 +457,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		else // Assume the left even if scan code doesn't match what would be expected.
 			if (key_up)
 			{
-				g_modifiersLR_logical &= ~MOD_LCONTROL;
+				if (!aIsSuppressed)
+					g_modifiersLR_logical &= ~MOD_LCONTROL;
 				if (EventIsPhysical(lParam, sc, key_up))
 				{
 					g_modifiersLR_physical &= ~MOD_LCONTROL;
@@ -445,7 +468,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 			}
 			else
 			{
-				g_modifiersLR_logical |= MOD_LCONTROL;
+				if (!aIsSuppressed)
+					g_modifiersLR_logical |= MOD_LCONTROL;
 				if (EventIsPhysical(lParam, sc, key_up))
 				{
 					g_modifiersLR_physical |= MOD_LCONTROL;
@@ -457,7 +481,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		if (sc == SC_RALT)
 			if (key_up)
 			{
-				g_modifiersLR_logical &= ~MOD_RALT;
+				if (!aIsSuppressed)
+					g_modifiersLR_logical &= ~MOD_RALT;
 				if (EventIsPhysical(lParam, sc, key_up))
 				{
 					g_modifiersLR_physical &= ~MOD_RALT;
@@ -467,7 +492,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 			}
 			else
 			{
-				g_modifiersLR_logical |= MOD_RALT;
+				if (!aIsSuppressed)
+					g_modifiersLR_logical |= MOD_RALT;
 				if (EventIsPhysical(lParam, sc, key_up))
 				{
 					g_modifiersLR_physical |= MOD_RALT;
@@ -477,7 +503,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		else // Assume the left even if scan code doesn't match what would be expected.
 			if (key_up)
 			{
-				g_modifiersLR_logical &= ~MOD_LALT;
+				if (!aIsSuppressed)
+					g_modifiersLR_logical &= ~MOD_LALT;
 				if (EventIsPhysical(lParam, sc, key_up))
 				{
 					g_modifiersLR_physical &= ~MOD_LALT;
@@ -487,7 +514,8 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 			}
 			else
 			{
-				g_modifiersLR_logical |= MOD_LALT;
+				if (!aIsSuppressed)
+					g_modifiersLR_logical |= MOD_LALT;
 				if (EventIsPhysical(lParam, sc, key_up))
 				{
 					g_modifiersLR_physical |= MOD_LALT;
@@ -500,7 +528,7 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 
 
 
-void UpdateKeyState(LPARAM lParam, sc_type sc, bool key_up)
+void UpdateKeyState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppressed)
 {
 	// See above notes near the first mention of SHIFT_KEY_WORKAROUND_TIMEOUT for details.
 	// This part of the workaround can be tested via "NumpadEnd::KeyHistory".  Turn on numlock,
@@ -540,7 +568,7 @@ void UpdateKeyState(LPARAM lParam, sc_type sc, bool key_up)
 	// future, so we need to make sure the physical state of the modifiers is updated
 	// in our tracking system even though the key is being suppressed:
 	if (kvk[(vk_type)pEvent->vkCode].as_modifiersLR)
-		UpdateModifierState(lParam, sc, key_up);  // Update our tracking of LWIN/RWIN/RSHIFT etc.
+		UpdateModifierState(lParam, sc, key_up, aIsSuppressed);  // Update our tracking of LWIN/RWIN/RSHIFT etc.
 
 	// Now that we're done using the old values (the above used them and also UpdateModifierState()'s
 	// calls to EventIsPhysical()), update these to their new values:
@@ -601,7 +629,7 @@ void UpdateKeyState(LPARAM lParam, sc_type sc, bool key_up)
 		KeyEvent(KEYUP, VK_NUMLOCK);
 		KeyEvent(KEYDOWN, VK_NUMLOCK);
 	}
-	UpdateKeyState(lParam, sc, key_up);
+	UpdateKeyState(lParam, sc, key_up, true);
 #endif
 
 	// Use PostMessage() rather than directly calling the function to write the key to
@@ -645,7 +673,7 @@ inline LRESULT AllowIt(HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, sc_typ
 	// Do these here since the above "return SuppressThisKey" will have already done it in that case.
 	if (g_KeyHistoryToFile && pKeyHistoryCurr)
 		PostMessage(g_hWnd, AHK_KEYHISTORY, (WPARAM)pKeyHistoryCurr, 0);
-	UpdateKeyState(lParam, sc, key_up);
+	UpdateKeyState(lParam, sc, key_up, false);
 
 	if (!kvk[(vk_type)pEvent->vkCode].as_modifiersLR)
 		return CallNextHookEx(hhk, code, wParam, lParam);
@@ -1606,9 +1634,6 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 			break;
 		}
 		default:
-			// Since action was taken, suppress this key event (don't let the system process it further) by
-			// returning non-zero on success.  Realistically, PostMessage should never fail?  But just
-			// in case it does, explicitly return non-zero rather than the result of PostMessage:
 #ifdef INCLUDE_KEYBD_HOOK
 			PostMessage(g_hWnd, AHK_HOOK_HOTKEY, hotkey_id, 0);  // Returns non-zero on success.
 #else

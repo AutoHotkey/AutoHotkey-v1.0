@@ -2406,6 +2406,11 @@ ResultType Line::FileInstall(char *aSource, char *aDest, char *aFlag)
 	bool allow_overwrite = aFlag && *aFlag == '1';
 #ifdef AUTOHOTKEYSC
 	HS_EXEArc_Read oRead;
+	// AutoIt3: Open the archive in this compiled exe.
+	// Jon gave me some details about why a password isn't needed: "The code in those libararies will
+	// only allow files to be extracted from the exe is is bound to (i.e the script that it was
+	// compiled with).  There are various checks and CRCs to make sure that it can't be used to read
+	// the files from any other exe that is passed."
 	if (oRead.Open(g_script.mFileSpec, "") != HS_EXEARC_E_OK)
 	{
 		MsgBox(g_script.mFileSpec, 0, "Could not open this EXE to run the main script:");

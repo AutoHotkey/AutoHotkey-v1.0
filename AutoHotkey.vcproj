@@ -282,6 +282,9 @@
 				RelativePath=".\source\defines.h">
 			</File>
 			<File
+				RelativePath=".\source\lib\exearc_read.h">
+			</File>
+			<File
 				RelativePath=".\source\globaldata.h">
 			</File>
 			<File

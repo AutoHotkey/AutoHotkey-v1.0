@@ -51,24 +51,27 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 
 	// Make a best guess of what the physical state of the keys is prior to starting,
 	// since GetAsyncKeyState() is unreliable (it seems to always report the logical vs.
-	// physical state, at least under Windows XP):
-	modLR_type modifiersLR_down_physically;
+	// physical state, at least under Windows XP).  Note: We're only want those physical
+	// keys that are also logically down (it's possible for a key to be down physically
+	// but not logically such as well R-control, for example, is a suffix hotkey and the
+	// user is physically holding it down):
+	modLR_type modifiersLR_down_physically_and_logically;
 	if (g_hhkLowLevelKeybd)
 		// Since hook is installed, use its more reliable tracking to determine which
 		// modifiers are down.
-		modifiersLR_down_physically = g_modifiersLR_physical;
+		modifiersLR_down_physically_and_logically = g_modifiersLR_physical & g_modifiersLR_logical; // intersect
 	else // Use best-guess instead.
 	{
 		// Even if TickCount has wrapped due to system being up more than about 49 days,
 		// DWORD math still gives the right answer as long as g_script.mThisHotkeyStartTime
 		// itself isn't more than about 49 days ago:
 		if ((GetTickCount() - g_script.mThisHotkeyStartTime) < (DWORD)g_HotkeyModifierTimeout) // Elapsed time < timeout-value
-			modifiersLR_down_physically = modifiersLR_current & aModifiersLR; // Bitwise AND is set intersection.
+			modifiersLR_down_physically_and_logically = modifiersLR_current & aModifiersLR; // Bitwise AND is set intersection.
 		else
 			// Since too much time as passed since the user pressed the hotkey, it seems best,
 			// based on the action that will occur below, to assume that no hotkey modifiers
 			// are physically down:
-			modifiersLR_down_physically = 0;
+			modifiersLR_down_physically_and_logically = 0;
 	}
 	// Any of the external modifiers that are down but NOT due to the hotkey are probably
 	// logically down rather than physically (perhaps from a prior command such as
@@ -79,14 +82,14 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 	// before sending "A" if this value indicates that LWin is down).  The below sets
 	// the value to be all the down-keys in modifiersLR_current except any that are physically
 	// down due to the hotkey itself:
-	modLR_type modifiersLR_persistent = modifiersLR_current & ~modifiersLR_down_physically;
+	modLR_type modifiersLR_persistent = modifiersLR_current & ~modifiersLR_down_physically_and_logically;
 	mod_type modifiers_persistent = ConvertModifiersLR(modifiersLR_persistent);
 
 //MsgBox(GetTickCount() - g_script.mThisHotkeyStartTime);
 //char mod_str[256];
 //MsgBox(ModifiersLRToText(aModifiersLR, mod_str));
 //MsgBox(ModifiersLRToText(modifiersLR_current, mod_str));
-//MsgBox(ModifiersLRToText(modifiersLR_down_physically, mod_str));
+//MsgBox(ModifiersLRToText(modifiersLR_down_physically_and_logically, mod_str));
 //MsgBox(ModifiersLRToText(modifiersLR_persistent, mod_str));
 
 	// Might be better to do this prior to changing capslock state:
@@ -283,13 +286,13 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 		// This is done because the user may have released some keys during the send operation
 		// (especially if KeyDelay > 0 and the Send is a large one):
 		if (g_hhkLowLevelKeybd)
-			modifiersLR_down_physically = g_modifiersLR_physical;
+			modifiersLR_down_physically_and_logically = g_modifiersLR_physical & g_modifiersLR_logical; // intersect
 		// Restore the state of the modifiers to be those believed to be physically held down
 		// by the user.  Do not restore any that were logically "persistent", as detected upon
 		// entrance to this function (e.g. due to something such as a prior "Send, {LWinDown}"),
 		// since their state should already been correct if things above are designed right:
 		modifiersLR_current = GetModifierLRState();
-		modLR_type keys_to_press_down = modifiersLR_down_physically & ~modifiersLR_current;
+		modLR_type keys_to_press_down = modifiersLR_down_physically_and_logically & ~modifiersLR_current;
 		SetModifierLRStateSpecific(keys_to_press_down, modifiersLR_current, KEYDOWN);
 	}
 
