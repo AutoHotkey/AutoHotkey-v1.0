@@ -11552,7 +11552,7 @@ ResultType Line::LineError(char *aErrorText, ResultType aErrorType, char *aExtra
 		// MY: Full filename is required, even if it's the main file, because some editors (EditPlus)
 		// seem to rely on that to determine which file and line number to jump to when the user double-clicks
 		// the error message in the output window:
-		printf("%s (%d): ==> %s\n", sSourceFile[mFileNumber], mLineNumber, aErrorText);
+		printf("%s (%d): ==> %s\n", sSourceFile[mFileNumber], mLineNumber, aErrorText); // printf() does not signifantly increase the size of the EXE, probably because it shares most of the same code with sprintf(), etc.
 		if (*aExtraInfo)
 			printf("     Specifically: %s\n", aExtraInfo);
 	}

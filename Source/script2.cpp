@@ -8961,6 +8961,11 @@ ResultType Line::FileAppend(char *aFilespec, char *aBuf, LoopReadFileStruct *aCu
 	bool file_was_already_open = fp;
 
 	bool open_as_binary = (*aFilespec == '*');
+	if (open_as_binary && !*(aFilespec + 1)) // Naked "*" means write to stdout.
+		// Avoid puts() in case it bloats the code in some compilers. i.e. fputs() is already used,
+		// so using it again here shouldn't bloat it:
+		return g_ErrorLevel->Assign(fputs(aBuf, stdout) ? ERRORLEVEL_ERROR : ERRORLEVEL_NONE); // fputs() returns 0 on success.
+		
 	if (open_as_binary)
 		// Do not do this because it's possible for filenames to start with a space
 		// (even though Explorer itself won't let you create them that way):
