@@ -7758,6 +7758,9 @@ bool Line::ScriptGetKeyState(vk_type aVK, KeyStateTypes aKeyStateType)
 		// which is why the below specifically calls IsKeyDown2kXP() rather than some more
 		// comprehensive method such as consulting the physical key state as tracked by the hook:
 		return IsKeyDown2kXP(aVK);
+		// Known limitation: For some reason, both the above and IsKeyDown9xNT() will indicate
+		// that the CONTROL key is up whenever RButton is down, at least if the mouse hook is
+		// installed without the keyboard hook.  No known explanation.
 }
 
 

@@ -202,7 +202,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 	ActionTypeType type_of_first_line;
 	int priority;
 	Hotstring *hs;
-	GuiType *pgui;   // This is just a temp variable and should not be referred to once the below has been determined.
+	GuiType *pgui; // This is just a temp variable and should not be referred to once the below has been determined.
 	HWND focused_control, focused_parent;
 	GuiControlType *pcontrol, *ptab_control;
 	GuiIndexType gui_index;  // Don't use pgui because pointer can become invalid if ExecUntil() executes "Gui Destroy".
@@ -851,6 +851,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 					g.GuiControlIndex = (GuiIndexType)msg.wParam;
 				}
 
+				// LAUNCH THREAD:
 				gui_label->mJumpToLine->ExecUntil(UNTIL_RETURN);
 
 				// Bug-fix for v1.0.22: If the above ExecUntil() performed a "Gui Destroy", the
@@ -858,24 +859,32 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				// hdrop_to_free will already have been freed as part of the window destruction
 				// process, so don't do it here.  g_gui[gui_index] is checked to ensure the window
 				// still exists:
-				if (g_gui[gui_index])
+				if (pgui = g_gui[gui_index]) // Assign.  This refresh is done as explained below.
 				{
-					if (pgui_label_is_running)
-						*pgui_label_is_running = false;
-					else if (msg.wParam == AHK_GUI_DROPFILES)
+					// Bug-fix for v1.0.30.04: If the thread that was just launched above destroyed
+					// its own GUI window, but then recreated it, that window's members obviously aren't
+					// guaranteed to have the same memory addresses that they did prior to destruction.
+					// Even g_gui[gui_index] would probably be a different address, so pgui would be
+					// invalid too.  Therefore, refresh the original pointers (pgui is refreshed above).
+					// See similar switch() higher above for comments about the below:
+					switch(msg.wParam)
 					{
-						if (hdrop_to_free) // This is only non-NULL when pgui is non-NULL.
+					case AHK_GUI_CLOSE:  pgui->mLabelForCloseIsRunning = false; break;
+					case AHK_GUI_ESCAPE: pgui->mLabelForEscapeIsRunning = false; break;
+					case AHK_GUI_SIZE:   pgui->mLabelForSizeIsRunning = false; break;
+					case AHK_GUI_DROPFILES:
+						if (pgui->mHdrop) // It's no longer safer to refer to hdrop_to_free (see comments above).
 						{
-							DragFinish(hdrop_to_free); // Since the DropFiles quasi-thread is finished, free the HDROP resources.
+							DragFinish(pgui->mHdrop); // Since the DropFiles quasi-thread is finished, free the HDROP resources.
 							pgui->mHdrop = NULL; // Indicate that this GUI window is ready for another drop.
 						}
 						pgui->mExStyle |= WS_EX_ACCEPTFILES;
 						SetWindowLong(pgui->mHwnd, GWL_EXSTYLE, pgui->mExStyle);
+					default: // It's a control's action, so set its attribute.
+						if (msg.wParam < pgui->mControlCount) // Recheck to ensure that control still exists (in case window was recreated as explained above).
+							pgui->mControl[msg.wParam].attrib &= ~GUI_CONTROL_ATTRIB_LABEL_IS_RUNNING;
 					}
-					else // It's a control's action, so set its attribute.
-						pgui->mControl[msg.wParam].attrib &= ~GUI_CONTROL_ATTRIB_LABEL_IS_RUNNING;
-				}
-
+				} // if (this gui window wasn't destroyed-without-recreation by the thread we just launched).
 				break;
 
 			default: // hotkey

@@ -9187,7 +9187,7 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 	// For example, -2**2 is evaluated as -(2**2), not (-2)**2 (the latter is unsupported by qmathPow anyway).
 	// However, this rule requires a small workaround in the postfix-builder to allow 2**-2 to be
 	// evaluated as 2**(-2) rather than being seen as an error.
-	// On a related note, the right-to-left tradition of of something like 2**3**4 is not implemented.
+	// On a related note, the right-to-left tradition of something like 2**3**4 is not implemented.
 	// Instead, the expression is evaluated from left-to-right (like other operators) to simplify the code.
 
 	#define MAX_TOKENS 512 // Max number of operators/operands.  Seems enough to handle anything realistic, while conserving call-stack space.
@@ -9713,7 +9713,7 @@ double_deref:
 				--stack_count;
 			else if (stack_symbol == SYM_OPAREN) // Open paren is never closed (currently impossible due to load-time balancing, but kept for completeness).
 				goto fail;
-			else // Pop item of the stack, and continue iterating to hit this line until stack is empty.
+			else // Pop item of the stack, and continue iterating, which will hit this line until stack is empty.
 				postfix[postfix_count++] = STACK_POP;
 			continue;
 		}
