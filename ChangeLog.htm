@@ -6,6 +6,78 @@
 <br>
 <br>
 
+</font><font size=4><b>0.214 BETA - December 16, 2003</b></font><font size=3><br><br>
+
+Added command WinMenuSelectItem (similar to AutoIt3 command).  The menu search terms are not case sensitive (i.e. File->Save is the same as file->save) and the use of ampersand (&) to indicate the underlined letter in a menu item is not necessary.  Example:<br>
+WinMenuSelectItem, Untitled - Notepad, , File, Save<br>
+WinMenuSelectItem, Untitled - Notepad, , 1&, 3&  ; Same as above but uses menu item position rather than text.<br>
+Note: The position method exists to support menus that don't contain text (perhaps because they are pictures of text rather than actual text?)  Position 1 is the first menu item (e.g. the File Menu).  Menu separator lines count as menu items for the purpose of determining the position of a menu item.<br>
+<br>
+Added command ControlFocus.  Example:<br>
+ControlFocus, (ControlName or ControlClassNN), WinTitle, WinText, Excludetitle, Excludetext<br>
+Note: As with all commands that take WinTitle/Text, you can specify the letter A as the title to use the active window, or leave all 4 window params blank to use the window most recently found by commands such as IfWinExist and WinWait.<br>
+<br>
+Improved the following commands so that they set ErrorLevel to 1 if there was any kind of non-critical error (such as a non-existent window or control) that prevented the command from completing:<br>
+<PRE>
+	ControlSend
+	ControlLeftClick
+	ControlSetText
+	ControlGetText
+	StatusBarGetText
+	WinGetText
+</PRE>
+<br>
+Improved StatusBarWait so that it sets ErrorLevel to 2 if there was some kind of error (e.g. the target window doesn't exist or doesn't have a status bar).  But as before, ErrorLevel will be set to 1 if the command times out or 0 if the status bar becomes a match for the specified text.<br>
+<br>
+Improved the KeyLog command to support logging keys & mouse buttons to a file.  It still works the old way (displaying the keylog window) if no params are given.  But it behaves differently if given a first param.  Examples:<br>
+<PRE>
+KeyLog, C:\Keylog.txt  ; Specify the filename and turn on file logging.
+KeyLog, off     ; Turn off file logging.
+KeyLog, on      ; Turn on file logging to the filename specified by a prior use of this command.
+Keylog, toggle  ; Toggle logging (set it to the opposite of its previous state).
+</PRE>
+The keyboard or mouse hook must be installed for logging to occur.  You can force them to be unconditionally installed by adding the following lines to your script:<br>
+#InstallKeybdHook<br>
+#InstallMouseHook<br>
+<br>
+The log file a tab-delimited text file with the following fields:<br>
+Virtual key code (hex)<br>
+Scan code (hex, the first digit is 1 if the key is an "extended" key)<br>
+Seconds elapsed since prior event<br>
+flag (h = hook hotkey, s = suppressed (hidden from system) by hook, i = ignored by hook)<br>
+down/up (d or u)<br>
+Key name<br>
+Active window title (only present if it has changed from the prior event)<br>
+<br>
+Sample log file:<br>
+<PRE>
+59	015	15.0	 	u	Y	C:\
+5B	15B	0.1	 	u	Left Windows
+9E	000	1.1	 	d	WheelDown
+9F	000	0.4	 	d	WheelUp
+A4	038	0.4	 	d	Alt
+09	00F	0.1	 	d	Tab
+09	00F	0.2	 	u	Tab
+A4	038	0.1	 	u	Alt	 Untitled - Notepad
+A3	11D	1.4	 	d	Right Ctrl
+26	148	0.1	h	d	Up	C:\
+26	148	0.1	s	u	Up
+A3	11D	0.0	 	u	Right Ctrl
+A3	11D	1.6	 	d	Right Ctrl
+2E	153	0.1	h	d	Delete
+A3	11D	0.0	i	u	Right Ctrl
+A4	038	0.0	i	d	Alt
+73	03E	0.0	i	d	F4
+73	03E	0.0	i	u	F4
+A4	038	0.0	i	u	Alt
+A3	11D	0.0	i	d	Right Ctrl
+</PRE>
+Note: Each keystroke generates two lines, a down and an up.<br>
+
+ 
+<br><hr><br>
+
+
 </font><font size=4><b>0.213 BETA - December 15, 2003</b></font><font size=3><br><br>
  
 Fixed hotkeys that have LWin/RWin (windows key) as a modifier and that use the Send command: In some cases, the windows key was incorrectly put into the down position after the Send.  [Thanks to Robert Yaklin for discovering this.]  On a related note, you do not need to use the Sleep command to allow the user time to release the modifier keys (Ctrl/Alt/Shift/Win) with hotkeys that use the Send command.  The Send command knows to change the modifiers to what they need to be for every key that will be sent.<br>

@@ -350,7 +350,7 @@ bool DoesFilePatternExist(char *aFilePattern)
 }
 
 
-int FileAppend(char *aFilespec, char *aLine, bool aAppendNewline)
+ResultType FileAppend(char *aFilespec, char *aLine, bool aAppendNewline)
 {
 	if (!aFilespec || !aLine) return FAIL;
 	if (!*aFilespec) return FAIL;

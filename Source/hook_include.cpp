@@ -423,6 +423,13 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 	if (kvk[(vk_type)pEvent->vkCode].as_modifiersLR)
 		UpdateModifierState(lParam, sc, key_up);
 #endif
+	// Use PostMessage() rather than directly calling the function to write the key to
+	// the log file.  This is done so that we can return sooner, which reduces keyboard
+	// and mouse lag by us not being in a pumping-messages state.  IN ADDITION, this
+	// method may also help to keep the keystrokes in order (due to recursive calls
+	// to the hook via keybd_event(), etc), I'm not sure:
+	if (g_KeyLogToFile && pKeyLogCurr)
+		PostMessage(g_hWnd, AHK_KEYLOG, (WPARAM)pKeyLogCurr, 0);
 	return 1;
 }
 
@@ -453,6 +460,10 @@ inline LRESULT AllowIt (HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, sc_ty
 			// Dereference to get the global var's value:
 			if (*(kvk[(vk_type)(pEvent->vkCode)].pForceToggle) != NEUTRAL) // Prevent toggle.
 				return SuppressThisKey;
+
+	// Do this here since the above "return SuppressThisKey" will have already done it in that case.
+	if (g_KeyLogToFile && pKeyLogCurr)
+		PostMessage(g_hWnd, AHK_KEYLOG, (WPARAM)pKeyLogCurr, 0);
 
 	if (!kvk[(vk_type)pEvent->vkCode].as_modifiersLR)
 		return CallNextHookEx(hhk, code, wParam, lParam);
@@ -496,7 +507,9 @@ inline LRESULT AllowIt (HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, sc_ty
 }
 
 #else // Mouse hook:
-#define AllowKeyToGoToSystem CallNextHookEx(g_hhkLowLevelMouse, code, wParam, lParam)
+#define AllowKeyToGoToSystem CallNextHookEx(g_hhkLowLevelMouse, code, wParam, lParam);\
+	if (g_KeyLogToFile && pKeyLogCurr)\
+		PostMessage(g_hWnd, AHK_KEYLOG, (WPARAM)pKeyLogCurr, 0)
 #endif
 
 
@@ -504,6 +517,7 @@ inline LRESULT AllowIt (HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, sc_ty
 #ifdef INCLUDE_KEYBD_HOOK
 LRESULT CALLBACK LowLevelKeybdProc(int code, WPARAM wParam, LPARAM lParam)
 {
+	KeyLogItem *pKeyLogCurr = NULL;
 	if (code != HC_ACTION)  // MSDN docs specify that Both LL keybd & mouse hook should return in this case.
 		return CallNextHookEx(g_hhkLowLevelKeybd, code, wParam, lParam);
 
@@ -530,6 +544,7 @@ LRESULT CALLBACK LowLevelKeybdProc(int code, WPARAM wParam, LPARAM lParam)
 #else // Mouse Hook:
 LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 {
+	KeyLogItem *pKeyLogCurr = NULL;
 	// code != HC_ACTION should be evaluated PRIOR to considering the values
 	// of wParam and lParam, because those values may be invalid or untrustworthy
 	// whenever code < 0.  So the order in this short-circuit boolean expression
@@ -582,9 +597,9 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	// KeyLogNext, in most cases before we had a chance to finish using the old value.  In other
 	// words, we use an automatic variable so that every instance of this function will get its
 	// own copy of the variable whose value will stays constant until that instance returns:
-	KeyLogItem *pKeyLogCurr = KeyLog + KeyLogNext;
-	if (++KeyLogNext >= MAX_LOGGED_KEYS)
-		KeyLogNext = 0;
+	pKeyLogCurr = g_KeyLog + g_KeyLogNext;
+	if (++g_KeyLogNext >= MAX_LOGGED_KEYS)
+		g_KeyLogNext = 0;
 	pKeyLogCurr->vk = vk;
 #ifdef INCLUDE_KEYBD_HOOK
 	// Intentionally log a zero if it comes in that way, prior to using MapVirtualKey() to try to resolve it:

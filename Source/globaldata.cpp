@@ -181,8 +181,9 @@ Action g_act[] =
 	// optional and validate elsewhere that the 2nd one specifically isn't blank:
 	, {"ControlSend", 0, 6, NULL} // Control, Chars-to-Send, std. 4 window params.
 	, {"ControlLeftClick", 0, 5, NULL} // Control, std. 4 window params
-	, {"ControlSetText", 1, 6, NULL} // Control, new text, std. 4 window params
-	, {"ControlGetText", 1, 6, NULL} // Output-var, Control, std. 4 window params
+	, {"ControlFocus", 0, 5, NULL}     // Control, std. 4 window params
+	, {"ControlSetText", 1, 6, NULL}   // Control, new text, std. 4 window params
+	, {"ControlGetText", 1, 6, NULL}   // Output-var, Control, std. 4 window params
 
 	, {"SetDefaultMouseSpeed", 1, 1, {1, 0}} // speed (numeric)
 	, {"MouseMove", 2, 3, {1, 2, 3, 0}} // x, y, speed
@@ -218,6 +219,7 @@ Action g_act[] =
 	, {"WinMove", 0, 8, {3, 4, 5, 6, 0}} // title, text, xpos, ypos, width, height, exclude-title, exclude_text
 	// Note for WinMove: xpos/ypos/width/height can be the string "default", but that is explicitly
 	// checked for in spite of requiring it to be numeric in the definition here.
+	, {"WinMenuSelectItem", 0, 11, NULL} // WinTitle, WinText, Menu name, 6 optional sub-menu names, ExcludeTitle/Text
 
 	// WinSetTitle: Allow a minimum of zero params so that title isn't forced to be non-blank.
 	// Also, if the user passes only one param, the title of the "last used" window will be
@@ -269,7 +271,7 @@ Action g_act[] =
 	, {"SetStoreCapslockMode", 1, 1, NULL} // On/Off
 	, {"ForceHotkey", 1, 1, NULL} // On/Off
 
-	, {"KeyLog", 0, 0, NULL}, {"ListLines", 0, 0, NULL}
+	, {"KeyLog", 0, 1, NULL}, {"ListLines", 0, 0, NULL}
 	, {"ListVars", 0, 0, NULL}, {"ListHotkeys", 0, 0, NULL}
 
 	, {"Reload", 0, 0, NULL}
@@ -499,5 +501,6 @@ key_to_sc_type g_key_to_sc[] =
 int g_key_to_vk_count = sizeof(g_key_to_vk) / sizeof(key_to_vk_type);
 int g_key_to_sc_count = sizeof(g_key_to_sc) / sizeof(key_to_sc_type);
 
-KeyLogItem KeyLog[MAX_LOGGED_KEYS] = {{0}};
-int KeyLogNext = 0;
+KeyLogItem g_KeyLog[MAX_LOGGED_KEYS] = {{0}};
+int g_KeyLogNext = 0;
+bool g_KeyLogToFile = false;

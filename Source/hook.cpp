@@ -609,7 +609,7 @@ HookType HookInit(Hotkey *aHK[], int aHK_count, HookType aHooksToActivate)
 	// it's only called once (either by first use of "SetNumLock(etc.), AlwaysOn" or
 	// by the activation of the entire hotkey set (if the set requires the hook)
 	// so this is the first time:
-	ZeroMemory(KeyLog, sizeof(KeyLog));
+	ZeroMemory(g_KeyLog, sizeof(g_KeyLog));
 	ZeroMemory(g_PhysicalKeyState, sizeof(g_PhysicalKeyState));
 	pPrefixKey = NULL;
 	g_modifiersLR_logical = g_modifiersLR_physical = g_modifiersLR_get = 0;
@@ -649,9 +649,8 @@ char *GetHookStatus(char *aBuf, size_t aBufSize)
 {
 	if (!aBuf || !aBufSize) return aBuf;
 
-	char KeyLogText[2048], KeyName[128], KeyNameOS[128]
-		, LRgText[128], LRhText[128], LRpText[128], IgnoreText[1024];
-	int item, i, j;
+	char KeyLogText[2048], KeyName[128], LRgText[128], LRhText[128], LRpText[128], IgnoreText[1024];
+	int item, i;
 	*KeyLogText = *IgnoreText = '\0';
 
 	if (!g_hhkLowLevelKeybd && !g_hhkLowLevelMouse)
@@ -665,49 +664,19 @@ char *GetHookStatus(char *aBuf, size_t aBufSize)
 	else
 	{
 		// Start at the oldest key, which is KeyLogNext:
-		for (item = KeyLogNext, i = 0; i < MAX_LOGGED_KEYS; ++i, ++item)
+		for (item = g_KeyLogNext, i = 0; i < MAX_LOGGED_KEYS; ++i, ++item)
 		{
 			if (item >= MAX_LOGGED_KEYS)
 				item = 0;
-			switch(KeyLog[item].vk)
-			{
-			case VK_CONTROL:
-			case VK_MENU:
-			case VK_SHIFT:
-			case VK_LWIN:
-			case VK_RWIN:
-				*KeyName = '\0';  // Let GetKeyNameText() resolve it instead.
-				break;
-			default:
-				for (j = 0; j < g_key_to_vk_count; ++j)
-					if (g_key_to_vk[j].vk == KeyLog[item].vk)
-						break;
-				if (j < g_key_to_vk_count)
-					strcpy(KeyName, g_key_to_vk[j].key_name);
-				else
-					if (isprint(KeyLog[item].vk))
-					{
-						KeyName[0] = KeyLog[item].vk;
-						KeyName[1] = '\0';
-					}
-					else
-						*KeyName = '\0';
-			}
-			*KeyNameOS = '\0';
-			if (KeyLog[item].sc)
-				// Use 0x02000000 to tell it that we want it to give left/right specific info, lctrl/rctrl etc.
-				if (!GetKeyNameText((long)(KeyLog[item].sc) << 16
-					, KeyNameOS, sizeof(KeyNameOS)/sizeof(TCHAR)))
-					snprintf(KeyNameOS, sizeof(KeyNameOS), "lParam=%08X", (LPARAM)(KeyLog[item].sc) << 16);
 			// Minimize the length of the text in this stmt because if it's too long,
 			// the MessageBox dialog will trucate it and not display the most important
 			// (most recent) keystrokes:
-			snprintfcat(KeyLogText, sizeof(KeyLogText), "\r\nvk%02X sc%03X %c %c %s %s"
-				, KeyLog[item].vk, KeyLog[item].sc
-				, KeyLog[item].key_up ? 'u' : 'd'
+			snprintfcat(KeyLogText, sizeof(KeyLogText), "\r\nvk%02X sc%03X %c %c %s"
+				, g_KeyLog[item].vk, g_KeyLog[item].sc
+				, g_KeyLog[item].key_up ? 'u' : 'd'
 				// It can't be both ignored and suppressed, so display only one:
-				, KeyLog[item].event_type
-				, KeyName, stricmp(KeyNameOS, KeyName) ? KeyNameOS : ""
+				, g_KeyLog[item].event_type
+				, GetKeyName(g_KeyLog[item].vk, g_KeyLog[item].sc, KeyName, sizeof(KeyName))
 				);
 		}
 	}

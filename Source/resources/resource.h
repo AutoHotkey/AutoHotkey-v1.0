@@ -1,6 +1,6 @@
 //{{NO_DEPENDENCIES}}
 // Microsoft Visual C++ generated include file.
-// Used by AutoHotkeyNT.rc
+// Used by AutoHotkey.rc
 //
 #define IDS_PROJNAME                    100
 #define IDR_WMDMLOGGER                  101

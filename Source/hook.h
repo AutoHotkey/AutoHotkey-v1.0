@@ -25,7 +25,7 @@ GNU General Public License for more details.
 #include "hotkey.h"
 
 // WM_USER is the lowest number that can be a user-defined message.  Anything above that is also valid.
-enum UserMessages {AHK_HOOK_HOTKEY = WM_USER, AHK_HOOK_TEST_MSG, AHK_DIALOG, AHK_NOTIFYICON};
+enum UserMessages {AHK_HOOK_HOTKEY = WM_USER, AHK_HOOK_TEST_MSG, AHK_DIALOG, AHK_NOTIFYICON, AHK_KEYLOG};
 
 
 // Some reasoning behind the below data structures: Could build a new array for [sc][sc] and [vk][vk]

@@ -93,8 +93,10 @@ extern key_to_sc_type g_key_to_sc[];
 extern int g_key_to_vk_count;
 extern int g_key_to_sc_count;
 
-extern KeyLogItem KeyLog[MAX_LOGGED_KEYS];
-extern int KeyLogNext;
+extern KeyLogItem g_KeyLog[MAX_LOGGED_KEYS];
+extern int g_KeyLogNext;
+extern bool g_KeyLogToFile;
+
 
 inline int GetBatchLines(char *aBuf = NULL)
 {

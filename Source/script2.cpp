@@ -114,6 +114,8 @@ ResultType Line::PerformShowWindow(ActionTypeType aActionType, char *aTitle, cha
 ResultType Line::WinMove(char *aTitle, char *aText, char *aX, char *aY
 	, char *aWidth, char *aHeight, char *aExcludeTitle, char *aExcludeText)
 {
+	// So that compatibility is retained, don't set ErrorLevel for commands that are native to AutoIt2
+	// but that AutoIt2 doesn't use ErrorLevel with (such as this one).
 	DETERMINE_TARGET_WINDOW
 	if (!target_window)
 		return OK;
@@ -132,9 +134,99 @@ ResultType Line::WinMove(char *aTitle, char *aText, char *aX, char *aY
 
 
 
+ResultType Line::WinMenuSelectItem(char *aTitle, char *aText, char *aMenu1, char *aMenu2
+	, char *aMenu3, char *aMenu4, char *aMenu5, char *aMenu6, char *aMenu7
+	, char *aExcludeTitle, char *aExcludeText)
+// Adapted from the AutoIt3 source.
+{
+	// Set up a temporary array make it easier to traverse nested menus & submenus
+	// in a loop.  Also add a NULL at the end to simplify the loop a little:
+	char *menu_param[] = {aMenu1, aMenu2, aMenu3, aMenu4, aMenu5, aMenu6, aMenu7, NULL};
+
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
+	DETERMINE_TARGET_WINDOW
+	if (!target_window)
+		return OK;  // Let ErrorLevel tell the story.
+
+	HMENU hMenu = GetMenu(target_window);
+	if (!hMenu) // Window has no menu bar.
+		return OK;  // Let ErrorLevel tell the story.
+
+	int menu_item_count = GetMenuItemCount(hMenu);
+	if (menu_item_count <= 0) // Menu bar has no menus.
+		return OK;  // Let ErrorLevel tell the story.
+	
+	#define MENU_ITEM_IS_SUBMENU 0xFFFFFFFF
+	UINT menu_id = MENU_ITEM_IS_SUBMENU;
+	char menu_text[1024];
+	bool match_found;
+	size_t menu_param_length;
+	int pos, target_menu_pos;
+	for (int i = 0; menu_param[i] && *menu_param[i]; ++i)
+	{
+		if (!hMenu)  // The nesting of submenus ended prior to the end of the list of menu search terms.
+			return OK;  // Let ErrorLevel tell the story.
+		menu_param_length = strlen(menu_param[i]);
+		target_menu_pos = (menu_param[i][menu_param_length - 1] == '&') ? atoi(menu_param[i]) - 1 : -1;
+		if (target_menu_pos >= 0)
+		{
+			if (target_menu_pos >= menu_item_count)  // Invalid menu position (doesn't exist).
+				return OK;  // Let ErrorLevel tell the story.
+			#define UPDATE_MENU_VARS(menu_pos) \
+			menu_id = GetMenuItemID(hMenu, menu_pos);\
+			if (menu_id == MENU_ITEM_IS_SUBMENU)\
+				menu_item_count = GetMenuItemCount(hMenu = GetSubMenu(hMenu, menu_pos));\
+			else\
+			{\
+				menu_item_count = 0;\
+				hMenu = NULL;\
+			}
+			UPDATE_MENU_VARS(target_menu_pos)
+		}
+		else // Searching by text rather than numerical position.
+		{
+			for (match_found = false, pos = 0; pos < menu_item_count; ++pos)
+			{
+				GetMenuString(hMenu, pos, menu_text, sizeof(menu_text) - 1, MF_BYPOSITION);
+				match_found = !strnicmp(menu_text, menu_param[i], strlen(menu_param[i]));
+				//match_found = stristr(menu_text, menu_param[i]);
+				if (!match_found)
+				{
+					// Try again to find a match, this time without the ampersands used to indicate
+					// a menu item's shortcut key:
+					StrReplace(menu_text, "&", "");
+					match_found = !strnicmp(menu_text, menu_param[i], strlen(menu_param[i]));
+					//match_found = stristr(menu_text, menu_param[i]);
+				}
+				if (match_found)
+				{
+					UPDATE_MENU_VARS(pos)
+					break;
+				}
+			} // inner for()
+			if (!match_found) // The search hierarchy (nested menus) specified in the params could not be found.
+				return OK;  // Let ErrorLevel tell the story.
+		} // else
+	} // outer for()
+
+	// This would happen if the outer loop above had zero iterations due to aMenu1 being NULL or blank,
+	// or if the caller specified a submenu as the target (which doesn't seem valid since an app would
+	// next expect to ever receive a message for a submenu?):
+	if (menu_id == MENU_ITEM_IS_SUBMENU)
+		return OK;  // Let ErrorLevel tell the story.
+
+	// Since the above didn't return, the specified search hierarchy was completely found.
+	PostMessage(target_window, WM_COMMAND, (WPARAM)menu_id, 0);
+	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+	return OK;
+}
+
+
+
 ResultType Line::ControlSend(char *aControl, char *aKeysToSend, char *aTitle, char *aText
 	, char *aExcludeTitle, char *aExcludeText, modLR_type aModifiersLR)
 {
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 	DETERMINE_TARGET_WINDOW
 	if (!target_window)
 		return OK;
@@ -143,6 +235,7 @@ ResultType Line::ControlSend(char *aControl, char *aKeysToSend, char *aTitle, ch
 		return OK;
 	SendKeys(aKeysToSend, aModifiersLR, control_window);
 	// But don't do WinDelay because KeyDelay should have been in effect for the above.
+	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 	return OK;
 }
 
@@ -151,6 +244,7 @@ ResultType Line::ControlSend(char *aControl, char *aKeysToSend, char *aTitle, ch
 ResultType Line::ControlLeftClick(char *aControl, char *aTitle, char *aText
 	, char *aExcludeTitle, char *aExcludeText)
 {
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 	DETERMINE_TARGET_WINDOW
 	if (!target_window)
 		return OK;
@@ -160,6 +254,51 @@ ResultType Line::ControlLeftClick(char *aControl, char *aTitle, char *aText
 	PostMessage(control_window, WM_LBUTTONDOWN, MK_LBUTTON, 0);
 	PostMessage(control_window, WM_LBUTTONUP, 0, 0);
 	DoWinDelay;  // It seems safer and more flexible to do this even for Control commands.
+	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+	return OK;
+}
+
+
+
+ResultType Line::ControlFocus(char *aControl, char *aTitle, char *aText
+	, char *aExcludeTitle, char *aExcludeText)
+{
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
+	DETERMINE_TARGET_WINDOW
+	if (!target_window)
+		return OK;
+	HWND control_window = ControlExist(target_window, aControl);
+	if (!control_window)
+		return OK;
+
+	// Unlike many of the other Control commands, this one requires AttachThreadInput()
+	// to have any realistic chance of success (though sometimes it may work by pure
+	// chance even without it):
+	bool is_attached_my_to_fore = false, is_attached_fore_to_target = false;
+	DWORD fore_thread, my_thread, target_thread;
+	fore_thread = GetWindowThreadProcessId(GetForegroundWindow(), NULL);
+	my_thread  = GetCurrentThreadId();
+	target_thread = GetWindowThreadProcessId(target_window, NULL);
+	if (my_thread != fore_thread)
+		is_attached_my_to_fore = AttachThreadInput(my_thread, fore_thread, TRUE) != 0;
+	if (fore_thread != target_thread)
+		is_attached_fore_to_target = AttachThreadInput(fore_thread, target_thread, TRUE) != 0;
+
+	if (SetFocus(control_window))
+	{
+		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+		DoWinDelay;  // It seems safer and more flexible to do this even for Control commands.
+	}
+
+	// Very important to detach any threads whose inputs were attached above,
+	// prior to returning, otherwise the next attempt to attach thread inputs
+	// for these particular windows may result in a hung thread or other
+	// undesirable effect:
+	if (is_attached_my_to_fore)
+		AttachThreadInput(my_thread, fore_thread, FALSE);
+	if (is_attached_fore_to_target)
+		AttachThreadInput(fore_thread, target_thread, FALSE);
+
 	return OK;
 }
 
@@ -168,6 +307,7 @@ ResultType Line::ControlLeftClick(char *aControl, char *aTitle, char *aText
 ResultType Line::ControlSetText(char *aControl, char *aNewText, char *aTitle, char *aText
 	, char *aExcludeTitle, char *aExcludeText)
 {
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 	DETERMINE_TARGET_WINDOW
 	if (!target_window)
 		return OK;
@@ -181,6 +321,7 @@ ResultType Line::ControlSetText(char *aControl, char *aNewText, char *aTitle, ch
 	SendMessageTimeout(control_window, WM_SETTEXT, (WPARAM)0, (LPARAM)aNewText
 		, SMTO_ABORTIFHUNG, 5000, &result);
 	DoWinDelay;  // It seems safer and more flexible to do this even for Control commands.
+	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 	return OK;
 }
 
@@ -189,6 +330,7 @@ ResultType Line::ControlSetText(char *aControl, char *aNewText, char *aTitle, ch
 ResultType Line::ControlGetText(char *aControl, char *aTitle, char *aText
 	, char *aExcludeTitle, char *aExcludeText)
 {
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 	DETERMINE_TARGET_WINDOW
 	HWND control_window = target_window ? ControlExist(target_window, aControl) : NULL;
 	// Even if control_window is NULL, we want to continue on so that the output
@@ -215,11 +357,14 @@ ResultType Line::ControlGetText(char *aControl, char *aTitle, char *aText
 		if (!OUTPUT_VAR->Length())
 			// There was no text to get or GetWindowTextTimeout() failed.
 			*OUTPUT_VAR->Contents() = '\0';  // Safe because Assign() gave us a non-constant memory area.
+		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 	}
 	else
 	{
 		*OUTPUT_VAR->Contents() = '\0';
 		OUTPUT_VAR->Length() = 0;
+		// And leave g_ErrorLevel set to ERRORLEVEL_ERROR to distinguish a non-existent control
+		// from a one that does exist but returns no text.
 	}
 	// Consider the above to be always successful, even if the window wasn't found, except
 	// when below returns an error:
@@ -231,8 +376,11 @@ ResultType Line::ControlGetText(char *aControl, char *aTitle, char *aText
 ResultType Line::StatusBarGetText(char *aPart, char *aTitle, char *aText
 	, char *aExcludeTitle, char *aExcludeText)
 {
+	// Note: ErrorLevel is handled by StatusBarUtil(), below.
 	DETERMINE_TARGET_WINDOW
 	HWND control_window = target_window ? ControlExist(target_window, "msctls_statusbar321") : NULL;
+	// Call this even if control_window is NULL because in that case, it will set the output var to
+	// be blank for us:
 	StatusBarUtil(OUTPUT_VAR, control_window, atoi(aPart)); // It will handle any zero part# for us.
 	return OK; // Even if it fails, seems best to return OK so that subroutine can continue.
 }
@@ -242,6 +390,7 @@ ResultType Line::StatusBarGetText(char *aPart, char *aTitle, char *aText
 ResultType Line::StatusBarWait(char *aTextToWaitFor, char *aSeconds, char *aPart, char *aTitle, char *aText
 	, char *aInterval, char *aExcludeTitle, char *aExcludeText)
 {
+	// Note: ErrorLevel is handled by StatusBarUtil(), below.
 	DETERMINE_TARGET_WINDOW
 	// Make a copy of any memory areas that are volatile (due to Deref buf being overwritten
 	// if a new hotkey subroutine is launched while we are waiting) but whose contents we
@@ -301,22 +450,30 @@ ResultType Line::WinGetTitle(char *aTitle, char *aText, char *aExcludeTitle, cha
 
 ResultType Line::WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
 {
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 	DETERMINE_TARGET_WINDOW
 	// Even if target_window is NULL, we want to continue on so that the output
 	// variables are set to be the empty string, which is the proper thing to do
 	// rather than leaving whatever was in there before:
 	if (!target_window)
 		return OUTPUT_VAR->Assign(); // Tell it not to free the memory by not calling with "".
+
 	length_and_buf_type sab;
 	sab.buf = NULL; // Tell it just to calculate the length this time around.
 	sab.total_length = sab.capacity = 0; // Init
 	EnumChildWindows(target_window, EnumChildGetText, (LPARAM)&sab);
+
 	if (!sab.total_length)
+	{
+		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 		return OUTPUT_VAR->Assign(); // Tell it not to free the memory by omitting all params.
+	}
+
 	// Set up the var, enlarging it if necessary.  If the OUTPUT_VAR is of type VAR_CLIPBOARD,
 	// this call will set up the clipboard for writing:
 	if (OUTPUT_VAR->Assign(NULL, (VarSizeType)sab.total_length) != OK)
 		return FAIL;  // It already displayed the error.
+
 	// Fetch the text directly into the var.  Also set the length explicitly
 	// in case actual size written was off from the esimated size (since
 	// GetWindowTextLength() can return more space that will actually be required
@@ -325,8 +482,11 @@ ResultType Line::WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char
 	sab.total_length = 0; // Init
 	sab.capacity = OUTPUT_VAR->Capacity(); // Because capacity might be a little larger than we asked for.
 	EnumChildWindows(target_window, EnumChildGetText, (LPARAM)&sab);
+
 	OUTPUT_VAR->Length() = (VarSizeType)sab.total_length;  // In case it wound up being smaller than expected.
-	if (!sab.total_length)
+	if (sab.total_length)
+		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+	else
 		// Something went wrong, so make sure we set to empty string.
 		*OUTPUT_VAR->Contents() = '\0';  // Safe because Assign() gave us a non-constant memory area.
 	return OUTPUT_VAR->Close();  // In case it's the clipboard.
@@ -681,6 +841,11 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		MsgSleep();  // Now call the main loop to handle the message we just posted (and any others).
 		return 0; // Not sure if this is the correct return value.  It probably doesn't matter.
 	}
+
+	case AHK_KEYLOG:
+		KeyLogToFile(NULL, ((KeyLogItem *)wParam)->event_type, ((KeyLogItem *)wParam)->key_up
+			, ((KeyLogItem *)wParam)->vk, ((KeyLogItem *)wParam)->sc);
+		return 0;
 
 	case WM_SYSCOMMAND:
 		if (wParam == SC_CLOSE && hWnd == g_hWnd) // i.e. behave this way only for main window.
@@ -2262,6 +2427,13 @@ ResultType Line::CheckForMandatoryArgs()
 		// at runtime):
 		if (!*RAW_ARG2)
 			return LineError("Parameter #2 must not be blank.");
+		return OK;
+	case ACT_WINMENUSELECTITEM:
+		// Window params can all be blank in this case, but the first menu param should
+		// be non-blank (but it's ok if its a dereferenced var that resolves to blank
+		// at runtime):
+		if (!*RAW_ARG3)
+			return LineError("Parameter #3 must not be blank.");
 		return OK;
 	case ACT_MOUSECLICKDRAG:
 		// Even though we check for blanks at load-time, we don't bother to do so at runtime

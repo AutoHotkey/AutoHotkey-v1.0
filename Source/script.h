@@ -79,7 +79,7 @@ enum enum_act {
 , ACT_STRINGLEN, ACT_STRINGGETPOS, ACT_STRINGREPLACE
 , ACT_RUN, ACT_RUNWAIT
 , ACT_GETKEYSTATE
-, ACT_SEND, ACT_CONTROLSEND, ACT_CONTROLLEFTCLICK, ACT_CONTROLSETTEXT, ACT_CONTROLGETTEXT
+, ACT_SEND, ACT_CONTROLSEND, ACT_CONTROLLEFTCLICK, ACT_CONTROLFOCUS, ACT_CONTROLSETTEXT, ACT_CONTROLGETTEXT
 , ACT_SETDEFAULTMOUSESPEED, ACT_MOUSEMOVE, ACT_MOUSECLICK, ACT_MOUSECLICKDRAG, ACT_MOUSEGETPOS
 , ACT_STATUSBARGETTEXT
 , ACT_STATUSBARWAIT
@@ -93,7 +93,7 @@ enum enum_act {
 , ACT_WINMINIMIZE, ACT_WINMAXIMIZE, ACT_WINRESTORE
 , ACT_WINHIDE, ACT_WINSHOW
 , ACT_WINMINIMIZEALL, ACT_WINMINIMIZEALLUNDO
-, ACT_WINCLOSE, ACT_WINKILL, ACT_WINMOVE
+, ACT_WINCLOSE, ACT_WINKILL, ACT_WINMOVE, ACT_WINMENUSELECTITEM
 , ACT_WINSETTITLE, ACT_WINGETTITLE, ACT_WINGETPOS, ACT_WINGETTEXT
 // Keep rarely used actions near the bottom for parsing/performance reasons:
 , ACT_PIXELGETCOLOR, ACT_PIXELSEARCH
@@ -251,9 +251,14 @@ private:
 		, char *aExcludeTitle = "", char *aExcludeText = "");
 	ResultType WinMove(char *aTitle, char *aText, char *aX, char *aY
 		, char *aWidth = "", char *aHeight = "", char *aExcludeTitle = "", char *aExcludeText = "");
+	ResultType WinMenuSelectItem(char *aTitle, char *aText, char *aMenu1, char *aMenu2
+		, char *aMenu3, char *aMenu4, char *aMenu5, char *aMenu6, char *aMenu7
+		, char *aExcludeTitle, char *aExcludeText);
 	ResultType ControlSend(char *aControl, char *aKeysToSend, char *aTitle, char *aText
 		, char *aExcludeTitle, char *aExcludeText, modLR_type aModifiersLR);
 	ResultType ControlLeftClick(char *aControl, char *aTitle, char *aText
+		, char *aExcludeTitle, char *aExcludeText);
+	ResultType ControlFocus(char *aControl, char *aTitle, char *aText
 		, char *aExcludeTitle, char *aExcludeText);
 	ResultType ControlSetText(char *aControl, char *aNewText, char *aTitle, char *aText
 		, char *aExcludeTitle, char *aExcludeText);
@@ -341,13 +346,19 @@ public:
 	#define ARG6 (mArgc > 5 ? sArgDeref[5] : "")
 	#define ARG7 (mArgc > 6 ? sArgDeref[6] : "")
 	#define ARG8 (mArgc > 7 ? sArgDeref[7] : "")
+	#define ARG9 (mArgc > 8 ? sArgDeref[8] : "")
+	#define ARG10 (mArgc > 9 ? sArgDeref[9] : "")
+	#define ARG11 (mArgc > 10 ? sArgDeref[10] : "")
 	#define TWO_ARGS ARG1, ARG2
-	#define THREE_ARGS ARG1, ARG2, ARG3
-	#define FOUR_ARGS ARG1, ARG2, ARG3, ARG4
-	#define FIVE_ARGS ARG1, ARG2, ARG3, ARG4, ARG5
-	#define SIX_ARGS ARG1, ARG2, ARG3, ARG4, ARG5, ARG6
-	#define SEVEN_ARGS ARG1, ARG2, ARG3, ARG4, ARG5, ARG6, ARG7
-	#define EIGHT_ARGS ARG1, ARG2, ARG3, ARG4, ARG5, ARG6, ARG7, ARG8
+	#define THREE_ARGS  ARG1, ARG2, ARG3
+	#define FOUR_ARGS   ARG1, ARG2, ARG3, ARG4
+	#define FIVE_ARGS   ARG1, ARG2, ARG3, ARG4, ARG5
+	#define SIX_ARGS    ARG1, ARG2, ARG3, ARG4, ARG5, ARG6
+	#define SEVEN_ARGS  ARG1, ARG2, ARG3, ARG4, ARG5, ARG6, ARG7
+	#define EIGHT_ARGS  ARG1, ARG2, ARG3, ARG4, ARG5, ARG6, ARG7, ARG8
+	#define NINE_ARGS   ARG1, ARG2, ARG3, ARG4, ARG5, ARG6, ARG7, ARG8, ARG9
+	#define TEN_ARGS    ARG1, ARG2, ARG3, ARG4, ARG5, ARG6, ARG7, ARG8, ARG9, ARG10
+	#define ELEVEN_ARGS ARG1, ARG2, ARG3, ARG4, ARG5, ARG6, ARG7, ARG8, ARG9, ARG10, ARG11
 	#define VAR(arg) ((Var *)arg.deref)
 	#define OUTPUT_VAR VAR(mArg[0])
 	#define OUTPUT_VAR2 VAR(mArg[1])

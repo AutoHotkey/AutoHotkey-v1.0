@@ -708,6 +708,8 @@ ResultType StatusBarUtil(Var *aOutputVar, HWND aControlWindow, int aPartNumber
 // aControlWindow is allowed to be NULL because we want to set the output var
 // to be the empty string in that case.
 {
+	// Set default ErrorLevel, which is a special value (2 vs. 1) in the case of StatusBarWait:
+	g_ErrorLevel->Assign(aOutputVar ? ERRORLEVEL_ERROR : ERRORLEVEL_ERROR2);
 	if (aCheckInterval <= 0) aCheckInterval = SB_DEFAULT_CHECK_INTERVAL; // Caller relies on us doing this.
 	if (!aTextToWaitFor) aTextToWaitFor = "";  // For consistency.
 
@@ -767,6 +769,8 @@ ResultType StatusBarUtil(Var *aOutputVar, HWND aControlWindow, int aPartNumber
 			if (hProcess)
 			{
 				// AutoIt3: Dynamic functions to retain 95 compatibility
+				// My: The above comment seems wrong since this section is only for NT/2k/XP+.
+				// Perhaps it meant that only NT and/or 2k require dynamic functions whereas XP doesn't:
 				typedef LPVOID (WINAPI *MyVirtualAllocEx)(HANDLE, LPVOID, SIZE_T, DWORD, DWORD);
 				// Static for performance, since value should be always the same.
 				static MyVirtualAllocEx lpfnAlloc = (MyVirtualAllocEx)GetProcAddress(GetModuleHandle("kernel32.dll")
@@ -775,34 +779,46 @@ ResultType StatusBarUtil(Var *aOutputVar, HWND aControlWindow, int aPartNumber
 
 				for (;;)
 				{ // Always do the first iteration so that at least one check is done.
-					if (SendMessageTimeout(aControlWindow, SB_GETTEXT, (WPARAM)(aPartNumber - 1), (LPARAM)pMem
+					if (!SendMessageTimeout(aControlWindow, SB_GETTEXT, (WPARAM)(aPartNumber - 1), (LPARAM)pMem
 						, SMTO_ABORTIFHUNG, SB_TIMEOUT, &dwResult))
-					{
-						if (!ReadProcessMemory(hProcess, pMem, buf, WINDOW_TEXT_SIZE, NULL))
-						{
-							*buf = '\0';  // In case it changed the buf before failing.
-							break;
-						}
-						buf[sizeof(buf) - 1] = '\0';  // Just to be sure.
-						// Below: Match is achieved if both are empty string:
-						#define MATCH_FOUND_OR_NOT_WAITING ((!*aTextToWaitFor && !*buf)\
-							|| (*aTextToWaitFor	&& strstr(buf, aTextToWaitFor)))
-						if (MATCH_FOUND_OR_NOT_WAITING)
-							break;
-					}
-					else // it failed or timed out; buf stays as it was: initialized to empty string.
+						// It failed or timed out; buf stays as it was: initialized to empty string.
+						// Also ErrorLevel stays set to 2, the default set above.
 						break;
+					if (!ReadProcessMemory(hProcess, pMem, buf, WINDOW_TEXT_SIZE, NULL))
+					{
+						*buf = '\0';  // In case it changed the buf before failing.
+						break;
+					}
+					buf[sizeof(buf) - 1] = '\0';  // Just to be sure.
+
+					// Below: In addition to normal/intuitive matching, a match is also achieved if
+					// both are empty string:
+					#define BREAK_IF_MATCH_FOUND_OR_IF_NOT_WAITING \
+					if ((!*aTextToWaitFor && !*buf) || (aTextToWaitFor && strstr(buf, aTextToWaitFor))) \
+					{\
+						g_ErrorLevel->Assign(ERRORLEVEL_NONE);\
+						break;\
+					}\
+					if (aOutputVar)\
+						break;  // i.e. If an output variable was given, we're not waiting for a match.
+					BREAK_IF_MATCH_FOUND_OR_IF_NOT_WAITING
 
 					// Don't continue to the wait if the target window is destroyed:
 					// Must cast to int or any negative result will be lost due to DWORD type.
 					// Also: Last param false because we don't want it to restore the
 					// current active window after the time expires (in case
-					// our subroutine is suspended).
-					#define SB_SLEEP_IF_NEEDED if (   IsWindow(aControlWindow) && (WAIT_INDEFINITELY\
-						|| (int)(aWaitTime - (GetTickCount() - start_time)) > SLEEP_INTERVAL_HALF)   )\
+					// our subroutine is suspended).  Also, ERRORLEVEL_ERROR is the value that
+					// indicates that we timed out rather than having ever found a match:
+					#define SB_SLEEP_IF_NEEDED \
+					if (!IsWindow(aControlWindow))\
+						break;\
+					if (WAIT_INDEFINITELY || (int)(aWaitTime - (GetTickCount() - start_time)) > SLEEP_INTERVAL_HALF)\
 						MsgSleep(aCheckInterval, RETURN_AFTER_MESSAGES, false);\
 					else\
-						break;  // Done waiting.
+					{\
+						g_ErrorLevel->Assign(ERRORLEVEL_ERROR);\
+						break;\
+					}
 					SB_SLEEP_IF_NEEDED
 				}
 
@@ -829,8 +845,7 @@ ResultType StatusBarUtil(Var *aOutputVar, HWND aControlWindow, int aPartNumber
 						// Not sure why AutoIt3 doesn't use use strcpy() for this, but leave it to be safe:
 						CopyMemory(buf, pMem, WINDOW_TEXT_SIZE);
 						buf[sizeof(buf) - 1] = '\0';  // Just to be sure.
-						if (MATCH_FOUND_OR_NOT_WAITING)
-							break;
+						BREAK_IF_MATCH_FOUND_OR_IF_NOT_WAITING
 					}
 					else // it failed or timed out; buf stays as it was: initialized to empty string.
 						break;
@@ -846,10 +861,11 @@ ResultType StatusBarUtil(Var *aOutputVar, HWND aControlWindow, int aPartNumber
 
 	// Otherwise, consider this to be always successful, even if aControlWindow == NULL
 	// or the status bar didn't have the part number provided, unless the below fails.
-	if (aOutputVar) // Otherwise caller didn't want the text.
+	if (aOutputVar)
 		// Note we use a temp buf rather than writing directly to the var contents above, because
 		// we don't know how long the text will be until after the above operation finishes.
 		return aOutputVar->Assign(buf, space_needed - 1);
+	// else caller didn't want the text.
 	return OK;
 }
 

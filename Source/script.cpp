@@ -304,13 +304,17 @@ int Script::LoadFromFile()
 	FILE *fp = fopen(mFileSpec, "r");
 	if (!fp)
 	{
-		int response = MsgBox("Config file can't be opened.  Create it now?", MB_YESNOCANCEL);
-		if (response == IDCANCEL || response == IDNO)
+		int response = MsgBox("Default script file can't be opened.  Create it now?", MB_YESNO);
+		if (response != IDYES)
 			return 0;
 		FILE *fp2 = fopen(mFileSpec, "a");
 		if (!fp2)
+		{
+			MsgBox("Could not create file, perhaps because the current directory is read-only"
+				" or has insufficient permissions.");
 			return -1;
-		fprintf(fp2, "; " NAME_P " config file\n"
+		}
+		fprintf(fp2, "; " NAME_P " script file\n"
 			"\n"
 			//"; Uncomment out the below line to try out a sample of an Alt-tab\n"
 			//"; substitute (currently not supported in Win9x):\n"
@@ -3070,10 +3074,14 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 
 	case ACT_WINMOVE:
 		return mArgc > 2 ? WinMove(EIGHT_ARGS) : WinMove("", "", ARG1, ARG2);
+	case ACT_WINMENUSELECTITEM:
+		return WinMenuSelectItem(ELEVEN_ARGS);
 	case ACT_CONTROLSEND:
 		return ControlSend(SIX_ARGS, aModifiersLR);
 	case ACT_CONTROLLEFTCLICK:
 		return ControlLeftClick(FIVE_ARGS);
+	case ACT_CONTROLFOCUS:
+		return ControlFocus(FIVE_ARGS);
 	case ACT_CONTROLSETTEXT:
 		return ControlSetText(SIX_ARGS);
 	case ACT_CONTROLGETTEXT:
@@ -3468,6 +3476,21 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	}
 	case ACT_KEYLOG:
 	{
+		if (*ARG1)
+		{
+			if (!stricmp(ARG1, "Off"))
+				g_KeyLogToFile = false;
+			else if (!stricmp(ARG1, "On"))
+				g_KeyLogToFile = true;
+			else if (!stricmp(ARG1, "Toggle"))
+				g_KeyLogToFile = !g_KeyLogToFile;
+			else // Assume the param is the target file to which to log the keys:
+			{
+				g_KeyLogToFile = true;
+				KeyLogToFile(ARG1);
+			}
+			return OK;
+		}
 		// I was initially concerned that GetWindowText() can hang if the target window is
 		// hung.  But at least on newer OS's, this doesn't seem to be a problem: MSDN says
 		// "If the window does not have a caption, the return value is a null string. This

@@ -193,7 +193,7 @@ char *StrReplaceAll(char *Str, char *OldStr, char *NewStr = "", bool aCaseSensit
 //void DisplayError (DWORD Error);
 // UINT FileTimeTenthsOfSecondUntil (FILETIME *pftStart, FILETIME *pftEnd);
 bool DoesFilePatternExist(char *aFilePattern);
-int FileAppend(char *aFilespec, char *aLine, bool aAppendNewline = true);
+ResultType FileAppend(char *aFilespec, char *aLine, bool aAppendNewline = true);
 char *ConvertFilespecToCorrectCase(char *aFullFileSpec);
 
 #endif

@@ -1135,3 +1135,88 @@ int TextToSpecial(char *aText, UINT aTextLength, mod_type &aModifiers)
 	}
 	return 0;
 }
+
+
+
+ResultType KeyLogToFile(char *aFilespec, char aType, bool aKeyUp, vk_type aVK, sc_type aSC)
+{
+	static char target_filespec[MAX_PATH] = "";
+	static HWND last_foreground_window = NULL;
+	static DWORD last_tickcount = GetTickCount();
+
+	if (aFilespec && *aFilespec)
+		strlcpy(target_filespec, aFilespec, sizeof(target_filespec));
+	if (aFilespec && !aVK && !aSC) // Caller didn't want us to log anything this time.
+		return OK;
+	if (!*target_filespec)
+		return OK; // No file to log to.
+
+	if (!aVK)
+		aVK = g_sc_to_vk[aSC].a;
+	else
+		if (!aSC)
+			aSC = g_vk_to_sc[aVK].a;
+
+	char buf[2048] = "", win_title[1024] = "<Init>", key_name[128] = "";
+	HWND curr_foreground_window = GetForegroundWindow();
+	DWORD curr_tickcount = GetTickCount();
+	bool log_changed_window = (curr_foreground_window != last_foreground_window);
+	if (log_changed_window)
+	{
+		if (curr_foreground_window)
+			GetWindowText(curr_foreground_window, win_title, sizeof(win_title));
+		else
+			strlcpy(win_title, "<None>", sizeof(win_title));
+		last_foreground_window = curr_foreground_window;
+	}
+
+	snprintf(buf, sizeof(buf), "%02X" "\t%03X" "\t%0.1f" "\t%c" "\t%c" "\t%s" "%s%s"
+		, aVK, aSC
+		, (float)(curr_tickcount - last_tickcount) / (float)1000
+		, aType
+		, aKeyUp ? 'u' : 'd'
+		, GetKeyName(aVK, aSC, key_name, sizeof(key_name))
+		, log_changed_window ? "\t" : ""
+		, log_changed_window ? win_title : ""
+		);
+	last_tickcount = curr_tickcount;
+	return FileAppend(target_filespec, buf);
+}
+
+
+
+char *GetKeyName(vk_type aVK, sc_type aSC, char *aBuf, size_t aBuf_size)
+{
+	if (!aBuf || aBuf_size < 3) return aBuf;
+
+	*aBuf = '\0'; // Set default.
+	if (!aVK && !aSC)
+		return aBuf;
+
+	if (!aVK)
+		aVK = g_sc_to_vk[aSC].a;
+	else
+		if (!aSC)
+			aSC = g_vk_to_sc[aVK].a;
+
+	// Use 0x02000000 to tell it that we want it to give left/right specific info, lctrl/rctrl etc.
+	if (!aSC || !GetKeyNameText((long)(aSC) << 16, aBuf, (int)(aBuf_size/sizeof(TCHAR))))
+	{
+		for (int j = 0; j < g_key_to_vk_count; ++j)
+			if (g_key_to_vk[j].vk == aVK)
+				break;
+		if (j < g_key_to_vk_count)
+			strlcpy(aBuf, g_key_to_vk[j].key_name, aBuf_size);
+		else
+		{
+			if (isprint(aVK))
+			{
+				aBuf[0] = aVK;
+				aBuf[1] = '\0';
+			}
+			else
+				strlcpy(aBuf, "not found", aBuf_size);
+		}
+	}
+	return aBuf;
+}
