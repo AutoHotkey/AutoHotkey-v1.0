@@ -142,20 +142,23 @@ struct key_type
 //	vk_type toggleable_vk;  // If this key is CAPS/NUM/SCROLL-lock, its virtual key value is stored here.
 	ToggleValueType *pForceToggle;  // Pointer to a global variable for toggleable keys only.  NULL for others.
 	modLR_type as_modifiersLR; // If this key is a modifier, this will have the corresponding bit(s) for that key.
+	HotkeyIDType hotkey_to_fire_upon_release; // A up-event hotkey queued by a prior down-event.
 	bool used_as_prefix;  // whether a given virtual key or scan code is even used by a hotkey.
 	bool used_as_suffix;  // whether a given virtual key or scan code is even used by a hotkey.
+	bool used_as_key_up;  // Whether this suffix also has an enabled key-up hotkey.
 	UCHAR no_suppress;
 	bool is_down; // this key is currently down.
 	bool it_put_alt_down;  // this key resulted in ALT being pushed down (due to alt-tab).
 	bool it_put_shift_down;  // this key resulted in SHIFT being pushed down (due to shift-alt-tab).
-	bool down_performed_action;  // the last key-down resulted in an action (modifiers matched those of a valid hotkey)
+	bool down_performed_action; // the last key-down resulted in an action (modifiers matched those of a valid hotkey)
+	bool hotkey_down_was_suppressed; // Whether the down-event for a key was suppressed (thus its up-event should be too).
 	// The values for "was_just_used" (zero is the inialized default, meaning it wasn't just used):
 	char was_just_used; // a non-modifier key of any kind was pressed while this prefix key was down.
 	// And these are the values for the above (besides 0):
 	#define AS_PREFIX 1
 	#define AS_PREFIX_FOR_HOTKEY 2
 	bool sc_takes_precedence; // used only by the scan code array: this scan code should take precedence over vk.
-};
+}; // Keep the macro below in sync with the above.
 
 #define RESET_KEYTYPE_ATTRIB(item) \
 {\
@@ -163,13 +166,17 @@ struct key_type
 	item.nModifierSC = 0;\
 	item.used_as_prefix = false;\
 	item.used_as_suffix = false;\
+	item.used_as_key_up = false;\
 	item.no_suppress = false;\
 	item.sc_takes_precedence = false;\
 }
 
 #define RESET_KEYTYPE_STATE(item) \
 {\
-	item.is_down = item.it_put_alt_down = item.it_put_shift_down = item.down_performed_action = false;\
+	item.is_down = false;\
+	item.it_put_alt_down = false;\
+	item.it_put_shift_down = false;\
+	item.down_performed_action = false;\
 	item.was_just_used = 0;\
 }
 

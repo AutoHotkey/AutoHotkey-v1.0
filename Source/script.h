@@ -110,7 +110,7 @@ enum enum_act {
 , ACT_PIXELGETCOLOR, ACT_PIXELSEARCH, ACT_IMAGESEARCH
 , ACT_GROUPADD, ACT_GROUPACTIVATE, ACT_GROUPDEACTIVATE, ACT_GROUPCLOSE
 , ACT_DRIVESPACEFREE, ACT_DRIVE, ACT_DRIVEGET
-, ACT_SOUNDGET, ACT_SOUNDSET, ACT_SOUNDGETWAVEVOLUME, ACT_SOUNDSETWAVEVOLUME, ACT_SOUNDPLAY
+, ACT_SOUNDGET, ACT_SOUNDSET, ACT_SOUNDGETWAVEVOLUME, ACT_SOUNDSETWAVEVOLUME, ACT_SOUNDBEEP, ACT_SOUNDPLAY
 , ACT_FILEAPPEND, ACT_FILEREAD, ACT_FILEREADLINE, ACT_FILEDELETE, ACT_FILERECYCLE, ACT_FILERECYCLEEMPTY
 , ACT_FILEINSTALL, ACT_FILECOPY, ACT_FILEMOVE, ACT_FILECOPYDIR, ACT_FILEMOVEDIR
 , ACT_FILECREATEDIR, ACT_FILEREMOVEDIR
@@ -2192,6 +2192,7 @@ public:
 
 	HICON mCustomIcon;  // NULL unless the script has loaded a custom icon during its runtime.
 	char *mCustomIconFile; // Filename of icon.  Allocated on first use.
+	bool mIconFrozen; // If true, the icon does not change state when the state of pause or suspend changes.
 	char *mTrayIconTip;  // Custom tip text for tray icon.  Allocated on first use.
 	UINT mCustomIconNumber; // The number of the icon inside the above file.
 

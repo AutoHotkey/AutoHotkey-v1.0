@@ -1178,8 +1178,8 @@ void PollJoysticks()
 // Polling the joysticks this way rather than using joySetCapture() is preferable for several reasons:
 // 1) I believe joySetCapture() internally polls the joystick anyway, via a system timer, so it probably
 //    doesn't perform much better (if at all) than polling "manually".
-// 2) joySetCapture() only supports 4 buttons
-// 3) joySetCapture() will fail if another app is already capturing the joystick
+// 2) joySetCapture() only supports 4 buttons;
+// 3) joySetCapture() will fail if another app is already capturing the joystick;
 // 4) Even if the joySetCapture() succeeds, other programs (e.g. older games), would be prevented from
 //    capturing the joystick while the script in question is running.
 {

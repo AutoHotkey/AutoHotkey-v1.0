@@ -4019,6 +4019,10 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, COLOR
 		if (   !(screen_pixel = getbits(hbitmap_screen, sdc, screen_width, screen_height, screen_is_16bit))   )
 			goto fast_end;
 
+		// Concerning 0xF8F8F8F8: "On 16bit and 15 bit color the first 5 bits in each byte are valid
+		// (in 16bit there is an extra bit but i forgot for which color). And this will explain the
+		// second problem [in the test script], since GetPixel even in 16bit will return some "valid"
+		// data in the last 3bits of each byte."
 		int i;
 		LONG screen_pixel_count = screen_width * screen_height;
 		if (screen_is_16bit)
@@ -4043,7 +4047,7 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, COLOR
 		}
 		else
 		{
-			// It seems more appropriate to do the 16-bit conversionprior to SET_COLOR_RANGE,
+			// It seems more appropriate to do the 16-bit conversion prior to SET_COLOR_RANGE,
 			// rather than applying 0xF8 to each of the high/low values individually.
 			if (screen_is_16bit)
 			{
@@ -4074,7 +4078,8 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, COLOR
 				red = GetBValue(pixel);
 				green = GetGValue(pixel);
 				blue = GetRValue(pixel);
-				if (red >= red_low && red <= red_high && green >= green_low && green <= green_high
+				if (red >= red_low && red <= red_high
+					&& green >= green_low && green <= green_high
 					&& blue >= blue_low && blue <= blue_high)
 				{
 					found = true;
@@ -4118,8 +4123,8 @@ fast_end:
 	// This old/slower method is kept  because fast mode will break older scripts that rely on
 	// which match is found if there is more than one match (since fast mode searches the
 	// pixels in a different order (horizontally rather than verically, I believe).
-	// In addition, there is doubt that the fast mode in all screen color depths, all games,
-	// and all the other circumstances that the slow mode is known to work in.
+	// In addition, there is doubt that the fast mode works in all the screen color depths, games,
+	// and other circumstances that the slow mode is known to work in.
 
 	// If the caller gives us inverted X or Y coordinates, conduct the search in reverse order.
 	// This feature was requested; it was put into effect for v1.0.25.06.
@@ -4801,7 +4806,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		if (iMsg == WM_TASKBARCREATED && !g_NoTrayIcon) // !g_NoTrayIcon --> the tray icon should be always visible.
 		{
 			g_script.CreateTrayIcon();
-			g_script.UpdateTrayIcon(true);  // Force the icon into the correct pause/suspend state.
+			g_script.UpdateTrayIcon(true);  // Force the icon into the correct pause, suspend, or mIconFrozen state.
 			// And now pass this iMsg on to DefWindowProc() in case it does anything with it.
 		}
 
@@ -8113,6 +8118,11 @@ ResultType Line::SoundSetWaveVolume(char *aVolume, HWAVEOUT aDeviceID)
 
 ResultType Line::SoundPlay(char *aFilespec, bool aSleepUntilDone)
 {
+	char *cp = omit_leading_whitespace(aFilespec);
+	if (*cp == '*')
+		return g_ErrorLevel->Assign(MessageBeep(ATOU(cp + 1)) ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
+		// ATOU() returns 0xFFFFFFFF for -1, which is relied upon to support the -1 sound.
+
 	// Adapted from the AutoIt3 source.
 	// See http://msdn.microsoft.com/library/default.asp?url=/library/en-us/multimed/htm/_win32_play.asp
 	// for some documentation mciSendString() and related.
@@ -8938,7 +8948,7 @@ ResultType Line::FileReadLine(char *aFilespec, char *aLineNumber)
 ResultType Line::FileAppend(char *aFilespec, char *aBuf, LoopReadFileStruct *aCurrentReadFile)
 {
 	// The below is avoided because want to allow "nothing" to be written to a file in case the
-	// user is doing this to reset it's timestamp:
+	// user is doing this to reset it's timestamp (or create an empty file).
 	//if (!aBuf || !*aBuf)
 	//	return g_ErrorLevel->Assign(ERRORLEVEL_NONE);
 

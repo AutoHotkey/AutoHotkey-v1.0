@@ -59,7 +59,7 @@ Script::Script()
 	, mLinesExecutedThisCycle(0), mUninterruptedLineCountMax(1000), mUninterruptibleTime(15)
 	, mRunAsUser(NULL), mRunAsPass(NULL), mRunAsDomain(NULL)
 	, mCustomIcon(NULL) // Normally NULL unless there's a custom tray icon loaded dynamically.
-	, mCustomIconFile(NULL), mTrayIconTip(NULL) // Allocated on first use.
+	, mCustomIconFile(NULL), mIconFrozen(false), mTrayIconTip(NULL) // Allocated on first use.
 	, mCustomIconNumber(0)
 {
 	// v1.0.25: mLastScriptRest and mLastPeekTime are now initialized right before the auto-exec
@@ -497,7 +497,7 @@ void Script::UpdateTrayIcon(bool aForceUpdate)
 		return;
 	static bool icon_shows_paused = false;
 	static bool icon_shows_suspended = false;
-	if (!aForceUpdate && g.IsPaused == icon_shows_paused && g_IsSuspended == icon_shows_suspended)
+	if (!aForceUpdate && (mIconFrozen || (g.IsPaused == icon_shows_paused && g_IsSuspended == icon_shows_suspended)))
 		return; // it's already in the right state
 	int icon;
 	if (g.IsPaused && g_IsSuspended)
@@ -513,7 +513,7 @@ void Script::UpdateTrayIcon(bool aForceUpdate)
 		icon = g_IconTray;
 #endif
 	// Use the custom tray icon if the icon is normal (non-paused & non-suspended):
-	mNIC.hIcon = (mCustomIcon && !g.IsPaused && !g_IsSuspended) ? mCustomIcon
+	mNIC.hIcon = (mCustomIcon && (mIconFrozen || (!g.IsPaused && !g_IsSuspended))) ? mCustomIcon
 		: LoadIcon(g_hInstance, MAKEINTRESOURCE(icon));
 	if (Shell_NotifyIcon(NIM_MODIFY, &mNIC))
 	{
@@ -7763,6 +7763,14 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			device_id = 0;
 		return (mActionType == ACT_SOUNDGETWAVEVOLUME) ? SoundGetWaveVolume((HWAVEOUT)device_id)
 			: SoundSetWaveVolume(ARG1, (HWAVEOUT)device_id);
+
+	case ACT_SOUNDBEEP:
+		// For simplicity and support for future/greater capabilities, no range checking is done.
+		// It simply calls the function with the two DWORD values provided. It avoids setting
+		// ErrorLevel because failure is rare and also because a script might want play a beep
+		// right before displaying an error dialog that uses the previous value of ErrorLevel.
+		Beep(*ARG1 ? ATOU(ARG1) : 523, *ARG2 ? ATOU(ARG2) : 150);
+		return OK;
 
 	case ACT_SOUNDPLAY:
 		return SoundPlay(ARG1, *ARG2 && !stricmp(ARG2, "wait") || !stricmp(ARG2, "1"));

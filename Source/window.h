@@ -51,6 +51,8 @@ if (USE_FOREGROUND_WINDOW(title, text, exclude_title, exclude_text))\
 #define WINDOW_CLASS_SIZE 1024  // Haven't found anything that documents how long one can be, so use this.
 #define AHK_CLASS_FLAG "ahk_class"
 #define AHK_CLASS_FLAG_LENGTH 9  // The length of the above string.
+#define AHK_PID_FLAG "ahk_pid"
+#define AHK_PID_FLAG_LENGTH 7  // The length of the above string.
 #define AHK_ID_FLAG "ahk_id"
 #define AHK_ID_FLAG_LENGTH 6  // The length of the above string.
 
@@ -256,10 +258,13 @@ inline bool IsTextMatch(char *aHaystack, char *aNeedle, TitleMatchModes aTitleMa
 
 inline bool IsTitleMatch(HWND aWnd, char *aHaystack, char *aNeedle, char *aExcludeTitle)
 // To help performance, it's the caller's responsibility to ensure that all params are not NULL.
-// Use the AutoIt2 convention (same in AutoIt3?) of making searches for window titles
-// and text case sensitive.
+// Use the AutoIt2 convention of making searches for window titles and text case sensitive.
 {
-	if (strnicmp(aNeedle, AHK_CLASS_FLAG, AHK_CLASS_FLAG_LENGTH)) // aNeedle doesn't specify a class name.
+	bool is_pid;
+	if (strnicmp(aNeedle, "ahk_", 4) // i.e. it can't be AHK_CLASS or AHK_PID (this first check helps performance).
+		|| (is_pid = strnicmp(aNeedle, AHK_CLASS_FLAG, AHK_CLASS_FLAG_LENGTH)) // ... or: it's not AHK_CLASS (this check must come before the next).
+			&& strnicmp(aNeedle, AHK_PID_FLAG, AHK_PID_FLAG_LENGTH)) // ... and it's not AHK_PID.
+		// aNeedle doesn't specify a class name or PID (is_pid might be uninitialized at this stage).
 	{
 		if (g.TitleMatchMode == FIND_ANYWHERE)
 			return (!*aNeedle || strstr(aHaystack, aNeedle)) // Either one of these makes half a match.
@@ -271,17 +276,27 @@ inline bool IsTitleMatch(HWND aWnd, char *aHaystack, char *aNeedle, char *aExclu
 			return (!*aNeedle || !strcmp(aHaystack, aNeedle))
 				&& (!*aExcludeTitle || strcmp(aHaystack, aExcludeTitle));
 	}
-	// Otherwise, aNeedle specifies a class name rather than a window title.
-	aNeedle = omit_leading_whitespace(aNeedle + AHK_CLASS_FLAG_LENGTH);
-	char fore_class[WINDOW_CLASS_SIZE];
-	if (!GetClassName(aWnd, fore_class, WINDOW_CLASS_SIZE - 1)) // Assume its not a match.
-		return false;
-	// To be a match, the class names must match exactly (case sensitive).  This seems best to
-	// avoid problems with ambiguity, since some apps might use very short class names that
-	// overlap with more "official" classnames, or vice versa.  User can always define a Window
-	// Group to operate upon more than one class simultaneously.
-	if (strcmp(fore_class, aNeedle))
-		return false;
+	// Otherwise, aNeedle specifies a class name or PID rather than a window title.
+	aNeedle = omit_leading_whitespace(aNeedle + (is_pid ? AHK_PID_FLAG_LENGTH : AHK_CLASS_FLAG_LENGTH));
+	if (is_pid)
+	{
+		DWORD pid;
+		GetWindowThreadProcessId(aWnd, &pid);
+		if (pid != ATOU(aNeedle))
+			return false;
+	}
+	else
+	{
+		char class_name[WINDOW_CLASS_SIZE];
+		if (!GetClassName(aWnd, class_name, WINDOW_CLASS_SIZE - 1)) // Assume its not a match.
+			return false;
+		// To be a match, the class names must match exactly (case sensitive).  This seems best to
+		// avoid problems with ambiguity, since some apps might use very short class names that
+		// overlap with more "official" classnames, or vice versa.  User can always define a Window
+		// Group to operate upon more than one class simultaneously.
+		if (strcmp(class_name, aNeedle))
+			return false;
+	}
 	// The other requirement for a match is that ExcludeTitle not be found in aHaystack.
 	if (!*aExcludeTitle)
 		return true;

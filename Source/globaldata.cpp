@@ -205,7 +205,8 @@ sc2_type g_vk_to_sc[VK_ARRAY_COUNT] = {{0}};
 //    accommodate all the elements in the new sub-array, including room for it's 0 terminator.
 //    Note: If you use a value for MinParams than is greater than zero, remember than any params
 //    beneath that threshold will also be required to be non-blank (i.e. user can't omit them even
-//    if later, non-blank params are provided).
+//    if later, non-blank params are provided).  UPDATE: For a parameter to recognize an expression
+//    such as x+100, it must be listed in the sub-array as a pure numeric parameter.
 // 3) If the new command has any params that are output or input vars, change Line::ArgIsVar().
 // 4) Add any desired load-time validation in Script::AddLine() in an syntax-checking section.
 // 5) Implement the command in Line::Perform() or Line::EvaluateCondition (if it's an IF).
@@ -406,9 +407,10 @@ Action g_act[] =
 	, {"SoundSet", 1, 4, {1, 4, 0}} // Volume percent-level (0-100), ComponentType, ControlType (default=vol), Mixer/Device Number
 	, {"SoundGetWaveVolume", 1, 2, {2, 0}} // OutputVar, Mixer/Device Number
 	, {"SoundSetWaveVolume", 1, 2, {1, 2, 0}} // Volume percent-level (0-100), Device Number (1 is the first)
+	, {"SoundBeep", 0, 2, {1, 2, 0}} // Frequency, Duration.
 	, {"SoundPlay", 1, 2, NULL} // Filename [, wait]
 
-	, {"FileAppend", 1, 2, NULL} // text, filename (which can be omitted in a read-file loop).
+	, {"FileAppend", 0, 2, NULL} // text, filename (which can be omitted in a read-file loop). Update: Text can be omitted too, to create an empty file or alter the timestamp of an existing file.
 	, {"FileRead", 2, 2, NULL} // Output variable, filename
 	, {"FileReadLine", 3, 3, NULL} // Output variable, filename, line-number (custom validation, not numeric validation)
 	, {"FileDelete", 1, 1, NULL} // filename or pattern

@@ -68,6 +68,9 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 	case MENU_CMD_ICON:
 	{
 		RETURN_IF_NOT_TRAY;
+		bool mIconFrozen_prev = mIconFrozen;
+		if (*aOptions) // i.e. if it's blank, don't change the current setting of mIconFrozen.
+			mIconFrozen = (ATOI64(aOptions) == 1);
 		if (!*aParam3)
 		{
 			g_NoTrayIcon = false;
@@ -76,6 +79,8 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 				CreateTrayIcon();
 				UpdateTrayIcon(true);  // Force the icon into the correct pause/suspend state.
 			}
+			else if (!mIconFrozen && mIconFrozen_prev) // To cause "Menu Tray, Icon,,, 0" to update the icon while the script is suspended.
+				UpdateTrayIcon(true);
 			return OK;
 		}
 

@@ -54,9 +54,31 @@ void Hotkey::AllActivate()
 	// by the caller, if desired, before calling us.
 	bool is_neutral, suppress_hotkey_warnings = false;
 	modLR_type modifiersLR;
+	int j;
 	for (int i = 0; i < sHotkeyCount; ++i)
 	{
 		Hotkey &hot = *shk[i]; // For performance and convenience.
+
+		if (hot.mKeyUp && hot.mVK) // No need to do the below for mSC hotkeys since their down hotkeys would already be handled by the hook.
+		{
+			// For each key-up hotkey, search for any its counterpart that's a down-hotkey (if any).
+			// Such a hotkey should also be handled by the hook because if registered, such as
+			// "#5" (reg) and "#5 up" (hook), the hook would suppress the down event because it
+			// is unaware that down-hotkey exists (it's suppressed to prevent the key from being
+			// stuck in a logically down state).
+			for (j = 0; j < sHotkeyCount; ++j)
+			{
+				// No need to check the following because they are already hook hotkeys:
+				// mModifierVK/SC
+				// mAllowExtraModifiers
+				// mNoSuppress
+				// In addition, there is no need to check shk[j]->mKeyUp because that can't be
+				// true if it's mType is HK_NORMAL:
+				if (shk[j]->mType == HK_NORMAL && shk[j]->mVK == hot.mVK && shk[j]->mModifiersConsolidatedLR == hot.mModifiersConsolidatedLR)
+					shk[j]->mType = HK_KEYBD_HOOK;
+			}
+		}
+
 		// For simplicity, don't try to undo keys that are already considered to be
 		// handled by the hook, since it's not easy to know if they were set that
 		// way using "#UseHook, on" or really qualified some other way.
@@ -75,6 +97,7 @@ void Hotkey::AllActivate()
 				hot.mModifiers &= ~ConvertModifiersLR(modifiersLR);
 			else
 				hot.mModifiersLR &= ~modifiersLR;
+
 		// HK_MOUSE_HOOK type, and most HK_KEYBD types, are handled by the hotkey constructor.
 		// What we do here is change the type of any normal or undetermined key if there are other
 		// keys that overlap with it (i.e. because only now are all these keys available for checking).
@@ -246,7 +269,7 @@ void Hotkey::AllActivate()
 					// requires the keyboard hook. ALT hotkeys don't need it because the mouse hook sends
 					// a CTRL keystroke to disguise them, a trick that is unfortunately not reliable for
 					// when it happens while the while key is down (though it does disguise a Win-up).
-					|| (hot.mModifiersConsolidated && !(hot.mModifiersConsolidated & ~(MOD_LWIN | MOD_RWIN))) // Only LWin, RWin, or both are modifiers for this mouse button hotkey.
+					|| (hot.mModifiersConsolidatedLR && !(hot.mModifiersConsolidatedLR & ~(MOD_LWIN | MOD_RWIN))) // Only LWin, RWin, or both are modifiers for this mouse button hotkey.
 					|| (hot.mVK && !VK_IS_MOUSE(hot.mVK)) // e.g. "RButton & Space"
 					|| (hot.mModifierVK && !VK_IS_MOUSE(hot.mModifierVK))   ) // e.g. "Space & RButton"
 				{
@@ -256,7 +279,7 @@ void Hotkey::AllActivate()
 				// For the above, the following types of mouse hotkeys do not need the keyboard hook:
 				// 1) mAllowExtraModifiers: Already handled since the mouse hook fetches the modifier state
 				//    manually when the keyboard hook isn't installed.
-				// 2) mModifiersConsolidated (i.e. the mouse button is modified by a normal modifier
+				// 2) mModifiersConsolidatedLR (i.e. the mouse button is modified by a normal modifier
 				//    such as CTRL): Same reason as #1.
 				// 3) As a subset of #2, mouse hotkeys that use WIN as a modifier will not have the
 				//    Start Menu suppressed unless the keyboard hook is installed.  It's debatable,
@@ -764,7 +787,7 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 	, mNoSuppress(0)  // Default is to suppress both prefixes and suffixes.
 	, mModifierVK(0)
 	, mModifierSC(0)
-	, mModifiersConsolidated(0)
+	, mModifiersConsolidatedLR(0)
 	, mType(HK_UNDETERMINED)
 	, mUnregisterDuringThread(false)
 	, mIsRegistered(false)
@@ -794,7 +817,7 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 		return;
 
 	if (mType == HK_JOYSTICK)
-		mModifiersConsolidated = 0;
+		mModifiersConsolidatedLR = 0;
 	else
 	{
 		char error_text[512];
@@ -873,14 +896,14 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 		// just bitwise-or them together in case there's any ineffectual stuff stored in
 		// the fields that have no effect (e.g. modifiers have no effect if there's a mModifierVK):
 		if (mModifierVK)
-			mModifiersConsolidated = KeyToModifiersLR(mModifierVK);
+			mModifiersConsolidatedLR = KeyToModifiersLR(mModifierVK);
 		else if (mModifierSC)
-			mModifiersConsolidated = KeyToModifiersLR(0, mModifierSC);
+			mModifiersConsolidatedLR = KeyToModifiersLR(0, mModifierSC);
 		else
 		{
-			mModifiersConsolidated = mModifiersLR;
+			mModifiersConsolidatedLR = mModifiersLR;
 			if (mModifiers)
-				mModifiersConsolidated |= ConvertModifiers(mModifiers);
+				mModifiersConsolidatedLR |= ConvertModifiers(mModifiers);
 		}
 	}
 

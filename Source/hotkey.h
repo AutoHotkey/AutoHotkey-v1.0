@@ -30,7 +30,7 @@ EXTERN_SCRIPT;  // For g_script.
 // But further limit this to 0x3FFF (16,383) so that the two highest order bits
 // are reserved for our other uses:
 #define HOTKEY_NO_SUPPRESS             0x8000
-#define HOTKEY_FUTURE_USE              0x4000
+#define HOTKEY_KEY_UP                  0x4000
 #define HOTKEY_ID_MASK                 0x3FFF
 #define HOTKEY_ID_INVALID              HOTKEY_ID_MASK
 #define HOTKEY_ID_ALT_TAB              0x3FFE
@@ -84,7 +84,7 @@ private:
 	sc_type mModifierSC; // If mModifierVK is zero, this scan code, if non-zero, will be used as the modifier.
 	mod_type mModifiers;  // MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, or some additive or bitwise-or combination of these.
 	modLR_type mModifiersLR;  // Left-right centric versions of the above.
-	modLR_type mModifiersConsolidated; // The combination of mModifierVK, mModifierSC, mModifiersLR, modifiers
+	modLR_type mModifiersConsolidatedLR; // The combination of mModifierVK, mModifierSC, mModifiersLR, modifiers
 
 	// Keep single-byte attributes adjacent to each other to conserve memory within byte-aligned class/struct:
 	vk_type mVK; // virtual-key code, e.g. VK_TAB, VK_LWIN, VK_LMENU, VK_APPS, VK_F10.  If zero, use sc below.
@@ -149,7 +149,7 @@ private:
 			// by a timed subroutine, while #HotkeyModifierTimeout is still in effect,
 			// in which case we would want SendKeys() to take not of these modifiers even
 			// if it was called from an ExecUntil() other than ours here:
-			g_script.mThisHotkeyModifiersLR = mModifiersConsolidated;
+			g_script.mThisHotkeyModifiersLR = mModifiersConsolidatedLR;
 			// For v1.0.23, the below allows the $ hotkey prefix to unregister the hotkey on
 			// Windows 9x, which allows the send command to send the hotkey itself without
 			// causing an infinite loop of keystrokes.  For simplicity, the hotkey is kept

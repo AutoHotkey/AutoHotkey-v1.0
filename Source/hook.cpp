@@ -57,6 +57,7 @@ static key_type *ksc = NULL;
 // array of keyboard-hook hotkeys (similar to how the mouse is done):
 static HotkeyIDType *kvkm = NULL;
 static HotkeyIDType *kscm = NULL;
+static HotkeyIDType *hotkey_up = NULL;
 // Macros for convenience in accessing the above arrays as multidimensional objects.
 // When using them, be sure to consistently access the first index as ModLR (i.e. the rows)
 // and the second as VK or SC (i.e. the columns):
@@ -101,19 +102,21 @@ int sort_most_general_before_least(const void *a1, const void *a2)
 // those with more specific modifiers (e.g. CTRL-ALT).  To make qsort() perform properly, it seems
 // best to sort by vk/sc then by generality.
 {
+	hk_sorted_type &b1 = *(hk_sorted_type *)a1; // For performance and convenience.
+	hk_sorted_type &b2 = *(hk_sorted_type *)a2;
 	// It's probably not necessary to be so thorough.  For example, if a1 has a vk but a2 has an sc,
 	// those two are immediately non-equal.  But I'm worried about consistency: qsort() may get messed
 	// up if these same two objects are ever compared, in reverse order, but a different comparison
 	// result is returned.  Therefore, we compare rigorously and consistently:
-	if (   ((hk_sorted_type *)a1)->vk && ((hk_sorted_type *)a2)->vk   )
-		if (   ((hk_sorted_type *)a1)->vk != ((hk_sorted_type *)a2)->vk   )
-			return ((hk_sorted_type *)a1)->vk - ((hk_sorted_type *)a2)->vk;
-	if (   ((hk_sorted_type *)a1)->sc && ((hk_sorted_type *)a2)->sc   )
-		if (   ((hk_sorted_type *)a1)->sc != ((hk_sorted_type *)a2)->sc   )
-			return ((hk_sorted_type *)a1)->sc - ((hk_sorted_type *)a2)->sc;
-	if (   ((hk_sorted_type *)a1)->vk && !((hk_sorted_type *)a2)->vk   )
+	if (b1.vk && b2.vk)
+		if (b1.vk != b2.vk)
+			return b1.vk - b2.vk;
+	if (b1.sc && b2.sc)
+		if (b1.sc != b2.sc)
+			return b1.sc - b2.sc;
+	if (b1.vk && !b2.vk)
 		return 1;
-	if (   !((hk_sorted_type *)a1)->vk && ((hk_sorted_type *)a2)->vk   )
+	if (!b1.vk && b2.vk)
 		return -1;
 
 	// If the above didn't return, we now know that a1 and a2 have the same vk's or sc's.  So
@@ -123,9 +126,9 @@ int sort_most_general_before_least(const void *a1, const void *a2)
 
 	// This part is basically saying that keys that don't allow extra modifiers can always be processed
 	// after all other keys:
-	if (((hk_sorted_type *)a1)->AllowExtraModifiers && !((hk_sorted_type *)a2)->AllowExtraModifiers)
+	if (b1.AllowExtraModifiers && !b2.AllowExtraModifiers)
 		return -1;  // Indicate that a1 is smaller, so that it will go to the top.
-	if (!((hk_sorted_type *)a1)->AllowExtraModifiers && ((hk_sorted_type *)a2)->AllowExtraModifiers)
+	if (!b1.AllowExtraModifiers && b2.AllowExtraModifiers)
 		return 1;
 
 	// However the order of suffixes that don't allow extra modifiers, among themselves, may be important.
@@ -133,21 +136,21 @@ int sort_most_general_before_least(const void *a1, const void *a2)
 	// Example: User defines ^a, but also defines >^a.  What should probably happen is that >^a fores ^a
 	// to fire only when <^a occurs.
 
-	mod_type mod_a1_merged = ((hk_sorted_type *)a1)->modifiers;
-	mod_type mod_a2_merged = ((hk_sorted_type *)a2)->modifiers;
-	if (((hk_sorted_type *)a1)->modifiersLR)
-		mod_a1_merged |= ConvertModifiersLR(((hk_sorted_type *)a1)->modifiersLR);
-	if (((hk_sorted_type *)a2)->modifiersLR)
-		mod_a2_merged |= ConvertModifiersLR(((hk_sorted_type *)a2)->modifiersLR);
+	mod_type mod_a1_merged = b1.modifiers;
+	mod_type mod_a2_merged = b2.modifiers;
+	if (b1.modifiersLR)
+		mod_a1_merged |= ConvertModifiersLR(b1.modifiersLR);
+	if (b2.modifiersLR)
+		mod_a2_merged |= ConvertModifiersLR(b2.modifiersLR);
 
 	// Check for equality first to avoid a possible infinite loop where two identical sets are subsets of each other:
 	if (mod_a1_merged == mod_a1_merged)
 	{
 		// Here refine it further to handle a case such as ^a and >^a.  We want ^a to be considered
 		// more general so that it won't override >^a altogether:
-		if (   ((hk_sorted_type *)a1)->modifiersLR && !((hk_sorted_type *)a2)->modifiersLR   )
+		if (b1.modifiersLR && !b2.modifiersLR)
 			return 1;  // Make a1 greater, so that it goes below a2 on the list.
-		if (   !((hk_sorted_type *)a1)->modifiersLR && ((hk_sorted_type *)a2)->modifiersLR   )
+		if (!b1.modifiersLR && b2.modifiersLR)
 			return -1;
 		// After the above, the only remaining possible-problem case in this block is that
 		// a1 and a2 have non-zero modifiersLRs that are different.  e.g. >+^a and +>^a
@@ -232,8 +235,10 @@ HookType RemoveAllHooks()
 	if (ksc) delete [] ksc;
 	if (kvkm) delete [] kvkm;
 	if (kscm) delete [] kscm;
+	if (hotkey_up) delete [] hotkey_up;
 	kvk = ksc = NULL;
 	kvkm = kscm = NULL;
+	hotkey_up = NULL;
 	return 0;
 }
 
@@ -332,16 +337,19 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 		if (kvk = new key_type[VK_ARRAY_COUNT])
 			if (ksc = new key_type[SC_ARRAY_COUNT])
 				if (kvkm = new HotkeyIDType[KVKM_SIZE])
-					kscm = new HotkeyIDType[KSCM_SIZE];
-		if (!kvk || !ksc || !kvkm || !kscm) // at least one of the allocations failed
+					if (kscm = new HotkeyIDType[KSCM_SIZE])
+						hotkey_up = new HotkeyIDType[MAX_HOTKEYS];
+		if (!(kvk && ksc && kvkm && kscm && hotkey_up)) // at least one of the allocations failed
 		{
 			// Keep all 4 objects in sync with one another (i.e. either all allocated, or all not allocated):
 			if (kvk) delete [] kvk;
 			if (ksc) delete [] ksc;
 			if (kvkm) delete [] kvkm;
 			if (kscm) delete [] kscm;
+			if (hotkey_up) delete [] hotkey_up;
 			kvk = ksc = NULL;
 			kvkm = kscm = NULL;
+			hotkey_up = NULL;
 			// In this case, indicate that none of the hooks is installed, since if we're here, this
 			// is the first call to this function and there hasn't yet been any opportunity to install
 			// a hook:
@@ -414,6 +422,8 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 		kvkm[i] = HOTKEY_ID_INVALID;
 	for (i = 0; i < KSCM_SIZE; ++i)
 		kscm[i] = HOTKEY_ID_INVALID;
+	for (i = 0; i < MAX_HOTKEYS; ++i)
+		hotkey_up[i] = HOTKEY_ID_INVALID;
 
 	hk_sorted_type hk_sorted[MAX_HOTKEYS];
 	ZeroMemory(hk_sorted, sizeof(hk_sorted));
@@ -508,9 +518,18 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 		pThisKey->used_as_suffix = true;
 		HotkeyIDType hotkey_id_with_flags = hk.mID;
 
+		if (hk.mKeyUp)
+		{
+			pThisKey->used_as_key_up = true;
+			hotkey_id_with_flags |= HOTKEY_KEY_UP;
+		}
+
 		if (hk.mNoSuppress & NO_SUPPRESS_SUFFIX)
 		{
 			hotkey_id_with_flags |= HOTKEY_NO_SUPPRESS;
+			// For v1.0.28, I realized that the below is unnecessary because there's already a better
+			// and easier workaround in hook_include.cpp. Search on "send a down event to make up"
+			// to find it.
 			// For v1.0.26, the below fixes cases such as the below by making any key that is
 			// a non-suppressed suffix key into a non-suppressed prefix key:
 			// ~a::MsgBox
@@ -523,10 +542,10 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 			// For example:
 			// a::MsgBox
 			// ~a & b::MsgBox
-			if (hk.mVK)
-				kvk[hk.mVK].no_suppress |= NO_SUPPRESS_PREFIX;
-			else // It must have a non-zero hk.mSC due to check higher above.
-				ksc[hk.mSC].no_suppress |= NO_SUPPRESS_PREFIX;
+			//if (hk.mVK)
+			//	kvk[hk.mVK].no_suppress |= NO_SUPPRESS_PREFIX;
+			//else // It must have a non-zero hk.mSC due to check higher above.
+			//	ksc[hk.mSC].no_suppress |= NO_SUPPRESS_PREFIX;
 		}
 		// else leave the bit set to zero in hotkey_id_with_flags so that the key will be suppressed
 		// (most hotkeys are like this).
@@ -624,16 +643,23 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 
 		mod_type modifiers, i_modifiers_merged;
 		int modifiersLR;  // Don't make this modLR_type to avoid integer overflow, since it's a loop-counter.
+		bool prev_hk_is_key_up, this_hk_is_key_up;
+		HotkeyIDType this_hk_id;
+
 		for (i = 0; i < hk_sorted_count; ++i)
 		{
-			i_modifiers_merged = hk_sorted[i].modifiers;
-			if (hk_sorted[i].modifiersLR)
-				i_modifiers_merged |= ConvertModifiersLR(hk_sorted[i].modifiersLR);
+			hk_sorted_type &this_hk = hk_sorted[i]; // For performance and convenience.
+			this_hk_is_key_up = this_hk.id_with_flags & HOTKEY_KEY_UP;
+			this_hk_id = this_hk.id_with_flags & HOTKEY_ID_MASK;
+
+			i_modifiers_merged = this_hk.modifiers;
+			if (this_hk.modifiersLR)
+				i_modifiers_merged |= ConvertModifiersLR(this_hk.modifiersLR);
 
 			for (modifiersLR = 0; modifiersLR <= MODLR_MAX; ++modifiersLR)  // For each possible LR value.
 			{
 				modifiers = ConvertModifiersLR(modifiersLR);
-				if (hk_sorted[i].AllowExtraModifiers)
+				if (this_hk.AllowExtraModifiers)
 				{
 					// True if modifiersLR is a superset of i's modifier value.  In other words,
 					// modifiersLR has the minimum required keys but also has some
@@ -648,56 +674,98 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 				// In addition to the above, modifiersLR must also have the *specific* left or right keys
 				// found in i's modifiersLR.  In other words, i's modifiersLR must be a perfect subset
 				// of modifiersLR:
-				if (hk_sorted[i].modifiersLR) // make sure that any more specific left/rights are also present.
-					if (hk_sorted[i].modifiersLR != (modifiersLR & hk_sorted[i].modifiersLR))
+				if (this_hk.modifiersLR) // make sure that any more specific left/rights are also present.
+					if (this_hk.modifiersLR != (modifiersLR & this_hk.modifiersLR))
 						continue;
 
 				// If above didn't "continue", modifiersLR is a valid hotkey combination so set it as such:
-				if (!hk_sorted[i].vk)
+				if (!this_hk.vk)
+				{
 					// scan codes don't need the switch() stmt below because, for example,
 					// the hook knows to look up left-control by only SC_LCONTROL,
 					// not VK_LCONTROL.
-					Kscm(modifiersLR, hk_sorted[i].sc) = hk_sorted[i].id_with_flags;
-				else
-				{
-					Kvkm(modifiersLR, hk_sorted[i].vk) = hk_sorted[i].id_with_flags;
-					switch (hk_sorted[i].vk)
+					HotkeyIDType &prev_hk_element = Kscm(modifiersLR, this_hk.sc);
+					if (prev_hk_element == HOTKEY_ID_INVALID) // Since there is no ID currently in the slot, key-up/down doesn't matter.
+						prev_hk_element = this_hk.id_with_flags;
+					else
 					{
-					case VK_MENU:
-						Kvkm(modifiersLR, VK_LMENU) = Kvkm(modifiersLR, VK_RMENU)
-							= Kscm(modifiersLR, SC_LALT) = Kscm(modifiersLR, SC_RALT)
-							= hk_sorted[i].id_with_flags;
-						break;
-					case VK_LMENU: // In case the program is ever changed to support these VKs directly.
-						Kvkm(modifiersLR, VK_LMENU) = Kscm(modifiersLR, SC_LALT) = hk_sorted[i].id_with_flags;
-						break;
-					case VK_RMENU:
-						Kvkm(modifiersLR, VK_RMENU) = Kscm(modifiersLR, SC_RALT) = hk_sorted[i].id_with_flags;
-						break;
-					case VK_SHIFT:
-						Kvkm(modifiersLR, VK_LSHIFT) = Kvkm(modifiersLR, VK_RSHIFT)
-							= Kscm(modifiersLR, SC_LSHIFT) = Kscm(modifiersLR, SC_RSHIFT)
-							= hk_sorted[i].id_with_flags;
-						break;
-					case VK_LSHIFT:
-						Kvkm(modifiersLR, VK_LSHIFT) = Kscm(modifiersLR, SC_LSHIFT) = hk_sorted[i].id_with_flags;
-						break;
-					case VK_RSHIFT:
-						Kvkm(modifiersLR, VK_RSHIFT) = Kscm(modifiersLR, SC_RSHIFT) = hk_sorted[i].id_with_flags;
-						break;
-					case VK_CONTROL:
-						Kvkm(modifiersLR, VK_LCONTROL) = Kvkm(modifiersLR, VK_RCONTROL)
-							= Kscm(modifiersLR, SC_LCONTROL) = Kscm(modifiersLR, SC_RCONTROL)
-							= hk_sorted[i].id_with_flags;
-						break;
-					case VK_LCONTROL:
-						Kvkm(modifiersLR, VK_LCONTROL) = Kscm(modifiersLR, SC_LCONTROL) = hk_sorted[i].id_with_flags;
-						break;
-					case VK_RCONTROL:
-						Kvkm(modifiersLR, VK_RCONTROL) = Kscm(modifiersLR, SC_RCONTROL) = hk_sorted[i].id_with_flags;
-						break;
+						prev_hk_is_key_up = prev_hk_element & HOTKEY_KEY_UP;
+						if (this_hk_is_key_up && !prev_hk_is_key_up)
+							hotkey_up[prev_hk_element & HOTKEY_ID_MASK] = this_hk.id_with_flags;
+						else if (!this_hk_is_key_up && prev_hk_is_key_up)
+						{
+							// Swap them so that the down-hotkey is in the main array and the up in the secondary:
+							hotkey_up[this_hk_id] = prev_hk_element;
+							prev_hk_element = this_hk.id_with_flags;
+						}
+						else // Either both are key-up hotkeys or both are key-down:
+							prev_hk_element = this_hk.id_with_flags;
 					}
 				}
+				else // This hotkey is a virtual key (non-scan code) hotkey, which is more typical.
+				{
+					bool do_cascade = true;
+					HotkeyIDType &prev_hk_element = Kvkm(modifiersLR, this_hk.vk);
+					if (prev_hk_element == HOTKEY_ID_INVALID) // Since there is no ID currently in the slot, key-up/down doesn't matter.
+						prev_hk_element = this_hk.id_with_flags;
+					else
+					{
+						prev_hk_is_key_up = prev_hk_element & HOTKEY_KEY_UP;
+						if (this_hk_is_key_up && !prev_hk_is_key_up)
+						{
+							hotkey_up[prev_hk_element & HOTKEY_ID_MASK] = this_hk.id_with_flags;
+							do_cascade = false;  // Every place the down-hotkey ID already appears, it will point to this same key-up hotkey.
+						}
+						else if (!this_hk_is_key_up && prev_hk_is_key_up)
+						{
+							// Swap them so that the down-hotkey is in the main array and the up in the secondary:
+							hotkey_up[this_hk_id] = prev_hk_element;
+							prev_hk_element = this_hk.id_with_flags;
+						}
+						else // Either both are key-up hotkeys or both are key-down:
+							prev_hk_element = this_hk.id_with_flags;
+					}
+					
+					if (do_cascade)
+					{
+						switch (this_hk.vk)
+						{
+						case VK_MENU:
+							Kvkm(modifiersLR, VK_LMENU) = Kvkm(modifiersLR, VK_RMENU)
+								= Kscm(modifiersLR, SC_LALT) = Kscm(modifiersLR, SC_RALT)
+								= this_hk.id_with_flags;
+							break;
+						case VK_LMENU: // In case the program is ever changed to support these VKs directly.
+							Kvkm(modifiersLR, VK_LMENU) = Kscm(modifiersLR, SC_LALT) = this_hk.id_with_flags;
+							break;
+						case VK_RMENU:
+							Kvkm(modifiersLR, VK_RMENU) = Kscm(modifiersLR, SC_RALT) = this_hk.id_with_flags;
+							break;
+						case VK_SHIFT:
+							Kvkm(modifiersLR, VK_LSHIFT) = Kvkm(modifiersLR, VK_RSHIFT)
+								= Kscm(modifiersLR, SC_LSHIFT) = Kscm(modifiersLR, SC_RSHIFT)
+								= this_hk.id_with_flags;
+							break;
+						case VK_LSHIFT:
+							Kvkm(modifiersLR, VK_LSHIFT) = Kscm(modifiersLR, SC_LSHIFT) = this_hk.id_with_flags;
+							break;
+						case VK_RSHIFT:
+							Kvkm(modifiersLR, VK_RSHIFT) = Kscm(modifiersLR, SC_RSHIFT) = this_hk.id_with_flags;
+							break;
+						case VK_CONTROL:
+							Kvkm(modifiersLR, VK_LCONTROL) = Kvkm(modifiersLR, VK_RCONTROL)
+								= Kscm(modifiersLR, SC_LCONTROL) = Kscm(modifiersLR, SC_RCONTROL)
+								= this_hk.id_with_flags;
+							break;
+						case VK_LCONTROL:
+							Kvkm(modifiersLR, VK_LCONTROL) = Kscm(modifiersLR, SC_LCONTROL) = this_hk.id_with_flags;
+							break;
+						case VK_RCONTROL:
+							Kvkm(modifiersLR, VK_RCONTROL) = Kscm(modifiersLR, SC_RCONTROL) = this_hk.id_with_flags;
+							break;
+						} // switch()
+					} // if (do_cascade)
+				} // this hotkey is a scan code hotkey.
 			}
 		}
 	}
