@@ -180,8 +180,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 	if (this_layer_needs_timer)
 	{
 		++g_nLayersNeedingTimer;  // IsCycleComplete() is responsible for decrementing this for us.
-		if (!g_MainTimerExists)
-			SET_MAIN_TIMER
+		SET_MAIN_TIMER
 		// Reasons why the timer might already have been on:
 		// 1) g_script.mTimerEnabledCount is greater than zero.
 		// 2) another instance of MsgSleep() (beneath us in the stack) needs it (see the comments
@@ -251,11 +250,44 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 				{
 					// Macro notes:
 					// Must decrement prior to every RETURN to balance it.
-					// Do this prior to checking whether timer should be killed, below:
+					// Do this prior to checking whether timer should be killed, below.
+					// Kill the timer only if we're about to return OK to the caller since the caller
+					// would still need the timer if FAIL was returned above.  But don't kill it if
+					// there are any enabled timed subroutines, because the current policy it to keep
+					// the main timer always-on in those cases.  UPDATE: Also avoid killing the timer
+					// if there are any script threads running.  To do so might cause a problem such
+					// as in this example scenario: MsgSleep() is called for any reason with a delay
+					// large enough to require the timer.  The timer is set.  But a msg arrives that
+					// MsgSleep() dispatches to MainWindowProc().  If it's a hotkey or custom menu,
+					// MsgSleep() is called recursively with a delay of -1.  But when it finishes via
+					// IsCycleComplete(), the timer would be wrongly killed because the underlying
+					// instance of MsgSleep still needs it.  Above is even more wide-spread because if
+					// MsgSleep() is called recursively for any reason, even with a duration >10, it will
+					// wrongly kill the timer upon returning, in some cases.  For example, if the first call to
+					// MsgSleep(-1) finds a hotkey or menu item msg, and executes the corresponding subroutine,
+					// that subroutine could easily call MsgSleep(10+) for any number of reasons, which
+					// would then kill the timer.
+					// Also require that aSleepDuration > 0 so that MainWindowProc()'s receipt of a
+					// WM_HOTKEY msg, to which it responds by turning on the main timer if the script
+					// is uninterruptible, is not defeated here.  In other words, leave the timer on so
+					// that when the script becomes interruptible once again, the hotkey will take effect
+					// almost immediately rather than having to wait for the displayed dialog to be
+					// dismissed (if there is one).
+					// If timer doesn't exist, the new-thread-launch routine of MsgSleep() relies on this
+					// to turn it back on whenever a layer beneath us needs it.  Since the timer
+					// is never killed while g_script.mTimerEnabledCount is >0, it shouldn't be necessary
+					// to check g_script.mTimerEnabledCount here.
 					#define RETURN_FROM_MSGSLEEP(return_value) \
 					{\
 						if (this_layer_needs_timer)\
 							--g_nLayersNeedingTimer;\
+						if (g_MainTimerExists)\
+						{\
+							if (aSleepDuration > 0 && !g_nLayersNeedingTimer && !g_script.mTimerEnabledCount && !Hotkey::sJoyHotkeyCount)\
+								KILL_MAIN_TIMER \
+						}\
+						else if (g_nLayersNeedingTimer)\
+							SET_MAIN_TIMER \
 						return return_value;\
 					}
 					// Function should always return OK in this case.  Also, was_interrupted
@@ -421,7 +453,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 			// minutes, or more; during which time we don't want the timer running because it will
 			// only fill up the queue with WM_TIMER messages and thus hurt performance).
 			// UPDATE: But don't kill it if it should be always-on to support the existence of
-			// at least one enabled timed subroutine:
+			// at least one enabled timed subroutine or joystick hotkey:
 			if (!g_script.mTimerEnabledCount && !Hotkey::sJoyHotkeyCount)
 				KILL_MAIN_TIMER;
 
@@ -456,8 +488,8 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 			if (msg.message == AHK_USER_MENU)
 			{
 				// Safer to make a full copies than point to something potentially volatile.
-				strlcpy(g_script.mThisMenuItem, menu_item->mName, sizeof(g_script.mThisMenuItem));
-				strlcpy(g_script.mThisMenu, menu_item->mMenu->mName, sizeof(g_script.mThisMenu));
+				strlcpy(g_script.mThisMenuItemName, menu_item->mName, sizeof(g_script.mThisMenuItemName));
+				strlcpy(g_script.mThisMenuName, menu_item->mMenu->mName, sizeof(g_script.mThisMenuName));
 			}
 			else // Hotkey or hot string
 			{
@@ -679,41 +711,6 @@ ResultType IsCycleComplete(int aSleepDuration, DWORD aStartTime, bool aAllowEarl
 		g_script.mLinesExecutedThisCycle = 0;
 		g_script.mLastScriptRest = tick_now;
 	}
-
-	// Kill the timer only if we're about to return OK to the caller since the caller
-	// would still need the timer if FAIL was returned above.  But don't kill it if
-	// there are any enabled timed subroutines, because the current policy it to keep
-	// the main timer always-on in those cases.  UPDATE: Also avoid killing the timer
-	// if there are any script threads running.  To do so might cause a problem such
-	// as in this example scenario: MsgSleep() is called for any reason with a delay
-	// large enough to require the timer.  The timer is set.  But a msg arrives that
-	// MsgSleep() dispatches to MainWindowProc().  If it's a hotkey or custom menu,
-	// MsgSleep() is called recursively with a delay of -1.  But when it finishes via
-	// IsCycleComplete(), the timer would be wrongly killed because the underlying
-	// instance of MsgSleep still needs it.  Above is even more wide-spread because if
-	// MsgSleep() is called recursively for any reason, even with a duration >10, it will
-	// wrongly kill the timer upon returning, in some cases.  For example, if the first call to
-	// MsgSleep(-1) finds a hotkey or menu item msg, and executes the corresponding subroutine,
-	// that subroutine could easily call MsgSleep(10+) for any number of reasons, which
-	// would then kill the timer:
-	if (g_MainTimerExists)
-	{
-		// Also require that aSleepDuration > 0 so that MainWindowProc()'s receipt of a
-		// WM_HOTKEY msg, to which it responds by turning on the main timer if the script
-		// is uninterruptible, is not defeated here.  In other words, leave the timer on so
-		// that when the script becomes interruptible once again, the hotkey will take effect
-		// almost immediately rather than having to wait for the displayed dialog to be
-		// dismissed (if there is one):
-		if (aSleepDuration > 0 && !g_nLayersNeedingTimer && !g_script.mTimerEnabledCount && !Hotkey::sJoyHotkeyCount)
-			KILL_MAIN_TIMER
-	}
-	else // It doesn't exist (MsgSleep() relies on us to do this check)
-		// Ensure the timer is back on whenever a layer beneath us needs it.  Since the timer
-		// is never killed while g_script.mTimerEnabledCount is >0, it shouldn't be necessary
-		// to check g_script.mTimerEnabledCount here:
-		if (g_nLayersNeedingTimer)
-			SET_MAIN_TIMER // This won't do anything if it's already on.
-
 	return OK;
 }
 

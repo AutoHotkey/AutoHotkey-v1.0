@@ -96,8 +96,8 @@ private:
 	bool mConstructedOK;
 
 	// Something in the compiler is currently preventing me from using HookType in place of UCHAR:
-	friend UCHAR ChangeHookState(Hotkey *aHK[], int aHK_count, UCHAR aWhichHook, UCHAR aWhichHookAlways, bool aWarnIfHooksAlreadyInstalled
-		, bool aActivateOnlySuspendHotkeys);
+	friend UCHAR ChangeHookState(Hotkey *aHK[], int aHK_count, UCHAR aWhichHook, UCHAR aWhichHookAlways
+		, bool aWarnIfHooksAlreadyInstalled);
 
 	ResultType TextInterpret(char *aName);
 	char *TextToModifiers(char *aText);
@@ -219,7 +219,7 @@ public:
 	static void InstallKeybdHook()
 	{
 		sWhichHookAlways |= HOOK_KEYBD;
-		sWhichHookActive = ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways, false, false);
+		sWhichHookActive = ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways, false);
 	}
 
 	static bool PerformIsAllowed(HotkeyIDType aHotkeyID)

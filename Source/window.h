@@ -262,4 +262,18 @@ inline bool IsTitleMatch(HWND aWnd, char *aHaystack, char *aNeedle, char *aExclu
 		return strcmp(aHaystack, aExcludeTitle);
 }
 
+
+
+////////////////////
+// PROCESS ROUTINES
+////////////////////
+
+DWORD ProcessExist9x2000 (char *aProcess);
+DWORD ProcessExistNT4(char *aProcess);
+
+inline DWORD ProcessExist(char *aProcess)
+{
+	return g_os.IsWinNT4() ? ProcessExistNT4(aProcess) : ProcessExist9x2000(aProcess);
+}
+
 #endif

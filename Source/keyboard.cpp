@@ -58,7 +58,9 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 	// messsages is more accurate:
 	LONG_OPERATION_INIT
 
-	modLR_type modifiersLR_current = GetModifierLRState(); // Current "logical" modifier state.
+	// Below is now called with "true" so that the hook's modifier state will be corrected (if necessary)
+	// prior to every send.
+	modLR_type modifiersLR_current = GetModifierLRState(true); // Current "logical" modifier state.
 
 	// Make a best guess of what the physical state of the keys is prior to starting,
 	// since GetAsyncKeyState() is unreliable (it seems to always report the logical vs.
@@ -1264,6 +1266,46 @@ inline modLR_type GetModifierLRState(bool aExplicitlyGet)
 		if (IsKeyDown2kXP(VK_RWIN)) modifiersLR |= MOD_RWIN;
 	}
 
+	if (g_KeybdHook)
+	{
+		// Since hook is installed, fix any modifiers that it incorrectly thinks are down.
+		// Though rare, this situation does arise during periods when the hook cannot track
+		// the user's keystrokes, such as when the OS is doing something with the hardware,
+		// e.g. switching to TV-out or changing video resolutions.  There are probably other
+		// situations where this happens -- never fully explored and identified -- so it
+		// seems best to do this, at least when the caller specified aExplicitlyGet = true.
+		// To limit the scope of this workaround, only change the state of the hook modifiers
+		// to be "up" for those keys the hook thinks are logically down but which the OS thinks
+		// are logically up.  Note that it IS possible for a key to be physically down without
+		// being logically down (i.e. during a Send command where the user is phyiscally holding
+		// down a modifier, but the Send command needs to put it up temporarily), so do not
+		// change the hook's physical state for such keys in that case.
+		modLR_type hook_wrongly_down = g_modifiersLR_logical & ~modifiersLR;
+		if (hook_wrongly_down)
+		{
+			// Adjust the physical and logical hook state to release the keys that are wrongly down.
+			// If a key is wrongly logically down, it seems best to release it both physically and
+			// logically, since the hook's failure to see the up-event probably makes its physical
+			// state wrong in most such cases.
+			g_modifiersLR_physical &= ~hook_wrongly_down;
+			g_modifiersLR_logical &= ~hook_wrongly_down;
+			g_modifiersLR_logical_non_ignored &= ~hook_wrongly_down;
+			// Also adjust physical state so that the GetKeyState command will retrieve the correct values:
+			g_PhysicalKeyState[VK_LSHIFT] = (g_modifiersLR_physical & MOD_LSHIFT) ? STATE_DOWN : 0;
+			g_PhysicalKeyState[VK_RSHIFT] = (g_modifiersLR_physical & MOD_RSHIFT) ? STATE_DOWN : 0;
+			g_PhysicalKeyState[VK_LCONTROL] = (g_modifiersLR_physical & MOD_LCONTROL) ? STATE_DOWN : 0;
+			g_PhysicalKeyState[VK_RCONTROL] = (g_modifiersLR_physical & MOD_RCONTROL) ? STATE_DOWN : 0;
+			g_PhysicalKeyState[VK_LMENU] = (g_modifiersLR_physical & MOD_LALT) ? STATE_DOWN : 0;
+			g_PhysicalKeyState[VK_RMENU] = (g_modifiersLR_physical & MOD_RALT) ? STATE_DOWN : 0;
+			g_PhysicalKeyState[VK_LWIN] = (g_modifiersLR_physical & MOD_LWIN) ? STATE_DOWN : 0;
+			g_PhysicalKeyState[VK_RWIN] = (g_modifiersLR_physical & MOD_RWIN) ? STATE_DOWN : 0;
+			// Update the state of neutral keys only after the above, in case both keys of the pair were wrongly down:
+			g_PhysicalKeyState[VK_SHIFT] = (g_PhysicalKeyState[VK_LSHIFT] || g_PhysicalKeyState[VK_RSHIFT]) ? STATE_DOWN : 0;
+			g_PhysicalKeyState[VK_CONTROL] = (g_PhysicalKeyState[VK_LCONTROL] || g_PhysicalKeyState[VK_RCONTROL]) ? STATE_DOWN : 0;
+			g_PhysicalKeyState[VK_MENU] = (g_PhysicalKeyState[VK_LMENU] || g_PhysicalKeyState[VK_RMENU]) ? STATE_DOWN : 0;
+		}
+	}
+
 	return modifiersLR;
 
 	// Only consider a modifier key to be really down if both the hook's tracking of it
@@ -1271,7 +1313,7 @@ inline modLR_type GetModifierLRState(bool aExplicitlyGet)
 	// of the inherent unreliability present in each method (and each method is unreliable in
 	// ways different from the other).  I have verified through testing that this eliminates
 	// many misfires of hotkeys.  UPDATE: Both methods are fairly reliable now due to starting
-	// to send scan codes with keybd_events(), using MapVirtualKey to resolve zero-value scan
+	// to send scan codes with keybd_event(), using MapVirtualKey to resolve zero-value scan
 	// codes in the keyboardproc(), and using GetKeyState() rather than GetKeyboardState().
 	// There are still a few cases when they don't agree, so return the bitwise-and of both
 	// if the keyboard hook is active.  Bitwise and is used because generally it's safer
@@ -1582,7 +1624,7 @@ vk_type TextToVK(char *aText, mod_type *pModifiers, bool aExcludeThoseHandledByS
 	{
 		SHORT mod_plus_vk = VkKeyScan(*aText);
 		char keyscan_modifiers = HIBYTE(mod_plus_vk);
-		if (keyscan_modifiers == -1 && LOBYTE(mod_plus_vk) == -1) // No translation could be made.
+		if (keyscan_modifiers == -1 && LOBYTE(mod_plus_vk) == (UCHAR)-1) // No translation could be made.
 			return 0;
 
 		// The win docs for VkKeyScan() are a bit confusing, referring to flag "bits" when it should really

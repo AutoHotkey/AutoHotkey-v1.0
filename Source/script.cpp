@@ -62,7 +62,7 @@ Script::Script()
 	, mCustomIconFile(NULL), mTrayIconTip(NULL) // Allocated on first use.
 	, mCustomIconNumber(0)
 {
-	*mThisMenuItem = *mThisMenu = '\0';
+	*mThisMenuItemName = *mThisMenuName = '\0';
 	mLastScriptRest = mLastPeekTime = GetTickCount();
 	ZeroMemory(&mNIC, sizeof(mNIC));  // Constructor initializes this, to be safe.
 	mNIC.hWnd = NULL;  // Set this as an indicator that it tray icon is not installed.
@@ -1939,13 +1939,14 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 			// is modifiable), use memmove() so that overlapping source & dest are properly handled:
 			memmove(aLineText, action_args, new_length + 1); // +1 to include the zero terminator.
 			// Append the second param, which is just "1" since the ++ and -- only inc/dec by 1:
-			aLineText[new_length++] = ',';
+			aLineText[new_length++] = g_delimiter;
 			aLineText[new_length++] = '1';
 			aLineText[new_length] = '\0';
 			action_args = aLineText;
 		}
 		else if (!stricmp(action_name, "IF"))
 		{
+			char *next_word;
 			// Skip over the variable name so that the "is" and "is not" operators are properly supported:
 			char *operation = StrChrAny(action_args, end_flags);
 			if (!operation)
@@ -1983,25 +1984,58 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 				else
 					return ScriptError("When used this way, the symbol must be \"!=\" not \"!\".", aLineText);
 				break;
+			case 'b': // "Between"
+			case 'B':
+				if (strnicmp(operation, "between", 7))
+					return ScriptError("The word BETWEEN was expected but not found.", aLineText);
+				action_type = ACT_IFBETWEEN;
+				// Set things up to be parsed as args further down.  A delimiter is inserted later below:
+				memset(operation, ' ', 7);
+				break;
 			case 'i':  // "is" or "is not"
 			case 'I':
-				if (toupper(*(operation + 1)) == 'S')
+				switch (toupper(*(operation + 1)))
 				{
-					char *next_word = omit_leading_whitespace(operation + 2);
+				case 's':  // "IS"
+				case 'S':
+					next_word = omit_leading_whitespace(operation + 2);
 					if (strnicmp(next_word, "not", 3))
 						action_type = ACT_IFIS;
 					else
 					{
 						action_type = ACT_IFISNOT;
 						// Remove the word "not" to set things up to be parsed as args further down.
-						*next_word = ' ';
-						*(next_word + 1) = ' ';
-						*(next_word + 2) = ' ';
+						memset(next_word, ' ', 3);
 					}
 					*(operation + 1) = ' '; // Remove the 'S' in "IS".  'I' is replaced with ',' later below.
+					break;
+				case 'n':  // "IN"
+				case 'N':
+					action_type = ACT_IFIN;
+					*(operation + 1) = ' '; // Remove the 'N' in "IN".  'I' is replaced with ',' later below.
+					break;
+				default:
+					return ScriptError("The word IS or IN was expected but not found.", aLineText);
+				} // switch()
+				break;
+			case 'n':  // It's either "not in" or "not between"
+			case 'N':
+				if (strnicmp(operation, "not", 3))
+					return ScriptError("The word NOT was expected but not found.", aLineText);
+				// Remove the "NOT" separately in case there is more than one space or tab between
+				// it and the following word, e.g. "not   between":
+				memset(operation, ' ', 3);
+				next_word = omit_leading_whitespace(operation + 3);
+				if (!strnicmp(next_word, "in", 2))
+				{
+					action_type = ACT_IFNOTIN;
+					memset(next_word, ' ', 2);
 				}
-				else
-					return ScriptError("The word IS was expected but not found.", aLineText);
+				else if (!strnicmp(next_word, "between", 7))
+				{
+					action_type = ACT_IFNOTBETWEEN;
+					memset(next_word, ' ', 7);
+				}
 				break;
 			default:
 				return ScriptError("Although this line is an IF, it lacks operator symbol(s).", aLineText);
@@ -2010,6 +2044,30 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 			} // switch()
 			// Set things up to be parsed as args later on:
 			*operation = g_delimiter;
+			if (action_type == ACT_IFBETWEEN || action_type == ACT_IFNOTBETWEEN)
+			{
+				// I decided against the syntax "if var between 3,8" because the gain in simplicity
+				// and the small avoidance of ambiguity didn't seem worth the cost in terms of readability.
+				for (next_word = operation;;)
+				{
+					if (   !(next_word = stristr(next_word, "and"))   )
+						return ScriptError("BETWEEN requires the word AND.", aLineText);
+					if (strchr(" \t", *(next_word - 1)) && strchr(" \t", *(next_word + 3)))
+					{
+						// Since there's a space or tab on both sides, we know this is the correct "and",
+						// i.e. not one contained within one of the parameters.  Examples:
+						// if var between band and cat  ; Don't falsely detect "band"
+						// if var betwwen Andy and David  ; Don't falsely detect "Andy".
+						// Replace the word AND with a delimiter so that it will be parsed correctly later:
+						*next_word = g_delimiter;
+						*(next_word + 1) = ' ';
+						*(next_word + 2) = ' ';
+						break;
+					}
+					else
+						next_word += 3;  // Skip over this false "and".
+				}
+			}
 		}
 		else // The action type is something other than an IF.
 		{
@@ -3366,9 +3424,33 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		}
 		break;
 
-	case ACT_WINGET:
-		if (!line->ArgHasDeref(2) && !line->ConvertWinGetCmd(LINE_RAW_ARG2)) // It's okay if ARG2 is blank.
-			return ScriptError(ERR_WINGET, LINE_RAW_ARG2);
+	case ACT_PROCESS:
+		if (line->mArgc > 0 && !line->ArgHasDeref(1))
+		{
+			ProcessCmds process_cmd = line->ConvertProcessCmd(LINE_RAW_ARG1);
+			if (process_cmd != PROCESS_CMD_PRIORITY && !*LINE_RAW_ARG2)
+				return ScriptError("Parameter #2 must not be blank in this case.", LINE_RAW_ARG2);
+			switch (process_cmd)
+			{
+			case PROCESS_CMD_INVALID:
+				return ScriptError(ERR_PROCESSCOMMAND, LINE_RAW_ARG1);
+			case PROCESS_CMD_EXIST:
+			case PROCESS_CMD_CLOSE:
+				if (*LINE_RAW_ARG3)
+					return ScriptError("Parameter #3 must be blank in this case.", LINE_RAW_ARG3);
+				break;
+			case PROCESS_CMD_PRIORITY:
+				if (!*LINE_RAW_ARG3 || (!line->ArgHasDeref(3) && !strchr(PROCESS_PRIORITY_LETTERS, toupper(*LINE_RAW_ARG3))))
+					return ScriptError("Parameter #3 must be one of the following letters: "
+						PROCESS_PRIORITY_LETTERS ".", LINE_RAW_ARG3);
+				break;
+			case PROCESS_CMD_WAIT:
+			case PROCESS_CMD_WAITCLOSE:
+				if (*LINE_RAW_ARG3 && !line->ArgHasDeref(3) && !IsPureNumeric(LINE_RAW_ARG3, false, true, true))
+					return ScriptError("If present, parameter #3 must be a positive number in this case.", LINE_RAW_ARG3);
+				break;
+			}
+		}
 		break;
 
 	case ACT_WINSET:
@@ -3393,6 +3475,11 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				return ScriptError(ERR_WINSET, LINE_RAW_ARG1);
 			}
 		}
+		break;
+
+	case ACT_WINGET:
+		if (!line->ArgHasDeref(2) && !line->ConvertWinGetCmd(LINE_RAW_ARG2)) // It's okay if ARG2 is blank.
+			return ScriptError(ERR_WINGET, LINE_RAW_ARG2);
 		break;
 
 	case ACT_INPUTBOX:
@@ -3871,6 +3958,7 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, Var *aVarPrev)
 	else if (!stricmp(new_name, "A_Index")) var_type = VAR_INDEX;  // A short name since it maybe be typed so often.
 
 	else if (!stricmp(new_name, "A_ThisMenuItem")) var_type = VAR_THISMENUITEM;
+	else if (!stricmp(new_name, "A_ThisMenuItemPos")) var_type = VAR_THISMENUITEMPOS;
 	else if (!stricmp(new_name, "A_ThisMenu")) var_type = VAR_THISMENU;
 	else if (!stricmp(new_name, "A_ThisHotkey")) var_type = VAR_THISHOTKEY;
 	else if (!stricmp(new_name, "A_PriorHotkey")) var_type = VAR_PRIORHOTKEY;
@@ -5096,7 +5184,7 @@ inline ResultType Line::EvaluateCondition()
 		return LineError("EvaluateCondition() was called with a line that isn't a condition."
 			PLEASE_REPORT ERR_ABORT);
 
-	pure_numeric_type var_is_pure_numeric, value_is_pure_numeric;
+	pure_numeric_type var_is_pure_numeric, value_is_pure_numeric, value2_is_pure_numeric;
 	int if_condition;
 
 	switch (mActionType)
@@ -5156,7 +5244,11 @@ inline ResultType Line::EvaluateCondition()
 		#define DETERMINE_NUMERIC_TYPES \
 			value_is_pure_numeric = IsPureNumeric(ARG2, true, false, true);\
 			var_is_pure_numeric = IsPureNumeric(ARG1, true, false, true);
+		#define DETERMINE_NUMERIC_TYPES2 \
+			DETERMINE_NUMERIC_TYPES \
+			value2_is_pure_numeric = IsPureNumeric(ARG3, true, false, true);
 		#define IF_EITHER_IS_NON_NUMERIC if (!value_is_pure_numeric || !var_is_pure_numeric)
+		#define IF_EITHER_IS_NON_NUMERIC2 if (!value_is_pure_numeric || !value2_is_pure_numeric || !var_is_pure_numeric)
 		#undef IF_EITHER_IS_FLOAT
 		#define IF_EITHER_IS_FLOAT if (value_is_pure_numeric == PURE_FLOAT || var_is_pure_numeric == PURE_FLOAT)
 
@@ -5213,6 +5305,37 @@ inline ResultType Line::EvaluateCondition()
 			if_condition = ATOF(ARG1) >= ATOF(ARG2);
 		else
 			if_condition = ATOI64(ARG1) >= ATOI64(ARG2);
+		break;
+
+	case ACT_IFBETWEEN:
+	case ACT_IFNOTBETWEEN:
+		DETERMINE_NUMERIC_TYPES2
+		IF_EITHER_IS_NON_NUMERIC2
+		{
+			if (g.StringCaseSense)
+				if_condition = !(strcmp(ARG1, ARG2) < 0 || strcmp(ARG1, ARG3) > 0);
+			else  // case insensitive
+				if_condition = !(stricmp(ARG1, ARG2) < 0 || stricmp(ARG1, ARG3) > 0);
+		}
+		else IF_EITHER_IS_FLOAT
+		{
+			double arg1_as_float = ATOF(ARG1);
+			if_condition = arg1_as_float >= ATOF(ARG2) && arg1_as_float <= ATOF(ARG3);
+		}
+		else
+		{
+			__int64 arg1_as_int64 = ATOI64(ARG1);
+			if_condition = arg1_as_int64 >= ATOI64(ARG2) && arg1_as_int64 <= ATOI64(ARG3);
+		}
+		if (mActionType == ACT_IFNOTBETWEEN)
+			if_condition = !if_condition;
+		break;
+
+	case ACT_IFIN:
+	case ACT_IFNOTIN:
+		if_condition = IsStringInList(ARG1, ARG2, g.StringCaseSense);
+		if (mActionType == ACT_IFNOTIN)
+			if_condition = !if_condition;
 		break;
 
 	case ACT_IFIS:
@@ -6114,10 +6237,10 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			mbstowcs(g_script.mRunAsDomain, ARG3, RUNAS_ITEM_SIZE);
 		}
 		return OK;
-	case ACT_RUN:
-		return g_script.ActionExec(ARG1, NULL, ARG2, true, ARG3, NULL, true);  // Be sure to pass NULL for 2nd param.
+	case ACT_RUN: // Be sure to pass NULL for 2nd param:
+		return g_script.ActionExec(ARG1, NULL, ARG2, true, ARG3, NULL, true, ResolveVarOfArg(3));
 	case ACT_RUNWAIT:
-		if (!g_script.ActionExec(ARG1, NULL, ARG2, true, ARG3, &running_process, true))
+		if (!g_script.ActionExec(ARG1, NULL, ARG2, true, ARG3, &running_process, true, NULL))
 			return FAIL;
 		// else fall through to the below.
 	case ACT_CLIPWAIT:
@@ -6296,6 +6419,8 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		return ScriptPostMessage(EIGHT_ARGS);
 	case ACT_SENDMESSAGE:
 		return ScriptSendMessage(EIGHT_ARGS);
+	case ACT_PROCESS:
+		return ScriptProcess(THREE_ARGS);
 	case ACT_WINSET:
 		return WinSet(SIX_ARGS);
 	case ACT_WINSETTITLE:
@@ -8004,33 +8129,32 @@ VarSizeType Script::ScriptGetCaret(VarTypeType aVarType, char *aBuf)
 	static HWND sForeWinPrev = NULL;
 	static DWORD sTimestamp = GetTickCount();
 	static POINT sPoint;
+	static BOOL sResult;
 
 	// I believe only the foreground window can have a caret position due to relationship with focused control.
 	HWND target_window = GetForegroundWindow(); // Variable must be named target_window for ATTACH_THREAD_INPUT.
+	if (!target_window) // No window is in the foreground, report blank coordinate.
+	{
+		*aBuf = '\0';
+		return 0;
+	}
+
 	DWORD now_tick = GetTickCount();
 
 	if (target_window != sForeWinPrev || now_tick - sTimestamp > 5) // Different window or too much time has passed.
 	{
-		// Update static variables for the next caller:
-		sForeWinPrev = target_window;
-		sTimestamp = now_tick;
-		if (!target_window) // No window is in the foreground.
-		{
-			*aBuf = '\0';
-			return 0;
-		}
 		// Otherwise:
 		ATTACH_THREAD_INPUT  // au3: Doesn't work without attaching.
-		BOOL result = GetCaretPos(&sPoint);
+		sResult = GetCaretPos(&sPoint);
 		HWND focused_control = GetFocus();  // Also relies on threads being attached.
 		DETACH_THREAD_INPUT
-		if (!result)
+		if (!sResult)
 		{
 			*aBuf = '\0';
 			return 0;
 		}
 		ClientToScreen(focused_control ? focused_control : target_window, &sPoint);
-		if (!(g.CoordMode & COORD_MODE_TOOLTIP))  // Using the default, which is coordinates relative to window.
+		if (!(g.CoordMode & COORD_MODE_CARET))  // Using the default, which is coordinates relative to window.
 		{
 			// Convert screen coordinates to window coordinates:
 			RECT rect;
@@ -8038,8 +8162,19 @@ VarSizeType Script::ScriptGetCaret(VarTypeType aVarType, char *aBuf)
 			sPoint.x -= rect.left;
 			sPoint.y -= rect.top;
 		}
+		// Now that all failure conditions have been checked, update static variables for the next caller:
+		sForeWinPrev = target_window;
+		sTimestamp = now_tick;
 	}
-	// Now the above has ensured that sPoint contains coordinates that are up-to-date enough to be used.
+	else // Same window and recent enough, but did prior call fail?  If so, provide a blank result like the prior.
+	{
+		if (!sResult)
+		{
+			*aBuf = '\0';
+			return 0;
+		}
+	}
+	// Now the above has ensured that sPoint contains valid coordinates that are up-to-date enough to be used.
 	_itoa(aVarType == VAR_CARETX ? sPoint.x : sPoint.y, aBuf, 10);  // Always output as decimal vs. hex in this case.
 	return (VarSizeType)strlen(aBuf);
 }
@@ -8188,11 +8323,18 @@ char *Line::ToText(char *aBuf, size_t aBufSize, DWORD aElapsed)
 	char *aBuf_orig = aBuf;
 	snprintf(aBuf, BUF_SPACE_REMAINING, "%03u: ", mLineNumber);
 	aBuf += strlen(aBuf);
-	if (ACT_IS_ASSIGN(mActionType) || (ACT_IS_IF(mActionType) && mActionType < ACT_FIRST_COMMAND))
+	if (mActionType == ACT_IFBETWEEN || mActionType == ACT_IFNOTBETWEEN)
 	{
-		// Only these commands need custom conversion.
+		snprintf(aBuf, BUF_SPACE_REMAINING, "if %s %s %s and %s"
+			, *mArg[0].text ? mArg[0].text : VAR(mArg[0])->mName  // i.e. don't resolve dynamic variable names.
+			, g_act[mActionType].Name, RAW_ARG2, RAW_ARG3);
+		aBuf += strlen(aBuf);
+	}
+	else if (ACT_IS_ASSIGN(mActionType) || (ACT_IS_IF(mActionType) && mActionType < ACT_FIRST_COMMAND))
+	{
+		// Only these other commands need custom conversion.
 		snprintf(aBuf, BUF_SPACE_REMAINING, "%s%s %s %s"
-			, ACT_IS_IF(mActionType) ? "IF " : ""
+			, ACT_IS_IF(mActionType) ? "if " : ""
 			, *mArg[0].text ? mArg[0].text : VAR(mArg[0])->mName  // i.e. don't resolve dynamic variable names.
 			, g_act[mActionType].Name, RAW_ARG2);
 		aBuf += strlen(aBuf);
@@ -8543,7 +8685,7 @@ char *Script::ListKeyHistory(char *aBuf, size_t aBufSize)
 
 
 ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, bool aDisplayErrors
-	, char *aRunShowMode, HANDLE *aProcess, bool aUseRunAs)
+	, char *aRunShowMode, HANDLE *aProcess, bool aUseRunAs, Var *aOutputVar)
 // Caller should specify NULL for aParams if it wants us to attempt to parse out params from
 // within aAction.  Caller may specify empty string ("") instead to specify no params at all.
 // Remember that aAction and aParams can both be NULL, so don't dereference without checking first.
@@ -8553,6 +8695,8 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 {
 	if (aProcess) // Init output param if the caller gave us memory to store it.
 		*aProcess = NULL;
+	if (aOutputVar) // Same
+		aOutputVar->Assign();
 
 	// Launching nothing is always a success:
 	if (!aAction || !*aAction) return OK;
@@ -8774,6 +8918,8 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 				if (pi.hThread)
 					CloseHandle(pi.hThread); // Required to avoid memory leak.
 				new_process = pi.hProcess;
+				if (aOutputVar)
+					aOutputVar->Assign(pi.dwProcessId);
 			}
 			else
 				GetLastErrorText(system_error_text, sizeof(system_error_text));
@@ -8803,6 +8949,8 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 				if (pi.hThread)
 					CloseHandle(pi.hThread); // Required to avoid memory leak.
 				new_process = pi.hProcess;
+				if (aOutputVar)
+					aOutputVar->Assign(pi.dwProcessId);
 			}
 			else
 				GetLastErrorText(system_error_text, sizeof(system_error_text));
@@ -8843,6 +8991,10 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 		if (ShellExecuteEx(&sei)) // Relies on short-circuit boolean order.
 		{
 			new_process = sei.hProcess;
+			// aOutputVar is left blank because:
+			// ProcessID is not available when launched this way, and since GetProcessID() is only
+			// available in WinXP SP1, no effort is currently made to dynamically load it from
+			// kernel32.dll (to retain compatibility with older OSes).
 			success = true;
 		}
 		else

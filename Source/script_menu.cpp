@@ -1013,6 +1013,25 @@ UINT UserMenu::GetSubmenuPos(HMENU ahMenu)
 
 
 
+UINT UserMenu::GetItemPos(char *aMenuItemName)
+// aMenuItemName will be searched for in this->mMenu.
+// Returns UINT_MAX if this->mMenu is NULL or if aMenuItemName can't be found in this->mMenu.
+{
+	if (!mMenu)
+		return UINT_MAX;
+	int menu_item_count = GetMenuItemCount(mMenu);
+	char buf[MAX_MENU_LENGTH + 2];  // +2 due to uncertainty over whether GetMenuString()'s nMaxCount includes room for terminator.
+	for (int i = 0; i < menu_item_count; ++i)
+	{
+		if (GetMenuString(mMenu, i, buf, sizeof(buf) - 1, MF_BYPOSITION))
+			if (!stricmp(buf, aMenuItemName))  // A case insensitive match was found.
+				return i;
+	}
+	return UINT_MAX;  // No match found.
+}
+
+
+
 bool UserMenu::ContainsMenu(UserMenu *aMenu)
 {
 	if (!aMenu)

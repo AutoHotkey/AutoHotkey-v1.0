@@ -239,6 +239,8 @@ Action g_act[] =
 	// string this way: "If var1 >=".  Note: Line::ToText() relies on the below names:
 	, {"=", 1, 2, NULL}, {"<>", 1, 2, NULL}, {">", 1, 2, NULL}
 	, {">=", 1, 2, NULL}, {"<", 1, 2, NULL}, {"<=", 1, 2, NULL}
+	, {"between", 1, 3, NULL}, {"not between", 1, 3, NULL}  // Min 1 to allow #2 and #3 to be the empty string.
+	, {"in", 2, 2, NULL}, {"not in", 2, 2, NULL}
 	, {"is", 2, 2, NULL}, {"is not", 2, 2, NULL}
 
 	// For these, allow a minimum of zero, otherwise, the first param (WinTitle) would
@@ -286,7 +288,7 @@ Action g_act[] =
 	, {"EnvUpdate", 0, 0, NULL}
 
 	, {"RunAs", 0, 3, NULL} // user, pass, domain (0 params can be passed to disable the feature)
-	, {"Run", 1, 3, NULL}
+	, {"Run", 1, 4, NULL}      // TargetFile, Working Dir, WinShow-Mode, OutputVarPID
 	, {"RunWait", 1, 3, NULL}  // TargetFile, Working Dir, WinShow-Mode
 	, {"URLDownloadToFile", 2, 2, NULL} // URL, save-as-filename
 
@@ -351,6 +353,8 @@ Action g_act[] =
 	// Note for WinMove: xpos/ypos/width/height can be the string "default", but that is explicitly
 	// checked for in spite of requiring it to be numeric in the definition here.
 	, {"WinMenuSelectItem", 0, 11, NULL} // WinTitle, WinText, Menu name, 6 optional sub-menu names, ExcludeTitle/Text
+
+	, {"Process", 1, 3, NULL}  // Sub-cmd, PID/name, Param3 (use minimum of 1 param so that 2nd can be blank)
 
 	, {"WinSet", 1, 6, NULL} // attribute, setting, title, text, exclude-title, exclude-text
 	// WinSetTitle: Allow a minimum of zero params so that title isn't forced to be non-blank.

@@ -15,6 +15,7 @@ GNU General Public License for more details.
 */
 
 #include "stdafx.h" // pre-compiled headers
+#include <tlhelp32.h> // For ScriptProcess()
 #include "window.h"
 #include "util.h" // for strlcpy()
 #include "application.h" // for MsgSleep()
@@ -1538,4 +1539,141 @@ void SetForegroundLockTimeout()
 	}
 //	else
 //		MsgBox("Enable focus-stealing: neither needed nor supported under Win95 and WinNT.");
+}
+
+
+
+////////////////////
+// PROCESS ROUTINES
+////////////////////
+
+DWORD ProcessExist9x2000 (char *aProcess)
+// Adapted from the AutoIt3 source.
+{
+	// We must dynamically load the function or program will probably not launch at all on NT4.
+	typedef BOOL (WINAPI *PROCESSWALK)(HANDLE hSnapshot, LPPROCESSENTRY32 lppe);
+	typedef HANDLE (WINAPI *CREATESNAPSHOT)(DWORD dwFlags, DWORD th32ProcessID);
+
+	static CREATESNAPSHOT lpfnCreateToolhelp32Snapshot = (CREATESNAPSHOT)GetProcAddress(GetModuleHandle("kernel32.dll"), "CreateToolhelp32Snapshot");
+    static PROCESSWALK lpfnProcess32First = (PROCESSWALK)GetProcAddress(GetModuleHandle("kernel32.dll"), "Process32First");
+    static PROCESSWALK lpfnProcess32Next = (PROCESSWALK)GetProcAddress(GetModuleHandle("kernel32.dll"), "Process32Next");
+
+	if (!lpfnCreateToolhelp32Snapshot || !lpfnProcess32First || !lpfnProcess32Next)
+		return 0;
+
+	PROCESSENTRY32 proc;
+    proc.dwSize = sizeof(proc);
+	HANDLE snapshot = lpfnCreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+	lpfnProcess32First(snapshot, &proc);
+
+	// Determine the PID if aProcess is a pure, non-negative integer:
+	DWORD specified_pid = IsPureNumeric(aProcess) ? ATOU(aProcess) : 0;
+	char szDrive[_MAX_PATH+1], szDir[_MAX_PATH+1], szFile[_MAX_PATH+1], szExt[_MAX_PATH+1];
+
+	while (lpfnProcess32Next(snapshot, &proc))
+	{
+		if (specified_pid && specified_pid == proc.th32ProcessID)
+		{
+			CloseHandle(snapshot);
+			return specified_pid;
+		}
+		// Otherwise, check for matching name even if aProcess is purely numeric (i.e. a number might
+		// also be a valid name?):
+		_splitpath(proc.szExeFile, szDrive, szDir, szFile, szExt);
+		strcat(szFile, szExt);
+		if (!stricmp(szFile, aProcess))
+		{
+			CloseHandle(snapshot);
+			return proc.th32ProcessID;
+		}
+	}
+	CloseHandle(snapshot);
+	return 0;  // Not found.
+}
+
+
+
+DWORD ProcessExistNT4(char *aProcess)
+// Adapted from the AutoIt3 source.
+{
+	//BOOL EnumProcesses(
+	//  DWORD *lpidProcess,  // array of process identifiers
+	//  DWORD cb,            // size of array
+	//  DWORD *cbNeeded      // number of bytes returned
+	//);
+	typedef BOOL (WINAPI *MyEnumProcesses)(DWORD*, DWORD, DWORD*);
+
+	//BOOL EnumProcessModules(
+	//  HANDLE hProcess,      // handle to process
+	//  HMODULE *lphModule,   // array of module handles
+	//  DWORD cb,             // size of array
+	//  LPDWORD lpcbNeeded    // number of bytes required
+	//);
+	typedef BOOL (WINAPI *MyEnumProcessModules)(HANDLE, HMODULE*, DWORD, LPDWORD);
+
+	//DWORD GetModuleBaseName(
+	//  HANDLE hProcess,    // handle to process
+	//  HMODULE hModule,    // handle to module
+	//  LPTSTR lpBaseName,  // base name buffer
+	//  DWORD nSize         // maximum characters to retrieve
+	//);
+	typedef DWORD (WINAPI *MyGetModuleBaseName)(HANDLE, HMODULE, LPTSTR, DWORD);
+
+	// We must dynamically load the function or program will probably not launch at all on Win95.
+    // Get a handle to the DLL module that contains EnumProcesses
+	HINSTANCE hinstLib = LoadLibrary("psapi.dll");
+	if (!hinstLib)
+		return 0;
+
+	// Not static in this case, since address can change with each new load of the library:
+  	MyEnumProcesses lpfnEnumProcesses = (MyEnumProcesses)GetProcAddress(hinstLib, "EnumProcesses");
+	MyEnumProcessModules lpfnEnumProcessModules = (MyEnumProcessModules)GetProcAddress(hinstLib, "EnumProcessModules");
+	MyGetModuleBaseName lpfnGetModuleBaseName = (MyGetModuleBaseName)GetProcAddress(hinstLib, "GetModuleBaseNameA");
+
+	DWORD idProcessArray[512];		// 512 processes max
+	DWORD cbNeeded;					// Bytes returned
+	if (!lpfnEnumProcesses || !lpfnEnumProcessModules || !lpfnGetModuleBaseName
+		|| !lpfnEnumProcesses(idProcessArray, sizeof(idProcessArray), &cbNeeded))
+	{
+		FreeLibrary(hinstLib);
+		return 0;
+	}
+
+	// Get the count of PIDs in the array
+	DWORD cProcesses = cbNeeded / sizeof(DWORD);
+	// Determine the PID if aProcess is a pure, non-negative integer:
+	DWORD specified_pid = IsPureNumeric(aProcess) ? ATOU(aProcess) : 0;
+	char szDrive[_MAX_PATH+1], szDir[_MAX_PATH+1], szFile[_MAX_PATH+1], szExt[_MAX_PATH+1];
+	char szProcessName[_MAX_PATH+1];
+	HMODULE hMod;
+	HANDLE hProcess;
+
+	for (UINT i = 0; i < cProcesses; ++i)
+	{
+		if (specified_pid && specified_pid == idProcessArray[i])
+		{
+			FreeLibrary(hinstLib);
+			return specified_pid;
+		}
+		// Otherwise, check for matching name even if aProcess is purely numeric (i.e. a number might
+		// also be a valid name?):
+		if (hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, idProcessArray[i])) // Assign
+		{
+			lpfnEnumProcessModules(hProcess, &hMod, sizeof(hMod), &cbNeeded);
+			if (lpfnGetModuleBaseName(hProcess, hMod, szProcessName, _MAX_PATH))
+			{
+				_splitpath(szProcessName, szDrive, szDir, szFile, szExt);
+				strcat(szFile, szExt);
+				if (!stricmp(szFile, aProcess))
+				{
+					CloseHandle(hProcess);
+					FreeLibrary(hinstLib);
+					return idProcessArray[i];  // The PID.
+				}
+			}
+			CloseHandle(hProcess);
+		}
+	}
+	FreeLibrary(hinstLib);
+	return 0;  // Not found.
 }

@@ -631,3 +631,64 @@ char *ConvertEscapeSequences(char *aBuf, char aEscapeChar)
 	}
 	return aBuf;
 }
+
+
+
+bool IsStringInList(char *aStr, char *aList, bool aCaseSensitive)
+// Checks if aStr exists in aList (which is a comma-separated list).
+// If aStr is blank, aList must start with a delimiting comma for there to be a match.
+{
+	// Must use a temp. buffer because otherwise there's no easy way to properly match upon strings
+	// such as the following:
+	// if var in string,,with,,literal,,commas
+	char buf[LINE_SIZE];
+    char *this_field = aList, *next_field, *cp;
+	size_t length;
+
+	while (*this_field)  // For each field in aList.
+	{
+		// To avoid the need to constantly check for buffer overflow (i.e. to keep it simple),
+		// just copy up to the limit of the buffer:
+		strlcpy(buf, this_field, sizeof(buf));
+		// Find the end of the field inside buf.  In keeping with the tradition set by the Input command,
+		// this always uses comma rather than g_delimiter.
+		for (cp = buf, next_field = this_field; *cp; ++cp, ++next_field)
+		{
+			if (*cp == ',')
+			{
+				if (*(cp + 1) == ',') // Make this pair into a single literal comma.
+				{
+					memmove(cp, cp + 1, strlen(cp + 1) + 1);  // +1 to include the zero terminator.
+					++next_field;  // An extra increment since the source string still has both commas of the pair.
+				}
+				else // this comma marks the end of the field.
+				{
+					*cp = '\0';  // Terminate the buffer to isolate just the current field.
+					break;
+				}
+			}
+		}
+
+		if (*next_field)  // The end of the field occurred prior to the end of aList.
+			++next_field; // Point it to the character after the delimiter (otherwise, leave it where it is).
+
+		length = strlen(buf);
+		if (length) // It is possible for this to be zero only for the first field.  Example: if var in ,abc
+		{
+			if (aCaseSensitive)
+			{
+				if (!strcmp(aStr, buf)) // Match found
+					return true;
+			}
+			else // Not case sensitive
+				if (!stricmp(aStr, buf)) // Match found
+					return true;
+		}
+		else // First item in the list is the empty string, so this is a match if aStr is also blank:
+			if (!*aStr)
+				return true;
+		this_field = next_field;
+	} // while()
+
+	return false;  // No match found.
+}

@@ -33,11 +33,6 @@ GNU General Public License for more details.
 EXTERN_OSVER; // For the access to the g_os version object without having to include globaldata.h
 EXTERN_G;
 
-// AutoIt2 supports lines up to 16384 characters long, and we want to be able to do so too
-// so that really long lines from aut2 scripts, such as a chain of IF commands, can be
-// brought in and parsed:
-#define LINE_SIZE (16384 + 1)
-
 enum ExecUntilMode {NORMAL_MODE, UNTIL_RETURN, UNTIL_BLOCK_END, ONLY_ONE_LINE};
 
 // It's done this way so that mAttribute can store a pointer or one of these constants.
@@ -71,7 +66,7 @@ enum enum_act {
 , ACT_REPEAT // Never parsed directly, only provided as a translation target for the old command (see other notes).
 , ACT_ELSE   // Parsed at a lower level than most commands to support same-line ELSE-actions (e.g. "else if").
 , ACT_IFEQUAL, ACT_IFNOTEQUAL, ACT_IFGREATER, ACT_IFGREATEROREQUAL, ACT_IFLESS, ACT_IFLESSOREQUAL
-, ACT_IFIS, ACT_IFISNOT
+, ACT_IFBETWEEN, ACT_IFNOTBETWEEN, ACT_IFIN, ACT_IFNOTIN, ACT_IFIS, ACT_IFISNOT
 , ACT_FIRST_COMMAND // i.e the above aren't considered commands for parsing/searching purposes.
 , ACT_IFWINEXIST = ACT_FIRST_COMMAND
 , ACT_IFWINNOTEXIST, ACT_IFWINACTIVE, ACT_IFWINNOTACTIVE
@@ -101,7 +96,7 @@ enum enum_act {
 , ACT_WINMINIMIZE, ACT_WINMAXIMIZE, ACT_WINRESTORE
 , ACT_WINHIDE, ACT_WINSHOW
 , ACT_WINMINIMIZEALL, ACT_WINMINIMIZEALLUNDO
-, ACT_WINCLOSE, ACT_WINKILL, ACT_WINMOVE, ACT_WINMENUSELECTITEM
+, ACT_WINCLOSE, ACT_WINKILL, ACT_WINMOVE, ACT_WINMENUSELECTITEM, ACT_PROCESS
 , ACT_WINSET, ACT_WINSETTITLE, ACT_WINGETTITLE, ACT_WINGETCLASS, ACT_WINGET, ACT_WINGETPOS, ACT_WINGETTEXT
 , ACT_POSTMESSAGE, ACT_SENDMESSAGE
 // Keep rarely used actions near the bottom for parsing/performance reasons:
@@ -211,8 +206,9 @@ enum TrayMenuItems {ID_TRAY_OPEN = 16000, ID_TRAY_HELP, ID_TRAY_WINDOWSPY, ID_TR
 #define ERR_CONTROLCOMMAND "Parameter #1 is not a valid Control command."
 #define ERR_CONTROLGETCOMMAND "Parameter #2 is not a valid ControlGet command."
 #define ERR_DRIVECOMMAND "Parameter #2 is not a valid DriveGet command."
-#define ERR_WINGET "Parameter #2 is not a valid WinGet command."
+#define ERR_PROCESSCOMMAND "Parameter #1 is not a valid Process command."
 #define ERR_WINSET "Parameter #1 is not a valid WinSet attribute."
+#define ERR_WINGET "Parameter #2 is not a valid WinGet command."
 #define ERR_IFMSGBOX "This line specifies an invalid MsgBox result."
 #define ERR_REG_KEY "The key name must be either HKEY_LOCAL_MACHINE, HKEY_USERS, HKEY_CURRENT_USER, HKEY_CLASSES_ROOT, HKEY_CURRENT_CONFIG, or the abbreviations for these."
 #define ERR_REG_VALUE_TYPE "The value type must be either REG_SZ, REG_EXPAND_SZ, REG_MULTI_SZ, REG_DWORD, or REG_BINARY."
@@ -399,7 +395,9 @@ enum JoyControls {JOYCTRL_INVALID, JOYCTRL_XPOS, JOYCTRL_YPOS, JOYCTRL_ZPOS
 , JOYCTRL_BUTTON_MAX = JOYCTRL_32
 };
 
-enum WinGetCmds {WINGET_CMD_INVALID, WINGET_CMD_ID, WINGET_CMD_IDLAST, WINGET_CMD_COUNT, WINGET_CMD_LIST};
+enum WinGetCmds {WINGET_CMD_INVALID, WINGET_CMD_ID, WINGET_CMD_IDLAST, WINGET_CMD_PID
+	, WINGET_CMD_COUNT, WINGET_CMD_LIST
+};
 
 enum TransformCmds {TRANS_CMD_INVALID, TRANS_CMD_ASC, TRANS_CMD_CHR, TRANS_CMD_DEREF, TRANS_CMD_HTML
 	, TRANS_CMD_MOD, TRANS_CMD_POW, TRANS_CMD_EXP, TRANS_CMD_SQRT, TRANS_CMD_LOG, TRANS_CMD_LN
@@ -418,6 +416,10 @@ enum MenuCommands {MENU_CMD_INVALID, MENU_CMD_SHOW, MENU_CMD_USEERRORLEVEL
 };
 
 enum ThreadCommands {THREAD_CMD_INVALID, THREAD_CMD_PRIORITY, THREAD_CMD_INTERRUPT};
+
+#define PROCESS_PRIORITY_LETTERS "LBNAHR"
+enum ProcessCmds {PROCESS_CMD_INVALID, PROCESS_CMD_EXIST, PROCESS_CMD_CLOSE, PROCESS_CMD_PRIORITY
+	, PROCESS_CMD_WAIT, PROCESS_CMD_WAITCLOSE};
 
 enum ControlCmds {CONTROL_CMD_INVALID, CONTROL_CMD_CHECK, CONTROL_CMD_UNCHECK
 	, CONTROL_CMD_ENABLE, CONTROL_CMD_DISABLE, CONTROL_CMD_SHOW, CONTROL_CMD_HIDE
@@ -565,6 +567,7 @@ private:
 		, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType ScriptSendMessage(char *aMsg, char *awParam, char *alParam, char *aControl
 		, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
+	ResultType ScriptProcess(char *aCmd, char *aProcess, char *aParam3);
 	ResultType WinSet(char *aAttrib, char *aValue, char *aTitle, char *aText
 		, char *aExcludeTitle, char *aExcludeText);
 	ResultType WinSetTitle(char *aTitle, char *aText, char *aNewTitle
@@ -1039,6 +1042,7 @@ public:
 		if (!aBuf || !*aBuf) return WINGET_CMD_ID;  // If blank, return the default command.
 		if (!stricmp(aBuf, "ID")) return WINGET_CMD_ID;
 		if (!stricmp(aBuf, "IDLast")) return WINGET_CMD_IDLAST;
+		if (!stricmp(aBuf, "PID")) return WINGET_CMD_PID;
 		if (!stricmp(aBuf, "Count")) return WINGET_CMD_COUNT;
 		if (!stricmp(aBuf, "List")) return WINGET_CMD_LIST;
 		return WINGET_CMD_INVALID;
@@ -1111,6 +1115,17 @@ public:
 		return THREAD_CMD_INVALID;
 	}
 	
+	static ProcessCmds ConvertProcessCmd(char *aBuf)
+	{
+		if (!aBuf || !*aBuf) return PROCESS_CMD_INVALID;
+		if (!stricmp(aBuf, "Exist")) return PROCESS_CMD_EXIST;
+		if (!stricmp(aBuf, "Close")) return PROCESS_CMD_CLOSE;
+		if (!stricmp(aBuf, "Priority")) return PROCESS_CMD_PRIORITY;
+		if (!stricmp(aBuf, "Wait")) return PROCESS_CMD_WAIT;
+		if (!stricmp(aBuf, "WaitClose")) return PROCESS_CMD_WAITCLOSE;
+		return PROCESS_CMD_INVALID;
+	}
+
 	static ControlCmds ConvertControlCmd(char *aBuf)
 	{
 		if (!aBuf || !*aBuf) return CONTROL_CMD_INVALID;
@@ -1429,6 +1444,7 @@ public:
 	ResultType Destroy();
 	ResultType Display(bool aForceToForeground = true);
 	UINT GetSubmenuPos(HMENU ahMenu);
+	UINT GetItemPos(char *aMenuItemName);
 	bool ContainsMenu(UserMenu *aMenu);
 };
 
@@ -1522,8 +1538,8 @@ private:
 
 public:
 	Line *mCurrLine;  // Seems better to make this public than make Line our friend.
-	char mThisMenuItem[MAX_MENU_LENGTH + 1];
-	char mThisMenu[MAX_MENU_LENGTH + 1];
+	char mThisMenuItemName[MAX_MENU_LENGTH + 1];
+	char mThisMenuName[MAX_MENU_LENGTH + 1];
 	char *mThisHotkeyName, *mPriorHotkeyName;
 	Label *mOnExitLabel;  // The label to run when the script terminates (NULL if none).
 	ExitReasons mExitReason;
@@ -1588,7 +1604,8 @@ public:
 	ResultType AddGroup(char *aGroupName);
 	Label *FindLabel(char *aLabelName);
 	ResultType ActionExec(char *aAction, char *aParams = NULL, char *aWorkingDir = NULL
-		, bool aDisplayErrors = true, char *aRunShowMode = NULL, HANDLE *aProcess = NULL, bool aUseRunAs = false);
+		, bool aDisplayErrors = true, char *aRunShowMode = NULL, HANDLE *aProcess = NULL
+		, bool aUseRunAs = false, Var *aOutputVar = NULL);
 	char *ListVars(char *aBuf, size_t aBufSize);
 	char *ListKeyHistory(char *aBuf, size_t aBufSize);
 
@@ -1999,14 +2016,47 @@ public:
 	VarSizeType GetThisMenuItem(char *aBuf = NULL)
 	{
 		if (aBuf)
-			strcpy(aBuf, mThisMenuItem);
-		return (VarSizeType)strlen(mThisMenuItem);
+			strcpy(aBuf, mThisMenuItemName);
+		return (VarSizeType)strlen(mThisMenuItemName);
+	}
+	VarSizeType GetThisMenuItemPos(char *aBuf = NULL)
+	{
+		if (!aBuf)
+			return MAX_NUMBER_LENGTH;
+		// The menu item's position is discovered through this process -- rather than doing
+		// something higher performance such as storing the menu handle or pointer to menu/item
+		// object in g_script -- because those things tend to be volatile.  For example, a menu
+		// or menu item object might be destroyed between the time the user selects it and the
+		// time this variable is referenced in the script.  Thus, by definition, this variable
+		// contains the CURRENT position of the most recently selected menu item within its
+		// CURRENT menu.
+		if (*mThisMenuName && *mThisMenuItemName)
+		{
+			UserMenu *menu = FindMenu(mThisMenuName);
+			if (menu)
+			{
+				// If the menu does not physically exist yet (perhaps due to being destroyed as a result
+				// of DeleteAll, Delete, or some other operation), create it so that the position of the
+				// item can be determined.  This is done for consistency in behavior.
+				if (!menu->mMenu)
+					menu->Create();
+				UINT menu_item_pos = menu->GetItemPos(mThisMenuItemName);
+				if (menu_item_pos < UINT_MAX) // Success
+				{
+					UTOA(menu_item_pos + 1, aBuf);  // Add one to convert from zero-based to 1-based.
+					return (VarSizeType)strlen(aBuf);
+				}
+			}
+		}
+		// Otherwise:
+		*aBuf = '\0';
+		return 0;
 	}
 	VarSizeType GetThisMenu(char *aBuf = NULL)
 	{
 		if (aBuf)
-			strcpy(aBuf, mThisMenu);
-		return (VarSizeType)strlen(mThisMenu);
+			strcpy(aBuf, mThisMenuName);
+		return (VarSizeType)strlen(mThisMenuName);
 	}
 	VarSizeType GetThisHotkey(char *aBuf = NULL)
 	{

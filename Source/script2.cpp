@@ -693,22 +693,24 @@ ResultType Line::ToolTip(char *aText, char *aX, char *aY, char *aID)
 	//ti.rect.top = dtw.top;
 	//ti.rect.left = dtw.left;
 
-	DWORD dwResult;
+	// No need to use SendMessageTimeout() since the ToolTip() is owned by our own thread, which
+	// (since we're here) we know is not hung or heavily occupied.
+
 	if (!tip_hwnd)
 	{
 		// This this window has no owner, it won't be automatically destroyed when its owner is.
-		// Thus, it should be destroyed upon program termination.
+		// Thus, it will be explicitly by the program's exit function.
 		tip_hwnd = g_hWndToolTip[window_index] = CreateWindowEx(WS_EX_TOPMOST, TOOLTIPS_CLASS, NULL, TTS_NOPREFIX | TTS_ALWAYSTIP
 			, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, NULL, NULL, NULL, NULL);
-		SendMessageTimeout(tip_hwnd, TTM_ADDTOOL, 0, (LPARAM)(LPTOOLINFO)&ti, SMTO_ABORTIFHUNG, 2000, &dwResult);
-		SendMessageTimeout(tip_hwnd, TTM_SETMAXTIPWIDTH, 0, (LPARAM)dtw.right, SMTO_ABORTIFHUNG, 2000, &dwResult);
+		SendMessage(tip_hwnd, TTM_ADDTOOL, 0, (LPARAM)(LPTOOLINFO)&ti);
+		SendMessage(tip_hwnd, TTM_SETMAXTIPWIDTH, 0, (LPARAM)dtw.right);
 		// Must do these next two when the window is first created, otherwise GetWindowRect() below will retrieve
 		// a tooltip window size that is quite a bit taller than it winds up being:
-		SendMessageTimeout(tip_hwnd, TTM_TRACKPOSITION, 0, (LPARAM)MAKELONG(pt.x, pt.y), SMTO_ABORTIFHUNG, 2000, &dwResult);
-		SendMessageTimeout(tip_hwnd, TTM_TRACKACTIVATE, TRUE, (LPARAM)&ti, SMTO_ABORTIFHUNG, 2000, &dwResult);
+		SendMessage(tip_hwnd, TTM_TRACKPOSITION, 0, (LPARAM)MAKELONG(pt.x, pt.y));
+		SendMessage(tip_hwnd, TTM_TRACKACTIVATE, TRUE, (LPARAM)&ti);
 	}
 	else
-		SendMessageTimeout(tip_hwnd, TTM_UPDATETIPTEXT, 0, (LPARAM)&ti, SMTO_ABORTIFHUNG, 2000, &dwResult);
+		SendMessage(tip_hwnd, TTM_UPDATETIPTEXT, 0, (LPARAM)&ti);
 
 
 	RECT ttw = {0};
@@ -744,10 +746,10 @@ ResultType Line::ToolTip(char *aText, char *aX, char *aY, char *aID)
 		}
 	}
 
-	SendMessageTimeout(tip_hwnd, TTM_TRACKPOSITION, 0, (LPARAM)MAKELONG(pt.x, pt.y), SMTO_ABORTIFHUNG, 2000, &dwResult);
+	SendMessage(tip_hwnd, TTM_TRACKPOSITION, 0, (LPARAM)MAKELONG(pt.x, pt.y));
 	// And do a TTM_TRACKACTIVATE even if the tooltip window already existed upon entry to this function,
 	// so that in case it was hidden or dismissed while its HWND still exists, it will be shown again:
-	SendMessageTimeout(tip_hwnd, TTM_TRACKACTIVATE, TRUE, (LPARAM)&ti, SMTO_ABORTIFHUNG, 2000, &dwResult);
+	SendMessage(tip_hwnd, TTM_TRACKACTIVATE, TRUE, (LPARAM)&ti);
 	return OK;
 }
 
@@ -2554,6 +2556,112 @@ ResultType Line::ScriptSendMessage(char *aMsg, char *awParam, char *alParam, cha
 
 
 
+ResultType Line::ScriptProcess(char *aCmd, char *aProcess, char *aParam3)
+{
+	ProcessCmds process_cmd = ConvertProcessCmd(aCmd);
+	// Runtime error is rare since it is caught at load-time unless it's in a var. ref.
+	if (process_cmd == PROCESS_CMD_INVALID)
+		return LineError(ERR_PROCESSCOMMAND ERR_ABORT, FAIL, aCmd);
+
+	HANDLE hProcess;
+	DWORD pid, priority;
+	BOOL result;
+
+	switch (process_cmd)
+	{
+	case PROCESS_CMD_EXIST:
+		return g_ErrorLevel->Assign(ProcessExist(aProcess)); // The discovered PID or zero if none.
+
+	case PROCESS_CMD_CLOSE:
+		if (pid = ProcessExist(aProcess))  // Assign
+		{
+			if (hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid))
+			{
+				result = TerminateProcess(hProcess, 0);
+				CloseHandle(hProcess);
+				return g_ErrorLevel->Assign(result ? pid : 0); // Indicate success or failure.
+			}
+		}
+		// Otherwise, return a PID of 0 to indicate failure.
+		return g_ErrorLevel->Assign("0");
+
+	case PROCESS_CMD_PRIORITY:
+		switch (toupper(*aParam3))
+		{
+		case 'L': priority = IDLE_PRIORITY_CLASS; break;
+		case 'B': priority = BELOW_NORMAL_PRIORITY_CLASS; break;
+		case 'N': priority = NORMAL_PRIORITY_CLASS; break;
+		case 'A': priority = ABOVE_NORMAL_PRIORITY_CLASS; break;
+		case 'H': priority = HIGH_PRIORITY_CLASS; break;
+		case 'R': priority = REALTIME_PRIORITY_CLASS; break;
+		default:
+			return g_ErrorLevel->Assign("0");  // 0 indicates failure in this case (i.e. a PID of zero).
+		}
+		if (pid = *aProcess ? ProcessExist(aProcess) : GetCurrentProcessId())  // Assign
+		{
+			if (hProcess = OpenProcess(PROCESS_SET_INFORMATION, FALSE, pid)) // Assign
+			{
+				// If OS doesn't support "above/below normal", seems best to default to normal rather than high/low,
+				// since "above/below normal" aren't that dramatically different from normal:
+				if (!g_os.IsWin2000orLater() && (priority == BELOW_NORMAL_PRIORITY_CLASS || priority == ABOVE_NORMAL_PRIORITY_CLASS))
+					priority = NORMAL_PRIORITY_CLASS;
+				result = SetPriorityClass(hProcess, priority);
+				CloseHandle(hProcess);
+				return g_ErrorLevel->Assign(result ? pid : 0); // Indicate success or failure.
+			}
+		}
+		// Otherwise, return a PID of 0 to indicate failure.
+		return g_ErrorLevel->Assign("0");
+
+	case PROCESS_CMD_WAIT:
+	case PROCESS_CMD_WAITCLOSE:
+	{
+		// This section is similar to that used for WINWAIT and RUNWAIT:
+		bool wait_indefinitely;
+		int sleep_duration;
+		DWORD start_time;
+		if (*aParam3) // the param containing the timeout value isn't blank.
+		{
+			wait_indefinitely = false;
+			sleep_duration = (int)(ATOF(aParam3) * 1000); // Can be zero.
+			start_time = GetTickCount();
+		}
+		else
+		{
+			wait_indefinitely = true;
+			sleep_duration = 0; // Just to catch any bugs.
+		}
+		for (;;)
+		{ // Always do the first iteration so that at least one check is done.
+			pid = ProcessExist(aProcess);
+			if (process_cmd == PROCESS_CMD_WAIT)
+			{
+				if (pid)
+					return g_ErrorLevel->Assign(pid);
+			}
+			else // PROCESS_CMD_WAITCLOSE
+			{
+				// Since PID cannot always be determined (i.e. if process never existed, there was
+				// no need to wait for it to close), for consistency, return 0 on success.
+				if (!pid)
+					return g_ErrorLevel->Assign("0");
+			}
+			// Must cast to int or any negative result will be lost due to DWORD type:
+			if (wait_indefinitely || (int)(sleep_duration - (GetTickCount() - start_time)) > SLEEP_INTERVAL_HALF)
+				MsgSleep(100);  // For performance reasons, don't check as often as the WinWait family does.
+			else // Done waiting.
+				return g_ErrorLevel->Assign(pid);
+				// Above assigns 0 if "Process Wait" times out; or the PID of the process that still exists
+				// if "Process WaitClose" times out.
+		} // for()
+	} // case
+	} // switch()
+
+	return FAIL;  // Should never be executed; just here to catch bugs.
+}
+
+
+
 ResultType Line::WinSet(char *aAttrib, char *aValue, char *aTitle, char *aText
 	, char *aExcludeTitle, char *aExcludeText)
 {
@@ -2714,17 +2822,24 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 	{
 	case WINGET_CMD_ID:
 	case WINGET_CMD_IDLAST:
-		if (target_window_determined)
-		{
-			if (target_window)
-				return output_var->AssignHWND(target_window);
-			else
-				return output_var->Assign();
-		}
-		// Otherwise:
-		if (   !(target_window = WinExist(aTitle, aText, aExcludeTitle, aExcludeText, cmd == WINGET_CMD_IDLAST))   )
+		if (!target_window_determined)
+			target_window = WinExist(aTitle, aText, aExcludeTitle, aExcludeText, cmd == WINGET_CMD_IDLAST);
+		if (target_window)
+			return output_var->AssignHWND(target_window);
+		else
 			return output_var->Assign();
-		return output_var->AssignHWND(target_window);
+
+	case WINGET_CMD_PID:
+		if (!target_window_determined)
+			target_window = WinExist(aTitle, aText, aExcludeTitle, aExcludeText);
+		if (target_window)
+		{
+			DWORD pid;
+			GetWindowThreadProcessId(target_window, &pid);
+			return output_var->Assign(pid);
+		}
+		else
+			return output_var->Assign();
 
 	case WINGET_CMD_COUNT:
 		if (target_window_determined) // target_window (if non-NULL) represents exactly 1 window in this case.
@@ -3531,6 +3646,10 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		}
 		if (g_MenuIsVisible == MENU_VISIBLE_POPUP || (iMsg == AHK_HOOK_HOTKEY && lParam && g_hWnd == GetForegroundWindow()))
 		{
+			// UPDATE: Since it didn't return above, the script is interruptible, which should
+			// mean that none of the script's or thread's menus should be currently displayed.
+			// So part of the reason for this section might be obsolete now.  But more review
+			// would be needed before changing it.  OLDER INFO:
 			// Ok this is a little strange, but the thought here is that if the tray menu is
 			// displayed, it should be closed prior to executing any new hotkey.  This is
 			// because hotkeys usually cause other windows to become active, and once that
@@ -4423,11 +4542,15 @@ ResultType Line::MouseClickDrag(vk_type aVK, int aX1, int aY1, int aX2, int aY2,
 	// Always sleep a certain minimum amount of time between events to improve reliability,
 	// but allow the user to specify a higher time if desired.  Note that for Win9x,
 	// a true Sleep() is done because it is much more accurate than the MsgSleep() method,
-	// at least on Win98SE when short sleeps are done:
+	// at least on Win98SE when short sleeps are done.  UPDATE: A true sleep is now done
+	// unconditionally if the delay period is small.  This fixes a small issue where if
+	// RButton is a hotkey that includes "MouseClick right" somewhere in its subroutine,
+	// the user would not be able to correctly open the script's own tray menu via
+	// right-click (note that this issue affected only the one script itself, not others).
 	#define MOUSE_SLEEP \
 		if (g.MouseDelay >= 0)\
 		{\
-			if (g.MouseDelay < 25 && g_os.IsWin9x())\
+			if (g.MouseDelay < 11 || (g.MouseDelay < 25 && g_os.IsWin9x()))\
 				Sleep(g.MouseDelay);\
 			else\
 				SLEEP_WITHOUT_INTERRUPTION(g.MouseDelay)\
@@ -5591,10 +5714,16 @@ ResultType Line::ScriptGetKeyState(char *aKeyName, char *aOption)
 			else // keyboard
 			{
 				if (g_KeybdHook)
+				{
 					// Since the hook is installed, use its value rather than that from
 					// GetAsyncKeyState(), which doesn't seem to return the physical state
-					// as expected/advertised, least under WinXP:
+					// as expected/advertised, least under WinXP.
+					// But first, correct the hook modifier state if it needs it.  See comments
+					// in GetModifierLRState() for why this is needed:
+					if (KeyToModifiersLR(vk))     // It's a modifier.
+						GetModifierLRState(true); // Correct hook's physical state if needed.
 					return output_var->Assign(g_PhysicalKeyState[vk] & STATE_DOWN ? "D" : "U");
+				}
 				else // Even for Win9x/NT, it seems slightly better to call this rather than IsKeyDown9xNT():
 					return output_var->Assign(IsPhysicallyDown(vk) ? "D" : "U");
 			}
@@ -6267,7 +6396,7 @@ ResultType Line::URLDownloadToFile(char *aURL, char *aFilespec)
 	{
 		lpfnInternetCloseHandle(hFile);
 		lpfnInternetCloseHandle(hInet);
-		FreeLibrary(hinstLib);					// Free the DLL module.
+		FreeLibrary(hinstLib);
 		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
 	}
 
@@ -8262,6 +8391,10 @@ ArgTypeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_IFGREATEROREQUAL:
 		case ACT_IFLESS:
 		case ACT_IFLESSOREQUAL:
+		case ACT_IFBETWEEN:
+		case ACT_IFNOTBETWEEN:
+		case ACT_IFIN:
+		case ACT_IFNOTIN:
 		case ACT_IFIS:
 		case ACT_IFISNOT:
 			return ARG_TYPE_INPUT_VAR;
@@ -8312,6 +8445,7 @@ ArgTypeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_CONTROLGETPOS:
 		case ACT_MOUSEGETPOS:
 		case ACT_SPLITPATH:
+		case ACT_RUN:
 			return ARG_TYPE_OUTPUT_VAR;
 		}
 		break;

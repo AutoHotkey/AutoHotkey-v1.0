@@ -466,5 +466,6 @@ ResultType FileAppend(char *aFilespec, char *aLine, bool aAppendNewline = true);
 char *ConvertFilespecToCorrectCase(char *aFullFileSpec);
 COLORREF ColorNameToBGR(char *aColorName);
 char *ConvertEscapeSequences(char *aBuf, char aEscapeChar);
+bool IsStringInList(char *aStr, char *aList, bool aCaseSensitive);
 
 #endif

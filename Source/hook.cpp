@@ -290,7 +290,7 @@ HookType GetActiveHooks()
 
 
 HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, HookType aWhichHookAlways
-	, bool aWarnIfHooksAlreadyInstalled, bool aActivateOnlySuspendHotkeys)
+	, bool aWarnIfHooksAlreadyInstalled)
 // The input params are unnecessary because could just access directly by using Hotkey::shk[].
 // But aHK is a little more concise.
 // aWhichHookAlways was added to force the hooks to be installed (or stay installed) in the case
@@ -316,7 +316,7 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 
 	// Now we know that at least one of the hooks is a candidate for activation.
 	// Set up the arrays process all of the hook hotkeys even if the corresponding hook won't
-	// become active (which should only happen if aActivateOnlySuspendHotkeys is true
+	// become active (which should only happen if g_IsSuspended is true
 	// and it turns out there are no suspend-hotkeys that are handled by the hook).
 
 	// These arrays are dynamically allocated so that memory is conserved in cases when
@@ -426,9 +426,9 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 		if (!TYPE_IS_HOOK(aHK[i]->mType) || !aHK[i]->mEnabled)
 			continue;
 
-		// So aHK[i] is a hook hotkey.  But if the caller specified true for aActivateOnlySuspendHotkeys,
-		// we won't include it unless it's exempt from suspension:
-		if (aActivateOnlySuspendHotkeys && !aHK[i]->IsExemptFromSuspend())
+		// So aHK[i] is a hook hotkey.  But if g_IsSuspended is true, we won't include it unless it's
+		// exempt from suspension:
+		if (g_IsSuspended && !aHK[i]->IsExemptFromSuspend())
 			continue;
 
 		// Rule out the possibility of obnoxious values right away, preventing array-out-of bounds, etc.:
@@ -587,10 +587,9 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 	if (!(keybd_hook_hotkey_count || mouse_hook_hotkey_count || force_CapsNumScroll || aWhichHookAlways
 		|| Hotstring::AtLeastOneEnabled()))
 		// Since there are no hotkeys whatsover (not even an AlwaysOn/Off toggleable key),
-		// remove all hooks and free the memory.  Currently, this should only happen if
-		// aActivateOnlySuspendHotkeys is true (i.e. there were no Suspend-type hotkeys to
-		// activate). Note: When "suspend" mode is in effect, the Num/Scroll/CapsLock
-		// AlwaysOn/Off feature is not disabled, by design:
+		// remove all hooks.  Currently, this should only happen if g_IsSuspended is true
+		// (i.e. there were no Suspend-type hotkeys to activate). Note: When "suspend" mode
+		// is in effect, the Num/Scroll/CapsLock AlwaysOn/Off feature is not disabled, by design:
 		return RemoveAllHooks();
 
 	if (hk_sorted_count)
@@ -716,21 +715,23 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 		}
 		else
 		{
-			if (g_os.IsWin9x()) // i.e. it failed because the OS does't support it.
+			if (!g_os.IsWin9x())
+				MsgBox("Warning: The keyboard hook could not be activated; some parts of the script will not function.");
+			//else // i.e. it failed because the OS does't support it.
 				// Currently, this never happens because there are other checks that intercept
-				// attempts to get this far if the OS is Win9x.  But just in case the code ever
-				// changes:
-				MsgBox("Note: This script attempts to use keyboard or hotkey features that aren't yet supported"
-					" on Win95/98/ME.  Those parts of the script will not function.");
-			else
-				MsgBox("Warning: The keyboard hook could not be activated.  Please report this as a possible bug.");
+				// attempts to get this far if the OS is Win9x.  UPDATE: I think it does happen
+				// sometimes, perhaps only when you have the line #InstallKeybdHook in the script.
+				// It seems best to disable this so that the same script can be used without
+				// a warning on Win9x (and since it's so rare anyway):
+				//MsgBox("Note: This script attempts to use keyboard or hotkey features that aren't yet supported"
+				//	" on Win95/98/ME.  Those parts of the script will not function.");
 			return -1;
 		}
 	}
 	else
 		// Deinstall hook if the caller omitted it from aWhichHook, or if it had no
 		// corresponding hotkeys (currently the latter only happens in the case of
-		// aActivateOnlySuspendHotkeys == TRUE):
+		// g_IsSuspended is true):
 		if (g_KeybdHook && !(aWhichHookAlways & HOOK_KEYBD)
 			&& (!(aWhichHook & HOOK_KEYBD) || !(keybd_hook_hotkey_count || force_CapsNumScroll || Hotstring::AtLeastOneEnabled())))
 			hooks_currently_active = RemoveKeybdHook();
@@ -764,18 +765,15 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 		}
 		else
 		{
-			if (g_os.IsWin9x()) // i.e. it failed because the OS does't support it.
-				MsgBox("Note: This script attempts to use mouse features that aren't yet supported on Win95/98/ME."
-					"  Those parts of the script will not function.");
-			else
-				MsgBox("Warning: The mouse hook could not be activated.  Please report this as a possible bug.");
+			if (!g_os.IsWin9x())
+				MsgBox("Warning: The mouse hook could not be activated; some parts of the script will not function.");
 			return -1;
 		}
 	}
 	else
 		// Deinstall hook if the caller omitted it from aWhichHook, or if it had no
 		// corresponding hotkeys (currently the latter only happens in the case of
-		// aActivateOnlySuspendHotkeys == TRUE):
+		// g_IsSuspended is true):
 		if (g_MouseHook && !(aWhichHookAlways & HOOK_MOUSE)
 			&& (!(aWhichHook & HOOK_MOUSE) || !mouse_hook_hotkey_count))
 			hooks_currently_active = RemoveMouseHook();

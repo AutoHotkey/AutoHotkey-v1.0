@@ -229,7 +229,7 @@ HookType RemoveKeybdHook();
 HookType RemoveMouseHook();
 HookType GetActiveHooks();
 HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, HookType aWhichHookAlways
-, bool aWarnIfHooksAlreadyInstalled, bool aActivateOnlySuspendHotkeys = false);
+	, bool aWarnIfHooksAlreadyInstalled);
 void ResetHook(bool aAllModifiersUp = false, HookType aWhichHook = (HOOK_KEYBD | HOOK_MOUSE)
 	, bool aResetKVKandKSC = false);
 

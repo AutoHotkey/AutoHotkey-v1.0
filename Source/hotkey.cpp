@@ -285,10 +285,10 @@ void Hotkey::AllActivate()
 	// So for now, when in restart mode, just acquire the mutex but don't display
 	// any warning if another instance also has the mutex:
 	if (g_IsSuspended)
-		sWhichHookActive = ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways, false, true);
+		sWhichHookActive = ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways, false);
 	else
 		sWhichHookActive = ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways
-			, (!g_ForceLaunch && !g_script.mIsRestart) || sHotkeysAreLocked, false);
+			, (!g_ForceLaunch && !g_script.mIsRestart) || sHotkeysAreLocked);
 
 	// Signal that no new hotkeys should be defined after this point (i.e. that the definition
 	// stage is complete).  Do this only after the the above so that the above can use the old value.
@@ -306,7 +306,7 @@ ResultType Hotkey::AllDeactivate(bool aObeySuspend, bool aChangeHookStatus, bool
 	if (aChangeHookStatus)
 	{
 		if (aObeySuspend && g_IsSuspended) // Have the hook keep active only those that are exempt from suspension.
-			sWhichHookActive = ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways, false, true);
+			sWhichHookActive = ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways, false);
 		else if (aKeepHookIfNeeded)
 		{
 			// Caller has already changed the set of hotkeys, perhaps to disable one of them.  If there
