@@ -2970,8 +2970,13 @@ ResultType Line::WinSet(char *aAttrib, char *aValue, char *aTitle, char *aText
 		case TOGGLE: topmost_or_not = (exstyle & WS_EX_TOPMOST) ? HWND_NOTOPMOST : HWND_TOPMOST; break;
 		default: return OK;
 		}
-		// SetWindowLong() didn't seem to work, at least not on some windows.  But this does:
-		SetWindowPos(target_window, topmost_or_not, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+		// SetWindowLong() didn't seem to work, at least not on some windows.  But this does.
+		// As of v1.0.25.14, SWP_NOACTIVATE is also specified, though its absence does not actually
+		// seem to activate the window, at least on XP (perhaps due to anti-focus-stealing measure
+		// in Win98/2000 and beyond).  Or perhaps its something to do with the presence of
+		// topmost_or_not (HWND_TOPMOST/HWND_NOTOPMOST), which might always avoid activating the
+		// window.
+		SetWindowPos(target_window, topmost_or_not, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
 		break;
 	}
 
@@ -2980,7 +2985,7 @@ ResultType Line::WinSet(char *aAttrib, char *aValue, char *aTitle, char *aText
 	case WINSET_BOTTOM:
 		// Note: SWP_NOACTIVATE must be specified otherwise the target window often/always fails to go
 		// to the bottom:
-		SetWindowPos(target_window, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+		SetWindowPos(target_window, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
 		break;
 
 	case WINSET_TRANSPARENT:

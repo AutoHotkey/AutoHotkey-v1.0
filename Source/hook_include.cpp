@@ -875,7 +875,7 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 		// - Anything with Ctrl+Alt together in it, including Ctrl+Alt+Shift, etc. -- but don't do
 		//   "anything containing the Alt key" because that causes weird side-effects with
 		//   Alt+LeftArrow/RightArrow and maybe other keys too).
-		// Older/Obsolete: If any modifiers except SHIFT are physically down, don't transcribe the key since
+		// Older comment: If any modifiers except SHIFT are physically down, don't transcribe the key since
 		// most users wouldn't want that.  An additional benefit of this policy is that registered hotkeys will
 		// normally be excluded from the input (except those rare ones that have only SHIFT as a modifier).
 		// Note that ToAscii() will translate ^i to a tab character, !i to plain i, and many other modified
@@ -885,6 +885,7 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 	static vk_type pending_dead_key_vk = 0;
 	static sc_type pending_dead_key_sc = 0; // Need to track this separately because sometimes default mapping isn't correct.
 	static bool pending_dead_key_used_shift = false;
+	static bool pending_dead_key_used_altgr = false;
 
 	// v1.0.21: Only true (unmodified) backspaces are recognized by the below.  Another reason to do
 	// this is that ^backspace has a native function (delete word) different than backspace in many editors.
@@ -971,8 +972,25 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 			vk_type which_shift_to_send = which_shift_down ? which_shift_down : VK_LSHIFT;
 			if (pending_dead_key_used_shift != (bool)which_shift_down)
 				KeyEvent(pending_dead_key_used_shift ? KEYDOWN : KEYUP, which_shift_to_send);
+			// v1.0.25.14: Apply AltGr too, if necessary.  This is necessary because some keyboard
+			// layouts have dead keys that are manifest only by holding down AltGr and pressing
+			// another key.  If this weren't done, a hotstring script running on Belgian/French
+			// layout (and probably many others that have AltGr dead keys) would disrupt the user's
+			// ability to use the tilde dead key.  For example, pressing AltGr+Slash (equals sign
+			// on Belgian keyboard) followed by the letter o should produce the tilde-over-o
+			// character, but it would not if the following AltGr fix isn't in effect.
+			// If pending_dead_key_used_altgr is true, the current keyboard layout has an AltGr key.
+			// That plus the fact that VK_RMENU is not down should mean definitively that AltGr is not
+			// down. Also, it might be necessary to assign the below to a variable more than just for
+			// performance/readability: KeyEvent() results in a recursive call to this hook function,
+			// which causes g_modifiersLR_logical to be different after the call.
+			bool apply_altgr = pending_dead_key_used_altgr && !(g_modifiersLR_logical & MOD_RALT);
+			if (apply_altgr)
+				KeyEvent(KEYDOWN, VK_RMENU); // This will also push down LCTRL as an intrinsic part of AltGr's functionality.
 			// Since it's a substitute for the previously suppressed physical dead key event, mark it as physical:
 			KEYEVENT_PHYS(KEYDOWNANDUP, vk_to_send, pending_dead_key_sc);
+			if (apply_altgr)
+				KeyEvent(KEYUP, VK_RMENU); // This will also release LCTRL as an intrinsic part of AltGr's functionality.
 			if (pending_dead_key_used_shift != (bool)which_shift_down) // Restore the original shift state.
 				KeyEvent(pending_dead_key_used_shift ? KEYUP : KEYDOWN, which_shift_to_send);
 		}
@@ -984,6 +1002,10 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 			pending_dead_key_vk = vk;
 			pending_dead_key_sc = sc;
 			pending_dead_key_used_shift = g_modifiersLR_logical & (MOD_LSHIFT | MOD_RSHIFT);
+			// Detect AltGr as fully and completely as possible in case the current keyboard layout
+			// doesn't even have an AltGr key.  The section above which references
+			// pending_dead_key_used_altgr relies on this check having been done here:
+			pending_dead_key_used_altgr = (g_modifiersLR_logical & MOD_LCONTROL) && (g_modifiersLR_logical & MOD_RALT);
 		}
 		// Dead keys must always be hidden, otherwise they would be shown twice literally due to
 		// having been "damaged" by ToAsciiEx():

@@ -495,7 +495,8 @@ enum MenuCommands {MENU_CMD_INVALID, MENU_CMD_SHOW, MENU_CMD_USEERRORLEVEL
 };
 
 enum GuiCommands {GUI_CMD_INVALID, GUI_CMD_OPTIONS, GUI_CMD_ADD, GUI_CMD_MENU, GUI_CMD_SHOW
-	, GUI_CMD_SUBMIT, GUI_CMD_CANCEL, GUI_CMD_DESTROY, GUI_CMD_FONT, GUI_CMD_TAB, GUI_CMD_DEFAULT
+	, GUI_CMD_SUBMIT, GUI_CMD_CANCEL, GUI_CMD_MINIMIZE, GUI_CMD_MAXIMIZE, GUI_CMD_RESTORE
+	, GUI_CMD_DESTROY, GUI_CMD_FONT, GUI_CMD_TAB, GUI_CMD_DEFAULT
 	, GUI_CMD_COLOR, GUI_CMD_FLASH
 };
 
@@ -1362,6 +1363,9 @@ public:
 		if (!stricmp(aBuf, "Show")) return GUI_CMD_SHOW;
 		if (!stricmp(aBuf, "Submit")) return GUI_CMD_SUBMIT;
 		if (!stricmp(aBuf, "Cancel") || !stricmp(aBuf, "Hide")) return GUI_CMD_CANCEL;
+		if (!stricmp(aBuf, "Minimize")) return GUI_CMD_MINIMIZE;
+		if (!stricmp(aBuf, "Maximize")) return GUI_CMD_MAXIMIZE;
+		if (!stricmp(aBuf, "Restore")) return GUI_CMD_RESTORE;
 		if (!stricmp(aBuf, "Destroy")) return GUI_CMD_DESTROY;
 		if (!stricmp(aBuf, "Menu")) return GUI_CMD_MENU;
 		if (!stricmp(aBuf, "Font")) return GUI_CMD_FONT;
@@ -1950,7 +1954,7 @@ public:
 	HDROP mHdrop;                 // Used for drag and drop operations.
 	int mMarginX, mMarginY, mPrevX, mPrevY, mPrevWidth, mPrevHeight, mMaxExtentRight, mMaxExtentDown
 		, mSectionX, mSectionY, mMaxExtentRightSection, mMaxExtentDownSection;
-	bool mFirstShowing, mShowIsInProgress, mDestroyWindowHasBeenCalled;
+	bool mFirstGuiShowCmd, mFirstActivation, mShowIsInProgress, mDestroyWindowHasBeenCalled;
 
 	#define MAX_GUI_FONTS 100
 	static FontType sFont[MAX_GUI_FONTS];
@@ -1988,7 +1992,8 @@ public:
 		, mMaxExtentRight(0), mMaxExtentDown(0)
 		, mSectionX(COORD_UNSPECIFIED), mSectionY(COORD_UNSPECIFIED)
 		, mMaxExtentRightSection(COORD_UNSPECIFIED), mMaxExtentDownSection(COORD_UNSPECIFIED)
-		, mFirstShowing(true), mShowIsInProgress(false), mDestroyWindowHasBeenCalled(false)
+		, mFirstGuiShowCmd(true), mFirstActivation(true), mShowIsInProgress(false)
+		, mDestroyWindowHasBeenCalled(false)
 	{
 		// The array of controls is left unitialized to catch bugs.  Each control's attributes should be
 		// fully populated when it is created.
@@ -2272,6 +2277,7 @@ public:
 	VarSizeType GetLoopFileShortName(char *aBuf = NULL);
 	VarSizeType GetLoopFileDir(char *aBuf = NULL);
 	VarSizeType GetLoopFileFullPath(char *aBuf = NULL);
+	VarSizeType GetLoopFileLongPath(char *aBuf = NULL);
 	VarSizeType GetLoopFileShortPath(char *aBuf = NULL);
 	VarSizeType GetLoopFileTimeModified(char *aBuf = NULL);
 	VarSizeType GetLoopFileTimeCreated(char *aBuf = NULL);

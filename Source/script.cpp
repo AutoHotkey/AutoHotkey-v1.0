@@ -3813,6 +3813,9 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					return ScriptError(ERR_GUICONTROL, NEW_RAW_ARG2);
 				break;
 			case GUI_CMD_CANCEL:
+			case GUI_CMD_MINIMIZE:
+			case GUI_CMD_MAXIMIZE:
+			case GUI_CMD_RESTORE:
 			case GUI_CMD_DESTROY:
 			case GUI_CMD_DEFAULT:
 				if (aArgc > 1)
@@ -4650,6 +4653,7 @@ VarTypes Script::GetVarType(char *aVarName)
 	if (!stricmp(aVarName, "A_LoopFileShortName")) return VAR_LOOPFILESHORTNAME;
 	if (!stricmp(aVarName, "A_LoopFileDir")) return VAR_LOOPFILEDIR;
 	if (!stricmp(aVarName, "A_LoopFileFullPath")) return VAR_LOOPFILEFULLPATH;
+	if (!stricmp(aVarName, "A_LoopFileLongPath")) return VAR_LOOPFILELONGPATH;
 	if (!stricmp(aVarName, "A_LoopFileShortPath")) return VAR_LOOPFILESHORTPATH;
 	if (!stricmp(aVarName, "A_LoopFileTimeModified")) return VAR_LOOPFILETIMEMODIFIED;
 	if (!stricmp(aVarName, "A_LoopFileTimeCreated")) return VAR_LOOPFILETIMECREATED;
@@ -10745,6 +10749,38 @@ VarSizeType Script::GetLoopFileFullPath(char *aBuf)
 	if (aBuf)
 		strcpy(aBuf, str);
 	return (VarSizeType)strlen(str);
+}
+
+VarSizeType Script::GetLoopFileLongPath(char *aBuf)
+{
+	char *temp, buf[MAX_PATH] = ""; // Set default.
+	DWORD length = 0;               // Set default.
+	if (mLoopFile)
+	{
+		// GetFullPathName() is done in addition to ConvertFilespecToCorrectCase() for the following reasons:
+		// 1) It's currrently the only easy way to get the full path of the directory in which a file resides.
+		//    For example, if a script is passed a filename via command line parameter, that file could be
+		//    either an absolute path or a relative path.  If relative, of course it's relative to A_WorkingDir.
+		//    The problem is, the script would have to manually detect this, which would probably take several
+		//    extra steps.
+		// 2) A_LoopFileLongPath is mostly intended for the following cases, and in all of them it seems
+		//    preferable to have the full/absolute path rather than the relative path:
+		//    a) Files dragged onto a .ahk script when the drag-and-drop option has been enabled via the Installer.
+		//    b) Files passed into the script via command line.
+		// The below also serves to make a copy because changing the original would yield
+		// unexpected/inconsistent results in a script that retrieves the A_LoopFileFullPath
+		// but only conditionally retrieves A_LoopFileLongPath.
+		if (   !(length = GetFullPathName(mLoopFile->cFileName, sizeof(buf), buf, &temp))   )
+			*buf = '\0'; // It might fail if NtfsDisable8dot3NameCreation is turned on in the registry, and possibly for other reasons.
+		else
+			// The below is called in case the loop is being used to convert filename specs that were passed
+			// in from the command line, which thus might not be the proper case (at least in the path
+			// portion of the filespec), as shown in the file system:
+			ConvertFilespecToCorrectCase(buf);
+	}
+	if (aBuf)
+		strcpy(aBuf, buf);
+	return (VarSizeType)length;
 }
 
 VarSizeType Script::GetLoopFileShortPath(char *aBuf)

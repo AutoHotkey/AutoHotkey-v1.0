@@ -906,11 +906,14 @@ ResultType FileAppend(char *aFilespec, char *aLine, bool aAppendNewline)
 
 char *ConvertFilespecToCorrectCase(char *aFullFileSpec)
 // aFullFileSpec must be a modifiable string since it will be converted to proper case.
+// Also, it should be at least MAX_PATH is size because if it contains any short (8.3)
+// components, they will be converted into their long names.
 // Returns aFullFileSpec, the contents of which have been converted to the case used by the
 // file system.  Note: The trick of changing the current directory to be that of
 // aFullFileSpec and then calling GetFullPathName() doesn't always work.  So perhaps the
 // only easy way is to call FindFirstFile() on each directory that composes aFullFileSpec,
-// which is what is done here.
+// which is what is done here.  I think there's another way involving some PIDL Explorer
+// function, but that might not support UNCs correctly.
 {
 	if (!aFullFileSpec || !*aFullFileSpec) return aFullFileSpec;
 	size_t length = strlen(aFullFileSpec);

@@ -62,6 +62,9 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 		case GUI_CMD_SUBMIT:
 		case GUI_CMD_CANCEL:
 		case GUI_CMD_FLASH:
+		case GUI_CMD_MINIMIZE:
+		case GUI_CMD_MAXIMIZE:
+		case GUI_CMD_RESTORE:
 			return OK; // Nothing needs to be done since the window object doesn't exist.
 		}
 		// Otherwise: Create the object and (later) its window, since all the other sub-commands below need it:
@@ -131,6 +134,19 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 
 	case GUI_CMD_CANCEL:
 		return gui.Cancel();
+
+	case GUI_CMD_MINIMIZE:
+		// If the window is hidden, it is unhidden as a side-effect (this happens even for SW_SHOWMINNOACTIVE).
+		ShowWindow(gui.mHwnd, SW_MINIMIZE);
+		return OK;
+
+	case GUI_CMD_MAXIMIZE:
+		ShowWindow(gui.mHwnd, SW_MAXIMIZE); // If the window is hidden, it is unhidden as a side-effect.
+		return OK;
+
+	case GUI_CMD_RESTORE:
+		ShowWindow(gui.mHwnd, SW_RESTORE); // If the window is hidden, it is unhidden as a side-effect.
+		return OK;
 
 	case GUI_CMD_FONT:
 		return gui.SetCurrentFont(aParam2, aParam3);
@@ -2388,7 +2404,14 @@ ResultType GuiType::ParseOptions(char *aOptions, bool &aSetLastFoundWindow)
 		}
 
 		else if (!stricmp(next_option, "AlwaysOnTop"))
+		{
 			if (adding) mExStyle |= WS_EX_TOPMOST; else mStyle = mExStyle & ~WS_EX_TOPMOST;
+			// If the window already exists, SetWindowLong() isn't enough.  Must use SetWindowPos()
+			// to make it take effect.
+			if (mHwnd)
+				SetWindowPos(mHwnd, adding ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0
+					, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE); // SWP_NOACTIVATE prevents the side-effect of activating the window, which is undesirable if only its style is changing.
+		}
 
 		else if (!stricmp(next_option, "Border"))
 			if (adding) mStyle |= WS_BORDER; else mStyle &= ~WS_BORDER;
@@ -3761,8 +3784,16 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 	// specify [SW_SHOWNORMAL] when displaying the window for the first time."  However, SW_SHOWNORMAL is
 	// avoided after the first showing of the window because that would probably also do a "restore" on the
 	// window if it was maximized previously.  Note that the description of SW_SHOWNORMAL is virtually the
-	// same as that of SW_RESTORE in MSDN:
-	int show_mode = mFirstShowing ? SW_SHOWNORMAL : SW_SHOW; // Set default.
+	// same as that of SW_RESTORE in MSDN.  UPDATE: mFirstGuiShowCmd is used here instead of mFirstActivation
+	// because it seems more flexible to have "Gui Show" behave consistently (SW_SHOW) every time after
+	// the first use of "Gui Show".  UPDATE: Since SW_SHOW seems to have no effect on minimized windows,
+	// at least on XP, and since such a minimized window will be restored by action of SetForegroundWindowEx(),
+	// it seems best to unconditionally use SW_SHOWNORMAL, rather than "mFirstGuiShowCmd ? SW_SHOWNORMAL : SW_SHOW".
+	// This is done so that the window will be restored and thus have a better chance of being successfully
+	// activated (and thus not requiring the call to SetForegroundWindowEx()).
+	int show_mode = SW_SHOWNORMAL; // Set default.
+	// Note that although SW_SHOW un-minimizes a window (at least on XP), it does not un-maximize it
+	// (unlike SW_SHOWNORMAL, which seems functionally identical to SW_RESTORE).
 
 	for (char *cp = aOptions; *cp; ++cp)
 	{
@@ -3905,7 +3936,7 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 
 	if (allow_move_window)
 	{
-		if (auto_size) // Check this one first so that it takes precedence over mFirstShowing below.
+		if (auto_size) // Check this one first so that it takes precedence over mFirstGuiShowCmd below.
 		{
 			// Find out a different set of max extents rather than using mMaxExtentRight/Down, which should
 			// not be altered because they are used to position any subsequently added controls.
@@ -3929,7 +3960,7 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 		}
 		else if (width == COORD_UNSPECIFIED || height == COORD_UNSPECIFIED)
 		{
-			if (mFirstShowing) // By default, center the window if this is the first time it's being shown.
+			if (mFirstGuiShowCmd) // By default, center the window if this is the first use of "Gui Show" (even "Gui Show, Hide").
 			{
 				if (width == COORD_UNSPECIFIED)
 					width = mMaxExtentRight + mMarginX;
@@ -3948,11 +3979,11 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 		}
 	} // if (allow_move_window)
 
-	if (mFirstShowing)
+	if (mFirstGuiShowCmd)
 	{
 		// Update any tab controls to show only their correct pane.  This should only be necessary
-		// upon the first showing of the window because subsequent switches of the control's tab
-		// should result in a TCN_SELCHANGE notification.
+		// upon the first "Gui Show" (even "Gui, Show, Hide") of the window because subsequent switches
+		// of the control's tab should result in a TCN_SELCHANGE notification.
 		for (GuiIndexType u = 0; u < mControlCount; ++u)
 			if (mControl[u].type == GUI_CONTROL_TAB)
 				ControlUpdateCurrentTab(mControl[u], false); // Pass false so that default/z-order focus is used across entire window.
@@ -3982,8 +4013,9 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 		int work_height = work_rect.bottom - work_rect.top; // Note that "top" won't be zero if task bar is on top!
 
 		// Seems best to restrict window size to the size of the desktop whenever explicit sizes
-		// weren't given, since most users would probably want that.  But only on first showing:
-		if (mFirstShowing)
+		// weren't given, since most users would probably want that.  But only on first use of
+		// "Gui Show" (even "Gui, Show, Hide"):
+		if (mFirstGuiShowCmd)
 		{
 			if (width_orig == COORD_UNSPECIFIED && width > work_width)
 				width = work_width;
@@ -4025,23 +4057,52 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 	if (!show_was_done)
 		ShowWindow(mHwnd, show_mode);
 
-	if ((show_mode == SW_MAXIMIZE || show_mode == SW_RESTORE || show_mode == SW_SHOW || show_mode == SW_SHOWNORMAL)
-		&& mHwnd != GetForegroundWindow())
-		SetForegroundWindowEx(mHwnd);   // In the above modes, try to force it to the foreground as documented.
+	bool we_did_the_first_activation = false; // Set default.
 
-	if (mFirstShowing && mTabControlCount && IsWindowVisible(mHwnd)) // Window probably must be visible for GetFocus() to work.
+	switch(show_mode)
 	{
-		// Since this is the first showing, if the focus wound up on a tab control itself as a result of
-		// the above, focus the first control of that tab since that is traditional.  HOWEVER, do not
+	case SW_SHOW:
+	case SW_SHOWNORMAL:
+	case SW_MAXIMIZE:
+	case SW_RESTORE:
+		if (mHwnd != GetForegroundWindow())
+			SetForegroundWindowEx(mHwnd);   // In the above modes, try to force it to the foreground as documented.
+		if (mFirstActivation)
+		{
+			// Since the window has never before been active, any of the above qualify as "first activation".
+			// Thus, we are no longer at the first activation:
+			mFirstActivation = false;
+			we_did_the_first_activation = true; // And we're the ones who did the first activation.
+		}
+		break;
+	// No action for these:
+	//case SW_MINIMIZE:
+	//case SW_SHOWNA:
+	//case SW_SHOWNOACTIVATE:
+	//case SW_HIDE:
+	}
+
+	// No attempt is made to handle the fact that Gui windows can be shown or activated via WinShow and
+	// WinActivate.  In such cases, if the tab control itself is focused, mFirstActivation will stil focus
+	// a control inside the tab rather than leaving the tab control focused.  Similarly, if the window
+	// was shown with NA or NOACTIVATE or MINIMIZE, when the first use of an activation mode of "Gui Show"
+	// is done, even if it's far into the future, long after the user has activated and navigated in the
+	// window, the same "first activation" behavior will be done anyway.  This is documented here as a
+	// known limitation, since fixing it would probably add an unreasonable amount of complexity.
+	HWND focused_control_hwnd;
+	if (we_did_the_first_activation && mTabControlCount // Window probably must be visible and active for GetFocus() to work.
+		&& (focused_control_hwnd = GetFocus())) // Assign
+	{
+		// Since this is the first activation, if the focus wound up on a tab control itself as a result
+		// of the above, focus the first control of that tab since that is traditional.  HOWEVER, do not
 		// instead default tab controls to lacking WS_TABSTOP since it is traditional for them to have
 		// that property, probably to aid accessibility.
-		HWND focused_control_hwnd = GetFocus();
 		GuiControlType *focused_control = FindControl(focused_control_hwnd);
 		if (focused_control && focused_control->type == GUI_CONTROL_TAB)
 			ControlUpdateCurrentTab(*focused_control, true);
 	}
 
-	mFirstShowing = false;
+	mFirstGuiShowCmd = false;
 
 	// It seems best to reset this prior to SLEEP below, but after the above line (for code clarity) since
 	// otherwise it might get stuck in a true state if the SLEEP results in the launch of a script
@@ -5673,14 +5734,16 @@ void GuiType::ControlUpdateCurrentTab(GuiControlType &aTabControl, bool aFocusFi
 	// attempting to "rely on everyone else to do their jobs of keeping the controls in the right state"
 	// because it improves maintainability:
 	DWORD tab_style = GetWindowLong(aTabControl.hwnd, GWL_STYLE);
-	bool hide_all = !(tab_style & WS_VISIBLE);
+	bool hide_all = !(tab_style & WS_VISIBLE); // Regardless of whether mHwnd is visible or not.
 	bool disable_all = (tab_style & WS_DISABLED); // Don't use IsWindowEnabled() because it might return false if parent is disabled?
 	// Say that the focus was already set correctly if the entire tab control is hidden or caller said
 	// not to focus it:
 	bool focus_was_set;
+	bool parent_is_visible = IsWindowVisible(mHwnd);
+	bool parent_is_visible_and_not_minimized = parent_is_visible && !IsIconic(mHwnd);
 	if (hide_all || disable_all)
 		focus_was_set = true;  // Tell the below not to set focus, since all tab controls are hidden or disabled.
-	else if (aFocusFirstControl)
+	else if (aFocusFirstControl)  // Note that SetFocus() has an effect even if the parent window is hidden. i.e. next time the window is shown, the control will be focused.
 		focus_was_set = false; // Tell it to focus the first control on the new page.
 	else
 	{
@@ -5688,9 +5751,9 @@ void GuiType::ControlUpdateCurrentTab(GuiControlType &aTabControl, bool aFocusFi
 		GuiControlType *focused_control;
 		// If the currently focused control is somewhere in this tab control (but not the tab control
 		// itself, because arrow-key navigation relies on tabs stay focused while the user is pressing
-		// left and right-arrow), override aFocusFirstControl (make it true) so that when the page changes,
-		// its first control will be focused:
-		focus_was_set = !(   IsWindowVisible(mHwnd) && (focused_hwnd = GetFocus())
+		// left and right-arrow), override the fact that aFocusFirstControl is false so that when the
+		// page changes, its first control will be focused:
+		focus_was_set = !(   parent_is_visible && (focused_hwnd = GetFocus())
 			&& (focused_control = FindControl(focused_hwnd))
 			&& focused_control->tab_control_index == aTabControl.tab_index   );
 	}
@@ -5713,10 +5776,14 @@ void GuiType::ControlUpdateCurrentTab(GuiControlType &aTabControl, bool aFocusFi
 	// For a likely cleaner transition between tabs, disable redrawing until the switch is complete.
 	// Doing it this way also serves to refresh a tab whose controls have just been disabled via
 	// something like "GuiControl, Disable, MyTab", which would otherwise not happen because unlike
-	// ShowWindow(), EnableWindow() apparently does not cause a repaint to occur:
-	SendMessage(mHwnd, WM_SETREDRAW, FALSE, 0);
+	// ShowWindow(), EnableWindow() apparently does not cause a repaint to occur.
+	// Fix for v1.0.25.14: Don't send the message below (and its counterpart later on) because that
+	// sometimes or always, as a side-effect, shows the window if it's hidden:
+	if (parent_is_visible_and_not_minimized)
+		SendMessage(mHwnd, WM_SETREDRAW, FALSE, 0);
 	bool invalidate_entire_parent = false; // Set default.
 
+	// Even if mHwnd is hidden, set styles to Show/Hide and Enable/Disable any controls that need it.
 	for (GuiIndexType u = 0; u < mControlCount; ++u)
 	{
 		// Note aTabControl.tab_index stores aTabControl's tab_control_index (true only for type GUI_CONTROL_TAB).
@@ -5781,18 +5848,19 @@ void GuiType::ControlUpdateCurrentTab(GuiControlType &aTabControl, bool aFocusFi
 		if (!focus_was_set && member_of_current_tab && will_be_visible && will_be_enabled
 			&& GUI_CONTROL_TYPE_CAN_BE_FOCUSED(control.type))
 		{
-			// Fix for v1.0.24: Don't check the return value of SetFocus because sometimes it returns
+			// Fix for v1.0.24: Don't check the return value of SetFocus() because sometimes it returns
 			// NULL even when the call will wind up succeeding.  For example, if the user clicks on
 			// the second tab in a tab control, SetFocus() will probably return NULL because there
 			// is not previously focused control at the instant the call is made.  This is because
 			// the control that had focus has likely already been hidden and thus lost focus before
 			// we arrived at this stage:
-			SetFocus(control.hwnd);
-			focus_was_set = true;
+			SetFocus(control.hwnd); // Note that this has an effect even if the parent window is hidden. i.e. next time the parent is shown, this control will be focused.
+			focus_was_set = true; // i.e. SetFocus() only for the FIRST control that meets the above criteria.
 		}
 	}
 
-	SendMessage(mHwnd, WM_SETREDRAW, TRUE, 0); // Re-enable drawing before below so that tab can be focused below.
+	if (parent_is_visible_and_not_minimized) // Fix for v1.0.25.14.  See further above for details.
+		SendMessage(mHwnd, WM_SETREDRAW, TRUE, 0); // Re-enable drawing before below so that tab can be focused below.
 
 	// In case tab is empty or there is no control capable of receiving focus, focus the tab itself
 	// instead.  This allows the Ctrl-Pgdn/Pgup keyboard shortcuts to continue to navigate within
@@ -5801,18 +5869,21 @@ void GuiType::ControlUpdateCurrentTab(GuiControlType &aTabControl, bool aFocusFi
 	// seem okay for some reason), i.e. if the control with focus is hidden, the dialog falls back to
 	// giving the focus to the the first focus-capable control in the z-order.
 	if (!focus_was_set)
-		SetFocus(aTabControl.hwnd);
+		SetFocus(aTabControl.hwnd); // Note that this has an effect even if the parent window is hidden. i.e. next time the parent is shown, this control will be focused.
 
 	// UPDATE: Below is now only done when necessary to cut down on flicker:
 	// Seems best to invalidate the entire client area because otherwise, if any of the tab's controls lie
 	// outside of its interior (this is common for TCS_BUTTONS style), they would not get repainted properly.
 	// In addition, tab controls tend to occupy the majority of their parent's client area anyway:
-	if (invalidate_entire_parent)
-		InvalidateRect(mHwnd, NULL, TRUE); // TRUE seems safer.
-	else
+	if (parent_is_visible_and_not_minimized)
 	{
-		MapWindowPoints(NULL, mHwnd, (LPPOINT)&tab_rect, 2); // Convert rect to client coordinates (not the same as GetClientRect()).
-		InvalidateRect(mHwnd, &tab_rect, TRUE); // Seems safer to use TRUE, not knowing all possible overlaps, etc.
+		if (invalidate_entire_parent)
+			InvalidateRect(mHwnd, NULL, TRUE); // TRUE seems safer.
+		else
+		{
+			MapWindowPoints(NULL, mHwnd, (LPPOINT)&tab_rect, 2); // Convert rect to client coordinates (not the same as GetClientRect()).
+			InvalidateRect(mHwnd, &tab_rect, TRUE); // Seems safer to use TRUE, not knowing all possible overlaps, etc.
+		}
 	}
 }
 
