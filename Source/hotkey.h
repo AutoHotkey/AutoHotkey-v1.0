@@ -89,6 +89,7 @@ private:
 	HookActionType mHookAction;
 	Label *mJumpToLabel;
 	UCHAR mExistingThreads, mMaxThreads;
+	int mPriority;
 	bool mMaxThreadsBuffer;
 	bool mRunAgainAfterFinished;
 	DWORD mRunAgainTime;
@@ -104,12 +105,7 @@ private:
 
 	bool IsExemptFromSuspend()
 	{
-		// Hotkey subroutines whose first line is the Suspend command are exempt from
-		// being suspended themselves except when their first parameter is the literal
-		// word "on":
-		return mJumpToLabel && mJumpToLabel->mJumpToLine->mActionType == ACT_SUSPEND
-			&& (!mJumpToLabel->mJumpToLine->mArgc || mJumpToLabel->mJumpToLine->ArgHasDeref(1)
-				|| stricmp(mJumpToLabel->mJumpToLine->mArg[0].text, "on"));
+		return mJumpToLabel && mJumpToLabel->IsExemptFromSuspend();
 	}
 
 	bool PerformIsAllowed()
@@ -176,7 +172,7 @@ private:
 		// Older: AllDeactivate() shouldn't be necessary in this case, since there's no chance that
 		// hooks will be removed as a result of this action?
 		AllDeactivate(false, false);  // Avoid removing the hooks when enabling a key.
-		AllActivate(true);
+		AllActivate();
 		return OK;
 	}
 
@@ -186,7 +182,7 @@ private:
 		// AllDeactivate() is done in case this is the last hook hotkey (mouse or keyboard hook) and
 		// the hook(s) are no longer needed:
 		AllDeactivate(false, TYPE_IS_HOOK(mType), true);
-		AllActivate(true);
+		AllActivate();
 		return OK;
 	}
 
@@ -216,7 +212,7 @@ public:
 	static ResultType PerformID(HotkeyIDType aHotkeyID);
 	static void TriggerJoyHotkeys(int aJoystickID, DWORD aButtonsNewlyDown);
 	static ResultType AllDeactivate(bool aObeySuspend, bool aChangeHookStatus = true, bool aKeepHookIfNeeded = false);
-	static void AllActivate(bool aOverrideLock);
+	static void AllActivate();
 	static void RequireHook(HookType aWhichHook) {sWhichHookAlways |= aWhichHook;}
 	static HookType HookIsActive() {return sWhichHookActive;} // Returns bitwise values: HOOK_MOUSE, HOOK_KEYBD.
 
@@ -250,6 +246,11 @@ public:
 	static char GetType(HotkeyIDType aHotkeyID)
 	{
 		return (aHotkeyID >= 0 && aHotkeyID < sHotkeyCount) ? shk[aHotkeyID]->mType : -1;
+	}
+
+	static int GetPriority(HotkeyIDType aHotkeyID)
+	{
+		return (aHotkeyID >= 0 && aHotkeyID < sHotkeyCount) ? shk[aHotkeyID]->mPriority : PRIORITY_MINIMUM;
 	}
 
 	static char *GetName(HotkeyIDType aHotkeyID)
@@ -295,4 +296,71 @@ public:
 	static char *ListHotkeys(char *aBuf, size_t aBufSize);
 	char *ToText(char *aBuf, size_t aBufSize, bool aAppendNewline);
 };
+
+
+///////////////////////////////////////////////////////////////////////////////////
+
+#define MAX_HOTSTRING_LENGTH 30  // Hard to imagine a need for more than this, and most are only a few chars long.
+#define MAX_HOTSTRING_LENGTH_STR "30"  // Keep in sync with the above.
+#define HOTSTRING_BLOCK_SIZE 1024
+typedef UINT HotstringIDType;
+
+enum CaseConformModes {CASE_CONFORM_NONE, CASE_CONFORM_ALL_CAPS, CASE_CONFORM_FIRST_CAP};
+
+
+class Hotstring
+{
+public:
+	static Hotstring **shs;  // An array to be allocated on first use (performs better than linked list).
+	static HotstringIDType sHotstringCount;
+	static HotstringIDType sHotstringCountMax;
+
+	Label *mJumpToLabel;
+	char *mString, *mReplacement;
+	UCHAR mStringLength;
+	bool mSuspended;
+	UCHAR mExistingThreads, mMaxThreads;
+	int mPriority, mKeyDelay;
+	bool mCaseSensitive, mConformToCase, mDoBackspace, mOmitEndChar, mSendRaw, mEndCharRequired
+		, mDetectWhenInsideWord, mConstructedOK;
+
+	static bool AtLeastOneEnabled()
+	{
+		for (UINT u = 0; u < sHotstringCount; ++u)
+			if (!shs[u]->mSuspended)
+				return true;
+		return false;
+	}
+
+	static void SuspendAll(bool aSuspend)
+	{
+		UINT u;
+		if (aSuspend) // Suspend all those that aren't exempt.
+		{
+			for (u = 0; u < sHotstringCount; ++u)
+				if (!shs[u]->mJumpToLabel->IsExemptFromSuspend())
+					shs[u]->mSuspended = true;
+		}
+		else // Unsuspend all.
+			for (u = 0; u < sHotstringCount; ++u)
+				shs[u]->mSuspended = false;
+	}
+
+	ResultType Perform();
+	void DoReplace(LPARAM alParam);
+	static ResultType AddHotstring(Label *aJumpToLabel, char *aOptions, char *aHotstring, char *aReplacement);
+	Hotstring(Label *aJumpToLabel, char *aOptions, char *aHotstring, char *aReplacement); // Constructor
+	static void ParseOptions(char *aOptions, int &aPriority, int &aKeyDelay, bool &aCaseSensitive
+		, bool &aConformToCase, bool &aDoBackspace, bool &aOmitEndChar, bool &aSendRaw
+		, bool &aEndCharRequired, bool &aDetectWhenInsideWord);
+
+	~Hotstring() {}  // Note that mReplacement is sometimes malloc'd, sometimes from SimpleHeap, and sometimes the empty string.
+
+	void *operator new(size_t aBytes) {return SimpleHeap::Malloc(aBytes);}
+	void *operator new[](size_t aBytes) {return SimpleHeap::Malloc(aBytes);}
+	void operator delete(void *aPtr) {SimpleHeap::Delete(aPtr);}  // Deletes aPtr if it was the most recently allocated.
+	void operator delete[](void *aPtr) {SimpleHeap::Delete(aPtr);}
+};
+
+
 #endif

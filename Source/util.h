@@ -28,26 +28,6 @@ GNU General Public License for more details.
 //	return (int)floor(x + ((x >= 0) ? 0.5 : -0.5));
 //}
 
-inline char *strupr(char *str)
-{
-	char *temp = str;
-	if (str)
-		for ( ; *str; ++str)
-			*str = toupper(*str);
-	return temp;
-}
-
-
-inline char *strlwr(char *str)
-{
-	char *temp = str;
-	if (str)
-		for ( ; *str; ++str)
-			*str = tolower(*str);
-	return temp;
-}
-
-
 
 inline char *StrToTitleCase(char *aStr)
 {
@@ -59,14 +39,14 @@ inline char *StrToTitleCase(char *aStr)
 		{
 			if (convert_next_alpha_char_to_upper)
 			{
-				*aStr = toupper(*aStr);
+				*aStr = (char)CharUpper((LPTSTR)(UCHAR)*aStr);
 				convert_next_alpha_char_to_upper = false;
 			}
 			else
-				*aStr = tolower(*aStr);
+				*aStr = (char)CharLower((LPTSTR)(UCHAR)*aStr);
 		}
 		else
-			if (isspace(*aStr))
+			if (isspace((UCHAR)*aStr))
 				convert_next_alpha_char_to_upper = true;
 		// Otherwise, it's a digit, punctuation mark, etc. so nothing needs to be done.
 	}
@@ -485,5 +465,6 @@ bool DoesFilePatternExist(char *aFilePattern);
 ResultType FileAppend(char *aFilespec, char *aLine, bool aAppendNewline = true);
 char *ConvertFilespecToCorrectCase(char *aFullFileSpec);
 COLORREF ColorNameToBGR(char *aColorName);
+char *ConvertEscapeSequences(char *aBuf, char aEscapeChar);
 
 #endif

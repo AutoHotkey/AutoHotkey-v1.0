@@ -295,9 +295,7 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 					font_weight2 = 0;
 				break;
 			default:
-				if (aSplashImage)
-					splash.width = atoi(cp);
-				//else don't allow it to be changed from its default for Progress Bars.
+				splash.width = atoi(cp);
 			}
 			break;
 		case 'H':
@@ -321,7 +319,9 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 				splash.object_height = atoi(cp + 1); // Allow it to be zero or negative to omit the object.
 				break;
 			case 'W':
-				splash.object_width = atoi(cp + 1); // Allow it to be zero or negative to omit the object.
+				if (aSplashImage)
+					splash.object_width = atoi(cp + 1); // Allow it to be zero or negative to omit the object.
+				//else for Progress, don't allow width to be changed since a zero would omit the bar.
 				break;
 			case 'X':
 				splash.margin_x = atoi(cp + 1);
@@ -347,9 +347,13 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 	GetTextMetrics(hdc, &tm);
 	int default_gui_font_height = tm.tmHeight;
 
-	if (   (splash.object_height <= 0 && splash.object_height != COORD_UNSPECIFIED)
-		|| (splash.object_width <= 0 && splash.object_width != COORD_UNSPECIFIED)   )
-		splash.object_height = splash.object_width = 0;  // Reset for maintainability and sizing below.
+	// If both are zero or less, reset object height/width for maintainability and sizing later.
+	// However, if one of them is -1, the caller is asking for that dimension to be auto-calc'd
+	// to "keep aspect ratio" with the the other specified dimension:
+	if (   splash.object_height <= 0 && splash.object_height != COORD_UNSPECIFIED
+		&& splash.object_width <= 0 && splash.object_width != COORD_UNSPECIFIED
+		|| !splash.object_height || !splash.object_width   )
+		splash.object_height = splash.object_width = 0;
 
 	// If there's an image, handle it first so that automatic-width can be applied (if no width was specified)
 	// for later font calculations:
@@ -379,17 +383,36 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 							if (FAILED(OleLoadPicture(pstm, file_size, FALSE, IID_IPicture, (LPVOID *)&splash.pic)))
 								splash.pic = NULL;
 							pstm->Release();
-							long hm_value;
-							if (splash.object_height == COORD_UNSPECIFIED)
+							long hm_width, hm_height;
+							if (splash.object_height == -1 && splash.object_width > 0)
 							{
-								splash.pic->get_Height(&hm_value);
-								// Convert himetric to pixels:
-								splash.object_height = MulDiv(hm_value, pixels_per_point_y, HIMETRIC_INCH);
+								// Caller wants height calculated based on the specified width (keep aspect ratio).
+								splash.pic->get_Width(&hm_width);
+								splash.pic->get_Height(&hm_height);
+								if (hm_width) // Avoid any chance of divide-by-zero.
+									splash.object_height = (int)(((double)hm_height / hm_width) * splash.object_width + .5); // Round.
 							}
-							if (splash.object_width == COORD_UNSPECIFIED)
+							else if (splash.object_width == -1 && splash.object_height > 0)
 							{
-								splash.pic->get_Width(&hm_value);
-								splash.object_width = MulDiv(hm_value, GetDeviceCaps(hdc, LOGPIXELSX), HIMETRIC_INCH);
+								// Caller wants width calculated based on the specified height (keep aspect ratio).
+								splash.pic->get_Width(&hm_width);
+								splash.pic->get_Height(&hm_height);
+								if (hm_height) // Avoid any chance of divide-by-zero.
+									splash.object_width = (int)(((double)hm_width / hm_height) * splash.object_height + .5); // Round.
+							}
+							else
+							{
+								if (splash.object_height == COORD_UNSPECIFIED)
+								{
+									splash.pic->get_Height(&hm_height);
+									// Convert himetric to pixels:
+									splash.object_height = MulDiv(hm_height, pixels_per_point_y, HIMETRIC_INCH);
+								}
+								if (splash.object_width == COORD_UNSPECIFIED)
+								{
+									splash.pic->get_Width(&hm_width);
+									splash.object_width = MulDiv(hm_width, GetDeviceCaps(hdc, LOGPIXELSX), HIMETRIC_INCH);
+								}
 							}
 							if (splash.width == COORD_UNSPECIFIED)
 								splash.width = splash.object_width + (2 * splash.margin_x);
@@ -499,7 +522,7 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 	RECT desk_rect;
 	SystemParametersInfo(SPI_GETWORKAREA, 0, &desk_rect, 0);  // Get Desktop rect excluding task bar.
 
-	// Seems best (and easier) to do unconditionally restrict window size to the size of the desktop,
+	// Seems best (and easier) to unconditionally restrict window size to the size of the desktop,
 	// since most users would probably want that.  This can be overridden by using WinMove afterward.
 	if (main_width > desk_rect.right)
 		main_width = desk_rect.right;
@@ -527,7 +550,7 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 	{
 		// Setting the small icon puts it in the upper left corner of the dialog window.
 		// Setting the big icon makes the dialog show up correctly in the Alt-Tab menu (but big seems to
-		// have no effect unless the window is unowned, i.e. it has a button on the task bar.
+		// have no effect unless the window is unowned, i.e. it has a button on the task bar).
 		LPARAM main_icon = (LPARAM)(g_script.mCustomIcon ? g_script.mCustomIcon
 			: LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_MAIN)));
 		if (style & WS_SYSMENU)
@@ -538,7 +561,7 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 
 	// Update client rect in case it was resized due to being too large (above) or in case the OS
 	// auto-resized it for some reason.  These updated values are also used by SPLASH_CALC_CTRL_WIDTH
-	// to properly position the static text controls so that text will be centered properly:
+	// to position the static text controls so that text will be centered properly:
 	GetClientRect(splash.hwnd, &client_rect);
 	splash.height = client_rect.bottom;
 	splash.width = client_rect.right;
@@ -1159,14 +1182,17 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 	/////////////////////////////////////////////////
 	// Parse aMatchList into an array of key phrases:
 	/////////////////////////////////////////////////
+	char **realloc_temp;  // Needed since realloc returns NULL on failure but leaves original block allocated!
 	g_input.MatchCount = 0;  // Set default.
 	if (*aMatchList)
 	{
 		// If needed, create the array of pointers that points into MatchBuf to each match phrase:
-		if (!g_input.match && !(g_input.match = (char **)malloc(INPUT_ARRAY_BLOCK_SIZE * sizeof(char *))))
-			return LineError("Out of mem #1");  // Short msg. since so rare.
-		else
+		if (!g_input.match)
+		{
+			if (   !(g_input.match = (char **)malloc(INPUT_ARRAY_BLOCK_SIZE * sizeof(char *)))   )
+				return LineError("Out of mem #1");  // Short msg. since so rare.
 			g_input.MatchCountMax = INPUT_ARRAY_BLOCK_SIZE;
+		}
 		// If needed, create or enlarge the buffer that contains all the match phrases:
 		size_t aMatchList_length = strlen(aMatchList);
 		size_t space_needed = aMatchList_length + 1;  // +1 for the final zero terminator.
@@ -1195,11 +1221,11 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 					if (g_input.MatchCount >= g_input.MatchCountMax) // Rarely needed, so just realloc() to expand.
 					{
 						// Expand the array by one block:
-						if (   !(g_input.match = (char **)realloc(g_input.match
+						if (   !(realloc_temp = (char **)realloc(g_input.match  // Must use a temp variable.
 							, (g_input.MatchCountMax + INPUT_ARRAY_BLOCK_SIZE) * sizeof(char *)))   )
 							return LineError("Out of mem #3");  // Short msg. since so rare.
-						else
-							g_input.MatchCountMax += INPUT_ARRAY_BLOCK_SIZE;
+						g_input.match = realloc_temp;
+						g_input.MatchCountMax += INPUT_ARRAY_BLOCK_SIZE;
 					}
 					g_input.match[g_input.MatchCount] = dest + 1;
 				}
@@ -1563,7 +1589,7 @@ ResultType Line::WinMenuSelectItem(char *aTitle, char *aText, char *aMenu1, char
 
 
 ResultType Line::ControlSend(char *aControl, char *aKeysToSend, char *aTitle, char *aText
-	, char *aExcludeTitle, char *aExcludeText)
+	, char *aExcludeTitle, char *aExcludeText, bool aSendRaw)
 {
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 	DETERMINE_TARGET_WINDOW
@@ -1573,7 +1599,7 @@ ResultType Line::ControlSend(char *aControl, char *aKeysToSend, char *aTitle, ch
 		: target_window;
 	if (!control_window)
 		return OK;
-	SendKeys(aKeysToSend, control_window);
+	SendKeys(aKeysToSend, aSendRaw, control_window);
 	// But don't do WinDelay because KeyDelay should have been in effect for the above.
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 	return OK;
@@ -1581,7 +1607,7 @@ ResultType Line::ControlSend(char *aControl, char *aKeysToSend, char *aTitle, ch
 
 
 
-ResultType Line::ControlClick(vk_type aVK, int aClickCount, char aEventType, char *aControl
+ResultType Line::ControlClick(vk_type aVK, int aClickCount, char *aOptions, char *aControl
 	, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
 {
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
@@ -1598,20 +1624,48 @@ ResultType Line::ControlClick(vk_type aVK, int aClickCount, char aEventType, cha
 		// that may sometimes (by intent) resolve to zero or negative:
 		return g_ErrorLevel->Assign(ERRORLEVEL_NONE);
 
-	// The chars 'U' (up) and 'D' (down), if specified, will restrict the clicks
-	// to being only DOWN or UP (so that the mouse button can be held down, for
-	// example):
-	if (aEventType)
-		aEventType = toupper(aEventType);
+	// Set the defaults that will be in effect unless overridden by options:
+	KeyEventTypes event_type = KEYDOWNANDUP;
+	int xpos = COORD_UNSPECIFIED;
+	int ypos = COORD_UNSPECIFIED;
 
-	// AutoIt3: Get the dimensions of the control so we can click the centre of it
-	// (maybe safer and more natural than 0,0).
-	// My: In addition, this is probably better for some large controls (e.g. SysListView32) because
-	// clicking at 0,0 might activate a part of the control that is not even visible:
+	for (char *cp = aOptions; *cp; ++cp)
+	{
+		switch(toupper(*cp))
+		{
+		case 'D':
+			event_type = KEYDOWN;
+			break;
+		case 'U':
+			event_type = KEYUP;
+			break;
+		// For the below:
+		// Use atoi() vs. ATOI() to avoid interpreting something like 0x01D as hex
+		// when in fact the D was meant to be an option letter:
+		case 'X':
+			xpos = atoi(cp + 1);
+			break;
+		case 'Y':
+			ypos = atoi(cp + 1);
+			break;
+		}
+	}
+
 	RECT rect;
-	if (!GetWindowRect(control_window, &rect))
-		return OK;  // Let ErrorLevel tell the story.
-	LPARAM lparam = MAKELPARAM( (rect.right - rect.left) / 2, (rect.bottom - rect.top) / 2);
+	if (xpos == COORD_UNSPECIFIED || ypos == COORD_UNSPECIFIED)
+	{
+		// AutoIt3: Get the dimensions of the control so we can click the centre of it
+		// (maybe safer and more natural than 0,0).
+		// My: In addition, this is probably better for some large controls (e.g. SysListView32) because
+		// clicking at 0,0 might activate a part of the control that is not even visible:
+		if (!GetWindowRect(control_window, &rect))
+			return OK;  // Let ErrorLevel tell the story.
+		if (xpos == COORD_UNSPECIFIED)
+			xpos = (rect.right - rect.left) / 2;
+		if (ypos == COORD_UNSPECIFIED)
+			ypos = (rect.bottom - rect.top) / 2;
+	}
+	LPARAM lparam = MAKELPARAM(xpos, ypos);
 
 	UINT msg_down, msg_up;
 	WPARAM wparam;
@@ -1674,7 +1728,7 @@ ResultType Line::ControlClick(vk_type aVK, int aClickCount, char aEventType, cha
 	{
 		for (int i = 0; i < aClickCount; ++i)
 		{
-			if (aEventType != 'U') // It's either D or NULL, which means we always to the down-event.
+			if (event_type != KEYUP) // It's either down-only or up-and-down so always to the down-event.
 			{
 				PostMessage(control_window, msg_down, wparam, lparam);
 				// Seems best to do this one too, which is what AutoIt3 does also.  User can always reduce
@@ -1686,10 +1740,10 @@ ResultType Line::ControlClick(vk_type aVK, int aClickCount, char aEventType, cha
 				// to detect artificial input), the click might not work.  So it might be better after
 				// all to do the delay until it's proven to be problematic (Jon implies that he has
 				// no proof yet).  IF THIS IS EVER DISABLED, be sure to do the ControlDelay anyway
-				// if aEventType == 'D':
+				// if event_type == KEYDOWN:
 				DoControlDelay;
 			}
-			if (aEventType != 'D') // It's either U or NULL, which means we always to the up-event.
+			if (event_type != KEYDOWN) // It's either up-only or up-and-down so always to the up-event.
 			{
 				PostMessage(control_window, msg_up, 0, lparam);
 				DoControlDelay;
@@ -2929,6 +2983,208 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int a
 
 
 
+//ResultType Line::ImageSearch(int aLeft, int aTop, int aRight, int aBottom, char *aImageFile)
+//{
+//	Var *output_var_x = ResolveVarOfArg(0);  // Ok if NULL.
+//	Var *output_var_y = ResolveVarOfArg(1);  // Ok if NULL.
+//
+//	g_ErrorLevel->Assign(ERRORLEVEL_ERROR2); // Set default ErrorLevel.  2 means error other than "color not found".
+//	if (output_var_x)
+//		output_var_x->Assign();  // Init to empty string regardless of whether we succeed here.
+//	if (output_var_y)
+//		output_var_y->Assign(); // Same.
+//
+//	// Always adjust coords to reflect the position of the foreground window because AutoHotkey
+//	// doesn't yet support AutoIt3's absolute-screen-coords mode:
+//	RECT rect;
+//	HWND cw=GetForegroundWindow();
+//	if (!GetWindowRect(GetForegroundWindow(), &rect))
+//		return OK;  // Let ErrorLevel tell the story.
+//	aLeft   += rect.left;
+//	aTop    += rect.top;
+//	aRight  += rect.left;  // Add left vs. right because we're adjusting based on the position of the window.
+//	aBottom += rect.top;   // Same.
+//
+//	HDC hdc = GetDC(NULL);
+//	if (!hdc)
+//		return OK;  // Let ErrorLevel tell the story.
+//
+//	int aWidth,aHeight;
+//	aWidth = aRight - aLeft +1;
+//	aHeight = aBottom - aTop +1;
+//
+//	int xpos, ypos;
+//	ResultType result = OK;
+//	
+//	bool is16bits = false;
+//
+//	int i,j,k,x,y,p;
+//
+//	HBITMAP tmpl;
+//	BITMAP bm;
+//	long width;	
+//	long height;
+//	HDC tdc;
+//	tmpl=(HBITMAP)::LoadImage(NULL, aImageFile, IMAGE_BITMAP, 0, 0,LR_LOADFROMFILE | LR_CREATEDIBSECTION);
+//
+//	GetObject(tmpl, sizeof(bm), &bm);
+//	width = bm.bmWidth ;	
+//	height = bm.bmHeight;
+//	
+//	//put the image in the HDC context
+//	tdc = ::CreateCompatibleDC(hdc);
+//	HGDIOBJ oldtdc=::SelectObject(tdc,tmpl);
+//	
+//
+//	BITMAPINFO bmInfo;
+//	::memset(&bmInfo,0,sizeof(BITMAPINFO));
+//	bmInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+//	int err=::GetDIBits(tdc,tmpl,0,0,0,&bmInfo,DIB_RGB_COLORS);
+//	if(err==0){
+//			ReleaseDC(NULL, hdc);	
+//			ReleaseDC(NULL,tdc);
+//			DeleteObject(tmpl);
+//			return FAIL;
+//	}
+//
+//
+//	if(bmInfo.bmiHeader.biBitCount<16){
+//			ReleaseDC(NULL, hdc);	
+//			ReleaseDC(NULL, tdc);
+//			DeleteObject(tmpl);
+//			return FAIL;
+//	}
+//
+//	is16bits = (bmInfo.bmiHeader.biBitCount == 16);
+//
+//
+//	int szb = bmInfo.bmiHeader.biWidth*bmInfo.bmiHeader.biHeight;
+//	DWORD* bits=new DWORD[szb];              
+//	::memset(bits,0xAA,szb*4);
+//	bmInfo.bmiHeader.biBitCount = 32;
+//	bmInfo.bmiHeader.biHeight = -bmInfo.bmiHeader.biHeight;
+//
+//	err=::GetDIBits(tdc,tmpl,0,-bmInfo.bmiHeader.biHeight,bits,&bmInfo,DIB_RGB_COLORS);
+//	bmInfo.bmiHeader.biHeight = -bmInfo.bmiHeader.biHeight;
+//	if(err==0){
+//			ReleaseDC(NULL, hdc);	
+//			ReleaseDC(NULL,tdc);
+//			if(bits)delete bits;
+//			DeleteObject(tmpl);
+//			return FAIL;
+//	}
+//
+//	//get the screen
+//
+//	HDC sdc = ::CreateCompatibleDC(hdc);
+//	HBITMAP scr = ::CreateCompatibleBitmap(hdc,aWidth,aHeight);
+//
+//	HGDIOBJ old = ::SelectObject(sdc,scr);
+//
+//
+//	::BitBlt(sdc,0,0,aWidth,aHeight,hdc,aLeft,aTop,SRCCOPY);
+//	BITMAPINFO bmScr;
+//	::memset(&bmScr,0,sizeof(BITMAPINFO));
+//	bmScr.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+//	err=::GetDIBits(sdc,scr,0,0,0,&bmScr,DIB_RGB_COLORS);
+//	if(err==0){
+//				ReleaseDC(NULL, hdc);	
+//				ReleaseDC(NULL,sdc);
+//				ReleaseDC(NULL,tdc);
+//				if(bits)delete bits;
+//				DeleteObject(scr);
+//				DeleteObject(tmpl);
+//				return FAIL;
+//	}
+//	int szs = bmScr.bmiHeader.biWidth*bmScr.bmiHeader.biHeight;
+//	DWORD* bScr=new DWORD[szs];              
+//	::memset(bScr,0xAA,szs*4);
+//	bmScr.bmiHeader.biHeight = -bmScr.bmiHeader.biHeight;
+//
+//	is16bits = (bmScr.bmiHeader.biBitCount == 16);
+//
+//
+//	bmScr.bmiHeader.biBitCount = 32;
+//
+//	err=::GetDIBits(sdc,scr,0,-bmScr.bmiHeader.biHeight,bScr,&bmScr,DIB_RGB_COLORS);
+//	bmScr.bmiHeader.biHeight = -bmScr.bmiHeader.biHeight;
+//	if(err==0){
+//				ReleaseDC(NULL, hdc);
+//				ReleaseDC(NULL,sdc);
+//				ReleaseDC(NULL,tdc);
+//				if(bits)delete bits;
+//				if(bScr)delete bScr;
+//				DeleteObject(scr);
+//				DeleteObject(tmpl);
+//				return FAIL;
+//	}
+//
+//	if(is16bits){
+//		for(i=0;i<szs;i++)bScr[i]&=0xF8F8F8F8;
+//		for(i=0;i<szb;i++)bits[i]&=0xF8F8F8F8;
+//	}
+//
+//	for (i=0;i <szs; i++)
+//	{
+//		
+//			if (bScr[i]==bits[0]) // This pixel matches one of the specified color(s).
+//			{
+//				bool found = true;
+//
+//				for(y=0,j=0,k=i;y<bmInfo.bmiHeader.biHeight && k<szs && found;y++,k+=bmScr.bmiHeader.biWidth){
+//					for(x=0,p=k;x<bmInfo.bmiHeader.biWidth && p<szs && found ;x++,j++,p++){
+//						if(bScr[p]==bits[j]){
+//							found = true;
+//						}else{
+//							found = false;
+//						}
+//					}
+//				}
+//				if(found){
+//					ReleaseDC(NULL, hdc);
+//					
+//					ReleaseDC(NULL,sdc);
+//					ReleaseDC(NULL,tdc);
+//					if(bits)delete bits;
+//					if(bScr)delete bScr;
+//					DeleteObject(scr);
+//					DeleteObject(tmpl);
+//
+//					//calculate xpos,ypos;	
+//					xpos = aLeft + i%bmScr.bmiHeader.biWidth;
+//					ypos = aTop + i/bmScr.bmiHeader.biWidth;
+//
+//					if (output_var_x)
+//						// Adjust coords to make them relative to the position of the target window:
+//						if (!output_var_x->Assign(xpos - rect.left))
+//							result = FAIL;
+//						if (output_var_y)
+//							if (!output_var_y->Assign(ypos - rect.top))
+//								result = FAIL;
+//						if (result == OK)
+//							g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+//					return result;
+//				}
+//			}
+//	}
+//	
+//	// If the above didn't return, the pixel wasn't found in the specified region.
+//	// So leave ErrorLevel set to "error" to indicate that:
+//
+//	ReleaseDC(NULL, hdc);
+//					
+//	ReleaseDC(NULL,sdc);
+//	ReleaseDC(NULL,tdc);
+//	if(bits)delete bits;
+//	if(bScr)delete bScr;
+//	DeleteObject(scr);
+//	DeleteObject(tmpl);
+//	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // This value indicates "color not found".
+//	return OK;
+//}
+
+
+
 ResultType Line::PixelGetColor(int aX, int aY)
 // This has been adapted from the AutoIt3 source.
 {
@@ -3111,7 +3367,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 				// 2) YES: A new hotkey or timed subroutine was just launched and it's still in its
 				//    grace period.  In this case, ExecUntil()'s call of PeekMessage() every 10ms
 				//    or so will catch the item we just posted.  But it seems okay to interrupt
-				//    here directly in most such cases.  ENABLE_UNINTERRUPTIBLE_SUB: Newly launched
+				//    here directly in most such cases.  INIT_NEW_THREAD: Newly launched
 				//    timed subroutine or hotkey subroutine.
 				// 3) YES: Script is engaged in an uninterruptible activity such as SendKeys().  In this
 				//    case, since the user has managed to get the tray menu open, it's probably
@@ -3510,32 +3766,35 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			// Always return a real HBRUSH so that Windows knows we altered the HDC for it to use:
 			return splash.hbrush ? (LRESULT)splash.hbrush : (LRESULT)GetSysColorBrush(COLOR_BTNFACE);
 		case WM_ERASEBKGND:
+		{
+			if (splash.pic) // And since there is a pic, its object_width/height should already be valid.
+			{
+				// MSDN: get width and height of picture
+				long hm_width, hm_height;
+				splash.pic->get_Width(&hm_width);
+				splash.pic->get_Height(&hm_height);
+				GetClientRect(splash.hwnd, &client_rect);
+				// MSDN: display picture using IPicture::Render
+				int ypos = splash.margin_y + (splash.text1_height ? (splash.text1_height + splash.margin_y) : 0);
+				splash.pic->Render((HDC)wParam, splash.margin_x, ypos, splash.object_width, splash.object_height
+					, 0, hm_height, hm_width, -hm_height, &client_rect);
+				// Prevent "flashing" by erasing only the part that hasn't already been drawn:
+				ExcludeClipRect((HDC)wParam, splash.margin_x, ypos, splash.margin_x + splash.object_width
+					, ypos + splash.object_height);
+				HRGN hrgn = CreateRectRgn(0, 0, 1, 1);
+				GetClipRgn((HDC)wParam, hrgn);
+				FillRgn((HDC)wParam, hrgn, splash.hbrush ? splash.hbrush : GetSysColorBrush(COLOR_BTNFACE));
+				DeleteObject(hrgn);
+				return 1; // "An application should return nonzero if it erases the background."
+			}
+			// Otherwise, it's a Progress window (or a SplashImage window with no picture):
 			if (!splash.hbrush) // Let DWP handle it.
 				break;
 			RECT clipbox;
 			GetClipBox((HDC)wParam, &clipbox);
 			FillRect((HDC)wParam, &clipbox, splash.hbrush);
 			return 1; // "An application should return nonzero if it erases the background."
-		case WM_PAINT:
-			if (!is_splashimage) // Let DWP handle it.
-				break;
-			if (splash.pic) // And since there is a pic, its object_width/height should already be valid.
-			{
-				PAINTSTRUCT ps;
-				HDC hdc = BeginPaint(hWnd, &ps);
-				// MSDN: get width and height of picture
-				long hm_width;
-				long hm_height;
-				splash.pic->get_Width(&hm_width);
-				splash.pic->get_Height(&hm_height);
-				GetClientRect(splash.hwnd, &client_rect);
-				// MSDN: display picture using IPicture::Render
-				splash.pic->Render(hdc, splash.margin_x
-					, splash.margin_y + (splash.text1_height ? (splash.text1_height + splash.margin_y) : 0)
-					, splash.object_width, splash.object_height, 0, hm_height, hm_width, -hm_height, &client_rect);
-				EndPaint(hWnd, &ps);
-			}
-			break;
+		}
 		} // switch()
 		break; // Let DWP handle it.
 	}
@@ -7947,6 +8206,7 @@ ArgTypeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_CONTROLGETPOS:
 		case ACT_PIXELGETCOLOR:
 		case ACT_PIXELSEARCH:
+		//case ACT_IMAGESEARCH:
 		case ACT_INPUT:
 			return ARG_TYPE_OUTPUT_VAR;
 
@@ -7986,6 +8246,7 @@ ArgTypeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_WINGETPOS:
 		case ACT_CONTROLGETPOS:
 		case ACT_PIXELSEARCH:
+		//case ACT_IMAGESEARCH:
 		case ACT_SPLITPATH:
 			return ARG_TYPE_OUTPUT_VAR;
 		}
@@ -8058,6 +8319,7 @@ ResultType Line::CheckForMandatoryArgs()
 			return LineError(ERR_WINDOW_PARAM);
 		return OK;
 	case ACT_CONTROLSEND:
+	case ACT_CONTROLSENDRAW:
 		// Window params can all be blank in this case, but characters to send should
 		// be non-blank (but it's ok if its a dereferenced var that resolves to blank
 		// at runtime):
@@ -8084,6 +8346,7 @@ ResultType Line::CheckForMandatoryArgs()
 			return LineError(ERR_MISSING_OUTPUT_VAR);
 		return OK;
 	case ACT_PIXELSEARCH:
+	//case ACT_IMAGESEARCH:
 		if (!*RAW_ARG3 || !*RAW_ARG4 || !*RAW_ARG5 || !*RAW_ARG6 || !*RAW_ARG7)
 			return LineError("Parameters 3 through 7 must not be blank.");
 		return OK;

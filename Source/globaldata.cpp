@@ -71,7 +71,6 @@ bool g_InputTimerExists = false;
 bool g_SoundWasPlayed = false;
 bool g_IsSuspended = false;  // Make this separate from g_AllowInterruption since that is frequently turned off & on.
 bool g_AllowInterruption = true;
-bool g_AllowInterruptionForSub = true; // Separate from g_AllowInterruption so that they can have independent values.
 int g_nLayersNeedingTimer = 0;
 int g_nThreads = 0;
 int g_nPausedThreads = 0;
@@ -107,6 +106,28 @@ int g_SortColumnOffset;
 char g_delimiter = ',';
 char g_DerefChar = '%';
 char g_EscapeChar = '`';
+
+// Hot string vars (initialized when ResetHook() is first called):
+char g_HSBuf[HS_BUF_SIZE];
+int g_HSBufLength;
+HWND g_HShwnd;
+
+// Hot string global settings:
+int g_HSPriority = 0;  // default priority is always 0
+int g_HSKeyDelay = 0;  // Fast sends are much nicer for auto-replace and auto-backspace.
+bool g_HSCaseSensitive = false;
+bool g_HSConformToCase = true;
+bool g_HSDoBackspace = true;
+bool g_HSOmitEndChar = false;
+bool g_HSSendRaw = false;
+bool g_HSEndCharRequired = true;
+bool g_HSDetectWhenInsideWord = false;
+char g_EndChars[HS_MAX_END_CHARS + 1] = "-()[]{}:;'\"/\\,.?!\n \t";  // Hotstring default end chars, including a space.
+// The following were considered but seemed too rare and/or too likely to result in undesirable replacements
+// (such as while programming or scripting, or in usernames or passwords): <>*+=_%^&|@#$|
+// Although dash/hyphen is used for multiple purposes, it seems to me that it is best (on average) to include it.
+// Jay D. Novak suggested ([{/ for things such as fl/nj or fl(nj) which might resolve to USA state names.
+// i.e. word(synonym) and/or word/synonym
 
 // Global objects:
 Var *g_ErrorLevel = NULL; // Allows us (in addition to the user) to set this var to indicate success/failure.
@@ -271,11 +292,13 @@ Action g_act[] =
 
 	, {"GetKeyState", 2, 3, NULL} // OutputVar, key name, mode (optional) P = Physical, T = Toggle
 	, {"Send", 1, 1, NULL} // But that first param can be a deref that resolves to a blank param
+	, {"SendRaw", 1, 1, NULL} // But that first param can be a deref that resolves to a blank param
 	// For these, the "control" param can be blank.  The window's first visible control will
 	// be used.  For this first one, allow a minimum of zero, otherwise, the first param (control)
 	// would be considered mandatory-non-blank by default.  It's easier to make all the params
 	// optional and validate elsewhere that the 2nd one specifically isn't blank:
 	, {"ControlSend", 0, 6, NULL} // Control, Chars-to-Send, std. 4 window params.
+	, {"ControlSendRaw", 0, 6, NULL} // Control, Chars-to-Send, std. 4 window params.
 	, {"ControlClick", 0, 8, {5, 0}} // Control, WinTitle, WinText, WhichButton, ClickCount, Hold/Release, ExcludeTitle, ExcludeText
 	, {"ControlMove", 0, 9, {2, 3, 4, 5, 0}} // Control, x, y, w, h, WinTitle, WinText, ExcludeTitle, ExcludeText
 	, {"ControlGetPos", 0, 9, NULL} // Four optional output vars: xpos, ypos, width, height, control, std. 4 window params.
@@ -304,7 +327,8 @@ Action g_act[] =
 	, {"Gosub", 1, 1, NULL}   // Label (or dereference that resolves to a label).
 	, {"OnExit", 0, 2, NULL}  // Optional label, future use (since labels are allowed to contain commas)
 	, {"Hotkey", 1, 3, NULL}  // Mod+Keys, Label/Action (blank to avoid changing curr. label), Options
-	, {"SetTimer", 1, 2, NULL}  // Label (or dereference that resolves to a label), period (or ON/OFF)
+	, {"SetTimer", 1, 3, {3, 0}}  // Label (or dereference that resolves to a label), period (or ON/OFF), Priority
+	, {"Thread", 1, 3, {2, 3, 0}}  // Command, value1 (can be blank for interrupt), value2
 	, {"Return", 0, 0, NULL}, {"Exit", 0, 1, {1, 0}} // ExitCode (currently ignored)
 	, {"Loop", 0, 4, NULL} // Iteration Count or FilePattern or root key name [,subkey name], FileLoopMode, Recurse? (custom validation for these last two)
 	, {"Break", 0, 0, NULL}, {"Continue", 0, 0, NULL}
@@ -343,6 +367,7 @@ Action g_act[] =
 
 	, {"PixelGetColor", 3, 3, {2, 3, 0}} // OutputVar, X-coord, Y-coord
 	, {"PixelSearch", 0, 8, {3, 4, 5, 6, 7, 8, 0}} // OutputX, OutputY, left, top, right, bottom, Color, Variation
+	//, {"ImageSearch", 0, 7, {3, 4, 5, 6, 0}} // OutputX, OutputY, left, top, right, bottom, ImageFile
 	// Note in the above: 0 min args so that the output vars can be optional.
 
 	// See above for why minimum is 1 vs. 2:
@@ -402,7 +427,6 @@ Action g_act[] =
 	, {"SetWinDelay", 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)
 	, {"SetControlDelay", 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)
 	, {"SetBatchLines", 1, 1, NULL} // Can be non-numeric, such as 15ms, or a number (to indicate line count).
-	, {"SetInterrupt", 1, 2, {1, 2, 0}} // Interval (in milliseconds), number of uninterruptible lines.
 	, {"SetTitleMatchMode", 1, 1, NULL} // Allowed values: 1, 2, slow, fast
 	, {"SetFormat", 1, 2, NULL} // Float|Integer, FormatString (for float) or H|D (for int)
 
@@ -424,7 +448,7 @@ Action g_act[] =
 
 	, {"Edit", 0, 0, NULL}
 	, {"Reload", 0, 0, NULL}
-	, {"Menu", 2, 5, NULL}  // tray, add, name, label, FutureUse (thread priority?)
+	, {"Menu", 2, 6, NULL}  // tray, add, name, label, options, future use
 
 	, {"ExitApp", 0, 1, NULL}  // Optional exit-code
 	, {"Shutdown", 1, 1, {1, 0}} // Seems best to make the first param (the flag/code) mandatory.
@@ -448,6 +472,7 @@ Action g_old_act[] =
 	, {"IfLess", 1, 2, NULL}, {"IfLessOrEqual", 1, 2, NULL}
 	, {"LeftClick", 2, 2, {1, 2, 0}}, {"RightClick", 2, 2, {1, 2, 0}}
 	, {"LeftClickDrag", 4, 4, {1, 2, 3, 4, 0}}, {"RightClickDrag", 4, 4, {1, 2, 3, 4, 0}}
+	, {"HideAutoItWin", 1, 1, NULL}
 	  // Allow zero params, unlike AutoIt.  These params should match those for REPEAT in the above array:
 	, {"Repeat", 0, 1, {1, 0}}, {"EndRepeat", 0, 0, NULL}
 	, {"WinGetActiveTitle", 1, 1, NULL} // <Title Var>

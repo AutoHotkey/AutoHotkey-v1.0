@@ -199,6 +199,8 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 	char fore_class_name[32];
 	UserMenuItem *menu_item;
 	ActionTypeType type_of_first_line;
+	int priority;
+	Hotstring *hs;
 	MSG msg;
 
 	for (;;)
@@ -323,11 +325,27 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 			// the time has expired:
 			continue;
 
-		case WM_HOTKEY: // As a result of this app having previously called RegisterHotkey().
+		case WM_HOTKEY:        // As a result of this app having previously called RegisterHotkey().
 		case AHK_HOOK_HOTKEY:  // Sent from this app's keyboard or mouse hook.
-		case AHK_USER_MENU:  // The user selected a custom menu item.
+		case AHK_HOTSTRING:    // Sent from keybd hook to activate a non-auto-replace hotstring.
+		case AHK_USER_MENU:    // The user selected a custom menu item.
 			// MSG_FILTER_MAX should prevent us from receiving these messages (except AHK_USER_MENU)
-			// whenever g_AllowInterruption or g_AllowInterruptionForSub is false.
+			// whenever g_AllowInterruption or g.AllowThisThreadToBeInterrupted is false.
+			if (msg.message == AHK_HOTSTRING)
+			{
+				if (msg.wParam >= Hotstring::sHotstringCount) // Invalid hotstring ID (perhaps spoofed by external app)
+					continue; // Do nothing.
+				hs = Hotstring::shs[msg.wParam];  // For performance and convenience.
+				// Do a simple replacement for the hotstring if that's all that's called for.
+				// Don't create a new quasi-thread or any of that other complexity done further
+				// below.  But also do the backspacing (if specified) for a non-autoreplace hotstring,
+				// even if it can't launch due to MaxThreads, MaxThreadsPerHotkey, or some other reason:
+				hs->DoReplace(msg.lParam);  // Does only the backspacing if it's not an auto-replace hotstring.
+				if (*hs->mReplacement) // Fully handled by the above.
+					continue;
+				// Otherwise, continue on and let a new thread be created to handle this hotstring.
+				// Any required backspacing will be done shortly when the hotstring subroutine is launched.
+			}
 			if (msg.message == AHK_USER_MENU) // user-defined menu item
 			{
 				if (   !(menu_item = g_script.FindMenuItemByID((UINT)msg.lParam))   ) // Item not found.
@@ -349,6 +367,8 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 
 				if (msg.message == AHK_USER_MENU) // user-defined menu item
 					type_of_first_line = menu_item->mLabel->mJumpToLine->mActionType;
+				else if (msg.message == AHK_HOTSTRING)
+					type_of_first_line = hs->mJumpToLabel->mJumpToLine->mActionType;
 				else // hotkey
 					type_of_first_line = Hotkey::GetTypeOfFirstLine((HotkeyIDType)msg.wParam);
 				if (!ACT_IS_ALWAYS_ALLOWED(type_of_first_line))
@@ -369,7 +389,8 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 			// Due to the key-repeat feature and the fact that most scripts use a value of 1
 			// for their #MaxThreadsPerHotkey, this check will often help average performance
 			// by avoiding a lot of unncessary overhead that would otherwise occur:
-			if (msg.message != AHK_USER_MENU && !Hotkey::PerformIsAllowed((HotkeyIDType)msg.wParam))
+			if ((msg.message == WM_HOTKEY || msg.message == AHK_HOOK_HOTKEY)
+				&& !Hotkey::PerformIsAllowed((HotkeyIDType)msg.wParam))
 			{
 				// The key is buffered in this case to boost the responsiveness of hotkeys
 				// that are being held down by the user to activate the keyboard's key-repeat
@@ -380,6 +401,17 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 				Hotkey::RunAgainAfterFinished((HotkeyIDType)msg.wParam);
 				continue;
 			}
+
+			// Ignore/discard a hotkey or custom menu item event if the current thread's priority
+			// is higher than it's:
+			if (msg.message == AHK_USER_MENU) // user-defined menu item
+				priority = menu_item->mPriority;
+			else if (msg.message == AHK_HOTSTRING)
+				priority = hs->mPriority;
+			else // hotkey
+				priority = Hotkey::GetPriority((HotkeyIDType)msg.wParam);
+			if (priority < g.Priority)
+				continue;
 
 			// Always kill the main timer, for performance reasons and for simplicity of design,
 			// prior to embarking on new subroutine whose duration may be long (e.g. if BatchLines
@@ -419,32 +451,24 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 				// to launch a new subroutine.
 			}
 
-			// Make every newly launched subroutine start off with the global default values that
-			// the user set up in the auto-execute part of the script (e.g. KeyDelay, WinDelay, etc.).
-			// However, we do not set ErrorLevel to NONE here because it's more flexible that way
-			// (i.e. the user may want one hotkey subroutine to use the value of ErrorLevel set by another):
-			CopyMemory(&g, &g_default, sizeof(global_struct));
-
 			if (msg.message == AHK_USER_MENU)
 			{
 				// Safer to make a full copies than point to something potentially volatile.
 				strlcpy(g_script.mThisMenuItem, menu_item->mName, sizeof(g_script.mThisMenuItem));
 				strlcpy(g_script.mThisMenu, menu_item->mMenu->mName, sizeof(g_script.mThisMenu));
 			}
-			else // Hotkey
+			else // Hotkey or hot string
 			{
 				// Just prior to launching the hotkey, update these values to support built-in
 				// variables such as A_TimeSincePriorHotkey:
 				g_script.mPriorHotkeyName = g_script.mThisHotkeyName;
 				g_script.mPriorHotkeyStartTime = g_script.mThisHotkeyStartTime;
-				g_script.mThisHotkeyName = Hotkey::GetName((HotkeyIDType)msg.wParam);
+				// Unlike hotkeys -- which can have a name independent of their label by being created or updated
+				// with the HOTKEY command -- a hot string's unique name is always its label since that includes
+				// the options that distinguish between (for example) :c:ahk:: and ::ahk::
+				g_script.mThisHotkeyName = (msg.message == AHK_HOTSTRING) ? hs->mJumpToLabel->mName
+					: Hotkey::GetName((HotkeyIDType)msg.wParam);
 			}
-
-			// If the current quasi-thread is paused, the thread we're about to launch
-			// will not be, so the icon needs to be checked:
-			g_script.UpdateTrayIcon();
-
-			ENABLE_UNINTERRUPTIBLE_SUB
 
 			if (g_nFileDialogs)
 				// Since there is a quasi-thread with an open file dialog underneath the one
@@ -465,6 +489,16 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 				// navigates is "undone" here:
 				SetCurrentDirectory(g_WorkingDir);
 
+			// If the current quasi-thread is paused, the thread we're about to launch
+			// will not be, so the icon needs to be checked:
+			g_script.UpdateTrayIcon();
+			// Make every newly launched subroutine start off with the global default values that
+			// the user set up in the auto-execute part of the script (e.g. KeyDelay, WinDelay, etc.).
+			// However, we do not set ErrorLevel to NONE here because it's more flexible that way
+			// (i.e. the user may want one hotkey subroutine to use the value of ErrorLevel set by another):
+			INIT_NEW_THREAD
+			g.Priority = priority;  // Set thread priority.
+
 			// Do this last, right before the PerformID():
 			// It seems best to reset these unconditionally, because the user has pressed a hotkey
 			// or selected a custom menu item, so would expect maximum responsiveness (e.g. in a game
@@ -474,20 +508,22 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 			// that is reset also:
 			g_script.mLinesExecutedThisCycle = 0;
 			g_script.mLastScriptRest = GetTickCount();
-			if (msg.message != AHK_USER_MENU)
+			if (msg.message != AHK_USER_MENU) // Done even for hot strings.
 				g_script.mThisHotkeyStartTime = g_script.mLastScriptRest;
 
-			// Perform the new hotkey's subroutine:
+			// Perform the new thread's subroutine:
 			++g_nThreads;
 			if (msg.message == AHK_USER_MENU)
 				menu_item->mLabel->mJumpToLine->ExecUntil(UNTIL_RETURN);
-			else
+			else if (msg.message == AHK_HOTSTRING)
+				hs->Perform();
+			else // hotkey
 				Hotkey::PerformID((HotkeyIDType)msg.wParam);
 			--g_nThreads;
 
-			DISABLE_UNINTERRUPTIBLE_SUB
+			KILL_UNINTERRUPTIBLE_TIMER
 
-			if (msg.message != AHK_USER_MENU)
+			if (msg.message == WM_HOTKEY || msg.message == AHK_HOOK_HOTKEY)
 				g_LastPerformedHotkeyType = Hotkey::GetType((HotkeyIDType)msg.wParam); // For use with the KeyHistory cmd.
 
 			if (aMode == RETURN_AFTER_MESSAGES)
@@ -512,6 +548,13 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 					SET_MAIN_TIMER // This won't do anything if it's already on.
 				// and now if the cycle isn't complete, stay in the blessed GetMessage() state until the time
 				// has expired.
+			}
+			else
+			{
+				// Since the script is now idle again, this must done because they indicate that the
+				// "idle thread" can always be interrupted:
+				g.Priority = PRIORITY_MINIMUM; // Minimum priority so that idle state can always be "interrupted".
+				g.AllowThisThreadToBeInterrupted = true; // There is no actual thread in this case, since script is idle.
 			}
 			continue;
 
@@ -719,7 +762,7 @@ void CheckScriptTimers()
 	{
 		// Call GetTickCount() every time in case a previous iteration of the loop took a long
 		// time to execute:
-		if (timer->mEnabled && timer->mExistingThreads < 1
+		if (timer->mEnabled && timer->mExistingThreads < 1 && timer->mPriority >= g.Priority // thread priorities
 			&& (tick_start = GetTickCount()) - timer->mTimeLastRun >= (DWORD)timer->mPeriod)
 		{
 			if (!n_ran_subroutines)
@@ -753,25 +796,26 @@ void CheckScriptTimers()
 			// a hotkey, and thus potentially buried in the stack:
 			g_script.mLinesExecutedThisCycle = 0;
 
+			if (g_nFileDialogs) // See MsgSleep() for comments on this.
+				SetCurrentDirectory(g_WorkingDir);
+
+			// Note that it is not necessary to call UpdateTrayIcon() here since timers won't run
+			// if there is any paused thread, thus the icon can't currently be showing "paused".
+
 			// This next line is necessary in case a prior iteration of our loop invoked a different
 			// timed subroutine that changed any of the global struct's values.  In other words, make
 			// every newly launched subroutine start off with the global default values that
 			// the user set up in the auto-execute part of the script (e.g. KeyDelay, WinDelay, etc.).
 			// However, we do not set ErrorLevel to NONE here because it's more flexible that way
 			// (i.e. the user may want one hotkey subroutine to use the value of ErrorLevel set by another):
-			CopyMemory(&g, &g_default, sizeof(global_struct));
-
-			if (g_nFileDialogs) // See MsgSleep() for comments on this.
-				SetCurrentDirectory(g_WorkingDir);
-
-			ENABLE_UNINTERRUPTIBLE_SUB
+			INIT_NEW_THREAD
+			g.Priority = timer->mPriority;  // Set thread priority.
 
 			++timer->mExistingThreads;
 			timer->mLabel->mJumpToLine->ExecUntil(UNTIL_RETURN);
 			--timer->mExistingThreads;
 
-			DISABLE_UNINTERRUPTIBLE_SUB
-
+			KILL_UNINTERRUPTIBLE_TIMER
 
 			// Seems better to store the start time rather than the finish time, though it's clearly
 			// debatable.  The reason is that it's sometimes more important to ensure that a given
@@ -881,12 +925,12 @@ VOID CALLBACK AutoExecSectionTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD d
 	// Otherwise:
 	CopyMemory(&g_default, &g, sizeof(global_struct));
 	global_clear_state(&g_default);  // Only clear g_default, not g.
-	// And since the AutoExecute is taking a long time (or might never complete), we now
-	// allow interruptions such as hotkeys and timed subroutines. Use g_AllowInterruptionForSub
-	// vs. g_AllowInterruption in case commands in the AutoExecute section need exclusive use
-	// of g_AllowInterruption (i.e. they might change its value to false and then back to true,
+	// And since the AutoExecute is taking a long time (or might never complete), we now allow
+	// interruptions such as hotkeys and timed subroutines. Use g.AllowThisThreadToBeInterrupted
+	// vs. g_AllowInterruption in case commands in the AutoExecute section need exclusive use of
+	// g_AllowInterruption (i.e. they might change its value to false and then back to true,
 	// which would interfere with our use of that var):
-	g_AllowInterruptionForSub = true;
+	g.AllowThisThreadToBeInterrupted = true;
 }
 
 
@@ -894,7 +938,7 @@ VOID CALLBACK AutoExecSectionTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD d
 VOID CALLBACK UninteruptibleTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
 {
 	KILL_UNINTERRUPTIBLE_TIMER // Best to use the macro so that g_UninterruptibleTimerExists is reset to false.
-	g_AllowInterruptionForSub = true;
+	g.AllowThisThreadToBeInterrupted = true;
 }
 
 

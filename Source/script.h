@@ -86,14 +86,14 @@ enum enum_act {
 , ACT_ENVSET, ACT_ENVUPDATE
 , ACT_RUNAS, ACT_RUN, ACT_RUNWAIT, ACT_URLDOWNLOADTOFILE
 , ACT_GETKEYSTATE
-, ACT_SEND, ACT_CONTROLSEND, ACT_CONTROLCLICK, ACT_CONTROLMOVE, ACT_CONTROLGETPOS
+, ACT_SEND, ACT_SENDRAW, ACT_CONTROLSEND, ACT_CONTROLSENDRAW, ACT_CONTROLCLICK, ACT_CONTROLMOVE, ACT_CONTROLGETPOS
 , ACT_CONTROLFOCUS, ACT_CONTROLGETFOCUS, ACT_CONTROLSETTEXT, ACT_CONTROLGETTEXT, ACT_CONTROL, ACT_CONTROLGET
 , ACT_COORDMODE, ACT_SETDEFAULTMOUSESPEED, ACT_MOUSEMOVE, ACT_MOUSECLICK, ACT_MOUSECLICKDRAG, ACT_MOUSEGETPOS
 , ACT_STATUSBARGETTEXT
 , ACT_STATUSBARWAIT
 , ACT_CLIPWAIT
 , ACT_SLEEP, ACT_RANDOM
-, ACT_GOTO, ACT_GOSUB, ACT_ONEXIT, ACT_HOTKEY, ACT_SETTIMER, ACT_RETURN, ACT_EXIT
+, ACT_GOTO, ACT_GOSUB, ACT_ONEXIT, ACT_HOTKEY, ACT_SETTIMER, ACT_THREAD, ACT_RETURN, ACT_EXIT
 , ACT_LOOP, ACT_BREAK, ACT_CONTINUE
 , ACT_BLOCK_BEGIN, ACT_BLOCK_END
 , ACT_WINACTIVATE, ACT_WINACTIVATEBOTTOM
@@ -105,7 +105,7 @@ enum enum_act {
 , ACT_WINSET, ACT_WINSETTITLE, ACT_WINGETTITLE, ACT_WINGETCLASS, ACT_WINGET, ACT_WINGETPOS, ACT_WINGETTEXT
 , ACT_POSTMESSAGE, ACT_SENDMESSAGE
 // Keep rarely used actions near the bottom for parsing/performance reasons:
-, ACT_PIXELGETCOLOR, ACT_PIXELSEARCH
+, ACT_PIXELGETCOLOR, ACT_PIXELSEARCH //, ACT_IMAGESEARCH
 , ACT_GROUPADD, ACT_GROUPACTIVATE, ACT_GROUPDEACTIVATE, ACT_GROUPCLOSE
 , ACT_DRIVESPACEFREE, ACT_DRIVEGET
 , ACT_SOUNDGET, ACT_SOUNDSET, ACT_SOUNDGETWAVEVOLUME, ACT_SOUNDSETWAVEVOLUME, ACT_SOUNDPLAY
@@ -117,7 +117,7 @@ enum enum_act {
 , ACT_SETWORKINGDIR, ACT_FILESELECTFILE, ACT_FILESELECTFOLDER, ACT_FILECREATESHORTCUT
 , ACT_INIREAD, ACT_INIWRITE, ACT_INIDELETE
 , ACT_REGREAD, ACT_REGWRITE, ACT_REGDELETE
-, ACT_SETKEYDELAY, ACT_SETMOUSEDELAY, ACT_SETWINDELAY, ACT_SETCONTROLDELAY, ACT_SETBATCHLINES, ACT_SETINTERRUPT
+, ACT_SETKEYDELAY, ACT_SETMOUSEDELAY, ACT_SETWINDELAY, ACT_SETCONTROLDELAY, ACT_SETBATCHLINES
 , ACT_SETTITLEMATCHMODE, ACT_SETFORMAT
 , ACT_SUSPEND, ACT_PAUSE
 , ACT_AUTOTRIM, ACT_STRINGCASESENSE, ACT_DETECTHIDDENWINDOWS, ACT_DETECTHIDDENTEXT, ACT_BLOCKINPUT
@@ -142,7 +142,7 @@ enum enum_act_old {
   , OLD_SETENV, OLD_ENVADD, OLD_ENVSUB, OLD_ENVMULT, OLD_ENVDIV
   , OLD_IFEQUAL, OLD_IFNOTEQUAL, OLD_IFGREATER, OLD_IFGREATEROREQUAL, OLD_IFLESS, OLD_IFLESSOREQUAL
   , OLD_LEFTCLICK, OLD_RIGHTCLICK, OLD_LEFTCLICKDRAG, OLD_RIGHTCLICKDRAG
-  , OLD_REPEAT, OLD_ENDREPEAT
+  , OLD_HIDEAUTOITWIN, OLD_REPEAT, OLD_ENDREPEAT
   , OLD_WINGETACTIVETITLE, OLD_WINGETACTIVESTATS
 };
 
@@ -167,6 +167,8 @@ enum enum_act_old {
 #define DETACH_THREAD_INPUT \
 	if (threads_are_attached)\
 		AttachThreadInput(my_thread, target_thread, FALSE);
+
+#define IS_PERSISTENT (Hotkey::sHotkeyCount || Hotstring::sHotstringCount || Hotkey::HookIsActive() || g_persistent)
 
 // The starting ID is arbitrary, but it seems best to avoid low IDs to avoid any chance of
 // a conflict with system menu id's, for example (though this is unlikely since I believe
@@ -204,6 +206,7 @@ enum TrayMenuItems {ID_TRAY_OPEN = 16000, ID_TRAY_HELP, ID_TRAY_WINDOWSPY, ID_TR
 #define ERR_TRANSFORMCOMMAND "Parameter #2 is not a valid transform command."
 #define ERR_MENUCOMMAND "Parameter #2 is not a valid menu command."
 #define ERR_MENUCOMMAND2 "Parameter #2's variable does not contain a valid menu command."
+#define ERR_THREADCOMMAND "Parameter #1 is not a valid thread command."
 #define ERR_MENUTRAY "Supported only for the tray menu."
 #define ERR_CONTROLCOMMAND "Parameter #1 is not a valid Control command."
 #define ERR_CONTROLGETCOMMAND "Parameter #2 is not a valid ControlGet command."
@@ -414,6 +417,8 @@ enum MenuCommands {MENU_CMD_INVALID, MENU_CMD_SHOW, MENU_CMD_USEERRORLEVEL
 	, MENU_CMD_MAINWINDOW, MENU_CMD_NOMAINWINDOW
 };
 
+enum ThreadCommands {THREAD_CMD_INVALID, THREAD_CMD_PRIORITY, THREAD_CMD_INTERRUPT};
+
 enum ControlCmds {CONTROL_CMD_INVALID, CONTROL_CMD_CHECK, CONTROL_CMD_UNCHECK
 	, CONTROL_CMD_ENABLE, CONTROL_CMD_DISABLE, CONTROL_CMD_SHOW, CONTROL_CMD_HIDE
 	, CONTROL_CMD_SHOWDROPDOWN, CONTROL_CMD_HIDEDROPDOWN
@@ -535,8 +540,8 @@ private:
 		, char *aMenu3, char *aMenu4, char *aMenu5, char *aMenu6, char *aMenu7
 		, char *aExcludeTitle, char *aExcludeText);
 	ResultType ControlSend(char *aControl, char *aKeysToSend, char *aTitle, char *aText
-		, char *aExcludeTitle, char *aExcludeText);
-	ResultType ControlClick(vk_type aVK, int aClickCount, char aEventType, char *aControl
+		, char *aExcludeTitle, char *aExcludeText, bool aSendRaw);
+	ResultType ControlClick(vk_type aVK, int aClickCount, char *aOptions, char *aControl
 		, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType ControlMove(char *aControl, char *aX, char *aY, char *aWidth, char *aHeight
 		, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
@@ -570,6 +575,7 @@ private:
 	ResultType WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType WinGetPos(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int aColor, int aVariation);
+	//ResultType ImageSearch(int aLeft, int aTop, int aRight, int aBottom, char *aImageFile);
 	ResultType PixelGetColor(int aX, int aY);
 
 	static ResultType SetToggleState(vk_type aVK, ToggleValueType &ForceLock, char *aToggleText);
@@ -771,8 +777,9 @@ public:
 		case ACT_RANDOM:
 		case ACT_WINMOVE:
 		case ACT_CONTROLMOVE:
-		case ACT_SETINTERRUPT:
 		case ACT_PIXELGETCOLOR:
+		case ACT_SETTIMER:
+		case ACT_THREAD:
 			return true;
 
 		case ACT_TOOLTIP:    // Seems best to allow negative even though the tip will be put in a visible region.
@@ -783,6 +790,7 @@ public:
 		case ACT_MOUSEMOVE:
 			return (aArgNum == 1 || aArgNum == 2);
 		case ACT_PIXELSEARCH:
+		//case ACT_IMAGESEARCH:
 			return (aArgNum >= 3 || aArgNum <= 7); // i.e. Color values can be negative, but the last param cannot.
 		case ACT_INPUTBOX:
 			return (aArgNum == 7 || aArgNum == 8); // X & Y coords, even if they're absolute vs. relative.
@@ -1093,6 +1101,14 @@ public:
 		return MENU_CMD_INVALID;
 	}
 
+	static ThreadCommands ConvertThreadCommand(char *aBuf)
+	{
+		if (!aBuf || !*aBuf) return THREAD_CMD_INVALID;
+		if (!stricmp(aBuf, "Priority")) return THREAD_CMD_PRIORITY;
+		if (!stricmp(aBuf, "Interrupt")) return THREAD_CMD_INTERRUPT;
+		return THREAD_CMD_INVALID;
+	}
+	
 	static ControlCmds ConvertControlCmd(char *aBuf)
 	{
 		if (!aBuf || !*aBuf) return CONTROL_CMD_INVALID;
@@ -1315,6 +1331,15 @@ public:
 	Line *mJumpToLine;
 	Label *mPrevLabel, *mNextLabel;  // Prev & Next items in linked list.
 
+	bool IsExemptFromSuspend()
+	{
+		// Hotkey and Hotstring subroutines whose first line is the Suspend command are exempt from
+		// being suspended themselves except when their first parameter is the literal
+		// word "on":
+		return mJumpToLine->mActionType == ACT_SUSPEND && (!mJumpToLine->mArgc || mJumpToLine->ArgHasDeref(1)
+			|| stricmp(mJumpToLine->mArg[0].text, "on"));
+	}
+
 	Label(char *aLabelName)
 		: mName(aLabelName) // Caller gave us a pointer to dynamic memory for this.
 		, mJumpToLine(NULL)
@@ -1333,13 +1358,15 @@ class ScriptTimer
 public:
 	Label *mLabel;
 	int mPeriod;
+	int mPriority;  // Thread priority relative to other threads, default 0.
 	UCHAR mExistingThreads;  // Whether this timer is already running its subroutine.
 	DWORD mTimeLastRun;  // TickCount
 	bool mEnabled;
 	ScriptTimer *mNextTimer;  // Next items in linked list
 	ScriptTimer(Label *aLabel)
 		#define DEFAULT_TIMER_PERIOD 250
-		: mLabel(aLabel), mPeriod(DEFAULT_TIMER_PERIOD), mExistingThreads(0), mTimeLastRun(0)
+		: mLabel(aLabel), mPeriod(DEFAULT_TIMER_PERIOD), mPriority(0) // Default is always 0.
+		, mExistingThreads(0), mTimeLastRun(0)
 		, mEnabled(false), mNextTimer(NULL)  // Note that mEnabled must default to false for the counts to be right.
 	{}
 	void *operator new(size_t aBytes) {return SimpleHeap::Malloc(aBytes);}
@@ -1380,10 +1407,11 @@ public:
 		DeleteAllItems();
 	}
 
-	ResultType AddItem(char *aName, UINT aMenuID, Label *aLabel, UserMenu *aSubmenu);
+	ResultType AddItem(char *aName, UINT aMenuID, Label *aLabel, UserMenu *aSubmenu, char *aOptions);
 	ResultType DeleteItem(UserMenuItem *aMenuItem, UserMenuItem *aMenuItemPrev);
 	ResultType DeleteAllItems();
-	ResultType ModifyItem(UserMenuItem *aMenuItem, Label *aLabel, UserMenu *aSubmenu);
+	ResultType ModifyItem(UserMenuItem *aMenuItem, Label *aLabel, UserMenu *aSubmenu, char *aOptions);
+	void UpdateOptions(UserMenuItem *aMenuItem, char *aOptions);
 	ResultType RenameItem(UserMenuItem *aMenuItem, char *aNewName);
 	ResultType CheckItem(UserMenuItem *aMenuItem);
 	ResultType UncheckItem(UserMenuItem *aMenuItem);
@@ -1412,12 +1440,13 @@ public:
 	Label *mLabel;
 	UserMenu *mSubmenu;
 	UserMenu *mMenu;  // The menu to which this item belongs.  Needed to support script var A_ThisMenu.
+	int mPriority;
 	bool mEnabled, mChecked;
 	UserMenuItem *mNextMenuItem;  // Next item in linked list
 
 	// Constructor:
 	UserMenuItem(char *aName, UINT aMenuID, Label *aLabel, UserMenu *aSubmenu, UserMenu *aMenu)
-		: mMenuID(aMenuID), mLabel(aLabel), mSubmenu(aSubmenu), mMenu(aMenu)
+		: mMenuID(aMenuID), mLabel(aLabel), mSubmenu(aSubmenu), mMenu(aMenu), mPriority(0) // default priority = 0
 		, mEnabled(true), mChecked(false), mNextMenuItem(NULL)
 	{
 		strlcpy(mName, aName, sizeof(mName));
@@ -1522,7 +1551,8 @@ public:
 	bool mIsAutoIt2; // Whether this script is considered to be an AutoIt2 script.
 	bool mErrorStdOut; // true if load-time syntax errors should be sent to stdout vs. a MsgBox.
 	__int64 mLinesExecutedThisCycle; // Use 64-bit to match the type of g.LinesPerCycle
-	int mUninterruptedLineCount; // Similar in purpose to the above, but only 32-bit.
+	int mUninterruptedLineCountMax; // 32-bit for performance (since huge values seem unnecessary here).
+	int mUninterruptibleTime;
 	DWORD mLastScriptRest, mLastPeekTime;
 
 	#define RUNAS_ITEM_SIZE (257 * sizeof(wchar_t))
@@ -1546,7 +1576,8 @@ public:
 	void TerminateApp(int aExitCode);
 	LineNumberType LoadFromFile();
 	ResultType LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude);
-	ResultType UpdateOrCreateTimer(Label *aLabel, int aFreq, bool aEnable);
+	ResultType UpdateOrCreateTimer(Label *aLabel, char *aPeriod, char *aPriority, bool aEnable
+		, bool aUpdatePriorityOnly);
 	#define VAR_NAME_LENGTH_DEFAULT 0
 	Var *FindOrAddVar(char *aVarName, size_t aVarNameLength = VAR_NAME_LENGTH_DEFAULT, Var *aSearchStart = NULL);
 	Var *FindVar(char *aVarName, size_t aVarNameLength = 0, Var **apVarPrev = NULL, Var *aSearchStart = NULL);
@@ -1558,7 +1589,7 @@ public:
 	char *ListVars(char *aBuf, size_t aBufSize);
 	char *ListKeyHistory(char *aBuf, size_t aBufSize);
 
-	ResultType PerformMenu(char *aMenu, char *aCommand, char *aParam3, char *aParam4);
+	ResultType PerformMenu(char *aMenu, char *aCommand, char *aParam3, char *aParam4, char *aOptions);
 	UserMenu *FindMenu(char *aMenuName);
 	UserMenu *AddMenu(char *aMenuName);
 	ResultType ScriptDeleteMenu(UserMenu *aMenu);
@@ -1789,10 +1820,17 @@ public:
 		char *last_backslash = NULL;
 		if (mLoopFile)
 		{
-			// The loop handler already prepended the script's directory in here for us:
-			str = mLoopFile->cFileName;
+			// The loop handler already prepended the script's directory in here for us.
+			// But if the loop had a relative path in its FilePattern, there might be
+			// only a relative directory here, or no directory at all if the current
+			// file is in the origin/root dir of the search:
 			if (last_backslash = strrchr(mLoopFile->cFileName, '\\'))
+			{
 				*last_backslash = '\0'; // Temporarily terminate.
+				str = mLoopFile->cFileName;
+			}
+			else // No backslash, so there is no directory in this case.
+				str = "";
 		}
 		VarSizeType length = (VarSizeType)strlen(str);
 		if (!aBuf)
@@ -2089,6 +2127,24 @@ public:
 		*(aBuf++) = aType == VAR_SPACE ? ' ' : '\t';
 		*aBuf = '\0';
 		return 1;
+	}
+
+	// Confirmed: The below will all automatically use the local time (not UTC) when 3rd param is NULL.
+	VarSizeType GetMMMM(char *aBuf = NULL)
+	{
+		return (VarSizeType)(GetDateFormat(LOCALE_USER_DEFAULT, 0, NULL, "MMMM", aBuf, aBuf ? 999 : 0) - 1);
+	}
+	VarSizeType GetMMM(char *aBuf = NULL)
+	{
+		return (VarSizeType)(GetDateFormat(LOCALE_USER_DEFAULT, 0, NULL, "MMM", aBuf, aBuf ? 999 : 0) - 1);
+	}
+	VarSizeType GetDDDD(char *aBuf = NULL)
+	{
+		return (VarSizeType)(GetDateFormat(LOCALE_USER_DEFAULT, 0, NULL, "dddd", aBuf, aBuf ? 999 : 0) - 1);
+	}
+	VarSizeType GetDDD(char *aBuf = NULL)
+	{
+		return (VarSizeType)(GetDateFormat(LOCALE_USER_DEFAULT, 0, NULL, "ddd", aBuf, aBuf ? 999 : 0) - 1);
 	}
 
 	// Call this SciptError to avoid confusion with Line's error-displaying functions:

@@ -45,7 +45,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	//char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
 	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
 	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\Menu command COMPREHENSIVE TEST.ahk";
-	char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\SplitPath.ahk";
+	char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\Hotstrings.ahk";
 	#else
 	char *script_filespec = NAME_P ".ini";  // Use this extension for better file association with editor(s).
 	#endif
@@ -75,9 +75,9 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		// Insist that switches be an exact match for the allowed values to cut down on ambiguity.
 		// For example, if the user runs "CompiledScript.exe /find", we want /find to be considered
 		// an input parameter for the script rather than a switch:
-		else if (   (__argv[i][0] == '/' && toupper(__argv[i][1]) == 'R') || !stricmp(__argv[i], "/restart")   )
+		else if (!stricmp(__argv[i], "/R") || !stricmp(__argv[i], "/restart"))
 			restart_mode = true;
-		else if (   (__argv[i][0] == '/' && toupper(__argv[i][1]) == 'F') || !stricmp(__argv[i], "/force")   )
+		else if (!stricmp(__argv[i], "/F") || !stricmp(__argv[i], "/force"))
 			// Force the keybd/mouse hook(s) to be installed again even if another instance already did.
 			g_ForceLaunch = true;
 		else if (!stricmp(__argv[i], "/ErrorStdOut"))
@@ -150,9 +150,15 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	if (!load_result) // LoadFromFile() relies upon us to do this check.  No lines were loaded, so we're done.
 		return 0;
 
+	// Unless explicitly set to be non-SingleInstance via SINGLE_INSTANCE_OFF or a special kind of
+	// SingleInstance such as SINGLE_INSTANCE_REPLACE and SINGLE_INSTANCE_IGNORE, persistent scripts
+	// and those that contain hotkeys/hotstrings are automatically SINGLE_INSTANCE as of v1.0.16:
+	if (g_AllowOnlyOneInstance == ALLOW_MULTI_INSTANCE && IS_PERSISTENT)
+		g_AllowOnlyOneInstance = SINGLE_INSTANCE;
+
 	HWND w_existing = NULL;
 	UserMessages reason_to_close_prior = (UserMessages)0;
-	if (g_AllowOnlyOneInstance && !restart_mode && !g_ForceLaunch)
+	if (g_AllowOnlyOneInstance && g_AllowOnlyOneInstance != SINGLE_INSTANCE_OFF && !restart_mode && !g_ForceLaunch)
 	{
 		// Note: the title below must be constructed the same was as is done by our
 		// CreateWindows(), which is why it's standardized in g_script.mMainWindowTitle:
@@ -217,7 +223,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	// top part (the auto-execute part) of the script so that they will be in effect
 	// even if the top part is something that's very involved and requires user
 	// interaction:
-	Hotkey::AllActivate(true);         // We want these active now in case auto-execute never returns (e.g. loop)
+	Hotkey::AllActivate();         // We want these active now in case auto-execute never returns (e.g. loop)
 	g_script.mIsReadyToExecute = true; // This is done only now for error reporting purposes in Hotkey.cpp.
 	if (Hotkey::sJoyHotkeyCount)       // Joystick hotkeys require the timer to be always on.
 		SET_MAIN_TIMER
@@ -225,7 +231,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	ResultType result = g_script.AutoExecSection();
 	// If no hotkeys are in effect, the user hasn't requested a hook to be activated, and the script
 	// doesn't contain the #Persistent directive we're done unless the OnExit subroutine doesn't exit:
-	if (!Hotkey::sHotkeyCount && !Hotkey::HookIsActive() && !g_persistent)
+	if (!IS_PERSISTENT)
 		g_script.ExitApp(result == FAIL ? EXIT_ERROR : EXIT_EXIT);
 
 	// The below is done even if AutoExecSectionTimeout() already set the values once.
@@ -249,6 +255,10 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	// here in case the auto-exectute section changed it:
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE);
 
+	// Since we're about to enter the script's idle state, set the "idle thread" to
+	// be minimum priority so that it can always be "interrupted" (though technically,
+	// there is no actual idle quasi-thread, so it can't really be interrupted):
+	g.Priority = PRIORITY_MINIMUM;
 	// Call it in this special mode to kick off the main event loop.
 	// Be sure to pass something >0 for the first param or it will
 	// return (and we never want this to return):

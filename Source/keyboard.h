@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003 Christopher L. Mallett
+Copyright 2003 Chris Mallett
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -191,7 +191,7 @@ struct sc2_type
 
 enum KeyEventTypes {KEYDOWN, KEYUP, KEYDOWNANDUP};
 
-void SendKeys(char *aKeys, HWND aTargetWindow = NULL);
+void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow = NULL);
 int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, modLR_type aModifiersLRPersistent
 	, int aRepeatCount, KeyEventTypes aEventType, modLR_type aKeyAsModifiersLR, HWND aTargetWindow);
 int SendKeySpecial(char aChar, mod_type aModifiers, modLR_type aModifiersLRPersistent
@@ -233,7 +233,7 @@ modLR_type SetModifierState(mod_type aModifiersNew, modLR_type aModifiersLRnow
 , DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER);
 modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLRnow
 	, DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER);
-void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLRnow, KeyEventTypes aKeyUp
+void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLRnow, KeyEventTypes aEventType
 	, DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER);
 
 mod_type GetModifierState();

@@ -24,8 +24,9 @@ GNU General Public License for more details.
 EXTERN_CLIPBOARD;
 
 // Something big enough to be flexible, yet small enough to not be a problem on 99% of systems:
-#define MAX_ALLOC_MALLOC (16 * 1024 * 1024)
-#define MAX_ALLOC_SIMPLE 64
+#define MAX_ALLOC_MALLOC (64 * 1024 * 1024)
+#define MAX_ALLOC_SIMPLE 64  // Do not decrease this much since it is used for the sizing of some built-in variables.
+#define SMALL_STRING_LENGTH (MAX_ALLOC_SIMPLE - 1)  // The largest string that can fit in the above.
 #define DEREF_BUF_MAX MAX_ALLOC_MALLOC
 #define DEREF_BUF_EXPAND_INCREMENT (32 * 1024)
 #define ERRORLEVEL_NONE "0"
@@ -37,7 +38,8 @@ enum VarTypes
 {
   VAR_NORMAL // It's probably best of this one is first (zero).
 , VAR_CLIPBOARD
-, VAR_SEC, VAR_MIN, VAR_HOUR, VAR_MDAY, VAR_MON, VAR_YEAR, VAR_WDAY, VAR_YDAY, VAR_TICKCOUNT, VAR_NOW, VAR_NOWUTC
+, VAR_YYYY, VAR_MM, VAR_MMMM, VAR_MMM, VAR_DD, VAR_YDAY, VAR_WDAY, VAR_DDDD, VAR_DDD
+, VAR_HOUR, VAR_MIN, VAR_SEC, VAR_TICKCOUNT, VAR_NOW, VAR_NOWUTC
 , VAR_WORKINGDIR, VAR_BATCHLINES
 , VAR_TITLEMATCHMODE, VAR_TITLEMATCHMODESPEED, VAR_DETECTHIDDENWINDOWS, VAR_DETECTHIDDENTEXT
 , VAR_AUTOTRIM, VAR_STRINGCASESENSE, VAR_FORMATINTEGER, VAR_FORMATFLOAT
@@ -158,7 +160,7 @@ public:
 
 	Var(char *aVarName, VarTypeType aType = VAR_NORMAL)
 		// The caller must ensure that aVarName is non-null and non-empty-string.
-		: mName(aVarName) // Caller gave us a pointer to dynamic memory for this.
+		: mName(aVarName) // Caller gave us a pointer to dynamic memory for this (or static in the case of ResolveVarOfArg()).
 		, mLength(0)
 		, mCapacity(0)
 		, mHowAllocated(ALLOC_NONE)

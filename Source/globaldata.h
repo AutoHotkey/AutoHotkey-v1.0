@@ -62,7 +62,6 @@ extern bool g_NoTrayIcon;
 extern bool g_AllowSameLineComments;
 extern char g_LastPerformedHotkeyType;
 extern bool g_AllowInterruption;
-extern bool g_AllowInterruptionForSub;
 extern bool g_MainTimerExists;
 extern bool g_UninterruptibleTimerExists;
 extern bool g_AutoExecTimerExists;
@@ -101,6 +100,23 @@ extern int g_SortColumnOffset;
 extern char g_delimiter;
 extern char g_DerefChar;
 extern char g_EscapeChar;
+
+// Hot string vars:
+extern char g_HSBuf[HS_BUF_SIZE];
+extern int g_HSBufLength;
+extern HWND g_HShwnd;
+
+// Hot string global settings:
+extern int g_HSPriority;
+extern int g_HSKeyDelay;
+extern bool g_HSCaseSensitive;
+extern bool g_HSConformToCase;
+extern bool g_HSDoBackspace;
+extern bool g_HSOmitEndChar;
+extern bool g_HSSendRaw;
+extern bool g_HSEndCharRequired;
+extern bool g_HSDetectWhenInsideWord;
+extern char g_EndChars[HS_MAX_END_CHARS + 1];
 
 // Global objects:
 extern Var *g_ErrorLevel;

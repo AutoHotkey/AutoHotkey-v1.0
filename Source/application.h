@@ -76,8 +76,9 @@ if (!g_MainTimerExists && !(g_MainTimerExists = SetTimer(g_hWnd, TIMER_ID_MAIN, 
 // Also have this one abort on unexpected error, since failure to set the timer might result in the
 // script becoming permanently uninterruptible (which prevents new hotkeys from being activated
 // even though the program is still responsive).
-#define SET_UNINTERRUPTIBLE_TIMER(aTimeoutValue) \
-if (!g_UninterruptibleTimerExists && !(g_UninterruptibleTimerExists = SetTimer(g_hWnd, TIMER_ID_UNINTERRUPTIBLE, aTimeoutValue, UninteruptibleTimeout)))\
+#define SET_UNINTERRUPTIBLE_TIMER \
+if (!g_UninterruptibleTimerExists && !(g_UninterruptibleTimerExists = SetTimer(g_hWnd, TIMER_ID_UNINTERRUPTIBLE \
+	, g_script.mUninterruptibleTime < 10 ? 10 : g_script.mUninterruptibleTime, UninteruptibleTimeout)))\
 	g_script.ExitApp(EXIT_CRITICAL, "SetTimer() unexpectedly failed.");
 
 #define SET_AUTOEXEC_TIMER(aTimeoutValue) \
@@ -130,10 +131,10 @@ ResultType MsgSleep(int aSleepDuration = INTERVAL_UNSPECIFIED, MessageMode aMode
 // either a newly pressed hotkey or a timed subroutine that is due to be run.
 // Note that the 2 variables used here are independent of each other to support
 // the case where an uninterruptible operation such as SendKeys() happens to occur
-// while g_AllowInterruptionForSub is true, in which case we would want the completion
-// of that operation to affect only the status of g_AllowInterruption, not
-// g_AllowInterruptionForSub.
-#define INTERRUPTIBLE (g_AllowInterruptionForSub && g_AllowInterruption && !g_MenuIsVisible)
+// while g.AllowThisThreadToBeInterrupted is true, in which case we would want the
+// completion of that operation to affect only the status of g_AllowInterruption,
+// not g.AllowThisThreadToBeInterrupted.
+#define INTERRUPTIBLE (g.AllowThisThreadToBeInterrupted && g_AllowInterruption && !g_MenuIsVisible)
 
 // To reduce the expectation that a newly launched hotkey or timed subroutine will
 // be immediately interrupted by a timed subroutine or hotkey, interruptions are
@@ -150,7 +151,7 @@ ResultType MsgSleep(int aSleepDuration = INTERVAL_UNSPECIFIED, MessageMode aMode
 // Notes that apply to the macro:
 // Both must be non-zero.
 // ...
-// Use g_AllowInterruptionForSub vs. g_AllowInterruption in case g_AllowInterruption
+// Use g.AllowThisThreadToBeInterrupted vs. g_AllowInterruption in case g_AllowInterruption
 // just happens to have been set to true for some other reason (e.g. SendKeys()).
 // ...
 // It's much better to set a timer than have ExecUntil() watch for the time
@@ -167,30 +168,31 @@ ResultType MsgSleep(int aSleepDuration = INTERVAL_UNSPECIFIED, MessageMode aMode
 // Known to be either negative or positive (but not zero) at this point.
 // ...
 // else if it's negative, it's considered to be infinite, so no timer need be set.
-#define ENABLE_UNINTERRUPTIBLE_SUB \
-if (g.UninterruptibleTime && g.UninterruptedLineCountMax)\
+
+#define INIT_NEW_THREAD \
+CopyMemory(&g, &g_default, sizeof(global_struct));\
+if (g_script.mUninterruptibleTime && g_script.mUninterruptedLineCountMax)\
 {\
-	g_AllowInterruptionForSub = false;\
-	g_script.mUninterruptedLineCount = 0;\
-	if (g.UninterruptibleTime > 0)\
-		SET_UNINTERRUPTIBLE_TIMER(g.UninterruptibleTime < 10 ? 10 : g.UninterruptibleTime) \
+	g.AllowThisThreadToBeInterrupted = false;\
+	if (g_script.mUninterruptibleTime > 0)\
+		SET_UNINTERRUPTIBLE_TIMER \
 }
 
 // The DISABLE_UNINTERRUPTIBLE_SUB macro below must always kill the timer if it exists -- even if
-// the timer hasn't expired yet.  This is because if the timer were to fire when interruptibility
-// had already been previously restored, it's possible that it would set g_AllowInterruptionForSub
+// the timer hasn't expired yet.  This is because if the timer were to fire when interruptibility had
+// already been previously restored, it's possible that it would set g.AllowThisThreadToBeInterrupted
 // to be true even when some other code had had the opporutunity to set it to false by intent.
-// In other words, once g_AllowInterruptionForSub is set to true the first time, it should not be
+// In other words, once g.AllowThisThreadToBeInterrupted is set to true the first time, it should not be
 // set a second time "just to be sure" because by then it may already by in use by someone else
 // for some other purpose.
-// It's possible for the SetBatchLines command to have changed the values of g.UninterruptibleTime
-// and g.UninterruptedLineCountMax since the time ENABLE_UNINTERRUPTIBLE_SUB was called.  If they were
+// It's possible for the SetBatchLines command to have changed the values of g_script.mUninterruptibleTime
+// and g_script.mUninterruptedLineCountMax since the time INIT_NEW_THREAD was called.  If they were
 // changed so that subroutines are always interruptible, that seems to be handled correctly.
 // If they were changed so that subroutines are never interruptible, that seems to be okay too.
 // It doesn't seem like any combination of starting vs. ending interruptibility is a particular
 // problem, so no special handling is done here (just keep it simple).
-// UPDATE: g_AllowInterruptionForSub is always made true even if both settings are negative, since
-// our callers would all want us to do it unconditionally.  This is because there's no need to
+// UPDATE: g.AllowThisThreadToBeInterrupted is always made true even if both settings are negative,
+// since our callers would all want us to do it unconditionally.  This is because there's no need to
 // keep it false even when all subroutines are permanently uninterruptible, since it will be made
 // false every time a new subroutine launches.
 // Macro notes:
@@ -200,11 +202,14 @@ if (g.UninterruptibleTime && g.UninterruptedLineCountMax)\
 // Since this timer is of the type that calls a function directly, rather than placing
 // msgs in our msg queue, it should not be necessary to worry about removing its messages
 // from the msg queue.
-#define DISABLE_UNINTERRUPTIBLE_SUB \
-{\
-	g_AllowInterruptionForSub = true;\
-	KILL_UNINTERRUPTIBLE_TIMER \
-}
+// UPDATE: The below is now the same as KILL_UNINTERRUPTIBLE_TIMER because all of its callers
+// have finished running the current thread (i.e. the current thread is about to be destroyed):
+//#define DISABLE_UNINTERRUPTIBLE_SUB \
+//{\
+//	g.AllowThisThreadToBeInterrupted = true;\
+//	KILL_UNINTERRUPTIBLE_TIMER \
+//}
+//#define DISABLE_UNINTERRUPTIBLE_SUB	KILL_UNINTERRUPTIBLE_TIMER
 
 
 // The unpause logic is done immediately after the most recently suspended thread's

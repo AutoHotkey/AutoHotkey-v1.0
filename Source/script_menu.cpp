@@ -21,7 +21,7 @@ GNU General Public License for more details.
 #include "window.h" // for SetForegroundWindowEx()
 
 
-ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char *aParam4)
+ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char *aParam4, char *aOptions)
 {
 	if (mMenuUseErrorLevel)
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE);  // Set default, which is "none" for the Menu command.
@@ -198,7 +198,7 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 	case MENU_CMD_ADD:
 		if (*aParam3) // Since a menu item name was given, it's not a separator line.
 			break;    // Let a later switch() handle it.
-		if (!menu->AddItem("", 0, NULL, NULL))
+		if (!menu->AddItem("", 0, NULL, NULL, ""))
 			RETURN_MENU_ERROR("Can't add separator.", "");
 		return OK;
 	case MENU_CMD_DELETE:
@@ -236,11 +236,22 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 	if (!*aParam3)
 		RETURN_MENU_ERROR("Parameter #3 must not be blank in this case.", "");
 
+	// Find the menu item name AND its previous item (needed for the DELETE command) in the linked list:
+	UserMenuItem *mi, *menu_item = NULL, *menu_item_prev = NULL; // Set defaults.
+	for (menu_item = menu->mFirstMenuItem
+		; menu_item
+		; menu_item_prev = menu_item, menu_item = menu_item->mNextMenuItem)
+		if (!stricmp(menu_item->mName, aParam3)) // Match found (case insensitive).
+			break;
+
+	// Whether an existing menu item's options should be updated without updating its submenu or label:
+	bool update_exiting_item_options = (menu_command == MENU_CMD_ADD && menu_item && !*aParam4 && *aOptions);
+
 	// Seems best to avoid performance enhancers such as (Label *)mAttribute here, since the "Menu"
 	// command has so many modes of operation that would be difficult to parse at load-time:
 	Label *target_label = NULL;  // Set default.
 	UserMenu *submenu = NULL;    // Set default.
-	if (menu_command == MENU_CMD_ADD) // Labels and submenus are only used in conjuction with the ADD command.
+	if (menu_command == MENU_CMD_ADD && !update_exiting_item_options) // Labels and submenus are only used in conjuction with the ADD command.
 	{
 		if (!*aParam4) // Allow the label/submenu to default to the menu name.
 			aParam4 = aParam3; // Note that aParam3 will be blank in the case of a separator line.
@@ -263,13 +274,6 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 		}
 	}
 
-	// Find the menu item name AND its previous item (needed for the DELETE command) in the linked list:
-	UserMenuItem *mi, *menu_item = NULL, *menu_item_prev = NULL; // Set defaults.
-	for (menu_item = menu->mFirstMenuItem
-		; menu_item
-		; menu_item_prev = menu_item, menu_item = menu_item->mNextMenuItem)
-		if (!stricmp(menu_item->mName, aParam3)) // Match found (case insensitive).
-			break;
 	if (!menu_item)  // menu item doesn't exist, so create it (but only if the command is ADD).
 	{
 		if (menu_command != MENU_CMD_ADD)
@@ -310,7 +314,7 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 			if (!id_in_use) // Break before the loop increments candidate_id.
 				break;
 		}
-		if (!menu->AddItem(aParam3, candidate_id, target_label, submenu))
+		if (!menu->AddItem(aParam3, candidate_id, target_label, submenu, aOptions))
 			RETURN_MENU_ERROR("Can't add menu item.", aParam3);
 		return OK;  // Item has been successfully added with the correct properties.
 	} // if (!menu_item)
@@ -323,9 +327,10 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 	switch (menu_command)
 	{
 	case MENU_CMD_ADD:
-		// This is only reached if the ADD command is being used to update the label or submenu of an
-		// existing menu item (since it would have returned above if the item was just newly created).
-		return menu->ModifyItem(menu_item, target_label, submenu);
+		// This is only reached if the ADD command is being used to update the label, submenu, or
+		// options of an existing menu item (since it would have returned above if the item was
+		// just newly created).
+		return menu->ModifyItem(menu_item, target_label, submenu, aOptions);
 	case MENU_CMD_RENAME:
 		if (!menu->RenameItem(menu_item, new_name))
 			RETURN_MENU_ERROR("The menu item's new name must not match that of an existing item.", new_name);
@@ -390,12 +395,9 @@ ResultType Script::ScriptDeleteMenu(UserMenu *aMenu)
 // Deletes a UserMenu object and all the UserMenuItem objects that belong to it.
 // Any UserMenuItem object that has a submenu attached to it does not result in
 // that submenu being deleted, even if no other menus are using that submenu
-// (i.e. the user must delete all menus individually -- this avoids problems with
-// recursion if menus are submenus of each other, which seems justified given
-// how rarely a menu really *needs* to be deleted by a script.  Any menus
-// which have aMenu as one of their submenus will have that menu item deleted
-// from their menus to avoid any chance of problems due to non-existent or NULL
-// submenus.
+// (i.e. the user must delete all menus individually).  Any menus which have
+// aMenu as one of their submenus will have that menu item deleted from their
+// menus to avoid any chance of problems due to non-existent or NULL submenus.
 {
 	// Delete any other menu's menu item that has aMenu as its attached submenu:
 	UserMenuItem *mi, *mi_prev, *mi_to_delete;
@@ -464,7 +466,7 @@ ResultType Script::ScriptDeleteMenu(UserMenu *aMenu)
 
 
 
-ResultType UserMenu::AddItem(char *aName, UINT aMenuID, Label *aLabel, UserMenu *aSubmenu)
+ResultType UserMenu::AddItem(char *aName, UINT aMenuID, Label *aLabel, UserMenu *aSubmenu, char *aOptions)
 // Caller must have already ensured that aName does not yet exist as a user-defined menu item
 // in this->mMenu.
 {
@@ -480,6 +482,8 @@ ResultType UserMenu::AddItem(char *aName, UINT aMenuID, Label *aLabel, UserMenu 
 		mLastMenuItem = menu_item;
 	}
 	++mMenuItemCount;  // Only after memory has been successfully allocated.
+	if (*aOptions)
+		UpdateOptions(menu_item, aOptions);
 	return OK;
 }
 
@@ -531,11 +535,17 @@ ResultType UserMenu::DeleteAllItems()
 
 
 
-ResultType UserMenu::ModifyItem(UserMenuItem *aMenuItem, Label *aLabel, UserMenu *aSubmenu)
-// Modify the label or submenu of a menu item (exactly one of these should be NULL and the other not).
+ResultType UserMenu::ModifyItem(UserMenuItem *aMenuItem, Label *aLabel, UserMenu *aSubmenu, char *aOptions)
+// Modify the label, submenu, or options of a menu item (exactly one of these should be NULL and the
+// other not except when updating only the options).
 // If a menu item becomes a submenu, we don't relinquish its ID in case it's ever made a normal item
 // again (avoids the need to re-lookup a unique ID).
 {
+	if (*aOptions)
+		UpdateOptions(aMenuItem, aOptions);
+	if (!aLabel && !aSubmenu) // We were called only to update this item's options.
+		return OK;
+
 	aMenuItem->mLabel = aLabel;  // This will be NULL if this menu item is a separator or submenu.
 	if (aMenuItem->mSubmenu == aSubmenu) // Below relies on this check.
 		return OK;
@@ -581,6 +591,14 @@ ResultType UserMenu::ModifyItem(UserMenuItem *aMenuItem, Label *aLabel, UserMenu
 	// else no error msg and return OK so that the thread will continue.  This may help catch
 	// bugs in the course of normal use of this feature.
 	return OK;
+}
+
+
+
+void UserMenu::UpdateOptions(UserMenuItem *aMenuItem, char *aOptions)
+{
+	if (toupper(*aOptions) == 'P')
+		aMenuItem->mPriority = atoi(aOptions + 1);
 }
 
 
@@ -758,7 +776,7 @@ ResultType UserMenu::ExcludeStandardItems()
 
 ResultType UserMenu::Create()
 {
-	if (mMenu)  // Besides making sense, this should stop runaway recursion if menus are submenus of each other.
+	if (mMenu)
 		return OK;
 	if (   !(mMenu = CreatePopupMenu())   ) // Rare, so no error msg here (caller can, if it wants).
 		return FAIL;
@@ -844,7 +862,7 @@ ResultType UserMenu::AppendStandardItems()
 
 ResultType UserMenu::Destroy()
 {
-	if (!mMenu)  // Besides performance, this will halt runaway recursion if menus contain each other as submenus.
+	if (!mMenu)  // For performance.
 		return OK;
 	// I think DestroyMenu() can fail if an attempt is made to destroy the menu while it is being
 	// displayed (but even if it doesn't fail, it seems very bad to try to destroy it then, which
@@ -862,10 +880,8 @@ ResultType UserMenu::Destroy()
 	// just assume that afterward, the menu is gone.  IsMenu() is checked because the handle can be
 	// invalid if the OS already destroyed it behind-the-scenes (this happens to a submenu whenever
 	// its parent menu is destroyed, or whenever a submenu is converted back into a normal menu item):
-	if (IsMenu(mMenu)) // In addition to making sense, this check should prevent runaway recursion.
+	if (IsMenu(mMenu))
 	{
-		// Doing this first should prevent the recursive calls to Destroy() below from causing
-		// infinite recursion of menus are submenus of each other:
 		DestroyMenu(mMenu);
 		// The moment the above is done, any submenus that were attached to mMenu are also destroyed
 		// by the OS.  So mark them as destroyed in our bookkeeping also:

@@ -45,7 +45,7 @@ inline void DoKeyDelay(int aDelay = g.KeyDelay)
 
 
 
-void SendKeys(char *aKeys, HWND aTargetWindow)
+void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 // The aKeys string must be modifiable (not constant), since for performance reasons,
 // it's allowed to be temporarily altered by this function.  mThisHotkeyModifiersLR, if non-zero,
 // is the set of modifiers used to trigger the hotkey that called the subroutine
@@ -159,164 +159,169 @@ void SendKeys(char *aKeys, HWND aTargetWindow)
 	for (; *aKeys; ++aKeys)
 	{
 		LONG_OPERATION_UPDATE_FOR_SENDKEYS
-		switch (*aKeys)
+		if (!aSendRaw && strchr("^+!#{}", *aKeys))
 		{
-		case '^':
-			if (!(modifiers_persistent & MOD_CONTROL))
-				modifiers_for_next_key |= MOD_CONTROL;
-			// else don't add it, because the value of modifiers_for_next_key may also used to determine
-			// which keys to release after the key to which this modifier applies is sent.
-			// We don't want persistent modifiers to ever be released because that's how
-			// AutoIt2 behaves and it seems like a reasonable standard.
-			break;
-		case '+':
-			if (!(modifiers_persistent & MOD_SHIFT))
-				modifiers_for_next_key |= MOD_SHIFT;
-			break;
-		case '!':
-			if (!(modifiers_persistent & MOD_ALT))
-				modifiers_for_next_key |= MOD_ALT;
-			break;
-		case '#':
-			if (g_script.mIsAutoIt2) // Since AutoIt2 ignores these, ignore them if script is in AutoIt2 mode.
+			switch (*aKeys)
+			{
+			case '^':
+				if (!(modifiers_persistent & MOD_CONTROL))
+					modifiers_for_next_key |= MOD_CONTROL;
+				// else don't add it, because the value of modifiers_for_next_key may also used to determine
+				// which keys to release after the key to which this modifier applies is sent.
+				// We don't want persistent modifiers to ever be released because that's how
+				// AutoIt2 behaves and it seems like a reasonable standard.
 				break;
-			if (!(modifiers_persistent & MOD_WIN))
-				modifiers_for_next_key |= MOD_WIN;
-			break;
-		case '}': break;  // Important that these be ignored.  Be very careful about changing this, see below.
-		case '{':
-		{
-			char *end_pos = strchr(aKeys + 1, '}');
-			if (!end_pos)
-				break;  // do nothing, just ignore it and continue.
-			size_t key_text_length = end_pos - aKeys - 1;
-			if (!key_text_length)
+			case '+':
+				if (!(modifiers_persistent & MOD_SHIFT))
+					modifiers_for_next_key |= MOD_SHIFT;
+				break;
+			case '!':
+				if (!(modifiers_persistent & MOD_ALT))
+					modifiers_for_next_key |= MOD_ALT;
+				break;
+			case '#':
+				if (g_script.mIsAutoIt2) // Since AutoIt2 ignores these, ignore them if script is in AutoIt2 mode.
+					break;
+				if (!(modifiers_persistent & MOD_WIN))
+					modifiers_for_next_key |= MOD_WIN;
+				break;
+			case '}': break;  // Important that these be ignored.  Be very careful about changing this, see below.
+			case '{':
 			{
-				if (end_pos[1] == '}')
+				char *end_pos = strchr(aKeys + 1, '}');
+				if (!end_pos)
+					break;  // do nothing, just ignore it and continue.
+				size_t key_text_length = end_pos - aKeys - 1;
+				if (!key_text_length)
 				{
-					// The literal string "{}}" has been encountered, which is interpreted as a single "}".
-					++end_pos;
-					key_text_length = 1;
-				}
-				else // Empty braces {} were encountered.
-					break;  // do nothing: let it proceed to the }, which will then be ignored.
-			}
-			size_t key_name_length = key_text_length; // Set default.
-
-			*end_pos = '\0';  // temporarily terminate the string here.
-			UINT repeat_count = 1;
-			KeyEventTypes event_type = KEYDOWNANDUP; // Set default.
-			char old_char;
-			char *space_pos = StrChrAny(aKeys + 1, " \t");  // Relies on the fact that {} key names contain no spaces.
-			if (space_pos)
-			{
-				old_char = *space_pos;
-				*space_pos = '\0';  // Temporarily terminate here so that TextToVK() can properly resolve a single char.
-				key_name_length = space_pos - aKeys - 1; // Override the default value set above.
-				char *next_word = omit_leading_whitespace(space_pos + 1);
-				UINT next_word_length = (UINT)(end_pos - next_word);
-				if (next_word_length > 0)
-				{
-					if (!stricmp(next_word, "down"))
-						event_type = KEYDOWN;
-					else if (!stricmp(next_word, "up"))
-						event_type = KEYUP;
-					else
+					if (end_pos[1] == '}')
 					{
-						repeat_count = ATOI(next_word);
-						if (repeat_count < 0) // But seems best to allow zero itself, for possibly use with environment vars
-							repeat_count = 0;
+						// The literal string "{}}" has been encountered, which is interpreted as a single "}".
+						++end_pos;
+						key_text_length = 1;
+					}
+					else // Empty braces {} were encountered.
+						break;  // do nothing: let it proceed to the }, which will then be ignored.
+				}
+				size_t key_name_length = key_text_length; // Set default.
+
+				*end_pos = '\0';  // temporarily terminate the string here.
+				UINT repeat_count = 1;
+				KeyEventTypes event_type = KEYDOWNANDUP; // Set default.
+				char old_char;
+				char *space_pos = StrChrAny(aKeys + 1, " \t");  // Relies on the fact that {} key names contain no spaces.
+				if (space_pos)
+				{
+					old_char = *space_pos;
+					*space_pos = '\0';  // Temporarily terminate here so that TextToVK() can properly resolve a single char.
+					key_name_length = space_pos - aKeys - 1; // Override the default value set above.
+					char *next_word = omit_leading_whitespace(space_pos + 1);
+					UINT next_word_length = (UINT)(end_pos - next_word);
+					if (next_word_length > 0)
+					{
+						if (!stricmp(next_word, "down"))
+							event_type = KEYDOWN;
+						else if (!stricmp(next_word, "up"))
+							event_type = KEYUP;
+						else
+						{
+							repeat_count = ATOI(next_word);
+							if (repeat_count < 0) // But seems best to allow zero itself, for possibly use with environment vars
+								repeat_count = 0;
+						}
 					}
 				}
-			}
 
-			vk = TextToVK(aKeys + 1, &modifiers_for_next_key, true);
-			sc = vk ? 0 : TextToSC(aKeys + 1);  // If sc is 0, it will be resolved by KeyEvent() later.
-			if (!vk && !sc && toupper(*(aKeys + 1)) == 'V' && toupper(*(aKeys + 2)) == 'K')
-			{
-				char *sc_string = StrChrAny(aKeys + 3, "Ss"); // Look for the "SC" that demarks the scan code.
-				if (sc_string && toupper(*(sc_string + 1)) == 'C')
-					sc = strtol(sc_string + 2, NULL, 16);  // Convert from hex.
-				// else leave sc set to zero and just get the specified VK.  This supports Send {VKnn}.
-				vk = (vk_type)strtol(aKeys + 3, NULL, 16);  // Convert from hex.
-			}
-
-			if (space_pos)  // undo the temporary termination
-				*space_pos = old_char;
-			*end_pos = '}';  // undo the temporary termination
-
-			if (vk || sc)
-			{
-				if (repeat_count)
+				vk = TextToVK(aKeys + 1, &modifiers_for_next_key, true);
+				sc = vk ? 0 : TextToSC(aKeys + 1);  // If sc is 0, it will be resolved by KeyEvent() later.
+				if (!vk && !sc && toupper(*(aKeys + 1)) == 'V' && toupper(*(aKeys + 2)) == 'K')
 				{
-					if (key_as_modifiersLR = KeyToModifiersLR(vk, sc)) // Assign
+					char *sc_string = StrChrAny(aKeys + 3, "Ss"); // Look for the "SC" that demarks the scan code.
+					if (sc_string && toupper(*(sc_string + 1)) == 'C')
+						sc = strtol(sc_string + 2, NULL, 16);  // Convert from hex.
+					// else leave sc set to zero and just get the specified VK.  This supports Send {VKnn}.
+					vk = (vk_type)strtol(aKeys + 3, NULL, 16);  // Convert from hex.
+				}
+
+				if (space_pos)  // undo the temporary termination
+					*space_pos = old_char;
+				*end_pos = '}';  // undo the temporary termination
+
+				if (vk || sc)
+				{
+					if (repeat_count)
 					{
-						if (event_type == KEYDOWN) // i.e. make {Shift down} have the same effect {ShiftDown}
-							modifiers_persistent = ConvertModifiersLR(g_modifiersLR_persistent |= key_as_modifiersLR);
-						else if (event_type == KEYUP)
-							modifiers_persistent = ConvertModifiersLR(g_modifiersLR_persistent &= ~key_as_modifiersLR);
-						// else must never change modifiers_persistent in response to KEYDOWNANDUP
-						// because that would break existing scripts.  This is because that same
-						// modifier key may have been pushed down via {ShiftDown} rather than "{Shift Down}".
-						// In other words, {Shift} should never undo the effects of a prior {ShiftDown}
-						// or {Shift down}.
+						if (key_as_modifiersLR = KeyToModifiersLR(vk, sc)) // Assign
+						{
+							if (event_type == KEYDOWN) // i.e. make {Shift down} have the same effect {ShiftDown}
+								modifiers_persistent = ConvertModifiersLR(g_modifiersLR_persistent |= key_as_modifiersLR);
+							else if (event_type == KEYUP)
+								modifiers_persistent = ConvertModifiersLR(g_modifiersLR_persistent &= ~key_as_modifiersLR);
+							// else must never change modifiers_persistent in response to KEYDOWNANDUP
+							// because that would break existing scripts.  This is because that same
+							// modifier key may have been pushed down via {ShiftDown} rather than "{Shift Down}".
+							// In other words, {Shift} should never undo the effects of a prior {ShiftDown}
+							// or {Shift down}.
+						}
+						// Below: modifiers_persistent stays in effect (pressed down) even if the key
+						// being sent includes that same modifier.  Surprisingly, this is how AutoIt2
+						// behaves also, which is good.  Example: Send, {AltDown}!f  ; this will cause
+						// Alt to still be down after the command is over, even though F is modified
+						// by Alt.
+						SendKey(vk, sc, modifiers_for_next_key, g_modifiersLR_persistent, repeat_count
+							, event_type, key_as_modifiersLR, aTargetWindow);
 					}
-					// Below: modifiers_persistent stays in effect (pressed down) even if the key
-					// being sent includes that same modifier.  Surprisingly, this is how AutoIt2
-					// behaves also, which is good.  Example: Send, {AltDown}!f  ; this will cause
-					// Alt to still be down after the command is over, even though F is modified
-					// by Alt.
-					SendKey(vk, sc, modifiers_for_next_key, g_modifiersLR_persistent, repeat_count
-						, event_type, key_as_modifiersLR, aTargetWindow);
+					modifiers_for_next_key = 0;  // reset after each, and even if no valid vk was found (should be just like AutoIt).
+					aKeys = end_pos;  // In prep for aKeys++ at the bottom of the loop.
+					break;
 				}
-				modifiers_for_next_key = 0;  // reset after each, and even if no valid vk was found (should be just like AutoIt).
-				aKeys = end_pos;  // In prep for aKeys++ at the bottom of the loop.
-				break;
-			}
 
-			// If no vk was found and the key name is of length 1, the only chance is to try sending it
-			// as a special character:
-			if (key_name_length == 1)
-			{
-				if (repeat_count)
-					SendKeySpecial(aKeys[1], modifiers_for_next_key, g_modifiersLR_persistent, repeat_count
-						, event_type, aTargetWindow);
-				modifiers_for_next_key = 0;  // reset after each, and even if no valid vk was found (should be just like AutoIt).
-				aKeys = end_pos;  // In prep for aKeys++ at the bottom of the loop.
-				break;
-			}
+				// If no vk was found and the key name is of length 1, the only chance is to try sending it
+				// as a special character:
+				if (key_name_length == 1)
+				{
+					if (repeat_count)
+						SendKeySpecial(aKeys[1], modifiers_for_next_key, g_modifiersLR_persistent, repeat_count
+							, event_type, aTargetWindow);
+					modifiers_for_next_key = 0;  // reset after each, and even if no valid vk was found (should be just like AutoIt).
+					aKeys = end_pos;  // In prep for aKeys++ at the bottom of the loop.
+					break;
+				}
 
-			// Otherwise, since no vk was found, check it against list of special keys:
-			int special_key = TextToSpecial(aKeys + 1, (UINT)key_text_length, g_modifiersLR_persistent, modifiers_persistent);
-			if (special_key)
-				for (UINT i = 0; i < repeat_count; ++i)
+				// Otherwise, since no vk was found, check it against list of special keys:
+				int special_key = TextToSpecial(aKeys + 1, (UINT)key_text_length, g_modifiersLR_persistent, modifiers_persistent);
+				if (special_key)
+					for (UINT i = 0; i < repeat_count; ++i)
+					{
+						// Don't tell it to save & restore modifiers because special keys like this one
+						// should have maximum flexibility (i.e. nothing extra should be done so that the
+						// user can have more control):
+						KeyEvent(special_key > 0 ? KEYDOWN : KEYUP, abs(special_key), 0, aTargetWindow, true);
+						LONG_OPERATION_UPDATE_FOR_SENDKEYS
+					}
+				else // Check if it's "{ASC nnnn}"
 				{
-					// Don't tell it to save & restore modifiers because special keys like this one
-					// should have maximum flexibility (i.e. nothing extra should be done so that the
-					// user can have more control):
-					KeyEvent(special_key > 0 ? KEYDOWN : KEYUP, abs(special_key), 0, aTargetWindow, true);
-					LONG_OPERATION_UPDATE_FOR_SENDKEYS
+					// Include the trailing space in "ASC " to increase uniqueness (selectivity).
+					// Also, sending the ASC sequence to window doesn't work, so don't even try:
+					if (key_text_length > 4 && !strnicmp(aKeys + 1, "ASC ", 4) && !aTargetWindow)
+					{
+						SendASC(omit_leading_whitespace(aKeys + 4), aTargetWindow); // aTargetWindow is always NULL, it's just for maintainability.
+						// Do this only once at the end of the sequence:
+						DoKeyDelay();
+					}
 				}
-			else // Check if it's "{ASC nnnn}"
-			{
-				// Include the trailing space in "ASC " to increase uniqueness (selectivity).
-				// Also, sending the ASC sequence to window doesn't work, so don't even try:
-				if (key_text_length > 4 && !strnicmp(aKeys + 1, "ASC ", 4) && !aTargetWindow)
-				{
-					SendASC(omit_leading_whitespace(aKeys + 4), aTargetWindow); // aTargetWindow is always NULL, it's just for maintainability.
-					// Do this only once at the end of the sequence:
-					DoKeyDelay();
-				}
-			}
-			// If what's between {} is unrecognized, such as {Bogus}, it's safest not to send
-			// the contents literally since that's almost certainly not what the user intended.
-			// In addition, reset the modifiers, since they were intended to apply only to
-			// the key inside {}:
-			modifiers_for_next_key = 0;
-			aKeys = end_pos;  // In prep for aKeys++ done by the loop.
-			break;
-		}
-		default:
+				// If what's between {} is unrecognized, such as {Bogus}, it's safest not to send
+				// the contents literally since that's almost certainly not what the user intended.
+				// In addition, reset the modifiers, since they were intended to apply only to
+				// the key inside {}:
+				modifiers_for_next_key = 0;
+				aKeys = end_pos;  // In prep for aKeys++ done by the loop.
+				break;
+			} // case '{'
+			} // switch()
+		} // if (!aSendRaw && strchr("^+!#{}", *aKeys))
+		else
+		{
 			// Best to call this separately, rather than as first arg in SendKey, since it changes the
 			// value of modifiers and the updated value is *not* guaranteed to be passed.
 			// In other words, SendKey(TextToVK(...), modifiers, ...) would often send the old
@@ -330,8 +335,7 @@ void SendKeys(char *aKeys, HWND aTargetWindow)
 			else // Try to send it by alternate means.
 				SendKeySpecial(*aKeys, modifiers_for_next_key, g_modifiersLR_persistent, 1, KEYDOWNANDUP, aTargetWindow);
 			modifiers_for_next_key = 0;  // Safest to reset this regardless of whether a key was sent.
-			// break;  Not needed in "default".
-		} // switch()
+		}
 	} // for()
 
 	// Don't press back down the modifiers that were used to trigger this hotkey if there's
@@ -756,7 +760,12 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 // virtual key, which is fine since it's the scan code that matters to apps that can
 // differentiate between keys with the same vk.
 
-// Later, switch to using SendInput() on OS's that support it.
+// Later, switch to using SendInput() on OS's that support it.  But this is non-trivial due to
+// the following observation when it was attempted:
+// The problem with SendInput is that there are many assumptions in SendKeys() and all the functions
+// it calls about things already being in effect as the Send sends its keystrokes.  But when the
+// sendinput method is used, these events haven't yet occurred so the logic is not correct,
+// and it would probably be very complex to fix it.
 {
 	if (!aVK && !aSC) return FAIL;
 
@@ -1128,7 +1137,7 @@ FileAppend("c:\\templog.txt", buf);
 
 
 
-void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLRnow, KeyEventTypes aKeyUp
+void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLRnow, KeyEventTypes aEventType
 	, DWORD aExtraInfo)
 // Press or release only the specific keys whose bits are set to 1
 // in aModifiersLR.
@@ -1148,20 +1157,39 @@ void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLR
 // systems, GetAsyncKeyState() reports the key is up after
 // any keybd_event() put them up, even if the key is physically down!
 {
-	if (aKeyUp && aKeyUp != KEYUP) aKeyUp = KEYUP;  // In case caller called it wrong.
-	if (aModifiersLR & MOD_LSHIFT) KeyEvent(aKeyUp, VK_LSHIFT, 0, NULL, false, aExtraInfo);
-	if (aModifiersLR & MOD_RSHIFT) KeyEvent(aKeyUp, VK_RSHIFT, 0, NULL, false, aExtraInfo);
-	if (aModifiersLR & MOD_LCONTROL) KeyEvent(aKeyUp, VK_LCONTROL, 0, NULL, false, aExtraInfo);
-	if (aModifiersLR & MOD_RCONTROL) KeyEvent(aKeyUp, VK_RCONTROL, 0, NULL, false, aExtraInfo);
-	if (aModifiersLR & MOD_LALT) KeyEvent(aKeyUp, VK_LMENU, 0, NULL, false, aExtraInfo);
-	if (aModifiersLR & MOD_RALT) KeyEvent(aKeyUp, VK_RMENU, 0, NULL, false, aExtraInfo);
+	if (aEventType && aEventType != KEYUP) aEventType = KEYUP;  // In case caller called it wrong.
+
+	if (aModifiersLR & MOD_LSHIFT)
+	{
+		KeyEvent(aEventType, VK_LSHIFT, 0, NULL, false, aExtraInfo);
+		// Update for use with shift_not_down_now (below):
+		if (aEventType == KEYDOWN)
+			aModifiersLRnow |= MOD_LSHIFT;
+		else // KEYUP (and even KEYDOWNANDUP, but it should never be called that way).
+			aModifiersLRnow &= ~MOD_LSHIFT;
+	}
+	if (aModifiersLR & MOD_RSHIFT)
+	{
+		KeyEvent(aEventType, VK_RSHIFT, 0, NULL, false, aExtraInfo);
+		// Same comments as above:
+		if (aEventType == KEYDOWN)
+			aModifiersLRnow |= MOD_RSHIFT;
+		else
+			aModifiersLRnow &= ~MOD_RSHIFT;
+	}
+
+	if (aModifiersLR & MOD_LCONTROL) KeyEvent(aEventType, VK_LCONTROL, 0, NULL, false, aExtraInfo);
+	if (aModifiersLR & MOD_RCONTROL) KeyEvent(aEventType, VK_RCONTROL, 0, NULL, false, aExtraInfo);
+	if (aModifiersLR & MOD_LALT) KeyEvent(aEventType, VK_LMENU, 0, NULL, false, aExtraInfo);
+	if (aModifiersLR & MOD_RALT) KeyEvent(aEventType, VK_RMENU, 0, NULL, false, aExtraInfo);
 
 	bool shift_not_down_now = !((aModifiersLRnow & MOD_LSHIFT) || (aModifiersLRnow & MOD_RSHIFT));
+
 	if (aModifiersLR & MOD_LWIN)
 	{
 		if (shift_not_down_now)  // Prevents Start Menu from appearing.
 			KeyEvent(KEYDOWN, VK_SHIFT, 0, NULL, false, aExtraInfo);
-		KeyEvent(aKeyUp, VK_LWIN, 0, NULL, false, aExtraInfo);
+		KeyEvent(aEventType, VK_LWIN, 0, NULL, false, aExtraInfo);
 		if (shift_not_down_now)
 			KeyEvent(KEYUP, VK_SHIFT, 0, NULL, false, aExtraInfo);
 	}
@@ -1169,7 +1197,7 @@ void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLR
 	{
 		if (shift_not_down_now)  // Prevents Start Menu from appearing.
 			KeyEvent(KEYDOWN, VK_SHIFT, 0, NULL, false, aExtraInfo);
-		KeyEvent(aKeyUp, VK_RWIN, 0, NULL, false, aExtraInfo);
+		KeyEvent(aEventType, VK_RWIN, 0, NULL, false, aExtraInfo);
 		if (shift_not_down_now)
 			KeyEvent(KEYUP, VK_SHIFT, 0, NULL, false, aExtraInfo);
 	}
@@ -1322,7 +1350,7 @@ mod_type ConvertModifiersLR(modLR_type aModifiersLR)
 
 char *ModifiersLRToText(modLR_type aModifiersLR, char *aBuf)
 {
-	if (!aBuf) return 0;
+	if (!aBuf) return NULL;
 	*aBuf = '\0';
 	if (aModifiersLR & MOD_LWIN) strcat(aBuf, "LWin ");
 	if (aModifiersLR & MOD_RWIN) strcat(aBuf, "RWin ");

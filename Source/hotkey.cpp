@@ -35,260 +35,238 @@ DWORD Hotkey::sJoyHotkeyCount = 0;
 
 
 
-void Hotkey::AllActivate(bool aOverrideLock)
-// Returns the total number of hotkeys, both registered and handled by the hooks.
+void Hotkey::AllActivate()
 // This function can also be called to install the keyboard hook if the state
 // of g_ForceNumLock and such have changed, even if the hotkeys are already
 // active.
 {
-	int i;
-	if (sHotkeysAreLocked && !aOverrideLock)
+	// Do this part only if it hasn't been done before (as indicated by sHotkeysAreLocked)
+	// because it's not reviewed/designed to be run more than once.  UPDATE (for dynamic
+	// hotkeys): I think the gist of the likely problems with running this part more than
+	// once is that some hotkeys were already promoted (the first time this ran) to be hook
+	// hotkeys based on their interdependencies with other hotkeys.  If those
+	// interdependencies change due to dynamic changes to the set of hotkeys, some hotkeys
+	// might stay promoted when they should in fact be demoted back to being registered,
+	// which will result in the hook being installed to implement those keys when it
+	// technically doesn't need to be.  However, this is likely extremely rare, and fairly
+	// inconsequential even when it does happen.  This could perhaps be resolved by
+	// storing the original mType with each hotkey so that those types can be restored
+	// by the caller, if desired, before calling us.
+	bool is_neutral, suppress_hotkey_warnings = false;
+	modLR_type modifiersLR;
+	for (int i = 0; i < sHotkeyCount; ++i)
 	{
-		// Register any keys that were previously unregistered:
-		for (i = 0; i < sHotkeyCount; ++i)
-			// Even if this call fails, do nothing.  This is because the first call
-			// to AllActivate() would have set the type to be HK_KEYBD_HOOK if that
-			// first attempt to register it failed.  We don't want to change that
-			// determination, even if justified, because the design hasn't yet been
-			// reviewed to handle that complexity.  I think the only reason it would
-			// fail now when it hadn't before is that another script has since been
-			// run or unsuspended which took over this same hotkey, preventing this
-			// instance from using it:
-			if (shk[i]->mType == HK_NORMAL)
-				shk[i]->Register();
-	}
-	else
-	{
-		// Do this part only if it hasn't been done before (as indicated by sHotkeysAreLocked)
-		// because it's not reviewed/designed to be run more than once.  UPDATE (for dynamic
-		// hotkeys): I think the gist of the likely problems with running this part more than
-		// once is that some hotkeys were already promoted (the first time this ran) to be hook
-		// hotkeys based on their interdependencies with other hotkeys.  If those
-		// interdependencies change due to dynamic changes to the set of hotkeys, some hotkeys
-		// might stay promoted when they should in fact be demoted back to being registered,
-		// which will result in the hook being installed to implement those keys when it
-		// technically doesn't need to be.  However, this is likely extremely rare, and fairly
-		// inconsequential even when it does happen.  This could perhaps be resolved by
-		// storing the original mType with each hotkey so that those types can be restored
-		// by the caller, if desired, before calling us.
-		bool is_neutral, suppress_hotkey_warnings = false;
-		modLR_type modifiersLR;
-		for (i = 0; i < sHotkeyCount; ++i)
+		// For simplicity, don't try to undo keys that are already considered to be
+		// handled by the hook, since it's not easy to know if they were set that
+		// way using "#UseHook, on" or really qualified some other way.
+		// Instead, just remove any modifiers that are obviously redundant from all
+		// keys (do them all due to cases where RegisterHotkey() fails and the key
+		// is then auto-enabled via the hook).  No attempt is currently made to
+		// correct a silly hotkey such as "lwin & lwin".  In addition, weird hotkeys
+		// such as <^Control and ^LControl are not currently validated and might
+		// yield unpredictable results:
+		if (modifiersLR = KeyToModifiersLR(shk[i]->mVK, shk[i]->mSC, &is_neutral))
+			// This hotkey's action-key is itself a modifier, so ensure that it's not defined
+			// to modify itself.  Other sections might rely on us doing this:
+			if (is_neutral)
+				// Since the action-key is a neutral modifier (not left or right specific),
+				// turn off any neutral modifiers that may be on:
+				shk[i]->mModifiers &= ~ConvertModifiersLR(modifiersLR);
+			else
+				shk[i]->mModifiersLR &= ~modifiersLR;
+		// HK_MOUSE_HOOK type, and most HK_KEYBD types, are handled by the hotkey constructor.
+		// What we do here is change the type of any normal or undetermined key if there are other
+		// keys that overlap with it (i.e. because only now are all these keys available for checking).
+		if (shk[i]->mType == HK_UNDETERMINED || shk[i]->mType == HK_NORMAL)
 		{
-			// For simplicity, don't try to undo keys that are already considered to be
-			// handled by the hook, since it's not easy to know if they were set that
-			// way using "#UseHook, on" or really qualified some other way.
-			// Instead, just remove any modifiers that are obviously redundant from all
-			// keys (do them all due to cases where RegisterHotkey() fails and the key
-			// is then auto-enabled via the hook).  No attempt is currently made to
-			// correct a silly hotkey such as "lwin & lwin".  In addition, weird hotkeys
-			// such as <^Control and ^LControl are not currently validated and might
-			// yield unpredictable results:
-			if (modifiersLR = KeyToModifiersLR(shk[i]->mVK, shk[i]->mSC, &is_neutral))
-				// This hotkey's action-key is itself a modifier, so ensure that it's not defined
-				// to modify itself.  Other sections might rely on us doing this:
-				if (is_neutral)
-					// Since the action-key is a neutral modifier (not left or right specific),
-					// turn off any neutral modifiers that may be on:
-					shk[i]->mModifiers &= ~ConvertModifiersLR(modifiersLR);
-				else
-					shk[i]->mModifiersLR &= ~modifiersLR;
-			// HK_MOUSE_HOOK type, and most HK_KEYBD types, are handled by the hotkey constructor.
-			// What we do here is change the type of any normal or undetermined key if there are other
-			// keys that overlap with it (i.e. because only now are all these keys available for checking).
-			if (shk[i]->mType == HK_UNDETERMINED || shk[i]->mType == HK_NORMAL)
+			// The idea here is to avoid the use of the keyboard hook if at all possible (since
+			// it may reduce system performance slightly).  With that in mind, rather than just
+			// forcing NumpadEnter and Enter to be entirely separate keys, both handled by the
+			// hook, we allow mod+Enter to take over both keys if their is no mod+NumPadEnter key
+			// configured with identical modifiers.  UPDATE: I don't think I like this method because
+			// it will produce undocumented behavior in some cases (e.g. if user has ^NumpadEnter as
+			// a hotkey, ^Enter will also trigger the hotkey, which is not what would be expected).
+			// Therefore, I'm changing it now to have all dual-state keys handled by the hook so that
+			// the counterpart key will never trigger an unexpected firing:
+			if (g_vk_to_sc[shk[i]->mVK].b)
 			{
-				// The idea here is to avoid the use of the keyboard hook if at all possible (since
-				// it may reduce system performance slightly).  With that in mind, rather than just
-				// forcing NumpadEnter and Enter to be entirely separate keys, both handled by the
-				// hook, we allow mod+Enter to take over both keys if their is no mod+NumPadEnter key
-				// configured with identical modifiers.  UPDATE: I don't think I like this method because
-				// it will produce undocumented behavior in some cases (e.g. if user has ^NumpadEnter as
-				// a hotkey, ^Enter will also trigger the hotkey, which is not what would be expected).
-				// Therefore, I'm changing it now to have all dual-state keys handled by the hook so that
-				// the counterpart key will never trigger an unexpected firing:
-				if (g_vk_to_sc[shk[i]->mVK].b)
+				if (!g_os.IsWin9x())
+					shk[i]->mType = HK_KEYBD_HOOK;
+				else
 				{
-					if (!g_os.IsWin9x())
-						shk[i]->mType = HK_KEYBD_HOOK;
-					else
-					{
-						// Since the hook is not yet supported on these OSes, try not to use it.
-						// If the hook must be used, we'll mark it as needing the hook so that
-						// other reporting (e.g. ListHotkeys) can easily tell which keys won't work
-						// on Win9x.  The first condition: e.g. a naked NumpadEnd or NumpadEnter shouldn't
-						// be allowed to be Registered() because it would cause the hotkey to also fire on
-						// END or ENTER (the non-Numpad versions of these keys).  UPDATE: But it seems
-						// best to allow this on Win9x because it's more flexible to do so (i.e. some
-						// people might have a use for it):
-						//if (!shk[i]->mModifiers)
-						//	shk[i]->mType = HK_KEYBD_HOOK;
-						shk[i]->mType = HK_NORMAL;
-						// Second condition (now disabled): Since both keys (e.g. NumpadEnd and End) are
-						// configured as hotkeys with the same modifiers, only one of them can be registered.
-						// It's probably best to allow one of them to be registered, arbitrarily, so that some
-						// functionality is offered.  That's why this is disabled:
-						// This hotkey's vk has a counterpart key with the same vk.  Check if either of those
-						// two keys exists as a "scan code" hotkey.  If so, This hotkey must be handled
-						// by the hook to prevent it from firing for both scan codes.  modifiersLR should be
-						// zero here because otherwise type would have already been set to HK_KEYBD_HOOK:
-						//if (FindHotkeyBySC(g_vk_to_sc[shk[i]->mVK], shk[i]->mModifiers, shk[i]->mModifiersLR) != HOTKEY_ID_INVALID))
-						//	shk[i]->mType = HK_KEYBD_HOOK;
-					}
+					// Since the hook is not yet supported on these OSes, try not to use it.
+					// If the hook must be used, we'll mark it as needing the hook so that
+					// other reporting (e.g. ListHotkeys) can easily tell which keys won't work
+					// on Win9x.  The first condition: e.g. a naked NumpadEnd or NumpadEnter shouldn't
+					// be allowed to be Registered() because it would cause the hotkey to also fire on
+					// END or ENTER (the non-Numpad versions of these keys).  UPDATE: But it seems
+					// best to allow this on Win9x because it's more flexible to do so (i.e. some
+					// people might have a use for it):
+					//if (!shk[i]->mModifiers)
+					//	shk[i]->mType = HK_KEYBD_HOOK;
+					shk[i]->mType = HK_NORMAL;
+					// Second condition (now disabled): Since both keys (e.g. NumpadEnd and End) are
+					// configured as hotkeys with the same modifiers, only one of them can be registered.
+					// It's probably best to allow one of them to be registered, arbitrarily, so that some
+					// functionality is offered.  That's why this is disabled:
+					// This hotkey's vk has a counterpart key with the same vk.  Check if either of those
+					// two keys exists as a "scan code" hotkey.  If so, This hotkey must be handled
+					// by the hook to prevent it from firing for both scan codes.  modifiersLR should be
+					// zero here because otherwise type would have already been set to HK_KEYBD_HOOK:
+					//if (FindHotkeyBySC(g_vk_to_sc[shk[i]->mVK], shk[i]->mModifiers, shk[i]->mModifiersLR) != HOTKEY_ID_INVALID))
+					//	shk[i]->mType = HK_KEYBD_HOOK;
 				}
+			}
 
-				// Fall back to default checks if more specific ones above didn't set it to use the hook:
-				if (shk[i]->mType != HK_KEYBD_HOOK)
+			// Fall back to default checks if more specific ones above didn't set it to use the hook:
+			if (shk[i]->mType != HK_KEYBD_HOOK)
+			{
+				// Keys modified by CTRL/SHIFT/ALT/WIN can always be registered normally because these
+				// modifiers are never used (are overridden) when that key is used as a ModifierVK
+				// for another key.  Example: if key1 is a ModifierVK for another key, ^key1
+				// (or any other modified versions of key1) can be registered as a hotkey because
+				// that doesn't affect the hook's ability to use key1 as a prefix:
+				if (shk[i]->mModifiers)
+					shk[i]->mType = HK_NORMAL;
+				else
 				{
-					// Keys modified by CTRL/SHIFT/ALT/WIN can always be registered normally because these
-					// modifiers are never used (are overridden) when that key is used as a ModifierVK
-					// for another key.  Example: if key1 is a ModifierVK for another key, ^key1
-					// (or any other modified versions of key1) can be registered as a hotkey because
-					// that doesn't affect the hook's ability to use key1 as a prefix:
-					if (shk[i]->mModifiers)
-						shk[i]->mType = HK_NORMAL;
+					if ((shk[i]->mVK == VK_LWIN || shk[i]->mVK == VK_RWIN))  // "!shk[i]->mModifiers" already true
+						// To prevent the start menu from appearing for a naked LWIN or RWIN, must
+						// handle this key with the hook (the presence of a normal modifier makes
+						// this unnecessary, at least under WinXP, because the start menu is
+						// never invoked when a modifier key is held down with lwin/rwin).
+						// But make it NORMAL on Win9x since the hook isn't yet supported.
+						// At least that way there's a chance some people might find it useful,
+						// perhaps by doing their own workaround for the start menu appearing:
+						shk[i]->mType = g_os.IsWin9x() ? HK_NORMAL : HK_KEYBD_HOOK;
 					else
 					{
-						if ((shk[i]->mVK == VK_LWIN || shk[i]->mVK == VK_RWIN))  // "!shk[i]->mModifiers" already true
-							// To prevent the start menu from appearing for a naked LWIN or RWIN, must
-							// handle this key with the hook (the presence of a normal modifier makes
-							// this unnecessary, at least under WinXP, because the start menu is
-							// never invoked when a modifier key is held down with lwin/rwin).
-							// But make it NORMAL on Win9x since the hook isn't yet supported.
-							// At least that way there's a chance some people might find it useful,
-							// perhaps by doing their own workaround for the start menu appearing:
+						// If this hotkey is an unmodified modifier (e.g. control = calc.exe) and
+						// there are any other hotkeys that rely specifically on this modifier,
+						// have the hook handle this hotkey so that it will only fire on key-up
+						// rather than key-down.  Note: cases where this key's modifiersLR or
+						// ModifierVK/SC are non-zero -- as well as hotkeys that use sc vs. vk
+						// -- have already been set to use the keybd hook, so don't need to be
+						// handled here.  UPDATE: All the following cases have been already set
+						// to be HK_KEYBD_HOOK:
+						// - left/right ctrl/alt/shift (since RegisterHotkey() doesn't support them).
+						// - Any key with a ModifierVK/SC
+						// - The naked lwin or rwin key (due to the check above)
+						// Therefore, the only case left to be detected by this next line is the
+						// one in which the user configures the naked neutral key VK_SHIFT,
+						// VK_MENU, or VK_CONTROL.  As a safety precaution, always handle those
+						// neutral keys with the hook so that their action will only fire
+						// when the key is released (thus allowing each key to be used for its
+						// normal modifying function):
+						if (shk[i]->mVK == VK_SHIFT || shk[i]->mVK == VK_MENU || shk[i]->mVK == VK_CONTROL)
+							// In addition, the following are already known to be true or we wouldn't
+							// have gotten this far:
+							// !shk[i]->mModifiers && !shk[i]->mModifiersLR
+							// !shk[i]->mModifierVK && !shk[i]->mModifierSC
+							// If it's Win9x, take a stab at making it a normal registered hotkey
+							// in case it's of some use to someone to allow that:
 							shk[i]->mType = g_os.IsWin9x() ? HK_NORMAL : HK_KEYBD_HOOK;
 						else
-						{
-							// If this hotkey is an unmodified modifier (e.g. control = calc.exe) and
-							// there are any other hotkeys that rely specifically on this modifier,
-							// have the hook handle this hotkey so that it will only fire on key-up
-							// rather than key-down.  Note: cases where this key's modifiersLR or
-							// ModifierVK/SC are non-zero -- as well as hotkeys that use sc vs. vk
-							// -- have already been set to use the keybd hook, so don't need to be
-							// handled here.  UPDATE: All the following cases have been already set
-							// to be HK_KEYBD_HOOK:
-							// - left/right ctrl/alt/shift (since RegisterHotkey() doesn't support them).
-							// - Any key with a ModifierVK/SC
-							// - The naked lwin or rwin key (due to the check above)
-							// Therefore, the only case left to be detected by this next line is the
-							// one in which the user configures the naked neutral key VK_SHIFT,
-							// VK_MENU, or VK_CONTROL.  As a safety precaution, always handle those
-							// neutral keys with the hook so that their action will only fire
-							// when the key is released (thus allowing each key to be used for its
-							// normal modifying function):
-							if (shk[i]->mVK == VK_SHIFT || shk[i]->mVK == VK_MENU || shk[i]->mVK == VK_CONTROL)
-								// In addition, the following are already known to be true or we wouldn't
-								// have gotten this far:
-								// !shk[i]->mModifiers && !shk[i]->mModifiersLR
-								// !shk[i]->mModifierVK && !shk[i]->mModifierSC
-								// If it's Win9x, take a stab at making it a normal registered hotkey
-								// in case it's of some use to someone to allow that:
-								shk[i]->mType = g_os.IsWin9x() ? HK_NORMAL : HK_KEYBD_HOOK;
-							else
-								// Check if this key is used as the modifier (prefix) for any other key.  If it is,
-								// the keyboard hook must handle this key also because otherwise the key-down event
-								// would trigger the registered hotkey immediately, rather than waiting to see if
-								// this key is be held down merely to modify some other key.
-								shk[i]->mType = !g_os.IsWin9x() && FindHotkeyWithThisModifier(shk[i]->mVK, shk[i]->mSC)
-									!= HOTKEY_ID_INVALID ? HK_KEYBD_HOOK : HK_NORMAL;
-						}
+							// Check if this key is used as the modifier (prefix) for any other key.  If it is,
+							// the keyboard hook must handle this key also because otherwise the key-down event
+							// would trigger the registered hotkey immediately, rather than waiting to see if
+							// this key is be held down merely to modify some other key.
+							shk[i]->mType = !g_os.IsWin9x() && FindHotkeyWithThisModifier(shk[i]->mVK, shk[i]->mSC)
+								!= HOTKEY_ID_INVALID ? HK_KEYBD_HOOK : HK_NORMAL;
 					}
-					if (shk[i]->mVK == VK_APPS)
-						// Override anything set above:
-						// For now, always use the hook to handle hotkeys that use Appskey as a suffix.
-						// This is because registering such keys with RegisterHotkey() will fail to suppress
-						// (hide) the key-up events from the system, and the key-up for Apps key, at least in
-						// apps like Explorer, is a special event that results in the context menu appearing
-						// (though most other apps seem to use the key-down event rather than the key-up,
-						// so they would probably work okay).  Note: Of possible future use is the fact that
-						// if the Alt key is held down before pressing Appskey, it's native function does
-						// not occur.  This may be similar to the fact that LWIN and RWIN don't cause the
-						// start menu to appear if a shift key is held down.  For Win9x, take a stab at
-						// registering it in case its limited capability is useful to someone:
-						shk[i]->mType = g_os.IsWin9x() ? HK_NORMAL : HK_KEYBD_HOOK;
 				}
+				if (shk[i]->mVK == VK_APPS)
+					// Override anything set above:
+					// For now, always use the hook to handle hotkeys that use Appskey as a suffix.
+					// This is because registering such keys with RegisterHotkey() will fail to suppress
+					// (hide) the key-up events from the system, and the key-up for Apps key, at least in
+					// apps like Explorer, is a special event that results in the context menu appearing
+					// (though most other apps seem to use the key-down event rather than the key-up,
+					// so they would probably work okay).  Note: Of possible future use is the fact that
+					// if the Alt key is held down before pressing Appskey, it's native function does
+					// not occur.  This may be similar to the fact that LWIN and RWIN don't cause the
+					// start menu to appear if a shift key is held down.  For Win9x, take a stab at
+					// registering it in case its limited capability is useful to someone:
+					shk[i]->mType = g_os.IsWin9x() ? HK_NORMAL : HK_KEYBD_HOOK;
 			}
+		}
 
-			char buf[1024];
-			if (shk[i]->mType == HK_NORMAL && (!g_IsSuspended || shk[i]->IsExemptFromSuspend()) && !shk[i]->Register())
+		char buf[1024];
+		if (shk[i]->mType == HK_NORMAL && (!g_IsSuspended || shk[i]->IsExemptFromSuspend()) && !shk[i]->Register())
+		{
+			if (g_os.IsWin9x())
 			{
-				if (g_os.IsWin9x())
-				{
-					// The case where g_script.mIsReadyToExecute == true is handled by Dynamic().
-					if (!g_script.mIsReadyToExecute && !suppress_hotkey_warnings)
-					{
-						snprintf(buf, sizeof(buf), "Hotkey \"%s\" could not be enabled, perhaps "
-							"because another script or application is already using it.  It could "
-							"also be that this hotkey is not supported on Windows 95/98/ME."
-							"\n\nContinue to display this type of warning?"
-							, shk[i]->mName);
-						int response = MsgBox(buf, 4);
-						if (response != IDYES)
-							suppress_hotkey_warnings = true;
-					}
-				} // Win9x warning.
-				else // Not Win9x, so use the hook to try to override anyone else who might have it registered.
-					shk[i]->mType = HK_KEYBD_HOOK;
-			}
-			if (TYPE_IS_HOOK(shk[i]->mType) && g_os.IsWin9x())
-			{
-				// Since it's flagged as a hook in spite of the fact that the OS is Win9x, it means
-				// that some previous logic determined that it's not even worth trying to register
-				// it because it's just plain not supported.
 				// The case where g_script.mIsReadyToExecute == true is handled by Dynamic().
 				if (!g_script.mIsReadyToExecute && !suppress_hotkey_warnings)
 				{
-					snprintf(buf, sizeof(buf), "Hotkey \"%s\" is not supported on Windows 95/98/ME."
-						"\n\nContinue to display this type of warning?", shk[i]->mName);
+					snprintf(buf, sizeof(buf), "Hotkey \"%s\" could not be enabled, perhaps "
+						"because another script or application is already using it.  It could "
+						"also be that this hotkey is not supported on Windows 95/98/ME."
+						"\n\nContinue to display this type of warning?"
+						, shk[i]->mName);
 					int response = MsgBox(buf, 4);
 					if (response != IDYES)
 						suppress_hotkey_warnings = true;
 				}
-			}
-			else
+			} // Win9x warning.
+			else // Not Win9x, so use the hook to try to override anyone else who might have it registered.
+				shk[i]->mType = HK_KEYBD_HOOK;
+		}
+		if (TYPE_IS_HOOK(shk[i]->mType) && g_os.IsWin9x())
+		{
+			// Since it's flagged as a hook in spite of the fact that the OS is Win9x, it means
+			// that some previous logic determined that it's not even worth trying to register
+			// it because it's just plain not supported.
+			// The case where g_script.mIsReadyToExecute == true is handled by Dynamic().
+			if (!g_script.mIsReadyToExecute && !suppress_hotkey_warnings)
 			{
-				if (shk[i]->mType == HK_KEYBD_HOOK)
-					sWhichHookNeeded |= HOOK_KEYBD;
-				if (shk[i]->mType == HK_MOUSE_HOOK)
-				{
-					sWhichHookNeeded |= HOOK_MOUSE;
-					// Check if this mouse hotkey also requires the keyboard hook (e.g. #LButton).
-					// Some mouse hotkeys, such as those with normal modifiers, don't require it
-					// since the mouse hook has logic to handle that situation.  But those that
-					// are composite hotkeys such as "RButton & Space" or "Space & RButton" need
-					// the keyboard hook:
-					if (   shk[i]->mModifierSC || shk[i]->mSC // i.e. since it's an SC, it can't be a mouse button.
-						|| (shk[i]->mVK && !VK_IS_MOUSE(shk[i]->mVK)) // e.g. "RButton & Space"
-						|| (shk[i]->mModifierVK && !VK_IS_MOUSE(shk[i]->mModifierVK))   ) // e.g. "Space & RButton"
-					{
-						shk[i]->mType = HK_BOTH_HOOKS;  // Needed by ChangeHookState().
-						sWhichHookNeeded |= HOOK_KEYBD;
-					}
-					// For the above, the following types of mouse hotkeys do not need the keyboard hook:
-					// 1) mAllowExtraModifiers: Already handled since the mouse hook fetches the modifier state
-					//    manually when the keyboard hook isn't installed.
-					// 2) mModifiersConsolidated (i.e. the mouse button is modified by a normal modifier
-					//    such as CTRL): Same reason as #1.
-					// 3) As a subset of #2, mouse hotkeys that use WIN as a modifier will not have the
-					//    Start Menu suppressed unless the keyboard hook is installed.  It's debatable,
-					//    but that seems a small price to pay (esp. given how rare it is just to have
-					//    the mouse hook with no keyboard hook) to avoid the overhead of the keyboard hook.
-				}
+				snprintf(buf, sizeof(buf), "Hotkey \"%s\" is not supported on Windows 95/98/ME."
+					"\n\nContinue to display this type of warning?", shk[i]->mName);
+				int response = MsgBox(buf, 4);
+				if (response != IDYES)
+					suppress_hotkey_warnings = true;
 			}
-		} // for()
-	} // if()
+		}
+		else
+		{
+			if (shk[i]->mType == HK_KEYBD_HOOK)
+				sWhichHookNeeded |= HOOK_KEYBD;
+			if (shk[i]->mType == HK_MOUSE_HOOK)
+			{
+				sWhichHookNeeded |= HOOK_MOUSE;
+				// Check if this mouse hotkey also requires the keyboard hook (e.g. #LButton).
+				// Some mouse hotkeys, such as those with normal modifiers, don't require it
+				// since the mouse hook has logic to handle that situation.  But those that
+				// are composite hotkeys such as "RButton & Space" or "Space & RButton" need
+				// the keyboard hook:
+				if (   shk[i]->mModifierSC || shk[i]->mSC // i.e. since it's an SC, it can't be a mouse button.
+					|| (shk[i]->mVK && !VK_IS_MOUSE(shk[i]->mVK)) // e.g. "RButton & Space"
+					|| (shk[i]->mModifierVK && !VK_IS_MOUSE(shk[i]->mModifierVK))   ) // e.g. "Space & RButton"
+				{
+					shk[i]->mType = HK_BOTH_HOOKS;  // Needed by ChangeHookState().
+					sWhichHookNeeded |= HOOK_KEYBD;
+				}
+				// For the above, the following types of mouse hotkeys do not need the keyboard hook:
+				// 1) mAllowExtraModifiers: Already handled since the mouse hook fetches the modifier state
+				//    manually when the keyboard hook isn't installed.
+				// 2) mModifiersConsolidated (i.e. the mouse button is modified by a normal modifier
+				//    such as CTRL): Same reason as #1.
+				// 3) As a subset of #2, mouse hotkeys that use WIN as a modifier will not have the
+				//    Start Menu suppressed unless the keyboard hook is installed.  It's debatable,
+				//    but that seems a small price to pay (esp. given how rare it is just to have
+				//    the mouse hook with no keyboard hook) to avoid the overhead of the keyboard hook.
+			}
+		}
+	} // for()
 
 	// But do this part outside of the above block because these values may have changed since
-	// this function was first called:
-	if (g_ForceNumLock != NEUTRAL || g_ForceCapsLock != NEUTRAL || g_ForceScrollLock != NEUTRAL)
-		if (g_os.IsWin9x())
-			MsgBox("Keeping the NumLock, CapsLock, or ScrollLock key AlwaysOn or AlwaysOff "
-				"is not supported on Windows 95/98/ME.  This line will be ignored.");
-		else
-			sWhichHookNeeded |= HOOK_KEYBD;
-	// else it's currently not designed to ever deinstall the hook, because we don't track separately
-	// whether the hook is also needed to implement hotkeys. i.e. this is a known limitation.
+	// this function was first called.  The Win9x warning message was removed so that scripts can be
+	// run on multiple OSes without a continual warning message just because it happens to be running
+	// on Win9x:
+	if (!(sWhichHookNeeded & HOOK_KEYBD) && !g_os.IsWin9x() // Check if these other things require the hook.
+		&& (!(g_ForceNumLock == NEUTRAL && g_ForceCapsLock == NEUTRAL && g_ForceScrollLock == NEUTRAL)
+			|| Hotstring::AtLeastOneEnabled()))
+		sWhichHookNeeded |= HOOK_KEYBD;
 
 	// Install or deinstall either or both hooks, if necessary, based on these param values.
 	// Also, tell it to always display warning if this is a reinstall of the hook(s).
@@ -337,7 +315,7 @@ ResultType Hotkey::AllDeactivate(bool aObeySuspend, bool aChangeHookStatus, bool
 			// and sometimes it seems to take a while to get it installed again) and also to avoid having
 			// a time gap in the hook's tracking of key states:
 			int i;
-			if (g_KeybdHook)
+			if (g_KeybdHook && !Hotstring::AtLeastOneEnabled())
 			{
 				for (i = 0; i < sHotkeyCount; ++i)
 					if (   shk[i]->mEnabled && (shk[i]->mType == HK_KEYBD_HOOK || shk[i]->mType == HK_BOTH_HOOKS)   )
@@ -364,11 +342,18 @@ ResultType Hotkey::AllDeactivate(bool aObeySuspend, bool aChangeHookStatus, bool
 	// This also resets the mRunAgainAfterFinished flag for each hotkey that is being deactivated
 	// here, including hook hotkeys:
 	for (int i = 0; i < sHotkeyCount; ++i)
+	{
+		// IIRC, !g_IsSuspended is used below in case this function is called from something
+		// like AllDestruct(), in which case the Unregister() should happen even if hotkeys
+		// aren't suspended:
 		if (!aObeySuspend || !g_IsSuspended || !shk[i]->IsExemptFromSuspend())
 		{
 			shk[i]->Unregister();
 			shk[i]->mRunAgainAfterFinished = false;  // ACT_SUSPEND, at least, relies on us to do this.
 		}
+	}
+	// Hot strings are handled by ToggleSuspendState.
+
 	return OK;
 }
 
@@ -455,7 +440,7 @@ ResultType Hotkey::PerformID(HotkeyIDType aHotkeyID)
 	// Currently, hotkey_id can't be < 0 due to its type, so we only check if it's too large:
 	if (aHotkeyID >= sHotkeyCount)
 	{
-		MsgBox("Received a hotkey ID larger than the configured range!");
+		MsgBox("Hotkey ID too large");
 		return FAIL;  // Not a critical error in case some other app is sending us bogus messages?
 	}
 
@@ -543,7 +528,7 @@ void Hotkey::TriggerJoyHotkeys(int aJoystickID, DWORD aButtonsNewlyDown)
 	{
 		if (shk[i]->mType != HK_JOYSTICK || shk[i]->mVK != aJoystickID)
 			continue;
-		// Determine if this hotkey's button among those newly pressed:
+		// Determine if this hotkey's button is among those newly pressed:
 		if (   aButtonsNewlyDown & ((DWORD)0x01 << (shk[i]->mSC - JOYCTRL_1))   )
 			// Post it to the thread, just in case the OS tries to be "helpful" and
 			// directly call MainWindowProc() rather than actually posting the message.
@@ -558,7 +543,7 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, Label *aJumpToLabel, HookActionTyp
 // Creates, updates, enables, or disables a hotkey dynamically (while the script is running).
 // aJumpToLabel can be NULL while aHookAction is 0 only when the caller is updating an existing
 // hotkey to have new options (i.e. its current label is not to be changed).
-// Return OK or FAIL.
+// Returns OK or FAIL.
 {
 	int hotkey_id = FindHotkeyByName(aHotkeyName);
 	Hotkey *hk = (hotkey_id == HOTKEY_ID_INVALID) ? NULL : shk[hotkey_id];
@@ -623,6 +608,7 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, Label *aJumpToLabel, HookActionTyp
 
 	int max_threads_per_hotkey;
 	bool max_threads_buffer;
+	int priority;
 
 	if (!hk)
 	{
@@ -640,11 +626,13 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, Label *aJumpToLabel, HookActionTyp
 		// turned on.
 		max_threads_buffer = g_MaxThreadsBuffer;
 		max_threads_per_hotkey = g_MaxThreadsPerHotkey;
+		priority = 0; // standard default
 	}
 	else // Set the defaults to be whatever they already were set to when the hotkey was originally created.
 	{
 		max_threads_buffer = hk->mMaxThreadsBuffer;
 		max_threads_per_hotkey = hk->mMaxThreads;
+		priority = hk->mPriority;
 	}
 	for (char *cp = aOptions; *cp; ++cp)
 	{
@@ -653,9 +641,12 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, Label *aJumpToLabel, HookActionTyp
 		case 'B':
 			max_threads_buffer = (*(cp + 1) != '0');  // i.e. if the char is NULL or something other than '0'.
 			break;
+		// For options such as P & T: Use atoi() vs. ATOI() to avoid interpreting something like 0x01B
+		// as hex when in fact the B was meant to be an option letter:
+		case 'P':
+			priority = atoi(cp + 1);
+			break;
 		case 'T':
-			// Use atoi() vs. ATOI() to avoid interpreting something like 0x01B as hex
-			// when in fact the B was meant to be an option letter:
 			max_threads_per_hotkey = atoi(cp + 1);
 			if (max_threads_per_hotkey > MAX_THREADS_LIMIT)
 				// For now, keep this limited to prevent stack overflow due to too many pseudo-threads.
@@ -668,6 +659,7 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, Label *aJumpToLabel, HookActionTyp
 	}
 	hk->mMaxThreadsBuffer = max_threads_buffer;
 	hk->mMaxThreads = max_threads_per_hotkey;
+	hk->mPriority = priority;
 	return OK;
 }
 
@@ -713,7 +705,7 @@ ResultType Hotkey::UpdateHotkey(Label *aJumpToLabel, HookActionType aHookAction)
 	if (reset)
 	{
 		AllDeactivate(false, true, true);
-		AllActivate(true);
+		AllActivate();
 	}
 	return OK;
 }
@@ -727,7 +719,7 @@ ResultType Hotkey::AddHotkey(Label *aJumpToLabel, HookActionType aHookAction, ch
 // be NULL is when the caller is creating a dynamic hotkey that has an aHookAction.
 // Return OK or FAIL.
 {
-	if (NULL == (shk[sNextID] = new Hotkey(sNextID, aJumpToLabel, aHookAction, aName)))
+	if (   !(shk[sNextID] = new Hotkey(sNextID, aJumpToLabel, aHookAction, aName))   )
 		return FAIL;
 	if (!shk[sNextID]->mConstructedOK)
 	{
@@ -748,7 +740,7 @@ ResultType Hotkey::AddHotkey(Label *aJumpToLabel, HookActionType aHookAction, ch
 		// In such a case, the key should be unregistered for maximum reliability, even though'
 		// the hook could probably override the registration in most cases:
 		AllDeactivate(false, false);  // Avoid removing the hooks when adding a key.
-		AllActivate(true);
+		AllActivate();
 	}
 	return OK;
 }
@@ -775,6 +767,7 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 	, mExistingThreads(0)
 	, mMaxThreads(g_MaxThreadsPerHotkey)  // The value of g_MaxThreadsPerHotkey can vary during load-time.
 	, mMaxThreadsBuffer(g_MaxThreadsBuffer) // same comment as above
+	, mPriority(0) // default priority is always 0
 	, mRunAgainAfterFinished(false), mRunAgainTime(0), mConstructedOK(false)
 
 // It's better to receive the hotkey_id as a param, since only the caller has better knowledge and
@@ -885,7 +878,11 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 	}
 
 	// To avoid memory leak, this is done only when it is certain the hotkey will be created:
-	mName = aName ? SimpleHeap::Malloc(aName) : hotkey_name;
+	if (   !(mName = aName ? SimpleHeap::Malloc(aName) : hotkey_name)   )
+	{
+		g_script.ScriptError("Out of mem for hotkey name");  // Very rare.
+		return;
+	}
 
 	// Always assign the ID last, right before a successful return, so that the caller is notified
 	// that the constructor succeeded:
@@ -1368,4 +1365,233 @@ char *Hotkey::ToText(char *aBuf, size_t aBufSize, bool aAppendNewline)
 		*aBuf = '\0';
 	}
 	return aBuf;
+}
+
+
+///////////////
+// Hot Strings
+///////////////
+
+// Init static variables:
+Hotstring **Hotstring::shs = NULL;
+HotstringIDType Hotstring::sHotstringCount = 0;
+HotstringIDType Hotstring::sHotstringCountMax = 0;
+
+
+ResultType Hotstring::Perform()
+// Returns OK or FAIL.  Caller has already ensured that the backspacing (if specified by mDoBackspace)
+// has been done.
+{
+	if (mExistingThreads >= mMaxThreads && !ACT_IS_ALWAYS_ALLOWED(mJumpToLabel->mJumpToLine->mActionType))
+		return FAIL;
+	// See Hotkey::Perform() for details about this.  For hot strings -- which also use the
+	// g_script.mThisHotkeyStartTime value to determine whether g_script.mThisHotkeyModifiersLR
+	// is still timely/accurate -- it seems best to set to "no modifiers":
+	g_script.mThisHotkeyModifiersLR = 0;
+	++mExistingThreads;  // This is the thread count for this particular hotstring only.
+	ResultType result = mJumpToLabel->mJumpToLine->ExecUntil(UNTIL_RETURN);
+	--mExistingThreads;
+	return result ? OK : FAIL;	// Return OK on all non-failure results.
+}
+
+
+
+void Hotstring::DoReplace(LPARAM alParam)
+// aEndChar is the char from the set of EndChars that the user had to press to trigger the hotkey.
+// This is not applicable if mEndCharRequired is false, in which case caller should have passed zero.
+{
+	char SendBuf[LINE_SIZE + 20] = "";  // Allow extra room for the optional backspaces.
+	char *start_of_replacement = SendBuf;  // Set default.
+	if (mDoBackspace)
+	{
+		// Subtract 1 from backspaces because the final key pressed by the user to make a
+		// match was already suppressed by the hook (it wasn't sent through to the active
+		// window).  So what we do is backspace over all the other keys prior to that one,
+		// put in the replacement text (if applicable), then send the EndChar through
+		// (if applicable) to complete the sequence.
+		int backspace_count = mStringLength - 1;
+		if (mEndCharRequired)
+			++backspace_count;
+		int i;
+		for (start_of_replacement = SendBuf, i = 0; i < backspace_count; ++i)
+			*start_of_replacement++ = '\b';  // Use raw backspaces, not {BS n}, in case the send will be raw.
+		*start_of_replacement = '\0';
+	}
+	if (*mReplacement) // replacement text is entirely handled here
+	{
+		snprintf(start_of_replacement, sizeof(SendBuf) - (start_of_replacement - SendBuf), "%s", mReplacement);
+		CaseConformModes case_conform_mode = (CaseConformModes)HIWORD(alParam);
+		if (case_conform_mode == CASE_CONFORM_ALL_CAPS)
+			CharUpper(start_of_replacement);
+		else if (case_conform_mode == CASE_CONFORM_FIRST_CAP)
+			*start_of_replacement = (char)CharUpper((LPTSTR)(UCHAR)*start_of_replacement);
+		char end_char = (char)LOWORD(alParam);
+		if (end_char && !mOmitEndChar) // Append the final character (since it was excluded from any case conversion above).
+		{
+			size_t length = strlen(start_of_replacement);
+			start_of_replacement[length++] = end_char;
+			start_of_replacement[length] = '\0';
+		}
+	}
+	if (*SendBuf)
+	{
+		int old_delay = g.KeyDelay;
+		g.KeyDelay = mKeyDelay;
+		SendKeys(SendBuf, mSendRaw);
+		g.KeyDelay = old_delay;
+	}
+}
+
+
+
+ResultType Hotstring::AddHotstring(Label *aJumpToLabel, char *aOptions, char *aHotstring, char *aReplacement)
+// Returns OK or FAIL.
+// Caller has ensured that aHotstringOptions is blank if there are no options.  Otherwise, aHotstringOptions
+// should end in a colon, which marks the end of the options list.  aHotstring is the hotstring itself
+// (e.g. "ahk"), which does not have to be unique, unlike the label name, which was made unique by also
+// including any options in with the label name (e.g. ::ahk:: is a different label than :c:ahk::).
+{
+	// The length is limited for performance reasons, notably so that the hook does not have to move
+	// memory around in the buffer it uses to watch for hotstrings:
+	if (strlen(aHotstring) > MAX_HOTSTRING_LENGTH)
+		return g_script.ScriptError("A hotstring itself must not be longer than " MAX_HOTSTRING_LENGTH_STR
+			" characters.", aHotstring);
+
+	if (!shs)
+	{
+		if (   !(shs = (Hotstring **)malloc(HOTSTRING_BLOCK_SIZE * sizeof(Hotstring *)))   )
+			return g_script.ScriptError("Hotstring: Out of mem"); // Short msg. since so rare.
+		sHotstringCountMax = HOTSTRING_BLOCK_SIZE;
+	}
+	else if (sHotstringCount >= sHotstringCountMax) // Realloc to preserve contents and keep contiguous array.
+	{
+		// Expand the array by one block.  Use a temp var. because realloc() returns NULL on failure
+		// but leaves original block allocated!
+		void *realloc_temp = realloc(shs, (sHotstringCountMax + HOTSTRING_BLOCK_SIZE) * sizeof(Hotstring *));
+		if (!realloc_temp)
+			return g_script.ScriptError("Out of mem #3");  // Short msg. since so rare.
+		shs = (Hotstring **)realloc_temp;
+		sHotstringCountMax += HOTSTRING_BLOCK_SIZE;
+	}
+
+	if (   !(shs[sHotstringCount] = new Hotstring(aJumpToLabel, aOptions, aHotstring, aReplacement))   )
+		return g_script.ScriptError("Hotstring: Out of mem 2"); // Short msg. since so rare.
+	if (!shs[sHotstringCount]->mConstructedOK)
+	{
+		delete shs[sHotstringCount];  // SimpleHeap allows deletion of most recently added item.
+		return FAIL;  // The constructor already displayed the error.
+	}
+
+	++sHotstringCount;
+	return OK;
+}
+
+
+
+Hotstring::Hotstring(Label *aJumpToLabel, char *aOptions, char *aHotstring, char *aReplacement) // Constructor
+	: mJumpToLabel(aJumpToLabel)  // Can be NULL for dynamic hotkeys that are hook actions such as Alt-Tab.
+	, mString(NULL), mReplacement(""), mStringLength(0)
+	, mSuspended(false)
+	, mExistingThreads(0)
+	, mMaxThreads(g_MaxThreadsPerHotkey)  // The value of g_MaxThreadsPerHotkey can vary during load-time.
+	, mPriority(g_HSPriority), mKeyDelay(g_HSKeyDelay)  // And all these can vary too.
+	, mCaseSensitive(g_HSCaseSensitive), mConformToCase(g_HSConformToCase), mDoBackspace(g_HSDoBackspace)
+	, mOmitEndChar(g_HSOmitEndChar), mSendRaw(g_HSSendRaw), mEndCharRequired(g_HSEndCharRequired)
+	, mDetectWhenInsideWord(g_HSDetectWhenInsideWord)
+	, mConstructedOK(false)
+{
+	// Insist on certain qualities so that they never need to be checked other than here:
+	if (!mJumpToLabel || !*aHotstring)
+		return;
+
+	ParseOptions(aOptions, mPriority, mKeyDelay, mCaseSensitive, mConformToCase, mDoBackspace, mOmitEndChar
+		, mSendRaw, mEndCharRequired, mDetectWhenInsideWord);
+
+	// To avoid memory leak, this is done only when it is certain the hotkey will be created:
+	if (   !(mString = SimpleHeap::Malloc(aHotstring))   )
+	{
+		g_script.ScriptError("Out of mem for HS"); // Short msg since very rare.
+		return;
+	}
+	mStringLength = (UCHAR)strlen(mString);
+	if (*aReplacement)
+	{
+		// To avoid wasting memory due to SimpleHeap's block-granularity, only allocate there if the replacement
+		// string is short (note that replacement strings can be over 16,000 characters long).  Since
+		// hotstrings can be disabled but never entirely deleted, it's not a memory leak in either case
+		// since memory allocated by either method will be freed when the program exits.
+		size_t size = strlen(aReplacement) + 1;
+		if (   !(mReplacement = (size > MAX_ALLOC_SIMPLE) ? (char *)malloc(size) : SimpleHeap::Malloc(size))   )
+		{
+			g_script.ScriptError("Out of mem for HS replacement"); // Short msg since very rare.
+			return;
+		}
+		strcpy(mReplacement, aReplacement);
+	}
+	else // Leave mReplacement blank, but make this false so that the hook doesn't do extra work.
+		mConformToCase = false;
+
+
+	mConstructedOK = true; // Done at the very end.
+}
+
+
+
+
+void Hotstring::ParseOptions(char *aOptions, int &aPriority, int &aKeyDelay, bool &aCaseSensitive
+	, bool &aConformToCase, bool &aDoBackspace, bool &aOmitEndChar, bool &aSendRaw, bool &aEndCharRequired
+	, bool &aDetectWhenInsideWord)
+{
+	// In this case, colon rather than zero marks the end of the string.  However, the string
+	// might be empty so check for that too.  In addition, this is now called from
+	// IsPreprocessDirective(), so that's another reason to check for normal string termination.
+	char *cp1;
+	for (char *cp = aOptions; *cp && *cp != ':'; ++cp)
+	{
+		cp1 = cp + 1;
+		switch(toupper(*cp))
+		{
+		case 'B': // Do backspacing.
+			aDoBackspace = (*cp1 != '0');
+			break;
+		case 'C':
+			if (*cp1 == '0') // restore both settings to default.
+			{
+				aConformToCase = true;
+				aCaseSensitive = false;
+			}
+			else if (*cp1 == '1')
+			{
+				aConformToCase = false;
+				aCaseSensitive = false;
+			}
+			else // treat as plain "C"
+			{
+				aConformToCase = false;  // No point in conforming if its case sensitive.
+				aCaseSensitive = true;
+			}
+			break;
+		case 'O':
+			aOmitEndChar = (*cp1 != '0');
+			break;
+		// For options such as K & P: Use atoi() vs. ATOI() to avoid interpreting something like 0x01C
+		// as hex when in fact the C was meant to be an option letter:
+		case 'K':
+			aKeyDelay = atoi(cp + 1);
+			break;
+		case 'P':
+			aPriority = atoi(cp + 1);
+			break;
+		case 'R':
+			aSendRaw = (*cp1 != '0');
+			break;
+		case '*':
+			aEndCharRequired = (*cp1 == '0');
+			break;
+		case '?':
+			aDetectWhenInsideWord = (*cp1 != '0');
+			break;
+		// Otherwise: Ignore other characters, such as the digits that comprise the number after the P option.
+		}
+	}
 }

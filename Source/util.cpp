@@ -374,6 +374,15 @@ char *stristr(char *aStr, char *aPattern)
 		
 		// MY: No need to check for end of "sptr" because previous loop already verified that
 		// there are enough characters remaining in "sptr" to support all those in "pptr".
+		// For compatibility with stricmp() and the fact that IFEQUAL, IFINSTRING and some other
+		// commands all use the C libraries for insensitive searches, it seems best not to do
+		// this to support accented letters and other letters whose ASCII value is above 127.
+		// Some reasons for this:
+		// 1) It might break existing scripts that rely on old behavior of StringReplace and Input
+		//    and any other command that calls this function.
+		// 2) Performance is worse, perhaps a lot due to API locale-detection overhead.
+		//    (this is true at least for lstricmp() vs. stricmp(), but maybe not the below)
+		//while (   (char)CharUpper((LPTSTR)(UCHAR)*sptr) == (char)CharUpper((LPTSTR)(UCHAR)*pptr)   )
 		while (toupper(*sptr) == toupper(*pptr))
 		{
 			++sptr;
@@ -587,4 +596,38 @@ COLORREF ColorNameToBGR(char *aColorName)
 	if (!stricmp(aColorName, "Teal"))   return 0x808000;
 	if (!stricmp(aColorName, "Aqua"))   return 0xFFFF00;
 	return CLR_DEFAULT;
+}
+
+
+
+char *ConvertEscapeSequences(char *aBuf, char aEscapeChar)
+{
+	char *cp, *cp1;
+	for (cp = aBuf; ; ++cp)  // Increment to skip over the symbol just found by the inner for().
+	{
+		for (; *cp && *cp != aEscapeChar; ++cp);  // Find the next escape char.
+		if (!*cp) // end of string.
+			break;
+		cp1 = cp + 1;
+		switch (*cp1)
+		{
+			// Only lowercase is recognized for these:
+			case 'a': *cp1 = '\a'; break;  // alert (bell) character
+			case 'b': *cp1 = '\b'; break;  // backspace
+			case 'f': *cp1 = '\f'; break;  // formfeed
+			case 'n': *cp1 = '\n'; break;  // newline
+			case 'r': *cp1 = '\r'; break;  // carriage return
+			case 't': *cp1 = '\t'; break;  // horizontal tab
+			case 'v': *cp1 = '\v'; break;  // vertical tab
+			// Otherwise, if it's not one of the above, the escape-char is considered to
+			// mark the next character as literal, regardless of what it is. Examples:
+			// `` -> `
+			// `:: -> :: (effectively)
+			// `; -> ;
+			// `c -> c (i.e. unknown escape sequences resolve to the char after the `)
+		}
+		// Below has a final +1 to include the terminator:
+		MoveMemory(cp, cp1, strlen(cp1) + 1);
+	}
+	return aBuf;
 }

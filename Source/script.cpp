@@ -56,7 +56,7 @@ Script::Script()
 	, mFileSpec(""), mFileDir(""), mFileName(""), mOurEXE(""), mOurEXEDir(""), mMainWindowTitle("")
 	, mIsReadyToExecute(false), AutoExecSectionIsRunning(false)
 	, mIsRestart(false), mIsAutoIt2(false), mErrorStdOut(false)
-	, mLinesExecutedThisCycle(0), mUninterruptedLineCount(0)
+	, mLinesExecutedThisCycle(0), mUninterruptedLineCountMax(1000), mUninterruptibleTime(15)
 	, mRunAsUser(NULL), mRunAsPass(NULL), mRunAsDomain(NULL)
 	, mCustomIcon(NULL) // Normally NULL unless there's a custom tray icon loaded dynamically.
 	, mCustomIconFile(NULL), mTrayIconTip(NULL) // Allocated on first use.
@@ -499,16 +499,17 @@ ResultType Script::AutoExecSection()
 		// unless someone actually reports that such a thing ever happens.  Still, to reduce the chance
 		// of such a thing ever happening, it seems best to boost the timeout from 50 up to 100:
 		SET_AUTOEXEC_TIMER(100);
+		g.AllowThisThreadToBeInterrupted = false; // See AutoExecSectionTimeout() for why this var is used.
 		AutoExecSectionIsRunning = true;
-		g_AllowInterruptionForSub = false; // See AutoExecSectionTimeout() for why this var is used.
+
 		++g_nThreads;
 		ResultType result = mFirstLine->ExecUntil(UNTIL_RETURN);
 		--g_nThreads;
-		g_AllowInterruptionForSub = true;  // In case it finishes before the AutoExecSectionTimeout() timer expires.
-		AutoExecSectionIsRunning = false;
-		// If it hasn't already been killed, kill it now so that it won't update the AutoExec globals again
-		// (though there's a double check in AutoExecSectionTimeout() to make sure they aren't updated again):
+
 		KILL_AUTOEXEC_TIMER
+		g.AllowThisThreadToBeInterrupted = true; // Must restore to true in this case since above wasn't run as a new thread (i.e. there's nothing to resume).
+		AutoExecSectionIsRunning = false;
+
 		return result;
 	}
 	return OK;
@@ -596,9 +597,9 @@ ResultType Script::ExitApp(ExitReasons aExitReason, char *aBuf, int aExitCode)
 	// non-NULL if the script is in a runnable state (since registering an OnExit label requires
 	// that a script command has executed to do it).  If this ever changes, the !mIsReadyToExecute
 	// condition should be added to the below if statement:
-	static bool exit_label_is_running = false;
-	if (!mOnExitLabel || exit_label_is_running)  // || !mIsReadyToExecute
-		// In the case of exit_label_is_running == true:
+	static bool sExitLabelIsRunning = false;
+	if (!mOnExitLabel || sExitLabelIsRunning)  // || !mIsReadyToExecute
+		// In the case of sExitLabelIsRunning == true:
 		// There is another instance of this function beneath us on the stack.  Since we have
 		// been called, this is a true exit condition and we exit immediately:
 		TerminateApp(aExitCode);
@@ -617,42 +618,70 @@ ResultType Script::ExitApp(ExitReasons aExitReason, char *aBuf, int aExitCode)
 	strlcpy(g.ErrorLevel, g_ErrorLevel->Contents(), sizeof(g.ErrorLevel)); // Save caller's errorlevel.
 	global_struct global_saved;
 	CopyMemory(&global_saved, &g, sizeof(global_struct));
-	CopyMemory(&g, &g_default, sizeof(global_struct));
+	CopyMemory(&g, &g_default, sizeof(global_struct)); // Mirrors the behavior of INIT_NEW_THREAD
 
-	// This should slightly increase the expectation that any short timed subroutine will
-	// run all the way through to completion rather than being interrupted by the press of
-	// a hotkey, and thus potentially buried in the stack:
+	// Make it start fresh to avoid unnecessary delays due to SetBatchLines:
 	g_script.mLinesExecutedThisCycle = 0;
 
 	if (g_nFileDialogs) // See MsgSleep() for comments on this.
 		SetCurrentDirectory(g_WorkingDir);
 
-	// Use g_AllowInterruptionForSub to forbid any hotkeys, timers, or user defined menu items
+	// Use g.AllowThisThreadToBeInterrupted to forbid any hotkeys, timers, or user defined menu items
 	// to interrupt.  This is mainly done for peace-of-mind (since possible interactions due to
-	// interruptions have not been studie) and the fact that this most users would not want this
+	// interruptions have not been studied) and the fact that this most users would not want this
 	// subroutine to be interruptible (it usually runs quickly anyway).  Another reason to make
 	// it non-interruptible is that some OnExit subroutines might destruct things used by the
 	// script's hotkeys/timers/menu items, and activating these items during the deconstruction
-	// would not be safe.  An option can be added via the FutureUse param to make it interruptible
-	// if there is ever a demand for that:
-	exit_label_is_running = true;
-	++g_nThreads;  // i.e. This special thread does not obey g_MaxThreadsTotal.
-	bool allow_interrupt_prev = g_AllowInterruptionForSub;
-	g_AllowInterruptionForSub = false;
+	// would not be safe.  Finally, if a logoff or shutdown is occurring, it seems best to prevent
+	// timed subroutines from running -- which might take too much time and prevent the exit from
+	// occurring in a timely fashion.  An option can be added via the FutureUse param to make it
+	// interruptible if there is ever a demand for that.  UPDATE: g_AllowInterruption is now used
+	// instead of g.AllowThisThreadToBeInterrupted for two reasons:
+	// 1) It avoids the need to do "int mUninterruptedLineCountMax_prev = g_script.mUninterruptedLineCountMax;"
+	//    (Disable this item so that ExecUntil() won't automatically make our new thread uninterruptible
+	//    after it has executed a certain number of lines).
+	// 2) If the thread we're interrupting is uninterruptible, the uinterruptible timer might be
+	//    currently pending.  When it fires, it would make the OnExit subroutine interruptible
+	//    rather than the underlying subroutine.  The above fixes the first part of that problem.
+	//    The 2nd part is fixed by reinstating the timer when the uninterruptible thread is resumed.
+	//    This special handling is only necessary here -- not in other places where new threads are
+	//    created -- because OnExit is the only type of thread that can interrupt an uninterruptible
+	//    thread.
+	bool g_AllowInterruption_prev = g_AllowInterruption;  // Save current setting.
+	g_AllowInterruption = false; // Mark the thread just created above as permanently uninterruptible (i.e. until it finishes and is destroyed).
 
+	// This addresses the 2nd part of the problem described in the above large comment:
+	bool uninterruptible_timer_was_pending = g_UninterruptibleTimerExists;
+
+	// If the current quasi-thread is paused, the thread we're about to launch
+	// will not be, so the icon needs to be checked:
+	g_script.UpdateTrayIcon();
+
+	sExitLabelIsRunning = true;
+	++g_nThreads;  // i.e. This special thread does not obey g_MaxThreadsTotal.
 	if (mOnExitLabel->mJumpToLine->ExecUntil(UNTIL_RETURN) == FAIL)
 		// If the subroutine encounters a failure condition such as a runtime error, exit immediately.
 		// Otherwise, there will be no way to exit the script if the subroutine fails on each attempt.
 		TerminateApp(aExitCode);
-
-	g_AllowInterruptionForSub = allow_interrupt_prev;
 	--g_nThreads;  // Since this instance of this function only had one thread in use at a time.
-	exit_label_is_running = false;  // In case the user wanted the thread to end normally (see above).
-
-	RESUME_UNDERLYING_THREAD // For explanation, see comments where the macro is defined.
+	sExitLabelIsRunning = false;  // In case the user wanted the thread to end normally (see above).
 
 	if (terminate_afterward)
 		TerminateApp(aExitCode);
+
+	// Otherwise:
+	RESUME_UNDERLYING_THREAD // For explanation, see comments where the macro is defined.
+	g_AllowInterruption = g_AllowInterruption_prev;  // Restore original setting.
+	if (uninterruptible_timer_was_pending)
+		// Below macro recreates the timer if it doesn't already exists (i.e. if it fired during
+		// the running of the OnExit subroutine).  Although such a firing would have had
+		// no negative impact on the OnExit subroutine (since it's kept always-uninterruptible
+		// via g_AllowInterruption), reinstate the timer so that it will make the thread
+		// we're resuming interruptible.  The interval might not be exactly right -- since we
+		// don't know when the thread started -- but it seems relatively unimportant to
+		// worry about such accuracy given how rare and usually-inconsequential this whole
+		// scenario is:
+		SET_UNINTERRUPTIBLE_TIMER
 
 	return OK;  // for caller convenience.
 }
@@ -814,6 +843,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 // "Shift:" might be a legitimate label that the user forgot is also
 // a valid hotkey:
 #define HOTKEY_FLAG "::"
+#define HOTKEY_FLAG_LENGTH 2
 {
 	if (!aFileSpec || !*aFileSpec) return FAIL;
 
@@ -903,7 +933,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 	// File is now open, read lines from it.
 
 	// <buf> should be no larger than LINE_SIZE because some later functions rely upon that:
-	char buf[LINE_SIZE], *hotkey_flag, *cp;
+	char buf[LINE_SIZE], *hotkey_flag, *cp, *cp1, *hotstring_start, *hotstring_options;
 	HookActionType hook_action;
 	size_t buf_length;
 	bool is_label, section_comment = false;
@@ -939,6 +969,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			continue;
 
 		if (section_comment) // Look for the uncomment-flag.
+		{
 			if (!strncmp(buf, "*/", 2))
 			{
 				section_comment = false;
@@ -950,22 +981,151 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			}
 			else
 				continue;
-		else
-			if (!strncmp(buf, "/*", 2))
-			{
-				section_comment = true;
-				continue; // It's now commented out, so the rest of this line is ignored.
-			}
+		}
+		else if (!strncmp(buf, "/*", 2))
+		{
+			section_comment = true;
+			continue; // It's now commented out, so the rest of this line is ignored.
+		}
 
-		// Note that there may be an action following the HOTKEY_FLAG (on the same line).
-		hotkey_flag = strstr(buf, HOTKEY_FLAG); // Find the first one from the left, in case there's more than 1.
-		is_label = (hotkey_flag != NULL && hotkey_flag != buf);  // i.e. a naked "::" is treated as a normal label.
+
+		// "::" alone isn't a hotstring, it's a label whose name is colon.
+		// Below relies on the fact that no valid hotkey can start with a colon, since
+		// ": & somekey" is not valid (since colon is a shifted key) and colon itself
+		// should instead be defined as "+;::".  It also relies on short-circuit boolean:
+		hotstring_start = hotstring_options = hotkey_flag = NULL;
+		if (buf[0] == ':' && buf[1])
+		{
+			if (buf[1] != ':')
+			{
+				hotstring_options = buf + 1; // Point it to the hotstring's option letters.
+				// Relies on the fact that options should never contain a literal colon:
+				if (   !(hotstring_start = strchr(hotstring_options, ':'))   )
+					hotstring_start = NULL; // Indicate that this isn't a hotstring after all.
+				else
+					++hotstring_start; // Points to the hotstring itself.
+			}
+			else // Double-colon, so it's a hotstring if there's more after this (but no options are present).
+				if (buf[2])
+					hotstring_start = buf + 2;
+				//else it's just a naked "::", which is considered to be a mundane label whose name is colon.
+		}
+		if (hotstring_start)
+		{
+			// Find the hotstring's final double-colon by consider escape sequences from left to right.
+			// This is necessary for to handles cases such as the following:
+			// ::abc```::::Replacement String
+			// The above hotstring translates literally into "abc`::".
+			char *escaped_double_colon = NULL;
+			for (cp = hotstring_start; ; ++cp)  // Increment to skip over the symbol just found by the inner for().
+			{
+				for (; *cp && *cp != g_EscapeChar && *cp != ':'; ++cp);  // Find the next escape char or colon.
+				if (!*cp) // end of string.
+					break;
+				cp1 = cp + 1;
+				if (*cp == ':')
+				{
+					if (*cp1 == ':') // Found a non-escaped double-colon, so this is the right one.
+						hotkey_flag = cp++;  // Increment to have loop skip over both colons.
+						// and the continue with the loop so that escape sequences in the replacement
+						// text (if there is replacement text) are also translated.
+					// else just a single colon, or the second colon of an escaped pair (`::), so continue.
+					continue;
+				}
+				switch (*cp1)
+				{
+					// Only lowercase is recognized for these:
+					case 'a': *cp1 = '\a'; break;  // alert (bell) character
+					case 'b': *cp1 = '\b'; break;  // backspace
+					case 'f': *cp1 = '\f'; break;  // formfeed
+					case 'n': *cp1 = '\n'; break;  // newline
+					case 'r': *cp1 = '\r'; break;  // carriage return
+					case 't': *cp1 = '\t'; break;  // horizontal tab
+					case 'v': *cp1 = '\v'; break;  // vertical tab
+					// Otherwise, if it's not one of the above, the escape-char is considered to
+					// mark the next character as literal, regardless of what it is. Examples:
+					// `` -> `
+					// `:: -> :: (effectively)
+					// `; -> ;
+					// `c -> c (i.e. unknown escape sequences resolve to the char after the `)
+				}
+				// Below has a final +1 to include the terminator:
+				MoveMemory(cp, cp1, strlen(cp1) + 1);
+				// Since single colons normally do not need to be escaped, this increments one extra
+				// for double-colons to skip over the entire pair so that its second colon
+				// is not seen as part of the hotstring's final double-colon.  Example:
+				// ::ahc```::::Replacement String
+				if (*cp == ':' && *cp1 == ':')
+					++cp;
+			} // for()
+			if (!hotkey_flag)
+				hotstring_start = NULL;  // Indicate that this isn't a hotstring after all.
+		}
+		else // Not a hotstring
+			// Note that there may be an action following the HOTKEY_FLAG (on the same line).
+			hotkey_flag = strstr(buf, HOTKEY_FLAG); // Find the first one from the left, in case there's more than 1.
+
+		// The below considers all of the following to be non-hotkey labels:
+		// A naked "::", which is treated as a normal label whose label name is colon.
+		// A command containing an escaped literal double-colon, e.g. Run, Something.exe `:: /b
+		//    In the above case, the escape sequence just tell us here not to process it as a label,
+		//    and later the escape sequence `: resolves to a single colon.
+		// But the below also ensures that `:: is a valid hotkey label whose hotkey is accent.
+		// And it relies on short-circuit boolean:
+		is_label = (hotkey_flag && hotkey_flag > buf);
+		if (is_label && !hotstring_start && *(hotkey_flag - 1) == g_EscapeChar && hotkey_flag - buf > 2)
+		{
+			// Greater-than 2 is used above because "x=`::" is currently the smallest possible command
+			// that might be confused as a hotkey label.
+			// Since it appears to be a hotkey label and it's known not to be a hotstring label (hotstrings
+			// can't suffer from this type of ambiguity because a leading colon or pair of colons makes them
+			// easier to detect), ensure it really is a hotkey label rather than an escaped double-colon by
+			// eliminating ambiguity as much as possible.  Examples of ambiguity:
+			//run Enter & `::
+			//vs.
+			//Enter & `::   (i.e. accent is the suffix of a composite hotkey)
+			//
+			//x = Enter & `::
+			//vs.
+			//Enter & `::
+			//
+			//x=^`::
+			//vs.
+			//^`::  (i.e. accent is the suffix key)
+			// First check if it has the composite delimiter.  If it does, it's 99.9% certain that it's
+			// a hotkey due to the extreme odds against " & `::" ever appearing literally in a command.
+			size_t available_length = hotkey_flag - buf;
+			if (available_length <= COMPOSITE_DELIMITER_LENGTH + 1  // i.e. it must long enough to contain "x & `::"
+                || strnicmp(hotkey_flag - 4, COMPOSITE_DELIMITER, COMPOSITE_DELIMITER_LENGTH)) // it's not it.
+			{
+				// Assume it's not a label unless it's short, contains no spaces, and contains only
+				// hotkey modifiers.
+				is_label = false;
+				if (available_length < 10)  // Longest possible non-composite hotkey: "$*~<^+!#`::"
+				{
+					char *bcp;
+					for (bcp = buf; bcp < hotkey_flag - 1; ++bcp)
+						if (!strchr("><*~$!^+#", *bcp))
+							break;
+					if (bcp == hotkey_flag - 1)
+						// It appears to be a hotkey after all, since only modifiers exist to the left of "`::"
+						is_label = true;
+				}
+				//else it's too long to be a hotkey.
+			}
+		}
+
 		if (is_label) // It's a label and a hotkey.
 		{
 			*hotkey_flag = '\0'; // Terminate so that buf is now the label itself.
-			hotkey_flag += strlen(HOTKEY_FLAG);  // Now hotkey_flag is the hotkey's action, if any.
-			ltrim(hotkey_flag); // Has already been rtrimmed by GetLine().
-			rtrim(buf); // Has already been ltrimmed.
+			hotkey_flag += HOTKEY_FLAG_LENGTH;  // Now hotkey_flag is the hotkey's action, if any.
+			if (!hotstring_start)
+			{
+				ltrim(hotkey_flag); // Has already been rtrimmed by GetLine().
+				rtrim(buf); // Trim the new substring inside of buf (due to temp termination). It has already been ltrimmed.
+			}
+			// else don't trim hotstrings since literal spaces in both substrings are significant.
+
 			// If this is the first hotkey label encountered, Add a return before
 			// adding the label, so that the auto-exectute section is terminated.
 			// Only do this if the label is a hotkey because, for example,
@@ -993,25 +1153,45 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 					return CloseAndReturn(fp, script_buf, FAIL);
 				mCurrLine = NULL;  // To signify that we're in transition, trying to load a new one.
 			}
+			// For hotstrings, the below makes the label include leading colon(s) and the full option
+			// string (if any) so that the uniqueness of labels is preserved.  For example, we want
+			// the following two hotstring labels to be unique rather than considered duplicates:
+			// ::abc::
+			// :c:abc::
 			if (AddLabel(buf) != OK) // Always add a label before adding the first line of its section.
 				return CloseAndReturn(fp, script_buf, FAIL);
 			if (*hotkey_flag) // This hotkey's action is on the same line as its label.
 			{
-				// Don't add the alt-tabs as a line, since it has no meaning as a script command.
-				// But do put in the Return regardless, in case this label is ever jumped to
-				// via Goto/Gosub:
-				if (   !(hook_action = Hotkey::ConvertAltTab(hotkey_flag, false))   )
-					if (ParseAndAddLine(hotkey_flag) != OK)
-						return CloseAndReturn(fp, script_buf, FAIL);
-				// Also add a Return that's implicit for a single-line hotkey:
+				if (!hotstring_start)
+					// Don't add the alt-tabs as a line, since it has no meaning as a script command.
+					// But do put in the Return regardless, in case this label is ever jumped to
+					// via Goto/Gosub:
+					if (   !(hook_action = Hotkey::ConvertAltTab(hotkey_flag, false))   )
+						if (ParseAndAddLine(hotkey_flag) != OK)
+							return CloseAndReturn(fp, script_buf, FAIL);
+				// Also add a Return that's implicit for a single-line hotkey.  This is also
+				// done for auto-replace hotstrings in case gosub/goto is ever used to jump
+				// to their labels:
 				if (AddLine(ACT_RETURN) != OK)
 					return CloseAndReturn(fp, script_buf, FAIL);
 			}
 			else
 				hook_action = 0;
-			// Set the new hotkey will jump to this label to begin execution:
-			if (Hotkey::AddHotkey(mLastLabel, hook_action) != OK)
-				return CloseAndReturn(fp, script_buf, FAIL);
+
+			if (hotstring_start)
+			{
+				// In the case of hotstrings, hotstring_start is the beginning of the hotstring itself,
+				// i.e. the character after the second colon.  hotstring_options is NULL if no options,
+				// otherwise it's the first character in the options list (option string is not terminated,
+				// but instead ends in a colon).  hotkey_flag is blank if it's not an auto-replace
+				// hotstring, otherwise it contains the auto-replace text.
+				if (!Hotstring::AddHotstring(mLastLabel, hotstring_options ? hotstring_options : ""
+					, hotstring_start, hotkey_flag))
+					return CloseAndReturn(fp, script_buf, FAIL);
+			}
+			else
+				if (Hotkey::AddHotkey(mLastLabel, hook_action) != OK) // Set hotkey to jump to this label.
+					return CloseAndReturn(fp, script_buf, FAIL);
 			continue;
 		}
 
@@ -1083,6 +1263,8 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 				return CloseAndReturn(fp, script_buf, FAIL);
 			mCurrLine = NULL;  // To signify that we're in transition, trying to load a new one.
 			action_end = omit_leading_whitespace(action_end); // Now action_end is the word after the ELSE.
+			if (*action_end == g_delimiter) // Allow "else, action"
+				action_end = omit_leading_whitespace(action_end + 1);
 			if (*action_end && ParseAndAddLine(action_end) != OK)
 				return CloseAndReturn(fp, script_buf, FAIL);
 			// Otherwise, there was either no same-line action or the same-line action was successfully added,
@@ -1267,7 +1449,37 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 				g_AllowOnlyOneInstance = SINGLE_INSTANCE_REPLACE;
 			else if (!stricmp(cp, "ignore"))
 				g_AllowOnlyOneInstance = SINGLE_INSTANCE_IGNORE;
+			else if (!stricmp(cp, "off"))
+				g_AllowOnlyOneInstance = SINGLE_INSTANCE_OFF;
 		}
+		return CONDITION_TRUE;
+	}
+	if (IS_DIRECTIVE_MATCH("#Hotstring"))
+	{
+		if (*directive_end && *(cp = omit_leading_whitespace(directive_end)))
+		{
+			if (*cp == g_delimiter)
+				cp = omit_leading_whitespace(cp + 1);
+			if (!*cp)
+				return CONDITION_TRUE;
+			char *suboption = stristr(cp, "EndChars");
+			if (suboption)
+			{
+				// Since it's not realistic to have only a couple, spaces and literal tabs
+				// must be included in between other chars, e.g. `n `t has a space in between.
+				// Also, EndChar  \t  will have a space and a tab since there are two spaces
+				// after the word EndChar.
+				if (    !(cp = StrChrAny(suboption, "\t "))   )
+					return CONDITION_TRUE;
+				strlcpy(g_EndChars, ++cp, sizeof(g_EndChars));
+				ConvertEscapeSequences(g_EndChars, g_EscapeChar);
+				return CONDITION_TRUE;
+			}
+		}
+		// Otherwise assume it's a list of options.  Note that for compatibility with its
+		// other caller, it will stop at end-of-string or ':', whichever comes first.
+		Hotstring::ParseOptions(cp, g_HSPriority, g_HSKeyDelay, g_HSCaseSensitive, g_HSConformToCase
+			, g_HSDoBackspace, g_HSOmitEndChar, g_HSSendRaw, g_HSEndCharRequired, g_HSDetectWhenInsideWord);
 		return CONDITION_TRUE;
 	}
 	if (IS_DIRECTIVE_MATCH("#NoTrayIcon"))
@@ -1482,8 +1694,9 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 
 
 
-ResultType Script::UpdateOrCreateTimer(Label *aLabel, int aPeriod, bool aEnable)
-// Caller should specific a negative aPeriod to prevent the timer's period from being changed
+ResultType Script::UpdateOrCreateTimer(Label *aLabel, char *aPeriod, char *aPriority, bool aEnable
+	, bool aUpdatePriorityOnly)
+// Caller should specific a blank aPeriod to prevent the timer's period from being changed
 // (i.e. if caller just wants to turn on or off an existing timer).  But if it does this
 // for a non-existent timer, that timer will be created with the default period as specfied in
 // the constructor.
@@ -1492,7 +1705,8 @@ ResultType Script::UpdateOrCreateTimer(Label *aLabel, int aPeriod, bool aEnable)
 	for (timer = mFirstTimer; timer != NULL; timer = timer->mNextTimer)
 		if (timer->mLabel == aLabel) // Match found.
 			break;
-	if (!timer)  // Timer doesn't exist, so create it.
+	bool timer_existed = (timer != NULL);
+	if (!timer_existed)  // Create it.
 	{
 		if (   !(timer = new ScriptTimer(aLabel))   )
 			return ScriptError("UpdateOrCreateTimer(): Out of memory.");
@@ -1509,9 +1723,14 @@ ResultType Script::UpdateOrCreateTimer(Label *aLabel, int aPeriod, bool aEnable)
 	// Update its members:
 	if (aEnable && !timer->mEnabled) // Must check both or the below count will be wrong.
 	{
-		timer->mEnabled = true;
-		++mTimerEnabledCount;
-		SET_MAIN_TIMER  // Ensure the timer is always running when there is at least one enabled timed subroutine.
+		// The exception is if the timer already existed but the caller only wanted its priority changed:
+		if (!(timer_existed && aUpdatePriorityOnly))
+		{
+			timer->mEnabled = true;
+			++mTimerEnabledCount;
+			SET_MAIN_TIMER  // Ensure the timer is always running when there is at least one enabled timed subroutine.
+		}
+		//else do nothing, leave it disabled.
 	}
 	else if (!aEnable && timer->mEnabled) // Must check both or the below count will be wrong.
 	{
@@ -1533,10 +1752,19 @@ ResultType Script::UpdateOrCreateTimer(Label *aLabel, int aPeriod, bool aEnable)
 		if (!mTimerEnabledCount && !g_nLayersNeedingTimer && !Hotkey::sJoyHotkeyCount)
 			KILL_MAIN_TIMER
 	}
-	if (aPeriod >= 0) // Caller wanted us to update this member.
-		timer->mPeriod = aPeriod;  // It shouldn't hurt anything if this happens to be zero or negative.
 
-	if (aEnable)
+	if (*aPeriod) // Caller wanted us to update this member.
+	{
+		int period = ATOI(aPeriod);  // Always use this method & check to retain compatibility with existing scripts.
+		// Allow a period of zero even though CheckScriptTimers() is usually called no more often than every 10ms:
+		if (period >= 0)
+			timer->mPeriod = period; // Read any float in a runtime variable reference as an int.
+	}
+
+	if (*aPriority) // Caller wants this member to be changed from its current or default value.
+		timer->mPriority = ATOI(aPriority); // Read any float in a runtime variable reference as an int.
+
+	if (!(timer_existed && aUpdatePriorityOnly))
 		// Caller relies on us updating mTimeLastRun in this case.  This is done because it's more
 		// flexible, e.g. a user might want to create a timer that is triggered 5 seconds from now.
 		// In such a case, we don't want the timer's first triggering to occur immediately.
@@ -1861,6 +2089,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 			c = action_args[i + 1];
 			switch (c)
 			{
+				// Only lowercase is recognized for these:
 				case 'a': action_args[i + 1] = '\a'; break;  // alert (bell) character
 				case 'b': action_args[i + 1] = '\b'; break;  // backspace
 				case 'f': action_args[i + 1] = '\f'; break;  // formfeed
@@ -2087,6 +2316,13 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 			arg[1] = arg[0];  arg_map[1] = arg_map[0];
 			arg[0] = (old_action_type == OLD_LEFTCLICKDRAG) ? "Left" : "Right";  arg_map[0] = NULL;
 			return AddLine(ACT_MOUSECLICKDRAG, arg, ++nArgs, arg_map);
+		case OLD_HIDEAUTOITWIN:
+			// This isn't a perfect mapping because the word "on" or "off" might be contained
+			// in a variable reference, in which case this conversion will be incorrect.
+			// However, variable ref. is exceedingly rare.
+			arg[1] = stricmp(arg[0], "On") ? "Icon" : "NoIcon";
+			arg[0] = "Tray"; // Assign only after we're done using the old arg[0] value above.
+			return AddLine(ACT_MENU, arg, 2, arg_map);
 		case OLD_REPEAT:
 			if (AddLine(ACT_REPEAT, arg, nArgs, arg_map) != OK)
 				return FAIL;
@@ -2732,9 +2968,6 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		if (*LINE_RAW_ARG4 && !line->ArgHasDeref(4)) // i.e. it's allowed to be blank (defaults to left).
 			if (!line->ConvertMouseButton(LINE_RAW_ARG4))
 				return ScriptError(ERR_MOUSE_BUTTON, LINE_RAW_ARG4);
-		if (*LINE_RAW_ARG6 && !line->ArgHasDeref(6))
-			if (strlen(LINE_RAW_ARG6) > 1 || !strchr("UD", toupper(*LINE_RAW_ARG6)))  // Up / Down
-				return ScriptError(ERR_MOUSE_UPDOWN, LINE_RAW_ARG6);
 		break;
 
 	case ACT_ADD:
@@ -3023,7 +3256,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			case MENU_CMD_NOICON:
 			case MENU_CMD_MAINWINDOW:
 			case MENU_CMD_NOMAINWINDOW:
-				if (*LINE_RAW_ARG3 || *LINE_RAW_ARG4 || *LINE_RAW_ARG5)
+				if (*LINE_RAW_ARG3 || *LINE_RAW_ARG4 || *LINE_RAW_ARG5 || *LINE_RAW_ARG6)
 					return ScriptError("Parameter #3 and beyond should be omitted in this case.", LINE_RAW_ARG3);
 				break;
 
@@ -3038,8 +3271,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			case MENU_CMD_DEFAULT:
 			case MENU_CMD_DELETE:
 			case MENU_CMD_TIP:
-				if (   menu_cmd != MENU_CMD_RENAME && (*LINE_RAW_ARG4 || *LINE_RAW_ARG5)   )
-					return ScriptError("Parameter #4 should be omitted in this case.", LINE_RAW_ARG4);
+				if (   menu_cmd != MENU_CMD_RENAME && (*LINE_RAW_ARG4 || *LINE_RAW_ARG5 || *LINE_RAW_ARG6)   )
+					return ScriptError("Parameter #4 and beyond should be omitted in this case.", LINE_RAW_ARG4);
 				switch(menu_cmd)
 				{
 				case MENU_CMD_USEERRORLEVEL:
@@ -3060,6 +3293,11 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		}
 		break;
 
+	case ACT_THREAD:
+		if (line->mArgc > 0 && !line->ArgHasDeref(1) && !line->ConvertThreadCommand(LINE_RAW_ARG1))
+			return ScriptError(ERR_THREADCOMMAND, LINE_RAW_ARG1);
+		break;
+
 	case ACT_CONTROL:
 		if (line->mArgc > 0 && !line->ArgHasDeref(1))
 		{
@@ -3075,10 +3313,12 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			case CONTROL_CMD_CHOOSE:
 			case CONTROL_CMD_CHOOSESTRING:
 			case CONTROL_CMD_EDITPASTE:
+				if (control_cmd != CONTROL_CMD_TABLEFT && control_cmd != CONTROL_CMD_TABRIGHT && !*LINE_RAW_ARG2)
+					return ScriptError("Parameter #2 must not be blank in this case.", LINE_RAW_ARG2);
 				break;
 			default: // All commands except the above should have a blank Value parameter.
 				if (*LINE_RAW_ARG2)
-					return ScriptError("Parameter #2 should be blank or omitted in this case.", LINE_RAW_ARG2);
+					return ScriptError("Parameter #2 must be blank in this case.", LINE_RAW_ARG2);
 			}
 		}
 		break;
@@ -3093,10 +3333,12 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				return ScriptError(ERR_CONTROLGETCOMMAND, LINE_RAW_ARG2);
 			case CONTROLGET_CMD_FINDSTRING:
 			case CONTROLGET_CMD_LINE:
+				if (!*LINE_RAW_ARG3)
+					return ScriptError("Parameter #3 must not be blank in this case.", LINE_RAW_ARG3);
 				break;
 			default: // All commands except the above should have a blank Value parameter.
 				if (*LINE_RAW_ARG3)
-					return ScriptError("Parameter #3 should be blank or omitted in this case.", LINE_RAW_ARG3);
+					return ScriptError("Parameter #3 must be blank in this case.", LINE_RAW_ARG3);
 			}
 		}
 		break;
@@ -3108,10 +3350,10 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			if (!drive_cmd)
 				return ScriptError(ERR_DRIVECOMMAND, LINE_RAW_ARG2);
 			if (drive_cmd != DRIVE_CMD_LIST && !*LINE_RAW_ARG3)
-				return ScriptError("Parameter #3 should not be blank in this case.");
+				return ScriptError("Parameter #3 must not be blank in this case.");
 			if (drive_cmd != DRIVE_CMD_SETLABEL && (line->mArgc < 1 || line->mArg[0].type == ARG_TYPE_NORMAL))
 				// The output variable has been omitted.
-				return ScriptError("Parameter #1 should not be blank in this case.");
+				return ScriptError("Parameter #1 must not be blank in this case.");
 		}
 		break;
 
@@ -3347,12 +3589,22 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 	// function or should check for NULL upon return.  UPDATE: This actually never happens, see
 	// comment above the "if (aArgIndex >= mArgc)" line.
 
-	char var_name[MAX_VAR_NAME_LENGTH + 1];  // Will hold the dynamically built name.
+	// Static to correspond to the static empty_var further below.  It needs the memory area
+	// to support resolving dynamic environment variables.  In the following example,
+	// the result will be blank unless the first line is present (without this fix here):
+	//null = %SystemRoot%  ; bogus line as a required workaround in versions prior to v1.0.16
+	//thing = SystemRoot
+	//StringTrimLeft, output, %thing%, 0
+	//msgbox %output%
+
+	static char var_name[MAX_VAR_NAME_LENGTH + 1];  // Will hold the dynamically built name.
+
 	// At this point, we know the requested arg is a variable that must be dynamically resolved.
 	// This section is similar to that in ExpandArg(), so they should be maintained together:
 	char *pText;
 	DerefType *deref;
 	int vni;
+
 	for (vni = 0, pText = mArg[aArgIndex].text  // Start at the begining of this arg's text.
 		, deref = mArg[aArgIndex].deref  // Start off by looking for the first deref.
 		; deref && deref->marker; ++deref)  // A deref with a NULL marker terminates the list.
@@ -3402,7 +3654,8 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 	// Terminate the buffer, even if nothing was written into it:
 	var_name[vni] = '\0';
 
-	static Var empty_var("");
+	static Var empty_var(var_name);  // Must use var_name here.  See comment above for why.
+
 	Var *found_var;
 	if (aCreateIfNecessary)
 	{
@@ -3531,14 +3784,19 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, Var *aVarPrev)
 	VarTypeType var_type;
 	// Keeping the most common ones near the top helps performance a little:
 	if (!stricmp(new_name, "clipboard")) var_type = VAR_CLIPBOARD;
-	else if (!stricmp(new_name, "A_year")) var_type = VAR_YEAR;
-	else if (!stricmp(new_name, "A_mon")) var_type = VAR_MON;
-	else if (!stricmp(new_name, "A_mday")) var_type = VAR_MDAY;
-	else if (!stricmp(new_name, "A_hour")) var_type = VAR_HOUR;
-	else if (!stricmp(new_name, "A_min")) var_type = VAR_MIN;
-	else if (!stricmp(new_name, "A_sec")) var_type = VAR_SEC;
-	else if (!stricmp(new_name, "A_wday")) var_type = VAR_WDAY;
-	else if (!stricmp(new_name, "A_yday")) var_type = VAR_YDAY;
+	else if (!stricmp(new_name, "A_YYYY") || !stricmp(new_name, "A_Year")) var_type = VAR_YYYY;
+	else if (!stricmp(new_name, "A_MMMM")) var_type = VAR_MMMM;  // Long name of month.
+	else if (!stricmp(new_name, "A_MMM")) var_type = VAR_MMM; // 3-char abbrev. month name.
+	else if (!stricmp(new_name, "A_MM") || !stricmp(new_name, "A_Mon")) var_type = VAR_MM;  // 01 thru 12
+	else if (!stricmp(new_name, "A_DDDD")) var_type = VAR_DDDD; // Name of weekday, e.g. Sunday
+	else if (!stricmp(new_name, "A_DDD")) var_type = VAR_DDD;   // Abbrev., e.g. Sun
+	else if (!stricmp(new_name, "A_DD") || !stricmp(new_name, "A_Mday")) var_type = VAR_DD; // 01 thru 31
+	else if (!stricmp(new_name, "A_Wday")) var_type = VAR_WDAY;
+	else if (!stricmp(new_name, "A_Yday")) var_type = VAR_YDAY;
+
+	else if (!stricmp(new_name, "A_Hour")) var_type = VAR_HOUR;
+	else if (!stricmp(new_name, "A_Min")) var_type = VAR_MIN;
+	else if (!stricmp(new_name, "A_Sec")) var_type = VAR_SEC;
 	else if (!stricmp(new_name, "A_TickCount")) var_type = VAR_TICKCOUNT;
 	else if (!stricmp(new_name, "A_Now")) var_type = VAR_NOW;
 	else if (!stricmp(new_name, "A_NowUTC")) var_type = VAR_NOWUTC;
@@ -4182,20 +4440,23 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
 		// of lines that have been run since this quasi-thread started now indicate that
 		// interruptibility should be reenabled.  But if UninterruptedLineCountMax is negative, don't
 		// bother checking because this quasi-thread will stay non-interruptible until it finishes:
-		if (!g_AllowInterruptionForSub && g.UninterruptedLineCountMax >= 0)
+		if (!g.AllowThisThreadToBeInterrupted && g_script.mUninterruptedLineCountMax >= 0)
 		{
 			// Note that there is a timer that handles the UninterruptibleTime setting, so we don't
 			// have handle that setting here.  But that timer is killed by the DISABLE_UNINTERRUPTIBLE
 			// macro we call below.  This is because we don't want the timer to "fire" after we've
 			// already met the conditions which allow interruptibility to be restored, because if
 			// it did, it might interfere with the fact that some other code might already be using
-			// g_AllowInterruptionForSub again for its own purpose:
-			if (g_script.mUninterruptedLineCount > g.UninterruptedLineCountMax)
-				DISABLE_UNINTERRUPTIBLE_SUB
+			// g.AllowThisThreadToBeInterrupted again for its own purpose:
+			if (g.UninterruptedLineCount > g_script.mUninterruptedLineCountMax)
+			{
+				KILL_UNINTERRUPTIBLE_TIMER
+				g.AllowThisThreadToBeInterrupted = true;
+			}
 			else
 				// Incrementing this unconditionally makes it a cruder measure than g.LinesPerCycle,
 				// but it seems okay to be less accurate for this purpose:
-				++g_script.mUninterruptedLineCount;
+				++g.UninterruptedLineCount;
 		}
 
 		// The below handles the message-loop checking regardless of whether
@@ -4703,7 +4964,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
 			// the program itself to terminate.  Otherwise, it causes us to return from all blocks
 			// and Gosubs (i.e. all the way out of the current subroutine, which was usually triggered
 			// by a hotkey):
-			if (Hotkey::sHotkeyCount || Hotkey::HookIsActive() || g_persistent)
+			if (IS_PERSISTENT)
 				return EARLY_EXIT;  // It's "early" because only the very end of the script is the "normal" exit.
 			else
 				// This has been tested and it does yield to the OS the error code indicated in ARG1,
@@ -5978,10 +6239,13 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 
 	case ACT_WINMOVE:
 		return mArgc > 2 ? WinMove(EIGHT_ARGS) : WinMove("", "", ARG1, ARG2);
+
 	case ACT_WINMENUSELECTITEM:
 		return WinMenuSelectItem(ELEVEN_ARGS);
+
 	case ACT_CONTROLSEND:
-		return ControlSend(SIX_ARGS);
+	case ACT_CONTROLSENDRAW:
+		return ControlSend(SIX_ARGS, mActionType == ACT_CONTROLSENDRAW);
 
 	case ACT_CONTROLCLICK:
 		if (*ARG4)
@@ -5991,7 +6255,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		}
 		else // Default button when the param is blank or an reference to an empty var.
 			vk = VK_LBUTTON;
-		return ControlClick(vk, *ARG5 ? ATOI(ARG5) : 1, *ARG6, ARG1, ARG2, ARG3, ARG7, ARG8);
+		return ControlClick(vk, *ARG5 ? ATOI(ARG5) : 1, ARG6, ARG1, ARG2, ARG3, ARG7, ARG8);
 
 	case ACT_CONTROLMOVE:
 		return ControlMove(NINE_ARGS);
@@ -6033,6 +6297,8 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		return WinGetPos(ARG5, ARG6, ARG7, ARG8);
 	case ACT_PIXELSEARCH:
 		return PixelSearch(ATOI(ARG3), ATOI(ARG4), ATOI(ARG5), ATOI(ARG6), ATOI(ARG7), ATOI(ARG8));
+	//case ACT_IMAGESEARCH:
+	//	return ImageSearch(ATOI(ARG3), ATOI(ARG4), ATOI(ARG5), ATOI(ARG6), ARG7);
 	case ACT_PIXELGETCOLOR:
 		return PixelGetColor(ATOI(ARG2), ATOI(ARG3));
 	case ACT_WINMINIMIZEALL: // From AutoIt3 source:
@@ -6098,12 +6364,34 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		}
 		else
 			toggle = TOGGLE_INVALID;
+		// Below relies on distinguishing a true empty string from one that is sent to the function
+		// as empty as a signal.  Don't change it without a full understanding because it's likely
+		// to break compatibility or something else:
 		switch(toggle)
 		{
-		case TOGGLED_ON:  g_script.UpdateOrCreateTimer(target_label, -1, true); break;
-		case TOGGLED_OFF: g_script.UpdateOrCreateTimer(target_label, -1, false); break;
-		// Timer is always (re)enabled when ARG2 is blank or specifies a numeric period:
-		default: g_script.UpdateOrCreateTimer(target_label, ATOI(ARG2), true); // Read any float as an int.
+		case TOGGLED_ON:  g_script.UpdateOrCreateTimer(target_label, "", ARG3, true, false); break;
+		case TOGGLED_OFF: g_script.UpdateOrCreateTimer(target_label, "", ARG3, false, false); break;
+		// Timer is always (re)enabled when ARG2 specifies a numeric period or is blank + there's no ARG3.
+		// If ARG2 is blank but ARG3 (priority) isn't, tell it to update only the priority and nothing else:
+		default: g_script.UpdateOrCreateTimer(target_label, ARG2, ARG3, true, !*ARG2 && *ARG3);
+		}
+		return OK;
+
+	case ACT_THREAD:
+		switch (ConvertThreadCommand(ARG1))
+		{
+		case THREAD_CMD_PRIORITY:
+			g.Priority = ATOI(ARG2);
+			break;
+		case THREAD_CMD_INTERRUPT:
+			// If either one is blank, leave that setting as it was before.
+			if (*ARG1)
+				g_script.mUninterruptibleTime = ATOI(ARG2);  // 32-bit (for compatibility with DWORDs returned by GetTickCount).
+			if (*ARG2)
+				g_script.mUninterruptedLineCountMax = ATOI(ARG3);  // 32-bit also, to help performance (since huge values seem unnecessary).
+			break;
+		// If invalid command, do nothing since that is always caught at load-time unless the command
+		// is in a variable reference (very rare in this case).
 		}
 		return OK;
 
@@ -6255,9 +6543,9 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		if (*ARG3 && toupper(*ARG3) == 'T' && !*(ARG3 + 1)) // Convert to title case
 			StrToTitleCase(output_var->Contents());
 		else if (mActionType == ACT_STRINGLOWER)
-			strlwr(output_var->Contents());
+			CharLower(output_var->Contents());
 		else
-			strupr(output_var->Contents());
+			CharUpper(output_var->Contents());
 		return output_var->Close();  // In case it's the clipboard.
 
 	case ACT_STRINGLEN:
@@ -6903,8 +7191,10 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		return Input(ARG2, ARG3, ARG4);
 
 	case ACT_SEND:
-		SendKeys(ARG1);
+	case ACT_SENDRAW:
+		SendKeys(ARG1, mActionType == ACT_SENDRAW);
 		return OK;
+
 	case ACT_MOUSECLICKDRAG:
 		if (   !(vk = ConvertMouseButton(ARG1, false))   )
 			return LineError(ERR_MOUSE_BUTTON ERR_ABORT, FAIL, ARG1);
@@ -6919,6 +7209,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		MouseClickDrag(vk, x, y, ATOI(ARG4), ATOI(ARG5), *ARG6 ? ATOI(ARG6) : g.DefaultMouseSpeed
 			, toupper(*ARG7) == 'R');
 		return OK;
+
 	case ACT_MOUSECLICK:
 		if (   !(vk = ConvertMouseButton(ARG1))   )
 			return LineError(ERR_MOUSE_BUTTON ERR_ABORT, FAIL, ARG1);
@@ -6929,6 +7220,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		MouseClick(vk, x, y, *ARG4 ? ATOI(ARG4) : 1, *ARG5 ? ATOI(ARG5) : g.DefaultMouseSpeed, *ARG6
 			, toupper(*ARG7) == 'R');
 		return OK;
+
 	case ACT_MOUSEMOVE:
 		if (!ValidateMouseCoords(ARG1, ARG2))
 			return LineError(ERR_MOUSE_COORD ERR_ABORT, FAIL, ARG1);
@@ -6936,6 +7228,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		y = *ARG2 ? ATOI(ARG2) : COORD_UNSPECIFIED;
 		MouseMove(x, y, *ARG3 ? ATOI(ARG3) : g.DefaultMouseSpeed, toupper(*ARG4) == 'R');
 		return OK;
+
 	case ACT_MOUSEGETPOS:
 		return MouseGetPos();
 
@@ -7016,7 +7309,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		return OK;
 
 	case ACT_MENU:
-		return g_script.PerformMenu(FOUR_ARGS);
+		return g_script.PerformMenu(FIVE_ARGS);
 
 	case ACT_SETCONTROLDELAY: g.ControlDelay = ATOI(ARG1); return OK;
 	case ACT_SETWINDELAY: g.WinDelay = ATOI(ARG1); return OK;
@@ -7040,16 +7333,8 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			if (   !(g.LinesPerCycle = ATOI64(ARG1))   )
 				// Don't interpret zero as "infinite" because zero can accidentally
 				// occur if the dereferenced var was blank:
-				g.LinesPerCycle = DEFAULT_BATCH_LINES;
+				g.LinesPerCycle = 10;  // The old default, which is retained for compatbility with existing scripts.
 		}
-		return OK;
-
-	case ACT_SETINTERRUPT:
-		// If either one is blank, leave that setting as it was before.
-		if (*ARG1)
-			g.UninterruptibleTime = ATOI(ARG1);  // 32-bit (for compatibility with DWORDs returned by GetTickCount).
-		if (*ARG2)
-			g.UninterruptedLineCountMax = ATOI(ARG2);  // 32-bit also, to help performance (since huge values seem unnecessary).
 		return OK;
 
 	////////////////////////////////////////////////////////////////////////////////////////
@@ -7538,9 +7823,8 @@ VarSizeType Script::GetTimeIdlePhysical(char *aBuf)
 VarSizeType Script::ScriptGetCursor(char *aBuf)
 // Adapted from the AutoIt3 source.
 {
-	#define CURSOR_NAME_SIZE (MAX_ALLOC_SIMPLE - 1) // The maximum size of any of the strings we return, including terminator.
 	if (!aBuf)
-		return CURSOR_NAME_SIZE - 1;  // -1 since we're returning the length of the var's contents, not the size.
+		return SMALL_STRING_LENGTH;  // we're returning the length of the var's contents, not the size.
 
 	POINT point;
 	GetCursorPos(&point);
@@ -7556,7 +7840,7 @@ VarSizeType Script::ScriptGetCursor(char *aBuf)
 	if (!current_cursor)
 	{
 		#define CURSOR_UNKNOWN "Unknown"
-		strlcpy(aBuf, CURSOR_UNKNOWN, CURSOR_NAME_SIZE);
+		strlcpy(aBuf, CURSOR_UNKNOWN, SMALL_STRING_LENGTH + 1);
 		return (VarSizeType)strlen(aBuf);
 	}
 
@@ -7577,7 +7861,7 @@ VarSizeType Script::ScriptGetCursor(char *aBuf)
 		if (cursor[a] == current_cursor)
 			break;
 
-	strlcpy(aBuf, cursor_name[a], CURSOR_NAME_SIZE);  // If a is out-of-bounds, "Unknown" will be used.
+	strlcpy(aBuf, cursor_name[a], SMALL_STRING_LENGTH + 1);  // If a is out-of-bounds, "Unknown" will be used.
 	return (VarSizeType)strlen(aBuf);
 }
 
@@ -7586,7 +7870,8 @@ VarSizeType Script::ScriptGetCursor(char *aBuf)
 VarSizeType Script::GetIP(int aAdapterIndex, char *aBuf)
 // Adapted from the AutoIt3 source.
 {
-	#define IP_ADDRESS_SIZE (MAX_ALLOC_SIMPLE - 1) // The maximum size of any of the strings we return, including terminator.
+	// aaa.bbb.ccc.ddd = 15, but allow room for larger IP's in the future.
+	#define IP_ADDRESS_SIZE 32 // The maximum size of any of the strings we return, including terminator.
 	if (!aBuf)
 		return IP_ADDRESS_SIZE - 1;  // -1 since we're returning the length of the var's contents, not the size.
 
@@ -7775,7 +8060,8 @@ void Line::ToggleSuspendState()
 		// while the suspension was in effect, in which case the nature of some old hotkeys may have changed
 		// from registered to hook due to an interdependency with a newly added hotkey.  There are comments
 		// in AllActivate() that describe these interdependencies:
-		Hotkey::AllActivate(true);
+		Hotkey::AllActivate();
+	Hotstring::SuspendAll(g_IsSuspended);
 	g_script.UpdateTrayIcon();
 	CheckMenuItem(GetMenu(g_hWnd), ID_FILE_SUSPEND, g_IsSuspended ? MF_CHECKED : MF_UNCHECKED);
 }
@@ -8378,7 +8664,7 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 		}
 		else
 		{
-			sei.lpVerb = "open";
+			sei.lpVerb = NULL;  // A better choice than "open" because NULL causes default verb to be used.
 			sei.lpFile = shell_action;
 			sei.lpParameters = shell_params;
 		}
@@ -8396,7 +8682,7 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 		if (aDisplayErrors)
 		{
 			char error_text[2048], verb_text[128];
-			if (shell_action_is_system_verb && stricmp(shell_action, "open"))  // It's a verb, but not the default "open" verb.
+			if (shell_action_is_system_verb)
 				snprintf(verb_text, sizeof(verb_text), "\nVerb: <%s>", shell_action);
 			else // Don't bother showing it if it's just "open".
 				*verb_text = '\0';

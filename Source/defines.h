@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003 Christopher L. Mallett
+Copyright 2003 Chris Mallett
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.15"
+#define NAME_VERSION "1.0.16"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -95,7 +95,7 @@ enum ExitReasons {EXIT_NONE, EXIT_CRITICAL, EXIT_ERROR, EXIT_DESTROY, EXIT_LOGOF
 	, EXIT_WM_QUIT, EXIT_WM_CLOSE, EXIT_MENU, EXIT_EXIT, EXIT_RELOAD, EXIT_SINGLEINSTANCE};
 
 enum SingleInstanceType {ALLOW_MULTI_INSTANCE, SINGLE_INSTANCE, SINGLE_INSTANCE_REPLACE
-	, SINGLE_INSTANCE_IGNORE}; // ALLOW_MULTI_INSTANCE must be zero.
+	, SINGLE_INSTANCE_IGNORE, SINGLE_INSTANCE_OFF}; // ALLOW_MULTI_INSTANCE must be zero.
 
 enum MenuVisibleType {MENU_VISIBLE_NONE, MENU_VISIBLE_POPUP, MENU_VISIBLE_MAIN}; // NONE must be zero.
 
@@ -127,6 +127,12 @@ enum ToggleValueType {TOGGLE_INVALID = 0, TOGGLED_ON, TOGGLED_OFF, ALWAYS_ON, AL
 #define MAX_NUMBER_LENGTH 20
 // Above is the maximum length of a 64-bit number when expressed as decimal or hex string.
 // e.g. -9223372036854775808 or (unsigned) 18446744073709551616
+
+// Hot strings:
+// memmove() and proper detection of long hotstrings rely on buf being at least this large:
+#define HS_BUF_SIZE (MAX_HOTSTRING_LENGTH * 2 + 10)
+#define HS_BUF_DELETE_COUNT (HS_BUF_SIZE / 2)
+#define HS_MAX_END_CHARS 100
 
 // Bitwise storage of boolean flags.  This section is kept in this file because
 // of mutual dependency problems between hook.h and other header files:
@@ -241,6 +247,9 @@ enum TitleMatchModes {MATCHMODE_INVALID = FAIL, FIND_IN_LEADING_PART, FIND_ANYWH
 #define COORD_MODE_MOUSE 0x2
 #define COORD_MODE_TOOLTIP 0x4
 
+// Each instance of this struct generally corresponds to a quasi-thread.  The function that creates
+// a new thread typically saves the old thread's struct values on its stack so that they can later
+// be copied back into the g struct when the thread is resumed:
 struct global_struct
 {
 	TitleMatchModes TitleMatchMode;
@@ -248,9 +257,10 @@ struct global_struct
 	bool DetectHiddenWindows; // Whether to detect the titles of hidden parent windows.
 	bool DetectHiddenText;    // Whether to detect the text of hidden child windows.
 	__int64 LinesPerCycle; // Use 64-bits for this so that user can specify really large values.
-	int UninterruptedLineCountMax; // 32-bit for performance (since huge values seem unnecessary here).
-	int UninterruptibleTime;
 	int IntervalBeforeRest;
+	bool AllowThisThreadToBeInterrupted;  // Whether this thread can be interrupted by custom menu items, hotkeys, or timers.
+	int UninterruptedLineCount; // Stored as a g-struct attribute in case OnExit sub interrupts it while uninterruptible.
+	int Priority;  // This thread's priority relative to others.
 	int WinDelay;  // negative values may be used as special flags.
 	int ControlDelay;  // negative values may be used as special flags.
 	int KeyDelay;  // negative values may be used as special flags.
@@ -278,6 +288,7 @@ inline void global_clear_state(global_struct *gp)
 	//gp->hWndToRestore = NULL;
 	gp->MsgBoxResult = 0;
 	gp->IsPaused = false;
+	gp->UninterruptedLineCount = 0;
 }
 
 inline void global_init(global_struct *gp)
@@ -294,11 +305,11 @@ inline void global_init(global_struct *gp)
 	gp->DetectHiddenWindows = false;  // Same as AutoIt2 but unlike AutoIt3; seems like a more intuitive default.
 	gp->DetectHiddenText = true;  // Unlike AutoIt, which defaults to false.  This setting performs better.
 	// Not sure what the optimal default is.  1 seems too low (scripts would be very slow by default):
-	#define DEFAULT_BATCH_LINES 10
-	gp->LinesPerCycle = DEFAULT_BATCH_LINES;
-	gp->UninterruptedLineCountMax = 1000;  // High by default, since we want UninterruptibleTime usually to occur 1st.
-	gp->UninterruptibleTime = 15;  // Seems more likely to truly wait than 10 would, due to timer granularity.
-	gp->IntervalBeforeRest = -1;  // i.e. this new method is disabled by default.
+	gp->LinesPerCycle = -1;
+	gp->IntervalBeforeRest = 10;  // sleep for 10ms every 10ms
+	gp->AllowThisThreadToBeInterrupted = true; // Separate from g_AllowInterruption so that they can have independent values.
+	#define PRIORITY_MINIMUM INT_MIN
+	gp->Priority = 0;
 	gp->WinDelay = 100;  // AutoIt3's default is 250, which seems a little too high nowadays.
 	gp->ControlDelay = 20;
 	gp->KeyDelay = 10;   // AutoIt3's default.

@@ -554,6 +554,10 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 					ksc[aHK[i]->mModifierSC].used_as_prefix = true;
 					if (aHK[i]->mNoSuppress & NO_SUPPRESS_PREFIX)
 						ksc[aHK[i]->mModifierSC].no_suppress |= NO_SUPPRESS_PREFIX;
+					// For some scan codes this was already set above.  But to support explicit scan code prefixes,
+					// such as "SC118 & SC122::MsgBox", make sure it's set for every prefix that uses an explicit
+					// scan code:
+					ksc[aHK[i]->mModifierSC].sc_takes_precedence = true;
 				}
 				if (pThisKey->nModifierSC < MAX_MODIFIER_SCS_PER_SUFFIX)  // else currently no error-reporting.
 				{
@@ -582,7 +586,8 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 	// Note: the values of g_ForceNum/Caps/ScrollLock are TOGGLED_ON/OFF or neutral, never ALWAYS_ON/ALWAYS_OFF:
 	bool force_CapsNumScroll = g_ForceNumLock != NEUTRAL || g_ForceCapsLock != NEUTRAL || g_ForceScrollLock != NEUTRAL;
 
-	if (!keybd_hook_hotkey_count && !mouse_hook_hotkey_count && !force_CapsNumScroll && !aWhichHookAlways)
+	if (!(keybd_hook_hotkey_count || mouse_hook_hotkey_count || force_CapsNumScroll || aWhichHookAlways
+		|| Hotstring::AtLeastOneEnabled()))
 		// Since there are no hotkeys whatsover (not even an AlwaysOn/Off toggleable key),
 		// remove all hooks and free the memory.  Currently, this should only happen if
 		// aActivateOnlySuspendHotkeys is true (i.e. there were no Suspend-type hotkeys to
@@ -682,7 +687,7 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 	// Install any hooks that aren't already installed:
 	// Even if OS is Win9x, try LL hooks anyway.  This will probably fail on WinNT if it doesn't have SP3+
 	if (   !g_KeybdHook && ((aWhichHookAlways & HOOK_KEYBD)
-		|| ((aWhichHook & HOOK_KEYBD) && (keybd_hook_hotkey_count || force_CapsNumScroll)))   )
+		|| ((aWhichHook & HOOK_KEYBD) && (keybd_hook_hotkey_count || force_CapsNumScroll || Hotstring::AtLeastOneEnabled())))   )
 	{
 #ifdef HOOK_WARNING
 		if (!keybd_hook_mutex) // else we already have ownership of the mutex so no need for this check.
@@ -709,17 +714,7 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 		if (g_KeybdHook = SetWindowsHookEx(WH_KEYBOARD_LL, LowLevelKeybdProc, g_hInstance, 0))
 		{
 			hooks_currently_active |= HOOK_KEYBD;
-			// Doesn't seem necessary to ever init g_KeyHistory or g_KeyHistoryNext here, since they were
-			// zero-filled on startup.  But we do want to reset the below whenever the hook is being
-			// installed after a (probably long) period during which it wasn't installed.  This is
-			// because we don't know the current physical state of the keyboard and such:
-			ZeroMemory(g_PhysicalKeyState, sizeof(g_PhysicalKeyState));
-			pPrefixKey = NULL;
-			g_modifiersLR_physical = 0;  // Best to make this zero, otherwise keys might get stuck down after a Send.
-			g_modifiersLR_logical = g_modifiersLR_logical_non_ignored = GetModifierLRState(true);
-			disguise_next_lwin_up = disguise_next_rwin_up = disguise_next_lalt_up = disguise_next_ralt_up
-				= alt_tab_menu_is_visible = false;
-			ZeroMemory(pad_state, sizeof(pad_state));
+			ResetHook(HOOK_KEYBD);
 		}
 		else
 		{
@@ -739,7 +734,7 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 		// corresponding hotkeys (currently the latter only happens in the case of
 		// aActivateOnlySuspendHotkeys == TRUE):
 		if (g_KeybdHook && !(aWhichHookAlways & HOOK_KEYBD)
-			&& (!(aWhichHook & HOOK_KEYBD) || !(keybd_hook_hotkey_count || force_CapsNumScroll)))
+			&& (!(aWhichHook & HOOK_KEYBD) || !(keybd_hook_hotkey_count || force_CapsNumScroll || Hotstring::AtLeastOneEnabled())))
 			hooks_currently_active = RemoveKeybdHook();
 
 	if (   !g_MouseHook && ((aWhichHookAlways & HOOK_MOUSE)
@@ -767,17 +762,7 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 		if (g_MouseHook = SetWindowsHookEx(WH_MOUSE_LL, LowLevelMouseProc, g_hInstance, 0))
 		{
 			hooks_currently_active |= HOOK_MOUSE;
-			// Initialize some things, a very limited subset of what is initialized when the
-			// keyboard hook is installed (see its comments).  This is might not everything
-			// we should initialize, so further study is justified in the future:
-#ifdef FUTURE_USE_MOUSE_BUTTONS_LOGICAL
-			g_mouse_buttons_logical = 0;
-#endif
-			g_PhysicalKeyState[VK_LBUTTON] = g_PhysicalKeyState[VK_RBUTTON] = g_PhysicalKeyState[VK_MBUTTON] 
-				= g_PhysicalKeyState[VK_XBUTTON1] = g_PhysicalKeyState[VK_XBUTTON2] = 0;
-			// These are not really valid, since they can't be in a physically down state, but it's
-			// probably better to have a false value in them:
-			g_PhysicalKeyState[VK_WHEEL_DOWN] = g_PhysicalKeyState[VK_WHEEL_UP] = 0;
+			ResetHook(HOOK_MOUSE);
 		}
 		else
 		{
@@ -798,6 +783,49 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 			hooks_currently_active = RemoveMouseHook();
 
 	return hooks_currently_active;
+}
+
+
+
+void ResetHook(HookType aWhichHook)
+{
+	if (aWhichHook & HOOK_MOUSE)
+	{
+		// Initialize some things, a very limited subset of what is initialized when the
+		// keyboard hook is installed (see its comments).  This is might not everything
+		// we should initialize, so further study is justified in the future:
+#ifdef FUTURE_USE_MOUSE_BUTTONS_LOGICAL
+		g_mouse_buttons_logical = 0;
+#endif
+		g_PhysicalKeyState[VK_LBUTTON] = g_PhysicalKeyState[VK_RBUTTON] = g_PhysicalKeyState[VK_MBUTTON] 
+			= g_PhysicalKeyState[VK_XBUTTON1] = g_PhysicalKeyState[VK_XBUTTON2] = 0;
+		// These are not really valid, since they can't be in a physically down state, but it's
+		// probably better to have a false value in them:
+		g_PhysicalKeyState[VK_WHEEL_DOWN] = g_PhysicalKeyState[VK_WHEEL_UP] = 0;
+	}
+
+	if (aWhichHook & HOOK_KEYBD)
+	{
+		// Doesn't seem necessary to ever init g_KeyHistory or g_KeyHistoryNext here, since they were
+		// zero-filled on startup.  But we do want to reset the below whenever the hook is being
+		// installed after a (probably long) period during which it wasn't installed.  This is
+		// because we don't know the current physical state of the keyboard and such:
+
+		g_modifiersLR_physical = 0;  // Best to make this zero, otherwise keys might get stuck down after a Send.
+		g_modifiersLR_logical = g_modifiersLR_logical_non_ignored = GetModifierLRState(true);
+
+		ZeroMemory(g_PhysicalKeyState, sizeof(g_PhysicalKeyState));
+		pPrefixKey = NULL;
+
+		disguise_next_lwin_up = disguise_next_rwin_up = disguise_next_lalt_up = disguise_next_ralt_up
+			= alt_tab_menu_is_visible = false;
+
+		ZeroMemory(pad_state, sizeof(pad_state));
+
+		*g_HSBuf = '\0';
+		g_HSBufLength = 0;
+		g_HShwnd = GetForegroundWindow(); // Not needed by some callers, but shouldn't hurt even then.
+	}
 }
 
 

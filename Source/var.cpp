@@ -466,12 +466,18 @@ VarSizeType Var::Get(char *aBuf)
 	case VAR_TAB:
 	case VAR_SPACE: if (!aBuf) return g_script.GetSpace(mType); else aBuf += g_script.GetSpace(mType, aBuf); break;
 
+	case VAR_MMMM:   if (!aBuf) return g_script.GetMMMM(); else aBuf += g_script.GetMMMM(aBuf); break;
+	case VAR_MMM:  if (!aBuf) return g_script.GetMMM(); else aBuf += g_script.GetMMM(aBuf); break;
+	case VAR_DDDD:  if (!aBuf) return g_script.GetDDDD(); else aBuf += g_script.GetDDDD(aBuf); break;
+	case VAR_DDD: if (!aBuf) return g_script.GetDDD(); else aBuf += g_script.GetDDD(aBuf); break;
+
 	case VAR_TICKCOUNT: if (!aBuf) return g_script.MyGetTickCount(); else aBuf += g_script.MyGetTickCount(aBuf); break;
 	case VAR_NOW: if (!aBuf) return g_script.GetNow(); else aBuf += g_script.GetNow(aBuf); break;
 	case VAR_NOWUTC: if (!aBuf) return g_script.GetNowUTC(); else aBuf += g_script.GetNowUTC(aBuf); break;
-	case VAR_YEAR: if (!aBuf) return 4; // else fall through, which admittedly is somewhat inefficient here.
-	case VAR_MON:
-	case VAR_MDAY:
+
+	case VAR_YYYY: if (!aBuf) return 4; // else fall through, which admittedly is somewhat inefficient here.
+	case VAR_MM:
+	case VAR_DD:
 	case VAR_HOUR:
 	case VAR_MIN:
 	case VAR_SEC:  if (!aBuf) return 2; // length 2 for this and the above.
@@ -492,9 +498,9 @@ VarSizeType Var::Get(char *aBuf)
 		}
 		switch (mType)
 		{
-		case VAR_YEAR: aBuf += sprintf(aBuf, "%d", now->tm_year + 1900); break;
-		case VAR_MON:  aBuf += sprintf(aBuf, "%02d", now->tm_mon + 1); break;
-		case VAR_MDAY: aBuf += sprintf(aBuf, "%02d", now->tm_mday); break;
+		case VAR_YYYY: aBuf += sprintf(aBuf, "%d", now->tm_year + 1900); break;
+		case VAR_MM:  aBuf += sprintf(aBuf, "%02d", now->tm_mon + 1); break;
+		case VAR_DD: aBuf += sprintf(aBuf, "%02d", now->tm_mday); break;
 		case VAR_HOUR: aBuf += sprintf(aBuf, "%02d", now->tm_hour); break;
 		case VAR_MIN:  aBuf += sprintf(aBuf, "%02d", now->tm_min); break;
 		case VAR_SEC:  aBuf += sprintf(aBuf, "%02d", now->tm_sec); break;
