@@ -1664,7 +1664,9 @@ HWND WindowSearch::IsMatch(bool aInverted)
 		//else no error reporting currently, since should be very rare.
 	}
 
-	return mFoundParent;
+	// Fix for v1.0.30.01: Don't return mFoundParent because its NULL when aInverted is true.
+	// At this stage, the candidate is a known match, so return it:
+	return mCandidateParent;
 }
 
 

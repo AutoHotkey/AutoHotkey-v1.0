@@ -8997,6 +8997,18 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
             for (this_marker = deref->marker; pText < this_marker; *aBuf++ = *pText++); // this_marker is used to help performance.
 		}
 
+		// Known issue: If something like %A_Space%String exists in the script (or any variable containing
+		// spaces), the expression will yield inconsistent results.  Since I haven't found an easy way
+		// to fix that, not fixing it seems okay in this case because it's not a correct way to be using
+		// dynamically built variable names in the first place.  In case this will be fixed in the future,
+		// either directly or as a side-effect of other changes, here is a test script that illustrates
+		// the inconsistency:
+		//vText = ABC 
+		//vNum = 1 
+		//result1 := (vText = %A_space%ABC) AND (vNum = 1)
+		//result2 := vText = %A_space%ABC AND vNum = 1
+		//MsgBox %result1%`n%result2%
+
 		// Now copy the contents of the dereferenced var.  For all cases, aBuf has already
 		// been verified to be large enough, assuming the value hasn't changed between the
 		// time we were called and the time the caller calculated the space needed.

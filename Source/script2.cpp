@@ -6716,7 +6716,7 @@ ResultType Line::PerformAssign()
 		// Otherwise, the variable's mLength member would be set to something too high (the estimate),
 		// which might cause problems elsewhere.
 		binary_contents = output_var->Contents();
-		VarSizeType capacity = output_var->Capacity();
+		VarSizeType capacity = output_var->Capacity(); // Note that this is the granted capacity, which might be a little larger than requested.
 		VarSizeType actual_space_used;
 		for (actual_space_used = sizeof(format), format = 0; format = EnumClipboardFormats(format);)
 		{

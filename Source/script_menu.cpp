@@ -695,7 +695,12 @@ ResultType UserMenu::ModifyItem(UserMenuItem *aMenuItem, Label *aLabel, UserMenu
 		{
 			UserMenu *temp = aMenuItem->mSubmenu;
 			aMenuItem->mSubmenu = aSubmenu; // Should be done before the below so that Destroy() sees the change.
-			temp->Destroy(); // Shouldn't fail because submenus are popup menus, and popup menus can't be menu bars.
+			// The following shouldn't fail because submenus are popup menus, and popup menus can't be
+			// menu bars. Update: Even if it does fail due to causing a cascade-destroy upward toward any
+			// menu bar that happens to own it, it seems okay because the real purpose here is simply to
+			// update that fact that "temp" was already destroyed indirectly by the OS, as evidenced by
+			// the fact that IsMenu() returned FALSE above.
+			temp->Destroy();
 		}
 		else
 			aMenuItem->mSubmenu = aSubmenu;
@@ -1073,6 +1078,9 @@ ResultType UserMenu::AppendStandardItems()
 
 
 ResultType UserMenu::Destroy()
+// Returns OK upon complete success or FAIL otherwise.  For example, even if this's menu
+// is successfully destroyed, if the indirect destructions resulting from it don't succeed, this
+// method returns FAIL.
 {
 	if (!mMenu)  // For performance.
 		return OK;
@@ -1108,22 +1116,23 @@ ResultType UserMenu::Destroy()
 						break;
 				}
 		}
-		DestroyMenu(mMenu);
+		if (!DestroyMenu(mMenu)) // v1.0.30.01: Doesn't seem to be a reason *not* to check the return value and return FAIL if it failed.
+			return FAIL;
 	}
 	mMenu = NULL; // This must be done immediately after destroying the menu to prevent recursion problems below.
 
 	// Bug-fix for v1.0.19: The below is now done OUTSIDE the above block because the moment a
 	// parent menu is deleted all its submenus AND SUB-SUB-SUB...MENUS become invalid menu handles.
 	// But even though the OS has done this, Destroy() must still be called recursively from here
-	// so that the menu handles will be set to NULL.  This is because other functions (such as
-	// Display()) do not do the IsMenu() check, relying instead on whether the handle is NULL to
+	// so that the menu handles will be set to NULL.  This is because other functions -- such as
+	// Display() -- do not do the IsMenu() check, relying instead on whether the handle is NULL to
 	// determine whether the menu physically exists.
 	// The moment the above is done, any submenus that were attached to mMenu are also destroyed
 	// by the OS.  So mark them as destroyed in our bookkeeping also:
 	UserMenuItem *mi;
 	for (mi = mFirstMenuItem; mi ; mi = mi->mNextMenuItem)
 		if (mi->mSubmenu && mi->mSubmenu->mMenu && !IsMenu(mi->mSubmenu->mMenu))
-			mi->mSubmenu->Destroy();
+			mi->mSubmenu->Destroy(); // Its return value isn't checked since there doesn't seem to be anything that can/should be done if it fails.
 
 	// Destroy any menu that contains this menu as a submenu.  This is done so that such
 	// menus will be automatically recreated the next time they are used, which is necessary
@@ -1136,12 +1145,14 @@ ResultType UserMenu::Destroy()
 	// time we display it.  Another drawback to DeleteMenu() is that it would change the
 	// order of the menu items to something other than what the user originally specified
 	// unless InsertMenu() was woven in during the update:
+	ResultType result = OK;
 	for (UserMenu *m = g_script.mFirstMenu; m; m = m->mNextMenu)
 		if (m->mMenu)
 			for (mi = m->mFirstMenuItem; mi; mi = mi->mNextMenuItem)
 				if (mi->mSubmenu == this)
-					m->Destroy();  // Attempt to destroy any menu that contains this menu as a submenu (will fail if m is a menu bar).
-	return OK;
+					if (!m->Destroy())  // Attempt to destroy any menu that contains this menu as a submenu (will fail if m is a menu bar).
+						result = FAIL; // Seems best to consider even one failure is considered a total failure.
+	return result;
 }
 
 

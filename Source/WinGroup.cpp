@@ -431,6 +431,9 @@ BOOL CALLBACK EnumParentFindAnyExcept(HWND aWnd, LPARAM lParam)
 	WindowSearch &ws = *((WindowSearch *)lParam);  // For performance and convenience.
 	ws.SetCandidate(aWnd);
 
+	// Check this window's attributes against each set of criteria present in the group.  If
+	// it's a match for any set of criteria, it's a member of the group and thus should be
+	// excluded since we want only NON-members:
 	for (WindowSpec *win = ws.mFirstWinSpec;;)
 	{
 		// For each window in the linked list, check if aWnd is a match for it:
