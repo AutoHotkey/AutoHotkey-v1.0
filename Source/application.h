@@ -17,7 +17,6 @@ GNU General Public License for more details.
 #ifndef application_h
 #define application_h
 
-#include <limits.h>
 #include "defines.h"
 
 // 9 might be better than 10 because if the granularity/timer is a little

@@ -17,11 +17,7 @@ GNU General Public License for more details.
 #ifndef hook_h
 #define hook_h
 
-#include "StdAfx.h"  // Pre-compiled headers
-#ifndef _MSC_VER  // For non-MS compilers:
-	#include <windows.h>
-#endif
-
+#include "stdafx.h" // pre-compiled headers
 #include "hotkey.h"
 
 // WM_USER is the lowest number that can be a user-defined message.  Anything above that is also valid.

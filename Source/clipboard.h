@@ -17,7 +17,7 @@ GNU General Public License for more details.
 #ifndef clipboard_h
 #define clipboard_h
 
-#include <limits.h>  // For UINT_MAX
+#include "stdafx.h" // pre-compiled headers
 #include "defines.h"
 
 

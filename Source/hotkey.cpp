@@ -14,6 +14,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 */
 
+#include "stdafx.h" // pre-compiled headers
 #include "hotkey.h"
 #include "globaldata.h"  // For access to g_vk_to_sc and several other global vars.
 #include "window.h" // For MsgBox()
@@ -64,7 +65,7 @@ void Hotkey::AllActivate()
 		{
 			// For simplicity, don't try to undo keys that are already considered to be
 			// handled by the hook, since it's not easy to know if they were set that
-			// way using "ForceHotkey, on" or really qualified some other way.
+			// way using "#UseHook, on" or really qualified some other way.
 			// Instead, just remove any modifiers that are obviously redundant from all
 			// keys (do them all due to cases where RegisterHotkey() fails and the key
 			// is then auto-enabled via the hook).  No attempt is currently made to

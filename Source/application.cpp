@@ -14,6 +14,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 */
 
+#include "stdafx.h" // pre-compiled headers
 #include "application.h"
 #include "globaldata.h" // for access to g_clip, the "g" global struct, etc.
 #include "window.h" // for serveral MsgBox and window functions

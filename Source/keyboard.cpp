@@ -14,6 +14,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 */
 
+#include "stdafx.h" // pre-compiled headers
 #include "keyboard.h"
 #include "globaldata.h" // for g.KeyDelay
 #include "application.h" // for MsgSleep()

@@ -28,7 +28,7 @@
 				MinimalRebuild="TRUE"
 				BasicRuntimeChecks="3"
 				RuntimeLibrary="5"
-				UsePrecompiledHeader="0"
+				UsePrecompiledHeader="2"
 				WarningLevel="3"
 				Detect64BitPortabilityProblems="TRUE"
 				DebugInformationFormat="4"/>
@@ -42,6 +42,7 @@
 				GenerateDebugInformation="TRUE"
 				ProgramDatabaseFile="$(OutDir)/AutoHotkey.pdb"
 				SubSystem="2"
+				OptimizeForWindows98="1"
 				TargetMachine="1"/>
 			<Tool
 				Name="VCMIDLTool"/>
@@ -72,9 +73,18 @@
 			CharacterSet="2">
 			<Tool
 				Name="VCCLCompilerTool"
+				Optimization="2"
+				GlobalOptimizations="TRUE"
+				InlineFunctionExpansion="0"
+				EnableIntrinsicFunctions="TRUE"
+				FavorSizeOrSpeed="1"
+				OmitFramePointers="TRUE"
 				PreprocessorDefinitions="WIN32;NDEBUG;_WINDOWS"
+				StringPooling="TRUE"
+				ExceptionHandling="FALSE"
 				RuntimeLibrary="4"
-				UsePrecompiledHeader="0"
+				BufferSecurityCheck="FALSE"
+				UsePrecompiledHeader="2"
 				WarningLevel="3"
 				Detect64BitPortabilityProblems="TRUE"
 				DebugInformationFormat="3"/>
@@ -85,10 +95,13 @@
 				AdditionalDependencies="winmm.lib version.lib"
 				OutputFile="$(OutDir)/AutoHotkey.exe"
 				LinkIncremental="1"
-				GenerateDebugInformation="TRUE"
+				GenerateDebugInformation="FALSE"
 				SubSystem="2"
+				LargeAddressAware="1"
+				TerminalServerAware="1"
 				OptimizeReferences="2"
 				EnableCOMDATFolding="2"
+				OptimizeForWindows98="1"
 				TargetMachine="1"/>
 			<Tool
 				Name="VCMIDLTool"/>
@@ -119,9 +132,18 @@
 			CharacterSet="2">
 			<Tool
 				Name="VCCLCompilerTool"
+				Optimization="2"
+				GlobalOptimizations="TRUE"
+				InlineFunctionExpansion="0"
+				EnableIntrinsicFunctions="TRUE"
+				FavorSizeOrSpeed="1"
+				OmitFramePointers="TRUE"
 				PreprocessorDefinitions="WIN32;NDEBUG;_WINDOWS;AUTOHOTKEYSC"
+				StringPooling="TRUE"
+				ExceptionHandling="FALSE"
 				RuntimeLibrary="4"
-				UsePrecompiledHeader="0"
+				BufferSecurityCheck="FALSE"
+				UsePrecompiledHeader="2"
 				WarningLevel="3"
 				Detect64BitPortabilityProblems="TRUE"
 				DebugInformationFormat="3"/>
@@ -133,10 +155,13 @@
 				OutputFile="$(OutDir)/AutoHotkeySC.bin"
 				LinkIncremental="1"
 				IgnoreDefaultLibraryNames="LIBCMT"
-				GenerateDebugInformation="TRUE"
+				GenerateDebugInformation="FALSE"
 				SubSystem="2"
+				LargeAddressAware="1"
+				TerminalServerAware="1"
 				OptimizeReferences="2"
 				EnableCOMDATFolding="2"
+				OptimizeForWindows98="1"
 				TargetMachine="1"/>
 			<Tool
 				Name="VCMIDLTool"/>
@@ -305,12 +330,6 @@
 			UniqueIdentifier="{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}">
 			<File
 				RelativePath=".\source\resources\AutoHotkey.rc">
-			</File>
-			<File
-				RelativePath=".\source\resources\icon1.ico">
-			</File>
-			<File
-				RelativePath=".\source\resources\icon2.ico">
 			</File>
 			<File
 				RelativePath=".\source\resources\icon_filetype.ico">

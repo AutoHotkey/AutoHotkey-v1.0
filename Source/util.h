@@ -17,10 +17,8 @@ GNU General Public License for more details.
 #ifndef util_h
 #define util_h
 
+#include "stdafx.h" // pre-compiled headers
 #include "defines.h"
-#include "limits.h"  // for UINT_MAX
-//#include <math.h> // For floor()
-
 
 #define IS_SPACE_OR_TAB(c) (c == ' ' || c == '\t')
 
@@ -211,6 +209,8 @@ char *FileAttribToStr(char *aBuf, DWORD aAttr);
 #define DATE_FORMAT "YYYYMMDDHHMISS"
 ResultType YYYYMMDDToFileTime(char *YYYYMMDD, FILETIME *pftDateTime);
 char *FileTimeToYYYYMMDD(char *aYYYYMMDD, FILETIME *pftDateTime, bool aConvertToLocalTime = false);
+unsigned __int64 FileTimeSecondsUntil(FILETIME *pftStart, FILETIME *pftEnd);
+unsigned __int64 YYYYMMDDSecondsUntil(char *aYYYYMMDDStart, char *aYYYYMMDDEnd);
 
 unsigned __int64 GetFileSize64(HANDLE aFileHandle);
 int snprintfcat(char *aBuf, size_t aBufSize, const char *aFormat, ...);

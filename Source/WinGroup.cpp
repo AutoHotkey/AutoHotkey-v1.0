@@ -14,6 +14,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 */
 
+#include "stdafx.h" // pre-compiled headers
 #include "WinGroup.h"
 #include "window.h" // for several lower level window functions
 #include "globaldata.h" // for DoWinDelay

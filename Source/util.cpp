@@ -14,14 +14,8 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 */
 
-#include "StdAfx.h"  // Pre-compiled headers
-#ifndef _MSC_VER  // For non-MS compilers:
-	#include <stdio.h>
-	#include <stdlib.h>
-#endif
-#include <stdarg.h>
+#include "stdafx.h" // pre-compiled headers
 #include "util.h"
-
 
 
 char *FileAttribToStr(char *aBuf, DWORD aAttr)
@@ -98,6 +92,55 @@ char *FileTimeToYYYYMMDD(char *aYYYYMMDD, FILETIME *pftDateTime, bool aConvertTo
 		, st.wYear, st.wMonth, st.wDay
 		, st.wHour, st.wMinute, st.wSecond);
 	return aYYYYMMDD;
+}
+
+
+
+unsigned __int64 FileTimeSecondsUntil(FILETIME *pftStart, FILETIME *pftEnd)
+// Returns the number of seconds from pftStart until pftEnd.
+{
+	if (!pftStart || !pftEnd) return 0;
+
+	// The calculation is done this way for compilers that don't support 64-bit math operations (not sure which):
+	LARGE_INTEGER liStart, liEnd;
+	liStart.LowPart = pftStart->dwLowDateTime;
+	liStart.HighPart = pftStart->dwHighDateTime;
+	liEnd.LowPart = pftEnd->dwLowDateTime;
+	liEnd.HighPart = pftEnd->dwHighDateTime;
+	return (liEnd.QuadPart - liStart.QuadPart) / 10000000; // Convert from tenths-of-microsecond.
+}
+
+
+
+unsigned __int64 YYYYMMDDSecondsUntil(char *aYYYYMMDDStart, char *aYYYYMMDDEnd)
+// Returns the number of seconds from aYYYYMMDDStart until aYYYYMMDDEnd.
+// If aYYYYMMDDStart is blank, the current time will be used in its place.
+{
+	if (!aYYYYMMDDStart || !aYYYYMMDDEnd) return 0;
+
+	FILETIME ftStart, ftEnd, ftNowUTC;
+
+	if (*aYYYYMMDDStart)
+	{
+		if (!YYYYMMDDToFileTime(aYYYYMMDDStart, &ftStart))
+			return 0;
+	}
+	else // Use the current time in its place.
+	{
+		GetSystemTimeAsFileTime(&ftNowUTC);
+		FileTimeToLocalFileTime(&ftNowUTC, &ftStart);  // Convert UTC to local time.
+	}
+	if (*aYYYYMMDDEnd)
+	{
+		if (!YYYYMMDDToFileTime(aYYYYMMDDEnd, &ftEnd))
+			return 0;
+	}
+	else // Use the current time in its place.
+	{
+		GetSystemTimeAsFileTime(&ftNowUTC);
+		FileTimeToLocalFileTime(&ftNowUTC, &ftEnd);  // Convert UTC to local time.
+	}
+	return FileTimeSecondsUntil(&ftStart, &ftEnd);
 }
 
 

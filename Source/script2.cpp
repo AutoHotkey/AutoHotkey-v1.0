@@ -14,8 +14,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 */
 
-#include <windows.h>
-#include <shlobj.h>  // for SHGetMalloc()
+#include "stdafx.h" // pre-compiled headers
 #include "script.h"
 #include "window.h" // for IF_USE_FOREGROUND_WINDOW
 #include "application.h" // for MsgSleep()
@@ -1161,7 +1160,7 @@ ResultType InputBox(Var *aOutputVar, char *aTitle, char *aText, bool aHideInput)
 	++g_nInputBoxes;
 	// Specify NULL as the owner since we want to be able to have the main window in the foreground
 	// even if there are InputBox windows:
-	INT_PTR result = DialogBox(g_hInstance, MAKEINTRESOURCE(IDD_INPUTBOX), NULL, InputBoxProc);
+	int result = (int)DialogBox(g_hInstance, MAKEINTRESOURCE(IDD_INPUTBOX), NULL, InputBoxProc);
 	--g_nInputBoxes;
 	g.WaitingForDialog = false;  // IsCycleComplete() relies on this.
 	if (result == -1)
@@ -1176,7 +1175,7 @@ ResultType InputBox(Var *aOutputVar, char *aTitle, char *aText, bool aHideInput)
 
 
 
-INT_PTR CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+BOOL CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 // MSDN:
 // Typically, the dialog box procedure should return TRUE if it processed the message,
 // and FALSE if it did not. If the dialog box procedure returns FALSE, the dialog

@@ -14,11 +14,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 */
 
-#include "StdAfx.h"  // Pre-compiled headers
-#ifndef _MSC_VER  // For non-MS compilers:
-	#include <stdlib.h> // for qsort()
-#endif
-
+#include "stdafx.h" // pre-compiled headers
 #include "hook.h"
 #include "globaldata.h"  // for access to several global vars
 #include "hotkey.h" // ChangeHookState() reads directly from static Hotkey class vars.

@@ -17,10 +17,7 @@ GNU General Public License for more details.
 #ifndef defines_h
 #define defines_h
 
-#include "StdAfx.h"  // Pre-compiled headers
-#ifndef _MSC_VER  // For non-MS compilers:
-	#include <windows.h>
-#endif
+#include "stdafx.h" // pre-compiled headers
 
 // Disable silly performance warning about converting int to bool:
 // Unlike other typecasts from a larger type to a smaller, I'm 99% sure
@@ -37,7 +34,7 @@ GNU General Public License for more details.
 
 #define NAME_P "AutoHotkey"
 #define WINDOW_CLASS_NAME NAME_P
-#define NAME_VERSION "0.2.20"
+#define NAME_VERSION "0.2.21"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 #define EXT_AUTOIT2 ".aut"
@@ -55,6 +52,31 @@ GNU General Public License for more details.
 #ifndef vsnprintf
 #define vsnprintf _vsnprintf
 #endif
+
+// Items that may be needed for VC++ 6.X:
+#ifndef SPI_GETFOREGROUNDLOCKTIMEOUT
+	#define SPI_GETFOREGROUNDLOCKTIMEOUT        0x2000
+	#define SPI_SETFOREGROUNDLOCKTIMEOUT        0x2001
+#endif
+#ifndef VK_XBUTTON1
+	#define VK_XBUTTON1       0x05    /* NOT contiguous with L & RBUTTON */
+	#define VK_XBUTTON2       0x06    /* NOT contiguous with L & RBUTTON */
+	#define WM_NCXBUTTONDOWN                0x00AB
+	#define WM_NCXBUTTONUP                  0x00AC
+	#define WM_NCXBUTTONDBLCLK              0x00AD
+	#define GET_WHEEL_DELTA_WPARAM(wParam)  ((short)HIWORD(wParam))
+	#define WM_XBUTTONDOWN                  0x020B
+	#define WM_XBUTTONUP                    0x020C
+	#define WM_XBUTTONDBLCLK                0x020D
+	#define GET_KEYSTATE_WPARAM(wParam)     (LOWORD(wParam))
+	#define GET_NCHITTEST_WPARAM(wParam)    ((short)LOWORD(wParam))
+	#define GET_XBUTTON_WPARAM(wParam)      (HIWORD(wParam))
+	/* XButton values are WORD flags */
+	#define XBUTTON1      0x0001
+	#define XBUTTON2      0x0002
+#endif
+
+
 
 #define GET_BIT(buf,n) (((buf) & (1 << (n))) >> (n))
 #define SET_BIT(buf,n,val) ((val) ? ((buf) |= (1<<(n))) : (buf &= ~(1<<(n))))

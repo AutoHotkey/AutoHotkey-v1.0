@@ -14,6 +14,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 */
 
+#include "stdafx.h" // pre-compiled headers
 #include "SimpleHeap.h"
 #include "globaldata.h" // for g_script, so that errors can be centrally reported here.
 

@@ -44,7 +44,7 @@
 */
 
 #include "StdAfx.h"								// Pre-compiled headers
-#include <time.h>
+//#include <time.h>
 #include "mt19937ar-cok.h"
 
 // Period parameters 

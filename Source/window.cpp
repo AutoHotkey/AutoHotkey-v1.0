@@ -14,10 +14,10 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 */
 
+#include "stdafx.h" // pre-compiled headers
 #include "window.h"
 #include "util.h" // for strlcpy()
 #include "application.h" // for MsgSleep()
-#include <commctrl.h> // for status bar functions. Must be included after <windows.h>.
 
 
 HWND WinActivate(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText

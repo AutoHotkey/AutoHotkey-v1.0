@@ -14,6 +14,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 */
 
+#include "stdafx.h" // pre-compiled headers
 // These includes should probably a superset of those in globaldata.h:
 #include "hook.h" // For KeyLogItem and probably other things.
 #include "clipboard.h"  // For the global clipboard object
@@ -132,7 +133,16 @@ Action g_act[] =
 	// Note: Line::ToText() relies on the below names being the correct symbols for the operation:
 	// 1st param is the target, 2nd (optional) is the value:
 	, {"=", 1, 2, NULL} // For this one, omitting the second param sets the var to be empty.
-	, {"+=", 2, 2, {2, 0}}, {"-=", 2, 2, {2, 0}}, {"*=", 2, 2, {2, 0}}, {"/=", 2, 2, {2, 0}}
+
+	// Subtraction(but not addition) allow 2nd to be blank due to 3rd param.
+	// Also, it seems ok to allow date-time operations with += and -=, even though these
+	// operators may someday be enhanced to handle complex expressions, since it seems
+	// possible to parse out the TimeUnits parameter even from a complex expression (since
+	// such expressions wouldn't be expected to use commas for anything else?):
+	, {"+=", 2, 3, {2, 0}}
+	, {"-=", 1, 3, {2, 0}}
+	, {"*=", 2, 2, {2, 0}}
+	, {"/=", 2, 2, {2, 0}}
 
 	// This command is never directly parsed, but we need to have it here as a translation
 	// target for the old "repeat" command.  This is because that command treats a zero
@@ -317,7 +327,7 @@ Action g_old_act[] =
 {
 	{"<invalid command>", 0, 0, NULL}  // OLD_INVALID.  Give it a name in case it's ever displayed.
 	, {"SetEnv", 1, 2, NULL}
-	, {"EnvAdd", 2, 2, {2, 0}}, {"EnvSub", 2, 2, {2, 0}}
+	, {"EnvAdd", 2, 3, {2, 0}}, {"EnvSub", 1, 3, {2, 0}} // EnvSub (but not Add) allow 2nd to be blank due to 3rd param.
 	, {"EnvMult", 2, 2, {2, 0}}, {"EnvDiv", 2, 2, {2, 0}}
 	, {"IfEqual", 1, 2, NULL}, {"IfNotEqual", 1, 2, NULL}
 	, {"IfGreater", 1, 2, NULL}, {"IfGreaterOrEqual", 1, 2, NULL}

@@ -17,10 +17,7 @@ GNU General Public License for more details.
 #ifndef SimpleHeap_h
 #define SimpleHeap_h
 
-#include "StdAfx.h"  // Pre-compiled headers
-#ifndef _MSC_VER  // For non-MS compilers:
-	#include <windows.h>
-#endif
+#include "stdafx.h" // pre-compiled headers
 
 // May greatly improve the efficiency of dynamic memory for callers that would otherwise want to do many
 // small new's or malloc's.  Savings of both RAM space overhead and performance are achieved.  In addition,

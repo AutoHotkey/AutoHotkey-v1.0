@@ -17,7 +17,7 @@ GNU General Public License for more details.
 #ifndef script_h
 #define script_h
 
-#include <limits.h>  // for UCHAR_MAX
+#include "stdafx.h" // pre-compiled headers
 #include "defines.h"
 #include "SimpleHeap.h" // for overloaded new/delete operators.
 #include "keyboard.h" // for modLR_type
@@ -152,6 +152,7 @@ enum enum_act_old {
 #define ERR_TITLEMATCHMODE2 "The variable does not contain a valid TitleMatchMode (the value must be either 1, 2, slow, or fast)." ERR_ABORT
 #define ERR_IFMSGBOX "This line specifies an invalid MsgBox result."
 #define ERR_RUN_SHOW_MODE "The 3rd parameter must be either blank or one of these words: min, max, hide."
+#define ERR_COMPARE_TIMES "Parameter #3 must be either blank, Seconds, Minutes, Hours, Days, or a dereferenced variable."
 #define ERR_FILE_TIME "Parameter #3 must be either blank, M, C, A, or a dereferenced variable."
 #define ERR_MOUSE_BUTTON "This line specifies an invalid mouse button."
 #define ERR_MOUSE_COORD "The X & Y coordinates must be either both absent or both present."
@@ -202,7 +203,7 @@ typedef UCHAR ArgCountType;
 #define MAX_ARGS 20
 
 ResultType InputBox(Var *aOutputVar, char *aTitle = "", char *aText = "", bool aHideInput = false);
-INT_PTR CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
+BOOL CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
 BOOL CALLBACK EnumChildFocusFind(HWND aWnd, LPARAM lParam);
 BOOL CALLBACK EnumChildGetText(HWND aWnd, LPARAM lParam);
 LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lParam);

@@ -14,10 +14,10 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 */
 
+#include "stdafx.h" // pre-compiled headers
 #include "var.h"
 #include "globaldata.h" // for g_script
 #include "util.h" // for strlcpy()
-#include <time.h> // for the c-lib time functions, to support A_YDAY, etc.
 
 
 ResultType Var::Assign(int aValueToAssign)
@@ -420,14 +420,31 @@ ResultType Var::ValidateName(char *aName)
 	//	return g_script.ScriptError("This variable name starts with a number, which is not allowed.", aName);
 	for (char *cp = aName; *cp; ++cp)
 	{
-		// Things that are too likely to be misconstrued or be unintentional typos are made illegal.
-		// ispunct(): ! " # $ % & ' ( ) * + , - . / : ; < = > ? @ [ \ ] ^ _ ` { | } ~
-		// Above set is illegal, except the following: underscore (reserve the others for potential
-		// future use as special symbols)
-		// These are especially illegal because they might someday be used as operators:
-		//		+ - * / ^ = | & ! > <
-		if (   IS_SPACE_OR_TAB(*cp) || *cp == g_delimiter || *cp == g_DerefChar
-			|| (ispunct(*cp) && *cp != '_')   )
+		// ispunct(): @ # $ _ [ ] ? ! % & " ' ( ) * + - ^ . / \ : ; , < = > ` ~ | { }
+		// Of the above, it seems best to disallow the following:
+		// () future: user-defined functions, e.g. var = myfunc2(myfunc1() + 2)
+		// ! future "not"
+		// % reserved: deref char
+		// & future: "and" or "bitwise and"
+		// ' seems too iffy
+		// " seems too iffy
+		// */-+ reserved: math
+		// , reserved: delimiter
+		// . future: structs
+		// : seems too iffy
+		// ; reserved: comment
+		// \ seems too iffy
+		// <=> reserved: comparison
+		// ^ future: "exp/power"
+		// ` reserved: escape char
+		// {} reserved: blocks
+		// | future: "or" or "bitwise or"
+		// ~ future: "bitwise not"
+		if (IS_SPACE_OR_TAB(*cp) || *cp == g_delimiter || *cp == g_DerefChar
+			|| *cp == '!' || *cp == '%' || *cp == '&' || *cp == '"' || *cp == '\'' || *cp == '(' || *cp == ')'
+			|| *cp == '*' || *cp == '+' || *cp == '-' || *cp == '^' || *cp == '.' || *cp == '/' || *cp == '\\'
+			|| *cp == ':' || *cp == ';' || *cp == ',' || *cp == '<' || *cp == '=' || *cp == '>'
+			|| *cp == '`' || *cp == '~' || *cp == '|' || *cp == '{' || *cp == '}')
 			return g_script.ScriptError("This variable name contains an illegal character.", aName);
 	}
 	// Otherwise:

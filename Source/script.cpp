@@ -14,15 +14,13 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 */
 
+#include "stdafx.h" // pre-compiled headers
 #include "script.h"
 #include "globaldata.h" // for a lot of things
 #include "util.h" // for strlcpy() etc.
 #include "mt19937ar-cok.h" // for random number generator
 #include "window.h" // for a lot of things
 #include "application.h" // for MsgSleep()
-#include <time.h> // for time()
-#include <sys/timeb.h> // for _timeb struct
-#include <mmsystem.h> // for waveOutSetVolume()
 
 
 // Globals that are for only this module:
@@ -260,8 +258,9 @@ ResultType Script::CreateWindows(HINSTANCE aInstance)
 		// Using NOTIFYICONDATA_V2_SIZE vs. sizeof(NOTIFYICONDATA) improves compatibility with Win9x maybe.
 		// MSDN: "Using [NOTIFYICONDATA_V2_SIZE] for cbSize will allow your application to use NOTIFYICONDATA
 		// with earlier Shell32.dll versions, although without the version 6.0 enhancements."
-		// Update: Using V2 gives an compile error so trying V1:
-		mNIC.cbSize				= NOTIFYICONDATA_V1_SIZE;
+		// Update: Using V2 gives an compile error so trying V1.  Update: Trying sizeof(NOTIFYICONDATA)
+		// for compatibility with VC++ 6.x.  This is also what AutoIt3 uses:
+		mNIC.cbSize				= sizeof(NOTIFYICONDATA);  // NOTIFYICONDATA_V1_SIZE
 		mNIC.hWnd				= g_hWnd;
 		mNIC.uID				= 0;  // Icon ID (can be anything, like Timer IDs?)
 		mNIC.uFlags				= NIF_MESSAGE | NIF_TIP | NIF_ICON;
@@ -1986,6 +1985,13 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		}
 		break;
 
+	case ACT_ADD:
+	case ACT_SUB:
+		if (line->mArgc > 2 && !line->ArgHasDeref(3) && *LINE_RAW_ARG3)
+			if (!strchr("SMHD", toupper(*LINE_RAW_ARG3)))  // (S)econds, (M)inutes, (H)ours, or (D)ays
+				return ScriptError(ERR_COMPARE_TIMES, LINE_RAW_ARG3);
+		break;
+
 	case ACT_FILECOPY:
 	case ACT_FILEMOVE:
 	case ACT_FILESELECTFOLDER:
@@ -3191,16 +3197,24 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 			// else result can be LOOP_BREAK or OK, but not LOOP_CONTINUE.
 			if (continue_main_loop) // It signaled us to do this:
 				continue;
+
+			if (aMode == ONLY_ONE_LINE)
+			{
+				if (jump_to_line != NULL && apJumpToLine != NULL)
+					// The above call to ExecUntil() told us to jump somewhere.  But since we're in
+					// ONLY_ONE_LINE mode, our caller must handle it because only it knows how
+					// to extricate itself from whatever it's doing:
+					*apJumpToLine = jump_to_line; // Tell the caller to handle this jump.
+				// Return OK even if our result was LOOP_CONTINUE because we already handled the continue:
+				return OK;
+			}
 			if (jump_to_line)
 			{
-				if (aMode == ONLY_ONE_LINE || jump_to_line->mParentLine != line->mParentLine)
+				if (jump_to_line->mParentLine != line->mParentLine)
 				{
-					// The above call to PerformLoop() told us to jump somewhere.  If we're in
-					// ONLY_ONE_LINE mode, our caller must handle it because only it knows how
-					// to extricate itself from whatever it's doing.  Our caller must also handle
-					// it doesn't share the same parent as the current line (i.e. it's not at the
-					// same nesting level) because that means the jump target is at a more shallow
-					// nesting level than where we are now
+					// Our caller must handle the jump if it doesn't share the same parent as the
+					// current line (i.e. it's not at the same nesting level) because that means
+					// the jump target is at a more shallow nesting level than where we are now:
 					if (apJumpToLine != NULL) // i.e. caller gave us a place to store the jump target.
 						*apJumpToLine = jump_to_line; // Tell the caller to handle this jump.
 					return OK;
@@ -4268,14 +4282,70 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_ADD:
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
-		math_result = PureNumberToInt(output_var->Contents()) + PureNumberToInt(ARG2);
-		sprintf(buf_temp, "%d", math_result);
+		if (*ARG3 && strchr("SMHD", toupper(*ARG3))) // the command is being used to add date-time values.
+		{
+			FILETIME ft, ftNowUTC;
+			if (*output_var->Contents())
+				YYYYMMDDToFileTime(output_var->Contents(), &ft);
+			else // The output variable is currently blank, so substitute the current time for it.
+			{
+				GetSystemTimeAsFileTime(&ftNowUTC);
+				FileTimeToLocalFileTime(&ftNowUTC, &ft);  // Convert UTC to local time.
+			}
+			unsigned __int64 nUnits = PureNumberToInt(ARG2);
+			// Convert to 10ths of a microsecond, which is the units of the FILETIME struct:
+			switch (toupper(*ARG3))
+			{
+			case 'S': // Seconds
+				nUnits *= (unsigned __int64)10000000;
+				break;
+			case 'M': // Minutes
+				nUnits *= ((unsigned __int64)10000000 * 60);
+				break;
+			case 'H': // Hours
+				nUnits *= ((unsigned __int64)10000000 * 60 * 60);
+				break;
+			case 'D': // Days
+				nUnits *= ((unsigned __int64)10000000 * 60 * 60 * 24);
+				break;
+			}
+			// Convert ft struct to a 64-bit variable (maybe there's some way to avoid these conversions):
+			LARGE_INTEGER li;
+			li.LowPart = ft.dwLowDateTime;
+			li.HighPart = ft.dwHighDateTime;
+			// Add the specified amount of time to the result value:
+			li.QuadPart += nUnits;
+			// Convert back into ft struct:
+			ft.dwLowDateTime = li.LowPart;
+			ft.dwHighDateTime = li.HighPart;
+			FileTimeToYYYYMMDD(buf_temp, &ft, false);
+		}
+		else // The command is being used to do normal math (not date-time).
+			sprintf(buf_temp, "%d", PureNumberToInt(output_var->Contents()) + PureNumberToInt(ARG2));
 		output_var->Assign(buf_temp);
 		return OK;
 	case ACT_SUB:
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
-		math_result = PureNumberToInt(output_var->Contents()) - PureNumberToInt(ARG2);
+		switch (toupper(*ARG3))
+		{
+		// If ARG2 is blank, it will default to the current time:
+		case 'S': // Seconds
+			math_result = (int)YYYYMMDDSecondsUntil(ARG2, output_var->Contents());
+			break;
+		case 'M': // Minutes
+			math_result = (int)YYYYMMDDSecondsUntil(ARG2, output_var->Contents())/60;
+			break;
+		case 'H': // Hours
+			math_result = (int)YYYYMMDDSecondsUntil(ARG2, output_var->Contents())/(60*60);
+			break;
+		case 'D': // Days
+			math_result = (int)YYYYMMDDSecondsUntil(ARG2, output_var->Contents())/(60*60*24);
+			break;
+		default: // '\0' or ARG3 was a deref that resolved to some illegal value.
+			math_result = PureNumberToInt(output_var->Contents()) - PureNumberToInt(ARG2);
+			break;
+		}
 		sprintf(buf_temp, "%d", math_result);
 		output_var->Assign(buf_temp);
 		return OK;
@@ -4347,8 +4417,8 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			"\r\nKeybd hook: %s"
 			"\r\nMouse hook: %s"
 			"\r\nLast hotkey type: %s"
-			"\r\nInterrupted subroutines: %d%s"
-			"\r\nPaused subroutines: %d"
+			"\r\nInterrupted threads: %d%s"
+			"\r\nPaused threads: %d"
 			"\r\nMsgBoxes: %d"
 			"\r\nModifiers (GetKeyState() now) = %s"
 			"\r\n"
@@ -4358,7 +4428,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			, g_hhkLowLevelMouse == NULL ? "no" : "yes"
 			, g_LastPerformedHotkeyType == HK_KEYBD_HOOK ? "keybd hook" : "not keybd hook"
 			, g_nInterruptedSubroutines
-			, g_nInterruptedSubroutines ? " (preempted: they will resume when the current subroutine finishes)" : ""
+			, g_nInterruptedSubroutines ? " (preempted: they will resume when the current thread finishes)" : ""
 			, g_nPausedSubroutines
 			, g_nMessageBoxes
 			, ModifiersLRToText(GetModifierLRStateSimple(), LRtext));
