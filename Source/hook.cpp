@@ -961,10 +961,9 @@ void ResetHook(bool aAllModifiersUp, HookType aWhichHook, bool aResetKVKandKSC)
 
 
 
-char *GetHookStatus(char *aBuf, size_t aBufSize)
+void GetHookStatus(char *aBuf, int aBufSize)
+// aBufSize is an int so that any negative values passed in from caller are not lost.
 {
-	if (!aBuf || !aBufSize) return aBuf;
-
 	char LRhText[128], LRpText[128];
 	snprintfcat(aBuf, aBufSize,
 		"Modifiers (Hook's Logical) = %s\r\n"
@@ -1014,6 +1013,4 @@ char *GetHookStatus(char *aBuf, size_t aBufSize)
 					);
 		}
 	}
-
-	return aBuf;
 }

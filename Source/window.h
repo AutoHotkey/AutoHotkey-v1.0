@@ -266,6 +266,7 @@ void SetForegroundLockTimeout();
 
 
 inline int GetWindowTextByTitleMatchMode(HWND aWnd, char *aBuf = NULL, int aBufSize = 0)
+// aBufSize is an int so that any negative values passed in from caller are not lost.
 {
 	// Due to potential key and mouse lag caused by GetWindowTextTimeout() preventing us
 	// from pumping messages for up to several seconds at a time (only if the user has specified

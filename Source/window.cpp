@@ -1370,6 +1370,7 @@ bool IsWindowHung(HWND aWnd)
 
 
 int GetWindowTextTimeout(HWND aWnd, char *aBuf, int aBufSize, UINT aTimeout)
+// aBufSize is an int so that any negative values passed in from caller are not lost.
 // Returns the length of what would be copied (not including the zero terminator).
 // In addition, if aBuf is not NULL, the window text is copied into aBuf (not to exceed aBufSize).
 // AutoIt3 author indicates that using WM_GETTEXT vs. GetWindowText() sometimes yields more text.
@@ -1388,9 +1389,12 @@ int GetWindowTextTimeout(HWND aWnd, char *aBuf, int aBufSize, UINT aTimeout)
 // things like WinGetText and ControlGetText, in which getting the maximum amount and types
 // of text is more important than performance.
 {
-	if (!aWnd) return 0; // Seems better than -1 or some error code.
-	if (aBuf && aBufSize < 1) aBuf = NULL; // Just return the length.
-	if (aBuf) *aBuf = '\0';  // Init just to get it out of the way in case of early return/error.
+	if (!aWnd)
+		return 0; // Seems better than -1 or some error code.
+	if (aBuf && aBufSize < 1)
+		aBuf = NULL; // Flag the pointer itself as NULL for detection further below.
+	if (aBuf)
+		*aBuf = '\0';  // Init just to get it out of the way in case of early return/error.
 	// Override for Win95 because AutoIt3 author says it might crash otherwise:
 	if (aBufSize > WINDOW_TEXT_SIZE && g_os.IsWin95()) aBufSize = WINDOW_TEXT_SIZE;
 	DWORD result;

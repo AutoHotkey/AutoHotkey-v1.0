@@ -815,7 +815,7 @@ public:
 	// the vast majority of scripts, so 200 seems unlikely to exceed the buffer size.  Even in the
 	// worst case where the buffer size is exceeded, the text is simply truncated, so it's not too
 	// bad:
-	#define LINE_LOG_SIZE 200
+	#define LINE_LOG_SIZE 400  // Going much higher than this would risk overflowing the 32K edit buffer size (32K is the default limit on Win9x, though I think it can be increased to as much as 64K).
 	static Line *sLog[LINE_LOG_SIZE];
 	static DWORD sLogTick[LINE_LOG_SIZE];
 	static int sLogNext;
@@ -1699,9 +1699,9 @@ public:
 		return FAIL; // Otherwise, one is blank but the other isn't, which is not allowed.
 	}
 
-	static char *LogToText(char *aBuf, size_t aBufSize);
-	char *VicinityToText(char *aBuf, size_t aBufSize, int aMaxLines = 15);
-	char *ToText(char *aBuf, size_t aBufSize, bool aCRLF, DWORD aElapsed = 0);
+	static char *LogToText(char *aBuf, int aBufSize);
+	char *VicinityToText(char *aBuf, int aBufSize, int aMaxLines = 15);
+	char *ToText(char *aBuf, int aBufSize, bool aCRLF, DWORD aElapsed = 0, bool aLineWasResumed = false);
 
 	static void ToggleSuspendState();
 	ResultType ChangePauseState(ToggleValueType aChangeTo);
@@ -2231,8 +2231,8 @@ public:
 	ResultType ActionExec(char *aAction, char *aParams = NULL, char *aWorkingDir = NULL
 		, bool aDisplayErrors = true, char *aRunShowMode = NULL, HANDLE *aProcess = NULL
 		, bool aUseRunAs = false, Var *aOutputVar = NULL);
-	char *ListVars(char *aBuf, size_t aBufSize);
-	char *ListKeyHistory(char *aBuf, size_t aBufSize);
+	char *ListVars(char *aBuf, int aBufSize);
+	char *ListKeyHistory(char *aBuf, int aBufSize);
 
 	ResultType PerformMenu(char *aMenu, char *aCommand, char *aParam3, char *aParam4, char *aOptions);
 	UserMenu *FindMenu(char *aMenuName);

@@ -1734,8 +1734,8 @@ mod_type ConvertModifiersLR(modLR_type aModifiersLR)
 
 
 char *ModifiersLRToText(modLR_type aModifiersLR, char *aBuf)
+// Caller has ensured that aBuf is not NULL.
 {
-	if (!aBuf) return NULL;
 	*aBuf = '\0';
 	if (aModifiersLR & MOD_LWIN) strcat(aBuf, "LWin ");
 	if (aModifiersLR & MOD_RWIN) strcat(aBuf, "RWin ");
@@ -1905,38 +1905,40 @@ void init_sc_to_vk()
 
 
 
-char *SCToKeyName(sc_type aSC, char *aBuf, size_t aBuf_size)
+char *SCToKeyName(sc_type aSC, char *aBuf, int aBufSize)
+// aBufSize is an int so that any negative values passed in from caller are not lost.
 // Always produces a non-empty string.
 {
 	for (int i = 0; i < g_key_to_sc_count; ++i)
 	{
 		if (g_key_to_sc[i].sc == aSC)
 		{
-			strlcpy(aBuf, g_key_to_sc[i].key_name, aBuf_size);
+			strlcpy(aBuf, g_key_to_sc[i].key_name, aBufSize);
 			return aBuf;
 		}
 	}
 	// Since above didn't return, no match was found.  Use the default format for an unknown scan code:
-	snprintf(aBuf, aBuf_size, "SC%03x", aSC);
+	snprintf(aBuf, aBufSize, "SC%03x", aSC);
 	return aBuf;
 }
 
 
 
-char *VKToKeyName(vk_type aVK, sc_type aSC, char *aBuf, size_t aBuf_size)
+char *VKToKeyName(vk_type aVK, sc_type aSC, char *aBuf, int aBufSize)
+// aBufSize is an int so that any negative values passed in from caller are not lost.
 // Caller may omit aSC and it will be derived if needed.
 {
 	for (int i = 0; i < g_key_to_vk_count; ++i)
 	{
 		if (g_key_to_vk[i].vk == aVK)
 		{
-			strlcpy(aBuf, g_key_to_vk[i].key_name, aBuf_size);
+			strlcpy(aBuf, g_key_to_vk[i].key_name, aBufSize);
 			return aBuf;
 		}
 	}
 	// Since above didn't return, no match was found.  Ask the OS for the name instead (it's probably
 	// a letter key such as A through Z, but could be anything for which we don't have a listing):
-	return GetKeyName(aVK, aSC, aBuf, aBuf_size);
+	return GetKeyName(aVK, aSC, aBuf, aBufSize);
 }
 
 
@@ -2222,9 +2224,12 @@ ResultType KeyHistoryToFile(char *aFilespec, char aType, bool aKeyUp, vk_type aV
 
 
 
-char *GetKeyName(vk_type aVK, sc_type aSC, char *aBuf, size_t aBuf_size)
+char *GetKeyName(vk_type aVK, sc_type aSC, char *aBuf, int aBufSize)
+// aBufSize is an int so that any negative values passed in from caller are not lost.
+// Caller has ensured that aBuf isn't NULL.
 {
-	if (!aBuf || aBuf_size < 3) return aBuf;
+	if (aBufSize < 3)
+		return aBuf;
 
 	*aBuf = '\0'; // Set default.
 	if (!aVK && !aSC)
@@ -2237,13 +2242,13 @@ char *GetKeyName(vk_type aVK, sc_type aSC, char *aBuf, size_t aBuf_size)
 			aSC = g_vk_to_sc[aVK].a;
 
 	// Use 0x02000000 to tell it that we want it to give left/right specific info, lctrl/rctrl etc.
-	if (!aSC || !GetKeyNameText((long)(aSC) << 16, aBuf, (int)(aBuf_size/sizeof(TCHAR))))
+	if (!aSC || !GetKeyNameText((long)(aSC) << 16, aBuf, (int)(aBufSize/sizeof(TCHAR))))
 	{
 		for (int j = 0; j < g_key_to_vk_count; ++j)
 			if (g_key_to_vk[j].vk == aVK)
 				break;
 		if (j < g_key_to_vk_count)
-			strlcpy(aBuf, g_key_to_vk[j].key_name, aBuf_size);
+			strlcpy(aBuf, g_key_to_vk[j].key_name, aBufSize);
 		else
 		{
 			if (isprint(aVK))
@@ -2252,7 +2257,7 @@ char *GetKeyName(vk_type aVK, sc_type aSC, char *aBuf, size_t aBuf_size)
 				aBuf[1] = '\0';
 			}
 			else
-				strlcpy(aBuf, "not found", aBuf_size);
+				strlcpy(aBuf, "not found", aBufSize);
 		}
 	}
 	return aBuf;

@@ -114,16 +114,17 @@ public:
 	VarSizeType Get(char *aBuf = NULL);
 	static ResultType ValidateName(char *aName, bool aIsRuntime = false, bool aDisplayError = true);
 	VarSizeType Capacity() {return mCapacity;} // Capacity includes the zero terminator.
-	char *ToText(char *aBuf, size_t aBufSize, bool aAppendNewline)
+
+	char *ToText(char *aBuf, int aBufSize, bool aAppendNewline)
+	// aBufSize is an int so that any negative values passed in from caller are not lost.
+	// Caller has ensured that aBuf isn't NULL.
 	// Translates this var into its text equivalent, putting the result into aBuf andp
 	// returning the position in aBuf of its new string terminator.
 	{
-		if (!aBuf) return NULL;
 		char *aBuf_orig = aBuf;
-		snprintf(aBuf, BUF_SPACE_REMAINING, "%s[%u of %u]: %-1.60s%s", mName
+		aBuf += snprintf(aBuf, BUF_SPACE_REMAINING, "%s[%u of %u]: %-1.60s%s", mName
 			, mLength, mCapacity ? (mCapacity - 1) : 0  // Use -1 since it makes more sense to exclude the terminator.
 			, mContents, mLength > 60 ? "..." : "");
-		aBuf += strlen(aBuf);
 		if (aAppendNewline && BUF_SPACE_REMAINING >= 2)
 		{
 			*aBuf++ = '\r';

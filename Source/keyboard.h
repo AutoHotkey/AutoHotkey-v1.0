@@ -270,8 +270,8 @@ char *ModifiersLRToText(modLR_type aModifiersLR, char *aBuf);
 
 void init_vk_to_sc();
 void init_sc_to_vk();
-char *SCToKeyName(sc_type aSC, char *aBuf, size_t aBuf_size);
-char *VKToKeyName(vk_type aVK, sc_type aSC, char *aBuf, size_t aBuf_size);
+char *SCToKeyName(sc_type aSC, char *aBuf, int aBufSize);
+char *VKToKeyName(vk_type aVK, sc_type aSC, char *aBuf, int aBufSize);
 sc_type TextToSC(char *aText);
 vk_type TextToVK(char *aText, mod_type *pModifiers = NULL, bool aExcludeThoseHandledByScanCode = false
 	, bool aAllowExplicitVK = true);
@@ -283,6 +283,6 @@ ResultType KeyHistoryToFile(char *aFilespec = NULL, char aType = '\0', bool aKey
 	, vk_type aVK = 0, sc_type aSC = 0);
 #endif
 
-char *GetKeyName(vk_type aVK, sc_type aSC, char *aBuf, size_t aBuf_size);
+char *GetKeyName(vk_type aVK, sc_type aSC, char *aBuf, int aBufSize);
 
 #endif

@@ -263,6 +263,6 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 void ResetHook(bool aAllModifiersUp = false, HookType aWhichHook = (HOOK_KEYBD | HOOK_MOUSE)
 	, bool aResetKVKandKSC = false);
 
-char *GetHookStatus(char *aBuf, size_t aBufSize);
+void GetHookStatus(char *aBuf, int aBufSize);
 
 #endif

@@ -1381,16 +1381,14 @@ int Hotkey::FindHotkeyBySC(sc2_type aSC2, mod_type aModifiers, modLR_type aModif
 */
 
 
-char *Hotkey::ListHotkeys(char *aBuf, size_t aBufSize)
+char *Hotkey::ListHotkeys(char *aBuf, int aBufSize)
 // Translates this script's list of variables into text equivalent, putting the result
 // into aBuf and returning the position in aBuf of its new string terminator.
 {
-	if (!aBuf || aBufSize < 256) return NULL;
 	char *aBuf_orig = aBuf;
 	// Save vertical space by limiting newlines here:
-	snprintf(aBuf, BUF_SPACE_REMAINING, "Type\tOff?\tRunning\tName\r\n"
+	aBuf += snprintf(aBuf, BUF_SPACE_REMAINING, "Type\tOff?\tRunning\tName\r\n"
 							 "-------------------------------------------------------------------\r\n");
-	aBuf += strlen(aBuf);
 	// Start at the oldest and continue up through the newest:
 	for (int i = 0; i < sHotkeyCount; ++i)
 		aBuf = shk[i]->ToText(aBuf, BUF_SPACE_REMAINING, true);
@@ -1399,11 +1397,12 @@ char *Hotkey::ListHotkeys(char *aBuf, size_t aBufSize)
 
 
 
-char *Hotkey::ToText(char *aBuf, size_t aBufSize, bool aAppendNewline)
+char *Hotkey::ToText(char *aBuf, int aBufSize, bool aAppendNewline)
+// aBufSize is an int so that any negative values passed in from caller are not lost.
+// Caller has ensured that aBuf isn't NULL.
 // Translates this var into its text equivalent, putting the result into aBuf and
 // returning the position in aBuf of its new string terminator.
 {
-	if (!aBuf) return NULL;
 	char *aBuf_orig = aBuf;
 	char existing_threads_str[128];
 	if (mExistingThreads)
@@ -1420,12 +1419,11 @@ char *Hotkey::ToText(char *aBuf, size_t aBufSize, bool aAppendNewline)
 	case HK_JOYSTICK: strlcpy(htype, "joypoll", sizeof(htype)); break;
 	default: *htype = '\0';
 	}
-	snprintf(aBuf, BUF_SPACE_REMAINING, "%s%s\t%s\t%s\t%s"
+	aBuf += snprintf(aBuf, BUF_SPACE_REMAINING, "%s%s\t%s\t%s\t%s"
 		, htype, (mType == HK_NORMAL && !mIsRegistered) ? "(no)" : ""
 		, mEnabled ? "" : "OFF"
 		, existing_threads_str
 		, mName);
-	aBuf += strlen(aBuf);
 	if (aAppendNewline && BUF_SPACE_REMAINING >= 2)
 	{
 		*aBuf++ = '\r';
@@ -1487,7 +1485,8 @@ void Hotstring::DoReplace(LPARAM alParam)
 	}
 	if (*mReplacement)
 	{
-		snprintf(start_of_replacement, sizeof(SendBuf) - (start_of_replacement - SendBuf), "%s", mReplacement);
+		// Below casts to int to preserve any negaive results:
+		snprintf(start_of_replacement, (int)(sizeof(SendBuf) - (start_of_replacement - SendBuf)), "%s", mReplacement);
 		CaseConformModes case_conform_mode = (CaseConformModes)HIWORD(alParam);
 		if (case_conform_mode == CASE_CONFORM_ALL_CAPS)
 			CharUpper(start_of_replacement);

@@ -972,7 +972,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 
 	// Must cast to int to avoid loss of negative values:
 	#define SCRIPT_BUF_SPACE_REMAINING ((int)(nDataSize - (script_buf_marker - script_buf)))
-	int script_buf_space_remaining, max_chars_to_read;
+	int script_buf_space_remaining, max_chars_to_read; // script_buf_space_remaining must be an int to detect negatives.
 
 	// AutoIt3: We have the data in RAW BINARY FORM, the script is a text file, so
 	// this means that instead of a newline character, there may also be carridge
@@ -6422,7 +6422,7 @@ ResultType Line::PerformLoop(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCu
 			continue; // Never recurse into these.
 		// Build the new search pattern, which consists of the original file_path + the subfolder name
 		// we just discovered + the original pattern:
-		snprintf(append_location, sizeof(file_path) - (append_location - file_path), "%s\\%s"
+		snprintf(append_location, (int)(sizeof(file_path) - (append_location - file_path)), "%s\\%s"  // Cast to int to preserve any negative results.
 			, new_current_file.cFileName, naked_filename_or_pattern);
 		// Pass NULL for the 2nd param because it will determine its own current-file when it does
 		// its first loop iteration.  This is because this directory is being recursed into, not
@@ -7178,7 +7178,6 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 					// might be misinterpreted:
 					wait_indefinitely = false;
 					sleep_duration = (int)(ATOF(cp + 1) * 1000);
-					start_time = GetTickCount();
 					break;
 				}
 			}
@@ -7197,7 +7196,6 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 				// "IfEqual, clipboard, , xxx" (though admittedly it's higher overhead to
 				// actually fetch the contents of the clipboard).
 				sleep_duration = 500;
-			start_time = GetTickCount();
 		}
 		else
 		{
@@ -7229,7 +7227,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			}
 		}
 
-		for (;;)
+		for (start_time = GetTickCount();;) // start_time is initialized unconditionally for use with v1.0.30.02's new logging feature further below.
 		{ // Always do the first iteration so that at least one check is done.
 			switch(mActionType)
 			{
@@ -7315,11 +7313,29 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 
 			// Must cast to int or any negative result will be lost due to DWORD type:
 			if (wait_indefinitely || (int)(sleep_duration - (GetTickCount() - start_time)) > SLEEP_INTERVAL_HALF)
-				MsgSleep(INTERVAL_UNSPECIFIED); // INTERVAL_UNSPECIFIED performs better.
+			{
+				if (MsgSleep(INTERVAL_UNSPECIFIED)) // INTERVAL_UNSPECIFIED performs better.
+				{
+					// v1.0.30.02: Since MsgSleep() launched and returned from at least one new thread, put the
+					// current waiting line into the line-log again to make it easy to see what the current
+					// thread is doing.  This is especially useful for figuring out which subroutine is holding
+					// another thread interrupted beneath it.  For example, if a timer gets interrupted by
+					// a hotkey that has an indefinite WinWait, and that window never appears, this will allow
+					// the user to find out the culprit thread by showing its line in the log (and usually
+					// it will appear as the very last line, since usually the script is idle and thus the
+					// currently active thread is the one that's still waiting for the window).
+					sLog[sLogNext] = this;
+					sLogTick[sLogNext++] = start_time; // Store a special value so that Line::LogToText() can report that its "still waiting" from earlier.
+					if (sLogNext >= LINE_LOG_SIZE)
+						sLogNext = 0;
+					// The lines above are the similar to those used in ExecUntil(), so the two should be
+					// maintained together.
+				}
+			}
 			else // Done waiting.
 				return g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Since it timed out, we override the default with this.
 		} // for()
-		break; // Never executed, just for safety.
+		//break; // Never executed.
 	}
 
 	case ACT_WINMOVE:
@@ -11388,50 +11404,105 @@ VarSizeType Script::GetTimeIdle(char *aBuf)
 
 
 
-char *Line::LogToText(char *aBuf, size_t aBufSize)
-// Static method:
+char *Line::LogToText(char *aBuf, int aBufSize) // aBufSize should be an int to preserve negatives from caller (caller relies on this).
+// aBufSize is an int so that any negative values passed in from caller are not lost.
 // Translates sLog into its text equivalent, putting the result into aBuf and
 // returning the position in aBuf of its new string terminator.
+// Caller has ensured that aBuf is non-NULL and that aBufSize is reasonable (at least 256).
 {
-	if (!aBuf || aBufSize < 256) return NULL;
 	char *aBuf_orig = aBuf;
-	//snprintf(aBuf, BUF_SPACE_REMAINING, "Deref buffer size: %u\n\n", sDerefBufSize);
-	//aBuf += strlen(aBuf);
-	snprintf(aBuf, BUF_SPACE_REMAINING, "Script lines most recently executed (oldest first).  Press [F5] to refresh.\r\n"
+
+	// Store the position of where each retry done by the outer loop will start writing:
+	char *aBuf_log_start = aBuf + snprintf(aBuf, aBufSize, "Script lines most recently executed (oldest first).  Press [F5] to refresh.\r\n"
 		"The seconds elapsed between a line and the one after it is in parens to the right (if not 0).\r\n"
 		"The bottommost line's elapsed time is the number of seconds since it executed.\r\n\r\n");
-	aBuf += strlen(aBuf);
-	// Start at the oldest and continue up through the newest:
-	int i, line_index;
+
+	int i, lines_to_show, line_index, line_index2, space_remaining; // space_remaining must be an int to detect negatives.
 	DWORD elapsed;
-	size_t space_remaining;
-	for (i = 0, line_index = sLogNext; i < LINE_LOG_SIZE; ++i, ++line_index)
+	bool this_item_is_special, next_item_is_special;
+
+	// In the below, sLogNext causes it to start at the oldest logged line and continue up through the newest:
+	for (lines_to_show = LINE_LOG_SIZE, line_index = sLogNext;;) // Retry with fewer lines in case the first attempt doesn't fit in the buffer.
 	{
-		if (line_index >= LINE_LOG_SIZE) // wrap around
-			line_index = 0;
-		if (sLog[line_index] == NULL)
-			continue;
-		if (i + 1 < LINE_LOG_SIZE)  // There are still more lines to be processed
-			elapsed = sLogTick[line_index + 1 >= LINE_LOG_SIZE ? 0 : line_index + 1] - sLogTick[line_index];
-		else // This is the line, so compare it's time against the current time instead.
-			elapsed = GetTickCount() - sLogTick[line_index];
-		space_remaining = BUF_SPACE_REMAINING;  // Resolve macro only once for performance.
-		// Truncate really huge lines so that the Edit control's size is less likely to be exceeded:
-		aBuf = sLog[line_index]->ToText(aBuf, space_remaining < 500 ? space_remaining : 500, true, elapsed);
-	}
-	snprintf(aBuf, BUF_SPACE_REMAINING, "\r\nPress [F5] to refresh.");
-	aBuf += strlen(aBuf);
-	return aBuf;
+		aBuf = aBuf_log_start; // Reset target position in buffer to the place where log should begin.
+		for (next_item_is_special = false, i = 0; i < lines_to_show; ++i, ++line_index)
+		{
+			if (line_index >= LINE_LOG_SIZE) // wrap around, because sLog is a circular queue
+				line_index -= LINE_LOG_SIZE; // Don't just reset it to zero because an offset larger than one may have been added to it.
+			if (!sLog[line_index]) // No line has yet been logged in this slot.
+				continue;
+			this_item_is_special = next_item_is_special;
+			next_item_is_special = false;  // Set default.
+			if (i + 1 < lines_to_show)  // There are still more lines to be processed
+			{
+				if (this_item_is_special) // And we know from the above that this special line is not the last line.
+					// Due to the fact that these special lines are usually only useful when they appear at the
+					// very end of the log, omit them from the log-display when they're not the last line.
+					// In the case of a high-frequency SetTimer, this greatly reduces the log clutter that
+					// would otherwise occur:
+					continue;
+
+				// Since above didn't continue, this item isn't special, so display it normally.
+				elapsed = sLogTick[line_index + 1 >= LINE_LOG_SIZE ? 0 : line_index + 1] - sLogTick[line_index];
+				if (elapsed > INT_MAX) // INT_MAX is about one-half of DWORD's capacity.
+				{
+					// v1.0.30.02: Assume that huge values (greater than 24 days or so) were caused by
+					// the new policy of storing WinWait/RunWait/etc.'s line in the buffer whenever
+					// it was interrupted and later resumed by a thread.  In other words, there are now
+					// extra lines in the buffer which are considered "special" because they don't indicate
+					// a line that actually executed, but rather one that is still executing (waiting).
+					// See ACT_WINWAIT for details.
+					next_item_is_special = true; // Override the default.
+					if (i + 2 == lines_to_show) // The line after this one is not only special, but the last one that will be shown, so recalculate this one correctly.
+						elapsed = GetTickCount() - sLogTick[line_index];
+					else // Neither this line nor the special one that follows it is the last.
+					{
+						// Refer to the line after the next (special) line to get this line's correct elapsed time.
+						line_index2 = line_index + 2;
+						if (line_index2 >= LINE_LOG_SIZE)
+							line_index2 -= LINE_LOG_SIZE;
+						elapsed = sLogTick[line_index2] - sLogTick[line_index];
+					}
+				}
+			}
+			else // This is the last line (whether special or not), so compare it's time against the current time instead.
+				elapsed = GetTickCount() - sLogTick[line_index];
+			space_remaining = BUF_SPACE_REMAINING;  // Resolve macro only once for performance.
+			// Truncate really huge lines so that the Edit control's size is less likely to be exhausted.
+			// In v1.0.30.02, this is even more likely due to having increased the line-buf's capacity from
+			// 200 to 400, therefore the truncation point was reduced from 500 to 200 to make it more likely
+			// that the first attempt to fit the lines_to_show number of lines into the buffer will succeed.
+			aBuf = sLog[line_index]->ToText(aBuf, space_remaining < 200 ? space_remaining : 200, true, elapsed, this_item_is_special);
+			// If the line above can't fit everything it needs into the remaining space, it will fill all
+			// of the remaining space, and thus the check against LINE_LOG_FINAL_MESSAGE_LENGTH below
+			// should never fail to catch that, and then do a retry.
+		} // Inner for()
+
+		#define LINE_LOG_FINAL_MESSAGE "\r\nPress [F5] to refresh." // Keep the next line in sync with this.
+		#define LINE_LOG_FINAL_MESSAGE_LENGTH 24
+		if (BUF_SPACE_REMAINING > LINE_LOG_FINAL_MESSAGE_LENGTH || lines_to_show < 120) // Either success or can't succeed.
+			break;
+
+		// Otherwise, there is insufficient room to put everything in, but there's still room to retry
+		// with a smaller value of lines_to_show:
+		lines_to_show -= 100;
+		line_index = sLogNext + (LINE_LOG_SIZE - lines_to_show); // Move the starting point forward in time so that the oldest log entries are omitted.
+
+	} // outer for() that retries the log-to-buffer routine.
+
+	// Must add the return value, not LINE_LOG_FINAL_MESSAGE_LENGTH, in case insufficient room (i.e. in case
+	// outer loop terminated due to lines_to_show being too small).
+	return aBuf + snprintf(aBuf, BUF_SPACE_REMAINING, LINE_LOG_FINAL_MESSAGE);
 }
 
 
 
-char *Line::VicinityToText(char *aBuf, size_t aBufSize, int aMaxLines)
+char *Line::VicinityToText(char *aBuf, int aBufSize, int aMaxLines) // aBufSize should be an int to preserve negatives from caller (caller relies on this).
+// aBufSize is an int so that any negative values passed in from caller are not lost.
+// Caller has ensured that aBuf isn't NULL.
 // Translates the current line and the lines above and below it into their text equivalent
 // putting the result into aBuf and returning the position in aBuf of its new string terminator.
 {
-	if (!aBuf || aBufSize < 256) return NULL;
-
 	char *aBuf_orig = aBuf;
 
 	if (aMaxLines < 5)
@@ -11454,10 +11525,9 @@ char *Line::VicinityToText(char *aBuf, size_t aBufSize, int aMaxLines)
 
 	// Now line_start and line_end are the first and last lines of the range
 	// we want to convert to text, and they're non-NULL.
-	snprintf(aBuf, BUF_SPACE_REMAINING, "\tLine#\n");
-	aBuf += strlen(aBuf);
+	aBuf += snprintf(aBuf, BUF_SPACE_REMAINING, "\tLine#\n");
 
-	size_t space_remaining;
+	int space_remaining; // Must be an int to preserve any negative results.
 
 	// Start at the oldest and continue up through the newest:
 	for (Line *line = line_start;;)
@@ -11479,54 +11549,44 @@ char *Line::VicinityToText(char *aBuf, size_t aBufSize, int aMaxLines)
 
 
 
-char *Line::ToText(char *aBuf, size_t aBufSize, bool aCRLF, DWORD aElapsed)
+char *Line::ToText(char *aBuf, int aBufSize, bool aCRLF, DWORD aElapsed, bool aLineWasResumed) // aBufSize should be an int to preserve negatives from caller (caller relies on this).
+// aBufSize is an int so that any negative values passed in from caller are not lost.
+// Caller has ensured that aBuf isn't NULL.
 // Translates this line into its text equivalent, putting the result into aBuf and
 // returning the position in aBuf of its new string terminator.
 {
-	if (!aBuf) return NULL;
 	if (aBufSize < 3)
 		return aBuf;
 	else
 		aBufSize -= (1 + aCRLF);  // Reserve one char for LF/CRLF after each line (so that it always get added).
+
 	char *aBuf_orig = aBuf;
-	snprintf(aBuf, BUF_SPACE_REMAINING, "%03u: ", mLineNumber);
-	aBuf += strlen(aBuf);
+
+	aBuf += snprintf(aBuf, aBufSize, "%03u: ", mLineNumber);
+
 	if (mActionType == ACT_IFBETWEEN || mActionType == ACT_IFNOTBETWEEN)
-	{
-		snprintf(aBuf, BUF_SPACE_REMAINING, "if %s %s %s and %s"
+		aBuf += snprintf(aBuf, BUF_SPACE_REMAINING, "if %s %s %s and %s"
 			, *mArg[0].text ? mArg[0].text : VAR(mArg[0])->mName  // i.e. don't resolve dynamic variable names.
 			, g_act[mActionType].Name, RAW_ARG2, RAW_ARG3);
-		aBuf += strlen(aBuf);
-	}
 	else if (ACT_IS_ASSIGN(mActionType) || (ACT_IS_IF(mActionType) && mActionType < ACT_FIRST_COMMAND))
-	{
 		// Only these other commands need custom conversion.
-		snprintf(aBuf, BUF_SPACE_REMAINING, "%s%s %s %s"
+		aBuf += snprintf(aBuf, BUF_SPACE_REMAINING, "%s%s %s %s"
 			, ACT_IS_IF(mActionType) ? "if " : ""
 			, *mArg[0].text ? mArg[0].text : VAR(mArg[0])->mName  // i.e. don't resolve dynamic variable names.
 			, g_act[mActionType].Name, RAW_ARG2);
-		aBuf += strlen(aBuf);
-	}
 	else
 	{
-		snprintf(aBuf, BUF_SPACE_REMAINING, "%s", g_act[mActionType].Name);
-		aBuf += strlen(aBuf);
+		aBuf += snprintf(aBuf, BUF_SPACE_REMAINING, "%s", g_act[mActionType].Name);
 		for (int i = 0; i < mArgc; ++i)
-		{
 			// This method a little more efficient than using snprintfcat().
 			// Also, always use the arg's text for input and output args whose variables haven't
 			// been been resolved at load-time, since the text has everything in it we want to display
 			// and thus there's no need to "resolve" dynamic variables here (e.g. array%i%).
-			snprintf(aBuf, BUF_SPACE_REMAINING, ",%s", (mArg[i].type != ARG_TYPE_NORMAL && !*mArg[i].text)
+			aBuf += snprintf(aBuf, BUF_SPACE_REMAINING, ",%s", (mArg[i].type != ARG_TYPE_NORMAL && !*mArg[i].text)
 				? VAR(mArg[i])->mName : mArg[i].text);
-			aBuf += strlen(aBuf);
-		}
 	}
 	if (aElapsed)
-	{
-		snprintf(aBuf, BUF_SPACE_REMAINING, " (%0.2f)", (float)aElapsed / 1000.0);
-		aBuf += strlen(aBuf);
-	}
+		aBuf += snprintf(aBuf, BUF_SPACE_REMAINING, " (%s%0.2f)", aLineWasResumed ? "Still waiting: " : "", (float)aElapsed / 1000.0);
 	// UPDATE for v1.0.25: It seems that MessageBox(), which is the only way these lines are currently
 	// displayed, prefers \n over \r\n because otherwise, Ctrl-C on the MsgBox copies the lines all
 	// onto one line rather than formatted nicely as separate lines.
@@ -11682,20 +11742,18 @@ ResultType Line::LineError(char *aErrorText, ResultType aErrorType, char *aExtra
 			*source_file = '\0'; // Don't bother cluttering the display if it's the main script file.
 
 		char buf[MSGBOX_TEXT_SIZE];
-		snprintf(buf, sizeof(buf), "%s%s: %-1.500s\n\n"  // Keep it to a sane size in case it's huge.
+		char *buf_marker = buf + snprintf(buf, sizeof(buf), "%s%s: %-1.500s\n\n"  // Keep it to a sane size in case it's huge.
 			, aErrorType == WARN ? "Warning" : (aErrorType == CRITICAL_ERROR ? "Critical Error" : "Error")
 			, source_file, aErrorText);
 		if (*aExtraInfo)
 			// Use format specifier to make sure really huge strings that get passed our
 			// way, such as a var containing clipboard text, are kept to a reasonable size:
-			snprintfcat(buf, sizeof(buf), "Specifically: %-1.100s%s\n\n"
+			buf_marker += snprintfcat(buf, sizeof(buf), "Specifically: %-1.100s%s\n\n"
 			, aExtraInfo, strlen(aExtraInfo) > 100 ? "..." : "");
-		char *buf_marker = buf + strlen(buf);
-		buf_marker = VicinityToText(buf_marker, sizeof(buf) - (buf_marker - buf));
+		buf_marker = VicinityToText(buf_marker, (int)(sizeof(buf) - (buf_marker - buf))); // Cast to int to avoid loss of negative values.
 		if (aErrorType == CRITICAL_ERROR || (aErrorType == FAIL && !g_script.mIsReadyToExecute))
 			strlcpy(buf_marker, g_script.mIsRestart ? ("\n" OLD_STILL_IN_EFFECT) : ("\n" WILL_EXIT)
-				, sizeof(buf) - (buf_marker - buf));
-		//buf_marker += strlen(buf_marker);
+				, (int)(sizeof(buf) - (buf_marker - buf))); // Cast to int to avoid loss of negative values.
 		g_script.mCurrLine = this;  // This needs to be set in some cases where the caller didn't.
 		//g_script.ShowInEditor();
 		MsgBox(buf);
@@ -11775,14 +11833,13 @@ ResultType Script::ScriptError(char *aErrorText, char *aExtraInfo) //, ResultTyp
 
 
 
-char *Script::ListVars(char *aBuf, size_t aBufSize)
+char *Script::ListVars(char *aBuf, int aBufSize) // aBufSize should be an int to preserve negatives from caller (caller relies on this).
+// aBufSize is an int so that any negative values passed in from caller are not lost.
 // Translates this script's list of variables into text equivalent, putting the result
 // into aBuf and returning the position in aBuf of its new string terminator.
 {
-	if (!aBuf || aBufSize < 256) return NULL;
 	char *aBuf_orig = aBuf;
-	snprintf(aBuf, BUF_SPACE_REMAINING, "Variables (alphabetical) & their current contents:\r\n\r\n");
-	aBuf += strlen(aBuf);
+	aBuf += snprintf(aBuf, BUF_SPACE_REMAINING, "Variables (alphabetical) & their current contents:\r\n\r\n");
 	// Start at the oldest and continue up through the newest:
 	for (Var *var = mFirstVar; var; var = var->mNextVar)
 		if (var->mType == VAR_NORMAL) // Don't bother showing clipboard and other built-in vars.
@@ -11792,11 +11849,11 @@ char *Script::ListVars(char *aBuf, size_t aBufSize)
 
 
 
-char *Script::ListKeyHistory(char *aBuf, size_t aBufSize)
+char *Script::ListKeyHistory(char *aBuf, int aBufSize) // aBufSize should be an int to preserve negatives from caller (caller relies on this).
+// aBufSize is an int so that any negative values passed in from caller are not lost.
 // Translates this key history into text equivalent, putting the result
 // into aBuf and returning the position in aBuf of its new string terminator.
 {
-	if (!aBuf || aBufSize < 256) return NULL;
 	char *aBuf_orig = aBuf; // Needed for the BUF_SPACE_REMAINING macro.
 	// I was initially concerned that GetWindowText() can hang if the target window is
 	// hung.  But at least on newer OS's, this doesn't seem to be a problem: MSDN says
@@ -11826,7 +11883,7 @@ char *Script::ListKeyHistory(char *aBuf, size_t aBufSize)
 	}
 
 	char LRtext[256];
-	snprintf(aBuf, aBufSize,
+	aBuf += snprintf(aBuf, aBufSize,
 		"Window: %s"
 		//"\r\nBlocks: %u"
 		"\r\nKeybd hook: %s"
@@ -11847,13 +11904,10 @@ char *Script::ListKeyHistory(char *aBuf, size_t aBufSize)
 		, g_nThreads > 1 ? " (preempted: they will resume when the current thread finishes)" : ""
 		, g_nPausedThreads, g_nThreads, g_nLayersNeedingTimer
 		, ModifiersLRToText(GetModifierLRState(true), LRtext));
-	aBuf += strlen(aBuf);
 	GetHookStatus(aBuf, BUF_SPACE_REMAINING);
-	aBuf += strlen(aBuf);
-	snprintf(aBuf, BUF_SPACE_REMAINING, g_KeyHistory ? "\r\nPress [F5] to refresh."
+	aBuf += strlen(aBuf); // Adjust for what GetHookStatus() wrote to the buffer.
+	return aBuf + snprintf(aBuf, BUF_SPACE_REMAINING, g_KeyHistory ? "\r\nPress [F5] to refresh."
 		: "\r\nKey History has been disabled via #KeyHistory 0.");
-	aBuf += strlen(aBuf);
-	return aBuf;
 }
 
 

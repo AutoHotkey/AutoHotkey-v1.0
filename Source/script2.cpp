@@ -3471,7 +3471,7 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 	bool target_window_determined = true;  // Set default.
 	HWND target_window;
 	IF_USE_FOREGROUND_WINDOW(aTitle, aText, aExcludeTitle, aExcludeText)
-	else if (!(*aTitle || *aText || *aExcludeTitle || *aExcludeText))
+	else if (!(*aTitle || *aText || *aExcludeTitle || *aExcludeText) && cmd != WINGET_CMD_LIST) // v1.0.30.02: Have "list" get all windows on the system when there are no parameters.
 		target_window = GetValidLastUsedWindow();
 	else
 		target_window_determined = false;  // A different method is required.
@@ -3542,7 +3542,7 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 		}
 		// Otherwise, the target window(s) have not yet been determined and a special method
 		// is required to gather them.
-		return WinGetList(output_var, aTitle, aExcludeTitle, aText, aExcludeText); // Outsourced to avoid having a WindowSearch object on this function's stack.
+		return WinGetList(output_var, aTitle, aText, aExcludeTitle, aExcludeText); // Outsourced to avoid having a WindowSearch object on this function's stack.
 
 	case WINGET_CMD_MINMAX:
 		if (!target_window_determined)
@@ -5296,8 +5296,8 @@ ResultType GetAHKInstallDir(char *aBuf)
 	HKEY hRegKey;
 	if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, "SOFTWARE\\AutoHotkey", 0, KEY_READ, &hRegKey) != ERROR_SUCCESS)
 		return FAIL;
-	DWORD aBuf_size = MAX_PATH;
-	if (RegQueryValueEx(hRegKey, "InstallDir", NULL, NULL, (LPBYTE)aBuf, &aBuf_size) != ERROR_SUCCESS)
+	DWORD aBufSize = MAX_PATH;
+	if (RegQueryValueEx(hRegKey, "InstallDir", NULL, NULL, (LPBYTE)aBuf, &aBufSize) != ERROR_SUCCESS)
 	{
 		RegCloseKey(hRegKey);
 		return FAIL;

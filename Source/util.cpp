@@ -74,7 +74,6 @@ int GetISOWeekNumber(char *aBuf, int aYear, int aYDay, int aWDay)
 	// Use snprintf() for safety; that is, in case year contains a value longer than 4 digits.
 	// This also adds the leading zeros in front of year and week number, if needed.
 	snprintf(aBuf, 7, "%04d%02d", year, (days / 7) + 1);
-	aBuf[6] = '\0';  // Must terminate in this case due to an issue explained in the snprintf() section.
 	return 6; // The length of the string produced.
 }
 
@@ -328,45 +327,57 @@ SymbolType IsPureNumeric(char *aBuf, bool aAllowNegative, bool aAllowAllWhitespa
 
 
 
-int snprintf(char *aBuf, size_t aBufSize, const char *aFormat, ...)
-// _snprintf() seems to copy one more character into the buffer than it should, causing overflow.
-// So until that's been explained or fixed, reduce buffer size by 1 for safety.
-// Follows the xprintf() convention to "return the number of characters
-// printed (not including the trailing '\0' used to end output to strings)
-// or a negative value if an output error occurs, except for snprintf()
-// and vsnprintf(), which return the number of characters that would have
-// been printed if the size were unlimited (again, not including the final '\0')."
+int snprintf(char *aBuf, int aBufSize, const char *aFormat, ...)
+// aBufSize is an int so that any negative values passed in from caller are not lost.
+// aBuf will always be terminated here except when aBufSize is <= zero (in which case the caller should
+// already have terminated it).  If aBufSize is greater than zero but not large enough to hold the
+// entire result, as much of the result as possible is copied and the return value is aBufSize - 1.
+// Returns the exact number of characters written, not including the zero terminator.  A negative
+// number is never returned, even if aBufSize is <= zero (which means there isn't even enough space left
+// to write a zero terminator), under the assumption that the caller has already terminated the string
+// and thus prefers to have 0 rather than -1 returned in such cases.
+// MSDN says (about _snprintf(), and testing shows that it applies to _vsnprintf() too): "This function
+// does not guarantee NULL termination, so ensure it is followed by sz[size - 1] = 0".
 {
-	if (!aBuf || !aFormat) return -1;  // But allow aBufSize to be zero so that the proper return value is provided.
-	if (aBufSize) // avoid underflow
-		--aBufSize; // See above for explanation.
+	// The following should probably never be changed without a full suite of tests to ensure the
+	// change doesn't cause the finicky _vsnprintf() to break something.
+	if (aBufSize <= 0 || !aBuf || !aFormat) return 0; // It's called from so many places that the extra checks seem warranted.
 	va_list ap;
 	va_start(ap, aFormat);
 	// Must use _vsnprintf() not _snprintf() because of the way va_list is handled:
-	return _vsnprintf(aBuf, aBufSize, aFormat, ap);
+	int result = _vsnprintf(aBuf, aBufSize, aFormat, ap); // "returns the number of characters written, not including the terminating null character, or a negative value if an output error occurs"
+	aBuf[aBufSize - 1] = '\0'; // Confirmed through testing: Must terminate at this exact spot because _vsnprintf() doesn't always do it.
+	return result >= 0 ? result : aBufSize - 1; // Never return a negative value.  See comment under function definition, above.
 }
 
 
 
-int snprintfcat(char *aBuf, size_t aBufSize, const char *aFormat, ...)
-// The caller must have ensured that aBuf contains a valid string
+int snprintfcat(char *aBuf, int aBufSize, const char *aFormat, ...)
+// aBufSize is an int so that any negative values passed in from caller are not lost.
+// aBuf will always be terminated here except when the amount of space left in the buffer is zero or less.
+// (in which case the caller should already have terminated it).  If aBufSize is greater than zero but not
+// large enough to hold the entire result, as much of the result as possible is copied and the return value
+// is space_remaining - 1.
+// The caller must have ensured that aBuf and aFormat are non-NULL and that aBuf contains a valid string
 // (i.e. that it is null-terminated somewhere within the limits of aBufSize).
-// Follows the xprintf() convention to "return the number of characters
-// printed (not including the trailing '\0' used to end output to strings)
-// or a negative value if an output error occurs, except for snprintf()
-// and vsnprintf(), which return the number of characters that would have
-// been printed if the size were unlimited (again, not including the final
-// '\0')."
+// Returns the exact number of characters written, not including the zero terminator.  A negative
+// number is never returned, even if aBufSize is <= zero (which means there isn't even enough space left
+// to write a zero terminator), under the assumption that the caller has already terminated the string
+// and thus prefers to have 0 rather than -1 returned in such cases.
 {
-	if (!aBuf || !aFormat) return -1;  // But allow aBufSize to be zero so that the proper return value is provided.
-	size_t length = strlen(aBuf);  // This could crash if caller didn't initialize it.
-	__int64 space_remaining = (__int64)(aBufSize - length) - 1; // -1 for the overflow bug, see snprintf() comments.
-	if (space_remaining < 0) // But allow it to be zero so that the proper return value is provided.
-		return -1;
+	// The following should probably never be changed without a full suite of tests to ensure the
+	// change doesn't cause the finicky _vsnprintf() to break something.
+	size_t length = strlen(aBuf);
+	int space_remaining = (int)(aBufSize - length); // Must cast to int to avoid loss of negative values.
+	if (space_remaining <= 0) // Can't even terminate it (no room) so just indicate that no characters were copied.
+		return 0;
+	aBuf += length;  // aBuf is now the spot where the new text will be written.
 	va_list ap;
 	va_start(ap, aFormat);
 	// Must use vsnprintf() not snprintf() because of the way va_list is handled:
-	return _vsnprintf(aBuf + length, (size_t)space_remaining, aFormat, ap);
+	int result = _vsnprintf(aBuf, (size_t)space_remaining, aFormat, ap); // "returns the number of characters written, not including the terminating null character, or a negative value if an output error occurs"
+	aBuf[space_remaining - 1] = '\0'; // Confirmed through testing: Must terminate at this exact spot because _vsnprintf() doesn't always do it.
+	return result >= 0 ? result : space_remaining - 1; // Never return a negative value.  See comment under function definition, above.
 }
 
 
@@ -802,7 +813,7 @@ char *StrReplaceAll(char *aBuf, char *aOld, char *aNew, bool aAlwaysUseSlow, boo
 
 
 
-char *StrReplaceAllSafe(char *aBuf, size_t aBuf_size, char *aOld, char *aNew, bool aCaseSensitive)
+char *StrReplaceAllSafe(char *aBuf, size_t aBufSize, char *aOld, char *aNew, bool aCaseSensitive)
 // Similar to above but checks to ensure that the size of the buffer isn't exceeded.
 {
 	// Nothing to do if aBuf is blank.  If aOld is blank, that is not supported because it
@@ -814,7 +825,7 @@ char *StrReplaceAllSafe(char *aBuf, size_t aBuf_size, char *aOld, char *aNew, bo
 	for (ptr = aBuf;; )
 	{
 		if (length_increase > 0) // Make sure there's enough room in aBuf first.
-			if ((int)(aBuf_size - strlen(aBuf) - 1) < length_increase)
+			if ((int)(aBufSize - strlen(aBuf) - 1) < length_increase)
 				break;  // Not enough room to do the next replacement.
 		if (   !(ptr = StrReplace(ptr, aOld, aNew, aCaseSensitive))   )
 			break;
@@ -1019,15 +1030,17 @@ unsigned __int64 GetFileSize64(HANDLE aFileHandle)
 
 
 
-char *GetLastErrorText(char *aBuf, size_t aBuf_size)
+char *GetLastErrorText(char *aBuf, int aBufSize)
+// aBufSize is an int to preserve any negative values the caller might pass in.
 {
-	if (!aBuf || !aBuf_size) return aBuf;
-	if (aBuf_size == 1)
+	if (aBufSize <= 0)
+		return aBuf;
+	if (aBufSize == 1)
 	{
 		*aBuf = '\0';
 		return aBuf;
 	}
-	FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM, NULL, GetLastError(), 0, aBuf, (DWORD)aBuf_size - 1, NULL);
+	FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM, NULL, GetLastError(), 0, aBuf, (DWORD)aBufSize - 1, NULL);
 	return aBuf;
 }
 

@@ -308,8 +308,8 @@ public:
 	static int FindHotkeyContainingModLR(modLR_type aModifiersLR);  //, int hotkey_id_to_omit);
 	//static int FindHotkeyBySC(sc2_type aSC2, mod_type aModifiers, modLR_type aModifiersLR);
 
-	static char *ListHotkeys(char *aBuf, size_t aBufSize);
-	char *ToText(char *aBuf, size_t aBufSize, bool aAppendNewline);
+	static char *ListHotkeys(char *aBuf, int aBufSize);
+	char *ToText(char *aBuf, int aBufSize, bool aAppendNewline);
 };
 
 

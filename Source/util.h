@@ -402,13 +402,15 @@ inline char *UTOA(unsigned long value, char *buf)
 inline void strlcpy (char *aDst, const char *aSrc, size_t aDstSize)
 // Same as strncpy() but guarantees null-termination of aDst upon return.
 // No more than aDstSize - 1 characters will be copied from aSrc into aDst
-// (leaving room for the zero terminator).
+// (leaving room for the zero terminator, which is always inserted).
 // This function is defined in some Unices but is not standard.  But unlike
 // other versions, this one uses void for return value for reduced code size
 // (since it's called in so many places).
 {
 	// Disabled for performance and reduced code size:
 	//if (!aDst || !aSrc || !aDstSize) return aDstSize;  // aDstSize must not be zero due to the below method.
+	// It might be worthwhile to have a custom char-copying-loop here someday so that number of characters
+	// actually copied (not including the zero terminator) can be returned to callers who want it.
 	strncpy(aDst, aSrc, aDstSize - 1);
 	aDst[aDstSize - 1] = '\0';
 }
@@ -483,8 +485,8 @@ struct ExprTokenType  // Something in the compiler hates the name TokenType, so 
 SymbolType IsPureNumeric(char *aBuf, bool aAllowNegative = false
 	, bool aAllowAllWhitespace = true, bool aAllowFloat = false, bool aAllowImpure = false);
 
-int snprintf(char *aBuf, size_t aBufSize, const char *aFormat, ...);
-int snprintfcat(char *aBuf, size_t aBufSize, const char *aFormat, ...);
+int snprintf(char *aBuf, int aBufSize, const char *aFormat, ...);
+int snprintfcat(char *aBuf, int aBufSize, const char *aFormat, ...);
 // Not currently used by anything, so commented out to possibly reduce code size:
 //int strlcmp (char *aBuf1, char *aBuf2, UINT aLength1 = UINT_MAX, UINT aLength2 = UINT_MAX);
 int strlicmp(char *aBuf1, char *aBuf2, UINT aLength1 = UINT_MAX, UINT aLength2 = UINT_MAX);
@@ -493,7 +495,7 @@ char *strcasestr (const char *phaystack, const char *pneedle);
 char *StrReplace(char *aBuf, char *aOld, char *aNew, bool aCaseSensitive = true);
 char *StrReplaceAll(char *aBuf, char *aOld, char *aNew, bool aAlwaysUseSlow, bool aCaseSensitive = true
 	, DWORD aReplacementsNeeded = UINT_MAX); // Caller can provide this value to avoid having to calculate it again.
-char *StrReplaceAllSafe(char *aBuf, size_t aBuf_size, char *aOld, char *aNew, bool aCaseSensitive = true);
+char *StrReplaceAllSafe(char *aBuf, size_t aBufSize, char *aOld, char *aNew, bool aCaseSensitive = true);
 char *TranslateLFtoCRLF(char *aString);
 bool DoesFilePatternExist(char *aFilePattern);
 #ifdef _DEBUG
@@ -502,7 +504,7 @@ bool DoesFilePatternExist(char *aFilePattern);
 char *ConvertFilespecToCorrectCase(char *aFullFileSpec);
 char *FileAttribToStr(char *aBuf, DWORD aAttr);
 unsigned __int64 GetFileSize64(HANDLE aFileHandle);
-char *GetLastErrorText(char *aBuf, size_t aBuf_size);
+char *GetLastErrorText(char *aBuf, int aBufSize);
 void AssignColor(char *aColorName, COLORREF &aColor, HBRUSH &aBrush);
 COLORREF ColorNameToBGR(char *aColorName);
 HRESULT MySetWindowTheme(HWND hwnd, LPCWSTR pszSubAppName, LPCWSTR pszSubIdList);

@@ -28,6 +28,7 @@
 				MinimalRebuild="TRUE"
 				BasicRuntimeChecks="3"
 				RuntimeLibrary="5"
+				BufferSecurityCheck="TRUE"
 				UsePrecompiledHeader="3"
 				WarningLevel="3"
 				Detect64BitPortabilityProblems="TRUE"

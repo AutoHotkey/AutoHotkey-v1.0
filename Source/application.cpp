@@ -22,12 +22,11 @@ GNU General Public License for more details.
 #include "resources\resource.h"  // For ID_TRAY_OPEN.
 
 
-ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
-// Returns a non-meaningful value (so that it can return the result of something, thus
-// effectively ignoring the result).  Callers should ignore it.  aSleepDuration can be
-// zero to do a true Sleep(0), or less than 0 to avoid sleeping or waiting at all
-// (i.e. messages are checked and if there are none, the function will return immediately).
-// aMode is RETURN_AFTER_MESSAGES (default) or WAIT_FOR_MESSAGES.
+bool MsgSleep(int aSleepDuration, MessageMode aMode)
+// Returns true if it launched at least one thread, and false otherwise.
+// aSleepDuration can be be zero to do a true Sleep(0), or less than 0 to avoid sleeping or
+// waiting at all (i.e. messages are checked and if there are none, the function will return
+// immediately).  aMode is RETURN_AFTER_MESSAGES (default) or WAIT_FOR_MESSAGES.
 // If the caller doesn't specify aSleepDuration, this function will return after a
 // time less than or equal to SLEEP_INTERVAL (i.e. the exact amount of the sleep
 // isn't important to the caller).  This mode is provided for performance reasons
@@ -146,6 +145,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 	// caused by the keyboard & mouse hooks, so checking the timers early, rather than
 	// immediately going into the GetMessage() state, should not be a problem:
 	POLL_JOYSTICK_IF_NEEDED  // Do this first since it's much faster.
+	bool return_value = false; //  Set default.  Also, this is used by the macro below.
 	CHECK_SCRIPT_TIMERS_IF_NEEDED
 
 	// Because this function is called recursively: for now, no attempt is
@@ -322,7 +322,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 				// to turn it back on whenever a layer beneath us needs it.  Since the timer
 				// is never killed while g_script.mTimerEnabledCount is >0, it shouldn't be necessary
 				// to check g_script.mTimerEnabledCount here.
-				#define RETURN_FROM_MSGSLEEP(return_value) \
+				#define RETURN_FROM_MSGSLEEP \
 				{\
 					if (this_layer_needs_timer)\
 						--g_nLayersNeedingTimer;\
@@ -344,7 +344,8 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 				// The below is checked here rather than in IsCycleComplete() because
 				// that function is sometimes called more than once prior to returning
 				// (e.g. empty_the_queue_via_peek) and we only want this to be decremented once:
-				RETURN_FROM_MSGSLEEP(IsCycleComplete(aSleepDuration, start_time, allow_early_return))
+				IsCycleComplete(aSleepDuration, start_time, allow_early_return);
+				RETURN_FROM_MSGSLEEP
 			}
 			// else Peek() found a message, so process it below.
 		}
@@ -484,7 +485,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 			// but extremely rarely, interrupted/recursed yet again if that final
 			// peek were to detect a recursable message):
 			if (IsCycleComplete(aSleepDuration, start_time, allow_early_return))
-				RETURN_FROM_MSGSLEEP(OK)
+				RETURN_FROM_MSGSLEEP
 			// Otherwise, stay in the blessed GetMessage() state until
 			// the time has expired:
 			continue;
@@ -782,6 +783,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 				g_script.mThisHotkeyStartTime = g_script.mLastScriptRest;
 
 			// Perform the new thread's subroutine:
+			return_value = true; // We will return this value to indicate that we launched at least one new thread.
 			++g_nThreads;
 			switch(msg.message)
 			{
@@ -1044,7 +1046,8 @@ ResultType IsCycleComplete(int aSleepDuration, DWORD aStartTime, bool aAllowEarl
 
 
 
-void CheckScriptTimers()
+bool CheckScriptTimers()
+// Returns true if it launched at least one thread, and false otherwise.
 // It's best to call this function only directly from MsgSleep() or when there is an instance of
 // MsgSleep() closer on the call stack than the nearest dialog's message pump (e.g. MsgBox).
 // This is because threads some events might get queued up for our thread during the execution
@@ -1080,7 +1083,7 @@ void CheckScriptTimers()
 	// UPDATE: It seems slightly better (more consistent) to disallow all timed subroutines whenever
 	// there is even one paused thread anywhere in the "stack":
 	if (!INTERRUPTIBLE || g_nPausedThreads > 0 || g_nThreads >= g_MaxThreadsTotal)
-		return; // Above: To be safe (prevent stack faults) don't allow max threads to be exceeded.
+		return false; // Above: To be safe (prevent stack faults) don't allow max threads to be exceeded.
 
 	ScriptTimer *timer;
 	UINT n_ran_subroutines;
@@ -1165,7 +1168,9 @@ void CheckScriptTimers()
 	{
 		--g_nThreads;  // Since this instance of this function only had one thread in use at a time.
 		RESUME_UNDERLYING_THREAD // For explanation, see comments where the macro is defined.
+		return true;
 	}
+	return false;
 }
 
 

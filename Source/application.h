@@ -168,7 +168,7 @@ if (g_DerefTimerExists && KillTimer(g_hWnd, TIMER_ID_DEREF))\
 
 // Callers should note that using INTERVAL_UNSPECIFIED might not rest the CPU at all if there is
 // already at least one msg waiting in our thread's msg queue:
-ResultType MsgSleep(int aSleepDuration = INTERVAL_UNSPECIFIED, MessageMode aMode = RETURN_AFTER_MESSAGES);
+bool MsgSleep(int aSleepDuration = INTERVAL_UNSPECIFIED, MessageMode aMode = RETURN_AFTER_MESSAGES);
 
 // This macro is used to Sleep without the possibility of a new hotkey subroutine being launched.
 // Timed subroutines will also be prevented from running while it is enabled.
@@ -339,8 +339,8 @@ ResultType IsCycleComplete(int aSleepDuration, DWORD aStartTime, bool aAllowEarl
 // first to a dialog's message pump rather than MsgSleep's pump.  That's because our thread
 // might then have queued messages that would be stuck in the queue (due to the possible absence
 // of the main timer) until the dialog's msg pump ended.
-void CheckScriptTimers();
-#define CHECK_SCRIPT_TIMERS_IF_NEEDED if (g_script.mTimerEnabledCount) CheckScriptTimers();
+bool CheckScriptTimers();
+#define CHECK_SCRIPT_TIMERS_IF_NEEDED if (g_script.mTimerEnabledCount && CheckScriptTimers()) return_value = true; // Change the existing value only if it returned true.
 
 void PollJoysticks();
 #define POLL_JOYSTICK_IF_NEEDED if (Hotkey::sJoyHotkeyCount) PollJoysticks();
