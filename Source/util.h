@@ -117,6 +117,30 @@ inline char *omit_leading_whitespace(char *aBuf)
 
 
 
+inline char *omit_leading_any(char *aBuf, char *aOmitList, size_t aLength)
+// Returns the address of the first character in aBuf that isn't a member of aOmitList.
+// But no more than aLength characters of aBuf will be considered.  If aBuf is composed
+// entirely of omitted characters, the address of the char after the last char in the
+// string will returned (that char will be the zero terminator unless aLength explicitly
+// caused only part of aBuf to be considered).
+{
+	char *cp;
+	for (size_t i = 0; i < aLength; ++i, ++aBuf)
+	{
+		// Check if the current char is a member of the omitted-char list:
+		for (cp = aOmitList; *cp; ++cp)
+			if (*aBuf == *cp) // Match found.
+				break;
+		if (!*cp) // No match found, so this character is not omitted, thus we immediately return it's position.
+			return aBuf;
+	}
+	// Since the above didn't return, aBuf is the position of the zero terminator or (if aLength
+	// indicated only a substring) the position of the char after the last char in the substring.
+	return aBuf;
+}
+
+
+
 inline char *omit_trailing_whitespace(char *aBuf, char *aBuf_marker)
 // aBuf_marker must be a position in aBuf (to the right of it).
 // Starts at aBuf_marker and keeps moving to the left until a non-whitespace
@@ -124,6 +148,32 @@ inline char *omit_trailing_whitespace(char *aBuf, char *aBuf_marker)
 {
 	for (; aBuf_marker > aBuf && IS_SPACE_OR_TAB(*aBuf_marker); --aBuf_marker);
 	return aBuf_marker;  // Can equal aBuf.
+}
+
+
+
+inline size_t omit_trailing_any(char *aBuf, char *aOmitList, char *aBuf_marker)
+// aBuf_marker must be a position in aBuf (to the right of it).
+// Starts at aBuf_marker and keeps moving to the left until a char that isn't a member
+// of aOmitList is found.  The length of the remaining substring is returned.
+// That length will be zero if the string consists entirely of omitted characters.
+{
+	char *cp;
+	for (; aBuf_marker > aBuf; --aBuf_marker)
+	{
+		// Check if the current char is a member of the omitted-char list:
+		for (cp = aOmitList; *cp; ++cp)
+			if (*aBuf_marker == *cp) // Match found.
+				break;
+		if (!*cp) // No match found, so this character is not omitted, thus we immediately return.
+			return (aBuf_marker - aBuf) + 1; // The length of the string when trailing chars are omitted.
+	}
+	// Since the above didn't return, aBuf_marker is now equal to aBuf.  If this final character is itself
+	// a member of the omitted-list, the length returned will be zero.  Otherwise it will be 1:
+	for (cp = aOmitList; *cp; ++cp)
+		if (*aBuf_marker == *cp) // Match found.
+			return 0;
+	return 1;
 }
 
 

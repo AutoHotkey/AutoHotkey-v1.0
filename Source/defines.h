@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.04"
+#define NAME_VERSION "1.0.05"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -54,6 +54,7 @@ GNU General Public License for more details.
 
 // 10 is the number base system:
 #define ITOA(value, buf) _itoa(value, buf, 10)
+#define UTOA(value, buf) _ultoa(value, buf, 10)
 #define ITOA64(value, buf) _i64toa(value, buf, 10)
 
 // Items that may be needed for VC++ 6.X:

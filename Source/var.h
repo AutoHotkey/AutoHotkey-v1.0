@@ -45,8 +45,9 @@ enum VarTypes
 , VAR_LOOPFILETIMEMODIFIED, VAR_LOOPFILETIMECREATED, VAR_LOOPFILETIMEACCESSED
 , VAR_LOOPFILEATTRIB, VAR_LOOPFILESIZE, VAR_LOOPFILESIZEKB, VAR_LOOPFILESIZEMB
 , VAR_LOOPREGTYPE, VAR_LOOPREGKEY, VAR_LOOPREGSUBKEY, VAR_LOOPREGNAME, VAR_LOOPREGTIMEMODIFIED
+, VAR_LOOPREADLINE, VAR_LOOPFIELD, VAR_INDEX
 , VAR_THISHOTKEY, VAR_PRIORHOTKEY, VAR_TIMESINCETHISHOTKEY, VAR_TIMESINCEPRIORHOTKEY
-, VAR_TICKCOUNT, VAR_TIMEIDLE
+, VAR_TICKCOUNT, VAR_TIMEIDLE, VAR_TIMEIDLEPHYSICAL
 , VAR_SPACE, VAR_TAB
 };
 #define VAR_IS_RESERVED(var) (var->mType != VAR_NORMAL && var->mType != VAR_CLIPBOARD)
@@ -55,6 +56,7 @@ typedef UCHAR VarTypeType;     // UCHAR vs. VarTypes to save memory.
 typedef UCHAR AllocMethodType; // UCHAR vs. AllocMethod to save memory.
 typedef DWORD VarSizeType;  // Up to 4 gig if sizeof(UINT) is 4.  See next line.
 #define VARSIZE_MAX MAXDWORD
+#define VARSIZE_ERROR VARSIZE_MAX
 #define MAX_FORMATTED_NUMBER_LENGTH 255
 
 class Var
@@ -71,11 +73,12 @@ public:
 	Var *mNextVar;  // Next item in linked list.
 
 	ResultType Assign(int aValueToAssign);
+	ResultType Assign(UINT aValueToAssign);
 	ResultType Assign(__int64 aValueToAssign);
 	ResultType Assign(double aValueToAssign);
 	ResultType Assign(char *aBuf = NULL, VarSizeType aLength = VARSIZE_MAX, bool aTrimIt = false);
 	VarSizeType Get(char *aBuf = NULL);
-	static ResultType ValidateName(char *aName);
+	static ResultType ValidateName(char *aName, bool aIsRuntime = false);
 	VarSizeType Capacity() {return mCapacity;}
 	char *ToText(char *aBuf, size_t aBufSize, bool aAppendNewline)
 	// Translates this var into its text equivalent, putting the result into aBuf and

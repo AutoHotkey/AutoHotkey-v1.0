@@ -65,7 +65,8 @@ size_t Clipboard::Get(char *aBuf)
 			return 0;
 		if (!Open())
 		{
-			Close("Could not open clipboard (probably because another app is hogging it).");
+			Close("Clipboard::Get(): Could not open clipboard after many timed attempts."
+				" Another program is probably holding it open.");
 			return CLIPBOARD_FAILURE;
 		}
 		if (   !(mClipMemNow = GetClipboardData(clipboard_contains_files ? CF_HDROP : CF_TEXT))   )
@@ -206,8 +207,9 @@ ResultType Clipboard::Commit()
 // was already physically open, this function will close it as part of the commit (since
 // whoever had it open before can't use the prior contents, since they're invalid).
 {
-	if (!mIsOpen && !Open(30, 20)) // Make a lot of attempts.
-		AbortWrite("Clipboard::Commit(): Could not open clipboard after many timed attempts.");
+	if (!mIsOpen && !Open())
+		AbortWrite("Clipboard::Commit(): Could not open clipboard after many timed attempts."
+			" Another program is probably holding it open.");
 	if (!EmptyClipboard())
 		AbortWrite("Clipboard::Commit(): EmptyClipboard() failed.");
 	if (mClipMemNew)

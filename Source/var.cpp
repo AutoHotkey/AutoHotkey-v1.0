@@ -35,6 +35,15 @@ ResultType Var::Assign(int aValueToAssign)
 
 
 
+ResultType Var::Assign(UINT aValueToAssign)
+// Returns OK or FAIL.
+{
+	char value_string[256];
+	return Assign(UTOA(aValueToAssign, value_string));
+}
+
+
+
 ResultType Var::Assign(__int64 aValueToAssign)
 // Returns OK or FAIL.
 {
@@ -391,12 +400,17 @@ VarSizeType Var::Get(char *aBuf)
 	case VAR_LOOPREGNAME: if (!aBuf) return g_script.GetLoopRegName(); else aBuf += g_script.GetLoopRegName(aBuf); break;
 	case VAR_LOOPREGTIMEMODIFIED: if (!aBuf) return g_script.GetLoopRegTimeModified(); else aBuf += g_script.GetLoopRegTimeModified(aBuf); break;
 
+	case VAR_LOOPREADLINE: if (!aBuf) return g_script.GetLoopReadLine(); else aBuf += g_script.GetLoopReadLine(aBuf); break;
+	case VAR_LOOPFIELD: if (!aBuf) return g_script.GetLoopField(); else aBuf += g_script.GetLoopField(aBuf); break;
+	case VAR_INDEX: if (!aBuf) return g_script.GetLoopIndex(); else aBuf += g_script.GetLoopIndex(aBuf); break;
+
 	case VAR_THISHOTKEY: if (!aBuf) return g_script.GetThisHotkey(); else aBuf += g_script.GetThisHotkey(aBuf); break;
 	case VAR_PRIORHOTKEY: if (!aBuf) return g_script.GetPriorHotkey(); else aBuf += g_script.GetPriorHotkey(aBuf); break;
 	case VAR_TIMESINCETHISHOTKEY: if (!aBuf) return g_script.GetTimeSinceThisHotkey(); else aBuf += g_script.GetTimeSinceThisHotkey(aBuf); break;
 	case VAR_TIMESINCEPRIORHOTKEY: if (!aBuf) return g_script.GetTimeSincePriorHotkey(); else aBuf += g_script.GetTimeSincePriorHotkey(aBuf); break;
 	case VAR_TICKCOUNT: if (!aBuf) return g_script.MyGetTickCount(); else aBuf += g_script.MyGetTickCount(aBuf); break;
 	case VAR_TIMEIDLE: if (!aBuf) return g_script.GetTimeIdle(); else aBuf += g_script.GetTimeIdle(aBuf); break;
+	case VAR_TIMEIDLEPHYSICAL: if (!aBuf) return g_script.GetTimeIdlePhysical(); else aBuf += g_script.GetTimeIdlePhysical(aBuf); break;
 
 	// This one is done this way, rather than using an escape sequence such as `s, because the escape
 	// sequence method doesn't work (probably because `s resolves to a space and is that trimmed at
@@ -452,7 +466,7 @@ VarSizeType Var::Get(char *aBuf)
 
 
 
-ResultType Var::ValidateName(char *aName)
+ResultType Var::ValidateName(char *aName, bool aIsRuntime)
 // Returns OK or FAIL.
 {
 	if (!aName || !*aName) return FAIL;
@@ -489,7 +503,10 @@ ResultType Var::ValidateName(char *aName)
 			|| *cp == '*' || *cp == '+' || *cp == '-' || *cp == '^' || *cp == '.' || *cp == '/' || *cp == '\\'
 			|| *cp == ':' || *cp == ';' || *cp == ',' || *cp == '<' || *cp == '=' || *cp == '>'
 			|| *cp == '`' || *cp == '~' || *cp == '|' || *cp == '{' || *cp == '}')
-			return g_script.ScriptError("This variable name contains an illegal character.", aName);
+			if (aIsRuntime)
+				return g_script.ScriptError("This variable name contains an illegal character." ERR_ABORT, aName);
+			else
+				return g_script.ScriptError("This variable name contains an illegal character.", aName);
 	}
 	// Otherwise:
 	return OK;

@@ -110,7 +110,7 @@ extern int g_KeyHistoryNext;
 extern bool g_KeyHistoryToFile;
 extern DWORD g_HistoryTickNow;
 extern DWORD g_HistoryTickPrev;
-
+extern DWORD g_TimeLastInputPhysical;
 
 
 inline VarSizeType GetBatchLines(char *aBuf = NULL)

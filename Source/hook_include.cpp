@@ -178,14 +178,17 @@ inline bool EventIsPhysical(LPARAM lParam, sc_type sc, bool key_up)
 			&& (DWORD)(GetTickCount() - prior_event_tickcount) < (DWORD)SHIFT_KEY_WORKAROUND_TIMEOUT   )
 			return false;
 	}
-	// Otherwise:
+	// Otherwise, it's physical:
+	g_TimeLastInputPhysical = pEvent->time;
 	return true;
 }
 
 #else // Mouse hook:
 inline bool EventIsPhysical(LPARAM lParam, bool key_up)
 {
-	return !(pEvent->flags & LLKHF_INJECTED);
+	// g_TimeLastInputPhysical is handled elsewhere so that mouse movements are handled too
+	// (this function is only ever called for action of the mouse buttons).
+	return !(pEvent->flags & LLMHF_INJECTED);
 }
 #endif
 
@@ -649,10 +652,10 @@ void UpdateKeyState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppressed)
 #endif
 
 	// Use PostMessage() rather than directly calling the function to write the key to
-	// the log file.  This is done so that we can return sooner, which reduces keyboard
-	// and mouse lag by us not being in a pumping-messages state.  IN ADDITION, this
-	// method may also help to keep the keystrokes in order (due to recursive calls
-	// to the hook via keybd_event(), etc), I'm not sure:
+	// the log file.  This is done so that we can return sooner, which reduces the keyboard
+	// and mouse lag that would otherwise be caused by us not being in a pumping-messages state.
+	// IN ADDITION, this method may also help to keep the keystrokes in order (due to recursive
+	// calls to the hook via keybd_event(), etc), I'm not sure:
 	if (g_KeyHistoryToFile && pKeyHistoryCurr)
 		PostMessage(g_hWnd, AHK_KEYHISTORY, (WPARAM)pKeyHistoryCurr, 0);
 	return 1;
@@ -691,8 +694,11 @@ inline LRESULT AllowIt(HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, sc_typ
 		PostMessage(g_hWnd, AHK_KEYHISTORY, (WPARAM)pKeyHistoryCurr, 0);
 	UpdateKeyState(lParam, sc, key_up, false);
 
-	if (   pEvent->vkCode == 'L' && !key_up && (g_modifiersLR_logical == MOD_LWIN
-		|| g_modifiersLR_logical == MOD_RWIN || g_modifiersLR_logical == (MOD_RWIN | MOD_RWIN))   )
+	// Win-L uses logical keys, unlike Ctrl-Alt-Del which uses physical keys (i.e. Win-L can be simulated,
+	// but Ctrl-Alt-Del must be physically pressed by the user):
+	if (   pEvent->vkCode == 'L' && !key_up && (g_modifiersLR_logical == MOD_LWIN  // i.e. *no* other keys but WIN.
+		|| g_modifiersLR_logical == MOD_RWIN || g_modifiersLR_logical == (MOD_RWIN | MOD_RWIN))
+		&& g_os.IsWinXPorLater())
 	{
 		// Since the user has pressed Win-L with *no* other modifier keys held down, and since
 		// this key isn't being suppressed (since we're here in this function), the computer
@@ -701,9 +707,46 @@ inline LRESULT AllowIt(HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, sc_typ
 		// notified when the user releases the LWIN or RWIN key, so we should assume that
 		// it's now not in the down position.  This avoids it being thought to be down when the
 		// user logs back in, which might cause hook hotkeys to accidentally fire.
+		// Update: I've received an indication from a single Win2k user (unconfirmed from anyone
+		// else) that the Win-L hotkey doesn't work on Win2k.  If true, it probably doesn't work
+		// on NT either.  So it's been changed to happen only on XP:
 		g_modifiersLR_logical = g_modifiersLR_physical = 0; // We already know that *only* the WIN key is down.
 		// Indicate that the windows keys and the 'L' key are not down, in preparation for re-logon:
 		g_PhysicalKeyState[pEvent->vkCode] = g_PhysicalKeyState[VK_LWIN] = g_PhysicalKeyState[VK_RWIN] = 0;
+	}
+
+	// Although the delete key itself can be simulated (logical or physical), the user must be physically
+	// (not logically) holding down CTRL and ALT for the ctrl-alt-del sequence to take effect,
+	// which is why g_modifiersLR_physical is used vs. g_modifiersLR_logical (which is used above since it's different):
+	if (   (pEvent->vkCode == VK_DELETE || pEvent->vkCode == VK_DECIMAL) && !key_up // Both of these qualify, see notes.
+		&& (g_modifiersLR_physical & (MOD_LCONTROL | MOD_RCONTROL)) // At least one CTRL key is physically down.
+		&& (g_modifiersLR_physical & (MOD_LALT | MOD_RALT))         // At least one ALT key is physically down.
+		&& !(g_modifiersLR_physical & (MOD_LSHIFT | MOD_RSHIFT))    // Neither shift key is phys. down (WIN is ok).
+		&& (g_os.IsWin2000() || g_os.IsWinNT4())   )                // Only these two should need the fix.
+	{
+		// Similar to the above case except for Windows 2000.  I suspect it also applies to NT,
+		// but I'm not sure.  It seems safer to apply it to NT until confirmed otherwise.
+		// Note that Ctrl-Alt-Delete works with *either* delete key, and it works regardless
+		// of the state of Numlock (at least on XP, so it's probably that way on Win2k/NT also,
+		// though it would be nice if this too is someday confirmed).  Here's the key history
+		// someone for when the pressed ctrl-alt-del and then pressed esc to dismiss the dialog
+		// on Win2k (Win2k invokes a 6-button dialog, with choices such as task manager and lock
+		// workstation, if I recall correctly -- unlike XP which invokes task mgr by default):
+		// A4  038	 	d	21.24	Alt            	
+		// A2  01D	 	d	0.00	Ctrl           	
+		// A2  01D	 	d	0.52	Ctrl           	
+		// 2E  053	 	d	0.02	Num Del        	<-- notice how there's no following up event
+		// 1B  001	 	u	2.80	Esc             <-- notice how there's no preceding down event
+		// Other notes: On XP at least, shift key must not be down, otherwise Ctrl-Alt-Delete does
+		// not take effect.  Windows key can be down, however.
+		// Since the user will be gone for an unknown amount of time, it seems best just to reset
+		// all hook tracking of the modifiers to the "up" position.  The user can always press them
+		// down again upon return.  It also seems best to reset both logical and physical, just for
+		// peace of mind and simplicity:
+		g_modifiersLR_logical = g_modifiersLR_physical = 0;
+		// Indicate that the windows keys and the 'L' key are not down, in preparation for re-logon:
+		g_PhysicalKeyState[pEvent->vkCode] = g_PhysicalKeyState[VK_LCONTROL] = g_PhysicalKeyState[VK_RCONTROL]
+			= g_PhysicalKeyState[VK_LMENU] = g_PhysicalKeyState[VK_RMENU] = 0;
 	}
 
 	if (!kvk[(vk_type)pEvent->vkCode].as_modifiersLR)
@@ -800,7 +843,13 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	// of wParam and lParam, because those values may be invalid or untrustworthy
 	// whenever code < 0.  So the order in this short-circuit boolean expression
 	// may be important:
-	if (code != HC_ACTION || wParam == WM_MOUSEMOVE)
+	if (code != HC_ACTION)
+		return AllowKeyToGoToSystem;
+
+	if (!(pEvent->flags & LLMHF_INJECTED)) // Physical mouse movement or button action (uses LLMHF vs. LLKHF).
+		g_TimeLastInputPhysical = pEvent->time;
+
+	if (wParam == WM_MOUSEMOVE) // Only after updating for physical input, above, is this checked.
 		return AllowKeyToGoToSystem;
 
 	// MSDN: WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN, or WM_RBUTTONUP.
@@ -896,7 +945,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	// true, allows AltTab and ShiftAltTab hotkeys to function even when the AltTab menu was invoked by
 	// means other than an AltTabMenu or AltTabAndMenu hotkey.  The alt-tab menu becomes visible only
 	// under these exact conditions, at least under WinXP:
-	if (!alt_tab_menu_is_visible && vk == VK_TAB && !key_up
+	if (vk == VK_TAB && !key_up && !alt_tab_menu_is_visible
 		&& ((g_modifiersLR_logical & MOD_LALT) || (g_modifiersLR_logical & MOD_RALT))
 		&& !(g_modifiersLR_logical & MOD_LCONTROL) && !(g_modifiersLR_logical & MOD_RCONTROL))
 		alt_tab_menu_is_visible = true;
@@ -904,7 +953,11 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	// Track physical state of keyboard & mouse buttons since GetAsyncKeyState() doesn't seem
 	// to do so, at least under WinXP.  Also, if it's a modifier, let another section handle it
 	// because it's not as simple as just setting the value to true or false (e.g. if LShift
-	// goes up, the state of VK_SHIFT should stay down if VK_RSHIFT is down, or up otherwise):
+	// goes up, the state of VK_SHIFT should stay down if VK_RSHIFT is down, or up otherwise).
+	// Also, even if this input event will wind up being suppressed (usually because of being
+	// a hotkey), still update the physical state anyway, because we want the physical state to
+	// be entirely independent of the logical state (i.e. we want the key to be reported as
+	// physically down even if it isn't logically down):
 	if (!kvk[vk].as_modifiersLR && EventIsPhysical(lParam, sc, key_up))
 		g_PhysicalKeyState[vk] = !key_up;
 
@@ -1187,11 +1240,11 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 			{
 				if (pThisKey->as_modifiersLR)
 					return (pThisKey->was_just_used == AS_PREFIX_FOR_HOTKEY) ? AllowKeyToGoToSystemButDisguiseWinAlt
-						: AllowKeyToGoToSystem;  // i.e. don't disguise Windows key if it didn't fire a hotkey.
+						: AllowKeyToGoToSystem;  // i.e. don't disguise Win or Alt key if it didn't fire a hotkey.
 				else
 					return SuppressThisKey;
 			}
-#else
+#else // Mouse hook.
 				return SuppressThisKey;
 #endif
 
@@ -1468,27 +1521,6 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 			disguise_next_ralt_up = true;
 	}
 
-
-	// UPDATE to below: Since this function is only called from a single thread (namely ours),
-	// albeit recursively, it's apparently not reentrant (unless our own main app itself becomes
-	// multithreaded someday, and even then it might not matter?) there's no advantage to using
-	// PostMessage() because the message can't be acted upon until after we return from this
-	// function.  Therefore, avoid the overhead (and possible delays while system is under
-	// heavy load?) of using PostMessage and simply execute the hotkey right here before
-	// returning.  UPDATE AGAIN: No, I don't think this will work reliably because I think
-	// this function is called invisibly by Get/PeekMessage(), without it even telling us
-	// that it's calling it.  Therefore, if we call a subroutine in the script from here,
-	// we can't return until after the subroutine is over, thus Get/PeekMessage() will
-	// probably hang, or be forced to start a new thread or something?  An alternative to
-	// using PostMessage() (if it really is susceptible to delays due to system being under
-	// load, which is far from certain), is to change the value of a global var to signal
-	// to MsgSleep() that a hotkey has been fired.  However, this doesn't seem likely
-	// to work because a call to GetMessage() will likely call this function without
-	// actually returning any messages to its caller, thus the hotkeys would never be
-	// seen during periods when there are no messages.  PostMessage works reliably, so
-	// it seems best not to change it without good reason and without a full understanding
-	// of what's really going on.
-
 	switch(hotkey_id)
 	{
 		case HOTKEY_ID_ALT_TAB_MENU_DISMISS: // This case must occur before HOTKEY_ID_ALT_TAB_MENU due to non-break.
@@ -1670,6 +1702,25 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 			break;
 		}
 		default:
+		// UPDATE to below: Since this function is only called from a single thread (namely ours),
+		// albeit recursively, it's apparently not reentrant (unless our own main app itself becomes
+		// multithreaded someday, and even then it might not matter?) there's no advantage to using
+		// PostMessage() because the message can't be acted upon until after we return from this
+		// function.  Therefore, avoid the overhead (and possible delays while system is under
+		// heavy load?) of using PostMessage and simply execute the hotkey right here before
+		// returning.  UPDATE AGAIN: No, I don't think this will work reliably because this
+		// function is called invisibly by GetMessage(), without it even telling us that
+		// it's calling it.  Therefore, if we call a subroutine in the script from here,
+		// we can't return until after the subroutine is over, thus GetMessage() will
+		// probably hang, or be forced to start a new thread or something?  An alternative to
+		// using PostMessage() (if it really is susceptible to delays due to system being under
+		// load, which is far from certain), is to change the value of a global var to signal
+		// to MsgSleep() that a hotkey has been fired.  However, this doesn't seem likely
+		// to work because a call to GetMessage() will likely call this function without
+		// actually returning any messages to its caller, thus the hotkeys would never be
+		// seen during periods when there are no messages.  PostMessage works reliably, so
+		// it seems best not to change it without good reason and without a full understanding
+		// of what's really going on.
 #ifdef INCLUDE_KEYBD_HOOK
 			PostMessage(g_hWnd, AHK_HOOK_HOTKEY, hotkey_id, 0);  // Returns non-zero on success.
 #else

@@ -31,8 +31,10 @@ private:
 	// It seems best to default to many attempts, because a failure
 	// to open the clipboard may result in the early termination
 	// of a large script due to the fear that it's generally
-	// unsafe to continue in such cases:
-	ResultType Open(int aAttempts = 20, int aRetryInterval = 20);
+	// unsafe to continue in such cases.  Update: Increased default
+	// number of attempts from 20 to 40 because Jason (Payam) reported
+	// that he was getting an error on rare occasions (but not reproducible).
+	ResultType Open(int aAttempts = 40, int aRetryInterval = 20);
 
 public:
 	bool mIsOpen;  // Whether the clipboard is physically open due to action by this class.

@@ -39,9 +39,9 @@ static size_t g_CommentFlagLength = strlen(g_CommentFlag); // pre-calculated for
 
 Script::Script()
 	: mFirstLine(NULL), mLastLine(NULL), mCurrLine(NULL)
-	, mLoopFile(NULL), mLoopRegItem(NULL)
+	, mLoopFile(NULL), mLoopRegItem(NULL), mLoopReadFile(NULL), mLoopField(NULL), mLoopIteration(0)
 	, mThisHotkeyLabel(NULL), mPriorHotkeyLabel(NULL), mPriorHotkeyStartTime(0)
-	, mFirstLabel(NULL), mLastLabel(NULL)
+	, mAutoStartLabel(NULL), mFirstLabel(NULL), mLastLabel(NULL)
 	, mFirstVar(NULL), mLastVar(NULL)
 	, mLineCount(0), mLabelCount(0), mVarCount(0), mGroupCount(0)
 	, mCurrFileNumber(0), mCurrLineNumber(0), mNoHotkeyLabels(true)
@@ -1204,6 +1204,8 @@ ResultType Script::AddLabel(char *aLabelName)
 		// This must be done after the above:
 		mLastLabel = the_new_label;
 	}
+	if (!stricmp(aLabelName, "A_AutoStart"))
+		g_script.mAutoStartLabel = the_new_label; // Stored for performance reasons, in case script has many labels.
 	++mLabelCount;
 	return OK;
 }
@@ -1894,7 +1896,10 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			// Before allocating memory for this Arg's text, first check if it's a pure
 			// variable.  If it is, we store it differently (and there's no need to resolve
 			// escape sequences in these cases, since var names can't contain them):
-			new_arg[i].type = Line::ArgIsVar(aActionType, i);
+			if (aActionType == ACT_LOOP && i == 1 && new_arg[0].text && !stricmp(new_arg[0].text, "Parse"))
+				new_arg[i].type = ARG_TYPE_INPUT_VAR;
+			else
+				new_arg[i].type = Line::ArgIsVar(aActionType, i);
 			// Since some vars are optional, the below allows them all to be blank or
 			// not present in the arg list.  If mandatory var is blank at this stage,
 			// it's okay because all mandatory args are validated to be non-blank elsewhere:
@@ -1905,7 +1910,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					// that this arg is not a variable, just a normal empty arg.  Functions
 					// such as ListLines() rely on this having been done because they assume,
 					// for performance reasons, that args marked as variables really are
-					// variables:
+					// variables.  In addition, ExpandArgs() relies on this having been done:
 					new_arg[i].type = ARG_TYPE_NORMAL;
 				else
 				{
@@ -1986,6 +1991,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					return ScriptError("This parmeter contains a variable name with"
 						" an escaped dereference symbol, which is not allowed.", new_arg[i].text);
 				deref_string_length = new_arg[i].text + j - deref[deref_count].marker + 1;
+				if (deref_string_length == 2) // The percent signs were empty, e.g. %%
+					return ScriptError("This parmeter contains an empty variable reference (%%).", new_arg[i].text);
 				if (deref_string_length - 2 > MAX_VAR_NAME_LENGTH) // -2 for the opening & closing g_DerefChars
 					return ScriptError("This parmeter contains a variable name that is too long."
 						, new_arg[i].text);
@@ -2148,6 +2155,12 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			&& ((!*(LINE_RAW_ARG5 + 1) && *LINE_RAW_ARG5 != '1' && toupper(*LINE_RAW_ARG5) != 'A')
 			|| (*(LINE_RAW_ARG5 + 1) && stricmp(LINE_RAW_ARG5, "all"))))
 			return ScriptError("If not blank, parameter #5 must be 1, A, ALL, or a variable reference.", LINE_RAW_ARG5);
+		break;
+
+	case ACT_STRINGSPLIT:
+		if (line->mArgc > 0 && !line->ArgHasDeref(1) && *LINE_RAW_ARG1) // The output array must be a legal name.
+			if (!Var::ValidateName(LINE_RAW_ARG1)) // It already displayed the error.
+				return FAIL;
 		break;
 
 	case ACT_REGREAD:
@@ -2477,25 +2490,34 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			}
 			break;
 		default:  // has 2 or more args.
-			line->mAttribute = line->RegConvertRootKey(LINE_RAW_ARG1) ? ATTR_LOOP_REG : ATTR_LOOP_FILE;
-			if (line->mAttribute == ATTR_LOOP_FILE)
+			if (line->ArgHasDeref(1)) // Impossible to know now what type of loop (only at runtime).
+				line->mAttribute = ATTR_LOOP_UNKNOWN;
+			else if (!stricmp(LINE_RAW_ARG1, "Read"))
+				line->mAttribute = ATTR_LOOP_READ_FILE;
+			else if (!stricmp(LINE_RAW_ARG1, "Parse"))
+				line->mAttribute = ATTR_LOOP_PARSE;
+			else // the 1st arg can either be a Root Key or a File Pattern, depending on the type of loop.
 			{
-				// Validate whatever we can rather than waiting for runtime validation:
-				if (!line->ArgHasDeref(2) && Line::ConvertLoopMode(LINE_RAW_ARG2) == FILE_LOOP_INVALID)
-					return ScriptError(ERR_LOOP_FILE_MODE, LINE_RAW_ARG2);
-				if (line->mArgc > 2 && !line->ArgHasDeref(3) && *LINE_RAW_ARG3)
-					if (strlen(LINE_RAW_ARG3) > 1 || (*LINE_RAW_ARG3 != '0' && *LINE_RAW_ARG3 != '1'))
-						return ScriptError("Parameter #3 must be either blank, 0, 1, or a variable reference."
-							, LINE_RAW_ARG3);
-			}
-			else // Registry loop.
-			{
-				if (line->mArgc > 2 && !line->ArgHasDeref(3) && Line::ConvertLoopMode(LINE_RAW_ARG3) == FILE_LOOP_INVALID)
-					return ScriptError(ERR_LOOP_REG_MODE, LINE_RAW_ARG3);
-				if (line->mArgc > 3 && !line->ArgHasDeref(4) && *LINE_RAW_ARG4)
-					if (strlen(LINE_RAW_ARG4) > 1 || (*LINE_RAW_ARG4 != '0' && *LINE_RAW_ARG4 != '1'))
-						return ScriptError("Parameter #4 must be either blank, 0, 1, or a variable reference."
-							, LINE_RAW_ARG4);
+				line->mAttribute = line->RegConvertRootKey(LINE_RAW_ARG1) ? ATTR_LOOP_REG : ATTR_LOOP_FILE;
+				if (line->mAttribute == ATTR_LOOP_FILE)
+				{
+					// Validate whatever we can rather than waiting for runtime validation:
+					if (!line->ArgHasDeref(2) && Line::ConvertLoopMode(LINE_RAW_ARG2) == FILE_LOOP_INVALID)
+						return ScriptError(ERR_LOOP_FILE_MODE, LINE_RAW_ARG2);
+					if (line->mArgc > 2 && !line->ArgHasDeref(3) && *LINE_RAW_ARG3)
+						if (strlen(LINE_RAW_ARG3) > 1 || (*LINE_RAW_ARG3 != '0' && *LINE_RAW_ARG3 != '1'))
+							return ScriptError("Parameter #3 must be either blank, 0, 1, or a variable reference."
+								, LINE_RAW_ARG3);
+				}
+				else // Registry loop.
+				{
+					if (line->mArgc > 2 && !line->ArgHasDeref(3) && Line::ConvertLoopMode(LINE_RAW_ARG3) == FILE_LOOP_INVALID)
+						return ScriptError(ERR_LOOP_REG_MODE, LINE_RAW_ARG3);
+					if (line->mArgc > 3 && !line->ArgHasDeref(4) && *LINE_RAW_ARG4)
+						if (strlen(LINE_RAW_ARG4) > 1 || (*LINE_RAW_ARG4 != '0' && *LINE_RAW_ARG4 != '1'))
+							return ScriptError("Parameter #4 must be either blank, 0, 1, or a variable reference."
+								, LINE_RAW_ARG4);
+				}
 			}
 		}
 		break; // Outer switch().
@@ -2549,6 +2571,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 
 
 Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
+// Returns NULL on failure.
 // Args that are input or output variables are normally resolved at load-time, so that
 // they contain a pointer to their Var object.  This is done for performance.  However,
 // in order to support dynamically resolved variables names like AutoIt2 (e.g. arrays),
@@ -2557,10 +2580,13 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 // they're trying to find is unimportant.  For example, dynamically built input variables,
 // such as "StringLen, length, array%i%", do not need to be created if they weren't
 // previously assigned to (i.e. they weren't previously used as an output variable).
-// In the above example, array elements that don't exist are not created unless they were
-// specifically assigned a value at some previous time during runtime.
+// In the above example, the array element would never be created here.  But if the output
+// variable were dynamic, our call would have told us to create it.
 {
-	if (aArgIndex >= mArgc) // The requested ARG isn't even present, so it can't have a variable.
+	// The requested ARG isn't even present, so it can't have a variable.  Currently, this should
+	// never happen because the loading procedure ensures that input/output args are not marked
+	// as variables if they are blank (and our caller should check for this and not call in that case):
+	if (aArgIndex >= mArgc)
 		return NULL;
 	// Since this function isn't inline (since it's called so frequently), there isn't that much more
 	// overhead to doing this check, even though it shouldn't be needed since it's the caller's
@@ -2571,7 +2597,8 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 		return VAR(mArg[aArgIndex]); // Return the var's address that was already determined at load-time.
 	// The above might return NULL in the case where the arg is optional (i.e. the command allows
 	// the var name to be omitted).  But in that case, the caller should either never have called this
-	// function or should check for NULL upon return.
+	// function or should check for NULL upon return.  UPDATE: This actually never happens, see
+	// comment above the "if (aArgIndex >= mArgc)" line.
 
 	char var_name[MAX_VAR_NAME_LENGTH + 1];  // Will hold the dynamically built name.
 	// At this point, we know the requested arg is a variable that must be dynamically resolved.
@@ -2594,7 +2621,7 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 			// function called it to resolve an output variable, it will see tha the result is
 			// NULL and terminate the current subroutine.
 			#define DYNAMIC_TOO_LONG "This dynamically built variable name is too long."
-			LineError(DYNAMIC_TOO_LONG, WARN, mArg[aArgIndex].text);
+			LineError(DYNAMIC_TOO_LONG, FAIL, mArg[aArgIndex].text);
 			return NULL;
 		}
 		// Now copy the contents of the dereferenced var.  For all cases, aBuf has already
@@ -2602,7 +2629,7 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 		// time we were called and the time the caller calculated the space needed.
 		if (deref->var->Get() > (VarSizeType)(MAX_VAR_NAME_LENGTH - vni)) // The variable name would be too long!
 		{
-			LineError(DYNAMIC_TOO_LONG, WARN, mArg[aArgIndex].text);
+			LineError(DYNAMIC_TOO_LONG, FAIL, mArg[aArgIndex].text);
 			return NULL;
 		}
 		vni += deref->var->Get(var_name + vni);
@@ -2613,7 +2640,7 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 	for (; *pText && vni < MAX_VAR_NAME_LENGTH; var_name[vni++] = *pText++);
 	if (vni >= MAX_VAR_NAME_LENGTH && *pText) // The variable name would be too long!
 	{
-		LineError(DYNAMIC_TOO_LONG, WARN, mArg[aArgIndex].text);
+		LineError(DYNAMIC_TOO_LONG, FAIL, mArg[aArgIndex].text);
 		return NULL;
 	}
 	// Terminate the buffer, even if nothing was written into it:
@@ -2623,10 +2650,11 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 	Var *found_var;
 	if (aCreateIfNecessary)
 	{
-		found_var = g_script.FindOrAddVar(var_name);
+		if (   !(found_var = g_script.FindOrAddVar(var_name))   )
+			return NULL;  // Above will already have displayed the error.
 		if (mArg[aArgIndex].type == ARG_TYPE_OUTPUT_VAR && VAR_IS_RESERVED(found_var))
 		{
-			LineError(ERR_VAR_IS_RESERVED, WARN, var_name);
+			LineError(ERR_VAR_IS_RESERVED, FAIL, var_name);
 			return NULL;  // Don't return the var, preventing the caller from assigning to it.
 		}
 		else
@@ -2637,7 +2665,7 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 		// Now we've dynamically build the variable name.  It's possible that the name is illegal,
 		// so check that (the name is automatically checked by FindOrAddVar(), so we only need to
 		// check it if we're not calling that):
-		if (!Var::ValidateName(var_name))
+		if (!Var::ValidateName(var_name, g_script.mIsReadyToExecute))
 			return NULL; // Above already displayed error for us.
 		found_var = g_script.FindVar(var_name);
 		// If not found: for performance reasons, don't create it because caller just wants an empty variable.
@@ -2647,56 +2675,102 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 
 
 
-Var *Script::FindOrAddVar(char *aVarName, size_t aVarNameLength)
+Var *Script::FindOrAddVar(char *aVarName, size_t aVarNameLength, Var *aSearchStart)
 // Returns the Var whose name matches aVarName.  If it doesn't exist, it is created.
 {
 	if (!aVarName || !*aVarName) return NULL;
-	Var *var = FindVar(aVarName, aVarNameLength);
+	Var *var_prev;
+	Var *var = FindVar(aVarName, aVarNameLength, &var_prev, aSearchStart);  // 3rd param is a handle.
 	if (var)
 		return var;
-	// Otherwise, no match found, so create a new var.
-	if (AddVar(aVarName, aVarNameLength) != OK)
-		return NULL;
-	return mLastVar;
+	// Otherwise, no match found, so create a new var.  This will return NULL if there was a problem,
+	// in which case AddVar() will already have displayed the error:
+	return AddVar(aVarName, aVarNameLength, var_prev);
 }
 
 
 
-Var *Script::FindVar(char *aVarName, size_t aVarNameLength)
+Var *Script::FindVar(char *aVarName, size_t aVarNameLength, Var **apVarPrev, Var *aSearchStart)
 // Returns the Var whose name matches aVarName.  If it doesn't exist, NULL is returned.
+// If caller provided a non-NULL apVarPrev, it will be given a pointer to the variable
+// in the linked list after which the new variable would need to be inserted to maintain
+// alphabetical order, which helps performance and allows the ListVars command display
+// the variables in alphabetical order.
 {
 	if (!aVarName || !*aVarName) return NULL;
 	if (!aVarNameLength) // Caller didn't specify, so use the entire string.
 		aVarNameLength = strlen(aVarName);
-	for (Var *var = mFirstVar; var != NULL; var = var->mNextVar)
-		if (!strlicmp(aVarName, var->mName, (UINT)aVarNameLength)) // Match found.
+
+	int result;
+	Var *var, *var_prev;
+
+	// If possible, start at aSearchStart, which is a performance hint from the caller:
+	for (var_prev = NULL, var = aSearchStart ? aSearchStart : mFirstVar
+		; var
+		; var_prev = var, var = var->mNextVar)
+	{
+		result = strlicmp(aVarName, var->mName, (UINT)aVarNameLength);
+		if (!result) // Match found.
+		{
+			if (apVarPrev) // Caller should ignore the value in this case, but set to NULL for consistency.
+				*apVarPrev = NULL;
 			return var;
-	// Otherwise, no match found:
+		}
+		if (result < 0) // Because the list is sorted, we now know that aVarName does not exist in the list.
+		{
+			// Set the output parameter, if present:
+			if (apVarPrev)
+				*apVarPrev = var_prev; // This is the var after which the new var should be insertted.
+			return NULL;
+		}
+	}
+	// Otherwise, no match found after going through the entire list, which means that aVarName
+	// should be insertted at the end of the list by our caller (if it wishes to do that). So set the
+	// output parameter, if present, to the last item (which will be NULL if the linked list is empty).
+	if (apVarPrev)
+		*apVarPrev = mLastVar;
 	return NULL;
 }
 
 
 
-ResultType Script::AddVar(char *aVarName, size_t aVarNameLength)
-// Returns OK or FAIL.
+Var *Script::AddVar(char *aVarName, size_t aVarNameLength, Var *aVarPrev)
+// This function should probably not be called by anyone except FindOrAddVar, which has already done
+// the dupe-checking and is also providing us with the insertion point so that the list stays sorted.
+// Returns the address of the new variable or NULL on failure.
 // The caller must already have verfied that this isn't a duplicate var.
 {
-	if (!aVarName || !*aVarName)
-		return ScriptError("AddVar() called incorrectly.");
+	if (!aVarName || !*aVarName) return NULL;  // Should never happen, so just silently indicate failure.
 	if (!aVarNameLength) // Caller didn't specify, so use the entire string.
 		aVarNameLength = strlen(aVarName);
-	if (aVarNameLength > MAX_VAR_NAME_LENGTH)
-		// Caller is supposed to prevent this.
-		return ScriptError("AddVar(): Variable name is too long." PLEASE_REPORT);
 
-	// Make a copy so that it can be modified for certain.  This will also serve
-	// as the dynamic memory we pass to the constructor:
-	char *new_name = SimpleHeap::Malloc(aVarNameLength + 1); // +1 for the terminator
+	if (aVarNameLength > MAX_VAR_NAME_LENGTH)
+	{
+		// Load-time callers should check for this.  But at runtime, it's possible for a dynamically
+		// resolved variable name to be too long.  Note that aVarName should be the exact variable
+		// name and does not need to be truncated to aVarNameLength whenever this error occurs
+		// (i.e. at runtime):
+		if (mIsReadyToExecute) // Runtime error.
+			ScriptError("Variable name is too long." ERR_ABORT, aVarName);
+		else
+			ScriptError("Variable name is too long.", aVarName);
+		return NULL;
+	}
+
+	// Make a temporary copy that includes only the first aVarNameLength characters from aVarName:
+	char var_name[MAX_VAR_NAME_LENGTH + 1];
+	strlcpy(var_name, aVarName, aVarNameLength + 1);  // +1 to convert length to size.
+
+	if (!Var::ValidateName(var_name, mIsReadyToExecute))
+		// Above already displayed error for us.  This can happen at loadtime or runtime (e.g. StringSplit).
+		return NULL;
+
+	// Allocate some dynamic memory to pass to the constructor:
+	char *new_name = SimpleHeap::Malloc(var_name);
 	if (!new_name)
-		return FAIL;  // It already displayed the error for us.
-	strlcpy(new_name, aVarName, aVarNameLength + 1);  // Copies only the desired substring.
-	if (!Var::ValidateName(new_name))
-		return FAIL; // Above already displayed error for us.
+		// It already displayed the error for us.  These mem errors are so unusual that we're not going
+		// to bother varying the error message to include ERR_ABORT if this occurs during runtime.
+		return NULL;
 
 	VarTypeType var_type;
 	// Keeping the most common ones near the top helps performance a little:
@@ -2735,30 +2809,53 @@ ResultType Script::AddVar(char *aVarName, size_t aVarNameLength)
 	else if (!stricmp(new_name, "a_LoopRegName")) var_type = VAR_LOOPREGNAME;
 	else if (!stricmp(new_name, "a_LoopRegTimeModified")) var_type = VAR_LOOPREGTIMEMODIFIED;
 
+	else if (!stricmp(new_name, "a_LoopReadLine")) var_type = VAR_LOOPREADLINE;
+	else if (!stricmp(new_name, "a_LoopField")) var_type = VAR_LOOPFIELD;
+	else if (!stricmp(new_name, "a_Index")) var_type = VAR_INDEX;  // A short name since it maybe be typed so often.
+
 	else if (!stricmp(new_name, "a_ThisHotkey")) var_type = VAR_THISHOTKEY;
 	else if (!stricmp(new_name, "a_PriorHotkey")) var_type = VAR_PRIORHOTKEY;
 	else if (!stricmp(new_name, "a_TimeSinceThisHotkey")) var_type = VAR_TIMESINCETHISHOTKEY;
 	else if (!stricmp(new_name, "a_TimeSincePriorHotkey")) var_type = VAR_TIMESINCEPRIORHOTKEY;
 	else if (!stricmp(new_name, "a_TickCount")) var_type = VAR_TICKCOUNT;
 	else if (!stricmp(new_name, "a_TimeIdle")) var_type = VAR_TIMEIDLE;
+	else if (!stricmp(new_name, "a_TimeIdlePhysical")) var_type = VAR_TIMEIDLEPHYSICAL;
 	else if (!stricmp(new_name, "a_Space")) var_type = VAR_SPACE;
 	else if (!stricmp(new_name, "a_Tab")) var_type = VAR_TAB;
 	else var_type = VAR_NORMAL;
 
 	Var *the_new_var = new Var(new_name, var_type);
 	if (the_new_var == NULL)
-		return ScriptError("AddVar(): Out of memory.");
-	if (mFirstVar == NULL)
+	{
+		ScriptError("AddVar(): Out of memory.");
+		return NULL;
+	}
+	if (mFirstVar == NULL) // The list is empty, so this will be the first and last item.
 		mFirstVar = mLastVar = the_new_var;
 	else
 	{
-		mLastVar->mNextVar = the_new_var;
-		// This must be done after the above:
-		mLastVar = the_new_var;
+		if (!aVarPrev) // Caller is telling us to insert it at the beginning of the list.
+		{
+			// These two statements must be done in this order:
+			the_new_var->mNextVar = mFirstVar;
+			mFirstVar = the_new_var;
+		}
+		else if (aVarPrev == mLastVar) // Caller is telling us to insert it at the end of the list.
+		{
+			// These two statements must be done in this order:
+			mLastVar->mNextVar = the_new_var;
+			mLastVar = the_new_var;
+		}
+		else // Caller is telling us to insert it somewhere in the middle of the list.
+		{
+			// These two statements must be done in this order:
+			the_new_var->mNextVar = aVarPrev->mNextVar;
+			aVarPrev->mNextVar = the_new_var;
+		}
 	}
 
 	++mVarCount;
-	return OK;
+	return the_new_var;
 }
 
 
@@ -2935,7 +3032,8 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 
 
 
-Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, AttributeType aLoopType1, AttributeType aLoopType2)
+Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, AttributeType aLoopTypeFile
+	, AttributeType aLoopTypeReg, AttributeType aLoopTypeRead, AttributeType aLoopTypeParse)
 // Zero is the default for aMode, otherwise:
 // Will return NULL to the top-level caller if there's an error, or if
 // mLastLine is NULL (i.e. the script is empty).
@@ -2946,7 +3044,9 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 	// Don't check aStartingLine here at top: only do it at the bottom
 	// for it's differing return values.
 	Line *line_temp;
-	AttributeType loop_type1, loop_type2;  // Although rare, a statement can be enclosed in both a file-loop and a reg-loop.
+	// Although rare, a statement can be enclosed in more than one type of special loop,
+	// e.g. both a file-loop and a reg-loop:
+	AttributeType loop_type_file, loop_type_reg, loop_type_read, loop_type_parse;
 	for (Line *line = aStartingLine; line != NULL;)
 	{
 		if (ACT_IS_IF(line->mActionType) || line->mActionType == ACT_LOOP || line->mActionType == ACT_REPEAT)
@@ -2961,28 +3061,46 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 
 			// We're checking for ATTR_LOOP_FILE here to detect whether qualified commands enclosed
 			// in a true file loop are allowed to omit their filename paremeter:
-			loop_type1 = ATTR_NONE;
-			if (aLoopType1 == ATTR_LOOP_FILE || line->mAttribute == ATTR_LOOP_FILE)
+			loop_type_file = ATTR_NONE;
+			if (aLoopTypeFile == ATTR_LOOP_FILE || line->mAttribute == ATTR_LOOP_FILE)
 				// i.e. if either one is a file-loop, that's enough to establish
 				// the fact that we're in a file loop.
-				loop_type1 = ATTR_LOOP_FILE;
-			else if (aLoopType1 == ATTR_LOOP_UNKNOWN || line->mAttribute == ATTR_LOOP_UNKNOWN)
+				loop_type_file = ATTR_LOOP_FILE;
+			else if (aLoopTypeFile == ATTR_LOOP_UNKNOWN || line->mAttribute == ATTR_LOOP_UNKNOWN)
 				// ATTR_LOOP_UNKNOWN takes precedence over ATTR_LOOP_NORMAL because
 				// we can't be sure if we're in a file loop, but it's correct to
 				// assume that we are (otherwise, unwarranted syntax errors may be reported
 				// later on in here).
-				loop_type1 = ATTR_LOOP_UNKNOWN;
-			else if (aLoopType1 == ATTR_LOOP_NORMAL || line->mAttribute == ATTR_LOOP_NORMAL)
-				loop_type1 = ATTR_LOOP_NORMAL;
+				loop_type_file = ATTR_LOOP_UNKNOWN;
+			else if (aLoopTypeFile == ATTR_LOOP_NORMAL || line->mAttribute == ATTR_LOOP_NORMAL)
+				loop_type_file = ATTR_LOOP_NORMAL;
 
 			// The section is the same as above except for registry vs. file loops:
-			loop_type2 = ATTR_NONE;
-			if (aLoopType2 == ATTR_LOOP_REG || line->mAttribute == ATTR_LOOP_REG)
-				loop_type2 = ATTR_LOOP_REG;
-			else if (aLoopType2 == ATTR_LOOP_UNKNOWN || line->mAttribute == ATTR_LOOP_UNKNOWN)
-				loop_type2 = ATTR_LOOP_UNKNOWN;
-			else if (aLoopType2 == ATTR_LOOP_NORMAL || line->mAttribute == ATTR_LOOP_NORMAL)
-				loop_type2 = ATTR_LOOP_NORMAL;
+			loop_type_reg = ATTR_NONE;
+			if (aLoopTypeReg == ATTR_LOOP_REG || line->mAttribute == ATTR_LOOP_REG)
+				loop_type_reg = ATTR_LOOP_REG;
+			else if (aLoopTypeReg == ATTR_LOOP_UNKNOWN || line->mAttribute == ATTR_LOOP_UNKNOWN)
+				loop_type_reg = ATTR_LOOP_UNKNOWN;
+			else if (aLoopTypeReg == ATTR_LOOP_NORMAL || line->mAttribute == ATTR_LOOP_NORMAL)
+				loop_type_reg = ATTR_LOOP_NORMAL;
+
+			// Same as above except for READ-FILE loops:
+			loop_type_read = ATTR_NONE;
+			if (aLoopTypeRead == ATTR_LOOP_READ_FILE || line->mAttribute == ATTR_LOOP_READ_FILE)
+				loop_type_read = ATTR_LOOP_READ_FILE;
+			else if (aLoopTypeRead == ATTR_LOOP_UNKNOWN || line->mAttribute == ATTR_LOOP_UNKNOWN)
+				loop_type_read = ATTR_LOOP_UNKNOWN;
+			else if (aLoopTypeRead == ATTR_LOOP_NORMAL || line->mAttribute == ATTR_LOOP_NORMAL)
+				loop_type_read = ATTR_LOOP_NORMAL;
+
+			// Same as above except for PARSING loops:
+			loop_type_parse = ATTR_NONE;
+			if (aLoopTypeParse == ATTR_LOOP_PARSE || line->mAttribute == ATTR_LOOP_PARSE)
+				loop_type_parse = ATTR_LOOP_PARSE;
+			else if (aLoopTypeParse == ATTR_LOOP_UNKNOWN || line->mAttribute == ATTR_LOOP_UNKNOWN)
+				loop_type_parse = ATTR_LOOP_UNKNOWN;
+			else if (aLoopTypeParse == ATTR_LOOP_NORMAL || line->mAttribute == ATTR_LOOP_NORMAL)
+				loop_type_parse = ATTR_LOOP_NORMAL;
 
 			// Check if the IF's action-line is something we want to recurse.  UPDATE: Always
 			// recurse because other line types, such as Goto and Gosub, need to be preparsed
@@ -2990,7 +3108,8 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 			// Recurse this line rather than the next because we want
 			// the called function to recurse again if this line is a ACT_BLOCK_BEGIN
 			// or is itself an IF:
-			line_temp = PreparseIfElse(line_temp, ONLY_ONE_LINE, loop_type1, loop_type2);
+			line_temp = PreparseIfElse(line_temp, ONLY_ONE_LINE, loop_type_file, loop_type_reg, loop_type_read
+				, loop_type_parse);
 			// If not end-of-script or error, line_temp is now either:
 			// 1) If this if's/loop's action was a BEGIN_BLOCK: The line after the end of the block.
 			// 2) If this if's/loop's action was another IF or LOOP:
@@ -3054,7 +3173,8 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 				if (line->mActionType == ACT_ELSE || line->mActionType == ACT_BLOCK_END)
 					return line_temp->PreparseError("The line beneath this ELSE is an invalid action.");
 				// Assign to line rather than line_temp:
-				line = PreparseIfElse(line, ONLY_ONE_LINE, aLoopType1, aLoopType2);
+				line = PreparseIfElse(line, ONLY_ONE_LINE, aLoopTypeFile, aLoopTypeReg, aLoopTypeRead
+					, aLoopTypeParse);
 				if (line == NULL)
 					return NULL; // Error or end-of-script.
 				// Set this ELSE's jumppoint.  This is similar to the jumppoint set for
@@ -3077,7 +3197,8 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 		switch (line->mActionType)
 		{
 		case ACT_BLOCK_BEGIN:
-			line = PreparseIfElse(line->mNextLine, UNTIL_BLOCK_END, aLoopType1, aLoopType2);
+			line = PreparseIfElse(line->mNextLine, UNTIL_BLOCK_END, aLoopTypeFile, aLoopTypeReg, aLoopTypeRead
+				, aLoopTypeParse);
 			// line is now either NULL due to an error, or the location
 			// of the END_BLOCK itself.
 			if (line == NULL)
@@ -3100,18 +3221,26 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 			return line->PreparseError("Unexpected end-of-block (parsing multiple lines).");
 		case ACT_BREAK:
 		case ACT_CONTINUE:
-			if (!aLoopType1 && !aLoopType2)
+			if (!aLoopTypeFile && !aLoopTypeReg && !aLoopTypeRead && !aLoopTypeParse)
 				return line->PreparseError("This break or continue statement is not enclosed by a loop.");
 			break;
 
 		case ACT_REGREAD:
 		case ACT_REGWRITE: // Unknown loops get the benefit of the doubt.
-			if (aLoopType2 != ATTR_LOOP_REG && aLoopType2 != ATTR_LOOP_UNKNOWN && line->mArgc < 4)
+			if (aLoopTypeReg != ATTR_LOOP_REG && aLoopTypeReg != ATTR_LOOP_UNKNOWN && line->mArgc < 4)
 				return line->PreparseError("When not enclosed in a registry-loop, this command requires 4 parameters.");
 			break;
 		case ACT_REGDELETE:
-			if (aLoopType2 != ATTR_LOOP_REG && aLoopType2 != ATTR_LOOP_UNKNOWN && line->mArgc < 2)
+			if (aLoopTypeReg != ATTR_LOOP_REG && aLoopTypeReg != ATTR_LOOP_UNKNOWN && line->mArgc < 2)
 				return line->PreparseError("When not enclosed in a registry-loop, this command requires 2 parameters.");
+			break;
+
+		case ACT_FILEAPPEND:
+			// But no attempt is made to validate that the enclosing file-read loop actually has
+			// an OutputFile.  If it doesn't, at runtime ErrorLevel will be set to 1 to indicate
+			// that the append failed.
+			if (aLoopTypeRead != ATTR_LOOP_READ_FILE && aLoopTypeRead != ATTR_LOOP_UNKNOWN && line->mArgc < 2)
+				return line->PreparseError("When not enclosed in a file-read loop, this command requires 2 parameters.");
 			break;
 
 		case ACT_FILEGETATTRIB:
@@ -3120,7 +3249,7 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 		case ACT_FILEGETVERSION:
 		case ACT_FILEGETTIME:
 		case ACT_FILESETTIME:
-			if (aLoopType1 != ATTR_LOOP_FILE && aLoopType1 != ATTR_LOOP_UNKNOWN && !*LINE_RAW_ARG2)
+			if (aLoopTypeFile != ATTR_LOOP_FILE && aLoopTypeFile != ATTR_LOOP_UNKNOWN && !*LINE_RAW_ARG2)
 				return line->PreparseError("When not enclosed in a file-loop, this command requires a 2nd parameter.");
 			break;
 
@@ -3206,7 +3335,8 @@ char *Line::sArgDeref[MAX_ARGS]; // No init needed.
 
 
 ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **apJumpToLine
-	, WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aCurrentRegItem)
+	, WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aCurrentRegItem, LoopReadFileStruct *aCurrentReadFile
+	, char *aCurrentField, __int64 aCurrentLoopIteration)
 // Start executing at "this" line, stop when aMode indicates.
 // RECURSIVE: Handles all lines that involve flow-control.
 // aMode can be UNTIL_RETURN, UNTIL_BLOCK_END, ONLY_ONE_LINE.
@@ -3229,7 +3359,8 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 	for (Line *line = this; line != NULL;)
 	{
 		// If a previous command (line) had the clipboard open, perhaps because it directly accessed
-		// the clipboard via Var::Contents(), we close it here:
+		// the clipboard via Var::Contents(), we close it here for performance reasons (see notes
+		// in Clipboard::Open() for details):
 		CLOSE_CLIPBOARD_IF_OPEN;
 		g_script.mCurrLine = line;  // Simplifies error reporting when we get deep into function calls.
 		line->Log();  // Maintains a circular queue of the lines most recently executed.
@@ -3331,6 +3462,9 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 		// in the stack:
 		g_script.mLoopFile = aCurrentFile;
 		g_script.mLoopRegItem = aCurrentRegItem; // Similar in function to the above.
+		g_script.mLoopReadFile = aCurrentReadFile; // Similar in function to the above.
+		g_script.mLoopField = aCurrentField; // Similar in function to the above.
+		g_script.mLoopIteration = aCurrentLoopIteration; // Similar in function to the above.
 
 		// Do this only after the opportunity to Sleep (above) has passed, because during
 		// that sleep, a new subroutine might be launched which would likely overwrite the
@@ -3354,7 +3488,8 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 			{
 				// line->mNextLine has already been verified non-NULL by the pre-parser, so
 				// this dereference is safe:
-				result = line->mNextLine->ExecUntil(ONLY_ONE_LINE, aModifiersLR, &jump_to_line, aCurrentFile, aCurrentRegItem);
+				result = line->mNextLine->ExecUntil(ONLY_ONE_LINE, aModifiersLR, &jump_to_line, aCurrentFile
+					, aCurrentRegItem, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
 				if (jump_to_line == line)
 					// Since this IF's ExecUntil() encountered a Goto whose target is the IF
 					// itself, continue with the for-loop without moving to a different
@@ -3431,7 +3566,8 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 				if (line->mActionType == ACT_ELSE) // This IF has an else.
 				{
 					// Preparser has ensured that every ELSE has a non-NULL next line:
-					result = line->mNextLine->ExecUntil(ONLY_ONE_LINE, aModifiersLR, &jump_to_line, aCurrentFile, aCurrentRegItem);
+					result = line->mNextLine->ExecUntil(ONLY_ONE_LINE, aModifiersLR, &jump_to_line, aCurrentFile
+						, aCurrentRegItem, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
 					if (aMode == ONLY_ONE_LINE && jump_to_line != NULL && apJumpToLine != NULL)
 						// The above call to ExecUntil() told us to jump somewhere.  But since we're in
 						// ONLY_ONE_LINE mode, our caller must handle it because only it knows how
@@ -3499,7 +3635,8 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 			// I'm pretty sure it's not valid for this call to ExecUntil() to tell us to jump
 			// somewhere, because the called function, or a layer even deeper, should handle
 			// the goto prior to returning to us?  So the last param is omitted:
-			result = line->mRelatedLine->ExecUntil(UNTIL_RETURN, aModifiersLR, NULL, aCurrentFile, aCurrentRegItem);
+			result = line->mRelatedLine->ExecUntil(UNTIL_RETURN, aModifiersLR, NULL, aCurrentFile
+				, aCurrentRegItem, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
 			// Must do these return conditions in this specific order:
 			if (result == FAIL || result == EARLY_EXIT)
 				return result;
@@ -3531,7 +3668,8 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 					// crazy place:
 					return FAIL;
 				// This section is just like the Gosub code above, so maintain them together.
-				result = jump_to_line->ExecUntil(UNTIL_RETURN, aModifiersLR, NULL, aCurrentFile, aCurrentRegItem);
+				result = jump_to_line->ExecUntil(UNTIL_RETURN, aModifiersLR, NULL, aCurrentFile
+					, aCurrentRegItem, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
 				if (result == FAIL || result == EARLY_EXIT)
 					return result;
 				if (aMode == ONLY_ONE_LINE)
@@ -3592,8 +3730,18 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 					}
 					break;
 				default: // 2 or more args.
-					root_key_type = RegConvertRootKey(LINE_ARG1);
-					attr = root_key_type ? ATTR_LOOP_REG : ATTR_LOOP_FILE;
+					if (!stricmp(LINE_ARG1, "Read"))
+						attr = ATTR_LOOP_READ_FILE;
+					// Note that a "Parse" loop is not allowed to have it's first param be a variable reference
+					// that resolves to the word "Parse" at runtime.  This is because the input variable would not
+					// have been resolved in this case (since the type of loop was unknown at load-time),
+					// and it would be complicated to have to add code for that, especially since there's
+					// virtually no conceivable use for allowing it be a variable reference.
+					else
+					{
+						root_key_type = RegConvertRootKey(LINE_ARG1);
+						attr = root_key_type ? ATTR_LOOP_REG : ATTR_LOOP_FILE;
+					}
 				}
 			}
 
@@ -3603,13 +3751,14 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 			__int64 iteration_limit = 0;
 			bool is_infinite = line->mArgc < 1;
 			if (!is_infinite)
-				// Must be set to zero for ATTR_LOOP_FILE:
-				iteration_limit = (attr == ATTR_LOOP_FILE || attr == ATTR_LOOP_REG) ? 0 : _atoi64(LINE_ARG1);
+				// Must be set to zero at least for ATTR_LOOP_FILE:
+				iteration_limit = (attr == ATTR_LOOP_FILE || attr == ATTR_LOOP_REG || attr == ATTR_LOOP_READ_FILE
+					||  attr == ATTR_LOOP_PARSE) ? 0 : _atoi64(LINE_ARG1);
 
 			if (line->mActionType == ACT_REPEAT && !iteration_limit)
 				is_infinite = true;  // Because a 0 means infinite in AutoIt2 for the REPEAT command.
 
-			FileLoopModeType file_loop_mode = FILE_LOOP_INVALID;
+			FileLoopModeType file_loop_mode;
 			if (attr == ATTR_LOOP_FILE)
 			{
 				file_loop_mode = (line->mArgc <= 1) ? FILE_LOOP_FILES_ONLY : ConvertLoopMode(LINE_ARG2);
@@ -3622,10 +3771,50 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 				if (file_loop_mode == FILE_LOOP_INVALID)
 					return line->LineError(ERR_LOOP_REG_MODE ERR_ABORT, FAIL, LINE_ARG3);
 			}
+			else
+				file_loop_mode = FILE_LOOP_INVALID;
 
 			bool continue_main_loop = false; // Init prior to below call.
 			jump_to_line = NULL; // Init prior to below call.
-			if (attr == ATTR_LOOP_REG)
+
+			if (attr == ATTR_LOOP_PARSE)
+				result = line->PerformLoopParse(aModifiersLR, aCurrentFile, aCurrentRegItem, aCurrentReadFile
+					, continue_main_loop, jump_to_line);
+			else if (attr == ATTR_LOOP_READ_FILE)
+			{
+				// Open the input file:
+				FILE *read_file = fopen(LINE_ARG2, "r");
+				if (read_file)
+				{
+					// Open the output file (if one was specified).  Unlike the input file, this is not
+					// a critical error if it fails.  We want it to be non-critical so that FileAppend
+					// commands in the body of the loop will set ErrorLevel to indicate the problem:
+					char *write_filespec = LINE_ARG3;
+					bool open_as_binary = false;
+					if (*write_filespec == '*')
+					{
+						open_as_binary = true;
+						// Do not do this because I think it's possible for filenames to start with a space
+						// (even though Explorer itself won't let you create them that way):
+						//write_filespec = omit_leading_whitespace(write_filespec + 1);
+						// Instead just do this:
+						++write_filespec;
+					}
+					FILE *write_file = *write_filespec ? fopen(write_filespec, open_as_binary ? "ab" : "a") : NULL;
+					result = line->PerformLoopReadFile(aModifiersLR, aCurrentFile, aCurrentRegItem, aCurrentField
+						, continue_main_loop, jump_to_line, read_file, write_file);
+					fclose(read_file);
+					if (write_file)
+						fclose(write_file);
+				}
+				else
+					// The open of a the input file failed.  So just set result to OK since no ErrorLevel
+					// setting is supported with loops (since that seems like it would be an overuse
+					// of ErrorLevel, perhaps changing its value too often when the user would want
+					// it saved.  But in any case, changing that now might break existing scripts).
+					result = OK;
+			}
+			else if (attr == ATTR_LOOP_REG)
 			{
 				// This isn't the most efficient way to do things (e.g. the repeated calls to
 				// RegConvertRootKey()), but it the simplest way for now.  Optimization can
@@ -3636,8 +3825,9 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 				if (root_key)
 				{
 					// root_key_type needs to be passed in order to support GetLoopRegKey():
-					result = line->PerformLoopReg(aModifiersLR, aCurrentFile, continue_main_loop, jump_to_line
-						, file_loop_mode, recurse_subfolders, root_key_type, root_key, LINE_ARG2);
+					result = line->PerformLoopReg(aModifiersLR, aCurrentFile, aCurrentReadFile, aCurrentField
+						, continue_main_loop, jump_to_line, file_loop_mode, recurse_subfolders
+						, root_key_type, root_key, LINE_ARG2);
 					if (is_remote_registry)
 						RegCloseKey(root_key);
 				}
@@ -3646,13 +3836,13 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 					// failed earlier rather than here).  So just set result to OK since no ErrorLevel
 					// setting is supported with loops (since that seems like it would be an overuse
 					// of ErrorLevel, perhaps changing its value too often when the user would want
-					// it saved.  But in any case, changing that now might break existing scripts.
+					// it saved.  But in any case, changing that now might break existing scripts).
 					result = OK;
-
 			}
 			else // All other loops types are handled this way:
-				result = line->PerformLoop(aModifiersLR, aCurrentFile, aCurrentRegItem, continue_main_loop, jump_to_line
-					, attr, file_loop_mode, recurse_subfolders, LINE_ARG1, iteration_limit, is_infinite);
+				result = line->PerformLoop(aModifiersLR, aCurrentFile, aCurrentRegItem, aCurrentReadFile
+					, aCurrentField, continue_main_loop, jump_to_line, attr, file_loop_mode, recurse_subfolders
+					, LINE_ARG1, iteration_limit, is_infinite);
 
 			if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT)
 				return result;
@@ -3706,14 +3896,15 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 			else
 				// This has been tested and it does return the error code indicated in ARG1, if present
 				// (otherwise it returns 0, naturally) as expected:
-				g_script.ExitApp(NULL, atoi(ARG1));  // Seems more reliable than PostQuitMessage().
+				g_script.ExitApp(NULL, atoi(LINE_ARG1));  // Seems more reliable than PostQuitMessage().
 		case ACT_EXITAPP: // Unconditional exit.
-			g_script.ExitApp(NULL, atoi(ARG1));  // Seems more reliable than PostQuitMessage().
+			g_script.ExitApp(NULL, atoi(LINE_ARG1));  // Seems more reliable than PostQuitMessage().
 		case ACT_BLOCK_BEGIN:
 			// Don't count block-begin/end against the total since they should be nearly instantaneous:
 			//++g_script.mLinesExecutedThisCycle;
 			// In this case, line->mNextLine is already verified non-NULL by the pre-parser:
-			result = line->mNextLine->ExecUntil(UNTIL_BLOCK_END, aModifiersLR, &jump_to_line, aCurrentFile, aCurrentRegItem);
+			result = line->mNextLine->ExecUntil(UNTIL_BLOCK_END, aModifiersLR, &jump_to_line, aCurrentFile
+				, aCurrentRegItem, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
 			if (jump_to_line == line)
 				// Since this Block-begin's ExecUntil() encountered a Goto whose target is the
 				// block-begin itself, continue with the for-loop without moving to a different
@@ -3772,7 +3963,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 			return line->LineError("This ELSE is unexpected." PLEASE_REPORT ERR_ABORT);
 		default:
 			++g_script.mLinesExecutedThisCycle;
-			result = line->Perform(aModifiersLR, aCurrentFile, aCurrentRegItem);
+			result = line->Perform(aModifiersLR, aCurrentFile, aCurrentRegItem, aCurrentReadFile);
 			if (result == FAIL || aMode == ONLY_ONE_LINE)
 				// Thus, Perform() should be designed to only return FAIL if it's an
 				// error that would make it unsafe to proceed the subroutine
@@ -4012,9 +4203,9 @@ inline ResultType Line::EvaluateCondition()
 
 
 ResultType Line::PerformLoop(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrentFile
-	, RegItemStruct *apCurrentRegItem, bool &aContinueMainLoop, Line *&aJumpToLine
-	, AttributeType aAttr, FileLoopModeType aFileLoopMode, bool aRecurseSubfolders, char *aFilePattern
-	, __int64 aIterationLimit, bool aIsInfinite)
+	, RegItemStruct *apCurrentRegItem, LoopReadFileStruct *apCurrentReadFile, char *aCurrentField
+	, bool &aContinueMainLoop, Line *&aJumpToLine, AttributeType aAttr, FileLoopModeType aFileLoopMode
+	, bool aRecurseSubfolders, char *aFilePattern, __int64 aIterationLimit, bool aIsInfinite)
 // Note: Even if aFilePattern is just a directory (i.e. with not wildcard pattern), it seems best
 // not to append "\\*.*" to it because the pattern might be a script variable that the user wants
 // to conditionally resolve to various things at runtime.  In other words, it's valid to have
@@ -4067,7 +4258,8 @@ ResultType Line::PerformLoop(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrent
 		// file-loop can be supported:
 		result = mNextLine->ExecUntil(ONLY_ONE_LINE, aModifiersLR, &jump_to_line
 			, file_found ? &new_current_file : apCurrentFile // inner loop's file takes precedence over outer's.
-			, apCurrentRegItem);
+			, apCurrentRegItem, apCurrentReadFile, aCurrentField
+			, i + 1);  // i+1, since 1 is the first iteration as reported to the script.
 		if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT || result == LOOP_BREAK)
 		{
 			#define CLOSE_FILE_SEARCH \
@@ -4159,8 +4351,8 @@ ResultType Line::PerformLoop(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrent
 		// its first loop iteration.  This is because this directory is being recursed into, not
 		// processed itself as a file-loop item (since this was already done in the first loop,
 		// above, if its name matches the original search pattern):
-		result = PerformLoop(aModifiersLR, NULL, apCurrentRegItem, aContinueMainLoop, aJumpToLine
-			, aAttr, aFileLoopMode, aRecurseSubfolders, file_path
+		result = PerformLoop(aModifiersLR, NULL, apCurrentRegItem, apCurrentReadFile, aCurrentField
+			, aContinueMainLoop, aJumpToLine, aAttr, aFileLoopMode, aRecurseSubfolders, file_path
 			, aIterationLimit, aIsInfinite);
 		// result should never be LOOP_CONTINUE because the above call to PerformLoop() should have
 		// handled that case.  However, it can be LOOP_BREAK if it encoutered the break command.
@@ -4184,8 +4376,8 @@ ResultType Line::PerformLoop(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrent
 
 
 ResultType Line::PerformLoopReg(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrentFile
-	, bool &aContinueMainLoop, Line *&aJumpToLine, FileLoopModeType aFileLoopMode
-	, bool aRecurseSubfolders, HKEY aRootKeyType, HKEY aRootKey, char *aRegSubkey)
+	, LoopReadFileStruct *apCurrentReadFile, char *aCurrentField, bool &aContinueMainLoop, Line *&aJumpToLine
+	, FileLoopModeType aFileLoopMode, bool aRecurseSubfolders, HKEY aRootKeyType, HKEY aRootKey, char *aRegSubkey)
 // aRootKeyType is the type of root key, independent of whether it's local or remote.
 // This is used because there's no easy way to determine which root key a remote HKEY
 // refers to.
@@ -4217,7 +4409,8 @@ ResultType Line::PerformLoopReg(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurr
 	// Note that &reg_item is passed to ExecUntil() rather than 
 	#define MAKE_SCRIPT_LOOP_PROCESS_THIS_ITEM \
 	{\
-		result = mNextLine->ExecUntil(ONLY_ONE_LINE, aModifiersLR, &jump_to_line, apCurrentFile, &reg_item);\
+		result = mNextLine->ExecUntil(ONLY_ONE_LINE, aModifiersLR, &jump_to_line, apCurrentFile\
+			, &reg_item, apCurrentReadFile, aCurrentField, ++script_iteration);\
 		if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT || result == LOOP_BREAK)\
 		{\
 			RegCloseKey(hRegKey);\
@@ -4236,6 +4429,7 @@ ResultType Line::PerformLoopReg(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurr
 	}
 
 	DWORD name_size;
+	__int64 script_iteration = 0;
 
 	// First enumerate the values, which are analogous to files in the file system.
 	// Later, the subkeys ("subfolders") will be done:
@@ -4286,8 +4480,9 @@ ResultType Line::PerformLoopReg(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurr
 				// after the recusive call returns to us:
 				snprintf(subkey_full_path, sizeof(subkey_full_path), "%s\\%s", reg_item.subkey, reg_item.name);
 				// This section is very similar to the one in PerformLoop(), so see it for comments:
-				result = PerformLoopReg(aModifiersLR, apCurrentFile, aContinueMainLoop, aJumpToLine
-					, aFileLoopMode, aRecurseSubfolders, aRootKeyType, aRootKey, subkey_full_path);
+				result = PerformLoopReg(aModifiersLR, apCurrentFile, apCurrentReadFile, aCurrentField
+					, aContinueMainLoop, aJumpToLine, aFileLoopMode, aRecurseSubfolders, aRootKeyType
+					, aRootKey, subkey_full_path);
 				if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT || result == LOOP_BREAK)
 				{
 					RegCloseKey(hRegKey);
@@ -4307,7 +4502,154 @@ ResultType Line::PerformLoopReg(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurr
 
 
 
-inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aCurrentRegItem)
+ResultType Line::PerformLoopParse(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrentFile
+	, RegItemStruct *apCurrentRegItem, LoopReadFileStruct *apCurrentReadFile
+	, bool &aContinueMainLoop, Line *&aJumpToLine)
+{
+	if (!*ARG2) // Since the input variable's contents are blank, the loop will execute zero times.
+		return OK;
+
+	// This will be used to hold the parsed items.  It needs to have its own storage because
+	// even though ARG2 might always be a writable memory area, we can't rely upon it being
+	// persistent because it might reside in the deref buffer, in which case the other commands
+	// in the loop's body would probably overwrite it.  Even if the ARG2's contents aren't in
+	// the deref buffer, we still can't modify it (i.e. to temporarily terminate it and thus
+	// bypass the need for malloc() below) because that might modify the variable contents, and
+	// that variable may be referenced elsewhere in the body of the loop (which would result
+	// in unexpected side-effects).  So, rather than have a limit of 64K or something (which
+	// would limit this feature's usefulness for parsing a large list of filenames, for example),
+	// it seems best to dynamically allocate a temporary buffer large enough to hold the
+	// contents of ARG2 (the input variable).  Update: Since these loops tend to be enclosed
+	// by file-read loops, and thus may be called thousands of times in a short period,
+	// it should help average performance to use the stack for small vars rather than
+	// constantly doing malloc() and free(), which are much higher overhead and probably
+	// cause memory fragmentation (especially with thousands of calls):
+	char stack_buf[16384], *buf;
+	size_t space_needed = strlen(ARG2) + 1;  // +1 for the zero terminator.
+	if (space_needed <= sizeof(stack_buf))
+		buf = stack_buf;
+	else
+	{
+		if (   !(buf = (char *)malloc(space_needed))   )
+			// Probably best to consider this a critical error, since on the rare times it does happen, the user
+			// would probably want to know about it immediately.
+			return LineError("Failed to make a temp copy of the input variable.", FAIL, ARG2);
+	}
+	strcpy(buf, ARG2); // Make the copy.
+
+	#define FREE_PARSE_MEMORY if (buf != stack_buf) free(buf)
+
+	// Make a copy of ARG3 and ARG4 in case either one's contents are in the deref buffer, which would
+	// probably be overwritten by the commands in the script loop's body:
+	char delimiters[512], omit_list[512];
+	strlcpy(delimiters, ARG3, sizeof(delimiters));
+	strlcpy(omit_list, ARG4, sizeof(omit_list));
+
+	ResultType result;
+	Line *jump_to_line;
+	char *field, *field_end, saved_char;
+	size_t field_length;
+	__int64 script_iteration;
+
+	for (script_iteration = 0, field = buf;;)
+	{ 
+		if (*delimiters)
+		{
+			if (   !(field_end = StrChrAny(field, delimiters))   ) // No more delimiters found.
+				field_end = field + strlen(field);  // Set it to the position of the zero terminator instead.
+		}
+		else // Since no delimiters, every char in the input string is treated as a separate field.
+		{
+			// But exclude this char if it's in the omit_list:
+			if (*omit_list && strchr(omit_list, *field))
+			{
+				++field; // Move on to the next char.
+				continue;
+			}
+			field_end = field + 1;
+		}
+
+		saved_char = *field_end;  // In case it's a non-delimited list of single chars.
+		*field_end = '\0';  // Temporarily terminate so that GetLoopField() will see the correct substring.
+
+		if (*omit_list && *field && *delimiters)  // If no delimiters, the omit_list has already been handled above.
+		{
+			// Process the omit list.
+			field = omit_leading_any(field, omit_list, field_end - field);
+			if (*field) // i.e. the above didn't remove all the chars due to them all being in the omit-list.
+			{
+				field_length = omit_trailing_any(field, omit_list, field_end - 1);
+				field[field_length] = '\0';  // Terminate here, but don't update field_end, since saved_char needs it.
+			}
+		}
+
+		// See comments in PerformLoop() for details about this section.
+		result = mNextLine->ExecUntil(ONLY_ONE_LINE, aModifiersLR, &jump_to_line, apCurrentFile
+			, apCurrentRegItem, apCurrentReadFile, field, ++script_iteration);
+
+		if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT || result == LOOP_BREAK)
+		{
+			FREE_PARSE_MEMORY;
+			return result;
+		}
+		if (jump_to_line == this)
+		{
+			aContinueMainLoop = true;
+			break;
+		}
+		if (jump_to_line)
+		{
+			aJumpToLine = jump_to_line;
+			break;
+		}
+		if (!saved_char) // The last item in the list has just been processed, so the loop is done.
+			break;
+		*field_end = saved_char;  // Undo the temporary termination, in case the list of delimiters is blank.
+		field = *delimiters ? field_end + 1 : field_end;  // Move on to the next field.
+	}
+	FREE_PARSE_MEMORY;
+	return OK;
+}
+
+
+
+ResultType Line::PerformLoopReadFile(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrentFile
+	, RegItemStruct *apCurrentRegItem, char *aCurrentField, bool &aContinueMainLoop, Line *&aJumpToLine
+	, FILE *aReadFile, FILE *aWriteFile)
+{
+	LoopReadFileStruct loop_info(aReadFile, aWriteFile);
+	size_t line_length;
+	ResultType result;
+	Line *jump_to_line;
+
+	for (__int64 script_iteration = 0; fgets(loop_info.mCurrentLine, sizeof(loop_info.mCurrentLine), loop_info.mReadFile);)
+	{ 
+		line_length = strlen(loop_info.mCurrentLine);
+		if (line_length && loop_info.mCurrentLine[line_length - 1] == '\n') // Remove newlines like FileReadLine does.
+			loop_info.mCurrentLine[--line_length] = '\0';
+		// See comments in PerformLoop() for details about this section.
+		result = mNextLine->ExecUntil(ONLY_ONE_LINE, aModifiersLR, &jump_to_line, apCurrentFile
+			, apCurrentRegItem, &loop_info, aCurrentField, ++script_iteration);
+		if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT || result == LOOP_BREAK)
+			return result;
+		if (jump_to_line == this)
+		{
+			aContinueMainLoop = true;
+			break;
+		}
+		if (jump_to_line)
+		{
+			aJumpToLine = jump_to_line;
+			break;
+		}
+	}
+	return OK;
+}
+
+
+
+inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurrentFile
+	, RegItemStruct *aCurrentRegItem, LoopReadFileStruct *aCurrentReadFile)
 // Performs only this line's action.
 // Returns OK or FAIL.
 // The function should not be called to perform any flow-control actions such as
@@ -4695,6 +5037,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		}
 		return group->AddWindow(ARG2, ARG3, jump_to_line, ARG5, ARG6);
 	}
+
 	// Note ACT_GROUPACTIVATE is handled by ExecUntil(), since it's better suited to do the Gosub.
 	case ACT_GROUPDEACTIVATE:
 		if (   !(group = (WinGroup *)mAttribute)   )
@@ -4702,6 +5045,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 				return FAIL;  // It already displayed the error for us.
 		group->Deactivate(*ARG2 && !stricmp(ARG2, "R"));  // Note: It will take care of DoWinDelay if needed.
 		return OK;
+
 	case ACT_GROUPCLOSE:
 		if (   !(group = (WinGroup *)mAttribute)   )
 			if (   !(group = g_script.FindOrAddGroup(ARG1))   )
@@ -4727,6 +5071,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		// for some of its commands, such as FileReadLine.  UPDATE: AutoIt2 apprarently doesn't trim
 		// when one of the STRING commands does an assignment.
 		return output_var->Assign(ARG2, (VarSizeType)strnlen(ARG2, chars_to_extract));
+
 	case ACT_STRINGRIGHT:
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
@@ -4738,6 +5083,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			chars_to_extract = (int)source_length;
 		// It will display any error that occurs:
 		return output_var->Assign(ARG2 + source_length - chars_to_extract, chars_to_extract);
+
 	case ACT_STRINGMID:
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
@@ -4756,6 +5102,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			return output_var->Assign();  // Set it to be blank in this case.
 		else
 			return output_var->Assign(ARG2 + start_char_num - 1, chars_to_extract);
+
 	case ACT_STRINGTRIMLEFT:
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
@@ -4766,6 +5113,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		if (chars_to_extract > (int)source_length) // This could be intentional, so don't display an error.
 			chars_to_extract = (int)source_length;
 		return output_var->Assign(ARG2 + chars_to_extract, (VarSizeType)(source_length - chars_to_extract));
+
 	case ACT_STRINGTRIMRIGHT:
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
@@ -4776,6 +5124,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		if (chars_to_extract > (int)source_length) // This could be intentional, so don't display an error.
 			chars_to_extract = (int)source_length;
 		return output_var->Assign(ARG2, (VarSizeType)(source_length - chars_to_extract)); // It already displayed any error.
+
 	case ACT_STRINGLOWER:
 	case ACT_STRINGUPPER:
 		if (   !(output_var = ResolveVarOfArg(0))   )
@@ -4794,10 +5143,12 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		else
 			strupr(output_var->Contents());
 		return output_var->Close();  // In case it's the clipboard.
+
 	case ACT_STRINGLEN:
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
 		return output_var->Assign((__int64)strlen(ARG2)); // It already displayed any error.
+
 	case ACT_STRINGGETPOS:
 	{
 		if (   !(output_var = ResolveVarOfArg(0))   )
@@ -4824,6 +5175,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		}
 		return output_var->Assign(pos); // It already displayed any error that may have occurred.
 	}
+
 	case ACT_STRINGREPLACE:
 	{
 		if (   !(output_var = ResolveVarOfArg(0))   )
@@ -4905,6 +5257,9 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		// Consider the above to have been always successful unless the below returns an error:
 		return output_var->Close();  // In case it's the clipboard.
 	}
+
+	case ACT_STRINGSPLIT:
+		return StringSplit(ARG1, ARG2, ARG3, ARG4);
 
 	case ACT_GETKEYSTATE:
 		if (   !(output_var = ResolveVarOfArg(0))   )
@@ -5014,13 +5369,19 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		return SoundPlay(ARG1, *ARG2 && !stricmp(ARG2, "wait") || !stricmp(ARG2, "1"));
 
 	case ACT_FILEAPPEND:
-		return this->FileAppend(ARG2, ARG1);  // To avoid ambiguity in case there's another FileAppend().
+		if (mArgc < 2 && aCurrentReadFile) // Uses the read-file loop's current item.
+			return this->FileAppend(ARG2, ARG1, aCurrentReadFile->mWriteFile);
+		return this->FileAppend(ARG2, ARG1);  // Use "this" to emphasize that FileAppend() is one of our methods.
+
 	case ACT_FILEREADLINE:
 		return FileReadLine(ARG2, ARG3);
+
 	case ACT_FILEDELETE:
 		return FileDelete(ARG1);
+
 	case ACT_FILEINSTALL:
 		return FileInstall(THREE_ARGS);
+
 	case ACT_FILECOPY:
 	{
 		int error_count = Util_CopyFile(ARG1, ARG2, *ARG3 == '1' && !*(ARG3 + 1), false);
@@ -5261,10 +5622,16 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			LineError("The MsgBox dialog could not be displayed." ERR_ABORT);
 		return result ? OK : FAIL;
 	}
+
 	case ACT_INPUTBOX:
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
-		return InputBox(output_var, ARG2, ARG3, toupper(*ARG4) == 'H'); // Last = whether to hide input.
+		return InputBox(output_var, ARG2, ARG3, toupper(*ARG4) == 'H' // 4th is whether to hide input.
+			, *ARG5 ? atoi(ARG5) : INPUTBOX_DEFAULT
+			, *ARG6 ? atoi(ARG6) : INPUTBOX_DEFAULT
+			, *ARG7 ? atoi(ARG7) : INPUTBOX_DEFAULT
+			, *ARG8 ? atoi(ARG8) : INPUTBOX_DEFAULT);
+
 	case ACT_SPLASHTEXTON:
 	{
 		// The SplashText command has been adapted from the AutoIt3 source.
@@ -5533,6 +5900,8 @@ ResultType Line::ExpandArgs()
 	// more memory if needed.  Second pass: dereference the args into the buffer.
 
 	size_t space_needed = GetExpandedArgSize(true);  // First pass.
+	if (space_needed == VARSIZE_ERROR)
+		return FAIL;  // It will have already displayed the error.
 
 	if (space_needed > DEREF_BUF_MAX)
 		return LineError("Dereferencing the variables in this line's parameters"
@@ -5578,7 +5947,11 @@ ResultType Line::ExpandArgs()
 			continue;
 		}
 
-		the_only_var_of_this_arg = (mArg[iArg].type == ARG_TYPE_INPUT_VAR) ? ResolveVarOfArg(iArg, false) : NULL;
+		the_only_var_of_this_arg = NULL;
+		if (mArg[iArg].type == ARG_TYPE_INPUT_VAR)
+			if (   !(the_only_var_of_this_arg = ResolveVarOfArg(iArg, false))   )
+				return FAIL;  // The above will have already displayed the error.
+
 		if (!the_only_var_of_this_arg) // Arg isn't an input var.
 		{
 			#define NO_DEREF (!ArgHasDeref(iArg + 1))
@@ -5597,16 +5970,9 @@ ResultType Line::ExpandArgs()
 
 		if (the_only_var_of_this_arg) // This arg resolves to only a single, naked var.
 		{
-			if (ArgMustBeDereferenced(the_only_var_of_this_arg, iArg))
+			switch(ArgMustBeDereferenced(the_only_var_of_this_arg, iArg))
 			{
-				// the_only_var_of_this_arg is either a reserved var or a normal var of
-				// zero length (for which GetEnvironment() is called for), or is used
-				// again in this line as an output variable.  In all these cases, it must
-				// be expanded into the buffer rather than accessed directly:
-				sArgDeref[iArg] = sDerefBufMarker; // Point it to its location in the buffer.
-				sDerefBufMarker += the_only_var_of_this_arg->Get(sDerefBufMarker) + 1; // +1 for terminator.
-			}
-			else
+			case CONDITION_FALSE:
 				// This arg contains only a single dereference variable, and no
 				// other text at all.  So rather than copy the contents into the
 				// temp buffer, it's much better for performance (especially for
@@ -5618,13 +5984,27 @@ ResultType Line::ExpandArgs()
 				// the clipboard if it contains only files and no text, so that
 				// the files will be transcribed into the deref buffer.  This is
 				// because the clipboard object needs a memory area into which
-				// to write the filespecs:
+				// to write the filespecs it translated:
 				sArgDeref[iArg] = the_only_var_of_this_arg->Contents();
+				break;
+			case CONDITION_TRUE:
+				// the_only_var_of_this_arg is either a reserved var or a normal var of
+				// zero length (for which GetEnvironment() is called for), or is used
+				// again in this line as an output variable.  In all these cases, it must
+				// be expanded into the buffer rather than accessed directly:
+				sArgDeref[iArg] = sDerefBufMarker; // Point it to its location in the buffer.
+				sDerefBufMarker += the_only_var_of_this_arg->Get(sDerefBufMarker) + 1; // +1 for terminator.
+				break;
+			default: // FAIL should be the only other possibility.
+				return FAIL;  // ArgMustBeDereferenced() will already have displayed the error.
+			}
 		}
 		else // The arg must be expanded in the normal, lower-performance way.
 		{
 			sArgDeref[iArg] = sDerefBufMarker; // Point it to its location in the buffer.
 			sDerefBufMarker = ExpandArg(sDerefBufMarker, iArg); // Expand the arg into that location.
+			if (!sDerefBufMarker)
+				return FAIL;  // ExpandArg() will have already displayed the error.
 		}
 	}
 
@@ -5685,11 +6065,14 @@ ResultType Line::ExpandArgs()
 	
 
 inline VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize)
+// Returns the size, or VARSIZE_ERROR if there was a problem.
 {
 	int iArg;
 	VarSizeType space_needed;
 	DerefType *deref;
 	Var *the_only_var_of_this_arg;
+	bool include_this_item;
+	ResultType result;
 
 	// Note: the below loop is similar to the one in ExpandArgs(), so the two should be
 	// maintained together:
@@ -5699,9 +6082,14 @@ inline VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize)
 		// Accumulate the total of how much space we will need.
 		if (mArg[iArg].type == ARG_TYPE_OUTPUT_VAR)  // These should never be included in the space calculation.
 			continue;
+
 		// Always do this check before attempting to traverse the list of dereferences, since
 		// such an attempt would be invalid in this case:
-		the_only_var_of_this_arg = (mArg[iArg].type == ARG_TYPE_INPUT_VAR) ? ResolveVarOfArg(iArg, false) : NULL;
+		the_only_var_of_this_arg = NULL;
+		if (mArg[iArg].type == ARG_TYPE_INPUT_VAR)
+			if (   !(the_only_var_of_this_arg = ResolveVarOfArg(iArg, false))   )
+				return VARSIZE_ERROR;  // The above will have already displayed the error.
+
 		if (!the_only_var_of_this_arg) // It's not an input var.
 		{
 			if (NO_DEREF)
@@ -5717,8 +6105,17 @@ inline VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize)
 		}
 		if (the_only_var_of_this_arg)
 		{
-			if (!aCalcDerefBufSize || ArgMustBeDereferenced(the_only_var_of_this_arg, iArg))
-				// Either caller wanted it included anyway, or it must always been deref'd:
+			include_this_item = !aCalcDerefBufSize;  // i.e. caller wanted its size unconditionally included
+			if (!include_this_item)
+			{
+				result = ArgMustBeDereferenced(the_only_var_of_this_arg, iArg);
+				if (result == FAIL)
+					return VARSIZE_ERROR;
+				if (result == CONDITION_TRUE) // The size of these types of args is always included.
+					include_this_item = true;
+				// else leave it as false
+			}
+			if (include_this_item)
 				space_needed += the_only_var_of_this_arg->Get() + 1;  // +1 for the zero terminator.
 			// else no extra space is needed in the buffer.
 			continue;
@@ -5748,12 +6145,19 @@ inline char *Line::ExpandArg(char *aBuf, int aArgIndex)
 {
 	// This should never be called if the given arg is an output var, but we check just in case:
 	if (mArg[aArgIndex].type == ARG_TYPE_OUTPUT_VAR)
-		// Just a warning because this function isn't set up to cause a true failure:
+	{
 		LineError("ExpandArg() was called to expand an arg that contains only an output variable."
-			PLEASE_REPORT, WARN);
+			PLEASE_REPORT);
+		return NULL;
+	}
+
 	// Always do this part before attempting to traverse the list of dereferences, since
 	// such an attempt would be invalid in this case:
-	Var *the_only_var_of_this_arg = (mArg[aArgIndex].type == ARG_TYPE_INPUT_VAR) ? ResolveVarOfArg(aArgIndex, false) : NULL;
+	Var *the_only_var_of_this_arg = NULL;
+	if (mArg[aArgIndex].type == ARG_TYPE_INPUT_VAR)
+		if (   !(the_only_var_of_this_arg = ResolveVarOfArg(aArgIndex, false))   )
+			return NULL;  // The above will have already displayed the error.
+
 	if (the_only_var_of_this_arg)
 		// +1 so that we return the position after the terminator, as required:
 		return aBuf += the_only_var_of_this_arg->Get(aBuf) + 1;
@@ -5780,6 +6184,23 @@ inline char *Line::ExpandArg(char *aBuf, int aArgIndex)
 	// Terminate the buffer, even if nothing was written into it:
 	*aBuf++ = '\0';
 	return aBuf; // Returns the position after the terminator.
+}
+
+
+
+VarSizeType Script::GetTimeIdlePhysical(char *aBuf)
+// This is here rather than in script.h with the others because it depends on
+// hotkey.h and globaldata.h, which can't be easily included in script.h due to
+// mutual dependency issues.
+{
+	// If neither hook is active, default this to the same as the regular idle time:
+	if (!Hotkey::HookIsActive())
+		return GetTimeIdle(aBuf);
+	char str[128];
+	ITOA64(GetTickCount() - g_TimeLastInputPhysical, str);
+	if (aBuf)
+		strcpy(aBuf, str);
+	return (VarSizeType)strlen(str);
 }
 
 
@@ -6148,7 +6569,7 @@ char *Script::ListVars(char *aBuf, size_t aBufSize)
 {
 	if (!aBuf || aBufSize < 256) return NULL;
 	char *aBuf_orig = aBuf;
-	snprintf(aBuf, BUF_SPACE_REMAINING, "Variables (in order of appearance) & their current contents:\r\n\r\n");
+	snprintf(aBuf, BUF_SPACE_REMAINING, "Variables (alphabetical) & their current contents:\r\n\r\n");
 	aBuf += strlen(aBuf);
 	// Start at the oldest and continue up through the newest:
 	for (Var *var = mFirstVar; var; var = var->mNextVar)

@@ -48,6 +48,8 @@ enum ExecUntilMode {NORMAL_MODE, UNTIL_RETURN, UNTIL_BLOCK_END, ONLY_ONE_LINE};
 #define ATTR_LOOP_NORMAL ((void *)2)
 #define ATTR_LOOP_FILE ((void *)3)
 #define ATTR_LOOP_REG ((void *)4)
+#define ATTR_LOOP_READ_FILE ((void *)5)
+#define ATTR_LOOP_PARSE ((void *)6)
 typedef void *AttributeType;
 
 enum FileLoopModeType {FILE_LOOP_INVALID, FILE_LOOP_FILES_ONLY, FILE_LOOP_FILES_AND_FOLDERS, FILE_LOOP_FOLDERS_ONLY};
@@ -77,7 +79,7 @@ enum enum_act {
 , ACT_MSGBOX, ACT_INPUTBOX, ACT_SPLASHTEXTON, ACT_SPLASHTEXTOFF
 , ACT_STRINGLEFT, ACT_STRINGRIGHT, ACT_STRINGMID
 , ACT_STRINGTRIMLEFT, ACT_STRINGTRIMRIGHT, ACT_STRINGLOWER, ACT_STRINGUPPER
-, ACT_STRINGLEN, ACT_STRINGGETPOS, ACT_STRINGREPLACE
+, ACT_STRINGLEN, ACT_STRINGGETPOS, ACT_STRINGREPLACE, ACT_STRINGSPLIT
 , ACT_ENVSET, ACT_ENVUPDATE
 , ACT_RUN, ACT_RUNWAIT, ACT_URLDOWNLOADTOFILE
 , ACT_GETKEYSTATE
@@ -193,10 +195,22 @@ struct InputBoxType
 {
 	char *title;
 	char *text;
+	int width;
+	int height;
+	int xpos;
+	int ypos;
 	Var *output_var;
 	char password_char;
 	HWND hwnd;
 };
+
+// From AutoIt3's inputbox:
+template <class T>
+inline void swap(T &v1, T &v2) {
+	T tmp=v1;
+	v1=v2;
+	v2=tmp;
+}
 
 
 typedef UINT LineNumberType;
@@ -258,10 +272,26 @@ struct RegItemStruct
 	}
 };
 
+struct LoopReadFileStruct
+{
+	FILE *mReadFile, *mWriteFile;
+	#define READ_FILE_LINE_SIZE (64 * 1024)  // This is also used by FileReadLine().
+	char mCurrentLine[READ_FILE_LINE_SIZE];
+	LoopReadFileStruct(FILE *aReadFile, FILE *aWriteFile)
+		: mReadFile(aReadFile), mWriteFile(aWriteFile)
+	{
+		*mCurrentLine = '\0';
+	}
+};
+
+
 typedef UCHAR ArgCountType;
 #define MAX_ARGS 20
 
-ResultType InputBox(Var *aOutputVar, char *aTitle = "", char *aText = "", bool aHideInput = false);
+#define INPUTBOX_DEFAULT INT_MIN
+ResultType InputBox(Var *aOutputVar, char *aTitle = "", char *aText = "", bool aHideInput = false
+	, int aWidth = INPUTBOX_DEFAULT, int aHeight = INPUTBOX_DEFAULT
+	, int aX = INPUTBOX_DEFAULT, int aY = INPUTBOX_DEFAULT);
 BOOL CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
 BOOL CALLBACK EnumChildFocusFind(HWND aWnd, LPARAM lParam);
 BOOL CALLBACK EnumChildGetText(HWND aWnd, LPARAM lParam);
@@ -289,14 +319,23 @@ private:
 
 	ResultType EvaluateCondition();
 	ResultType PerformLoop(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
-		, bool &aContinueMainLoop, Line *&aJumpToLine, AttributeType aAttr, FileLoopModeType aFileLoopMode
-		, bool aRecurseSubfolders, char *aFilePattern, __int64 aIterationLimit, bool aIsInfinite);
+		, LoopReadFileStruct *apCurrentReadFile, char *aCurrentField, bool &aContinueMainLoop, Line *&aJumpToLine
+		, AttributeType aAttr, FileLoopModeType aFileLoopMode, bool aRecurseSubfolders, char *aFilePattern
+		, __int64 aIterationLimit, bool aIsInfinite);
 	ResultType PerformLoopReg(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrentFile
+		, LoopReadFileStruct *apCurrentReadFile, char *aCurrentField
 		, bool &aContinueMainLoop, Line *&aJumpToLine, FileLoopModeType aFileLoopMode
 		, bool aRecurseSubfolders, HKEY aRootKeyType, HKEY aRootKey, char *aRegSubkey);
+	ResultType PerformLoopParse(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrentFile
+		, RegItemStruct *apCurrentRegItem, LoopReadFileStruct *apCurrentReadFile
+		, bool &aContinueMainLoop, Line *&aJumpToLine);
+	ResultType PerformLoopReadFile(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrentFile
+		, RegItemStruct *apCurrentRegItem, char *aCurrentField, bool &aContinueMainLoop, Line *&aJumpToLine
+		, FILE *aReadFile, FILE *aWriteFile);
 	ResultType Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurrentFile = NULL
-		, RegItemStruct *aCurrentRegItem = NULL);
+		, RegItemStruct *aCurrentRegItem = NULL, LoopReadFileStruct *aCurrentReadFile = NULL);
 	ResultType PerformAssign();
+	ResultType StringSplit(char *aArrayName, char *aInputString, char *aDelimiterList, char *aOmitList);
 	ResultType DriveSpaceFree(char *aPath);
 	ResultType SoundSetGet(char *aSetting, DWORD aComponentType, int aComponentInstance
 		, DWORD aControlType, UINT aMixerID);
@@ -310,7 +349,7 @@ private:
 		, char *aDescription, char *aIconFile, char *aHotkey);
 	ResultType FileCreateDir(char *aDirSpec);
 	ResultType FileReadLine(char *aFilespec, char *aLineNumber);
-	ResultType FileAppend(char *aFilespec, char *aBuf);
+	ResultType FileAppend(char *aFilespec, char *aBuf, FILE *aTargetFileAlreadyOpen = NULL);
 	ResultType FileDelete(char *aFilePattern);
 	ResultType FileInstall(char *aSource, char *aDest, char *aFlag);
 
@@ -473,8 +512,10 @@ public:
 	static char *sSourceFile[MAX_SCRIPT_FILES];
 	static int nSourceFiles; // An int vs. UCHAR so that it can be exactly 256 without overflowing.
 
-	ResultType ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **apJumpToLine = NULL
-		, WIN32_FIND_DATA *aCurrentFile = NULL, RegItemStruct *aCurrentRegItem = NULL);
+	ResultType ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR = 0, Line **apJumpToLine = NULL
+		, WIN32_FIND_DATA *aCurrentFile = NULL, RegItemStruct *aCurrentRegItem = NULL
+		, LoopReadFileStruct *aCurrentReadFile = NULL, char *aCurrentField = NULL
+		, __int64 aCurrentLoopIteration = 0); // Use signed, since script/ITOA64 aren't designed to work with unsigned.
 
 	Var *ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary = true);
 	ResultType ExpandArgs();
@@ -510,7 +551,8 @@ public:
 		return mArg[aArgNum - 1].deref && mArg[aArgNum - 1].deref[0].marker;
 	}
 
-	bool ArgMustBeDereferenced(Var *aVar, int aArgIndexToExclude)
+	ResultType ArgMustBeDereferenced(Var *aVar, int aArgIndexToExclude)
+	// Returns CONDITION_TRUE, CONDITION_FALSE, or FAIL.
 	{
 		if (aVar->mType == VAR_CLIPBOARD)
 			// Even if the clipboard is both an input and an output var, it still
@@ -518,22 +560,27 @@ public:
 			// clipboard has two buffers of its own.  The only exception is when
 			// the clipboard has only files on it, in which case those files need
 			// to be converted into plain text:
-			return CLIPBOARD_CONTAINS_ONLY_FILES;
+			return CLIPBOARD_CONTAINS_ONLY_FILES ? CONDITION_TRUE : CONDITION_FALSE;
 		if (aVar->mType != VAR_NORMAL || !aVar->Length())
 			// Reserved vars must always be dereferenced due to their volatile nature.
 			// Normal vars of length zero are dereferenced because they might exist
 			// as system environment variables, whose contents are also potentially
 			// volatile (i.e. they are sometimes changed by outside forces):
-			return true;
+			return CONDITION_TRUE;
 		// Since the above didn't return, we know that this is a NORMAL input var of
 		// non-zero length.  Such input vars only need to be dereferenced if they are
 		// also used as an output var by the current script line:
+		Var *output_var;
 		for (int iArg = 0; iArg < mArgc; ++iArg)
-			if (iArg != aArgIndexToExclude && mArg[iArg].type == ARG_TYPE_OUTPUT_VAR
-				&& ResolveVarOfArg(iArg, false) == aVar)
-				return true;
+			if (iArg != aArgIndexToExclude && mArg[iArg].type == ARG_TYPE_OUTPUT_VAR)
+			{
+				if (   !(output_var = ResolveVarOfArg(iArg, false))   )
+					return FAIL;  // It will have already displayed the error.
+				if (output_var == aVar)
+					return CONDITION_TRUE;
+			}
 		// Otherwise:
-		return false;
+		return CONDITION_FALSE;
 	}
 
 	bool ArgAllowsNegative(int aArgNum)
@@ -571,6 +618,8 @@ public:
 			return (aArgNum == 2 || aArgNum == 3);
 		case ACT_PIXELSEARCH:
 			return (aArgNum >= 3 || aArgNum <= 7); // i.e. Color values can be negative, but the last param cannot.
+		case ACT_INPUTBOX:
+			return (aArgNum == 7 || aArgNum == 8); // X & Y coords, even if they're absolute vs. relative.
 
 		case ACT_SOUNDSET:
 		case ACT_SOUNDSETWAVEVOLUME:
@@ -969,20 +1018,24 @@ private:
 	static ActionTypeType ConvertOldActionType(char *aActionTypeString);
 	ResultType AddLabel(char *aLabelName);
 	ResultType AddLine(ActionTypeType aActionType, char *aArg[] = NULL, ArgCountType aArgc = 0, char *aArgMap[] = NULL);
-	ResultType AddVar(char *aVarName, size_t aVarNameLength = 0);
+	Var *AddVar(char *aVarName, size_t aVarNameLength, Var *aVarPrev);
 
 	// These aren't in the Line class because I think they're easier to implement
 	// if aStartingLine is allowed to be NULL (for recursive calls).  If they
 	// were member functions of class Line, a check for NULL would have to
 	// be done before dereferencing any line's mNextLine, for example:
 	Line *PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd = false, Line *aParentLine = NULL);
-	Line *PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode = NORMAL_MODE
-		, AttributeType aLoopType1 = ATTR_NONE, AttributeType aLoopType2 = ATTR_NONE);
+	Line *PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode = NORMAL_MODE, AttributeType aLoopTypeFile = ATTR_NONE
+		, AttributeType aLoopTypeReg = ATTR_NONE, AttributeType aLoopTypeRead = ATTR_NONE
+		, AttributeType aLoopTypeParse = ATTR_NONE);
 public:
 	Line *mCurrLine;  // Seems better to make this public than make Line our friend.
-	Label *mThisHotkeyLabel, *mPriorHotkeyLabel;
+	Label *mThisHotkeyLabel, *mPriorHotkeyLabel, *mAutoStartLabel;
 	WIN32_FIND_DATA *mLoopFile;  // The file of the current file-loop, if applicable.
 	RegItemStruct *mLoopRegItem; // The registry subkey or value of the current registry enumeration loop.
+	LoopReadFileStruct *mLoopReadFile;  // The file whose contents are currently being read by a File-Read Loop.
+	char *mLoopField;  // The field of the current string-parsing loop.
+	__int64 mLoopIteration; // Signed, since script/ITOA64 aren't designed to handle unsigned.
 	DWORD mThisHotkeyStartTime, mPriorHotkeyStartTime;  // Tickcount timestamp of when its subroutine began.
 	char *mFileSpec; // Will hold the full filespec, for convenience.
 	char *mFileDir;  // Will hold the directory containing the script file.
@@ -1004,8 +1057,9 @@ public:
 	void ExitApp(char *aBuf = NULL, int ExitCode = 0);
 	LineNumberType LoadFromFile();
 	ResultType LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude);
-	Var *FindOrAddVar(char *aVarName, size_t aVarNameLength = 0);
-	Var *FindVar(char *aVarName, size_t aVarNameLength = 0);
+	#define VAR_NAME_LENGTH_DEFAULT 0
+	Var *FindOrAddVar(char *aVarName, size_t aVarNameLength = VAR_NAME_LENGTH_DEFAULT, Var *aSearchStart = NULL);
+	Var *FindVar(char *aVarName, size_t aVarNameLength = 0, Var **apVarPrev = NULL, Var *aSearchStart = NULL);
 	ResultType ExecuteFromLine1()
 	{
 		if (!mIsReadyToExecute)
@@ -1213,6 +1267,36 @@ public:
 	}
 
 
+	VarSizeType GetLoopReadLine(char *aBuf = NULL)
+	{
+		char *str = "";  // Set default.
+		if (mLoopReadFile)
+			str = mLoopReadFile->mCurrentLine;
+		if (aBuf)
+			strcpy(aBuf, str);
+		return (VarSizeType)strlen(str);
+	}
+
+	VarSizeType GetLoopField(char *aBuf = NULL)
+	{
+		char *str = "";  // Set default.
+		if (mLoopField)
+			str = mLoopField;
+		if (aBuf)
+			strcpy(aBuf, str);
+		return (VarSizeType)strlen(str);
+	}
+
+	VarSizeType GetLoopIndex(char *aBuf = NULL)
+	{
+		char str[64];
+		ITOA64(mLoopIteration, str);
+		if (aBuf)
+			strcpy(aBuf, str);
+		return (VarSizeType)strlen(str);
+	}
+
+
 	VarSizeType GetThisHotkey(char *aBuf = NULL)
 	{
 		char *str = "";  // Set default.
@@ -1306,6 +1390,8 @@ public:
 			strcpy(aBuf, str);
 		return (VarSizeType)strlen(str);
 	}
+
+	VarSizeType GetTimeIdlePhysical(char *aBuf = NULL);
 
 	VarSizeType GetSpace(VarTypeType aType, char *aBuf = NULL)
 	{

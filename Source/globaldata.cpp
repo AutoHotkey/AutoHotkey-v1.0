@@ -181,7 +181,7 @@ Action g_act[] =
 	// IfMsgBox must be physically adjacent to the other IFs in this array:
 	, {"IfMsgBox", 1, 1, NULL} // MsgBox result (e.g. OK, YES, NO)
 	, {"MsgBox", 0, 4, {4, 0}} // Text (if only 1 param) or: Mode-flag, Title, Text, Timeout.
-	, {"InputBox", 1, 4, NULL} // Output var, title, prompt, hide-text (e.g. passwords)
+	, {"InputBox", 1, 8, {5, 6, 7, 8, 0}} // Output var, title, prompt, hide-text (e.g. passwords), width, height, X, Y
 	, {"SplashTextOn", 0, 4, {1, 2, 0}} // Width, height, title, text
 	, {"SplashTextOff", 0, 0, NULL}
 
@@ -190,11 +190,12 @@ Action g_act[] =
 	, {"StringMid", 4, 4, {3, 4, 0}} // Output Variable, Input Variable, Start char, Number of chars to extract
 	, {"StringTrimLeft", 3, 3, {3, 0}}  // output var, input var, number of chars to trim
 	, {"StringTrimRight", 3, 3, {3, 0}} // same
-	, {"StringLower", 2, 2, NULL} // output var, input var
+	, {"StringLower", 2, 3, NULL} // output var, input var, T = Title Case
 	, {"StringUpper", 2, 3, NULL} // output var, input var, T = Title Case
 	, {"StringLen", 2, 2, NULL} // output var, input var
 	, {"StringGetPos", 3, 4, NULL}  // Output Variable, Input Variable, Search Text, R or Right (from right)
 	, {"StringReplace", 3, 5, NULL} // Output Variable, Input Variable, Search String, Replace String, do-all.
+	, {"StringSplit", 2, 5, NULL} // Output Array, Input Variable, Delimiter List (optional), Omit List, Future Use
 
 	, {"EnvSet", 1, 2, NULL} // EnvVar, Value
 	, {"EnvUpdate", 0, 0, NULL}
@@ -277,7 +278,7 @@ Action g_act[] =
 	, {"SoundSetWaveVolume", 1, 2, {1, 2, 0}} // Volume percent-level (0-100), Device Number (1 is the first)
 	, {"SoundPlay", 1, 2, NULL} // Filename [, wait]
 
-	, {"FileAppend", 2, 2, NULL} // text, filename
+	, {"FileAppend", 1, 2, NULL} // text, filename (which can be omitted in a read-file loop).
 	, {"FileReadLine", 3, 3, NULL} // Output variable, filename, line-number (custom validation, not numeric validation)
 	, {"FileDelete", 1, 1, NULL} // filename
 	, {"FileInstall", 2, 3, {3, 0}} // source, dest, flag (1/0, where 1=overwrite)
@@ -428,6 +429,7 @@ key_to_vk_type g_key_to_vk[] =
 , {"Pause", VK_PAUSE}
 , {"Break", VK_PAUSE}
 , {"Help", VK_HELP}  // VK_HELP is probably not the extended HELP key.  Not sure what this one is.
+, {"Sleep", VK_SLEEP}
 
 , {"AppsKey", VK_APPS}
 
@@ -448,6 +450,7 @@ key_to_vk_type g_key_to_vk[] =
 
 // The left/right versions of these are handled elsewhere since their virtual keys aren't fully API-supported:
 , {"Control", VK_CONTROL}
+, {"Ctrl", VK_CONTROL}  // An alternate for convenience.
 , {"Alt", VK_MENU}
 , {"Shift", VK_SHIFT}
 /*
@@ -573,3 +576,6 @@ bool g_KeyHistoryToFile = false;
 // and mouse events will be wrong:
 DWORD g_HistoryTickNow = 0;
 DWORD g_HistoryTickPrev = GetTickCount();  // So that the first logged key doesn't have a huge elapsed time.
+
+// Also hook related:
+DWORD g_TimeLastInputPhysical = GetTickCount();

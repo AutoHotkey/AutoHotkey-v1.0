@@ -1043,6 +1043,20 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		if (top_box)
 		{
 			SetForegroundWindowEx(top_box);
+
+			// Setting the big icon makes AutoHotkey dialogs more distinct in the Alt-tab menu.
+			// Unfortunately, it seems that setting the big icon also indirectly sets the small
+			// icon, or more precisely, that the dialog simply scales the large icon whenever
+			// a small one isn't available.  This results in the FileSelectFile dialog's title
+			// being initially messed up (at least on WinXP) and also puts an unwanted icon in
+			// the title bar of each MsgBox.  So for now it's disabled:
+			//LPARAM main_icon = (LPARAM)LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_MAIN));
+			//SendMessage(top_box, WM_SETICON, ICON_BIG, main_icon);
+			//SendMessage(top_box, WM_SETICON, ICON_SMALL, 0);  // Tried this to get rid of it, but it didn't help.
+			// But don't set the small one, because it reduces the area available for title text
+			// without adding any significant benefit:
+			//SendMessage(top_box, WM_SETICON, ICON_SMALL, main_icon);
+
 			if ((UINT)wParam > 0)
 				// Caller told us to establish a timeout for this modal dialog (currently always MessageBox):
 				SetTimer(top_box, g_nMessageBoxes, (UINT)wParam * 1000, DialogTimeout);
@@ -1284,7 +1298,8 @@ ResultType ShowMainWindow(MainWindowModes aMode)
 // InputBox //
 //////////////
 
-ResultType InputBox(Var *aOutputVar, char *aTitle, char *aText, bool aHideInput)
+ResultType InputBox(Var *aOutputVar, char *aTitle, char *aText, bool aHideInput, int aWidth, int aHeight
+	, int aX, int aY)
 {
 	// Note: for maximum compatibility with existing AutoIt2 scripts, do not
 	// set ErrorLevel to ERRORLEVEL_ERROR when the user presses cancel.  Instead,
@@ -1309,6 +1324,12 @@ ResultType InputBox(Var *aOutputVar, char *aTitle, char *aText, bool aHideInput)
 	strlcpy(text, aText, sizeof(text));
 	g_InputBox[g_nInputBoxes].title = title;
 	g_InputBox[g_nInputBoxes].text = text;
+
+	// Allow 0 width or height (hides the window):
+	g_InputBox[g_nInputBoxes].width = aWidth != INPUTBOX_DEFAULT && aWidth < 0 ? 0 : aWidth;
+	g_InputBox[g_nInputBoxes].height = aHeight != INPUTBOX_DEFAULT && aHeight < 0 ? 0 : aHeight;
+	g_InputBox[g_nInputBoxes].xpos = aX;  // But seems okay to allow these to be negative, even if absolute coords.
+	g_InputBox[g_nInputBoxes].ypos = aY;
 	g_InputBox[g_nInputBoxes].output_var = aOutputVar;
 	g_InputBox[g_nInputBoxes].password_char = aHideInput ? '*' : '\0';
 	g.WaitingForDialog = true;
@@ -1350,17 +1371,151 @@ BOOL CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 		// of this dialog (e.g. "InputBox, out, %clipboard%").  It's best to do this before
 		// anything that might take a relatively long time (e.g. SetForegroundWindowEx()):
 		CLOSE_CLIPBOARD_IF_OPEN;
+
 		// Caller has ensured that g_nInputBoxes > 0:
 		CURR_INPUTBOX.hwnd = hWndDlg;
+
+		if (CURR_INPUTBOX.password_char)
+			SendDlgItemMessage(hWndDlg, IDC_INPUTEDIT, EM_SETPASSWORDCHAR, CURR_INPUTBOX.password_char, 0);
+
 		SetWindowText(hWndDlg, CURR_INPUTBOX.title);
 		if (hControl = GetDlgItem(hWndDlg, IDC_INPUTPROMPT))
 			SetWindowText(hControl, CURR_INPUTBOX.text);
-		if (hWndDlg != GetForegroundWindow()) // Normally it will be since the template has this property.
+
+		// Don't do this check; instead allow the MoveWindow() to occur unconditionally so that
+		// the new button positions and such will override those set in the dialog's resource
+		// properties:
+		//if (CURR_INPUTBOX.width != INPUTBOX_DEFAULT || CURR_INPUTBOX.height != INPUTBOX_DEFAULT
+		//	|| CURR_INPUTBOX.xpos != INPUTBOX_DEFAULT || CURR_INPUTBOX.ypos != INPUTBOX_DEFAULT)
+		RECT rect;
+		GetWindowRect(hWndDlg, &rect);
+		int new_width = (CURR_INPUTBOX.width == INPUTBOX_DEFAULT) ? rect.right - rect.left : CURR_INPUTBOX.width;
+		int new_height = (CURR_INPUTBOX.height == INPUTBOX_DEFAULT) ? rect.bottom - rect.top : CURR_INPUTBOX.height;
+
+		// If a non-default size was specified, the box will need to be recentered.  The exception is when
+		// an explicit xpos or ypos is specified, in which case centering is disabled for that dimension.
+		int new_xpos, new_ypos;
+		if (CURR_INPUTBOX.xpos != INPUTBOX_DEFAULT && CURR_INPUTBOX.ypos != INPUTBOX_DEFAULT)
+		{
+			new_xpos = CURR_INPUTBOX.xpos;
+			new_ypos = CURR_INPUTBOX.ypos;
+		}
+		else
+		{
+	  		GetWindowRect(GetDesktopWindow(), &rect);
+  			if (CURR_INPUTBOX.xpos == INPUTBOX_DEFAULT) // Center horizontally.
+				new_xpos = (rect.right - rect.left - new_width) / 2;
+			else
+				new_xpos = CURR_INPUTBOX.xpos;
+  			if (CURR_INPUTBOX.ypos == INPUTBOX_DEFAULT) // Center vertically.
+				new_ypos = (rect.bottom - rect.top - new_height) / 2;
+			else
+				new_ypos = CURR_INPUTBOX.ypos;
+		}
+
+		MoveWindow(hWndDlg, new_xpos, new_ypos, new_width, new_height, TRUE);  // Do repaint.
+		// This may also needed to make it redraw in some OSes or some conditions:
+		GetClientRect(hWndDlg, &rect);  // Not to be confused with GetWindowRect().
+		SendMessage(hWndDlg, WM_SIZE, SIZE_RESTORED, rect.right + (rect.bottom<<16));
+
+		if (hWndDlg != GetForegroundWindow()) // Normally it will be foreground since the template has this property.
 			SetForegroundWindowEx(hWndDlg);   // Try to force it to the foreground.
-		if (CURR_INPUTBOX.password_char)
-			SendDlgItemMessage(hWndDlg, IDC_INPUTEDIT, EM_SETPASSWORDCHAR, CURR_INPUTBOX.password_char, 0);
+
+		// Setting the small icon puts it in the upper left corner of the dialog window.
+		// Setting the big icon makes the dialog show up correctly in the Alt-Tab menu.
+		LPARAM main_icon = (LPARAM)LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_MAIN));
+		SendMessage(hWndDlg, WM_SETICON, ICON_SMALL, main_icon);
+		SendMessage(hWndDlg, WM_SETICON, ICON_BIG, main_icon);
+
 		return TRUE; // i.e. let the system set the keyboard focus to the first visible control.
 	}
+
+	case WM_SIZE:
+	{
+		// Adapted from D.Nuttall's InputBox in the AutotIt3 source.
+
+		// don't try moving controls if minimized
+		if (wParam == SIZE_MINIMIZED)
+			return TRUE;
+
+		int dlg_new_width = LOWORD(lParam);
+		int dlg_new_height = HIWORD(lParam);
+
+		int last_ypos = 0, curr_width, curr_height;
+
+		// Changing these might cause weird effects when user resizes the window since the default size and
+		// margins is about 5 (as stored in the dialog's resource properties).  UPDATE: That's no longer
+		// an issue since the dialog is resized when the dialog is first displayed to make sure everything
+		// behaves consistently:
+		const int XMargin = 5, YMargin = 5;
+
+		RECT rTmp;
+
+		// start at the bottom - OK button
+
+		HWND hbtOk = GetDlgItem(hWndDlg, IDOK);
+		if (hbtOk != NULL)
+		{
+			// how big is the control?
+			GetWindowRect(hbtOk, &rTmp);
+			if (rTmp.left > rTmp.right)
+				swap(rTmp.left, rTmp.right);
+			if (rTmp.top > rTmp.bottom)
+				swap(rTmp.top, rTmp.bottom);
+			curr_width = rTmp.right - rTmp.left;
+			curr_height = rTmp.bottom - rTmp.top;
+			last_ypos = dlg_new_height - YMargin - curr_height;
+			// where to put the control?
+			MoveWindow(hbtOk, dlg_new_width/4+(XMargin-curr_width)/2, last_ypos, curr_width, curr_height, FALSE);
+		}
+
+		// Cancel Button
+		HWND hbtCancel = GetDlgItem(hWndDlg, IDCANCEL);
+		if (hbtCancel != NULL)
+		{
+			// how big is the control?
+			GetWindowRect(hbtCancel, &rTmp);
+			if (rTmp.left > rTmp.right)
+				swap(rTmp.left, rTmp.right);
+			if (rTmp.top > rTmp.bottom)
+				swap(rTmp.top, rTmp.bottom);
+			curr_width = rTmp.right - rTmp.left;
+			curr_height = rTmp.bottom - rTmp.top;
+			// where to put the control?
+			MoveWindow(hbtCancel, dlg_new_width*3/4-(XMargin+curr_width)/2, last_ypos, curr_width, curr_height, FALSE);
+		}
+
+		// Edit Box
+		HWND hedText = GetDlgItem(hWndDlg, IDC_INPUTEDIT);
+		if (hedText != NULL)
+		{
+			// how big is the control?
+			GetWindowRect(hedText, &rTmp);
+			if (rTmp.left > rTmp.right)
+				swap(rTmp.left, rTmp.right);
+			if (rTmp.top > rTmp.bottom)
+				swap(rTmp.top, rTmp.bottom);
+			curr_width = rTmp.right - rTmp.left;
+			curr_height = rTmp.bottom - rTmp.top;
+			last_ypos -= 5 + curr_height;  // Allows space between the buttons and the edit box.
+			// where to put the control?
+			MoveWindow(hedText, XMargin, last_ypos, dlg_new_width - XMargin*2
+				, curr_height, FALSE);
+		}
+
+		// Static Box (Prompt)
+		HWND hstPrompt = GetDlgItem(hWndDlg, IDC_INPUTPROMPT);
+		if (hstPrompt != NULL)
+		{
+			last_ypos -= 10;  // Allows space between the edit box and the prompt (static text area).
+			// where to put the control?
+			MoveWindow(hstPrompt, XMargin, YMargin, dlg_new_width - XMargin*2
+				, last_ypos, FALSE);
+		}
+		InvalidateRect(hWndDlg, NULL, TRUE);	// force window to be redrawn
+		return TRUE;  // i.e. completely handled here.
+	}
+
 	case WM_COMMAND:
 		// In this case, don't use (g_nInputBoxes - 1) as the index because it might
 		// not correspond to the g_InputBox[] array element that belongs to hWndDlg.
@@ -1770,7 +1925,11 @@ ResultType Line::PerformAssign()
 		space_needed = (VarSizeType)strlen(ARG2) + 1;  // +1 for the zero terminator.
 	}
 	else
+	{
 		space_needed = GetExpandedArgSize(false); // There's at most one arg to expand in this case.
+		if (space_needed == VARSIZE_ERROR)
+			return FAIL;  // It will have already displayed the error.
+	}
 
 	// Now above has ensured that space_needed is at least 1 (it should not be zero because even
 	// the empty string uses up 1 char for its zero terminator).  The below relies upon this fact.
@@ -1801,7 +1960,10 @@ ResultType Line::PerformAssign()
 	// the mem that has already been allocated for the new clipboard contents
 	// That might happen due to a failure or size discrepancy between the
 	// deref size-estimate and the actual deref itself:
-	output_var->Length() = (VarSizeType)(ExpandArg(output_var->Contents(), 1) - output_var->Contents() - 1);
+	char *one_beyond_contents_end = ExpandArg(output_var->Contents(), 1);
+	if (!one_beyond_contents_end)
+		return FAIL;  // ExpandArg() will have already displayed the error.
+	output_var->Length() = (VarSizeType)(one_beyond_contents_end - output_var->Contents() - 1);
 	if (g.AutoTrim)
 	{
 		trim(output_var->Contents());
@@ -1920,6 +2082,98 @@ void Util_WinKill(HWND hWnd)
 
 
 
+ResultType Line::StringSplit(char *aArrayName, char *aInputString, char *aDelimiterList, char *aOmitList)
+{
+	// Make it longer than Max so that FindOrAddVar() will be able to spot and report var names
+	// that are too long:
+	char var_name[MAX_VAR_NAME_LENGTH + 20];
+	snprintf(var_name, sizeof(var_name), "%s0", aArrayName);
+	Var *array0 = g_script.FindOrAddVar(var_name);
+	if (!array0)
+		return FAIL;  // It will have already displayed the error.
+
+	if (!*aInputString) // The input variable is blank, thus there will be zero elements.
+		return array0->Assign((int)0);  // Store the count in the 0th element.
+
+	UINT next_element_number;
+	Var *next_element;
+
+	if (*aDelimiterList) // The user provided a list of delimiters, so process the input variable normally.
+	{
+		char *contents_of_next_element, *delimiter, *new_starting_pos;
+		size_t element_length;
+		for (contents_of_next_element = aInputString, next_element_number = 1; ; ++next_element_number)
+		{
+			snprintf(var_name, sizeof(var_name), "%s%u", aArrayName, next_element_number);
+
+			// To help performance (in case the linked list of variables is huge), tell it where
+			// to start the search.  Use element #0 rather than the preceding element because,
+			// for example, Array19 is alphabetially less than Array2, so we can't rely on the
+			// numerical ordering:
+			if (   !(next_element = g_script.FindOrAddVar(var_name, VAR_NAME_LENGTH_DEFAULT, array0))   )
+				return FAIL;  // It will have already displayed the error.
+
+			if (delimiter = StrChrAny(contents_of_next_element, aDelimiterList)) // A delimiter was found.
+			{
+				element_length = delimiter - contents_of_next_element;
+				if (*aOmitList && element_length > 0)
+				{
+					contents_of_next_element = omit_leading_any(contents_of_next_element, aOmitList, element_length);
+					element_length = delimiter - contents_of_next_element; // Update in case above changed it.
+					if (element_length)
+						element_length = omit_trailing_any(contents_of_next_element, aOmitList, delimiter - 1);
+				}
+				// If there are no chars to the left of the delim, or if they were all in the list of omitted
+				// chars, the variable will be assigned the empty string:
+				if (!next_element->Assign(contents_of_next_element, (VarSizeType)element_length))
+					return FAIL;
+				contents_of_next_element = delimiter + 1;  // Omit the delimiter since it's never included in contents.
+			}
+			else // the entire length of contents_of_next_element is what will be stored
+			{
+				element_length = strlen(contents_of_next_element);
+				if (*aOmitList && element_length > 0)
+				{
+					new_starting_pos = omit_leading_any(contents_of_next_element, aOmitList, element_length);
+					element_length -= (new_starting_pos - contents_of_next_element); // Update in case above changed it.
+					contents_of_next_element = new_starting_pos;
+					if (element_length)
+						// If this is true, the string must contain at least one char that isn't in the list
+						// of omitted chars, otherwise omit_leading_any() would have already omitted them:
+						element_length = omit_trailing_any(contents_of_next_element, aOmitList
+							, contents_of_next_element + element_length - 1);
+				}
+				// If there are no chars to the left of the delim, or if they were all in the list of omitted
+				// chars, the variable will be assigned the empty string:
+				if (!next_element->Assign(contents_of_next_element, (VarSizeType)element_length))
+					return FAIL;
+				// This is the only way out of the loop other than critical errors:
+				return array0->Assign(next_element_number); // Store the count of how many items were stored in the array.
+			}
+		}
+	}
+
+	// Otherwise aDelimiterList is empty, so store each char of aInputString in its own array element.
+	char *cp, *dp;
+	for (cp = aInputString, next_element_number = 1; *cp; ++cp)
+	{
+		for (dp = aOmitList; *dp; ++dp)
+			if (*cp == *dp) // This char is a member of the omitted list, thus it is not included in the output array.
+				break;
+		if (*dp) // Omitted.
+			continue;
+		snprintf(var_name, sizeof(var_name), "%s%u", aArrayName, next_element_number);
+		if (   !(next_element = g_script.FindOrAddVar(var_name, VAR_NAME_LENGTH_DEFAULT, array0))   )
+			return FAIL;  // It will have already displayed the error.
+		if (!next_element->Assign(cp, 1))
+			return FAIL;
+		++next_element_number; // Only increment this if above didn't "continue".
+	}
+	return array0->Assign(next_element_number - 1); // Store the count of how many items were stored in the array.
+}
+
+
+
 ResultType Line::DriveSpaceFree(char *aPath)
 // Adapted from the AutoIt3 source.
 // Because of NTFS's ability to mount volumes into a directory, a path might not necessarily
@@ -1948,16 +2202,18 @@ ResultType Line::DriveSpaceFree(char *aPath)
 	SetErrorMode(SEM_FAILCRITICALERRORS);  // AutoIt3: So a:\ does not ask for disk
 
 #ifdef _MSC_VER									// AutoIt3: Need a MinGW solution for __int64
-	ULARGE_INTEGER	uiTotal, uiFree, uiUsed;
-	DWORD			dwSectPerClust, dwBytesPerSect, dwFreeClusters, dwTotalClusters;
-	static FARPROC  pGetDiskFreeSpaceEx = GetProcAddress(GetModuleHandle("kernel32.dll"), "GetDiskFreeSpaceExA");
-	int				test = ERROR_SUCCESS;
+	// The program won't launch at all on Win95a (original Win95) unless the function address is resolved
+	// at runtime:
+	typedef BOOL (WINAPI *GetDiskFreeSpaceExType)(LPCTSTR, PULARGE_INTEGER, PULARGE_INTEGER, PULARGE_INTEGER);
+	static GetDiskFreeSpaceExType MyGetDiskFreeSpaceEx =
+		(GetDiskFreeSpaceExType)GetProcAddress(GetModuleHandle("kernel32.dll"), "GetDiskFreeSpaceExA");
 
 	// MSDN: "The GetDiskFreeSpaceEx function returns correct values for all volumes, including those
 	// that are greater than 2 gigabytes."
-	if (pGetDiskFreeSpaceEx)  // Function is available (unpatched Win95 and WinNT might not have it).
+	if (MyGetDiskFreeSpaceEx)  // Function is available (unpatched Win95 and WinNT might not have it).
 	{
-		if (!GetDiskFreeSpaceEx(buf,&uiFree,&uiTotal,&uiUsed)) // AutoIt3 just calls it by name like this.
+		ULARGE_INTEGER uiTotal, uiFree, uiUsed;
+		if (!MyGetDiskFreeSpaceEx(buf, &uiFree, &uiTotal, &uiUsed))
 			return OK; // Let ErrorLevel tell the story.
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 		// Casting this way limits us to 2,097,152 gigabytes in size:
@@ -1965,6 +2221,7 @@ ResultType Line::DriveSpaceFree(char *aPath)
 	}
 	else
 	{
+		DWORD dwSectPerClust, dwBytesPerSect, dwFreeClusters, dwTotalClusters;
 		if (!GetDiskFreeSpace(buf, &dwSectPerClust, &dwBytesPerSect, &dwFreeClusters, &dwTotalClusters))
 			return OK; // Let ErrorLevel tell the story.
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
@@ -2696,7 +2953,7 @@ ResultType Line::FileReadLine(char *aFilespec, char *aLineNumber)
 
 	LONG_OPERATION_INIT
 
-	char buf[64 * 1024];
+	char buf[READ_FILE_LINE_SIZE];
 	for (__int64 i = 0; i < line_number; ++i)
 	{
 		if (fgets(buf, sizeof(buf) - 1, fp) == NULL) // end-of-file or error
@@ -2725,17 +2982,38 @@ ResultType Line::FileReadLine(char *aFilespec, char *aLineNumber)
 
 
 
-ResultType Line::FileAppend(char *aFilespec, char *aBuf)
+ResultType Line::FileAppend(char *aFilespec, char *aBuf, FILE *aTargetFileAlreadyOpen)
 {
-	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
-	if (!aFilespec || !*aFilespec)
-		return OK;  // Return OK because g_ErrorLevel tells the story.
-	FILE *fp = fopen(aFilespec, "a");
-	if (!fp)
-		return OK;  // Return OK because g_ErrorLevel tells the story.
-	if (!fputs(aBuf, fp)) // Success.
-		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-	fclose(fp);
+	if (!aTargetFileAlreadyOpen && (!aFilespec || !*aFilespec)) // Nothing to write to (caller relies on this check).
+		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+
+	// Don't do this because want to allow "nothing" to be written to a file in case the
+	// user is doing this to reset it's timestamp:
+	//if (!aBuf || !*aBuf)
+	//	return g_ErrorLevel->Assign(ERRORLEVEL_NONE);
+
+	FILE *fp;
+	if (aTargetFileAlreadyOpen)
+		fp = aTargetFileAlreadyOpen;
+	else
+	{
+		bool open_as_binary = false;
+		if (*aFilespec == '*')
+		{
+			open_as_binary = true;
+			// Do not do this because I think it's possible for filenames to start with a space
+			// (even though Explorer itself won't let you create them that way):
+			//aFilespec = omit_leading_whitespace(aFilespec + 1);
+			// Instead just do this:
+			++aFilespec;
+		}
+		if (   !(fp = fopen(aFilespec, open_as_binary ? "ab" : "a"))   )
+			return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+	}
+	g_ErrorLevel->Assign(fputs(aBuf, fp) ? ERRORLEVEL_ERROR : ERRORLEVEL_NONE); // fputs() returns 0 on success.
+	if (!aTargetFileAlreadyOpen)
+		fclose(fp);
+	// else it's the caller's responsibility, or it's caller's, to close it.
 	return OK;
 }
 
@@ -4198,6 +4476,7 @@ ArgTypeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_STRINGLEN:
 		case ACT_STRINGREPLACE:
 		case ACT_STRINGGETPOS:
+		case ACT_STRINGSPLIT:
 			return ARG_TYPE_INPUT_VAR;
 
 		case ACT_MOUSEGETPOS:

@@ -1407,12 +1407,12 @@ int TextToSpecial(char *aText, UINT aTextLength, mod_type &aModifiers)
 		aModifiers &= ~MOD_SHIFT;
 		return -VK_SHIFT;
 	}
-	if (!strlicmp(aText, "CTRLDOWN", aTextLength))
+	if (!strlicmp(aText, "CTRLDOWN", aTextLength) || !strlicmp(aText, "CONTROLDOWN", aTextLength))
 	{
 		aModifiers |= MOD_CONTROL;
 		return VK_CONTROL;
 	}
-	if (!strlicmp(aText, "CTRLUP", aTextLength))
+	if (!strlicmp(aText, "CTRLUP", aTextLength) || !strlicmp(aText, "CONTROLUP", aTextLength))
 	{
 		aModifiers &= ~MOD_CONTROL;
 		return -VK_CONTROL;

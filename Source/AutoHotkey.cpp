@@ -64,8 +64,9 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		if (switch_processing_is_complete) // All args are now considered to be input parameters for the script.
 		{
 			snprintf(var_name, sizeof(var_name), "%d", script_param_num);
-			if (var = g_script.FindOrAddVar(var_name))
-				var->Assign(__argv[i]);
+			if (   !(var = g_script.FindOrAddVar(var_name))   )
+				return CRITICAL_ERROR;  // Realistically should never happen.
+			var->Assign(__argv[i]);
 			++script_param_num;
 		}
 		// Insist that switches be an exact match for the allowed values to cut down on ambiguity.
@@ -88,8 +89,9 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	}
 
 	// Like AutoIt2, store the number of script parameters in the script variable %0%, even if it's zero:
-	if (var = g_script.FindOrAddVar("0"))
-		var->Assign(script_param_num - 1);
+	if (   !(var = g_script.FindOrAddVar("0"))   )
+		return CRITICAL_ERROR;  // Realistically should never happen.
+	var->Assign(script_param_num - 1);
 
 #ifndef AUTOHOTKEYSC
 	size_t filespec_length = strlen(script_filespec);
@@ -219,8 +221,20 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	// It seems best to set ErrorLevel to NONE after the auto-execute part of the script is done.
 	// However, we do not set it to NONE right before launching each new hotkey subroutine because
 	// it's more flexible that way (i.e. the user may want one hotkey subroutine to use the value of
-	// ErrorLevel set by another):
+	// ErrorLevel set by another).  This reset was also done by LoadFromFile(), but we do it again
+	// here in case the auto-exectute section changed it:
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE);
+
+	// The A_AutoStart label is run only for persistent scripts (i.e. those that have hotkeys
+	// or that have a hook installed, perhaps to support Numlock always-on, for example).
+	// Its purpose is to launch a background "thread" (usually an infinite loop), not unlike ADLIB
+	// (but more limited since if interrupted, it will be suspended).  The reason for not launching
+	// infinite background loops from the auto-execute section is that the above call to
+	// ExecuteFromLine1() would never return in that case, which would disrupt all of the tasks
+	// done between ExecuteFromLine1() and here, such as setting the global defaults for things such
+	// as KeyDelay:
+	if (g_script.mAutoStartLabel)
+		g_script.mAutoStartLabel->mJumpToLine->ExecUntil(UNTIL_RETURN); // It's okay if this never returns.
 
 	// Call it in this special mode to kick off the main event loop.
 	// Be sure to pass something >0 for the first param or it will
