@@ -1960,10 +1960,23 @@ vk_type TextToVK(char *aText, mod_type *pModifiers, bool aExcludeThoseHandledByS
 
 	if (strlen(aText) == 1)
 	{
-		SHORT mod_plus_vk = VkKeyScan(*aText);
-		char keyscan_modifiers = HIBYTE(mod_plus_vk);
-		if (keyscan_modifiers == -1 && LOBYTE(mod_plus_vk) == (UCHAR)-1) // No translation could be made.
-			return 0;
+		vk_type vk;
+		char keyscan_modifiers;
+		if (*aText == '\n')
+		{
+			// For v1.0.25.12, it seems best to avoid the many recent problems with linefeed (`n) being sent
+			// as Ctrl+Enter by changing it to always send a plain Enter, just like carriage return (`r).
+			vk = VK_RETURN;
+			keyscan_modifiers = 0;
+		}
+		else
+		{
+			SHORT mod_plus_vk = VkKeyScan(*aText);
+			vk = LOBYTE(mod_plus_vk);
+			keyscan_modifiers = HIBYTE(mod_plus_vk);
+			if (keyscan_modifiers == -1 && vk == (UCHAR)-1) // No translation could be made.
+				return 0;
+		}
 
 		// The win docs for VkKeyScan() are a bit confusing, referring to flag "bits" when it should really
 		// say flag "values".  In addition, it seems that these flag values are incompatible with
@@ -1980,7 +1993,7 @@ vk_type TextToVK(char *aText, mod_type *pModifiers, bool aExcludeThoseHandledByS
 			if (keyscan_modifiers & 0x04)
 				*pModifiers |= MOD_ALT;
 		}
-		return LOBYTE(mod_plus_vk);  // The virtual key.
+		return vk;
 	}
 
 // Use above in favor of this:

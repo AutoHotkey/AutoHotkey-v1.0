@@ -1031,6 +1031,7 @@ public:
 
 
 
+	ResultType ArgMustBeDereferenced(Var *aVar, int aArgIndexToExclude);
 	bool ArgHasDeref(int aArgNum)
 	// This function should always be called in lieu of doing something like "strchr(arg.text, g_DerefChar)"
 	// because that method is unreliable due to the possible presence of literal (escaped) g_DerefChars
@@ -1050,40 +1051,6 @@ public:
 		// Return false if it's not of a type caller wants deemed to have derefs.
 		// Relies on short-circuit boolean evaluation order to prevent NULL-deref:
 		return (arg.type == ARG_TYPE_NORMAL) ? arg.deref && arg.deref[0].marker : false;
-	}
-
-	ResultType ArgMustBeDereferenced(Var *aVar, int aArgIndexToExclude)
-	// Returns CONDITION_TRUE, CONDITION_FALSE, or FAIL.
-	{
-		if (mActionType == ACT_SORT) // See PerformSort() for why it's always dereferenced.
-			return CONDITION_TRUE;
-		if (aVar->mType == VAR_CLIPBOARD)
-			// Even if the clipboard is both an input and an output var, it still
-			// doesn't need to be dereferenced into the temp buffer because the
-			// clipboard has two buffers of its own.  The only exception is when
-			// the clipboard has only files on it, in which case those files need
-			// to be converted into plain text:
-			return CLIPBOARD_CONTAINS_ONLY_FILES ? CONDITION_TRUE : CONDITION_FALSE;
-		if (aVar->mType != VAR_NORMAL || !aVar->Length())
-			// Reserved vars must always be dereferenced due to their volatile nature.
-			// Normal vars of length zero are dereferenced because they might exist
-			// as system environment variables, whose contents are also potentially
-			// volatile (i.e. they are sometimes changed by outside forces):
-			return CONDITION_TRUE;
-		// Since the above didn't return, we know that this is a NORMAL input var of
-		// non-zero length.  Such input vars only need to be dereferenced if they are
-		// also used as an output var by the current script line:
-		Var *output_var;
-		for (int iArg = 0; iArg < mArgc; ++iArg)
-			if (iArg != aArgIndexToExclude && mArg[iArg].type == ARG_TYPE_OUTPUT_VAR)
-			{
-				if (   !(output_var = ResolveVarOfArg(iArg, false))   )
-					return FAIL;  // It will have already displayed the error.
-				if (output_var == aVar)
-					return CONDITION_TRUE;
-			}
-		// Otherwise:
-		return CONDITION_FALSE;
 	}
 
 
@@ -2217,9 +2184,12 @@ public:
 	ResultType LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude);
 	ResultType UpdateOrCreateTimer(Label *aLabel, char *aPeriod, char *aPriority, bool aEnable
 		, bool aUpdatePriorityOnly);
+
 	#define VAR_NAME_LENGTH_DEFAULT 0
 	Var *FindOrAddVar(char *aVarName, size_t aVarNameLength = VAR_NAME_LENGTH_DEFAULT, Var *aSearchStart = NULL);
 	Var *FindVar(char *aVarName, size_t aVarNameLength = 0, Var **apVarPrev = NULL, Var *aSearchStart = NULL);
+	static VarTypes GetVarType(char *aVarName);
+
 	WinGroup *FindOrAddGroup(char *aGroupName);
 	ResultType AddGroup(char *aGroupName);
 	Label *FindLabel(char *aLabelName);

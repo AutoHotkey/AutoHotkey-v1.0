@@ -1474,8 +1474,10 @@ void Hotstring::DoReplace(LPARAM alParam)
 		// prevents the user's Enter keystroke (which would be the end-char that triggers this
 		// hotstring) from being translated into Ctrl-Enter.  Ctrl-Enter has a different effect in
 		// most word processors than Enter, producing a page break or something else undesirable.
-		if (*SendBuf == '\n')
-			*SendBuf = '\r';
+		// Update for v1.0.25.12: The below is no longer necessary because SendKeys() treats
+		// \n the same as \r now:
+		//if (*SendBuf == '\n')
+		//	*SendBuf = '\r';
 		SendKeys(SendBuf, true);
 	}
 	g.KeyDelay = old_delay;  // Restore

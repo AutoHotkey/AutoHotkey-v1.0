@@ -3404,7 +3404,7 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 		{
 		case GUI_CONTROL_PIC:
 			// Fixed for v1.0.25.11 to prevent SS_ICON from getting changed to SS_BITMAP:
-			//new_style = (new_style & ~0x0F) | (current_style & 0x0F); // Done to ensure the lowest four bits are pure.
+			new_style = (new_style & ~0x0F) | (current_style & 0x0F); // Done to ensure the lowest four bits are pure.
 			break;
 		case GUI_CONTROL_GROUPBOX:
 			// There doesn't seem to be any flexibility lost by forcing the buttons to be the right type,
