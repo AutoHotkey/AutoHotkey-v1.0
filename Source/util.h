@@ -159,7 +159,7 @@ inline pure_numeric_type IsPureNumeric(char *aBuf, bool aAllowNegative = false
 	if (aAllowNegative && *aBuf == '-')
 		++aBuf;
 	bool is_float;
-	for (is_float = false; *aBuf; ++aBuf)
+	for (is_float = false; *aBuf && !IS_SPACE_OR_TAB(*aBuf); ++aBuf)
 	{
 		if (*aBuf == '.')
 			if (!aAllowFloat || is_float) // if aBuf contains 2 decimal points, it can't be a valid number.
@@ -170,6 +170,11 @@ inline pure_numeric_type IsPureNumeric(char *aBuf, bool aAllowNegative = false
 			if (*aBuf < '0' || *aBuf > '9')
 				return PURE_NOT_NUMERIC;
 	}
+	if (*aBuf && *omit_leading_whitespace(aBuf))
+		// The loop was broken because a space or tab was encountered, and since there's
+		// something other than whitespace at the end of the number, it can't be a pure number
+		// (e.g. "123 456" is not a valid number):
+		return PURE_NOT_NUMERIC;
 	// Since the above didn't return, it must be a float or an integer:
 	return is_float ? PURE_FLOAT : PURE_INTEGER;
 }
