@@ -24,6 +24,9 @@ GNU General Public License for more details.
 #include "var.h" // for a script's variables.
 #include "WinGroup.h" // for a script's Window Groups.
 #include "resources\resource.h"  // For tray icon.
+#ifdef AUTOHOTKEYSC
+	#include "lib/exearc_read.h"
+#endif
 
 // AutoIt2 supports lines up to 16384 characters long, and we want to be able to do so too
 // so that really long lines from aut2 scripts, such as a chain of IF commands, can be
@@ -660,8 +663,13 @@ private:
 	LineNumberType mFileLineCount;  // How many physical lines are in the file.
 	NOTIFYICONDATA mNIC; // For ease of adding and deleting our tray icon.
 
-	int CloseAndReturn(FILE *fp, int return_value);
+#ifdef AUTOHOTKEYSC
+	int CloseAndReturn(HS_EXEArc_Read *fp, UCHAR *aBuf, int return_value);
+	size_t GetLine(char *aBuf, int aMaxCharsToRead, UCHAR *&aMemFile);
+#else
+	int CloseAndReturn(FILE *fp, UCHAR *aBuf, int return_value);
 	size_t GetLine(char *aBuf, int aMaxCharsToRead, FILE *fp);
+#endif
 	ResultType IsPreprocessorDirective(char *aBuf);
 
 	ResultType ParseAndAddLine(char *aLineText, char *aActionName = NULL, char *aEndMarker = NULL
@@ -673,7 +681,6 @@ private:
 	ResultType AddLabel(char *aLabelName);
 	ResultType AddLine(ActionTypeType aActionType, char *aArg[] = NULL, ArgCountType aArgc = 0
 		, char *aArgMap[] = NULL);
-	Var *FindOrAddVar(char *aVarName, size_t aVarNameLength = 0);
 	ResultType AddVar(char *aVarName, size_t aVarNameLength = 0);
 
 	// These aren't in the Line class because I think they're easier to implement
@@ -704,6 +711,7 @@ public:
 	ResultType Reload();
 	void ExitApp(char *aBuf = NULL, int ExitCode = 0);
 	int LoadFromFile();
+	Var *FindOrAddVar(char *aVarName, size_t aVarNameLength = 0);
 	ResultType ExecuteFromLine1()
 	{
 		if (!mIsReadyToExecute)

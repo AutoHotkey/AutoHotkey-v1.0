@@ -16,12 +16,15 @@ Global
 	GlobalSection(SolutionConfiguration) = preSolution
 		Debug = Debug
 		Release = Release
+		SC (self-contained) = SC (self-contained)
 	EndGlobalSection
 	GlobalSection(ProjectConfiguration) = postSolution
 		{76EFDEE3-81CF-4ADA-94DC-EA5509FF6FFC}.Debug.ActiveCfg = Debug|Win32
 		{76EFDEE3-81CF-4ADA-94DC-EA5509FF6FFC}.Debug.Build.0 = Debug|Win32
 		{76EFDEE3-81CF-4ADA-94DC-EA5509FF6FFC}.Release.ActiveCfg = Release|Win32
 		{76EFDEE3-81CF-4ADA-94DC-EA5509FF6FFC}.Release.Build.0 = Release|Win32
+		{76EFDEE3-81CF-4ADA-94DC-EA5509FF6FFC}.SC (self-contained).ActiveCfg = SC (self-contained)|Win32
+		{76EFDEE3-81CF-4ADA-94DC-EA5509FF6FFC}.SC (self-contained).Build.0 = SC (self-contained)|Win32
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 	EndGlobalSection

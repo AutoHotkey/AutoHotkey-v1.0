@@ -767,9 +767,14 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 	{
         switch(lParam)
         {
+// Don't allow the main window to be opened this way by a compiled EXE, since it will display
+// the lines most recently executed (and many people who compile scripts don't want their users
+// to see the contents of the script:
+#ifndef AUTOHOTKEYSC
 		case WM_LBUTTONDBLCLK:
 			ShowMainWindow();
 			return 0;
+#endif
 		case WM_RBUTTONDOWN:
 		{
 			HMENU hMenu = LoadMenu(g_hInstance, MAKEINTRESOURCE(IDR_MENU1));
@@ -777,11 +782,35 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			// the handle to the first shortcut menu.
 			if (!hMenu)
 				return 0;
+ 			if (   !(hMenu = GetSubMenu(hMenu, 0))   )  // It seems this must be done prior to some of the below.
+				return 0;
+#ifdef AUTOHOTKEYSC
+			DeleteMenu(hMenu, ID_TRAY_OPEN, MF_BYCOMMAND);
+			DeleteMenu(hMenu, ID_TRAY_HELP, MF_BYCOMMAND);
+			DeleteMenu(hMenu, ID_TRAY_WINDOWSPY, MF_BYCOMMAND);
+			// Doesn't make sense to have this option since script can't
+			// be edited once it's inside the EXE:
+			DeleteMenu(hMenu, ID_TRAY_RELOADSCRIPT, MF_BYCOMMAND);
+			DeleteMenu(hMenu, ID_TRAY_EDITSCRIPT, MF_BYCOMMAND);
+			// Delete the left-over menu separators.  This isn't a very
+			// maintainable way to do it, but I'm doing something wrong
+			// with the other method, so using this for now:
+			DeleteMenu(hMenu, 1, MF_BYPOSITION);
+			DeleteMenu(hMenu, 0, MF_BYPOSITION);
+			// Trying to code this is a way that easier to maintain:
+			//int menu_item_count = GetMenuItemCount(hMenu);
+			//MENUITEMINFO mii;
+			//for (int i = 0; i < menu_item_count; ++i)
+			//{
+			//	if (GetMenuItemInfo(hMenu, i, TRUE, &mii))
+			//		if (mii.fType == MFT_SEPARATOR)
+			//			DeleteMenu(hMenu, i, MF_BYPOSITION);
+			//}
+#else
+			SetMenuDefaultItem(hMenu, ID_TRAY_OPEN, FALSE);
+#endif
 			CheckMenuItem(hMenu, ID_TRAY_SUSPEND, g_IsSuspended ? MF_CHECKED : MF_UNCHECKED);
 			CheckMenuItem(hMenu, ID_TRAY_PAUSE, g.IsPaused ? MF_CHECKED : MF_UNCHECKED);
- 			if (   !(hMenu = GetSubMenu(hMenu, 0))   )
-				return 0;
-			SetMenuDefaultItem(hMenu, ID_TRAY_OPEN, FALSE);
 			POINT pt;
 			GetCursorPos(&pt);
 			SetForegroundWindow(hWnd); // Always call this right before TrackPopupMenu(), even window if hidden.

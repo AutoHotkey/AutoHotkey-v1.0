@@ -42,6 +42,7 @@ HHOOK g_hhkLowLevelKeybd = NULL;
 HHOOK g_hhkLowLevelMouse = NULL;
 bool g_ForceLaunch = false;
 bool g_AllowOnlyOneInstance = false;
+bool g_NoTrayIcon = false;
 bool g_AllowSameLineComments = true;
 char g_LastPerformedHotkeyType = HK_NORMAL;
 bool g_IsIdle = false;  // Set false as the initial state for use during the auto-execute part of the script.

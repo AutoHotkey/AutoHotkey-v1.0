@@ -32,23 +32,45 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	g_hInstance = hInstance;
 
 	// Set defaults, to be overridden by command line args we receive:
-#ifdef _DEBUG
+	bool restart_mode = false;
+
+#ifdef AUTOHOTKEYSC
+	char *script_filespec = __argv[0];  // i.e. the EXE name.  This is just a placeholder for now.
+#else
+	#ifdef _DEBUG
 	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Find.aut";
 	char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
 	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
-#else
+	#else
 	char *script_filespec = NAME_P ".ini";  // Use this extension for better file associate with editor(s).
+	#endif
 #endif
-	bool restart_mode = false;
 
-	// Examine command line args:
-	for (int i = 1; i < __argc; ++i) // Start at 1 because 0 contains the program name.
+	// Examine command line args.  Rules:
+	// Any special flags (e.g. /force and /restart) must appear prior to the script filespec.
+	// The script filespec (if present) must be the first non-backslash arg.
+	// All args that appear after the filespec are considered to be parameters for the script
+	// and will be added as variables %1% %2% etc.
+	// The above rules effectively make it impossible to autostart AutoHotkey.ini with parameters
+	// unless the filename is explicitly given (shouldn't be an issue for 99.9% of people).
+	char var_name[32]; // Small size since only numbers will be used (e.g. %1%, %2%).
+	Var *var;
+	bool switch_processing_is_complete = false;
+	for (int i = 1, script_param_num = 1; i < __argc; ++i) // Start at 1 because 0 contains the program name.
 	{
-		if (*__argv[i] == '/')
+		if (switch_processing_is_complete)
+		{
+			// All args after the script filespec are considered to be parameters for the script:
+			snprintf(var_name, sizeof(var_name), "%d", script_param_num);
+			if (var = g_script.FindOrAddVar(var_name))
+				var->Assign(__argv[i]);
+			++script_param_num;
+		}
+		else if (*__argv[i] == '/')
 		{
 			switch(toupper(__argv[i][1]))
 			{
-			case 'R': // Restart
+			case 'R': // Reload
 				restart_mode = true;
 				break;
 			case 'F': // Force the keybd/mouse hook(s) to be installed again even if another instance already did.
@@ -56,10 +78,18 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 				break;
 			}
 		}
-		else // the last arg found without a leading slash will be the script filespec.
+		else // since this param does not start with the backslash, the end of the [Switches] section has been reached.
+		{
+			switch_processing_is_complete = true;  // No more switches allowed after this point.
+#ifdef AUTOHOTKEYSC
+			--i; // Make the loop process this item again so that it will be treated as a script param.
+#else
 			script_filespec = __argv[i];
+#endif
+		}
 	}
 
+#ifndef AUTOHOTKEYSC
 	size_t filespec_length = strlen(script_filespec);
 	if (filespec_length >= CONVERSION_FLAG_LENGTH)
 	{
@@ -68,6 +98,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		if (!stricmp(cp, CONVERSION_FLAG))
 			return Line::ConvertEscapeChar(script_filespec, '\\', '`');
 	}
+#endif
 
 	global_init(&g);  // Set defaults prior to the below, since below might override them for AutoIt2 scripts.
 	if (g_script.Init(script_filespec, restart_mode) != OK)  // Set up the basics of the script, using the above.

@@ -37,7 +37,7 @@ GNU General Public License for more details.
 
 #define NAME_P "AutoHotkey"
 #define WINDOW_CLASS_NAME NAME_P
-#define NAME_VERSION "0.217"
+#define NAME_VERSION "0.218"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 #define EXT_AUTOIT2 ".aut"

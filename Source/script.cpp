@@ -51,7 +51,7 @@ Script::Script()
 	, mIsAutoIt2(false)
 	, mLinesExecutedThisCycle(0)
 {
-	ZeroMemory(&mNIC, sizeof(mNIC));  // To be safe.
+	ZeroMemory(&mNIC, sizeof(mNIC));  // Constructor initializes this, to be safe.
 	mNIC.hWnd = NULL;  // Set this as an indicator that it tray icon is not installed.
 #ifdef _DEBUG
 	int LargestMaxParams, i, j;
@@ -112,7 +112,9 @@ ResultType Script::Init(char *aScriptFilename, bool aIsRestart)
 	size_t filename_length = strlen(filename_marker);
 	if (   mIsAutoIt2 = (filename_length >= 4 && !stricmp(filename_marker + filename_length - 4, EXT_AUTOIT2))   )
 	{
-		// Set the old/AutoIt2 defaults for maximum safety and compatibilility:
+		// Set the old/AutoIt2 defaults for maximum safety and compatibilility.
+		// Standalone EXEs (compiled scripts) are always considered to be non-AutoIt2 (otherwise,
+		// the user should probably be using the AutoIt2 compiler).
 		g_AllowSameLineComments = false;
 		g_EscapeChar = '\\';
 		g.TitleFindFast = true; // In case the normal default is false.
@@ -151,7 +153,14 @@ ResultType Script::Init(char *aScriptFilename, bool aIsRestart)
 		return FAIL;  // It already displayed the error for us.
 	if (   !(mFileName = SimpleHeap::Malloc(filename_marker))   )
 		return FAIL;  // It already displayed the error for us.
+#ifdef AUTOHOTKEYSC
+	// Omit AutoHotkey from the window title, like AutoIt3 does for its compiled scripts.
+	// One reason for this is to reduce backlash if evil-doers create viruses and such
+	// with the program:
+	snprintf(buf, sizeof(buf), "%s\\%s", mFileDir, mFileName);
+#else
 	snprintf(buf, sizeof(buf), "%s\\%s - %s", mFileDir, mFileName, NAME_PV);
+#endif
 	if (   !(mMainWindowTitle = SimpleHeap::Malloc(buf))   )
 		return FAIL;  // It already displayed the error for us.
 	if (GetModuleFileName(NULL, buf, sizeof(buf))) // realistically, probably can't fail.
@@ -237,22 +246,27 @@ ResultType Script::CreateWindows(HINSTANCE aInstance)
 	////////////////////
 	// Set up tray icon.
 	////////////////////
-	ZeroMemory(&mNIC, sizeof(mNIC));  // To be safe.
-	// Using NOTIFYICONDATA_V2_SIZE vs. sizeof(NOTIFYICONDATA) improves compatibility with Win9x maybe.
-	// MSDN: "Using [NOTIFYICONDATA_V2_SIZE] for cbSize will allow your application to use NOTIFYICONDATA
-	// with earlier Shell32.dll versions, although without the version 6.0 enhancements."
-	// Update: Using V2 gives an compile error so trying V1:
-	mNIC.cbSize				= NOTIFYICONDATA_V1_SIZE;
-	mNIC.hWnd				= g_hWnd;
-	mNIC.uID				= 0;  // Icon ID (can be anything, like Timer IDs?)
-	mNIC.uFlags				= NIF_MESSAGE | NIF_TIP | NIF_ICON;
-	mNIC.uCallbackMessage	= AHK_NOTIFYICON;
-	mNIC.hIcon				= LoadIcon(aInstance, MAKEINTRESOURCE(IDI_ICON_MAIN));
-	strlcpy(mNIC.szTip, mFileName ? mFileName : NAME_P, sizeof(mNIC.szTip));
-	if (!Shell_NotifyIcon(NIM_ADD, &mNIC))
-	{
+	if (g_NoTrayIcon)
 		mNIC.hWnd = NULL;  // Set this as an indicator that tray icon is not installed.
-		return FAIL;
+	else
+	{
+		ZeroMemory(&mNIC, sizeof(mNIC));  // To be safe.
+		// Using NOTIFYICONDATA_V2_SIZE vs. sizeof(NOTIFYICONDATA) improves compatibility with Win9x maybe.
+		// MSDN: "Using [NOTIFYICONDATA_V2_SIZE] for cbSize will allow your application to use NOTIFYICONDATA
+		// with earlier Shell32.dll versions, although without the version 6.0 enhancements."
+		// Update: Using V2 gives an compile error so trying V1:
+		mNIC.cbSize				= NOTIFYICONDATA_V1_SIZE;
+		mNIC.hWnd				= g_hWnd;
+		mNIC.uID				= 0;  // Icon ID (can be anything, like Timer IDs?)
+		mNIC.uFlags				= NIF_MESSAGE | NIF_TIP | NIF_ICON;
+		mNIC.uCallbackMessage	= AHK_NOTIFYICON;
+		mNIC.hIcon				= LoadIcon(aInstance, MAKEINTRESOURCE(IDI_ICON_MAIN));
+		strlcpy(mNIC.szTip, mFileName ? mFileName : NAME_P, sizeof(mNIC.szTip));
+		if (!Shell_NotifyIcon(NIM_ADD, &mNIC))
+		{
+			mNIC.hWnd = NULL;  // Set this as an indicator that tray icon is not installed.
+			return FAIL;
+		}
 	}
 	return OK;
 }
@@ -289,6 +303,11 @@ void Script::UpdateTrayIcon()
 
 ResultType Script::Edit()
 {
+	// This is here in case a compiled script ever uses the Edit command.  Since the "Edit This
+	// Script" menu item is not available for compiled scripts, it can't be called from there.
+#ifdef AUTOHOTKEYSC
+	return OK; // Do nothing.
+#endif
 	bool old_mode = g.TitleFindAnywhere;
 	g.TitleFindAnywhere = true;
 	HWND hwnd = WinExist(mFileName, "", mMainWindowTitle); // Exclude our own main.
@@ -322,10 +341,17 @@ ResultType Script::Edit()
 
 ResultType Script::Reload()
 {
-	char arg_string[MAX_PATH + 512], current_dir[MAX_PATH];
+	char current_dir[MAX_PATH];
 	GetCurrentDirectory(sizeof(current_dir), current_dir);  // In case the user launched it in a non-default dir.
+#ifndef AUTOHOTKEYSC
+	char arg_string[MAX_PATH + 512];
 	snprintf(arg_string, sizeof(arg_string), "/restart \"%s\"", mFileSpec);
 	g_script.ActionExec(mOurEXE, arg_string, current_dir); // It will tell our process to stop.
+#else
+	// This is here in case a compiled script ever uses the Edit command.  Since the "Reload This
+	// Script" menu item is not available for compiled scripts, it can't be called from there.
+	g_script.ActionExec(mOurEXE, "/restart", current_dir); // It will tell our process to stop.
+#endif
 	return OK;
 }
 
@@ -345,7 +371,7 @@ void Script::ExitApp(char *aBuf, int ExitCode)
 		// No more than size-1 chars will be written and string will be terminated:
 		snprintf(buf, sizeof(buf), "Critical Error: %s\n\n" WILL_EXIT, aBuf);
 		// To avoid chance of more errors, don't use MsgBox():
-		MessageBox(g_hWnd, buf, NAME_PV, MB_OK | MB_SETFOREGROUND | MB_APPLMODAL);
+		MessageBox(g_hWnd, buf, g_script.mFileSpec, MB_OK | MB_SETFOREGROUND | MB_APPLMODAL);
 	}
 	Hotkey::AllDestructAndExit(*aBuf ? CRITICAL_ERROR : ExitCode); // Terminate the application.
 	// Not as reliable: PostQuitMessage(CRITICAL_ERROR);
@@ -364,6 +390,36 @@ int Script::LoadFromFile()
 {
 	if (!mFileSpec || !*mFileSpec) return -1;
 
+	UCHAR *script_buf = NULL;  // Init for the case when the buffer isn't used (non-standalone mode).
+	ULONG nDataSize = 0;
+
+#ifdef AUTOHOTKEYSC
+	HS_EXEArc_Read oRead;
+	// AutoIt3: Open the archive in this compiled exe
+	if ( oRead.Open(mFileSpec, "") != HS_EXEARC_E_OK)
+	{
+		MsgBox("Could not open the script inside the EXE.", 0, mFileSpec);
+		return -1;
+	}
+	// AutoIt3: Read the script (the func allocates the memory for the buffer :) )
+	if ( oRead.FileExtractToMem(">AUTOHOTKEY SCRIPT<", &script_buf, &nDataSize) != HS_EXEARC_E_OK)
+	{
+		oRead.Close();							// Close the archive
+		MsgBox("Could extract the script from the EXE into memory.", 0, mFileSpec);
+		return -1;
+	}
+	UCHAR *script_buf_marker = script_buf;  // "marker" will track where we are in the mem. file as we read from it.
+
+	// Must cast to int to avoid loss of negative values:
+	#define SCRIPT_BUF_SPACE_REMAINING ((int)(nDataSize - (script_buf_marker - script_buf)))
+	int script_buf_space_remaining, max_chars_to_read;
+
+	// AutoIt3: We have the data in RAW BINARY FORM, the script is a text file, so
+	// this means that instead of a newline character, there may also be carridge
+	// returns 0x0d 0x0a (\r\n)
+	HS_EXEArc_Read *fp = &oRead;  // To help consolidate the code below.
+
+#else  // Not in stand-alone mode, so read an external script file.
 	// Future: might be best to put a stat() in here for better handling.
 	FILE *fp = fopen(mFileSpec, "r");
 	if (!fp)
@@ -405,6 +461,8 @@ int Script::LoadFromFile()
 		// future: have it wait for the process to close, then try to open the config file again:
 		return 0;
 	}
+#endif
+
 
 	// File is now open, read lines from it.
 
@@ -416,8 +474,16 @@ int Script::LoadFromFile()
 	for (mFileLineCount = 0, mIsReadyToExecute = false;;) // Init in case this func ever called more than once.
 	{
 		mCurrLine = NULL;  // To signify that we're in transition, trying to load a new one.
+#ifdef AUTOHOTKEYSC
+		script_buf_space_remaining = SCRIPT_BUF_SPACE_REMAINING;  // Temporary storage for performance.
+		max_chars_to_read = (sizeof(buf) - 1 < script_buf_space_remaining) ? sizeof(buf) - 1
+			: script_buf_space_remaining;
+		if (   -1 == (buf_length = GetLine(buf, max_chars_to_read, script_buf_marker))   )
+#else
 		if (   -1 == (buf_length = GetLine(buf, (int)(sizeof(buf) - 1), fp))   )
+#endif
 			break;
+
 		++mFileLineCount; // Keep track of the phyiscal line number in the file for debugging purposes.
 		if (!buf_length)
 			continue;
@@ -469,9 +535,9 @@ int Script::LoadFromFile()
 			// falling through from above into a hotkey (which probably isn't very valid anyway)?
 			if (mFirstLabel == NULL)
 				if (AddLine(ACT_RETURN) != OK)
-					return CloseAndReturn(fp, -1);
+					return CloseAndReturn(fp, script_buf, -1);
 			if (AddLabel(buf) != OK) // Always add a label before adding the first line of its section.
-				return CloseAndReturn(fp, -1);
+				return CloseAndReturn(fp, script_buf, -1);
 			if (*hotkey_flag) // This hotkey's action is on the same line as its label.
 			{
 				if (!stricmp(hotkey_flag, "AltTab"))
@@ -491,16 +557,16 @@ int Script::LoadFromFile()
 				// via Goto/Gosub:
 				if (!hook_action)
 					if (ParseAndAddLine(hotkey_flag) != OK)
-						return CloseAndReturn(fp, -1);
+						return CloseAndReturn(fp, script_buf, -1);
 				// Also add a Return that's implicit for a single-line hotkey:
 				if (AddLine(ACT_RETURN) != OK)
-					return CloseAndReturn(fp, -1);
+					return CloseAndReturn(fp, script_buf, -1);
 			}
 			else
 				hook_action = 0;
 			// Set the new hotkey will jump to this label to begin execution:
 			if (Hotkey::AddHotkey(mLastLabel, hook_action) != OK)
-				return CloseAndReturn(fp, -1);
+				return CloseAndReturn(fp, script_buf, -1);
 			continue;
 		}
 
@@ -522,7 +588,7 @@ int Script::LoadFromFile()
 			buf[buf_length - 1] = '\0';  // Remove the trailing colon.
 			rtrim(buf); // Has already been ltrimmed.
 			if (AddLabel(buf) != OK)
-				return CloseAndReturn(fp, -1);
+				return CloseAndReturn(fp, script_buf, -1);
 			continue;
 		}
 		// It's not a label.
@@ -533,7 +599,7 @@ int Script::LoadFromFile()
 			case CONDITION_TRUE:
 				continue;
 			case FAIL:
-				return CloseAndReturn(fp, -1); // It already reported the error.
+				return CloseAndReturn(fp, script_buf, -1); // It already reported the error.
 			// Otherwise it's CONDITION_FALSE.  Do nothing.
 			}
 		}
@@ -554,7 +620,7 @@ int Script::LoadFromFile()
 		if (strlicmp(action_start, g_act[ACT_ELSE].Name, (UINT)(action_end - action_start)))
 		{
 			if (ParseAndAddLine(buf) != OK)
-				return CloseAndReturn(fp, -1);
+				return CloseAndReturn(fp, script_buf, -1);
 		}
 		else // This line is an ELSE.
 		{
@@ -563,15 +629,22 @@ int Script::LoadFromFile()
 			// don't want because we wouldn't have access to the corresponding literal-map to
 			// figure out the proper use of escaped characters:
 			if (AddLine(ACT_ELSE) != OK)
-				return CloseAndReturn(fp, -1);
+				return CloseAndReturn(fp, script_buf, -1);
 			action_end = omit_leading_whitespace(action_end); // Now action_end is the word after the ELSE.
 			if (*action_end && ParseAndAddLine(action_end) != OK)
-				return CloseAndReturn(fp, -1);
+				return CloseAndReturn(fp, script_buf, -1);
 			// Otherwise, there was either no same-line action or the same-line action was successfully added,
 			// so do nothing.
 		}
 	}
+
+#ifdef AUTOHOTKEYSC
+	// AutoIt3: Close the archive and free the file in memory
+	free(script_buf);
+	oRead.Close();
+#else
 	fclose(fp);
+#endif
 
 	if (!mLineCount)
 		return mLineCount;
@@ -630,17 +703,62 @@ int Script::LoadFromFile()
 
 
 
-inline int Script::CloseAndReturn(FILE *fp, int aReturnValue)
 // Small inline to make LoadFromFile() code cleaner.
+#ifdef AUTOHOTKEYSC
+inline int Script::CloseAndReturn(HS_EXEArc_Read *fp, UCHAR *aBuf, int aReturnValue)
 {
+	free(aBuf);
+	fp->Close();
+	return aReturnValue;
+}
+#else
+inline int Script::CloseAndReturn(FILE *fp, UCHAR *aBuf, int aReturnValue)
+{
+	// aBuf is unused in this case.
 	fclose(fp);
 	return aReturnValue;
 }
+#endif
 
 
 
+#ifdef AUTOHOTKEYSC
+size_t Script::GetLine(char *aBuf, int aMaxCharsToRead, UCHAR *&aMemFile) // last param = reference to pointer
+#else
 size_t Script::GetLine(char *aBuf, int aMaxCharsToRead, FILE *fp)
+#endif
 {
+	size_t aBuf_length = 0;
+#ifdef AUTOHOTKEYSC
+	if (!aBuf || !aMemFile) return -1;
+	if (aMaxCharsToRead <= 0) return -1; // We're signaling to caller that the end of the memory file has been reached.
+	// Otherwise, continue reading characters from the memory file until either a newline is
+	// reached or aMaxCharsToRead have been read:
+	// Track "i" separately from aBuf_length because we want to read beyond the bounds of the memory file.
+	int i;
+	for (i = 0; i < aMaxCharsToRead; ++i)
+	{
+		if (aMemFile[i] == '\n')
+		{
+			// The end of this line has been reached.  Don't copy this char into the target buffer.
+			// In addition, if the previous char was '\r', remove it from the target buffer:
+			if (aBuf_length > 0 && aBuf[aBuf_length - 1] == '\r')
+				aBuf[--aBuf_length] = '\0';
+			++i; // i.e. so that aMemFile will be adjusted to omit this newline char.
+			break;
+		}
+		else
+			aBuf[aBuf_length++] = aMemFile[i];
+	}
+	// We either read aMaxCharsToRead or reached the end of the line (as indicated by the newline char).
+	// In the former case, aMemFile might now be changed to be a position outside the bounds of the
+	// memory area, which the caller will reflect back to us during the next call as a 0 value for
+	// aMaxCharsToRead, which we then signal to the caller (above) as the end of the file):
+	aMemFile += i; // Update this value for use by the caller.
+	// Terminate the buffer (the caller has already ensured that there's room for the terminator
+	// via its value of aMaxCharsToRead):
+	aBuf[aBuf_length] = '\0';
+#else
 	if (!aBuf || !fp) return -1;
 	if (aMaxCharsToRead <= 0) return 0;
 	if (feof(fp)) return -1; // Previous call to this function probably already read the last line.
@@ -649,11 +767,15 @@ size_t Script::GetLine(char *aBuf, int aMaxCharsToRead, FILE *fp)
 		*aBuf = '\0';  // Reset since on error, contents added by fgets() are indeterminate.
 		return -1;
 	}
-	size_t aBuf_length = strlen(aBuf);
+	aBuf_length = strlen(aBuf);
 	if (!aBuf_length)
 		return 0;
 	if (aBuf[aBuf_length-1] == '\n')
 		aBuf[--aBuf_length] = '\0';
+	if (aBuf[aBuf_length-1] == '\r')  // In case there are any, e.g. a Macintosh or Unix file?
+		aBuf[--aBuf_length] = '\0';
+#endif
+
 	// ltrim to support semicolons after tab keys or other whitespace.  Seems best to rtrim also:
 	trim(aBuf);
 	if (!strncmp(aBuf, g_CommentFlag, g_CommentFlagLength)) // Case sensitive.
@@ -717,6 +839,11 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 	IF_IS_DIRECTIVE_MATCH("#SingleInstance")
 	{
 		g_AllowOnlyOneInstance = true;
+		return CONDITION_TRUE;
+	}
+	IF_IS_DIRECTIVE_MATCH("#NoTrayIcon")
+	{
+		g_NoTrayIcon = true;
 		return CONDITION_TRUE;
 	}
 	IF_IS_DIRECTIVE_MATCH("#AllowSameLineComments")  // i.e. There's no way to turn it off, only on.
@@ -4511,6 +4638,10 @@ void Script::ShowInEditor()
 {
 	// Disabled for now:
 	return;
+
+#ifdef AUTOHOTKEYSC
+	return;
+#endif
 
 	bool old_mode = g.TitleFindAnywhere;
 	g.TitleFindAnywhere = true;

@@ -24,7 +24,23 @@ body {
   <div id="globalNav">    <a href="http://www.autohotkey.com">home</a> | <a href="../docs/index.htm"></a><a href="../download">download</a> | <a href="../docs">documentation</a> | <a href="../support">support</a></div> 
 </div> 
 
+<p><br>
+  </font><b>0.218 BETA - January 7, 2004</b></p>
+<p>  Added a script compiler (makes an EXE from a script) by popular demand.  It was a lot easier than I thought, thanks to Jon's (AutoIt author's) open &amp; modular coding style. It's available on the <a href="../download">download</a> page. Note: Presently, .aut scripts are not supported because there's no way for the compiled script to figure out whether to run in AutoIt2 mode (backslash as escape char) or AutoHotkey mode ([`] as escape char). So if necessary, first <a href="#AutoConvert">auto-convert</a> your .aut file to .ahk by renaming it to &quot;whatever.aut.ahk&quot; and then running it with AutoHotkey.exe.</p>
+<p>Added support for command line parameters becoming script variables. The command line format is:<br>
+  AutoHotkey.exe [switches] [Script Filename] [Script Parameters]<br>
+  CompiledScript.exe [switches] [Script Parameters]<br>
+  Switches can be zero or more of the following:<br>
+  /f or /force -- Launch unconditionally, skipping any warning dialogs.<br>
+  /r or /restart -- Indicate that the script is being restarted (this is also used by the Reload command, internally)<br>
+  Script Filename can be omitted if there are no Script Parameters. If omitted, it will run (or prompt you to create) AutoHotkey.ini in the current directory.<br>
+  Script Parameters can be any strings you want to pass into the script. Any parameter containing spaces must be enclosed in double quotes. Like AutoIt2, the script sees them as the variables %1%, %2%, and so on.</p>
+<p>Added command #NoTrayIcon. Put it anywhere in a script to disable the showing of a tray icon. If you use this for a script that has hotkeys, you might want to bind a hotkey to the ExitApp command. Otherwise, there will be no easy way to exit the program (without restarting the computer or killing the process). Example: #x::ExitApp<br>
+</p>
+<hr>
 <br>
+
+
 </font><b>0.217 BETA - January 5, 2004</b><br>
 <br>
 Fixed variable assignment (SetEnv and the new style, var = value) to properly handle escape sequences.  Lines such as this should now work properly: result = %result% %color% `%`n
@@ -44,12 +60,12 @@ Fixed variable assignment (SetEnv and the new style, var = value) to properly ha
   AutoTrim, off<br>
   MySpace = %A_SPACE%</p>
 <p>Added the Edit command, which opens the current script for editing, or activates an existing Editor window if it finds one it thinks may have the file open based on its window title. This command is the same feature as selecting &quot;Edit This Script&quot; from the tray menu.</p>
-<p>Added the Pause command and corresponding tray menu item. Unlike Suspend -- which disables hotkeys entirely -- pause will freeze the currently running subroutine (if none, pause will have no effect). The allowed values for the command's first parameter are ON, OFF, and TOGGLE (change to the opposite state). If the first parameter is omitted, it will default to TOGGLE just like the Suspend command. New hotkeys can still be launched while the script is paused, but when their subroutines finish, the underlying interrupted subroutine will still be paused. The &quot;Pause, off&quot; command will turn off the pause state for only the subroutine that was most recently interrupted. Each subroutine can be paused independently of the others. The color of the tray icon changes to black whenever the script's current subroutine is in a paused state.</p>
+<p>Added the Pause command and corresponding tray menu item. Unlike Suspend -- which disables hotkeys entirely -- pause will freeze the currently running subroutine (if none, pause will have no effect). The allowed values for the command's first parameter are ON, OFF, and TOGGLE (change to the opposite state). If the first parameter is omitted, it will default to TOGGLE just like the Suspend command. New hotkeys can still be launched while the script is paused, but when their subroutines finish, the underlying interrupted subroutine will still be paused. The &quot;Pause, off&quot; command will unpause only the most recently paused subroutine. Each subroutine can be paused independently of the others. The color of the tray icon changes to black whenever the script's current subroutine is in a paused state.</p>
 <p>Improved the Suspend feature:</p>
 <ul>
   <li>It now reverts all hotkeys back to their native functions rather than doing nothing when they are pressed.</li>
   <li> The tray icon is changed to an S whenever hotkeys are suspended.</li>
-  <li> The first param can now be PERMIT or TOGGLE, in addition to ON or OFF. TOGGLE does the same thing as omitting the first param (i.e. toggles to the opposite state). PERMIT does not change the state of suspension. Instead, when used as the first line of any subroutine, it flags that subroutine as having permission to run even when hotkeys are suspended. Note: As before, any subroutine that has SUSPEND as its first command will be permitted to run while hotkeys are suspended (i.e. the PERMIT value is just a way to do it without changing the suspend state).</li>
+  <li> The first param can now be PERMIT or TOGGLE, in addition to ON or OFF. TOGGLE does the same thing as omitting the first param (i.e. toggles to the opposite state). PERMIT does not change the state of suspension. Instead, when used as the first line of any subroutine, it flags that subroutine as having permission to run even when hotkeys are suspended. Note: As before, any subroutine that has Suspend as its first command will be permitted to run while hotkeys are suspended (i.e. the PERMIT value is just a way to do it without changing the suspend state).</li>
   <li>Note: Suspend will not disable the AlwaysOn/AlwaysOff feature for Scroll/Caps/Numlock if the script is using it.</li>
   <li>    Note: Although it isn't officially paused, the script is always halted while its tray menu is displayed. However, new hotkeys can be launched even then.</li>
 </ul>
@@ -213,7 +229,7 @@ Minor: Undid the previous change mentioned below having to do with "escape chars
 <br>
 Minor: Changed WinClose to use the WM_CLOSE vs. SC_CLOSE (alt-F4) method so that it's like AutoIt2 and AutoIt3.  The new method is a little less gentle to the target window than the previous method, but it's likely to work on more types of windows.<br>
 <br>
-There's now an automated way to convert a .aut file to .ahk so that you can take full advantage of the new features (some new features -- such as the new params available in some commands -- are disabled in .aut scripts to improve compatibility with AutoIt2).  The conversion will simply make the escape character ` instead of \.  This is harder than it sounds due to the precise ordering of escape sequences in each line, which is why you just can't do a Search & Replace in a text editor.  This automated way should take care of all the details:<br>
+<a name="AutoConvert"></a>There's now an automated way to convert a .aut file to .ahk so that you can take full advantage of the new features (some new features -- such as the new params available in some commands -- are disabled in .aut scripts to improve compatibility with AutoIt2).  The conversion will simply make the escape character ` instead of \.  This is harder than it sounds due to the precise ordering of escape sequences in each line, which is why you just can't do a Search & Replace in a text editor.  This automated way should take care of all the details:<br>
 1) Append a .ahk to the end of an existing .aut file, so that filename now ends in ".aut.ahk"<br>
 2) Run this file with AutoHotkey, which, rather than than running the file, will create a new file in the same directory that ends in "-NEW.ahk".  This is the converted version.  The original version will be unchanged.<br>
 3) If you were using #DerefChar in the script, remove it from the converted version.<br>
