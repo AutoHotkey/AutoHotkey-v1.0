@@ -1666,26 +1666,39 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	// KeyHistoryNext, in most cases before we had a chance to finish using the old value.  In other
 	// words, we use an automatic variable so that every instance of this function will get its
 	// own copy of the variable whose value will stays constant until that instance returns:
-	pKeyHistoryCurr = g_KeyHistory + g_KeyHistoryNext;
-	if (++g_KeyHistoryNext >= MAX_HISTORY_KEYS)
-		g_KeyHistoryNext = 0;
-	pKeyHistoryCurr->vk = vk;
-#ifdef INCLUDE_KEYBD_HOOK
-	// Intentionally log a zero if it comes in that way, prior to using MapVirtualKey() to try to resolve it:
-	pKeyHistoryCurr->sc = sc;
-#else
-	pKeyHistoryCurr->sc = 0;
-#endif
-	pKeyHistoryCurr->key_up = key_up;
-	pKeyHistoryCurr->event_type = is_ignored ? 'i' : ' ';
-	g_HistoryTickNow = GetTickCount();
-	pKeyHistoryCurr->elapsed_time = (g_HistoryTickNow - g_HistoryTickPrev) / (float)1000;
-	g_HistoryTickPrev = g_HistoryTickNow;
-	HWND fore_win = GetForegroundWindow();
-	if (fore_win)
-		GetWindowText(fore_win, pKeyHistoryCurr->target_window, sizeof(pKeyHistoryCurr->target_window));
+	KeyHistoryItem khi_temp; // Serves as a storage spot for a single keystroke in case key history is disabled.
+	if (!g_KeyHistory)
+		pKeyHistoryCurr = &khi_temp;  // Having a non-NULL pKeyHistoryCurr simplifies the code in other places.
 	else
-		strcpy(pKeyHistoryCurr->target_window, "N/A");
+	{
+		pKeyHistoryCurr = g_KeyHistory + g_KeyHistoryNext;
+		if (++g_KeyHistoryNext >= g_MaxHistoryKeys)
+			g_KeyHistoryNext = 0;
+		pKeyHistoryCurr->vk = vk;
+#ifdef INCLUDE_KEYBD_HOOK
+		// Intentionally log a zero if it comes in that way, prior to using MapVirtualKey() to try to resolve it:
+		pKeyHistoryCurr->sc = sc;
+#else
+		pKeyHistoryCurr->sc = 0;
+#endif
+		pKeyHistoryCurr->key_up = key_up;
+		g_HistoryTickNow = GetTickCount();
+		pKeyHistoryCurr->elapsed_time = (g_HistoryTickNow - g_HistoryTickPrev) / (float)1000;
+		g_HistoryTickPrev = g_HistoryTickNow;
+		HWND fore_win = GetForegroundWindow();
+		if (fore_win)
+		{
+			if (fore_win != g_HistoryHwndPrev)
+				GetWindowText(fore_win, pKeyHistoryCurr->target_window, sizeof(pKeyHistoryCurr->target_window));
+			else // i.e. where possible, avoid the overhead of the call to GetWindowText().
+				*pKeyHistoryCurr->target_window = '\0';
+		}
+		else
+			strcpy(pKeyHistoryCurr->target_window, "N/A");
+		g_HistoryHwndPrev = fore_win;  // Updated unconditionally in case fore_win is NULL.
+	}
+	// The following is done even if key history is disabled because alt_tab_menu_is_visible relies on it:
+	pKeyHistoryCurr->event_type = is_ignored ? 'i' : ' ';
 
 #ifdef INCLUDE_KEYBD_HOOK
 	// If the scan code is extended, the key that was pressed is not a dual-state numpad key,

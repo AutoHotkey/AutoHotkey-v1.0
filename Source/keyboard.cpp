@@ -1033,26 +1033,7 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 				ToggleNumlockWin9x();
 
 			if (!g_KeybdHook) // Hook isn't logging, so we'll log just the keys we send, here.
-			{
-				#define UpdateKeyEventHistory(aKeyUp) \
-				{\
-					g_KeyHistory[g_KeyHistoryNext].vk = aVK;\
-					g_KeyHistory[g_KeyHistoryNext].sc = aSC;\
-					g_KeyHistory[g_KeyHistoryNext].key_up = aKeyUp;\
-					g_KeyHistory[g_KeyHistoryNext].event_type = 'i';\
-					g_HistoryTickNow = GetTickCount();\
-					g_KeyHistory[g_KeyHistoryNext].elapsed_time = (g_HistoryTickNow - g_HistoryTickPrev) / (float)1000;\
-					g_HistoryTickPrev = g_HistoryTickNow;\
-					HWND fore_win = GetForegroundWindow();\
-					if (fore_win)\
-						GetWindowText(fore_win, g_KeyHistory[g_KeyHistoryNext].target_window, sizeof(g_KeyHistory[g_KeyHistoryNext].target_window));\
-					else\
-						*g_KeyHistory[g_KeyHistoryNext].target_window = '\0';\
-					if (++g_KeyHistoryNext >= MAX_HISTORY_KEYS)\
-						g_KeyHistoryNext = 0;\
-				}
-				UpdateKeyEventHistory(false);
-			}
+				UpdateKeyEventHistory(false, aVK, aSC);
 		}
 		// The press-duration delay is done only when this is a down-and-up because otherwise,
 		// the normal g.KeyDelay will be in effect.  In other words, it seems undesirable in
@@ -1064,7 +1045,7 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 			keybd_event(aVK, LOBYTE(aSC), (HIBYTE(aSC) ? KEYEVENTF_EXTENDEDKEY : 0)
 				| KEYEVENTF_KEYUP, aExtraInfo);
 			if (!g_KeybdHook) // Hook isn't logging, so we'll log just the keys we send, here.
-				UpdateKeyEventHistory(true);
+				UpdateKeyEventHistory(true, aVK, aSC);
 		}
 		if (we_turned_blockinput_off)  // Turn it back on.
 			Line::ScriptBlockInput(true);
@@ -1073,6 +1054,34 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 	if (aDoKeyDelay)
 		DoKeyDelay();
 	return OK;
+}
+
+
+
+void UpdateKeyEventHistory(bool aKeyUp, vk_type aVK, sc_type aSC)
+{
+	if (!g_KeyHistory) // Don't access the array if it doesn't exist (i.e. key history is disabled).
+		return;
+	g_KeyHistory[g_KeyHistoryNext].key_up = aKeyUp;
+	g_KeyHistory[g_KeyHistoryNext].vk = aVK;
+	g_KeyHistory[g_KeyHistoryNext].sc = aSC;
+	g_KeyHistory[g_KeyHistoryNext].event_type = 'i'; // Callers all want this.
+	g_HistoryTickNow = GetTickCount();
+	g_KeyHistory[g_KeyHistoryNext].elapsed_time = (g_HistoryTickNow - g_HistoryTickPrev) / (float)1000;
+	g_HistoryTickPrev = g_HistoryTickNow;
+	HWND fore_win = GetForegroundWindow();
+	if (fore_win)
+	{
+		if (fore_win != g_HistoryHwndPrev)
+			GetWindowText(fore_win, g_KeyHistory[g_KeyHistoryNext].target_window, sizeof(g_KeyHistory[g_KeyHistoryNext].target_window));
+		else // i.e. avoid the call to GetWindowText() if possible.
+			*g_KeyHistory[g_KeyHistoryNext].target_window = '\0';
+	}
+	else
+		strcpy(g_KeyHistory[g_KeyHistoryNext].target_window, "N/A");
+	g_HistoryHwndPrev = fore_win; // Update unconditionally in case it's NULL.
+	if (++g_KeyHistoryNext >= g_MaxHistoryKeys)
+		g_KeyHistoryNext = 0;
 }
 
 
@@ -2145,6 +2154,9 @@ ResultType KeyHistoryToFile(char *aFilespec, char aType, bool aKeyUp, vk_type aV
 	static FILE *fp = NULL;
 	static HWND last_foreground_window = NULL;
 	static DWORD last_tickcount = GetTickCount();
+
+	if (!g_KeyHistory) // Since key history is disabled, keys are not being tracked by the hook, so there's nothing to log.
+		return OK;     // Files should not need to be closed since they would never have been opened in the first place.
 
 	if (!aFilespec && !aVK && !aSC) // Caller is signaling to close the file if it's open.
 	{

@@ -60,7 +60,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\GUI Demo.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\Expressions.ahk";
-		char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\Setting style and exstyle on other windows and controls.ahk";
+		char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\New Text Document.ahk";
 	#else
 		char *script_filespec = NAME_P ".ini";  // Use this extension for better file association with editor(s).
 	#endif
@@ -145,20 +145,6 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	init_vk_to_sc();
 	init_sc_to_vk();
 
-	// Allocate from SimpleHeap() to reduce avg. memory load (i.e. since most scripts are small).
-	// Do this before LoadFromFile() so that it will be the first thing allocated from the first
-	// block, reducing the chance that a new block will have to be allocated just to handle this
-	// larger-than-average request:
-	if (g_KeyHistory = (KeyHistoryItem *)SimpleHeap::Malloc(MAX_HISTORY_KEYS * sizeof(KeyHistoryItem)))
-		ZeroMemory(g_KeyHistory, MAX_HISTORY_KEYS * sizeof(KeyHistoryItem)); // Must be zeroed.
-	else
-	{
-		// Realistically, this should never happen.  But it simplifies the code in many other
-		// places if we make sure the KeyHistory array isn't NULL right away:
-		MsgBox(ERR_OUTOFMEM);
-		return CRITICAL_ERROR;
-	}
-
 	LineNumberType load_result = g_script.LoadFromFile();
 	if (load_result == LOADING_FAILED) // Error during load (was already displayed by the function call).
 		return CRITICAL_ERROR;  // Should return this value because PostQuitMessage() also uses it.
@@ -234,6 +220,10 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	// to return early due to an error have passed, above.
 	if (g_script.CreateWindows() != OK)
 		return CRITICAL_ERROR;
+
+	if (g_MaxHistoryKeys && (g_KeyHistory = (KeyHistoryItem *)malloc(g_MaxHistoryKeys * sizeof(KeyHistoryItem))))
+		ZeroMemory(g_KeyHistory, g_MaxHistoryKeys * sizeof(KeyHistoryItem)); // Must be zeroed.
+	//else leave it NULL as it was initialized in globaldata.
 
 	// Activate the hotkeys and any hooks that are required prior to executing the
 	// top part (the auto-execute part) of the script so that they will be in effect

@@ -1668,6 +1668,23 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 			g_MaxHotkeysPerInterval = 1;
 		return CONDITION_TRUE;
 	}
+	if (IS_DIRECTIVE_MATCH("#KeyHistory"))
+	{
+		RETURN_IF_NO_CHAR
+		g_MaxHistoryKeys = ATOI(cp);  // cp was set to the right position by the above macro
+		if (g_MaxHistoryKeys < 0)
+			g_MaxHistoryKeys = 0;
+		else if (g_MaxHistoryKeys > 500)
+			g_MaxHistoryKeys = 500;
+		// Above: There are two reasons for limiting the history file to 500 keystrokes:
+		// 1) GetHookStatus() only has a limited size buffer in which to transcribe the keystrokes.
+		//    500 events is about what you would expect to fit in a 32 KB buffer (it the unlikely event
+		//    that the transcribed events create too much text, the text will be truncated, so it's
+		//    not dangerous anyway).
+		// 2) To reduce the impression that AutoHotkey designed for key logging (the key history file
+		//    is in a very unfriendly format that type of key logging anyway).
+		return CONDITION_TRUE;
+	}
 
 	// For the below series, it seems okay to allow the comment flag to contain other reserved chars,
 	// such as DerefChar, since comments are evaluated, and then taken out of the game at an earlier
@@ -11669,7 +11686,6 @@ char *Script::ListKeyHistory(char *aBuf, size_t aBufSize)
 		//"\r\nBlocks: %u"
 		"\r\nKeybd hook: %s"
 		"\r\nMouse hook: %s"
-		"\r\nLast hotkey type: %s"
 		"\r\nEnabled Timers: %u of %u (%s)"
 		//"\r\nInterruptible?: %s"
 		"\r\nInterrupted threads: %d%s"
@@ -11680,7 +11696,6 @@ char *Script::ListKeyHistory(char *aBuf, size_t aBufSize)
 		//, SimpleHeap::GetBlockCount()
 		, g_KeybdHook == NULL ? "no" : "yes"
 		, g_MouseHook == NULL ? "no" : "yes"
-		, g_LastPerformedHotkeyType == HK_KEYBD_HOOK ? "keybd hook" : "not keybd hook"
 		, mTimerEnabledCount, mTimerCount, timer_list
 		//, INTERRUPTIBLE ? "yes" : "no"
 		, g_nThreads > 1 ? g_nThreads - 1 : 0
@@ -11690,7 +11705,8 @@ char *Script::ListKeyHistory(char *aBuf, size_t aBufSize)
 	aBuf += strlen(aBuf);
 	GetHookStatus(aBuf, BUF_SPACE_REMAINING);
 	aBuf += strlen(aBuf);
-	snprintf(aBuf, BUF_SPACE_REMAINING, "\r\nPress [F5] to refresh.");
+	snprintf(aBuf, BUF_SPACE_REMAINING, g_KeyHistory ? "\r\nPress [F5] to refresh."
+		: "\r\nKey History has been disabled via #KeyHistory 0.");
 	aBuf += strlen(aBuf);
 	return aBuf;
 }

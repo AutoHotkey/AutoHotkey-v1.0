@@ -874,9 +874,6 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 
 			MAKE_THREAD_INTERRUPTIBLE
 
-			if (msg.message == WM_HOTKEY || msg.message == AHK_HOOK_HOTKEY)
-				g_LastPerformedHotkeyType = Hotkey::GetType((HotkeyIDType)msg.wParam); // For use with the KeyHistory cmd.
-
 			if (aMode == RETURN_AFTER_MESSAGES)
 			{
 				RESUME_UNDERLYING_THREAD

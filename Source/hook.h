@@ -222,7 +222,6 @@ struct input_type
 
 //-------------------------------------------
 
-#define MAX_HISTORY_KEYS 40
 struct KeyHistoryItem
 {
 	vk_type vk;

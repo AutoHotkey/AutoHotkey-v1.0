@@ -224,6 +224,7 @@ int SendChar(char aChar, mod_type aModifiers, KeyEventTypes aEventType, HWND aTa
 //    to make the hotkey suffix match a different set of modifiers, the wrong hotkey would fire.
 ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC = 0, HWND aTargetWindow = NULL
 	, bool aDoKeyDelay = false, DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER);
+void UpdateKeyEventHistory(bool aKeyUp, vk_type aVK, sc_type aSC);
 #define KEYEVENT_PHYS(event_type, vk, sc) KeyEvent(event_type, vk, sc, NULL, false, KEY_PHYS_IGNORE)
 
 ToggleValueType ToggleKeyState(vk_type aVK, ToggleValueType aToggleValue);

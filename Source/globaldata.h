@@ -61,7 +61,6 @@ extern bool g_NoTrayIcon;
 	extern bool g_AllowMainWindow;
 #endif
 extern bool g_AllowSameLineComments;
-extern char g_LastPerformedHotkeyType;
 extern bool g_AllowInterruption;
 extern bool g_MainTimerExists;
 extern bool g_UninterruptibleTimerExists;
@@ -74,6 +73,7 @@ extern int g_nLayersNeedingTimer;
 extern int g_nThreads;
 extern int g_nPausedThreads;
 extern bool g_UnpauseWhenResumed;
+extern int g_MaxHistoryKeys;
 
 extern VarSizeType g_MaxVarCapacity;
 // This value is the absolute limit:
@@ -165,6 +165,7 @@ extern KeyHistoryItem *g_KeyHistory;
 extern int g_KeyHistoryNext;
 extern DWORD g_HistoryTickNow;
 extern DWORD g_HistoryTickPrev;
+extern HWND g_HistoryHwndPrev;
 extern DWORD g_TimeLastInputPhysical;
 
 #ifdef ENABLE_KEY_HISTORY_FILE
