@@ -24,7 +24,7 @@ EXTERN_SCRIPT;  // For g_script.
 // Due to control/alt/shift modifiers, quite a lot of hotkey combinations are possible, so support any
 // conceivable use.  Note: Increasing this value will increase the memory required (i.e. any arrays
 // that use this value):
-#define MAX_HOTKEYS 512
+#define MAX_HOTKEYS 700
 
 // Note: 0xBFFF is the largest ID that can be used with RegisterHotkey().
 // But further limit this to 0x3FFF (16,383) so that the two highest order bits
@@ -38,7 +38,9 @@ EXTERN_SCRIPT;  // For g_script.
 #define HOTKEY_ID_ALT_TAB_MENU         0x3FFC
 #define HOTKEY_ID_ALT_TAB_AND_MENU     0x3FFB
 #define HOTKEY_ID_ALT_TAB_MENU_DISMISS 0x3FFA
-#define HOTKEY_ID_MAX                  0x3FF9
+#define HOTKEY_ID_MAX                  0x3FF9  // 16377 hotkeys
+#define HOTKEY_ID_ON                   0x01  // This and the next are used only for convenience by ConvertAltTab().
+#define HOTKEY_ID_OFF                  0x02
 
 #define COMPOSITE_DELIMITER " & "
 #define COMPOSITE_DELIMITER_LENGTH 3
@@ -47,6 +49,7 @@ EXTERN_SCRIPT;  // For g_script.
 typedef USHORT HotkeyIDType;
 typedef HotkeyIDType HookActionType;
 enum HotkeyTypes {HK_UNDETERMINED, HK_NORMAL, HK_KEYBD_HOOK, HK_MOUSE_HOOK, HK_BOTH_HOOKS, HK_JOYSTICK};
+#define TYPE_IS_HOOK(type) (type == HK_KEYBD_HOOK || type == HK_MOUSE_HOOK || type == HK_BOTH_HOOKS)
 
 
 class Hotkey
@@ -66,6 +69,7 @@ private:
 	static HotkeyIDType sNextID;
 
 	HotkeyIDType mID;  // Must be unique for each hotkey of a given thread.
+	char *mName; // Points to the label name for static hotkeys, or a dynamically-allocated string for dynamic hotkeys.
 	vk_type mVK; // virtual-key code, e.g. VK_TAB, VK_LWIN, VK_LMENU, VK_APPS, VK_F10.  If zero, use sc below.
 	sc_type mSC; // Scan code.  All vk's have a scan code, but not vice versa.
 	mod_type mModifiers;  // MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, or some additive or bitwise-or combination of these.
@@ -80,6 +84,7 @@ private:
 	modLR_type mModifiersConsolidated; // The combination of mModifierVK, mModifierSC, mModifiersLR, modifiers
 	HotkeyTypes mType;
 	bool mIsRegistered;  // Whether this hotkey has been successfully registered.
+	bool mEnabled;
 	HookActionType mHookAction;
 	Label *mJumpToLabel;
 	UCHAR mExistingThreads, mMaxThreads;
@@ -92,9 +97,9 @@ private:
 	friend UCHAR ChangeHookState(Hotkey *aHK[], int aHK_count, UCHAR aWhichHook, UCHAR aWhichHookAlways, bool aWarnIfHooksAlreadyInstalled
 		, bool aActivateOnlySuspendHotkeys);
 
-	ResultType TextInterpret();
+	ResultType TextInterpret(char *aName);
 	char *TextToModifiers(char *aText);
-	ResultType TextToKey(char *aText, bool aIsModifier);
+	ResultType TextToKey(char *aText, char *aHotkeyName, bool aIsModifier);
 
 	bool IsExemptFromSuspend()
 	{
@@ -121,7 +126,7 @@ private:
 
 	ResultType Perform() // Returns OK or FAIL.
 	{
-		if (!PerformIsAllowed())
+		if (!PerformIsAllowed() || !mJumpToLabel)
 			return FAIL;
 		ResultType result;
 		++mExistingThreads;  // This is the thread count for this particular hotkey only.
@@ -159,6 +164,31 @@ private:
 		return (result == FAIL) ? FAIL : OK;
 	}
 
+	ResultType Enable()
+	{
+		mEnabled = true;
+		// For now, call AllDeactivate() for cases such as the following:
+		// the newly added hotkey has an interaction/dependency
+		// with another hotkey, causing it to be promoted from a registered hotkey to a hook hotkey.
+		// In such a case, the key should be unregistered for maximum reliability, even though'
+		// the hook could probably override the registration in most cases:
+		// Older: AllDeactivate() shouldn't be necessary in this case, since there's no chance that
+		// hooks will be removed as a result of this action?
+		AllDeactivate(false, false);  // Avoid removing the hooks when enabling a key.
+		AllActivate(true);
+		return OK;
+	}
+
+	ResultType Disable()
+	{
+		mEnabled = false;
+		// AllDeactivate() is done in case this is the last hook hotkey (mouse or keyboard hook) and
+		// the hook(s) are no longer needed:
+		AllDeactivate(false, TYPE_IS_HOOK(mType));
+		AllActivate(true);
+		return OK;
+	}
+
 	ResultType Register();
 	ResultType Unregister();
 	static ResultType AllDestruct();
@@ -170,7 +200,7 @@ private:
 
 	// For now, constructor & destructor are private so that only static methods can create new
 	// objects.  This allow proper tracking of which OS hotkey IDs have been used.
-	Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction);
+	Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction, char *aName = NULL);
 	~Hotkey() {if (mIsRegistered) Unregister();}
 public:
 	// Make sHotkeyCount an alias for sNextID.  Make it const to enforce modifying the value in only one way:
@@ -179,11 +209,13 @@ public:
 	static DWORD sJoyHotkeyCount;
 
 	static void AllDestructAndExit(int exit_code);
-	static ResultType AddHotkey(Label *aJumpToLabel, HookActionType aHookAction);
+	static ResultType Dynamic(char *aHotkeyName, Label *aJumpToLabel, HookActionType aHookAction, char *aOptions);
+	ResultType UpdateHotkey(Label *aJumpToLabel, HookActionType aHookAction);
+	static ResultType AddHotkey(Label *aJumpToLabel, HookActionType aHookAction, char *aName = NULL);
 	static ResultType PerformID(HotkeyIDType aHotkeyID);
 	static void TriggerJoyHotkeys(int aJoystickID, DWORD aButtonsNewlyDown);
-	static ResultType AllDeactivate(bool aExcludeSuspendHotkeys = false);
-	static void AllActivate();
+	static ResultType AllDeactivate(bool aObeySuspend, bool aChangeHookStatus = true);
+	static void AllActivate(bool aOverrideLock);
 	static void RequireHook(HookType aWhichHook) {sWhichHookAlways |= aWhichHook;}
 	static HookType HookIsActive() {return sWhichHookActive;} // Returns bitwise values: HOOK_MOUSE, HOOK_KEYBD.
 
@@ -219,10 +251,16 @@ public:
 		return (aHotkeyID >= 0 && aHotkeyID < sHotkeyCount) ? shk[aHotkeyID]->mType : -1;
 	}
 
+	static char *GetName(HotkeyIDType aHotkeyID)
+	{
+		return (aHotkeyID >= 0 && aHotkeyID < sHotkeyCount) ? shk[aHotkeyID]->mName : "";
+	}
+
 	static Label *GetLabel(HotkeyIDType aHotkeyID)
 	{
 		return (aHotkeyID >= 0 && aHotkeyID < sHotkeyCount) ? shk[aHotkeyID]->mJumpToLabel : NULL;
 	}
+
 	static ActionTypeType GetTypeOfFirstLine(HotkeyIDType aHotkeyID)
 	{
 		Label *label = GetLabel(aHotkeyID);
@@ -231,9 +269,26 @@ public:
 		return label->mJumpToLine->mActionType;
 	}
 
-	static int FindHotkeyBySC(sc2_type aSC2, mod_type aModifiers, modLR_type aModifiersLR);
+	static HookActionType ConvertAltTab(char *aBuf, bool aAllowOnOff)
+	{
+		if (!aBuf || !*aBuf) return 0;
+		if (!stricmp(aBuf, "AltTab")) return HOTKEY_ID_ALT_TAB;
+		if (!stricmp(aBuf, "ShiftAltTab")) return HOTKEY_ID_ALT_TAB_SHIFT;
+		if (!stricmp(aBuf, "AltTabMenu")) return HOTKEY_ID_ALT_TAB_MENU;
+		if (!stricmp(aBuf, "AltTabAndMenu")) return HOTKEY_ID_ALT_TAB_AND_MENU;
+		if (!stricmp(aBuf, "AltTabMenuDismiss")) return HOTKEY_ID_ALT_TAB_MENU_DISMISS;
+		if (aAllowOnOff)
+		{
+			if (!stricmp(aBuf, "On")) return HOTKEY_ID_ON;
+			if (!stricmp(aBuf, "Off")) return HOTKEY_ID_OFF;
+		}
+		return 0;
+	}
+
+	static int FindHotkeyByName(char *aName);
 	static int FindHotkeyWithThisModifier(vk_type aVK, sc_type aSC);
 	static int FindHotkeyContainingModLR(modLR_type aModifiersLR);  //, int hotkey_id_to_omit);
+	//static int FindHotkeyBySC(sc2_type aSC2, mod_type aModifiers, modLR_type aModifiersLR);
 
 	static char *ListHotkeys(char *aBuf, size_t aBufSize);
 	char *ToText(char *aBuf, size_t aBufSize, bool aAppendNewline);

@@ -31,6 +31,9 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 {
 	// Init any globals not in "struct g" that need it:
 	g_hInstance = hInstance;
+	if (!GetCurrentDirectory(sizeof(g_WorkingDir), g_WorkingDir)) // Needed for the FileSelectFile() workaround.
+		*g_WorkingDir = '\0';
+	g_WorkingDirOrig = SimpleHeap::Malloc(g_WorkingDir); // Needed by the Reload command.
 
 	// Set defaults, to be overridden by command line args we receive:
 	bool restart_mode = false;
@@ -40,8 +43,8 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 #else
 	#ifdef _DEBUG
 	//char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
-	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
-	char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TrayTip.ahk";
+	char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
+	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\Transform.ahk";
 	#else
 	char *script_filespec = NAME_P ".ini";  // Use this extension for better file association with editor(s).
 	#endif
@@ -203,7 +206,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	// top part (the auto-execute part) of the script so that they will be in effect
 	// even if the top part is something that's very involved and requires user
 	// interaction:
-	Hotkey::AllActivate();           // We want these active now in case auto-execute never returns (e.g. loop)
+	Hotkey::AllActivate(true);       // We want these active now in case auto-execute never returns (e.g. loop)
 	if (Hotkey::sJoyHotkeyCount)     // Joystick hotkeys requir the timer to be always on.
 		SET_MAIN_TIMER
 	g_script.AutoExecSection();      // Run the auto-execute part at the top of the script.

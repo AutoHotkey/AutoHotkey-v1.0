@@ -431,9 +431,9 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 			{
 				// Just prior to launching the hotkey, update these values to support built-in
 				// variables such as A_TimeSincePriorHotkey:
-				g_script.mPriorHotkeyLabel = g_script.mThisHotkeyLabel;
+				g_script.mPriorHotkeyName = g_script.mThisHotkeyName;
 				g_script.mPriorHotkeyStartTime = g_script.mThisHotkeyStartTime;
-				g_script.mThisHotkeyLabel = Hotkey::GetLabel((HotkeyIDType)msg.wParam);
+				g_script.mThisHotkeyName = Hotkey::GetName((HotkeyIDType)msg.wParam);
 			}
 
 			// If the current quasi-thread is paused, the thread we're about to launch
@@ -441,6 +441,25 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 			g_script.UpdateTrayIcon();
 
 			ENABLE_UNINTERRUPTIBLE_SUB
+
+			if (g_nFileDialogs)
+				// Since there is a quasi-thread with an open file dialog underneath the one
+				// we're about to launch, set the current directory to be the one the user
+				// would expect to be in effect.  This is not a 100% fix/workaround for the
+				// fact that the dialog changes the working directory as the user navigates
+				// from folder to folder because the dialog can still function even when its
+				// quasi-thread is suspended (i.e. while our new thread being launched here
+				// is in the middle of running).  In other words, the user can still use
+				// the dialog of a suspended quasi-thread, and thus change the working
+				// directory indirectly.  But that should be very rare and I don't see an
+				// easy way to fix it completely without using a "HOOK function to monitor
+				// the WM_NOTIFY message", calling SetCurrentDirectory() after every script
+				// line executes (which seems too high in overhead to be justified), or
+				// something similar.  Note changing to a new directory here does not seem
+				// to hurt the ongoing FileSelectFile() dialog.  In other words, the dialog
+				// does not seem to care that its changing of the directory as the user
+				// navigates is "undone" here:
+				SetCurrentDirectory(g_WorkingDir);
 
 			// Do this last, right before the PerformID():
 			// It seems best to reset these unconditionally, because the user has pressed a hotkey
@@ -558,7 +577,10 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 		// sense because our message pump here retrieves all thread messages).
 		// It might cause problems to dispatch such messages directly, since
 		// IsDialogMessage() is supposed to be used in lieu of DispatchMessage()
-		// for these types of messages:
+		// for these types of messages.
+		// NOTE: THE BELOW IS CONFIRMED to be needed, at least for a FileSelectFile()
+		// dialog whose quasi-thread has been suspended, and probably for some of the other
+		// types of dialogs as well:
 		if ((fore_window = GetForegroundWindow()) != NULL)  // There is a foreground window.
 		{
 			GetWindowThreadProcessId(fore_window, &fore_pid);
@@ -567,7 +589,30 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 				GetClassName(fore_window, fore_class_name, sizeof(fore_class_name));
 				if (!strcmp(fore_class_name, "#32770"))  // MessageBox(), InputBox(), or FileSelectFile() window.
 					if (IsDialogMessage(fore_window, &msg))  // This message is for it, so let it process it.
+					{
+						// If it is likely that a FileSelectFile dialog is active, this
+						// section attempt to retain the current directory as the user
+						// navigates from folder to folder.  This is done because it is
+						// possible that our caller is a quasi-thread other than the one
+						// that originally launched the FileSelectFile (i.e. that dialog
+						// is in a suspended thread), in which case the user's navigation
+						// would cause the active threads working dir to change unexpectedly
+						// unless the below is done.  This is not a complete fix since if
+						// a message pump other than this one is running (e.g. that of a
+						// MessageBox()), these messages will not be detected:
+						if (g_nFileDialogs) // See MsgSleep() for comments on this.
+							// The below two messages that are likely connected with a user
+							// navigating to a different folder within the FileSelectFile dialog.
+							// That avoids changing the directory for every message, since there
+							// can easily be thousands of such messages every second if the
+							// user is moving the mouse.  UPDATE: This doesn't work, so for now,
+							// just call SetCurrentDirectory() for every message, which does work.
+							// A brief test of CPU utilization indicates that SetCurrentDirectory()
+							// is not a very high overhead call when it is called many times here:
+							//if (msg.message == WM_ERASEBKGND || msg.message == WM_DELETEITEM)
+							SetCurrentDirectory(g_WorkingDir);
 						continue;  // This message is done, so start a new iteration to get another msg.
+					}
 			}
 		}
 		// Translate keyboard input for any of our thread's windows that need it:
@@ -733,6 +778,9 @@ void CheckScriptTimers()
 			// However, we do not set ErrorLevel to NONE here because it's more flexible that way
 			// (i.e. the user may want one hotkey subroutine to use the value of ErrorLevel set by another):
 			CopyMemory(&g, &g_default, sizeof(global_struct));
+
+			if (g_nFileDialogs) // See MsgSleep() for comments on this.
+				SetCurrentDirectory(g_WorkingDir);
 
 			ENABLE_UNINTERRUPTIBLE_SUB
 

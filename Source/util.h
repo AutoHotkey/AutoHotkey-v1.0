@@ -269,7 +269,12 @@ inline bool IsHex(char *aBuf)
 // those are so rare that the speed-up seems worth the extra code size:
 //#define ATOI64(buf) _strtoi64(buf, NULL, 0) // formerly used _atoi64()
 #define ATOI64(buf) (IsHex(buf) ? _strtoi64(buf, NULL, 16) : _atoi64(buf))
-#define ATOI(buf) strtol(buf, NULL, 0) // Use zero as last param to support both hex & dec.
+#define ATOU64(buf) _strtoui64(buf, NULL, IsHex(buf) ? 16 : 10)
+
+// Below has been updated because values with leading zeros were being intepreted as
+// octal, which is undesirable.
+//#define ATOI(buf) strtol(buf, NULL, 0) // Use zero as last param to support both hex & dec.
+#define ATOI(buf) (IsHex(buf) ? strtol(buf, NULL, 16) : atoi(buf))
 
 // Unlike some Unix versions of strtod(), the VC++ version does not seem to handle hex strings
 // such as "0xFF" automatically.  So this macro must check for hex because some callers rely on that.

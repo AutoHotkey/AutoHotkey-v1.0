@@ -41,7 +41,7 @@ static size_t g_CommentFlagLength = strlen(g_CommentFlag); // pre-calculated for
 Script::Script()
 	: mFirstLine(NULL), mLastLine(NULL), mCurrLine(NULL)
 	, mLoopFile(NULL), mLoopRegItem(NULL), mLoopReadFile(NULL), mLoopField(NULL), mLoopIteration(0)
-	, mThisHotkeyLabel(NULL), mPriorHotkeyLabel(NULL), mThisHotkeyStartTime(0), mPriorHotkeyStartTime(0)
+	, mThisHotkeyName(""), mPriorHotkeyName(""), mThisHotkeyStartTime(0), mPriorHotkeyStartTime(0)
 	, mThisHotkeyModifiersLR(0)
 	, mFirstLabel(NULL), mLastLabel(NULL)
 	, mFirstTimer(NULL), mLastTimer(NULL), mTimerEnabledCount(0), mTimerCount(0)
@@ -108,7 +108,17 @@ Script::~Script()
 		DestroyMenu(mTrayMenu);
 		mTrayMenu = NULL;
 	}
-
+	// Close any open sound item to prevent hang-on-exit in certain operating systems or conditions.
+	// If there's any chance that a sound was played and not closed out, or that it is still playing,
+	// this check is done.  Otherwise, the check is avoided since it might be a high overhead call,
+	// especially if the sound subsystem part of the OS is currently swapped out or something:
+	if (g_SoundWasPlayed)
+	{
+		char buf[MAX_PATH * 2];
+		mciSendString("status " SOUNDPLAY_ALIAS " mode", buf, sizeof(buf), NULL);
+		if (*buf) // "playing" or "stopped"
+			mciSendString("close " SOUNDPLAY_ALIAS, NULL, 0, NULL);
+	}
 #ifdef ENABLE_KEY_HISTORY_FILE
 	KeyHistoryToFile();  // Close the KeyHistory file if it's open.
 #endif
@@ -863,10 +873,10 @@ ResultType Script::Edit()
 #else
 	// This is here in case a compiled script ever uses the Edit command.  Since the "Edit This
 	// Script" menu item is not available for compiled scripts, it can't be called from there.
-	bool old_mode = g.TitleFindAnywhere;
-	g.TitleFindAnywhere = true;
+	TitleMatchModes old_mode = g.TitleMatchMode;
+	g.TitleMatchMode = FIND_ANYWHERE;
 	HWND hwnd = WinExist(mFileName, "", mMainWindowTitle); // Exclude our own main.
-	g.TitleFindAnywhere = old_mode;
+	g.TitleMatchMode = old_mode;
 	if (hwnd)
 	{
 		char class_name[32];
@@ -900,18 +910,16 @@ ResultType Script::Edit()
 
 ResultType Script::Reload(bool aDisplayErrors)
 {
-	char current_dir[MAX_PATH];
-	GetCurrentDirectory(sizeof(current_dir), current_dir);  // In case the user launched it in a non-default dir.
 	// The new instance we're about to start will tell our process to stop, or it will display
 	// a syntax error or some other error, in which case our process will still be running:
 #ifdef AUTOHOTKEYSC
-	// This is here in case a compiled script ever uses the Edit command.  Since the "Reload This
+	// This is here in case a compiled script ever uses the Reload command.  Since the "Reload This
 	// Script" menu item is not available for compiled scripts, it can't be called from there.
-	return g_script.ActionExec(mOurEXE, "/restart", current_dir, aDisplayErrors);
+	return g_script.ActionExec(mOurEXE, "/restart", g_WorkingDirOrig, aDisplayErrors);
 #else
 	char arg_string[MAX_PATH + 512];
 	snprintf(arg_string, sizeof(arg_string), "/restart \"%s\"", mFileSpec);
-	return g_script.ActionExec(mOurEXE, arg_string, current_dir, aDisplayErrors);
+	return g_script.ActionExec(mOurEXE, arg_string, g_WorkingDirOrig, aDisplayErrors);
 #endif
 }
 
@@ -1253,22 +1261,10 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 				return CloseAndReturn(fp, script_buf, FAIL);
 			if (*hotkey_flag) // This hotkey's action is on the same line as its label.
 			{
-				if (!stricmp(hotkey_flag, "AltTab"))
-					hook_action = HOTKEY_ID_ALT_TAB;
-				else if (!stricmp(hotkey_flag, "ShiftAltTab"))
-					hook_action = HOTKEY_ID_ALT_TAB_SHIFT;
-				else if (!stricmp(hotkey_flag, "AltTabMenu"))
-					hook_action = HOTKEY_ID_ALT_TAB_MENU;
-				else if (!stricmp(hotkey_flag, "AltTabAndMenu"))
-					hook_action = HOTKEY_ID_ALT_TAB_AND_MENU;
-				else if (!stricmp(hotkey_flag, "AltTabMenuDismiss"))
-					hook_action = HOTKEY_ID_ALT_TAB_MENU_DISMISS;
-				else
-					hook_action = 0;
 				// Don't add the alt-tabs as a line, since it has no meaning as a script command.
 				// But do put in the Return regardless, in case this label is ever jumped to
 				// via Goto/Gosub:
-				if (!hook_action)
+				if (   !(hook_action = Hotkey::ConvertAltTab(hotkey_flag, false))   )
 					if (ParseAndAddLine(hotkey_flag) != OK)
 						return CloseAndReturn(fp, script_buf, FAIL);
 				// Also add a Return that's implicit for a single-line hotkey:
@@ -1898,13 +1894,32 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 		for (++action_args; IS_SPACE_OR_TAB(*action_args); ++action_args);
 	}
 	else
+	{
 		// The next line is used to help avoid ambiguity of a line such as the following:
 		// Input = test  ; Would otherwise be confused with the Input command.
 		// But there may be times when a line like this would be used:
 		// SomeCommand =  ; i.e. the equals is intended to be the first parameter, not an operator.
 		// In the above case, the user can provide the optional comma to avoid the ambiguity:
 		// SomeCommand, =
-		is_var_and_operator = *action_args ? strchr("=*/-+", *action_args) : false;
+		switch(*action_args)
+		{
+		case '=':
+			is_var_and_operator = true;
+			break;
+		case '*':
+		case '/':
+		case '-':
+		case '+':
+			// Insist that the next symbol be equals to form a complete operator.  This allows
+			// a line such as the following, which omits the first optional comma, to still
+			// be recognized as a command rather than a variable-with-operator:
+			// SetBatchLines -1
+			is_var_and_operator = *(action_args + 1) == '=';
+			break;
+		default:
+			is_var_and_operator = false;
+		}
+	}
 	// Now the above has ensured that action_args is the first parameter itself, or empty-string if none.
 	// If action_args now starts with a delimiter, it means that the first param is blank/empty.
 
@@ -2925,6 +2940,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			if (value < 0 || value > MAX_MOUSE_SPEED)
 				return ScriptError(ERR_MOUSE_SPEED, LINE_RAW_ARG3);
 		}
+		if (*LINE_RAW_ARG4 && !line->ArgHasDeref(4) && toupper(*LINE_RAW_ARG4) != 'R')
+			return ScriptError("Parameter #4 (if present) must be the letter R.", LINE_RAW_ARG4);
 		if (!line->ValidateMouseCoords(LINE_RAW_ARG1, LINE_RAW_ARG2))
 			return ScriptError(ERR_MOUSE_COORD, LINE_RAW_ARG1);
 		break;
@@ -2938,6 +2955,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		if (*LINE_RAW_ARG6 && !line->ArgHasDeref(6))
 			if (strlen(LINE_RAW_ARG6) > 1 || !strchr("UD", toupper(*LINE_RAW_ARG6)))  // Up / Down
 				return ScriptError(ERR_MOUSE_UPDOWN, LINE_RAW_ARG6);
+		if (*LINE_RAW_ARG7 && !line->ArgHasDeref(7) && toupper(*LINE_RAW_ARG7) != 'R')
+			return ScriptError("Parameter #7 (if present) must be the letter R.", LINE_RAW_ARG7);
 		// Check that the button is valid (e.g. left/right/middle):
 		if (!line->ArgHasDeref(1))
 			if (!line->ConvertMouseButton(LINE_RAW_ARG1))
@@ -2952,6 +2971,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			if (value < 0 || value > MAX_MOUSE_SPEED)
 				return ScriptError(ERR_MOUSE_SPEED, LINE_RAW_ARG6);
 		}
+		if (*LINE_RAW_ARG7 && !line->ArgHasDeref(7) && toupper(*LINE_RAW_ARG7) != 'R')
+			return ScriptError("Parameter #7 (if present) must be the letter R.", LINE_RAW_ARG7);
 		if (!line->ArgHasDeref(1))
 			if (!line->ConvertMouseButton(LINE_RAW_ARG1, false))
 				return ScriptError(ERR_MOUSE_BUTTON, LINE_RAW_ARG1);
@@ -3098,6 +3119,124 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		// the 'f' to make it a valid format specifier string:
 		break;
 
+	case ACT_TRANSFORM:
+		if (line->mArgc > 1 && !line->ArgHasDeref(2))
+		{
+			TransformCmds trans_cmd = line->ConvertTransformCmd(LINE_RAW_ARG2);
+			if (trans_cmd == TRANS_CMD_INVALID)
+				return ScriptError(ERR_TRANSFORMCOMMAND, LINE_RAW_ARG2);
+			if (!line->ArgHasDeref(3))
+			{
+				switch(trans_cmd)
+				{
+				case TRANS_CMD_CHR:
+				case TRANS_CMD_BITNOT:
+				case TRANS_CMD_BITSHIFTLEFT:
+				case TRANS_CMD_BITSHIFTRIGHT:
+				case TRANS_CMD_BITAND:
+				case TRANS_CMD_BITOR:
+				case TRANS_CMD_BITXOR:
+					if (!IsPureNumeric(LINE_RAW_ARG3, true, false))
+						return ScriptError("Parameter #3 must be an integer in this case.", LINE_RAW_ARG3);
+					break;
+
+				case TRANS_CMD_MOD:
+				case TRANS_CMD_EXP:
+				case TRANS_CMD_ROUND:
+				case TRANS_CMD_CEIL:
+				case TRANS_CMD_FLOOR:
+				case TRANS_CMD_ABS:
+				case TRANS_CMD_SIN:
+				case TRANS_CMD_COS:
+				case TRANS_CMD_TAN:
+				case TRANS_CMD_ASIN:
+				case TRANS_CMD_ACOS:
+				case TRANS_CMD_ATAN:
+					if (!IsPureNumeric(LINE_RAW_ARG3, true, false, true))
+						return ScriptError("Parameter #3 must be a number in this case.", LINE_RAW_ARG3);
+					break;
+
+				case TRANS_CMD_POW:
+				case TRANS_CMD_SQRT:
+				case TRANS_CMD_LOG:
+				case TRANS_CMD_LN:
+					if (!IsPureNumeric(LINE_RAW_ARG3, false, false, true))
+						return ScriptError("Parameter #3 must be a positive integer in this case.", LINE_RAW_ARG3);
+					break;
+
+				// The following are not listed above because no validation of Paramter #3 is needed:
+				// TRANS_CMD_ASC
+				}
+			}
+
+			switch(trans_cmd)
+			{
+			case TRANS_CMD_ASC:
+			case TRANS_CMD_CHR:
+			case TRANS_CMD_EXP:
+			case TRANS_CMD_SQRT:
+			case TRANS_CMD_LOG:
+			case TRANS_CMD_LN:
+			case TRANS_CMD_CEIL:
+			case TRANS_CMD_FLOOR:
+			case TRANS_CMD_ABS:
+			case TRANS_CMD_SIN:
+			case TRANS_CMD_COS:
+			case TRANS_CMD_TAN:
+			case TRANS_CMD_ASIN:
+			case TRANS_CMD_ACOS:
+			case TRANS_CMD_ATAN:
+			case TRANS_CMD_BITNOT:
+				if (*LINE_RAW_ARG4)
+					return ScriptError("Parameter #4 should be omitted in this case.", LINE_RAW_ARG4);
+				break;
+
+			case TRANS_CMD_BITAND:
+			case TRANS_CMD_BITOR:
+			case TRANS_CMD_BITXOR:
+				if (!line->ArgHasDeref(4) && !IsPureNumeric(LINE_RAW_ARG4, true, false))
+					return ScriptError("Parameter #4 must be an integer in this case.", LINE_RAW_ARG4);
+				break;
+
+			case TRANS_CMD_BITSHIFTLEFT:
+			case TRANS_CMD_BITSHIFTRIGHT:
+				if (!line->ArgHasDeref(4) && !IsPureNumeric(LINE_RAW_ARG4, false, false))
+					return ScriptError("Parameter #4 must be a positive integer in this case.", LINE_RAW_ARG4);
+				break;
+
+			case TRANS_CMD_ROUND:
+				if (*LINE_RAW_ARG4 && !line->ArgHasDeref(4) && !IsPureNumeric(LINE_RAW_ARG4, true, false))
+					return ScriptError("Parameter #4 must be blank or an integer in this case.", LINE_RAW_ARG4);
+				break;
+
+			case TRANS_CMD_MOD:
+			case TRANS_CMD_POW:
+				if (!line->ArgHasDeref(4) && !IsPureNumeric(LINE_RAW_ARG4, true, false, true))
+					return ScriptError("Parameter #4 must be a number in this case.", LINE_RAW_ARG4);
+				break;
+
+			default:
+				return ScriptError("Unhandled", LINE_RAW_ARG2);  // To improve maintainability.
+			}
+
+			switch(trans_cmd)
+			{
+			case TRANS_CMD_CHR:
+				if (!line->ArgHasDeref(3))
+				{
+					value = ATOI(LINE_RAW_ARG3);
+					if (!IsPureNumeric(LINE_RAW_ARG3, false, false) || value < 0 || value > 255)
+						return ScriptError("Parameter #3 must be between 0 and 255 inclusive.", LINE_RAW_ARG3);
+				}
+				break;
+			case TRANS_CMD_MOD:
+				if (!line->ArgHasDeref(4) && !ATOI64(LINE_RAW_ARG4)) // Parameter is omitted or something that resolves to zero.
+					return ScriptError(ERR_DIVIDEBYZERO, LINE_RAW_ARG4);
+				break;
+			}
+		}
+		break;
+
 	case ACT_MENU:
 		if (line->mArgc > 0 && !line->ArgHasDeref(1) && stricmp(LINE_RAW_ARG1, "tray"))
 			return ScriptError("Parameter #1 must be the word TRAY or a variable reference.", LINE_RAW_ARG1);
@@ -3219,7 +3358,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_DIV:
 		if (!line->ArgHasDeref(2)) // i.e. if it's a deref, we won't try to validate it now.
 			if (!ATOI64(LINE_RAW_ARG2))
-				return ScriptError("This line would attempt to divide by zero.");
+				return ScriptError(ERR_DIVIDEBYZERO, LINE_RAW_ARG2);
 		break;
 	case ACT_GROUPADD:
 	case ACT_GROUPACTIVATE:
@@ -4067,6 +4206,15 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 					return NULL; // Error was already displayed by called function.
 			break;
 
+		// These next two must also be done here (i.e. *after* all the script lines have been added),
+		// so that labels both above and below this line can be resolved:
+		case ACT_HOTKEY:
+			if (*LINE_RAW_ARG2 && !line->ArgHasDeref(2))
+				if (   !(line->mAttribute = FindLabel(LINE_RAW_ARG2))   )
+					if (!Hotkey::ConvertAltTab(LINE_RAW_ARG2, true))
+						return line->PreparseError(ERR_HOTKEY_LABEL);
+			break;
+
 		case ACT_SETTIMER:
 			if (!line->ArgHasDeref(1))
 				if (   !(line->mAttribute = FindLabel(LINE_RAW_ARG1))   )
@@ -4547,8 +4695,11 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
 				case 1:
 					// Unlike at loadtime, allow it to be negative at runtime in case it was a variable
 					// reference that resolved to a negative number, to indicate that 0 iterations
-					// should be performed:
-					if (IsPureNumeric(LINE_ARG1, true))
+					// should be performed.  UPDATE: Also allow floating point numbers at runtime
+					// but not at load-time (since it doesn't make sense to have a literal floating
+					// point number as the iteration count, but a variable containing a pure float
+					// should be allowed):
+					if (IsPureNumeric(LINE_ARG1, true, true, true))
 						attr = ATTR_LOOP_NORMAL;
 					else
 					{
@@ -4908,6 +5059,7 @@ inline ResultType Line::EvaluateCondition()
 			value_is_pure_numeric = IsPureNumeric(ARG2, true, false, true);\
 			var_is_pure_numeric = IsPureNumeric(ARG1, true, false, true);
 		#define IF_EITHER_IS_NON_NUMERIC if (!value_is_pure_numeric || !var_is_pure_numeric)
+		#undef IF_EITHER_IS_FLOAT
 		#define IF_EITHER_IS_FLOAT if (value_is_pure_numeric == PURE_FLOAT || var_is_pure_numeric == PURE_FLOAT)
 
 		DETERMINE_NUMERIC_TYPES
@@ -5406,6 +5558,8 @@ ResultType Line::PerformLoopParse(WIN32_FIND_DATA *apCurrentFile, RegItemStruct 
 			if (*omit_list && strchr(omit_list, *field))
 			{
 				++field; // Move on to the next char.
+				if (!*field) // The end of the string has been reached.
+					break;
 				continue;
 			}
 			field_end = field + 1;
@@ -5642,6 +5796,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	size_t source_length; // For String commands.
 	pure_numeric_type var_is_pure_numeric, value_is_pure_numeric; // For math operations.
 	vk_type vk; // For mouse commands and GetKeyState.
+	Label *target_label;  // For ACT_SETTIMER and ACT_HOTKEY
 	int instance_number;  // For sound commands.
 	DWORD component_type; // For sound commands.
 	__int64 device_id;  // For sound commands.  __int64 helps avoid compiler warning for some conversions.
@@ -6002,6 +6157,8 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		return mArgc > 1 ? WinSetTitle(FIVE_ARGS) : WinSetTitle("", "", ARG1);
 	case ACT_WINGETTITLE:
 		return WinGetTitle(ARG2, ARG3, ARG4, ARG5);
+	case ACT_WINGETCLASS:
+		return WinGetClass(ARG2, ARG3, ARG4, ARG5);
 	case ACT_WINGETTEXT:
 		return WinGetText(ARG2, ARG3, ARG4, ARG5);
 	case ACT_WINGETPOS:
@@ -6026,12 +6183,21 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	case ACT_WINRESTORE:
 		return PerformShowWindow(mActionType, FOUR_ARGS);
 
-	case ACT_SETTIMER: // A timer is being created, changed, or enabled/disabled.
+	case ACT_HOTKEY:
 	{
+		HookActionType hook_action;
+		// Since it wasn't resolved at load-time, it must be a variable reference or a special value:
+		if (   !(target_label = (Label *)mAttribute)   )
+			if (   !(hook_action = Hotkey::ConvertAltTab(ARG2, true))   )
+				if (   *ARG2 && !(target_label = g_script.FindLabel(ARG2))   )  // Allow ARG2 to be blank.
+					return LineError(ERR_HOTKEY_LABEL ERR_ABORT, FAIL, ARG1);
+		return Hotkey::Dynamic(ARG1, target_label, hook_action, ARG3);
+	}
+
+	case ACT_SETTIMER: // A timer is being created, changed, or enabled/disabled.
 		// Note that only one timer per label is allowed because the label is the unique identifier
 		// that allows us to figure out whether to "update or create" when searching the list of timers.
-		Label *target_label = (Label *)mAttribute;
-		if (!target_label) // Since it wasn't resolved at load-time, the label name must be a variable reference.
+		if (   !(target_label = (Label *)mAttribute)   ) // Since it wasn't resolved at load-time, it must be a variable reference.
 			if (   !(target_label = g_script.FindLabel(ARG1))   )
 				return LineError(ERR_SETTIMER ERR_ABORT, FAIL, ARG1);
 		// And don't update mAttribute (leave it NULL) because we want ARG1 to be dynamically resolved
@@ -6059,7 +6225,6 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		default: g_script.UpdateOrCreateTimer(target_label, ATOI(ARG2), true); // Read any float as an int.
 		}
 		return OK;
-	}
 
 	case ACT_GROUPADD: // Adding a WindowSpec *to* a group, not adding a group.
 	{
@@ -6111,6 +6276,9 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		else
 			group->CloseAndGoToNext(*ARG2 && !stricmp(ARG2, "R"));  // Note: It will take care of DoWinDelay if needed.
 		return OK;
+
+	case ACT_TRANSFORM:
+		return Transform(ARG2, ARG3, ARG4);
 
 	case ACT_STRINGLEFT:
 		if (   !(output_var = ResolveVarOfArg(0))   )
@@ -6485,6 +6653,20 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	case ACT_FILEGETVERSION:
 		return FileGetVersion(USE_FILE_LOOP_FILE_IF_ARG_BLANK(ARG2));
 
+	case ACT_SETWORKINGDIR:
+		if (SetCurrentDirectory(ARG1))
+		{
+			// Other than during program startup, this should be the only place where the official
+			// working dir can change.  The exception is FileSelectFile(), which changes the working
+			// dir as the user navigates from folder to folder.  However, the whole purpose of
+			// maintaining g_WorkingDir is to workaround that very issue.
+			// NOTE: GetCurrentDirectory() is called explicitly in case ARG1 is a relative path.
+			// We want to store the absolute path:
+			if (!GetCurrentDirectory(sizeof(g_WorkingDir), g_WorkingDir))
+				strlcpy(g_WorkingDir, ARG1, sizeof(g_WorkingDir));
+			return g_ErrorLevel->Assign(ERRORLEVEL_NONE);
+		}
+		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
 	case ACT_FILESELECTFILE:
 		return FileSelectFile(ARG2, ARG3, ARG4, ARG5);
 	case ACT_FILESELECTFOLDER:
@@ -6816,7 +6998,8 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		// current mouse position:
 		x = *ARG2 ? ATOI(ARG2) : COORD_UNSPECIFIED;
 		y = *ARG3 ? ATOI(ARG3) : COORD_UNSPECIFIED;
-		MouseClickDrag(vk, x, y, ATOI(ARG4), ATOI(ARG5), *ARG6 ? ATOI(ARG6) : g.DefaultMouseSpeed);
+		MouseClickDrag(vk, x, y, ATOI(ARG4), ATOI(ARG5), *ARG6 ? ATOI(ARG6) : g.DefaultMouseSpeed
+			, toupper(*ARG7) == 'R');
 		return OK;
 	case ACT_MOUSECLICK:
 		if (   !(vk = ConvertMouseButton(ARG1))   )
@@ -6825,14 +7008,15 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			return LineError(ERR_MOUSE_COORD ERR_ABORT, FAIL, ARG2);
 		x = *ARG2 ? ATOI(ARG2) : COORD_UNSPECIFIED;
 		y = *ARG3 ? ATOI(ARG3) : COORD_UNSPECIFIED;
-		MouseClick(vk, x, y, *ARG4 ? ATOI(ARG4) : 1, *ARG5 ? ATOI(ARG5) : g.DefaultMouseSpeed, *ARG6);
+		MouseClick(vk, x, y, *ARG4 ? ATOI(ARG4) : 1, *ARG5 ? ATOI(ARG5) : g.DefaultMouseSpeed, *ARG6
+			, toupper(*ARG7) == 'R');
 		return OK;
 	case ACT_MOUSEMOVE:
 		if (!ValidateMouseCoords(ARG1, ARG2))
 			return LineError(ERR_MOUSE_COORD ERR_ABORT, FAIL, ARG1);
 		x = *ARG1 ? ATOI(ARG1) : COORD_UNSPECIFIED;
 		y = *ARG2 ? ATOI(ARG2) : COORD_UNSPECIFIED;
-		MouseMove(x, y, *ARG3 ? ATOI(ARG3) : g.DefaultMouseSpeed);
+		MouseMove(x, y, *ARG3 ? ATOI(ARG3) : g.DefaultMouseSpeed, toupper(*ARG4) == 'R');
 		return OK;
 	case ACT_MOUSEGETPOS:
 		return MouseGetPos();
@@ -6867,18 +7051,11 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	case ACT_SETTITLEMATCHMODE:
 		switch (ConvertTitleMatchMode(ARG1))
 		{
-		case FIND_IN_LEADING_PART:
-			g.TitleFindAnywhere = false;
-			return OK;
-		case FIND_ANYWHERE:
-			g.TitleFindAnywhere = true;
-			return OK;
-		case FIND_FAST:
-			g.TitleFindFast = true;
-			return OK;
-		case FIND_SLOW:
-			g.TitleFindFast = false;
-			return OK;
+		case FIND_IN_LEADING_PART: g.TitleMatchMode = FIND_IN_LEADING_PART; return OK;
+		case FIND_ANYWHERE: g.TitleMatchMode = FIND_ANYWHERE; return OK;
+		case FIND_EXACT: g.TitleMatchMode = FIND_EXACT; return OK;
+		case FIND_FAST: g.TitleFindFast = true; return OK;
+		case FIND_SLOW: g.TitleFindFast = false; return OK;
 		}
 		return LineError(ERR_TITLEMATCHMODE2, FAIL, ARG1);
 
@@ -7615,14 +7792,18 @@ char *Line::ToText(char *aBuf, size_t aBufSize, DWORD aElapsed)
 
 void Line::ToggleSuspendState()
 {
-	if (g_IsSuspended) // turn off the suspension
-		Hotkey::AllActivate();
-	else // suspend
+	g_IsSuspended = !g_IsSuspended;
+	if (g_IsSuspended)
 		Hotkey::AllDeactivate(true); // This will also reset the RunAgainAfterFinished flags for all those deactivated.
 		// It seems unnecessary, and possibly undesirable, to purge any pending hotkey msgs from the msg queue.
 		// Even if there are some, it's possible that they are exempt from suspension so we wouldn't want to
 		// globally purge all messages anyway.
-	g_IsSuspended = !g_IsSuspended;
+	else
+		// For now, it seems best to call it with "true" in case the any hotkeys were dynamically added
+		// while the suspension was in effect, in which case the nature of some old hotkeys may have changed
+		// from registered to hook due to an interdependency with a newly added hotkey.  There are comments
+		// in AllActivate() that describe these interdependencies:
+		Hotkey::AllActivate(true);
 	g_script.UpdateTrayIcon();
 	CheckMenuItem(GetMenu(g_hWnd), ID_FILE_SUSPEND, g_IsSuspended ? MF_CHECKED : MF_UNCHECKED);
 }

@@ -199,32 +199,38 @@ inline HWND HasMatchingChild(HWND aWnd, char *aText, char *aExcludeText)
 }
 
 inline bool IsTextMatch(char *aHaystack, char *aNeedle, char *aExcludeText = ""
-	, bool aFindAnywhere = g.TitleFindAnywhere)
+	, TitleMatchModes aTitleMatchMode = g.TitleMatchMode)
 // To help performance, it's the caller's responsibility to ensure that all params are not NULL.
 // Use the AutoIt2 convention (same in AutoIt3?) of making searches for window titles
 // and text case sensitive: "N.B. Windows titles and text are CASE SENSITIVE!"
 {
-	if (aFindAnywhere)
+	if (aTitleMatchMode == FIND_ANYWHERE)
 		return (!*aNeedle || strstr(aHaystack, aNeedle)) // Either one of these makes half a match.
 			&& (!*aExcludeText || !strstr(aHaystack, aExcludeText));  // And this is the other half.
-	// Otherwise, search the leading part only:
-	return (!*aNeedle || !strncmp(aHaystack, aNeedle, strlen(aNeedle)))
-		&& (!*aExcludeText || strncmp(aHaystack, aExcludeText, strlen(aExcludeText)));
+	else if (aTitleMatchMode == FIND_IN_LEADING_PART)
+		return (!*aNeedle || !strncmp(aHaystack, aNeedle, strlen(aNeedle)))
+			&& (!*aExcludeText || strncmp(aHaystack, aExcludeText, strlen(aExcludeText)));
+	else // Exact match.
+		return (!*aNeedle || !strcmp(aHaystack, aNeedle))
+			&& (!*aExcludeText || strcmp(aHaystack, aExcludeText));
 }
 
-inline bool IsTitleMatch(HWND aWnd, char *aHaystack, char *aNeedle, char *aExcludeText)
+inline bool IsTitleMatch(HWND aWnd, char *aHaystack, char *aNeedle, char *aExcludeTitle)
 // To help performance, it's the caller's responsibility to ensure that all params are not NULL.
 // Use the AutoIt2 convention (same in AutoIt3?) of making searches for window titles
 // and text case sensitive.
 {
 	if (strnicmp(aNeedle, AHK_CLASS_FLAG, AHK_CLASS_FLAG_LENGTH)) // aNeedle doesn't specify a class name.
 	{
-		if (g.TitleFindAnywhere)
+		if (g.TitleMatchMode == FIND_ANYWHERE)
 			return (!*aNeedle || strstr(aHaystack, aNeedle)) // Either one of these makes half a match.
-				&& (!*aExcludeText || !strstr(aHaystack, aExcludeText));  // And this is the other half.
-		// Otherwise, search the leading part only:
-		return (!*aNeedle || !strncmp(aHaystack, aNeedle, strlen(aNeedle)))
-			&& (!*aExcludeText || strncmp(aHaystack, aExcludeText, strlen(aExcludeText)));
+				&& (!*aExcludeTitle || !strstr(aHaystack, aExcludeTitle));  // And this is the other half.
+		else if (g.TitleMatchMode == FIND_IN_LEADING_PART)
+			return (!*aNeedle || !strncmp(aHaystack, aNeedle, strlen(aNeedle)))
+				&& (!*aExcludeTitle || strncmp(aHaystack, aExcludeTitle, strlen(aExcludeTitle)));
+		else // Exact match.
+			return (!*aNeedle || !strcmp(aHaystack, aNeedle))
+				&& (!*aExcludeTitle || strcmp(aHaystack, aExcludeTitle));
 	}
 	// Otherwise, aNeedle specifies a class name rather than a window title.
 	aNeedle = omit_leading_whitespace(aNeedle + AHK_CLASS_FLAG_LENGTH);
@@ -235,10 +241,17 @@ inline bool IsTitleMatch(HWND aWnd, char *aHaystack, char *aNeedle, char *aExclu
 	// avoid problems with ambiguity, since some apps might use very short class names that
 	// overlap with more "official" classnames, or vice versa.  User can always define a Window
 	// Group to operate upon more than one class simultaneously.
+	if (strcmp(fore_class, aNeedle))
+		return false;
 	// The other requirement for a match is that ExcludeTitle not be found in aHaystack.
-	return !strcmp(fore_class, aNeedle) && (!*aExcludeText
-		|| (g.TitleFindAnywhere ? !strstr(aHaystack, aExcludeText)
-			: strncmp(aHaystack, aExcludeText, strlen(aExcludeText))));
+	if (!*aExcludeTitle)
+		return true;
+	if (g.TitleMatchMode == FIND_ANYWHERE)
+		return !strstr(aHaystack, aExcludeTitle);
+	else if (g.TitleMatchMode == FIND_IN_LEADING_PART)
+		return strncmp(aHaystack, aExcludeTitle, strlen(aExcludeTitle));
+	else // Exact match.
+		return strcmp(aHaystack, aExcludeTitle);
 }
 
 #endif

@@ -689,7 +689,7 @@ BOOL CALLBACK EnumChildFind(HWND aWnd, LPARAM lParam)
 		return TRUE;  // Even if can't get the text of some window, for some reason, keep enumerating.
 	// Below: Tell it to find match anywhere in the child-window text, rather than just
 	// in the leading part, because this is how AutoIt2 and AutoIt3 operate:
-	if (IsTextMatch(win_text, pWin->text, pWin->exclude_text, true))
+	if (IsTextMatch(win_text, pWin->text, pWin->exclude_text, FIND_ANYWHERE))
 	{
 		// Match found, so stop searching.
 		//char class_name[64];

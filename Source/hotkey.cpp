@@ -35,14 +35,14 @@ DWORD Hotkey::sJoyHotkeyCount = 0;
 
 
 
-void Hotkey::AllActivate()
+void Hotkey::AllActivate(bool aOverrideLock)
 // Returns the total number of hotkeys, both registered and handled by the hooks.
 // This function can also be called to install the keyboard hook if the state
 // of g_ForceNumLock and such have changed, even if the hotkeys are already
 // active.
 {
 	int i;
-	if (sHotkeysAreLocked)
+	if (sHotkeysAreLocked && !aOverrideLock)
 	{
 		// Register any keys that were previously unregistered:
 		for (i = 0; i < sHotkeyCount; ++i)
@@ -60,7 +60,17 @@ void Hotkey::AllActivate()
 	else
 	{
 		// Do this part only if it hasn't been done before (as indicated by sHotkeysAreLocked)
-		// because it's not reviewed/designed to be run more than once:
+		// because it's not reviewed/designed to be run more than once.  UPDATE (for dynamic
+		// hotkeys): I think the gist of the likely problems with running this part more than
+		// once is that some hotkeys were already promoted (the first time this ran) to be hook
+		// hotkeys based on their interdependencies with other hotkeys.  If those
+		// interdependencies change due to dynamic changes to the set of hotkeys, some hotkeys
+		// might stay promoted when they should in fact be demoted back to being registered,
+		// which will result in the hook being installed to implement those keys when it
+		// technically doesn't need to be.  However, this is likely extremely rare, and fairly
+		// inconsequential even when it does happen.  This could perhaps be resolved by
+		// storing the original mType with each hotkey so that those types can be restored
+		// by the caller, if desired, before calling us.
 		bool is_neutral, suppress_hotkey_warnings = false;
 		modLR_type modifiersLR;
 		for (i = 0; i < sHotkeyCount; ++i)
@@ -122,7 +132,7 @@ void Hotkey::AllActivate()
 						// two keys exists as a "scan code" hotkey.  If so, This hotkey must be handled
 						// by the hook to prevent it from firing for both scan codes.  modifiersLR should be
 						// zero here because otherwise type would have already been set to HK_KEYBD_HOOK:
-						//if (FindHotkeyBySC(g_vk_to_sc[shk[i]->mVK], shk[i]->mModifiers, shk[i]->mModifiersLR) >= 0))
+						//if (FindHotkeyBySC(g_vk_to_sc[shk[i]->mVK], shk[i]->mModifiers, shk[i]->mModifiersLR) != HOTKEY_ID_INVALID))
 						//	shk[i]->mType = HK_KEYBD_HOOK;
 					}
 				}
@@ -180,8 +190,8 @@ void Hotkey::AllActivate()
 								// the keyboard hook must handle this key also because otherwise the key-down event
 								// would trigger the registered hotkey immediately, rather than waiting to see if
 								// this key is be held down merely to modify some other key.
-								shk[i]->mType = !g_os.IsWin9x() && FindHotkeyWithThisModifier(shk[i]->mVK, shk[i]->mSC) >= 0
-									? HK_KEYBD_HOOK : HK_NORMAL;
+								shk[i]->mType = !g_os.IsWin9x() && FindHotkeyWithThisModifier(shk[i]->mVK, shk[i]->mSC)
+									!= HOTKEY_ID_INVALID ? HK_KEYBD_HOOK : HK_NORMAL;
 						}
 					}
 					if (shk[i]->mVK == VK_APPS)
@@ -201,7 +211,7 @@ void Hotkey::AllActivate()
 			}
 
 			char buf[1024];
-			if (shk[i]->mType == HK_NORMAL && !shk[i]->Register())
+			if (shk[i]->mType == HK_NORMAL && (!g_IsSuspended || shk[i]->IsExemptFromSuspend()) && !shk[i]->Register())
 			{
 				if (g_os.IsWin9x())
 				{
@@ -211,7 +221,7 @@ void Hotkey::AllActivate()
 							"because another script or application has already registered it.  It could "
 							" also be that this hotkey is not supported on Windows 95/98/ME."
 							"\n\nContinue to display this type of warning?"
-							, shk[i]->mJumpToLabel ? shk[i]->mJumpToLabel->mName : "N/A");
+							, shk[i]->mName);
 						int response = MsgBox(buf, 4);
 						if (response != IDYES)
 							suppress_hotkey_warnings = true;
@@ -228,8 +238,7 @@ void Hotkey::AllActivate()
 				if (!suppress_hotkey_warnings)
 				{
 					snprintf(buf, sizeof(buf), "Hotkey \"%s\" is not supported on Windows 95/98/ME."
-						"\n\nContinue to display this type of warning?"
-						, shk[i]->mJumpToLabel ? shk[i]->mJumpToLabel->mName : "N/A");
+						"\n\nContinue to display this type of warning?", shk[i]->mName);
 					int response = MsgBox(buf, 4);
 					if (response != IDYES)
 						suppress_hotkey_warnings = true;
@@ -295,33 +304,40 @@ void Hotkey::AllActivate()
 	// now require one of the hooks that hadn't been required before (rare).
 	// So for now, when in restart mode, just acquire the mutex but don't display
 	// any warning if another instance also has the mutex:
-	sWhichHookActive = ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways
-		, (!g_ForceLaunch && !g_script.mIsRestart) || sHotkeysAreLocked, false);
+	if (g_IsSuspended)
+		sWhichHookActive = ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways, false, true);
+	else
+		sWhichHookActive = ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways
+			, (!g_ForceLaunch && !g_script.mIsRestart) || sHotkeysAreLocked, false);
 
 	// Signal that no new hotkeys should be defined after this point (i.e. that the definition
-	// stage is complete).  Do this only after the the above so that the above can use the old value:
+	// stage is complete).  Do this only after the the above so that the above can use the old value.
+	// UPDATE (for dynamic hotkeys): This now indicates that all static hotkeys have been defined:
 	sHotkeysAreLocked = true;
 }
 
 
 
-ResultType Hotkey::AllDeactivate(bool aExcludeSuspendHotkeys)
+ResultType Hotkey::AllDeactivate(bool aObeySuspend, bool aChangeHookStatus)
 // Returns OK or FAIL (but currently not failure modes).
 {
 	if (!sHotkeysAreLocked) // The hotkey definition stage hasn't yet been run, so there's no need.
 		return OK;
-	if (aExcludeSuspendHotkeys)
-		sWhichHookActive = ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways, false, true);
-	else // remove all hooks
-		if (sWhichHookActive)
-			sWhichHookActive = RemoveAllHooks();
-	// Unregister all hotkeys except when aExcludeSuspendHotkeys is true.  In that case, don't
+	if (aChangeHookStatus)
+	{
+		if (aObeySuspend && g_IsSuspended) // Have the hook keep active only those that are exempt from suspension.
+			sWhichHookActive = ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways, false, true);
+		else // remove all hooks
+			if (sWhichHookActive)
+				sWhichHookActive = RemoveAllHooks();
+	}
+	// Unregister all hotkeys except when aObeySuspend is true.  In that case, don't
 	// unregister those whose subroutines have ACT_SUSPEND as their first line.  This allows
 	// such hotkeys to stay in effect so that the user can press them to turn off the suspension.
 	// This also resets the mRunAgainAfterFinished flag for each hotkey that is being deactivated
 	// here, including hook hotkeys:
 	for (int i = 0; i < sHotkeyCount; ++i)
-		if (!aExcludeSuspendHotkeys || !shk[i]->IsExemptFromSuspend())
+		if (!aObeySuspend || !g_IsSuspended || !shk[i]->IsExemptFromSuspend())
 		{
 			shk[i]->Unregister();
 			shk[i]->mRunAgainAfterFinished = false;  // ACT_SUSPEND, at least, relies on us to do this.
@@ -334,7 +350,9 @@ ResultType Hotkey::AllDeactivate(bool aExcludeSuspendHotkeys)
 ResultType Hotkey::AllDestruct()
 // Returns OK or FAIL (but currently not failure modes).
 {
-	AllDeactivate();
+	// Tell it to deactivate all unconditionally, even if the script is suspended and
+	// some hotkeys are exempt from suspension:
+	AllDeactivate(false);
 	for (int i = 0; i < sHotkeyCount; ++i)
 		delete shk[i];  // unregisters before destroying
 	sNextID = 0;
@@ -432,68 +450,66 @@ ResultType Hotkey::PerformID(HotkeyIDType aHotkeyID)
 	if (!sTimePrev)
 		sTimePrev = GetTickCount();
 
-	if (shk[aHotkeyID]->mJumpToLabel != NULL)  // Probably safest to throttle all others.
+	++throttled_key_count;
+	sTimeNow = GetTickCount();
+	// Calculate the amount of time since the last reset of the sliding interval.
+	// Note: A tickcount in the past can be subtracted from one in the future to find
+	// the true difference between them, even if the system's uptime is greater than
+	// 49 days and the future one has wrapped but the past one hasn't.  This is
+	// due to the nature of DWORD math.  The only time this calculation will be
+	// unreliable is when the true difference between the past and future
+	// tickcounts itself is greater than about 49 days:
+	time_until_now = (sTimeNow - sTimePrev);
+	if (display_warning = (throttled_key_count > (DWORD)g_MaxHotkeysPerInterval
+		&& time_until_now < (DWORD)g_HotkeyThrottleInterval))
 	{
-		++throttled_key_count;
-		sTimeNow = GetTickCount();
-		// Calculate the amount of time since the last reset of the sliding interval.
-		// Note: A tickcount in the past can be subtracted from one in the future to find
-		// the true difference between them, even if the system's uptime is greater than
-		// 49 days and the future one has wrapped but the past one hasn't.  This is
-		// due to the nature of DWORD math.  The only time this calculation will be
-		// unreliable is when the true difference between the past and future
-		// tickcounts itself is greater than about 49 days:
-		time_until_now = (sTimeNow - sTimePrev);
-		if (display_warning = (throttled_key_count > (DWORD)g_MaxHotkeysPerInterval
-			&& time_until_now < (DWORD)g_HotkeyThrottleInterval))
-		{
-			// The moment any dialog is displayed, hotkey processing is halted since this
-			// app currently has only one thread.
-			char error_text[2048];
-			// Using %f with wsprintf() yields a floating point runtime error dialog.
-			// UPDATE: That happens if you don't cast to float, or don't have a float var
-			// involved somewhere.  Avoiding floats altogether may reduce EXE size
-			// and maybe other benefits (due to it not being "loaded")?
-			snprintf(error_text, sizeof(error_text), "More than %u hotkeys have been received in the last %ums."
-				"This could indicate a runaway condition (infinite loop) due to conflicting keys"
-				" within the script (usually due to the Send command).  It might be possible to"
-				" fix this problem simply by including the $ prefix in the hotkey definition"
-				" (e.g. $!d::), which would install the keyboard hook to handle this hotkey.\n\n"
-				" In addition, this warning can be reduced or eliminated by adding the following lines"
-				" anywhere in the script:\n"
-				"#HotkeyInterval %d  ; Increase this value slightly to reduce the problem.\n"
-				"#MaxHotkeysPerInterval %d  ; Decreasing this value (milliseconds) should also help.\n\n"
-				" Do you want to continue (choose NO to exit the program)?"  // In case its stuck in a loop.
-				, g_MaxHotkeysPerInterval, g_HotkeyThrottleInterval
-				, g_MaxHotkeysPerInterval, g_HotkeyThrottleInterval);
+		// The moment any dialog is displayed, hotkey processing is halted since this
+		// app currently has only one thread.
+		char error_text[2048];
+		// Using %f with wsprintf() yields a floating point runtime error dialog.
+		// UPDATE: That happens if you don't cast to float, or don't have a float var
+		// involved somewhere.  Avoiding floats altogether may reduce EXE size
+		// and maybe other benefits (due to it not being "loaded")?
+		snprintf(error_text, sizeof(error_text), "More than %u hotkeys have been received in the last %ums."
+			"This could indicate a runaway condition (infinite loop) due to conflicting keys"
+			" within the script (usually due to the Send command).  It might be possible to"
+			" fix this problem simply by including the $ prefix in the hotkey definition"
+			" (e.g. $!d::), which would install the keyboard hook to handle this hotkey.\n\n"
+			" In addition, this warning can be reduced or eliminated by adding the following lines"
+			" anywhere in the script:\n"
+			"#HotkeyInterval %d  ; Increase this value slightly to reduce the problem.\n"
+			"#MaxHotkeysPerInterval %d  ; Decreasing this value (milliseconds) should also help.\n\n"
+			" Do you want to continue (choose NO to exit the program)?"  // In case its stuck in a loop.
+			, g_MaxHotkeysPerInterval, g_HotkeyThrottleInterval
+			, g_MaxHotkeysPerInterval, g_HotkeyThrottleInterval);
 
-			// Turn off any RunAgain flags that may be on, which in essense is the same as de-buffering
-			// any pending hotkey keystrokes that haven't yet been fired:
-			ResetRunAgainAfterFinished();
+		// Turn off any RunAgain flags that may be on, which in essense is the same as de-buffering
+		// any pending hotkey keystrokes that haven't yet been fired:
+		ResetRunAgainAfterFinished();
 
-			// This is now needed since hotkeys can still fire while a messagebox is displayed.
-			// Seems safest to do this even if it isn't always necessary:
-			g_AllowInterruption = false;
-			if (MsgBox(error_text, MB_YESNO) == IDNO)
-				g_script.ExitApp();
-			g_AllowInterruption = true;
-		}
-		// The display_warning var is needed due to the fact that there's an OR in this condition:
-		if (display_warning || time_until_now > (DWORD)g_HotkeyThrottleInterval)
-		{
-			// Reset the sliding interval whenever it expires.  Doing it this way makes the
-			// sliding interval more sensitive than alternate methods might be.
-			// Also reset it if a warning was displayed, since in that case it didn't expire.
-			throttled_key_count = 0;
-			sTimePrev = sTimeNow;
-		}
-		if (display_warning)
-			// At this point, even though the user chose to continue, it seems safest
-			// to ignore this particular hotkey event since it might be WinClose or some
-			// other command that would have unpredictable results due to the displaying
-			// of the dialog itself.
-			return OK;
+		// This is now needed since hotkeys can still fire while a messagebox is displayed.
+		// Seems safest to do this even if it isn't always necessary:
+		g_AllowInterruption = false;
+		if (MsgBox(error_text, MB_YESNO) == IDNO)
+			g_script.ExitApp();
+		g_AllowInterruption = true;
 	}
+	// The display_warning var is needed due to the fact that there's an OR in this condition:
+	if (display_warning || time_until_now > (DWORD)g_HotkeyThrottleInterval)
+	{
+		// Reset the sliding interval whenever it expires.  Doing it this way makes the
+		// sliding interval more sensitive than alternate methods might be.
+		// Also reset it if a warning was displayed, since in that case it didn't expire.
+		throttled_key_count = 0;
+		sTimePrev = sTimeNow;
+	}
+	if (display_warning)
+		// At this point, even though the user chose to continue, it seems safest
+		// to ignore this particular hotkey event since it might be WinClose or some
+		// other command that would have unpredictable results due to the displaying
+		// of the dialog itself.
+		return OK;
+
 	return shk[aHotkeyID]->Perform();
 }
 
@@ -516,24 +532,172 @@ void Hotkey::TriggerJoyHotkeys(int aJoystickID, DWORD aButtonsNewlyDown)
 
 
 
-ResultType Hotkey::AddHotkey(Label *aJumpToLabel, HookActionType aHookAction)
+ResultType Hotkey::Dynamic(char *aHotkeyName, Label *aJumpToLabel, HookActionType aHookAction, char *aOptions)
+// Creates, updates, enables, or disables a hotkey dynamically (while the script is running).
+// aJumpToLabel can be NULL while aHookAction is 0 only when the caller is updating an existing
+// hotkey to have new options (i.e. its current label is not to be changed).
 // Return OK or FAIL.
 {
-	if (NULL == (shk[sNextID] = new Hotkey(sNextID, aJumpToLabel, aHookAction)))
-		return FAIL;
-	if (!shk[sNextID]->mConstructedOK) // This really shouldn't happen?.
+	int hotkey_id = FindHotkeyByName(aHotkeyName);
+	ResultType result = OK; // Set default.
+
+	switch(aHookAction)
 	{
-		delete shk[sNextID];  // Currently doesn't actually do anything due to SimpleHeap.
-		return FAIL;
+	case 0:
+		if (hotkey_id != HOTKEY_ID_INVALID)
+		{
+			if (aJumpToLabel)
+				result = shk[hotkey_id]->UpdateHotkey(aJumpToLabel, 0);  // Update its label to be aJumpToLabel.
+			// else do nothing, the caller is probably just trying to change this hotkey's options.
+		}
+		else
+		{
+			if (!aJumpToLabel) // Caller is trying to set new aOptions for a non-existent hotkey.
+				return g_script.ScriptError("This hotkey cannot be changed because it doesn't exist." ERR_ABORT, aHotkeyName);
+			// Otherwise, aJumpToLabel is the new target label.
+			result = AddHotkey(aJumpToLabel, 0, aHotkeyName);
+		}
+		break;
+	case HOTKEY_ID_ON:
+	case HOTKEY_ID_OFF:
+		if (hotkey_id == HOTKEY_ID_INVALID)
+			return g_script.ScriptError("This hotkey cannot be changed because it doesn't exist." ERR_ABORT, aHotkeyName);
+		result = (aHookAction == HOTKEY_ID_ON) ? shk[hotkey_id]->Enable() : shk[hotkey_id]->Disable();
+		break;
+	default: // It's one of the alt-tab actions handled by the hook (no label required).
+		result = (hotkey_id == HOTKEY_ID_INVALID) ? AddHotkey(NULL, aHookAction, aHotkeyName)
+			: shk[hotkey_id]->UpdateHotkey(NULL, aHookAction);
 	}
-	++sNextID;
+
+	if (result != OK)
+		return result;
+	if (!*aOptions)
+		return OK;  // Newly created hotkeys will have used g_MaxThreadsBuffer, etc.
+
+	int max_threads_per_hotkey;
+	bool max_threads_buffer;
+
+	if (hotkey_id == HOTKEY_ID_INVALID)
+	{
+		hotkey_id = sNextID - 1;  // The ID of the newly added hotkey.
+		// Set defaults for all options.  Don't use g_MaxThreadsBuffer, etc., as the default
+		// because it seems more useful to have the option letters override a known default
+		// and since otherwise, the option letters would have to support a minus prefix or
+		// such to allow the option to be put back to its default state (i.e. if
+		// g_MaxThreadsBuffer is ON, you would need to use -B to have the hotkey use it as
+		// off, which adds unnecessary complexity I think).  UPDATE: Because a hotkey's
+		// options can be changed after they were initially set, it seems best to allow
+		// the minus sign approach after all, since otherwise there would be no way to
+		// turn off the options after they are turned on.
+		max_threads_buffer = g_MaxThreadsBuffer;
+		max_threads_per_hotkey = g_MaxThreadsPerHotkey;
+	}
+	else // Set the defaults to be whatever they already are in the hotkey.
+	{
+		max_threads_buffer = shk[hotkey_id]->mMaxThreadsBuffer;
+		max_threads_per_hotkey = shk[hotkey_id]->mMaxThreads;
+	}
+	for (char *cp = aOptions; *cp; ++cp)
+	{
+		switch(toupper(*cp))
+		{
+		case 'B':
+			max_threads_buffer = (*(cp + 1) != '0');  // i.e. if the char is NULL or something other than '0'.
+			break;
+		case 'T':
+			max_threads_per_hotkey = ATOI(cp + 1);
+			if (max_threads_per_hotkey > MAX_THREADS_LIMIT)
+				// For now, keep this limited to prevent stack overflow due to too many pseudo-threads.
+				max_threads_per_hotkey = MAX_THREADS_LIMIT;
+			else if (max_threads_per_hotkey < 1)
+				max_threads_per_hotkey = 1;
+			break;
+		// Ignore other characters, such as the digits that comprise the number after the T option.
+		}
+	}
+	shk[hotkey_id]->mMaxThreadsBuffer = max_threads_buffer;
+	shk[hotkey_id]->mMaxThreads = max_threads_per_hotkey;
 	return OK;
 }
 
 
 
-Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction) // Constructor
+ResultType Hotkey::UpdateHotkey(Label *aJumpToLabel, HookActionType aHookAction)
+{
+	bool reset = false;
+	if (aJumpToLabel != mJumpToLabel)
+	{
+		if (mJumpToLabel && mJumpToLabel->mName == mName)
+			// Since mName points to the original label it must be currently be a static hotkey
+			// (one not created by the Hotkey command).  We need to preserve it's original name,
+			// so whenever a static hotkey is made dynamic (a one-time event since it can never
+			// go in the other direction), we allocate some memory for the original label name
+			// because it is the Hotkey's name (Mod+Keyname, e.g. ^c).  Once the mName is
+			// allocated in this way, it will never be made to point to another string because
+			// that would cause a memory leak:
+			mName = SimpleHeap::Malloc(mJumpToLabel->mName);
+		mJumpToLabel = aJumpToLabel;  // Done after the above.  Should be NULL only when there's an aHookAction.
+		// If either the new or old label is NULL, we're changing from a normal hotkey to a special
+		// Alt-Tab hotkey, or vice versa.  Due to the complexity of registered vs. hook hotkeys, for now
+		// just start from scratch so that there is high confidence that the hook and all registered hotkeys,
+		// including their interdependencies, will be re-initialized correctly:
+		if (!aJumpToLabel || !mJumpToLabel)
+			reset = true;
+	}
+	if (aHookAction != mHookAction)
+	{
+		mHookAction = aHookAction;
+		// For now just keep it simple to maximize confidence that everything will be re-initialized okay:
+		reset = true;
+	}
+	if (reset)
+	{
+		AllDeactivate(false);
+		AllActivate(true);
+	}
+	return OK;
+}
+
+
+
+ResultType Hotkey::AddHotkey(Label *aJumpToLabel, HookActionType aHookAction, char *aName)
+// Caller must ensure that either aJumpToLabel or aName is not NULL.
+// aName is NULL whenever the caller is creating a static hotkey, at loadtime (i.e. one that
+// points to a hotkey label rather than a normal label).  The only time aJumpToLabel should
+// be NULL is when the caller is creating a dynamic hotkey that has an aHookAction.
+// Return OK or FAIL.
+{
+	if (NULL == (shk[sNextID] = new Hotkey(sNextID, aJumpToLabel, aHookAction, aName)))
+		return FAIL;
+	if (!shk[sNextID]->mConstructedOK)
+	{
+		delete shk[sNextID];  // Currently doesn't actually do anything due to SimpleHeap.
+		return FAIL;  // The constructor already displayed the error.
+	}
+	++sNextID;
+	if (sHotkeysAreLocked)
+	{
+		// Reasons to reinitialize the entire hotkey set, perhaps even if the newly added hotkey
+		// is just a registered one: Hotkeys affect each other.  See examples in AllActivate()
+		// such as "Check if this key is used as the modifier (prefix) for any other key.  If it
+		// is, the keyboard hook must handle this key also because otherwise the key-down event
+		// would trigger the registered hotkey immediately, rather than waiting to see if this
+		// key is be held down merely to modify some other key.".  For now, call AllDeactivate()
+		// for cases such as the following: the newly added hotkey has an interaction/dependency
+		// with another hotkey, causing it to be promoted from a registered hotkey to a hook hotkey.
+		// In such a case, the key should be unregistered for maximum reliability, even though'
+		// the hook could probably override the registration in most cases:
+		AllDeactivate(false, false);  // Avoid removing the hooks when adding a key.
+		AllActivate(true);
+	}
+	return OK;
+}
+
+
+
+Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction, char *aName) // Constructor
 	: mID(HOTKEY_ID_INVALID)  // Default until overridden.
+	// Caller must ensure that either aName or aJumpToLabel isn't NULL.
 	, mVK(0)
 	, mSC(0)
 	, mModifiers(0)
@@ -545,8 +709,9 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 	, mModifiersConsolidated(0)
 	, mType(HK_UNDETERMINED)
 	, mIsRegistered(false)
+	, mEnabled(true)
 	, mHookAction(aHookAction)
-	, mJumpToLabel(aJumpToLabel)
+	, mJumpToLabel(aJumpToLabel)  // Can be NULL for dynamic hotkeys that are hook actions such as Alt-Tab.
 	, mExistingThreads(0)
 	, mMaxThreads(g_MaxThreadsPerHotkey)  // The value of g_MaxThreadsPerHotkey can vary during load-time.
 	, mMaxThreadsBuffer(g_MaxThreadsBuffer) // same comment as above
@@ -556,22 +721,18 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 // verification of the fact that this hotkey's id is always set equal to it's index in the array
 // (for performance reasons).
 {
-	// Don't allow hotkeys to be added while the set is already active.  This avoids complications such as having
-	// to activate one of the hooks if not already active, and having to pass new hotkey config to the DLL.
-	// In addition, it avoids the problem where a key already registered as a hotkey is assigned to become
-	// a prefix (handled by the hook).  The registration (if without shift/alt/win/ctrl modifiers) would prevent
-	// the hook from ever seeing the key.
-	if (sHotkeysAreLocked) return;
 	if (aID > HOTKEY_ID_MAX) return;   // Probably should never happen.
-	if (aJumpToLabel == NULL) return;  // Even for alt-tab, should have the label just for record-keeping.
 
 	if (sHotkeyCount >= MAX_HOTKEYS)
 	{
-		MsgBox("The maximum number of hotkeys has been reached.  Some have not been loaded.");
+		// This will actually cause the script to terminate if this hotkey is a static (load-time)
+		// hotkey.  In the future, some other behavior is probably better:
+		MsgBox("The max number of hotkeys has been reached.");  // Brief msg since so rare.
 		return;  // Success since the above is just a warning.
 	}
 
-	if (!TextInterpret()) // The called function already displayed the error.
+	char *hotkey_name = aName ? aName : aJumpToLabel->mName;
+	if (!TextInterpret(hotkey_name)) // The called function already displayed the error.
 		return;
 
 	if (mType == HK_JOYSTICK)
@@ -593,10 +754,9 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 					// 3) Have the hook search for the suffix key by first looking up the left/right
 					//    specific modifier (i.e. just as it came in) and then if that fails, trying
 					//    to look it up by the neutral VK.
-					snprintf(error_text, sizeof(error_text), "Warning: The following hotkey uses a neutral"
+					snprintf(error_text, sizeof(error_text), "The hotkey \"%s\" uses a neutral"
 						" modifier key as a suffix.  Instead, use the left/right specific key,"
-						" e.g. LShift vs. Shift.\n\nThis hotkey has not been enabled:\n%s"
-						, mJumpToLabel->mName);
+						" e.g. LShift vs. Shift.", hotkey_name);
 					MsgBox(error_text);
 					return;  // Key is invalid so don't give it an ID.
 				}
@@ -609,14 +769,12 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 				// Neutral modifier has been specified.  Future enhancement: improve this
 				// to try to guess which key, left or right, should be used based on the
 				// location of the suffix key on the keyboard.
-				snprintf(error_text, sizeof(error_text), "Warning: The following hotkey is AltTab but has a"
+				snprintf(error_text, sizeof(error_text), "The hotkey \"%s\" is AltTab but has a"
 					" neutral modifying prefix key.  For this type, you must specify left"
 					" or right by using something like:\n\n"
-					"RWIN" COMPOSITE_DELIMITER "RShift::AltTab\n"
+					"RWin" COMPOSITE_DELIMITER "RShift::AltTab\n"
 					"or\n"
-					">+Rwin::AltTab"
-					"\n\nThis hotkey has not been enabled:\n%s"
-					, mJumpToLabel->mName);
+					">+RWin::AltTab", hotkey_name);
 				MsgBox(error_text);
 				return;  // Key is invalid so don't give it an ID.
 			}
@@ -633,10 +791,8 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 				case MOD_LWIN: mModifierVK = VK_LWIN; break; // Win9x should support LWIN/RWIN.
 				case MOD_RWIN: mModifierVK = VK_RWIN; break;
 				default:
-					snprintf(error_text, sizeof(error_text), "Warning: The following hotkey is AltTab but has"
-						" more than one modifying prefix key, which is not allowed."
-						"  This hotkey has not been enabled:\n%s"
-						, mJumpToLabel->mName);
+					snprintf(error_text, sizeof(error_text), "The hotkey \"%s\" is AltTab but has"
+						" more than one modifying prefix key, which is not allowed.", hotkey_name);
 					MsgBox(error_text);
 					return;  // Key is invalid so don't give it an ID.
 				}
@@ -678,6 +834,10 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 				mModifiersConsolidated |= ConvertModifiers(mModifiers);
 		}
 	}
+
+	// To avoid memory leak, this is done only when it is certain the hotkey will be created:
+	mName = aName ? SimpleHeap::Malloc(aName) : hotkey_name;
+
 	// Always assign the ID last, right before a successful return, so that the caller is notified
 	// that the constructor succeeded:
 	mConstructedOK = true;
@@ -688,13 +848,16 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 
 
 
-ResultType Hotkey::TextInterpret()
+ResultType Hotkey::TextInterpret(char *aName)
 // Returns OK or FAIL.
 {
-	char *term1 = mJumpToLabel->mName;
+	// Make a copy that can be modified:
+	char hotkey_name[256];
+	strlcpy(hotkey_name, aName, sizeof(hotkey_name));
+	char *term1 = hotkey_name;
 	char *term2 = stristr(term1, COMPOSITE_DELIMITER);
 	if (!term2)
-		return TextToKey(TextToModifiers(term1), false);
+		return TextToKey(TextToModifiers(term1), aName, false);
 	if (*term1 == '~')
 	{
 		mNoSuppress |= NO_SUPPRESS_PREFIX;
@@ -704,7 +867,7 @@ ResultType Hotkey::TextInterpret()
 	// Temporarily terminate the string so that the 2nd term is hidden:
 	char ctemp = *end_of_term1;
 	*end_of_term1 = '\0';
-	ResultType result = TextToKey(term1, true);
+	ResultType result = TextToKey(term1, aName, true);
 	*end_of_term1 = ctemp;  // Undo the termination.
 	if (result == FAIL)
 		return FAIL;
@@ -713,7 +876,7 @@ ResultType Hotkey::TextInterpret()
 	// Even though modifiers on keys already modified by a mModifierVK are not supported, call
 	// TextToModifiers() anyway to use its output (for consistency).  The modifiers it sets
 	// are currently ignored because the mModifierVK takes precedence.
-	return TextToKey(TextToModifiers(term2), false);
+	return TextToKey(TextToModifiers(term2), aName, false);
 }
 
 
@@ -832,8 +995,8 @@ char *Hotkey::TextToModifiers(char *aText)
 
 
 
-ResultType Hotkey::TextToKey(char *aText, bool aIsModifier)
-// Takes input param aText to support receiving only a subset of mJumpToLabel->mName.
+ResultType Hotkey::TextToKey(char *aText, char *aHotkeyName, bool aIsModifier)
+// Takes input param aText to support receiving only a subset of mName.
 // In private members, sets the values of vk/sc or ModifierVK/ModifierSC depending on aIsModifier.
 // It may also merge new modifiers into the existing value of modifiers, so the caller
 // should never reset modifiers after calling this.
@@ -842,10 +1005,9 @@ ResultType Hotkey::TextToKey(char *aText, bool aIsModifier)
 	char error_text[512];
 	if (!aText || !*aText)
 	{
-		// Use the label name since aText is empty
 		snprintf(error_text, sizeof(error_text), "\"%s\" is not a valid hotkey."
 			"  Note that shifted hotkeys such as # and ? should be defined as +3 and +/, respectively."
-			, mJumpToLabel->mName);
+			, aHotkeyName);
 		MsgBox(error_text);
 		return FAIL;
 	}
@@ -867,7 +1029,6 @@ ResultType Hotkey::TextToKey(char *aText, bool aIsModifier)
 	{
 		if (aIsModifier && (temp_vk == VK_WHEEL_DOWN || temp_vk == VK_WHEEL_UP))
 		{
-			// Can't display mJumpToLabel->mName because our caller temporarily truncated it in the middle:
 			snprintf(error_text, sizeof(error_text), "\"%s\" is not allowed to be used as a prefix key.", aText);
 			MsgBox(error_text);
 			return FAIL;
@@ -954,7 +1115,7 @@ scan code array).
 ResultType Hotkey::Register()
 // Returns OK or FAIL.
 {
-	if (mIsRegistered) return OK;
+	if (mIsRegistered || !mEnabled) return OK;  // It's normal for a disabled hotkey to return OK.
 	// Can't use the API method to register such hotkeys.  They are handled by the hook:
 	if (mType != HK_NORMAL) return FAIL;
 
@@ -1017,8 +1178,61 @@ ResultType Hotkey::Unregister()
 
 
 
+int Hotkey::FindHotkeyByName(char *aName)
+// Returns the the HotkeyID if found, HOTKEY_ID_INVALID otherwise.
+{
+	// Originally I thought it might be best to exclude ~ and $ from the comparison by using
+	// stricmp_exclude().  However, if this is done, there would be no way to change a hotkey
+	// from hook to normal (or vice versa), and also no way to change the pass-through nature
+	// of a hotkey once it is created (since hotkeys can be disabled but never destroyed).
+	// Although special handling could be added for this, it seems best to allow these duplicates
+	// to be defined, for both max simplicity and flexibility.  The hook will be tested to ensure
+	// that it can properly handle duplicate definitions such as $^h and ~^h (testing reveals
+	// that the first hotkey to be defined will take precedence).
+	for (int i = 0; i < sHotkeyCount; ++i)
+		if (!stricmp(shk[i]->mName, aName)) // Case insensitive so that something like ^A is a match for ^a
+			return i;
+	return HOTKEY_ID_INVALID;  // No match found.
+}
+
+
+
+int Hotkey::FindHotkeyWithThisModifier(vk_type aVK, sc_type aSC)
+// Returns the the HotkeyID if found, HOTKEY_ID_INVALID otherwise.
+// Answers the question: What is the first hotkey with mModifierVK or mModifierSC equal to those given?
+// A non-zero vk param will take precendence over any non-zero value for sc.
+{
+	if (!aVK & !aSC) return HOTKEY_ID_INVALID;
+	for (int i = 0; i < sHotkeyCount; ++i)
+		if (   (aVK && aVK == shk[i]->mModifierVK) || (aSC && aSC == shk[i]->mModifierSC)   )
+			return i;
+	return HOTKEY_ID_INVALID;  // No match found.
+}
+
+
+
+int Hotkey::FindHotkeyContainingModLR(modLR_type aModifiersLR) // , int hotkey_id_to_omit)
+// Returns the the HotkeyID if found, HOTKEY_ID_INVALID otherwise.
+// Find the first hotkey whose modifiersLR contains *any* of the modifiers shows in the parameter value.
+// The caller tells us the ID of the hotkey to omit from the search because that one
+// would always be found (since something like "lcontrol=calc.exe" in the script
+// would really be defines as  "<^control=calc.exe".
+// Note: By intent, this function does not find hotkeys whose normal/neutral modifiers
+// contain <modifiersLR>.
+{
+	if (!aModifiersLR) return HOTKEY_ID_INVALID;
+	for (int i = 0; i < sHotkeyCount; ++i)
+		// Bitwise set-intersection: indicates if anything in common:
+		if (shk[i]->mModifiersLR & aModifiersLR)
+		//if (i != hotkey_id_to_omit && shk[i]->mModifiersLR & modifiersLR)
+			return i;
+	return HOTKEY_ID_INVALID;  // No match found.
+}
+
+
+/*
 int Hotkey::FindHotkeyBySC(sc2_type aSC2, mod_type aModifiers, modLR_type aModifiersLR)
-// Returns the the HotkeyID if found, -1 otherwise.
+// Returns the the HotkeyID if found, HOTKEY_ID_INVALID otherwise.
 // Answers the question: What is the first hotkey with the given sc & modifiers *regardless* of
 // any non-zero mModifierVK or mModifierSC it may have?  The mModifierSC/vk is ignored because
 // the caller wants to know whether this key would be blocked if its counterpart were registered.
@@ -1030,43 +1244,9 @@ int Hotkey::FindHotkeyBySC(sc2_type aSC2, mod_type aModifiers, modLR_type aModif
 		if (!shk[i]->mVK && (shk[i]->mSC == aSC2.a || shk[i]->mSC == aSC2.b))
 			if (shk[i]->mModifiers == aModifiers && shk[i]->mModifiersLR == aModifiersLR)  // Ensures an exact match.
 				return i;
-	return -1;  // No match found.
+	return HOTKEY_ID_INVALID;  // No match found.
 }
-
-
-
-int Hotkey::FindHotkeyWithThisModifier(vk_type aVK, sc_type aSC)
-// Returns the the HotkeyID if found, -1 otherwise.
-// Answers the question: What is the first hotkey with mModifierVK or mModifierSC equal to those given?
-// A non-zero vk param will take precendence over any non-zero value for sc.
-{
-	if (!aVK & !aSC) return -1;
-	for (int i = 0; i < sHotkeyCount; ++i)
-		if (   (aVK && aVK == shk[i]->mModifierVK) || (aSC && aSC == shk[i]->mModifierSC)   )
-			return i;
-	return -1;  // No match found.
-}
-
-
-
-int Hotkey::FindHotkeyContainingModLR(modLR_type aModifiersLR) // , int hotkey_id_to_omit)
-// Returns the the HotkeyID if found, -1 otherwise.
-// Find the first hotkey whose modifiersLR contains *any* of the modifiers shows in the parameter value.
-// The caller tells us the ID of the hotkey to omit from the search because that one
-// would always be found (since something like "lcontrol=calc.exe" in the script
-// would really be defines as  "<^control=calc.exe".
-// Note: By intent, this function does not find hotkeys whose normal/neutral modifiers
-// contain <modifiersLR>.
-{
-	if (!aModifiersLR) return -1;
-	for (int i = 0; i < sHotkeyCount; ++i)
-		// Bitwise set-intersection: indicates if anything in common:
-		if (shk[i]->mModifiersLR & aModifiersLR)
-		//if (i != hotkey_id_to_omit && shk[i]->mModifiersLR & modifiersLR)
-			return i;
-	return -1;  // No match found.
-}
-
+*/
 
 
 char *Hotkey::ListHotkeys(char *aBuf, size_t aBufSize)
@@ -1076,8 +1256,8 @@ char *Hotkey::ListHotkeys(char *aBuf, size_t aBufSize)
 	if (!aBuf || aBufSize < 256) return NULL;
 	char *aBuf_orig = aBuf;
 	// Save vertical space by limiting newlines here:
-	snprintf(aBuf, BUF_SPACE_REMAINING, "Type\tRunning\tName\r\n"
-							 "---------------------------------------------------------------\r\n");
+	snprintf(aBuf, BUF_SPACE_REMAINING, "Type\tOff?\tRunning\tName\r\n"
+							 "-------------------------------------------------------------------\r\n");
 	aBuf += strlen(aBuf);
 	// Start at the oldest and continue up through the newest:
 	for (int i = 0; i < sHotkeyCount; ++i)
@@ -1098,11 +1278,21 @@ char *Hotkey::ToText(char *aBuf, size_t aBufSize, bool aAppendNewline)
 		_itoa(mExistingThreads, existing_threads_str, 10);
 	else
 		*existing_threads_str = '\0'; // Make it blank to avoid clutter in the hotkey display.
-	snprintf(aBuf, BUF_SPACE_REMAINING, "%s%s\t%s\t%s"
-		, (mType == HK_KEYBD_HOOK) ? "k-hook" : ((mType == HK_MOUSE_HOOK) ? "m-hook" : "reg")
-		, (mType == HK_NORMAL && !mIsRegistered) ? "(no)" : ""
+	char htype[32];
+	switch (mType)
+	{
+	case HK_NORMAL: strlcpy(htype, "reg", sizeof(htype)); break;
+	case HK_KEYBD_HOOK: strlcpy(htype, "k-hook", sizeof(htype)); break;
+	case HK_MOUSE_HOOK: strlcpy(htype, "m-hook", sizeof(htype)); break;
+	case HK_BOTH_HOOKS: strlcpy(htype, "2-hooks", sizeof(htype)); break;
+	case HK_JOYSTICK: strlcpy(htype, "joypoll", sizeof(htype)); break;
+	default: *htype = '\0';
+	}
+	snprintf(aBuf, BUF_SPACE_REMAINING, "%s%s\t%s\t%s\t%s"
+		, htype, (mType == HK_NORMAL && !mIsRegistered) ? "(no)" : ""
+		, mEnabled ? "" : "OFF"
 		, existing_threads_str
-		, mJumpToLabel->mName);
+		, mName);
 	aBuf += strlen(aBuf);
 	if (aAppendNewline && BUF_SPACE_REMAINING >= 2)
 	{

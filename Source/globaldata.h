@@ -64,6 +64,7 @@ extern bool g_MainTimerExists;
 extern bool g_UninterruptibleTimerExists;
 extern bool g_AutoExecTimerExists;
 extern bool g_InputTimerExists;
+extern bool g_SoundWasPlayed;
 extern bool g_IsSuspended;
 extern int g_nLayersNeedingTimer;
 extern int g_nThreads;
@@ -104,6 +105,9 @@ extern DWORD g_OriginalTimeout;
 
 EXTERN_G;
 extern global_struct g_default;
+
+extern char g_WorkingDir[MAX_PATH];  // Explicit size needed here in .h file for use with sizeof().
+extern char *g_WorkingDirOrig;
 
 // This macro is defined because sometimes g.hWndLastUsed will be out-of-date and the window
 // may have been destroyed.  It also returns NULL if the current settings indicate that

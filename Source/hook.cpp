@@ -204,7 +204,7 @@ void SetModifierAsPrefix(vk_type aVK, sc_type aSC, bool aAlwaysSetAsPrefix = fal
 			if (aAlwaysSetAsPrefix)
 				kvk[aVK].used_as_prefix = true;
 			else
-				if (Hotkey::FindHotkeyContainingModLR(kvk[aSC].as_modifiersLR) >= 0)
+				if (Hotkey::FindHotkeyContainingModLR(kvk[aSC].as_modifiersLR) != HOTKEY_ID_INVALID)
 					kvk[aVK].used_as_prefix = true;
 				// else allow its suffix action to fire when key is pressed down,
 				// under the fairly safe assumption that the user hasn't configured
@@ -218,7 +218,7 @@ void SetModifierAsPrefix(vk_type aVK, sc_type aSC, bool aAlwaysSetAsPrefix = fal
 	if (aAlwaysSetAsPrefix)
 		ksc[aSC].used_as_prefix = true;
 	else
-		if (Hotkey::FindHotkeyContainingModLR(ksc[aSC].as_modifiersLR) >= 0)
+		if (Hotkey::FindHotkeyContainingModLR(ksc[aSC].as_modifiersLR) != HOTKEY_ID_INVALID)
 			ksc[aSC].used_as_prefix = true;
 }
 
@@ -425,7 +425,8 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 	{
 		// If it's not a hook hotkey (e.g. it was already registered with RegisterHotkey() or it's a joystick
 		// hotkey) don't process it here:
-		if (aHK[i]->mType != HK_KEYBD_HOOK && aHK[i]->mType != HK_MOUSE_HOOK && aHK[i]->mType != HK_BOTH_HOOKS)
+		if ((aHK[i]->mType != HK_KEYBD_HOOK && aHK[i]->mType != HK_MOUSE_HOOK && aHK[i]->mType != HK_BOTH_HOOKS)
+			|| !aHK[i]->mEnabled)
 			continue;
 
 		// So aHK[i] is a hook hotkey.  But if the caller specified true for aActivateOnlySuspendHotkeys,

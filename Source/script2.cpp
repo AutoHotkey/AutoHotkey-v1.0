@@ -16,6 +16,7 @@ GNU General Public License for more details.
 
 #include "stdafx.h" // pre-compiled headers
 #include <wininet.h> // For URLDownloadToFile().
+#include "qmath.h" // Used by Transform() [math.h incurs 2k larger code size just for ceil() & floor()]
 #include "script.h"
 #include "window.h" // for IF_USE_FOREGROUND_WINDOW
 #include "application.h" // for MsgSleep()
@@ -42,20 +43,14 @@ ResultType Line::ToolTip(char *aText, char *aX, char *aY)
 // The window isn't created until it's first needed, so no resources are used until then.
 // Also, the window is destroyed in AutoIt_Script's destructor so no resource leaks occur.
 {
-	TOOLINFO ti;
-	ti.cbSize	= sizeof(ti);
-	ti.uFlags	= TTF_TRACK;
-	ti.hwnd		= NULL;
-	ti.hinst	= NULL;
-	ti.uId		= 0;
-	ti.lpszText	= aText;
-	ti.rect.left = ti.rect.top = ti.rect.right	= ti.rect.bottom = 0;
-	
 	// Set default values for the tip as the current mouse position.
 	// UPDATE: Don't call GetCursorPos() unless absolutely needed because it seems to mess
 	// up double-click timing, at least on XP.  UPDATE #2: Is isn't GetCursorPos() that's
 	// interfering with double clicks, so it seems it must be the displaying of the ToolTip
 	// window itself.
+
+	RECT dtw;
+	GetWindowRect(GetDesktopWindow(), &dtw);
 
 	POINT pt;
 	if (!*aX || !*aY)
@@ -63,6 +58,10 @@ ResultType Line::ToolTip(char *aText, char *aX, char *aY)
 		GetCursorPos(&pt);
 		pt.x += 16;  // Set default spot to be near the mouse cursor.
 		pt.y += 16;
+		// 20 seems to be about the right amount to prevent it from "warping" to the top of the screen,
+		// at least on XP:
+		if (pt.y > dtw.bottom - 20)
+			pt.y = dtw.bottom - 20;
 	}
 
 	RECT rect;
@@ -80,8 +79,23 @@ ResultType Line::ToolTip(char *aText, char *aX, char *aY)
 	if (*aY)
 		pt.y = ATOI(aY) + rect.top;
 
-	DWORD dwResult;
+	TOOLINFO ti;
+	ti.cbSize	= sizeof(ti);
+	ti.uFlags	= TTF_TRACK;
+	ti.hwnd		= NULL;  // Doesn't work: GetDesktopWindow()
+	ti.hinst	= NULL;
+	ti.uId		= 0;
+	ti.lpszText	= aText;
+	ti.rect.left = ti.rect.top = ti.rect.right = ti.rect.bottom = 0;
 
+	// My: This does more harm that good (it causes the cursor to warp from the right side to the left
+	// if it gets to close to the right side), so for now, I did a different fix (above) instead:
+	//ti.rect.bottom = dtw.bottom;  // Just this first line was the au3 fix, not the others below.
+	//ti.rect.right = dtw.right;
+	//ti.rect.top = dtw.top;
+	//ti.rect.left = dtw.left;
+
+	DWORD dwResult;
 	if (!g_hWndToolTip)
 	{
 		// This this window has no owner, it won't be automatically destroyed when its owner is.
@@ -93,9 +107,6 @@ ResultType Line::ToolTip(char *aText, char *aX, char *aY)
 	}
 	else
 		SendMessageTimeout(g_hWndToolTip, TTM_UPDATETIPTEXT, 0, (LPARAM)&ti, SMTO_ABORTIFHUNG, 2000, &dwResult);
-
-	RECT dtw;
-	GetWindowRect(GetDesktopWindow(), &dtw);
 
 	SendMessageTimeout(g_hWndToolTip, TTM_SETMAXTIPWIDTH, 0, (LPARAM)dtw.right, SMTO_ABORTIFHUNG, 2000, &dwResult);
 	SendMessageTimeout(g_hWndToolTip, TTM_TRACKPOSITION, 0, (LPARAM)MAKELONG(pt.x, pt.y), SMTO_ABORTIFHUNG, 2000, &dwResult);
@@ -120,6 +131,217 @@ ResultType Line::TrayTip(char *aTitle, char *aText, char *aTimeout, char *aOptio
 	strlcpy(nic.szInfo, aText, sizeof(nic.szInfo));	// Empty text removes the balloon.
 	Shell_NotifyIcon(NIM_MODIFY, &nic);
 	return OK;
+}
+
+
+
+ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
+{
+	Var *output_var = ResolveVarOfArg(0);
+	if (!output_var)
+		return FAIL;
+	TransformCmds trans_cmd = ConvertTransformCmd(aCmd);
+	// Since command names are validated at load-time, this only happens if the command name
+	// was contained in a variable reference.  Since that is very rare, output_var is simply
+	// made blank to indicate the problem:
+	if (trans_cmd == TRANS_CMD_INVALID)
+		return output_var->Assign();
+
+	char buf[32], *cp;
+	int value32;
+	INT64 value64;
+	double value_double1, value_double2, multiplier;
+	double result_double;
+	pure_numeric_type value1_is_pure_numeric, value2_is_pure_numeric;
+
+	#undef DETERMINE_NUMERIC_TYPES
+	#define DETERMINE_NUMERIC_TYPES \
+		value1_is_pure_numeric = IsPureNumeric(aValue1, true, false, true);\
+		value2_is_pure_numeric = IsPureNumeric(aValue2, true, false, true);
+
+	#define EITHER_IS_FLOAT (value1_is_pure_numeric == PURE_FLOAT || value2_is_pure_numeric == PURE_FLOAT)
+
+	// If neither input is float, the result is assigned as an integer (i.e. no decimal places):
+	#define ASSIGN_BASED_ON_TYPE \
+		DETERMINE_NUMERIC_TYPES \
+		if (EITHER_IS_FLOAT) \
+			return output_var->Assign(result_double);\
+		else\
+			return output_var->Assign((INT64)result_double);
+
+	// Have a negative exponent always cause a floating point result:
+	#define ASSIGN_BASED_ON_TYPE_POW \
+		DETERMINE_NUMERIC_TYPES \
+		if (EITHER_IS_FLOAT || value_double2 < 0) \
+			return output_var->Assign(result_double);\
+		else\
+			return output_var->Assign((INT64)result_double);
+
+	#define ASSIGN_BASED_ON_TYPE_SINGLE \
+		if (IsPureNumeric(aValue1, true, false, true) == PURE_FLOAT)\
+			return output_var->Assign(result_double);\
+		else\
+			return output_var->Assign((INT64)result_double);
+
+	// If rounding to an integer, ensure the result is stored as an integer:
+	#define ASSIGN_BASED_ON_TYPE_SINGLE_ROUND \
+		if (IsPureNumeric(aValue1, true, false, true) == PURE_FLOAT && value32 > 0)\
+			return output_var->Assign(result_double);\
+		else\
+			return output_var->Assign((INT64)result_double);
+
+	switch(trans_cmd)
+	{
+	case TRANS_CMD_ASC:
+		if (*aValue1)
+			return output_var->Assign((int)(UCHAR)*aValue1); // Cast to UCHAR so that chars above Asc(128) show as positive.
+		else
+			return output_var->Assign();
+
+	case TRANS_CMD_CHR:
+		value32 = ATOI(aValue1);
+		if (value32 < 0 || value32 > 255)
+			return output_var->Assign();
+		else
+		{
+			*buf = value32;
+			*(buf + 1) = '\0';
+			return output_var->Assign(buf);
+		}
+
+	case TRANS_CMD_MOD:
+		if (   !(value_double2 = ATOF(aValue2))   ) // Divide by zero, set it to be blank to indicate the problem.
+			return output_var->Assign();
+		// Otherwise:
+		result_double = qmathFmod(ATOF(aValue1), value_double2);
+		ASSIGN_BASED_ON_TYPE
+
+	case TRANS_CMD_POW:
+		// Currently, a negative aValue1 isn't supported (AutoIt3 doesn't support them either).
+		// The reason for this is that since fractional exponents are supported (e.g. 0.5, which
+		// results in the square root), there would have to be some extra detection to ensure
+		// that a negative aValue1 is never used with fractional exponent (since the sqrt of
+		// a negative is undefined).  In addition, qmathPow() doesn't support negatives, returning
+		// an unexpectedly large value or -1.#IND00 instead.
+		value_double1 = ATOF(aValue1);
+		if (value_double1 < 0)
+			return output_var->Assign();  // Return a consistent result (blank) rather than something that varies.
+		value_double2 = ATOF(aValue2);
+		result_double = qmathPow(value_double1, value_double2);
+		ASSIGN_BASED_ON_TYPE_POW
+
+	case TRANS_CMD_EXP:
+		return output_var->Assign(qmathExp(ATOF(aValue1)));
+
+	case TRANS_CMD_SQRT:
+		value_double1 = ATOF(aValue1);
+		if (value_double1 < 0)
+			return output_var->Assign();
+		return output_var->Assign(qmathSqrt(value_double1));
+
+	case TRANS_CMD_LOG:
+		value_double1 = ATOF(aValue1);
+		if (value_double1 < 0)
+			return output_var->Assign();
+		return output_var->Assign(qmathLog10(ATOF(aValue1)));
+
+	case TRANS_CMD_LN:
+		value_double1 = ATOF(aValue1);
+		if (value_double1 < 0)
+			return output_var->Assign();
+		return output_var->Assign(qmathLog(ATOF(aValue1)));
+
+	case TRANS_CMD_ROUND:
+		// Adapted from the AutoIt3 source.
+		// In the future, a string conversion algorithm might be better to avoid the loss
+		// of 64-bit integer precision that it currently caused by the use of doubles in
+		// the calculation:
+		value32 = ATOI(aValue2);
+		multiplier = *aValue2 ? qmathPow(10, value32) : 1;
+		value_double1 = ATOF(aValue1);
+		if (value_double1 >= 0.0)
+			result_double = qmathFloor(value_double1 * multiplier + 0.5) / multiplier;
+		else
+			result_double = qmathCeil(value_double1 * multiplier - 0.5) / multiplier;
+		ASSIGN_BASED_ON_TYPE_SINGLE_ROUND
+
+	// These next two might be improved by to avoid loss of 64-bit integer precision
+	// by using a string conversion algorithm rather than converting to double:
+	case TRANS_CMD_CEIL:
+		return output_var->Assign((INT64)qmathCeil(ATOF(aValue1)));
+
+	case TRANS_CMD_FLOOR:
+		return output_var->Assign((INT64)qmathFloor(ATOF(aValue1)));
+
+	case TRANS_CMD_ABS:
+		// Seems better to convert as string to avoid loss of 64-bit integer precision
+		// that would be caused by conversion to double.  I think this will work even
+		// for negative hex numbers that are close to the 64-bit limit since they too have
+		// a minus sign when generated by the script (e.g. -0x1).
+		//result_double = qmathFabs(ATOF(aValue1));
+		//ASSIGN_BASED_ON_TYPE_SINGLE
+		cp = omit_leading_whitespace(aValue1); // i.e. caller doesn't have to have ltrimmed it.
+		if (*cp == '-')
+			return output_var->Assign(cp + 1);  // Omit the first minus sign (simple conversion only).
+		// Otherwise, no minus sign, so just omit the leading whitespace for consistency:
+		return output_var->Assign(cp);
+
+	case TRANS_CMD_SIN:
+		return output_var->Assign(qmathSin(ATOF(aValue1)));
+
+	case TRANS_CMD_COS:
+		return output_var->Assign(qmathCos(ATOF(aValue1)));
+
+	case TRANS_CMD_TAN:
+		return output_var->Assign(qmathTan(ATOF(aValue1)));
+
+	case TRANS_CMD_ASIN:
+		value_double1 = ATOF(aValue1);
+		if (value_double1 > 1 || value_double1 < -1)
+			return output_var->Assign(); // ASin and ACos aren't defined for other values.
+		return output_var->Assign(qmathAsin(ATOF(aValue1)));
+
+	case TRANS_CMD_ACOS:
+		value_double1 = ATOF(aValue1);
+		if (value_double1 > 1 || value_double1 < -1)
+			return output_var->Assign(); // ASin and ACos aren't defined for other values.
+		return output_var->Assign(qmathAcos(ATOF(aValue1)));
+
+	case TRANS_CMD_ATAN:
+		return output_var->Assign(qmathAtan(ATOF(aValue1)));
+
+	// For all of the below bitwise operations:
+	// Seems better to convert to signed rather than unsigned so that signed values can
+	// be supported.  i.e. it seems better to trade one bit in capacity in order to support
+	// negative numbers.  Another reason is that commands such as IfEquals use ATOI64 (signed),
+	// so if we were to produce unsigned 64 bit values here, they would be somewhat incompatible
+	// with other script operations.
+	case TRANS_CMD_BITAND:
+		return output_var->Assign(ATOI64(aValue1) & ATOI64(aValue2));
+
+	case TRANS_CMD_BITOR:
+		return output_var->Assign(ATOI64(aValue1) | ATOI64(aValue2));
+
+	case TRANS_CMD_BITXOR:
+		return output_var->Assign(ATOI64(aValue1) ^ ATOI64(aValue2));
+
+	case TRANS_CMD_BITNOT:
+		value64 = ATOI64(aValue1);
+		if (value64 < 0 || value64 > UINT_MAX)
+			// Treat it as a 64-bit signed value, since no other aspects of the program
+			// (e.g. IfEqual) will recognize an unsigned 64 bit number.
+			return output_var->Assign(~value64);
+		else // Treat it as a 32-bit unsigned value when inverting and assigning:
+			return output_var->Assign(~(DWORD)value64);
+
+	case TRANS_CMD_BITSHIFTLEFT:  // Equivalent to multiplying by 2^value2
+		return output_var->Assign(ATOI64(aValue1) << ATOI(aValue2));
+
+	case TRANS_CMD_BITSHIFTRIGHT:  // Equivalent to dividing (integer) by 2^value2
+		return output_var->Assign(ATOI64(aValue1) >> ATOI(aValue2));
+	}
+
+	return FAIL;  // Never executed (increases maintainability and avoids compiler warning).
 }
 
 
@@ -1574,6 +1796,22 @@ ResultType Line::WinGetTitle(char *aTitle, char *aText, char *aExcludeTitle, cha
 
 
 
+ResultType Line::WinGetClass(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
+{
+	Var *output_var = ResolveVarOfArg(0);
+	if (!output_var)
+		return FAIL;
+	DETERMINE_TARGET_WINDOW
+	if (!target_window)
+		return output_var->Assign();
+	char class_name[1024];
+	if (!GetClassName(target_window, class_name, sizeof(class_name)))
+		return output_var->Assign();
+	return output_var->Assign(class_name);
+}
+
+
+
 ResultType Line::WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
 {
 	Var *output_var = ResolveVarOfArg(0);
@@ -2860,7 +3098,7 @@ VOID CALLBACK InputBoxTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
 // Mouse related //
 ///////////////////
 
-ResultType Line::MouseClickDrag(vk_type aVK, int aX1, int aY1, int aX2, int aY2, int aSpeed)
+ResultType Line::MouseClickDrag(vk_type aVK, int aX1, int aY1, int aX2, int aY2, int aSpeed, bool aMoveRelative)
 // Note: This is based on code in the AutoIt3 source.
 {
 	// Autoit3: Check for x without y
@@ -2872,7 +3110,7 @@ ResultType Line::MouseClickDrag(vk_type aVK, int aX1, int aY1, int aX2, int aY2,
 
 	// Move the mouse to the start position if we're not starting in the current position:
 	if (aX1 != COORD_UNSPECIFIED && aY1 != COORD_UNSPECIFIED)
-		MouseMove(aX1, aY1, aSpeed);
+		MouseMove(aX1, aY1, aSpeed, aMoveRelative);
 
 	// The drag operation fails unless speed is now >=2
 	// My: I asked him about the above, saying "Have you discovered that insta-drags
@@ -2903,35 +3141,35 @@ ResultType Line::MouseClickDrag(vk_type aVK, int aX1, int aY1, int aX2, int aY2,
 	case VK_LBUTTON:
 		MouseEvent(MOUSEEVENTF_LEFTDOWN);
 		MOUSE_SLEEP;
-		MouseMove(aX2, aY2, aSpeed);
+		MouseMove(aX2, aY2, aSpeed, aMoveRelative);
 		MOUSE_SLEEP;
 		MouseEvent(MOUSEEVENTF_LEFTUP);
 		break;
 	case VK_RBUTTON:
 		MouseEvent(MOUSEEVENTF_RIGHTDOWN);
 		MOUSE_SLEEP;
-		MouseMove(aX2, aY2, aSpeed);
+		MouseMove(aX2, aY2, aSpeed, aMoveRelative);
 		MOUSE_SLEEP;
 		MouseEvent(MOUSEEVENTF_RIGHTUP);
 		break;
 	case VK_MBUTTON:
 		MouseEvent(MOUSEEVENTF_MIDDLEDOWN);
 		MOUSE_SLEEP;
-		MouseMove(aX2, aY2, aSpeed);
+		MouseMove(aX2, aY2, aSpeed, aMoveRelative);
 		MOUSE_SLEEP;
 		MouseEvent(MOUSEEVENTF_MIDDLEUP);
 		break;
 	case VK_XBUTTON1:
 		MouseEvent(MOUSEEVENTF_XDOWN, 0, 0, XBUTTON1);
 		MOUSE_SLEEP;
-		MouseMove(aX2, aY2, aSpeed);
+		MouseMove(aX2, aY2, aSpeed, aMoveRelative);
 		MOUSE_SLEEP;
 		MouseEvent(MOUSEEVENTF_XUP, 0, 0, XBUTTON1);
 		break;
 	case VK_XBUTTON2:
 		MouseEvent(MOUSEEVENTF_XDOWN, 0, 0, XBUTTON2);
 		MOUSE_SLEEP;
-		MouseMove(aX2, aY2, aSpeed);
+		MouseMove(aX2, aY2, aSpeed, aMoveRelative);
 		MOUSE_SLEEP;
 		MouseEvent(MOUSEEVENTF_XUP, 0, 0, XBUTTON2);
 		break;
@@ -2946,7 +3184,8 @@ ResultType Line::MouseClickDrag(vk_type aVK, int aX1, int aY1, int aX2, int aY2,
 
 
 
-ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aSpeed, char aEventType)
+ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aSpeed, char aEventType
+	, bool aMoveRelative)
 // Note: This is based on code in the AutoIt3 source.
 {
 	// Autoit3: Check for x without y
@@ -2971,7 +3210,7 @@ ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aS
 
 	// Do we need to move the mouse?
 	if (aX != COORD_UNSPECIFIED && aY != COORD_UNSPECIFIED) // Otherwise don't bother.
-		MouseMove(aX, aY, aSpeed);
+		MouseMove(aX, aY, aSpeed, aMoveRelative);
 
 	// For wheel movement, if the user activated this command via a hotkey, and that hotkey
 	// has a modifier such as CTRL, the user is probably still holding down the CTRL key
@@ -3083,13 +3322,14 @@ ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aS
 
 
 
-void Line::MouseMove(int aX, int aY, int aSpeed)
+void Line::MouseMove(int aX, int aY, int aSpeed, bool aMoveRelative)
 // Note: This is based on code in the AutoIt3 source.
 {
-	POINT	ptCur;
-	int		xCur, yCur;
-	int		delta;
-	const	int	nMinSpeed = 32;
+	POINT ptCur;
+	int xCur, yCur;
+	int delta;
+	const int	nMinSpeed = 32;
+	RECT rect;
 
 	if (aSpeed < 0) // This can happen during script's runtime due to MouseClick's speed being a var containing a neg.
 		aSpeed = 0;  // 0 is the fastest.
@@ -3097,21 +3337,29 @@ void Line::MouseMove(int aX, int aY, int aSpeed)
 		if (aSpeed > MAX_MOUSE_SPEED)
 			aSpeed = MAX_MOUSE_SPEED;
 
-	RECT rect;
-	if (!(g.CoordMode & COORD_MODE_MOUSE) && GetWindowRect(GetForegroundWindow(), &rect)) // Relative vs. screen.
+	if (aMoveRelative)  // We're moving the mouse cursor relative to its current position.
 	{
-		aX += rect.left;
-		aY += rect.top;
+		GetCursorPos(&ptCur);
+		aX += ptCur.x;
+		aY += ptCur.y;
+	}
+	else
+	{
+		if (!(g.CoordMode & COORD_MODE_MOUSE) && GetWindowRect(GetForegroundWindow(), &rect))
+		{
+			// Relative vs. screen coords.
+			aX += rect.left;
+			aY += rect.top;
+		}
 	}
 
 	// AutoIt3: Get size of desktop
 	if (!GetWindowRect(GetDesktopWindow(), &rect)) // Might fail if there is no desktop (e.g. user not logged in).
-		rect.bottom = rect.left = rect.right = rect.top;  // Arbitrary defaults.
+		rect.bottom = rect.left = rect.right = rect.top = 0;  // Arbitrary defaults.
 
-	// AutoIt3: Convert our coords to mouse_event coords
+	// AutoIt3: Convert our coords to MOUSEEVENTF_ABSOLUTE coords
 	aX = ((65535 * aX) / (rect.right - 1)) + 1;
 	aY = ((65535 * aY) / (rect.bottom - 1)) + 1;
-
 
 	// AutoIt3: Are we slowly moving or insta-moving?
 	if (aSpeed == 0)
@@ -3562,7 +3810,7 @@ ResultType Line::ScriptGetKeyState(char *aKeyName, char *aOption)
 			{
 				if (g_MouseHook) // mouse hook is installed, so use it's tracking of physical state.
 					return output_var->Assign(g_PhysicalKeyState[vk] & STATE_DOWN ? "D" : "U");
-				else // Even for Win9x, it seems slightly better to call this rather than IsKeyDown9x():
+				else // Even for Win9x/NT, it seems slightly better to call this rather than IsKeyDown9xNT():
 					return output_var->Assign(IsPhysicallyDown(vk) ? "D" : "U");
 			}
 			else // keyboard
@@ -3572,17 +3820,17 @@ ResultType Line::ScriptGetKeyState(char *aKeyName, char *aOption)
 					// GetAsyncKeyState(), which doesn't seem to return the physical state
 					// as expected/advertised, least under WinXP:
 					return output_var->Assign(g_PhysicalKeyState[vk] & STATE_DOWN ? "D" : "U");
-				else // Even for Win9x, it seems slightly better to call this rather than IsKeyDown9x():
+				else // Even for Win9x/NT, it seems slightly better to call this rather than IsKeyDown9xNT():
 					return output_var->Assign(IsPhysicallyDown(vk) ? "D" : "U");
 			}
 		default: // Logical state of key.
-			if (g_os.IsWin9x())
-				return output_var->Assign(IsKeyDown9x(vk) ? "D" : "U"); // This seems more likely to be reliable.
+			if (g_os.IsWin9x() || g_os.IsWinNT4())
+				return output_var->Assign(IsKeyDown9xNT(vk) ? "D" : "U"); // This seems more likely to be reliable.
 			else
-				// On XP/2K/NT at least, a key can be physically down even if it isn't logically down,
-				// which is why the below specifically calls IsKeyDownNT() rather than some more
+				// On XP/2K at least, a key can be physically down even if it isn't logically down,
+				// which is why the below specifically calls IsKeyDown2kXP() rather than some more
 				// comprehensive method such as consulting the physical key state as tracked by the hook:
-				return output_var->Assign(IsKeyDownNT(vk) ? "D" : "U");
+				return output_var->Assign(IsKeyDown2kXP(vk) ? "D" : "U");
 		}
 	}
 
@@ -4158,22 +4406,16 @@ ResultType Line::SoundPlay(char *aFilespec, bool aSleepUntilDone)
 	// Adapted from the AutoIt3 source.
 	// See http://msdn.microsoft.com/library/default.asp?url=/library/en-us/multimed/htm/_win32_play.asp
 	// for some documentation mciSendString() and related.
-	#define SOUNDPLAY_ALIAS "AHK_PlayMe"
 	char buf[MAX_PATH * 2];
 	mciSendString("status " SOUNDPLAY_ALIAS " mode", buf, sizeof(buf), NULL);
 	if (*buf) // "playing" or "stopped" (so close it before trying to re-open with a new aFilespec).
 		mciSendString("close " SOUNDPLAY_ALIAS, NULL, 0, NULL);
 	snprintf(buf, sizeof(buf), "open \"%s\" alias " SOUNDPLAY_ALIAS, aFilespec);
 	if (mciSendString(buf, NULL, 0, NULL)) // Failure.
-	{
-		g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
-		return OK;  // OK since this isn't a critical error.
-	}
+		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);  // Let ErrorLevel tell the story.
+	g_SoundWasPlayed = true;  // For use by Script's destructor.
 	if (mciSendString("play " SOUNDPLAY_ALIAS, NULL, 0, NULL)) // Failure.
-	{
-		g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
-		return OK;  // OK since this isn't a critical error.
-	}
+		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);  // Let ErrorLevel tell the story.
 	// Otherwise, the sound is now playing.
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE);
 	if (!aSleepUntilDone)
@@ -4408,6 +4650,11 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 	// Specifying NULL will make it default to the last used directory (at least in Win2k):
 	ofn.lpstrInitialDir = *working_dir ? working_dir : NULL;
 
+	// Note that the OFN_NOCHANGEDIR flag is ineffective in some cases, so we'll use a custom
+	// workaround instead.  MSDN: "Windows NT 4.0/2000/XP: This flag is ineffective for GetOpenFileName."
+	// In addition, it does not prevent the CWD from changing while the user navigates from folder to
+	// folder in the dialog, except perhaps on Win9x.
+
 	int options = ATOI(aOptions);
 	ofn.Flags = OFN_HIDEREADONLY | OFN_EXPLORER | OFN_NODEREFERENCELINKS;
 	if (options & 0x10)
@@ -4429,6 +4676,23 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 	BOOL result = (ofn.Flags & OFN_OVERWRITEPROMPT) && !(ofn.Flags & OFN_CREATEPROMPT)
 		? GetSaveFileName(&ofn) : GetOpenFileName(&ofn);
 	--g_nFileDialogs;
+
+	// Both GetOpenFileName() and GetSaveFileName() change the working directory as a side-effect
+	// of their operation.  The below is not a 100% workaround for the problem because even while
+	// a new quasi-thread is running (having interrupted this one while the dialog is still
+	// displayed), the dialog is still functional, and as a result, the dialog changes the
+	// working directory every time the user navigates to a new folder.
+	// This is only needed when the user pressed OK, since the dialog auto-restores the
+	// working directory if CANCEL is pressed or the window was closed by means other than OK.
+	// UPDATE: No, it's needed for CANCEL too because GetSaveFileName/GetOpenFileName will restore
+	// the working dir to the wrong dir if the user changed it (via SetWorkingDir) while the
+	// dialog was displayed.
+	// Restore the original working directory so that any threads suspended beneath this one,
+	// and any newly launched ones if there aren't any suspended threads, will have the directory
+	// that the user expects.  NOTE: It's possible for g_WorkingDir to have changed via the
+	// SetWorkingDir command while the dialog was displayed (e.g. a newly launched quasi-thread):
+	if (*g_WorkingDir)
+		SetCurrentDirectory(g_WorkingDir);
 
 	if (!result) // User pressed CANCEL vs. OK to dismiss the dialog or there was a problem displaying it.
 		// It seems best to clear the variable in these cases, since this is a scripting
@@ -6163,6 +6427,7 @@ ArgTypeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_SUB:
 		case ACT_MULT:
 		case ACT_DIV:
+		case ACT_TRANSFORM:
 		case ACT_STRINGLEFT:
 		case ACT_STRINGRIGHT:
 		case ACT_STRINGMID:
@@ -6195,6 +6460,7 @@ ArgTypeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_FILESELECTFOLDER:
 		case ACT_MOUSEGETPOS:
 		case ACT_WINGETTITLE:
+		case ACT_WINGETCLASS:
 		case ACT_WINGETTEXT:
 		case ACT_WINGETPOS:
 		case ACT_PIXELGETCOLOR:
@@ -6350,14 +6616,14 @@ bool Line::FileIsFilteredOut(WIN32_FIND_DATA &aCurrentFile, FileLoopModeType aFi
 
 Line *Line::GetJumpTarget(bool aIsDereferenced)
 {
-	#define TARGET_LABEL (aIsDereferenced ? ARG1 : RAW_ARG1)
-	Label *label = g_script.FindLabel(TARGET_LABEL);
+	char *target_label = aIsDereferenced ? ARG1 : RAW_ARG1;
+	Label *label = g_script.FindLabel(target_label);
 	if (!label)
 	{
 		if (aIsDereferenced)
-			LineError("This Goto/Gosub's target label does not exist." ERR_ABORT, FAIL, TARGET_LABEL);
+			LineError("This Goto/Gosub's target label does not exist." ERR_ABORT, FAIL, target_label);
 		else
-			LineError("This Goto/Gosub's target label does not exist.", FAIL, TARGET_LABEL);
+			LineError("This Goto/Gosub's target label does not exist.", FAIL, target_label);
 		return NULL;
 	}
 	if (!aIsDereferenced)

@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.10"
+#define NAME_VERSION "1.0.11"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -77,6 +77,7 @@ GNU General Public License for more details.
 
 
 
+#define IS_32BIT(signed_value_64) (signed_value_64 >= INT_MIN && signed_value_64 <= INT_MAX)
 #define GET_BIT(buf,n) (((buf) & (1 << (n))) >> (n))
 #define SET_BIT(buf,n,val) ((val) ? ((buf) |= (1<<(n))) : (buf &= ~(1<<(n))))
 
@@ -219,7 +220,7 @@ struct Action
 
 // Same reason as above struct.  It's best to keep this struct as small as possible
 // because it's used as a local (stack) var by at least one recursive function:
-enum TitleMatchModes {MATCHMODE_INVALID = FAIL, FIND_IN_LEADING_PART, FIND_ANYWHERE, FIND_FAST, FIND_SLOW};
+enum TitleMatchModes {MATCHMODE_INVALID = FAIL, FIND_IN_LEADING_PART, FIND_ANYWHERE, FIND_EXACT, FIND_FAST, FIND_SLOW};
 
 // Bitwise flags for the UCHAR CoordMode:
 #define COORD_MODE_PIXEL 0x1
@@ -228,7 +229,7 @@ enum TitleMatchModes {MATCHMODE_INVALID = FAIL, FIND_IN_LEADING_PART, FIND_ANYWH
 
 struct global_struct
 {
-	bool TitleFindAnywhere;  // Whether match can be found anywhere in a window title, rather than leading part.
+	TitleMatchModes TitleMatchMode;
 	bool TitleFindFast; // Whether to use the fast mode of searching window text, or the more thorough slow mode.
 	bool DetectHiddenWindows; // Whether to detect the titles of hidden parent windows.
 	bool DetectHiddenText;    // Whether to detect the text of hidden child windows.
@@ -274,7 +275,7 @@ inline void global_init(global_struct *gp)
 	// deeper recursion.  When the interrupting subroutine returns, the former
 	// subroutine's values for these are restored prior to resuming execution:
 	global_clear_state(gp);
-	gp->TitleFindAnywhere = false; // Standard default for AutoIt2 and 3: Leading part of window title must match.
+	gp->TitleMatchMode = FIND_IN_LEADING_PART; // Standard default for AutoIt2 and 3.
 	gp->TitleFindFast = true; // Since it's so much faster in many cases.
 	gp->DetectHiddenWindows = false;  // Same as AutoIt2 but unlike AutoIt3; seems like a more intuitive default.
 	gp->DetectHiddenText = true;  // Unlike AutoIt, which defaults to false.  This setting performs better.

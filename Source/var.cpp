@@ -353,9 +353,11 @@ VarSizeType Var::Get(char *aBuf)
 		break;
 	}
 	case VAR_WORKINGDIR:
-		// Using GetCurrentDirectory() in case working directory is ever allowed to change
-		// (or if somehow it changes during operation of the program, perhaps due to a network
-		// drive being lost):
+		// Use GetCurrentDirectory() vs. g_WorkingDir because any in-progrses FileSelectFile()
+		// dialog is able to keep functioning even when it's quasi-thread is suspended.  The
+		// dialog can thus change the current directory as seen by the active quasi-thread even
+		// though g_WorkingDir hasn't been updated.  It might also be possible for the working
+		// directory to change in unusual circumstances such as a network drive being lost):
 		if (!aBuf)
 		{
 			result = GetCurrentDirectory(sizeof(buf_temp), buf_temp);
@@ -363,8 +365,7 @@ VarSizeType Var::Get(char *aBuf)
 			{
 				// This is just a warning because this function isn't set up to cause a true
 				// failure.  So don't append ERR_ABORT to the below string:
-				g_script.ScriptError("GetCurrentDirectory() failed; was trying to determine the length of"
-					" the current working dir.");
+				g_script.ScriptError("GetCurrentDirectory() failed.");
 				// Probably safer to return something so that caller reserves enough space for it
 				// in case the call works the next time?:
 				return MAX_PATH;

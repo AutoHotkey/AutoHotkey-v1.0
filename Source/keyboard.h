@@ -205,9 +205,11 @@ int SendChar(char aChar, mod_type aModifiers, KeyEventTypes aEventType, HWND aTa
 // a value close to UINT_MAX might be a little better since it's might be less likely to
 // be used as a pointer value by any apps that send keybd events whose ExtraInfo is really
 // a pointer value (hard to imagine?):
-#define KEYIGNORE 0xFFC3D44F
+#define KEY_IGNORE 0xFFC3D44F
+#define KEY_IGNORE_PHYS (KEY_IGNORE - 1)  // Same as above marked as physical for other instances of the hook.
 ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC = 0, HWND aTargetWindow = NULL
-	, bool aDoKeyDelay = false);
+	, bool aDoKeyDelay = false, DWORD aExtraInfo = KEY_IGNORE);
+#define KEYEVENT_PHYS(event_type, vk, sc) KeyEvent(event_type, vk, sc, NULL, false, KEY_IGNORE_PHYS)
 
 ToggleValueType ToggleKeyState(vk_type aVK, ToggleValueType aToggleValue);
 void ToggleNumlockWin9x();
@@ -220,13 +222,13 @@ void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLR
 mod_type GetModifierState();
 modLR_type GetModifierLRState(bool aExplicitlyGet = false);
 
-// The IsKeyDown9x() method is needed because GetKeyState() does not return the proper
+// The IsKeyDown9xNT() method is needed because GetKeyState() does not return the proper
 // state under Win9x, at least for the modifier keys under certain conditions.  The
 // AutoIt3 author indicates that GetAsyncKeyState() is also unreliable and he uses
 // this same method, so it seems best for now.  Specify GetAsyncKeyState() first due
 // to performance of short-circuit boolean:
-#define IsKeyDown9x(vk) (   (GetAsyncKeyState(vk) & 0x80000000) || ((GetKeyState(vk) & 0x8000))   )
-#define IsKeyDownNT(vk) (GetKeyState(vk) & 0x8000)
+#define IsKeyDown9xNT(vk) (   (GetAsyncKeyState(vk) & 0x80000000) || ((GetKeyState(vk) & 0x8000))   )
+#define IsKeyDown2kXP(vk) (GetKeyState(vk) & 0x8000)
 #define IsKeyToggledOn(vk) (GetKeyState(vk) & 0x01)
 
 // GetAsyncKeyState() doesn't always seem to work as advertised, at least under WinXP

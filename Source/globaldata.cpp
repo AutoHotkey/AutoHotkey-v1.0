@@ -65,6 +65,7 @@ bool g_MainTimerExists = false;
 bool g_UninterruptibleTimerExists = false;
 bool g_AutoExecTimerExists = false;
 bool g_InputTimerExists = false;
+bool g_SoundWasPlayed = false;
 bool g_IsSuspended = false;  // Make this separate from g_AllowInterruption since that is frequently turned off & on.
 bool g_AllowInterruption = true;
 bool g_AllowInterruptionForSub = true; // Separate from g_AllowInterruption so that they can have independent values.
@@ -119,6 +120,14 @@ int g_IconTraySuspend = (g_os.IsWin95() || g_os.IsWin98() || g_os.IsWinNT4() || 
 DWORD g_OriginalTimeout;
 
 global_struct g, g_default;
+
+// I considered maintaining this on a per-quasi-thread basis (i.e. in global_struct), but the overhead
+// of having to check and restore the working directory when a suspended thread is resumed (especially
+// when the script has many high-frequency timers), and possibly changing the working directory
+// whenever a new thread is launched, doesn't seem worth it.  This is because the need to change
+// the working directory is comparatively rare:
+char g_WorkingDir[MAX_PATH] = "";
+char *g_WorkingDirOrig = NULL;  // Assigned a value in WinMain().
 
 bool g_ForceKeybdHook = false;
 ToggleValueType g_ForceNumLock = NEUTRAL;
@@ -221,6 +230,8 @@ Action g_act[] =
 	, {"TrayTip", 0, 4, {3, 4, 0}}  // Title, Text, Timeout, Options
 	, {"Input", 0, 4, NULL}  // OutputVar, Options, EndKeys, MatchList.
 
+	, {"Transform", 3, 4, NULL}  // output var, operation, value1, value2
+
 	, {"StringLeft", 3, 3, {3, 0}}  // output var, input var, number of chars to extract
 	, {"StringRight", 3, 3, {3, 0}} // same
 	, {"StringMid", 4, 4, {3, 4, 0}} // Output Variable, Input Variable, Start char, Number of chars to extract
@@ -259,9 +270,9 @@ Action g_act[] =
 
 	, {"CoordMode", 1, 2, NULL} // Pixel|Mouse|ToolTip, screen|relative
 	, {"SetDefaultMouseSpeed", 1, 1, {1, 0}} // speed (numeric)
-	, {"MouseMove", 2, 3, {1, 2, 3, 0}} // x, y, speed
-	, {"MouseClick", 1, 6, {2, 3, 4, 5, 0}} // which-button, x, y, ClickCount, speed, d=hold-down/u=release
-	, {"MouseClickDrag", 1, 6, {2, 3, 4, 5, 6, 0}} // which-button, x1, y1, x2, y2, speed
+	, {"MouseMove", 2, 4, {1, 2, 3, 0}} // x, y, speed, option
+	, {"MouseClick", 1, 7, {2, 3, 4, 5, 0}} // which-button, x, y, ClickCount, speed, d=hold-down/u=release, Relative
+	, {"MouseClickDrag", 1, 7, {2, 3, 4, 5, 6, 0}} // which-button, x1, y1, x2, y2, speed, Relative
 	, {"MouseGetPos", 0, 2, NULL} // 2 optional output variables: one for xpos, and one for ypos. MinParams must be 0.
 
 	, {"StatusBarGetText", 1, 6, {2, 0}} // Output-var, part# (numeric), std. 4 window params
@@ -271,7 +282,8 @@ Action g_act[] =
 	, {"Sleep", 1, 1, {1, 0}} // Sleep time in ms (numeric)
 	, {"Random", 1, 3, {2, 3, 0}} // Output var, Min, Max (Note: MinParams is 1 so that param2 can be blank).
 	, {"Goto", 1, 1, NULL}
-	, {"Gosub", 1, 1, NULL}     // Label (or dereference that resolves to a label).
+	, {"Gosub", 1, 1, NULL}   // Label (or dereference that resolves to a label).
+	, {"Hotkey", 1, 3, NULL}  // Mod+Keys, Label/Action (blank to avoid changing curr. label), Options
 	, {"SetTimer", 1, 2, NULL}  // Label (or dereference that resolves to a label), period (or ON/OFF)
 	, {"Return", 0, 0, NULL}, {"Exit", 0, 1, {1, 0}} // ExitCode (currently ignored)
 	, {"Loop", 0, 4, NULL} // Iteration Count or FilePattern or root key name [,subkey name], FileLoopMode, Recurse? (custom validation for these last two)
@@ -302,6 +314,7 @@ Action g_act[] =
 	// set to the string in the first param:
 	, {"WinSetTitle", 0, 5, NULL} // title, text, newtitle, exclude-title, exclude-text
 	, {"WinGetTitle", 1, 5, NULL} // Output-var, std. 4 window params
+	, {"WinGetClass", 1, 5, NULL} // Output-var, std. 4 window params
 	, {"WinGetPos", 0, 8, NULL} // Four optional output vars: xpos, ypos, width, height.  Std. 4 window params.
 	, {"WinGetText", 1, 5, NULL} // Output var, std 4 window params.
 	, {"PostMessage", 1, 8}  // msg, wParam, lParam, Control, WinTitle, WinText, ExcludeTitle, ExcludeText
@@ -346,6 +359,7 @@ Action g_act[] =
 	, {"FileGetSize", 1, 3, NULL} // OutputVar, Filespec, B|K|M (bytes, kb, or mb)
 	, {"FileGetVersion", 1, 2, NULL} // OutputVar, Filespec
 
+	, {"SetWorkingDir", 1, 1, NULL} // New path
 	, {"FileSelectFile", 1, 5, {2, 0}} // output var, flag, working dir, greeting, filter
 	, {"FileSelectFolder", 1, 4, NULL} // output var, root directory, allow create folder (0=no, 1=yes), greeting
 
@@ -390,6 +404,7 @@ Action g_act[] =
 	, {"Edit", 0, 0, NULL}
 	, {"Reload", 0, 0, NULL}
 	, {"Menu", 2, 5, NULL}  // Example: Menu, tray, add, name, label, FutureUse (thread priority?)
+
 	, {"ExitApp", 0, 1, NULL}  // Optional exit-code
 	, {"Shutdown", 1, 1, {1, 0}} // Seems best to make the first param (the flag/code) mandatory.
 };

@@ -37,7 +37,7 @@ key is actually down at the moment of consideration.
 	#undef pEvent
 	#define pEvent ((PMSLLHOOKSTRUCT)lParam)
 #endif
-
+#define IS_IGNORED (pEvent->dwExtraInfo == KEY_IGNORE || pEvent->dwExtraInfo == KEY_IGNORE_PHYS)
 
 
 #ifdef INCLUDE_KEYBD_HOOK
@@ -399,7 +399,9 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppres
 		break;
 
 	// This should rarely if ever occur under WinNT/2k/XP -- perhaps only if an app calls keybd_event()
-	// and explicitly specifies one of these VKs to be sent:
+	// and explicitly specifies one of these VKs to be sent.  UPDATE: THIS DOES HAPPEN ON WINDOWS NT.
+	// So apparently, NT works with the neutral VKs for modifiers rather than the left/right specific
+	// ones like 2k/XP:
 	case VK_SHIFT:
 		if (sc == SC_RSHIFT)
 			if (key_up)
@@ -626,12 +628,12 @@ void UpdateKeyState(LPARAM lParam, sc_type sc, bool key_up, bool aIsSuppressed)
 	// otherwise be impossible because Numpad7 would become NumpadHome the moment
 	// Numlock was pressed down.  Note: this problem doesn't appear to affect Capslock
 	// or Scrolllock for some reason, possibly hardware or driver related.
-	// Note: the check for KEYIGNORE isn't strictly necessary, but here just for safety
+	// Note: the check for KEY_IGNORE isn't strictly necessary, but here just for safety
 	// in case this is ever called for a key that should be ignored.  If that were
 	// to happen and we didn't check for it, and endless loop of keyboard events
 	// might be caused due to the keybd events sent below.
 #ifdef INCLUDE_KEYBD_HOOK
-	if (pEvent->vkCode == VK_NUMLOCK && !key_up && pEvent->dwExtraInfo != KEYIGNORE)
+	if (pEvent->vkCode == VK_NUMLOCK && !key_up && !IS_IGNORED)
 	{
 		// This seems to undo the faulty indicator light problem and toggle
 		// the key back to the state it was in prior to when the user pressed it.
@@ -824,7 +826,8 @@ LRESULT AllowIt(HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, sc_type sc, b
 	// numlock events due to the keybd events that SuppressThisKey sends.
 	// It's a little more readable and comfortable not to rely on short-circuit
 	// booleans and instead do these conditions as separate IF statements.
-	if (pEvent->dwExtraInfo != KEYIGNORE)
+	bool is_ignored = IS_IGNORED;
+	if (!is_ignored)
 	{
 		if (kvk[(vk_type)(pEvent->vkCode)].pForceToggle) // Key is a toggleable key.
 		{
@@ -834,7 +837,7 @@ LRESULT AllowIt(HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, sc_type sc, b
 		}
 	}
 
-	if (g_input.status == INPUT_IN_PROGRESS && !(g_input.IgnoreAHKInput && pEvent->dwExtraInfo == KEYIGNORE))
+	if (g_input.status == INPUT_IN_PROGRESS && !(g_input.IgnoreAHKInput && is_ignored))
 		if (!CollectInput(lParam, sc, key_up)) // Key should be invisible (suppressed).
 			return SuppressThisKey;
 
@@ -933,7 +936,7 @@ LRESULT AllowIt(HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, sc_type sc, b
 		// pretty rare anyway, and I have more confidence in the reliability of putting
 		// the shift key down every time.
 		KeyEvent(KEYDOWN, VK_SHIFT);
-		KeyEvent(key_up ? KEYUP : KEYDOWN, (vk_type)pEvent->vkCode, sc);
+		KEYEVENT_PHYS(KEYUP, (vk_type)pEvent->vkCode, sc); // Mark it as physical for any other hook instances.
 		KeyEvent(KEYUP, VK_SHIFT);
 		// Suppress.  Technically, should do "return SuppressThisKey" so that KeyHistory indicates
 		// that this key was suppressed, but that would make the source a lot messier:
@@ -990,6 +993,13 @@ LRESULT CALLBACK LowLevelKeybdProc(int code, WPARAM wParam, LPARAM lParam)
 	KeyHistoryItem *pKeyHistoryCurr = NULL;
 	if (code != HC_ACTION)  // MSDN docs specify that Both LL keybd & mouse hook should return in this case.
 		return CallNextHookEx(g_KeybdHook, code, wParam, lParam);
+
+	// Change the event to be physical if that is indicated in its dwExtraInfo attribute.
+	// This is done for cases when the hook is installed multiple times and one instance of
+	// it wants to inform the others that this event should be considered physical for the
+	// purpose of updating modifier and key states:
+	if (pEvent->dwExtraInfo == KEY_IGNORE_PHYS)
+		pEvent->flags &= ~LLKHF_INJECTED;
 
 // Make all keybd events physical to try to fool the system into accepting CTRL-ALT-DELETE.
 // This didn't work, which implies that Ctrl-Alt-Delete is trapped at a lower level than
@@ -1076,6 +1086,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 
 #endif
 
+	bool is_ignored = IS_IGNORED;
 	// This is done for more than just convenience.  It solves problems that would otherwise arise
 	// due to the value of a global var such as KeyHistoryNext changing due to the reentrancy of
 	// this procedure.  For example, a call to KeyEvent() in here would alter the value of
@@ -1093,7 +1104,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	pKeyHistoryCurr->sc = 0;
 #endif
 	pKeyHistoryCurr->key_up = key_up;
-	pKeyHistoryCurr->event_type = (pEvent->dwExtraInfo == KEYIGNORE ? 'i' : ' ');
+	pKeyHistoryCurr->event_type = is_ignored ? 'i' : ' ';
 	g_HistoryTickNow = GetTickCount();
 	pKeyHistoryCurr->elapsed_time = (g_HistoryTickNow - g_HistoryTickPrev) / (float)1000;
 	g_HistoryTickPrev = g_HistoryTickNow;
@@ -1151,8 +1162,10 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		g_PhysicalKeyState[vk] = key_up ? 0 : STATE_DOWN;
 #endif
 
-	// Do this after above since AllowKeyToGoToSystem requires that sc be properly determined:
-	if (pEvent->dwExtraInfo == KEYIGNORE)
+	// Do this after above since AllowKeyToGoToSystem requires that sc be properly determined.
+	// Another reason to do it after the above is due to the fact that KEY_IGNORE_PHYS permits
+	// an ignored key to be considered physical input, which is handled above:
+	if (is_ignored)
 		// This is a key sent by our own app that we want to ignore.
 		// It's important never to change this to call the SuppressKey function because
 		// that function would cause an infinite loop when the Numlock key is pressed,
@@ -1190,7 +1203,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		// down-event wasn't suppressed (probably due to the fact that this win
 		// key is a prefix but not a suffix):
 		KeyEvent(KEYDOWN, VK_SHIFT);
-		KeyEvent(KEYUP, vk, sc);
+		KEYEVENT_PHYS(KEYUP, vk, sc); // Mark it as physical for any other hook instances.
 		KeyEvent(KEYUP, VK_SHIFT);
 		return SuppressThisKey;
 	}
@@ -1386,7 +1399,7 @@ if (!g_KeybdHook)
 			// will see all three events in the right order:
 			if (pThisKey->was_just_used == AS_PREFIX_FOR_HOTKEY)
 			{
-				KeyEvent(KEYUP, vk, sc);
+				KEYEVENT_PHYS(KEYUP, vk, sc); // Mark it as physical for any other hook instances.
 				KeyEvent(KEYDOWN, vk, sc);
 				KeyEvent(KEYUP, vk, sc);
 				return SuppressThisKey;
@@ -1903,7 +1916,7 @@ if (!g_KeybdHook)
 		// to MsgSleep() that a hotkey has been fired.  However, this doesn't seem likely
 		// to work because a call to GetMessage() will likely call this function without
 		// actually returning any messages to its caller, thus the hotkeys would never be
-		// seen during periods when there are no messages.  PostMessage works reliably, so
+		// seen during periods when there are no messages.  PostMessage() works reliably, so
 		// it seems best not to change it without good reason and without a full understanding
 		// of what's really going on.
 #ifdef INCLUDE_KEYBD_HOOK
@@ -1938,7 +1951,7 @@ if (!g_KeybdHook)
 				// and has the added benefit of allowing the key to be toggled if
 				// a modifier is held down before it (e.g. alt-CapsLock would then
 				// be able to toggle the CapsLock key):
-				KeyEvent(KEYUP, vk, sc);
+				KEYEVENT_PHYS(KEYUP, vk, sc); // Mark it as physical for any other hook instances.
 				KeyEvent(KEYDOWN, vk, sc);
 				KeyEvent(KEYUP, vk, sc);
 				return SuppressThisKey;

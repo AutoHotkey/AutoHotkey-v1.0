@@ -305,6 +305,9 @@
 				RelativePath=".\source\os_version.h">
 			</File>
 			<File
+				RelativePath=".\source\qmath.h">
+			</File>
+			<File
 				RelativePath=".\source\resources\resource.h">
 			</File>
 			<File

@@ -78,7 +78,7 @@ enum enum_act {
 , ACT_IFEXIST, ACT_IFNOTEXIST, ACT_IFMSGBOX
 , ACT_IF_FIRST = ACT_IFEQUAL, ACT_IF_LAST = ACT_IFMSGBOX  // Keep this updated with any new IFs that are added.
 , ACT_MSGBOX, ACT_INPUTBOX, ACT_SPLASHTEXTON, ACT_SPLASHTEXTOFF, ACT_TOOLTIP, ACT_TRAYTIP, ACT_INPUT
-, ACT_STRINGLEFT, ACT_STRINGRIGHT, ACT_STRINGMID
+, ACT_TRANSFORM, ACT_STRINGLEFT, ACT_STRINGRIGHT, ACT_STRINGMID
 , ACT_STRINGTRIMLEFT, ACT_STRINGTRIMRIGHT, ACT_STRINGLOWER, ACT_STRINGUPPER
 , ACT_STRINGLEN, ACT_STRINGGETPOS, ACT_STRINGREPLACE, ACT_STRINGSPLIT
 , ACT_ENVSET, ACT_ENVUPDATE
@@ -91,7 +91,7 @@ enum enum_act {
 , ACT_STATUSBARWAIT
 , ACT_CLIPWAIT
 , ACT_SLEEP, ACT_RANDOM
-, ACT_GOTO, ACT_GOSUB, ACT_SETTIMER, ACT_RETURN, ACT_EXIT
+, ACT_GOTO, ACT_GOSUB, ACT_HOTKEY, ACT_SETTIMER, ACT_RETURN, ACT_EXIT
 , ACT_LOOP, ACT_BREAK, ACT_CONTINUE
 , ACT_BLOCK_BEGIN, ACT_BLOCK_END
 , ACT_WINACTIVATE, ACT_WINACTIVATEBOTTOM
@@ -100,7 +100,7 @@ enum enum_act {
 , ACT_WINHIDE, ACT_WINSHOW
 , ACT_WINMINIMIZEALL, ACT_WINMINIMIZEALLUNDO
 , ACT_WINCLOSE, ACT_WINKILL, ACT_WINMOVE, ACT_WINMENUSELECTITEM
-, ACT_WINSET, ACT_WINSETTITLE, ACT_WINGETTITLE, ACT_WINGETPOS, ACT_WINGETTEXT
+, ACT_WINSET, ACT_WINSETTITLE, ACT_WINGETTITLE, ACT_WINGETCLASS, ACT_WINGETPOS, ACT_WINGETTEXT
 , ACT_POSTMESSAGE, ACT_SENDMESSAGE
 // Keep rarely used actions near the bottom for parsing/performance reasons:
 , ACT_PIXELGETCOLOR, ACT_PIXELSEARCH
@@ -112,7 +112,7 @@ enum enum_act {
 , ACT_FILECREATEDIR, ACT_FILEREMOVEDIR
 , ACT_FILEGETATTRIB, ACT_FILESETATTRIB, ACT_FILEGETTIME, ACT_FILESETTIME
 , ACT_FILEGETSIZE, ACT_FILEGETVERSION
-, ACT_FILESELECTFILE, ACT_FILESELECTFOLDER, ACT_FILECREATESHORTCUT
+, ACT_SETWORKINGDIR, ACT_FILESELECTFILE, ACT_FILESELECTFOLDER, ACT_FILECREATESHORTCUT
 , ACT_INIREAD, ACT_INIWRITE, ACT_INIDELETE
 , ACT_REGREAD, ACT_REGWRITE, ACT_REGDELETE
 , ACT_SETKEYDELAY, ACT_SETMOUSEDELAY, ACT_SETWINDELAY, ACT_SETCONTROLDELAY, ACT_SETBATCHLINES, ACT_SETINTERRUPT
@@ -182,6 +182,7 @@ enum TrayMenuItems {ID_TRAY_OPEN = 16000, ID_TRAY_HELP, ID_TRAY_WINDOWSPY, ID_TR
 #define ERR_MISSING_OUTPUT_VAR "This command requires that at least one of its output variables be provided."
 #define ERR_ELSE_WITH_NO_IF "This ELSE doesn't appear to belong to any IF-statement."
 #define ERR_SETTIMER "This timer's target label does not exist."
+#define ERR_HOTKEY_LABEL "Parameter #2 is not a valid label or action."
 #define ERR_MENULABEL "This menu item's target label does not exist."
 #define ERR_GROUPADD_LABEL "The target label in parameter #4 does not exist."
 #define ERR_WINDOW_PARAM "This command requires that at least one of its window parameters be non-blank."
@@ -191,8 +192,9 @@ enum TrayMenuItems {ID_TRAY_OPEN = 16000, ID_TRAY_HELP, ID_TRAY_WINDOWSPY, ID_TR
 #define ERR_ON_OFF_ALWAYS "If not blank or a variable reference, this parameter must be either ON, OFF, ALWAYSON, or ALWAYSOFF."
 #define ERR_ON_OFF_TOGGLE "If not blank or a variable reference, this parameter must be either ON, OFF, or TOGGLE."
 #define ERR_ON_OFF_TOGGLE_PERMIT "If not blank or a variable reference, this parameter must be either ON, OFF, TOGGLE, or PERMIT."
-#define ERR_TITLEMATCHMODE "TitleMatchMode must be either 1, 2, slow, fast, or a variable reference."
+#define ERR_TITLEMATCHMODE "TitleMatchMode must be either 1, 2, 3, slow, fast, or a variable reference."
 #define ERR_TITLEMATCHMODE2 "The variable does not contain a valid TitleMatchMode." ERR_ABORT
+#define ERR_TRANSFORMCOMMAND "Parameter #2 is not a valid transform command."
 #define ERR_MENUCOMMAND "Parameter #2 is not a valid menu command."
 #define ERR_MENUCOMMAND2 "Parameter #2's variable does not contain a valid menu command." ERR_ABORT
 #define ERR_CONTROLCOMMAND "Parameter #1 is not a valid Control command."
@@ -209,6 +211,7 @@ enum TrayMenuItems {ID_TRAY_OPEN = 16000, ID_TRAY_HELP, ID_TRAY_WINDOWSPY, ID_TR
 #define ERR_MOUSE_BUTTON "This line specifies an invalid mouse button."
 #define ERR_MOUSE_COORD "The X & Y coordinates must be either both absent or both present."
 #define ERR_MOUSE_UPDOWN "Parameter #6 must be either blank, D, U, or a variable reference."
+#define ERR_DIVIDEBYZERO "This line would attempt to divide by zero."
 #define ERR_PERCENT "Parameter #1 must be a number between -100 and 100 (inclusive), or a variable reference."
 #define ERR_MOUSE_SPEED "The Mouse Speed must be a number between 0 and " MAX_MOUSE_SPEED_STR ", blank, or a variable reference."
 #define ERR_MEM_ASSIGN "Out of memory while assigning to this variable." ERR_ABORT
@@ -353,6 +356,14 @@ enum JoyControls {JOYCTRL_INVALID, JOYCTRL_XPOS, JOYCTRL_YPOS, JOYCTRL_ZPOS
 , JOYCTRL_BUTTON_MAX = JOYCTRL_32
 };
 
+enum TransformCmds {TRANS_CMD_INVALID, TRANS_CMD_ASC, TRANS_CMD_CHR, TRANS_CMD_MOD
+	, TRANS_CMD_POW, TRANS_CMD_EXP, TRANS_CMD_SQRT, TRANS_CMD_LOG, TRANS_CMD_LN
+	, TRANS_CMD_ROUND, TRANS_CMD_CEIL, TRANS_CMD_FLOOR, TRANS_CMD_ABS
+	, TRANS_CMD_SIN, TRANS_CMD_COS, TRANS_CMD_TAN, TRANS_CMD_ASIN, TRANS_CMD_ACOS, TRANS_CMD_ATAN
+	, TRANS_CMD_BITAND, TRANS_CMD_BITOR, TRANS_CMD_BITXOR, TRANS_CMD_BITNOT
+	, TRANS_CMD_BITSHIFTLEFT, TRANS_CMD_BITSHIFTRIGHT
+};
+
 enum MenuCommands {MENU_COMMAND_INVALID, MENU_COMMAND_ADD, MENU_COMMAND_RENAME
 	, MENU_COMMAND_CHECK, MENU_COMMAND_UNCHECK, MENU_COMMAND_TOGGLECHECK
 	, MENU_COMMAND_ENABLE, MENU_COMMAND_DISABLE, MENU_COMMAND_TOGGLEENABLE
@@ -471,6 +482,7 @@ private:
 		, char *aExcludeTitle = "", char *aExcludeText = "");
 	ResultType ToolTip(char *aText, char *aX, char *aY);
 	ResultType TrayTip(char *aTitle, char *aText, char *aTimeout, char *aOptions);
+	ResultType Transform(char *aCmd, char *aValue1, char *aValue2);
 	ResultType Input(char *aOptions, char *aEndKeys, char *aMatchList);
 	ResultType WinMove(char *aTitle, char *aText, char *aX, char *aY
 		, char *aWidth = "", char *aHeight = "", char *aExcludeTitle = "", char *aExcludeText = "");
@@ -507,6 +519,7 @@ private:
 	ResultType WinSetTitle(char *aTitle, char *aText, char *aNewTitle
 		, char *aExcludeTitle = "", char *aExcludeText = "");
 	ResultType WinGetTitle(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
+	ResultType WinGetClass(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType WinGetPos(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int aColor, int aVariation);
@@ -514,17 +527,17 @@ private:
 
 	static ResultType SetToggleState(vk_type aVK, ToggleValueType &ForceLock, char *aToggleText);
 	static ResultType MouseClickDrag(vk_type aVK // Which button.
-		, int aX1, int aY1, int aX2, int aY2, int aSpeed);
+		, int aX1, int aY1, int aX2, int aY2, int aSpeed, bool aMoveRelative);
 	static ResultType MouseClick(vk_type aVK // Which button.
 		, int aX = COORD_UNSPECIFIED, int aY = COORD_UNSPECIFIED // These values signal us not to move the mouse.
-		, int aClickCount = 1, int aSpeed = DEFAULT_MOUSE_SPEED, char aEventType = '\0');
-	static void MouseMove(int aX, int aY, int aSpeed = DEFAULT_MOUSE_SPEED);
+		, int aClickCount = 1, int aSpeed = DEFAULT_MOUSE_SPEED, char aEventType = '\0', bool aMoveRelative = false);
+	static void MouseMove(int aX, int aY, int aSpeed = DEFAULT_MOUSE_SPEED, bool aMoveRelative = false);
 	ResultType MouseGetPos();
 	static void MouseEvent(DWORD aEventFlags, DWORD aX = 0, DWORD aY = 0, DWORD aData = 0)
-	// A small inline to help us remember to use KEYIGNORE so that our own mouse
+	// A small inline to help us remember to use KEY_IGNORE so that our own mouse
 	// events won't be falsely detected as hotkeys by the hooks (if they are installed).
 	{
-		mouse_event(aEventFlags, aX, aY, aData, KEYIGNORE);
+		mouse_event(aEventFlags, aX, aY, aData, KEY_IGNORE);
 	}
 
 public:
@@ -958,9 +971,40 @@ public:
 		if (!aBuf || !*aBuf) return MATCHMODE_INVALID;
 		if (*aBuf == '1' && !*(aBuf + 1)) return FIND_IN_LEADING_PART;
 		if (*aBuf == '2' && !*(aBuf + 1)) return FIND_ANYWHERE;
+		if (*aBuf == '3' && !*(aBuf + 1)) return FIND_EXACT;
 		if (!stricmp(aBuf, "FAST")) return FIND_FAST;
 		if (!stricmp(aBuf, "SLOW")) return FIND_SLOW;
 		return MATCHMODE_INVALID;
+	}
+
+	static TransformCmds ConvertTransformCmd(char *aBuf)
+	{
+		if (!aBuf || !*aBuf) return TRANS_CMD_INVALID;
+		if (!stricmp(aBuf, "Asc")) return TRANS_CMD_ASC;
+		if (!stricmp(aBuf, "Chr")) return TRANS_CMD_CHR;
+		if (!stricmp(aBuf, "Mod")) return TRANS_CMD_MOD;
+		if (!stricmp(aBuf, "Pow")) return TRANS_CMD_POW;
+		if (!stricmp(aBuf, "Exp")) return TRANS_CMD_EXP;
+		if (!stricmp(aBuf, "Sqrt")) return TRANS_CMD_SQRT;
+		if (!stricmp(aBuf, "Log")) return TRANS_CMD_LOG;
+		if (!stricmp(aBuf, "Ln")) return TRANS_CMD_LN;  // Natural log.
+		if (!stricmp(aBuf, "Round")) return TRANS_CMD_ROUND;
+		if (!stricmp(aBuf, "Ceil")) return TRANS_CMD_CEIL;
+		if (!stricmp(aBuf, "Floor")) return TRANS_CMD_FLOOR;
+		if (!stricmp(aBuf, "Abs")) return TRANS_CMD_ABS;
+		if (!stricmp(aBuf, "Sin")) return TRANS_CMD_SIN;
+		if (!stricmp(aBuf, "Cos")) return TRANS_CMD_COS;
+		if (!stricmp(aBuf, "Tan")) return TRANS_CMD_TAN;
+		if (!stricmp(aBuf, "ASin")) return TRANS_CMD_ASIN;
+		if (!stricmp(aBuf, "ACos")) return TRANS_CMD_ACOS;
+		if (!stricmp(aBuf, "ATan")) return TRANS_CMD_ATAN;
+		if (!stricmp(aBuf, "BitAnd")) return TRANS_CMD_BITAND;
+		if (!stricmp(aBuf, "BitOr")) return TRANS_CMD_BITOR;
+		if (!stricmp(aBuf, "BitXOr")) return TRANS_CMD_BITXOR;
+		if (!stricmp(aBuf, "BitNot")) return TRANS_CMD_BITNOT;
+		if (!stricmp(aBuf, "BitShiftLeft")) return TRANS_CMD_BITSHIFTLEFT;
+		if (!stricmp(aBuf, "BitShiftRight")) return TRANS_CMD_BITSHIFTRIGHT;
+		return TRANS_CMD_INVALID;
 	}
 
 	static MenuCommands ConvertMenuCommand(char *aBuf)
@@ -1338,7 +1382,7 @@ private:
 	void AppendStandardTrayItems();
 public:
 	Line *mCurrLine;  // Seems better to make this public than make Line our friend.
-	Label *mThisHotkeyLabel, *mPriorHotkeyLabel;
+	char *mThisHotkeyName, *mPriorHotkeyName;
 
 	ScriptTimer *mFirstTimer, *mLastTimer;  // The first and last script timers in the linked list.
 	UINT mTimerCount, mTimerEnabledCount;
@@ -1639,21 +1683,15 @@ public:
 
 	VarSizeType GetThisHotkey(char *aBuf = NULL)
 	{
-		char *str = "";  // Set default.
-		if (mThisHotkeyLabel)
-			str = mThisHotkeyLabel->mName;
 		if (aBuf)
-			strcpy(aBuf, str);
-		return (VarSizeType)strlen(str);
+			strcpy(aBuf, mThisHotkeyName);
+		return (VarSizeType)strlen(mThisHotkeyName);
 	}
 	VarSizeType GetPriorHotkey(char *aBuf = NULL)
 	{
-		char *str = "";  // Set default.
-		if (mPriorHotkeyLabel)
-			str = mPriorHotkeyLabel->mName;
 		if (aBuf)
-			strcpy(aBuf, str);
-		return (VarSizeType)strlen(str);
+			strcpy(aBuf, mPriorHotkeyName);
+		return (VarSizeType)strlen(mPriorHotkeyName);
 	}
 	VarSizeType GetTimeSinceThisHotkey(char *aBuf = NULL)
 	{
@@ -1661,7 +1699,7 @@ public:
 		// It must be the type of hotkey that has a label because we want the TimeSinceThisHotkey
 		// value to be "in sync" with the value of ThisHotkey itself (i.e. use the same method
 		// to determine which hotkey is the "this" hotkey):
-		if (mThisHotkeyLabel)
+		if (*mThisHotkeyName)
 			// Even if GetTickCount()'s TickCount has wrapped around to zero and the timestamp hasn't,
 			// DWORD math still gives the right answer as long as the number of days between
 			// isn't greater than about 49.  See MyGetTickCount() for explanation of %d vs. %u.
@@ -1677,7 +1715,7 @@ public:
 	VarSizeType GetTimeSincePriorHotkey(char *aBuf = NULL)
 	{
 		char str[128];
-		if (mPriorHotkeyLabel)
+		if (*mPriorHotkeyName)
 			// See MyGetTickCount() for explanation for explanation:
 			//snprintf(str, sizeof(str), "%d", (DWORD)(GetTickCount() - mPriorHotkeyStartTime));
 			ITOA64((__int64)(GetTickCount() - mPriorHotkeyStartTime), str)
@@ -1746,6 +1784,7 @@ public:
 	// Call this SciptError to avoid confusion with Line's error-displaying functions:
 	ResultType ScriptError(char *aErrorText, char *aExtraInfo = "");
 
+	#define SOUNDPLAY_ALIAS "AHK_PlayMe"  // Used by destructor and SoundPlay().
 	Script();
 	~Script();
 	// Note that the anchors to any linked lists will be lost when this

@@ -626,7 +626,8 @@ int SendChar(char aChar, mod_type aModifiers, KeyEventTypes aEventType, HWND aTa
 
 
 
-ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTargetWindow, bool aDoKeyDelay)
+ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTargetWindow
+	, bool aDoKeyDelay, DWORD aExtraInfo)
 // sc or vk, but not both, can be zero to indicate unspecified.
 // For keys like NumpadEnter -- that have have a unique scancode but a non-unique virtual key --
 // caller can just specify the sc.  In addition, the scan code should be specified for keys
@@ -638,9 +639,6 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 // Later, switch to using SendInput() on OS's that support it.
 {
 	if (!aVK && !aSC) return FAIL;
-	DWORD aExtraInfo = KEYIGNORE;  // Formerly a param, but it was never called that way so got rid of it.
-	//if (aExtraInfo && aExtraInfo != KEYIGNORE)
-	//	aExtraInfo = KEYIGNORE;  // In case caller called it wrong.
 
 	// Even if the g_sc_to_vk mapping results in a zero-value vk, don't return.
 	// I think it may be valid to send keybd_events	that have a zero vk.
@@ -904,6 +902,9 @@ MsgBox(error_text);
 	else if (!(modifiers_now & MOD_SHIFT) && (aModifiersNew & MOD_SHIFT))
 		modifiersLRnew |= MOD_LSHIFT;
 
+	if (modifiersLRnew == aModifiersLRnow)  // They're already in the right state.
+		return modifiersLRnew;
+	// Otherwise, change the state:
 	return SetModifierLRState(modifiersLRnew, aModifiersLRnow);
 }
 
@@ -1091,27 +1092,27 @@ inline modLR_type GetModifierLRState(bool aExplicitlyGet)
 	// in its place, yields the correct info.  Very strange.
 
 	modLR_type modifiersLR = 0;  // Allows all to default to up/off to simplify the below.
-	if (g_os.IsWin9x())
+	if (g_os.IsWin9x() || g_os.IsWinNT4())
 	{
 		// Assume it's the left key since there's no way to tell which of the pair it
 		// is? (unless the hook is installed, in which case it's value would have already
 		// been returned, above).
-		if (IsKeyDown9x(VK_SHIFT)) modifiersLR |= MOD_LSHIFT;
-		if (IsKeyDown9x(VK_CONTROL)) modifiersLR |= MOD_LCONTROL;
-		if (IsKeyDown9x(VK_MENU)) modifiersLR |= MOD_LALT;
-		if (IsKeyDown9x(VK_LWIN)) modifiersLR |= MOD_LWIN;
-		if (IsKeyDown9x(VK_RWIN)) modifiersLR |= MOD_RWIN;
+		if (IsKeyDown9xNT(VK_SHIFT)) modifiersLR |= MOD_LSHIFT;
+		if (IsKeyDown9xNT(VK_CONTROL)) modifiersLR |= MOD_LCONTROL;
+		if (IsKeyDown9xNT(VK_MENU)) modifiersLR |= MOD_LALT;
+		if (IsKeyDown9xNT(VK_LWIN)) modifiersLR |= MOD_LWIN;
+		if (IsKeyDown9xNT(VK_RWIN)) modifiersLR |= MOD_RWIN;
 	}
 	else
 	{
-		if (IsKeyDownNT(VK_LSHIFT)) modifiersLR |= MOD_LSHIFT;
-		if (IsKeyDownNT(VK_RSHIFT)) modifiersLR |= MOD_RSHIFT;
-		if (IsKeyDownNT(VK_LCONTROL)) modifiersLR |= MOD_LCONTROL;
-		if (IsKeyDownNT(VK_RCONTROL)) modifiersLR |= MOD_RCONTROL;
-		if (IsKeyDownNT(VK_LMENU)) modifiersLR |= MOD_LALT;
-		if (IsKeyDownNT(VK_RMENU)) modifiersLR |= MOD_RALT;
-		if (IsKeyDownNT(VK_LWIN)) modifiersLR |= MOD_LWIN;
-		if (IsKeyDownNT(VK_RWIN)) modifiersLR |= MOD_RWIN;
+		if (IsKeyDown2kXP(VK_LSHIFT)) modifiersLR |= MOD_LSHIFT;
+		if (IsKeyDown2kXP(VK_RSHIFT)) modifiersLR |= MOD_RSHIFT;
+		if (IsKeyDown2kXP(VK_LCONTROL)) modifiersLR |= MOD_LCONTROL;
+		if (IsKeyDown2kXP(VK_RCONTROL)) modifiersLR |= MOD_RCONTROL;
+		if (IsKeyDown2kXP(VK_LMENU)) modifiersLR |= MOD_LALT;
+		if (IsKeyDown2kXP(VK_RMENU)) modifiersLR |= MOD_RALT;
+		if (IsKeyDown2kXP(VK_LWIN)) modifiersLR |= MOD_LWIN;
+		if (IsKeyDown2kXP(VK_RWIN)) modifiersLR |= MOD_RWIN;
 	}
 
 	return modifiersLR;
@@ -1412,12 +1413,8 @@ sc_type TextToSC(char *aText)
 			return g_key_to_sc[i].sc;
 	// Do this only after the above, in case any valid key names ever start with SC:
 	if (toupper(*aText) == 'S' && toupper(*(aText + 1)) == 'C')
-	{
-		int sc; // UINT in case sscanf() requires a larger storage area than sc_type (even though it is currently UINT).
-		sscanf(aText + 2, "%X", &sc); // Convert hexadecimal text string to word/UINT/sc_type.
-		return sc;
-	}
-	return 0; // I don't think zero is a valid scan code, but might want to confirm.
+		return strtol(aText + 2, NULL, 16);  // Convert from hex.
+	return 0; // Indicate "not found".
 }
 
 
