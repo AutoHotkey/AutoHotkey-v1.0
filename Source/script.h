@@ -47,6 +47,7 @@ enum ExecUntilMode {NORMAL_MODE, UNTIL_RETURN, UNTIL_BLOCK_END, ONLY_ONE_LINE};
 typedef void *AttributeType;
 
 enum FileLoopModeType {FILE_LOOP_INVALID, FILE_LOOP_FILES_ONLY, FILE_LOOP_FILES_AND_FOLDERS, FILE_LOOP_FOLDERS_ONLY};
+enum VariableTypeType {VAR_TYPE_INVALID, VAR_TYPE_NUMBER, VAR_TYPE_FLOAT, VAR_TYPE_TIME};
 
 // But the array that goes with these actions is in globaldata.cpp because
 // otherwise it would be a little cumbersome to declare the extern version
@@ -61,6 +62,7 @@ enum enum_act {
 , ACT_REPEAT // Never parsed directly, only provided as a translation target for the old command (see other notes).
 , ACT_ELSE   // Parsed at a lower level than most commands to support same-line ELSE-actions (e.g. "else if").
 , ACT_IFEQUAL, ACT_IFNOTEQUAL, ACT_IFGREATER, ACT_IFGREATEROREQUAL, ACT_IFLESS, ACT_IFLESSOREQUAL
+, ACT_IFIS, ACT_IFISNOT
 , ACT_FIRST_COMMAND // i.e the above aren't considered commands for parsing/searching purposes.
 , ACT_IFWINEXIST = ACT_FIRST_COMMAND
 , ACT_IFWINNOTEXIST, ACT_IFWINACTIVE, ACT_IFWINNOTACTIVE
@@ -634,6 +636,17 @@ public:
 		if (!stricmp(aBuf, "RIGHT")) return VK_RBUTTON;
 		if (!stricmp(aBuf, "MIDDLE")) return VK_MBUTTON;
 		return 0;
+	}
+
+	static VariableTypeType ConvertVariableTypeName(char *aBuf)
+	// Returns the matching type, or zero if none.
+	{
+		if (!aBuf || !*aBuf) return VAR_TYPE_INVALID;
+		if (!stricmp(aBuf, "number")) return VAR_TYPE_NUMBER;
+		if (!stricmp(aBuf, "float")) return VAR_TYPE_FLOAT;
+		if (!stricmp(aBuf, "time")) return VAR_TYPE_TIME;
+		if (!stricmp(aBuf, "date")) return VAR_TYPE_TIME;  // "date" is just an alias for "time".
+		return VAR_TYPE_INVALID;
 	}
 
 	static ResultType ValidateMouseCoords(char *aX, char *aY)

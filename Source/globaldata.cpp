@@ -159,6 +159,7 @@ Action g_act[] =
 	// string this way: "If var1 >=".  Note: Line::ToText() relies on the below names:
 	, {"=", 1, 2, NULL}, {"<>", 1, 2, NULL}, {">", 1, 2, NULL}
 	, {">=", 1, 2, NULL}, {"<", 1, 2, NULL}, {"<=", 1, 2, NULL}
+	, {"is", 2, 2, NULL}, {"is not", 2, 2, NULL}
 
 	// For these, allow a minimum of zero, otherwise, the first param (WinTitle) would
 	// be considered mandatory-non-blank by default.  It's easier to make all the params

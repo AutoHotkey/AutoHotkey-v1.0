@@ -3245,6 +3245,8 @@ ArgTypeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_IFGREATEROREQUAL:
 		case ACT_IFLESS:
 		case ACT_IFLESSOREQUAL:
+		case ACT_IFIS:
+		case ACT_IFISNOT:
 			return ARG_TYPE_INPUT_VAR;
 		}
 		break;

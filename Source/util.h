@@ -150,14 +150,19 @@ inline char *trim (char *aStr)
 // Callers rely on PURE_NOT_NUMERIC being zero/false, so order is important:
 enum pure_numeric_type {PURE_NOT_NUMERIC, PURE_INTEGER, PURE_FLOAT};
 inline pure_numeric_type IsPureNumeric(char *aBuf, bool aAllowNegative = false
-	, bool aAllowAllWhitespace = true, bool aAllowFloat = false)
+	, bool aAllowAllWhitespace = true, bool aAllowFloat = false, bool aAllowImpure = false)
 // String can contain whitespace.
 {
 	aBuf = omit_leading_whitespace(aBuf); // i.e. caller doesn't have to have ltrimmed, only rtrimmed.
 	if (!*aBuf) // The string is empty or consists entirely of whitespace.
 		return aAllowAllWhitespace ? PURE_INTEGER : PURE_NOT_NUMERIC;
-	if (aAllowNegative && *aBuf == '-')
-		++aBuf;
+	if (*aBuf == '-')
+		if (aAllowNegative)
+			++aBuf;
+		else
+			return PURE_NOT_NUMERIC;
+	if (*aBuf < '0' || *aBuf > '9') // Regardless of aAllowImpure, first char must always be non-numeric.
+		return PURE_NOT_NUMERIC;
 	bool is_float;
 	for (is_float = false; *aBuf && !IS_SPACE_OR_TAB(*aBuf); ++aBuf)
 	{
@@ -168,7 +173,10 @@ inline pure_numeric_type IsPureNumeric(char *aBuf, bool aAllowNegative = false
 				is_float = true;
 		else
 			if (*aBuf < '0' || *aBuf > '9')
-				return PURE_NOT_NUMERIC;
+				if (aAllowImpure) // Since aStr starts with a number (as verified above), it is considered a number.
+					return is_float ? PURE_FLOAT : PURE_INTEGER;
+				else
+					return PURE_NOT_NUMERIC;
 	}
 	if (*aBuf && *omit_leading_whitespace(aBuf))
 		// The loop was broken because a space or tab was encountered, and since there's

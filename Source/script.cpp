@@ -898,7 +898,7 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 	{
 		RETURN_IF_NO_CHAR
 		g_HotkeyThrottleInterval = atoi(cp);  // cp was set to the right position by the above macro
-		if (g_HotkeyThrottleInterval < 10) // sanity check
+		if (g_HotkeyThrottleInterval < 10) // values under 10 wouldn't be useful due to timer granularity.
 			g_HotkeyThrottleInterval = 10;
 		return CONDITION_TRUE;
 	}
@@ -1104,11 +1104,10 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 		}
 		else if (!stricmp(action_name, "IF"))
 		{
-			char *operation = StrChrAny(action_args, "><!=");
-			if (!operation)
-				return ScriptError("Although this line is an IF, it lacks operator symbol(s).", aLineText);
-				// Note: User can use whitespace to differentiate a literal symbol from
-				// part of an operator, e.g. if var1 < =  <--- char is literal
+			char *operation;
+			// Skip over the variable name so that the "is" and "is not" operators are properly supported:
+			for (operation = action_args; *operation && !IS_SPACE_OR_TAB(*operation); ++operation);
+			operation = omit_leading_whitespace(operation);
 			switch (*operation)
 			{
 			case '=': // But don't allow == to be "Equals" since the 2nd '=' might be literal.
@@ -1140,6 +1139,30 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 				else
 					return ScriptError("When used this way, the symbol must be \"!=\" not \"!\".", aLineText);
 				break;
+			case 'i':  // "is" or "is not"
+			case 'I':
+				if (toupper(*(operation + 1)) == 'S')
+				{
+					char *next_word = omit_leading_whitespace(operation + 2);
+					if (strnicmp(next_word, "not", 3))
+						action_type = ACT_IFIS;
+					else
+					{
+						action_type = ACT_IFISNOT;
+						// Remove the word "not" to set things up to be parsed as args further down.
+						*next_word = ' ';
+						*(next_word + 1) = ' ';
+						*(next_word + 2) = ' ';
+					}
+					*(operation + 1) = ' '; // Remove the 'S' in "IS".  'I' is replaced with ',' later below.
+				}
+				else
+					return ScriptError("The word IS was expected but not found.", aLineText);
+				break;
+			default:
+				return ScriptError("Although this line is an IF, it lacks operator symbol(s).", aLineText);
+				// Note: User can use whitespace to differentiate a literal symbol from
+				// part of an operator, e.g. if var1 < =  <--- char is literal
 			} // switch()
 			// Set things up to be parsed as args later on:
 			*operation = g_delimiter;
@@ -2122,6 +2145,13 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_IFMSGBOX:
 		if (line->mArgc > 0 && !line->ArgHasDeref(1) && !line->ConvertMsgBoxResult(LINE_RAW_ARG1))
 			return ScriptError(ERR_IFMSGBOX, LINE_RAW_ARG1);
+		break;
+	case ACT_IFIS:
+	case ACT_IFISNOT:
+		if (line->mArgc > 1 && !line->ArgHasDeref(2) && !line->ConvertVariableTypeName(LINE_RAW_ARG2))
+			// Don't refer to it as "Parameter #2" because this command isn't formatted/displayed that way:
+			return ScriptError("The type name must be either NUMBER, FLOAT, TIME, DATE, or a variable reference."
+				, LINE_RAW_ARG2);
 		break;
 	case ACT_GETKEYSTATE:
 		if (line->mArgc > 1 && !line->ArgHasDeref(2) && !TextToVK(LINE_RAW_ARG2))
@@ -3524,6 +3554,41 @@ inline ResultType Line::EvaluateCondition()
 			if_condition = _atoi64(ARG1) >= _atoi64(ARG2);
 		break;
 
+	case ACT_IFIS:
+	case ACT_IFISNOT:
+	{
+		VariableTypeType variable_type = ConvertVariableTypeName(ARG2);
+		if (variable_type == VAR_TYPE_INVALID)
+		{
+			// Type is probably a dereferenced variable that resolves to an invalid type name.
+			// It seems best to make the condition false in these cases, rather than pop up
+			// a runtime error dialog:
+			if_condition = false;
+			break;
+		}
+		switch(variable_type)
+		{
+		case VAR_TYPE_NUMBER:
+			if_condition = IsPureNumeric(ARG1, true, false, true);  // Floats are defined as being numeric.
+			break;
+		case VAR_TYPE_FLOAT:
+			if_condition = IsPureNumeric(ARG1, true, false, true) && strchr(ARG1, '.');
+			break;
+		case VAR_TYPE_TIME:
+		{
+			FILETIME ft;
+			// Also insist on numeric, because even though YYYYMMDDToFileTime() will properly convert a
+			// non-conformant string such as "2004.4", for future compatibility, we don't want to
+			// report that such strings are valid times:
+			if_condition = IsPureNumeric(ARG1, false, false, false) && YYYYMMDDToFileTime(ARG1, &ft);
+			break;
+		}
+		}
+		if (mActionType == ACT_IFISNOT)
+			if_condition = !if_condition;
+		break;
+	}
+
 	case ACT_IFMSGBOX:
 	{
 		int mb_result = ConvertMsgBoxResult(ARG1);
@@ -4392,17 +4457,17 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 
 		#undef DETERMINE_NUMERIC_TYPES
 		#define DETERMINE_NUMERIC_TYPES \
-			value_is_pure_numeric = IsPureNumeric(ARG2, true, false, true);\
-			var_is_pure_numeric = IsPureNumeric(output_var->Contents(), true, false, true);
-		#define IF_EITHER_IS_NON_NUMERIC if (!value_is_pure_numeric || !var_is_pure_numeric)
+			value_is_pure_numeric = IsPureNumeric(ARG2, true, false, true, true);\
+			var_is_pure_numeric = IsPureNumeric(output_var->Contents(), true, false, true, true);
+//		#define IF_EITHER_IS_NON_NUMERIC if (!value_is_pure_numeric || !var_is_pure_numeric)
 		#define IF_EITHER_IS_FLOAT if (value_is_pure_numeric == PURE_FLOAT || var_is_pure_numeric == PURE_FLOAT)
 
 		DETERMINE_NUMERIC_TYPES
 
 		if (*ARG3 && strchr("SMHD", toupper(*ARG3))) // the command is being used to add a value to a date-time.
 		{
-			if (!value_is_pure_numeric) // Adding blank or something non-numeric to a datetime sets var to be blank.
-				return output_var->Assign("");
+			if (!value_is_pure_numeric) // It's considered to be zero, so the output_var is left unchanged:
+				return OK;
 			else
 			{
 				// Use double to support a floating point value for days, hours, minutes, etc:
@@ -4449,19 +4514,9 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		}
 		else // The command is being used to do normal math (not date-time).
 		{
-			// If either VAR or VALUE is non-numeric, AutoIt2 is documented as setting the variable
-			// to be zero (but it doesn't actually behave this way as of version 2.64).
-			// Due to this AutoIt2 oversight, it seems best to use different behavior: set the var
-			// to be blank so that a legitmately created zero (such as by adding 1 to a variable that
-			// contains -1) can be differentiated from an operation that involved non-numeric
-			// values.  This behavior is used as an easy way to determine whether a variable
-			// contains a pure numeric value (i.e. rather than having a separate command such as
-			// "if IsPureNumber, variable"):
-			IF_EITHER_IS_NON_NUMERIC
-				return output_var->Assign("");
-			else IF_EITHER_IS_FLOAT
+			IF_EITHER_IS_FLOAT
 				return output_var->Assign(atof(output_var->Contents()) + atof(ARG2));  // Overload: Assigns a double.
-			else
+			else // Non-numeric variables or values are considered to be zero for the purpose of the calculation.
 				return output_var->Assign(_atoi64(output_var->Contents()) + _atoi64(ARG2));  // Overload: Assigns an int.
 		}
 		return OK;  // Never executed.
@@ -4492,11 +4547,9 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		else
 		{
 			DETERMINE_NUMERIC_TYPES
-			IF_EITHER_IS_NON_NUMERIC
-				return output_var->Assign("");
-			else IF_EITHER_IS_FLOAT
+			IF_EITHER_IS_FLOAT
 				return output_var->Assign(atof(output_var->Contents()) - atof(ARG2));  // Overload: Assigns a double.
-			else
+			else // Non-numeric variables or values are considered to be zero for the purpose of the calculation.
 				return output_var->Assign(_atoi64(output_var->Contents()) - _atoi64(ARG2));  // Overload: Assigns an INT.
 			break;
 		}
@@ -4508,11 +4561,9 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
 		DETERMINE_NUMERIC_TYPES
-		IF_EITHER_IS_NON_NUMERIC
-			return output_var->Assign("");
-		else IF_EITHER_IS_FLOAT
+		IF_EITHER_IS_FLOAT
 			return output_var->Assign(atof(output_var->Contents()) * atof(ARG2));  // Overload: Assigns a double.
-		else
+		else // Non-numeric variables or values are considered to be zero for the purpose of the calculation.
 			return output_var->Assign(_atoi64(output_var->Contents()) * _atoi64(ARG2));  // Overload: Assigns an INT.
 
 	case ACT_DIV:
@@ -4520,9 +4571,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
 		DETERMINE_NUMERIC_TYPES
-		IF_EITHER_IS_NON_NUMERIC
-			return output_var->Assign("");
-		else IF_EITHER_IS_FLOAT
+		IF_EITHER_IS_FLOAT
 		{
 			double ARG2_as_float = atof(ARG2);  // Since atof() returns double, at least on MSVC++ 7.x
 			// It's a little iffy to compare floats this way, but what's the alternative?:
@@ -4530,7 +4579,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 				return LineError("This line would attempt to divide by zero." ERR_ABORT, FAIL, ARG2);
 			return output_var->Assign(atof(output_var->Contents()) / ARG2_as_float);  // Overload: Assigns a double.
 		}
-		else
+		else // Non-numeric variables or values are considered to be zero for the purpose of the calculation.
 		{
 			__int64 ARG2_as_int = _atoi64(ARG2);
 			if (!ARG2_as_int)
