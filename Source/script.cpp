@@ -22,6 +22,7 @@ GNU General Public License for more details.
 #include <sys/timeb.h> // for _timeb struct
 #include "window.h" // for a lot of things
 #include "application.h" // for MsgSleep()
+#include <mmsystem.h> // for waveOutSetVolume()
 
 // Globals that are for only this module:
 #define MAX_COMMENT_FLAG_LENGTH 15
@@ -1489,6 +1490,16 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				}
 				break;
 
+			case ACT_SOUNDSETWAVEVOLUME:
+				if (i != 0) break; // i.e. 1st param
+				if (!deref_count)
+				{
+					value = atoi(new_arg[i].text);
+					if (value < 0 || value > 100)
+						return ScriptError(ERR_PERCENT, new_arg[i].text);
+				}
+				break;
+
 			case ACT_MOUSEMOVE:
 				if (i != 2) break; // i.e. 3rd param
 				#define VALIDATE_MOUSE_SPEED if (!deref_count)\
@@ -1496,18 +1507,21 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					value = atoi(new_arg[i].text);\
 					if (value < 0 || value > MAX_MOUSE_SPEED)\
 						return ScriptError(ERR_MOUSE_SPEED, new_arg[i].text);\
-				}\
-				break;
+				}
 				VALIDATE_MOUSE_SPEED
+				break;
 			case ACT_MOUSECLICK:
 				if (i != 4) break; // i.e. 5th param
 				VALIDATE_MOUSE_SPEED
+				break;
 			case ACT_MOUSECLICKDRAG:
 				if (i != 5) break; // i.e. 6th param
 				VALIDATE_MOUSE_SPEED
+				break;
 			case ACT_SETDEFAULTMOUSESPEED:
 				if (i != 0) break; // i.e. 1st param
 				VALIDATE_MOUSE_SPEED
+				break;
 
 			case ACT_FILECOPY:
 			case ACT_FILEMOVE:
@@ -2263,6 +2277,9 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 
 	for (Line *line = this; line != NULL;)
 	{
+		// If a previous command (line) had the clipboard open, perhaps because it directly accessed
+		// the clipboard via Var::Contents(), we close it here:
+		CLOSE_CLIPBOARD_IF_OPEN;
 		g_script.mCurrLine = line;  // Simplifies error reporting when we get deep into function calls.
 		line->Log();  // Maintains a circular queue of the lines most recently executed.
 
@@ -2943,6 +2960,26 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_SLEEP:
 		MsgSleep(atoi(ARG1));
 		return OK;
+	case ACT_ENVSET:
+		// MSDN: "If [the 2nd] parameter is NULL, the variable is deleted from the current process’s environment."
+		// My: Though it seems okay, for now, just to set it to be blank if the user omitted the 2nd param or
+		// left it blank (AutoIt3 does this too).  Also, no checking is currently done to ensure that ARG2
+		// isn't longer than 32K, since future OSes may support longer env. vars.  SetEnvironmentVariable()
+		// might return 0(fail) in that case anyway.  Also, ARG1 may be a dereferenced variable that resolves
+		// to the name of an Env. Variable.  In any case, this name need not correspond to any existing
+		// variable name within the script (i.e. script variables and env. variables aren't tied to each other
+		// in any way).  This seems to be the most flexible approach, but are there any shortcomings?
+		// The only one I can think of is that if the script tries to fetch the value of an env. var (perhaps
+		// one that some other spawned program changed), and that var's name corresponds to the name of a
+		// script var, the script var's value (if non-blank) will be fetched instead.
+		// Note: It seems, at least under WinXP, that env variable names can contain spaces.  So it's best
+		// not to validate ARG1 the same way we validate script variables (i.e. just let\
+		// SetEnvironmentVariable()'s return value determine whether there's an error).  However, I just
+		// realized that it's impossible to "retrieve" the value of an env var that has spaces since
+		// there is no EnvGet() command (EnvGet() is implicit whenever an undefined or blank script
+		// variable is dereferenced).  For now, this is documented here as a known limitation.
+		g_ErrorLevel->Assign(SetEnvironmentVariable(ARG1, ARG2) ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
+		return OK;
 	case ACT_RUN:
 		return g_script.ActionExec(ARG1, NULL, ARG2, true, ARG3);  // Be sure to pass NULL for 2nd param.
 	case ACT_RUNWAIT:
@@ -3387,6 +3424,23 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		return PerformAssign();  // It will report any errors for us.
 	case ACT_DRIVESPACEFREE:
 		return DriveSpaceFree(ARG2);
+	case ACT_SOUNDSETWAVEVOLUME:
+	{
+		// Adapted from the AutoIt3 source.
+		int volume = atoi(ARG1);
+		if (volume < 0 || volume > 100)
+		{
+			g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+			return OK;  // Let ErrorLevel tell the story.
+		}
+		WORD wVolume = 0xFFFF * volume / 100;
+		if (waveOutSetVolume(0, MAKELONG(wVolume, wVolume)) == MMSYSERR_NOERROR)
+			g_ErrorLevel->Assign(ERRORLEVEL_NONE);
+		else
+			g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+		return OK;
+	}
+
 	case ACT_FILESELECTFILE:
 		return FileSelectFile(ARG2, ARG3);
 	case ACT_FILECREATEDIR:
@@ -3972,8 +4026,8 @@ inline VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize)
 		space_needed += (VarSizeType)strlen(mArg[iArg].text);
 		for (deref = mArg[iArg].deref; deref && deref->marker; ++deref)
 		{
-			space_needed -= mArg[iArg].deref->length;  // Substitute the length of the variable contents
-			space_needed += deref->var->Get();    // for that of the literal text of the deref.
+			space_needed -= deref->length;     // Substitute the length of the variable contents
+			space_needed += deref->var->Get(); // for that of the literal text of the deref.
 		}
 		// +1 for this arg's zero terminator in the buffer:
 		++space_needed;
@@ -4113,8 +4167,9 @@ char *Line::ToText(char *aBuf, size_t aBufSize, bool aAppendNewline)
 	char *aBuf_orig = aBuf;
 	snprintf(aBuf, BUF_SPACE_REMAINING, "%03u: ", mFileLineNumber);
 	aBuf += strlen(aBuf);
-	if (mActionType < ACT_FIRST_COMMAND && mActionType != ACT_REPEAT) // Needs custom conversion.
+	if (ACT_IS_ASSIGN(mActionType) || (ACT_IS_IF(mActionType) && mActionType < ACT_FIRST_COMMAND))
 	{
+		// Only these commands need custom conversion.
 		snprintf(aBuf, BUF_SPACE_REMAINING, "%s%s %s %s"
 			, ACT_IS_IF(mActionType) ? "IF " : "", VARARG1->mName, g_act[mActionType].Name, RAW_ARG2);
 		aBuf += strlen(aBuf);
@@ -4235,6 +4290,9 @@ ResultType Script::ScriptError(char *aErrorText, char *aExtraInfo)
 
 void Script::ShowInEditor()
 {
+	// Disabled for now:
+	return;
+
 	bool old_mode = g.TitleFindAnywhere;
 	g.TitleFindAnywhere = true;
 	HWND editor = WinExist(mFileName);

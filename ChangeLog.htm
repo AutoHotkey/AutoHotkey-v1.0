@@ -6,6 +6,35 @@
 <br>
 <br>
 
+</font><font size=4><b>0.215 BETA - December 18, 2003</b></font><font size=3><br><br>
+
+Fixed a possible crash in variable assignments that involve more than one source.  e.g. statements such as clipboard = %clipboard%%SomeVar%<br>
+<br>
+Fixed a possible crash-on-startup bug introduced in version 0.212 in conjuction with "else if" support.<br>
+<br>
+Fixed clipboard being hogged (held open) in rare cases such as displaying the clipboard with SplashTextOn.<br>
+<br>
+Fixed PixelGetColor to accept negative coordinates without complaining.<br>
+<br>
+Fixed a very obscure issue where a non-suppressed mouse hotkey such as "~LButton::" would cause that particular AutoHotkey instance's tray menu and main window context menus to behave strangely.<br>
+<br>
+Added command SoundSetWaveVolume, which sets the playback volume for files such as WAV and MP3.  Example:<br>
+SoundSetWaveVolume, 50  ; Number between 0 and 100, inclusive.<br>
+<br>
+Added command EnvSet, which is needed because unlike AutoIt2, AutoHotkey does not store its variables in the environment.  This is because performance would be worse and also because the OS limits env. vars to 32K (AutoHotkey vars, including the clipboard, are essentially unlimited in size).  ErrorLevel is set to 1 if there was a problem or 0 otherwise.  Example:<br>
+EnvSet, AutGUI, Some text to put in the variable.<br>
+<br>
+Note: An EnvGet command is not necessary because dereferencing a blank or undefined variable will automatically trigger that behavior.  For example, in the following line, the value of the ProgramFiles variable (if undefined in the script) will be fetched from the environment:<br>
+TargetFile = %ProgramFiles%\Something\setup.ini<br>
+<br>
+Disabled the feature that jumps to the proper line in notepad or metapad when a syntax error is found (if the script is already open in such an editor) because it doesn't seem to work reliably.  If any of you were using it, let me know.  Later, I plan to add support for an external script such as "RunWhenSyntaxError.ahk" that will automatically be run if a script launch fails due to a syntax error.<br>
+<br>
+Improved PixelSearch to set ErrorLevel to 2 if there was an error other than "color not found".  It still sets it to 1 if the color isn't found, or 0 if it is.<br>
+
+ 
+<br><hr><br>
+
+
 </font><font size=4><b>0.214 BETA - December 16, 2003</b></font><font size=3><br><br>
 
 Added command WinMenuSelectItem (similar to AutoIt3 command).  The menu search terms are not case sensitive (i.e. File->Save is the same as file->save) and the use of ampersand (&) to indicate the underlined letter in a menu item is not necessary.  Example:<br>

@@ -172,6 +172,7 @@ Action g_act[] =
 	, {"StringGetPos", 3, 4, NULL}  // Output Variable, Input Variable, Search Text, R or Right (from right)
 	, {"StringReplace", 3, 5, NULL} // Output Variable, Input Variable, Search String, Replace String, do-all.
 
+	, {"EnvSet", 1, 2, NULL} // EnvVar, Value
 	, {"Run", 1, 3, NULL}, {"RunWait", 1, 3, NULL}  // TargetFile, Working Dir, WinShow-Mode
 	, {"GetKeyState", 2, 3, NULL} // OutputVar, key name, mode (optional) P = Physical, T = Toggle
 	, {"Send", 1, 1, NULL} // But that first param can be a deref that resolves to a blank param
@@ -239,6 +240,7 @@ Action g_act[] =
 	, {"GroupClose", 1, 2, NULL}, {"GroupCloseAll", 1, 1, NULL}
 
 	, {"DriveSpaceFree", 2, 2, NULL} // Output-var, path (e.g. c:\)
+	, {"SoundSetWaveVolume", 1, 1, NULL} // Volume percent-level (0-100)
 
 	, {"FileAppend", 2, 2, NULL} // text, filename
 	, {"FileReadLine", 3, 3, {3, 0}} // Output variable, filename, line-number

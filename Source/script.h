@@ -64,6 +64,7 @@ enum enum_act {
 // any POD structures that contain an action_type field:
   ACT_INVALID = FAIL  // These should both be zero for initialization and function-return-value purposes.
 , ACT_ASSIGN, ACT_ADD, ACT_SUB, ACT_MULT, ACT_DIV
+, ACT_ASSIGN_FIRST = ACT_ASSIGN, ACT_ASSIGN_LAST = ACT_DIV
 , ACT_REPEAT // Never parsed directly, only provided as a translation target for the old command (see other notes).
 , ACT_ELSE   // Parsed at a lower level than most commands to support same-line ELSE-actions (e.g. "else if").
 , ACT_IFEQUAL, ACT_IFNOTEQUAL, ACT_IFGREATER, ACT_IFGREATEROREQUAL, ACT_IFLESS, ACT_IFLESSOREQUAL
@@ -77,6 +78,7 @@ enum enum_act {
 , ACT_STRINGLEFT, ACT_STRINGRIGHT, ACT_STRINGMID
 , ACT_STRINGTRIMLEFT, ACT_STRINGTRIMRIGHT
 , ACT_STRINGLEN, ACT_STRINGGETPOS, ACT_STRINGREPLACE
+, ACT_ENVSET
 , ACT_RUN, ACT_RUNWAIT
 , ACT_GETKEYSTATE
 , ACT_SEND, ACT_CONTROLSEND, ACT_CONTROLLEFTCLICK, ACT_CONTROLFOCUS, ACT_CONTROLSETTEXT, ACT_CONTROLGETTEXT
@@ -98,7 +100,7 @@ enum enum_act {
 // Keep rarely used actions near the bottom for parsing/performance reasons:
 , ACT_PIXELGETCOLOR, ACT_PIXELSEARCH
 , ACT_GROUPADD, ACT_GROUPACTIVATE, ACT_GROUPDEACTIVATE, ACT_GROUPCLOSE, ACT_GROUPCLOSEALL
-, ACT_DRIVESPACEFREE
+, ACT_DRIVESPACEFREE, ACT_SOUNDSETWAVEVOLUME
 , ACT_FILEAPPEND, ACT_FILEREADLINE, ACT_FILECOPY, ACT_FILEMOVE, ACT_FILEDELETE
 , ACT_FILECREATEDIR, ACT_FILEREMOVEDIR
 , ACT_FILETOGGLEHIDDEN, ACT_FILESETDATEMODIFIED, ACT_FILESELECTFILE
@@ -122,6 +124,7 @@ enum enum_act {
 // , ACT_COUNT
 };
 #define ACT_IS_IF(ActionType) (ActionType >= ACT_IF_FIRST && ActionType <= ACT_IF_LAST)
+#define ACT_IS_ASSIGN(ActionType) (ActionType >= ACT_ASSIGN_FIRST && ActionType <= ACT_ASSIGN_LAST)
 
 enum enum_act_old {
   OLD_INVALID = FAIL  // These should both be zero for initialization and function-return-value purposes.
@@ -152,6 +155,7 @@ enum enum_act_old {
 #define ERR_RUN_SHOW_MODE "The 3rd parameter must be either blank or one of these words: min, max, hide."
 #define ERR_MOUSE_BUTTON "This line specifies an invalid mouse button."
 #define ERR_MOUSE_COORD "The X & Y coordinates must be either both absent or both present."
+#define ERR_PERCENT "The parameter must be a percentage between 0 and 100, or a dereferenced variable."
 #define ERR_MOUSE_SPEED "The Mouse Speed must be a number between 0 and " MAX_MOUSE_SPEED_STR ", or a dereferenced variable."
 #define ERR_MEM_ASSIGN "Out of memory while assigning to this variable." ERR_ABORT
 #define ERR_VAR_IS_RESERVED "This variable is reserved and cannot be assigned to."
@@ -466,6 +470,8 @@ public:
 			return (aArgNum >= 2 && aArgNum <= 5);  // Allow dragging to/from negative coordinates.
 		case ACT_MOUSEMOVE:
 			return (aArgNum == 1 || aArgNum == 2);
+		case ACT_PIXELGETCOLOR:
+			return (aArgNum == 2 || aArgNum == 3);
 		}
 		return false;  // Since above didn't return, negative is not allowed.
 	}

@@ -54,7 +54,8 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 // caller's script subroutine is suspended due to action by us, an unknowable
 // amount of time may pass prior to finally returning to the caller.
 {
-	// This is done here for performance reasons:
+	// This is done here for performance reasons.  UPDATE: This probably never needs
+	// to close the clipboard now that Line::ExecUntil() also calls CLOSE_CLIPBOARD_IF_OPEN:
 	CLOSE_CLIPBOARD_IF_OPEN;
 	// I know of no way to simulate a Sleep(0), so for now we do this.
 	// UPDATE: It's more urgent that messages be checked than for the Sleep

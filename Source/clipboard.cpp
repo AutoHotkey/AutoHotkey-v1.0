@@ -109,7 +109,7 @@ size_t Clipboard::Get(char *aBuf)
 		// way to avoid the chance that the clipboard contents (and thus its length)
 		// will change while we don't have it open, possibly resulting in a buffer
 		// overflow.  In addition, this approach performs better because it avoids
-		// the overheading of having to close and reopen the clipboard.
+		// the overhead of having to close and reopen the clipboard.
 
 	// Otherwise:
 	if (clipboard_contains_files)

@@ -583,7 +583,7 @@ ResultType Line::WinGetPos(char *aTitle, char *aText, char *aExcludeTitle, char 
 
 ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int aColor)
 {
-	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR2); // Set default ErrorLevel.  2 means error other than "color not found".
 	OUTPUT_VAR->Assign();  // Init to empty string regardless of whether we succeed here.
 	OUTPUT_VAR2->Assign(); // Same.
 
@@ -600,19 +600,19 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int a
 	if (!hdc)
 		return OK;  // Let ErrorLevel tell the story.
 
-	int q, r;
+	int xpos, ypos;
 	ResultType result = OK;
-	for (q = aLeft; q <= aRight; ++q)
+	for (xpos = aLeft; xpos <= aRight; ++xpos)
 	{
-		for (r = aTop; r <= aBottom; ++r)
+		for (ypos = aTop; ypos <= aBottom; ++ypos)
 		{
-			if (GetPixel(hdc, q, r) == aColor) // Found the pixel
+			if (GetPixel(hdc, xpos, ypos) == aColor) // Found the pixel
 			{
 				ReleaseDC(NULL, hdc);
 				// Adjust coords to make them relative to the position of the target window:
-				if (!OUTPUT_VAR->Assign(q - rect.left))
+				if (!OUTPUT_VAR->Assign(xpos - rect.left))
 					result = FAIL;
-				if (!OUTPUT_VAR2->Assign(r - rect.top))
+				if (!OUTPUT_VAR2->Assign(ypos - rect.top))
 					result = FAIL;
 				if (result == OK)
 					g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
@@ -624,6 +624,7 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int a
 	// If the above didn't return, the pixel wasn't found in the specified region.
 	// So leave ErrorLevel set to "error" to indicate that:
 	ReleaseDC(NULL, hdc);
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // This value indicates "color not found".
 	return OK;
 }
 
@@ -800,6 +801,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 	case WM_HOTKEY: // As a result of this app having previously called RegisterHotkey().
 	case AHK_HOOK_HOTKEY:  // Sent from this app's keyboard or mouse hook.
 	{
+		return 0;
 		if (IGNORE_THIS_HOTKEY((HotkeyIDType)wParam))
 			// Used to prevent runaway hotkeys, or too many happening due to key-repeat feature.
 			// It can also be used to prevent a call to MsgSleep() from accepting new hotkeys
@@ -811,13 +813,22 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		// posting the message.  We don't want to be called, we want the main loop
 		// to handle this message:
 		PostThreadMessage(GetCurrentThreadId(), iMsg, wParam, lParam);
-		if (g_TrayMenuIsVisible)
+		if (g_TrayMenuIsVisible || (iMsg == AHK_HOOK_HOTKEY && lParam && g_hWnd == GetForegroundWindow()))
 		{
 			// Ok this is a little strange, but the thought here is that if the tray menu is
 			// displayed, it should be closed prior to executing any new hotkey.  This is
 			// because hotkeys usually cause other windows to become active, and once that
 			// happens, the tray menu cannot be closed except by choosing a menu item in it
-			// (which is often undesirable):
+			// (which is often undesirable).  This is also done if the hook told us that
+			// this event is something that may have invoked the tray menu or a context
+			// menu in our own main window, because otherwise such menus can't be dismissed
+			// by another mouseclick or (in the case of the tray menu) they don't work reliably.
+			// However, I'm not sure that this AHK_HOOK_HOTKEY workaround won't cause more
+			// problems than it solves (i.e. WM_CANCELMODE might be called in some cases
+			// when it doesn't need to be, and then might have some undesirable side-effect
+			// since I believe it has other purposes besides dismissing menus).  But such
+			// side effects should be minimal since WM_CANCELMODE mode is only set if
+			// this AutoHotkey instance's own main window is active:
 			SendMessage(hWnd, WM_CANCELMODE, 0, 0);
 			// The menu is now gone because the above should have called this function
 			// recursively to close the it.  Now, rather than continuing in this

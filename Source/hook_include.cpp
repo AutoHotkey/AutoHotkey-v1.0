@@ -440,7 +440,7 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 #define AllowKeyToGoToSystem AllowIt(g_hhkLowLevelKeybd, code, wParam, lParam, sc, key_up, pKeyLogCurr)
 #define AllowKeyToGoToSystemButDisguiseWinKey AllowIt(g_hhkLowLevelKeybd, code, wParam, lParam \
 	, sc, key_up, pKeyLogCurr, true)
-inline LRESULT AllowIt (HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, sc_type sc, bool key_up
+inline LRESULT AllowIt(HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, sc_type sc, bool key_up
 	, KeyLogItem *pKeyLogCurr, bool DisguiseWinKey = false)
 {
 	// In this function, always use pEvent->vkCode rather than accepting vk as a param
@@ -507,9 +507,13 @@ inline LRESULT AllowIt (HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, sc_ty
 }
 
 #else // Mouse hook:
-#define AllowKeyToGoToSystem CallNextHookEx(g_hhkLowLevelMouse, code, wParam, lParam);\
-	if (g_KeyLogToFile && pKeyLogCurr)\
-		PostMessage(g_hWnd, AHK_KEYLOG, (WPARAM)pKeyLogCurr, 0)
+#define AllowKeyToGoToSystem AllowIt(g_hhkLowLevelMouse, code, wParam, lParam, pKeyLogCurr)
+inline LRESULT AllowIt(HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, KeyLogItem *pKeyLogCurr)
+{
+	if (g_KeyLogToFile && pKeyLogCurr)
+		PostMessage(g_hWnd, AHK_KEYLOG, (WPARAM)pKeyLogCurr, 0);
+	return CallNextHookEx(hhk, code, wParam, lParam);
+}
 #endif
 
 
@@ -788,7 +792,8 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		if (down_performed_action)
 			return SuppressThisKey;
 #else
-		if (down_performed_action && (!pThisKey->no_mouse_suppress || g_modifiersLR_logical || pPrefixKey))
+		#define ALLOW_MOUSE_SUPPRESS (!pThisKey->no_mouse_suppress || g_modifiersLR_logical || pPrefixKey)
+		if (down_performed_action && ALLOW_MOUSE_SUPPRESS)
 			// Above: i.e. Only allow "non-suppression" of a mouse hotkey if it's
 			// an unmodified hotkey.  This is because the key_type struct does not
 			// contain the individual hotkeys, but rather prefixes and suffixes that
@@ -1352,7 +1357,14 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 			// Since action was taken, suppress this key event (don't let the system process it further) by
 			// returning non-zero on success.  Realistically, PostMessage should never fail?  But just
 			// in case it does, explicitly return non-zero rather than the result of PostMessage:
+#ifdef INCLUDE_KEYBD_HOOK
 			PostMessage(g_hWnd, AHK_HOOK_HOTKEY, hotkey_id, 0);  // Returns non-zero on success.
+#else
+			// In the case of a mouse hotkey whose native function the user didn't want suppressed,
+			// tell our hotkey handler to also dismiss any menus that the mouseclick itself may
+			// have invoked:
+			PostMessage(g_hWnd, AHK_HOOK_HOTKEY, hotkey_id, !ALLOW_MOUSE_SUPPRESS);
+#endif
 			// Don't execute it directly because if whatever it does takes a long time, this keystroke
 			// and instance of the function will be left hanging until it returns:
 			//Hotkey::PerformID(hotkey_id);
@@ -1439,9 +1451,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 
 #ifdef INCLUDE_KEYBD_HOOK
 	return SuppressThisKey;
-#else
-	// There's a note above about "no_mouse_suppress" to explain why g_modifiersLR_logical and pPrefixKey
-	// are also checked here:
-	return (!pThisKey->no_mouse_suppress || g_modifiersLR_logical || pPrefixKey) ? SuppressThisKey : AllowKeyToGoToSystem;
+#else // mouse hook
+	return ALLOW_MOUSE_SUPPRESS ? SuppressThisKey : AllowKeyToGoToSystem;
 #endif
 }
