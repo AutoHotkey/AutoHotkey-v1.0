@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003 Chris Mallett
+Copyright 2003-2005 Chris Mallett
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -387,6 +387,15 @@ VarSizeType Var::Get(char *aBuf)
 		aBuf += size;
 		break;
 	}
+
+	case VAR_TRUE:
+	case VAR_FALSE:
+		if (aBuf)
+			*aBuf++ = (mType == VAR_TRUE) ? '1': '0'; // It will be terminated later below.
+		else
+			return 1; // The length of the value.
+		break;
+
 	case VAR_WORKINGDIR:
 		// Use GetCurrentDirectory() vs. g_WorkingDir because any in-progrses FileSelectFile()
 		// dialog is able to keep functioning even when it's quasi-thread is suspended.  The
@@ -475,6 +484,7 @@ VarSizeType Var::Get(char *aBuf)
 	case VAR_LOOPFILESHORTNAME: if (!aBuf) return g_script.GetLoopFileShortName(); else aBuf += g_script.GetLoopFileShortName(aBuf); break;
 	case VAR_LOOPFILEDIR: if (!aBuf) return g_script.GetLoopFileDir(); else aBuf += g_script.GetLoopFileDir(aBuf); break;
 	case VAR_LOOPFILEFULLPATH: if (!aBuf) return g_script.GetLoopFileFullPath(); else aBuf += g_script.GetLoopFileFullPath(aBuf); break;
+	case VAR_LOOPFILELONGPATH: if (!aBuf) return g_script.GetLoopFileLongPath(); else aBuf += g_script.GetLoopFileLongPath(aBuf); break;
 	case VAR_LOOPFILESHORTPATH: if (!aBuf) return g_script.GetLoopFileShortPath(); else aBuf += g_script.GetLoopFileShortPath(aBuf); break;
 	case VAR_LOOPFILETIMEMODIFIED: if (!aBuf) return g_script.GetLoopFileTimeModified(); else aBuf += g_script.GetLoopFileTimeModified(aBuf); break;
 	case VAR_LOOPFILETIMECREATED: if (!aBuf) return g_script.GetLoopFileTimeCreated(); else aBuf += g_script.GetLoopFileTimeCreated(aBuf); break;

@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003 Chris Mallett
+Copyright 2003-2005 Chris Mallett
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -139,13 +139,6 @@ extern global_struct g_default;
 
 extern char g_WorkingDir[MAX_PATH];  // Explicit size needed here in .h file for use with sizeof().
 extern char *g_WorkingDirOrig;
-
-// This macro is defined because sometimes g.hWndLastUsed will be out-of-date and the window
-// may have been destroyed.  It also returns NULL if the current settings indicate that
-// hidden windows should be ignored:
-#define g_ValidLastUsedWindow (!g.hWndLastUsed ? NULL\
-	: (!IsWindow(g.hWndLastUsed) ? NULL\
-	: ((!g.DetectHiddenWindows && !IsWindowVisible(g.hWndLastUsed)) ? NULL : g.hWndLastUsed)))
 
 extern bool g_ForceKeybdHook;
 extern ToggleValueType g_ForceNumLock;

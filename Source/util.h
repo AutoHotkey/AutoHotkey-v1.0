@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003 Chris Mallett
+Copyright 2003-2005 Chris Mallett
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -175,10 +175,13 @@ inline size_t ltrim(char *aStr, size_t aLength = -1)
 	for (ptr = aStr; IS_SPACE_OR_TAB(*ptr); ++ptr);
 	// v1.0.25: If no trimming needed, don't do the memmove.  This seems to make a big difference
 	// in the performance of critical sections of the program such as PerformAssign():
-	if (ptr > aStr)
+	size_t offset;
+	if (offset = ptr - aStr) // Assign.
 	{
 		if (aLength == -1)
 			aLength = strlen(ptr); // Set aLength as new/trimmed length, for use below and also as the return value.
+		else // v1.0.25.05 bug-fix: Must adjust the length provided by caller to reflect what we did here.
+			aLength -= offset;
 		memmove(aStr, ptr, aLength + 1); // +1 to include the '\0'.  memmove() permits source & dest to overlap.
 	}
 	return aLength;
@@ -449,7 +452,7 @@ char *strrstr(char *aStr, char *aPattern, bool aCaseSensitive = true, int aOccur
 char *strcasestr (const char *phaystack, const char *pneedle);
 char *StrReplace(char *aBuf, char *aOld, char *aNew, bool aCaseSensitive = true);
 char *StrReplaceAll(char *aBuf, char *aOld, char *aNew, bool aAlwaysUseSlow, bool aCaseSensitive = true
-	, UINT aReplacementsNeeded = UINT_MAX); // Caller can provide this value to avoid having to calculate it again.
+	, DWORD aReplacementsNeeded = UINT_MAX); // Caller can provide this value to avoid having to calculate it again.
 char *StrReplaceAllSafe(char *aBuf, size_t aBuf_size, char *aOld, char *aNew, bool aCaseSensitive = true);
 char *TranslateLFtoCRLF(char *aString);
 bool DoesFilePatternExist(char *aFilePattern);

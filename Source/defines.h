@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003 Chris Mallett
+Copyright 2003-2005 Chris Mallett
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.25"
+#define NAME_VERSION "1.0.26.00"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -128,7 +128,7 @@ enum ToggleValueType {TOGGLE_INVALID = 0, TOGGLED_ON, TOGGLED_OFF, ALWAYS_ON, AL
 #define MAX_SPLASHIMAGE_WINDOWS_STR "10" // Keep this in sync with above.
 #define MAX_GUI_WINDOWS 10  // Increasing this will impact performance for routines that search through them all.
 #define MAX_GUI_WINDOWS_STR "10" // Keep this in sync with above.
-#define MAX_CONTROLS_PER_GUI 500
+#define MAX_CONTROLS_PER_GUI 1000 // Can't go any higher than 1000 without running into ID_USER_FIRST.
 #define MAX_TOOLTIPS 20
 #define MAX_TOOLTIPS_STR "20"   // Keep this in sync with above.
 #define MAX_FILEDIALOGS 4
@@ -293,7 +293,7 @@ struct global_struct
 	char FormatFloat[32];
 	bool FormatIntAsHex;
 	char ErrorLevel[128]; // Big in case user put something bigger than a number in g_ErrorLevel.
-	HWND hWndLastUsed;  // In many cases, it's better to use g_ValidLastUsedWindow when referring to this.
+	HWND hWndLastUsed;  // In many cases, it's better to use GetValidLastUsedWindow() when referring to this.
 	//HWND hWndToRestore;
 	int MsgBoxResult;  // Which button was pressed in the most recent MsgBox.
 	bool IsPaused;

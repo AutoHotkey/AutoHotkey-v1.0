@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003 Chris Mallett
+Copyright 2003-2005 Chris Mallett
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -107,7 +107,7 @@ enum enum_act {
 , ACT_WINSET, ACT_WINSETTITLE, ACT_WINGETTITLE, ACT_WINGETCLASS, ACT_WINGET, ACT_WINGETPOS, ACT_WINGETTEXT
 , ACT_SYSGET, ACT_POSTMESSAGE, ACT_SENDMESSAGE
 // Keep rarely used actions near the bottom for parsing/performance reasons:
-, ACT_PIXELGETCOLOR, ACT_PIXELSEARCH //, ACT_IMAGESEARCH
+, ACT_PIXELGETCOLOR, ACT_PIXELSEARCH, ACT_IMAGESEARCH
 , ACT_GROUPADD, ACT_GROUPACTIVATE, ACT_GROUPDEACTIVATE, ACT_GROUPCLOSE
 , ACT_DRIVESPACEFREE, ACT_DRIVE, ACT_DRIVEGET
 , ACT_SOUNDGET, ACT_SOUNDSET, ACT_SOUNDGETWAVEVOLUME, ACT_SOUNDSETWAVEVOLUME, ACT_SOUNDPLAY
@@ -470,7 +470,7 @@ enum JoyControls {JOYCTRL_INVALID, JOYCTRL_XPOS, JOYCTRL_YPOS, JOYCTRL_ZPOS
 
 enum WinGetCmds {WINGET_CMD_INVALID, WINGET_CMD_ID, WINGET_CMD_IDLAST, WINGET_CMD_PID, WINGET_CMD_PROCESSNAME
 	, WINGET_CMD_COUNT, WINGET_CMD_LIST, WINGET_CMD_MINMAX, WINGET_CMD_CONTROLLIST
-	, WINGET_CMD_STYLE, WINGET_CMD_EXSTYLE
+	, WINGET_CMD_STYLE, WINGET_CMD_EXSTYLE, WINGET_CMD_TRANSPARENT, WINGET_CMD_TRANSCOLOR
 };
 
 enum SysGetCmds {SYSGET_CMD_INVALID, SYSGET_CMD_METRICS, SYSGET_CMD_MONITORCOUNT, SYSGET_CMD_MONITORPRIMARY
@@ -495,7 +495,8 @@ enum MenuCommands {MENU_CMD_INVALID, MENU_CMD_SHOW, MENU_CMD_USEERRORLEVEL
 };
 
 enum GuiCommands {GUI_CMD_INVALID, GUI_CMD_OPTIONS, GUI_CMD_ADD, GUI_CMD_MENU, GUI_CMD_SHOW
-	, GUI_CMD_SUBMIT, GUI_CMD_CANCEL, GUI_CMD_DESTROY, GUI_CMD_FONT, GUI_CMD_TAB, GUI_CMD_DEFAULT
+	, GUI_CMD_SUBMIT, GUI_CMD_CANCEL, GUI_CMD_MINIMIZE, GUI_CMD_MAXIMIZE, GUI_CMD_RESTORE
+	, GUI_CMD_DESTROY, GUI_CMD_FONT, GUI_CMD_TAB, GUI_CMD_DEFAULT
 	, GUI_CMD_COLOR, GUI_CMD_FLASH
 };
 
@@ -537,6 +538,7 @@ enum ProcessCmds {PROCESS_CMD_INVALID, PROCESS_CMD_EXIST, PROCESS_CMD_CLOSE, PRO
 
 enum ControlCmds {CONTROL_CMD_INVALID, CONTROL_CMD_CHECK, CONTROL_CMD_UNCHECK
 	, CONTROL_CMD_ENABLE, CONTROL_CMD_DISABLE, CONTROL_CMD_SHOW, CONTROL_CMD_HIDE
+	, CONTROL_CMD_STYLE, CONTROL_CMD_EXSTYLE
 	, CONTROL_CMD_SHOWDROPDOWN, CONTROL_CMD_HIDEDROPDOWN
 	, CONTROL_CMD_TABLEFT, CONTROL_CMD_TABRIGHT
 	, CONTROL_CMD_ADD, CONTROL_CMD_DELETE, CONTROL_CMD_CHOOSE
@@ -544,7 +546,7 @@ enum ControlCmds {CONTROL_CMD_INVALID, CONTROL_CMD_CHECK, CONTROL_CMD_UNCHECK
 
 enum ControlGetCmds {CONTROLGET_CMD_INVALID, CONTROLGET_CMD_CHECKED, CONTROLGET_CMD_ENABLED
 	, CONTROLGET_CMD_VISIBLE, CONTROLGET_CMD_TAB, CONTROLGET_CMD_FINDSTRING
-	, CONTROLGET_CMD_CHOICE, CONTROLGET_CMD_LINECOUNT, CONTROLGET_CMD_CURRENTLINE
+	, CONTROLGET_CMD_CHOICE, CONTROLGET_CMD_LIST, CONTROLGET_CMD_LINECOUNT, CONTROLGET_CMD_CURRENTLINE
 	, CONTROLGET_CMD_CURRENTCOL, CONTROLGET_CMD_LINE, CONTROLGET_CMD_SELECTED
 	, CONTROLGET_CMD_STYLE, CONTROLGET_CMD_EXSTYLE};
 
@@ -554,7 +556,8 @@ enum DriveGetCmds {DRIVEGET_CMD_INVALID, DRIVEGET_CMD_LIST, DRIVEGET_CMD_FILESYS
 	, DRIVEGET_CMD_SETLABEL, DRIVEGET_CMD_SERIAL, DRIVEGET_CMD_TYPE, DRIVEGET_CMD_STATUS
 	, DRIVEGET_CMD_STATUSCD, DRIVEGET_CMD_CAPACITY};
 
-enum WinSetAttributes {WINSET_INVALID, WINSET_TRANSPARENT, WINSET_TRANSCOLOR, WINSET_ALWAYSONTOP, WINSET_BOTTOM};
+enum WinSetAttributes {WINSET_INVALID, WINSET_TRANSPARENT, WINSET_TRANSCOLOR, WINSET_ALWAYSONTOP
+	, WINSET_BOTTOM, WINSET_STYLE, WINSET_EXSTYLE, WINSET_REDRAW};
 
 
 
@@ -709,8 +712,8 @@ private:
 	ResultType WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType WinGetPos(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType SysGet(char *aCmd, char *aValue);
-	ResultType PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int aColor, int aVariation, bool aUseRGB);
-	//ResultType ImageSearch(int aLeft, int aTop, int aRight, int aBottom, char *aImageFile);
+	ResultType PixelSearch(int aLeft, int aTop, int aRight, int aBottom, COLORREF aColorBGR, int aVariation, char *aOptions);
+	ResultType ImageSearch(int aLeft, int aTop, int aRight, int aBottom, char *aImageFile);
 	ResultType PixelGetColor(int aX, int aY, bool aUseRGB);
 
 	static ResultType SetToggleState(vk_type aVK, ToggleValueType &ForceLock, char *aToggleText);
@@ -832,7 +835,7 @@ public:
 		, int aX = COORD_UNSPECIFIED, int aY = COORD_UNSPECIFIED // These values signal us not to move the mouse.
 		, int aClickCount = 1, int aSpeed = DEFAULT_MOUSE_SPEED, KeyEventTypes aEventType = KEYDOWNANDUP, bool aMoveRelative = false);
 	static void MouseMove(int aX, int aY, int aSpeed = DEFAULT_MOUSE_SPEED, bool aMoveRelative = false);
-	ResultType MouseGetPos();
+	ResultType MouseGetPos(bool aSimpleMode);
 	static void MouseEvent(DWORD aEventFlags, DWORD aX = 0, DWORD aY = 0, DWORD aData = 0)
 	// A small inline to help us remember to use KEY_IGNORE so that our own mouse
 	// events won't be falsely detected as hotkeys by the hooks (if they are installed).
@@ -935,7 +938,7 @@ public:
 			case ACT_CONTROLGETPOS:
 			case ACT_PIXELGETCOLOR:
 			case ACT_PIXELSEARCH:
-			//case ACT_IMAGESEARCH:
+			case ACT_IMAGESEARCH:
 			case ACT_INPUT:
 			case ACT_FORMATTIME:
 				return ARG_TYPE_OUTPUT_VAR;
@@ -982,7 +985,7 @@ public:
 			case ACT_WINGETPOS:
 			case ACT_CONTROLGETPOS:
 			case ACT_PIXELSEARCH:
-			//case ACT_IMAGESEARCH:
+			case ACT_IMAGESEARCH:
 			case ACT_SPLITPATH:
 			case ACT_FILEGETSHORTCUT:
 				return ARG_TYPE_OUTPUT_VAR;
@@ -1031,6 +1034,7 @@ public:
 
 
 
+	ResultType ArgMustBeDereferenced(Var *aVar, int aArgIndexToExclude);
 	bool ArgHasDeref(int aArgNum)
 	// This function should always be called in lieu of doing something like "strchr(arg.text, g_DerefChar)"
 	// because that method is unreliable due to the possible presence of literal (escaped) g_DerefChars
@@ -1050,40 +1054,6 @@ public:
 		// Return false if it's not of a type caller wants deemed to have derefs.
 		// Relies on short-circuit boolean evaluation order to prevent NULL-deref:
 		return (arg.type == ARG_TYPE_NORMAL) ? arg.deref && arg.deref[0].marker : false;
-	}
-
-	ResultType ArgMustBeDereferenced(Var *aVar, int aArgIndexToExclude)
-	// Returns CONDITION_TRUE, CONDITION_FALSE, or FAIL.
-	{
-		if (mActionType == ACT_SORT) // See PerformSort() for why it's always dereferenced.
-			return CONDITION_TRUE;
-		if (aVar->mType == VAR_CLIPBOARD)
-			// Even if the clipboard is both an input and an output var, it still
-			// doesn't need to be dereferenced into the temp buffer because the
-			// clipboard has two buffers of its own.  The only exception is when
-			// the clipboard has only files on it, in which case those files need
-			// to be converted into plain text:
-			return CLIPBOARD_CONTAINS_ONLY_FILES ? CONDITION_TRUE : CONDITION_FALSE;
-		if (aVar->mType != VAR_NORMAL || !aVar->Length())
-			// Reserved vars must always be dereferenced due to their volatile nature.
-			// Normal vars of length zero are dereferenced because they might exist
-			// as system environment variables, whose contents are also potentially
-			// volatile (i.e. they are sometimes changed by outside forces):
-			return CONDITION_TRUE;
-		// Since the above didn't return, we know that this is a NORMAL input var of
-		// non-zero length.  Such input vars only need to be dereferenced if they are
-		// also used as an output var by the current script line:
-		Var *output_var;
-		for (int iArg = 0; iArg < mArgc; ++iArg)
-			if (iArg != aArgIndexToExclude && mArg[iArg].type == ARG_TYPE_OUTPUT_VAR)
-			{
-				if (   !(output_var = ResolveVarOfArg(iArg, false))   )
-					return FAIL;  // It will have already displayed the error.
-				if (output_var == aVar)
-					return CONDITION_TRUE;
-			}
-		// Otherwise:
-		return CONDITION_FALSE;
 	}
 
 
@@ -1294,6 +1264,8 @@ public:
 		if (!stricmp(aBuf, "ControlList")) return WINGET_CMD_CONTROLLIST;
 		if (!stricmp(aBuf, "Style")) return WINGET_CMD_STYLE;
 		if (!stricmp(aBuf, "ExStyle")) return WINGET_CMD_EXSTYLE;
+		if (!stricmp(aBuf, "Transparent")) return WINGET_CMD_TRANSPARENT;
+		if (!stricmp(aBuf, "TransColor")) return WINGET_CMD_TRANSCOLOR;
 		return WINGET_CMD_INVALID;
 	}
 
@@ -1395,6 +1367,9 @@ public:
 		if (!stricmp(aBuf, "Show")) return GUI_CMD_SHOW;
 		if (!stricmp(aBuf, "Submit")) return GUI_CMD_SUBMIT;
 		if (!stricmp(aBuf, "Cancel") || !stricmp(aBuf, "Hide")) return GUI_CMD_CANCEL;
+		if (!stricmp(aBuf, "Minimize")) return GUI_CMD_MINIMIZE;
+		if (!stricmp(aBuf, "Maximize")) return GUI_CMD_MAXIMIZE;
+		if (!stricmp(aBuf, "Restore")) return GUI_CMD_RESTORE;
 		if (!stricmp(aBuf, "Destroy")) return GUI_CMD_DESTROY;
 		if (!stricmp(aBuf, "Menu")) return GUI_CMD_MENU;
 		if (!stricmp(aBuf, "Font")) return GUI_CMD_FONT;
@@ -1489,6 +1464,8 @@ public:
 		if (!stricmp(aBuf, "Disable")) return CONTROL_CMD_DISABLE;
 		if (!stricmp(aBuf, "Show")) return CONTROL_CMD_SHOW;
 		if (!stricmp(aBuf, "Hide")) return CONTROL_CMD_HIDE;
+		if (!stricmp(aBuf, "Style")) return CONTROL_CMD_STYLE;
+		if (!stricmp(aBuf, "ExStyle")) return CONTROL_CMD_EXSTYLE;
 		if (!stricmp(aBuf, "ShowDropDown")) return CONTROL_CMD_SHOWDROPDOWN;
 		if (!stricmp(aBuf, "HideDropDown")) return CONTROL_CMD_HIDEDROPDOWN;
 		if (!stricmp(aBuf, "TabLeft")) return CONTROL_CMD_TABLEFT;
@@ -1510,6 +1487,7 @@ public:
 		if (!stricmp(aBuf, "Tab")) return CONTROLGET_CMD_TAB;
 		if (!stricmp(aBuf, "FindString")) return CONTROLGET_CMD_FINDSTRING;
 		if (!stricmp(aBuf, "Choice")) return CONTROLGET_CMD_CHOICE;
+		if (!stricmp(aBuf, "List")) return CONTROLGET_CMD_LIST;
 		if (!stricmp(aBuf, "LineCount")) return CONTROLGET_CMD_LINECOUNT;
 		if (!stricmp(aBuf, "CurrentLine")) return CONTROLGET_CMD_CURRENTLINE;
 		if (!stricmp(aBuf, "CurrentCol")) return CONTROLGET_CMD_CURRENTCOL;
@@ -1552,6 +1530,9 @@ public:
 		if (!stricmp(aBuf, "TransColor")) return WINSET_TRANSCOLOR;
 		if (!stricmp(aBuf, "AlwaysOnTop") || !stricmp(aBuf, "Topmost")) return WINSET_ALWAYSONTOP;
 		if (!stricmp(aBuf, "Bottom")) return WINSET_BOTTOM;
+		if (!stricmp(aBuf, "Style")) return WINSET_STYLE;
+		if (!stricmp(aBuf, "ExStyle")) return WINSET_EXSTYLE;
+		if (!stricmp(aBuf, "Redraw")) return WINSET_REDRAW;
 		return WINSET_INVALID;
 	}
 
@@ -1874,13 +1855,13 @@ struct FontType
 {
 	#define MAX_FONT_NAME_LENGTH 63  // Longest name I've seen is 29 chars, "Franklin Gothic Medium Italic".
 	char name[MAX_FONT_NAME_LENGTH + 1];
-	int point_size; // Decided to use int vs. float to simplify the code in many places. Fractional sizes seem rarely needed.
-	int weight;
 	// Keep any fields that aren't an even multiple of 4 adjacent to each other.  This conserves memory
 	// due to byte-alignment:
 	bool italic;
 	bool underline;
 	bool strikeout;
+	int point_size; // Decided to use int vs. float to simplify the code in many places. Fractional sizes seem rarely needed.
+	int weight;
 	HFONT hfont;
 };
 
@@ -1931,6 +1912,7 @@ struct GuiControlOptionsType
 	int tip_side; // Which side of the control to display the tip on (0 to use default side).
 	GuiControlType *buddy1, *buddy2;
 	COLORREF progress_color_bk;
+	bool color_changed; // To discern when a control has been put back to the default color. [v1.0.26]
 	int limit;   // The max number of characters to permit in an edit or combobox's edit.
 	int hscroll_pixels;  // The number of pixels for a listbox's horizontal scrollbar to be able to scroll.
 	int checked; // When zeroed, struct contains default starting state of checkbox/radio, i.e. BST_UNCHECKED.
@@ -1982,7 +1964,7 @@ public:
 	HDROP mHdrop;                 // Used for drag and drop operations.
 	int mMarginX, mMarginY, mPrevX, mPrevY, mPrevWidth, mPrevHeight, mMaxExtentRight, mMaxExtentDown
 		, mSectionX, mSectionY, mMaxExtentRightSection, mMaxExtentDownSection;
-	bool mFirstShowing, mShowIsInProgress, mDestroyWindowHasBeenCalled;
+	bool mFirstGuiShowCmd, mFirstActivation, mShowIsInProgress, mDestroyWindowHasBeenCalled;
 
 	#define MAX_GUI_FONTS 100
 	static FontType sFont[MAX_GUI_FONTS];
@@ -2020,7 +2002,8 @@ public:
 		, mMaxExtentRight(0), mMaxExtentDown(0)
 		, mSectionX(COORD_UNSPECIFIED), mSectionY(COORD_UNSPECIFIED)
 		, mMaxExtentRightSection(COORD_UNSPECIFIED), mMaxExtentDownSection(COORD_UNSPECIFIED)
-		, mFirstShowing(true), mShowIsInProgress(false), mDestroyWindowHasBeenCalled(false)
+		, mFirstGuiShowCmd(true), mFirstActivation(true), mShowIsInProgress(false)
+		, mDestroyWindowHasBeenCalled(false)
 	{
 		// The array of controls is left unitialized to catch bugs.  Each control's attributes should be
 		// fully populated when it is created.
@@ -2031,7 +2014,7 @@ public:
 	ResultType Create();
 	static void UpdateMenuBars(HMENU aMenu);
 	ResultType AddControl(GuiControls aControlType, char *aOptions, char *aText);
-	ResultType ParseOptions(char *aOptions);
+	ResultType ParseOptions(char *aOptions, bool &aSetLastFoundWindow);
 	ResultType ControlParseOptions(char *aOptions, GuiControlOptionsType &aOpt, GuiControlType &aControl
 		, GuiIndexType aControlIndex = -1); // aControlIndex is not needed upon control creation.
 	void ControlInitOptions(GuiControlOptionsType &aOpt, GuiControlType &aControl);
@@ -2216,9 +2199,12 @@ public:
 	ResultType LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude);
 	ResultType UpdateOrCreateTimer(Label *aLabel, char *aPeriod, char *aPriority, bool aEnable
 		, bool aUpdatePriorityOnly);
+
 	#define VAR_NAME_LENGTH_DEFAULT 0
 	Var *FindOrAddVar(char *aVarName, size_t aVarNameLength = VAR_NAME_LENGTH_DEFAULT, Var *aSearchStart = NULL);
 	Var *FindVar(char *aVarName, size_t aVarNameLength = 0, Var **apVarPrev = NULL, Var *aSearchStart = NULL);
+	static VarTypes GetVarType(char *aVarName);
+
 	WinGroup *FindOrAddGroup(char *aGroupName);
 	ResultType AddGroup(char *aGroupName);
 	Label *FindLabel(char *aLabelName);
@@ -2301,6 +2287,7 @@ public:
 	VarSizeType GetLoopFileShortName(char *aBuf = NULL);
 	VarSizeType GetLoopFileDir(char *aBuf = NULL);
 	VarSizeType GetLoopFileFullPath(char *aBuf = NULL);
+	VarSizeType GetLoopFileLongPath(char *aBuf = NULL);
 	VarSizeType GetLoopFileShortPath(char *aBuf = NULL);
 	VarSizeType GetLoopFileTimeModified(char *aBuf = NULL);
 	VarSizeType GetLoopFileTimeCreated(char *aBuf = NULL);

@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003 Chris Mallett
+Copyright 2003-2005 Chris Mallett
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -62,6 +62,9 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 		case GUI_CMD_SUBMIT:
 		case GUI_CMD_CANCEL:
 		case GUI_CMD_FLASH:
+		case GUI_CMD_MINIMIZE:
+		case GUI_CMD_MAXIMIZE:
+		case GUI_CMD_RESTORE:
 			return OK; // Nothing needs to be done since the window object doesn't exist.
 		}
 		// Otherwise: Create the object and (later) its window, since all the other sub-commands below need it:
@@ -76,19 +79,22 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 
 	// Now handle any commands that should be handled prior to creation of the window in the case
 	// where the window doesn't already exist:
+	bool set_last_found_window = false;
 	if (gui_command == GUI_CMD_OPTIONS)
-		if (!gui.ParseOptions(options))
+		if (!gui.ParseOptions(options, set_last_found_window))
 			return FAIL;  // It already displayed the error.
 
 	// Create the window if needed.  Since it should not be possible for our window to get destroyed
 	// without our knowning about it (via the explicit handling in its window proc), it shouldn't
 	// be necessary to check the result of IsWindow(gui.mHwnd):
-	if (!gui.mHwnd)
-		if (!gui.Create())
-		{
-			GuiType::Destroy(window_index); // Get rid of the object so that it stays in sync with the window's existence.
-			return ScriptError("Could not create window." ERR_ABORT);
-		}
+	if (!gui.mHwnd && !gui.Create())
+	{
+		GuiType::Destroy(window_index); // Get rid of the object so that it stays in sync with the window's existence.
+		return ScriptError("Could not create window." ERR_ABORT);
+	}
+
+	if (set_last_found_window)
+		g.hWndLastUsed = gui.mHwnd;
 
 	// After creating the window, return from any commands that were fully handled above:
 	if (gui_command == GUI_CMD_OPTIONS)
@@ -128,6 +134,19 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 
 	case GUI_CMD_CANCEL:
 		return gui.Cancel();
+
+	case GUI_CMD_MINIMIZE:
+		// If the window is hidden, it is unhidden as a side-effect (this happens even for SW_SHOWMINNOACTIVE).
+		ShowWindow(gui.mHwnd, SW_MINIMIZE);
+		return OK;
+
+	case GUI_CMD_MAXIMIZE:
+		ShowWindow(gui.mHwnd, SW_MAXIMIZE); // If the window is hidden, it is unhidden as a side-effect.
+		return OK;
+
+	case GUI_CMD_RESTORE:
+		ShowWindow(gui.mHwnd, SW_RESTORE); // If the window is hidden, it is unhidden as a side-effect.
+		return OK;
 
 	case GUI_CMD_FONT:
 		return gui.SetCurrentFont(aParam2, aParam3);
@@ -692,7 +711,8 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 			break;
 		default:  // Not a supported control type.
 			return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
-		}
+		} // switch(control.type)
+
 		if (guicontrol_cmd == GUICONTROL_CMD_CHOOSESTRING)
 		{
 			if (msg == LB_FINDSTRING)
@@ -2117,6 +2137,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		if (control.hwnd = CreateWindowEx(exstyle, TRACKBAR_CLASS, "", style
 			, opt.x, opt.y, opt.width, opt.height, mHwnd, control_id, g_hInstance, NULL))
 		{
+			ControlSetSliderOptions(control, opt); // Fix for v1.0.25.08: This must be done prior to the below.
 			// The control automatically deals with out-of-range values by setting slider to min or max.
 			// MSDN: "If this value is outside the control's maximum and minimum range, the position
 			// is set to the maximum or minimum value."
@@ -2124,7 +2145,6 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 				SendMessage(control.hwnd, TBM_SETPOS, TRUE, ControlInvertSliderIfNeeded(control, ATOI(aText)));
 				// Above msg has no return value.
 			//else leave it at the OS's default starting position (probably always the far left or top of the range).
-			ControlSetSliderOptions(control, opt);
 		}
 		break;
 
@@ -2174,7 +2194,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			SetWindowLong(control.hwnd, GWL_WNDPROC, (LONG)TabWindowProc);
 			// Doesn't work to remove theme background from tab:
 			//MyEnableThemeDialogTexture(control.hwnd, ETDT_DISABLE);
-			// This attempt to apply theme to the entire dialog window also have no effect, probably
+			// This attempt to apply theme to the entire dialog window also has no effect, probably
 			// because ETDT_ENABLETAB only works with true dialog windows (e.g. CreateDialog()):
 			//MyEnableThemeDialogTexture(mHwnd, ETDT_ENABLETAB);
 			// The above require the following line:
@@ -2246,13 +2266,13 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			SetWindowLong(control.hwnd, GWL_STYLE, style);
 		opt.height = rect.bottom - rect.top;  // Update opt.height for here and for later use below.
 		// The below is commented out because TabCtrl_AdjustRect() is unable to cope with tabs on
-		// the left or right sides.  It would be rarely used anyway:
+		// the left or right sides.  It would be rarely used anyway.
 		//if (style & TCS_VERTICAL && width_was_originally_unspecified)
 		//	// Also make the interior wider in this case, to make the interior as large as intended.
 		//	// It is a known limitation that this adjustment does not occur when the script did not
 		//	// specify a row_count or omitted height and row_count.
 		//	opt.width = rect.right - rect.left;
-		MoveWindow(control.hwnd, opt.x, opt.y, opt.width, opt.height, TRUE); // Repaint, since it might be visible.
+		MoveWindow(control.hwnd, opt.x, opt.y, opt.width, opt.height, TRUE); // Repaint, since parent might be visible.
 	}
 
 	if (retrieve_dimensions) // Update to actual size for use later below.
@@ -2309,9 +2329,9 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 
 
 
-ResultType GuiType::ParseOptions(char *aOptions)
+ResultType GuiType::ParseOptions(char *aOptions, bool &aSetLastFoundWindow)
 // This function is similar to ControlParseOptions() further below, so should be maintained alongside it.
-// Caller must have already initialied aOpt with zeroes or any other desired started values.
+// Caller must have already initialized aSetLastFoundWindow with desired starting values.
 // Caller must ensure that aOptions is a modifiable string, since this method temporarily alters it.
 {
 	int owner_window_index;
@@ -2383,12 +2403,35 @@ ResultType GuiType::ParseOptions(char *aOptions)
 			}
 		}
 
+		else if (!stricmp(next_option, "AlwaysOnTop"))
+		{
+			// If the window already exists, SetWindowLong() isn't enough.  Must use SetWindowPos()
+			// to make it take effect.
+			if (mHwnd)
+				SetWindowPos(mHwnd, adding ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0
+					, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE); // SWP_NOACTIVATE prevents the side-effect of activating the window, which is undesirable if only its style is changing.
+			else // Must do the below ONLY if the window doesn't exist, other will window will be broken.
+				if (adding) mExStyle |= WS_EX_TOPMOST; else mStyle = mExStyle & ~WS_EX_TOPMOST;
+
+		}
+
 		else if (!stricmp(next_option, "Border"))
 			if (adding) mStyle |= WS_BORDER; else mStyle &= ~WS_BORDER;
 
 		else if (!stricmp(next_option, "Caption"))
 			// To remove title bar successfully, the WS_POPUP style must also be applied:
 			if (adding) mStyle |= WS_CAPTION; else mStyle = mStyle & ~WS_CAPTION | WS_POPUP;
+
+		else if (!stricmp(next_option, "Disabled"))
+		{
+			if (mHwnd)
+				EnableWindow(mHwnd, adding ? FALSE : TRUE);  // Must not not apply WS_DISABLED directly because that breaks the window.
+			else
+				if (adding) mStyle |= WS_DISABLED; else mStyle = mStyle & ~WS_DISABLED;
+		}
+
+		else if (!stricmp(next_option, "LastFound"))
+			aSetLastFoundWindow = true; // Regardless of whether "adding" is true or false.
 
 		else if (!stricmp(next_option, "MaximizeBox")) // See above comment.
 			if (adding) mStyle |= WS_MAXIMIZEBOX|WS_SYSMENU; else mStyle &= ~WS_MAXIMIZEBOX;
@@ -2460,23 +2503,25 @@ ResultType GuiType::ParseOptions(char *aOptions)
 			SetWindowLong(mHwnd, GWL_STYLE, mStyle);
 		if (mExStyle != exstyle_orig)
 			SetWindowLong(mHwnd, GWL_EXSTYLE, mExStyle);
-		// Hiding then showing is the only way I've discovered to make it update.  If the window
-		// is not updated, a strange effect occurs where the window is still visible but can no
-		// longer be used at all (clicks pass right through it).  This show/hide method is less
-		// desirable due to possible side effects caused to any script that happens to be watching
-		// for its existence/non-existence, so it would be nice if some better way can be discovered
-		// to do this.
-		// SetWindowPos is also necessary, otherwise the frame thickness entirely around the window
-		// does not get updated (just parts of it):
-		SetWindowPos(mHwnd, NULL, 0, 0, 0, 0, SWP_DRAWFRAME|SWP_FRAMECHANGED|SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE);
-		ShowWindow(mHwnd, SW_HIDE);
-		ShowWindow(mHwnd, SW_SHOWNOACTIVATE); // i.e. don't activate it if it wasn't before.
-		// None of the following methods alone is enough, at least not when the window is currently active:
-		// 1) InvalidateRect(mHwnd, NULL, TRUE);
-		// 2) SendMessage(mHwnd, WM_NCPAINT, 1, 0);  // 1 = Repaint entire frame.
-		// 3) RedrawWindow(mHwnd, NULL, NULL, RDW_INVALIDATE|RDW_FRAME|RDW_UPDATENOW);
-		// 4) SetWindowPos(mHwnd, NULL, 0, 0, 0, 0, SWP_DRAWFRAME|SWP_FRAMECHANGED|SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE);
-
+		if (IsWindowVisible(mHwnd) && !IsIconic(mHwnd))
+		{
+			// Hiding then showing is the only way I've discovered to make it update.  If the window
+			// is not updated, a strange effect occurs where the window is still visible but can no
+			// longer be used at all (clicks pass right through it).  This show/hide method is less
+			// desirable due to possible side effects caused to any script that happens to be watching
+			// for its existence/non-existence, so it would be nice if some better way can be discovered
+			// to do this.
+			// SetWindowPos is also necessary, otherwise the frame thickness entirely around the window
+			// does not get updated (just parts of it):
+			SetWindowPos(mHwnd, NULL, 0, 0, 0, 0, SWP_DRAWFRAME|SWP_FRAMECHANGED|SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE);
+			ShowWindow(mHwnd, SW_HIDE);
+			ShowWindow(mHwnd, SW_SHOWNA); // i.e. don't activate it if it wasn't before. Note that SW_SHOWNA avoids restoring the window if it is currently minimized or maximized (unlike SW_SHOWNOACTIVATE).
+			// None of the following methods alone is enough, at least not when the window is currently active:
+			// 1) InvalidateRect(mHwnd, NULL, TRUE);
+			// 2) SendMessage(mHwnd, WM_NCPAINT, 1, 0);  // 1 = Repaint entire frame.
+			// 3) RedrawWindow(mHwnd, NULL, NULL, RDW_INVALIDATE|RDW_FRAME|RDW_UPDATENOW);
+			// 4) SetWindowPos(mHwnd, NULL, 0, 0, 0, 0, SWP_DRAWFRAME|SWP_FRAMECHANGED|SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE);
+		}
 		// Continue on to create the window so that code is simplified in other places by
 		// using the assumption that "if gui[i] object exists, so does its window".
 		// Another important reason this is done is that if an owner window were to be destroyed
@@ -2491,7 +2536,7 @@ ResultType GuiType::ParseOptions(char *aOptions)
 
 ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &aOpt, GuiControlType &aControl
 	, GuiIndexType aControlIndex)
-// Caller must have already initialied aOpt with zeroes or any other desired started values.
+// Caller must have already initialized aOpt with zeroes or any other desired starting values.
 // Caller must ensure that aOptions is a modifiable string, since this method temporarily alters it.
 {
 	char *next_option, *option_end, orig_char;
@@ -2542,8 +2587,27 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 			if (adding) aControl.attrib |= GUI_CONTROL_ATTRIB_ALTSUBMIT; else aControl.attrib &= ~GUI_CONTROL_ATTRIB_ALTSUBMIT;
 
 		// Content of control (these are currently only effective if the control is being newly created):
-		else if ((aControl.type == GUI_CONTROL_CHECKBOX || aControl.type == GUI_CONTROL_RADIO) && !stricmp(next_option, "Checked"))
-			if (adding) aOpt.checked = BST_CHECKED; else aOpt.checked = BST_UNCHECKED;
+		else if ((aControl.type == GUI_CONTROL_CHECKBOX || aControl.type == GUI_CONTROL_RADIO)
+			&& !strnicmp(next_option, "Checked", 7))
+		{
+			// As of v1.0.26, Checked/Hidden/Disabled can be followed by an optional 1/0/-1 so that
+			// there is a way for a script to set the starting state by reading from an INI or registry
+			// entry that contains 1 or 0 instead of needing the literal word "checked" stored in there.
+			// Otherwise, a script would have to do something like the following before every "Gui Add":
+			// if Box1Enabled
+			//    Enable = Enabled
+			// else
+			//    Enable =
+			// Gui Add, checkbox, %Enable%, My checkbox.
+			if (next_option[7]) // There's more after the word, namely a 1, 0, or -1.
+			{
+				aOpt.checked = ATOI(next_option + 7);
+				if (aOpt.checked == -1)
+					aOpt.checked = BST_INDETERMINATE;
+			}
+			else
+				if (adding) aOpt.checked = BST_CHECKED; else aOpt.checked = BST_UNCHECKED;
+		}
 		else if (aControl.type == GUI_CONTROL_CHECKBOX && !stricmp(next_option, "CheckedGray")) // Radios can't have the 3rd/gray state.
 			if (adding) aOpt.checked = BST_INDETERMINATE; else aOpt.checked = BST_UNCHECKED;
 		else if (!strnicmp(next_option, "Choose", 6)) // Caller should ignore aOpt.choice if it isn't applicable for this control type.
@@ -2583,10 +2647,42 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 			if (adding) aOpt.style_remove |= WS_TABSTOP; else aOpt.style_add |= WS_TABSTOP;
 		else if (!stricmp(next_option, "Group")) // This overlaps with g-label, but seems well worth it in this case.
 			if (adding) aOpt.style_add |= WS_GROUP; else aOpt.style_remove |= WS_GROUP;
-		else if (!stricmp(next_option, "Disabled"))
-			if (adding) aOpt.style_add |= WS_DISABLED; else aOpt.style_remove |= WS_DISABLED;
-		else if (!stricmp(next_option, "Hidden"))
-			if (adding) aOpt.style_remove |= WS_VISIBLE; else aOpt.style_add |= WS_VISIBLE;
+		else if (!strnicmp(next_option, "Disabled", 8))
+		{
+			// As of v1.0.26, Checked/Hidden/Disabled can be followed by an optional 1/0/-1 so that
+			// there is a way for a script to set the starting state by reading from an INI or registry
+			// entry that contains 1 or 0 instead of needing the literal word "checked" stored in there.
+			// Otherwise, a script would have to do something like the following before every "Gui Add":
+			// if Box1Enabled
+			//    Enable = Enabled
+			// else
+			//    Enable =
+			// Gui Add, checkbox, %Enable%, My checkbox.
+			if (next_option[8] && !ATOI(next_option + 8)) // If it's Disabled0, invert the mode to become "enabled".
+				adding = !adding;
+			if (aControl.hwnd) // More correct to call EnableWindow and let it set the style.  Do not set the style explicitly in this case since that might break it.
+				EnableWindow(aControl.hwnd, adding ? FALSE : TRUE);
+			else
+				if (adding) aOpt.style_add |= WS_DISABLED; else aOpt.style_remove |= WS_DISABLED;
+		}
+		else if (!strnicmp(next_option, "Hidden", 6))
+		{
+			// As of v1.0.26, Checked/Hidden/Disabled can be followed by an optional 1/0/-1 so that
+			// there is a way for a script to set the starting state by reading from an INI or registry
+			// entry that contains 1 or 0 instead of needing the literal word "checked" stored in there.
+			// Otherwise, a script would have to do something like the following before every "Gui Add":
+			// if Box1Enabled
+			//    Enable = Enabled
+			// else
+			//    Enable =
+			// Gui Add, checkbox, %Enable%, My checkbox.
+			if (next_option[6] && !ATOI(next_option + 6)) // If it's Hidden0, invert the mode to become "show".
+				adding = !adding;
+			if (aControl.hwnd) // More correct to call ShowWindow() and let it set the style.  Do not set the style explicitly in this case since that might break it.
+				ShowWindow(aControl.hwnd, adding ? SW_HIDE : SW_SHOWNOACTIVATE);
+			else
+				if (adding) aOpt.style_remove |= WS_VISIBLE; else aOpt.style_add |= WS_VISIBLE;
+		}
 		else if (!stricmp(next_option, "Wrap"))
 		{
 			switch(aControl.type)
@@ -2838,7 +2934,7 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 					if (var)
 					{
 						// Below relies on GuiIndexType underflow:
-						for (GuiIndexType u = mControlCount - 1; u < mControlCount; --u) // Search in reverse for expected better performance.
+						for (GuiIndexType u = mControlCount - 1; u < mControlCount; --u) // Search in reverse for better avg-case performance.
 							if (mControl[u].output_var == var)
 								if (which_buddy == '1')
 									aOpt.buddy1 = &mControl[u];
@@ -3150,8 +3246,11 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 				switch (toupper(next_option[-1]))
 				{
 				case 'C':
-					if (!adding && aControl.type != GUI_CONTROL_PIC)
+					if (!adding && aControl.type != GUI_CONTROL_PIC && aControl.union_color != CLR_DEFAULT)
+					{
 						aControl.union_color = CLR_DEFAULT; // i.e. treat "-C" as return to the default color.
+						aOpt.color_changed = true;
+					}
 					break;
 				case 'G':
 					aControl.jump_to_label = NULL;
@@ -3252,12 +3351,18 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 			case 'C':  // Color
 				if (aControl.type == GUI_CONTROL_PIC) // Don't trash the union's hbitmap member.
 					break;
-				aControl.union_color = ColorNameToBGR(next_option);
-				if (aControl.union_color == CLR_NONE) // A matching color name was not found, so assume it's in hex format.
+				COLORREF new_color;
+				new_color = ColorNameToBGR(next_option);
+				if (new_color == CLR_NONE) // A matching color name was not found, so assume it's in hex format.
 					// It seems strtol() automatically handles the optional leading "0x" if present:
-					aControl.union_color = rgb_to_bgr(strtol(next_option, NULL, 16));
+					new_color = rgb_to_bgr(strtol(next_option, NULL, 16));
 					// if next_option did not contain something hex-numeric, black (0x00) will be assumed,
 					// which seems okay given how rare such a problem would be.
+				if (aControl.union_color != new_color)
+				{
+					aControl.union_color = new_color;
+					aOpt.color_changed = true;
+				}
 				break;
 
 			case 'W':
@@ -3402,7 +3507,8 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 		switch (aControl.type)
 		{
 		case GUI_CONTROL_PIC:
-			new_style = (new_style & ~0x0F) | SS_BITMAP; // Done to ensure the lowest four/five bits are pure.
+			// Fixed for v1.0.25.11 to prevent SS_ICON from getting changed to SS_BITMAP:
+			new_style = (new_style & ~0x0F) | (current_style & 0x0F); // Done to ensure the lowest four bits are pure.
 			break;
 		case GUI_CONTROL_GROUPBOX:
 			// There doesn't seem to be any flexibility lost by forcing the buttons to be the right type,
@@ -3739,6 +3845,23 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 	int height = COORD_UNSPECIFIED;
 	bool auto_size = false;
 
+	// There is evidence that SW_SHOWNORMAL might be better than SW_SHOW for the first showing because
+	// someone reported that a window appears centered on the screen for its first showing even if some
+	// other position was specified.  In addition, MSDN says (without explanation): "An application should
+	// specify [SW_SHOWNORMAL] when displaying the window for the first time."  However, SW_SHOWNORMAL is
+	// avoided after the first showing of the window because that would probably also do a "restore" on the
+	// window if it was maximized previously.  Note that the description of SW_SHOWNORMAL is virtually the
+	// same as that of SW_RESTORE in MSDN.  UPDATE: mFirstGuiShowCmd is used here instead of mFirstActivation
+	// because it seems more flexible to have "Gui Show" behave consistently (SW_SHOW) every time after
+	// the first use of "Gui Show".  UPDATE: Since SW_SHOW seems to have no effect on minimized windows,
+	// at least on XP, and since such a minimized window will be restored by action of SetForegroundWindowEx(),
+	// it seems best to unconditionally use SW_SHOWNORMAL, rather than "mFirstGuiShowCmd ? SW_SHOWNORMAL : SW_SHOW".
+	// This is done so that the window will be restored and thus have a better chance of being successfully
+	// activated (and thus not requiring the call to SetForegroundWindowEx()).
+	int show_mode = SW_SHOWNORMAL; // Set default.
+	// Note that although SW_SHOW un-minimizes a window (at least on XP), it does not un-maximize it
+	// (unlike SW_SHOWNORMAL, which seems functionally identical to SW_RESTORE).
+
 	for (char *cp = aOptions; *cp; ++cp)
 	{
 		switch(toupper(*cp))
@@ -3766,12 +3889,61 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 				y = COORD_CENTERED;
 			}
 			break;
+		case 'M':
+			if (!strnicmp(cp, "Minimize", 8)) // Seems best to reserve "Min" for other things, such as Min W/H. "Minimize" is also more self-documenting.
+			{
+				// Skip over the text of the name so that it isn't interpreted as option letters.
+				// 7 vs. 8 to avoid the loop's addition ++cp from reading beyond the length of the string:
+				cp += 7;
+				show_mode = SW_MINIMIZE;  // Seems more typically useful/desirable than SW_SHOWMINIMIZED.
+			}
+			else if (!strnicmp(cp, "Maximize", 8))
+			{
+				// Skip over the text of the name so that it isn't interpreted as option letters.
+				// 7 vs. 8 to avoid the loop's addition ++cp from reading beyond the length of the string:
+				cp += 7;
+				show_mode = SW_MAXIMIZE;  // SW_MAXIMIZE == SW_SHOWMAXIMIZED
+			}
+			break;
+		case 'N':
+			if (!strnicmp(cp, "NA", 2))
+			{
+				// Skip over the text of the name so that it isn't interpreted as option letters.
+				// 1 vs. 2 to avoid the loop's addition ++cp from reading beyond the length of the string:
+				cp += 1;
+				show_mode = SW_SHOWNA;
+			}
+			else if (!strnicmp(cp, "NoActivate", 10))
+			{
+				// Skip over the text of the name so that it isn't interpreted as option letters.
+				// 9 vs. 10 to avoid the loop's addition ++cp from reading beyond the length of the string:
+				cp += 9;
+				show_mode = SW_SHOWNOACTIVATE;
+			}
+			break;
+		case 'R':
+			if (!strnicmp(cp, "Restore", 7))
+			{
+				// Skip over the text of the name so that it isn't interpreted as option letters.
+				// 6 vs. 7 to avoid the loop's addition ++cp from reading beyond the length of the string:
+				cp += 6;
+				show_mode = SW_RESTORE;
+			}
+			break;
 		case 'W':
 			width = atoi(cp + 1);
 			break;
 		case 'H':
-			// Allow any width/height to be specified so that the window can be "rolled up" to its title bar:
-			height = atoi(cp + 1);
+			if (!strnicmp(cp, "Hide", 4))
+			{
+				// Skip over the text of the name so that it isn't interpreted as option letters.
+				// 3 vs. 4 to avoid the loop's addition ++cp from reading beyond the length of the string:
+				cp += 3;
+				show_mode = SW_HIDE;
+			}
+			else
+				// Allow any width/height to be specified so that the window can be "rolled up" to its title bar:
+				height = atoi(cp + 1);
 			break;
 		case 'X':
 			if (!strnicmp(cp + 1, "Center", 6))
@@ -3798,53 +3970,87 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 	int width_orig = width;
 	int height_orig = height;
 
-	if (auto_size) // Check this one first so that it takes precedence over mFirstShowing below.
+	// The following section must be done prior to any calls to GetWindow/ClientRect(mHwnd) because
+	// neither of them can retrieve the correct diminsnions of a minmized window.  Similarly, if
+	// the window is maximized but is about to be restored, do that prior to getting any of mHwnd's
+	// rectangles because we want to use the restored size as the basis for centering, resizing, etc.
+	// If show_mode is "hide", move the window only after hiding it (to reduce screen flicker).
+	// If the window is being restored from a minimized or maximized state, move the window only
+	// after restoring it; otherwise, any resize to be done by the MoveWindow() might not take effect.
+	// Note that SW_SHOWNOACTIVATE is very similar to SW_RESTORE in its effects.
+	bool show_was_done = false;
+	if (show_mode == SW_HIDE // Hiding a window or restoring a window known to be minimized/maximized.
+		|| (show_mode == SW_RESTORE || SW_SHOWNOACTIVATE) && (IsZoomed(mHwnd) || IsIconic(mHwnd)))
 	{
-		// Find out a different set of max extents rather than using mMaxExtentRight/Down, which should
-		// not be altered because they are used to position any subsequently added controls.
-		RECT rect;
-		width = 0;
-		height = 0;
-		for (GuiIndexType u = 0; u < mControlCount; ++u)
-			if (GetWindowLong(mControl[u].hwnd, GWL_STYLE) & WS_VISIBLE) // Don't use IsWindowVisible() in case parent window is hidden.
-			{
-				GetWindowRect(mControl[u].hwnd, &rect);
-				MapWindowPoints(NULL, mHwnd, (LPPOINT)&rect, 2); // Convert rect to client coordinates (not the same as GetClientRect()).
-				if (rect.right > width)
-					width = rect.right;
-				if (rect.bottom > height)
-					height = rect.bottom;
-			}
-		if (width > 0)
-			width += mMarginX;
-		if (height > 0)
-			height += mMarginY;
+		ShowWindow(mHwnd, show_mode);
+		show_was_done = true;
 	}
-	else if (width == COORD_UNSPECIFIED || height == COORD_UNSPECIFIED)
-	{
-		if (mFirstShowing) // By default, center the window if this is the first time it's being shown.
-		{
-			if (width == COORD_UNSPECIFIED)
-				width = mMaxExtentRight + mMarginX;
-			if (height == COORD_UNSPECIFIED)
-				height = mMaxExtentDown + mMarginY;
-		}
-		else
-		{
-			RECT rect;
-			GetClientRect(mHwnd, &rect);
-			if (width == COORD_UNSPECIFIED) // Keep the current client width, as documented.
-				width = rect.right - rect.left;
-			if (height == COORD_UNSPECIFIED) // Keep the current client height, as documented.
-				height = rect.bottom - rect.top;
-		}
-	}
+	// Note that SW_RESTORE and SW_SHOWNOACTIVATE will show a window if it's hidden.  Therefore, just
+	// because the window is not in need of restoring doesn't mean the ShowWindow() call is skipped.
+	// That is why show_was_done is left false in such cases.
 
-	if (mFirstShowing)
+	// Due to the checking above, if the window is minimized/maximized now, that means it will still be
+	// minimized/maximized when this function is done.  As a result, it's not really valid to call
+	// MoveWindow() for any purpose (auto-centering, auto-sizing, new position, new size, etc.).
+	// The below is especially necessary for minimized windows because it avoid calculating window
+	// dimensions, auto-centering, etc. based on incorrect values returned by GetWindow/ClientRect(mHwnd).
+	// Update: For flexibililty, it seems best to allow a maximized window to be moved, which might be
+	// valid on a multi-monitor system.  This maintains flexibility and doesn't appear to give up
+	// anything because the script can do an explicit "Gui, Show, Restore" prior to a
+	// "Gui, Show, x33 y44 w400" to be sure the window is restored before the operation (or combine
+	// both of those commands into one).
+	bool allow_move_window = !IsIconic(mHwnd);
+
+	if (allow_move_window)
+	{
+		if (auto_size) // Check this one first so that it takes precedence over mFirstGuiShowCmd below.
+		{
+			// Find out a different set of max extents rather than using mMaxExtentRight/Down, which should
+			// not be altered because they are used to position any subsequently added controls.
+			RECT rect;
+			width = 0;
+			height = 0;
+			for (GuiIndexType u = 0; u < mControlCount; ++u)
+				if (GetWindowLong(mControl[u].hwnd, GWL_STYLE) & WS_VISIBLE) // Don't use IsWindowVisible() in case parent window is hidden.
+				{
+					GetWindowRect(mControl[u].hwnd, &rect);
+					MapWindowPoints(NULL, mHwnd, (LPPOINT)&rect, 2); // Convert rect to client coordinates (not the same as GetClientRect()).
+					if (rect.right > width)
+						width = rect.right;
+					if (rect.bottom > height)
+						height = rect.bottom;
+				}
+			if (width > 0)
+				width += mMarginX;
+			if (height > 0)
+				height += mMarginY;
+		}
+		else if (width == COORD_UNSPECIFIED || height == COORD_UNSPECIFIED)
+		{
+			if (mFirstGuiShowCmd) // By default, center the window if this is the first use of "Gui Show" (even "Gui Show, Hide").
+			{
+				if (width == COORD_UNSPECIFIED)
+					width = mMaxExtentRight + mMarginX;
+				if (height == COORD_UNSPECIFIED)
+					height = mMaxExtentDown + mMarginY;
+			}
+			else
+			{
+				RECT rect;
+				GetClientRect(mHwnd, &rect);
+				if (width == COORD_UNSPECIFIED) // Keep the current client width, as documented.
+					width = rect.right - rect.left;
+				if (height == COORD_UNSPECIFIED) // Keep the current client height, as documented.
+					height = rect.bottom - rect.top;
+			}
+		}
+	} // if (allow_move_window)
+
+	if (mFirstGuiShowCmd)
 	{
 		// Update any tab controls to show only their correct pane.  This should only be necessary
-		// upon the first showing of the window because subsequent switches of the control's tab
-		// should result in a TCN_SELCHANGE notification.
+		// upon the first "Gui Show" (even "Gui, Show, Hide") of the window because subsequent switches
+		// of the control's tab should result in a TCN_SELCHANGE notification.
 		for (GuiIndexType u = 0; u < mControlCount; ++u)
 			if (mControl[u].type == GUI_CONTROL_TAB)
 				ControlUpdateCurrentTab(mControl[u], false); // Pass false so that default/z-order focus is used across entire window.
@@ -3855,106 +4061,115 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 			y = COORD_CENTERED;
 	}
 
-	// The above has determined the height/width of the client area.  From that area, determine
-	// the window's new rect, including title bar, borders, etc.
-	// If the window has a border or caption this also changes top & left *slightly* from zero.
-	RECT rect = {0, 0, width, height}; // left,top,right,bottom
-	AdjustWindowRectEx(&rect, GetWindowLong(mHwnd, GWL_STYLE), GetMenu(mHwnd) ? TRUE : FALSE
-		, GetWindowLong(mHwnd, GWL_EXSTYLE));
-	width = rect.right - rect.left;  // rect.left might be slightly less than zero.
-	height = rect.bottom - rect.top; // rect.top might be slightly less than zero.
-
-	RECT work_rect;
-	SystemParametersInfo(SPI_GETWORKAREA, 0, &work_rect, 0);  // Get desktop rect excluding task bar.
-	int work_width = work_rect.right - work_rect.left;  // Note that "left" won't be zero if task bar is on left!
-	int work_height = work_rect.bottom - work_rect.top;  // Note that "top" won't be zero if task bar is on top!
-
-	// Seems best to restrict window size to the size of the desktop whenever explicit sizes
-	// weren't given, since most users would probably want that.  But only on first showing:
-	if (mFirstShowing)
-	{
-		if (width_orig == COORD_UNSPECIFIED && width > work_width)
-			width = work_width;
-		if (height_orig == COORD_UNSPECIFIED && height > work_height)
-			height = work_height;
-	}
-
-	if (x == COORD_CENTERED || y == COORD_CENTERED) // Center it, based on its dimensions determined above.
-	{
-		// This does not currently handle multi-monitor systems explicitly, since those calculations
-		// require API functions that don't exist in Win95/NT (and thus would have to be loaded
-		// dynamically to allow the program to launch).  Therefore, windows will likely wind up
-		// being centered across the total dimensions of all monitors, which usually results in
-		// half being on one monitor and half in the other.  This doesn't seem too terrible and
-		// might even be what the user wants in some cases (i.e. for really big windows).
-		if (x == COORD_CENTERED)
-			x = work_rect.left + ((work_width - width) / 2);
-		if (y == COORD_CENTERED)
-			y = work_rect.top + ((work_height - height) / 2);
-	}
-
 	BOOL is_visible = IsWindowVisible(mHwnd);
-	RECT old_rect;
-	GetWindowRect(mHwnd, &old_rect);
-	int old_width = old_rect.right - old_rect.left;
-	int old_height = old_rect.bottom - old_rect.top;
 
-	if (width != old_width || height != old_height || (x != COORD_UNSPECIFIED && x != old_rect.left)
-		|| (y != COORD_UNSPECIFIED && y != old_rect.bottom))
+	if (allow_move_window)
 	{
-		MoveWindow(mHwnd, x == COORD_UNSPECIFIED ? old_rect.left : x, y == COORD_UNSPECIFIED ? old_rect.top : y
-			, width, height, is_visible);  // Do repaint if visible.
+		// The above has determined the height/width of the client area.  From that area, determine
+		// the window's new rect, including title bar, borders, etc.
+		// If the window has a border or caption this also changes top & left *slightly* from zero.
+		RECT rect = {0, 0, width, height}; // left,top,right,bottom
+		AdjustWindowRectEx(&rect, GetWindowLong(mHwnd, GWL_STYLE), GetMenu(mHwnd) ? TRUE : FALSE
+			, GetWindowLong(mHwnd, GWL_EXSTYLE));
+		width = rect.right - rect.left;  // rect.left might be slightly less than zero.
+		height = rect.bottom - rect.top; // rect.top might be slightly less than zero.
+
+		RECT work_rect;
+		SystemParametersInfo(SPI_GETWORKAREA, 0, &work_rect, 0);  // Get desktop rect excluding task bar.
+		int work_width = work_rect.right - work_rect.left;  // Note that "left" won't be zero if task bar is on left!
+		int work_height = work_rect.bottom - work_rect.top; // Note that "top" won't be zero if task bar is on top!
+
+		// Seems best to restrict window size to the size of the desktop whenever explicit sizes
+		// weren't given, since most users would probably want that.  But only on first use of
+		// "Gui Show" (even "Gui, Show, Hide"):
+		if (mFirstGuiShowCmd)
+		{
+			if (width_orig == COORD_UNSPECIFIED && width > work_width)
+				width = work_width;
+			if (height_orig == COORD_UNSPECIFIED && height > work_height)
+				height = work_height;
+		}
+
+		if (x == COORD_CENTERED || y == COORD_CENTERED) // Center it, based on its dimensions determined above.
+		{
+			// This does not currently handle multi-monitor systems explicitly, since those calculations
+			// require API functions that don't exist in Win95/NT (and thus would have to be loaded
+			// dynamically to allow the program to launch).  Therefore, windows will likely wind up
+			// being centered across the total dimensions of all monitors, which usually results in
+			// half being on one monitor and half in the other.  This doesn't seem too terrible and
+			// might even be what the user wants in some cases (i.e. for really big windows).
+			if (x == COORD_CENTERED)
+				x = work_rect.left + ((work_width - width) / 2);
+			if (y == COORD_CENTERED)
+				y = work_rect.top + ((work_height - height) / 2);
+		}
+
+		RECT old_rect;
+		GetWindowRect(mHwnd, &old_rect);
+		int old_width = old_rect.right - old_rect.left;
+		int old_height = old_rect.bottom - old_rect.top;
+
+		// Avoid calling MoveWindow() if nothing changed because it might repaint/redraw even if window size/pos
+		// didn't change:
+		if (width != old_width || height != old_height || (x != COORD_UNSPECIFIED && x != old_rect.left)
+			|| (y != COORD_UNSPECIFIED && y != old_rect.bottom))
+		{
+			MoveWindow(mHwnd, x == COORD_UNSPECIFIED ? old_rect.left : x, y == COORD_UNSPECIFIED ? old_rect.top : y
+				, width, height, is_visible);  // Do repaint if window is visible.
+		}
+	} // if (allow_move_window)
+
+	// Note that for SW_MINIMIZE and SW_MAXIMZE, the MoveWindow() above should be done prior to ShowWindow()
+	// so that the window will "remember" its new size upon being restored later.
+	if (!show_was_done)
+		ShowWindow(mHwnd, show_mode);
+
+	bool we_did_the_first_activation = false; // Set default.
+
+	switch(show_mode)
+	{
+	case SW_SHOW:
+	case SW_SHOWNORMAL:
+	case SW_MAXIMIZE:
+	case SW_RESTORE:
+		if (mHwnd != GetForegroundWindow())
+			SetForegroundWindowEx(mHwnd);   // In the above modes, try to force it to the foreground as documented.
+		if (mFirstActivation)
+		{
+			// Since the window has never before been active, any of the above qualify as "first activation".
+			// Thus, we are no longer at the first activation:
+			mFirstActivation = false;
+			we_did_the_first_activation = true; // And we're the ones who did the first activation.
+		}
+		break;
+	// No action for these:
+	//case SW_MINIMIZE:
+	//case SW_SHOWNA:
+	//case SW_SHOWNOACTIVATE:
+	//case SW_HIDE:
 	}
 
-	if (!is_visible)
-		ShowWindow(mHwnd, SW_SHOW);
-	if (mHwnd != GetForegroundWindow()) // Normally it will be foreground since the template has this property.
-		SetForegroundWindowEx(mHwnd);   // Try to force it to the foreground.
-	// When the window is shown via the action of a custom tray menu item (and perhaps at other times),
-	// it appears and is foreground, yet does not have keyboard focus.  As a result, not only is there
-	// no focused control, but the following do not work either:
-	// 1) Pressing Escape to trigger the built-in escape action (if any).
-	// 2) Pressing Enter to trigger the default button.
-	// 3) Pressing Tab to navigate.
-	// Example script to reproduce the problem on XP (Tekl and I can both reproduce this):
-	//Gui, Add, Edit, vMyEdit
-	//Gui, Add, Button, Default, OK
-	//Menu, tray, add, Show the Window, ShowGui
-	//return
-	//ShowGui:
-	//Gui, Show
-	//return
-	// The below workaround seems to fix it.  SetActiveWindow() was not enough.
-	// This workaround method seems preferable to calling SetFocus because that window might
-	// be being reshown, in which case it would be desirable in some cases to retain its current
-	// focused control:
-	if (!GetFocus())
+	// No attempt is made to handle the fact that Gui windows can be shown or activated via WinShow and
+	// WinActivate.  In such cases, if the tab control itself is focused, mFirstActivation will stil focus
+	// a control inside the tab rather than leaving the tab control focused.  Similarly, if the window
+	// was shown with NA or NOACTIVATE or MINIMIZE, when the first use of an activation mode of "Gui Show"
+	// is done, even if it's far into the future, long after the user has activated and navigated in the
+	// window, the same "first activation" behavior will be done anyway.  This is documented here as a
+	// known limitation, since fixing it would probably add an unreasonable amount of complexity.
+	HWND focused_control_hwnd;
+	if (we_did_the_first_activation && mTabControlCount // Window probably must be visible and active for GetFocus() to work.
+		&& (focused_control_hwnd = GetFocus())) // Assign
 	{
-		// For v1.0.24, an additional check is done to avoid doing the hide+show if the window
-		// has no input-capable controls that are currently visible+enabled:
-		for (GuiIndexType u = 0; u < mControlCount; ++u)
-			if (GUI_CONTROL_TYPE_CAN_BE_FOCUSED(mControl[u].type) && IsWindowVisible(mControl[u].hwnd)
-				&& IsWindowEnabled(mControl[u].hwnd))
-			{
-				ShowWindow(mHwnd, SW_HIDE);
-				ShowWindow(mHwnd, SW_SHOW);
-				break;
-			}
-	}
-
-	// Since this is the first showing, if the focus wound up on a tab control itself as a result of
-	// the above, focus the first control of that tab since that is traditional.  HOWEVER, do not
-	// instead default tab controls to lacking WS_TABSTOP since it is traditional for them to have
-	// that property, probably to aid accessibility.
-	if (mFirstShowing && mTabControlCount) // This is done only now that the window is visible so that GetFocus() will work.
-	{
-		HWND focused_control_hwnd = GetFocus();
+		// Since this is the first activation, if the focus wound up on a tab control itself as a result
+		// of the above, focus the first control of that tab since that is traditional.  HOWEVER, do not
+		// instead default tab controls to lacking WS_TABSTOP since it is traditional for them to have
+		// that property, probably to aid accessibility.
 		GuiControlType *focused_control = FindControl(focused_control_hwnd);
 		if (focused_control && focused_control->type == GUI_CONTROL_TAB)
 			ControlUpdateCurrentTab(*focused_control, true);
 	}
 
-	mFirstShowing = false;
+	mFirstGuiShowCmd = false;
 
 	// It seems best to reset this prior to SLEEP below, but after the above line (for code clarity) since
 	// otherwise it might get stuck in a true state if the SLEEP results in the launch of a script
@@ -3969,6 +4184,8 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 	// "Gui Show", the GUI window might not appear until afterward because our thread never had a
 	// chance to call its WindowProc with all the messages needed to actually show the window:
 	SLEEP_WITHOUT_INTERRUPTION(-1)
+	// UpdateWindow() would probably achieve the same effect as the above, but it feels safer to do
+	// the above because it ensures that our message queue is empty prior to returning to our caller.
 
 	return OK;
 }
@@ -4224,13 +4441,13 @@ ResultType GuiType::ControlGetContents(Var &aOutputVar, GuiControlType &aControl
 			if (GetWindowLong(aControl.hwnd, GWL_STYLE) & (LBS_EXTENDEDSEL|LBS_MULTIPLESEL))
 			{
 				LRESULT item_count = SendMessage(aControl.hwnd, LB_GETSELCOUNT, 0, 0);
-				if (!item_count || item_count == LB_ERR)  // LB_ERR should be impossible in this case.
+				if (item_count <= 0)  // <=0 to check for LB_ERR too (but it should be impossible in this case).
 					return aOutputVar.Assign();
 				int *item = (int *)malloc(item_count * sizeof(int)); // dynamic since there can be a very large number of items.
 				if (!item)
 					return aOutputVar.Assign();
 				item_count = SendMessage(aControl.hwnd, LB_GETSELITEMS, (WPARAM)item_count, (LPARAM)item);
-				if (!item_count || item_count == LB_ERR)  // Both these conditions should be impossible in this case.
+				if (item_count <= 0)  // 0 or LB_ERR, but both these conditions should be impossible in this case.
 				{
 					free(item);
 					return aOutputVar.Assign();
@@ -5526,8 +5743,10 @@ void GuiType::ControlSetProgressOptions(GuiControlType &aControl, GuiControlOpti
 		else
 			SendMessage(aControl.hwnd, PBM_SETRANGE32, aOpt.range_min, aOpt.range_max);
 	}
-	if (aControl.union_color != CLR_DEFAULT)
+
+	if (aOpt.color_changed)
 		SendMessage(aControl.hwnd, PBM_SETBARCOLOR, 0, aControl.union_color);
+
 	switch (aOpt.progress_color_bk)
 	{
 	case CLR_DEFAULT:
@@ -5584,14 +5803,16 @@ void GuiType::ControlUpdateCurrentTab(GuiControlType &aTabControl, bool aFocusFi
 	// attempting to "rely on everyone else to do their jobs of keeping the controls in the right state"
 	// because it improves maintainability:
 	DWORD tab_style = GetWindowLong(aTabControl.hwnd, GWL_STYLE);
-	bool hide_all = !(tab_style & WS_VISIBLE);
+	bool hide_all = !(tab_style & WS_VISIBLE); // Regardless of whether mHwnd is visible or not.
 	bool disable_all = (tab_style & WS_DISABLED); // Don't use IsWindowEnabled() because it might return false if parent is disabled?
 	// Say that the focus was already set correctly if the entire tab control is hidden or caller said
 	// not to focus it:
 	bool focus_was_set;
+	bool parent_is_visible = IsWindowVisible(mHwnd);
+	bool parent_is_visible_and_not_minimized = parent_is_visible && !IsIconic(mHwnd);
 	if (hide_all || disable_all)
 		focus_was_set = true;  // Tell the below not to set focus, since all tab controls are hidden or disabled.
-	else if (aFocusFirstControl)
+	else if (aFocusFirstControl)  // Note that SetFocus() has an effect even if the parent window is hidden. i.e. next time the window is shown, the control will be focused.
 		focus_was_set = false; // Tell it to focus the first control on the new page.
 	else
 	{
@@ -5599,9 +5820,9 @@ void GuiType::ControlUpdateCurrentTab(GuiControlType &aTabControl, bool aFocusFi
 		GuiControlType *focused_control;
 		// If the currently focused control is somewhere in this tab control (but not the tab control
 		// itself, because arrow-key navigation relies on tabs stay focused while the user is pressing
-		// left and right-arrow), override aFocusFirstControl (make it true) so that when the page changes,
-		// its first control will be focused:
-		focus_was_set = !(   IsWindowVisible(mHwnd) && (focused_hwnd = GetFocus())
+		// left and right-arrow), override the fact that aFocusFirstControl is false so that when the
+		// page changes, its first control will be focused:
+		focus_was_set = !(   parent_is_visible && (focused_hwnd = GetFocus())
 			&& (focused_control = FindControl(focused_hwnd))
 			&& focused_control->tab_control_index == aTabControl.tab_index   );
 	}
@@ -5624,10 +5845,14 @@ void GuiType::ControlUpdateCurrentTab(GuiControlType &aTabControl, bool aFocusFi
 	// For a likely cleaner transition between tabs, disable redrawing until the switch is complete.
 	// Doing it this way also serves to refresh a tab whose controls have just been disabled via
 	// something like "GuiControl, Disable, MyTab", which would otherwise not happen because unlike
-	// ShowWindow(), EnableWindow() apparently does not cause a repaint to occur:
-	SendMessage(mHwnd, WM_SETREDRAW, FALSE, 0);
+	// ShowWindow(), EnableWindow() apparently does not cause a repaint to occur.
+	// Fix for v1.0.25.14: Don't send the message below (and its counterpart later on) because that
+	// sometimes or always, as a side-effect, shows the window if it's hidden:
+	if (parent_is_visible_and_not_minimized)
+		SendMessage(mHwnd, WM_SETREDRAW, FALSE, 0);
 	bool invalidate_entire_parent = false; // Set default.
 
+	// Even if mHwnd is hidden, set styles to Show/Hide and Enable/Disable any controls that need it.
 	for (GuiIndexType u = 0; u < mControlCount; ++u)
 	{
 		// Note aTabControl.tab_index stores aTabControl's tab_control_index (true only for type GUI_CONTROL_TAB).
@@ -5692,18 +5917,19 @@ void GuiType::ControlUpdateCurrentTab(GuiControlType &aTabControl, bool aFocusFi
 		if (!focus_was_set && member_of_current_tab && will_be_visible && will_be_enabled
 			&& GUI_CONTROL_TYPE_CAN_BE_FOCUSED(control.type))
 		{
-			// Fix for v1.0.24: Don't check the return value of SetFocus because sometimes it returns
+			// Fix for v1.0.24: Don't check the return value of SetFocus() because sometimes it returns
 			// NULL even when the call will wind up succeeding.  For example, if the user clicks on
 			// the second tab in a tab control, SetFocus() will probably return NULL because there
 			// is not previously focused control at the instant the call is made.  This is because
 			// the control that had focus has likely already been hidden and thus lost focus before
 			// we arrived at this stage:
-			SetFocus(control.hwnd);
-			focus_was_set = true;
+			SetFocus(control.hwnd); // Note that this has an effect even if the parent window is hidden. i.e. next time the parent is shown, this control will be focused.
+			focus_was_set = true; // i.e. SetFocus() only for the FIRST control that meets the above criteria.
 		}
 	}
 
-	SendMessage(mHwnd, WM_SETREDRAW, TRUE, 0); // Re-enable drawing before below so that tab can be focused below.
+	if (parent_is_visible_and_not_minimized) // Fix for v1.0.25.14.  See further above for details.
+		SendMessage(mHwnd, WM_SETREDRAW, TRUE, 0); // Re-enable drawing before below so that tab can be focused below.
 
 	// In case tab is empty or there is no control capable of receiving focus, focus the tab itself
 	// instead.  This allows the Ctrl-Pgdn/Pgup keyboard shortcuts to continue to navigate within
@@ -5712,18 +5938,21 @@ void GuiType::ControlUpdateCurrentTab(GuiControlType &aTabControl, bool aFocusFi
 	// seem okay for some reason), i.e. if the control with focus is hidden, the dialog falls back to
 	// giving the focus to the the first focus-capable control in the z-order.
 	if (!focus_was_set)
-		SetFocus(aTabControl.hwnd);
+		SetFocus(aTabControl.hwnd); // Note that this has an effect even if the parent window is hidden. i.e. next time the parent is shown, this control will be focused.
 
 	// UPDATE: Below is now only done when necessary to cut down on flicker:
 	// Seems best to invalidate the entire client area because otherwise, if any of the tab's controls lie
 	// outside of its interior (this is common for TCS_BUTTONS style), they would not get repainted properly.
 	// In addition, tab controls tend to occupy the majority of their parent's client area anyway:
-	if (invalidate_entire_parent)
-		InvalidateRect(mHwnd, NULL, TRUE); // TRUE seems safer.
-	else
+	if (parent_is_visible_and_not_minimized)
 	{
-		MapWindowPoints(NULL, mHwnd, (LPPOINT)&tab_rect, 2); // Convert rect to client coordinates (not the same as GetClientRect()).
-		InvalidateRect(mHwnd, &tab_rect, TRUE); // Seems safer to use TRUE, not knowing all possible overlaps, etc.
+		if (invalidate_entire_parent)
+			InvalidateRect(mHwnd, NULL, TRUE); // TRUE seems safer.
+		else
+		{
+			MapWindowPoints(NULL, mHwnd, (LPPOINT)&tab_rect, 2); // Convert rect to client coordinates (not the same as GetClientRect()).
+			InvalidateRect(mHwnd, &tab_rect, TRUE); // Seems safer to use TRUE, not knowing all possible overlaps, etc.
+		}
 	}
 }
 
@@ -5792,7 +6021,7 @@ POINT GuiType::GetPositionOfTabClientArea(GuiControlType &aTabControl)
 	DWORD style = GetWindowLong(aTabControl.hwnd, GWL_STYLE);
 	// Tabs on left (TCS_BUTTONS only) require workaround, at least on XP.  Otherwise pt.x will be much too large.
 	// This has been confirmed to be true even when theme has been stripped off the tab control.
-	bool workaround = (style & TCS_VERTICAL) && !(style & TCS_RIGHT) && (style & TCS_BUTTONS);
+	bool workaround = !(style & TCS_RIGHT) && (style & (TCS_VERTICAL | TCS_BUTTONS)) == (TCS_VERTICAL | TCS_BUTTONS);
 	if (workaround)
 		SetWindowLong(aTabControl.hwnd, GWL_STYLE, style & ~TCS_BUTTONS);
 	TabCtrl_AdjustRect(aTabControl.hwnd, FALSE, &rect); // Retrieve the area beneath the tabs.

@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003 Chris Mallett
+Copyright 2003-2005 Chris Mallett
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -192,7 +192,9 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 	UserMenu *menu = FindMenu(aMenu);
 	if (!menu)
 	{
-		if (menu_command != MENU_CMD_ADD) // Menus can be created only in conjuction with the ADD command.
+		// Menus can be created only in conjuction with the ADD command. Update: As of v1.0.25.12, they can
+		// also be created with the "Menu, MyMenu, Standard" command.
+		if (menu_command != MENU_CMD_ADD && menu_command != MENU_CMD_STANDARD)
 			RETURN_MENU_ERROR(ERR_MENU, aMenu);
 		if (   !(menu = AddMenu(aMenu))   )
 			RETURN_MENU_ERROR("Menu name too long.", aMenu); // Could also be "out of mem" but that's too rare to display.

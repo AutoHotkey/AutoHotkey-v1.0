@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003 Chris Mallett
+Copyright 2003-2005 Chris Mallett
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -329,7 +329,7 @@ Action g_act[] =
 	, {"MouseMove", 2, 4, {1, 2, 3, 0}} // x, y, speed, option
 	, {"MouseClick", 1, 7, {2, 3, 4, 5, 0}} // which-button, x, y, ClickCount, speed, d=hold-down/u=release, Relative
 	, {"MouseClickDrag", 1, 7, {2, 3, 4, 5, 6, 0}} // which-button, x1, y1, x2, y2, speed, Relative
-	, {"MouseGetPos", 0, 4, NULL} // 4 optional output vars: xpos, ypos, WindowID, ControlName. MinParams must be 0.
+	, {"MouseGetPos", 0, 5, {5, 0}} // 4 optional output vars: xpos, ypos, WindowID, ControlName. Finally: Mode. MinParams must be 0.
 
 	, {"StatusBarGetText", 1, 6, {2, 0}} // Output-var, part# (numeric), std. 4 window params
 	, {"StatusBarWait", 0, 8, {2, 3, 6, 0}} // Wait-text(blank ok),seconds,part#,title,text,interval,exclude-title,exclude-text
@@ -389,7 +389,7 @@ Action g_act[] =
 
 	, {"PixelGetColor", 3, 4, {2, 3, 0}} // OutputVar, X-coord, Y-coord [, RGB]
 	, {"PixelSearch", 0, 9, {3, 4, 5, 6, 7, 8, 0}} // OutputX, OutputY, left, top, right, bottom, Color, Variation [, RGB]
-	//, {"ImageSearch", 0, 7, {3, 4, 5, 6, 0}} // OutputX, OutputY, left, top, right, bottom, ImageFile
+	, {"ImageSearch", 0, 7, {3, 4, 5, 6, 0}} // OutputX, OutputY, left, top, right, bottom, ImageFile
 	// Note in the above: 0 min args so that the output vars can be optional.
 
 	// See above for why minimum is 1 vs. 2:

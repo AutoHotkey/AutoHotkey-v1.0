@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003 Chris Mallett
+Copyright 2003-2005 Chris Mallett
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -259,6 +259,7 @@ modLR_type GetModifierLRState(bool aExplicitlyGet = false);
 	|| vk == VK_XBUTTON1 || vk == VK_XBUTTON2\
 	|| vk == VK_WHEEL_DOWN || vk == VK_WHEEL_UP)
 
+void AdjustKeyState(BYTE aKeyState[], modLR_type aModifiersLR);
 modLR_type KeyToModifiersLR(vk_type aVK, sc_type aSC = 0, bool *pIsNeutral = NULL);
 modLR_type ConvertModifiers(mod_type aModifiers);
 mod_type ConvertModifiersLR(modLR_type aModifiersLR);

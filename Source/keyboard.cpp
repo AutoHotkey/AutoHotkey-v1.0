@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003 Chris Mallett
+Copyright 2003-2005 Chris Mallett
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -1217,16 +1217,14 @@ modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLR
 	// Set up some conditions so that the keystrokes that disguise the release of Win or Alt
 	// are only sent when necessary (which helps avoid complications caused by keystroke interaction,
 	// while improving performance):
-	bool ctrl_not_down = !((aModifiersLRnow & MOD_LCONTROL) || (aModifiersLRnow & MOD_RCONTROL));
-	bool ctrl_will_not_be_down = !((modifiersLRnew & MOD_LCONTROL) || (modifiersLRnew & MOD_RCONTROL));
+	bool ctrl_not_down = !(aModifiersLRnow & (MOD_LCONTROL | MOD_RCONTROL)); // Neither CTRL key is down now.
+	bool ctrl_will_not_be_down = !(modifiersLRnew & (MOD_LCONTROL | MOD_RCONTROL)); // Nor will it be.
 
-	bool ctrl_nor_shift_nor_alt_down = ctrl_not_down                          // Ctrl not down now.
-		&& !((aModifiersLRnow & MOD_LSHIFT) || (aModifiersLRnow & MOD_RSHIFT) // Nor is either Shift key.
-			|| (aModifiersLRnow & MOD_LALT) || (aModifiersLRnow & MOD_RALT)); // Nor is either Alt key.
+	bool ctrl_nor_shift_nor_alt_down = ctrl_not_down                             // Neither CTRL key is down now.
+		&& !(aModifiersLRnow & (MOD_LSHIFT | MOD_RSHIFT | MOD_LALT | MOD_RALT)); // Nor is any SHIFT/ALT key.
 
-	bool ctrl_or_shift_or_alt_will_be_down = !ctrl_will_not_be_down        // Ctrl will be down.
-		|| (modifiersLRnew & MOD_LSHIFT) || (modifiersLRnew & MOD_RSHIFT)  // Or Shift will be.
-		|| (modifiersLRnew & MOD_LALT) || (modifiersLRnew & MOD_RALT);     // Or Alt will be.
+	bool ctrl_or_shift_or_alt_will_be_down = !ctrl_will_not_be_down            // CTRL will be down.
+		|| (modifiersLRnew & (MOD_LSHIFT | MOD_RSHIFT | MOD_LALT | MOD_RALT)); // or SHIFT or ALT will be.
 
 	// If the required disguise keys aren't down now but will be, defer the release of Win and/or Alt
 	// until after the disguise keys are in place (since in that case, the caller wanted them down
@@ -1389,8 +1387,8 @@ void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLR
 	if (!aModifiersLR) // Nothing to do (especially avoids the aTargetWindow check at the bottom).
 		return;
 
-	bool ctrl_not_down = !((aModifiersLRnow & MOD_LCONTROL) || (aModifiersLRnow & MOD_RCONTROL));
-	bool ctrl_wont_be_down = aEventType == KEYUP || !((aModifiersLR & MOD_LCONTROL) || (aModifiersLR & MOD_RCONTROL));
+	bool ctrl_not_down = !(aModifiersLRnow & (MOD_LCONTROL | MOD_RCONTROL)); // Neither CTRL key is down now.
+	bool ctrl_wont_be_down = aEventType == KEYUP || !(aModifiersLR & (MOD_LCONTROL | MOD_RCONTROL));
 	// Control won't be going down if aEventType==KEYUP because nothing is ever pressed down in that mode.
 
 	// To prevent it from activating the menu bar, the release of the ALT key should be disguised
@@ -1431,10 +1429,10 @@ void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLR
 
 	// The WIN key is successfully disguised under a greater number of conditions than ALT:
 	bool disguise_win_key = ctrl_not_down && ctrl_wont_be_down
-		&& !((aModifiersLRnow & MOD_LSHIFT) || (aModifiersLRnow & MOD_RSHIFT)) // And neither Shift key is down.
-		&& (aEventType == KEYUP || !((aModifiersLR & MOD_LSHIFT) || (aModifiersLR & MOD_RSHIFT))) // Nor will it be.
-		&& !((aModifiersLRnow & MOD_LALT) || (aModifiersLRnow & MOD_RALT))     // And neither Alt key is down.
-		&& (aEventType == KEYUP || !((aModifiersLR & MOD_LALT) || (aModifiersLR & MOD_RALT))); // Nor will it be.
+		&& !(aModifiersLRnow & (MOD_LSHIFT | MOD_RSHIFT)) // And neither SHIFT key is down.
+		&& (aEventType == KEYUP || !(aModifiersLR & (MOD_LSHIFT | MOD_RSHIFT))) // Nor will it be.
+		&& !(aModifiersLRnow & (MOD_LALT | MOD_RALT))     // And neither ALT key is down.
+		&& (aEventType == KEYUP || !(aModifiersLR & (MOD_LALT | MOD_RALT))); // Nor will it be.
 
 	// Handle ALT and WIN prior to the other modifiers because the "disguise" methods below are
 	// only needed upon release of ALT or WIN.  This is because such releases tend to have a better
@@ -1618,18 +1616,7 @@ modLR_type GetModifierLRState(bool aExplicitlyGet)
 			g_modifiersLR_logical &= ~hook_wrongly_down;
 			g_modifiersLR_logical_non_ignored &= ~hook_wrongly_down;
 			// Also adjust physical state so that the GetKeyState command will retrieve the correct values:
-			g_PhysicalKeyState[VK_LSHIFT] = (g_modifiersLR_physical & MOD_LSHIFT) ? STATE_DOWN : 0;
-			g_PhysicalKeyState[VK_RSHIFT] = (g_modifiersLR_physical & MOD_RSHIFT) ? STATE_DOWN : 0;
-			g_PhysicalKeyState[VK_LCONTROL] = (g_modifiersLR_physical & MOD_LCONTROL) ? STATE_DOWN : 0;
-			g_PhysicalKeyState[VK_RCONTROL] = (g_modifiersLR_physical & MOD_RCONTROL) ? STATE_DOWN : 0;
-			g_PhysicalKeyState[VK_LMENU] = (g_modifiersLR_physical & MOD_LALT) ? STATE_DOWN : 0;
-			g_PhysicalKeyState[VK_RMENU] = (g_modifiersLR_physical & MOD_RALT) ? STATE_DOWN : 0;
-			g_PhysicalKeyState[VK_LWIN] = (g_modifiersLR_physical & MOD_LWIN) ? STATE_DOWN : 0;
-			g_PhysicalKeyState[VK_RWIN] = (g_modifiersLR_physical & MOD_RWIN) ? STATE_DOWN : 0;
-			// Update the state of neutral keys only after the above, in case both keys of the pair were wrongly down:
-			g_PhysicalKeyState[VK_SHIFT] = (g_PhysicalKeyState[VK_LSHIFT] || g_PhysicalKeyState[VK_RSHIFT]) ? STATE_DOWN : 0;
-			g_PhysicalKeyState[VK_CONTROL] = (g_PhysicalKeyState[VK_LCONTROL] || g_PhysicalKeyState[VK_RCONTROL]) ? STATE_DOWN : 0;
-			g_PhysicalKeyState[VK_MENU] = (g_PhysicalKeyState[VK_LMENU] || g_PhysicalKeyState[VK_RMENU]) ? STATE_DOWN : 0;
+			AdjustKeyState(g_PhysicalKeyState, g_modifiersLR_physical);
 		}
 	}
 
@@ -1646,6 +1633,26 @@ modLR_type GetModifierLRState(bool aExplicitlyGet)
 	// if the keyboard hook is active.  Bitwise and is used because generally it's safer
 	// to assume a modifier key is up, when in doubt (e.g. to avoid firing unwanted hotkeys):
 //	return g_KeybdHook ? (g_modifiersLR_logical & g_modifiersLR_get) : g_modifiersLR_get;
+}
+
+
+
+void AdjustKeyState(BYTE aKeyState[], modLR_type aModifiersLR)
+// Caller has ensured that aKeyState is a 256-BYTE array of key states, in the same format used
+// by GetKeyboardState() and ToAscii().
+{
+	aKeyState[VK_LSHIFT] = (aModifiersLR & MOD_LSHIFT) ? STATE_DOWN : 0;
+	aKeyState[VK_RSHIFT] = (aModifiersLR & MOD_RSHIFT) ? STATE_DOWN : 0;
+	aKeyState[VK_LCONTROL] = (aModifiersLR & MOD_LCONTROL) ? STATE_DOWN : 0;
+	aKeyState[VK_RCONTROL] = (aModifiersLR & MOD_RCONTROL) ? STATE_DOWN : 0;
+	aKeyState[VK_LMENU] = (aModifiersLR & MOD_LALT) ? STATE_DOWN : 0;
+	aKeyState[VK_RMENU] = (aModifiersLR & MOD_RALT) ? STATE_DOWN : 0;
+	aKeyState[VK_LWIN] = (aModifiersLR & MOD_LWIN) ? STATE_DOWN : 0;
+	aKeyState[VK_RWIN] = (aModifiersLR & MOD_RWIN) ? STATE_DOWN : 0;
+	// Update the state of neutral keys only after the above, in case both keys of the pair were wrongly down:
+	aKeyState[VK_SHIFT] = (aKeyState[VK_LSHIFT] || aKeyState[VK_RSHIFT]) ? STATE_DOWN : 0;
+	aKeyState[VK_CONTROL] = (aKeyState[VK_LCONTROL] || aKeyState[VK_RCONTROL]) ? STATE_DOWN : 0;
+	aKeyState[VK_MENU] = (aKeyState[VK_LMENU] || aKeyState[VK_RMENU]) ? STATE_DOWN : 0;
 }
 
 
@@ -1708,10 +1715,10 @@ mod_type ConvertModifiersLR(modLR_type aModifiersLR)
 // Convert the input param to a normal modifiers value and return it.
 {
 	mod_type modifiers = 0;
-	if (aModifiersLR & MOD_LWIN || aModifiersLR & MOD_RWIN) modifiers |= MOD_WIN;
-	if (aModifiersLR & MOD_LALT || aModifiersLR & MOD_RALT) modifiers |= MOD_ALT;
-	if (aModifiersLR & MOD_LSHIFT || aModifiersLR & MOD_RSHIFT) modifiers |= MOD_SHIFT;
-	if (aModifiersLR & MOD_LCONTROL || aModifiersLR & MOD_RCONTROL) modifiers |= MOD_CONTROL;
+	if (aModifiersLR & (MOD_LWIN | MOD_RWIN)) modifiers |= MOD_WIN;
+	if (aModifiersLR & (MOD_LALT | MOD_RALT)) modifiers |= MOD_ALT;
+	if (aModifiersLR & (MOD_LSHIFT | MOD_RSHIFT)) modifiers |= MOD_SHIFT;
+	if (aModifiersLR & (MOD_LCONTROL | MOD_RCONTROL)) modifiers |= MOD_CONTROL;
 	return modifiers;
 }
 
@@ -1951,10 +1958,23 @@ vk_type TextToVK(char *aText, mod_type *pModifiers, bool aExcludeThoseHandledByS
 
 	if (strlen(aText) == 1)
 	{
-		SHORT mod_plus_vk = VkKeyScan(*aText);
-		char keyscan_modifiers = HIBYTE(mod_plus_vk);
-		if (keyscan_modifiers == -1 && LOBYTE(mod_plus_vk) == (UCHAR)-1) // No translation could be made.
-			return 0;
+		vk_type vk;
+		char keyscan_modifiers;
+		if (*aText == '\n')
+		{
+			// For v1.0.25.12, it seems best to avoid the many recent problems with linefeed (`n) being sent
+			// as Ctrl+Enter by changing it to always send a plain Enter, just like carriage return (`r).
+			vk = VK_RETURN;
+			keyscan_modifiers = 0;
+		}
+		else
+		{
+			SHORT mod_plus_vk = VkKeyScan(*aText);
+			vk = LOBYTE(mod_plus_vk);
+			keyscan_modifiers = HIBYTE(mod_plus_vk);
+			if (keyscan_modifiers == -1 && vk == (UCHAR)-1) // No translation could be made.
+				return 0;
+		}
 
 		// The win docs for VkKeyScan() are a bit confusing, referring to flag "bits" when it should really
 		// say flag "values".  In addition, it seems that these flag values are incompatible with
@@ -1971,7 +1991,7 @@ vk_type TextToVK(char *aText, mod_type *pModifiers, bool aExcludeThoseHandledByS
 			if (keyscan_modifiers & 0x04)
 				*pModifiers |= MOD_ALT;
 		}
-		return LOBYTE(mod_plus_vk);  // The virtual key.
+		return vk;
 	}
 
 // Use above in favor of this:

@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003 Chris Mallett
+Copyright 2003-2005 Chris Mallett
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -421,25 +421,27 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 	key_type *pThisKey = NULL;
 	for (i = 0; i < aHK_count; ++i)
 	{
+		Hotkey &hk = *(aHK[i]); // For performance and convenience.
+
 		// If it's not a hook hotkey (e.g. it was already registered with RegisterHotkey() or it's a joystick
 		// hotkey) don't process it here:
-		if (!TYPE_IS_HOOK(aHK[i]->mType) || !aHK[i]->mEnabled)
+		if (!TYPE_IS_HOOK(hk.mType) || !hk.mEnabled)
 			continue;
 
 		// So aHK[i] is a hook hotkey.  But if g_IsSuspended is true, we won't include it unless it's
 		// exempt from suspension:
-		if (g_IsSuspended && !aHK[i]->IsExemptFromSuspend())
+		if (g_IsSuspended && !hk.IsExemptFromSuspend())
 			continue;
 
 		// Rule out the possibility of obnoxious values right away, preventing array-out-of bounds, etc.:
-		if ((!aHK[i]->mVK && !aHK[i]->mSC) || aHK[i]->mVK > VK_MAX || aHK[i]->mSC > SC_MAX)
+		if ((!hk.mVK && !hk.mSC) || hk.mVK > VK_MAX || hk.mSC > SC_MAX)
 			continue;
 
 		// Now that any conditions under which we would exclude the hotkey have been checked above,
 		// accumulate these values:
-		if (aHK[i]->mType == HK_KEYBD_HOOK)
+		if (hk.mType == HK_KEYBD_HOOK)
 			++keybd_hook_hotkey_count;
-		else if (aHK[i]->mType == HK_MOUSE_HOOK)
+		else if (hk.mType == HK_MOUSE_HOOK)
 			++mouse_hook_hotkey_count;
 		else // HK_BOTH_HOOKS
 		{
@@ -447,21 +449,21 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 			++mouse_hook_hotkey_count;
 		}
 
-		if (!aHK[i]->mVK)
+		if (!hk.mVK)
 		{
 			// scan codes don't need something like the switch stmt below because they can't be neutral.
 			// In other words, there's no scan code equivalent for something like VK_CONTROL.
 			// In addition, SC_LCONTROL, for example, doesn't also need to change the kvk array
 			// for VK_LCONTROL because the hook knows to give the scan code precedence, and thus
 			// look it up only in the ksc array in that case.
-			pThisKey = ksc + aHK[i]->mSC;
+			pThisKey = ksc + hk.mSC;
 			// For some scan codes this was already set above.  But to support explicit scan code hotkeys,
 			// such as "SC102::MsgBox", make sure it's set for every hotkey that uses an explicit scan code.
 			pThisKey->sc_takes_precedence = true;
 		}
 		else
 		{
-			pThisKey = kvk + aHK[i]->mVK;
+			pThisKey = kvk + hk.mVK;
 			// Keys that have a neutral as well as a left/right counterpart must be
 			// fully initialized since the hook can receive the left, the right, or
 			// the neutral (neutral only if another app calls KeyEvent(), probably).
@@ -479,7 +481,7 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 			// even for Win9x for safety and in case Win9x ever gets overhauled and
 			// improved in some future era, or in case Win9x is running in an emulator
 			// that expands its capabilities.
-			switch (aHK[i]->mVK)
+			switch (hk.mVK)
 			{
 			case VK_MENU:
 				// It's not strictly necessary to init all of these, since the
@@ -504,36 +506,55 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 		}
 
 		pThisKey->used_as_suffix = true;
+		HotkeyIDType hotkey_id_with_flags = hk.mID;
 
-		HotkeyIDType hotkey_id_with_flags = aHK[i]->mID;
-		if (aHK[i]->mNoSuppress & NO_SUPPRESS_SUFFIX)
+		if (hk.mNoSuppress & NO_SUPPRESS_SUFFIX)
+		{
 			hotkey_id_with_flags |= HOTKEY_NO_SUPPRESS;
-		// else leave the bit set to zero so that the key will be suppressed (most hotkeys are like this).
+			// For v1.0.26, the below fixes cases such as the below by making any key that is
+			// a non-suppressed suffix key into a non-suppressed prefix key:
+			// ~a::MsgBox
+			// a & b::MsgBox
+			// This also solves the issue of Capslock getting stuck on after the first press here:
+			//SetCapsLockState AlwaysOff
+			//~Capslock::KeyHistory
+			//Capslock & LButton::MsgBox
+			// NOTE: The converse situation of the above is handled elsewhere (in hook_include.cpp).
+			// For example:
+			// a::MsgBox
+			// ~a & b::MsgBox
+			if (hk.mVK)
+				kvk[hk.mVK].no_suppress |= NO_SUPPRESS_PREFIX;
+			else // It must have a non-zero hk.mSC due to check higher above.
+				ksc[hk.mSC].no_suppress |= NO_SUPPRESS_PREFIX;
+		}
+		// else leave the bit set to zero in hotkey_id_with_flags so that the key will be suppressed
+		// (most hotkeys are like this).
 
 		// If this is a naked (unmodified) modifier key, make it a prefix if it ever modifies any
 		// other hotkey.  This processing might be later combined with the hotkeys activation function
 		// to eliminate redundancy / improve efficiency, but then that function would probably need to
 		// init everything else here as well:
-		if (pThisKey->as_modifiersLR && !aHK[i]->mModifiers && !aHK[i]->mModifiersLR
-			&& !aHK[i]->mModifierVK && !aHK[i]->mModifierSC)
-			SetModifierAsPrefix(aHK[i]->mVK, aHK[i]->mSC);
+		if (pThisKey->as_modifiersLR && !hk.mModifiers && !hk.mModifiersLR
+			&& !hk.mModifierVK && !hk.mModifierSC)
+			SetModifierAsPrefix(hk.mVK, hk.mSC);
 
-		if (aHK[i]->mModifierVK)
+		if (hk.mModifierVK)
 		{
-			if (kvk[aHK[i]->mModifierVK].as_modifiersLR)
+			if (kvk[hk.mModifierVK].as_modifiersLR)
 				// The hotkey's ModifierVK is itself a modifier.
-				SetModifierAsPrefix(aHK[i]->mModifierVK, 0, true);
+				SetModifierAsPrefix(hk.mModifierVK, 0, true);
 			else
 			{
-				kvk[aHK[i]->mModifierVK].used_as_prefix = true;
-				if (aHK[i]->mNoSuppress & NO_SUPPRESS_PREFIX)
-					kvk[aHK[i]->mModifierVK].no_suppress |= NO_SUPPRESS_PREFIX;
+				kvk[hk.mModifierVK].used_as_prefix = true;
+				if (hk.mNoSuppress & NO_SUPPRESS_PREFIX)
+					kvk[hk.mModifierVK].no_suppress |= NO_SUPPRESS_PREFIX;
 			}
 			if (pThisKey->nModifierVK < MAX_MODIFIER_VKS_PER_SUFFIX)  // else currently no error-reporting.
 			{
-				pThisKey->ModifierVK[pThisKey->nModifierVK].vk = aHK[i]->mModifierVK;
-				if (aHK[i]->mHookAction)
-					pThisKey->ModifierVK[pThisKey->nModifierVK].id_with_flags = aHK[i]->mHookAction;
+				pThisKey->ModifierVK[pThisKey->nModifierVK].vk = hk.mModifierVK;
+				if (hk.mHookAction)
+					pThisKey->ModifierVK[pThisKey->nModifierVK].id_with_flags = hk.mHookAction;
 				else
 					pThisKey->ModifierVK[pThisKey->nModifierVK].id_with_flags = hotkey_id_with_flags;
 				++pThisKey->nModifierVK;
@@ -542,26 +563,26 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 		}
 		else
 		{
-			if (aHK[i]->mModifierSC)
+			if (hk.mModifierSC)
 			{
-				if (kvk[aHK[i]->mModifierSC].as_modifiersLR)
+				if (kvk[hk.mModifierSC].as_modifiersLR)
 					// The hotkey's ModifierSC is itself a modifier.
-					SetModifierAsPrefix(0, aHK[i]->mModifierSC, true);
+					SetModifierAsPrefix(0, hk.mModifierSC, true);
 				else
 				{
-					ksc[aHK[i]->mModifierSC].used_as_prefix = true;
-					if (aHK[i]->mNoSuppress & NO_SUPPRESS_PREFIX)
-						ksc[aHK[i]->mModifierSC].no_suppress |= NO_SUPPRESS_PREFIX;
+					ksc[hk.mModifierSC].used_as_prefix = true;
+					if (hk.mNoSuppress & NO_SUPPRESS_PREFIX)
+						ksc[hk.mModifierSC].no_suppress |= NO_SUPPRESS_PREFIX;
 					// For some scan codes this was already set above.  But to support explicit scan code prefixes,
 					// such as "SC118 & SC122::MsgBox", make sure it's set for every prefix that uses an explicit
 					// scan code:
-					ksc[aHK[i]->mModifierSC].sc_takes_precedence = true;
+					ksc[hk.mModifierSC].sc_takes_precedence = true;
 				}
 				if (pThisKey->nModifierSC < MAX_MODIFIER_SCS_PER_SUFFIX)  // else currently no error-reporting.
 				{
-					pThisKey->ModifierSC[pThisKey->nModifierSC].sc = aHK[i]->mModifierSC;
-					if (aHK[i]->mHookAction)
-						pThisKey->ModifierSC[pThisKey->nModifierSC].id_with_flags = aHK[i]->mHookAction;
+					pThisKey->ModifierSC[pThisKey->nModifierSC].sc = hk.mModifierSC;
+					if (hk.mHookAction)
+						pThisKey->ModifierSC[pThisKey->nModifierSC].id_with_flags = hk.mHookAction;
 					else
 						pThisKey->ModifierSC[pThisKey->nModifierSC].id_with_flags = hotkey_id_with_flags;
 					++pThisKey->nModifierSC;
@@ -572,12 +593,12 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 
 		// At this point, since the above didn't "continue", this hotkey is one without a ModifierVK/SC.
 		// Put it into a temporary array, which will be later sorted:
-		hk_sorted[hk_sorted_count].id_with_flags = aHK[i]->mHookAction ? aHK[i]->mHookAction : hotkey_id_with_flags;
-		hk_sorted[hk_sorted_count].vk = aHK[i]->mVK;
-		hk_sorted[hk_sorted_count].sc = aHK[i]->mSC;
-		hk_sorted[hk_sorted_count].modifiers = aHK[i]->mModifiers;
-		hk_sorted[hk_sorted_count].modifiersLR = aHK[i]->mModifiersLR;
-		hk_sorted[hk_sorted_count].AllowExtraModifiers = aHK[i]->mAllowExtraModifiers;
+		hk_sorted[hk_sorted_count].id_with_flags = hk.mHookAction ? hk.mHookAction : hotkey_id_with_flags;
+		hk_sorted[hk_sorted_count].vk = hk.mVK;
+		hk_sorted[hk_sorted_count].sc = hk.mSC;
+		hk_sorted[hk_sorted_count].modifiers = hk.mModifiers;
+		hk_sorted[hk_sorted_count].modifiersLR = hk.mModifiersLR;
+		hk_sorted[hk_sorted_count].AllowExtraModifiers = hk.mAllowExtraModifiers;
 		++hk_sorted_count;
 	}
 
@@ -724,7 +745,7 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 				// It seems best to disable this so that the same script can be used without
 				// a warning on Win9x (and since it's so rare anyway):
 				//MsgBox("Note: This script attempts to use keyboard or hotkey features that aren't yet supported"
-				//	" on Win95/98/ME.  Those parts of the script will not function.");
+				//	" on Win95/98/Me.  Those parts of the script will not function.");
 			return -1;
 		}
 	}
