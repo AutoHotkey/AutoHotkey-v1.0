@@ -20,7 +20,7 @@ GNU General Public License for more details.
 #include "script.h" // For the global script object and g_ErrorLevel
 #include "os_version.h" // For the global OS_Version object
 
-// Since at least some of some of these (e.g. g_modifiersLRh) should not
+// Since at least some of some of these (e.g. g_modifiersLR_logical) should not
 // be kept in the struct since it's not correct to save and restore their
 // state, don't keep anything in the global_struct except those things
 // which are necessary to save and restore (even though it would clean
@@ -29,8 +29,15 @@ HWND g_hWnd = NULL;
 HWND g_hWndEdit = NULL;
 HWND g_hWndSplash = NULL;
 HINSTANCE g_hInstance; // Set by WinMain().
-modLR_type g_modifiersLRh = 0;
-modLR_type g_modifiersLRg = 0;
+modLR_type g_modifiersLR_logical = 0;
+modLR_type g_modifiersLR_physical = 0;
+modLR_type g_modifiersLR_get = 0;
+
+// Used by the hook to track physical state of all virtual keys, since GetAsyncKeyState() does
+// not work as advertised, at least under WinXP:
+bool g_PhysicalKeyState[VK_MAX + 1] = {false};
+
+int g_HotkeyModifierTimeout = 100;
 HHOOK g_hhkLowLevelKeybd = NULL;
 HHOOK g_hhkLowLevelMouse = NULL;
 bool g_ForceLaunch = false;
@@ -40,6 +47,14 @@ char g_LastPerformedHotkeyType = HK_NORMAL;
 bool g_IsSuspended = false;  // Make this separate from g_IgnoreHotkeys since that is frequently turned off & on.
 bool g_IgnoreHotkeys = false;
 int g_nSuspendedSubroutines = 0;
+
+// On my system, the repeat-rate (which is probably set to XP's default) is such that between 20
+// and 25 keys are generated per second.  Therefore, 50 in 2000ms seems like it should allow the
+// key auto-repeat feature to work on most systems without triggering the warning dialog.
+// In any case, using auto-repeat with a hotkey is pretty rare for most people, so it's best
+// to keep these values conservative:
+int g_MaxHotkeysPerInterval = 50;
+int g_HotkeyThrottleInterval = 2000; // Milliseconds.
 
 bool g_TrayMenuIsVisible = false;
 int g_nMessageBoxes = 0;
@@ -121,6 +136,7 @@ Action g_act[] =
 	// load-time.  Thus, we support both types of loops as actual commands that are
 	// handled separately at runtime.
 	, {"Repeat", 0, 1, {1, 0}}  // Iteration Count: was mandatory in AutoIt2 but doesn't seem necessary here.
+	, {"Else", 0, 0, NULL}
 
 	// Comparison operators take 1 param (if they're being compared to blank) or 2.
 	// For example, it's okay (though probably useless) to compare a string to the empty
@@ -157,7 +173,7 @@ Action g_act[] =
 	, {"StringReplace", 3, 5, NULL} // Output Variable, Input Variable, Search String, Replace String, do-all.
 
 	, {"Run", 1, 3, NULL}, {"RunWait", 1, 3, NULL}  // TargetFile, Working Dir, WinShow-Mode
-	, {"GetKeyState", 2, 2, NULL} // OutputVar, key name
+	, {"GetKeyState", 2, 3, NULL} // OutputVar, key name, mode (optional) P = Physical, T = Toggle
 	, {"Send", 1, 1, NULL} // But that first param can be a deref that resolves to a blank param
 	// For these, the "control" param can be blank.  The window's first visible control will
 	// be used.  For this first one, allow a minimum of zero, otherwise, the first param (control)
@@ -184,7 +200,7 @@ Action g_act[] =
 	, {"Return", 0, 0, NULL}, {"Exit", 0, 1, {1, 0}} // ExitCode (currently ignored)
 	, {"Loop", 0, 2, NULL} // Iteration Count or file-search (e.g. c:\*.*), FileLoopMode
 	, {"Break", 0, 0, NULL}, {"Continue", 0, 0, NULL}
-	, {"{", 0, 0, NULL}, {"}", 0, 0, NULL}, {"Else", 0, 0, NULL}
+	, {"{", 0, 0, NULL}, {"}", 0, 0, NULL}
 
 	, {"WinActivate", 0, 4, NULL} // Passing zero params results in activating the LastUsed window.
 	, {"WinActivateBottom", 0, 4, NULL} // Min. 0 so that 1st params can be blank and later ones not blank.
@@ -352,6 +368,8 @@ key_to_vk_type g_key_to_vk[] =
 // more compatible with non-standard or non-English keyboards:
 , {"LControl", VK_LCONTROL}
 , {"RControl", VK_RCONTROL}
+, {"LCtrl", VK_LCONTROL} // Support this alternate to be like AutoIt3.
+, {"RCtrl", VK_RCONTROL} // Support this alternate to be like AutoIt3.
 , {"LShift", VK_LSHIFT}
 , {"RShift", VK_RSHIFT}
 , {"LAlt", VK_LMENU}

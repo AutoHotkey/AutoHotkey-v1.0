@@ -26,8 +26,15 @@ extern HWND g_hWnd;  // The main window
 extern HWND g_hWndEdit;  // The edit window, child of main.
 extern HWND g_hWndSplash;  // The SplashText window.
 extern HINSTANCE g_hInstance;
-extern modLR_type g_modifiersLRh;  // Hook's value, if hook is active.
-extern modLR_type g_modifiersLRg;  // From GetKeyState().
+extern modLR_type g_modifiersLR_logical;   // Tracked by hook (if hook is active).
+extern modLR_type g_modifiersLR_physical;  // Same as above except it's which modifiers are PHYSICALLY down.
+extern modLR_type g_modifiersLR_get;  // From GetKeyState().
+
+extern bool g_PhysicalKeyState[VK_MAX + 1];
+
+// If a SendKeys() operation takes longer than this, hotkey's modifiers won't be pressed back down:
+extern int g_HotkeyModifierTimeout;
+
 extern HHOOK g_hhkLowLevelKeybd;
 extern HHOOK g_hhkLowLevelMouse;
 extern bool g_ForceLaunch;
@@ -37,8 +44,10 @@ extern char g_LastPerformedHotkeyType;
 extern bool g_IgnoreHotkeys;
 extern bool g_IsSuspended;
 #define IGNORE_THIS_HOTKEY(id) (g_IgnoreHotkeys || (g_IsSuspended && Hotkey::GetTypeOfFirstLine(id) != ACT_SUSPEND))
-
 extern int g_nSuspendedSubroutines;
+
+extern int g_MaxHotkeysPerInterval;
+extern int g_HotkeyThrottleInterval;
 
 extern bool g_TrayMenuIsVisible;
 extern int g_nMessageBoxes;

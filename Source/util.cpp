@@ -121,9 +121,12 @@ int snprintfcat(char *aBuf, size_t aBufSize, const char *aFormat, ...)
 int strlcmp(char *aBuf1, char *aBuf2, UINT aLength1, UINT aLength2)
 // Similar to strncmp but considers each aBuf to be a string of length aLength
 // if aLength was specified.  In other words, unlike strncmp() which would
-// consider strncmp("abc", "ab", 2) to be a match, this function would consider
-// them to be a mismatch.  This is useful for cases where you don't want to
-// have to bother with temporarily terminating a string so you can compare
+// consider strncmp("ab", "abc", 2) to be a match, this function would consider
+// them to be a mismatch.  Another way of looking at it: aBuf1 and aBuf2 will
+// be directly compared to one another as though they were actually of length
+// aLength1 and aLength2, respectively and then passed to strcmp() as those
+// shorter strings.  This behavior is useful for cases where you don't want
+// to have to bother with temporarily terminating a string so you can compare
 // only a substring to something else.  The return value meaning is the
 // same as strncmp().  If either aLength param is UINT_MAX (via the default
 // parameters or via explicit call), it will be assumed that the entire

@@ -34,7 +34,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	// Set defaults, to be overridden by command line args we receive:
 #ifdef _DEBUG
 	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Find.aut";
-	char *script_filespec = "C:\\Util\\AutoHotkey.ini";
+	char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
 	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
 #else
 	char *script_filespec = NAME_P ".ini";  // Use this extension for better file associate with editor(s).
@@ -136,12 +136,13 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	// interaction:
 	Hotkey::AllActivate();
 	g_script.ExecuteFromLine1();     // Run the auto-execute part at the top of the script.
-	if (!Hotkey::sHotkeyCount)      // No hotkeys are in effect.
+	if (!Hotkey::sHotkeyCount)       // No hotkeys are in effect.
 		if (!Hotkey::HookIsActive()) // And the user hasn't requested a hook to be activated.
 			g_script.ExitApp();      // We're done.
 
 	// Call it in this special mode to kick off the main event loop.
 	// Be sure to pass something >0 for the first param or it will
 	// return (and we never want this to return):
-	return (int)MsgSleep(SLEEP_INTERVAL, WAIT_FOR_MESSAGES);
+	MsgSleep(SLEEP_INTERVAL, WAIT_FOR_MESSAGES);
+	return 0; // Never executed; avoids compiler warning.
 }

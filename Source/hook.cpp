@@ -86,7 +86,7 @@ static HotkeyIDType *kscm = NULL;
 
 struct hk_sorted_type
 {
-	int id;
+	int id_with_flags;
 	vk_type vk;
 	sc_type sc;
 	mod_type modifiers;
@@ -248,7 +248,7 @@ HookType HookInit(Hotkey *aHK[], int aHK_count, HookType aHooksToActivate)
 		hooks_currently_active |= HOOK_MOUSE;
 
 	// The below effectively makes it necessary for the caller to call HookTerm()
-	// first if it  wishes us to reload the hotkey configuration:
+	// first if it wishes us to reload the hotkey configuration:
 	if ((aHooksToActivate & hooks_currently_active) == aHooksToActivate)
 		// Bitwise-AND does set intersection.  In this case, the above means that
 		// aHooksToActivate is a perfect subset of hooks_currently_active,
@@ -305,15 +305,9 @@ HookType HookInit(Hotkey *aHK[], int aHK_count, HookType aHooksToActivate)
 	ZeroMemory(ksc, KSC_SIZE * sizeof(key_type));
 	int i;
 	for (i = 0; i < KVK_SIZE; ++i)
-	{
-		kvk[i].do_suppress = true; // Set default
 		kvk[i].pForceToggle = NULL;
-	}
 	for (i = 0; i < KSC_SIZE; ++i)
-	{
-		ksc[i].do_suppress = true; // Set default
 		ksc[i].pForceToggle = NULL;
-	}
 
 	// This attribute is exists for performance reasons (avoids a function call in the hook
 	// procedure to determine this value):
@@ -438,15 +432,26 @@ HookType HookInit(Hotkey *aHK[], int aHK_count, HookType aHooksToActivate)
 
 		pThisKey->used_as_suffix = true;
 
-		// Due to the fact that the hook does handle things as hotkeys, but rather at
-		// a lower level (prefixes and suffixes), there's no easy way to support toggling
-		// suppression for individual hotkeys (perhaps the simplest way to do so would be
-		// to create a new array of structs to contain the list of which hotkey_id's are
-		// special/non-suppressed).  So for now, once a suffix key has had its suppression
-		// turned off, it stays off.  But currently, this is inconsequential I think, since
-		// only the naked (unmodified) key, when used as a hotkey, supports non-suppression:
+		HotkeyIDType hotkey_id_with_flags = aHK[i]->mID;
 		if (!aHK[i]->mDoSuppress)
-			pThisKey->do_suppress = false;
+		{
+			hotkey_id_with_flags |= HOTKEY_NO_SUPPRESS;
+			// Due to the fact that the hook does handle things as hotkeys, but rather at
+			// a lower level (prefixes and suffixes), there's no easy way to support toggling
+			// suppression for individual hotkeys (perhaps the simplest way to do so would be
+			// to create a new array of structs to contain the list of which hotkey_id's are
+			// special/non-suppressed).  So for now, once a suffix key has had its suppression
+			// turned off, it stays off.  But currently, this is inconsequential I think, since
+			// only the naked (unmodified) key, when used as a hotkey, supports non-suppression.
+			// UPDATE: The above limitation now applies only to mouse buttons, since the
+			// non-suppression of keyboard keys is handled via the HOTKEY_NO_SUPPRESS bit in
+			// the hotkey_id (mouse events can't be easily handled this way since the hook
+			// would have to generate substitute mouse events, which may be a lot of work to
+			// code):
+			if (aHK[i]->mType == HK_MOUSE_HOOK)
+				pThisKey->no_mouse_suppress = true;
+		}
+		// else leave the bit set to zero so that the key will be suppressed (most hotkeys are like this).
 
 		// If this is a naked (unmodified) modifier key, make it a prefix if it ever modifies any
 		// other hotkey.  This processing might be later combined with the hotkeys activation function
@@ -468,9 +473,9 @@ HookType HookInit(Hotkey *aHK[], int aHK_count, HookType aHooksToActivate)
 			{
 				pThisKey->ModifierVK[pThisKey->nModifierVK].vk = aHK[i]->mModifierVK;
 				if (aHK[i]->mHookAction)
-					pThisKey->ModifierVK[pThisKey->nModifierVK].id = aHK[i]->mHookAction;
+					pThisKey->ModifierVK[pThisKey->nModifierVK].id_with_flags = aHK[i]->mHookAction;
 				else
-					pThisKey->ModifierVK[pThisKey->nModifierVK].id = aHK[i]->mID;
+					pThisKey->ModifierVK[pThisKey->nModifierVK].id_with_flags = hotkey_id_with_flags;
 				++pThisKey->nModifierVK;
 				continue;
 			}
@@ -488,9 +493,9 @@ HookType HookInit(Hotkey *aHK[], int aHK_count, HookType aHooksToActivate)
 				{
 					pThisKey->ModifierSC[pThisKey->nModifierSC].sc = aHK[i]->mModifierSC;
 					if (aHK[i]->mHookAction)
-						pThisKey->ModifierSC[pThisKey->nModifierSC].id = aHK[i]->mHookAction;
+						pThisKey->ModifierSC[pThisKey->nModifierSC].id_with_flags = aHK[i]->mHookAction;
 					else
-						pThisKey->ModifierSC[pThisKey->nModifierSC].id = aHK[i]->mID;
+						pThisKey->ModifierSC[pThisKey->nModifierSC].id_with_flags = hotkey_id_with_flags;
 					++pThisKey->nModifierSC;
 					continue;
 				}
@@ -500,7 +505,7 @@ HookType HookInit(Hotkey *aHK[], int aHK_count, HookType aHooksToActivate)
 		// At this point, since the above didn't "continue", this hotkey is one without a ModifierVK/SC.
 		// Put it into a temporary array, which will be later sorted.
 
-		hk_sorted[hk_sorted_count].id = aHK[i]->mHookAction ? aHK[i]->mHookAction : aHK[i]->mID;
+		hk_sorted[hk_sorted_count].id_with_flags = aHK[i]->mHookAction ? aHK[i]->mHookAction : hotkey_id_with_flags;
 		hk_sorted[hk_sorted_count].vk = aHK[i]->mVK;
 		hk_sorted[hk_sorted_count].sc = aHK[i]->mSC;
 		hk_sorted[hk_sorted_count].modifiers = aHK[i]->mModifiers;
@@ -554,44 +559,44 @@ HookType HookInit(Hotkey *aHK[], int aHK_count, HookType aHooksToActivate)
 					// scan codes don't need the switch() stmt below because, for example,
 					// the hook knows to look up left-control by only SC_LCONTROL,
 					// not VK_LCONTROL.
-					Kscm(modifiersLR, hk_sorted[i].sc) = hk_sorted[i].id;
+					Kscm(modifiersLR, hk_sorted[i].sc) = hk_sorted[i].id_with_flags;
 				else
 				{
-					Kvkm(modifiersLR, hk_sorted[i].vk) = hk_sorted[i].id;
+					Kvkm(modifiersLR, hk_sorted[i].vk) = hk_sorted[i].id_with_flags;
 					switch (hk_sorted[i].vk)
 					{
 					case VK_MENU:
 						Kvkm(modifiersLR, VK_LMENU) = Kvkm(modifiersLR, VK_RMENU)
 							= Kscm(modifiersLR, SC_LALT) = Kscm(modifiersLR, SC_RALT)
-							= hk_sorted[i].id;
+							= hk_sorted[i].id_with_flags;
 						break;
 					case VK_LMENU: // In case the program is ever changed to support these VKs directly.
-						Kvkm(modifiersLR, VK_LMENU) = Kscm(modifiersLR, SC_LALT) = hk_sorted[i].id;
+						Kvkm(modifiersLR, VK_LMENU) = Kscm(modifiersLR, SC_LALT) = hk_sorted[i].id_with_flags;
 						break;
 					case VK_RMENU:
-						Kvkm(modifiersLR, VK_RMENU) = Kscm(modifiersLR, SC_RALT) = hk_sorted[i].id;
+						Kvkm(modifiersLR, VK_RMENU) = Kscm(modifiersLR, SC_RALT) = hk_sorted[i].id_with_flags;
 						break;
 					case VK_SHIFT:
 						Kvkm(modifiersLR, VK_LSHIFT) = Kvkm(modifiersLR, VK_RSHIFT)
 							= Kscm(modifiersLR, SC_LSHIFT) = Kscm(modifiersLR, SC_RSHIFT)
-							= hk_sorted[i].id;
+							= hk_sorted[i].id_with_flags;
 						break;
 					case VK_LSHIFT:
-						Kvkm(modifiersLR, VK_LSHIFT) = Kscm(modifiersLR, SC_LSHIFT) = hk_sorted[i].id;
+						Kvkm(modifiersLR, VK_LSHIFT) = Kscm(modifiersLR, SC_LSHIFT) = hk_sorted[i].id_with_flags;
 						break;
 					case VK_RSHIFT:
-						Kvkm(modifiersLR, VK_RSHIFT) = Kscm(modifiersLR, SC_RSHIFT) = hk_sorted[i].id;
+						Kvkm(modifiersLR, VK_RSHIFT) = Kscm(modifiersLR, SC_RSHIFT) = hk_sorted[i].id_with_flags;
 						break;
 					case VK_CONTROL:
 						Kvkm(modifiersLR, VK_LCONTROL) = Kvkm(modifiersLR, VK_RCONTROL)
 							= Kscm(modifiersLR, SC_LCONTROL) = Kscm(modifiersLR, SC_RCONTROL)
-							= hk_sorted[i].id;
+							= hk_sorted[i].id_with_flags;
 						break;
 					case VK_LCONTROL:
-						Kvkm(modifiersLR, VK_LCONTROL) = Kscm(modifiersLR, SC_LCONTROL) = hk_sorted[i].id;
+						Kvkm(modifiersLR, VK_LCONTROL) = Kscm(modifiersLR, SC_LCONTROL) = hk_sorted[i].id_with_flags;
 						break;
 					case VK_RCONTROL:
-						Kvkm(modifiersLR, VK_RCONTROL) = Kscm(modifiersLR, SC_RCONTROL) = hk_sorted[i].id;
+						Kvkm(modifiersLR, VK_RCONTROL) = Kscm(modifiersLR, SC_RCONTROL) = hk_sorted[i].id_with_flags;
 						break;
 					}
 				}
@@ -601,10 +606,13 @@ HookType HookInit(Hotkey *aHK[], int aHK_count, HookType aHooksToActivate)
 
 	// It seems best to reset these whenever either hook is activated, since there's
 	// currently no way to know if the function has been called before.  Currently,
-	// it's only called once so this is the first time:
+	// it's only called once (either by first use of "SetNumLock(etc.), AlwaysOn" or
+	// by the activation of the entire hotkey set (if the set requires the hook)
+	// so this is the first time:
 	ZeroMemory(KeyLog, sizeof(KeyLog));
+	ZeroMemory(g_PhysicalKeyState, sizeof(g_PhysicalKeyState));
 	pPrefixKey = NULL;
-	g_modifiersLRh = g_modifiersLRg = 0;
+	g_modifiersLR_logical = g_modifiersLR_physical = g_modifiersLR_get = 0;
 	disguise_next_lwin_up = disguise_next_rwin_up = alt_tab_menu_is_visible = false;
 	// Even if OS is Win9x, try LL hooks anyway.  This will probably fail on WinNT if it doesn't have SP3+
 	if (!g_hhkLowLevelKeybd && (aHooksToActivate & HOOK_KEYBD))
@@ -641,59 +649,77 @@ char *GetHookStatus(char *aBuf, size_t aBufSize)
 {
 	if (!aBuf || !aBufSize) return aBuf;
 
-	char KeyLogText[2048], KeyName[128], KeyNameOS[128], LRgText[128], LRhText[128], IgnoreText[1024];
+	char KeyLogText[2048], KeyName[128], KeyNameOS[128]
+		, LRgText[128], LRhText[128], LRpText[128], IgnoreText[1024];
 	int item, i, j;
 	*KeyLogText = *IgnoreText = '\0';
 
-	// Start at the oldest key, which is KeyLogNext:
-	for (item = KeyLogNext, i = 0; i < MAX_LOGGED_KEYS; ++i, ++item)
+	if (!g_hhkLowLevelKeybd && !g_hhkLowLevelMouse)
+		strlcpy(KeyLogText, "\r\n"
+			"Note: The KeyLog itself is not shown because neither\r\n"
+			"the keyboard nor the mouse hook is installed.\r\n"
+			"You can force them to be installed by adding either or\r\n"
+			"both of the following lines to this script:\r\n"
+			"#InstallKeybdHook\r\n"
+			"#InstallMouseHook\r\n", sizeof(KeyLogText));
+	else
 	{
-		if (item >= MAX_LOGGED_KEYS)
-			item = 0;
-		switch(KeyLog[item].vk)
+		// Start at the oldest key, which is KeyLogNext:
+		for (item = KeyLogNext, i = 0; i < MAX_LOGGED_KEYS; ++i, ++item)
 		{
-		case VK_CONTROL:
-		case VK_MENU:
-		case VK_SHIFT:
-		case VK_LWIN:
-		case VK_RWIN:
-			*KeyName = '\0';  // Let GetKeyNameText() resolve it instead.
-			break;
-		default:
-			for (j = 0; j < g_key_to_vk_count; ++j)
-				if (g_key_to_vk[j].vk == KeyLog[item].vk)
-					break;
-			if (j < g_key_to_vk_count)
-				strcpy(KeyName, g_key_to_vk[j].key_name);
-			else
-				if (isprint(KeyLog[item].vk))
-				{
-					KeyName[0] = KeyLog[item].vk;
-					KeyName[1] = '\0';
-				}
+			if (item >= MAX_LOGGED_KEYS)
+				item = 0;
+			switch(KeyLog[item].vk)
+			{
+			case VK_CONTROL:
+			case VK_MENU:
+			case VK_SHIFT:
+			case VK_LWIN:
+			case VK_RWIN:
+				*KeyName = '\0';  // Let GetKeyNameText() resolve it instead.
+				break;
+			default:
+				for (j = 0; j < g_key_to_vk_count; ++j)
+					if (g_key_to_vk[j].vk == KeyLog[item].vk)
+						break;
+				if (j < g_key_to_vk_count)
+					strcpy(KeyName, g_key_to_vk[j].key_name);
 				else
-					*KeyName = '\0';
+					if (isprint(KeyLog[item].vk))
+					{
+						KeyName[0] = KeyLog[item].vk;
+						KeyName[1] = '\0';
+					}
+					else
+						*KeyName = '\0';
+			}
+			*KeyNameOS = '\0';
+			if (KeyLog[item].sc)
+				// Use 0x02000000 to tell it that we want it to give left/right specific info, lctrl/rctrl etc.
+				if (!GetKeyNameText((long)(KeyLog[item].sc) << 16
+					, KeyNameOS, sizeof(KeyNameOS)/sizeof(TCHAR)))
+					snprintf(KeyNameOS, sizeof(KeyNameOS), "lParam=%08X", (LPARAM)(KeyLog[item].sc) << 16);
+			// Minimize the length of the text in this stmt because if it's too long,
+			// the MessageBox dialog will trucate it and not display the most important
+			// (most recent) keystrokes:
+			snprintfcat(KeyLogText, sizeof(KeyLogText), "\r\nvk%02X sc%03X %c %c %s %s"
+				, KeyLog[item].vk, KeyLog[item].sc
+				, KeyLog[item].key_up ? 'u' : 'd'
+				// It can't be both ignored and suppressed, so display only one:
+				, KeyLog[item].event_type
+				, KeyName, stricmp(KeyNameOS, KeyName) ? KeyNameOS : ""
+				);
 		}
-		*KeyNameOS = '\0';
-		if (KeyLog[item].sc)
-			// Use 0x02000000 to tell it that we want it to give left/right specific info, lctrl/rctrl etc.
-			if (!GetKeyNameText((long)(KeyLog[item].sc) << 16
-				, KeyNameOS, sizeof(KeyNameOS)/sizeof(TCHAR)))
-				snprintf(KeyNameOS, sizeof(KeyNameOS), "lParam=%08X", (LPARAM)(KeyLog[item].sc) << 16);
-		// Minimize the length of the text in this stmt because if it's too long,
-		// the MessageBox dialog will trucate it and not display the most important
-		// (most recent) keystrokes:
-		snprintfcat(KeyLogText, sizeof(KeyLogText), "\r\nvk%02X sc%03X %c %c %s %s"
-			, KeyLog[item].vk, KeyLog[item].sc
-			, KeyLog[item].key_up ? 'u' : 'd'
-			// It can't be both ignored and suppressed, so display only one:
-			, KeyLog[item].event_type
-			, KeyName, stricmp(KeyNameOS, KeyName) ? KeyNameOS : ""
-			);
 	}
-	snprintf(aBuf, aBufSize, "modifiersLRh=%s\r\nmodifiersLRg=%s (old, from hook's last call of Get())\r\n"
-		"Prefix Key Down=%s\r\n%s"
-		, ModifiersLRToText(g_modifiersLRh, LRhText), ModifiersLRToText(g_modifiersLRg, LRgText)
+	snprintf(aBuf, aBufSize,
+		"Modifiers (Hook's Logical) = %s\r\n"
+		"Modifiers (Hook's Physical) = %s\r\n" // Font isn't fixed-width, so don't bother trying to line them up.
+		"Modifiers (GetKeyState()) = %s (old, from last call to GetModifierLRState())\r\n"
+		"Prefix Key Down=%s\r\n"
+		"%s"
+		, ModifiersLRToText(g_modifiersLR_logical, LRhText)
+		, ModifiersLRToText(g_modifiersLR_physical, LRpText)
+		, ModifiersLRToText(g_modifiersLR_get, LRgText)
 		, pPrefixKey == NULL ? "No" : "Yes"
 		// This can't work because the hotkey that triggers the info-dialog will always make it true:
 		//, pPrefixKey == NULL ? "" : (pPrefixKey->was_just_used ? " (yes)" : " (no)")

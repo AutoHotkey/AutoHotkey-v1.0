@@ -35,6 +35,10 @@ GNU General Public License for more details.
 #pragma warning(disable:4800)
 #endif
 
+#define NAME_P "AutoHotkey"
+#define WINDOW_CLASS_NAME NAME_P
+#define NAME_VERSION "0.212"
+#define NAME_PV NAME_P " v" NAME_VERSION
 
 // This is not the best way to do this, but it does make MS compilers more
 // like MinGW and other Gnu-ish compilers.  Also, I'm not sure what (if
@@ -47,10 +51,8 @@ GNU General Public License for more details.
 #define vsnprintf _vsnprintf
 #endif
 
-#define NAME_P "AutoHotkey"
-#define WINDOW_CLASS_NAME NAME_P
-#define NAME_VERSION "0.211"
-#define NAME_PV NAME_P " v" NAME_VERSION
+#define GET_BIT(buf,n) (((buf) & (1 << (n))) >> (n))
+#define SET_BIT(buf,n,val) ((val) ? ((buf) |= (1<<(n))) : (buf &= ~(1<<(n))))
 
 // FAIL = 0 to remind that FAIL should have the value zero instead of something arbitrary
 // because some callers may simply evaluate the return result as true or false
@@ -127,6 +129,7 @@ struct global_struct
 	HWND hWndToRestore;
 	int MsgBoxResult;  // Which button was pressed in the most recent MsgBox.
 	bool WaitingForDialog;
+	DWORD StartTime;   // When when this subroutine was started.
 };
 
 inline void global_init(global_struct *gp)

@@ -146,6 +146,7 @@ typedef UINT mod_type; // Standard windows modifier type.
 
 typedef UCHAR modLR_type; // Only the left-right win/alt/ctrl/shift rather than their generic counterparts.
 #define MODLR_MAX 0xFF
+#define MODLR_COUNT 8
 #define MOD_LCONTROL 0x01
 #define MOD_RCONTROL 0x02
 #define MOD_LALT 0x04
@@ -184,7 +185,8 @@ struct sc2_type
 
 
 void SendKeys(char *aKeys, modLR_type aModifiersLR = 0, HWND aTargetWindow = NULL);
-void SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, int aRepeatCount, HWND aTargetWindow = NULL);
+void SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, mod_type aModifiersPersistent
+	, int aRepeatCount, HWND aTargetWindow = NULL);
 
 enum KeyEventTypes {KEYDOWN, KEYUP, KEYDOWNANDUP};
 
@@ -192,11 +194,12 @@ enum KeyEventTypes {KEYDOWN, KEYUP, KEYDOWNANDUP};
 // the app are running, they will all ignore each other's keyboard & mouse events.  Also,
 // a value close to UINT_MAX might be a little better since it's might be less likely to
 // be used as a pointer value by any apps that send keybd events whose ExtraInfo is really
-// a pointer value (hard to imagine?):
+// a pointer value (hard to imagine?).  Also, the param aSaveAndRestoreModifierState is needed
+// to differentiate the zero-default value of aModifiersLR from a true zero, which has real
+// meaning (it turns off all modifiers):
 #define KEYIGNORE 0xFFC3D44F
-ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC = 0
-	, HWND aTargetWindow = NULL, DWORD aExtraInfo = KEYIGNORE);
-
+ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC = 0, HWND aTargetWindow = NULL
+	, bool aDoKeyDelay = false);
 
 ToggleValueType ToggleKeyState(vk_type vk, ToggleValueType aToggleValue);
 
@@ -204,11 +207,16 @@ modLR_type SetModifierState(mod_type aModifiersNew, modLR_type aModifiersLRnow);
 modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLRnow);
 void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLRnow, KeyEventTypes aKeyUp);
 
+mod_type GetModifierState();
 modLR_type GetModifierLRState();
 modLR_type GetModifierLRStateSimple();
 
 // Doesn't always seem to work as advertised, at least under WinXP:
 #define IsPhysicallyDown(vk) (GetAsyncKeyState(vk) & 0x80000000)
+
+#define VK_IS_MOUSE(vk) (vk == VK_LBUTTON || vk == VK_RBUTTON || vk == VK_MBUTTON\
+	|| vk == VK_XBUTTON1 || vk == VK_XBUTTON2\
+	|| vk == VK_WHEEL_DOWN || vk == VK_WHEEL_UP)
 
 modLR_type KeyToModifiersLR(vk_type aVK, sc_type aSC = 0, bool *pIsNeutral = NULL);
 modLR_type ConvertModifiers(mod_type aModifiers);
@@ -220,7 +228,7 @@ char *ModifiersLRToText(modLR_type aModifiersLR, char *aBuf);
 void init_vk_to_sc();
 void init_sc_to_vk();
 sc_type TextToSC(char *aText);
-vk_type TextToVK(char *aText, mod_type *pModifiers);
-int TextToSpecial(char *aText, UINT aTextLength, mod_type *pModifiers);
+vk_type TextToVK(char *aText, mod_type *pModifiers = NULL, bool aExcludeThoseHandledByScanCode = false);
+int TextToSpecial(char *aText, UINT aTextLength, mod_type &aModifiers);
 
 #endif

@@ -27,17 +27,30 @@ HWND WinActivate(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeT
 	if (!aText) aText = "";
 	if (!aExcludeTitle) aExcludeTitle = "";
 	if (!aExcludeText) aExcludeText = "";
+
 	// If window is already active, be sure to leave it that way rather than activating some
 	// other window that may match title & text also.  NOTE: An explicit check is done
 	// for this rather than just relying on EnumWindows() to obey the z-order because
 	// EnumWindows() is *not* guaranteed to enumerate windows in z-order, thus the currently
 	// active window, even if it's an exact match, might become overlapped by another matching
-	// window:
-	HWND hwnd;
+	// window.  Also, use the USE_FOREGROUND_WINDOW vs. IF_USE_FOREGROUND_WINDOW macro for
+	// this because the active window can sometimes be NULL (i.e. if it's a hidden window
+	// and DetectHiddenWindows is off):
+	HWND target_window;
+	if (USE_FOREGROUND_WINDOW(aTitle, aText, aExcludeTitle, aExcludeText))
+	{
+		// User asked us to activate the "active" window, which by definition already is.
+		// However, if the active (foreground) window is hidden and DetectHiddenWindows is
+		// off, the below will set target_window to be NULL, which seems like the most
+		// consistent result to use:
+		SET_TARGET_TO_ALLOWABLE_FOREGROUND
+		return target_window;
+	}
+
 	if (!aFindLastMatch && !*aTitle && !*aText && !*aExcludeTitle && !*aExcludeText)
 	{
 		// User passed no params, so use the window most recently found by WinExist():
-		if (   !(hwnd = g_ValidLastUsedWindow)   )
+		if (   !(target_window = g_ValidLastUsedWindow)   )
 			return NULL;
 	}
 	else
@@ -46,12 +59,12 @@ HWND WinActivate(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeT
 		// Might not help avg. perfomance any?
 		if (!aFindLastMatch) // Else even if the windows is already active, we want the bottomost one.
 			if (hwnd = WinActive(aTitle, aText, aExcludeTitle, aExcludeText)) // Already active.
-				return hwnd;
+				return target_window;
 		*/
 		// Don't activate in this case, because the top-most window might be an
 		// always-on-top but not-meant-to-be-activated window such as AutoIt's
 		// splash text:
-		if (   !(hwnd = WinExist(aTitle, aText, aExcludeTitle, aExcludeText, aFindLastMatch
+		if (   !(target_window = WinExist(aTitle, aText, aExcludeTitle, aExcludeText, aFindLastMatch
 			, false, aAlreadyVisited, aAlreadyVisitedCount))   )
 			return NULL;
 	}
@@ -62,9 +75,9 @@ HWND WinActivate(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeT
 	// for a hidden window to be the foreground window, and since the user might want that
 	// in obscure cases, don't show the window if it's hidden.  The user can always do that
 	// with ShowWindow, if desired:
-	if (!IsWindowVisible(hwnd) && !g.DetectHiddenWindows)
+	if (!IsWindowVisible(target_window) && !g.DetectHiddenWindows)
 		return NULL;
-	return SetForegroundWindowEx(hwnd);
+	return SetForegroundWindowEx(target_window);
 }
 
 
@@ -493,6 +506,15 @@ HWND WinActive(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeTex
 	if (!aExcludeTitle) aExcludeTitle = "";
 	if (!aExcludeText) aExcludeText = "";
 
+	HWND target_window;
+	if (USE_FOREGROUND_WINDOW(aTitle, aText, aExcludeTitle, aExcludeText))
+	{
+		// User asked us if the "active" window is active, which is true if it's not a
+		// hidden window or DetectHiddenWindows is ON:
+		SET_TARGET_TO_ALLOWABLE_FOREGROUND
+		return target_window;
+	}
+
 	HWND fore_win = GetForegroundWindow();
 	if (!fore_win)
 		return NULL;
@@ -530,12 +552,30 @@ HWND WinExist(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
 	if (!aText) aText = "";
 	if (!aExcludeTitle) aExcludeTitle = "";
 	if (!aExcludeText) aExcludeText = "";
+
+	HWND target_window;
+	if (USE_FOREGROUND_WINDOW(aTitle, aText, aExcludeTitle, aExcludeText))
+	{
+		// User asked us if the "active" window exists, which is true if it's not a
+		// hidden window or DetectHiddenWindows is ON:
+		SET_TARGET_TO_ALLOWABLE_FOREGROUND
+		// Updating LastUsed to be hwnd even if it's NULL seems best for consistency?
+		// UPDATE: No, it's more flexible not to never set it to NULL, because there
+		// will be times when the old value is still useful:
+		#define UPDATE_AND_RETURN_LAST_USED_WINDOW(hwnd)\
+			if (aUpdateLastUsed && hwnd)\
+				g.hWndLastUsed = hwnd;\
+			return hwnd;
+		UPDATE_AND_RETURN_LAST_USED_WINDOW(target_window);
+	}
+
 	if (!*aTitle && !*aText && !*aExcludeTitle && !*aExcludeText)
 		// User passed no params, so use the window most recently found by WinExist().
 		// It's correct to do this even in this function because it's called by
 		// WINWAITCLOSE and IFWINEXIST specifically to discover if the Last-Used
 		// window still exists.
 		return g_ValidLastUsedWindow;
+
 	WindowInfoPackage wip;
 	wip.find_last_match = aFindLastMatch;
 	strlcpy(wip.title, aTitle, sizeof(wip.title));
@@ -544,16 +584,12 @@ HWND WinExist(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
 	strlcpy(wip.exclude_text, aExcludeText, sizeof(wip.exclude_text));
 	wip.already_visited = aAlreadyVisited;
 	wip.already_visited_count = aAlreadyVisitedCount;
+
 	// Note: It's a little strange, but I think EnumWindows() returns FALSE when the callback stopped
 	// the enumeration prematurely by returning false to its caller.  Otherwise (the enumeration went
 	// through every window), it returns TRUE:
 	EnumWindows(EnumParentFind, (LPARAM)&wip);
-	// Doing this even if wip.parent_hwnd is NULL seems best for consistency?
-	// UPDATE: No, it's more flexible not to ever set it to NULL, because there
-	// will be times when the old value is still useful:
-	if (aUpdateLastUsed && wip.parent_hwnd)
-		g.hWndLastUsed = wip.parent_hwnd;  // Store this for convenience.
-	return wip.parent_hwnd;
+	UPDATE_AND_RETURN_LAST_USED_WINDOW(wip.parent_hwnd);
 }
 
 

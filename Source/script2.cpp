@@ -35,6 +35,82 @@ else\
 	target_window = g_ValidLastUsedWindow;
 
 
+
+ResultType Line::PerformShowWindow(ActionTypeType aActionType, char *aTitle, char *aText
+	, char *aExcludeTitle, char *aExcludeText)
+{
+	// By design, the WinShow command must always unhide a hidden window, even if the user has
+	// specified that hidden windows should not be detected.  So set this now so that the
+	// DETERMINE_TARGET_WINDOW macro will make its calls in the right mode:
+	bool need_restore = (aActionType == ACT_WINSHOW && !g.DetectHiddenWindows);
+	if (need_restore)
+		g.DetectHiddenWindows = true;
+	DETERMINE_TARGET_WINDOW
+	if (need_restore)
+		g.DetectHiddenWindows = false;
+	if (!target_window)
+		return OK;
+
+	int nCmdShow;
+	switch (aActionType)
+	{
+		// SW_FORCEMINIMIZE: supported only in Windows 2000/XP and beyond: "Minimizes a window,
+		// even if the thread that owns the window is hung. This flag should only be used when
+		// minimizing windows from a different thread."
+		// My: It seems best to use SW_FORCEMINIMIZE on OS's that support it because I have
+		// observed ShowWindow() to hang (thus locking up our app's main thread) if the target
+		// window is hung.
+		// UPDATE: For now, not using "force" every time because it has undesirable side-effects such
+		// as the window not being restored to its maximized state after it was minimized
+		// this way.
+		// Note: The use of IsHungAppWindow() (supported under Win2k+) is discouraged by MS,
+		// so we won't use it here even though it probably performs much better.
+		#define SW_INVALID -1
+		case ACT_WINMINIMIZE:
+			if (g_os.IsWin2000orLater())
+				nCmdShow = IsWindowHung(target_window) ? SW_FORCEMINIMIZE : SW_MINIMIZE;
+			else
+				// If it's not Win2k or later, don't attempt to minimize hung windows because I
+				// have an 80% expectation (i.e. untested) that our thread would hang because
+				// the call to ShowWindow() would never return.  I have confirmed that SW_MINIMIZE
+				// can lock up our thread on WinXP, which is why we revert to SW_FORCEMINIMIZE
+				// above.
+				nCmdShow = IsWindowHung(target_window) ? SW_INVALID : SW_MINIMIZE;
+			break;
+		case ACT_WINMAXIMIZE: nCmdShow = IsWindowHung(target_window) ? SW_INVALID : SW_MAXIMIZE; break;
+		case ACT_WINRESTORE:  nCmdShow = IsWindowHung(target_window) ? SW_INVALID : SW_RESTORE;  break;
+		// Seems safe to assume it's not hung in these cases, since I'm inclined to believe
+		// (untested) that hiding and showing a hung window won't lock up our thread, and
+		// there's a chance they may be effective even against hung windows, unlike the
+		// others above (except ACT_WINMINIMIZE, which has a special FORCE method):
+		case ACT_WINHIDE: nCmdShow = SW_HIDE; break;
+		case ACT_WINSHOW: nCmdShow = SW_SHOW; break;
+	}
+	// UPDATE:  Trying ShowWindowAsync()
+	// now, which should avoid the problems with hanging.  UPDATE #2: Went back to
+	// not using Async() because sometimes the script lines that come after the one
+	// that is doing this action here rely on this action having been completed
+	// (e.g. a window being maximized prior to clicking somewhere inside it).
+	if (nCmdShow != SW_INVALID)
+	{
+		// I'm not certain that SW_FORCEMINIMIZE works with ShowWindowAsync(), but
+		// it probably does since there's absolutely no mention to the contrary
+		// anywhere on MS's site or on the web.  But clearly, if it does work, it
+		// does so only because Async() doesn't really post the message to the thread's
+		// queue, instead opting for more agressive measures.  Thus, it seems best
+		// to do it this way to have maximum confidence in it:
+		//if (nCmdShow == SW_FORCEMINIMIZE) // Safer not to use ShowWindowAsync() in this case.
+			ShowWindow(target_window, nCmdShow);
+		//else
+		//	ShowWindowAsync(target_window, nCmdShow);
+//PostMessage(target_window, WM_SYSCOMMAND, SC_MINIMIZE, 0);
+		DoWinDelay;
+	}
+	return OK;  // Return success for all the above cases.
+}
+
+
+
 ResultType Line::WinMove(char *aTitle, char *aText, char *aX, char *aY
 	, char *aWidth, char *aHeight, char *aExcludeTitle, char *aExcludeText)
 {

@@ -21,10 +21,8 @@ GNU General Public License for more details.
 
 // Initialize static members:
 bool Hotkey::sHotkeysAreActive = false;
-int Hotkey::sWhichHookNeeded = 0;
+HookType Hotkey::sWhichHookNeeded = 0;
 HookType Hotkey::sWhichHookActive = 0;
-UINT Hotkey::sMaxThrottledKeyCount = 10;
-UINT Hotkey::sTimeIntervalSize = 1000;
 DWORD Hotkey::sTimePrev = {0};
 DWORD Hotkey::sTimeNow = {0};
 Hotkey *Hotkey::shk[MAX_HOTKEYS] = {NULL};
@@ -166,8 +164,21 @@ int Hotkey::AllActivate()
 		static HANDLE hook_mutex = NULL;
 		if (!hook_mutex) // otherwise, we already have ownership of the mutex so no need for this check.
 		{
+			// If script isn't being restarting, shouldn't need much more than one check.
+			// If it is being restarted, sometimes the prior instance takes a long time to
+			// release the mutex, perhaps due to being partially swapped out (esp. if the
+			// prior instance has been running for many hours or days).  UPDATE: This is
+			// still displaying a warning sometimes when restarting, even with a 1 second
+			// grace/wait period.  So it seems best not to display the warning at all
+			// when in restart mode, since obviously (by definition) this script is
+			// already running so of course the user wants to restart it unconditionally
+			// 99% of the time.  The only exception would be when the user's recent
+			// changes to the script (i.e. those for which the restart is being done)
+			// now require one of the hooks that hadn't been required before (rare).
+			// So for now, when in restart mode, just acquire the mutex but don't display
+			// any warning if another instance also has the mutex:
 			hook_mutex = CreateMutex(NULL, TRUE, NAME_P "Hooks");
-			if (!g_ForceLaunch && GetLastError() == ERROR_ALREADY_EXISTS)
+			if (!g_ForceLaunch && !g_script.mIsRestart && GetLastError() == ERROR_ALREADY_EXISTS)
 			{
 				int result = MsgBox("Another instance of this program already has the keyboard or"
 					" mouse hook installed (because some of its hotkeys require the hook(s))."
@@ -312,14 +323,14 @@ ResultType Hotkey::PerformID(HotkeyIDType aHotkeyID)
 		// unreliable is when the true difference between the past and future
 		// tickcounts itself is greater than about 49 days:
 		time_until_now = (sTimeNow - sTimePrev);
-		if (display_warning = (throttled_key_count > sMaxThrottledKeyCount
-			&& time_until_now < sTimeIntervalSize))
+		if (display_warning = (throttled_key_count > (DWORD)g_MaxHotkeysPerInterval
+			&& time_until_now < (DWORD)g_HotkeyThrottleInterval))
 		{
 			// The moment any dialog is displayed, hotkey processing is halted since this
 			// app currently has only one thread.
-			char error_text[512];
+			char error_text[2048];
 			// Using %f with wsprintf() yields a floating point runtime error dialog.
-			// UPDATE: That happens if you don't cast to float, or have a float var
+			// UPDATE: That happens if you don't cast to float, or don't have a float var
 			// involved somewhere.  Avoiding floats altogether may reduce EXE size
 			// and maybe other benefits (due to it not being "loaded")?
 			snprintf(error_text, sizeof(error_text), "More than %u hotkeys have been received in the last %ums."
@@ -327,10 +338,13 @@ ResultType Hotkey::PerformID(HotkeyIDType aHotkeyID)
 				" within the config file (usually due to the Send command).  It might be possible to"
 				" fix this problem simply by including the $ prefix in the hotkey definition"
 				" (e.g. $!d::), which would install the keyboard hook to handle this hotkey.\n\n"
-				//" This warning can be"
-				//" reduced or eliminated via the \"<something>\" command in the config file."
+				" In addition, this warning can be reduced or eliminated by adding the following lines"
+				" anywhere in the script:\n"
+				"#HotkeyInterval %d  ; Increase this value slightly to reduce the problem.\n"
+				"#MaxHotkeysPerInterval %d  ; Decreasing this value (milliseconds) should also help.\n\n"
 				" Do you want to continue (choose NO to exit the program)?"  // In case its stuck in a loop.
-				, sMaxThrottledKeyCount, sTimeIntervalSize);
+				, g_MaxHotkeysPerInterval, g_HotkeyThrottleInterval
+				, g_MaxHotkeysPerInterval, g_HotkeyThrottleInterval);
 			// This is now needed since hotkeys can still fire while a messagebox is displayed:
 			g_IgnoreHotkeys = true;
 			if (MsgBox(error_text, MB_YESNO) == IDNO)
@@ -338,7 +352,7 @@ ResultType Hotkey::PerformID(HotkeyIDType aHotkeyID)
 			g_IgnoreHotkeys = false;
 		}
 		// The display_warning var is needed due to the fact that there's an OR in this condition:
-		if (display_warning || time_until_now > sTimeIntervalSize)
+		if (display_warning || time_until_now > (DWORD)g_HotkeyThrottleInterval)
 		{
 			// Reset the sliding interval whenever it expires.  Doing it this way makes the
 			// sliding interval more sensitive than alternate methods might be.
@@ -401,7 +415,7 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 	// a prefix (handled by the hook).  The registration (if without shift/alt/win/ctrl modifiers) would prevent
 	// the hook from ever seeing the key.
 	if (sHotkeysAreActive) return;
-	if (aID > HOTKEY_ID_MAX) return;  // The windows limit, 0xBFFF, is so large that this should never happen.
+	if (aID > HOTKEY_ID_MAX) return;   // Probably should never happen.
 	if (aJumpToLabel == NULL) return;  // Even for alt-tab, should have the label just for record-keeping.
 
 	if (sHotkeyCount >= MAX_HOTKEYS)
@@ -435,26 +449,23 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 		}
 		if (mModifiersLR)
 		{
-			// For Win9x, this section will probably need to be changed to use
-			// the scan code rather than the virtual key for all of these
-			// except LWIN/RWIN:
 			switch (mModifiersLR)
 			{
-				case MOD_LCONTROL: mModifierVK = VK_LCONTROL; break;
-				case MOD_RCONTROL: mModifierVK = VK_RCONTROL; break;
-				case MOD_LSHIFT: mModifierVK = VK_LSHIFT; break;
-				case MOD_RSHIFT: mModifierVK = VK_RSHIFT; break;
-				case MOD_LALT: mModifierVK = VK_LMENU; break;
-				case MOD_RALT: mModifierVK = VK_RMENU; break;
-				case MOD_LWIN: mModifierVK = VK_LWIN; break;
-				case MOD_RWIN: mModifierVK = VK_RWIN; break;
-				default:
-					snprintf(error_text, sizeof(error_text), "Warning: The following hotkey is AltTab but has"
-						" more than one modifying prefix key, which is not allowed."
-						"  This hotkey has not been enabled:\n%s"
-						, mJumpToLabel->mName);
-					MsgBox(error_text);
-					return;  // Key is invalid so don't give it an ID.
+			case MOD_LCONTROL: mModifierVK = g_os.IsWin9x() ? VK_CONTROL : VK_LCONTROL; break;
+			case MOD_RCONTROL: mModifierVK = g_os.IsWin9x() ? VK_CONTROL : VK_RCONTROL; break;
+			case MOD_LSHIFT: mModifierVK = g_os.IsWin9x() ? VK_SHIFT : VK_LSHIFT; break;
+			case MOD_RSHIFT: mModifierVK = g_os.IsWin9x() ? VK_SHIFT : VK_RSHIFT; break;
+			case MOD_LALT: mModifierVK = g_os.IsWin9x() ? VK_MENU : VK_LMENU; break;
+			case MOD_RALT: mModifierVK = g_os.IsWin9x() ? VK_MENU : VK_RMENU; break;
+			case MOD_LWIN: mModifierVK = VK_LWIN; break; // Win9x should support LWIN/RWIN.
+			case MOD_RWIN: mModifierVK = VK_RWIN; break;
+			default:
+				snprintf(error_text, sizeof(error_text), "Warning: The following hotkey is AltTab but has"
+					" more than one modifying prefix key, which is not allowed."
+					"  This hotkey has not been enabled:\n%s"
+					, mJumpToLabel->mName);
+				MsgBox(error_text);
+				return;  // Key is invalid so don't give it an ID.
 			}
 			// Since above didn't return:
 			mModifiersLR = 0;  // Since ModifierVK/SC is now its substitute.
@@ -656,7 +667,7 @@ int Hotkey::TextToKey(char *aText, bool aIsModifier)
 	mod_type modifiers = 0;
 	modLR_type modifiersLR = 0;
 	bool is_mouse = false;
-	if (temp_vk = TextToVK(aText, &modifiers))
+	if (temp_vk = TextToVK(aText, &modifiers, true))
 	{
 		if (aIsModifier && (temp_vk == VK_WHEEL_DOWN || temp_vk == VK_WHEEL_UP))
 		{
@@ -666,9 +677,7 @@ int Hotkey::TextToKey(char *aText, bool aIsModifier)
 			MsgBox(error_text);
 			return 0;
 		}
-		is_mouse = temp_vk == VK_LBUTTON || temp_vk == VK_RBUTTON || temp_vk == VK_MBUTTON
-			|| temp_vk == VK_XBUTTON1 || temp_vk == VK_XBUTTON2
-			|| temp_vk == VK_WHEEL_DOWN || temp_vk == VK_WHEEL_UP;
+		is_mouse = VK_IS_MOUSE(temp_vk);
 		if (modifiers & MOD_SHIFT)
 			if (temp_vk >= 'A' && temp_vk <= 'Z')  // VK of an alpha char is the same as the ASCII code of its uppercase version.
 				modifiers &= ~MOD_SHIFT;  // Making alpha chars case insensitive seems much more friendly.

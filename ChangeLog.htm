@@ -1,927 +1,265 @@
-<html xmlns:o="urn:schemas-microsoft-com:office:office"
-xmlns:w="urn:schemas-microsoft-com:office:word"
-xmlns:st1="urn:schemas-microsoft-com:office:smarttags"
-xmlns="http://www.w3.org/TR/REC-html40">
-
 <head>
-<meta http-equiv=Content-Type content="text/html; charset=us-ascii">
-<meta name=ProgId content=Word.Document>
-<meta name=Generator content="Microsoft Word 10">
-<meta name=Originator content="Microsoft Word 10">
-<link rel=File-List href="ChangeLog_files/filelist.xml">
-<title> AutoHotkey Change Log </title>
-<o:SmartTagType namespaceuri="urn:schemas-microsoft-com:office:smarttags"
- name="date"/>
-<!--[if gte mso 9]><xml>
- <o:DocumentProperties>
-  <o:Author>Home</o:Author>
-  <o:LastAuthor>Home</o:LastAuthor>
-  <o:Revision>26</o:Revision>
-  <o:TotalTime>154</o:TotalTime>
-  <o:Created>2003-11-12T03:58:00Z</o:Created>
-  <o:LastSaved>2003-12-02T03:02:00Z</o:LastSaved>
-  <o:Pages>1</o:Pages>
-  <o:Words>1529</o:Words>
-  <o:Characters>8719</o:Characters>
-  <o:Lines>72</o:Lines>
-  <o:Paragraphs>20</o:Paragraphs>
-  <o:CharactersWithSpaces>10228</o:CharactersWithSpaces>
-  <o:Version>10.4219</o:Version>
- </o:DocumentProperties>
-</xml><![endif]--><!--[if gte mso 9]><xml>
- <w:WordDocument>
-  <w:SpellingState>Clean</w:SpellingState>
-  <w:GrammarState>Clean</w:GrammarState>
-  <w:BrowserLevel>MicrosoftInternetExplorer4</w:BrowserLevel>
- </w:WordDocument>
-</xml><![endif]--><!--[if !mso]><object
- classid="clsid:38481807-CA0E-42D2-BF39-B33AF135CC4D" id=ieooui></object>
-<style>
-st1\:*{behavior:url(#ieooui) }
-</style>
-<![endif]-->
-<style>
-<!--
- /* Style Definitions */
- p.MsoNormal, li.MsoNormal, div.MsoNormal
-	{mso-style-parent:"";
-	margin:0in;
-	margin-bottom:.0001pt;
-	mso-pagination:widow-orphan;
-	font-size:12.0pt;
-	font-family:"Times New Roman";
-	mso-fareast-font-family:"Times New Roman";}
-a:link, span.MsoHyperlink
-	{color:blue;
-	text-decoration:underline;
-	text-underline:single;}
-a:visited, span.MsoHyperlinkFollowed
-	{color:purple;
-	text-decoration:underline;
-	text-underline:single;}
-span.SpellE
-	{mso-style-name:"";
-	mso-spl-e:yes;}
-span.GramE
-	{mso-style-name:"";
-	mso-gram-e:yes;}
-@page Section1
-	{size:8.5in 11.0in;
-	margin:1.0in 1.25in 1.0in 1.25in;
-	mso-header-margin:.5in;
-	mso-footer-margin:.5in;
-	mso-paper-source:0;}
-div.Section1
-	{page:Section1;}
- /* List Definitions */
- @list l0
-	{mso-list-id:46685561;
-	mso-list-type:hybrid;
-	mso-list-template-ids:-1974275876 67698689 67698691 67698693 67698689 67698691 67698693 67698689 67698691 67698693;}
-@list l0:level1
-	{mso-level-number-format:bullet;
-	mso-level-text:\F0B7;
-	mso-level-tab-stop:.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;
-	font-family:Symbol;}
-@list l0:level2
-	{mso-level-tab-stop:1.0in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l0:level3
-	{mso-level-tab-stop:1.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l0:level4
-	{mso-level-tab-stop:2.0in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l0:level5
-	{mso-level-tab-stop:2.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l0:level6
-	{mso-level-tab-stop:3.0in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l0:level7
-	{mso-level-tab-stop:3.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l0:level8
-	{mso-level-tab-stop:4.0in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l0:level9
-	{mso-level-tab-stop:4.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l1
-	{mso-list-id:174073190;
-	mso-list-type:hybrid;
-	mso-list-template-ids:-268293734 67698689 67698691 67698693 67698689 67698691 67698693 67698689 67698691 67698693;}
-@list l1:level1
-	{mso-level-number-format:bullet;
-	mso-level-text:\F0B7;
-	mso-level-tab-stop:.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;
-	font-family:Symbol;}
-@list l1:level2
-	{mso-level-tab-stop:1.0in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l1:level3
-	{mso-level-tab-stop:1.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l1:level4
-	{mso-level-tab-stop:2.0in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l1:level5
-	{mso-level-tab-stop:2.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l1:level6
-	{mso-level-tab-stop:3.0in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l1:level7
-	{mso-level-tab-stop:3.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l1:level8
-	{mso-level-tab-stop:4.0in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l1:level9
-	{mso-level-tab-stop:4.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l2
-	{mso-list-id:226301070;
-	mso-list-template-ids:2048718388;}
-@list l2:level1
-	{mso-level-number-format:bullet;
-	mso-level-text:\F0B7;
-	mso-level-tab-stop:.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;
-	mso-ansi-font-size:10.0pt;
-	font-family:Symbol;}
-@list l3
-	{mso-list-id:444927245;
-	mso-list-template-ids:-1437284126;}
-@list l3:level1
-	{mso-level-number-format:bullet;
-	mso-level-text:\F0B7;
-	mso-level-tab-stop:.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;
-	mso-ansi-font-size:10.0pt;
-	font-family:Symbol;}
-@list l4
-	{mso-list-id:455609048;
-	mso-list-type:hybrid;
-	mso-list-template-ids:2034390406 67698689 67698691 67698693 67698689 67698691 67698693 67698689 67698691 67698693;}
-@list l4:level1
-	{mso-level-number-format:bullet;
-	mso-level-text:\F0B7;
-	mso-level-tab-stop:.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;
-	font-family:Symbol;}
-@list l4:level2
-	{mso-level-tab-stop:1.0in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l4:level3
-	{mso-level-tab-stop:1.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l4:level4
-	{mso-level-tab-stop:2.0in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l4:level5
-	{mso-level-tab-stop:2.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l4:level6
-	{mso-level-tab-stop:3.0in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l4:level7
-	{mso-level-tab-stop:3.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l4:level8
-	{mso-level-tab-stop:4.0in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l4:level9
-	{mso-level-tab-stop:4.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l5
-	{mso-list-id:1024137452;
-	mso-list-type:hybrid;
-	mso-list-template-ids:-1202531826 67698689 67698691 67698693 67698689 67698691 67698693 67698689 67698691 67698693;}
-@list l5:level1
-	{mso-level-number-format:bullet;
-	mso-level-text:\F0B7;
-	mso-level-tab-stop:.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;
-	font-family:Symbol;}
-@list l5:level2
-	{mso-level-tab-stop:1.0in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l5:level3
-	{mso-level-tab-stop:1.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l5:level4
-	{mso-level-tab-stop:2.0in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l5:level5
-	{mso-level-tab-stop:2.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l5:level6
-	{mso-level-tab-stop:3.0in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l5:level7
-	{mso-level-tab-stop:3.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l5:level8
-	{mso-level-tab-stop:4.0in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l5:level9
-	{mso-level-tab-stop:4.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l6
-	{mso-list-id:1139613806;
-	mso-list-type:hybrid;
-	mso-list-template-ids:-1366897508 67698689 67698691 67698693 67698689 67698691 67698693 67698689 67698691 67698693;}
-@list l6:level1
-	{mso-level-number-format:bullet;
-	mso-level-text:\F0B7;
-	mso-level-tab-stop:.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;
-	font-family:Symbol;}
-@list l6:level2
-	{mso-level-tab-stop:1.0in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l6:level3
-	{mso-level-tab-stop:1.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l6:level4
-	{mso-level-tab-stop:2.0in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l6:level5
-	{mso-level-tab-stop:2.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l6:level6
-	{mso-level-tab-stop:3.0in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l6:level7
-	{mso-level-tab-stop:3.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l6:level8
-	{mso-level-tab-stop:4.0in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l6:level9
-	{mso-level-tab-stop:4.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l7
-	{mso-list-id:1243759474;
-	mso-list-template-ids:1548499632;}
-@list l7:level1
-	{mso-level-number-format:bullet;
-	mso-level-text:\F0B7;
-	mso-level-tab-stop:.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;
-	mso-ansi-font-size:10.0pt;
-	font-family:Symbol;}
-@list l8
-	{mso-list-id:1589580014;
-	mso-list-template-ids:1545403094;}
-@list l8:level1
-	{mso-level-number-format:bullet;
-	mso-level-text:\F0B7;
-	mso-level-tab-stop:.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;
-	mso-ansi-font-size:10.0pt;
-	font-family:Symbol;}
-@list l9
-	{mso-list-id:1676305815;
-	mso-list-template-ids:1514192474;}
-@list l9:level1
-	{mso-level-number-format:bullet;
-	mso-level-text:\F0B7;
-	mso-level-tab-stop:.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;
-	mso-ansi-font-size:10.0pt;
-	font-family:Symbol;}
-@list l10
-	{mso-list-id:1762488237;
-	mso-list-template-ids:57059652;}
-@list l10:level1
-	{mso-level-number-format:bullet;
-	mso-level-text:\F0B7;
-	mso-level-tab-stop:.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;
-	mso-ansi-font-size:10.0pt;
-	font-family:Symbol;}
-@list l11
-	{mso-list-id:2034501416;
-	mso-list-template-ids:1304064056;}
-@list l11:level1
-	{mso-level-number-format:bullet;
-	mso-level-text:\F0B7;
-	mso-level-tab-stop:.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;
-	mso-ansi-font-size:10.0pt;
-	font-family:Symbol;}
-@list l12
-	{mso-list-id:2048483735;
-	mso-list-type:hybrid;
-	mso-list-template-ids:1630986230 67698689 67698691 67698693 67698689 67698691 67698693 67698689 67698691 67698693;}
-@list l12:level1
-	{mso-level-number-format:bullet;
-	mso-level-text:\F0B7;
-	mso-level-tab-stop:.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;
-	font-family:Symbol;}
-@list l12:level2
-	{mso-level-tab-stop:1.0in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l12:level3
-	{mso-level-tab-stop:1.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l12:level4
-	{mso-level-tab-stop:2.0in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l12:level5
-	{mso-level-tab-stop:2.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l12:level6
-	{mso-level-tab-stop:3.0in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l12:level7
-	{mso-level-tab-stop:3.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l12:level8
-	{mso-level-tab-stop:4.0in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l12:level9
-	{mso-level-tab-stop:4.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;}
-@list l13
-	{mso-list-id:2128154330;
-	mso-list-template-ids:-77808134;}
-@list l13:level1
-	{mso-level-number-format:bullet;
-	mso-level-text:\F0B7;
-	mso-level-tab-stop:.5in;
-	mso-level-number-position:left;
-	text-indent:-.25in;
-	mso-ansi-font-size:10.0pt;
-	font-family:Symbol;}
-ol
-	{margin-bottom:0in;}
-ul
-	{margin-bottom:0in;}
--->
-</style>
-<!--[if gte mso 10]>
-<style>
- /* Style Definitions */
- table.MsoNormalTable
-	{mso-style-name:"Table Normal";
-	mso-tstyle-rowband-size:0;
-	mso-tstyle-colband-size:0;
-	mso-style-noshow:yes;
-	mso-style-parent:"";
-	mso-padding-alt:0in 5.4pt 0in 5.4pt;
-	mso-para-margin:0in;
-	mso-para-margin-bottom:.0001pt;
-	mso-pagination:widow-orphan;
-	font-size:10.0pt;
-	font-family:"Times New Roman";}
-</style>
-<![endif]-->
+<title>AutoHotkey Change Log</title>
 </head>
-
-<body lang=EN-US link=blue vlink=purple style='tab-interval:.5in'>
-
-<div class=Section1>
-
-<p class=MsoNormal><span style='font-size:18.0pt;font-family:Arial'>AutoHotkey
-Change Log<o:p></o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<p class=MsoNormal><b style='mso-bidi-font-weight:normal'><span
-style='font-family:Arial'>0.211 <span class=GramE>BETA</span> - </span></b><st1:date
-Year="2003" Day="1" Month="12"><b style='mso-bidi-font-weight:normal'><span
- style='font-family:Arial'>December 1, 2003</span></b></st1:date><b
-style='mso-bidi-font-weight:normal'><span style='font-family:Arial'><o:p></o:p></span></b></p>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'>Fixed the Reload command and
-the corresponding tray menu item to work with script filenames that contain
-spaces.<o:p></o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'>Added <span class=SpellE>GetKeyState</span>.<span
-style='mso-spacerun:yes'>&nbsp; </span>Example:<o:p></o:p></span></p>
-
-<p class=MsoNormal><span class=SpellE><span style='font-family:Arial'>GetKeyState</span></span><span
-style='font-family:Arial'>, <span class=SpellE>OutputVar</span>, <span
-class=SpellE>LButton</span><o:p></o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'>It sets <span class=SpellE>OutputVar</span>
-to be U (for up), D (for down), or blank if the state couldn't be determined
-for any reason.<o:p></o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'>The key name can be
-virtually any of the keys listed in the documentation, including mouse buttons
-(at least under <span class=SpellE>WinXP</span>, and they will probably work on
-other <span class=SpellE>OSes</span> as well).<o:p></o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'>Added a new optional <span
-class=SpellE>param</span> to <span class=SpellE>MouseClick</span>.<span
-style='mso-spacerun:yes'>&nbsp; </span>If this last <span class=SpellE>param</span>
-is D the button will be held down until it is released by the user physically
-clicking it or via another action in the script.<span
-style='mso-spacerun:yes'>&nbsp; </span>If this last <span class=SpellE>param</span>
-is U, the button will be released (even if it wasn't down before, an up-event
-will still be sent).<o:p></o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'>Added new hotkey definition
-symbol ~ (tilde) to indicate that this hotkey's native function shouldn't be
-suppressed (hidden from the system) when the hotkey fires.<span
-style='mso-spacerun:yes'>&nbsp; </span>For example, in the below, the mouse
-button click will be sent to the active window when it normally wouldn't be:<o:p></o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'>~<span class=SpellE>RButton::Sleep</span>,
-1<o:p></o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'>Note: Special hotkeys that
-are substitutes for alt-tab always ignore this setting.<b style='mso-bidi-font-weight:
-normal'><o:p></o:p></b></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'>Changed commands that click
-the mouse (<span class=SpellE>MouseClick</span>, <span class=SpellE>LeftClick</span>,
-etc.) so that the clicks themselves cannot trigger hotkey subroutines.<span
-style='mso-spacerun:yes'>&nbsp; </span>This prevents potential infinite loop
-conditions if a script were to send mouse events that happen to be valid
-hotkeys.<o:p></o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'>Changed slightly how hotkeys
-that are combinations of keyboard and mouse work: Normally if the prefix key of
-that pair modifies any other key (even something that isn't a hotkey) its
-key-up action won't fire (if it has one).<span style='mso-spacerun:yes'>&nbsp;
-</span>This has been changed so that mouse buttons are the exception.<span
-style='mso-spacerun:yes'>&nbsp; </span>For example:<o:p></o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'>Numpad0 &amp;
-Numpad1::MsgBox, test1<span style='mso-spacerun:yes'>&nbsp; </span>; Numpad0 is
-now a prefix key that is handled by the keyboard hook.<o:p></o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'>Numpad0::MsgBox, test2 ; Now
-Numpad0 is both a prefix AND a suffix (a suffix because it has its own action)<o:p></o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'>Under the old method, if
-Numpad0 was pressed down and then a mouse button clicked, the Numpad0 action
-would not fire when Numpad0 is released, as it normally would.<span
-style='mso-spacerun:yes'>&nbsp; </span>Under the new method it does, but only
-if the combination of Numpad0 and that mouse button isn't a hotkey (since by
-default, the key/mouse events that comprise a hotkey are always hidden from the
-system unless the ~ symbol, described above, is used).<o:p></o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<p class=MsoNormal><b style='mso-bidi-font-weight:normal'><span
-style='font-family:Arial'><o:p>&nbsp;</o:p></span></b></p>
-
-<p class=MsoNormal><b style='mso-bidi-font-weight:normal'><span
-style='font-family:Arial'>0.210 BETA - </span></b><st1:date Month="11" Day="19"
-Year="2003"><b style='mso-bidi-font-weight:normal'><span style='font-family:
- Arial'>November 19, 2003</span></b></st1:date><b style='mso-bidi-font-weight:
-normal'><span style='font-family:Arial'><o:p></o:p></span></b></p>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'>Added command
-&quot;suspend&quot;.<span style='mso-spacerun:yes'>&nbsp; </span>It's just like
-the tray menu item of the same name.<span style='mso-spacerun:yes'>&nbsp;
-</span>The first <span class=SpellE>param</span> can be either blank (to toggle
-the state to the opposite setting), ON (to suspend hotkeys), or OFF (to
-resume).<span style='mso-spacerun:yes'>&nbsp; </span>Note: Any hotkey whose
-subroutine's first line is the &quot;suspend&quot; command will not be subject
-to suspension.<span style='mso-spacerun:yes'>&nbsp; </span>This allows any such
-hotkey to turn off the suspension.<o:p></o:p></span></p>
-
-<p class=MsoNormal><b style='mso-bidi-font-weight:normal'><span
-style='font-family:Arial'><o:p>&nbsp;</o:p></span></b></p>
-
-<p class=MsoNormal><b style='mso-bidi-font-weight:normal'><span
-style='font-family:Arial'><o:p>&nbsp;</o:p></span></b></p>
-
-<p class=MsoNormal><b style='mso-bidi-font-weight:normal'><span
-style='font-family:Arial'>0.209 BETA - </span></b><st1:date Month="11" Day="19"
-Year="2003"><b style='mso-bidi-font-weight:normal'><span style='font-family:
- Arial'>November 19, 2003</span></b></st1:date><b style='mso-bidi-font-weight:
-normal'><span style='font-family:Arial'><o:p></o:p></span></b></p>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'>Improved Run and <span
-class=SpellE>RunWait</span> so that they attempt <span class=SpellE>CreateProcess</span>()
-(the AutoIt method) if the normal <span class=SpellE>ShellExecute</span>()
-method fails to work.<span style='mso-spacerun:yes'>&nbsp; </span>This should
-make things more flexible and more like AutoIt.<span
-style='mso-spacerun:yes'>&nbsp; </span>Note: Internally, the <span
-class=SpellE>ShellExecute</span>() method is always attempted first because I
-believe it has more capabilities, such as the ability to run documents, launch
-URLs, and execute system verbs such as &quot;properties&quot; (see below).<o:p></o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'>Run and <span class=SpellE>RunWait</span>
-now support the following system verbs: properties, edit, print, find, explore,
-open, and print.<span style='mso-spacerun:yes'>&nbsp; </span>Example:<o:p></o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'>Run, properties
-c:\autoexec.bat<span style='mso-spacerun:yes'>&nbsp; </span>; Bring up the
-properties dialog for this file.<o:p></o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'>Run, edit
-%A_SCRIPTFULLPATH%<span style='mso-spacerun:yes'>&nbsp; </span>; Perform the
-associated &quot;edit&quot; action for this file (if it has one).<o:p></o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'>Added #Delimiter
-command.<span style='mso-spacerun:yes'>&nbsp; </span>This can be used to change
-to the default (comma) delimiter, which is used to separate commands and <span
-class=SpellE>params</span> from each other.<span
-style='mso-spacerun:yes'>&nbsp; </span>Note: It cannot be a space, tab (since
-some editors replace tabs with spaces), or a char that it already in use for
-another special purpose.<span style='mso-spacerun:yes'>&nbsp; </span>Example:<o:p></o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'>#delimiter . ; Make the
-delimiter a period rather than a comma.<o:p></o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'>Fixed tray menu item
-&quot;Edit This Script&quot; (again) because it still wasn&#8217;t working
-right.<o:p></o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'>Enabled tray menu item
-&quot;Suspend&quot;.<span style='mso-spacerun:yes'>&nbsp; </span>This function
-prevents new hotkey subroutines from launching (but Alt-Tab hotkeys will still
-work).<span style='mso-spacerun:yes'>&nbsp; </span>In other words, pressing a
-hotkey will have no effect at all; it won&#8217;t even be seen by the
-system.<span style='mso-spacerun:yes'>&nbsp;&nbsp; </span>For example, if
-Control-C is a hotkey, it would do nothing rather than its normal
-&quot;copy&quot; behavior.<span style='mso-spacerun:yes'>&nbsp; </span>Note:
-&#8220;Suspend&#8221; will not halt any subroutines that are already running.<o:p></o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<p class=MsoNormal><b style='mso-bidi-font-weight:normal'><span
-style='font-family:Arial'><o:p>&nbsp;</o:p></span></b></p>
-
-<p class=MsoNormal><b style='mso-bidi-font-weight:normal'><span
-style='font-family:Arial'><o:p>&nbsp;</o:p></span></b></p>
-
-<p class=MsoNormal><b style='mso-bidi-font-weight:normal'><span
-style='font-family:Arial'>0.208 BETA - </span></b><st1:date Month="11" Day="17"
-Year="2003"><b style='mso-bidi-font-weight:normal'><span style='font-family:
- Arial'>November 17, 2003</span></b></st1:date><b style='mso-bidi-font-weight:
-normal'><span style='font-family:Arial'><o:p></o:p></span></b></p>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'>FIXES:<o:p></o:p></span></p>
-
-<ul style='margin-top:0in' type=disc>
- <li class=MsoNormal style='mso-list:l12 level1 lfo3;tab-stops:list .5in'><span
-     style='font-family:Arial'>Fixed the tray menu item &quot;Edit This
-     Script&quot;.<o:p></o:p></span></li>
- <li class=MsoNormal style='mso-list:l12 level1 lfo3;tab-stops:list .5in'><span
-     style='font-family:Arial'>Fixed compatibility-check for AutoIt2: some of
-     the default AutoIt2 behaviors weren't being used.<o:p></o:p></span></li>
- <li class=MsoNormal style='mso-list:l12 level1 lfo3;tab-stops:list .5in'><span
-     style='font-family:Arial'>Fixed <span class=SpellE>WinWait</span>
-     commands: Exclude-Text and Exclude-Title weren't being handled correctly.<o:p></o:p></span></li>
- <li class=MsoNormal style='mso-list:l12 level1 lfo3;tab-stops:list .5in'><span
-     style='font-family:Arial'>Turned off debug logging: If you were running an
-     older version, you may have a small text file &#8220;C:\AutoHotkey
-     SetForegroundWindowEx.txt&#8221;, which you can safely delete after
-     upgrading to this version.<o:p></o:p></span></li>
- <li class=MsoNormal style='mso-list:l12 level1 lfo3;tab-stops:list .5in'><span
-     style='font-family:Arial'>Changed <span class=SpellE>StringReplace</span>
-     so that it doesn't trim <span class=SpellE>whitespace</span> from the
-     result, which matches AutoIt2's behavior.<o:p></o:p></span></li>
-</ul>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'>CHANGES:<o:p></o:p></span></p>
-
-<ul style='margin-top:0in' type=disc>
- <li class=MsoNormal style='mso-list:l6 level1 lfo6;tab-stops:list .5in'><span
-     style='font-family:Arial'>Included the VC++ project in the source code ZIP
-     file. <o:p></o:p></span></li>
- <li class=MsoNormal style='mso-list:l6 level1 lfo6;tab-stops:list .5in'><span
-     style='font-family:Arial'>Changed the default for .<span class=SpellE>aut</span>
-     (AutoIt2) scripts to &quot;<span class=SpellE>DetectHiddenWindows</span>,
-     off&quot;, so that things are more like AutoIt2.<span
-     style='mso-spacerun:yes'>&nbsp; </span>This is now the default for all
-     scripts.<span style='mso-spacerun:yes'>&nbsp; </span>From what I can tell,
-     unlike AutoIt2, AutoIt3 always detects hidden windows.<span
-     style='mso-spacerun:yes'>&nbsp; </span>Since this can sometimes cause
-     problems with window matching and distinctness, the AutoIt2 method seems
-     to be a better default.<o:p></o:p></span></li>
- <li class=MsoNormal style='mso-list:l6 level1 lfo6;tab-stops:list .5in'><a
-     name="OLE_LINK1"><span style='font-family:Arial'>Changed the </span></a><span
-     class=SpellE><span style='mso-bookmark:OLE_LINK1'><span style='font-family:
-     Arial'>SetTitleMatchMode</span></span></span><span style='mso-bookmark:
-     OLE_LINK1'><span style='font-family:Arial'> command.<span
-     style='mso-spacerun:yes'>&nbsp; </span>In addition to supporting the
-     traditional modes of 1 &amp; 2, the command now supports the words fast
-     and slow (e.g. <span class=SpellE>SetTitleMatchMode</span>, slow).<span
-     style='mso-spacerun:yes'>&nbsp; </span>The default is fast, which is what
-     AutoIt2 uses, whereas AutoIt3 uses the slow mode because it can
-     &#8220;see&#8221; more text for certain windows.<span
-     style='mso-spacerun:yes'>&nbsp; </span>The fast mode performs
-     significantly better, which may help the speed of scripts that that do a
-     lot of windowing commands.<span style='mso-spacerun:yes'>&nbsp; </span>The
-     slow mode can be used to ensure full compatibility with AutoIt3 and its
-     Window Spy (the Spy is included with AutoHotkey).<span
-     style='mso-spacerun:yes'>&nbsp; </span>I&#8217;m thinking of modifying the
-     Window Spy so that it indicates which text of a window is available only
-     in the &#8220;slow&#8221; mode.<o:p></o:p></span></span></li>
- <li class=MsoNormal style='mso-list:l6 level1 lfo6;tab-stops:list .5in'><span
-     style='mso-bookmark:OLE_LINK1'><span style='font-family:Arial'>Window
-     finding reliability: Made the &#8220;slow&#8221; <span class=SpellE>TitleMatchMode</span>
-     more reliable by increasing the timeout to 5 seconds because some windows
-     are sluggish about checking their message queues (e.g. during long disk
-     operations), and thus very slow to cough up their window text.<o:p></o:p></span></span></li>
- <li class=MsoNormal style='mso-list:l6 level1 lfo6;tab-stops:list .5in'><span
-     style='mso-bookmark:OLE_LINK1'><span style='font-family:Arial'>In this
-     version, by default, multiple instances of the same script can be
-     launched.<span style='mso-spacerun:yes'>&nbsp; </span>If you wish to limit
-     a script to a single instance, use the #<span class=SpellE>SingleInstance</span>
-     directive described below.<o:p></o:p></span></span></li>
-</ul>
-
-<span style='mso-bookmark:OLE_LINK1'></span>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'>ADDITIONS:<o:p></o:p></span></p>
-
-<ul style='margin-top:0in' type=disc>
- <li class=MsoNormal style='mso-list:l4 level1 lfo9;tab-stops:list .5in'><span
-     class=SpellE><span style='font-family:Arial'>DriveSpaceFree</span></span><span
-     style='font-family:Arial'> (gets the free space [in MB] for a drive).<span
-     style='mso-spacerun:yes'>&nbsp; </span>Example: <span class=SpellE>DriveSpaceFree</span>,
-     <span class=SpellE>OutputVar</span>, C:\<o:p></o:p></span></li>
- <li class=MsoNormal style='mso-list:l4 level1 lfo9;tab-stops:list .5in'><span
-     class=SpellE><span style='font-family:Arial'>SetAutoTrim</span></span><span
-     style='font-family:Arial'>, on/off (defaults to on): When you assign a
-     value to a variable, this controls whether <span class=SpellE>whitespace</span>
-     is automatically trimmed from the left and right of the string.<span
-     style='mso-spacerun:yes'>&nbsp; </span>For this purpose, <span
-     class=SpellE>whitespace</span> consists of spaces and tabs, but NOT <span
-     class=SpellE>newlines</span> (carriage returns).<span
-     style='mso-spacerun:yes'>&nbsp; </span>Thus, I believe the
-     &#8220;on&#8221; setting yields the same behavior as AutoIt2 in this
-     regard.<o:p></o:p></span></li>
- <li class=MsoNormal style='mso-list:l4 level1 lfo9;tab-stops:list .5in'><span
-     class=SpellE><span style='font-family:Arial'>StringGetPos</span></span><span
-     style='font-family:Arial'> now supports a new optional last <span
-     class=SpellE>param</span>.<span style='mso-spacerun:yes'>&nbsp; </span>If
-     that <span class=SpellE>param</span> is the letter R, the search will be
-     conducted from the right instead of the left, i.e. the last occurrence
-     will be found rather than the first.<o:p></o:p></span></li>
- <li class=MsoNormal style='mso-list:l4 level1 lfo9;tab-stops:list .5in'><span
-     class=SpellE><span style='font-family:Arial'>ControlSetText</span></span><span
-     style='font-family:Arial'>: Derived from AutoIt3&#8217;s function of the
-     same name.<span style='mso-spacerun:yes'>&nbsp;&nbsp; </span>Example:<o:p></o:p></span></li>
-</ul>
-
-<p class=MsoNormal style='margin-left:.25in;text-indent:.25in'><span
-class=SpellE><span style='font-family:Arial'>ControlSetText</span></span><span
-style='font-family:Arial'>, <span class=SpellE>ControlName</span>, Some new
-text, <span class=SpellE>wintitle</span>, <span class=SpellE>wintext</span>,
-exclude-title, exclude-text<o:p></o:p></span></p>
-
-<ul style='margin-top:0in' type=disc>
- <li class=MsoNormal style='mso-list:l4 level1 lfo9;tab-stops:list .5in'><span
-     style='font-family:Arial'>Note that some or all of the last four <span
-     class=SpellE>params</span> can be omitted.<span
-     style='mso-spacerun:yes'>&nbsp; </span>If all of them are omitted, the
-     window found by the most recent <span class=SpellE>IfWinExist</span>, <span
-     class=SpellE>IfWinNotExist</span>, or <span class=SpellE>WinWait</span>
-     will be used.<span style='mso-spacerun:yes'>&nbsp; </span>This behavior is
-     the same for almost all of the other windowing commands too.<o:p></o:p></span></li>
- <li class=MsoNormal style='mso-list:l4 level1 lfo9;tab-stops:list .5in'><span
-     style='font-family:Arial'>#<span class=SpellE>AllowSameLineComments</span>:
-     To increase compatibility with AutoIt2, scripts that end in .<span
-     class=SpellE>aut</span> are normally not permitted to have same-line
-     comments (e.g. Run, notepad<span style='mso-spacerun:yes'>&nbsp; </span>;
-     this is a comment).<span style='mso-spacerun:yes'>&nbsp; </span>Add the
-     line #<span class=SpellE>AllowSameLineComments</span> to the top of your
-     script to allow them.<o:p></o:p></span></li>
- <li class=MsoNormal style='mso-list:l4 level1 lfo9;tab-stops:list .5in'><span
-     style='font-family:Arial'>#<span class=SpellE>SingleInstance</span>:
-     Specifying this anywhere in a script will prevent new instances of that
-     script from being launched once there is already one running.<span
-     style='mso-spacerun:yes'>&nbsp; </span>Instead, you will be prompted for
-     whether to close the existing instance.<span
-     style='mso-spacerun:yes'>&nbsp; </span>Note: You do not need to use
-     &#8220;on&#8221; or &#8220;off&#8221; with this command.<o:p></o:p></span></li>
- <li class=MsoNormal style='mso-list:l4 level1 lfo9;tab-stops:list .5in'><span
-     style='font-family:Arial'>#<span class=SpellE>CommentFlag</span>: Allows
-     you to change the comment-flag from the default of semicolon to a string
-     of your choice.<span style='mso-spacerun:yes'>&nbsp; </span>The string can
-     be up to 15 characters long.<span style='mso-spacerun:yes'>&nbsp;
-     </span>Example: #<span class=SpellE>CommentFlag</span> //<span
-     style='mso-spacerun:yes'>&nbsp; </span>; Change to C++ style.<o:p></o:p></span></li>
- <li class=MsoNormal style='mso-list:l4 level1 lfo9;tab-stops:list .5in'><span
-     style='font-family:Arial'>#<span class=SpellE>EscapeChar</span>: The
-     escape character is normally &#8220;`&#8221; but this allows you to change
-     it to AutoIt2&#8217;s escape character (backslash) or some other char of
-     your choice.<span style='mso-spacerun:yes'>&nbsp; </span>Note that by
-     default, scripts that end in .<span class=SpellE>aut</span> will use the
-     backslash for their escape char.<o:p></o:p></span></li>
- <li class=MsoNormal style='mso-list:l4 level1 lfo9;tab-stops:list .5in'><span
-     style='font-family:Arial'>#<span class=SpellE>DerefChar</span>: The <span
-     class=SpellE>deref</span> char is normally % (e.g. Sleep, %<span
-     class=SpellE>SleepTime</span>%).<span style='mso-spacerun:yes'>&nbsp;
-     </span>You can change it to some other character with this.<o:p></o:p></span></li>
-</ul>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'>TIPS<o:p></o:p></span></p>
-
-<ul style='margin-top:0in' type=disc>
- <li class=MsoNormal style='mso-list:l6 level1 lfo6;tab-stops:list .5in'><span
-     style='font-family:Arial'>The first comma can always be omitted for any
-     command, e.g. <span class=SpellE>MsgBox</span> This is the text of the <span
-     class=SpellE>Msgbox</span> (single-<span class=SpellE>param</span> mode).<o:p></o:p></span></li>
- <li class=MsoNormal style='mso-list:l6 level1 lfo6;tab-stops:list .5in'><span
-     style='font-family:Arial'>Use can use the <span class=SpellE>CapsLock</span>
-     keys as a new &quot;modifier&quot;, similar to the windows key, without
-     changing its native function (WinNT/2k/XP only, currently).<span
-     style='mso-spacerun:yes'>&nbsp; </span>Example:<o:p></o:p></span></li>
-</ul>
-
-<p class=MsoNormal style='margin-left:.5in'><span class=SpellE><span
-style='font-family:Arial'>CapsLock</span></span><span style='font-family:Arial'>
-&amp; <span class=SpellE>A::run</span>, notepad<o:p></o:p></span></p>
-
-<p class=MsoNormal style='margin-left:.5in'><span class=SpellE><span
-style='font-family:Arial'>CapsLock</span></span><span style='font-family:Arial'>
-&amp; <span class=SpellE>S::run</span>, calc<o:p></o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<p class=MsoNormal><b style='mso-bidi-font-weight:normal'><span
-style='font-family:Arial'>0.207 BETA - </span></b><st1:date Month="11" Day="12"
-Year="2003"><b style='mso-bidi-font-weight:normal'><span style='font-family:
- Arial'>November 12, 2003</span></b></st1:date><b style='mso-bidi-font-weight:
-normal'><span style='font-family:Arial'><o:p></o:p></span></b></p>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<ul style='margin-top:0in' type=disc>
- <li class=MsoNormal style='mso-list:l1 level1 lfo14;tab-stops:list .5in'><span
-     style='font-family:Arial'>Fixed <span class=SpellE>StringMid</span>: It
-     was previously able to read beyond the length of the input variable.<o:p></o:p></span></li>
- <li class=MsoNormal style='mso-list:l1 level1 lfo14;tab-stops:list .5in'><span
-     style='font-family:Arial'>Disabled the auto-restore-on-resume feature --
-     which restores the foreground window that a suspended thread was working
-     with -- because it probably causes more trouble than it&#8217;s worth.<o:p></o:p></span></li>
-</ul>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<p class=MsoNormal><b style='mso-bidi-font-weight:normal'><span
-style='font-family:Arial'>0.206 BETA - </span></b><st1:date Month="11" Day="11"
-Year="2003"><b style='mso-bidi-font-weight:normal'><span style='font-family:
- Arial'>November 11, 2003</span></b></st1:date><b style='mso-bidi-font-weight:
-normal'><span style='font-family:Arial'><o:p></o:p></span></b></p>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<ul style='margin-top:0in' type=disc>
- <li class=MsoNormal style='mso-list:l5 level1 lfo17;tab-stops:list .5in'><span
-     style='font-family:Arial'>Fixed scripts randomly hanging (sleeping
-     indefinitely): caused by the thread's main timer having been killed when
-     it shouldn't be. <o:p></o:p></span></li>
- <li class=MsoNormal style='mso-list:l5 level1 lfo17;tab-stops:list .5in'><span
-     style='font-family:Arial'>Fixed <span class=SpellE>WinWait</span>-type
-     commands that would behave unexpectedly if a new hotkey subroutine was
-     launched while the command was waiting for the timeout to expire: the new
-     subroutine was overwriting a buffer that was still needed by the old
-     subroutine.<o:p></o:p></span></li>
- <li class=MsoNormal style='mso-list:l5 level1 lfo17;tab-stops:list .5in'><span
-     style='font-family:Arial'>Fixed: tray menu behaving strangely if a modal
-     dialog, such as <span class=SpellE>MsgBox</span> or <span class=SpellE>InputBox</span>,
-     was on the screen.<o:p></o:p></span></li>
- <li class=MsoNormal style='mso-list:l5 level1 lfo17;tab-stops:list .5in'><span
-     style='font-family:Arial'>Fixed the REPEAT command, which was causing an
-     infinite loop if its first parameter was a <span class=SpellE>dereferenced</span>
-     variable rather than a literal number.<o:p></o:p></span></li>
-</ul>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<p class=MsoNormal><b style='mso-bidi-font-weight:normal'><span
-style='font-family:Arial'>0.205 BETA - </span></b><st1:date Month="11" Day="10"
-Year="2003"><b style='mso-bidi-font-weight:normal'><span style='font-family:
- Arial'>November 10, 2003</span></b></st1:date><b style='mso-bidi-font-weight:
-normal'><span style='font-family:Arial'><o:p></o:p></span></b></p>
-
-<ul style='margin-top:0in' type=disc>
- <li class=MsoNormal style='mso-list:l0 level1 lfo20;tab-stops:list .5in'><span
-     style='font-family:Arial'>Initial release<o:p></o:p></span></li>
-</ul>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'><a
-href="http://home.tampabay.rr.com/kodi/ahk/README.htm">Back to main page</a><o:p></o:p></span></p>
-
-<p class=MsoNormal><span style='font-family:Arial'><o:p>&nbsp;</o:p></span></p>
-
-</div>
+<body>
+<font size=5>AutoHotkey Change Log
+<br>
+<br>
+
+</font><font size=4><b>0.212 BETA - December 8, 2003</b></font><font size=3><br><br>
+
+Added support for a command being on the same line as its ELSE.  Examples:<br>
+<PRE>
+if x = 1
+	Gosub, a1
+else if x = 2
+	Gosub, a2
+else IfEqual, x, 3
+{
+	Gosub, a3
+	Sleep, 1
+}
+else Gosub, a4  ; i.e. Any command can be on the same line with an ELSE.
+ 
+;Also OK:
+IfEqual, y, 1, Gosub, b1
+else {
+	Sleep, 1
+	Gosub, b2
+}
+ 
+; But this is illegal:
+if x = 1 {  ; Invalid: This would compare X to the string "1 {" instead of treating { as the start of a block.
+	Sleep, 1
+	MsgBox, test
+}
+ 
+; A legal alternative:
+IfEqual, x, 1, {
+	Sleep, 1
+	MsgBox, test
+}
+</PRE>
+ 
+The main use of the above is for "else if" ladders, which may increase the script's readability.<br>
+<br>
+<br>
+Relaxed the conditions that triggered the warning dialog "More than X hotkeys have been received in the last Y milliseconds" (thanks to CyberSlug for the idea) so that keyboard auto-repeat feature can be used on most systems without triggering a warning.  In addition, you can customize this behavior by using the following directives:<br>
+<br>
+#HotkeyInterval 2000       ; This is the default value (milliseconds).<br>
+#MaxHotkeysPerInterval 50  ; This is the default value.<br>
+<br>
+Care should be taken not to make the above too lenient because if you ever inadvertently introduce an infinite loop of keystrokes (via a Send command that accidentally triggers other hotkeys), your computer could become unresponsive due to the rapid flood of keyboard events.  Example of an infinite loop of keystrokes: ^c::Send, ^c<br>
+<br>
+If you want to do something like the above without triggering an infinite loop add a $ to the hotkey definition (e.g $#y::).  The $ tells it to use the hook for the hotkey, which is smart enough to know not to treat our own SEND commands as a source for hotkeys.  Using the hook has at least a couple of disadvantages, which is why it isn't always used: 1) Only one instance of the program at a time should have the hook installed; 2) It may very slightly impact system performance.<br>
+<br>
+<br>
+Improved the ~ (tilde) hotkey prefix (see docs) so that it works with modified hotkeys (i.e. those that require CTRL, ALT, SHIFT, or WIN to be pressed) as well as unmodified ones.  The only exception is mouse buttons, which must be unmodified to be "non-suppressed".<br>
+<br>
+Made all windowing commands support the letter A as the first param to indicate that the active window should be used.  Even though the result is always "known" ahead of time for commands such as WinWait, WinActivate, IfWinExists, and IfWinActive (since by definition the active window is active and exists), this change makes things more consistent.  For example, the first param can conditionally resolve to the letter A at runtime, thus increasing flexibility.  In addition, this change also allows the Last Used Window to be reset easily such as in this example:
+<PRE>
+#y::  ; Win-Y
+Run, notepad
+WinWait, Notepad
+WinActivate  ; Activate the window last found.
+; ...Let's say some time has passed and we're no longer sure which window is the "last used" one.
+WinActivate, Notepad
+WinWait, a  ; ***** Set the "last used" window to be the active window.
+; Now we can do commands such as the below without specifying the window (better performance too):
+WinMinimize
+ControlSend, , Some text that will appear in notepad even if it isn't active (ControlSend can use the "last used" window; in addition it sends to the top-most control by default).
+WinMaximize
+WinActivate
+return
+</PRE>
+<br>
+New command:<br>
+#HotkeyModifierTimeout 100  ; value in milliseconds, default 100<br>
+The above only has meaning if the script does not have the keyboard hook installed (you can see if your script uses the hook via the KeyLog command).  This is because the hook can keep track of which modifier keys (ALT/CTRL/WIN/SHIFT) the user is physically holding down.  Example:<br>
+^!a::Send, abcdefg<br>
+The above SEND requires that CTRL and ALT be released so that the keys get sent properly.  After the SEND completes, if the hook is installed the program knows whether it can safely push back down CTRL and ALT.  But if not and the SEND finishes more than HotkeyModifierTimeout milliseconds after the hotkey subroutine began, the modifier keys will not be restored and you will have to release and press them again if you wish to use them to modify the same (or another) key again.  Note: You can set the value to be -1 so that it never times out, or 0 so that it always times out.  Also, you can ensure that the keyboard hook is installed, thus making the above unnecessary, by adding the line #InstallKeybdHook anywhere in the script.  Reducing KeyDelay (via SetKeyDelay) to 0 or -1 may also help if the keyboard hook isn't installed, since SEND will run more quickly.<br>
+<br>
+Fixed unjustified warning dialog ("Another instance of this program already has the keyboard or mouse hook installed") that occurred sometimes when using the "Reload This Script" function.  This was apparently caused by OS being slow to unload the prior instance & mutex from memory.  The program now does not display this warning if a currently-running script is being restarted.<br>
+<br>
+Added $ as a hotkey modifier symbol (e.g. $^c): It results in the use of an alternate (more powerful) method to implement the hotkey.  Use this if the default method doesn't work properly (due to its recursive use of the Send command, for example).  In technical terms, this method uses the keyboard hook rather than RegisterHotkey() to implement the hotkey.<br>
+<br> 
+Fixed GetKeyState so that all keys work.  Previously, keys with NumPad equivalents, such as Delete and End, didn't work.<br>
+<br>
+GetKeyState now supports an optional 3rd arg that can be the letter T (state of toggleable key such as CapsLock) or P (physical state of key).  If the arg is omitted or blank, the logical state of the key will be returned.  The logical state should be one that the OS and the foreground app believe the key to be in, whereas the physical state is whether the key or mouse button is physically down or up.  Example:<br>
+GetKeyState, state, CapsLock, T  ; Will set "state" to be D if CapsLock is ON or U otherwise.<br>
+<br>
+Currently the "physical" state is always the same as the logical state if the hooks aren't installed, because Windows XP (and probably NT/2k, but perhaps not Win9x) doesn't seem to properly implement the following code.  If anyone has a workaround, I'd love to hear it:<br>
+#define IsPhysicallyDown(vk) (GetAsyncKeyState(vk) & 0x80000000)<br>
+<br> 
+The keyboard hook is installed to support left/right-modifier specific hotkeys, wildcard hotkeys, SetNum/Scroll/CapsLock, AlwaysOn/Off, to override Windows Explorer hotkeys such as Win-E, and for a few other purposes.  It is not unconditionally installed because it very slightly impacts system performance and is also only not designed to be used by more than one script at a time (though you can force it).  You can determine which  hooks (mouse and keyboard) are installed by assigning the KeyLog command to a hotkey.<br>
+<br>
+You can force the hooks to be installed unconditionally by adding either or both of these lines anywhere in the script:<br>
+#InstallKeybdHook  ; this is the hook needed to maximize reliability of modifier restoration with the Send command (see above)<br>
+#InstallMouseHook  ; this would probably only be used if you wanted to see mouse button events in the KeyLog, since it will automatically be installed if you are using any mouse hotkeys<br>
+<br>
+<br>
+For the Send command, changed the name of ControlDown/Up to CtrlDown/Up so that it matches AutoIt.  Also added LCtrl and RCtrl as alternate valid key names for LControl/RControl for use with hotkeys as well as commands such as Send and GetKeyState.<br>
+<br>
+Fixed SEND so that if modifier keys are sent that happen to be part of the hotkey definition itself, those modifiers are restored after the Send is complete.  This resolves issues where if KeyDelay was greater than -1, you would have to release the modifiers and press them down again to get the same hotkey to fire again after the first time. Example:<br>
+^+0::Send, {SHIFTDOWN}a{SHIFTUP}<br>
+Another thanks to CyberSlug for discovering this problem.  See other sections above for further details.<br>
+<br>
+Changed ControlSend so that {ASC nnnn} items are ignored, since the OS does not support this feature when sending keystrokes directly to a window or control.<br>
+<br>
+Fixed the Send command, which was sometimes sending an incorrect scan code (usually inconsequential).<br>
+<br>
+Minor change: A modifier's key-up hotkey action (if it has one) won't fire if that modifier was used to modify any mouse button click (since Ctrl-LeftClick, for example, is a valid native OS feature that most users would never want to sacrifice).<br>
+<br>
+Minor change: Escape characters that occur at the very end of a line or that "escape" a whitespace character are now considered to be literal.  This should be more like AutoIt2.  Example:<br>
+var1 = this character is now literal -->`<br>
+<br>
+Tip: C-style section comments can be used, but the symbols must appear at the beginning of a line to be recognized:<br>
+/*<br>
+...<br>
+(section that is commented out)<br>
+...<br>
+*/<br>
+
+
+<br><hr><br>
+ 
+</font><font size=4><b>0.211 BETA - December 1, 2003</b></font><font size=3><br><br>
+ 
+Fixed the Reload command and the corresponding tray menu item to work with script filenames that contain spaces.<br>
+<br>
+Added GetKeyState.  Example:<br>
+GetKeyState, OutputVar, LButton<br>
+It sets OutputVar to be U (for up), D (for down), or blank if the state couldn't be determined for any reason.
+The key name can be virtually any of the keys listed in the documentation, including mouse buttons (at least under WinXP, and they will probably work on other OSes as well).<br>
+<br>
+Added a new optional param to MouseClick.  If this last param is D the button will be held down until it is released by the user physically clicking it or via another action in the script.  If this last param is U, the button will be released (even if it wasn't down before, an up-event will still be sent).<br>
+<br>
+Added new hotkey definition symbol ~ (tilde) to indicate that this hotkey's native function shouldn't be suppressed (hidden from the system) when the hotkey fires.  For example, in the below, the mouse button click will be sent to the active window when it normally wouldn't be:<br>
+~RButton::Sleep, 1<br>
+Note: Special hotkeys that are substitutes for alt-tab always ignore this setting.<br>
+<br>
+Changed commands that click the mouse (MouseClick, LeftClick, etc.) so that the clicks themselves cannot trigger hotkey subroutines.  This prevents potential infinite loop conditions if a script were to send mouse events that happen to be valid hotkeys.<br>
+<br>
+Changed slightly how hotkeys that are combinations of keyboard and mouse work: Normally if the prefix key of that pair modifies any other key (even something that isn't a hotkey) its key-up action won't fire (if it has one).  This has been changed so that mouse buttons are the exception.  For example:<br>
+Numpad0 & Numpad1::MsgBox, test1  ; Numpad0 is now a prefix key that is handled by the keyboard hook.<br>
+Numpad0::MsgBox, test2 ; Now Numpad0 is both a prefix AND a suffix (a suffix because it has its own action)<br>
+Under the old method, if Numpad0 was pressed down and then a mouse button clicked, the Numpad0 action would not fire when Numpad0 is released, as it normally would.  Under the new method it does, but only if the combination of Numpad0 and that mouse button isn't a hotkey (since by default, the key/mouse events that comprise a hotkey are always hidden from the system unless the ~ symbol, described above, is used).<br>
+ 
+ 
+<br><hr><br>
+
+</font><font size=4><b>0.210 BETA - November 19, 2003</b></font><font size=3><br><br>
+
+Added command "suspend".  It's just like the tray menu item of the same name.  The first param can be either blank (to toggle the state to the opposite setting), ON (to suspend hotkeys), or OFF (to resume).  Note: Any hotkey whose subroutine's first line is the "suspend" command will not be subject to suspension.  This allows any such hotkey to turn off the suspension.<br>
+ 
+<br><hr><br>
+
+</font><font size=4><b>0.209 BETA - November 19, 2003</b></font><font size=3><br><br>
+
+Improved Run and RunWait so that they attempt CreateProcess() (the AutoIt method) if the normal ShellExecute() method fails to work.  This should make things more flexible and more like AutoIt.  Note: Internally, the ShellExecute() method is always attempted first because I believe it has more capabilities, such as the ability to run documents, launch URLs, and execute system verbs such as "properties" (see below).<br>
+ 
+Run and RunWait now support the following system verbs: properties, edit, print, find, explore, open, and print.  Example:<br>
+Run, properties c:\autoexec.bat  ; Bring up the properties dialog for this file.<br>
+Run, edit %A_SCRIPTFULLPATH%  ; Perform the associated "edit" action for this file (if it has one).<br>
+<br>
+Added #Delimiter command.  This can be used to change to the default (comma) delimiter, which is used to separate commands and params from each other.  Note: It cannot be a space, tab (since some editors replace tabs with spaces), or a char that it already in use for another special purpose.  Example:<br>
+#delimiter . ; Make the delimiter a period rather than a comma.<br>
+<br>
+Fixed tray menu item "Edit This Script" (again) because it still wasn’t working right.<br>
+<br>
+Enabled tray menu item "Suspend".  This function prevents new hotkey subroutines from launching (but Alt-Tab hotkeys will still work).  In other words, pressing a hotkey will have no effect at all; it won’t even be seen by the system.   For example, if Control-C is a hotkey, it would do nothing rather than its normal "copy" behavior.  Note: “Suspend” will not halt any subroutines that are already running.<br>
+ 
+ 
+ 
+<br><hr><br>
+
+</font><font size=4><b>0.208 BETA - November 17, 2003</b></font><font size=3><br><br>
+
+<b>FIXES:</b><br>
+Fixed the tray menu item "Edit This Script".<br>
+<br>
+Fixed compatibility-check for AutoIt2: some of the default AutoIt2 behaviors weren't being used.<br>
+<br>
+Fixed WinWait commands: Exclude-Text and Exclude-Title weren't being handled correctly.<br>
+<br>
+Turned off debug logging: If you were running an older version, you may have a small text file “C:\AutoHotkey SetForegroundWindowEx.txt”, which you can safely delete after upgrading to this version.<br>
+<br>
+Changed StringReplace so that it doesn't trim whitespace from the result, which matches AutoIt2's behavior.<br>
+<br>
+<br>
+<b>CHANGES:</b><br>
+Included the VC++ project in the source code ZIP file.<br>
+<br>
+Changed the default for .aut (AutoIt2) scripts to "DetectHiddenWindows, off", so that things are more like AutoIt2.  This is now the default for all scripts.  From what I can tell, unlike AutoIt2, AutoIt3 always detects hidden windows.  Since this can sometimes cause problems with window matching and distinctness, the AutoIt2 method seems to be a better default.<br>
+<br>
+Changed the SetTitleMatchMode command.  In addition to supporting the traditional modes of 1 & 2, the command now supports the words fast and slow (e.g. SetTitleMatchMode, slow).  The default is fast, which is what AutoIt2 uses, whereas AutoIt3 uses the slow mode because it can “see” more text for certain windows.  The fast mode performs significantly better, which may help the speed of scripts that that do a lot of windowing commands.  The slow mode can be used to ensure full compatibility with AutoIt3 and its Window Spy (the Spy is included with AutoHotkey).  I’m thinking of modifying the Window Spy so that it indicates which text of a window is available only in the “slow” mode.<br>
+<br>
+Window finding reliability: Made the “slow” TitleMatchMode more reliable by increasing the timeout to 5 seconds because some windows are sluggish about checking their message queues (e.g. during long disk operations), and thus very slow to cough up their window text.<br>
+<br>
+In this version, by default, multiple instances of the same script can be launched.  If you wish to limit a script to a single instance, use the #SingleInstance directive described below.<br>
+<br>
+<br>
+<b>ADDITIONS:</b><br>
+DriveSpaceFree (gets the free space [in MB] for a drive).  Example:<br>
+DriveSpaceFree, OutputVar, C:\<br>
+<br>
+SetAutoTrim, on/off (defaults to on): When you assign a value to a variable, this controls whether whitespace is automatically trimmed from the left and right of the string.  For this purpose, whitespace consists of spaces and tabs, but NOT newlines (carriage returns).  Thus, I believe the “on” setting yields the same behavior as AutoIt2 in this regard.<br>
+<br>
+StringGetPos now supports a new optional last param.  If that param is the letter R, the search will be conducted from the right instead of the left, i.e. the last occurrence will be found rather than the first.  ControlSetText: Derived from AutoIt3’s function of the same name.  Example:<br>
+ControlSetText, ControlName, Some new text, wintitle, wintext, exclude-title, exclude-text<br>
+<br>
+Note that some or all of the last four params can be omitted.  If all of them are omitted, the window found by the most recent IfWinExist, IfWinNotExist, or WinWait will be used.  This behavior is the same for almost all of the other windowing commands too.<br>
+<br>
+#AllowSameLineComments: To increase compatibility with AutoIt2, scripts that end in .aut are normally not permitted to have same-line comments (e.g. Run, notepad  ; this is a comment).  Add the line #AllowSameLineComments to the top of your script to allow them.<br>
+<br>
+#SingleInstance: Specifying this anywhere in a script will prevent new instances of that script from being launched once there is already one running.  Instead, you will be prompted for whether to close the existing instance.  Note: You do not need to use “on” or “off” with this command.<br>
+<br>
+#CommentFlag: Allows you to change the comment-flag from the default of semicolon to a string of your choice.  The string can be up to 15 characters long.  Example: #CommentFlag //  ; Change to C++ style.<br>
+<br>
+#EscapeChar: The escape character is normally “`” but this allows you to change it to AutoIt2’s escape character (backslash) or some other char of your choice.  Note that by default, scripts that end in .aut will use the backslash for their escape char.<br>
+<br>
+#DerefChar: The deref char is normally % (e.g. Sleep, %SleepTime%).  You can change it to some other character with this.<br>
+<br>
+<br>
+<b>TIPS<br></b>
+The first comma can always be omitted for any command, e.g. MsgBox This is the text of the Msgbox (single-param mode).<br>
+<br>
+You can use the CapsLock keys as a new "modifier", similar to the windows key, without changing its native function (WinNT/2k/XP only, currently).  Example:<br>
+CapsLock & A::run, notepad<br>
+CapsLock & S::run, calc<br>
+
+
+<br><hr><br>
+
+</font><font size=4><b>0.207 BETA - November 12, 2003</b></font><font size=3><br><br>
+
+Fixed StringMid: It was previously able to read beyond the length of the input variable.<br>
+<br>
+Disabled the auto-restore-on-resume feature -- which restores the foreground window that a suspended thread was working with -- because it probably causes more trouble than it's worth.<br>
+
+<br><hr><br>
+
+</font><font size=4><b>0.206 BETA - November 11, 2003</b></font><font size=3><br><br>
+
+
+Fixed scripts randomly hanging (sleeping indefinitely): caused by the thread's main timer having been killed when it shouldn't be.<br>
+<br>
+Fixed WinWait-type commands that would behave unexpectedly if a new hotkey subroutine was launched while the command was waiting for the timeout to expire: the new subroutine was overwriting a buffer that was still needed by the old subroutine.<br>
+<br>
+Fixed: tray menu behaving strangely if a modal dialog, such as MsgBox or InputBox, was on the screen.<br>
+<br>
+Fixed the REPEAT command, which was causing an infinite loop if its first parameter was a dereferenced variable rather than a literal number.<br>
+
+<br><hr><br>
+
+</font><font size=4><b>0.205 BETA - November 10, 2003</b></font><font size=3><br><br>
+
+
+Initial release 
+ 
+<br><hr><br>
+ 
+<a href="http://home.tampabay.rr.com/kodi/ahk/README.htm">Back to main page</a>
 
 </body>
-
 </html>

@@ -64,7 +64,8 @@ enum enum_act {
 // any POD structures that contain an action_type field:
   ACT_INVALID = FAIL  // These should both be zero for initialization and function-return-value purposes.
 , ACT_ASSIGN, ACT_ADD, ACT_SUB, ACT_MULT, ACT_DIV
-, ACT_REPEAT // Never parsed directly, only provided as a translation target for the old command.
+, ACT_REPEAT // Never parsed directly, only provided as a translation target for the old command (see other notes).
+, ACT_ELSE   // Parsed at a lower level than most commands to support same-line ELSE-actions (e.g. "else if").
 , ACT_IFEQUAL, ACT_IFNOTEQUAL, ACT_IFGREATER, ACT_IFGREATEROREQUAL, ACT_IFLESS, ACT_IFLESSOREQUAL
 , ACT_FIRST_COMMAND // i.e the above aren't considered commands for parsing/searching purposes.
 , ACT_IFWINEXIST = ACT_FIRST_COMMAND
@@ -86,7 +87,7 @@ enum enum_act {
 , ACT_SLEEP, ACT_RANDOM
 , ACT_GOTO, ACT_GOSUB, ACT_RETURN, ACT_EXIT
 , ACT_LOOP, ACT_BREAK, ACT_CONTINUE
-, ACT_BLOCK_BEGIN, ACT_BLOCK_END, ACT_ELSE
+, ACT_BLOCK_BEGIN, ACT_BLOCK_END
 , ACT_WINACTIVATE, ACT_WINACTIVATEBOTTOM
 , ACT_WINWAIT, ACT_WINWAITCLOSE, ACT_WINWAITACTIVE, ACT_WINWAITNOTACTIVE
 , ACT_WINMINIMIZE, ACT_WINMAXIMIZE, ACT_WINRESTORE
@@ -245,6 +246,8 @@ private:
 		return NULL;
 	}
 
+	ResultType PerformShowWindow(ActionTypeType aActionType, char *aTitle = "", char *aText = ""
+		, char *aExcludeTitle = "", char *aExcludeText = "");
 	ResultType WinMove(char *aTitle, char *aText, char *aX, char *aY
 		, char *aWidth = "", char *aHeight = "", char *aExcludeTitle = "", char *aExcludeText = "");
 	ResultType ControlSend(char *aControl, char *aKeysToSend, char *aTitle, char *aText

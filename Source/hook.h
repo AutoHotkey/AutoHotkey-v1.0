@@ -42,12 +42,12 @@ enum UserMessages {AHK_HOOK_HOTKEY = WM_USER, AHK_HOOK_TEST_MSG, AHK_DIALOG, AHK
 struct vk_hotkey
 {
 	vk_type vk;
-	HotkeyIDType id;
+	HotkeyIDType id_with_flags;
 };
 struct sc_hotkey
 {
 	sc_type sc;
-	HotkeyIDType id;
+	HotkeyIDType id_with_flags;
 };
 
 
@@ -69,7 +69,7 @@ struct key_type
 	modLR_type as_modifiersLR; // If this key is a modifier, this will have the corresponding bit(s) for that key.
 	bool used_as_prefix;  // whether a given virtual key or scan code is even used by a hotkey.
 	bool used_as_suffix;  // whether a given virtual key or scan code is even used by a hotkey.
-	bool do_suppress; // Normally true for all keys; if false hotkey events won't be hidden from the system.
+	bool no_mouse_suppress;  // Whether to omit the normal supression of a mouse hotkey; normally false.
 	bool is_down; // this key is currently down.
 	bool it_put_alt_down;  // this key resulted in ALT being pushed down (due to alt-tab).
 	bool it_put_shift_down;  // this key resulted in SHIFT being pushed down (due to shift-alt-tab).

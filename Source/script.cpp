@@ -462,9 +462,39 @@ int Script::LoadFromFile()
 			// Otherwise it's CONDITION_FALSE.  Do nothing.
 			}
 		}
-		// Otherwise it's just a normal script line:
-		if (ParseAndAddLine(buf) != OK)
-			return CloseAndReturn(fp, -1);
+		// Otherwise it's just a normal script line.
+		// First do a little special handling to support actions on the same line as their
+		// ELSE, e.g.:
+		// else if x = 1
+		// This is done here rather than in ParseAndAddLine() because it's fairly
+		// complicated to do there (already tried it) mostly due to the fact that
+		// literal_map has to be properly passed in a recursive call to itself, as well
+		// as properly detecting special commands that don't have keywords such as
+		// IF comparisons, ACT_ASSIGN, +=, -=, etc.
+		char *action_start = omit_leading_whitespace(buf);
+		char *action_end = *action_start ? StrChrAny(action_start, "\t ") : NULL;
+		if (!action_end)
+			action_end = action_start + strlen(action_start);
+		// Now action_end is the position of the terminator, or the tab/space following the command name.
+		if (strlicmp(action_start, g_act[ACT_ELSE].Name, (UINT)(action_end - action_start)))
+		{
+			if (ParseAndAddLine(buf) != OK)
+				return CloseAndReturn(fp, -1);
+		}
+		else // This line is an ELSE.
+		{
+			// Add the ELSE directly rather than calling ParseAndAddLine() because that function
+			// would resolve escape sequences throughout the entire length of <buf>, which we
+			// don't want because we wouldn't have access to the corresponding literal-map to
+			// figure out the proper use of escaped characters:
+			if (AddLine(ACT_ELSE) != OK)
+				return CloseAndReturn(fp, -1);
+			action_end = omit_leading_whitespace(action_end); // Now action_end is the word after the ELSE.
+			if (*action_end && ParseAndAddLine(action_end) != OK)
+				return CloseAndReturn(fp, -1);
+			// Otherwise, there was either no same-line action or the same-line action was successfully added,
+			// so do nothing.
+		}
 	}
 	fclose(fp);
 
@@ -619,17 +649,49 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 		g_AllowSameLineComments = true;
 		return CONDITION_TRUE;
 	}
-
-	// For the below series, it seems okay to allow the comment flag to contain other reserved chars,
-	// such as DerefChar, since comments are evaluated, and then taken out of the game at an earlier
-	// stage than DerefChar and the other special chars.
-	IF_IS_DIRECTIVE_MATCH("#CommentFlag")
+	IF_IS_DIRECTIVE_MATCH("#InstallKeybdHook")
+	{
+		Hotkey::RequireHook(HOOK_KEYBD);
+		return CONDITION_TRUE;
+	}
+	IF_IS_DIRECTIVE_MATCH("#InstallMouseHook")
+	{
+		Hotkey::RequireHook(HOOK_MOUSE);
+		return CONDITION_TRUE;
+	}
+	IF_IS_DIRECTIVE_MATCH("#HotkeyModifierTimeout")
 	{
 		#define RETURN_IF_NO_CHAR \
 		if (   !(cp = StrChrAny(aBuf, end_flags))   )\
 			return CONDITION_TRUE;\
 		if (   !*(cp = omit_leading_whitespace(cp))   )\
 			return CONDITION_TRUE;
+		RETURN_IF_NO_CHAR
+		g_HotkeyModifierTimeout = atoi(cp);  // cp was set to the right position by the above macro
+		return CONDITION_TRUE;
+	}
+	IF_IS_DIRECTIVE_MATCH("#HotkeyInterval")
+	{
+		RETURN_IF_NO_CHAR
+		g_HotkeyThrottleInterval = atoi(cp);  // cp was set to the right position by the above macro
+		if (g_HotkeyThrottleInterval < 10) // sanity check
+			g_HotkeyThrottleInterval = 10;
+		return CONDITION_TRUE;
+	}
+	IF_IS_DIRECTIVE_MATCH("#MaxHotkeysPerInterval")
+	{
+		RETURN_IF_NO_CHAR
+		g_MaxHotkeysPerInterval = atoi(cp);  // cp was set to the right position by the above macro
+		if (g_MaxHotkeysPerInterval <= 0) // sanity check
+			g_MaxHotkeysPerInterval = 1;
+		return CONDITION_TRUE;
+	}
+
+	// For the below series, it seems okay to allow the comment flag to contain other reserved chars,
+	// such as DerefChar, since comments are evaluated, and then taken out of the game at an earlier
+	// stage than DerefChar and the other special chars.
+	IF_IS_DIRECTIVE_MATCH("#CommentFlag")
+	{
 		RETURN_IF_NO_CHAR
 		if (!*(cp + 1))  // i.e. the length is 1
 		{
@@ -826,7 +888,11 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 			// by the section that resolves escape sequences for g_DerefChar, the backslash is seen
 			// as an escape char rather than a literal backslash, which is not correct.  Thus, we
 			// resolve all escapes sequences HERE in one go, from left to right.
-			if (c != '\0' && c != ' ' && c != '\t')
+			if (c == '\0' || c == ' ' || c == '\t')
+				// AutoIt2 definitely treats an escape char that occurs at the very end of
+				// a line as literal.  It seems best to also do it for these other cases too.
+				literal_map[i] = 1;  // In the map, mark this char as literal.
+			else
 			{
 				// So these are also done as well, and don't need an explicit check:
 				// g_EscapeChar , g_delimiter , (when g_CommentFlagLength > 1 ??): *g_CommentFlag
@@ -1123,7 +1189,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 	{
 		char *delimiter;
 		char *last_arg = arg[nArgs - 1];
-		for (mark = int(last_arg - action_args); action_args[mark]; ++mark)
+		for (mark = (int)(last_arg - action_args); action_args[mark]; ++mark)
 		{
 			if (action_args[mark] == g_delimiter && !literal_map[mark])  // Match found: a non-literal delimiter.
 			{
@@ -1560,6 +1626,10 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_IFMSGBOX:
 		if (line->mArgc > 0 && !line->ArgHasDeref(1) && !line->ConvertMsgBoxResult(LINE_RAW_ARG1))
 			return ScriptError(ERR_IFMSGBOX, LINE_RAW_ARG1);
+		break;
+	case ACT_GETKEYSTATE:
+		if (line->mArgc > 1 && !line->ArgHasDeref(2) && !TextToVK(LINE_RAW_ARG2))
+			return ScriptError("This is not a valid key or mouse button name.", LINE_RAW_ARG2);
 		break;
 	case ACT_DIV:
 		if (!line->ArgHasDeref(2)) // i.e. if it's a deref, we won't try to validate it now.
@@ -2797,7 +2867,6 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	// a dozen or more buffers, one for each case in the switch() stmt that needs
 	// one, just have one or two for general purpose use (helps conserve stack space):
 	char buf_temp[LINE_SIZE]; // Work area for use in various places.  Some things rely on it being large.
-	int nCmdShow; // For commands that use ShowWindow().
 	WinGroup *group; // For the group commands.
 	VarSizeType space_needed; // For the commands that assign directly to an output var.
 	ToggleValueType toggle;  // For commands that use on/off/neutral.
@@ -3019,85 +3088,8 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_WINHIDE:
 	case ACT_WINSHOW:
 	case ACT_WINRESTORE:
-	{
-		// Current limitation: if this action is ACT_WINSHOW and it's acting on the foreground window,
-		// and that window is hidden: It won't be shown if DetectHiddenHiddenWindows is off.  This
-		// is probably not a bad thing, since normally any hidden window in the foreground is probably
-		// something not designed to be shown.  The user can always work around this behavior by using
-		// WinShow in a more specific way:
-		IF_USE_FOREGROUND_WINDOW(ARG1, ARG2, ARG3, ARG4)
-		else if (*ARG1 || *ARG2 || *ARG3 || *ARG4)
-		{
-			// By design, WinShow() must always unhide a hidden window, even if the user has
-			// specified that hidden windows should not be detected:
-			bool need_restore = (mActionType == ACT_WINSHOW && !g.DetectHiddenWindows);
-			if (need_restore)
-				g.DetectHiddenWindows = true;
-			target_window = WinExist(FOUR_ARGS);
-			if (need_restore)
-				g.DetectHiddenWindows = false;
-		}
-		else
-			target_window = g_ValidLastUsedWindow;
-		if (!target_window)
-			return OK;
+		return PerformShowWindow(mActionType, FOUR_ARGS);
 
-		switch (mActionType)
-		{
-			// SW_FORCEMINIMIZE: supported only in Windows 2000/XP and beyond: "Minimizes a window,
-			// even if the thread that owns the window is hung. This flag should only be used when
-			// minimizing windows from a different thread."
-			// My: It seems best to use SW_FORCEMINIMIZE on OS's that support it because I have
-			// observed ShowWindow() to hang (thus locking up our app's main thread) if the target
-			// window is hung.
-			// UPDATE: For now, not using "force" every time because it has undesirable side-effects such
-			// as the window not being restored to its maximized state after it was minimized
-			// this way.
-			// Note: The use of IsHungAppWindow() (supported under Win2k+) is discouraged by MS,
-			// so we won't use it here even though it probably performs much better.
-			#define SW_INVALID -1
-			case ACT_WINMINIMIZE:
-				if (g_os.IsWin2000orLater())
-					nCmdShow = IsWindowHung(target_window) ? SW_FORCEMINIMIZE : SW_MINIMIZE;
-				else
-					// If it's not Win2k or later, don't attempt to minimize hung windows because I
-					// have an 80% expectation (i.e. untested) that our thread would hang because
-					// the call to ShowWindow() would never return.  I have confirmed that SW_MINIMIZE
-					// can lock up our thread on WinXP, which is why we revert to SW_FORCEMINIMIZE
-					// above.
-					nCmdShow = IsWindowHung(target_window) ? SW_INVALID : SW_MINIMIZE;
-				break;
-			case ACT_WINMAXIMIZE: nCmdShow = IsWindowHung(target_window) ? SW_INVALID : SW_MAXIMIZE; break;
-			case ACT_WINRESTORE:  nCmdShow = IsWindowHung(target_window) ? SW_INVALID : SW_RESTORE;  break;
-			// Seems safe to assume it's not hung in these cases, since I'm inclined to believe
-			// (untested) that hiding and showing a hung window won't lock up our thread, and
-			// there's a chance they may be effective even against hung windows, unlike the
-			// others above (except ACT_WINMINIMIZE, which has a special FORCE method):
-			case ACT_WINHIDE: nCmdShow = SW_HIDE; break;
-			case ACT_WINSHOW: nCmdShow = SW_SHOW; break;
-		}
-		// UPDATE:  Trying ShowWindowAsync()
-		// now, which should avoid the problems with hanging.  UPDATE #2: Went back to
-		// not using Async() because sometimes the script lines that come after the one
-		// that is doing this action here rely on this action having been completed
-		// (e.g. a window being maximized prior to clicking somewhere inside it).
-		if (nCmdShow != SW_INVALID)
-		{
-			// I'm not certain that SW_FORCEMINIMIZE works with ShowWindowAsync(), but
-			// it probably does since there's absolutely no mention to the contrary
-			// anywhere on MS's site or on the web.  But clearly, if it does work, it
-			// does so only because Async() doesn't really post the message to the thread's
-			// queue, instead opting for more agressive measures.  Thus, it seems best
-			// to do it this way to have maximum confidence in it:
-			//if (nCmdShow == SW_FORCEMINIMIZE) // Safer not to use ShowWindowAsync() in this case.
-				ShowWindow(target_window, nCmdShow);
-			//else
-			//	ShowWindowAsync(target_window, nCmdShow);
-//PostMessage(target_window, WM_SYSCOMMAND, SC_MINIMIZE, 0);
-			DoWinDelay;
-		}
-		return OK;  // Return success for all the above cases.
-	}
 	case ACT_GROUPADD: // Adding a WindowSpec *to* a group, not adding a group.
 	{
 		if (!*ARG2 && !*ARG3 && !*ARG5 && !*ARG6) // Arg4 is the jump-to label.
@@ -3311,8 +3303,24 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	}
 
 	case ACT_GETKEYSTATE:
-		if (vk = TextToVK(ARG2, NULL))
-			return OUTPUT_VAR->Assign((GetKeyState(vk) & 0x8000) ? "D" : "U");
+		if (vk = TextToVK(ARG2))
+		{
+			switch (toupper(*ARG3))
+			{
+			case 'T': // Whether a toggleable key such as CapsLock is currently turned on.
+				return OUTPUT_VAR->Assign((GetKeyState(vk) & 0x00000001) ? "D" : "U");
+			case 'P': // Physical state of key.
+				if (g_hhkLowLevelKeybd)
+					// Since the hook is installed, use its value rather than that from
+					// GetAsyncKeyState(), which doesn't seem to work as advertised, at
+					// least under WinXP:
+					return OUTPUT_VAR->Assign(g_PhysicalKeyState[vk] ? "D" : "U");
+				else
+					return OUTPUT_VAR->Assign(IsPhysicallyDown(vk) ? "D" : "U");
+			default: // Logical state of key
+				return OUTPUT_VAR->Assign((GetKeyState(vk) & 0x8000) ? "D" : "U");
+			}
+		}
 		return OUTPUT_VAR->Assign("");
 
 	case ACT_RANDOM:
@@ -3462,7 +3470,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			"\r\nLast hotkey type: %s"
 			"\r\nSuspended subroutines: %d"
 			"\r\nMsgBoxes: %d"
-			"\r\nmodifiersLR=%s (current, from Get())"
+			"\r\nModifiers (GetKeyState() now) = %s"
 			"\r\n"
 			, win_title
 			//, SimpleHeap::GetBlockCount()

@@ -27,12 +27,18 @@ GNU General Public License for more details.
 // target_window to NULL if it's hidden.  Doing this prevents, for example,
 // WinClose() from closing the hidden foreground if it's some important hidden
 // window like the shell or the desktop:
-#define IF_USE_FOREGROUND_WINDOW(title, text, exclude_title, exclude_text)\
-if ((*title == 'A' || *title == 'a') && !*(title + 1) && !*text && !*exclude_title && !*exclude_text)\
+#define USE_FOREGROUND_WINDOW(title, text, exclude_title, exclude_text)\
+	((*title == 'A' || *title == 'a') && !*(title + 1) && !*text && !*exclude_title && !*exclude_text)
+#define SET_TARGET_TO_ALLOWABLE_FOREGROUND \
 {\
 	if (target_window = GetForegroundWindow())\
 		if (!g.DetectHiddenWindows && !IsWindowVisible(target_window))\
 			target_window = NULL;\
+}
+#define IF_USE_FOREGROUND_WINDOW(title, text, exclude_title, exclude_text)\
+if (USE_FOREGROUND_WINDOW(title, text, exclude_title, exclude_text))\
+{\
+	SET_TARGET_TO_ALLOWABLE_FOREGROUND\
 }
 
 #define pWin ((WindowInfoPackage *)lParam)

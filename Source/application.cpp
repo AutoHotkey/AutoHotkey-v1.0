@@ -340,6 +340,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 
 			// Always reset these two, after the above, regardless of aMode:
 			g.hWndLastUsed = NULL;
+			g.StartTime = GetTickCount();
 			g_script.mLinesExecutedThisCycle = 0;  // Doing this is somewhat debatable.
 
 			// Always kill the main timer, for performance reasons and for simplicity of design,

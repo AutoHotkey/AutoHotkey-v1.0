@@ -21,19 +21,27 @@ GNU General Public License for more details.
 #include "script.h"  // For which label (and in turn which line) in the script to jump to.
 
 // Due to control/alt/shift modifiers, quite a lot of hotkey combinations are possible, so support any
-// conceivable use.
+// conceivable use.  Note: Increasing this value will increase the memory required (i.e. any arrays
+// that use this value):
 #define MAX_HOTKEYS 512
-// Smallest workable size: to save mem in some large arrays that use this.
-// Note: 0xBFFF is the largest ID that can be used with RegisterHotkey.
-#define HOTKEY_ID_MAX 0xBFFF
-#define HOTKEY_ID_INVALID 0xFFFF
-#define HOTKEY_ID_ALT_TAB 0xFFFE
-#define HOTKEY_ID_ALT_TAB_SHIFT 0xFFFD
-#define HOTKEY_ID_ALT_TAB_MENU 0xFFFC
-#define HOTKEY_ID_ALT_TAB_AND_MENU 0xFFFB
-#define HOTKEY_ID_ALT_TAB_MENU_DISMISS 0xFFFA
+
+// Note: 0xBFFF is the largest ID that can be used with RegisterHotkey().
+// But further limit this to 0x3FFF (16,383) so that the two highest order bits
+// are reserved for our other uses:
+#define HOTKEY_NO_SUPPRESS             0x8000
+#define HOTKEY_FUTURE_USE              0x4000
+#define HOTKEY_ID_MASK                 0x3FFF
+#define HOTKEY_ID_INVALID              HOTKEY_ID_MASK
+#define HOTKEY_ID_ALT_TAB              0x3FFE
+#define HOTKEY_ID_ALT_TAB_SHIFT        0x3FFD
+#define HOTKEY_ID_ALT_TAB_MENU         0x3FFC
+#define HOTKEY_ID_ALT_TAB_AND_MENU     0x3FFB
+#define HOTKEY_ID_ALT_TAB_MENU_DISMISS 0x3FFA
+#define HOTKEY_ID_MAX                  0x3FF9
+
 #define COMPOSITE_DELIMITER " & "
 
+// Smallest workable size: to save mem in some large arrays that use this:
 typedef USHORT HotkeyIDType;
 typedef HotkeyIDType HookActionType;
 enum HotkeyTypes {HK_UNDETERMINED, HK_NORMAL, HK_KEYBD_HOOK, HK_MOUSE_HOOK};
@@ -47,10 +55,8 @@ private:
 	// the potential future use of more than one set of hotkeys, which could still be implemented
 	// within static data and methods to retain the indexing/performance method:
 	static bool sHotkeysAreActive; // Whether the hotkeys are in effect.
-	static int sWhichHookNeeded;
+	static HookType sWhichHookNeeded;
 	static HookType sWhichHookActive;
-	static UINT sMaxThrottledKeyCount;
-	static UINT sTimeIntervalSize;
 	static DWORD sTimePrev;
 	static DWORD sTimeNow;
 	static Hotkey *shk[MAX_HOTKEYS];
@@ -108,6 +114,7 @@ public:
 		return shk[aHotkeyID]->mJumpToLabel->mJumpToLine->mActionType;
 	}
 	static int AllActivate();
+	static void RequireHook(HookType aWhichHook) {sWhichHookNeeded |= aWhichHook;}
 	static HookType HookIsActive() {return sWhichHookActive;} // Returns bitwise values: HOOK_MOUSE, HOOK_KEYBD.
 
 	static char GetType(HotkeyIDType aHotkeyID)
