@@ -59,7 +59,7 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 		// In other words, since the script line that called us might have been preceeded by
 		// other, time-consuming lines, aModifiersLR may be out-of-date:
 		modifiersLR_down_physically = g_modifiersLR_physical;
-	else // Use best-guess instead:
+	else // Use best-guess instead:a
 	{
 		// Even if TickCount has wrapped due to system being up more than about 49 days,
 		// DWORD math still gives the right answer as long as g.StartTime itself isn't more
@@ -83,6 +83,13 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 	// down due to the hotkey itself:
 	modLR_type modifiersLR_persistent = modifiersLR_current & ~modifiersLR_down_physically;
 	mod_type modifiers_persistent = ConvertModifiersLR(modifiersLR_persistent);
+
+//MsgBox(GetTickCount() - g.StartTime);
+//char mod_str[256];
+//MsgBox(ModifiersLRToText(aModifiersLR, mod_str));
+//MsgBox(ModifiersLRToText(modifiersLR_current, mod_str));
+//MsgBox(ModifiersLRToText(modifiersLR_down_physically, mod_str));
+//MsgBox(ModifiersLRToText(modifiersLR_persistent, mod_str));
 
 	// The default behavior is to turn the capslock key off prior to sending any keys
 	// because otherwise lowercase letters would come through as uppercase:
@@ -430,14 +437,35 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 	else
 	{
 		if (aEventType != KEYUP)  // i.e. always do it for KEYDOWNANDUP
+		{
 			keybd_event(aVK
 				, LOBYTE(aSC)  // naked scan code (the 0xE0 prefix, if any, is omitted)
 				, (HIBYTE(aSC) ? KEYEVENTF_EXTENDEDKEY : 0)
 				, aExtraInfo);
-
+			if (!g_hhkLowLevelKeybd) // Hook isn't logging, so we'll log just the keys we send, here.
+			{
+				g_KeyLog[g_KeyLogNext].vk = aVK;
+				g_KeyLog[g_KeyLogNext].sc = aSC;
+				g_KeyLog[g_KeyLogNext].event_type = 'i';
+				g_KeyLog[g_KeyLogNext].key_up = false;
+				if (++g_KeyLogNext >= MAX_LOGGED_KEYS)
+					g_KeyLogNext = 0;
+			}
+		}
 		if (aEventType != KEYDOWN)  // i.e. always do it for KEYDOWNANDUP
+		{
 			keybd_event(aVK, LOBYTE(aSC), (HIBYTE(aSC) ? KEYEVENTF_EXTENDEDKEY : 0)
 				| KEYEVENTF_KEYUP, aExtraInfo);
+			if (!g_hhkLowLevelKeybd) // Hook isn't logging, so we'll log just the keys we send, here.
+			{
+				g_KeyLog[g_KeyLogNext].vk = aVK;
+				g_KeyLog[g_KeyLogNext].sc = aSC;
+				g_KeyLog[g_KeyLogNext].event_type = 'i';
+				g_KeyLog[g_KeyLogNext].key_up = true;
+				if (++g_KeyLogNext >= MAX_LOGGED_KEYS)
+					g_KeyLogNext = 0;
+			}
+		}
 	}
 
 	if (aDoKeyDelay)

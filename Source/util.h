@@ -150,11 +150,13 @@ inline char *trim (char *aStr)
 
 
 
-inline bool IsPureNumeric(char *aBuf, bool aAllowNegative = false)
+inline bool IsPureNumeric(char *aBuf, bool aAllowNegative = false, bool aAllowAllWhitespace = true)
 // String can contain whitespace.
 {
 	if (!aBuf || !*aBuf) return true;
 	aBuf = omit_leading_whitespace(aBuf);
+	if (!*aBuf && !aAllowAllWhitespace) // The string consists entirely of whitespace.
+		return false;
 	if (aAllowNegative && *aBuf == '-')
 		++aBuf;
 	for (; *aBuf >= '0' && *aBuf <= '9'; ++aBuf);
@@ -204,9 +206,11 @@ inline char *strcatmove(char *aDst, char *aSrc)
 }
 
 
+char *FileAttribToStr(char *aBuf, DWORD aAttr);
+
 #define DATE_FORMAT "YYYYMMDDHHMISS"
 ResultType YYYYMMDDToFileTime(char *YYYYMMDD, FILETIME *pftDateTime);
-char *FileTimeToYYYYMMDD(char *aYYYYMMDD, FILETIME *pftDateTime);
+char *FileTimeToYYYYMMDD(char *aYYYYMMDD, FILETIME *pftDateTime, bool aConvertToLocalTime = false);
 
 unsigned __int64 GetFileSize64(HANDLE aFileHandle);
 int snprintfcat(char *aBuf, size_t aBufSize, const char *aFormat, ...);

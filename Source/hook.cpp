@@ -791,32 +791,25 @@ char *GetHookStatus(char *aBuf, size_t aBufSize)
 	int item, i;
 	*KeyLogText = *IgnoreText = '\0';
 
-	if (!g_hhkLowLevelKeybd && !g_hhkLowLevelMouse)
-		strlcpy(KeyLogText, "\r\n"
-			"Note: The KeyLog itself is not shown because this script\r\n"
-			"requires neither the keyboard nor the mouse hook.\r\n"
-			"You can force the hooks to be installed by adding either\r\n"
-			"or both of the following lines to this script:\r\n"
-			"#InstallKeybdHook\r\n"
-			"#InstallMouseHook\r\n", sizeof(KeyLogText));
-	else
+	if (!g_hhkLowLevelKeybd)
+		snprintfcat(KeyLogText, sizeof(KeyLogText), "\r\n"
+			"NOTE: Only the script's own keyboard events are shown\r\n"
+			"(not the user's), because the keyboard hook isn't installed.\r\n");
+	// Start at the oldest key, which is KeyLogNext:
+	for (item = g_KeyLogNext, i = 0; i < MAX_LOGGED_KEYS; ++i, ++item)
 	{
-		// Start at the oldest key, which is KeyLogNext:
-		for (item = g_KeyLogNext, i = 0; i < MAX_LOGGED_KEYS; ++i, ++item)
-		{
-			if (item >= MAX_LOGGED_KEYS)
-				item = 0;
-			// Minimize the length of the text in this stmt because if it's too long,
-			// the MessageBox dialog will trucate it and not display the most important
-			// (most recent) keystrokes:
-			snprintfcat(KeyLogText, sizeof(KeyLogText), "\r\nvk%02X sc%03X %c %c %s"
-				, g_KeyLog[item].vk, g_KeyLog[item].sc
-				, g_KeyLog[item].key_up ? 'u' : 'd'
-				// It can't be both ignored and suppressed, so display only one:
-				, g_KeyLog[item].event_type
-				, GetKeyName(g_KeyLog[item].vk, g_KeyLog[item].sc, KeyName, sizeof(KeyName))
-				);
-		}
+		if (item >= MAX_LOGGED_KEYS)
+			item = 0;
+		// Minimize the length of the text in this stmt because if it's too long,
+		// the MessageBox dialog will trucate it and not display the most important
+		// (most recent) keystrokes:
+		snprintfcat(KeyLogText, sizeof(KeyLogText), "\r\nvk%02X sc%03X %c %c %s"
+			, g_KeyLog[item].vk, g_KeyLog[item].sc
+			, g_KeyLog[item].key_up ? 'u' : 'd'
+			// It can't be both ignored and suppressed, so display only one:
+			, g_KeyLog[item].event_type
+			, GetKeyName(g_KeyLog[item].vk, g_KeyLog[item].sc, KeyName, sizeof(KeyName))
+			);
 	}
 	snprintf(aBuf, aBufSize,
 		"Modifiers (Hook's Logical) = %s\r\n"

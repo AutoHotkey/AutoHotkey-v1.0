@@ -258,7 +258,27 @@ VarSizeType Var::Get(char *aBuf)
 		// otherwise, it has non-zero length (set by user), so it takes precedence over any existing env. var.
 		if (!aBuf)
 			return mLength;
-		for (char *cp = mContents; *cp; *aBuf++ = *cp++); // Copy the var contents into aBuf.
+		// Copy the var contents into aBuf.  Although a little bit slower than CopyMemory() for large
+		// variables (say, over 100K), this loop seems much faster for small ones, which is the typical
+		// case.  Also of note is that this code section is the main bottleneck for scripts that manipulate
+		// large variables, such as this:
+		//start_time = %A_TICKCOUNT%
+		//my = 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789
+		//tempvar =
+		//loop, 2000
+		//	tempvar = %tempvar%%My%
+		//elapsed_time = %A_TICKCOUNT%
+		//elapsed_time -= %start_time%
+		//msgbox, elapsed_time = %elapsed_time%
+		//return
+		if (mLength > 100000)
+		{
+			// Faster for large vars, but large vars aren't typical:
+			CopyMemory(aBuf, mContents, mLength);
+			aBuf += mLength;
+		}
+		else
+			for (char *cp = mContents; *cp; *aBuf++ = *cp++);
 		break;
 	// Built-in vars with volatile contents:
 	case VAR_CLIPBOARD:
@@ -317,6 +337,18 @@ VarSizeType Var::Get(char *aBuf)
 	case VAR_SCRIPTNAME: if (!aBuf) return g_script.GetFilename(); else aBuf += g_script.GetFilename(aBuf); break;
 	case VAR_SCRIPTDIR: if (!aBuf) return g_script.GetFileDir(); else aBuf += g_script.GetFileDir(aBuf); break;
 	case VAR_SCRIPTFULLPATH: if (!aBuf) return g_script.GetFilespec(); else aBuf += g_script.GetFilespec(aBuf); break;
+
+	case VAR_LOOPFILENAME: if (!aBuf) return g_script.GetLoopFileName(); else aBuf += g_script.GetLoopFileName(aBuf); break;
+	case VAR_LOOPFILESHORTNAME: if (!aBuf) return g_script.GetLoopFileShortName(); else aBuf += g_script.GetLoopFileShortName(aBuf); break;
+	case VAR_LOOPFILEDIR: if (!aBuf) return g_script.GetLoopFileDir(); else aBuf += g_script.GetLoopFileDir(aBuf); break;
+	case VAR_LOOPFILEFULLPATH: if (!aBuf) return g_script.GetLoopFileFullPath(); else aBuf += g_script.GetLoopFileFullPath(aBuf); break;
+	case VAR_LOOPFILETIMEMODIFIED: if (!aBuf) return g_script.GetLoopFileTimeModified(); else aBuf += g_script.GetLoopFileTimeModified(aBuf); break;
+	case VAR_LOOPFILETIMECREATED: if (!aBuf) return g_script.GetLoopFileTimeCreated(); else aBuf += g_script.GetLoopFileTimeCreated(aBuf); break;
+	case VAR_LOOPFILETIMEACCESSED: if (!aBuf) return g_script.GetLoopFileTimeAccessed(); else aBuf += g_script.GetLoopFileTimeAccessed(aBuf); break;
+	case VAR_LOOPFILEATTRIB: if (!aBuf) return g_script.GetLoopFileAttrib(); else aBuf += g_script.GetLoopFileAttrib(aBuf); break;
+	case VAR_LOOPFILESIZE: if (!aBuf) return g_script.GetLoopFileSize(); else aBuf += g_script.GetLoopFileSize(aBuf); break;
+	case VAR_LOOPFILESIZEKB: if (!aBuf) return g_script.GetLoopFileSizeKB(); else aBuf += g_script.GetLoopFileSizeKB(aBuf); break;
+
 	case VAR_THISHOTKEY: if (!aBuf) return g_script.GetThisHotkey(); else aBuf += g_script.GetThisHotkey(aBuf); break;
 	case VAR_PRIORHOTKEY: if (!aBuf) return g_script.GetPriorHotkey(); else aBuf += g_script.GetPriorHotkey(aBuf); break;
 	case VAR_TIMESINCETHISHOTKEY: if (!aBuf) return g_script.GetTimeSinceThisHotkey(); else aBuf += g_script.GetTimeSinceThisHotkey(aBuf); break;

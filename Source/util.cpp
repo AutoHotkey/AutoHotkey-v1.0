@@ -24,6 +24,34 @@ GNU General Public License for more details.
 
 
 
+char *FileAttribToStr(char *aBuf, DWORD aAttr)
+{
+	if (!aBuf) return aBuf;
+	int length = 0;
+	if (aAttr & FILE_ATTRIBUTE_READONLY)
+		aBuf[length++] = 'R';
+	if (aAttr & FILE_ATTRIBUTE_ARCHIVE)
+		aBuf[length++] = 'A';
+	if (aAttr & FILE_ATTRIBUTE_SYSTEM)
+		aBuf[length++] = 'S';
+	if (aAttr & FILE_ATTRIBUTE_HIDDEN)
+		aBuf[length++] = 'H';
+	if (aAttr & FILE_ATTRIBUTE_NORMAL)
+		aBuf[length++] = 'N';
+	if (aAttr & FILE_ATTRIBUTE_DIRECTORY)
+		aBuf[length++] = 'D';
+	if (aAttr & FILE_ATTRIBUTE_OFFLINE)
+		aBuf[length++] = 'O';
+	if (aAttr & FILE_ATTRIBUTE_COMPRESSED)
+		aBuf[length++] = 'C';
+	if (aAttr & FILE_ATTRIBUTE_TEMPORARY)
+		aBuf[length++] = 'T';
+	aBuf[length] = '\0';  // Perform the final termination.
+	return aBuf;
+}
+
+
+
 ResultType YYYYMMDDToFileTime(char *aYYYYMMDD, FILETIME *pftDateTime)
 {
 	if (!aYYYYMMDD || !pftDateTime) return FAIL;
@@ -56,11 +84,16 @@ ResultType YYYYMMDDToFileTime(char *aYYYYMMDD, FILETIME *pftDateTime)
 
 
 
-char *FileTimeToYYYYMMDD(char *aYYYYMMDD, FILETIME *pftDateTime)
+char *FileTimeToYYYYMMDD(char *aYYYYMMDD, FILETIME *pftDateTime, bool aConvertToLocalTime)
 {
 	if (!aYYYYMMDD || !pftDateTime) return NULL;
+	FILETIME local_file_time;
+	if (aConvertToLocalTime)
+		FileTimeToLocalFileTime(pftDateTime, &local_file_time);
+	else
+		CopyMemory(&local_file_time, pftDateTime, sizeof(local_file_time));
 	SYSTEMTIME st = {0};
-	FileTimeToSystemTime(pftDateTime, &st);
+	FileTimeToSystemTime(&local_file_time, &st);
 	sprintf(aYYYYMMDD, "%04d%02d%02d" "%02d%02d%02d"
 		, st.wYear, st.wMonth, st.wDay
 		, st.wHour, st.wMinute, st.wSecond);
@@ -322,7 +355,7 @@ bool DoesFilePatternExist(char *aFilePattern)
 {
 	// Taken from the AutoIt3 source:
 	if (!aFilePattern || !*aFilePattern) return false;
-	if (strchr(aFilePattern, '*') || strchr(aFilePattern, '?'))
+	if (StrChrAny(aFilePattern, "?*"))
 	{
 		WIN32_FIND_DATA wfd;
 		HANDLE hFile = FindFirstFile(aFilePattern, &wfd);

@@ -146,25 +146,25 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 	// Note: QueryPerformanceCounter() has very high overhead compared to GetTickCount():
 	DWORD start_time = allow_early_return ? 0 : GetTickCount();
 
+	// Because this function is called recursively: for now, no attempt is
+	// made to improve performance by setting the timer interval to be
+	// aSleepDuration rather than a standard short interval.  That would cause
+	// a problem if this instance of the function invoked a new subroutine,
+	// suspending the one that called this instance.  The new subroutine
+	// might need a timer of a longer interval, which would mess up
+	// this layer.  One solution worth investigating is to give every
+	// layer/instance its own timer (the ID of the timer can be determined
+	// from info in the WM_TIMER message).  But that can be a real mess
+	// because what if a deeper recursion level receives our first
+	// WM_TIMER message because we were suspended too long?  Perhaps in
+	// that case we wouldn't our WM_TIMER pulse because upon returning
+	// from those deeper layers, we would check to see if the current
+	// time is beyond our finish time.  In addition, having more timers
+	// might be worse for overall system performance than having a single
+	// timer that pulses very frequently (because the system must keep
+	// them all up-to-date):
 	bool timer_is_needed = aSleepDuration > 0 && aMode == RETURN_AFTER_MESSAGES;
 	if (timer_is_needed)
-		// Because this function is called recursively: for now, no attempt is
-		// made to improve performance by setting the timer interval to be
-		// aSleepDuration rather than a standard short interval.  That would cause
-		// a problem if this instance of the function invoked a new subroutine,
-		// suspending the one that called this instance.  The new subroutine
-		// might need a timer of a longer interval, which would mess up
-		// this layer.  One solution worth investigating is to give every
-		// layer/instance its own timer (the ID of the timer can be determined
-		// from info in the WM_TIMER message).  But that can be a real mess
-		// because what if a deeper recursion level receives our first
-		// WM_TIMER message because we were suspended too long?  Perhaps in
-		// that case we wouldn't our WM_TIMER pulse because upon returning
-		// from those deeper layers, we would check to see if the current
-		// time is beyond our finish time.  In addition, having more timers
-		// might be worse for overall system performance than having a single
-		// timer that pulses very frequently (because the system must keep
-		// them all up-to-date).
 		SET_MAIN_TIMER
 
 	// Remove any WM_TIMER messages that are already in our queue because we don't
@@ -345,12 +345,6 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 				// to launch a new subroutine.
 			}
 
-			// Always reset these two, after the above, regardless of aMode:
-			g.hWndLastUsed = NULL;
-			g.StartTime = GetTickCount();
-			g_script.mLinesExecutedThisCycle = 0;  // Doing this is somewhat debatable.
-			g_IsIdle = false;  // Make sure the state is correct since we're about to launch a subroutine.
-
 			// Always kill the main timer, for performance reasons and for simplicity of design,
 			// prior to embarking on new subroutine whose duration may be long (e.g. if BatchLines
 			// is very high or infinite, the called subroutine may not return to us for seconds,
@@ -363,6 +357,13 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 			// However, we do not set ErrorLevel to NONE here because it's more flexible that way
 			// (i.e. the user may want one hotkey subroutine to use the value of ErrorLevel set by another):
 			CopyMemory(&g, &g_default, sizeof(global_struct));
+
+			// Always reset these two, after the saving to global_saved and restoring to defaults above,
+			// regardless of aMode:
+			g.hWndLastUsed = NULL;
+			g.StartTime = GetTickCount();
+			g_script.mLinesExecutedThisCycle = 0;  // Doing this is somewhat debatable.
+			g_IsIdle = false;  // Make sure the state is correct since we're about to launch a subroutine.
 
 			// Just prior to launching the hotkey, update these values to support built-in
 			// variables such as A_TimeSincePriorHotkey:
@@ -486,7 +487,8 @@ ResultType IsCycleComplete(int aSleepDuration, DWORD aStartTime, bool aAllowEarl
 	// DWORD math still gives the right answer as long as aStartTime itself isn't more
 	// than about 49 days ago. Note: must cast to int or any negative result will be lost
 	// due to DWORD type:
-	if (!aAllowEarlyReturn && (int)(aSleepDuration - (GetTickCount() - aStartTime)) > SLEEP_INTERVAL_HALF)
+	DWORD time_now = GetTickCount();
+	if (!aAllowEarlyReturn && (int)(aSleepDuration - (time_now - aStartTime)) > SLEEP_INTERVAL_HALF)
 		// Early return isn't allowed and the time remaining is large enough that we need to
 		// wait some more (small amounts of remaining time can't be effectively waited for
 		// due to the 10ms granularity limit of SetTimer):
@@ -500,6 +502,13 @@ ResultType IsCycleComplete(int aSleepDuration, DWORD aStartTime, bool aAllowEarl
 	// video capture, video playback):
 	if (aSleepDuration >= 0)
 		g_script.mLinesExecutedThisCycle = 0;
+
+	// Normally only update g_script.mLastSleepTime when a non-zero MsgSleep() has
+	// occurred.  This is because lesser sleeps never put us into the GetMessage()
+	// state, and thus the keyboard & mouse hooks might cause key/mouse lag if
+	// we fail call GetMessage() consistently every 10 to 50ms.
+	if (aSleepDuration > 0)
+		g_script.mLastSleepTime = time_now;
 
 	// Kill the timer only if we're about to return OK to the caller since the caller
 	// would still need the timer if FAIL was returned above.

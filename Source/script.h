@@ -23,6 +23,7 @@ GNU General Public License for more details.
 #include "keyboard.h" // for modLR_type
 #include "var.h" // for a script's variables.
 #include "WinGroup.h" // for a script's Window Groups.
+#include "Util.h" // for FileTimeToYYYYMMDD()
 #include "resources\resource.h"  // For tray icon.
 #ifdef AUTOHOTKEYSC
 	#include "lib/exearc_read.h"
@@ -45,18 +46,7 @@ enum ExecUntilMode {NORMAL_MODE, UNTIL_RETURN, UNTIL_BLOCK_END, ONLY_ONE_LINE};
 #define ATTR_LOOP_FILE ((void *)3)
 typedef void *AttributeType;
 
-// Bitwise combination.  RECURSE and FILE_LOOP_INCLUDE_SELF_AND_PARENT aren't yet implemented.
-// FILE_LOOP_INCLUDE_SELF_AND_PARENT probably never will be since it seems too obscure.
-typedef UCHAR FileLoopModeType;
-#define FILE_LOOP_DEFAULT 0
-#define FILE_LOOP_RECURSE 0x01
-#define FILE_LOOP_INCLUDE_FOLDERS 0x02
-#define FILE_LOOP_INCLUDE_FOLDERS_ONLY 0x04
-#define FILE_LOOP_INCLUDE_SELF_AND_PARENT 0x08
-#define FILE_LOOP_INVALID 0x80
-// So based on the above, the default (0) mode is to not recurse and to include only
-// files (not folders) in the Loop.
-
+enum FileLoopModeType {FILE_LOOP_INVALID, FILE_LOOP_FILES_ONLY, FILE_LOOP_FILES_AND_FOLDERS, FILE_LOOP_FOLDERS_ONLY};
 
 // But the array that goes with these actions is in globaldata.cpp because
 // otherwise it would be a little cumbersome to declare the extern version
@@ -103,8 +93,8 @@ enum enum_act {
 , ACT_WINSETTITLE, ACT_WINGETTITLE, ACT_WINGETPOS, ACT_WINGETTEXT
 // Keep rarely used actions near the bottom for parsing/performance reasons:
 , ACT_PIXELGETCOLOR, ACT_PIXELSEARCH
-, ACT_GROUPADD, ACT_GROUPACTIVATE, ACT_GROUPDEACTIVATE, ACT_GROUPCLOSE, ACT_GROUPCLOSEALL
-, ACT_DRIVESPACEFREE, ACT_SOUNDSETWAVEVOLUME
+, ACT_GROUPADD, ACT_GROUPACTIVATE, ACT_GROUPDEACTIVATE, ACT_GROUPCLOSE
+, ACT_DRIVESPACEFREE, ACT_SOUNDSETWAVEVOLUME, ACT_SOUNDPLAY
 , ACT_FILEAPPEND, ACT_FILEREADLINE, ACT_FILECOPY, ACT_FILEMOVE, ACT_FILEDELETE
 , ACT_FILECREATEDIR, ACT_FILEREMOVEDIR
 , ACT_FILEGETATTRIB, ACT_FILESETATTRIB, ACT_FILEGETTIME, ACT_FILESETTIME
@@ -112,10 +102,10 @@ enum enum_act {
 , ACT_FILESELECTFILE, ACT_FILESELECTFOLDER
 , ACT_INIREAD, ACT_INIWRITE, ACT_INIDELETE
 , ACT_REGREAD, ACT_REGWRITE, ACT_REGDELETE
-, ACT_SETTITLEMATCHMODE, ACT_SETKEYDELAY, ACT_SETWINDELAY, ACT_SETBATCHLINES, ACT_SUSPEND, ACT_PAUSE
+, ACT_SETTITLEMATCHMODE, ACT_SETKEYDELAY, ACT_SETWINDELAY, ACT_SETCONTROLDELAY, ACT_SETBATCHLINES
+, ACT_SUSPEND, ACT_PAUSE
 , ACT_AUTOTRIM, ACT_STRINGCASESENSE, ACT_DETECTHIDDENWINDOWS, ACT_DETECTHIDDENTEXT
 , ACT_SETNUMLOCKSTATE, ACT_SETSCROLLLOCKSTATE, ACT_SETCAPSLOCKSTATE, ACT_SETSTORECAPSLOCKMODE
-, ACT_FORCE_KEYBD_HOOK
 , ACT_KEYLOG, ACT_LISTLINES, ACT_LISTVARS, ACT_LISTHOTKEYS
 , ACT_EDIT, ACT_RELOADCONFIG
 , ACT_EXITAPP
@@ -153,7 +143,7 @@ enum enum_act_old {
 #define ERR_ELSE_WITH_NO_IF "This ELSE doesn't appear to belong to any IF-statement."
 #define ERR_GROUPADD_LABEL "The target label in parameter #4 does not exist."
 #define ERR_WINDOW_PARAM "This command requires that at least one of its window parameters be non-blank."
-#define ERR_LOOP_FILE_MODE "This line specifies an invalid file-loop mode."
+#define ERR_LOOP_FILE_MODE "If not blank, parameter #2 must be either 0, 1, 2, or a dereferenced variable."
 #define ERR_ON_OFF "If not blank, the value must be either ON, OFF, or a dereferenced variable."
 #define ERR_ON_OFF_ALWAYS "If not blank, the value must be either ON, OFF, ALWAYSON, ALWAYSOFF, or a dereferenced variable."
 #define ERR_ON_OFF_TOGGLE "If not blank, the value must be either ON, OFF, TOGGLE, or a dereferenced variable."
@@ -197,15 +187,19 @@ struct DerefType
 	DerefLengthType length;
 };
 
-struct ArgType
+typedef UCHAR ArgTypeType;  // UCHAR vs. an enum, to save memory.
+#define ARG_TYPE_NORMAL     (UCHAR)0
+#define ARG_TYPE_INPUT_VAR  (UCHAR)1
+#define ARG_TYPE_OUTPUT_VAR (UCHAR)2
+struct ArgStruct
 {
+	ArgTypeType type;
 	char *text;
 	DerefType *deref;  // Will hold a NULL-terminated array of var-deref locations within <text>.
 };
 
 typedef UCHAR ArgCountType;
 #define MAX_ARGS 20
-typedef char *ArgPurposeType;
 
 ResultType InputBox(Var *aOutputVar, char *aTitle = "", char *aText = "", bool aHideInput = false);
 INT_PTR CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -231,9 +225,14 @@ private:
 	static char *sArgDeref[MAX_ARGS];
 
 	ResultType EvaluateCondition();
+	ResultType PerformLoop(modLR_type aModifiersLR, WIN32_FIND_DATA *apCurrentFile
+		, bool &aContinueMainLoop, Line *&aJumpToLine
+		, AttributeType aAttr, FileLoopModeType aFileLoopMode, bool aRecurseSubfolders, char *aFilePattern
+		, int aIterationLimit, bool aIsInfinite);
 	ResultType Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurrentFile = NULL);
 	ResultType PerformAssign();
 	ResultType DriveSpaceFree(char *aPath);
+	ResultType SoundPlay(char *aFilespec, bool aSleepUntilDone);
 	ResultType FileSelectFile(char *aOptions, char *aWorkingDir);
 	ResultType FileSelectFolder(char *aRootDir, bool aAllowCreateFolder, char *aGreeting);
 	ResultType FileCreateDir(char *aDirSpec);
@@ -248,16 +247,18 @@ private:
 	static bool Util_DoesFileExist(const char *szFilename);
 
 	ResultType FileGetAttrib(char *aFilespec);
-	ResultType FileSetAttrib(char *aAttributes, char *aFilePattern, bool aOperateOnFolders);
-	ResultType FileGetTime(char *aWhichTime, char *aFilespec);
-	ResultType FileSetTime(char *aWhichTime, char *aYYYYMMDD, char *aFilePattern, bool aOperateOnFolders);
+	int FileSetAttrib(char *aAttributes, char *aFilePattern, FileLoopModeType aOperateOnFolders
+		, bool aDoRecurse, bool aCalledRecursively = false);
+	ResultType FileGetTime(char *aFilespec, char aWhichTime);
+	int FileSetTime(char *aYYYYMMDD, char *aFilePattern, char aWhichTime
+		, FileLoopModeType aOperateOnFolders, bool aDoRecurse, bool aCalledRecursively = false);
 	ResultType FileGetSize(char *aFilespec, char *aGranularity);
 	ResultType FileGetVersion(char *aFilespec);
 
 	ResultType IniRead(char *aFilespec, char *aSection, char *aKey, char *aDefault);
 	ResultType IniWrite(char *aValue, char *aFilespec, char *aSection, char *aKey);
 	ResultType IniDelete(char *aFilespec, char *aSection, char *aKey);
-	ResultType RegRead(char *aValueType, char *aRegKey, char *aRegSubkey, char *aValueName);
+	ResultType RegRead(char *aRegKey, char *aRegSubkey, char *aValueName);
 	ResultType RegWrite(char *aValueType, char *aRegKey, char *aRegSubkey, char *aValueName, char *aValue);
 	ResultType RegDelete(char *aRegKey, char *aRegSubkey, char *aValueName);
 	static bool RegRemoveSubkeys(HKEY hRegKey);
@@ -321,11 +322,6 @@ public:
 	#define LINE_LOG_SIZE 50
 	static Line *sLog[LINE_LOG_SIZE];
 	static int sLogNext;
-	static const char sArgIsInputVar[1];   // A special, constant pointer value we can use.
-	static const char sArgIsOutputVar[1];  // same
-	#define IS_NOT_A_VAR NULL
-	#define IS_INPUT_VAR (Line::sArgIsInputVar)
-	#define IS_OUTPUT_VAR (Line::sArgIsOutputVar)
 
 	ActionTypeType mActionType; // What type of line this is.
 	LineNumberType mFileLineNumber;  // The line number in the file from which the script was loaded, for debugging.
@@ -362,6 +358,7 @@ public:
 	#define LINE_RAW_ARG8 (line->mArgc > 7 ? line->mArg[7].text : "")
 	#define LINE_ARG1 (line->mArgc > 0 ? line->sArgDeref[0] : "")
 	#define LINE_ARG2 (line->mArgc > 1 ? line->sArgDeref[1] : "")
+	#define LINE_ARG3 (line->mArgc > 2 ? line->sArgDeref[2] : "")
 	#define SAVED_ARG1 (mArgc > 0 ? arg[0] : "")
 	#define SAVED_ARG2 (mArgc > 1 ? arg[1] : "")
 	#define SAVED_ARG3 (mArgc > 2 ? arg[2] : "")
@@ -388,28 +385,20 @@ public:
 	#define NINE_ARGS   ARG1, ARG2, ARG3, ARG4, ARG5, ARG6, ARG7, ARG8, ARG9
 	#define TEN_ARGS    ARG1, ARG2, ARG3, ARG4, ARG5, ARG6, ARG7, ARG8, ARG9, ARG10
 	#define ELEVEN_ARGS ARG1, ARG2, ARG3, ARG4, ARG5, ARG6, ARG7, ARG8, ARG9, ARG10, ARG11
+	// If the arg's text is non-blank, it means the variable is a dynamic name such as array%i%
+	// that must be resolved at runtime rather than load-time.  Therefore, this macro must not
+	// be used without first having checked that arg.text is blank:
 	#define VAR(arg) ((Var *)arg.deref)
-	#define OUTPUT_VAR VAR(mArg[0])
-	#define OUTPUT_VAR2 VAR(mArg[1])
-	#define ARG_IS_VAR(arg) ((arg.text == Line::sArgIsInputVar || arg.text == Line::sArgIsOutputVar) ? VAR(arg) : NULL)
-	#define ARG_IS_INPUT_VAR(arg) ((arg.text == Line::sArgIsInputVar) ? VAR(arg) : NULL)
-	#define ARG_IS_OUTPUT_VAR(arg) ((arg.text == Line::sArgIsOutputVar) ? VAR(arg) : NULL)
-	#define VARARG1 (VAR(mArg[0]))
-	#define VARARG2 (VAR(mArg[1]))
-	#define VARARG3 (VAR(mArg[2]))
-	#define VARARG4 (VAR(mArg[3]))
-	#define VARARG5 (VAR(mArg[4]))
-	#define VARRAW_ARG1 (mArgc > 0 ? VARARG1 : NULL)
-	#define VARRAW_ARG2 (mArgc > 1 ? VARARG2 : NULL)
-	#define VARRAW_ARG3 (mArgc > 2 ? VARARG3 : NULL)
-	#define VARRAW_ARG4 (mArgc > 3 ? VARARG4 : NULL)
-	#define VARRAW_ARG5 (mArgc > 4 ? VARARG5 : NULL)
+	// Uses arg number (i.e. the first arg is 1, not 0).  Caller must ensure that ArgNum >= 1 and that
+	// the arg in question is an input or output variable (since that isn't checked there):
+	#define ARG_HAS_VAR(ArgNum) (mArgc >= ArgNum && (*mArg[ArgNum-1].text || mArg[ArgNum-1].deref))
 	ArgCountType mArgc; // How many arguments exist in mArg[].
-	ArgType *mArg; // Will be used to hold a dynamic array of dynamic Args.
+	ArgStruct *mArg; // Will be used to hold a dynamic array of dynamic Args.
 
 	ResultType ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **apJumpToLine = NULL
 		, WIN32_FIND_DATA *aCurrentFile = NULL);
 
+	Var *ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary = true);
 	ResultType ExpandArgs();
 	VarSizeType GetExpandedArgSize(bool aCalcDerefBufSize);
 	char *ExpandArg(char *aBuf, int aArgIndex);
@@ -419,7 +408,7 @@ public:
 	ResultType SetJumpTarget(bool aIsDereferenced);
 	ResultType IsJumpValid(Line *aDestination);
 
-	static ArgPurposeType ArgIsVar(ActionTypeType aActionType, int aArgIndex);
+	static ArgTypeType ArgIsVar(ActionTypeType aActionType, int aArgIndex);
 	static int ConvertEscapeChar(char *aFilespec, char aOldChar, char aNewChar);
 	static size_t ConvertEscapeCharGetLine(char *aBuf, int aMaxCharsToRead, FILE *fp);
 	ResultType CheckForMandatoryArgs();
@@ -437,13 +426,13 @@ public:
 		}
 		if (aArgNum > mArgc) // arg doesn't exist
 			return false;
-		if (ARG_IS_VAR(mArg[aArgNum - 1])) // Always do this check prior to the next.
+		if (mArg[aArgNum - 1].type != ARG_TYPE_NORMAL) // Always do this check prior to the next.
 			return false;
 		// Relies on short-circuit boolean evaluation order to prevent NULL-deref:
 		return mArg[aArgNum - 1].deref && mArg[aArgNum - 1].deref[0].marker;
 	}
 
-	bool ArgMustBeDereferenced(Var *aVar)
+	bool ArgMustBeDereferenced(Var *aVar, int aArgIndexToExclude)
 	{
 		if (aVar->mType == VAR_CLIPBOARD)
 			// Even if the clipboard is both an input and an output var, it still
@@ -458,18 +447,19 @@ public:
 			// as system environment variables, whose contents are also potentially
 			// volatile (i.e. they are sometimes changed by outside forces):
 			return true;
-		// Since the above didn't return, we know that this is a NORMAL var of
-		// non-zero length.  Such vars only need to be dereferenced if they are
-		// also used as an output var by this line:
+		// Since the above didn't return, we know that this is a NORMAL input var of
+		// non-zero length.  Such input vars only need to be dereferenced if they are
+		// also used as an output var by the current script line:
 		for (int iArg = 0; iArg < mArgc; ++iArg)
-			if (ARG_IS_OUTPUT_VAR(mArg[iArg]) == aVar)
+			if (iArg != aArgIndexToExclude && mArg[iArg].type == ARG_TYPE_OUTPUT_VAR
+				&& ResolveVarOfArg(iArg, false) == aVar)
 				return true;
 		// Otherwise:
 		return false;
 	}
 
 	bool ArgAllowsNegative(int aArgNum)
-	// aArgNum starts at 1 (for the first arg), so zero is invalid).
+	// aArgNum starts at 1 (for the first arg), so zero is invalid.
 	{
 		if (!aArgNum)
 		{
@@ -484,6 +474,7 @@ public:
 		case ACT_DIV:
 		case ACT_SETKEYDELAY:
 		case ACT_SETWINDELAY:
+		case ACT_SETCONTROLDELAY:
 		case ACT_SETBATCHLINES:
 		case ACT_RANDOM:
 		case ACT_WINMOVE:
@@ -554,20 +545,19 @@ public:
 		return aDefault;
 	}
 
-	static int ConvertLoopMode(char *aBuf)
+	static FileLoopModeType ConvertLoopMode(char *aBuf)
 	// Returns the file loop mode, or FILE_LOOP_INVALID if aBuf contains an invalid mode.
 	{
-		// When/if RECURSE is implemented, could add something like this:
-		// 6 options total:
-		//(RECURSE_)FILES_ONLY
-		//(RECURSE_)FOLDERS_ONLY
-		//(RECURSE_)FILES_AND_FOLDERS
-		//	(GET RID OF THE PARENT OPTION)
-		if (!aBuf || !*aBuf) return FILE_LOOP_DEFAULT;
-		// Keeping the most oft-used ones up top helps perf. a little:
-		if (!stricmp(aBuf, "FoldersOnly")) return FILE_LOOP_INCLUDE_FOLDERS_ONLY;
-		if (!stricmp(aBuf, "FilesAndFolders")) return FILE_LOOP_INCLUDE_FOLDERS;
-		if (!stricmp(aBuf, "FilesOnly")) return FILE_LOOP_DEFAULT;
+		if (!aBuf || !*aBuf)
+			return FILE_LOOP_FILES_ONLY; // The default mode is used if the param is blank.
+		if (strlen(aBuf) > 1)
+			return FILE_LOOP_INVALID;
+		if (*aBuf == '0')
+			return FILE_LOOP_FILES_ONLY;
+		if (*aBuf == '1')
+			return FILE_LOOP_FILES_AND_FOLDERS;
+		if (*aBuf == '2')
+			return FILE_LOOP_FOLDERS_ONLY;
 		return FILE_LOOP_INVALID;
 	}
 
@@ -634,7 +624,7 @@ public:
 	// Call this LineError to avoid confusion with Script's error-displaying functions:
 	ResultType LineError(char *aErrorText, ResultType aErrorType = FAIL, char *aExtraInfo = "");
 
-	Line(LineNumberType aFileLineNumber, ActionTypeType aActionType, ArgType aArg[], ArgCountType aArgc) // Constructor
+	Line(LineNumberType aFileLineNumber, ActionTypeType aActionType, ArgStruct aArg[], ArgCountType aArgc) // Constructor
 		: mActionType(aActionType), mFileLineNumber(aFileLineNumber), mAttribute(ATTR_NONE)
 		, mArgc(aArgc), mArg(aArg)
 		, mPrevLine(NULL), mNextLine(NULL), mRelatedLine(NULL), mParentLine(NULL)
@@ -709,6 +699,7 @@ private:
 public:
 	Line *mCurrLine;  // Seems better to make this public than make Line our friend.
 	Label *mThisHotkeyLabel, *mPriorHotkeyLabel;
+	WIN32_FIND_DATA *mLoopFile;  // The file of the current file-loop, if applicable.
 	DWORD mThisHotkeyStartTime, mPriorHotkeyStartTime;  // Tickcount timestamp of when its subroutine began.
 	char *mFileSpec; // Will hold the full filespec, for convenience.
 	char *mFileDir;  // Will hold the directory containing the script file.
@@ -719,6 +710,7 @@ public:
 	bool mIsRestart; // The app is restarting rather than starting from scratch.
 	bool mIsAutoIt2; // Whether this script is considered to be an AutoIt2 script.
 	LineNumberType mLinesExecutedThisCycle; // Not tracking this separately for every recursed subroutine.
+	DWORD mLastSleepTime; // Track MsgSleep() from any and all sources to pump messages more consistently.
 
 	ResultType Init(char *aScriptFilename, bool aIsRestart);
 	ResultType CreateWindows(HINSTANCE hInstance);
@@ -728,6 +720,7 @@ public:
 	void ExitApp(char *aBuf = NULL, int ExitCode = 0);
 	int LoadFromFile();
 	Var *FindOrAddVar(char *aVarName, size_t aVarNameLength = 0);
+	Var *FindVar(char *aVarName, size_t aVarNameLength = 0);
 	ResultType ExecuteFromLine1()
 	{
 		if (!mIsReadyToExecute)
@@ -767,6 +760,156 @@ public:
 		aBuf += length;
 		return length;
 	}
+
+	int GetLoopFileName(char *aBuf = NULL)
+	{
+		char *str = "";  // Set default.
+		if (mLoopFile)
+		{
+			// The loop handler already prepended the script's directory in here for us:
+			if (str = strrchr(mLoopFile->cFileName, '\\'))
+				++str;
+			else // No backslash, so just make it the entire file name.
+				str = mLoopFile->cFileName;
+		}
+		VarSizeType length = (VarSizeType)strlen(str);
+		if (!aBuf) return length;
+		strcpy(aBuf, str);
+		aBuf += length;
+		return length;
+	}
+	int GetLoopFileShortName(char *aBuf = NULL)
+	{
+		char *str = "";  // Set default.
+		if (mLoopFile)
+		{
+			if (   !*(str = mLoopFile->cAlternateFileName)   )
+				// Files whose long name is shorter than the 8.3 usually don't have value stored here,
+				// so use the long name whenever a short name is unavailable for any reason (could
+				// also happen if NTFS has short-name generation disabled?)
+				return GetLoopFileName(aBuf);
+		}
+		VarSizeType length = (VarSizeType)strlen(str);
+		if (!aBuf) return length;
+		strcpy(aBuf, str);
+		aBuf += length;
+		return length;
+	}
+	int GetLoopFileDir(char *aBuf = NULL)
+	{
+		char *str = "";  // Set default.
+		char *last_backslash = NULL;
+		if (mLoopFile)
+		{
+			// The loop handler already prepended the script's directory in here for us:
+			str = mLoopFile->cFileName;
+			if (last_backslash = strrchr(mLoopFile->cFileName, '\\'))
+				*last_backslash = '\0'; // Temporarily terminate.
+		}
+		VarSizeType length = (VarSizeType)strlen(str);
+		if (!aBuf)
+		{
+			if (last_backslash)
+				*last_backslash = '\\';  // Restore the orginal value.
+			return length;
+		}
+		strcpy(aBuf, str);
+		aBuf += length;
+		if (last_backslash)
+			*last_backslash = '\\';  // Restore the orginal value.
+		return length;
+	}
+	int GetLoopFileFullPath(char *aBuf = NULL)
+	{
+		char *str = "";  // Set default.
+		if (mLoopFile)
+			// The loop handler already prepended the script's directory in here for us:
+			str = mLoopFile->cFileName;
+		VarSizeType length = (VarSizeType)strlen(str);
+		if (!aBuf) return length;
+		strcpy(aBuf, str);
+		aBuf += length;
+		return length;
+	}
+	int GetLoopFileTimeModified(char *aBuf = NULL)
+	{
+		char str[64] = "";  // Set default.
+		if (mLoopFile)
+			FileTimeToYYYYMMDD(str, &mLoopFile->ftLastWriteTime, true);
+		VarSizeType length = (VarSizeType)strlen(str);
+		if (!aBuf) return length;
+		strcpy(aBuf, str);
+		aBuf += length;
+		return length;
+	}
+	int GetLoopFileTimeCreated(char *aBuf = NULL)
+	{
+		char str[64] = "";  // Set default.
+		if (mLoopFile)
+			FileTimeToYYYYMMDD(str, &mLoopFile->ftCreationTime, true);
+		VarSizeType length = (VarSizeType)strlen(str);
+		if (!aBuf) return length;
+		strcpy(aBuf, str);
+		aBuf += length;
+		return length;
+	}
+	int GetLoopFileTimeAccessed(char *aBuf = NULL)
+	{
+		char str[64] = "";  // Set default.
+		if (mLoopFile)
+			FileTimeToYYYYMMDD(str, &mLoopFile->ftLastAccessTime, true);
+		VarSizeType length = (VarSizeType)strlen(str);
+		if (!aBuf) return length;
+		strcpy(aBuf, str);
+		aBuf += length;
+		return length;
+	}
+	int GetLoopFileAttrib(char *aBuf = NULL)
+	{
+		char str[64] = "";  // Set default.
+		if (mLoopFile)
+			FileAttribToStr(str, mLoopFile->dwFileAttributes);
+		VarSizeType length = (VarSizeType)strlen(str);
+		if (!aBuf) return length;
+		strcpy(aBuf, str);
+		aBuf += length;
+		return length;
+	}
+	int GetLoopFileSize(char *aBuf = NULL)
+	{
+		char str[64] = "";  // Set default.
+		if (mLoopFile)
+			// It's a documented limitation that the size will show as negative if
+			// greater than 2 gig, and will be wrong if greater than 4 gig.  For files
+			// that large, scripts should use the KB version of this function instead.
+			// If a file is over 4gig, set the value to be the maximum size (-1 when
+			// expressed as a signed integer, since script variables are based entirely
+			// on 32-bit signed integers due to the use of atoi(), etc.):
+			sprintf(str, "%d%", mLoopFile->nFileSizeHigh ? -1 : (int)mLoopFile->nFileSizeLow);
+		VarSizeType length = (VarSizeType)strlen(str);
+		if (!aBuf) return length;
+		strcpy(aBuf, str);
+		aBuf += length;
+		return length;
+	}
+	int GetLoopFileSizeKB(char *aBuf = NULL)
+	{
+		char str[128] = "";  // Set default.
+		if (mLoopFile)
+		{
+			ULARGE_INTEGER ul;
+			ul.LowPart = mLoopFile->nFileSizeLow;
+			ul.HighPart = mLoopFile->nFileSizeHigh;
+			// Always use signed (%d) vs. unsigned (%u).  See comment in GetLoopFileSize():
+			sprintf(str, "%d%", (int)((unsigned __int64)ul.QuadPart/1024));
+		}
+		VarSizeType length = (VarSizeType)strlen(str);
+		if (!aBuf) return length;
+		strcpy(aBuf, str);
+		aBuf += length;
+		return length;
+	}
+
 	int GetThisHotkey(char *aBuf = NULL)
 	{
 		char *str = "";  // Set default.
@@ -832,9 +975,10 @@ public:
 		// UPDATE: It seems better to store all unsigned values as signed within script
 		// variables.  Otherwise, when the var's value is next accessed and converted using
 		// atoi(), the outcome won't be as useful.  In other words, since the negative value
-		// will be properly converted by atoi(), it's possible that comparing two tickcounts,
-		// even if one or more of them is negative, will then work correctly due to the nature
-		// of implicit unsigned math.  This needs further study & testing:
+		// will be properly converted by atoi(), comparing two negative tickcounts works
+		// correctly (confirmed).  Even if one of them is negative and the other positive,
+		// it will probably work correctly due to the nature of implicit unsigned math.
+		// Thus, we use %d vs. %u in the snprintf() call below.
 		char str[128];
 		snprintf(str, sizeof(str), "%d", GetTickCount());
 		VarSizeType length = (VarSizeType)strlen(str);

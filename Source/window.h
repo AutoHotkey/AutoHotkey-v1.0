@@ -106,7 +106,8 @@ HWND SetForegroundWindowEx(HWND aWnd);
 HWND WinClose(char *aTitle = "", char *aText = "", int aTimeToWaitForClose = DEFAULT_WINCLOSE_WAIT
 	, char *aExcludeTitle = "", char *aExcludeText = "", bool aKillIfHung = false);
 
-HWND WinActive(char *aTitle, char *aText = "", char *aExcludeTitle = "", char *aExcludeText = "");
+HWND WinActive(char *aTitle, char *aText = "", char *aExcludeTitle = "", char *aExcludeText = ""
+	, bool aUpdateLastUsed = false);
 
 HWND WinExist(char *aTitle, char *aText = "", char *aExcludeTitle = "", char *aExcludeText = ""
 	, bool aFindLastMatch = false, bool aUpdateLastUsed = false

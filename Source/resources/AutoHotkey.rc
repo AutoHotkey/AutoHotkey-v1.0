@@ -77,10 +77,11 @@ END
 
 // Icon with lowest ID value placed first to ensure application icon
 // remains consistent on all systems.
-IDI_ICON_MAIN           ICON                    "icon_main.ico"
-IDI_ICON_SUSPEND        ICON                    "icon_suspend.ico"
-IDI_ICON_PAUSE          ICON                    "icon_pause.ico"
-IDI_ICON_PAUSE_SUSPEND  ICON                    "icon_pause_suspend.ico"
+IDI_MAIN                ICON                    "icon_main.ico"
+IDI_SUSPEND             ICON                    "icon_suspend.ico"
+IDI_PAUSE               ICON                    "icon_pause.ico"
+IDI_PAUSE_SUSPEND       ICON                    "icon_pause_suspend.ico"
+IDI_FILETYPE            ICON                    "icon_filetype.ico"
 
 /////////////////////////////////////////////////////////////////////////////
 //
@@ -106,8 +107,8 @@ END
 //
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 0,2,19,0
- PRODUCTVERSION 0,2,19,0
+ FILEVERSION 0,2,20,0
+ PRODUCTVERSION 0,2,20,0
  FILEFLAGSMASK 0x17L
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -123,12 +124,12 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "FileDescription", "AutoHotkey"
-            VALUE "FileVersion", "0, 2, 19, 0"
+            VALUE "FileVersion", "0, 2, 20, 0"
             VALUE "InternalName", "AutoHotkey"
             VALUE "LegalCopyright", "Copyright (C) 2004"
             VALUE "OriginalFilename", "AutoHotkey.rc"
             VALUE "ProductName", " AutoHotkey"
-            VALUE "ProductVersion", "0, 2, 19, 0"
+            VALUE "ProductVersion", "0, 2, 20, 0"
         END
     END
     BLOCK "VarFileInfo"

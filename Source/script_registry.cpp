@@ -37,6 +37,9 @@
 
 ResultType Line::IniRead(char *aFilespec, char *aSection, char *aKey, char *aDefault)
 {
+	Var *output_var = ResolveVarOfArg(0);
+	if (!output_var)
+		return FAIL;
 	if (!aDefault || !*aDefault)
 		aDefault = "ERROR";  // This mirrors what AutoIt2 does for its default value.
 	char	szFileTemp[_MAX_PATH+1];
@@ -47,7 +50,7 @@ ResultType Line::IniRead(char *aFilespec, char *aSection, char *aKey, char *aDef
 	GetPrivateProfileString(aSection, aKey, aDefault, szBuffer, sizeof(szBuffer), szFileTemp);
 	// The above function is supposed to set szBuffer to be aDefault if it can't find the
 	// file, section, or key.  In other words, it always changes the contents of szBuffer.
-	return OUTPUT_VAR->Assign(szBuffer);
+	return output_var->Assign(szBuffer);
 }
 
 
@@ -78,12 +81,15 @@ ResultType Line::IniDelete(char *aFilespec, char *aSection, char *aKey)
 
 
 
-ResultType Line::RegRead(char *aValueType, char *aRegKey, char *aRegSubkey, char *aValueName)
+ResultType Line::RegRead(char *aRegKey, char *aRegSubkey, char *aValueName)
 {
 	// $var = RegRead(key, valuename)
 
+	Var *output_var = ResolveVarOfArg(0);
+	if (!output_var)
+		return FAIL;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
-	OUTPUT_VAR->Assign(); // Init.  Tell it not to free the memory by not calling with "".
+	output_var->Assign(); // Init.  Tell it not to free the memory by not calling with "".
 
 	HKEY	hRegKey, hMainKey;
 	DWORD	dwRes, dwBuf, dwType;
@@ -112,14 +118,14 @@ ResultType Line::RegRead(char *aValueType, char *aRegKey, char *aRegSubkey, char
 			RegQueryValueEx(hRegKey, aValueName, NULL, NULL, (LPBYTE)szRegBuffer, &dwRes);
 			RegCloseKey(hRegKey);
 			g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-			return OUTPUT_VAR->Assign(szRegBuffer);
+			return output_var->Assign(szRegBuffer);
 
 		case REG_DWORD:
 			dwRes = sizeof(dwBuf);
 			RegQueryValueEx(hRegKey, aValueName, NULL, NULL, (LPBYTE)&dwBuf, &dwRes);
 			RegCloseKey(hRegKey);
 			g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-			return OUTPUT_VAR->Assign((int)dwBuf);
+			return output_var->Assign((int)dwBuf);
 	}
 
 	// Since above didn't return, this is an unsupported value type.

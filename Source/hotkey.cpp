@@ -501,7 +501,7 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 	}
 
 	if (mType != HK_MOUSE_HOOK)  // Don't let a mouse key ever be affected by these checks.
-		if (g_ForceKeybdHook == TOGGLED_ON || mModifiersLR || mAllowExtraModifiers || !mDoSuppress || aHookAction)
+		if (g_ForceKeybdHook || mModifiersLR || mAllowExtraModifiers || !mDoSuppress || aHookAction)
 			mType = HK_KEYBD_HOOK;
 
 	// Currently, these take precedence over each other in the following order, so don't

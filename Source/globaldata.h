@@ -79,7 +79,7 @@ extern global_struct g, g_default;
 	: (!IsWindow(g.hWndLastUsed) ? NULL\
 	: ((!g.DetectHiddenWindows && !IsWindowVisible(g.hWndLastUsed)) ? NULL : g.hWndLastUsed)))
 
-extern ToggleValueType g_ForceKeybdHook;
+extern bool g_ForceKeybdHook;
 extern ToggleValueType g_ForceNumLock;
 extern ToggleValueType g_ForceCapsLock;
 extern ToggleValueType g_ForceScrollLock;

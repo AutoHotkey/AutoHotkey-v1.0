@@ -501,7 +501,7 @@ HWND WinClose(char *aTitle, char *aText, int aTimeToWaitForClose
 
 
 
-HWND WinActive(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
+HWND WinActive(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText, bool aUpdateLastUsed)
 {
 	if (!aTitle) aTitle = "";
 	if (!aText) aText = "";
@@ -514,7 +514,13 @@ HWND WinActive(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeTex
 		// User asked us if the "active" window is active, which is true if it's not a
 		// hidden window or DetectHiddenWindows is ON:
 		SET_TARGET_TO_ALLOWABLE_FOREGROUND
-		return target_window;
+		#define UPDATE_AND_RETURN_LAST_USED_WINDOW(hwnd) \
+		{\
+			if (aUpdateLastUsed && hwnd)\
+				g.hWndLastUsed = hwnd;\
+			return hwnd;\
+		}
+		UPDATE_AND_RETURN_LAST_USED_WINDOW(target_window)
 	}
 
 	HWND fore_win = GetForegroundWindow();
@@ -539,7 +545,10 @@ HWND WinActive(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeTex
 
 	// Otherwise confirm the match by ensuring that active window has a child that contains <aText>.
 	// (it will return "success" immediately if aText & aExcludeText are both blank):
-	return HasMatchingChild(fore_win, aText, aExcludeText) ? fore_win : NULL;
+	if (HasMatchingChild(fore_win, aText, aExcludeText))
+		UPDATE_AND_RETURN_LAST_USED_WINDOW(fore_win)
+	else
+		return NULL;
 }
 
 
@@ -564,10 +573,6 @@ HWND WinExist(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
 		// Updating LastUsed to be hwnd even if it's NULL seems best for consistency?
 		// UPDATE: No, it's more flexible not to never set it to NULL, because there
 		// will be times when the old value is still useful:
-		#define UPDATE_AND_RETURN_LAST_USED_WINDOW(hwnd)\
-			if (aUpdateLastUsed && hwnd)\
-				g.hWndLastUsed = hwnd;\
-			return hwnd;
 		UPDATE_AND_RETURN_LAST_USED_WINDOW(target_window);
 	}
 
@@ -794,7 +799,7 @@ ResultType StatusBarUtil(Var *aOutputVar, HWND aControlWindow, int aPartNumber
 					// Below: In addition to normal/intuitive matching, a match is also achieved if
 					// both are empty string:
 					#define BREAK_IF_MATCH_FOUND_OR_IF_NOT_WAITING \
-					if ((!*aTextToWaitFor && !*buf) || (aTextToWaitFor && strstr(buf, aTextToWaitFor))) \
+					if ((!*aTextToWaitFor && !*buf) || (aTextToWaitFor && IsTextMatch(buf, aTextToWaitFor))) \
 					{\
 						g_ErrorLevel->Assign(ERRORLEVEL_NONE);\
 						break;\

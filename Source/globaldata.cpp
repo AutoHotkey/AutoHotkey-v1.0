@@ -83,7 +83,7 @@ DWORD g_OriginalTimeout;
 
 global_struct g, g_default;
 
-ToggleValueType g_ForceKeybdHook = TOGGLED_OFF;
+bool g_ForceKeybdHook = false;
 ToggleValueType g_ForceNumLock = NEUTRAL;
 ToggleValueType g_ForceCapsLock = NEUTRAL;
 ToggleValueType g_ForceScrollLock = NEUTRAL;
@@ -210,7 +210,7 @@ Action g_act[] =
 	, {"Random", 1, 3, {2, 3, 0}} // Output var, Min, Max (Note: MinParams is 1 so that param2 can be blank).
 	, {"Goto", 1, 1, NULL}, {"Gosub", 1, 1, NULL} // Label (or dereference that resolves to a label).
 	, {"Return", 0, 0, NULL}, {"Exit", 0, 1, {1, 0}} // ExitCode (currently ignored)
-	, {"Loop", 0, 2, NULL} // Iteration Count or file-search (e.g. c:\*.*), FileLoopMode
+	, {"Loop", 0, 3, NULL} // Iteration Count or file-search (e.g. c:\*.*), FileLoopMode, Recurse? (custom validation for these last two)
 	, {"Break", 0, 0, NULL}, {"Continue", 0, 0, NULL}
 	, {"{", 0, 0, NULL}, {"}", 0, 0, NULL}
 
@@ -244,17 +244,18 @@ Action g_act[] =
 	, {"PixelSearch", 0, 8, {3, 4, 5, 6, 7, 8, 0}} // OutputX, OutputY, left, top, right, bottom, Color, Variation
 	// Note in the above: 0 min args so that the output vars can be optional.
 
-	// Below: Group name, wintitle, what label to Gosub if no instances of the window exist, exclude-title/text:
 	// See above for why minimum is 1 vs. 2:
-	, {"GroupAdd", 1, 6, NULL}
-	, {"GroupActivate", 1, 2, NULL}, {"GroupDeactivate", 1, 2, NULL}
-	, {"GroupClose", 1, 2, NULL}, {"GroupCloseAll", 1, 1, NULL}
+	, {"GroupAdd", 1, 6, NULL} // Group name, WinTitle, WinText, Label, exclude-title/text
+	, {"GroupActivate", 1, 2, NULL}
+	, {"GroupDeactivate", 1, 2, NULL}
+	, {"GroupClose", 1, 2, NULL}
 
 	, {"DriveSpaceFree", 2, 2, NULL} // Output-var, path (e.g. c:\)
-	, {"SoundSetWaveVolume", 1, 1, NULL} // Volume percent-level (0-100)
+	, {"SoundSetWaveVolume", 1, 1, {1, 0}} // Volume percent-level (0-100)
+	, {"SoundPlay", 1, 2, NULL} // Filename [, wait]
 
 	, {"FileAppend", 2, 2, NULL} // text, filename
-	, {"FileReadLine", 3, 3, {3, 0}} // Output variable, filename, line-number
+	, {"FileReadLine", 3, 3, NULL} // Output variable, filename, line-number (custom validation, not numeric validation)
 	, {"FileCopy", 2, 3, {3, 0}} // source, dest, flag
 	, {"FileMove", 2, 3, {3, 0}} // source, dest, flag
 	, {"FileDelete", 1, 1, NULL} // filename
@@ -262,9 +263,9 @@ Action g_act[] =
 	, {"FileRemoveDir", 1, 1, NULL} // dir name
 
 	, {"FileGetAttrib", 1, 2, NULL} // OutputVar, Filespec (if blank, uses loop's current file)
-	, {"FileSetAttrib", 1, 3, NULL} // Attribute(s), FilePattern, OperateOnFolders?
+	, {"FileSetAttrib", 1, 4, NULL} // Attribute(s), FilePattern, OperateOnFolders?, Recurse? (custom validation for these last two)
 	, {"FileGetTime", 1, 3, NULL} // OutputVar, Filespec, WhichTime (modified/created/accessed)
-	, {"FileSetTime", 0, 4, {1, 0}} // datetime (YYYYMMDDHH24MISS), FilePattern, WhichTime, OperateOnFolders?
+	, {"FileSetTime", 0, 5, {1, 0}} // datetime (YYYYMMDDHH24MISS), FilePattern, WhichTime, OperateOnFolders?, Recurse?
 	, {"FileGetSize", 1, 3, NULL} // OutputVar, Filespec, B|K|M (bytes, kb, or mb)
 	, {"FileGetVersion", 1, 2, NULL} // OutputVar, Filespec
 
@@ -275,13 +276,14 @@ Action g_act[] =
 	, {"IniWrite", 4, 4, NULL}  // Value, Filespec, Section, Key
 	, {"IniDelete", 3, 3, NULL} // Filespec, Section, Key
 
-	, {"RegRead", 5, 5, NULL} // output var, ValueType, RegKey, RegSubkey, ValueName
+	, {"RegRead", 1, 5, NULL} // output var, ValueType (optional), RegKey, RegSubkey, ValueName
 	, {"RegWrite", 4, 5, NULL} // ValueType, RegKey, RegSubKey, ValueName, Value (set to blank if omitted?)
-	, {"RegDelete", 3, 3, NULL} // RegKey, RegSubKey, ValueName
+	, {"RegDelete", 2, 3, NULL} // RegKey, RegSubKey, ValueName
 
 	, {"SetTitleMatchMode", 1, 1, NULL} // Allowed values: 1, 2, slow, fast
 	, {"SetKeyDelay", 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)
 	, {"SetWinDelay", 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)
+	, {"SetControlDelay", 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)
 	, {"SetBatchLines", 1, 1, {1, 0}} // Number of script lines to execute before sleeping.
 	, {"Suspend", 0, 1, NULL} // On/Off/Toggle/Permit/Blank (blank is the same as toggle)
 	, {"Pause", 0, 1, NULL} // On/Off/Toggle/Blank (blank is the same as toggle)
@@ -294,7 +296,6 @@ Action g_act[] =
 	, {"SetScrollLockState", 0, 1, NULL} // same
 	, {"SetCapslockState", 0, 1, NULL} // same
 	, {"SetStoreCapslockMode", 1, 1, NULL} // On/Off
-	, {"ForceHotkey", 1, 1, NULL} // On/Off
 
 	, {"KeyLog", 0, 2, NULL}, {"ListLines", 0, 0, NULL}
 	, {"ListVars", 0, 0, NULL}, {"ListHotkeys", 0, 0, NULL}

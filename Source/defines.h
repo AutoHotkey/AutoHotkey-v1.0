@@ -37,7 +37,7 @@ GNU General Public License for more details.
 
 #define NAME_P "AutoHotkey"
 #define WINDOW_CLASS_NAME NAME_P
-#define NAME_VERSION "0.219"
+#define NAME_VERSION "0.2.20"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 #define EXT_AUTOIT2 ".aut"
@@ -126,6 +126,7 @@ struct global_struct
 	bool DetectHiddenText;    // Whether to detect the text of hidden child windows.
 	UINT LinesPerCycle;
 	int WinDelay;  // negative values may be used as special flags.
+	int ControlDelay;  // negative values may be used as special flags.
 	int KeyDelay;  // negative values may be used as special flags.
 	UCHAR DefaultMouseSpeed;
 	bool StoreCapslockMode;
@@ -168,10 +169,11 @@ inline void global_init(global_struct *gp)
 	// Not sure what the optimal default is.  1 seems too low (scripts would be very slow by default):
 	#define DEFAULT_BATCH_LINES 10
 	gp->LinesPerCycle = DEFAULT_BATCH_LINES;
-	gp->WinDelay = 250;  // AutoIt3's default.
+	gp->WinDelay = 100;  // AutoIt3's default is 250, which seems a little too high nowadays.
+	gp->ControlDelay = 20;
 	gp->KeyDelay = 10;   // AutoIt3's default.
 	// AutoIt3's default:
-	#define DEFAULT_MOUSE_SPEED 10
+	#define DEFAULT_MOUSE_SPEED 2
 	#define MAX_MOUSE_SPEED 100
 	#define MAX_MOUSE_SPEED_STR "100"
 	#define COORD_UNSPECIFIED (INT_MIN)

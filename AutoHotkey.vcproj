@@ -313,6 +313,9 @@
 				RelativePath=".\source\resources\icon2.ico">
 			</File>
 			<File
+				RelativePath=".\source\resources\icon_filetype.ico">
+			</File>
+			<File
 				RelativePath=".\source\resources\icon_main.ico">
 			</File>
 			<File

@@ -254,7 +254,7 @@ ResultType Line::ControlLeftClick(char *aControl, char *aTitle, char *aText
 		return OK;
 	PostMessage(control_window, WM_LBUTTONDOWN, MK_LBUTTON, 0);
 	PostMessage(control_window, WM_LBUTTONUP, 0, 0);
-	DoWinDelay;  // It seems safer and more flexible to do this even for Control commands.
+	DoControlDelay;  // It seems safer and more flexible to do this even for Control commands.
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 	return OK;
 }
@@ -263,8 +263,11 @@ ResultType Line::ControlLeftClick(char *aControl, char *aTitle, char *aText
 
 ResultType Line::ControlGetFocus(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
 {
+	Var *output_var = ResolveVarOfArg(0);
+	if (!output_var)
+		return FAIL;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
-	OUTPUT_VAR->Assign();  // Set default: blank for the output variable.
+	output_var->Assign();  // Set default: blank for the output variable.
 	DETERMINE_TARGET_WINDOW
 	if (!target_window)
 		return OK;  // Let ErrorLevel and the blank output variable tell the story.
@@ -309,7 +312,7 @@ ResultType Line::ControlGetFocus(char *aTitle, char *aText, char *aExcludeTitle,
 	size_t class_name_length = strlen(class_name);
 	snprintf(class_name + class_name_length, sizeof(class_name) - class_name_length - 1, "%d", cah.class_count);
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-	return OUTPUT_VAR->Assign(class_name);
+	return output_var->Assign(class_name);
 }
 
 
@@ -361,7 +364,7 @@ ResultType Line::ControlFocus(char *aControl, char *aTitle, char *aText
 	if (SetFocus(control_window))
 	{
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-		DoWinDelay;  // It seems safer and more flexible to do this even for Control commands.
+		DoControlDelay;  // It seems safer and more flexible to do this even for Control commands.
 	}
 
 	// Very important to detach any threads whose inputs were attached above,
@@ -394,7 +397,7 @@ ResultType Line::ControlSetText(char *aControl, char *aNewText, char *aTitle, ch
 	DWORD result;
 	SendMessageTimeout(control_window, WM_SETTEXT, (WPARAM)0, (LPARAM)aNewText
 		, SMTO_ABORTIFHUNG, 5000, &result);
-	DoWinDelay;  // It seems safer and more flexible to do this even for Control commands.
+	DoControlDelay;  // It seems safer and more flexible to do this even for Control commands.
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 	return OK;
 }
@@ -404,6 +407,9 @@ ResultType Line::ControlSetText(char *aControl, char *aNewText, char *aTitle, ch
 ResultType Line::ControlGetText(char *aControl, char *aTitle, char *aText
 	, char *aExcludeTitle, char *aExcludeText)
 {
+	Var *output_var = ResolveVarOfArg(0);
+	if (!output_var)
+		return FAIL;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 	DETERMINE_TARGET_WINDOW
 	HWND control_window = target_window ? ControlExist(target_window, aControl) : NULL;
@@ -416,9 +422,9 @@ ResultType Line::ControlGetText(char *aControl, char *aTitle, char *aText
 	// because it is able to get text from more types of controls (e.g. large edit controls):
 	VarSizeType space_needed = control_window ? GetWindowTextTimeout(control_window) + 1 : 1; // 1 for terminator.
 
-	// Set up the var, enlarging it if necessary.  If the OUTPUT_VAR is of type VAR_CLIPBOARD,
+	// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
 	// this call will set up the clipboard for writing:
-	if (OUTPUT_VAR->Assign(NULL, space_needed - 1) != OK)
+	if (output_var->Assign(NULL, space_needed - 1) != OK)
 		return FAIL;  // It already displayed the error.
 	// Fetch the text directly into the var.  Also set the length explicitly
 	// in case actual size written was off from the esimated size (since
@@ -426,23 +432,23 @@ ResultType Line::ControlGetText(char *aControl, char *aTitle, char *aText
 	// in certain circumstances, see MS docs):
 	if (control_window)
 	{
-		OUTPUT_VAR->Length() = (VarSizeType)GetWindowTextTimeout(control_window
-			, OUTPUT_VAR->Contents(), space_needed);
-		if (!OUTPUT_VAR->Length())
+		output_var->Length() = (VarSizeType)GetWindowTextTimeout(control_window
+			, output_var->Contents(), space_needed);
+		if (!output_var->Length())
 			// There was no text to get or GetWindowTextTimeout() failed.
-			*OUTPUT_VAR->Contents() = '\0';  // Safe because Assign() gave us a non-constant memory area.
+			*output_var->Contents() = '\0';  // Safe because Assign() gave us a non-constant memory area.
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 	}
 	else
 	{
-		*OUTPUT_VAR->Contents() = '\0';
-		OUTPUT_VAR->Length() = 0;
+		*output_var->Contents() = '\0';
+		output_var->Length() = 0;
 		// And leave g_ErrorLevel set to ERRORLEVEL_ERROR to distinguish a non-existent control
 		// from a one that does exist but returns no text.
 	}
 	// Consider the above to be always successful, even if the window wasn't found, except
 	// when below returns an error:
-	return OUTPUT_VAR->Close();  // In case it's the clipboard.
+	return output_var->Close();  // In case it's the clipboard.
 }
 
 
@@ -450,12 +456,15 @@ ResultType Line::ControlGetText(char *aControl, char *aTitle, char *aText
 ResultType Line::StatusBarGetText(char *aPart, char *aTitle, char *aText
 	, char *aExcludeTitle, char *aExcludeText)
 {
+	Var *output_var = ResolveVarOfArg(0);
+	if (!output_var)
+		return FAIL;
 	// Note: ErrorLevel is handled by StatusBarUtil(), below.
 	DETERMINE_TARGET_WINDOW
 	HWND control_window = target_window ? ControlExist(target_window, "msctls_statusbar321") : NULL;
 	// Call this even if control_window is NULL because in that case, it will set the output var to
 	// be blank for us:
-	StatusBarUtil(OUTPUT_VAR, control_window, atoi(aPart)); // It will handle any zero part# for us.
+	StatusBarUtil(output_var, control_window, atoi(aPart)); // It will handle any zero part# for us.
 	return OK; // Even if it fails, seems best to return OK so that subroutine can continue.
 }
 
@@ -495,6 +504,9 @@ ResultType Line::WinSetTitle(char *aTitle, char *aText, char *aNewTitle, char *a
 
 ResultType Line::WinGetTitle(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
 {
+	Var *output_var = ResolveVarOfArg(0);
+	if (!output_var)
+		return FAIL;
 	DETERMINE_TARGET_WINDOW
 	// Even if target_window is NULL, we want to continue on so that the output
 	// param is set to be the empty string, which is the proper thing to do
@@ -502,35 +514,38 @@ ResultType Line::WinGetTitle(char *aTitle, char *aText, char *aExcludeTitle, cha
 
 	// Handle the output parameter.  See the comments in ACT_CONTROLGETTEXT for details.
 	VarSizeType space_needed = target_window ? GetWindowTextLength(target_window) + 1 : 1; // 1 for terminator.
-	if (OUTPUT_VAR->Assign(NULL, space_needed - 1) != OK)
+	if (output_var->Assign(NULL, space_needed - 1) != OK)
 		return FAIL;  // It already displayed the error.
 	if (target_window)
 	{
-		OUTPUT_VAR->Length() = (VarSizeType)GetWindowText(target_window
-			, OUTPUT_VAR->Contents(), space_needed);
-		if (!OUTPUT_VAR->Length())
+		output_var->Length() = (VarSizeType)GetWindowText(target_window
+			, output_var->Contents(), space_needed);
+		if (!output_var->Length())
 			// There was no text to get or GetWindowTextTimeout() failed.
-			*OUTPUT_VAR->Contents() = '\0';  // Safe because Assign() gave us a non-constant memory area.
+			*output_var->Contents() = '\0';  // Safe because Assign() gave us a non-constant memory area.
 	}
 	else
 	{
-		*OUTPUT_VAR->Contents() = '\0';
-		OUTPUT_VAR->Length() = 0;
+		*output_var->Contents() = '\0';
+		output_var->Length() = 0;
 	}
-	return OUTPUT_VAR->Close();  // In case it's the clipboard.
+	return output_var->Close();  // In case it's the clipboard.
 }
 
 
 
 ResultType Line::WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
 {
+	Var *output_var = ResolveVarOfArg(0);
+	if (!output_var)
+		return FAIL;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 	DETERMINE_TARGET_WINDOW
 	// Even if target_window is NULL, we want to continue on so that the output
 	// variables are set to be the empty string, which is the proper thing to do
 	// rather than leaving whatever was in there before:
 	if (!target_window)
-		return OUTPUT_VAR->Assign(); // Tell it not to free the memory by not calling with "".
+		return output_var->Assign(); // Tell it not to free the memory by not calling with "".
 
 	length_and_buf_type sab;
 	sab.buf = NULL; // Tell it just to calculate the length this time around.
@@ -540,30 +555,30 @@ ResultType Line::WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char
 	if (!sab.total_length)
 	{
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-		return OUTPUT_VAR->Assign(); // Tell it not to free the memory by omitting all params.
+		return output_var->Assign(); // Tell it not to free the memory by omitting all params.
 	}
 
-	// Set up the var, enlarging it if necessary.  If the OUTPUT_VAR is of type VAR_CLIPBOARD,
+	// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
 	// this call will set up the clipboard for writing:
-	if (OUTPUT_VAR->Assign(NULL, (VarSizeType)sab.total_length) != OK)
+	if (output_var->Assign(NULL, (VarSizeType)sab.total_length) != OK)
 		return FAIL;  // It already displayed the error.
 
 	// Fetch the text directly into the var.  Also set the length explicitly
 	// in case actual size written was off from the esimated size (since
 	// GetWindowTextLength() can return more space that will actually be required
 	// in certain circumstances, see MS docs):
-	sab.buf = OUTPUT_VAR->Contents();
+	sab.buf = output_var->Contents();
 	sab.total_length = 0; // Init
-	sab.capacity = OUTPUT_VAR->Capacity(); // Because capacity might be a little larger than we asked for.
+	sab.capacity = output_var->Capacity(); // Because capacity might be a little larger than we asked for.
 	EnumChildWindows(target_window, EnumChildGetText, (LPARAM)&sab);
 
-	OUTPUT_VAR->Length() = (VarSizeType)sab.total_length;  // In case it wound up being smaller than expected.
+	output_var->Length() = (VarSizeType)sab.total_length;  // In case it wound up being smaller than expected.
 	if (sab.total_length)
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 	else
 		// Something went wrong, so make sure we set to empty string.
-		*OUTPUT_VAR->Contents() = '\0';  // Safe because Assign() gave us a non-constant memory area.
-	return OUTPUT_VAR->Close();  // In case it's the clipboard.
+		*output_var->Contents() = '\0';  // Safe because Assign() gave us a non-constant memory area.
+	return output_var->Close();  // In case it's the clipboard.
 }
 
 
@@ -601,6 +616,11 @@ BOOL CALLBACK EnumChildGetText(HWND aWnd, LPARAM lParam)
 
 ResultType Line::WinGetPos(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
 {
+	Var *output_var_x = ResolveVarOfArg(0);  // Ok if NULL.
+	Var *output_var_y = ResolveVarOfArg(1);  // Ok if NULL.
+	Var *output_var_width = ResolveVarOfArg(2);  // Ok if NULL.
+	Var *output_var_height = ResolveVarOfArg(3);  // Ok if NULL.
+
 	DETERMINE_TARGET_WINDOW
 	// Even if target_window is NULL, we want to continue on so that the output
 	// variables are set to be the empty string, which is the proper thing to do
@@ -613,41 +633,41 @@ ResultType Line::WinGetPos(char *aTitle, char *aText, char *aExcludeTitle, char 
 
 	ResultType result = OK; // Set default;
 
-	if (VARRAW_ARG1)
+	if (output_var_x)
 		if (target_window)
 		{
-			if (!VARARG1->Assign((int)rect.left))  // X position
+			if (!output_var_x->Assign((int)rect.left))  // X position
 				result = FAIL;
 		}
 		else
-			if (!VARARG1->Assign(""))
+			if (!output_var_x->Assign(""))
 				result = FAIL;
-	if (VARRAW_ARG2)
+	if (output_var_y)
 		if (target_window)
 		{
-			if (!VARARG2->Assign((int)rect.top))  // Y position
+			if (!output_var_y->Assign((int)rect.top))  // Y position
 				result = FAIL;
 		}
 		else
-			if (!VARARG2->Assign(""))
+			if (!output_var_y->Assign(""))
 				result = FAIL;
-	if (VARRAW_ARG3) // else user didn't want this value saved to an output param
+	if (output_var_width) // else user didn't want this value saved to an output param
 		if (target_window)
 		{
-			if (!VARARG3->Assign((int)rect.right - rect.left))  // Width
+			if (!output_var_width->Assign((int)rect.right - rect.left))  // Width
 				result = FAIL;
 		}
 		else
-			if (!VARARG3->Assign("")) // Set it to be empty to signal the user that the window wasn't found.
+			if (!output_var_width->Assign("")) // Set it to be empty to signal the user that the window wasn't found.
 				result = FAIL;
-	if (VARRAW_ARG4)
+	if (output_var_height)
 		if (target_window)
 		{
-			if (!VARARG4->Assign((int)rect.bottom - rect.top))  // Height
+			if (!output_var_height->Assign((int)rect.bottom - rect.top))  // Height
 				result = FAIL;
 		}
 		else
-			if (!VARARG4->Assign(""))
+			if (!output_var_height->Assign(""))
 				result = FAIL;
 
 	return result;
@@ -657,11 +677,14 @@ ResultType Line::WinGetPos(char *aTitle, char *aText, char *aExcludeTitle, char 
 
 ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int aColor, int aVariation)
 {
+	Var *output_var_x = ResolveVarOfArg(0);  // Ok if NULL.
+	Var *output_var_y = ResolveVarOfArg(1);  // Ok if NULL.
+
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR2); // Set default ErrorLevel.  2 means error other than "color not found".
-	if (VARRAW_ARG1)
-		OUTPUT_VAR->Assign();  // Init to empty string regardless of whether we succeed here.
-	if (VARRAW_ARG2)
-		OUTPUT_VAR2->Assign(); // Same.
+	if (output_var_x)
+		output_var_x->Assign();  // Init to empty string regardless of whether we succeed here.
+	if (output_var_y)
+		output_var_y->Assign(); // Same.
 
 	// Always adjust coords to reflect the position of the foreground window because AutoHotkey
 	// doesn't yet support AutoIt3's absolute-screen-coords mode:
@@ -725,12 +748,12 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int a
 			if (match_found) // This pixel matches one of the specified color(s).
 			{
 				ReleaseDC(NULL, hdc);
-				if (VARRAW_ARG1)
+				if (output_var_x)
 					// Adjust coords to make them relative to the position of the target window:
-					if (!OUTPUT_VAR->Assign(xpos - rect.left))
+					if (!output_var_x->Assign(xpos - rect.left))
 						result = FAIL;
-				if (VARRAW_ARG2)
-					if (!OUTPUT_VAR2->Assign(ypos - rect.top))
+				if (output_var_y)
+					if (!output_var_y->Assign(ypos - rect.top))
 						result = FAIL;
 				if (result == OK)
 					g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
@@ -751,8 +774,11 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int a
 ResultType Line::PixelGetColor(int aX, int aY)
 // This has been adapted from the AutoIt3 source.
 {
+	Var *output_var = ResolveVarOfArg(0);
+	if (!output_var)
+		return FAIL;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
-	OUTPUT_VAR->Assign(); // Init to empty string regardless of whether we succeed here.
+	output_var->Assign(); // Init to empty string regardless of whether we succeed here.
 
 	RECT rect;
 	GetWindowRect(GetForegroundWindow(), &rect);
@@ -762,7 +788,7 @@ ResultType Line::PixelGetColor(int aX, int aY)
 	HDC hdc = GetDC(NULL);
 	if (!hdc)
 		return OK;  // Let ErrorLevel tell the story.
-	ResultType result = OUTPUT_VAR->Assign((int)GetPixel(hdc, aX, aY));
+	ResultType result = output_var->Assign((int)GetPixel(hdc, aX, aY));
 	ReleaseDC(NULL, hdc);
 
 	if (result == OK)
@@ -810,7 +836,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			if (!last_backslash)
 				break;
 			last_backslash[1] = '\0';
-			snprintfcat(buf, sizeof(buf), "README.htm");
+			snprintfcat(buf, sizeof(buf), "AutoHotkey.chm");
 			g_script.ActionExec(buf, "");
 			return 0;
 		case ID_TRAY_SUSPEND:
@@ -1214,7 +1240,7 @@ INT_PTR CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lPa
 				if (!g_script.mIsAutoIt2)
 					g_ErrorLevel->Assign(LOWORD(wParam) == IDCANCEL ? ERRORLEVEL_ERROR : ERRORLEVEL_NONE);
 				VarSizeType space_needed = SET_OUTPUT_VAR_TO_BLANK ? 1 : GetWindowTextLength(hControl) + 1;
-				// Set up the var, enlarging it if necessary.  If the OUTPUT_VAR is of type VAR_CLIPBOARD,
+				// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
 				// this call will set up the clipboard for writing:
 				if (INPUTBOX_VAR->Assign(NULL, space_needed - 1) != OK)
 					// It will have already displayed the error.  Displaying errors in a callback
@@ -1270,7 +1296,7 @@ ResultType Line::MouseClickDrag(vk_type aVK, int aX1, int aY1, int aX2, int aY2,
 		return FAIL;
 
 	// Move the mouse to the start position if we're not starting in the current position:
-	if (aX1 != COORD_UNSPECIFIED && aY1 != COORD_UNSPECIFIED) // Otherwise don't bother.
+	if (aX1 != COORD_UNSPECIFIED && aY1 != COORD_UNSPECIFIED)
 		MouseMove(aX1, aY1, aSpeed);
 
 	// The drag operation fails unless speed is now >=2
@@ -1505,9 +1531,12 @@ ResultType Line::MouseGetPos()
 // Returns OK or FAIL.
 // This has been adapted from the AutoIt3 source.
 {
-	if (!VARRAW_ARG1 && !VARRAW_ARG2)
-		// This is an error because it was previously verified that at least one is non-blank:
-		return LineError("MouseGetPos() was called without any output vars." PLEASE_REPORT ERR_ABORT);
+	// Caller should already have ensured that at least one of these will be non-NULL.
+	// The only time this isn't true is for dynamically-built variable names.  In that
+	// case, we don't worry about it if it's NULL, since the user will already have been
+	// warned:
+	Var *output_var_x = ResolveVarOfArg(0);  // Ok if NULL.
+	Var *output_var_y = ResolveVarOfArg(1);  // Ok if NULL.
 
 	RECT rect;
 	POINT pt;
@@ -1520,11 +1549,11 @@ ResultType Line::MouseGetPos()
 
 	ResultType result = OK; // Set default;
 
-	if (VARRAW_ARG1) // else the user didn't want the X coordinate, just the Y.
-		if (!VARARG1->Assign((int)(pt.x - rect.left)))
+	if (output_var_x) // else the user didn't want the X coordinate, just the Y.
+		if (!output_var_x->Assign((int)(pt.x - rect.left)))
 			result = FAIL;
-	if (VARRAW_ARG2) // else the user didn't want the Y coordinate, just the X.
-		if (!VARARG2->Assign((int)(pt.y - rect.top)))
+	if (output_var_y) // else the user didn't want the Y coordinate, just the X.
+		if (!output_var_y->Assign((int)(pt.y - rect.top)))
 			result = FAIL;
 
 	return result;
@@ -1539,22 +1568,24 @@ ResultType Line::MouseGetPos()
 ResultType Line::PerformAssign()
 // Returns OK or FAIL.
 {
-	//if (OUTPUT_VAR == NULL)
-	//	return LineError("PerformAssign() was called with a NULL target variable." PLEASE_REPORT ERR_ABORT);
-
-	// Find out if OUTPUT_VAR (the var being assigned to) is dereferenced (mentioned) in
-	// this line's first arg.  If it isn't, things are much simpler.  Note:
-	// If OUTPUT_VAR is the clipboard, it can be used in the source deref(s) while also
+	Var *output_var = ResolveVarOfArg(0);
+	if (!output_var)
+		return FAIL;
+	// Find out if output_var (the var being assigned to) is dereferenced (mentioned) in this line's
+	// second arg, which is the value to be assigned.  If it isn't, things are much simpler.
+	// Note: Since Arg#2 for this function is never an output or an input variable, it is not
+	// necessary to check whether its the same variable as Arg#1 for this determination.
+	// Note: If output_var is the clipboard, it can be used in the source deref(s) while also
 	// being the target -- without having to use the deref buffer -- because the clipboard
 	// has it's own temp buffer: the memory area to which the result is written.
 	// The prior content of the clipboard remains available in its other memory area
 	// until Commit() is called (i.e. long enough for our purposes):
 	bool target_is_involved_in_source = false;
-	if (OUTPUT_VAR->mType != VAR_CLIPBOARD && mArgc > 1)
+	if (output_var->mType != VAR_CLIPBOARD && mArgc > 1)
 		// It has a second arg, which in this case is the value to be assigned to the var.
-		// Examine any derefs that the second arg has to see if OUTPUT_VAR is mentioned:
+		// Examine any derefs that the second arg has to see if output_var is mentioned:
 		for (DerefType *deref = mArg[1].deref; deref && deref->marker; ++deref)
-			if (deref->var == OUTPUT_VAR)
+			if (deref->var == output_var)
 			{
 				target_is_involved_in_source = true;
 				break;
@@ -1567,11 +1598,11 @@ ResultType Line::PerformAssign()
 	// the literal string.  In addition to being quicker than the ExpandArgs()
 	// method, this approach would avoid the possibility of needing to expand the
 	// deref buffer just to handle the operation.  However, if that is ever done,
-	// be sure to check that OUTPUT_VAR is mentioned only once in the list of derefs.
+	// be sure to check that output_var is mentioned only once in the list of derefs.
 	// For example, something like this would probably be much easier to
 	// implement by using ExpandArgs(): Var1 = xxxx Var1 Var2 Var1 xxxx.
 	// So the main thing to be possibly later improved here is the case where
-	// OUTPUT_VAR is mentioned only once in the deref list:
+	// output_var is mentioned only once in the deref list:
 	VarSizeType space_needed;
 	if (target_is_involved_in_source)
 	{
@@ -1587,38 +1618,38 @@ ResultType Line::PerformAssign()
 	// the empty string uses up 1 char for its zero terminator).  The below relies upon this fact.
 
 	if (space_needed <= 1) // Variable is being assigned the empty string (or a deref that resolves to it).
-		return OUTPUT_VAR->Assign("");  // If the var is of large capacity, this will also free its memory.
+		return output_var->Assign("");  // If the var is of large capacity, this will also free its memory.
 
 	if (target_is_involved_in_source)
 		// It was already dereferenced above, so use ARG2, which points to the
 		// derefed contents of ARG2 (i.e. the data to be assigned).
 		// Seems better to trim even if not AutoIt2, since that's currently the only way easy way
 		// to trim things:
-		return OUTPUT_VAR->Assign(ARG2, space_needed - 1, g.AutoTrim); // , g_script.mIsAutoIt2);
+		return output_var->Assign(ARG2, space_needed - 1, g.AutoTrim); // , g_script.mIsAutoIt2);
 
 	// Otherwise:
-	// If we're here, OUTPUT_VAR->mType must be clipboard or normal because otherwise
+	// If we're here, output_var->mType must be clipboard or normal because otherwise
 	// the validation during load would have prevented the script from loading:
 
-	// First set everything up for the operation.  If OUTPUT_VAR is the clipboard, this
+	// First set everything up for the operation.  If output_var is the clipboard, this
 	// will prepare the clipboard for writing:
-	if (OUTPUT_VAR->Assign(NULL, space_needed - 1) != OK)
+	if (output_var->Assign(NULL, space_needed - 1) != OK)
 		return FAIL;
 	// Expand Arg2 directly into the var.  Also set the length explicitly
 	// in case actual size written was off from the esimated size, perhaps
 	// due to a failure or size discrepancy between the deref size-estimate
-	// and the actual deref itself.  Note: If OUTPUT_VAR is the clipboard,
+	// and the actual deref itself.  Note: If output_var is the clipboard,
 	// it's probably okay if the below actually writes less than the size of
 	// the mem that has already been allocated for the new clipboard contents
 	// That might happen due to a failure or size discrepancy between the
 	// deref size-estimate and the actual deref itself:
-	OUTPUT_VAR->Length() = (VarSizeType)(ExpandArg(OUTPUT_VAR->Contents(), 1) - OUTPUT_VAR->Contents() - 1);
+	output_var->Length() = (VarSizeType)(ExpandArg(output_var->Contents(), 1) - output_var->Contents() - 1);
 	if (g.AutoTrim)
 	{
-		trim(OUTPUT_VAR->Contents());
-		OUTPUT_VAR->Length() = (VarSizeType)strlen(OUTPUT_VAR->Contents());
+		trim(output_var->Contents());
+		output_var->Length() = (VarSizeType)strlen(output_var->Contents());
 	}
-	return OUTPUT_VAR->Close();  // i.e. Consider this function to be always successful unless this fails.
+	return output_var->Close();  // i.e. Consider this function to be always successful unless this fails.
 }
 
 
@@ -1737,8 +1768,11 @@ ResultType Line::DriveSpaceFree(char *aPath)
 // have the same amount of free space as its root drive.  However, I'm not sure if this
 // method here actually takes that into account.
 {
+	Var *output_var = ResolveVarOfArg(0);
+	if (!output_var)
+		return FAIL;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
-	OUTPUT_VAR->Assign(); // Init to empty string regardless of whether we succeed here.
+	output_var->Assign(); // Init to empty string regardless of whether we succeed here.
 
 	if (!aPath || !*aPath) return OK;  // Let ErrorLevel tell the story.  Below relies on this check.
 
@@ -1769,15 +1803,15 @@ ResultType Line::DriveSpaceFree(char *aPath)
 			return OK; // Let ErrorLevel tell the story.
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 		// Casting this way limits us to 2,097,152 gigabytes in size:
-		return OUTPUT_VAR->Assign(   (int)((__int64)(uiFree.QuadPart) / (__int64)(1024*1024))   );
+		return output_var->Assign(   (int)((unsigned __int64)(uiFree.QuadPart) / (unsigned __int64)(1024*1024))   );
 	}
 	else
 	{
 		if (!GetDiskFreeSpace(buf, &dwSectPerClust, &dwBytesPerSect, &dwFreeClusters, &dwTotalClusters))
 			return OK; // Let ErrorLevel tell the story.
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-		return OUTPUT_VAR->Assign(   (int)((__int64)(dwFreeClusters * dwSectPerClust * dwBytesPerSect)
-			/ (__int64)(1024*1024))   );
+		return output_var->Assign(   (int)((unsigned __int64)(dwFreeClusters * dwSectPerClust * dwBytesPerSect)
+			/ (unsigned __int64)(1024*1024))   );
 	}
 #endif	
 
@@ -1786,8 +1820,59 @@ ResultType Line::DriveSpaceFree(char *aPath)
 
 
 
+ResultType Line::SoundPlay(char *aFilespec, bool aSleepUntilDone)
+{
+	// Adapted from the AutoIt3 source.
+	// See http://msdn.microsoft.com/library/default.asp?url=/library/en-us/multimed/htm/_win32_play.asp
+	// for some documentation mciSendString() and related.
+	#define SOUNDPLAY_ALIAS "AHK_PlayMe"
+	char buf[MAX_PATH * 2];
+	mciSendString("status " SOUNDPLAY_ALIAS " mode", buf, sizeof(buf), NULL);
+	if (*buf) // "playing" or "stopped" (so close it before trying to re-open with a new aFilespec).
+		mciSendString("close " SOUNDPLAY_ALIAS, NULL, 0, NULL);
+	snprintf(buf, sizeof(buf), "open \"%s\" alias " SOUNDPLAY_ALIAS, aFilespec);
+	if (mciSendString(buf, NULL, 0, NULL)) // Failure.
+	{
+		g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+		return OK;  // OK since this isn't a critical error.
+	}
+	if (mciSendString("play " SOUNDPLAY_ALIAS, NULL, 0, NULL)) // Failure.
+	{
+		g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+		return OK;  // OK since this isn't a critical error.
+	}
+	// Otherwise, the sound is now playing.
+	g_ErrorLevel->Assign(ERRORLEVEL_NONE);
+	if (!aSleepUntilDone)
+		return OK;
+	// Otherwise we're to wait until the sound is done.  To allow our app to remain responsive
+	// during this time, and so that the keyboard and mouse hook (if installed) won't cause
+	// key & mouse lag, we do this in a loop rather than AutoIt3's method:
+	// "mciSendString("play " SOUNDPLAY_ALIAS " wait",NULL,0,NULL)"
+	for (;;)
+	{
+		mciSendString("status " SOUNDPLAY_ALIAS " mode", buf, sizeof(buf), NULL);
+		if (!*buf) // Probably can't happen given the state we're in.
+			break;
+		if (!strcmp(buf, "stopped")) // The sound is done playing.
+		{
+			mciSendString("close " SOUNDPLAY_ALIAS, NULL, 0, NULL);
+			break;
+		}
+		// Sleep a little longer than normal because I'm not sure how much overhead
+		// and CPU utilization the above incurs:
+		MsgSleep(20);
+	}
+	return OK;
+}
+
+
+
 ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir)
 {
+	Var *output_var = ResolveVarOfArg(0);
+	if (!output_var)
+		return FAIL;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 	if (g_nFileDialogs >= MAX_FILEDIALOGS)
 	{
@@ -1846,7 +1931,7 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir)
 		// It seems best to clear the variable in these cases, since this is a scripting
 		// language where performance is not the primary goal.  So do that and return OK,
 		// but leave ErrorLevel set to ERRORLEVEL_ERROR.
-		return OUTPUT_VAR->Assign(); // Tell it not to free the memory by not calling with "".
+		return output_var->Assign(); // Tell it not to free the memory by not calling with "".
 	else
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate that the user pressed OK vs. CANCEL.
 
@@ -1865,7 +1950,7 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir)
 				break;
 		}
 	}
-	return OUTPUT_VAR->Assign(ofn.lpstrFile);
+	return output_var->Assign(ofn.lpstrFile);
 }
 
 
@@ -1873,9 +1958,12 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir)
 ResultType Line::FileSelectFolder(char *aRootDir, bool aAllowCreateFolder, char *aGreeting)
 // Adapted from the AutoIt3 source.
 {
+	Var *output_var = ResolveVarOfArg(0);
+	if (!output_var)
+		return FAIL;
 	if (!aRootDir) aRootDir = "";
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
-	if (!OUTPUT_VAR->Assign())  // Initialize the output variable.
+	if (!output_var->Assign())  // Initialize the output variable.
 		return FAIL;
 
 	if (g_nFolderDialogs >= MAX_FOLDERDIALOGS)
@@ -1943,7 +2031,7 @@ ResultType Line::FileSelectFolder(char *aRootDir, bool aAllowCreateFolder, char 
 	pMalloc->Release();
 
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-	return OUTPUT_VAR->Assign(Result);
+	return output_var->Assign(Result);
 }
 
 
@@ -1989,6 +2077,9 @@ ResultType Line::FileReadLine(char *aFilespec, char *aLineNumber)
 // kind of unexpected and more serious error occurs, such as variable-out-of-memory,
 // that will cause FAIL to be returned.
 {
+	Var *output_var = ResolveVarOfArg(0);
+	if (!output_var)
+		return FAIL;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 	UINT line_number = atoi(aLineNumber);
 	if (line_number <= 0)
@@ -2000,7 +2091,8 @@ ResultType Line::FileReadLine(char *aFilespec, char *aLineNumber)
 	// Remember that once the first call to MsgSleep() is done, a new hotkey subroutine
 	// may fire and suspend what we're doing here.  Such a subroutine might also overwrite
 	// the values our params, some of which may be in the deref buffer.  So be sure not
-	// to refer to those strings once MsgSleep() has been done, below:
+	// to refer to those strings once MsgSleep() has been done, below.  Alternatively,
+	// a copy of such params can be made using our own stack space.
 
 	// If the keyboard or mouse hook is installed, pause periodically during potentially long
 	// operations such as this one, to give the msg pump a chance to process keyboard and
@@ -2047,11 +2139,11 @@ ResultType Line::FileReadLine(char *aFilespec, char *aLineNumber)
 		buf[--buf_length] = '\0';
 	if (!buf_length)
 	{
-		if (!OUTPUT_VAR->Assign()) // Explicitly call it this way so that it won't free the memory.
+		if (!output_var->Assign()) // Explicitly call it this way so that it won't free the memory.
 			return FAIL;
 	}
 	else
-		if (!OUTPUT_VAR->Assign(buf, (VarSizeType)buf_length))
+		if (!output_var->Assign(buf, (VarSizeType)buf_length))
 			return FAIL;
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 	return OK;
@@ -2089,7 +2181,7 @@ ResultType Line::FileDelete(char *aFilePattern)
 	}
 
 	// Otherwise aFilePattern contains wildcards, so we'll search for all matches and delete them.
-	char file_path[MAX_PATH * 2];  // Give extra room in case OS supports extra-long files?
+	char file_path[MAX_PATH * 2];  // Give extra room in case OS supports extra-long filenames?
 	char target_filespec[MAX_PATH * 2];
 	if (strlen(aFilePattern) >= sizeof(file_path))
 		return OK; // Return OK because this is non-critical.  Let the above ErrorLevel indicate the problem.
@@ -2150,8 +2242,11 @@ ResultType Line::FileCopy(char *aSource, char *aDest, char *aFlag)
 
 ResultType Line::FileGetAttrib(char *aFilespec)
 {
+	Var *output_var = ResolveVarOfArg(0);
+	if (!output_var)
+		return FAIL;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default
-	OUTPUT_VAR->Assign(); // Init to be blank, in case of failure.
+	output_var->Assign(); // Init to be blank, in case of failure.
 
 	if (!aFilespec || !*aFilespec)
 		return OK;  // Let ErrorLevel indicate an error, since this is probably not what the user intended.
@@ -2160,47 +2255,52 @@ ResultType Line::FileGetAttrib(char *aFilespec)
 	if (attr == 0xFFFFFFFF)  // Failure, probably because file doesn't exist.
 		return OK;  // Let ErrorLevel tell the story.
 
-	char attr_string[128] = "";
-	size_t attr_string_length = 0;
-
-	if (attr & FILE_ATTRIBUTE_READONLY)
-		attr_string[attr_string_length++] = 'R';
-	if (attr & FILE_ATTRIBUTE_ARCHIVE)
-		attr_string[attr_string_length++] = 'A';
-	if (attr & FILE_ATTRIBUTE_SYSTEM)
-		attr_string[attr_string_length++] = 'S';
-	if (attr & FILE_ATTRIBUTE_HIDDEN)
-		attr_string[attr_string_length++] = 'H';
-	if (attr & FILE_ATTRIBUTE_NORMAL)
-		attr_string[attr_string_length++] = 'N';
-	if (attr & FILE_ATTRIBUTE_DIRECTORY)
-		attr_string[attr_string_length++] = 'D';
-	if (attr & FILE_ATTRIBUTE_OFFLINE)
-		attr_string[attr_string_length++] = 'O';
-	if (attr & FILE_ATTRIBUTE_COMPRESSED)
-		attr_string[attr_string_length++] = 'C';
-	if (attr & FILE_ATTRIBUTE_TEMPORARY)
-		attr_string[attr_string_length++] = 'T';
-
-	attr_string[attr_string_length] = '\0';  // Perform the final termination.
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE);
-	return OUTPUT_VAR->Assign(attr_string);
+	char attr_string[128];
+	return output_var->Assign(FileAttribToStr(attr_string, attr));
 }
 
 
 
-ResultType Line::FileSetAttrib(char *aAttributes, char *aFilePattern, bool aOperateOnFolders)
+int Line::FileSetAttrib(char *aAttributes, char *aFilePattern, FileLoopModeType aOperateOnFolders
+	, bool aDoRecurse, bool aCalledRecursively)
+// Returns the number of files and folders that could not be changed due to an error.
+// Current limitation: It will not recurse into subfolders unless their names also match
+// aFilePattern.
 {
-	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default
-	if (!aFilePattern || !*aFilePattern)
-		return OK;  // Let ErrorLevel indicate an error, since this is probably not what the user intended.
+	// Making this static is not friendly to reentrant calls to this function (i.e. calls maded
+	// as a consequence of the current script subroutine being interrupted by another during
+	// this instance's MsgSleep()).  However, it doesn't seem to be that much of a consequence
+	// since the exact interval period of the MsgSleep()'s isn't that important.  It's also
+	// pretty unlikely that the interrupting subroutine will also just happen to call this
+	// function rather than some other.  On the other hand, we don't do failure_count as a
+	// static because we want its value to be 100% accurate even if reentrancy occurs:
+	static int files_considered;
+	if (!aCalledRecursively)  // i.e. Only need to do this if we're not called by ourself:
+	{
+		files_considered = 0;
+		g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default
+		if (!aFilePattern || !*aFilePattern)
+			return 0;  // Let ErrorLevel indicate an error, since this is probably not what the user intended.
+		if (aOperateOnFolders == FILE_LOOP_INVALID) // In case runtime dereference of a var was an invalid value.
+			aOperateOnFolders = FILE_LOOP_FILES_ONLY;  // Set default.
+	}
 
-	// Give extra room in some of these vars, in case OS supports extra-long files:
+	// Related to the comment at the top: Since the script subroutine that resulted in the call to
+	// this function can be interrupted during our MsgSleep(), make a copy of any params that might
+	// currently point directly to the deref buffer.  This is done because their contents might
+	// be overwritten by the interrupting subroutine:
+	char attributes[64];
+	strlcpy(attributes, aAttributes, sizeof(attributes));
+	char file_pattern[MAX_PATH * 2];  // In case OS supports extra-long filenames.
+	strlcpy(file_pattern, aFilePattern, sizeof(file_pattern));
+
+	// Give extra room in some of these vars, in case OS supports extra-long filenames:
 	char file_path[MAX_PATH * 2];
 	char target_filespec[MAX_PATH * 2];
-	if (strlen(aFilePattern) >= sizeof(file_path))
-		return OK; // Return OK because this is non-critical.  Let the above ErrorLevel indicate the problem.
-	strlcpy(file_path, aFilePattern, sizeof(file_path));
+	if (strlen(file_pattern) >= sizeof(file_path))
+		return 0; // Let the above ErrorLevel indicate the problem.
+	strlcpy(file_path, file_pattern, sizeof(file_path));
 	char *last_backslash = strrchr(file_path, '\\');
 	// Remove the filename and/or wildcard part.   But leave the trailing backslash on it for
 	// consistency with below:
@@ -2209,22 +2309,54 @@ ResultType Line::FileSetAttrib(char *aAttributes, char *aFilePattern, bool aOper
 	else // Use current working directory, e.g. if user specified only *.*
 		*file_path = '\0';
 
-	if (!StrChrAny(aFilePattern, "?*"))
-		aOperateOnFolders = true; // Since no wildcards, always operate on this single item even if it's a folder.
+	// For use with aDoRecurse, get just the naked file name/pattern:
+	char *naked_filename_or_pattern = strrchr(file_pattern, '\\');
+	if (naked_filename_or_pattern)
+		++naked_filename_or_pattern;
+	else
+		naked_filename_or_pattern = file_pattern;
+
+	if (!StrChrAny(naked_filename_or_pattern, "?*"))
+		// Since no wildcards, always operate on this single item even if it's a folder.
+		aOperateOnFolders = FILE_LOOP_FILES_AND_FOLDERS;
+
+	int batch_size, sleep_duration;
+	if (Hotkey::HookIsActive())
+	{
+		batch_size = 100; // i.e. try to minimize keyboard & mouse lag by sleeping more often.
+		sleep_duration = 10;
+	}
+	else
+	{
+		batch_size = 1000;
+		sleep_duration = -1; // Since all we want to do is check messages.
+	}
 
 	WIN32_FIND_DATA current_file;
-	HANDLE file_search = FindFirstFile(aFilePattern, &current_file);
+	HANDLE file_search = FindFirstFile(file_pattern, &current_file);
 	bool file_found = (file_search != INVALID_HANDLE_VALUE);
-	int failure_count = 0;
 	char *cp;
+	int failure_count = 0;
 	enum attrib_modes {ATTRIB_MODE_NONE, ATTRIB_MODE_ADD, ATTRIB_MODE_REMOVE, ATTRIB_MODE_TOGGLE};
 	attrib_modes mode = ATTRIB_MODE_NONE;
 
-	for (; file_found; file_found = FindNextFile(file_search, &current_file))
+	for (; file_found; file_found = FindNextFile(file_search, &current_file), ++files_considered)
 	{
-		if (!aOperateOnFolders && (current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
-			continue;
-		for (cp = aAttributes; *cp; ++cp)
+		if (files_considered && !(files_considered % batch_size))
+			MsgSleep(sleep_duration); // Allows the program to be responsive even during a very long operation.
+		if (current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+		{
+			if (!strcmp(current_file.cFileName, "..") || !strcmp(current_file.cFileName, "."))
+				continue; // Never operate upon or recurse into these.
+			// Regardless of whether this folder will be recursed into, if this param
+			// is false, this folder's own attributes will not be affected:
+			if (aOperateOnFolders == FILE_LOOP_FILES_ONLY)
+				continue;
+		}
+		else // It's a file, not a folder.
+			if (aOperateOnFolders == FILE_LOOP_FOLDERS_ONLY)
+				continue;
+		for (cp = attributes; *cp; ++cp)
 		{
 			switch (toupper(*cp))
 			{
@@ -2297,17 +2429,54 @@ ResultType Line::FileSetAttrib(char *aAttributes, char *aFilePattern, bool aOper
 
 	if (file_search != INVALID_HANDLE_VALUE) // In case the loop had zero iterations.
 		FindClose(file_search);
-	g_ErrorLevel->Assign(failure_count); // i.e. indicate success if there were no failures.
-	return OK;
+
+	if (aDoRecurse)
+	{
+		// Now that the base directory of aFilePattern has been processed, recurse into
+		// any subfolders to look for the same pattern.  Create a new pattern (don't reuse
+		// file_pattern since naked_filename_or_pattern points into it) to be *.* so that
+		// we can find all subfolders, not just those matching the original pattern:
+		char all_file_pattern[MAX_PATH * 2];  // In case OS supports extra-long filenames.
+		snprintf(all_file_pattern, sizeof(all_file_pattern), "%s*.*", file_path);
+		file_search = FindFirstFile(all_file_pattern, &current_file);
+		file_found = (file_search != INVALID_HANDLE_VALUE);
+		for (; file_found; file_found = FindNextFile(file_search, &current_file), ++files_considered)
+		{
+			if (files_considered && !(files_considered % batch_size))
+				MsgSleep(sleep_duration); // Allows the program to be responsive even during a very long operation.
+			if (!(current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+				continue;
+			if (!strcmp(current_file.cFileName, "..") || !strcmp(current_file.cFileName, "."))
+				continue; // Never recurse into these.
+			// This will build the string CurrentDir+SubDir+FilePatternOrName.
+			// If FilePatternOrName doesn't contain a wildcard, the recursion
+			// process will attempt to operate on the originally-specified
+			// single filename or folder name if it occurs anywhere else in the
+			// tree, e.g. recursing C:\Temp\temp.txt would affect all occurences
+			// of temp.txt both in C:\Temp and any subdirectories it might contain:
+			snprintf(target_filespec, sizeof(target_filespec), "%s%s\\%s"
+				, file_path, current_file.cFileName, naked_filename_or_pattern);
+			failure_count += FileSetAttrib(attributes, target_filespec, aOperateOnFolders, aDoRecurse, true);
+		}
+		if (file_search != INVALID_HANDLE_VALUE) // In case the loop had zero iterations.
+			FindClose(file_search);
+	}
+
+	if (!aCalledRecursively) // i.e. Only need to do this if we're returning to top-level caller:
+		g_ErrorLevel->Assign(failure_count); // i.e. indicate success if there were no failures.
+	return failure_count;
 }
 
 
 
-ResultType Line::FileGetTime(char *aFilespec, char *aWhichTime)
+ResultType Line::FileGetTime(char *aFilespec, char aWhichTime)
 // Adapted from the AutoIt3 source.
 {
+	Var *output_var = ResolveVarOfArg(0);
+	if (!output_var)
+		return FAIL;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default
-	OUTPUT_VAR->Assign(); // Init to be blank, in case of failure.
+	output_var->Assign(); // Init to be blank, in case of failure.
 
 	if (!aFilespec || !*aFilespec)
 		return OK;  // Let ErrorLevel indicate an error, since this is probably not what the user intended.
@@ -2334,7 +2503,7 @@ ResultType Line::FileGetTime(char *aFilespec, char *aWhichTime)
 	}
 
 	FILETIME local_file_time;
-	switch (toupper(*aWhichTime))
+	switch (toupper(aWhichTime))
 	{
 	case 'C': // File's creation time.
 		FileTimeToLocalFileTime(&ftCreationTime, &local_file_time);
@@ -2348,36 +2517,63 @@ ResultType Line::FileGetTime(char *aFilespec, char *aWhichTime)
 
     g_ErrorLevel->Assign(ERRORLEVEL_NONE);  // Indicate success.
 	char local_file_time_string[128];
-	return OUTPUT_VAR->Assign(FileTimeToYYYYMMDD(local_file_time_string, &local_file_time));
+	return output_var->Assign(FileTimeToYYYYMMDD(local_file_time_string, &local_file_time));
 }
 
 
 
-ResultType Line::FileSetTime(char *aYYYYMMDD, char *aFilePattern, char *aWhichTime, bool aOperateOnFolders)
+int Line::FileSetTime(char *aYYYYMMDD, char *aFilePattern, char aWhichTime
+	, FileLoopModeType aOperateOnFolders, bool aDoRecurse, bool aCalledRecursively)
+// Returns the number of files and folders that could not be changed due to an error.
+// Current limitation: It will not recurse into subfolders unless their names also match
+// aFilePattern.
 {
-	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default
-	if (!aFilePattern || !*aFilePattern)
-		return OK;  // Let ErrorLevel indicate an error, since this is probably not what the user intended.
+	// Making this static is not friendly to reentrant calls to this function (i.e. calls maded
+	// as a consequence of the current script subroutine being interrupted by another during
+	// this instance's MsgSleep()).  However, it doesn't seem to be that much of a consequence
+	// since the exact interval period of the MsgSleep()'s isn't that important.  It's also
+	// pretty unlikely that the interrupting subroutine will also just happen to call this
+	// function rather than some other.  On the other hand, we don't do failure_count as a
+	// static because we want its value to be 100% accurate even if reentrancy occurs:
+	static int files_considered;
+	if (!aCalledRecursively)  // i.e. Only need to do this if we're not called by ourself:
+	{
+		files_considered = 0;
+		g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default
+		if (!aFilePattern || !*aFilePattern)
+			return 0;  // Let ErrorLevel indicate an error, since this is probably not what the user intended.
+		if (aOperateOnFolders == FILE_LOOP_INVALID) // In case runtime dereference of a var was an invalid value.
+			aOperateOnFolders = FILE_LOOP_FILES_ONLY;  // Set default.
+	}
+
+	// Related to the comment at the top: Since the script subroutine that resulted in the call to
+	// this function can be interrupted during our MsgSleep(), make a copy of any params that might
+	// currently point directly to the deref buffer.  This is done because their contents might
+	// be overwritten by the interrupting subroutine:
+	char yyyymmdd[64]; // Even do this one since its value is passed recursively in calls to self.
+	strlcpy(yyyymmdd, aYYYYMMDD, sizeof(yyyymmdd));
+	char file_pattern[MAX_PATH * 2];  // In case OS supports extra-long filenames.
+	strlcpy(file_pattern, aFilePattern, sizeof(file_pattern));
 
 	FILETIME ft, ftUTC;
-	if (*aYYYYMMDD)
+	if (*yyyymmdd)
 	{
 		// Convert the arg into the time struct as local (non-UTC) time:
-		if (!YYYYMMDDToFileTime(aYYYYMMDD, &ft))
-			return OK;  // Let ErrorLevel tell the story.
+		if (!YYYYMMDDToFileTime(yyyymmdd, &ft))
+			return 0;  // Let ErrorLevel tell the story.
 		// Convert from local to UTC:
 		if (!LocalFileTimeToFileTime(&ft, &ftUTC))
-			return OK;  // Let ErrorLevel tell the story.
+			return 0;  // Let ErrorLevel tell the story.
 	}
 	else // User wants to use the current time (i.e. now) as the new timestamp.
 		GetSystemTimeAsFileTime(&ftUTC);
 
 	// This following section is very similar to that in FileSetAttrib and FileDelete:
-	// Give extra room in some of these vars, in case OS supports extra-long files:
+	// Give extra room in some of these vars, in case OS supports extra-long filenames:
 	char file_path[MAX_PATH * 2];
 	char target_filespec[MAX_PATH * 2];
 	if (strlen(aFilePattern) >= sizeof(file_path))
-		return OK; // Return OK because this is non-critical.  Let the above ErrorLevel indicate the problem.
+		return 0; // Return OK because this is non-critical.  Let the above ErrorLevel indicate the problem.
 	strlcpy(file_path, aFilePattern, sizeof(file_path));
 	char *last_backslash = strrchr(file_path, '\\');
 	// Remove the filename and/or wildcard part.   But leave the trailing backslash on it for
@@ -2387,8 +2583,28 @@ ResultType Line::FileSetTime(char *aYYYYMMDD, char *aFilePattern, char *aWhichTi
 	else // Use current working directory, e.g. if user specified only *.*
 		*file_path = '\0';
 
-	if (!StrChrAny(aFilePattern, "?*"))
-		aOperateOnFolders = true; // Since no wildcards, always operate on this single item even if it's a folder.
+	// For use with aDoRecurse, get just the naked file name/pattern:
+	char *naked_filename_or_pattern = strrchr(file_pattern, '\\');
+	if (naked_filename_or_pattern)
+		++naked_filename_or_pattern;
+	else
+		naked_filename_or_pattern = file_pattern;
+
+	if (!StrChrAny(naked_filename_or_pattern, "?*"))
+		// Since no wildcards, always operate on this single item even if it's a folder.
+		aOperateOnFolders = FILE_LOOP_FILES_AND_FOLDERS;
+
+	int batch_size, sleep_duration;
+	if (Hotkey::HookIsActive())
+	{
+		batch_size = 100; // i.e. try to minimize keyboard & mouse lag by sleeping more often.
+		sleep_duration = 10;
+	}
+	else
+	{
+		batch_size = 1000;
+		sleep_duration = -1; // Since all we want to do is check messages.
+	}
 
 	WIN32_FIND_DATA current_file;
 	HANDLE file_search = FindFirstFile(aFilePattern, &current_file);
@@ -2396,10 +2612,23 @@ ResultType Line::FileSetTime(char *aYYYYMMDD, char *aFilePattern, char *aWhichTi
 	int failure_count = 0;
 	HANDLE hFile;
 
-	for (; file_found; file_found = FindNextFile(file_search, &current_file))
+	for (; file_found; file_found = FindNextFile(file_search, &current_file), ++files_considered)
 	{
-		if (!aOperateOnFolders && (current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
-			continue;
+		if (files_considered && !(files_considered % batch_size))
+			MsgSleep(sleep_duration); // Allows the program to be responsive even during a very long operation.
+		if (current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+		{
+			if (!strcmp(current_file.cFileName, "..") || !strcmp(current_file.cFileName, "."))
+				continue; // Never operate upon or recurse into these.
+			// Regardless of whether this folder was recursed-into by the above, if this param
+			// is false, its own attributes will not be affected:
+			if (aOperateOnFolders == FILE_LOOP_FILES_ONLY)
+				continue;
+		}
+		else // It's a file, not a folder.
+			if (aOperateOnFolders == FILE_LOOP_FOLDERS_ONLY)
+				continue;
+
 		snprintf(target_filespec, sizeof(target_filespec), "%s%s", file_path, current_file.cFileName);
 		hFile = CreateFile(target_filespec, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE
 			, (LPSECURITY_ATTRIBUTES)NULL, OPEN_EXISTING
@@ -2409,7 +2638,7 @@ ResultType Line::FileSetTime(char *aYYYYMMDD, char *aFilePattern, char *aWhichTi
 			++failure_count;
 			continue;
 		}
-		switch (toupper(*aWhichTime))
+		switch (toupper(aWhichTime))
 		{
 		case 'C': // File's creation time.
 			if (!SetFileTime(hFile, &ftUTC, NULL, NULL))
@@ -2428,8 +2657,34 @@ ResultType Line::FileSetTime(char *aYYYYMMDD, char *aFilePattern, char *aWhichTi
 
 	if (file_search != INVALID_HANDLE_VALUE) // In case the loop had zero iterations.
 		FindClose(file_search);
-	g_ErrorLevel->Assign(failure_count); // i.e. indicate success if there were no failures.
-	return OK;
+
+	// This section is identical to that in FileSetAttrib() except for the recursive function
+	// call itself, so see comments there for details:
+	if (aDoRecurse) 
+	{
+		char all_file_pattern[MAX_PATH * 2];
+		snprintf(all_file_pattern, sizeof(all_file_pattern), "%s*.*", file_path);
+		file_search = FindFirstFile(all_file_pattern, &current_file);
+		file_found = (file_search != INVALID_HANDLE_VALUE);
+		for (; file_found; file_found = FindNextFile(file_search, &current_file), ++files_considered)
+		{
+			if (files_considered && !(files_considered % batch_size))
+				MsgSleep(sleep_duration);
+			if (!(current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+				continue;
+			if (!strcmp(current_file.cFileName, "..") || !strcmp(current_file.cFileName, "."))
+				continue;
+			snprintf(target_filespec, sizeof(target_filespec), "%s%s\\%s"
+				, file_path, current_file.cFileName, naked_filename_or_pattern);
+			failure_count += FileSetTime(yyyymmdd, target_filespec, aWhichTime, aOperateOnFolders, aDoRecurse, true);
+		}
+		if (file_search != INVALID_HANDLE_VALUE) // In case the loop had zero iterations.
+			FindClose(file_search);
+	}
+
+	if (!aCalledRecursively) // i.e. Only need to do this if we're returning to top-level caller:
+		g_ErrorLevel->Assign(failure_count); // i.e. indicate success if there were no failures.
+	return failure_count;
 }
 
 
@@ -2437,8 +2692,11 @@ ResultType Line::FileSetTime(char *aYYYYMMDD, char *aFilePattern, char *aWhichTi
 ResultType Line::FileGetSize(char *aFilespec, char *aGranularity)
 // Adapted from the AutoIt3 source.
 {
+	Var *output_var = ResolveVarOfArg(0);
+	if (!output_var)
+		return FAIL;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default
-	OUTPUT_VAR->Assign(); // Init to be blank, in case of failure.
+	output_var->Assign(); // Init to be blank, in case of failure.
 
 	if (!aFilespec || !*aFilespec)
 		return OK;  // Let ErrorLevel indicate an error, since this is probably not what the user intended.
@@ -2472,10 +2730,11 @@ ResultType Line::FileGetSize(char *aFilespec, char *aGranularity)
 	}
 
     g_ErrorLevel->Assign(ERRORLEVEL_NONE);  // Indicate success.
-	return OUTPUT_VAR->Assign((int)size);
+	return output_var->Assign((int)(size > MAXDWORD ? -1 : size));
 	// Currently, the above is basically subject to a 2 gig limit, I believe, after which the
 	// size will appear to be negative.  Beyond a 4 gig limit, the value will probably wrap around
-	// to zero and start counting from there as file sizes grow beyond 4 gig.
+	// to zero and start counting from there as file sizes grow beyond 4 gig (UPDATE: The size
+	// is now set to -1 [the maximum DWORD when expressed as a signed int] whenever >4 gig).
 	// There's not much sense in putting values larger than 2 gig into the var as a text string
 	// containing a positive number because such a var could never be properly handled by anything
 	// that compares to it (e.g. IfGreater) or does math on it (e.g. EnvAdd), since those operations
@@ -2484,6 +2743,10 @@ ResultType Line::FileGetSize(char *aFilespec, char *aGranularity)
 	// size should be returned in K(ilobyte) or M(egabyte).  However, this is sorta bad too since
 	// adding a param can break existing scripts which use filenames containing commas (delimiters)
 	// with this command.  Therefore, I think I'll just add the K/M param now.
+	// Also, the above assigns an int because unsigned ints should never be stored in script
+	// variables.  This is because an unsigned variable larger than INT_MAX would not be properly
+	// converted by atoi(), which is current standard method for variables to be auto-converted
+	// from text back to a number whenever that is needed.
 }
 
 
@@ -2491,8 +2754,11 @@ ResultType Line::FileGetSize(char *aFilespec, char *aGranularity)
 ResultType Line::FileGetVersion(char *aFilespec)
 // Adapted from the AutoIt3 source.
 {
+	Var *output_var = ResolveVarOfArg(0);
+	if (!output_var)
+		return FAIL;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default
-	OUTPUT_VAR->Assign(); // Init to be blank, in case of failure.
+	output_var->Assign(); // Init to be blank, in case of failure.
 
 	if (!aFilespec || !*aFilespec)
 		return OK;  // Let ErrorLevel indicate an error, since this is probably not what the user intended.
@@ -2525,7 +2791,7 @@ ResultType Line::FileGetVersion(char *aFilespec)
 	free(pInfo);
 
     g_ErrorLevel->Assign(ERRORLEVEL_NONE);  // Indicate success.
-	return OUTPUT_VAR->Assign(version_string);
+	return output_var->Assign(version_string);
 }
 
 
@@ -2925,7 +3191,7 @@ size_t Line::ConvertEscapeCharGetLine(char *aBuf, int aMaxCharsToRead, FILE *fp)
 
 
 
-ArgPurposeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
+ArgTypeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 {
 	switch(aArgIndex)
 	{
@@ -2969,7 +3235,7 @@ ArgPurposeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_WINGETPOS:
 		case ACT_PIXELGETCOLOR:
 		case ACT_PIXELSEARCH:
-			return (ArgPurposeType)IS_OUTPUT_VAR;
+			return ARG_TYPE_OUTPUT_VAR;
 
 		case ACT_IFINSTRING:
 		case ACT_IFNOTINSTRING:
@@ -2979,7 +3245,7 @@ ArgPurposeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_IFGREATEROREQUAL:
 		case ACT_IFLESS:
 		case ACT_IFLESSOREQUAL:
-			return (ArgPurposeType)IS_INPUT_VAR;
+			return ARG_TYPE_INPUT_VAR;
 		}
 		break;
 
@@ -2996,27 +3262,27 @@ ArgPurposeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_STRINGLEN:
 		case ACT_STRINGREPLACE:
 		case ACT_STRINGGETPOS:
-			return (ArgPurposeType)IS_INPUT_VAR;
+			return ARG_TYPE_INPUT_VAR;
 
 		case ACT_MOUSEGETPOS:
 		case ACT_WINGETPOS:
 		case ACT_PIXELSEARCH:
-			return (ArgPurposeType)IS_OUTPUT_VAR;
+			return ARG_TYPE_OUTPUT_VAR;
 		}
 		break;
 
 	case 2:  // Arg #3
 		if (aActionType == ACT_WINGETPOS)
-			return (ArgPurposeType)IS_OUTPUT_VAR;
+			return ARG_TYPE_OUTPUT_VAR;
 		break;
 
 	case 3:  // Arg #4
 		if (aActionType == ACT_WINGETPOS)
-			return (ArgPurposeType)IS_OUTPUT_VAR;
+			return ARG_TYPE_OUTPUT_VAR;
 		break;
 	}
 	// Otherwise:
-	return IS_NOT_A_VAR;
+	return ARG_TYPE_NORMAL;
 }
 
 
@@ -3074,16 +3340,20 @@ ResultType Line::CheckForMandatoryArgs()
 			return LineError("Parameters 4 and 5 must specify a non-blank destination for the drag.");
 		return OK;
 	case ACT_MOUSEGETPOS:
-		if (!VARRAW_ARG1 && !VARRAW_ARG2)
+		if (!ARG_HAS_VAR(1) && !ARG_HAS_VAR(2))
 			return LineError(ERR_MISSING_OUTPUT_VAR);
 		return OK;
 	case ACT_WINGETPOS:
-		if (!VARRAW_ARG1 && !VARRAW_ARG2 && !VARRAW_ARG3 && !VARRAW_ARG4)
+		if (!ARG_HAS_VAR(1) && !ARG_HAS_VAR(2) && !ARG_HAS_VAR(3) && !ARG_HAS_VAR(4))
 			return LineError(ERR_MISSING_OUTPUT_VAR);
 		return OK;
 	case ACT_PIXELSEARCH:
 		if (!*RAW_ARG3 || !*RAW_ARG4 || !*RAW_ARG5 || !*RAW_ARG6 || !*RAW_ARG7)
 			return LineError("Parameters 3 through 7 must not be blank.");
+		return OK;
+	case ACT_REGREAD:
+		if (!*RAW_ARG3 || !*RAW_ARG4) // But #5 can be blank in case the command is being used in 4-param mode.
+			return LineError("Parameters 3 and 4 must not be blank.");
 		return OK;
 	}
 	return OK;  // For when the command isn't mentioned in the switch().
@@ -3091,39 +3361,24 @@ ResultType Line::CheckForMandatoryArgs()
 
 
 
-bool Line::FileIsFilteredOut(WIN32_FIND_DATA &aCurrentFile, FileLoopModeType aFileLoopMode
-	, char *aFilePath)
+bool Line::FileIsFilteredOut(WIN32_FIND_DATA &aCurrentFile, FileLoopModeType aFileLoopMode, char *aFilePath)
 {
-	if (   (!strcmp(aCurrentFile.cFileName, "..") || !strcmp(aCurrentFile.cFileName, "."))
-		&& !(aFileLoopMode & FILE_LOOP_INCLUDE_SELF_AND_PARENT)   )
-		return true;
-	if (   (aCurrentFile.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)  // it is a folder.
-		&& !(aFileLoopMode & (FILE_LOOP_INCLUDE_FOLDERS | FILE_LOOP_INCLUDE_FOLDERS_ONLY))   )
-		return true;
-	if (   !(aCurrentFile.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) // not a folder.
-		&& (aFileLoopMode & FILE_LOOP_INCLUDE_FOLDERS_ONLY)   )
-		return true;
+	if (aCurrentFile.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) // It's a folder.
+	{
+		if (aFileLoopMode == FILE_LOOP_FILES_ONLY
+			|| !strcmp(aCurrentFile.cFileName, "..") || !strcmp(aCurrentFile.cFileName, "."))
+			return true; // Exclude this folder by returning true.
+	}
+	else // it's not a folder.
+		if (aFileLoopMode == FILE_LOOP_FOLDERS_ONLY)
+			return true; // Exclude this file by returning true.
 
 	// Since file was found, also prepend the file's path to its name for the caller:
 	if (!aFilePath || !*aFilePath) // don't bother.
 		return false;
-
-	char *last_backslash = strrchr(aFilePath, '\\');
-	if (!last_backslash) // probably because a file search in the current dir, such as "*.*" was specified.
-		return false;  // No need to prepend the path.
-	size_t path_length = last_backslash - aFilePath + 1; // Exclude the wildcard part from the length.
-	size_t filename_length = strlen(aCurrentFile.cFileName);
-	if (filename_length + path_length >= MAX_PATH) // >= to allow room for the string terminator?
-	{
-		// This function isn't set up to cause a true FAIL condition, so just warn:
-		LineError("When this filename's path is prepended, the result is too long.", WARN
-			, aCurrentFile.cFileName);
-		return true;  // Since we can't construct the full spec, tell it that this file was filtered after all.
-	}
-	// It's done this way to save stack space, since the recursion can get pretty deep.
-	// Uses +1 to include the string's terminator:
-	MoveMemory(aCurrentFile.cFileName + path_length, aCurrentFile.cFileName, filename_length + 1);
-	MoveMemory(aCurrentFile.cFileName, aFilePath, path_length);
+	char temp[MAX_PATH];
+	strlcpy(temp, aCurrentFile.cFileName, sizeof(temp));
+	snprintf(aCurrentFile.cFileName, sizeof(aCurrentFile.cFileName), "%s%s", aFilePath, temp);
 	return false;  // i.e. this file has not been filtered out.
 }
 

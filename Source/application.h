@@ -65,6 +65,7 @@ ResultType MsgSleep(int aSleepDuration = INTERVAL_UNSPECIFIED, MessageMode aMode
 	g_IgnoreHotkeys = false;\
 }
 #define DoWinDelay if (g.WinDelay >= 0) MsgSleep(g.WinDelay)
+#define DoControlDelay if (g.ControlDelay >= 0) MsgSleep(g.ControlDelay)
 
 ResultType IsCycleComplete(int aSleepDuration, DWORD aStartTime, bool aAllowEarlyReturn
 	, bool aWasInterrupted, bool aNeverRestoreWnd = false);

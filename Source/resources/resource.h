@@ -4,6 +4,8 @@
 //
 #define IDS_PROJNAME                    100
 #define IDR_WMDMLOGGER                  101
+#define IDI_MAIN                        159
+#define IDI_FILETYPE                    160
 #define IDS_LOG_SEV_INFO                201
 #define IDC_INPUTEDIT                   201
 #define IDS_LOG_SEV_WARN                202
@@ -11,12 +13,11 @@
 #define IDS_LOG_SEV_ERROR               203
 #define IDS_LOG_DATETIME                204
 #define IDC_INPUTPROMPT                 204
-#define IDI_ICON_MAIN                   204
 #define IDS_LOG_SRCNAME                 205
 #define IDD_INPUTBOX                    205
-#define IDI_ICON_SUSPEND                206
-#define IDI_ICON_PAUSE                  207
-#define IDI_ICON_PAUSE_SUSPEND          208
+#define IDI_SUSPEND                     206
+#define IDI_PAUSE                       207
+#define IDI_PAUSE_SUSPEND               208
 #define IDS_DEF_LOGFILE                 301
 #define IDS_DEF_MAXSIZE                 302
 #define IDS_DEF_SHRINKTOSIZE            303
@@ -35,7 +36,7 @@
 // 
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
-#define _APS_NEXT_RESOURCE_VALUE        209
+#define _APS_NEXT_RESOURCE_VALUE        211
 #define _APS_NEXT_COMMAND_VALUE         32785
 #define _APS_NEXT_CONTROL_VALUE         205
 #define _APS_NEXT_SYMED_VALUE           101
