@@ -1,0 +1,1730 @@
+<html xmlns:o="urn:schemas-microsoft-com:office:office"
+xmlns:w="urn:schemas-microsoft-com:office:word"
+xmlns:st1="urn:schemas-microsoft-com:office:smarttags"
+xmlns="http://www.w3.org/TR/REC-html40">
+
+<head>
+<meta http-equiv=Content-Type content="text/html; charset=windows-1252">
+<meta name=ProgId content=Word.Document>
+<meta name=Generator content="Microsoft Word 10">
+<meta name=Originator content="Microsoft Word 10">
+<link rel=File-List href="README_files/filelist.xml">
+<title>AutoHotkey BETA</title>
+<o:SmartTagType namespaceuri="urn:schemas-microsoft-com:office:smarttags"
+ name="date"/>
+<!--[if gte mso 9]><xml>
+ <o:DocumentProperties>
+  <o:Author>Home</o:Author>
+  <o:LastAuthor>Home</o:LastAuthor>
+  <o:Revision>16</o:Revision>
+  <o:TotalTime>78</o:TotalTime>
+  <o:Created>2003-11-10T15:55:00Z</o:Created>
+  <o:LastSaved>2003-11-12T12:26:00Z</o:LastSaved>
+  <o:Pages>1</o:Pages>
+  <o:Words>2910</o:Words>
+  <o:Characters>15602</o:Characters>
+  <o:Lines>600</o:Lines>
+  <o:Paragraphs>411</o:Paragraphs>
+  <o:CharactersWithSpaces>18101</o:CharactersWithSpaces>
+  <o:Version>10.4219</o:Version>
+ </o:DocumentProperties>
+</xml><![endif]--><!--[if gte mso 9]><xml>
+ <w:WordDocument>
+  <w:Compatibility>
+   <w:BreakWrappedTables/>
+   <w:SnapToGridInCell/>
+   <w:WrapTextWithPunct/>
+   <w:UseAsianBreakRules/>
+  </w:Compatibility>
+  <w:BrowserLevel>MicrosoftInternetExplorer4</w:BrowserLevel>
+ </w:WordDocument>
+</xml><![endif]--><!--[if !mso]><object
+ classid="clsid:38481807-CA0E-42D2-BF39-B33AF135CC4D" id=ieooui></object>
+<style>
+st1\:*{behavior:url(#ieooui) }
+</style>
+<![endif]-->
+<style>
+<!--
+ /* Font Definitions */
+ @font-face
+	{font-family:Wingdings;
+	panose-1:5 0 0 0 0 0 0 0 0 0;
+	mso-font-charset:2;
+	mso-generic-font-family:auto;
+	mso-font-pitch:variable;
+	mso-font-signature:0 268435456 0 0 -2147483648 0;}
+ /* Style Definitions */
+ p.MsoNormal, li.MsoNormal, div.MsoNormal
+	{mso-style-parent:"";
+	margin:0in;
+	margin-bottom:.0001pt;
+	mso-pagination:widow-orphan;
+	font-size:12.0pt;
+	font-family:"Times New Roman";
+	mso-fareast-font-family:"Times New Roman";}
+a:link, span.MsoHyperlink
+	{color:blue;
+	text-decoration:underline;
+	text-underline:single;}
+a:visited, span.MsoHyperlinkFollowed
+	{color:purple;
+	text-decoration:underline;
+	text-underline:single;}
+p.MsoPlainText, li.MsoPlainText, div.MsoPlainText
+	{margin:0in;
+	margin-bottom:.0001pt;
+	mso-pagination:widow-orphan;
+	font-size:10.0pt;
+	font-family:"Courier New";
+	mso-fareast-font-family:"Times New Roman";}
+@page Section1
+	{size:8.5in 11.0in;
+	margin:1.0in 65.95pt 1.0in 65.95pt;
+	mso-header-margin:.5in;
+	mso-footer-margin:.5in;
+	mso-paper-source:0;}
+div.Section1
+	{page:Section1;}
+ /* List Definitions */
+ @list l0
+	{mso-list-id:311445640;
+	mso-list-type:hybrid;
+	mso-list-template-ids:-1114726544 67698689 67698691 67698693 67698689 67698691 67698693 67698689 67698691 67698693;}
+@list l0:level1
+	{mso-level-number-format:bullet;
+	mso-level-text:\F0B7;
+	mso-level-tab-stop:.5in;
+	mso-level-number-position:left;
+	text-indent:-.25in;
+	font-family:Symbol;}
+@list l0:level2
+	{mso-level-tab-stop:1.0in;
+	mso-level-number-position:left;
+	text-indent:-.25in;}
+@list l0:level3
+	{mso-level-tab-stop:1.5in;
+	mso-level-number-position:left;
+	text-indent:-.25in;}
+@list l0:level4
+	{mso-level-tab-stop:2.0in;
+	mso-level-number-position:left;
+	text-indent:-.25in;}
+@list l0:level5
+	{mso-level-tab-stop:2.5in;
+	mso-level-number-position:left;
+	text-indent:-.25in;}
+@list l0:level6
+	{mso-level-tab-stop:3.0in;
+	mso-level-number-position:left;
+	text-indent:-.25in;}
+@list l0:level7
+	{mso-level-tab-stop:3.5in;
+	mso-level-number-position:left;
+	text-indent:-.25in;}
+@list l0:level8
+	{mso-level-tab-stop:4.0in;
+	mso-level-number-position:left;
+	text-indent:-.25in;}
+@list l0:level9
+	{mso-level-tab-stop:4.5in;
+	mso-level-number-position:left;
+	text-indent:-.25in;}
+@list l1
+	{mso-list-id:466893976;
+	mso-list-type:hybrid;
+	mso-list-template-ids:-924019150 67698689 67698691 67698693 67698689 67698691 67698693 67698689 67698691 67698693;}
+@list l1:level1
+	{mso-level-number-format:bullet;
+	mso-level-text:\F0B7;
+	mso-level-tab-stop:.5in;
+	mso-level-number-position:left;
+	text-indent:-.25in;
+	font-family:Symbol;}
+@list l1:level2
+	{mso-level-number-format:bullet;
+	mso-level-text:o;
+	mso-level-tab-stop:1.0in;
+	mso-level-number-position:left;
+	text-indent:-.25in;
+	font-family:"Courier New";}
+@list l1:level3
+	{mso-level-number-format:bullet;
+	mso-level-text:\F0A7;
+	mso-level-tab-stop:1.5in;
+	mso-level-number-position:left;
+	text-indent:-.25in;
+	font-family:Wingdings;}
+@list l1:level4
+	{mso-level-number-format:bullet;
+	mso-level-text:\F0B7;
+	mso-level-tab-stop:2.0in;
+	mso-level-number-position:left;
+	text-indent:-.25in;
+	font-family:Symbol;}
+@list l1:level5
+	{mso-level-tab-stop:2.5in;
+	mso-level-number-position:left;
+	text-indent:-.25in;}
+@list l1:level6
+	{mso-level-tab-stop:3.0in;
+	mso-level-number-position:left;
+	text-indent:-.25in;}
+@list l1:level7
+	{mso-level-tab-stop:3.5in;
+	mso-level-number-position:left;
+	text-indent:-.25in;}
+@list l1:level8
+	{mso-level-tab-stop:4.0in;
+	mso-level-number-position:left;
+	text-indent:-.25in;}
+@list l1:level9
+	{mso-level-tab-stop:4.5in;
+	mso-level-number-position:left;
+	text-indent:-.25in;}
+ol
+	{margin-bottom:0in;}
+ul
+	{margin-bottom:0in;}
+-->
+</style>
+<!--[if gte mso 10]>
+<style>
+ /* Style Definitions */
+ table.MsoNormalTable
+	{mso-style-name:"Table Normal";
+	mso-tstyle-rowband-size:0;
+	mso-tstyle-colband-size:0;
+	mso-style-noshow:yes;
+	mso-style-parent:"";
+	mso-padding-alt:0in 5.4pt 0in 5.4pt;
+	mso-para-margin:0in;
+	mso-para-margin-bottom:.0001pt;
+	mso-pagination:widow-orphan;
+	font-size:10.0pt;
+	font-family:"Times New Roman";}
+table.MsoTableGrid
+	{mso-style-name:"Table Grid";
+	mso-tstyle-rowband-size:0;
+	mso-tstyle-colband-size:0;
+	border:solid windowtext 1.0pt;
+	mso-border-alt:solid windowtext .5pt;
+	mso-padding-alt:0in 5.4pt 0in 5.4pt;
+	mso-border-insideh:.5pt solid windowtext;
+	mso-border-insidev:.5pt solid windowtext;
+	mso-para-margin:0in;
+	mso-para-margin-bottom:.0001pt;
+	mso-pagination:widow-orphan;
+	font-size:10.0pt;
+	font-family:"Times New Roman";}
+</style>
+<![endif]-->
+</head>
+
+<body lang=EN-US link=blue vlink=purple style='tab-interval:.5in'>
+
+<div class=Section1>
+
+<p class=MsoPlainText><span style='font-size:18.0pt;font-family:Arial'>AutoHotkey<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Version
+0.207 BETA (see <a href="ChangeLog.htm">Change Log</a>)<o:p></o:p></span></p>
+
+<p class=MsoPlainText><st1:date Year="2003" Day="12" Month="11"><span
+ style='font-size:12.0pt;font-family:Arial'>November 12, 2003</span></st1:date><span
+style='font-size:12.0pt;font-family:Arial'><o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>URL: <a
+href="http://home.tampabay.rr.com/kodi/ahk/README.htm">Web site for beta
+version</a> (i.e. the online version of this page)<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:16.0pt;font-family:Arial'>What is
+it?<o:p></o:p></span></p>
+
+<p class=MsoPlainText style='margin-left:.5in;text-indent:-.25in;mso-list:l0 level1 lfo2;
+tab-stops:list .5in'><![if !supportLists]><span style='font-size:12.0pt;
+font-family:Symbol;mso-fareast-font-family:Symbol;mso-bidi-font-family:Symbol'><span
+style='mso-list:Ignore'>·<span style='font:7.0pt "Times New Roman"'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+</span></span></span><![endif]><span style='font-size:12.0pt;font-family:Arial'>Free
+&amp; open source (GPL)<o:p></o:p></span></p>
+
+<p class=MsoPlainText style='margin-left:.5in;text-indent:-.25in;mso-list:l0 level1 lfo2;
+tab-stops:list .5in'><![if !supportLists]><span style='font-size:12.0pt;
+font-family:Symbol;mso-fareast-font-family:Symbol;mso-bidi-font-family:Symbol'><span
+style='mso-list:Ignore'>·<span style='font:7.0pt "Times New Roman"'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+</span></span></span><![endif]><span style='font-size:12.0pt;font-family:Arial'>A
+powerful hotkey (shortcut key) scripting language, supporting both keyboard and
+mouse<o:p></o:p></span></p>
+
+<p class=MsoPlainText style='margin-left:.5in;text-indent:-.25in;mso-list:l0 level1 lfo2;
+tab-stops:list .5in'><![if !supportLists]><span style='font-size:12.0pt;
+font-family:Symbol;mso-fareast-font-family:Symbol;mso-bidi-font-family:Symbol'><span
+style='mso-list:Ignore'>·<span style='font:7.0pt "Times New Roman"'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+</span></span></span><![endif]><span style='font-size:12.0pt;font-family:Arial'>A
+regular scripting language (backward compatible with most existing AutoIt2
+scripts).<span style='mso-spacerun:yes'>  </span>Includes many new commands, as
+well as enhancements to old ones (thanks in part to AutoIt3)<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:16.0pt;font-family:Arial'>Who
+might benefit?<o:p></o:p></span></p>
+
+<p class=MsoPlainText style='margin-left:.5in;text-indent:-.25in;mso-list:l1 level1 lfo4;
+tab-stops:list .5in'><![if !supportLists]><span style='font-size:12.0pt;
+font-family:Symbol;mso-fareast-font-family:Symbol;mso-bidi-font-family:Symbol'><span
+style='mso-list:Ignore'>·<span style='font:7.0pt "Times New Roman"'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+</span></span></span><![endif]><span style='font-size:12.0pt;font-family:Arial'>Power
+users who have an interest in creating hotkeys that:<o:p></o:p></span></p>
+
+<p class=MsoPlainText style='margin-left:1.0in;text-indent:-.25in;mso-list:
+l1 level2 lfo4;tab-stops:list 1.0in'><![if !supportLists]><span
+style='font-size:12.0pt;mso-fareast-font-family:"Courier New"'><span
+style='mso-list:Ignore'>o<span style='font:7.0pt "Times New Roman"'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+</span></span></span><![endif]><span style='font-size:12.0pt;font-family:Arial'>aren't
+limited to only those combinations allowed by Windows<o:p></o:p></span></p>
+
+<p class=MsoPlainText style='margin-left:1.0in;text-indent:-.25in;mso-list:
+l1 level2 lfo4;tab-stops:list 1.0in'><![if !supportLists]><span
+style='font-size:12.0pt;mso-fareast-font-family:"Courier New"'><span
+style='mso-list:Ignore'>o<span style='font:7.0pt "Times New Roman"'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+</span></span></span><![endif]><span style='font-size:12.0pt;font-family:Arial'>are
+capable of more complexity than most other hotkey apps support<o:p></o:p></span></p>
+
+<p class=MsoPlainText style='margin-left:1.0in;text-indent:-.25in;mso-list:
+l1 level2 lfo4;tab-stops:list 1.0in'><![if !supportLists]><span
+style='font-size:12.0pt;mso-fareast-font-family:"Courier New"'><span
+style='mso-list:Ignore'>o<span style='font:7.0pt "Times New Roman"'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+</span></span></span><![endif]><span style='font-size:12.0pt;font-family:Arial'>are
+more responsive than those that use AutoIt2 or AutoIt3 (since the overhead of
+launching a new script for each hotkey is avoided)<o:p></o:p></span></p>
+
+<p class=MsoPlainText style='margin-left:.5in;text-indent:-.25in;mso-list:l1 level1 lfo4;
+tab-stops:list .5in'><![if !supportLists]><span style='font-size:12.0pt;
+font-family:Symbol;mso-fareast-font-family:Symbol;mso-bidi-font-family:Symbol'><span
+style='mso-list:Ignore'>·<span style='font:7.0pt "Times New Roman"'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+</span></span></span><![endif]><span style='font-size:12.0pt;font-family:Arial'>AutoIt2
+users who:<o:p></o:p></span></p>
+
+<p class=MsoPlainText style='margin-left:1.0in;text-indent:-.25in;mso-list:
+l1 level2 lfo4;tab-stops:list 1.0in'><![if !supportLists]><span
+style='font-size:12.0pt;mso-fareast-font-family:"Courier New"'><span
+style='mso-list:Ignore'>o<span style='font:7.0pt "Times New Roman"'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+</span></span></span><![endif]><span style='font-size:12.0pt;font-family:Arial'>aren't
+ready to completely switch over to AutoIt v3<o:p></o:p></span></p>
+
+<p class=MsoPlainText style='margin-left:1.0in;text-indent:-.25in;mso-list:
+l1 level2 lfo4;tab-stops:list 1.0in'><![if !supportLists]><span
+style='font-size:12.0pt;mso-fareast-font-family:"Courier New"'><span
+style='mso-list:Ignore'>o<span style='font:7.0pt "Times New Roman"'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+</span></span></span><![endif]><span style='font-size:12.0pt;font-family:Arial'>want
+an open source alternative to AutoIt2<o:p></o:p></span></p>
+
+<p class=MsoPlainText style='margin-left:1.0in;text-indent:-.25in;mso-list:
+l1 level2 lfo4;tab-stops:list 1.0in'><![if !supportLists]><span
+style='font-size:12.0pt;mso-fareast-font-family:"Courier New"'><span
+style='mso-list:Ignore'>o<span style='font:7.0pt "Times New Roman"'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+</span></span></span><![endif]><span style='font-size:12.0pt;font-family:Arial'>want
+to enhance existing AutoIt2 scripts with new commands and features<o:p></o:p></span></p>
+
+<p class=MsoPlainText style='margin-left:.5in;text-indent:-.25in;mso-list:l1 level1 lfo4;
+tab-stops:list .5in'><![if !supportLists]><span style='font-size:12.0pt;
+font-family:Symbol;mso-fareast-font-family:Symbol;mso-bidi-font-family:Symbol'><span
+style='mso-list:Ignore'>·<span style='font:7.0pt "Times New Roman"'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+</span></span></span><![endif]><span style='font-size:12.0pt;font-family:Arial'>Anyone
+concerned about, or already suffering from, Repetitive Stress Injury
+(RSI).<span style='mso-spacerun:yes'>  </span>For example, the mouse wheel can
+be used as a substitute for Alt-Tab.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:14.0pt;font-family:Arial'>DOWNLOAD<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><a
+href="http://home.tampabay.rr.com/kodi/ahk/AutoHotkey0207BETA.zip">AutoHotkey
+Application</a><o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><a
+href="http://home.tampabay.rr.com/kodi/ahk/AutoHotkey0207BETA_source.zip">Source
+Code</a><o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:14.0pt;font-family:Arial'>HOTKEYS<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Hotkeys
+are defined by creating a subroutine label in a script file with two colons
+instead of one.<span style='mso-spacerun:yes'>  </span>Example:<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>#y::<span
+style='mso-spacerun:yes'>  </span>; #y means Win-Y<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>WinActivate,
+Notepad<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>return<span
+style='mso-spacerun:yes'>  </span>; i.e. When Win-Y is pressed, all statements
+will be executed until the first RETURN is encountered.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>If a
+hotkey label needs only a single line, it can be included to the right of the double-colon:<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>#y::WinActivate,
+Notepad<span style='mso-spacerun:yes'>  </span>; i.e. the RETURN is implicit.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><b style='mso-bidi-font-weight:normal'><span
+style='font-size:12.0pt;font-family:Arial'>You can use the following symbols to
+define hotkeys:<o:p></o:p></span></b></p>
+
+<table class=MsoTableGrid border=1 cellspacing=0 cellpadding=0
+ style='border-collapse:collapse;border:none;mso-border-alt:solid windowtext .5pt;
+ mso-yfti-tbllook:480;mso-padding-alt:0in 5.4pt 0in 5.4pt;mso-border-insideh:
+ .5pt solid windowtext;mso-border-insidev:.5pt solid windowtext'>
+ <tr style='mso-yfti-irow:0'>
+  <td width=35 valign=top style='width:26.6pt;border:solid windowtext 1.0pt;
+  mso-border-alt:solid windowtext .5pt;padding:0in 5.4pt 0in 5.4pt'>
+  <p class=MsoPlainText><b style='mso-bidi-font-weight:normal'><span
+  style='font-size:12.0pt;font-family:Arial'>#<o:p></o:p></span></b></p>
+  </td>
+  <td width=619 valign=top style='width:464.3pt;border:solid windowtext 1.0pt;
+  border-left:none;mso-border-left-alt:solid windowtext .5pt;mso-border-alt:
+  solid windowtext .5pt;padding:0in 5.4pt 0in 5.4pt'>
+  <p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Win
+  (Windows Key)<o:p></o:p></span></p>
+  </td>
+ </tr>
+ <tr style='mso-yfti-irow:1'>
+  <td width=35 valign=top style='width:26.6pt;border:solid windowtext 1.0pt;
+  border-top:none;mso-border-top-alt:solid windowtext .5pt;mso-border-alt:solid windowtext .5pt;
+  padding:0in 5.4pt 0in 5.4pt'>
+  <p class=MsoPlainText><b style='mso-bidi-font-weight:normal'><span
+  style='font-size:12.0pt;font-family:Arial'>!<o:p></o:p></span></b></p>
+  </td>
+  <td width=619 valign=top style='width:464.3pt;border-top:none;border-left:
+  none;border-bottom:solid windowtext 1.0pt;border-right:solid windowtext 1.0pt;
+  mso-border-top-alt:solid windowtext .5pt;mso-border-left-alt:solid windowtext .5pt;
+  mso-border-alt:solid windowtext .5pt;padding:0in 5.4pt 0in 5.4pt'>
+  <p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Alt<o:p></o:p></span></p>
+  </td>
+ </tr>
+ <tr style='mso-yfti-irow:2'>
+  <td width=35 valign=top style='width:26.6pt;border:solid windowtext 1.0pt;
+  border-top:none;mso-border-top-alt:solid windowtext .5pt;mso-border-alt:solid windowtext .5pt;
+  padding:0in 5.4pt 0in 5.4pt'>
+  <p class=MsoPlainText><b style='mso-bidi-font-weight:normal'><span
+  style='font-size:12.0pt;font-family:Arial'>^<o:p></o:p></span></b></p>
+  </td>
+  <td width=619 valign=top style='width:464.3pt;border-top:none;border-left:
+  none;border-bottom:solid windowtext 1.0pt;border-right:solid windowtext 1.0pt;
+  mso-border-top-alt:solid windowtext .5pt;mso-border-left-alt:solid windowtext .5pt;
+  mso-border-alt:solid windowtext .5pt;padding:0in 5.4pt 0in 5.4pt'>
+  <p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Control<o:p></o:p></span></p>
+  </td>
+ </tr>
+ <tr style='mso-yfti-irow:3'>
+  <td width=35 valign=top style='width:26.6pt;border:solid windowtext 1.0pt;
+  border-top:none;mso-border-top-alt:solid windowtext .5pt;mso-border-alt:solid windowtext .5pt;
+  padding:0in 5.4pt 0in 5.4pt'>
+  <p class=MsoPlainText><b style='mso-bidi-font-weight:normal'><span
+  style='font-size:12.0pt;font-family:Arial'>+<o:p></o:p></span></b></p>
+  </td>
+  <td width=619 valign=top style='width:464.3pt;border-top:none;border-left:
+  none;border-bottom:solid windowtext 1.0pt;border-right:solid windowtext 1.0pt;
+  mso-border-top-alt:solid windowtext .5pt;mso-border-left-alt:solid windowtext .5pt;
+  mso-border-alt:solid windowtext .5pt;padding:0in 5.4pt 0in 5.4pt'>
+  <p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Shift<o:p></o:p></span></p>
+  </td>
+ </tr>
+ <tr style='mso-yfti-irow:4'>
+  <td width=35 valign=top style='width:26.6pt;border:solid windowtext 1.0pt;
+  border-top:none;mso-border-top-alt:solid windowtext .5pt;mso-border-alt:solid windowtext .5pt;
+  padding:0in 5.4pt 0in 5.4pt'>
+  <p class=MsoPlainText><b style='mso-bidi-font-weight:normal'><span
+  style='font-size:12.0pt;font-family:Arial'>&lt;<o:p></o:p></span></b></p>
+  </td>
+  <td width=619 valign=top style='width:464.3pt;border-top:none;border-left:
+  none;border-bottom:solid windowtext 1.0pt;border-right:solid windowtext 1.0pt;
+  mso-border-top-alt:solid windowtext .5pt;mso-border-left-alt:solid windowtext .5pt;
+  mso-border-alt:solid windowtext .5pt;padding:0in 5.4pt 0in 5.4pt'>
+  <p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Use
+  the left key of the pair.<span style='mso-spacerun:yes'>  </span>e.g. &lt;!a is
+  the same as !a except that only the left-alt key will trigger it.<o:p></o:p></span></p>
+  </td>
+ </tr>
+ <tr style='mso-yfti-irow:5'>
+  <td width=35 valign=top style='width:26.6pt;border:solid windowtext 1.0pt;
+  border-top:none;mso-border-top-alt:solid windowtext .5pt;mso-border-alt:solid windowtext .5pt;
+  padding:0in 5.4pt 0in 5.4pt'>
+  <p class=MsoPlainText><b style='mso-bidi-font-weight:normal'><span
+  style='font-size:12.0pt;font-family:Arial'>&gt;<o:p></o:p></span></b></p>
+  </td>
+  <td width=619 valign=top style='width:464.3pt;border-top:none;border-left:
+  none;border-bottom:solid windowtext 1.0pt;border-right:solid windowtext 1.0pt;
+  mso-border-top-alt:solid windowtext .5pt;mso-border-left-alt:solid windowtext .5pt;
+  mso-border-alt:solid windowtext .5pt;padding:0in 5.4pt 0in 5.4pt'>
+  <p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Use
+  the right key of the pair.<o:p></o:p></span></p>
+  </td>
+ </tr>
+ <tr style='mso-yfti-irow:6;mso-yfti-lastrow:yes'>
+  <td width=35 valign=top style='width:26.6pt;border:solid windowtext 1.0pt;
+  border-top:none;mso-border-top-alt:solid windowtext .5pt;mso-border-alt:solid windowtext .5pt;
+  padding:0in 5.4pt 0in 5.4pt'>
+  <p class=MsoPlainText><b style='mso-bidi-font-weight:normal'><span
+  style='font-size:12.0pt;font-family:Arial'>*<o:p></o:p></span></b></p>
+  </td>
+  <td width=619 valign=top style='width:464.3pt;border-top:none;border-left:
+  none;border-bottom:solid windowtext 1.0pt;border-right:solid windowtext 1.0pt;
+  mso-border-top-alt:solid windowtext .5pt;mso-border-left-alt:solid windowtext .5pt;
+  mso-border-alt:solid windowtext .5pt;padding:0in 5.4pt 0in 5.4pt'>
+  <p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Wildcard:
+  Allow extra modifiers to be used with this key.<span
+  style='mso-spacerun:yes'>  </span>Example:<br>
+  *ScrollLock::Run, Notepad<span style='mso-spacerun:yes'>  </span>; Launch
+  notepad regardless of whether any control/alt/shift/win keys are also down.<o:p></o:p></span></p>
+  </td>
+ </tr>
+</table>
+
+<p class=MsoPlainText><b style='mso-bidi-font-weight:normal'><span
+style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></b></p>
+
+<p class=MsoPlainText><b style='mso-bidi-font-weight:normal'><span
+style='font-size:12.0pt;font-family:Arial'>(See the bottom of this file for a
+complete list of key and mouse button names)<o:p></o:p></span></b></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>In
+addition, you can define a custom combination of two keys by using &quot; &amp;
+&quot; between them:<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Space
+&amp; N::AltTab<span style='mso-spacerun:yes'>  </span>; Hold down the space
+bar then press the N key to activate the hotkey.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Space
+&amp; M::ShiftAltTab<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>AltTab
+and ShiftAltTab are two of the special commands that are only recognized when
+used with hotkeys.<span style='mso-spacerun:yes'>  </span>They can also be used
+with mouse buttons and mousewheel rotation, as can any other script commands as
+well:<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>LAlt
+&amp; LButton::AltTab<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>LAlt
+&amp; WheelDown::AltTab<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>LAlt
+&amp; WheelUp::ShiftAltTab<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Hotkey
+labels can be used as if they were normal labels: You can Gosub/Goto them and
+define more than one hotkey label to do the same subroutine, such as in this
+example:<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>^Numpad0::<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>^Numpad1::<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>...<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>; Both
+of the above hotkeys will execute this subroutine.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>return<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>You can
+force the 3 toggleable keys to be AlwaysOn or Always off, e.g.:<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>SetNumlockState,
+AlwaysOn<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Note:
+The program is pseudo multi-threaded.<span style='mso-spacerun:yes'>  </span>It
+doesn't actually use multiple threads (thus avoiding the overhead of that),
+instead simulating that behavior: If a hotkey subroutine is running and you
+press another hotkey, the first subroutine will be suspended to let the second
+one run.<span style='mso-spacerun:yes'>  </span>If a third hotkey is pressed
+while the 2nd is running, both the 2nd and 1st will be in a suspended state,
+and so on.<span style='mso-spacerun:yes'>  </span>When the most recent (topmost)
+hotkey subroutine finishes, the one underneath will be resumed, and so on,
+until all the subroutines finally finish.<span style='mso-spacerun:yes'> 
+</span>The KeyLog command shows a lot of info such as how many subroutines are
+currently in a suspended state.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Related
+to the above: A single script can have multiple simultaneous MsgBox, InputBox,
+and FileSelectFile dialogs.<span style='mso-spacerun:yes'>  </span>This is
+achieved by launching new hotkey subroutines while existing one(s) are already
+displaying a dialog of their own.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>If you
+open the main window via the tray icon, it defaults to showing the most
+recently executed script lines.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>In
+WinNT/2k/XP, Explorer's hotkeys (e.g. Win-E, Win-U) can be individually
+overridden by assigning them to an action in the script.<span
+style='mso-spacerun:yes'>  </span>This feature is not implemented on
+Win95/98/ME due to the limitations of those OSes.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:14.0pt;font-family:Arial'>SCRIPTS<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Scripts
+are validated prior to being run.<span style='mso-spacerun:yes'>  </span>If
+there are any syntax errors, they must be corrected before the script can run.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Scripts
+are also pseudo-compiled to enhance performance and reduce memory load.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>After a
+script is successfully loaded, it will be executed starting at the top until
+the first hotkey label is encountered (or an explicit exit or return).<span
+style='mso-spacerun:yes'>  </span>Hotkey labels and any normal labels beyond
+the top section are not executed unless called specifically by pressing a
+hotkey.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Scripts that
+contain no hotkey subroutines (i.e. no double colon labels) and that don't ask
+for the Caps/Num/ScrollLock keys to be kept AlwaysOn or AlwaysOff will
+terminate after they have been executed from top to bottom.<span
+style='mso-spacerun:yes'>  </span>In other words, they will behave just like
+AutoIt2 scripts.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>The
+default escape char in program is ` (upper left corner of most keyboards)
+rather than what AutoIt2 uses (backslash).<span style='mso-spacerun:yes'> 
+</span>I'm thinking of using .ahk as the extension for pure AutoHotkey scripts
+that don't need full compatibility with AutoIt2.<span
+style='mso-spacerun:yes'>  </span>However, if you open a .aut file with
+AutoHotkey (by passing the file as a command line arg, or doing an explorer
+right click-&gt;&quot;Open With&quot; or any other method), the program will
+attempt to increase compatibility by reverting to AutoIt2 defaults and
+behaviors.<span style='mso-spacerun:yes'>  </span>The most notable of these is
+the use of the backslash as the escape character.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:14.0pt;font-family:Arial'>ENHANCED
+SYNTAX<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>The
+keyword ELSE is supported with all IF-type commands.<span
+style='mso-spacerun:yes'>  </span>In addition, blocks are supported.<span
+style='mso-spacerun:yes'>  </span>Example:<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>OLD
+STYLE:<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>IfWinExist,
+Notepad, , winactivate, Notepad<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>NEW
+STYLE (use {…} to create a block if there’s more than one line to be executed):<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>IfWinExist,
+Notepad<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>{<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><span
+style='mso-tab-count:1'>            </span>winactivate<span
+style='mso-spacerun:yes'>   </span>; no need to specify title again, since it
+will automatically use the &quot;last found&quot; window.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><span
+style='mso-tab-count:1'>            </span>sleep, 1<span
+style='mso-spacerun:yes'>  </span>; if this line weren't here, you wouldn't
+need a block around this section<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>else<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><span
+style='mso-tab-count:1'>            </span>sleep, 1<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Nested
+IFs and blocks example:<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>if varx
+= x<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>{<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><span
+style='mso-tab-count:1'>            </span>if vary = y<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><span
+style='mso-tab-count:2'>                        </span>if varz = z<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><span
+style='mso-tab-count:3'>                                    </span>sleep, 1<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><span
+style='mso-tab-count:2'>                        </span>else<span
+style='mso-spacerun:yes'>  </span>; this else goes with the nearest IF<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><span
+style='mso-tab-count:3'>                                    </span>sleep, 1<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>else<span
+style='mso-spacerun:yes'>  </span>; this else goes with the top IF because the
+block prevents it from going with &quot;if vary = y&quot;<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><span
+style='mso-tab-count:1'>            </span>sleep, 1<span style='mso-tab-count:
+2'>                      </span><o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Also,
+blocks can be used with loops, such as these examples:<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Loop,
+5000<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><span
+style='mso-tab-count:1'>            </span>IfNotExist, c:\semaphore.txt<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><span
+style='mso-tab-count:2'>                        </span>sleep, 1000<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><span
+style='mso-tab-count:1'>            </span>else<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><span
+style='mso-tab-count:2'>                        </span>break<span
+style='mso-spacerun:yes'>  </span>; terminate the loop early<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>; Since
+the above loop has only one statement, it doesn't need a block.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>; Here's
+one with a block:<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Loop<span
+style='mso-spacerun:yes'>  </span>; Since there's no count specified, it's an
+infinite loop unless an Exit, Return, or Break is encountered.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>{<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><span
+style='mso-tab-count:1'>            </span>...<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><span
+style='mso-tab-count:1'>            </span>if var &lt;= 5<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><span
+style='mso-tab-count:2'>                        </span>continue<span
+style='mso-spacerun:yes'>  </span>; skip the rest of the block and begin at the
+top of the block for the next iteration.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><span
+style='mso-tab-count:1'>            </span>...<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><span
+style='mso-tab-count:1'>            </span>if var &gt; 25<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><span
+style='mso-tab-count:2'>                        </span>break<span
+style='mso-spacerun:yes'>  </span>; break out of the loop<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Loop,
+c:\new folder\*.*<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>{<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><span
+style='mso-tab-count:1'>            </span>; Do something with every file that
+matches the spec.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><span
+style='mso-tab-count:1'>            </span>; There aren't many commands yet to
+utilize this type of loop, but there will be for the final release.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:14.0pt;font-family:Arial'>NEW
+LANGUAGE AND COMMAND STYLE<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Same-line
+comments can be used if the file extension of the script isn’t .aut
+(AutoIt2).<span style='mso-spacerun:yes'>  </span>The semicolon is used for
+these comments, just as it is for whole line comments.<span
+style='mso-spacerun:yes'>  </span>A semi-colon is not considered a comment
+unless there is whitespace to the left of it.<span style='mso-spacerun:yes'> 
+</span>In addition, you can explicitly escape a semi-colon if there's ever a
+need to have one with whitespace to the left of it.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Example:<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>var =
+`;<span style='mso-spacerun:yes'>  </span>; This assigns a literal semicolon to
+the var.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>var
+=;<span style='mso-spacerun:yes'>  </span>; This does the same thing.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>For some
+commands, you can optionally use a new style in lieu the original AutoIt2
+style.<span style='mso-spacerun:yes'>  </span>These are:<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Var =
+value<span style='mso-spacerun:yes'>  </span>; can be used instead of SetEnv,
+var, value.<span style='mso-spacerun:yes'>  </span>Value can be blank, i.e. var
+= <o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>if var
+&lt;&gt; value<span style='mso-spacerun:yes'>  </span>; you can use &lt;&gt; !=
+&lt; = &gt; as comparison operators rather than ifequal/notequal/greater, etc.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>var += 5
+; This is equivalent to envadd, var, 5.<span style='mso-spacerun:yes'> 
+</span>The other operators are -=, *=, /=<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>; But
+currently, complex expressions are not supported, so you can't do:<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>var +=
+%var1% + 5 <o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:14.0pt;font-family:Arial'>ENHANCED
+COMMANDS<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>For most
+of the window commands, such as WinActivate, passing zero params results in
+activating the window most recently found by IfWinExist or WinWait.<span
+style='mso-spacerun:yes'>  </span>In addition, passing the letter A for the
+window title tells the command to act upon the currently-active window (i.e.
+the foreground window).<span style='mso-spacerun:yes'>  </span>e.g. WinClose, A<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Also,
+most of the Window commands support new params for Exclude-Title and
+Exclude-Text.<span style='mso-spacerun:yes'>  </span>A window that would
+otherwise be a match will be disqualified if its Title contains Exclude-Title
+or its text contains Exclude-Text.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Run and
+RunWait can run documents or URLs. <span style='mso-spacerun:yes'> </span>e.g.
+Run, www.yahoo.com or RunWait, New Document.doc<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Stringreplace
+can optionally replace all occurrences, via passing a last param &quot;A&quot;.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>MsgBox
+supports an optional Timeout value.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>There
+are many other enhancements to the commands that will be documented in the help
+file to be included with the final release.<span style='mso-spacerun:yes'> 
+</span>Some of these enhancements were inspired by, or directly derived from
+AutoIt3.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:14.0pt;font-family:Arial'>NEW
+COMMANDS<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>ClipWait:
+Wait for the clipboard to contain text (become non-empty).<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>StatusBarWait:
+Wait for the status bar of a window to contain the specified text, or become
+blank.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>StatusBarGetText:
+Same as AutoIt3's<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>WinActivateBottom:
+This command is similar to WinActivate but activates the oldest window rather
+than the newest.<span style='mso-spacerun:yes'>  </span>If there is one window
+that matches, this command will perform identically to WinActivate.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>The
+concept of a Window Group is supported.<span style='mso-spacerun:yes'> 
+</span>Once defined, a group can be traversed by via the GroupActivate
+command.<span style='mso-spacerun:yes'>  </span>Example:<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>GroupAdd,
+MSIE, - Microsoft Internet Explorer<span style='mso-spacerun:yes'>  </span>;
+Add only a single window to this group.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Numpad1::<span
+style='mso-spacerun:yes'>  </span>; Assign a hotkey to activate this group.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>SetTitleMatchMode,
+2<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>GroupActivate,
+MSIE, r<span style='mso-spacerun:yes'>  </span>; Traverse through all open MSIE
+windows, one at a time (i.e. each press of the hotkey).<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>return<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>; Here's
+a more complex group for MS Outlook 2002:<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>GroupAdd,
+mail, Message - Microsoft Word<span style='mso-spacerun:yes'>  </span>; This is
+for mails currently being composed<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>GroupAdd,
+mail, - Message (<span style='mso-spacerun:yes'>  </span>; This is for already
+opened items<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>GroupAdd,
+mail, Advanced Find, Sear&amp;ch for the word(s)<span
+style='mso-spacerun:yes'>  </span>; Need extra text to avoid activation of a
+phantom window.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>GroupAdd,
+mail, , Recurrence:<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>GroupAdd,
+mail, Reminder<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>GroupAdd,
+mail, - Microsoft Outlook<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Numpad5::GroupActivate,
+mail<span style='mso-spacerun:yes'>  </span>; Assign a hotkey to traverse
+through the group.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Upon
+using GroupActivate with the above group, the first window that matches any of
+the specifications will be activated.<span style='mso-spacerun:yes'> 
+</span>Using GroupActivate a second time will activate the next window in the
+series and so on.<span style='mso-spacerun:yes'>  </span>Normally,
+GroupActivate is assigned to a hotkey so that this window-traversal behavior is
+automated by pressing that key.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>There is
+another command, GroupDEactivate, which will activate the first window found
+that does NOT match any of the specifications in the group.<span
+style='mso-spacerun:yes'>  </span>This is useful if you have a collection of
+favorite windows and periodically like to clean up your desktop by visiting
+each window that isn't a member of your favorites, e.g. GroupDeactivate,
+MyFavoriteWindows<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Finally,
+you can use the GroupClose command to close the active window if it's a member
+of the group.<span style='mso-spacerun:yes'>  </span>Assigning this to a 2nd
+hotkey can often make a nice companion to a group's GroupActivate hotkey.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:14.0pt;font-family:Arial'>AUTOIT2
+COMMANDS NOT YET SUPPORTED<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>IniRead/Write/Delete<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Adlib
+section (though this behavior can be mimicked by launching a subroutine that
+never returns).<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>#include<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>FileInstall
+(directive for the Aut2Exe compiler)<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>BlockInput<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Break
+(break is now used for loops instead)<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>HideAutoItWin<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>HideAutoItDebug<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:14.0pt;font-family:Arial'>COMMAND
+REFERENCE<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>These
+are only the commands that have changed substantially since AutoIt2.<span
+style='mso-spacerun:yes'>  </span>All AutoIt2 commands are also supported
+except those listed above.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>NEW:<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>WinGetTitle:
+Output-var, std. 4 window params<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>WinGetPos:
+Four optional output vars: xpos, ypos, width, height.<span
+style='mso-spacerun:yes'>  </span>Std. 4 window params.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>WinGetText:
+Output var, std 4 window params.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>GroupAdd:
+(params): Group name, wintitle, what label to Gosub if no instances of the
+window exist, exclude-title/text:<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>GroupActivate:
+See above.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>GroupDeactivate:
+See above.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>GroupClose:
+Close the active window if it’s a member of the group.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>GroupCloseAll:
+Close the entire group.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>FileToggleHidden:
+filespec (if omitted, will use file-loop's current file)<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>FileSetDateModified:
+filespec, datetime (YYYYMMDDHH24MISS)<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>DetectHiddenWindows:
+Defaults to off (i.e. hidden windows are not detected, except by WinShow).<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>SetNumlockState:
+On/Off/AlwaysOn/AlwaysOff or blank (unspecified) to return to normal.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>SetScrollLockState:
+same<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>SetCapslockState:
+same<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>// These
+display some statistics about the current script:<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>KeyLog<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>ListLines<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>ListVars<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>ListHotkeys<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Reload:
+Reload the current script.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>ExitApp:
+Exits the script entirely.<span style='mso-spacerun:yes'>  </span>This is used
+the script is of the persistent variety (see above).<span
+style='mso-spacerun:yes'>  </span>params: Optional exit-code<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>ControlSend:
+Control, Chars-to-Send, std. 4 window params.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>ControlLeftClick:
+Control, std. 4 window params<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>ControlGetText:
+Output-var, Control, std. 4 window params<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>SetDefaultMouseSpeed:
+Speed (0-100)<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>MouseMove:<span
+style='mso-spacerun:yes'>  </span>x, y, speed<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>MouseClick:
+which-button (left, right, middle), x, y, ClickCount, speed<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>MouseClickDrag:
+which-button, x1, y1, x2, y2, speed<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>The following
+commands have new optional parameters, at the end, for Exclude-Title and
+Exclude-Text (described above):<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>IfWinExist<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>IfWinNotExist<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>IfWinActive<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>IfWinNotActive<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>WinWait<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>WinWaitClose<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>WinWaitActive<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>WinWaitNotActive<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>WinMinimize<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>WinMaximize<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>WinRestore<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>WinHide<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>WinShow<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>WinMove<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>WinClose:
+title, text, time-to-wait-for-close (0 = 500ms, blank = don’t wait), exclude
+title/text<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>WinKill:
+same params as WinClose.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>WinSetTitle:
+If the user passes only one param, the title of the &quot;last used&quot;
+window will be set to the string in the first param.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:14.0pt;font-family:Arial'>KEY
+&amp; MOUSE BUTTON REFERENCE<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>// Mouse
+buttons:<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;LButton&quot;, VK_LBUTTON}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;RButton&quot;, VK_RBUTTON}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;MButton&quot;, VK_MBUTTON}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>//
+Supported in only in Win2k and beyond:<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;XButton1&quot;, VK_XBUTTON1}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;XButton2&quot;, VK_XBUTTON2}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>//
+Custom/fake VKs for use by the mouse hook (supported only in WinNT SP3 and
+beyond?):<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;WheelDown&quot;, VK_WHEEL_DOWN}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;WheelUp&quot;, VK_WHEEL_UP}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>{
+{&quot;Numpad0&quot;, VK_NUMPAD0}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Numpad1&quot;, VK_NUMPAD1}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Numpad2&quot;, VK_NUMPAD2}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Numpad3&quot;, VK_NUMPAD3}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Numpad4&quot;, VK_NUMPAD4}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Numpad5&quot;, VK_NUMPAD5}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Numpad6&quot;, VK_NUMPAD6}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Numpad7&quot;, VK_NUMPAD7}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Numpad8&quot;, VK_NUMPAD8}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Numpad9&quot;, VK_NUMPAD9}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;NumpadMult&quot;, VK_MULTIPLY}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;NumpadDiv&quot;, VK_DIVIDE}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;NumpadAdd&quot;, VK_ADD}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;NumpadSub&quot;, VK_SUBTRACT}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;NumpadDot&quot;, VK_DECIMAL}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Numlock&quot;, VK_NUMLOCK}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;ScrollLock&quot;, VK_SCROLL}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;CapsLock&quot;, VK_CAPITAL}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Escape&quot;, VK_ESCAPE}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Esc&quot;, VK_ESCAPE}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Tab&quot;, VK_TAB}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Space&quot;, VK_SPACE}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Backspace&quot;, VK_BACK}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;BS&quot;, VK_BACK}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Enter&quot;, VK_RETURN}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Return&quot;, VK_RETURN}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;NumpadDel&quot;, VK_DELETE}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;NumpadIns&quot;, VK_INSERT}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;NumpadClear&quot;, VK_CLEAR}<span style='mso-spacerun:yes'>  </span>//
+same physical key as Numpad5 on most keyboards?<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;NumpadUp&quot;, VK_UP}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;NumpadDown&quot;, VK_DOWN}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;NumpadLeft&quot;, VK_LEFT}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;NumpadRight&quot;, VK_RIGHT}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;NumpadHome&quot;, VK_HOME}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;NumpadEnd&quot;, VK_END}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;NumpadPgUp&quot;, VK_PRIOR}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;NumpadPgDn&quot;, VK_NEXT}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;PrintScreen&quot;, VK_SNAPSHOT}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;CtrlBreak&quot;, VK_CANCEL}<span style='mso-spacerun:yes'>  </span>//
+Might want to verify this, and whether it has any peculiarities.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Pause&quot;, VK_PAUSE}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Break&quot;, VK_PAUSE}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Help&quot;, VK_HELP}<span style='mso-spacerun:yes'>  </span>// VK_HELP
+is probably not the extended HELP key.<span style='mso-spacerun:yes'> 
+</span>Not sure what this one is.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;AppsKey&quot;, VK_APPS}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>//
+UPDATE: For the NT/2k/XP version, now doing these by VK since it's likely to be<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>// more
+compatible with non-standard or non-English keyboards:<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;LControl&quot;, VK_LCONTROL}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;RControl&quot;, VK_RCONTROL}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;LShift&quot;, VK_LSHIFT}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;RShift&quot;, VK_RSHIFT}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;LAlt&quot;, VK_LMENU}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;RAlt&quot;, VK_RMENU}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>// These
+two are always left/right centric and I think their vk's are always supported
+by the various<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>//
+Windows API calls, unlike VK_RSHIFT, etc. (which are seldom supported):<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;LWin&quot;, VK_LWIN}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;RWin&quot;, VK_RWIN}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>// The
+left/right versions of these are handled elsewhere since their virtual keys
+aren't fully API-supported:<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Control&quot;, VK_CONTROL}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Alt&quot;, VK_MENU}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Shift&quot;, VK_SHIFT}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;F1&quot;, VK_F1}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;F2&quot;, VK_F2}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;F3&quot;, VK_F3}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;F4&quot;, VK_F4}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;F5&quot;, VK_F5}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;F6&quot;, VK_F6}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;F7&quot;, VK_F7}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;F8&quot;, VK_F8}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;F9&quot;, VK_F9}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;F10&quot;, VK_F10}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;F11&quot;, VK_F11}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;F12&quot;, VK_F12}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;F13&quot;, VK_F13}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;F14&quot;, VK_F14}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;F15&quot;, VK_F15}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;F16&quot;, VK_F16}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;F17&quot;, VK_F17}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;F18&quot;, VK_F18}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;F19&quot;, VK_F19}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;F20&quot;, VK_F20}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;F21&quot;, VK_F21}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;F22&quot;, VK_F22}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;F23&quot;, VK_F23}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;F24&quot;, VK_F24}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Browser_Back&quot;, VK_BROWSER_BACK}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Browser_Forward&quot;, VK_BROWSER_FORWARD}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Browser_Refresh&quot;, VK_BROWSER_REFRESH}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Browser_Stop&quot;, VK_BROWSER_STOP}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Browser_Search&quot;, VK_BROWSER_SEARCH}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Browser_Favorites&quot;, VK_BROWSER_FAVORITES}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Browser_Home&quot;, VK_BROWSER_HOME}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Volume_Mute&quot;, VK_VOLUME_MUTE}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Volume_Down&quot;, VK_VOLUME_DOWN}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Volume_Up&quot;, VK_VOLUME_UP}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Media_Next&quot;, VK_MEDIA_NEXT_TRACK}<span style='mso-spacerun:yes'> 
+</span>// Use the AutoIt3 convention of omitting &quot;_Track&quot; from the
+name.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Media_Prev&quot;, VK_MEDIA_PREV_TRACK}<span style='mso-spacerun:yes'> 
+</span>// Use the AutoIt3 convention of omitting &quot;_Track&quot; from the
+name.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Media_Stop&quot;, VK_MEDIA_STOP}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Media_Play_Pause&quot;, VK_MEDIA_PLAY_PAUSE}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Launch_Mail&quot;, VK_LAUNCH_MAIL}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Launch_Media&quot;, VK_LAUNCH_MEDIA_SELECT} // Use the AutoIt3 name.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Launch_App1&quot;, VK_LAUNCH_APP1}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Launch_App2&quot;, VK_LAUNCH_APP2}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Delete&quot;, SC_DELETE}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Del&quot;, SC_DELETE}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Insert&quot;, SC_INSERT}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Ins&quot;, SC_INSERT}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Up&quot;, SC_UP}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Down&quot;, SC_DOWN}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Left&quot;, SC_LEFT}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Right&quot;, SC_RIGHT}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;Home&quot;, SC_HOME}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;End&quot;, SC_END}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;PgUp&quot;, SC_PGUP}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>,
+{&quot;PgDn&quot;, SC_PGDN}<o:p></o:p></span></p>
+
+<p class=MsoPlainText><o:p>&nbsp;</o:p></p>
+
+<p class=MsoPlainText><o:p>&nbsp;</o:p></p>
+
+<p class=MsoPlainText><o:p>&nbsp;</o:p></p>
+
+<p class=MsoPlainText><o:p>&nbsp;</o:p></p>
+
+<p class=MsoPlainText><o:p>&nbsp;</o:p></p>
+
+<p class=MsoPlainText><span style='font-size:14.0pt;font-family:Arial'>FINAL
+NOTE<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Although
+most of the frequently-used commands have been well tested already, the app
+needs more testing overall.<span style='mso-spacerun:yes'>  </span>In addition,
+Win9x functionality is not yet complete because revised versions of the
+keyboard and mouse hooks must be produced to work with those OSes.<span
+style='mso-spacerun:yes'>  </span>Thus, while most features and hotkeys will
+work with Win9x, mouse hotkeys, alt-tab substitutes, and “advanced” hotkeys
+will not function.<span style='mso-spacerun:yes'>  </span>Finally, I'm sure
+there are some aspects of AutoIt2 compatibility that don't work.<span
+style='mso-spacerun:yes'>  </span>Please contact me with any issues that you
+find.<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'><o:p>&nbsp;</o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Thanks,<o:p></o:p></span></p>
+
+<p class=MsoPlainText><span style='font-size:12.0pt;font-family:Arial'>Chris
+Mallett -- <a href="mailto:arch78@tampabay.rr.com">arch78@tampabay.rr.com</a><o:p></o:p></span></p>
+
+<p class=MsoPlainText><o:p>&nbsp;</o:p></p>
+
+</div>
+
+</body>
+
+</html>
