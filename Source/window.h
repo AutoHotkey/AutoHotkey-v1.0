@@ -216,7 +216,7 @@ HWND WinActive(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeTex
 
 HWND WinExist(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
 	, bool aFindLastMatch = false, bool aUpdateLastUsed = false
-	, HWND aAlreadyVisited[] = NULL, int aAlreadyVisitedCount = 0, bool aReturnTheCount = false);
+	, HWND aAlreadyVisited[] = NULL, int aAlreadyVisitedCount = 0);
 
 HWND GetValidLastUsedWindow();
 

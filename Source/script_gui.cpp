@@ -1192,7 +1192,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		control.union_color = CLR_DEFAULT; // Set progress to default color avoids unnecessary stripping of theme.
 	//else don't change union_color since it shares the same address as union_hbitmap.
 
-	switch (aControlType)
+	switch (aControlType) // Set starting defaults based on control type (the above also does some of that).
 	{
 	// Some controls also have the WS_EX_CLIENTEDGE exstyle by default because they look pretty strange
 	// without them.  This seems to be the standard default used by most applications.
@@ -1217,7 +1217,12 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		break;
 	case GUI_CONTROL_LISTBOX:
 		// Omit LBS_STANDARD because it includes LBS_SORT, which we don't want as a default style.
-		opt.style_add |= WS_TABSTOP|WS_VSCROLL;  // WS_VSCROLL seems the most desirable default.
+		// However, as of v1.0.30.03, LBS_USETABSTOPS is included by default because:
+		// 1) Not doing so seems to make it impossible to apply tab stops after the control has been created.
+		// 2) Without this style, tabs appears as empty squares in the text, which seems undesirable for
+		//    99.9% of applications.
+		// 3) LBS_USETABSTOPS can be explicitly removed by specifying -0x80 in the options of "Gui Add".
+		opt.style_add |= WS_TABSTOP|WS_VSCROLL|LBS_USETABSTOPS;  // WS_VSCROLL seems the most desirable default.
 		opt.exstyle_add |= WS_EX_CLIENTEDGE;
 		break;
 	case GUI_CONTROL_EDIT:
@@ -3350,8 +3355,6 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 			case 'T': // Tabstop (the kind that exists inside a multi-line edit control or ListBox).
 				if (aOpt.tabstop_count < GUI_MAX_TABSTOPS)
 					aOpt.tabstop[aOpt.tabstop_count++] = ATOU(next_option);
-				if (aControl.type == GUI_CONTROL_LISTBOX)
-					aOpt.style_add |= LBS_USETABSTOPS; // Required to allow the ListBox to respond to LB_SETTABSTOPS.
 				//else ignore ones beyond the maximum.
 				break;
 
@@ -3746,6 +3749,13 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 				// MSDN: "If the application is changing the tab stops for text already in the edit control,
 				// it should call the InvalidateRect function to redraw the edit control window."
 				do_invalidate_rect = true; // Override the default.
+			}
+			break;
+		case GUI_CONTROL_LISTBOX:
+			if (aOpt.tabstop_count)
+			{
+				SendMessage(aControl.hwnd, LB_SETTABSTOPS, aOpt.tabstop_count, (LPARAM)aOpt.tabstop);
+				do_invalidate_rect = true; // The is done for the same reason that EDIT (above) does it.
 			}
 			break;
 		}

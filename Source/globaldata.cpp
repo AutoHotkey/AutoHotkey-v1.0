@@ -292,7 +292,7 @@ Action g_act[] =
 	, {"StringLower", 2, 3, NULL} // output var, input var, T = Title Case
 	, {"StringUpper", 2, 3, NULL} // output var, input var, T = Title Case
 	, {"StringLen", 2, 2, NULL} // output var, input var
-	, {"StringGetPos", 3, 4, NULL}  // Output Variable, Input Variable, Search Text, R or Right (from right)
+	, {"StringGetPos", 3, 5, {5, 0}}  // Output Variable, Input Variable, Search Text, R or Right (from right), Offset
 	, {"StringReplace", 3, 5, NULL} // Output Variable, Input Variable, Search String, Replace String, do-all.
 	, {"StringSplit", 2, 5, NULL} // Output Array, Input Variable, Delimiter List (optional), Omit List, Future Use
 	, {"SplitPath", 1, 6, NULL} // InputFilespec, OutName, OutDir, OutExt, OutNameNoExt, OutDrive
@@ -347,7 +347,7 @@ Action g_act[] =
 	, {"Hotkey", 1, 3, NULL}  // Mod+Keys, Label/Action (blank to avoid changing curr. label), Options
 	, {"SetTimer", 1, 3, {3, 0}}  // Label (or dereference that resolves to a label), period (or ON/OFF), Priority
 	, {"Thread", 1, 3, {2, 3, 0}}  // Command, value1 (can be blank for interrupt), value2
-	, {"Return", 0, 0, NULL}, {"Exit", 0, 1, {1, 0}} // ExitCode (currently ignored)
+	, {"Return", 0, 0, NULL}, {"Exit", 0, 1, {1, 0}} // ExitCode
 	, {"Loop", 0, 4, NULL} // Iteration Count or FilePattern or root key name [,subkey name], FileLoopMode, Recurse? (custom validation for these last two)
 	, {"Break", 0, 0, NULL}, {"Continue", 0, 0, NULL}
 	, {"{", 0, 0, NULL}, {"}", 0, 0, NULL}
@@ -413,7 +413,7 @@ Action g_act[] =
 
 	, {"FileAppend", 0, 2, NULL} // text, filename (which can be omitted in a read-file loop). Update: Text can be omitted too, to create an empty file or alter the timestamp of an existing file.
 	, {"FileRead", 2, 2, NULL} // Output variable, filename
-	, {"FileReadLine", 3, 3, NULL} // Output variable, filename, line-number (custom validation, not numeric validation)
+	, {"FileReadLine", 3, 3, {3, 0}} // Output variable, filename, line-number
 	, {"FileDelete", 1, 1, NULL} // filename or pattern
 	, {"FileRecycle", 1, 1, NULL} // filename or pattern
 	, {"FileRecycleEmpty", 0, 1, NULL} // optional drive letter (all bins will be emptied if absent.
@@ -426,15 +426,15 @@ Action g_act[] =
 	, {"FileRemoveDir", 1, 2, {2, 0}} // dir name, flag
 
 	, {"FileGetAttrib", 1, 2, NULL} // OutputVar, Filespec (if blank, uses loop's current file)
-	, {"FileSetAttrib", 1, 4, NULL} // Attribute(s), FilePattern, OperateOnFolders?, Recurse? (custom validation for these last two)
+	, {"FileSetAttrib", 1, 4, {3, 4, 0}} // Attribute(s), FilePattern, OperateOnFolders?, Recurse? (custom validation for these last two)
 	, {"FileGetTime", 1, 3, NULL} // OutputVar, Filespec, WhichTime (modified/created/accessed)
-	, {"FileSetTime", 0, 5, {1, 0}} // datetime (YYYYMMDDHH24MISS), FilePattern, WhichTime, OperateOnFolders?, Recurse?
+	, {"FileSetTime", 0, 5, {1, 4, 5, 0}} // datetime (YYYYMMDDHH24MISS), FilePattern, WhichTime, OperateOnFolders?, Recurse?
 	, {"FileGetSize", 1, 3, NULL} // OutputVar, Filespec, B|K|M (bytes, kb, or mb)
 	, {"FileGetVersion", 1, 2, NULL} // OutputVar, Filespec
 
 	, {"SetWorkingDir", 1, 1, NULL} // New path
 	, {"FileSelectFile", 1, 5, NULL} // output var, options, working dir, greeting, filter
-	, {"FileSelectFolder", 1, 4, NULL} // output var, root directory, allow create folder (0=no, 1=yes), greeting
+	, {"FileSelectFolder", 1, 4, {3, 0}} // output var, root directory, options, greeting
 
 	, {"FileGetShortcut", 1, 8, NULL} // Filespec, OutTarget, OutDir, OutArg, OutDescrip, OutIcon, OutIconIndex, OutShowState.
 	, {"FileCreateShortcut", 2, 9, {8, 9, 0}} // file, lnk [, workdir, args, desc, icon, hotkey, icon_number, run_state]

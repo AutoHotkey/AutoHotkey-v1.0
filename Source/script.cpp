@@ -271,7 +271,7 @@ ResultType Script::Init(char *aScriptFilename, bool aIsRestart)
 		g_act[ACT_MSGBOX].MaxParams -= 1;
 		g_act[ACT_INIREAD].MaxParams -= 1;
 		g_act[ACT_STRINGREPLACE].MaxParams -= 1;
-		g_act[ACT_STRINGGETPOS].MaxParams -= 1;
+		g_act[ACT_STRINGGETPOS].MaxParams -= 2;
 		g_act[ACT_WINCLOSE].MaxParams -= 3;  // -3 for these two, -2 for the others.
 		g_act[ACT_WINKILL].MaxParams -= 3;
 		g_act[ACT_WINACTIVATE].MaxParams -= 2;
@@ -2782,6 +2782,33 @@ inline ActionTypeType Script::ConvertOldActionType(char *aActionTypeString)
 
 
 
+bool LegacyArgIsExpression(char *aArgText, char *aArgMap)
+// Helper function for AddLine
+{
+	// The section below is here in light of rare legacy cases such as the below:
+	// -%y%   ; i.e. make it negative.
+	// +%y%   ; might happen with up/down adjustments on SoundSet, GuiControl progress/slider, etc?
+	// Although the above are detected as non-expressions and thus non-double-derefs,
+	// the following are not because they're too rare or would sacrifice too much flexibility:
+	// 1%y%.0 ; i.e. at a tens/hundreds place and make it a floating point.  In addition,
+	//          1%y% could be an array, so best not to tag that as non-expression.
+	//          For that matter, %y%.0 could be an obscure kind of reverse-notation array itself.
+	//          However, as of v1.0.29, things like %y%000 are allowed, e.g. Sleep %Seconds%000
+	// 0x%y%  ; i.e. make it hex (too rare to check for, plus it could be an array).
+	// %y%%z% ; i.e. concatenate two numbers to make a larger number (too rare to check for)
+	char *cp = aArgText + (*aArgText == '-' || *aArgText == '+'); // i.e. +1 if second term evaluates to true.
+	return *cp != g_DerefChar // If no deref, for simplicity assume it's an expression since any such non-numeric item would be extremely rare in pre-expression era.
+		|| !aArgMap || *(aArgMap + (cp != aArgText)) // There's no literal-map or this deref char is not really a deref char because it's marked as a literal.
+		|| !(cp = strchr(cp + 1, g_DerefChar)) // There is no next deref char.
+		|| (*(cp + 1) && !IsPureNumeric(cp + 1, false, true, true)); // But that next deref char is not the last char, which means this is not a single isolated deref. v1.0.29: Allow things like Sleep %Var%000.
+		// Above does not need to check whether last deref char is marked literal in the
+		// arg map because if it is, it would mean the first deref char lacks a matching
+		// close-symbol, which will be caught as a syntax error below regardless of whether
+		// this is an expression.
+}
+
+
+
 ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountType aArgc, char *aArgMap[])
 // aArg must be a collection of pointers to memory areas that are modifiable, and there
 // must be at least MAX_ARGS number of pointers in the aArg array.
@@ -2803,6 +2830,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	char *this_aArgMap, *this_aArg, *cp;
 	int open_parens;
 	ActionTypeType *np;
+	TransformCmds trans_cmd;
 
 	if (!aArgc)
 		new_arg = NULL;  // Just need an empty array in this case.
@@ -2820,6 +2848,31 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			this_aArgMap = aArgMap ? aArgMap[i] : NULL; // Same.
 			ArgStruct &this_new_arg = new_arg[i];       // Same.
 			this_new_arg.is_expression = false;         // Set default early, for maintainability.
+
+			if (aActionType == ACT_TRANSFORM)
+			{
+				if (i == 1) // The second parameter (since the first is the OutputVar).
+					// Note that the following might return TRANS_CMD_INVALID just because the sub-command
+					// is containined in a variable reference.  That is why TRANS_CMD_INVALID does not
+					// produce an error at this stage, but only later when the line has been constructed
+					// far enough to call ArgHasDeref():
+					trans_cmd = Line::ConvertTransformCmd(this_aArg);
+					// The value of trans_cmd is also used by the syntax checker further below.
+				else if (i > 1) // i.e. Not the first param, only the third and fourth, which currently are either both numeric or both non-numeric for all cases.
+				{
+					switch(trans_cmd)
+					{
+					case TRANS_CMD_INVALID: // See comment above for why this isn't yet reported as an error.
+					case TRANS_CMD_ASC:
+					case TRANS_CMD_UNICODE:
+					case TRANS_CMD_DEREF:
+					case TRANS_CMD_HTML:
+						break; // Do nothing.  Leave this_new_arg.is_expression set to its default of false.
+					default: // For all other sub-commands, Arg #3 and #4 are expression-capable.
+						this_new_arg.is_expression = LegacyArgIsExpression(this_aArg, this_aArgMap);
+					}
+				}
+			}
 
 			// Before allocating memory for this Arg's text, first check if it's a pure
 			// variable.  If it is, we store it differently (and there's no need to resolve
@@ -2941,12 +2994,6 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 								if (aArgc > 2) // Title/text are not numeric/expressions.
 									break; // The loop is over because this arg was found in the list.
 						}
-						// To help runtime performance, the below leaves an ACT_ASSIGNEXPR marked as a
-						// non-expression if its expression consists of only a single literal number.
-						// At runtime, such args are expanded normally rather than having to run them
-						// through the expression evaluator:
-						if (IsPureNumeric(this_new_arg.text, true, true, true))
-							break; // The loop is over because this arg was found in the list.
 						// Otherwise, it might be an expression so do the final checks.
 						// Override the original false default of is_expression unless an exception applies.
 						// Since ACT_ASSIGNEXPR is not a legacy command, none of the legacy exceptions need
@@ -2955,33 +3002,18 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 						if (aActionType == ACT_ASSIGNEXPR || StrChrAny(this_new_arg.text, EXP_TELLTALES))
 							this_new_arg.is_expression = true;
 						else
-						{
-							// The section below is here in light of rare legacy cases such as the below:
-							// -%y%   ; i.e. make it negative.
-							// +%y%   ; might happen with up/down adjustments on SoundSet, GuiControl progress/slider, etc?
-							// Although the above are detected as non-expressions and thus non-double-derefs,
-							// the following are not because they're too rare or would sacrifice too much flexibility:
-							// 1%y%.0 ; i.e. at a tens/hundreds place and make it a floating point.  In addition,
-							//          1%y% could be an array, so best not to tag that as non-expression.
-							//          For that matter, %y%.0 could be an obscure kind of reverse-notation array itself.
-							//          However, as of v1.0.29, things like %y%000 are allowed, e.g. Sleep %Seconds%000
-							// 0x%y%  ; i.e. make it hex (too rare to check for, plus it could be an array).
-							// %y%%z% ; i.e. concatenate two numbers to make a larger number (too rare to check for)
-							cp = this_new_arg.text + (*this_new_arg.text == '-' || *this_new_arg.text == '+'); // i.e. +1 if second term evaluates to true.
-							if (*cp != g_DerefChar // If no deref, for simplicity assume it's an expression since any such non-numeric item would be extremely rare in pre-expression era.
-								|| !this_aArgMap || *(this_aArgMap + (cp != this_new_arg.text)) // There's no literal-map or this deref char is not really a deref char because it's marked as a literal.
-								|| !(cp = strchr(cp + 1, g_DerefChar)) // There is no next deref char.
-								|| (*(cp + 1) && !IsPureNumeric(cp + 1, false, true, true))) // But that next deref char is not the last char, which means this is not a single isolated deref. v1.0.29: Allow things like Sleep %Var%000.
-								// Above does not need to check whether last deref char is marked literal in the
-								// arg map because if it is, it would mean the first deref char lacks a matching
-								// close-symbol, which will be caught as a syntax error below regardless of whether
-								// this is an expression.
-								this_new_arg.is_expression = true;
-						}
+							this_new_arg.is_expression = LegacyArgIsExpression(this_new_arg.text, this_aArgMap);
 						break; // The loop is over if this arg is found in the list of mandatory-numeric args.
 					} // i is a mandatory-numeric arg
 				} // for each mandatory-numeric arg of this command, see if this arg matches its number.
 			} // this command has a list of mandatory numeric-args.
+
+			// To help runtime performance, the below changes an ACT_ASSIGNEXPR, ACT_TRANSFORM, and
+			// perhaps others in the future, to become non-expressions if they contain only a single
+			// numeric literal (or are entirely blank). At runtime, such args are expanded normally
+			// rather than having to run them through the expression evaluator:
+			if (this_new_arg.is_expression && IsPureNumeric(this_new_arg.text, true, true, true))
+				this_new_arg.is_expression = false;
 
 			if (this_new_arg.is_expression)
 			{
@@ -3204,7 +3236,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					if (aActionType == ACT_ASSIGNEXPR && deref[0].var->mType == VAR_CLIPBOARDALL)
 						aActionType = ACT_ASSIGN;
 				}
-				else if (deref_count && !StrChrAny(this_new_arg.text, EXP_OPERAND_TERMINATORS))
+				else if (deref_count && !StrChrAny(this_new_arg.text, EXP_OPERAND_TERMINATORS)) // No spaces, tabs, etc.
 				{
 					// Adjust if any of the following special cases apply:
 					// x := y  -> Mark as non-expression (after expression-parsing set up parsed derefs above)
@@ -3335,17 +3367,6 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_STRINGMID:
-	case ACT_FILEREADLINE:
-		if (aArgc > 2 && !line->ArgHasDeref(3))
-		{
-			if (!IsPureNumeric(NEW_RAW_ARG3, false, false, false) || !ATOI64(NEW_RAW_ARG3))
-				// This error is caught at load-time, but at runtime it's not considered
-				// an error (i.e. if a variable resolves to zero or less, StringMid will
-				// automatically consider it to be 1, though FileReadLine would consider
-				// it an error):
-				return ScriptError("Parameter #3 must be a number greater than zero or a variable reference."
-					, NEW_RAW_ARG3);
-		}
 		if (aArgc > 4 && !line->ArgHasDeref(5) && stricmp(NEW_RAW_ARG5, "L"))
 			return ScriptError("Parameter #5 must be blank, the letter L, or a variable reference.", NEW_RAW_ARG5);
 		break;
@@ -3395,8 +3416,13 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 
 	case ACT_SOUNDGET:
 	case ACT_SOUNDSET:
+		// Pass "true" so that double derefs (such as Array%i%) that have been transformed into
+		// input variables at an earlier stage will not be seen here as literal text capable of
+		// being validated:
 		if (aActionType == ACT_SOUNDSET && aArgc > 0 && !line->ArgHasDeref(1))
 		{
+			// The value of catching syntax errors at load-time seems to outweigh the fact that this check
+			// sees a valid no-deref expression such as 300-250 as invalid.
 			value_float = ATOF(NEW_RAW_ARG1);
 			if (value_float < -100 || value_float > 100)
 				return ScriptError(ERR_PERCENT, NEW_RAW_ARG1);
@@ -3408,8 +3434,13 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_SOUNDSETWAVEVOLUME:
+		// Pass "true" so that double derefs (such as Array%i%) that have been transformed into
+		// input variables at an earlier stage will not be seen here as literal text capable of
+		// being validated:
 		if (aArgc > 0 && !line->ArgHasDeref(1))
 		{
+			// The value of catching syntax errors at load-time seems to outweigh the fact that this check
+			// sees a valid no-deref expression such as 300-250 as invalid.
 			value_float = ATOF(NEW_RAW_ARG1);
 			if (value_float < -100 || value_float > 100)
 				return ScriptError(ERR_PERCENT, NEW_RAW_ARG1);
@@ -3432,8 +3463,13 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			return ScriptError("Parameters 3 through 7 must not be blank.");
 		if (aActionType != ACT_IMAGESEARCH)
 		{
+			// Pass "true" so that double derefs (such as Array%i%) that have been transformed into
+			// input variables at an earlier stage will not be seen here as literal text capable of
+			// being validated:
 			if (*NEW_RAW_ARG8 && !line->ArgHasDeref(8))
 			{
+				// The value of catching syntax errors at load-time seems to outweigh the fact that this check
+				// sees a valid no-deref expression such as 300-200 as invalid.
 				value = ATOI(NEW_RAW_ARG8);
 				if (value < 0 || value > 255)
 					return ScriptError("Parameter #8 must be number between 0 and 255, blank, or a variable reference."
@@ -3448,8 +3484,14 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_SETDEFAULTMOUSESPEED:
+		// Pass "true" so that double derefs (such as Array%i%) that have been transformed into
+		// input variables at an earlier stage will not be seen here as literal text capable of
+		// being validated:
 		if (*NEW_RAW_ARG1 && !line->ArgHasDeref(1))
+
 		{
+			// The value of catching syntax errors at load-time seems to outweigh the fact that this check
+			// sees a valid no-deref expression such as 1+2 as invalid.
 			value = ATOI(NEW_RAW_ARG1);
 			if (value < 0 || value > MAX_MOUSE_SPEED)
 				return ScriptError(ERR_MOUSE_SPEED, NEW_RAW_ARG1);
@@ -3457,8 +3499,13 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_MOUSEMOVE:
+		// Pass "true" so that double derefs (such as Array%i%) that have been transformed into
+		// input variables at an earlier stage will not be seen here as literal text capable of
+		// being validated:
 		if (*NEW_RAW_ARG3 && !line->ArgHasDeref(3))
 		{
+			// The value of catching syntax errors at load-time seems to outweigh the fact that this check
+			// sees a valid no-deref expression such as 200-150 as invalid.
 			value = ATOI(NEW_RAW_ARG3);
 			if (value < 0 || value > MAX_MOUSE_SPEED)
 				return ScriptError(ERR_MOUSE_SPEED, NEW_RAW_ARG3);
@@ -3470,8 +3517,13 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_MOUSECLICK:
+		// Pass "true" so that double derefs (such as Array%i%) that have been transformed into
+		// input variables at an earlier stage will not be seen here as literal text capable of
+		// being validated:
 		if (*NEW_RAW_ARG5 && !line->ArgHasDeref(5))
 		{
+			// The value of catching syntax errors at load-time seems to outweigh the fact that this check
+			// sees a valid no-deref expression such as 200-150 as invalid.
 			value = ATOI(NEW_RAW_ARG5);
 			if (value < 0 || value > MAX_MOUSE_SPEED)
 				return ScriptError(ERR_MOUSE_SPEED, NEW_RAW_ARG5);
@@ -3493,8 +3545,13 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		// (i.e. if a dereferenced var resolved to blank, it will be treated as a zero):
 		if (!*NEW_RAW_ARG4 || !*NEW_RAW_ARG5)
 			return ScriptError("Parameter #4 and #5 must not be blank.");
+		// Pass "true" so that double derefs (such as Array%i%) that have been transformed into
+		// input variables at an earlier stage will not be seen here as literal text capable of
+		// being validated:
 		if (*NEW_RAW_ARG6 && !line->ArgHasDeref(6))
 		{
+			// The value of catching syntax errors at load-time seems to outweigh the fact that this check
+			// sees a valid no-deref expression such as 200-150 as invalid.
 			value = ATOI(NEW_RAW_ARG6);
 			if (value < 0 || value > MAX_MOUSE_SPEED)
 				return ScriptError(ERR_MOUSE_SPEED, NEW_RAW_ARG6);
@@ -3544,9 +3601,13 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_FILEMOVE:
 	case ACT_FILECOPYDIR:
 	case ACT_FILEMOVEDIR:
-	case ACT_FILESELECTFOLDER:
+		// Pass "true" so that double derefs (such as Array%i%) that have been transformed into
+		// input variables at an earlier stage will not be seen here as literal text capable of
+		// being validated:
 		if (*NEW_RAW_ARG3 && !line->ArgHasDeref(3))
 		{
+			// The value of catching syntax errors at load-time seems to outweigh the fact that this check
+			// sees a valid no-deref expression such as 2-1 as invalid.
 			if (strlen(NEW_RAW_ARG3) > 1 || *NEW_RAW_ARG3 < '0' || *NEW_RAW_ARG3 > '3')
 				if (aActionType != ACT_FILEMOVEDIR || toupper(*NEW_RAW_ARG3) != 'R')
 					return ScriptError("Parameter #3 is not valid.", NEW_RAW_ARG3);
@@ -3560,8 +3621,13 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_FILEREMOVEDIR:
+		// Pass "true" so that double derefs (such as Array%i%) that have been transformed into
+		// input variables at an earlier stage will not be seen here as literal text capable of
+		// being validated:
 		if (*NEW_RAW_ARG2 && !line->ArgHasDeref(2))
 		{
+			// The value of catching syntax errors at load-time seems to outweigh the fact that this check
+			// sees a valid no-deref expression such as 3-2 as invalid.
 			if (strlen(NEW_RAW_ARG2) > 1 || (*NEW_RAW_ARG2 != '0' && *NEW_RAW_ARG2 != '1'))
 				return ScriptError("Parameter #2 must be either blank, 0, 1, or a variable reference."
 					, NEW_RAW_ARG2);
@@ -3576,6 +3642,12 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					return ScriptError("Parameter #1 contains unsupported file-attribute letters or symbols."
 						, NEW_RAW_ARG1);
 		}
+		// For the next two checks:
+		// Pass "true" so that double derefs (such as Array%i%) that have been transformed into
+		// input variables at an earlier stage will not be seen here as literal text capable of
+		// being validated.
+		// The value of catching syntax errors at load-time seems to outweigh the fact that this check
+		// sees a valid no-deref expression such as 300-200 as invalid.
 		if (aArgc > 2 && !line->ArgHasDeref(3) && line->ConvertLoopMode(NEW_RAW_ARG3) == FILE_LOOP_INVALID)
 			return ScriptError("If not blank, parameter #3 must be either 0, 1, 2, or a variable reference."
 				, NEW_RAW_ARG3);
@@ -3598,6 +3670,12 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		if (*NEW_RAW_ARG3 && !line->ArgHasDeref(3))
 			if (strlen(NEW_RAW_ARG3) > 1 || !strchr("MCA", toupper(*NEW_RAW_ARG3)))
 				return ScriptError(ERR_FILE_TIME, NEW_RAW_ARG3);
+		// For the next two checks:
+		// Pass "true" so that double derefs (such as Array%i%) that have been transformed into
+		// input variables at an earlier stage will not be seen here as literal text capable of
+		// being validated.
+		// The value of catching syntax errors at load-time seems to outweigh the fact that this check
+		// sees a valid no-deref expression such as 300-200 as invalid.
 		if (aArgc > 3 && !line->ArgHasDeref(4) && line->ConvertLoopMode(NEW_RAW_ARG4) == FILE_LOOP_INVALID)
 			return ScriptError("If not blank, parameter #4 must be either 0, 1, 2, or a variable reference."
 				, NEW_RAW_ARG4);
@@ -3660,7 +3738,9 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_TRANSFORM:
 		if (aArgc > 1 && !line->ArgHasDeref(2))
 		{
-			TransformCmds trans_cmd = line->ConvertTransformCmd(NEW_RAW_ARG2);
+			// The value of trans_cmd was already set at an earlier stage, but only here can the error
+			// for NEW_RAW_ARG3 be displayed because only here was it finally possible to call
+			// ArgHasDeref() [above].
 			if (trans_cmd == TRANS_CMD_INVALID)
 				return ScriptError(ERR_TRANSFORMCOMMAND, NEW_RAW_ARG2);
 			if (trans_cmd == TRANS_CMD_UNICODE && !*line->mArg[0].text) // blank text means output-var is not a dynamically built one.
@@ -3680,7 +3760,10 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 						return ScriptError("Parameter #3 must be blank in this case.", NEW_RAW_ARG3);
 				break; // This type has been fully checked above.
 			}
-			if (!line->ArgHasDeref(3))
+
+			// The value of catching syntax errors at load-time seems to outweigh the fact that this check
+			// sees a valid no-deref expression such as 1+2 as invalid.
+			if (!line->ArgHasDeref(3)) // "true" since it might have been made into an InputVar due to being a simple expression.
 			{
 				switch(trans_cmd)
 				{
@@ -4177,7 +4260,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				if (!IsPureNumeric(NEW_RAW_ARG1)) // Allow it to be entirely whitespace to indicate 0, like Aut2.
 					return ScriptError("When used with more than one parameter, MsgBox requires that"
 						" the 1st parameter be numeric or a variable reference.", NEW_RAW_ARG1);
-		if (aArgc > 3)
+		if (aArgc > 3) // EVEN THOUGH IT'S NUMERIC, due to MsgBox's smart-comma handling, this cannot be an expression because it would never have been detected as the fourth parameter to begin with.
 			if (!line->ArgHasDeref(4)) // i.e. if it's a deref, we won't try to validate it now.
 				if (!IsPureNumeric(NEW_RAW_ARG4, false, true, true))
 					return ScriptError("MsgBox requires that the 4th parameter, if present, be numeric & positive,"
@@ -7663,41 +7746,61 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	{
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
-		bool search_from_the_right = toupper(*ARG4) == 'R' || *ARG4 == '1';
-		int i, pos = -1, occurrence_number = 1; // Set defaults.
-		if (strchr("LR", toupper(*ARG4)))
-			occurrence_number = *(ARG4 + 1) ? ATOI(ARG4 + 1) : 1;
+		char *arg4 = ARG4;
+		int pos = -1; // Set default.
+		int occurrence_number;
+		if (*arg4 && strchr("LR", toupper(*arg4)))
+			occurrence_number = *(arg4 + 1) ? ATOI(arg4 + 1) : 1;
+		else
+			occurrence_number = 1;
 		// Intentionally allow occurrence_number to resolve to a negative, for scripting flexibililty:
 		if (occurrence_number > 0)
 		{
 			if (!*ARG3) // It might be intentional, in obscure cases, to search for the empty string.
 				pos = 0;
 				// Above: empty string is always found immediately (first char from left) regardless
-				// of whether search_from_the_right is true.  This is because it's too rare to
-				// worry about giving it any more explicit handling based on search_from_the_right.
+				// of whether the search will be conducted from the right.  This is because it's too
+				// rare to worry about giving it any more explicit handling based on search direction.
 			else
 			{
-				char *found, *search_str = ARG3;
-				size_t search_str_length = strlen(search_str);
-				if (search_from_the_right)
-					// Want it to behave like in this example: If searching for the 2nd occurrence of
-					// FF in the string FFFF, it should find the first two F's, not the middle two:
-					found = strrstr(ARG2, search_str, g.StringCaseSense, occurrence_number);
-				else
+				char *found, *haystack = ARG2, *needle = ARG3;
+				int offset = ATOI(ARG5); // v1.0.30.03
+				if (offset < 0)
+					offset = 0;
+				size_t haystack_length = offset ? strlen(haystack) : 1; // Avoids calling strlen() if no offset, in which case length isn't needed here.
+				if (offset < (int)haystack_length)
 				{
-					// Want it to behave like in this example: If searching for the 2nd occurrence of
-					// FF in the string FFFF, it should find position 3 (the 2nd pair), not position 2:
-					for (i = 1, found = ARG2; ; ++i, found += search_str_length)
+					if (*arg4 == '1' || toupper(*arg4) == 'R') // Conduct the search starting at the right side, moving leftward.
 					{
-						if (   !(found = g.StringCaseSense ? strstr(found, search_str) : strcasestr(found, search_str))   )
-							break;
-						if (i == occurrence_number)
-							break;
+						char prev_char, *terminate_here;
+						if (offset)
+						{
+							terminate_here = haystack + haystack_length - offset;
+							prev_char = *terminate_here;
+							*terminate_here = '\0';  // Temporarily terminate for the duration of the search.
+						}
+						// Want it to behave like in this example: If searching for the 2nd occurrence of
+						// FF in the string FFFF, it should find the first two F's, not the middle two:
+						found = strrstr(haystack, needle, g.StringCaseSense, occurrence_number);
+						if (offset)
+							*terminate_here = prev_char;
 					}
+					else
+					{
+						// Want it to behave like in this example: If searching for the 2nd occurrence of
+						// FF in the string FFFF, it should find position 3 (the 2nd pair), not position 2:
+						size_t needle_length = strlen(needle);
+						int i;
+						for (i = 1, found = haystack + offset; ; ++i, found += needle_length)
+							if (   !(found = g.StringCaseSense ? strstr(found, needle) : strcasestr(found, needle))
+								|| i == occurrence_number)
+								break;
+					}
+					if (found)
+						pos = (int)(found - haystack);
+					// else leave pos set to its default value, -1.
 				}
-				if (found)
-					pos = (int)(found - ARG2);
-				// else leave pos set to its default value, -1.
+				//else offset >= strlen(haystack), so no match is possible in either left or right mode.
 			}
 		}
 		g_ErrorLevel->Assign(pos < 0 ? ERRORLEVEL_ERROR : ERRORLEVEL_NONE);
@@ -7965,12 +8068,12 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		#define USE_FILE_LOOP_FILE_IF_ARG_BLANK(arg) (*arg ? arg : (aCurrentFile ? aCurrentFile->cFileName : ""))
 		return FileGetAttrib(USE_FILE_LOOP_FILE_IF_ARG_BLANK(ARG2));
 	case ACT_FILESETATTRIB:
-		FileSetAttrib(ARG1, USE_FILE_LOOP_FILE_IF_ARG_BLANK(ARG2), ConvertLoopMode(ARG3), !strcmp(ARG4, "1"));
+		FileSetAttrib(ARG1, USE_FILE_LOOP_FILE_IF_ARG_BLANK(ARG2), ConvertLoopMode(ARG3), ATOI(ARG4) == 1);
 		return OK; // Always return OK since ErrorLevel will indicate if there was a problem.
 	case ACT_FILEGETTIME:
 		return FileGetTime(USE_FILE_LOOP_FILE_IF_ARG_BLANK(ARG2), *ARG3);
 	case ACT_FILESETTIME:
-		FileSetTime(ARG1, USE_FILE_LOOP_FILE_IF_ARG_BLANK(ARG2), *ARG3, ConvertLoopMode(ARG4), !strcmp(ARG5, "1"));
+		FileSetTime(ARG1, USE_FILE_LOOP_FILE_IF_ARG_BLANK(ARG2), *ARG3, ConvertLoopMode(ARG4), ATOI(ARG5) == 1);
 		return OK; // Always return OK since ErrorLevel will indicate if there was a problem.
 	case ACT_FILEGETSIZE:
 		return FileGetSize(USE_FILE_LOOP_FILE_IF_ARG_BLANK(ARG2), ARG3);
@@ -11497,7 +11600,7 @@ char *Line::LogToText(char *aBuf, int aBufSize) // aBufSize should be an int to 
 
 
 
-char *Line::VicinityToText(char *aBuf, int aBufSize, int aMaxLines) // aBufSize should be an int to preserve negatives from caller (caller relies on this).
+char *Line::VicinityToText(char *aBuf, int aBufSize) // aBufSize should be an int to preserve negatives from caller (caller relies on this).
 // aBufSize is an int so that any negative values passed in from caller are not lost.
 // Caller has ensured that aBuf isn't NULL.
 // Translates the current line and the lines above and below it into their text equivalent
@@ -11505,23 +11608,26 @@ char *Line::VicinityToText(char *aBuf, int aBufSize, int aMaxLines) // aBufSize 
 {
 	char *aBuf_orig = aBuf;
 
-	if (aMaxLines < 5)
-		aMaxLines = 5;
-	--aMaxLines; // -1 to leave room for the current line itself.
-
-	int lines_following = (int)(aMaxLines / 2);
-	int lines_preceding = aMaxLines - lines_following;
+	#define LINES_ABOVE_AND_BELOW 7
 
 	// Determine the correct value for line_start and line_end:
 	int i;
 	Line *line_start, *line_end;
 	for (i = 0, line_start = this
-		; i < lines_preceding && line_start->mPrevLine != NULL
+		; i < LINES_ABOVE_AND_BELOW && line_start->mPrevLine != NULL
 		; ++i, line_start = line_start->mPrevLine);
 
 	for (i = 0, line_end = this
-		; i < lines_following && line_end->mNextLine != NULL
+		; i < LINES_ABOVE_AND_BELOW && line_end->mNextLine != NULL
 		; ++i, line_end = line_end->mNextLine);
+
+#ifdef AUTOHOTKEYSC
+	if (!g_AllowMainWindow) // Override the above to show only a single line, to conceal the script's source code.
+	{
+		line_start = this;
+		line_end = this;
+	}
+#endif
 
 	// Now line_start and line_end are the first and last lines of the range
 	// we want to convert to text, and they're non-NULL.
@@ -11586,7 +11692,7 @@ char *Line::ToText(char *aBuf, int aBufSize, bool aCRLF, DWORD aElapsed, bool aL
 				? VAR(mArg[i])->mName : mArg[i].text);
 	}
 	if (aElapsed)
-		aBuf += snprintf(aBuf, BUF_SPACE_REMAINING, " (%s%0.2f)", aLineWasResumed ? "Still waiting: " : "", (float)aElapsed / 1000.0);
+		aBuf += snprintf(aBuf, BUF_SPACE_REMAINING, " (%s%0.2f)", aLineWasResumed ? "STILL WAITING: " : "", (float)aElapsed / 1000.0);
 	// UPDATE for v1.0.25: It seems that MessageBox(), which is the only way these lines are currently
 	// displayed, prefers \n over \r\n because otherwise, Ctrl-C on the MsgBox copies the lines all
 	// onto one line rather than formatted nicely as separate lines.

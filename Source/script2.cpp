@@ -1103,12 +1103,14 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 		ASSIGN_BASED_ON_TYPE
 
 	case TRANS_CMD_POW:
-		// Currently, a negative aValue1 isn't supported (AutoIt3 doesn't support them either).
-		// The reason for this is that since fractional exponents are supported (e.g. 0.5, which
-		// results in the square root), there would have to be some extra detection to ensure
-		// that a negative aValue1 is never used with fractional exponent (since the sqrt of
-		// a negative is undefined).  In addition, qmathPow() doesn't support negatives, returning
-		// an unexpectedly large value or -1.#IND00 instead.
+		// The code here should be kept in sync with the behavior of the POWER operator (**)
+		// in ExpandExpression.
+		// Currently, a negative aValue1 isn't supported.  The reason for this is that since
+		// fractional exponents are supported (e.g. 0.5, which results in the square root),
+		// there would have to be some extra detection to ensure that a negative aValue1 is
+		// never used with fractional exponent (since the sqrt of a negative is undefined).
+		// In addition, qmathPow() doesn't support negatives, returning an unexpectedly large
+		// value or -1.#IND00 instead.
 		value_double1 = ATOF(aValue1);
 		value_double2 = ATOF(aValue2);
 		// Zero raised to a negative power is undefined, similar to division-by-zero, and thus treated as a failure.
@@ -3438,13 +3440,13 @@ ResultType Line::WinGetClass(char *aTitle, char *aText, char *aExcludeTitle, cha
 
 
 
-ResultType WinGetList(Var *output_var, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
+ResultType WinGetList(Var *output_var, WinGetCmds aCmd, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
 // Helper function for WinGet() to avoid having a WindowSearch object on its stack (since that object
 // normally isn't needed).  Caller has ensured that output_var isn't NULL.
 {
 	WindowSearch ws;
 	ws.mFindLastMatch = true; // Must set mFindLastMatch to get all matches rather than just the first.
-	ws.mArrayStart = output_var; // Provide the position in the var list of where the array-element vars will be.
+	ws.mArrayStart = (aCmd == WINGET_CMD_LIST) ? output_var : NULL; // Provide the position in the var list of where the array-element vars will be.
 	// If aTitle is ahk_id nnnn, the Enum() below will be inefficient.  However, ahk_id is almost unheard of
 	// in this context because it makes little sense, so no extra code is added to make that case efficient.
 	if (ws.SetCriteria(aTitle, aText, aExcludeTitle, aExcludeText)) // These criteria allow the possibilty of a match.
@@ -3471,7 +3473,8 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 	bool target_window_determined = true;  // Set default.
 	HWND target_window;
 	IF_USE_FOREGROUND_WINDOW(aTitle, aText, aExcludeTitle, aExcludeText)
-	else if (!(*aTitle || *aText || *aExcludeTitle || *aExcludeText) && cmd != WINGET_CMD_LIST) // v1.0.30.02: Have "list" get all windows on the system when there are no parameters.
+	else if (!(*aTitle || *aText || *aExcludeTitle || *aExcludeText)
+		&& !(cmd == WINGET_CMD_LIST || cmd == WINGET_CMD_COUNT)) // v1.0.30.02/v1.0.30.03: Have "list"/"count" get all windows on the system when there are no parameters.
 		target_window = GetValidLastUsedWindow();
 	else
 		target_window_determined = false;  // A different method is required.
@@ -3512,13 +3515,8 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 		return output_var->Assign();
 
 	case WINGET_CMD_COUNT:
-		if (target_window_determined) // target_window (if non-NULL) represents exactly 1 window in this case.
-			return output_var->Assign(target_window ? "1" : "0");
-		// Otherwise, have WinExist() get the count for us:
-		return output_var->Assign((DWORD)WinExist(aTitle, aText, aExcludeTitle, aExcludeText, true, false, NULL, 0, true));
-
 	case WINGET_CMD_LIST:
-		// Retrieves a list of HWNDs for the windows that match the given criteria and stores them in
+		// LIST retrieves a list of HWNDs for the windows that match the given criteria and stores them in
 		// an array.  The number of items in the array is stored in the base array name (unlike
 		// StringSplit, which stores them in array element #0).  This is done for performance reasons
 		// (so that element #0 doesn't have to be looked up at runtime), but mostly because of the
@@ -3531,18 +3529,21 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 		{
 			if (!target_window)
 				return output_var->Assign("0"); // 0 windows found
-			// Otherwise, since the target window has been determined, we know that it is
-			// the only window to be put into the array:
-			snprintf(var_name, sizeof(var_name), "%s1", output_var->mName);
-			if (   !(array_item = g_script.FindOrAddVar(var_name))   )  // Find or create element #1.
-				return FAIL;  // It will have already displayed the error.
-			if (!array_item->AssignHWND(target_window))
-				return FAIL;
+			if (cmd == WINGET_CMD_LIST)
+			{
+				// Otherwise, since the target window has been determined, we know that it is
+				// the only window to be put into the array:
+				snprintf(var_name, sizeof(var_name), "%s1", output_var->mName);
+				if (   !(array_item = g_script.FindOrAddVar(var_name))   )  // Find or create element #1.
+					return FAIL;  // It will have already displayed the error.
+				if (!array_item->AssignHWND(target_window))
+					return FAIL;
+			}
 			return output_var->Assign("1");  // 1 window found
 		}
 		// Otherwise, the target window(s) have not yet been determined and a special method
 		// is required to gather them.
-		return WinGetList(output_var, aTitle, aText, aExcludeTitle, aExcludeText); // Outsourced to avoid having a WindowSearch object on this function's stack.
+		return WinGetList(output_var, cmd, aTitle, aText, aExcludeTitle, aExcludeText); // Outsourced to avoid having a WindowSearch object on this function's stack.
 
 	case WINGET_CMD_MINMAX:
 		if (!target_window_determined)
@@ -4228,7 +4229,7 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, COLOR
 		// (in 16bit there is an extra bit but i forgot for which color). And this will explain the
 		// second problem [in the test script], since GetPixel even in 16bit will return some "valid"
 		// data in the last 3bits of each byte."
-		int i;
+		register i;
 		LONG screen_pixel_count = screen_width * screen_height;
 		if (screen_is_16bit)
 			for (i = 0; i < screen_pixel_count; ++i)
@@ -4335,7 +4336,7 @@ fast_end:
 	// This feature was requested; it was put into effect for v1.0.25.06.
 	bool right_to_left = aLeft > aRight;
 	bool bottom_to_top = aTop > aBottom;
-	int xpos, ypos;
+	register xpos, ypos;
 
 	if (aVariation > 0)
 		SET_COLOR_RANGE
@@ -4479,7 +4480,7 @@ ResultType Line::ImageSearch(int aLeft, int aTop, int aRight, int aBottom, char 
 
 	LONG image_pixel_count = image_width * image_height;
 	LONG screen_pixel_count = screen_width * screen_height;
-	int i, j, k, x, y, p;
+	register i, j, k, x, y, p;
 
 	// If either is 16-bit, convert to 32-bit:
 	if (image_is_16bit || screen_is_16bit)
@@ -4621,7 +4622,16 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			// else do nothing.
 #endif
 			return 0;
-		case WM_RBUTTONDOWN:
+		case WM_RBUTTONUP:
+			// v1.0.30.03:
+			// Opening the menu upon UP vs. DOWN solves at least one set of problems: The fact that
+			// when the right mouse button is remapped as shown in the example below, it prevents
+			// the left button from being able to select a menu item from the tray menu.  It might
+			// solve other problems also, and it seems fairly common for other apps to open the
+			// menu upon UP rather than down.  Even Explorer's own context menus are like this.
+			// The following example is trivial and serves only to illustrate the former problem:
+			//MButton::Send {RButton down}
+			//MButton up::Send {RButton up}
 			g_script.mTrayMenu->Display(false);
 			return 0;
 		} // Inner switch()
@@ -6658,7 +6668,7 @@ ResultType Line::PerformAssign()
 		// says: "If the system provides an automatic type conversion for a particular clipboard format,
 		// there is no advantage to placing the conversion format(s) on the clipboard."
 		bool format_is_text;
-		UINT dib_format_to_omit = 0, text_format_to_include = 0;
+		UINT dib_format_to_omit = 0, meta_format_to_omit = 0, text_format_to_include = 0;
 		// Start space_needed off at 4 to allow room for guaranteed final termination of output_var's contents.
 		// The termination must be of the same size as format because a single-byte terminator would
 		// be read in as a format of 0x00?????? where ?????? is an access violation beyond the buffer.
@@ -6692,6 +6702,13 @@ ResultType Line::PerformAssign()
 					else if (format == CF_DIBV5)
 						dib_format_to_omit = CF_DIB;
 				}
+				if (!meta_format_to_omit) // Checked for the same reasons as dib_format_to_omit.
+				{
+					if (format == CF_ENHMETAFILE)
+						meta_format_to_omit = CF_METAFILEPICT;
+					else if (format == CF_METAFILEPICT)
+						meta_format_to_omit = CF_ENHMETAFILE;
+				}
 			}
 			//else omit this format from consideration.
 		}
@@ -6723,7 +6740,7 @@ ResultType Line::PerformAssign()
 			// No point in calling GetLastError() since it would never be executed because the loop's
 			// condition breaks on zero return value.
 			if ((format == CF_TEXT || format == CF_OEMTEXT || format == CF_UNICODETEXT) && format != text_format_to_include
-				|| format == dib_format_to_omit)
+				|| format == dib_format_to_omit || format == meta_format_to_omit)
 				continue;
 			// Although the GlobalSize() documentation implies that a valid HGLOBAL should not be zero in
 			// size, it does happen, at least in MS Word and for CF_BITMAP.  Therefore, in order to save
@@ -9535,22 +9552,28 @@ ResultType Line::WriteClipboardToFile(char *aFilespec)
 	SIZE_T size;
 	DWORD bytes_written;
 	BOOL result;
-	bool format_is_text, format_is_dib, text_was_already_written = false, dib_was_already_written = false;
+	bool format_is_text, format_is_dib, format_is_meta;
+	bool text_was_already_written = false, dib_was_already_written = false, meta_was_already_written = false;
 
 	for (format = 0; format = EnumClipboardFormats(format);)
 	{
 		format_is_text = (format == CF_TEXT || format == CF_OEMTEXT || format == CF_UNICODETEXT);
 		format_is_dib = (format == CF_DIB || format == CF_DIBV5);
+		format_is_meta = (format == CF_ENHMETAFILE || format == CF_METAFILEPICT);
 
 		// Only write one Text and one Dib format, omitting the others to save space.  See
 		// similar section in PerformAssign() for details:
-		if (format_is_text && text_was_already_written || format_is_dib && dib_was_already_written)
+		if (format_is_text && text_was_already_written
+			|| format_is_dib && dib_was_already_written
+			|| format_is_meta && meta_was_already_written)
 			continue;
 
 		if (format_is_text)
 			text_was_already_written = true;
 		else if (format_is_dib)
 			dib_was_already_written = true;
+		else if (format_is_meta)
+			meta_was_already_written = true;
 
 		if ((hglobal = GetClipboardData(format)) // Relies on short-circuit boolean order:
 			&& (!(size = GlobalSize(hglobal)) || (hglobal_locked = GlobalLock(hglobal)))) // Size of zero or lock succeeded: Include this format.

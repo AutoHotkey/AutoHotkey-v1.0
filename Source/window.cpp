@@ -540,11 +540,7 @@ HWND WinActive(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeTex
 
 
 HWND WinExist(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
-	, bool aFindLastMatch, bool aUpdateLastUsed
-	, HWND aAlreadyVisited[], int aAlreadyVisitedCount, bool aReturnTheCount)
-// If caller specifies true for aReturnTheCount, the count of how many windows match the
-// given parameters will be returned, in which case aUpdateLastUsed is always considered
-// to be false regardless of what was passed.
+	, bool aFindLastMatch, bool aUpdateLastUsed, HWND aAlreadyVisited[], int aAlreadyVisitedCount)
 {
 	HWND target_window;
 	if (USE_FOREGROUND_WINDOW(aTitle, aText, aExcludeTitle, aExcludeText))
@@ -552,9 +548,6 @@ HWND WinExist(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
 		// User asked us if the "active" window exists, which is true if it's not a
 		// hidden window or DetectHiddenWindows is ON:
 		SET_TARGET_TO_ALLOWABLE_FOREGROUND
-		if (aReturnTheCount)
-			return (HWND)(target_window ? 1 : 0);
-		// Otherwise:
 		// Updating LastUsed to be hwnd even if it's NULL seems best for consistency?
 		// UPDATE: No, it's more flexible not to never set it to NULL, because there
 		// will be times when the old value is still useful:
@@ -562,20 +555,17 @@ HWND WinExist(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
 	}
 
 	if (!(*aTitle || *aText || *aExcludeTitle || *aExcludeText))
-	{
 		// User passed no params, so use the window most recently found by WinExist().
 		// It's correct to do this even in this function because it's called by
 		// WINWAITCLOSE and IFWINEXIST specifically to discover if the Last-Used
 		// window still exists.
-		target_window = GetValidLastUsedWindow();
-		return aReturnTheCount ? (HWND)(target_window ? 1 : 0) : target_window;
-	}
+		return GetValidLastUsedWindow();
 
 	WindowSearch ws;
 	if (!ws.SetCriteria(aTitle, aText, aExcludeTitle, aExcludeText)) // No match is possible with these criteria.
-		return NULL; // This will be interpreted as zero if caller specified true for aReturnTheCount.
+		return NULL;
 
-	ws.mFindLastMatch = aFindLastMatch || aReturnTheCount; // This is because aReturnTheCount implies aFindLastMatch.
+	ws.mFindLastMatch = aFindLastMatch;
 	ws.mAlreadyVisited = aAlreadyVisited;
 	ws.mAlreadyVisitedCount = aAlreadyVisitedCount;
 
@@ -590,20 +580,17 @@ HWND WinExist(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
 		if (ws.mCriterionHwnd != HWND_BROADCAST // It's not exempt from the other checks on the two lines below.
 			&& (!IsWindow(ws.mCriterionHwnd)    // And it's either not a valid window...
 			|| !(g.DetectHiddenWindows || IsWindowVisible(ws.mCriterionHwnd)))) // ...or the window is not detectible.
-			return NULL; // NULL will be interpreted as zero in the case of aReturnTheCount.
+			return NULL;
 
 		// Otherwise, the window is valid and detectible.
 		ws.SetCandidate(ws.mCriterionHwnd);
 		if (!ws.IsMatch()) // This checks if it matches any WinText/ExcludeTitle, as well as anything in the aAlreadyVisited list.
-			return NULL; // This will be interpreted as zero if caller specified true for aReturnTheCount.
+			return NULL;
 		//else fall through to the section below, since ws.mFoundCount and ws.mFoundParent were set by ws.IsMatch().
 	}
 	else // aWinTitle doesn't start with "ahk_id".  Try to find a matching window.
 		EnumWindows(EnumParentFind, (LPARAM)&ws);
 
-	if (aReturnTheCount) // The last found window is never updated in this case.
-		return (HWND)ws.mFoundCount;
-	// Otherwise:
 	UPDATE_AND_RETURN_LAST_USED_WINDOW(ws.mFoundParent) // This also does a "return".
 }
 

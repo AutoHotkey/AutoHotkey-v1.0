@@ -1041,6 +1041,7 @@ public:
 
 
 	ResultType ArgMustBeDereferenced(Var *aVar, int aArgIndexToExclude);
+
 	bool ArgHasDeref(int aArgNum)
 	// This function should always be called in lieu of doing something like "strchr(arg.text, g_DerefChar)"
 	// because that method is unreliable due to the possible presence of literal (escaped) g_DerefChars
@@ -1058,8 +1059,10 @@ public:
 			return false;
 		ArgStruct &arg = mArg[aArgNum - 1]; // For performance.
 		// Return false if it's not of a type caller wants deemed to have derefs.
-		// Relies on short-circuit boolean evaluation order to prevent NULL-deref:
-		return (arg.type == ARG_TYPE_NORMAL) ? arg.deref && arg.deref[0].marker : false;
+		if (arg.type == ARG_TYPE_NORMAL)
+			return arg.deref && arg.deref[0].marker; // Relies on short-circuit boolean evaluation order to prevent NULL-deref.
+		else // Callers rely on input variables being seen as "true" because sometimes single isolated derefs are converted into ARG_TYPE_INPUT_VAR at load-time.
+			return (arg.type == ARG_TYPE_INPUT_VAR);
 	}
 
 
@@ -1602,16 +1605,13 @@ public:
 	static FileLoopModeType ConvertLoopMode(char *aBuf)
 	// Returns the file loop mode, or FILE_LOOP_INVALID if aBuf contains an invalid mode.
 	{
-		if (!aBuf || !*aBuf)
-			return FILE_LOOP_FILES_ONLY; // The default mode is used if the param is blank.
-		if (strlen(aBuf) > 1)
-			return FILE_LOOP_INVALID;
-		if (*aBuf == '0')
-			return FILE_LOOP_FILES_ONLY;
-		if (*aBuf == '1')
-			return FILE_LOOP_FILES_AND_FOLDERS;
-		if (*aBuf == '2')
-			return FILE_LOOP_FOLDERS_ONLY;
+		switch (ATOI(aBuf))
+		{
+		case 0: return FILE_LOOP_FILES_ONLY; // This is also the default mode if the param is blank.
+		case 1: return FILE_LOOP_FILES_AND_FOLDERS;
+		case 2: return FILE_LOOP_FOLDERS_ONLY;
+		}
+		// Otherwise:
 		return FILE_LOOP_INVALID;
 	}
 
@@ -1700,7 +1700,7 @@ public:
 	}
 
 	static char *LogToText(char *aBuf, int aBufSize);
-	char *VicinityToText(char *aBuf, int aBufSize, int aMaxLines = 15);
+	char *VicinityToText(char *aBuf, int aBufSize);
 	char *ToText(char *aBuf, int aBufSize, bool aCRLF, DWORD aElapsed = 0, bool aLineWasResumed = false);
 
 	static void ToggleSuspendState();
