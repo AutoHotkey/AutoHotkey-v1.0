@@ -184,11 +184,16 @@ struct sc2_type
 };
 
 
-void SendKeys(char *aKeys, modLR_type aModifiersLR = 0, HWND aTargetWindow = NULL);
-void SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, mod_type aModifiersPersistent
-	, int aRepeatCount, HWND aTargetWindow = NULL);
-
 enum KeyEventTypes {KEYDOWN, KEYUP, KEYDOWNANDUP};
+
+void SendKeys(char *aKeys, modLR_type aModifiersLR = 0, HWND aTargetWindow = NULL);
+int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, mod_type aModifiersPersistent
+	, int aRepeatCount, KeyEventTypes aEventType, HWND aTargetWindow = NULL);
+int SendKeySpecial(char aChar, mod_type aModifiers, mod_type aModifiersPersistent
+	, int aRepeatCount, KeyEventTypes aEventType, HWND aTargetWindow);
+int SendASC(int aAscii, HWND aTargetWindow);
+int SendChar(char aChar, mod_type aModifiers, KeyEventTypes aEventType, HWND aTargetWindow);
+
 
 // A pseudo-random value.  It's best that this be constant so that if multiple instances of
 // the app are running, they will all ignore each other's keyboard & mouse events.  Also,

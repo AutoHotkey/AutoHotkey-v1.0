@@ -40,9 +40,9 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 #else
 	#ifdef _DEBUG
 	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Find.aut";
-	char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
+	//char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
 	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test.ahk";
-	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
+	char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
 	#else
 	char *script_filespec = NAME_P ".ini";  // Use this extension for better file associate with editor(s).
 	#endif
@@ -144,7 +144,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	{
 		// Note: the title below must be constructed the same was as is done by our
 		// CreateWindows(), which is why it's standardized in g_script.mMainWindowTitle:
-		if (w_existing = FindWindow(WINDOW_CLASS_NAME, g_script.mMainWindowTitle))
+		if (w_existing = FindWindow(WINDOW_CLASS_MAIN, g_script.mMainWindowTitle))
 		{
 			// Use a more unique title for this dialog so that subsequent executions of this
 			// program can easily find it (though they currently don't):
@@ -157,7 +157,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		}
 	}
 	if (!close_prior_instance && restart_mode)
-		if (w_existing = FindWindow(WINDOW_CLASS_NAME, g_script.mMainWindowTitle))
+		if (w_existing = FindWindow(WINDOW_CLASS_MAIN, g_script.mMainWindowTitle))
 			close_prior_instance = true;
 	if (close_prior_instance)
 	{

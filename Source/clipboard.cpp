@@ -175,7 +175,7 @@ ResultType Clipboard::Set(char *aBuf, UINT aLength) //, bool aTrimIt)
 
 char *Clipboard::PrepareForWrite(size_t aAllocSize)
 {
-	if (!aAllocSize) return NULL;
+	if (!aAllocSize) return NULL; // Caller should ensure that size is at least 1, i.e. room for the zero terminator.
 	if (IsReadyForWrite())
 		// It was already prepared due to a prior call.  Currently, the most useful thing to do
 		// here is return the memory area that's already been reserved:

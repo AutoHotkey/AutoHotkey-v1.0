@@ -156,35 +156,59 @@ inline pure_numeric_type IsPureNumeric(char *aBuf, bool aAllowNegative = false
 	aBuf = omit_leading_whitespace(aBuf); // i.e. caller doesn't have to have ltrimmed, only rtrimmed.
 	if (!*aBuf) // The string is empty or consists entirely of whitespace.
 		return aAllowAllWhitespace ? PURE_INTEGER : PURE_NOT_NUMERIC;
-	if (*aBuf == '-')
+
+	// It's debatable, but it seems best to allow leading plus signs, e.g. +123.0, since
+	// atoi() properly parses them and this is also the way that AutoIt2 likely works:
+	if (*aBuf == '+')
+		++aBuf;
+	else if (*aBuf == '-')
 		if (aAllowNegative)
 			++aBuf;
 		else
 			return PURE_NOT_NUMERIC;
-	if (*aBuf < '0' || *aBuf > '9') // Regardless of aAllowImpure, first char must always be non-numeric.
-		return PURE_NOT_NUMERIC;
-	bool is_float;
-	for (is_float = false; *aBuf && !IS_SPACE_OR_TAB(*aBuf); ++aBuf)
+
+	// Set defaults:
+	bool has_decimal_point = false;
+	bool has_at_least_one_digit = false; // i.e. a string consisting of only "+", "-" or "." is not considered numeric.
+
+	for (; *aBuf && !IS_SPACE_OR_TAB(*aBuf); ++aBuf)
 	{
 		if (*aBuf == '.')
-			if (!aAllowFloat || is_float) // if aBuf contains 2 decimal points, it can't be a valid number.
+		{
+			if (!aAllowFloat || has_decimal_point) // i.e. if aBuf contains 2 decimal points, it can't be a valid number.
 				return PURE_NOT_NUMERIC;
 			else
-				is_float = true;
+				has_decimal_point = true;
+		}
 		else
-			if (*aBuf < '0' || *aBuf > '9')
+		{
+			if (*aBuf < '0' || *aBuf > '9') // And since we're here, it's not '.' either.
 				if (aAllowImpure) // Since aStr starts with a number (as verified above), it is considered a number.
-					return is_float ? PURE_FLOAT : PURE_INTEGER;
+				{
+					if (has_at_least_one_digit)
+						return has_decimal_point ? PURE_FLOAT : PURE_INTEGER;
+					else // i.e. the strings "." and "-" are not considered to be numeric by themselves.
+						return PURE_NOT_NUMERIC;
+				}
 				else
 					return PURE_NOT_NUMERIC;
+			else
+				has_at_least_one_digit = true;
+		}
 	}
-	if (*aBuf && *omit_leading_whitespace(aBuf))
-		// The loop was broken because a space or tab was encountered, and since there's
-		// something other than whitespace at the end of the number, it can't be a pure number
-		// (e.g. "123 456" is not a valid number):
-		return PURE_NOT_NUMERIC;
-	// Since the above didn't return, it must be a float or an integer:
-	return is_float ? PURE_FLOAT : PURE_INTEGER;
+	if (*aBuf) // The loop was broken because a space or tab was encountered.
+		if (*omit_leading_whitespace(aBuf)) // But that space or tab is followed by something other than whitespace.
+			if (!aAllowImpure) // e.g. "123 456" is not a valid pure number.
+				return PURE_NOT_NUMERIC;
+			// else fall through to the bottom logic.
+		// else since just whitespace at the end, the number qualifies as pure, so fall through.
+		// (it would already have returned in the loop if it was impure)
+	// else since end of string was encountered, the number qualifies as pure, so fall through.
+	// (it would already have returned in the loop if it was impure).
+	if (has_at_least_one_digit)
+		return has_decimal_point ? PURE_FLOAT : PURE_INTEGER;
+	else
+		return PURE_NOT_NUMERIC; // i.e. the strings "+" "-" and "." are not numeric by themselves.
 }
 
 

@@ -44,6 +44,7 @@ int g_HotkeyModifierTimeout = 100;
 HHOOK g_hhkLowLevelKeybd = NULL;
 HHOOK g_hhkLowLevelMouse = NULL;
 bool g_ForceLaunch = false;
+bool g_WinActivateForce = false;
 bool g_AllowOnlyOneInstance = false;
 bool g_NoTrayIcon = false;
 bool g_AllowSameLineComments = true;
@@ -206,7 +207,7 @@ Action g_act[] =
 	// would be considered mandatory-non-blank by default.  It's easier to make all the params
 	// optional and validate elsewhere that the 2nd one specifically isn't blank:
 	, {"ControlSend", 0, 6, NULL} // Control, Chars-to-Send, std. 4 window params.
-	, {"ControlClick", 0, 7, {5, 0}} // Control, WinTitle, WinText, WhichButton, ClickCount, ExcludeTitle, ExcludeText
+	, {"ControlClick", 0, 8, {5, 0}} // Control, WinTitle, WinText, WhichButton, ClickCount, Hold/Release, ExcludeTitle, ExcludeText
 	, {"ControlGetFocus", 1, 5, NULL}  // OutputVar, std. 4 window params
 	, {"ControlFocus", 0, 5, NULL}     // Control, std. 4 window params
 	, {"ControlSetText", 1, 6, NULL}   // Control, new text, std. 4 window params
@@ -272,12 +273,14 @@ Action g_act[] =
 
 	, {"FileAppend", 2, 2, NULL} // text, filename
 	, {"FileReadLine", 3, 3, NULL} // Output variable, filename, line-number (custom validation, not numeric validation)
+	, {"FileDelete", 1, 1, NULL} // filename
 	, {"FileInstall", 2, 3, {3, 0}} // source, dest, flag (1/0, where 1=overwrite)
 	, {"FileCopy", 2, 3, {3, 0}} // source, dest, flag
 	, {"FileMove", 2, 3, {3, 0}} // source, dest, flag
-	, {"FileDelete", 1, 1, NULL} // filename
+	, {"FileCopyDir", 2, 3, {3, 0}} // source, dest, flag
+	, {"FileMoveDir", 2, 3, {3, 0}} // source, dest, flag
 	, {"FileCreateDir", 1, 1, NULL} // dir name
-	, {"FileRemoveDir", 1, 1, NULL} // dir name
+	, {"FileRemoveDir", 1, 2, {2, 0}} // dir name, flag
 
 	, {"FileGetAttrib", 1, 2, NULL} // OutputVar, Filespec (if blank, uses loop's current file)
 	, {"FileSetAttrib", 1, 4, NULL} // Attribute(s), FilePattern, OperateOnFolders?, Recurse? (custom validation for these last two)
@@ -286,7 +289,7 @@ Action g_act[] =
 	, {"FileGetSize", 1, 3, NULL} // OutputVar, Filespec, B|K|M (bytes, kb, or mb)
 	, {"FileGetVersion", 1, 2, NULL} // OutputVar, Filespec
 
-	, {"FileSelectFile", 1, 3, {2, 0}} // output var, flag, working dir
+	, {"FileSelectFile", 1, 5, {2, 0}} // output var, flag, working dir, greeting, filter
 	, {"FileSelectFolder", 1, 4, NULL} // output var, root directory, allow create folder (0=no, 1=yes), greeting
 
 	, {"IniRead", 4, 5, NULL}   // OutputVar, Filespec, Section, Key, Default (value to return if key not found)

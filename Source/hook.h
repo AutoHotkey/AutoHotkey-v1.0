@@ -23,6 +23,11 @@ GNU General Public License for more details.
 // WM_USER is the lowest number that can be a user-defined message.  Anything above that is also valid.
 enum UserMessages {AHK_HOOK_HOTKEY = WM_USER, AHK_HOOK_TEST_MSG, AHK_DIALOG, AHK_NOTIFYICON, AHK_KEYHISTORY};
 
+enum DualNumpadKeys	{PAD_DECIMAL, PAD_NUMPAD0, PAD_NUMPAD1, PAD_NUMPAD2, PAD_NUMPAD3
+, PAD_NUMPAD4, PAD_NUMPAD5, PAD_NUMPAD6, PAD_NUMPAD7, PAD_NUMPAD8, PAD_NUMPAD9
+, PAD_DELETE, PAD_INSERT, PAD_END, PAD_DOWN, PAD_NEXT, PAD_LEFT, PAD_CLEAR
+, PAD_RIGHT, PAD_HOME, PAD_UP, PAD_PRIOR, PAD_TOTAL_COUNT};
+
 
 // Some reasoning behind the below data structures: Could build a new array for [sc][sc] and [vk][vk]
 // (since only two keys are allowed in a ModifierVK/SC combination, only 2 dimensions are needed).

@@ -55,12 +55,9 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 	modLR_type modifiersLR_down_physically;
 	if (g_hhkLowLevelKeybd)
 		// Since hook is installed, use its more reliable tracking to determine which
-		// modifiers are down, ESPECIALLY since there's no way of knowing how much
-		// time has passed since the user pressed the hotkey and this function was called.
-		// In other words, since the script line that called us might have been preceeded by
-		// other, time-consuming lines, aModifiersLR may be out-of-date:
+		// modifiers are down.
 		modifiersLR_down_physically = g_modifiersLR_physical;
-	else // Use best-guess instead:a
+	else // Use best-guess instead.
 	{
 		// Even if TickCount has wrapped due to system being up more than about 49 days,
 		// DWORD math still gives the right answer as long as g_script.mThisHotkeyStartTime
@@ -69,7 +66,7 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 			modifiersLR_down_physically = modifiersLR_current & aModifiersLR; // Bitwise AND is set intersection.
 		else
 			// Since too much time as passed since the user pressed the hotkey, it seems best,
-			// based on the action that will occur below, to assume that no/ hotkey modifiers
+			// based on the action that will occur below, to assume that no hotkey modifiers
 			// are physically down:
 			modifiersLR_down_physically = 0;
 	}
@@ -92,12 +89,23 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 //MsgBox(ModifiersLRToText(modifiersLR_down_physically, mod_str));
 //MsgBox(ModifiersLRToText(modifiersLR_persistent, mod_str));
 
+	// Might be better to do this prior to changing capslock state:
+	bool threads_are_attached = false; // Set default.
+	DWORD my_thread, target_thread;
+	if (aTargetWindow)
+	{
+		my_thread  = GetCurrentThreadId();
+		target_thread = GetWindowThreadProcessId(aTargetWindow, NULL);
+		if (target_thread && target_thread != my_thread && !IsWindowHung(aTargetWindow))
+			threads_are_attached = AttachThreadInput(my_thread, target_thread, TRUE) != 0;
+	}
+
 	// The default behavior is to turn the capslock key off prior to sending any keys
 	// because otherwise lowercase letters would come through as uppercase:
 	ToggleValueType prior_capslock_state = g.StoreCapslockMode ? ToggleKeyState(VK_CAPITAL, TOGGLED_OFF)
 		: TOGGLE_INVALID;
 
-	char single_char_string[2], *cp;
+	char single_char_string[2];
 	vk_type vk = 0;
 	sc_type sc = 0;
 	mod_type modifiers_for_next_key = 0;
@@ -130,7 +138,7 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 				modifiers_for_next_key |= MOD_CONTROL;
 			// else don't add it, because the value of modifiers_for_next_key may also used to determine
 			// which keys to release after the key to which this modifier applies is sent.
-			// We don't want persistent modifiers to ever be release because that's how
+			// We don't want persistent modifiers to ever be released because that's how
 			// AutoIt2 behaves and it seems like a reasonable standard.
 			break;
 		case '+':
@@ -153,48 +161,73 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 			char *end_pos = strchr(aKeys + 1, '}');
 			if (!end_pos)
 				break;  // do nothing, just ignore it and continue.
-			size_t vk_text_length = end_pos - aKeys - 1;
-			if (!vk_text_length)
+			size_t key_text_length = end_pos - aKeys - 1;
+			size_t key_name_length = key_text_length; // Set default.
+			if (!key_text_length)
 				break;  // do nothing: let it proceed to the }, which will then be ignored.
 
 			*end_pos = '\0';  // temporarily terminate the string here.
-			UINT repeat_count_length = 0, repeat_count = 1;
-			char *space_pos = strchr(aKeys + 1, ' ');  // Relies on the fact that {} keys contain no spaces.
+			UINT repeat_count = 1;
+			KeyEventTypes event_type = KEYDOWNANDUP; // Set default.
+			char old_char;
+			char *space_pos = StrChrAny(aKeys + 1, " \t");  // Relies on the fact that {} key names contain no spaces.
 			if (space_pos)
-				repeat_count_length = (UINT)(end_pos - space_pos - 1);
-			if (repeat_count_length > 0)
 			{
-				repeat_count = atoi(space_pos + 1);
-				if (repeat_count < 0) // But seems best to allow zero itself, for possibly use with environment vars
-					repeat_count = 0;
-				*space_pos = '\0';  // Terminate here so that TextToVK() can properly resolve a single char.
+				old_char = *space_pos;
+				*space_pos = '\0';  // Temporarily terminate here so that TextToVK() can properly resolve a single char.
+				key_name_length = space_pos - aKeys - 1; // Override the default value set above.
+				char *next_word = omit_leading_whitespace(space_pos + 1);
+				UINT next_word_length = (UINT)(end_pos - next_word);
+				if (next_word_length > 0)
+				{
+					if (!stricmp(next_word, "down"))
+						event_type = KEYDOWN;
+					else if (!stricmp(next_word, "up"))
+						event_type = KEYUP;
+					else
+					{
+						repeat_count = atoi(next_word);
+						if (repeat_count < 0) // But seems best to allow zero itself, for possibly use with environment vars
+							repeat_count = 0;
+					}
+				}
 			}
 
 			vk = TextToVK(aKeys + 1, &modifiers_for_next_key, true);
 			sc = vk ? 0 : TextToSC(aKeys + 1);  // If sc is 0, it will be resolved by KeyEvent() later.
-			if (repeat_count_length > 0)  // undo the temporary termination
-				*space_pos = ' ';
+			if (space_pos)  // undo the temporary termination
+				*space_pos = old_char;
 			*end_pos = '}';  // undo the temporary termination
 
 			if (vk || sc)
 			{
 				if (repeat_count)
-				{
 					// Note: modifiers_persistent stays in effect (pressed down) even if the key
 					// being sent includes that same modifier.  Surprisingly, this is how AutoIt2
 					// behaves also, which is good.  Example: Send, {AltDown}!f  ; this will cause
 					// Alt to still be down after the command is over, even though F is modified
 					// by Alt.
-					SendKey(vk, sc, modifiers_for_next_key, modifiers_persistent, repeat_count, aTargetWindow);
-					keys_sent += repeat_count;
-				}
+					keys_sent += SendKey(vk, sc, modifiers_for_next_key, modifiers_persistent
+						, repeat_count, event_type, aTargetWindow);
 				modifiers_for_next_key = 0;  // reset after each, and even if no valid vk was found (should be just like AutoIt).
 				aKeys = end_pos;  // In prep for aKeys++ at the bottom of the loop.
 				break;
 			}
 
-			// If no vk was found, check it against list of special keys:
-			int special_key = TextToSpecial(aKeys + 1, (UINT)vk_text_length, modifiers_persistent);
+			// If no vk was found and the key name is of length 1, the only chance is to try sending it
+			// as a special character:
+			if (key_name_length == 1)
+			{
+				if (repeat_count)
+					keys_sent += SendKeySpecial(aKeys[1], modifiers_for_next_key, modifiers_persistent
+						, repeat_count, event_type, aTargetWindow);
+				modifiers_for_next_key = 0;  // reset after each, and even if no valid vk was found (should be just like AutoIt).
+				aKeys = end_pos;  // In prep for aKeys++ at the bottom of the loop.
+				break;
+			}
+
+			// Otherwise, since no vk was found, check it against list of special keys:
+			int special_key = TextToSpecial(aKeys + 1, (UINT)key_text_length, modifiers_persistent);
 			if (special_key)
 				for (UINT i = 0; i < repeat_count; ++i)
 					// Don't tell it to save & restore modifiers because special keys like this one
@@ -203,44 +236,13 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 					KeyEvent(special_key > 0 ? KEYDOWN : KEYUP, abs(special_key), 0, aTargetWindow, true);
 			else // Check if it's "{ASC nnnn}"
 			{
-				// Known issue: If the hotkey that triggers this Send command is CONTROL-ALT
-				// (and maybe either CTRL or ALT separately, as well), the {ASC nnnn} method
-				// may not work reliably due to strangeness with that OS feature, at least on
-				// WinXP.  I already tried adding delays between the keystrokes and it didn't
-				// help.
-
 				// Include the trailing space in "ASC " to increase uniqueness (selectivity).
 				// Also, sending the ASC sequence to window doesn't work, so don't even try:
-				if (vk_text_length > 4 && !strnicmp(aKeys + 1, "ASC ", 4) && !aTargetWindow)
+				if (key_text_length > 4 && !strnicmp(aKeys + 1, "ASC ", 4) && !aTargetWindow)
 				{
-					cp = aKeys + 4;
-					cp = omit_leading_whitespace(cp);
-
-					// Make sure modifier state is correct: ALT pressed down and other modifiers UP
-					// because CTRL and SHIFT seem to interfere with this technique if they are down,
-					// at least under WinXP (though the Windows key doesn't seem to be a problem):
-					modLR_type modifiersLR_to_release = GetModifierLRState()
-						& (MOD_LCONTROL | MOD_RCONTROL | MOD_LSHIFT | MOD_RSHIFT);
-					if (modifiersLR_to_release)
-						// Note: It seems best never to put them back down, because the act of doing so
-						// may do more harm than good (i.e. the keystrokes may caused unexpected
-						// side-effects:
-						SetModifierLRStateSpecific(modifiersLR_to_release, GetModifierLRState(), KEYUP);
-					if (!(GetModifierState() & MOD_ALT)) // Neither ALT key is down.
-						KeyEvent(KEYDOWN, VK_MENU, 0, aTargetWindow);
-					for (; *cp != '}'; ++cp)
-						// A comment from AutoIt3: ASCII 0 is 48, NUMPAD0 is 96, add on 48 to the ASCII.
-						// Also, don't do WinDelay after each keypress in this case because it would make
-						// such keys take up to 3 or 4 times as long to send (AutoIt3 avoids doing the
-						// delay also):
-						KeyEvent(KEYDOWNANDUP, *cp + 48, 0, aTargetWindow);
-					// Must release the key regardless of whether it was already down, so that the
-					// sequence will take effect immediately rather than waiting for the user to
-					// release the ALT key (if it's physically down):
-					KeyEvent(KEYUP, VK_MENU, 0, aTargetWindow);
+					keys_sent += SendASC(atoi(aKeys + 4), aTargetWindow); // aTargetWindow is always NULL, it's just for maintainability.
 					// Do this only once at the end of the sequence:
 					DoKeyDelay();
-					keys_sent++; // Seems ok to count it as only 1 key.
 				}
 			}
 			// If what's between {} is unrecognized, such as {Bogus}, it's safest not to send
@@ -261,10 +263,9 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 			vk = TextToVK(single_char_string, &modifiers_for_next_key, true);
 			sc = 0;
 			if (vk)
-			{
-				SendKey(vk, sc, modifiers_for_next_key, modifiers_persistent, 1, aTargetWindow);
-				keys_sent++;
-			}
+				keys_sent += SendKey(vk, sc, modifiers_for_next_key, modifiers_persistent, 1, KEYDOWNANDUP, aTargetWindow);
+			else // Try to send it by alternate means.
+				keys_sent += SendKeySpecial(*aKeys, modifiers_for_next_key, modifiers_persistent, 1, KEYDOWNANDUP, aTargetWindow);
 			modifiers_for_next_key = 0;  // Safest to reset this regardless of whether a key was sent.
 			// break;  Not needed in "default".
 		} // switch()
@@ -294,13 +295,18 @@ void SendKeys(char *aKeys, modLR_type aModifiersLR, HWND aTargetWindow)
 
 	if (prior_capslock_state == TOGGLED_ON) // The current user setting requires us to turn it back on.
 		ToggleKeyState(VK_CAPITAL, TOGGLED_ON);
+
+	// Might be better to do this after changing capslock state:
+	if (threads_are_attached)
+		AttachThreadInput(my_thread, target_thread, FALSE);
 }
 
 
 
-void SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, mod_type aModifiersPersistent
-	, int aRepeatCount, HWND aTargetWindow)
+int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, mod_type aModifiersPersistent
+	, int aRepeatCount, KeyEventTypes aEventType, HWND aTargetWindow)
 // vk or sc may be zero, but not both.
+// Returns the number of keys actually sent for caller convenience.
 // The function is reponsible for first setting the correct modifier state,
 // as specified by the caller, before sending the key.  After sending,
 // it should put the system's modifier state back to the way it was
@@ -308,8 +314,8 @@ void SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, mod_type aModifiersP
 // any modifiers that were originally down unless those keys are physically
 // down.
 {
-	if (!aVK && !aSC) return;
-	if (aRepeatCount <= 0) return;
+	if (!aVK && !aSC) return 0;
+	if (aRepeatCount <= 0) return aRepeatCount;
 
 	// I thought maybe it might be best not to release unwanted modifier keys that are already down
 	// (perhaps via something like "Send, {altdown}{esc}{altup}"), but that harms the case where
@@ -351,13 +357,15 @@ void SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, mod_type aModifiersP
 		// ^c::Send,^{d 15}
 		// Also: Seems best to do SetModifierState() even if Keydelay < 0:
 		SetModifierState(aModifiers | aModifiersPersistent, GetModifierLRState());
-		KeyEvent(KEYDOWNANDUP, aVK, aSC, aTargetWindow);
-		if (i + 1 < aRepeatCount) // There are more keys to send after this one.
-			DoKeyDelay();
-		// else let the below handle it because it's better to restore the modifier state
-		// immediately rather than doing a key-delay first.  This alleviates the shift-numpad
-		// issue discussed in hook_include.cpp.
+		KeyEvent(aEventType, aVK, aSC, aTargetWindow, true);
 	}
+
+	// The final iteration by the above loop does its key delay prior to us changing the
+	// modifiers below.  This is a good thing because otherwise the modifiers would sometimes
+	// be released so soon after the keys they modify that the modifiers are not in effect.
+	// This can be seen sometimes when/ ctrl-shift-tabbing back through a multi-tabbed dialog:
+	// The last ^+{tab} will usually not take effect because the CTRL key was released too quickly.
+
 	// Release any modifiers that were pressed down just for the sake of the above
 	// event (i.e. leave any persistent modifiers pressed down).  The caller should
 	// already have verified that aModifiers does not contain any of the modifiers
@@ -365,16 +373,182 @@ void SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, mod_type aModifiersP
 	// rather than trying to use a saved value from above, in case the above itself
 	// changed the value of the modifiers (i.e. aVk/aSC is a modifier).  Admittedly,
 	// that would be pretty strange but it seems the most correct thing to do.
-	// Update: Sometimes the modifiers are being released so soon after the keys they
-	// modify that the modifiers are not in effect.  This can be seen sometimes when
-	// ctrl-shift-tabbing back through a multi-tabbed dialog: The last ^+{tab} will
-	// usually not take effect because the CTRL key was released too quickly.
-	// Therefore, try a sleep(0) so that we can keep the bulk of the benefit of
-	// why we're doing it so quickly in the first place (see above):
-	if (g.KeyDelay)
-		DoKeyDelay(0);
 	SetModifierState(aModifiersPersistent, GetModifierLRState());
-	DoKeyDelay();  // The delay for the final key, see above for details of why its done this way.
+	return aRepeatCount;
+}
+
+
+
+int SendKeySpecial(char aChar, mod_type aModifiers, mod_type aModifiersPersistent
+	, int aRepeatCount, KeyEventTypes aEventType, HWND aTargetWindow)
+// Returns the number of keys actually sent for caller convenience.
+// This function has been adapted from the AutoIt3 source.
+// This function uses some of the same code as SendKey() above, so maintain them together.
+{
+	if (aRepeatCount <= 0) return aRepeatCount;
+	// My: It looks like the "Pƒ" in the below belongs there, as does "­½", which
+	// seems to be a single unit of some kind.
+	// AutoIt3: Note that the cent and yen symbol are missing and replaced with space - 
+	// this will never be matched as this function will never be called with a space char
+	char szSpecials[] = "ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ £ PƒáíóúñÑªº¿¬­½¼¡«»";
+	// simulation using diadic keystroke
+	char diadic[64] =
+/*192 */ {	'`', '´', '^', '~', '¨', 'º', ' ', ' ', '`', '´', '^', '¨', '`', '´', '^', '¨',
+/*208 */	' ', '~', '`', '´', '^', '~', '¨', ' ', ' ', '`', '´', '^', '¨', '´', ' ', ' ',
+/*224 */	'`', '´', '^', '~', '¨', 'º', ' ', ' ', '`', '´', '^', '¨', '`', '´', '^', '¨',
+/*240 */	' ', '~', '`', '´', '^', '~', '¨', ' ', ' ', '`', '´', '^', '¨', '´', ' ', '¨'
+		};
+	char letter[64] =
+/*192 */ {	'A', 'A', 'A', 'A', 'A', 'A', ' ', ' ', 'E', 'E', 'E', 'E', 'I', 'I', 'I', 'I',
+/*208 */	' ', 'N', 'O', 'O', 'O', 'O', 'O', ' ', ' ', 'U', 'U', 'U', 'U', 'Y', ' ', ' ',
+/*224 */	'a', 'a', 'a', 'a', 'a', 'a', ' ', ' ', 'e', 'e', 'e', 'e', 'i', 'i', 'i', 'i',
+/*240 */	' ', 'n', 'o', 'o', 'o', 'o', 'o', ' ', ' ', 'u', 'u', 'u', 'u', 'y', ' ', 'y'
+		};
+
+	int ascii, ascii_diadic, pair_index;
+
+	// AutoIt3: // simulation using {ASC nnn}
+	// Only the char code between {asc 128} and {asc 175} can be sent
+	char *cp = strchr(szSpecials, aChar);
+	if (cp)
+	{
+		if (aTargetWindow)
+			// For now, don't support the ASC method for sending directly to windows.
+			// AutoIt3 takes a stab at supporting it, by activating the parent window I think,
+			// but this seems pointless to me.  So for now, the user shouldn't be using the
+			// ControlSend command to send anything that requires the ASC method:
+			return 0;
+		ascii = 128 + (int)(cp - szSpecials);
+	}
+	else // ASCII codes between 192 and 255 inclusive (a total of 64 characters).
+	{
+		ascii = 0;  // Set as indicator that the below alternate method will be used instead.
+		if (aChar >= 'À')
+		{
+			pair_index = aChar - 'À'; // 'À' expressed as a signed char is -64.
+			// Sanity check to prevent any chance of buffer underrun or overrun (probably impossible
+			// given the above checks):
+			if (pair_index < 0 || pair_index >= sizeof(diadic))
+				return 0;
+			if (diadic[pair_index] == ' ') // This is one of the ASCII codes between 192 and 256 than CAN'T be sent.
+				return 0;
+			// else AutoIt3: something can be try to send diadic followed by non accent char
+			// The diadic itself might require the ASC method:
+			if (cp = strchr(szSpecials, diadic[pair_index]))
+			{
+				if (aTargetWindow) // Not supported, see above.
+					return 0;
+				ascii_diadic = 128 + (int)(cp - szSpecials);
+			}
+			else
+				ascii_diadic = 0;
+		}
+	}
+
+	UINT keys_sent;
+	int i;
+	for (keys_sent = i = 0; i < aRepeatCount; ++i)
+	{
+		if (keys_sent >= MAX_LUMP_KEYS && g.KeyDelay < 0) // See notes in SendKey().
+		{
+			keys_sent = 0;
+			DoKeyDelay(0);
+		}
+		if (ascii) // Method #1
+		{
+			keys_sent += SendASC(ascii, aTargetWindow); // aTargetWindow is always NULL, it's just for maintainability.
+			DoKeyDelay();
+		}
+		else // Method #2
+		{
+			if (ascii_diadic)
+				keys_sent += SendASC(ascii_diadic, aTargetWindow); // aTargetWindow is always NULL, it's just for maintainability.
+			else
+				keys_sent += SendChar(diadic[pair_index], aModifiers | aModifiersPersistent, KEYDOWNANDUP, aTargetWindow);
+			keys_sent += SendChar(letter[pair_index], aModifiers | aModifiersPersistent, aEventType, aTargetWindow);
+			DoKeyDelay();
+		}
+	}
+	SetModifierState(aModifiersPersistent, GetModifierLRState()); // See notes in SendKey().
+	return aRepeatCount;
+}
+
+
+
+int SendASC(int aAscii, HWND aTargetWindow)
+// Returns the number of keys sent (doesn't need to be exact).
+{
+	// This is just here to catch bugs in callers who do it wrong.  See notes in SendKeys() for explanation:
+	if (aTargetWindow) return 0;
+	if (aAscii < 0 || aAscii > 255) return 0; // Sanity check.
+
+	// Known issue: If the hotkey that triggers this Send command is CONTROL-ALT
+	// (and maybe either CTRL or ALT separately, as well), the {ASC nnnn} method
+	// might not work reliably due to strangeness with that OS feature, at least on
+	// WinXP.  I already tried adding delays between the keystrokes and it didn't help.
+
+	// Make sure modifier state is correct: ALT pressed down and other modifiers UP
+	// because CTRL and SHIFT seem to interfere with this technique if they are down,
+	// at least under WinXP (though the Windows key doesn't seem to be a problem):
+	modLR_type modifiersLR_to_release = GetModifierLRState()
+		& (MOD_LCONTROL | MOD_RCONTROL | MOD_LSHIFT | MOD_RSHIFT);
+	if (modifiersLR_to_release)
+		// Note: It seems best never to put them back down, because the act of doing so
+		// may do more harm than good (i.e. the keystrokes may caused unexpected
+		// side-effects:
+		SetModifierLRStateSpecific(modifiersLR_to_release, GetModifierLRState(), KEYUP);
+
+	int keys_sent = 0;
+
+	if (!(GetModifierState() & MOD_ALT)) // Neither ALT key is down.
+	{
+		KeyEvent(KEYDOWN, VK_MENU);
+		++keys_sent;
+	}
+
+	char string_to_send[16];
+	ITOA(aAscii, string_to_send);
+
+	for (char *cp = string_to_send; *cp; ++cp)
+	{
+		// A comment from AutoIt3: ASCII 0 is 48, NUMPAD0 is 96, add on 48 to the ASCII.
+		// Also, don't do WinDelay after each keypress in this case because it would make
+		// such keys take up to 3 or 4 times as long to send (AutoIt3 avoids doing the
+		// delay also):
+		KeyEvent(KEYDOWNANDUP, *cp + 48);
+		++keys_sent;
+	}
+
+	// Must release the key regardless of whether it was already down, so that the
+	// sequence will take effect immediately rather than waiting for the user to
+	// release the ALT key (if it's physically down).  It's the caller's responsibility
+	// to put it back down if it needs to be:
+	KeyEvent(KEYUP, VK_MENU);
+	return ++keys_sent;
+}
+
+
+
+int SendChar(char aChar, mod_type aModifiers, KeyEventTypes aEventType, HWND aTargetWindow)
+// Returns the number of keys sent (doesn't need to be exact).
+{
+	SHORT mod_plus_vk = VkKeyScan(aChar);
+	char keyscan_modifiers = HIBYTE(mod_plus_vk);
+	if (keyscan_modifiers == -1) // No translation could be made.
+		return 0;
+
+	// Combine the modifiers needed to enact this key with those that the caller wanted to be in effect:
+	if (keyscan_modifiers & 0x01)
+		aModifiers |= MOD_SHIFT;
+	if (keyscan_modifiers & 0x02)
+		aModifiers |= MOD_CONTROL;
+	if (keyscan_modifiers & 0x04)
+		aModifiers |= MOD_ALT;
+
+	// It's the caller's responsibility to restore the modifiers if it needs to:
+	SetModifierState(aModifiers, GetModifierLRState());
+	KeyEvent(aEventType, LOBYTE(mod_plus_vk), 0, aTargetWindow, true);
+	return 1;
 }
 
 
@@ -436,6 +610,59 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 		}
 	}
 
+	if (aTargetWindow && KeyToModifiersLR(aVK, aSC))
+	{
+		// When sending modifier keystrokes directly to a window, use the AutoIt3 SetKeyboardState()
+		// technique to improve the reliability of changes to modifier states.  If this is not done,
+		// sometimes the state of the SHIFT key (and perhaps other modifiers) will get out-of-sync
+		// with what's intended, resulting in uppercase vs. lowercase problems (and that's probably
+		// just the tip of the iceberg).  For this to be helpful, our caller must have ensured that
+		// our thread is attached to aTargetWindow's (but it seems harmless to do the below even if
+		// that wasn't done for any reason).  Doing this here in this function rather than at a
+		// higher level probably isn't best in terms of performance (e.g. in the case where more
+		// than one modifier is being changed, the multiple calls to Get/SetKeyboardState() could
+		// be consolidated into one call), but it is much easier to code and maintain this way
+		// since many different functions might call us to change the modifier state:
+		BYTE state[256];
+		GetKeyboardState((PBYTE)&state);
+		if (aEventType == KEYDOWN)
+			state[aVK] |= 0x80;
+		else if (aEventType == KEYUP)
+			state[aVK] &= ~0x80;
+		// else KEYDOWNANDUP, in which case it seems best (for now) not to change the state at all.
+		// It's rarely if ever called that way anyway.
+
+		// If aVK is a left/right specific key, be sure to also update the state of the neutral key:
+		switch(aVK)
+		{
+		case VK_LCONTROL: 
+		case VK_RCONTROL:
+			if ((state[VK_LCONTROL] & 0x80) || (state[VK_RCONTROL] & 0x80))
+				state[VK_CONTROL] |= 0x80;
+			else
+				state[VK_CONTROL] &= ~0x80;
+			break;
+		case VK_LSHIFT:
+		case VK_RSHIFT:
+			if ((state[VK_LSHIFT] & 0x80) || (state[VK_RSHIFT] & 0x80))
+				state[VK_SHIFT] |= 0x80;
+			else
+				state[VK_SHIFT] &= ~0x80;
+			break;
+		case VK_LMENU:
+		case VK_RMENU:
+			if ((state[VK_LMENU] & 0x80) || (state[VK_RMENU] & 0x80))
+				state[VK_MENU] |= 0x80;
+			else
+				state[VK_MENU] &= ~0x80;
+			break;
+		}
+
+		SetKeyboardState((PBYTE)&state);
+		// Even after doing the above, we still continue on to send the keystrokes
+		// themselves to the window, for greater reliability (same as AutoIt3).
+	}
+
 	if (aTargetWindow)
 	{
 		// lowest 16 bits: repeat count: always 1 for up events, probably 1 for down in our case.
@@ -445,9 +672,6 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 			PostMessage(aTargetWindow, WM_KEYDOWN, aVK, lParam | 0x00000001);
 		if (aEventType != KEYDOWN)  // i.e. always do it for KEYDOWNANDUP
 			PostMessage(aTargetWindow, WM_KEYUP, aVK, lParam | 0xC0000001);
-		//MsgSleep(20);  // NOT SURE IF THIS IS NEEDED.  The user's own key-delay will already be in effect.
-		//if (is_attached_my_to_target)
-		//	AttachThreadInput(my_thread, target_thread, FALSE);
 	}
 	else
 	{

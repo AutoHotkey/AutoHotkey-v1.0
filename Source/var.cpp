@@ -19,6 +19,10 @@ GNU General Public License for more details.
 #include "globaldata.h" // for g_script
 
 
+// Init static vars:
+char Var::sEmptyString[] = ""; // Used to as a non-constant empty string so that callers can write to it.
+
+
 ResultType Var::Assign(int aValueToAssign)
 // Returns OK or FAIL.
 {
@@ -107,15 +111,12 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt)
 		switch (mHowAllocated)
 		{
 		case ALLOC_NONE:
-			if (do_assign)
-			{
-				mContents = "";  // Some things may rely on this being empty-string vs. NULL.
-				return OK;
-			}
-			// else continue on, because we want to change this to ALLOC_SIMPLE, so that the
-			// caller can do something like *buf = '\0' if it wants.  Use break to continue
-			// on after this switch():
-			break;
+			// Some things may rely on this being empty-string vs. NULL.
+			// In addition, don't make it "" so that the caller's code can be simpler and
+			// more maintainable, i.e. the caller can always do *buf = '\0' if it wants:
+			mContents = sEmptyString;
+			*mContents = '\0';  // Just in case someone else changed it to be non-zero.
+			return OK;
 		case ALLOC_SIMPLE:
 			// Don't set to "" because then we'd have a memory leak.  i.e. once a var
 			// becomes ALLOC_SIMPLE, it should never become ALLOC_NONE again:
@@ -131,7 +132,8 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt)
 			{
 				free(mContents);
 				mCapacity = 0;
-				mContents = "";  // Some things may rely on this being empty-string vs. NULL.
+				mContents = sEmptyString; // See ALLOC_NONE above for explanation.
+				*mContents = '\0';  // Just in case someone else changed it to be non-zero.
 			}
 			else
 				if (mCapacity)
@@ -392,7 +394,8 @@ VarSizeType Var::Get(char *aBuf)
 	// This one is done this way, rather than using an escape sequence such as `s, because the escape
 	// sequence method doesn't work (probably because `s resolves to a space and is that trimmed at
 	// some point in process prior to when it can be used):
-	case VAR_SPACE: if (!aBuf) return g_script.GetSpace(); else aBuf += g_script.GetSpace(aBuf); break;
+	case VAR_TAB:
+	case VAR_SPACE: if (!aBuf) return g_script.GetSpace(mType); else aBuf += g_script.GetSpace(mType, aBuf); break;
 
 	case VAR_YEAR: if (!aBuf) return 4; // else fall through, which admittedly is somewhat inefficient here.
 	case VAR_MON:

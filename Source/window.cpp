@@ -154,7 +154,7 @@ HWND SetForegroundWindowEx(HWND aWnd)
 #endif
 
 	HWND orig_foreground_wnd = GetForegroundWindow();
-	// Autoit3: If there is not any foreground window, then input focus is on the TaskBar.
+	// AutoIt3: If there is not any foreground window, then input focus is on the TaskBar.
 	// MY: It is definitely possible for GetForegroundWindow() to return NULL, even on XP.
 	if (!orig_foreground_wnd)
 		orig_foreground_wnd = FindWindow("Shell_TrayWnd", NULL);
@@ -183,7 +183,8 @@ HWND SetForegroundWindowEx(HWND aWnd)
 
 	HWND new_foreground_wnd;
 
-	if (g_os.IsWin95() || (!g_os.IsWin9x() && !g_os.IsWin2000orLater()))  // Win95 or NT
+	if (!g_WinActivateForce)
+	// if (g_os.IsWin95() || (!g_os.IsWin9x() && !g_os.IsWin2000orLater())))  // Win95 or NT
 		// Try a simple approach first for these two OS's, since they don't have
 		// any restrictions on focus stealing:
 #ifdef _DEBUG
@@ -247,9 +248,9 @@ HWND SetForegroundWindowEx(HWND aWnd)
 		// using it for now:
 		//if (my_thread != target_thread) // Don't attempt the call otherwise.
 		//	AttachThreadInput(my_thread, target_thread, TRUE);
-		if (fore_thread && my_thread != fore_thread)
+		if (fore_thread && my_thread != fore_thread && !IsWindowHung(orig_foreground_wnd))
 			is_attached_my_to_fore = AttachThreadInput(my_thread, fore_thread, TRUE) != 0;
-		if (fore_thread && target_thread && fore_thread != target_thread)
+		if (fore_thread && target_thread && fore_thread != target_thread && !IsWindowHung(aWnd))
 			is_attached_fore_to_target = AttachThreadInput(fore_thread, target_thread, TRUE) != 0;
 	}
 

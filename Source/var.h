@@ -46,7 +46,7 @@ enum VarTypes
 , VAR_LOOPFILEATTRIB, VAR_LOOPFILESIZE, VAR_LOOPFILESIZEKB, VAR_LOOPFILESIZEMB
 , VAR_THISHOTKEY, VAR_PRIORHOTKEY, VAR_TIMESINCETHISHOTKEY, VAR_TIMESINCEPRIORHOTKEY
 , VAR_TICKCOUNT
-, VAR_SPACE
+, VAR_SPACE, VAR_TAB
 };
 #define VAR_IS_RESERVED(var) (var->mType != VAR_NORMAL && var->mType != VAR_CLIPBOARD)
 
@@ -63,6 +63,7 @@ private:
 	VarSizeType mLength;   // How much is actually stored in it currently, excluding the zero terminator.
 	VarSizeType mCapacity; // In bytes.  Includes the space for the zero terminator.
 	AllocMethodType mHowAllocated;
+	static char sEmptyString[1]; // A special, non-constant memory area for empty variables.
 public:
 	char *mName;    // The name of the var.
 	VarTypeType mType;
@@ -136,7 +137,17 @@ public:
 		, mCapacity(0)
 		, mHowAllocated(ALLOC_NONE)
 		, mType(aType)
-		, mContents("") // This initial empty-string value may be relied upon.
+		// This initial empty-string value may be relied upon (i.e. don't make it NULL).
+		// In addition, it's safer to make it modifiable rather than a constant such
+		// as "" so that any caller that accesses the memory via Contents() can write
+		// to it (e.g. it can do *buf = '\0').  In some sense this is a little scary
+		// because if anything misbehaves and sets this value to be something other
+		// than '\0', all empty variables will suddenly take on the wrong value and
+		// there will suddenly be a lot of buffer overflows probably, since those
+		// variables will no longer be terminated.  However, you could argue that this
+		// is a good thing because any bug that ever does that is more likely to cause
+		// a crash right away rather than go silently undetected for a long time:
+		, mContents(sEmptyString)
 		, mNextVar(NULL)
 	{}
 	void *operator new(size_t aBytes) {return SimpleHeap::Malloc(aBytes);}

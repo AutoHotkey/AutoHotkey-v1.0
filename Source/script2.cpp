@@ -27,12 +27,23 @@ GNU General Public License for more details.
 
 // Note that there's no action after the IF_USE_FOREGROUND_WINDOW line because that macro handles the action:
 #define DETERMINE_TARGET_WINDOW \
-HWND target_window;\
-IF_USE_FOREGROUND_WINDOW(aTitle, aText, aExcludeTitle, aExcludeText)\
-else if (*aTitle || *aText || *aExcludeTitle || *aExcludeText)\
-	target_window = WinExist(aTitle, aText, aExcludeTitle, aExcludeText);\
-else\
-	target_window = g_ValidLastUsedWindow;
+	HWND target_window;\
+	IF_USE_FOREGROUND_WINDOW(aTitle, aText, aExcludeTitle, aExcludeText)\
+	else if (*aTitle || *aText || *aExcludeTitle || *aExcludeText)\
+		target_window = WinExist(aTitle, aText, aExcludeTitle, aExcludeText);\
+	else\
+		target_window = g_ValidLastUsedWindow;
+
+#define ATTACH_THREAD_INPUT \
+	bool threads_are_attached = false;\
+	DWORD my_thread  = GetCurrentThreadId();\
+	DWORD target_thread = GetWindowThreadProcessId(target_window, NULL);\
+	if (target_thread && target_thread != my_thread && !IsWindowHung(target_window))\
+		threads_are_attached = AttachThreadInput(my_thread, target_thread, TRUE) != 0;
+
+#define DETACH_THREAD_INPUT \
+	if (threads_are_attached)\
+		AttachThreadInput(my_thread, target_thread, FALSE);
 
 
 
@@ -241,8 +252,8 @@ ResultType Line::ControlSend(char *aControl, char *aKeysToSend, char *aTitle, ch
 
 
 
-ResultType Line::ControlClick(vk_type aVK, int aClickCount, char *aControl, char *aTitle, char *aText
-	, char *aExcludeTitle, char *aExcludeText)
+ResultType Line::ControlClick(vk_type aVK, int aClickCount, char aEventType, char *aControl
+	, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
 {
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 	DETERMINE_TARGET_WINDOW
@@ -251,6 +262,20 @@ ResultType Line::ControlClick(vk_type aVK, int aClickCount, char *aControl, char
 	HWND control_window = ControlExist(target_window, aControl);
 	if (!control_window)
 		return OK;
+
+	// The chars 'U' (up) and 'D' (down), if specified, will restrict the clicks
+	// to being only DOWN or UP (so that the mouse button can be held down, for
+	// example):
+	if (aEventType)
+		aEventType = toupper(aEventType);
+
+	// AutoIt3: Get the dimensions of the control so we can click the centre of it
+	// (maybe safer and more natural than 0,0).
+	// My: In addition, this is probably better for some large controls (e.g. SysListView32) because
+	// clicking/ at 0,0 might activate a part of the control that is not even visible:
+	RECT rect;
+	GetWindowRect(control_window, &rect);
+	LPARAM lparam = MAKELPARAM( (rect.right - rect.left) / 2, (rect.bottom - rect.top) / 2);
 
 	UINT msg_down, msg_up;
 	WPARAM wparam;
@@ -262,15 +287,41 @@ ResultType Line::ControlClick(vk_type aVK, int aClickCount, char *aControl, char
 		default: return OK; // Just do nothing since this should realistically never happen.
 	}
 
+	// SetActiveWindow() requires ATTACH_THREAD_INPUT to succeed.  Even though the MSDN docs state
+	// that SetActiveWindow() has no effect unless the parent window is foreground, Jon insists
+	// that SetActiveWindow() resolved some problems for some users.  In any case, it seems best
+	// to do this in case the window really is foreground, in which case MSDN indicates that
+	// it will help for certain types of dialogs.
+	// AutoIt3: See BM_CLICK documentation, applies to this too
+	ATTACH_THREAD_INPUT
+	SetActiveWindow(target_window);
+
 	for (int i = 0; i < aClickCount; ++i)
 	{
-		PostMessage(control_window, msg_down, wparam, 0);
-		// Seems best to do this one too, which is what AutoIt3 does also.  User can always reduce
-		// ControlDelay to 0 or -1.
-		DoControlDelay;
-		PostMessage(control_window, msg_up, 0, 0);
-		DoControlDelay;
+		if (aEventType != 'U') // It's either D or NULL, which means we always to the down-event.
+		{
+			PostMessage(control_window, msg_down, wparam, lparam);
+			// Seems best to do this one too, which is what AutoIt3 does also.  User can always reduce
+			// ControlDelay to 0 or -1.  Update: Jon says this delay might be causing it to fail in
+			// some cases.  Upon reflection, it seems best not to do this anyway because PostMessage()
+			// should queue up the message for the app correctly even if it's busy.  Update: But I
+			// think the timestamp is available on every posted message, so if some apps check for
+			// inhumanly fast clicks (to weed out transients with partial clicks of the mouse, or
+			// to detect artificial input), the click might not work.  So it might be better after
+			// all to do the delay until it's proven to be problematic (Jon implies that he has
+			// no proof yet).  IF THIS IS EVER DISABLED, be sure to do the ControlDelay anyway
+			// if aEventType == 'D':
+			DoControlDelay;
+		}
+		if (aEventType != 'D') // It's either U or NULL, which means we always to the up-event.
+		{
+			PostMessage(control_window, msg_up, 0, lparam);
+			DoControlDelay;
+		}
 	}
+
+	DETACH_THREAD_INPUT
+
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 	return OK;
 }
@@ -288,16 +339,8 @@ ResultType Line::ControlGetFocus(char *aTitle, char *aText, char *aExcludeTitle,
 	if (!target_window)
 		return OK;  // Let ErrorLevel and the blank output variable tell the story.
 
-	// Unlike many of the other Control commands, this one requires AttachThreadInput():
-	bool is_attached_my_to_fore = false, is_attached_fore_to_target = false;
-	DWORD fore_thread, my_thread, target_thread;
-	fore_thread = GetWindowThreadProcessId(GetForegroundWindow(), NULL);
-	my_thread  = GetCurrentThreadId();
-	target_thread = GetWindowThreadProcessId(target_window, NULL);
-	if (fore_thread && my_thread != fore_thread)
-		is_attached_my_to_fore = AttachThreadInput(my_thread, fore_thread, TRUE) != 0;
-	if (fore_thread && target_thread && fore_thread != target_thread)
-		is_attached_fore_to_target = AttachThreadInput(fore_thread, target_thread, TRUE) != 0;
+	// Unlike many of the other Control commands, this one requires AttachThreadInput().
+	ATTACH_THREAD_INPUT
 
 	class_and_hwnd_type cah;
 	cah.hwnd = GetFocus();  // Do this now that our thread is attached to the target window's.
@@ -306,10 +349,7 @@ ResultType Line::ControlGetFocus(char *aTitle, char *aText, char *aExcludeTitle,
 	// prior to returning, otherwise the next attempt to attach thread inputs
 	// for these particular windows may result in a hung thread or other
 	// undesirable effect:
-	if (is_attached_my_to_fore)
-		AttachThreadInput(my_thread, fore_thread, FALSE);
-	if (is_attached_fore_to_target)
-		AttachThreadInput(fore_thread, target_thread, FALSE);
+	DETACH_THREAD_INPUT
 
 	if (!cah.hwnd)
 		return OK;  // Let ErrorLevel and the blank output variable tell the story.
@@ -367,15 +407,7 @@ ResultType Line::ControlFocus(char *aControl, char *aTitle, char *aText
 	// Unlike many of the other Control commands, this one requires AttachThreadInput()
 	// to have any realistic chance of success (though sometimes it may work by pure
 	// chance even without it):
-	bool is_attached_my_to_fore = false, is_attached_fore_to_target = false;
-	DWORD fore_thread, my_thread, target_thread;
-	fore_thread = GetWindowThreadProcessId(GetForegroundWindow(), NULL);
-	my_thread  = GetCurrentThreadId();
-	target_thread = GetWindowThreadProcessId(target_window, NULL);
-	if (fore_thread && my_thread != fore_thread)
-		is_attached_my_to_fore = AttachThreadInput(my_thread, fore_thread, TRUE) != 0;
-	if (fore_thread && target_thread && fore_thread != target_thread)
-		is_attached_fore_to_target = AttachThreadInput(fore_thread, target_thread, TRUE) != 0;
+	ATTACH_THREAD_INPUT
 
 	if (SetFocus(control_window))
 	{
@@ -387,10 +419,7 @@ ResultType Line::ControlFocus(char *aControl, char *aTitle, char *aText
 	// prior to returning, otherwise the next attempt to attach thread inputs
 	// for these particular windows may result in a hung thread or other
 	// undesirable effect:
-	if (is_attached_my_to_fore)
-		AttachThreadInput(my_thread, fore_thread, FALSE);
-	if (is_attached_fore_to_target)
-		AttachThreadInput(fore_thread, target_thread, FALSE);
+	DETACH_THREAD_INPUT
 
 	return OK;
 }
@@ -1073,11 +1102,10 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 
 	case AHK_KEYHISTORY:
 		// Logging keys to a file is disabled in the main version in an effort to prevent
-		// AutoHotkey from being branded as a key logger or trojan by various security firms
-		// and security software. Comment out this line to re-enabled logging of keys to a file:
-		return 0;
-		KeyHistoryToFile(NULL, ((KeyHistoryItem *)wParam)->event_type, ((KeyHistoryItem *)wParam)->key_up
-			, ((KeyHistoryItem *)wParam)->vk, ((KeyHistoryItem *)wParam)->sc);
+		// AutoHotkey from being branded as a key logger or trojan by various security firms and
+		// security software. Uncomment out the next 2 lines to re-enabled logging of keys to a file:
+		//KeyHistoryToFile(NULL, ((KeyHistoryItem *)wParam)->event_type, ((KeyHistoryItem *)wParam)->key_up
+		//	, ((KeyHistoryItem *)wParam)->vk, ((KeyHistoryItem *)wParam)->sc);
 		return 0;
 
 	case WM_SYSCOMMAND:
@@ -1289,7 +1317,11 @@ BOOL CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 // manager performs the default dialog operation in response to the message.
 {
 	HWND hControl;
-	int target_index = g_nInputBoxes - 1;  // Set default array index for g_InputBox[].
+
+	// Set default array index for g_InputBox[]:
+	int target_index = g_nInputBoxes - 1;
+	#define CURR_INPUTBOX g_InputBox[target_index]
+
 	switch(uMsg)
 	{
 	case WM_INITDIALOG:
@@ -1299,7 +1331,6 @@ BOOL CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 		// anything that might take a relatively long time (e.g. SetForegroundWindowEx()):
 		CLOSE_CLIPBOARD_IF_OPEN;
 		// Caller has ensured that g_nInputBoxes > 0:
-		#define CURR_INPUTBOX g_InputBox[target_index]
 		CURR_INPUTBOX.hwnd = hWndDlg;
 		SetWindowText(hWndDlg, CURR_INPUTBOX.title);
 		if (hControl = GetDlgItem(hWndDlg, IDC_INPUTPROMPT))
@@ -1370,7 +1401,7 @@ BOOL CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 						INPUTBOX_VAR->Length() = (VarSizeType)GetWindowText(hControl
 							, INPUTBOX_VAR->Contents(), space_needed);
 						if (!INPUTBOX_VAR->Length())
-							// There was no text to get or GetWindowTextTimeout() failed.
+							// There was no text to get or GetWindowText() failed.
 							*INPUTBOX_VAR->Contents() = '\0';  // Safe because Assign() gave us a non-constant memory area.
 					}
 					return_value = (WORD)INPUTBOX_VAR->Close();  // In case it's the clipboard.
@@ -1474,7 +1505,8 @@ ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aS
 	// The chars 'U' (up) and 'D' (down), if specified, will restrict the clicks
 	// to being only DOWN or UP (so that the mouse button can be held down, for
 	// example):
-	aEventType = toupper(aEventType);
+	if (aEventType)
+		aEventType = toupper(aEventType);
 
 	// Do we need to move the mouse?
 	if (aX != COORD_UNSPECIFIED && aY != COORD_UNSPECIFIED) // Otherwise don't bother.
@@ -1974,7 +2006,7 @@ ResultType Line::SoundPlay(char *aFilespec, bool aSleepUntilDone)
 
 
 
-ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir)
+ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeting, char *aFilter)
 {
 	Var *output_var = ResolveVarOfArg(0);
 	if (!output_var)
@@ -1993,19 +2025,60 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir)
 	// may be a string that's too long:
 	char file_buf[65535] = "";
 
-	// Use a more specific title so that the dialogs of different scripts can be distinguished
-	// from one another, which may help script automation in rare cases:
-	char dialog_title[512];
-	snprintf(dialog_title, sizeof(dialog_title), "Select File - %s", g_script.mFileName);
+	char greeting[1024];
+	if (aGreeting && *aGreeting)
+		strlcpy(greeting, aGreeting, sizeof(greeting));
+	else
+		// Use a more specific title so that the dialogs of different scripts can be distinguished
+		// from one another, which may help script automation in rare cases:
+		snprintf(greeting, sizeof(greeting), "Select File - %s", g_script.mFileName);
+
+	// The filter must be terminated by two NULL characters.  One is explicit, the other automatic:
+	char filter[1024] = "", pattern[1024] = "";  // Set default.
+	if (aFilter && *aFilter)
+	{
+		char *pattern_start = strchr(aFilter, '(');
+		if (pattern_start)
+		{
+			// Make pattern a separate string because we want to remove any spaces from it.
+			// For example, if the user specified Documents (*.txt; *.doc), the space after
+			// the semicolon should be removed for the pattern string itself but not from
+			// the displayed version of the pattern:
+			strlcpy(pattern, ++pattern_start, sizeof(pattern));
+			char *pattern_end = strrchr(pattern, ')'); // strrchr() in case there are other literal parens.
+			if (pattern_end)
+				*pattern_end = '\0';  // If parens are empty, this will set pattern to be the empty string.
+			else // no closing paren, so set to empty string as an indicator:
+				*pattern = '\0';
+
+		}
+		else // No open-paren, so assume the entire string is the filter.
+			strlcpy(pattern, aFilter, sizeof(pattern));
+		if (*pattern)
+		{
+			// Remove any spaces present in the pattern, such as a space after every semicolon
+			// that separates the allowed file extensions.  The API docs specify that there
+			// should be no spaces in the pattern itself, even though it's okay if they exist
+			// in the displayed name of the file-type:
+			StrReplace(pattern, " ", "");
+			// Also include the All Files (*.*) filter, since there doesn't seem to be much
+			// point to making this an option.  This is because the user could always type
+			// *.* and press ENTER in the filename field and achieve the same result:
+			snprintf(filter, sizeof(filter), "%s%c%s%c" "All Files (*.*)%c*.*%c"
+				, aFilter, '\0', pattern, '\0'
+				, '\0', '\0'); // double-terminate.
+		}
+		else
+			*filter = '\0';  // It will use a standard default below.
+	}
 
 	OPENFILENAME ofn;
 	// This init method is used in more than one example:
 	ZeroMemory(&ofn, sizeof(ofn));
 	ofn.lStructSize = sizeof(ofn);
 	ofn.hwndOwner = NULL; // i.e. no need to have main window forced into the background for this.
-	// Must be terminated by two NULL characters.  One is explicit, the other automatic:
-	ofn.lpstrTitle = dialog_title;
-	ofn.lpstrFilter = "All Files (*.*)\0*.*\0Text Documents (*.txt)\0*.txt\0";
+	ofn.lpstrTitle = greeting;
+	ofn.lpstrFilter = *filter ? filter : "All Files (*.*)\0*.*\0Text Documents (*.txt)\0*.txt\0";
 	ofn.lpstrFile = file_buf;
 	ofn.nMaxFile = sizeof(file_buf) - 1; // -1 to be extra safe, like AutoIt3.
 	// Specifying NULL will make it default to the last used directory (at least in Win2k):
@@ -2354,33 +2427,9 @@ ResultType Line::FileInstall(char *aSource, char *aDest, char *aFlag)
 	oRead.Close();
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 #else
-	if (Util_CopyFile(aSource, aDest, allow_overwrite))
+	if (CopyFile(aSource, aDest, !allow_overwrite))
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 #endif
-	return OK;
-}
-
-
-
-ResultType Line::FileCopy(char *aSource, char *aDest, char *aFlag)
-// Adapted from the AutoIt3 source.
-{
-	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
-	bool allow_overwrite = aFlag && *aFlag == '1';
-	if (Util_CopyFile(aSource, aDest, allow_overwrite))
-		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-	return OK;
-}
-
-
-
-ResultType Line::FileMove(char *aSource, char *aDest, char *aFlag)
-// Adapted from the AutoIt3 source.
-{
-	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
-	bool allow_overwrite = aFlag && *aFlag == '1';
-	if (MoveFile(aSource, aDest))
-		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 	return OK;
 }
 
@@ -2941,19 +2990,198 @@ ResultType Line::FileGetVersion(char *aFilespec)
 }
 
 
+
+///////////////////////////////////////////////////////////////////////////////
+// TAKEN FROM THE AUTOIT3 SOURCE
+///////////////////////////////////////////////////////////////////////////////
+// Util_CopyDir()
+///////////////////////////////////////////////////////////////////////////////
+
+bool Line::Util_CopyDir (const char *szInputSource, const char *szInputDest, bool bOverwrite)
+{
+	SHFILEOPSTRUCT	FileOp;
+	char			szSource[_MAX_PATH+2];
+	char			szDest[_MAX_PATH+2];
+
+	// Get the fullpathnames and strip trailing \s
+	Util_GetFullPathName(szInputSource, szSource);
+	Util_GetFullPathName(szInputDest, szDest);
+
+	// Ensure source is a directory
+	if (Util_IsDir(szSource) == false)
+		return false;							// Nope
+
+	// Does the destination dir exist?
+	if (Util_IsDir(szDest))
+	{
+		if (bOverwrite == false)
+			return false;
+	}
+	else
+	{
+		// We must create the top level directory
+		if (!Util_CreateDir(szDest))
+			return false;
+	}
+
+	// To work under old versions AND new version of shell32.dll the source must be specifed
+	// as "dir\*.*" and the destination directory must already exist... Godamn Microsoft and their APIs...
+	strcat(szSource, "\\*.*");
+
+	// We must also make source\dest double nulled strings for the SHFileOp API
+	szSource[strlen(szSource)+1] = '\0';	
+	szDest[strlen(szDest)+1] = '\0';	
+
+	// Setup the struct
+	FileOp.pFrom					= szSource;
+	FileOp.pTo						= szDest;
+	FileOp.hNameMappings			= NULL;
+	FileOp.lpszProgressTitle		= NULL;
+	FileOp.fAnyOperationsAborted	= FALSE;
+	FileOp.hwnd						= NULL;
+
+	FileOp.wFunc	= FO_COPY;
+	FileOp.fFlags	= FOF_SILENT | FOF_NOCONFIRMMKDIR | FOF_NOCONFIRMATION | FOF_NOERRORUI;
+
+	if ( SHFileOperation(&FileOp) ) 
+		return false;								
+
+	return true;
+
+} // Util_CopyDir()
+
+
+
+///////////////////////////////////////////////////////////////////////////////
+// TAKEN FROM THE AUTOIT3 SOURCE
+///////////////////////////////////////////////////////////////////////////////
+// Util_MoveDir()
+///////////////////////////////////////////////////////////////////////////////
+
+bool Line::Util_MoveDir (const char *szInputSource, const char *szInputDest, bool bOverwrite)
+{
+	SHFILEOPSTRUCT	FileOp;
+	char			szSource[_MAX_PATH+2];
+	char			szDest[_MAX_PATH+2];
+
+	// Get the fullpathnames and strip trailing \s
+	Util_GetFullPathName(szInputSource, szSource);
+	Util_GetFullPathName(szInputDest, szDest);
+
+	// Ensure source is a directory
+	if (Util_IsDir(szSource) == false)
+		return false;							// Nope
+
+	// Does the destination dir exist?
+	if (Util_IsDir(szDest))
+	{
+		if (bOverwrite == false)
+			return false;
+	}
+
+	// Now, if the source and dest are on different volumes then we must copy rather than move
+	// as move in this case only works on some OSes
+	if (Util_IsDifferentVolumes(szSource, szDest))
+	{
+		// Copy and delete (poor man's move)
+		if (Util_CopyDir(szSource, szDest, true) == false)
+			return false;
+		if (Util_RemoveDir(szSource, true) == false)
+			return false;
+		else
+			return true;
+	}
+
+	// We must also make source\dest double nulled strings for the SHFileOp API
+	szSource[strlen(szSource)+1] = '\0';	
+	szDest[strlen(szDest)+1] = '\0';	
+
+	// Setup the struct
+	FileOp.pFrom					= szSource;
+	FileOp.pTo						= szDest;
+	FileOp.hNameMappings			= NULL;
+	FileOp.lpszProgressTitle		= NULL;
+	FileOp.fAnyOperationsAborted	= FALSE;
+	FileOp.hwnd						= NULL;
+
+	FileOp.wFunc	= FO_MOVE;
+	FileOp.fFlags	= FOF_SILENT | FOF_NOCONFIRMMKDIR | FOF_NOCONFIRMATION | FOF_NOERRORUI;
+
+	if ( SHFileOperation(&FileOp) ) 
+		return false;								
+	else
+		return true;
+
+} // Util_MoveDir()
+
+
+
+///////////////////////////////////////////////////////////////////////////////
+// TAKEN FROM THE AUTOIT3 SOURCE
+///////////////////////////////////////////////////////////////////////////////
+// Util_RemoveDir()
+///////////////////////////////////////////////////////////////////////////////
+
+bool Line::Util_RemoveDir (const char *szInputSource, bool bRecurse)
+{
+	SHFILEOPSTRUCT	FileOp;
+	char			szSource[_MAX_PATH+2];
+
+	// Get the fullpathnames and strip trailing \s
+	Util_GetFullPathName(szInputSource, szSource);
+
+	// Ensure source is a directory
+	if (Util_IsDir(szSource) == false)
+		return false;							// Nope
+
+	// If recursion not on just try a standard delete on the directory (the SHFile function WILL
+	// delete a directory even if not empty no matter what flags you give it...)
+	if (bRecurse == false)
+	{
+		if (!RemoveDirectory(szSource))
+			return false;
+		else
+			return true;
+	}
+
+	// We must also make double nulled strings for the SHFileOp API
+	szSource[strlen(szSource)+1] = '\0';	
+
+	// Setup the struct
+	FileOp.pFrom					= szSource;
+	FileOp.pTo						= NULL;
+	FileOp.hNameMappings			= NULL;
+	FileOp.lpszProgressTitle		= NULL;
+	FileOp.fAnyOperationsAborted	= FALSE;
+	FileOp.hwnd						= NULL;
+
+	FileOp.wFunc	= FO_DELETE;
+	FileOp.fFlags	= FOF_SILENT | FOF_NOCONFIRMMKDIR | FOF_NOCONFIRMATION | FOF_NOERRORUI;
+	
+	if ( SHFileOperation(&FileOp) ) 
+		return false;								
+
+	return true;
+
+} // Util_RemoveDir()
+
+
+
 ///////////////////////////////////////////////////////////////////////////////
 // TAKEN FROM THE AUTOIT3 SOURCE
 ///////////////////////////////////////////////////////////////////////////////
 // Util_CopyFile()
-// Returns true if all files copied, else returns false
+// (moves files too)
+// Returns the number of files that could not be copied or moved due to error.
 ///////////////////////////////////////////////////////////////////////////////
 
-bool Line::Util_CopyFile(const char *szInputSource, const char *szInputDest, bool bOverwrite)
+int Line::Util_CopyFile(const char *szInputSource, const char *szInputDest, bool bOverwrite, bool bMove)
 {
 	WIN32_FIND_DATA	findData;
 	HANDLE			hSearch;
 	bool			bLoop;
-	bool			bDestExists;
+	bool			bFound = false;				// Not found initially
+	BOOL			bRes;
 
 	char			szSource[_MAX_PATH+1];
 	char			szDest[_MAX_PATH+1];
@@ -2964,47 +3192,38 @@ bool Line::Util_CopyFile(const char *szInputSource, const char *szInputDest, boo
 	char			szDir[_MAX_PATH+1];
 	char			szFile[_MAX_PATH+1];
 	char			szExt[_MAX_PATH+1];
+	bool			bDiffVol;
+
+	// Get local version of our source/dest with full path names, strip trailing \s
+	Util_GetFullPathName(szInputSource, szSource);
+	Util_GetFullPathName(szInputDest, szDest);
+
+	// Check if the files are on different volumes (affects how we do a Move operation)
+	bDiffVol = Util_IsDifferentVolumes(szSource, szDest);
+
+	// If the source or dest is a directory then add *.* to the end
+	if (Util_IsDir(szSource))
+		strcat(szSource, "\\*.*");
+	if (Util_IsDir(szDest))
+		strcat(szDest, "\\*.*");
 
 
-	// Get local version of our source/dest
-	strcpy(szSource, szInputSource);
-	strcpy(szDest, szInputDest);
-
-	// Split dest into file and extension
-	_splitpath( szInputDest, szDrive, szDir, szFile, szExt );
-
-	// If the filename and extension are both blank, sub with *.*
-	if (szFile[0] == '\0' && szFile[0] == '\0')
-	{
-		strcpy(szFile, "*");
-		strcpy(szExt,".*");
-	}
-	
-	strcpy(szDest, szDrive);	strcat(szDest, szDir);
-	strcat(szDest, szFile);	strcat(szDest, szExt);
-
-
-	// Split source into file and extension
+	// Split source into file and extension (we need this info in the loop below to recontstruct the path)
 	_splitpath( szSource, szDrive, szDir, szFile, szExt );
 
-	// If the filename and extension are both blank, sub with *.*
-	if (szFile[0] == '\0' && szFile[0] == '\0')
-	{
-		strcpy(szFile, "*");
-		strcpy(szExt,".*");
-	}
-	
-	strcpy(szSource, szDrive);	strcat(szSource, szDir);
-	strcat(szSource, szFile);	strcat(szSource, szExt);
-
-	// Note we now rely on the SOURCE being the contents of SZDir, szFile, etc.
-
+	// Note we now rely on the SOURCE being the contents of szDrive, szDir, szFile, etc.
 
 	// Does the source file exist?
 	hSearch = FindFirstFile(szSource, &findData);
 	bLoop = true;
+
+	// AutoHotkey:
+	int failure_count = 0;
+
 	while (hSearch != INVALID_HANDLE_VALUE && bLoop == true)
 	{
+		bFound = true;							// Found at least one match
+
 		// Make sure the returned handle is a file and not a directory before we
 		// try and do copy type things on it!
 		if ( (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != FILE_ATTRIBUTE_DIRECTORY)
@@ -3017,18 +3236,58 @@ bool Line::Util_CopyFile(const char *szInputSource, const char *szInputDest, boo
 			strcat(szTempPath, szDir);
 			strcat(szTempPath, findData.cFileName);
 
-			// Does the destination exist?
-			bDestExists = Util_DoesFileExist(szExpandedDest);
-
-			// Copy the file - maybe
-			if ( (bDestExists == true  && bOverwrite == true) || (bDestExists == false) )
+			// Does the destination exist? - delete it first if it does (unless we not overwriting)
+			if ( Util_DoesFileExist(szExpandedDest) )
 			{
-				if ( CopyFile(szTempPath, szExpandedDest, FALSE) != TRUE )
+				if (bOverwrite == false)
 				{
-					FindClose(hSearch);
-					return false;						// Error copying one of the files
+					// AutoHotkey:
+					++failure_count;
+					if (FindNextFile(hSearch, &findData) == FALSE)
+						bLoop = false;
+					continue;
+					//FindClose(hSearch);
+					//return false;					// Destination already exists and we not overwriting
+				}
+				else
+					// AutoHotkey:
+					if (!DeleteFile(szExpandedDest))
+					{
+						++failure_count;
+						if (FindNextFile(hSearch, &findData) == FALSE)
+							bLoop = false;
+						continue;
+					}
+			}
+		
+			// Move or copy operation?
+			if (bMove == true)
+			{
+				if (bDiffVol == false)
+				{
+					bRes = MoveFile(szTempPath, szExpandedDest);
+				}
+				else
+				{
+					// Do a copy then delete (simulated copy)
+					if ( (bRes = CopyFile(szTempPath, szExpandedDest, FALSE)) != FALSE )
+						bRes = DeleteFile(szTempPath);
 				}
 			}
+			else
+				bRes = CopyFile(szTempPath, szExpandedDest, FALSE);
+			
+			if (bRes == FALSE)
+			{
+				// AutoHotkey:
+				++failure_count;
+				if (FindNextFile(hSearch, &findData) == FALSE)
+					bLoop = false;
+				continue;
+				// FindClose(hSearch);
+				// return false;						// Error copying/moving one of the files
+			}
+
 		} // End If
 
 		if (FindNextFile(hSearch, &findData) == FALSE)
@@ -3038,9 +3297,12 @@ bool Line::Util_CopyFile(const char *szInputSource, const char *szInputDest, boo
 
 	FindClose(hSearch);
 
-	return true;
+	// AutoHotkey:
+	return failure_count;
+	//return bFound;
 
 } // Util_CopyFile()
+
 
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -3155,8 +3417,73 @@ void Line::Util_ExpandFilenameWildcardPart(const char *szSource, const char *szD
 		// No wildcard, straight copy of destext
 		strcpy(szExpandedDest, szDest);
 	}
-
 } // Util_ExpandFilenameWildcardPart()
+
+
+
+///////////////////////////////////////////////////////////////////////////////
+// TAKEN FROM THE AUTOIT3 SOURCE
+///////////////////////////////////////////////////////////////////////////////
+// Util_CreateDir()
+// Recursive directory creation function
+///////////////////////////////////////////////////////////////////////////////
+
+bool Line::Util_CreateDir(const char *szDirName)
+{
+	DWORD	dwTemp;
+	bool	bRes;
+	char	*szTemp = NULL;
+	char	*psz_Loc = NULL;
+
+	dwTemp = GetFileAttributes(szDirName);
+	if (dwTemp == FILE_ATTRIBUTE_DIRECTORY)
+		return true;							// Directory exists, yay!
+
+	if (dwTemp == 0xffffffff) 
+	{	// error getting attribute - what was the error?
+		if (GetLastError() == ERROR_PATH_NOT_FOUND) 
+		{
+			// Create path
+			szTemp = new char[strlen(szDirName)+1];
+			strcpy(szTemp, szDirName);
+			psz_Loc = strrchr(szTemp, '\\');	/* find last \ */
+			if (psz_Loc == NULL)				// not found
+			{
+				delete [] szTemp;
+				return false;
+			}
+			else 
+			{
+				*psz_Loc = '\0';				// remove \ and everything after
+				bRes = Util_CreateDir(szTemp);
+				delete [] szTemp;
+				if (bRes)
+				{
+					if (CreateDirectory(szDirName, NULL))
+						bRes = true;
+					else
+						bRes = false;
+				}
+
+				return bRes;
+			}
+		} 
+		else 
+		{
+			if (GetLastError() == ERROR_FILE_NOT_FOUND) 
+			{
+				// Create directory
+				if (CreateDirectory(szDirName, NULL))
+					return true;
+				else
+					return false;
+			}
+		}
+	} 
+			
+	return false;								// Unforeseen error
+
+} // Util_CreateDir()
 
 
 
@@ -3194,6 +3521,107 @@ bool Line::Util_DoesFileExist(const char *szFilename)
 	}
 
 } // Util_DoesFileExist
+
+
+
+///////////////////////////////////////////////////////////////////////////////
+// TAKEN FROM THE AUTOIT3 SOURCE
+///////////////////////////////////////////////////////////////////////////////
+// Util_IsDir()
+// Returns true if the path is a directory
+///////////////////////////////////////////////////////////////////////////////
+
+bool Line::Util_IsDir(const char *szPath)
+{
+	DWORD dwTemp;
+
+	dwTemp = GetFileAttributes(szPath);
+	if ( dwTemp != 0xffffffff && (dwTemp & FILE_ATTRIBUTE_DIRECTORY) )
+		return true;
+	else
+		return false;
+
+} // Util_IsDir
+
+
+
+///////////////////////////////////////////////////////////////////////////////
+// TAKEN FROM THE AUTOIT3 SOURCE
+///////////////////////////////////////////////////////////////////////////////
+// Util_GetFullPathName()
+// Returns the full pathname and strips any trailing \s.  Assumes output
+// is _MAX_PATH in size
+///////////////////////////////////////////////////////////////////////////////
+
+void Line::Util_GetFullPathName(const char *szIn, char *szOut)
+{
+	char	*szFilePart;
+
+	GetFullPathName(szIn, _MAX_PATH, szOut, &szFilePart);
+	Util_StripTrailingDir(szOut);
+} // Util_GetFullPathName()
+
+
+
+///////////////////////////////////////////////////////////////////////////////
+// TAKEN FROM THE AUTOIT3 SOURCE
+///////////////////////////////////////////////////////////////////////////////
+// Util_StripTrailingDir()
+//
+// Makes sure a filename does not have a trailing //
+//
+///////////////////////////////////////////////////////////////////////////////
+
+void Line::Util_StripTrailingDir(char *szPath)
+{
+	if (szPath[strlen(szPath)-1] == '\\')
+		szPath[strlen(szPath)-1] = '\0';
+
+} // Util_StripTrailingDir
+
+
+
+///////////////////////////////////////////////////////////////////////////////
+// TAKEN FROM THE AUTOIT3 SOURCE
+///////////////////////////////////////////////////////////////////////////////
+// Util_IsDifferentVolumes()
+// Checks two paths to see if they are on the same volume
+///////////////////////////////////////////////////////////////////////////////
+
+bool Line::Util_IsDifferentVolumes(const char *szPath1, const char *szPath2)
+{
+	char			szP1Drive[_MAX_DRIVE+1];
+	char			szP2Drive[_MAX_DRIVE+1];
+
+	char			szDir[_MAX_DIR+1];
+	char			szFile[_MAX_FNAME+1];
+	char			szExt[_MAX_EXT+1];
+	
+	char			szP1[_MAX_PATH+1];	
+	char			szP2[_MAX_PATH+1];
+
+	// Get full pathnames
+	Util_GetFullPathName(szPath1, szP1);
+	Util_GetFullPathName(szPath2, szP2);
+
+	// Split the target into bits
+	_splitpath( szP1, szP1Drive, szDir, szFile, szExt );
+	_splitpath( szP2, szP2Drive, szDir, szFile, szExt );
+
+	if (szP1Drive[0] == '\0' || szP2Drive[0] == '\0')
+	{
+		// One or both paths is a UNC - assume different volumes
+		return true;
+	}
+	else
+	{
+		if (stricmp(szP1Drive, szP2Drive))
+			return true;
+		else
+			return false;
+	}
+
+} // Util_IsDifferentVolumes()
 
 
 

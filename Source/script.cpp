@@ -138,6 +138,8 @@ ResultType Script::Init(char *aScriptFilename, bool aIsRestart)
 		// for parsing those commands to figure out whether they're being used in the old AutoIt2
 		// style or the new Exclude Title/Text mode.
 
+		g_act[ACT_FILESELECTFILE].MaxParams -= 2;
+		g_act[ACT_FILEREMOVEDIR].MaxParams -= 1;
 		g_act[ACT_MSGBOX].MaxParams -= 1;
 		g_act[ACT_INIREAD].MaxParams -= 1;
 		g_act[ACT_STRINGREPLACE].MaxParams -= 1;
@@ -205,7 +207,7 @@ ResultType Script::CreateWindows(HINSTANCE aInstance)
 	WNDCLASSEX wc;
 	ZeroMemory(&wc, sizeof(wc));
 	wc.cbSize = sizeof(wc);
-	wc.lpszClassName = WINDOW_CLASS_NAME;
+	wc.lpszClassName = WINDOW_CLASS_MAIN;
 	wc.hInstance = aInstance;
 	wc.lpfnWndProc = MainWindowProc;
 	// Provided from some example code:
@@ -217,10 +219,19 @@ ResultType Script::CreateWindows(HINSTANCE aInstance)
 	wc.hCursor = LoadCursor((HINSTANCE) NULL, IDC_ARROW);
 	wc.hbrBackground = (HBRUSH)GetStockObject(WHITE_BRUSH); // Aut3: GetSysColorBrush(COLOR_BTNFACE)
 	wc.lpszMenuName = MAKEINTRESOURCE(IDR_MENU_MAIN); // NULL; // "MainMenu";
-	ATOM wa = RegisterClassEx(&wc);
-	if (!wa)
+	if (!RegisterClassEx(&wc))
 	{
-		MsgBox("RegisterClass() failed.");
+		MsgBox("RegisterClass() #1 failed.");
+		return FAIL;
+	}
+
+	// Register a second class for the splash window.  The only difference is that
+	// it doesn't have the menu bar:
+	wc.lpszClassName = WINDOW_CLASS_SPLASH;
+	wc.lpszMenuName = NULL;
+	if (!RegisterClassEx(&wc))
+	{
+		MsgBox("RegisterClass() #2 failed.");
 		return FAIL;
 	}
 
@@ -229,7 +240,7 @@ ResultType Script::CreateWindows(HINSTANCE aInstance)
 	// which is why it's standardized in g_script.mMainWindowTitle.
 	// Create the main window:
 	if (   !(g_hWnd = CreateWindow(
-		  WINDOW_CLASS_NAME
+		  WINDOW_CLASS_MAIN
 		, mMainWindowTitle
 		, WS_OVERLAPPEDWINDOW // Style.  Alt: WS_POPUP or maybe 0.
 		, CW_USEDEFAULT // xpos
@@ -375,14 +386,14 @@ ResultType Script::Reload(bool aDisplayErrors)
 	GetCurrentDirectory(sizeof(current_dir), current_dir);  // In case the user launched it in a non-default dir.
 	// The new instance we're about to start will tell our process to stop, or it will display
 	// a syntax error or some other error, in which case our process will still be running:
-#ifndef AUTOHOTKEYSC
-	char arg_string[MAX_PATH + 512];
-	snprintf(arg_string, sizeof(arg_string), "/restart \"%s\"", mFileSpec);
-	return g_script.ActionExec(mOurEXE, arg_string, current_dir, aDisplayErrors);
-#else
+#ifdef AUTOHOTKEYSC
 	// This is here in case a compiled script ever uses the Edit command.  Since the "Reload This
 	// Script" menu item is not available for compiled scripts, it can't be called from there.
 	return g_script.ActionExec(mOurEXE, "/restart", current_dir, aDisplayErrors);
+#else
+	char arg_string[MAX_PATH + 512];
+	snprintf(arg_string, sizeof(arg_string), "/restart \"%s\"", mFileSpec);
+	return g_script.ActionExec(mOurEXE, arg_string, current_dir, aDisplayErrors);
 #endif
 }
 
@@ -945,6 +956,11 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 		directive_end = aBuf + strlen(aBuf); // Point it to the zero terminator.
 	#define IS_DIRECTIVE_MATCH(directive) (!strlicmp(aBuf, directive, (UINT)(directive_end - aBuf)))
 
+	if (IS_DIRECTIVE_MATCH("#WinActivateForce"))
+	{
+		g_WinActivateForce = true;
+		return CONDITION_TRUE;
+	}
 	if (IS_DIRECTIVE_MATCH("#SingleInstance"))
 	{
 		g_AllowOnlyOneInstance = true;
@@ -1186,6 +1202,10 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 	if (!aLineText || !*aLineText)
 		return ScriptError("ParseAndAddLine() called incorrectly." PLEASE_REPORT);
 
+	#define DEFINE_END_FLAGS \
+		char end_flags[] = {' ', g_delimiter, '\t', '<', '>', '=', '+', '-', '*', '/', '!', '\0'}; // '\0' must be last.
+	DEFINE_END_FLAGS
+
 	char action_name[MAX_VAR_NAME_LENGTH + 1], *end_marker;
 	if (aActionName) // i.e. this function was called recursively with explicit values for the optional params.
 	{
@@ -1260,10 +1280,12 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 		}
 		else if (!stricmp(action_name, "IF"))
 		{
-			char *operation;
 			// Skip over the variable name so that the "is" and "is not" operators are properly supported:
-			for (operation = action_args; *operation && !IS_SPACE_OR_TAB(*operation); ++operation);
-			operation = omit_leading_whitespace(operation);
+			char *operation = StrChrAny(action_args, end_flags);
+			if (!operation)
+				operation = action_args + strlen(action_args); // Point it to the NULL terminator instead.
+			else
+				operation = omit_leading_whitespace(operation);
 			switch (*operation)
 			{
 			case '=': // But don't allow == to be "Equals" since the 2nd '=' might be literal.
@@ -1764,7 +1786,7 @@ inline char *Script::ParseActionType(char *aBufTarget, char *aBufSource, bool aD
 	// aLineText that is a space, a delimiter, or a tab. Also search for operator symbols
 	// so that assignments and IFs without whitespace are supported, e.g. var1=5,
 	// if var2<%var3%.  Not static in case g_delimiter is allowed to vary:
-	char end_flags[] = {' ', g_delimiter, '\t', '<', '>', '=', '+', '-', '*', '/', '!', '\0'}; // '\0' must be last.
+	DEFINE_END_FLAGS
 	char *end_marker = StrChrAny(aBufSource, end_flags);
 	if (end_marker) // Found a delimiter.
 	{
@@ -1857,33 +1879,43 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			// Since some vars are optional, the below allows them all to be blank or
 			// not present in the arg list.  If mandatory var is blank at this stage,
 			// it's okay because all mandatory args are validated to be non-blank elsewhere:
-			if (new_arg[i].type != ARG_TYPE_NORMAL && *aArg[i])
+			if (new_arg[i].type != ARG_TYPE_NORMAL)
 			{
-				// Does this input or output variable contain a dereference?  If so, it must
-				// be resolved at runtime (to support old-style AutoIt2 arrays, etc.).
-				// Find the first non-escaped dereference symbol:
-				for (j = 0; aArg[i][j] && (aArg[i][j] != g_DerefChar || (aArgMap && aArgMap[i] && aArgMap[i][j])); ++j);
-				if (!aArg[i][j])
+				if (!*aArg[i])
+					// An optional input or output variable has been omitted, so indicate
+					// that this arg is not a variable, just a normal empty arg.  Functions
+					// such as ListLines() rely on this having been done because they assume,
+					// for performance reasons, that args marked as variables really are
+					// variables:
+					new_arg[i].type = ARG_TYPE_NORMAL;
+				else
 				{
-					// A non-escaped deref symbol wasn't found, therefore this variable does not
-					// appear to be something that must be resolved dynamically at runtime.
-					if (   !(target_var = FindOrAddVar(aArg[i]))   )
-						return FAIL;  // The above already displayed the error.
-					// If this action type is something that modifies the contents of the var, ensure the var
-					// isn't a special/reserved one:
-					if (new_arg[i].type == ARG_TYPE_OUTPUT_VAR && VAR_IS_RESERVED(target_var))
-						return ScriptError(ERR_VAR_IS_RESERVED, aArg[i]);
-					// Rather than removing this arg from the list altogether -- which would distrub
-					// the ordering and hurt the maintainability of the code -- the next best thing
-					// in terms of saving memory is to store an empty string in place of the arg's
-					// text if that arg is a pure variable (i.e. since the name of the variable is already
-					// stored in the Var object, we don't need to store it twice):
-					new_arg[i].text = "";
-					new_arg[i].deref = (DerefType *)target_var;
-					continue;
+					// Does this input or output variable contain a dereference?  If so, it must
+					// be resolved at runtime (to support old-style AutoIt2 arrays, etc.).
+					// Find the first non-escaped dereference symbol:
+					for (j = 0; aArg[i][j] && (aArg[i][j] != g_DerefChar || (aArgMap && aArgMap[i] && aArgMap[i][j])); ++j);
+					if (!aArg[i][j])
+					{
+						// A non-escaped deref symbol wasn't found, therefore this variable does not
+						// appear to be something that must be resolved dynamically at runtime.
+						if (   !(target_var = FindOrAddVar(aArg[i]))   )
+							return FAIL;  // The above already displayed the error.
+						// If this action type is something that modifies the contents of the var, ensure the var
+						// isn't a special/reserved one:
+						if (new_arg[i].type == ARG_TYPE_OUTPUT_VAR && VAR_IS_RESERVED(target_var))
+							return ScriptError(ERR_VAR_IS_RESERVED, aArg[i]);
+						// Rather than removing this arg from the list altogether -- which would distrub
+						// the ordering and hurt the maintainability of the code -- the next best thing
+						// in terms of saving memory is to store an empty string in place of the arg's
+						// text if that arg is a pure variable (i.e. since the name of the variable is already
+						// stored in the Var object, we don't need to store it twice):
+						new_arg[i].text = "";
+						new_arg[i].deref = (DerefType *)target_var;
+						continue;
+					}
+					// else continue on so that this input or output variable name's dynamic part (e.g. array%i%)
+					// can be partially resolved:
 				}
-				// else continue on so that this input or output variable name's dynamic part (e.g. array%i%)
-				// can be partially resolved:
 			}
 
 			// Below will set the new var to be the constant empty string if the
@@ -2162,6 +2194,9 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			if (value < 0 || value > MAX_MOUSE_SPEED)
 				return ScriptError(ERR_MOUSE_SPEED, LINE_RAW_ARG5);
 		}
+		if (line->mArgc > 5 && !line->ArgHasDeref(6) && *LINE_RAW_ARG6)
+			if (strlen(LINE_RAW_ARG6) > 1 || !strchr("UD", toupper(*LINE_RAW_ARG6)))  // Up / Down
+				return ScriptError(ERR_MOUSE_UPDOWN, LINE_RAW_ARG6);
 		// Check that the button is valid (e.g. left/right/middle):
 		if (!line->ArgHasDeref(1))
 			if (!line->ConvertMouseButton(LINE_RAW_ARG1))
@@ -2198,6 +2233,9 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		if (!line->ArgHasDeref(4) && *LINE_RAW_ARG4) // i.e. it's allowed to be blank (defaults to left).
 			if (!line->ConvertMouseButton(LINE_RAW_ARG4))
 				return ScriptError(ERR_MOUSE_BUTTON, LINE_RAW_ARG4);
+		if (line->mArgc > 5 && !line->ArgHasDeref(6) && *LINE_RAW_ARG6)
+			if (strlen(LINE_RAW_ARG6) > 1 || !strchr("UD", toupper(*LINE_RAW_ARG6)))  // Up / Down
+				return ScriptError(ERR_MOUSE_UPDOWN, LINE_RAW_ARG6);
 		break;
 
 	case ACT_ADD:
@@ -2216,6 +2254,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_FILEINSTALL:
 	case ACT_FILECOPY:
 	case ACT_FILEMOVE:
+	case ACT_FILECOPYDIR:
+	case ACT_FILEMOVEDIR:
 	case ACT_FILESELECTFOLDER:
 		if (line->mArgc > 2 && !line->ArgHasDeref(3) && *LINE_RAW_ARG3)
 		{
@@ -2228,6 +2268,15 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			if (line->mArgc > 0 && line->ArgHasDeref(1))
 				return ScriptError("Parameter #1 must not contain references to variables."
 					, LINE_RAW_ARG1);
+		}
+		break;
+
+	case ACT_FILEREMOVEDIR:
+		if (line->mArgc > 1 && !line->ArgHasDeref(2) && *LINE_RAW_ARG2)
+		{
+			if (strlen(LINE_RAW_ARG2) > 1 || (*LINE_RAW_ARG2 != '0' && *LINE_RAW_ARG2 != '1'))
+				return ScriptError("Parameter #2 must be either blank, 0, 1, or a variable reference."
+					, LINE_RAW_ARG2);
 		}
 		break;
 
@@ -2320,7 +2369,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_IFISNOT:
 		if (line->mArgc > 1 && !line->ArgHasDeref(2) && !line->ConvertVariableTypeName(LINE_RAW_ARG2))
 			// Don't refer to it as "Parameter #2" because this command isn't formatted/displayed that way:
-			return ScriptError("The type name must be either NUMBER, FLOAT, TIME, DATE, or a variable reference."
+			return ScriptError("The type name must be either NUMBER, INTEGER, FLOAT, TIME, DATE, DIGIT, ALPHA, ALNUM, SPACE, or a variable reference."
 				, LINE_RAW_ARG2);
 		break;
 	case ACT_GETKEYSTATE:
@@ -2629,6 +2678,7 @@ ResultType Script::AddVar(char *aVarName, size_t aVarNameLength)
 	else if (!stricmp(new_name, "a_TimeSincePriorHotkey")) var_type = VAR_TIMESINCEPRIORHOTKEY;
 	else if (!stricmp(new_name, "a_TickCount")) var_type = VAR_TICKCOUNT;
 	else if (!stricmp(new_name, "a_Space")) var_type = VAR_SPACE;
+	else if (!stricmp(new_name, "a_Tab")) var_type = VAR_TAB;
 	else var_type = VAR_NORMAL;
 
 	Var *the_new_var = new Var(new_name, var_type);
@@ -3731,6 +3781,7 @@ inline ResultType Line::EvaluateCondition()
 	case ACT_IFIS:
 	case ACT_IFISNOT:
 	{
+		char *cp;
 		VariableTypeType variable_type = ConvertVariableTypeName(ARG2);
 		if (variable_type == VAR_TYPE_INVALID)
 		{
@@ -3745,8 +3796,11 @@ inline ResultType Line::EvaluateCondition()
 		case VAR_TYPE_NUMBER:
 			if_condition = IsPureNumeric(ARG1, true, false, true);  // Floats are defined as being numeric.
 			break;
+		case VAR_TYPE_INTEGER:
+			if_condition = IsPureNumeric(ARG1, true, false, false);
+			break;
 		case VAR_TYPE_FLOAT:
-			if_condition = IsPureNumeric(ARG1, true, false, true) && strchr(ARG1, '.');
+			if_condition = IsPureNumeric(ARG1, true, false, true) == PURE_FLOAT;
 			break;
 		case VAR_TYPE_TIME:
 		{
@@ -3757,6 +3811,32 @@ inline ResultType Line::EvaluateCondition()
 			if_condition = IsPureNumeric(ARG1, false, false, false) && YYYYMMDDToFileTime(ARG1, &ft);
 			break;
 		}
+		case VAR_TYPE_DIGIT:
+			if_condition = true;
+			for (cp = ARG1; *cp; ++cp)
+				if (!isdigit(*cp))
+					if_condition = false;
+			break;
+		case VAR_TYPE_ALPHA:
+			// Like AutoIt3, the empty string is considered to be alphabetic, which is only slightly debatable.
+			if_condition = true;
+			for (cp = ARG1; *cp; ++cp)
+				if (!IsCharAlpha(*cp)) // Use this for to better support chars from non-English languages.
+					if_condition = false;
+			break;
+		case VAR_TYPE_ALNUM:
+			// Like AutoIt3, the empty string is considered to be alphabetic, which is only slightly debatable.
+			if_condition = true;
+			for (cp = ARG1; *cp; ++cp)
+				if (!IsCharAlphaNumeric(*cp)) // Use this for to better support chars from non-English languages.
+					if_condition = false;
+			break;
+		case VAR_TYPE_SPACE:
+			if_condition = true;
+			for (cp = ARG1; *cp; ++cp)
+				if (!isspace(*cp))
+					if_condition = false;
+			break;
 		}
 		if (mActionType == ACT_IFISNOT)
 			if_condition = !if_condition;
@@ -4215,11 +4295,11 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		if (*ARG4)
 		{
 			if (   !(vk = ConvertMouseButton(ARG4))   )
-				return LineError(ERR_MOUSE_BUTTON ERR_ABORT, FAIL, ARG1);
+				return LineError(ERR_MOUSE_BUTTON ERR_ABORT, FAIL, ARG4);
 		}
 		else // Default button when the param is blank or an reference to an empty var.
 			vk = VK_LBUTTON;
-		return ControlClick(vk, *ARG5 ? atoi(ARG5) : 1, ARG1, ARG2, ARG3, ARG6, ARG7);
+		return ControlClick(vk, *ARG5 ? atoi(ARG5) : 1, *ARG6, ARG1, ARG2, ARG3, ARG7, ARG8);
 	case ACT_CONTROLGETFOCUS:
 		return ControlGetFocus(ARG2, ARG3, ARG4, ARG5);
 	case ACT_CONTROLFOCUS:
@@ -4594,20 +4674,24 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		return this->FileAppend(ARG2, ARG1);  // To avoid ambiguity in case there's another FileAppend().
 	case ACT_FILEREADLINE:
 		return FileReadLine(ARG2, ARG3);
+	case ACT_FILEDELETE:
+		return FileDelete(ARG1);
 	case ACT_FILEINSTALL:
 		return FileInstall(THREE_ARGS);
 	case ACT_FILECOPY:
-		return FileCopy(THREE_ARGS);
+		return g_ErrorLevel->Assign(Util_CopyFile(ARG1, ARG2, *ARG3 == '1' && !*(ARG3 + 1), false));
 	case ACT_FILEMOVE:
-		return FileMove(THREE_ARGS);
-	case ACT_FILEDELETE:
-		return FileDelete(ARG1);
+		return g_ErrorLevel->Assign(Util_CopyFile(ARG1, ARG2, *ARG3 == '1' && !*(ARG3 + 1), true));
+	case ACT_FILECOPYDIR:
+		return g_ErrorLevel->Assign(Util_CopyDir(ARG1, ARG2, *ARG3 == '1' && !*(ARG3 + 1)) ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
+	case ACT_FILEMOVEDIR:
+		return g_ErrorLevel->Assign(Util_MoveDir(ARG1, ARG2, *ARG3 == '1' && !*(ARG3 + 1)) ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
 	case ACT_FILECREATEDIR:
 		return FileCreateDir(ARG1);
 	case ACT_FILEREMOVEDIR:
 		if (!*ARG1) // Consider an attempt to create or remove a blank dir to be an error.
 			return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
-		return g_ErrorLevel->Assign(RemoveDirectory(ARG1) ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
+		return g_ErrorLevel->Assign(Util_RemoveDir(ARG1, *ARG2 == '1' && !*(ARG2 + 1)) ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
 
 	case ACT_FILEGETATTRIB:
 		// The specified ARG, if non-blank, takes precedence over the file-loop's file (if any):
@@ -4627,7 +4711,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		return FileGetVersion(USE_FILE_LOOP_FILE_IF_ARG_BLANK(ARG2));
 
 	case ACT_FILESELECTFILE:
-		return FileSelectFile(ARG2, ARG3);
+		return FileSelectFile(ARG2, ARG3, ARG4, ARG5);
 	case ACT_FILESELECTFOLDER:
 		return FileSelectFolder(ARG2, *ARG3 ? (atoi(ARG3) != 0) : true, ARG4);
 
@@ -4840,8 +4924,8 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		// window that would interfere with user's ability to see dialogs and other things.
 
 		// Add some caption and frame size to window:
-		W += GetSystemMetrics(SM_CXEDGE) * 2;
-		int min_height = GetSystemMetrics(SM_CYCAPTION) + (GetSystemMetrics(SM_CYEDGE) * 2);
+		W += GetSystemMetrics(SM_CXFIXEDFRAME) * 2;
+		int min_height = GetSystemMetrics(SM_CYCAPTION) + (GetSystemMetrics(SM_CXFIXEDFRAME) * 2);
 		if (g_script.mIsAutoIt2)
 		{
 			// I think this is probably something like how AutoIt2 does things:
@@ -4870,7 +4954,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		// does doing so seem to cause any harm.  Feels safer to have it be
 		// an independent window.  Update: Must make it owned by the parent window
 		// otherwise it will get its own tray icon, which is usually undesirable:
-		g_hWndSplash = CreateWindowEx(WS_EX_TOPMOST, WINDOW_CLASS_NAME, ARG3  // ARG3 is the window title
+		g_hWndSplash = CreateWindowEx(WS_EX_TOPMOST, WINDOW_CLASS_SPLASH, ARG3  // ARG3 is the window title
 			, WS_DISABLED|WS_POPUP|WS_CAPTION, xpos, ypos, W, H
 			, g_hWnd, (HMENU)NULL, g_hInstance, NULL);
 
@@ -4977,7 +5061,10 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		__int64 precision = dot_pos ? _atoi64(dot_pos + 1) : 0;
 		if (width + precision + 2 > MAX_FORMATTED_NUMBER_LENGTH) // +2 to allow room for decimal point itself and a safety margin.
 			return OK; // Don't change it.
-		sprintf(g.FormatFloat, "%%%sf", ARG2); // Create as "%ARG2f": %f can handle doubles in MSVC++.
+		// Create as "%ARG2f".  Add a dot if none was specified so that "0" is the same as "0.", which
+		// seems like the most user-friendly approach; it's also easier to document in the help file.
+		// Note that %f can handle doubles in MSVC++:
+		sprintf(g.FormatFloat, "%%%s%sf", ARG2, dot_pos ? "" : ".");
 		return OK;
 	}
 	case ACT_SETCONTROLDELAY: g.ControlDelay = atoi(ARG1); return OK;
@@ -5443,7 +5530,7 @@ char *Line::ToText(char *aBuf, size_t aBufSize, bool aAppendNewline)
 			// This method a little more efficient than using snprintfcat().
 			// Also, always use the arg's text for input and output args whose variables haven't
 			// been been resolved at load-time, since the text has everything in it we want to display
-			// and thus there's no need to "resolve" dynamic variables here (e.g. array%i%):
+			// and thus there's no need to "resolve" dynamic variables here (e.g. array%i%).
 			snprintf(aBuf, BUF_SPACE_REMAINING, ",%s", (mArg[i].type != ARG_TYPE_NORMAL && !*mArg[i].text)
 				? VAR(mArg[i])->mName : mArg[i].text);
 			aBuf += strlen(aBuf);
@@ -5721,7 +5808,6 @@ char *Script::ListKeyHistory(char *aBuf, size_t aBufSize)
 		"\r\nLast hotkey type: %s"
 		"\r\nInterrupted threads: %d%s"
 		"\r\nPaused threads: %d"
-		"\r\nMsgBoxes: %d"
 		"\r\nModifiers (GetKeyState() now) = %s"
 		"\r\n"
 		, win_title
@@ -5732,7 +5818,6 @@ char *Script::ListKeyHistory(char *aBuf, size_t aBufSize)
 		, g_nInterruptedSubroutines
 		, g_nInterruptedSubroutines ? " (preempted: they will resume when the current thread finishes)" : ""
 		, g_nPausedSubroutines
-		, g_nMessageBoxes
 		, ModifiersLRToText(GetModifierLRStateSimple(), LRtext));
 	aBuf += strlen(aBuf);
 	GetHookStatus(aBuf, BUF_SPACE_REMAINING);
@@ -5770,41 +5855,43 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 	if (aWorkingDir && !*aWorkingDir)
 		aWorkingDir = NULL;
 
-	// Save the originals for later use:
-	char *aAction_orig = aAction;
-	char *aParams_orig = aParams;
-
 	#define IS_VERB(str) (   !stricmp(str, "find") || !stricmp(str, "explore") || !stricmp(str, "open")\
 		|| !stricmp(str, "edit") || !stricmp(str, "print") || !stricmp(str, "properties")   )
-	bool action_is_system_verb = false;
 
-	// Declare these here to ensure they're in scope for the entire function, since their
+	// Declare this buf here to ensure it's in scope for the entire function, since its
 	// contents may be referred to indirectly:
-	char action[LINE_SIZE], *first_phrase, *first_phrase_end, *second_phrase;
+	char parse_buf[LINE_SIZE];
 
-	// CreateProcess() requires that it be modifiable, so ensure that it is just in case
-	// this function is ever changed to use CreateProcess() even when the caller gave
-	// use some params:
-	strlcpy(action, aAction, sizeof(action));
-	aAction = action;
+	// Set default items to be run by ShellExecute().  These are also used by the error
+	// reporting at the end, which is why they're initialized even if CreateProcess() works
+	// and there's no need to use ShellExecute():
+	char *shell_action = aAction;
+	char *shell_params = aParams ? aParams : "";
+	bool shell_action_is_system_verb = false;
 
+	///////////////////////////////////////////////////////////////////////////////////
+	// This next section is done prior to CreateProcess() because when aParams is NULL,
+	// we need to find out whether aAction contains a system verb.
+	///////////////////////////////////////////////////////////////////////////////////
 	if (aParams) // Caller specified the params (even an empty string counts, for this purpose).
-		action_is_system_verb = IS_VERB(aAction);
+		shell_action_is_system_verb = IS_VERB(shell_action);
 	else // Caller wants us to try to parse params out of aAction.
 	{
-		aParams = "";  // Set default to be empty string in case the below doesn't find any params.
+		// Make a copy so that we can modify it (i.e. split it into action & params):
+		strlcpy(parse_buf, aAction, sizeof(parse_buf));
 
 		// Find out the "first phrase" in the string.  This is done to support the special "find" and "explore"
 		// operations as well as minmize the chance that executable names intended by the user to be parameters
 		// will not be considered to be the program to run (e.g. for use with a compiler, perhaps).
-		if (*aAction == '\"')
+		char *first_phrase, *first_phrase_end, *second_phrase;
+		if (*parse_buf == '\"')
 		{
-			first_phrase = aAction + 1;  // Omit the double-quotes, for use with CreateProcess() and such.
+			first_phrase = parse_buf + 1;  // Omit the double-quotes, for use with CreateProcess() and such.
 			first_phrase_end = strchr(first_phrase, '\"');
 		}
 		else
 		{
-			first_phrase = aAction;
+			first_phrase = parse_buf;
 			// Set first_phrase_end to be the location of the first whitespace char, if
 			// one exists:
 			first_phrase_end = StrChrAny(first_phrase, " \t"); // Find space or tab.
@@ -5813,67 +5900,66 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 		// or the position of the first whitespace char to the right of first_phrase.
 		if (first_phrase_end)
 		{
-			// Split into two phrases for use with AddLine():
+			// Split into two phrases:
 			*first_phrase_end = '\0';
 			second_phrase = first_phrase_end + 1;
 		}
 		else // the entire string is considered to be the first_phrase, and there's no second:
 			second_phrase = NULL;
-		if (action_is_system_verb = IS_VERB(first_phrase))
+		if (shell_action_is_system_verb = IS_VERB(first_phrase))
 		{
-			aAction = first_phrase;
-			aParams = second_phrase ? second_phrase : "";
+			shell_action = first_phrase;
+			shell_params = second_phrase ? second_phrase : "";
 		}
 		else
 		{
-	// Rather than just consider the first phrase to be the exectable and the rest to be the param, we check it
-	// for a proper extension so that the user can launch a document name containing spaces, without having to
-	// enclose it in double quotes.  UPDATE: Want to be able to support executable filespecs without requiring them
-	// to be enclosed in double quotes.  Therefore, search the entire string, rather than just first_phrase, for
-	// the left-most occurrence of a valid executable extension.  This should be fine since the user can still
-	// pass in EXEs and such as params as long as the first executable is fully qualified with its real extension
-	// so that we can tell that it's the action and not one of the params.
+// Rather than just consider the first phrase to be the executable and the rest to be the param, we check it
+// for a proper extension so that the user can launch a document name containing spaces, without having to
+// enclose it in double quotes.  UPDATE: Want to be able to support executable filespecs without requiring them
+// to be enclosed in double quotes.  Therefore, search the entire string, rather than just first_phrase, for
+// the left-most occurrence of a valid executable extension.  This should be fine since the user can still
+// pass in EXEs and such as params as long as the first executable is fully qualified with its real extension
+// so that we can tell that it's the action and not one of the params.
 
-	// This method is rather crude because is doesn't handle an extensionless executable such as "notepad test.txt"
-	// It's important that it finds the first occurrence of an executable extension in case there are other
-	// occurrences in the parameters.  Also, .pif and .lnk are currently not considered executables for this purpose
-	// since they probably don't accept parameters:
-			strlcpy(action, aAction_orig, sizeof(action));  // Restore the original value in case it was changed.
-			aAction = action;  // Reset it to its original value, in case it was changed; and ensure it's modifiable.
-			aParams = ""; // Init.
+// This method is rather crude because is doesn't handle an extensionless executable such as "notepad test.txt"
+// It's important that it finds the first occurrence of an executable extension in case there are other
+// occurrences in the parameters.  Also, .pif and .lnk are currently not considered executables for this purpose
+// since they probably don't accept parameters:
+			strlcpy(parse_buf, aAction, sizeof(parse_buf));  // Restore the original value in case it was changed.
 			char *action_extension;
-			if (   !(action_extension = stristr(aAction, ".exe "))   )
-				if (   !(action_extension = stristr(aAction, ".exe\""))   )
-					if (   !(action_extension = stristr(aAction, ".bat "))   )
-						if (   !(action_extension = stristr(aAction, ".bat\""))   )
-							if (   !(action_extension = stristr(aAction, ".com "))   )
-								if (   !(action_extension = stristr(aAction, ".com\""))   )
+			if (   !(action_extension = stristr(parse_buf, ".exe "))   )
+				if (   !(action_extension = stristr(parse_buf, ".exe\""))   )
+					if (   !(action_extension = stristr(parse_buf, ".bat "))   )
+						if (   !(action_extension = stristr(parse_buf, ".bat\""))   )
+							if (   !(action_extension = stristr(parse_buf, ".com "))   )
+								if (   !(action_extension = stristr(parse_buf, ".com\""))   )
 									// Not 100% sure that .cmd and .hta are genuine executables in every sense:
-									if (   !(action_extension = stristr(aAction, ".cmd "))   )
-										if (   !(action_extension = stristr(aAction, ".cmd\""))   )
-											if (   !(action_extension = stristr(aAction, ".hta "))   )
-												action_extension = stristr(aAction, ".hta\"");
+									if (   !(action_extension = stristr(parse_buf, ".cmd "))   )
+										if (   !(action_extension = stristr(parse_buf, ".cmd\""))   )
+											if (   !(action_extension = stristr(parse_buf, ".hta "))   )
+												action_extension = stristr(parse_buf, ".hta\"");
 
 			if (action_extension)
 			{
-				// If above isn't true, there's no extension: so assume the whole <aAction> is a document name
-				// to be opened by the shell.  Otherwise we do this:
+				shell_action = parse_buf;
 				// +4 for the 3-char extension with the period:
-				char *exec_params = action_extension + 4;  // exec_params is now the start of params, or empty-string.
-				if (*exec_params == '\"')
-					// Exclude from exec_params since it's probably belongs to the action, not the params
+				shell_params = action_extension + 4;  // exec_params is now the start of params, or empty-string.
+				if (*shell_params == '\"')
+					// Exclude from shell_params since it's probably belongs to the action, not the params
 					// (i.e. it's paired with another double-quote at the start):
-					++exec_params;
-				if (*exec_params) // otherwise, there doesn't appear to be any params.
+					++shell_params;
+				if (*shell_params)
 				{
 					// Terminate the <aAction> string in the right place.  For this to work correctly,
 					// at least one space must exist between action & params (shortcoming?):
-					*exec_params = '\0';
-					++exec_params;
-					ltrim(exec_params);
-					aParams = exec_params;
+					*shell_params = '\0';
+					++shell_params;
+					ltrim(shell_params); // Might be empty string after this, which is ok.
 				}
+				// else there doesn't appear to be any params, so just leave shell_params set to empty string.
 			}
+			// else there's no extension: so assume the whole <aAction> is a document name to be opened by
+			// the shell.  So leave shell_action and shell_params set their original defaults.
 		}
 	}
 
@@ -5889,10 +5975,8 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 	// In that case, we'll also skip the CreateProcess() attempt and do only the ShellExecute().
 	// If the user really meant to launch find.bat or find.exe, for example, he should add
 	// the extension (e.g. .exe) to differentiate "find" from "find.exe":
-	if (   !action_is_system_verb && (!aParams_orig || !*aParams_orig)   )
+	if (!shell_action_is_system_verb)
 	{
-		aAction = action; // same
-		aParams = "";     // same
 		STARTUPINFO si = {0};  // Zero fill to be safer.
 		si.cb = sizeof(si);
 		si.lpReserved = si.lpDesktop = si.lpTitle = NULL;
@@ -5900,9 +5984,14 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 		si.dwFlags = STARTF_USESHOWWINDOW;  // This tells it to use the value of wShowWindow below.
 		si.wShowWindow = (aRunShowMode && *aRunShowMode) ? Line::ConvertRunMode(aRunShowMode) : SW_SHOWNORMAL;
 		PROCESS_INFORMATION pi = {0};
+
 		// Since CreateProcess() requires that the 2nd param be modifiable, ensure that it is
 		// (even if this is ANSI and not Unicode; it's just safer):
-		strlcpy(action, aAction_orig, sizeof(action)); // i.e. we're running the original action from caller.
+		char command_line[LINE_SIZE];
+		if (aParams && *aParams)
+			snprintf(command_line, sizeof(command_line), "%s %s", aAction, aParams);
+		else
+        	strlcpy(command_line, aAction, sizeof(command_line)); // i.e. we're running the original action from caller.
 
 		// MSDN: "If [lpCurrentDirectory] is NULL, the new process is created with the same
 		// current drive and directory as the calling process." (i.e. since caller may have
@@ -5915,12 +6004,18 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 		// this parameter must include the .com extension. If the file name ends in a period (.) with
 		// no extension, or if the file name contains a path, .exe is not appended. If the file name does
 		// not contain a directory path, the system searches for the executable file in the following
-		// sequence...":
-		if (CreateProcess(NULL, aAction, NULL, NULL, FALSE, 0, NULL, aWorkingDir, &si, &pi))
+		// sequence...".
+		// Provide the app name (first param) if possible, for greater expected reliability.
+		// UPDATE: Don't provide the module name because if it's enclosed in double quotes,
+		// CreateProcess() will fail, at least under XP:
+		//if (CreateProcess(aParams && *aParams ? aAction : NULL
+		if (CreateProcess(NULL, command_line, NULL, NULL, FALSE, 0, NULL, aWorkingDir, &si, &pi))
 		{
 			success = true;
 			new_process = pi.hProcess;
 		}
+//else
+//MsgBox(command_line);
 	}
 
 	if (!success) // Either the above wasn't attempted, or the attempt failed.  So try ShellExecute().
@@ -5931,19 +6026,19 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 		sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
 		sei.lpDirectory = aWorkingDir; // OK if NULL or blank; that will cause current dir to be used.
 		sei.nShow = (aRunShowMode && *aRunShowMode) ? Line::ConvertRunMode(aRunShowMode) : SW_SHOWNORMAL;
-		if (action_is_system_verb)
+		if (shell_action_is_system_verb)
 		{
-			sei.lpVerb = aAction;
-			if (!stricmp(aAction, "properties"))
+			sei.lpVerb = shell_action;
+			if (!stricmp(shell_action, "properties"))
 				sei.fMask |= SEE_MASK_INVOKEIDLIST;  // Need to use this for the "properties" verb to work reliably.
-			sei.lpFile = aParams;
+			sei.lpFile = shell_params;
 			sei.lpParameters = NULL;
 		}
 		else
 		{
 			sei.lpVerb = "open";
-			sei.lpFile = aAction;
-			sei.lpParameters = aParams;
+			sei.lpFile = shell_action;
+			sei.lpParameters = shell_params;
 		}
 		if (ShellExecuteEx(&sei) && LOBYTE(LOWORD(sei.hInstApp)) > 32) // Relies on short-circuit boolean order.
 		{
@@ -5957,23 +6052,20 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 		if (aDisplayErrors)
 		{
 			char error_text[2048], verb_text[128];
-			if (action_is_system_verb && stricmp(aAction, "open"))  // It's a verb, but not the default "open" verb.
-				snprintf(verb_text, sizeof(verb_text), "\nVerb: <%s>", aAction);
+			if (shell_action_is_system_verb && stricmp(shell_action, "open"))  // It's a verb, but not the default "open" verb.
+				snprintf(verb_text, sizeof(verb_text), "\nVerb: <%s>", shell_action);
 			else // Don't bother showing it if it's just "open".
 				*verb_text = '\0';
 			// Use format specifier to make sure it doesn't get too big for the error
-			// function to display.  Also, due to above having tried CreateProcess()
-			// as a last resort, aParams will always be blank so don't bother displaying it:
-			if (!aParams)
-				aParams = "";
+			// function to display:
 			snprintf(error_text, sizeof(error_text)
 				, "Failed attempt to launch program or document:"
 				"\nAction: <%-0.400s%s>"
 				"%s"
 				"\nParams: <%-0.400s%s>\n\n" ERR_ABORT_NO_SPACES
-				, aAction, strlen(aAction) > 400 ? "..." : ""
+				, shell_action, strlen(shell_action) > 400 ? "..." : ""
 				, verb_text
-				, aParams, strlen(aParams) > 400 ? "..." : ""
+				, shell_params, strlen(shell_params) > 400 ? "..." : ""
 				);
 			ScriptError(error_text);
 		}

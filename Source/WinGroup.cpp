@@ -36,6 +36,21 @@ ResultType WinGroup::AddWindow(char *aTitle, char *aText, void *aJumpToLine
 	if (!aExcludeTitle) aExcludeTitle = "";
 	if (!aExcludeText) aExcludeText = "";
 
+	// For now, it seems best not to add the specification if all the params are blank:
+	if (!*aTitle && !*aText && !*aExcludeTitle && !*aExcludeText)
+		return OK;
+
+	// Though the documentation is clear on this, some users will still probably execute
+	// each GroupAdd statement more than once.  Thus, to prevent more and more memory
+	// from being allocated for duplicates, do not add the window specification if it
+	// already exists in the group:
+	if (mFirstWindow) // Traverse the circular linked-list to look for a match.
+		for (WindowSpec *win = mFirstWindow
+			; win != NULL; win = (win->mNextWindow == mFirstWindow) ? NULL : win->mNextWindow)
+			if (!strcmp(win->mTitle, aTitle) && !strcmp(win->mText, aText) // All are case sensitive.
+				&& !strcmp(win->mExcludeTitle, aExcludeTitle) && !strcmp(win->mExcludeText, aExcludeText))
+				return OK;
+
 	// SimpleHeap::Malloc() will set these new vars to the constant empty string if their
 	// corresponding params are blank:
 	char *new_title, *new_text, *new_exclude_title, *new_exclude_text;

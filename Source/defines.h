@@ -33,9 +33,19 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define WINDOW_CLASS_NAME NAME_P
-#define NAME_VERSION "0.2.25"
+#define NAME_VERSION "1.0.00"
 #define NAME_PV NAME_P " v" NAME_VERSION
+
+// Window class names: Changing these may result in new versions not being able to detect any old instances
+// that may be running (such as the use of FindWindow() in WinMain()).  It may also have other unwanted
+// effects, such as anything in the OS that relies on the class name that the user may have changed the
+// settings for, such as whether to hide the tray icon (though it probably doesn't use the class name
+// in that example).
+// MSDN: "Because window classes are process specific, window class names need to be unique only within
+// the same process. Also, because class names occupy space in the system's private atom table, you
+// should keep class name strings as short a possible:
+#define WINDOW_CLASS_MAIN "AutoHotkey"
+#define WINDOW_CLASS_SPLASH NAME_P "AutoHotkey2"
 
 #define EXT_AUTOIT2 ".aut"
 #define EXT_AUTOHOTKEY ".ahk"

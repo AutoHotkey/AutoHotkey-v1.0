@@ -33,23 +33,6 @@ key is actually down at the moment of consideration.
 	// pEvent is a macro for convenience and readability:
 	#undef pEvent
 	#define pEvent ((PKBDLLHOOKSTRUCT)lParam)
-	// Testing reveals that the driver-generated physical shift-key events occur very quickly before or
-	// after the key they are designed to "help".  Thus a value of 22 (to give it a little more leeway
-	// for when the system is under load) should cover just about everything).  The tickcount/sleep timer
-	// granularity is usually 10 on WinNT/2k/XP, and maybe close to that on Win98 as well).
-	// I'm (maybe temporarily) increasing the value to 120 to try to isolate why this still
-	// doesn't work for some people.  UPDATE: The driver generated shift-down that occurs AFTER a numpad
-	// key is released doesn't happen until another key on the keyboard is physically pressed.  In other
-	// words, the driver avoids pushing the SHIFT key back down until it's obvious that the user needs
-	// it to be down.  However, this doesn't appear to be done for performance reasons because the driver
-	// generates a fast down and up even when another numpad key is pressed immediately after the first.
-	// UPDATE: It looks like it does it both ways: Sometimes it pushes down the SHIFT key immediately
-	// after its done having it up, and sometimes it waits.  Update: Possibly this is the rule: On my
-	// system, it might only *wait* to do the key down if a numpad key is being held down at the moment
-	// some other key is pressed, in which case it's forced to put shift back down to modify that key.
-	// Related: Upon numpad key down, when it puts shift up, it waits for user to release the numpad key,
-	// at which time it immediately puts shift back down.
-	#define SHIFT_KEY_WORKAROUND_TIMEOUT 22
 #else // Mouse Hook:
 	#undef pEvent
 	#define pEvent ((PMSLLHOOKSTRUCT)lParam)
@@ -57,10 +40,44 @@ key is actually down at the moment of consideration.
 
 
 
-// Used to help make a workaround for the way the keyboard driver generates
-// physical shift-key events to release the shift key whenever it is physically
-// down during the press or release of a dual-state Numpad key:
 #ifdef INCLUDE_KEYBD_HOOK
+// Used to help make a workaround for the way the keyboard driver generates physical
+// shift-key events to release the shift key whenever it is physically down during
+// the press or release of a dual-state Numpad key. These keyboard driver generated
+// shift-key events only seem to happen when Numlock is ON, the shift key is logically
+// or physically down, and a dual-state numpad key is pressed or released (i.e. the shift
+// key might not have been down for the press, but if it's down for the release, the driver
+// will suddenly start generating shift events).  I think the purpose of these events is to
+// allow the shift keyto temporarily alter the state of the Numlock key for the purpose of
+// sending that one key, without the shift key actually being "seen" as down while the key
+// itself is sent (since some apps may have special behavior when they detect the shift key
+// is down).
+
+// Note: numlock, numpaddiv/mult/sub/add/enter are not affected by this because they have only
+// a single state (i.e. they are unaffected by the state of the Numlock key).  Also, these
+// driver-generated events occur at a level lower than the hook, so it doesn't matter whether
+// the hook suppresses the keys involved (i.e. the shift events still happen anyway).
+
+// So which keys are not physical even though they're non-injected?:
+// 1) The shift-up that precedes a down of a dual-state numpad key (only happens when shift key is logically down).
+// 2) The shift-down that precedes a pressing down (or releasing in certain very rare cases caused by the
+//    exact sequence of keys received) of a key WHILE the numpad key in question is still down.
+//    Although this case may seem rare, it's happened to both Robert Yaklin and myself when doing various
+//    sorts of hotkeys.
+// 3) The shift-up that precedes an up of a dual-state numpad key.  This only happens if the shift key is
+//    logically down for any reason at this exact moment, which can be achieved via the send command.
+// 4) The shift-down that follows the up of a dual-state numpad key (i.e. the driver is restoring the shift state
+//    to what it was before).  This can be either immediate or "lazy".  It's lazy whenever the user had pressed
+//    another key while a numpad key was being held down (i.e. case #2 above), in which case the driver waits
+//    indefinitely for the user to press any other key and then immediately sneaks in the shift key-down event
+//    right before it in the input stream (insertion).
+
+// The below timeout is for the subset of driver-generated shift-events that occur immediately
+// before or after some other keyboard event.  The elapsed time is usually zero, but using 22ms
+// here just in case slower systems or systems under load have longer delays between keystrokes:
+#define SHIFT_KEY_WORKAROUND_TIMEOUT 22
+static bool pad_state[PAD_TOTAL_COUNT];  // Initialized by ChangeHookState()
+static bool next_phys_shift_down_is_not_phys = false;
 static vk_type prior_vk = 0;
 static sc_type prior_sc = 0;
 static bool prior_event_was_key_up = false;
@@ -69,62 +86,40 @@ static DWORD prior_event_tickcount = 0;
 static modLR_type prior_modifiersLR_physical = 0;
 static bool prior_shift_state = false;  // i.e. default to "key is up".
 static bool prior_lshift_state = false;
-static bool prior_rshift_state = false;
 #endif
 
 	
 #ifdef INCLUDE_KEYBD_HOOK
+inline bool DualStateNumpadKeyIsDown()
+{
+	// Note: GetKeyState() might not agree with us that the key is physically down because
+	// the hook may have suppressed it (e.g. if it's a hotkey).  Therefore, pad_state
+	// is the only way to know for user if the user is physically holding down a *qualified*
+	// Numpad key.  "Qualified" means that it must be a dual-state key and Numlock must have
+	// been ON at the time the key was first pressed down.  This last criteria is needed because
+	// physically holding down the shift-key will change VK generated by the driver to appear
+	// to be that of the numpad without the numlock key on.  In other words, we can't just
+	// consult the g_PhysicalKeyState array because it won't tell whether a key such as
+	// NumpadEnd is truly phyiscally down:
+	for (int i = 0; i < PAD_TOTAL_COUNT; ++i)
+		if (pad_state[i])
+			return true;
+	return false;
+}
+
+
+
 inline IsDualStateNumpadKey(vk_type aVK, sc_type aSC)
 {
-	// Older, background notes:
-	// Even if the hook suppresses the numpad key in question entirely, one of those
-	// subsystems still sees it and does the shift thing.  So that subsystem must be at a
-	// lower level than even the hook.
-
-	// The driver or whatever is generating these events is also smart enough to push the
-	// shift key back down WHILE the numpad key is still down if the user presses another key
-	// in between.  It generates this down-event BEFORE the key that the user pressed takes effect,
-	// so we know this is happening at a very low level, probably driver level or bios level.  Example:
-	// Hold down shift
-	// Hold down numpad2
-	// Press any key (e.g. H)
-	// The driver will have generated a lot of shift events to keep the shift key in the right state at
-	// each stage.
-
-	// So which keys are not physical even though they're non-injected?:
-	// - The shift-up that precedes a down of a dual-state numpad key (only happens when shift key is logically down).
-	// - The shift-down that precedes a pressing down of a key WHILE the numpad key in question is still down (rare).
-	// - The shift-up that precedes an up of a dual-state numpad key.  This only happens if the shift key is
-	//   logically down for any reason at this exact moment.
-	// - The shift-down that follows the up of a dual-state numpad key (i.e. the driver is restoring the shift state
-	//   to what it was before).
-
-	// Newer:
-	// The weird keyboard driver generated shift-key events only seem to happen when
-	// the lower function of the dual state key occurs (i.e. the Numlock-off function, such
-	// as Ins, Del, PgDn, End).  The driver probably generates these so that the shift key
-	// can be used to temporarily alter the state of the Numlock key for the purpose of
-	// sending that one key, without the shift key actually being down while the key itself
-	// is sent (since some apps may have special behavior when they detect the shift key
-	// is down).  Therefore, this function should only return TRUE if the given key is
-	// lower of the two functions for each key (e.g. INS rather than Numpad0, Del rather
-	// than NumpadDot, etc.), since the driver-generated SHIFT events won't occur otherwise.
-
-	// Note: The driver puts the shift key back down (if it needs to be restored to down) immediately
-	// after every press of a numpad key.  It then puts it up again if the user presses yet another
-	// numpad key.  In other words, it doesn't wait until the last moment to restore the shift key,
-	// it does it right away.
-
-	// Note: numlock, div, mult, sub, add, and enter are not affected by this because they
-	// have only a single state (i.e. they are unaffected by the state of the Numlock key).
-
-	// The scan code mustn't be extended, otherwise the key that was pressed is not on
-	// the Number Pad (i.e. it's the counterpart key located elsewhere on the keyboard):
-	if (aSC & 0x100)
+	if (aSC & 0x100)  // If it's extended, it can't be a numpad key.
 		return false;
 
 	switch(aVK)
 	{
+	// It seems best to exclude the VK_DECIMAL and VK_NUMPAD0 through VK_NUMPAD9 from the below
+	// list because the callers want to know whether this is a numpad key being *modified* by
+	// the shift key (i.e. the shift key is being held down to temporarily transform the numpad
+	// key into its opposite state, overriding the fact that Numlock is ON):
 	case VK_DELETE: // NumpadDot (VK_DECIMAL)
 	case VK_INSERT: // Numpad0
 	case VK_END:    // Numpad1
@@ -138,6 +133,7 @@ inline IsDualStateNumpadKey(vk_type aVK, sc_type aSC)
 	case VK_PRIOR:  // Numpad9
 		return true;
 	}
+
 	return false;
 }
 #endif
@@ -152,23 +148,21 @@ inline bool EventIsPhysical(LPARAM lParam, sc_type sc, bool key_up)
 	// My: This also applies to mouse events, so use it for them too:
 	if (pEvent->flags & LLKHF_INJECTED)
 		return false;
-	// Otherwise, it's probably physical.  The only exception I know of is when the keyboard driver
-	// or other low-level subsystem inserts shift-key events whenever the following are both true:
-	// 1) A dual-state Numpad key is pressed or released.
-	// 2) The shift key is logically down.
-	// In the above case, the system generates a shift-up even to ensure that the shift key isn't
-	// down while the numpad key is pressed or released.  It then pushes the key back down afterward.
-	// These events are not marked as injected even though they really are (i.e. the user never
-	// physically pressed them).  UPDATE: It seems better not to use SHIFT_KEY_WORKAROUND_TIMEOUT
-	// as the timeout value because some drivers (e.g. my XP) may wait until the user presses another key
-	// before "sneaking in" the shift-key-down event to restore the state.
-	// See SHIFT_KEY_WORKAROUND_TIMEOUT comments for details:
-	if (   (pEvent->vkCode == VK_LSHIFT || pEvent->vkCode == VK_RSHIFT || pEvent->vkCode == VK_SHIFT) && !key_up
-		&& prior_event_was_key_up && IsDualStateNumpadKey(prior_vk, prior_sc)
-		&& (DWORD)(GetTickCount() - prior_event_tickcount) < (DWORD)5000   )
+	// So now we know it's a physical event.  But certain LSHIFT key-down events are driver-generated.
+	// We want to be able to tell the difference because the Send command and other aspects
+	// of keyboard functionality need us to be accurate about which keys the user is physically
+	// holding down at any given time:
+	if (   (pEvent->vkCode == VK_LSHIFT || pEvent->vkCode == VK_SHIFT) && !key_up   ) // But not RSHIFT.
 	{
-//PostMessage(g_hWnd, AHK_HOOK_TEST_MSG, (vk_type)pEvent->vkCode, (DWORD)(GetTickCount() - prior_event_tickcount));
-		return false;  // This appears to be a non-physical, low-level event generated by the driver or OS.
+		if (next_phys_shift_down_is_not_phys && !DualStateNumpadKeyIsDown())
+		{
+			next_phys_shift_down_is_not_phys = false;
+			return false;
+		}
+		// Otherwise (see notes about SHIFT_KEY_WORKAROUND_TIMEOUT above for details):
+		if (prior_event_was_key_up && IsDualStateNumpadKey(prior_vk, prior_sc)
+			&& (DWORD)(GetTickCount() - prior_event_tickcount) < (DWORD)SHIFT_KEY_WORKAROUND_TIMEOUT   )
+			return false;
 	}
 	// Otherwise:
 	return true;
@@ -508,29 +502,29 @@ void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 
 void UpdateKeyState(LPARAM lParam, sc_type sc, bool key_up)
 {
-	// Numpad shift-key workaround to compensate for the fact that the keyboard driver (or other low-level
-	// subsystem) generates physical shift-key events to ensure that the shift key isn't logically down
-	// when a dual-state numpad key is pressed or released.  This part of the workaround is needed in
-	// cases such as when the user is physically holding down the shift key, perhaps as part of the
-	// hotkey itself.  We don't want the driver-generated key-up event to fool the hook's physical
-	// status into thinking it's not really still down when it is.  This part of the workaround can be
-	// tested via "NumpadEnd::KeyHistory".  Turn on numlock, hold down shift, and press numpad1.
-	// The hotkey will fire and the status should display that the shift key is physically, but
-	// not logically down at that exact moment:
-	if (   IsDualStateNumpadKey((vk_type)pEvent->vkCode, sc)  // both the up and down events are eligible
-		&& prior_event_was_key_up && prior_event_was_physical // prior event was a physical shift-up
-		&& (prior_vk == VK_SHIFT || prior_vk == VK_LSHIFT || prior_vk == VK_RSHIFT)
-		&& (DWORD)(GetTickCount() - prior_event_tickcount) < (DWORD)SHIFT_KEY_WORKAROUND_TIMEOUT   )
+	// See above notes near the first mention of SHIFT_KEY_WORKAROUND_TIMEOUT for details.
+	// This part of the workaround can be tested via "NumpadEnd::KeyHistory".  Turn on numlock,
+	// hold down shift, and press numpad1. The hotkey will fire and the status should display
+	// that the shift key is physically, but not logically down at that exact moment:
+	if (prior_event_was_physical && (prior_vk == VK_LSHIFT || prior_vk == VK_SHIFT)  // But not RSHIFT.
+		&& (DWORD)(GetTickCount() - prior_event_tickcount) < (DWORD)SHIFT_KEY_WORKAROUND_TIMEOUT)
 	{
-		// Since the prior event (the shift key) already happened (took effect) and since only
-		// now is it known that it shouldn't have been physical, undo the effects of it having
-		// been physical:
-//PostMessage(g_hWnd, AHK_HOOK_TEST_MSG, prior_shift_state, (DWORD)(GetTickCount() - prior_event_tickcount));
-		g_modifiersLR_physical = prior_modifiersLR_physical;
-		g_PhysicalKeyState[VK_SHIFT] = prior_shift_state;
-		g_PhysicalKeyState[VK_LSHIFT] = prior_lshift_state;
-		g_PhysicalKeyState[VK_RSHIFT] = prior_rshift_state;
+		// Verified: Both down and up events for the current key qualify for this:
+		bool fix_it = !prior_event_was_key_up && DualStateNumpadKeyIsDown();
+		if (fix_it)
+			next_phys_shift_down_is_not_phys = true;
+		// In the first case, both the numpad key-up and down events are eligible:
+		if (   fix_it || (prior_event_was_key_up && IsDualStateNumpadKey((vk_type)pEvent->vkCode, sc))   )
+		{
+			// Since the prior event (the shift key) already happened (took effect) and since only
+			// now is it known that it shouldn't have been physical, undo the effects of it having
+			// been physical:
+			g_modifiersLR_physical = prior_modifiersLR_physical;
+			g_PhysicalKeyState[VK_SHIFT] = prior_shift_state;
+			g_PhysicalKeyState[VK_LSHIFT] = prior_lshift_state;
+		}
 	}
+
 
 	// Must do this part prior to UpdateModifierState() because we want to store the values
 	// as they are prior to the potentially-erroneously-physical shift key event takes effect.
@@ -539,7 +533,6 @@ void UpdateKeyState(LPARAM lParam, sc_type sc, bool key_up)
 	prior_modifiersLR_physical = g_modifiersLR_physical;
 	prior_shift_state = g_PhysicalKeyState[VK_SHIFT];
 	prior_lshift_state = g_PhysicalKeyState[VK_LSHIFT];
-	prior_rshift_state = g_PhysicalKeyState[VK_RSHIFT];
 
 	// If this function was called from SuppressThisKey(), these comments apply:
 	// Currently SuppressThisKey is only called with a modifier in the rare case
@@ -812,11 +805,29 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	else
 		*pKeyHistoryCurr->target_window = '\0';
 
-	// Track physical state of keyboard & mouse buttons since GetAsyncKeyState() doesn't seem
-	// to do so, at least under WinXP.  Also, if it's a modifier, let another section handle it
-	// because it's not as simple as just setting the value to true or false (e.g. if LShift
-	// goes up, the state of VK_SHIFT should stay down if VK_RSHIFT is down, or up otherwise):
 #ifdef INCLUDE_KEYBD_HOOK
+	// If the scan code is extended, the key that was pressed is not a dual-state numpad key,
+	// i.e. it could be the counterpart key, such as End vs. NumpadEnd, located elsewhere on
+	// the keyboard, but we're not interested in those.  Also, Numlock must be ON because
+	// otherwise the driver will not generate those false-physical shift key events:
+	if (!(sc & 0x100) && (GetKeyState(VK_NUMLOCK) & 0x00000001))
+	{
+		switch(vk)
+		{
+		case VK_DELETE: case VK_DECIMAL: pad_state[PAD_DECIMAL] = !key_up; break;
+		case VK_INSERT: case VK_NUMPAD0: pad_state[PAD_NUMPAD0] = !key_up; break;
+		case VK_END:    case VK_NUMPAD1: pad_state[PAD_NUMPAD1] = !key_up; break;
+		case VK_DOWN:   case VK_NUMPAD2: pad_state[PAD_NUMPAD2] = !key_up; break;
+		case VK_NEXT:   case VK_NUMPAD3: pad_state[PAD_NUMPAD3] = !key_up; break;
+		case VK_LEFT:   case VK_NUMPAD4: pad_state[PAD_NUMPAD4] = !key_up; break;
+		case VK_CLEAR:  case VK_NUMPAD5: pad_state[PAD_NUMPAD5] = !key_up; break;
+		case VK_RIGHT:  case VK_NUMPAD6: pad_state[PAD_NUMPAD6] = !key_up; break;
+		case VK_HOME:   case VK_NUMPAD7: pad_state[PAD_NUMPAD7] = !key_up; break;
+		case VK_UP:     case VK_NUMPAD8: pad_state[PAD_NUMPAD8] = !key_up; break;
+		case VK_PRIOR:  case VK_NUMPAD9: pad_state[PAD_NUMPAD9] = !key_up; break;
+		}
+	}
+
 	// Having this extra check here, in addition to the other(s) that set alt_tab_menu_is_visible to be
 	// true, allows AltTab and ShiftAltTab hotkeys to function even when the AltTab menu was invoked by
 	// means other than an AltTabMenu or AltTabAndMenu hotkey.  The alt-tab menu becomes visible only
@@ -826,9 +837,14 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		&& !(g_modifiersLR_logical & MOD_LCONTROL) && !(g_modifiersLR_logical & MOD_RCONTROL))
 		alt_tab_menu_is_visible = true;
 
+	// Track physical state of keyboard & mouse buttons since GetAsyncKeyState() doesn't seem
+	// to do so, at least under WinXP.  Also, if it's a modifier, let another section handle it
+	// because it's not as simple as just setting the value to true or false (e.g. if LShift
+	// goes up, the state of VK_SHIFT should stay down if VK_RSHIFT is down, or up otherwise):
 	if (!kvk[vk].as_modifiersLR && EventIsPhysical(lParam, sc, key_up))
 		g_PhysicalKeyState[vk] = !key_up;
-#else
+
+#else // Mouse hook.
 	if (EventIsPhysical(lParam, key_up))
 		g_PhysicalKeyState[vk] = !key_up;
 #endif

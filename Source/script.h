@@ -47,7 +47,8 @@ enum ExecUntilMode {NORMAL_MODE, UNTIL_RETURN, UNTIL_BLOCK_END, ONLY_ONE_LINE};
 typedef void *AttributeType;
 
 enum FileLoopModeType {FILE_LOOP_INVALID, FILE_LOOP_FILES_ONLY, FILE_LOOP_FILES_AND_FOLDERS, FILE_LOOP_FOLDERS_ONLY};
-enum VariableTypeType {VAR_TYPE_INVALID, VAR_TYPE_NUMBER, VAR_TYPE_FLOAT, VAR_TYPE_TIME};
+enum VariableTypeType {VAR_TYPE_INVALID, VAR_TYPE_NUMBER, VAR_TYPE_INTEGER, VAR_TYPE_FLOAT, VAR_TYPE_TIME
+	, VAR_TYPE_DIGIT, VAR_TYPE_ALPHA, VAR_TYPE_ALNUM, VAR_TYPE_SPACE};
 
 // But the array that goes with these actions is in globaldata.cpp because
 // otherwise it would be a little cumbersome to declare the extern version
@@ -97,7 +98,8 @@ enum enum_act {
 , ACT_PIXELGETCOLOR, ACT_PIXELSEARCH
 , ACT_GROUPADD, ACT_GROUPACTIVATE, ACT_GROUPDEACTIVATE, ACT_GROUPCLOSE
 , ACT_DRIVESPACEFREE, ACT_SOUNDSETWAVEVOLUME, ACT_SOUNDPLAY
-, ACT_FILEAPPEND, ACT_FILEREADLINE, ACT_FILEINSTALL, ACT_FILECOPY, ACT_FILEMOVE, ACT_FILEDELETE
+, ACT_FILEAPPEND, ACT_FILEREADLINE, ACT_FILEDELETE
+, ACT_FILEINSTALL, ACT_FILECOPY, ACT_FILEMOVE, ACT_FILECOPYDIR, ACT_FILEMOVEDIR
 , ACT_FILECREATEDIR, ACT_FILEREMOVEDIR
 , ACT_FILEGETATTRIB, ACT_FILESETATTRIB, ACT_FILEGETTIME, ACT_FILESETTIME
 , ACT_FILEGETSIZE, ACT_FILEGETVERSION
@@ -163,13 +165,14 @@ enum enum_act_old {
 #define ERR_TITLEMATCHMODE2 "The variable does not contain a valid TitleMatchMode (the value must be either 1, 2, slow, or fast)." ERR_ABORT
 #define ERR_IFMSGBOX "This line specifies an invalid MsgBox result."
 #define ERR_REG_KEY "The key name must be either HKEY_LOCAL_MACHINE, HKEY_USERS, HKEY_CURRENT_USER, HKEY_CLASSES_ROOT, or HKEY_CURRENT_CONFIG."
-#define ERR_REG_VALUE_TYPE "The value type must be either REG_SZ, REG_EXPAND_SZ, REG_DWORD, or REG_BINARY."
+#define ERR_REG_VALUE_TYPE "The value type must be either REG_SZ, REG_EXPAND_SZ, REG_MULTI_SZ, REG_DWORD, or REG_BINARY."
 #define ERR_RUN_SHOW_MODE "Parameter #3 must be either blank or one of these words: min, max, hide."
 #define ERR_COMPARE_TIMES "Parameter #3 must be either blank, Seconds, Minutes, Hours, Days, or a variable reference."
 #define ERR_INVALID_DATETIME "This date-time string contains at least one invalid component."
 #define ERR_FILE_TIME "Parameter #3 must be either blank, M, C, A, or a variable reference."
 #define ERR_MOUSE_BUTTON "This line specifies an invalid mouse button."
 #define ERR_MOUSE_COORD "The X & Y coordinates must be either both absent or both present."
+#define ERR_MOUSE_UPDOWN "Parameter #6 must be either blank, D, U, or a variable reference."
 #define ERR_PERCENT "The parameter must be a percentage between 0 and 100, or a variable reference."
 #define ERR_MOUSE_SPEED "The Mouse Speed must be a number between 0 and " MAX_MOUSE_SPEED_STR ", blank, or a variable reference."
 #define ERR_MEM_ASSIGN "Out of memory while assigning to this variable." ERR_ABORT
@@ -253,19 +256,27 @@ private:
 	ResultType PerformAssign();
 	ResultType DriveSpaceFree(char *aPath);
 	ResultType SoundPlay(char *aFilespec, bool aSleepUntilDone);
-	ResultType FileSelectFile(char *aOptions, char *aWorkingDir);
+	ResultType FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeting, char *aFilter);
 	ResultType FileSelectFolder(char *aRootDir, bool aAllowCreateFolder, char *aGreeting);
 	ResultType FileCreateDir(char *aDirSpec);
 	ResultType FileReadLine(char *aFilespec, char *aLineNumber);
 	ResultType FileAppend(char *aFilespec, char *aBuf);
 	ResultType FileDelete(char *aFilePattern);
-	ResultType FileCopy(char *aSource, char *aDest, char *aFlag);
-	ResultType FileMove(char *aSource, char *aDest, char *aFlag);
 	ResultType FileInstall(char *aSource, char *aDest, char *aFlag);
-	static bool Util_CopyFile(const char *szInputSource, const char *szInputDest, bool bOverwrite);
-	static void Util_ExpandFilenameWildcard(const char *szSource, const char *szDest, char *szExpandedDest);
-	static void Util_ExpandFilenameWildcardPart(const char *szSource, const char *szDest, char *szExpandedDest);
-	static bool Util_DoesFileExist(const char *szFilename);
+
+	// AutoIt3 functions:
+	bool Util_CopyDir (const char *szInputSource, const char *szInputDest, bool bOverwrite);
+	bool Util_MoveDir (const char *szInputSource, const char *szInputDest, bool bOverwrite);
+	bool Util_RemoveDir (const char *szInputSource, bool bRecurse);
+	int Util_CopyFile(const char *szInputSource, const char *szInputDest, bool bOverwrite, bool bMove);
+	void Util_ExpandFilenameWildcard(const char *szSource, const char *szDest, char *szExpandedDest);
+	void Util_ExpandFilenameWildcardPart(const char *szSource, const char *szDest, char *szExpandedDest);
+	bool Util_CreateDir(const char *szDirName);
+	bool Util_DoesFileExist(const char *szFilename);
+	bool Util_IsDir(const char *szPath);
+	void Util_GetFullPathName(const char *szIn, char *szOut);
+	void Util_StripTrailingDir(char *szPath);
+	bool Util_IsDifferentVolumes(const char *szPath1, const char *szPath2);
 
 	ResultType FileGetAttrib(char *aFilespec);
 	int FileSetAttrib(char *aAttributes, char *aFilePattern, FileLoopModeType aOperateOnFolders
@@ -303,8 +314,8 @@ private:
 		, char *aExcludeTitle, char *aExcludeText);
 	ResultType ControlSend(char *aControl, char *aKeysToSend, char *aTitle, char *aText
 		, char *aExcludeTitle, char *aExcludeText, modLR_type aModifiersLR);
-	ResultType ControlClick(vk_type aVK, int aClickCount, char *aControl, char *aTitle, char *aText
-		, char *aExcludeTitle, char *aExcludeText);
+	ResultType ControlClick(vk_type aVK, int aClickCount, char aEventType, char *aControl
+		, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType ControlGetFocus(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType ControlFocus(char *aControl, char *aTitle, char *aText
 		, char *aExcludeTitle, char *aExcludeText);
@@ -662,10 +673,15 @@ public:
 	// Returns the matching type, or zero if none.
 	{
 		if (!aBuf || !*aBuf) return VAR_TYPE_INVALID;
-		if (!stricmp(aBuf, "number")) return VAR_TYPE_NUMBER;
+		if (!stricmp(aBuf, "integer")) return VAR_TYPE_INTEGER;
 		if (!stricmp(aBuf, "float")) return VAR_TYPE_FLOAT;
+		if (!stricmp(aBuf, "number")) return VAR_TYPE_NUMBER;
 		if (!stricmp(aBuf, "time")) return VAR_TYPE_TIME;
 		if (!stricmp(aBuf, "date")) return VAR_TYPE_TIME;  // "date" is just an alias for "time".
+		if (!stricmp(aBuf, "digit")) return VAR_TYPE_DIGIT;
+		if (!stricmp(aBuf, "alpha")) return VAR_TYPE_ALPHA;
+		if (!stricmp(aBuf, "alnum")) return VAR_TYPE_ALNUM;
+		if (!stricmp(aBuf, "space")) return VAR_TYPE_SPACE;
 		return VAR_TYPE_INVALID;
 	}
 
@@ -691,6 +707,7 @@ public:
 	{
 		if (!stricmp(aValueType, "REG_SZ")) return OK;
 		if (!stricmp(aValueType, "REG_EXPAND_SZ")) return OK;
+		if (!stricmp(aValueType, "REG_MULTI_SZ")) return OK;
 		if (!stricmp(aValueType, "REG_DWORD")) return OK;
 		if (!stricmp(aValueType, "REG_BINARY")) return OK;
 		return FAIL;
@@ -1047,10 +1064,10 @@ public:
 			strcpy(aBuf, str);
 		return (VarSizeType)strlen(str);
 	}
-	VarSizeType GetSpace(char *aBuf = NULL)
+	VarSizeType GetSpace(VarTypeType aType, char *aBuf = NULL)
 	{
 		if (!aBuf) return 1;  // i.e. the length of a single space char.
-		*(aBuf++) = ' ';
+		*(aBuf++) = aType == VAR_SPACE ? ' ' : '\t';
 		*aBuf = '\0';
 		return 1;
 	}

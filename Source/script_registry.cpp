@@ -45,6 +45,8 @@ ResultType Line::IniRead(char *aFilespec, char *aSection, char *aKey, char *aDef
 	// The above function is supposed to set szBuffer to be aDefault if it can't find the
 	// file, section, or key.  In other words, it always changes the contents of szBuffer.
 	return output_var->Assign(szBuffer);
+	// Note: ErrorLevel is not changed by this command since the aDefault value is returned
+	// whenever there's an error.
 }
 
 
@@ -55,9 +57,9 @@ ResultType Line::IniWrite(char *aValue, char *aFilespec, char *aSection, char *a
 	char	*szFilePart;
 	// Get the fullpathname (ini functions need a full path) 
 	GetFullPathName(aFilespec, _MAX_PATH, szFileTemp, &szFilePart);
-	WritePrivateProfileString(aSection, aKey, aValue, szFileTemp);  // Returns zero on failure.
+	BOOL result = WritePrivateProfileString(aSection, aKey, aValue, szFileTemp);  // Returns zero on failure.
 	WritePrivateProfileString(NULL, NULL, NULL, szFileTemp);	// Flush
-	return OK;  // For now, this always returns OK.
+	return g_script.mIsAutoIt2 ? OK : g_ErrorLevel->Assign(result ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
 }
 
 
@@ -68,9 +70,9 @@ ResultType Line::IniDelete(char *aFilespec, char *aSection, char *aKey)
 	char	*szFilePart;
 	// Get the fullpathname (ini functions need a full path) 
 	GetFullPathName(aFilespec, _MAX_PATH, szFileTemp, &szFilePart);
-	WritePrivateProfileString(aSection, aKey, NULL, szFileTemp);  // Returns zero on failure.
+	BOOL result = WritePrivateProfileString(aSection, aKey, NULL, szFileTemp);  // Returns zero on failure.
 	WritePrivateProfileString(NULL, NULL, NULL, szFileTemp);	// Flush
-	return OK;  // For now, this always returns OK.
+	return g_script.mIsAutoIt2 ? OK : g_ErrorLevel->Assign(result ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
 }
 
 
@@ -88,7 +90,7 @@ ResultType Line::RegRead(char *aRegKey, char *aRegSubkey, char *aValueName)
 	HKEY	hRegKey, hMainKey;
 	DWORD	dwRes, dwBuf, dwType;
 	// My: Seems safest to keep the limit just below 64K in case Win95 has problems with larger values.
-	char	szRegBuffer[65535];					// Only allow reading of 64Kb from a key
+	char	szRegBuffer[65535]; // Only allow reading of 64Kb from a key
 
 	// Get the main key name
 	if (   !(hMainKey = RegConvertMainKey(aRegKey))   )
@@ -102,18 +104,11 @@ ResultType Line::RegRead(char *aRegKey, char *aRegSubkey, char *aValueName)
 	if ( RegQueryValueEx(hRegKey, aValueName, NULL, &dwType, NULL, NULL) != ERROR_SUCCESS )
 		return OK;  // Let ErrorLevel tell the story.
 
+	char *buf;
+
 	// The way we read is different depending on the type of the key
 	switch (dwType)
 	{
-		case REG_SZ:
-		case REG_MULTI_SZ:
-		case REG_EXPAND_SZ:
-			dwRes = sizeof(szRegBuffer);
-			RegQueryValueEx(hRegKey, aValueName, NULL, NULL, (LPBYTE)szRegBuffer, &dwRes);
-			RegCloseKey(hRegKey);
-			g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-			return output_var->Assign(szRegBuffer);
-
 		case REG_DWORD:
 			dwRes = sizeof(dwBuf);
 			RegQueryValueEx(hRegKey, aValueName, NULL, NULL, (LPBYTE)&dwBuf, &dwRes);
@@ -121,16 +116,94 @@ ResultType Line::RegRead(char *aRegKey, char *aRegSubkey, char *aValueName)
 			g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 			return output_var->Assign((__int64)dwBuf);
 
+		// Note: The contents of any of these types can be >64K on NT/2k/XP+ (though that is probably rare):
+		case REG_SZ:
+		case REG_EXPAND_SZ:
+		case REG_MULTI_SZ:
+		{
+			// Ask it how large the value is.  Specify a relatively low value for dwRes, even though
+			// it's probably ignored in this case, because values >64K may cause it to fail on Win95.
+			// 0 might be best:
+			dwRes = 0;
+			RegQueryValueEx(hRegKey, aValueName, NULL, NULL, (LPBYTE)NULL, &dwRes);
+			if (dwRes <= 1) // According to MSDN, the size will be exactly 1 in the case of an empty string.
+			{
+				RegCloseKey(hRegKey);
+				return g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+			}
+			// Set up the variable to receive the contents, enlarging it if necessary:
+			// Since dwRes includes the space for the zero terminator (if the MSDN docs
+			// are accurate), this will enlarge it to be 1 byte larger than we need,
+			// which leaves room for the final newline character to be inserted after
+			// the last item.  Even so, it feels safer to add 2 to the requested capacity
+			// to avoid any chance of a buffer overrun:
+			if (output_var->Assign(NULL, (VarSizeType)(dwRes + 2)) != OK)
+			{
+				RegCloseKey(hRegKey);
+				return FAIL; // FAIL is only returned when the error is a critical one such as this one.
+			}
+
+			buf = output_var->Contents(); // This target buf should now be large enough for the result.
+
+			RegQueryValueEx(hRegKey, aValueName, NULL, NULL, (LPBYTE)buf, &dwRes);
+			RegCloseKey(hRegKey);
+
+			// The MSDN docs state that we should ensure that the buffer is NULL-terminated ourselves:
+			// "If the data has the REG_SZ, REG_MULTI_SZ or REG_EXPAND_SZ type, then lpcbData will also
+			// include the size of the terminating null character or characters ... If the data has the
+			// REG_SZ, REG_MULTI_SZ or REG_EXPAND_SZ type, the string may not have been stored with the
+			// proper null-terminating characters. Applications should ensure that the string is properly
+			// terminated before using it, otherwise, the application may fail by overwriting a buffer."
+
+			// Double-terminate so that the loop can find out the true end of the buffer.
+			// The MSDN docs cited above are a little unclear.  The most likely interpretation is that
+			// dwRes contains the true size retrieved.  For example, if dwRes is 1, the first char
+			// in the buffer is either a NULL or an actual non-NULL character that was originally
+			// stored in the registry incorrectly (i.e. without a terminator).  In either case, do
+			// not change the first character, just leave it as is and add a NULL at the 2nd and
+			// 3rd character positions to ensure that it is double terminated in every case:
+			buf[dwRes] = buf[dwRes + 1] = '\0';
+
+			if (dwType == REG_MULTI_SZ) // Convert NULL-delimiters into newline delimiters.
+			{
+				for (;; ++buf)
+				{
+					if (!*buf)
+					{
+						// Unlike AutoIt3, it seems best to have a newline character after the
+						// last item in the list also.  It usually makes parsing easier:
+						*buf = '\n';	// Convert to \n for later storage in the user's variable.
+						if (!*(buf + 1)) // Buffer is double terminated, so this is safe.
+							// Double null terminator marks the end of the used portion of the buffer.
+							break;
+					}
+				}
+				// else the buffer is empty (see above notes for explanation).  So don't put any newlines
+				// into it at all, since each newline should correspond to an item in the buffer.
+			}
+			g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+			// Due to conservative buffer sizes above, length is probably too large by 3.
+			// So update to reflect the true length:
+			output_var->Length() = (VarSizeType)strlen(output_var->Contents());
+			return output_var->Close();  // In case it's the clipboard.
+		}
+
 		case REG_BINARY:
 		{
 			dwRes = sizeof(szRegBuffer);
-			RegQueryValueEx(hRegKey, aValueName, NULL, NULL, (LPBYTE)szRegBuffer, &dwRes);
+			LONG result = RegQueryValueEx(hRegKey, aValueName, NULL, NULL, (LPBYTE)szRegBuffer, &dwRes);
+			RegCloseKey(hRegKey);
+
+			if (result == ERROR_MORE_DATA)
+				// The API docs state that the buffer's contents are undefined in this case,
+				// so for no we don't support values larger than our buffer size:
+				return OK; // Let ErrorLevel tell the story.  The output variable has already been made blank.
 
 			// Set up the variable to receive the contents, enlarging it if necessary.
 			// AutoIt3: Each byte will turned into 2 digits, plus a final null:
 			if (output_var->Assign(NULL, (VarSizeType)(dwRes * 2)) != OK)
 				return FAIL;
-			char *buf = output_var->Contents();
+			buf = output_var->Contents();
 			*buf = '\0';
 
 			int j = 0;
@@ -144,9 +217,9 @@ ResultType Line::RegRead(char *aRegKey, char *aRegSubkey, char *aValueName)
 				buf[j] = szHexData[n % 16];
 				j += 2;
 			}
-			buf[j] = '\0';					// Terminate
+			buf[j] = '\0'; // Terminate
+			g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 			return output_var->Close();  // In case it's the clipboard.
-			break;
 		}
 	}
 
@@ -164,8 +237,17 @@ ResultType Line::RegWrite(char *aValueType, char *aRegKey, char *aRegSubkey, cha
 
 	HKEY	hRegKey, hMainKey;
 	DWORD	dwRes, dwBuf;
+
 	// My: Seems safest to keep the limit just below 64K in case Win95 has problems with larger values.
-	char	szRegBuffer[65535];					// Only allow writing of 64Kb to a key
+	char szRegBuffer[65535], *buf; // Only allow writing of 64Kb to a key for Win9x, which is all it supports.
+	#define SET_REG_BUF \
+		if (g_os.IsWin9x())\
+		{\
+			strlcpy(szRegBuffer, aValue, sizeof(szRegBuffer));\
+			buf = szRegBuffer;\
+		}\
+		else\
+			buf = aValue;
 
 	// Get the main key name
 	if (   !(hMainKey = RegConvertMainKey(aRegKey))   )
@@ -177,21 +259,48 @@ ResultType Line::RegWrite(char *aValueType, char *aRegKey, char *aRegSubkey, cha
 		return OK;  // Let ErrorLevel tell the story.
 
 	// Write the registry differently depending on type of variable we are writing
-	if (!stricmp(aValueType, "REG_EXPAND_SZ"))
+	if (!stricmp(aValueType, "REG_SZ"))
 	{
-		strlcpy(szRegBuffer, aValue, sizeof(szRegBuffer));
-		if (RegSetValueEx(hRegKey, aValueName, 0, REG_EXPAND_SZ, (CONST BYTE *)szRegBuffer
-			, (DWORD)strlen(szRegBuffer)+1 ) == ERROR_SUCCESS)
+		SET_REG_BUF
+		if (RegSetValueEx(hRegKey, aValueName, 0, REG_SZ, (CONST BYTE *)buf, (DWORD)strlen(buf)+1) == ERROR_SUCCESS)
 			g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 		RegCloseKey(hRegKey);
 		return OK;
 	}
 
-	if (!stricmp(aValueType, "REG_SZ"))
+	if (!stricmp(aValueType, "REG_EXPAND_SZ"))
 	{
-		strlcpy(szRegBuffer, aValue, sizeof(szRegBuffer));
-		if ( RegSetValueEx(hRegKey, aValueName, 0, REG_SZ, (CONST BYTE *)szRegBuffer
-			, (DWORD)strlen(szRegBuffer)+1 ) == ERROR_SUCCESS )
+		SET_REG_BUF
+		if (RegSetValueEx(hRegKey, aValueName, 0, REG_EXPAND_SZ, (CONST BYTE *)buf, (DWORD)strlen(buf)+1) == ERROR_SUCCESS)
+			g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+		RegCloseKey(hRegKey);
+		return OK;
+	}
+
+	if (!stricmp(aValueType, "REG_MULTI_SZ"))
+	{
+		// Don't allow values over 64K for this type because aValue might not be a writable
+		// string, and we would need to write to it to temporarily change the newline delimiters
+		// into zero-delimiters.  Even if we were to require callers to give us a modifiable string,
+		// its capacity be 1 byte too small to handle the double termination that's needed
+		// (i.e. if the last item in the list happens to not end in a newline):
+		strlcpy(szRegBuffer, aValue, sizeof(szRegBuffer) - 1);  // -1 to leave space for a 2nd terminator.
+		// Double-terminate:
+		size_t length = strlen(szRegBuffer);
+		szRegBuffer[length + 1] = '\0';
+
+		// Remove any final newline the user may have provided since we don't want the length
+		// to include it when calling RegSetValueEx() -- it would be too large by 1:
+		if (length > 0 && szRegBuffer[length - 1] == '\n')
+			szRegBuffer[--length] = '\0';
+
+		// Replace the script's delimiter char with the zero-delimiter needed by RegSetValueEx():
+		for (char *cp = szRegBuffer; *cp; ++cp)
+			if (*cp == '\n')
+				*cp = '\0';
+
+		if (RegSetValueEx(hRegKey, aValueName, 0, REG_MULTI_SZ, (CONST BYTE *)szRegBuffer
+			, (DWORD)(length ? length + 2 : 0)) == ERROR_SUCCESS)
 			g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 		RegCloseKey(hRegKey);
 		return OK;
@@ -199,7 +308,10 @@ ResultType Line::RegWrite(char *aValueType, char *aRegKey, char *aRegSubkey, cha
 
 	if (!stricmp(aValueType, "REG_DWORD"))
 	{
-		sscanf(aValue, "%u", &dwBuf);
+		if (*aValue)
+			sscanf(aValue, "%u", &dwBuf);
+		else // Default to 0 when blank.
+			dwBuf = 0;
 		if (RegSetValueEx(hRegKey, aValueName, 0, REG_DWORD, (CONST BYTE *)&dwBuf, sizeof(dwBuf) ) == ERROR_SUCCESS)
 			g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 		RegCloseKey(hRegKey);
@@ -304,9 +416,9 @@ ResultType Line::RegDelete(char *aRegKey, char *aRegSubkey, char *aValueName)
 
 	if (!aValueName || !*aValueName)
 	{
-		// Remove Key
-		bool success = RegRemoveSubkeys(hRegKey);
-		RegCloseKey(hRegKey);
+		// Remove the entire Key
+		bool success = RegRemoveSubkeys(hRegKey); // Delete any subitems within the key.
+		RegCloseKey(hRegKey); // Close parent key.  Not sure if this needs to be done after the above.
 		if (!success)
 			return OK;  // Let ErrorLevel tell the story.
 		if (RegDeleteKey(hMainKey, aRegSubkey) != ERROR_SUCCESS) 
@@ -316,9 +428,9 @@ ResultType Line::RegDelete(char *aRegKey, char *aRegSubkey, char *aValueName)
 	{
 		// Remove Value
 		LONG lRes = RegDeleteValue(hRegKey, aValueName);
+		RegCloseKey(hRegKey);
 		if (lRes != ERROR_SUCCESS)
 			return OK;  // Let ErrorLevel tell the story.
-		RegCloseKey(hRegKey);
 	}
 
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.

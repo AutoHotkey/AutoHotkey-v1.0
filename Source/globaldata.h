@@ -40,6 +40,7 @@ extern int g_HotkeyModifierTimeout;
 extern HHOOK g_hhkLowLevelKeybd;
 extern HHOOK g_hhkLowLevelMouse;
 extern bool g_ForceLaunch;
+extern bool g_WinActivateForce;
 extern bool g_AllowOnlyOneInstance;
 extern bool g_NoTrayIcon;
 extern bool g_AllowSameLineComments;

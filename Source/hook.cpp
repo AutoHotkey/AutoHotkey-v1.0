@@ -709,6 +709,7 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 			g_modifiersLR_logical = g_modifiersLR_physical = g_modifiersLR_get = 0;
 			disguise_next_lwin_up = disguise_next_rwin_up = disguise_next_lalt_up = disguise_next_ralt_up
 				= alt_tab_menu_is_visible = false;
+			ZeroMemory(pad_state, sizeof(pad_state));
 		}
 		else
 		{
@@ -788,7 +789,7 @@ char *GetHookStatus(char *aBuf, size_t aBufSize)
 {
 	if (!aBuf || !aBufSize) return aBuf;
 
-	char KeyHistoryText[2048], KeyName[128], LRgText[128], LRhText[128], LRpText[128], IgnoreText[1024];
+	char KeyHistoryText[2048], KeyName[128], LRhText[128], LRpText[128], IgnoreText[1024];
 	int item, i;
 	*KeyHistoryText = *IgnoreText = '\0';
 
@@ -824,13 +825,13 @@ char *GetHookStatus(char *aBuf, size_t aBufSize)
 	snprintf(aBuf, aBufSize,
 		"Modifiers (Hook's Logical) = %s\r\n"
 		"Modifiers (Hook's Physical) = %s\r\n" // Font isn't fixed-width, so don't bother trying to line them up.
-		"Modifiers (GetKeyState()) = %s (old, from last call to GetModifierLRState())\r\n"
-		"Prefix Key Down=%s\r\n"
+		//"Modifiers (GetKeyState()) = %s (old, from last call to GetModifierLRState())\r\n"
+		"Prefix key is down: %s\r\n"
 		"%s"
 		, ModifiersLRToText(g_modifiersLR_logical, LRhText)
 		, ModifiersLRToText(g_modifiersLR_physical, LRpText)
-		, ModifiersLRToText(g_modifiersLR_get, LRgText)
-		, pPrefixKey == NULL ? "No" : "Yes"
+		//, ModifiersLRToText(g_modifiersLR_get, LRgText)
+		, pPrefixKey == NULL ? "no" : "yes"
 		// This can't work because the hotkey that triggers the info-dialog will always make it true:
 		//, pPrefixKey == NULL ? "" : (pPrefixKey->was_just_used ? " (yes)" : " (no)")
 		, KeyHistoryText);
