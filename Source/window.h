@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2005 Chris Mallett
+Copyright 2003 Chris Mallett
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -156,8 +156,6 @@ HWND WinActive(char *aTitle, char *aText = "", char *aExcludeTitle = "", char *a
 HWND WinExist(char *aTitle, char *aText = "", char *aExcludeTitle = "", char *aExcludeText = ""
 	, bool aFindLastMatch = false, bool aUpdateLastUsed = false
 	, HWND aAlreadyVisited[] = NULL, int aAlreadyVisitedCount = 0, bool aReturnTheCount = false);
-
-HWND GetValidLastUsedWindow();
 
 BOOL CALLBACK EnumParentFind(HWND hwnd, LPARAM lParam);
 BOOL CALLBACK EnumChildFind(HWND hwnd, LPARAM lParam);

@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2005 Chris Mallett
+Copyright 2003 Chris Mallett
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -2101,7 +2101,7 @@ ResultType Line::ControlGetFocus(char *aTitle, char *aText, char *aExcludeTitle,
 
 	char class_name[WINDOW_CLASS_SIZE];
 	cah.class_name = class_name;
-	if (!GetClassName(cah.hwnd, class_name, sizeof(class_name) - 5)) // -5 to allow room for sequence number.
+	if (!GetClassName(cah.hwnd, class_name, sizeof(class_name) - 3)) // -3 to allow room for sequence number.
 		return OK;  // Let ErrorLevel and the blank output variable tell the story.
 	
 	cah.class_count = 0;  // Init for the below.
@@ -2308,7 +2308,7 @@ ResultType Line::Control(char *aCmd, char *aValue, char *aControl, char *aTitle,
 		break;
 
 	case CONTROL_CMD_SHOW:
-		ShowWindow(control_window, SW_SHOWNOACTIVATE); // SW_SHOWNOACTIVATE has been seen in some example code for this purpose.
+		ShowWindow(control_window, SW_SHOWNOACTIVATE); // SW_SHOWNOACTIVATE is what au3 uses.
 		break;
 
 	case CONTROL_CMD_HIDE:
@@ -2386,23 +2386,14 @@ ResultType Line::Control(char *aCmd, char *aValue, char *aControl, char *aTitle,
 		}
 		else if (!strnicmp(aControl, "List" ,4))
 		{
-			if (GetWindowLong(control_window, GWL_STYLE) & (LBS_EXTENDEDSEL|LBS_MULTIPLESEL))
-				msg = LB_SETSEL;
-			else // single-select listbox
-				msg = LB_SETCURSEL;
+			msg = LB_SETCURSEL;
 			x_msg = LBN_SELCHANGE;
 			y_msg = LBN_DBLCLK;
 		}
 		else
 			return OK;  // Must be ComboBox or ListBox.  Let ErrorLevel tell the story.
-		if (msg == LB_SETSEL) // Multi-select, so use the cumulative method.
-		{
-			if (!SendMessageTimeout(control_window, msg, TRUE, control_index, SMTO_ABORTIFHUNG, 2000, &dwResult))
-				return OK;  // Let ErrorLevel tell the story.
-		}
-		else // ComboBox or single-select ListBox.
-			if (!SendMessageTimeout(control_window, msg, control_index, 0, SMTO_ABORTIFHUNG, 2000, &dwResult))
-				return OK;  // Let ErrorLevel tell the story.
+		if (!SendMessageTimeout(control_window, msg, control_index, 0, SMTO_ABORTIFHUNG, 2000, &dwResult))
+			return OK;  // Let ErrorLevel tell the story.
 		if (dwResult == CB_ERR)  // CB_ERR == LB_ERR
 			return OK;
 		if (   !(immediate_parent = GetParent(control_window))   )
@@ -2427,28 +2418,16 @@ ResultType Line::Control(char *aCmd, char *aValue, char *aControl, char *aTitle,
 		}
 		else if (!strnicmp(aControl, "ListBox", 7))
 		{
-			if (GetWindowLong(control_window, GWL_STYLE) & (LBS_EXTENDEDSEL|LBS_MULTIPLESEL))
-				msg = LB_FINDSTRING;
-			else // single-select listbox
-				msg = LB_SELECTSTRING;
+			msg = LB_SELECTSTRING;
 			x_msg = LBN_SELCHANGE;
 			y_msg = LBN_DBLCLK;
 		}
 		else
 			return OK;  // Must be ComboBox or ListBox.  Let ErrorLevel tell the story.
-		if (msg == LB_FINDSTRING) // Multi-select ListBox (LB_SELECTSTRING is not supported by these).
-		{
-			DWORD item_index;
-			if (!SendMessageTimeout(control_window, msg, -1, (LPARAM)aValue, SMTO_ABORTIFHUNG, 2000, &item_index)
-				|| item_index == LB_ERR
-				|| !SendMessageTimeout(control_window, LB_SETSEL, TRUE, item_index, SMTO_ABORTIFHUNG, 2000, &dwResult)
-				|| dwResult == LB_ERR) // Relies on short-circuit boolean.
-				return OK;  // Let ErrorLevel tell the story.
-		}
-		else // ComboBox or single-select ListBox.
-			if (!SendMessageTimeout(control_window, msg, 1, (LPARAM)aValue, SMTO_ABORTIFHUNG, 2000, &dwResult)
-				|| dwResult == CB_ERR) // CB_ERR == LB_ERR
-				return OK;  // Let ErrorLevel tell the story.
+		if (!SendMessageTimeout(control_window, msg, 1, (LPARAM)aValue, SMTO_ABORTIFHUNG, 2000, &dwResult))
+			return OK;  // Let ErrorLevel tell the story.
+		if (dwResult == CB_ERR)  // CB_ERR == LB_ERR
+			return OK;
 		if (   !(immediate_parent = GetParent(control_window))   )
 			return OK;
 		if (   !(control_id = GetDlgCtrlID(control_window))   )
@@ -2497,10 +2476,10 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 	if (!control_window)
 		return output_var->Assign();  // Let ErrorLevel tell the story.
 
-	DWORD dwResult, index, length, item_length, start, end, u, item_count;
+	DWORD dwResult, index, length, start, end;
 	UINT msg, x_msg, y_msg;
 	int control_index;
-	char *cp, *dyn_buf, buf[32768];  // 32768 is the size Au3 uses for GETLINE and such.
+	char *dyn_buf, buf[32768];  // 32768 is the size Au3 uses for GETLINE and such.
 
 	switch(control_cmd)
 	{
@@ -2580,62 +2559,6 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 		if (length == CB_ERR)  // Probably impossible given the way it was called above.  Also, CB_ERR == LB_ERR
 			return output_var->Assign(); // Let ErrorLevel tell the story.
 		output_var->Length() = length;  // Update to actual vs. estimated length.
-		break;
-
-	case CONTROLGET_CMD_LIST:
-		// This is done here as the special LIST sub-command rather than just being built into
-		// ControlGetText because ControlGetText already has a function for ComboBoxes: it fetches
-		// the current selection.  Although ListBox does not have such a function, it seem best
-		// to consolidate both methods here.
-		if (!strnicmp(aControl, "ComboBox", 8))
-		{
-			msg = CB_GETCOUNT;
-			x_msg = CB_GETLBTEXTLEN;
-			y_msg = CB_GETLBTEXT;
-		}
-		else if (!strnicmp(aControl, "ListBox" ,7))
-		{
-			msg = LB_GETCOUNT;
-			x_msg = LB_GETTEXTLEN;
-			y_msg = LB_GETTEXT;
-		}
-		else // Must be ComboBox or ListBox
-			return output_var->Assign();  // Let ErrorLevel tell the story.
-		if (!(SendMessageTimeout(control_window, msg, 0, 0, SMTO_ABORTIFHUNG, 5000, &item_count))
-			|| item_count <= 0) // No items in ListBox/ComboBox or there was a problem getting the count.
-			return output_var->Assign();  // Let ErrorLevel tell the story.
-		// Calculate the length of delimited list of items.  Length is initialized to provide enough
-		// room for each item's delimiter (the last item does not have a delimiter).
-		for (length = item_count - 1, u = 0; u < item_count; ++u)
-		{
-			if (!SendMessageTimeout(control_window, x_msg, u, 0, SMTO_ABORTIFHUNG, 5000, &item_length)
-				|| item_length == LB_ERR) // Note that item_length is legitimately zero for a blank item in the list.
-				return output_var->Assign();  // Let ErrorLevel tell the story.
-			length += item_length;
-		}
-		// In unusual cases, MSDN says the indicated length might be longer than it actually winds up
-		// being when the item's text is retrieved.  This should be harmless, since there are many
-		// other precedents where a variable is sized to something larger than it winds up carrying.
-		// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
-		// this call will set up the clipboard for writing:
-		if (output_var->Assign(NULL, (VarSizeType)length) != OK)
-			return FAIL;  // It already displayed the error.
-		for (cp = output_var->Contents(), length = item_count - 1, u = 0; u < item_count; ++u)
-		{
-			if (SendMessageTimeout(control_window, y_msg, (WPARAM)u, (LPARAM)cp, SMTO_ABORTIFHUNG, 5000, &item_length)
-				&& item_length != LB_ERR)
-			{
-				length += item_length; // Accumulate actual vs. estimated length.
-				cp += item_length;  // Point it to the terminator in preparation for the next write.
-			}
-			//else do nothing, just consider this to be a blank item so that the process can continue.
-			if (u < item_count - 1)
-				*cp++ = '\n'; // Add delimiter after each item except the last (helps parsing loop).
-			// Above: In this case, seems better to use \n rather than pipe as default delimiter in case
-			// the listbox/combobox contains any real pipes.
-		}
-		output_var->Length() = (VarSizeType)length;  // Update it to the actual length, which can vary from the estimate.
-		output_var->Close(); // In case it's the clipboard.
 		break;
 
 	case CONTROLGET_CMD_LINECOUNT:  //Must be an Edit
@@ -2970,13 +2893,8 @@ ResultType Line::WinSet(char *aAttrib, char *aValue, char *aTitle, char *aText
 		case TOGGLE: topmost_or_not = (exstyle & WS_EX_TOPMOST) ? HWND_NOTOPMOST : HWND_TOPMOST; break;
 		default: return OK;
 		}
-		// SetWindowLong() didn't seem to work, at least not on some windows.  But this does.
-		// As of v1.0.25.14, SWP_NOACTIVATE is also specified, though its absence does not actually
-		// seem to activate the window, at least on XP (perhaps due to anti-focus-stealing measure
-		// in Win98/2000 and beyond).  Or perhaps its something to do with the presence of
-		// topmost_or_not (HWND_TOPMOST/HWND_NOTOPMOST), which might always avoid activating the
-		// window.
-		SetWindowPos(target_window, topmost_or_not, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
+		// SetWindowLong() didn't seem to work, at least not on some windows.  But this does:
+		SetWindowPos(target_window, topmost_or_not, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
 		break;
 	}
 
@@ -2985,7 +2903,7 @@ ResultType Line::WinSet(char *aAttrib, char *aValue, char *aTitle, char *aText
 	case WINSET_BOTTOM:
 		// Note: SWP_NOACTIVATE must be specified otherwise the target window often/always fails to go
 		// to the bottom:
-		SetWindowPos(target_window, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
+		SetWindowPos(target_window, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 		break;
 
 	case WINSET_TRANSPARENT:
@@ -3008,7 +2926,7 @@ ResultType Line::WinSet(char *aAttrib, char *aValue, char *aTitle, char *aText
 		// Bottom line: The above is why there is currently no "on" or "toggle" sub-command, just "Off".
 		// Also, must fetch the below at runtime, otherwise the program can't even be launched on Win9x/NT.
 		// Also, since the color of an HBRUSH can't be easily determined (since it can be a pattern and
-		// since there seem to be no easy API calls to discover the colors of pixels in an HBRUSH),
+		// since there seem to be no easy API calls to discover the colors of pixels in an HBRUSH,
 		// the following is not yet implemented: Use window's own class background color (via
 		// GetClassLong) if aValue is entirely blank.
 		typedef BOOL (WINAPI *MySetLayeredWindowAttributesType)(HWND, COLORREF, BYTE, DWORD);
@@ -3161,7 +3079,7 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 	HWND target_window;
 	IF_USE_FOREGROUND_WINDOW(aTitle, aText, aExcludeTitle, aExcludeText)
 	else if (!*aTitle && !*aText && !*aExcludeTitle && !*aExcludeText)
-		target_window = GetValidLastUsedWindow();
+		target_window = g_ValidLastUsedWindow;
 	else
 		target_window_determined = false;  // A different method is required.
 
@@ -3724,6 +3642,7 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int a
 	Var *output_var_x = ResolveVarOfArg(0);  // Ok if NULL.
 	Var *output_var_y = ResolveVarOfArg(1);  // Ok if NULL.
 
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR2); // Set default ErrorLevel.  2 means error other than "color not found".
 	if (output_var_x)
 		output_var_x->Assign();  // Init to empty string regardless of whether we succeed here.
 	if (output_var_y)
@@ -3733,7 +3652,7 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int a
 	if (!(g.CoordMode & COORD_MODE_PIXEL)) // Using relative vs. screen coordinates.
 	{
 		if (!GetWindowRect(GetForegroundWindow(), &rect))
-			return g_ErrorLevel->Assign(ERRORLEVEL_ERROR2); // 2 means error other than "color not found".
+			return OK;  // Let ErrorLevel tell the story.
 		aLeft   += rect.left;
 		aTop    += rect.top;
 		aRight  += rect.left;  // Add left vs. right because we're adjusting based on the position of the window.
@@ -3742,7 +3661,7 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int a
 
 	HDC hdc = GetDC(NULL);
 	if (!hdc)
-		g_ErrorLevel->Assign(ERRORLEVEL_ERROR2); // 2 means error other than "color not found".
+		return OK;  // Let ErrorLevel tell the story.
 
 	if (aVariation < 0) aVariation = 0;
 	if (aVariation > 255) aVariation = 255;
@@ -3773,63 +3692,45 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int a
 	int xpos, ypos, color;
 	BYTE red, green, blue;
 	bool match_found;
-
-	// If the caller gives us inverted X or Y coordinates, conduct the search in reverse order.
-	// This feature was requested; it was put into effect for v1.0.25.06.
-	bool right_to_left = aLeft > aRight;
-	bool bottom_to_top = aTop > aBottom;
-
-	for (match_found = false, xpos = aLeft  // It starts at aLeft even if right_to_left is true.
-		; (right_to_left ? (xpos >= aRight) : (xpos <= aRight)) // Verified correct.
-		; xpos += right_to_left ? -1 : 1)
+	ResultType result = OK;
+	for (xpos = aLeft; xpos <= aRight; ++xpos)
 	{
-		for (ypos = aTop  // It starts at aTop even if bottom_to_top is true.
-			; bottom_to_top ? (ypos >= aBottom) : (ypos <= aBottom) // Verified correct.
-			; ypos += bottom_to_top ? -1 : 1)
+		for (ypos = aTop; ypos <= aBottom; ++ypos)
 		{
 			color = GetPixel(hdc, xpos, ypos);
 			if (aVariation <= 0)  // User wanted an exact match.
-			{
-				if (color == aColor)
-				{
-					match_found = true;
-					break;
-				}
-			}
+				match_found = (color == aColor);
 			else  // User specified that some variation in each of the RGB components is allowable.
 			{
 				red = GetRValue(color);
 				green = GetGValue(color);
 				blue = GetBValue(color);
-				if (red >= red_low && red <= red_high && green >= green_low && green <= green_high
-					&& blue >= blue_low && blue <= blue_high)
-				{
-					match_found = true;
-					break;
-				}
+				match_found = (red >= red_low && red <= red_high
+					&& green >= green_low && green <= green_high
+					&& blue >= blue_low && blue <= blue_high);
+			}
+			if (match_found) // This pixel matches one of the specified color(s).
+			{
+				ReleaseDC(NULL, hdc);
+				// Adjust coords to make them relative to the position of the target window
+				// (rect will contain zero values if this doesn't need to be done):
+				xpos -= rect.left;
+				ypos -= rect.top;
+				if (output_var_x && !output_var_x->Assign(xpos))
+					result = FAIL;
+				if (output_var_y && !output_var_y->Assign(ypos))
+					result = FAIL;
+				if (result == OK)
+					g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+				return result;
 			}
 		}
-		// Check this here rather than in the outer loop's top line because otherwise the loop's
-		// increment would make xpos too big by 1:
-		if (match_found)
-			break;
 	}
 
+	// If the above didn't return, the pixel wasn't found in the specified region.
+	// So leave ErrorLevel set to "error" to indicate that:
 	ReleaseDC(NULL, hdc);
-
-	if (!match_found)
-		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // This value indicates "color not found".
-
-	// Otherwise, this pixel matches one of the specified color(s).
-	ReleaseDC(NULL, hdc);
-	// Adjust coords to make them relative to the position of the target window
-	// (rect will contain zero values if this doesn't need to be done):
-	if (output_var_x && !output_var_x->Assign(xpos - rect.left))
-		return FAIL;
-	if (output_var_y && !output_var_y->Assign(ypos - rect.top))
-		return FAIL;
-	// Since above didn't return:
-	return g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+	return g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // This value indicates "color not found".
 }
 
 
@@ -5565,8 +5466,9 @@ void Line::MouseMove(int aX, int aY, int aSpeed, bool aMoveRelative)
 
 
 
-ResultType Line::MouseGetPos(bool aSimpleMode)
+ResultType Line::MouseGetPos()
 // Returns OK or FAIL.
+// This has been adapted from the AutoIt3 source.
 {
 	// Caller should already have ensured that at least one of these will be non-NULL.
 	// The only time this isn't true is for dynamically-built variable names.  In that
@@ -5626,18 +5528,11 @@ ResultType Line::MouseGetPos(bool aSimpleMode)
 
 	// Doing it this way overcomes the limitations of WindowFromPoint() and ChildWindowFromPoint()
 	// and also better matches the control that Window Spy would think is under the cursor:
-	if (!aSimpleMode)
-	{
-		point_and_hwnd_type pah = {0};
-		pah.pt = point;
-		EnumChildWindows(parent_under_cursor, EnumChildFindPoint, (LPARAM)&pah); // Find topmost control containing point.
-		if (pah.hwnd_found)
-			child_under_cursor = pah.hwnd_found;
-	}
-	//else as of v1.0.25.10, leave child_under_cursor set the the value retrieved earlier from WindowFromPoint().
-	// This allows MDI child windows to be reported correctly; i.e. that the window on top of the others
-	// is reported rather than the one at the top of the z-order (the z-order of MDI child windows,
-	// although probably constant, is not useful for determine which one is one top of the others).
+	point_and_hwnd_type pah = {0};
+	pah.pt = point;
+	EnumChildWindows(parent_under_cursor, EnumChildFindPoint, (LPARAM)&pah); // Find topmost control containing point.
+	if (pah.hwnd_found)
+		child_under_cursor = pah.hwnd_found;
 
 	if (parent_under_cursor == child_under_cursor) // if there's no control per se, make it blank.
 		return output_var_child->Assign();
@@ -5646,7 +5541,7 @@ ResultType Line::MouseGetPos(bool aSimpleMode)
 	cah.hwnd = child_under_cursor;  // This is the specific control we need to find the sequence number of.
 	char class_name[WINDOW_CLASS_SIZE];
 	cah.class_name = class_name;
-	if (!GetClassName(cah.hwnd, class_name, sizeof(class_name) - 5))  // -5 to allow room for sequence number.
+	if (!GetClassName(cah.hwnd, class_name, sizeof(class_name) - 3))  // -3 to allow room for sequence number.
 		return output_var_child->Assign();
 	cah.class_count = 0;  // Init for the below.
 	cah.is_found = false; // Same.
@@ -6120,7 +6015,7 @@ ResultType Line::PerformAssign()
 				return FAIL;
 		}
 		else // there's enough capacity in output_var to accept the text to be appended.
-			target_is_involved_in_source = false;  // Tell the below not to consider expanding the args.
+			target_is_involved_in_source = false;  // Tell the below not to consider expand the args.
 	}
 
 	if (target_is_involved_in_source)
@@ -6368,111 +6263,44 @@ ResultType Line::SplitPath(char *aFileSpec)
 	Var *output_var_name_no_ext = ResolveVarOfArg(4);  // Ok if NULL.
 	Var *output_var_drive = ResolveVarOfArg(5);  // Ok if NULL.
 
-	// For URLs, "drive" is defined as the server name, e.g. http://somedomain.com
-	char *name = "", *name_delimiter = NULL, *drive_end = NULL; // Set defaults to improve maintainability.
-	char *drive = omit_leading_whitespace(aFileSpec); // i.e. whitespace is considered for everything except the drive letter or server name, so that a pathless filename can have leading whitespace.
-	char *colon_double_slash = strstr(aFileSpec, "://");
+	// Differences between _splitpath() and the method used here:
+	// _splitpath() doesn't include drive in output_var_dir, it includes a trailing
+	// backslash, it includes the . in the extension, it considers ":" to be a filename.
+	// _splitpath(pathname, drive, dir, file, ext);
+	//char sdrive[16], sdir[MAX_PATH], sname[MAX_PATH], sext[MAX_PATH];
+	//_splitpath(aFileSpec, sdrive, sdir, sname, sext);
+	//if (output_var_name_no_ext)
+	//	output_var_name_no_ext->Assign(sname);
+	//strcat(sname, sext);
+	//if (output_var_name)
+	//	output_var_name->Assign(sname);
+	//if (output_var_dir)
+	//	output_var_dir->Assign(sdir);
+	//if (output_var_ext)
+	//	output_var_ext->Assign(sext);
+	//if (output_var_drive)
+	//	output_var_drive->Assign(sdrive);
+	//return OK;
 
-	if (colon_double_slash) // This is a URL such as ftp://... or http://...
-	{
-		if (   !(drive_end = strchr(colon_double_slash + 3, '/'))   )
-		{
-			if (   !(drive_end = strchr(colon_double_slash + 3, '\\'))   ) // Try backslash so that things like file://C:\Folder\File.txt are supported.
-				drive_end = colon_double_slash + strlen(colon_double_slash); // Set it to the position of the zero terminator instead.
-				// And because there is no filename, leave name and name_delimiter set to their defaults.
-			//else there is a backslash, e.g. file://C:\Folder\File.txt, so treat that backslash as the end of the drive name.
-		}
-		name_delimiter = drive_end; // Set default, to be possibly overridden below.
-		// Above has set drive_end to one of the following:
-		// 1) The slash that occurs to the right of the doubleslash in a URL.
-		// 2) The backslash that occurs to the right of the doubleslash in a URL.
-		// 3) The zero terminator if there is no slash or backslash to the right of the doubleslash.
-		if (*drive_end) // A slash or backslash exists to the right of the server name.
-		{
-			if (*(drive_end + 1))
-			{
-				// Find the rightmost slash.  At this stage, this is known to find the correct slash.
-				// In the case of a file at the root of a domain such as http://domain.com/root_file.htm,
-				// the directory consists of only the domain name, e.g. http://domain.com.  This is because
-				// the directory always the "drive letter" by design, since that is more often what the
-				// caller wants.  A script can use StringReplace to remove the drive/server portion from
-				// the directory, if desired.
-				name_delimiter = strrchr(aFileSpec, '/');
-				if (name_delimiter == colon_double_slash + 2) // To reach this point, it must have a backslash, something like file://c:\folder\file.txt
-					name_delimiter = strrchr(aFileSpec, '\\'); // Will always be found.
-				name = name_delimiter + 1; // This will be the empty string for something like http://domain.com/dir/
-			}
-			//else something like http://domain.com/, so leave name and name_delimiter set to their defaults.
-		}
-		//else something like http://domain.com, so leave name and name_delimiter set to their defaults.
-	}
-	else // It's not a URL, just a file specification such as c:\my folder\my file.txt, or \\server01\folder\file.txt
-	{
-		// Differences between _splitpath() and the method used here:
-		// _splitpath() doesn't include drive in output_var_dir, it includes a trailing
-		// backslash, it includes the . in the extension, it considers ":" to be a filename.
-		// _splitpath(pathname, drive, dir, file, ext);
-		//char sdrive[16], sdir[MAX_PATH], sname[MAX_PATH], sext[MAX_PATH];
-		//_splitpath(aFileSpec, sdrive, sdir, sname, sext);
-		//if (output_var_name_no_ext)
-		//	output_var_name_no_ext->Assign(sname);
-		//strcat(sname, sext);
-		//if (output_var_name)
-		//	output_var_name->Assign(sname);
-		//if (output_var_dir)
-		//	output_var_dir->Assign(sdir);
-		//if (output_var_ext)
-		//	output_var_ext->Assign(sext);
-		//if (output_var_drive)
-		//	output_var_drive->Assign(sdrive);
-		//return OK;
+	// Don't use _splitpath() since it supposedly doesn't handle UNC paths correctly,
+	// and anyway we need more info than it provides.  Also note that it is possible
+	// for a file to begin with space(s) or a dot (if created programmatically), so
+	// don't trim or omit leading space unless it's known to be an absolute path.
 
-		// Don't use _splitpath() since it supposedly doesn't handle UNC paths correctly,
-		// and anyway we need more info than it provides.  Also note that it is possible
-		// for a file to begin with space(s) or a dot (if created programmatically), so
-		// don't trim or omit leading space unless it's known to be an absolute path.
+	// Note that "C:Some File.txt" is a valid filename in some contexts, which the below
+	// tries to take into account.  However, there will be no way for this command to
+	// return a path that differentiates between "C:Some File.txt" and "C:\Some File.txt"
+	// since the first backslash is not included with the returned path, even if it's
+	// the root directory (i.e. "C:" is returned in both cases).  The "C:Filename"
+	// convention is pretty rare, and anyway this trait can be detected via something like
+	// IfInString, Filespec, :, IfNotInString, Filespec, :\, MsgBox Drive with no absolute path.
+	char *name_delimiter = strrchr(aFileSpec, '\\');
+	if (!name_delimiter)
+		if (   !(name_delimiter = strrchr(aFileSpec, ':'))   )
+			name_delimiter = NULL;
 
-		// Note that "C:Some File.txt" is a valid filename in some contexts, which the below
-		// tries to take into account.  However, there will be no way for this command to
-		// return a path that differentiates between "C:Some File.txt" and "C:\Some File.txt"
-		// since the first backslash is not included with the returned path, even if it's
-		// the root directory (i.e. "C:" is returned in both cases).  The "C:Filename"
-		// convention is pretty rare, and anyway this trait can be detected via something like
-		// IfInString, Filespec, :, IfNotInString, Filespec, :\, MsgBox Drive with no absolute path.
-
-		// UNCs are detected with this approach so that double sets of backslashes -- which sometimes
-		// occur by accident in "built filespecs" and are tolerated by the OS -- are not falsely
-		// detected as UNCs.
-		if (*drive == '\\' && *(drive + 1) == '\\') // Relies on short-circuit evaluation order.
-		{
-			if (   !(drive_end = strchr(drive + 2, '\\'))   )
-				drive_end = drive + strlen(drive); // Set it to the position of the zero terminator instead.
-		}
-		else if (*(drive + 1) == ':') // It's an absolute path.
-			// Assign letter and colon for consistency with server naming convention above.
-			// i.e. so that server name and drive can be used without having to worry about
-			// whether it needs a colon added or not.
-			drive_end = drive + 2;
-		else
-			// It's debatable, but it seems best to return a blank drive if a aFileSpec is a relative path.
-			// rather than trying to use GetFullPathName() on a potentially non-existent file/dir.
-			// _splitpath() doesn't fetch the drive letter of relative paths either.  This also reports
-			// a blank drive for something like file://C:\My Folder\My File.txt, which seems too rarely
-			// to justify a special mode.
-			drive_end = drive = ""; // This is necessary to allow Assign() to work correctly later below, since it interprets a length of zero as "use string's entire length".
-
-		if (   !(name_delimiter = strrchr(aFileSpec, '\\'))   ) // No backslash.
-			if (   !(name_delimiter = strrchr(aFileSpec, ':'))   ) // No colon.
-				name_delimiter = NULL; // Indicate that there is no directory.
-
-		name = name_delimiter ? name_delimiter + 1 : aFileSpec; // If no delimiter, name is the entire string.
-	}
-
-	// The above has now set the following variables:
-	// name: As an empty string or the actual name of the file, including extension.
-	// name_delimiter: As NULL if there is no directory, otherwise, the end of the directory's name.
-	// drive: As the start of the drive/server name, e.g. C:, \\Workstation01, http://domain.com, etc.
-	// drive_end: As the position after the drive's last character, either a zero terminator, slash, or backslash.
+	char *name = name_delimiter ? name_delimiter + 1 : aFileSpec; // If no delimiter, name is the entire string.
+	char *ext_dot = strrchr(name, '.');
 
 	if (output_var_name && !output_var_name->Assign(name))
 		return FAIL;
@@ -6481,7 +6309,7 @@ ResultType Line::SplitPath(char *aFileSpec)
 	{
 		if (!name_delimiter)
 			output_var_dir->Assign(); // Shouldn't fail.
-		else if (*name_delimiter == '\\' || *name_delimiter == '/')
+		else if (*name_delimiter == '\\')
 		{
 			if (!output_var_dir->Assign(aFileSpec, (VarSizeType)(name_delimiter - aFileSpec)))
 				return FAIL;
@@ -6492,7 +6320,6 @@ ResultType Line::SplitPath(char *aFileSpec)
 				return FAIL;
 	}
 
-	char *ext_dot = strrchr(name, '.');
 	if (output_var_ext)
 	{
 		// Note that the OS doesn't allow filenames to end in a period.
@@ -6506,8 +6333,35 @@ ResultType Line::SplitPath(char *aFileSpec)
 	if (output_var_name_no_ext && !output_var_name_no_ext->Assign(name, (VarSizeType)(ext_dot ? ext_dot - name : strlen(name))))
 		return FAIL;
 
-	if (output_var_drive && !output_var_drive->Assign(drive, (VarSizeType)(drive_end - drive)))
-		return FAIL;
+	if (output_var_drive)
+	{
+		char *drive = omit_leading_whitespace(aFileSpec);
+		if (!*drive)
+			output_var_drive->Assign();
+		else
+		{
+			// UNCs are detected with this approach so that double sets of backslashes -- which sometimes
+			// occur by accident in "built filespecs" and are tolerated by the OS -- are not falsely
+			// detected as UNCs.
+			if (*drive == '\\' && *(drive + 1) == '\\')
+			{
+				char *drive_end = strchr(drive + 2, '\\');
+				if (drive_end)
+					output_var_drive->Assign(drive, (VarSizeType)(drive_end - drive));
+				else
+					output_var_drive->Assign(drive); // Assume the entire string is the server name.
+			}
+			else if (*(drive + 1) == ':') // It's an absolute path.
+				// Assign letter and colon for consistency with server naming convention above.
+				// i.e. so that server name and drive can be used without having to worry about
+				// whether it needs a colon added or not.
+				output_var_drive->Assign(drive, 2);
+			else // It's debatable, but it seems best to return a blank drive if a aFileSpec is a relative path.
+				 // rather than trying to use GetFullPathName() on a potentially non-existent file/dir.
+				 // _splitpath() doesn't fetch the drive letter of relative paths either.
+				output_var_drive->Assign();
+		}
+	}
 
 	return OK;
 }
@@ -6583,7 +6437,7 @@ struct sort_rand_type
 };
 
 int SortRandom(const void *a1, const void *a2)
-// See comments in prior functions for details.
+// See comments in prior function for details.
 {
 	return ((sort_rand_type *)a1)->rand - ((sort_rand_type *)a2)->rand;
 }
@@ -8068,28 +7922,14 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 	// In addition, it does not prevent the CWD from changing while the user navigates from folder to
 	// folder in the dialog, except perhaps on Win9x.
 
-	// For v1.0.25.05, the new "M" letter is used for a new multi-select method since the old multi-select
-	// is faulty in the following ways:
-	// 1) If the user selects a single file in a multi-select dialog, the result is inconsistent: it
-	//    contains the full path and name of that single file rather than the folder followed by the
-	//    single file name as most users would expect.  To make matters worse, it includes a linefeed
-	//    after that full path in name, which makes it difficult for a script to determine whether
-	//    only a single file was selected.
-	// 2) The last item in the list is terminated by a linefeed, which is not as easily used with a
-	//    parsing loop as shown in example in the help file.
-	bool always_use_save_dialog = false; // Set default.
-	bool new_multi_select_method = false; // Set default.
-	switch (toupper(*aOptions))
+	bool always_use_save_dialog;
+	if (toupper(*aOptions) == 'S')
 	{
-	case 'M':  // Multi-select.
-		++aOptions;
-		new_multi_select_method = true;
-		break;
-	case 'S': // Have a "Save" button rather than an "Open" button.
-		++aOptions;
 		always_use_save_dialog = true;
-		break;
+		++aOptions;
 	}
+	else
+		always_use_save_dialog = false;
 
 	int options = ATOI(aOptions);
 	ofn.Flags = OFN_HIDEREADONLY | OFN_EXPLORER | OFN_NODEREFERENCELINKS;
@@ -8097,7 +7937,7 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 		ofn.Flags |= OFN_OVERWRITEPROMPT;
 	if (options & 0x08)
 		ofn.Flags |= OFN_CREATEPROMPT;
-	if (new_multi_select_method || (options & 0x04))
+	if (options & 0x04)
 		ofn.Flags |= OFN_ALLOWMULTISELECT;
 	if (options & 0x02)
 		ofn.Flags |= OFN_PATHMUSTEXIST;
@@ -8142,64 +7982,20 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 
 	if (ofn.Flags & OFN_ALLOWMULTISELECT)
 	{
-		char *cp;
-		if (new_multi_select_method) // v1.0.25.05+ method.
+		// Replace all the zero terminators with a delimiter, except the one for the last file
+		// (the last file should be followed by two sequential zero terminators).
+		// Use a delimiter that can't be confused with a real character inside a filename, i.e.
+		// not a comma.  We only have room for one without getting into the complexity of having
+		// to expand the string, so \r\n is disqualified for now.
+		for (char *cp = ofn.lpstrFile;;)
 		{
-			// If the first terminator in file_buf is also the last, the user selected only
-			// a single file:
-			size_t length = strlen(file_buf);
-			if (!file_buf[length + 1]) // The list contains only a single file (full path and name).
-			{
-				// v1.0.25.05: To make the result of selecting one file the same as selecting multiple files
-				// -- and thus easier to work with in a script -- convert the result into the multi-file
-				// format (folder as first item and naked filename as second):
-				if (cp = strrchr(file_buf, '\\'))
-				{
-					*cp = '\n';
-					// If the folder is the root folder, add a backslash so that selecting a single
-					// file yields the same reported folder as selecting multiple files.  One reason
-					// for doing it this way is that SetCurrentDirectory() requires a backslash after
-					// a root folder to succeed.  This allows a script to use SetWorkingDir to change
-					// to the selected folder before operating on each of the selected/naked filenames.
-					if (cp - file_buf == 2 && *(cp - 1) == ':') // e.g. "C:"
-					{
-						memmove(cp + 1, cp, strlen(cp) + 1); // Make room to insert backslash (since only one file was selcted, the buf is large enough).
-						*cp = '\\';
-					}
-				}
-			}
-			else // More than one file was selected.
-			{
-				// Use the same method as the old multi-select format except don't provide a
-				// linefeed after the final item.  That final linefeed would make parsing via
-				// a parsing loop more complex because a parsing loop would see a blank item
-				// at the end of the list:
-				for (cp = file_buf;;)
-				{
-					for (; *cp; ++cp); // Find the next terminator.
-					if (!*(cp + 1)) // This is the last file because it's double-terminated, so we're done.
-						break;
-					*cp = '\n'; // Replace zero-delimiter with a visible/printable delimiter, for the user.
-				}
-			}
-		}
-		else  // Old multi-select method is in effect (kept for backward compatibility).
-		{
-			// Replace all the zero terminators with a delimiter, except the one for the last file
-			// (the last file should be followed by two sequential zero terminators).
-			// Use a delimiter that can't be confused with a real character inside a filename, i.e.
-			// not a comma.  We only have room for one without getting into the complexity of having
-			// to expand the string, so \r\n is disqualified for now.
-			for (cp = file_buf;;)
-			{
-				for (; *cp; ++cp); // Find the next terminator.
-				*cp = '\n'; // Replace zero-delimiter with a visible/printable delimiter, for the user.
-				if (!*(cp + 1)) // This is the last file because it's double-terminated, so we're done.
-					break;
-			}
+			for (; *cp; ++cp); // Find the next terminator.
+			*cp = '\n'; // Replace zero-delimiter with a visible/printable delimiter, for the user.
+			if (!*(cp + 1)) // This is the last file because it's double-terminated, so we're done.
+				break;
 		}
 	}
-	return output_var->Assign(file_buf);
+	return output_var->Assign(ofn.lpstrFile);
 }
 
 
@@ -9203,7 +8999,7 @@ int Line::FileSetTime(char *aYYYYMMDD, char *aFilePattern, char aWhichTime
 		// FILE_FLAG_NO_BUFFERING might improve performance because all we're doing is
 		// changing one of the file's attributes.  FILE_FLAG_BACKUP_SEMANTICS must be
 		// used, otherwise changing the time of a directory under NT and beyond will
-		// not succeed.  Win95 (not sure about Win98/Me) does not support this, but it
+		// not succeed.  Win95 (not sure about Win98/ME) does not support this, but it
 		// should be harmless to specify it even if the OS is Win95:
 		hFile = CreateFile(target_filespec, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE
 			, (LPSECURITY_ATTRIBUTES)NULL, OPEN_EXISTING
@@ -10032,8 +9828,8 @@ HWND Line::DetermineTargetWindow(char *aTitle, char *aText, char *aExcludeTitle,
 	IF_USE_FOREGROUND_WINDOW(aTitle, aText, aExcludeTitle, aExcludeText)
 	else if (*aTitle || *aText || *aExcludeTitle || *aExcludeText)
 		target_window = WinExist(aTitle, aText, aExcludeTitle, aExcludeText);
-	else // Use the "last found" window.
-		target_window = GetValidLastUsedWindow();
+	else
+		target_window = g_ValidLastUsedWindow;
 	return target_window;
 }
 

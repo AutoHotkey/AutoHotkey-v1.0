@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2005 Chris Mallett
+Copyright 2003 Chris Mallett
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -638,22 +638,22 @@ char *StrReplace(char *aBuf, char *aOld, char *aNew, bool aCaseSensitive)
 	char *found = (aCaseSensitive ? strstr(aBuf, aOld) : strcasestr(aBuf, aOld));
 	if (!found)
 		return NULL;
-	size_t aOld_length = strlen(aOld);
-	size_t aNew_length = strlen(aNew);
-	char *the_part_of_aBuf_to_remain_unaltered = found + aNew_length;
+	size_t length_of_old = strlen(aOld);
+	size_t length_of_new = strlen(aNew);
+	char *the_part_of_aBuf_to_remain_unaltered = found + length_of_new;
 	// The check below can greatly improve performance if old and new strings happen to be same length
 	// (especially if this function is called thousands of times in a loop to replace multiple strings):
-	if (aOld_length != aNew_length)
+	if (length_of_old != length_of_new)
 		// Since new string can't fit exactly in place of old string, adjust the target area to
 		// accept exactly the right length so that the rest of the string stays unaltered:
-		memmove(the_part_of_aBuf_to_remain_unaltered, found + aOld_length, strlen(found + aOld_length) + 1); // +1 to include the terminator.
-	memcpy(found, aNew, aNew_length); // Perform the replacement.
+		memmove(the_part_of_aBuf_to_remain_unaltered, found + length_of_old, strlen(found + length_of_old) + 1); // +1 to include the terminator.
+	memcpy(found, aNew, length_of_new); // Perform the replacement.
 	return the_part_of_aBuf_to_remain_unaltered;
 }
 
 
 
-char *StrReplaceAll(char *aBuf, char *aOld, char *aNew, bool aAlwaysUseSlow, bool aCaseSensitive, DWORD aReplacementsNeeded)
+char *StrReplaceAll(char *aBuf, char *aOld, char *aNew, bool aAlwaysUseSlow, bool aCaseSensitive, UINT aReplacementsNeeded)
 // Replaces all occurrences of aOld with aNew inside aBuf, and returns aBuf.
 {
 	// Nothing to do if aBuf is blank.  If aOld is blank, that is not supported because it
@@ -671,10 +671,10 @@ char *StrReplaceAll(char *aBuf, char *aOld, char *aNew, bool aAlwaysUseSlow, boo
 	// and didn't have to swap to allocate it.  So such an algorithm should probably be offered
 	// only as an option (in the future), especially since it wouldn't help performance much
 	// unless many replacements are needed within the target string.
-	size_t aOld_length = strlen(aOld);
-	size_t aNew_length = strlen(aNew);
-	size_t aBuf_length = strlen(aBuf);
-	if (aOld_length == aNew_length)
+	size_t length_of_old = strlen(aOld);
+	size_t length_of_new = strlen(aNew);
+	size_t buf_length = strlen(aBuf);
+	if (length_of_old == length_of_new)
 		aAlwaysUseSlow = true; // Use slow mode because it's just as fast in this case, while avoiding the extra memory allocation.
 
 	if (!aAlwaysUseSlow) // Auto-detect whether to use fast mode.
@@ -688,15 +688,15 @@ char *StrReplaceAll(char *aBuf, char *aOld, char *aNew, bool aAlwaysUseSlow, boo
 		if (aReplacementsNeeded < UINT_MAX) // Caller provided the count to avoid us having to calculate it again.
 			replacements_needed = aReplacementsNeeded;
 		else
-			for (replacements_needed = 0, cp = aBuf; cp = (aCaseSensitive ? strstr(cp, aOld) : strcasestr(cp, aOld)); cp += aOld_length)
+			for (replacements_needed = 0, cp = aBuf; cp = (aCaseSensitive ? strstr(cp, aOld) : strcasestr(cp, aOld)); cp += length_of_old)
 				++replacements_needed;
 		if (!replacements_needed) // aBuf already contains the correct contents.
 			return aBuf;
 		// Fall back to the slow method unless the fast method's performance gain is worth the risk of
 		// stressing the system (in case it's low on memory).
 		// Testing shows that the below cutoffs seem approximately correct based on the fact that the
-		// slow method's execution time is proportional to both aBuf_length and replacements_needed.
-		// By contrast, the fast method takes about the same amount of time for a given aBuf_length
+		// slow method's execution time is proportional to both buf_length and replacements_needed.
+		// By contrast, the fast method takes about the same amount of time for a given buf_length
 		// regardless of how many replacements are needed.  Here are the test results (not rigorously
 		// conducted -- they were done only to get a idea of the shape of the curve):
 		//1415 KB with 5 evenly spaced replacements: slow and fast are about the same speed.
@@ -709,10 +709,10 @@ char *StrReplaceAll(char *aBuf, char *aOld, char *aNew, bool aAlwaysUseSlow, boo
 		//293 KB with 100,000 replacements: 14000 vs. 30
 		//146 KB with 50,000 replacements: 2954 vs 20
 		//30KB with 10000 replacements: 60 vs. 0
-		if (replacements_needed > 20 && aBuf_length > 5000) // Also fall back to slow method if buffer is of trivial size, since there isn't much difference in that case.
+		if (replacements_needed > 20 && buf_length > 5000) // Also fall back to slow method if buffer is of trivial size, since there isn't much difference in that case.
 		{
 			// Allocate the memory:
-			size_t buf_size = aBuf_length + replacements_needed*(aNew_length - aOld_length) + 1; // +1 for zero terminator.
+			size_t buf_size = buf_length + replacements_needed*(length_of_new - length_of_old) + 1; // +1 for zero terminator.
 			char *buf = (char *)malloc(buf_size);
 			if (buf)
 			{
@@ -732,10 +732,10 @@ char *StrReplaceAll(char *aBuf, char *aOld, char *aNew, bool aAlwaysUseSlow, boo
 						memcpy(dp, cp, chars_to_copy);
 						dp += chars_to_copy;
 					}
-					if (aNew_length) // Insert the replacement string in place of the old string.
+					if (length_of_new) // Insert the replacement string in place of the old string.
 					{
-						memcpy(dp, aNew, aNew_length);
-						dp += aNew_length;
+						memcpy(dp, aNew, length_of_new);
+						dp += length_of_new;
 					}
 					//else omit it altogether; that is, replace every aOld with the empty string.
 
@@ -743,13 +743,10 @@ char *StrReplaceAll(char *aBuf, char *aOld, char *aNew, bool aAlwaysUseSlow, boo
 					// the "slow" method, overlapping matches are not detected.  For example, the replacement
 					// of all occurrences of ".." with ". ." would transform an aBuf of "..." into ". ..",
 					// not ". . .":
-					found += aOld_length;
+					found += length_of_old;
 					cp = found; // Since "found" is about to be altered by strstr, cp serves as a placeholder for use by the next iteration.
 				}
-
-				// Fixed for v1.0.25.11: Copy the remaining characters after the last replacement (if any).
-				// Due to the check above, it is known there was more than zero replacements.
-				memcpy(dp, cp, aBuf_length - (cp - aBuf) + 1); // Should perform better than strcpy(). +1 to include the terminator.
+				*dp = '\0';  // Final terminator.
 
 				// Copy the result back into the caller's original buf (with added complexity by the caller, this step
 				// could be avoided):
@@ -777,24 +774,24 @@ char *StrReplaceAll(char *aBuf, char *aOld, char *aNew, bool aAlwaysUseSlow, boo
 	// here has the additional advantage that the lengths of aOld and aNew need be calculated only once
 	// at the beginning rather than having StrReplace() do it every time, which can be a very large
 	// savings if aOld and/or aNew happen to be very long strings (unusual).
-	int length_to_add = (int)(aNew_length - aOld_length);  // Can be negative.
+	int length_to_add = (int)(length_of_new - length_of_old);  // Can be negative.
 	char *found, *search_area;
 	for (search_area = aBuf; found = aCaseSensitive ? strstr(search_area, aOld) : strcasestr(search_area, aOld);)
 	{
-		search_area = found + aNew_length;  // The next search should start at this position when all is adjusted below.
+		search_area = found + length_of_new;  // The next search should start at this position when all is adjusted below.
 		// The check below can greatly improve performance if old and new strings happen to be same length:
-		if (aOld_length != aNew_length)
+		if (length_of_old != length_of_new)
 		{
 			// Since new string can't fit exactly in place of old string, adjust the target area to
 			// accept exactly the right length so that the rest of the string stays unaltered:
-			memmove(search_area, found + aOld_length
-				, aBuf_length - (found - aBuf) - aOld_length + 1); // +1 to include zero terminator.
+			memmove(search_area, found + length_of_old
+				, buf_length - (found - aBuf) - length_of_old + 1); // +1 to include zero terminator.
 			// Above: Calculating length vs. using strlen() makes overall speed of the operation about
 			// twice as fast for some typical test cases in a 2 MB buffer such as replacing \r\n with \n.
 		}
-		memcpy(found, aNew, aNew_length); // Perform the replacement.
-		// Must keep aBuf_length updated as we go, for use with memmove() above:
-		aBuf_length += length_to_add; // Note that length_to_add will be negative if aNew is shorter than aOld.
+		memcpy(found, aNew, length_of_new); // Perform the replacement.
+		// Must keep buf_length updated as we go, for use with memmove() above:
+		buf_length += length_to_add; // Note that length_to_add will be negative if aNew is shorter than aOld.
 	}
 
 	return aBuf;
@@ -906,14 +903,11 @@ ResultType FileAppend(char *aFilespec, char *aLine, bool aAppendNewline)
 
 char *ConvertFilespecToCorrectCase(char *aFullFileSpec)
 // aFullFileSpec must be a modifiable string since it will be converted to proper case.
-// Also, it should be at least MAX_PATH is size because if it contains any short (8.3)
-// components, they will be converted into their long names.
 // Returns aFullFileSpec, the contents of which have been converted to the case used by the
 // file system.  Note: The trick of changing the current directory to be that of
 // aFullFileSpec and then calling GetFullPathName() doesn't always work.  So perhaps the
 // only easy way is to call FindFirstFile() on each directory that composes aFullFileSpec,
-// which is what is done here.  I think there's another way involving some PIDL Explorer
-// function, but that might not support UNCs correctly.
+// which is what is done here.
 {
 	if (!aFullFileSpec || !*aFullFileSpec) return aFullFileSpec;
 	size_t length = strlen(aFullFileSpec);

@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2005 Chris Mallett
+Copyright 2003 Chris Mallett
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -353,24 +353,12 @@ ResultType Script::CreateWindows()
 		return FAIL;
 	}
 
-	char class_name[64];
-	HWND fore_win = GetForegroundWindow();
-	bool do_minimize = !fore_win || (GetClassName(fore_win, class_name, sizeof(class_name))
-		&& !stricmp(class_name, "Shell_TrayWnd")); // Shell_TrayWnd is the taskbar's class on Win98/XP and probably the others too.
-
 	// Note: the title below must be constructed the same was as is done by our
 	// WinMain() (so that we can detect whether this script is already running)
 	// which is why it's standardized in g_script.mMainWindowTitle.
-	// Create the main window.  Prevent momentary disruption of Start Menu, which
-	// some users understandably don't like, by omitting the taskbar button temporarily.
-	// This is done because testing shows that minimizing the window further below, even
-	// though the window is hidden, would otherwise briefly show the taskbar button (or
-	// at least redraw the taskbar).  Sometimes this isn't noticeable, but other times
-	// (such as when the system is under heavy load) a user reported that it is quite
-	// noticeable. WS_EX_TOOLWINDOW is used instead of WS_EX_NOACTIVATE because
-	// WS_EX_NOACTIVATE is available only on 2000/XP.
-	if (   !(g_hWnd = CreateWindowEx(do_minimize ? WS_EX_TOOLWINDOW : 0
-		, WINDOW_CLASS_MAIN
+	// Create the main window:
+	if (   !(g_hWnd = CreateWindow(
+		  WINDOW_CLASS_MAIN
 		, mMainWindowTitle
 		, WS_OVERLAPPEDWINDOW // Style.  Alt: WS_POPUP or maybe 0.
 		, CW_USEDEFAULT // xpos
@@ -382,7 +370,7 @@ ResultType Script::CreateWindows()
 		, g_hInstance // passed into WinMain
 		, NULL))   ) // lpParam
 	{
-		MsgBox("CreateWindow"); // Short msg since so rare.
+		MsgBox("CreateWindow() failed.");
 		return FAIL;
 	}
 #ifdef AUTOHOTKEYSC
@@ -400,42 +388,33 @@ ResultType Script::CreateWindows()
 	}
 #endif
 
+	// AutoIt3: Add read-only edit control to our main window:
 	if (    !(g_hWndEdit = CreateWindow("edit", NULL, WS_CHILD | WS_VISIBLE | WS_BORDER
 		| ES_LEFT | ES_MULTILINE | ES_READONLY | WS_VSCROLL // | WS_HSCROLL (saves space)
 		, 0, 0, 0, 0, g_hWnd, (HMENU)1, g_hInstance, NULL))  )
 	{
-		MsgBox("CreateWindow"); // Short msg since so rare.
+		MsgBox("CreateWindow() for the edit-window child failed.");
 		return FAIL;
 	}
 
-	// Some of the MSDN docs mention that an app's very first call to ShowWindow() makes that
-	// function operate in a special mode. Therefore, it seems best to get that first call out
-	// of the way to avoid the possibility that the first-call behavior will cause problems with
-	// our normal use of ShowWindow() below and other places.  Also, decided to ignore nCmdShow,
-    // to avoid any momentary visual effects on startup.
-	// Update: It's done a second time because the main window might now be visible if the process
-	// that launched ours specified that.  It seems best to override the requested state because
-	// some calling processes might specify "maximize" or "shownormal" as generic launch method.
-	// The script can display it's own main window with ListLines, etc.
-	// MSDN: "the nCmdShow value is ignored in the first call to ShowWindow if the program that
-	// launched the application specifies startup information in the structure. In this case,
-	// ShowWindow uses the information specified in the STARTUPINFO structure to show the window.
-	// On subsequent calls, the application must call ShowWindow with nCmdShow set to SW_SHOWDEFAULT
-	// to use the startup information provided by the program that launched the application."
+	// To be compliant, we're supposed to do this.  Also, some of the MSDN docs mention that
+	// an app's very first call to ShowWindow() makes that function operate in a special mode.
+	// Therefore, it seems best to get that first call out of the way to avoid the possibility
+	// that the first-call behavior will cause problems with our normal use of ShowWindow()
+	// elsewhere.  UPDATE: Decided to do only the SW_HIDE one, ingoring default / nCmdShow.
+	// That should avoid any momentary visual effects on startup:
+	//ShowWindow(g_hWnd, SW_SHOWDEFAULT);  // The docs conflict, sometimes suggesting nCmdShow vs. this.
+	//UpdateWindow(g_hWnd);  // Not necessary because it's empty.
+	// Should do at least one call.  But sometimes SW_HIDE will be ignored the first time
+	// (see MSDN docs), so do two calls to be sure the window is really hidden:
+	//ShowWindow(g_hWnd, SW_HIDE);
+	//ShowWindow(g_hWnd, SW_HIDE); // 2nd call to be safe.
+	// Update: Doing it this way prevents the launch of the program from "stealing focus"
+	// (changing the foreground window to be nothing).  This allows scripts launched from the
+	// start menu, for example, to immediately operate on the window that was foreground
+	// prior to the start menu having been displayed:
+	ShowWindow(g_hWnd, SW_MINIMIZE);
 	ShowWindow(g_hWnd, SW_HIDE);
-	ShowWindow(g_hWnd, SW_HIDE);
-
-	// Now that the first call to ShowWindow() is out of the way, minimize the main window so that
-	// if the script is launched from the Start Menu (and perhaps other places such as the
-	// Quick-launch toolbar), the window that was active before the Start Menu was displayed will
-	// become active again.  But as of v1.0.25.09, this minimize is done more selectively to prevent
-	// the launch of a script from knocking the user out of a full-screen game or other application
-	// that would be disrupted by an SW_MINIMIZE:
-	if (do_minimize)
-	{
-		ShowWindow(g_hWnd, SW_MINIMIZE);
-		SetWindowLong(g_hWnd, GWL_EXSTYLE, 0); // Give the main window back its taskbar button.
-	}
 
 	g_hAccelTable = LoadAccelerators(g_hInstance, MAKEINTRESOURCE(IDR_ACCELERATOR1));
 
@@ -789,9 +768,9 @@ LineNumberType Script::LoadFromFile()
 "; You can also run more than one .ahk file simultaneously and each will\n"
 "; get its own tray icon.\n"
 "\n"
-"; Please read the QUICK-START TUTORIAL near the top of the help file.\n"
-"; It explains how to perform common automation tasks such as sending\n"
-"; keystrokes and mouse clicks.  It also explains how to use hotkeys.\n"
+"; QUICK-START TUTORIAL: If you've never used an automation language such\n"
+"; as AutoIt, please read the quick-start tutorial in the help file.  It\n"
+"; will help you begin scripting your own macros and hotkeys right away.\n"
 "\n"
 "; SAMPLE HOTKEYS: Below are two sample hotkeys.  The first is Win+Z and it\n"
 "; launches a web site in the default browser.  The second is Control+Alt+N\n"
@@ -1226,15 +1205,6 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 
 			if (hotstring_start)
 			{
-				if (!*hotstring_start)
-				{
-					// The following error message won't indicate the correct line number because
-					// the hotstring (as a label) does not actually exist as a line.  But it seems
-					// best to report it this way in case the hotstring is inside a #Include file,
-					// so that the correct file name and approximate line number are shown:
-					ScriptError("This hotstring is missing its abbreviation.", hotkey_flag);
-					return CloseAndReturn(fp, script_buf, FAIL);
-				}
 				// In the case of hotstrings, hotstring_start is the beginning of the hotstring itself,
 				// i.e. the character after the second colon.  hotstring_options is NULL if no options,
 				// otherwise it's the first character in the options list (option string is not terminated,
@@ -1568,7 +1538,7 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 	{
 		// It seems best not to report this warning because a user may want to use partial functionality
 		// of a script on Win9x:
-		//MsgBox("#InstallKeybdHook is not supported on Windows 95/98/Me.  This line will be ignored.");
+		//MsgBox("#InstallKeybdHook is not supported on Windows 95/98/ME.  This line will be ignored.");
 		if (!g_os.IsWin9x())
 		{
 			Hotkey::RequireHook(HOOK_KEYBD);
@@ -1588,7 +1558,7 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 	{
 		// It seems best not to report this warning because a user may want to use partial functionality
 		// of a script on Win9x:
-		//MsgBox("#InstallMouseHook is not supported on Windows 95/98/Me.  This line will be ignored.");
+		//MsgBox("#InstallMouseHook is not supported on Windows 95/98/ME.  This line will be ignored.");
 		if (!g_os.IsWin9x())
 		{
 			Hotkey::RequireHook(HOOK_MOUSE);
@@ -1908,7 +1878,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 
 	// The characters below are ordered with most-often used ones first, for performance:
 	#define DEFINE_END_FLAGS \
-		char end_flags[] = {' ', g_delimiter, '(', '\t', '<', '>', ':', '=', '+', '-', '*', '/', '!', '~', '&', '|', '^', '\0'}; // '\0' must be last.
+		char end_flags[] = {' ', g_delimiter, '(', '\t', '<', '>', '=', '+', '-', '*', '/', '!', '~', '&', '|', '^', '\0'}; // '\0' must be last.
 	DEFINE_END_FLAGS
 
 	char action_name[MAX_VAR_NAME_LENGTH + 1], *end_marker;
@@ -1943,7 +1913,6 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 		switch(*action_args)
 		{
 		case '=':
-		case ':':  // i.e. :=
 		case '(':  // i.e. "if (expr)"
 			is_var_and_operator = true;
 			break;
@@ -2748,7 +2717,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	ArgStruct *new_arg;  // We will allocate some dynamic memory for this, then hang it onto the new line.
 	size_t operand_length;
 	char *op_begin, *op_end, orig_char;
-	char *this_aArgMap, *this_aArg, *cp;
+	char *this_aArgMap, *this_aArg, *cp, c;
 	int open_parens;
 	ActionTypeType *np;
 
@@ -3083,14 +3052,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					if (!*cp)
 					{
 						this_new_arg.is_expression = false;
-						// Bugfix for 1.0.25.06: The below has been disabled because:
-						// 1) It yields inconsistent results due to AutoTrim.  For example, the assignment
-						//    x := "  string" should retain the leading spaces unconditionally, since any
-						//    more complex expression would.  But if := were converted to = in this case,
-						//    AutoTrim would be in effect for it, which is undesirable.
-						// 2) It's not necessary in since ASSIGNEXPR handles both expressions and non-expressions.
-						//if (aActionType == ACT_ASSIGNEXPR)
-						//	aActionType = ACT_ASSIGN; // Convert to simple assignment.
+						if (aActionType == ACT_ASSIGNEXPR)
+							aActionType = ACT_ASSIGN; // Convert to simple assignment.
 						*(--cp) = '\0'; // Remove the ending quote.
 						memmove(this_new_arg.text, this_new_arg.text + 1, cp - this_new_arg.text); // Remove the starting quote.
 						// Convert all pairs of quotes into single literal quotes:
@@ -3260,6 +3223,14 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_STRINGGETPOS:
 		if (*NEW_RAW_ARG4 && !line->ArgHasDeref(4) && !strchr("LR1", toupper(*NEW_RAW_ARG4)))
 			return ScriptError("If not blank or a variable reference, parameter #4 must be 1 or start with the letter L or R.", NEW_RAW_ARG4);
+		break;
+
+	case ACT_STRINGREPLACE:
+		cp = NEW_RAW_ARG5;
+		c = toupper(*cp);
+		if (   c && !line->ArgHasDeref(5) && ((!*(cp + 1) && c != '1' && c != 'A')
+			|| (*(cp + 1) && strnicmp(cp, "All", 3)))   ) // Only 3 chars are checked because both All and AllSlow are allowed.
+			return ScriptError("If not blank, parameter #5 must be 1, A, ALL, F, Fast, or a variable reference.", cp);
 		break;
 
 	case ACT_STRINGSPLIT:
@@ -3813,9 +3784,6 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					return ScriptError(ERR_GUICONTROL, NEW_RAW_ARG2);
 				break;
 			case GUI_CMD_CANCEL:
-			case GUI_CMD_MINIMIZE:
-			case GUI_CMD_MAXIMIZE:
-			case GUI_CMD_RESTORE:
 			case GUI_CMD_DESTROY:
 			case GUI_CMD_DEFAULT:
 				if (aArgc > 1)
@@ -4391,37 +4359,29 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 	static Var empty_var(var_name);  // Must use var_name here.  See comment above for why.
 
 	Var *found_var;
-	if (!aCreateIfNecessary)
+	if (aCreateIfNecessary)
+	{
+		if (   !(found_var = g_script.FindOrAddVar(var_name))   )
+			return NULL;  // Above will already have displayed the error.
+		if (mArg[aArgIndex].type == ARG_TYPE_OUTPUT_VAR && VAR_IS_RESERVED(found_var))
+		{
+			LineError(ERR_VAR_IS_RESERVED, FAIL, var_name);
+			return NULL;  // Don't return the var, preventing the caller from assigning to it.
+		}
+		else
+			return found_var;
+	}
+	else
 	{
 		// Now we've dynamically build the variable name.  It's possible that the name is illegal,
 		// so check that (the name is automatically checked by FindOrAddVar(), so we only need to
 		// check it if we're not calling that):
 		if (!Var::ValidateName(var_name, g_script.mIsReadyToExecute))
 			return NULL; // Above already displayed error for us.
-		if (found_var = g_script.FindVar(var_name)) // Assign.
-			return found_var;
-		// At this point, this is either a non-existent variable or a reserved/built-in variable
-		// that was never statically referenced in the script (only dynamically), e.g. A_IPAddress%A_Index%
-		if (Script::GetVarType(var_name) == VAR_NORMAL)
-			// If not found: for performance reasons, don't create it because caller just wants an empty variable.
-			return &empty_var;
-		//else it's the clipboard or some other built-in variable, so continue onward so that the
-		// variable gets created in the variable list, which is necessary to allow it to be properly
-		// dereferenced, e.g. in a script consisting of only the following:
-		// Loop, 4
-		//     StringTrimRight, IP, A_IPAddress%A_Index%, 0
+		found_var = g_script.FindVar(var_name);
+		// If not found: for performance reasons, don't create it because caller just wants an empty variable.
+		return found_var ? found_var : &empty_var;
 	}
-	// Otherwise, aCreateIfNecessary is true or we want to create this variable unconditionally for the
-	// reason described above.
-	if (   !(found_var = g_script.FindOrAddVar(var_name))   )
-		return NULL;  // Above will already have displayed the error.
-	if (mArg[aArgIndex].type == ARG_TYPE_OUTPUT_VAR && VAR_IS_RESERVED(found_var))
-	{
-		LineError(ERR_VAR_IS_RESERVED, FAIL, var_name);
-		return NULL;  // Don't return the var, preventing the caller from assigning to it.
-	}
-	else
-		return found_var;
 }
 
 
@@ -4523,7 +4483,129 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, Var *aVarPrev)
 		// to bother varying the error message to include ERR_ABORT if this occurs during runtime.
 		return NULL;
 
-	VarTypeType var_type = GetVarType(new_name);
+	VarTypeType var_type = VAR_NORMAL;  // Set default.
+	if (!stricmp(new_name, "clipboard"))
+		var_type = VAR_CLIPBOARD;
+	else if (toupper(*new_name) == 'A' && *(new_name + 1) == '_')  // This check helps average performance.
+	{
+		// Keeping the most common ones near the top helps performance a little:
+		if (!stricmp(new_name, "A_YYYY") || !stricmp(new_name, "A_Year")) var_type = VAR_YYYY;
+		else if (!stricmp(new_name, "A_MMMM")) var_type = VAR_MMMM;  // Long name of month.
+		else if (!stricmp(new_name, "A_MMM")) var_type = VAR_MMM; // 3-char abbrev. month name.
+		else if (!stricmp(new_name, "A_MM") || !stricmp(new_name, "A_Mon")) var_type = VAR_MM;  // 01 thru 12
+		else if (!stricmp(new_name, "A_DDDD")) var_type = VAR_DDDD; // Name of weekday, e.g. Sunday
+		else if (!stricmp(new_name, "A_DDD")) var_type = VAR_DDD;   // Abbrev., e.g. Sun
+		else if (!stricmp(new_name, "A_DD") || !stricmp(new_name, "A_Mday")) var_type = VAR_DD; // 01 thru 31
+		else if (!stricmp(new_name, "A_Wday")) var_type = VAR_WDAY;
+		else if (!stricmp(new_name, "A_Yday")) var_type = VAR_YDAY;
+		else if (!stricmp(new_name, "A_Yweek")) var_type = VAR_YWEEK;
+
+		else if (!stricmp(new_name, "A_Hour")) var_type = VAR_HOUR;
+		else if (!stricmp(new_name, "A_Min")) var_type = VAR_MIN;
+		else if (!stricmp(new_name, "A_Sec")) var_type = VAR_SEC;
+		else if (!stricmp(new_name, "A_TickCount")) var_type = VAR_TICKCOUNT;
+		else if (!stricmp(new_name, "A_Now")) var_type = VAR_NOW;
+		else if (!stricmp(new_name, "A_NowUTC")) var_type = VAR_NOWUTC;
+
+		else if (!stricmp(new_name, "A_WorkingDir")) var_type = VAR_WORKINGDIR;
+		else if (!stricmp(new_name, "A_ScriptName")) var_type = VAR_SCRIPTNAME;
+		else if (!stricmp(new_name, "A_ScriptDir")) var_type = VAR_SCRIPTDIR;
+		else if (!stricmp(new_name, "A_ScriptFullPath")) var_type = VAR_SCRIPTFULLPATH;
+
+		else if (!stricmp(new_name, "A_BatchLines") || !stricmp(new_name, "A_NumBatchLines")) var_type = VAR_BATCHLINES;
+		else if (!stricmp(new_name, "A_TitleMatchMode")) var_type = VAR_TITLEMATCHMODE;
+		else if (!stricmp(new_name, "A_TitleMatchModeSpeed")) var_type = VAR_TITLEMATCHMODESPEED;
+		else if (!stricmp(new_name, "A_DetectHiddenWindows")) var_type = VAR_DETECTHIDDENWINDOWS;
+		else if (!stricmp(new_name, "A_DetectHiddenText")) var_type = VAR_DETECTHIDDENTEXT;
+		else if (!stricmp(new_name, "A_AutoTrim")) var_type = VAR_AUTOTRIM;
+		else if (!stricmp(new_name, "A_StringCaseSense")) var_type = VAR_STRINGCASESENSE;
+		else if (!stricmp(new_name, "A_FormatInteger")) var_type = VAR_FORMATINTEGER;
+		else if (!stricmp(new_name, "A_FormatFloat")) var_type = VAR_FORMATFLOAT;
+		else if (!stricmp(new_name, "A_KeyDelay")) var_type = VAR_KEYDELAY;
+		else if (!stricmp(new_name, "A_WinDelay")) var_type = VAR_WINDELAY;
+		else if (!stricmp(new_name, "A_ControlDelay")) var_type = VAR_CONTROLDELAY;
+		else if (!stricmp(new_name, "A_MouseDelay")) var_type = VAR_MOUSEDELAY;
+		else if (!stricmp(new_name, "A_DefaultMouseSpeed")) var_type = VAR_DEFAULTMOUSESPEED;
+
+		else if (!stricmp(new_name, "A_IconHidden")) var_type = VAR_ICONHIDDEN;
+		else if (!stricmp(new_name, "A_IconTip")) var_type = VAR_ICONTIP;
+		else if (!stricmp(new_name, "A_IconFile")) var_type = VAR_ICONFILE;
+		else if (!stricmp(new_name, "A_IconNumber")) var_type = VAR_ICONNUMBER;
+
+		else if (!stricmp(new_name, "A_ExitReason")) var_type = VAR_EXITREASON;
+
+		else if (!stricmp(new_name, "A_OStype")) var_type = VAR_OSTYPE;
+		else if (!stricmp(new_name, "A_OSversion")) var_type = VAR_OSVERSION;
+		else if (!stricmp(new_name, "A_Language")) var_type = VAR_LANGUAGE;
+		else if (!stricmp(new_name, "A_ComputerName")) var_type = VAR_COMPUTERNAME;
+		else if (!stricmp(new_name, "A_UserName")) var_type = VAR_USERNAME;
+
+		else if (!stricmp(new_name, "A_WinDir")) var_type = VAR_WINDIR;
+		else if (!stricmp(new_name, "A_ProgramFiles")) var_type = VAR_PROGRAMFILES;
+		else if (!stricmp(new_name, "A_Desktop")) var_type = VAR_DESKTOP;
+		else if (!stricmp(new_name, "A_DesktopCommon")) var_type = VAR_DESKTOPCOMMON;
+		else if (!stricmp(new_name, "A_StartMenu")) var_type = VAR_STARTMENU;
+		else if (!stricmp(new_name, "A_StartMenuCommon")) var_type = VAR_STARTMENUCOMMON;
+		else if (!stricmp(new_name, "A_Programs")) var_type = VAR_PROGRAMS;
+		else if (!stricmp(new_name, "A_ProgramsCommon")) var_type = VAR_PROGRAMSCOMMON;
+		else if (!stricmp(new_name, "A_Startup")) var_type = VAR_STARTUP;
+		else if (!stricmp(new_name, "A_StartupCommon")) var_type = VAR_STARTUPCOMMON;
+		else if (!stricmp(new_name, "A_MyDocuments")) var_type = VAR_MYDOCUMENTS;
+
+		else if (!stricmp(new_name, "A_IsAdmin")) var_type = VAR_ISADMIN;
+		else if (!stricmp(new_name, "A_Cursor")) var_type = VAR_CURSOR;
+		else if (!stricmp(new_name, "A_CaretX")) var_type = VAR_CARETX;
+		else if (!stricmp(new_name, "A_CaretY")) var_type = VAR_CARETY;
+		else if (!stricmp(new_name, "A_ScreenWidth")) var_type = VAR_SCREENWIDTH;
+		else if (!stricmp(new_name, "A_ScreenHeight")) var_type = VAR_SCREENHEIGHT;
+		else if (!stricmp(new_name, "A_IPAddress1")) var_type = VAR_IPADDRESS1;
+		else if (!stricmp(new_name, "A_IPAddress2")) var_type = VAR_IPADDRESS2;
+		else if (!stricmp(new_name, "A_IPAddress3")) var_type = VAR_IPADDRESS3;
+		else if (!stricmp(new_name, "A_IPAddress4")) var_type = VAR_IPADDRESS4;
+
+		else if (!stricmp(new_name, "A_LoopFileName")) var_type = VAR_LOOPFILENAME;
+		else if (!stricmp(new_name, "A_LoopFileShortName")) var_type = VAR_LOOPFILESHORTNAME;
+		else if (!stricmp(new_name, "A_LoopFileDir")) var_type = VAR_LOOPFILEDIR;
+		else if (!stricmp(new_name, "A_LoopFileFullPath")) var_type = VAR_LOOPFILEFULLPATH;
+		else if (!stricmp(new_name, "A_LoopFileShortPath")) var_type = VAR_LOOPFILESHORTPATH;
+		else if (!stricmp(new_name, "A_LoopFileTimeModified")) var_type = VAR_LOOPFILETIMEMODIFIED;
+		else if (!stricmp(new_name, "A_LoopFileTimeCreated")) var_type = VAR_LOOPFILETIMECREATED;
+		else if (!stricmp(new_name, "A_LoopFileTimeAccessed")) var_type = VAR_LOOPFILETIMEACCESSED;
+		else if (!stricmp(new_name, "A_LoopFileAttrib")) var_type = VAR_LOOPFILEATTRIB;
+		else if (!stricmp(new_name, "A_LoopFileSize")) var_type = VAR_LOOPFILESIZE;
+		else if (!stricmp(new_name, "A_LoopFileSizeKB")) var_type = VAR_LOOPFILESIZEKB;
+		else if (!stricmp(new_name, "A_LoopFileSizeMB")) var_type = VAR_LOOPFILESIZEMB;
+
+		else if (!stricmp(new_name, "A_LoopRegType")) var_type = VAR_LOOPREGTYPE;
+		else if (!stricmp(new_name, "A_LoopRegKey")) var_type = VAR_LOOPREGKEY;
+		else if (!stricmp(new_name, "A_LoopRegSubKey")) var_type = VAR_LOOPREGSUBKEY;
+		else if (!stricmp(new_name, "A_LoopRegName")) var_type = VAR_LOOPREGNAME;
+		else if (!stricmp(new_name, "A_LoopRegTimeModified")) var_type = VAR_LOOPREGTIMEMODIFIED;
+
+		else if (!stricmp(new_name, "A_LoopReadLine")) var_type = VAR_LOOPREADLINE;
+		else if (!stricmp(new_name, "A_LoopField")) var_type = VAR_LOOPFIELD;
+		else if (!stricmp(new_name, "A_Index")) var_type = VAR_INDEX;  // A short name since it maybe be typed so often.
+
+		else if (!stricmp(new_name, "A_ThisMenuItem")) var_type = VAR_THISMENUITEM;
+		else if (!stricmp(new_name, "A_ThisMenuItemPos")) var_type = VAR_THISMENUITEMPOS;
+		else if (!stricmp(new_name, "A_ThisMenu")) var_type = VAR_THISMENU;
+		else if (!stricmp(new_name, "A_ThisHotkey")) var_type = VAR_THISHOTKEY;
+		else if (!stricmp(new_name, "A_PriorHotkey")) var_type = VAR_PRIORHOTKEY;
+		else if (!stricmp(new_name, "A_TimeSinceThisHotkey")) var_type = VAR_TIMESINCETHISHOTKEY;
+		else if (!stricmp(new_name, "A_TimeSincePriorHotkey")) var_type = VAR_TIMESINCEPRIORHOTKEY;
+		else if (!stricmp(new_name, "A_EndChar")) var_type = VAR_ENDCHAR;
+		else if (!stricmp(new_name, "A_Gui")) var_type = VAR_GUI;
+		else if (!stricmp(new_name, "A_GuiControl")) var_type = VAR_GUICONTROL;
+		else if (!stricmp(new_name, "A_GuiControlEvent")) var_type = VAR_GUICONTROLEVENT;
+		else if (!stricmp(new_name, "A_GuiWidth")) var_type = VAR_GUIWIDTH;
+		else if (!stricmp(new_name, "A_GuiHeight")) var_type = VAR_GUIHEIGHT;
+
+		else if (!stricmp(new_name, "A_TimeIdle")) var_type = VAR_TIMEIDLE;
+		else if (!stricmp(new_name, "A_TimeIdlePhysical")) var_type = VAR_TIMEIDLEPHYSICAL;
+		else if (!stricmp(new_name, "A_Space")) var_type = VAR_SPACE;
+		else if (!stricmp(new_name, "A_Tab")) var_type = VAR_TAB;
+		else if (!stricmp(new_name, "A_AhkVersion")) var_type = VAR_AHKVERSION;
+	}
 
 	Var *the_new_var = new Var(new_name, var_type);
 	if (the_new_var == NULL)
@@ -4557,144 +4639,6 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, Var *aVarPrev)
 
 	++mVarCount;
 	return the_new_var;
-}
-
-
-
-VarTypes Script::GetVarType(char *aVarName)
-{
-	if (toupper(*aVarName) != 'A' || *(aVarName + 1) != '_')  // This check helps average performance.
-	{
-		if (!stricmp(aVarName, "true")) return VAR_TRUE;
-		if (!stricmp(aVarName, "false")) return VAR_FALSE;
-		if (!stricmp(aVarName, "clipboard")) return VAR_CLIPBOARD;
-		// Otherwise:
-		return VAR_NORMAL;
-	}
-
-	// Otherwise, aVarName begins with "A_", so it's probably one of the built-in variables.
-	// Keeping the most common ones near the top helps performance a little:
-
-	if (!stricmp(aVarName, "A_YYYY") || !stricmp(aVarName, "A_Year")) return VAR_YYYY;
-	if (!stricmp(aVarName, "A_MMMM")) return VAR_MMMM; // Long name of month.
-	if (!stricmp(aVarName, "A_MMM")) return VAR_MMM;   // 3-char abbrev. month name.
-	if (!stricmp(aVarName, "A_MM") || !stricmp(aVarName, "A_Mon")) return VAR_MM;  // 01 thru 12
-	if (!stricmp(aVarName, "A_DDDD")) return VAR_DDDD; // Name of weekday, e.g. Sunday
-	if (!stricmp(aVarName, "A_DDD")) return VAR_DDD;   // Abbrev., e.g. Sun
-	if (!stricmp(aVarName, "A_DD") || !stricmp(aVarName, "A_Mday")) return VAR_DD; // 01 thru 31
-	if (!stricmp(aVarName, "A_Wday")) return VAR_WDAY;
-	if (!stricmp(aVarName, "A_Yday")) return VAR_YDAY;
-	if (!stricmp(aVarName, "A_Yweek")) return VAR_YWEEK;
-
-	if (!stricmp(aVarName, "A_Hour")) return VAR_HOUR;
-	if (!stricmp(aVarName, "A_Min")) return VAR_MIN;
-	if (!stricmp(aVarName, "A_Sec")) return VAR_SEC;
-	if (!stricmp(aVarName, "A_TickCount")) return VAR_TICKCOUNT;
-	if (!stricmp(aVarName, "A_Now")) return VAR_NOW;
-	if (!stricmp(aVarName, "A_NowUTC")) return VAR_NOWUTC;
-
-	if (!stricmp(aVarName, "A_WorkingDir")) return VAR_WORKINGDIR;
-	if (!stricmp(aVarName, "A_ScriptName")) return VAR_SCRIPTNAME;
-	if (!stricmp(aVarName, "A_ScriptDir")) return VAR_SCRIPTDIR;
-	if (!stricmp(aVarName, "A_ScriptFullPath")) return VAR_SCRIPTFULLPATH;
-
-	if (!stricmp(aVarName, "A_BatchLines") || !stricmp(aVarName, "A_NumBatchLines")) return VAR_BATCHLINES;
-	if (!stricmp(aVarName, "A_TitleMatchMode")) return VAR_TITLEMATCHMODE;
-	if (!stricmp(aVarName, "A_TitleMatchModeSpeed")) return VAR_TITLEMATCHMODESPEED;
-	if (!stricmp(aVarName, "A_DetectHiddenWindows")) return VAR_DETECTHIDDENWINDOWS;
-	if (!stricmp(aVarName, "A_DetectHiddenText")) return VAR_DETECTHIDDENTEXT;
-	if (!stricmp(aVarName, "A_AutoTrim")) return VAR_AUTOTRIM;
-	if (!stricmp(aVarName, "A_StringCaseSense")) return VAR_STRINGCASESENSE;
-	if (!stricmp(aVarName, "A_FormatInteger")) return VAR_FORMATINTEGER;
-	if (!stricmp(aVarName, "A_FormatFloat")) return VAR_FORMATFLOAT;
-	if (!stricmp(aVarName, "A_KeyDelay")) return VAR_KEYDELAY;
-	if (!stricmp(aVarName, "A_WinDelay")) return VAR_WINDELAY;
-	if (!stricmp(aVarName, "A_ControlDelay")) return VAR_CONTROLDELAY;
-	if (!stricmp(aVarName, "A_MouseDelay")) return VAR_MOUSEDELAY;
-	if (!stricmp(aVarName, "A_DefaultMouseSpeed")) return VAR_DEFAULTMOUSESPEED;
-
-	if (!stricmp(aVarName, "A_IconHidden")) return VAR_ICONHIDDEN;
-	if (!stricmp(aVarName, "A_IconTip")) return VAR_ICONTIP;
-	if (!stricmp(aVarName, "A_IconFile")) return VAR_ICONFILE;
-	if (!stricmp(aVarName, "A_IconNumber")) return VAR_ICONNUMBER;
-
-	if (!stricmp(aVarName, "A_ExitReason")) return VAR_EXITREASON;
-
-	if (!stricmp(aVarName, "A_OStype")) return VAR_OSTYPE;
-	if (!stricmp(aVarName, "A_OSversion")) return VAR_OSVERSION;
-	if (!stricmp(aVarName, "A_Language")) return VAR_LANGUAGE;
-	if (!stricmp(aVarName, "A_ComputerName")) return VAR_COMPUTERNAME;
-	if (!stricmp(aVarName, "A_UserName")) return VAR_USERNAME;
-
-	if (!stricmp(aVarName, "A_WinDir")) return VAR_WINDIR;
-	if (!stricmp(aVarName, "A_ProgramFiles")) return VAR_PROGRAMFILES;
-	if (!stricmp(aVarName, "A_Desktop")) return VAR_DESKTOP;
-	if (!stricmp(aVarName, "A_DesktopCommon")) return VAR_DESKTOPCOMMON;
-	if (!stricmp(aVarName, "A_StartMenu")) return VAR_STARTMENU;
-	if (!stricmp(aVarName, "A_StartMenuCommon")) return VAR_STARTMENUCOMMON;
-	if (!stricmp(aVarName, "A_Programs")) return VAR_PROGRAMS;
-	if (!stricmp(aVarName, "A_ProgramsCommon")) return VAR_PROGRAMSCOMMON;
-	if (!stricmp(aVarName, "A_Startup")) return VAR_STARTUP;
-	if (!stricmp(aVarName, "A_StartupCommon")) return VAR_STARTUPCOMMON;
-	if (!stricmp(aVarName, "A_MyDocuments")) return VAR_MYDOCUMENTS;
-
-	if (!stricmp(aVarName, "A_IsAdmin")) return VAR_ISADMIN;
-	if (!stricmp(aVarName, "A_Cursor")) return VAR_CURSOR;
-	if (!stricmp(aVarName, "A_CaretX")) return VAR_CARETX;
-	if (!stricmp(aVarName, "A_CaretY")) return VAR_CARETY;
-	if (!stricmp(aVarName, "A_ScreenWidth")) return VAR_SCREENWIDTH;
-	if (!stricmp(aVarName, "A_ScreenHeight")) return VAR_SCREENHEIGHT;
-	if (!stricmp(aVarName, "A_IPAddress1")) return VAR_IPADDRESS1;
-	if (!stricmp(aVarName, "A_IPAddress2")) return VAR_IPADDRESS2;
-	if (!stricmp(aVarName, "A_IPAddress3")) return VAR_IPADDRESS3;
-	if (!stricmp(aVarName, "A_IPAddress4")) return VAR_IPADDRESS4;
-
-	if (!stricmp(aVarName, "A_LoopFileName")) return VAR_LOOPFILENAME;
-	if (!stricmp(aVarName, "A_LoopFileShortName")) return VAR_LOOPFILESHORTNAME;
-	if (!stricmp(aVarName, "A_LoopFileDir")) return VAR_LOOPFILEDIR;
-	if (!stricmp(aVarName, "A_LoopFileFullPath")) return VAR_LOOPFILEFULLPATH;
-	if (!stricmp(aVarName, "A_LoopFileLongPath")) return VAR_LOOPFILELONGPATH;
-	if (!stricmp(aVarName, "A_LoopFileShortPath")) return VAR_LOOPFILESHORTPATH;
-	if (!stricmp(aVarName, "A_LoopFileTimeModified")) return VAR_LOOPFILETIMEMODIFIED;
-	if (!stricmp(aVarName, "A_LoopFileTimeCreated")) return VAR_LOOPFILETIMECREATED;
-	if (!stricmp(aVarName, "A_LoopFileTimeAccessed")) return VAR_LOOPFILETIMEACCESSED;
-	if (!stricmp(aVarName, "A_LoopFileAttrib")) return VAR_LOOPFILEATTRIB;
-	if (!stricmp(aVarName, "A_LoopFileSize")) return VAR_LOOPFILESIZE;
-	if (!stricmp(aVarName, "A_LoopFileSizeKB")) return VAR_LOOPFILESIZEKB;
-	if (!stricmp(aVarName, "A_LoopFileSizeMB")) return VAR_LOOPFILESIZEMB;
-
-	if (!stricmp(aVarName, "A_LoopRegType")) return VAR_LOOPREGTYPE;
-	if (!stricmp(aVarName, "A_LoopRegKey")) return VAR_LOOPREGKEY;
-	if (!stricmp(aVarName, "A_LoopRegSubKey")) return VAR_LOOPREGSUBKEY;
-	if (!stricmp(aVarName, "A_LoopRegName")) return VAR_LOOPREGNAME;
-	if (!stricmp(aVarName, "A_LoopRegTimeModified")) return VAR_LOOPREGTIMEMODIFIED;
-
-	if (!stricmp(aVarName, "A_LoopReadLine")) return VAR_LOOPREADLINE;
-	if (!stricmp(aVarName, "A_LoopField")) return VAR_LOOPFIELD;
-	if (!stricmp(aVarName, "A_Index")) return VAR_INDEX;  // A short name since it maybe be typed so often.
-
-	if (!stricmp(aVarName, "A_ThisMenuItem")) return VAR_THISMENUITEM;
-	if (!stricmp(aVarName, "A_ThisMenuItemPos")) return VAR_THISMENUITEMPOS;
-	if (!stricmp(aVarName, "A_ThisMenu")) return VAR_THISMENU;
-	if (!stricmp(aVarName, "A_ThisHotkey")) return VAR_THISHOTKEY;
-	if (!stricmp(aVarName, "A_PriorHotkey")) return VAR_PRIORHOTKEY;
-	if (!stricmp(aVarName, "A_TimeSinceThisHotkey")) return VAR_TIMESINCETHISHOTKEY;
-	if (!stricmp(aVarName, "A_TimeSincePriorHotkey")) return VAR_TIMESINCEPRIORHOTKEY;
-	if (!stricmp(aVarName, "A_EndChar")) return VAR_ENDCHAR;
-	if (!stricmp(aVarName, "A_Gui")) return VAR_GUI;
-	if (!stricmp(aVarName, "A_GuiControl")) return VAR_GUICONTROL;
-	if (!stricmp(aVarName, "A_GuiControlEvent")) return VAR_GUICONTROLEVENT;
-	if (!stricmp(aVarName, "A_GuiWidth")) return VAR_GUIWIDTH;
-	if (!stricmp(aVarName, "A_GuiHeight")) return VAR_GUIHEIGHT;
-
-	if (!stricmp(aVarName, "A_TimeIdle")) return VAR_TIMEIDLE;
-	if (!stricmp(aVarName, "A_TimeIdlePhysical")) return VAR_TIMEIDLEPHYSICAL;
-	if (!stricmp(aVarName, "A_Space")) return VAR_SPACE;
-	if (!stricmp(aVarName, "A_Tab")) return VAR_TAB;
-	if (!stricmp(aVarName, "A_AhkVersion")) return VAR_AHKVERSION;
-
-	// Since above didn't return:
-	return VAR_NORMAL;
 }
 
 
@@ -5870,27 +5814,14 @@ inline ResultType Line::EvaluateCondition()
 
 	SymbolType var_is_pure_numeric, value_is_pure_numeric, value2_is_pure_numeric;
 	int if_condition;
-	char *cp;
 
 	switch (mActionType)
 	{
 	case ACT_IFEXPR:
 		// Use ATOF to support hex, float, and integer formats.  Also, explicitly compare to 0.0
 		// to avoid truncation of double, which would result in a value such as 0.1 being seen
-		// as false rather than true.  Fixed in v1.0.25.12 so that only the following are false:
-		// 0
-		// 0.0
-		// 0x0
-		// (variants of the above)
-		// blank string
-		// ... in other words, "if var" should be true if it contains a non-numeric string.
-		cp = ARG1;  // It should help performance to resolve the ARG1 macro only once.
-		if (!*cp)
-			if_condition = false;
-		else if (!IsPureNumeric(cp, true, false, true)) // i.e. a var containing all whitespace would be considered "true", since it's a non-blank string that isn't equal to 0.0.
-			if_condition = true;
-		else // It's purely numeric, not blank, and not all whitespace.
-			if_condition = (ATOF(cp) != 0.0);
+		// as false rather than true:
+		if_condition = (ATOF(ARG1) != 0.0);
 		break;
 
 	// For ACT_IFWINEXIST and ACT_IFWINNOTEXIST, although we validate that at least one
@@ -6959,10 +6890,10 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 				return LineError(ERR_OUTOFMEM ERR_ABORT);
 			g_script.mRunAsPass = g_script.mRunAsUser + RUNAS_ITEM_SIZE;
 			g_script.mRunAsDomain = g_script.mRunAsPass + RUNAS_ITEM_SIZE;
+			mbstowcs(g_script.mRunAsUser, ARG1, RUNAS_ITEM_SIZE);
+			mbstowcs(g_script.mRunAsPass, ARG2, RUNAS_ITEM_SIZE);
+			mbstowcs(g_script.mRunAsDomain, ARG3, RUNAS_ITEM_SIZE);
 		}
-		mbstowcs(g_script.mRunAsUser, ARG1, RUNAS_ITEM_SIZE);
-		mbstowcs(g_script.mRunAsPass, ARG2, RUNAS_ITEM_SIZE);
-		mbstowcs(g_script.mRunAsDomain, ARG3, RUNAS_ITEM_SIZE);
 		return OK;
 
 	case ACT_RUN: // Be sure to pass NULL for 2nd param.
@@ -7553,11 +7484,10 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		space_needed = (VarSizeType)source_length + 1;  // Set default, or starting value for accumulation.
 		VarSizeType final_space_needed = space_needed;
 		bool do_replace = *ARG2 && *ARG3; // i.e. don't allow replacement of the empty string.
-		bool always_use_slow_mode = strcasestr(ARG5, "AllSlow");
-		bool alternate_error_level = strcasestr(ARG5, "UseErrorLevel");
-		// Both AllSlow and UseErrorLevel imply "replace all":
-		bool replace_all = always_use_slow_mode || alternate_error_level || StrChrAny(ARG5, "1aA");
-		DWORD found_count = 0; // Set default.
+		bool always_use_slow_mode = !stricmp(ARG5, "AllSlow");
+		// AllSlow implies "replace all":
+		bool replace_all = always_use_slow_mode || toupper(*ARG5) == 'A' || *ARG5 == '1'; // i.e. more lenient if it's a dereferenced var.
+		UINT found_count = 0; // Set default.
 
 		if (do_replace) 
 		{
@@ -7568,7 +7498,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			size_t search_str_len = strlen(ARG3);
 			size_t replace_str_len = strlen(ARG4);
 			char *found_pos;
-			for (found_pos = ARG2;;)
+			for (found_count = 0, found_pos = ARG2;;)
 			{
 				if (   !(found_pos = g.StringCaseSense ? strstr(found_pos, ARG3) : strcasestr(found_pos, ARG3))   )
 					break;
@@ -7588,10 +7518,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 
 		// AutoIt2: "If the search string cannot be found, the contents of <Output Variable>
 		// will be the same as <Input Variable>."
-		if (alternate_error_level)
-			g_ErrorLevel->Assign(found_count);
-		else
-			g_ErrorLevel->Assign(found_count ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR); // So that it behaves like AutoIt2.
+		g_ErrorLevel->Assign(found_count ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR); // So that it behaves like AutoIt2.
 	
 		// Handle the output parameter.  This section is similar to that in PerformAssign().
 		// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
@@ -7816,10 +7743,8 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			return g_ErrorLevel->Assign(ERRORLEVEL_NONE);
 		}
 		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
-
 	case ACT_FILESELECTFILE:
 		return FileSelectFile(ARG2, ARG3, ARG4, ARG5);
-
 	case ACT_FILESELECTFOLDER:
 		return FileSelectFolder(ARG2, (DWORD)(*ARG3 ? ATOI(ARG3) : FSF_ALLOW_CREATE), ARG4);
 
@@ -8130,8 +8055,6 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		// (the text appears more quickly when the command after the splash is something
 		// that might keep our thread tied up and unable to check messages).
 		SLEEP_WITHOUT_INTERRUPTION(-1)
-		// UpdateWindow() would probably achieve the same effect as the above, but it feels safer to do
-		// the above because it ensures that our message queue is empty prior to returning to our caller.
 		return OK;
 	}
 	case ACT_SPLASHTEXTOFF:
@@ -8230,7 +8153,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		return OK;
 
 	case ACT_MOUSEGETPOS:
-		return MouseGetPos(ATOI(ARG5) == 1);
+		return MouseGetPos();
 
 //////////////////////////////////////////////////////////////////////////
 
@@ -8703,45 +8626,6 @@ inline VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize)
 
 
 
-ResultType Line::ArgMustBeDereferenced(Var *aVar, int aArgIndexToExclude)
-// Returns CONDITION_TRUE, CONDITION_FALSE, or FAIL.
-{
-	if (mActionType == ACT_SORT) // See PerformSort() for why it's always dereferenced.
-		return CONDITION_TRUE;
-	if (aVar->mType == VAR_CLIPBOARD)
-		// Even if the clipboard is both an input and an output var, it still
-		// doesn't need to be dereferenced into the temp buffer because the
-		// clipboard has two buffers of its own.  The only exception is when
-		// the clipboard has only files on it, in which case those files need
-		// to be converted into plain text:
-		return CLIPBOARD_CONTAINS_ONLY_FILES ? CONDITION_TRUE : CONDITION_FALSE;
-	if (aVar->mType != VAR_NORMAL || !aVar->Length() || aVar == g_ErrorLevel)
-		// Reserved vars must always be dereferenced due to their volatile nature.
-		// Normal vars of length zero are dereferenced because they might exist
-		// as system environment variables, whose contents are also potentially
-		// volatile (i.e. they are sometimes changed by outside forces).
-		// As of v1.0.25.12, g_ErrorLevel is always dereferenced also so that
-		// a command that sets ErrorLevel can itself use ErrorLevel as in
-		// this example: StringReplace, EndKey, ErrorLevel, EndKey:
-		return CONDITION_TRUE;
-	// Since the above didn't return, we know that this is a NORMAL input var of
-	// non-zero length.  Such input vars only need to be dereferenced if they are
-	// also used as an output var by the current script line:
-	Var *output_var;
-	for (int iArg = 0; iArg < mArgc; ++iArg)
-		if (iArg != aArgIndexToExclude && mArg[iArg].type == ARG_TYPE_OUTPUT_VAR)
-		{
-			if (   !(output_var = ResolveVarOfArg(iArg, false))   )
-				return FAIL;  // It will have already displayed the error.
-			if (output_var == aVar)
-				return CONDITION_TRUE;
-		}
-	// Otherwise:
-	return CONDITION_FALSE;
-}
-
-
-
 inline char *Line::ExpandArg(char *aBuf, int aArgIndex)
 // Caller must be sure not to call this for an arg that's marked as an expression, since
 // expressions are handled by a different function.
@@ -8814,7 +8698,7 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 	map_item map[MAX_DEREFS_PER_ARG*2 + 1];
 	int map_count = 0;
 	// Above sizes the map to "times 2 plus 1" to handle worst case, which is -y + 1 (raw+deref+raw).
-	// Thus, if this particular arg has the maximum number of derefs, the number of map markers
+	// Thus, if this particular arg has the maximum number of derefs, the number of/ map markers
 	// needed would be twice that, plus one for the last raw text's marker.
 
 	///////////////////////////////////////////////////////////////////////////////////////
@@ -8873,8 +8757,8 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 	// Although having a precedence array is probably not strictly required (since the order of evaluation
 	// of operators of equal precedence doesn't seem to matter for any of the operators in the list),
 	// it probably helps performance by avoiding unnecessary pushing and popping of operators to the stack.
-	// This array must be kept in sync with "enum SymbolType".  Also, dimensioning explicitly by SYM_COUNT
-	// helps enforce that at compile-time:
+	// This array must be kept in sync with "enum SymbolType".  Dimensioning explicitly by SYM_COUNT helps
+	// enforce that at compile-time:
 	static int sPrecedence[SYM_COUNT] =
 	{
 		  0, 0, 0, 0, 0 // SYM_STRING, SYM_INTEGER, SYM_FLOAT, SYM_OPERAND, SYM_BEGIN (SYM_BEGIN must be lowest precedence).
@@ -8894,10 +8778,10 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 		, 14            // SYM_POWER (see note below).
 	};
 	// Most programming languages give exponentiation a higher precedence than unary minus and !/not.
-	// For example, -2**2 is evaluated as -(2**2), not (-2)**2 (the latter is unsupported by qmathPow anyway).
-	// However, this rule requires a small workaround in the postfix-builder to allow 2**-2 to be
-	// evaluated as 2**(-2) rather than being seen as an error.
-	// On a related note, the right-to-left tradition of of something like 2**3**4 is not implemented.
+	// For example, -2^2 is evaluated as -(2^2), not (-2)^2 (the latter is unsupported by qmathPow anyway).
+	// However, this rule requires a small workaround in the postfix-builder to allow 2^-2 to be
+	// evaluated as 2^(-2) rather than being seen as an error.
+	// On a related note, the right-to-left tradition of of something like 2^3^4 is not implemented.
 	// Instead, the expression is evaluated in left-to-right (like other operators) to simplify the code.
 
 	#define MAX_TOKENS 512 // Max number of operators/operands.  Seems enough to handle anything realistic, while conserving call-stack space.
@@ -8932,7 +8816,7 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 		// (without enclosing double quotes, since those are only needed for raw string literals).
 		// An EXP_DEREF_SINGLE item cannot extend beyond into the map item to its right, since such
 		// a condition can never occur due to load-time preparsing (e.g. the x and y in x+y are two
-		// separate items because there's an operator between them). Even a concat expression such as
+		// separate items because there's an operator between them. Even a fault expression such as
 		// (x y) would still have x and y separate because the space between them counts as a raw
 		// map item, which keeps them separate.
 		if (this_item.type == EXP_DEREF_SINGLE)
@@ -8961,10 +8845,10 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 							, item_end - this_item.marker);
 					else
 						prev_infix_item.marker = this_item.marker; // i.e. consider the double to be an empty string for this concat.
-						// And prev_infix_item.symbol should already be set to SYM_OPERAND at this stage.
 					continue;
 					// Currently, attempts to concat something onto a double-deref, or a double onto
-					// something, treat the double as an empty string, as documented.
+					// something, simply fail during the eval-postfix phase since the stack winds
+					// up with more than one unevaluated item left on it.  This is by design.
 				}
 			}
 			// Since above didn't "continue":
@@ -8999,7 +8883,7 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 			// space, the entire thing would be one operand so it wouldn't matter (though in this case, it
 			// would form an invalid var-name since dashes can't exist in them, which is caught later).
 			cp = this_item.marker; // Set for use by the label below.
-			goto double_deref;
+			goto double_deref; // For performance.
 		}
 
 		// RAW is of lower precedence than the above, so is checked last.  For example, if a single
@@ -9152,7 +9036,7 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 				++cp; // Omit the starting-quote from consideration, and from the operand's eventual contents.
 				for (op_end = cp;; ++op_end)
 				{
-					if (!*op_end) // No matching end-quote. Probably impossible due to load-time validation.
+					if (!*op_end) // No matching end-quote. Probably impossible to load-time validation.
 						goto fail;
 					if (*op_end == '"') // If not followed immediately by another, this is the end of it.
 					{
@@ -9180,10 +9064,7 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 							// Below recomputes strlen(cp) in case StrReplaceAll, above, changed it:
 							memmove(prev_infix_item.marker + strlen(prev_infix_item.marker), cp, strlen(cp) + 1);
 						else
-						{
 							prev_infix_item.marker = cp; // i.e. consider the double deref to be the empty string for this concat.
-							prev_infix_item.symbol = SYM_STRING; // Indicate that it's a literal string.
-						}
 						--infix_count; // Counteract the loops ++infix_count.
 						cp = op_end + 1; // Set it up for the next iteration (terminate_string_here is not needed).
 						continue;
@@ -9285,9 +9166,8 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 							// the end of this newly concatenated string:
 							*(temp + op_length) = '\0';
 						}
-						else // It's a concat onto a double deref, so treat the double as an empty string.
+						else
 							prev_infix_item.marker = cp;
-							// And prev_infix_item.symbol should already be set to SYM_OPERAND at this stage.
 						--infix_count; // Counteract the loops ++infix_count.
 						cp = op_end; // Have the loop process whatever lies at op_end and beyond.
 						// Not necessary to do terminate_string_here because the following is currently
@@ -9325,6 +9205,37 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 		continue;  // To avoid falling into the label below.
 
 double_deref:
+		// Callers of this label have set cp to the start of the variable name and op_end to the
+		// position of the character after the last one in the name.  The below does not validate
+		// that the variable name is legal.  Instead, it just tries to look up an existing variable.
+		// If there is no such variable, it is considered to be the empty string (which seems better
+		// than causing the entire expression to evaluate to blank) to indicate the problem.
+		// The same thing happens if this is the clipboard because temporary memory would be
+		// needed somewhere if the clipboard contains files that need to be expanded to text.
+		// Finally, all other non-normal variables (such as reserved variables) are also failure
+		// conditions because they would need to be fetched into some kind of temp. memory somewhere.
+		// Next condition:
+		// An environment variable might not have an entry in the script's variable list if it is
+		// only ever referred to dynamically, never directly by name.  In that case, FindVar() below
+		// will not find it in the list.  But if it is found in the list, it seems best to make it
+		// blank so that the behavior for env. vars is always the same.  Related: all other aspects
+		// of script behavior treat variables of length zero as the contents of the corresponding
+		// environment variable (if one exists).
+		op_length = op_end - cp;
+		infix[infix_count].marker = (!op_length || !(found_var = g_script.FindVar(cp, op_length)) // i.e. don't call FindVar with zero for length, since that's a special mode.
+			|| found_var->mType != VAR_NORMAL // Relies on short-circuit boolean order.
+			|| (!found_var->Length() // i.e. it might be an environment variable.
+				&& GetEnvironmentVariable(found_var->mName, buf_temp, 1))) // Pass 1 to force it to report whether the env. var exists (even if env var empty).
+				? "" // Var is not found, not a normal var, or it *is* an environment variable.
+				: found_var->Contents(); // This operand becomes the variable's contents.
+				// "" is used above, rather than a real empty string residing within limits of
+				// the expression's text, so that attempts to concat this item will fail in the
+				// same way that other concats involving double derefs fail.
+		// If this item is the empty string or consists entirely of whitespace, it will be treated
+		// as a string-operand rather than a number:
+		infix[infix_count].symbol = SYM_OPERAND;
+		++infix_count;
+
 		if (*item_end && op_end >= item_end) // This operand includes this map item and one or more to its right, so adjust map_index accordingly.
 		{
 			// Find the map item containing the end of this operand.  If the loop ends when
@@ -9361,43 +9272,6 @@ double_deref:
 			//else do nothing since map_index is now set to the final map item of this operand, and that
 			// map item is fully consumed by this operand and needs no further processing.
 		} // This map item stretches into others to its right.
-
-		// Check if this double is being concatenated onto a previous operand.  If so, it is not
-		// currently supported so this double-deref will be treated as an empty string, as documented.
-		// Example 1: Var := "abc" %naked_double_ref%
-		// Example 2: Var := "abc" Array%Index%
-		if (!infix_count || !IS_OPERAND(infix[infix_count - 1].symbol)) // Relies on short-circuit boolean order.
-		{
-			// Callers of this label have set cp to the start of the variable name and op_end to the
-			// position of the character after the last one in the name.  The below does not validate
-			// that the variable name is legal.  Instead, it just tries to look up an existing variable.
-			// If there is no such variable, it is considered to be the empty string (which seems better
-			// than causing the entire expression to evaluate to blank) to indicate the problem.
-			// The same thing happens if this is the clipboard because temporary memory would be
-			// needed somewhere if the clipboard contains files that need to be expanded to text.
-			// Finally, all other non-normal variables (such as reserved variables) are also failure
-			// conditions because they would need to be fetched into some kind of temp. memory somewhere.
-			// Next condition:
-			// An environment variable might not have an entry in the script's variable list if it is
-			// only ever referred to dynamically, never directly by name.  In that case, FindVar() below
-			// will not find it in the list.  But if it is found in the list, it seems best to make it
-			// blank so that the behavior for env. vars is always the same.  Related: all other aspects
-			// of script behavior treat variables of length zero as the contents of the corresponding
-			// environment variable (if one exists).
-			op_length = op_end - cp;
-			infix[infix_count].marker = (!op_length || !(found_var = g_script.FindVar(cp, op_length)) // i.e. don't call FindVar with zero for length, since that's a special mode.
-				|| found_var->mType != VAR_NORMAL // Relies on short-circuit boolean order.
-				|| !found_var->Length()) // i.e. it's either an environment variable or a zero-length variable.  But either way it's treated as a blank string.
-					? "" // Var is not found, not a normal var, or it *is* an environment variable.
-					: found_var->Contents(); // This operand becomes the variable's contents.
-					// "" is used above, rather than a real empty string residing within limits of
-					// the expression's text, so that attempts to concat this item will fail in the
-					// same way that other concats involving double derefs fail.
-			// If this item is the empty string or consists entirely of whitespace, it will be treated
-			// as a string-operand rather than a number:
-			infix[infix_count].symbol = SYM_OPERAND;
-			++infix_count;
-		}
 	} // for each map item
 
 	////////////////////////////
@@ -9526,24 +9400,12 @@ double_deref:
 				this_token.value_double = -(right.symbol == SYM_OPERAND ? atof(right.marker) : right.value_double);
 			else if (right_is_number == PURE_INTEGER)
 				this_token.value_int64 = -(right.symbol == SYM_OPERAND ? ATOI64(right.marker) : right.value_int64);
-			else // String.
-			{
-				// Seems best to consider the application of unary minus to a string, even a quoted string
-				// literal such as "15", to be a failure.  UPDATE: For v1.0.25.06, invalid operations like
-				// this instead treat the operand as an empty string.  This avoids aborting a long, complex
-				// expression entirely just because on of its operands is invalid.  However, the net effect
-				// in most cases might be the same, since the empty string is a non-numeric result and thus
-				// will cause any operator it is involved with to treat its other operand as a string too.
-				// And the result of a math operation on two strings is typically an empty string.
-				this_token.marker = "";
-				this_token.symbol = SYM_STRING;
-				break;
-			}
-			// Since above didn't "break":
+			else // String.  Seems best to consider the application of unary minus to a string, even a quoted string literal such as "15", to be a failure.
+				goto fail;
 			this_token.symbol = right_is_number; // Convert generic SYM_OPERAND into a specific type: float or int.
 			break;
 
-		// Both nots are equivalent at this stage because precedence was already acted upon by infix-to-postfix:
+		// Both nots are equivalent at this stage because precedence was acted upon by infix-to-postfix:
 		case SYM_LOWNOT:  // The operator-word "not".
 		case SYM_HIGHNOT: // The symbol !
 			if (right_is_number == PURE_FLOAT) // Convert to float, not int, so that a number between 0.0001 and 0.9999 is considered "true".
@@ -9564,17 +9426,12 @@ double_deref:
 
 		case SYM_BITNOT: // The tilde (~) operator.
 			if (right_is_number == PURE_FLOAT)
-				// Overwrite this_token's union with a float. No need to have the overhead of ATOI64() since PURE_FLOAT can't be hex.
-				this_token.value_int64 = right.symbol == SYM_OPERAND ? _atoi64(right.marker) : (__int64)right.value_double;
-			else if (right_is_number == PURE_INTEGER) // But in this case, it can be hex, so use ATOI64().
+				// Overwrite this_token's union with a float. No need to have the overhead of ATOF() since it can't be hex.
+				this_token.value_int64 = right.symbol == SYM_OPERAND ? ATOI64(right.marker) : (__int64)right.value_double;
+			else if (right_is_number == PURE_INTEGER)
 				this_token.value_int64 = right.symbol == SYM_OPERAND ? ATOI64(right.marker) : right.value_int64;
 			else // String.  Seems best to consider the application of unary minus to a string, even a quoted string literal such as "15", to be a failure.
-			{
-				this_token.marker = "";
-				this_token.symbol = SYM_STRING;
-				break;
-			}
-			// Since above didn't "break":
+				goto fail;
 			// Note that it is not legal to perform ~, &, |, or ^ on doubles.  Because of this, and also to
 			// conform to the behavior of the Transform command, any floating point operand is truncated to
 			// an integer above.
@@ -9650,12 +9507,12 @@ double_deref:
 				}
 				
 				#undef STRING_COMPARE
-				#define STRING_COMPARE (g.StringCaseSense ? strcmp(left_string, right_string) : stricmp(left_string, right_string))
+				#define STRING_COMPARE (g.StringCaseSense ? strcmp(left.marker, right.marker) : stricmp(left.marker, right.marker))
 
 				switch(this_token.symbol)
 				{
-				case SYM_EQUAL:     this_token.value_int64 = !stricmp(left_string, right_string); break;
-				case SYM_EQUALCASE: this_token.value_int64 = !strcmp(left_string, right_string); break;
+				case SYM_EQUAL:     this_token.value_int64 = !stricmp(left.marker, right.marker); break;
+				case SYM_EQUALCASE: this_token.value_int64 = !strcmp(left.marker, right.marker); break;
 				// The rest all obey g.StringCaseSense since they have no case sensitive counterparts:
 				case SYM_NOTEQUAL:  this_token.value_int64 = STRING_COMPARE ? 1 : 0; break;
 				case SYM_GT:        this_token.value_int64 = STRING_COMPARE > 0; break;
@@ -9663,12 +9520,8 @@ double_deref:
 				case SYM_GTOE:      this_token.value_int64 = STRING_COMPARE >= 0; break;
 				case SYM_LTOE:      this_token.value_int64 = STRING_COMPARE <= 0; break;
 				default:
-					// Other operators do not support string operands, so the result is an empty string.
-					this_token.marker = "";
-					this_token.symbol = SYM_STRING;
-					goto push_this_result;
+					goto fail; // Other operators do not support string operands.
 				}
-				// Since above didn't "goto":
 				this_token.symbol = SYM_INTEGER; // Boolean result is treated as an integer.  Must be done only after the switch() above.
 			}
 
@@ -9729,12 +9582,7 @@ double_deref:
 					// an unexpectedly large value or -1.#IND00 instead.  Also note that zero raised to
 					// a negative power is undefined, similar to division-by-zero, and thus treated as a failure.
 					if (left_int64 < 0 || (!left_int64 && right_int64 < 0)) // See comments at TRANS_CMD_POW about this.
-					{
-						// Return a consistent result rather than something that varies:
-						this_token.marker = "";
-						this_token.symbol = SYM_STRING;
-						goto push_this_result;
-					}
+						goto fail; // Return a consistent result rather than something that varies.
 					if (right_int64 < 0)
 					{
 						this_token.value_double = qmathPow((double)left_int64, (double)right_int64);
@@ -9773,16 +9621,7 @@ double_deref:
 				case SYM_PLUS:     this_token.value_double = left_double + right_double; break;
 				case SYM_MINUS:	   this_token.value_double = left_double - right_double; break;
 				case SYM_TIMES:    this_token.value_double = left_double * right_double; break;
-				case SYM_DIVIDE:
-					if (right_double == 0.0)
-					{
-						this_token.marker = "";
-						this_token.symbol = SYM_STRING;
-						goto push_this_result;
-					}
-					// Otherwise:
-					this_token.value_double = left_double / right_double;
-					break;
+				case SYM_DIVIDE:   if (right_double == 0.0) goto fail; this_token.value_double = left_double / right_double; break;
 				case SYM_EQUALCASE: // Same behavior as SYM_EQUAL for numeric operands.
 				case SYM_EQUAL:    this_token.value_double = left_double == right_double; break;
 				case SYM_NOTEQUAL: this_token.value_double = left_double != right_double; break;
@@ -9792,12 +9631,7 @@ double_deref:
 				case SYM_LTOE:     this_token.value_double = left_double <= right_double; break;
 				case SYM_POWER: // See the other SYM_POWER higher above for explanation of the below:
 					if (left_double < 0 || (left_double == 0.0 && right_double < 0))
-					{
-						this_token.marker = "";
-						this_token.symbol = SYM_STRING;
-						goto push_this_result;
-					}
-					// Otherwise:
+						goto fail;
 					this_token.value_double = qmathPow(left_double, right_double);
 					break;
 				}
@@ -9805,7 +9639,6 @@ double_deref:
 			} // Result is floating point.
 		} // switch() operator type
 
-push_this_result:
 		STACK_PUSH(this_token); // Push the result onto the stack for use as an operand by a future operator.
 	} // For each item in the postfix array.
 
@@ -9854,17 +9687,19 @@ push_this_result:
 	case SYM_INTEGER:
 		ITOA64(result.value_int64, aBuf_orig); // Store in hex or decimal format, as appropriate.
 		break;
-	case SYM_STRING: // And note that it can't be SYM_OPERAND because step right above would have remarked it as SYM_STRING.
+	case SYM_STRING:
 		result_size = strlen(result.marker) + 1;
 		memmove(aBuf_orig, result.marker, result_size);
 		return aBuf_orig + result_size;
-	default: // Result contains a non-operand symbol such as an operator.
+	default:
+		// An expression should not evaluate to SYM_STRING, so that is an error.  An expression such as
+		// +VarContainingString is one way to make this happen.
+		// It's also an error when the result contains a non-operand symbol such as an operator.
 		goto fail;
 	}
 
 	// It would have returned above if SYM_STRING, so this is SYM_FLOAT/SYM_INTEGER.  Calculate the length:
 	return aBuf_orig + strlen(aBuf_orig) + 1;  // +1 because that's what callers want; i.e. the position after the terminator.
-
 fail:
 	*aBuf_orig++ = '\0'; // Increment because that's what callers want; i.e. the position after the terminator.
 	return aBuf_orig;
@@ -10749,38 +10584,6 @@ VarSizeType Script::GetLoopFileFullPath(char *aBuf)
 	if (aBuf)
 		strcpy(aBuf, str);
 	return (VarSizeType)strlen(str);
-}
-
-VarSizeType Script::GetLoopFileLongPath(char *aBuf)
-{
-	char *temp, buf[MAX_PATH] = ""; // Set default.
-	DWORD length = 0;               // Set default.
-	if (mLoopFile)
-	{
-		// GetFullPathName() is done in addition to ConvertFilespecToCorrectCase() for the following reasons:
-		// 1) It's currrently the only easy way to get the full path of the directory in which a file resides.
-		//    For example, if a script is passed a filename via command line parameter, that file could be
-		//    either an absolute path or a relative path.  If relative, of course it's relative to A_WorkingDir.
-		//    The problem is, the script would have to manually detect this, which would probably take several
-		//    extra steps.
-		// 2) A_LoopFileLongPath is mostly intended for the following cases, and in all of them it seems
-		//    preferable to have the full/absolute path rather than the relative path:
-		//    a) Files dragged onto a .ahk script when the drag-and-drop option has been enabled via the Installer.
-		//    b) Files passed into the script via command line.
-		// The below also serves to make a copy because changing the original would yield
-		// unexpected/inconsistent results in a script that retrieves the A_LoopFileFullPath
-		// but only conditionally retrieves A_LoopFileLongPath.
-		if (   !(length = GetFullPathName(mLoopFile->cFileName, sizeof(buf), buf, &temp))   )
-			*buf = '\0'; // It might fail if NtfsDisable8dot3NameCreation is turned on in the registry, and possibly for other reasons.
-		else
-			// The below is called in case the loop is being used to convert filename specs that were passed
-			// in from the command line, which thus might not be the proper case (at least in the path
-			// portion of the filespec), as shown in the file system:
-			ConvertFilespecToCorrectCase(buf);
-	}
-	if (aBuf)
-		strcpy(aBuf, buf);
-	return (VarSizeType)length;
 }
 
 VarSizeType Script::GetLoopFileShortPath(char *aBuf)

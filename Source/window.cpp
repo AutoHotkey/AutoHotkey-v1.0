@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2005 Chris Mallett
+Copyright 2003 Chris Mallett
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -51,7 +51,7 @@ HWND WinActivate(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeT
 	if (!aFindLastMatch && !*aTitle && !*aText && !*aExcludeTitle && !*aExcludeText)
 	{
 		// User passed no params, so use the window most recently found by WinExist():
-		if (   !(target_window = GetValidLastUsedWindow())   )
+		if (   !(target_window = g_ValidLastUsedWindow)   )
 			return NULL;
 	}
 	else
@@ -69,9 +69,15 @@ HWND WinActivate(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeT
 			, false, aAlreadyVisited, aAlreadyVisitedCount))   )
 			return NULL;
 	}
-	// Above has ensured that target_window is non-NULL, that it is a valid window, and that
-	// it is eligible due to g.DetectHiddenWindows being true or the window not being hidden
-	// (or being one of the script's GUI windows).
+	// If it's invisible, don't bother unless the user explicitly wants to operate
+	// on invisible windows(although AutoIt2, but seemingly not 3, handles this
+	// by unhiding the window).  Some apps aren't tolerant of having their hidden windows
+	// shown by 3rd parties, and they might get messed up.  UPDATE: Since it's valid
+	// for a hidden window to be the foreground window, and since the user might want that
+	// in obscure cases, don't show the window if it's hidden.  The user can always do that
+	// with ShowWindow, if desired:
+	if (!IsWindowVisible(target_window) && !g.DetectHiddenWindows)
+		return NULL;
 	return SetForegroundWindowEx(target_window);
 }
 
@@ -231,7 +237,7 @@ HWND SetForegroundWindowEx(HWND aWnd)
 		// almost always succeeds whereas the one-attach method hardly ever succeeds the first
 		// time (resulting in a flashing taskbar button due to having to invoke a second attempt)
 		// when one window is quickly activated after another was just activated.
-		// AutoIt3: Attach all our input threads, will cause SetForeground to work under 98/Me.
+		// AutoIt3: Attach all our input threads, will cause SetForeground to work under 98/ME.
 		// MSDN docs: The AttachThreadInput function fails if either of the specified threads
 		// does not have a message queue (My: ok here, since any window's thread MUST have a
 		// message queue).  [It] also fails if a journal record hook is installed.  ... Note
@@ -409,7 +415,7 @@ HWND WinClose(char *aTitle, char *aText, int aTimeToWaitForClose
 				return NULL;
 	}
 	else
-		target_window = GetValidLastUsedWindow();
+		target_window = g_ValidLastUsedWindow;
 	if (!target_window)
 		return NULL;
 
@@ -512,7 +518,7 @@ HWND WinActive(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeTex
 	if (USE_FOREGROUND_WINDOW(aTitle, aText, aExcludeTitle, aExcludeText))
 	{
 		// User asked us if the "active" window is active, which is true if it's not a
-		// hidden window, or if DetectHiddenWindows is ON:
+		// hidden window or DetectHiddenWindows is ON:
 		SET_TARGET_TO_ALLOWABLE_FOREGROUND
 		#define UPDATE_AND_RETURN_LAST_USED_WINDOW(hwnd) \
 		{\
@@ -526,14 +532,12 @@ HWND WinActive(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeTex
 	HWND fore_win = GetForegroundWindow();
 	if (!fore_win)
 		return NULL;
-
-	if (!*aTitle && !*aText && !*aExcludeTitle && !*aExcludeText) // Use the "last found" window.
-		return (fore_win == GetValidLastUsedWindow()) ? fore_win : NULL;
-
-	// Only after the above check should the below be done.  This is because "IfWinActive" (with no params)
-	// should be "true" if one of the script's GUI windows is active:
 	if (!g.DetectHiddenWindows && !IsWindowVisible(fore_win)) // In this case, the caller's window can't be active.
 		return NULL;
+
+	if (!*aTitle && !*aText && !*aExcludeTitle && !*aExcludeText)
+		// User passed no params, so use the window most recently found by WinExist().
+		return (fore_win == g_ValidLastUsedWindow) ? fore_win : NULL;
 
 	char win_title[WINDOW_TEXT_SIZE];
 
@@ -630,10 +634,11 @@ HWND WinExist(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
 		// It's correct to do this even in this function because it's called by
 		// WINWAITCLOSE and IFWINEXIST specifically to discover if the Last-Used
 		// window still exists.
-		target_window = GetValidLastUsedWindow();
-		return aReturnTheCount ? (HWND)(target_window ? 1 : 0) : target_window;
+		target_window = g_ValidLastUsedWindow;
+		if (aReturnTheCount)
+			return (HWND)(target_window ? 1 : 0);
+		return g_ValidLastUsedWindow;
 	}
-
 
 	if (!strnicmp(aTitle, AHK_ID_FLAG, AHK_ID_FLAG_LENGTH)) // In this case aFindLastMatch is ignored.
 	{
@@ -783,26 +788,6 @@ BOOL CALLBACK EnumParentFind(HWND aWnd, LPARAM lParam)
 	// If find_last_match is true, continue searching.  Otherwise, this first match is the one
 	// that's desired so stop here:
 	return wip.find_last_match;  // Returning a bool in lieu of BOOL is safe in this case.
-}
-
-
-
-HWND GetValidLastUsedWindow()
-// If the last found window is one of the script's own GUI windows, it is considered valid even if
-// DetectHiddenWindows is ON.  Note that this exemption does not apply to things like "IfWinExist,
-// My Gui Title", "WinActivate, ahk_id <gui id>", etc.
-// A GUI window can become the last found window while DetectHiddenWindows is ON in two ways:
-// Gui +LastFound
-// The launch of a GUI thread that explicitly set the last found window to be that GUI window.
-{
-	if (!g.hWndLastUsed || !IsWindow(g.hWndLastUsed))
-		return NULL;
-	if (g.DetectHiddenWindows || IsWindowVisible(g.hWndLastUsed))
-		return g.hWndLastUsed;
-	// Otherwise, DetectHiddenWindows is OFF and the window is not visible.  Return NULL
-	// unless this is a GUI window belonging to this particular script, in which case
-	// the setting of DetectHiddenWindows is ignored (as of v1.0.25.13).
-	return GuiType::FindGui(g.hWndLastUsed) ? g.hWndLastUsed : NULL;
 }
 
 

@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2005 Chris Mallett
+Copyright 2003 Chris Mallett
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -724,7 +724,7 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 				// It seems best to disable this so that the same script can be used without
 				// a warning on Win9x (and since it's so rare anyway):
 				//MsgBox("Note: This script attempts to use keyboard or hotkey features that aren't yet supported"
-				//	" on Win95/98/Me.  Those parts of the script will not function.");
+				//	" on Win95/98/ME.  Those parts of the script will not function.");
 			return -1;
 		}
 	}

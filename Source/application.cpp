@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2005 Chris Mallett
+Copyright 2003 Chris Mallett
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -785,7 +785,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 					// msg.wParam is the index rather than a pointer to avoid any chance of problems with
 					// a gui object or its window having been destroyed while the msg was waiting in the queue.
 					// As documented, set the last found window if possible/applicable.  It's not necessary to
-					// check IsWindow/IsWindowVisible/DetectHiddenWindows since GetValidLastUsedWindow()
+					// check IsWindow/IsWindowVisible/DetectHiddenWindows since g_ValidLastUsedWindow
 					// takes care of that whenever the script actually tries to use the last found window.
 					if (g_gui[msg.wParam])
 					{
@@ -818,10 +818,8 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 				else // Reset for potential future uses (may help avoid breaking existing scripts if ErrorLevel is ever set).
 					g_ErrorLevel->Assign();
 				// Set last found window (as documented).  It's not necessary to check IsWindow/IsWindowVisible/
-				// DetectHiddenWindows since GetValidLastUsedWindow() takes care of that whenever the script
-				// actually tries to use the last found window.  UPDATE: Definitely don't want to check
-				// IsWindowVisible/DetectHiddenWindows now that the last-found window is exempt from
-				// DetectHiddenWindows if the last-found window is one of the script's GUI windows [v1.0.25.13]:
+				// DetectHiddenWindows since g_ValidLastUsedWindow takes care of that whenever the script
+				// actually tries to use the last found window:
 				g.hWndLastUsed = pgui->mHwnd;
 
 				if (pgui_label_is_running) // i.e. GuiClose, GuiEscape, and related window-level events.
