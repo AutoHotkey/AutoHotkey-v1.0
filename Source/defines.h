@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.21"
+#define NAME_VERSION "1.0.22"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -277,6 +277,7 @@ struct global_struct
 	int WinDelay;  // negative values may be used as special flags.
 	int ControlDelay;  // negative values may be used as special flags.
 	int KeyDelay;  // negative values may be used as special flags.
+	int PressDuration; // The delay between the up-event and down-event of each keystroke.
 	int MouseDelay;  // negative values may be used as special flags.
 	UCHAR DefaultMouseSpeed;
 	UCHAR CoordMode; // Bitwise collection of flags.
@@ -328,6 +329,7 @@ inline void global_init(global_struct *gp)
 	gp->WinDelay = 100;  // AutoIt3's default is 250, which seems a little too high nowadays.
 	gp->ControlDelay = 20;
 	gp->KeyDelay = 10;   // AutoIt3's default.
+	gp->PressDuration = -1;
 	gp->MouseDelay = 10;
 	// AutoIt3's default:
 	#define DEFAULT_MOUSE_SPEED 2

@@ -16,6 +16,7 @@ GNU General Public License for more details.
 
 #include "stdafx.h" // pre-compiled headers
 #include <olectl.h> // for OleLoadPicture()
+#include <Gdiplus.h> // Used by LoadPicture().
 #include "util.h"
 
 
@@ -739,80 +740,146 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight)
 // proportional to the other dimension's size so that the original aspect ratio is retained.
 // Returns NULL on failure.
 {
-	HANDLE hfile = CreateFile(aFilespec, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
-	if (hfile == INVALID_HANDLE_VALUE)
-		return NULL;
-	DWORD size = GetFileSize(hfile, NULL);
-	HGLOBAL hglobal = GlobalAlloc(GMEM_MOVEABLE, size);
-	if (!hglobal)
+	HBITMAP hbitmap = NULL;
+	IPicture *pic = NULL;
+	HINSTANCE hinstGDI = NULL;
+
+	// Find out the file type.  This method is not foolproof since all it does is look at the
+	// file's extension, not its contents.  However, it doesn't need to be 100% accurate because
+	// its only purpose is to detect whether the higher-overhead calls to GdiPlus can be avoided.
+	bool file_type_is_always_supported = false; // Assume false in the absence of a dot/period in the filename.
+	char *file_ext = strrchr(aFilespec, '.');
+	if (file_ext)
 	{
+		++file_ext;
+		file_type_is_always_supported = !(stricmp(file_ext, "jpg") && stricmp(file_ext, "jpeg")
+			&& stricmp(file_ext, "gif") && stricmp(file_ext, "bmp"));
+	}
+
+	// If it is suspected that the file type isn't supported, try to use GdiPlus if available.
+	// If it's not available, fall back to the old method in case the filename doesn't properly
+	// reflect its true contents (i.e. in case it really is a JPG/GIF/BMP internally).
+	// If the below LoadLibrary() succeeds, either the OS is XP+ or the GdiPlus extensions have been
+	// installed on an older OS:
+	if (!file_type_is_always_supported && (hinstGDI = LoadLibrary("GdiPlus.dll"))) // Assign. Relies on short-circuit boolean.
+	{
+		// LPVOID and "int" are used to avoid compiler errors caused by... namespace issues?
+		typedef int (WINAPI *GdiplusStartupType)(ULONG_PTR*, LPVOID, LPVOID);
+		typedef VOID (WINAPI *GdiplusShutdownType)(ULONG_PTR);
+		typedef int (WINGDIPAPI *GdipCreateBitmapFromFileType)(LPVOID, LPVOID);
+		typedef int (WINGDIPAPI *GdipCreateHBITMAPFromBitmapType)(LPVOID, LPVOID, DWORD);
+		typedef int (WINGDIPAPI *GdipDisposeImageType)(LPVOID);
+		GdiplusStartupType DynGdiplusStartup = (GdiplusStartupType)GetProcAddress(hinstGDI, "GdiplusStartup");
+  		GdiplusShutdownType DynGdiplusShutdown = (GdiplusShutdownType)GetProcAddress(hinstGDI, "GdiplusShutdown");
+  		GdipCreateBitmapFromFileType DynGdipCreateBitmapFromFile = (GdipCreateBitmapFromFileType)GetProcAddress(hinstGDI, "GdipCreateBitmapFromFile");
+  		GdipCreateHBITMAPFromBitmapType DynGdipCreateHBITMAPFromBitmap = (GdipCreateHBITMAPFromBitmapType)GetProcAddress(hinstGDI, "GdipCreateHBITMAPFromBitmap");
+  		GdipDisposeImageType DynGdipDisposeImage = (GdipDisposeImageType)GetProcAddress(hinstGDI, "GdipDisposeImage");
+
+		ULONG_PTR token;
+		Gdiplus::GdiplusStartupInput gdi_input;
+		Gdiplus::GpBitmap *pgdi_bitmap;
+		if (DynGdiplusStartup && DynGdiplusStartup(&token, &gdi_input, NULL) == Gdiplus::Ok)
+		{
+			wchar_t filespec_wide[MAX_PATH];
+			mbstowcs(filespec_wide, aFilespec, sizeof(filespec_wide));
+			if (DynGdipCreateBitmapFromFile(filespec_wide, &pgdi_bitmap) == Gdiplus::Ok)
+			{
+				if (DynGdipCreateHBITMAPFromBitmap(pgdi_bitmap, &hbitmap, CLR_DEFAULT) != Gdiplus::Ok)
+					hbitmap = NULL; // Set to NULL to be sure.
+				DynGdipDisposeImage(pgdi_bitmap); // This was tested once to make sure it really returns Gdiplus::Ok.
+			}
+			// The current thought is that shutting it down every time conserves resources.  If so, it
+			// seems justified since it is probably called infrequently by most scripts:
+			DynGdiplusShutdown(token);
+		}
+		FreeLibrary(hinstGDI);
+	}
+
+	else // Using old picture loading method.
+	{
+		HANDLE hfile = CreateFile(aFilespec, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
+		if (hfile == INVALID_HANDLE_VALUE)
+			return NULL;
+		DWORD size = GetFileSize(hfile, NULL);
+		HGLOBAL hglobal = GlobalAlloc(GMEM_MOVEABLE, size);
+		if (!hglobal)
+		{
+			CloseHandle(hfile);
+			return NULL;
+		}
+		LPVOID hlocked = GlobalLock(hglobal);
+		if (!hlocked)
+		{
+			CloseHandle(hfile);
+			GlobalFree(hglobal);
+			return NULL;
+		}
+		// Read the file into memory:
+		ReadFile(hfile, hlocked, size, &size, NULL);
+		GlobalUnlock(hglobal);
 		CloseHandle(hfile);
-		return NULL;
-	}
-	LPVOID hlocked = GlobalLock(hglobal);
-	if (!hlocked)
-	{
-		CloseHandle(hfile);
+		LPSTREAM stream;
+		if (FAILED(CreateStreamOnHGlobal(hglobal, FALSE, &stream)) || !stream)  // Relies on short-circuit boolean order.
+		{
+			GlobalFree(hglobal);
+			return NULL;
+		}
+		// Specify TRUE to have it do the GlobalFree() for us.  But since the call might fail, it seems best
+		// to free the mem ourselves to avoid uncertainy over what it does on failure:
+		if (FAILED(OleLoadPicture(stream, 0, FALSE, IID_IPicture, (void **)&pic)))
+			pic = NULL;
+		stream->Release();
 		GlobalFree(hglobal);
-		return NULL;
+		if (!pic)
+			return NULL;
+		pic->get_Handle((OLE_HANDLE *)&hbitmap);
+		// Above: MSDN: "The caller is responsible for this handle upon successful return. The variable is set
+		// to NULL on failure."
+		if (!hbitmap)
+		{
+			pic->Release();
+			return NULL;
+		}
+		// Don't pic->Release() yet because that will also destroy/invalidate hbitmap handle.
 	}
-	// Read the file into memory:
-	ReadFile(hfile, hlocked, size, &size, NULL);
-	GlobalUnlock(hglobal);
-	CloseHandle(hfile);
-	LPSTREAM stream;
-	if (FAILED(CreateStreamOnHGlobal(hglobal, FALSE, &stream)) || !stream)  // Relies on short-circuit boolean order.
-	{
-		GlobalFree(hglobal);
-		return NULL;
-	}
-	IPicture *pic;
-	// Specify TRUE to have it do the GlobalFree() for us.  But since the call might fail, it seems best
-	// to free the mem ourselves to avoid uncertainy over what it does on failure:
-	if (FAILED(OleLoadPicture(stream, 0, FALSE, IID_IPicture, (void **)&pic)))
-		pic = NULL;
-	stream->Release();
-	GlobalFree(hglobal);
-	if (!pic)
-		return NULL;
-	HBITMAP hbitmap;
-	pic->get_Handle((OLE_HANDLE *)&hbitmap);
-	// Above: MSDN: "The caller is responsible for this handle upon successful return. The variable is set
-	// to NULL on failure."
-	if (!hbitmap)
-	{
-		pic->Release();
-		return NULL;
-	}
+	BITMAP bitmap;
 	// Adjust things if "keep aspect ratio" is in effect:
-	long hm_width, hm_height;
 	if (aHeight == -1 && aWidth > 0)
 	{
 		// Caller wants aHeight calculated based on the specified aWidth (keep aspect ratio).
-		pic->get_Width(&hm_width);
-		pic->get_Height(&hm_height);
-		if (hm_width) // Avoid any chance of divide-by-zero.
-			aHeight = (int)(((double)hm_height / hm_width) * aWidth + .5); // Round.
+		GetObject(hbitmap, sizeof(BITMAP), &bitmap);
+		if (bitmap.bmWidth) // Avoid any chance of divide-by-zero.
+			aHeight = (int)(((double)bitmap.bmHeight / bitmap.bmWidth) * aWidth + .5); // Round.
 	}
 	else if (aWidth == -1 && aHeight > 0)
 	{
 		// Caller wants aWidth calculated based on the specified aHeight (keep aspect ratio).
-		pic->get_Width(&hm_width);
-		pic->get_Height(&hm_height);
-		if (hm_height) // Avoid any chance of divide-by-zero.
-			aWidth = (int)(((double)hm_width / hm_height) * aHeight + .5); // Round.
+		GetObject(hbitmap, sizeof(BITMAP), &bitmap);
+		if (bitmap.bmHeight) // Avoid any chance of divide-by-zero.
+			aWidth = (int)(((double)bitmap.bmWidth / bitmap.bmHeight) * aHeight + .5); // Round.
 	}
-	// The below statement is confirmed by having tested that DeleteObject(hbitmap) fails
-	// if called after pic->Release():
-	// "Copy the image. Necessary, because upon pic's release the handle is destroyed."
-	// MSDN: CopyImage(): "[If either width or height] is zero, then the returned image will have the
-	// same width/height as the original."
-	// Note also that CopyImage() seems to provide better scaling quality than using MoveWindow()
-	// (followed by redrawing the parent window) on the static control that contains it:
-	HBITMAP hbitmap_new = (HBITMAP)CopyImage(hbitmap, IMAGE_BITMAP, aWidth, aHeight
-		, (aWidth || aHeight) ? 0 : LR_COPYRETURNORG); // Produce original size if no scaling is needed.
-	pic->Release();
-	DeleteObject(hbitmap);
+	HBITMAP hbitmap_new; // To hold the scaled image (if scaling is needed).
+	if (hinstGDI) // Using GDI+ method.
+	{
+		if (!aWidth && !aHeight) // No scaling needed.
+			return hbitmap;
+		hbitmap_new = (HBITMAP)CopyImage(hbitmap, IMAGE_BITMAP, aWidth, aHeight, 0);
+		DeleteObject(hbitmap); // Delete the original to avoid cascading resource usage.
+	}
+	else // Using old method.
+	{
+		// The below statement is confirmed by having tested that DeleteObject(hbitmap) fails
+		// if called after pic->Release():
+		// "Copy the image. Necessary, because upon pic's release the handle is destroyed."
+		// MSDN: CopyImage(): "[If either width or height] is zero, then the returned image will have the
+		// same width/height as the original."
+		// Note also that CopyImage() seems to provide better scaling quality than using MoveWindow()
+		// (followed by redrawing the parent window) on the static control that contains it:
+		hbitmap_new = (HBITMAP)CopyImage(hbitmap, IMAGE_BITMAP, aWidth, aHeight
+			, (aWidth || aHeight) ? 0 : LR_COPYRETURNORG); // Produce original size if no scaling is needed.
+		pic->Release();
+		// No need to call DeleteObject(hbitmap), see above.
+	}
 	return hbitmap_new;
 }
 

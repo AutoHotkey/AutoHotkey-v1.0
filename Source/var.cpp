@@ -473,6 +473,7 @@ VarSizeType Var::Get(char *aBuf)
 	// some point in process prior to when it can be used):
 	case VAR_TAB:
 	case VAR_SPACE: if (!aBuf) return g_script.GetSpace(mType); else aBuf += g_script.GetSpace(mType, aBuf); break;
+	case VAR_AHKVERSION: if (!aBuf) return g_script.GetAhkVersion(); else aBuf += g_script.GetAhkVersion(aBuf); break;
 
 	case VAR_MMMM:   if (!aBuf) return g_script.GetMMMM(); else aBuf += g_script.GetMMMM(aBuf); break;
 	case VAR_MMM:  if (!aBuf) return g_script.GetMMM(); else aBuf += g_script.GetMMM(aBuf); break;

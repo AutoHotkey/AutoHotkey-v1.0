@@ -33,6 +33,7 @@ HWND g_hWndEdit = NULL;
 HWND g_hWndSplash = NULL;
 HFONT g_hFontSplash = NULL;  // So that font can be deleted on program close.
 HACCEL g_hAccelTable = NULL;
+WNDPROC g_TabClassProc = NULL;
 
 modLR_type g_modifiersLR_logical = 0;
 modLR_type g_modifiersLR_logical_non_ignored = 0;
@@ -415,7 +416,7 @@ Action g_act[] =
 	, {"FileCopy", 2, 3, {3, 0}} // source, dest, flag
 	, {"FileMove", 2, 3, {3, 0}} // source, dest, flag
 	, {"FileCopyDir", 2, 3, {3, 0}} // source, dest, flag
-	, {"FileMoveDir", 2, 3, {3, 0}} // source, dest, flag
+	, {"FileMoveDir", 2, 3, NULL} // source, dest, flag (which can be non-numeric in this case)
 	, {"FileCreateDir", 1, 1, NULL} // dir name
 	, {"FileRemoveDir", 1, 2, {2, 0}} // dir name, flag
 
@@ -443,7 +444,7 @@ Action g_act[] =
 	, {"RegWrite", 0, 5, NULL} // ValueType, RegKey, RegSubKey, ValueName, Value (set to blank if omitted?)
 	, {"RegDelete", 0, 3, NULL} // RegKey, RegSubKey, ValueName
 
-	, {"SetKeyDelay", 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)
+	, {"SetKeyDelay", 0, 2, {1, 2, 0}} // Delay in ms (numeric, negative allowed), PressDuration
 	, {"SetMouseDelay", 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)
 	, {"SetWinDelay", 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)
 	, {"SetControlDelay", 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)

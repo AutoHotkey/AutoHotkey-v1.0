@@ -387,7 +387,17 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 		// because these keys being put back down match the physical pressing of those same keys by the
 		// user, and we want such modifiers to be taken into account for the purpose of deciding whether
 		// other hotkeys should fire (or the same one again if auto-repeating):
-		SetModifierLRStateSpecific(keys_to_press_down, modifiersLR_current, KEYDOWN, aTargetWindow);
+		if (keys_to_press_down)
+		{
+			SetModifierLRStateSpecific(keys_to_press_down, modifiersLR_current, KEYDOWN, aTargetWindow);
+			// Modifiers were changed by the above.
+			// Since there normally isn't a delay between a change in modifiers and the first keystroke,
+			// if a PressDuration is in effect, also do it here to improve reliability (I have observed
+			// cases where modifiers need to be left alone for a short time in order for the keystrokes
+			// that follow to be be modified by the intended set of modifiers.
+			DoKeyDelay(g.PressDuration);
+		}
+
 		if (g_KeybdHook)
 		{
 			// Ensure that g_modifiersLR_logical_non_ignored does not contain any down-modifiers
@@ -455,7 +465,9 @@ int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, modLR_type aModifiers
 	// old method of sending the VK directly (which probably has no effect 99% of the time):
 	if (VK_IS_MOUSE(aVK) && !aTargetWindow)
 	{
-		SetModifierState(modifiers_specified, GetModifierLRState(), aTargetWindow, KEY_IGNORE);
+		if (SetModifierState(modifiers_specified, GetModifierLRState(), aTargetWindow, KEY_IGNORE))
+			// Modifiers were changed by the above.
+			DoKeyDelay(g.PressDuration); // See comments in SendKeys() about why this is done.
 		Line::MouseClick(aVK, COORD_UNSPECIFIED, COORD_UNSPECIFIED, aRepeatCount); // It will do its own MouseDelay.
 	}
 	else
@@ -477,8 +489,12 @@ int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, modLR_type aModifiers
 			// modifier keys just for it, since most of the time that is unnecessary and in
 			// some cases, the extra generated keystrokes would cause complications/side-effects.
 			if (!aKeyAsModifiersLR)
+			{
 				// See keyboard.h for explantion of KEY_IGNORE:
-				SetModifierState(modifiers_specified, GetModifierLRState(), aTargetWindow, KEY_IGNORE);
+				if (SetModifierState(modifiers_specified, GetModifierLRState(), aTargetWindow, KEY_IGNORE))
+					// Modifiers were changed by the above.
+					DoKeyDelay(g.PressDuration); // See comments in SendKeys() about why this is done.
+			}
 			KeyEvent(aEventType, aVK, aSC, aTargetWindow, true);
 		}
 	}
@@ -498,6 +514,7 @@ int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, modLR_type aModifiers
 	// changed the value of the modifiers (i.e. aVk/aSC is a modifier).  Admittedly,
 	// that would be pretty strange but it seems the most correct thing to do.
 	if (!aKeyAsModifiersLR) // See prior use of this var for explanation.
+	{
 		// It seems best not to use KEY_IGNORE_ALL_EXCEPT_MODIFIER in this case, though there's
 		// a slight chance that a script or two might be broken by not doing so.  The chance
 		// is very slight because the only thing KEY_IGNORE_ALL_EXCEPT_MODIFIER would allow is
@@ -516,7 +533,11 @@ int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, modLR_type aModifiers
 		//    during the course of a SendKeys() operation.  Since the persistent modifiers were
 		//    (by definition) already in effect prior to the Send, putting them back down for the
 		//    purpose of firing hook hotkeys does not seem unreasonable, and may in fact add value:
-		SetModifierLRState(aModifiersLRPersistent, GetModifierLRState(), aTargetWindow);
+		if (SetModifierLRState(aModifiersLRPersistent, GetModifierLRState(), aTargetWindow))
+			// Modifiers were changed by the above.
+			DoKeyDelay(g.PressDuration); // See comments in SendKeys() about why this is done.
+	}
+
 	return aRepeatCount;
 }
 
@@ -590,7 +611,8 @@ int SendKeySpecial(char aChar, mod_type aModifiers, modLR_type aModifiersLRPersi
 			DoKeyDelay();
 		}
 		// See notes in SendKey():
-		SetModifierLRState(aModifiersLRPersistent, GetModifierLRState(), aTargetWindow);
+		if (SetModifierLRState(aModifiersLRPersistent, GetModifierLRState(), aTargetWindow))
+			DoKeyDelay(g.PressDuration); // See comments in SendKeys() about why this is done.
 		return aRepeatCount;
 	}
 
@@ -687,7 +709,8 @@ int SendKeySpecial(char aChar, mod_type aModifiers, modLR_type aModifiersLRPersi
 		DoKeyDelay();
 	}
 	// See notes in SendKey():
-	SetModifierLRState(aModifiersLRPersistent, GetModifierLRState(), aTargetWindow);
+	if (SetModifierLRState(aModifiersLRPersistent, GetModifierLRState(), aTargetWindow))
+		DoKeyDelay(g.PressDuration); // See comments in SendKeys() about why this is done.
 	return aRepeatCount;
 }
 
@@ -718,6 +741,7 @@ int SendASC(char *aAscii, HWND aTargetWindow)
 	modLR_type modifiersLR_to_release = GetModifierLRState()
 		& (MOD_LCONTROL | MOD_RCONTROL | MOD_LSHIFT | MOD_RSHIFT);
 	if (modifiersLR_to_release)
+	{
 		// Note: It seems best never to put them back down, because the act of doing so
 		// may do more harm than good (i.e. the keystrokes may caused unexpected
 		// side-effects.  Specify KEY_IGNORE so that this action does not affect the
@@ -726,6 +750,8 @@ int SendASC(char *aAscii, HWND aTargetWindow)
 		// (for when the user is holding down that suffix to auto-repeat it --
 		// see keyboard.h for details):
 		SetModifierLRStateSpecific(modifiersLR_to_release, GetModifierLRState(), KEYUP, aTargetWindow, KEY_IGNORE);
+		DoKeyDelay(g.PressDuration); // See comments in SendKeys() about why this is done.
+	}
 
 	int keys_sent = 0;  // Track this value and return it to the caller.
 
@@ -774,7 +800,9 @@ int SendChar(char aChar, mod_type aModifiers, KeyEventTypes aEventType, HWND aTa
 		aModifiers |= MOD_ALT;
 
 	// It's the caller's responsibility to restore the modifiers if it needs to:
-	SetModifierState(aModifiers, GetModifierLRState(), aTargetWindow, KEY_IGNORE);
+	if (SetModifierState(aModifiers, GetModifierLRState(), aTargetWindow, KEY_IGNORE))
+		// Modifiers were changed by the above.
+		DoKeyDelay(g.PressDuration); // See comments in SendKeys() about why this is done.
 	KeyEvent(aEventType, LOBYTE(mod_plus_vk), 0, aTargetWindow, true);
 	return 1;
 }
@@ -912,6 +940,11 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 		LPARAM lParam = (LPARAM)(aSC << 16);
 		if (aEventType != KEYUP)  // i.e. always do it for KEYDOWNANDUP
 			PostMessage(aTargetWindow, WM_KEYDOWN, aVK, lParam | 0x00000001);
+		// The press-duration delay is done only when this is a down-and-up because otherwise,
+		// the normal g.KeyDelay will be in effect.  In other words, it seems undesirable in
+		// most cases to do both delays for only "one half" of a keystroke:
+		if (aDoKeyDelay && aEventType == KEYDOWNANDUP)
+			DoKeyDelay(g.PressDuration);
 		if (aEventType != KEYDOWN)  // i.e. always do it for KEYDOWNANDUP
 			PostMessage(aTargetWindow, WM_KEYUP, aVK, lParam | 0xC0000001);
 	}
@@ -961,6 +994,11 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 				UpdateKeyEventHistory(false);
 			}
 		}
+		// The press-duration delay is done only when this is a down-and-up because otherwise,
+		// the normal g.KeyDelay will be in effect.  In other words, it seems undesirable in
+		// most cases to do both delays for only "one half" of a keystroke:
+		if (aDoKeyDelay && aEventType == KEYDOWNANDUP)
+			DoKeyDelay(g.PressDuration);
 		if (aEventType != KEYDOWN)  // i.e. always do it for KEYDOWNANDUP
 		{
 			keybd_event(aVK, LOBYTE(aSC), (HIBYTE(aSC) ? KEYEVENTF_EXTENDEDKEY : 0)
@@ -1054,7 +1092,7 @@ void SetKeyState (vk_type vk, int aKeyUp)
 
 
 modLR_type SetModifierState(mod_type aModifiersNew, modLR_type aModifiersLRnow, HWND aTargetWindow, DWORD aExtraInfo)
-// Returns the new modifierLR state (i.e. the state after the action here has occurred).
+// Returns the set of modifiers that *changed* (i.e. went from down to up or vice versa).
 {
 	// Can't do this because the two values aren't compatible (one is LR and the other neutral):
 	//if (aModifiersNew == aModifiersLRnow) return aModifiersLRnow
@@ -1088,7 +1126,7 @@ MsgBox(error_text);
 		modifiersLRnew |= MOD_LSHIFT;
 
 	if (modifiersLRnew == aModifiersLRnow)  // They're already in the right state.
-		return modifiersLRnew;
+		return 0;
 	// Otherwise, change the state:
 	return SetModifierLRState(modifiersLRnew, aModifiersLRnow, aTargetWindow, aExtraInfo);
 }
@@ -1096,6 +1134,7 @@ MsgBox(error_text);
 
 
 modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLRnow, HWND aTargetWindow, DWORD aExtraInfo)
+// Returns the set of modifiers that *changed* (i.e. went from down to up or vice versa).
 // Note that by design and as documented for ControlSend, aTargetWindow is not used as the target for the
 // various calls to KeyEvent() here.  It is only used as a workaround for the GUI window issue described
 // at the bottom.
@@ -1124,7 +1163,7 @@ FileAppend("c:\\templog.txt", buf);
 	// is under load.
 
 	if (aModifiersLRnow == modifiersLRnew) // They're already in the right state, so avoid doing all the checks.
-		return aModifiersLRnow;
+		return 0;
 
 	if ((aModifiersLRnow & MOD_LCONTROL) && !(modifiersLRnew & MOD_LCONTROL))
 		KeyEvent(KEYUP, VK_LCONTROL, 0, NULL, false, aExtraInfo);
@@ -1216,7 +1255,7 @@ FileAppend("c:\\templog.txt", buf);
 			SLEEP_WITHOUT_INTERRUPTION(-1)
 	}
 
-	return modifiersLRnew;
+	return aModifiersLRnow ^ modifiersLRnew; // Calculate the set of modifiers that changed.
 }
 
 

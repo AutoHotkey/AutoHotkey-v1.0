@@ -2902,16 +2902,24 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 			return output_var->Assign();
 
 	case WINGET_CMD_PID:
+	case WINGET_CMD_PROCESSNAME:
 		if (!target_window_determined)
 			target_window = WinExist(aTitle, aText, aExcludeTitle, aExcludeText);
 		if (target_window)
 		{
 			DWORD pid;
 			GetWindowThreadProcessId(target_window, &pid);
-			return output_var->Assign(pid);
+			if (cmd == WINGET_CMD_PID)
+				return output_var->Assign(pid);
+			// Otherwise, get the full path and name of the executable that owns this window.
+			char pid_as_string[32];
+			_ultoa(pid, pid_as_string, 10);
+			char process_name[MAX_PATH];
+			if (ProcessExist(pid_as_string, process_name))
+				return output_var->Assign(process_name);
 		}
-		else
-			return output_var->Assign();
+		// If above didn't return:
+		return output_var->Assign();
 
 	case WINGET_CMD_COUNT:
 		if (target_window_determined) // target_window (if non-NULL) represents exactly 1 window in this case.
@@ -6398,7 +6406,7 @@ ResultType Line::Drive(char *aCmd, char *aValue, char *aValue2) // aValue not aV
 			error = mciSendString(mci_string, NULL, 0, NULL); // Open or close the tray.
 			return g_ErrorLevel->Assign(error ? ERRORLEVEL_ERROR : ERRORLEVEL_NONE); // Indicate success or failure.
 		}
-		snprintf(mci_string, sizeof(mci_string), "open %s type cdaudio alias cd wait", aValue);
+		snprintf(mci_string, sizeof(mci_string), "open %s type cdaudio alias cd wait shareable", aValue);
 		if (mciSendString(mci_string, NULL, 0, NULL)) // Error.
 			return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
 		snprintf(mci_string, sizeof(mci_string), "set cd door %s wait", ATOI(aValue2) == 1 ? "closed" : "open");
@@ -6569,6 +6577,40 @@ ResultType Line::DriveGet(char *aCmd, char *aValue)
 		}
 		break;
 	}
+
+	case DRIVEGET_CMD_STATUSCD:
+		// Don't do DRIVE_SET_PATH in this case since trailing backslash might prevent it from
+		// working on some OSes.
+		// It seems best not to do the below check since:
+		// 1) aValue usually lacks a trailing backslash so that it will work correctly with "open c: type cdaudio".
+		//    That lack might prevent DriveGetType() from working on some OSes.
+		// 2) It's conceivable that tray eject/retract might work on certain types of drives even though
+		//    they aren't of type DRIVE_CDROM.
+		// 3) One or both of the calls to mciSendString() will simply fail if the drive isn't of the right type.
+		//if (GetDriveType(aValue) != DRIVE_CDROM) // Testing reveals that the below method does not work on Network CD/DVD drives.
+		//	return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+		char mci_string[256], status[128];
+		// Note that there is apparently no way to determine via mciSendString() whether the tray is ejected
+		// or not, since "open" is returned even when the tray is closed but there is no media.
+		if (!*aValue) // When drive is omitted, operate upon default CD/DVD drive.
+		{
+			if (mciSendString("status cdaudio mode", status, sizeof(status), NULL))
+				return output_var->Assign(); // Let ErrorLevel tell the story.
+		}
+		else // Operate upon a specific drive letter.
+		{
+			snprintf(mci_string, sizeof(mci_string), "open %s type cdaudio alias cd wait shareable", aValue);
+			if (mciSendString(mci_string, NULL, 0, NULL)) // Error.
+				return output_var->Assign(); // Let ErrorLevel tell the story.
+			MCIERROR error = mciSendString("status cd mode", status, sizeof(status), NULL);
+			mciSendString("close cd wait", NULL, 0, NULL);
+			if (error)
+				return output_var->Assign(); // Let ErrorLevel tell the story.
+		}
+		// Otherwise, success:
+		output_var->Assign(status);
+		break;
+
 	} // switch()
 
 	// Note that ControlDelay is not done for the Get type commands, because it seems unnecessary.

@@ -297,12 +297,13 @@ inline bool IsTitleMatch(HWND aWnd, char *aHaystack, char *aNeedle, char *aExclu
 // PROCESS ROUTINES
 ////////////////////
 
-DWORD ProcessExist9x2000 (char *aProcess);
-DWORD ProcessExistNT4(char *aProcess);
+DWORD ProcessExist9x2000(char *aProcess, char *aProcessName);
+DWORD ProcessExistNT4(char *aProcess, char *aProcessName);
 
-inline DWORD ProcessExist(char *aProcess)
+inline DWORD ProcessExist(char *aProcess, char *aProcessName = NULL)
 {
-	return g_os.IsWinNT4() ? ProcessExistNT4(aProcess) : ProcessExist9x2000(aProcess);
+	return g_os.IsWinNT4() ? ProcessExistNT4(aProcess, aProcessName)
+		: ProcessExist9x2000(aProcess, aProcessName);
 }
 
 #endif

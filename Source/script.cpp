@@ -3127,8 +3127,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		if (*LINE_RAW_ARG3 && !line->ArgHasDeref(3))
 		{
 			if (strlen(LINE_RAW_ARG3) > 1 || *LINE_RAW_ARG3 < '0' || *LINE_RAW_ARG3 > '3')
-				return ScriptError("Parameter #3 must be either blank, 0, 1, 2, 3, or a variable reference."
-					, LINE_RAW_ARG3);
+				if (aActionType != ACT_FILEMOVEDIR || toupper(*LINE_RAW_ARG3) != 'R')
+					return ScriptError("Parameter #3 is not valid.", LINE_RAW_ARG3);
 		}
 		if (aActionType == ACT_FILEINSTALL)
 		{
@@ -3472,6 +3472,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			// No action for these since they have a varying number of optional params:
 			//case GUI_CMD_SHOW:
 			//case GUI_CMD_FONT:
+			//case GUI_CMD_TAB:
 			//case GUI_CMD_COLOR: No load-time param validation to avoid larger EXE size.
 			}
 		}
@@ -3538,7 +3539,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			case GUICONTROL_CMD_INVALID:
 				return ScriptError(ERR_GUICONTROLCOMMAND, LINE_RAW_ARG1);
 			case GUICONTROL_CMD_CONTENTS:
-				break; // Do nothing for the above commands since Param3 is options.
+			case GUICONTROL_CMD_TEXT:
+				break; // Do nothing for the above commands since Param3 is optional.
 			case GUICONTROL_CMD_MOVE:
 			case GUICONTROL_CMD_CHOOSE:
 			case GUICONTROL_CMD_CHOOSESTRING:
@@ -3598,7 +3600,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			DriveGetCmds drive_get_cmd = line->ConvertDriveGetCmd(LINE_RAW_ARG2);
 			if (!drive_get_cmd)
 				return ScriptError(ERR_DRIVEGETCOMMAND, LINE_RAW_ARG2);
-			if (drive_get_cmd != DRIVEGET_CMD_LIST && !*LINE_RAW_ARG3)
+			if (drive_get_cmd != DRIVEGET_CMD_LIST && drive_get_cmd != DRIVEGET_CMD_STATUSCD && !*LINE_RAW_ARG3)
 				return ScriptError("Parameter #3 must not be blank in this case.");
 			if (drive_get_cmd != DRIVEGET_CMD_SETLABEL && (line->mArgc < 1 || line->mArg[0].type == ARG_TYPE_NORMAL))
 				// The output variable has been omitted.
@@ -4160,6 +4162,7 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, Var *aVarPrev)
 		else if (!stricmp(new_name, "A_TimeIdlePhysical")) var_type = VAR_TIMEIDLEPHYSICAL;
 		else if (!stricmp(new_name, "A_Space")) var_type = VAR_SPACE;
 		else if (!stricmp(new_name, "A_Tab")) var_type = VAR_TAB;
+		else if (!stricmp(new_name, "A_AhkVersion")) var_type = VAR_AHKVERSION;
 	}
 
 	Var *the_new_var = new Var(new_name, var_type);
@@ -7230,7 +7233,18 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	case ACT_FILECOPYDIR:
 		return g_ErrorLevel->Assign(Util_CopyDir(ARG1, ARG2, *ARG3 == '1' && !*(ARG3 + 1)) ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
 	case ACT_FILEMOVEDIR:
+		if (toupper(*ARG3) == 'R')
+		{
+			// Perform a simple rename instead, which prevents the operation from being only partially
+			// complete if the source directory is in use (due to being a working dir for a currently
+			// running process, or containing a file that is being written to).  In other words,
+			// the operation will be "all or none":
+			g_ErrorLevel->Assign(MoveFile(ARG1, ARG2) ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
+			return OK;
+		}
+		// Otherwise:
 		return g_ErrorLevel->Assign(Util_MoveDir(ARG1, ARG2, *ARG3 == '1' && !*(ARG3 + 1)) ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
+
 	case ACT_FILECREATEDIR:
 		return FileCreateDir(ARG1);
 	case ACT_FILEREMOVEDIR:
@@ -7760,8 +7774,13 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 
 	case ACT_SETCONTROLDELAY: g.ControlDelay = ATOI(ARG1); return OK;
 	case ACT_SETWINDELAY: g.WinDelay = ATOI(ARG1); return OK;
-	case ACT_SETKEYDELAY: g.KeyDelay = ATOI(ARG1); return OK;
 	case ACT_SETMOUSEDELAY: g.MouseDelay = ATOI(ARG1); return OK;
+	case ACT_SETKEYDELAY:
+		if (*ARG1)
+			g.KeyDelay = ATOI(ARG1);
+		if (*ARG2)
+			g.PressDuration = ATOI(ARG2);
+		return OK;
 
 	case ACT_SETBATCHLINES:
 		// This below ensures that IntervalBeforeRest and LinesPerCycle aren't both in effect simultaneously

@@ -202,6 +202,8 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 	int priority;
 	Hotstring *hs;
 	GuiType *pgui;   // This is just a temp variable and should not be referred to once the below has been determined.
+	HWND focused_control, focused_parent;
+	GuiControlType *pcontrol, *ptab_control;
 	UINT gui_index;  // Don't use pgui because pointer can become invalid if ExecUntil() executes "Gui Destroy".
 	bool *pgui_label_is_running;
 	Label *gui_label;
@@ -352,13 +354,73 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 		// performance, since all messages must come through this bottleneck.
 		if (GuiType::sObjectCount && msg.hwnd && msg.hwnd != g_hWnd && msg.message != AHK_GUI_ACTION)
 		{
+			// Relies heavily on short-circuit boolean order:
+			if (   msg.message == WM_KEYDOWN
+				&& (msg.wParam == VK_NEXT || msg.wParam == VK_PRIOR || msg.wParam == VK_TAB
+					|| msg.wParam == VK_LEFT || msg.wParam == VK_RIGHT)
+				&& (focused_control = GetFocus()) && (focused_parent = GetParent(focused_control))
+				&& (pgui = GuiType::FindGui(focused_parent)) && pgui->mTabControlCount
+				&& (pcontrol = pgui->FindControl(focused_control))   )
+			{
+				ptab_control = NULL; // Set default.
+				if (pcontrol->type == GUI_CONTROL_TAB) // The focused control is a tab control itself.
+				{
+					ptab_control = pcontrol;
+					// For the below, note that Alt-left and Alt-right are automatically excluded,
+					// as desired, since any key modified only by alt would be WM_SYSKEYDOWN vs. WM_KEYDOWN.
+					if (msg.wParam == VK_LEFT || msg.wParam == VK_RIGHT)
+					{
+						pgui->SelectAdjacentTab(*ptab_control, msg.wParam == VK_RIGHT, false, false);
+						// Pass false for both the above since that's the whole point of having arrow
+						// keys handled separately from the below: Focus should stay on the tabs
+						// rather than jumping to the first control of the tab, it focus should not
+						// wrap around to the beginning or end (to conform to standard behavior for
+						// arrow keys).
+						continue; // Suppress this key even if the above failed (probably impossible in this case).
+					}
+					//else fall through to the next part.
+				}
+				// If focus is in a multiline edit control, don't act upon Control-Tab (and
+				// shift-control-tab -> for simplicity & consistency) since Control-Tab is a special
+				// keystroke that inserts a literal tab in the edit control:
+				if (   (GetKeyState(VK_CONTROL) & 0x8000) // Even if other modifiers are down, it still qualifies.
+					&& (msg.wParam != VK_TAB || pcontrol->type != GUI_CONTROL_EDIT
+						|| !(GetWindowLong(pcontrol->hwnd, GWL_STYLE) & ES_MULTILINE))   )
+				{
+					// If ptab_control wasn't determined above, check if focused control is owned by a tab control:
+					if (!ptab_control && !(ptab_control = pgui->FindTabControl(pcontrol->tab_control_index))   )
+						// Fall back to the first tab control (for consistency & simplicty, seems best
+						// to always use the first rather than something fancier such as "nearest in z-order".
+						ptab_control = pgui->FindTabControl(0);
+					if (ptab_control)
+					{
+						pgui->SelectAdjacentTab(*ptab_control
+							, msg.wParam == VK_NEXT || (msg.wParam == VK_TAB && !(GetKeyState(VK_SHIFT) & 0x8000))
+							, true, true);
+						// Update to the below: Must suppress the tab key at least, to prevent it
+						// from navigating *and* changing the tab.  And since this one is suppressed,
+						// might as well suppress the others for consistency.
+						// Older: Since WM_KEYUP is not handled/suppressed here, it seems best not to
+						// suppress this WM_KEYDOWN either (it should do nothing in this case
+						// anyway, but for balance this seems best): Fall through to the next section.
+						continue;
+					}
+					//else fall through to the below.
+				}
+				//else fall through to the below.
+			}
 			for (i = 0; i < MAX_GUI_WINDOWS; ++i)
+			{
 				// Note: indications are that IsDialogMessage() should not be called with NULL as
 				// its first parameter (perhaps as an attempt to get allow dialogs owned by our
 				// thread to be handled at once). Although it might work on some versions of Windows,
-				// it's undocumented and shouldn't be relied on:
+				// it's undocumented and shouldn't be relied on.
+				// Also, can't call IsDialogMessage against msg.hwnd because that is not a complete
+				// solution: at the very least, tab key navigation will not work in GUI windows.
+				// There are probably other side-effects as well.
 				if (g_gui[i] && g_gui[i]->mHwnd && IsDialogMessage(g_gui[i]->mHwnd, &msg))
 					break;
+			}
 			if (i < MAX_GUI_WINDOWS) // This message was handled by IsDialogMessage() above.
 				continue; // Continue with the main message loop.
 		}

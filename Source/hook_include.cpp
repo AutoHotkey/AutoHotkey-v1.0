@@ -1745,7 +1745,22 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	// left" to send a true mouse-click through as a replacement for the suppressed
 	// button-down and button-up events caused by the hotkey:
 	if (!vk || (g_MenuIsVisible && vk == VK_LBUTTON))
+	{
+		// Bug-fix for v1.0.22: If "LControl & LButton::" (and perhaps similar combinations)
+		// is a hotkey, the foreground window would think that the mouse is stuck down, at least
+		// if the user clicked outside the menu to dismiss it.  Specifically, this comes about
+		// as follows:
+		// The wrong up-event is suppressed:
+		// ...because down_performed_action was true when it should have been false
+		// ...because the while-menu-was-displayed up-event never set it to false
+		// ...because it returned too early here before it could get to that part further below.
+		if (vk)
+		{
+			pThisKey->down_performed_action = false; // Seems ok in this case to do this for both key_up and !key_up.
+			pThisKey->is_down = !key_up;
+		}
 		return AllowKeyToGoToSystem;
+	}
 #endif
 
 // Uncomment this section to have it report the vk and sc of every key pressed (can be useful):

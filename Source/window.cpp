@@ -1558,9 +1558,12 @@ void SetForegroundLockTimeout()
 // PROCESS ROUTINES
 ////////////////////
 
-DWORD ProcessExist9x2000 (char *aProcess)
+DWORD ProcessExist9x2000(char *aProcess, char *aProcessName)
 // Adapted from the AutoIt3 source.
 {
+	if (aProcessName) // Init this output variable in case of early return.
+		*aProcessName = '\0';
+
 	// We must dynamically load the function or program will probably not launch at all on NT4.
 	typedef BOOL (WINAPI *PROCESSWALK)(HANDLE hSnapshot, LPPROCESSENTRY32 lppe);
 	typedef HANDLE (WINAPI *CREATESNAPSHOT)(DWORD dwFlags, DWORD th32ProcessID);
@@ -1585,15 +1588,26 @@ DWORD ProcessExist9x2000 (char *aProcess)
 	{
 		if (specified_pid && specified_pid == proc.th32ProcessID)
 		{
+			if (aProcessName) // Caller wanted process name also.
+			{
+				// For consistency in results, use _splitpath() both here and below rather than
+				// something that just checks for a rightmost backslash.
+				_splitpath(proc.szExeFile, szDrive, szDir, aProcessName, szExt);
+				strcat(aProcessName, szExt);
+			}
 			CloseHandle(snapshot);
 			return specified_pid;
 		}
 		// Otherwise, check for matching name even if aProcess is purely numeric (i.e. a number might
 		// also be a valid name?):
+		// It seems that proc.szExeFile never contains a path, just the executable name.
+		// But in case it ever does, ensure consistency by removing the path:
 		_splitpath(proc.szExeFile, szDrive, szDir, szFile, szExt);
 		strcat(szFile, szExt);
 		if (!stricmp(szFile, aProcess))
 		{
+			if (aProcessName) // Caller wanted process name also.
+				strcpy(aProcessName, szFile);
 			CloseHandle(snapshot);
 			return proc.th32ProcessID;
 		}
@@ -1604,9 +1618,11 @@ DWORD ProcessExist9x2000 (char *aProcess)
 
 
 
-DWORD ProcessExistNT4(char *aProcess)
+DWORD ProcessExistNT4(char *aProcess, char *aProcessName)
 // Adapted from the AutoIt3 source.
 {
+	if (aProcessName) // Init this output variable in case of early return.
+		*aProcessName = '\0';
 	//BOOL EnumProcesses(
 	//  DWORD *lpidProcess,  // array of process identifiers
 	//  DWORD cb,            // size of array
@@ -1663,6 +1679,21 @@ DWORD ProcessExistNT4(char *aProcess)
 	{
 		if (specified_pid && specified_pid == idProcessArray[i])
 		{
+			if (aProcessName) // Caller wanted process name also.
+			{
+				if (hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, idProcessArray[i])) // Assign
+				{
+					lpfnEnumProcessModules(hProcess, &hMod, sizeof(hMod), &cbNeeded);
+					if (lpfnGetModuleBaseName(hProcess, hMod, szProcessName, _MAX_PATH))
+					{
+						// For consistency in results, use _splitpath() both here and below rather than
+						// something that just checks for a rightmost backslash.
+						_splitpath(szProcessName, szDrive, szDir, aProcessName, szExt);
+						strcat(aProcessName, szExt);
+					}
+					CloseHandle(hProcess);
+				}
+			}
 			FreeLibrary(hinstLib);
 			return specified_pid;
 		}
@@ -1677,6 +1708,8 @@ DWORD ProcessExistNT4(char *aProcess)
 				strcat(szFile, szExt);
 				if (!stricmp(szFile, aProcess))
 				{
+					if (aProcessName) // Caller wanted process name also.
+						strcpy(aProcessName, szProcessName);
 					CloseHandle(hProcess);
 					FreeLibrary(hinstLib);
 					return idProcessArray[i];  // The PID.

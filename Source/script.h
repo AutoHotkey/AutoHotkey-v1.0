@@ -449,7 +449,7 @@ enum JoyControls {JOYCTRL_INVALID, JOYCTRL_XPOS, JOYCTRL_YPOS, JOYCTRL_ZPOS
 };
 #define IS_JOYSTICK_BUTTON(joy) (joy >= JOYCTRL_1 && joy <= JOYCTRL_BUTTON_MAX)
 
-enum WinGetCmds {WINGET_CMD_INVALID, WINGET_CMD_ID, WINGET_CMD_IDLAST, WINGET_CMD_PID
+enum WinGetCmds {WINGET_CMD_INVALID, WINGET_CMD_ID, WINGET_CMD_IDLAST, WINGET_CMD_PID, WINGET_CMD_PROCESSNAME
 	, WINGET_CMD_COUNT, WINGET_CMD_LIST, WINGET_CMD_MINMAX, WINGET_CMD_CONTROLLIST
 };
 
@@ -474,10 +474,11 @@ enum MenuCommands {MENU_CMD_INVALID, MENU_CMD_SHOW, MENU_CMD_USEERRORLEVEL
 };
 
 enum GuiCommands {GUI_CMD_INVALID, GUI_CMD_OPTIONS, GUI_CMD_ADD, GUI_CMD_MENU, GUI_CMD_SHOW
-	, GUI_CMD_SUBMIT, GUI_CMD_CANCEL, GUI_CMD_DESTROY, GUI_CMD_FONT, GUI_CMD_COLOR, GUI_CMD_FLASH
+	, GUI_CMD_SUBMIT, GUI_CMD_CANCEL, GUI_CMD_DESTROY, GUI_CMD_FONT, GUI_CMD_TAB, GUI_CMD_COLOR
+	, GUI_CMD_FLASH
 };
 
-enum GuiControlCmds {GUICONTROL_CMD_INVALID, GUICONTROL_CMD_OPTIONS, GUICONTROL_CMD_CONTENTS
+enum GuiControlCmds {GUICONTROL_CMD_INVALID, GUICONTROL_CMD_OPTIONS, GUICONTROL_CMD_CONTENTS, GUICONTROL_CMD_TEXT
 	, GUICONTROL_CMD_MOVE, GUICONTROL_CMD_FOCUS, GUICONTROL_CMD_ENABLE, GUICONTROL_CMD_DISABLE
 	, GUICONTROL_CMD_SHOW, GUICONTROL_CMD_HIDE, GUICONTROL_CMD_CHOOSE, GUICONTROL_CMD_CHOOSESTRING
 };
@@ -499,6 +500,10 @@ typedef UCHAR GuiControls;
 #define GUI_CONTROL_COMBOBOX     8
 #define GUI_CONTROL_LISTBOX      9
 #define GUI_CONTROL_EDIT         10
+#define GUI_CONTROL_TAB          11
+
+// Keep the below macro in sync with the above:
+#define GUI_CONTROL_TYPE_CAN_BE_FOCUSED(type) (type != GUI_CONTROL_TEXT && type != GUI_CONTROL_PIC)
 
 
 enum ThreadCommands {THREAD_CMD_INVALID, THREAD_CMD_PRIORITY, THREAD_CMD_INTERRUPT};
@@ -523,7 +528,8 @@ enum ControlGetCmds {CONTROLGET_CMD_INVALID, CONTROLGET_CMD_CHECKED, CONTROLGET_
 enum DriveCmds {DRIVE_CMD_INVALID, DRIVE_CMD_EJECT, DRIVE_CMD_LABEL};
 
 enum DriveGetCmds {DRIVEGET_CMD_INVALID, DRIVEGET_CMD_LIST, DRIVEGET_CMD_FILESYSTEM, DRIVEGET_CMD_LABEL
-	, DRIVEGET_CMD_SETLABEL, DRIVEGET_CMD_SERIAL, DRIVEGET_CMD_TYPE, DRIVEGET_CMD_STATUS, DRIVEGET_CMD_CAPACITY};
+	, DRIVEGET_CMD_SETLABEL, DRIVEGET_CMD_SERIAL, DRIVEGET_CMD_TYPE, DRIVEGET_CMD_STATUS
+	, DRIVEGET_CMD_STATUSCD, DRIVEGET_CMD_CAPACITY};
 
 enum WinSetAttributes {WINSET_INVALID, WINSET_TRANSPARENT, WINSET_ALWAYSONTOP};
 
@@ -1145,6 +1151,7 @@ public:
 		if (!stricmp(aBuf, "ID")) return WINGET_CMD_ID;
 		if (!stricmp(aBuf, "IDLast")) return WINGET_CMD_IDLAST;
 		if (!stricmp(aBuf, "PID")) return WINGET_CMD_PID;
+		if (!stricmp(aBuf, "ProcessName")) return WINGET_CMD_PROCESSNAME;
 		if (!stricmp(aBuf, "Count")) return WINGET_CMD_COUNT;
 		if (!stricmp(aBuf, "List")) return WINGET_CMD_LIST;
 		if (!stricmp(aBuf, "MinMax")) return WINGET_CMD_MINMAX;
@@ -1251,6 +1258,7 @@ public:
 		if (!stricmp(aBuf, "Destroy")) return GUI_CMD_DESTROY;
 		if (!stricmp(aBuf, "Menu")) return GUI_CMD_MENU;
 		if (!stricmp(aBuf, "Font")) return GUI_CMD_FONT;
+		if (!stricmp(aBuf, "Tab")) return GUI_CMD_TAB;
 		if (!stricmp(aBuf, "Color")) return GUI_CMD_COLOR;
 		if (!stricmp(aBuf, "Flash")) return GUI_CMD_FLASH;
 		return GUI_CMD_INVALID;
@@ -1267,6 +1275,7 @@ public:
 			return GUICONTROL_CMD_CONTENTS;
 		if (!*aBuf || *aBuf == '+' || *aBuf == '-') // Assume a var ref that resolves to blank is "options" (for runtime flexibility).
 			return GUICONTROL_CMD_OPTIONS;
+		if (!stricmp(aBuf, "Text")) return GUICONTROL_CMD_TEXT;
 		if (!stricmp(aBuf, "Move")) return GUICONTROL_CMD_MOVE;
 		if (!stricmp(aBuf, "Focus")) return GUICONTROL_CMD_FOCUS;
 		if (!stricmp(aBuf, "Enable")) return GUICONTROL_CMD_ENABLE;
@@ -1301,6 +1310,7 @@ public:
 		if (!stricmp(aBuf, "ListBox")) return GUI_CONTROL_LISTBOX;
 		if (!stricmp(aBuf, "Edit")) return GUI_CONTROL_EDIT;
 		// Keep those seldom used at the bottom for performance:
+		if (!stricmp(aBuf, "Tab")) return GUI_CONTROL_TAB;
 		if (!stricmp(aBuf, "GroupBox")) return GUI_CONTROL_GROUPBOX;
 		if (!stricmp(aBuf, "Pic") || !stricmp(aBuf, "Picture")) return GUI_CONTROL_PIC;
 		return GUI_CONTROL_INVALID;
@@ -1383,6 +1393,7 @@ public:
 		if (!stricmp(aBuf, "Serial")) return DRIVEGET_CMD_SERIAL;
 		if (!stricmp(aBuf, "Type")) return DRIVEGET_CMD_TYPE;
 		if (!stricmp(aBuf, "Status")) return DRIVEGET_CMD_STATUS;
+		if (!stricmp(aBuf, "StatusCD")) return DRIVEGET_CMD_STATUSCD;
 		if (!stricmp(aBuf, "Capacity") || !stricmp(aBuf, "Cap")) return DRIVEGET_CMD_CAPACITY;
 		return DRIVEGET_CMD_INVALID;
 	}
@@ -1725,23 +1736,38 @@ struct GuiControlOptionsType
 	bool start_new_section;
 };
 
+typedef UCHAR TabControlIndexType;
+typedef UCHAR TabIndexType;
+// Keep the below in sync with the size of the types above:
+#define MAX_TAB_CONTROLS 255  // i.e. the value 255 itself is reserved to mean "doesn't belong to a tab".
+#define MAX_TABS_PER_CONTROL 256
 struct GuiControlType
 {
 	HWND hwnd;
 	// Keep any fields that are smaller than 4 bytes adjacent to each other.  This conserves memory
 	// due to byte-alignment.  It has been verified to save 4 bytes per struct in this case:
 	GuiControls type;
+	#define GUI_CONTROL_ATTRIB_IMPLICIT_CANCEL    0x01
+	#define GUI_CONTROL_ATTRIB_ALTSUBMIT          0x02
+	#define GUI_CONTROL_ATTRIB_LABEL_IS_RUNNING   0x04
+	#define GUI_CONTROL_ATTRIB_EXPLICITLY_HIDDEN  0x08
+	#define GUI_CONTROL_ATTRIB_DEFAULT_BACKGROUND 0x10
 	UCHAR attrib; // A field of option flags/bits defined above.
+	TabControlIndexType tab_control_index; // Which tab control this control belongs to, if any.
+	TabIndexType tab_index;
 	Var *output_var;
 	Label *jump_to_label;
-	#define GUI_CONTROL_ATTRIB_IMPLICIT_CANCEL  0x01
-	#define GUI_CONTROL_ATTRIB_ALTSUBMIT        0x02
-	#define GUI_CONTROL_ATTRIB_LABEL_IS_RUNNING 0x04 // The next should be 0x08, 0x10, etc.
-	COLORREF color; // Color of the control's text.
-	HBITMAP hbitmap; // For PIC controls, stores the bitmap.  Might also have uses for future types of controls.
+	union
+	{
+		COLORREF union_color;  // Color of the control's text.
+		HBITMAP union_hbitmap; // For PIC controls, stores the bitmap.
+		// Note: Pic controls cannot obey the text color, but they can obey the window's background
+		// color if the picture's background is transparent (at least in the case of icons on XP).
+	};
 };
 
 LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lParam);
+LRESULT CALLBACK TabWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lParam);
 
 class GuiType
 {
@@ -1768,6 +1794,9 @@ public:
 	bool mUseTheme;  // Whether XP theme and styles should be applied to the parent window and subsequently added controls.
 	HWND mOwner;  // The window that owns this one, if any.  Note that Windows provides no way to change owners after window creation.
 	int mCurrentFontIndex;
+	TabControlIndexType mTabControlCount;
+	TabControlIndexType mCurrentTabControlIndex; // Which tab control of the window.
+	TabIndexType mCurrentTabIndex;// Which tab of a tab control is currently the default for newly added controls.
 	COLORREF mCurrentColor;       // The default color of text in controls.
 	COLORREF mBackgroundColorWin; // The window's background color itself.
 	HBRUSH mBackgroundBrushWin;   // Brush corresponding to the above.
@@ -1802,6 +1831,7 @@ public:
 		, mExStyle(0)
 		, mInRadioGroup(false), mUseTheme(true), mOwner(NULL)
 		, mCurrentFontIndex(FindOrCreateFont()) // Omit params to tell it to find or create DEFAULT_GUI_FONT.
+		, mTabControlCount(0), mCurrentTabControlIndex(MAX_TAB_CONTROLS), mCurrentTabIndex(0)
 		, mCurrentColor(CLR_DEFAULT)
 		, mBackgroundColorWin(CLR_DEFAULT), mBackgroundBrushWin(NULL)
 		, mBackgroundColorCtl(CLR_DEFAULT), mBackgroundBrushCtl(NULL)
@@ -1825,21 +1855,14 @@ public:
 	ResultType ParseOptions(char *aOptions);
 	ResultType ControlParseOptions(char *aOptions, GuiControlOptionsType &aOpt, GuiControlType &aControl
 		, UINT aControlIndex = -1); // aControlIndex is not needed upon control creation.
-	void AddControlContent(GuiControlType &aControl, char *aContent, int aChoice);
-	void Event(UINT aControlIndex, WORD aNotifyCode);
+	void ControlAddContents(GuiControlType &aControl, char *aContent, int aChoice);
 	ResultType Show(char *aOptions, char *aTitle);
 	ResultType Clear();
 	ResultType Cancel();
 	ResultType Close(); // Due to SC_CLOSE, etc.
 	ResultType Escape(); // Similar to close, except typically called when the user presses ESCAPE.
 	ResultType Submit(bool aHideIt);
-	static ResultType ControlGetContents(Var &aOutputVar, GuiControlType aControl, char *aMode = "");
-	UINT FindControl(char *aControlID);
-	int FindGroup(UINT aControlIndex, UINT &aGroupStart, UINT &aGroupEnd);
-	ResultType SetCurrentFont(char *aOptions, char *aFontName);
-	static int FindOrCreateFont(char *aOptions = "", char *aFontName = "", FontType *aFoundationFont = NULL
-		, COLORREF *aColor = NULL);
-	static int FindFont(FontType &aFont);
+	static ResultType ControlGetContents(Var &aOutputVar, GuiControlType &aControl, char *aMode = "");
 
 	static GuiType *FindGui(HWND aHwnd) // Find which GUI object owns the specified window.
 	{
@@ -1855,13 +1878,24 @@ public:
 		return NULL;
 	}
 
-	GuiControlType *FindControl(HWND aHwnd)
-	{
-		for (UINT u = 0; u < mControlCount; ++u)
-			if (mControl[u].hwnd == aHwnd)
-				return &mControl[u];
-		return NULL;
-	}
+	UINT FindControl(char *aControlID);
+	GuiControlType *FindControl(HWND aHwnd);
+	int FindGroup(UINT aControlIndex, UINT &aGroupStart, UINT &aGroupEnd);
+
+	ResultType SetCurrentFont(char *aOptions, char *aFontName);
+	static int FindOrCreateFont(char *aOptions = "", char *aFontName = "", FontType *aFoundationFont = NULL
+		, COLORREF *aColor = NULL);
+	static int FindFont(FontType &aFont);
+
+	void Event(UINT aControlIndex, UINT aNotifyCode);
+
+	void ControlUpdateCurrentTab(GuiControlType &aTabControl, bool aFocusFirstControl);
+	GuiControlType *FindTabControl(TabControlIndexType aTabControlIndex);
+	int FindTabIndexByName(GuiControlType &aTabControl, char *aName);
+	int GetControlCountOnTabPage(TabControlIndexType aTabControlIndex, TabIndexType aTabIndex);
+	POINT GetPositionOfTabClientArea(GuiControlType &aTabControl);
+	ResultType SelectAdjacentTab(GuiControlType &aTabControl, bool aMoveToRight, bool aFocusFirstControl
+		, bool aWrapAround);
 };
 
 
@@ -2577,6 +2611,13 @@ public:
 		*(aBuf++) = aType == VAR_SPACE ? ' ' : '\t';
 		*aBuf = '\0';
 		return 1;
+	}
+
+	VarSizeType GetAhkVersion(char *aBuf = NULL)
+	{
+		if (aBuf)
+			strcpy(aBuf, NAME_VERSION);
+		return (VarSizeType)strlen(NAME_VERSION);
 	}
 
 	// Confirmed: The below will all automatically use the local time (not UTC) when 3rd param is NULL.

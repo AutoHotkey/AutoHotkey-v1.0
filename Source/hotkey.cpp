@@ -1425,7 +1425,9 @@ void Hotstring::DoReplace(LPARAM alParam)
 			*start_of_replacement = (char)CharUpper((LPTSTR)(UCHAR)*start_of_replacement);
 	}
 	int old_delay = g.KeyDelay;
+	int old_press_duration = g.PressDuration;
 	g.KeyDelay = mKeyDelay; // This is relatively safe since SendKeys() normally can't be interrupted by a new thread.
+	g.PressDuration = -1;   // Always -1, since Send command can be used in body of hotstring to have a custom press duration.
 	if (*SendBuf)
 		SendKeys(SendBuf, mSendRaw);
 	if (   *mReplacement && !mOmitEndChar && (*SendBuf = (char)LOWORD(alParam))   ) // Assign
@@ -1435,6 +1437,7 @@ void Hotstring::DoReplace(LPARAM alParam)
 		SendKeys(SendBuf, true);
 	}
 	g.KeyDelay = old_delay;  // Restore
+	g.PressDuration = old_press_duration;  // Restore
 }
 
 
