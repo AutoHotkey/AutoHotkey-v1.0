@@ -44,9 +44,12 @@ bool g_ForceLaunch = false;
 bool g_AllowOnlyOneInstance = false;
 bool g_AllowSameLineComments = true;
 char g_LastPerformedHotkeyType = HK_NORMAL;
+bool g_IsIdle = false;  // Set false as the initial state for use during the auto-execute part of the script.
 bool g_IsSuspended = false;  // Make this separate from g_IgnoreHotkeys since that is frequently turned off & on.
 bool g_IgnoreHotkeys = false;
-int g_nSuspendedSubroutines = 0;
+int g_nInterruptedSubroutines = 0;
+int g_nPausedSubroutines = 0;
+bool g_UnpauseWhenResumed = false;  // Start off "false" because the Unpause mode must be explicitly triggered.
 
 // On my system, the repeat-rate (which is probably set to XP's default) is such that between 20
 // and 25 keys are generated per second.  Therefore, 50 in 2000ms seems like it should allow the
@@ -175,6 +178,8 @@ Action g_act[] =
 	, {"StringReplace", 3, 5, NULL} // Output Variable, Input Variable, Search String, Replace String, do-all.
 
 	, {"EnvSet", 1, 2, NULL} // EnvVar, Value
+	, {"EnvUpdate", 0, 0, NULL}
+
 	, {"Run", 1, 3, NULL}, {"RunWait", 1, 3, NULL}  // TargetFile, Working Dir, WinShow-Mode
 	, {"GetKeyState", 2, 3, NULL} // OutputVar, key name, mode (optional) P = Physical, T = Toggle
 	, {"Send", 1, 1, NULL} // But that first param can be a deref that resolves to a blank param
@@ -233,7 +238,8 @@ Action g_act[] =
 	, {"WinGetText", 1, 5, NULL} // Output var, std 4 window params.
 
 	, {"PixelGetColor", 3, 3, {2, 3, 0}} // OutputVar, X-coord, Y-coord
-	, {"PixelSearch", 7, 7, {3, 4, 5, 6, 7, 0}} // OutputX, OutputY, left, top, right, bottom, color
+	, {"PixelSearch", 0, 8, {3, 4, 5, 6, 7, 8, 0}} // OutputX, OutputY, left, top, right, bottom, Color, Variation
+	// Note in the above: 0 min args so that the output vars can be optional.
 
 	// Below: Group name, wintitle, what label to Gosub if no instances of the window exist, exclude-title/text:
 	// See above for why minimum is 1 vs. 2:
@@ -255,6 +261,10 @@ Action g_act[] =
 	, {"FileSetDateModified", 0, 2, {2, 0}} // filespec, datetime (YYYYMMDDHH24MISS)
 	, {"FileSelectFile", 1, 3, {2, 0}} // output var, flag, working dir
 
+	, {"IniRead", 4, 5, NULL}   // OutputVar, Filespec, Section, Key, Default (value to return if key not found)
+	, {"IniWrite", 4, 4, NULL}  // Value, Filespec, Section, Key
+	, {"IniDelete", 3, 3, NULL} // Filespec, Section, Key
+
 	, {"RegRead", 5, 5, NULL} // output var, ValueType, RegKey, RegSubkey, ValueName
 	, {"RegWrite", 4, 5, NULL} // ValueType, RegKey, RegSubKey, ValueName, Value (set to blank if omitted?)
 	, {"RegDelete", 3, 3, NULL} // RegKey, RegSubKey, ValueName
@@ -263,7 +273,8 @@ Action g_act[] =
 	, {"SetKeyDelay", 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)
 	, {"SetWinDelay", 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)
 	, {"SetBatchLines", 1, 1, {1, 0}} // Number of script lines to execute before sleeping.
-	, {"Suspend", 0, 1, NULL} // On/Off/Blank (blank causes it to toggle to the opposite value)
+	, {"Suspend", 0, 1, NULL} // On/Off/Toggle/Permit/Blank (blank is the same as toggle)
+	, {"Pause", 0, 1, NULL} // On/Off/Toggle/Blank (blank is the same as toggle)
 	, {"AutoTrim", 1, 1, NULL} // On/Off
 	, {"StringCaseSense", 1, 1, NULL} // On/Off
 	, {"DetectHiddenWindows", 1, 1, NULL} // On/Off
@@ -278,6 +289,7 @@ Action g_act[] =
 	, {"KeyLog", 0, 1, NULL}, {"ListLines", 0, 0, NULL}
 	, {"ListVars", 0, 0, NULL}, {"ListHotkeys", 0, 0, NULL}
 
+	, {"Edit", 0, 0, NULL}
 	, {"Reload", 0, 0, NULL}
 	, {"ExitApp", 0, 1, NULL}  // Optional exit-code
 	, {"Shutdown", 1, 1, {1, 0}} // Seems best to make the first param (the flag/code) mandatory.

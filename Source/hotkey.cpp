@@ -20,7 +20,7 @@ GNU General Public License for more details.
 //#include "application.h" // For ExitApp()
 
 // Initialize static members:
-bool Hotkey::sHotkeysAreActive = false;
+bool Hotkey::sHotkeysAreLocked = false;
 HookType Hotkey::sWhichHookNeeded = 0;
 HookType Hotkey::sWhichHookActive = 0;
 DWORD Hotkey::sTimePrev = {0};
@@ -31,19 +31,35 @@ const HotkeyIDType &Hotkey::sHotkeyCount = Hotkey::sNextID;
 
 
 
-int Hotkey::AllActivate()
+void Hotkey::AllActivate()
 // Returns the total number of hotkeys, both registered and handled by the hooks.
 // This function can also be called to install the keyboard hook if the state
 // of g_ForceNumLock and such have changed, even if the hotkeys are already
 // active.
 {
-	// In light of the above comment, don't do this:
-	//if (sHotkeysAreActive) return sHotkeyCount;
-	bool is_neutral;
-	modLR_type modifiersLR;
-	if (!sHotkeysAreActive) // otherwise, don't do this part because it might mess things up.
+	int i;
+	if (sHotkeysAreLocked)
 	{
-		for (int i = 0; i < sHotkeyCount; ++i)
+		// Register any keys that were previously unregistered:
+		for (i = 0; i < sHotkeyCount; ++i)
+			// Even if this call fails, do nothing.  This is because the first call
+			// to AllActivate() would have set the type to be HK_KEYBD_HOOK if that
+			// first attempt to register it failed.  We don't want to change that
+			// determination, even if justified, because the design hasn't yet been
+			// reviewed to handle that complexity.  I think the only reason it would
+			// fail now when it hadn't before is that another script has since been
+			// run or unsuspended which took over this same hotkey, preventing this
+			// instance from using it:
+			if (shk[i]->mType == HK_NORMAL)
+				shk[i]->Register();
+	}
+	else
+	{
+		// Do this part only if it hasn't been done before (as indicated by sHotkeysAreLocked)
+		// because it's not reviewed/designed to be run more than once:
+		bool is_neutral;
+		modLR_type modifiersLR;
+		for (i = 0; i < sHotkeyCount; ++i)
 		{
 			// For simplicity, don't try to undo keys that are already considered to be
 			// handled by the hook, since it's not easy to know if they were set that
@@ -71,15 +87,37 @@ int Hotkey::AllActivate()
 				// it may reduce system performance slightly).  With that in mind, rather than just
 				// forcing NumpadEnter and Enter to be entirely separate keys, both handled by the
 				// hook, we allow mod+Enter to take over both keys if their is no mod+NumPadEnter key
-				// configured with identical modifiers:
+				// configured with identical modifiers.  UPDATE: I don't think I like this method because
+				// it will produce undocumented behavior in some cases (e.g. if user has ^NumpadEnter as
+				// a hotkey, ^Enter will also trigger the hotkey, which is not what would be expected).
+				// Therefore, I'm changing it now to have all dual-state keys handled by the hook so that
+				// the counterpart key will never trigger an unexpected firing:
 				if (g_vk_to_sc[shk[i]->mVK].b)
-					// This hotkey's vk has a counterpart key with the same vk.  Check if either of those
-					// two keys exists as a "scan code" hotkey.  If so, This hotkey must be handled
-					// by the hook to prevent it from firing for both scan codes.
-					// modifiersLR should be zero here because otherwise type would have already been set to use hook.
-					if (FindHotkeyBySC(g_vk_to_sc[shk[i]->mVK], shk[i]->mModifiers, shk[i]->mModifiersLR) >= 0)
-						// Counterpart key is configured as a hotkey with the same modifiers as this key.
+				{
+					if (!g_os.IsWin9x())
 						shk[i]->mType = HK_KEYBD_HOOK;
+					else
+					{
+						// Since the hook is not yet supported on these OSes, try not to use it.
+						// If the hook must be used, we'll mark it as needing the hook so that
+						// other reporting (e.g. ListHotkeys) can easily tell which keys won't work
+						// on Win9x.  The first condition: e.g. a naked NumpadEnd or NumpadEnter shouldn't
+						// be allowed to be Registered() because it would cause the hotkey to also fire on
+						// END or ENTER (the non-Numpad versions of these keys).
+						if (!shk[i]->mModifiers)
+							shk[i]->mType = HK_KEYBD_HOOK;
+						// Second condition (now disabled): Since both keys (e.g. NumpadEnd and End) are
+						// configured as hotkeys with the same modifiers, only one of them can be registered.
+						// It's probably best to allow one of them to be registered, arbitrarily, so that some
+						// functionality is offered.  That's why this is disabled:
+						// This hotkey's vk has a counterpart key with the same vk.  Check if either of those
+						// two keys exists as a "scan code" hotkey.  If so, This hotkey must be handled
+						// by the hook to prevent it from firing for both scan codes.  modifiersLR should be
+						// zero here because otherwise type would have already been set to HK_KEYBD_HOOK:
+						//if (FindHotkeyBySC(g_vk_to_sc[shk[i]->mVK], shk[i]->mModifiers, shk[i]->mModifiersLR) >= 0))
+						//	shk[i]->mType = HK_KEYBD_HOOK;
+					}
+				}
 
 				// Fall back to default checks if more specific ones above didn't set it:
 				if (shk[i]->mType != HK_KEYBD_HOOK)
@@ -154,78 +192,56 @@ int Hotkey::AllActivate()
 		} // for()
 	} // if()
 
+	// But do this part outside of the above block because these values may have changed since
+	// this function was first called:
 	if (g_ForceNumLock != NEUTRAL || g_ForceCapsLock != NEUTRAL || g_ForceScrollLock != NEUTRAL)
 		sWhichHookNeeded |= HOOK_KEYBD;
+	// else it's currently not designed to ever deinstall the hook, because we don't track separately
+	// whether the hook is also needed to implement hotkeys. i.e. this is a known limitation.
 
-	if ((sWhichHookNeeded & sWhichHookActive) != sWhichHookNeeded) // bitwise-AND does a set-intersection.
-	{
-		// At least one of the hooks isn't installed that needs to be.
-		// But first check if some other instance has the hook(s) installed.
-		static HANDLE hook_mutex = NULL;
-		if (!hook_mutex) // otherwise, we already have ownership of the mutex so no need for this check.
-		{
-			// If script isn't being restarting, shouldn't need much more than one check.
-			// If it is being restarted, sometimes the prior instance takes a long time to
-			// release the mutex, perhaps due to being partially swapped out (esp. if the
-			// prior instance has been running for many hours or days).  UPDATE: This is
-			// still displaying a warning sometimes when restarting, even with a 1 second
-			// grace/wait period.  So it seems best not to display the warning at all
-			// when in restart mode, since obviously (by definition) this script is
-			// already running so of course the user wants to restart it unconditionally
-			// 99% of the time.  The only exception would be when the user's recent
-			// changes to the script (i.e. those for which the restart is being done)
-			// now require one of the hooks that hadn't been required before (rare).
-			// So for now, when in restart mode, just acquire the mutex but don't display
-			// any warning if another instance also has the mutex:
-			hook_mutex = CreateMutex(NULL, TRUE, NAME_P "Hooks");
-			if (!g_ForceLaunch && !g_script.mIsRestart && GetLastError() == ERROR_ALREADY_EXISTS)
-			{
-				int result = MsgBox("Another instance of this program already has the keyboard or"
-					" mouse hook installed (because some of its hotkeys require the hook(s))."
-					"  Installing them a second time might produce unexpected behavior.  Do it anyway?"
-					"\n\nYou can disable this warning by starting the program with /force as a parameter."
-					, MB_YESNO);
-				if (result != IDYES)
-					g_script.ExitApp();
-				// Note: It's not necessary to ever close the Mutex with CloseHandle() because:
-				// "The system closes the handle automatically when the process terminates.
-				// The mutex object is destroyed when its last handle has been closed."
-			}
-		}
-		sWhichHookActive = HookInit(shk, sHotkeyCount, sWhichHookNeeded);
-		if ((sWhichHookNeeded & HOOK_KEYBD) && (sWhichHookNeeded & HOOK_MOUSE) && !sWhichHookActive)
-		{
-			MsgBox("HookInit() failed to activate both the keyboard and mouse hook.");
-			return -1;
-		}
-		if ((sWhichHookNeeded & HOOK_KEYBD) && !(sWhichHookActive & HOOK_KEYBD))
-		{
-			MsgBox("HookInit() failed to activate the keyboard hook.");
-			return -1;
-		}
-		if ((sWhichHookNeeded & HOOK_MOUSE) && !(sWhichHookActive & HOOK_MOUSE))
-		{
-			MsgBox("HookInit() failed to activate the mouse hook.");
-			return -1;
-		}
-	}
+	// Install or deinstall either or both hooks, if necessary, based on these param values.
+	// Also, tell it to always display warning if this is a reinstall of the hook(s).
+	// Older info about whether to display the "already installed" warning dialog:
+	// If script isn't being restarted, shouldn't need much more than one check.
+	// If it is being restarted, sometimes the prior instance takes a long time to
+	// release the mutex, perhaps due to being partially swapped out (esp. if the
+	// prior instance has been running for many hours or days).  UPDATE: This is
+	// still displaying a warning sometimes when restarting, even with a 1 second
+	// grace/wait period.  So it seems best not to display the warning at all
+	// when in restart mode, since obviously (by definition) this script is
+	// already running so of course the user wants to restart it unconditionally
+	// 99% of the time.  The only exception would be when the user's recent
+	// changes to the script (i.e. those for which the restart is being done)
+	// now require one of the hooks that hadn't been required before (rare).
+	// So for now, when in restart mode, just acquire the mutex but don't display
+	// any warning if another instance also has the mutex:
+	sWhichHookActive = ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded
+		, (!g_ForceLaunch && !g_script.mIsRestart) || sHotkeysAreLocked, false);
 
-	sHotkeysAreActive = true;
-	return sHotkeyCount;
+	// Signal that no new hotkeys should be defined after this point (i.e. that the definition
+	// stage is complete).  Do this only after the the above so that the above can use the old value:
+	sHotkeysAreLocked = true;
 }
 
 
 
-ResultType Hotkey::AllDeactivate()
+ResultType Hotkey::AllDeactivate(bool aExcludeSuspendHotkeys)
 // Returns OK or FAIL (but currently not failure modes).
 {
-	if (!sHotkeysAreActive)
+	if (!sHotkeysAreLocked) // The hotkey definition stage hasn't yet been run, so there's no need.
 		return OK;
-	if (sWhichHookActive)
-		HookTerm();
+	if (aExcludeSuspendHotkeys)
+		sWhichHookActive = ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, false, true);
+	else // remove all hooks
+		if (sWhichHookActive)
+			sWhichHookActive = RemoveAllHooks();
+	// Unregister all hotkeys except when aExcludeSuspendHotkeys is true.  In that case, don't
+	// unregister those whose subroutines have ACT_SUSPEND as their first line.  This allows
+	// such hotkeys to stay in effect so that the user can press them to turn off the suspension:
 	for (int i = 0; i < sHotkeyCount; ++i)
-		shk[i]->Unregister();
-	sHotkeysAreActive = false;
+		if (!(aExcludeSuspendHotkeys && shk[i]->mJumpToLabel
+			&& shk[i]->mJumpToLabel->mJumpToLine->mActionType == ACT_SUSPEND))
+			shk[i]->Unregister();
 	return OK;
 }
 
@@ -414,7 +430,7 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 	// In addition, it avoids the problem where a key already registered as a hotkey is assigned to become
 	// a prefix (handled by the hook).  The registration (if without shift/alt/win/ctrl modifiers) would prevent
 	// the hook from ever seeing the key.
-	if (sHotkeysAreActive) return;
+	if (sHotkeysAreLocked) return;
 	if (aID > HOTKEY_ID_MAX) return;   // Probably should never happen.
 	if (aJumpToLabel == NULL) return;  // Even for alt-tab, should have the label just for record-keeping.
 

@@ -1,13 +1,69 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
+"http://www.w3.org/TR/html4/loose.dtd">
+<html>
+<!-- DW6 -->
 <head>
+<meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
 <title>AutoHotkey Change Log</title>
+<link rel="stylesheet" href="../2col_leftNav.css" type="text/css">
+<style type="text/css">
+<!--
+body {
+	margin-left: 10px;
+	margin-right: 10px;
+	margin-bottom: 10px;
+}
+-->
+</style>
 </head>
-<body>
-<font size=5>AutoHotkey Change Log
+<!-- The structure of this file is exactly the same as 2col_rightNav.html;
+     the only difference between the two is the stylesheet they use -->
+<body> 
+<div id="masthead"> 
+  <h1 id="siteName">AutoHotkey Change Log </h1> 
+  <div id="globalNav">    <a href="http://www.autohotkey.com">home</a> | <a href="../docs/index.htm"></a><a href="../download">download</a> | <a href="../docs">documentation</a> | <a href="../support">support</a></div> 
+</div> 
+
 <br>
+</font><b>0.217 BETA - January 5, 2004</b><br>
+<br>
+Fixed variable assignment (SetEnv and the new style, var = value) to properly handle escape sequences.  Lines such as this should now work properly: result = %result% %color% `%`n
+<p>Fixed the shift key getting stuck down in rare cases when Numpad hotkeys invoke the Send command to send the shift key. The fix is basically a workaround for the fact that the OS, driver, or BIOS generates physical shift-key events to ensure that Numpad keys that have a dual-state (Numpad1-9 and Dot) never have their keystrokes occur while the shift key is down. Thanks once again to Robert Yaklin for his help on tracking this down.</p>
+<p>Fixed  Numpad hotkeys (e.g. NumpadEnd) that have a counterpart on the main keyboard (e.g. End) so that the counterpart key does not fire the hotkey.</p>
+<p>Added commands IniRead/Write/Delete:<br>
+  IniRead, OutputVar, Filespec, Section, Key, Default (value to return if key not found)<br>
+  IniWrite, Value, Filespec, Section, Key<br>
+  IniDelete, Filespec, Section, Key<br>
+  Note: For compatibility reasons, IniRead does not support the last parameter if the script is of type .aut. Also, if this last param is omitted, OutputVar will be set to ERROR if there was a problem. This mirrors AutoIt2's behavior. Finally, none of these commands set ErrorLevel; this mirrors the behavior of AutoIt2 and 3.</p>
+<p>Added command EnvUpdate, which according to the AutoIt3 docs: &quot;Refreshes the OS environment. Similar effect as logging off and then on again.&quot; The command sets ErrorLevel to 0 to indicate success or 1 otherwise. Note: Due to the nature of this feature, there is a slight chance that keyboard and mouse events will lag (be delayed) while the command is running if the keyboard/mouse hooks are installed.</p>
+<p>Added a built-in variable A_Space which contains a single space character. This avoids the need for a workaround to get a variable to contain a space. Example:<br>
+  String = String with spaces<br>
+  IfInString, String, %A_SPACE%<br>
+  MsgBox, A space was found.<br>
+  ; But to assign a naked space to a variable of your own, be sure to turn off AutoTrim so that the assignment won't remove all leading and trailing spaces:<br>
+  AutoTrim, off<br>
+  MySpace = %A_SPACE%</p>
+<p>Added the Edit command, which opens the current script for editing, or activates an existing Editor window if it finds one it thinks may have the file open based on its window title. This command is the same feature as selecting &quot;Edit This Script&quot; from the tray menu.</p>
+<p>Added the Pause command and corresponding tray menu item. Unlike Suspend -- which disables hotkeys entirely -- pause will freeze the currently running subroutine (if none, pause will have no effect). The allowed values for the command's first parameter are ON, OFF, and TOGGLE (change to the opposite state). If the first parameter is omitted, it will default to TOGGLE just like the Suspend command. New hotkeys can still be launched while the script is paused, but when their subroutines finish, the underlying interrupted subroutine will still be paused. The &quot;Pause, off&quot; command will turn off the pause state for only the subroutine that was most recently interrupted. Each subroutine can be paused independently of the others. The color of the tray icon changes to black whenever the script's current subroutine is in a paused state.</p>
+<p>Improved the Suspend feature:</p>
+<ul>
+  <li>It now reverts all hotkeys back to their native functions rather than doing nothing when they are pressed.</li>
+  <li> The tray icon is changed to an S whenever hotkeys are suspended.</li>
+  <li> The first param can now be PERMIT or TOGGLE, in addition to ON or OFF. TOGGLE does the same thing as omitting the first param (i.e. toggles to the opposite state). PERMIT does not change the state of suspension. Instead, when used as the first line of any subroutine, it flags that subroutine as having permission to run even when hotkeys are suspended. Note: As before, any subroutine that has SUSPEND as its first command will be permitted to run while hotkeys are suspended (i.e. the PERMIT value is just a way to do it without changing the suspend state).</li>
+  <li>Note: Suspend will not disable the AlwaysOn/AlwaysOff feature for Scroll/Caps/Numlock if the script is using it.</li>
+  <li>    Note: Although it isn't officially paused, the script is always halted while its tray menu is displayed. However, new hotkeys can be launched even then.</li>
+</ul>
+<p>Improved the behavior of #SingleInstance scripts when the user attempts to run another instance: The user is now prompted for whether to keep the original instance or replace it with the new one.</p>
+<p>Improved PixelSearch by making the output variables optional. In addition, an optional parameter has been added, which if present is a number between 0 and 255 (inclusive) to indicate the allowed number of shades of variation in either direction for the intensity of the red, green, and blue components of the color. This can be helpful if the color you're looking for isn't always exactly the same shade. Example:<br>
+  PixelSearch, FoundX, FoundY, %X1%, %Y1%, %X2%, %Y2%, %Color%, 10 ; Allow 10 shades of variation.<br>
+  Note: If you specify 255 shades of variation, all colors will match. The default is 0 shades.<br>
+</p>
+<hr>
 <br>
 
-</font><font size=4><b>0.216 BETA - December 29, 2003</b></font><font size=3><br><br>
 
+</font><b>0.216 BETA - December 29, 2003</b><br>
+<br>
 Fixed a bug introduced in a prior version that prevented new hotkeys from firing if the script had a MsgBox or other dialog displayed on the screen.<br>
 <br>
 Fixed PixelSearch to accept negative coordinates without complaining.<br>
@@ -33,11 +89,13 @@ A_PriorHotkey: Same as above except for the subroutine that ran prior to this on
 A_TimeSinceThisHotkey: Milliseconds since the most recently launched hotkey subroutine began.  It's -1 if A_ThisHotkey is blank.<br>
 A_TimeSincePriorHotkey: Milliseconds since the prior hotkey subroutine was launched.  It's -1 if A_PriorHotkey is blank.<br>
 A_TickCount: Milliseconds since the computer was last restarted.  If this value ever exceeds 4294967295 (49.7 days), it will reset back to zero and begin counting from there.<br>
- 
-<br><hr><br>
+<br>
+<hr>
+<br>
 
 
-</font><font size=4><b>0.215 BETA - December 18, 2003</b></font><font size=3><br><br>
+<b>0.215 BETA - December 18, 2003</b><br>
+<br>
 
 Fixed a possible crash in variable assignments that involve more than one source.  e.g. statements such as clipboard = %clipboard%%SomeVar%<br>
 <br>
@@ -63,14 +121,16 @@ Disabled the feature that jumps to the proper line in notepad or metapad when a 
 Improved PixelSearch to set ErrorLevel to 2 if there was an error other than "color not found".  It still sets it to 1 if the color isn't found, or 0 if it is.<br>
 
  
-<br><hr><br>
+<br>
+<hr>
+<br>
 
 
-</font><font size=4><b>0.214 BETA - December 16, 2003</b></font><font size=3><br><br>
-
+<b>0.214 BETA - December 16, 2003</b><br>
+<br>
 Added command WinMenuSelectItem (similar to AutoIt3 command).  The menu search terms are not case sensitive (i.e. File->Save is the same as file->save) and the use of ampersand (&) to indicate the underlined letter in a menu item is not necessary.  Example:<br>
 WinMenuSelectItem, Untitled - Notepad, , File, Save<br>
-WinMenuSelectItem, Untitled - Notepad, , 1&, 3&  ; Same as above but uses menu item position rather than text.<br>
+WinMenuSelectItem, Untitled - Notepad, , 1&, 3& ; Same as above but uses menu item position rather than text.<br>
 Note: The position method exists to support menus that don't contain text (perhaps because they are pictures of text rather than actual text?)  Position 1 is the first menu item (e.g. the File Menu).  Menu separator lines count as menu items for the purpose of determining the position of a menu item.<br>
 <br>
 Added command ControlFocus.  Example:<br>
@@ -135,10 +195,13 @@ A3	11D	0.0	i	d	Right Ctrl
 Note: Each keystroke generates two lines, a down and an up.<br>
 
  
-<br><hr><br>
+<br>
+<hr>
+<br>
 
 
-</font><font size=4><b>0.213 BETA - December 15, 2003</b></font><font size=3><br><br>
+<b>0.213 BETA - December 15, 2003</b><br>
+<br>
  
 Fixed hotkeys that have LWin/RWin (windows key) as a modifier and that use the Send command: In some cases, the windows key was incorrectly put into the down position after the Send.  [Thanks to Robert Yaklin for discovering this.]  On a related note, you do not need to use the Sleep command to allow the user time to release the modifier keys (Ctrl/Alt/Shift/Win) with hotkeys that use the Send command.  The Send command knows to change the modifiers to what they need to be for every key that will be sent.<br>
 <br>
@@ -178,10 +241,13 @@ Note #1: Even though they accept new params in .ahk files, commands such as IfWi
 <br>
 Note #2: As always, AutoHotkey can run most AutoIt2 (.aut) files directly, without the need to convert to a .ahk file.<br>
  
-<br><hr><br>
+<br>
+<hr>
+<br>
 
 
-</font><font size=4><b>0.212 BETA - December 8, 2003</b></font><font size=3><br><br>
+<b>0.212 BETA - December 8, 2003</b><br>
+<br>
 
 Added support for a command being on the same line as its ELSE.  Examples:<br>
 <PRE>
@@ -215,7 +281,6 @@ IfEqual, x, 1, {
 	MsgBox, test
 }
 </PRE>
- 
 The main use of the above is for "else if" ladders, which may increase the script's readability.<br>
 <br>
 <br>
@@ -296,9 +361,12 @@ Tip: C-style section comments can be used, but the symbols must appear at the be
 */<br>
 
 
-<br><hr><br>
+<br>
+<hr>
+<br>
  
-</font><font size=4><b>0.211 BETA - December 1, 2003</b></font><font size=3><br><br>
+<b>0.211 BETA - December 1, 2003</b><br>
+<br>
  
 Fixed the Reload command and the corresponding tray menu item to work with script filenames that contain spaces.<br>
 <br>
@@ -321,16 +389,20 @@ Numpad0::MsgBox, test2 ; Now Numpad0 is both a prefix AND a suffix (a suffix bec
 Under the old method, if Numpad0 was pressed down and then a mouse button clicked, the Numpad0 action would not fire when Numpad0 is released, as it normally would.  Under the new method it does, but only if the combination of Numpad0 and that mouse button isn't a hotkey (since by default, the key/mouse events that comprise a hotkey are always hidden from the system unless the ~ symbol, described above, is used).<br>
  
  
-<br><hr><br>
+<br>
+<hr>
+<br>
 
-</font><font size=4><b>0.210 BETA - November 19, 2003</b></font><font size=3><br><br>
-
+<b>0.210 BETA - November 19, 2003</b><br>
+<br>
 Added command "suspend".  It's just like the tray menu item of the same name.  The first param can be either blank (to toggle the state to the opposite setting), ON (to suspend hotkeys), or OFF (to resume).  Note: Any hotkey whose subroutine's first line is the "suspend" command will not be subject to suspension.  This allows any such hotkey to turn off the suspension.<br>
  
-<br><hr><br>
+<br>
+<hr>
+<br>
 
-</font><font size=4><b>0.209 BETA - November 19, 2003</b></font><font size=3><br><br>
-
+<b>0.209 BETA - November 19, 2003</b><br>
+<br>
 Improved Run and RunWait so that they attempt CreateProcess() (the AutoIt method) if the normal ShellExecute() method fails to work.  This should make things more flexible and more like AutoIt.  Note: Internally, the ShellExecute() method is always attempted first because I believe it has more capabilities, such as the ability to run documents, launch URLs, and execute system verbs such as "properties" (see below).<br>
  
 Run and RunWait now support the following system verbs: properties, edit, print, find, explore, open, and print.  Example:<br>
@@ -346,9 +418,12 @@ Enabled tray menu item "Suspend".  This function prevents new hotkey subroutines
  
  
  
-<br><hr><br>
+<br>
+<hr>
+<br>
 
-</font><font size=4><b>0.208 BETA - November 17, 2003</b></font><font size=3><br><br>
+<b>0.208 BETA - November 17, 2003</b><br>
+<br>
 
 <b>FIXES:</b><br>
 Fixed the tray menu item "Edit This Script".<br>
@@ -396,7 +471,8 @@ Note that some or all of the last four params can be omitted.  If all of them ar
 #DerefChar: The deref char is normally % (e.g. Sleep, %SleepTime%).  You can change it to some other character with this.<br>
 <br>
 <br>
-<b>TIPS<br></b>
+<b>TIPS<br>
+</b>
 The first comma can always be omitted for any command, e.g. MsgBox This is the text of the Msgbox (single-param mode).<br>
 <br>
 You can use the CapsLock keys as a new "modifier", similar to the windows key, without changing its native function (WinNT/2k/XP only, currently).  Example:<br>
@@ -404,17 +480,23 @@ CapsLock & A::run, notepad<br>
 CapsLock & S::run, calc<br>
 
 
-<br><hr><br>
+<br>
+<hr>
+<br>
 
-</font><font size=4><b>0.207 BETA - November 12, 2003</b></font><font size=3><br><br>
+<b>0.207 BETA - November 12, 2003</b><br>
+<br>
 
 Fixed StringMid: It was previously able to read beyond the length of the input variable.<br>
 <br>
 Disabled the auto-restore-on-resume feature -- which restores the foreground window that a suspended thread was working with -- because it probably causes more trouble than it's worth.<br>
 
-<br><hr><br>
+<br>
+<hr>
+<br>
 
-</font><font size=4><b>0.206 BETA - November 11, 2003</b></font><font size=3><br><br>
+<b>0.206 BETA - November 11, 2003</b><br>
+<br>
 
 
 Fixed scripts randomly hanging (sleeping indefinitely): caused by the thread's main timer having been killed when it shouldn't be.<br>
@@ -425,16 +507,21 @@ Fixed: tray menu behaving strangely if a modal dialog, such as MsgBox or InputBo
 <br>
 Fixed the REPEAT command, which was causing an infinite loop if its first parameter was a dereferenced variable rather than a literal number.<br>
 
-<br><hr><br>
+<br>
+<hr>
+<br>
 
-</font><font size=4><b>0.205 BETA - November 10, 2003</b></font><font size=3><br><br>
+<b>0.205 BETA - November 10, 2003</b><font size=3><br><br>
 
 
-Initial release 
- 
-<br><hr><br>
- 
-<a href="http://home.tampabay.rr.com/kodi/ahk/README.htm">Back to main page</a>
-
+Initial release<br>
+<hr>
+<br>
+<div id="masthead">
+  <div id="globalNav"><a href="http://www.autohotkey.com">home</a> | <a href="../docs/index.htm"></a><a href="../download">download</a> | <a href="../docs">documentation</a> | <a href="../support">support</a></div>
+</div>
+<p>
+  <!--end content --> 
+</p>
 </body>
 </html>

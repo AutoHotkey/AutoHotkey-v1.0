@@ -254,6 +254,21 @@
 			<File
 				RelativePath=".\source\resources\icon1.ico">
 			</File>
+			<File
+				RelativePath=".\source\resources\icon2.ico">
+			</File>
+			<File
+				RelativePath=".\source\resources\icon_main.ico">
+			</File>
+			<File
+				RelativePath=".\source\resources\icon_pause.ico">
+			</File>
+			<File
+				RelativePath=".\source\resources\icon_pause_suspend.ico">
+			</File>
+			<File
+				RelativePath=".\source\resources\icon_suspend.ico">
+			</File>
 		</Filter>
 	</Files>
 	<Globals>

@@ -54,7 +54,7 @@ private:
 	// the hotkey ID is used as the array index for performance reasons.  Having an outer class implies
 	// the potential future use of more than one set of hotkeys, which could still be implemented
 	// within static data and methods to retain the indexing/performance method:
-	static bool sHotkeysAreActive; // Whether the hotkeys are in effect.
+	static bool sHotkeysAreLocked; // Whether the definition-stage of hotkey creation is finished.
 	static HookType sWhichHookNeeded;
 	static HookType sWhichHookActive;
 	static DWORD sTimePrev;
@@ -79,7 +79,8 @@ private:
 	bool mConstructedOK;
 
 	// Something in the compiler is currently preventing me from using HookType in place of UCHAR:
-	friend UCHAR HookInit(Hotkey *aHK[], int aHK_count, UCHAR aHooksToActivate);
+	friend UCHAR ChangeHookState(Hotkey *aHK[], int aHK_count, UCHAR aWhichHooks, bool aWarnIfHooksAlreadyInstalled
+		, bool aActivateOnlySuspendHotkeys);
 
 	ResultType TextInterpret();
 	char *TextToModifiers(char *aText);
@@ -87,7 +88,6 @@ private:
 	ResultType Perform() {return mJumpToLabel->mJumpToLine->ExecUntil(UNTIL_RETURN, mModifiersConsolidated);}
 	ResultType Register();
 	ResultType Unregister();
-	static ResultType AllDeactivate();
 	static ResultType AllDestruct();
 
 	void *operator new(size_t aBytes) {return SimpleHeap::Malloc(aBytes);}
@@ -106,14 +106,8 @@ public:
 	static void AllDestructAndExit(int exit_code);
 	static ResultType AddHotkey(Label *aJumpToLabel, HookActionType aHookAction);
 	static ResultType PerformID(HotkeyIDType aHotkeyID);
-	static ActionTypeType GetTypeOfFirstLine(HotkeyIDType aHotkeyID)
-	{
-		// Currently, hotkey_id can't be < 0 due to its type, so we only check if it's too large:
-		if (aHotkeyID >= sHotkeyCount) return ACT_INVALID;
-		if (shk[aHotkeyID]->mJumpToLabel == NULL) return ACT_INVALID;
-		return shk[aHotkeyID]->mJumpToLabel->mJumpToLine->mActionType;
-	}
-	static int AllActivate();
+	static ResultType AllDeactivate(bool aExcludeSuspendHotkeys = false);
+	static void AllActivate();
 	static void RequireHook(HookType aWhichHook) {sWhichHookNeeded |= aWhichHook;}
 	static HookType HookIsActive() {return sWhichHookActive;} // Returns bitwise values: HOOK_MOUSE, HOOK_KEYBD.
 

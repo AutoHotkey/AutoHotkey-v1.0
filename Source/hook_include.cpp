@@ -33,19 +33,141 @@ key is actually down at the moment of consideration.
 #ifdef INCLUDE_KEYBD_HOOK
 	#undef pEvent
 	#define pEvent ((PKBDLLHOOKSTRUCT)lParam)
+	// Testing reveals that the driver-generated physical shift-key events occur very quickly before or
+	// after the key they are designed to "help".  Thus a value of 12 should cover just about everything
+	// (the tickcount/sleep timer granularity is usually 10 on WinNT/2k/XP, and maybe close to that on Win98
+	// as well):
+	#define SHIFT_KEY_WORKAROUND_TIMEOUT 12
 #else // Mouse Hook:
 	#undef pEvent
 	#define pEvent ((PMSLLHOOKSTRUCT)lParam)
 #endif
 
-// MSDN: "The keyboard input can come from the local keyboard driver or from calls to the keybd_event
-// function. If the input comes from a call to keybd_event, the input was "injected"".
-// My: This also applies to mouse events, so use it for them too:
-#define EVENT_IS_PHYSICAL !(pEvent->flags & LLKHF_INJECTED)
+
+
+// Used to help make a workaround for the way the keyboard driver generates
+// physical shift-key events to release the shift key whenever it is physically
+// down during the press of a dual-state Numpad key:
+#ifdef INCLUDE_KEYBD_HOOK
+static vk_type prior_vk = 0;
+static sc_type prior_sc = 0;
+static bool prior_event_was_key_up = false;
+static bool prior_event_was_physical = false;
+static DWORD prior_event_tickcount = 0;
+static modLR_type prior_modifiersLR_physical = 0;
+static bool prior_shift_state = false;  // i.e. default to "key is up".
+static bool prior_lshift_state = false;
+static bool prior_rshift_state = false;
+#endif
+
+	
+#ifdef INCLUDE_KEYBD_HOOK
+inline IsDualStateNumpadKey(vk_type aVK, sc_type aSC)
+{
+	// Older, background notes:
+	// Even if the hook suppresses the numpad key in question entirely, one of those
+	// subsystems still sees it and does the shift thing.  So that subsystem must be at a
+	// lower level than even the hook.
+
+	// The driver or whatever is generating these events is also smart enough to push the
+	// shift key back down WHILE the numpad key is still down if the user presses another key
+	// in between.  It generates this down-event BEFORE the key that the user pressed takes effect,
+	// so we know this is happening at a very low level, probably driver level or bios level.  Example:
+	// Hold down shift
+	// Hold down numpad2
+	// Press any key (e.g. H)
+	// The driver will have generated a lot of shift events to keep the shift key in the right state at
+	// each stage.
+
+	// So which keys are not physical even though they're non-injected?:
+	// - The shift-up that precedes a down of a dual-state numpad key (only happens when shift key is logically down).
+	// - The shift-down that precedes a pressing down of a key WHILE the numpad key in question is still down (rare).
+	// - The shift-up that precedes an up of a dual-state numpad key.  This only happens if the shift key is
+	//   logically down for any reason at this exact moment.
+	// - The shift-down that follows the up of a dual-state numpad key (i.e. the driver is restoring the shift state
+	//   to what it was before).
+
+	// Newer:
+	// The weird keyboard driver generated shift-key events only seem to happen when
+	// the lower function of the dual state key occurs (i.e. the Numlock-off function, such
+	// as Ins, Del, PgDn, End).  The driver probably generates these so that the shift key
+	// can be used to temporarily alter the state of the Numlock key for the purpose of
+	// sending that one key, without the shift key actually being down while the key itself
+	// is sent (since some apps may have special behavior when they detect the shift key
+	// is down).  Therefore, this function should only return TRUE if the given key is
+	// lower of the two functions for each key (e.g. INS rather than Numpad0, Del rather
+	// than NumpadDot, etc.), since the driver-generated SHIFT events won't occur otherwise.
+
+	// Note: The driver puts the shift key back down (if it needs to be restored to down) immediately
+	// after every press of a numpad key.  It then puts it up again if the user presses yet another
+	// numpad key.  In other words, it doesn't wait until the last moment to restore the shift key,
+	// it does it right away.
+
+	// Note: numlock, div, mult, sub, add, and enter are not affected by this because they
+	// have only a single state (i.e. they are unaffected by the state of the Numlock key).
+
+	// The scan code mustn't be extended, otherwise the key that was pressed is not on
+	// the Number Pad (i.e. it's the counterpart key located elsewhere on the keyboard):
+	if (aSC & 0x100)
+		return false;
+
+	switch(aVK)
+	{
+	case VK_DELETE: // NumpadDot (VK_DECIMAL)
+	case VK_INSERT: // Numpad0
+	case VK_END:    // Numpad1
+	case VK_DOWN:   // Numpad2
+	case VK_NEXT:   // Numpad3
+	case VK_LEFT:   // Numpad4
+	case VK_CLEAR:  // Numpad5 (this has been verified to be the VK that is sent, at least on my keyboard).
+	case VK_RIGHT:  // Numpad6
+	case VK_HOME:   // Numpad7
+	case VK_UP:     // Numpad8
+	case VK_PRIOR:  // Numpad9
+		return true;
+	}
+	return false;
+}
+#endif
+
 
 
 #ifdef INCLUDE_KEYBD_HOOK
-inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
+inline bool EventIsPhysical(LPARAM lParam, sc_type sc, bool key_up)
+{
+	// MSDN: "The keyboard input can come from the local keyboard driver or from calls to the keybd_event
+	// function. If the input comes from a call to keybd_event, the input was "injected"".
+	// My: This also applies to mouse events, so use it for them too:
+	if (pEvent->flags & LLKHF_INJECTED)
+		return false;
+	// Otherwise, it's probably physical.  The only exception I know of is when the keyboard driver
+	// or other low-level subsystem inserts shift-key events whenever the following are both true:
+	// 1) A dual-state Numpad key is pressed.
+	// 2) The shift key is logically down.
+	// When these events occur, the system does not indicate that they are injected even though
+	// they really are (i.e. the user never physically pressed them).
+	if (   (pEvent->vkCode == VK_SHIFT || pEvent->vkCode == VK_LSHIFT || pEvent->vkCode == VK_RSHIFT) && !key_up
+		&& prior_event_was_key_up && IsDualStateNumpadKey(prior_vk, prior_sc)
+		&& (DWORD)(GetTickCount() - prior_event_tickcount) < (DWORD)SHIFT_KEY_WORKAROUND_TIMEOUT   )
+	{
+//PostMessage(g_hWnd, AHK_HOOK_TEST_MSG, (vk_type)pEvent->vkCode, (DWORD)(GetTickCount() - prior_event_tickcount));
+		return false;  // This appears to be a non-physical, low-level event generated by the driver or OS.
+	}
+	// Otherwise:
+	return true;
+}
+
+#else // Mouse hook:
+inline bool EventIsPhysical(LPARAM lParam, bool key_up)
+{
+	return !(pEvent->flags & LLKHF_INJECTED);
+}
+#endif
+
+
+
+#ifdef INCLUDE_KEYBD_HOOK
+void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 {
 	// This part is done even if the key is being ignored because we always want their status
 	// to be correct *regardless* of whether the key is ignored.  This is especially important
@@ -68,7 +190,7 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		if (key_up)
 		{
 			g_modifiersLR_logical &= ~MOD_LSHIFT;
-			if (EVENT_IS_PHYSICAL)
+			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical &= ~MOD_LSHIFT;
 				g_PhysicalKeyState[VK_LSHIFT] = false;
@@ -78,7 +200,7 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		else
 		{
 			g_modifiersLR_logical |= MOD_LSHIFT;
-			if (EVENT_IS_PHYSICAL)
+			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical |= MOD_LSHIFT;
 				// Neutral key is defined as being down if either L/R is down:
@@ -90,7 +212,7 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		if (key_up)
 		{
 			g_modifiersLR_logical &= ~MOD_RSHIFT;
-			if (EVENT_IS_PHYSICAL)
+			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical &= ~MOD_RSHIFT;
 				g_PhysicalKeyState[VK_RSHIFT] = false;
@@ -100,7 +222,7 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		else
 		{
 			g_modifiersLR_logical |= MOD_RSHIFT;
-			if (EVENT_IS_PHYSICAL)
+			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical |= MOD_RSHIFT;
 				g_PhysicalKeyState[VK_RSHIFT] = g_PhysicalKeyState[VK_SHIFT] = true;
@@ -111,7 +233,7 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		if (key_up)
 		{
 			g_modifiersLR_logical &= ~MOD_LCONTROL;
-			if (EVENT_IS_PHYSICAL)
+			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical &= ~MOD_LCONTROL;
 				g_PhysicalKeyState[VK_LCONTROL] = false;
@@ -121,7 +243,7 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		else
 		{
 			g_modifiersLR_logical |= MOD_LCONTROL;
-			if (EVENT_IS_PHYSICAL)
+			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical |= MOD_LCONTROL;
 				g_PhysicalKeyState[VK_LCONTROL] = g_PhysicalKeyState[VK_CONTROL] = true;
@@ -132,7 +254,7 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		if (key_up)
 		{
 			g_modifiersLR_logical &= ~MOD_RCONTROL;
-			if (EVENT_IS_PHYSICAL)
+			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical &= ~MOD_RCONTROL;
 				g_PhysicalKeyState[VK_RCONTROL] = false;
@@ -142,7 +264,7 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		else
 		{
 			g_modifiersLR_logical |= MOD_RCONTROL;
-			if (EVENT_IS_PHYSICAL)
+			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical |= MOD_RCONTROL;
 				g_PhysicalKeyState[VK_RCONTROL] = g_PhysicalKeyState[VK_CONTROL] = true;
@@ -153,7 +275,7 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		if (key_up)
 		{
 			g_modifiersLR_logical &= ~MOD_LALT;
-			if (EVENT_IS_PHYSICAL)
+			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical &= ~MOD_LALT;
 				g_PhysicalKeyState[VK_LMENU] = false;
@@ -163,7 +285,7 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		else
 		{
 			g_modifiersLR_logical |= MOD_LALT;
-			if (EVENT_IS_PHYSICAL)
+			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical |= MOD_LALT;
 				g_PhysicalKeyState[VK_LMENU] = g_PhysicalKeyState[VK_MENU] = true;
@@ -174,7 +296,7 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		if (key_up)
 		{
 			g_modifiersLR_logical &= ~MOD_RALT;
-			if (EVENT_IS_PHYSICAL)
+			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical &= ~MOD_RALT;
 				g_PhysicalKeyState[VK_RMENU] = false;
@@ -184,7 +306,7 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		else
 		{
 			g_modifiersLR_logical |= MOD_RALT;
-			if (EVENT_IS_PHYSICAL)
+			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical |= MOD_RALT;
 				g_PhysicalKeyState[VK_RMENU] = g_PhysicalKeyState[VK_MENU] = true;
@@ -195,7 +317,7 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		if (key_up)
 		{
 			g_modifiersLR_logical &= ~MOD_LWIN;
-			if (EVENT_IS_PHYSICAL)
+			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical &= ~MOD_LWIN;
 				g_PhysicalKeyState[VK_LWIN] = false;
@@ -204,7 +326,7 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		else
 		{
 			g_modifiersLR_logical |= MOD_LWIN;
-			if (EVENT_IS_PHYSICAL)
+			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical |= MOD_LWIN;
 				g_PhysicalKeyState[VK_LWIN] = true;
@@ -215,7 +337,7 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		if (key_up)
 		{
 			g_modifiersLR_logical &= ~MOD_RWIN;
-			if (EVENT_IS_PHYSICAL)
+			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical &= ~MOD_RWIN;
 				g_PhysicalKeyState[VK_RWIN] = false;
@@ -224,7 +346,7 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		else
 		{
 			g_modifiersLR_logical |= MOD_RWIN;
-			if (EVENT_IS_PHYSICAL)
+			if (EventIsPhysical(lParam, sc, key_up))
 			{
 				g_modifiersLR_physical |= MOD_RWIN;
 				g_PhysicalKeyState[VK_RWIN] = true;
@@ -239,7 +361,7 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 			if (key_up)
 			{
 				g_modifiersLR_logical &= ~MOD_RSHIFT;
-				if (EVENT_IS_PHYSICAL)
+				if (EventIsPhysical(lParam, sc, key_up))
 				{
 					g_modifiersLR_physical &= ~MOD_RSHIFT;
 					g_PhysicalKeyState[VK_RSHIFT] = false;
@@ -249,7 +371,7 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 			else
 			{
 				g_modifiersLR_logical |= MOD_RSHIFT;
-				if (EVENT_IS_PHYSICAL)
+				if (EventIsPhysical(lParam, sc, key_up))
 				{
 					g_modifiersLR_physical |= MOD_RSHIFT;
 					g_PhysicalKeyState[VK_RSHIFT] = g_PhysicalKeyState[VK_SHIFT] = true;
@@ -261,7 +383,7 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 			if (key_up)
 			{
 				g_modifiersLR_logical &= ~MOD_LSHIFT;
-				if (EVENT_IS_PHYSICAL)
+				if (EventIsPhysical(lParam, sc, key_up))
 				{
 					g_modifiersLR_physical &= ~MOD_LSHIFT;
 					g_PhysicalKeyState[VK_LSHIFT] = false;
@@ -271,7 +393,7 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 			else
 			{
 				g_modifiersLR_logical |= MOD_LSHIFT;
-				if (EVENT_IS_PHYSICAL)
+				if (EventIsPhysical(lParam, sc, key_up))
 				{
 					g_modifiersLR_physical |= MOD_LSHIFT;
 					g_PhysicalKeyState[VK_LSHIFT] = g_PhysicalKeyState[VK_SHIFT] = true;
@@ -283,7 +405,7 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 			if (key_up)
 			{
 				g_modifiersLR_logical &= ~MOD_RCONTROL;
-				if (EVENT_IS_PHYSICAL)
+				if (EventIsPhysical(lParam, sc, key_up))
 				{
 					g_modifiersLR_physical &= ~MOD_RCONTROL;
 					g_PhysicalKeyState[VK_RCONTROL] = false;
@@ -293,7 +415,7 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 			else
 			{
 				g_modifiersLR_logical |= MOD_RCONTROL;
-				if (EVENT_IS_PHYSICAL)
+				if (EventIsPhysical(lParam, sc, key_up))
 				{
 					g_modifiersLR_physical |= MOD_RCONTROL;
 					g_PhysicalKeyState[VK_RCONTROL] = g_PhysicalKeyState[VK_CONTROL] = true;
@@ -303,7 +425,7 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 			if (key_up)
 			{
 				g_modifiersLR_logical &= ~MOD_LCONTROL;
-				if (EVENT_IS_PHYSICAL)
+				if (EventIsPhysical(lParam, sc, key_up))
 				{
 					g_modifiersLR_physical &= ~MOD_LCONTROL;
 					g_PhysicalKeyState[VK_LCONTROL] = false;
@@ -313,7 +435,7 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 			else
 			{
 				g_modifiersLR_logical |= MOD_LCONTROL;
-				if (EVENT_IS_PHYSICAL)
+				if (EventIsPhysical(lParam, sc, key_up))
 				{
 					g_modifiersLR_physical |= MOD_LCONTROL;
 					g_PhysicalKeyState[VK_LCONTROL] = g_PhysicalKeyState[VK_CONTROL] = true;
@@ -325,7 +447,7 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 			if (key_up)
 			{
 				g_modifiersLR_logical &= ~MOD_RALT;
-				if (EVENT_IS_PHYSICAL)
+				if (EventIsPhysical(lParam, sc, key_up))
 				{
 					g_modifiersLR_physical &= ~MOD_RALT;
 					g_PhysicalKeyState[VK_RMENU] = false;
@@ -335,7 +457,7 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 			else
 			{
 				g_modifiersLR_logical |= MOD_RALT;
-				if (EVENT_IS_PHYSICAL)
+				if (EventIsPhysical(lParam, sc, key_up))
 				{
 					g_modifiersLR_physical |= MOD_RALT;
 					g_PhysicalKeyState[VK_RMENU] = g_PhysicalKeyState[VK_MENU] = true;
@@ -345,7 +467,7 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 			if (key_up)
 			{
 				g_modifiersLR_logical &= ~MOD_LALT;
-				if (EVENT_IS_PHYSICAL)
+				if (EventIsPhysical(lParam, sc, key_up))
 				{
 					g_modifiersLR_physical &= ~MOD_LALT;
 					g_PhysicalKeyState[VK_LMENU] = false;
@@ -355,7 +477,7 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 			else
 			{
 				g_modifiersLR_logical |= MOD_LALT;
-				if (EVENT_IS_PHYSICAL)
+				if (EventIsPhysical(lParam, sc, key_up))
 				{
 					g_modifiersLR_physical |= MOD_LALT;
 					g_PhysicalKeyState[VK_LMENU] = g_PhysicalKeyState[VK_MENU] = true;
@@ -364,7 +486,55 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		break;
 	}
 }
-#endif
+
+
+
+void UpdateKeyState(LPARAM lParam, sc_type sc, bool key_up)
+{
+	// Numpad shift-key workaround to compensate for the fact that the keyboard driver (or other low-level
+	// subsystem) generates physical shift-key events to ensure that the shift key isn't logically down
+	// when a dual-state numpad key is pressed or released:
+	if (   IsDualStateNumpadKey((vk_type)pEvent->vkCode, sc)  // both the up and down events are eligible
+		&& prior_event_was_key_up && prior_event_was_physical // prior event was a physical shift-up
+		&& (prior_vk == VK_SHIFT || prior_vk == VK_LSHIFT || prior_vk == VK_RSHIFT)
+		&& (DWORD)(GetTickCount() - prior_event_tickcount) < (DWORD)SHIFT_KEY_WORKAROUND_TIMEOUT   )
+	{
+		// Since the prior event (the shift key) already happened (took effect) and since only
+		// now is it known that it shouldn't have been physical, undo the effects of it having
+		// been physical:
+//PostMessage(g_hWnd, AHK_HOOK_TEST_MSG, prior_shift_state, (DWORD)(GetTickCount() - prior_event_tickcount));
+		g_modifiersLR_physical = prior_modifiersLR_physical;
+		g_PhysicalKeyState[VK_SHIFT] = prior_shift_state;
+		g_PhysicalKeyState[VK_LSHIFT] = prior_lshift_state;
+		g_PhysicalKeyState[VK_RSHIFT] = prior_rshift_state;
+	}
+
+	// Must do this part prior to UpdateModifierState() because we want to store the values
+	// as they are prior to the potentially-erroneously-physical shift key event takes effect.
+	// The state of these is also saved because we can't assume that a shift-down, for
+	// example, CHANGED the state to down, because it may have been already down before that:
+	prior_modifiersLR_physical = g_modifiersLR_physical;
+	prior_shift_state = g_PhysicalKeyState[VK_SHIFT];
+	prior_lshift_state = g_PhysicalKeyState[VK_LSHIFT];
+	prior_rshift_state = g_PhysicalKeyState[VK_RSHIFT];
+
+	// If this function was called from SuppressThisKey(), these comments apply:
+	// Currently SuppressThisKey is only called with a modifier in the rare case
+	// when disguise_next_lwin/rwin_up is in effect.  But there may be other cases in the
+	// future, so we need to make sure the physical state of the modifiers is updated
+	// in our tracking system even though the key is being suppressed:
+	if (kvk[(vk_type)pEvent->vkCode].as_modifiersLR)
+		UpdateModifierState(lParam, sc, key_up);  // Update our tracking of LWIN/RWIN/RSHIFT etc.
+
+	// Now that we're done using the old values (the above used them and also UpdateModifierState()'s
+	// calls to EventIsPhysical()), update these to their new values:
+	prior_vk = (vk_type)pEvent->vkCode;
+	prior_sc = sc;
+	prior_event_was_key_up = key_up;
+	prior_event_was_physical = EventIsPhysical(lParam, sc, key_up);
+	prior_event_tickcount = GetTickCount();
+}
+#endif // Keyboard hook
 
 
 
@@ -415,14 +585,9 @@ inline void UpdateModifierState(LPARAM lParam, sc_type sc, bool key_up)
 		KeyEvent(KEYUP, VK_NUMLOCK);
 		KeyEvent(KEYDOWN, VK_NUMLOCK);
 	}
-
-	// Currrently SuppressThisKey is only called with a modifier in the rare case
-	// when disguise_next_lwin/rwin_up is in effect.  But there may be other cases in the
-	// future, so we need to make sure the physical state of the modifiers is updated
-	// in our tracking system even though the key is being suppressed:
-	if (kvk[(vk_type)pEvent->vkCode].as_modifiersLR)
-		UpdateModifierState(lParam, sc, key_up);
+	UpdateKeyState(lParam, sc, key_up);
 #endif
+
 	// Use PostMessage() rather than directly calling the function to write the key to
 	// the log file.  This is done so that we can return sooner, which reduces keyboard
 	// and mouse lag by us not being in a pumping-messages state.  IN ADDITION, this
@@ -461,14 +626,15 @@ inline LRESULT AllowIt(HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, sc_typ
 			if (*(kvk[(vk_type)(pEvent->vkCode)].pForceToggle) != NEUTRAL) // Prevent toggle.
 				return SuppressThisKey;
 
-	// Do this here since the above "return SuppressThisKey" will have already done it in that case.
+	// Do these here since the above "return SuppressThisKey" will have already done it in that case.
 	if (g_KeyLogToFile && pKeyLogCurr)
 		PostMessage(g_hWnd, AHK_KEYLOG, (WPARAM)pKeyLogCurr, 0);
+	UpdateKeyState(lParam, sc, key_up);
 
 	if (!kvk[(vk_type)pEvent->vkCode].as_modifiersLR)
 		return CallNextHookEx(hhk, code, wParam, lParam);
 
-	UpdateModifierState(lParam, sc, key_up);  // Update our tracking of LWIN/RWIN/RSHIFT etc.
+	// Due to above, we now know it's a modifier.
 
 	// Don't do it this way because then the alt key itself can't be reliable used as "AltTabMenu"
 	// (due to ShiftAltTab causing alt_tab_menu_is_visible to become false):
@@ -618,8 +784,13 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	// to do so, at least under WinXP.  Also, if it's a modifier, let another section handle it
 	// because it's not as simple as just setting the value to true or false (e.g. if LShift
 	// goes up, the state of VK_SHIFT should stay down if VK_RSHIFT is down, or up otherwise):
-	if (EVENT_IS_PHYSICAL && !kvk[vk].as_modifiersLR)
+#ifdef INCLUDE_KEYBD_HOOK
+	if (!kvk[vk].as_modifiersLR && EventIsPhysical(lParam, sc, key_up))
 		g_PhysicalKeyState[vk] = !key_up;
+#else
+	if (EventIsPhysical(lParam, key_up))
+		g_PhysicalKeyState[vk] = !key_up;
+#endif
 
 	// Do this after above since AllowKeyToGoToSystem requires that sc be properly determined:
 	if (pEvent->dwExtraInfo == KEYIGNORE)
@@ -628,11 +799,6 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		// that function would cause an infinite loop when the Numlock key is pressed,
 		// which would likely hang the entire system:
 		return AllowKeyToGoToSystem;
-
-#ifndef INCLUDE_KEYBD_HOOK
-	if (!vk) // No mapping for this key, so currently there's no way to process it.
-		return AllowKeyToGoToSystem;
-#endif
 
 #ifdef INCLUDE_KEYBD_HOOK
 	// Do this only after the above because the SuppressThisKey macro relies
@@ -667,9 +833,13 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		// shared by more than one key (e.g. Numpad7 and NumpadHome).  If sc were always used in
 		// preference to vk, we wouldn't be able to distinguish between such keys.
 		vk = 0;
+
+#else // Mouse hook
+	if (!vk) // No mapping for this key, so currently there's no way to process it.
+		return AllowKeyToGoToSystem;
 #endif
 
-// Uncomment this section to have it report the vk and sc of every key pressed (can be very useful):
+// Uncomment this section to have it report the vk and sc of every key pressed (can be useful):
 //PostMessage(g_hWnd, AHK_HOOK_TEST_MSG, vk, sc);
 //return AllowKeyToGoToSystem;
 

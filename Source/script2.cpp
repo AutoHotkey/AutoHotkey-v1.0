@@ -581,11 +581,13 @@ ResultType Line::WinGetPos(char *aTitle, char *aText, char *aExcludeTitle, char 
 
 
 
-ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int aColor)
+ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int aColor, int aVariation)
 {
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR2); // Set default ErrorLevel.  2 means error other than "color not found".
-	OUTPUT_VAR->Assign();  // Init to empty string regardless of whether we succeed here.
-	OUTPUT_VAR2->Assign(); // Same.
+	if (VARRAW_ARG1)
+		OUTPUT_VAR->Assign();  // Init to empty string regardless of whether we succeed here.
+	if (VARRAW_ARG2)
+		OUTPUT_VAR2->Assign(); // Same.
 
 	// Always adjust coords to reflect the position of the foreground window because AutoHotkey
 	// doesn't yet support AutoIt3's absolute-screen-coords mode:
@@ -600,20 +602,62 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int a
 	if (!hdc)
 		return OK;  // Let ErrorLevel tell the story.
 
-	int xpos, ypos;
+	if (aVariation < 0) aVariation = 0;
+	if (aVariation > 255) aVariation = 255;
+	BYTE search_red = GetRValue(aColor);
+	BYTE search_green = GetGValue(aColor);
+	BYTE search_blue = GetBValue(aColor);
+	BYTE red_low, red_high, green_low, green_high, blue_low, blue_high;
+	if (aVariation <= 0)  // User wanted an exact match.
+	{
+		red_low = red_high = search_red;
+		green_low = green_high = search_green;
+		blue_low = blue_high = search_blue;
+	}
+	else
+	{
+		// Allow colors to vary within the spectrum of intensity, rather than having them
+		// wrap around (which doesn't seem to make much sense).  For example, if the user specified
+		// a variation of 5, but the red component of aColor is only 0x01, we don't want red_low to go
+		// below zero, which would cause it to wrap around to a very intense red color:
+		red_low = (aVariation > search_red) ? 0 : search_red - aVariation;
+		green_low = (aVariation > search_green) ? 0 : search_green - aVariation;
+		blue_low = (aVariation > search_blue) ? 0 : search_blue - aVariation;
+		red_high = (aVariation > 0xFF - search_red) ? 0xFF : search_red + aVariation;
+		green_high = (aVariation > 0xFF - search_green) ? 0xFF : search_green + aVariation;
+		blue_high = (aVariation > 0xFF - search_blue) ? 0xFF : search_blue + aVariation;
+	}
+
+	int xpos, ypos, color;
+	BYTE red, green, blue;
+	bool match_found;
 	ResultType result = OK;
 	for (xpos = aLeft; xpos <= aRight; ++xpos)
 	{
 		for (ypos = aTop; ypos <= aBottom; ++ypos)
 		{
-			if (GetPixel(hdc, xpos, ypos) == aColor) // Found the pixel
+			color = GetPixel(hdc, xpos, ypos);
+			if (aVariation <= 0)  // User wanted an exact match.
+				match_found = (color == aColor);
+			else  // User specified that some variation in each of the RGB components is allowable.
+			{
+				red = GetRValue(color);
+				green = GetGValue(color);
+				blue = GetBValue(color);
+				match_found = (red >= red_low && red <= red_high
+					&& green >= green_low && green <= green_high
+					&& blue >= blue_low && blue <= blue_high);
+			}
+			if (match_found) // This pixel matches one of the specified color(s).
 			{
 				ReleaseDC(NULL, hdc);
-				// Adjust coords to make them relative to the position of the target window:
-				if (!OUTPUT_VAR->Assign(xpos - rect.left))
-					result = FAIL;
-				if (!OUTPUT_VAR2->Assign(ypos - rect.top))
-					result = FAIL;
+				if (VARRAW_ARG1)
+					// Adjust coords to make them relative to the position of the target window:
+					if (!OUTPUT_VAR->Assign(xpos - rect.left))
+						result = FAIL;
+				if (VARRAW_ARG2)
+					if (!OUTPUT_VAR2->Assign(ypos - rect.top))
+						result = FAIL;
 				if (result == OK)
 					g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 				return result;
@@ -672,32 +716,8 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			ShowMainWindow();
 			return 0;
 		case ID_TRAY_EDITSCRIPT:
-		{
-			bool old_mode = g.TitleFindAnywhere;
-			g.TitleFindAnywhere = true;
-			HWND hwnd = WinExist(g_script.mFileName, "", g_script.mMainWindowTitle); // Exclude our own main.
-			g.TitleFindAnywhere = old_mode;
-			if (hwnd)
-			{
-				char class_name[32];
-				GetClassName(hwnd, class_name, sizeof(class_name));
-				if (!strcmp(class_name, "#32770"))  // MessageBox(), InputBox(), or FileSelectFile() window.
-					hwnd = NULL;  // Exclude it from consideration.
-			}
-			if (hwnd)  // File appears to already be open for editing, so use the current window.
-				SetForegroundWindowEx(hwnd);
-			else
-				if (!g_script.ActionExec("edit", g_script.mFileSpec, g_script.mFileDir, false))
-				{
-					// Even though notepad properly handles filenames with spaces in them under WinXP,
-					// even without double quotes around them, it seems safer and more correct to always
-					// enclose the filename in double quotes for maximum compatibility with all OSes:
-					snprintf(buf, sizeof(buf), "\"%s\"", g_script.mFileSpec);
-					if (!g_script.ActionExec("notepad.exe", buf, g_script.mFileDir, false))
-						MsgBox("Could not open the file for editing using the associated \"edit\" action or Notepad.");
-				}
+			g_script.Edit();
 			return 0;
-		}
 		case ID_TRAY_RELOADSCRIPT:
 			g_script.Reload();
 			return 0;
@@ -720,7 +740,22 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			g_script.ActionExec(buf, "");
 			return 0;
 		case ID_TRAY_SUSPEND:
-			g_IsSuspended = !g_IsSuspended;
+			Line::ToggleSuspendState();
+			return 0;
+		case ID_TRAY_PAUSE:
+			if (!g.IsPaused && g_IsIdle)
+			{
+				MsgBox("The script cannot be paused while it is doing nothing.  If you wish to prevent new"
+					" hotkey subroutines from running, use Suspend instead.");
+				// i.e. we don't want idle scripts to ever be in a paused state.
+				return 0;
+			}
+			if (g.IsPaused)
+				--g_nPausedSubroutines;
+			else
+				++g_nPausedSubroutines;
+			g.IsPaused = !g.IsPaused;
+			g_script.UpdateTrayIcon();
 			return 0;
 		case ID_TRAY_EXIT:
 			g_script.ExitApp();  // More reliable than PostQuitMessage(), which has been known to fail in rare cases.
@@ -743,6 +778,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			if (!hMenu)
 				return 0;
 			CheckMenuItem(hMenu, ID_TRAY_SUSPEND, g_IsSuspended ? MF_CHECKED : MF_UNCHECKED);
+			CheckMenuItem(hMenu, ID_TRAY_PAUSE, g.IsPaused ? MF_CHECKED : MF_UNCHECKED);
  			if (   !(hMenu = GetSubMenu(hMenu, 0))   )
 				return 0;
 			SetMenuDefaultItem(hMenu, ID_TRAY_OPEN, FALSE);
@@ -801,7 +837,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 	case WM_HOTKEY: // As a result of this app having previously called RegisterHotkey().
 	case AHK_HOOK_HOTKEY:  // Sent from this app's keyboard or mouse hook.
 	{
-		if (IGNORE_THIS_HOTKEY((HotkeyIDType)wParam))
+		if (g_IgnoreHotkeys)
 			// Used to prevent runaway hotkeys, or too many happening due to key-repeat feature.
 			// It can also be used to prevent a call to MsgSleep() from accepting new hotkeys
 			// in cases where the caller's activity might be interferred with by the launch
@@ -2341,6 +2377,7 @@ ArgPurposeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_STATUSBARGETTEXT:
 		case ACT_INPUTBOX:
 		case ACT_RANDOM:
+		case ACT_INIREAD:
 		case ACT_REGREAD:
 		case ACT_DRIVESPACEFREE:
 		case ACT_FILEREADLINE:
@@ -2463,7 +2500,10 @@ ResultType Line::CheckForMandatoryArgs()
 		if (!VARRAW_ARG1 && !VARRAW_ARG2 && !VARRAW_ARG3 && !VARRAW_ARG4)
 			return LineError(ERR_MISSING_OUTPUT_VAR);
 		return OK;
-	// case ACT_PIXELSEARCH:  This is not needed here since both output vars are mandatory in the cmd array.
+	case ACT_PIXELSEARCH:
+		if (!*RAW_ARG3 || !*RAW_ARG4 || !*RAW_ARG5 || !*RAW_ARG6 || !*RAW_ARG7)
+			return LineError("Parameters 3 through 7 must not be blank.");
+		return OK;
 	}
 	return OK;  // For when the command isn't mentioned in the switch().
 }

@@ -63,7 +63,8 @@ BEGIN
         MENUITEM "&Reload This Script",         ID_TRAY_RELOADSCRIPT
         MENUITEM "&Edit This Script",           ID_TRAY_EDITSCRIPT
         MENUITEM SEPARATOR
-        MENUITEM "&Suspend",                    ID_TRAY_SUSPEND
+        MENUITEM "&Suspend Hotkeys",            ID_TRAY_SUSPEND
+        MENUITEM "&Pause Script",               ID_TRAY_PAUSE
         MENUITEM "E&xit",                       ID_TRAY_EXIT
     END
 END
@@ -76,7 +77,10 @@ END
 
 // Icon with lowest ID value placed first to ensure application icon
 // remains consistent on all systems.
-IDI_ICON1               ICON                    "icon1.ico"
+IDI_ICON_MAIN           ICON                    "icon_main.ico"
+IDI_ICON_SUSPEND        ICON                    "icon_suspend.ico"
+IDI_ICON_PAUSE          ICON                    "icon_pause.ico"
+IDI_ICON_PAUSE_SUSPEND  ICON                    "icon_pause_suspend.ico"
 
 /////////////////////////////////////////////////////////////////////////////
 //

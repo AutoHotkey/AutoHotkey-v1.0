@@ -78,7 +78,7 @@ enum enum_act {
 , ACT_STRINGLEFT, ACT_STRINGRIGHT, ACT_STRINGMID
 , ACT_STRINGTRIMLEFT, ACT_STRINGTRIMRIGHT, ACT_STRINGLOWER, ACT_STRINGUPPER
 , ACT_STRINGLEN, ACT_STRINGGETPOS, ACT_STRINGREPLACE
-, ACT_ENVSET
+, ACT_ENVSET, ACT_ENVUPDATE
 , ACT_RUN, ACT_RUNWAIT
 , ACT_GETKEYSTATE
 , ACT_SEND, ACT_CONTROLSEND, ACT_CONTROLLEFTCLICK, ACT_CONTROLFOCUS, ACT_CONTROLSETTEXT, ACT_CONTROLGETTEXT
@@ -104,13 +104,14 @@ enum enum_act {
 , ACT_FILEAPPEND, ACT_FILEREADLINE, ACT_FILECOPY, ACT_FILEMOVE, ACT_FILEDELETE
 , ACT_FILECREATEDIR, ACT_FILEREMOVEDIR
 , ACT_FILETOGGLEHIDDEN, ACT_FILESETDATEMODIFIED, ACT_FILESELECTFILE
+, ACT_INIREAD, ACT_INIWRITE, ACT_INIDELETE
 , ACT_REGREAD, ACT_REGWRITE, ACT_REGDELETE
-, ACT_SETTITLEMATCHMODE, ACT_SETKEYDELAY, ACT_SETWINDELAY, ACT_SETBATCHLINES, ACT_SUSPEND
+, ACT_SETTITLEMATCHMODE, ACT_SETKEYDELAY, ACT_SETWINDELAY, ACT_SETBATCHLINES, ACT_SUSPEND, ACT_PAUSE
 , ACT_AUTOTRIM, ACT_STRINGCASESENSE, ACT_DETECTHIDDENWINDOWS, ACT_DETECTHIDDENTEXT
 , ACT_SETNUMLOCKSTATE, ACT_SETSCROLLLOCKSTATE, ACT_SETCAPSLOCKSTATE, ACT_SETSTORECAPSLOCKMODE
 , ACT_FORCE_KEYBD_HOOK
 , ACT_KEYLOG, ACT_LISTLINES, ACT_LISTVARS, ACT_LISTHOTKEYS
-, ACT_RELOADCONFIG
+, ACT_EDIT, ACT_RELOADCONFIG
 , ACT_EXITAPP
 , ACT_SHUTDOWN
 // Make these the last ones before the count so they will be less often processed.  This helps
@@ -149,6 +150,8 @@ enum enum_act_old {
 #define ERR_LOOP_FILE_MODE "This line specifies an invalid file-loop mode."
 #define ERR_ON_OFF "If not blank, the value must be either ON, OFF, or a dereferenced variable."
 #define ERR_ON_OFF_ALWAYS "If not blank, the value must be either ON, OFF, ALWAYSON, ALWAYSOFF, or a dereferenced variable."
+#define ERR_ON_OFF_TOGGLE "If not blank, the value must be either ON, OFF, TOGGLE, or a dereferenced variable."
+#define ERR_ON_OFF_TOGGLE_PERMIT "If not blank, the value must be either ON, OFF, TOGGLE, PERMIT, or a dereferenced variable."
 #define ERR_TITLEMATCHMODE "TitleMatchMode must be either 1, 2, slow, fast, or a dereferenced variable."
 #define ERR_TITLEMATCHMODE2 "The variable does not contain a valid TitleMatchMode (the value must be either 1, 2, slow, or fast)." ERR_ABORT
 #define ERR_IFMSGBOX "This line specifies an invalid MsgBox result."
@@ -236,6 +239,9 @@ private:
 	static bool Util_DoesFileExist(const char *szFilename);
 
 
+	ResultType IniRead(char *aFilespec, char *aSection, char *aKey, char *aDefault);
+	ResultType IniWrite(char *aValue, char *aFilespec, char *aSection, char *aKey);
+	ResultType IniDelete(char *aFilespec, char *aSection, char *aKey);
 	ResultType RegRead(char *aValueType, char *aRegKey, char *aRegSubkey, char *aValueName);
 	ResultType RegWrite(char *aValueType, char *aRegKey, char *aRegSubkey, char *aValueName, char *aValue);
 	ResultType RegDelete(char *aRegKey, char *aRegSubkey, char *aValueName);
@@ -277,7 +283,7 @@ private:
 	ResultType WinGetTitle(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType WinGetPos(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
-	ResultType PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int aColor);
+	ResultType PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int aColor, int aVariation);
 	ResultType PixelGetColor(int aX, int aY);
 
 	static ResultType SetToggleState(vk_type aVK, ToggleValueType &ForceLock, char *aToggleText);
@@ -473,7 +479,7 @@ public:
 		case ACT_PIXELGETCOLOR:
 			return (aArgNum == 2 || aArgNum == 3);
 		case ACT_PIXELSEARCH:
-			return (aArgNum >= 3 || aArgNum <= 7); // Not sure if color can be negative, so allowing it for now.
+			return (aArgNum >= 3 || aArgNum <= 7); // i.e. Color values can be negative, but the last param cannot.
 		}
 		return false;  // Since above didn't return, negative is not allowed.
 	}
@@ -505,6 +511,27 @@ public:
 		if (!stricmp(aBuf, "Off")) return TOGGLED_OFF;
 		if (!stricmp(aBuf, "AlwaysOn")) return ALWAYS_ON;
 		if (!stricmp(aBuf, "AlwaysOff")) return ALWAYS_OFF;
+		return aDefault;
+	}
+
+	static ToggleValueType ConvertOnOffToggle(char *aBuf, ToggleValueType aDefault = TOGGLE_INVALID)
+	// Returns aDefault if aBuf isn't either ON, OFF, TOGGLE, or blank.
+	{
+		if (!aBuf || !*aBuf) return NEUTRAL;
+		if (!stricmp(aBuf, "On")) return TOGGLED_ON;
+		if (!stricmp(aBuf, "Off")) return TOGGLED_OFF;
+		if (!stricmp(aBuf, "Toggle")) return TOGGLE;
+		return aDefault;
+	}
+
+	static ToggleValueType ConvertOnOffTogglePermit(char *aBuf, ToggleValueType aDefault = TOGGLE_INVALID)
+	// Returns aDefault if aBuf isn't either ON, OFF, TOGGLE, PERMIT, or blank.
+	{
+		if (!aBuf || !*aBuf) return NEUTRAL;
+		if (!stricmp(aBuf, "On")) return TOGGLED_ON;
+		if (!stricmp(aBuf, "Off")) return TOGGLED_OFF;
+		if (!stricmp(aBuf, "Toggle")) return TOGGLE;
+		if (!stricmp(aBuf, "Permit")) return TOGGLE_PERMIT;
 		return aDefault;
 	}
 
@@ -580,6 +607,9 @@ public:
 	static char *LogToText(char *aBuf, size_t aBufSize);
 	char *VicinityToText(char *aBuf, size_t aBufSize, int aMaxLines = 15);
 	char *ToText(char *aBuf, size_t aBufSize, bool aAppendNewline = false);
+
+	static void ToggleSuspendState();
+	ResultType ChangePauseState(ToggleValueType aChangeTo);
 
 	Line *PreparseError(char *aErrorText);
 	// Call this LineError to avoid confusion with Script's error-displaying functions:
@@ -669,6 +699,8 @@ public:
 
 	ResultType Init(char *aScriptFilename, bool aIsRestart);
 	ResultType CreateWindows(HINSTANCE hInstance);
+	void UpdateTrayIcon();
+	ResultType Edit();
 	ResultType Reload();
 	void ExitApp(char *aBuf = NULL, int ExitCode = 0);
 	int LoadFromFile();
@@ -779,6 +811,13 @@ public:
 		strcpy(aBuf, str);
 		aBuf += length;
 		return length;
+	}
+	int GetSpace(char *aBuf = NULL)
+	{
+		if (!aBuf) return 1;  // i.e. the length of a single space char.
+		*(aBuf++) = ' ';
+		*aBuf = '\0';
+		return 1;
 	}
 
 	// Call this SciptError to avoid confusion with Line's error-displaying functions:

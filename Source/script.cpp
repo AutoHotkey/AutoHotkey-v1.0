@@ -133,6 +133,7 @@ ResultType Script::Init(char *aScriptFilename, bool aIsRestart)
 		// style or the new Exclude Title/Text mode.
 
 		g_act[ACT_MSGBOX].MaxParams -= 1;
+		g_act[ACT_INIREAD].MaxParams -= 1;
 		g_act[ACT_STRINGREPLACE].MaxParams -= 1;
 		g_act[ACT_STRINGGETPOS].MaxParams -= 1;
 		g_act[ACT_WINCLOSE].MaxParams -= 3;  // -3 for these two, -2 for the others.
@@ -166,7 +167,7 @@ ResultType Script::CreateWindows(HINSTANCE aInstance)
 {
 	if (!mMainWindowTitle || !*mMainWindowTitle) return FAIL;  // Init() must be called before this function.
 	// Register a window class for the main window:
-	HICON hIcon = LoadIcon(aInstance, MAKEINTRESOURCE(IDI_ICON1)); // LoadIcon((HINSTANCE) NULL, IDI_APPLICATION)
+	HICON hIcon = LoadIcon(aInstance, MAKEINTRESOURCE(IDI_ICON_MAIN)); // LoadIcon((HINSTANCE) NULL, IDI_APPLICATION)
 	WNDCLASSEX wc;
 	ZeroMemory(&wc, sizeof(wc));
 	wc.cbSize = sizeof(wc);
@@ -246,12 +247,73 @@ ResultType Script::CreateWindows(HINSTANCE aInstance)
 	mNIC.uID				= 0;  // Icon ID (can be anything, like Timer IDs?)
 	mNIC.uFlags				= NIF_MESSAGE | NIF_TIP | NIF_ICON;
 	mNIC.uCallbackMessage	= AHK_NOTIFYICON;
-	mNIC.hIcon				= LoadIcon(aInstance, MAKEINTRESOURCE(IDI_ICON1));
+	mNIC.hIcon				= LoadIcon(aInstance, MAKEINTRESOURCE(IDI_ICON_MAIN));
 	strlcpy(mNIC.szTip, mFileName ? mFileName : NAME_P, sizeof(mNIC.szTip));
 	if (!Shell_NotifyIcon(NIM_ADD, &mNIC))
 	{
 		mNIC.hWnd = NULL;  // Set this as an indicator that tray icon is not installed.
 		return FAIL;
+	}
+	return OK;
+}
+
+
+
+void Script::UpdateTrayIcon()
+{
+	if (!mNIC.hWnd) // tray icon is not installed
+		return;
+	static bool icon_shows_paused = false;
+	static bool icon_shows_suspended = false;
+	if (g.IsPaused == icon_shows_paused && g_IsSuspended == icon_shows_suspended) // it's already in the right state
+		return;
+	int icon;
+	if (g.IsPaused && g_IsSuspended)
+		icon = IDI_ICON_PAUSE_SUSPEND;
+	else if (g.IsPaused)
+		icon = IDI_ICON_PAUSE;
+	else if (g_IsSuspended)
+		icon = IDI_ICON_SUSPEND;
+	else
+		icon = IDI_ICON_MAIN;
+	mNIC.hIcon = LoadIcon(g_hInstance, MAKEINTRESOURCE(icon));
+	if (Shell_NotifyIcon(NIM_MODIFY, &mNIC))
+	{
+		icon_shows_paused = g.IsPaused;
+		icon_shows_suspended = g_IsSuspended;
+	}
+	// else do nothing, just leave it in the same state.
+}
+
+
+
+ResultType Script::Edit()
+{
+	bool old_mode = g.TitleFindAnywhere;
+	g.TitleFindAnywhere = true;
+	HWND hwnd = WinExist(mFileName, "", mMainWindowTitle); // Exclude our own main.
+	g.TitleFindAnywhere = old_mode;
+	if (hwnd)
+	{
+		char class_name[32];
+		GetClassName(hwnd, class_name, sizeof(class_name));
+		if (!strcmp(class_name, "#32770"))  // MessageBox(), InputBox(), or FileSelectFile() window.
+			hwnd = NULL;  // Exclude it from consideration.
+	}
+	if (hwnd)  // File appears to already be open for editing, so use the current window.
+		SetForegroundWindowEx(hwnd);
+	else
+	{
+		if (!ActionExec("edit", mFileSpec, mFileDir, false))  // Since this didn't work, try notepad.
+		{
+			// Even though notepad properly handles filenames with spaces in them under WinXP,
+			// even without double quotes around them, it seems safer and more correct to always
+			// enclose the filename in double quotes for maximum compatibility with all OSes:
+			char buf[MAX_PATH * 2];
+			snprintf(buf, sizeof(buf), "\"%s\"", mFileSpec);
+			if (!ActionExec("notepad.exe", buf, mFileDir, false))
+				MsgBox("Could not open the file for editing using the associated \"edit\" action or Notepad.");
+		}
 	}
 	return OK;
 }
@@ -836,91 +898,6 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 	// Now the above has ensured that action_args is the first parameter itself, or empty-string if none.
 	// If action_args now starts with a delimiter, it means that the first param is blank/empty.
 
-	//////////////////////////////////////////////////////////////////////////////////////////////
-	// Handle escaped-sequences (escaped delimiters and all others except variable deref symbols).
-	//////////////////////////////////////////////////////////////////////////////////////////////
-	// The size of this relies on the fact that caller made sure that aLineText isn't
-	// longer than LINE_SIZE.  Also, it seems safer to use char rather than bool, even
-	// though on most compilers they're the same size.  Char is always of size 1, but bool
-	// can be bigger depending on platform/compiler:
-	char literal_map[LINE_SIZE];
-	ZeroMemory(literal_map, sizeof(literal_map));  // Must be fully zeroed for this purpose.
-	if (aLiteralMap)
-		// Since literal map is NOT a string, just an array of char values, be sure to
-		// use memcpy() vs. strcpy() on it.  Also, caller's aLiteralMap starts at aEndMarker,
-		// so adjust it so that it starts at the newly found position of action_args instead:
-	{
-		int map_offset = (int)(action_args - end_marker);
-		int map_length = (int)(aLiteralMapLength - map_offset);
-		if (map_length > 0)
-			memcpy(literal_map, aLiteralMap + map_offset, map_length);
-	}
-	else
-	{
-		// Resolve escaped sequences and make a map of which characters in the string should
-		// be interpreted literally rather than as their native function.  In other words,
-		// convert any escape sequences in order from left to right (this order is important,
-		// e.g. ``% should evaluate to `g_DerefChar not `LITERAL_PERCENT.  This part must be
-		// done *after* checking for comment-flags that appear to the right of a valid line, above.
-		// How literal comment-flags (e.g. semicolons) work:
-		//string1; string2 <-- not a problem since string2 won't be considered a comment by the above.
-		//string1 ; string2  <-- this would be a user mistake if string2 wasn't supposed to be a comment.
-		//string1 `; string 2  <-- since esc seq. is resolved *after* checking for comments, this behaves as intended.
-		// Current limitation: a comment-flag longer than 1 can't be escaped, so if "//" were used,
-		// as a comment flag, it could never have whitespace to the left of it if it were meant to be literal.
-		// Note: This section resolves all escape sequences except those involving g_DerefChar, which
-		// are handled by a later section.
-		char c;
-		int i;
-		for (i = 0; ; ++i)  // Increment to skip over the symbol just found by the inner for().
-		{
-			for (; action_args[i] && action_args[i] != g_EscapeChar; ++i);  // Find the next escape char.
-			if (!action_args[i]) // end of string.
-				break;
-			c = action_args[i + 1];
-			switch (c)
-			{
-				case 'a': action_args[i + 1] = '\a'; break;  // alert (bell) character
-				case 'b': action_args[i + 1] = '\b'; break;  // backspace
-				case 'f': action_args[i + 1] = '\f'; break;  // formfeed
-				case 'n': action_args[i + 1] = '\n'; break;  // newline
-				case 'r': action_args[i + 1] = '\r'; break;  // carriage return
-				case 't': action_args[i + 1] = '\t'; break;  // horizontal tab
-				case 'v': action_args[i + 1] = '\v'; break;  // vertical tab
-			}
-			// Replace escape-sequence with its single-char value.  This is done event if the pair isn't
-			// a recognizable escape sequence (e.g. `? becomes ?), which is the Microsoft approach
-			// and might not be a bad way of handing things.  There are some exceptions, however.
-			// The first of these exceptions (g_DerefChar) is mandatory because that char must be
-			// handled at a later stage or escaped g_DerefChars won't work right.  The others are
-			// questionable, and might be worth further consideration.  UPDATE: g_DerefChar is now
-			// done here because otherwise, examples such as this fail:
-			// - The escape char is backslash.
-			// - any instances of \\%, such as c:\\%var% , will not work because the first escape
-			// sequence (\\) is resolved to a single literal backslash.  But then when \% is encountered
-			// by the section that resolves escape sequences for g_DerefChar, the backslash is seen
-			// as an escape char rather than a literal backslash, which is not correct.  Thus, we
-			// resolve all escapes sequences HERE in one go, from left to right.
-
-			// AutoIt2 definitely treats an escape char that occurs at the very end of
-			// a line as literal.  It seems best to also do it for these other cases too.
-			// UPDATE: I cannot reproduce the above behavior in AutoIt2.  Maybe it only
-			// does it for some commands or maybe I was mistaken.  So for now, this part
-			// is disabled:
-			//if (c == '\0' || c == ' ' || c == '\t')
-			//	literal_map[i] = 1;  // In the map, mark this char as literal.
-			//else
-			{
-				// So these are also done as well, and don't need an explicit check:
-				// g_EscapeChar , g_delimiter , (when g_CommentFlagLength > 1 ??): *g_CommentFlag
-				// Below has a final +1 to include the terminator:
-				MoveMemory(action_args + i, action_args + i + 1, strlen(action_args + i + 1) + 1);
-				literal_map[i] = 1;  // In the map, mark this char as literal.
-			}
-			// else: Do nothing, even if the value is zero (the string's terminator).
-		}
-	}
-
 	///////////////////////////////////////////////
 	// Check if this line contains a valid command.
 	///////////////////////////////////////////////
@@ -1018,6 +995,93 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 	} // If no matching command found.
 
 	Action *this_action = (action_type == ACT_INVALID) ? &g_old_act[old_action_type] : &g_act[action_type];
+
+	//////////////////////////////////////////////////////////////////////////////////////////////
+	// Handle escaped-sequences (escaped delimiters and all others except variable deref symbols).
+	// This section must occur after all other changes to the pointer value action_args have
+	// occurred above.
+	//////////////////////////////////////////////////////////////////////////////////////////////
+	// The size of this relies on the fact that caller made sure that aLineText isn't
+	// longer than LINE_SIZE.  Also, it seems safer to use char rather than bool, even
+	// though on most compilers they're the same size.  Char is always of size 1, but bool
+	// can be bigger depending on platform/compiler:
+	char literal_map[LINE_SIZE];
+	ZeroMemory(literal_map, sizeof(literal_map));  // Must be fully zeroed for this purpose.
+	if (aLiteralMap)
+	{
+		// Since literal map is NOT a string, just an array of char values, be sure to
+		// use memcpy() vs. strcpy() on it.  Also, caller's aLiteralMap starts at aEndMarker,
+		// so adjust it so that it starts at the newly found position of action_args instead:
+		int map_offset = (int)(action_args - end_marker);
+		int map_length = (int)(aLiteralMapLength - map_offset);
+		if (map_length > 0)
+			memcpy(literal_map, aLiteralMap + map_offset, map_length);
+	}
+	else
+	{
+		// Resolve escaped sequences and make a map of which characters in the string should
+		// be interpreted literally rather than as their native function.  In other words,
+		// convert any escape sequences in order from left to right (this order is important,
+		// e.g. ``% should evaluate to `g_DerefChar not `LITERAL_PERCENT.  This part must be
+		// done *after* checking for comment-flags that appear to the right of a valid line, above.
+		// How literal comment-flags (e.g. semicolons) work:
+		//string1; string2 <-- not a problem since string2 won't be considered a comment by the above.
+		//string1 ; string2  <-- this would be a user mistake if string2 wasn't supposed to be a comment.
+		//string1 `; string 2  <-- since esc seq. is resolved *after* checking for comments, this behaves as intended.
+		// Current limitation: a comment-flag longer than 1 can't be escaped, so if "//" were used,
+		// as a comment flag, it could never have whitespace to the left of it if it were meant to be literal.
+		// Note: This section resolves all escape sequences except those involving g_DerefChar, which
+		// are handled by a later section.
+		char c;
+		int i;
+		for (i = 0; ; ++i)  // Increment to skip over the symbol just found by the inner for().
+		{
+			for (; action_args[i] && action_args[i] != g_EscapeChar; ++i);  // Find the next escape char.
+			if (!action_args[i]) // end of string.
+				break;
+			c = action_args[i + 1];
+			switch (c)
+			{
+				case 'a': action_args[i + 1] = '\a'; break;  // alert (bell) character
+				case 'b': action_args[i + 1] = '\b'; break;  // backspace
+				case 'f': action_args[i + 1] = '\f'; break;  // formfeed
+				case 'n': action_args[i + 1] = '\n'; break;  // newline
+				case 'r': action_args[i + 1] = '\r'; break;  // carriage return
+				case 't': action_args[i + 1] = '\t'; break;  // horizontal tab
+				case 'v': action_args[i + 1] = '\v'; break;  // vertical tab
+			}
+			// Replace escape-sequence with its single-char value.  This is done event if the pair isn't
+			// a recognizable escape sequence (e.g. `? becomes ?), which is the Microsoft approach
+			// and might not be a bad way of handing things.  There are some exceptions, however.
+			// The first of these exceptions (g_DerefChar) is mandatory because that char must be
+			// handled at a later stage or escaped g_DerefChars won't work right.  The others are
+			// questionable, and might be worth further consideration.  UPDATE: g_DerefChar is now
+			// done here because otherwise, examples such as this fail:
+			// - The escape char is backslash.
+			// - any instances of \\%, such as c:\\%var% , will not work because the first escape
+			// sequence (\\) is resolved to a single literal backslash.  But then when \% is encountered
+			// by the section that resolves escape sequences for g_DerefChar, the backslash is seen
+			// as an escape char rather than a literal backslash, which is not correct.  Thus, we
+			// resolve all escapes sequences HERE in one go, from left to right.
+
+			// AutoIt2 definitely treats an escape char that occurs at the very end of
+			// a line as literal.  It seems best to also do it for these other cases too.
+			// UPDATE: I cannot reproduce the above behavior in AutoIt2.  Maybe it only
+			// does it for some commands or maybe I was mistaken.  So for now, this part
+			// is disabled:
+			//if (c == '\0' || c == ' ' || c == '\t')
+			//	literal_map[i] = 1;  // In the map, mark this char as literal.
+			//else
+			{
+				// So these are also done as well, and don't need an explicit check:
+				// g_EscapeChar , g_delimiter , (when g_CommentFlagLength > 1 ??): *g_CommentFlag
+				// Below has a final +1 to include the terminator:
+				MoveMemory(action_args + i, action_args + i + 1, strlen(action_args + i + 1) + 1);
+				literal_map[i] = 1;  // In the map, mark this char as literal.
+			}
+			// else: Do nothing, even if the value is zero (the string's terminator).
+		}
+	}
 
 	////////////////////////////////////////////////////////////
 	// Parse the parmeter string into a list of separate params.
@@ -1118,21 +1182,21 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 		case OLD_LEFTCLICK:
 		case OLD_RIGHTCLICK:
 			// Insert an arg at the beginning of the list to indicate the mouse button.
-			arg[2] = arg[1];
-			arg[1] = arg[0];
-			arg[0] = old_action_type == OLD_LEFTCLICK ? "Left" : "Right";
-			return AddLine(ACT_MOUSECLICK, arg, ++nArgs);
+			arg[2] = arg[1];  arg_map[2] = arg_map[1];
+			arg[1] = arg[0];  arg_map[1] = arg_map[0];
+			arg[0] = old_action_type == OLD_LEFTCLICK ? "Left" : "Right";  arg_map[0] = NULL;
+			return AddLine(ACT_MOUSECLICK, arg, ++nArgs, arg_map);
 		case OLD_LEFTCLICKDRAG:
 		case OLD_RIGHTCLICKDRAG:
 			// Insert an arg at the beginning of the list to indicate the mouse button.
-			arg[4] = arg[3]; // Set the 5th arg to be the 4th, etc.
-			arg[3] = arg[2];
-			arg[2] = arg[1];
-			arg[1] = arg[0];
-			arg[0] = (old_action_type == OLD_LEFTCLICKDRAG) ? "Left" : "Right";
-			return AddLine(ACT_MOUSECLICKDRAG, arg, ++nArgs);
+			arg[4] = arg[3];  arg_map[4] = arg_map[3]; // Set the 5th arg to be the 4th, etc.
+			arg[3] = arg[2];  arg_map[3] = arg_map[2];
+			arg[2] = arg[1];  arg_map[2] = arg_map[1];
+			arg[1] = arg[0];  arg_map[1] = arg_map[0];
+			arg[0] = (old_action_type == OLD_LEFTCLICKDRAG) ? "Left" : "Right";  arg_map[0] = NULL;
+			return AddLine(ACT_MOUSECLICKDRAG, arg, ++nArgs, arg_map);
 		case OLD_REPEAT:
-			if (AddLine(ACT_REPEAT, arg, nArgs) != OK)
+			if (AddLine(ACT_REPEAT, arg, nArgs, arg_map) != OK)
 				return FAIL;
 			// For simplicity, always enclose repeat-loop's contents in in a block rather
 			// than trying to detect if it has only one line:
@@ -1140,38 +1204,38 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 		case OLD_ENDREPEAT:
 			return AddLine(ACT_BLOCK_END);
 		case OLD_WINGETACTIVETITLE:
-			arg[nArgs++] = "A";  // Signifies the active window.
-			return AddLine(ACT_WINGETTITLE, arg, nArgs);
+			arg[nArgs] = "A";  arg_map[nArgs] = NULL; // "A" signifies the active window.
+			++nArgs;
+			return AddLine(ACT_WINGETTITLE, arg, nArgs, arg_map);
 		case OLD_WINGETACTIVESTATS:
 		{
-			// Convert OLD_WINGETACTIVESTATS into two new commands.
-			char *title = arg[0];
-			char *width = arg[1];
-			char *height = arg[2];
-			char *xpos = arg[3];
-			char *ypos = arg[4];
-			arg[0] = title;
-			arg[1] = "A";  // Signifies the active window.
-			if (AddLine(ACT_WINGETTITLE, arg, 2) != OK)
+			// Convert OLD_WINGETACTIVESTATS into *two* new commands:
+			// Command #1: WinGetTitle, OutputVar, A
+			char *width = arg[1];  // Temporary placeholder.
+			arg[1] = "A";  arg_map[1] = NULL;  // Signifies the active window.
+			if (AddLine(ACT_WINGETTITLE, arg, 2, arg_map) != OK)
 				return FAIL;
-			arg[0] = xpos;  // Reassign args in the new command's ordering.
-			arg[1] = ypos;
-			arg[2] = width;
-			arg[3] = height;
-			arg[4] = "A";
-			return AddLine(ACT_WINGETPOS, arg, 5);
+			// Command #2: WinGetPos, XPos, YPos, Width, Height, A
+			// Reassign args in the new command's ordering.  These lines must occur
+			// in this exact order for the copy to work properly:
+			arg[0] = arg[3];  arg_map[0] = arg_map[3];  // xpos
+			arg[3] = arg[2];  arg_map[3] = arg_map[2];  // height
+			arg[2] = width;   arg_map[2] = arg_map[1];  // width
+			arg[1] = arg[4];  arg_map[1] = arg_map[4];  // ypos
+			arg[4] = "A";  arg_map[4] = NULL;  // "A" signifies the active window.
+			return AddLine(ACT_WINGETPOS, arg, 5, arg_map);
 		}
 
 		case OLD_SETENV:
-			return AddLine(ACT_ASSIGN, arg, nArgs);
+			return AddLine(ACT_ASSIGN, arg, nArgs, arg_map);
 		case OLD_ENVADD:
-			return AddLine(ACT_ADD, arg, nArgs);
+			return AddLine(ACT_ADD, arg, nArgs, arg_map);
 		case OLD_ENVSUB:
-			return AddLine(ACT_SUB, arg, nArgs);
+			return AddLine(ACT_SUB, arg, nArgs, arg_map);
 		case OLD_ENVMULT:
-			return AddLine(ACT_MULT, arg, nArgs);
+			return AddLine(ACT_MULT, arg, nArgs, arg_map);
 		case OLD_ENVDIV:
-			return AddLine(ACT_DIV, arg, nArgs);
+			return AddLine(ACT_DIV, arg, nArgs, arg_map);
 
 		// For these, break rather than return so that further processing can be done:
 		case OLD_IFEQUAL:
@@ -1421,7 +1485,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			{
 				// Find next non-literal g_DerefChar:
 				for (; new_arg[i].text[j]
-					&& (new_arg[i].text[j] != g_DerefChar || (aArgMap && aArgMap[i][j])); ++j);
+					&& (new_arg[i].text[j] != g_DerefChar || (aArgMap && aArgMap[i] && aArgMap[i][j])); ++j);
 				if (!new_arg[i].text[j])
 					break;
 				// else: Match was found; this is the deref's open-symbol.
@@ -1435,7 +1499,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					return ScriptError("This parameter contains a variable name"
 						" that is missing its ending dereference symbol.", new_arg[i].text);
 				// Otherwise: Match was found; this should be the deref's close-symbol.
-				if (aArgMap && aArgMap[i][j])  // But it's mapped as literal g_DerefChar.
+				if (aArgMap && aArgMap[i] && aArgMap[i][j])  // But it's mapped as literal g_DerefChar.
 					return ScriptError("This parmeter contains a variable name with"
 						" an escaped dereference symbol, which is not allowed.", new_arg[i].text);
 				deref_string_length = new_arg[i].text + j - deref[deref_count].marker + 1;
@@ -1458,13 +1522,26 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			case ACT_DETECTHIDDENWINDOWS:
 			case ACT_DETECTHIDDENTEXT:
 			case ACT_SETSTORECAPSLOCKMODE:
-			case ACT_SUSPEND:
 			case ACT_AUTOTRIM:
 			case ACT_STRINGCASESENSE:
 				if (i != 0) break;  // Should never happen in these cases.
 				if (!deref_count)
 					if (!Line::ConvertOnOff(new_arg[i].text))
 						return ScriptError(ERR_ON_OFF, g_act[aActionType].Name);
+				break;
+
+			case ACT_SUSPEND:
+				if (i != 0) break;  // Should never happen in this cases.
+				if (!deref_count)
+					if (!Line::ConvertOnOffTogglePermit(new_arg[i].text))
+						return ScriptError(ERR_ON_OFF_TOGGLE_PERMIT, g_act[aActionType].Name);
+				break;
+
+			case ACT_PAUSE:
+				if (i != 0) break;  // Should never happen in this cases.
+				if (!deref_count)
+					if (!Line::ConvertOnOffToggle(new_arg[i].text))
+						return ScriptError(ERR_ON_OFF_TOGGLE, g_act[aActionType].Name);
 				break;
 
 			case ACT_SETNUMLOCKSTATE:
@@ -1498,6 +1575,16 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					value = atoi(new_arg[i].text);
 					if (value < 0 || value > 100)
 						return ScriptError(ERR_PERCENT, new_arg[i].text);
+				}
+				break;
+
+			case ACT_PIXELSEARCH:
+				if (i != 7) break; // i.e. 8th param
+				if (!deref_count)
+				{
+					value = atoi(new_arg[i].text);
+					if (value < 0 || value > 255)
+						return ScriptError("Parameter #8 must be number between 0 and 255, or a dereferenced variable.", new_arg[i].text);
 				}
 				break;
 
@@ -1615,8 +1702,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 							if (stricmp(line->mArg[*np - 1].text, "default"))
 							{
 								snprintf(error_msg, sizeof(error_msg), "\"%s\" requires parameter #%u to be"
-									" either %s numeric, a dereferenced variable, blank, or the word Default."
-									, g_act[line->mActionType].Name, *np, allow_negative ? "" : "non-negative");
+									" either %snumeric, a dereferenced variable, blank, or the word Default."
+									, g_act[line->mActionType].Name, *np, allow_negative ? "" : "non-negative ");
 								return ScriptError(error_msg, line->mArg[*np - 1].text);
 							}
 							// else don't bother removing the word "default" since it won't save
@@ -1627,8 +1714,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 						else
 						{
 							snprintf(error_msg, sizeof(error_msg), "\"%s\" requires parameter #%u to be"
-								" either %s numeric, blank (if blank is allowed), or a dereferenced variable."
-								, g_act[line->mActionType].Name, *np, allow_negative ? "" : "non-negative");
+								" either %snumeric, blank (if blank is allowed), or a dereferenced variable."
+								, g_act[line->mActionType].Name, *np, allow_negative ? "" : "non-negative ");
 							return ScriptError(error_msg, line->mArg[*np - 1].text);
 						}
 					}
@@ -1830,6 +1917,7 @@ ResultType Script::AddVar(char *aVarName, size_t aVarNameLength)
 	else if (!stricmp(new_name, "a_TimeSinceThisHotkey")) var_type = VAR_TIMESINCETHISHOTKEY;
 	else if (!stricmp(new_name, "a_TimeSincePriorHotkey")) var_type = VAR_TIMESINCEPRIORHOTKEY;
 	else if (!stricmp(new_name, "a_TickCount")) var_type = VAR_TICKCOUNT;
+	else if (!stricmp(new_name, "a_Space")) var_type = VAR_SPACE;
 	else var_type = VAR_NORMAL;
 
 	Var *the_new_var = new Var(new_name, var_type);
@@ -2289,15 +2377,6 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 		g_script.mCurrLine = line;  // Simplifies error reporting when we get deep into function calls.
 		line->Log();  // Maintains a circular queue of the lines most recently executed.
 
-		// Expand any dereferences contained in this line's args.
-		// Note: Only one line at a time be expanded via the above function.  So be sure
-		// to store any parts of a line that are needed prior to moving on to the next
-		// line (e.g. control stmts such as IF and LOOP).  Also, don't expand
-		// ACT_ASSIGN because a more efficient way of dereferencing may be possible
-		// in that case:
-		if (line->mActionType != ACT_ASSIGN && line->ExpandArgs() != OK)
-			return FAIL;  // Abort the current subroutine, but don't terminate the app.
-
 		// The below handles the message-loop checking regardless of whether
 		// aMode is ONLY_ONE_LINE (i.e. recursed) or not (i.e. we're using
 		// the for-loop to execute the script linearly):
@@ -2311,6 +2390,28 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, modLR_type aModifiersLR, Line **
 			// this call will never return.  Note: MsgSleep() will reset
 			// mLinesExecutedThisCycle for us:
 			MsgSleep(); // Exact length of sleep unimportant.
+
+		// At this point, a pause may have been triggered either by the above MsgSleep()
+		// or due to the action of a command (e.g. Pause, or perhaps tray menu "pause" was selected during Sleep):
+		for (;;)
+		{
+			if (g.IsPaused)
+				MsgSleep(INTERVAL_UNSPECIFIED, RETURN_AFTER_MESSAGES, false);
+			else
+				break;
+		}
+
+		// Do this only after the opportunity to Sleep (above) has passed, because during
+		// that sleep, a new subroutine might be launched which would likely overwrite the
+		// deref buffer used for arg expansion, below:
+		// Expand any dereferences contained in this line's args.
+		// Note: Only one line at a time be expanded via the above function.  So be sure
+		// to store any parts of a line that are needed prior to moving on to the next
+		// line (e.g. control stmts such as IF and LOOP).  Also, don't expand
+		// ACT_ASSIGN because a more efficient way of dereferencing may be possible
+		// in that case:
+		if (line->mActionType != ACT_ASSIGN && line->ExpandArgs() != OK)
+			return FAIL;  // Abort the current subroutine, but don't terminate the app.
 
 		if (ACT_IS_IF(line->mActionType))
 		{
@@ -2954,6 +3055,13 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		return OK;  // Always successful, like AutoIt.
 	}
 
+	case ACT_INIREAD:
+		return IniRead(ARG2, ARG3, ARG4, ARG5);
+	case ACT_INIWRITE:
+		return IniWrite(FOUR_ARGS);
+	case ACT_INIDELETE:
+		return IniDelete(THREE_ARGS);
+
 	case ACT_REGREAD:
 		return RegRead(ARG2, ARG3, ARG4, ARG5);
 	case ACT_REGWRITE:
@@ -2986,6 +3094,18 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		// variable is dereferenced).  For now, this is documented here as a known limitation.
 		g_ErrorLevel->Assign(SetEnvironmentVariable(ARG1, ARG2) ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
 		return OK;
+	case ACT_ENVUPDATE:
+	{
+		// From the AutoIt3 source:
+		// AutoIt3 uses SMTO_BLOCK (which prevents our thread from doing anything during the call)
+		// vs. SMTO_NORMAL.  Since I'm not sure why, I'm leaving it that way for now:
+		ULONG nResult;
+		if (SendMessageTimeout(HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM)"Environment", SMTO_BLOCK, 15000, &nResult))
+			g_ErrorLevel->Assign(ERRORLEVEL_NONE);
+		else
+			g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+		return OK;
+	}
 	case ACT_RUN:
 		return g_script.ActionExec(ARG1, NULL, ARG2, true, ARG3);  // Be sure to pass NULL for 2nd param.
 	case ACT_RUNWAIT:
@@ -3142,7 +3262,7 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 	case ACT_WINGETPOS:
 		return WinGetPos(ARG5, ARG6, ARG7, ARG8);
 	case ACT_PIXELSEARCH:
-		return PixelSearch(atoi(ARG3), atoi(ARG4), atoi(ARG5), atoi(ARG6), atoi(ARG7));
+		return PixelSearch(atoi(ARG3), atoi(ARG4), atoi(ARG5), atoi(ARG6), atoi(ARG7), atoi(ARG8));
 	case ACT_PIXELGETCOLOR:
 		return PixelGetColor(atoi(ARG2), atoi(ARG3));
 	case ACT_WINMINIMIZEALL: // From AutoIt3 source:
@@ -3585,7 +3705,8 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			"\r\nKeybd hook: %s"
 			"\r\nMouse hook: %s"
 			"\r\nLast hotkey type: %s"
-			"\r\nSuspended subroutines: %d"
+			"\r\nInterrupted subroutines: %d%s"
+			"\r\nPaused subroutines: %d"
 			"\r\nMsgBoxes: %d"
 			"\r\nModifiers (GetKeyState() now) = %s"
 			"\r\n"
@@ -3594,7 +3715,9 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			, g_hhkLowLevelKeybd == NULL ? "no" : "yes"
 			, g_hhkLowLevelMouse == NULL ? "no" : "yes"
 			, g_LastPerformedHotkeyType == HK_KEYBD_HOOK ? "keybd hook" : "not keybd hook"
-			, g_nSuspendedSubroutines
+			, g_nInterruptedSubroutines
+			, g_nInterruptedSubroutines ? " (preempted: they will resume when the current subroutine finishes)" : ""
+			, g_nPausedSubroutines
 			, g_nMessageBoxes
 			, ModifiersLRToText(GetModifierLRStateSimple(), LRtext));
 		size_t length = strlen(buf_temp);
@@ -3804,16 +3927,31 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 			g.StoreCapslockMode = (toggle == TOGGLED_ON);
 		return OK;
 	case ACT_SUSPEND:
-		switch (ConvertOnOff(ARG1))
+		switch (ConvertOnOffTogglePermit(ARG1))
 		{
-		case NEUTRAL:     g_IsSuspended = !g_IsSuspended; break;
-		case TOGGLED_ON:  g_IsSuspended = true; break;
-		case TOGGLED_OFF: g_IsSuspended = false; break;
+		case NEUTRAL:
+		case TOGGLE:
+			ToggleSuspendState();
+			break;
+		case TOGGLED_ON:
+			if (!g_IsSuspended)
+				ToggleSuspendState();
+			break;
+		case TOGGLED_OFF:
+			if (g_IsSuspended)
+				ToggleSuspendState();
+			break;
+		case TOGGLE_PERMIT:
+			// In this case do nothing.  The user is just using this command as a flag to indicate that
+			// this subroutine should not be suspended.
+			break;
 		// We know it's a variable because otherwise the loading validation would have caught it earlier:
-		case TOGGLE_INVALID: return LineError("The variable in param #1 does not resolve to an allowed value."
-			, FAIL, ARG1);
+		case TOGGLE_INVALID:
+			return LineError("The variable in param #1 does not resolve to an allowed value.", FAIL, ARG1);
 		}
 		return OK;
+	case ACT_PAUSE:
+		return ChangePauseState(ConvertOnOffToggle(ARG1));
 	case ACT_AUTOTRIM:
 		if (   (toggle = ConvertOnOff(ARG1, NEUTRAL)) != NEUTRAL   )
 			g.AutoTrim = (toggle == TOGGLED_ON);
@@ -3846,9 +3984,14 @@ inline ResultType Line::Perform(modLR_type aModifiersLR, WIN32_FIND_DATA *aCurre
 		return SetToggleState(VK_CAPITAL, g_ForceCapsLock, ARG1);
 	case ACT_SETSCROLLLOCKSTATE:
 		return SetToggleState(VK_SCROLL, g_ForceScrollLock, ARG1);
+
+	case ACT_EDIT:
+		g_script.Edit();
+		return OK;
 	case ACT_RELOADCONFIG:
 		g_script.Reload();
 		return OK;
+
 	case ACT_INVALID: // Should be impossible because Script::AddLine() forbids it.
 		return LineError("Perform(): Invalid action type." PLEASE_REPORT ERR_ABORT);
 	}
@@ -4212,6 +4355,62 @@ char *Line::ToText(char *aBuf, size_t aBufSize, bool aAppendNewline)
 		*aBuf = '\0';
 	}
 	return aBuf;
+}
+
+
+
+void Line::ToggleSuspendState()
+{
+	if (g_IsSuspended) // toggle off the suspension
+		Hotkey::AllActivate();
+	else // suspend
+		Hotkey::AllDeactivate(true);
+	g_IsSuspended = !g_IsSuspended;
+	g_script.UpdateTrayIcon();
+}
+
+
+
+ResultType Line::ChangePauseState(ToggleValueType aChangeTo)
+// Returns OK or FAIL.
+// Note: g_Idle must be false since we're always called from a script subroutine, not from
+// the tray menu.  Therefore, the value of g_Idle need never be checked here.
+{
+	switch (aChangeTo)
+	{
+	case TOGGLED_ON:
+		// Pause the current subroutine (which by definition isn't paused since it had to be 
+		// active to call us):
+		g.IsPaused = true;
+		++g_nPausedSubroutines;
+		g_script.UpdateTrayIcon();
+		return OK;
+	case TOGGLED_OFF:
+		// Unpause the uppermost underlying paused subroutine.  If none of the interrupted subroutines
+		// are paused, do nothing. This relies on the fact that the current script subroutine,
+		// which got us here, cannot itself be currently paused by definition:
+		if (g_nPausedSubroutines > 0)
+			g_UnpauseWhenResumed = true;
+		return OK;
+	case NEUTRAL: // the user omitted the parameter entirely, which is considered the same as "toggle"
+	case TOGGLE:
+		// See TOGGLED_OFF comment above:
+		if (g_nPausedSubroutines > 0)
+			g_UnpauseWhenResumed = true;
+		else
+		{
+			// Since there are no underlying paused subroutines, pause the current subroutine.
+			// There must be a current subroutine (i.e. the script can't be idle) because the
+			// it's the one that called us directly, and we know it's not paused:
+			g.IsPaused = true;
+			++g_nPausedSubroutines;
+			g_script.UpdateTrayIcon();
+		}
+		return OK;
+	default: // TOGGLE_INVALID or some other disallowed value.
+		// We know it's a variable because otherwise the loading validation would have caught it earlier:
+		return LineError("The variable in param #1 does not resolve to an allowed value.", FAIL, ARG1);
+	}
 }
 
 

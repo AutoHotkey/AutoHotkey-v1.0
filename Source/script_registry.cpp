@@ -1,7 +1,5 @@
 ////////////////////////////////////////////////////////////
 // This file has been adapted to work with this application.
-////////////////////////////////////////////////////////////
-
 ///////////////////////////////////////////////////////////////////////////////
 //
 // AutoIt
@@ -36,9 +34,49 @@
 #include "globaldata.h"
 
 
-///////////////////////////////////////////////////////////////////////////////
-// RegRead()
-///////////////////////////////////////////////////////////////////////////////
+
+ResultType Line::IniRead(char *aFilespec, char *aSection, char *aKey, char *aDefault)
+{
+	if (!aDefault || !*aDefault)
+		aDefault = "ERROR";  // This mirrors what AutoIt2 does for its default value.
+	char	szFileTemp[_MAX_PATH+1];
+	char	*szFilePart;
+	char	szBuffer[65535] = "";					// Max ini file size is 65535 under 95
+	// Get the fullpathname (ini functions need a full path):
+	GetFullPathName(aFilespec, _MAX_PATH, szFileTemp, &szFilePart);
+	GetPrivateProfileString(aSection, aKey, aDefault, szBuffer, sizeof(szBuffer), szFileTemp);
+	// The above function is supposed to set szBuffer to be aDefault if it can't find the
+	// file, section, or key.  In other words, it always changes the contents of szBuffer.
+	return OUTPUT_VAR->Assign(szBuffer);
+}
+
+
+
+ResultType Line::IniWrite(char *aValue, char *aFilespec, char *aSection, char *aKey)
+{
+	char	szFileTemp[_MAX_PATH+1];
+	char	*szFilePart;
+	// Get the fullpathname (ini functions need a full path) 
+	GetFullPathName(aFilespec, _MAX_PATH, szFileTemp, &szFilePart);
+	WritePrivateProfileString(aSection, aKey, aValue, szFileTemp);  // Returns zero on failure.
+	WritePrivateProfileString(NULL, NULL, NULL, szFileTemp);	// Flush
+	return OK;  // For now, this always returns OK.
+}
+
+
+
+ResultType Line::IniDelete(char *aFilespec, char *aSection, char *aKey)
+{
+	char	szFileTemp[_MAX_PATH+1];
+	char	*szFilePart;
+	// Get the fullpathname (ini functions need a full path) 
+	GetFullPathName(aFilespec, _MAX_PATH, szFileTemp, &szFilePart);
+	WritePrivateProfileString(aSection, aKey, NULL, szFileTemp);  // Returns zero on failure.
+	WritePrivateProfileString(NULL, NULL, NULL, szFileTemp);	// Flush
+	return OK;  // For now, this always returns OK.
+}
+
+
 
 ResultType Line::RegRead(char *aValueType, char *aRegKey, char *aRegSubkey, char *aValueName)
 {
@@ -89,9 +127,6 @@ ResultType Line::RegRead(char *aValueType, char *aRegKey, char *aRegSubkey, char
 } // RegRead()
 
 
-///////////////////////////////////////////////////////////////////////////////
-// RegWrite()
-///////////////////////////////////////////////////////////////////////////////
 
 ResultType Line::RegWrite(char *aValueType, char *aRegKey, char *aRegSubkey, char *aValueName, char *aValue)
 {
@@ -149,9 +184,6 @@ ResultType Line::RegWrite(char *aValueType, char *aRegKey, char *aRegSubkey, cha
 } // RegWrite()
 
 
-///////////////////////////////////////////////////////////////////////////////
-// RegRemovewSubkeys() - helper function for RegDelete
-///////////////////////////////////////////////////////////////////////////////
 
 bool Line::RegRemoveSubkeys(HKEY hRegKey)
 {
@@ -181,9 +213,6 @@ bool Line::RegRemoveSubkeys(HKEY hRegKey)
 }
 
 
-///////////////////////////////////////////////////////////////////////////////
-// RegDelete()
-///////////////////////////////////////////////////////////////////////////////
 
 ResultType Line::RegDelete(char *aRegKey, char *aRegSubkey, char *aValueName)
 {

@@ -196,6 +196,12 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 	MSG msg;
 	for (;;)
 	{
+		// The script is idle (doing nothing and having no dialogs or suspended subroutines)
+		// whenever the aMode is the one set when we were first called by WinMain().  All
+		// other callers call this function with the other mode, and the script should not
+		// be considered idle in those cases:
+		g_IsIdle = (aMode == WAIT_FOR_MESSAGES);
+
 		if (aSleepDuration > 0 && !empty_the_queue_via_peek)
 		{
 			// Use GetMessage() whenever possible, rather than PeekMessage() or a technique such
@@ -307,16 +313,16 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 		}
 		case WM_HOTKEY: // As a result of this app having previously called RegisterHotkey().
 		case AHK_HOOK_HOTKEY:  // Sent from this app's keyboard or mouse hook.
-			if (IGNORE_THIS_HOTKEY((HotkeyIDType)msg.wParam))
+			if (g_IgnoreHotkeys)
 				break;
-			if (g_nSuspendedSubroutines >= 10)
+			if (g_nInterruptedSubroutines >= 10)
 				// Allow only a limited number of recursion levels to avoid any chance of
 				// stack overflow.  So ignore this message:
 				break;
 			if (aMode == RETURN_AFTER_MESSAGES)
 			{
 				was_interrupted = true;
-				++g_nSuspendedSubroutines;
+				++g_nInterruptedSubroutines;
 				// Save the current foreground window in case the subroutine that's about
 				// to be suspended is working with it.  Then, when the subroutine is
 				// resumed, we can ensure this window is the foreground one.  UPDATE:
@@ -343,6 +349,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 			g.hWndLastUsed = NULL;
 			g.StartTime = GetTickCount();
 			g_script.mLinesExecutedThisCycle = 0;  // Doing this is somewhat debatable.
+			g_IsIdle = false;  // Make sure the state is correct since we're about to launch a subroutine.
 
 			// Always kill the main timer, for performance reasons and for simplicity of design,
 			// prior to embarking on new subroutine whose duration may be long (e.g. if BatchLines
@@ -375,9 +382,9 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 
 			if (aMode == RETURN_AFTER_MESSAGES)
 			{
-				if (g_nSuspendedSubroutines > 0) // Check just in case because never want it to go negative.
-					--g_nSuspendedSubroutines;
-				// Restore the global values for the subroutine that was suspended:
+				if (g_nInterruptedSubroutines > 0) // Check just in case because never want it to go negative.
+					--g_nInterruptedSubroutines;
+				// Restore the global values for the subroutine that was interrupted:
 				// Resume the original subroutine by returning, even if there
 				// are still messages waiting in the queue.  Always return OK
 				// to the caller because CRITICAL_ERROR was handled above:
@@ -386,6 +393,19 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode, bool aRestoreActiveWi
 				// Last param of below call tells it never to restore, because the final
 				// loop iteration will do that if it's appropriate (i.e. avoid doing it
 				// twice in case the final peek-iteration discovers a recursable action):
+				if (g_UnpauseWhenResumed && g.IsPaused)
+				{
+					g_UnpauseWhenResumed = false;  // We've "used up" this unpause ticket.
+					g.IsPaused = false;
+					--g_nPausedSubroutines;
+				}
+				// else if it it's paused, it will automatically be resumed in a paused state
+				// because when we return from this function, we should be returning to
+				// an instance of ExecUntil() (our caller), which should be in a pause loop still.
+				// But always update the tray icon in case the paused state of the subroutine
+				// we're about to resume is different from our previous paused state:
+				g_script.UpdateTrayIcon();
+
 				if (IsCycleComplete(aSleepDuration, start_time, allow_early_return, was_interrupted, true))
 				{
 					// Check for messages once more in case the subroutine that just completed

@@ -37,7 +37,7 @@ GNU General Public License for more details.
 
 #define NAME_P "AutoHotkey"
 #define WINDOW_CLASS_NAME NAME_P
-#define NAME_VERSION "0.216"
+#define NAME_VERSION "0.217"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 #define EXT_AUTOIT2 ".aut"
@@ -70,7 +70,8 @@ enum ResultType {FAIL = 0, OK, WARN = OK, CRITICAL_ERROR
 // These are used for things that can be turned on, off, or left at a
 // neutral default value that is neither on nor off.  INVALID must
 // be zero:
-enum ToggleValueType {TOGGLE_INVALID = 0, TOGGLED_ON, TOGGLED_OFF, ALWAYS_ON, ALWAYS_OFF, NEUTRAL};
+enum ToggleValueType {TOGGLE_INVALID = 0, TOGGLED_ON, TOGGLED_OFF, ALWAYS_ON, ALWAYS_OFF
+	, TOGGLE, TOGGLE_PERMIT, NEUTRAL};
 
 // For convenience in many places.  Must cast to int to avoid loss of negative values.
 #define BUF_SPACE_REMAINING ((int)(aBufSize - (aBuf - aBuf_orig)))
@@ -109,7 +110,7 @@ struct Action
 	// number 1, the second 2, etc (i.e. it doesn't start at zero).  The list
 	// is ended with a zero, much like a string.  The compiler will notify us
 	// (verified) if the number of elements ever needs to be increased:
-	#define MAX_NUMERIC_PARAMS 6
+	#define MAX_NUMERIC_PARAMS 7
 	ActionTypeType NumericParams[MAX_NUMERIC_PARAMS];
 };
 
@@ -134,17 +135,20 @@ struct global_struct
 	HWND hWndToRestore;
 	int MsgBoxResult;  // Which button was pressed in the most recent MsgBox.
 	bool WaitingForDialog;
+	bool IsPaused;
 	DWORD StartTime;   // When when this subroutine was started.
 };
 
 inline void global_clear_state(global_struct *gp)
-// Reset those values which represent the condition or state of previously executed commands.
+// Reset those values which represent the condition or state created by previously executed commands.
 {
 	*gp->ErrorLevel = '\0'; // This isn't the actual ErrorLevel: it's used to save and restore it.
 	// But don't reset g_ErrorLevel itself because we want to handle that conditional behavior elsewhere.
 	gp->hWndLastUsed = gp->hWndToRestore = NULL;
 	gp->MsgBoxResult = 0;
 	gp->WaitingForDialog = false;
+	gp->IsPaused = false;
+
 }
 
 inline void global_init(global_struct *gp)

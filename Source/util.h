@@ -19,10 +19,16 @@ GNU General Public License for more details.
 
 #include "defines.h"
 #include "limits.h"  // for UINT_MAX
+//#include <math.h> // For floor()
 
 
 #define IS_SPACE_OR_TAB(c) (c == ' ' || c == '\t')
 
+
+//inline int iround(double x)  // Taken from someone's "Snippets".
+//{
+//	return (int)floor(x + ((x >= 0) ? 0.5 : -0.5));
+//}
 
 inline char *strupr(char *str)
 {

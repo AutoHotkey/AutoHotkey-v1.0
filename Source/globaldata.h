@@ -41,10 +41,12 @@ extern bool g_ForceLaunch;
 extern bool g_AllowOnlyOneInstance;
 extern bool g_AllowSameLineComments;
 extern char g_LastPerformedHotkeyType;
+extern bool g_IsIdle;
 extern bool g_IgnoreHotkeys;
 extern bool g_IsSuspended;
-#define IGNORE_THIS_HOTKEY(id) (g_IgnoreHotkeys || (g_IsSuspended && Hotkey::GetTypeOfFirstLine(id) != ACT_SUSPEND))
-extern int g_nSuspendedSubroutines;
+extern int g_nInterruptedSubroutines;
+extern int g_nPausedSubroutines;
+extern bool g_UnpauseWhenResumed;
 
 extern int g_MaxHotkeysPerInterval;
 extern int g_HotkeyThrottleInterval;

@@ -1210,6 +1210,9 @@ HWND GetTopChild(HWND aParent)
 {
 	if (!aParent) return aParent;
 	HWND hwnd_top, next_top;
+	// Get the topmost window of the topmost window of...
+	// i.e. Since child windows can also have children, we keep going until
+	// we reach the "last topmost" window:
 	for (hwnd_top = GetTopWindow(aParent)
 		; hwnd_top && (next_top = GetTopWindow(hwnd_top))
 		; hwnd_top = next_top);

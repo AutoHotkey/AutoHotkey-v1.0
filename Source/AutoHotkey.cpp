@@ -80,7 +80,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	// is run without it, that 3rd instance should still be blocked because the
 	// second created a 2nd handle to the mutex that won't be closed until the 2nd
 	// instance terminates, so it should work ok:
-	//CreateMutex(NULL, TRUE, script_filespec); // script_filespec seems a good choice for uniqueness.
+	//CreateMutex(NULL, FALSE, script_filespec); // script_filespec seems a good choice for uniqueness.
 	//if (!g_ForceLaunch && !restart_mode && GetLastError() == ERROR_ALREADY_EXISTS)
 
 	// Init global arrays after chances to exit have passed:
@@ -96,19 +96,21 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	// Note: the title below must be constructed the same was as is done by our
 	// CreateWindows(), which is why it's standardized in g_script.mMainWindowTitle:
 	HWND w_existing = FindWindow(WINDOW_CLASS_NAME, g_script.mMainWindowTitle);
+	bool close_prior_instance = false;
 	if (g_AllowOnlyOneInstance && w_existing && !restart_mode && !g_ForceLaunch)
 	{
 		// Use a more unique title for this dialog so that subsequent executions of this
 		// program can easily find it (though they currently don't):
 		//#define NAME_ALREADY_RUNNING NAME_PV " script already running"
-		if (MsgBox("Another instance of this script is already running.  Close it?"
-			"\n\nNote: You can force additional instances by running the program with"
-			" the /force switch.", MB_YESNO, g_script.mFileName) == IDYES)
-			PostMessage(w_existing, WM_CLOSE, 0, 0);
-		return 0;
+		if (MsgBox("An older instance of this #SingleInstance script is already running."
+			"  Replace it with this instance?", MB_YESNO, g_script.mFileName) == IDNO)
+			return 0;
+		else
+			close_prior_instance = true;
 	}
-
-	if (restart_mode && w_existing)
+	if (!close_prior_instance && restart_mode && w_existing)
+		close_prior_instance = true;
+	if (close_prior_instance)
 	{
 		// Now that the script has been validated and is ready to run,
 		// close the prior instance.  We wait until now to do this so
@@ -128,6 +130,9 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 			MsgBox("Could not close the previous instance of this script."  PLEASE_REPORT);
 			return CRITICAL_ERROR;
 		}
+		// Give it a small amount of additional time to completely terminate, even though
+		// its main window has already been destroyed:
+		Sleep(100);
 	}
 
 	// Call this only after closing any existing instance of the program,

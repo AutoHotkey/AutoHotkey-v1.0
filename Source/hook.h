@@ -102,8 +102,10 @@ struct KeyLogItem
 LRESULT CALLBACK LowLevelKeybdProc(int code, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam);
 
-HookType HookInit(Hotkey *aHK[], int aHK_count, HookType aHooksToActivate);
-void HookTerm();
+HookType RemoveAllHooks();
+HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHooks, bool aWarnIfHooksAlreadyInstalled
+	, bool aActivateOnlySuspendHotkeys = false);
+
 char *GetHookStatus(char *aBuf, size_t aBufSize);
 
 #endif

@@ -21,8 +21,9 @@ GNU General Public License for more details.
 
 #include "hook.h"
 #include "globaldata.h"  // for access to several global vars
-#include "hotkey.h" // HookInit() reads directly from static Hotkey class vars.
+#include "hotkey.h" // ChangeHookState() reads directly from static Hotkey class vars.
 #include "util.h" // for snprintfcat()
+#include "window.h" // for MsgBox()
 
 // Declare static variables (global to only this file/module, i.e. no
 // external linkage):
@@ -34,6 +35,9 @@ GNU General Public License for more details.
 static bool disguise_next_lwin_up = false;
 static bool disguise_next_rwin_up = false;
 static bool alt_tab_menu_is_visible = false;
+
+static HANDLE keybd_hook_mutex = NULL;
+static HANDLE mouse_hook_mutex = NULL;
 
 // The prefix key that's currently down (i.e. in effect).
 // It's tracked this way, rather than as a count of the number of prefixes currently down, out of
@@ -75,7 +79,6 @@ static HotkeyIDType *kscm = NULL;
 // and we wouldn't know whether to send the mouse or the keybd handle.  This is because
 // we're not supposed to look at the other args (wParam & lParam) received by the Hook
 // when nCode < 0, because those args might have no meaning or even have random values:
-
 // Define the mouse hook function:
 #include "hook_include.cpp"
 // Define the keybd hook function:
@@ -174,6 +177,7 @@ int sort_most_general_before_least(const void *a1, const void *a2)
 }
 
 
+
 void SetModifierAsPrefix(vk_type aVK, sc_type aSC, bool aAlwaysSetAsPrefix = false)
 // The caller has already ensured that vk and/or sc is a modifier such as VK_CONTROL.
 {
@@ -224,72 +228,115 @@ void SetModifierAsPrefix(vk_type aVK, sc_type aSC, bool aAlwaysSetAsPrefix = fal
 
 
 
-HookType HookInit(Hotkey *aHK[], int aHK_count, HookType aHooksToActivate)
-// The input params are probably unnecessary because could just
-// access directly by using Hotkey::shk[] ... but aHK is a little
-// more concise.
-// Returns the set of hooks that is currently active.
+inline HookType GetActiveHooks()
 {
-	// Don't allow caller to ask us to deactivate a currently-active hook.
-	// The caller should have used HookTerm() for that.  UPDATE: It's okay
-	// if caller asks us to install only one of the hooks but the other
-	// is already installed.  The convention now is that the caller isn't
-	// asking us to turn anything off; it's just specifying what it wants
-	// turned on:
-	//if (g_hhkLowLevelKeybd && !(aHooksToActivate & HOOK_KEYBD))
-	//	return HOOK_FAIL;
-	//if (g_hhkLowLevelMouse && !(aHooksToActivate & HOOK_MOUSE))
-	//	return HOOK_FAIL;
-
 	HookType hooks_currently_active = 0;
 	if (g_hhkLowLevelKeybd)
 		hooks_currently_active |= HOOK_KEYBD;
 	if (g_hhkLowLevelMouse)
 		hooks_currently_active |= HOOK_MOUSE;
+	return hooks_currently_active;
+}
 
-	// The below effectively makes it necessary for the caller to call HookTerm()
-	// first if it wishes us to reload the hotkey configuration:
-	if ((aHooksToActivate & hooks_currently_active) == aHooksToActivate)
-		// Bitwise-AND does set intersection.  In this case, the above means that
-		// aHooksToActivate is a perfect subset of hooks_currently_active,
-		// which means that all the requested hooks are already installed.
+
+
+HookType RemoveKeybdHook()
+{
+	if (g_hhkLowLevelKeybd)
+		if (UnhookWindowsHookEx(g_hhkLowLevelKeybd))
+		{
+			g_hhkLowLevelKeybd = NULL;
+			if (keybd_hook_mutex)
+			{
+				CloseHandle(keybd_hook_mutex);
+				keybd_hook_mutex = NULL;  // Keep this in sync with the above, since this can be run more than once.
+			}
+		}
+	return GetActiveHooks();
+}
+
+
+
+HookType RemoveMouseHook()
+{
+	if (g_hhkLowLevelMouse)
+		if (UnhookWindowsHookEx(g_hhkLowLevelMouse))
+		{
+			g_hhkLowLevelMouse = NULL;
+			if (mouse_hook_mutex)
+			{
+				CloseHandle(mouse_hook_mutex);
+				mouse_hook_mutex = NULL;  // Keep this in sync with the above, since this can be run more than once.
+			}
+		}
+	return GetActiveHooks();
+}
+
+
+
+HookType RemoveAllHooks()
+{
+	RemoveKeybdHook();
+	RemoveMouseHook();
+	if (kvk) delete [] kvk;
+	if (ksc) delete [] ksc;
+	if (kvkm) delete [] kvkm;
+	if (kscm) delete [] kscm;
+	kvk = ksc = NULL;
+	kvkm = kscm = NULL;
+	return 0;
+}
+
+
+
+HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHooks, bool aWarnIfHooksAlreadyInstalled
+	, bool aActivateOnlySuspendHotkeys)
+// The input params are unnecessary because could just access directly by using Hotkey::shk[].
+// But aHK is a little more concise.
+// Returns the set of hooks that are active after processing is complete.
+{
+	HookType hooks_currently_active = GetActiveHooks();
+	if (aWhichHooks == hooks_currently_active && !aActivateOnlySuspendHotkeys) // Nothing needs to be done.
 		return hooks_currently_active;
-	// else at least one of the hooks needs to be activated, and the below relies
-	// upon this being true.
 
-	// No longer applicable:
-	// But do allow the function to continue even if the hooks specified in aHooksToActivate
-	// are already active, so that the data structures can be reinitialized below to reflect
-	// changes the caller wants made.  However, support for that has not been fully reviewed
-	// or tested.
+	if (!aHK || !aHK_count || !aWhichHooks)
+		// Deinstall all hooks and free the memory in any of these cases (though it's currently never
+		// called this way):
+		return RemoveAllHooks();
 
-	// It's valid for this be zero, such as when the user specifies that
-	// the Numlock key should be forced on, but nothing else is handled
-	// by the hook:
-	//if (!aHK_count) return 0;
+	// Now we know that at least one of the hooks is a candidate for activation.
+	// Set up the arrays process all of the hook hotkeys even if the corresponding hook won't
+	// become active (which should only happen if aActivateOnlySuspendHotkeys is true
+	// and it turns out there are no suspend-hotkeys that are handled by the hook).
 
 	// These arrays are dynamically allocated so that memory is conserved in cases when
 	// the user doesn't need the hook at all (i.e. just normal registered hotkeys).
 	// This is a waste of memory if there are no hook hotkeys, but currently the operation
 	// of the hook relies upon these being allocated, even if the arrays are all clean
-	// slates with nothing in them.  Presumably, the caller is requesting the keyboard
-	// hook with zero hotkeys to support the forcing of Num/Caps/ScrollLock always on
-	// or off:
-	kvk = ksc = NULL;
-	kvkm = kscm = NULL;
-	if (NULL != (kvk = new key_type[KVK_SIZE]))
-		if (NULL != (ksc = new key_type[KSC_SIZE]))
-			if (NULL != (kvkm = new HotkeyIDType[KVKM_SIZE]))
-				kscm = new HotkeyIDType[KSCM_SIZE];
-	if (kvk == NULL || ksc == NULL || kvkm == NULL || kscm == NULL)
+	// slates with nothing in them (it could check if the arrays are NULL but then the
+	// performance would be slightly worse for the "average" script).  Presumably, the
+	// caller is requesting the keyboard hook with zero hotkeys to support the forcing
+	// of Num/Caps/ScrollLock always on or off (a fairly rare situation, probably):
+	if (kvk == NULL)  // Since its an initialzied global, this indicates that all 4 objects are not yet allocated.
 	{
-		if (kvk) delete [] kvk;
-		if (ksc) delete [] ksc;
-		if (kvkm) delete [] kvkm;
-		if (kscm) delete [] kscm;
-		kvk = ksc = NULL;
-		kvkm = kscm = NULL;
-		return 0;
+		if (NULL != (kvk = new key_type[KVK_SIZE]))
+			if (NULL != (ksc = new key_type[KSC_SIZE]))
+				if (NULL != (kvkm = new HotkeyIDType[KVKM_SIZE]))
+					kscm = new HotkeyIDType[KSCM_SIZE];
+		if (kvk == NULL || ksc == NULL || kvkm == NULL || kscm == NULL) // at least one of the allocations failed
+		{
+			// Keep all 4 objects in sync with one another (i.e. either all allocated, or all not allocated):
+			if (kvk) delete [] kvk;
+			if (ksc) delete [] ksc;
+			if (kvkm) delete [] kvkm;
+			if (kscm) delete [] kscm;
+			kvk = ksc = NULL;
+			kvkm = kscm = NULL;
+			// In this case, indicate that none of the hooks is installed, since if we're here, this
+			// is the first call to this function and there hasn't yet been any opportunity to install
+			// a hook:
+			return 0;
+		}
 	}
 
 	// Very important to initialize in this case.  Don't use sizeof(kvk/ksc) because kvk and ksc
@@ -323,12 +370,6 @@ HookType HookInit(Hotkey *aHK[], int aHK_count, HookType aHooksToActivate)
 	kvk[VK_LWIN].as_modifiersLR = MOD_LWIN;
 	kvk[VK_RWIN].as_modifiersLR = MOD_RWIN;
 
-/*
-	// Used to assist the performance and readability of the hook procedure:
-	kvk[VK_SCROLL].toggleable_vk = VK_SCROLL;
-	kvk[VK_CAPITAL].toggleable_vk = VK_CAPITAL;
-	kvk[VK_NUMLOCK].toggleable_vk = VK_NUMLOCK;
-*/
 	// Use the address rather than the value, so that if the global var's value
 	// changes during runtime, ours will too:
 	kvk[VK_SCROLL].pForceToggle = &g_ForceScrollLock;
@@ -368,16 +409,31 @@ HookType HookInit(Hotkey *aHK[], int aHK_count, HookType aHooksToActivate)
 
 	hk_sorted_type hk_sorted[MAX_HOTKEYS];
 	ZeroMemory(hk_sorted, sizeof(hk_sorted));
-	int hk_sorted_count = 0;
+	int hk_sorted_count = 0, keybd_hook_hotkey_count = 0, mouse_hook_hotkey_count = 0;
 	key_type *pThisKey = NULL;
 	for (i = 0; i < aHK_count; ++i)
 	{
+		// If it's not a hook hotkey (e.g. it was already registered with RegisterHotkey(),
+		// don't process it here:
 		if (aHK[i]->mType != HK_KEYBD_HOOK && aHK[i]->mType != HK_MOUSE_HOOK)
+			continue;
+
+		// So aHK[i] is a hook hotkey.  But if the caller specified true for aActivateOnlySuspendHotkeys,
+		// we won't include it unless the first line of its subroutine is the SUSPEND command:
+		if (aActivateOnlySuspendHotkeys
+			&& !(aHK[i]->mJumpToLabel && aHK[i]->mJumpToLabel->mJumpToLine->mActionType == ACT_SUSPEND))
 			continue;
 
 		// Rule out the possibility of obnoxious values right away, preventing array-out-of bounds, etc.:
 		if ((!aHK[i]->mVK && !aHK[i]->mSC) || aHK[i]->mVK > VK_MAX || aHK[i]->mSC > SC_MAX)
 			continue;
+
+		// Now that any conditions under which we would exclude the hotkey have been checked above,
+		// accumulate these values:
+		if (aHK[i]->mType == HK_KEYBD_HOOK)
+			++keybd_hook_hotkey_count;
+		else if (aHK[i]->mType == HK_MOUSE_HOOK)
+			++mouse_hook_hotkey_count;
 
 		if (!aHK[i]->mVK)
 			// scan codes don't need something like the switch stmt below because they can't be neutral.
@@ -503,8 +559,7 @@ HookType HookInit(Hotkey *aHK[], int aHK_count, HookType aHooksToActivate)
 		}
 
 		// At this point, since the above didn't "continue", this hotkey is one without a ModifierVK/SC.
-		// Put it into a temporary array, which will be later sorted.
-
+		// Put it into a temporary array, which will be later sorted:
 		hk_sorted[hk_sorted_count].id_with_flags = aHK[i]->mHookAction ? aHK[i]->mHookAction : hotkey_id_with_flags;
 		hk_sorted[hk_sorted_count].vk = aHK[i]->mVK;
 		hk_sorted[hk_sorted_count].sc = aHK[i]->mSC;
@@ -514,7 +569,18 @@ HookType HookInit(Hotkey *aHK[], int aHK_count, HookType aHooksToActivate)
 		++hk_sorted_count;
 	}
 
-	if (hk_sorted_count)
+	// Note: the values of g_ForceNum/Caps/ScrollLock are TOGGLED_ON/OFF or neutral, never ALWAYS_ON/ALWAYS_OFF:
+	bool force_CapsNumScroll = g_ForceNumLock != NEUTRAL || g_ForceCapsLock != NEUTRAL || g_ForceScrollLock != NEUTRAL;
+
+	if (!hk_sorted_count && !force_CapsNumScroll)
+		// Since there are no hotkeys whatsover (not even an AlwaysOn/Off toggleable key),
+		// remove all hooks and free the memory.  Currently, this should only happen if
+		// aActivateOnlySuspendHotkeys is true (i.e. there were no Suspend-type hotkeys to
+		// activate). Note: When "suspend" mode is in effect, the Num/Scroll/CapsLock
+		// AlwaysOn/Off feature is not disabled, by design:
+		return RemoveAllHooks();
+
+	if (hk_sorted_count) // else it's zero, which at this stage should mean that AlwaysOn/Off has been specified for at least one key.
 	{
 		// It's necessary to get them into this order to avoid problems that would be caused by
 		// AllowExtraModifiers:
@@ -531,7 +597,6 @@ HookType HookInit(Hotkey *aHK[], int aHK_count, HookType aHooksToActivate)
 			if (hk_sorted[i].modifiersLR)
 				i_modifiers_merged |= ConvertModifiersLR(hk_sorted[i].modifiersLR);
 
-//if (hk_sorted[i].vk == VK_MENU) PostMessage(g_hWnd, AHK_HOOK_TEST_MSG, hk_sorted[i].modifiers, hk_sorted[i].modifiersLR);
 			for (modifiersLR = 0; modifiersLR <= MODLR_MAX; ++modifiersLR)  // For each possible LR value.
 			{
 				modifiers = ConvertModifiersLR(modifiersLR);
@@ -604,43 +669,105 @@ HookType HookInit(Hotkey *aHK[], int aHK_count, HookType aHooksToActivate)
 		}
 	}
 
-	// It seems best to reset these whenever either hook is activated, since there's
-	// currently no way to know if the function has been called before.  Currently,
-	// it's only called once (either by first use of "SetNumLock(etc.), AlwaysOn" or
-	// by the activation of the entire hotkey set (if the set requires the hook)
-	// so this is the first time:
-	ZeroMemory(g_KeyLog, sizeof(g_KeyLog));
-	ZeroMemory(g_PhysicalKeyState, sizeof(g_PhysicalKeyState));
-	pPrefixKey = NULL;
-	g_modifiersLR_logical = g_modifiersLR_physical = g_modifiersLR_get = 0;
-	disguise_next_lwin_up = disguise_next_rwin_up = alt_tab_menu_is_visible = false;
+	// Install any hooks that aren't already installed:
 	// Even if OS is Win9x, try LL hooks anyway.  This will probably fail on WinNT if it doesn't have SP3+
-	if (!g_hhkLowLevelKeybd && (aHooksToActivate & HOOK_KEYBD))
+	if (!g_hhkLowLevelKeybd && (aWhichHooks & HOOK_KEYBD) && (keybd_hook_hotkey_count || force_CapsNumScroll))
+	{
+		if (!keybd_hook_mutex) // else we already have ownership of the mutex so no need for this check.
+		{
+			keybd_hook_mutex = CreateMutex(NULL, FALSE, NAME_P "KeybdHook");
+			if (aWarnIfHooksAlreadyInstalled && GetLastError() == ERROR_ALREADY_EXISTS)
+			{
+				int result = MsgBox("Another instance of this program already has the KEYBOARD hook"
+					" installed (perhaps because some of its hotkeys require it)."
+					"  Installing it a second time might produce unexpected behavior.  Do it anyway?"
+					"\n\nChoose NO to exit the program."
+					"\n\nYou can disable this warning by starting the program with /force as a parameter."
+					, MB_YESNO);
+				if (result != IDYES)
+					g_script.ExitApp();
+				// Note: It's not necessary to ever close the Mutex with CloseHandle() because:
+				// "The system closes the handle automatically when the process terminates.
+				// The mutex object is destroyed when its last handle has been closed."
+			}
+		}
 		if (g_hhkLowLevelKeybd = SetWindowsHookEx(WH_KEYBOARD_LL, LowLevelKeybdProc, g_hInstance, 0))
+		{
 			hooks_currently_active |= HOOK_KEYBD;
-	if (!g_hhkLowLevelMouse && (aHooksToActivate & HOOK_MOUSE))
+			// Doesn't seem necessary to ever init g_KeyLog or g_KeyLogNext here, since they were
+			// zero-filled on startup by their global initializers.  But we do want to reset the below
+			// whenever the hook is being installed after a (probably long) period during which it
+			// wasn't installed.  This is because we don't know the current physical state of the
+			// keyboard and such:
+			ZeroMemory(g_PhysicalKeyState, sizeof(g_PhysicalKeyState));
+			pPrefixKey = NULL;
+			g_modifiersLR_logical = g_modifiersLR_physical = g_modifiersLR_get = 0;
+			disguise_next_lwin_up = disguise_next_rwin_up = alt_tab_menu_is_visible = false;
+		}
+		else
+		{
+			if (g_os.IsWin9x()) // i.e. it failed because the OS does't support it.
+				MsgBox("Note: This script attempts to use keyboard or hotkey features that aren't yet supported"
+					" on Win95/98/ME.  Those parts of the script will not function.");
+			else
+				MsgBox("Warning: The keyboard hook could not be activated.  Please report this as a possible bug.");
+			return -1;
+		}
+	}
+	else
+		// Deinstall hook if the caller omitted it from aWhichHooks, or if it had no
+		// corresponding hotkeys (currently the latter only happens in the case of
+		// aActivateOnlySuspendHotkeys == TRUE):
+		if (g_hhkLowLevelKeybd && (!(aWhichHooks & HOOK_KEYBD) || !(keybd_hook_hotkey_count || force_CapsNumScroll)))
+			hooks_currently_active = RemoveKeybdHook();
+
+	if (!g_hhkLowLevelMouse && (aWhichHooks & HOOK_MOUSE) && mouse_hook_hotkey_count)
+	{
+		if (!mouse_hook_mutex) // else we already have ownership of the mutex so no need for this check.
+		{
+			mouse_hook_mutex = CreateMutex(NULL, FALSE, NAME_P "MouseHook");
+			if (aWarnIfHooksAlreadyInstalled && GetLastError() == ERROR_ALREADY_EXISTS)
+			{
+				int result = MsgBox("Another instance of this program already has the MOUSE hook"
+					" installed (perhaps because some of its hotkeys require it)."
+					"  Installing it a second time might produce unexpected behavior.  Do it anyway?"
+					"\n\nChoose NO to exit the program."
+					"\n\nYou can disable this warning by starting the program with /force as a parameter."
+					, MB_YESNO);
+				if (result != IDYES)
+					g_script.ExitApp();
+			}
+		}
 		if (g_hhkLowLevelMouse = SetWindowsHookEx(WH_MOUSE_LL, LowLevelMouseProc, g_hInstance, 0))
+		{
 			hooks_currently_active |= HOOK_MOUSE;
+			// Initialize some things, a very limited subset of what is initialized when the
+			// keyboard hook is installed (see its comments).  This is might not everything
+			// we should initialize, so further study is justified in the future:
+			g_PhysicalKeyState[VK_LBUTTON] = g_PhysicalKeyState[VK_RBUTTON] = g_PhysicalKeyState[VK_MBUTTON] 
+				= g_PhysicalKeyState[VK_XBUTTON1] = g_PhysicalKeyState[VK_XBUTTON2] = false;
+			// These are not really valid, since they can't be in a physically down state, but it's
+			// probably better to have a false value in them:
+			g_PhysicalKeyState[VK_WHEEL_DOWN] = g_PhysicalKeyState[VK_WHEEL_UP] = false;
+		}
+		else
+		{
+			if (g_os.IsWin9x()) // i.e. it failed because the OS does't support it.
+				MsgBox("Note: This script attempts to use mouse features that aren't yet supported on Win95/98/ME."
+					"  Those parts of the script will not function.");
+			else
+				MsgBox("Warning: The mouse hook could not be activated.  Please report this as a possible bug.");
+			return -1;
+		}
+	}
+	else
+		// Deinstall hook if the caller omitted it from aWhichHooks, or if it had no
+		// corresponding hotkeys (currently the latter only happens in the case of
+		// aActivateOnlySuspendHotkeys == TRUE):
+		if (g_hhkLowLevelMouse && (!(aWhichHooks & HOOK_MOUSE) || !mouse_hook_hotkey_count))
+			hooks_currently_active = RemoveMouseHook();
 
 	return hooks_currently_active;
-}
-
-
-
-void HookTerm()
-{
-	if (g_hhkLowLevelKeybd)
-		if (UnhookWindowsHookEx(g_hhkLowLevelKeybd))
-			g_hhkLowLevelKeybd = NULL;
-	if (g_hhkLowLevelMouse)
-		if (UnhookWindowsHookEx(g_hhkLowLevelMouse))
-			g_hhkLowLevelMouse = NULL;
-	if (kvk) delete [] kvk;
-	if (ksc) delete [] ksc;
-	if (kvkm) delete [] kvkm;
-	if (kscm) delete [] kscm;
-	kvk = ksc = NULL;
-	kvkm = kscm = NULL;
 }
 
 
@@ -655,10 +782,10 @@ char *GetHookStatus(char *aBuf, size_t aBufSize)
 
 	if (!g_hhkLowLevelKeybd && !g_hhkLowLevelMouse)
 		strlcpy(KeyLogText, "\r\n"
-			"Note: The KeyLog itself is not shown because neither\r\n"
-			"the keyboard nor the mouse hook is installed.\r\n"
-			"You can force them to be installed by adding either or\r\n"
-			"both of the following lines to this script:\r\n"
+			"Note: The KeyLog itself is not shown because this script\r\n"
+			"requires neither the keyboard nor the mouse hook.\r\n"
+			"You can force the hooks to be installed by adding either\r\n"
+			"or both of the following lines to this script:\r\n"
 			"#InstallKeybdHook\r\n"
 			"#InstallMouseHook\r\n", sizeof(KeyLogText));
 	else
