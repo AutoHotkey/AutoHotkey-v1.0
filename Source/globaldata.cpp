@@ -36,13 +36,18 @@ HACCEL g_hAccelTable = NULL;
 modLR_type g_modifiersLR_logical = 0;
 modLR_type g_modifiersLR_physical = 0;
 
+#ifdef FUTURE_USE_MOUSE_BUTTONS_LOGICAL
+WORD g_mouse_buttons_logical = 0;
+#endif
+
 // Used by the hook to track physical state of all virtual keys, since GetAsyncKeyState() does
-// not work as advertised, at least under WinXP:
-bool g_PhysicalKeyState[VK_MAX + 1] = {false};
+// not work as advertised, at least under WinXP.  Note that this array is also used by ToAscii(),
+// so it's format should be the same as that returned from GetKeyboardState():
+BYTE g_PhysicalKeyState[VK_ARRAY_COUNT] = {0};
 
 int g_HotkeyModifierTimeout = 50;  // Reduced from 100, which was a little too large for fast typists.
-HHOOK g_hhkLowLevelKeybd = NULL;
-HHOOK g_hhkLowLevelMouse = NULL;
+HHOOK g_KeybdHook = NULL;
+HHOOK g_MouseHook = NULL;
 #ifdef HOOK_WARNING
 	HookType sWhichHookSkipWarning = 0;
 #endif
@@ -59,6 +64,7 @@ char g_LastPerformedHotkeyType = HK_NORMAL;
 bool g_MainTimerExists = false;
 bool g_UninterruptibleTimerExists = false;
 bool g_AutoExecTimerExists = false;
+bool g_InputTimerExists = false;
 bool g_IsSuspended = false;  // Make this separate from g_AllowInterruption since that is frequently turned off & on.
 bool g_AllowInterruption = true;
 bool g_AllowInterruptionForSub = true; // Separate from g_AllowInterruption so that they can have independent values.
@@ -90,8 +96,9 @@ char g_DerefChar = '%';
 char g_EscapeChar = '`';
 
 // Global objects:
-Script g_script;
 Var *g_ErrorLevel = NULL; // Allows us (in addition to the user) to set this var to indicate success/failure.
+input_type g_input;
+Script g_script;
 // This made global for performance reasons (determining size of clipboard data then
 // copying contents in or out without having to close & reopen the clipboard in between):
 Clipboard g_clip;
@@ -118,8 +125,8 @@ ToggleValueType g_ForceNumLock = NEUTRAL;
 ToggleValueType g_ForceCapsLock = NEUTRAL;
 ToggleValueType g_ForceScrollLock = NEUTRAL;
 
-vk2_type g_sc_to_vk[SC_MAX + 1] = {{0}};
-sc2_type g_vk_to_sc[VK_MAX + 1] = {{0}};
+vk2_type g_sc_to_vk[SC_ARRAY_COUNT] = {{0}};
+sc2_type g_vk_to_sc[VK_ARRAY_COUNT] = {{0}};
 
 
 // The order of initialization here must match the order in the enum contained in script.h
@@ -211,6 +218,8 @@ Action g_act[] =
 	, {"SplashTextOn", 0, 4, {1, 2, 0}} // Width, height, title, text
 	, {"SplashTextOff", 0, 0, NULL}
 	, {"ToolTip", 0, 3, {2, 3, 0}}  // Text, X, Y.  If all 3 are omitted, the Tooltip is turned off.
+	, {"TrayTip", 0, 4, {3, 4, 0}}  // Title, Text, Timeout, Options
+	, {"Input", 0, 4, NULL}  // OutputVar, Options, EndKeys, MatchList.
 
 	, {"StringLeft", 3, 3, {3, 0}}  // output var, input var, number of chars to extract
 	, {"StringRight", 3, 3, {3, 0}} // same
@@ -243,11 +252,12 @@ Action g_act[] =
 	, {"ControlMove", 0, 9, {2, 3, 4, 5, 0}} // Control, x, y, w, h, WinTitle, WinText, ExcludeTitle, ExcludeText
 	, {"ControlFocus", 0, 5, NULL}     // Control, std. 4 window params
 	, {"ControlGetFocus", 1, 5, NULL}  // OutputVar, std. 4 window params
-	, {"ControlSetText", 1, 6, NULL}   // Control, new text, std. 4 window params
+	, {"ControlSetText", 0, 6, NULL}   // Control, new text, std. 4 window params
 	, {"ControlGetText", 1, 6, NULL}   // Output-var, Control, std. 4 window params
 	, {"Control", 1, 7, NULL}   // Command, Value, Control, std. 4 window params
 	, {"ControlGet", 2, 8, NULL}   // Output-var, Command, Value, Control, std. 4 window params
 
+	, {"CoordMode", 1, 2, NULL} // Pixel|Mouse|ToolTip, screen|relative
 	, {"SetDefaultMouseSpeed", 1, 1, {1, 0}} // speed (numeric)
 	, {"MouseMove", 2, 3, {1, 2, 3, 0}} // x, y, speed
 	, {"MouseClick", 1, 6, {2, 3, 4, 5, 0}} // which-button, x, y, ClickCount, speed, d=hold-down/u=release
@@ -308,6 +318,7 @@ Action g_act[] =
 	, {"GroupClose", 1, 2, NULL}
 
 	, {"DriveSpaceFree", 2, 2, NULL} // Output-var, path (e.g. c:\)
+	, {"DriveGet", 0, 3, NULL} // Output-var (optional in at least one case), Command, Value
 
 	, {"SoundGet", 1, 4, {4, 0}} // OutputVar, ComponentType (default=master), ControlType (default=vol), Mixer/Device Number
 	, {"SoundSet", 1, 4, {1, 4, 0}} // Volume percent-level (0-100), ComponentType, ControlType (default=vol), Mixer/Device Number
@@ -342,7 +353,7 @@ Action g_act[] =
 
 	, {"IniRead", 4, 5, NULL}   // OutputVar, Filespec, Section, Key, Default (value to return if key not found)
 	, {"IniWrite", 4, 4, NULL}  // Value, Filespec, Section, Key
-	, {"IniDelete", 3, 3, NULL} // Filespec, Section, Key
+	, {"IniDelete", 2, 3, NULL} // Filespec, Section, Key
 
 	// These require so few parameters due to registry loops, which provide the missing parameter values
 	// automatically.  In addition, RegRead can't require more than 1 param since the 2nd param is
@@ -430,11 +441,11 @@ key_to_vk_type g_key_to_vk[] =
 , {"ScrollLock", VK_SCROLL}
 , {"CapsLock", VK_CAPITAL}
 
-, {"Escape", VK_ESCAPE}
+, {"Escape", VK_ESCAPE}  // So that VKToKeyName() delivers consistent results, always have the preferred name first.
 , {"Esc", VK_ESCAPE}
 , {"Tab", VK_TAB}
 , {"Space", VK_SPACE}
-, {"Backspace", VK_BACK}
+, {"Backspace", VK_BACK} // So that VKToKeyName() delivers consistent results, always have the preferred name first.
 , {"BS", VK_BACK}
 
 // These keys each have a counterpart on the number pad with the same VK.  Use the VK for these,
@@ -450,7 +461,7 @@ key_to_vk_type g_key_to_vk[] =
 // Even though ENTER is probably less likely to be assigned than NumpadEnter, must have ENTER as
 // the primary vk because otherwise, if the user configures only naked-NumPadEnter to do something,
 // RegisterHotkey() would register that vk and ENTER would also be configured to do the same thing.
-, {"Enter", VK_RETURN}
+, {"Enter", VK_RETURN}  // So that VKToKeyName() delivers consistent results, always have the preferred name first.
 , {"Return", VK_RETURN}
 
 , {"NumpadDel", VK_DELETE}
@@ -467,7 +478,7 @@ key_to_vk_type g_key_to_vk[] =
 
 , {"PrintScreen", VK_SNAPSHOT}
 , {"CtrlBreak", VK_CANCEL}  // Might want to verify this, and whether it has any peculiarities.
-, {"Pause", VK_PAUSE}
+, {"Pause", VK_PAUSE} // So that VKToKeyName() delivers consistent results, always have the preferred name first.
 , {"Break", VK_PAUSE}
 , {"Help", VK_HELP}  // VK_HELP is probably not the extended HELP key.  Not sure what this one is.
 , {"Sleep", VK_SLEEP}
@@ -476,8 +487,8 @@ key_to_vk_type g_key_to_vk[] =
 
 // UPDATE: For the NT/2k/XP version, now doing these by VK since it's likely to be
 // more compatible with non-standard or non-English keyboards:
-, {"LControl", VK_LCONTROL}
-, {"RControl", VK_RCONTROL}
+, {"LControl", VK_LCONTROL} // So that VKToKeyName() delivers consistent results, always have the preferred name first.
+, {"RControl", VK_RCONTROL} // So that VKToKeyName() delivers consistent results, always have the preferred name first.
 , {"LCtrl", VK_LCONTROL} // Support this alternate to be like AutoIt3.
 , {"RCtrl", VK_RCONTROL} // Support this alternate to be like AutoIt3.
 , {"LShift", VK_LSHIFT}
@@ -490,7 +501,7 @@ key_to_vk_type g_key_to_vk[] =
 , {"RWin", VK_RWIN}
 
 // The left/right versions of these are handled elsewhere since their virtual keys aren't fully API-supported:
-, {"Control", VK_CONTROL}
+, {"Control", VK_CONTROL} // So that VKToKeyName() delivers consistent results, always have the preferred name first.
 , {"Ctrl", VK_CONTROL}  // An alternate for convenience.
 , {"Alt", VK_MENU}
 , {"Shift", VK_SHIFT}

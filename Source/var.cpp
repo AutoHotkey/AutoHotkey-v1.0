@@ -35,7 +35,7 @@ ResultType Var::Assign(int aValueToAssign) // For some reason, these functions a
 
 
 
-ResultType Var::Assign(UINT aValueToAssign)
+ResultType Var::Assign(DWORD aValueToAssign)
 // Returns OK or FAIL.
 {
 	char value_string[256];
@@ -380,6 +380,14 @@ VarSizeType Var::Get(char *aBuf)
 	case VAR_NUMBATCHLINES: if (!aBuf) return GetBatchLines(); aBuf += GetBatchLines(aBuf); break;
 	case VAR_OSTYPE: if (!aBuf) return GetOSType(); aBuf += GetOSType(aBuf); break;
 	case VAR_OSVERSION: if (!aBuf) return GetOSVersion(); aBuf += GetOSVersion(aBuf); break;
+	case VAR_ISADMIN: if (!aBuf) return GetIsAdmin(); aBuf += GetIsAdmin(aBuf); break;
+	case VAR_CURSOR: if (!aBuf) return g_script.ScriptGetCursor(); aBuf += g_script.ScriptGetCursor(aBuf); break;
+	case VAR_IPADDRESS1:
+	case VAR_IPADDRESS2:
+	case VAR_IPADDRESS3:
+	case VAR_IPADDRESS4:
+		if (!aBuf) return g_script.GetIP(mType - VAR_IPADDRESS1); aBuf += g_script.GetIP(mType - VAR_IPADDRESS1, aBuf); break;
+
 	case VAR_SCRIPTNAME: if (!aBuf) return g_script.GetFilename(); else aBuf += g_script.GetFilename(aBuf); break;
 	case VAR_SCRIPTDIR: if (!aBuf) return g_script.GetFileDir(); else aBuf += g_script.GetFileDir(aBuf); break;
 	case VAR_SCRIPTFULLPATH: if (!aBuf) return g_script.GetFilespec(); else aBuf += g_script.GetFilespec(aBuf); break;

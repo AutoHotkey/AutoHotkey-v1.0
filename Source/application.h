@@ -47,7 +47,7 @@ enum MessageMode {RETURN_AFTER_MESSAGES, WAIT_FOR_MESSAGES};
 
 // The first timers in the series are used by the MessageBoxes.  Start at +2 to give
 // an extra margin of safety:
-enum OurTimers {TIMER_ID_MAIN = MAX_MSGBOXES + 2, TIMER_ID_UNINTERRUPTIBLE, TIMER_ID_AUTOEXEC};
+enum OurTimers {TIMER_ID_MAIN = MAX_MSGBOXES + 2, TIMER_ID_UNINTERRUPTIBLE, TIMER_ID_AUTOEXEC, TIMER_ID_INPUT};
 
 // MUST MAKE main timer and uninterruptible timers associated with our main window so that
 // MainWindowProc() will be able to process them when it is called by the DispatchMessage()
@@ -84,6 +84,10 @@ if (!g_UninterruptibleTimerExists && !(g_UninterruptibleTimerExists = SetTimer(g
 if (!g_AutoExecTimerExists && !(g_AutoExecTimerExists = SetTimer(g_hWnd, TIMER_ID_AUTOEXEC, aTimeoutValue, AutoExecSectionTimeout)))\
 	g_script.ExitApp("SetTimer() unexpectedly failed.");
 
+#define SET_INPUT_TIMER(aTimeoutValue) \
+	if (!g_InputTimerExists)\
+		g_InputTimerExists = SetTimer(g_hWnd, TIMER_ID_INPUT, aTimeoutValue, InputTimeout);
+
 #define KILL_MAIN_TIMER \
 if (g_MainTimerExists && KillTimer(g_hWnd, TIMER_ID_MAIN))\
 	g_MainTimerExists = false;
@@ -95,6 +99,10 @@ if (g_UninterruptibleTimerExists && KillTimer(g_hWnd, TIMER_ID_UNINTERRUPTIBLE))
 #define KILL_AUTOEXEC_TIMER \
 if (g_AutoExecTimerExists && KillTimer(g_hWnd, TIMER_ID_AUTOEXEC))\
 	g_AutoExecTimerExists = false;
+
+#define KILL_INPUT_TIMER \
+if (g_InputTimerExists && KillTimer(g_hWnd, TIMER_ID_INPUT))\
+	g_InputTimerExists = false;
 
 
 // Callers should note that using INTERVAL_UNSPECIFIED might not rest the CPU at all if there is
@@ -230,8 +238,12 @@ ResultType IsCycleComplete(int aSleepDuration, DWORD aStartTime, bool aAllowEarl
 void CheckScriptTimers();
 #define CHECK_SCRIPT_TIMERS_IF_NEEDED if (g_script.mTimerEnabledCount) CheckScriptTimers();
 
+void PollJoysticks();
+#define POLL_JOYSTICK_IF_NEEDED if (Hotkey::sJoyHotkeyCount) PollJoysticks();
+
 VOID CALLBACK MsgBoxTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);
 VOID CALLBACK AutoExecSectionTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);
 VOID CALLBACK UninteruptibleTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);
+VOID CALLBACK InputTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);
 
 #endif

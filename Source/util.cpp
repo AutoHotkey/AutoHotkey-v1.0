@@ -442,8 +442,8 @@ char *StrReplaceAllSafe(char *Str, size_t Str_size, char *OldStr, char *NewStr, 
 
 
 bool DoesFilePatternExist(char *aFilePattern)
+// Adapted from the AutoIt3 source:
 {
-	// Taken from the AutoIt3 source:
 	if (!aFilePattern || !*aFilePattern) return false;
 	if (StrChrAny(aFilePattern, "?*"))
 	{

@@ -65,6 +65,7 @@ ResultType Line::IniWrite(char *aValue, char *aFilespec, char *aSection, char *a
 
 
 ResultType Line::IniDelete(char *aFilespec, char *aSection, char *aKey)
+// Note that aKey can be NULL, in which case the entire section will be deleted.
 {
 	char	szFileTemp[_MAX_PATH+1];
 	char	*szFilePart;

@@ -77,7 +77,7 @@ enum enum_act {
 , ACT_IFINSTRING, ACT_IFNOTINSTRING
 , ACT_IFEXIST, ACT_IFNOTEXIST, ACT_IFMSGBOX
 , ACT_IF_FIRST = ACT_IFEQUAL, ACT_IF_LAST = ACT_IFMSGBOX  // Keep this updated with any new IFs that are added.
-, ACT_MSGBOX, ACT_INPUTBOX, ACT_SPLASHTEXTON, ACT_SPLASHTEXTOFF, ACT_TOOLTIP
+, ACT_MSGBOX, ACT_INPUTBOX, ACT_SPLASHTEXTON, ACT_SPLASHTEXTOFF, ACT_TOOLTIP, ACT_TRAYTIP, ACT_INPUT
 , ACT_STRINGLEFT, ACT_STRINGRIGHT, ACT_STRINGMID
 , ACT_STRINGTRIMLEFT, ACT_STRINGTRIMRIGHT, ACT_STRINGLOWER, ACT_STRINGUPPER
 , ACT_STRINGLEN, ACT_STRINGGETPOS, ACT_STRINGREPLACE, ACT_STRINGSPLIT
@@ -86,7 +86,7 @@ enum enum_act {
 , ACT_GETKEYSTATE
 , ACT_SEND, ACT_CONTROLSEND, ACT_CONTROLCLICK, ACT_CONTROLMOVE, ACT_CONTROLFOCUS, ACT_CONTROLGETFOCUS
 , ACT_CONTROLSETTEXT, ACT_CONTROLGETTEXT, ACT_CONTROL, ACT_CONTROLGET
-, ACT_SETDEFAULTMOUSESPEED, ACT_MOUSEMOVE, ACT_MOUSECLICK, ACT_MOUSECLICKDRAG, ACT_MOUSEGETPOS
+, ACT_COORDMODE, ACT_SETDEFAULTMOUSESPEED, ACT_MOUSEMOVE, ACT_MOUSECLICK, ACT_MOUSECLICKDRAG, ACT_MOUSEGETPOS
 , ACT_STATUSBARGETTEXT
 , ACT_STATUSBARWAIT
 , ACT_CLIPWAIT
@@ -105,7 +105,7 @@ enum enum_act {
 // Keep rarely used actions near the bottom for parsing/performance reasons:
 , ACT_PIXELGETCOLOR, ACT_PIXELSEARCH
 , ACT_GROUPADD, ACT_GROUPACTIVATE, ACT_GROUPDEACTIVATE, ACT_GROUPCLOSE
-, ACT_DRIVESPACEFREE
+, ACT_DRIVESPACEFREE, ACT_DRIVEGET
 , ACT_SOUNDGET, ACT_SOUNDSET, ACT_SOUNDGETWAVEVOLUME, ACT_SOUNDSETWAVEVOLUME, ACT_SOUNDPLAY
 , ACT_FILEAPPEND, ACT_FILEREADLINE, ACT_FILEDELETE, ACT_FILERECYCLE, ACT_FILERECYCLEEMPTY
 , ACT_FILEINSTALL, ACT_FILECOPY, ACT_FILEMOVE, ACT_FILECOPYDIR, ACT_FILEMOVEDIR
@@ -153,6 +153,17 @@ enum enum_act_old {
 #define ACT_IS_IF(ActionType) (ActionType >= ACT_IF_FIRST && ActionType <= ACT_IF_LAST)
 #define ACT_IS_ASSIGN(ActionType) (ActionType >= ACT_ASSIGN_FIRST && ActionType <= ACT_ASSIGN_LAST)
 
+#define ATTACH_THREAD_INPUT \
+	bool threads_are_attached = false;\
+	DWORD my_thread  = GetCurrentThreadId();\
+	DWORD target_thread = GetWindowThreadProcessId(target_window, NULL);\
+	if (target_thread && target_thread != my_thread && !IsWindowHung(target_window))\
+		threads_are_attached = AttachThreadInput(my_thread, target_thread, TRUE) != 0;
+
+#define DETACH_THREAD_INPUT \
+	if (threads_are_attached)\
+		AttachThreadInput(my_thread, target_thread, FALSE);
+
 // The starting ID is arbitrary, but it seems best to avoid low IDs to avoid any chance of
 // a conflict with system menu id's, for example (though this is unlikely since I believe
 // they all  generate WM_SYSCOMMAND vs. WM_COMMAND).  Also need to avoid a conflict with the
@@ -186,6 +197,7 @@ enum TrayMenuItems {ID_TRAY_OPEN = 16000, ID_TRAY_HELP, ID_TRAY_WINDOWSPY, ID_TR
 #define ERR_MENUCOMMAND2 "Parameter #2's variable does not contain a valid menu command." ERR_ABORT
 #define ERR_CONTROLCOMMAND "Parameter #1 is not a valid Control command."
 #define ERR_CONTROLGETCOMMAND "Parameter #2 is not a valid ControlGet command."
+#define ERR_DRIVECOMMAND "Parameter #2 is not a valid DriveGet command."
 #define ERR_WINSET "Parameter #1 is not a valid WinSet attribute."
 #define ERR_IFMSGBOX "This line specifies an invalid MsgBox result."
 #define ERR_REG_KEY "The key name must be either HKEY_LOCAL_MACHINE, HKEY_USERS, HKEY_CURRENT_USER, HKEY_CLASSES_ROOT, HKEY_CURRENT_CONFIG, or the abbreviations for these."
@@ -326,6 +338,21 @@ typedef UCHAR ArgCountType;
 #define MAX_ARGS 20
 
 
+// Note that currently this value must fit into a sc_type variable because that is how TextToKey()
+// stores it in the hotkey class.  sc_type is currently a UINT, and will always be at least a
+// WORD in size, so it shouldn't be much of an issue:
+#define MAX_JOYSTICKS 16  // The maximum allowed by any Windows operating system.
+#define MAX_JOY_BUTTONS 32 // Also the max that Windows supports.
+enum JoyControls {JOYCTRL_INVALID, JOYCTRL_XPOS, JOYCTRL_YPOS, JOYCTRL_ZPOS
+, JOYCTRL_RPOS, JOYCTRL_UPOS, JOYCTRL_VPOS, JOYCTRL_POV
+, JOYCTRL_NAME, JOYCTRL_BUTTONS, JOYCTRL_AXES, JOYCTRL_INFO
+, JOYCTRL_1, JOYCTRL_2, JOYCTRL_3, JOYCTRL_4, JOYCTRL_5, JOYCTRL_6, JOYCTRL_7, JOYCTRL_8  // Buttons.
+, JOYCTRL_9, JOYCTRL_10, JOYCTRL_11, JOYCTRL_12, JOYCTRL_13, JOYCTRL_14, JOYCTRL_15, JOYCTRL_16
+, JOYCTRL_17, JOYCTRL_18, JOYCTRL_19, JOYCTRL_20, JOYCTRL_21, JOYCTRL_22, JOYCTRL_23, JOYCTRL_24
+, JOYCTRL_25, JOYCTRL_26, JOYCTRL_27, JOYCTRL_28, JOYCTRL_29, JOYCTRL_30, JOYCTRL_31, JOYCTRL_32
+, JOYCTRL_BUTTON_MAX = JOYCTRL_32
+};
+
 enum MenuCommands {MENU_COMMAND_INVALID, MENU_COMMAND_ADD, MENU_COMMAND_RENAME
 	, MENU_COMMAND_CHECK, MENU_COMMAND_UNCHECK, MENU_COMMAND_TOGGLECHECK
 	, MENU_COMMAND_ENABLE, MENU_COMMAND_DISABLE, MENU_COMMAND_TOGGLEENABLE
@@ -346,6 +373,9 @@ enum ControlGetCmds {CONTROLGET_CMD_INVALID, CONTROLGET_CMD_CHECKED, CONTROLGET_
 	, CONTROLGET_CMD_VISIBLE, CONTROLGET_CMD_TAB, CONTROLGET_CMD_FINDSTRING
 	, CONTROLGET_CMD_CHOICE, CONTROLGET_CMD_LINECOUNT, CONTROLGET_CMD_CURRENTLINE
 	, CONTROLGET_CMD_CURRENTCOL, CONTROLGET_CMD_LINE, CONTROLGET_CMD_SELECTED};
+
+enum DriveCmds {DRIVE_CMD_INVALID, DRIVE_CMD_LIST, DRIVE_CMD_FILESYSTEM, DRIVE_CMD_LABEL
+	, DRIVE_CMD_SETLABEL, DRIVE_CMD_SERIAL, DRIVE_CMD_TYPE, DRIVE_CMD_STATUS, DRIVE_CMD_CAPACITY};
 
 enum WinSetAttributes {WINSET_INVALID, WINSET_TRANSPARENT, WINSET_ALWAYSONTOP};
 
@@ -380,7 +410,9 @@ private:
 		, LoopReadFileStruct *aCurrentReadFile = NULL);
 	ResultType PerformAssign();
 	ResultType StringSplit(char *aArrayName, char *aInputString, char *aDelimiterList, char *aOmitList);
-	ResultType DriveSpaceFree(char *aPath);
+	ResultType ScriptGetKeyState(char *aKeyName, char *aOption);
+	ResultType DriveSpace(char *aPath, bool aGetFreeSpace);
+	ResultType DriveGet(char *aCmd, char *aValue);
 	ResultType SoundSetGet(char *aSetting, DWORD aComponentType, int aComponentInstance
 		, DWORD aControlType, UINT aMixerID);
 	ResultType SoundGetWaveVolume(HWAVEOUT aDeviceID);
@@ -438,6 +470,8 @@ private:
 	ResultType PerformShowWindow(ActionTypeType aActionType, char *aTitle = "", char *aText = ""
 		, char *aExcludeTitle = "", char *aExcludeText = "");
 	ResultType ToolTip(char *aText, char *aX, char *aY);
+	ResultType TrayTip(char *aTitle, char *aText, char *aTimeout, char *aOptions);
+	ResultType Input(char *aOptions, char *aEndKeys, char *aMatchList);
 	ResultType WinMove(char *aTitle, char *aText, char *aX, char *aY
 		, char *aWidth = "", char *aHeight = "", char *aExcludeTitle = "", char *aExcludeText = "");
 	ResultType WinMenuSelectItem(char *aTitle, char *aText, char *aMenu1, char *aMenu2
@@ -486,11 +520,11 @@ private:
 		, int aClickCount = 1, int aSpeed = DEFAULT_MOUSE_SPEED, char aEventType = '\0');
 	static void MouseMove(int aX, int aY, int aSpeed = DEFAULT_MOUSE_SPEED);
 	ResultType MouseGetPos();
-	static void MouseEvent(DWORD aEventFlags, DWORD aX = 0, DWORD aY = 0)
+	static void MouseEvent(DWORD aEventFlags, DWORD aX = 0, DWORD aY = 0, DWORD aData = 0)
 	// A small inline to help us remember to use KEYIGNORE so that our own mouse
 	// events won't be falsely detected as hotkeys by the hooks (if they are installed).
 	{
-		mouse_event(aEventFlags, aX, aY, 0, KEYIGNORE);
+		mouse_event(aEventFlags, aX, aY, aData, KEYIGNORE);
 	}
 
 public:
@@ -528,6 +562,7 @@ public:
 	#define LINE_RAW_ARG6 (line->mArgc > 5 ? line->mArg[5].text : "")
 	#define LINE_RAW_ARG7 (line->mArgc > 6 ? line->mArg[6].text : "")
 	#define LINE_RAW_ARG8 (line->mArgc > 7 ? line->mArg[7].text : "")
+	#define LINE_RAW_ARG9 (line->mArgc > 8 ? line->mArg[8].text : "")
 	#define LINE_ARG1 (line->mArgc > 0 ? line->sArgDeref[0] : "")
 	#define LINE_ARG2 (line->mArgc > 1 ? line->sArgDeref[1] : "")
 	#define LINE_ARG3 (line->mArgc > 2 ? line->sArgDeref[2] : "")
@@ -568,8 +603,14 @@ public:
 	ArgCountType mArgc; // How many arguments exist in mArg[].
 	ArgStruct *mArg; // Will be used to hold a dynamic array of dynamic Args.
 
-	#define LINE_LOG_SIZE 50
+	// Shouldn't go much higher than 200 since the main window's Edit control is currently limited
+	// to 32K to be compatible with the Win9x limit.  Avg. line length is probably under 100 for
+	// the vast majority of scripts, so 200 seems unlikely to exceed the buffer size.  Even in the
+	// worst case where the buffer size is exceeded, the text is simply truncated, so it's not too
+	// bad:
+	#define LINE_LOG_SIZE 200
 	static Line *sLog[LINE_LOG_SIZE];
+	static DWORD sLogTick[LINE_LOG_SIZE];
 	static int sLogNext;
 
 	#define MAX_SCRIPT_FILES (UCHAR_MAX + 1)
@@ -868,6 +909,49 @@ public:
 		return MIXERCONTROL_CONTROLTYPE_INVALID;
 	}
 
+	static int ConvertJoy(char *aBuf, int *aJoystickID = NULL, bool aAllowOnlyButtons = false)
+	{
+		if (aJoystickID)
+			*aJoystickID = 0;  // Set default output value for the caller.
+		if (!aBuf || !*aBuf) return JOYCTRL_INVALID;
+		char *aBuf_orig = aBuf;
+		for (; *aBuf >= '0' && *aBuf <= '9'; ++aBuf); // self-contained loop to find the first non-digit.
+		if (aBuf > aBuf_orig) // The string starts with a number.
+		{
+			int joystick_id = ATOI(aBuf_orig) - 1;
+			if (joystick_id < 0 || joystick_id >= MAX_JOYSTICKS)
+				return JOYCTRL_INVALID;
+			if (aJoystickID)
+				*aJoystickID = joystick_id;  // Use ATOI vs. atoi even though hex isn't supported yet.
+		}
+
+		if (!strnicmp(aBuf, "Joy", 3))
+		{
+			if (IsPureNumeric(aBuf + 3, false, false))
+			{
+				int offset = ATOI(aBuf + 3);
+				if (offset < 1 || offset > MAX_JOY_BUTTONS)
+					return JOYCTRL_INVALID;
+				return JOYCTRL_1 + offset - 1;
+			}
+		}
+		if (aAllowOnlyButtons)
+			return JOYCTRL_INVALID;
+
+		// Otherwise:
+		if (!stricmp(aBuf, "JoyX")) return JOYCTRL_XPOS;
+		if (!stricmp(aBuf, "JoyY")) return JOYCTRL_YPOS;
+		if (!stricmp(aBuf, "JoyZ")) return JOYCTRL_ZPOS;
+		if (!stricmp(aBuf, "JoyR")) return JOYCTRL_RPOS;
+		if (!stricmp(aBuf, "JoyU")) return JOYCTRL_UPOS;
+		if (!stricmp(aBuf, "JoyV")) return JOYCTRL_VPOS;
+		if (!stricmp(aBuf, "JoyPOV")) return JOYCTRL_POV;
+		if (!stricmp(aBuf, "JoyName")) return JOYCTRL_NAME;
+		if (!stricmp(aBuf, "JoyButtons")) return JOYCTRL_BUTTONS;
+		if (!stricmp(aBuf, "JoyAxes")) return JOYCTRL_AXES;
+		if (!stricmp(aBuf, "JoyInfo")) return JOYCTRL_INFO;
+		return JOYCTRL_INVALID;
+	}
 
 	static TitleMatchModes ConvertTitleMatchMode(char *aBuf)
 	{
@@ -939,6 +1023,20 @@ public:
 		if (!stricmp(aBuf, "Line")) return CONTROLGET_CMD_LINE;
 		if (!stricmp(aBuf, "Selected")) return CONTROLGET_CMD_SELECTED;
 		return CONTROLGET_CMD_INVALID;
+	}
+
+	static DriveCmds ConvertDriveCmd(char *aBuf)
+	{
+		if (!aBuf || !*aBuf) return DRIVE_CMD_INVALID;
+		if (!stricmp(aBuf, "List")) return DRIVE_CMD_LIST;
+		if (!stricmp(aBuf, "FileSystem") || !stricmp(aBuf, "FS")) return DRIVE_CMD_FILESYSTEM;
+		if (!stricmp(aBuf, "Label")) return DRIVE_CMD_LABEL;
+		if (!strnicmp(aBuf, "SetLabel:", 9)) return DRIVE_CMD_SETLABEL;  // Uses strnicmp() vs. stricmp().
+		if (!stricmp(aBuf, "Serial")) return DRIVE_CMD_SERIAL;
+		if (!stricmp(aBuf, "Type")) return DRIVE_CMD_TYPE;
+		if (!stricmp(aBuf, "Status")) return DRIVE_CMD_STATUS;
+		if (!stricmp(aBuf, "Capacity") || !stricmp(aBuf, "Cap")) return DRIVE_CMD_CAPACITY;
+		return DRIVE_CMD_INVALID;
 	}
 
 	static WinSetAttributes ConvertWinSetAttribute(char *aBuf)
@@ -1034,13 +1132,20 @@ public:
 		return SW_SHOWNORMAL;
 	}
 
-	static int ConvertMouseButton(char *aBuf)
+	static int ConvertMouseButton(char *aBuf, bool aAllowWheel = true)
 	// Returns the matching VK, or zero if none.
 	{
 		if (!aBuf || !*aBuf) return 0;
 		if (!stricmp(aBuf, "LEFT") || !stricmp(aBuf, "L")) return VK_LBUTTON;
 		if (!stricmp(aBuf, "RIGHT") || !stricmp(aBuf, "R")) return VK_RBUTTON;
 		if (!stricmp(aBuf, "MIDDLE") || !stricmp(aBuf, "M")) return VK_MBUTTON;
+		if (!stricmp(aBuf, "X1")) return VK_XBUTTON1;
+		if (!stricmp(aBuf, "X2")) return VK_XBUTTON2;
+		if (aAllowWheel)
+		{
+			if (!stricmp(aBuf, "WheelUp") || !stricmp(aBuf, "WU")) return VK_WHEEL_UP;
+			if (!stricmp(aBuf, "WheelDown") || !stricmp(aBuf, "WD")) return VK_WHEEL_DOWN;
+		}
 		return 0;
 	}
 
@@ -1070,7 +1175,7 @@ public:
 
 	static char *LogToText(char *aBuf, size_t aBufSize);
 	char *VicinityToText(char *aBuf, size_t aBufSize, int aMaxLines = 15);
-	char *ToText(char *aBuf, size_t aBufSize, bool aAppendNewline = false);
+	char *ToText(char *aBuf, size_t aBufSize, DWORD aElapsed = 0);
 
 	static void ToggleSuspendState();
 	ResultType ChangePauseState(ToggleValueType aChangeTo);
@@ -1627,6 +1732,8 @@ public:
 	}
 
 	VarSizeType GetTimeIdlePhysical(char *aBuf = NULL);
+	VarSizeType ScriptGetCursor(char *aBuf = NULL);
+	VarSizeType GetIP(int aAdapterIndex, char *aBuf = NULL);
 
 	VarSizeType GetSpace(VarTypeType aType, char *aBuf = NULL)
 	{

@@ -47,10 +47,6 @@ static key_type *pPrefixKey = NULL;
 
 static key_type *kvk = NULL;
 static key_type *ksc = NULL;
-// Since index zero is a placeholder for the invalid virtual key or scan code, add one to each MAX value
-// to compute the number of elements actually needed to accomodate 0 up to and including VK_MAX or SC_MAX:
-#define KVK_SIZE (VK_MAX + 1)
-#define KSC_SIZE (SC_MAX + 1)
 
 // Less memory overhead (space and performance) to allocate a solid block for multidimensional arrays:
 // These store all the valid modifier+suffix combinations (those that result in hotkey actions) except
@@ -66,8 +62,8 @@ static HotkeyIDType *kscm = NULL;
 // and the second as VK or SC (i.e. the columns):
 #define Kvkm(i,j) kvkm[(i)*(MODLR_MAX + 1) + (j)]
 #define Kscm(i,j) kscm[(i)*(MODLR_MAX + 1) + (j)]
-#define KVKM_SIZE ((MODLR_MAX + 1)*(VK_MAX + 1))
-#define KSCM_SIZE ((MODLR_MAX + 1)*(SC_MAX + 1))
+#define KVKM_SIZE ((MODLR_MAX + 1)*(VK_ARRAY_COUNT))
+#define KSCM_SIZE ((MODLR_MAX + 1)*(SC_ARRAY_COUNT))
 
 
 
@@ -231,9 +227,9 @@ void SetModifierAsPrefix(vk_type aVK, sc_type aSC, bool aAlwaysSetAsPrefix = fal
 inline HookType GetActiveHooks()
 {
 	HookType hooks_currently_active = 0;
-	if (g_hhkLowLevelKeybd)
+	if (g_KeybdHook)
 		hooks_currently_active |= HOOK_KEYBD;
-	if (g_hhkLowLevelMouse)
+	if (g_MouseHook)
 		hooks_currently_active |= HOOK_MOUSE;
 	return hooks_currently_active;
 }
@@ -242,10 +238,10 @@ inline HookType GetActiveHooks()
 
 HookType RemoveKeybdHook()
 {
-	if (g_hhkLowLevelKeybd)
-		if (UnhookWindowsHookEx(g_hhkLowLevelKeybd))
+	if (g_KeybdHook)
+		if (UnhookWindowsHookEx(g_KeybdHook))
 		{
-			g_hhkLowLevelKeybd = NULL;
+			g_KeybdHook = NULL;
 #ifdef HOOK_WARNING
 			if (keybd_hook_mutex)
 			{
@@ -261,10 +257,10 @@ HookType RemoveKeybdHook()
 
 HookType RemoveMouseHook()
 {
-	if (g_hhkLowLevelMouse)
-		if (UnhookWindowsHookEx(g_hhkLowLevelMouse))
+	if (g_MouseHook)
+		if (UnhookWindowsHookEx(g_MouseHook))
 		{
-			g_hhkLowLevelMouse = NULL;
+			g_MouseHook = NULL;
 #ifdef HOOK_WARNING
 			if (mouse_hook_mutex)
 			{
@@ -333,8 +329,8 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 	// of Num/Caps/ScrollLock always on or off (a fairly rare situation, probably):
 	if (kvk == NULL)  // Since its an initialzied global, this indicates that all 4 objects are not yet allocated.
 	{
-		if (NULL != (kvk = new key_type[KVK_SIZE]))
-			if (NULL != (ksc = new key_type[KSC_SIZE]))
+		if (NULL != (kvk = new key_type[VK_ARRAY_COUNT]))
+			if (NULL != (ksc = new key_type[SC_ARRAY_COUNT]))
 				if (NULL != (kvkm = new HotkeyIDType[KVKM_SIZE]))
 					kscm = new HotkeyIDType[KSCM_SIZE];
 		if (kvk == NULL || ksc == NULL || kvkm == NULL || kscm == NULL) // at least one of the allocations failed
@@ -362,12 +358,12 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 	// (and even if you could, you'd have loop through every array element), it seems best
 	// to do it this way.  This also initializes any pointers to NULL rather than a
 	// bitwise-zero for compatibility with any conceivable hardware:
-	ZeroMemory(kvk, KVK_SIZE * sizeof(key_type));
-	ZeroMemory(ksc, KSC_SIZE * sizeof(key_type));
+	ZeroMemory(kvk, VK_ARRAY_COUNT * sizeof(key_type));
+	ZeroMemory(ksc, SC_ARRAY_COUNT * sizeof(key_type));
 	int i;
-	for (i = 0; i < KVK_SIZE; ++i)
+	for (i = 0; i < VK_ARRAY_COUNT; ++i)
 		kvk[i].pForceToggle = NULL;
-	for (i = 0; i < KSC_SIZE; ++i)
+	for (i = 0; i < SC_ARRAY_COUNT; ++i)
 		ksc[i].pForceToggle = NULL;
 
 	// This attribute is exists for performance reasons (avoids a function call in the hook
@@ -427,9 +423,9 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 	key_type *pThisKey = NULL;
 	for (i = 0; i < aHK_count; ++i)
 	{
-		// If it's not a hook hotkey (e.g. it was already registered with RegisterHotkey(),
-		// don't process it here:
-		if (aHK[i]->mType != HK_KEYBD_HOOK && aHK[i]->mType != HK_MOUSE_HOOK)
+		// If it's not a hook hotkey (e.g. it was already registered with RegisterHotkey() or it's a joystick
+		// hotkey) don't process it here:
+		if (aHK[i]->mType != HK_KEYBD_HOOK && aHK[i]->mType != HK_MOUSE_HOOK && aHK[i]->mType != HK_BOTH_HOOKS)
 			continue;
 
 		// So aHK[i] is a hook hotkey.  But if the caller specified true for aActivateOnlySuspendHotkeys,
@@ -447,6 +443,11 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 			++keybd_hook_hotkey_count;
 		else if (aHK[i]->mType == HK_MOUSE_HOOK)
 			++mouse_hook_hotkey_count;
+		else // HK_BOTH_HOOKS
+		{
+			++keybd_hook_hotkey_count;
+			++mouse_hook_hotkey_count;
+		}
 
 		if (!aHK[i]->mVK)
 		{
@@ -507,24 +508,8 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 		pThisKey->used_as_suffix = true;
 
 		HotkeyIDType hotkey_id_with_flags = aHK[i]->mID;
-		if (!aHK[i]->mDoSuppress)
-		{
+		if (aHK[i]->mNoSuppress & NO_SUPPRESS_SUFFIX)
 			hotkey_id_with_flags |= HOTKEY_NO_SUPPRESS;
-			// Due to the fact that the hook does handle things as hotkeys, but rather at
-			// a lower level (prefixes and suffixes), there's no easy way to support toggling
-			// suppression for individual hotkeys (perhaps the simplest way to do so would be
-			// to create a new array of structs to contain the list of which hotkey_id's are
-			// special/non-suppressed).  So for now, once a suffix key has had its suppression
-			// turned off, it stays off.  But currently, this is inconsequential I think, since
-			// only the naked (unmodified) key, when used as a hotkey, supports non-suppression.
-			// UPDATE: The above limitation now applies only to mouse buttons, since the
-			// non-suppression of keyboard keys is handled via the HOTKEY_NO_SUPPRESS bit in
-			// the hotkey_id (mouse events can't be easily handled this way since the hook
-			// would have to generate substitute mouse events, which may be a lot of work to
-			// code):
-			if (aHK[i]->mType == HK_MOUSE_HOOK)
-				pThisKey->no_mouse_suppress = true;
-		}
 		// else leave the bit set to zero so that the key will be suppressed (most hotkeys are like this).
 
 		// If this is a naked (unmodified) modifier key, make it a prefix if it ever modifies any
@@ -541,8 +526,11 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 				// The hotkey's ModifierVK is itself a modifier.
 				SetModifierAsPrefix(aHK[i]->mModifierVK, 0, true);
 			else
+			{
 				kvk[aHK[i]->mModifierVK].used_as_prefix = true;
-
+				if (aHK[i]->mNoSuppress & NO_SUPPRESS_PREFIX)
+					kvk[aHK[i]->mModifierVK].no_suppress |= NO_SUPPRESS_PREFIX;
+			}
 			if (pThisKey->nModifierVK < MAX_MODIFIER_VKS_PER_SUFFIX)  // else currently no error-reporting.
 			{
 				pThisKey->ModifierVK[pThisKey->nModifierVK].vk = aHK[i]->mModifierVK;
@@ -562,7 +550,11 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 					// The hotkey's ModifierSC is itself a modifier.
 					SetModifierAsPrefix(0, aHK[i]->mModifierSC, true);
 				else
+				{
 					ksc[aHK[i]->mModifierSC].used_as_prefix = true;
+					if (aHK[i]->mNoSuppress & NO_SUPPRESS_PREFIX)
+						ksc[aHK[i]->mModifierSC].no_suppress |= NO_SUPPRESS_PREFIX;
+				}
 				if (pThisKey->nModifierSC < MAX_MODIFIER_SCS_PER_SUFFIX)  // else currently no error-reporting.
 				{
 					pThisKey->ModifierSC[pThisKey->nModifierSC].sc = aHK[i]->mModifierSC;
@@ -689,7 +681,7 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 
 	// Install any hooks that aren't already installed:
 	// Even if OS is Win9x, try LL hooks anyway.  This will probably fail on WinNT if it doesn't have SP3+
-	if (   !g_hhkLowLevelKeybd && ((aWhichHookAlways & HOOK_KEYBD)
+	if (   !g_KeybdHook && ((aWhichHookAlways & HOOK_KEYBD)
 		|| ((aWhichHook & HOOK_KEYBD) && (keybd_hook_hotkey_count || force_CapsNumScroll)))   )
 	{
 #ifdef HOOK_WARNING
@@ -714,7 +706,7 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 			}
 		}
 #endif
-		if (g_hhkLowLevelKeybd = SetWindowsHookEx(WH_KEYBOARD_LL, LowLevelKeybdProc, g_hInstance, 0))
+		if (g_KeybdHook = SetWindowsHookEx(WH_KEYBOARD_LL, LowLevelKeybdProc, g_hInstance, 0))
 		{
 			hooks_currently_active |= HOOK_KEYBD;
 			// Doesn't seem necessary to ever init g_KeyHistory or g_KeyHistoryNext here, since they were
@@ -746,11 +738,11 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 		// Deinstall hook if the caller omitted it from aWhichHook, or if it had no
 		// corresponding hotkeys (currently the latter only happens in the case of
 		// aActivateOnlySuspendHotkeys == TRUE):
-		if (g_hhkLowLevelKeybd && !(aWhichHookAlways & HOOK_KEYBD)
+		if (g_KeybdHook && !(aWhichHookAlways & HOOK_KEYBD)
 			&& (!(aWhichHook & HOOK_KEYBD) || !(keybd_hook_hotkey_count || force_CapsNumScroll)))
 			hooks_currently_active = RemoveKeybdHook();
 
-	if (   !g_hhkLowLevelMouse && ((aWhichHookAlways & HOOK_MOUSE)
+	if (   !g_MouseHook && ((aWhichHookAlways & HOOK_MOUSE)
 		|| ((aWhichHook & HOOK_MOUSE) && mouse_hook_hotkey_count))   )
 	{
 #ifdef HOOK_WARNING
@@ -772,17 +764,20 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 			}
 		}
 #endif
-		if (g_hhkLowLevelMouse = SetWindowsHookEx(WH_MOUSE_LL, LowLevelMouseProc, g_hInstance, 0))
+		if (g_MouseHook = SetWindowsHookEx(WH_MOUSE_LL, LowLevelMouseProc, g_hInstance, 0))
 		{
 			hooks_currently_active |= HOOK_MOUSE;
 			// Initialize some things, a very limited subset of what is initialized when the
 			// keyboard hook is installed (see its comments).  This is might not everything
 			// we should initialize, so further study is justified in the future:
+#ifdef FUTURE_USE_MOUSE_BUTTONS_LOGICAL
+			g_mouse_buttons_logical = 0;
+#endif
 			g_PhysicalKeyState[VK_LBUTTON] = g_PhysicalKeyState[VK_RBUTTON] = g_PhysicalKeyState[VK_MBUTTON] 
-				= g_PhysicalKeyState[VK_XBUTTON1] = g_PhysicalKeyState[VK_XBUTTON2] = false;
+				= g_PhysicalKeyState[VK_XBUTTON1] = g_PhysicalKeyState[VK_XBUTTON2] = 0;
 			// These are not really valid, since they can't be in a physically down state, but it's
 			// probably better to have a false value in them:
-			g_PhysicalKeyState[VK_WHEEL_DOWN] = g_PhysicalKeyState[VK_WHEEL_UP] = false;
+			g_PhysicalKeyState[VK_WHEEL_DOWN] = g_PhysicalKeyState[VK_WHEEL_UP] = 0;
 		}
 		else
 		{
@@ -798,7 +793,7 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 		// Deinstall hook if the caller omitted it from aWhichHook, or if it had no
 		// corresponding hotkeys (currently the latter only happens in the case of
 		// aActivateOnlySuspendHotkeys == TRUE):
-		if (g_hhkLowLevelMouse && !(aWhichHookAlways & HOOK_MOUSE)
+		if (g_MouseHook && !(aWhichHookAlways & HOOK_MOUSE)
 			&& (!(aWhichHook & HOOK_MOUSE) || !mouse_hook_hotkey_count))
 			hooks_currently_active = RemoveMouseHook();
 
@@ -820,7 +815,7 @@ char *GetHookStatus(char *aBuf, size_t aBufSize)
 		, ModifiersLRToText(g_modifiersLR_physical, LRpText)
 		, pPrefixKey == NULL ? "no" : "yes");
 
-	if (!g_hhkLowLevelKeybd)
+	if (!g_KeybdHook)
 		snprintfcat(aBuf, aBufSize, "\r\n"
 			"NOTE: Only the script's own keyboard events are shown\r\n"
 			"(not the user's), because the keyboard hook isn't installed.\r\n");

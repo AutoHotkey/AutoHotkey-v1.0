@@ -145,6 +145,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 	// Note that ExecUntil() no longer needs to call us solely for prevention of lag
 	// caused by the keyboard & mouse hooks, so checking the timers early, rather than
 	// immediately going into the GetMessage() state, should not be a problem:
+	POLL_JOYSTICK_IF_NEEDED  // Do this first since it's much faster.
 	CHECK_SCRIPT_TIMERS_IF_NEEDED
 
 	// Because this function is called recursively: for now, no attempt is
@@ -190,6 +191,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 	// Only used when aMode == RETURN_AFTER_MESSAGES:
 	// True if the current subroutine was interrupted by another:
 	//bool was_interrupted = false;
+	bool sleep0_was_done = false;
 	bool empty_the_queue_via_peek = false;
 
 	HWND fore_window;
@@ -227,27 +229,44 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 				// It is not necessary to actually do the Sleep(0) when aSleepDuration == 0
 				// because the most recent PeekMessage() has just yielded our prior timeslice.
 				// This is because when Peek() doesn't find any messages, it automatically
-				// behaves as though it did a Sleep(0).
-
-				// Macro notes:
-				// Must decrement prior to every RETURN to balance it.
-				// Do this prior to checking whether timer should be killed, below:
-				#define RETURN_FROM_MSGSLEEP(return_value) \
-				{\
-					if (this_layer_needs_timer)\
-						--g_nLayersNeedingTimer;\
-					return return_value;\
+				// behaves as though it did a Sleep(0). UPDATE: This is apparently not quite
+				// true.  All Peek() does yield, it is somehow not as long or as good as
+				// Sleep(0).  This is evidenced by the fact that some of my script's
+				// WinWaitClose's now finish too quickly when DoKeyDelay(0) is done for them,
+				// but replacing DoKeyDelay(0) with Sleep(0) makes it work as it did before.
+				if (aSleepDuration == 0 && !sleep0_was_done)
+				{
+					Sleep(0);
+					sleep0_was_done = true;
+					// Now start a new iteration of the loop that will see if we
+					// received any messages during the up-to-20ms delay (perhaps even more)
+					// that just occurred.  It's done this way to minimize keyboard/mouse
+					// lag (if the hooks are installed) that will occur if any key or
+					// mouse events are generated during that 20ms:
+					continue;
 				}
-				// Function should always return OK in this case.  Also, was_interrupted
-				// will always be false because if this "aSleepDuration <= 0" call
-				// really was interrupted, it would already have returned in the
-				// hotkey cases of the switch().  UPDATE: was_interrupted can now
-				// be true since the hotkey case in the switch() doesn't return,
-				// relying on us to do it after making sure the queue is empty.
-				// The below is checked here rather than in IsCycleComplete() because
-				// that function is sometimes called more than once prior to returning
-				// (e.g. empty_the_queue_via_peek) and we only want this to be decremented once:
-				RETURN_FROM_MSGSLEEP(IsCycleComplete(aSleepDuration, start_time, allow_early_return))
+				else // aSleepDuration is non-zero or we already did the Sleep(0)
+				{
+					// Macro notes:
+					// Must decrement prior to every RETURN to balance it.
+					// Do this prior to checking whether timer should be killed, below:
+					#define RETURN_FROM_MSGSLEEP(return_value) \
+					{\
+						if (this_layer_needs_timer)\
+							--g_nLayersNeedingTimer;\
+						return return_value;\
+					}
+					// Function should always return OK in this case.  Also, was_interrupted
+					// will always be false because if this "aSleepDuration <= 0" call
+					// really was interrupted, it would already have returned in the
+					// hotkey cases of the switch().  UPDATE: was_interrupted can now
+					// be true since the hotkey case in the switch() doesn't return,
+					// relying on us to do it after making sure the queue is empty.
+					// The below is checked here rather than in IsCycleComplete() because
+					// that function is sometimes called more than once prior to returning
+					// (e.g. empty_the_queue_via_peek) and we only want this to be decremented once:
+					RETURN_FROM_MSGSLEEP(IsCycleComplete(aSleepDuration, start_time, allow_early_return))
+				}
 			}
 			// else Peek() found a message, so process it below.
 		}
@@ -267,6 +286,12 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 		case WM_TIMER:
 			if (msg.lParam) // Since this WM_TIMER is intended for a TimerProc, dispatch the msg instead.
 				break;
+			// It seems best to poll the joystick for every WM_TIMER message (i.e. every 10ms or so on
+			// NT/2k/XP).  This is because if the system is under load, it might be 20ms, 40ms, or even
+			// longer before we get a timeslice again and that is a long time to be away from the poll
+			// (a fast button press-and-release might occur in less than 50ms, which could be missed if
+			// the polling frequency is too low):
+			POLL_JOYSTICK_IF_NEEDED // Do this first since it's much faster.
 			CHECK_SCRIPT_TIMERS_IF_NEEDED
 			if (aMode == WAIT_FOR_MESSAGES)
 				// Timer should have already been killed if we're in this state.
@@ -365,7 +390,7 @@ ResultType MsgSleep(int aSleepDuration, MessageMode aMode)
 			// only fill up the queue with WM_TIMER messages and thus hurt performance).
 			// UPDATE: But don't kill it if it should be always-on to support the existence of
 			// at least one enabled timed subroutine:
-			if (!g_script.mTimerEnabledCount)
+			if (!g_script.mTimerEnabledCount && !Hotkey::sJoyHotkeyCount)
 				KILL_MAIN_TIMER;
 
 			if (aMode == RETURN_AFTER_MESSAGES)
@@ -607,7 +632,7 @@ ResultType IsCycleComplete(int aSleepDuration, DWORD aStartTime, bool aAllowEarl
 		// that when the script becomes interruptible once again, the hotkey will take effect
 		// almost immediately rather than having to wait for the displayed dialog to be
 		// dismissed (if there is one):
-		if (aSleepDuration > 0 && !g_nLayersNeedingTimer && !g_script.mTimerEnabledCount)
+		if (aSleepDuration > 0 && !g_nLayersNeedingTimer && !g_script.mTimerEnabledCount && !Hotkey::sJoyHotkeyCount)
 			KILL_MAIN_TIMER
 	}
 	else // It doesn't exist (MsgSleep() relies on us to do this check)
@@ -640,7 +665,6 @@ void CheckScriptTimers()
 // interrupted hotkey subroutines, or when they themselves are interrupted by hotkey subroutines
 // or other timer subroutines.
 {
-
 	// When this is true, such as during a SendKeys() operation, it seems best not to launch any new
 	// timed subroutines.  The reasons for this are similar to the reasons for not allowing hotkeys
 	// to fire during such times.  Those reasons are discussed in other comments.  In addition,
@@ -740,6 +764,46 @@ void CheckScriptTimers()
 
 
 
+void PollJoysticks()
+// Polling the joysticks this way rather than using joySetCapture() is preferable for several reasons:
+// 1) I believe joySetCapture() internally polls the joystick anyway, via a system timer, so it probably
+//    doesn't perform much better (if at all) than polling "manually".
+// 2) joySetCapture() only supports 4 buttons
+// 3) joySetCapture() will fail if another app is already capturing the joystick
+// 4) Even if the joySetCapture() succeeds, other programs (e.g. older games), would be prevented from
+//    capturing the joystick while the script in question is running.
+{
+	// Even if joystick hotkeys aren't currently allowed to fire, poll it anyway so that hotkey
+	// messages can be buffered for later.
+	static DWORD buttons_prev[MAX_JOYSTICKS] = {0}; // Set initial state to "all buttons up for all joysticks".
+	JOYINFOEX jie;
+	DWORD buttons_newly_down;
+
+	for (int i = 0; i < MAX_JOYSTICKS; ++i)
+	{
+		if (!Hotkey::sJoystickHasHotkeys[i])
+			continue;
+		// Reset these every time in case joyGetPosEx() ever changes them:
+		jie.dwSize = sizeof(JOYINFOEX);
+		jie.dwFlags = JOY_RETURNBUTTONS; // vs. JOY_RETURNALL
+		if (joyGetPosEx(i, &jie) != JOYERR_NOERROR) // Skip this joystick and try the others.
+			continue;
+		// The exclusive-or operator determines which buttons have changed state.  After that,
+		// the bitwise-and operator determines which of those have gone from up to down (the
+		// down-to-up events are currently not significant).
+		buttons_newly_down = (jie.dwButtons ^ buttons_prev[i]) & jie.dwButtons;
+		buttons_prev[i] = jie.dwButtons;
+		if (!buttons_newly_down)
+			continue;
+		// See if any of the joystick hotkeys match this joystick ID and one of the buttons that
+		// has just been pressed on it.  If so, queue up (buffer) the hotkey events so that they will
+		// be processed when messages are next checked:
+		Hotkey::TriggerJoyHotkeys(i, buttons_newly_down);
+	}
+}
+
+
+
 VOID CALLBACK MsgBoxTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
 {
 	// Unfortunately, it appears that MessageBox() will return zero rather
@@ -801,4 +865,12 @@ VOID CALLBACK UninteruptibleTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dw
 {
 	KILL_UNINTERRUPTIBLE_TIMER // Best to use the macro so that g_UninterruptibleTimerExists is reset to false.
 	g_AllowInterruptionForSub = true;
+}
+
+
+
+VOID CALLBACK InputTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
+{
+	KILL_INPUT_TIMER
+	g_input.status = INPUT_TIMED_OUT;
 }

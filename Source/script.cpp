@@ -15,6 +15,7 @@ GNU General Public License for more details.
 */
 
 #include "stdafx.h" // pre-compiled headers
+#include <winsock.h>  // for WSADATA.  This also requires wsock32.lib to be linked in.
 #include "script.h"
 #include "globaldata.h" // for a lot of things
 #include "util.h" // for strlcpy() etc.
@@ -1526,7 +1527,9 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 			if (*cp == g_delimiter)
 				cp = omit_leading_whitespace(cp + 1);
 			if (!stricmp(cp, "force"))
-				g_AllowOnlyOneInstance = SINGLE_INSTANCE_NO_PROMPT;
+				g_AllowOnlyOneInstance = SINGLE_INSTANCE_REPLACE;
+			else if (!stricmp(cp, "ignore"))
+				g_AllowOnlyOneInstance = SINGLE_INSTANCE_IGNORE;
 		}
 		return CONDITION_TRUE;
 	}
@@ -1780,8 +1783,17 @@ ResultType Script::UpdateOrCreateTimer(Label *aLabel, int aPeriod, bool aEnable)
 		// If there are now no enabled timed subroutines, kill the main timer since there's no other
 		// reason for it to exist if we're here.   This is because or direct or indirect caller is
 		// currently always ExecUntil(), which doesn't need the timer while its running except to
-		// support timed subroutines:
-		if (!mTimerEnabledCount)
+		// support timed subroutines.  UPDATE: The above is faulty; Must also check g_nLayersNeedingTimer
+		// because our caller can be one that still needs a timer as proven by this script that
+		// hangs otherwise:
+		//SetTimer, Test, on 
+		//Sleep, 1000 
+		//msgbox, done
+		//return
+		//Test: 
+		//SetTimer, Test, off 
+		//return
+		if (!mTimerEnabledCount && !g_nLayersNeedingTimer && !Hotkey::sJoyHotkeyCount)
 			KILL_MAIN_TIMER
 	}
 	if (aPeriod >= 0) // Caller wanted us to update this member.
@@ -1875,13 +1887,24 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 			return FAIL; // It already displayed the error.
 
 	// Find the arguments (not to be confused with exec_params) of this action, if it has any:
-	char *action_args = end_marker + 1;
-	action_args = omit_leading_whitespace(action_args);
+	char *action_args = omit_leading_whitespace(end_marker + 1);
 	// Now action_args is either the first delimiter or the first parameter (if it optional first
 	// delimiter was omitted):
+	bool is_var_and_operator;
 	if (*action_args == g_delimiter)
+	{
+		is_var_and_operator = false;  // Since there's a comma, we know it's not, e.g. something, += 4
 		// Find the start of the next token (or its ending delimiter if the token is blank such as ", ,"):
 		for (++action_args; IS_SPACE_OR_TAB(*action_args); ++action_args);
+	}
+	else
+		// The next line is used to help avoid ambiguity of a line such as the following:
+		// Input = test  ; Would otherwise be confused with the Input command.
+		// But there may be times when a line like this would be used:
+		// SomeCommand =  ; i.e. the equals is intended to be the first parameter, not an operator.
+		// In the above case, the user can provide the optional comma to avoid the ambiguity:
+		// SomeCommand, =
+		is_var_and_operator = *action_args ? strchr("=*/-+", *action_args) : false;
 	// Now the above has ensured that action_args is the first parameter itself, or empty-string if none.
 	// If action_args now starts with a delimiter, it means that the first param is blank/empty.
 
@@ -1904,7 +1927,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 	// new commands have been completed.
 	ActionTypeType action_type = aActionType;
 	ActionTypeType old_action_type = aOldActionType;
-	if (action_type == ACT_INVALID && old_action_type == OLD_INVALID)
+	if (action_type == ACT_INVALID && old_action_type == OLD_INVALID && !is_var_and_operator)
 		if (   (action_type = ConvertActionType(action_name)) == ACT_INVALID   )
 			old_action_type = ConvertOldActionType(action_name);
 
@@ -2547,7 +2570,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					// that this arg is not a variable, just a normal empty arg.  Functions
 					// such as ListLines() rely on this having been done because they assume,
 					// for performance reasons, that args marked as variables really are
-					// variables.  In addition, ExpandArgs() relies on this having been done:
+					// variables.  In addition, ExpandArgs() relies on this having been done
+					// as does the load-time validation for ACT_DRIVEGET:
 					new_arg[i].type = ARG_TYPE_NORMAL;
 				else
 				{
@@ -2788,19 +2812,18 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_STRINGGETPOS:
-		if (line->mArgc > 3 && !line->ArgHasDeref(4) && *LINE_RAW_ARG4 && !strchr("LR1", toupper(*LINE_RAW_ARG4)))
+		if (*LINE_RAW_ARG4 && !line->ArgHasDeref(4) && !strchr("LR1", toupper(*LINE_RAW_ARG4)))
 			return ScriptError("If not blank or a variable reference, parameter #4 must be 1 or start with the letter L or R.", LINE_RAW_ARG4);
 		break;
 
 	case ACT_STRINGREPLACE:
-		if (line->mArgc > 4 && !line->ArgHasDeref(5) && *LINE_RAW_ARG5
-			&& ((!*(LINE_RAW_ARG5 + 1) && *LINE_RAW_ARG5 != '1' && toupper(*LINE_RAW_ARG5) != 'A')
-			|| (*(LINE_RAW_ARG5 + 1) && stricmp(LINE_RAW_ARG5, "all"))))
+		if (   *LINE_RAW_ARG5 && !line->ArgHasDeref(5)	&& ((!*(LINE_RAW_ARG5 + 1) && *LINE_RAW_ARG5 != '1'
+			&& toupper(*LINE_RAW_ARG5) != 'A') || (*(LINE_RAW_ARG5 + 1) && stricmp(LINE_RAW_ARG5, "all")))   )
 			return ScriptError("If not blank, parameter #5 must be 1, A, ALL, or a variable reference.", LINE_RAW_ARG5);
 		break;
 
 	case ACT_STRINGSPLIT:
-		if (line->mArgc > 0 && !line->ArgHasDeref(1) && *LINE_RAW_ARG1) // The output array must be a legal name.
+		if (*LINE_RAW_ARG1 && !line->ArgHasDeref(1)) // The output array must be a legal name.
 			if (!Var::ValidateName(LINE_RAW_ARG1)) // It already displayed the error.
 				return FAIL;
 		break;
@@ -2812,11 +2835,11 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		if (line->mArgc > 4 || line->RegConvertValueType(LINE_RAW_ARG2))
 		{
 			// The obsolete 5-param method is being used, wherein ValueType is the 2nd param.
-			if (!line->ArgHasDeref(3) && *LINE_RAW_ARG3 && !line->RegConvertRootKey(LINE_RAW_ARG3))
+			if (*LINE_RAW_ARG3 && !line->ArgHasDeref(3) && !line->RegConvertRootKey(LINE_RAW_ARG3))
 				return ScriptError(ERR_REG_KEY, LINE_RAW_ARG3);
 		}
 		else // 4-param method.
-			if (line->mArgc > 1 && !line->ArgHasDeref(2) && *LINE_RAW_ARG2 && !line->RegConvertRootKey(LINE_RAW_ARG2))
+			if (*LINE_RAW_ARG2 && !line->ArgHasDeref(2) && !line->RegConvertRootKey(LINE_RAW_ARG2))
 				return ScriptError(ERR_REG_KEY, LINE_RAW_ARG2);
 		break;
 
@@ -2825,15 +2848,15 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		// is being used in its registry-loop mode and is validated elsewhere:
 		if (line->mArgc > 1)
 		{
-			if (!line->ArgHasDeref(1) && *LINE_RAW_ARG1 && !line->RegConvertValueType(LINE_RAW_ARG1))
+			if (*LINE_RAW_ARG1 && !line->ArgHasDeref(1) && !line->RegConvertValueType(LINE_RAW_ARG1))
 				return ScriptError(ERR_REG_VALUE_TYPE, LINE_RAW_ARG1);
-			if (!line->ArgHasDeref(2) && *LINE_RAW_ARG2 && !line->RegConvertRootKey(LINE_RAW_ARG2))
+			if (*LINE_RAW_ARG2 && !line->ArgHasDeref(2) && !line->RegConvertRootKey(LINE_RAW_ARG2))
 				return ScriptError(ERR_REG_KEY, LINE_RAW_ARG2);
 		}
 		break;
 
 	case ACT_REGDELETE:
-		if (line->mArgc > 0 && !line->ArgHasDeref(1) && *LINE_RAW_ARG1 && !line->RegConvertRootKey(LINE_RAW_ARG1))
+		if (*LINE_RAW_ARG1 && !line->ArgHasDeref(1) && !line->RegConvertRootKey(LINE_RAW_ARG1))
 			return ScriptError(ERR_REG_KEY, LINE_RAW_ARG1);
 		break;
 
@@ -2845,9 +2868,9 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			if (value_float < -100 || value_float > 100)
 				return ScriptError(ERR_PERCENT, LINE_RAW_ARG1);
 		}
-		if (line->mArgc > 1 && !line->ArgHasDeref(2) && *LINE_RAW_ARG2 && !line->SoundConvertComponentType(LINE_RAW_ARG2))
+		if (*LINE_RAW_ARG2 && !line->ArgHasDeref(2) && !line->SoundConvertComponentType(LINE_RAW_ARG2))
 			return ScriptError("Parameter #2 specifies an invalid component type.", LINE_RAW_ARG2);
-		if (line->mArgc > 2 && !line->ArgHasDeref(3) && *LINE_RAW_ARG3 && !line->SoundConvertControlType(LINE_RAW_ARG3))
+		if (*LINE_RAW_ARG3 && !line->ArgHasDeref(3) && !line->SoundConvertControlType(LINE_RAW_ARG3))
 			return ScriptError("Parameter #3 specifies an invalid control type.", LINE_RAW_ARG3);
 		break;
 
@@ -2861,13 +2884,12 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_SOUNDPLAY:
-		if (line->mArgc > 1 && !line->ArgHasDeref(2) && *LINE_RAW_ARG2
-			&& stricmp(LINE_RAW_ARG2, "wait") && stricmp(LINE_RAW_ARG2, "1"))
+		if (*LINE_RAW_ARG2 && !line->ArgHasDeref(2) && stricmp(LINE_RAW_ARG2, "wait") && stricmp(LINE_RAW_ARG2, "1"))
 			return ScriptError("If not blank, parameter #2 must be 1, WAIT, or a variable reference.", LINE_RAW_ARG2);
 		break;
 
 	case ACT_PIXELSEARCH:
-		if (line->mArgc > 7 && !line->ArgHasDeref(8) && *LINE_RAW_ARG8)
+		if (*LINE_RAW_ARG8 && !line->ArgHasDeref(8))
 		{
 			value = ATOI(LINE_RAW_ARG8);
 			if (value < 0 || value > 255)
@@ -2876,8 +2898,28 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		}
 		break;
 
+	case ACT_COORDMODE:
+		if (*LINE_RAW_ARG1 && !line->ArgHasDeref(1) && stricmp(LINE_RAW_ARG1, "Pixel")
+			&& stricmp(LINE_RAW_ARG1, "Mouse") && stricmp(LINE_RAW_ARG1, "ToolTip"))
+			return ScriptError("Parameter #1 must be a variable reference or the word PIXEL, MOUSE, or TOOLTIP."
+				, LINE_RAW_ARG1);
+		if (*LINE_RAW_ARG2 && !line->ArgHasDeref(2) && stricmp(LINE_RAW_ARG2, "Screen")
+			&& stricmp(LINE_RAW_ARG2, "Relative"))
+			return ScriptError("Parameter #2 must be blank, a variable reference, or the word SCREEN or RELATIVE."
+				, LINE_RAW_ARG2);
+		break;
+
+	case ACT_SETDEFAULTMOUSESPEED:
+		if (*LINE_RAW_ARG1 && !line->ArgHasDeref(1))
+		{
+			value = ATOI(LINE_RAW_ARG1);
+			if (value < 0 || value > MAX_MOUSE_SPEED)
+				return ScriptError(ERR_MOUSE_SPEED, LINE_RAW_ARG1);
+		}
+		break;
+
 	case ACT_MOUSEMOVE:
-		if (line->mArgc > 2 && !line->ArgHasDeref(3) && *LINE_RAW_ARG3)
+		if (*LINE_RAW_ARG3 && !line->ArgHasDeref(3))
 		{
 			value = ATOI(LINE_RAW_ARG3);
 			if (value < 0 || value > MAX_MOUSE_SPEED)
@@ -2887,13 +2929,13 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			return ScriptError(ERR_MOUSE_COORD, LINE_RAW_ARG1);
 		break;
 	case ACT_MOUSECLICK:
-		if (line->mArgc > 4 && !line->ArgHasDeref(5) && *LINE_RAW_ARG5)
+		if (*LINE_RAW_ARG5 && !line->ArgHasDeref(5))
 		{
 			value = ATOI(LINE_RAW_ARG5);
 			if (value < 0 || value > MAX_MOUSE_SPEED)
 				return ScriptError(ERR_MOUSE_SPEED, LINE_RAW_ARG5);
 		}
-		if (line->mArgc > 5 && !line->ArgHasDeref(6) && *LINE_RAW_ARG6)
+		if (*LINE_RAW_ARG6 && !line->ArgHasDeref(6))
 			if (strlen(LINE_RAW_ARG6) > 1 || !strchr("UD", toupper(*LINE_RAW_ARG6)))  // Up / Down
 				return ScriptError(ERR_MOUSE_UPDOWN, LINE_RAW_ARG6);
 		// Check that the button is valid (e.g. left/right/middle):
@@ -2904,35 +2946,27 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			return ScriptError(ERR_MOUSE_COORD, LINE_RAW_ARG2);
 		break;
 	case ACT_MOUSECLICKDRAG:
-		if (line->mArgc > 5 && !line->ArgHasDeref(6) && *LINE_RAW_ARG6)
+		if (*LINE_RAW_ARG6 && !line->ArgHasDeref(6))
 		{
 			value = ATOI(LINE_RAW_ARG6);
 			if (value < 0 || value > MAX_MOUSE_SPEED)
 				return ScriptError(ERR_MOUSE_SPEED, LINE_RAW_ARG6);
 		}
 		if (!line->ArgHasDeref(1))
-			if (!line->ConvertMouseButton(LINE_RAW_ARG1))
+			if (!line->ConvertMouseButton(LINE_RAW_ARG1, false))
 				return ScriptError(ERR_MOUSE_BUTTON, LINE_RAW_ARG1);
 		if (!line->ValidateMouseCoords(LINE_RAW_ARG2, LINE_RAW_ARG3))
 			return ScriptError(ERR_MOUSE_COORD, LINE_RAW_ARG2);
 		if (!line->ValidateMouseCoords(LINE_RAW_ARG4, LINE_RAW_ARG5))
 			return ScriptError(ERR_MOUSE_COORD, LINE_RAW_ARG4);
 		break;
-	case ACT_SETDEFAULTMOUSESPEED:
-		if (line->mArgc > 0 && !line->ArgHasDeref(1) && *LINE_RAW_ARG1)
-		{
-			value = ATOI(LINE_RAW_ARG1);
-			if (value < 0 || value > MAX_MOUSE_SPEED)
-				return ScriptError(ERR_MOUSE_SPEED, LINE_RAW_ARG1);
-		}
-		break;
 
 	case ACT_CONTROLCLICK:
 		// Check that the button is valid (e.g. left/right/middle):
-		if (!line->ArgHasDeref(4) && *LINE_RAW_ARG4) // i.e. it's allowed to be blank (defaults to left).
+		if (*LINE_RAW_ARG4 && !line->ArgHasDeref(4)) // i.e. it's allowed to be blank (defaults to left).
 			if (!line->ConvertMouseButton(LINE_RAW_ARG4))
 				return ScriptError(ERR_MOUSE_BUTTON, LINE_RAW_ARG4);
-		if (line->mArgc > 5 && !line->ArgHasDeref(6) && *LINE_RAW_ARG6)
+		if (*LINE_RAW_ARG6 && !line->ArgHasDeref(6))
 			if (strlen(LINE_RAW_ARG6) > 1 || !strchr("UD", toupper(*LINE_RAW_ARG6)))  // Up / Down
 				return ScriptError(ERR_MOUSE_UPDOWN, LINE_RAW_ARG6);
 		break;
@@ -2941,10 +2975,10 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_SUB:
 		if (line->mArgc > 2)
 		{
-			if (!line->ArgHasDeref(3) && *LINE_RAW_ARG3)
+			if (*LINE_RAW_ARG3 && !line->ArgHasDeref(3))
 				if (!strchr("SMHD", toupper(*LINE_RAW_ARG3)))  // (S)econds, (M)inutes, (H)ours, or (D)ays
 					return ScriptError(ERR_COMPARE_TIMES, LINE_RAW_ARG3);
-			if (aActionType == ACT_SUB && !line->ArgHasDeref(2) && *LINE_RAW_ARG2)
+			if (aActionType == ACT_SUB && *LINE_RAW_ARG2 && !line->ArgHasDeref(2))
 				if (!YYYYMMDDToFileTime(LINE_RAW_ARG2, &ft))
 					return ScriptError(ERR_INVALID_DATETIME, LINE_RAW_ARG2);
 		}
@@ -2956,7 +2990,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_FILECOPYDIR:
 	case ACT_FILEMOVEDIR:
 	case ACT_FILESELECTFOLDER:
-		if (line->mArgc > 2 && !line->ArgHasDeref(3) && *LINE_RAW_ARG3)
+		if (*LINE_RAW_ARG3 && !line->ArgHasDeref(3))
 		{
 			if (strlen(LINE_RAW_ARG3) > 1 || *LINE_RAW_ARG3 < '0' || *LINE_RAW_ARG3 > '3')
 				return ScriptError("Parameter #3 must be either blank, 0, 1, 2, 3, or a variable reference."
@@ -2971,7 +3005,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_FILEREMOVEDIR:
-		if (line->mArgc > 1 && !line->ArgHasDeref(2) && *LINE_RAW_ARG2)
+		if (*LINE_RAW_ARG2 && !line->ArgHasDeref(2))
 		{
 			if (strlen(LINE_RAW_ARG2) > 1 || (*LINE_RAW_ARG2 != '0' && *LINE_RAW_ARG2 != '1'))
 				return ScriptError("Parameter #2 must be either blank, 0, 1, or a variable reference."
@@ -2980,7 +3014,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_FILESETATTRIB:
-		if (line->mArgc > 0 && !line->ArgHasDeref(1) && *LINE_RAW_ARG1)
+		if (*LINE_RAW_ARG1 && !line->ArgHasDeref(1))
 		{
 			for (char *cp = LINE_RAW_ARG1; *cp; ++cp)
 				if (!strchr("+-^RASHNOT", toupper(*cp)))
@@ -2990,43 +3024,43 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		if (line->mArgc > 2 && !line->ArgHasDeref(3) && line->ConvertLoopMode(LINE_RAW_ARG3) == FILE_LOOP_INVALID)
 			return ScriptError("If not blank, parameter #3 must be either 0, 1, 2, or a variable reference."
 				, LINE_RAW_ARG3);
-		if (line->mArgc > 3 && !line->ArgHasDeref(4) && *LINE_RAW_ARG4)
+		if (*LINE_RAW_ARG4 && !line->ArgHasDeref(4))
 			if (strlen(LINE_RAW_ARG4) > 1 || (*LINE_RAW_ARG4 != '0' && *LINE_RAW_ARG4 != '1'))
 				return ScriptError("Parameter #4 must be either blank, 0, 1, or a variable reference."
 					, LINE_RAW_ARG4);
 		break;
 
 	case ACT_FILEGETTIME:
-		if (line->mArgc > 2 && !line->ArgHasDeref(3) && *LINE_RAW_ARG3)
+		if (*LINE_RAW_ARG3 && !line->ArgHasDeref(3))
 			if (strlen(LINE_RAW_ARG3) > 1 || !strchr("MCA", toupper(*LINE_RAW_ARG3)))
 				return ScriptError(ERR_FILE_TIME, LINE_RAW_ARG3);
 		break;
 
 	case ACT_FILESETTIME:
-		if (line->mArgc > 0 && !line->ArgHasDeref(1) && *LINE_RAW_ARG1)
+		if (*LINE_RAW_ARG1 && !line->ArgHasDeref(1))
 			if (!YYYYMMDDToFileTime(LINE_RAW_ARG1, &ft))
 				return ScriptError(ERR_INVALID_DATETIME, LINE_RAW_ARG1);
-		if (line->mArgc > 2 && !line->ArgHasDeref(3) && *LINE_RAW_ARG3)
+		if (*LINE_RAW_ARG3 && !line->ArgHasDeref(3))
 			if (strlen(LINE_RAW_ARG3) > 1 || !strchr("MCA", toupper(*LINE_RAW_ARG3)))
 				return ScriptError(ERR_FILE_TIME, LINE_RAW_ARG3);
 		if (line->mArgc > 3 && !line->ArgHasDeref(4) && line->ConvertLoopMode(LINE_RAW_ARG4) == FILE_LOOP_INVALID)
 			return ScriptError("If not blank, parameter #4 must be either 0, 1, 2, or a variable reference."
 				, LINE_RAW_ARG4);
-		if (line->mArgc > 4 && !line->ArgHasDeref(5) && *LINE_RAW_ARG5)
+		if (*LINE_RAW_ARG5 && !line->ArgHasDeref(5))
 			if (strlen(LINE_RAW_ARG5) > 1 || (*LINE_RAW_ARG5 != '0' && *LINE_RAW_ARG5 != '1'))
 				return ScriptError("Parameter #5 must be either blank, 0, 1, or a variable reference."
 					, LINE_RAW_ARG5);
 		break;
 
 	case ACT_FILEGETSIZE:
-		if (line->mArgc > 2 && !line->ArgHasDeref(3) && *LINE_RAW_ARG3)
+		if (*LINE_RAW_ARG3 && !line->ArgHasDeref(3))
 			if (strlen(LINE_RAW_ARG3) > 1 || !strchr("BKM", toupper(*LINE_RAW_ARG3))) // Allow B=Bytes as undocumented.
 				return ScriptError("Parameter #3 must be either blank, K, M, or a variable reference."
 					, LINE_RAW_ARG3);
 		break;
 
 	case ACT_FILESELECTFILE:
-		if (line->mArgc > 1 && !line->ArgHasDeref(2) && *LINE_RAW_ARG2)
+		if (*LINE_RAW_ARG2 && !line->ArgHasDeref(2))
 		{
 			value = ATOI(LINE_RAW_ARG2);
 			if (value < 0 || value > 31)
@@ -3088,7 +3122,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			case CONTROL_CMD_EDITPASTE:
 				break;
 			default: // All commands except the above should have a blank Value parameter.
-				if (line->mArgc > 1 && *LINE_RAW_ARG2)
+				if (*LINE_RAW_ARG2)
 					return ScriptError("Parameter #2 should be blank or omitted in this case.", LINE_RAW_ARG2);
 			}
 		}
@@ -3106,9 +3140,23 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			case CONTROLGET_CMD_LINE:
 				break;
 			default: // All commands except the above should have a blank Value parameter.
-				if (line->mArgc > 2 && *LINE_RAW_ARG3)
+				if (*LINE_RAW_ARG3)
 					return ScriptError("Parameter #3 should be blank or omitted in this case.", LINE_RAW_ARG3);
 			}
+		}
+		break;
+
+	case ACT_DRIVEGET:
+		if (!line->ArgHasDeref(2))  // Don't check "line->mArgc > 1" because of DRIVE_CMD_SETLABEL's param format.
+		{
+			DriveCmds drive_cmd = line->ConvertDriveCmd(LINE_RAW_ARG2);
+			if (!drive_cmd)
+				return ScriptError(ERR_DRIVECOMMAND, LINE_RAW_ARG2);
+			if (drive_cmd != DRIVE_CMD_LIST && !*LINE_RAW_ARG3)
+				return ScriptError("Parameter #3 should not be blank in this case.");
+			if (drive_cmd != DRIVE_CMD_SETLABEL && (line->mArgc < 1 || line->mArg[0].type == ARG_TYPE_NORMAL))
+				// The output variable has been omitted.
+				return ScriptError("Parameter #1 should not be blank in this case.");
 		}
 		break;
 
@@ -3136,6 +3184,11 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		}
 		break;
 
+	case ACT_INPUTBOX:
+		if (*LINE_RAW_ARG9)  // && !line->ArgHasDeref(9)
+			return ScriptError("Parameter #9 is for future use and should be left blank.", LINE_RAW_ARG9);
+		break;
+
 	case ACT_MSGBOX:
 		if (line->mArgc > 1) // i.e. this MsgBox is using the 3-param or 4-param style.
 			if (!line->ArgHasDeref(1)) // i.e. if it's a deref, we won't try to validate it now.
@@ -3160,8 +3213,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				, LINE_RAW_ARG2);
 		break;
 	case ACT_GETKEYSTATE:
-		if (line->mArgc > 1 && !line->ArgHasDeref(2) && !TextToVK(LINE_RAW_ARG2))
-			return ScriptError("This is not a valid key or mouse button name.", LINE_RAW_ARG2);
+		if (line->mArgc > 1 && !line->ArgHasDeref(2) && !TextToVK(LINE_RAW_ARG2) && !Line::ConvertJoy(LINE_RAW_ARG2))
+			return ScriptError("This is not a valid key, mouse, or joystick name.", LINE_RAW_ARG2);
 		break;
 	case ACT_DIV:
 		if (!line->ArgHasDeref(2)) // i.e. if it's a deref, we won't try to validate it now.
@@ -3182,13 +3235,13 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				return FAIL;  // The above already displayed the error.
 		if (aActionType == ACT_GROUPACTIVATE || aActionType == ACT_GROUPDEACTIVATE)
 		{
-			if (line->mArgc > 1 && !line->ArgHasDeref(2) && *LINE_RAW_ARG2)
+			if (*LINE_RAW_ARG2 && !line->ArgHasDeref(2))
 				if (strlen(LINE_RAW_ARG2) > 1 || toupper(*LINE_RAW_ARG2) != 'R')
 					return ScriptError("Parameter #2 must be either blank, R, or a variable reference."
 						, LINE_RAW_ARG2);
 		}
 		else if (aActionType == ACT_GROUPCLOSE)
-			if (line->mArgc > 1 && !line->ArgHasDeref(2) && *LINE_RAW_ARG2)
+			if (*LINE_RAW_ARG2 && !line->ArgHasDeref(2))
 				if (strlen(LINE_RAW_ARG2) > 1 || !strchr("RA", toupper(*LINE_RAW_ARG2)))
 					return ScriptError("Parameter #2 must be either blank, R, A, or a variable reference."
 						, LINE_RAW_ARG2);
@@ -3238,7 +3291,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					// Validate whatever we can rather than waiting for runtime validation:
 					if (!line->ArgHasDeref(2) && Line::ConvertLoopMode(LINE_RAW_ARG2) == FILE_LOOP_INVALID)
 						return ScriptError(ERR_LOOP_FILE_MODE, LINE_RAW_ARG2);
-					if (line->mArgc > 2 && !line->ArgHasDeref(3) && *LINE_RAW_ARG3)
+					if (*LINE_RAW_ARG3 && !line->ArgHasDeref(3))
 						if (strlen(LINE_RAW_ARG3) > 1 || (*LINE_RAW_ARG3 != '0' && *LINE_RAW_ARG3 != '1'))
 							return ScriptError("Parameter #3 must be either blank, 0, 1, or a variable reference."
 								, LINE_RAW_ARG3);
@@ -3247,7 +3300,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				{
 					if (line->mArgc > 2 && !line->ArgHasDeref(3) && Line::ConvertLoopMode(LINE_RAW_ARG3) == FILE_LOOP_INVALID)
 						return ScriptError(ERR_LOOP_REG_MODE, LINE_RAW_ARG3);
-					if (line->mArgc > 3 && !line->ArgHasDeref(4) && *LINE_RAW_ARG4)
+					if (*LINE_RAW_ARG4 && !line->ArgHasDeref(4))
 						if (strlen(LINE_RAW_ARG4) > 1 || (*LINE_RAW_ARG4 != '0' && *LINE_RAW_ARG4 != '1'))
 							return ScriptError("Parameter #4 must be either blank, 0, 1, or a variable reference."
 								, LINE_RAW_ARG4);
@@ -3533,6 +3586,12 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, Var *aVarPrev)
 	else if (!stricmp(new_name, "a_NumBatchLines")) var_type = VAR_NUMBATCHLINES;
 	else if (!stricmp(new_name, "a_OStype")) var_type = VAR_OSTYPE;
 	else if (!stricmp(new_name, "a_OSversion")) var_type = VAR_OSVERSION;
+	else if (!stricmp(new_name, "a_IsAdmin")) var_type = VAR_ISADMIN;
+	else if (!stricmp(new_name, "a_Cursor")) var_type = VAR_CURSOR;
+	else if (!stricmp(new_name, "a_IPAddress1")) var_type = VAR_IPADDRESS1;
+	else if (!stricmp(new_name, "a_IPAddress2")) var_type = VAR_IPADDRESS2;
+	else if (!stricmp(new_name, "a_IPAddress3")) var_type = VAR_IPADDRESS3;
+	else if (!stricmp(new_name, "a_IPAddress4")) var_type = VAR_IPADDRESS4;
 
 	else if (!stricmp(new_name, "a_LoopFileName")) var_type = VAR_LOOPFILENAME;
 	else if (!stricmp(new_name, "a_LoopFileShortName")) var_type = VAR_LOOPFILESHORTNAME;
@@ -3953,7 +4012,7 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 				 // end-block.  UPDATE: I think this is impossible because callers only use
 				 // aMode == ONLY_ONE_LINE when aStartingLine's ActionType is already
 				 // known to be an IF or a BLOCK_BEGIN:
-				 return line->PreparseError("Unexpected end-of-block (parsing single line).");
+				 return line->PreparseError("Unexpected end-of-block (single).");
 			if (UNTIL_BLOCK_END)
 				// Return line rather than line->mNextLine because, if we're at the end of
 				// the script, it's up to the caller to differentiate between that condition
@@ -3961,7 +4020,7 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 				return line;
 			// Otherwise, we found an end-block we weren't looking for.  This should be
 			// impossible since the block pre-parsing already balanced all the blocks?
-			return line->PreparseError("Unexpected end-of-block (parsing multiple lines).");
+			return line->PreparseError("Unexpected end-of-block (multi).");
 		case ACT_BREAK:
 		case ACT_CONTINUE:
 			if (!aLoopTypeFile && !aLoopTypeReg && !aLoopTypeRead && !aLoopTypeParse)
@@ -4082,7 +4141,8 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 //-------------------------------------------------------------------------------------
 
 // Init static vars:
-Line *Line::sLog[] = {NULL};  // I think this initializes all the array elements.
+Line *Line::sLog[] = {NULL};  // Initialize all the array elements.
+DWORD Line::sLogTick[]; // No initialization needed.
 int Line::sLogNext = 0;  // Start at the first element.
 
 char *Line::sSourceFile[MAX_SCRIPT_FILES]; // No init needed.
@@ -4191,7 +4251,13 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
         g_script.mCurrLine = line;  // Simplifies error reporting when we get deep into function calls.
 
 		// Maintain a circular queue of the lines most recently executed:
-		sLog[sLogNext++] = line; // The code actually runs faster this way than if this were combined with the above.
+		sLog[sLogNext] = line; // The code actually runs faster this way than if this were combined with the above.
+		// Get a fresh tick in case tick_now is out of date.  Strangely, it takes benchmarks 3% faster
+		// on my system with this line than without it, but that's probably just a quirk of the build
+		// or the CPU's caching.  It was already shown previously that the released version of 1.0.09
+		// was almost 2% faster than an early version of this version (yet even now, that prior version
+		// benchmarks slower than this one, which I can't explain).
+		sLogTick[sLogNext++] = GetTickCount();  // Incrementing here vs. separately benches a little faster.
 		if (sLogNext >= LINE_LOG_SIZE)
 			sLogNext = 0;
 
@@ -4661,7 +4727,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
 			// the program itself to terminate.  Otherwise, it causes us to return from all blocks
 			// and Gosubs (i.e. all the way out of the current subroutine, which was usually triggered
 			// by a hotkey):
-			if (Hotkey::sHotkeyCount || Hotkey::HookIsActive())
+			if (Hotkey::sHotkeyCount || Hotkey::HookIsActive() || g_persistent)
 				return EARLY_EXIT;  // It's "early" because only the very end of the script is the "normal" exit.
 			else
 				// This has been tested and it does return the error code indicated in ARG1, if present
@@ -4726,7 +4792,15 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
 			//++g_script.mLinesExecutedThisCycle;
 			if (aMode != UNTIL_BLOCK_END)
 				// Shouldn't happen if the pre-parser and this function are designed properly?
-				return line->LineError("Unexpected end-of-block." PLEASE_REPORT ERR_ABORT);
+				// Update: Rajat found a way for this to happen that basically amounts to this:
+				// If within a loop you gosub a label that is also inside of the block, and
+				// that label sometimes doesn't return (i.e. due to a missing "return" somewhere
+				// in its flow of control), the loop(s)'s block-end symbols will be encountered
+				// by the subroutine, and these symbols don't have meaning to it.  In other words,
+				// the subroutine has put us into a waiting-for-return state rather than a
+				// waiting-for-block-end state, so when block-end's are encountered, that is
+				// considered a runtime error:
+				return line->LineError("Unexpected end-of-block, probably due to a Gosub without matching Return." ERR_ABORT);
 			return OK; // It's the caller's responsibility to resume execution at the next line, if appropriate.
 		case ACT_ELSE:
 			// Shouldn't happen if the pre-parser and this function are designed properly?
@@ -5614,7 +5688,11 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	case ACT_INIWRITE:
 		return IniWrite(FOUR_ARGS);
 	case ACT_INIDELETE:
-		return IniDelete(THREE_ARGS);
+		// To preserve maximum compatibility with existing scripts, only send NULL if ARG3
+		// was explicitly omitted.  This is because some older scripts might rely on the
+		// fact that a blank ARG3 does not delete the entire section, but rather does
+		// nothing (that fact is untested):
+		return IniDelete(ARG1, ARG2, mArgc < 3 ? NULL : ARG3);
 
 	case ACT_REGREAD:
 		if (mArgc < 2 && aCurrentRegItem) // Uses the registry loop's current item.
@@ -6258,62 +6336,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		return StringSplit(ARG1, ARG2, ARG3, ARG4);
 
 	case ACT_GETKEYSTATE:
-		if (   !(output_var = ResolveVarOfArg(0))   )
-			return FAIL;
-		if (vk = TextToVK(ARG2))
-		{
-			switch (toupper(*ARG3))
-			{
-			case 'T': // Whether a toggleable key such as CapsLock is currently turned on.
-				// Under Win9x, at least certain versions and for certain hardware, this
-				// doesn't seem to be always accurate, especially when the key has just
-				// been toggled and the user hasn't pressed any other key since then.
-				// I tried using GetKeyboardState() instead, but it produces the same
-				// result.  Therefore, I've documented this as a limitation in the help file.
-				// In addition, this was attempted but it didn't seem to help:
-				//if (g_os.IsWin9x())
-				//{
-				//	DWORD my_thread  = GetCurrentThreadId();
-				//	DWORD fore_thread = GetWindowThreadProcessId(GetForegroundWindow(), NULL);
-				//	bool is_attached_my_to_fore = false;
-				//	if (fore_thread && fore_thread != my_thread)
-				//		is_attached_my_to_fore = AttachThreadInput(my_thread, fore_thread, TRUE) != 0;
-				//	output_var->Assign(IsKeyToggledOn(vk) ? "D" : "U");
-				//	if (is_attached_my_to_fore)
-				//		AttachThreadInput(my_thread, fore_thread, FALSE);
-				//	return OK;
-				//}
-				//else
-				return output_var->Assign(IsKeyToggledOn(vk) ? "D" : "U");
-			case 'P': // Physical state of key.
-				if (VK_IS_MOUSE(vk)) // mouse button
-				{
-					if (g_hhkLowLevelMouse) // mouse hook is installed, so use it's tracking of physical state.
-						return output_var->Assign(g_PhysicalKeyState[vk] ? "D" : "U");
-					else // Even for Win9x, it seems slightly better to call this rather than IsKeyDown9x():
-						return output_var->Assign(IsPhysicallyDown(vk) ? "D" : "U");
-				}
-				else // keyboard
-				{
-					if (g_hhkLowLevelKeybd)
-						// Since the hook is installed, use its value rather than that from
-						// GetAsyncKeyState(), which doesn't seem to return the physical state
-						// as expected/advertised, least under WinXP:
-						return output_var->Assign(g_PhysicalKeyState[vk] ? "D" : "U");
-					else // Even for Win9x, it seems slightly better to call this rather than IsKeyDown9x():
-						return output_var->Assign(IsPhysicallyDown(vk) ? "D" : "U");
-				}
-			default: // Logical state of key.
-				if (g_os.IsWin9x())
-					return output_var->Assign(IsKeyDown9x(vk) ? "D" : "U"); // This seems more likely to be reliable.
-				else
-					// On XP/2K/NT at least, a key can be physically down even if it isn't logically down,
-					// which is why the below specifically calls IsKeyDownNT() rather than some more
-					// comprehensive method such as consulting the physical key state as tracked by the hook:
-					return output_var->Assign(IsKeyDownNT(vk) ? "D" : "U");
-			}
-		}
-		return output_var->Assign("");
+		return ScriptGetKeyState(ARG2, ARG3);
 
 	case ACT_RANDOM:
 	{
@@ -6363,7 +6386,10 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		return PerformAssign();  // It will report any errors for us.
 
 	case ACT_DRIVESPACEFREE:
-		return DriveSpaceFree(ARG2);
+		return DriveSpace(ARG2, true);
+
+	case ACT_DRIVEGET:
+		return DriveGet(ARG2, ARG3);
 
 	case ACT_SOUNDGET:
 		device_id = *ARG4 ? ATOI(ARG4) - 1 : 0;
@@ -6770,11 +6796,17 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	case ACT_TOOLTIP:
 		return ToolTip(THREE_ARGS);
 
+	case ACT_TRAYTIP:
+		return TrayTip(FOUR_ARGS);
+
+	case ACT_INPUT:
+		return Input(ARG2, ARG3, ARG4);
+
 	case ACT_SEND:
 		SendKeys(ARG1);
 		return OK;
 	case ACT_MOUSECLICKDRAG:
-		if (   !(vk = ConvertMouseButton(ARG1))   )
+		if (   !(vk = ConvertMouseButton(ARG1, false))   )
 			return LineError(ERR_MOUSE_BUTTON ERR_ABORT, FAIL, ARG1);
 		if (!ValidateMouseCoords(ARG2, ARG3))
 			return LineError(ERR_MOUSE_COORD ERR_ABORT, FAIL, ARG2);
@@ -6806,6 +6838,24 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		return MouseGetPos();
 
 //////////////////////////////////////////////////////////////////////////
+
+	case ACT_COORDMODE:
+	{
+		bool screen_mode;
+		if (!*ARG2 || !stricmp(ARG2, "Screen"))
+			screen_mode = true;
+		else if (!stricmp(ARG2, "Relative"))
+			screen_mode = false;
+		else  // Since validated at load-time, too rare to return FAIL for.
+			return OK;
+		if (!stricmp(ARG1, "Pixel"))
+			if (screen_mode) g.CoordMode |= COORD_MODE_PIXEL; else g.CoordMode &= ~COORD_MODE_PIXEL;
+		else if (!stricmp(ARG1, "Mouse"))
+			if (screen_mode) g.CoordMode |= COORD_MODE_MOUSE; else g.CoordMode &= ~COORD_MODE_MOUSE;
+		else if (!stricmp(ARG1, "ToolTip"))
+			if (screen_mode) g.CoordMode |= COORD_MODE_TOOLTIP; else g.CoordMode &= ~COORD_MODE_TOOLTIP;
+		return OK;
+	}
 
 	case ACT_SETDEFAULTMOUSESPEED:
 		g.DefaultMouseSpeed = (UCHAR)ATOI(ARG1);
@@ -7191,6 +7241,8 @@ ResultType Line::ExpandArgs()
 
 inline VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize)
 // Returns the size, or VARSIZE_ERROR if there was a problem.
+// WARNING: This function can return a size larger than what winds up actually being needed
+// (e.g. caused by ScriptGetCursor()), so our callers should be aware that that can happen.
 {
 	int iArg;
 	VarSizeType space_needed;
@@ -7241,6 +7293,8 @@ inline VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize)
 				// else leave it as false
 			}
 			if (include_this_item)
+				// NOTE: Get() (with no params) can retrieve a size larger that what winds up actually
+				// being needed, so our callers should be aware that that can happen.
 				space_needed += the_only_var_of_this_arg->Get() + 1;  // +1 for the zero terminator.
 			// else no extra space is needed in the buffer.
 			continue;
@@ -7251,6 +7305,8 @@ inline VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize)
 		{
 			space_needed -= deref->length;     // Substitute the length of the variable contents
 			space_needed += deref->var->Get(); // for that of the literal text of the deref.
+			// NOTE: Get() (with no params) can retrieve a size larger that what winds up actually
+			// being needed, so our callers should be aware that that can happen.
 		}
 		// +1 for this arg's zero terminator in the buffer:
 		++space_needed;
@@ -7284,7 +7340,7 @@ inline char *Line::ExpandArg(char *aBuf, int aArgIndex)
 			return NULL;  // The above will have already displayed the error.
 
 	if (the_only_var_of_this_arg)
-		// +1 so that we return the position after the terminator, as required:
+		// +1 so that we return the position after the terminator, as required.
 		return aBuf += the_only_var_of_this_arg->Get(aBuf) + 1;
 
 	char *pText;
@@ -7330,6 +7386,92 @@ VarSizeType Script::GetTimeIdlePhysical(char *aBuf)
 
 
 
+VarSizeType Script::ScriptGetCursor(char *aBuf)
+// Adapted from the AutoIt3 source.
+{
+	#define CURSOR_NAME_SIZE (MAX_ALLOC_SIMPLE - 1) // The maximum size of any of the strings we return, including terminator.
+	if (!aBuf)
+		return CURSOR_NAME_SIZE - 1;  // -1 since we're returning the length of the var's contents, not the size.
+
+	POINT point;
+	GetCursorPos(&point);
+	HWND target_window = WindowFromPoint(point);
+
+	// MSDN docs imply that threads must be attached for GetCursor() to work.
+	// A side-effect of attaching threads or of GetCursor() itself is that mouse double-clicks
+	// are interfered with, at least if this function is called repeatedly at a high frequency.
+	ATTACH_THREAD_INPUT
+	HCURSOR current_cursor = GetCursor();
+	DETACH_THREAD_INPUT
+
+	if (!current_cursor)
+	{
+		#define CURSOR_UNKNOWN "Unknown"
+		strlcpy(aBuf, CURSOR_UNKNOWN, CURSOR_NAME_SIZE);
+		return (VarSizeType)strlen(aBuf);
+	}
+
+	// Static so that it's initialized on first use (should help performance after the first time):
+	static HCURSOR cursor[] = {LoadCursor(0,IDC_APPSTARTING), LoadCursor(0,IDC_ARROW), LoadCursor(0,IDC_CROSS)
+		, LoadCursor(0,IDC_HELP), LoadCursor(0,IDC_IBEAM), LoadCursor(0,IDC_ICON), LoadCursor(0,IDC_NO)
+		, LoadCursor(0,IDC_SIZE), LoadCursor(0,IDC_SIZEALL), LoadCursor(0,IDC_SIZENESW), LoadCursor(0,IDC_SIZENS)
+		, LoadCursor(0,IDC_SIZENWSE), LoadCursor(0,IDC_SIZEWE), LoadCursor(0,IDC_UPARROW), LoadCursor(0,IDC_WAIT)};
+	// The order in the below array must correspond to the order in the above array:
+	static char *cursor_name[] = {"AppStarting", "Arrow", "Cross"
+		, "Help", "IBeam", "Icon", "No"
+		, "Size", "SizeAll", "SizeNESW", "SizeNS"  // NESW = NorthEast or SouthWest
+		, "SizeNWSE", "SizeWE", "UpArrow", "Wait", CURSOR_UNKNOWN};  // The last item is used to mark end-of-array.
+	static int cursor_count = sizeof(cursor) / sizeof(HCURSOR);
+
+	int a;
+	for (a = 0; a < cursor_count; ++a)
+		if (cursor[a] == current_cursor)
+			break;
+
+	strlcpy(aBuf, cursor_name[a], CURSOR_NAME_SIZE);  // If a is out-of-bounds, "Unknown" will be used.
+	return (VarSizeType)strlen(aBuf);
+}
+
+
+
+VarSizeType Script::GetIP(int aAdapterIndex, char *aBuf)
+// Adapted from the AutoIt3 source.
+{
+	#define IP_ADDRESS_SIZE (MAX_ALLOC_SIMPLE - 1) // The maximum size of any of the strings we return, including terminator.
+	if (!aBuf)
+		return IP_ADDRESS_SIZE - 1;  // -1 since we're returning the length of the var's contents, not the size.
+
+	WSADATA wsadata;
+	if (WSAStartup(MAKEWORD(1, 1), &wsadata)) // Failed (it returns 0 on success).
+	{
+		*aBuf = '\0';
+		return 0;
+	}
+
+	char host_name[256];
+	gethostname(host_name, sizeof(host_name));
+	HOSTENT *lpHost = gethostbyname(host_name);
+
+	// au3: How many adapters have we?
+	int adapter_count = 0;
+	while (lpHost->h_addr_list[adapter_count])
+		++adapter_count;
+
+	if (aAdapterIndex >= adapter_count)
+		strlcpy(aBuf, "0.0.0.0", IP_ADDRESS_SIZE);
+	else
+	{
+		IN_ADDR inaddr;
+		memcpy(&inaddr, lpHost->h_addr_list[aAdapterIndex], 4);
+		strlcpy(aBuf, (char *)inet_ntoa(inaddr), IP_ADDRESS_SIZE);
+	}
+
+	WSACleanup();
+	return (VarSizeType)strlen(aBuf);
+}
+
+
+
 char *Line::LogToText(char *aBuf, size_t aBufSize)
 // Static method:
 // Translates sLog into its text equivalent, putting the result into aBuf and
@@ -7339,17 +7481,27 @@ char *Line::LogToText(char *aBuf, size_t aBufSize)
 	char *aBuf_orig = aBuf;
 	//snprintf(aBuf, BUF_SPACE_REMAINING, "Deref buffer size: %u\n\n", sDerefBufSize);
 	//aBuf += strlen(aBuf);
-	snprintf(aBuf, BUF_SPACE_REMAINING, "Script lines most recently executed (oldest first).  Press [F5] to refresh.\r\n\r\n");
+	snprintf(aBuf, BUF_SPACE_REMAINING, "Script lines most recently executed (oldest first).  Press [F5] to refresh.\r\n"
+		"The seconds elapsed between a line and the one after it is in parens to the right (if not 0).\r\n"
+		"The bottommost line's elapsed time is the number of seconds since it executed.\r\n\r\n");
 	aBuf += strlen(aBuf);
 	// Start at the oldest and continue up through the newest:
 	int i, line_index;
+	DWORD elapsed;
+	size_t space_remaining;
 	for (i = 0, line_index = sLogNext; i < LINE_LOG_SIZE; ++i, ++line_index)
 	{
 		if (line_index >= LINE_LOG_SIZE) // wrap around
 			line_index = 0;
 		if (sLog[line_index] == NULL)
 			continue;
-		aBuf = sLog[line_index]->ToText(aBuf, BUF_SPACE_REMAINING, true);
+		if (i + 1 < LINE_LOG_SIZE)  // There are still more lines to be processed
+			elapsed = sLogTick[line_index + 1 >= LINE_LOG_SIZE ? 0 : line_index + 1] - sLogTick[line_index];
+		else // This is the line, so compare it's time against the current time instead.
+			elapsed = GetTickCount() - sLogTick[line_index];
+		space_remaining = BUF_SPACE_REMAINING;  // Resolve macro only once for performance.
+		// Truncate really huge lines so that the Edit control's size is less likely to be exceeded:
+		aBuf = sLog[line_index]->ToText(aBuf, space_remaining < 500 ? space_remaining : 500, elapsed);
 	}
 	snprintf(aBuf, BUF_SPACE_REMAINING, "\r\nPress [F5] to refresh.");
 	aBuf += strlen(aBuf);
@@ -7388,6 +7540,9 @@ char *Line::VicinityToText(char *aBuf, size_t aBufSize, int aMaxLines)
 	// we want to convert to text, and they're non-NULL.
 	snprintf(aBuf, BUF_SPACE_REMAINING, "\tLine#\n");
 	aBuf += strlen(aBuf);
+
+	size_t space_remaining;
+
 	// Start at the oldest and continue up through the newest:
 	for (Line *line = line_start;;)
 	{
@@ -7396,7 +7551,9 @@ char *Line::VicinityToText(char *aBuf, size_t aBufSize, int aMaxLines)
 		else
 			strlcpy(aBuf, "\t", BUF_SPACE_REMAINING);
 		aBuf += strlen(aBuf);
-		aBuf = line->ToText(aBuf, BUF_SPACE_REMAINING, true);
+		space_remaining = BUF_SPACE_REMAINING;  // Resolve macro only once for performance.
+		// Truncate large lines so that the dialog is more readable:
+		aBuf = line->ToText(aBuf, space_remaining < 500 ? space_remaining : 500);
 		if (line == line_end)
 			break;
 		line = line->mNextLine;
@@ -7406,11 +7563,15 @@ char *Line::VicinityToText(char *aBuf, size_t aBufSize, int aMaxLines)
 
 
 
-char *Line::ToText(char *aBuf, size_t aBufSize, bool aAppendNewline)
+char *Line::ToText(char *aBuf, size_t aBufSize, DWORD aElapsed)
 // Translates this line into its text equivalent, putting the result into aBuf and
 // returning the position in aBuf of its new string terminator.
 {
 	if (!aBuf) return NULL;
+	if (aBufSize < 3)
+		return aBuf;
+	else
+		aBufSize -= 2;  // Reserve two characters for CR+LF to each line (so that they always get added).
 	char *aBuf_orig = aBuf;
 	snprintf(aBuf, BUF_SPACE_REMAINING, "%03u: ", mLineNumber);
 	aBuf += strlen(aBuf);
@@ -7438,12 +7599,15 @@ char *Line::ToText(char *aBuf, size_t aBufSize, bool aAppendNewline)
 			aBuf += strlen(aBuf);
 		}
 	}
-	if (aAppendNewline && BUF_SPACE_REMAINING >= 2)
+	if (aElapsed)
 	{
-		*aBuf++ = '\r';
-		*aBuf++ = '\n';
-		*aBuf = '\0';
+		snprintf(aBuf, BUF_SPACE_REMAINING, " (%0.2f)", (float)aElapsed / 1000.0);
+		aBuf += strlen(aBuf);
 	}
+	// Room for these two characters was reserved at the top of this function:
+	*aBuf++ = '\r';
+	*aBuf++ = '\n';
+	*aBuf = '\0';
 	return aBuf;
 }
 
@@ -7714,8 +7878,8 @@ char *Script::ListKeyHistory(char *aBuf, size_t aBufSize)
 		"\r\n"
 		, win_title
 		//, SimpleHeap::GetBlockCount()
-		, g_hhkLowLevelKeybd == NULL ? "no" : "yes"
-		, g_hhkLowLevelMouse == NULL ? "no" : "yes"
+		, g_KeybdHook == NULL ? "no" : "yes"
+		, g_MouseHook == NULL ? "no" : "yes"
 		, g_LastPerformedHotkeyType == HK_KEYBD_HOOK ? "keybd hook" : "not keybd hook"
 		, mTimerEnabledCount, mTimerCount, timer_list
 		//, INTERRUPTIBLE ? "yes" : "no"

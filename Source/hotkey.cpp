@@ -30,6 +30,8 @@ DWORD Hotkey::sTimeNow = {0};
 Hotkey *Hotkey::shk[MAX_HOTKEYS] = {NULL};
 HotkeyIDType Hotkey::sNextID = 0;
 const HotkeyIDType &Hotkey::sHotkeyCount = Hotkey::sNextID;
+bool Hotkey::sJoystickHasHotkeys[MAX_JOYSTICKS] = {false};
+DWORD Hotkey::sJoyHotkeyCount = 0;
 
 
 
@@ -238,7 +240,30 @@ void Hotkey::AllActivate()
 				if (shk[i]->mType == HK_KEYBD_HOOK)
 					sWhichHookNeeded |= HOOK_KEYBD;
 				if (shk[i]->mType == HK_MOUSE_HOOK)
+				{
 					sWhichHookNeeded |= HOOK_MOUSE;
+					// Check if this mouse hotkey also requires the keyboard hook (e.g. #LButton).
+					// Some mouse hotkeys, such as those with normal modifiers, don't require it
+					// since the mouse hook has logic to handle that situation.  But those that
+					// are composite hotkeys such as "RButton & Space" or "Space & RButton" need
+					// the keyboard hook:
+					if (   shk[i]->mModifierSC || shk[i]->mSC // i.e. since it's an SC, it can't be a mouse button.
+						|| (shk[i]->mVK && !VK_IS_MOUSE(shk[i]->mVK)) // e.g. "RButton & Space"
+						|| (shk[i]->mModifierVK && !VK_IS_MOUSE(shk[i]->mModifierVK))   ) // e.g. "Space & RButton"
+					{
+						shk[i]->mType = HK_BOTH_HOOKS;  // Needed by ChangeHookState().
+						sWhichHookNeeded |= HOOK_KEYBD;
+					}
+					// For the above, the following types of mouse hotkeys do not need the keyboard hook:
+					// 1) mAllowExtraModifiers: Already handled since the mouse hook fetches the modifier state
+					//    manually when the keyboard hook isn't installed.
+					// 2) mModifiersConsolidated (i.e. the mouse button is modified by a normal modifier
+					//    such as CTRL): Same reason as #1.
+					// 3) As a subset of #2, mouse hotkeys that use WIN as a modifier will not have the
+					//    Start Menu suppressed unless the keyboard hook is installed.  It's debatable,
+					//    but that seems a small price to pay (esp. given how rare it is just to have
+					//    the mouse hook with no keyboard hook) to avoid the overhead of the keyboard hook.
+				}
 			}
 		} // for()
 	} // if()
@@ -474,6 +499,23 @@ ResultType Hotkey::PerformID(HotkeyIDType aHotkeyID)
 
 
 
+void Hotkey::TriggerJoyHotkeys(int aJoystickID, DWORD aButtonsNewlyDown)
+{
+	for (int i = 0; i < sHotkeyCount; ++i)
+	{
+		if (shk[i]->mType != HK_JOYSTICK || shk[i]->mVK != aJoystickID)
+			continue;
+		// Determine if this hotkey's button among those newly pressed:
+		if (   aButtonsNewlyDown & ((DWORD)0x01 << (shk[i]->mSC - JOYCTRL_1))   )
+			// Post it to the thread, just in case the OS tries to be "helpful" and
+			// directly call MainWindowProc() rather than actually posting the message.
+			// We want the main loop to handle this message:
+			PostThreadMessage(GetCurrentThreadId(), WM_HOTKEY, (WPARAM)i, 0);
+	}
+}
+
+
+
 ResultType Hotkey::AddHotkey(Label *aJumpToLabel, HookActionType aHookAction)
 // Return OK or FAIL.
 {
@@ -497,7 +539,7 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 	, mModifiers(0)
 	, mModifiersLR(0)
 	, mAllowExtraModifiers(false)
-	, mDoSuppress(true)
+	, mNoSuppress(0)  // Default is to suppress both prefixes and suffixes.
 	, mModifierVK(0)
 	, mModifierSC(0)
 	, mModifiersConsolidated(0)
@@ -532,103 +574,110 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 	if (!TextInterpret()) // The called function already displayed the error.
 		return;
 
-	char error_text[512];
-	if ((mModifierVK || mModifierSC))
-	{
-		bool is_neutral;
-		if (KeyToModifiersLR(mVK, mSC, &is_neutral))
-			if (is_neutral)
-			{
-				// In the future, this warning might be removed by directly supporting a neutral
-				// suffix key.  But it's fairly difficult to implement in a maintainable way;
-				// These are the only ways I can think of:
-				// 1) Create two hotkey entries for every such instance;
-				// 2) Have ChangeHookState() create two kvk/ksc(?) entries;
-				// 3) Have the hook search for the suffix key by first looking up the left/right
-				//    specific modifier (i.e. just as it came in) and then if that fails, trying
-				//    to look it up by the neutral VK.
-				snprintf(error_text, sizeof(error_text), "Warning: The following hotkey uses a neutral"
-					" modifier key as a suffix.  Instead, use the left/right specific key,"
-					" e.g. LShift vs. Shift.\n\nThis hotkey has not been enabled:\n%s"
-					, mJumpToLabel->mName);
-				MsgBox(error_text);
-				return;  // Key is invalid so don't give it an ID.
-			}
-	}
-	if (   (mHookAction == HOTKEY_ID_ALT_TAB || mHookAction == HOTKEY_ID_ALT_TAB_SHIFT)
-		&& !mModifierVK && !mModifierSC   )
-	{
-		if (mModifiers)
-		{
-			// Neutral modifier has been specified.  Future enhancement: improve this
-			// to try to guess which key, left or right, should be used based on the
-			// location of the suffix key on the keyboard.
-			snprintf(error_text, sizeof(error_text), "Warning: The following hotkey is AltTab but has a"
-				" neutral modifying prefix key.  For this type, you must specify left"
-				" or right by using something like:\n\n"
-				"RWIN" COMPOSITE_DELIMITER "RShift::AltTab\n"
-				"or\n"
-				">+Rwin::AltTab"
-				"\n\nThis hotkey has not been enabled:\n%s"
-				, mJumpToLabel->mName);
-			MsgBox(error_text);
-			return;  // Key is invalid so don't give it an ID.
-		}
-		if (mModifiersLR)
-		{
-			switch (mModifiersLR)
-			{
-			case MOD_LCONTROL: mModifierVK = g_os.IsWin9x() ? VK_CONTROL : VK_LCONTROL; break;
-			case MOD_RCONTROL: mModifierVK = g_os.IsWin9x() ? VK_CONTROL : VK_RCONTROL; break;
-			case MOD_LSHIFT: mModifierVK = g_os.IsWin9x() ? VK_SHIFT : VK_LSHIFT; break;
-			case MOD_RSHIFT: mModifierVK = g_os.IsWin9x() ? VK_SHIFT : VK_RSHIFT; break;
-			case MOD_LALT: mModifierVK = g_os.IsWin9x() ? VK_MENU : VK_LMENU; break;
-			case MOD_RALT: mModifierVK = g_os.IsWin9x() ? VK_MENU : VK_RMENU; break;
-			case MOD_LWIN: mModifierVK = VK_LWIN; break; // Win9x should support LWIN/RWIN.
-			case MOD_RWIN: mModifierVK = VK_RWIN; break;
-			default:
-				snprintf(error_text, sizeof(error_text), "Warning: The following hotkey is AltTab but has"
-					" more than one modifying prefix key, which is not allowed."
-					"  This hotkey has not been enabled:\n%s"
-					, mJumpToLabel->mName);
-				MsgBox(error_text);
-				return;  // Key is invalid so don't give it an ID.
-			}
-			// Since above didn't return:
-			mModifiersLR = 0;  // Since ModifierVK/SC is now its substitute.
-		}
-		// Update: This is no longer needed because the hook attempts to compensate.
-		// However, leaving it enabled may improve performance and reliability.
-		// Update#2: No, it needs to be disabled, otherwise alt-tab won't work right
-		// in the rare case where an ALT key itself is defined as "AltTabMenu":
-		//else
-			// It has no ModifierVK/SC and no modifiers, so it's a hotkey that is defined
-			// to fire only when the Alt-Tab menu is visible.  Since the ALT key must be
-			// down for that menu to be visible (on all OSes?), add the ALT key to this
-			// keys modifiers so that it will be detected as a hotkey whenever the
-			// Alt-Tab menu is visible:
-		//	modifiers |= MOD_ALT;
-	}
-
-	if (mType != HK_MOUSE_HOOK)  // Don't let a mouse key ever be affected by these checks.
-		if ((g_ForceKeybdHook || mModifiersLR || mAllowExtraModifiers || !mDoSuppress || aHookAction)
-			&& !g_os.IsWin9x())
-			mType = HK_KEYBD_HOOK;
-
-	// Currently, these take precedence over each other in the following order, so don't
-	// just bitwise-or them together in case there's any ineffectual stuff stored in
-	// the fields that have no effect (e.g. modifiers have no effect if there's a mModifierVK):
-	if (mModifierVK)
-		mModifiersConsolidated = KeyToModifiersLR(mModifierVK);
-	else if (mModifierSC)
-		mModifiersConsolidated = KeyToModifiersLR(0, mModifierSC);
+	if (mType == HK_JOYSTICK)
+		mModifiersConsolidated = 0;
 	else
 	{
-		mModifiersConsolidated = mModifiersLR;
-		if (mModifiers)
-			mModifiersConsolidated |= ConvertModifiers(mModifiers);
-	}
+		char error_text[512];
+		if ((mModifierVK || mModifierSC))
+		{
+			bool is_neutral;
+			if (KeyToModifiersLR(mVK, mSC, &is_neutral))
+				if (is_neutral)
+				{
+					// In the future, this warning might be removed by directly supporting a neutral
+					// suffix key.  But it's fairly difficult to implement in a maintainable way;
+					// These are the only ways I can think of:
+					// 1) Create two hotkey entries for every such instance;
+					// 2) Have ChangeHookState() create two kvk/ksc(?) entries;
+					// 3) Have the hook search for the suffix key by first looking up the left/right
+					//    specific modifier (i.e. just as it came in) and then if that fails, trying
+					//    to look it up by the neutral VK.
+					snprintf(error_text, sizeof(error_text), "Warning: The following hotkey uses a neutral"
+						" modifier key as a suffix.  Instead, use the left/right specific key,"
+						" e.g. LShift vs. Shift.\n\nThis hotkey has not been enabled:\n%s"
+						, mJumpToLabel->mName);
+					MsgBox(error_text);
+					return;  // Key is invalid so don't give it an ID.
+				}
+		}
+		if (   (mHookAction == HOTKEY_ID_ALT_TAB || mHookAction == HOTKEY_ID_ALT_TAB_SHIFT)
+			&& !mModifierVK && !mModifierSC   )
+		{
+			if (mModifiers)
+			{
+				// Neutral modifier has been specified.  Future enhancement: improve this
+				// to try to guess which key, left or right, should be used based on the
+				// location of the suffix key on the keyboard.
+				snprintf(error_text, sizeof(error_text), "Warning: The following hotkey is AltTab but has a"
+					" neutral modifying prefix key.  For this type, you must specify left"
+					" or right by using something like:\n\n"
+					"RWIN" COMPOSITE_DELIMITER "RShift::AltTab\n"
+					"or\n"
+					">+Rwin::AltTab"
+					"\n\nThis hotkey has not been enabled:\n%s"
+					, mJumpToLabel->mName);
+				MsgBox(error_text);
+				return;  // Key is invalid so don't give it an ID.
+			}
+			if (mModifiersLR)
+			{
+				switch (mModifiersLR)
+				{
+				case MOD_LCONTROL: mModifierVK = g_os.IsWin9x() ? VK_CONTROL : VK_LCONTROL; break;
+				case MOD_RCONTROL: mModifierVK = g_os.IsWin9x() ? VK_CONTROL : VK_RCONTROL; break;
+				case MOD_LSHIFT: mModifierVK = g_os.IsWin9x() ? VK_SHIFT : VK_LSHIFT; break;
+				case MOD_RSHIFT: mModifierVK = g_os.IsWin9x() ? VK_SHIFT : VK_RSHIFT; break;
+				case MOD_LALT: mModifierVK = g_os.IsWin9x() ? VK_MENU : VK_LMENU; break;
+				case MOD_RALT: mModifierVK = g_os.IsWin9x() ? VK_MENU : VK_RMENU; break;
+				case MOD_LWIN: mModifierVK = VK_LWIN; break; // Win9x should support LWIN/RWIN.
+				case MOD_RWIN: mModifierVK = VK_RWIN; break;
+				default:
+					snprintf(error_text, sizeof(error_text), "Warning: The following hotkey is AltTab but has"
+						" more than one modifying prefix key, which is not allowed."
+						"  This hotkey has not been enabled:\n%s"
+						, mJumpToLabel->mName);
+					MsgBox(error_text);
+					return;  // Key is invalid so don't give it an ID.
+				}
+				// Since above didn't return:
+				mModifiersLR = 0;  // Since ModifierVK/SC is now its substitute.
+			}
+			// Update: This is no longer needed because the hook attempts to compensate.
+			// However, leaving it enabled may improve performance and reliability.
+			// Update#2: No, it needs to be disabled, otherwise alt-tab won't work right
+			// in the rare case where an ALT key itself is defined as "AltTabMenu":
+			//else
+				// It has no ModifierVK/SC and no modifiers, so it's a hotkey that is defined
+				// to fire only when the Alt-Tab menu is visible.  Since the ALT key must be
+				// down for that menu to be visible (on all OSes?), add the ALT key to this
+				// keys modifiers so that it will be detected as a hotkey whenever the
+				// Alt-Tab menu is visible:
+			//	modifiers |= MOD_ALT;
+		}
 
+		if (mType != HK_MOUSE_HOOK && mType != HK_JOYSTICK)
+			if ((g_ForceKeybdHook || mModifiersLR || mAllowExtraModifiers || mNoSuppress || aHookAction)
+				&& !g_os.IsWin9x())
+				// Do this for both NO_SUPPRESS_SUFFIX and NO_SUPPRESS_PREFIX.  In the case of
+				// NO_SUPPRESS_PREFIX, the hook is needed anyway since the only way to get
+				// NO_SUPPRESS_PREFIX in effect is with a hotkey that has a ModifierVK/SC.
+				mType = HK_KEYBD_HOOK;
+
+		// Currently, these take precedence over each other in the following order, so don't
+		// just bitwise-or them together in case there's any ineffectual stuff stored in
+		// the fields that have no effect (e.g. modifiers have no effect if there's a mModifierVK):
+		if (mModifierVK)
+			mModifiersConsolidated = KeyToModifiersLR(mModifierVK);
+		else if (mModifierSC)
+			mModifiersConsolidated = KeyToModifiersLR(0, mModifierSC);
+		else
+		{
+			mModifiersConsolidated = mModifiersLR;
+			if (mModifiers)
+				mModifiersConsolidated |= ConvertModifiers(mModifiers);
+		}
+	}
 	// Always assign the ID last, right before a successful return, so that the caller is notified
 	// that the constructor succeeded:
 	mConstructedOK = true;
@@ -642,18 +691,24 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 ResultType Hotkey::TextInterpret()
 // Returns OK or FAIL.
 {
-	char *term2;
-	if (   !(term2 = stristr(mJumpToLabel->mName, COMPOSITE_DELIMITER))   )
-		return TextToKey(TextToModifiers(mJumpToLabel->mName), false);
-    char *end_of_term1 = omit_trailing_whitespace(mJumpToLabel->mName, term2) + 1;
+	char *term1 = mJumpToLabel->mName;
+	char *term2 = stristr(term1, COMPOSITE_DELIMITER);
+	if (!term2)
+		return TextToKey(TextToModifiers(term1), false);
+	if (*term1 == '~')
+	{
+		mNoSuppress |= NO_SUPPRESS_PREFIX;
+		term1 = omit_leading_whitespace(term1 + 1);
+	}
+    char *end_of_term1 = omit_trailing_whitespace(term1, term2) + 1;
 	// Temporarily terminate the string so that the 2nd term is hidden:
 	char ctemp = *end_of_term1;
 	*end_of_term1 = '\0';
-	ResultType result = TextToKey(mJumpToLabel->mName, true);
+	ResultType result = TextToKey(term1, true);
 	*end_of_term1 = ctemp;  // Undo the termination.
 	if (result == FAIL)
 		return FAIL;
-	term2 += strlen(COMPOSITE_DELIMITER);
+	term2 += COMPOSITE_DELIMITER_LENGTH;
 	term2 = omit_leading_whitespace(term2);
 	// Even though modifiers on keys already modified by a mModifierVK are not supported, call
 	// TextToModifiers() anyway to use its output (for consistency).  The modifiers it sets
@@ -691,7 +746,7 @@ char *Hotkey::TextToModifiers(char *aText)
 			mAllowExtraModifiers = true;
 			break;
 		case '~':
-			mDoSuppress = false;
+			mNoSuppress |= NO_SUPPRESS_SUFFIX;
 			break;
 		case '$':
 			if (!g_os.IsWin9x())
@@ -806,6 +861,8 @@ ResultType Hotkey::TextToKey(char *aText, bool aIsModifier)
 	mod_type modifiers = 0;
 	modLR_type modifiersLR = 0;
 	bool is_mouse = false;
+	int joystick_id;
+
 	if (temp_vk = TextToVK(aText, &modifiers, true))
 	{
 		if (aIsModifier && (temp_vk == VK_WHEEL_DOWN || temp_vk == VK_WHEEL_UP))
@@ -826,11 +883,19 @@ ResultType Hotkey::TextToKey(char *aText, bool aIsModifier)
 	}
 	else // no VK was found.  Is there a scan code?
 		if (   !(temp_sc = TextToSC(aText))   )
-		{
-			snprintf(error_text, sizeof(error_text), "\"%s\" is not a valid key name within a hotkey label.", aText);
-			MsgBox(error_text);
-			return FAIL;
-		}
+			if (   !(temp_sc = (sc_type)Line::ConvertJoy(aText, &joystick_id, true))   )  // Is there a joystick control/button?
+			{
+				snprintf(error_text, sizeof(error_text), "\"%s\" is not a valid key name within a hotkey label.", aText);
+				MsgBox(error_text);
+				return FAIL;
+			}
+			else
+			{
+				++sJoyHotkeyCount;
+				mType = HK_JOYSTICK;
+				temp_vk = (vk_type)joystick_id;  // 0 is the 1st joystick, 1 the 2nd, etc.
+				sJoystickHasHotkeys[joystick_id] = true;
+			}
 
 
 /*
@@ -851,7 +916,7 @@ scan code array).
 	{
 		mModifierVK = temp_vk;
 		mModifierSC = temp_sc;
-		if (!is_mouse)
+		if (!is_mouse && mType != HK_JOYSTICK)
 			mType = HK_KEYBD_HOOK;  // Always use the hook for keys that have a mModifierVK or SC
 		return OK;
 	}
@@ -861,7 +926,7 @@ scan code array).
 		mSC = temp_sc;
 		mModifiers |= modifiers;  // Turn on any additional modifiers.  e.g. SHIFT to realize '#'.
 		mModifiersLR |= modifiersLR;
-		if (!is_mouse)
+		if (!is_mouse && mType != HK_JOYSTICK)
 		{
 			// For these, if it's Win9x, attempt to register them normally to give the user at least
 			// some partial functiality.  The key will probably be toggled to its opposite state when
@@ -870,7 +935,7 @@ scan code array).
 				mType =  HK_KEYBD_HOOK;
 			// But these flag for the hook even if the OS is Win9x so that a warning will be
 			// displayed when it comes time to register them:
-			if (   !temp_vk || temp_vk == VK_LCONTROL || temp_vk == VK_RCONTROL
+			else if (   !temp_vk || temp_vk == VK_LCONTROL || temp_vk == VK_RCONTROL
 				|| temp_vk == VK_LSHIFT || temp_vk == VK_RSHIFT
 				|| temp_vk == VK_LMENU || temp_vk == VK_RMENU   )
 				// Scan codes having no available virtual key must always be handled by the hook.

@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.09"
+#define NAME_VERSION "1.0.10"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -88,7 +88,8 @@ enum ResultType {FAIL = 0, OK, WARN = OK, CRITICAL_ERROR
 	, LOOP_BREAK, LOOP_CONTINUE
 	, EARLY_RETURN, EARLY_EXIT};
 
-enum SingleInstanceType {ALLOW_MULTI_INSTANCE, SINGLE_INSTANCE, SINGLE_INSTANCE_NO_PROMPT}; // First must be zero.
+enum SingleInstanceType {ALLOW_MULTI_INSTANCE, SINGLE_INSTANCE, SINGLE_INSTANCE_REPLACE
+	, SINGLE_INSTANCE_IGNORE}; // ALLOW_MULTI_INSTANCE must be zero.
 
 enum MenuVisibleType {MENU_VISIBLE_NONE, MENU_VISIBLE_TRAY, MENU_VISIBLE_MAIN}; // NONE must be zero.
 
@@ -219,6 +220,12 @@ struct Action
 // Same reason as above struct.  It's best to keep this struct as small as possible
 // because it's used as a local (stack) var by at least one recursive function:
 enum TitleMatchModes {MATCHMODE_INVALID = FAIL, FIND_IN_LEADING_PART, FIND_ANYWHERE, FIND_FAST, FIND_SLOW};
+
+// Bitwise flags for the UCHAR CoordMode:
+#define COORD_MODE_PIXEL 0x1
+#define COORD_MODE_MOUSE 0x2
+#define COORD_MODE_TOOLTIP 0x4
+
 struct global_struct
 {
 	bool TitleFindAnywhere;  // Whether match can be found anywhere in a window title, rather than leading part.
@@ -234,6 +241,7 @@ struct global_struct
 	int KeyDelay;  // negative values may be used as special flags.
 	int MouseDelay;  // negative values may be used as special flags.
 	UCHAR DefaultMouseSpeed;
+	UCHAR CoordMode; // Bitwise collection of flags.
 	bool StoreCapslockMode;
 	bool AutoTrim;
 	bool StringCaseSense;
@@ -286,6 +294,7 @@ inline void global_init(global_struct *gp)
 	#define MAX_MOUSE_SPEED_STR "100"
 	#define COORD_UNSPECIFIED (INT_MIN)
 	gp->DefaultMouseSpeed = DEFAULT_MOUSE_SPEED;
+	gp->CoordMode = 0;  // All the flags it contains are off by default.
 	gp->StoreCapslockMode = true;  // AutoIt2 (and probably 3's) default, and it makes a lot of sense.
 	gp->AutoTrim = true;  // AutoIt2's default, and overall the best default in most cases.
 	gp->StringCaseSense = false;  // AutoIt2 default, and it does seem best.

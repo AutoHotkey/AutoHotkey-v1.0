@@ -36,7 +36,7 @@
 				Name="VCCustomBuildTool"/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="winmm.lib version.lib"
+				AdditionalDependencies="wsock32.lib winmm.lib version.lib"
 				OutputFile="$(OutDir)/AutoHotkey.exe"
 				LinkIncremental="2"
 				GenerateDebugInformation="TRUE"
@@ -93,7 +93,7 @@
 			<Tool
 				Name="VCLinkerTool"
 				AdditionalOptions="/SAFESEH:NO"
-				AdditionalDependencies="winmm.lib version.lib"
+				AdditionalDependencies="wsock32.lib winmm.lib version.lib"
 				OutputFile="$(OutDir)/AutoHotkey.exe"
 				LinkIncremental="1"
 				GenerateDebugInformation="FALSE"
@@ -153,7 +153,7 @@
 				Name="VCCustomBuildTool"/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="winmm.lib version.lib $(InputDir)\source\lib\exearc_read_mt.lib"
+				AdditionalDependencies="wsock32.lib winmm.lib version.lib $(InputDir)\source\lib\exearc_read_mt.lib"
 				OutputFile="$(OutDir)/AutoHotkeySC.bin"
 				LinkIncremental="1"
 				IgnoreDefaultLibraryNames="LIBCMT"

@@ -409,7 +409,11 @@ BOOL CALLBACK EnumParentFindAnyExcept(HWND aWnd, LPARAM lParam)
 		return TRUE;
 	char win_title[WINDOW_TEXT_SIZE];
 	if (!GetWindowText(aWnd, win_title, sizeof(win_title)))
-		return TRUE;  // Even if can't get the text of some window, for some reason, keep enumerating.
+		// UPDATE: This method effectively prevented windows without titles, such as
+		// "ahk_class Shell_TrayWnd", from ever been findable by the script.  So now
+		// allow it to continue instead:
+		//return TRUE;
+		*win_title = '\0';
 	if (!stricmp(win_title, "Program Manager"))
 		// Skip this too because activating it would serve no purpose.  This is probably the
 		// same HWND that GetShellWindow() returns, but GetShellWindow() isn't supported on
@@ -466,7 +470,11 @@ BOOL CALLBACK EnumParentCloseAny(HWND aWnd, LPARAM lParam)
 		return TRUE;
 	char win_title[WINDOW_TEXT_SIZE];
 	if (!GetWindowText(aWnd, win_title, sizeof(win_title)))
-		return TRUE;  // Even if can't get the text of some window, for some reason, keep enumerating.
+		// UPDATE: This method effectively prevented windows without titles, such as
+		// "ahk_class Shell_TrayWnd", from ever been findable by the script.  So now
+		// allow it to continue instead:
+		//return TRUE;
+		*win_title = '\0';
 	if (!stricmp(win_title, "Program Manager"))
 		// Skip this too because never want to close it as part of a group close.
 		return TRUE;

@@ -46,7 +46,7 @@ inline void DoKeyDelay(int aDelay = g.KeyDelay)
 
 
 void SendKeys(char *aKeys, HWND aTargetWindow)
-// The <aKeys> string must be modifiable (not constant), since for performance reasons,
+// The aKeys string must be modifiable (not constant), since for performance reasons,
 // it's allowed to be temporarily altered by this function.  mThisHotkeyModifiersLR, if non-zero,
 // is the set of modifiers used to trigger the hotkey that called the subroutine
 // containing the Send that got us here.  If any of those modifiers are still down,
@@ -67,7 +67,7 @@ void SendKeys(char *aKeys, HWND aTargetWindow)
 	// but not logically such as well R-control, for example, is a suffix hotkey and the
 	// user is physically holding it down):
 	modLR_type modifiersLR_down_physically_and_logically, modifiersLR_down_physically_but_not_logically;
-	if (g_hhkLowLevelKeybd)
+	if (g_KeybdHook)
 	{
 		// Since hook is installed, use its more reliable tracking to determine which
 		// modifiers are down.
@@ -301,7 +301,7 @@ void SendKeys(char *aKeys, HWND aTargetWindow)
 			// In addition, reset the modifiers, since they were intended to apply only to
 			// the key inside {}:
 			modifiers_for_next_key = 0;
-			aKeys = end_pos;  // In prep for aKeys++ below.
+			aKeys = end_pos;  // In prep for aKeys++ done by the loop.
 			break;
 		}
 		default:
@@ -326,7 +326,7 @@ void SendKeys(char *aKeys, HWND aTargetWindow)
 	// any doubt that they're still down, since doing so when they're not physically down
 	// would cause them to be stuck down, which might cause unwanted behavior when the unsuspecting
 	// user resumes typing:
-	if (g_hhkLowLevelKeybd
+	if (g_KeybdHook
 		|| g_HotkeyModifierTimeout < 0 // User specified that the below should always be done.
 		|| (GetTickCount() - g_script.mThisHotkeyStartTime) < (DWORD)g_HotkeyModifierTimeout) // Elapsed time < timeout-value
 	{
@@ -340,7 +340,7 @@ void SendKeys(char *aKeys, HWND aTargetWindow)
 		// holding them down physically.  The previously-down keys we don't do this for are those 
 		// that were physically but not logically down, such as a naked Control key that's used
 		// as a suffix without being a prefix.  See above comments for more details:
-		if (g_hhkLowLevelKeybd)
+		if (g_KeybdHook)
 			modifiersLR_down_physically_and_logically = g_modifiersLR_physical
 				& ~modifiersLR_down_physically_but_not_logically; // intersect
 		// Restore the state of the modifiers to be those believed to be physically held down
@@ -758,7 +758,7 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 			if (aVK == VK_NUMLOCK && g_os.IsWin9x()) // Under Win9x, Numlock needs special treatment.
 				ToggleNumlockWin9x();
 
-			if (!g_hhkLowLevelKeybd) // Hook isn't logging, so we'll log just the keys we send, here.
+			if (!g_KeybdHook) // Hook isn't logging, so we'll log just the keys we send, here.
 			{
 				#define UpdateKeyEventHistory(aKeyUp) \
 				{\
@@ -784,7 +784,7 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 		{
 			keybd_event(aVK, LOBYTE(aSC), (HIBYTE(aSC) ? KEYEVENTF_EXTENDEDKEY : 0)
 				| KEYEVENTF_KEYUP, aExtraInfo);
-			if (!g_hhkLowLevelKeybd) // Hook isn't logging, so we'll log just the keys we send, here.
+			if (!g_KeybdHook) // Hook isn't logging, so we'll log just the keys we send, here.
 				UpdateKeyEventHistory(true);
 		}
 	}
@@ -1069,7 +1069,7 @@ inline modLR_type GetModifierLRState(bool aExplicitlyGet)
 	// Rather than old/below method, in light of the fact that new low-level hook is being tried,
 	// try relying on only the hook's tracked value rather than calling Get() (if if the hook
 	// is active:
-	if (g_hhkLowLevelKeybd && !aExplicitlyGet)
+	if (g_KeybdHook && !aExplicitlyGet)
 		return g_modifiersLR_logical;
 
 	// I decided to call GetKeyboardState() rather than tracking the state of these keys with the
@@ -1126,7 +1126,7 @@ inline modLR_type GetModifierLRState(bool aExplicitlyGet)
 	// There are still a few cases when they don't agree, so return the bitwise-and of both
 	// if the keyboard hook is active.  Bitwise and is used because generally it's safer
 	// to assume a modifier key is up, when in doubt (e.g. to avoid firing unwanted hotkeys):
-//	return g_hhkLowLevelKeybd ? (g_modifiersLR_logical & g_modifiersLR_get) : g_modifiersLR_get;
+//	return g_KeybdHook ? (g_modifiersLR_logical & g_modifiersLR_get) : g_modifiersLR_get;
 }
 
 
@@ -1366,6 +1366,40 @@ void init_sc_to_vk()
 			// been resolved above so don't need to be looked up here (LWIN and RWIN
 			// each have their own VK's so shouldn't be problem for the below call to resolve):
 			g_sc_to_vk[sc].a = MapVirtualKey((BYTE)sc, 1);
+}
+
+
+
+char *SCToKeyName(sc_type aSC, char *aBuf, size_t aBuf_size)
+{
+	for (int i = 0; i < g_key_to_sc_count; ++i)
+	{
+		if (g_key_to_sc[i].sc == aSC)
+		{
+			strlcpy(aBuf, g_key_to_sc[i].key_name, aBuf_size);
+			return aBuf;
+		}
+	}
+	// Since above didn't return, no match was found.  Use the default format for an unknown scan code:
+	snprintf(aBuf, aBuf_size, "SC%03x", aSC);
+	return aBuf;
+}
+
+
+
+char *VKToKeyName(vk_type aVK, sc_type aSC, char *aBuf, size_t aBuf_size)
+{
+	for (int i = 0; i < g_key_to_vk_count; ++i)
+	{
+		if (g_key_to_vk[i].vk == aVK)
+		{
+			strlcpy(aBuf, g_key_to_vk[i].key_name, aBuf_size);
+			return aBuf;
+		}
+	}
+	// Since above didn't return, no match was found.  Ask the OS for the name instead (it's probably
+	// a letter key such as A through Z, but could be anything for which we don't have a listing):
+	return GetKeyName(aVK, aSC, aBuf, aBuf_size);
 }
 
 

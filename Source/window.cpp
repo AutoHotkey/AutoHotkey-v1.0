@@ -538,7 +538,11 @@ HWND WinActive(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeTex
 	// Don't use GetWindowTextByTitleMatchMode() because Aut3 uses the same fast
 	// method as below for window titles:
 	if (!GetWindowText(fore_win, active_win_title, sizeof(active_win_title)))
-		return NULL;
+		// UPDATE: This method effectively prevented windows without titles, such as
+		// "ahk_class Shell_TrayWnd", from ever been findable by the script.  So now
+		// allow it to continue instead:
+		//return NULL;
+		*active_win_title = '\0';
 
 	if (!IsTitleMatch(fore_win, active_win_title, aTitle, aExcludeTitle))
 		// Active window's title doesn't match.
@@ -623,7 +627,12 @@ BOOL CALLBACK EnumParentFind(HWND aWnd, LPARAM lParam)
 	// Don't use GetWindowTextByTitleMatchMode() because it's (always?) unnecessary for
 	// window titles (AutoIt3 does this same thing):
 	if (!GetWindowText(aWnd, win_title, sizeof(win_title)))
-		return TRUE;  // Even if can't get the text of some window, for some reason, keep enumerating.
+		// Even if can't get the text of some window, for some reason, keep enumerating.
+		// UPDATE: This method effectively prevented windows without titles, such as
+		// "ahk_class Shell_TrayWnd", from ever been findable by the script.  So now
+		// allow it to continue instead:
+		//return TRUE;
+		*win_title = '\0';
 	// strstr() and related std C functions -- as well as the custom stristr(), will always
 	// find the empty string in any string, which is what we want in case title is the empty string.
 	if (!IsTitleMatch(aWnd, win_title, pWin->title, pWin->exclude_title))

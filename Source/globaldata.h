@@ -32,13 +32,19 @@ extern HACCEL g_hAccelTable; // Accelerator table for main menu shortcut keys.
 extern modLR_type g_modifiersLR_logical;   // Tracked by hook (if hook is active).
 extern modLR_type g_modifiersLR_physical;  // Same as above except it's which modifiers are PHYSICALLY down.
 
-extern bool g_PhysicalKeyState[VK_MAX + 1];
+#ifdef FUTURE_USE_MOUSE_BUTTONS_LOGICAL
+extern WORD g_mouse_buttons_logical; // A bitwise combination of MK_LBUTTON, etc.
+#endif
+
+#define STATE_DOWN 0x80
+#define STATE_ON 0x01
+extern BYTE g_PhysicalKeyState[VK_ARRAY_COUNT];
 
 // If a SendKeys() operation takes longer than this, hotkey's modifiers won't be pressed back down:
 extern int g_HotkeyModifierTimeout;
 
-extern HHOOK g_hhkLowLevelKeybd;
-extern HHOOK g_hhkLowLevelMouse;
+extern HHOOK g_KeybdHook;
+extern HHOOK g_MouseHook;
 #ifdef HOOK_WARNING
 	extern HookType sWhichHookSkipWarning;
 #endif
@@ -57,6 +63,7 @@ extern bool g_AllowInterruptionForSub;
 extern bool g_MainTimerExists;
 extern bool g_UninterruptibleTimerExists;
 extern bool g_AutoExecTimerExists;
+extern bool g_InputTimerExists;
 extern bool g_IsSuspended;
 extern int g_nLayersNeedingTimer;
 extern int g_nThreads;
@@ -85,6 +92,7 @@ extern char g_EscapeChar;
 
 // Global objects:
 extern Var *g_ErrorLevel;
+extern input_type g_input;
 EXTERN_SCRIPT;
 EXTERN_CLIPBOARD;
 EXTERN_OSVER;
@@ -109,8 +117,8 @@ extern ToggleValueType g_ForceNumLock;
 extern ToggleValueType g_ForceCapsLock;
 extern ToggleValueType g_ForceScrollLock;
 
-extern vk2_type g_sc_to_vk[SC_MAX + 1];
-extern sc2_type g_vk_to_sc[VK_MAX + 1];
+extern vk2_type g_sc_to_vk[SC_ARRAY_COUNT];
+extern sc2_type g_vk_to_sc[VK_ARRAY_COUNT];
 
 extern Action g_act[];
 extern int g_ActionCount;
@@ -183,6 +191,39 @@ inline VarSizeType GetOSVersion(char *aBuf = NULL)
 	if (aBuf)
 		strcpy(aBuf, version);
 	return (VarSizeType)strlen(version); // Always return length of version, not aBuf.
+}
+
+inline VarSizeType GetIsAdmin(char *aBuf = NULL)
+// Adapted from AutoIt3 source.
+{
+	if (!aBuf)
+		return 1;  // The length of the string "1" or "0".
+	char result = '0';  // Default.
+	if (g_os.IsWin9x())
+		result = '1';
+	else
+	{
+		SC_HANDLE h = OpenSCManager(NULL, NULL, SC_MANAGER_LOCK);
+		if (h)
+		{
+			SC_LOCK lock = LockServiceDatabase(h);
+			if (lock)
+			{
+				UnlockServiceDatabase(lock);
+				result = '1';
+			}
+			else
+			{
+				DWORD lastErr = GetLastError();
+				if (lastErr == ERROR_SERVICE_DATABASE_LOCKED)
+					result = '1';
+			}
+			CloseServiceHandle(h);
+		}
+	}
+	aBuf[0] = result;
+	aBuf[1] = '\0';
+	return 1; // Length of aBuf.
 }
 
 #endif

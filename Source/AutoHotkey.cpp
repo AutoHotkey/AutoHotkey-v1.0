@@ -40,9 +40,8 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 #else
 	#ifdef _DEBUG
 	//char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
-	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\Menu command COMPREHENSIVE TEST.ahk";
-	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\Window Class.ahk";
-	char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
+	//char *script_filespec = "C:\\A-Source\\AutoHotkey\\ZZZZ Test Script.ahk";
+	char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TrayTip.ahk";
 	#else
 	char *script_filespec = NAME_P ".ini";  // Use this extension for better file association with editor(s).
 	#endif
@@ -153,10 +152,9 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		// CreateWindows(), which is why it's standardized in g_script.mMainWindowTitle:
 		if (w_existing = FindWindow(WINDOW_CLASS_MAIN, g_script.mMainWindowTitle))
 		{
-			// Use a more unique title for this dialog so that subsequent executions of this
-			// program can easily find it (though they currently don't):
-			//#define NAME_ALREADY_RUNNING NAME_PV " script already running"
-			if (g_AllowOnlyOneInstance != SINGLE_INSTANCE_NO_PROMPT)
+			if (g_AllowOnlyOneInstance == SINGLE_INSTANCE_IGNORE)
+				return 0;
+			if (g_AllowOnlyOneInstance != SINGLE_INSTANCE_REPLACE)
 				if (MsgBox("An older instance of this #SingleInstance script is already running."
 					"  Replace it with this instance?", MB_YESNO, g_script.mFileName) == IDNO)
 					return 0;
@@ -206,11 +204,13 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	// even if the top part is something that's very involved and requires user
 	// interaction:
 	Hotkey::AllActivate();           // We want these active now in case auto-execute never returns (e.g. loop)
+	if (Hotkey::sJoyHotkeyCount)     // Joystick hotkeys requir the timer to be always on.
+		SET_MAIN_TIMER
 	g_script.AutoExecSection();      // Run the auto-execute part at the top of the script.
 	if (!Hotkey::sHotkeyCount)       // No hotkeys are in effect.
 		if (!Hotkey::HookIsActive()) // And the user hasn't requested a hook to be activated.
 			if (!g_persistent)       // And the script doesn't contain the #Persistent directive.
-				g_script.ExitApp();      // We're done.
+				g_script.ExitApp();  // We're done.
 
 	// The below is done even if AutoExecSectionTimeout() already set the values once.
 	// This is because when the AutoExecute section finally does finish, by definition it's

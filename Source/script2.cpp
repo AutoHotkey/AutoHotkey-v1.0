@@ -35,18 +35,6 @@ GNU General Public License for more details.
 	else\
 		target_window = g_ValidLastUsedWindow;
 
-#define ATTACH_THREAD_INPUT \
-	bool threads_are_attached = false;\
-	DWORD my_thread  = GetCurrentThreadId();\
-	DWORD target_thread = GetWindowThreadProcessId(target_window, NULL);\
-	if (target_thread && target_thread != my_thread && !IsWindowHung(target_window))\
-		threads_are_attached = AttachThreadInput(my_thread, target_thread, TRUE) != 0;
-
-#define DETACH_THREAD_INPUT \
-	if (threads_are_attached)\
-		AttachThreadInput(my_thread, target_thread, FALSE);
-
-
 
 ResultType Line::ToolTip(char *aText, char *aX, char *aY)
 // Adapted from the AutoIt3 source.
@@ -63,23 +51,34 @@ ResultType Line::ToolTip(char *aText, char *aX, char *aY)
 	ti.lpszText	= aText;
 	ti.rect.left = ti.rect.top = ti.rect.right	= ti.rect.bottom = 0;
 	
-	// Set default values for the tip as the current mouse position
-	POINT pt;
-	GetCursorPos(&pt);
-	pt.x += 16;  // Set default spot to be near the mouse cursor.
-	pt.y += 16;
+	// Set default values for the tip as the current mouse position.
+	// UPDATE: Don't call GetCursorPos() unless absolutely needed because it seems to mess
+	// up double-click timing, at least on XP.  UPDATE #2: Is isn't GetCursorPos() that's
+	// interfering with double clicks, so it seems it must be the displaying of the ToolTip
+	// window itself.
 
-	if (*aX || *aY)
+	POINT pt;
+	if (!*aX || !*aY)
 	{
-		// Convert from relative to absolute (screen) coordinates:
-		RECT rect;
+		GetCursorPos(&pt);
+		pt.x += 16;  // Set default spot to be near the mouse cursor.
+		pt.y += 16;
+	}
+
+	RECT rect;
+	if ((*aX || *aY) && !(g.CoordMode & COORD_MODE_TOOLTIP)) // Need the rect.
+	{
 		if (!GetWindowRect(GetForegroundWindow(), &rect))
 			return OK;  // Don't bother setting ErrorLevel with this command.
-		if (*aX)
-			pt.x = ATOI(aX) + rect.left;
-		if (*aY)
-			pt.y = ATOI(aY) + rect.top;
 	}
+	else
+		rect.bottom = rect.left = rect.right = rect.top = 0;
+
+	// This will also convert from relative to screen coordinates if rect contains non-zero values:
+	if (*aX)
+		pt.x = ATOI(aX) + rect.left;
+	if (*aY)
+		pt.y = ATOI(aY) + rect.top;
 
 	DWORD dwResult;
 
@@ -102,6 +101,306 @@ ResultType Line::ToolTip(char *aText, char *aX, char *aY)
 	SendMessageTimeout(g_hWndToolTip, TTM_TRACKPOSITION, 0, (LPARAM)MAKELONG(pt.x, pt.y), SMTO_ABORTIFHUNG, 2000, &dwResult);
 	SendMessageTimeout(g_hWndToolTip, TTM_TRACKACTIVATE, TRUE, (LPARAM)&ti, SMTO_ABORTIFHUNG, 2000, &dwResult);
 	return OK;
+}
+
+
+
+ResultType Line::TrayTip(char *aTitle, char *aText, char *aTimeout, char *aOptions)
+{
+	if (!g_os.IsWin2000orLater()) // Older OSes not supported, so by design it does nothing.
+		return OK;
+	NOTIFYICONDATA nic = {0};
+	nic.cbSize = sizeof(nic);
+	nic.uID = AHK_NOTIFYICON;  // This must match our tray icon's uID or Shell_NotifyIcon() will return failure.
+	nic.hWnd = g_hWnd;
+	nic.uFlags = NIF_INFO;
+	nic.uTimeout = ATOI(aTimeout) * 1000;
+	nic.dwInfoFlags = ATOI(aOptions);
+	strlcpy(nic.szInfoTitle, aTitle, sizeof(nic.szInfoTitle)); // Empty title omits the title line entirely.
+	strlcpy(nic.szInfo, aText, sizeof(nic.szInfo));	// Empty text removes the balloon.
+	Shell_NotifyIcon(NIM_MODIFY, &nic);
+	return OK;
+}
+
+
+
+ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
+// The aEndKeys string must be modifiable (not constant), since for performance reasons,
+// it's allowed to be temporarily altered by this function.
+// OVERVIEW:
+// Although a script can have many concurrent quasi-threads, there can only be one input
+// at a time.  Thus, if an input is ongoing and a new thread starts, and it begins its
+// own input, that input should terminate the prior input prior to beginning the new one.
+// In a "worst case" scenario, each interrupted quasi-thread could have its own
+// input, which is in turn terminated by the thread that interrupts it.  Every time
+// this function returns, it must be sure to set g_input.status to INPUT_OFF beforehand.
+// This signals the quasi-threads beneath, when they finally return, that their input
+// was terminated due to a new input that took precedence.
+{
+	Var *output_var = ResolveVarOfArg(0);
+	if (!output_var)
+	{
+		// No output variable, which due to load-time validation means there are no other args either.
+		// This means that the user is specifically canceling the prior input (if any).  Thus, our
+		// ErrorLevel here is set to 1 or 0, but the prior input's ErrorLevel will be set to "NewInput"
+		// when its quasi-thread is resumed:
+		bool prior_input_is_being_terminated = (g_input.status == INPUT_IN_PROGRESS);
+		g_input.status = INPUT_OFF;
+		return g_ErrorLevel->Assign(prior_input_is_being_terminated ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
+		// Above: It's considered an "error" of sorts when there is no prior input to terminate.
+	}
+
+	// Set default in case of early return (we want these to be in effect even if
+	// FAIL is returned for our thread, since the underlying thread that had the
+	// active input prior to us didn't fail and it it needs to know how its input
+	// was terminated):
+	g_input.status = INPUT_OFF;
+
+	//////////////////////////////////////////////
+	// Set up sparse arrays according to aEndKeys:
+	//////////////////////////////////////////////
+	bool end_vk[VK_ARRAY_COUNT] = {false};  // A sparse array that indicates which VKs terminate the input.
+	bool end_sc[SC_ARRAY_COUNT] = {false};  // A sparse array that indicates which SCs terminate the input.
+
+	char single_char_string[2];
+	vk_type vk = 0;
+	sc_type sc = 0;
+
+	for (; *aEndKeys; ++aEndKeys) // This a modified version of the processing loop used in SendKeys().
+	{
+		switch (*aEndKeys)
+		{
+		case '}': break;  // Important that these be ignored.
+		case '{':
+		{
+			char *end_pos = strchr(aEndKeys + 1, '}');
+			if (!end_pos)
+				break;  // do nothing, just ignore it and continue.
+			size_t key_text_length = end_pos - aEndKeys - 1;
+			if (!key_text_length)
+			{
+				if (end_pos[1] == '}')
+				{
+					// The literal string "{}}" has been encountered, which is interpreted as a single "}".
+					++end_pos;
+					key_text_length = 1;
+				}
+				else // Empty braces {} were encountered.
+					break;  // do nothing: let it proceed to the }, which will then be ignored.
+			}
+
+			*end_pos = '\0';  // temporarily terminate the string here.
+
+			if (vk = TextToVK(aEndKeys + 1, NULL, true))
+				end_vk[vk] = true;
+			else
+				if (sc = TextToSC(aEndKeys + 1))
+					end_sc[sc] = true;
+
+			*end_pos = '}';  // undo the temporary termination
+
+			aEndKeys = end_pos;  // In prep for aEndKeys++ at the bottom of the loop.
+			break;
+		}
+		default:
+			single_char_string[0] = *aEndKeys;
+			single_char_string[1] = '\0';
+			if (vk = TextToVK(single_char_string, NULL, true))
+				end_vk[vk] = true;
+		} // switch()
+	} // for()
+
+	/////////////////////////////////////////////////
+	// Parse aMatchList into an array of key phrases:
+	/////////////////////////////////////////////////
+	g_input.MatchCount = 0;  // Set default.
+	if (*aMatchList)
+	{
+		// If needed, create the array of pointers that points into MatchBuf to each match phrase:
+		if (!g_input.match && !(g_input.match = (char **)malloc(INPUT_ARRAY_BLOCK_SIZE * sizeof(char *))))
+			return LineError("Out of mem #1.");  // Short msg. since so rare.
+		else
+			g_input.MatchCountMax = INPUT_ARRAY_BLOCK_SIZE;
+		// If needed, create or enlarge the buffer that contains all the match phrases:
+		size_t aMatchList_length = strlen(aMatchList);
+		size_t space_needed = aMatchList_length + 1;  // +1 for the final zero terminator.
+		if (space_needed > g_input.MatchBufSize)
+		{
+			g_input.MatchBufSize = (UINT)(space_needed > 4096 ? space_needed : 4096);
+			if (g_input.MatchBuf) // free the old one since it's too small.
+				free(g_input.MatchBuf);
+			if (   !(g_input.MatchBuf = (char *)malloc(g_input.MatchBufSize))   )
+			{
+				g_input.MatchBufSize = 0;
+				return LineError("Out of mem #2.");  // Short msg. since so rare.
+			}
+		}
+		// Copy aMatchList into the match buffer:
+		char *source, *dest;
+		for (source = aMatchList, dest = g_input.match[g_input.MatchCount] = g_input.MatchBuf; *source; ++source, ++dest)
+		{
+			if (*source == ',')  // Each comma becomes the terminator of the previous key phrase.
+			{
+				*dest = '\0';
+				if (strlen(g_input.match[g_input.MatchCount])) // i.e. omit empty strings from the match list.
+					++g_input.MatchCount;
+				if (*(source + 1)) // There is a next element.
+				{
+					if (g_input.MatchCount >= g_input.MatchCountMax) // Rarely needed, so just realloc() to expand.
+					{
+						// Expand the array by one block:
+						if (   !(g_input.match = (char **)realloc(g_input.match
+							, (g_input.MatchCountMax + INPUT_ARRAY_BLOCK_SIZE) * sizeof(char *)))   )
+							return LineError("Out of mem #3.");  // Short msg. since so rare.
+						else
+							g_input.MatchCountMax += INPUT_ARRAY_BLOCK_SIZE;
+					}
+					g_input.match[g_input.MatchCount] = dest + 1;
+				}
+			}
+			else // Not a comma, so just copy it over.
+				*dest = *source;
+		}
+		*dest = '\0';  // Terminate the last item.
+		if (strlen(g_input.match[g_input.MatchCount])) // i.e. omit empty strings from the match list.
+			++g_input.MatchCount;
+	}
+
+	// Notes about the below macro:
+	// In case the Input timer has already put a WM_TIMER msg in our queue before we killed it,
+	// clean out the queue now to avoid any chance that such a WM_TIMER message will take effect
+	// later when it would be unexpected and might interfere with this input.  To avoid an
+	// unnecessary call to PeekMessage(), which might in turn yield our timeslice to other
+	// processes if the CPU is under load (which might be undesirable if this input is
+	// time-critical, such as in a game), call GetQueueStatus() to see if there are any timer
+	// messages in the queue.  I believe that GetQueueStatus(), unlike PeekMessage(), does not
+	// have the nasty/undocumented side-effect of yielding our timeslice, but Google and MSDN
+	// are completely devoid of any confirming info on this:
+	#define KILL_AND_PURGE_INPUT_TIMER \
+	if (g_InputTimerExists)\
+	{\
+		KILL_INPUT_TIMER \
+		if (HIWORD(GetQueueStatus(QS_TIMER)) & QS_TIMER)\
+			MsgSleep(-1);\
+	}
+
+	// Be sure to get rid of the timer if it exists due to a prior, ongoing input.
+	// It seems best to do this only after signaling the hook to start the input
+	// so that it's MsgSleep(-1), if it launches a new hotkey or timed subroutine,
+	// will be less likely to interrupt us during our setup of the input, i.e.
+	// it seems best that we put the input in progress prior to allowing any
+	// interruption.  UPDATE: Must do this before changing to INPUT_IN_PROGRESS
+	// because otherwise the purging of the timer message might call InputTimeout(),
+	// which in turn would set the status immediately to INPUT_TIMED_OUT:
+	KILL_AND_PURGE_INPUT_TIMER
+
+	//////////////////////////////////////////////////////////////
+	// Initialize buffers and state variables for use by the hook:
+	//////////////////////////////////////////////////////////////
+	// Set the defaults that will be in effect unless overridden by an item in aOptions:
+	g_input.BackspaceIsUndo = true;
+	g_input.CaseSensitive = false;
+	g_input.IgnoreAHKInput = false;
+	g_input.Visible = false;
+	g_input.FindAnywhere = false;
+	int timeout = 0;  // Set default.
+	char input_buf[INPUT_BUFFER_SIZE] = ""; // Will contain the actual input from the user.
+	g_input.buffer = input_buf;
+	g_input.BufferLength = 0;
+	g_input.BufferLengthMax = INPUT_BUFFER_SIZE - 1;
+
+	for (char *cp = aOptions; *cp; ++cp)
+	{
+		switch(toupper(*cp))
+		{
+		case 'B':
+			g_input.BackspaceIsUndo = false;
+			break;
+		case 'C':
+			g_input.CaseSensitive = true;
+			break;
+		case 'I':
+			g_input.IgnoreAHKInput = true;
+			break;
+		case 'L':
+			g_input.BufferLengthMax = ATOI(cp + 1);
+			if (g_input.BufferLengthMax > INPUT_BUFFER_SIZE - 1)
+				g_input.BufferLengthMax = INPUT_BUFFER_SIZE - 1;
+			break;
+		case 'T':
+			timeout = (int)(ATOF(cp + 1) * 1000);
+			break;
+		case 'V':
+			g_input.Visible = true;
+			break;
+		case '*':
+			g_input.FindAnywhere = true;
+			break;
+		}
+	}
+	// Point the global addresses to our memory areas on the stack:
+	g_input.EndVK = end_vk;
+	g_input.EndSC = end_sc;
+	g_input.status = INPUT_IN_PROGRESS; // Signal the hook to start the input.
+	if (!g_KeybdHook) // Install the hook (if needed) upon first use of this feature.
+		Hotkey::InstallKeybdHook();
+
+	// A timer is used rather than monitoring the elapsed time here directly because
+	// this script's quasi-thread might be interrupted by a Timer or Hotkey subroutine,
+	// which (if it takes a long time) would result in our Input not obeying its timeout.
+	// By using an actual timer, the TimerProc() will run when the timer expires regardless
+	// of which quasi-thread is active, and it will end our input on schedule:
+	if (timeout > 0)
+		SET_INPUT_TIMER(timeout < 10 ? 10 : timeout)
+
+	//////////////////////////////////////////////////////////////////
+	// Wait for one of the following to terminate our input:
+	// 1) The hook (due a match in aEndKeys or aMatchList);
+	// 2) A thread that interrupts us with a new Input of its own;
+	// 3) The timer we put in effect for our timeout (if we have one).
+	//////////////////////////////////////////////////////////////////
+	for (;;)
+	{
+		// Rather than monitoring the timeout here, just wait for the incoming WM_TIMER message
+		// to take effect as a TimerProc() call during the MsgSleep():
+		MsgSleep();
+		if (g_input.status != INPUT_IN_PROGRESS)
+			break;
+	}
+
+	switch(g_input.status)
+	{
+	case INPUT_TIMED_OUT:
+		g_ErrorLevel->Assign("Timeout");
+		break;
+	case INPUT_TERMINATED_BY_MATCH:
+		g_ErrorLevel->Assign("Match");
+		break;
+	case INPUT_TERMINATED_BY_ENDKEY:
+	{
+		char key_name[128] = "EndKey:";
+		g_input.EndedBySC ? SCToKeyName(g_input.EndingSC, key_name + 7, sizeof(key_name) - 7)
+			: VKToKeyName(g_input.EndingVK, g_input.EndingSC, key_name + 7, sizeof(key_name) - 7);
+		g_ErrorLevel->Assign(key_name);
+		break;
+	}
+	case INPUT_LIMIT_REACHED:
+		g_ErrorLevel->Assign("Max");
+		break;
+	default: // Our input was terminated due to a new input in a quasi-thread that interrupted ours.
+		g_ErrorLevel->Assign("NewInput");
+		break;
+	}
+
+	g_input.status = INPUT_OFF;  // See OVERVIEW above for why this must be set prior to returning.
+
+	// In case it ended for reason other than a timeout, in which case the timer is still on:
+	KILL_AND_PURGE_INPUT_TIMER
+
+	// Seems ok to assign after the kill/purge above since input_buf is our own stack variable
+	// and its contents shouldn't be affected even if KILL_AND_PURGE_INPUT_TIMER's MsgSleep()
+	// results in a new thread being created that starts a new Input:
+	return output_var->Assign(input_buf);
 }
 
 
@@ -339,7 +638,7 @@ ResultType Line::ControlClick(vk_type aVK, int aClickCount, char aEventType, cha
 	// AutoIt3: Get the dimensions of the control so we can click the centre of it
 	// (maybe safer and more natural than 0,0).
 	// My: In addition, this is probably better for some large controls (e.g. SysListView32) because
-	// clicking/ at 0,0 might activate a part of the control that is not even visible:
+	// clicking at 0,0 might activate a part of the control that is not even visible:
 	RECT rect;
 	if (!GetWindowRect(control_window, &rect))
 		return OK;  // Let ErrorLevel tell the story.
@@ -347,12 +646,45 @@ ResultType Line::ControlClick(vk_type aVK, int aClickCount, char aEventType, cha
 
 	UINT msg_down, msg_up;
 	WPARAM wparam;
-	switch (aVK)
+	bool vk_is_wheel = aVK == VK_WHEEL_UP || aVK == VK_WHEEL_DOWN;
+
+	if (vk_is_wheel)
 	{
-		case VK_LBUTTON: msg_down = WM_LBUTTONDOWN; msg_up = WM_LBUTTONUP; wparam = MK_LBUTTON; break;
-		case VK_RBUTTON: msg_down = WM_RBUTTONDOWN; msg_up = WM_RBUTTONUP; wparam = MK_RBUTTON; break;
-		case VK_MBUTTON: msg_down = WM_MBUTTONDOWN; msg_up = WM_MBUTTONUP; wparam = MK_MBUTTON; break;
-		default: return OK; // Just do nothing since this should realistically never happen.
+		wparam = (aClickCount * ((aVK == VK_WHEEL_UP) ? WHEEL_DELTA : -WHEEL_DELTA)) << 16;  // High order word contains the delta.
+		// Make the event more accurate by having the state of the keys reflected in the event.
+		// The logical state (not physical state) of the modifier keys is used so that something
+		// like this is supported:
+		// Send, {ShiftDown}
+		// MouseClick, WheelUp
+		// Send, {ShiftUp}
+		// In addition, if the mouse hook is installed, use its logical mouse button state so that
+		// something like this is supported:
+		// MouseClick, left, , , , , D  ; Hold down the left mouse button
+		// MouseClick, WheelUp
+		// MouseClick, left, , , , , U  ; Release the left mouse button.
+		// UPDATE: Since the other ControlClick types (such as leftclick) do not reflect these
+		// modifiers -- and we want to keep it that way, at least by default, for compatibility
+		// reasons -- it seems best for consistency not to do them for WheelUp/Down either.
+		// A script option can be added in the future to obey the state of the modifiers:
+		//mod_type mod = GetModifierState();
+		//if (mod & MOD_SHIFT)
+		//	wparam |= MK_SHIFT;
+		//if (mod & MOD_CONTROL)
+		//	wparam |= MK_CONTROL;
+        //if (g_MouseHook)
+		//	wparam |= g_mouse_buttons_logical;
+	}
+	else
+	{
+		switch (aVK)
+		{
+			case VK_LBUTTON:  msg_down = WM_LBUTTONDOWN; msg_up = WM_LBUTTONUP; wparam = MK_LBUTTON; break;
+			case VK_RBUTTON:  msg_down = WM_RBUTTONDOWN; msg_up = WM_RBUTTONUP; wparam = MK_RBUTTON; break;
+			case VK_MBUTTON:  msg_down = WM_MBUTTONDOWN; msg_up = WM_MBUTTONUP; wparam = MK_MBUTTON; break;
+			case VK_XBUTTON1: msg_down = WM_XBUTTONDOWN; msg_up = WM_XBUTTONUP; wparam = MK_XBUTTON1; break;
+			case VK_XBUTTON2: msg_down = WM_XBUTTONDOWN; msg_up = WM_XBUTTONUP; wparam = MK_XBUTTON2; break;
+			default: return OK; // Just do nothing since this should realistically never happen.
+		}
 	}
 
 	// SetActiveWindow() requires ATTACH_THREAD_INPUT to succeed.  Even though the MSDN docs state
@@ -364,27 +696,35 @@ ResultType Line::ControlClick(vk_type aVK, int aClickCount, char aEventType, cha
 	ATTACH_THREAD_INPUT
 	SetActiveWindow(target_window);
 
-	for (int i = 0; i < aClickCount; ++i)
+	if (vk_is_wheel)
 	{
-		if (aEventType != 'U') // It's either D or NULL, which means we always to the down-event.
+		PostMessage(control_window, WM_MOUSEWHEEL, wparam, lparam);
+		DoControlDelay;
+	}
+	else
+	{
+		for (int i = 0; i < aClickCount; ++i)
 		{
-			PostMessage(control_window, msg_down, wparam, lparam);
-			// Seems best to do this one too, which is what AutoIt3 does also.  User can always reduce
-			// ControlDelay to 0 or -1.  Update: Jon says this delay might be causing it to fail in
-			// some cases.  Upon reflection, it seems best not to do this anyway because PostMessage()
-			// should queue up the message for the app correctly even if it's busy.  Update: But I
-			// think the timestamp is available on every posted message, so if some apps check for
-			// inhumanly fast clicks (to weed out transients with partial clicks of the mouse, or
-			// to detect artificial input), the click might not work.  So it might be better after
-			// all to do the delay until it's proven to be problematic (Jon implies that he has
-			// no proof yet).  IF THIS IS EVER DISABLED, be sure to do the ControlDelay anyway
-			// if aEventType == 'D':
-			DoControlDelay;
-		}
-		if (aEventType != 'D') // It's either U or NULL, which means we always to the up-event.
-		{
-			PostMessage(control_window, msg_up, 0, lparam);
-			DoControlDelay;
+			if (aEventType != 'U') // It's either D or NULL, which means we always to the down-event.
+			{
+				PostMessage(control_window, msg_down, wparam, lparam);
+				// Seems best to do this one too, which is what AutoIt3 does also.  User can always reduce
+				// ControlDelay to 0 or -1.  Update: Jon says this delay might be causing it to fail in
+				// some cases.  Upon reflection, it seems best not to do this anyway because PostMessage()
+				// should queue up the message for the app correctly even if it's busy.  Update: But I
+				// think the timestamp is available on every posted message, so if some apps check for
+				// inhumanly fast clicks (to weed out transients with partial clicks of the mouse, or
+				// to detect artificial input), the click might not work.  So it might be better after
+				// all to do the delay until it's proven to be problematic (Jon implies that he has
+				// no proof yet).  IF THIS IS EVER DISABLED, be sure to do the ControlDelay anyway
+				// if aEventType == 'D':
+				DoControlDelay;
+			}
+			if (aEventType != 'D') // It's either U or NULL, which means we always to the up-event.
+			{
+				PostMessage(control_window, msg_up, 0, lparam);
+				DoControlDelay;
+			}
 		}
 	}
 
@@ -756,7 +1096,7 @@ ResultType Line::Control(char *aCmd, char *aValue, char *aControl, char *aTitle,
 		if (!*aValue)
 			return OK;
 		control_index = ATOI(aValue) - 1;
-		if (control_index <= 0)
+		if (control_index < 0)
 			return OK;  // Let ErrorLevel tell the story.
 		if (!strnicmp(aControl, "Combo", 5))
 		{
@@ -882,7 +1222,7 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 			return output_var->Assign();
 		if (index == -1)
 			return output_var->Assign();
-		output_var->Assign((UINT)index + 1);
+		output_var->Assign(index + 1);
 		break;
 
 	case CONTROLGET_CMD_FINDSTRING:
@@ -896,7 +1236,7 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 			return output_var->Assign();
 		if (index == CB_ERR)  // CB_ERR == LB_ERR
 			return output_var->Assign();
-		output_var->Assign((UINT)index + 1);
+		output_var->Assign(index + 1);
 		break;
 
 	case CONTROLGET_CMD_CHOICE:
@@ -943,13 +1283,13 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 		// MSDN: "If the control has no text, the return value is 1. The return value will never be less than 1."
 		if (!SendMessageTimeout(control_window, EM_GETLINECOUNT, 0, 0, SMTO_ABORTIFHUNG, 2000, &dwResult))
 			return output_var->Assign();
-		output_var->Assign((UINT)dwResult);
+		output_var->Assign(dwResult);
 		break;
 
 	case CONTROLGET_CMD_CURRENTLINE:
 		if (!SendMessageTimeout(control_window, EM_LINEFROMCHAR, -1, 0, SMTO_ABORTIFHUNG, 2000, &dwResult))
 			return output_var->Assign();
-		output_var->Assign((UINT)dwResult + 1);
+		output_var->Assign(dwResult + 1);
 		break;
 
 	case CONTROLGET_CMD_CURRENTCOL:
@@ -962,7 +1302,7 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 			return output_var->Assign();
 		if (!line_number) // Since we're on line zero, the column number is simply start+1.
 		{
-			output_var->Assign((UINT)start + 1);  // +1 to convert from zero based.
+			output_var->Assign(start + 1);  // +1 to convert from zero based.
 			break;
 		}
 		// Au3: Decrement the character index until the row changes.  Difference between this
@@ -984,7 +1324,7 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 		if (!*aValue)
 			return output_var->Assign();
 		control_index = ATOI(aValue) - 1;
-		if (control_index <= 0)
+		if (control_index < 0)
 			return output_var->Assign();  // Let ErrorLevel tell the story.
 		*((LPINT)buf) = sizeof(buf);  // EM_GETLINE requires first word of string to be set to its size.
 		if (!SendMessageTimeout(control_window, EM_GETLINE, (WPARAM)control_index, (LPARAM)buf, SMTO_ABORTIFHUNG, 2000, &dwResult))
@@ -1116,7 +1456,7 @@ ResultType Line::ScriptSendMessage(char *aMsg, char *awParam, char *alParam, cha
 		, SMTO_ABORTIFHUNG, 2000, &dwResult))
 		return g_ErrorLevel->Assign("FAIL"); // Need a special value to distinguish this from numeric reply-values.
 	// By design (since this is a power user feature), no ControlDelay is done here.
-	return g_ErrorLevel->Assign((UINT)dwResult); // UINT seems best most of the time?
+	return g_ErrorLevel->Assign(dwResult); // UINT seems best most of the time?
 }
 
 
@@ -1386,15 +1726,16 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int a
 	if (output_var_y)
 		output_var_y->Assign(); // Same.
 
-	// Always adjust coords to reflect the position of the foreground window because AutoHotkey
-	// doesn't yet support AutoIt3's absolute-screen-coords mode:
-	RECT rect;
-	if (!GetWindowRect(GetForegroundWindow(), &rect))
-		return OK;  // Let ErrorLevel tell the story.
-	aLeft   += rect.left;
-	aTop    += rect.top;
-	aRight  += rect.left;  // Add left vs. right because we're adjusting based on the position of the window.
-	aBottom += rect.top;   // Same.
+	RECT rect = {0};
+	if (!(g.CoordMode & COORD_MODE_PIXEL)) // Using relative vs. screen coordinates.
+	{
+		if (!GetWindowRect(GetForegroundWindow(), &rect))
+			return OK;  // Let ErrorLevel tell the story.
+		aLeft   += rect.left;
+		aTop    += rect.top;
+		aRight  += rect.left;  // Add left vs. right because we're adjusting based on the position of the window.
+		aBottom += rect.top;   // Same.
+	}
 
 	HDC hdc = GetDC(NULL);
 	if (!hdc)
@@ -1449,13 +1790,14 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, int a
 			if (match_found) // This pixel matches one of the specified color(s).
 			{
 				ReleaseDC(NULL, hdc);
-				if (output_var_x)
-					// Adjust coords to make them relative to the position of the target window:
-					if (!output_var_x->Assign(xpos - rect.left))
-						result = FAIL;
-				if (output_var_y)
-					if (!output_var_y->Assign(ypos - rect.top))
-						result = FAIL;
+				// Adjust coords to make them relative to the position of the target window
+				// (rect will contain zero values if this doesn't need to be done):
+				xpos -= rect.left;
+				ypos -= rect.top;
+				if (output_var_x && !output_var_x->Assign(xpos))
+					result = FAIL;
+				if (output_var_y && !output_var_y->Assign(ypos))
+					result = FAIL;
 				if (result == OK)
 					g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 				return result;
@@ -1481,12 +1823,15 @@ ResultType Line::PixelGetColor(int aX, int aY)
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 	output_var->Assign(); // Init to empty string regardless of whether we succeed here.
 
-	// Convert from relative to absolute (screen) coordinates:
-	RECT rect;
-	if (!GetWindowRect(GetForegroundWindow(), &rect))
-		return OK;  // Let ErrorLevel tell the story.
-	aX += rect.left;
-	aY += rect.top;
+	if (!(g.CoordMode & COORD_MODE_PIXEL)) // Using relative vs. screen coordinates.
+	{
+		// Convert from relative to absolute (screen) coordinates:
+		RECT rect;
+		if (!GetWindowRect(GetForegroundWindow(), &rect))
+			return OK;  // Let ErrorLevel tell the story.
+		aX += rect.left;
+		aY += rect.top;
+	}
 
 	HDC hdc = GetDC(NULL);
 	if (!hdc)
@@ -1539,6 +1884,8 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			if (GetAHKInstallDir(buf_temp + 1))
 				snprintfcat(buf_temp, sizeof(buf_temp), "\\AU3_Spy.exe\"");
 			else
+				// Mostly this ELSE is here in case AHK isn't installed (i.e. the user just
+				// copied the files over without running the installer).  But also:
 				// Even if this is the self-contained version (AUTOHOTKEYSC), attempt to launch anyway in
 				// case the user has put a copy of WindowSpy in the same dir with the compiled script:
 				// ActionExec()'s CreateProcess() is currently done in a way that prefers enclosing double quotes:
@@ -1675,7 +2022,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		} // Inner switch()
 		break;
 
-	case AHK_NOTIFYICON:  // Tray icon clicked on.  Note that wParam has been set to 0 by TRANSLATE_AHK_MSG.
+	case AHK_NOTIFYICON:  // Tray icon clicked on.
 	{
         switch(lParam)
         {
@@ -1953,6 +2300,16 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			return 0;
 		}
 		break;
+
+	case AHK_RETURN_PID:
+		// Rajat wanted this so that it's possible to discover the PID based on the title of each
+		// script's main window (i.e. if there are multiple scripts running).  Note that
+		// ReplyMessage() has no effect if our own thread sent this message to us.  In other words,
+		// if a script asks itself what its PID is, the answer will be 0.  Also note that this
+		// msg uses TRANSLATE_AHK_MSG() to prevent it from ever being filtered out (and thus
+		// delayed) while the script is uninterruptible.
+		ReplyMessage(GetCurrentProcessId());
+		return 0;
 
 	} // end main switch
 
@@ -2564,6 +2921,20 @@ ResultType Line::MouseClickDrag(vk_type aVK, int aX1, int aY1, int aX2, int aY2,
 		MOUSE_SLEEP;
 		MouseEvent(MOUSEEVENTF_MIDDLEUP);
 		break;
+	case VK_XBUTTON1:
+		MouseEvent(MOUSEEVENTF_XDOWN, 0, 0, XBUTTON1);
+		MOUSE_SLEEP;
+		MouseMove(aX2, aY2, aSpeed);
+		MOUSE_SLEEP;
+		MouseEvent(MOUSEEVENTF_XUP, 0, 0, XBUTTON1);
+		break;
+	case VK_XBUTTON2:
+		MouseEvent(MOUSEEVENTF_XDOWN, 0, 0, XBUTTON2);
+		MOUSE_SLEEP;
+		MouseMove(aX2, aY2, aSpeed);
+		MOUSE_SLEEP;
+		MouseEvent(MOUSEEVENTF_XUP, 0, 0, XBUTTON2);
+		break;
 	}
 	// It seems best to always do this one too in case the script line that caused
 	// us to be called here is followed immediately by another script line which
@@ -2602,6 +2973,33 @@ ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aS
 	if (aX != COORD_UNSPECIFIED && aY != COORD_UNSPECIFIED) // Otherwise don't bother.
 		MouseMove(aX, aY, aSpeed);
 
+	// For wheel movement, if the user activated this command via a hotkey, and that hotkey
+	// has a modifier such as CTRL, the user is probably still holding down the CTRL key
+	// at this point.  Therefore, there's some merit to the fact that we should release
+	// those modifier keys prior to turning the mouse wheel (since some apps disable the
+	// wheel or give it different behavior when the CTRL key is down -- for example, MSIE
+	// changes the font size when you use the wheel while CTRL is down).  However, if that
+	// were to be done, there would be no way to ever hold down the CTRL key explicitly
+	// (via Send, {CtrlDown}) unless the hook were installed.  The same argument could probably
+	// be made for mouse button clicks: modifier keys can often affect their behavior.  But
+	// changing this function to adjust modifiers for all types of events would probably break
+	// some existing scripts.  Maybe it can be a script option in the future.  In the meantime,
+	// it seems best not to adjust the modifiers for any mouse events and just document that
+	// behavior in the MouseClick command.
+	if (aVK == VK_WHEEL_UP)
+	{
+		MouseEvent(MOUSEEVENTF_WHEEL, 0, 0, aClickCount * WHEEL_DELTA);
+		MOUSE_SLEEP;
+		return OK;
+	}
+	else if (aVK == VK_WHEEL_DOWN)
+	{
+		MouseEvent(MOUSEEVENTF_WHEEL, 0, 0, -(aClickCount * WHEEL_DELTA));
+		MOUSE_SLEEP;
+		return OK;
+	}
+
+	// Otherwise:
 	for (int i = 0; i < aClickCount; ++i)
 	{
 		// Note: It seems best to always Sleep a certain minimum time between events
@@ -2610,6 +3008,9 @@ ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aS
 		// revised to do this.
 		switch (aVK)
 		{
+		// The below calls to MouseEvent() do not specify coordinates because such are only
+		// needed if we were to include MOUSEEVENTF_MOVE in the dwFlags parameter, which
+		// we don't since we've already moved the mouse (above) if that was needed:
 		case VK_LBUTTON:
 			if (aEventType != 'U')
 			{
@@ -2650,8 +3051,32 @@ ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aS
 				MOUSE_SLEEP;
 			}
 			break;
-		}
-	}
+		case VK_XBUTTON1:
+			if (aEventType != 'U')
+			{
+				MouseEvent(MOUSEEVENTF_XDOWN, 0, 0, XBUTTON1);
+				MOUSE_SLEEP;
+			}
+			if (aEventType != 'D')
+			{
+				MouseEvent(MOUSEEVENTF_XUP, 0, 0, XBUTTON1);
+				MOUSE_SLEEP;
+			}
+			break;
+		case VK_XBUTTON2:
+			if (aEventType != 'U')
+			{
+				MouseEvent(MOUSEEVENTF_XDOWN, 0, 0, XBUTTON2);
+				MOUSE_SLEEP;
+			}
+			if (aEventType != 'D')
+			{
+				MouseEvent(MOUSEEVENTF_XUP, 0, 0, XBUTTON2);
+				MOUSE_SLEEP;
+			}
+			break;
+		} // switch()
+	} // for()
 
 	return OK;
 }
@@ -2662,7 +3087,6 @@ void Line::MouseMove(int aX, int aY, int aSpeed)
 // Note: This is based on code in the AutoIt3 source.
 {
 	POINT	ptCur;
-	RECT	rect;
 	int		xCur, yCur;
 	int		delta;
 	const	int	nMinSpeed = 32;
@@ -2673,9 +3097,10 @@ void Line::MouseMove(int aX, int aY, int aSpeed)
 		if (aSpeed > MAX_MOUSE_SPEED)
 			aSpeed = MAX_MOUSE_SPEED;
 
-	if (GetWindowRect(GetForegroundWindow(), &rect))
+	RECT rect;
+	if (!(g.CoordMode & COORD_MODE_MOUSE) && GetWindowRect(GetForegroundWindow(), &rect)) // Relative vs. screen.
 	{
-		aX += rect.left; 
+		aX += rect.left;
 		aY += rect.top;
 	}
 
@@ -2769,12 +3194,12 @@ ResultType Line::MouseGetPos()
 	Var *output_var_x = ResolveVarOfArg(0);  // Ok if NULL.
 	Var *output_var_y = ResolveVarOfArg(1);  // Ok if NULL.
 
-	RECT rect;
-	rect.bottom = rect.left = rect.right = rect.top = 0; // ensure it's initialized for later calculations.
 	POINT pt;
 	GetCursorPos(&pt);  // Realistically, can't fail?
 	HWND fore_win = GetForegroundWindow();
-	if (fore_win)
+
+	RECT rect = {0};  // ensure it's initialized for later calculations.
+	if (fore_win && !(g.CoordMode & COORD_MODE_MOUSE)) // Using relative vs. absolute coordinates.
 		GetWindowRect(fore_win, &rect);  // If this call fails, above default values will be used.
 
 	ResultType result = OK; // Set default;
@@ -2880,6 +3305,8 @@ ResultType Line::PerformAssign()
 	char *one_beyond_contents_end = ExpandArg(output_var->Contents(), 1);
 	if (!one_beyond_contents_end)
 		return FAIL;  // ExpandArg() will have already displayed the error.
+	// Set the length explicitly rather than using space_needed because GetExpandedArgSize()
+	// sometimes returns a larger size than is actually needed (e.g. for ScriptGetCursor()):
 	output_var->Length() = (VarSizeType)(one_beyond_contents_end - output_var->Contents() - 1);
 	if (g.AutoTrim)
 	{
@@ -3012,7 +3439,7 @@ ResultType Line::StringSplit(char *aArrayName, char *aInputString, char *aDelimi
 	if (!*aInputString) // The input variable is blank, thus there will be zero elements.
 		return array0->Assign((int)0);  // Store the count in the 0th element.
 
-	UINT next_element_number;
+	DWORD next_element_number;
 	Var *next_element;
 
 	if (*aDelimiterList) // The user provided a list of delimiters, so process the input variable normally.
@@ -3091,7 +3518,160 @@ ResultType Line::StringSplit(char *aArrayName, char *aInputString, char *aDelimi
 
 
 
-ResultType Line::DriveSpaceFree(char *aPath)
+ResultType Line::ScriptGetKeyState(char *aKeyName, char *aOption)
+{
+	Var *output_var = ResolveVarOfArg(0);
+	if (!output_var)
+		return FAIL;
+
+	JoyControls joy;
+	int joystick_id;
+	vk_type vk = TextToVK(aKeyName);
+    if (!vk)
+	{
+		if (   !(joy = (JoyControls)ConvertJoy(aKeyName, &joystick_id))   )
+			return output_var->Assign("");
+	}
+	else // There is a virtual key (not a joystick control).
+	{
+		switch (toupper(*aOption))
+		{
+		case 'T': // Whether a toggleable key such as CapsLock is currently turned on.
+			// Under Win9x, at least certain versions and for certain hardware, this
+			// doesn't seem to be always accurate, especially when the key has just
+			// been toggled and the user hasn't pressed any other key since then.
+			// I tried using GetKeyboardState() instead, but it produces the same
+			// result.  Therefore, I've documented this as a limitation in the help file.
+			// In addition, this was attempted but it didn't seem to help:
+			//if (g_os.IsWin9x())
+			//{
+			//	DWORD my_thread  = GetCurrentThreadId();
+			//	DWORD fore_thread = GetWindowThreadProcessId(GetForegroundWindow(), NULL);
+			//	bool is_attached_my_to_fore = false;
+			//	if (fore_thread && fore_thread != my_thread)
+			//		is_attached_my_to_fore = AttachThreadInput(my_thread, fore_thread, TRUE) != 0;
+			//	output_var->Assign(IsKeyToggledOn(vk) ? "D" : "U");
+			//	if (is_attached_my_to_fore)
+			//		AttachThreadInput(my_thread, fore_thread, FALSE);
+			//	return OK;
+			//}
+			//else
+			return output_var->Assign(IsKeyToggledOn(vk) ? "D" : "U");
+		case 'P': // Physical state of key.
+			if (VK_IS_MOUSE(vk)) // mouse button
+			{
+				if (g_MouseHook) // mouse hook is installed, so use it's tracking of physical state.
+					return output_var->Assign(g_PhysicalKeyState[vk] & STATE_DOWN ? "D" : "U");
+				else // Even for Win9x, it seems slightly better to call this rather than IsKeyDown9x():
+					return output_var->Assign(IsPhysicallyDown(vk) ? "D" : "U");
+			}
+			else // keyboard
+			{
+				if (g_KeybdHook)
+					// Since the hook is installed, use its value rather than that from
+					// GetAsyncKeyState(), which doesn't seem to return the physical state
+					// as expected/advertised, least under WinXP:
+					return output_var->Assign(g_PhysicalKeyState[vk] & STATE_DOWN ? "D" : "U");
+				else // Even for Win9x, it seems slightly better to call this rather than IsKeyDown9x():
+					return output_var->Assign(IsPhysicallyDown(vk) ? "D" : "U");
+			}
+		default: // Logical state of key.
+			if (g_os.IsWin9x())
+				return output_var->Assign(IsKeyDown9x(vk) ? "D" : "U"); // This seems more likely to be reliable.
+			else
+				// On XP/2K/NT at least, a key can be physically down even if it isn't logically down,
+				// which is why the below specifically calls IsKeyDownNT() rather than some more
+				// comprehensive method such as consulting the physical key state as tracked by the hook:
+				return output_var->Assign(IsKeyDownNT(vk) ? "D" : "U");
+		}
+	}
+
+	// Since the above didn't return, joy contains a valid joystick button/control ID:
+	bool joy_is_button = (joy >= JOYCTRL_1 && joy <= JOYCTRL_BUTTON_MAX);
+
+	JOYCAPS jc;
+	if (!joy_is_button && joy != JOYCTRL_POV)
+	{
+		// Get the joystick's range of motion so that we can report it as a percentage.
+		if (joyGetDevCaps(joystick_id, &jc, sizeof(JOYCAPS)) != JOYERR_NOERROR)
+			ZeroMemory(&jc, sizeof(jc));
+	}
+
+	JOYINFOEX jie;
+
+	if (joy != JOYCTRL_NAME && joy != JOYCTRL_BUTTONS && joy != JOYCTRL_AXES && joy != JOYCTRL_INFO)
+	{
+		jie.dwSize = sizeof(JOYINFOEX);
+		jie.dwFlags = JOY_RETURNALL;
+		if (joyGetPosEx(joystick_id, &jie) != JOYERR_NOERROR)
+			return output_var->Assign("");
+		if (joy_is_button)
+			return output_var->Assign(((jie.dwButtons >> (joy - JOYCTRL_1)) & (DWORD)0x01) ? "D" : "U");
+	}
+
+	// Otherwise:
+	UINT range;
+	char buf[128], *buf_ptr;
+
+	switch(joy)
+	{
+	case JOYCTRL_XPOS:
+		range = (jc.wXmax > jc.wXmin) ? jc.wXmax - jc.wXmin : 0;
+		return output_var->Assign(range ? 100 * (double)jie.dwXpos / range : jie.dwXpos);
+	case JOYCTRL_YPOS:
+		range = (jc.wYmax > jc.wYmin) ? jc.wYmax - jc.wYmin : 0;
+		return output_var->Assign(range ? 100 * (double)jie.dwYpos / range : jie.dwYpos);
+	case JOYCTRL_ZPOS:
+		range = (jc.wZmax > jc.wZmin) ? jc.wZmax - jc.wZmin : 0;
+		return output_var->Assign(range ? 100 * (double)jie.dwZpos / range : jie.dwZpos);
+	case JOYCTRL_RPOS:  // Rudder or 4th axis.
+		range = (jc.wRmax > jc.wRmin) ? jc.wRmax - jc.wRmin : 0;
+		return output_var->Assign(range ? 100 * (double)jie.dwRpos / range : jie.dwRpos);
+	case JOYCTRL_UPOS:  // 5th axis.
+		range = (jc.wUmax > jc.wUmin) ? jc.wUmax - jc.wUmin : 0;
+		return output_var->Assign(range ? 100 * (double)jie.dwUpos / range : jie.dwUpos);
+	case JOYCTRL_VPOS:  // 6th axis.
+		range = (jc.wVmax > jc.wVmin) ? jc.wVmax - jc.wVmin : 0;
+		return output_var->Assign(range ? 100 * (double)jie.dwVpos / range : jie.dwVpos);
+	case JOYCTRL_POV:  // Need to explicitly compare against JOY_POVCENTERED because it's a WORD not a DWORD.
+		if (jie.dwPOV == JOY_POVCENTERED)
+			return output_var->Assign("-1"); // Documented behavior.
+		else
+			return output_var->Assign(jie.dwPOV);
+	case JOYCTRL_NAME:
+		return output_var->Assign(jc.szPname);
+	case JOYCTRL_BUTTONS:
+		return output_var->Assign((DWORD)jc.wNumButtons);  // wMaxButtons is the *driver's* max supported buttons.
+	case JOYCTRL_AXES:
+		return output_var->Assign((DWORD)jc.wNumAxes);  // wMaxAxes is the *driver's* max supported axes.
+	case JOYCTRL_INFO:
+		buf_ptr = buf;
+		if (jc.wCaps & JOYCAPS_HASZ)
+			*buf_ptr++ = 'Z';
+		if (jc.wCaps & JOYCAPS_HASR)
+			*buf_ptr++ = 'R';
+		if (jc.wCaps & JOYCAPS_HASU)
+			*buf_ptr++ = 'U';
+		if (jc.wCaps & JOYCAPS_HASV)
+			*buf_ptr++ = 'V';
+		if (jc.wCaps & JOYCAPS_HASPOV)
+		{
+			*buf_ptr++ = 'P';
+			if (jc.wCaps & JOYCAPS_POV4DIR)
+				*buf_ptr++ = 'D';
+			if (jc.wCaps & JOYCAPS_POVCTS)
+				*buf_ptr++ = 'C';
+		}
+		*buf_ptr = '\0'; // Final termination.
+		return output_var->Assign(buf);
+	}
+
+	return output_var->Assign(); // Should never be executed.
+}
+
+
+
+ResultType Line::DriveSpace(char *aPath, bool aGetFreeSpace)
 // Adapted from the AutoIt3 source.
 // Because of NTFS's ability to mount volumes into a directory, a path might not necessarily
 // have the same amount of free space as its root drive.  However, I'm not sure if this
@@ -3134,7 +3714,8 @@ ResultType Line::DriveSpaceFree(char *aPath)
 			return OK; // Let ErrorLevel tell the story.
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 		// Casting this way limits us to 2,097,152 gigabytes in size:
-		return output_var->Assign(   (__int64)((unsigned __int64)uiFree.QuadPart / (1024*1024))   );
+		return output_var->Assign(   (__int64)((unsigned __int64)(aGetFreeSpace ? uiFree.QuadPart : uiTotal.QuadPart)
+			/ (1024*1024))   );
 	}
 	else
 	{
@@ -3142,12 +3723,180 @@ ResultType Line::DriveSpaceFree(char *aPath)
 		if (!GetDiskFreeSpace(buf, &dwSectPerClust, &dwBytesPerSect, &dwFreeClusters, &dwTotalClusters))
 			return OK; // Let ErrorLevel tell the story.
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-		return output_var->Assign(   (__int64)((unsigned __int64)(dwFreeClusters * dwSectPerClust * dwBytesPerSect)
-			/ (1024*1024))   );
+		return output_var->Assign(   (__int64)((unsigned __int64)((aGetFreeSpace ? dwFreeClusters : dwTotalClusters)
+			* dwSectPerClust * dwBytesPerSect) / (1024*1024))   );
 	}
 #endif	
 
 	return OK;
+}
+
+
+
+ResultType Line::DriveGet(char *aCmd, char *aValue)
+// This function has been adapted from the AutoIt3 source.
+{
+	DriveCmds drive_cmd = ConvertDriveCmd(aCmd);
+	if (drive_cmd == DRIVE_CMD_CAPACITY)
+		return DriveSpace(aValue, false);
+
+	char path[MAX_PATH + 1];  // +1 to allow room for trailing backslash in case it needs to be added.
+	size_t path_length;
+
+	// Notes about the below macro:
+	// Leave space for the backslash in case its needed:
+	// au3: attempt to fix the parameter passed (backslash may be needed in some OSes).
+	#define DRIVE_SET_PATH \
+		strlcpy(path, aValue, sizeof(path) - 1);\
+		path_length = strlen(path);\
+		if (path_length && path[path_length - 1] != '\\')\
+			path[path_length++] = '\\';
+
+	if (drive_cmd == DRIVE_CMD_SETLABEL)
+	{
+		DRIVE_SET_PATH
+		SetErrorMode(SEM_FAILCRITICALERRORS);		// So a:\ does not ask for disk
+		char *new_label = omit_leading_whitespace(aCmd + 9);  // Example: SetLabel:MyLabel
+		return g_ErrorLevel->Assign(SetVolumeLabel(path, new_label) ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
+	}
+
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR);  // Set default since there are many points of return.
+
+	Var *output_var = ResolveVarOfArg(0);
+	if (!output_var)
+		return FAIL;
+
+	switch(drive_cmd)
+	{
+
+	case DRIVE_CMD_INVALID:
+		// Since command names are validated at load-time, this only happens if the command name
+		// was contained in a variable reference.  Since that is very rare, just set ErrorLevel
+		// and return:
+		return output_var->Assign();  // Let ErrorLevel tell the story.
+
+	case DRIVE_CMD_LIST:
+	{
+		UINT uiFlag, uiTemp;
+
+		if (!*aValue) uiFlag = 99;
+		else if (!stricmp(aValue, "CDRom")) uiFlag = DRIVE_CDROM;
+		else if (!stricmp(aValue, "Removable")) uiFlag = DRIVE_REMOVABLE;
+		else if (!stricmp(aValue, "Fixed")) uiFlag = DRIVE_FIXED;
+		else if (!stricmp(aValue, "Network")) uiFlag = DRIVE_REMOTE;
+		else if (!stricmp(aValue, "Ramdisk")) uiFlag = DRIVE_RAMDISK;
+		else if (!stricmp(aValue, "Unknown")) uiFlag = DRIVE_UNKNOWN;
+		else // Let ErrorLevel tell the story.
+			return OK;
+
+		char found_drives[32];  // Need room for all 26 possible drive letters.
+		int found_drives_count;
+		UCHAR letter;
+		char buf[128], *buf_ptr;
+
+		SetErrorMode(SEM_FAILCRITICALERRORS);		// So a:\ does not ask for disk
+
+		for (found_drives_count = 0, letter = 'A'; letter <= 'Z'; ++letter)
+		{
+			buf_ptr = buf;
+			*buf_ptr++ = letter;
+			*buf_ptr++ = ':';
+			*buf_ptr++ = '\\';
+			*buf_ptr = '\0';
+			uiTemp = GetDriveType(buf);
+			if (uiTemp == uiFlag || (uiFlag == 99 && uiTemp != DRIVE_NO_ROOT_DIR))
+				found_drives[found_drives_count++] = letter;  // Store just the drive letters.
+		}
+		found_drives[found_drives_count] = '\0';  // Terminate the string of found drive letters.
+		output_var->Assign(found_drives);
+		if (!*found_drives)
+			return OK;  // Seems best to flag zero drives in the system as default ErrorLevel of "1".
+		break;
+	}
+
+	case DRIVE_CMD_FILESYSTEM:
+	case DRIVE_CMD_LABEL:
+	case DRIVE_CMD_SERIAL:
+	{
+		char label[256];
+		char file_system[256];
+		DRIVE_SET_PATH
+		SetErrorMode(SEM_FAILCRITICALERRORS);		// So a:\ does not ask for disk
+		DWORD dwVolumeSerial, dwMaxCL, dwFSFlags;
+		if (!GetVolumeInformation(path, label, sizeof(label) - 1, &dwVolumeSerial, &dwMaxCL
+			, &dwFSFlags, file_system, sizeof(file_system) - 1))
+			return output_var->Assign(); // Let ErrorLevel tell the story.
+		switch(drive_cmd)
+		{
+		case DRIVE_CMD_FILESYSTEM: output_var->Assign(file_system); break;
+		case DRIVE_CMD_LABEL: output_var->Assign(label); break;
+		case DRIVE_CMD_SERIAL: output_var->Assign(dwVolumeSerial); break;
+		}
+		break;
+	}
+
+	case DRIVE_CMD_TYPE:
+	{
+		DRIVE_SET_PATH
+		SetErrorMode(SEM_FAILCRITICALERRORS);	// So a:\ does not ask for disk
+		UINT uiType = GetDriveType(path);
+		switch (uiType)
+		{
+		case DRIVE_UNKNOWN:
+			output_var->Assign("Unknown");
+			break;
+		case DRIVE_REMOVABLE:
+			output_var->Assign("Removable");
+			break;
+		case DRIVE_FIXED:
+			output_var->Assign("Fixed");
+			break;
+		case DRIVE_REMOTE:
+			output_var->Assign("Network");
+			break;
+		case DRIVE_CDROM:
+			output_var->Assign("CDROM");
+			break;
+		case DRIVE_RAMDISK:
+			output_var->Assign("RAMDisk");
+			break;
+		default: // DRIVE_NO_ROOT_DIR
+			return output_var->Assign();  // Let ErrorLevel tell the story.
+		}
+		break;
+	}
+
+	case DRIVE_CMD_STATUS:
+	{
+		DRIVE_SET_PATH
+		DWORD dwSectPerClust, dwBytesPerSect, dwFreeClusters, dwTotalClusters;
+		DWORD last_error = ERROR_SUCCESS;
+		SetErrorMode(SEM_FAILCRITICALERRORS);		// So a:\ does not ask for disk
+		if (   !(GetDiskFreeSpace(path, &dwSectPerClust, &dwBytesPerSect, &dwFreeClusters, &dwTotalClusters))   )
+			last_error = GetLastError();
+		switch (last_error)
+		{
+		case ERROR_SUCCESS:
+			output_var->Assign("Ready");
+			break;
+		case ERROR_PATH_NOT_FOUND:
+			output_var->Assign("Invalid");
+			break;
+		case ERROR_NOT_READY:
+			output_var->Assign("NotReady");
+			break;
+		case ERROR_WRITE_PROTECT:
+			output_var->Assign("ReadOnly");
+			break;
+		default:
+			output_var->Assign("Unknown");
+		}
+		break;
+	}
+	} // switch()
+
+	// Note that ControlDelay is not done for the Get type commands, because it seems unnecessary.
+	return g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 }
 
 
@@ -5272,11 +6021,11 @@ ResultType Line::SetToggleState(vk_type aVK, ToggleValueType &ForceLock, char *a
 	case ALWAYS_OFF:
 		ForceLock = (toggle == ALWAYS_ON) ? TOGGLED_ON : TOGGLED_OFF; // Must do this first.
 		ToggleKeyState(aVK, ForceLock);
-		// This will ensure that the hook is installed if it isn't already.  The hook is
-		// currently needed to support keeping these keys AlwaysOn or AlwaysOff, though
+		// The hook is currently needed to support keeping these keys AlwaysOn or AlwaysOff, though
 		// there may be better ways to do it (such as registering them as a hotkey, but
 		// that may introduce quite a bit of complexity):
-		Hotkey::AllActivate();
+		if (!g_KeybdHook)
+			Hotkey::InstallKeybdHook();
 		break;
 	case NEUTRAL:
 		// Note: No attempt is made to detect whether the keybd hook should be deinstalled
@@ -5434,6 +6183,7 @@ ArgTypeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_INIREAD:
 		case ACT_REGREAD:
 		case ACT_DRIVESPACEFREE:
+		case ACT_DRIVEGET:
 		case ACT_SOUNDGET:
 		case ACT_SOUNDGETWAVEVOLUME:
 		case ACT_FILEREADLINE:
@@ -5449,6 +6199,7 @@ ArgTypeType Line::ArgIsVar(ActionTypeType aActionType, int aArgIndex)
 		case ACT_WINGETPOS:
 		case ACT_PIXELGETCOLOR:
 		case ACT_PIXELSEARCH:
+		case ACT_INPUT:
 			return ARG_TYPE_OUTPUT_VAR;
 
 		case ACT_IFINSTRING:

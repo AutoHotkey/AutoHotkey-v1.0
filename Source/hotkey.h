@@ -41,11 +41,12 @@ EXTERN_SCRIPT;  // For g_script.
 #define HOTKEY_ID_MAX                  0x3FF9
 
 #define COMPOSITE_DELIMITER " & "
+#define COMPOSITE_DELIMITER_LENGTH 3
 
 // Smallest workable size: to save mem in some large arrays that use this:
 typedef USHORT HotkeyIDType;
 typedef HotkeyIDType HookActionType;
-enum HotkeyTypes {HK_UNDETERMINED, HK_NORMAL, HK_KEYBD_HOOK, HK_MOUSE_HOOK};
+enum HotkeyTypes {HK_UNDETERMINED, HK_NORMAL, HK_KEYBD_HOOK, HK_MOUSE_HOOK, HK_BOTH_HOOKS, HK_JOYSTICK};
 
 
 class Hotkey
@@ -70,7 +71,10 @@ private:
 	mod_type mModifiers;  // MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, or some additive or bitwise-or combination of these.
 	modLR_type mModifiersLR;  // Left-right centric versions of the above.
 	bool mAllowExtraModifiers;  // False if the hotkey should not fire when extraneous modifiers are held down.
-	bool mDoSuppress;  // Normally true, but can be overridden by using the hotkey ~ prefix.
+	#define NO_SUPPRESS_SUFFIX 0x01 // Bitwise: Bit #1
+	#define NO_SUPPRESS_PREFIX 0x02 // Bitwise: Bit #2
+	#define NO_SUPPRESS_NEXT_UP_EVENT 0x04 // Bitwise: Bit #3
+	UCHAR mNoSuppress;  // Normally 0, but can be overridden by using the hotkey tilde (~) prefix.
 	vk_type mModifierVK; // Any other virtual key that must be pressed down in order to activate "vk" itself.
 	sc_type mModifierSC; // If mModifierVK is zero, this scan code, if non-zero, will be used as the modifier.
 	modLR_type mModifiersConsolidated; // The combination of mModifierVK, mModifierSC, mModifiersLR, modifiers
@@ -171,14 +175,23 @@ private:
 public:
 	// Make sHotkeyCount an alias for sNextID.  Make it const to enforce modifying the value in only one way:
 	static const HotkeyIDType &sHotkeyCount;
+	static bool sJoystickHasHotkeys[MAX_JOYSTICKS];
+	static DWORD sJoyHotkeyCount;
 
 	static void AllDestructAndExit(int exit_code);
 	static ResultType AddHotkey(Label *aJumpToLabel, HookActionType aHookAction);
 	static ResultType PerformID(HotkeyIDType aHotkeyID);
+	static void TriggerJoyHotkeys(int aJoystickID, DWORD aButtonsNewlyDown);
 	static ResultType AllDeactivate(bool aExcludeSuspendHotkeys = false);
 	static void AllActivate();
 	static void RequireHook(HookType aWhichHook) {sWhichHookAlways |= aWhichHook;}
 	static HookType HookIsActive() {return sWhichHookActive;} // Returns bitwise values: HOOK_MOUSE, HOOK_KEYBD.
+
+	static void InstallKeybdHook()
+	{
+		sWhichHookAlways |= HOOK_KEYBD;
+		sWhichHookActive = ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways, false, false);
+	}
 
 	static bool PerformIsAllowed(HotkeyIDType aHotkeyID)
 	{
