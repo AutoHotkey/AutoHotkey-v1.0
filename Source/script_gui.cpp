@@ -850,20 +850,21 @@ ResultType Line::GuiControlGet(char *aCommand, char *aControlID, char *aParam3)
 		// var names that are too long:
 		char var_name[MAX_VAR_NAME_LENGTH + 20];
 		Var *var;
+		int always_use = output_var->IsLocal() ? ALWAYS_USE_LOCAL : ALWAYS_USE_GLOBAL;
 		snprintf(var_name, sizeof(var_name), "%sX", output_var->mName);
-		if (   !(var = g_script.FindOrAddVar(var_name, 0, output_var))   ) // Called with output_var to enhance performance.
+		if (   !(var = g_script.FindOrAddVar(var_name, 0, always_use))   ) // Called with output_var to enhance performance.
 			return FAIL;  // It will have already displayed the error.
 		var->Assign(pt.x);
 		snprintf(var_name, sizeof(var_name), "%sY", output_var->mName);
-		if (   !(var = g_script.FindOrAddVar(var_name, 0, output_var))   ) // Called with output_var to enhance performance.
+		if (   !(var = g_script.FindOrAddVar(var_name, 0, always_use))   ) // Called with output_var to enhance performance.
 			return FAIL;  // It will have already displayed the error.
 		var->Assign(pt.y);
 		snprintf(var_name, sizeof(var_name), "%sW", output_var->mName);
-		if (   !(var = g_script.FindOrAddVar(var_name, 0, output_var))   ) // Called with output_var to enhance performance.
+		if (   !(var = g_script.FindOrAddVar(var_name, 0, always_use))   ) // Called with output_var to enhance performance.
 			return FAIL;  // It will have already displayed the error.
 		var->Assign(rect.right - rect.left);
 		snprintf(var_name, sizeof(var_name), "%sH", output_var->mName);
-		if (   !(var = g_script.FindOrAddVar(var_name, 0, output_var))   ) // Called with output_var to enhance performance.
+		if (   !(var = g_script.FindOrAddVar(var_name, 0, always_use))   ) // Called with output_var to enhance performance.
 			return FAIL;  // It will have already displayed the error.
 		return var->Assign(rect.bottom - rect.top);
 	}
@@ -2827,7 +2828,12 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 		else if (!stricmp(next_option, "ReadOnly"))
 		{
 			if (aControl.type == GUI_CONTROL_EDIT)
-				if (adding) aOpt.style_add |= ES_READONLY; else aOpt.style_remove |= ES_READONLY;
+			{
+				if (aControl.hwnd) // Update the existing edit.  Must use SendMessage() vs. changing the style.
+					SendMessage(aControl.hwnd, EM_SETREADONLY, adding, 0);
+				else
+					if (adding) aOpt.style_add |= ES_READONLY; else aOpt.style_remove |= ES_READONLY;
+			}
 			else if (aControl.type == GUI_CONTROL_LISTBOX)
 				if (adding) aOpt.style_add |= LBS_NOSEL; else aOpt.style_remove |= LBS_NOSEL;
 		}
@@ -2979,16 +2985,20 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 				if (which_buddy) // i.e. it's not the zero terminator
 				{
 					++next_option; // Now it should point to the variable name of the buddy control.
-					Var *var = g_script.FindVar(next_option); // Not FindOrAdd() in this case.
+					// Check if there's an existing *global* variable of this name.  It must be global
+					// because the variable of a control can never be a local variable:
+					Var *var = g_script.FindVar(next_option, 0, NULL, ALWAYS_USE_GLOBAL); // Search globals only.
 					if (var)
 					{
-						// Below relies on GuiIndexType underflow:
-						for (GuiIndexType u = mControlCount - 1; u < mControlCount; --u) // Search in reverse for better avg-case performance.
-							if (mControl[u].output_var == var)
-								if (which_buddy == '1')
-									aOpt.buddy1 = &mControl[u];
-								else // assume '2'
-									aOpt.buddy2 = &mControl[u];
+						var = var->ResolveAlias(); // Update it to its target if it's an alias.
+						if (!var->IsLocal()) // Must be global.  Note that an alias can point to a local vs. global var.
+							// Below relies on GuiIndexType underflow:
+							for (GuiIndexType u = mControlCount - 1; u < mControlCount; --u) // Search in reverse for better avg-case performance.
+								if (mControl[u].output_var == var)
+									if (which_buddy == '1')
+										aOpt.buddy1 = &mControl[u];
+									else // assume '2'
+										aOpt.buddy2 = &mControl[u];
 					}
 				}
 			}
@@ -3364,7 +3374,10 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 				// This is because it allows layout editors and other script generators to omit the variable
 				// and yet still be able to generate a runnable script.
 				Var *candidate_var;
-				if (   !(candidate_var = g_script.FindOrAddVar(next_option))   )
+				// ALWAYS_PREFER_LOCAL is used below so that any existing local variable (e.g. a ByRef alias)
+				// will take precedence over a global of the same name when assume-global is in effect.  If
+				// neither type of variable exists, a global variable will be created if assume-global is in effect.
+				if (   !(candidate_var = g_script.FindOrAddVar(next_option, 0, ALWAYS_PREFER_LOCAL))   ) // Find local or global, see below.
 					// For now, this is always a critical error that stops the current quasi-thread rather
 					// than setting ErrorLevel (if ErrorLevel is called for).  This is because adding a
 					// variable can cause one of any number of different errors to be displayed, and changing
@@ -3372,6 +3385,23 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 					// rarely 1) a control needs to get a new variable; 2) that variable name is too long
 					// or not valid.
 					return FAIL;  // It already displayed the error (e.g. name too long). Existing var (if any) is retained.
+				// Below: Must be a global variable since otherwise, "Gui Submit" would store its results
+				// in the local variables of some function that isn't even currently running.  Reporting
+				// a runtime error seems the best way to solve this overall issue since the other
+				// alternatives seem overly complicated or have worse drawbacks.  One alternative would
+				// be to do load-time resolution of vVar and store the result in the lines mAttribute.
+				// But in addition to the problems of parsing vVar out of the list at loadtime, something
+				// like % "v" VarContainingVar (i.e. an expression) and other things seems would introduce
+				// an amount of complexity at loadtime that doesn't seem worth it.  Another possibility is
+				// to review a function's lines the first time its first "Gui Add" is encountered at runtime.
+				// Any local variable that match the name of the vVar global could be made into aliases so
+				// that they point to the global instead.  But that is pretty ugly and doesn't seem worth it.
+				candidate_var = candidate_var->ResolveAlias(); // Update it to its target if it's an alias.
+				if (candidate_var->IsLocal()) // Note that an alias can point to a local vs. global var.
+					return g_script.ScriptError("A control's variable must be global." ERR_ABORT, next_option - 1);
+				// Another reason that the above always resolves aliases is because it allows the next
+				// check below to find true duplicates, even if different aliases are used to create the
+				// controls (i.e. if two alias both point to the same global).
 				// Check if any other control (visible or not, to avoid the complexity of a hidden control
 				// needing to be dupe-checked every time it becomes visible) on THIS gui window has the
 				// same variable.  That's an error because not only doesn't it make sense to do that,
@@ -4709,14 +4739,24 @@ GuiIndexType GuiType::FindControl(char *aControlID)
 // 3) Control's title/caption.
 // Returns -1 if not found.
 {
+	GuiIndexType u;
 	// To keep things simple, the first search method is always conducted: It looks for a
 	// matching variable name, but only among the variables used by this particular window's
 	// controls (i.e. avoid ambiguity by NOT having earlier matched up aControlID against
-	// all variable names in the entire script, perhaps in PreparseBlocks() or something):
-	GuiIndexType u;
-	for (u = 0; u < mControlCount; ++u)
-		if (mControl[u].output_var && !stricmp(mControl[u].output_var->mName, aControlID)) // Relies on short-circuit boolean order.
-			return u;  // Match found.
+	// all variable names in the entire script, perhaps in PreparseBlocks() or something).
+	// UPDATE: For v1.0.31, the performance is improved by resolving the variable to its
+	// pointer first, rather than comparing the variable names for a match.  It's further
+	// improved by skipping the first loop entirely when aControlID doesn't exist as a global
+	// variable (GUI controls always have global variables, not locals).
+	Var *var = g_script.FindVar(aControlID, 0, NULL, ALWAYS_USE_GLOBAL); // Search globals only (in case we're inside a function body now).
+	if (var)
+	{
+		var = var->ResolveAlias(); // Update it to its target if it's an alias.
+		if (!var->IsLocal()) // Must be global to be valid.  Note that an alias can point to a local vs. global var.
+			for (u = 0; u < mControlCount; ++u)
+				if (mControl[u].output_var == var)
+					return u;  // Match found.
+	}
 	// Otherwise: No match found, so fall back to standard control class and/or text finding method.
 	HWND control_hwnd = ControlExist(mHwnd, aControlID);
 	if (!control_hwnd)

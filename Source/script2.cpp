@@ -952,7 +952,7 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 
 	case TRANS_CMD_UNICODE:
 		int char_count;
-		if (output_var->mType == VAR_CLIPBOARD)
+		if (output_var->Type() == VAR_CLIPBOARD)
 		{
 			// Since the output var is the clipboard, the mode is autodetected as the following:
 			// Convert aValue1 from UTF-8 to Unicode and put the result onto the clipboard.
@@ -986,7 +986,7 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 			g_clip.Close();
 			return output_var->Assign(); // Make the (non-clipboard) output_var blank to indicate failure.
 		}
-		// Othewise, it found the count.  Set up the output variable, enlarging yit if needed:
+		// Othewise, it found the count.  Set up the output variable, enlarging it if needed:
 		if (output_var->Assign(NULL, char_count - 1) != OK) // Don't combine this with the above or below it can return FAIL.
 		{
 			g_clip.Close();
@@ -3534,7 +3534,8 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 				// Otherwise, since the target window has been determined, we know that it is
 				// the only window to be put into the array:
 				snprintf(var_name, sizeof(var_name), "%s1", output_var->mName);
-				if (   !(array_item = g_script.FindOrAddVar(var_name))   )  // Find or create element #1.
+				if (   !(array_item = g_script.FindOrAddVar(var_name, 0, output_var->IsLocal()
+					? ALWAYS_USE_LOCAL : ALWAYS_USE_GLOBAL))   )  // Find or create element #1.
 					return FAIL;  // It will have already displayed the error.
 				if (!array_item->AssignHWND(target_window))
 					return FAIL;
@@ -3941,17 +3942,19 @@ ResultType Line::SysGet(char *aCmd, char *aValue)
 		// to start the search.  Use the base array name rather than the preceding element because,
 		// for example, Array19 is alphabetially less than Array2, so we can't rely on the
 		// numerical ordering:
+		int always_use;
+		always_use = output_var->IsLocal() ? ALWAYS_USE_LOCAL : ALWAYS_USE_GLOBAL;
 		snprintf(var_name, sizeof(var_name), "%sLeft", output_var->mName);
-		if (   !(output_var_left = g_script.FindOrAddVar(var_name, VAR_NAME_LENGTH_DEFAULT, output_var))   )
+		if (   !(output_var_left = g_script.FindOrAddVar(var_name, 0, always_use))   )
 			return FAIL;  // It already reported the error.
 		snprintf(var_name, sizeof(var_name), "%sTop", output_var->mName);
-		if (   !(output_var_top = g_script.FindOrAddVar(var_name, VAR_NAME_LENGTH_DEFAULT, output_var))   )
+		if (   !(output_var_top = g_script.FindOrAddVar(var_name, 0, always_use))   )
 			return FAIL;
 		snprintf(var_name, sizeof(var_name), "%sRight", output_var->mName);
-		if (   !(output_var_right = g_script.FindOrAddVar(var_name, VAR_NAME_LENGTH_DEFAULT, output_var))   )
+		if (   !(output_var_right = g_script.FindOrAddVar(var_name, 0, always_use))   )
 			return FAIL;
 		snprintf(var_name, sizeof(var_name), "%sBottom", output_var->mName);
-		if (   !(output_var_bottom = g_script.FindOrAddVar(var_name, VAR_NAME_LENGTH_DEFAULT, output_var))   )
+		if (   !(output_var_bottom = g_script.FindOrAddVar(var_name, 0, always_use))   )
 			return FAIL;
 
 		RECT monitor_rect;
@@ -5198,10 +5201,9 @@ bool HandleMenuItem(WORD aMenuItemID, WPARAM aGuiIndex)
 ResultType ShowMainWindow(MainWindowModes aMode, bool aRestricted)
 // Always returns OK for caller convenience.
 {
-	// 32767 might be the limit for an edit control, at least under Win95.
-	// Later maybe use the EM_REPLACESEL method to avoid this limit if the
-	// OS is WinNT/2k/XP:
-	char buf_temp[32767] = "";
+	// v1.0.30.05: Increased from 32 KB to 64 KB, which is the maximum size of an Edit
+	// in Win9x:
+	char buf_temp[65534] = "";  // Formerly 32767.
 	bool jump_to_bottom = false;  // Set default behavior for edit control.
 	static MainWindowModes current_mode = MAIN_MODE_NO_CHANGE;
 
@@ -6537,11 +6539,12 @@ ResultType Line::FormatTime(char *aYYYYMMDD, char *aFormat)
 
 
 ResultType Line::PerformAssign()
-// Returns OK or FAIL.
+// Returns OK or FAIL.  Caller has ensured that none of this line's derefs is a function-call.
 {
 	Var *output_var = ResolveVarOfArg(0);
 	if (!output_var)
 		return FAIL;
+	output_var = output_var->ResolveAlias(); // Resolve alias now to detect "source_is_being_appended_to_target" and perhaps other things.
 	// Find out if output_var (the var being assigned to) is dereferenced (mentioned) in this line's
 	// second arg, which is the value to be assigned.  If it isn't, things are much simpler.
 	// Note: Since Arg#2 for this function is never an output or an input variable, it is not
@@ -6553,17 +6556,22 @@ ResultType Line::PerformAssign()
 	// until Commit() is called (i.e. long enough for our purposes):
 	bool target_is_involved_in_source = false;
 	bool source_is_being_appended_to_target = false; // v1.0.25
-	if (output_var->mType != VAR_CLIPBOARD && mArgc > 1)
+	if (output_var->Type() != VAR_CLIPBOARD && mArgc > 1)
 	{
 		// It has a second arg, which in this case is the value to be assigned to the var.
-		// Examine any derefs that the second arg has to see if output_var is mentioned:
+		// Examine any derefs that the second arg has to see if output_var is mentioned.
+		// Also, calls to script functions aren't possible within these derefs because
+		// our caller has ensured there are no expressions, and thus no function calls,
+		// inside this line.
 		for (DerefType *deref = mArg[1].deref; deref && deref->marker; ++deref)
 		{
+			if (deref->is_function) // Silent failure, for rare cases such ACT_ASSIGNEXPR calling us due to something like Clipboard:=SavedClipboard + fn(x)
+				return FAIL;
 			if (source_is_being_appended_to_target)
 			{
 				// Check if target is mentioned more than once in source, e.g. Var = %Var%Some Text%Var%
 				// would be disqualified for the "fast append" method because %Var% occurs more than once.
-				if (deref->var == output_var)
+				if (deref->var->ResolveAlias() == output_var) // deref->is_function was checked above just in case.
 				{
 					source_is_being_appended_to_target = false;
 					break;
@@ -6571,7 +6579,7 @@ ResultType Line::PerformAssign()
 			}
 			else
 			{
-				if (deref->var == output_var)
+				if (deref->var->ResolveAlias() == output_var) // deref->is_function was checked above just in case.
 				{
 					target_is_involved_in_source = true;
 					// The below disqualifies both of the following cases from the simple-append mode:
@@ -6601,11 +6609,11 @@ ResultType Line::PerformAssign()
 			if (ArgHasDeref(2)) // There is at least one deref in Arg #2.
 				// For simplicity, we don't check that it's the only deref, nor whether it has any literal text
 				// around it, since those things aren't supported anyway.
-				source_var = mArg[1].deref[0].var;
+				source_var = mArg[1].deref[0].var; // Caller has ensured none of this line's derefs is a function-call.
 		if (source_var)
 		{
-			assign_clipboardall = source_var->mType == VAR_CLIPBOARDALL;
-			assign_binary_var = source_var->mIsBinaryClip;
+			assign_clipboardall = source_var->Type() == VAR_CLIPBOARDALL;
+			assign_binary_var = source_var->IsBinaryClip();
 		}
 	}
 
@@ -6619,7 +6627,7 @@ ResultType Line::PerformAssign()
 	if (assign_clipboardall)
 	{
 		// The caller is performing the special mode "Var = %ClipboardAll%".
-		if (output_var->mType == VAR_CLIPBOARD) // Seems pointless (nor is the below equipped to handle it), so make this have no effect.
+		if (output_var->Type() == VAR_CLIPBOARD) // Seems pointless (nor is the below equipped to handle it), so make this have no effect.
 			return OK;
 		if (!g_clip.Open())
 			return LineError(CANT_OPEN_CLIPBOARD_READ);
@@ -6775,9 +6783,7 @@ ResultType Line::PerformAssign()
 		g_clip.Close();
 		*(UINT *)binary_contents = 0; // Final termination (must be UINT, see above).
 		output_var->Length() = actual_space_used - 1; // Omit the final zero-byte from the length in case any other routines assume that exactly one zero exists at the end of var's length.
-		output_var->Close(); // Called for completeness and maintainability, since it isn't currently necessary.
-		output_var->mIsBinaryClip = true; // Must be done after closing since Close() resets it to false.
-		return OK;
+		return output_var->Close(true); // Pass "true" to make it binary-clipboard type.
 	}
 
 	if (assign_binary_var)
@@ -6785,15 +6791,13 @@ ResultType Line::PerformAssign()
 		// Caller wants a variable with binary contents assigned (copied) to another variable (usually VAR_CLIPBOARD).
 		binary_contents = source_var->Contents();
 		VarSizeType source_length = source_var->Length();
-		if (output_var->mType != VAR_CLIPBOARD) // Copy a binary variable to another variable that isn't the clipboard.
+		if (output_var->Type() != VAR_CLIPBOARD) // Copy a binary variable to another variable that isn't the clipboard.
 		{
 			if (!output_var->Assign(NULL, source_length))
 				return FAIL; // Above should have already reported the error.
 			memcpy(output_var->Contents(), binary_contents, source_length + 1);  // Add 1 not sizeof(format).
 			output_var->Length() = source_length;
-			output_var->Close(); // Called for completeness and maintainability, since it isn't currently necessary.
-			output_var->mIsBinaryClip = true; // Must be done after closing.
-			return OK;
+			return output_var->Close(true); // Pass "true" to make it binary-clipboard type.
 		}
 
 		// Since above didn't return, a variable containing binary clipboard data is being copied back onto
@@ -6853,6 +6857,7 @@ ResultType Line::PerformAssign()
 	// So the main thing to be possibly later improved here is the case where
 	// output_var is mentioned only once in the deref list (which as of v1.0.25,
 	// has been partially done via the concatenation improvement, e.g. Var = %Var%Text).
+	Var *arg_var[MAX_ARGS];
 	if (target_is_involved_in_source && !source_is_being_appended_to_target)
 	{
 		if (ExpandArgs() != OK)
@@ -6862,7 +6867,7 @@ ResultType Line::PerformAssign()
 	}
 	else
 	{
-		space_needed = GetExpandedArgSize(false); // There's at most one arg to expand in this case.
+		space_needed = GetExpandedArgSize(false, arg_var); // There's at most one arg to expand in this case.
 		if (space_needed == VARSIZE_ERROR)
 			return FAIL;  // It will have already displayed the error.
 	}
@@ -6880,7 +6885,7 @@ ResultType Line::PerformAssign()
 			// Since expanding the size of output_var while preserving its existing contents would
 			// likely be a slow operation, revert to the normal method rather than the fast-append
 			// mode.  Expand the args then continue on normally to the below.
-			if (ExpandArgs() != OK)
+			if (ExpandArgs(space_needed, arg_var) != OK) // In this case, both params were previously calculated by GetExpandedArgSize().
 				return FAIL;
 		}
 		else // there's enough capacity in output_var to accept the text to be appended.
@@ -6890,12 +6895,10 @@ ResultType Line::PerformAssign()
 	if (target_is_involved_in_source)
 		// It was already dereferenced above, so use ARG2, which points to the
 		// derefed contents of ARG2 (i.e. the data to be assigned).
-		// Seems better to trim even if not AutoIt2, since that's currently the only way easy way
-		// to trim things:
-		return output_var->Assign(ARG2, space_needed - 1, g.AutoTrim); // , g_script.mIsAutoIt2);
+		return output_var->Assign(ARG2, VARSIZE_MAX, g.AutoTrim); // Pass VARSIZE_MAX to have it recalculate, since space_needed might be a conservative estimate larger than the actual length+1.
 
 	// Otherwise:
-	// If we're here, output_var->mType must be clipboard or normal because otherwise
+	// If we're here, output_var->Type() must be clipboard or normal because otherwise
 	// the validation during load would have prevented the script from loading:
 
 	// First set everything up for the operation.  If output_var is the clipboard, this
@@ -6913,7 +6916,10 @@ ResultType Line::PerformAssign()
 	// That might happen due to a failure or size discrepancy between the
 	// deref size-estimate and the actual deref itself:
 	char *contents = output_var->Contents();
-	char *one_beyond_contents_end = ExpandArg(contents, 1); // This knows not to copy the first var-ref onto itself (for when source_is_being_appended_to_target is true).
+	// This knows not to copy the first var-ref onto itself (for when source_is_being_appended_to_target is true).
+	// In addition, to reach this point, arg_var[0]'s value will already have been determined (possibly NULL)
+	// by GetExpandedArgSize():
+	char *one_beyond_contents_end = ExpandArg(contents, 1, arg_var[0]);
 	if (!one_beyond_contents_end)
 		return FAIL;  // ExpandArg() will have already displayed the error.
 	// Set the length explicitly rather than using space_needed because GetExpandedArgSize()
@@ -7038,9 +7044,13 @@ ResultType Line::StringSplit(char *aArrayName, char *aInputString, char *aDelimi
 	// as a result of appending the array index number:
 	char var_name[MAX_VAR_NAME_LENGTH + 20];
 	snprintf(var_name, sizeof(var_name), "%s0", aArrayName);
-	Var *array0 = g_script.FindOrAddVar(var_name);
+	// ALWAYS_PREFER_LOCAL below allows any existing local variable that matches array0's name
+	// (e.g. Array0) to be given preference over creating a new global variable if the function's
+	// mode is to assume globals:
+	Var *array0 = g_script.FindOrAddVar(var_name, 0, ALWAYS_PREFER_LOCAL);
 	if (!array0)
 		return FAIL;  // It will have already displayed the error.
+	int always_use = array0->IsLocal() ? ALWAYS_USE_LOCAL : ALWAYS_USE_GLOBAL;
 
 	if (!*aInputString) // The input variable is blank, thus there will be zero elements.
 		return array0->Assign("0");  // Store the count in the 0th element.
@@ -7060,7 +7070,7 @@ ResultType Line::StringSplit(char *aArrayName, char *aInputString, char *aDelimi
 			// to start the search.  Use element #0 rather than the preceding element because,
 			// for example, Array19 is alphabetially less than Array2, so we can't rely on the
 			// numerical ordering:
-			if (   !(next_element = g_script.FindOrAddVar(var_name, VAR_NAME_LENGTH_DEFAULT, array0))   )
+			if (   !(next_element = g_script.FindOrAddVar(var_name, 0, always_use))   )
 				return FAIL;  // It will have already displayed the error.
 
 			if (delimiter = StrChrAny(contents_of_next_element, aDelimiterList)) // A delimiter was found.
@@ -7113,7 +7123,7 @@ ResultType Line::StringSplit(char *aArrayName, char *aInputString, char *aDelimi
 		if (*dp) // Omitted.
 			continue;
 		snprintf(var_name, sizeof(var_name), "%s%u", aArrayName, next_element_number);
-		if (   !(next_element = g_script.FindOrAddVar(var_name, VAR_NAME_LENGTH_DEFAULT, array0))   )
+		if (   !(next_element = g_script.FindOrAddVar(var_name, 0, always_use))   )
 			return FAIL;  // It will have already displayed the error.
 		if (!next_element->Assign(cp, 1))
 			return FAIL;
@@ -9306,7 +9316,7 @@ ResultType Line::FileRead(char *aFilespec)
 	if (hfile == INVALID_HANDLE_VALUE)
 		return OK; // Let ErrorLevel tell the story.
 
-	if (is_binary_clipboard && output_var->mType == VAR_CLIPBOARD)
+	if (is_binary_clipboard && output_var->Type() == VAR_CLIPBOARD)
 		return ReadClipboardFromFile(hfile);
 	// Otherwise, if is_binary_clipboard, load it directly into a normal variable.  The data in the
 	// clipboard file should already have the (UINT)0 as its ending terminator.
@@ -9376,9 +9386,7 @@ ResultType Line::FileRead(char *aFilespec)
 	}
 
 	// ErrorLevel, as set in various places above, indicates success or failure.
-	output_var->Close();  // In case it's the clipboard.
-	output_var->mIsBinaryClip = is_binary_clipboard; // Must be done only after Close(), since Close() resets it.
-	return OK;
+	return output_var->Close(is_binary_clipboard);
 }
 
 
@@ -9471,9 +9479,9 @@ ResultType Line::FileAppend(char *aFilespec, char *aBuf, LoopReadFileStruct *aCu
 		//    (which helps performance).
 		if (mArgc > 0 && sArgVar[0])
 		{
-			if (sArgVar[0]->mType == VAR_CLIPBOARDALL)
+			if (sArgVar[0]->Type() == VAR_CLIPBOARDALL)
 				return WriteClipboardToFile(aFilespec);
-			else if (sArgVar[0]->mIsBinaryClip)
+			else if (sArgVar[0]->IsBinaryClip())
 			{
 				// Since there is at least one deref in Arg #1 and the first deref is binary clipboard,
 				// assume this operation's only purpose is to write binary data from that deref to a file.
@@ -11202,7 +11210,7 @@ ResultType Line::IsJumpValid(Line *aDestination)
 	// This can happen if the Goto's target is at a deeper level than it, or if the target
 	// is at a more shallow level but is in some block totally unrelated to it!
 	// Returns FAIL by default, which is what we want because that value is zero:
-	return LineError("A Goto/Gosub/GroupActivate mustn't jump into a block that doesn't enclose it.");
+	return LineError("A Goto/Gosub mustn't jump into a block that doesn't enclose it."); // Omit GroupActivate from the error msg since that is rare enough to justify the increase in common-case clarify.
 	// Above currently doesn't attempt to detect runtime vs. load-time for the purpose of appending
 	// ERR_ABORT.
 }

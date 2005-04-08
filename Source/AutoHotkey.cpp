@@ -54,11 +54,12 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 
 #ifndef AUTOHOTKEYSC
 	#ifdef _DEBUG
-		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\GUI Demo.ahk";
-		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\MAIN.ahk";
-		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\Expressions.ahk";
 		//char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
-		char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\New Text Document.ahk";
+		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\GUI Demo.ahk";
+		char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\MAIN.ahk";
+		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\Expressions.ahk";
+		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\Benchmarks\\Array write and read.ahk";
+		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\New Text Document.ahk";
 	#else
 		char *script_filespec = NAME_P ".ini";  // Use this extension for better file association with editor(s).
 	#endif
@@ -122,7 +123,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	}
 #endif
 
-	global_init(&g);  // Set defaults prior to the below, since below might override them for AutoIt2 scripts.
+	global_init(g);  // Set defaults prior to the below, since below might override them for AutoIt2 scripts.
 
 // Set up the basics of the script:
 #ifdef AUTOHOTKEYSC
@@ -255,7 +256,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	// of the script.  These new defaults will be put into effect whenever a new hotkey subroutine
 	// is launched.  Each launched subroutine may then change the values for its own purposes without
 	// affecting the settings for other subroutines:
-	global_clear_state(&g);  // Start with a "clean slate" in both g and g_default.
+	global_clear_state(g);  // Start with a "clean slate" in both g and g_default.
 	CopyMemory(&g_default, &g, sizeof(global_struct));
 	// After this point, the values in g_default should never be changed.
 

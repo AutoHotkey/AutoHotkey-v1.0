@@ -39,16 +39,18 @@ static size_t g_CommentFlagLength = strlen(g_CommentFlag); // pre-calculated for
 
 
 Script::Script()
-	: mFirstLine(NULL), mLastLine(NULL), mCurrLine(NULL)
+	: mFirstLine(NULL), mLastLine(NULL), mCurrLine(NULL), mLineCount(0)
 	, mLoopFile(NULL), mLoopRegItem(NULL), mLoopReadFile(NULL), mLoopField(NULL), mLoopIteration(0)
 	, mThisHotkeyName(""), mPriorHotkeyName(""), mThisHotkeyStartTime(0), mPriorHotkeyStartTime(0)
 	, mEndChar(0), mThisHotkeyModifiersLR(0)
 	, mOnExitLabel(NULL), mExitReason(EXIT_NONE)
 	, mFirstLabel(NULL), mLastLabel(NULL)
+	, mFirstFunc(NULL), mLastFunc(NULL)
 	, mFirstTimer(NULL), mLastTimer(NULL), mTimerEnabledCount(0), mTimerCount(0)
 	, mFirstMenu(NULL), mLastMenu(NULL), mMenuCount(0)
-	, mFirstVar(NULL), mLastVar(NULL)
-	, mLineCount(0), mLabelCount(0), mVarCount(0), mGroupCount(0)
+	, mVar(NULL), mVarCount(0), mVarCountMax(0), mLazyVar(NULL), mLazyVarCount(0)
+	, mOpenBlockCount(0), mNextLineIsFunctionBody(false)
+	, mFuncExceptionVar(NULL), mFuncExceptionVarCount(0)
 #ifdef AUTOHOTKEYSC
 	, mCompiledHasCustomIcon(false)
 #endif;
@@ -416,6 +418,14 @@ ResultType Script::CreateWindows()
 		MsgBox("CreateWindow"); // Short msg since so rare.
 		return FAIL;
 	}
+
+	// v1.0.30.05:
+	// Specifying a limit of zero opens the control to its maximum text capacity,
+	// which removes the 32K size restriction.  Testing shows that this does not increase the actual
+	// amount of memory used for controls containing small amounts of text.  All it does is allow
+	// the control to allocate more memory as needed.  By specifying zero, a max
+	// of 64K becomes available on Windows 9x, and perhaps as much as 4 GB on NT/2k/XP.
+	SendMessage(g_hWndEdit, EM_LIMITTEXT, 0, 0);
 
 	// Some of the MSDN docs mention that an app's very first call to ShowWindow() makes that
 	// function operate in a special mode. Therefore, it seems best to get that first call out
@@ -858,7 +868,7 @@ LineNumberType Script::LoadFromFile()
 	//	ACT_IS_IF(mLastLine->mActionType)
 	//	...
 	++mCurrLineNumber;
-	if (AddLine(ACT_EXIT) != OK) // First exit.
+	if (!AddLine(ACT_EXIT)) // First exit.
 		return LOADING_FAILED;
 
 	// Even if the last line of the script is already ACT_EXIT, always add another
@@ -868,7 +878,7 @@ LineNumberType Script::LoadFromFile()
 	// file ends with ELSEless IF or an ELSE, that IF's or ELSE's mRelatedLine
 	// will be non-NULL, which further simplifies script execution:
 	++mCurrLineNumber;
-	if (AddLine(ACT_EXIT) != OK) // Second exit to guaranty non-NULL mRelatedLine(s).
+	if (!AddLine(ACT_EXIT)) // Second exit to guaranty non-NULL mRelatedLine(s).
 		return LOADING_FAILED;
 
 	// Always preparse the blocks before the If/Else's because If/Else may rely on blocks:
@@ -996,10 +1006,13 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 	// File is now open, read lines from it.
 
 	// <buf> should be no larger than LINE_SIZE because some later functions rely upon that:
-	char buf[LINE_SIZE], *hotkey_flag, *cp, *cp1, *hotstring_start, *hotstring_options;
+	char buf[LINE_SIZE], buf_prev[LINE_SIZE] = "", *hotkey_flag, *cp, *cp1, *hotstring_start, *hotstring_options;
 	HookActionType hook_action;
 	size_t buf_length;
-	bool is_label, section_comment = false;
+	bool is_function, is_label, section_comment = false;
+
+	#define MAX_FUNC_VAR_EXCEPTIONS 2000
+	Var *func_exception_var[MAX_FUNC_VAR_EXCEPTIONS];
 
 	// Init both for main file and any included files loaded by this function:
 	mCurrFileNumber = source_file_number;  // source_file_number is kept on the stack due to recursion.
@@ -1026,7 +1039,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			break;
 
 		++mCurrLineNumber; // Keep track of the physical line number in the file for debugging purposes.
-		++line_number; // A local copy on the stack to help with recursion.
+		++line_number;     // A local copy on the stack to help with recursion (when a #Include directive recursively calls us).
 
 		if (!buf_length)
 			continue;
@@ -1051,6 +1064,82 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			continue; // It's now commented out, so the rest of this line is ignored.
 		}
 
+		// Since the neither of the above executed, or they did but didn't "continue",
+		// buf now contains a non-commented line.  If there's a previous line waiting to
+		// be processed, its fate can now be determined based on the nature of *this* line:
+		if (*buf_prev)
+		{
+			// Somewhat messy to decrement then increment later, but it's probably easier than the
+			// alternatives due to the use of "continue" in some places above.  NOTE: line_number
+			// would not need to be decremented+incremented even if the below resulted in a recursive
+			// call to us (though it doesn't currently) because line_number's only purpose is to
+			// remember where this layer left off when the recursion collapses back to us.
+			--mCurrLineNumber; // Done so that any syntax errors that occur during the calls below will report the correct line number.
+			// Open brace means this is a function definition. NOTE: buf was already ltrimmed by GetLine().
+			// Could use *g_act[ACT_BLOCK_BEGIN].Name instead of '{', but it seems to elaborate to be worth it.
+			if (*buf == '{')
+			{
+				// Note that two consecutive function definitions aren't possible:
+				// fn1()
+				// fn2()
+				// {
+				//  ...
+				// }
+				// This is because the first would automatically be deemed a function call by means of
+				// the check higher above (by virtue of the fact that the line after it isn't an open-brace).
+				if (g.CurrentFunc)
+				{
+					// Though it might be allowed in the future -- perhaps to have nested functions have
+					// access to their parent functions' local variables, or perhaps just to improve
+					// script readability and maintainability -- it's currently not allowed because of
+					// the practice of maintaining the func_exception_var list on our stack:
+					ScriptError("Functions cannot contain functions.", buf_prev);
+					return CloseAndReturn(fp, script_buf, FAIL);
+				}
+				if (!DefineFunc(buf_prev, func_exception_var))
+					return CloseAndReturn(fp, script_buf, FAIL);
+			}
+			else // It's either a function call on a line by itself, such as fn(x). It can't be if(..) because another section checked that.
+				if (!ParseAndAddLine(buf_prev, ACT_FUNCTIONCALL))
+					return CloseAndReturn(fp, script_buf, FAIL);
+			++mCurrLineNumber;
+			*buf_prev = '\0'; // Now that it's been fully handled, reset the buf.
+			// Now fall through to the below so that *this* line (the one after it) will be processed.
+			// Note that this line might be a pre-processor directive, label, etc. that won't actually
+			// become a runtime line per se.
+		}
+
+		// By doing the following section prior to checking for hotkey and hotstring labels, double colons do
+		// not need to be escaped inside naked function calls and function definitions such as the following:
+		// fn("::")      ; Function call.
+		// fn(Str="::")  ; Function definition with default value for its param.
+		// The below will make sure it's not a hotstring-in-disguise such as: ::fn("::")
+		// "(:=" is included below to differentiate an isolated fn call or definition from an assignment with
+		// no spaces around the operator.  Example: fn(x) qualifies as a candidate for a formal function
+		// definition, but y:=fn(x) does not.  NOTE: buf was already ltrimmed by GetLine(). In addition,
+		// the above has ensured that it is non-zero length.
+		char *action_end = StrChrAny(buf, "\t (:=");
+		if (!action_end) // Note that action_end is used later below too, so be careful changing this.
+			action_end = buf + strlen(buf);
+		// Now action_end is the position of the terminator, or the tab/space/:/= or '(' following the command name.
+		// It seems best never to allow if(...) to be a function call, even if it's blank inside such as if().
+		// In addition, it seems best not to allow if(...) to ever be a function definition since such a function
+		// could never be called as ACT_FUNCTIONCALL since it would be seen as an IF-stmt instead.
+		if (*action_end == '(' && (action_end - buf != 2 || strnicmp(buf, "IF", 2)))
+		{
+			// This appears to be either a function call or a function definition.
+			*action_end = '\0'; // Temporarily terminate.
+			is_function = Var::ValidateName(buf, false, false); // To ensure it's not a hotstring-in-disguise such as: ::fn("::"), and possibly to filter out other ambiguous things.
+			*action_end = '('; // Undo the temp. termination.
+			if (is_function)
+			{
+				// Defer this line until the next line comes in, which helps determine whether this line is
+				// a function call vs. definition:
+				strcpy(buf_prev, buf);
+				continue;
+			}
+			//else it's a hotstring or some other type of line yet to be determined.  Fall through to the below.
+		}
 
 		// "::" alone isn't a hotstring, it's a label whose name is colon.
 		// Below relies on the fact that no valid hotkey can start with a colon, since
@@ -1178,8 +1267,19 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			}
 		}
 
-		if (is_label) // It's a label and a hotkey.
+		if (is_label) // It's a hotkey/hotstring label.
 		{
+			if (g.CurrentFunc)
+			{
+				// The reason for not allowing hotkeys and hotstrings inside a function's body is that
+				// when the subroutine is launched, the hotstring/hotkey would be using the function's
+				// local variables.  But that is not appropriate and it's likely to cause problems even
+				// if it were.  It doesn't seem useful in any case.  By contrast, normal labels can
+				// safely exist inside a function body and since the body is a block, other validation
+				// ensures that a Gosub or Goto can't jump to it from outside the function.
+				ScriptError("Hotkeys/hotstrings are not allowed inside functions.", buf);
+				return CloseAndReturn(fp, script_buf, FAIL);
+			}
 			*hotkey_flag = '\0'; // Terminate so that buf is now the label itself.
 			hotkey_flag += HOTKEY_FLAG_LENGTH;  // Now hotkey_flag is the hotkey's action, if any.
 			if (!hotstring_start)
@@ -1212,7 +1312,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			if (mNoHotkeyLabels)
 			{
 				mNoHotkeyLabels = false;
-				if (AddLine(ACT_RETURN) != OK)
+				if (!AddLine(ACT_RETURN))
 					return CloseAndReturn(fp, script_buf, FAIL);
 				mCurrLine = NULL;  // To signify that we're in transition, trying to load a new one.
 			}
@@ -1221,7 +1321,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			// the following two hotstring labels to be unique rather than considered duplicates:
 			// ::abc::
 			// :c:abc::
-			if (AddLabel(buf) != OK) // Always add a label before adding the first line of its section.
+			if (!AddLabel(buf)) // Always add a label before adding the first line of its section.
 				return CloseAndReturn(fp, script_buf, FAIL);
 			if (*hotkey_flag) // This hotkey's action is on the same line as its label.
 			{
@@ -1230,12 +1330,12 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 					// But do put in the Return regardless, in case this label is ever jumped to
 					// via Goto/Gosub:
 					if (   !(hook_action = Hotkey::ConvertAltTab(hotkey_flag, false))   )
-						if (ParseAndAddLine(hotkey_flag) != OK)
+						if (!ParseAndAddLine(hotkey_flag)) // Function calls such as fn() are also detected by it.
 							return CloseAndReturn(fp, script_buf, FAIL);
 				// Also add a Return that's implicit for a single-line hotkey.  This is also
 				// done for auto-replace hotstrings in case gosub/goto is ever used to jump
 				// to their labels:
-				if (AddLine(ACT_RETURN) != OK)
+				if (!AddLine(ACT_RETURN))
 					return CloseAndReturn(fp, script_buf, FAIL);
 			}
 			else
@@ -1284,7 +1384,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 		{
 			buf[buf_length - 1] = '\0';  // Remove the trailing colon.
 			rtrim(buf); // Has already been ltrimmed.
-			if (AddLabel(buf) != OK)
+			if (!AddLabel(buf))
 				return CloseAndReturn(fp, script_buf, FAIL);
 			continue;
 		}
@@ -1306,6 +1406,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			// Otherwise it's CONDITION_FALSE.  Do nothing.
 			}
 		}
+
 		// Otherwise it's just a normal script line.
 		// First do a little special handling to support actions on the same line as their
 		// ELSE, e.g.:
@@ -1315,14 +1416,9 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 		// literal_map has to be properly passed in a recursive call to itself, as well
 		// as properly detecting special commands that don't have keywords such as
 		// IF comparisons, ACT_ASSIGN, +=, -=, etc.
-		char *action_start = omit_leading_whitespace(buf);
-		char *action_end = *action_start ? StrChrAny(action_start, "\t ") : NULL;
-		if (!action_end)
-			action_end = action_start + strlen(action_start);
-		// Now action_end is the position of the terminator, or the tab/space following the command name.
-		if (strlicmp(action_start, g_act[ACT_ELSE].Name, (UINT)(action_end - action_start)))
+		if (strlicmp(buf, g_act[ACT_ELSE].Name, (UINT)(action_end - buf))) // It's not an ELSE.
 		{
-			if (ParseAndAddLine(buf) != OK)
+			if (!ParseAndAddLine(buf))
 				return CloseAndReturn(fp, script_buf, FAIL);
 		}
 		else // This line is an ELSE.
@@ -1331,17 +1427,27 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			// would resolve escape sequences throughout the entire length of <buf>, which we
 			// don't want because we wouldn't have access to the corresponding literal-map to
 			// figure out the proper use of escaped characters:
-			if (AddLine(ACT_ELSE) != OK)
+			if (!AddLine(ACT_ELSE))
 				return CloseAndReturn(fp, script_buf, FAIL);
 			mCurrLine = NULL;  // To signify that we're in transition, trying to load a new one.
 			action_end = omit_leading_whitespace(action_end); // Now action_end is the word after the ELSE.
 			if (*action_end == g_delimiter) // Allow "else, action"
 				action_end = omit_leading_whitespace(action_end + 1);
-			if (*action_end && ParseAndAddLine(action_end) != OK)
+			if (*action_end && !ParseAndAddLine(action_end)) // Function calls such as fn() are also detected by it.
 				return CloseAndReturn(fp, script_buf, FAIL);
 			// Otherwise, there was either no same-line action or the same-line action was successfully added,
 			// so do nothing.
 		}
+	} // for each line.
+
+	if (*buf_prev) // Since there's a previous line, but it's the last non-comment line, it must be a function call, not a function definition.
+	{
+		// Somewhat messy to decrement then increment later, but it's probably easier than the
+		// alternatives due to the use of "continue" in some places above.
+		--mCurrLineNumber;
+		if (!ParseAndAddLine(buf_prev))
+			return CloseAndReturn(fp, script_buf, FAIL);
+		++mCurrLineNumber;
 	}
 
 #ifdef AUTOHOTKEYSC
@@ -1627,6 +1733,12 @@ inline ResultType Script::IsDirective(char *aBuf)
 		if (parameter && Line::ConvertOnOff(parameter) == TOGGLED_OFF)
 			g_MaxThreadsBuffer = false;
 		// else leave the default to "true" as set above.
+		return CONDITION_TRUE;
+	}
+	if (IS_DIRECTIVE_MATCH("#ClipboardTimeout"))
+	{
+		if (parameter)
+			g_ClipboardTimeout = ATOI(parameter);  // parameter was set to the right position by the above macro
 		return CONDITION_TRUE;
 	}
 	if (IS_DIRECTIVE_MATCH("#HotkeyModifierTimeout"))
@@ -1923,7 +2035,7 @@ ResultType Script::AddLabel(char *aLabelName)
 		// label1:
 		// label1:  <-- This would be a dupe-error but it doesn't yet have an mJumpToLine.
 		// return
-		return ScriptError("This label has been defined more than once.", aLabelName);
+		return ScriptError("Duplicate label.", aLabelName);
 	char *new_name = SimpleHeap::Malloc(aLabelName);
 	if (!new_name)
 		return FAIL;  // It already displayed the error for us.
@@ -1939,15 +2051,13 @@ ResultType Script::AddLabel(char *aLabelName)
 		// This must be done after the above:
 		mLastLabel = the_new_label;
 	}
-	++mLabelCount;
 	return OK;
 }
 
 
 
-ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEndMarker
-	, char *aLiteralMap, size_t aLiteralMapLength
-	, ActionTypeType aActionType, ActionTypeType aOldActionType)
+ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, ActionTypeType aOldActionType
+	, char *aActionName, char *aEndMarker, char *aLiteralMap, size_t aLiteralMapLength)
 // Returns OK or FAIL.
 // aLineText needs to be a string whose contents are modifiable (this
 // helps performance by allowing the string to be split into sections
@@ -1969,22 +2079,177 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 		strcpy(action_name, aActionName);
 		end_marker = aEndMarker;
 	}
-	else
+	else if (aActionType == ACT_FUNCTIONCALL // Caller determined this for us.
+		|| (end_marker = StrChrAny(aLineText, "\t (:=")) && *end_marker == '(' // Relies on short-circuit boolean order.
+			&& (end_marker - aLineText != 2 || strnicmp(aLineText, "IF", 2))) // if(...) is always an IF, not a function call.
+	{
+		// The above check is similar to the ones done in LoadIncludedFile() to detect functions, so
+		// maintain them together.
+		aActionType = ACT_FUNCTIONCALL;
+		*action_name = '\0';
+		end_marker = NULL; // Indicate that there is no action to mark the end of.
+	}
+	else // We weren't called recursively from self, nor is it ACT_FUNCTIONCALL, so set action_name and end_marker the normal way.
+	{
+		for (;;) // A loop with only one iteration so that "break" can be used instead of a lot of nested if's.
+		{
+			if (!g.CurrentFunc) // Not inside a function body, so "Global"/"Local"/"Static" get no special treatment.
+				break;
+
+			#define VAR_DECLARE_NONE   0
+			#define VAR_DECLARE_GLOBAL 1
+			#define VAR_DECLARE_LOCAL  2
+			#define VAR_DECLARE_STATIC 3
+			int declare_type;
+			char *cp;
+			if (!strnicmp(aLineText, "Global", 6)) // Checked first because it's more common than the others.
+			{
+				cp = aLineText + 6; // The character after the declaration word.
+				declare_type = VAR_DECLARE_GLOBAL;
+			}
+			else if (!strnicmp(aLineText, "Local", 5))
+			{
+				cp = aLineText + 5; // The character after the declaration word.
+				declare_type = VAR_DECLARE_LOCAL;
+			}
+			else if (!strnicmp(aLineText, "Static", 6)) // Static also implies local (for functions that default to global).
+			{
+				cp = aLineText + 6; // The character after the declaration word.
+				declare_type = VAR_DECLARE_STATIC;
+			}
+			else // It's not the word "global", "local", or static, so no further checking is done.
+				break;
+
+			if (*cp && !IS_SPACE_OR_TAB(*cp)) // There is a character following the word local but it's not a space or tab.
+				break; // It doesn't qualify as being the global or local keyword because it's something like global2.
+			if (*cp && *(cp = omit_leading_whitespace(cp))) // Probably always a true stmt since caller rtrimmed it, but even if not it's handled correctly.
+			{
+				// Check whether the first character is an operator by seeing if it alone would be a
+				// valid variable name.  If it's not valid, this doesn't qualify as the global or local
+				// keyword because it's something like this instead:
+				// local := xyz
+				// local += 3
+				char orig_char = cp[1];
+				cp[1] = '\0'; // Temporarily terminate.
+				ResultType result = Var::ValidateName(cp, false, false);
+				cp[1] = orig_char; // Undo the termination.
+				if (!result) // It's probably operator, e.g. local = %var%
+					break;
+			}
+			else // It's the word "global", "local", "static" by itself.  But only global is valid that way (when it's the first line in the function body).
+			{
+				// All of the following must be checked to catch back-to-back conflicting declarations such
+				// as these:
+				// global x
+				// global  ; Should be an error because global vars are implied/automatic.
+				if (declare_type == VAR_DECLARE_GLOBAL && mNextLineIsFunctionBody && g.CurrentFunc->mDefaultVarType == VAR_ASSUME_NONE)
+				{
+					g.CurrentFunc->mDefaultVarType = VAR_ASSUME_GLOBAL;
+					// No further action is required for the word "global" by itself.
+					return OK;
+				}
+				// Otherwise, it's the word "local"/"static" by itself or "global" by itself but that occurs too far down in the body.
+				return ScriptError(ERR_UNRECOGNIZED_ACTION, aLineText); // Vague error since so rare.
+			}
+			if (mNextLineIsFunctionBody && g.CurrentFunc->mDefaultVarType == VAR_ASSUME_NONE)
+			{
+				// Both of the above must be checked to catch back-to-back conflicting declarations such
+				// as these:
+				// local x
+				// global y  ; Should be an error because global vars are implied/automatic.
+				// This line will become first non-directive, non-label line in the function's body.
+
+				// If the first non-directive, non-label line in the function's body contains
+				// the "local" keyword, everything inside this function will assume that variables
+				// are global unless they are explicitly declared local (this is the opposite of
+				// the default).  The converse is also true.  UPDATE: "static" must also force ASSUME_LOCAL
+				// into effect because otherwise statics wouldn't go into the exception list and thus
+				// wouldn't be properly looked up when they're referenced throughout the function body.
+				// Therefore, if the first line of the function body is "static MyVar", VAR_DECLARE_LOCAL
+				// goes into effect permanently, which can be worked around by using the word "global"
+				// as the first word of the function instead.
+				g.CurrentFunc->mDefaultVarType = declare_type == VAR_DECLARE_LOCAL ? VAR_ASSUME_GLOBAL : VAR_ASSUME_LOCAL;
+			}
+			else // Since this isn't the first line of the function's body, mDefaultVarType has aleady been set permanently.
+			{
+				// Seems best to flag errors since they might be an indication to the user that something
+				// is being done incorrectly in this function, not to mention being a reminder about what
+				// mode the function is in:
+				if (g.CurrentFunc->mDefaultVarType == VAR_ASSUME_GLOBAL)
+				{
+					if (declare_type == VAR_DECLARE_GLOBAL)
+						return ScriptError("Global variables do not need to be declared in this function.", aLineText);
+				}
+				else // Must be VAR_ASSUME_LOCAL at this stage.
+					if (declare_type == VAR_DECLARE_LOCAL)
+						return ScriptError("Local variables do not need to be declared in this function.", aLineText);
+			}
+			// Since above didn't break or return, a variable is being declared as an exception to the
+			// mode specified by mDefaultVarType (except if it's a static, which would be an exception
+			// only if VAR_ASSUME_GLOBAL is in effect, since statics are implicitly local).
+
+			// If the declare_type is local or global, inversion must be done (i.e. this will be an exception
+			// variable) because otherwise it would have already displayed an "unnecessary declaration" error
+			// and returned above.  But if the declare_type is static, and given that all static variables are
+			// local, inversion is necessary only if the current mode isn't LOCAL:
+			bool is_already_exception, is_exception = (declare_type != VAR_DECLARE_STATIC
+				|| g.CurrentFunc->mDefaultVarType == VAR_ASSUME_GLOBAL); // Above has ensured that NONE can't be in effect by the time we reach the first static.
+			for (char *item = cp; *item;)
+			{
+				char *item_end = StrChrAny(item, ", \t");  // Comma, space or tab.
+				if (!item_end)
+					item_end = item + strlen(item);
+				int always_use;
+				if (is_exception)
+					always_use = g.CurrentFunc->mDefaultVarType == VAR_ASSUME_GLOBAL ? ALWAYS_USE_LOCAL : ALWAYS_USE_GLOBAL;
+				else
+					always_use = ALWAYS_USE_DEFAULT;
+				Var *var;
+				if (   !(var = FindOrAddVar(item, item_end - item, always_use, &is_already_exception))   )
+					return FAIL; // It already displayed the error.
+				if (is_already_exception) // It was already in the exception list (previously declared).
+					return ScriptError("Duplicate declaration.", item);
+				if (var->Type() != VAR_NORMAL || !strlicmp(item, "ErrorLevel", (UINT)(item_end - item))) // Shouldn't be declared either way (global or local).
+					return ScriptError("Built-in variables are always global and should not be declared.", item);
+				for (int i = 0; i < g.CurrentFunc->mParamCount; ++i) // Search by name to find both global and local declarations.
+					if (!strlicmp(item, g.CurrentFunc->mParam[i]->mName, (UINT)(item_end - item)))
+						return ScriptError("Parameters must not be declared.", item);
+				if (is_exception)
+				{
+					if (mFuncExceptionVarCount >= MAX_FUNC_VAR_EXCEPTIONS)
+						return ScriptError("Too many declarations.", item); // Short message since it's so unlikely.
+					mFuncExceptionVar[mFuncExceptionVarCount++] = var;
+				}
+				if (declare_type == VAR_DECLARE_STATIC)
+					var->OverwriteAttrib(VAR_ATTRIB_STATIC);
+				item = omit_leading_whitespace(item_end);
+				if (*item == ',')
+					item = omit_leading_whitespace(item + 1);
+			}
+			return OK;
+		} // single-iteration for-loop
+
+		// Since above didn't return, it's not a declaration such as "global MyVar".
 		if (   !(end_marker = ParseActionType(action_name, aLineText, true))   )
 			return FAIL; // It already displayed the error.
-
+	}
+	
+	// Above has ensured that end_marker is the address of the last character of the action name,
+	// or NULL if there is no action name.
 	// Find the arguments (not to be confused with exec_params) of this action, if it has any:
-	char *action_args = omit_leading_whitespace(end_marker + 1);
+	char *action_args = end_marker ? omit_leading_whitespace(end_marker + 1) : aLineText;
+
 	// Now action_args is either the first delimiter or the first parameter (if it optional first
-	// delimiter was omitted):
-	bool is_var_and_operator;
+	// delimiter was omitted).
+
+	bool is_var_and_operator = false; // Set default.
 	if (*action_args == g_delimiter)
 	{
-		is_var_and_operator = false;  // Since there's a comma, we know it's not, e.g. something, += 4
+		// Since there's a comma, leave is_var_and_operator should as false, e.g. "something, += 4" is invalid.
 		// Find the start of the next token (or its ending delimiter if the token is blank such as ", ,"):
 		for (++action_args; IS_SPACE_OR_TAB(*action_args); ++action_args);
 	}
-	else
+	else if (!aActionType)
 	{
 		// The next line is used to help avoid ambiguity of a line such as the following:
 		// Input = test  ; Would otherwise be confused with the Input command.
@@ -1994,9 +2259,9 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 		// MsgBox, =
 		switch(*action_args)
 		{
-		case '=':
-		case ':':  // i.e. :=
-		case '(':  // i.e. "if (expr)"
+		case '=':  // i.e. var=value  (with no spaces around operator)
+		case ':':  // i.e. var:=value (with no spaces around operator)
+		case '(':  // i.e. "if(expr)" (with no space between the if and the open-paren).
 			is_var_and_operator = true;
 			break;
 		case '*':
@@ -2009,10 +2274,11 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 			// SetBatchLines -1
 			is_var_and_operator = *(action_args + 1) == '=';
 			break;
-		default:
-			is_var_and_operator = false;
+		// Otherwise (default): Leave is_var_and_operator set to false.
 		}
 	}
+	//else aActionType is not ACT_INVALID, so leave is_var_and_operator set to false.
+
 	// Now the above has ensured that action_args is the first parameter itself, or empty-string if none.
 	// If action_args now starts with a delimiter, it means that the first param is blank/empty.
 
@@ -2275,7 +2541,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 		// Since literal map is NOT a string, just an array of char values, be sure to
 		// use memcpy() vs. strcpy() on it.  Also, caller's aLiteralMap starts at aEndMarker,
 		// so adjust it so that it starts at the newly found position of action_args instead:
-		int map_offset = (int)(action_args - end_marker);
+		int map_offset = (int)(action_args - end_marker);  // end_marker is known not to be NULL when aLiteralMap is non-NULL.
 		int map_length = (int)(aLiteralMapLength - map_offset);
 		if (map_length > 0)
 			memcpy(literal_map, aLiteralMap + map_offset, map_length);
@@ -2444,7 +2710,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 				}
 			}
 		}
-	}
+	} // end of special handling for MsgBox.
 
 
 	////////////////////////////////////////////////////////////
@@ -2452,15 +2718,16 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 	////////////////////////////////////////////////////////////
 	// MaxParams has already been verified as being <= MAX_ARGS.
 	// Any g_delimiter-delimited items beyond MaxParams will be included in a lump inside the last param:
-	int nArgs, nArgs_plus_one;
+	int nArgs, nArgs_plus_one, open_parens;
 	char *arg[MAX_ARGS], *arg_map[MAX_ARGS];
 	ActionTypeType subaction_type = ACT_INVALID; // Must init these.
 	ActionTypeType suboldaction_type = OLD_INVALID;
 	char subaction_name[MAX_VAR_NAME_LENGTH + 1], *subaction_end_marker = NULL, *subaction_start = NULL;
 	int max_params = max_params_override ? max_params_override : this_action->MaxParams;
 	int max_params_minus_one = max_params - 1;
-	bool in_quotes;
+	bool in_quotes, is_expression;
 	ActionTypeType *np;
+
 	for (nArgs = mark = 0; action_args[mark] && nArgs < max_params; ++nArgs)
 	{
 		if (nArgs == 2) // i.e. the 3rd arg is about to be added.
@@ -2494,29 +2761,83 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 			++nArgs;
 			break;
 		}
+		// The above does not need the in_quotes and in_parens checks because commas in the last arg
+		// are always literal, so there's no problem even in expressions.
+
+		is_expression = *arg[nArgs] == g_DerefChar && !*arg_map[nArgs] // It's a non-literal deref character.
+			&& IS_SPACE_OR_TAB(arg[nArgs][1]); // Followed by a space or tab.
+
 		// Find the end of the above arg:
-		for (in_quotes = false; action_args[mark]; ++mark)
+		for (in_quotes = false, open_parens = 0; action_args[mark]; ++mark)
 		{
-			// The simple method below is sufficient for our purpose even if a quoted string contains
-			// pairs of double-quotes to represent a single literal quote, e.g. "quoted ""word""".
-			// In other words, it relies on the fact that there must be an even number of quotes
-			// inside any mandatory-numeric arg that is an expressions such as x=="red,blue"
-			if (action_args[mark] == '"')
+			switch (action_args[mark])
+			{
+			case '"':
+				// The simple method below is sufficient for our purpose even if a quoted string contains
+				// pairs of double-quotes to represent a single literal quote, e.g. "quoted ""word""".
+				// In other words, it relies on the fact that there must be an even number of quotes
+				// inside any mandatory-numeric arg that is an expression such as x=="red,blue"
 				in_quotes = !in_quotes;
+				break;
+			case '(':
+				if (!in_quotes) // Literal parens inside a quoted string should not be counted for this purpose.
+					++open_parens;
+				break;
+			case ')':
+				if (!in_quotes)
+					--open_parens;
+				break;
+			}
+
 			if (action_args[mark] == g_delimiter && !literal_map[mark])  // A non-literal delimiter (unless its within double-quotes of a mandatory-numeric arg) is a match.
 			{
-				// If we're inside a pair of quotes and this arg is mandatory-numeric, this delimiter
-				// is part of the quoted string and thus not a delimiter:
-				if (in_quotes && (np = g_act[action_type].NumericParams)) // This command has at least one numeric parameter.
+				// If we're inside a pair of quotes or parens and this arg is known to be an expression, this
+				// delimiter is part this arg and thus not to be used as a delimiter between command args:
+				if (in_quotes || open_parens > 0)
 				{
-					// As of v1.0.25, pure numeric parameters can optionally be numeric expressions, so check for that:
-					nArgs_plus_one = nArgs + 1;
-					for (; *np; ++np)
-						if (*np == nArgs_plus_one) // This arg is enforced to be purely numeric.
-							break;
-					if (*np) // Match found, so this is a purely numeric arg.
-						continue; // This delimiter is disqualified, so look for the next one.
-				}
+					if (is_expression)
+						continue;
+					if (action_type == ACT_TRANSFORM && (nArgs == 2 || nArgs == 3)) // i.e. the 3rd or 4th arg is about to be added.
+					{
+						// Somewhat inefficient in the case where it has to be called for both Arg#2 and Arg#3,
+						// but that is pretty rare.  Overall, expressions and quoted strings in these args
+						// is rare too, so the inefficiency of redundant calls to ConvertTransformCmd() is
+						// very small on average, and seems worth the benefit in terms of code simplification.
+						// Note that the following might return TRANS_CMD_INVALID just because the sub-command
+						// is containined in a variable reference.  That is why TRANS_CMD_INVALID does not
+						// produce an error at this stage, but only later when the line has been constructed
+						// far enough to call ArgHasDeref():
+						// i.e. Not the first param, only the third and fourth, which currently are either both numeric or both non-numeric for all cases.
+						switch(Line::ConvertTransformCmd(arg[1])) // arg[1] is the second arg.
+						{
+						// See comment above for why TRANS_CMD_INVALID isn't yet reported as an error:
+						#define TRANSFORM_NON_EXPRESSION_CASES \
+						case TRANS_CMD_INVALID:\
+						case TRANS_CMD_ASC:\
+						case TRANS_CMD_UNICODE:\
+						case TRANS_CMD_DEREF:\
+						case TRANS_CMD_HTML:\
+							break; // Do nothing.  Leave this_new_arg.is_expression set to its default of false.
+						TRANSFORM_NON_EXPRESSION_CASES
+						default:
+							// For all other sub-commands, Arg #3 and #4 are expression-capable.  It doesn't
+							// seem necessary to call LegacyArgIsExpression() because the mere fact that
+							// we're inside a pair of quotes or parens seems enough to indicate that this
+							// really is an expression.
+							continue;
+						}
+					}
+					if (np = g_act[action_type].NumericParams) // This command has at least one numeric parameter.
+					{
+						// As of v1.0.25, pure numeric parameters can optionally be numeric expressions, so check for that:
+						nArgs_plus_one = nArgs + 1;
+						for (; *np; ++np)
+							if (*np == nArgs_plus_one) // This arg is enforced to be purely numeric.
+								break;
+						if (*np) // Match found, so this is a purely numeric arg.
+							continue; // This delimiter is disqualified, so look for the next one.
+					}
+				} // if in quotes or parens
 				// Since above didn't "continue", this is a real delimiter.
 				action_args[mark] = '\0';  // Terminate the previous arg.
 				// Trim any whitespace from the previous arg.  This operation
@@ -2590,7 +2911,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 			arg[0] = "Tray"; // Assign only after we're done using the old arg[0] value above.
 			return AddLine(ACT_MENU, arg, 2, arg_map);
 		case OLD_REPEAT:
-			if (AddLine(ACT_REPEAT, arg, nArgs, arg_map) != OK)
+			if (!AddLine(ACT_REPEAT, arg, nArgs, arg_map))
 				return FAIL;
 			// For simplicity, always enclose repeat-loop's contents in in a block rather
 			// than trying to detect if it has only one line:
@@ -2607,7 +2928,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 			// Command #1: WinGetTitle, OutputVar, A
 			char *width = arg[1];  // Temporary placeholder.
 			arg[1] = "A";  arg_map[1] = NULL;  // Signifies the active window.
-			if (AddLine(ACT_WINGETTITLE, arg, 2, arg_map) != OK)
+			if (!AddLine(ACT_WINGETTITLE, arg, 2, arg_map))
 				return FAIL;
 			// Command #2: WinGetPos, XPos, YPos, Width, Height, A
 			// Reassign args in the new command's ordering.  These lines must occur
@@ -2696,7 +3017,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 		}
 	}
 
-	if (AddLine(action_type, arg, nArgs, arg_map) != OK)
+	if (!AddLine(action_type, arg, nArgs, arg_map))
 		return FAIL;
 	if (!subaction_type && !suboldaction_type) // There is no subaction in this case.
 		return OK;
@@ -2707,9 +3028,9 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 	// IfWinExist, x, y
 	//    IfWinNotExist, a, b
 	//       Gosub, Sub1
-	return ParseAndAddLine(subaction_start, subaction_name, subaction_end_marker
+	return ParseAndAddLine(subaction_start, subaction_type, suboldaction_type, subaction_name, subaction_end_marker
 		, literal_map + (subaction_end_marker - action_args) // Pass only the relevant substring of literal_map.
-		, strlen(subaction_end_marker), subaction_type, suboldaction_type);
+		, strlen(subaction_end_marker));
 }
 
 
@@ -2747,8 +3068,7 @@ inline char *Script::ParseActionType(char *aBufTarget, char *aBufSource, bool aD
 	if (action_name_length > MAX_VAR_NAME_LENGTH)
 	{
 		if (aDisplayErrors)
-			ScriptError("The first word in this line is too long to be any valid command or variable name."
-				, aBufSource);
+			ScriptError(ERR_UNRECOGNIZED_ACTION, aBufSource); // Short/vague message since so rare.
 		return NULL;
 	}
 	strlcpy(aBufTarget, aBufSource, action_name_length + 1);
@@ -2814,13 +3134,11 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 // must be at least MAX_ARGS number of pointers in the aArg array.
 // Returns OK or FAIL.
 {
+#ifdef _DEBUG
 	if (aActionType == ACT_INVALID)
 		return ScriptError("BAD AddLine", aArgc > 0 ? aArg[0] : "");
+#endif
 
-	//////////////////////////////////////////////////////////
-	// Build the new arg list in dynamic memory.
-	// The allocated structs will be attached to the new line.
-	//////////////////////////////////////////////////////////
 	Var *target_var;
 	DerefType deref[MAX_DEREFS_PER_ARG];  // Will be used to temporarily store the var-deref locations in each arg.
 	int deref_count;  // How many items are in deref array.
@@ -2831,14 +3149,22 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	int open_parens;
 	ActionTypeType *np;
 	TransformCmds trans_cmd;
+	bool is_function;
 
+	//////////////////////////////////////////////////////////
+	// Build the new arg list in dynamic memory.
+	// The allocated structs will be attached to the new line.
+	//////////////////////////////////////////////////////////
 	if (!aArgc)
 		new_arg = NULL;  // Just need an empty array in this case.
 	else
 	{
 		if (   !(new_arg = (ArgStruct *)SimpleHeap::Malloc(aArgc * sizeof(ArgStruct)))   )
 			return ScriptError(ERR_OUTOFMEM);
+
 		int i, j, i_plus_one;
+		bool in_quotes;
+
 		for (i = 0; i < aArgc; ++i)
 		{
 			////////////////
@@ -2862,13 +3188,10 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				{
 					switch(trans_cmd)
 					{
-					case TRANS_CMD_INVALID: // See comment above for why this isn't yet reported as an error.
-					case TRANS_CMD_ASC:
-					case TRANS_CMD_UNICODE:
-					case TRANS_CMD_DEREF:
-					case TRANS_CMD_HTML:
-						break; // Do nothing.  Leave this_new_arg.is_expression set to its default of false.
-					default: // For all other sub-commands, Arg #3 and #4 are expression-capable.
+					TRANSFORM_NON_EXPRESSION_CASES
+					default:
+						// For all other sub-commands, Arg #3 and #4 are expression-capable and will be made so
+						// if they pass the following check:
 						this_new_arg.is_expression = LegacyArgIsExpression(this_aArg, this_aArgMap);
 					}
 				}
@@ -2937,7 +3260,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					&& IS_SPACE_OR_TAB(this_aArg[1])) // Followed by a space or tab.
 				{
 					this_new_arg.is_expression = true;
-					// Omit the asterisk and the space after it from further consideration.
+					// Omit the percent sign and the space after it from further consideration.
 					this_aArg += 2;
 					this_aArgMap += 2;
 					// ACT_ASSIGN isn't capable of dealing with expressions because ExecUntil() does not
@@ -3018,19 +3341,33 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			if (this_new_arg.is_expression)
 			{
 				// Ensure parentheses are balanced:
-				for (cp = this_new_arg.text, open_parens = 0; *cp; ++cp)
+				for (cp = this_new_arg.text, in_quotes = false, open_parens = 0; *cp; ++cp)
 				{
-					if (*cp == '(')
-						++open_parens;
-					else if (*cp == ')')
+					switch (*cp)
 					{
-						if (!open_parens)
-							return ScriptError("Close-paren with no open-paren.", cp); // And indicate cp as the exact spot.
-						--open_parens;
+					// The simple method below is sufficient for our purpose even if a quoted string contains
+					// pairs of double-quotes to represent a single literal quote, e.g. "quoted ""word""".
+					// In other words, it relies on the fact that there must be an even number of quotes
+					// inside any mandatory-numeric arg that is an expression such as x=="red,blue"
+					case '"':
+						in_quotes = !in_quotes;
+						break;
+					case '(':
+						if (!in_quotes) // Literal parens inside a quoted string should not be counted for this purpose.
+							++open_parens;
+						break;
+					case ')':
+						if (!in_quotes)
+						{
+							if (!open_parens)
+								return ScriptError("Close-paren with no open-paren.", cp); // And indicate cp as the exact spot.
+							--open_parens;
+						}
+						break;
 					}
 				}
 				if (open_parens) // At least one open-paren is never closed.
-					return ScriptError("Missing \")\"", this_new_arg.text);
+					return ScriptError(ERR_MISSING_CLOSE_PAREN, this_new_arg.text);
 
 				// ParseDerefs() won't consider escaped percent signs to be illegal, but in this case
 				// they should be since they have no meaning in expressions:
@@ -3075,6 +3412,13 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					// Find the end of this operand (if *op_end is '\0', strchr() will find that too):
 					for (op_end = op_begin + 1; !strchr(EXP_OPERAND_TERMINATORS, *op_end); ++op_end); // Find first whitespace, operator, or paren.
 					// Now op_end marks the end of this operand.  The end might be the zero terminator, an operator, etc.
+
+					// Must be done only after op_end has been set above (since loop uses op_end):
+					if (*op_begin == '.' && IS_SPACE_OR_TAB(op_begin[1])) // If true, it can't be something like "5." because the dot inside would never be parsed separately in that case.
+						continue;
+					//else any '.' not followed by a space or tab is likely a number without a leading zero,
+					// so continue on below to process it.
+
 					operand_length = op_end - op_begin;
 
 					// Check if it's AND/OR/NOT:
@@ -3115,7 +3459,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					*op_end = '\0';
 
 					// Illegal characters are legal when enclosed in double quotes.  So the following is
-					// done only after the above has ensured this operand is one enclosed entirely in
+					// done only after the above has ensured this operand is not one enclosed entirely in
 					// double quotes.
 					// The following characters are either illegal in expressions or reserved for future use.
 					// Rather than forbidding g_delimiter and g_DerefChar, it seems best to assume they are at
@@ -3128,11 +3472,14 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					// inside of something like 0xFF from being detected as the name of a variable:
 					if (!IsPureNumeric(op_begin, true, false, true))
 					{
+						is_function = (orig_char == '(');
 						// This operand must be a variable reference or string literal, otherwise it's a syntax error.
 						// Check explicitly for derefs since the vast majority don't have any, and this
 						// avoids the function call in those cases:
-						if (strchr(op_begin, g_DerefChar)) // This operand contains at least one variable reference.
+						if (strchr(op_begin, g_DerefChar)) // This operand contains at least one double dereference.
 						{
+							if (is_function)
+								return ScriptError("Dynamic function-calls are not supported.", op_begin);
 							// The derefs are parsed and added to the deref array at this stage (on a
 							// per-operand basis) rather than all at once for the entire arg because
 							// the deref array must be ordered according to the physical position of
@@ -3144,15 +3491,26 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 							// In the following example, i made into a deref but the result (Array33) must be
 							// dereferenced during a second stage at runtime: if (x = Array%i%).
 						}
-						else // This operand is a variable name.
+						else // This operand is a variable name or function name (single deref).
 						{
-							#define TOO_MANY_VAR_REFS "Too many var refs." // Short msg since so rare.
+							#define TOO_MANY_REFS "Too many var/func refs." // Short msg since so rare.
 							if (deref_count >= MAX_DEREFS_PER_ARG)
-								return ScriptError(TOO_MANY_VAR_REFS, op_begin); // Indicate which operand it ran out of space at.
-							deref[deref_count].marker = op_begin;  // Store the deref's starting location.
+								return ScriptError(TOO_MANY_REFS, op_begin); // Indicate which operand it ran out of space at.
+							// Store the deref's starting location, even for functions (leave it set to the start
+							// of the function's name for use when doing error reporting at other stages -- i.e.
+							// don't set it to the address of the first param or closing-paren-if-no-params):
+							deref[deref_count].marker = op_begin;
 							deref[deref_count].length = (DerefLengthType)operand_length;
-							if (   !(deref[deref_count].var = FindOrAddVar(op_begin, operand_length))   )
-								return FAIL; // The called function already displayed the error.
+							if (deref[deref_count].is_function = is_function) // Assign.
+								// Set to NULL to catch bugs.  It must and will be filled in at a later stage
+								// because the setting of each function's mJumpToLine relies upon the fact that
+								// functions are added to the linked list only upon being formally defined
+								// so that the most recently defined function is always last in the linked
+								// list, awaiting its mJumpToLine that will appear beneath it.
+								deref[deref_count].func = NULL;
+							else
+								if (   !(deref[deref_count].var = FindOrAddVar(op_begin, operand_length))   )
+									return FAIL; // The called function already displayed the error.
 							++deref_count;
 						}
 					}
@@ -3233,7 +3591,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					// The following is needed to allow "Var := ClipboardAll" to work because that
 					// method is handled correctly only by ACT_ASSIGN. Everything else is left as
 					// ACT_ASSIGNEXPR because it probably performs better than ACT_ASSIGN in these cases:
-					if (aActionType == ACT_ASSIGNEXPR && deref[0].var->mType == VAR_CLIPBOARDALL)
+					if (aActionType == ACT_ASSIGNEXPR && !deref[0].is_function && deref[0].var->Type() == VAR_CLIPBOARDALL)
 						aActionType = ACT_ASSIGN;
 				}
 				else if (deref_count && !StrChrAny(this_new_arg.text, EXP_OPERAND_TERMINATORS)) // No spaces, tabs, etc.
@@ -3263,7 +3621,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					// Also, the first deref (indeed, all of them) should point to a percent sign, since
 					// there should not be any way for non-percent derefs to get mixed in with cases
 					// 2 or 3.
-					if (*deref[0].marker == g_DerefChar) // This appears to be case #2 or #3.
+					if (!deref[0].is_function && *deref[0].marker == g_DerefChar) // This appears to be case #2 or #3.
 					{
 						// Set it up so that x:=Array%i% behaves the same as StringTrimRight, Out, Array%i%, 0.
 						this_new_arg.is_expression = false;
@@ -3281,17 +3639,11 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			if (deref_count)
 			{
 				// +1 for the "NULL-item" terminator:
-				this_new_arg.deref = (DerefType *)SimpleHeap::Malloc((deref_count + 1) * sizeof(DerefType));
-				if (!this_new_arg.deref)
+				if (   !(this_new_arg.deref = (DerefType *)SimpleHeap::Malloc((deref_count + 1) * sizeof(DerefType)))   )
 					return ScriptError(ERR_OUTOFMEM);
-				for (j = 0; j < deref_count; ++j)
-					this_new_arg.deref[j] = deref[j]; // Fortunately, struct copying does not generate a large amount of code.
-				// Terminate the list of derefs with a deref that has a NULL marker,
-				// but only if the last one added isn't NULL (which it would be if it's
-				// the fake-deref used to store an output-parameter's variable):
-				if (this_new_arg.deref[deref_count - 1].marker)
-					this_new_arg.deref[deref_count].marker = NULL;
-					// No need to increment deref_count since it's never used beyond this point.
+				memcpy(this_new_arg.deref, deref, deref_count * sizeof(DerefType));
+				// Terminate the list of derefs with a deref that has a NULL marker:
+				this_new_arg.deref[deref_count].marker = NULL;
 			}
 			else
 				this_new_arg.deref = NULL;
@@ -3302,19 +3654,22 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	// Now the above has allocated some dynamic memory, the pointers to which we turn over
 	// to Line's constructor so that they can be anchored to the new line.
 	//////////////////////////////////////////////////////////////////////////////////////
-	Line *line = new Line(mCurrFileNumber, mCurrLineNumber, aActionType, new_arg, aArgc);
-	if (line == NULL)
+	Line *the_new_line = new Line(mCurrFileNumber, mCurrLineNumber, aActionType, new_arg, aArgc);
+	if (!the_new_line)
 		return ScriptError(ERR_OUTOFMEM);
-	line->mPrevLine = mLastLine;  // Whether NULL or not.
+
+	Line &line = *the_new_line;  // For performance and convenience.
+
+	line.mPrevLine = mLastLine;  // Whether NULL or not.
 	if (mFirstLine == NULL)
-		mFirstLine = mLastLine = line;
+		mFirstLine = mLastLine = the_new_line;
 	else
 	{
-		mLastLine->mNextLine = line;
+		mLastLine->mNextLine = the_new_line;
 		// This must be done after the above:
-		mLastLine = line;
+		mLastLine = the_new_line;
 	}
-	mCurrLine = line;  // To help error reporting.
+	mCurrLine = the_new_line;  // To help error reporting.
 
 	///////////////////////////////////////////////////////////////////
 	// Do any post-add validation & handling for specific action types.
@@ -3325,17 +3680,22 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 
 	switch(aActionType)
 	{
+	case ACT_RETURN:
+		if (aArgc > 0 && !g.CurrentFunc)
+			return ScriptError("Return's parameter should be blank except inside a function.");
+		break;
+
 	case ACT_AUTOTRIM:
 	case ACT_STRINGCASESENSE:
 	case ACT_DETECTHIDDENWINDOWS:
 	case ACT_DETECTHIDDENTEXT:
 	case ACT_SETSTORECAPSLOCKMODE:
-		if (aArgc > 0 && !line->ArgHasDeref(1) && !line->ConvertOnOff(NEW_RAW_ARG1))
+		if (aArgc > 0 && !line.ArgHasDeref(1) && !line.ConvertOnOff(NEW_RAW_ARG1))
 			return ScriptError(ERR_ON_OFF, NEW_RAW_ARG1);
 		break;
 
 	case ACT_SETBATCHLINES:
-		if (aArgc > 0 && !line->ArgHasDeref(1))
+		if (aArgc > 0 && !line.ArgHasDeref(1))
 		{
 			if (!strcasestr(NEW_RAW_ARG1, "ms") && !IsPureNumeric(NEW_RAW_ARG1, true, false))
 				return ScriptError("Parameter #1 must be an integer, an interval string such as 15ms,"
@@ -3344,40 +3704,40 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_SUSPEND:
-		if (aArgc > 0 && !line->ArgHasDeref(1) && !line->ConvertOnOffTogglePermit(NEW_RAW_ARG1))
+		if (aArgc > 0 && !line.ArgHasDeref(1) && !line.ConvertOnOffTogglePermit(NEW_RAW_ARG1))
 			return ScriptError(ERR_ON_OFF_TOGGLE_PERMIT, NEW_RAW_ARG1);
 		break;
 
 	case ACT_BLOCKINPUT:
-		if (aArgc > 0 && !line->ArgHasDeref(1) && !line->ConvertBlockInput(NEW_RAW_ARG1))
+		if (aArgc > 0 && !line.ArgHasDeref(1) && !line.ConvertBlockInput(NEW_RAW_ARG1))
 			return ScriptError(ERR_BLOCKINPUT, NEW_RAW_ARG1);
 		break;
 
 	case ACT_PAUSE:
 	case ACT_KEYHISTORY:
-		if (aArgc > 0 && !line->ArgHasDeref(1) && !line->ConvertOnOffToggle(NEW_RAW_ARG1))
+		if (aArgc > 0 && !line.ArgHasDeref(1) && !line.ConvertOnOffToggle(NEW_RAW_ARG1))
 			return ScriptError(ERR_ON_OFF_TOGGLE, NEW_RAW_ARG1);
 		break;
 
 	case ACT_SETNUMLOCKSTATE:
 	case ACT_SETSCROLLLOCKSTATE:
 	case ACT_SETCAPSLOCKSTATE:
-		if (aArgc > 0 && !line->ArgHasDeref(1) && !line->ConvertOnOffAlways(NEW_RAW_ARG1))
+		if (aArgc > 0 && !line.ArgHasDeref(1) && !line.ConvertOnOffAlways(NEW_RAW_ARG1))
 			return ScriptError(ERR_ON_OFF_ALWAYS, NEW_RAW_ARG1);
 		break;
 
 	case ACT_STRINGMID:
-		if (aArgc > 4 && !line->ArgHasDeref(5) && stricmp(NEW_RAW_ARG5, "L"))
+		if (aArgc > 4 && !line.ArgHasDeref(5) && stricmp(NEW_RAW_ARG5, "L"))
 			return ScriptError("Parameter #5 must be blank, the letter L, or a variable reference.", NEW_RAW_ARG5);
 		break;
 
 	case ACT_STRINGGETPOS:
-		if (*NEW_RAW_ARG4 && !line->ArgHasDeref(4) && !strchr("LR1", toupper(*NEW_RAW_ARG4)))
+		if (*NEW_RAW_ARG4 && !line.ArgHasDeref(4) && !strchr("LR1", toupper(*NEW_RAW_ARG4)))
 			return ScriptError("If not blank or a variable reference, parameter #4 must be 1 or start with the letter L or R.", NEW_RAW_ARG4);
 		break;
 
 	case ACT_STRINGSPLIT:
-		if (*NEW_RAW_ARG1 && !line->ArgHasDeref(1)) // The output array must be a legal name.
+		if (*NEW_RAW_ARG1 && !line.ArgHasDeref(1)) // The output array must be a legal name.
 			if (!Var::ValidateName(NEW_RAW_ARG1)) // It already displayed the error.
 				return FAIL;
 		break;
@@ -3386,14 +3746,14 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		// The below has two checks in case the user is using the 5-param method with the 5th parameter
 		// being blank to indicate that the key's "default" value should be read.  For example:
 		// RegRead, OutVar, REG_SZ, HKEY_CURRENT_USER, Software\Winamp,
-		if (aArgc > 4 || line->RegConvertValueType(NEW_RAW_ARG2))
+		if (aArgc > 4 || line.RegConvertValueType(NEW_RAW_ARG2))
 		{
 			// The obsolete 5-param method is being used, wherein ValueType is the 2nd param.
-			if (*NEW_RAW_ARG3 && !line->ArgHasDeref(3) && !line->RegConvertRootKey(NEW_RAW_ARG3))
+			if (*NEW_RAW_ARG3 && !line.ArgHasDeref(3) && !line.RegConvertRootKey(NEW_RAW_ARG3))
 				return ScriptError(ERR_REG_KEY, NEW_RAW_ARG3);
 		}
 		else // 4-param method.
-			if (*NEW_RAW_ARG2 && !line->ArgHasDeref(2) && !line->RegConvertRootKey(NEW_RAW_ARG2))
+			if (*NEW_RAW_ARG2 && !line.ArgHasDeref(2) && !line.RegConvertRootKey(NEW_RAW_ARG2))
 				return ScriptError(ERR_REG_KEY, NEW_RAW_ARG2);
 		break;
 
@@ -3402,15 +3762,15 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		// is being used in its registry-loop mode and is validated elsewhere:
 		if (aArgc > 1)
 		{
-			if (*NEW_RAW_ARG1 && !line->ArgHasDeref(1) && !line->RegConvertValueType(NEW_RAW_ARG1))
+			if (*NEW_RAW_ARG1 && !line.ArgHasDeref(1) && !line.RegConvertValueType(NEW_RAW_ARG1))
 				return ScriptError(ERR_REG_VALUE_TYPE, NEW_RAW_ARG1);
-			if (*NEW_RAW_ARG2 && !line->ArgHasDeref(2) && !line->RegConvertRootKey(NEW_RAW_ARG2))
+			if (*NEW_RAW_ARG2 && !line.ArgHasDeref(2) && !line.RegConvertRootKey(NEW_RAW_ARG2))
 				return ScriptError(ERR_REG_KEY, NEW_RAW_ARG2);
 		}
 		break;
 
 	case ACT_REGDELETE:
-		if (*NEW_RAW_ARG1 && !line->ArgHasDeref(1) && !line->RegConvertRootKey(NEW_RAW_ARG1))
+		if (*NEW_RAW_ARG1 && !line.ArgHasDeref(1) && !line.RegConvertRootKey(NEW_RAW_ARG1))
 			return ScriptError(ERR_REG_KEY, NEW_RAW_ARG1);
 		break;
 
@@ -3419,7 +3779,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		// Pass "true" so that double derefs (such as Array%i%) that have been transformed into
 		// input variables at an earlier stage will not be seen here as literal text capable of
 		// being validated:
-		if (aActionType == ACT_SOUNDSET && aArgc > 0 && !line->ArgHasDeref(1))
+		if (aActionType == ACT_SOUNDSET && aArgc > 0 && !line.ArgHasDeref(1))
 		{
 			// The value of catching syntax errors at load-time seems to outweigh the fact that this check
 			// sees a valid no-deref expression such as 300-250 as invalid.
@@ -3427,9 +3787,9 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			if (value_float < -100 || value_float > 100)
 				return ScriptError(ERR_PERCENT, NEW_RAW_ARG1);
 		}
-		if (*NEW_RAW_ARG2 && !line->ArgHasDeref(2) && !line->SoundConvertComponentType(NEW_RAW_ARG2))
+		if (*NEW_RAW_ARG2 && !line.ArgHasDeref(2) && !line.SoundConvertComponentType(NEW_RAW_ARG2))
 			return ScriptError("Parameter #2 specifies an invalid component type.", NEW_RAW_ARG2);
-		if (*NEW_RAW_ARG3 && !line->ArgHasDeref(3) && !line->SoundConvertControlType(NEW_RAW_ARG3))
+		if (*NEW_RAW_ARG3 && !line.ArgHasDeref(3) && !line.SoundConvertControlType(NEW_RAW_ARG3))
 			return ScriptError("Parameter #3 specifies an invalid control type.", NEW_RAW_ARG3);
 		break;
 
@@ -3437,7 +3797,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		// Pass "true" so that double derefs (such as Array%i%) that have been transformed into
 		// input variables at an earlier stage will not be seen here as literal text capable of
 		// being validated:
-		if (aArgc > 0 && !line->ArgHasDeref(1))
+		if (aArgc > 0 && !line.ArgHasDeref(1))
 		{
 			// The value of catching syntax errors at load-time seems to outweigh the fact that this check
 			// sees a valid no-deref expression such as 300-250 as invalid.
@@ -3448,12 +3808,12 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_SOUNDPLAY:
-		if (*NEW_RAW_ARG2 && !line->ArgHasDeref(2) && stricmp(NEW_RAW_ARG2, "wait") && stricmp(NEW_RAW_ARG2, "1"))
+		if (*NEW_RAW_ARG2 && !line.ArgHasDeref(2) && stricmp(NEW_RAW_ARG2, "wait") && stricmp(NEW_RAW_ARG2, "1"))
 			return ScriptError("If not blank, parameter #2 must be 1, WAIT, or a variable reference.", NEW_RAW_ARG2);
 		break;
 
 	case ACT_PIXELGETCOLOR:
-		if (*NEW_RAW_ARG4 && !line->ArgHasDeref(4) && stricmp(NEW_RAW_ARG4, "RGB"))
+		if (*NEW_RAW_ARG4 && !line.ArgHasDeref(4) && stricmp(NEW_RAW_ARG4, "RGB"))
 			return ScriptError("Parameter #4 must be blank or the word RGB.", NEW_RAW_ARG4);
 		break;
 
@@ -3466,7 +3826,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			// Pass "true" so that double derefs (such as Array%i%) that have been transformed into
 			// input variables at an earlier stage will not be seen here as literal text capable of
 			// being validated:
-			if (*NEW_RAW_ARG8 && !line->ArgHasDeref(8))
+			if (*NEW_RAW_ARG8 && !line.ArgHasDeref(8))
 			{
 				// The value of catching syntax errors at load-time seems to outweigh the fact that this check
 				// sees a valid no-deref expression such as 300-200 as invalid.
@@ -3479,7 +3839,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_COORDMODE:
-		if (*NEW_RAW_ARG1 && !line->ArgHasDeref(1) && !line->ConvertCoordModeAttrib(NEW_RAW_ARG1))
+		if (*NEW_RAW_ARG1 && !line.ArgHasDeref(1) && !line.ConvertCoordModeAttrib(NEW_RAW_ARG1))
 			return ScriptError(ERR_COORDMODE, NEW_RAW_ARG1);
 		break;
 
@@ -3487,7 +3847,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		// Pass "true" so that double derefs (such as Array%i%) that have been transformed into
 		// input variables at an earlier stage will not be seen here as literal text capable of
 		// being validated:
-		if (*NEW_RAW_ARG1 && !line->ArgHasDeref(1))
+		if (*NEW_RAW_ARG1 && !line.ArgHasDeref(1))
 
 		{
 			// The value of catching syntax errors at load-time seems to outweigh the fact that this check
@@ -3502,7 +3862,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		// Pass "true" so that double derefs (such as Array%i%) that have been transformed into
 		// input variables at an earlier stage will not be seen here as literal text capable of
 		// being validated:
-		if (*NEW_RAW_ARG3 && !line->ArgHasDeref(3))
+		if (*NEW_RAW_ARG3 && !line.ArgHasDeref(3))
 		{
 			// The value of catching syntax errors at load-time seems to outweigh the fact that this check
 			// sees a valid no-deref expression such as 200-150 as invalid.
@@ -3510,9 +3870,9 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			if (value < 0 || value > MAX_MOUSE_SPEED)
 				return ScriptError(ERR_MOUSE_SPEED, NEW_RAW_ARG3);
 		}
-		if (*NEW_RAW_ARG4 && !line->ArgHasDeref(4) && toupper(*NEW_RAW_ARG4) != 'R')
+		if (*NEW_RAW_ARG4 && !line.ArgHasDeref(4) && toupper(*NEW_RAW_ARG4) != 'R')
 			return ScriptError("Parameter #4 (if present) must be the letter R.", NEW_RAW_ARG4);
-		if (!line->ValidateMouseCoords(NEW_RAW_ARG1, NEW_RAW_ARG2))
+		if (!line.ValidateMouseCoords(NEW_RAW_ARG1, NEW_RAW_ARG2))
 			return ScriptError(ERR_MOUSE_COORD, NEW_RAW_ARG1);
 		break;
 
@@ -3520,7 +3880,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		// Pass "true" so that double derefs (such as Array%i%) that have been transformed into
 		// input variables at an earlier stage will not be seen here as literal text capable of
 		// being validated:
-		if (*NEW_RAW_ARG5 && !line->ArgHasDeref(5))
+		if (*NEW_RAW_ARG5 && !line.ArgHasDeref(5))
 		{
 			// The value of catching syntax errors at load-time seems to outweigh the fact that this check
 			// sees a valid no-deref expression such as 200-150 as invalid.
@@ -3528,15 +3888,15 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			if (value < 0 || value > MAX_MOUSE_SPEED)
 				return ScriptError(ERR_MOUSE_SPEED, NEW_RAW_ARG5);
 		}
-		if (*NEW_RAW_ARG6 && !line->ArgHasDeref(6))
+		if (*NEW_RAW_ARG6 && !line.ArgHasDeref(6))
 			if (strlen(NEW_RAW_ARG6) > 1 || !strchr("UD", toupper(*NEW_RAW_ARG6)))  // Up / Down
 				return ScriptError(ERR_MOUSE_UPDOWN, NEW_RAW_ARG6);
-		if (*NEW_RAW_ARG7 && !line->ArgHasDeref(7) && toupper(*NEW_RAW_ARG7) != 'R')
+		if (*NEW_RAW_ARG7 && !line.ArgHasDeref(7) && toupper(*NEW_RAW_ARG7) != 'R')
 			return ScriptError("Parameter #7 (if present) must be the letter R.", NEW_RAW_ARG7);
 		// Check that the button is valid (e.g. left/right/middle):
-		if (*NEW_RAW_ARG1 && !line->ArgHasDeref(1) && !line->ConvertMouseButton(NEW_RAW_ARG1)) // Treats blank as "Left".
+		if (*NEW_RAW_ARG1 && !line.ArgHasDeref(1) && !line.ConvertMouseButton(NEW_RAW_ARG1)) // Treats blank as "Left".
 			return ScriptError(ERR_MOUSE_BUTTON, NEW_RAW_ARG1);
-		if (!line->ValidateMouseCoords(NEW_RAW_ARG2, NEW_RAW_ARG3))
+		if (!line.ValidateMouseCoords(NEW_RAW_ARG2, NEW_RAW_ARG3))
 			return ScriptError(ERR_MOUSE_COORD, NEW_RAW_ARG2);
 		break;
 
@@ -3548,7 +3908,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		// Pass "true" so that double derefs (such as Array%i%) that have been transformed into
 		// input variables at an earlier stage will not be seen here as literal text capable of
 		// being validated:
-		if (*NEW_RAW_ARG6 && !line->ArgHasDeref(6))
+		if (*NEW_RAW_ARG6 && !line.ArgHasDeref(6))
 		{
 			// The value of catching syntax errors at load-time seems to outweigh the fact that this check
 			// sees a valid no-deref expression such as 200-150 as invalid.
@@ -3556,14 +3916,14 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			if (value < 0 || value > MAX_MOUSE_SPEED)
 				return ScriptError(ERR_MOUSE_SPEED, NEW_RAW_ARG6);
 		}
-		if (*NEW_RAW_ARG7 && !line->ArgHasDeref(7) && toupper(*NEW_RAW_ARG7) != 'R')
+		if (*NEW_RAW_ARG7 && !line.ArgHasDeref(7) && toupper(*NEW_RAW_ARG7) != 'R')
 			return ScriptError("Parameter #7 (if present) must be the letter R.", NEW_RAW_ARG7);
-		if (!line->ArgHasDeref(1))
-			if (!line->ConvertMouseButton(NEW_RAW_ARG1, false))
+		if (!line.ArgHasDeref(1))
+			if (!line.ConvertMouseButton(NEW_RAW_ARG1, false))
 				return ScriptError(ERR_MOUSE_BUTTON, NEW_RAW_ARG1);
-		if (!line->ValidateMouseCoords(NEW_RAW_ARG2, NEW_RAW_ARG3))
+		if (!line.ValidateMouseCoords(NEW_RAW_ARG2, NEW_RAW_ARG3))
 			return ScriptError(ERR_MOUSE_COORD, NEW_RAW_ARG2);
-		if (!line->ValidateMouseCoords(NEW_RAW_ARG4, NEW_RAW_ARG5))
+		if (!line.ValidateMouseCoords(NEW_RAW_ARG4, NEW_RAW_ARG5))
 			return ScriptError(ERR_MOUSE_COORD, NEW_RAW_ARG4);
 		break;
 
@@ -3578,8 +3938,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 
 	case ACT_CONTROLCLICK:
 		// Check that the button is valid (e.g. left/right/middle):
-		if (*NEW_RAW_ARG4 && !line->ArgHasDeref(4)) // i.e. it's allowed to be blank (defaults to left).
-			if (!line->ConvertMouseButton(NEW_RAW_ARG4)) // Treats blank as "Left".
+		if (*NEW_RAW_ARG4 && !line.ArgHasDeref(4)) // i.e. it's allowed to be blank (defaults to left).
+			if (!line.ConvertMouseButton(NEW_RAW_ARG4)) // Treats blank as "Left".
 				return ScriptError(ERR_MOUSE_BUTTON, NEW_RAW_ARG4);
 		break;
 
@@ -3587,10 +3947,10 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_SUB:
 		if (aArgc > 2)
 		{
-			if (*NEW_RAW_ARG3 && !line->ArgHasDeref(3))
+			if (*NEW_RAW_ARG3 && !line.ArgHasDeref(3))
 				if (!strchr("SMHD", toupper(*NEW_RAW_ARG3)))  // (S)econds, (M)inutes, (H)ours, or (D)ays
 					return ScriptError(ERR_COMPARE_TIMES, NEW_RAW_ARG3);
-			if (aActionType == ACT_SUB && *NEW_RAW_ARG2 && !line->ArgHasDeref(2))
+			if (aActionType == ACT_SUB && *NEW_RAW_ARG2 && !line.ArgHasDeref(2))
 				if (!YYYYMMDDToSystemTime(NEW_RAW_ARG2, st, true))
 					return ScriptError(ERR_INVALID_DATETIME, NEW_RAW_ARG2);
 		}
@@ -3604,7 +3964,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		// Pass "true" so that double derefs (such as Array%i%) that have been transformed into
 		// input variables at an earlier stage will not be seen here as literal text capable of
 		// being validated:
-		if (*NEW_RAW_ARG3 && !line->ArgHasDeref(3))
+		if (*NEW_RAW_ARG3 && !line.ArgHasDeref(3))
 		{
 			// The value of catching syntax errors at load-time seems to outweigh the fact that this check
 			// sees a valid no-deref expression such as 2-1 as invalid.
@@ -3614,7 +3974,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		}
 		if (aActionType == ACT_FILEINSTALL)
 		{
-			if (aArgc > 0 && line->ArgHasDeref(1))
+			if (aArgc > 0 && line.ArgHasDeref(1))
 				return ScriptError("Parameter #1 must not contain references to variables."
 					, NEW_RAW_ARG1);
 		}
@@ -3624,7 +3984,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		// Pass "true" so that double derefs (such as Array%i%) that have been transformed into
 		// input variables at an earlier stage will not be seen here as literal text capable of
 		// being validated:
-		if (*NEW_RAW_ARG2 && !line->ArgHasDeref(2))
+		if (*NEW_RAW_ARG2 && !line.ArgHasDeref(2))
 		{
 			// The value of catching syntax errors at load-time seems to outweigh the fact that this check
 			// sees a valid no-deref expression such as 3-2 as invalid.
@@ -3635,7 +3995,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_FILESETATTRIB:
-		if (*NEW_RAW_ARG1 && !line->ArgHasDeref(1))
+		if (*NEW_RAW_ARG1 && !line.ArgHasDeref(1))
 		{
 			for (char *cp = NEW_RAW_ARG1; *cp; ++cp)
 				if (!strchr("+-^RASHNOT", toupper(*cp)))
@@ -3648,26 +4008,26 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		// being validated.
 		// The value of catching syntax errors at load-time seems to outweigh the fact that this check
 		// sees a valid no-deref expression such as 300-200 as invalid.
-		if (aArgc > 2 && !line->ArgHasDeref(3) && line->ConvertLoopMode(NEW_RAW_ARG3) == FILE_LOOP_INVALID)
+		if (aArgc > 2 && !line.ArgHasDeref(3) && line.ConvertLoopMode(NEW_RAW_ARG3) == FILE_LOOP_INVALID)
 			return ScriptError("If not blank, parameter #3 must be either 0, 1, 2, or a variable reference."
 				, NEW_RAW_ARG3);
-		if (*NEW_RAW_ARG4 && !line->ArgHasDeref(4))
+		if (*NEW_RAW_ARG4 && !line.ArgHasDeref(4))
 			if (strlen(NEW_RAW_ARG4) > 1 || (*NEW_RAW_ARG4 != '0' && *NEW_RAW_ARG4 != '1'))
 				return ScriptError("Parameter #4 must be either blank, 0, 1, or a variable reference."
 					, NEW_RAW_ARG4);
 		break;
 
 	case ACT_FILEGETTIME:
-		if (*NEW_RAW_ARG3 && !line->ArgHasDeref(3))
+		if (*NEW_RAW_ARG3 && !line.ArgHasDeref(3))
 			if (strlen(NEW_RAW_ARG3) > 1 || !strchr("MCA", toupper(*NEW_RAW_ARG3)))
 				return ScriptError(ERR_FILE_TIME, NEW_RAW_ARG3);
 		break;
 
 	case ACT_FILESETTIME:
-		if (*NEW_RAW_ARG1 && !line->ArgHasDeref(1))
+		if (*NEW_RAW_ARG1 && !line.ArgHasDeref(1))
 			if (!YYYYMMDDToSystemTime(NEW_RAW_ARG1, st, true))
 				return ScriptError(ERR_INVALID_DATETIME, NEW_RAW_ARG1);
-		if (*NEW_RAW_ARG3 && !line->ArgHasDeref(3))
+		if (*NEW_RAW_ARG3 && !line.ArgHasDeref(3))
 			if (strlen(NEW_RAW_ARG3) > 1 || !strchr("MCA", toupper(*NEW_RAW_ARG3)))
 				return ScriptError(ERR_FILE_TIME, NEW_RAW_ARG3);
 		// For the next two checks:
@@ -3676,24 +4036,24 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		// being validated.
 		// The value of catching syntax errors at load-time seems to outweigh the fact that this check
 		// sees a valid no-deref expression such as 300-200 as invalid.
-		if (aArgc > 3 && !line->ArgHasDeref(4) && line->ConvertLoopMode(NEW_RAW_ARG4) == FILE_LOOP_INVALID)
+		if (aArgc > 3 && !line.ArgHasDeref(4) && line.ConvertLoopMode(NEW_RAW_ARG4) == FILE_LOOP_INVALID)
 			return ScriptError("If not blank, parameter #4 must be either 0, 1, 2, or a variable reference."
 				, NEW_RAW_ARG4);
-		if (*NEW_RAW_ARG5 && !line->ArgHasDeref(5))
+		if (*NEW_RAW_ARG5 && !line.ArgHasDeref(5))
 			if (strlen(NEW_RAW_ARG5) > 1 || (*NEW_RAW_ARG5 != '0' && *NEW_RAW_ARG5 != '1'))
 				return ScriptError("Parameter #5 must be either blank, 0, 1, or a variable reference."
 					, NEW_RAW_ARG5);
 		break;
 
 	case ACT_FILEGETSIZE:
-		if (*NEW_RAW_ARG3 && !line->ArgHasDeref(3))
+		if (*NEW_RAW_ARG3 && !line.ArgHasDeref(3))
 			if (strlen(NEW_RAW_ARG3) > 1 || !strchr("BKM", toupper(*NEW_RAW_ARG3))) // Allow B=Bytes as undocumented.
 				return ScriptError("Parameter #3 must be either blank, K, M, or a variable reference."
 					, NEW_RAW_ARG3);
 		break;
 
 	case ACT_FILESELECTFILE:
-		if (*NEW_RAW_ARG2 && !line->ArgHasDeref(2))
+		if (*NEW_RAW_ARG2 && !line.ArgHasDeref(2))
 		{
 			if (toupper(*NEW_RAW_ARG2 == 'S'))
                 value = ATOI(NEW_RAW_ARG2 + 1);
@@ -3706,16 +4066,16 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_SETTITLEMATCHMODE:
-		if (aArgc > 0 && !line->ArgHasDeref(1) && !line->ConvertTitleMatchMode(NEW_RAW_ARG1))
+		if (aArgc > 0 && !line.ArgHasDeref(1) && !line.ConvertTitleMatchMode(NEW_RAW_ARG1))
 			return ScriptError(ERR_TITLEMATCHMODE, NEW_RAW_ARG1);
 		break;
 
 	case ACT_SETFORMAT:
-		if (aArgc > 0 && !line->ArgHasDeref(1))
+		if (aArgc > 0 && !line.ArgHasDeref(1))
 		{
             if (!stricmp(NEW_RAW_ARG1, "float"))
 			{
-				if (aArgc > 1 && !line->ArgHasDeref(2))
+				if (aArgc > 1 && !line.ArgHasDeref(2))
 				{
 					if (!IsPureNumeric(NEW_RAW_ARG2, true, false, true))
 						return ScriptError("Parameter #2 must be numeric when used with FLOAT.", NEW_RAW_ARG2);
@@ -3725,7 +4085,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			}
 			else if (!stricmp(NEW_RAW_ARG1, "integer"))
 			{
-				if (aArgc > 1 && !line->ArgHasDeref(2) && toupper(*NEW_RAW_ARG2) != 'H' && toupper(*NEW_RAW_ARG2) != 'D')
+				if (aArgc > 1 && !line.ArgHasDeref(2) && toupper(*NEW_RAW_ARG2) != 'H' && toupper(*NEW_RAW_ARG2) != 'D')
 					return ScriptError("Parameter #2 must be either H or D when used with INTEGER.", NEW_RAW_ARG2);
 			}
 			else
@@ -3736,21 +4096,21 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_TRANSFORM:
-		if (aArgc > 1 && !line->ArgHasDeref(2))
+		if (aArgc > 1 && !line.ArgHasDeref(2))
 		{
 			// The value of trans_cmd was already set at an earlier stage, but only here can the error
 			// for NEW_RAW_ARG3 be displayed because only here was it finally possible to call
 			// ArgHasDeref() [above].
 			if (trans_cmd == TRANS_CMD_INVALID)
 				return ScriptError(ERR_TRANSFORMCOMMAND, NEW_RAW_ARG2);
-			if (trans_cmd == TRANS_CMD_UNICODE && !*line->mArg[0].text) // blank text means output-var is not a dynamically built one.
+			if (trans_cmd == TRANS_CMD_UNICODE && !*line.mArg[0].text) // blank text means output-var is not a dynamically built one.
 			{
 				// If the output var isn't the clipboard, the mode is "retrieve clipboard text as UTF-8".
 				// Therefore, Param#3 should be blank in that case to avoid unnecessary fetching of the
 				// entire clipboard contents as plain text when in fact the command itself will be
 				// directly accessing the clipboard rather than relying on the automatic parameter and
 				// deref handling.
-				if (VAR(line->mArg[0])->mType == VAR_CLIPBOARD)
+				if (VAR(line.mArg[0])->Type() == VAR_CLIPBOARD)
 				{
 					if (aArgc < 3)
 						return ScriptError("Parameter #3 must not be blank in this case.");
@@ -3763,7 +4123,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 
 			// The value of catching syntax errors at load-time seems to outweigh the fact that this check
 			// sees a valid no-deref expression such as 1+2 as invalid.
-			if (!line->ArgHasDeref(3)) // "true" since it might have been made into an InputVar due to being a simple expression.
+			if (!line.ArgHasDeref(3)) // "true" since it might have been made into an InputVar due to being a simple expression.
 			{
 				switch(trans_cmd)
 				{
@@ -3838,24 +4198,24 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			case TRANS_CMD_BITAND:
 			case TRANS_CMD_BITOR:
 			case TRANS_CMD_BITXOR:
-				if (!line->ArgHasDeref(4) && !IsPureNumeric(NEW_RAW_ARG4, true, false))
+				if (!line.ArgHasDeref(4) && !IsPureNumeric(NEW_RAW_ARG4, true, false))
 					return ScriptError("Parameter #4 must be an integer in this case.", NEW_RAW_ARG4);
 				break;
 
 			case TRANS_CMD_BITSHIFTLEFT:
 			case TRANS_CMD_BITSHIFTRIGHT:
-				if (!line->ArgHasDeref(4) && !IsPureNumeric(NEW_RAW_ARG4, false, false))
+				if (!line.ArgHasDeref(4) && !IsPureNumeric(NEW_RAW_ARG4, false, false))
 					return ScriptError("Parameter #4 must be a positive integer in this case.", NEW_RAW_ARG4);
 				break;
 
 			case TRANS_CMD_ROUND:
-				if (*NEW_RAW_ARG4 && !line->ArgHasDeref(4) && !IsPureNumeric(NEW_RAW_ARG4, true, false))
+				if (*NEW_RAW_ARG4 && !line.ArgHasDeref(4) && !IsPureNumeric(NEW_RAW_ARG4, true, false))
 					return ScriptError("Parameter #4 must be blank or an integer in this case.", NEW_RAW_ARG4);
 				break;
 
 			case TRANS_CMD_MOD:
 			case TRANS_CMD_POW:
-				if (!line->ArgHasDeref(4) && !IsPureNumeric(NEW_RAW_ARG4, true, false, true))
+				if (!line.ArgHasDeref(4) && !IsPureNumeric(NEW_RAW_ARG4, true, false, true))
 					return ScriptError("Parameter #4 must be a number in this case.", NEW_RAW_ARG4);
 				break;
 #ifdef _DEBUG
@@ -3867,7 +4227,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			switch(trans_cmd)
 			{
 			case TRANS_CMD_CHR:
-				if (!line->ArgHasDeref(3))
+				if (!line.ArgHasDeref(3))
 				{
 					value = ATOI(NEW_RAW_ARG3);
 					if (!IsPureNumeric(NEW_RAW_ARG3, false, false) || value < 0 || value > 255)
@@ -3877,12 +4237,12 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			case TRANS_CMD_DEREF:
 				// Seems best to issue a warning for this, since it's hard to imagine anyone ever intentionally
 				// doing it under any circumstances:
-				if (!line->ArgHasDeref(3))
+				if (!line.ArgHasDeref(3))
 					return ScriptError("Because parameter #3 contains no variable reference(s), "
 						"this line serves no purpose.", NEW_RAW_ARG3);
 				break;
 			case TRANS_CMD_MOD:
-				if (!line->ArgHasDeref(4) && !ATOF(NEW_RAW_ARG4)) // Parameter is omitted or something that resolves to zero.
+				if (!line.ArgHasDeref(4) && !ATOF(NEW_RAW_ARG4)) // Parameter is omitted or something that resolves to zero.
 					return ScriptError(ERR_DIVIDEBYZERO, NEW_RAW_ARG4);
 				break;
 			}
@@ -3890,9 +4250,9 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_MENU:
-		if (aArgc > 1 && !line->ArgHasDeref(2))
+		if (aArgc > 1 && !line.ArgHasDeref(2))
 		{
-			MenuCommands menu_cmd = line->ConvertMenuCommand(NEW_RAW_ARG2);
+			MenuCommands menu_cmd = line.ConvertMenuCommand(NEW_RAW_ARG2);
 
 			switch(menu_cmd)
 			{
@@ -3904,7 +4264,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			case MENU_CMD_CLICK:
 			{
 				bool is_tray = true;  // Assume true if unknown.
-				if (aArgc > 0 && !line->ArgHasDeref(1))
+				if (aArgc > 0 && !line.ArgHasDeref(1))
 					if (stricmp(NEW_RAW_ARG1, "tray"))
 						is_tray = false;
 				if (!is_tray)
@@ -3973,16 +4333,16 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		// script-loading process comes across any explicit uses of #SinngleInstance,
 		// in which case it would take precedence.
 		g_persistent = true;
-		if (aArgc > 0 && !line->ArgHasDeref(1))
+		if (aArgc > 0 && !line.ArgHasDeref(1))
 		{
-			GuiCommands gui_cmd = line->ConvertGuiCommand(NEW_RAW_ARG1);
+			GuiCommands gui_cmd = line.ConvertGuiCommand(NEW_RAW_ARG1);
 
 			switch (gui_cmd)
 			{
 			case GUI_CMD_INVALID:
 				return ScriptError(ERR_GUICOMMAND, NEW_RAW_ARG1);
 			case GUI_CMD_ADD:
-				if (aArgc > 1 && !line->ArgHasDeref(2) && !line->ConvertGuiControl(NEW_RAW_ARG2))
+				if (aArgc > 1 && !line.ArgHasDeref(2) && !line.ConvertGuiControl(NEW_RAW_ARG2))
 					return ScriptError(ERR_GUICONTROL, NEW_RAW_ARG2);
 				break;
 			case GUI_CMD_CANCEL:
@@ -4010,14 +4370,14 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_THREAD:
-		if (aArgc > 0 && !line->ArgHasDeref(1) && !line->ConvertThreadCommand(NEW_RAW_ARG1))
+		if (aArgc > 0 && !line.ArgHasDeref(1) && !line.ConvertThreadCommand(NEW_RAW_ARG1))
 			return ScriptError(ERR_THREADCOMMAND, NEW_RAW_ARG1);
 		break;
 
 	case ACT_CONTROL:
-		if (aArgc > 0 && !line->ArgHasDeref(1))
+		if (aArgc > 0 && !line.ArgHasDeref(1))
 		{
-			ControlCmds control_cmd = line->ConvertControlCmd(NEW_RAW_ARG1);
+			ControlCmds control_cmd = line.ConvertControlCmd(NEW_RAW_ARG1);
 			switch (control_cmd)
 			{
 			case CONTROL_CMD_INVALID:
@@ -4042,9 +4402,9 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_CONTROLGET:
-		if (aArgc > 1 && !line->ArgHasDeref(2))
+		if (aArgc > 1 && !line.ArgHasDeref(2))
 		{
-			ControlGetCmds control_get_cmd = line->ConvertControlGetCmd(NEW_RAW_ARG2);
+			ControlGetCmds control_get_cmd = line.ConvertControlGetCmd(NEW_RAW_ARG2);
 			switch (control_get_cmd)
 			{
 			case CONTROLGET_CMD_INVALID:
@@ -4064,9 +4424,9 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_GUICONTROL:
 		if (!*NEW_RAW_ARG2) // ControlID
 			return ScriptError("Parameter #2 must not be blank.");
-		if (aArgc > 0 && !line->ArgHasDeref(1))
+		if (aArgc > 0 && !line.ArgHasDeref(1))
 		{
-			GuiControlCmds guicontrol_cmd = line->ConvertGuiControlCmd(NEW_RAW_ARG1);
+			GuiControlCmds guicontrol_cmd = line.ConvertGuiControlCmd(NEW_RAW_ARG1);
 			switch (guicontrol_cmd)
 			{
 			case GUICONTROL_CMD_INVALID:
@@ -4088,9 +4448,9 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_GUICONTROLGET:
-		if (aArgc > 1 && !line->ArgHasDeref(2))
+		if (aArgc > 1 && !line.ArgHasDeref(2))
 		{
-			GuiControlGetCmds guicontrolget_cmd = line->ConvertGuiControlGetCmd(NEW_RAW_ARG2);
+			GuiControlGetCmds guicontrolget_cmd = line.ConvertGuiControlGetCmd(NEW_RAW_ARG2);
 			// This first check's error messages take precedence over the next check's:
 			switch (guicontrolget_cmd)
 			{
@@ -4113,9 +4473,9 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_DRIVE:
-		if (aArgc > 0 && !line->ArgHasDeref(1))
+		if (aArgc > 0 && !line.ArgHasDeref(1))
 		{
-			DriveCmds drive_cmd = line->ConvertDriveCmd(NEW_RAW_ARG1);
+			DriveCmds drive_cmd = line.ConvertDriveCmd(NEW_RAW_ARG1);
 			if (!drive_cmd)
 				return ScriptError(ERR_DRIVECOMMAND, NEW_RAW_ARG1);
 			if (drive_cmd != DRIVE_CMD_EJECT && !*NEW_RAW_ARG2)
@@ -4128,23 +4488,23 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_DRIVEGET:
-		if (!line->ArgHasDeref(2))  // Don't check "aArgc > 1" because of DRIVEGET_CMD_SETLABEL's param format.
+		if (!line.ArgHasDeref(2))  // Don't check "aArgc > 1" because of DRIVEGET_CMD_SETLABEL's param format.
 		{
-			DriveGetCmds drive_get_cmd = line->ConvertDriveGetCmd(NEW_RAW_ARG2);
+			DriveGetCmds drive_get_cmd = line.ConvertDriveGetCmd(NEW_RAW_ARG2);
 			if (!drive_get_cmd)
 				return ScriptError(ERR_DRIVEGETCOMMAND, NEW_RAW_ARG2);
 			if (drive_get_cmd != DRIVEGET_CMD_LIST && drive_get_cmd != DRIVEGET_CMD_STATUSCD && !*NEW_RAW_ARG3)
 				return ScriptError("Parameter #3 must not be blank in this case.");
-			if (drive_get_cmd != DRIVEGET_CMD_SETLABEL && (aArgc < 1 || line->mArg[0].type == ARG_TYPE_NORMAL))
+			if (drive_get_cmd != DRIVEGET_CMD_SETLABEL && (aArgc < 1 || line.mArg[0].type == ARG_TYPE_NORMAL))
 				// The output variable has been omitted.
 				return ScriptError("Parameter #1 must not be blank in this case.");
 		}
 		break;
 
 	case ACT_PROCESS:
-		if (aArgc > 0 && !line->ArgHasDeref(1))
+		if (aArgc > 0 && !line.ArgHasDeref(1))
 		{
-			ProcessCmds process_cmd = line->ConvertProcessCmd(NEW_RAW_ARG1);
+			ProcessCmds process_cmd = line.ConvertProcessCmd(NEW_RAW_ARG1);
 			if (process_cmd != PROCESS_CMD_PRIORITY && !*NEW_RAW_ARG2)
 				return ScriptError("Parameter #2 must not be blank in this case.");
 			switch (process_cmd)
@@ -4157,13 +4517,13 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					return ScriptError("Parameter #3 must be blank in this case.", NEW_RAW_ARG3);
 				break;
 			case PROCESS_CMD_PRIORITY:
-				if (!*NEW_RAW_ARG3 || (!line->ArgHasDeref(3) && !strchr(PROCESS_PRIORITY_LETTERS, toupper(*NEW_RAW_ARG3))))
+				if (!*NEW_RAW_ARG3 || (!line.ArgHasDeref(3) && !strchr(PROCESS_PRIORITY_LETTERS, toupper(*NEW_RAW_ARG3))))
 					return ScriptError("Parameter #3 must be one of the following letters: "
 						PROCESS_PRIORITY_LETTERS ".", NEW_RAW_ARG3);
 				break;
 			case PROCESS_CMD_WAIT:
 			case PROCESS_CMD_WAITCLOSE:
-				if (*NEW_RAW_ARG3 && !line->ArgHasDeref(3) && !IsPureNumeric(NEW_RAW_ARG3, false, true, true))
+				if (*NEW_RAW_ARG3 && !line.ArgHasDeref(3) && !IsPureNumeric(NEW_RAW_ARG3, false, true, true))
 					return ScriptError("If present, parameter #3 must be a positive number in this case.", NEW_RAW_ARG3);
 				break;
 			}
@@ -4205,12 +4565,12 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_WINSET:
-		if (aArgc > 0 && !line->ArgHasDeref(1))
+		if (aArgc > 0 && !line.ArgHasDeref(1))
 		{
-			switch(line->ConvertWinSetAttribute(NEW_RAW_ARG1))
+			switch(line.ConvertWinSetAttribute(NEW_RAW_ARG1))
 			{
 			case WINSET_TRANSPARENT:
-				if (aArgc > 1 && !line->ArgHasDeref(2))
+				if (aArgc > 1 && !line.ArgHasDeref(2))
 				{
 					value = ATOI(NEW_RAW_ARG2);
 					if (value < 0 || value > 255)
@@ -4223,7 +4583,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					return ScriptError("Parameter #2 must not be blank in this case.");
 				break;
 			case WINSET_ALWAYSONTOP:
-				if (aArgc > 1 && !line->ArgHasDeref(2) && !line->ConvertOnOffToggle(NEW_RAW_ARG2))
+				if (aArgc > 1 && !line.ArgHasDeref(2) && !line.ConvertOnOffToggle(NEW_RAW_ARG2))
 					return ScriptError(ERR_ON_OFF_TOGGLE, NEW_RAW_ARG2);
 				break;
 			case WINSET_BOTTOM:
@@ -4240,58 +4600,58 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_WINGET:
-		if (!line->ArgHasDeref(2) && !line->ConvertWinGetCmd(NEW_RAW_ARG2)) // It's okay if ARG2 is blank.
+		if (!line.ArgHasDeref(2) && !line.ConvertWinGetCmd(NEW_RAW_ARG2)) // It's okay if ARG2 is blank.
 			return ScriptError(ERR_WINGET, NEW_RAW_ARG2);
 		break;
 
 	case ACT_SYSGET:
-		if (!line->ArgHasDeref(2) && !line->ConvertSysGetCmd(NEW_RAW_ARG2))
+		if (!line.ArgHasDeref(2) && !line.ConvertSysGetCmd(NEW_RAW_ARG2))
 			return ScriptError(ERR_SYSGET, NEW_RAW_ARG2);
 		break;
 
 	case ACT_INPUTBOX:
-		if (*NEW_RAW_ARG9)  // && !line->ArgHasDeref(9)
+		if (*NEW_RAW_ARG9)  // && !line.ArgHasDeref(9)
 			return ScriptError("Parameter #9 is for future use and should be left blank.", NEW_RAW_ARG9);
 		break;
 
 	case ACT_MSGBOX:
 		if (aArgc > 1) // i.e. this MsgBox is using the 3-param or 4-param style.
-			if (!line->ArgHasDeref(1)) // i.e. if it's a deref, we won't try to validate it now.
+			if (!line.ArgHasDeref(1)) // i.e. if it's a deref, we won't try to validate it now.
 				if (!IsPureNumeric(NEW_RAW_ARG1)) // Allow it to be entirely whitespace to indicate 0, like Aut2.
 					return ScriptError("When used with more than one parameter, MsgBox requires that"
 						" the 1st parameter be numeric or a variable reference.", NEW_RAW_ARG1);
 		if (aArgc > 3) // EVEN THOUGH IT'S NUMERIC, due to MsgBox's smart-comma handling, this cannot be an expression because it would never have been detected as the fourth parameter to begin with.
-			if (!line->ArgHasDeref(4)) // i.e. if it's a deref, we won't try to validate it now.
+			if (!line.ArgHasDeref(4)) // i.e. if it's a deref, we won't try to validate it now.
 				if (!IsPureNumeric(NEW_RAW_ARG4, false, true, true))
 					return ScriptError("MsgBox requires that the 4th parameter, if present, be numeric & positive,"
 						" or a variable reference.", NEW_RAW_ARG4);
 		break;
 
 	case ACT_IFMSGBOX:
-		if (aArgc > 0 && !line->ArgHasDeref(1) && !line->ConvertMsgBoxResult(NEW_RAW_ARG1))
+		if (aArgc > 0 && !line.ArgHasDeref(1) && !line.ConvertMsgBoxResult(NEW_RAW_ARG1))
 			return ScriptError(ERR_IFMSGBOX, NEW_RAW_ARG1);
 		break;
 
 	case ACT_IFIS:
 	case ACT_IFISNOT:
-		if (aArgc > 1 && !line->ArgHasDeref(2) && !line->ConvertVariableTypeName(NEW_RAW_ARG2))
+		if (aArgc > 1 && !line.ArgHasDeref(2) && !line.ConvertVariableTypeName(NEW_RAW_ARG2))
 			// Don't refer to it as "Parameter #2" because this command isn't formatted/displayed that way:
 			return ScriptError("The type name must be either NUMBER, INTEGER, FLOAT, TIME, DATE, DIGIT, ALPHA, ALNUM, SPACE, or a variable reference."
 				, NEW_RAW_ARG2);
 		break;
 
 	case ACT_GETKEYSTATE:
-		if (aArgc > 1 && !line->ArgHasDeref(2) && !TextToVK(NEW_RAW_ARG2) && !Line::ConvertJoy(NEW_RAW_ARG2))
+		if (aArgc > 1 && !line.ArgHasDeref(2) && !TextToVK(NEW_RAW_ARG2) && !Line::ConvertJoy(NEW_RAW_ARG2))
 			return ScriptError("This is not a valid key, mouse, or joystick button.", NEW_RAW_ARG2);
 		break;
 
 	case ACT_KEYWAIT:
-		if (aArgc > 0 && !line->ArgHasDeref(1) && !TextToVK(NEW_RAW_ARG1) && !Line::ConvertJoy(NEW_RAW_ARG1))
+		if (aArgc > 0 && !line.ArgHasDeref(1) && !TextToVK(NEW_RAW_ARG1) && !Line::ConvertJoy(NEW_RAW_ARG1))
 			return ScriptError("This is not a valid key, mouse, or joystick button.", NEW_RAW_ARG1);
 		break;
 
 	case ACT_DIV:
-		if (!line->ArgHasDeref(2)) // i.e. if it's a deref, we won't try to validate it now.
+		if (!line.ArgHasDeref(2)) // i.e. if it's a deref, we won't try to validate it now.
 			if (!ATOF(NEW_RAW_ARG2))
 				return ScriptError(ERR_DIVIDEBYZERO, NEW_RAW_ARG2);
 		break;
@@ -4305,27 +4665,27 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		// and ACT_GROUPCLOSE because we can't rely on the ACT_GROUPADD commands having
 		// been parsed prior to them (e.g. something like "Gosub, DefineGroups" may appear
 		// in the auto-execute portion of the script).
-		if (!line->ArgHasDeref(1))
-			if (   !(line->mAttribute = FindOrAddGroup(NEW_RAW_ARG1))   )
+		if (!line.ArgHasDeref(1))
+			if (   !(line.mAttribute = FindOrAddGroup(NEW_RAW_ARG1))   )
 				return FAIL;  // The above already displayed the error.
 		if (aActionType == ACT_GROUPADD && !*NEW_RAW_ARG2 && !*NEW_RAW_ARG3 && !*NEW_RAW_ARG5 && !*NEW_RAW_ARG6) // ARG4 is the JumpToLine
 			return ScriptError(ERR_WINDOW_PARAM);
 		if (aActionType == ACT_GROUPACTIVATE || aActionType == ACT_GROUPDEACTIVATE)
 		{
-			if (*NEW_RAW_ARG2 && !line->ArgHasDeref(2))
+			if (*NEW_RAW_ARG2 && !line.ArgHasDeref(2))
 				if (strlen(NEW_RAW_ARG2) > 1 || toupper(*NEW_RAW_ARG2) != 'R')
 					return ScriptError("Parameter #2 must be either blank, R, or a variable reference."
 						, NEW_RAW_ARG2);
 		}
 		else if (aActionType == ACT_GROUPCLOSE)
-			if (*NEW_RAW_ARG2 && !line->ArgHasDeref(2))
+			if (*NEW_RAW_ARG2 && !line.ArgHasDeref(2))
 				if (strlen(NEW_RAW_ARG2) > 1 || !strchr("RA", toupper(*NEW_RAW_ARG2)))
 					return ScriptError("Parameter #2 must be either blank, R, A, or a variable reference."
 						, NEW_RAW_ARG2);
 		break;
 
 	case ACT_REPEAT: // These types of loops are always "NORMAL".
-		line->mAttribute = ATTR_LOOP_NORMAL;
+		line.mAttribute = ATTR_LOOP_NORMAL;
 		break;
 
 	case ACT_LOOP:
@@ -4334,44 +4694,44 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		switch (aArgc)
 		{
 		case 0:
-			line->mAttribute = ATTR_LOOP_NORMAL;
+			line.mAttribute = ATTR_LOOP_NORMAL;
 			break;
 		case 1:
-			if (line->ArgHasDeref(1)) // Impossible to know now what type of loop (only at runtime).
-				line->mAttribute = ATTR_LOOP_UNKNOWN;
+			if (line.ArgHasDeref(1)) // Impossible to know now what type of loop (only at runtime).
+				line.mAttribute = ATTR_LOOP_UNKNOWN;
 			else
 			{
 				if (IsPureNumeric(NEW_RAW_ARG1, false))
-					line->mAttribute = ATTR_LOOP_NORMAL;
+					line.mAttribute = ATTR_LOOP_NORMAL;
 				else
-					line->mAttribute = line->RegConvertRootKey(NEW_RAW_ARG1) ? ATTR_LOOP_REG : ATTR_LOOP_FILE;
+					line.mAttribute = line.RegConvertRootKey(NEW_RAW_ARG1) ? ATTR_LOOP_REG : ATTR_LOOP_FILE;
 			}
 			break;
 		default:  // has 2 or more args.
-			if (line->ArgHasDeref(1)) // Impossible to know now what type of loop (only at runtime).
-				line->mAttribute = ATTR_LOOP_UNKNOWN;
+			if (line.ArgHasDeref(1)) // Impossible to know now what type of loop (only at runtime).
+				line.mAttribute = ATTR_LOOP_UNKNOWN;
 			else if (!stricmp(NEW_RAW_ARG1, "Read"))
-				line->mAttribute = ATTR_LOOP_READ_FILE;
+				line.mAttribute = ATTR_LOOP_READ_FILE;
 			else if (!stricmp(NEW_RAW_ARG1, "Parse"))
-				line->mAttribute = ATTR_LOOP_PARSE;
+				line.mAttribute = ATTR_LOOP_PARSE;
 			else // the 1st arg can either be a Root Key or a File Pattern, depending on the type of loop.
 			{
-				line->mAttribute = line->RegConvertRootKey(NEW_RAW_ARG1) ? ATTR_LOOP_REG : ATTR_LOOP_FILE;
-				if (line->mAttribute == ATTR_LOOP_FILE)
+				line.mAttribute = line.RegConvertRootKey(NEW_RAW_ARG1) ? ATTR_LOOP_REG : ATTR_LOOP_FILE;
+				if (line.mAttribute == ATTR_LOOP_FILE)
 				{
 					// Validate whatever we can rather than waiting for runtime validation:
-					if (!line->ArgHasDeref(2) && Line::ConvertLoopMode(NEW_RAW_ARG2) == FILE_LOOP_INVALID)
+					if (!line.ArgHasDeref(2) && Line::ConvertLoopMode(NEW_RAW_ARG2) == FILE_LOOP_INVALID)
 						return ScriptError(ERR_LOOP_FILE_MODE, NEW_RAW_ARG2);
-					if (*NEW_RAW_ARG3 && !line->ArgHasDeref(3))
+					if (*NEW_RAW_ARG3 && !line.ArgHasDeref(3))
 						if (strlen(NEW_RAW_ARG3) > 1 || (*NEW_RAW_ARG3 != '0' && *NEW_RAW_ARG3 != '1'))
 							return ScriptError("Parameter #3 must be either blank, 0, 1, or a variable reference."
 								, NEW_RAW_ARG3);
 				}
 				else // Registry loop.
 				{
-					if (aArgc > 2 && !line->ArgHasDeref(3) && Line::ConvertLoopMode(NEW_RAW_ARG3) == FILE_LOOP_INVALID)
+					if (aArgc > 2 && !line.ArgHasDeref(3) && Line::ConvertLoopMode(NEW_RAW_ARG3) == FILE_LOOP_INVALID)
 						return ScriptError(ERR_LOOP_REG_MODE, NEW_RAW_ARG3);
-					if (*NEW_RAW_ARG4 && !line->ArgHasDeref(4))
+					if (*NEW_RAW_ARG4 && !line.ArgHasDeref(4))
 						if (strlen(NEW_RAW_ARG4) > 1 || (*NEW_RAW_ARG4 != '0' && *NEW_RAW_ARG4 != '1'))
 							return ScriptError("Parameter #4 must be either blank, 0, 1, or a variable reference."
 								, NEW_RAW_ARG4);
@@ -4381,6 +4741,51 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break; // Outer switch().
 	}
 
+	if (mNextLineIsFunctionBody)
+	{
+		mLastFunc->mJumpToLine = the_new_line;
+		mNextLineIsFunctionBody = false;
+		if (g.CurrentFunc->mDefaultVarType == VAR_ASSUME_NONE)
+			g.CurrentFunc->mDefaultVarType = VAR_ASSUME_LOCAL;  // Set default since no override was discovered at the top of the body.
+	}
+
+	// No checking for unbalanced blocks is done here.  That is done by PreparseBlocks() because
+	// it displays more informative error messages:
+	if (aActionType == ACT_BLOCK_BEGIN)
+	{
+		++mOpenBlockCount;
+		// It's only necessary to check mLastFunc, not the one(s) that come before it, to see if its
+		// mJumpToLine is NULL.  This is because our caller has made it impossible for a function
+		// to ever have been defined in the first place if it lacked its opening brace.  Search on
+		// "consecutive function" for more comments.  In addition, the following does not check
+		// that mOpenBlockCount is exactly 1, because: 1) Want to be able to support function
+		// definitions inside of other function definitions (to help script maintainability); 2) If
+		// mOpenBlockCount is 0 or negative, that will be caught as a syntax error by PreparseBlocks(),
+		// which yields a more informative error message that we could here.
+		if (mLastFunc && !mLastFunc->mJumpToLine) // If this stmt is true, caller has ensured that g.CurrentFunc isn't NULL.
+		{
+			// The above check relies upon the fact that mLastFunc->mType must be FUNC_NORMAL at this stage,
+			// which is true because any non-overridden built-in function won't get added until after all
+			// lines have been added, namely PreparseBlocks().
+			line.mAttribute = ATTR_TRUE;  // Flag this ACT_BLOCK_BEGIN as the opening brace of the function's body.
+			// For efficiency, and to prevent ExecUntil from starting a new recursion layer for the function's
+			// body, the function's execution should begin at the first line after its open-brace (even if that
+			// first line is another open-brace or the function's close-brace (i.e. an empty function):
+			mNextLineIsFunctionBody = true;
+		}
+	}
+	else if (aActionType == ACT_BLOCK_END)
+	{
+		--mOpenBlockCount;
+		if (g.CurrentFunc && !mOpenBlockCount) // Any negative mOpenBlockCount is caught by a different stage.
+		{
+			line.mAttribute = ATTR_TRUE;  // Flag this ACT_BLOCK_END as the ending brace of a function's body.
+			g.CurrentFunc = NULL;
+			mFuncExceptionVar = NULL;  // Notify FindVar() that there is no exception list to search.
+		}
+	}
+
+	// Above must be done prior to the below, since it sometimes sets mAttribute for use below.
 
 	///////////////////////////////////////////////////////////////
 	// Update any labels that should refer to the newly added line.
@@ -4396,7 +4801,9 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	// return
 	for (Label *label = mLastLabel; label != NULL && label->mJumpToLine == NULL; label = label->mPrevLabel)
 	{
-		if (line->mActionType == ACT_ELSE)
+		if (line.mActionType == ACT_BLOCK_BEGIN && line.mAttribute) // Non-zero mAttribute signfies the open-brace of a function body.
+			return ScriptError("A label mustn't point to a function.");
+		if (line.mActionType == ACT_ELSE)
 			return ScriptError("A label mustn't point to an ELSE.");
 		// Don't allow this because it may cause problems in a case such as this because
 		// label1 points to the end-block which is at the same level (and thus normally
@@ -4415,11 +4822,9 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		//
 		// An alternate way to deal with the above would be to make each block-end be owned
 		// by its block-begin rather than the block that encloses them both.
-		if (line->mActionType == ACT_BLOCK_END)
-			return ScriptError("A label mustn't point to the end of a block."
-				"  If this block is a loop, you can use the \"continue\" command to jump"
-				" to the end of the block.");
-		label->mJumpToLine = line;
+		if (line.mActionType == ACT_BLOCK_END)
+			return ScriptError("A label mustn't point to the end of a block.  For loops, use Continue vs. Goto.");
+		label->mJumpToLine = the_new_line;
 	}
 
 	++mLineCount;  // Right before returning "success", increment our count.
@@ -4444,7 +4849,7 @@ ResultType Script::ParseDerefs(char *aArgText, char *aArgMap, DerefType *aDeref,
 			break;
 		// else: Match was found; this is the deref's open-symbol.
 		if (aDerefCount >= MAX_DEREFS_PER_ARG)
-			return ScriptError(TOO_MANY_VAR_REFS, aArgText); // Short msg since so rare.
+			return ScriptError(TOO_MANY_REFS, aArgText); // Short msg since so rare.
 		DerefType &this_deref = aDeref[aDerefCount];  // For performance.
 		this_deref.marker = aArgText + j;  // Store the deref's starting location.
 		// Find next g_DerefChar, even if it's a literal.
@@ -4459,6 +4864,7 @@ ResultType Script::ParseDerefs(char *aArgText, char *aArgMap, DerefType *aDeref,
 			return ScriptError("This parmeter contains an empty variable reference (%%).", aArgText);
 		if (deref_string_length - 2 > MAX_VAR_NAME_LENGTH) // -2 for the opening & closing g_DerefChars
 			return ScriptError("This parmeter contains a variable name that is too long.", aArgText);
+		this_deref.is_function = false;
 		this_deref.length = (DerefLengthType)deref_string_length;
 		if (   !(this_deref.var = FindOrAddVar(this_deref.marker + 1, this_deref.length - 2))   )
 			return FAIL;  // The called function already displayed the error.
@@ -4470,8 +4876,221 @@ ResultType Script::ParseDerefs(char *aArgText, char *aArgMap, DerefType *aDeref,
 
 
 
+ResultType Script::DefineFunc(char *aBuf, Var *aFuncExceptionVar[])
+// Returns OK or FAIL.
+// Caller has already called ValidateName() on the function, and it is known that this valid name
+// is followed immediately by an open-paren.  aFuncExceptionVar is the address of an array on
+// the caller's stack that will hold the list of exception variables (those that must be explicitly
+// declared as either local or global) within the body of the function.
+{
+	char *param_end, *param_start = strchr(aBuf, '('); // Caller has ensured that this will return non-NULL.
+
+	Func *found_func = FindFunc(aBuf, param_start - aBuf);
+	if (found_func)
+	{
+		if (found_func->mType == FUNC_NORMAL)
+			return ScriptError("Duplicate function definition.", aBuf); // Seems more descriptive than "Function already defined."
+		else // It's a built-in function that the user wants to override with a custom definition.
+		{
+			found_func->mType = FUNC_NORMAL;  // Override built-in type with NORMAL.
+			found_func->mParamCount = 0; // Revert to the default appropriate for FUNC_NORMAL.
+			found_func->mMinParams = 0;
+			g.CurrentFunc = found_func;
+		}
+	}
+	else
+		// The value of g.CurrentFunc must be set here rather than by our caller since AddVar(), which we call,
+		// relies upon it having been done.
+		if (   !(g.CurrentFunc = AddFunc(aBuf, param_start - aBuf, FUNC_NORMAL))   )
+			return FAIL; // It already displayed the error.
+
+	Func &func = *g.CurrentFunc; // For performance and convenience.
+	int insert_pos;
+	size_t param_length;
+	Var *param[MAX_FUNCTION_PARAMS];
+	int param_count = 0;
+	VarTypeType var_type; // Whether or not it will be ByRef.
+
+	for (param_start = omit_leading_whitespace(param_start + 1);;)
+	{
+		if (*param_start == ')') // No more params.
+			break;
+
+		// Must start the search at param_start, not param_start+1, so that something like fn(, x) will be properly handled:
+		if (   !*param_start || !(param_end = StrChrAny(param_start, ", \t)"))   ) // Look for first comma, space, tab, or close-paren.
+			return ScriptError(ERR_MISSING_CLOSE_PAREN, aBuf);
+		// To enhance syntax error catching, consider ByRef to be a keyword; i.e. that can never be the name
+		// of a formal parameter:
+		var_type = strlicmp(param_start, "ByRef", (UINT)(param_end - param_start)) ? VAR_NORMAL : VAR_BYREF;
+		if (var_type == VAR_BYREF)
+		{
+			// Omit the ByRef keyword from further consideration:
+			param_start = omit_leading_whitespace(param_end);
+			if (   !*param_start || !(param_end = StrChrAny(param_start, ", \t)"))   ) // Look for first comma, space, tab, or close-paren.
+				return ScriptError(ERR_MISSING_CLOSE_PAREN, aBuf);
+		}
+		if (   !(param_length = param_end - param_start)   )
+			return ScriptError(ERR_BLANK_PARAM, aBuf); // Reporting aBuf vs. param_start seems more informative since Vicinity isn't shown.
+
+		if (param_count >= MAX_FUNCTION_PARAMS)
+			return ScriptError("Too many params.", param_start); // Short msg since so rare.
+
+		// This will search for local variables, never globals, by virtue of the fact that this
+		// new function's mDefaultVarType is always VAR_ASSUME_NONE at this early stage of its creation:
+		if (param[param_count] = FindVar(param_start, param_length, &insert_pos))  // Assign.
+			return ScriptError("Duplicate parameter.", param_start);
+		if (   !(param[param_count] = AddVar(param_start, param_length, insert_pos, true, var_type))   )  //, VAR_ATTRIB_PARAM))   )
+			return FAIL; // It already displayed the error, including attempts to have reserved names as parameter names.
+
+		++param_count;
+
+		// Set up for the next iteration:
+		param_start = omit_leading_whitespace(param_end);
+		if (*param_start != ',' && *param_start != ')') // Something like "fn(a, b c)" (missing comma) would cause this.
+			return ScriptError("Missing comma.", aBuf); // Reporting aBuf vs. param_start seems more informative since Vicinity isn't shown.
+		if (*param_start == ',')
+		{
+			param_start = omit_leading_whitespace(param_start + 1);
+			if (*param_start == ')') // If *param_start is ',' it will be caught as an error by the next iteration.
+				return ScriptError(ERR_BLANK_PARAM, aBuf); // Reporting aBuf vs. param_start seems more informative since Vicinity isn't shown.
+		}
+		//else it's ')', in which case the next iteration will handle it.
+		// Above has ensured that param_start now points to the next parameter, or ')' if none.
+	}
+
+	if (param_count)
+	{
+		// Allocate memory only for the actual number of parameters actually present.
+		size_t size = param_count * sizeof(param[0]);
+		if (   !(func.mParam = (Var **)SimpleHeap::Malloc(size))   )
+			return ScriptError(ERR_OUTOFMEM);
+		func.mParamCount = param_count;
+		memcpy(func.mParam, param, size);
+	}
+	//else leave func.mParam/mParamCount set to their NULL/0 defaults.
+
+	// Indicate success:
+	mFuncExceptionVar = aFuncExceptionVar; // Give mFuncExceptionVar its address, to be used for any var declarations inside this function's body.
+	mFuncExceptionVarCount = 0;  // Reset in preparation of declarations that appear beneath this function's definition.
+	return OK;
+}
+
+
+
+Func *Script::FindFunc(char *aFuncName, size_t aFuncNameLength)
+// Returns the Function whose name matches aFuncName (which caller has ensured isn't NULL).
+// If it doesn't exist, NULL is returned.
+{
+	if (!aFuncNameLength) // Caller didn't specify, so use the entire string.
+		aFuncNameLength = strlen(aFuncName);
+
+	// For the below, no error is reported because callers don't want that.  Instead, simply return
+	// NULL to indicate that names that are illegal or too long are not found.  If the caller later
+	// tries to add the function, it will get an error then:
+	if (aFuncNameLength > MAX_VAR_NAME_LENGTH)
+		return NULL;
+
+	// The following copy is made because it allows the name searching to use stricmp() instead of
+	// strlicmp(), which close to doubles the performance.  The copy includes only the first aVarNameLength
+	// characters from aVarName:
+	char func_name[MAX_VAR_NAME_LENGTH + 1];
+	strlcpy(func_name, aFuncName, aFuncNameLength + 1);  // +1 to convert length to size.
+
+	Func *pfunc;
+	for (pfunc = mFirstFunc; pfunc; pfunc = pfunc->mNextFunc)
+		if (!stricmp(func_name, pfunc->mName)) // Match found.
+			return pfunc;
+
+	// Since above didn't return, there is no match.  See if it's a built-in function that hasn't yet
+	// been added to the function list:
+	FuncType func_type;
+	if (!stricmp(func_name, "WinExist"))
+		func_type = FUNC_WINEXIST;
+	else if (!stricmp(func_name, "WinActive"))
+		func_type = FUNC_WINACTIVE;
+	else
+		return NULL;
+
+	// Since the above would have found it if it were already in the list, add this built-in function to the list:
+	if (   !(pfunc = AddFunc(func_name, aFuncNameLength, func_type))   )
+		return NULL;
+	Func &func = *pfunc; // For performance and convenience.
+
+	switch(func_type)
+	{
+	case FUNC_WINEXIST:
+	case FUNC_WINACTIVE:
+		func.mParamCount = 4; // func.mMinParams defaults to 0, which is correct in these cases.
+		break;
+	}
+
+	return pfunc;
+}
+
+
+
+Func *Script::AddFunc(char *aFuncName, size_t aFuncNameLength, FuncType aFuncType)
+// This function should probably not be called by anyone except FindOrAddFunc, which has already done
+// the dupe-checking.
+// Returns the address of the new function or NULL on failure.
+// The caller must already have verified that this isn't a duplicate function.
+{
+	if (!aFuncNameLength) // Caller didn't specify, so use the entire string.
+		aFuncNameLength = strlen(aFuncName);
+
+	if (aFuncNameLength > MAX_VAR_NAME_LENGTH)
+	{
+		// Dynamic function-calls such as MyFuncArray%i%() aren't currently supported, so the first
+		// item below is commented out:
+		// Load-time callers should check for this.  But at runtime, it's possible for a dynamically
+		// resolved function name to be too long.  Note that aFuncName should be the exact variable
+		// name and does not need to be truncated to aFuncNameLength whenever this error occurs
+		// (i.e. at runtime):
+		//if (mIsReadyToExecute) // Runtime error.
+		//	ScriptError("Function name too long." ERR_ABORT, aFuncName);
+		//else
+			ScriptError("Function name too long.", aFuncName);
+		return NULL;
+	}
+
+	// Make a temporary copy that includes only the first aFuncNameLength characters from aFuncName:
+	char func_name[MAX_VAR_NAME_LENGTH + 1];
+	strlcpy(func_name, aFuncName, aFuncNameLength + 1);  // +1 to convert length to size.
+
+	if (!Var::ValidateName(func_name, mIsReadyToExecute))  // Variable and function names are both validated the same way.
+		// Above already displayed error for us.  This can happen at loadtime or runtime (e.g. StringSplit).
+		return NULL;
+
+	// Allocate some dynamic memory to pass to the constructor:
+	char *new_name = SimpleHeap::Malloc(func_name);
+	if (!new_name)
+		// It already displayed the error for us.  These mem errors are so unusual that we're not going
+		// to bother varying the error message to include ERR_ABORT if this occurs during runtime.
+		return NULL;
+
+	Func *the_new_func = new Func(new_name, aFuncType);
+	if (!the_new_func)
+	{
+		ScriptError(ERR_OUTOFMEM);
+		return NULL;
+	}
+
+	if (!mFirstFunc) // The list is empty, so this will be the first and last item.
+		mFirstFunc = mLastFunc = the_new_func;
+	else
+	{
+		mLastFunc->mNextFunc = the_new_func;
+		// This must be done after the above:
+		mLastFunc = the_new_func;
+	}
+
+	return the_new_func;
+}
+
+
+
 Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
-// Returns NULL on failure.
+// Returns NULL on failure.  Caller has ensured that none of this arg's derefs are function-calls.
 // Args that are input or output variables are normally resolved at load-time, so that
 // they contain a pointer to their Var object.  This is done for performance.  However,
 // in order to support dynamically resolved variables names like AutoIt2 (e.g. arrays),
@@ -4488,13 +5107,15 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 	// as variables if they are blank (and our caller should check for this and not call in that case):
 	if (aArgIndex >= mArgc)
 		return NULL;
+	ArgStruct &this_arg = mArg[aArgIndex]; // For performance and convenience.
+
 	// Since this function isn't inline (since it's called so frequently), there isn't that much more
 	// overhead to doing this check, even though it shouldn't be needed since it's the caller's
 	// responsibility:
-	if (mArg[aArgIndex].type == ARG_TYPE_NORMAL) // Arg isn't an input or output variable.
+	if (this_arg.type == ARG_TYPE_NORMAL) // Arg isn't an input or output variable.
 		return NULL;
-	if (!*mArg[aArgIndex].text) // The arg's variable is not one that needs to be dynamically resolved.
-		return VAR(mArg[aArgIndex]); // Return the var's address that was already determined at load-time.
+	if (!*this_arg.text) // The arg's variable is not one that needs to be dynamically resolved.
+		return VAR(this_arg); // Return the var's address that was already determined at load-time.
 	// The above might return NULL in the case where the arg is optional (i.e. the command allows
 	// the var name to be omitted).  But in that case, the caller should either never have called this
 	// function or should check for NULL upon return.  UPDATE: This actually never happens, see
@@ -4516,8 +5137,9 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 	DerefType *deref;
 	int vni;
 
-	for (vni = 0, pText = mArg[aArgIndex].text  // Start at the begining of this arg's text.
-		, deref = mArg[aArgIndex].deref  // Start off by looking for the first deref.
+	// Caller has ensured that none of these derefs are function calls (i.e. deref->is_function is alway false).
+	for (vni = 0, pText = this_arg.text  // Start at the begining of this arg's text.
+		, deref = this_arg.deref  // Start off by looking for the first deref.
 		; deref && deref->marker; ++deref)  // A deref with a NULL marker terminates the list.
 	{
 		// FOR EACH DEREF IN AN ARG (if we're here, there's at least one):
@@ -4532,7 +5154,7 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 			// NULL and terminate the current subroutine.
 			#define DYNAMIC_TOO_LONG "This dynamically built variable name is too long." \
 				"  If this variable was not intended to be dynamic, remove the % symbols from it."
-			LineError(DYNAMIC_TOO_LONG, FAIL, mArg[aArgIndex].text);
+			LineError(DYNAMIC_TOO_LONG, FAIL, this_arg.text);
 			return NULL;
 		}
 		// Now copy the contents of the dereferenced var.  For all cases, aBuf has already
@@ -4540,7 +5162,7 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 		// time we were called and the time the caller calculated the space needed.
 		if (deref->var->Get() > (VarSizeType)(MAX_VAR_NAME_LENGTH - vni)) // The variable name would be too long!
 		{
-			LineError(DYNAMIC_TOO_LONG, FAIL, mArg[aArgIndex].text);
+			LineError(DYNAMIC_TOO_LONG, FAIL, this_arg.text);
 			return NULL;
 		}
 		vni += deref->var->Get(var_name + vni);
@@ -4552,21 +5174,21 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 	for (; *pText && vni < MAX_VAR_NAME_LENGTH; var_name[vni++] = *pText++);
 	if (vni >= MAX_VAR_NAME_LENGTH && *pText) // The variable name would be too long!
 	{
-		LineError(DYNAMIC_TOO_LONG, FAIL, mArg[aArgIndex].text);
+		LineError(DYNAMIC_TOO_LONG, FAIL, this_arg.text);
 		return NULL;
 	}
 	
 	if (!vni)
 	{
 		LineError("This dynamic variable is blank.  If this variable was not intended to be dynamic,"
-			" remove the % symbols from it.", FAIL, mArg[aArgIndex].text);
+			" remove the % symbols from it.", FAIL, this_arg.text);
 		return NULL;
 	}
 
 	// Terminate the buffer, even if nothing was written into it:
 	var_name[vni] = '\0';
 
-	static Var empty_var(var_name);  // Must use var_name here.  See comment above for why.
+	static Var empty_var(var_name, VAR_NORMAL, false); // Must use var_name here.  See comment above for why.
 
 	Var *found_var;
 	if (!aCreateIfNecessary)
@@ -4576,7 +5198,9 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 		// check it if we're not calling that):
 		if (!Var::ValidateName(var_name, g_script.mIsReadyToExecute))
 			return NULL; // Above already displayed error for us.
-		if (found_var = g_script.FindVar(var_name)) // Assign.
+		// The use of ALWAYS_PREFER_LOCAL below improves flexibility of assume-global functions
+		// by allowing this command to resolve to a local first if such a local exists:
+		if (found_var = g_script.FindVar(var_name, 0, NULL, ALWAYS_PREFER_LOCAL)) // Assign.
 			return found_var;
 		// At this point, this is either a non-existent variable or a reserved/built-in variable
 		// that was never statically referenced in the script (only dynamically), e.g. A_IPAddress%A_Index%
@@ -4590,10 +5214,12 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 		//     StringTrimRight, IP, A_IPAddress%A_Index%, 0
 	}
 	// Otherwise, aCreateIfNecessary is true or we want to create this variable unconditionally for the
-	// reason described above.
-	if (   !(found_var = g_script.FindOrAddVar(var_name))   )
+	// reason described above.  ALWAYS_PREFER_LOCAL is used so that any existing local variable will
+	// take precedence over a global of the same name when assume-global is in effect.  If neither type
+	// of variable exists, a global variable will be created if assume-global is in effect.
+	if (   !(found_var = g_script.FindOrAddVar(var_name, 0, ALWAYS_PREFER_LOCAL))   )
 		return NULL;  // Above will already have displayed the error.
-	if (mArg[aArgIndex].type == ARG_TYPE_OUTPUT_VAR && VAR_IS_RESERVED(found_var))
+	if (this_arg.type == ARG_TYPE_OUTPUT_VAR && VAR_IS_RESERVED(found_var))
 	{
 		LineError(ERR_VAR_IS_RESERVED, FAIL, var_name);
 		return NULL;  // Don't return the var, preventing the caller from assigning to it.
@@ -4604,72 +5230,216 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 
 
 
-Var *Script::FindOrAddVar(char *aVarName, size_t aVarNameLength, Var *aSearchStart)
+Var *Script::FindOrAddVar(char *aVarName, size_t aVarNameLength, int aAlwaysUse, bool *apIsException)
+// Caller has ensured that aVarName isn't NULL.
 // Returns the Var whose name matches aVarName.  If it doesn't exist, it is created.
 {
-	if (!aVarName || !*aVarName) return NULL;
-	Var *var_prev;
-	Var *var = FindVar(aVarName, aVarNameLength, &var_prev, aSearchStart);  // 3rd param is a handle.
+	if (!*aVarName)
+		return NULL;
+	int insert_pos;
+	bool is_local; // Used to detect which type of var should be added in case the result of the below is NULL.
+	Var *var = FindVar(aVarName, aVarNameLength, &insert_pos, aAlwaysUse, apIsException, &is_local);
 	if (var)
 		return var;
 	// Otherwise, no match found, so create a new var.  This will return NULL if there was a problem,
 	// in which case AddVar() will already have displayed the error:
-	return AddVar(aVarName, aVarNameLength, var_prev);
+	return AddVar(aVarName, aVarNameLength, insert_pos, is_local);
 }
 
 
 
-Var *Script::FindVar(char *aVarName, size_t aVarNameLength, Var **apVarPrev, Var *aSearchStart)
+Var *Script::FindVar(char *aVarName, size_t aVarNameLength, int *apInsertPos, int aAlwaysUse
+	, bool *apIsException, bool *apIsLocal)
+// Caller has ensured that aVarName isn't NULL.  It must also ignore the contents of apInsertPos when
+// a match (non-NULL value) is returned.
 // Returns the Var whose name matches aVarName.  If it doesn't exist, NULL is returned.
-// If caller provided a non-NULL apVarPrev, it will be given a pointer to the variable
-// in the linked list after which the new variable would need to be inserted to maintain
-// alphabetical order, which helps performance and allows the ListVars command display
-// the variables in alphabetical order.
+// If caller provided a non-NULL apInsertPos, it will be given a the array index that a newly
+// inserted item should have to keep the list in sorted order (which also allows the ListVars command
+// to display the variables in alphabetical order).
 {
-	if (!aVarName || !*aVarName) return NULL;
+	if (!*aVarName)
+		return NULL;
 	if (!aVarNameLength) // Caller didn't specify, so use the entire string.
 		aVarNameLength = strlen(aVarName);
 
-	int result;
-	Var *var, *var_prev;
+	// For the below, no error is reported because callers don't want that.  Instead, simply return
+	// NULL to indicate that names that are illegal or too long are not found.  When the caller later
+	// tries to add the variable, it will get an error then:
+	if (aVarNameLength > MAX_VAR_NAME_LENGTH)
+		return NULL;
 
-	// If possible, start at aSearchStart, which is a performance hint from the caller:
-	for (var_prev = NULL, var = aSearchStart ? aSearchStart : mFirstVar
-		; var
-		; var_prev = var, var = var->mNextVar)
+	// The following copy is made because it allows the various searches below to use stricmp() instead of
+	// strlicmp(), which close to doubles their performance.  The copy includes only the first aVarNameLength
+	// characters from aVarName:
+	char var_name[MAX_VAR_NAME_LENGTH + 1];
+	strlcpy(var_name, aVarName, aVarNameLength + 1);  // +1 to convert length to size.
+
+	Var *found_var = NULL; // Set default.
+	bool is_local;
+	if (aAlwaysUse == ALWAYS_USE_GLOBAL)
+		is_local = false;
+	else if (aAlwaysUse == ALWAYS_USE_LOCAL)
+		is_local = true;
+	else if (aAlwaysUse == ALWAYS_PREFER_LOCAL)
 	{
-		result = strlicmp(aVarName, var->mName, (UINT)aVarNameLength);
-		if (!result) // Match found.
+		if (g.CurrentFunc) // Caller relies on us to do this final check.
+			is_local = true;
+		else
 		{
-			if (apVarPrev) // Caller should ignore the value in this case, but set to NULL for consistency.
-				*apVarPrev = NULL;
-			return var;
-		}
-		if (result < 0) // Because the list is sorted, we now know that aVarName does not exist in the list.
-		{
-			// Set the output parameter, if present:
-			if (apVarPrev)
-				*apVarPrev = var_prev; // This is the var after which the new var should be insertted.
-			return NULL;
+			is_local = false;
+			aAlwaysUse = ALWAYS_USE_GLOBAL;  // Override aAlwaysUse for maintainability, in case there are more references to it below.
 		}
 	}
-	// Otherwise, no match found after going through the entire list, which means that aVarName
-	// should be insertted at the end of the list by our caller (if it wishes to do that). So set the
-	// output parameter, if present, to the last item (which will be NULL if the linked list is empty).
-	if (apVarPrev)
-		*apVarPrev = mLastVar;
-	return NULL;
+	else // aAlwaysUse == ALWAYS_USE_DEFAULT
+	{
+		is_local = g.CurrentFunc && g.CurrentFunc->mDefaultVarType != VAR_ASSUME_GLOBAL; // i.e. ASSUME_LOCAL or ASSUME_NONE
+		if (mFuncExceptionVar) // Caller has ensured that this non-NULL if and only if g.CurrentFunc is non-NULL.
+		{
+			int i;
+			for (i = 0; i < mFuncExceptionVarCount; ++i)
+			{
+				if (!stricmp(var_name, mFuncExceptionVar[i]->mName))
+				{
+					is_local = !is_local;  // Since it's an exception, it's always the opposite of what it would have been.
+					found_var = mFuncExceptionVar[i];
+					break;
+				}
+			}
+			// The following section is necessary because a function's parameters are not put into the
+			// exception list during load-time.  Thus, for an VAR_ASSUME_GLOBAL function, these are basically
+			// treated as exceptions too.
+			// If this function is one that assumes variables are global, the function's parameters are
+			// implicitly declared local because parameters are always local:
+			// Since the following is inside this block, it is checked only at loadtime.  It doesn't need
+			// to be checked at runtime because most things that resolve input variables or variables whose
+			// contents will be read (as compared to something that tries to create a dynamic variable, such
+			// as ResolveVarOfArg() for an output variable) at runtime use the ALWAYS_PREFER_LOCAL flag to
+			// indicate that a local of the same name as a global should take precedence.  This adds more
+			// flexibility/benefit than its costs in terms of confusion because otherwise there would be
+			// no way to dynamically reference the local variables of an assume-global function.
+			if (g.CurrentFunc->mDefaultVarType == VAR_ASSUME_GLOBAL && !is_local) // g.CurrentFunc is also known to be non-NULL in this case.
+			{
+				for (i = 0; i < g.CurrentFunc->mParamCount; ++i)
+					if (!stricmp(var_name, g.CurrentFunc->mParam[i]->mName))
+					{
+						is_local = true;
+						found_var = g.CurrentFunc->mParam[i];
+						break;
+					}
+			}
+		} // if (there is an exception list)
+	} // aAlwaysUse == ALWAYS_USE_DEFAULT
+
+	if (apIsLocal) // Its purpose is to inform caller of type it would have been in case we don't find a match.
+		*apIsLocal = is_local; // And it stays this way even if globals will be searched because caller wants that.  In other words, a local var is created by default when there is not existing global or local.
+	if (apInsertPos) // Set default.  Caller should ignore the value when match is found.
+		*apInsertPos = -1;
+	if (apIsException)
+		*apIsException = (found_var != NULL);
+
+	if (found_var) // Match found (as an exception or load-time "is parameter" exception).
+		return found_var; // apInsertPos does not need to be set because caller doesn't need it when match is found.
+
+	// Init for binary search loop:
+	int left, right, mid, result;  // left/right must be ints to allow them to go negative and detect underflow.
+	Var **var;  // An array of pointers-to-var.
+	if (is_local)
+	{
+		var = g.CurrentFunc->mVar;
+		right = g.CurrentFunc->mVarCount - 1;
+	}
+	else
+	{
+		var = mVar;
+		right = mVarCount - 1;
+	}
+
+	// Binary search:
+	for (left = 0; left <= right;) // "right" was already initialized above.
+	{
+		mid = (left + right) / 2;
+		result = stricmp(var_name, var[mid]->mName);
+		if (result > 0)
+			left = mid + 1;
+		else if (result < 0)
+			right = mid - 1;
+		else // Match found.
+			return var[mid];
+	}
+
+	// Since above didn't return, no match was found in the main list, so search the lazy list if there
+	// is one.  If there's no lazy list, the value of "left" established above will be used as the
+	// insertion point further below:
+	if (is_local)
+	{
+		var = g.CurrentFunc->mLazyVar;
+		right = g.CurrentFunc->mLazyVarCount - 1;
+	}
+	else
+	{
+		var = mLazyVar;
+		right = mLazyVarCount - 1;
+	}
+
+	if (var) // There is a lazy list to search (and even if the list is empty, left must be reset to 0 below).
+	{
+		// Binary search:
+		for (left = 0; left <= right;)  // "right" was already initialized above.
+		{
+			mid = (left + right) / 2;
+			result = stricmp(var_name, var[mid]->mName);
+			if (result > 0)
+				left = mid + 1;
+			else if (result < 0)
+				right = mid - 1;
+			else // Match found.
+				return var[mid];
+		}
+	}
+
+	// Since above didn't return, no match was found and "left" always contains the position where aVarName
+	// should be inserted to keep the list sorted.  The item is always inserted into the lazy list unless
+	// there is no lazy list.
+	// Set the output parameter, if present:
+	if (apInsertPos) // Caller wants this value even if we'll be resorting to searching the global list below.
+		*apInsertPos = left; // This is the index a newly inserted item should have to keep alphabetical order.
+
+	// Since no match was found, if this is a local fall back to searching the list of globals at runtime
+	// if the caller didn't insist on a particular type:
+	if (is_local)
+	{
+		if (aAlwaysUse == ALWAYS_PREFER_LOCAL)
+		{
+			// In this case, callers want to fall back to globals when a local wasn't found.  However,
+			// they want the insertion (if our caller will be doing one) to insert according to the
+			// current assume-mode.  Therefore, if the mode is VAR_ASSUME_GLOBAL, pass the apIsLocal
+			// and apInsertPos variables to FindVar() so that it will update them to be global.
+			// Otherwise, do not pass them since they were already set correctly by us above.
+			if (g.CurrentFunc->mDefaultVarType == VAR_ASSUME_GLOBAL)
+				return FindVar(aVarName, aVarNameLength, apInsertPos, ALWAYS_USE_GLOBAL, NULL, apIsLocal);
+			else
+				return FindVar(aVarName, aVarNameLength, NULL, ALWAYS_USE_GLOBAL);
+		}
+		if (aAlwaysUse == ALWAYS_USE_DEFAULT && mIsReadyToExecute) // In this case, fall back to globals only at runtime.
+			return FindVar(aVarName, aVarNameLength, NULL, ALWAYS_USE_GLOBAL);
+	}
+	// Otherwise, since above didn't return:
+	return NULL; // No match.
 }
 
 
 
-Var *Script::AddVar(char *aVarName, size_t aVarNameLength, Var *aVarPrev)
-// This function should probably not be called by anyone except FindOrAddVar, which has already done
-// the dupe-checking and is also providing us with the insertion point so that the list stays sorted.
+Var *Script::AddVar(char *aVarName, size_t aVarNameLength, int aInsertPos, bool aIsLocal, VarTypeType aVarType)
+// Not currently needed (e.g. for VAR_ATTRIB_PARAM):	, VarAttribType aAttrib)
+// Caller has ensured that aVarName isn't NULL, that this isn't a duplicate variable name.
+// In addition, it has provided aInsertPos, which is the insertion point so that the list stays sorted.
+// Finally, aIsLocal has been provided to indicate which list, global or local, should receive this
+// new variable.  And aVarType should be != VAR_INVALID only when the caller wants us to add a variable
+// that is also the formal parameter of a function.
 // Returns the address of the new variable or NULL on failure.
-// The caller must already have verified that this isn't a duplicate var.
 {
-	if (!aVarName || !*aVarName) return NULL;  // Should never happen, so just silently indicate failure.
+	if (!*aVarName) // Should never happen, so just silently indicate failure.
+		return NULL;
 	if (!aVarNameLength) // Caller didn't specify, so use the entire string.
 		aVarNameLength = strlen(aVarName);
 
@@ -4694,6 +5464,25 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, Var *aVarPrev)
 		// Above already displayed error for us.  This can happen at loadtime or runtime (e.g. StringSplit).
 		return NULL;
 
+	// Not necessary or desirable to add built-in variables to a function's list of locals.  Always keep
+	// built-in vars in the global list for efficiency and to keep them out of ListVars.  Note that another
+	// section at loadtime displays an error for any attempt to explicitly declare built-in variables as
+	// either global or local.
+	VarTypeType var_type = GetVarType(var_name);
+	if (g.CurrentFunc && aIsLocal && (var_type != VAR_NORMAL || !stricmp(var_name, "ErrorLevel"))) // Attempt to create built-in variable as local.
+	{
+		if (aVarType == VAR_INVALID) // Caller didn't specify, so fall back to the global built-in variable of this name rather than displaying an error.
+			return FindOrAddVar(var_name, aVarNameLength, ALWAYS_USE_GLOBAL); // Force find-or-create of global.
+		else
+		{
+			ScriptError("Illegal parameter name.", aVarName); // Short message since so rare.
+			return NULL;
+		}
+	}
+	// Otherwise, if caller provided a valid aVarType, namely VAR_BYREF or VAR_NORMAL, override ours with it:
+	if (aVarType != VAR_INVALID)
+		var_type = aVarType;
+
 	// Allocate some dynamic memory to pass to the constructor:
 	char *new_name = SimpleHeap::Malloc(var_name);
 	if (!new_name)
@@ -4701,39 +5490,166 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, Var *aVarPrev)
 		// to bother varying the error message to include ERR_ABORT if this occurs during runtime.
 		return NULL;
 
-	VarTypeType var_type = GetVarType(new_name);
-
-	Var *the_new_var = new Var(new_name, var_type);
+	Var *the_new_var = new Var(new_name, var_type, aIsLocal); // , aAttrib);
 	if (the_new_var == NULL)
 	{
 		ScriptError(ERR_OUTOFMEM);
 		return NULL;
 	}
-	if (mFirstVar == NULL) // The list is empty, so this will be the first and last item.
-		mFirstVar = mLastVar = the_new_var;
-	else
+
+	// If there's a lazy var list, aInsertPos provided by the caller is for it, so this new variable
+	// always gets inserted into that list because there's always room for one more (because the
+	// previously added variable would have purged it if it had reached capacity).
+	Var **lazy_var = aIsLocal ? g.CurrentFunc->mLazyVar : mLazyVar;
+	int &lazy_var_count = aIsLocal ? g.CurrentFunc->mLazyVarCount : mLazyVarCount; // Used further below too.
+	if (lazy_var)
 	{
-		if (!aVarPrev) // Caller is telling us to insert it at the beginning of the list.
-		{
-			// These two statements must be done in this order:
-			the_new_var->mNextVar = mFirstVar;
-			mFirstVar = the_new_var;
-		}
-		else if (aVarPrev == mLastVar) // Caller is telling us to insert it at the end of the list.
-		{
-			// These two statements must be done in this order:
-			mLastVar->mNextVar = the_new_var;
-			mLastVar = the_new_var;
-		}
-		else // Caller is telling us to insert it somewhere in the middle of the list.
-		{
-			// These two statements must be done in this order:
-			the_new_var->mNextVar = aVarPrev->mNextVar;
-			aVarPrev->mNextVar = the_new_var;
-		}
+		if (aInsertPos != lazy_var_count) // Need to make room at the indicated position for this variable.
+			memmove(lazy_var + aInsertPos + 1, lazy_var + aInsertPos, (lazy_var_count - aInsertPos) * sizeof(Var *));
+		//else both are zero or the item is being inserted at the end of the list, so it's easy.
+		lazy_var[aInsertPos] = the_new_var;
+		++lazy_var_count;
+		// In a testing creating between 200,000 and 400,000 variables, using a size of 1000 vs. 500 improves
+		// the speed by 17%, but when you substract out the binary search time (leaving only the insert time),
+		// the increase is more like 34%.  But there is a diminishing return after that: Going to 2000 only
+		// gains 20%, and to 4000 only gains an addition 10%.  Therefore, to conserve memory in functions that
+		// have so many variables that the lazy list is used, a good trade-off seems to be 2000 (8 KB of memory)
+		// per function that needs it.
+		#define MAX_LAZY_VARS 2000 // Don't make this larger than 90000 without altering the incremental increase of alloc_count further below.
+		if (lazy_var_count < MAX_LAZY_VARS) // The lazy list hasn't yet reached capacity, so no need to merge it into the main list.
+			return the_new_var;
 	}
 
-	++mVarCount;
+	// Since above didn't return, either there is no lazy list or the lazy list is full and needs to be
+	// merged into the main list.
+
+	// Create references to whichever variable list (local or global) is being acted upon.  These
+	// references simplify the code:
+	Var **&var = aIsLocal ? g.CurrentFunc->mVar : mVar; // This needs to be a ref. too in case it needs to be realloc'd.
+	int &var_count = aIsLocal ? g.CurrentFunc->mVarCount : mVarCount;
+	int &var_count_max = aIsLocal ? g.CurrentFunc->mVarCountMax : mVarCountMax;
+	int alloc_count;
+
+	// Since the above would have returned if the lazy list is present but not yet full, if the left side
+	// of the OR below is false, it also means that lazy_var is NULL.  Thus lazy_var==NULL is implicit for the
+	// right side of the OR:
+	if ((lazy_var && var_count + MAX_LAZY_VARS > var_count_max) || var_count == var_count_max)
+	{
+		// Increase by orders of magnitude each time because realloc() is probably an expensive operation
+		// in terms of hurting performance.  So here, a little bit of memory is sacrificed to improve
+		// the expected level of performance for scripts that use hundreds of thousands of variables.
+		if (!var_count_max)
+			alloc_count = aIsLocal ? 100 : 1000;  // 100 conserves memory since every function needs such a block, and most functions have much fewer than 100 local variables.
+		else if (var_count_max < 1000)
+			alloc_count = 1000;
+		else if (var_count_max < 9999) // Making this 9999 vs. 10000 allows an exact/whole number of lazy_var blocks to fit into main indices between 10000 and 99999
+			alloc_count = 9999;
+		else if (var_count_max < 100000)
+		{
+			alloc_count = 100000;
+			// This is also the threshold beyond which the lazy list is used to accelerate performance.
+			// Create the permanently lazy list:
+			Var **&lazy_var = aIsLocal ? g.CurrentFunc->mLazyVar : mLazyVar;
+			if (   !(lazy_var = (Var **)malloc(MAX_LAZY_VARS * sizeof(Var *)))   )
+			{
+				ScriptError(ERR_OUTOFMEM);
+				return NULL;
+			}
+		}
+		else if (var_count_max < 1000000)
+			alloc_count = 1000000;
+		else
+			alloc_count = var_count_max + 1000000;  // i.e. continue to increase by 4MB (1M*4) each time.
+
+		Var **temp = (Var **)realloc(var, alloc_count * sizeof(Var *));
+		if (!temp)
+		{
+			ScriptError(ERR_OUTOFMEM);
+			return NULL;
+		}
+		var = temp;
+		var_count_max = alloc_count;
+	}
+
+	if (!lazy_var)
+	{
+		if (aInsertPos != var_count) // Need to make room at the indicated position for this variable.
+			memmove(var + aInsertPos + 1, var + aInsertPos, (var_count - aInsertPos) * sizeof(Var *));
+		//else both are zero or the item is being inserted at the end of the list, so it's easy.
+		var[aInsertPos] = the_new_var;
+		++var_count;
+		return the_new_var;
+	}
+	//else the variable was already inserted into the lazy list, so the above is not done.
+
+	// Since above didn't return, the lazy list is not only present, but full because otherwise it
+	// would have returned higher above.
+
+	// Since the lazy list is now at its max capacity, merge it into the main list (if the
+	// main list was at capacity, this section relies upon the fact that the above already
+	// increased its capacity by an amount far larger than the number of items containined
+	// in the lazy list).
+
+	// LAZY LIST: Although it's not nearly as good as hashing (which might be implemented in the future,
+	// though it would be no small undertaking since it affects so many design aspects, both load-time
+	// and runtime for scripts), this method of accelerating inserts into a binary search array is
+	// enormously beneficial because it improves the scalability of binary-search by two orders
+	// of magnitude (from about 100,000 variables to at least 5M).  Credit for the idea goes to Lazlo.
+	// DETAILS:
+	// The fact that this merge operation is so much faster than total work required
+	// to insert each one into the main list is the whole reason for having the lazy
+	// list.  In other words, the large memmove() that would otherwise be required
+	// to insert each new variable into the main list is completely avoided.  Large memmove()s
+	// are far more costly than small ones because apparently they can't fit into the CPU
+	// cache, so the operation would take hundreds or even thousands of times longer
+	// depending on the speed difference between main memory and CPU cache.  But above and
+	// beyond the CPU cache issue, the lazy sorting method results in vastly less memory
+	// being moved than would have been required without it, so even if the CPU doesn't have
+	// a cache, the lazy list method vastly increases performance for scripts that have more
+	// than 100,000 variables, allowing at least 5 million variables to be created without a
+	// dramatic reduction in performance.
+
+	char *target_name;
+	Var **insert_pos, **insert_pos_prev;
+	int i, left, right, mid;
+
+	// Append any items from the lazy list to the main list that are alphabetically greater than
+	// the last item in the main list.  Above has already ensured that the main list is large enough
+	// to accept all items in the lazy list.
+	for (i = lazy_var_count - 1, target_name = var[var_count - 1]->mName
+		; i >= 0 && stricmp(target_name, lazy_var[i]->mName) < 0
+		; --i);
+	// Above is a self-contained loop.
+	// Now do a separate loop to append (in the *correct* order) anything found above.
+	for (int j = i + 1; j < lazy_var_count; ++j) // Might have zero iterations.
+		var[var_count++] = lazy_var[j];
+	lazy_var_count = i + 1; // The number of items that remain after moving out those that qualified.
+
+	// This will have zero iterations if the above already moved them all:
+	for (insert_pos = var + var_count, i = lazy_var_count - 1; i >= 0; --i)
+	{
+		// Modified binary search that relies on the fact that caller has ensured a match will never
+		// be found in the main list for each item in the lazy list:
+		for (target_name = lazy_var[i]->mName, left = 0, right = (int)(insert_pos - var - 1); left <= right;)
+		{
+			mid = (left + right) / 2;
+			if (stricmp(target_name, var[mid]->mName) > 0)
+				left = mid + 1;
+			else // it must be < 0 because caller has ensured it can't be equal (i.e. that there will be no match)
+				right = mid - 1;
+		}
+		// Now "left" contains the insertion point is is known to be less than var_count due to a previous
+		// set of loops above.  Make a gap there large enough to hold all items because that allows a
+		// smaller total amount of memory to be moved by shifting the gap to the left in the main list,
+		// gradually filling it as we go:
+		insert_pos_prev = insert_pos;  // "prev" is the now the position of the beginning of the gap, but the gap is about to be shifted left by moving memory right.
+		insert_pos = var + left; // This is where it *would* be inserted if we weren't doing the accelerated merge.
+		memmove(insert_pos + i + 1, insert_pos, (insert_pos_prev - insert_pos) * sizeof(Var *));
+		var[left + i] = lazy_var[i]; // Now insert this item at the far right side of the gap just created.
+	}
+	var_count += lazy_var_count;
+	lazy_var_count = 0;  // Indicate that the lazy var list is now empty.
+
 	return the_new_var;
 }
 
@@ -4777,6 +5693,8 @@ VarTypes Script::GetVarType(char *aVarName)
 	if (!stricmp(aVarName, "A_ScriptName")) return VAR_SCRIPTNAME;
 	if (!stricmp(aVarName, "A_ScriptDir")) return VAR_SCRIPTDIR;
 	if (!stricmp(aVarName, "A_ScriptFullPath")) return VAR_SCRIPTFULLPATH;
+	if (!stricmp(aVarName, "A_LineNumber")) return VAR_LINENUMBER;
+	if (!stricmp(aVarName, "A_LineFile")) return VAR_LINEFILE;
 
 // A_IsCompiled is undefined in uncompiled scripts.
 #ifdef AUTOHOTKEYSC
@@ -4926,7 +5844,6 @@ ResultType Script::AddGroup(char *aGroupName)
 		// This must be done after the above:
 		mLastGroup = the_new_group;
 	}
-	++mGroupCount;
 	return OK;
 }
 
@@ -4942,7 +5859,7 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 	// Not a problem for the foreseeable future:
 	static nest_level; // Level zero is the outermost one: outside all blocks.
 	static bool abort;
-	if (aParentLine == NULL)
+	if (!aParentLine)
 	{
 		// We were called from outside, not recursively, so init these.  This is
 		// very important if this function is ever to be called from outside
@@ -4951,10 +5868,149 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 		abort = false;
 	}
 
+	int i, open_parens;
+	bool in_quotes;
+	DerefType *deref, *deref2;
+	char *param_start, *param_end, *param_last_char, *cp, c;
+	bool found;
+
 	// Don't check aStartingLine here at top: only do it at the bottom
 	// for its differing return values.
-	for (Line *line = aStartingLine; line != NULL;)
+	for (Line *line = aStartingLine; line;)
 	{
+		// Check if any of each arg's derefs are function calls.  If so, do some validation and
+		// preprocessing to set things up for better runtime performance:
+		for (i = 0; i < line->mArgc; ++i) // For each arg.
+		{
+			ArgStruct &this_arg = line->mArg[i]; // For performance and convenience.
+			// Exclude the derefs of output and input vars from consideration, since they can't
+			// be function calls:
+			if (!this_arg.is_expression) // For now, only expressions are capable of calling functions. If ever change this, might want to add a check here for this_arg.type != ARG_TYPE_NORMAL (for performance).
+				continue;
+			for (deref = this_arg.deref; deref && deref->marker; ++deref) // For each deref.
+			{
+				if (!deref->is_function)
+					continue;
+				if (   !(deref->func = FindFunc(deref->marker, deref->length))   ) // An earlier stage has ensured that if the function exists, it's mJumpToLine is non-NULL.
+					return line->PreparseError("Call to nonexistent function.", deref->marker);
+				Func &func = *deref->func; // For performance and convenience.
+				// Ealier stage has ensured that strchr() will always find an open-paren:
+				for (deref->param_count = 0, param_start = omit_leading_whitespace(strchr(deref->marker, '(') + 1);;)
+				{
+					// For each parameter of this function-call.
+					if (*param_start == ')') // No more params.
+						break;
+					if (*param_start == ',')
+						return line->PreparseError(ERR_BLANK_PARAM, deref->marker);
+					// Although problems such as blank/empty parameters and missing close-paren were already
+					// checked by DefineFunc(), that was done only for the function's formal definition, not
+					// the calls to it.  And although parens were balanced in all expressions at an earlier
+					// stage, it's done again here in case function calls are ever allowed to be occur in
+					// a non-expression.
+					if (!*param_start)
+						return line->PreparseError(ERR_MISSING_CLOSE_PAREN, deref->marker);
+
+					// Find the end of this function-param by taking into account nested parens, omitting
+					// from consideration any parens inside of quoted/literal strings.  When this loop is done,
+					// param_end this param's final comma or this function-call's close-paren when this param
+					// is the last one.
+					for (in_quotes = false, open_parens = 0, param_end = param_start;; ++param_end)
+					{
+						// If nested function calls are encountered within the function call being examined
+						// now, they are skipped over because they will be processed here only when the outer
+						// loop gets to them.
+						c = *param_end; // switch() is not used so that "break" can be used to exit the loop.
+						if (c == ',')
+						{
+							if (!(in_quotes || open_parens)) // This comma belongs to our function, so it marks the end of this param.
+								break;
+							//else it's not a real comma since it's inside the parens of a subexpression or
+							// sub-function, or inside a quoted/literal string.  Ignore it.
+						}
+						else if (c == ')')
+						{
+							if (!in_quotes)
+							{
+								if (!open_parens) // This is our function's close-paren, and thus the end of this param.
+									break;
+								else
+									--open_parens;
+							}
+							//else it's not a real paren since it's inside a quoted/literal string.  Ignore it.
+						}
+						else if (c == '(')
+						{
+							if (!in_quotes) // Literal parens inside a quoted string should not be counted for this purpose.
+								++open_parens;
+						}
+						else if (c == '"')
+							// The simple method below is sufficient for our purpose even if a quoted string contains
+							// pairs of double-quotes to represent a single literal quote, e.g. "quoted ""word""".
+							// In other words, it relies on the fact that there must be an even number of quotes
+							// inside any mandatory-numeric arg that is an expression such as x=="red,blue"
+							in_quotes = !in_quotes;
+						else if (!c) // This function lacks a closing paren.
+							// Might happen if this is a syntax error not catchable by the earlier stage of syntax
+							// checking (paren balancing, quote balancing, etc.)
+							return line->PreparseError(ERR_MISSING_CLOSE_PAREN, deref->marker);
+						//else it's some other, non-special character, so ignore it.
+					} // for() that finds the end of this param of this function.
+
+					// Above would have returned unless *param_end is either a comma or close-paren (namely the
+					// one that terminates this parameter of this function).
+
+					if (deref->param_count >= func.mParamCount) // Check this every iteration to avoid going beyond MAX_FUNCTION_PARAMS.
+						return line->PreparseError("Too many params passed to function.", deref->marker);
+					// Below relies on the above check having been done first to avoid reading beyond the
+					// end of the mParam array.
+					// If this parameter is formally declared as ByRef, report a load-time error if
+					// the actual-parameter is obviously not a variable (can't catch everything, such
+					// as invalid double derefs, e.g. Array%VarContainingSpaces%):
+					if (func.mType == FUNC_NORMAL && func.mParam[deref->param_count]->IsByRef())
+					{
+						// First check if there are any EXP_TELLTALES characters in this param, since the
+						// presence of an expression for this parameter means it can't resolve to a variable
+						// as required by ByRef:
+						for (cp = param_start, param_last_char = omit_trailing_whitespace(param_start, param_end - 1)
+							; cp <= param_last_char; ++cp)
+							if (strchr(EXP_ALL_SYMBOLS, *cp))
+								return line->PreparseError(ERR_BYREF, param_start);   // param_start seems more informative than func.mParam[deref->param_count]->mName
+						// Below relies on the above having been done because the above should prevent
+						// any is_function derefs from being possible since their parens would have been caught
+						// as an error:
+						// For each deref after the function name itself, ensure that there is at least
+						// one deref in between this param's param_start and param_end.  This finds many
+						// common syntax errors such as passing a literal number or string to a ByRef
+						// parameter.  Note that there can be more than one for something like Array%i%_%j%.
+						for (found = false, deref2 = deref + 1; deref2 && deref2->marker; ++deref2)
+							if (deref2->marker >= param_start && deref2->marker < param_end)
+							{
+								found = true;
+								break;
+							}
+						if (!found)
+							return line->PreparseError(ERR_BYREF, param_start); // param_start seems more informative than func.mParam[deref->param_count]->mName
+					}
+
+					++deref->param_count;
+
+					// Set up for the next iteration:
+					param_start = param_end; // Must already be a comma or close-paren due to checking higher above.
+					if (*param_start == ',')
+					{
+						param_start = omit_leading_whitespace(param_start + 1);
+						if (*param_start == ')')
+							return line->PreparseError(ERR_BLANK_PARAM, param_start); // Report param_start vs. aBuf to give an idea of where the blank parameter is in a possibly long list of params.
+					}
+					//else it might be ')', in which case the next iteration will handle it.
+					// Above has ensured that param_start now points to the next parameter, or ')' if none.
+				} // for each parameter of this function call.
+				if (deref->param_count < func.mParamCount
+					&& (func.mType == FUNC_NORMAL || deref->param_count < func.mMinParams))
+					return line->PreparseError("Too few params passed to function.", deref->marker);
+			} // for each deref of this arg
+		} // for each arg of this line
+
 		// All lines in our recursion layer are assigned to the block that the caller specified:
 		if (line->mParentLine == NULL) // i.e. don't do it if it's already "owned" by an IF or ELSE.
 			line->mParentLine = aParentLine; // Can be NULL.
@@ -5038,7 +6094,8 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 		default: // Continue line-by-line.
 			line = line->mNextLine;
 		} // switch()
-	} // for()
+	} // for each line
+
 	// End of script has been reached.  <line> is now NULL so don't attempt to dereference it.
 	// If we were still looking for an EndBlock to match up with a begin, that's an error.
 	// Don't report the error here because we don't know which begin-block is waiting
@@ -5360,15 +6417,38 @@ char *Line::sSourceFile[MAX_SCRIPT_FILES]; // No init needed.
 int Line::nSourceFiles = 0;  // Zero source files initially.  The main script will be the first.
 
 char *Line::sDerefBuf = NULL;  // Buffer to hold the values of any args that need to be dereferenced.
-char *Line::sDerefBufMarker = NULL;
 size_t Line::sDerefBufSize = 0;
+int Line::sLargeDerefBufs = 0; // Keeps track of how many large bufs exist on the call-stack, for the purpose of determining when to stop the buffer-freeing timer.
 char *Line::sArgDeref[MAX_ARGS]; // No init needed.
 Var *Line::sArgVar[MAX_ARGS]; // Same.
 
 
-ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_DATA *aCurrentFile
-	, RegItemStruct *aCurrentRegItem, LoopReadFileStruct *aCurrentReadFile, char *aCurrentField
-	, __int64 aCurrentLoopIteration)
+void Line::FreeDerefBufIfLarge()
+{
+	if (sDerefBufSize > LARGE_DEREF_BUF_SIZE)
+	{
+		// Freeing the buffer should be safe even if the script's current quasi-thread is in the middle
+		// of executing a command, since commands are all designed to make only temporary use of the
+		// deref buffer (they make copies of anything they need prior to calling MsgSleep() or anything
+		// else that might pump messages and thus result in a call to us here).
+		free(sDerefBuf); // The above size-check has ensured this is non-NULL.
+		sDerefBuf = NULL;
+		sDerefBufSize = 0;
+		--sLargeDerefBufs;
+		if (!sLargeDerefBufs)
+			KILL_DEREF_TIMER
+	}
+	//else leave the timer running because some other deref buffer in a recursed ExpandArgs() layer
+	// is still waiting to be freed (even if it isn't, it should be harmless to keep the timer running
+	// just in case, since each call to ExpandArgs() will reset/postpone the timer due to the script
+	// having demonstrated that it isn't idle).
+}
+
+
+
+ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJumpToLine
+	, WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aCurrentRegItem, LoopReadFileStruct *aCurrentReadFile
+	, char *aCurrentField, __int64 aCurrentLoopIteration)
 // Start executing at "this" line, stop when aMode indicates.
 // RECURSIVE: Handles all lines that involve flow-control.
 // aMode can be UNTIL_RETURN, UNTIL_BLOCK_END, ONLY_ONE_LINE.
@@ -5507,8 +6587,14 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
 		// line (e.g. control stmts such as IF and LOOP).  Also, don't expand
 		// ACT_ASSIGN because a more efficient way of dereferencing may be possible
 		// in that case:
-		if (line->mActionType != ACT_ASSIGN && line->ExpandArgs() != OK)
-			return FAIL;  // Abort the current subroutine, but don't terminate the app.
+		if (line->mActionType != ACT_ASSIGN)
+		{
+			result = line->ExpandArgs();
+			// As of v1.0.31, ExpandArgs() will also return EARLY_EXIT if a function call inside one of this
+			// line's expressions did an EXIT.
+			if (result != OK)
+				return result; // In the case of FAIL: Abort the current subroutine, but don't terminate the app.
+		}
 
 		if (ACT_IS_IF(line->mActionType))
 		{
@@ -5520,7 +6606,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
 			{
 				// line->mNextLine has already been verified non-NULL by the pre-parser, so
 				// this dereference is safe:
-				result = line->mNextLine->ExecUntil(ONLY_ONE_LINE, &jump_to_line, aCurrentFile
+				result = line->mNextLine->ExecUntil(ONLY_ONE_LINE, apReturnValue, &jump_to_line, aCurrentFile
 					, aCurrentRegItem, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
 				if (jump_to_line == line)
 					// Since this IF's ExecUntil() encountered a Goto whose target is the IF
@@ -5597,7 +6683,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
 				if (line->mActionType == ACT_ELSE) // This IF has an else.
 				{
 					// Preparser has ensured that every ELSE has a non-NULL next line:
-					result = line->mNextLine->ExecUntil(ONLY_ONE_LINE, &jump_to_line, aCurrentFile
+					result = line->mNextLine->ExecUntil(ONLY_ONE_LINE, apReturnValue, &jump_to_line, aCurrentFile
 						, aCurrentRegItem, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
 					if (aMode == ONLY_ONE_LINE && jump_to_line != NULL && apJumpToLine != NULL)
 						// The above call to ExecUntil() told us to jump somewhere.  But since we're in
@@ -5634,6 +6720,34 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
 		// flow-control types:
 		switch (line->mActionType)
 		{
+		case ACT_GOSUB:
+			// A single gosub can cause an infinite loop if misused (i.e. recusive gosubs),
+			// so be sure to do this to prevent the program from hanging:
+			++g_script.mLinesExecutedThisCycle;
+			if (   !(jump_target = line->mRelatedLine)   )
+				// The label is a dereference, otherwise it would have been resolved at load-time.
+				// So send true because we don't want to update its mRelatedLine.  This is because
+				// we want to resolve the label every time through the loop in case the variable
+				// that contains the label changes, e.g. Gosub, %MyLabel%
+				if (   !(jump_target = line->GetJumpTarget(true))   )
+					return FAIL; // Error was already displayed by called function.
+			// I'm pretty sure it's not valid for this call to ExecUntil() to tell us to jump
+			// somewhere, because the called function, or a layer even deeper, should handle
+			// the goto prior to returning to us?  So the last param is omitted:
+			result = jump_target->ExecUntil(UNTIL_RETURN, NULL, NULL, aCurrentFile, aCurrentRegItem
+				, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
+			// Must do these return conditions in this specific order:
+			if (result == FAIL || result == EARLY_EXIT)
+				return result;
+			if (aMode == ONLY_ONE_LINE)
+				// This Gosub doesn't want its caller to know that the gosub's
+				// subroutine returned early:
+				return (result == EARLY_RETURN) ? OK : result;
+			// If the above didn't return, the subroutine finished successfully and
+			// we should now continue on with the line after the Gosub:
+			line = line->mNextLine;
+			break;  // Resume looping starting at the above line.
+
 		case ACT_GOTO:
 			// A single goto can cause an infinite loop if misused, so be sure to do this to
 			// prevent the program from hanging:
@@ -5660,33 +6774,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
 			// Otherwise, we will handle this Goto since it's in our nesting layer:
 			line = jump_target;
 			break;  // Resume looping starting at the above line.
-		case ACT_GOSUB:
-			// A single gosub can cause an infinite loop if misused (i.e. recusive gosubs),
-			// so be sure to do this to prevent the program from hanging:
-			++g_script.mLinesExecutedThisCycle;
-			if (   !(jump_target = line->mRelatedLine)   )
-				// The label is a dereference, otherwise it would have been resolved at load-time.
-				// So send true because we don't want to update its mRelatedLine.  This is because
-				// we want to resolve the label every time through the loop in case the variable
-				// that contains the label changes, e.g. Gosub, %MyLabel%
-				if (   !(jump_target = line->GetJumpTarget(true))   )
-					return FAIL; // Error was already displayed by called function.
-			// I'm pretty sure it's not valid for this call to ExecUntil() to tell us to jump
-			// somewhere, because the called function, or a layer even deeper, should handle
-			// the goto prior to returning to us?  So the last param is omitted:
-			result = jump_target->ExecUntil(UNTIL_RETURN, NULL, aCurrentFile, aCurrentRegItem
-				, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
-			// Must do these return conditions in this specific order:
-			if (result == FAIL || result == EARLY_EXIT)
-				return result;
-			if (aMode == ONLY_ONE_LINE)
-				// This Gosub doesn't want its caller to know that the gosub's
-				// subroutine returned early:
-				return (result == EARLY_RETURN) ? OK : result;
-			// If the above didn't return, the subroutine finished successfully and
-			// we should now continue on with the line after the Gosub:
-			line = line->mNextLine;
-			break;  // Resume looping starting at the above line.
+
 		case ACT_GROUPACTIVATE:
 		{
 			// This section is here rather than in Perform() because GroupActivate can
@@ -5707,7 +6795,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
 					// crazy place:
 					return FAIL;
 				// This section is just like the Gosub code above, so maintain them together.
-				result = jump_to_line->ExecUntil(UNTIL_RETURN, NULL, aCurrentFile, aCurrentRegItem
+				result = jump_to_line->ExecUntil(UNTIL_RETURN, NULL, NULL, aCurrentFile, aCurrentRegItem
 					, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
 				if (result == FAIL || result == EARLY_EXIT)
 					return result;
@@ -5717,13 +6805,22 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
 			line = line->mNextLine;
 			break;
 		}
+
 		case ACT_RETURN:
-			// Don't count returns against the total since they should be nearly instantaneous:
-			//++g_script.mLinesExecutedThisCycle;
-			// Note about RETURNs:
 			// Although a return is really just a kind of block-end, keep it separate
 			// because when a return is encountered inside a block, it has a double function:
 			// to first break out of all enclosing blocks and then return from the gosub.
+			// NOTE: The return's ARG1 expression has been evaluated by ExpandArgs() above,
+			// which is desirable *even* if apReturnValue is NULL (i.e. the caller will be
+			// ignoring the return value) in case the return's expression calls a function
+			// which has side-effects.  For example, "return LogThisEvent()" would likely
+			// be a function call that does something, so it should be called even though
+			// its return value is discarded.
+			if (apReturnValue) // Caller wants the return value.
+				*apReturnValue = LINE_ARG1; // This sets it to blank if this return lacks an arg.
+			//else the return value, if any, is discarded.
+			// Don't count returns against the total since they should be nearly instantaneous:
+			//++g_script.mLinesExecutedThisCycle;
 			if (aMode != UNTIL_RETURN)
 				// Tells the caller to return early if it's not the Gosub that directly
 				// brought us into this subroutine.  i.e. it allows us to escape from
@@ -5731,13 +6828,10 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
 				// recursive layers and back to the place this RETURN has meaning
 				// to someone (at the right recursion layer):
 				return EARLY_RETURN;
-			// For now, I don't think there's any way to generate a "Return with
-			// no matching Gosub" error, because RETURN effectively exits the
-			// script, going back into the message event loop in WinMain()?
 			return OK;
 
-		case ACT_REPEAT:
 		case ACT_LOOP:
+		case ACT_REPEAT:
 		{
 			AttributeType attr = line->mAttribute;
 			HKEY root_key_type = NULL; // This will hold the type of root key, independent of whether it is local or remote.
@@ -5833,10 +6927,10 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
 				// The phrase "csv" is unique enough since user can always rearrange the letters
 				// to do a literal parse using C, S, and V as delimiters:
 				if (stricmp(LINE_ARG3, "CSV"))
-					result = line->PerformLoopParse(aCurrentFile, aCurrentRegItem, aCurrentReadFile
+					result = line->PerformLoopParse(apReturnValue, aCurrentFile, aCurrentRegItem, aCurrentReadFile
 						, continue_main_loop, jump_to_line, script_iteration);
 				else
-					result = line->PerformLoopParseCSV(aCurrentFile, aCurrentRegItem, aCurrentReadFile
+					result = line->PerformLoopParseCSV(apReturnValue, aCurrentFile, aCurrentRegItem, aCurrentReadFile
 						, continue_main_loop, jump_to_line, script_iteration);
 			}
 			else if (attr == ATTR_LOOP_READ_FILE)
@@ -5845,7 +6939,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
 				FILE *read_file = fopen(LINE_ARG2, "r");
 				if (read_file)
 				{
-					result = line->PerformLoopReadFile(aCurrentFile, aCurrentRegItem, aCurrentField
+					result = line->PerformLoopReadFile(apReturnValue, aCurrentFile, aCurrentRegItem, aCurrentField
 						, continue_main_loop, jump_to_line, read_file, LINE_ARG3, script_iteration);
 					fclose(read_file);
 				}
@@ -5867,7 +6961,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
 				if (root_key)
 				{
 					// root_key_type needs to be passed in order to support GetLoopRegKey():
-					result = line->PerformLoopReg(aCurrentFile, aCurrentReadFile, aCurrentField
+					result = line->PerformLoopReg(apReturnValue, aCurrentFile, aCurrentReadFile, aCurrentField
 						, continue_main_loop, jump_to_line, file_loop_mode, recurse_subfolders
 						, root_key_type, root_key, LINE_ARG2, script_iteration);
 					if (is_remote_registry)
@@ -5882,7 +6976,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
 					result = OK;
 			}
 			else // All other loops types are handled this way:
-				result = line->PerformLoop(aCurrentFile, aCurrentRegItem, aCurrentReadFile
+				result = line->PerformLoop(apReturnValue, aCurrentFile, aCurrentRegItem, aCurrentReadFile
 					, aCurrentField, continue_main_loop, jump_to_line, attr, file_loop_mode, recurse_subfolders
 					, LINE_ARG1, iteration_limit, is_infinite, script_iteration);
 
@@ -5924,10 +7018,13 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
 			line = line->mRelatedLine;
 			break;
 		} // case ACT_LOOP.
+
 		case ACT_BREAK:
 			return LOOP_BREAK;
+
 		case ACT_CONTINUE:
 			return LOOP_CONTINUE;
+
 		case ACT_EXIT:
 			// If this script has no hotkeys and hasn't activated one of the hooks, EXIT will cause the
 			// the program itself to terminate.  Otherwise, it causes us to return from all blocks
@@ -5935,18 +7032,30 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
 			// by a hotkey):
 			if (IS_PERSISTENT)
 				return EARLY_EXIT;  // It's "early" because only the very end of the script is the "normal" exit.
+				// EARLY_EXIT needs to be distinct from FAIL for ExitApp() and AutoExecSection().
 			else
 				// This has been tested and it does yield to the OS the error code indicated in ARG1,
 				// if present (otherwise it returns 0, naturally) as expected:
 				return g_script.ExitApp(EXIT_EXIT, NULL, ATOI(LINE_ARG1));
+
 		case ACT_EXITAPP: // Unconditional exit.
 			return g_script.ExitApp(EXIT_EXIT, NULL, ATOI(LINE_ARG1));
+
 		case ACT_BLOCK_BEGIN:
+			if (line->mAttribute) // This is the ACT_BLOCK_BEGIN that starts a function's body.
+			{
+				// Any time this happens at runtime it means a function has been defined inside the
+				// auto-execute section, a block, or other place the flow of execution can reach
+				// on its own.  This is not considered a call to the function.  Instead, the entire
+				// body is just skipped over using this high performance method:
+				line = line->mRelatedLine; // Resume execution at the line following this functions end-block.
+				break;
+			}
 			// Don't count block-begin/end against the total since they should be nearly instantaneous:
 			//++g_script.mLinesExecutedThisCycle;
 			// In this case, line->mNextLine is already verified non-NULL by the pre-parser:
-			result = line->mNextLine->ExecUntil(UNTIL_BLOCK_END, &jump_to_line, aCurrentFile, aCurrentRegItem
-				, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
+			result = line->mNextLine->ExecUntil(UNTIL_BLOCK_END, apReturnValue, &jump_to_line, aCurrentFile
+				, aCurrentRegItem, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
 			if (jump_to_line == line)
 				// Since this Block-begin's ExecUntil() encountered a Goto whose target is the
 				// block-begin itself, continue with the for-loop without moving to a different
@@ -5993,6 +7102,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
 				// UPDATE: It can't be NULL (not that it matters in this case) since the loader
 				// has ensured that all scripts now end in an ACT_EXIT.
 			break;  // Resume looping starting at the above line.
+
 		case ACT_BLOCK_END:
 			// Don't count block-begin/end against the total since they should be nearly instantaneous:
 			//++g_script.mLinesExecutedThisCycle;
@@ -6014,14 +7124,13 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, Line **apJumpToLine, WIN32_FIND_
 		default:
 			++g_script.mLinesExecutedThisCycle;
 			result = line->Perform(aCurrentFile, aCurrentRegItem, aCurrentReadFile);
-			if (result == FAIL || aMode == ONLY_ONE_LINE)
-				// Thus, Perform() should be designed to only return FAIL if it's an
-				// error that would make it unsafe to proceed the subroutine
-				// we're executing now:
-				return result;
+			if (!result || aMode == ONLY_ONE_LINE)
+				// Thus, Perform() should be designed to only return FAIL if it's an error that would make
+				// it unsafe to proceed in the subroutine we're executing now:
+				return result; // Can be either OK or FAIL.
 			line = line->mNextLine;
-		}
-	}
+		} // switch()
+	} // for each line
 
 	// Above loop ended because the end of the script was reached.
 	// At this point, it should be impossible for aMode to be
@@ -6145,7 +7254,7 @@ inline ResultType Line::EvaluateCondition()
 		#undef IF_EITHER_IS_FLOAT
 		#define IF_EITHER_IS_FLOAT if (value_is_pure_numeric == PURE_FLOAT || var_is_pure_numeric == PURE_FLOAT)
 
-		if (mArgc > 1 && sArgVar[0] && sArgVar[0]->mIsBinaryClip && sArgVar[1] && sArgVar[1]->mIsBinaryClip)
+		if (mArgc > 1 && sArgVar[0] && sArgVar[0]->IsBinaryClip() && sArgVar[1] && sArgVar[1]->IsBinaryClip())
 			if_condition = (sArgVar[0]->Length() == sArgVar[1]->Length())
 				&& !memcmp(sArgVar[0]->Contents(), sArgVar[1]->Contents(), sArgVar[0]->Length());
 		else
@@ -6361,7 +7470,7 @@ inline ResultType Line::EvaluateCondition()
 
 
 
-ResultType Line::PerformLoop(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
+ResultType Line::PerformLoop(char **apReturnValue, WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
 	, LoopReadFileStruct *apCurrentReadFile, char *aCurrentField, bool &aContinueMainLoop
 	, Line *&aJumpToLine, AttributeType aAttr, FileLoopModeType aFileLoopMode
 	, bool aRecurseSubfolders, char *aFilePattern, __int64 aIterationLimit, bool aIsInfinite
@@ -6416,7 +7525,7 @@ ResultType Line::PerformLoop(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCu
 		// Preparser has ensured that every LOOP has a non-NULL next line.
 		// apCurrentFile is sent as an arg so that more than one nested/recursive
 		// file-loop can be supported:
-		result = mNextLine->ExecUntil(ONLY_ONE_LINE, &jump_to_line
+		result = mNextLine->ExecUntil(ONLY_ONE_LINE, apReturnValue, &jump_to_line
 			, file_found ? &new_current_file : apCurrentFile // inner loop's file takes precedence over outer's.
 			, apCurrentRegItem, apCurrentReadFile, aCurrentField
 			, aIndex + 1);  // i+1, since 1 is the first iteration as reported to the script.
@@ -6511,7 +7620,7 @@ ResultType Line::PerformLoop(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCu
 		// its first loop iteration.  This is because this directory is being recursed into, not
 		// processed itself as a file-loop item (since this was already done in the first loop,
 		// above, if its name matches the original search pattern):
-		result = PerformLoop(NULL, apCurrentRegItem, apCurrentReadFile, aCurrentField
+		result = PerformLoop(apReturnValue, NULL, apCurrentRegItem, apCurrentReadFile, aCurrentField
 			, aContinueMainLoop, aJumpToLine, aAttr, aFileLoopMode, aRecurseSubfolders, file_path
 			, aIterationLimit, aIsInfinite, aIndex);
 		// result should never be LOOP_CONTINUE because the above call to PerformLoop() should have
@@ -6535,7 +7644,7 @@ ResultType Line::PerformLoop(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCu
 
 
 
-ResultType Line::PerformLoopReg(WIN32_FIND_DATA *apCurrentFile, LoopReadFileStruct *apCurrentReadFile
+ResultType Line::PerformLoopReg(char **apReturnValue, WIN32_FIND_DATA *apCurrentFile, LoopReadFileStruct *apCurrentReadFile
 	, char *aCurrentField, bool &aContinueMainLoop, Line *&aJumpToLine, FileLoopModeType aFileLoopMode
 	, bool aRecurseSubfolders, HKEY aRootKeyType, HKEY aRootKey, char *aRegSubkey, __int64 &aIndex)
 // aRootKeyType is the type of root key, independent of whether it's local or remote.
@@ -6569,7 +7678,7 @@ ResultType Line::PerformLoopReg(WIN32_FIND_DATA *apCurrentFile, LoopReadFileStru
 	// Note that &reg_item is passed to ExecUntil() rather than 
 	#define MAKE_SCRIPT_LOOP_PROCESS_THIS_ITEM \
 	{\
-		result = mNextLine->ExecUntil(ONLY_ONE_LINE, &jump_to_line, apCurrentFile\
+		result = mNextLine->ExecUntil(ONLY_ONE_LINE, apReturnValue, &jump_to_line, apCurrentFile\
 			, &reg_item, apCurrentReadFile, aCurrentField, ++aIndex);\
 		if (result == LOOP_BREAK || result == EARLY_RETURN || result == EARLY_EXIT || result == FAIL)\
 		{\
@@ -6642,7 +7751,7 @@ ResultType Line::PerformLoopReg(WIN32_FIND_DATA *apCurrentFile, LoopReadFileStru
 				snprintf(subkey_full_path, sizeof(subkey_full_path), "%s%s%s", reg_item.subkey
 					, *reg_item.subkey ? "\\" : "", reg_item.name);
 				// This section is very similar to the one in PerformLoop(), so see it for comments:
-				result = PerformLoopReg(apCurrentFile, apCurrentReadFile, aCurrentField, aContinueMainLoop
+				result = PerformLoopReg(apReturnValue, apCurrentFile, apCurrentReadFile, aCurrentField, aContinueMainLoop
 					, aJumpToLine, aFileLoopMode, aRecurseSubfolders, aRootKeyType, aRootKey, subkey_full_path, aIndex);
 				if (result == LOOP_BREAK || result == EARLY_RETURN || result == EARLY_EXIT || result == FAIL)
 				{
@@ -6663,7 +7772,7 @@ ResultType Line::PerformLoopReg(WIN32_FIND_DATA *apCurrentFile, LoopReadFileStru
 
 
 
-ResultType Line::PerformLoopParse(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
+ResultType Line::PerformLoopParse(char **apReturnValue, WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
 	, LoopReadFileStruct *apCurrentReadFile, bool &aContinueMainLoop, Line *&aJumpToLine, __int64 &aIndex)
 {
 	if (!*ARG2) // Since the input variable's contents are blank, the loop will execute zero times.
@@ -6745,7 +7854,7 @@ ResultType Line::PerformLoopParse(WIN32_FIND_DATA *apCurrentFile, RegItemStruct 
 		}
 
 		// See comments in PerformLoop() for details about this section.
-		result = mNextLine->ExecUntil(ONLY_ONE_LINE, &jump_to_line, apCurrentFile, apCurrentRegItem
+		result = mNextLine->ExecUntil(ONLY_ONE_LINE, apReturnValue, &jump_to_line, apCurrentFile, apCurrentRegItem
 			, apCurrentReadFile, field, ++aIndex);
 
 		if (result == LOOP_BREAK || result == EARLY_RETURN || result == EARLY_EXIT || result == FAIL)
@@ -6774,7 +7883,7 @@ ResultType Line::PerformLoopParse(WIN32_FIND_DATA *apCurrentFile, RegItemStruct 
 
 
 
-ResultType Line::PerformLoopParseCSV(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
+ResultType Line::PerformLoopParseCSV(char **apReturnValue, WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
 	, LoopReadFileStruct *apCurrentReadFile, bool &aContinueMainLoop, Line *&aJumpToLine, __int64 &aIndex)
 // This function is similar to PerformLoopParse() so the two should be maintained together.
 // See PerformLoopParse() for comments about the below (comments have been mostly stripped
@@ -6861,7 +7970,7 @@ ResultType Line::PerformLoopParseCSV(WIN32_FIND_DATA *apCurrentFile, RegItemStru
 		}
 
 		// See comments in PerformLoop() for details about this section.
-		result = mNextLine->ExecUntil(ONLY_ONE_LINE, &jump_to_line, apCurrentFile, apCurrentRegItem
+		result = mNextLine->ExecUntil(ONLY_ONE_LINE, apReturnValue, &jump_to_line, apCurrentFile, apCurrentRegItem
 			, apCurrentReadFile, field, ++aIndex);
 
 		if (result == LOOP_BREAK || result == EARLY_RETURN || result == EARLY_EXIT || result == FAIL)
@@ -6903,7 +8012,7 @@ ResultType Line::PerformLoopParseCSV(WIN32_FIND_DATA *apCurrentFile, RegItemStru
 
 
 
-ResultType Line::PerformLoopReadFile(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
+ResultType Line::PerformLoopReadFile(char **apReturnValue, WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
 	, char *aCurrentField, bool &aContinueMainLoop, Line *&aJumpToLine, FILE *aReadFile, char *aWriteFileName
 	, __int64 &aIndex)
 {
@@ -6918,7 +8027,7 @@ ResultType Line::PerformLoopReadFile(WIN32_FIND_DATA *apCurrentFile, RegItemStru
 		if (line_length && loop_info.mCurrentLine[line_length - 1] == '\n') // Remove newlines like FileReadLine does.
 			loop_info.mCurrentLine[--line_length] = '\0';
 		// See comments in PerformLoop() for details about this section.
-		result = mNextLine->ExecUntil(ONLY_ONE_LINE, &jump_to_line, apCurrentFile, apCurrentRegItem
+		result = mNextLine->ExecUntil(ONLY_ONE_LINE, apReturnValue, &jump_to_line, apCurrentFile, apCurrentRegItem
 			, &loop_info, aCurrentField, ++aIndex);
 		if (result == LOOP_BREAK || result == EARLY_RETURN || result == EARLY_EXIT || result == FAIL)
 		{
@@ -7652,7 +8761,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		if (chars_to_extract < 0)
 			chars_to_extract = 0;
 		source_length = strlen(ARG2);
-		if (chars_to_extract > (int)source_length)
+		if ((UINT)chars_to_extract > source_length)
 			chars_to_extract = (int)source_length;
 		// It will display any error that occurs:
 		return output_var->Assign(ARG2 + source_length - chars_to_extract, chars_to_extract);
@@ -7680,9 +8789,10 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		// debugging purposes:
 		if (start_char_num < 1)
 			start_char_num = 1; // 1 is the position of the first char, unlike StringGetPos.
-		// Assign() is capable of doing what we want in this case.
-		// It will display any error that occurs:
-		if ((int)strlen(ARG2) < start_char_num)
+		source_length = strlen(ARG2);
+		if ((UINT)chars_to_extract > source_length)
+			chars_to_extract = (int)source_length;
+		if (source_length < (UINT)start_char_num)
 			return output_var->Assign();  // Set it to be blank in this case.
 		else
 			return output_var->Assign(ARG2 + start_char_num - 1, chars_to_extract);
@@ -7694,7 +8804,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		if (chars_to_extract < 0)
 			chars_to_extract = 0;
 		source_length = strlen(ARG2);
-		if (chars_to_extract > (int)source_length) // This could be intentional, so don't display an error.
+		if ((UINT)chars_to_extract > source_length) // This could be intentional, so don't display an error.
 			chars_to_extract = (int)source_length;
 		return output_var->Assign(ARG2 + chars_to_extract, (VarSizeType)(source_length - chars_to_extract));
 
@@ -7705,7 +8815,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		if (chars_to_extract < 0)
 			chars_to_extract = 0;
 		source_length = strlen(ARG2);
-		if (chars_to_extract > (int)source_length) // This could be intentional, so don't display an error.
+		if ((UINT)chars_to_extract > source_length) // This could be intentional, so don't display an error.
 			chars_to_extract = (int)source_length;
 		return output_var->Assign(ARG2, (VarSizeType)(source_length - chars_to_extract)); // It already displayed any error.
 
@@ -7738,7 +8848,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		// variable to be checked.  ExpandArgs() has already taken care of resolving that,
 		// so the only way to avoid strlen() would be to avoid the call to ExpandArgs()
 		// in ExecUntil(), and instead resolve the variable name here directly.
-		return output_var->Assign((__int64)(mArgc > 1 && sArgVar[1] && sArgVar[1]->mIsBinaryClip
+		return output_var->Assign((__int64)(mArgc > 1 && sArgVar[1] && sArgVar[1]->IsBinaryClip()
 			? sArgVar[1]->Length() + 1 // +1 to include the entire 4-byte terminator, which seems best in this case.
 			: strlen(ARG2)));
 
@@ -7957,15 +9067,21 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	case ACT_ASSIGNEXPR:
 		// sArgVar is used to enhance performance, which would otherwise be poor for dynamic variables
 		// such as Var:=Array%i% because Array%i% would have to be resolved twice (once here and once
-		// previously by ExpandArgs()) just to find out if it's mIsBinaryClip).
-		if (mArgc > 1 && sArgVar[1] && (sArgVar[1]->mIsBinaryClip || sArgVar[1]->mType == VAR_CLIPBOARDALL)) // Relies on short-circuit boolean order.
-			return PerformAssign();  // Performance should be good in this case since mIsBinaryClip implies a single isolated deref, which thus would never have been copied into the deref buffer.
+		// previously by ExpandArgs()) just to find out if it's IsBinaryClip()).
+		if (mArgc > 1 && sArgVar[1] && (sArgVar[1]->IsBinaryClip() || sArgVar[1]->Type() == VAR_CLIPBOARDALL)) // Relies on short-circuit boolean order.
+			return PerformAssign();  // Performance should be good in this case since IsBinaryClip() implies a single isolated deref, which thus would never have been copied into the deref buffer.
 		// Note that simple assignments such as Var:="xyz" or Var:=Var2 are resolved to be
 		// non-expressions at load-time.  In these cases, ARG2 would have been expanded
 		// normally rather than evaluated as an expression.
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
 		return output_var->Assign(ARG2); // ARG2 now contains the evaluated result of the expression.
+
+	case ACT_FUNCTIONCALL:
+		// Nothing needs to be done because the expression in ARG1 (which is the only arg) has already
+		// been evaluated and its functions and subfunctions called, e.g. the following line:
+		// fn(123, "string", var, fn2(y))
+		return OK;
 
 	case ACT_DRIVESPACEFREE:
 		return DriveSpace(ARG2, true);
@@ -8184,6 +9300,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 				return output_var->Assign(ATOI64(output_var->Contents()) + ATOI64(ARG2));  // Overload: Assigns an int.
 		}
 		return OK;  // Never executed.
+
 	case ACT_SUB:
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
@@ -8742,8 +9859,18 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 
 
 
-ResultType Line::ExpandArgs()
+ResultType Line::ExpandArgs(VarSizeType aSpaceNeeded, Var *aArgVar[])
+// Caller should either provide both or omit both of the parameters.  If provided, it means
+// caller already called GetExpandedArgSize for us.
+// Returns OK, FAIL, or EARLY_EXIT.  EARLY_EXIT occurs when a function-call inside an expression
+// used the EXIT command to terminate the thread.
 {
+	// The counterparts of sArgDeref and sArgVar kept on our stack to protect them from recursion caused by
+	// the calling of functions in the script:
+	char *arg_deref[MAX_ARGS];
+	Var *arg_var[MAX_ARGS];
+	int i;
+
 	// Make two passes through this line's arg list.  This is done because the performance of
 	// realloc() is worse than doing a free() and malloc() because the former does a memcpy()
 	// in addition to the latter's steps.  In addition, realloc() as much as doubles the memory
@@ -8751,9 +9878,20 @@ ResultType Line::ExpandArgs()
 	// First pass: determine how much space will be needed to do all the args and allocate
 	// more memory if needed.  Second pass: dereference the args into the buffer.
 
-	size_t space_needed = GetExpandedArgSize(true); // First pass. It takes into account the same things as 2nd pass.
-	if (space_needed == VARSIZE_ERROR)
-		return FAIL;  // It will have already displayed the error.
+	 // First pass. It takes into account the same things as 2nd pass.
+	size_t space_needed;
+	if (aSpaceNeeded == VARSIZE_ERROR)
+	{
+		space_needed = GetExpandedArgSize(true, arg_var);
+		if (space_needed == VARSIZE_ERROR)
+			return FAIL;  // It will have already displayed the error.
+	}
+	else // Caller already determined it.
+	{
+		space_needed = aSpaceNeeded;
+		for (i = 0; i < mArgc; ++i) // Copying actual/used elements is probably faster than using memcpy to copy both entire arrays.
+			arg_var[i] = aArgVar[i]; // Init to values determined by caller, which helps performance if any of the args are dynamic variables.
+	}
 
 	if (space_needed > g_MaxVarCapacity)
 		// Dereferencing the variables in this line's parameters would exceed the allowed size of the temp buffer:
@@ -8764,47 +9902,77 @@ ResultType Line::ExpandArgs()
 	// script with no derefs is being run):
 	if (space_needed > sDerefBufSize)
 	{
-		// K&R: Integer division truncates the fractional part:
 		size_t increments_needed = space_needed / DEREF_BUF_EXPAND_INCREMENT;
 		if (space_needed % DEREF_BUF_EXPAND_INCREMENT)  // Need one more if above division truncated it.
 			++increments_needed;
-		sDerefBufSize = increments_needed * DEREF_BUF_EXPAND_INCREMENT;
+		size_t new_buf_size = increments_needed * DEREF_BUF_EXPAND_INCREMENT;
 		if (sDerefBuf)
+		{
 			// Do a free() and malloc(), which should be far more efficient than realloc(),
 			// especially if there is a large amount of memory involved here:
 			free(sDerefBuf);
-		if (!(sDerefBufMarker = sDerefBuf = (char *)malloc(sDerefBufSize)))
+			if (sDerefBufSize > LARGE_DEREF_BUF_SIZE)
+				--sLargeDerefBufs;
+		}
+		if (   !(sDerefBuf = (char *)malloc(new_buf_size))   )
 		{
 			// Error msg was formerly: "Ran out of memory while attempting to dereference this line's parameters."
-			sDerefBufSize = 0;  // Reset so that it can attempt a smaller amount next time.
+			sDerefBufSize = 0;  // Reset so that it can make another attempt, possibly smaller, next time.
 			return LineError(ERR_OUTOFMEM ERR_ABORT); // Short msg since so rare.
 		}
+		sDerefBufSize = new_buf_size;
+		if (sDerefBufSize > LARGE_DEREF_BUF_SIZE)
+			++sLargeDerefBufs;
 	}
-	else
-		sDerefBufMarker = sDerefBuf;  // Prior contents of buffer will be overwritten in any case.
-	// Always init sDerefBufMarker even if zero iterations, because we want to enforce
-	// the fact that its prior contents become invalid once this function is called.
+
+	// Always init our_buf_marker even if zero iterations, because we want to enforce
+	// the fact that its prior contents become invalid once we're called.
 	// It's also necessary due to the fact that all the old memory is discarded by
-	// the above if more space was needed to accommodate this line:
+	// the above if more space was needed to accommodate this line.
+	char *our_buf_marker = sDerefBuf;  // Prior contents of buffer will be overwritten in any case.
 
-	// (Re)set the timer unconditionally so that it starts counting again from time zero.
-	// In other words, we only want the timer to fire when the large deref buffer has been
-	// unused/idle for a straight 10 seconds.
-	if (sDerefBufSize > 4*1024*1024)
-		SET_DEREF_TIMER(10000)
+	// From this point forward, must not refer to sDerefBuf as our buffer since it might have been
+	// given a new memory area by an expression's function-call within this line.  In other words,
+	// our_buf_marker is our recursion layer's buffer, but not necessarily sDerefBuf.  To enforce
+	// that, and keep responsibility here rather than in ExpandExpression(), set sDerefBuf to NULL
+	// so that the zero or more calls to ExpandExpression() made in the loop below, which in turn
+	// will result in zero or more invocations of script-functions, will allocate and use a single
+	// new deref buffer if any of them need it.
+	// Note that it is not possible for a new quasi-thread to directly interrupt ExpandArgs(),
+	// since ExpandArgs() never calls MsgSleep().  Therefore, each ExpandArgs() layer on the call
+	// stack is safe from interrupting threads overwriting its deref buffer.  It's true that a call
+	// to a script function will usually result in MsgSleep(), and thus allow interruptions, but those
+	// interruptions would hit some other deref buffer, not that of our layer.
+	char *our_deref_buf = sDerefBuf; // For detecting whether ExpandExpression() caused a new buffer to be created.
+	size_t our_deref_buf_size = sDerefBufSize;
+	sDerefBuf = NULL;
+	sDerefBufSize = 0;
 
+	ResultType result, result_to_return = OK;  // Set default return value.
 	Var *the_only_var_of_this_arg;
-	for (int iArg = 0; iArg < mArgc && iArg < MAX_ARGS; ++iArg) // Second pass.  For each arg:
+
+	for (i = 0; i < mArgc; ++i) // Second pass.  For each arg:
 	{
-		ArgStruct &this_arg = mArg[iArg]; // For performance and convenience.
-		sArgVar[iArg] = NULL; // Set default.
+		ArgStruct &this_arg = mArg[i]; // For performance and convenience.
 
 		// Load-time routines have already ensured that an arg can be an expression only if
 		// it's not an input or output var.
 		if (this_arg.is_expression)
 		{
-			sArgDeref[iArg] = sDerefBufMarker; // Point it to its location in the buffer.
-			sDerefBufMarker = ExpandExpression(sDerefBufMarker, iArg); // Expand the expression into that location.
+			// In addition to producing its return value, ExpandExpression() will alter our_buf_marker
+			// to point to the place in our_deref_buf where the next arg should be written.
+			// In addition, in some cases it will alter some of the other parameters that are arrays or
+			// that are passed by ref.  Finally, it might tempoarily use parts of the buffer beyond
+			// what the size estimator provide for it, so we should be sure here that everything in
+			// our_deref_buf after our_buf_marker is available to it as temporary memory.
+			if (   !(arg_deref[i] = ExpandExpression(i, result, our_buf_marker, our_deref_buf
+				, our_deref_buf_size, arg_deref, our_deref_buf_size - space_needed))   )
+			{
+				// A script-function-call inside the expression returned EARLY_EXIT or FAIL.  Report "result"
+				// to our caller (otherwise, the contents of "result" should be ignored since they're undefined).
+				result_to_return = result;
+				goto end;
+			}
 			continue;
 		}
 
@@ -8813,36 +9981,26 @@ ResultType Line::ExpandArgs()
 			// In case its "dereferenced" contents are ever directly examined, set it to be
 			// the empty string.  This also allows the ARG to be passed a dummy param, which
 			// makes things more convenient and maintainable in other places:
-			sArgDeref[iArg] = "";
+			arg_deref[i] = "";
 			continue;
 		}
 
-		the_only_var_of_this_arg = NULL;
-		if (this_arg.type == ARG_TYPE_INPUT_VAR)
-			if (   !(the_only_var_of_this_arg = ResolveVarOfArg(iArg, false))   )
-				return FAIL;  // The above will have already displayed the error.
-
-		if (!the_only_var_of_this_arg) // Arg isn't an input var.
+		// arg_var[i] was previously set by GetExpandedArgSize() so that we don't have to determine its
+		// value again:
+		if (   !(the_only_var_of_this_arg = arg_var[i])   ) // Arg isn't an input var or singled isolated deref.
 		{
-			#define NO_DEREF (!ArgHasDeref(iArg + 1))
+			#define NO_DEREF (!ArgHasDeref(i + 1))
 			if (NO_DEREF)
 			{
-				sArgDeref[iArg] = this_arg.text;  // Point the dereferenced arg to the arg text itself.
+				arg_deref[i] = this_arg.text;  // Point the dereferenced arg to the arg text itself.
 				continue;  // Don't need to use the deref buffer in this case.
 			}
-			// Now we know it has at least one deref.  If the second deref's marker is NULL,
-			// the first is the only deref in this arg:
-			#define SINGLE_ISOLATED_DEREF (!this_arg.deref[1].marker\
-				&& this_arg.deref[0].length == strlen(this_arg.text)) // and the arg contains no literal text
-			if (SINGLE_ISOLATED_DEREF)
-				the_only_var_of_this_arg = this_arg.deref[0].var;
 		}
 
 		// Check the value of the_only_var_of_this_arg again in case the above changed it:
 		if (the_only_var_of_this_arg) // This arg resolves to only a single, naked var.
 		{
-			sArgVar[iArg] = the_only_var_of_this_arg; // For now, this is done regardless of whether it must be dereferenced.
-			switch(ArgMustBeDereferenced(the_only_var_of_this_arg, iArg))
+			switch(ArgMustBeDereferenced(the_only_var_of_this_arg, i))
 			{
 			case CONDITION_FALSE:
 				// This arg contains only a single dereference variable, and no
@@ -8857,35 +10015,114 @@ ResultType Line::ExpandArgs()
 				// the files will be transcribed into the deref buffer.  This is
 				// because the clipboard object needs a memory area into which
 				// to write the filespecs it translated:
-				sArgDeref[iArg] = the_only_var_of_this_arg->Contents();
+				arg_deref[i] = the_only_var_of_this_arg->Contents();
 				break;
 			case CONDITION_TRUE:
 				// the_only_var_of_this_arg is either a reserved var or a normal var of
 				// zero length (for which GetEnvironment() is called for), or is used
 				// again in this line as an output variable.  In all these cases, it must
 				// be expanded into the buffer rather than accessed directly:
-				sArgDeref[iArg] = sDerefBufMarker; // Point it to its location in the buffer.
-				sDerefBufMarker += the_only_var_of_this_arg->Get(sDerefBufMarker) + 1; // +1 for terminator.
+				arg_deref[i] = our_buf_marker; // Point it to its location in the buffer.
+				our_buf_marker += the_only_var_of_this_arg->Get(our_buf_marker) + 1; // +1 for terminator.
 				break;
 			default: // FAIL should be the only other possibility.
-				return FAIL;  // ArgMustBeDereferenced() will already have displayed the error.
+				result_to_return = FAIL; // ArgMustBeDereferenced() will already have displayed the error.
+				goto end;
 			}
 		}
 		else // The arg must be expanded in the normal, lower-performance way.
 		{
-			sArgDeref[iArg] = sDerefBufMarker; // Point it to its location in the buffer.
-			sDerefBufMarker = ExpandArg(sDerefBufMarker, iArg); // Expand the arg into that location.
-			if (!sDerefBufMarker)
-				return FAIL;  // ExpandArg() will have already displayed the error.
+			arg_deref[i] = our_buf_marker; // Point it to its location in the buffer.
+			our_buf_marker = ExpandArg(our_buf_marker, i); // Expand the arg into that location.
+			if (!our_buf_marker)
+			{
+				result_to_return = FAIL; // ExpandArg() will have already displayed the error.
+				goto end;
+			}
 		}
+	} // for each arg.
+
+	// Only when the loop ends normally is the following needed, since otherwise it's a failure condition.
+	// Now that any recursive calls to ExpandArgs() above us on the stack have collapsed back to us, it's
+	// safe to set the args of this command for use by our caller, to whom we're about to return.
+	for (i = 0; i < mArgc; ++i) // Copying actual/used elements is probably faster than using memcpy to copy both entire arrays.
+	{
+		sArgDeref[i] = arg_deref[i];
+		sArgVar[i] = arg_var[i];
 	}
 
-	return OK;
+	// When the above loop ends normally, it falls into the label below and uses the original/default
+	// value of "result_to_return".
+
+end:
+	// As of v1.0.31, there can be multiple deref buffers simultaneously if one or more called functions
+	// requires a deref buffer of its own (separate from ours).  In addition, if a called function is
+	// interrupted by a new thread before it finishes, the interrupting thread will also use the
+	// new/separate deref buffer.  To minimize the amount of memory used in such cases cases,
+	// each line containing one or more expression with one or more function call (rather than each
+	// function call) will get up to one deref buffer of its own (i.e. only if its function body contains
+	// commands that actually require a second deref buffer).  This is achieved by saving sDerefBuf's
+	// pointer and setting sDerefBuf to NULL, which effectively makes the original deref buffer private
+	// until the line that contains the function-calling expressions finishes completely.
+	// Description of recursion and usage of multiple deref buffers:
+	// 1) ExpandArgs() receives a line with one or more expressions containing one or more function-calls.
+	// 2) Worst-case: the function calls create a new sDerefBuf automatically via us having set sDerefBuf to NULL.
+	// 3) Even worse, the bodies of those functions call other functions, which ExpandArgs() receives, resulting in
+	// a recursive leap back to step #1.
+	// So the above shows how any number of new deref buffers can be created.  But that's okay as long as the
+	// recursion collapses in an orderly manner (or the program exits, in which case the OS frees all its memory
+	// automatically).  This is because prior to returning, each recursion layer properly frees any extra deref
+	// buffer it was responsible for creating.  It only has to free at most one such buffer because each layer of
+	// ExpandArgs() on the call-stack can never be blamed for creating more than one extra buffer.
+	if (our_deref_buf)
+	{
+		// Must always restore the original buffer, not the keep the new one, because our caller needs
+		// the arg_deref addresses, which point into the original buffer.
+		if (sDerefBuf)
+		{
+			free(sDerefBuf);
+			if (sDerefBufSize > LARGE_DEREF_BUF_SIZE)
+				--sLargeDerefBufs;
+		}
+		sDerefBuf = our_deref_buf;
+		sDerefBufSize = our_deref_buf_size;
+	}
+	//else the original buffer is NULL, so keep any new sDerefBuf that might have been created (should
+	// help avg-case performance).
+
+	// For v1.0.31, this is no done right before returning so that any script function calls
+	// made by our calls to ExpandExpression() will now be done.  There might still be layers
+	// of ExpandArgs() beneath us on the call-stack, which is okay since they will keep the
+	// largest of the two available deref bufs (as described above) and thus they should
+	// reset the timer below right before they collapse/return.  
+	// (Re)set the timer unconditionally so that it starts counting again from time zero.
+	// In other words, we only want the timer to fire when the large deref buffer has been
+	// unused/idle for a straight 10 seconds.  There is no danger of this timer freeing
+	// the deref buffer at a critical moment because:
+	// 1) The timer is reset with each call to ExpandArgs (this function);
+	// 2) If our ExpandArgs() recursion layer takes a long time to finish, messages
+	//    won't be checked and thus the timer can't fire because it relies on the msg loop.
+	// 3) If our ExpandArgs() recursion layer launches function-calls in ExpandExpression(),
+	//    those calls will call ExpandArgs() recursively and reset the timer if its
+	//    buffer (not necessarily the original buffer somewhere on the call-stack) is large
+	//    enough.  In light of this, there is a chance that the timer might execute and free
+	//    a deref buffer other than the one it was originally intended for.  But in real world
+	//    scenarios, that seems rare.  In addition, the consequences seem to be limited to
+	//    some slight memory inefficiency.
+	// It could be aruged that the timer should only be activated when a hypothetical static
+	// var sLayersthat we maintain here indicates that we're the only layer.  However, if that
+	// were done and the launch of a script function creates (directly or through thread
+	// interruption, indirectly) a large deref buffer, and that thread is waiting for something
+	// such as WinWait, that large deref buffer would never get freed.
+	if (sDerefBufSize > LARGE_DEREF_BUF_SIZE)
+		SET_DEREF_TIMER(10000) // Reset the timer right before the deref buf is possibly about to become idle.
+
+	return result_to_return;
 }
 
 	
 
-inline VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize)
+inline VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize, Var *aArgVar[])
 // Args that are expressions are only calculated correctly if aCalcDerefBufSize is true,
 // which is okay for the moment since the only caller that can have expressions does call
 // it that way.
@@ -8893,7 +10130,7 @@ inline VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize)
 // WARNING: This function can return a size larger than what winds up actually being needed
 // (e.g. caused by ScriptGetCursor()), so our callers should be aware that that can happen.
 {
-	int iArg;
+	int i;
 	VarSizeType space_needed, space;
 	DerefType *deref;
 	Var *the_only_var_of_this_arg;
@@ -8902,9 +10139,10 @@ inline VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize)
 
 	// Note: the below loop is similar to the one in ExpandArgs(), so the two should be
 	// maintained together:
-	for (iArg = 0, space_needed = 0; iArg < mArgc && iArg < MAX_ARGS; ++iArg) // For each arg:
+	for (i = 0, space_needed = 0; i < mArgc; ++i) // For each arg:
 	{
-		ArgStruct &this_arg = mArg[iArg]; // For performance and convenience.
+		aArgVar[i] = NULL; // Set default.
+		ArgStruct &this_arg = mArg[i]; // For performance and convenience.
 
 		// If this_arg.is_expression is true, the space is still calculated as though the
 		// expression itself will be inside the arg.  This is done so that an expression
@@ -8918,8 +10156,8 @@ inline VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize)
 		// Always do this check before attempting to traverse the list of dereferences, since
 		// such an attempt would be invalid in this case:
 		the_only_var_of_this_arg = NULL;
-		if (this_arg.type == ARG_TYPE_INPUT_VAR)
-			if (   !(the_only_var_of_this_arg = ResolveVarOfArg(iArg, false))   )
+		if (this_arg.type == ARG_TYPE_INPUT_VAR) // Previous stage has ensured that arg can't be an expression if it's an input var.
+			if (   !(the_only_var_of_this_arg = ResolveVarOfArg(i, false))   )
 				return VARSIZE_ERROR;  // The above will have already displayed the error.
 
 		if (!the_only_var_of_this_arg) // It's not an input var.
@@ -8934,20 +10172,28 @@ inline VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize)
 				// the terminator isn't needed if the arg won't exist in the buffer at all.
 				continue;
 			}
-			if (SINGLE_ISOLATED_DEREF)
+			// Now we know it has at least one deref.  If the second deref's marker is NULL,
+			// the first is the only deref in this arg.  UPDATE: The following will return
+			// false for function calls since they are always followed by a set of parentheses
+			// (empty or otherwise), thus they will never be seen as isolated by it:
+			#define SINGLE_ISOLATED_DEREF (!this_arg.deref[1].marker\
+				&& this_arg.deref[0].length == strlen(this_arg.text)) // and the arg contains no literal text
+			if (SINGLE_ISOLATED_DEREF) // This also ensures the deref isn't a function-call.
 				the_only_var_of_this_arg = this_arg.deref[0].var;
 		}
 		if (the_only_var_of_this_arg)
 		{
+			// This is set for our caller so that it doesn't have to call ResolveVarOfArg() again, which
+			// would a performance hit if this variable is dynamically built and thus searched for at runtime:
+			aArgVar[i] = the_only_var_of_this_arg; // For now, this is done regardless of whether it must be dereferenced.
 			include_this_arg = !aCalcDerefBufSize || this_arg.is_expression;  // i.e. caller wanted its size unconditionally included
 			if (!include_this_arg)
 			{
-				result = ArgMustBeDereferenced(the_only_var_of_this_arg, iArg);
-				if (result == FAIL)
+				if (   !(result = ArgMustBeDereferenced(the_only_var_of_this_arg, i))   )
 					return VARSIZE_ERROR;
 				if (result == CONDITION_TRUE) // The size of these types of args is always included.
 					include_this_arg = true;
-				// else leave it as false
+				//else leave it as false
 			}
 			if (!include_this_arg) // No extra space is needed in the buffer for this arg.
 				continue;
@@ -8960,18 +10206,30 @@ inline VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize)
 				space_needed += space;
 			continue;
 		}
+
 		// Otherwise: This arg has more than one deref, or a single deref with some literal text around it.
-		space = (VarSizeType)strlen(this_arg.text);
+		space = (VarSizeType)strlen(this_arg.text) + 1; // +1 for this arg's zero terminator in the buffer.
 		for (deref = this_arg.deref; deref && deref->marker; ++deref)
 		{
-			space -= deref->length;                              // Substitute the length of the variable contents
-			space += deref->var->Get() + this_arg.is_expression; // for that of the literal text of the deref.
-			// Above adds 1 if this arg is an expression to the insertion of an extra space after
-			// every single deref.  This is done for parsing reasons described in ExpandExpression().
-			// NOTE: Get() (with no params) can retrieve a size larger that what winds up actually
-			// being needed, so our callers should be aware that that can happen.
+			// Replace the length of the deref's literal text with the length of its variable's contents:
+			space -= deref->length;
+			// But in the case of expressions, size needs to be reserved for the variable's contents only
+			// if it will be copied into the deref buffer; namely the following cases:
+			// 1) Derefs whose type isn't VAR_NORMAL or that are env. vars (those whose length is zero but whose Get() is of non-zero length)
+			// 2) Derefs that are enclosed by the g_DerefChar character (%), which in expressions means that
+			//    must be copied into the buffer to support double references such as Array%i%.
+			if (!deref->is_function && (!this_arg.is_expression || *deref->marker == g_DerefChar
+				|| deref->var->Type() != VAR_NORMAL || !deref->var->Length())) // Relies on short-circuit boolean order.
+				space += deref->var->Get() + this_arg.is_expression; // If it's of zero length, Get() will give us either 0 or the size of the environment variable.
+				// Above adds 1 if this arg is an expression to the insertion of an extra space after
+				// every single deref (this space is unnecessary if Get() returns a size of zero to indicate
+				// a non-existent environment variable, but that seems harmless).  This is done for parsing
+				// reasons described in ExpandExpression().
+				// NOTE: Get() (with no params) can retrieve a size larger that what winds up actually
+				// being needed, so our callers should be aware that that can happen.
+			//else it's a function-call's function name, in which case it's length is effectively zero.
+			// since the function name never gets copied into the deref buffer during ExpandExpression().
 		}
-		++space; // +1 for this arg's zero terminator in the buffer.
 		if (this_arg.is_expression) // Space is needed for the result of the expression or the expanded expression itself, whichever is greater.
 			space_needed += (space > MAX_FORMATTED_NUMBER_LENGTH) ? space : MAX_FORMATTED_NUMBER_LENGTH + 1;
 		else
@@ -8987,14 +10245,15 @@ ResultType Line::ArgMustBeDereferenced(Var *aVar, int aArgIndexToExclude)
 {
 	if (mActionType == ACT_SORT) // See PerformSort() for why it's always dereferenced.
 		return CONDITION_TRUE;
-	if (aVar->mType == VAR_CLIPBOARD)
+	aVar = aVar->ResolveAlias(); // Helps performance, but also necessary to accurately detect a match further below.
+	if (aVar->Type() == VAR_CLIPBOARD)
 		// Even if the clipboard is both an input and an output var, it still
 		// doesn't need to be dereferenced into the temp buffer because the
 		// clipboard has two buffers of its own.  The only exception is when
 		// the clipboard has only files on it, in which case those files need
 		// to be converted into plain text:
 		return CLIPBOARD_CONTAINS_ONLY_FILES ? CONDITION_TRUE : CONDITION_FALSE;
-	if (aVar->mType != VAR_NORMAL || !aVar->Length() || aVar == g_ErrorLevel)
+	if (aVar->Type() != VAR_NORMAL || !aVar->Length() || aVar == g_ErrorLevel)
 		// Reserved vars must always be dereferenced due to their volatile nature.
 		// Normal vars of length zero are dereferenced because they might exist
 		// as system environment variables, whose contents are also potentially
@@ -9007,12 +10266,12 @@ ResultType Line::ArgMustBeDereferenced(Var *aVar, int aArgIndexToExclude)
 	// non-zero length.  Such input vars only need to be dereferenced if they are
 	// also used as an output var by the current script line:
 	Var *output_var;
-	for (int iArg = 0; iArg < mArgc; ++iArg)
-		if (iArg != aArgIndexToExclude && mArg[iArg].type == ARG_TYPE_OUTPUT_VAR)
+	for (int i = 0; i < mArgc; ++i)
+		if (i != aArgIndexToExclude && mArg[i].type == ARG_TYPE_OUTPUT_VAR)
 		{
-			if (   !(output_var = ResolveVarOfArg(iArg, false))   )
+			if (   !(output_var = ResolveVarOfArg(i, false))   )
 				return FAIL;  // It will have already displayed the error.
-			if (output_var == aVar)
+			if (output_var->ResolveAlias() == aVar)
 				return CONDITION_TRUE;
 		}
 	// Otherwise:
@@ -9021,9 +10280,11 @@ ResultType Line::ArgMustBeDereferenced(Var *aVar, int aArgIndexToExclude)
 
 
 
-inline char *Line::ExpandArg(char *aBuf, int aArgIndex)
+inline char *Line::ExpandArg(char *aBuf, int aArgIndex, Var *aArgVar)
+// Caller must ensure that aArgVar is the input variable of the aArgIndex arg whenever it's an input variable.
 // Caller must be sure not to call this for an arg that's marked as an expression, since
-// expressions are handled by a different function.
+// expressions are handled by a different function.  Similarly, it must ensure that none
+// of this arg's deref's are function-calls, i.e. that deref->is_function is always false.
 // Caller must ensure that aBuf is large enough to accommodate the translation
 // of the Arg.  No validation of above params is done, caller must do that.
 // Returns a pointer to the char in aBuf that occurs after the zero terminator
@@ -9031,30 +10292,24 @@ inline char *Line::ExpandArg(char *aBuf, int aArgIndex)
 // if there are more args, since the zero terminator must normally be retained
 // between args).
 {
-	// This should never be called if the given arg is an output var, so flag that in DEBUG mode:
-	if (mArg[aArgIndex].type == ARG_TYPE_OUTPUT_VAR)
-	{
+	ArgStruct &this_arg = mArg[aArgIndex]; // For performance and convenience.
 #ifdef _DEBUG
+	// This should never be called if the given arg is an output var, so flag that in DEBUG mode:
+	if (this_arg.type == ARG_TYPE_OUTPUT_VAR)
+	{
 		LineError("ExpandArg() was called to expand an arg that contains only an output variable.");
-#endif
 		return NULL;
 	}
+#endif
 
-	// Always do this part before attempting to traverse the list of dereferences, since
-	// such an attempt would be invalid in this case:
-	Var *the_only_var_of_this_arg = NULL;
-	if (mArg[aArgIndex].type == ARG_TYPE_INPUT_VAR)
-		if (   !(the_only_var_of_this_arg = ResolveVarOfArg(aArgIndex, false))   )
-			return NULL;  // The above will have already displayed the error.
-
-	if (the_only_var_of_this_arg)
+	if (aArgVar)
 		// +1 so that we return the position after the terminator, as required.
-		return aBuf += the_only_var_of_this_arg->Get(aBuf) + 1;
+		return aBuf += aArgVar->Get(aBuf) + 1;
 
 	char *pText, *this_marker;
 	DerefType *deref;
-	for (pText = mArg[aArgIndex].text  // Start at the begining of this arg's text.
-		, deref = mArg[aArgIndex].deref  // Start off by looking for the first deref.
+	for (pText = this_arg.text  // Start at the begining of this arg's text.
+		, deref = this_arg.deref  // Start off by looking for the first deref.
 		; deref && deref->marker; ++deref)  // A deref with a NULL marker terminates the list.
 	{
 		// FOR EACH DEREF IN AN ARG (if we're here, there's at least one):
@@ -9064,7 +10319,7 @@ inline char *Line::ExpandArg(char *aBuf, int aArgIndex)
 		// Now copy the contents of the dereferenced var.  For all cases, aBuf has already
 		// been verified to be large enough, assuming the value hasn't changed between the
 		// time we were called and the time the caller calculated the space needed.
-		aBuf += deref->var->Get(aBuf);
+		aBuf += deref->var->Get(aBuf); // Caller has ensured that deref->is_function==false
 		// Finally, jump over the dereference text. Note that in the case of an expression, there might not
 		// be any percent signs within the text of the dereference, e.g. x + y, not %x% + %y%.
 		pText += deref->length;
@@ -9078,17 +10333,74 @@ inline char *Line::ExpandArg(char *aBuf, int aArgIndex)
 
 
 
-char *Line::ExpandExpression(char *aBuf, int aArgIndex)
-// Returns a pointer to the char in aBuf that occurs after the zero terminator
-// (because that's the position where the caller would normally resume writing
-// if there are more args, since the zero terminator must normally be retained
-// between args).
-// Caller must ensure that aBuf is large enough to accommodate the translation
-// of the Arg.  No validation of above params is done, caller must do that.
+ResultType BackupFunctionVars(Func &aFunc, VarBkp *&aVarBackup, int &aVarBackupCount)
+// Helper function for ExpandExpression().  All parameters except the first are output parameters that
+// are set for our caller.  However, if there is nothing to backup, only the aVarBackupCount is changed
+// (to zero).  Returns OK or FAIL.
+{
+	if (   !(aVarBackupCount = aFunc.mVarCount + aFunc.mLazyVarCount)   )  // Nothing needs to be backed up.
+		return OK;
+
+	// Since Var is not a POD struct (it contains private members, a custom constructor, etc.), the VarBkp
+	// POD struct is used to hold the backup because it's probably better performance than using Var's
+	// constructor to create each backup array element.
+	if (   !(aVarBackup = (VarBkp *)malloc(aVarBackupCount * sizeof(VarBkp)))   ) // Caller will take care of freeing it.
+		return FAIL;
+
+	int i;
+	aVarBackupCount = 0;  // Init only once prior to both loops.
+
+	// Note that Backup() does not make the variable empty after backing it up because that is something
+	// that must be done by our caller at a later stage.
+	for (i = 0; i < aFunc.mVarCount; ++i)
+		aFunc.mVar[i]->Backup(aVarBackup[aVarBackupCount++]);
+	for (i = 0; i < aFunc.mLazyVarCount; ++i)
+		aFunc.mLazyVar[i]->Backup(aVarBackup[aVarBackupCount++]);
+	return OK;
+}
+
+
+
+void RestoreFunctionVars(Func &aFunc, VarBkp *&aVarBackup, int aVarBackupCount)
+// Helper function for ExpandExpression().  Restores aVarBackup back into their original variables and
+// frees aVarBackup afterward.
+{
+	// Restore() will also free any existing contents of the variable prior to restoring the original
+	// contents from backup:
+	for (int i = 0; i < aVarBackupCount; ++i)
+		aVarBackup[i].mVar->Restore(aVarBackup[i]);
+	free(aVarBackup);
+}
+
+
+
+char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget, char *&aDerefBuf
+	, size_t &aDerefBufSize, char *aArgDeref[], size_t aExtraSize)
+// Caller should ignore aResult unless this function returns NULL.
+// Returns a pointer to this expression's result, which can be one of the following:
+// 1) NULL, in which case aResult will be either FAIL or EARLY_EXIT to indicate the means by which the current
+//    quasi-thread was terminated as a result of a function call.
+// 2) The constant empty string (""), in which case we do not alter aTarget for our caller.
+// 3) Some persistent location not in aDerefBuf, namely the mContents of a variable or a literal string/number,
+//    such as a function-call that returns "abc", 123, or a variable.
+// 4) At the offset aTarget minus aDerefBuf inside aDerefBuf (note that aDerefBuf might have been reallocated by us).
+// aTarget is left unchnaged except in case #4, in which case aTarget has been adjusted to the position after our
+// result-string's terminator.  In addition, in case #4, aDerefBuf, aDerefBufSize, and aArgDeref[] have been adjusted
+// for our caller if aDerefBuf was too small and needed to be enlarged.
 // Thanks to Joost Mulders for providing the expression evaluation code upon
 // which this function is based.
 {
-	char *aBuf_orig = aBuf;
+	// This is the location in aDerefBuf the caller told us is ours.  Caller has already ensured that
+	// our part of the buffer is large enough for our first stage expansion, but not necessarily
+	// for our final result (if too large, we will expand the buffer to handle the result).
+	char *target = aTarget;
+
+	// The following must be defined early so that mem_count is initialized and the array is guaranteed to be
+	// "in scope" in case of early "goto end/fail".
+	#define MAX_EXPR_MEM_ITEMS 100 // Hard to imagine using even a few in a typical script, let alone 100.
+	char *mem[MAX_EXPR_MEM_ITEMS]; // No init necessary.  In most cases, it will never be used.
+	int mem_count = 0; // The actual number of items in use in the above array.
+	char *result_to_return = "";
 
 	map_item map[MAX_DEREFS_PER_ARG*2 + 1];
 	int map_count = 0;
@@ -9106,14 +10418,16 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 		, deref = mArg[aArgIndex].deref  // Start off by looking for the first deref.
 		; deref && deref->marker; ++deref)  // A deref with a NULL marker terminates the list.
 	{
-		// FOR EACH DEREF IN AN ARG (if we're here, there's at least one):
-		if (pText < deref->marker)
+		// FOR EACH DEREF IN AN ARG:
+		DerefType &this_deref = *deref; // For performance.
+		if (pText < this_deref.marker)
 		{
 			map[map_count].type = EXP_RAW;
-			map[map_count].marker = aBuf;  // Indicate its position in the buffer.
+			map[map_count].marker = target;  // Indicate its position in the buffer.
+			// Copy the chars that occur prior to this_deref.marker into the buffer:
+            for (this_marker = this_deref.marker; pText < this_marker; *target++ = *pText++); // this_marker is used to help performance.
+			map[map_count].end = target; // Since RAWS are never empty due to the check above, this will always be the character after the last.
 			++map_count;
-			// Copy the chars that occur prior to deref->marker into the buffer:
-            for (this_marker = deref->marker; pText < this_marker; *aBuf++ = *pText++); // this_marker is used to help performance.
 		}
 
 		// Known issue: If something like %A_Space%String exists in the script (or any variable containing
@@ -9128,36 +10442,98 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 		//result2 := vText = %A_space%ABC AND vNum = 1
 		//MsgBox %result1%`n%result2%
 
-		// Now copy the contents of the dereferenced var.  For all cases, aBuf has already
-		// been verified to be large enough, assuming the value hasn't changed between the
-		// time we were called and the time the caller calculated the space needed.
-		map[map_count].type = (*deref->marker == g_DerefChar) ? EXP_DEREF_DOUBLE : EXP_DEREF_SINGLE;
-		map[map_count].marker = aBuf;  // Indicate its position in the buffer.
-		aBuf += deref->var->Get(aBuf); // Might retrieve a blank, in which case this item in the map will be the empty string.
-		// For performance reasons, the expression parser relies on an extra space to the right of each
-		// single deref.  For example, (x=str), which is seen as (x_contents=str_contents) during
-		// evaluation, would instead me seen as (x_contents =str_contents ), which allows string
-		// terminators to be put in place of those two spaces in case either or both contents-items
-		// are strings rather than numbers (such termination also simplifies number recognition).
-		// GetExpandedArgSize() has already ensured there is enough room in the deref buffer for these:
-		if (map[map_count].type == EXP_DEREF_SINGLE)
-			*aBuf++ = ' ';
+		if (this_deref.is_function)
+		{
+			map[map_count].type = EXP_DEREF_FUNC;
+			map[map_count].deref = deref;
+			// But nothing goes into target, so this is an invisible item of sorts.
+			// However, everything after the function's name, starting at its open-paren, will soon be
+			// put in as a collection of normal items (raw text and derefs).
+		}
+		else
+		{
+			// GetExpandedArgSize() relies on the fact that we only expand the following items into
+			// the deref buffer:
+			// 1) Derefs whose var type isn't VAR_NORMAL or who have zero length (since they might be env. vars).
+			// 2) Derefs that are enclosed by the g_DerefChar character (%), which in expressions means that
+			//    must be copied into the buffer to support double references such as Array%i%.
+			// Now copy the contents of the dereferenced var.  For all cases, the target buf has already
+			// been verified to be large enough, assuming the value hasn't changed between the time we
+			// were called and the time the caller calculated the space needed.
+			if (*this_deref.marker == g_DerefChar)
+				map[map_count].type = EXP_DEREF_DOUBLE;
+			else // SINGLE or VAR.  Set initial guess to possibly be overridden later:
+				map[map_count].type = (this_deref.var->Type() == VAR_NORMAL) ? EXP_DEREF_VAR : EXP_DEREF_SINGLE;
+
+			if (map[map_count].type == EXP_DEREF_VAR)
+			{
+				// Need to distinguish between empty variables and environment variables because the former
+				// we want to pass by reference into functions but the latter need to go into the deref buffer.
+				// So if this deref's variable is of zero length: if Get() actually retrieves anything, it's
+				// an environment variable rather than a zero-length normal variable. The size estimator knew
+				// that and already provided space for it in the buffer.  But if it returns an empty string,
+				// it's a normal empty variable and thus it stays of type EXP_DEREF_VAR.
+				if (this_deref.var->Length())
+					map[map_count].var = this_deref.var;
+				else // Check if it's an environment variable.
+				{
+					map[map_count].marker = target;  // Indicate its position in the buffer.
+					target += this_deref.var->Get(target);
+					if (map[map_count].marker == target) // Empty string, so it's not an environment variable.
+						map[map_count].var = this_deref.var;
+					else // Override it's original EXP_DEREF_VAR type.
+					{
+						map[map_count].end = target;
+						map[map_count].type = EXP_DEREF_SINGLE;
+					}
+				}
+			}
+			else // SINGLE or DOUBLE, both of which need to go into the buffer.
+			{
+				map[map_count].marker = target;  // Indicate its position in the buffer.
+				target += this_deref.var->Get(target);
+				map[map_count].end = target;
+				// For performance reasons, the expression parser relies on an extra space to the right of each
+				// single deref.  For example, (x=str), which is seen as (x_contents=str_contents) during
+				// evaluation, would instead me seen as (x_contents =str_contents ), which allows string
+				// terminators to be put in place of those two spaces in case either or both contents-items
+				// are strings rather than numbers (such termination also simplifies number recognition).
+				// GetExpandedArgSize() has already ensured there is enough room in the deref buffer for these:
+			}
+			if (map[map_count].type == EXP_DEREF_SINGLE) // Originally SINGLE or it was overridden from VAR to SINGLE.
+				*target++ = '\0'; // Always terminated since they can't form a part of a double-deref.
+			// For EXP_DEREF_VAR, if our caller will be assigning the result of our expression to
+			// one of the variables involved in the expression, that should be okay because:
+			// 1) The expression's result is normally not EXP_DEREF_VAR because any kind of operation
+			//    that is performed, such as addition or concatenation, would have transformed it into
+			//    SYM_OPERAND, SYM_STRING, SYM_INTEGER, or SYM_FLOAT.
+			// 2) If if the result of the expression is the exact same address as the contents of the
+			//    variable our caller is assigning to (which can happen from something like
+			//    GlobalVar := YieldGlobalVar()), Var::Assign() handles that by checking if they're
+			//    the same and also using memmove(), at least when source and target overlap.
+		}
 		++map_count; // i.e. don't increment until after we're done using the old value.
 		// Finally, jump over the dereference text. Note that in the case of an expression, there might not
 		// be any percent signs within the text of the dereference, e.g. x + y, not %x% + %y%.
-		pText += deref->length;
+		pText += this_deref.length;
 	}
 	// Copy any chars that occur after the final deref into the buffer:
 	if (*pText)
 	{
 		map[map_count].type = EXP_RAW;
-		map[map_count].marker = aBuf;  // Indicate its position in the buffer.
+		map[map_count].marker = target;  // Indicate its position in the buffer.
+		for (; *pText; *target++ = *pText++);
+		map[map_count].end = target;
 		++map_count;
-		for (; *pText; *aBuf++ = *pText++);
 	}
 
 	// Terminate the buffer, even if nothing was written into it:
-	*aBuf = '\0';
+	*target++ = '\0'; // Target must be incremented to point to the next available position (if any) for use further below.
+	// The following is conservative because the original size estimate for our portion might have
+	// been inflated due to:
+	// 1) Falling back to MAX_FORMATTED_NUMBER_LENGTH as the estimate because the other was smaller.
+	// 2) Some of the derefs being smaller than their estimate (which is a documented possibility for some built-in variables).
+	size_t capacity_of_our_buf_portion = target - aTarget + aExtraSize; // The initial amount of size available to write our final result.
 
 /////////////////////////////////////////
 
@@ -9167,21 +10543,23 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 	// Also, dimensioning explicitly by SYM_COUNT helps enforce that at compile-time:
 	static int sPrecedence[SYM_COUNT] =
 	{
-		  0, 0, 0, 0, 0 // SYM_STRING, SYM_INTEGER, SYM_FLOAT, SYM_OPERAND, SYM_BEGIN (SYM_BEGIN must be lowest precedence).
-		, 1, 1          // SYM_OPAREN, SYM_CPAREN (to simplify the code, these must be lower than all operators in precedence).
-		, 2             // SYM_OR
-		, 3             // SYM_AND
-		, 4             // SYM_LOWNOT  // The low precedence version of logical-not.
-		, 5, 5, 5       // SYM_EQUAL, SYM_EQUALCASE, SYM_NOTEQUAL (lower prec. than the below so that "x < 5 = var" means "result of comparison is the boolean value in var".
-		, 6, 6, 6, 6    // SYM_GT, SYM_LT, SYM_GTOE, SYM_LTOE
-		, 7             // SYM_BITOR  // Seems more intuitive to have these higher in prec. than the above, unlike C and Perl, but like Python.
-		, 8             // SYM_BITXOR
-		, 9             // SYM_BITAND
-		, 10, 10        // SYM_BITSHIFTLEFT, SYM_BITSHIFTRIGHT
-		, 11, 11        // SYM_PLUS, SYM_MINUS
-		, 12, 12        // SYM_TIMES, SYM_DIVIDE
-		, 13, 13, 13    // SYM_NEGATIVE (unary minus), SYM_HIGHNOT (the high precedence "not" operator), SYM_BITNOT
-		, 14            // SYM_POWER (see note below).
+		0, 0, 0, 0, 0, 0 // SYM_STRING, SYM_INTEGER, SYM_FLOAT, SYM_VAR, SYM_OPERAND, SYM_BEGIN (SYM_BEGIN must be lowest precedence).
+		, 1, 1, 1        // SYM_CPAREN, SYM_OPAREN, SYM_COMMA (to simplify the code, parens must be lower than all operators in precedence).
+		, 2              // SYM_OR
+		, 3              // SYM_AND
+		, 4              // SYM_LOWNOT (the low precedence version of logical-not)
+		, 5, 5, 5        // SYM_EQUAL, SYM_EQUALCASE, SYM_NOTEQUAL (lower prec. than the below so that "x < 5 = var" means "result of comparison is the boolean value in var".
+		, 6, 6, 6, 6     // SYM_GT, SYM_LT, SYM_GTOE, SYM_LTOE
+		, 7              // SYM_CONCAT
+		, 8              // SYM_BITOR -- Seems more intuitive to have these three higher in prec. than the above, unlike C and Perl, but like Python.
+		, 9              // SYM_BITXOR
+		, 10             // SYM_BITAND
+		, 11, 11         // SYM_BITSHIFTLEFT, SYM_BITSHIFTRIGHT
+		, 12, 12         // SYM_PLUS, SYM_MINUS
+		, 13, 13         // SYM_TIMES, SYM_DIVIDE
+		, 14, 14, 14     // SYM_NEGATIVE (unary minus), SYM_HIGHNOT (the high precedence "not" operator), SYM_BITNOT
+		, 15             // SYM_POWER (see note below).
+		, 16             // SYM_FUNC -- Probably must be of highest precedence for it to work properly.
 	};
 	// Most programming languages give exponentiation a higher precedence than unary minus and !/not.
 	// For example, -2**2 is evaluated as -(2**2), not (-2)**2 (the latter is unsupported by qmathPow anyway).
@@ -9191,7 +10569,7 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 	// Instead, the expression is evaluated from left-to-right (like other operators) to simplify the code.
 
 	#define MAX_TOKENS 512 // Max number of operators/operands.  Seems enough to handle anything realistic, while conserving call-stack space.
-	ExprTokenType infix[MAX_TOKENS], postfix[MAX_TOKENS], stack[MAX_TOKENS];
+	ExprTokenType infix[MAX_TOKENS], *postfix[MAX_TOKENS], *stack[MAX_TOKENS + 1];  // +1 for SYM_BEGIN on the stack.
 	int infix_count = 0, postfix_count = 0, stack_count = 0;
 	// Above dimensions the stack to be as large as the infix/postfix arrays to cover worst-case
 	// scenarios and avoid having to check for overflow.  For the infix-to-postfix conversion, the
@@ -9200,71 +10578,63 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 	// expression evaluation phase, the worst-case of which is unknown but certainly not larger
 	// than MAX_TOKENS.
 
-	////////////////////////////////////////////////////////////////////////////////////////////
-	// TOKENIZE THE INFIX EXPRESSION INTO AN ARRAY: Avoids the performance overhead of having to
-	// re-detect whether each symbol is an operand vs. operator at multiple stages.
-	////////////////////////////////////////////////////////////////////////////////////////////
+	///////////////////////////////////////////////////////////////////////////////////////////////
+	// TOKENIZE THE INFIX EXPRESSION INTO AN INFIX ARRAY: Avoids the performance overhead of having
+	// to re-detect whether each symbol is an operand vs. operator at multiple stages.
+	///////////////////////////////////////////////////////////////////////////////////////////////
 	SymbolType sym_prev;
-	char *item_end, *op_end, *cp, *temp, *terminate_string_here, buf_temp[MAX_FORMATTED_NUMBER_LENGTH + 1];
-	size_t op_length;
+	char *op_end, *cp, *terminate_string_here;
+	UINT op_length;
 	Var *found_var;
+
 	for (int map_index = 0; map_index < map_count; ++map_index) // For each deref and raw item in map.
 	{
 		// Because neither the postfix array nor the stack can ever wind up with more tokens than were
 		// contained in the original infix array, only the infix array need be checked for overflow:
-		if (infix_count >= MAX_TOKENS) // No room for this operator or operand to be added.
+		if (infix_count > MAX_TOKENS - 1) // No room for this operator or operand to be added.
 			goto fail;
 
-		map_item &this_item = map[map_index];
-		item_end = (map_index < map_count - 1) ? map[map_index + 1].marker : this_item.marker + strlen(this_item.marker);
+		map_item &this_map_item = map[map_index];
 
-		// At this stage, an EXP_DEREF_SINGLE item is seen as a numeric literal or a string-literal
-		// (without enclosing double quotes, since those are only needed for raw string literals).
-		// An EXP_DEREF_SINGLE item cannot extend beyond into the map item to its right, since such
-		// a condition can never occur due to load-time preparsing (e.g. the x and y in x+y are two
-		// separate items because there's an operator between them). Even a concat expression such as
-		// (x y) would still have x and y separate because the space between them counts as a raw
-		// map item, which keeps them separate.
-		if (this_item.type == EXP_DEREF_SINGLE)
+		switch (this_map_item.type)
 		{
-			// Single derefs must always be terminated exactly here because that is where the extent
-			// of their contents ends, which is important for strings to avoid having extra whitespace
-			// incorrectly added to the end.  The previous stage has ensured there is exactly one
-			// whitespace to be "sacrificed" at the end of each single-deref to be used for this
-			// purpose, which is necessary after each of the operands in an example such as (5+3),
-			// which is seen here as (5 +3 ) due to earlier processing.
-			*(item_end - 1) = '\0';
-			if (infix_count)
+		case EXP_DEREF_VAR:
+		case EXP_DEREF_FUNC:
+		case EXP_DEREF_SINGLE:
+			if (infix_count && IS_OPERAND_OR_CPAREN(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
 			{
-				ExprTokenType &prev_infix_item = infix[infix_count - 1];
-				if (IS_OPERAND(prev_infix_item.symbol)) // Since it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
-				{
-					// Under these conditions, this single-deref item is concatenated onto the previous
-					// item, forming a single operand.  The entire operand is shifted to the left a little,
-					// but the remaining part of the expression beyond this operand's former position is
-					// left unchanged because:
-					// 1) It avoids the need to shift-left the positions of all the map items that lie
-					//    to the right of this item.
-					// 2) Better performance since the memmove() is doing a smaller area.
-					if (prev_infix_item.marker >= aBuf_orig && prev_infix_item.marker < this_item.marker) // It's not a double deref.
-						memmove(prev_infix_item.marker + strlen(prev_infix_item.marker), this_item.marker
-							, item_end - this_item.marker);
-					else
-						prev_infix_item.marker = this_item.marker; // i.e. consider the double to be an empty string for this concat.
-						// And prev_infix_item.symbol should already be set to SYM_OPERAND at this stage.
-					continue;
-					// Currently, attempts to concat something onto a double-deref, or a double onto
-					// something, treat the double as an empty string, as documented.
-				}
+				if (infix_count > MAX_TOKENS - 2) // -2 to ensure room for this operator and the operand further below.
+					goto fail;
+				infix[infix_count++].symbol = SYM_CONCAT;
 			}
-			// Since above didn't "continue":
-			infix[infix_count].symbol = SYM_OPERAND;
-			infix[infix_count].marker = this_item.marker; // This operand has already been terminated above.
-			++infix_count;
+			switch(this_map_item.type)
+			{
+			case EXP_DEREF_VAR:
+				infix[infix_count].symbol = SYM_VAR;
+				infix[infix_count].var = this_map_item.var;
+				break;
+			case EXP_DEREF_FUNC:
+				infix[infix_count].symbol = SYM_FUNC;
+				infix[infix_count].deref = this_map_item.deref;
+				break;
+			default: // EXP_DEREF_SINGLE
+				// At this stage, an EXP_DEREF_SINGLE item is seen as a numeric literal or a string-literal
+				// (without enclosing double quotes, since those are only needed for raw string literals).
+				// An EXP_DEREF_SINGLE item cannot extend beyond into the map item to its right, since such
+				// a condition can never occur due to load-time preparsing (e.g. the x and y in x+y are two
+				// separate items because there's an operator between them). Even a concat expression such as
+				// (x y) would still have x and y separate because the space between them counts as a raw
+				// map item, which keeps them separate.
+				infix[infix_count].symbol = SYM_OPERAND; // Generic string so that it can later be interpreted as a number (if it's numeric).
+				infix[infix_count].marker = this_map_item.marker; // This operand has already been terminated above.
+			}
 			// This map item has been fully processed.  A new loop iteration will be started to move onto
 			// the next, if any:
+			++infix_count;
 			continue;
 		}
+		
+		// Since the above didn't continue, it's either DOUBLE or RAW.
 
 		// An EXP_DEREF_DOUBLE item must be a isolated double-reference or one that extends to the right
 		// into other map item(s).  If not, a previous iteration would have merged it in with a previous
@@ -9275,11 +10645,11 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 		// MyArray[33][44] here because the first dereferences have already been done.  MyArray[33][44]
 		// (and all the other examples here) are not yet operands because the need a second dereference
 		// to resolve them into a number or string.
-		if (this_item.type == EXP_DEREF_DOUBLE)
+		if (this_map_item.type == EXP_DEREF_DOUBLE)
 		{
 			// Find the end of this operand.  StrChrAny() is not used because if *op_end is '\0'
-			// (i.e. this_item is the last operand), the strchr() below will find that too:
-			for (op_end = this_item.marker; !strchr(EXP_OPERAND_TERMINATORS, *op_end); ++op_end);
+			// (i.e. this_map_item is the last operand), the strchr() below will find that too:
+			for (op_end = this_map_item.marker; !strchr(EXP_OPERAND_TERMINATORS, *op_end); ++op_end);
 			// Note that above has deteremined op_end correctly because any expression, even those not
 			// properly formatted, will have an operator or whitespace between each operand and the next.
 			// In the following example, let's say var contains the string -3:
@@ -9288,30 +10658,30 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 			// so it (and not the minus inside "var") marks the end of the first operand. If there were no
 			// space, the entire thing would be one operand so it wouldn't matter (though in this case, it
 			// would form an invalid var-name since dashes can't exist in them, which is caught later).
-			cp = this_item.marker; // Set for use by the label below.
+			cp = this_map_item.marker; // Set for use by the label below.
 			goto double_deref;
 		}
 
 		// RAW is of lower precedence than the above, so is checked last.  For example, if a single
-		// or double deref contains double quotes, those quotes do not delimit a string literal.
+		// or double deref's contents contain double quotes, those quotes do not delimit a string literal.
 		// Instead, the quotes themselves are part of the string.  Similarly, a single or double
 		// deref containing as string such as 5+3 is a string, not a subexpression to be evaluated.
-		// Since the above didn't "goto", this map item is EXP_RAW, which is the only type that
-		// can contain operators and raw literal numbers and strings (which are double-quoted when raw).
-		for (cp = this_item.marker;; ++infix_count) // For each token inside this map item.
+		// Since the above didn't "goto" or "continue", this map item is EXP_RAW, which is the only type
+		// that can contain operators and raw literal numbers and strings (which are double-quoted when raw).
+		for (cp = this_map_item.marker;; ++infix_count) // For each token inside this map item.
 		{
 			// Because neither the postfix array nor the stack can ever wind up with more tokens than were
 			// contained in the original infix array, only the infix array need be checked for overflow:
-			if (infix_count >= MAX_TOKENS) // No room for this operator or operand to be added.
+			if (infix_count > MAX_TOKENS - 1) // No room for this operator or operand to be added.
 				goto fail;
 
 			// Only spaces and tabs are considered whitespace, leaving newlines and other whitespace characters
 			// for possible future use:
 			cp = omit_leading_whitespace(cp);
-			if (cp >= item_end)
+			if (cp >= this_map_item.end)
 				break; // End of map item (or entire expression if this is the last map item) has been reached.
 
-			terminate_string_here = cp; // See comments near other uses of terminate_string_here below.
+			terminate_string_here = cp; // See comments below, near other uses of terminate_string_here.
 
 			ExprTokenType &this_infix_item = infix[infix_count]; // Might help reduce code size since it's referenced many places below.
 
@@ -9321,7 +10691,7 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 			// The most common cases are kept up top to enhance performance if switch() is implemented as if-else ladder.
 			case '+':
 				sym_prev = infix_count ? infix[infix_count - 1].symbol : SYM_OPAREN; // OPARAN is just a placeholder.
-				if (IS_OPERAND(sym_prev) || sym_prev == SYM_CPAREN)
+				if (IS_OPERAND_OR_CPAREN(sym_prev)) // CPAREN also covers the tail end of a function call.
 					this_infix_item.symbol = SYM_PLUS;
 				else // Remove unary pluses from consideration since they do not change the calculation.
 					--infix_count; // Counteract the loop's increment.
@@ -9333,7 +10703,10 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 				if (sym_prev == SYM_NEGATIVE) // Have this negative cancel out the previous negative.
 					infix_count -= 2;  // Subtracts 1 for the loop's increment, and 1 to remove the previous item.
 				else // Differentiate between unary minus and the "subtract" operator:
-					this_infix_item.symbol = (IS_OPERAND(sym_prev) || sym_prev == SYM_CPAREN) ? SYM_MINUS : SYM_NEGATIVE;
+					this_infix_item.symbol = IS_OPERAND_OR_CPAREN(sym_prev) ? SYM_MINUS : SYM_NEGATIVE;
+				break;
+			case ',':
+				this_infix_item.symbol = SYM_COMMA; // It's serves only as a "do not auto-concatenate" indicator for later below.
 				break;
 			case '/':
 				this_infix_item.symbol = SYM_DIVIDE;
@@ -9354,10 +10727,26 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 					this_infix_item.symbol = SYM_NOTEQUAL;
 				}
 				else
+					// If what lies to its left is a CPARAN or OPERAND, SYM_CONCAT is not auto-inserted because:
+					// 1) Allows ! and ~ to potentially be overloaded to become binary and unary operators in the future.
+					// 2) Keeps the behavior consistent with unary minus, which could never auto-concat since it would
+					//    always be seen as the binary subtract operator in such cases.
+					// 3) Simplifies the code.
 					this_infix_item.symbol = SYM_HIGHNOT; // High-precedence counterpart of the word "not".
 				break;
 			case '(':
-				this_infix_item.symbol = SYM_OPAREN;
+				// The below should not hurt any future type-casting feature because the type-cast can be checked
+				// for prior to checking the below.  For example, if what immediately follows the open-paren is
+				// the string "int)", this symbol is not open-paren at all but instead the unary type-cast-to-int
+				// operator.
+				if (infix_count && IS_OPERAND_OR_CPAREN(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
+				{
+					if (infix_count > MAX_TOKENS - 2) // -2 to ensure room for this operator and the operand further below.
+						goto fail;
+					this_infix_item.symbol = SYM_CONCAT;
+					++infix_count;
+				}
+				infix[infix_count].symbol = SYM_OPAREN; // Must not refer to "this_infix_item" in case the above did ++infix_count.
 				break;
 			case ')':
 				this_infix_item.symbol = SYM_CPAREN;
@@ -9365,7 +10754,7 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 			case '=':
 				if (*(cp + 1) == '=')
 				{
-					// In this case, it's not necessary to check cp >= item_end prior to ++cp,
+					// In this case, it's not necessary to check cp >= this_map_item.end prior to ++cp,
 					// since symbols such as > and = can't appear in a double-deref, which at
 					// this stage must be a legal variable name:
 					++cp; // An additional increment to have loop skip over the other '=' too.
@@ -9430,6 +10819,11 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 				this_infix_item.symbol = SYM_BITXOR;
 				break;
 			case '~':
+				// If what lies to its left is a CPARAN or OPERAND, SYM_CONCAT is not auto-inserted because:
+				// 1) Allows ! and ~ to potentially be overloaded to become binary and unary operators in the future.
+				// 2) Keeps the behavior consistent with unary minus, which could never auto-concat since it would
+				//    always be seen as the binary subtract operator in such cases.
+				// 3) Simplifies the code.
 				this_infix_item.symbol = SYM_BITNOT;
 				break;
 
@@ -9460,28 +10854,17 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 				// Above relies on the fact that StrReplaceAll() does not do cascading replacements,
 				// meaning that a series of characters such as """" would be correctly converted into
 				// two double quotes rather than just collapsing into one.
-				// For the below, see comments at (this_item.type == EXP_DEREF_SINGLE) above.
-				if (infix_count)
+				// For the below, see comments at (this_map_item.type == EXP_DEREF_SINGLE) above.
+				if (infix_count && IS_OPERAND_OR_CPAREN(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
 				{
-					ExprTokenType &prev_infix_item = infix[infix_count - 1];
-					if (IS_OPERAND(prev_infix_item.symbol)) // Since it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
-					{
-						if (prev_infix_item.marker >= aBuf_orig && prev_infix_item.marker < cp) // It's not a double deref.
-							// Below recomputes strlen(cp) in case StrReplaceAll, above, changed it:
-							memmove(prev_infix_item.marker + strlen(prev_infix_item.marker), cp, strlen(cp) + 1);
-						else
-						{
-							prev_infix_item.marker = cp; // i.e. consider the double deref to be the empty string for this concat.
-							prev_infix_item.symbol = SYM_STRING; // Indicate that it's a literal string.
-						}
-						--infix_count; // Counteract the loops ++infix_count.
-						cp = op_end + 1; // Set it up for the next iteration (terminate_string_here is not needed).
-						continue;
-					}
+					if (infix_count > MAX_TOKENS - 2) // -2 to ensure room for this operator and the operand further below.
+						goto fail;
+					this_infix_item.symbol = SYM_CONCAT;
+					++infix_count;
 				}
-				// Since above didn't "continue", this operand is not being combined with the previous.
-				this_infix_item.symbol = SYM_STRING;
-				this_infix_item.marker = cp; // This string-operand has already been terminated above.
+				// Must not refer to "this_infix_item" in case the above did ++infix_count.
+				infix[infix_count].symbol = SYM_STRING; // Marked explicitly as string vs. SYM_OPERAND to prevent it from being seen as a number, e.g. if (var == "12.0") would be false if var has no decimal point.
+				infix[infix_count].marker = cp; // This string-operand has already been terminated above.
 				cp = op_end + 1;  // Set it up for the next iteration (terminate_string_here is not needed in this case).
 				continue;
 
@@ -9496,21 +10879,30 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 				// things like (x=3)and(5=4) or even "x and!y", the and/or/not operators are processed
 				// here with the numeric literals since we want to find op_end the same way.
 
-				// Find the end of this operand or keyword, even if that end is beyond item_end.
+				if (*cp == '.' && IS_SPACE_OR_TAB(cp[1])) // This one must be done here rather than as a "case".  See comment below.
+				{
+					this_infix_item.symbol = SYM_CONCAT;
+					break;
+				}
+				//else any '.' not followed by a space or tab is likely a number without a leading zero,
+				// so continue on below to process it.
+
+				// Find the end of this operand or keyword, even if that end is beyond this_map_item.end.
 				// StrChrAny() is not used because if *op_end is '\0', the strchr() below will find it too:
 				for (op_end = cp + 1; !strchr(EXP_OPERAND_TERMINATORS, *op_end); ++op_end);
 				// Now op_end marks the end of this operand or keyword.  That end might be the zero terminator
 				// or the next operator in the expression, or just a whitespace.
-				if (*item_end && op_end >= item_end) // Where item_end is the first character of the next item.
-					// This operand extends into one or more map items to the right of this_item.  The first
-					// of those map items must be a EXP_DEREF_DOUBLE, since for various reasons, the other types
-					// are impossible at this stage.  Example:
-					// Array[%i%][%j%] (which at this stage appears to us as Array[33][44]).
+				if (op_end >= this_map_item.end // This must be true to qualify as a double deref.
+					&& (*this_map_item.end // If this is true, it's enough to know that it's a double deref.
+					// But if not, and all three of the following are true, it's a double deref anyway
+					// to support the correct result in something like: Var := "x" . Array%BlankVar%
+					|| (map_index != map_count - 1 && MAP_ITEM_IN_BUFFER(map[map_index + 1].type)
+						&& map[map_index + 1].marker == op_end)))
 					goto double_deref; // This also serves to break out of this for(), equivalent to a break.
 				// Otherwise, this operand is a normal raw numeric-literal or a word-operator (and/or/not).
 				// The section below is very similar to the one used at load-time to recognize and/or/not,
 				// so it should be maintained with that section:
-				op_length = op_end - cp;
+				op_length = (UINT)(op_end - cp);
 				if (op_length < 4 && op_length > 1) // Ordered for short-circuit performance.
 				{
 					// Since this item is of an appropriate length, check if it's AND/OR/NOT:
@@ -9554,40 +10946,17 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 				}
 				// Since above didn't "continue", this item is a raw numeric literal, either SYM_FLOAT or
 				// SYM_INTEGER (to be differentiated later).
-				// For the below, see comments at (this_item.type == EXP_DEREF_SINGLE) above.
-				if (infix_count)
+				// For the below, see comments at (this_map_item.type == EXP_DEREF_SINGLE) above.
+				if (infix_count && IS_OPERAND_OR_CPAREN(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
 				{
-					ExprTokenType &prev_infix_item = infix[infix_count - 1];
-					if (IS_OPERAND(prev_infix_item.symbol)) // Since it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
-					{
-						if (prev_infix_item.marker >= aBuf_orig && prev_infix_item.marker < cp) // It's not a double deref.
-						{
-							// Below moves only the number itself, not any zero terminator (since there isn't one yet):
-							temp = prev_infix_item.marker + strlen(prev_infix_item.marker);
-							memmove(temp, cp, op_length);
-							// The memmove() should have shifted the above to the left by at least one
-							// position in each of the following cases:
-							// "string literal" 123 --> The position of the final double-quote is available.
-							// Var 123 --> There must be at least one space between them for load-time to have parsed it.
-							// %Var% 123 --> Not supported (it would never reach here, instead failing at a later stage).
-							// Terminate this literal in the right place.  Otherwise, a future iteration's
-							// provided terminator will be too far to the right and thus append garbage to
-							// the end of this newly concatenated string:
-							*(temp + op_length) = '\0';
-						}
-						else // It's a concat onto a double deref, so treat the double as an empty string.
-							prev_infix_item.marker = cp;
-							// And prev_infix_item.symbol should already be set to SYM_OPERAND at this stage.
-						--infix_count; // Counteract the loops ++infix_count.
-						cp = op_end; // Have the loop process whatever lies at op_end and beyond.
-						// Not necessary to do terminate_string_here because the following is currently
-						// impossible: x:=0"" (load-time error because raw string-literal can't be up
-						// against the right side of another operand).
-						continue;
-					}
+					if (infix_count > MAX_TOKENS - 2) // -2 to ensure room for this operator and the operand further below.
+						goto fail;
+					this_infix_item.symbol = SYM_CONCAT;
+					++infix_count;
 				}
-				this_infix_item.symbol = SYM_OPERAND;
-				this_infix_item.marker = cp; // This numeric operand will be terminated later via terminate_string_here.
+				// Must not refer to "this_infix_item" in case above did ++infix_count:
+				infix[infix_count].symbol = SYM_OPERAND;
+				infix[infix_count].marker = cp; // This numeric operand will be terminated later via terminate_string_here.
 				cp = op_end; // Have the loop process whatever lies at op_end and beyond.
 				// The below is necessary to support an expression such as (1 "" 0), which
 				// would otherwise result in 1"0 instead of 10 because the 1 was lazily
@@ -9615,93 +10984,139 @@ char *Line::ExpandExpression(char *aBuf, int aArgIndex)
 		continue;  // To avoid falling into the label below.
 
 double_deref:
-		if (*item_end && op_end >= item_end) // This operand includes this map item and one or more to its right, so adjust map_index accordingly.
+		// The only purpose of the following loop is to increase map_index if one or more of the map items
+		// to the right of this_map_item are to be merged with this_map_item to construct a double deref
+		// such as Array%i%.
+		for (++map_index;; ++map_index)
 		{
-			// Find the map item containing the end of this operand.  If the loop ends when
-			// map_index==map_count, it ran out of map items, thus the final map item contains the
-			// end of this operand. The other termination condition below occurs when this operand
-			// is ended in the map item to the left of map_index:
-			for (;;)
+			if (map_index == map_count || !MAP_ITEM_IN_BUFFER(map[map_index].type)
+				|| (op_end <= map[map_index].marker  // Since above line didn't short-circuit, it's safe to reference map[map_index].marker.
+					&& map[map_index].end > map[map_index].marker))
+				// The final line above serves to merge empty items (which must be doubles since RAWs are never
+				// empty) in with this one.  Although everything might work correctly without this, it's more
+				// proper to get rid of these empty items now since they should "belong" to this item.
 			{
-				++map_index; // Due to the check above, there must be at least one map item beyond starting map item of this operand.
-				if (op_end <= map[map_index].marker // The map item to the right of the one containg the end of this operand has been found.
-					// ... except if that item is of zero length, in which case the below consumes it and
-					// any other consecutive empty map items to the right of it.  If this weren't done,
-					// a double-deref such as 100/(3 + Array%BlankVar%) would not work properly.
-					&& ((map_index == map_count - 1) || map[map_index + 1].marker != map[map_index].marker))
-				{
-					item_end = map[map_index].marker; // End of previous map item is beginning of this one.
-					--map_index;  // Set it to the final map item of this operand.
-					break;
-				}
-				if (map_index == map_count - 1) // No more map items.  This final item must be the one that contains the end of this operand.
-				{
-					item_end = map[map_index].marker + strlen(map[map_index].marker);
-					break;
-				}
+				// The map item to the right of the one containg the end of this operand has been found.
+				--map_index;
+				// If the loop had only one iteration, the above restores the original value of map_index.
+				// In other words, this map item doesn't stretch into others to its right, so it's just a
+				// naked double-deref such as %DynVar%.
+				break;
 			}
-			// If this map item wasn't fully consumed by this operand, alter the map item to contain
-			// only the part left to be processed.  For example, in Array[%i%]/3, the final map item
-			// is ]/3, of which only the ] is consumed by the Array[%i%] operand:
-			if (op_end < item_end)
+		}
+		// If the map_item[map_index] item isn't fully consumed by this operand, alter the map item to contain
+		// only the part left to be processed and then have the loop process this same map item again.
+		// For example, in Array[%i%]/3, the final map item is ]/3, of which only the ] is consumed by the
+		// Array[%i%] operand.
+		if (op_end < map[map_index].end)
+		{
+			if (map[map_index].type == EXP_RAW)
 			{
 				map[map_index].marker = op_end;
 				--map_index;  // Compensate for the loop's ++map_index.
 			}
-			//else do nothing since map_index is now set to the final map item of this operand, and that
-			// map item is fully consumed by this operand and needs no further processing.
-		} // This map item stretches into others to its right.
+			else // DOUBLE or something else that shouldn't be allowed to be partially processed such as the above.
+			{
+				// The above EXP_RAW method is not done of the map item is a double deref, since it's not
+				// currently valid to do something like Var:=%VarContainingSpaces% + 1.  Example:
+				//var = test
+				//x = var 11
+				//y := %x% + 1  ; Add 1 to force it to stay an expression rather than getting simplified at loadtime.
+				// In such cases, force it to handle this entire double as a unit, since other usages are invalid.
+				op_end = map[map_index].end; // Force the entire map item to be processed/consumed here.
+			}
+		}
+		//else do nothing since map_index is now set to the final map item of this operand, and that
+		// map item is fully consumed by this operand and needs no further processing.
 
+		// UPDATE: The following is now supported in v1.0.31, so this old comment is kept only for background:
 		// Check if this double is being concatenated onto a previous operand.  If so, it is not
 		// currently supported so this double-deref will be treated as an empty string, as documented.
 		// Example 1: Var := "abc" %naked_double_ref%
 		// Example 2: Var := "abc" Array%Index%
-		if (!infix_count || !IS_OPERAND(infix[infix_count - 1].symbol)) // Relies on short-circuit boolean order.
+		// UPDATE: Here is the means by which the above is now supported:
+		if (infix_count && IS_OPERAND_OR_CPAREN(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
+		{
+			if (infix_count > MAX_TOKENS - 2) // -2 to ensure room for this operator and the operand further below.
+				goto fail;
+			infix[infix_count++].symbol = SYM_CONCAT;
+		}
+
+		if (   !(op_length = (UINT)(op_end - cp))   )
+		{
+			// Var is not found, not a normal var, or it *is* an environment variable.
+			infix[infix_count].symbol = SYM_OPERAND;
+			infix[infix_count].marker = "";
+		}
+		else // This operand becomes the variable's contents.
 		{
 			// Callers of this label have set cp to the start of the variable name and op_end to the
-			// position of the character after the last one in the name.  The below does not validate
-			// that the variable name is legal.  Instead, it just tries to look up an existing variable.
-			// If there is no such variable, it is considered to be the empty string (which seems better
-			// than causing the entire expression to evaluate to blank) to indicate the problem.
-			// The same thing happens if this is the clipboard because temporary memory would be
-			// needed somewhere if the clipboard contains files that need to be expanded to text.
-			// Finally, all other non-normal variables (such as reserved variables) are also failure
-			// conditions because they would need to be fetched into some kind of temp. memory somewhere.
-			// Next condition:
-			// An environment variable might not have an entry in the script's variable list if it is
-			// only ever referred to dynamically, never directly by name.  In that case, FindVar() below
-			// will not find it in the list.  But if it is found in the list, it seems best to make it
-			// blank so that the behavior for env. vars is always the same.  Related: all other aspects
-			// of script behavior treat variables of length zero as the contents of the corresponding
-			// environment variable (if one exists).
-			op_length = op_end - cp;
-			infix[infix_count].marker = (!op_length || !(found_var = g_script.FindVar(cp, op_length)) // i.e. don't call FindVar with zero for length, since that's a special mode.
-				|| found_var->mType != VAR_NORMAL // Relies on short-circuit boolean order.
-				|| !found_var->Length()) // i.e. it's either an environment variable or a zero-length variable.  But either way it's treated as a blank string.
-					? "" // Var is not found, not a normal var, or it *is* an environment variable.
-					: found_var->Contents(); // This operand becomes the variable's contents.
-					// "" is used above, rather than a real empty string residing within limits of
-					// the expression's text, so that attempts to concat this item will fail in the
-					// same way that other concats involving double derefs fail.
-			// If this item is the empty string or consists entirely of whitespace, it will be treated
-			// as a string-operand rather than a number:
-			infix[infix_count].symbol = SYM_OPERAND;
-			++infix_count;
+			// position of the character after the last one in the name.
+			// In v1.0.31, FindOrAddVar() vs. FindVar() is called below to support the passing of non-existent
+			// array elements ByRef, e.g. Var:=MyFunc(Array%i%) where the MyFunc function's parameter is
+			// defined as ByRef, would effectively create the new element Array%i% if it doesn't already exist.
+			// Since at this stage we don't know whether this particular double deref is to be sent as a param
+			// to a function, or whether it will be byref, this is done unconditionally for all double derefs
+			// since it seems relatively harmless to create a blank variable in something like var := Array%i%
+			// (though it will produce a runtime error if the double resolves to an illegal variable name such
+			// as one containing spaces).
+			// The use of ALWAYS_PREFER_LOCAL below improves flexibility of assume-global functions
+			// by allowing this command to resolve to a local first if such a local exists:
+			if (   !(found_var = g_script.FindOrAddVar(cp, op_length, ALWAYS_PREFER_LOCAL))   ) // i.e. don't call FindOrAddVar with zero for length, since that's a special mode.
+			{
+				// Above already displayed the error.  As of v1.0.31, this type of error is displayed and
+				// causes the current thread to terminate, which seems more useful than the old behavior
+				// that tolerated anything in expressions.
+				aResult = FAIL; // Indicate reason to caller.
+				result_to_return = NULL; // Use NULL to inform our caller that this entire thread is to be terminated.
+				goto end;
+			}
+			// Otherwise, var was found or created.
+			if (found_var->Type() != VAR_NORMAL)
+			{
+				// Non-normal variables such as Clipboard and A_ScriptFullPath are not allowed to be
+				// generated from a double-deref such as A_Script%VarContainingFullPath% because:
+				// 1) Anything that needed their contents would have to find memory in which to store
+				//    the result of Var::Get(), which would complicate the code since that would have
+				//    to be added 
+				// 2) It doesn't appear to have much use, not even for passing them as a ByRef parameter
+				// to a function (since they're read-only [except Clipboard, but temporary memory would be
+				// needed somewhere if the clipboard contains files that need to be expanded to text] and
+				// essentially global by their very nature), and the value of catching unintended usages
+				// seems more important than any flexibilty that might add.
+				infix[infix_count].symbol = SYM_OPERAND;
+				infix[infix_count].marker = "";
+			}
+			else
+			{
+				// Even if it's an environment variable, it gets added as SYM_VAR.  However, unlike other
+				// aspects of the program, double-derefs that resolve to environment variables will be seen
+				// as always-blank due to the use of Var::Contents() vs. Var::Get() in various places below.
+				// This seems okay due to the extreme rarity of anyone intentionally wanting a double
+				// reference such as Array%i% to resolve to the name of an environment variable.
+				infix[infix_count].symbol = SYM_VAR;
+				infix[infix_count].var = found_var;
+			}
 		}
+		++infix_count;
 	} // for each map item
 
 	////////////////////////////
 	// CONVERT INFIX TO POSTFIX.
 	////////////////////////////
+	#define STACK_PUSH(token) stack[stack_count++] = &token
+	#define STACK_POP stack[--stack_count]  // To be used as the r-value for an assignment.
+	// SYM_BEGIN is the first item to go on the stack.  It's a flag to indicate that conversion to postfix has begun:
+	ExprTokenType token_begin;
+	token_begin.symbol = SYM_BEGIN;
+	STACK_PUSH(token_begin);
+
 	int i;
 	SymbolType stack_symbol, infix_symbol;
-	stack[stack_count++].symbol = SYM_BEGIN; // A flag to indicate that conversion to postfix has begun.
-	// Unlike the below, the above isn't a complete PUSH since it only sets the symbol member.
-	#define STACK_PUSH(token) stack[stack_count++] = token
-	#define STACK_POP stack[--stack_count]  // To be used as the r-value for an assignment.
+
 	for (i = 0; stack_count > 0;) // While SYM_BEGIN is still on the stack, continue iterating.
 	{
-		stack_symbol = stack[stack_count - 1].symbol; // Frequently used, so resolve only once to help performance.
+		stack_symbol = stack[stack_count - 1]->symbol; // Frequently used, so resolve only once to help performance.
 
 		// "i" will be out of bounds if infix expression is complete but stack is not empty.
 		// So the very first check must be for that.
@@ -9714,7 +11129,10 @@ double_deref:
 			else if (stack_symbol == SYM_OPAREN) // Open paren is never closed (currently impossible due to load-time balancing, but kept for completeness).
 				goto fail;
 			else // Pop item of the stack, and continue iterating, which will hit this line until stack is empty.
-				postfix[postfix_count++] = STACK_POP;
+			{
+				postfix[postfix_count] = STACK_POP;
+				postfix[postfix_count++]->circuit_token = NULL; // Set default. It's only ever overridden after it's in the postfix array.
+			}
 			continue;
 		}
 
@@ -9724,7 +11142,8 @@ double_deref:
 		// Put operands into the postfix array immediately, then move on to the next infix item:
 		if (IS_OPERAND(infix_symbol)) // At this stage, operands consist of only SYM_OPERAND and SYM_STRING.
 		{
-			postfix[postfix_count++] = infix[i++];
+			postfix[postfix_count] = infix + i++;
+			postfix[postfix_count++]->circuit_token = NULL; // Set default. It's only ever overridden after it's in the postfix array.
 			continue;
 		}
 
@@ -9738,18 +11157,32 @@ double_deref:
 			{
 				--stack_count; // Remove this open-paren from the stack, since it is now complete.
 				++i;           // Since this pair of parens is done, move on to the next token in the infix expression.
+				// There should be no danger of stack underflow in the following because SYM_BEGIN always
+				// exists at the bottom of the stack:
+				if (stack[stack_count - 1]->symbol == SYM_FUNC) // Within the postfix list, a function-call should always immediately follow its params.
+				{
+					postfix[postfix_count] = STACK_POP;
+					postfix[postfix_count++]->circuit_token = NULL; // Set default. It's only ever overridden after it's in the postfix array.
+				}
 			}
 			else if (stack_symbol == SYM_BEGIN) // Paren is closed without having been opened (currently impossible due to load-time balancing, but kept for completeness).
 				goto fail; 
 			else
-				postfix[postfix_count++] = STACK_POP;
+			{
+				postfix[postfix_count] = STACK_POP;
+				postfix[postfix_count++]->circuit_token = NULL; // Set default. It's only ever overridden after it's in the postfix array.
 				// By not incrementing i, the loop will continue to encounter SYM_CPAREN and thus
 				// continue to pop things off the stack until the corresponding OPAREN is reached.
+			}
 			break;
 
 		// Open-parens always go on the stack to await their matching close-parens:
 		case SYM_OPAREN:
 			STACK_PUSH(infix[i++]);
+			break;
+
+		case SYM_COMMA:
+			++i; // Omit commas from further consideration, since they only served as a "do not concatenate" indicator earlier.
 			break;
 
 		default: // Symbol is an operator, so act according to its precedence.
@@ -9760,62 +11193,465 @@ double_deref:
 			// Note: BEGIN and OPAREN are the lowest precedence items ever to appear on the stack (CPAREN
 			// never goes on the stack, so can't be encountered there).
 			if (   sPrecedence[stack_symbol] < sPrecedence[infix_symbol]
-				|| (stack_symbol == SYM_POWER && infix_symbol == SYM_NEGATIVE)   )
+				|| stack_symbol == SYM_POWER && infix_symbol == SYM_NEGATIVE   )
+			{
 				// The line above is a workaround to allow 2^-2 to be evaluated as 2^(-2) rather
 				// than being seen as an error.  However, for simplicity of code, consecutive
 				// unary operators are not supported:
 				// !-3  ; Not supported (seems of little use anyway; can be written as !(-3) to make it work).
 				// -!3  ; Not supported (seems useless anyway, can be written as -(!3) to make it work).
 				// !x   ; Supported even if X contains a negative number, since x is recognized as an isolated operand and not something containing unary minus.
+
+				// To facilitate short-circuit boolean evaluation, right before an AND/OR is pushed onto the
+				// stack, connect the end of it's left branch to it.  Note that the following postfix token
+				// can itself be of type AND/OR, a simple example of which is "if (true and true and true)",
+				// in which the first and's parent in an imaginary tree is the second "and".
+				// But how is it certain that this is the final operator or operand of and AND/OR's left branch?
+				// Here is the explanation:
+				// Everything higher priority than the AND/OR came off the stack right before it, resulting in
+				// what must be a balanced/complete sub-postfix-expression in and of itself (unless the expression
+				// has a syntax error, which is caught in various places).  Because it's complete, during the
+				// postfix evaluation phase, that sub-expression will result in a new operand for the stack,
+				// which must then be the left side of the AND/OR because the right side immediately follows it
+				// within the postfix array, which in turn is immediately followed its operator (namely AND/OR).
+				if ((infix_symbol == SYM_AND || infix_symbol == SYM_OR) && postfix_count)
+					postfix[postfix_count - 1]->circuit_token = infix + i;
 				STACK_PUSH(infix[i++]);
+			}
 			else // Stack item has equal or greater precedence (if equal, left-to-right evaluation order is in effect).
-				postfix[postfix_count++] = STACK_POP;
-		} // switch()
+			{
+				postfix[postfix_count] = STACK_POP;
+				postfix[postfix_count++]->circuit_token = NULL; // Set default. It's only ever overridden after it's in the postfix array.
+			}
+		} // switch(infix_symbol)
 	} // End of loop that builds postfix array.
 
 	///////////////////////////////////////////////////
 	// EVALUATE POSTFIX EXPRESSION (constructed above).
 	///////////////////////////////////////////////////
+	SymbolType right_is_number, left_is_number;
 	double right_double, left_double;
 	__int64 right_int64, left_int64;
 	char *right_string, *left_string;
-	SymbolType right_is_number, left_is_number;
-	for (i = 0; i < postfix_count; ++i) // For each item in the postfix array: push operands onto stack, evaluate operators and push their results onto stack.
+	char *right_contents, *left_contents;
+	size_t right_length, left_length;
+	int j, s, actual_param_count;
+	Func *prev_func;
+	char *result; // "result" is used for return values and also the final result.
+	size_t result_size;
+	bool done, make_result_persistent, early_return, backup_needed, left_branch_is_true;
+	ExprTokenType *circuit_token;
+	VarBkp *var_backup;   // If needed, it will hold an array of VarBkp objects.
+	int var_backup_count; // The number of items in the above array.
+	HWND found_hwnd;
+	#define MAX_EXPR_PARAMS 4  // For now, until some better approach is devised for supporting more without wasting a lot of call-stack space.
+	char param_buf[MAX_EXPR_PARAMS][MAX_FORMATTED_NUMBER_LENGTH + 1]; // Only needed for holding numbers.
+	char *param[MAX_EXPR_PARAMS];
+
+	// For each item in the postfix array: if it's an operand, push it onto stack; if it's an operator or
+	// function call, evaluate it and push its result onto the stack.
+	for (i = 0; i < postfix_count; ++i)
 	{
-		ExprTokenType &this_token = postfix[i];  // For performance and convenience.
+		ExprTokenType &this_token = *postfix[i];  // For performance and convenience.
 
 		// At this stage, operands in the postfix array should be either SYM_OPERAND or SYM_STRING.
 		// But all are checked since that operation is just as fast:
 		if (IS_OPERAND(this_token.symbol)) // If it's an operand, just push it onto stack for use by an operator in a future iteration.
+			goto push_this_token;
+
+		if (this_token.symbol == SYM_FUNC) // A call to a function in the script.
 		{
-			STACK_PUSH(this_token);
-			continue;
+			Func &func = *this_token.deref->func; // For performance.
+			actual_param_count = this_token.deref->param_count; // For performance.
+
+			if (func.mType != FUNC_NORMAL)
+			{
+				switch (func.mType)
+				{
+				case FUNC_WINEXIST:
+				case FUNC_WINACTIVE:
+					// Pop the actual number of params involved in this function-call off the stack.  Load-time
+					// validation has ensured that this number is always less than or equal to the number of
+					// parameters formally defined by the function.  Therefore, there should never be any leftover
+					// params on the stack after this is done:
+					for (j = func.mParamCount - 1; j >= 0; --j) // For each formal parameter (reverse order to mirror the nature of the stack).
+					{
+						if (j >= actual_param_count) // No actual to go with it (should be possible only if the parameter is optional or has a default value).
+						{
+							param[j] = "";
+							continue;
+						}
+						// Otherwise, assign actual parameter's value to the formal parameter:
+						if (!stack_count) // Prevent stack underflow (probably impossible if actual_param_count is accurate).
+							goto fail;
+						ExprTokenType &token = *STACK_POP;
+						// Below uses IS_OPERAND rather than checking for only SYM_OPERAND because the stack can contain
+						// both generic and specific operands.  Specific operands were evaluated by a previous iteration
+						// of this section.  Generic ones were pushed as-is onto the stack by a previous iteration.
+						if (!IS_OPERAND(token.symbol)) // Haven't found a way to produce this situation yet, but safe to assume it's possible.
+							goto fail;
+						switch(token.symbol)
+						{
+						case SYM_INTEGER:
+							param[j] = ITOA64(token.value_int64, param_buf[j]);
+							break;
+						case SYM_FLOAT:
+							snprintf(param_buf[j], MAX_FORMATTED_NUMBER_LENGTH + 1, g.FormatFloat, token.value_double);
+							param[j] = param_buf[j];
+							break;
+						case SYM_VAR:
+							param[j] = token.var->Contents();
+							break;
+						default: // SYM_STRING or SYM_OPERAND
+							param[j] = token.marker;
+						}
+					}
+
+					// Should be called the same was as ACT_IFWINEXIST and ACT_IFWINACTIVE:
+					found_hwnd = (func.mType == FUNC_WINEXIST)
+						? WinExist(param[0], param[1], param[2], param[3], false, true)
+						: WinActive(param[0], param[1], param[2], param[3], true);
+					result = param_buf[0];
+					result[0] = '0';
+					result[1] = 'x';
+					_ui64toa((unsigned __int64)found_hwnd, result + 2, 16);
+					break;
+
+				default: // Unknown/unhandled function type.
+					result = "";
+				} // switch (func.mType)
+
+				early_return = false; // For maintainability.
+			}
+			else // func.mType == FUNC_NORMAL (i.e. it's not a built-in function, or it's a built-in that was overridden with a custom function)
+			{
+				// If there are other instances of this function already running, either via recursion or
+				// an interrupted quasi-thread, backup the local variables of the instance that lies immediately
+				// beneath ours (in turn, that instance is responsible for backup up any instance that lies
+				// beneath it, and so on, since when recursion collapses or threads resume, they always do so
+				// in the reverse order in which they were created.
+				if (backup_needed = (func.mInstances > 0)) // i.e. treat negatives as zero to help catch any bugs in the way mInstances is maintained.
+				{
+					// Only when a backup is needed is it possible for this function to be calling itself recursively,
+					// either directly or indirectly by means of an intermediate function.  As a consequence, it's
+					// possible for this function to be passing one or more of its own params or locals to itself.
+					// The following section compensates for that to handle parameters passed by-value, but it
+					// doesn't correctly handle passing its own locals/params to itself ByRef, which will be
+					// documented as a known limitation.  Also, the below doesn't indicate a failure when stack
+					// underflow would occur because the loop after this one needs to do that (since this
+					// one will never execute if a backup isn't needed).  Note that this loop that reviews all
+					// actual paramters is necessary as a separate loop from the one further below because this
+					// first one's conversion must occur prior to calling BackupFunctionVars().  In addition, there
+					// might be other interdepencies between formals and actuals if a function is calling itself
+					// recursively.
+					for (j = func.mParamCount - 1, s = stack_count; j >= 0; --j) // For each formal parameter (reverse order to mirror the nature of the stack).
+					{
+						if (j < actual_param_count) // This formal has an actual on the stack.
+						{
+							// Move on to the next item in the stack (without popping):
+							if (!s) // Prevent stack underflow. Impossible if actual_param_count is accurate.
+								goto fail;
+							--s;
+							if (stack[s]->symbol == SYM_VAR && !func.mParam[j]->IsByRef())
+							{
+								// Since this formal parameter is passed by value, if it's SYM_VAR, convert it to
+								// SYM_OPERAND to allow the variables to be backed up and reset further below without
+								// corrupting any SYM_VARs that happen to be locals or params of this very same function:
+								stack[s]->marker = stack[s]->var->Contents();
+								stack[s]->symbol = SYM_OPERAND;
+							}
+						}
+					}
+					// BackupFunctionVars() will also clear each local variable and formal parameter so that
+					// if that parameter or local var or is assigned a value by any other means during our call
+					// to it, new memory will be allocated to hold that value rather than overwriting the
+					// underlying recursed/interrupted instance's memory, which it will need intact when it's resumed.
+					if (!BackupFunctionVars(func, var_backup, var_backup_count)) // Out of memory.
+					{
+						LineError(ERR_OUTOFMEM ERR_ABORT, FAIL, func.mName);
+						aResult = FAIL;
+						result_to_return = NULL; // Use NULL to inform our caller that this entire thread is to be terminated.
+						goto end;
+					}
+				}
+				//else backup is not needed because there are no other instances of this function on the call-stack.
+				// So by definition, this function is not calling itself directly or indirectly, therefore there's no
+				// need to do the conversion of SYM_VAR because those SYM_VARs can't be ones that were blanked out
+				// due to a function exiting.  In other words, it seems impossible for a there to be no other
+				// instances of this function on the call-stack and yet SYM_VAR to be one of this function's own
+				// locals or formal params because it would have no legitimate origin.
+
+				// Pop the actual number of params involved in this function-call off the stack.  Load-time
+				// validation has ensured that this number is always less than or equal to the number of
+				// parameters formally defined by the function.  Therefore, there should never be any leftover
+				// params on the stack after this is done:
+				for (j = func.mParamCount - 1; j >= 0; --j) // For each formal parameter (reverse order to mirror the nature of the stack).
+				{
+					if (j >= actual_param_count) // No actual to go with it (should be possible only if the parameter is optional or has a default value).
+					{
+						func.mParam[j]->Assign(); // By not specifying "" as the first param, the var's memory is not freed, which seems best to help performance when the function is called repeatedly in a loop.
+						continue;
+					}
+					// Otherwise, assign actual parameter's value to the formal parameter (which is itself a
+					// local variable in the function).
+					if (!stack_count) // Prevent stack underflow (note that the previous loop will not have checked this if no backup was needed). Impossible if actual_param_count is accurate.
+						goto fail;
+					ExprTokenType &token = *STACK_POP;
+					// Below uses IS_OPERAND rather than checking for only SYM_OPERAND because the stack can contain
+					// both generic and specific operands.  Specific operands were evaluated by a previous iteration
+					// of this section.  Generic ones were pushed as-is onto the stack by a previous iteration.
+					if (!IS_OPERAND(token.symbol)) // Haven't found a way to produce this situation yet, but safe to assume it's possible.
+						goto fail;
+					if (func.mParam[j]->IsByRef())
+					{
+						// Note that the previous loop might not have checked things like the following because that
+						// loop never ran unless a backup was needed:
+						if (token.symbol != SYM_VAR)
+						{
+							// In most cases this condition would have been caught by load-time validation.
+							// However, in the case of badly constructed double derefs, that won't be true
+							// (though currently, only a double deref that resolves to a built-in variable
+							// would be able to get this far to trigger this error, because something like
+							// func(Array%VarContainingSpaces%) would have been caught at an earlier stage above.
+							LineError(ERR_BYREF ERR_ABORT, FAIL, func.mParam[j]->mName);
+							aResult = FAIL;
+							result_to_return = NULL; // Use NULL to inform our caller that this entire thread is to be terminated.
+							goto end;
+						}
+						func.mParam[j]->UpdateAlias(token.var); // Make the formal parameter point directly to the actual parameter's contents.
+					}
+					else // This parameter is passed "by value".
+					{
+						switch(token.symbol)
+						{
+						case SYM_INTEGER:
+							func.mParam[j]->Assign(token.value_int64);
+							break;
+						case SYM_FLOAT:
+							func.mParam[j]->Assign(token.value_double);
+							break;
+						case SYM_VAR:
+							// This case can still happen because the previous loop's conversion of all
+							// by-value SYM_VAR operands into SYM_OPERAND would not have happened if no
+							// backup was needed for this function:
+							func.mParam[j]->Assign(token.var->Contents());
+							break;
+						default: // SYM_STRING or SYM_OPERAND
+							func.mParam[j]->Assign(token.marker);
+						}
+					}
+				}
+
+				result = ""; // Init to default in case function doesn't return a value or it EXITs or fails.
+
+				// Launch the function similar to Gosub (i.e. not as a new quasi-thread):
+				// The performance again of conditionally passing NULL in place of result (when this is the
+				// outermost function call of a line consisting only of function calls, namely ACT_FUNCTIONCALL)
+				// would not be significant because the Return command's expression (arg1) must still be evaluated
+				// in case it calls any functions that have side-effects, e.g. "return LogThisError()".
+				prev_func = g.CurrentFunc; // This will be non-NULL when a function is called from inside another function.
+				g.CurrentFunc = &func;
+				++func.mInstances;
+				// Although a GOTO that jumps to a position outside of the function's body could be supported,
+				// it seems best not to for these reasons:
+				// 1) The extreme rarity of a legitimate desire to intentionally do so.
+				// 2) The fact that any return encountered after the Goto cannot provide a return value for
+				//    the function because load-time validation checks for this (it it's preferable not to
+				//    give up this check, since it is an informative error message and might also help catch
+				//    bugs in the script).  Gosub does not suffer from this because the return that brings it
+				//    back into the function body belongs to the Gosub and not the function itself.
+				// 3) More difficult to maintain because we have handle jump_to_line the same way ExecUntil() does,
+				//    taking into account aResult first, etc.
+				aResult = func.mJumpToLine->ExecUntil(UNTIL_BLOCK_END, &result);
+				--func.mInstances;
+				// Restore the original value in case this function is called from inside another function.
+				// Due to the synchronous nature of recursion and recursion-collapse, this should keep
+				// g.CurrentFunc accurate, even amidst the asynchronous saving and restoring of "g" itself:
+				g.CurrentFunc = prev_func;
+
+				early_return = (aResult == EARLY_EXIT || aResult == FAIL);
+			}
+
+			done = !stack_count && i == postfix_count - 1; // True if we've used up the last of the operators & operands.
+
+			// The result just returned needs to be copied to a more persistent location.  This is done right
+			// away if the result is the contents of a local variable (since all locals are about to be freed
+			// and overwritten), which is assumed to be the case if it's not in the new deref buf because it's
+			// difficult to distinguish between when the function returned one of its own local variables
+			// rather than a global or a string/numeric literal).  The only exceptions are:
+			if (early_return // We're about to return early, so the caller will be ignoring this result entirely.
+				|| done && mActionType == ACT_FUNCTIONCALL) // Outermost function call's result will be ignored, so no need to store it.
+				make_result_persistent = false;
+			else if (result < sDerefBuf || result >= sDerefBuf + sDerefBufSize) // Not in their deref buffer (yields correct result even if sDerefBuf is NULL).
+				make_result_persistent = true; // Since above didn't set it to false, this result must be assumed to be one of their local variables, so must be immediately copied since it's about to be cleared.
+			// So now since the above didn't set the value, the result must be in their deref buffer, perhaps
+			// due to something like "return x+3" on their part.
+			else if (done) // We don't have to make it persistent here because the final stage will copy it from their deref buf into ours (since theirs is only deleted later, by our caller).
+				make_result_persistent = false;
+			else // There are more operators/operands to be evaluated, but if there are no more function calls, we don't have to make it persistent since their deref buf won't be overwritten by anything during the time we need it.
+			{
+				if (func.mType != FUNC_NORMAL)
+					make_result_persistent = true; // Future operators/operands might use the buffer where the result is stored, so must copy it somewhere else.
+				else
+				{
+					make_result_persistent = false; // Set default to be possibly overridden below.
+					// Since there's more in the stack or postfix array to be evaluated, and since the return value
+					// is in the new deref buffer, must copy result to somewhere non-volatile whenever there's
+					// another function call pending by us.  But if result is the empty string, that's a simplified
+					// case that doesn't require copying:
+					if (!*result)     // Since it's an empty string in their deref buffer,
+						result = "";  // ensure it's a non-volatile address instead (read-only mem is okay for expression results).
+					else
+					{
+						// If we don't have have any more function calls pending, we can skip the following step since
+						// this deref buffer will not be overwritten during the period we need it.
+						for (j = i + 1; j < postfix_count; ++j)
+							if (postfix[j]->symbol == SYM_FUNC)
+							{
+								make_result_persistent = true;
+								break;
+							}
+					}
+				}
+			}
+
+			if (make_result_persistent)
+			{
+				// Must cast to int to avoid loss of negative values:
+				result_size = strlen(result) + 1;
+				if (result_size <= (int)(aDerefBufSize - (target - aDerefBuf))) // There is room at the end of our deref buf, so use it.
+				{
+					memcpy(target, result, result_size); // Maybe faster than strcpy().
+					result = target; // Point it to its new, more persistent location.
+					target += result_size; // Point it to the location where the next string would be written.
+				}
+				else // Need to create some new persistent memory for our temporary use.
+				{
+					// In real-worth scripts the need for additonal memory allocation should be quite
+					// rare because it requires a combination of worst-case situations:
+					// - Called-function's return value is in their new deref buf (rare because return
+					//   values are more often literal numbers, true/false, or variables).
+					// - We still have more functions to call here (which is somewhat atypical).
+					// - There's insufficient room at the end of the deref buf to store the return value
+					//   (unusual because the deref buf expands in block-increments, and also because
+					//   return values are usually small, such as numbers).
+					if (mem_count == MAX_EXPR_MEM_ITEMS // No more slots left (should be nearly impossible).
+						|| !(mem[mem_count] = (char *)malloc(result_size)))
+					{
+						LineError(ERR_OUTOFMEM ERR_ABORT, FAIL, func.mName);
+						aResult = FAIL;
+						result_to_return = NULL; // Use NULL to inform our caller that this entire thread is to be terminated.
+						goto end;
+					}
+					memcpy(mem[mem_count], result, result_size); // Maybe faster than strcpy().
+					result = mem[mem_count++]; // Must be done last.  Point it to its new, more persistent location.
+				}
+			}
+
+			if (func.mType == FUNC_NORMAL)
+			{
+				// Free the memory of all the just-completed function's local variables.  This is done in
+				// both of the following cases:
+				// 1) There are other instances of this function beneath us on the call-stack: Must free
+				//    the memory to prevent a memory leak for any variable that existed prior to the call
+				//    we just did.  Although any local variables newly created as a result of our call
+				//    technically don't need to be freed, they are freed for simplicity of code and also
+				//    because not doing so might result in side-effects for instances of our function that
+				//    lie beneath ours that would expect such nonexistent variable to have blank contents
+				//    when *they* create it.
+				// 2) No other instances of this function exist on the call stack: The memory is freed and
+				//    the contents made blank for these reasons:
+				//    a) Prevents locals from all being static in duration, and users coming to rely on that,
+				//       since in the future local variables might be implemented using a non-persistent method
+				//       such as hashing (rather than maintaining a permanently list of Var*'s for each function).
+				//    b) To conserve memory between calls (in case the function's locals use a lot of memory).
+				//    c) To yield results consistent with when the same function is called while other instances
+				//       of itself exist on the call stack.  In other words, it would be inconsistent to make
+				//       all variables blank for case #1 above but not do it here in case #2.
+				for (j = 0; j < func.mVarCount; ++j)
+					func.mVar[j]->Free(VAR_FREE_EXCLUDE_STATIC, true); // Pass "true" to exclude aliases, since their targets should not be freed (they don't belong to this function).
+				for (j = 0; j < func.mLazyVarCount; ++j)
+					func.mLazyVar[j]->Free(VAR_FREE_EXCLUDE_STATIC, true);
+
+				// The following call to RestoreFunctionVars() relies on the fact that Free() was already called above.
+				// The previous call to BackupFunctionVars() has ensured that none of the variables Free()'d above
+				// were ALLOC_SIMPLE, because that would be a memory leak since there's no way to free that type.
+				if (backup_needed) // This is the indicator that a backup was made, a restore is also needed
+					RestoreFunctionVars(func, var_backup, var_backup_count); // It avoids restoring statics.
+
+				// Our callers know to ignore the value of aResult unless we return NULL:
+				if (early_return) // aResult has already been set above for our caller.
+				{
+					result_to_return = NULL; // Use NULL to inform our caller that this entire thread is to be terminated.
+					goto end;
+				}
+			} // if (func.mType == FUNC_NORMAL)
+
+			// Convert this_token's symbol only as the final step in case anything above ever uses its old
+			// union member.  Mark it as generic, not string, so that any operator of function call that uses
+			// this result is free to reinterpret it as an integer or float:
+			this_token.symbol = SYM_OPERAND;
+			this_token.marker = result;
+			goto push_this_token;
 		}
 
-		// Otherwise, this token must be a unary or binary operator.
-		// GET THE FIRST OPERAND FOR THIS OPERATOR (for non-unary operators, this is the right-side operand):
+		// Since the above didn't "goto", this token must be a unary or binary operator.
+		// Get the first operand for this operator (for non-unary operators, this is the right-side operand):
 		if (!stack_count) // Prevent stack underflow.  An expression such as -*3 causes this.
 			goto fail;
-		ExprTokenType &right = STACK_POP;
+		ExprTokenType &right = *STACK_POP;
 		// Below uses IS_OPERAND rather than checking for only SYM_OPERAND because the stack can contain
 		// both generic and specific operands.  Specific operands were evaluated by a previous iteration
 		// of this section.  Generic ones were pushed as-is onto the stack by a previous iteration.
 		if (!IS_OPERAND(right.symbol)) // Haven't found a way to produce this situation yet, but safe to assume it's possible.
 			goto fail;
 		// If the operand is still generic/undetermined, find out whether it is a string, integer, or float:
-		right_is_number = (right.symbol == SYM_OPERAND) ? IsPureNumeric(right.marker, true, false, true) : right.symbol;
+		switch(right.symbol)
+		{
+		case SYM_VAR:
+			right_contents = right.var->Contents();
+			right_is_number = IsPureNumeric(right_contents, true, false, true);
+			break;
+		case SYM_OPERAND:
+			right_contents = right.marker;
+			right_is_number = IsPureNumeric(right_contents, true, false, true);
+			break;
+		case SYM_STRING:
+			right_contents = right.marker;
+			right_is_number = PURE_NOT_NUMERIC; // Explicitly-marked strings are not numeric, which allows numeric strings to be compared as strings rather than as numbers.
+		default: // INTEGER or FLOAT
+			// right_contents is left uninitialized for performance and to catch bugs.
+			right_is_number = right.symbol;
+		}
 
 		// IF THIS IS A UNARY OPERATOR, we now have the single operand needed to perform the operation.
 		// The cases in the switch() below are all unary operators.  The other operators are handled
 		// in the switch()'s default section:
 		switch (this_token.symbol)
 		{
+		case SYM_AND: // These are now unary operators because short-circuit has made them so.  If the AND/OR
+		case SYM_OR:  // had short-circuited, we would never be here, so this is the right branch of a non-short-circuit AND/OR.
+			if (right_is_number == PURE_INTEGER)
+				this_token.value_int64 = (right.symbol == SYM_INTEGER ? right.value_int64 : ATOI64(right_contents)) != 0;
+			else if (right_is_number == PURE_FLOAT)
+				this_token.value_int64 = (right.symbol == SYM_FLOAT ? right.value_double : atof(right_contents)) != 0.0;
+			else // This is either a non-numeric string or a numeric raw literal string such as "123".
+				// All non-numeric strings are considered TRUE here.  In addition, any raw literal string,
+				// even "0", is considered to be TRUE.  This relies on the fact that right.symbol will be
+				// SYM_OPERAND/generic (and thus handled higher above) for all pure-numeric strings except
+				// explicit raw literal strings.  Thus, if something like !"0" ever appears in an expression,
+				// it evaluates to !true.  EXCEPTION: Because "if x" evaluates to false when X is blank,
+				// it seems best to have "if !x" evaluate to TRUE.
+				this_token.value_int64 = *right_contents != '\0';
+			this_token.symbol = SYM_INTEGER; // Result of AND or OR is always a boolean integer (one or zero).
+			break;
+
 		case SYM_NEGATIVE:  // Unary-minus.
-			if (right_is_number == PURE_FLOAT)
+			if (right_is_number == PURE_INTEGER)
+				this_token.value_int64 = -(right.symbol == SYM_INTEGER ? right.value_int64 : ATOI64(right_contents));
+			else if (right_is_number == PURE_FLOAT)
 				// Overwrite this_token's union with a float. No need to have the overhead of ATOF() since it can't be hex.
-				this_token.value_double = -(right.symbol == SYM_OPERAND ? atof(right.marker) : right.value_double);
-			else if (right_is_number == PURE_INTEGER)
-				this_token.value_int64 = -(right.symbol == SYM_OPERAND ? ATOI64(right.marker) : right.value_int64);
+				this_token.value_double = -(right.symbol == SYM_FLOAT ? right.value_double : atof(right_contents));
 			else // String.
 			{
 				// Seems best to consider the application of unary minus to a string, even a quoted string
@@ -9836,11 +11672,11 @@ double_deref:
 		// Both nots are equivalent at this stage because precedence was already acted upon by infix-to-postfix:
 		case SYM_LOWNOT:  // The operator-word "not".
 		case SYM_HIGHNOT: // The symbol !
-			if (right_is_number == PURE_FLOAT) // Convert to float, not int, so that a number between 0.0001 and 0.9999 is considered "true".
+			if (right_is_number == PURE_INTEGER)
+				this_token.value_int64 = !(right.symbol == SYM_INTEGER ? right.value_int64 : ATOI64(right_contents));
+			else if (right_is_number == PURE_FLOAT) // Convert to float, not int, so that a number between 0.0001 and 0.9999 is considered "true".
 				// Using ! vs. comparing explicitly to 0.0 might generate faster code, and K&R implies it's okay:
-				this_token.value_int64 = !(right.symbol == SYM_OPERAND ? atof(right.marker) : right.value_double);
-			else if (right_is_number == PURE_INTEGER)
-				this_token.value_int64 = !(right.symbol == SYM_OPERAND ? ATOI64(right.marker) : right.value_int64);
+				this_token.value_int64 = !(right.symbol == SYM_FLOAT ? right.value_double : atof(right_contents));
 			else // This is either a non-numeric string or a numeric raw literal string such as "123".
 				// All non-numeric strings are considered TRUE here.  In addition, any raw literal string,
 				// even "0", is considered to be TRUE.  This relies on the fact that right.symbol will be
@@ -9848,16 +11684,16 @@ double_deref:
 				// explicit raw literal strings.  Thus, if something like !"0" ever appears in an expression,
 				// it evaluates to !true.  EXCEPTION: Because "if x" evaluates to false when X is blank,
 				// it seems best to have "if !x" evaluate to TRUE.
-				this_token.value_int64 = !*right.marker; // i.e. result is false except for empty string because !"string" is false.
+				this_token.value_int64 = !*right_contents; // i.e. result is false except for empty string because !"string" is false.
 			this_token.symbol = SYM_INTEGER; // Result of above is always a boolean integer (one or zero).
 			break;
 
 		case SYM_BITNOT: // The tilde (~) operator.
-			if (right_is_number == PURE_FLOAT)
+			if (right_is_number == PURE_INTEGER) // But in this case, it can be hex, so use ATOI64().
+				this_token.value_int64 = right.symbol == SYM_INTEGER ? right.value_int64 : ATOI64(right_contents);
+			else if (right_is_number == PURE_FLOAT)
 				// Overwrite this_token's union with a float. No need to have the overhead of ATOI64() since PURE_FLOAT can't be hex.
-				this_token.value_int64 = right.symbol == SYM_OPERAND ? _atoi64(right.marker) : (__int64)right.value_double;
-			else if (right_is_number == PURE_INTEGER) // But in this case, it can be hex, so use ATOI64().
-				this_token.value_int64 = right.symbol == SYM_OPERAND ? ATOI64(right.marker) : right.value_int64;
+				this_token.value_int64 = right.symbol == SYM_FLOAT ? (__int64)right.value_double : _atoi64(right_contents);
 			else // String.  Seems best to consider the application of unary minus to a string, even a quoted string literal such as "15", to be a failure.
 			{
 				this_token.marker = "";
@@ -9879,46 +11715,29 @@ double_deref:
 			// GET THE SECOND (LEFT-SIDE) OPERAND FOR THIS OPERATOR:
 			if (!stack_count) // Prevent stack underflow.
 				goto fail;
-			ExprTokenType &left  = STACK_POP; // i.e. the right operand always comes off the stack before the left.
+			ExprTokenType &left = *STACK_POP; // i.e. the right operand always comes off the stack before the left.
 			if (!IS_OPERAND(left.symbol)) // Haven't found a way to produce this situation yet, but safe to assume it's possible.
 				goto fail;
 			// If the operand is still generic/undetermined, find out whether it is a string, integer, or float:
-			left_is_number = (left.symbol == SYM_OPERAND) ? IsPureNumeric(left.marker, true, false, true) : left.symbol;
-
-			if (this_token.symbol == SYM_AND || this_token.symbol == SYM_OR)
+			switch(left.symbol)
 			{
-				// See comments in SYM_LOWNOT about the below:
-				if (left_is_number == PURE_FLOAT)
-					this_token.value_int64 = (left.symbol == SYM_OPERAND ? atof(left.marker) : left.value_double) != 0.0;
-				else if (left_is_number == PURE_INTEGER)
-					this_token.value_int64 = (left.symbol == SYM_OPERAND ? ATOI64(left.marker) : left.value_int64) != 0;
-				else // string.
-					// Since "if x" evaluates to false when x is blank, it seems best to also have blank
-					// strings resolve to false when used in more complex ways. In other words "if x or y"
-					// should be false if both x and y are blank.  Logical-not also follows this convention.
-					this_token.value_int64 = *left.marker != '\0';
-
-				// The check below is a very limited form of short-circuit boolean.  From the script's
-				// point-of-view, it isn't short-circuit boolean at all since all it does is help
-				// performance a little.  That's because by this stage, the right-side operand has
-				// already been fully evaluated if it was itself a sub-expression.
-				if (   this_token.symbol == SYM_AND && this_token.value_int64     // Left side is true so right-side will determine the final result.
-					|| this_token.symbol == SYM_OR && !this_token.value_int64   ) // Left side is false so right-side will determine the final result.
-				{
-					// See comments in SYM_LOWNOT about the below:
-					if (right_is_number == PURE_FLOAT)
-						this_token.value_int64 = (right.symbol == SYM_OPERAND ? atof(right.marker) : right.value_double) != 0.0;
-					else if (right_is_number == PURE_INTEGER)
-						this_token.value_int64 = (right.symbol == SYM_OPERAND ? ATOI64(right.marker) : right.value_int64) != 0;
-					else
-						this_token.value_int64 = *right.marker != '\0'; // See above for explanation.
-				}
-				//else the left-side alone was enough to determine and store the outcome.
-
-				this_token.symbol = SYM_INTEGER; // Result of AND or OR is always a boolean integer (one or zero).
+			case SYM_VAR:
+				left_contents = left.var->Contents();
+				left_is_number = IsPureNumeric(left_contents, true, false, true);
+				break;
+			case SYM_OPERAND:
+				left_contents = left.marker;
+				left_is_number = IsPureNumeric(left_contents, true, false, true);
+				break;
+			case SYM_STRING:
+				left_contents = left.marker;
+				left_is_number = PURE_NOT_NUMERIC;
+			default:
+				// left_contents is left uninitialized for performance and to catch bugs.
+				left_is_number = left.symbol;
 			}
 
-			else if (!right_is_number || !left_is_number) // At least one is a string, so this is a string operation.
+			if (!right_is_number || !left_is_number || this_token.symbol == SYM_CONCAT)
 			{
 				// Above check has ensured that at least one of them is a string.  But the other
 				// one might be a number such as in 5+10="15", in which 5+10 would be a numerical
@@ -9926,17 +11745,17 @@ double_deref:
 				switch (right.symbol)
 				{
 				// Seems best to obey SetFormat for these two, though it's debatable:
-				case SYM_INTEGER: right_string = ITOA64(right.value_int64, buf_temp); break;
-				case SYM_FLOAT: snprintf(buf_temp, sizeof(buf_temp), g.FormatFloat, right.value_double); right_string = buf_temp; break;
-				default: right_string = right.marker; // SYM_STRING or SYM_OPERAND, which is already in the right format.
+				case SYM_INTEGER: right_string = ITOA64(right.value_int64, param_buf[0]); break;
+				case SYM_FLOAT: snprintf(param_buf[0], sizeof(param_buf[0]), g.FormatFloat, right.value_double); right_string = param_buf[0]; break;
+				default: right_string = right_contents; // SYM_STRING/SYM_OPERAND/SYM_VAR, which is already in the right format.
 				}
 
 				switch (left.symbol)
 				{
 				// Seems best to obey SetFormat for these two, though it's debatable:
-				case SYM_INTEGER: left_string = ITOA64(left.value_int64, buf_temp); break;
-				case SYM_FLOAT: snprintf(buf_temp, sizeof(buf_temp), g.FormatFloat, left.value_double); left_string = buf_temp; break;
-				default: left_string = left.marker; // SYM_STRING or SYM_OPERAND, which is already in the right format.
+				case SYM_INTEGER: left_string = ITOA64(left.value_int64, param_buf[1]); break;
+				case SYM_FLOAT: snprintf(param_buf[1], sizeof(param_buf[1]), g.FormatFloat, left.value_double); left_string = param_buf[1]; break;
+				default: left_string = left_contents; // SYM_STRING or SYM_OPERAND, which is already in the right format.
 				}
 				
 				#undef STRING_COMPARE
@@ -9952,11 +11771,63 @@ double_deref:
 				case SYM_LT:        this_token.value_int64 = STRING_COMPARE < 0; break;
 				case SYM_GTOE:      this_token.value_int64 = STRING_COMPARE >= 0; break;
 				case SYM_LTOE:      this_token.value_int64 = STRING_COMPARE <= 0; break;
+
+				case SYM_CONCAT:
+					// Even if the left or right is "", must copy the result to temporary memory, at least
+					// when integers and floats had to be converted to temporary strings above.
+					right_length = (right.symbol == SYM_VAR) ? right.var->Length() : strlen(right_string);
+					left_length = (left.symbol == SYM_VAR) ? left.var->Length() : strlen(left_string);
+					result_size = right_length + left_length + 1;
+					// The following section is similar to the one for "symbol == SYM_FUNC", so they
+					// should be maintained together.
+					// Must cast to int to avoid loss of negative values:
+					if (result_size <= (int)(aDerefBufSize - (target - aDerefBuf))) // There is room at the end of our deref buf, so use it.
+					{
+						this_token.marker = target;
+						if (left_length)
+						{
+							memcpy(target, left_string, left_length);  // Not +1 because don't need the zero terminator.
+							target += left_length;
+						}
+						memcpy(target, right_string, right_length + 1); // +1 to include its zero terminator.
+						target += right_length + 1;  // Adjust target for potential future use by another concat or functionc call.
+					}
+					else // Need to create some new persistent memory for our temporary use.
+					{
+						// In real-worth scripts the need for additonal memory allocation should be quite
+						// rare because it requires a combination of worst-case situations:
+						// - Called-function's return value is in their new deref buf (rare because return
+						//   values are more often literal numbers, true/false, or variables).
+						// - We still have more functions to call here (which is somewhat atypical).
+						// - There's insufficient room at the end of the deref buf to store the return value
+						//   (unusual because the deref buf expands in block-increments, and also because
+						//   return values are usually small, such as numbers).
+						if (mem_count == MAX_EXPR_MEM_ITEMS // No more slots left (should be nearly impossible).
+							|| !(mem[mem_count] = (char *)malloc(result_size)))
+						{
+							LineError(ERR_OUTOFMEM ERR_ABORT, FAIL);
+							aResult = FAIL;
+							result_to_return = NULL; // Use NULL to inform our caller that this entire thread is to be terminated.
+							goto end;
+						}
+						this_token.marker = mem[mem_count++];
+						if (left_length)
+							memcpy(this_token.marker, left_string, left_length);  // Not +1 because don't need the zero terminator.
+						memcpy(this_token.marker + left_length, right_string, right_length + 1); // +1 to include its zero terminator.
+					}
+					// For this new concat operator introduced in v1.0.31, it seems best to treat the
+					// result as a SYM_STRING if either operand is a SYM_STRING.  That way, when the
+					// result of the operation is later used, it will be a real string even if pure numeric,
+					// which allows an exact string match to be specified even when the inputs are
+					// technically numeric; e.g. the following should be true only if (Var . 33 = "1133") 
+					this_token.symbol = (left.symbol == SYM_STRING || right.symbol == SYM_STRING) ? SYM_STRING: SYM_OPERAND;
+					goto push_this_token;
+
 				default:
 					// Other operators do not support string operands, so the result is an empty string.
 					this_token.marker = "";
 					this_token.symbol = SYM_STRING;
-					goto push_this_result;
+					goto push_this_token;
 				}
 				// Since above didn't "goto":
 				this_token.symbol = SYM_INTEGER; // Boolean result is treated as an integer.  Must be done only after the switch() above.
@@ -9975,18 +11846,20 @@ double_deref:
 
 				switch (right.symbol)
 				{
-				case SYM_OPERAND: right_int64 = ATOI64(right.marker); break;
 				case SYM_INTEGER: right_int64 = right.value_int64; break;
-				default: right_int64 = (__int64)right.value_double; // SYM_FLOAT (the least common).
-				// It can't be SYM_STRING because in here, both right and left are known to be numbers.
+				case SYM_FLOAT: right_int64 = (__int64)right.value_double; break;
+				default: right_int64 = ATOI64(right_contents); // SYM_OPERAND or SYM_VAR
+				// It can't be SYM_STRING because in here, both right and left are known to be numbers
+				// (otherwise an earlier "else if" would have executed instead of this one).
 				}
 
 				switch (left.symbol)
 				{
-				case SYM_OPERAND: left_int64 = ATOI64(left.marker); break;
 				case SYM_INTEGER: left_int64 = left.value_int64; break;
-				default: left_int64 = (__int64)left.value_double; // SYM_FLOAT (the least common).
-				// It can't be SYM_STRING because in here, both right and left are known to be numbers.
+				case SYM_FLOAT: left_int64 = (__int64)left.value_double; break;
+				default: left_int64 = ATOI64(left_contents); // SYM_OPERAND or SYM_VAR
+				// It can't be SYM_STRING because in here, both right and left are known to be numbers
+				// (otherwise an earlier "else if" would have executed instead of this one).
 				}
 
 				switch(this_token.symbol)
@@ -10023,7 +11896,7 @@ double_deref:
 						// Return a consistent result rather than something that varies:
 						this_token.marker = "";
 						this_token.symbol = SYM_STRING;
-						goto push_this_result;
+						goto push_this_token;
 					}
 					if (right_int64 < 0)
 					{
@@ -10044,17 +11917,17 @@ double_deref:
 				// to a float for the purpose of this calculation, hex will be supported:
 				switch (right.symbol)
 				{
-				case SYM_OPERAND: right_double = ATOF(right.marker); break;
 				case SYM_INTEGER: right_double = (double)right.value_int64; break;
-				default: right_double = right.value_double; break; // SYM_FLOAT (the least common).
+				case SYM_FLOAT: right_double = right.value_double; break;
+				default: right_double = ATOF(right_contents); // SYM_OPERAND or SYM_VAR
 				// It can't be SYM_STRING because in here, both right and left are known to be numbers.
 				}
 
 				switch (left.symbol)
 				{
-				case SYM_OPERAND: left_double = ATOF(left.marker); break;
 				case SYM_INTEGER: left_double = (double)left.value_int64; break;
-				default: left_double = left.value_double; break; // SYM_FLOAT (the least common).
+				case SYM_FLOAT: left_double = left.value_double; break;
+				default: left_double = ATOF(left_contents); // SYM_OPERAND or SYM_VAR
 				// It can't be SYM_STRING because in here, both right and left are known to be numbers.
 				}
 
@@ -10068,7 +11941,7 @@ double_deref:
 					{
 						this_token.marker = "";
 						this_token.symbol = SYM_STRING;
-						goto push_this_result;
+						goto push_this_token;
 					}
 					// Otherwise:
 					this_token.value_double = left_double / right_double;
@@ -10085,7 +11958,7 @@ double_deref:
 					{
 						this_token.marker = "";
 						this_token.symbol = SYM_STRING;
-						goto push_this_result;
+						goto push_this_token;
 					}
 					// Otherwise:
 					this_token.value_double = qmathPow(left_double, right_double);
@@ -10095,37 +11968,111 @@ double_deref:
 			} // Result is floating point.
 		} // switch() operator type
 
-push_this_result:
-		STACK_PUSH(this_token); // Push the result onto the stack for use as an operand by a future operator.
+push_this_token:
+		if (!this_token.circuit_token) // It's not capable of short-circuit.
+			STACK_PUSH(this_token);    // Push the result onto the stack for use as an operand by a future operator.
+		else // This is the final result of a AND or OR's left branch.  Apply short-circuit boolean method to it.
+		{
+			// Cast this left-branch result to true/false, then determine whether it should cause its
+			// parent AND/OR to short-circuit.
+
+			// If its a function result or raw numeric literal such as "if (123 or false)", its type might
+			// still be SYM_OPERAND, so resolve that to distinguish between the any SYM_STRING "0"
+			// (considered "true") and something that is allowed to be the number zero (which is
+			// considered "false").  In other words, the only literal string (or operand made a
+			// SYM_STRING via a previous operation) that is considered "false" is the empty string
+			// (i.e. "0" doesn't qualify but 0 does):
+			switch(this_token.symbol)
+			{
+			case SYM_VAR:
+				// "right" vs. "left" is used even though this is technically the left branch because
+				// right is used more often (for unary operators) and sometimes the compiler generates
+				// faster code for the most frequently accessed variables.
+				right_contents = this_token.var->Contents();
+				right_is_number = IsPureNumeric(right_contents, true, false, true);
+				break;
+			case SYM_OPERAND:
+				right_contents = this_token.marker;
+				right_is_number = IsPureNumeric(right_contents, true, false, true);
+				break;
+			case SYM_STRING:
+				right_contents = this_token.marker;
+				right_is_number = PURE_NOT_NUMERIC;
+			default:
+				// right_contents is left uninitialized for performance and to catch bugs.
+				right_is_number = this_token.symbol;
+			}
+
+			switch (right_is_number)
+			{
+			case PURE_INTEGER: // Probably the most common, e.g. both sides of "if (x>3 and x<6)" are the number 1/0.
+				// Force it to be purely 1 or 0 if it isn't already.
+				left_branch_is_true = (this_token.symbol == SYM_INTEGER ? this_token.value_int64
+					: ATOI64(right_contents)) != 0;
+				break;
+			case PURE_FLOAT: // Convert to float, not int, so that a number between 0.0001 and 0.9999 is is considered "true".
+				left_branch_is_true = (this_token.symbol == SYM_FLOAT ? this_token.value_double
+					: atof(right_contents)) != 0.0;
+				break;
+			default:  // string.
+				// Since "if x" evaluates to false when x is blank, it seems best to also have blank
+				// strings resolve to false when used in more complex ways. In other words "if x or y"
+				// should be false if both x and y are blank.  Logical-not also follows this convention.
+				left_branch_is_true = (*right_contents != '\0');
+			}
+
+			// The following loop exists to support cascading short-circuiting such as the following example:
+			// 2>3 and 2>3 and 2>3
+			// In postfix notation, the above looks like:
+			// 2 3 > 2 3 > and 2 3 > and
+			// When the first '>' operator is evaluated to false, it sees that its parent is an AND and
+			// thus it short-circuits, discarding everything between the first '>' and the "and".
+			// But since the first and's parent is the second "and", that false result just produced is now
+			// the left branch of the second "and", so the loop conducts a second iteration to discard
+			// everything between the first "and" and the second.  By contrast, if the second "and" were
+			// an "or", the second iteration would never occur because the loop's condition would be false
+			// on the second iteration, which would then cause the first and's false value to be discarded
+			// (due to the loop ending without having PUSHed) because solely the right side of the "or" should
+			// determine the final result of the "or".
+			for (circuit_token = this_token.circuit_token
+				; left_branch_is_true == (circuit_token->symbol == SYM_OR);) // If true, this AND/OR causes a short-circuit
+			{
+				// Discard the entire right branch of this AND/OR:
+				for (++i; postfix[i] != circuit_token; ++i); // Should always be found, so no need to check postfix_count.
+				// Above loop is self-contained.
+				if (   !(circuit_token = postfix[i]->circuit_token)   ) // This value is also used by our loop's condition.
+				{
+					// No more cascading is needed because this AND/OR isn't the left branch of another.
+					// This will be the final result of this AND/OR because it's right branch was discarded
+					// above without having been evaluated nor any of its functions called.  It's safe to use
+					// this_token vs. postfix[i] below, for performance, because the value in its circuit_token
+					// member no longer matters:
+					this_token.symbol = SYM_INTEGER;
+					this_token.value_int64 = left_branch_is_true; // Assign a pure 1 (for SYM_OR) or 0 (for SYM_AND).
+					STACK_PUSH(this_token);
+					break; // Now the outer loop's ++i will discard this AND/OR token itself and continue onward.
+				}
+				//else there is more cascading to be checked, so continue looping.
+			}
+			// If the while-loop ends normally (not via "break"), postfix[i] is now the left branch of an
+			// AND/OR that should not short-circuit.  As a result, this left branch is simply discarded
+			// (by means of the outer loop's ++i) because its right branch will be the sole determination
+			// of whether this AND/OR is true or false.
+		} // Left branch of an AND/OR.
 	} // For each item in the postfix array.
 
+	// Although ACT_FUNCTIONCALL was already checked higher above, it's checked again here for maintainability.
+	// Specifically, there might be ways the above didn't return if ACT_FUNCTIONCALL, such as when somehow there
+	// was more than one token on the stack even for the final function call, or maybe other unforseen ways.
+	// It seems best to avoid any chance of looking at the result since it might be invalid due to the above
+	// having taken shortcuts (since it knew the result wouldn't be needed).
+	if (mActionType == ACT_FUNCTIONCALL) // A line consisting only of a function call (possibly with nested function calls): the end result doesn't matter, even if it's a failure.
+		goto end;
+
 	if (stack_count != 1) // Stack should have only one item left on it: the result. If not, it's a syntax error.
-		goto fail; // This can happen with an expression consisting of only (), and definitely other ways too.
+		goto fail; // This with these examples: 1) (); 2) x y; 3) (x + y) (x + z); etc.
 
-	ExprTokenType &result = stack[0];  // For performance and convenience.
-
-	if (result.symbol == SYM_OPERAND) // The operand on the stack is generic (undetermined type).
-	{
-		// For this to happen, this operand must not have been involved with any operator, since
-		// all operators resolve generic operands into specific operands.  If it wasn't involved
-		// with any operator, that implies this expression contains no operators.  Although this
-		// generally doesn't happen since the load-time routine marks expressions consisting of
-		// only a single operand as non-expressions, it certainly does happen in these cases:
-		// var:=+3, since the := operator does not have the legacy load-time logic used by other
-		// expressions.  When the +3 arrives here, the unary plus is discarded as a non-operator,
-		// leaving a raw 3 behind for evaluation here.
-		// "Sleep Array%i%": This is still an exprssion even though there's only one operand
-		// and no operators.
-		// "Sleep VarContainingNumber": Load-time routine isn't quite smart enough to catch
-		// this as a single-isolated deref (though it does catch "Sleep %VarContainingNumber%").
-		switch (result.symbol = IsPureNumeric(result.marker, true, false, true)) // Assign.
-		{
-		case PURE_INTEGER:  result.value_int64 = ATOI64(result.marker); break;
-		case PURE_FLOAT:    result.value_double = atof(result.marker); break;
-		// Otherwise, symbol has been converted to SYM_STRING by the assignment in the switch expression,
-		// and the other members of "result" are left unchanged.
-		}
-	}
+	ExprTokenType &result_token = *stack[0];  // For performance and convenience.
 
 	// Store the result of the expression in the deref buffer for the caller.  It is stored in the current
 	// format in effect via SetFormat because:
@@ -10134,30 +12081,117 @@ push_this_result:
 	//    (i.e. it allows a way to do automatic rounding), without giving up too much.  Changing floating point
 	//    precision from the default of 6 decimal places is rare anyway, so as long as this behavior is documented,
 	//    it seems okay for the moment.
-	size_t result_size;
-	switch (result.symbol)
+	switch (result_token.symbol)
 	{
 	case SYM_FLOAT:
 		// In case of float formats that are too long to be supported, use snprint() to restrict the length.
-		snprintf(aBuf_orig, MAX_FORMATTED_NUMBER_LENGTH + 1, g.FormatFloat, result.value_double); // %f probably defaults to %0.6f.  %f can handle doubles in MSVC++.
+		snprintf(aTarget, MAX_FORMATTED_NUMBER_LENGTH + 1, g.FormatFloat, result_token.value_double); // %f probably defaults to %0.6f.  %f can handle doubles in MSVC++.
 		break;
 	case SYM_INTEGER:
-		ITOA64(result.value_int64, aBuf_orig); // Store in hex or decimal format, as appropriate.
+		ITOA64(result_token.value_int64, aTarget); // Store in hex or decimal format, as appropriate.
 		break;
-	case SYM_STRING: // And note that it can't be SYM_OPERAND because step right above would have remarked it as SYM_STRING.
-		result_size = strlen(result.marker) + 1;
-		memmove(aBuf_orig, result.marker, result_size);
-		return aBuf_orig + result_size;
+
+	// The cases above will always fit into our deref buffer because an earlier stage has already ensured
+	// that the buffer is large enough to hold at least one number.  But a string/generic might not fit if
+	// it's a concatenation and/or a large string returned from a called function:
+	case SYM_STRING:
+	case SYM_OPERAND:
+	case SYM_VAR: // SYM_VAR is somewhat unusual at this late a stage.
+		// At this stage, we know the result has to go into our deref buffer because if a way existed to
+		// avoid that, we would already have goto/returned higher above.  Also, at this stage,
+		// the pending result can exist in one several places:
+		// 1) Our deref buf (due to being a single-deref, a function's return value that was copied to the
+		//    end of our buf because there was enough room, etc.)
+		// 2) In a called function's deref buffer, namely sDerefBuf, which will be deleted by our caller
+		//    shortly after we return to it.
+		// 3) In an area of memory we malloc'd for lack of any better place to put it.
+		char *result;
+		if (result_token.symbol == SYM_VAR)
+		{
+			result = result_token.var->Contents();
+            result_size = result_token.var->Length() + 1;
+		}
+		else
+		{
+			result = result_token.marker;
+			result_size = strlen(result) + 1;
+		}
+		// If result is the empty string or a number, it should always fit because the size estimation
+		// phase has ensured that capacity_of_our_buf_portion is large enough to hold those:
+		if (result_size > capacity_of_our_buf_portion)
+		{
+			// Do a simple expansion of our deref buffer to handle the fact that our actual result is bigger
+			// than the size estimator could have calculated (due to a concatenation or a large string returned
+			// from a called function).  This performs poorly but seems justified by the fact that it is
+			// typically needed only in extreme cases.  Use a temp var. because realloc() returns NULL on
+			// failure but leaves original block allocated.
+			size_t new_buf_size = aDerefBufSize + result_size - capacity_of_our_buf_portion;
+
+			// malloc() and free() are used instead of realloc() because in many cases, the overhead of
+			// realloc()'s internal memcpy(entire contents) can be avoided because only part or
+			// none of the contents needs to be copied:
+			char *new_buf = (char *)malloc(new_buf_size);
+			if (!new_buf)
+			{
+				LineError(ERR_OUTOFMEM ERR_ABORT, FAIL);
+				aResult = FAIL;
+				result_to_return = NULL; // Use NULL to inform our caller that this entire thread is to be terminated.
+				goto end;
+			}
+			if (new_buf_size > LARGE_DEREF_BUF_SIZE)
+				++sLargeDerefBufs;
+
+			// Copy only that portion of the old buffer that is in front of our portion of the buffer
+			// because we no longer need our portion (except for result.marker if it happens to be
+			// in the old buffer, but that is handled after this):
+			size_t aTarget_offset = aTarget - aDerefBuf;
+			if (aTarget_offset) // aDerefBuf has contents that must be preserved.
+				memcpy(new_buf, aDerefBuf, aTarget_offset); // This will also copy the empty string if the buffer first and only character is that.
+			aTarget = new_buf + aTarget_offset;
+			// NOTE: result_token.marker might be at the end of our deref buffer and thus be larger than
+			// capacity_of_our_buf_portion because other arg(s) exist in this line after ours that will be
+			// using a larger total portion of the buffer than ours.  Thus, the following must be done prior
+			// to free(), but memcpy() vs. memmove() is safe in any case:
+			memcpy(aTarget, result, result_size); // Copy from old location to the newly allocated one.
+
+			free(aDerefBuf); // Free our original buffer since it's contents are no longer needed.
+			if (aDerefBufSize > LARGE_DEREF_BUF_SIZE)
+				--sLargeDerefBufs;
+
+			// Now that the buffer has been enlarged, need to adjust any other pointers that pointed into
+			// the old buffer:
+			char *aDerefBuf_end = aDerefBuf + aDerefBufSize; // Point it to the character after the end of the old buf.
+			for (i = 0; i < aArgIndex; ++i) // Adjust each item beneath ours (if any). Our own is not adjusted because we'll be returning the right address to our caller.
+				if (aArgDeref[i] >= aDerefBuf && aArgDeref[i] < aDerefBuf_end)
+					aArgDeref[i] = new_buf + (aArgDeref[i] - aDerefBuf); // Set for our caller.
+			// The following isn't done because target isn't used anymore at this late a stage:
+			//target = new_buf + (target - aDerefBuf);
+			aDerefBuf = new_buf; // Must be the last step, since the old address is used above.  Set for our caller.
+			aDerefBufSize = new_buf_size; // Set for our caller.
+		}
+		else if (aTarget != result) // Currently, might be always true.
+			memmove(aTarget, result, result_size); // memmove() vs. memcpy() in this case, since source and dest might overlap.
+		result_to_return = aTarget;
+		aTarget += result_size;
+		goto end;
+
 	default: // Result contains a non-operand symbol such as an operator.
 		goto fail;
 	}
 
-	// It would have returned above if SYM_STRING, so this is SYM_FLOAT/SYM_INTEGER.  Calculate the length:
-	return aBuf_orig + strlen(aBuf_orig) + 1;  // +1 because that's what callers want; i.e. the position after the terminator.
+	// Since above didn't "goto", this is SYM_FLOAT/SYM_INTEGER.  Calculate the length and use it to adjust
+	// aTarget for use by our caller:
+	result_to_return = aTarget;
+	aTarget += strlen(aTarget) + 1;  // +1 because that's what callers want; i.e. the position after the terminator.
 
+//goto end;
+// Uncomment the above line if the below ever changes:
+// For now, fail and end are the same location, but distinguishing between them helps readability.
 fail:
-	*aBuf_orig++ = '\0'; // Increment because that's what callers want; i.e. the position after the terminator.
-	return aBuf_orig;
+end:
+	for (i = 0; i < mem_count; ++i) // Free any temporary memory blocks that were used.
+		free(mem[i]);
+	return result_to_return;
 }
 
 
@@ -10165,11 +12199,14 @@ fail:
 ResultType Line::Deref(Var *aOutputVar, char *aBuf)
 // Similar to ExpandArg(), except it parses and expands all variable references contained in aBuf.
 {
+	aOutputVar = aOutputVar->ResolveAlias(); // Necessary for proper detection below of whether it's invalidly used as a source for itself.
+
 	// This transient variable is used resolving environment variables that don't already exist
 	// in the script's variable list (due to the fact that they aren't directly referenced elsewhere
 	// in the script):
 	char var_name[MAX_VAR_NAME_LENGTH + 1] = "";
-	Var temp_var(var_name);
+	Var temp_var(var_name, VAR_NORMAL, false);
+
 	Var *var;
 	VarSizeType expanded_length;
 	size_t var_name_length;
@@ -10244,12 +12281,16 @@ ResultType Line::Deref(Var *aOutputVar, char *aBuf)
 			if (var_name_length && var_name_length <= MAX_VAR_NAME_LENGTH)
 			{
 				strlcpy(var_name, cp + 1, var_name_length + 1);  // +1 to convert var_name_length to size.
-				if (   !(var = g_script.FindVar(var_name, var_name_length))   )
+				// The use of ALWAYS_PREFER_LOCAL below improves flexibility of assume-global functions
+				// by allowing this command to resolve to a local first if such a local exists:
+				if (   !(var = g_script.FindVar(var_name, var_name_length, NULL, ALWAYS_PREFER_LOCAL))   )
 					// Variable doesn't exist, but since it might be an environment variable never referenced
 					// directly elsewhere in the script, do special handling:
 					var = &temp_var;  // Relies on the fact that var_temp.mName *is* the var_name pointer.
+				else
+					var = var->ResolveAlias(); // This was already done (above) for aOutputVar.
 				// Don't allow the output variable to be read into itself this way because its contents
-				if (var != aOutputVar)
+				if (var != aOutputVar) // Both of these have had ResolveAlias() called, if required, to make the comparison accurate.
 				{
 					if (which_pass) // 2nd pass
 						dest += var->Get(dest);
@@ -10264,7 +12305,7 @@ ResultType Line::Deref(Var *aOutputVar, char *aBuf)
 	} // for() (first and second passes)
 
 	*dest = '\0';  // Terminate the output variable.
-	aOutputVar->Length() = (VarSizeType)strlen(aOutputVar->Contents());  // Update to actual in case estimate was too large.
+	aOutputVar->Length() = (VarSizeType)strlen(aOutputVar->Contents()); // Update to actual in case estimate was too large.
 	return aOutputVar->Close();  // In case it's the clipboard.
 }
 
@@ -10960,6 +13001,22 @@ VarSizeType Script::GetFilespec(char *aBuf)
 	if (aBuf)
 		sprintf(aBuf, "%s\\%s", mFileDir, mFileName);
 	return (VarSizeType)(strlen(mFileDir) + strlen(mFileName) + 1);
+}
+
+VarSizeType Script::GetLineNumber(char *aBuf)
+// Caller has ensured that mCurrLine is not NULL.
+{
+	if (!aBuf)
+		return MAX_NUMBER_LENGTH;
+	return (VarSizeType)strlen(ITOA(mCurrLine->mLineNumber, aBuf));
+}
+
+VarSizeType Script::GetLineFile(char *aBuf)
+// Caller has ensured that mCurrLine is not NULL.
+{
+	if (aBuf)
+		strcpy(aBuf, Line::sSourceFile[mCurrLine->mFileNumber]);
+	return (VarSizeType)strlen(Line::sSourceFile[mCurrLine->mFileNumber]);
 }
 
 
@@ -11669,6 +13726,8 @@ char *Line::ToText(char *aBuf, int aBufSize, bool aCRLF, DWORD aElapsed, bool aL
 	char *aBuf_orig = aBuf;
 
 	aBuf += snprintf(aBuf, aBufSize, "%03u: ", mLineNumber);
+	if (aLineWasResumed)
+		aBuf += snprintf(aBuf, BUF_SPACE_REMAINING, "STILL WAITING (%0.2f): ", (float)aElapsed / 1000.0);
 
 	if (mActionType == ACT_IFBETWEEN || mActionType == ACT_IFNOTBETWEEN)
 		aBuf += snprintf(aBuf, BUF_SPACE_REMAINING, "if %s %s %s and %s"
@@ -11691,8 +13750,8 @@ char *Line::ToText(char *aBuf, int aBufSize, bool aCRLF, DWORD aElapsed, bool aL
 			aBuf += snprintf(aBuf, BUF_SPACE_REMAINING, ",%s", (mArg[i].type != ARG_TYPE_NORMAL && !*mArg[i].text)
 				? VAR(mArg[i])->mName : mArg[i].text);
 	}
-	if (aElapsed)
-		aBuf += snprintf(aBuf, BUF_SPACE_REMAINING, " (%s%0.2f)", aLineWasResumed ? "STILL WAITING: " : "", (float)aElapsed / 1000.0);
+	if (aElapsed && !aLineWasResumed)
+		aBuf += snprintf(aBuf, BUF_SPACE_REMAINING, " (%0.2f)", (float)aElapsed / 1000.0);
 	// UPDATE for v1.0.25: It seems that MessageBox(), which is the only way these lines are currently
 	// displayed, prefers \n over \r\n because otherwise, Ctrl-C on the MsgBox copies the lines all
 	// onto one line rather than formatted nicely as separate lines.
@@ -11802,7 +13861,7 @@ ResultType Line::ScriptBlockInput(bool aEnable)
 
 
 
-inline Line *Line::PreparseError(char *aErrorText)
+Line *Line::PreparseError(char *aErrorText, char *aExtraInfo)
 // Returns a different type of result for use with the Pre-parsing methods.
 {
 	// Make all preparsing errors critical because the runtime reliability
@@ -11812,7 +13871,7 @@ inline Line *Line::PreparseError(char *aErrorText)
 	// be avoided whenever OK and FAIL are sufficient by themselves, because
 	// otherwise, callers can't use the NOT operator to detect if a function
 	// failed (since FAIL is value zero, but CRITICAL_ERROR is non-zero):
-	LineError(aErrorText, FAIL);
+	LineError(aErrorText, FAIL, aExtraInfo);
 	return NULL; // Always return NULL because the callers use it as their return value.
 }
 
@@ -11821,7 +13880,7 @@ inline Line *Line::PreparseError(char *aErrorText)
 ResultType Line::LineError(char *aErrorText, ResultType aErrorType, char *aExtraInfo)
 {
 	if (!aErrorText)
-		aErrorText = "Unknown Error";
+		aErrorText = "";
 	if (!aExtraInfo)
 		aExtraInfo = "";
 
@@ -11945,11 +14004,27 @@ char *Script::ListVars(char *aBuf, int aBufSize) // aBufSize should be an int to
 // into aBuf and returning the position in aBuf of its new string terminator.
 {
 	char *aBuf_orig = aBuf;
-	aBuf += snprintf(aBuf, BUF_SPACE_REMAINING, "Variables (alphabetical) & their current contents:\r\n\r\n");
+	if (g.CurrentFunc)
+	{
+		// This definition might help compiler string pooling by ensuring it stays the same for both usages:
+		#define LIST_VARS_UNDERLINE "\r\n--------------------------------------------------\r\n"
+		// Start at the oldest and continue up through the newest:
+		aBuf += snprintf(aBuf, BUF_SPACE_REMAINING, "Local Variables for %s()%s", g.CurrentFunc->mName, LIST_VARS_UNDERLINE);
+		Func &func = *g.CurrentFunc; // For performance.
+		for (int i = 0; i < func.mVarCount; ++i)
+			if (func.mVar[i]->Type() == VAR_NORMAL) // Don't bother showing clipboard and other built-in vars.
+				aBuf = func.mVar[i]->ToText(aBuf, BUF_SPACE_REMAINING, true);
+	}
+	// v1.0.31: The description "alphabetical" is kept even though it isn't quite true
+	// when the lazy variable list exists, since those haven't yet been sorted into the main list.
+	// However, 99.9% of scripts do not use the lazy list, so it seems too rare to worry about other
+	// than document it in the ListVars command in the help file:
+	aBuf += snprintf(aBuf, BUF_SPACE_REMAINING, "%sGlobal Variables (alphabetical)%s"
+		, g.CurrentFunc ? "\r\n\r\n" : "", LIST_VARS_UNDERLINE);
 	// Start at the oldest and continue up through the newest:
-	for (Var *var = mFirstVar; var; var = var->mNextVar)
-		if (var->mType == VAR_NORMAL) // Don't bother showing clipboard and other built-in vars.
-			aBuf = var->ToText(aBuf, BUF_SPACE_REMAINING, true);
+	for (int i = 0; i < mVarCount; ++i)
+		if (mVar[i]->Type() == VAR_NORMAL) // Don't bother showing clipboard and other built-in vars.
+			aBuf = mVar[i]->ToText(aBuf, BUF_SPACE_REMAINING, true);
 	return aBuf;
 }
 

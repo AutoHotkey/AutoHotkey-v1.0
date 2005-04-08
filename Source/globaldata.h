@@ -46,6 +46,7 @@ extern BYTE g_PhysicalKeyState[VK_ARRAY_COUNT];
 
 // If a SendKeys() operation takes longer than this, hotkey's modifiers won't be pressed back down:
 extern int g_HotkeyModifierTimeout;
+extern int g_ClipboardTimeout;
 
 extern HHOOK g_KeybdHook;
 extern HHOOK g_MouseHook;

@@ -120,7 +120,7 @@ public:
 
 	ResultType SetCriteria(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	void UpdateCandidateAttributes();
-	HWND IsMatch(bool aInverted = false);
+	HWND IsMatch(bool aInvert = false);
 
 	WindowSearch() // Constructor.
 		// For performance and code size, only the most essential members are initialized.

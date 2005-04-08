@@ -247,6 +247,7 @@ inline void rtrim_with_nbsp(char *aStr)
 
 inline size_t trim(char *aStr, size_t aLength = -1)
 // Caller must ensure that aStr is not NULL.
+// Returns new length of aStr.
 // NOTE: THIS VERSION trims only tabs and spaces.  It specifically avoids
 // trimming newlines because some callers want to retain those.
 {
@@ -440,47 +441,6 @@ char *FileTimeToYYYYMMDD(char *aBuf, FILETIME &aTime, bool aConvertToLocalTime =
 char *SystemTimeToYYYYMMDD(char *aBuf, SYSTEMTIME &aTime);
 __int64 YYYYMMDDSecondsUntil(char *aYYYYMMDDStart, char *aYYYYMMDDEnd, bool &aFailed);
 __int64 FileTimeSecondsUntil(FILETIME *pftStart, FILETIME *pftEnd);
-
-enum SymbolType // For use with ExpandExpression() and IsPureNumeric().
-{
-	// The sPrecedence array in ExpandExpression() must be kept in sync with any additions, removals,
-	// or re-ordering of the below.  Also, callers rely on PURE_NOT_NUMERIC being zero/false,
-	// so that should be listed first.  Finally, IS_OPERAND() relies on all operand types being
-	// at the beginning of the list:
-	  PURE_NOT_NUMERIC, PURE_INTEGER, PURE_FLOAT
-	, SYM_STRING = PURE_NOT_NUMERIC, SYM_INTEGER = PURE_INTEGER, SYM_FLOAT = PURE_FLOAT // Specific operand types.
-	, SYM_OPERAND // Generic/undetermined type of operand.
-	, SYM_OPERAND_END // Marks the symbol after the last operand.  This value is used below.
-	, SYM_BEGIN = SYM_OPERAND_END  // SYM_BEGIN is a special marker to simplify the code.
-	, SYM_OPAREN, SYM_CPAREN  // Open and close parentheses.
-	, SYM_OR, SYM_AND, SYM_LOWNOT  // LOWNOT is the word "not", the low precedence counterpart of !
-	, SYM_EQUAL, SYM_EQUALCASE, SYM_NOTEQUAL // =, ==, <>
-	, SYM_GT, SYM_LT, SYM_GTOE, SYM_LTOE  // >, <, >=, <=
-	, SYM_BITOR // Seems more intuitive to have these higher in prec. than the above, unlike C and Perl, but like Python.
-	, SYM_BITXOR
-	, SYM_BITAND
-	, SYM_BITSHIFTLEFT, SYM_BITSHIFTRIGHT // << >>
-	, SYM_PLUS, SYM_MINUS
-	, SYM_TIMES, SYM_DIVIDE
-	, SYM_NEGATIVE, SYM_HIGHNOT, SYM_BITNOT // Unary minus (unary plus is handled without needing a value here), !, and ~.
-	, SYM_POWER    // See below for why this takes precedence over negative.
-	, SYM_COUNT    // Must be last.
-};
-#define IS_OPERAND(symbol) (symbol < SYM_OPERAND_END)
-
-struct map_item
-{
-	#define EXP_RAW          0  // The "5 + " in the following: 5 + y - %z% * Array%i%
-	#define EXP_DEREF_SINGLE 1  // The y in the above.
-	#define EXP_DEREF_DOUBLE 2  // The %z% and %i% in the above.
-	int type;
-	char *marker;
-};
-struct ExprTokenType  // Something in the compiler hates the name TokenType, so using a different name.
-{
-	SymbolType symbol;
-	union {__int64 value_int64; double value_double; char *marker;}; // Depends on the value of symbol, above.
-};
 
 SymbolType IsPureNumeric(char *aBuf, bool aAllowNegative = false
 	, bool aAllowAllWhitespace = true, bool aAllowFloat = false, bool aAllowImpure = false);

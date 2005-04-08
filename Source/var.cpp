@@ -79,15 +79,21 @@ ResultType Var::Assign(double aValueToAssign)
 
 ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt)
 // Returns OK or FAIL.
+// If aBuf isn't NULL, caller must ensure that aLength is either VARSIZE_MAX (which tells us
+// that the entire strlen() of aBuf should be used) or an explicit length (can be zero) that
+// the caller must ensure is less than or equal to the total length of aBuf.
+// If aBuf is NULL, the variable will be set up to handle a string of at least aLength
+// in length.  In addition, if the var is the clipboard, it will be prepared for writing.
 // Any existing contents of this variable will be destroyed regardless of whether aBuf is NULL.
 // Caller can omit both params to set a var to be empty-string, but in that case, if the variable
 // is of large capacity, its memory will not be freed.  This is by design because it allows the
 // caller to exploit its knowledge of whether the var's large capacity is likely to be needed
 // again in the near future, thus reducing the expected amount of memory fragmentation.
 // To explicitly free the memory, use Assign("").
-// If aBuf is NULL, the variable will be set up to handle a string of at least aLength
-// in length.  In addition, if the var is the clipboard, it will be prepared for writing.
 {
+	if (mType == VAR_ALIAS) // For simplicity and reduced code size, just make a recursive call to self.
+		return mAliasFor->Assign(aBuf, aLength, aTrimIt);
+
 	bool do_assign = true; // Set default.
 	bool free_it_if_large = true;  // Default.
 	if (!aBuf)
@@ -107,9 +113,9 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt)
 	size_t space_needed = aLength + 1; // For the zero terminator.
 
 	// For simplicity, this is done unconditionally even though it should be needed only
-	// when do_assign is true. It's the caller's responsibility to set mIsBinaryClip to
-	// true (if appropriate) after calling Var::Close().
-	mIsBinaryClip = false;
+	// when do_assign is true. It's the caller's responsibility to turn on the binary-clip
+	// attribute (if appropriate) after calling Var::Close().
+	mAttrib &= ~VAR_ATTRIB_BINARY_CLIP;
 
 	if (mType == VAR_CLIPBOARD)
 		if (do_assign)
@@ -133,75 +139,39 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt)
 
 	if (space_needed <= 1) // Variable is being assigned the empty string (or a deref that resolves to it).
 	{
-		mLength = 0;
-		switch (mHowAllocated)
-		{
-		case ALLOC_NONE:
-			// Some things may rely on this being empty-string vs. NULL.
-			// In addition, don't make it "" so that the caller's code can be simpler and
-			// more maintainable, i.e. the caller can always do *buf = '\0' if it wants:
-			mContents = sEmptyString;
-			*mContents = '\0';  // Just in case someone else changed it to be non-zero.
-			return OK;
-		case ALLOC_SIMPLE:
-			// Don't set to "" because then we'd have a memory leak.  i.e. once a var
-			// becomes ALLOC_SIMPLE, it should never become ALLOC_NONE again:
-			*mContents = '\0';
-			return OK;
-		case ALLOC_MALLOC:
-			// Setting a var whose contents are very large to be nothing or blank is currently the
-			// only way to free up the memory of that var.  Shrinking it dynamically seems like it
-			// might introduce too much memory fragmentation and overhead (since in many cases,
-			// it would likely need to grow back to its former size in the near future).  So we
-			// only free relatively large vars:
-			if (mCapacity > (4 * 1024) && free_it_if_large)
-			{
-				free(mContents);
-				mCapacity = 0;
-				mContents = sEmptyString; // See ALLOC_NONE above for explanation.
-				*mContents = '\0';  // Just in case someone else changed it to be non-zero.
-			}
-			else
-				if (mCapacity)
-					// If capacity small, don't bother: It's probably not worth the added mem fragmentation.
-					*mContents = '\0';
-				// else it's the empty string (a constant), so don't attempt to free it or assign to it.
-			// But do not change mHowAllocated to be ALLOC_NONE because it would cause a
-			// a memory leak in this sequence of events:
-			// var1 is assigned something short enough to make it ALLOC_SIMPLE
-			// var1 is assigned something large enough to require malloc()
-			// var1 is set to empty string and its mem is thus free()'d by the above.
-			// var1 is once again assigned something short enough to make it ALLOC_SIMPLE
-			// The last step above would be a problem because the 2nd ALLOC_SIMPLE can't
-			// reclaim the spot in SimpleHeap that had been in use by the first.  In other
-			// words, when a var makes the transition from ALLOC_SIMPLE to ALLOC_MALLOC,
-			// its ALLOC_SIMPLE memory is lost to the system until the program exits.
-			// But since this loss occurs at most once per distinct variable name,
-			// it's not considered a memory leak because the loss can't exceed a fixed
-			// amount regardless of how long the program runs.  The reason for all of this
-			// is that allocating dynamic memory is costly: it causes system memory fragmentation,
-			// (especially if a var were to be malloc'd and free'd thousands of times in a loop)
-			// and small-sized mallocs have a large overhead: it's been said that every block
-			// of dynamic mem, even those of size 1 or 2, incurs about 40 bytes of overhead.
-			return OK;
-		} // switch()
-	} // if
+		Free(free_it_if_large ? VAR_FREE_IF_LARGE : VAR_NEVER_FREE);
+		return OK;
+	}
 
+	size_t alloc_size;
 	if (space_needed > mCapacity)
 	{
 		switch (mHowAllocated)
 		{
 		case ALLOC_NONE:
+		case ALLOC_SIMPLE:
 			if (space_needed <= MAX_ALLOC_SIMPLE)
 			{
-				if (   !(mContents = SimpleHeap::Malloc(MAX_ALLOC_SIMPLE))   )
+				// v1.0.31: Conserve memory within large arrays by allowing elements of length 1 or 6, for such
+				// things as the storage of boolean values, or the storage of short numbers.
+				// Because the above checked that space_needed > mCapacity, the capacity will increase but
+				// never decrease in this section, which prevent a memory leak by only ever wasting a maximum
+				// of 2+7+MAX_ALLOC_SIMPLE for each variable (and then only in the worst case -- in the average
+				// case, it saves memory by avoiding the overhead incurred for each separate malloc'd block).
+				if (space_needed < 3)
+					alloc_size = 2;
+				else if (space_needed < 8)
+					alloc_size = 7;
+				else // space_needed <= MAX_ALLOC_SIMPLE
+					alloc_size = MAX_ALLOC_SIMPLE;
+				if (   !(mContents = SimpleHeap::Malloc(alloc_size))   )
 					return FAIL; // It already displayed the error.
-				mHowAllocated = ALLOC_SIMPLE;
-				mCapacity = MAX_ALLOC_SIMPLE;
+				mHowAllocated = ALLOC_SIMPLE;  // In case it was ALLOC_NONE before.
+				mCapacity = (VarSizeType)alloc_size;
 				break;
 			}
 			// else don't break, just fall through to the next case.
-		case ALLOC_SIMPLE:
+
 		case ALLOC_MALLOC:
 		{
 			// This case can happen even if space_needed is less than MAX_ALLOC_SIMPLE
@@ -211,7 +181,7 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt)
 				free(mContents);
 			// else it's the empty string (a constant) or it points to memory on
 			// SimpleHeap, so don't attempt to free it.
-			size_t alloc_size = space_needed;
+			alloc_size = space_needed;
 			// Allow a little room for future expansion to cut down on the number of
 			// free's and malloc's we expect to have to do in the future for this var:
 			if (alloc_size < MAX_PATH)
@@ -240,8 +210,21 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt)
 
 	if (do_assign)
 	{
-		// Use strlcpy() so that only a substring is copied, in case caller specified that:
-		strlcpy(mContents, aBuf, space_needed);
+		// Above has ensured that space_needed is either strlen(aBuf)-1 or the length of some
+		// substring within aBuf starting at aBuf.  However, aBuf might overlap mContents or
+		// even be the same memory address (due to something like GlobalVar := YieldGlobalVar(),
+		// in which case ACT_ASSIGNEXPR calls us to assign GlobalVar to GlobalVar).
+		if (mContents != aBuf)
+		{
+			// Don't use strlcpy() or such because:
+			// 1) Caller might have specified that only part of aBuf's total length should be copied.
+			// 2) mContents and aBuf might overlap (see above comment), in which case strcpy()'s result
+			//    is undefined, but memmove() is guaranteed to work (and performs about the same).
+			memmove(mContents, aBuf, aLength);
+			mContents[aLength] = '\0';
+		}
+		// else nothing needs to be done since source and target are identical.
+
 		// Calculate the length explicitly in case aBuf was shorter than expected,
 		// perhaps due to one of the functions that built part of it failing.
 		// UPDATE: Sometimes, such as for StringMid, the caller explicitly wants
@@ -250,14 +233,10 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt)
 		// Also, use mContents rather than aBuf to calculate the length, in case
 		// caller only wanted a substring of aBuf copied:
 
-		// Only trim when the caller told us to, rather than always if g_script.mIsAutoIt2
-		// is true, since AutoIt2 doesn't always trim things (e.g. FileReadLine probably
-		// does not trim the line that was read into its output var).  UPDATE: This is
-		// no longer needed because I think AutoIt2 only auto-trims when SetEnv is used.
-		// UPDATE #2: Yes, it's needed in one case currently, so it's enabled again:
 		if (aTrimIt)
-			trim(mContents);
-		mLength = (VarSizeType)strlen(mContents);
+			mLength = (VarSizeType)trim(mContents);
+		else
+			mLength = aLength; // Above has ensured that aLength is accurate.
 	}
 	else
 	{
@@ -266,7 +245,7 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt)
 		// doesn't override this.
 		// Below: Already verified that the length value will fit into VarSizeType.
 		// Also, -1 because length is defined as not including zero terminator:
-		mLength = (VarSizeType)(space_needed - 1);
+		mLength = aLength; // Above has ensured that aLength is accurate.
 		// Init for greater safety.  This is safe because in this case mContents is not a
 		// constant memory area:
 		*mContents = '\0';
@@ -281,6 +260,9 @@ VarSizeType Var::Get(char *aBuf)
 // Returns the length of this var's contents.  In addition, if aBuf isn't NULL, it will
 // copy the contents into aBuf.
 {
+	if (mType == VAR_ALIAS) // For simplicity and reduced code size, just make a recursive call to self.
+		return mAliasFor->Get(aBuf);
+
 	// For v1.0.25, don't do this because in some cases the existing contents of aBuf will not
 	// be altered.  Instead, it will be set to blank as needed further below.
 	//if (aBuf) *aBuf = '\0';  // Init early to get it out of the way, in case of early return.
@@ -487,6 +469,9 @@ VarSizeType Var::Get(char *aBuf)
 	case VAR_SCRIPTDIR: if (!aBuf) return g_script.GetFileDir(); else aBuf += g_script.GetFileDir(aBuf); break;
 	case VAR_SCRIPTFULLPATH: if (!aBuf) return g_script.GetFilespec(); else aBuf += g_script.GetFilespec(aBuf); break;
 
+	case VAR_LINENUMBER: if (!aBuf) return g_script.GetLineNumber(); else aBuf += g_script.GetLineNumber(aBuf); break;
+	case VAR_LINEFILE: if (!aBuf) return g_script.GetLineFile(); else aBuf += g_script.GetLineFile(aBuf); break;
+
 #ifdef AUTOHOTKEYSC
 	case VAR_ISCOMPILED:
 		if (!aBuf)
@@ -608,6 +593,86 @@ VarSizeType Var::Get(char *aBuf)
 
 
 
+void Var::Free(int aWhenToFree, bool aExcludeAliases)
+// Sets the variable to have blank (empty string content) and frees the memory unconditionally unless
+// aFreeItOnlyIfLarge is true, in which case the memory is not freed if it is a small area (might help
+// reduce memory fragmentation).  NOTE: Caller must be aware that ALLOC_SIMPLE (due to its nature) is
+// never freed.
+{
+	if (mType == VAR_ALIAS) // For simplicity and reduced code size, just make a recursive call to self.
+	{
+		if (aExcludeAliases) // Caller didn't want the target of the alias freed.
+			return;
+		else
+			mAliasFor->Free(aWhenToFree);
+	}
+
+	// Must check this one first because caller relies not only on var not being freed in this case,
+	// but also on its contents not being set to an empty string:
+	if (aWhenToFree == VAR_FREE_EXCLUDE_STATIC && (mAttrib & VAR_ATTRIB_STATIC))
+		return;
+
+	mLength = 0;
+
+	switch (mHowAllocated)
+	{
+	case ALLOC_NONE:
+		// Some things may rely on this being empty-string vs. NULL.
+		// In addition, don't make it "" so that the caller's code can be simpler and
+		// more maintainable, i.e. the caller can always do *buf = '\0' if it wants:
+		mContents = sEmptyString;
+		*mContents = '\0';  // Just in case someone else changed it to be non-zero.
+		break;
+
+	case ALLOC_SIMPLE:
+		// Don't set to "" because then we'd have a memory leak.  i.e. once a var
+		// becomes ALLOC_SIMPLE, it should never become ALLOC_NONE again:
+		*mContents = '\0';
+		break;
+
+	case ALLOC_MALLOC:
+		// Setting a var whose contents are very large to be nothing or blank is currently the
+		// only way to free up the memory of that var.  Shrinking it dynamically seems like it
+		// might introduce too much memory fragmentation and overhead (since in many cases,
+		// it would likely need to grow back to its former size in the near future).  So we
+		// only free relatively large vars:
+		if (   mCapacity > 0 && (aWhenToFree == VAR_ALWAYS_FREE
+			|| (aWhenToFree == VAR_FREE_IF_LARGE && mCapacity > (4 * 1024)))   )
+		{
+			free(mContents);
+			mCapacity = 0;
+			mContents = sEmptyString; // See ALLOC_NONE above for explanation.
+			*mContents = '\0';  // Just in case someone else changed it to be non-zero.
+		}
+		else
+			if (mCapacity)
+				// If capacity small, don't bother: It's probably not worth the added mem fragmentation.
+				*mContents = '\0';
+			//else it's already the empty string (a constant), so don't attempt to free it or assign to it.
+
+		// But do not change mHowAllocated to be ALLOC_NONE because it would cause a
+		// a memory leak in this sequence of events:
+		// var1 is assigned something short enough to make it ALLOC_SIMPLE
+		// var1 is assigned something large enough to require malloc()
+		// var1 is set to empty string and its mem is thus free()'d by the above.
+		// var1 is once again assigned something short enough to make it ALLOC_SIMPLE
+		// The last step above would be a problem because the 2nd ALLOC_SIMPLE can't
+		// reclaim the spot in SimpleHeap that had been in use by the first.  In other
+		// words, when a var makes the transition from ALLOC_SIMPLE to ALLOC_MALLOC,
+		// its ALLOC_SIMPLE memory is lost to the system until the program exits.
+		// But since this loss occurs at most once per distinct variable name,
+		// it's not considered a memory leak because the loss can't exceed a fixed
+		// amount regardless of how long the program runs.  The reason for all of this
+		// is that allocating dynamic memory is costly: it causes system memory fragmentation,
+		// (especially if a var were to be malloc'd and free'd thousands of times in a loop)
+		// and small-sized mallocs have a large overhead: it's been said that every block
+		// of dynamic mem, even those of size 1 or 2, incurs about 40 bytes of overhead.
+		break;
+	} // switch()
+}
+
+
+
 ResultType Var::ValidateName(char *aName, bool aIsRuntime, bool aDisplayError)
 // Returns OK or FAIL.
 {
@@ -648,9 +713,9 @@ ResultType Var::ValidateName(char *aName, bool aIsRuntime, bool aDisplayError)
 			|| c == '`' || c == '~' || c == '|' || c == '{' || c == '}')
 			if (aDisplayError)
 				if (aIsRuntime)
-					return g_script.ScriptError("This variable name contains an illegal character." ERR_ABORT, aName);
+					return g_script.ScriptError("This variable or function name contains an illegal character." ERR_ABORT, aName);
 				else
-					return g_script.ScriptError("This variable name contains an illegal character.", aName);
+					return g_script.ScriptError("This variable or function name contains an illegal character.", aName);
 			else
 				return FAIL;
 	}

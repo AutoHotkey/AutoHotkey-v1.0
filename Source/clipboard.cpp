@@ -16,7 +16,7 @@ GNU General Public License for more details.
 
 #include "stdafx.h" // pre-compiled headers
 #include "clipboard.h"
-#include "globaldata.h"  // for g_script.ScriptError()
+#include "globaldata.h"  // for g_script.ScriptError() and g_ClipboardTimeout
 #include "application.h" // for MsgSleep()
 #include "util.h" // for strlcpy()
 
@@ -319,24 +319,26 @@ ResultType Clipboard::Close(char *aErrorMessage)
 
 
 
-ResultType Clipboard::Open(int aAttempts, int aRetryInterval)
+ResultType Clipboard::Open()
 {
-	if (mIsOpen) return OK;
-	if (aAttempts <= 0) aAttempts = 1;
-	if (aRetryInterval <= 0) aRetryInterval = 10;
-	// Make more than one attempt in case another app has the clipboard in use:
-	for (int i = 0; i < aAttempts; ++i)
+	if (mIsOpen)
+		return OK;
+	for (DWORD start_time = GetTickCount();;)
 	{
 		if (OpenClipboard(g_hWnd))
 		{
 			mIsOpen = true;
 			return OK;
 		}
+		if (g_ClipboardTimeout != -1) // We were told not to wait indefinitely.
+			if (!g_ClipboardTimeout   // We were told to make only one attempt, or ...
+				|| (int)(g_ClipboardTimeout - (GetTickCount() - start_time)) <= SLEEP_INTERVAL_HALF) //...it timed out.
+				// Above must cast to int or any negative result will be lost due to DWORD type.
+				return FAIL;
 		// Use SLEEP_WITHOUT_INTERRUPTION to prevent MainWindowProc() from accepting new hotkeys
 		// during our operation, since a new hotkey subroutine might interfere with
 		// what we're doing here (e.g. if it tries to use the clipboard, or perhaps overwrites
 		// the deref buffer if this object's caller gave it any pointers into that memory area):
-		SLEEP_WITHOUT_INTERRUPTION(aRetryInterval)
+		SLEEP_WITHOUT_INTERRUPTION(INTERVAL_UNSPECIFIED)
 	}
-	return FAIL;
 }

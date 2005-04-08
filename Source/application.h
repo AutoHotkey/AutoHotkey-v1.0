@@ -103,6 +103,7 @@ if (!g_UninterruptibleTimerExists && !(g_UninterruptibleTimerExists = SetTimer(g
 // about this, but testing shows that calling SetTimer() against an existing timer does completely
 // reset it as though it were killed and recreated.  Note also that g_hWnd is used vs. NULL so that
 // the timer will fire even when a msg pump other than our own is running, such as that of a MsgBox.
+#define LARGE_DEREF_BUF_SIZE (4*1024*1024)
 #define SET_DEREF_TIMER(aTimeoutValue) g_DerefTimerExists = SetTimer(g_hWnd, TIMER_ID_DEREF, aTimeoutValue, DerefTimeout);
 
 #define KILL_MAIN_TIMER \

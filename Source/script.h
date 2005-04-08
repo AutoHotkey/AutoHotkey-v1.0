@@ -40,7 +40,8 @@ enum ExecUntilMode {NORMAL_MODE, UNTIL_RETURN, UNTIL_BLOCK_END, ONLY_ONE_LINE};
 // for equality against these constants because by coincidence, the pointer value
 // might just match one of them:
 #define ATTR_NONE ((void *)0)
-#define ATTR_LOOP_UNKNOWN ((void *)1)
+#define ATTR_TRUE ((void *)1)
+#define ATTR_LOOP_UNKNOWN ((void *)1) // Same value as the above.
 #define ATTR_LOOP_NORMAL ((void *)2)
 #define ATTR_LOOP_FILE ((void *)3)
 #define ATTR_LOOP_REG ((void *)4)
@@ -61,7 +62,7 @@ enum enum_act {
 // Seems best to make this one zero so that it will be the ZeroMemory() default within
 // any POD structures that contain an action_type field:
   ACT_INVALID = FAIL  // These should both be zero for initialization and function-return-value purposes.
-, ACT_ASSIGN, ACT_ASSIGNEXPR, ACT_ADD, ACT_SUB, ACT_MULT, ACT_DIV
+, ACT_ASSIGN, ACT_ASSIGNEXPR, ACT_FUNCTIONCALL, ACT_ADD, ACT_SUB, ACT_MULT, ACT_DIV
 , ACT_ASSIGN_FIRST = ACT_ASSIGN, ACT_ASSIGN_LAST = ACT_DIV
 , ACT_REPEAT // Never parsed directly, only provided as a translation target for the old command (see other notes).
 , ACT_ELSE   // Parsed at a lower level than most commands to support same-line ELSE-actions (e.g. "else if").
@@ -232,6 +233,9 @@ enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
 #define OLD_STILL_IN_EFFECT "The script was not reloaded; the old version will remain in effect."
 #define ERR_UNRECOGNIZED_ACTION "This line does not contain a recognized action."
 #define ERR_MISSING_OUTPUT_VAR "This command requires that at least one of its output variables be provided."
+#define ERR_MISSING_CLOSE_PAREN "Missing \")\""
+#define ERR_BLANK_PARAM "Blank parameter."
+#define ERR_BYREF "Caller must pass a variable to this ByRef parameter."
 #define ERR_ELSE_WITH_NO_IF "This ELSE doesn't appear to belong to any IF-statement."
 #define ERR_OUTOFMEM "Out of memory."
 #define ERR_MEM_LIMIT_REACHED "Memory limit reached (see #MaxMem in the help file)." ERR_ABORT
@@ -372,21 +376,70 @@ typedef UINT LineNumberType;
 
 // -2 for the beginning and ending g_DerefChars:
 #define MAX_VAR_NAME_LENGTH (UCHAR_MAX - 2)
+#define MAX_FUNCTION_PARAMS UCHAR_MAX // Also conserves stack space to support future attributes such as param default values.
 #define MAX_DEREFS_PER_ARG 512
-typedef UINT DerefLengthType;  // Formerly UCHAR, but since UCHAR doesn't actually save memory yet, a UINT for performance reasons.
+
+typedef WORD DerefLengthType; // WORD might perform better than UCHAR, but this can be changed to UCHAR if another field is ever needed in the struct.
+typedef UCHAR DerefParamCountType;
+
+class Func; // Forward declaration for use below.
 struct DerefType
 {
 	char *marker;
-	Var *var;
+	union
+	{
+		Var *var;
+		Func *func;
+	};
 	// Keep any fields that aren't an even multiple of 4 adjacent to each other.  This conserves memory
 	// due to byte-alignment:
-	DerefLengthType length;
+	bool is_function; // This should be kept pure bool to allow easy determination of what's in the union, above.
+	DerefParamCountType param_count; // The actual number of parameters present in this function *call*.  Left uninitialized except for functions.
+	DerefLengthType length; // Listed only after byte-sized fields, due to it being a WORD.
+};
+
+struct map_item
+{
+	#define EXP_RAW          0  // The "5 + " in the following: 5 + y - %z% * Array%i%
+	#define EXP_DEREF_SINGLE 1  // The y in the above.
+	#define EXP_DEREF_DOUBLE 2  // The %z% and %i% in the above.
+	#define MAP_ITEM_IN_BUFFER(type) (type < 3) // Keep this in sync with the above.
+	#define EXP_DEREF_VAR    3  // A variable's contents.
+	#define EXP_DEREF_FUNC   4  // A function-call, such as fn(x), which means the deref member of the union is present.
+	int type;
+	union {char *marker; DerefType *deref; Var *var;}; // Depends on the value of type, above.
+	char *end;
+};
+
+struct ExprTokenType  // Something in the compiler hates the name TokenType, so using a different name.
+{
+	// Due to the presence of 8-byte members (double and __int64) this entire struct is aligned on 8-byte
+	// vs. 4-byte boundaries.  The compiler defaults to this because otherwise an 8-byte member might
+	// sometimes not start at an even address, which would hurt performance on Pentiums, etc.
+	// The above two probably need to be adjacent to each other to conserve memory due to 8-byte alignment,
+	// which is the default alignment (for performance reasons) in any struct that contains 8-byte members
+	// such as double and __int64.
+	union // Which of its members is used depends on the value of symbol, above.
+	{
+		__int64 value_int64; // for SYM_INTEGER
+		double value_double; // for SYM_FLOAT
+		DerefType *deref;    // for SYM_FUNC
+		Var *var;            // for SYM_VAR
+		char *marker;        // for SYM_STRING and SYM_OPERAND
+	};
+	// Note that marker's length should not be stored in this struct, even though it might be readily
+	// available in places and thus help performance.  This is because if it were stored and the marker
+	// or SYM_VAR's var pointed to a location that was changed as a side effect of an expression's
+	// call to a script function, the length would then be invalid.
+	SymbolType symbol; // Short-circuit benchmark is currently much faster with this and the next beneath the union, but not sure why.
+	ExprTokenType *circuit_token; // Facilitates short-circuit boolean evaluation.
 };
 
 typedef UCHAR ArgTypeType;  // UCHAR vs. an enum, to save memory.
-#define ARG_TYPE_NORMAL     (UCHAR)0  // Formerly (UCHAR)0
-#define ARG_TYPE_INPUT_VAR  (UCHAR)1  // Formerly (UCHAR)1
-#define ARG_TYPE_OUTPUT_VAR (UCHAR)2  // Formerly (UCHAR)2
+#define ARG_TYPE_NORMAL     (UCHAR)0
+#define ARG_TYPE_INPUT_VAR  (UCHAR)1
+#define ARG_TYPE_OUTPUT_VAR (UCHAR)2
+
 struct ArgStruct
 {
 	ArgTypeType type;
@@ -449,7 +502,7 @@ struct LoopReadFileStruct
 
 
 typedef UCHAR ArgCountType;
-#define MAX_ARGS 20
+#define MAX_ARGS 20   // Maximum number of args used by any command.
 
 
 // Note that currently this value must fit into a sc_type variable because that is how TextToKey()
@@ -580,8 +633,8 @@ public:
 
 private:
 	static char *sDerefBuf;  // Buffer to hold the values of any args that need to be dereferenced.
-	static char *sDerefBufMarker;  // Location of next free byte.
 	static size_t sDerefBufSize;
+	static int sLargeDerefBufs;
 
 	// Static because only one line can be Expanded at a time (not to mention the fact that we
 	// wouldn't want the size of each line to be expanded by this size):
@@ -589,18 +642,18 @@ private:
 	static Var *sArgVar[MAX_ARGS];
 
 	ResultType EvaluateCondition();
-	ResultType PerformLoop(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
+	ResultType PerformLoop(char **apReturnValue, WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
 		, LoopReadFileStruct *apCurrentReadFile, char *aCurrentField, bool &aContinueMainLoop, Line *&aJumpToLine
 		, AttributeType aAttr, FileLoopModeType aFileLoopMode, bool aRecurseSubfolders, char *aFilePattern
 		, __int64 aIterationLimit, bool aIsInfinite, __int64 &aIndex);
-	ResultType PerformLoopReg(WIN32_FIND_DATA *apCurrentFile, LoopReadFileStruct *apCurrentReadFile
+	ResultType PerformLoopReg(char **apReturnValue, WIN32_FIND_DATA *apCurrentFile, LoopReadFileStruct *apCurrentReadFile
 		, char *aCurrentField, bool &aContinueMainLoop, Line *&aJumpToLine, FileLoopModeType aFileLoopMode
 		, bool aRecurseSubfolders, HKEY aRootKeyType, HKEY aRootKey, char *aRegSubkey, __int64 &aIndex);
-	ResultType PerformLoopParse(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
+	ResultType PerformLoopParse(char **apReturnValue, WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
 		, LoopReadFileStruct *apCurrentReadFile, bool &aContinueMainLoop, Line *&aJumpToLine, __int64 &aIndex);
-	ResultType Line::PerformLoopParseCSV(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
+	ResultType Line::PerformLoopParseCSV(char **apReturnValue, WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
 		, LoopReadFileStruct *apCurrentReadFile, bool &aContinueMainLoop, Line *&aJumpToLine, __int64 &aIndex);
-	ResultType PerformLoopReadFile(WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
+	ResultType PerformLoopReadFile(char **apReturnValue, WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
 		, char *aCurrentField, bool &aContinueMainLoop, Line *&aJumpToLine, FILE *aReadFile, char *aWriteFileName
 		, __int64 &aIndex);
 	ResultType Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aCurrentRegItem, LoopReadFileStruct *aCurrentReadFile);
@@ -824,15 +877,7 @@ public:
 	static char *sSourceFile[MAX_SCRIPT_FILES];
 	static int nSourceFiles; // An int vs. UCHAR so that it can be exactly 256 without overflowing.
 
-	static void FreeDerefBuf()
-	{
-		if (sDerefBuf)
-		{
-			free(sDerefBuf);
-			sDerefBuf = NULL;
-			sDerefBufSize = 0;
-		}
-	}
+	static void FreeDerefBufIfLarge();
 
 	static ResultType MouseClickDrag(vk_type aVK // Which button.
 		, int aX1, int aY1, int aX2, int aY2, int aSpeed, bool aMoveRelative);
@@ -848,26 +893,28 @@ public:
 		mouse_event(aEventFlags, aX, aY, aData, KEY_IGNORE);
 	}
 
-	ResultType ExecUntil(ExecUntilMode aMode, Line **apJumpToLine = NULL
+	ResultType ExecUntil(ExecUntilMode aMode, char **apReturnValue = NULL, Line **apJumpToLine = NULL
 		, WIN32_FIND_DATA *aCurrentFile = NULL, RegItemStruct *aCurrentRegItem = NULL
 		, LoopReadFileStruct *aCurrentReadFile = NULL, char *aCurrentField = NULL
 		, __int64 aCurrentLoopIteration = 0); // Use signed, since script/ITOA64 aren't designed to work with unsigned.
 
 	// The characters common to both EXP_TELLTALES and EXP_OPERAND_TERMINATORS:
-	#define EXP_COMMON "<>=*/&|^~!()"
+	#define EXP_COMMON " \t<>=*/&|^~!(),"  // Space and Tab are included at the beginning for performance.
 	// Characters whose presence in a mandatory-numeric param make it an expression for certain.
 	// + and - are not included here because legacy numeric parameters can contain unary plus or minus,
 	// e.g. WinMove, -%x%, -%y%:
-	#define EXP_TELLTALES "\"" EXP_COMMON
+	#define EXP_TELLTALES EXP_COMMON "\""
 	// Characters that mark the end of an operand inside an expression.  Double-quote must not be included:
-	#define EXP_OPERAND_TERMINATORS "\t +-" EXP_COMMON
-	#define EXP_ILLEGAL_CHARS ",'\\:;`{}" // Characters illegal in an expression.
+	#define EXP_OPERAND_TERMINATORS EXP_COMMON "+-"
+	#define EXP_ALL_SYMBOLS EXP_OPERAND_TERMINATORS "\""
+	#define EXP_ILLEGAL_CHARS "'\\:;`{}" // Characters illegal in an expression.
 
 	Var *ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary = true);
-	ResultType ExpandArgs();
-	VarSizeType GetExpandedArgSize(bool aCalcDerefBufSize);
-	char *ExpandArg(char *aBuf, int aArgIndex);
-	char *ExpandExpression(char *aBuf, int aArgIndex);
+	ResultType ExpandArgs(VarSizeType aSpaceNeeded = VARSIZE_ERROR, Var *aArgVar[] = NULL);
+	VarSizeType GetExpandedArgSize(bool aCalcDerefBufSize, Var *aArgVar[]);
+	char *ExpandArg(char *aBuf, int aArgIndex, Var *aArgVar = NULL);
+	char *ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget, char *&aDerefBuf
+		, size_t &aDerefBufSize, char *aArgDeref[], size_t aExtraSize);
 	ResultType Deref(Var *aOutputVar, char *aBuf);
 
 	bool FileIsFilteredOut(WIN32_FIND_DATA &aCurrentFile, FileLoopModeType aFileLoopMode, char *aFilePath);
@@ -1707,7 +1754,7 @@ public:
 	ResultType ChangePauseState(ToggleValueType aChangeTo);
 	static ResultType ScriptBlockInput(bool aEnable);
 
-	Line *PreparseError(char *aErrorText);
+	Line *PreparseError(char *aErrorText, char *aExtraInfo = "");
 	// Call this LineError to avoid confusion with Script's error-displaying functions:
 	ResultType LineError(char *aErrorText, ResultType aErrorType = FAIL, char *aExtraInfo = "");
 
@@ -1745,6 +1792,49 @@ public:
 		: mName(aLabelName) // Caller gave us a pointer to dynamic memory for this.
 		, mJumpToLine(NULL)
 		, mPrevLabel(NULL), mNextLabel(NULL)
+	{}
+	void *operator new(size_t aBytes) {return SimpleHeap::Malloc(aBytes);}
+	void *operator new[](size_t aBytes) {return SimpleHeap::Malloc(aBytes);}
+	void operator delete(void *aPtr) {}
+	void operator delete[](void *aPtr) {}
+};
+
+
+
+enum FuncTypes
+{
+	FUNC_INVALID, FUNC_NORMAL, FUNC_WINEXIST, FUNC_WINACTIVE
+};
+typedef UCHAR FuncType;  // UCHAR vs. FuncTypes to save memory.
+
+class Func
+{
+public:
+	char *mName;
+	Line *mJumpToLine;
+	Var **mParam;    // Will hold an array of Var*'s.
+	int mParamCount; // The number of items in the above array.  This is also the function's maximum number of params.
+	int mMinParams;  // Currently used only by built-in functions. Future: Support optional params for other functions.
+	Var **mVar, **mLazyVar; // Array of pointers-to-variable, allocated upon first use and later expanded as needed.
+	int mVarCount, mVarCountMax, mLazyVarCount; // Count of items in the above array as well as the maximum capacity.
+	int mInstances; // How many instances currently exist on the call stack (due to recursion or thread interruption).  Future use: Might be used to limit how deep recursion can go to help prevent stack overflow.
+	Func *mNextFunc; // Next item in linked list.
+
+	#define VAR_ASSUME_NONE 0
+	#define VAR_ASSUME_LOCAL 1
+	#define VAR_ASSUME_GLOBAL 2
+	// Keep small members adjacent to each other to save space and improve perf. due to byte alignment:
+	UCHAR mDefaultVarType;
+	FuncType mType;  // Keep adjacent/contiguous with the above.
+
+	Func(char *aFuncName, FuncType aType)
+		: mName(aFuncName) // Caller gave us a pointer to dynamic memory for this.
+		, mJumpToLine(NULL)
+		, mParam(NULL), mParamCount(0), mMinParams(0)
+		, mVar(NULL), mVarCount(0), mVarCountMax(0), mLazyVar(NULL), mLazyVarCount(0)
+		, mInstances(0), mNextFunc(NULL)
+		, mDefaultVarType(VAR_ASSUME_NONE)
+		, mType(aType)
 	{}
 	void *operator new(size_t aBytes) {return SimpleHeap::Malloc(aBytes);}
 	void *operator new[](size_t aBytes) {return SimpleHeap::Malloc(aBytes);}
@@ -2108,19 +2198,28 @@ class Script
 private:
 	friend class Hotkey;
 	Line *mFirstLine, *mLastLine;     // The first and last lines in the linked list.
+	UINT mLineCount;                  // The number of lines.
 	Label *mFirstLabel, *mLastLabel;  // The first and last labels in the linked list.
-	Var *mFirstVar, *mLastVar;  // The first and last variables in the linked list.
+	Func *mFirstFunc, *mLastFunc;     // The first and last functions in the linked list.
+	Var **mVar, **mLazyVar; // Array of pointers-to-variable, allocated upon first use and later expanded as needed.
+	int mVarCount, mVarCountMax, mLazyVarCount; // Count of items in the above array as well as the maximum capacity.
 	WinGroup *mFirstGroup, *mLastGroup;  // The first and last variables in the linked list.
-	UINT mLineCount, mLabelCount, mVarCount, mGroupCount;
+	int mOpenBlockCount; // How many blocks are currently open.
+	bool mNextLineIsFunctionBody; // Whether the very next line to be added will be the first one of the body.
+	Var **mFuncExceptionVar;   // A list of variables declared explicitly local or global.
+	int mFuncExceptionVarCount; // The number of items in the array.
 
 #ifdef AUTOHOTKEYSC
 	bool mCompiledHasCustomIcon; // Whether the compiled script uses a custom icon.
 #endif;
 
 	// These two track the file number and line number in that file of the line currently being loaded,
-	// which simplifies calls to ScriptError() and LineError() (reduces the number of params that must be passed):
+	// which simplifies calls to ScriptError() and LineError() (reduces the number of params that must be passed).
+	// These are used ONLY while loading the script into memory.  After that (while the script is running),
+	// only mCurrLine is kept up-to-date:
 	UCHAR mCurrFileNumber;
 	LineNumberType mCurrLineNumber;
+
 	bool mNoHotkeyLabels;
 	bool mMenuUseErrorLevel;  // Whether runtime errors should be displayed by the Menu command, vs. ErrorLevel.
 
@@ -2137,16 +2236,15 @@ private:
 #endif
 	ResultType IsDirective(char *aBuf);
 
-	ResultType ParseAndAddLine(char *aLineText, char *aActionName = NULL
-		, char *aEndMarker = NULL, char *aLiteralMap = NULL, size_t aLiteralMapLength = 0
-		, ActionTypeType aActionType = ACT_INVALID, ActionTypeType aOldActionType = OLD_INVALID);
+	ResultType ParseAndAddLine(char *aLineText, ActionTypeType aActionType = ACT_INVALID
+		, ActionTypeType aOldActionType = OLD_INVALID, char *aActionName = NULL
+		, char *aEndMarker = NULL, char *aLiteralMap = NULL, size_t aLiteralMapLength = 0);
 	ResultType ParseDerefs(char *aArgText, char *aArgMap, DerefType *aDeref, int &aDerefCount);
 	char *ParseActionType(char *aBufTarget, char *aBufSource, bool aDisplayErrors);
 	static ActionTypeType ConvertActionType(char *aActionTypeString);
 	static ActionTypeType ConvertOldActionType(char *aActionTypeString);
 	ResultType AddLabel(char *aLabelName);
 	ResultType AddLine(ActionTypeType aActionType, char *aArg[] = NULL, ArgCountType aArgc = 0, char *aArgMap[] = NULL);
-	Var *AddVar(char *aVarName, size_t aVarNameLength, Var *aVarPrev);
 
 	// These aren't in the Line class because I think they're easier to implement
 	// if aStartingLine is allowed to be NULL (for recursive calls).  If they
@@ -2158,7 +2256,7 @@ private:
 		, AttributeType aLoopTypeParse = ATTR_NONE);
 
 public:
-	Line *mCurrLine;  // Seems better to make this public than make Line our friend.
+	Line *mCurrLine;     // Seems better to make this public than make Line our friend.
 	char mThisMenuItemName[MAX_MENU_NAME_LENGTH + 1];
 	char mThisMenuName[MAX_MENU_NAME_LENGTH + 1];
 	char *mThisHotkeyName, *mPriorHotkeyName;
@@ -2220,9 +2318,21 @@ public:
 	ResultType UpdateOrCreateTimer(Label *aLabel, char *aPeriod, char *aPriority, bool aEnable
 		, bool aUpdatePriorityOnly);
 
-	#define VAR_NAME_LENGTH_DEFAULT 0
-	Var *FindOrAddVar(char *aVarName, size_t aVarNameLength = VAR_NAME_LENGTH_DEFAULT, Var *aSearchStart = NULL);
-	Var *FindVar(char *aVarName, size_t aVarNameLength = 0, Var **apVarPrev = NULL, Var *aSearchStart = NULL);
+	ResultType DefineFunc(char *aBuf, Var *aFuncExceptionVar[]);
+	Func *FindFunc(char *aFuncName, size_t aFuncNameLength = 0);
+	Func *AddFunc(char *aFuncName, size_t aFuncNameLength, FuncType aFuncType);
+
+	#define ALWAYS_USE_DEFAULT  0
+	#define ALWAYS_USE_GLOBAL   1
+	#define ALWAYS_USE_LOCAL    2
+	#define ALWAYS_PREFER_LOCAL 3
+	Var *FindOrAddVar(char *aVarName, size_t aVarNameLength = 0, int aAlwaysUse = ALWAYS_USE_DEFAULT
+		, bool *apIsException = NULL);
+	Var *FindVar(char *aVarName, size_t aVarNameLength = 0, int *apInsertPos = NULL
+		, int aAlwaysUse = ALWAYS_USE_DEFAULT, bool *apIsException = NULL
+		, bool *apIsLocal = NULL);
+	Var *AddVar(char *aVarName, size_t aVarNameLength, int aInsertPos, bool aIsLocal
+		, VarTypeType aVarType = VAR_INVALID); // Not currently needed (e.g. for VAR_ATTRIB_PARAM): , VarAttribType aAttrib = 0);
 	static VarTypes GetVarType(char *aVarName);
 
 	WinGroup *FindOrAddGroup(char *aGroupName, bool aNoCreate = false);
@@ -2303,6 +2413,8 @@ public:
 	VarSizeType GetFilename(char *aBuf = NULL);
 	VarSizeType GetFileDir(char *aBuf = NULL);
 	VarSizeType GetFilespec(char *aBuf = NULL);
+	VarSizeType GetLineNumber(char *aBuf = NULL);
+	VarSizeType GetLineFile(char *aBuf = NULL);
 	VarSizeType GetLoopFileName(char *aBuf = NULL);
 	VarSizeType GetLoopFileShortName(char *aBuf = NULL);
 	VarSizeType GetLoopFileDir(char *aBuf = NULL);

@@ -39,7 +39,7 @@ public:
 	// unsafe to continue in such cases.  Update: Increased default
 	// number of attempts from 20 to 40 because Jason (Payam) reported
 	// that he was getting an error on rare occasions (but not reproducible).
-	ResultType Open(int aAttempts = 40, int aRetryInterval = 20);
+	ResultType Open();
 
 	// Below: Whether the clipboard is ready to be written to.  Note that the clipboard is not
 	// usually physically open even when this is true, unless the caller specifically opened

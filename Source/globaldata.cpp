@@ -50,6 +50,8 @@ WORD g_mouse_buttons_logical = 0;
 BYTE g_PhysicalKeyState[VK_ARRAY_COUNT] = {0};
 
 int g_HotkeyModifierTimeout = 50;  // Reduced from 100, which was a little too large for fast typists.
+int g_ClipboardTimeout = 1000; // v1.0.31
+
 HHOOK g_KeybdHook = NULL;
 HHOOK g_MouseHook = NULL;
 #ifdef HOOK_WARNING
@@ -226,11 +228,11 @@ Action g_act[] =
 	, {"=", 1, 2, NULL}    // For this one, omitting the second param sets the var to be empty.
 	, {":=", 1, 2, {2, 0}} // Same.  Param #2 is flagged as numeric so that expression detection is automatic.
 
-	// Subtraction(but not addition) allow 2nd to be blank due to 3rd param.
-	// Also, it seems ok to allow date-time operations with += and -=, even though these
-	// operators may someday be enhanced to handle complex expressions, since it seems
-	// possible to parse out the TimeUnits parameter even from a complex expression (since
-	// such expressions wouldn't be expected to use commas for anything else?):
+	// ACT_FUNCTIONCALL, which is a naked function call outside of any IF or assignment, e.g. fn1(123, fn2(y))
+	// Its name should be "" so that Line::ToText() will properly display it.
+	, {"", 1, 1, {1, 0}}
+
+	// Subtraction (but not addition) allows 2nd to be blank due to 3rd param.
 	, {"+=", 2, 3, {2, 0}}
 	, {"-=", 1, 3, {2, 0}}
 	, {"*=", 2, 2, {2, 0}}
@@ -347,7 +349,8 @@ Action g_act[] =
 	, {"Hotkey", 1, 3, NULL}  // Mod+Keys, Label/Action (blank to avoid changing curr. label), Options
 	, {"SetTimer", 1, 3, {3, 0}}  // Label (or dereference that resolves to a label), period (or ON/OFF), Priority
 	, {"Thread", 1, 3, {2, 3, 0}}  // Command, value1 (can be blank for interrupt), value2
-	, {"Return", 0, 0, NULL}, {"Exit", 0, 1, {1, 0}} // ExitCode
+	, {"Return", 0, 1, {1, 0}}
+	, {"Exit", 0, 1, {1, 0}} // ExitCode
 	, {"Loop", 0, 4, NULL} // Iteration Count or FilePattern or root key name [,subkey name], FileLoopMode, Recurse? (custom validation for these last two)
 	, {"Break", 0, 0, NULL}, {"Continue", 0, 0, NULL}
 	, {"{", 0, 0, NULL}, {"}", 0, 0, NULL}

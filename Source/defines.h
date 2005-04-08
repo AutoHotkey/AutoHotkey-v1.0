@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.30.04"
+#define NAME_VERSION "1.0.31.00"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -95,7 +95,7 @@ GNU General Public License for more details.
 enum ResultType {FAIL = 0, OK, WARN = OK, CRITICAL_ERROR  // Some things might rely on OK==1 (i.e. boolean "true")
 	, CONDITION_TRUE, CONDITION_FALSE
 	, LOOP_BREAK, LOOP_CONTINUE
-	, EARLY_RETURN, EARLY_EXIT};
+	, EARLY_RETURN, EARLY_EXIT}; // EARLY_EXIT needs to be distinct from FAIL for ExitApp() and AutoExecSection().
 
 enum ExitReasons {EXIT_NONE, EXIT_CRITICAL, EXIT_ERROR, EXIT_DESTROY, EXIT_LOGOFF, EXIT_SHUTDOWN
 	, EXIT_WM_QUIT, EXIT_WM_CLOSE, EXIT_MENU, EXIT_EXIT, EXIT_RELOAD, EXIT_SINGLEINSTANCE};
@@ -110,6 +110,37 @@ enum MenuTypeType {MENU_TYPE_NONE, MENU_TYPE_POPUP, MENU_TYPE_BAR}; // NONE must
 // be zero:
 enum ToggleValueType {TOGGLE_INVALID = 0, TOGGLED_ON, TOGGLED_OFF, ALWAYS_ON, ALWAYS_OFF
 	, TOGGLE, TOGGLE_PERMIT, NEUTRAL, TOGGLE_SEND, TOGGLE_MOUSE, TOGGLE_SENDANDMOUSE, TOGGLE_DEFAULT};
+
+enum SymbolType // For use with ExpandExpression() and IsPureNumeric().
+{
+	// The sPrecedence array in ExpandExpression() must be kept in sync with any additions, removals,
+	// or re-ordering of the below.  Also, callers rely on PURE_NOT_NUMERIC being zero/false,
+	// so that should be listed first.  Finally, IS_OPERAND() relies on all operand types being
+	// at the beginning of the list:
+	  PURE_NOT_NUMERIC, PURE_INTEGER, PURE_FLOAT
+	, SYM_STRING = PURE_NOT_NUMERIC, SYM_INTEGER = PURE_INTEGER, SYM_FLOAT = PURE_FLOAT // Specific operand types.
+	, SYM_VAR // An operand that is a variable's contents.
+	, SYM_OPERAND // Generic/undetermined type of operand.
+	, SYM_OPERAND_END // Marks the symbol after the last operand.  This value is used below.
+	, SYM_BEGIN = SYM_OPERAND_END  // SYM_BEGIN is a special marker to simplify the code.
+#define IS_OPERAND(symbol) (symbol < SYM_OPERAND_END)
+	, SYM_CPAREN, SYM_OPAREN, SYM_COMMA  // CPAREN (close-paren) must come right before OPAREN and must be the first non-operand symbol other than SYM_BEGIN.
+#define IS_OPERAND_OR_CPAREN(symbol) (symbol < SYM_OPAREN)
+	, SYM_OR, SYM_AND, SYM_LOWNOT  // LOWNOT is the word "not", the low precedence counterpart of !
+	, SYM_EQUAL, SYM_EQUALCASE, SYM_NOTEQUAL // =, ==, <>
+	, SYM_GT, SYM_LT, SYM_GTOE, SYM_LTOE  // >, <, >=, <=
+	, SYM_CONCAT
+	, SYM_BITOR // Seems more intuitive to have these higher in prec. than the above, unlike C and Perl, but like Python.
+	, SYM_BITXOR
+	, SYM_BITAND
+	, SYM_BITSHIFTLEFT, SYM_BITSHIFTRIGHT // << >>
+	, SYM_PLUS, SYM_MINUS
+	, SYM_TIMES, SYM_DIVIDE
+	, SYM_NEGATIVE, SYM_HIGHNOT, SYM_BITNOT // Unary minus (unary plus is handled without needing a value here), !, and ~.
+	, SYM_POWER    // See below for why this takes precedence over negative.
+	, SYM_FUNC     // A call to a function.
+	, SYM_COUNT    // Must be last.
+};
 
 // For convenience in many places.  Must cast to int to avoid loss of negative values.
 #define BUF_SPACE_REMAINING ((int)(aBufSize - (aBuf - aBuf_orig)))
@@ -272,6 +303,7 @@ typedef UCHAR CoordModeAttribType;
 // Each instance of this struct generally corresponds to a quasi-thread.  The function that creates
 // a new thread typically saves the old thread's struct values on its stack so that they can later
 // be copied back into the g struct when the thread is resumed:
+class Func;  // Forward declaration.
 struct global_struct
 {
 	TitleMatchModes TitleMatchMode;
@@ -299,30 +331,32 @@ struct global_struct
 	char FormatFloat[32];
 	bool FormatIntAsHex;
 	char ErrorLevel[128]; // Big in case user put something bigger than a number in g_ErrorLevel.
+	Func *CurrentFunc; // The function whose body is currently being processed at load-time, or being run at runtime (if any).
 	HWND hWndLastUsed;  // In many cases, it's better to use GetValidLastUsedWindow() when referring to this.
 	//HWND hWndToRestore;
 	int MsgBoxResult;  // Which button was pressed in the most recent MsgBox.
 	bool IsPaused;
 };
 
-inline void global_clear_state(global_struct *gp)
+inline void global_clear_state(global_struct &g)
 // Reset those values which represent the condition or state created by previously executed commands.
 {
-	*gp->ErrorLevel = '\0'; // This isn't the actual ErrorLevel: it's used to save and restore it.
+	*g.ErrorLevel = '\0'; // This isn't the actual ErrorLevel: it's used to save and restore it.
 	// But don't reset g_ErrorLevel itself because we want to handle that conditional behavior elsewhere.
-	gp->hWndLastUsed = NULL;
-	//gp->hWndToRestore = NULL;
-	gp->MsgBoxResult = 0;
-	gp->IsPaused = false;
-	gp->UninterruptedLineCount = 0;
-	gp->GuiDefaultWindowIndex = 0;
+	g.CurrentFunc = NULL;
+	g.hWndLastUsed = NULL;
+	//g.hWndToRestore = NULL;
+	g.MsgBoxResult = 0;
+	g.IsPaused = false;
+	g.UninterruptedLineCount = 0;
+	g.GuiDefaultWindowIndex = 0;
 	// Above line is done because allowing it to be permanently changed by the auto-exec section
 	// seems like it would cause more confusion that it's worth.  A change to the global default
 	// or even an override/always-use-this-window-number mode can be added if there is ever a
 	// demand for it.
 }
 
-inline void global_init(global_struct *gp)
+inline void global_init(global_struct &g)
 // This isn't made a real constructor to avoid the overhead, since there are times when we
 // want to declare a local var of type global_struct without having it initialized.
 {
@@ -330,41 +364,41 @@ inline void global_init(global_struct *gp)
 	// to save and restore their values when one hotkey interrupts another, going into
 	// deeper recursion.  When the interrupting subroutine returns, the former
 	// subroutine's values for these are restored prior to resuming execution:
-	global_clear_state(gp);
-	gp->TitleMatchMode = FIND_IN_LEADING_PART; // Standard default for AutoIt2 and 3.
-	gp->TitleFindFast = true; // Since it's so much faster in many cases.
-	gp->DetectHiddenWindows = false;  // Same as AutoIt2 but unlike AutoIt3; seems like a more intuitive default.
-	gp->DetectHiddenText = true;  // Unlike AutoIt, which defaults to false.  This setting performs better.
+	global_clear_state(g);
+	g.TitleMatchMode = FIND_IN_LEADING_PART; // Standard default for AutoIt2 and 3.
+	g.TitleFindFast = true; // Since it's so much faster in many cases.
+	g.DetectHiddenWindows = false;  // Same as AutoIt2 but unlike AutoIt3; seems like a more intuitive default.
+	g.DetectHiddenText = true;  // Unlike AutoIt, which defaults to false.  This setting performs better.
 	// Not sure what the optimal default is.  1 seems too low (scripts would be very slow by default):
-	gp->LinesPerCycle = -1;
-	gp->IntervalBeforeRest = 10;  // sleep for 10ms every 10ms
-	gp->AllowThisThreadToBeInterrupted = true; // Separate from g_AllowInterruption so that they can have independent values.
+	g.LinesPerCycle = -1;
+	g.IntervalBeforeRest = 10;  // sleep for 10ms every 10ms
+	g.AllowThisThreadToBeInterrupted = true; // Separate from g_AllowInterruption so that they can have independent values.
 	#define PRIORITY_MINIMUM INT_MIN
-	gp->Priority = 0;
-	gp->GuiEvent = GUI_EVENT_NONE;
+	g.Priority = 0;
+	g.GuiEvent = GUI_EVENT_NONE;
 	// For these, indexes rather than pointers are stored because handles can become invalid during the
 	// lifetime of a thread (while it's suspended, or if it destroys the control or window that created itself):
-	gp->GuiWindowIndex = MAX_GUI_WINDOWS;  // Default them to out-of-bounds.
-	gp->GuiControlIndex = MAX_CONTROLS_PER_GUI; // Same.
-	gp->GuiDefaultWindowIndex = 0;
-	gp->WinDelay = 100;
-	gp->ControlDelay = 20;
-	gp->KeyDelay = 10;
-	gp->PressDuration = -1;
-	gp->MouseDelay = 10;
+	g.GuiWindowIndex = MAX_GUI_WINDOWS;  // Default them to out-of-bounds.
+	g.GuiControlIndex = MAX_CONTROLS_PER_GUI; // Same.
+	g.GuiDefaultWindowIndex = 0;
+	g.WinDelay = 100;
+	g.ControlDelay = 20;
+	g.KeyDelay = 10;
+	g.PressDuration = -1;
+	g.MouseDelay = 10;
 	// AutoIt3's default:
 	#define DEFAULT_MOUSE_SPEED 2
 	#define MAX_MOUSE_SPEED 100
 	#define MAX_MOUSE_SPEED_STR "100"
 	#define COORD_UNSPECIFIED INT_MIN
 	#define COORD_CENTERED (INT_MIN + 1)
-	gp->DefaultMouseSpeed = DEFAULT_MOUSE_SPEED;
-	gp->CoordMode = 0;  // All the flags it contains are off by default.
-	gp->StoreCapslockMode = true;  // AutoIt2 (and probably 3's) default, and it makes a lot of sense.
-	gp->AutoTrim = true;  // AutoIt2's default, and overall the best default in most cases.
-	gp->StringCaseSense = false;  // AutoIt2 default, and it does seem best.
-	strcpy(gp->FormatFloat, "%0.6f");
-	gp->FormatIntAsHex = false;
+	g.DefaultMouseSpeed = DEFAULT_MOUSE_SPEED;
+	g.CoordMode = 0;  // All the flags it contains are off by default.
+	g.StoreCapslockMode = true;  // AutoIt2 (and probably 3's) default, and it makes a lot of sense.
+	g.AutoTrim = true;  // AutoIt2's default, and overall the best default in most cases.
+	g.StringCaseSense = false;  // AutoIt2 default, and it does seem best.
+	strcpy(g.FormatFloat, "%0.6f");
+	g.FormatIntAsHex = false;
 	// For FormatFloat:
 	// I considered storing more than 6 digits to the right of the decimal point (which is the default
 	// for most Unices and MSVC++ it seems).  But going beyond that makes things a little weird for many

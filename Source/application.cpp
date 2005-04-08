@@ -869,9 +869,9 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 					// See similar switch() higher above for comments about the below:
 					switch(msg.wParam)
 					{
-					case AHK_GUI_CLOSE:  pgui->mLabelForCloseIsRunning = false; break;
-					case AHK_GUI_ESCAPE: pgui->mLabelForEscapeIsRunning = false; break;
-					case AHK_GUI_SIZE:   pgui->mLabelForSizeIsRunning = false; break;
+					case AHK_GUI_CLOSE:  pgui->mLabelForCloseIsRunning = false; break;  // Safe to reset even if there is
+					case AHK_GUI_ESCAPE: pgui->mLabelForEscapeIsRunning = false; break; // no label due to the window having
+					case AHK_GUI_SIZE:   pgui->mLabelForSizeIsRunning = false; break;   // been destroyed and recreated.
 					case AHK_GUI_DROPFILES:
 						if (pgui->mHdrop) // It's no longer safer to refer to hdrop_to_free (see comments above).
 						{
@@ -880,6 +880,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 						}
 						pgui->mExStyle |= WS_EX_ACCEPTFILES;
 						SetWindowLong(pgui->mHwnd, GWL_EXSTYLE, pgui->mExStyle);
+						break;
 					default: // It's a control's action, so set its attribute.
 						if (msg.wParam < pgui->mControlCount) // Recheck to ensure that control still exists (in case window was recreated as explained above).
 							pgui->mControl[msg.wParam].attrib &= ~GUI_CONTROL_ATTRIB_LABEL_IS_RUNNING;
@@ -890,6 +891,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 			default: // hotkey
 				Hotkey::PerformID((HotkeyIDType)msg.wParam);
 			}
+
 			--g_nThreads;
 
 			MAKE_THREAD_INTERRUPTIBLE
@@ -1095,21 +1097,21 @@ bool CheckScriptTimers()
 		return false; // Above: To be safe (prevent stack faults) don't allow max threads to be exceeded.
 
 	ScriptTimer *timer;
-	UINT n_ran_subroutines;
+	UINT launched_threads;
 	DWORD tick_start;
 	global_struct global_saved;
 
 	// Note: It seems inconsequential if a subroutine that the below loop executes causes a
 	// new timer to be added to the linked list while the loop is still enumerating the timers.
 
-	for (n_ran_subroutines = 0, timer = g_script.mFirstTimer; timer != NULL; timer = timer->mNextTimer)
+	for (launched_threads = 0, timer = g_script.mFirstTimer; timer != NULL; timer = timer->mNextTimer)
 	{
 		// Call GetTickCount() every time in case a previous iteration of the loop took a long
 		// time to execute:
 		if (timer->mEnabled && timer->mExistingThreads < 1 && timer->mPriority >= g.Priority // thread priorities
 			&& (tick_start = GetTickCount()) - timer->mTimeLastRun >= (DWORD)timer->mPeriod)
 		{
-			if (!n_ran_subroutines)
+			if (!launched_threads)
 			{
 				// Since this is the first subroutine that will be launched during this call to
 				// this function, we know it will wind up running at least one subroutine, so
@@ -1134,6 +1136,20 @@ bool CheckScriptTimers()
 				// the current quasi-thread).  However, that might introduce unwanted complexity
 				// in other places that would need to start up the timer again because we stopped it, etc.
 			}
+
+			// Fix for v1.0.31: mTimeLastRun is now given its new value *before* the thread is launched
+			// rather than after.  This allows a timer to be reset by its own thread -- by means of
+			// "SetTimer, TimerName", which is otherwise impossible because the reset was being
+			// overridden by us here when the thread finished.
+			// Seems better to store the start time rather than the finish time, though it's clearly
+			// debatable.  The reason is that it's sometimes more important to ensure that a given
+			// timed subroutine is *begun* at the specified interval, rather than assuming that
+			// the specified interval is the time between when the prior run finished and the new
+			// one began.  This should make timers behave more consistently (i.e. how long a timed
+			// subroutine takes to run SHOULD NOT affect its *apparent* frequency, which is number
+			// of times per second or per minute that we actually attempt to run it):
+			timer->mTimeLastRun = tick_start;
+			++launched_threads;
 
 			// This should slightly increase the expectation that any short timed subroutine will
 			// run all the way through to completion rather than being interrupted by the press of
@@ -1160,20 +1176,10 @@ bool CheckScriptTimers()
 			--timer->mExistingThreads;
 
 			MAKE_THREAD_INTERRUPTIBLE
-
-			// Seems better to store the start time rather than the finish time, though it's clearly
-			// debatable.  The reason is that it's sometimes more important to ensure that a given
-			// timed subroutine is *begun* at the specified interval, rather than assuming that
-			// the specified interval is the time between when the prior run finished and the new
-			// one began.  This should make timers behave more consistently (i.e. how long a timed
-			// subroutine takes to run SHOULD NOT affect its *apparent* frequency, which is number
-			// of times per second or per minute that we actually attempt to run it):
-			timer->mTimeLastRun = tick_start;
-			++n_ran_subroutines;
 		}
 	}
 
-	if (n_ran_subroutines) // Since at least one subroutine was run above, restore various values for our caller.
+	if (launched_threads) // Since at least one subroutine was run above, restore various values for our caller.
 	{
 		--g_nThreads;  // Since this instance of this function only had one thread in use at a time.
 		RESUME_UNDERLYING_THREAD // For explanation, see comments where the macro is defined.
@@ -1280,7 +1286,7 @@ VOID CALLBACK AutoExecSectionTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD d
 
 	// Otherwise, update global DEFAULTS, which are for all threads launched in the future:
 	CopyMemory(&g_default, &g, sizeof(global_struct));
-	global_clear_state(&g_default);  // Only clear g_default, not g.
+	global_clear_state(g_default);  // Only clear g_default, not g.
 }
 
 
@@ -1302,10 +1308,5 @@ VOID CALLBACK InputTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
 
 VOID CALLBACK DerefTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
 {
-	KILL_DEREF_TIMER
-	Line::FreeDerefBuf();
-	// Freeing the buffer should be safe even if the script's current quasi-thread is in the middle
-	// of executing a command, since commands are all designed to make only temporary use of the
-	// deref buffer (they make copies of anything they need prior to calling MsgSleep() or anything
-	// else that might pump messages and thus result in a call to us here).
+	Line::FreeDerefBufIfLarge(); // It will also kill the timer, if appropriate.
 }

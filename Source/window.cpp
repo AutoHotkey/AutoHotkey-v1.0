@@ -739,135 +739,136 @@ ResultType StatusBarUtil(Var *aOutputVar, HWND aControlWindow, int aPartNumber
 	if (aPartNumber > (int)nParts)
 		aPartNumber = 0; // Set this as an indicator for below.
 
-	VarSizeType space_needed;
-	char buf[WINDOW_TEXT_SIZE + 1] = ""; // +1 is needed in this case.
 	if (!aControlWindow || !aPartNumber)
-		space_needed = 1; // 1 for terminator.
-	else
 	{
-		DWORD dwResult;
-		if (!SendMessageTimeout(aControlWindow, SB_GETTEXTLENGTH, (WPARAM)(aPartNumber - 1), (LPARAM)0
-			, SMTO_ABORTIFHUNG, SB_TIMEOUT, &dwResult))
-			// It timed out or failed.  Since we can't even find the length, don't bother
-			// with anything else:
-			return FAIL;
-		if (LOWORD(dwResult) > WINDOW_TEXT_SIZE) // extremely unlikely, perhaps impossible.
-			return FAIL;
-		if (!aWaitTime)
-			// Waiting 500ms in place of a "0" seems more useful than a true zero, which
-			// doens't need to be supported because it's the same thing as something like
-			// "IfWinExist".
-			aWaitTime = 500;
-		DWORD start_time;
-		#define WAIT_INDEFINITELY (aWaitTime < 0)
-		if (!WAIT_INDEFINITELY)
-			start_time = GetTickCount();
-
-		LPVOID pMem;
-		if (g_os.IsWinNT())  // NT/2k/XP/2003 and family
-		{
-			DWORD dwPid;
-			GetWindowThreadProcessId(aControlWindow, &dwPid);
-			HANDLE hProcess = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE, FALSE, dwPid);
-			if (hProcess)
-			{
-				// AutoIt3: Dynamic functions to retain 95 compatibility
-				// My: The above comment seems wrong since this section is only for NT/2k/XP+.
-				// Perhaps it meant that only NT and/or 2k require dynamic functions whereas XP doesn't:
-				typedef LPVOID (WINAPI *MyVirtualAllocEx)(HANDLE, LPVOID, SIZE_T, DWORD, DWORD);
-				// Static for performance, since value should be always the same.
-				static MyVirtualAllocEx lpfnAlloc = (MyVirtualAllocEx)GetProcAddress(GetModuleHandle("kernel32.dll")
-					, "VirtualAllocEx");
-				pMem = lpfnAlloc(hProcess, NULL, sizeof(buf), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-
-				for (;;)
-				{ // Always do the first iteration so that at least one check is done.
-					if (!SendMessageTimeout(aControlWindow, SB_GETTEXT, (WPARAM)(aPartNumber - 1), (LPARAM)pMem
-						, SMTO_ABORTIFHUNG, SB_TIMEOUT, &dwResult))
-						// It failed or timed out; buf stays as it was: initialized to empty string.
-						// Also ErrorLevel stays set to 2, the default set above.
-						break;
-					if (!ReadProcessMemory(hProcess, pMem, buf, WINDOW_TEXT_SIZE, NULL))
-					{
-						*buf = '\0';  // In case it changed the buf before failing.
-						break;
-					}
-					buf[sizeof(buf) - 1] = '\0';  // Just to be sure.
-
-					// Below: In addition to normal/intuitive matching, a match is also achieved if
-					// both are empty string:
-					#define BREAK_IF_MATCH_FOUND_OR_IF_NOT_WAITING \
-					if ((!*aTextToWaitFor && !*buf) || (aTextToWaitFor && IsTextMatch(buf, aTextToWaitFor))) \
-					{\
-						g_ErrorLevel->Assign(ERRORLEVEL_NONE);\
-						break;\
-					}\
-					if (aOutputVar)\
-						break;  // i.e. If an output variable was given, we're not waiting for a match.
-					BREAK_IF_MATCH_FOUND_OR_IF_NOT_WAITING
-
-					// Don't continue to the wait if the target window is destroyed:
-					// Must cast to int or any negative result will be lost due to DWORD type.
-					// Also: Last param false because we don't want it to restore the
-					// current active window after the time expires (in case
-					// our subroutine is suspended).  Also, ERRORLEVEL_ERROR is the value that
-					// indicates that we timed out rather than having ever found a match:
-					#define SB_SLEEP_IF_NEEDED \
-					if (!IsWindow(aControlWindow))\
-						break;\
-					if (WAIT_INDEFINITELY || (int)(aWaitTime - (GetTickCount() - start_time)) > SLEEP_INTERVAL_HALF)\
-						MsgSleep(aCheckInterval);\
-					else\
-					{\
-						g_ErrorLevel->Assign(ERRORLEVEL_ERROR);\
-						break;\
-					}
-					SB_SLEEP_IF_NEEDED
-				}
-
-				// AutoIt3: Dynamic functions to retain 95 compatibility
-				typedef BOOL (WINAPI *MyVirtualFreeEx)(HANDLE, LPVOID, SIZE_T, DWORD);
-				// Static for performance, since value should be always the same.
-				static MyVirtualFreeEx lpfnFree = (MyVirtualFreeEx)GetProcAddress(GetModuleHandle("kernel32.dll")
-					, "VirtualFreeEx");
-				lpfnFree(hProcess, pMem, 0, MEM_RELEASE); // Size 0 is used with MEM_RELEASE.
-				CloseHandle(hProcess);
-			} // if (hProcess)
-		} // WinNT
-		else // Win9x
-		{
-			HANDLE hMapping = CreateFileMapping(INVALID_HANDLE_VALUE, 0, PAGE_READWRITE, 0, WINDOW_TEXT_SIZE, NULL);
-			if (hMapping)
-			{
-				pMem = MapViewOfFile(hMapping, FILE_MAP_ALL_ACCESS, 0, 0, 0);
-				for (;;)
-				{ // Always do the first iteration so that at least one check is done.
-					if (SendMessageTimeout(aControlWindow, SB_GETTEXT, (WPARAM)(aPartNumber - 1), (LPARAM)pMem
-						, SMTO_ABORTIFHUNG, SB_TIMEOUT, &dwResult))
-					{
-						// Not sure why AutoIt3 doesn't use use strcpy() for this, but leave it to be safe:
-						CopyMemory(buf, pMem, WINDOW_TEXT_SIZE);
-						buf[sizeof(buf) - 1] = '\0';  // Just to be sure.
-						BREAK_IF_MATCH_FOUND_OR_IF_NOT_WAITING
-					}
-					else // it failed or timed out; buf stays as it was: initialized to empty string.
-						break;
-
-					SB_SLEEP_IF_NEEDED
-				}
-				UnmapViewOfFile(pMem);
-				CloseHandle(hMapping);
-			}
-		}
-		space_needed = (VarSizeType)(strlen(buf) + 1); // +1 for terminator.
+		if (aOutputVar)
+			return aOutputVar->Assign();
+		// else caller didn't want the text.
+		return OK;
 	}
 
-	// Otherwise, consider this to be always successful, even if aControlWindow == NULL
+	char buf[WINDOW_TEXT_SIZE + 1] = ""; // +1 is needed in this case.
+	DWORD dwResult;
+	if (!SendMessageTimeout(aControlWindow, SB_GETTEXTLENGTH, (WPARAM)(aPartNumber - 1), (LPARAM)0
+		, SMTO_ABORTIFHUNG, SB_TIMEOUT, &dwResult))
+		// It timed out or failed.  Since we can't even find the length, don't bother
+		// with anything else:
+		return FAIL;
+	if (LOWORD(dwResult) > WINDOW_TEXT_SIZE) // extremely unlikely, perhaps impossible.
+		return FAIL;
+	if (!aWaitTime)
+		// Waiting 500ms in place of a "0" seems more useful than a true zero, which
+		// doens't need to be supported because it's the same thing as something like
+		// "IfWinExist".
+		aWaitTime = 500;
+	DWORD start_time;
+	#define WAIT_INDEFINITELY (aWaitTime < 0)
+	if (!WAIT_INDEFINITELY)
+		start_time = GetTickCount();
+
+	LPVOID pMem;
+	if (g_os.IsWinNT())  // NT/2k/XP/2003 and family
+	{
+		DWORD dwPid;
+		GetWindowThreadProcessId(aControlWindow, &dwPid);
+		HANDLE hProcess = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE, FALSE, dwPid);
+		if (hProcess)
+		{
+			// AutoIt3: Dynamic functions to retain 95 compatibility
+			// My: The above comment seems wrong since this section is only for NT/2k/XP+.
+			// Perhaps it meant that only NT and/or 2k require dynamic functions whereas XP doesn't:
+			typedef LPVOID (WINAPI *MyVirtualAllocEx)(HANDLE, LPVOID, SIZE_T, DWORD, DWORD);
+			// Static for performance, since value should be always the same.
+			static MyVirtualAllocEx lpfnAlloc = (MyVirtualAllocEx)GetProcAddress(GetModuleHandle("kernel32.dll")
+				, "VirtualAllocEx");
+			pMem = lpfnAlloc(hProcess, NULL, sizeof(buf), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+
+			for (;;)
+			{ // Always do the first iteration so that at least one check is done.
+				if (!SendMessageTimeout(aControlWindow, SB_GETTEXT, (WPARAM)(aPartNumber - 1), (LPARAM)pMem
+					, SMTO_ABORTIFHUNG, SB_TIMEOUT, &dwResult))
+					// It failed or timed out; buf stays as it was: initialized to empty string.
+					// Also ErrorLevel stays set to 2, the default set above.
+					break;
+				if (!ReadProcessMemory(hProcess, pMem, buf, WINDOW_TEXT_SIZE, NULL))
+				{
+					*buf = '\0';  // In case it changed the buf before failing.
+					break;
+				}
+				buf[sizeof(buf) - 1] = '\0';  // Just to be sure.
+
+				// Below: In addition to normal/intuitive matching, a match is also achieved if
+				// both are empty string:
+				#define BREAK_IF_MATCH_FOUND_OR_IF_NOT_WAITING \
+				if ((!*aTextToWaitFor && !*buf) || (aTextToWaitFor && IsTextMatch(buf, aTextToWaitFor))) \
+				{\
+					g_ErrorLevel->Assign(ERRORLEVEL_NONE);\
+					break;\
+				}\
+				if (aOutputVar)\
+					break;  // i.e. If an output variable was given, we're not waiting for a match.
+				BREAK_IF_MATCH_FOUND_OR_IF_NOT_WAITING
+
+				// Don't continue to the wait if the target window is destroyed:
+				// Must cast to int or any negative result will be lost due to DWORD type.
+				// Also: Last param false because we don't want it to restore the
+				// current active window after the time expires (in case
+				// our subroutine is suspended).  Also, ERRORLEVEL_ERROR is the value that
+				// indicates that we timed out rather than having ever found a match:
+				#define SB_SLEEP_IF_NEEDED \
+				if (!IsWindow(aControlWindow))\
+					break;\
+				if (WAIT_INDEFINITELY || (int)(aWaitTime - (GetTickCount() - start_time)) > SLEEP_INTERVAL_HALF)\
+					MsgSleep(aCheckInterval);\
+				else\
+				{\
+					g_ErrorLevel->Assign(ERRORLEVEL_ERROR);\
+					break;\
+				}
+				SB_SLEEP_IF_NEEDED
+			}
+
+			// AutoIt3: Dynamic functions to retain 95 compatibility
+			typedef BOOL (WINAPI *MyVirtualFreeEx)(HANDLE, LPVOID, SIZE_T, DWORD);
+			// Static for performance, since value should be always the same.
+			static MyVirtualFreeEx lpfnFree = (MyVirtualFreeEx)GetProcAddress(GetModuleHandle("kernel32.dll")
+				, "VirtualFreeEx");
+			lpfnFree(hProcess, pMem, 0, MEM_RELEASE); // Size 0 is used with MEM_RELEASE.
+			CloseHandle(hProcess);
+		} // if (hProcess)
+	} // WinNT
+	else // Win9x
+	{
+		HANDLE hMapping = CreateFileMapping(INVALID_HANDLE_VALUE, 0, PAGE_READWRITE, 0, WINDOW_TEXT_SIZE, NULL);
+		if (hMapping)
+		{
+			pMem = MapViewOfFile(hMapping, FILE_MAP_ALL_ACCESS, 0, 0, 0);
+			for (;;)
+			{ // Always do the first iteration so that at least one check is done.
+				if (SendMessageTimeout(aControlWindow, SB_GETTEXT, (WPARAM)(aPartNumber - 1), (LPARAM)pMem
+					, SMTO_ABORTIFHUNG, SB_TIMEOUT, &dwResult))
+				{
+					// Not sure why AutoIt3 doesn't use use strcpy() for this, but leave it to be safe:
+					CopyMemory(buf, pMem, WINDOW_TEXT_SIZE);
+					buf[sizeof(buf) - 1] = '\0';  // Just to be sure.
+					BREAK_IF_MATCH_FOUND_OR_IF_NOT_WAITING
+				}
+				else // it failed or timed out; buf stays as it was: initialized to empty string.
+					break;
+
+				SB_SLEEP_IF_NEEDED
+			}
+			UnmapViewOfFile(pMem);
+			CloseHandle(hMapping);
+		}
+	}
+
+	// Consider this to be always successful, even if aControlWindow == NULL
 	// or the status bar didn't have the part number provided, unless the below fails.
 	if (aOutputVar)
 		// Note we use a temp buf rather than writing directly to the var contents above, because
 		// we don't know how long the text will be until after the above operation finishes.
-		return aOutputVar->Assign(buf, space_needed - 1);
+		return aOutputVar->Assign(buf);
 	// else caller didn't want the text.
 	return OK;
 }
@@ -1520,7 +1521,7 @@ void WindowSearch::UpdateCandidateAttributes()
 
 
 
-HWND WindowSearch::IsMatch(bool aInverted)
+HWND WindowSearch::IsMatch(bool aInvert)
 // This method returns the HWND of mCandidateParent if it matches the previously specified criteria
 // (title/pid/id/class/group) or NULL otherwise.  Upon NULL, it doesn't reset mFoundParent or mFoundCount
 // in case previous match(es) were found when mFindLastMatch is in effect.
@@ -1610,7 +1611,7 @@ HWND WindowSearch::IsMatch(bool aInverted)
 		// on below in case there is some WinText or ExcludeText to search.
 	}
 
-	if (!aInverted) // If caller specified aInverted==true, it will do the below instead of us.
+	if (!aInvert) // If caller specified aInvert==true, it will do the below instead of us.
 		for (int i = 0; i < mAlreadyVisitedCount; ++i)
 			if (mCandidateParent == mAlreadyVisited[i])
 				return NULL;
@@ -1632,12 +1633,12 @@ HWND WindowSearch::IsMatch(bool aInverted)
 	// Since the above didn't return or didn't need to be checked, it's a complete match.
 	// If mFindLastMatch is true, this new value for mFoundParent will stay in effect until
 	// overridden by another matching window later:
-	if (!aInverted)
+	if (!aInvert)
 	{
 		mFoundParent = mCandidateParent;
 		++mFoundCount; // This must be done prior to the mArrayStart section below.
 	}
-	//else aInverted==true, which means caller doesn't want the above set.
+	//else aInvert==true, which means caller doesn't want the above set.
 
 	if (mArrayStart)
 	{
@@ -1649,13 +1650,13 @@ HWND WindowSearch::IsMatch(bool aInverted)
 		// to start the search.  Use the base array name rather than the preceding element because,
 		// for example, Array19 is alphabetially less than Array2, so we can't rely on the
 		// numerical ordering:
-		Var *array_item = g_script.FindOrAddVar(var_name, VAR_NAME_LENGTH_DEFAULT, mArrayStart);
+		Var *array_item = g_script.FindOrAddVar(var_name, 0, mArrayStart->IsLocal() ? ALWAYS_USE_LOCAL : ALWAYS_USE_GLOBAL);
 		if (array_item)
 			array_item->AssignHWND(mFoundParent);
 		//else no error reporting currently, since should be very rare.
 	}
 
-	// Fix for v1.0.30.01: Don't return mFoundParent because its NULL when aInverted is true.
+	// Fix for v1.0.30.01: Don't return mFoundParent because its NULL when aInvert is true.
 	// At this stage, the candidate is a known match, so return it:
 	return mCandidateParent;
 }
