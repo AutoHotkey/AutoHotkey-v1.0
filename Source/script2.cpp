@@ -8804,9 +8804,9 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 			// the semicolon should be removed for the pattern string itself but not from
 			// the displayed version of the pattern:
 			strlcpy(pattern, ++pattern_start, sizeof(pattern));
-			char *pattern_end = strrchr(pattern, ')'); // strrchr() in case there are other literal parens.
+			char *pattern_end = strrchr(pattern, ')'); // strrchr() in case there are other literal parentheses.
 			if (pattern_end)
-				*pattern_end = '\0';  // If parens are empty, this will set pattern to be the empty string.
+				*pattern_end = '\0';  // If parentheses are empty, this will set pattern to be the empty string.
 			else // no closing paren, so set to empty string as an indicator:
 				*pattern = '\0';
 

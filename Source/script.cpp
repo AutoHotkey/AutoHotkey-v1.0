@@ -2261,8 +2261,10 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 		{
 		case '=':  // i.e. var=value  (with no spaces around operator)
 		case ':':  // i.e. var:=value (with no spaces around operator)
-		case '(':  // i.e. "if(expr)" (with no space between the if and the open-paren).
 			is_var_and_operator = true;
+			break;
+		case '(':  // i.e. "if(expr)" (with no space between the if and the open-paren).
+			is_var_and_operator = !stricmp(action_name, "IF"); // Fixed for v1.0.31.01.
 			break;
 		case '*':
 		case '/':
@@ -2385,7 +2387,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 						*(operation + 1) = ' '; // Remove it from so that it won't be considered by later parsing.
 					}
 					else
-						// To minimize the times where expressions must have an outer set of parens,
+						// To minimize the times where expressions must have an outer set of parentheses,
 						// assume all unknown operators are expressions, e.g. "if !var"
 						action_type = ACT_IFEXPR;
 					break;
@@ -2456,7 +2458,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 					}
 					break;
 
-				default: // To minimize the times where expressions must have an outer set of parens, assume all unknown operators are expressions.
+				default: // To minimize the times where expressions must have an outer set of parentheses, assume all unknown operators are expressions.
 					action_type = ACT_IFEXPR;
 				} // switch()
 
@@ -2780,7 +2782,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 				in_quotes = !in_quotes;
 				break;
 			case '(':
-				if (!in_quotes) // Literal parens inside a quoted string should not be counted for this purpose.
+				if (!in_quotes) // Literal parentheses inside a quoted string should not be counted for this purpose.
 					++open_parens;
 				break;
 			case ')':
@@ -2791,7 +2793,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 
 			if (action_args[mark] == g_delimiter && !literal_map[mark])  // A non-literal delimiter (unless its within double-quotes of a mandatory-numeric arg) is a match.
 			{
-				// If we're inside a pair of quotes or parens and this arg is known to be an expression, this
+				// If we're inside a pair of quotes or parentheses and this arg is known to be an expression, this
 				// delimiter is part this arg and thus not to be used as a delimiter between command args:
 				if (in_quotes || open_parens > 0)
 				{
@@ -2822,7 +2824,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 						default:
 							// For all other sub-commands, Arg #3 and #4 are expression-capable.  It doesn't
 							// seem necessary to call LegacyArgIsExpression() because the mere fact that
-							// we're inside a pair of quotes or parens seems enough to indicate that this
+							// we're inside a pair of quotes or parentheses seems enough to indicate that this
 							// really is an expression.
 							continue;
 						}
@@ -2837,7 +2839,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 						if (*np) // Match found, so this is a purely numeric arg.
 							continue; // This delimiter is disqualified, so look for the next one.
 					}
-				} // if in quotes or parens
+				} // if in quotes or parentheses
 				// Since above didn't "continue", this is a real delimiter.
 				action_args[mark] = '\0';  // Terminate the previous arg.
 				// Trim any whitespace from the previous arg.  This operation
@@ -3353,7 +3355,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 						in_quotes = !in_quotes;
 						break;
 					case '(':
-						if (!in_quotes) // Literal parens inside a quoted string should not be counted for this purpose.
+						if (!in_quotes) // Literal parentheses inside a quoted string should not be counted for this purpose.
 							++open_parens;
 						break;
 					case ')':
@@ -3382,7 +3384,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				// of variables.
 				for (op_begin = this_new_arg.text; *op_begin; op_begin = op_end)
 				{
-					for (; *op_begin && strchr(EXP_OPERAND_TERMINATORS, *op_begin); ++op_begin); // Skip over whitespace, operators, and parens.
+					for (; *op_begin && strchr(EXP_OPERAND_TERMINATORS, *op_begin); ++op_begin); // Skip over whitespace, operators, and parentheses.
 					if (!*op_begin) // The above loop reached the end of the string: No operands remaining.
 						break;
 
@@ -5904,14 +5906,14 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 						return line->PreparseError(ERR_BLANK_PARAM, deref->marker);
 					// Although problems such as blank/empty parameters and missing close-paren were already
 					// checked by DefineFunc(), that was done only for the function's formal definition, not
-					// the calls to it.  And although parens were balanced in all expressions at an earlier
+					// the calls to it.  And although parentheses were balanced in all expressions at an earlier
 					// stage, it's done again here in case function calls are ever allowed to be occur in
 					// a non-expression.
 					if (!*param_start)
 						return line->PreparseError(ERR_MISSING_CLOSE_PAREN, deref->marker);
 
-					// Find the end of this function-param by taking into account nested parens, omitting
-					// from consideration any parens inside of quoted/literal strings.  When this loop is done,
+					// Find the end of this function-param by taking into account nested parentheses, omitting
+					// from consideration any parentheses inside of quoted/literal strings.  When this loop is done,
 					// param_end this param's final comma or this function-call's close-paren when this param
 					// is the last one.
 					for (in_quotes = false, open_parens = 0, param_end = param_start;; ++param_end)
@@ -5924,7 +5926,7 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 						{
 							if (!(in_quotes || open_parens)) // This comma belongs to our function, so it marks the end of this param.
 								break;
-							//else it's not a real comma since it's inside the parens of a subexpression or
+							//else it's not a real comma since it's inside the parentheses of a subexpression or
 							// sub-function, or inside a quoted/literal string.  Ignore it.
 						}
 						else if (c == ')')
@@ -5940,7 +5942,7 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 						}
 						else if (c == '(')
 						{
-							if (!in_quotes) // Literal parens inside a quoted string should not be counted for this purpose.
+							if (!in_quotes) // Literal parentheses inside a quoted string should not be counted for this purpose.
 								++open_parens;
 						}
 						else if (c == '"')
@@ -5976,7 +5978,7 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 							if (strchr(EXP_ALL_SYMBOLS, *cp))
 								return line->PreparseError(ERR_BYREF, param_start);   // param_start seems more informative than func.mParam[deref->param_count]->mName
 						// Below relies on the above having been done because the above should prevent
-						// any is_function derefs from being possible since their parens would have been caught
+						// any is_function derefs from being possible since their parentheses would have been caught
 						// as an error:
 						// For each deref after the function name itself, ensure that there is at least
 						// one deref in between this param's param_start and param_end.  This finds many
@@ -7047,7 +7049,9 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 				// Any time this happens at runtime it means a function has been defined inside the
 				// auto-execute section, a block, or other place the flow of execution can reach
 				// on its own.  This is not considered a call to the function.  Instead, the entire
-				// body is just skipped over using this high performance method:
+				// body is just skipped over using this high performance method.  However, the function's
+				// opening brace will show up in ListLines, but that seems preferable to the performance
+				// overhead of explicitly removing it here.
 				line = line->mRelatedLine; // Resume execution at the line following this functions end-block.
 				break;
 			}
@@ -10544,7 +10548,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 	static int sPrecedence[SYM_COUNT] =
 	{
 		0, 0, 0, 0, 0, 0 // SYM_STRING, SYM_INTEGER, SYM_FLOAT, SYM_VAR, SYM_OPERAND, SYM_BEGIN (SYM_BEGIN must be lowest precedence).
-		, 1, 1, 1        // SYM_CPAREN, SYM_OPAREN, SYM_COMMA (to simplify the code, parens must be lower than all operators in precedence).
+		, 1, 1, 1        // SYM_CPAREN, SYM_OPAREN, SYM_COMMA (to simplify the code, parentheses must be lower than all operators in precedence).
 		, 2              // SYM_OR
 		, 3              // SYM_AND
 		, 4              // SYM_LOWNOT (the low precedence version of logical-not)
@@ -11156,7 +11160,7 @@ double_deref:
 			if (stack_symbol == SYM_OPAREN) // The first open-paren on the stack must be the one that goes with this close-paren.
 			{
 				--stack_count; // Remove this open-paren from the stack, since it is now complete.
-				++i;           // Since this pair of parens is done, move on to the next token in the infix expression.
+				++i;           // Since this pair of parentheses is done, move on to the next token in the infix expression.
 				// There should be no danger of stack underflow in the following because SYM_BEGIN always
 				// exists at the bottom of the stack:
 				if (stack[stack_count - 1]->symbol == SYM_FUNC) // Within the postfix list, a function-call should always immediately follow its params.
@@ -11176,13 +11180,25 @@ double_deref:
 			}
 			break;
 
-		// Open-parens always go on the stack to await their matching close-parens:
+		// Open-parentheses always go on the stack to await their matching close-parentheses:
 		case SYM_OPAREN:
 			STACK_PUSH(infix[i++]);
 			break;
 
 		case SYM_COMMA:
-			++i; // Omit commas from further consideration, since they only served as a "do not concatenate" indicator earlier.
+			// Fix for v1.0.31.01: Commas must force everything off the stack until this comma's own function
+			// call is encountered on the stack.  Otherwise, an expression such as fn(a+b, c) would be incorrectly
+			// converted to postfix "a b c + fn()" (i.e. the plus would operate upon b & c rather than a & b).
+			// First function-call on the stack must own this comma if expression is syntactically correct.
+			// Each function-call is accompanied by its open-parenthesis on the stack:
+			if (stack_symbol != SYM_OPAREN || stack[stack_count - 2]->symbol != SYM_FUNC) // Relies on short-circuit boolean order.
+			{
+				postfix[postfix_count] = STACK_POP;
+				postfix[postfix_count++]->circuit_token = NULL; // Set default. It's only ever overridden after it's in the postfix array.
+				// And by not incrementing i, this comma/case will continue to be encountered until everything comes off the stack the needs to be.
+			}
+			else
+				++i; // Omit commas from further consideration, since they only served as a "do not concatenate" indicator earlier.
 			break;
 
 		default: // Symbol is an operator, so act according to its precedence.
@@ -11521,7 +11537,7 @@ double_deref:
 				result_size = strlen(result) + 1;
 				if (result_size <= (int)(aDerefBufSize - (target - aDerefBuf))) // There is room at the end of our deref buf, so use it.
 				{
-					memcpy(target, result, result_size); // Maybe faster than strcpy().
+					memcpy(target, result, result_size); // Benches slightly faster than strcpy().
 					result = target; // Point it to its new, more persistent location.
 					target += result_size; // Point it to the location where the next string would be written.
 				}
@@ -11543,7 +11559,7 @@ double_deref:
 						result_to_return = NULL; // Use NULL to inform our caller that this entire thread is to be terminated.
 						goto end;
 					}
-					memcpy(mem[mem_count], result, result_size); // Maybe faster than strcpy().
+					memcpy(mem[mem_count], result, result_size); // Benches slightly faster than strcpy().
 					result = mem[mem_count++]; // Must be done last.  Point it to its new, more persistent location.
 				}
 			}
@@ -11786,6 +11802,7 @@ double_deref:
 						this_token.marker = target;
 						if (left_length)
 						{
+							// memcpy() benches slightly faster than strcpy().
 							memcpy(target, left_string, left_length);  // Not +1 because don't need the zero terminator.
 							target += left_length;
 						}
@@ -11811,6 +11828,7 @@ double_deref:
 							goto end;
 						}
 						this_token.marker = mem[mem_count++];
+						// memcpy() benches slightly faster than strcpy().
 						if (left_length)
 							memcpy(this_token.marker, left_string, left_length);  // Not +1 because don't need the zero terminator.
 						memcpy(this_token.marker + left_length, right_string, right_length + 1); // +1 to include its zero terminator.
@@ -13573,9 +13591,9 @@ char *Line::LogToText(char *aBuf, int aBufSize) // aBufSize should be an int to 
 	char *aBuf_orig = aBuf;
 
 	// Store the position of where each retry done by the outer loop will start writing:
-	char *aBuf_log_start = aBuf + snprintf(aBuf, aBufSize, "Script lines most recently executed (oldest first).  Press [F5] to refresh.\r\n"
-		"The seconds elapsed between a line and the one after it is in parens to the right (if not 0).\r\n"
-		"The bottommost line's elapsed time is the number of seconds since it executed.\r\n\r\n");
+	char *aBuf_log_start = aBuf + snprintf(aBuf, aBufSize, "Script lines most recently executed (oldest first)."
+		"  Press [F5] to refresh.  The seconds elapsed between a line and the one after it is in parentheses to"
+		" the right (if not 0).  The bottommost line's elapsed time is the number of seconds since it executed.\r\n\r\n");
 
 	int i, lines_to_show, line_index, line_index2, space_remaining; // space_remaining must be an int to detect negatives.
 	DWORD elapsed;
@@ -13843,7 +13861,6 @@ ResultType Line::ChangePauseState(ToggleValueType aChangeTo)
 
 
 ResultType Line::ScriptBlockInput(bool aEnable)
-// Adapted from the AutoIt3 source.
 // Always returns OK for caller convenience.
 {
 	// Must be running Win98/2000+ for this function to be successful.
