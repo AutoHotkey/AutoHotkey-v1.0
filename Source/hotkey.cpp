@@ -505,18 +505,9 @@ ResultType Hotkey::PerformID(HotkeyIDType aHotkeyID)
 		// UPDATE: That happens if you don't cast to float, or don't have a float var
 		// involved somewhere.  Avoiding floats altogether may reduce EXE size
 		// and maybe other benefits (due to it not being "loaded")?
-		snprintf(error_text, sizeof(error_text), "More than %u hotkeys have been received in the last %ums."
-			"This could indicate a runaway condition (infinite loop) due to conflicting keys "
-			"within the script (usually due to the Send command).  It might be possible to "
-			"fix this problem simply by including the $ prefix in the hotkey definition "
-			"(e.g. $!d::), which would install the keyboard hook to handle this hotkey.\n\n"
-			"In addition, this warning can be reduced or eliminated by adding the following lines "
-			"anywhere in the script:\n"
-			"#HotkeyInterval %d  ; Increase this value slightly to reduce the problem.\n"
-			"#MaxHotkeysPerInterval %d  ; Decreasing this value (milliseconds) should also help.\n\n"
-			"Do you want to continue (choose NO to exit the program)?"  // In case its stuck in a loop.
-			, g_MaxHotkeysPerInterval, g_HotkeyThrottleInterval
-			, g_MaxHotkeysPerInterval, g_HotkeyThrottleInterval);
+		snprintf(error_text, sizeof(error_text), "%u hotkeys have been received in the last %ums.\n\n"
+			"Do you want to continue?\n(see #MaxHotkeysPerInterval in the help file for details)"  // In case its stuck in a loop.
+			, throttled_key_count, time_until_now);
 
 		// Turn off any RunAgain flags that may be on, which in essense is the same as de-buffering
 		// any pending hotkey keystrokes that haven't yet been fired:

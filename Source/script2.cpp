@@ -1680,7 +1680,6 @@ ResultType Line::WinMove(char *aTitle, char *aText, char *aX, char *aY
 	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	if (!target_window)
 		return OK;
-	// Adapted from the AutoIt3 source:
 	RECT rect;
 	if (!GetWindowRect(target_window, &rect))
 		return OK;  // Can't set errorlevel, see above.
@@ -1691,7 +1690,7 @@ ResultType Line::WinMove(char *aTitle, char *aText, char *aX, char *aY
 		, *aHeight && stricmp(aHeight, "default") ? ATOI(aHeight) : rect.bottom - rect.top
 		, TRUE);  // Do repaint.
 	DoWinDelay;
-	return OK;  // Always successful, like AutoIt.
+	return OK;
 }
 
 

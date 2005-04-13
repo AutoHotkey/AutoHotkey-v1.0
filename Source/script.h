@@ -2088,7 +2088,7 @@ public:
 		// style windows such as this one, and the fact that it also allows the window's caption to be
 		// removed, which implies that POPUP windows are more flexible than OVERLAPPED windows.
 		, mStyle(WS_POPUP|WS_CLIPSIBLINGS|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX) // WS_CLIPCHILDREN (doesn't seem helpful currently)
-		, mExStyle(0)
+		, mExStyle(0) // This and the above should not be used once the window has been created since they might get out of date.
 		, mInRadioGroup(false), mUseTheme(true), mOwner(NULL)
 		, mCurrentFontIndex(FindOrCreateFont()) // Omit params to tell it to find or create DEFAULT_GUI_FONT.
 		, mTabControlCount(0), mCurrentTabControlIndex(MAX_TAB_CONTROLS), mCurrentTabIndex(0)

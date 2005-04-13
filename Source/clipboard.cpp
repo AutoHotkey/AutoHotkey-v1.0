@@ -72,10 +72,28 @@ size_t Clipboard::Get(char *aBuf)
 		}
 		if (   !(mClipMemNow = GetClipboardData(clipboard_contains_files ? CF_HDROP : CF_TEXT))   )
 		{
-			// Realistically, the above never fails?
+			// Fix for v1.0.31.02: GetClipboardData() apparently fails when there are files on the clipboard
+			// but either: 1) zero of them; 2) the CF_HDROP on the clipboard is somehow misformatted.
+			// If you select the parent ".." folder in WinRar then use the following hotkey, the script
+			// would previously yield a runtime error:
+			//#q::
+			//Send, ^c
+			//ClipWait, 0.5, 1
+			//msgbox %Clipboard%
+			//Return
+			if (clipboard_contains_files) // Tolerate failure in this case, see above.
+			{
+				Close();
+				if (aBuf)
+					*aBuf = '\0';
+				return 0;
+			}
 			Close("GetClipboardData"); // Short error message since so rare.
 			return CLIPBOARD_FAILURE;
 		}
+		// Although GlobalSize(mClipMemNow) can yield zero in some cases -- in which case GlobalLock() should
+		// not be attempted -- it probably can't yield zero for CF_HDROP and CF_TEXT because such a thing has
+		// never been reported by anyone.  Therefore, GlobalSize() is currently not called.
 		if (   !(mClipMemNowLocked = (char *)GlobalLock(mClipMemNow))   )
 		{
 			Close("GlobalLock");  // Short error message since so rare.

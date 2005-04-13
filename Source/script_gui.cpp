@@ -2379,6 +2379,14 @@ ResultType GuiType::ParseOptions(char *aOptions, bool &aSetLastFoundWindow)
 // Caller must ensure that aOptions is a modifiable string, since this method temporarily alters it.
 {
 	int owner_window_index;
+
+	if (mHwnd)
+	{
+		// Since window already exists, its mStyle and mExStyle members might be out-of-date due to
+		// "WinSet Transparent", etc.  So update them:
+		mStyle = GetWindowLong(mHwnd, GWL_STYLE);
+		mExStyle = GetWindowLong(mHwnd, GWL_EXSTYLE);
+	}
 	DWORD style_orig = mStyle;
 	DWORD exstyle_orig = mExStyle;
 

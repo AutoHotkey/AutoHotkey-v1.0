@@ -841,9 +841,10 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				else if (msg.wParam == AHK_GUI_DROPFILES)
 				{
 					g.GuiControlIndex = (GuiIndexType)msg.lParam; // Index is in lParam vs. wParam in this case.
-					// Visually indicate that drops aren't allowed while and existing drop is still being processed:
-					pgui->mExStyle &= ~WS_EX_ACCEPTFILES; // Update the member in case it is referenced during the drop.
-					SetWindowLong(pgui->mHwnd, GWL_EXSTYLE, pgui->mExStyle);
+					// Visually indicate that drops aren't allowed while and existing drop is still being processed.
+					// Fix for v1.0.31.02: The window's current ExStyle is fetched every time in case a non-GUI
+					// command altered it (such as making it transparent):
+					SetWindowLong(pgui->mHwnd, GWL_EXSTYLE, GetWindowLong(pgui->mHwnd, GWL_EXSTYLE) & ~WS_EX_ACCEPTFILES);
 				}
 				else // It's a control's action, so set its attribute.
 				{
@@ -878,8 +879,9 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 							DragFinish(pgui->mHdrop); // Since the DropFiles quasi-thread is finished, free the HDROP resources.
 							pgui->mHdrop = NULL; // Indicate that this GUI window is ready for another drop.
 						}
-						pgui->mExStyle |= WS_EX_ACCEPTFILES;
-						SetWindowLong(pgui->mHwnd, GWL_EXSTYLE, pgui->mExStyle);
+						// Fix for v1.0.31.02: The window's current ExStyle is fetched every time in case a non-GUI
+						// command altered it (such as making it transparent):
+						SetWindowLong(pgui->mHwnd, GWL_EXSTYLE, GetWindowLong(pgui->mHwnd, GWL_EXSTYLE) | WS_EX_ACCEPTFILES);
 						break;
 					default: // It's a control's action, so set its attribute.
 						if (msg.wParam < pgui->mControlCount) // Recheck to ensure that control still exists (in case window was recreated as explained above).
