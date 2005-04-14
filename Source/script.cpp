@@ -1125,7 +1125,8 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 		// It seems best never to allow if(...) to be a function call, even if it's blank inside such as if().
 		// In addition, it seems best not to allow if(...) to ever be a function definition since such a function
 		// could never be called as ACT_FUNCTIONCALL since it would be seen as an IF-stmt instead.
-		if (*action_end == '(' && (action_end - buf != 2 || strnicmp(buf, "IF", 2)))
+		if (*action_end == '(' && (action_end - buf != 2 || strnicmp(buf, "IF", 2))
+			&& !strchr(action_end, ':')) // Omit labels and hotstrings from being considered functions (labels can contain parentheses).
 		{
 			// This appears to be either a function call or a function definition.
 			*action_end = '\0'; // Temporarily terminate.

@@ -4501,9 +4501,21 @@ ResultType Line::ImageSearch(int aLeft, int aTop, int aRight, int aBottom, char 
 			for (found = true, y = 0, j = 0, k = i; found && y < image_height && k < screen_pixel_count; ++y, k += screen_width)
 				for (x = 0, p = k; x < image_width && p < screen_pixel_count && found; ++x, ++j, ++p)
 					found = (screen_pixel[p] == image_pixel[j]);
+			// Fix for v1.0.31.03: The above formerly considered a partial match at the edges of the search
+			// area to be a complete match.  This is definitely undesirable, so the following check will
+			// exclude such matches.  In other words, if the loops above ran out of screen pixels prior to
+			// running out of image pixels, found==true indicates only a partial match.  In addition, if the
+			// following exact set of conditions is true, a "break" is done because no further matches are
+			// possible because the remaining part of the search region is smaller than the search-image itself:
+			if (found && (x < image_width || y < image_height))
+			{
+				found = false;
+				break;
+			}
+			// Otherwise:
 			if (found)
 				break;
-			//else keep trying.
+			//else keep trying via the outermost loop.
 		}
 	}
 
