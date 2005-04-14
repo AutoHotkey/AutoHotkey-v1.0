@@ -41,6 +41,22 @@ if (USE_FOREGROUND_WINDOW(title, text, exclude_title, exclude_text))\
 	SET_TARGET_TO_ALLOWABLE_FOREGROUND\
 }
 
+
+
+inline bool IsTextMatch(char *aHaystack, char *aNeedle)
+// Generic helper function used by WindowSearch and other things.
+// To help performance, it's the caller's responsibility to ensure that all params are not NULL.
+{
+	if (g.TitleMatchMode == FIND_ANYWHERE)
+		return !*aNeedle || strstr(aHaystack, aNeedle);
+	else if (g.TitleMatchMode == FIND_IN_LEADING_PART)
+		return !*aNeedle || !strncmp(aHaystack, aNeedle, strlen(aNeedle));
+	else // Exact match.
+		return !*aNeedle || !strcmp(aHaystack, aNeedle);
+}
+
+
+
 #define SEARCH_PHRASE_SIZE 1024
 // Info from AutoIt3 source: GetWindowText fails under 95 if >65535, WM_GETTEXT randomly fails if > 32767.
 // My: And since 32767 is what AutoIt3 passes to the API functions as the size (not the length, i.e.
@@ -49,37 +65,80 @@ if (USE_FOREGROUND_WINDOW(title, text, exclude_title, exclude_text))\
 // copy to the buffer, including the NULL character. If the text exceeds this limit, it is truncated."
 #define WINDOW_TEXT_SIZE 32767
 #define WINDOW_CLASS_SIZE 1024  // Haven't found anything that documents how long one can be, so use this.
-#define AHK_CLASS_FLAG "ahk_class"
-#define AHK_CLASS_FLAG_LENGTH 9  // The length of the above string.
-#define AHK_PID_FLAG "ahk_pid"
-#define AHK_PID_FLAG_LENGTH 7  // The length of the above string.
-#define AHK_ID_FLAG "ahk_id"
-#define AHK_ID_FLAG_LENGTH 6  // The length of the above string.
 
-struct WindowInfoPackage // A simple struct to help with EnumWindows().
+enum WindowCriteria {CRITERION_INVALID, CRITERION_TITLE, CRITERION_ID, CRITERION_PID
+	, CRITERION_CLASS, CRITERION_GROUP};
+
+class WindowSearch
 {
-	char title[SEARCH_PHRASE_SIZE];
-	char text[SEARCH_PHRASE_SIZE];
-	char exclude_title[SEARCH_PHRASE_SIZE];
-	char exclude_text[SEARCH_PHRASE_SIZE];
-	// Whether to keep searching even after a match is found, so that last one is found.
-	bool find_last_match;
-	int match_count;
-	HWND parent_hwnd, child_hwnd; // Returned to the caller, but the caller should initialize it to NULL beforehand.
-	HWND *already_visited; // Array of HWNDs to exclude from consideration.
-	int already_visited_count;
-	WindowSpec *win_spec; // Linked list.
-	Var *array_start; // Used by WinGet() to fetch an array of matching HWNDs.
-	WindowInfoPackage::WindowInfoPackage()
-		: find_last_match(false) // default
-		, match_count(0)
-		, parent_hwnd(NULL), child_hwnd(NULL), already_visited(NULL), already_visited_count(0)
-		, win_spec(NULL), array_start(NULL)
+	// One of the reasons for having this class is to avoid fetching PID, Class, and Window Text
+	// when only the criteria have changed but not the candidate window.  This happens when called
+	// from the WinGroup class.  Another reason is that it's probably more understandable than
+	// the old way, while eliminating some redundant code as well.
+
+public:
+	WindowCriteria mCriterion; // Which primary criterion is currently in effect (ID, PID, Class, Title, etc.)
+
+	// Controlled and initialized by SetCriteria():
+	char mCriterionBuf[SEARCH_PHRASE_SIZE];  // For storing the title or the extracted "ahk_class" class name.
+	size_t mCriterionBufLength;              // Length of the above.
+	char *mCriterionExcludeTitle;            // ExcludeTitle.
+	size_t mCriterionExcludeTitleLength;     // Length of the above.
+	char *mCriterionText;                    // WinText.
+	char *mCriterionExcludeText;             // ExcludeText.
+	HWND mCriterionHwnd;                     // For "ahk_id".
+	DWORD mCriterionPID;                     // For "ahk_pid".
+	WinGroup *mCriterionGroup;               // For "ahk_group".
+
+	bool mFindLastMatch; // Whether to keep searching even after a match is found, so that last one is found.
+	int mFoundCount;     // Accumulates how many matches have been found (either 0 or 1 unless mFindLastMatch==true).
+	HWND mFoundParent;   // Must be separate from mCandidateParent because some callers don't have access to IsMatch()'s return value.
+	HWND mFoundChild;    // Needed by EnumChildFind() to store its result, and other things.
+
+	HWND *mAlreadyVisited;      // Array of HWNDs to exclude from consideration.
+	int mAlreadyVisitedCount;   // Count of items in the above.
+	WindowSpec *mFirstWinSpec;  // Linked list used by the WinGroup commands.
+	ActionTypeType mActionType; // Used only by WinGroup::PerformShowWindow().
+	int mTimeToWaitForClose;    // Used only by WinGroup::PerformShowWindow().
+	Var *mArrayStart;           // Used by WinGetList() to fetch an array of matching HWNDs.
+
+	// Controlled by the SetCandidate() method:
+	HWND mCandidateParent;
+	DWORD mCandidatePID;
+	char mCandidateTitle[WINDOW_TEXT_SIZE];  // For storing title or class name of the given mCandidateParent.
+	char mCandidateClass[WINDOW_CLASS_SIZE]; // Must not share mem with mCandidateTitle because even if ahk_class is in effect, ExcludeTitle can also be in effect.
+
+	void SetCandidate(HWND aWnd)
 	{
-		// Can't use initializer list for these:
-		*title = *text = *exclude_title = *exclude_text = '\0';
+		// For performance reasons, update the attributes only if the candidate window changed:
+		if (mCandidateParent != aWnd)
+		{
+			mCandidateParent = aWnd;
+			UpdateCandidateAttributes(); // In case mCandidateParent isn't NULL, update the PID/Class/etc. based on what was set above.
+		}
+	}
+
+	ResultType SetCriteria(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
+	void UpdateCandidateAttributes();
+	HWND IsMatch(bool aInverted = false);
+
+	WindowSearch() // Constructor.
+		// For performance and code size, only the most essential members are initialized.
+		// The others do not require it or are intialized by SetCriteria() or SetCandidate().
+		: mCriterion(CRITERION_INVALID), mCriterionExcludeTitle("") // ExcludeTitle is referenced often, so should be initialized.
+		, mFoundCount(0), mFoundParent(NULL) // Must be initialized here since none of the member functions is allowed to do it.
+		, mFoundChild(NULL) // ControlExist() relies upon this.
+		, mCandidateParent(NULL)
+		// The following must be initialized because it's the object user's responsibility to override
+		// them in those relatively rare cases when they need to be.  WinGroup::ActUponAll() and
+		// WinGroup::Deactivate() (and probably other callers) rely on these attributes being retained
+		// after they were overridden even upon multiple subsequent calls to SetCriteria():
+		, mFindLastMatch(false), mAlreadyVisited(NULL), mAlreadyVisitedCount(0), mFirstWinSpec(NULL), mArrayStart(NULL)
+	{
 	}
 };
+
+
 
 struct control_list_type
 {
@@ -141,7 +200,7 @@ struct point_and_hwnd_type
 };
 
 
-HWND WinActivate(char *aTitle, char *aText = "", char *aExcludeTitle = "", char *aExcludeText = ""
+HWND WinActivate(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
 	, bool aFindLastMatch = false
 	, HWND aAlreadyVisited[] = NULL, int aAlreadyVisitedCount = 0);
 HWND SetForegroundWindowEx(HWND aWnd);
@@ -149,13 +208,13 @@ HWND SetForegroundWindowEx(HWND aWnd);
 // Defaulting to a non-zero wait-time solves a lot of script problems that would otherwise
 // require the user to specify the last param (or use WinWaitClose):
 #define DEFAULT_WINCLOSE_WAIT 20
-HWND WinClose(char *aTitle = "", char *aText = "", int aTimeToWaitForClose = DEFAULT_WINCLOSE_WAIT
+HWND WinClose(char *aTitle, char *aText, int aTimeToWaitForClose = DEFAULT_WINCLOSE_WAIT
 	, char *aExcludeTitle = "", char *aExcludeText = "", bool aKillIfHung = false);
+HWND WinClose(HWND aWnd, int aTimeToWaitForClose = DEFAULT_WINCLOSE_WAIT, bool aKillIfHung = false);
 
-HWND WinActive(char *aTitle, char *aText = "", char *aExcludeTitle = "", char *aExcludeText = ""
-	, bool aUpdateLastUsed = false);
+HWND WinActive(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText, bool aUpdateLastUsed = false);
 
-HWND WinExist(char *aTitle, char *aText = "", char *aExcludeTitle = "", char *aExcludeText = ""
+HWND WinExist(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
 	, bool aFindLastMatch = false, bool aUpdateLastUsed = false
 	, HWND aAlreadyVisited[] = NULL, int aAlreadyVisitedCount = 0, bool aReturnTheCount = false);
 
@@ -225,87 +284,6 @@ inline int GetWindowTextByTitleMatchMode(HWND aWnd, char *aBuf = NULL, int aBufS
 		// We're using the slower method that is able to get text from more types of
 		// controls (e.g. large edit controls).
 		return GetWindowTextTimeout(aWnd, aBuf, aBufSize);
-}
-
-
-
-inline HWND HasMatchingChild(HWND aWnd, char *aText, char *aExcludeText)
-// Caller must have verified that all params are not NULL.
-{
-	if (!*aText && !*aExcludeText)
-		// This condition is defined as always being a match, so return the parent window
-		// itself to indicate success:
-		return aWnd;
-	WindowInfoPackage wip;
-	strlcpy(wip.text, aText, sizeof(wip.text));
-	strlcpy(wip.exclude_text, aExcludeText, sizeof(wip.exclude_text));
-	EnumChildWindows(aWnd, EnumChildFind, (LPARAM)&wip);
-	return wip.child_hwnd; // Returns non-NULL on success.
-}
-
-inline bool IsTextMatch(char *aHaystack, char *aNeedle, TitleMatchModes aTitleMatchMode = g.TitleMatchMode)
-// To help performance, it's the caller's responsibility to ensure that all params are not NULL.
-// Use the AutoIt2 convention (same in AutoIt3?) of making searches for window titles
-// and text case sensitive: "N.B. Windows titles and text are CASE SENSITIVE!"
-{
-	if (aTitleMatchMode == FIND_ANYWHERE)
-		return !*aNeedle || strstr(aHaystack, aNeedle);
-	else if (aTitleMatchMode == FIND_IN_LEADING_PART)
-		return !*aNeedle || !strncmp(aHaystack, aNeedle, strlen(aNeedle));
-	else // Exact match.
-		return !*aNeedle || !strcmp(aHaystack, aNeedle);
-}
-
-inline bool IsTitleMatch(HWND aWnd, char *aHaystack, char *aNeedle, char *aExcludeTitle)
-// To help performance, it's the caller's responsibility to ensure that all params are not NULL.
-// Use the AutoIt2 convention of making searches for window titles and text case sensitive.
-{
-	bool is_pid;
-	if (strnicmp(aNeedle, "ahk_", 4) // i.e. it can't be AHK_CLASS or AHK_PID (this first check helps performance).
-		|| (is_pid = strnicmp(aNeedle, AHK_CLASS_FLAG, AHK_CLASS_FLAG_LENGTH)) // ... or: it's not AHK_CLASS (this check must come before the next).
-			&& strnicmp(aNeedle, AHK_PID_FLAG, AHK_PID_FLAG_LENGTH)) // ... and it's not AHK_PID.
-		// aNeedle doesn't specify a class name or PID (is_pid might be uninitialized at this stage).
-	{
-		if (g.TitleMatchMode == FIND_ANYWHERE)
-			return (!*aNeedle || strstr(aHaystack, aNeedle)) // Either one of these makes half a match.
-				&& (!*aExcludeTitle || !strstr(aHaystack, aExcludeTitle));  // And this is the other half.
-		else if (g.TitleMatchMode == FIND_IN_LEADING_PART)
-			return (!*aNeedle || !strncmp(aHaystack, aNeedle, strlen(aNeedle)))
-				&& (!*aExcludeTitle || strncmp(aHaystack, aExcludeTitle, strlen(aExcludeTitle)));
-		else // Exact match.
-			return (!*aNeedle || !strcmp(aHaystack, aNeedle))
-				&& (!*aExcludeTitle || strcmp(aHaystack, aExcludeTitle));
-	}
-	// Otherwise, aNeedle specifies a class name or PID rather than a window title.
-	aNeedle = omit_leading_whitespace(aNeedle + (is_pid ? AHK_PID_FLAG_LENGTH : AHK_CLASS_FLAG_LENGTH));
-	if (is_pid)
-	{
-		DWORD pid;
-		GetWindowThreadProcessId(aWnd, &pid);
-		if (pid != ATOU(aNeedle))
-			return false;
-	}
-	else
-	{
-		char class_name[WINDOW_CLASS_SIZE];
-		if (!GetClassName(aWnd, class_name, WINDOW_CLASS_SIZE - 1)) // Assume its not a match.
-			return false;
-		// To be a match, the class names must match exactly (case sensitive).  This seems best to
-		// avoid problems with ambiguity, since some apps might use very short class names that
-		// overlap with more "official" classnames, or vice versa.  User can always define a Window
-		// Group to operate upon more than one class simultaneously.
-		if (strcmp(class_name, aNeedle))
-			return false;
-	}
-	// The other requirement for a match is that ExcludeTitle not be found in aHaystack.
-	if (!*aExcludeTitle)
-		return true;
-	if (g.TitleMatchMode == FIND_ANYWHERE)
-		return !strstr(aHaystack, aExcludeTitle);
-	else if (g.TitleMatchMode == FIND_IN_LEADING_PART)
-		return strncmp(aHaystack, aExcludeTitle, strlen(aExcludeTitle));
-	else // Exact match.
-		return strcmp(aHaystack, aExcludeTitle);
 }
 
 

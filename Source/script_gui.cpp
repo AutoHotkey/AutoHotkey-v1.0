@@ -2074,6 +2074,8 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		if (control.hwnd = CreateWindowEx(exstyle, "Listbox", "", style
 			, opt.x, opt.y, opt.width, opt.height, mHwnd, control_id, g_hInstance, NULL))
 		{
+			if (opt.tabstop_count)
+				SendMessage(control.hwnd, LB_SETTABSTOPS, opt.tabstop_count, (LPARAM)opt.tabstop);
 			// For now, it seems best to always override a height that would cause zero items to be
 			// displayed.  This is because there is a very thin control visible even if the height
 			// is explicitly set to zero, which seems pointless (there are other ways to draw thin
@@ -3345,9 +3347,11 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 				aControl.jump_to_label = candidate_label; // Will be NULL if something like gCancel (implicit was used).
 				break;
 
-			case 'T': // Tabstop (the kind that exists inside a multi-line edit control).
-				if (aOpt.tabstop_count < MAX_EDIT_TABSTOPS)
+			case 'T': // Tabstop (the kind that exists inside a multi-line edit control or ListBox).
+				if (aOpt.tabstop_count < GUI_MAX_TABSTOPS)
 					aOpt.tabstop[aOpt.tabstop_count++] = ATOU(next_option);
+				if (aControl.type == GUI_CONTROL_LISTBOX)
+					aOpt.style_add |= LBS_USETABSTOPS; // Required to allow the ListBox to respond to LB_SETTABSTOPS.
 				//else ignore ones beyond the maximum.
 				break;
 

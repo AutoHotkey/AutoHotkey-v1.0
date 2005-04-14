@@ -27,8 +27,7 @@ ResultType Var::Assign(int aValueToAssign) // For some reason, these functions a
 {
 	char value_string[256];
 	// ITOA() seems to perform quite a bit better than sprintf() in this case:
-	ITOA(aValueToAssign, value_string);
-	return Assign(value_string);
+	return Assign(ITOA(aValueToAssign, value_string));
 	//snprintf(value_string, sizeof(value_string), "%d", aValueToAssign);
 	//return Assign(value_string);
 }
@@ -39,8 +38,7 @@ ResultType Var::Assign(DWORD aValueToAssign)
 // Returns OK or FAIL.
 {
 	char value_string[256];
-	UTOA(aValueToAssign, value_string)
-	return Assign(value_string);
+	return Assign(UTOA(aValueToAssign, value_string));
 }
 
 
@@ -49,8 +47,7 @@ ResultType Var::Assign(__int64 aValueToAssign)
 // Returns OK or FAIL.
 {
 	char value_string[256];
-	ITOA64(aValueToAssign, value_string);
-	return Assign(value_string);
+	return Assign(ITOA64(aValueToAssign, value_string));
 }
 
 

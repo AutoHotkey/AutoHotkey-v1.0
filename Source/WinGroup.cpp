@@ -26,18 +26,12 @@ HWND *WinGroup::sAlreadyVisited = NULL;
 int WinGroup::sAlreadyVisitedCount = 0;
 
 
-ResultType WinGroup::AddWindow(char *aTitle, char *aText, void *aJumpToLine
-	, char *aExcludeTitle, char *aExcludeText)
+ResultType WinGroup::AddWindow(char *aTitle, char *aText, void *aJumpToLine, char *aExcludeTitle, char *aExcludeText)
 // Caller should ensure that at least one param isn't NULL/blank.
 // GroupActivate will tell its caller to jump to aJumpToLine if a WindowSpec isn't found.
 {
-	if (!aTitle) aTitle = "";
-	if (!aText) aText = "";
-	if (!aExcludeTitle) aExcludeTitle = "";
-	if (!aExcludeText) aExcludeText = "";
-
 	// For now, it seems best not to add the specification if all the params are blank:
-	if (!*aTitle && !*aText && !*aExcludeTitle && !*aExcludeText)
+	if (!(*aTitle || *aText || *aExcludeTitle || *aExcludeText))
 		return OK;
 
 	// Though the documentation is clear on this, some users will still probably execute
@@ -78,16 +72,17 @@ ResultType WinGroup::AddWindow(char *aTitle, char *aText, void *aJumpToLine
 
 
 
-ResultType WinGroup::CloseAll()
+ResultType WinGroup::ActUponAll(ActionTypeType aActionType, int aTimeToWaitForClose)
 {
 	if (IsEmpty())
 		return OK;  // OK since this is the expected behavior in this case.
 	// Don't need to call Update() in this case.
-	// Close all windows that match any WindowSpec in the group:
-	WindowInfoPackage wip;
-	wip.win_spec = mFirstWindow;
-	EnumWindows(EnumParentCloseAny, (LPARAM)&wip);
-	if (wip.parent_hwnd) // It closed at least one window.
+	WindowSearch ws;
+	ws.mFirstWinSpec = mFirstWindow; // Act upon all windows that match any WindowSpec in the group.
+	ws.mActionType = aActionType;    // Set the type of action to be performed on each window.
+	ws.mTimeToWaitForClose = aTimeToWaitForClose;  // Only relevant for WinClose and WinKill.
+	EnumWindows(EnumParentActUponAll, (LPARAM)&ws);
+	if (ws.mFoundParent) // It acted upon least one window.
 		DoWinDelay;
 	return OK;
 }
@@ -102,7 +97,11 @@ ResultType WinGroup::CloseAndGoToNext(bool aStartWithMostRecent)
 		return OK;  // OK since this is the expected behavior in this case.
 	// Otherwise:
 	// Don't call Update(), let (De)Activate() do that.
-	WindowSpec *win_spec = IsMember(GetForegroundWindow());
+
+	HWND fore_win = GetForegroundWindow();
+	// Even if it's NULL, don't return since the legacy behavior is to continue on to the final part below.
+
+	WindowSpec *win_spec = IsMember(fore_win);
 	if (   (mIsModeActivate && win_spec) || (!mIsModeActivate && !win_spec)   )
 	{
 		// If the user is using a GroupActivate hotkey, we don't want to close
@@ -123,9 +122,13 @@ ResultType WinGroup::CloseAndGoToNext(bool aStartWithMostRecent)
 		// again before it has been destroyed, defeating the purpose of the
 		// "ActivateNext" part of this function's job:
 		// SendKeys("!{F4}");
-		WinClose("a", "", 500); // a=active; Use this rather than PostMessage because it will wait-for-close.
-		DoWinDelay;
+		if (fore_win)
+		{
+			WinClose(fore_win, 500);
+			DoWinDelay;
+		}
 	}
+	//else do the activation below anyway, even though no close was done.
 	return mIsModeActivate ? Activate(aStartWithMostRecent, win_spec) : Deactivate(aStartWithMostRecent);
 }
 
@@ -288,13 +291,15 @@ ResultType WinGroup::Deactivate(bool aStartWithMostRecent)
 		sAlreadyVisitedCount = 0;
 
 	// Activate the next unvisited non-member:
-	WindowInfoPackage wip;
-	wip.already_visited = sAlreadyVisited;
-	wip.already_visited_count = sAlreadyVisitedCount;
-	wip.win_spec = mFirstWindow;
-	wip.find_last_match = !aStartWithMostRecent || sAlreadyVisitedCount;
-	EnumWindows(EnumParentFindAnyExcept, (LPARAM)&wip);
-	if (wip.parent_hwnd)
+	WindowSearch ws;
+	ws.mFindLastMatch = !aStartWithMostRecent || sAlreadyVisitedCount;
+	ws.mAlreadyVisited = sAlreadyVisited;
+	ws.mAlreadyVisitedCount = sAlreadyVisitedCount;
+	ws.mFirstWinSpec = mFirstWindow;
+
+	EnumWindows(EnumParentFindAnyExcept, (LPARAM)&ws);
+
+	if (ws.mFoundParent)
 	{
 		// If the window we're about to activate owns other visble parent windows, it can
 		// never truly be activated because it must always be below them in the z-order.
@@ -303,17 +308,17 @@ ResultType WinGroup::Deactivate(bool aStartWithMostRecent)
 		// have a pair of main windows, such as MS Visual Studio (and probably many more),
 		// because it avoids activating such apps twice in a row as the user progresses
 		// through the sequence:
-		HWND first_visible_owned = WindowOwnsOthers(wip.parent_hwnd);
+		HWND first_visible_owned = WindowOwnsOthers(ws.mFoundParent);
 		if (first_visible_owned)
 		{
-			MarkAsVisited(wip.parent_hwnd);  // Must mark owner as well as the owned window.
+			MarkAsVisited(ws.mFoundParent);  // Must mark owner as well as the owned window.
 			// Activate the owned window instead of the owner because it usually
 			// (probably always, given the comments above) is the real main window:
-			wip.parent_hwnd = first_visible_owned;
+			ws.mFoundParent = first_visible_owned;
 		}
-		SetForegroundWindowEx(wip.parent_hwnd);
+		SetForegroundWindowEx(ws.mFoundParent);
 		// Probably best to do this before WinDelay in case another hotkey fires during the delay:
-		MarkAsVisited(wip.parent_hwnd);
+		MarkAsVisited(ws.mFoundParent);
 		DoWinDelay;
 	}
 	else // No window was found to activate (they have all been visited).
@@ -363,26 +368,23 @@ inline ResultType WinGroup::Update(bool aIsModeActivate)
 
 
 
-inline WindowSpec *WinGroup::IsMember(HWND aWnd)
+WindowSpec *WinGroup::IsMember(HWND aWnd)
 {
 	if (!aWnd)
-		return NULL;  // Caller relies on us to return "no match" in this case.
-	char fore_title[WINDOW_TEXT_SIZE];
-	if (GetWindowText(aWnd, fore_title, sizeof(fore_title)))
+		return NULL;  // Some callers on this.
+	WindowSearch ws;
+	ws.SetCandidate(aWnd);
+	for (WindowSpec *win = mFirstWindow;;)
 	{
-		for (WindowSpec *win = mFirstWindow;;)
-		{
-			if (IsTitleMatch(aWnd, fore_title, win->mTitle, win->mExcludeTitle))
-				if (HasMatchingChild(aWnd, win->mText, win->mExcludeText))
-					return win;
-			// Otherwise, no match, so go onto the next one:
-			win = win->mNextWindow;
-			if (win == mFirstWindow)
-				// We've made one full circuit of the circular linked list,
-				// discovering that the foreground window isn't a member
-				// of the group:
-				break;
-		}
+		if (ws.SetCriteria(win->mTitle, win->mText, win->mExcludeTitle, win->mExcludeText) && ws.IsMatch())
+			return win;
+		// Otherwise, no match, so go onto the next one:
+		win = win->mNextWindow;
+		if (win == mFirstWindow)
+			// We've made one full circuit of the circular linked list,
+			// discovering that the foreground window isn't a member
+			// of the group:
+			break;
 	}
 	return NULL;  // Because it would have returned already if a match was found.
 }
@@ -394,57 +396,59 @@ inline WindowSpec *WinGroup::IsMember(HWND aWnd)
 BOOL CALLBACK EnumParentFindAnyExcept(HWND aWnd, LPARAM lParam)
 // Find the first parent window that doesn't match any of the WindowSpecs in
 // the linked list, and that hasn't already been visited.
-// Caller must have ensured that lParam isn't NULL.
-// lParam must contain the address of a WindowSpec object.
 {
+	// Since the following two sections apply only to GroupDeactivate (since that's our only caller),
+	// they both seem okay even in light of the ahk_group method.
+
 	if (!IsWindowVisible(aWnd))
 		// Skip these because we alwayswant them to stay invisible, regardless
 		// of the setting for g.DetectHiddenWindows:
 		return TRUE;
-	LONG style = GetWindowLong(aWnd, GWL_EXSTYLE);
-	if (style & WS_EX_TOPMOST)
-		// Skip always-on-top windows, such as AutoIt's SplashText, because they're already
-		// visible so the user already knows about them, so there's no need to have them
-		// presented for review:
-		return TRUE;
-	char win_title[WINDOW_TEXT_SIZE];
-	if (!GetWindowText(aWnd, win_title, sizeof(win_title)))
-		// UPDATE: This method effectively prevented windows without titles, such as
-		// "ahk_class Shell_TrayWnd", from ever been findable by the script.  So now
-		// allow it to continue instead:
-		//return TRUE;
-		*win_title = '\0';
-	if (!stricmp(win_title, "Program Manager"))
-		// Skip this too because activating it would serve no purpose.  This is probably the
-		// same HWND that GetShellWindow() returns, but GetShellWindow() isn't supported on
-		// Win9x or WinNT, so don't bother using it.  And GetDeskTopWindow() apparently doesn't
-		// return "Program Manager" (something with a blank title I think):
+
+	// UPDATE: Because the window of class Shell_TrayWnd (the taskbar) is also always-on-top,
+	// the below prevents it from ever being activated too, which is almost always desirable.
+	// However, this prevents the addition of WS_DISABLED as an extra criteria for skipping
+	// a window.  Maybe that's best for backward compatibility anyway.
+	// Skip always-on-top windows, such as SplashText, because probably shouldn't
+	// be activated (especially in this mode, which is often used to visit the user's
+	// "non-favorite" windows).  In addition, they're already visible so the user already
+	// knows about them, so there's no need to have them presented for review.
+	if (GetWindowLong(aWnd, GWL_EXSTYLE) & WS_EX_TOPMOST)
 		return TRUE;
 
-	WindowInfoPackage &wip = *((WindowInfoPackage *)lParam);  // For performance and convenience.
+	// It probably would have been better to use the class name (ProgMan?) for this instead,
+	// but there is doubt that the same class name is used across all OSes.  The reason for
+	// doing that is to avoid ambiguity with other windows that just happen to be called
+	// "Program Manager".  See similar section in EnumParentActUponAll().
+	// Skip "Program Manager" too because activating it would serve no purpose.  This is probably
+	// the same HWND that GetShellWindow() returns, but GetShellWindow() isn't supported on
+	// Win9x or WinNT, so don't bother using it.  And GetDeskTopWindow() apparently doesn't
+	// return "Program Manager" (something with a blank title I think):
+	char win_title[20]; // Just need enough size to check for Program Manager
+	if (GetWindowText(aWnd, win_title, sizeof(win_title)) && !stricmp(win_title, "Program Manager"))
+		return TRUE;
 
-	for (WindowSpec *win = wip.win_spec;;)
+	WindowSearch &ws = *((WindowSearch *)lParam);  // For performance and convenience.
+	ws.SetCandidate(aWnd);
+
+	for (WindowSpec *win = ws.mFirstWinSpec;;)
 	{
-		// For each window in the linked list, check if aWnd is a match
-		// for it:
-		if (IsTitleMatch(aWnd, win_title, win->mTitle, win->mExcludeTitle))
-			if (HasMatchingChild(aWnd, win->mText, win->mExcludeText))
-				// Match found, so aWnd is a member of the group.
-				// But we want to find non-members only, so keep
-				// searching:
-				return TRUE;
-		// Otherwise, no match, keep checking until aWnd has been compared against
+		// For each window in the linked list, check if aWnd is a match for it:
+		if (ws.SetCriteria(win->mTitle, win->mText, win->mExcludeTitle, win->mExcludeText) && ws.IsMatch(true))
+			// Match found, so aWnd is a member of the group. But we want to find non-members only,
+			// so keep searching:
+			return TRUE;
+		// Otherwise, no match, but keep checking until aWnd has been compared against
 		// all the WindowSpecs in the group:
 		win = win->mNextWindow;
-		if (win == wip.win_spec)
+		if (win == ws.mFirstWinSpec)
 		{
 			// We've made one full circuit of the circular linked list without
 			// finding a match.  So aWnd is the one we're looking for unless
 			// it's in the list of exceptions:
-			if (wip.already_visited_count && wip.already_visited)
-				for (int i = 0; i < wip.already_visited_count; ++i)
-					if (aWnd == wip.already_visited[i])
-						return TRUE; // It's an exception, so keep searching.
+			for (int i = 0; i < ws.mAlreadyVisitedCount; ++i)
+				if (aWnd == ws.mAlreadyVisited[i])
+					return TRUE; // It's an exception, so keep searching.
 			// Otherwise, this window meets the criteria, so return it to the caller and
 			// stop the enumeration.  UPDATE: Rather than stopping the enumeration,
 			// continue on through all windows so that the last match is found.
@@ -452,53 +456,74 @@ BOOL CALLBACK EnumParentFindAnyExcept(HWND aWnd, LPARAM lParam)
 			// beginning, the windows will occur in the same order that they did
 			// the first time, rather than going backwards through the sequence
 			// (which is counterintuitive for the user):
-			wip.parent_hwnd = aWnd;
-			return wip.find_last_match; // bool vs. BOOL should be okay in this case.
+			ws.mFoundParent = aWnd; // No need to increment ws.mFoundCount in this case.
+			return ws.mFindLastMatch;
 		}
-	}
+	} // The loop above is infinite unless a "return" is encountered inside.
 }
 
 
 
-BOOL CALLBACK EnumParentCloseAny(HWND aWnd, LPARAM lParam)
-// Caller must have ensured that lParam isn't NULL.
-// lParam must contain the address of a WindowSpec object.
+BOOL CALLBACK EnumParentActUponAll(HWND aWnd, LPARAM lParam)
+// Caller must have ensured that lParam isn't NULL and that it contains a non-NULL mFirstWinSpec.
 {
-	if (!IsWindowVisible(aWnd))
-		// Skip these because it seems safest to never close invisible windows --
-		// regardless of the setting of g.DetectHiddenWindows -- because of the
-		// slight risk that some important hidden system window would accidentally
-		// match one of the WindowSpecs in the group:
-		return TRUE;
-	char win_title[WINDOW_TEXT_SIZE];
-	if (!GetWindowText(aWnd, win_title, sizeof(win_title)))
-		// UPDATE: This method effectively prevented windows without titles, such as
-		// "ahk_class Shell_TrayWnd", from ever been findable by the script.  So now
-		// allow it to continue instead:
-		//return TRUE;
-		*win_title = '\0';
-	if (!stricmp(win_title, "Program Manager"))
-		// Skip this too because never want to close it as part of a group close.
+	WindowSearch &ws = *((WindowSearch *)lParam);  // For performance and convenience.
+
+	// Skip windows the command isn't supposed to detect.  ACT_WINSHOW is exempt because
+	// hidden windows are always detected by the WinShow command:
+	if (!(g.DetectHiddenWindows || ws.mActionType == ACT_WINSHOW || IsWindowVisible(aWnd)))
 		return TRUE;
 
-	WindowInfoPackage &wip = *((WindowInfoPackage *)lParam);  // For performance and convenience.
+	int nCmdShow;
+	ws.SetCandidate(aWnd);
 
-	for (WindowSpec *win = wip.win_spec;;)
+	for (WindowSpec *win = ws.mFirstWinSpec;;)
 	{
-		// For each window in the linked list, check if aWnd is a match
-		// for it:
-		if (IsTitleMatch(aWnd, win_title, win->mTitle, win->mExcludeTitle))
-			if (HasMatchingChild(aWnd, win->mText, win->mExcludeText))
+		// For each window in the linked list, check if aWnd is a match for it:
+		if (ws.SetCriteria(win->mTitle, win->mText, win->mExcludeTitle, win->mExcludeText) && ws.IsMatch())
+		{
+			// Match found, so aWnd is a member of the group.  In addition, IsMatch() has set
+			// the value of ws.mFoundParent to tell our caller that at least one window was acted upon.
+			// See Line::PerformShowWindow() for comments about the following section.
+			nCmdShow = SW_INVALID; // Set default each time.
+			switch (ws.mActionType)
 			{
-				// Match found, so aWnd is a member of the group.
-				wip.parent_hwnd = aWnd;  // So that the caller knows we closed at least one.
-				PostMessage(aWnd, WM_CLOSE, 0, 0);  // Ask it nicely to close.
-				return TRUE; // Continue the enumeration.
+			case ACT_WINCLOSE:
+			case ACT_WINKILL:
+				// mTimeToWaitForClose is not done in a very efficient way here: to keep code size
+				// in check, it closes each window individually rather than sending WM_CLOSE to all
+				// the windows simultaneously and then waiting until all have vanished:
+				WinClose(aWnd, ws.mTimeToWaitForClose, ws.mActionType == ACT_WINKILL); // DoWinDelay is done by our caller.
+				return TRUE; // All done with the current window, so fetch the next one.
+
+			case ACT_WINMINIMIZE:
+				if (IsWindowHung(aWnd))
+				{
+					if (g_os.IsWin2000orLater())
+						nCmdShow = SW_FORCEMINIMIZE;
+				}
+				else
+					nCmdShow = SW_MINIMIZE;
+				break;
+
+			case ACT_WINMAXIMIZE: if (!IsWindowHung(aWnd)) nCmdShow = SW_MAXIMIZE; break;
+			case ACT_WINRESTORE:  if (!IsWindowHung(aWnd)) nCmdShow = SW_RESTORE;  break;
+			case ACT_WINHIDE: nCmdShow = SW_HIDE; break;
+			case ACT_WINSHOW: nCmdShow = SW_SHOW; break;
 			}
-		// Otherwise, no match, keep checking until aWnd has been compared against
-		// all the WindowSpecs in the group:
+
+			if (nCmdShow != SW_INVALID)
+				ShowWindow(aWnd, nCmdShow);
+				// DoWinDelay is not done here because our caller will do it once only, which
+				// seems best when there are a lot of windows being acted upon here.
+
+			// Now that this matching window has been acted upon (or avoided due to being hung),
+			// continue the enumeration to get the next candidate window:
+			return TRUE;
+		}
+		// Otherwise, no match, keep checking until aWnd has been compared against all the WindowSpecs in the group:
 		win = win->mNextWindow;
-		if (win == wip.win_spec)
+		if (win == ws.mFirstWinSpec)
 			// We've made one full circuit of the circular linked list without
 			// finding a match, so aWnd is not a member of the group and
 			// should not be closed.

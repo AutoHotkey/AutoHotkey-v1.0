@@ -1184,7 +1184,16 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 					// casts a signed char to an unsigned WORD:
 					PostMessage(g_hWnd, AHK_HOTSTRING, u, MAKELONG(hs.mEndCharRequired
 						? (UCHAR)g_HSBuf[g_HSBufLength - 1] : 0, case_conform_mode));
-					// Clean up:
+					// Clean up.
+					// v1.0.30: mDoReset was added to prevent hotstrings such as the following
+					// from firing twice in a row, if you type 11 followed by another 1 afterward:
+					//:*?B0:11::
+					//MsgBox,0,test,%A_ThisHotkey%,1 ; Show which key was pressed and close the window after a second.
+					//return
+					// There are probably many other (albeit obscure) uses for the reset option (this has
+					// been brought up in the forum at least twice).
+					if (hs.mDoReset)
+						g_HSBufLength = 0; // The buffer will be terminated further below.
 					if (*hs.mReplacement)
 					{
 						// Since the buffer no longer reflects what is actually on screen to the left
@@ -1200,11 +1209,10 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 						}
 						else
 							g_HSBufLength = 0;
-						g_HSBuf[g_HSBufLength] = '\0';
 					}
 					else if (hs.mDoBackspace)
 					{
-						// It's not a replacement, but we're doing backspaces, so adjust buf for backspaces
+						// It's *not* a replacement, but we're doing backspaces, so adjust buf for backspaces
 						// and the fact that the final char of the HS (if no end char) or the end char
 						// (if end char required) will have been suppressed and never made it to the
 						// active window.  A simpler way to understand is to realize that the buffer now
@@ -1213,8 +1221,11 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 						g_HSBufLength -= hs.mStringLength;
 						if (hs.mEndCharRequired)
 							--g_HSBufLength;
-						g_HSBuf[g_HSBufLength] = '\0';
 					}
+
+					// In case the above changed the value of g_HSBufLength, terminate the buffer at that position:
+					g_HSBuf[g_HSBufLength] = '\0';
+
 					if (hs.mDoBackspace)
 					{
 						// Have caller suppress this final key pressed by the user, since it would have
@@ -2712,6 +2723,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	// the user releases the suffix, even if the WIN key is kept held down for a long time.
 	// When the user finally releases the WIN key, that release will be disguised if called
 	// for by the logic below.
+#ifdef INCLUDE_KEYBD_HOOK
 	if (!(g_modifiersLR_logical & ~(MOD_LWIN | MOD_RWIN))) // Only lwin, rwin, both, or neither are currently down.
 	{
 		// If it's used as a prefix, there's no need (and it would probably break something)
@@ -2722,6 +2734,21 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		if ((g_modifiersLR_logical & MOD_RWIN) && !kvk[VK_RWIN].used_as_prefix)
 			disguise_next_rwin_up = true;
 	}
+#else // Mouse hook
+	// The mouse hook requires suppression in more situations than the keyboard because the
+	// OS does not consider LWin/RWin to have modified a mouse button, only a keyboard key.
+	// Thus, the Start Menu appears in the following cases if the user releases LWin/RWin
+	// *after* the other modifier:
+	// #+MButton::return
+	// #^MButton::return
+	if ((g_modifiersLR_logical & MOD_LWIN) && !(g_modifiersLR_logical & (MOD_LALT|MOD_RALT)) && !kvk[VK_LWIN].used_as_prefix)
+		disguise_next_lwin_up = true;
+	else if ((g_modifiersLR_logical & MOD_RWIN) && !(g_modifiersLR_logical & (MOD_LALT|MOD_RALT)) && !kvk[VK_RWIN].used_as_prefix)
+		disguise_next_rwin_up = true;
+	// An earlier stage has ensured that the keyboard hook is installed for the above, because the sending
+	// of CTRL directly (here) would otherwise not suppress the Start Menu for LWin/RWin (though it does
+	// supress menu bar activation for ALT hotkeys, as described below).
+#endif
 	// For maximum reliability on the maximum range of systems, it seems best to do the above
 	// for ALT keys also, to prevent them from invoking the icon menu or menu bar of the
 	// foreground window (rarer than the Start Menu problem, above, I think).

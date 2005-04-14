@@ -269,7 +269,7 @@ void Hotkey::AllActivate()
 					// requires the keyboard hook. ALT hotkeys don't need it because the mouse hook sends
 					// a CTRL keystroke to disguise them, a trick that is unfortunately not reliable for
 					// when it happens while the while key is down (though it does disguise a Win-up).
-					|| (hot.mModifiersConsolidatedLR && !(hot.mModifiersConsolidatedLR & ~(MOD_LWIN | MOD_RWIN))) // Only LWin, RWin, or both are modifiers for this mouse button hotkey.
+					|| ((hot.mModifiersConsolidatedLR & (MOD_LWIN|MOD_RWIN)) && !(hot.mModifiersConsolidatedLR & (MOD_LALT|MOD_RALT))) // For v1.0.30, this has been expanded to include Win+Shift and Win+Control modifiers.
 					|| (hot.mVK && !VK_IS_MOUSE(hot.mVK)) // e.g. "RButton & Space"
 					|| (hot.mModifierVK && !VK_IS_MOUSE(hot.mModifierVK))   ) // e.g. "Space & RButton"
 				{
@@ -1579,7 +1579,7 @@ Hotstring::Hotstring(Label *aJumpToLabel, char *aOptions, char *aHotstring, char
 	, mPriority(g_HSPriority), mKeyDelay(g_HSKeyDelay)  // And all these can vary too.
 	, mCaseSensitive(g_HSCaseSensitive), mConformToCase(g_HSConformToCase), mDoBackspace(g_HSDoBackspace)
 	, mOmitEndChar(g_HSOmitEndChar), mSendRaw(g_HSSendRaw), mEndCharRequired(g_HSEndCharRequired)
-	, mDetectWhenInsideWord(g_HSDetectWhenInsideWord)
+	, mDetectWhenInsideWord(g_HSDetectWhenInsideWord), mDoReset(g_HSDoReset)
 	, mConstructedOK(false)
 {
 	// Insist on certain qualities so that they never need to be checked other than here:
@@ -1587,7 +1587,7 @@ Hotstring::Hotstring(Label *aJumpToLabel, char *aOptions, char *aHotstring, char
 		return;
 
 	ParseOptions(aOptions, mPriority, mKeyDelay, mCaseSensitive, mConformToCase, mDoBackspace, mOmitEndChar
-		, mSendRaw, mEndCharRequired, mDetectWhenInsideWord);
+		, mSendRaw, mEndCharRequired, mDetectWhenInsideWord, mDoReset);
 
 	// To avoid memory leak, this is done only when it is certain the hotkey will be created:
 	if (   !(mString = SimpleHeap::Malloc(aHotstring))   )
@@ -1622,7 +1622,7 @@ Hotstring::Hotstring(Label *aJumpToLabel, char *aOptions, char *aHotstring, char
 
 void Hotstring::ParseOptions(char *aOptions, int &aPriority, int &aKeyDelay, bool &aCaseSensitive
 	, bool &aConformToCase, bool &aDoBackspace, bool &aOmitEndChar, bool &aSendRaw, bool &aEndCharRequired
-	, bool &aDetectWhenInsideWord)
+	, bool &aDetectWhenInsideWord, bool &aDoReset)
 {
 	// In this case, colon rather than zero marks the end of the string.  However, the string
 	// might be empty so check for that too.  In addition, this is now called from
@@ -1633,6 +1633,12 @@ void Hotstring::ParseOptions(char *aOptions, int &aPriority, int &aKeyDelay, boo
 		cp1 = cp + 1;
 		switch(toupper(*cp))
 		{
+		case '*':
+			aEndCharRequired = (*cp1 == '0');
+			break;
+		case '?':
+			aDetectWhenInsideWord = (*cp1 != '0');
+			break;
 		case 'B': // Do backspacing.
 			aDoBackspace = (*cp1 != '0');
 			break;
@@ -1667,11 +1673,8 @@ void Hotstring::ParseOptions(char *aOptions, int &aPriority, int &aKeyDelay, boo
 		case 'R':
 			aSendRaw = (*cp1 != '0');
 			break;
-		case '*':
-			aEndCharRequired = (*cp1 == '0');
-			break;
-		case '?':
-			aDetectWhenInsideWord = (*cp1 != '0');
+		case 'Z':
+			aDoReset = (*cp1 != '0');
 			break;
 		// Otherwise: Ignore other characters, such as the digits that comprise the number after the P option.
 		}

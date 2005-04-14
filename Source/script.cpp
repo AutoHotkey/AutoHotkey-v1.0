@@ -589,7 +589,7 @@ ResultType Script::Edit()
 	// Script" menu item is not available for compiled scripts, it can't be called from there.
 	TitleMatchModes old_mode = g.TitleMatchMode;
 	g.TitleMatchMode = FIND_ANYWHERE;
-	HWND hwnd = WinExist(mFileName, "", mMainWindowTitle); // Exclude our own main window.
+	HWND hwnd = WinExist(mFileName, "", mMainWindowTitle, ""); // Exclude our own main window.
 	g.TitleMatchMode = old_mode;
 	if (hwnd)
 	{
@@ -1291,7 +1291,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 		// It's not a label.
 		if (*buf == '#')
 		{
-			switch(IsPreprocessorDirective(buf))
+			switch(IsDirective(buf))
 			{
 			case CONDITION_TRUE:
 				// Since the directive may have been a #include which called us recursively,
@@ -1475,7 +1475,7 @@ size_t Script::GetLine(char *aBuf, int aMaxCharsToRead, FILE *fp)
 
 
 
-inline ResultType Script::IsPreprocessorDirective(char *aBuf)
+inline ResultType Script::IsDirective(char *aBuf)
 // Returns CONDITION_TRUE, CONDITION_FALSE, or FAIL.
 // Note: Don't assume that every line in the script that starts with '#' is a directive
 // because hotkeys can legitimately start with that as well.  i.e., the following line should
@@ -1483,7 +1483,29 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 // #y::run, notepad
 {
 	char end_flags[] = {' ', '\t', g_delimiter, '\0'}; // '\0' must be last.
-	char *cp, *directive_end;
+	char *directive_end, *parameter_raw;
+	if (   !(directive_end = StrChrAny(aBuf, end_flags))   )
+	{
+		directive_end = aBuf + strlen(aBuf); // Point it to the zero terminator.
+		parameter_raw = NULL;
+	}
+	else
+		if (!*(parameter_raw = omit_leading_whitespace(directive_end)))
+			parameter_raw = NULL;
+
+	// The raw parameter retains any leading comma for those directives that need that (none currently).
+	// But the following omits that comma:
+	char *parameter;
+	if (!parameter_raw)
+		parameter = NULL;
+	else // Since parameter_raw is non-NULL, it's also non-blank and non-whitespace due to the above checking.
+		if (*parameter_raw != g_delimiter)
+			parameter = parameter_raw;
+		else // It's a delimiter, so "parameter" will be whatever non-whitespace character follows it, if any.
+			if (!*(parameter = omit_leading_whitespace(parameter_raw + 1)))
+				parameter = NULL;
+			//else leave it set to the value returned by omit_leading_whitespace().
+
 	int value; // Helps detect values that are too large, since some of the target globals are UCHAR.
 
 	// Use strnicmp() so that a match is found as long as aBuf starts with the string in question.
@@ -1491,13 +1513,12 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 	// "#a::run, something, "#SingleInstance" (i.e. a hotkey) will not be falsely detected
 	// due to using a more lenient function such as strcasestr().  UPDATE: Using strlicmp() now so
 	// that overlapping names, such as #MaxThreads and #MaxThreadsPerHotkey won't get mixed up:
-	if (   !(directive_end = StrChrAny(aBuf, end_flags))   )
-		directive_end = aBuf + strlen(aBuf); // Point it to the zero terminator.
-	#define IS_DIRECTIVE_MATCH(directive) (!strlicmp(aBuf, directive, (UINT)(directive_end - aBuf)))
+	#define IS_DIRECTIVE_MATCH(directive) (!strlicmp(aBuf, directive, directive_name_length))
+	UINT directive_name_length = (UINT)(directive_end - aBuf); // To avoid calculating it every time in the macro above.
 
-	if (IS_DIRECTIVE_MATCH("#WinActivateForce"))
+	if (IS_DIRECTIVE_MATCH("#NoTrayIcon"))
 	{
-		g_WinActivateForce = true;
+		g_NoTrayIcon = true;
 		return CONDITION_TRUE;
 	}
 	if (IS_DIRECTIVE_MATCH("#Persistent"))
@@ -1505,58 +1526,14 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 		g_persistent = true;
 		return CONDITION_TRUE;
 	}
+	if (IS_DIRECTIVE_MATCH("#WinActivateForce"))
+	{
+		g_WinActivateForce = true;
+		return CONDITION_TRUE;
+	}
 	if (IS_DIRECTIVE_MATCH("#ErrorStdOut"))
 	{
 		mErrorStdOut = true;
-		return CONDITION_TRUE;
-	}
-	if (IS_DIRECTIVE_MATCH("#SingleInstance"))
-	{
-		g_AllowOnlyOneInstance = SINGLE_INSTANCE_PROMPT; // Set default.
-		if (*directive_end && *(cp = omit_leading_whitespace(directive_end)))
-		{
-			if (*cp == g_delimiter)
-				cp = omit_leading_whitespace(cp + 1);
-			if (!stricmp(cp, "force"))
-				g_AllowOnlyOneInstance = SINGLE_INSTANCE_REPLACE;
-			else if (!stricmp(cp, "ignore"))
-				g_AllowOnlyOneInstance = SINGLE_INSTANCE_IGNORE;
-			else if (!stricmp(cp, "off"))
-				g_AllowOnlyOneInstance = SINGLE_INSTANCE_OFF;
-		}
-		return CONDITION_TRUE;
-	}
-	if (IS_DIRECTIVE_MATCH("#Hotstring"))
-	{
-		if (*directive_end && *(cp = omit_leading_whitespace(directive_end)))
-		{
-			if (*cp == g_delimiter)
-				cp = omit_leading_whitespace(cp + 1);
-			if (!*cp)
-				return CONDITION_TRUE;
-			char *suboption = strcasestr(cp, "EndChars");
-			if (suboption)
-			{
-				// Since it's not realistic to have only a couple, spaces and literal tabs
-				// must be included in between other chars, e.g. `n `t has a space in between.
-				// Also, EndChar  \t  will have a space and a tab since there are two spaces
-				// after the word EndChar.
-				if (    !(cp = StrChrAny(suboption, "\t "))   )
-					return CONDITION_TRUE;
-				strlcpy(g_EndChars, ++cp, sizeof(g_EndChars));
-				ConvertEscapeSequences(g_EndChars, g_EscapeChar);
-				return CONDITION_TRUE;
-			}
-		}
-		// Otherwise assume it's a list of options.  Note that for compatibility with its
-		// other caller, it will stop at end-of-string or ':', whichever comes first.
-		Hotstring::ParseOptions(cp, g_HSPriority, g_HSKeyDelay, g_HSCaseSensitive, g_HSConformToCase
-			, g_HSDoBackspace, g_HSOmitEndChar, g_HSSendRaw, g_HSEndCharRequired, g_HSDetectWhenInsideWord);
-		return CONDITION_TRUE;
-	}
-	if (IS_DIRECTIVE_MATCH("#NoTrayIcon"))
-	{
-		g_NoTrayIcon = true;
 		return CONDITION_TRUE;
 	}
 	if (IS_DIRECTIVE_MATCH("#AllowSameLineComments"))  // i.e. There's no way to turn it off, only on.
@@ -1564,19 +1541,51 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 		g_AllowSameLineComments = true;
 		return CONDITION_TRUE;
 	}
+	if (IS_DIRECTIVE_MATCH("#SingleInstance"))
+	{
+		g_AllowOnlyOneInstance = SINGLE_INSTANCE_PROMPT; // Set default.
+		if (parameter)
+		{
+			if (!stricmp(parameter, "Force"))
+				g_AllowOnlyOneInstance = SINGLE_INSTANCE_REPLACE;
+			else if (!stricmp(parameter, "Ignore"))
+				g_AllowOnlyOneInstance = SINGLE_INSTANCE_IGNORE;
+			else if (!stricmp(parameter, "Off"))
+				g_AllowOnlyOneInstance = SINGLE_INSTANCE_OFF;
+		}
+		return CONDITION_TRUE;
+	}
+	if (IS_DIRECTIVE_MATCH("#Hotstring"))
+	{
+		if (parameter)
+		{
+			char *suboption = strcasestr(parameter, "EndChars");
+			if (suboption)
+			{
+				// Since it's not realistic to have only a couple, spaces and literal tabs
+				// must be included in between other chars, e.g. `n `t has a space in between.
+				// Also, EndChar  \t  will have a space and a tab since there are two spaces
+				// after the word EndChar.
+				if (    !(parameter = StrChrAny(suboption, "\t "))   )
+					return CONDITION_TRUE;
+				strlcpy(g_EndChars, ++parameter, sizeof(g_EndChars));
+				ConvertEscapeSequences(g_EndChars, g_EscapeChar);
+				return CONDITION_TRUE;
+			}
+			// Otherwise assume it's a list of options.  Note that for compatibility with its
+			// other caller, it will stop at end-of-string or ':', whichever comes first.
+			Hotstring::ParseOptions(parameter, g_HSPriority, g_HSKeyDelay, g_HSCaseSensitive, g_HSConformToCase
+				, g_HSDoBackspace, g_HSOmitEndChar, g_HSSendRaw, g_HSEndCharRequired, g_HSDetectWhenInsideWord
+				, g_HSDoReset);
+		}
+		return CONDITION_TRUE;
+	}
+
 	if (IS_DIRECTIVE_MATCH("#UseHook"))
 	{
 		// Set the default mode that will be used if there's no parameter at all:
 		g_ForceKeybdHook = true;
-		#define RETURN_IF_NO_CHAR \
-			if (!*directive_end)\
-				return CONDITION_TRUE;\
-			if (   !*(cp = omit_leading_whitespace(directive_end))   )\
-				return CONDITION_TRUE;\
-			if (*cp == g_delimiter && !*(cp = omit_leading_whitespace(cp + 1))   )\
-				return CONDITION_TRUE;
-		RETURN_IF_NO_CHAR
-		if (Line::ConvertOnOff(cp) == TOGGLED_OFF)
+		if (parameter && Line::ConvertOnOff(parameter) == TOGGLED_OFF)
 			g_ForceKeybdHook = false;
 		// else leave the default to "true" as set above.
 		return CONDITION_TRUE;
@@ -1590,13 +1599,8 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 		{
 			Hotkey::RequireHook(HOOK_KEYBD);
 #ifdef HOOK_WARNING
-			if (*directive_end && *(cp = omit_leading_whitespace(directive_end)))
-			{
-				if (*cp == g_delimiter)
-					cp = omit_leading_whitespace(cp + 1);
-				if (!stricmp(cp, "force"))
-					sWhichHookSkipWarning |= HOOK_KEYBD;
-			}
+			if (parameter && !stricmp(parameter, "Force"))
+				sWhichHookSkipWarning |= HOOK_KEYBD;
 #endif
 		}
 		return CONDITION_TRUE;
@@ -1610,11 +1614,8 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 		{
 			Hotkey::RequireHook(HOOK_MOUSE);
 #ifdef HOOK_WARNING
-			if (*directive_end && *(cp = omit_leading_whitespace(directive_end)))
-			{
-				if (!stricmp(cp, "force"))
-					sWhichHookSkipWarning |= HOOK_MOUSE;
-			}
+			if (parameter && !stricmp(parameter, "Force"))
+				sWhichHookSkipWarning |= HOOK_MOUSE;
 #endif
 		}
 		return CONDITION_TRUE;
@@ -1623,83 +1624,94 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 	{
 		// Set the default mode that will be used if there's no parameter at all:
 		g_MaxThreadsBuffer = true;
-		RETURN_IF_NO_CHAR
-		if (Line::ConvertOnOff(cp) == TOGGLED_OFF)
+		if (parameter && Line::ConvertOnOff(parameter) == TOGGLED_OFF)
 			g_MaxThreadsBuffer = false;
 		// else leave the default to "true" as set above.
 		return CONDITION_TRUE;
 	}
 	if (IS_DIRECTIVE_MATCH("#HotkeyModifierTimeout"))
 	{
-		RETURN_IF_NO_CHAR
-		g_HotkeyModifierTimeout = ATOI(cp);  // cp was set to the right position by the above macro
+		if (parameter)
+			g_HotkeyModifierTimeout = ATOI(parameter);  // parameter was set to the right position by the above macro
 		return CONDITION_TRUE;
 	}
 	if (IS_DIRECTIVE_MATCH("#MaxMem"))
 	{
-		RETURN_IF_NO_CHAR
-		double valuef = ATOF(cp);  // cp was set to the right position by the above macro
-		if (valuef > 4095)  // Don't exceed capacity of VarSizeType, which is currently a DWORD (4 gig).
-			valuef = 4095;  // Don't use 4096 since that might be a special/reserved value for some functions.
-		else if (valuef  < 1)
-			valuef = 1;
-		g_MaxVarCapacity = (VarSizeType)(valuef * 1024 * 1024);
+		if (parameter)
+		{
+			double valuef = ATOF(parameter);  // parameter was set to the right position by the above macro
+			if (valuef > 4095)  // Don't exceed capacity of VarSizeType, which is currently a DWORD (4 gig).
+				valuef = 4095;  // Don't use 4096 since that might be a special/reserved value for some functions.
+			else if (valuef  < 1)
+				valuef = 1;
+			g_MaxVarCapacity = (VarSizeType)(valuef * 1024 * 1024);
+		}
 		return CONDITION_TRUE;
 	}
 	if (IS_DIRECTIVE_MATCH("#MaxThreads"))
 	{
-		RETURN_IF_NO_CHAR
-		value = ATOI(cp);  // cp was set to the right position by the above macro
-		if (value > MAX_THREADS_LIMIT) // For now, keep this limited to prevent stack overflow due to too many pseudo-threads.
-			value = MAX_THREADS_LIMIT;
-		else if (value < 1)
-			value = 1;
-		g_MaxThreadsTotal = value;
+		if (parameter)
+		{
+			value = ATOI(parameter);  // parameter was set to the right position by the above macro
+			if (value > MAX_THREADS_LIMIT) // For now, keep this limited to prevent stack overflow due to too many pseudo-threads.
+				value = MAX_THREADS_LIMIT;
+			else if (value < 1)
+				value = 1;
+			g_MaxThreadsTotal = value;
+		}
 		return CONDITION_TRUE;
 	}
 	if (IS_DIRECTIVE_MATCH("#MaxThreadsPerHotkey"))
 	{
-		RETURN_IF_NO_CHAR
-		// Use value as a temp holder since it's int vs. UCHAR and can thus detect very large or negative values:
-		value = ATOI(cp);  // cp was set to the right position by the above macro
-		if (value > MAX_THREADS_LIMIT) // For now, keep this limited to prevent stack overflow due to too many pseudo-threads.
-			value = MAX_THREADS_LIMIT;
-		else if (value < 1)
-			value = 1;
-		g_MaxThreadsPerHotkey = value; // Note: g_MaxThreadsPerHotkey is UCHAR.
+		if (parameter)
+		{
+			// Use value as a temp holder since it's int vs. UCHAR and can thus detect very large or negative values:
+			value = ATOI(parameter);  // parameter was set to the right position by the above macro
+			if (value > MAX_THREADS_LIMIT) // For now, keep this limited to prevent stack overflow due to too many pseudo-threads.
+				value = MAX_THREADS_LIMIT;
+			else if (value < 1)
+				value = 1;
+			g_MaxThreadsPerHotkey = value; // Note: g_MaxThreadsPerHotkey is UCHAR.
+		}
 		return CONDITION_TRUE;
 	}
 	if (IS_DIRECTIVE_MATCH("#HotkeyInterval"))
 	{
-		RETURN_IF_NO_CHAR
-		g_HotkeyThrottleInterval = ATOI(cp);  // cp was set to the right position by the above macro
-		if (g_HotkeyThrottleInterval < 10) // values under 10 wouldn't be useful due to timer granularity.
-			g_HotkeyThrottleInterval = 10;
+		if (parameter)
+		{
+			g_HotkeyThrottleInterval = ATOI(parameter);  // parameter was set to the right position by the above macro
+			if (g_HotkeyThrottleInterval < 10) // values under 10 wouldn't be useful due to timer granularity.
+				g_HotkeyThrottleInterval = 10;
+		}
 		return CONDITION_TRUE;
 	}
 	if (IS_DIRECTIVE_MATCH("#MaxHotkeysPerInterval"))
 	{
-		RETURN_IF_NO_CHAR
-		g_MaxHotkeysPerInterval = ATOI(cp);  // cp was set to the right position by the above macro
-		if (g_MaxHotkeysPerInterval <= 0) // sanity check
-			g_MaxHotkeysPerInterval = 1;
+		if (parameter)
+		{
+			g_MaxHotkeysPerInterval = ATOI(parameter);  // parameter was set to the right position by the above macro
+			if (g_MaxHotkeysPerInterval <= 0) // sanity check
+				g_MaxHotkeysPerInterval = 1;
+		}
 		return CONDITION_TRUE;
 	}
 	if (IS_DIRECTIVE_MATCH("#KeyHistory"))
 	{
-		RETURN_IF_NO_CHAR
-		g_MaxHistoryKeys = ATOI(cp);  // cp was set to the right position by the above macro
-		if (g_MaxHistoryKeys < 0)
-			g_MaxHistoryKeys = 0;
-		else if (g_MaxHistoryKeys > 500)
-			g_MaxHistoryKeys = 500;
-		// Above: There are two reasons for limiting the history file to 500 keystrokes:
-		// 1) GetHookStatus() only has a limited size buffer in which to transcribe the keystrokes.
-		//    500 events is about what you would expect to fit in a 32 KB buffer (it the unlikely event
-		//    that the transcribed events create too much text, the text will be truncated, so it's
-		//    not dangerous anyway).
-		// 2) To reduce the impression that AutoHotkey designed for key logging (the key history file
-		//    is in a very unfriendly format that type of key logging anyway).
+		if (parameter)
+		{
+			g_MaxHistoryKeys = ATOI(parameter);  // parameter was set to the right position by the above macro
+			if (g_MaxHistoryKeys < 0)
+				g_MaxHistoryKeys = 0;
+			else if (g_MaxHistoryKeys > 500)
+				g_MaxHistoryKeys = 500;
+			// Above: There are two reasons for limiting the history file to 500 keystrokes:
+			// 1) GetHookStatus() only has a limited size buffer in which to transcribe the keystrokes.
+			//    500 events is about what you would expect to fit in a 32 KB buffer (it the unlikely event
+			//    that the transcribed events create too much text, the text will be truncated, so it's
+			//    not dangerous anyway).
+			// 2) To reduce the impression that AutoHotkey designed for key logging (the key history file
+			//    is in a very unfriendly format that type of key logging anyway).
+		}
 		return CONDITION_TRUE;
 	}
 
@@ -1708,62 +1720,68 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 	// stage than DerefChar and the other special chars.
 	if (IS_DIRECTIVE_MATCH("#CommentFlag"))
 	{
-		RETURN_IF_NO_CHAR
-		if (!*(cp + 1))  // i.e. the length is 1
+		if (parameter)
 		{
-			// Don't allow '#' since it's the preprocessor directive symbol being used here.
-			// Seems ok to allow "." to be the comment flag, since other constraints mandate
-			// that at least one space or tab occur to its left for it to be considered a
-			// comment marker.
-			if (*cp == '#' || *cp == g_DerefChar || *cp == g_EscapeChar || *cp == g_delimiter)
-				return ScriptError(ERR_DEFINE_CHAR);
-			// Exclude hotkey definition chars, such as ^ and !, because otherwise
-			// the following example wouldn't work:
-			// User defines ! as the comment flag.
-			// The following hotkey would never be in effect since it's considered to
-			// be commented out:
-			// !^a::run,notepad
-			if (*cp == '!' || *cp == '^' || *cp == '+' || *cp == '$' || *cp == '~' || *cp == '*'
-				|| *cp == '<' || *cp == '>')
-				// Note that '#' is already covered by the other stmt. above.
-				return ScriptError(ERR_DEFINE_COMMENT);
+			if (!*(parameter + 1))  // i.e. the length is 1
+			{
+				// Don't allow '#' since it's the preprocessor directive symbol being used here.
+				// Seems ok to allow "." to be the comment flag, since other constraints mandate
+				// that at least one space or tab occur to its left for it to be considered a
+				// comment marker.
+				if (*parameter == '#' || *parameter == g_DerefChar || *parameter == g_EscapeChar || *parameter == g_delimiter)
+					return ScriptError(ERR_DEFINE_CHAR);
+				// Exclude hotkey definition chars, such as ^ and !, because otherwise
+				// the following example wouldn't work:
+				// User defines ! as the comment flag.
+				// The following hotkey would never be in effect since it's considered to
+				// be commented out:
+				// !^a::run,notepad
+				if (*parameter == '!' || *parameter == '^' || *parameter == '+' || *parameter == '$' || *parameter == '~' || *parameter == '*'
+					|| *parameter == '<' || *parameter == '>')
+					// Note that '#' is already covered by the other stmt. above.
+					return ScriptError(ERR_DEFINE_COMMENT);
+			}
+			strlcpy(g_CommentFlag, parameter, MAX_COMMENT_FLAG_LENGTH + 1);
+			g_CommentFlagLength = strlen(g_CommentFlag);  // Keep this in sync with above.
 		}
-		strlcpy(g_CommentFlag, cp, MAX_COMMENT_FLAG_LENGTH + 1);
-		g_CommentFlagLength = strlen(g_CommentFlag);  // Keep this in sync with above.
 		return CONDITION_TRUE;
 	}
 	if (IS_DIRECTIVE_MATCH("#EscapeChar"))
 	{
-		RETURN_IF_NO_CHAR
-		// Don't allow '.' since that can be part of literal floating point numbers:
-		if (   *cp == '#' || *cp == g_DerefChar || *cp == g_delimiter || *cp == '.'
-			|| (g_CommentFlagLength == 1 && *cp == *g_CommentFlag)   )
-			return ScriptError(ERR_DEFINE_CHAR);
-		g_EscapeChar = *cp;
+		if (parameter)
+		{
+			// Don't allow '.' since that can be part of literal floating point numbers:
+			if (   *parameter == '#' || *parameter == g_DerefChar || *parameter == g_delimiter || *parameter == '.'
+				|| (g_CommentFlagLength == 1 && *parameter == *g_CommentFlag)   )
+				return ScriptError(ERR_DEFINE_CHAR);
+			g_EscapeChar = *parameter;
+		}
 		return CONDITION_TRUE;
 	}
 	if (IS_DIRECTIVE_MATCH("#DerefChar"))
 	{
-		RETURN_IF_NO_CHAR
-		if (   *cp == '#' || *cp == g_EscapeChar || *cp == g_delimiter || *cp == '.'
-			|| (g_CommentFlagLength == 1 && *cp == *g_CommentFlag)   )
-			return ScriptError(ERR_DEFINE_CHAR);
-		g_DerefChar = *cp;
+		if (parameter)
+		{
+			if (   *parameter == '#' || *parameter == g_EscapeChar || *parameter == g_delimiter || *parameter == '.'
+				|| (g_CommentFlagLength == 1 && *parameter == *g_CommentFlag)   )
+				return ScriptError(ERR_DEFINE_CHAR);
+			g_DerefChar = *parameter;
+		}
 		return CONDITION_TRUE;
 	}
 	if (IS_DIRECTIVE_MATCH("#Delimiter"))
 	{
-		// This macro will skip over any leading delimiter than may be present, e.g. #Delimiter, ^
-		// This should be okay since the user shouldn't be attempting to change the delimiter
-		// to what it already is, and even if this is attempted, it would just be ignored.
+		// Attempts to change the delimiter to its starting default (comma) are ignored.
 		// For example, "#Delimiter ," isn't meaningful if the delimiter already is a comma,
-		// which is good because the RETURN_IF_NO_CHAR macro would assume that the comma
-		// is accidental (not a symbol) and try to find the symbol after it.
-		RETURN_IF_NO_CHAR
-		if (   *cp == '#' || *cp == g_EscapeChar || *cp == g_DerefChar || *cp == '.'
-			|| (g_CommentFlagLength == 1 && *cp == *g_CommentFlag)   )
-			return ScriptError(ERR_DEFINE_CHAR);
-		g_delimiter = *cp;
+		// which is good because "parameter" has already assumed that the comma is accidental
+		// (not a symbol) and omitted it.
+		if (parameter)
+		{
+			if (   *parameter == '#' || *parameter == g_EscapeChar || *parameter == g_DerefChar || *parameter == '.'
+				|| (g_CommentFlagLength == 1 && *parameter == *g_CommentFlag)   )
+				return ScriptError(ERR_DEFINE_CHAR);
+			g_delimiter = *parameter;
+		}
 		return CONDITION_TRUE;
 	}
 
@@ -1776,15 +1794,15 @@ inline ResultType Script::IsPreprocessorDirective(char *aBuf)
 #ifdef AUTOHOTKEYSC
 		return CONDITION_TRUE;
 #else
-		if (   !*(cp = omit_leading_whitespace(directive_end))   )
+		// If the below decision is ever changed, be sure to update ahk2exe with the same change:
+		// "parameter" is checked rather than parameter_raw for backward compatibility with earlier versions,
+		// in which a leading comma is not considered part of the filename.  Although this behavior is incorrect
+		// because it prevents files whose names start with a comma from being included without the first
+		// delim-comma being there too, it is kept because filesnames that start with a comma seem
+		// exceedingly rare.  As a workaround, the script can do #Include ,,FilenameWithLeadingComma.ahk
+		if (!parameter)
 			return ScriptError(ERR_INCLUDE_FILE);
-		if (*cp == g_delimiter)
-		{
-			++cp;
-			if (   !*(cp = omit_leading_whitespace(cp))   )
-				return ScriptError(ERR_INCLUDE_FILE);
-		}
-		return (LoadIncludedFile(cp, include_again) == FAIL) ? FAIL : CONDITION_TRUE;  // It will have already displayed any error.
+		return (LoadIncludedFile(parameter, include_again) == FAIL) ? FAIL : CONDITION_TRUE;  // It will have already displayed any error.
 #endif
 	}
 
@@ -2553,7 +2571,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, char *aActionName, char *aEn
 			// Insert an arg at the beginning of the list to indicate the mouse button.
 			arg[2] = arg[1];  arg_map[2] = arg_map[1];
 			arg[1] = arg[0];  arg_map[1] = arg_map[0];
-			arg[0] = old_action_type == OLD_LEFTCLICK ? "Left" : "Right";  arg_map[0] = NULL;
+			arg[0] = old_action_type == OLD_LEFTCLICK ? "" : "Right";  arg_map[0] = NULL; // "" is treated the same as "Left"
 			return AddLine(ACT_MOUSECLICK, arg, ++nArgs, arg_map);
 		case OLD_LEFTCLICKDRAG:
 		case OLD_RIGHTCLICKDRAG:
@@ -3464,9 +3482,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		if (*NEW_RAW_ARG7 && !line->ArgHasDeref(7) && toupper(*NEW_RAW_ARG7) != 'R')
 			return ScriptError("Parameter #7 (if present) must be the letter R.", NEW_RAW_ARG7);
 		// Check that the button is valid (e.g. left/right/middle):
-		if (!line->ArgHasDeref(1))
-			if (!line->ConvertMouseButton(NEW_RAW_ARG1))
-				return ScriptError(ERR_MOUSE_BUTTON, NEW_RAW_ARG1);
+		if (*NEW_RAW_ARG1 && !line->ArgHasDeref(1) && !line->ConvertMouseButton(NEW_RAW_ARG1)) // Treats blank as "Left".
+			return ScriptError(ERR_MOUSE_BUTTON, NEW_RAW_ARG1);
 		if (!line->ValidateMouseCoords(NEW_RAW_ARG2, NEW_RAW_ARG3))
 			return ScriptError(ERR_MOUSE_COORD, NEW_RAW_ARG2);
 		break;
@@ -3505,7 +3522,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_CONTROLCLICK:
 		// Check that the button is valid (e.g. left/right/middle):
 		if (*NEW_RAW_ARG4 && !line->ArgHasDeref(4)) // i.e. it's allowed to be blank (defaults to left).
-			if (!line->ConvertMouseButton(NEW_RAW_ARG4))
+			if (!line->ConvertMouseButton(NEW_RAW_ARG4)) // Treats blank as "Left".
 				return ScriptError(ERR_MOUSE_BUTTON, NEW_RAW_ARG4);
 		break;
 
@@ -4128,6 +4145,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				break;
 			case WINSET_BOTTOM:
 			case WINSET_REDRAW:
+			case WINSET_ENABLE:
+			case WINSET_DISABLE:
 				if (*NEW_RAW_ARG2)
 					return ScriptError("Parameter #2 must be blank in this case.");
 				break;
@@ -4783,7 +4802,7 @@ VarTypes Script::GetVarType(char *aVarName)
 
 
 
-WinGroup *Script::FindOrAddGroup(char *aGroupName)
+WinGroup *Script::FindOrAddGroup(char *aGroupName, bool aNoCreate)
 // Caller must ensure that aGroupName isn't NULL.  But if it's the empty string, NULL is returned.
 // Returns the Group whose name matches aGroupName.  If it doesn't exist, it is created.
 {
@@ -4793,7 +4812,7 @@ WinGroup *Script::FindOrAddGroup(char *aGroupName)
 		if (!stricmp(group->mName, aGroupName)) // Match found.
 			return group;
 	// Otherwise, no match found, so create a new group.
-	if (AddGroup(aGroupName) != OK)
+	if (aNoCreate || AddGroup(aGroupName) != OK)
 		return NULL;
 	return mLastGroup;
 }
@@ -4805,9 +4824,9 @@ ResultType Script::AddGroup(char *aGroupName)
 // The caller must already have verfied that this isn't a duplicate group.
 {
 	if (strlen(aGroupName) > MAX_VAR_NAME_LENGTH)
-		return ScriptError("Group name too long.");
-	if (!Var::ValidateName(aGroupName)) // Seems best to use same validation as var names.
-		return FAIL; // Above already displayed error for us.
+		return ScriptError("Group name too long.", aGroupName);
+	if (!Var::ValidateName(aGroupName, false, false)) // Seems best to use same validation as var names.
+		return ScriptError("Group name contains an illegal character.", aGroupName);
 
 	char *new_name = SimpleHeap::Malloc(aGroupName);
 	if (!new_name)
@@ -6013,6 +6032,7 @@ inline ResultType Line::EvaluateCondition()
 		break;
 
 	case ACT_IFEQUAL:
+	case ACT_IFNOTEQUAL:
 		// For now, these seem to be the best rules to follow:
 		// 1) If either one is non-empty and non-numeric, they're compared as strings.
 		// 2) Otherwise, they're compared as numbers (with empty vars treated as zero).
@@ -6042,24 +6062,23 @@ inline ResultType Line::EvaluateCondition()
 		#undef IF_EITHER_IS_FLOAT
 		#define IF_EITHER_IS_FLOAT if (value_is_pure_numeric == PURE_FLOAT || var_is_pure_numeric == PURE_FLOAT)
 
-		DETERMINE_NUMERIC_TYPES
-		IF_EITHER_IS_NON_NUMERIC
-			if_condition = !STRING_COMPARE;
-		else IF_EITHER_IS_FLOAT  // It might perform better to only do float conversions & math when necessary.
-			if_condition = ATOF(ARG1) == ATOF(ARG2);
+		if (mArgc > 1 && sArgVar[0] && sArgVar[0]->mIsBinaryClip && sArgVar[1] && sArgVar[1]->mIsBinaryClip)
+			if_condition = (sArgVar[0]->Length() == sArgVar[1]->Length())
+				&& !memcmp(sArgVar[0]->Contents(), sArgVar[1]->Contents(), sArgVar[0]->Length());
 		else
-			if_condition = ATOI64(ARG1) == ATOI64(ARG2);
+		{
+			DETERMINE_NUMERIC_TYPES
+			IF_EITHER_IS_NON_NUMERIC
+				if_condition = !STRING_COMPARE;
+			else IF_EITHER_IS_FLOAT  // It might perform better to only do float conversions & math when necessary.
+				if_condition = ATOF(ARG1) == ATOF(ARG2);
+			else
+				if_condition = ATOI64(ARG1) == ATOI64(ARG2);
+		}
+		if (mActionType == ACT_IFNOTEQUAL)
+			if_condition = !if_condition;
+		break;
 
-		break;
-	case ACT_IFNOTEQUAL:
-		DETERMINE_NUMERIC_TYPES
-		IF_EITHER_IS_NON_NUMERIC
-			if_condition = STRING_COMPARE;
-		else IF_EITHER_IS_FLOAT  // It might perform better to only do float conversions & math when necessary.
-			if_condition = ATOF(ARG1) != ATOF(ARG2);
-		else
-			if_condition = ATOI64(ARG1) != ATOI64(ARG2);
-		break;
 	case ACT_IFLESS:
 		DETERMINE_NUMERIC_TYPES
 		IF_EITHER_IS_NON_NUMERIC
@@ -6901,16 +6920,51 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			// since no other actions will be dependent on it actually
 			// having happened:
 			DoWinDelay;
-		return OK;  // Always successful, like AutoIt.
+		return OK;
+
+	case ACT_WINMINIMIZE:
+	case ACT_WINMAXIMIZE:
+	case ACT_WINRESTORE:
+	case ACT_WINHIDE:
+	case ACT_WINSHOW:
 	case ACT_WINCLOSE:
 	case ACT_WINKILL:
 	{
-		int wait_time = *ARG3 ? (int)(1000 * ATOF(ARG3)) : DEFAULT_WINCLOSE_WAIT;
-		if (!wait_time) // 0 is defined as 500ms, which seems more useful than a true zero.
-			wait_time = 500;
-		if (WinClose(ARG1, ARG2, wait_time, ARG4, ARG5, mActionType == ACT_WINKILL))
-			DoWinDelay;
-		return OK;  // Always successful, like AutoIt.
+		// Set initial guess for is_ahk_group (further refined later).  For ahk_group, WinText,
+		// ExcludeTitle, and ExcludeText must be blank so that they are reserved for future use
+		// (i.e. they're currently not supported since the group's own criteria take precedence):
+		bool is_ahk_group = !(strnicmp(ARG1, "ahk_group", 9) || *ARG2 || *ARG4);
+		// The following is not quite accurate since is_ahk_group is only a guess at this stage, but
+		// given the extreme rarity of the guess being wrong, this shortcut seems justified to reduce
+		// the code size/complexity.  A wait_time of zero seems best for group closing because it's
+		// currently implemented to do the wait after every window in the group.  In addition,
+		// this makes "WinClose ahk_group GroupName" behave identically to "GroupClose GroupName",
+		// which seems best, for consistency:
+		int wait_time = is_ahk_group ? 0 : DEFAULT_WINCLOSE_WAIT;
+		if (mActionType == ACT_WINCLOSE || mActionType == ACT_WINKILL) // ARG3 is contains the wait time.
+		{
+			if (*ARG3 && !(wait_time = (int)(1000 * ATOF(ARG3)))   )
+				wait_time = 500; // Legacy (prior to supporting floating point): 0 is defined as 500ms, which seems more useful than a true zero.
+			if (*ARG5)
+				is_ahk_group = false;  // Override the default.
+		}
+		else
+			if (*ARG3)
+				is_ahk_group = false;  // Override the default.
+		// Act upon all members of this group (WinText/ExcludeTitle/ExcludeText are ignored in this mode).
+		if (is_ahk_group && (group = g_script.FindOrAddGroup(omit_leading_whitespace(ARG1 + 9), true))) // Assign.
+			return group->ActUponAll(mActionType, wait_time); // It will do DoWinDelay if appropriate.
+		//else try to act upon it as though "ahk_group something" is a literal window title.
+	
+		// Since above didn't return, it's not "ahk_group", so do the normal single-window behavior.
+		if (mActionType == ACT_WINCLOSE || mActionType == ACT_WINKILL)
+		{
+			if (WinClose(ARG1, ARG2, wait_time, ARG4, ARG5, mActionType == ACT_WINKILL)) // It closed something.
+				DoWinDelay;
+			return OK;
+		}
+		else
+			return PerformShowWindow(mActionType, FOUR_ARGS);
 	}
 
 	case ACT_INIREAD:
@@ -7154,7 +7208,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		if (mActionType != ACT_RUNWAIT)
 			g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Set default ErrorLevel to be possibly overridden later on.
 
-		bool any_clipboard_format = (mActionType == ACT_CLIPWAIT && ATOI64(ARG2) == 1);
+		bool any_clipboard_format = (mActionType == ACT_CLIPWAIT && ATOI(ARG2) == 1);
 
 		// Right before starting the wait-loop, make a copy of our args using the stack
 		// space in our recursion layer.  This is done in case other hotkey subroutine(s)
@@ -7279,13 +7333,8 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		return ControlSend(SIX_ARGS, mActionType == ACT_CONTROLSENDRAW);
 
 	case ACT_CONTROLCLICK:
-		if (*ARG4)
-		{
-			if (   !(vk = ConvertMouseButton(ARG4))   )
-				return LineError(ERR_MOUSE_BUTTON ERR_ABORT, FAIL, ARG4);
-		}
-		else // Default button when the param is blank or an reference to an empty var.
-			vk = VK_LBUTTON;
+		if (   !(vk = ConvertMouseButton(ARG4))   ) // Treats blank as "Left".
+			return LineError(ERR_MOUSE_BUTTON ERR_ABORT, FAIL, ARG4);
 		return ControlClick(vk, *ARG5 ? ATOI(ARG5) : 1, ARG6, ARG1, ARG2, ARG3, ARG7, ARG8);
 
 	case ACT_CONTROLMOVE:
@@ -7348,13 +7397,6 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		PostMessage(FindWindow("Shell_TrayWnd", NULL), WM_COMMAND, 416, 0);
 		DoWinDelay;
 		return OK;
-
-	case ACT_WINMINIMIZE:
-	case ACT_WINMAXIMIZE:
-	case ACT_WINHIDE:
-	case ACT_WINSHOW:
-	case ACT_WINRESTORE:
-		return PerformShowWindow(mActionType, FOUR_ARGS);
 
 	case ACT_ONEXIT:
 		if (!*ARG1) // Reset to normal Exit behavior.
@@ -7480,7 +7522,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			if (   !(group = g_script.FindOrAddGroup(ARG1))   )
 				return FAIL;  // It already displayed the error for us.
 		if (*ARG2 && !stricmp(ARG2, "A"))
-			group->CloseAll();  // Note: It will take care of DoWinDelay if needed.
+			group->ActUponAll(ACT_WINCLOSE, 0);  // Note: It will take care of DoWinDelay if needed.
 		else
 			group->CloseAndGoToNext(*ARG2 && !stricmp(ARG2, "R"));  // Note: It will take care of DoWinDelay if needed.
 		return OK;
@@ -7599,7 +7641,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		// in ExecUntil(), and instead resolve the variable name here directly.
 		return output_var->Assign((__int64)(mArgc > 1 && sArgVar[1] && sArgVar[1]->mIsBinaryClip
 			? sArgVar[1]->Length() + 1 // +1 to include the entire 4-byte terminator, which seems best in this case.
-			: strlen(ARG2))); // It already displayed any error.
+			: strlen(ARG2)));
 
 	case ACT_STRINGGETPOS:
 	{
@@ -8309,7 +8351,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		return OK;
 
 	case ACT_MOUSECLICK:
-		if (   !(vk = ConvertMouseButton(ARG1))   )
+		if (   !(vk = ConvertMouseButton(ARG1))   ) // Treats blank as "Left".
 			return LineError(ERR_MOUSE_BUTTON ERR_ABORT, FAIL, ARG1);
 		if (!ValidateMouseCoords(ARG2, ARG3))
 			return LineError(ERR_MOUSE_COORD ERR_ABORT, FAIL, ARG2);
@@ -9753,7 +9795,7 @@ double_deref:
 				switch (right.symbol)
 				{
 				// Seems best to obey SetFormat for these two, though it's debatable:
-				case SYM_INTEGER: ITOA64(right.value_int64, buf_temp); right_string = buf_temp; break;
+				case SYM_INTEGER: right_string = ITOA64(right.value_int64, buf_temp); break;
 				case SYM_FLOAT: snprintf(buf_temp, sizeof(buf_temp), g.FormatFloat, right.value_double); right_string = buf_temp; break;
 				default: right_string = right.marker; // SYM_STRING or SYM_OPERAND, which is already in the right format.
 				}
@@ -9761,7 +9803,7 @@ double_deref:
 				switch (left.symbol)
 				{
 				// Seems best to obey SetFormat for these two, though it's debatable:
-				case SYM_INTEGER: ITOA64(left.value_int64, buf_temp); left_string = buf_temp; break;
+				case SYM_INTEGER: left_string = ITOA64(left.value_int64, buf_temp); break;
 				case SYM_FLOAT: snprintf(buf_temp, sizeof(buf_temp), g.FormatFloat, left.value_double); left_string = buf_temp; break;
 				default: left_string = left.marker; // SYM_STRING or SYM_OPERAND, which is already in the right format.
 				}
@@ -10273,8 +10315,7 @@ VarSizeType Script::GetIconNumber(char *aBuf)
 		*aBuf = '\0';
 		return 0;
 	}
-	UTOA(g_script.mCustomIconNumber, aBuf);
-	return (VarSizeType)strlen(aBuf);
+	return (VarSizeType)strlen(UTOA(g_script.mCustomIconNumber, aBuf));
 }
 
 
@@ -10318,8 +10359,7 @@ VarSizeType Script::GetTimeIdlePhysical(char *aBuf)
 		return GetTimeIdle(aBuf);
 	if (!aBuf)
 		return MAX_NUMBER_LENGTH;
-	ITOA64(GetTickCount() - g_TimeLastInputPhysical, aBuf);
-	return (VarSizeType)strlen(aBuf);
+	return (VarSizeType)strlen(ITOA64(GetTickCount() - g_TimeLastInputPhysical, aBuf));
 }
 
 
@@ -10382,8 +10422,7 @@ VarSizeType Script::MyGetTickCount(char *aBuf)
 	// Thus, we use %d vs. %u in the snprintf() call below.
 	if (!aBuf)
 		return MAX_NUMBER_LENGTH; // Especially in this case, since tick might change between 1st & 2nd calls.
-	ITOA64(GetTickCount(), aBuf);
-	return (VarSizeType)strlen(aBuf);
+	return (VarSizeType)strlen(ITOA64(GetTickCount(), aBuf));
 }
 
 
@@ -10710,16 +10749,14 @@ VarSizeType Script::GetScreenWidth(char *aBuf)
 {
 	if (!aBuf)
 		return MAX_NUMBER_LENGTH;
-	ITOA(GetSystemMetrics(SM_CXSCREEN), aBuf);
-	return (VarSizeType)strlen(aBuf);
+	return (VarSizeType)strlen(ITOA(GetSystemMetrics(SM_CXSCREEN), aBuf));
 }
 
 VarSizeType Script::GetScreenHeight(char *aBuf)
 {
 	if (!aBuf)
 		return MAX_NUMBER_LENGTH;
-	ITOA(GetSystemMetrics(SM_CYSCREEN), aBuf);
-	return (VarSizeType)strlen(aBuf);
+	return (VarSizeType)strlen(ITOA(GetSystemMetrics(SM_CYSCREEN), aBuf));
 }
 
 
@@ -11062,8 +11099,7 @@ VarSizeType Script::GetLoopIndex(char *aBuf)
 {
 	if (!aBuf)
 		return MAX_NUMBER_LENGTH;
-	ITOA64(mLoopIteration, aBuf);
-	return (VarSizeType)strlen(aBuf);
+	return (VarSizeType)strlen(ITOA64(mLoopIteration, aBuf));
 }
 
 
@@ -11098,10 +11134,7 @@ VarSizeType Script::GetThisMenuItemPos(char *aBuf)
 				menu->Create();
 			UINT menu_item_pos = menu->GetItemPos(mThisMenuItemName);
 			if (menu_item_pos < UINT_MAX) // Success
-			{
-				UTOA(menu_item_pos + 1, aBuf);  // Add one to convert from zero-based to 1-based.
-				return (VarSizeType)strlen(aBuf);
-			}
+				return (VarSizeType)strlen(UTOA(menu_item_pos + 1, aBuf)); // +1 to convert from zero-based to 1-based.
 		}
 	}
 	// Otherwise:
@@ -11143,7 +11176,7 @@ VarSizeType Script::GetTimeSinceThisHotkey(char *aBuf)
 		// isn't greater than about 49.  See MyGetTickCount() for explanation of %d vs. %u.
 		// Update: Using 64-bit ints now, so above is obsolete:
 		//snprintf(str, sizeof(str), "%d", (DWORD)(GetTickCount() - mThisHotkeyStartTime));
-		ITOA64((__int64)(GetTickCount() - mThisHotkeyStartTime), aBuf)  // No semicolon
+		ITOA64((__int64)(GetTickCount() - mThisHotkeyStartTime), aBuf);
 	else
 		strcpy(aBuf, "-1");
 	return (VarSizeType)strlen(aBuf);
@@ -11156,7 +11189,7 @@ VarSizeType Script::GetTimeSincePriorHotkey(char *aBuf)
 	if (*mPriorHotkeyName)
 		// See MyGetTickCount() for explanation for explanation:
 		//snprintf(str, sizeof(str), "%d", (DWORD)(GetTickCount() - mPriorHotkeyStartTime));
-		ITOA64((__int64)(GetTickCount() - mPriorHotkeyStartTime), aBuf)
+		ITOA64((__int64)(GetTickCount() - mPriorHotkeyStartTime), aBuf);
 	else
 		strcpy(aBuf, "-1");
 	return (VarSizeType)strlen(aBuf);

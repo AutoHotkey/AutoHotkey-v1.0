@@ -120,6 +120,7 @@ extern bool g_HSOmitEndChar;
 extern bool g_HSSendRaw;
 extern bool g_HSEndCharRequired;
 extern bool g_HSDetectWhenInsideWord;
+extern bool g_HSDoReset;
 extern char g_EndChars[HS_MAX_END_CHARS + 1];
 
 // Global objects:

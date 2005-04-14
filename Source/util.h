@@ -19,6 +19,7 @@ GNU General Public License for more details.
 
 #include "stdafx.h" // pre-compiled headers
 #include "defines.h"
+EXTERN_G;  // For ITOA() and related functions' use of g.FormatIntAsHex
 
 #define IS_SPACE_OR_TAB(c) (c == ' ' || c == '\t')
 #define IS_SPACE_OR_TAB_OR_NBSP(c) (c == ' ' || c == '\t' || c == -96) // Use a negative to support signed chars.
@@ -284,78 +285,117 @@ inline bool IsHex(char *aBuf)
 
 
 
+// As of v1.0.30, ATOI(), ITOA() and the other related functions below are no longer macros
+// because there are too many places where something like ATOI(++cp) is done, which would be a
+// bug if not caught since cp would be incremented more than once if the macro referred to that
+// arg more than once.  In addition, a non-comprehensive, simple bench benchmark shows that the
+// macros don't perform any better anyway, probably in part because there are many times when
+// something like ATOI(ARG1) is called, which forces the ARG1 macro to be expanded two or more
+// times within ATOI (when it was a macro).  So for now, the below are declared as inline.
+// However, it seems that the compiler chooses not to make them truly inline, which as it
+// turns out is probably the right decision since a simple benchmark shows that even with
+// __forceinline in effect for all of them (which is confirmed to actually force inline),
+// the performance isn't any better.
+
+inline __int64 ATOI64(char *buf)
 // A more complex macro is used for ATOI64(), since it is more often called from places where
 // performance matters (e.g. ACT_ADD).  It adds about 500 bytes to the code size in exchance for
 // a 8% faster math loops.  But it's probably about 8% slower when used with hex integers, but
 // those are so rare that the speed-up seems worth the extra code size:
 //#define ATOI64(buf) _strtoi64(buf, NULL, 0) // formerly used _atoi64()
-#define ATOI64(buf) (IsHex(buf) ? _strtoi64(buf, NULL, 16) : _atoi64(buf))
-#define ATOU64(buf) _strtoui64(buf, NULL, IsHex(buf) ? 16 : 10)
+{
+	return IsHex(buf) ? _strtoi64(buf, NULL, 16) : _atoi64(buf);
+}
 
-// Below has been updated because values with leading zeros were being intepreted as
-// octal, which is undesirable.
-//#define ATOI(buf) strtol(buf, NULL, 0) // Use zero as last param to support both hex & dec.
-#define ATOI(buf) (IsHex(buf) ? strtol(buf, NULL, 16) : atoi(buf))
-#define ATOU(buf) (strtoul(buf, NULL, IsHex(buf) ? 16 : 10))
+inline unsigned __int64 ATOU64(char *buf)
+{
+	return _strtoui64(buf, NULL, IsHex(buf) ? 16 : 10);
+}
 
+inline int ATOI(char *buf)
+{
+	// Below has been updated because values with leading zeros were being intepreted as
+	// octal, which is undesirable.
+	// Formerly: #define ATOI(buf) strtol(buf, NULL, 0) // Use zero as last param to support both hex & dec.
+	return IsHex(buf) ? strtol(buf, NULL, 16) : atoi(buf);
+}
+
+inline unsigned long ATOU(char *buf)
+{
+	return strtoul(buf, NULL, IsHex(buf) ? 16 : 10);
+}
+
+inline double ATOF(char *buf)
 // Unlike some Unix versions of strtod(), the VC++ version does not seem to handle hex strings
 // such as "0xFF" automatically.  So this macro must check for hex because some callers rely on that.
 // Also, it uses _strtoi64() vs. strtol() so that more of a double's capacity can be utilized:
-#define ATOF(buf) (IsHex(buf) ? (double)_strtoi64(buf, NULL, 16) : atof(buf))
+{
+	return IsHex(buf) ? (double)_strtoi64(buf, NULL, 16) : atof(buf);
+}
 
-// Negative hex numbers need special handling, otherwise something like zero minus one would create
-// a huge 0xffffffffffffffff value, which would subsequently not be read back in correctly as
-// a negative number (but UTOA() doesn't need this since there can't be negatives in that case).
-#define ITOA(value, buf) \
-	{\
-		if (g.FormatIntAsHex)\
-		{\
-			char *our_buf_temp = buf;\
-			if (value < 0)\
-				*our_buf_temp++ = '-';\
-			*our_buf_temp++ = '0';\
-			*our_buf_temp++ = 'x';\
-			_itoa(value < 0 ? -(int)value : value, our_buf_temp, 16);\
-		}\
-		else\
-			_itoa(value, buf, 10);\
+inline char *ITOA(int value, char *buf)
+{
+	if (g.FormatIntAsHex)
+	{
+		char *our_buf_temp = buf;
+		// Negative hex numbers need special handling, otherwise something like zero minus one would create
+		// a huge 0xffffffffffffffff value, which would subsequently not be read back in correctly as
+		// a negative number (but UTOA() doesn't need this since there can't be negatives in that case).
+		if (value < 0)
+			*our_buf_temp++ = '-';
+		*our_buf_temp++ = '0';
+		*our_buf_temp++ = 'x';
+		_itoa(value < 0 ? -(int)value : value, our_buf_temp, 16);
+		// Must not return the result of the above because it's our_buf_temp and we want buf.
+		return buf;
 	}
-#define ITOA64(value, buf) \
-	{\
-		if (g.FormatIntAsHex)\
-		{\
-			char *our_buf_temp = buf;\
-			if (value < 0)\
-				*our_buf_temp++ = '-';\
-			*our_buf_temp++ = '0';\
-			*our_buf_temp++ = 'x';\
-			_i64toa(value < 0 ? -(__int64)value : value, our_buf_temp, 16);\
-		}\
-		else\
-			_i64toa(value, buf, 10);\
+	else
+		return _itoa(value, buf, 10);
+}
+
+inline char *ITOA64(__int64 value, char *buf)
+{
+	if (g.FormatIntAsHex)
+	{
+		char *our_buf_temp = buf;
+		if (value < 0)
+			*our_buf_temp++ = '-';
+		*our_buf_temp++ = '0';
+		*our_buf_temp++ = 'x';
+		_i64toa(value < 0 ? -(__int64)value : value, our_buf_temp, 16);
+		// Must not return the result of the above because it's our_buf_temp and we want buf.
+		return buf;
 	}
-#define UTOA(value, buf) \
-	{\
-		if (g.FormatIntAsHex)\
-		{\
-			*buf = '0';\
-			*(buf + 1) = 'x';\
-			_ultoa(value, buf + 2, 16);\
-		}\
-		else\
-			_ultoa(value, buf, 10);\
+	else
+		return _i64toa(value, buf, 10);
+}
+
+inline char *UTOA(unsigned long value, char *buf)
+{
+	if (g.FormatIntAsHex)
+	{
+		*buf = '0';
+		*(buf + 1) = 'x';
+		_ultoa(value, buf + 2, 16);
+		// Must not return the result of the above because it's buf + 2 and we want buf.
+		return buf;
 	}
-#define UTOA64(value, buf) \
-	{\
-		if (g.FormatIntAsHex)\
-		{\
-			*buf = '0';\
-			*(buf + 1) = 'x';\
-			_ui64toa(value, buf + 2, 16);\
-		}\
-		else\
-			_ui64toa(value, buf, 10);\
-	}
+	else
+		return _ultoa(value, buf, 10);
+}
+
+// Not currently used:
+//inline char *UTOA64(unsigned __int64 value, char *buf) 
+//{
+//	if (g.FormatIntAsHex)
+//	{
+//		*buf = '0';
+//		*(buf + 1) = 'x';
+//		return _ui64toa(value, buf + 2, 16);
+//	}
+//	else
+//		return _ui64toa(value, buf, 10);
+//}
 
 
 

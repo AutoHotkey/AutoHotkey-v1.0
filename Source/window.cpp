@@ -24,11 +24,6 @@ GNU General Public License for more details.
 HWND WinActivate(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
 	, bool aFindLastMatch, HWND aAlreadyVisited[], int aAlreadyVisitedCount)
 {
-	if (!aTitle) aTitle = "";
-	if (!aText) aText = "";
-	if (!aExcludeTitle) aExcludeTitle = "";
-	if (!aExcludeText) aExcludeText = "";
-
 	// If window is already active, be sure to leave it that way rather than activating some
 	// other window that may match title & text also.  NOTE: An explicit check is done
 	// for this rather than just relying on EnumWindows() to obey the z-order because
@@ -382,13 +377,6 @@ HWND WinClose(char *aTitle, char *aText, int aTimeToWaitForClose
 // Return the HWND of any found-window to the caller so that it has the option of waiting
 // for it to become an invalid (closed) window.
 {
-	// Methods like this avoid any chance of dereferencing a NULL pointer:
-	if (!aTitle) aTitle = "";
-	if (!aText) aText = "";
-	if (!aExcludeTitle) aExcludeTitle = "";
-	if (!aExcludeText) aExcludeText = "";
-	if (aTimeToWaitForClose < 0) aTimeToWaitForClose = 0;
-
 	HWND target_window;
 	IF_USE_FOREGROUND_WINDOW(aTitle, aText, aExcludeTitle, aExcludeText)
 		// Close topmost (better than !F4 since that uses the alt key, effectively resetting
@@ -410,10 +398,15 @@ HWND WinClose(char *aTitle, char *aText, int aTimeToWaitForClose
 	}
 	else
 		target_window = GetValidLastUsedWindow();
-	if (!target_window)
-		return NULL;
 
-	if (aKillIfHung) // This part is based on the AutoIt3 source.
+	return target_window ? WinClose(target_window, aTimeToWaitForClose, aKillIfHung) : NULL;
+}
+
+
+
+HWND WinClose(HWND aWnd, int aTimeToWaitForClose, bool aKillIfHung)
+{
+	if (aKillIfHung) // This part is based on te AutoIt3 source.
 	{
 		// Update: Another reason not to wait a long time with the below is that WinKill
 		// is normally only used when the target window is suspected of being hung.  It
@@ -426,10 +419,10 @@ HWND WinClose(char *aTitle, char *aText, int aTimeToWaitForClose
 		// to freeze for a long time).  Also, always use WM_CLOSE vs. SC_CLOSE in this case
 		// since the target window is slightly more likely to respond to that:
 		DWORD dwResult;
-		if (!SendMessageTimeout(target_window, WM_CLOSE, 0, 0, SMTO_ABORTIFHUNG, 200, &dwResult))
+		if (!SendMessageTimeout(aWnd, WM_CLOSE, 0, 0, SMTO_ABORTIFHUNG, 200, &dwResult))
 		{
 			// Use more force - Mwuahaha
-			DWORD pid = GetWindowThreadProcessId(target_window, NULL);
+			DWORD pid = GetWindowThreadProcessId(aWnd, NULL);
 			HANDLE hProcess = pid ? OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid) : NULL;
 			if (hProcess)
 			{
@@ -454,8 +447,13 @@ HWND WinClose(char *aTitle, char *aText, int aTimeToWaitForClose
 		// a true WM_CLOSE, which is probably not what the user would want.
 		// Update: Swithced back to using WM_CLOSE so that instances of AutoHotkey
 		// can be terminated via another instances use of the WinClose command:
-		//PostMessage(target_window, WM_SYSCOMMAND, SC_CLOSE, 0);
-		PostMessage(target_window, WM_CLOSE, 0, 0);
+		//PostMessage(aWnd, WM_SYSCOMMAND, SC_CLOSE, 0);
+		PostMessage(aWnd, WM_CLOSE, 0, 0);
+
+	if (aTimeToWaitForClose < 0)
+		aTimeToWaitForClose = 0;
+	if (!aTimeToWaitForClose)
+		return aWnd; // v1.0.30: EnumParentActUponAll() relies on the ability to do no delay at all.
 
 	// Slight delay.  Might help avoid user having to modify script to use WinWaitClose()
 	// in many cases.  UPDATE: But this does a Sleep(0), which won't yield the remainder
@@ -487,8 +485,8 @@ HWND WinClose(char *aTitle, char *aText, int aTimeToWaitForClose
 		// Seems best to always do the first one regardless of the value 
 		// of aTimeToWaitForClose:
 		MsgSleep(INTERVAL_UNSPECIFIED);
-		if (!IsWindow(target_window)) // It's gone, so we're done.
-			return target_window;
+		if (!IsWindow(aWnd)) // It's gone, so we're done.
+			return aWnd;
 		// Must cast to int or any negative result will be lost due to DWORD type:
 		if ((int)(aTimeToWaitForClose - (GetTickCount() - start_time)) <= SLEEP_INTERVAL_HALF)
 			break;
@@ -496,18 +494,13 @@ HWND WinClose(char *aTitle, char *aText, int aTimeToWaitForClose
 			// current active window after the time expires (in case
 			// it's suspended).  INTERVAL_UNSPECIFIED performs better.
 	}
-	return target_window;  // Done waiting.
+	return aWnd;  // Done waiting.
 }
 
 
-
+	
 HWND WinActive(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText, bool aUpdateLastUsed)
 {
-	if (!aTitle) aTitle = "";
-	if (!aText) aText = "";
-	if (!aExcludeTitle) aExcludeTitle = "";
-	if (!aExcludeText) aExcludeText = "";
-
 	HWND target_window;
 	if (USE_FOREGROUND_WINDOW(aTitle, aText, aExcludeTitle, aExcludeText))
 	{
@@ -527,69 +520,20 @@ HWND WinActive(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeTex
 	if (!fore_win)
 		return NULL;
 
-	if (!*aTitle && !*aText && !*aExcludeTitle && !*aExcludeText) // Use the "last found" window.
+	if (!(*aTitle || *aText || *aExcludeTitle || *aExcludeText)) // Use the "last found" window.
 		return (fore_win == GetValidLastUsedWindow()) ? fore_win : NULL;
 
 	// Only after the above check should the below be done.  This is because "IfWinActive" (with no params)
 	// should be "true" if one of the script's GUI windows is active:
-	if (!g.DetectHiddenWindows && !IsWindowVisible(fore_win)) // In this case, the caller's window can't be active.
+	if (!(g.DetectHiddenWindows || IsWindowVisible(fore_win))) // In this case, the caller's window can't be active.
 		return NULL;
 
-	char win_title[WINDOW_TEXT_SIZE];
+	WindowSearch ws;
+	ws.SetCandidate(fore_win);
 
-	if (!strnicmp(aTitle, AHK_ID_FLAG, AHK_ID_FLAG_LENGTH))
-	{
-		// Use ATOU64() so that the full unsigned capacity of a 32-bit address can be read back in,
-		// and so that 64-bit memory addresses will be supported if the compiler uses them:
-		target_window = (HWND)ATOU64(aTitle + AHK_ID_FLAG_LENGTH);
-		if (target_window != fore_win || !IsWindow(target_window)) // g.DetectHiddenWindows was already checked above.
-			return NULL;
-		// Check if this specific window is excluded due to its title.
-		// This section is similar to the one in WinExist(), so maintain them together:
-		if (*aExcludeTitle)
-		{
-			if (GetWindowText(target_window, win_title, sizeof(win_title)))
-			{
-				switch(g.TitleMatchMode)
-				{
-				case FIND_ANYWHERE:
-					if (strstr(win_title, aExcludeTitle))
-						return NULL;
-					break;
-				case FIND_IN_LEADING_PART:
-					if (!strncmp(win_title, aExcludeTitle, strlen(aExcludeTitle)))
-						return NULL;
-					break;
-				default:
-					if (!strcmp(win_title, aExcludeTitle))
-						return NULL;
-				}
-			}
-		}
-		if (HasMatchingChild(target_window, aText, aExcludeText))
-			UPDATE_AND_RETURN_LAST_USED_WINDOW(target_window)
-		else
-			return NULL;
-	}
-
-	// Otherwise:
-	// Don't use GetWindowTextByTitleMatchMode() because Aut3 uses the same fast
-	// method as below for window titles:
-	if (!GetWindowText(fore_win, win_title, sizeof(win_title)))
-		// UPDATE: This method effectively prevented windows without titles, such as
-		// "ahk_class Shell_TrayWnd", from ever been findable by the script.  So now
-		// allow it to continue instead:
-		//return NULL;
-		*win_title = '\0';
-
-	if (!IsTitleMatch(fore_win, win_title, aTitle, aExcludeTitle)) // Active window's title doesn't match.
-		return NULL;
-
-	// Otherwise confirm the match by ensuring that active window has a child that contains <aText>.
-	// (it will return "success" immediately if aText & aExcludeText are both blank):
-	if (HasMatchingChild(fore_win, aText, aExcludeText))
-		UPDATE_AND_RETURN_LAST_USED_WINDOW(fore_win)
-	else
+	if (ws.SetCriteria(aTitle, aText, aExcludeTitle, aExcludeText) && ws.IsMatch()) // g.DetectHiddenWindows was already checked above.
+		UPDATE_AND_RETURN_LAST_USED_WINDOW(fore_win) // This also does a "return".
+	else // If the line above didn't return, indicate that the specified window is not active.
 		return NULL;
 }
 
@@ -602,13 +546,6 @@ HWND WinExist(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
 // given parameters will be returned, in which case aUpdateLastUsed is always considered
 // to be false regardless of what was passed.
 {
-	// Seems okay to allow both title and text to be NULL or empty.  It would then find the first window
-	// of any kind (and there's probably always at least one, even on a blank desktop).
-	if (!aTitle) aTitle = "";
-	if (!aText) aText = "";
-	if (!aExcludeTitle) aExcludeTitle = "";
-	if (!aExcludeText) aExcludeText = "";
-
 	HWND target_window;
 	if (USE_FOREGROUND_WINDOW(aTitle, aText, aExcludeTitle, aExcludeText))
 	{
@@ -624,7 +561,7 @@ HWND WinExist(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
 		UPDATE_AND_RETURN_LAST_USED_WINDOW(target_window);
 	}
 
-	if (!*aTitle && !*aText && !*aExcludeTitle && !*aExcludeText)
+	if (!(*aTitle || *aText || *aExcludeTitle || *aExcludeText))
 	{
 		// User passed no params, so use the window most recently found by WinExist().
 		// It's correct to do this even in this function because it's called by
@@ -634,163 +571,40 @@ HWND WinExist(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
 		return aReturnTheCount ? (HWND)(target_window ? 1 : 0) : target_window;
 	}
 
+	WindowSearch ws;
+	if (!ws.SetCriteria(aTitle, aText, aExcludeTitle, aExcludeText)) // No match is possible with these criteria.
+		return NULL; // This will be interpreted as zero if caller specified true for aReturnTheCount.
 
-	if (!strnicmp(aTitle, AHK_ID_FLAG, AHK_ID_FLAG_LENGTH)) // In this case aFindLastMatch is ignored.
+	ws.mFindLastMatch = aFindLastMatch || aReturnTheCount; // This is because aReturnTheCount implies aFindLastMatch.
+	ws.mAlreadyVisited = aAlreadyVisited;
+	ws.mAlreadyVisitedCount = aAlreadyVisitedCount;
+
+	if (ws.mCriterion == CRITERION_ID) // "ahk_id" will be satisified if that HWND still exists and is valid.
 	{
-		// Use ATOU64() so that the full unsigned capacity of a 32-bit address can be read back in,
-		// and so that 64-bit memory addresses will be supported if the compiler uses them:
-		target_window = (HWND)ATOU64(aTitle + AHK_ID_FLAG_LENGTH);
-		// Explicitly allow HWND_BROADCAST for all commands, even though it's only valid with
-		// ScriptSendMessage() and ScriptPostMessage().  This is because HWND_BROADCAST is
-		// probably never used as the HWND for a real window, so there should be no danger
-		// of any reasonable script ever passing that value in as a real target window,
+		// Explicitly allow HWND_BROADCAST for all commands that use WinExist (which is just about all
+		// window commands), even though it's only valid with ScriptSendMessage() and ScriptPostMessage().
+		// This is because HWND_BROADCAST is probably never used as the HWND for a real window, so there
+		// should be no danger of any reasonable script ever passing that value in as a real target window,
 		// which should thus minimize the chance of a crash due to calling various API functions
 		// with invalid window handles.
-		if (target_window != HWND_BROADCAST // It's not exempt from the other checks on the two lines below.
-			&& (!IsWindow(target_window)    // And it's either: 1) not a valid window...
-			|| !(g.DetectHiddenWindows || IsWindowVisible(target_window)))) // ...or 2) the window is not detectible.
+		if (ws.mCriterionHwnd != HWND_BROADCAST // It's not exempt from the other checks on the two lines below.
+			&& (!IsWindow(ws.mCriterionHwnd)    // And it's either not a valid window...
+			|| !(g.DetectHiddenWindows || IsWindowVisible(ws.mCriterionHwnd)))) // ...or the window is not detectible.
 			return NULL; // NULL will be interpreted as zero in the case of aReturnTheCount.
 
-		// Check if this specific window is excluded due to its title.
-		// This section is similar to the one in WinActive(), so maintain them together:
-		if (*aExcludeTitle)
-		{
-			char win_title[WINDOW_TEXT_SIZE];
-			if (GetWindowText(target_window, win_title, sizeof(win_title)))
-			{
-				switch(g.TitleMatchMode)
-				{
-				case FIND_ANYWHERE:
-					if (strstr(win_title, aExcludeTitle))
-						return NULL; // NULL will be interpreted as zero in the case of aReturnTheCount.
-					break;
-				case FIND_IN_LEADING_PART:
-					if (!strncmp(win_title, aExcludeTitle, strlen(aExcludeTitle)))
-						return NULL;
-					break;
-				default:
-					if (!strcmp(win_title, aExcludeTitle))
-						return NULL;
-				}
-			}
-		}
-		if (HasMatchingChild(target_window, aText, aExcludeText))
-		{
-			if (aReturnTheCount) // The last found window is never updated in this case.
-				return (HWND)1;
-			UPDATE_AND_RETURN_LAST_USED_WINDOW(target_window)
-		}
-		else
-			return NULL; // NULL will be interpreted as zero in the case of aReturnTheCount.
+		// Otherwise, the window is valid and detectible.
+		ws.SetCandidate(ws.mCriterionHwnd);
+		if (!ws.IsMatch()) // This checks if it matches any WinText/ExcludeTitle, as well as anything in the aAlreadyVisited list.
+			return NULL; // This will be interpreted as zero if caller specified true for aReturnTheCount.
+		//else fall through to the section below, since ws.mFoundCount and ws.mFoundParent were set by ws.IsMatch().
 	}
+	else // aWinTitle doesn't start with "ahk_id".  Try to find a matching window.
+		EnumWindows(EnumParentFind, (LPARAM)&ws);
 
-	// Otherwise (the above didn't return):
-	WindowInfoPackage wip;
-	wip.find_last_match = aFindLastMatch || aReturnTheCount; // aReturnTheCount implies aFindLastMatch
-	strlcpy(wip.title, aTitle, sizeof(wip.title));
-	strlcpy(wip.text, aText, sizeof(wip.text));
-	strlcpy(wip.exclude_title, aExcludeTitle, sizeof(wip.exclude_title));
-	strlcpy(wip.exclude_text, aExcludeText, sizeof(wip.exclude_text));
-	wip.already_visited = aAlreadyVisited;
-	wip.already_visited_count = aAlreadyVisitedCount;
-
-	// Note: It's a little strange, but I think EnumWindows() returns FALSE when the callback stopped
-	// the enumeration prematurely by returning false to its caller.  Otherwise (the enumeration went
-	// through every window), it returns TRUE:
-	EnumWindows(EnumParentFind, (LPARAM)&wip);
 	if (aReturnTheCount) // The last found window is never updated in this case.
-		return (HWND)wip.match_count;
-	UPDATE_AND_RETURN_LAST_USED_WINDOW(wip.parent_hwnd);
-}
-
-
-
-BOOL CALLBACK EnumParentFind(HWND aWnd, LPARAM lParam)
-// To continue enumeration, the function must return TRUE; to stop enumeration, it must return FALSE. 
-{
-	// According to MSDN, GetWindowText() will hang only if it's done against
-	// one of your own app's windows and that window is hung.  I suspect
-	// this might not be true in Win95, and possibly not even Win98, but
-	// it's not really an issue because GetWindowText() has to be called
-	// eventually, either here or in an EnumWindowsProc.  The only way
-	// to prevent hangs (if indeed it does hang on Win9x) would be to
-	// call something like IsWindowHung() before every call to
-	// GetWindowText(), which might result in a noticeable delay whenever
-	// we search for a window via its title (or even worse: by the title
-	// of one of its controls or child windows).  UPDATE: Trying GetWindowTextTimeout()
-	// now, which might be the best compromise.  UPDATE: It's annoyingly slow,
-	// so went back to using the old method.
-	if (!g.DetectHiddenWindows && !IsWindowVisible(aWnd)) // Skip hidden windows in this case.
-		return TRUE;
-	char win_title[WINDOW_TEXT_SIZE];
-	// Don't use GetWindowTextByTitleMatchMode() because it's (always?) unnecessary for
-	// window titles (AutoIt3 does this same thing):
-	if (!GetWindowText(aWnd, win_title, sizeof(win_title)))
-		// Even if can't get the text of some window, for some reason, keep enumerating.
-		// UPDATE: This method effectively prevented windows without titles, such as
-		// "ahk_class Shell_TrayWnd", from ever been findable by the script.  So now
-		// allow it to continue instead:
-		//return TRUE;
-		*win_title = '\0';
-
-	WindowInfoPackage &wip = *((WindowInfoPackage *)lParam);  // For performance and convenience.
-
-	// strstr() and related std C functions -- as well as the custom strcasestr(), will always
-	// find the empty string in any string, which is what we want in case title is the empty string.
-	if (!IsTitleMatch(aWnd, win_title, wip.title, wip.exclude_title))
-		// Since title doesn't match there's no point in checking the text of this HWND.
-		// Just continue finding more top-level (parent) windows:
-		return TRUE;
-
-	// Disqualify this window if the caller provided us a list of unwanted windows:
-	if (wip.already_visited_count && wip.already_visited)
-		for (int i = 0; i < wip.already_visited_count; ++i)
-			if (aWnd == wip.already_visited[i])
-				return TRUE; // Not a match, so skip this one and keep searching.
-
-	// Otherwise, the title matches.  If text is specified, the child windows of this parent
-	// must be searched to try to find a match for it:
-	if (*wip.text || *wip.exclude_text)
-	{
-		// Search for the specfied text among the children of this window.
-		// EnumChildWindows() will return FALSE (failure) in at least two common conditions:
-		// 1) It's EnumChildProc callback returned false (i.e. it ended the enumeration prematurely).
-		// 2) The specified parent has no children.
-		// Since in both these cases GetLastError() returns ERROR_SUCCESS, we discard the return
-		// value and just check the struct's child_hwnd to determine whether a match has been found:
-		wip.child_hwnd = NULL;  // Init prior to each call, in case find_last_match is true.
-		EnumChildWindows(aWnd, EnumChildFind, lParam);
-		if (!wip.child_hwnd)
-			// This parent has no matching child, or no children at all, so search for more parents:
-			return TRUE;
-	}
-
-	// Otherwise, a complete match has been found.  Set this output value for the caller.
-	// If find_last_match is true, this value will stay in effect unless overridden
-	// by another matching window:
-	wip.parent_hwnd = aWnd;
-	++wip.match_count;  // This must be done prior to the wip.array_start section below.
-
-	if (wip.array_start)
-	{
-		// Make it longer than Max var name so that FindOrAddVar() will be able to spot and report
-		// var names that are too long:
-		char var_name[MAX_VAR_NAME_LENGTH + 20];
-		snprintf(var_name, sizeof(var_name), "%s%u", wip.array_start->mName, wip.match_count);
-		// To help performance (in case the linked list of variables is huge), tell it where
-		// to start the search.  Use the base array name rather than the preceding element because,
-		// for example, Array19 is alphabetially less than Array2, so we can't rely on the
-		// numerical ordering:
-		Var *array_item = g_script.FindOrAddVar(var_name, VAR_NAME_LENGTH_DEFAULT, wip.array_start);
-		if (array_item)
-			array_item->AssignHWND(aWnd);  // Failure not checked since very rare, and way to report it yet.
-		// else no error reporting currently, since should be very rare.
-		return TRUE;  // Always do the entire enumeration when caller wants windows saved to an array.
-	}
-
-	// If find_last_match is true, continue searching.  Otherwise, this first match is the one
-	// that's desired so stop here:
-	return wip.find_last_match;  // Returning a bool in lieu of BOOL is safe in this case.
+		return (HWND)ws.mFoundCount;
+	// Otherwise:
+	UPDATE_AND_RETURN_LAST_USED_WINDOW(ws.mFoundParent) // This also does a "return".
 }
 
 
@@ -815,6 +629,36 @@ HWND GetValidLastUsedWindow()
 
 
 
+BOOL CALLBACK EnumParentFind(HWND aWnd, LPARAM lParam)
+// To continue enumeration, the function must return TRUE; to stop enumeration, it must return FALSE. 
+// It's a little strange, but I think EnumWindows() returns FALSE when the callback stopped
+// the enumeration prematurely by returning false to its caller.  Otherwise (the enumeration went
+// through every window), it returns TRUE:
+{
+	// According to MSDN, GetWindowText() will hang only if it's done against
+	// one of your own app's windows and that window is hung.  I suspect
+	// this might not be true in Win95, and possibly not even Win98, but
+	// it's not really an issue because GetWindowText() has to be called
+	// eventually, either here or in an EnumWindowsProc.  The only way
+	// to prevent hangs (if indeed it does hang on Win9x) would be to
+	// call something like IsWindowHung() before every call to
+	// GetWindowText(), which might result in a noticeable delay whenever
+	// we search for a window via its title (or even worse: by the title
+	// of one of its controls or child windows).  UPDATE: Trying GetWindowTextTimeout()
+	// now, which might be the best compromise.  UPDATE: It's annoyingly slow,
+	// so went back to using the old method.
+	if (!(g.DetectHiddenWindows || IsWindowVisible(aWnd))) // Skip windows the script isn't supposed to detect.
+		return TRUE;
+	WindowSearch &ws = *((WindowSearch *)lParam);  // For performance and convenience.
+	ws.SetCandidate(aWnd);
+	// If this window doesn't match, continue searching for more windows (via TRUE).  Likewise, if
+	// mFindLastMatch is true, continue searching even if this window is a match.  Otherwise, this
+	// first match is the one that's desired so stop here:
+	return ws.IsMatch() ? ws.mFindLastMatch : TRUE;
+}
+
+
+
 BOOL CALLBACK EnumChildFind(HWND aWnd, LPARAM lParam)
 // Although this function could be rolled into a generalized version of the EnumWindowsProc(),
 // it will perform better this way because there's less checking required and no mode/flag indicator
@@ -822,42 +666,47 @@ BOOL CALLBACK EnumChildFind(HWND aWnd, LPARAM lParam)
 // it's more comprehensible this way.  lParam is a pointer to the struct rather than just a
 // string because we want to give back the HWND of any matching window.
 {
+	// Since WinText and ExcludeText are seldom used in typical scripts, the following buffer
+	// is put on the stack here rather than on our callers (inside the WindowSearch object),
+	// which should help conserve stack space on average.  Can't use the ws.mCandidateTitle
+	// buffer because ws.mFindLastMatch might be true, in which case the original title must
+	// be preserved.
 	char win_text[WINDOW_TEXT_SIZE];
-	if (!g.DetectHiddenText && !IsWindowVisible(aWnd))
-		return TRUE;  // This child/control is hidden and user doesn't want it considered, so skip it.
-	if (!GetWindowTextByTitleMatchMode(aWnd, win_text, sizeof(win_text)))
-		return TRUE;  // Even if can't get the text of some window, for some reason, keep enumerating.
 
-	WindowInfoPackage &wip = *((WindowInfoPackage *)lParam);  // For performance and convenience.
+	if (!(g.DetectHiddenText || IsWindowVisible(aWnd)) // This text element should not be detectible by the script.
+		|| !GetWindowTextByTitleMatchMode(aWnd, win_text, sizeof(win_text))) // Or it has no text (or failure to fetch it).
+		return TRUE;  // Skip this child and keep enumerating to try to find a match among the other children.
 
-	// Below: Tell it to find match anywhere in the child-window text, rather than just
-	// in the leading part, because this is how AutoIt2 and AutoIt3 operate:
-	if (*wip.exclude_text && strstr(win_text, wip.exclude_text))
-		// Since this child window contains the specified ExcludeText, the parent window is
-		// always a non-match:
-		return FALSE;
-	if (IsTextMatch(win_text, wip.text, FIND_ANYWHERE))
+	WindowSearch &ws = *((WindowSearch *)lParam);  // For performance and convenience.
+
+	// For compatibility with AutoIt v2, strstr() is always used for control/child text elements.
+
+	// This first check takes precedence over the next, so it is done first:
+	if (*ws.mCriterionExcludeText && strstr(win_text, ws.mCriterionExcludeText))
+		// Since this child window contains the specified ExcludeText anywhere inside its text,
+		// the parent window is always a non-match.
+		return FALSE; // Parent can't be a match, so stop searching its children.
+	if (!*ws.mCriterionText || strstr(win_text, ws.mCriterionText)) // Match found.
 	{
-		// Match found, so stop searching.
-		//char class_name[64];
-		//GetClassName(aWnd, class_name, sizeof(class_name));
-		//MsgBox(class_name);
-		wip.child_hwnd = aWnd;
-		return FALSE;
+		ws.mFoundChild = aWnd;
+		return FALSE; // Match found, so stop searching.
 	}
-	// Since this child doesn't match, make sure none of its children (recursive)
-	// match prior to continuing the original enumeration.  We don't discard the
-	// return value from EnumChildWindows() because it's FALSE in two cases:
+
+	// UPDATE to the below: The MSDN docs state that EnumChildWindows() already handles the
+	// recursion for us: "If a child window has created child windows of its own,
+	// EnumChildWindows() enumerates those windows as well."
+	// Mostly obsolete comments: Since this child doesn't match, make sure none of its
+	// children (recursive) match prior to continuing the original enumeration.  We don't
+	// discard the return value from EnumChildWindows() because it's FALSE in two cases:
 	// 1) The given HWND has no children.
 	// 2) The given EnumChildProc() stopped prematurely rather than enumerating all the windows.
 	// and there's no way to distinguish between the two cases without using the
 	// struct's hwnd because GetLastError() seems to return ERROR_SUCCESS in both
-	// cases.  UPDATE: The MSDN docs state that EnumChildWindows already handles the
-	// recursion for us: "If a child window has created child windows of its own,
-	// EnumChildWindows() enumerates those windows as well."
+	// cases.
 	//EnumChildWindows(aWnd, EnumChildFind, lParam);
 	// If matching HWND still hasn't been found, return TRUE to keep searching:
-	//return wip.child_hwnd == NULL;
+	//return ws.mFoundChild == NULL;
+
 	return TRUE; // Keep searching.
 }
 
@@ -873,7 +722,6 @@ ResultType StatusBarUtil(Var *aOutputVar, HWND aControlWindow, int aPartNumber
 	// Set default ErrorLevel, which is a special value (2 vs. 1) in the case of StatusBarWait:
 	g_ErrorLevel->Assign(aOutputVar ? ERRORLEVEL_ERROR : ERRORLEVEL_ERROR2);
 	if (aCheckInterval <= 0) aCheckInterval = SB_DEFAULT_CHECK_INTERVAL; // Caller relies on us doing this.
-	if (!aTextToWaitFor) aTextToWaitFor = "";  // For consistency.
 
 	// Must have at least one of these.  UPDATE: We want to allow this so
 	// that the command can be used to wait for the status bar text to
@@ -1041,42 +889,51 @@ ResultType StatusBarUtil(Var *aOutputVar, HWND aControlWindow, int aPartNumber
 
 HWND ControlExist(HWND aParentWindow, char *aClassNameAndNum)
 {
-	if (!aParentWindow) return NULL;
-	if (!aClassNameAndNum || !*aClassNameAndNum) return GetTopChild(aParentWindow);
-	WindowInfoPackage wip;
+	if (!aParentWindow)
+		return NULL;
+	if (!aClassNameAndNum || !*aClassNameAndNum)
+		return GetTopChild(aParentWindow);
+
+	WindowSearch ws;
 	bool is_class_name = isdigit(aClassNameAndNum[strlen(aClassNameAndNum) - 1]);
+
 	if (is_class_name)
-        strlcpy(wip.title, aClassNameAndNum, sizeof(wip.title));  // Tell it to search by Class+Num.
-	else
-		strlcpy(wip.text, aClassNameAndNum, sizeof(wip.text)); // Tell it to search the control's text.
-	// It's a little strange, but I think EnumWindows() returns FALSE when the callback stopped
-	// the enumeration prematurely by returning false to its caller.  Otherwise (the enumeration went
-	// through every window), it returns TRUE:
-	EnumChildWindows(aParentWindow, EnumControlFind, (LPARAM)&wip);
-	if (is_class_name && !wip.child_hwnd)
+	{
+		// Tell EnumControlFind() to search by Class+Num.  Don't call ws.SetCriteria() because
+		// that has special handling for ahk_id, ahk_class, etc. in the first parameter.
+		strlcpy(ws.mCriterionBuf, aClassNameAndNum, sizeof(ws.mCriterionBuf));
+		ws.mCriterionText = "";
+	}
+	else // Tell EnumControlFind() to search the control's text.
+	{
+		*ws.mCriterionBuf = '\0';
+		ws.mCriterionText = aClassNameAndNum;
+	}
+
+	EnumChildWindows(aParentWindow, EnumControlFind, (LPARAM)&ws); // mFoundChild was initialized by the contructor.
+
+	if (is_class_name && !ws.mFoundChild)
 	{
 		// To reduce problems with ambiguity (a class name and number of one control happens
 		// to match the title/text of another control), search again only after the search
 		// for the ClassNameAndNum didn't turn up anything.
-		*wip.title = '\0';
-		strlcpy(wip.text, aClassNameAndNum, sizeof(wip.text)); // Tell it to search the control's text.
-		EnumChildWindows(aParentWindow, EnumControlFind, (LPARAM)&wip);
+		// Tell EnumControlFind() to search the control's text.
+		*ws.mCriterionBuf = '\0';
+		ws.mCriterionText = aClassNameAndNum;
+		EnumChildWindows(aParentWindow, EnumControlFind, (LPARAM)&ws); // ws.mFoundChild is already initialized to NULL due to the above check.
 	}
-	return wip.child_hwnd;
+
+	return ws.mFoundChild;
 }
 
 
 
 BOOL CALLBACK EnumControlFind(HWND aWnd, LPARAM lParam)
-// lParam is a pointer to the struct rather than just a string because we want
-// to give back the HWND of any matching window.  This is based on the AutoIt3
-// source code.
 {
-	char buf[WINDOW_TEXT_SIZE];
-	WindowInfoPackage &wip = *((WindowInfoPackage *)lParam);  // For performance and convenience.
-	if (*wip.title) // Caller told us to search by class name and number.
+	WindowSearch &ws = *((WindowSearch *)lParam);  // For performance and convenience.
+	if (*ws.mCriterionBuf) // Caller told us to search by class name and number.
 	{
-		GetClassName(aWnd, buf, sizeof(buf));
+		int length = GetClassName(aWnd, ws.mCandidateTitle, WINDOW_CLASS_SIZE); // Restrict the length to a small fraction of the buffer's size (also serves to leave room to append the sequence number).
 		// Below: i.e. this control's title (e.g. List) in contained entirely
 		// within the leading part of the user specified title (e.g. ListBox).
 		// Even though this is incorrect, the appending of the sequence number
@@ -1087,14 +944,21 @@ BOOL CALLBACK EnumControlFind(HWND aWnd, LPARAM lParam)
 		// more certain to work even though it's a little ugly.  It's also
 		// necessary to do this in a way functionally identical to the below
 		// so that Window Spy's sequence numbers match the ones generated here:
-		if (!strnicmp(wip.title, buf, strlen(buf)))
+		if (length && !strnicmp(ws.mCriterionBuf, ws.mCandidateTitle, length)) // Preliminary match of base class name.
 		{
-			// Use this var, initialized to zero by constructor, to accumulate the found-count:
-			++wip.already_visited_count;
-			snprintfcat(buf, sizeof(buf), "%u", wip.already_visited_count); // Append the count to the class.
-			if (!stricmp(buf, wip.title)) // It matches name and number.
+			// mAlreadyVisitedCount was initialized to zero by WindowSearch's constructor.  It is used
+			// to accumulate how many quasi-matches on this class have been found so far.  Also,
+			// comparing ws.mAlreadyVisitedCount to atoi(ws.mCriterionBuf + length) would not be
+			// the same as the below examples such as the following:
+			// Say the ClassNN being searched for is List01 (where List0 is the class name and 1
+			// is the sequence number). If a class called "List" exists in the parent window, it
+			// would be found above as a preliminary match.  The below would copy "1" into the buffer,
+			// which is correctly deemed not to match "01".  By contrast, the atoi() method would give
+			// the wrong result because the two numbers are numerically equal.
+			_itoa(++ws.mAlreadyVisitedCount, ws.mCandidateTitle, 10);  // Overwrite the buffer to contain only the count.
+			if (!stricmp(ws.mCandidateTitle, ws.mCriterionBuf + length)) // The counts match too, so it's a full match.
 			{
-				wip.child_hwnd = aWnd; // save this in here for return to the caller.
+				ws.mFoundChild = aWnd; // Save this in here for return to the caller.
 				return FALSE; // stop the enumeration.
 			}
 		}
@@ -1120,10 +984,10 @@ BOOL CALLBACK EnumControlFind(HWND aWnd, LPARAM lParam)
 		// TitleMatchMode will be in effect for this also.  Also, it's case sensitivity
 		// helps increase selectivity, which is helpful due to how common short or ambiguous
 		// control names tend to be:
-		GetWindowText(aWnd, buf, sizeof(buf));
-		if (IsTextMatch(buf, wip.text))
+		GetWindowText(aWnd, ws.mCandidateTitle, sizeof(ws.mCandidateTitle));
+		if (IsTextMatch(ws.mCandidateTitle, ws.mCriterionText))
 		{
-			wip.child_hwnd = aWnd; // save this in here for return to the caller.
+			ws.mFoundChild = aWnd; // save this in here for return to the caller.
 			return FALSE;
 		}
 	}
@@ -1556,6 +1420,256 @@ int GetWindowTextTimeout(HWND aWnd, char *aBuf, int aBufSize, UINT aTimeout)
 	// <result> contains the length of what was (or would have been) copied, not including the terminator:
 	return (int)result;
 }
+
+
+
+///////////////////////////////////////////////////////////////////////////
+
+
+
+ResultType WindowSearch::SetCriteria(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
+// Returns FAIL if the new criteria can't possibly match a window (due to ahk_id being in invalid
+// window or the specfied ahk_group not existing).  Otherwise, it returns OK.
+// Callers must ensure that aText, aExcludeTitle, and aExcludeText point to buffers whose contents
+// will be available for the entire duration of the search.  In other words, the caller should not
+// call MsgSleep() in a way that would allow another thread to launch and overwrite the contents
+// of the sDeref buffer (which might contain the contents).  Things like mFoundHWND and mFoundCount
+// are not initialized here because sometimes the caller changes the criteria without wanting to
+// reset the search.
+{
+	// Set any criteria which are not context sensitive.  It doesn't seem necessary to make copies of
+	// mCriterionText, mCriterionExcludeTitle, and mCriterionExcludeText because they're never altered
+	// here, nor does there seem to be a risk that deref buffer's contents will get overwritten
+	// while this set of criteria is in effect because our callers never allow interrupting threads
+	// *during* the duration of any one set of criteria.
+	bool exclude_title_became_non_blank = *aExcludeTitle && !*mCriterionExcludeTitle;
+	mCriterionExcludeTitle = aExcludeTitle;
+	mCriterionExcludeTitleLength = strlen(mCriterionExcludeTitle); // Pre-calculated for performance.
+	mCriterionText = aText;
+	mCriterionExcludeText = aExcludeText;
+
+	WindowCriteria orig_criterion = mCriterion;
+	mCriterion = CRITERION_TITLE;  // Set default, possibly to be overridden below.
+
+	if (!strnicmp(aTitle, "ahk_", 4))
+	{
+		char *cp = aTitle + 4; // Use a temp. variable in case it turns out to be something like "ahk_something_else".
+		if (!strnicmp(cp, "id", 2))
+		{
+			mCriterion = CRITERION_ID;
+			mCriterionHwnd = (HWND)ATOU64(cp + 2);
+			if (mCriterionHwnd != HWND_BROADCAST && !IsWindow(mCriterionHwnd)) // Checked here once rather than each call to IsMatch().
+			{
+				mCriterionHwnd = NULL;
+				return FAIL; // Inform caller of invalid criteria.  No need to do anything else further below.
+			}
+		}
+		else if (!strnicmp(cp, "pid", 3))
+		{
+			mCriterion = CRITERION_PID;
+			mCriterionPID = ATOU(cp + 3);
+		}
+		else if (!strnicmp(cp, "class", 5))
+		{
+			mCriterion = CRITERION_CLASS;
+			strlcpy(mCriterionBuf, omit_leading_whitespace(cp + 5), sizeof(mCriterionBuf));
+			// For performance, mCriterionBufLength is not set because it is not used.
+		}
+		else if (!strnicmp(cp, "group", 5))
+		{
+			mCriterion = CRITERION_GROUP;
+			if (   !(mCriterionGroup = g_script.FindOrAddGroup(omit_leading_whitespace(cp + 5), true))   )
+				return FAIL; // Inform caller of invalid criteria.  No need to do anything else further below.
+		}
+	}
+	
+	if (mCriterion == CRITERION_TITLE) // Since the above didn't change the default, it stays CRITERION_TITLE.
+	{
+		strlcpy(mCriterionBuf, aTitle, sizeof(mCriterionBuf));
+		mCriterionBufLength = strlen(mCriterionBuf); // Pre-calculated for performance.
+	}
+
+	// Since this function doesn't change mCandidateParent, there is no need to update the candidate's
+	// attributes unless the type of criterion has changed or if mExcludeTitle became non-blank as
+	// a result of our action above:
+	if (mCriterion != orig_criterion || exclude_title_became_non_blank)
+		UpdateCandidateAttributes(); // In case mCandidateParent isn't NULL, fetch different attributes based on what was set above.
+	//else for performance reasons, avoid unnecessary updates.
+	return OK;
+}
+
+
+
+void WindowSearch::UpdateCandidateAttributes()
+{
+	// Nothing to do until SetCandidate() is called with a non-NULL candidate and SetCriteria()
+	// has been called for the first time (otherwise, mCriterionExcludeTitle and other things
+	// are not yet initialized:
+	if (!mCandidateParent || mCriterion == CRITERION_INVALID)
+		return;
+
+	if (mCriterion == CRITERION_TITLE || *mCriterionExcludeTitle) // Need the window's title in both these cases.
+		if (!GetWindowText(mCandidateParent, mCandidateTitle, sizeof(mCandidateTitle)))
+			*mCandidateTitle = '\0'; // Failure or blank title is okay.
+
+	switch(mCriterion)
+	{
+	case CRITERION_PID:  // In which case mCriterionPID should already be filled in, though it might be an explicitly specified zero.
+		GetWindowThreadProcessId(mCandidateParent, &mCandidatePID);
+		break;
+	case CRITERION_CLASS:
+		GetClassName(mCandidateParent, mCandidateClass, sizeof(mCandidateClass)); // Limit to WINDOW_CLASS_SIZE in this case since that's the maximum that can be searched.
+		break;
+	// Nothing to do in these cases:
+	//case CRITERION_TITLE:    Already handled higher above.
+	//case CRITERION_GROUP:    Can't be pre-processed at this stage.
+	//case CRITERION_ID:       It is mCandidateParent, which was set at an earlier stage.
+	}
+}
+
+
+
+HWND WindowSearch::IsMatch(bool aInverted)
+// This method returns the HWND of mCandidateParent if it matches the previously specified criteria
+// (title/pid/id/class/group) or NULL otherwise.  Upon NULL, it doesn't reset mFoundParent or mFoundCount
+// in case previous match(es) were found when mFindLastMatch is in effect.
+{
+	if (!mCandidateParent) // Nothing to check, so no match.
+		return NULL;
+
+	switch(mCriterion)
+	{
+	case CRITERION_TITLE: // Listed first for performance, since it's the most common.
+		if (*mCriterionBuf)
+		{
+			switch(g.TitleMatchMode)
+			{
+			case FIND_ANYWHERE:
+				if (!strstr(mCandidateTitle, mCriterionBuf))
+					return NULL;
+				break;
+			case FIND_IN_LEADING_PART:
+				if (strncmp(mCandidateTitle, mCriterionBuf, mCriterionBufLength))
+					return NULL;
+				break;
+			default: // Exact match.
+				if (strcmp(mCandidateTitle, mCriterionBuf))
+					return NULL;
+			}
+			// If above didn't return, it's a match so far so continue onward to the other checks.
+		}
+		break;
+
+	case CRITERION_CLASS:
+		if (strcmp(mCandidateClass, mCriterionBuf)) // No match.
+			return NULL;
+		//else it's a match so far, but continue onward to check exclude-title/text.
+		break;
+
+	case CRITERION_PID:  // In which case mCriterionPID should already be filled in, though it might be an explicitly specified zero.
+		if (mCandidatePID != mCriterionPID)
+			return NULL;
+		//else it's a match so far, but continue onward to check exclude-title/text.
+		break;
+
+	case CRITERION_GROUP:
+		// This also handles the fact that mCriterionGroup might be NULL if the specified group
+		// does not exist or was never successfully created:
+		if (!mCriterionGroup || !mCriterionGroup->IsMember(mCandidateParent))
+			return NULL;
+		//else it's a match so far, but continue onward to check exclude-title/text (a little strange in this case, but might be useful).
+		break;
+
+	case CRITERION_ID: // Listed last since in terms of calling frequency, this case is hardly ever executed.
+		// Called this way from WinActive(), and possibly indirectly by an ahk_group that contains an ahk_id
+		// specification.  It's also called by WinGetList()'s EnumWindows(), though extremely rarely.
+		// It's also called this way from other places to determine whether an ahk_id window matches the
+		// other criteria such as WinText, ExcludeTitle, and mAlreadyVisited.
+		// mCriterionHwnd should already be filled in, though it might be an explicitly specified zero.
+		if (mCandidateParent != mCriterionHwnd) // IsWindow(mCriterionHwnd) was already called by SetCriteria().
+			return NULL;
+		//else it's a match so far, but continue onward to check exclude-title/text.
+		break;
+
+	default: // CRITERION_INVALID, etc.
+		return NULL;
+	}
+
+	// The above would have returned if the candidate window isn't a match for what was specified by
+	// the script's WinTitle parameter.  So now check that the ExcludeTitle criterion is satisfied.
+	// This is done prior to checking WinText/ExcludeText for performance reasons:
+
+	if (*mCriterionExcludeTitle)
+	{
+		switch(g.TitleMatchMode)
+		{
+		case FIND_ANYWHERE:
+			if (strstr(mCandidateTitle, mCriterionExcludeTitle))
+				return NULL;
+			break;
+		case FIND_IN_LEADING_PART:
+			if (!strncmp(mCandidateTitle, mCriterionExcludeTitle, mCriterionExcludeTitleLength))
+				return NULL;
+			break;
+		default: // Exact match.
+			if (!strcmp(mCandidateTitle, mCriterionExcludeTitle))
+				return NULL;
+		}
+		// If above didn't return, WinTitle and ExcludeTitle are both satisified.  So continue
+		// on below in case there is some WinText or ExcludeText to search.
+	}
+
+	if (!aInverted) // If caller specified aInverted==true, it will do the below instead of us.
+		for (int i = 0; i < mAlreadyVisitedCount; ++i)
+			if (mCandidateParent == mAlreadyVisited[i])
+				return NULL;
+
+	if (*mCriterionText || *mCriterionExcludeText) // It's not quite a match yet since there are more criteria.
+	{
+		// Check the child windows for the specified criteria.
+		// EnumChildWindows() will return FALSE (failure) in at least two common conditions:
+		// 1) It's EnumChildProc callback returned false (i.e. it ended the enumeration prematurely).
+		// 2) The specified parent has no children.
+		// Since in both these cases GetLastError() returns ERROR_SUCCESS, we discard the return
+		// value and just check mFoundChild to determine whether a match has been found:
+		mFoundChild = NULL;  // Init prior to each call, in case mFindLastMatch is true.
+		EnumChildWindows(mCandidateParent, EnumChildFind, (LPARAM)this);
+		if (!mFoundChild) // This parent has no matching child, or no children at all.
+			return NULL;
+	}
+
+	// Since the above didn't return or didn't need to be checked, it's a complete match.
+	// If mFindLastMatch is true, this new value for mFoundParent will stay in effect until
+	// overridden by another matching window later:
+	if (!aInverted)
+	{
+		mFoundParent = mCandidateParent;
+		++mFoundCount; // This must be done prior to the mArrayStart section below.
+	}
+	//else aInverted==true, which means caller doesn't want the above set.
+
+	if (mArrayStart)
+	{
+		// Make it longer than Max var name so that FindOrAddVar() will be able to spot and report
+		// var names that are too long:
+		char var_name[MAX_VAR_NAME_LENGTH + 20];
+		snprintf(var_name, sizeof(var_name), "%s%u", mArrayStart->mName, mFoundCount);
+		// To help performance (in case the linked list of variables is huge), tell it where
+		// to start the search.  Use the base array name rather than the preceding element because,
+		// for example, Array19 is alphabetially less than Array2, so we can't rely on the
+		// numerical ordering:
+		Var *array_item = g_script.FindOrAddVar(var_name, VAR_NAME_LENGTH_DEFAULT, mArrayStart);
+		if (array_item)
+			array_item->AssignHWND(mFoundParent);
+		//else no error reporting currently, since should be very rare.
+	}
+
+	return mFoundParent;
+}
+
+
+
+///////////////////////////////////////////////////////////////////
 
 
 

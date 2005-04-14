@@ -337,7 +337,7 @@ public:
 	UCHAR mExistingThreads, mMaxThreads;
 	int mPriority, mKeyDelay;
 	bool mCaseSensitive, mConformToCase, mDoBackspace, mOmitEndChar, mSendRaw, mEndCharRequired
-		, mDetectWhenInsideWord, mConstructedOK;
+		, mDetectWhenInsideWord, mDoReset, mConstructedOK;
 
 	static bool AtLeastOneEnabled()
 	{
@@ -367,7 +367,7 @@ public:
 	Hotstring(Label *aJumpToLabel, char *aOptions, char *aHotstring, char *aReplacement); // Constructor
 	static void ParseOptions(char *aOptions, int &aPriority, int &aKeyDelay, bool &aCaseSensitive
 		, bool &aConformToCase, bool &aDoBackspace, bool &aOmitEndChar, bool &aSendRaw
-		, bool &aEndCharRequired, bool &aDetectWhenInsideWord);
+		, bool &aEndCharRequired, bool &aDetectWhenInsideWord, bool &aDoReset);
 
 	~Hotstring() {}  // Note that mReplacement is sometimes malloc'd, sometimes from SimpleHeap, and sometimes the empty string.
 

@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.29.00"
+#define NAME_VERSION "1.0.30.00"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -92,7 +92,7 @@ GNU General Public License for more details.
 // FAIL = 0 to remind that FAIL should have the value zero instead of something arbitrary
 // because some callers may simply evaluate the return result as true or false
 // (and false is a failure):
-enum ResultType {FAIL = 0, OK, WARN = OK, CRITICAL_ERROR
+enum ResultType {FAIL = 0, OK, WARN = OK, CRITICAL_ERROR  // Some things might rely on OK==1 (i.e. boolean "true")
 	, CONDITION_TRUE, CONDITION_FALSE
 	, LOOP_BREAK, LOOP_CONTINUE
 	, EARLY_RETURN, EARLY_EXIT};

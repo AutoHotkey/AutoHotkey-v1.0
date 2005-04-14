@@ -129,6 +129,7 @@ bool g_HSOmitEndChar = false;
 bool g_HSSendRaw = false;
 bool g_HSEndCharRequired = true;
 bool g_HSDetectWhenInsideWord = false;
+bool g_HSDoReset = false;
 char g_EndChars[HS_MAX_END_CHARS + 1] = "-()[]{}:;'\"/\\,.?!\n \t";  // Hotstring default end chars, including a space.
 // The following were considered but seemed too rare and/or too likely to result in undesirable replacements
 // (such as while programming or scripting, or in usernames or passwords): <>*+=_%^&|@#$|
@@ -328,7 +329,7 @@ Action g_act[] =
 	, {"CoordMode", 1, 2, NULL} // Attribute, screen|relative
 	, {"SetDefaultMouseSpeed", 1, 1, {1, 0}} // speed (numeric)
 	, {"MouseMove", 2, 4, {1, 2, 3, 0}} // x, y, speed, option
-	, {"MouseClick", 1, 7, {2, 3, 4, 5, 0}} // which-button, x, y, ClickCount, speed, d=hold-down/u=release, Relative
+	, {"MouseClick", 0, 7, {2, 3, 4, 5, 0}} // which-button, x, y, ClickCount, speed, d=hold-down/u=release, Relative
 	, {"MouseClickDrag", 1, 7, {2, 3, 4, 5, 6, 0}} // which-button, x1, y1, x2, y2, speed, Relative
 	, {"MouseGetPos", 0, 5, {5, 0}} // 4 optional output vars: xpos, ypos, WindowID, ControlName. Finally: Mode. MinParams must be 0.
 

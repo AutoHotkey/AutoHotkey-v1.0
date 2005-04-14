@@ -36,6 +36,7 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 	int window_index = 0;  // Set the default window to operate upon (the first).
 	char *options, *image_filename = aImageFile;  // Set default.
 	bool turn_off = false;
+	bool show_it_only = false;
 	int bar_pos;
 	bool bar_pos_has_been_set = false;
 	bool options_consist_of_bar_pos_only = false;
@@ -68,7 +69,10 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 					}
 				}
 			}
-			turn_off = !stricmp(image_filename, "Off");
+			if (!stricmp(image_filename, "Off"))
+				turn_off = true;
+			else if (!stricmp(image_filename, "Show"))
+				show_it_only = true;
 		}
 	}
 	else // Progress Window.
@@ -83,16 +87,22 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 					, FAIL, aOptions);
 			++options;
 		}
-		turn_off = !stricmp(options, "Off");
-		// Allow floats at runtime for flexibility (i.e. in case aOptions was in a variable reference).
-		// But still use ATOI for the conversion:
-		if (!turn_off && IsPureNumeric(options, true, false, true)) // Negatives are allowed as of v1.0.25.
+		if (!stricmp(options, "Off"))
+            turn_off = true;
+		else if (!stricmp(options, "Show"))
+			show_it_only = true;
+		else
 		{
-			bar_pos = ATOI(options);
-			bar_pos_has_been_set = true;
-			options_consist_of_bar_pos_only = true;
+			// Allow floats at runtime for flexibility (i.e. in case aOptions was in a variable reference).
+			// But still use ATOI for the conversion:
+			if (IsPureNumeric(options, true, false, true)) // Negatives are allowed as of v1.0.25.
+			{
+				bar_pos = ATOI(options);
+				bar_pos_has_been_set = true;
+				options_consist_of_bar_pos_only = true;
+			}
+			//else leave it set to the default.
 		}
-		//else leave it set to the default.
 	}
 
 	SplashType &splash = aSplashImage ? g_SplashImage[window_index] : g_Progress[window_index];
@@ -102,6 +112,14 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 	// will be remembered until such time as "Command, Off" is used:
 	if (splash.hwnd && !IsWindow(splash.hwnd))
 		splash.hwnd = NULL;
+
+	if (show_it_only)
+	{
+		if (splash.hwnd && !IsWindowVisible(splash.hwnd))
+			ShowWindow(splash.hwnd,  SW_SHOWNOACTIVATE); // See bottom of this function for comments on SW_SHOWNOACTIVATE.
+		//else for simplicity, do nothing.
+		return OK;
+	}
 
 	if (!turn_off && splash.hwnd && !*image_filename && (options_consist_of_bar_pos_only || !*options)) // The "modify existing window" mode is in effect.
 	{
@@ -155,6 +173,7 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 	bool owned = true;          // Whether this window is owned by the main window.
 	bool centered_main = true;  // Whether the main text is centered.
 	bool centered_sub = true;   // Whether the sub text is centered.
+	bool initially_hidden = false;  // Whether the window should kept hidden (for later showing by the script).
 	int style = WS_DISABLED|WS_POPUP|WS_CAPTION;  // WS_CAPTION implies WS_BORDER
 	int exstyle = WS_EX_TOPMOST;
 	int xpos = COORD_UNSPECIFIED;
@@ -281,15 +300,13 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 		case 'R': // Range of progress bar [v1.0.25]
 			if (!*(cp + 1)) // Ignore it because we don't want cp to ever point to the NULL terminator due to the loop's increment.
 				break;
-			++cp;  // Now it points to range_min.
-			range_min = ATOI(cp);
+			range_min = ATOI(++cp); // Increment cp to point it to range_min.
 			if (cp2 = strchr(cp + 1, '-'))  // +1 to omit the min's minus sign, if it has one.
 			{
 				cp = cp2;
 				if (!*(cp + 1)) // Ignore it because we don't want cp to ever point to the NULL terminator due to the loop's increment.
 					break;
-				++cp; // Now it points to range_max, which can be negative as in this example: R-100--50
-				range_max = ATOI(cp);
+				range_max = ATOI(++cp); // Increment cp to point it to range_max, which can be negative as in this example: R-100--50
 			}
 			break;
 		case 'T': // Give it a task bar button by making it a non-owned window.
@@ -317,8 +334,13 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 			}
 			break;
 		case 'H':
-			// Allow any width/height to be specified so that the window can be "rolled up" to its title bar:
-			splash.height = atoi(cp + 1);
+			if (!strnicmp(cp, "Hide", 4)) // Hide vs. Hidden is debatable.
+			{
+				initially_hidden = true;
+				cp += 3; // +3 vs. +4 due to the loop's own ++cp.
+			}
+			else // Allow any width/height to be specified so that the window can be "rolled up" to its title bar:
+				splash.height = atoi(cp + 1);
 			break;
 		case 'X':
 			xpos = atoi(cp + 1);
@@ -653,7 +675,8 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 	// Show it without activating it.  Even with options that allow the window to be activated (such
 	// as movable), it seems best to do this to prevent changing the current foreground window, which
 	// is usually desirable for progress/splash windows since they should be seen but not be disruptive:
-	ShowWindow(splash.hwnd,  SW_SHOWNOACTIVATE);
+	if (!initially_hidden)
+		ShowWindow(splash.hwnd,  SW_SHOWNOACTIVATE);
 	return OK;
 }
 
@@ -1581,41 +1604,47 @@ ResultType Line::PerformShowWindow(ActionTypeType aActionType, char *aTitle, cha
 	if (!target_window)
 		return OK;
 
-	int nCmdShow;
+	// WinGroup's EnumParentActUponAll() is quite similar to the following, so the two should be
+	// maintained together.
+
+	int nCmdShow = SW_INVALID; // Set default.
+
 	switch (aActionType)
 	{
-		// SW_FORCEMINIMIZE: supported only in Windows 2000/XP and beyond: "Minimizes a window,
-		// even if the thread that owns the window is hung. This flag should only be used when
-		// minimizing windows from a different thread."
-		// My: It seems best to use SW_FORCEMINIMIZE on OS's that support it because I have
-		// observed ShowWindow() to hang (thus locking up our app's main thread) if the target
-		// window is hung.
-		// UPDATE: For now, not using "force" every time because it has undesirable side-effects such
-		// as the window not being restored to its maximized state after it was minimized
-		// this way.
-		// Note: The use of IsHungAppWindow() (supported under Win2k+) is discouraged by MS,
-		// so we won't use it here even though it probably performs much better.
-		#define SW_INVALID -1
-		case ACT_WINMINIMIZE:
+	// SW_FORCEMINIMIZE: supported only in Windows 2000/XP and beyond: "Minimizes a window,
+	// even if the thread that owns the window is hung. This flag should only be used when
+	// minimizing windows from a different thread."
+	// My: It seems best to use SW_FORCEMINIMIZE on OS's that support it because I have
+	// observed ShowWindow() to hang (thus locking up our app's main thread) if the target
+	// window is hung.
+	// UPDATE: For now, not using "force" every time because it has undesirable side-effects such
+	// as the window not being restored to its maximized state after it was minimized
+	// this way.
+	// Note: The use of IsHungAppWindow() (supported under Win2k+) is discouraged by MS,
+	// so we won't use it here even though it probably performs much better.
+	case ACT_WINMINIMIZE:
+		if (IsWindowHung(target_window))
+		{
 			if (g_os.IsWin2000orLater())
-				nCmdShow = IsWindowHung(target_window) ? SW_FORCEMINIMIZE : SW_MINIMIZE;
-			else
-				// If it's not Win2k or later, don't attempt to minimize hung windows because I
-				// have an 80% expectation (i.e. untested) that our thread would hang because
-				// the call to ShowWindow() would never return.  I have confirmed that SW_MINIMIZE
-				// can lock up our thread on WinXP, which is why we revert to SW_FORCEMINIMIZE
-				// above.
-				nCmdShow = IsWindowHung(target_window) ? SW_INVALID : SW_MINIMIZE;
-			break;
-		case ACT_WINMAXIMIZE: nCmdShow = IsWindowHung(target_window) ? SW_INVALID : SW_MAXIMIZE; break;
-		case ACT_WINRESTORE:  nCmdShow = IsWindowHung(target_window) ? SW_INVALID : SW_RESTORE;  break;
-		// Seems safe to assume it's not hung in these cases, since I'm inclined to believe
-		// (untested) that hiding and showing a hung window won't lock up our thread, and
-		// there's a chance they may be effective even against hung windows, unlike the
-		// others above (except ACT_WINMINIMIZE, which has a special FORCE method):
-		case ACT_WINHIDE: nCmdShow = SW_HIDE; break;
-		case ACT_WINSHOW: nCmdShow = SW_SHOW; break;
+				nCmdShow = SW_FORCEMINIMIZE;
+			//else it's not Win2k or later, so don't attempt to minimize hung windows because I
+			// have an 80% expectation (i.e. untested) that our thread would hang because the
+			// call to ShowWindow() would never return.  I have confirmed that SW_MINIMIZE can
+			// lock up our thread on WinXP, which is why we revert to SW_FORCEMINIMIZE above.
+		}
+		else
+			nCmdShow = SW_MINIMIZE;
+		break;
+	case ACT_WINMAXIMIZE: if (!IsWindowHung(target_window)) nCmdShow = SW_MAXIMIZE; break;
+	case ACT_WINRESTORE:  if (!IsWindowHung(target_window)) nCmdShow = SW_RESTORE;  break;
+	// Seems safe to assume it's not hung in these cases, since I'm inclined to believe
+	// (untested) that hiding and showing a hung window won't lock up our thread, and
+	// there's a chance they may be effective even against hung windows, unlike the
+	// others above (except ACT_WINMINIMIZE, which has a special FORCE method):
+	case ACT_WINHIDE: nCmdShow = SW_HIDE; break;
+	case ACT_WINSHOW: nCmdShow = SW_SHOW; break;
 	}
+
 	// UPDATE:  Trying ShowWindowAsync()
 	// now, which should avoid the problems with hanging.  UPDATE #2: Went back to
 	// not using Async() because sometimes the script lines that come after the one
@@ -2839,11 +2868,11 @@ ResultType Line::ScriptPostMessage(char *aMsg, char *awParam, char *alParam, cha
 	HWND control_window = *aControl ? ControlExist(target_window, aControl) : target_window;
 	if (!control_window)
 		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
-	// Use ATOI64 to support unsigned (i.e. UINT, LPARAM, and WPARAM are all 32-bit unsigned values).
-	// ATOI64 also supports hex strings in the script, such as 0xFF, which is why it's commonly
+	// Use ATOU() to support unsigned (i.e. UINT, LPARAM, and WPARAM are all 32-bit unsigned values).
+	// ATOU() also supports hex strings in the script, such as 0xFF, which is why it's commonly
 	// used in functions such as this:
-	return g_ErrorLevel->Assign(PostMessage(control_window, (UINT)ATOI64(aMsg), (LPARAM)ATOI64(awParam)
-		, (WPARAM)ATOI64(alParam)) ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
+	return g_ErrorLevel->Assign(PostMessage(control_window, ATOU(aMsg), ATOU(awParam)
+		, ATOU(alParam)) ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
 	// By design (since this is a power user feature), no ControlDelay is done here.
 }
 
@@ -2862,7 +2891,7 @@ ResultType Line::ScriptSendMessage(char *aMsg, char *awParam, char *alParam, cha
 	// ATOI64 also supports hex strings in the script, such as 0xFF, which is why it's commonly
 	// used in functions such as this:
 	DWORD dwResult;
-	if (!SendMessageTimeout(control_window, (UINT)ATOI64(aMsg), (WPARAM)ATOI64(awParam), (LPARAM)ATOI64(alParam)
+	if (!SendMessageTimeout(control_window, ATOU(aMsg), ATOU(awParam), ATOU(alParam)
 		, SMTO_ABORTIFHUNG, 5000, &dwResult)) // Increased from 2000 in v1.0.27.
 		return g_ErrorLevel->Assign("FAIL"); // Need a special value to distinguish this from numeric reply-values.
 	// By design (since this is a power user feature), no ControlDelay is done here.
@@ -2977,6 +3006,165 @@ ResultType Line::ScriptProcess(char *aCmd, char *aProcess, char *aParam3)
 
 
 
+ResultType WinSetRegion(HWND aWnd, char *aPoints)
+// Caller has initialized g_ErrorLevel to ERRORLEVEL_ERROR for us.
+{
+	RECT rect;
+	HRGN hrgn;
+
+	if (!*aPoints) // Attempt to restore the window's normal/correct region.
+	{
+		if (GetWindowRect(aWnd, &rect))
+		{
+			// Adjust the rect to keep the same size but have its upper-left corner at 0,0:
+			rect.right -= rect.left;
+			rect.bottom -= rect.top;
+			rect.left = 0;
+			rect.top = 0;
+			if (hrgn = CreateRectRgnIndirect(&rect)) // Assign
+			{
+				// Presumably, the system deletes the former region when upon a successful call to SetWindowRgn().
+				if (SetWindowRgn(aWnd, hrgn, TRUE))
+					return g_ErrorLevel->Assign(ERRORLEVEL_NONE);
+				// Otherwise, get rid of it since it didn't take effect:
+				DeleteObject(hrgn);
+			}
+		}
+		// Since above didn't return:
+		return OK; // Let ErrorLevel tell the story.
+	}
+
+	#define MAX_REGION_POINTS 2000  // 2000 requires 16 KB of stack space.
+	POINT pt[MAX_REGION_POINTS];
+	int pt_count;
+	char *cp;
+
+	// Set defaults prior to parsing options in case any options are absent:
+	int width = COORD_UNSPECIFIED;
+	int height = COORD_UNSPECIFIED;
+	int rr_width = COORD_UNSPECIFIED; // These two are for the rounded-rectangle method.
+	int rr_height = COORD_UNSPECIFIED;
+	bool use_ellipse = false;
+
+	int fill_mode = ALTERNATE;
+	// Concerning polygon regions: ALTERNATE is used by default (somewhat arbitrarily, but it seems to be the
+	// more typical default).
+	// MSDN: "In general, the modes [ALTERNATE vs. WINDING] differ only in cases where a complex,
+	// overlapping polygon must be filled (for example, a five-sided polygon that forms a five-pointed
+	// star with a pentagon in the center). In such cases, ALTERNATE mode fills every other enclosed
+	// region within the polygon (that is, the points of the star), but WINDING mode fills all regions
+	// (that is, the points and the pentagon)."
+
+	for (pt_count = 0, cp = aPoints; *(cp = omit_leading_whitespace(cp));)
+	{
+		// To allow the MAX to be increased in the future with less chance of breaking existing scripts, consider this an error.
+		if (pt_count >= MAX_REGION_POINTS)
+			return OK; // Let ErrorLevel tell the story.
+
+		if (isdigit(*cp))
+		{
+			// Assume it's a pair of X/Y coordinates.  It's done this way rather than using X and Y
+			// as option letters because:
+			// 1) The script is more readable when there are multiple coordinates (for polygon).
+			// 2) It enforces the fact that each X must have a Y and that X must always come before Y
+			//    (which simplifies and reduces the size of the code).
+			pt[pt_count].x = ATOI(cp);
+			// For the delimiter, dash is more readable than pipe, even though it overlaps with "minus sign".
+			// "x" is not used to avoid detecting "x" inside hex numbers.
+			#define REGION_DELIMITER '-' 
+			if (   !(cp = strchr(cp, REGION_DELIMITER))   )
+				return OK; // Let ErrorLevel tell the story.
+			pt[pt_count].y = ATOI(++cp);
+			++pt_count; // Move on to the next element of the pt array.
+		}
+		else
+		{
+			++cp;
+			switch(toupper(cp[-1]))
+			{
+			case 'E':
+				use_ellipse = true;
+				break;
+			case 'R':
+				if (!*cp || *cp == ' ') // Use 30x30 default.
+				{
+					rr_width = 30;
+					rr_height = 30;
+				}
+				else
+				{
+					rr_width = ATOI(cp);
+					if (cp = strchr(cp, REGION_DELIMITER)) // Assign
+						rr_height = ATOI(++cp);
+					else // Avoid problems with going beyond the end of the string.
+						return OK; // Let ErrorLevel tell the story.
+				}
+				break;
+			case 'W':
+				if (!strnicmp(cp, "ind", 3)) // [W]ind.
+					fill_mode = WINDING;
+				else
+					width = ATOI(cp);
+				break;
+			case 'H':
+				height = ATOI(cp);
+				break;
+			default: // For simplicity and to reserve other letters for future use, unknown options result in failure.
+				return OK; // Let ErrorLevel tell the story.
+			} // switch()
+		} // else
+
+		if (   !(cp = strchr(cp, ' '))   ) // No more items.
+			break;
+	}
+
+	if (!pt_count)
+		return OK; // Let ErrorLevel tell the story.
+
+	bool width_and_height_were_both_specified = !(width == COORD_UNSPECIFIED || height == COORD_UNSPECIFIED);
+	if (width_and_height_were_both_specified)
+	{
+		width += pt[0].x;   // Make width become the right side of the rect.
+		height += pt[0].y;  // Make height become the bottom.
+	}
+
+	if (use_ellipse) // Ellipse.
+	{
+		if (!width_and_height_were_both_specified || !(hrgn = CreateEllipticRgn(pt[0].x, pt[0].y, width, height)))
+			return OK; // Let ErrorLevel tell the story.
+	}
+	else if (rr_width != COORD_UNSPECIFIED) // Rounded rectangle.
+	{
+		if (!width_and_height_were_both_specified || !(hrgn = CreateRoundRectRgn(pt[0].x, pt[0].y, width, height, rr_width, rr_height)))
+			return OK; // Let ErrorLevel tell the story.
+	}
+	else if (width_and_height_were_both_specified) // Rectangle.
+	{
+		if (!(hrgn = CreateRectRgn(pt[0].x, pt[0].y, width, height)))
+			return OK; // Let ErrorLevel tell the story.
+	}
+	else // Polygon
+	{
+		if (   !(hrgn = CreatePolygonRgn(pt, pt_count, fill_mode))   )
+			return OK;
+	}
+
+	// Since above didn't return, hrgn is now a non-NULL region ready to be assigned to the window.
+
+	// Presumably, the system deletes the window's former region upon a successful call to SetWindowRgn():
+	if (!SetWindowRgn(aWnd, hrgn, TRUE))
+	{
+		DeleteObject(hrgn);
+		return OK; // Let ErrorLevel tell the story.
+	}
+	//else don't delete hrgn since the system has taken ownership of it.
+
+	// Since above didn't return, indicate success.
+	return g_ErrorLevel->Assign(ERRORLEVEL_NONE);
+}
+
+
+						
 ResultType Line::WinSet(char *aAttrib, char *aValue, char *aTitle, char *aText
 	, char *aExcludeTitle, char *aExcludeText)
 {
@@ -2984,13 +3172,16 @@ ResultType Line::WinSet(char *aAttrib, char *aValue, char *aTitle, char *aText
 	if (attrib == WINSET_INVALID)
 		return LineError(ERR_WINSET, FAIL, aAttrib);
 
-	if (attrib == WINSET_STYLE || attrib == WINSET_EXSTYLE)
-		g_ErrorLevel->Assign(ERRORLEVEL_NONE);  // Set default ErrorLevel for any commands that change ErrorLevel.
+	// Set default ErrorLevel for any commands that change ErrorLevel.
+	// The default should be ERRORLEVEL_ERROR so that that value will be returned
+	// by default when the target window doesn't exist:
+	if (attrib == WINSET_STYLE || attrib == WINSET_EXSTYLE || attrib == WINSET_REGION)
+		g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
 
 	// Since this is a macro, avoid repeating it for every case of the switch():
 	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	if (!target_window)
-		return OK;
+		return OK; // Let ErrorLevel (for commands that set it above) tell the story.
 
 	int value;
 	DWORD exstyle;
@@ -3121,7 +3312,7 @@ ResultType Line::WinSet(char *aAttrib, char *aValue, char *aTitle, char *aText
 	case WINSET_EXSTYLE:
 	{
 		if (!*aValue)
-			return g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Seems best not to treat an explicit blank as zero.
+			return OK; // Seems best not to treat an explicit blank as zero. Let ErrorLevel tell the story.
 		int style_index = (attrib == WINSET_STYLE) ? GWL_STYLE : GWL_EXSTYLE;
 		DWORD new_style, orig_style = GetWindowLong(target_window, style_index);
 		if (!strchr("+-^", *aValue))  // | and & are used instead of +/- to allow +/- to have their native function.
@@ -3151,11 +3342,19 @@ ResultType Line::WinSet(char *aAttrib, char *aValue, char *aTitle, char *aText
 				// Since SetWindowPos() probably doesn't know that the style changed, below is probably necessary
 				// too, at least in some cases:
 				InvalidateRect(target_window, NULL, TRUE); // Quite a few styles require this to become visibly manifest.
-				return OK; // ErrorLevel was previously initialized to ERRORLEVEL_NONE.
+				return g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 			}
 		}
-		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+		return OK; // Since above didn't return, it's a failure.  Let ErrorLevel tell the story.
 	}
+
+	case WINSET_ENABLE:
+	case WINSET_DISABLE: // These are separate sub-commands from WINSET_STYLE because merely changing the WS_DISABLED style is usually not as effective as calling EnableWindow().
+		EnableWindow(target_window, attrib == WINSET_ENABLE);
+		return OK;
+
+	case WINSET_REGION:
+		return WinSetRegion(target_window, aValue);
 
 	case WINSET_REDRAW:
 		// Seems best to always have the last param be TRUE, for now, so that aValue can be
@@ -3239,6 +3438,23 @@ ResultType Line::WinGetClass(char *aTitle, char *aText, char *aExcludeTitle, cha
 
 
 
+ResultType WinGetList(Var *output_var, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
+// Helper function for WinGet() to avoid having a WindowSearch object on its stack (since that object
+// normally isn't needed).  Caller has ensured that output_var isn't NULL.
+{
+	WindowSearch ws;
+	ws.mFindLastMatch = true; // Must set mFindLastMatch to get all matches rather than just the first.
+	ws.mArrayStart = output_var; // Provide the position in the var list of where the array-element vars will be.
+	// If aTitle is ahk_id nnnn, the Enum() below will be inefficient.  However, ahk_id is almost unheard of
+	// in this context because it makes little sense, so no extra code is added to make that case efficient.
+	if (ws.SetCriteria(aTitle, aText, aExcludeTitle, aExcludeText)) // These criteria allow the possibilty of a match.
+		EnumWindows(EnumParentFind, (LPARAM)&ws);
+	//else leave ws.mFoundCount set to zero (by the constructor).
+	return output_var->Assign(ws.mFoundCount);
+}
+
+
+
 ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
 {
 	Var *output_var = ResolveVarOfArg(0);  // This is done even for WINGET_CMD_LIST.
@@ -3255,16 +3471,15 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 	bool target_window_determined = true;  // Set default.
 	HWND target_window;
 	IF_USE_FOREGROUND_WINDOW(aTitle, aText, aExcludeTitle, aExcludeText)
-	else if (!*aTitle && !*aText && !*aExcludeTitle && !*aExcludeText)
+	else if (!(*aTitle || *aText || *aExcludeTitle || *aExcludeText))
 		target_window = GetValidLastUsedWindow();
 	else
 		target_window_determined = false;  // A different method is required.
 
 	// Used with WINGET_CMD_LIST to create an array (if needed).  Make it longer than Max var name
 	// so that FindOrAddVar() will be able to spot and report var names that are too long:
-	char var_name[MAX_VAR_NAME_LENGTH + 20];
+	char var_name[MAX_VAR_NAME_LENGTH + 20], buf[32];
 	Var *array_item;
-	WindowInfoPackage wip;
 
 	switch(cmd)
 	{
@@ -3288,10 +3503,9 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 			if (cmd == WINGET_CMD_PID)
 				return output_var->Assign(pid);
 			// Otherwise, get the full path and name of the executable that owns this window.
-			char pid_as_string[32];
-			_ultoa(pid, pid_as_string, 10);
+			_ultoa(pid, buf, 10);
 			char process_name[MAX_PATH];
-			if (ProcessExist(pid_as_string, process_name))
+			if (ProcessExist(buf, process_name))
 				return output_var->Assign(process_name);
 		}
 		// If above didn't return:
@@ -3328,14 +3542,7 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 		}
 		// Otherwise, the target window(s) have not yet been determined and a special method
 		// is required to gather them.
-		wip.find_last_match = true;
-		wip.array_start = output_var;  // Give it the position in the var list of where the array-element vars will be.
-		strlcpy(wip.title, aTitle, sizeof(wip.title));
-		strlcpy(wip.text, aText, sizeof(wip.text));
-		strlcpy(wip.exclude_title, aExcludeTitle, sizeof(wip.exclude_title));
-		strlcpy(wip.exclude_text, aExcludeText, sizeof(wip.exclude_text));
-		EnumWindows(EnumParentFind, (LPARAM)&wip);
-		return output_var->Assign(wip.match_count);
+		return WinGetList(output_var, aTitle, aExcludeTitle, aText, aExcludeText); // Outsourced to avoid having a WindowSearch object on this function's stack.
 
 	case WINGET_CMD_MINMAX:
 		if (!target_window_determined)
@@ -3360,7 +3567,6 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 			target_window = WinExist(aTitle, aText, aExcludeTitle, aExcludeText);
 		if (!target_window)
 			return output_var->Assign();
-		char buf[32];
 		sprintf(buf, "0x%08X", GetWindowLong(target_window, cmd == WINGET_CMD_STYLE ? GWL_STYLE : GWL_EXSTYLE));
 		return output_var->Assign(buf);
 
@@ -3387,7 +3593,6 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 		{
 			if (flags & LWA_COLORKEY)
 			{
-				char buf[32];
 				// Store in hex format to aid in debugging scripts.  Also, the color is always
 				// stored in RGB format, since that's what WinSet uses:
 				sprintf(buf, "0x%06X", bgr_to_rgb(color));
@@ -6110,7 +6315,7 @@ ResultType Line::FormatTime(char *aYYYYMMDD, char *aFormat)
 				reverse_date_time = true;
 				break;
 			case 'L':
-				lcid = !stricmp(next_option, "Sys") ? LOCALE_SYSTEM_DEFAULT : (LCID)ATOI64(next_option);
+				lcid = !stricmp(next_option, "Sys") ? LOCALE_SYSTEM_DEFAULT : (LCID)ATOU(next_option);
 				break;
 			// If not one of the above, such as zero terminator or a number, just ignore it.
 			}
@@ -6585,7 +6790,7 @@ ResultType Line::PerformAssign()
 		LPVOID next, binary_contents_max = (char *)binary_contents + source_length + 1; // The last acessible byte, which should be the last byte of the (UINT)0 terminator.
 
 		while ((next = (char *)binary_contents + sizeof(format)) <= binary_contents_max
-			&& (format = *(UINT *)binary_contents)) // Get the format. Relies on short-circuit boolean order.
+			&& (format = *(UINT *)binary_contents)) // Get the format.  Relies on short-circuit boolean order.
 		{
 			binary_contents = next;
 			if ((next = (char *)binary_contents + sizeof(size)) > binary_contents_max)

@@ -70,7 +70,7 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 		RETURN_IF_NOT_TRAY;
 		bool mIconFrozen_prev = mIconFrozen;
 		if (*aOptions) // i.e. if it's blank, don't change the current setting of mIconFrozen.
-			mIconFrozen = (ATOI64(aOptions) == 1);
+			mIconFrozen = (ATOI(aOptions) == 1);
 		if (!*aParam3)
 		{
 			g_NoTrayIcon = false;

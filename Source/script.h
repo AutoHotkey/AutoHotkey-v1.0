@@ -557,7 +557,7 @@ enum DriveGetCmds {DRIVEGET_CMD_INVALID, DRIVEGET_CMD_LIST, DRIVEGET_CMD_FILESYS
 	, DRIVEGET_CMD_STATUSCD, DRIVEGET_CMD_CAPACITY};
 
 enum WinSetAttributes {WINSET_INVALID, WINSET_TRANSPARENT, WINSET_TRANSCOLOR, WINSET_ALWAYSONTOP
-	, WINSET_BOTTOM, WINSET_STYLE, WINSET_EXSTYLE, WINSET_REDRAW};
+	, WINSET_BOTTOM, WINSET_STYLE, WINSET_EXSTYLE, WINSET_REDRAW, WINSET_ENABLE, WINSET_DISABLE, WINSET_REGION};
 
 
 
@@ -662,8 +662,10 @@ private:
 	ResultType RegDelete(HKEY aRootKey, char *aRegSubkey, char *aValueName);
 	static bool RegRemoveSubkeys(HKEY hRegKey);
 
+	#define SW_INVALID -1
 	ResultType PerformShowWindow(ActionTypeType aActionType, char *aTitle = "", char *aText = ""
 		, char *aExcludeTitle = "", char *aExcludeText = "");
+
 	ResultType Splash(char *aOptions, char *aSubText, char *aMainText, char *aTitle, char *aFontName
 		, char *aImageFile, bool aSplashImage);
 	ResultType ToolTip(char *aText, char *aX, char *aY, char *aID);
@@ -1537,6 +1539,9 @@ public:
 		if (!stricmp(aBuf, "Style")) return WINSET_STYLE;
 		if (!stricmp(aBuf, "ExStyle")) return WINSET_EXSTYLE;
 		if (!stricmp(aBuf, "Redraw")) return WINSET_REDRAW;
+		if (!stricmp(aBuf, "Enable")) return WINSET_ENABLE;
+		if (!stricmp(aBuf, "Disable")) return WINSET_DISABLE;
+		if (!stricmp(aBuf, "Region")) return WINSET_REGION;
 		return WINSET_INVALID;
 	}
 
@@ -1642,7 +1647,7 @@ public:
 	static int ConvertMouseButton(char *aBuf, bool aAllowWheel = true)
 	// Returns the matching VK, or zero if none.
 	{
-		if (!aBuf || !*aBuf) return 0;
+		if (!aBuf || !*aBuf) return VK_LBUTTON; // Some callers rely on this default.
 		if (!stricmp(aBuf, "LEFT") || !stricmp(aBuf, "L")) return VK_LBUTTON;
 		if (!stricmp(aBuf, "RIGHT") || !stricmp(aBuf, "R")) return VK_RBUTTON;
 		if (!stricmp(aBuf, "MIDDLE") || !stricmp(aBuf, "M")) return VK_MBUTTON;
@@ -1922,8 +1927,8 @@ struct GuiControlOptionsType
 	int checked; // When zeroed, struct contains default starting state of checkbox/radio, i.e. BST_UNCHECKED.
 	int icon_number; // Which icon of a multi-icon file to use.  Zero means use-default, i.e. the first icon.
 	char password_char; // When zeroed, indicates "use default password" for an edit control with the password style.
-	#define MAX_EDIT_TABSTOPS 50
-	UINT tabstop[MAX_EDIT_TABSTOPS]; // Array of tabstops for the interior of a multi-line edit control.
+	#define GUI_MAX_TABSTOPS 50
+	UINT tabstop[GUI_MAX_TABSTOPS]; // Array of tabstops for the interior of a multi-line edit control.
 	UINT tabstop_count;  // The number of entries in the above array.
 	bool start_new_section;
 };
@@ -2130,7 +2135,7 @@ private:
 	ResultType CloseAndReturn(FILE *fp, UCHAR *aBuf, ResultType return_value);
 	size_t GetLine(char *aBuf, int aMaxCharsToRead, FILE *fp);
 #endif
-	ResultType IsPreprocessorDirective(char *aBuf);
+	ResultType IsDirective(char *aBuf);
 
 	ResultType ParseAndAddLine(char *aLineText, char *aActionName = NULL
 		, char *aEndMarker = NULL, char *aLiteralMap = NULL, size_t aLiteralMapLength = 0
@@ -2220,7 +2225,7 @@ public:
 	Var *FindVar(char *aVarName, size_t aVarNameLength = 0, Var **apVarPrev = NULL, Var *aSearchStart = NULL);
 	static VarTypes GetVarType(char *aVarName);
 
-	WinGroup *FindOrAddGroup(char *aGroupName);
+	WinGroup *FindOrAddGroup(char *aGroupName, bool aNoCreate = false);
 	ResultType AddGroup(char *aGroupName);
 	Label *FindLabel(char *aLabelName);
 	ResultType ActionExec(char *aAction, char *aParams = NULL, char *aWorkingDir = NULL

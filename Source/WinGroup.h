@@ -72,7 +72,6 @@ private:
 		sAlreadyVisited[sAlreadyVisitedCount++] = aWnd;
 	}
 
-	WindowSpec *IsMember(HWND aWnd);
 	ResultType Update(bool aIsModeActivate);
 
 public:
@@ -81,13 +80,13 @@ public:
 	WinGroup *mNextGroup;  // Next item in linked list.
 	UINT mWindowCount;
 
-	ResultType AddWindow(char *aTitle = "", char *aText = "", void *aJumpToLine = NULL
-		, char *aExcludeTitle = "", char *aExcludeText = "");
-	ResultType CloseAll();
+	ResultType AddWindow(char *aTitle, char *aText, void *aJumpToLine, char *aExcludeTitle, char *aExcludeText);
+	ResultType ActUponAll(ActionTypeType aActionType, int aTimeToWaitForClose);
 	ResultType CloseAndGoToNext(bool aStartWithMostRecent);
 	ResultType Activate(bool aStartWithMostRecent, WindowSpec *aWinSpec = NULL, void **aJumpToLine = NULL);
 	ResultType Deactivate(bool aStartWithMostRecent);
 	bool IsEmpty() {return mFirstWindow == NULL;}
+	WindowSpec *IsMember(HWND aWnd);
 	WinGroup(char *aGroupName)
 		// The caller must ensure that aGroupName is non-null and non-empty-string.
 		: mName(aGroupName) // Caller gave us a pointer to dynamic memory for this.
@@ -104,6 +103,6 @@ public:
 
 
 BOOL CALLBACK EnumParentFindAnyExcept(HWND aWnd, LPARAM lParam);
-BOOL CALLBACK EnumParentCloseAny(HWND aWnd, LPARAM lParam);
+BOOL CALLBACK EnumParentActUponAll(HWND aWnd, LPARAM lParam);
 
 #endif
