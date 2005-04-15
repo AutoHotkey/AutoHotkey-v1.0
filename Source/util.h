@@ -81,11 +81,11 @@ inline char *StrChrAny(char *aStr, char *aCharList)
 	// Don't use strchr() because that would just find the first occurrence
 	// of the first search-char, which is not necessarily the first occurrence
 	// of *any* search-char:
-	char *look_for_this_char;
+	char *look_for_this_char, char_being_analyzed;
 	for (; *aStr; ++aStr) // It's safe to use the value-parameter itself.
 		// If *aStr is any of the search char's, we're done:
-		for (look_for_this_char = aCharList; *look_for_this_char; ++look_for_this_char)
-			if (*aStr == *look_for_this_char)
+		for (char_being_analyzed = *aStr, look_for_this_char = aCharList; *look_for_this_char; ++look_for_this_char)
+			if (char_being_analyzed == *look_for_this_char)
 				return aStr;  // Match found.
 	return NULL; // No match.
 }

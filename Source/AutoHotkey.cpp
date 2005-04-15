@@ -56,10 +56,10 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	#ifdef _DEBUG
 		//char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\GUI Demo.ahk";
-		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\MAIN.ahk";
+		char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\MAIN.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\Expressions.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\Benchmarks\\Array write and read.ahk";
-		char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\New Text Document.ahk";
+		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\New Text Document.ahk";
 	#else
 		char *script_filespec = NAME_P ".ini";  // Use this extension for better file association with editor(s).
 	#endif

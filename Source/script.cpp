@@ -909,6 +909,33 @@ LineNumberType Script::LoadFromFile()
 
 
 
+bool IsFunction(char *aBuf)
+// Helper function for LoadIncludedFile().
+{
+	char *action_end = StrChrAny(aBuf, EXP_ALL_SYMBOLS EXP_ILLEGAL_CHARS);
+	// Can't be a function definition or call without an open-parenthesis as first char found by the above.
+	// In addition, if action_end isn't NULL, that confirms that the string in aBuf prior to action_end contains
+	// no spaces, tabs, colons, or equal-signs.  As a result, it can't be:
+	// 1) a hotstring, since they always start with at least one colon that would be caught immediately as 
+	//    first-expr-char-is-not-open-parenthesis by the above.
+	// 2) Any kind of math or assignment, such as var:=(x+y) or var+=(x+y).
+	// The only things it could be other than a function call or function definition are:
+	// Normal label that ends in single colon but contains an open-parenthesis prior to the colon, e.g. Label(x):
+	// Single-line hotkey such as KeyName::MsgBox.  But since '(' isn't valid inside KeyName, this isn't a concern.
+	// In addition, note that it isn't necessary to check for colons that lie outside of quoted strings because
+	// we're only interested in the first "word" of aBuf: If this is indeed a function call or definition, what
+	// lies to the left of its first open-parenthesis can't contain any colons anyway because the above would
+	// have caught it as first-expr-char-is-not-open-parenthesis.  In other words, there's no way for a function's
+	// opening parenthesis to occur after a legtimate/quoted colon or double-colon in its parameters.
+	return action_end && *action_end == '(' && (action_end - aBuf != 2 || strnicmp(aBuf, "IF", 2))
+		&& action_end[strlen(action_end) - 1] == ')'; // This last check avoids detecting a label such as "Label(x):" as a function.
+	// Also, it seems best never to allow if(...) to be a function call, even if it's blank inside such as if().
+	// In addition, it seems best not to allow if(...) to ever be a function definition since such a function
+	// could never be called as ACT_FUNCTIONCALL since it would be seen as an IF-stmt instead.
+}
+
+
+
 ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude)
 // Returns the number of non-comment lines that were loaded, or LOADING_FAILED on error.
 // Below: Use double-colon as delimiter to set these apart from normal labels.
@@ -1006,7 +1033,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 	// File is now open, read lines from it.
 
 	// <buf> should be no larger than LINE_SIZE because some later functions rely upon that:
-	char buf[LINE_SIZE], buf_prev[LINE_SIZE] = "", *hotkey_flag, *cp, *cp1, *hotstring_start, *hotstring_options;
+	char buf[LINE_SIZE], buf_prev[LINE_SIZE] = "", *hotkey_flag, *cp, *cp1, *action_end, *hotstring_start, *hotstring_options;
 	HookActionType hook_action;
 	size_t buf_length;
 	bool is_function, is_label, section_comment = false;
@@ -1113,33 +1140,12 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 		// not need to be escaped inside naked function calls and function definitions such as the following:
 		// fn("::")      ; Function call.
 		// fn(Str="::")  ; Function definition with default value for its param.
-		// The below will make sure it's not a hotstring-in-disguise such as: ::fn("::")
-		// "(:=" is included below to differentiate an isolated fn call or definition from an assignment with
-		// no spaces around the operator.  Example: fn(x) qualifies as a candidate for a formal function
-		// definition, but y:=fn(x) does not.  NOTE: buf was already ltrimmed by GetLine(). In addition,
-		// the above has ensured that it is non-zero length.
-		char *action_end = StrChrAny(buf, "\t (:=");
-		if (!action_end) // Note that action_end is used later below too, so be careful changing this.
-			action_end = buf + strlen(buf);
-		// Now action_end is the position of the terminator, or the tab/space/:/= or '(' following the command name.
-		// It seems best never to allow if(...) to be a function call, even if it's blank inside such as if().
-		// In addition, it seems best not to allow if(...) to ever be a function definition since such a function
-		// could never be called as ACT_FUNCTIONCALL since it would be seen as an IF-stmt instead.
-		if (*action_end == '(' && (action_end - buf != 2 || strnicmp(buf, "IF", 2))
-			&& !strchr(action_end, ':')) // Omit labels and hotstrings from being considered functions (labels can contain parentheses).
+		if (is_function = IsFunction(buf)) // If true, it's either a function definition or a function call (to be distinguished later).
 		{
-			// This appears to be either a function call or a function definition.
-			*action_end = '\0'; // Temporarily terminate.
-			is_function = Var::ValidateName(buf, false, false); // To ensure it's not a hotstring-in-disguise such as: ::fn("::"), and possibly to filter out other ambiguous things.
-			*action_end = '('; // Undo the temp. termination.
-			if (is_function)
-			{
-				// Defer this line until the next line comes in, which helps determine whether this line is
-				// a function call vs. definition:
-				strcpy(buf_prev, buf);
-				continue;
-			}
-			//else it's a hotstring or some other type of line yet to be determined.  Fall through to the below.
+			// Defer this line until the next line comes in, which helps determine whether this line is
+			// a function call vs. definition:
+			strcpy(buf_prev, buf);
+			continue;
 		}
 
 		// "::" alone isn't a hotstring, it's a label whose name is colon.
@@ -1331,7 +1337,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 					// But do put in the Return regardless, in case this label is ever jumped to
 					// via Goto/Gosub:
 					if (   !(hook_action = Hotkey::ConvertAltTab(hotkey_flag, false))   )
-						if (!ParseAndAddLine(hotkey_flag)) // Function calls such as fn() are also detected by it.
+						if (!ParseAndAddLine(hotkey_flag, IsFunction(hotkey_flag) ? ACT_FUNCTIONCALL : ACT_INVALID)) // It can't be a function definition vs. call since it's a single-line hotkey.
 							return CloseAndReturn(fp, script_buf, FAIL);
 				// Also add a Return that's implicit for a single-line hotkey.  This is also
 				// done for auto-replace hotstrings in case gosub/goto is ever used to jump
@@ -1417,12 +1423,18 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 		// literal_map has to be properly passed in a recursive call to itself, as well
 		// as properly detecting special commands that don't have keywords such as
 		// IF comparisons, ACT_ASSIGN, +=, -=, etc.
-		if (strlicmp(buf, g_act[ACT_ELSE].Name, (UINT)(action_end - buf))) // It's not an ELSE.
+		if (!(action_end = StrChrAny(buf, "\t ,"))) // Position of first tab/space/comma.  For simplicitly, a non-standard g_delimiter is not supported.
+			action_end = buf + strlen(buf); // It's done this way so that ELSE can be fully handled here; i.e. that ELSE does not have to be in the list of commands recognizable by ParseAndAddLine().
+		// The following method ensures that words or variables that start with "Else", e.g. ElseAction, are not
+		// incorrectly detected as an Else command:
+		if (strlicmp(buf, "Else", (UINT)(action_end - buf))) // "Else" is used vs. g_act[ACT_ELSE].Name for performance.
 		{
+			// It's not an ELSE.  Also, it can't be ACT_FUNCTIONCALL at this stage because it would have
+			// been already handled higher above.
 			if (!ParseAndAddLine(buf))
 				return CloseAndReturn(fp, script_buf, FAIL);
 		}
-		else // This line is an ELSE.
+		else // This line is an ELSE, possibly with another command immediately after it (on the same line).
 		{
 			// Add the ELSE directly rather than calling ParseAndAddLine() because that function
 			// would resolve escape sequences throughout the entire length of <buf>, which we
@@ -1434,7 +1446,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			action_end = omit_leading_whitespace(action_end); // Now action_end is the word after the ELSE.
 			if (*action_end == g_delimiter) // Allow "else, action"
 				action_end = omit_leading_whitespace(action_end + 1);
-			if (*action_end && !ParseAndAddLine(action_end)) // Function calls such as fn() are also detected by it.
+			if (*action_end && !ParseAndAddLine(action_end, IsFunction(action_end) ? ACT_FUNCTIONCALL : ACT_INVALID)) // If it's a function, it must be a call vs. a definition because a function can't be defined on the same line as an Else.
 				return CloseAndReturn(fp, script_buf, FAIL);
 			// Otherwise, there was either no same-line action or the same-line action was successfully added,
 			// so do nothing.
@@ -1446,7 +1458,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 		// Somewhat messy to decrement then increment later, but it's probably easier than the
 		// alternatives due to the use of "continue" in some places above.
 		--mCurrLineNumber;
-		if (!ParseAndAddLine(buf_prev))
+		if (!ParseAndAddLine(buf_prev, ACT_FUNCTIONCALL)) // Must be function call vs. definition since otherwise the above would have detected the opening brace beneath it and already cleared buf_prev.
 			return CloseAndReturn(fp, script_buf, FAIL);
 		++mCurrLineNumber;
 	}
@@ -2080,13 +2092,8 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 		strcpy(action_name, aActionName);
 		end_marker = aEndMarker;
 	}
-	else if (aActionType == ACT_FUNCTIONCALL // Caller determined this for us.
-		|| (end_marker = StrChrAny(aLineText, "\t (:=")) && *end_marker == '(' // Relies on short-circuit boolean order.
-			&& (end_marker - aLineText != 2 || strnicmp(aLineText, "IF", 2))) // if(...) is always an IF, not a function call.
+	else if (aActionType == ACT_FUNCTIONCALL)
 	{
-		// The above check is similar to the ones done in LoadIncludedFile() to detect functions, so
-		// maintain them together.
-		aActionType = ACT_FUNCTIONCALL;
 		*action_name = '\0';
 		end_marker = NULL; // Indicate that there is no action to mark the end of.
 	}
