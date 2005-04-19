@@ -1034,6 +1034,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 
 	// <buf> should be no larger than LINE_SIZE because some later functions rely upon that:
 	char buf[LINE_SIZE], buf_prev[LINE_SIZE] = "", *hotkey_flag, *cp, *cp1, *action_end, *hotstring_start, *hotstring_options;
+	LineNumberType buf_prev_line_number, saved_line_number;
 	HookActionType hook_action;
 	size_t buf_length;
 	bool is_function, is_label, section_comment = false;
@@ -1101,7 +1102,11 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			// would not need to be decremented+incremented even if the below resulted in a recursive
 			// call to us (though it doesn't currently) because line_number's only purpose is to
 			// remember where this layer left off when the recursion collapses back to us.
-			--mCurrLineNumber; // Done so that any syntax errors that occur during the calls below will report the correct line number.
+			// Fix for v1.0.31.05: It's not enough just to decrement mCurrLineNumber because there
+			// might be some blank lines or commented-out lines between this function call/definition
+			// and the line that follows it, each of which will have previously incremented mCurrLineNumber.
+			saved_line_number = mCurrLineNumber;
+			mCurrLineNumber = buf_prev_line_number;  // Done so that any syntax errors that occur during the calls below will report the correct line number.
 			// Open brace means this is a function definition. NOTE: buf was already ltrimmed by GetLine().
 			// Could use *g_act[ACT_BLOCK_BEGIN].Name instead of '{', but it seems to elaborate to be worth it.
 			if (*buf == '{')
@@ -1127,9 +1132,12 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 					return CloseAndReturn(fp, script_buf, FAIL);
 			}
 			else // It's either a function call on a line by itself, such as fn(x). It can't be if(..) because another section checked that.
+			{
 				if (!ParseAndAddLine(buf_prev, ACT_FUNCTIONCALL))
 					return CloseAndReturn(fp, script_buf, FAIL);
-			++mCurrLineNumber;
+				mCurrLine = NULL; // Prevents showing misleading vicinity lines if the line after a function call is a syntax error.
+			}
+			mCurrLineNumber = saved_line_number;
 			*buf_prev = '\0'; // Now that it's been fully handled, reset the buf.
 			// Now fall through to the below so that *this* line (the one after it) will be processed.
 			// Note that this line might be a pre-processor directive, label, etc. that won't actually
@@ -1145,6 +1153,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			// Defer this line until the next line comes in, which helps determine whether this line is
 			// a function call vs. definition:
 			strcpy(buf_prev, buf);
+			buf_prev_line_number = mCurrLineNumber;
 			continue;
 		}
 
@@ -1457,10 +1466,11 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 	{
 		// Somewhat messy to decrement then increment later, but it's probably easier than the
 		// alternatives due to the use of "continue" in some places above.
-		--mCurrLineNumber;
+		saved_line_number = mCurrLineNumber;
+		mCurrLineNumber = buf_prev_line_number; // Done so that any syntax errors that occur during the calls below will report the correct line number.
 		if (!ParseAndAddLine(buf_prev, ACT_FUNCTIONCALL)) // Must be function call vs. definition since otherwise the above would have detected the opening brace beneath it and already cleared buf_prev.
 			return CloseAndReturn(fp, script_buf, FAIL);
-		++mCurrLineNumber;
+		mCurrLineNumber = saved_line_number;
 	}
 
 #ifdef AUTOHOTKEYSC
@@ -11480,13 +11490,24 @@ double_deref:
 				// it seems best not to for these reasons:
 				// 1) The extreme rarity of a legitimate desire to intentionally do so.
 				// 2) The fact that any return encountered after the Goto cannot provide a return value for
-				//    the function because load-time validation checks for this (it it's preferable not to
+				//    the function because load-time validation checks for this (it's preferable not to
 				//    give up this check, since it is an informative error message and might also help catch
 				//    bugs in the script).  Gosub does not suffer from this because the return that brings it
 				//    back into the function body belongs to the Gosub and not the function itself.
 				// 3) More difficult to maintain because we have handle jump_to_line the same way ExecUntil() does,
-				//    taking into account aResult first, etc.
-				aResult = func.mJumpToLine->ExecUntil(UNTIL_BLOCK_END, &result);
+				//    checking aResult the same way it does, then checking jump_to_line the same way it does, etc.
+				// Fix for v1.0.31.05: g_script.mLoopFile and the other g_script members that follow it are
+				// now passed to ExecUntil() for two reasons:
+				// 1) To fix the fact that any function call in one parameter of a command would reset
+				// A_Index and related variables so that if those variables are referenced in another
+				// parameter of the same command, they would be wrong.
+				// 2) So that the caller's value of A_Index and such will always be valid even inside
+				// of called functions (unless overridden/eclipsed by a loop in the body of the function),
+				// which seems to add flexibility without giving up anything.  This fix is necessary at least
+				// for a command that references A_Index in two of its args such as the following:
+				// ToolTip, O, ((cos(A_Index) * 500) + 500), A_Index
+				aResult = func.mJumpToLine->ExecUntil(UNTIL_BLOCK_END, &result, NULL, g_script.mLoopFile
+					, g_script.mLoopRegItem	, g_script.mLoopReadFile, g_script.mLoopField, g_script.mLoopIteration);
 				--func.mInstances;
 				// Restore the original value in case this function is called from inside another function.
 				// Due to the synchronous nature of recursion and recursion-collapse, this should keep
