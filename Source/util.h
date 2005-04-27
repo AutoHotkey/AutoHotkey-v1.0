@@ -476,6 +476,7 @@ void GetVirtualDesktopRect(RECT &aRect);
 ResultType RegReadString(HKEY aRootKey, char *aSubkey, char *aValueName, char *aBuf, size_t aBufSize);
 HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, int aIconIndex
 	, bool aUseGDIPlusIfAvailable);
+HBITMAP IconToBitmap(HICON ahIcon, bool aDestroyIcon);
 int CALLBACK FontEnumProc(ENUMLOGFONTEX *lpelfe, NEWTEXTMETRICEX *lpntme, DWORD FontType, LPARAM lParam);
 bool IsStringInList(char *aStr, char *aList, bool aFindExactMatch, bool aCaseSensitive);
 

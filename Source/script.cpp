@@ -5926,7 +5926,7 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 					// checked by DefineFunc(), that was done only for the function's formal definition, not
 					// the calls to it.  And although parentheses were balanced in all expressions at an earlier
 					// stage, it's done again here in case function calls are ever allowed to be occur in
-					// a non-expression.
+					// a non-expression (or dynamic functions calls such as FnArray%i%() are ever supported):
 					if (!*param_start)
 						return line->PreparseError(ERR_MISSING_CLOSE_PAREN, deref->marker);
 

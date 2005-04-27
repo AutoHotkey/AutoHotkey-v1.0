@@ -1536,8 +1536,9 @@ LRESULT AllowIt(HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, KeyHistoryIte
 		case WM_LBUTTONUP: g_mouse_buttons_logical &= ~MK_LBUTTON; break;
 		case WM_RBUTTONUP: g_mouse_buttons_logical &= ~MK_RBUTTON; break;
 		case WM_MBUTTONUP: g_mouse_buttons_logical &= ~MK_MBUTTON; break;
-		// Seems most correct to map NCX and X to the same VK since any given mouse is unlikely to
-		// have both sets of these extra buttons?:
+		// WM_NCXBUTTONUP is a click in the non-client area of a window.  MSDN implies this message can be
+		// received by the mouse hook  but it seems doubtful because its counterparts, such as WM_NCLBUTTONUP,
+		// are apparently never received:
 		case WM_NCXBUTTONUP:
 		case WM_XBUTTONUP:
 			g_mouse_buttons_logical &= ~(   (HIWORD(event.mouseData)) == XBUTTON1 ? MK_XBUTTON1 : MK_XBUTTON2   );

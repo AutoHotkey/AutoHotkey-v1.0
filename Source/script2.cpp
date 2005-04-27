@@ -4053,7 +4053,7 @@ BOOL CALLBACK EnumMonitorProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMoni
 
 
 
-LPCOLORREF getbits(HBITMAP ahImage, HDC hdc, LONG &aWidth, LONG &aHeight, bool &aIs16Bit)
+LPCOLORREF getbits(HBITMAP ahImage, HDC hdc, LONG &aWidth, LONG &aHeight, bool &aIs16Bit, int aMinColorDepth = 16)
 // Helper function used by PixelSearch below.
 // Returns an array of pixels to the caller, which it must free when done.  Returns NULL on failure,
 // in which case the contents of the output parameters is indeterminate.
@@ -4083,7 +4083,8 @@ LPCOLORREF getbits(HBITMAP ahImage, HDC hdc, LONG &aWidth, LONG &aHeight, bool &
 
 	bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
 	bmi.bmiHeader.biBitCount = 0; // i.e. "query bitmap attributes" only.
-	if (!GetDIBits(tdc, ahImage, 0, 0, NULL, (LPBITMAPINFO)&bmi, DIB_RGB_COLORS) || bmi.bmiHeader.biBitCount < 16) // Relies on short-circuit boolean order.
+	if (!GetDIBits(tdc, ahImage, 0, 0, NULL, (LPBITMAPINFO)&bmi, DIB_RGB_COLORS)
+		|| bmi.bmiHeader.biBitCount < aMinColorDepth) // Relies on short-circuit boolean order.
 		goto end;
 
 	// Set output parameters for caller:
@@ -4244,9 +4245,9 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, COLOR
 			for (i = 0; i < screen_pixel_count; ++i)
 			{
 				// Note that screen pixels sometimes have a non-zero high-order byte.  That's why
-				// bit-and with 0xFFFFFF is done.  Otherwise, Redish/orangish colors are not properly
+				// bit-and with 0x00FFFFFF is done.  Otherwise, Redish/orangish colors are not properly
 				// found:
-				if ((screen_pixel[i] & 0xFFFFFF) == aColorRGB)
+				if ((screen_pixel[i] & 0x00FFFFFF) == aColorRGB)
 				{
 					found = true;
 					break;
@@ -4423,22 +4424,95 @@ ResultType Line::ImageSearch(int aLeft, int aTop, int aRight, int aBottom, char 
 		aBottom += rect.top;   // Same.
 	}
 
-	// For now, images that can't be loaded as bitmaps (icons and cursors) are not supported, for the
-	// following reasons:
-	// 1) Most icons have a transparent background or color present, which the image search routine
-	//    here is probably not equipped to handle (since the transparent color, when shown, typically
-	//    reveals the color of whatever is behind it; thus screen pixel color won't match image's
-	//    pixel color).
-	// 2) The IconToBitmap() routine I tried yields a color bit-depth of 1, so it's probably not
-	//    working correctly, for this purpose at least.
+	// Options are done as asterisk+option to permit future expansion.
+	// Set defaults to be possibly overridden by any specified options:
+	int aVariation = 0;  // This is named aVariation vs. variation for use with the SET_COLOR_RANGE macro.
+	COLORREF trans_color = CLR_NONE; // The default must be a value that can't occur naturally in an image.
+	int icon_index = -1; // This is the value that should be passed to LoadPicture() when there is no preference about which icon to use (in a multi-icon file).
+	int width = 0, height = 0;
+	// For icons, override the default to be 16x16 because that is what is sought 99% of the time.
+	// This new default can be overridden by explicitly specifying w0 h0:
+	char *cp = strrchr(aImageFile, '.');
+	if (cp)
+	{
+		++cp;
+		if (!(stricmp(cp, "ico") && stricmp(cp, "exe") && stricmp(cp, "dll")))
+			width = GetSystemMetrics(SM_CXSMICON), height = GetSystemMetrics(SM_CYSMICON);
+	}
+
+	char color_name[32], *dp;
+	cp = omit_leading_whitespace(aImageFile); // But don't alter aImageFile yet in case it contains literal whitespace we want to retain.
+	while (*cp == '*')
+	{
+		++cp;
+		switch (toupper(*cp))
+		{
+		case 'W': width = ATOI(cp + 1); break;
+		case 'H': height = ATOI(cp + 1); break;
+		default:
+			if (!strnicmp(cp, "Icon", 4))
+			{
+				cp += 4;  // Now it's the character after the word.
+				icon_index = ATOI(cp) - 1; // LoadPicture() correctly handles any negative value.
+			}
+			else if (!strnicmp(cp, "Trans", 5))
+			{
+				cp += 5;  // Now it's the character after the word.
+				// Isolate the color name/number for ColorNameToBGR():
+				strlcpy(color_name, cp, sizeof(color_name));
+				if (dp = StrChrAny(color_name, " \t")) // Find space or tab, if any.
+					*dp = '\0';
+				trans_color = ColorNameToBGR(color_name);
+				if (trans_color == CLR_NONE) // A matching color name was not found, so assume it's in hex format.
+					// It seems strtol() automatically handles the optional leading "0x" if present:
+					trans_color = rgb_to_bgr(strtol(color_name, NULL, 16));
+					// if cp did not contain something hex-numeric, black (0x00) will be assumed,
+					// which seems okay given how rare such a problem would be.
+			}
+			else // Assume it's a number since that's the only other asterisk-option.
+			{
+				aVariation = ATOI(cp); // Seems okay to support hex via ATOI because the space after the number is documented as being mandatory.
+				if (aVariation < 0)
+					aVariation = 0;
+				if (aVariation > 255)
+					aVariation = 255;
+				// Note: because it's possible for filenames to start with a space (even though Explorer itself
+				// won't let you create them that way), allow exactly one space between end of option and the
+				// filename itself:
+			}
+		} // switch()
+		if (   !(cp = StrChrAny(cp, " \t"))   ) // Find the first space or tab after the option.
+			return OK; // Bad option/format.  Let ErrorLevel tell the story.
+		// Now it's the space or tab (if there is one) after the option letter.  Advance by exactly one character
+		// because only one space or tab is considered the delimiter.  Any others are considered to be part of the
+		// filename (though some or all OSes might simply ignore them or tolerate them as first-try match criteria).
+		aImageFile = ++cp; // This should now point to another asterisk or the filename itself.
+		// Above also serves to reset the filename to omit the option string whenever at least one asterisk-option is present.
+		cp = omit_leading_whitespace(cp); // This is done to make it more tolerant of having more than one space/tab between options.
+	}
+
+	// Update: Transparency is now supported in icons by using the icon's mask.  In addition, an attempt
+	// is made to support transparency in GIF, PNG, and possibly TIF files via the *Trans option, which
+	// assumes that one color in the image is transparent.  In GIFs not loaded via GDIPlus, the transparent
+	// color might always been seen as pure white, but when GDIPlus is used, it's probably always black
+	// like it is in PNG -- however, this will not relied upon, at least not until confirmed.
+	// OLDER/OBSOLETE comment kept for background:
+	// For now, images that can't be loaded as bitmaps (icons and cursors) are not supported because most
+	// icons have a transparent background or color present, which the image search routine here is
+	// probably not equipped to handle (since the transparent color, when shown, typically reveals the
+	// color of whatever is behind it; thus screen pixel color won't match image's pixel color).
 	// So currently, only BMP and GIF seem to work reliably, though some of the other GDIPlus-supported
-	// formats might work too:
+	// formats might work too.
 	int image_type;
-	HBITMAP hbitmap_image = LoadPicture(aImageFile, 0, 0, image_type, -1, false);
-	// UPDATE: Must not pass "true" with the above because that causes bitmaps and gifs
-	// be found by the search.  In other words, nothing works.  Obsolete: "true" so that
-	// an attempt will be made to load icons as bitmaps if GDIPlus is available.
-	if (!hbitmap_image || image_type != IMAGE_BITMAP)
+	HBITMAP hbitmap_image = LoadPicture(aImageFile, width, height, image_type, icon_index, false);
+	// The comment marked OBSOLETE below is no longer true because the elimination of the high-byte via
+	// 0x00FFFFFF seems to have fixed it.  But "true" is still not passed because that should increase
+	// consistency when GIF/BMP/ICO files are used by a script on both Win9x and other OSs (since the
+	// same loading method would be used via "false" for these formats across all OSes).
+	// OBSOLETE: Must not pass "true" with the above because that causes bitmaps and gifs to be not found
+	// by the search.  In other words, nothing works.  Obsolete comment: Pass "true" so that an attempt
+	// will be made to load icons as bitmaps if GDIPlus is available.
+	if (!hbitmap_image)
 		return OK; // Let ErrorLevel tell the story.
 
 	HDC hdc = GetDC(NULL);
@@ -4453,16 +4527,41 @@ ResultType Line::ImageSearch(int aLeft, int aTop, int aRight, int aBottom, char 
 	// label can detect them:
 	HDC sdc = NULL;
 	HBITMAP hbitmap_screen = NULL;
-	LPCOLORREF image_pixel = NULL, screen_pixel = NULL;
+	LPCOLORREF image_pixel = NULL, screen_pixel = NULL, image_mask = NULL;
 	HGDIOBJ sdc_orig_select = NULL;
 	bool found = false; // Must init here for use by "goto end".
     
 	bool image_is_16bit;
 	LONG image_width, image_height;
+
+	if (image_type == IMAGE_ICON)
+	{
+		// Must be done prior to IconToBitmap() since it deletes (HICON)hbitmap_image:
+		ICONINFO ii;
+		if (GetIconInfo((HICON)hbitmap_image, &ii))
+		{
+			// If the icon is monochrome (black and white), ii.hbmMask will contain twice as many pixels as
+			// are actually in the icon.  But since the top half of the pixels are the AND-mask, it seems
+			// okay to get all the pixels given the rarity of monochrome icons.  This scenario should be
+			// handled properly because: 1) the variables image_height and image_width will be overridden
+			// further below with the correct icon dimensions; 2) Only the first half of the pixels within
+			// the image_mask array will actually be referenced by the transparency checker in the loops,
+			// and that first half is the AND-mask, which is the transparency part that is needed.  The
+			// second half, the XOR part, is not needed and thus ignored.  Also note that if width/height
+			// required the icon to be scaled, LoadPicture() has already done that directly to the icon,
+			// so ii.hbmMask should already be scaled to match the size of the bitmap created later below.
+			image_mask = getbits(ii.hbmMask, hdc, image_width, image_height, image_is_16bit, 1);
+			DeleteObject(ii.hbmColor); // DeleteObject() probably handles NULL okay since few MSDN/other examples ever check for NULL.
+			DeleteObject(ii.hbmMask);
+		}
+		if (   !(hbitmap_image = IconToBitmap((HICON)hbitmap_image, true))   )
+			return OK; // Let ErrorLevel tell the story.
+	}
+
 	if (   !(image_pixel = getbits(hbitmap_image, hdc, image_width, image_height, image_is_16bit))   )
 		goto end;
 
-	// Create an empty bitmap to hold all the pixels currently visible on the screen (within the search area):
+	// Create an empty bitmap to hold all the pixels currently visible on the screen that lie within the search area:
 	int search_width = aRight - aLeft + 1;
 	int search_height = aBottom - aTop + 1;
 	if (   !(sdc = CreateCompatibleDC(hdc)) || !(hbitmap_screen = CreateCompatibleBitmap(hdc, search_width, search_height))   )
@@ -4482,40 +4581,153 @@ ResultType Line::ImageSearch(int aLeft, int aTop, int aRight, int aBottom, char 
 
 	LONG image_pixel_count = image_width * image_height;
 	LONG screen_pixel_count = screen_width * screen_height;
-	register i, j, k, x, y, p;
+	int i, j, k, x, y; // Declaring as "register" makes no performance difference with current compiler, so let the compiler choose which should be registers.
 
-	// If either is 16-bit, convert to 32-bit:
+	// If either is 16-bit, convert *both* to the 16-bit-compatible 32-bit format:
 	if (image_is_16bit || screen_is_16bit)
 	{
+		if (trans_color != CLR_NONE)
+			trans_color &= 0x00F8F8F8; // Convert indicated trans-color to be compatible with the conversion below.
 		for (i = 0; i < screen_pixel_count; ++i)
-			screen_pixel[i] &= 0xF8F8F8F8;
+			screen_pixel[i] &= 0x00F8F8F8; // Highest order byte must be masked to zero for consistency with use of 0x00FFFFFF below.
 		for (i = 0; i < image_pixel_count; ++i)
-			image_pixel[i] &= 0xF8F8F8F8;
+			image_pixel[i] &= 0x00F8F8F8;  // Same.
 	}
 
 	// Search the specified region for the first occurrence of the image:
-	for (i = 0; i < screen_pixel_count; ++i)
+	if (aVariation <= 0) // Caller wants an exact match.
 	{
-		if (screen_pixel[i] == image_pixel[0]) // A screen pixel has been found that matches the image's first pixel.
+		// Concerning the following use of 0x00FFFFFF, the use of 0x00F8F8F8 above is related (both have high order byte 00).
+		// The following needs to be done only when shades-of-variation mode isn't in effect because
+		// shades-of-variation mode ignores the high-order byte due to its use of macros such as GetRValue().
+		// This transformation incurs about a 15% performance decrease (percentage is fairly constant since
+		// it is proportional to the search-region size, which tends to be much larger than the search-image and
+		// is therefore the primary determination of how long the loops take). But it definitely helps find images
+		// more successfully in some cases.  For example, if a PNG file is displayed in a GUI window, this
+		// transformation allows certain bitmap search-images to be found via variation==0 when they otherwise
+		// would require variation==1 (possibly the variation==1 success is just a side-effect of it
+		// ignoring the high-order byte -- maybe a much higher variation would be needed if the high
+		// order byte were also subject to the same shades-of-variation analysis as the other three bytes [RGB]).
+		for (i = 0; i < screen_pixel_count; ++i)
+			screen_pixel[i] &= 0x00FFFFFF;
+		for (i = 0; i < image_pixel_count; ++i)
+			image_pixel[i] &= 0x00FFFFFF;
+
+		for (i = 0; i < screen_pixel_count; ++i)
 		{
-			for (found = true, y = 0, j = 0, k = i; found && y < image_height && k < screen_pixel_count; ++y, k += screen_width)
-				for (x = 0, p = k; x < image_width && p < screen_pixel_count && found; ++x, ++j, ++p)
-					found = (screen_pixel[p] == image_pixel[j]);
-			// Fix for v1.0.31.03: The above formerly considered a partial match at the edges of the search
-			// area to be a complete match.  This is definitely undesirable, so the following check will
-			// exclude such matches.  In other words, if the loops above ran out of screen pixels prior to
-			// running out of image pixels, found==true indicates only a partial match.  In addition, if the
-			// following exact set of conditions is true, a "break" is done because no further matches are
-			// possible because the remaining part of the search region is smaller than the search-image itself:
-			if (found && (x < image_width || y < image_height))
+			// Unlike the variation-loop, the following one uses a first-pixel optimization to boost performance
+			// by about 10% because it's only 3 extra comparisons and exact-match mode is probably used more often.
+			// Before even checking whether the other adjacent pixels in the region match the image, ensure
+			// the image does not extend past the right or bottom edges of the current part of the search region.
+			// This is done for performance but more importantly to prevent partial matches at the edges of the
+			// search region from being considered complete matches.
+			// The following check is ordered for short-circuit performance.  In addition, image_mask, if
+			// non-NULL, is used to determine which pixels are transparent within the image and thus should
+			// match any color on the screen.
+			if ((screen_pixel[i] == image_pixel[0] // A screen pixel has been found that matches the image's first pixel.
+				|| image_mask && image_mask[0]     // Or: It's an icon's transparent pixel, which matches any color.
+				|| image_pixel[0] == trans_color)  // This should be okay even if trans_color==CLR_NONE, since CLR none should never occur naturally in the image.
+				&& image_height <= screen_height - i/screen_width // Image is short enough to fit in the remaining rows of the search region.
+				&& image_width <= screen_width - i%screen_width)  // Image is narrow enough not to exceed the right-side boundary of the search region.
 			{
-				found = false;
-				break;
+				// Check if this candidate region -- which is a subset of the search region whose height and width
+				// matches that of the image -- is a pixel-for-pixel match of the image.
+				for (found = true, x = 0, y = 0, j = 0, k = i; j < image_pixel_count; ++j)
+				{
+					if (!(found = (screen_pixel[k] == image_pixel[j] // At least one pixel doesn't match, so this candidate is discarded.
+						|| image_mask && image_mask[j]      // Or: It's an icon's transparent pixel, which matches any color.
+						|| image_pixel[j] == trans_color))) // This should be okay even if trans_color==CLR_NONE, since CLR none should never occur naturally in the image.
+						break;
+					if (++x < image_width) // We're still within the same row of the image, so just move on to the next screen pixel.
+						++k;
+					else // We're starting a new row of the image.
+					{
+						x = 0; // Return to the leftmost column of the image.
+						++y;   // Move one row downward in the image.
+						// Move to the next row within the current-candiate region (not the entire search region).
+						// This is done by moving vertically downward from "i" (which is the upper-left pixel of the
+						// current-candidate region) by "y" rows.
+						k = i + y*screen_width; // Verified correct.
+					}
+				}
+				if (found) // Complete match found.
+					break;
 			}
-			// Otherwise:
-			if (found)
-				break;
-			//else keep trying via the outermost loop.
+		}
+	}
+	else // Allow colors to vary by aVariation shades; i.e. approximate match is okay.
+	{
+		// The following section is part of the first-pixel-check optimization that improves performance by
+		// 15% or more depending on where and whether a match is found.  This section and one the follows
+		// later is commented out to reduce code size.
+		// Set high/low range for the first pixel of the image since it is the pixel most often checked
+		// (i.e. for performance).
+		//BYTE search_red1 = GetBValue(image_pixel[0]);  // Because it's RGB vs. BGR, the B value is fetched, not R (though it doesn't matter as long as everything is internally consistent here).
+		//BYTE search_green1 = GetGValue(image_pixel[0]);
+		//BYTE search_blue1 = GetRValue(image_pixel[0]); // Same comment as above.
+		//BYTE red_low1 = (aVariation > search_red1) ? 0 : search_red1 - aVariation;
+		//BYTE green_low1 = (aVariation > search_green1) ? 0 : search_green1 - aVariation;
+		//BYTE blue_low1 = (aVariation > search_blue1) ? 0 : search_blue1 - aVariation;
+		//BYTE red_high1 = (aVariation > 0xFF - search_red1) ? 0xFF : search_red1 + aVariation;
+		//BYTE green_high1 = (aVariation > 0xFF - search_green1) ? 0xFF : search_green1 + aVariation;
+		//BYTE blue_high1 = (aVariation > 0xFF - search_blue1) ? 0xFF : search_blue1 + aVariation;
+		// Above relies on the fact that the 16-bit conversion higher above was already done because like
+		// in PixelSearch, it seems more appropriate to do the 16-bit conversion prior to setting the range
+		// of high and low colors (vs. than applying 0xF8 to each of the high/low values individually).
+
+		BYTE red, green, blue;
+		BYTE search_red, search_green, search_blue;
+		BYTE red_low, green_low, blue_low, red_high, green_high, blue_high;
+
+		// The following loop is very similar to its counterpart above that finds an exact match, so maintain
+		// them together and see above for more detailed comments about it.
+		for (i = 0; i < screen_pixel_count; ++i)
+		{
+			// The following is commented out to trade code size reduction for performance (see comment above).
+			//red = GetBValue(screen_pixel[i]);   // Because it's RGB vs. BGR, the B value is fetched, not R (though it doesn't matter as long as everything is internally consistent here).
+			//green = GetGValue(screen_pixel[i]);
+			//blue = GetRValue(screen_pixel[i]);
+			//if ((red >= red_low1 && red <= red_high1
+			//	&& green >= green_low1 && green <= green_high1
+			//	&& blue >= blue_low1 && blue <= blue_high1 // All three color components are a match, so this screen pixel matches the image's first pixel.
+			//		|| image_mask && image_mask[0]         // Or: It's an icon's transparent pixel, which matches any color.
+			//		|| image_pixel[0] == trans_color)      // This should be okay even if trans_color==CLR_NONE, since CLR none should never occur naturally in the image.
+			//	&& image_height <= screen_height - i/screen_width // Image is short enough to fit in the remaining rows of the search region.
+			//	&& image_width <= screen_width - i%screen_width)  // Image is narrow enough not to exceed the right-side boundary of the search region.
+			
+			// Instead of the above, only this abbreviated check is done:
+			if (image_height <= screen_height - i/screen_width    // Image is short enough to fit in the remaining rows of the search region.
+				&& image_width <= screen_width - i%screen_width)  // Image is narrow enough not to exceed the right-side boundary of the search region.
+			{
+				// Since the first pixel is a match, check the other pixels.
+				for (found = true, x = 0, y = 0, j = 0, k = i; j < image_pixel_count; ++j)
+				{
+   					search_red = GetBValue(image_pixel[j]);
+	   				search_green = GetGValue(image_pixel[j]);
+		   			search_blue = GetRValue(image_pixel[j]);
+					SET_COLOR_RANGE
+   					red = GetBValue(screen_pixel[k]);
+	   				green = GetGValue(screen_pixel[k]);
+		   			blue = GetRValue(screen_pixel[k]);
+
+					if (!(found = red >= red_low && red <= red_high
+						&& green >= green_low && green <= green_high
+                        && blue >= blue_low && blue <= blue_high
+							|| image_mask && image_mask[j]     // Or: It's an icon's transparent pixel, which matches any color.
+							|| image_pixel[j] == trans_color)) // This should be okay even if trans_color==CLR_NONE, since CLR none should never occur naturally in the image.
+						break; // At least one pixel doesn't match, so this candidate is discarded.
+					if (++x < image_width) // We're still within the same row of the image, so just move on to the next screen pixel.
+						++k;
+					else // We're starting a new row of the image.
+					{
+						x = 0; // Return to the leftmost column of the image.
+						++y;   // Move one row downward in the image.
+						k = i + y*screen_width; // Verified correct.
+					}
+				}
+				if (found) // Complete match found.
+					break;
+			}
 		}
 	}
 
@@ -4537,6 +4749,8 @@ end:
 		DeleteObject(hbitmap_screen);
 	if (image_pixel)
 		delete [] image_pixel;
+	if (image_mask)
+		delete [] image_mask;
 	if (screen_pixel)
 		delete [] screen_pixel;
 

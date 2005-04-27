@@ -1480,6 +1480,67 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, i
 
 
 
+HBITMAP IconToBitmap(HICON ahIcon, bool aDestroyIcon)
+// Converts HICON to an HBITMAP that has ahIcon's actual dimensions.
+// The incoming ahIcon will be destroyed if the caller passes true for aDestroyIcon.
+// Returns NULL on failure, in which case aDestroyIcon will still have taken effect.
+// If the icon contains any transparent pixels, they will be mapped to CLR_NONE within
+// the bitmap so that the caller can detect them.
+{
+	if (!ahIcon)
+		return NULL;
+
+	HBITMAP hbitmap = NULL;  // Set default.  This will be the value returned.
+
+	HDC hdc_desktop = GetDC(HWND_DESKTOP);
+	HDC hdc = CreateCompatibleDC(hdc_desktop); // Don't pass NULL since I think that would result in a monochrome bitmap.
+	if (hdc)
+	{
+		ICONINFO ii;
+		if (GetIconInfo(ahIcon, &ii))
+		{
+			BITMAP icon_bitmap;
+			// Find out how big the icon is and create a bitmap compatible with the desktop DC (not the memory DC,
+			// since its bits per pixel (color depth) is probably 1.
+			if (GetObject(ii.hbmColor, sizeof(BITMAP), &icon_bitmap)
+				&& (hbitmap = CreateCompatibleBitmap(hdc_desktop, icon_bitmap.bmWidth, icon_bitmap.bmHeight))) // Assign
+			{
+				// To retain maximum quality in case caller needs to resize the bitmap we return, convert the
+				// icon to a bitmap that matches the icon's actual size:
+				HGDIOBJ old_object = SelectObject(hdc, hbitmap);
+				if (old_object) // Above succeeded.
+				{
+					// Use DrawIconEx() vs. DrawIcon() because someone said DrawIcon() always draws 32x32
+					// regardless of the icon's actual size.
+					// If it's ever needed, this can be extended so that the caller can pass in a background
+					// color to use in place of any transparent pixels within the icon (apparently, DrawIconEx()
+					// skips over transparent pixels in the icon when drawing to the DC and its bitmap):
+					RECT rect = {0, 0, icon_bitmap.bmWidth, icon_bitmap.bmHeight}; // Left, top, right, bottom.
+					HBRUSH hbrush = CreateSolidBrush(CLR_DEFAULT);
+					FillRect(hdc, &rect, hbrush);
+					DeleteObject(hbrush);
+					//FillRect(hdc, &rect, (HBRUSH)GetStockObject(NULL_BRUSH));
+					DrawIconEx(hdc, 0, 0, ahIcon, icon_bitmap.bmWidth, icon_bitmap.bmHeight, 0, NULL, DI_NORMAL);
+					// Debug: Find out properties of new bitmap.
+					//BITMAP b;
+					//GetObject(hbitmap, sizeof(BITMAP), &b);
+					SelectObject(hdc, old_object); // Might be needed (prior to deleting hdc) to prevent memory leak.
+				}
+			}
+			// It's our reponsibility to delete these two when they're no longer needed:
+			DeleteObject(ii.hbmColor);
+			DeleteObject(ii.hbmMask);
+		}
+		DeleteDC(hdc);
+	}
+	ReleaseDC(HWND_DESKTOP, hdc_desktop);
+	if (aDestroyIcon)
+		DestroyIcon(ahIcon);
+	return hbitmap;
+}
+
+
+
 HRESULT MySetWindowTheme(HWND hwnd, LPCWSTR pszSubAppName, LPCWSTR pszSubIdList)
 {
 	// The library must be loaded dynamically, otherwise the app will not launch on OSes older than XP.
