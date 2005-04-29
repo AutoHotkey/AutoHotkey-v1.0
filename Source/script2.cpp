@@ -3010,28 +3010,34 @@ ResultType Line::ScriptProcess(char *aCmd, char *aProcess, char *aParam3)
 ResultType WinSetRegion(HWND aWnd, char *aPoints)
 // Caller has initialized g_ErrorLevel to ERRORLEVEL_ERROR for us.
 {
-	RECT rect;
-	HRGN hrgn;
-
 	if (!*aPoints) // Attempt to restore the window's normal/correct region.
 	{
-		if (GetWindowRect(aWnd, &rect))
-		{
-			// Adjust the rect to keep the same size but have its upper-left corner at 0,0:
-			rect.right -= rect.left;
-			rect.bottom -= rect.top;
-			rect.left = 0;
-			rect.top = 0;
-			if (hrgn = CreateRectRgnIndirect(&rect)) // Assign
-			{
-				// Presumably, the system deletes the former region when upon a successful call to SetWindowRgn().
-				if (SetWindowRgn(aWnd, hrgn, TRUE))
-					return g_ErrorLevel->Assign(ERRORLEVEL_NONE);
-				// Otherwise, get rid of it since it didn't take effect:
-				DeleteObject(hrgn);
-			}
-		}
-		// Since above didn't return:
+		// Fix for v1.0.31.07: The old method used the following, but apparently it's not the correct
+		// way to restore a window's proper/normal region because when such a window is later maximized,
+		// it retains its incorrect/smaller region:
+		//if (GetWindowRect(aWnd, &rect))
+		//{
+		//	// Adjust the rect to keep the same size but have its upper-left corner at 0,0:
+		//	rect.right -= rect.left;
+		//	rect.bottom -= rect.top;
+		//	rect.left = 0;
+		//	rect.top = 0;
+		//	if (hrgn = CreateRectRgnIndirect(&rect)) // Assign
+		//	{
+		//		// Presumably, the system deletes the former region when upon a successful call to SetWindowRgn().
+		//		if (SetWindowRgn(aWnd, hrgn, TRUE))
+		//			return g_ErrorLevel->Assign(ERRORLEVEL_NONE);
+		//		// Otherwise, get rid of it since it didn't take effect:
+		//		DeleteObject(hrgn);
+		//	}
+		//}
+		//// Since above didn't return:
+		//return OK; // Let ErrorLevel tell the story.
+
+		// It's undocumented by MSDN, but apparently setting the Window's region to NULL restores it
+		// to proper working order:
+		if (SetWindowRgn(aWnd, NULL, TRUE))
+			return g_ErrorLevel->Assign(ERRORLEVEL_NONE);
 		return OK; // Let ErrorLevel tell the story.
 	}
 
@@ -3129,6 +3135,7 @@ ResultType WinSetRegion(HWND aWnd, char *aPoints)
 		height += pt[0].y;  // Make height become the bottom.
 	}
 
+	HRGN hrgn;
 	if (use_ellipse) // Ellipse.
 	{
 		if (!width_and_height_were_both_specified || !(hrgn = CreateEllipticRgn(pt[0].x, pt[0].y, width, height)))
