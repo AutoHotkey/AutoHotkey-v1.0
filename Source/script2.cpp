@@ -1350,7 +1350,7 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 	/////////////////////////////////////////////////
 	// Parse aMatchList into an array of key phrases:
 	/////////////////////////////////////////////////
-	char **realloc_temp;  // Needed since realloc returns NULL on failure but leaves original block allocated!
+	char **realloc_temp;  // Needed since realloc returns NULL on failure but leaves original block allocated.
 	g_input.MatchCount = 0;  // Set default.
 	if (*aMatchList)
 	{

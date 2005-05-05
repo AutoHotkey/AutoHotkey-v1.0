@@ -813,24 +813,28 @@ char *StrReplaceAll(char *aBuf, char *aOld, char *aNew, bool aAlwaysUseSlow, boo
 
 
 
-char *StrReplaceAllSafe(char *aBuf, size_t aBufSize, char *aOld, char *aNew, bool aCaseSensitive)
+int StrReplaceAllSafe(char *aBuf, size_t aBufSize, char *aOld, char *aNew, bool aCaseSensitive)
 // Similar to above but checks to ensure that the size of the buffer isn't exceeded.
+// Returns how many replacements were done.
 {
 	// Nothing to do if aBuf is blank.  If aOld is blank, that is not supported because it
 	// would be an infinite loop.
 	if (!*aBuf || !*aOld)
-		return NULL;
+		return 0;
 	char *ptr;
+	int replacment_count;
 	int length_increase = (int)(strlen(aNew) - strlen(aOld));  // Can be negative.
-	for (ptr = aBuf;; )
+	for (replacment_count = 0, ptr = aBuf;; )
 	{
 		if (length_increase > 0) // Make sure there's enough room in aBuf first.
 			if ((int)(aBufSize - strlen(aBuf) - 1) < length_increase)
 				break;  // Not enough room to do the next replacement.
 		if (   !(ptr = StrReplace(ptr, aOld, aNew, aCaseSensitive))   )
 			break;
+		// Otherwise, it did actually replace one item, so increment:
+		++replacment_count;
 	}
-	return aBuf;
+	return replacment_count;
 }
 
 
@@ -1581,7 +1585,10 @@ HRESULT MySetWindowTheme(HWND hwnd, LPCWSTR pszSubAppName, LPCWSTR pszSubIdList)
 
 
 
-char *ConvertEscapeSequences(char *aBuf, char aEscapeChar)
+char *ConvertEscapeSequences(char *aBuf, char aEscapeChar, bool aAllowEscapedSpace)
+// Replaces any escape sequences in aBuf with their reduced equivalent.  For example, if aEscapeChar
+// is accent, Each `n would become a literal linefeed.  aBuf's length should always be the same or
+// lower than when the process started, so there is no chance of overflow.
 {
 	char *cp, *cp1;
 	for (cp = aBuf; ; ++cp)  // Increment to skip over the symbol just found by the inner for().
@@ -1600,6 +1607,11 @@ char *ConvertEscapeSequences(char *aBuf, char aEscapeChar)
 			case 'r': *cp1 = '\r'; break;  // carriage return
 			case 't': *cp1 = '\t'; break;  // horizontal tab
 			case 'v': *cp1 = '\v'; break;  // vertical tab
+			case 's': // space (not always allowed for backward compatibility reasons).
+				if (aAllowEscapedSpace)
+					*cp1 = ' ';
+				//else do nothing extra, just let the standard action for unrecognized escape sequences.
+				break;
 			// Otherwise, if it's not one of the above, the escape-char is considered to
 			// mark the next character as literal, regardless of what it is. Examples:
 			// `` -> `

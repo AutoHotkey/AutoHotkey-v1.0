@@ -363,12 +363,14 @@ public:
 
 	ResultType Perform();
 	void DoReplace(LPARAM alParam);
-	static ResultType AddHotstring(Label *aJumpToLabel, char *aOptions, char *aHotstring, char *aReplacement);
-	Hotstring(Label *aJumpToLabel, char *aOptions, char *aHotstring, char *aReplacement); // Constructor
+	static ResultType AddHotstring(Label *aJumpToLabel, char *aOptions, char *aHotstring, char *aReplacement
+		, bool aHasContinuationSection);
 	static void ParseOptions(char *aOptions, int &aPriority, int &aKeyDelay, bool &aCaseSensitive
 		, bool &aConformToCase, bool &aDoBackspace, bool &aOmitEndChar, bool &aSendRaw
 		, bool &aEndCharRequired, bool &aDetectWhenInsideWord, bool &aDoReset);
 
+	// Constructor & destructor:
+	Hotstring(Label *aJumpToLabel, char *aOptions, char *aHotstring, char *aReplacement, bool aHasContinuationSection);
 	~Hotstring() {}  // Note that mReplacement is sometimes malloc'd, sometimes from SimpleHeap, and sometimes the empty string.
 
 	void *operator new(size_t aBytes) {return SimpleHeap::Malloc(aBytes);}

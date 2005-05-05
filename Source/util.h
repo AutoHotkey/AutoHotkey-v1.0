@@ -222,25 +222,28 @@ inline size_t rtrim(char *aStr, size_t aLength = -1)
 	}
 }
 
-inline void rtrim_with_nbsp(char *aStr)
+inline size_t rtrim_with_nbsp(char *aStr, size_t aLength = -1)
+// Returns the new length of the string.
 // Caller must ensure that aStr is not NULL.
 // Same as rtrim but also gets rid of those annoying nbsp (non breaking space) chars that sometimes
 // wind up on the clipboard when copied from an HTML document, and thus get pasted into the text
 // editor as part of the code (such as the sample code in some of the examples).
 {
-	if (!*aStr) return;
-	for (char *cp = aStr + strlen(aStr) - 1; ; --cp)
+	if (!*aStr) return 0; // The below relies upon this check having been done.
+	if (aLength == -1)
+		aLength = strlen(aStr); // Set aLength for use below and also as the return value.
+	for (char *cp = aStr + aLength - 1; ; --cp, --aLength)
 	{
 		if (!IS_SPACE_OR_TAB_OR_NBSP(*cp))
 		{
 			*(cp + 1) = '\0';
-			return;
+			return aLength;
 		}
 		if (cp == aStr)
 		{
 			if (IS_SPACE_OR_TAB_OR_NBSP(*cp))
 				*cp = '\0';
-			return;
+			return aLength;
 		}
 	}
 }
@@ -455,7 +458,7 @@ char *strcasestr (const char *phaystack, const char *pneedle);
 char *StrReplace(char *aBuf, char *aOld, char *aNew, bool aCaseSensitive = true);
 char *StrReplaceAll(char *aBuf, char *aOld, char *aNew, bool aAlwaysUseSlow, bool aCaseSensitive = true
 	, DWORD aReplacementsNeeded = UINT_MAX); // Caller can provide this value to avoid having to calculate it again.
-char *StrReplaceAllSafe(char *aBuf, size_t aBufSize, char *aOld, char *aNew, bool aCaseSensitive = true);
+int StrReplaceAllSafe(char *aBuf, size_t aBufSize, char *aOld, char *aNew, bool aCaseSensitive = true);
 char *TranslateLFtoCRLF(char *aString);
 bool DoesFilePatternExist(char *aFilePattern);
 #ifdef _DEBUG
@@ -469,7 +472,7 @@ void AssignColor(char *aColorName, COLORREF &aColor, HBRUSH &aBrush);
 COLORREF ColorNameToBGR(char *aColorName);
 HRESULT MySetWindowTheme(HWND hwnd, LPCWSTR pszSubAppName, LPCWSTR pszSubIdList);
 //HRESULT MyEnableThemeDialogTexture(HWND hwnd, DWORD dwFlags);
-char *ConvertEscapeSequences(char *aBuf, char aEscapeChar);
+char *ConvertEscapeSequences(char *aBuf, char aEscapeChar, bool aAllowEscapedSpace);
 POINT CenterWindow(int aWidth, int aHeight);
 bool FontExist(HDC aHdc, char *aTypeface);
 void GetVirtualDesktopRect(RECT &aRect);

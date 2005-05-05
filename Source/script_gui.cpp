@@ -1116,7 +1116,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		// realloc() to keep the array contiguous, which allows better-performing methods to be
 		// used to access the list of controls in various places.
 		// Expand the array by one block:
-		GuiControlType *realloc_temp;  // Needed since realloc returns NULL on failure but leaves original block allocated!
+		GuiControlType *realloc_temp;  // Needed since realloc returns NULL on failure but leaves original block allocated.
 		if (   !(realloc_temp = (GuiControlType *)realloc(mControl
 			, (mControlCapacity + GUI_CONTROL_BLOCK_SIZE) * sizeof(GuiControlType)))   )
 			return g_script.ScriptError(TOO_MANY_CONTROLS); // A non-specific msg since this error is so rare.
@@ -1165,6 +1165,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 	// Set control-specific defaults for any options.
 	/////////////////////////////////////////////////
 	opt.style_add |= WS_VISIBLE;  // Starting default for all control types.
+	opt.use_theme = mUseTheme; // Set default.
 
 	// Radio buttons are handled separately here, outside the switch() further below:
 	if (aControlType == GUI_CONTROL_RADIO)
@@ -1238,6 +1239,10 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		opt.style_add |= PBS_SMOOTH; // The smooth ones seem preferable as a default.  Theme is removed later below.
 		break;
 	case GUI_CONTROL_TAB:
+		// Override the normal default, requiring a manual +Theme in the control's options.  This is done
+		// because themed tabs have a gradient background that is currently not well supported by the method
+		// used here (controls' backgrounds do not match the gradient):
+		opt.use_theme = false;
 		opt.style_add |= WS_TABSTOP|TCS_MULTILINE;
 		break;
 	// Nothing extra for these currently:
@@ -1337,8 +1342,8 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		// Even if that weren't the case, would still want owner-draw because otherwise the background
 		// color of the tab-text would be different than the tab's interior, which testing shows looks
 		// pretty strange.
-		if (   (mBackgroundBrushWin && !(control.attrib & GUI_CONTROL_ATTRIB_BACKGROUND_DEFAULT))
-			|| control.union_color != CLR_DEFAULT   )
+		if (mBackgroundBrushWin && !(control.attrib & GUI_CONTROL_ATTRIB_BACKGROUND_DEFAULT)
+			|| control.union_color != CLR_DEFAULT)
 			style |= TCS_OWNERDRAWFIXED;
 		else
 			style &= ~TCS_OWNERDRAWFIXED;
@@ -1806,7 +1811,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 	// CREATE THE CONTROL.
 	//
 	//////////////////////
-	bool do_strip_theme = !mUseTheme;   // Set defaults.
+	bool do_strip_theme = !opt.use_theme;   // Set defaults.
 	bool font_was_set = false;          // "
 	bool retrieve_dimensions = false;   // "
 	int item_height, min_list_height;
@@ -2226,7 +2231,8 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			//    EnableThemeDialogTexture().  It seems this call only works on true dialogs and their
 			//    children.
 			// See this and especially its reponses: http://www.codeproject.com/wtl/ThemedDialog.asp#xx727162xx
-			do_strip_theme = true;
+			// The following is no longer done because it was handled above via opt.use_theme:
+			//do_strip_theme = true;
 			// After a new tab control is created, default all subsequently created controls to belonging
 			// to the first tab of this tab control: 
 			mCurrentTabControlIndex = mTabControlCount;
@@ -2817,6 +2823,10 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 				}
 			}
 		}
+		else if (!stricmp(next_option, "Group")) // This overlaps with g-label, but seems well worth it in this case.
+			if (adding) aOpt.style_add |= WS_GROUP; else aOpt.style_remove |= WS_GROUP;
+		else if (!stricmp(next_option, "Theme"))
+			aOpt.use_theme = adding;
 
 		// Picture
 		else if (!strnicmp(next_option, "Icon", 4)) // Caller should ignore aOpt.icon_number if it isn't applicable for this control type.

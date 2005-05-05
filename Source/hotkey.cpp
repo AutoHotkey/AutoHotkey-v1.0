@@ -1515,7 +1515,8 @@ void Hotstring::DoReplace(LPARAM alParam)
 
 
 
-ResultType Hotstring::AddHotstring(Label *aJumpToLabel, char *aOptions, char *aHotstring, char *aReplacement)
+ResultType Hotstring::AddHotstring(Label *aJumpToLabel, char *aOptions, char *aHotstring, char *aReplacement
+	, bool aHasContinuationSection)
 // Returns OK or FAIL.
 // Caller has ensured that aHotstringOptions is blank if there are no options.  Otherwise, aHotstringOptions
 // should end in a colon, which marks the end of the options list.  aHotstring is the hotstring itself
@@ -1538,7 +1539,7 @@ ResultType Hotstring::AddHotstring(Label *aJumpToLabel, char *aOptions, char *aH
 	else if (sHotstringCount >= sHotstringCountMax) // Realloc to preserve contents and keep contiguous array.
 	{
 		// Expand the array by one block.  Use a temp var. because realloc() returns NULL on failure
-		// but leaves original block allocated!
+		// but leaves original block allocated.
 		void *realloc_temp = realloc(shs, (sHotstringCountMax + HOTSTRING_BLOCK_SIZE) * sizeof(Hotstring *));
 		if (!realloc_temp)
 			return g_script.ScriptError(ERR_OUTOFMEM);  // Short msg. since so rare.
@@ -1546,7 +1547,7 @@ ResultType Hotstring::AddHotstring(Label *aJumpToLabel, char *aOptions, char *aH
 		sHotstringCountMax += HOTSTRING_BLOCK_SIZE;
 	}
 
-	if (   !(shs[sHotstringCount] = new Hotstring(aJumpToLabel, aOptions, aHotstring, aReplacement))   )
+	if (   !(shs[sHotstringCount] = new Hotstring(aJumpToLabel, aOptions, aHotstring, aReplacement, aHasContinuationSection))   )
 		return g_script.ScriptError(ERR_OUTOFMEM); // Short msg. since so rare.
 	if (!shs[sHotstringCount]->mConstructedOK)
 	{
@@ -1560,7 +1561,7 @@ ResultType Hotstring::AddHotstring(Label *aJumpToLabel, char *aOptions, char *aH
 
 
 
-Hotstring::Hotstring(Label *aJumpToLabel, char *aOptions, char *aHotstring, char *aReplacement) // Constructor
+Hotstring::Hotstring(Label *aJumpToLabel, char *aOptions, char *aHotstring, char *aReplacement, bool aHasContinuationSection)
 	: mJumpToLabel(aJumpToLabel)  // Can be NULL for dynamic hotkeys that are hook actions such as Alt-Tab.
 	, mString(NULL), mReplacement(""), mStringLength(0)
 	, mSuspended(false)
@@ -1568,8 +1569,8 @@ Hotstring::Hotstring(Label *aJumpToLabel, char *aOptions, char *aHotstring, char
 	, mMaxThreads(g_MaxThreadsPerHotkey)  // The value of g_MaxThreadsPerHotkey can vary during load-time.
 	, mPriority(g_HSPriority), mKeyDelay(g_HSKeyDelay)  // And all these can vary too.
 	, mCaseSensitive(g_HSCaseSensitive), mConformToCase(g_HSConformToCase), mDoBackspace(g_HSDoBackspace)
-	, mOmitEndChar(g_HSOmitEndChar), mSendRaw(g_HSSendRaw), mEndCharRequired(g_HSEndCharRequired)
-	, mDetectWhenInsideWord(g_HSDetectWhenInsideWord), mDoReset(g_HSDoReset)
+	, mOmitEndChar(g_HSOmitEndChar), mSendRaw(aHasContinuationSection ? true : g_HSSendRaw)
+	, mEndCharRequired(g_HSEndCharRequired), mDetectWhenInsideWord(g_HSDetectWhenInsideWord), mDoReset(g_HSDoReset)
 	, mConstructedOK(false)
 {
 	// Insist on certain qualities so that they never need to be checked other than here:

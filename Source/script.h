@@ -2011,16 +2011,17 @@ struct GuiControlOptionsType
 	int tip_side; // Which side of the control to display the tip on (0 to use default side).
 	GuiControlType *buddy1, *buddy2;
 	COLORREF progress_color_bk;
-	bool color_changed; // To discern when a control has been put back to the default color. [v1.0.26]
 	int limit;   // The max number of characters to permit in an edit or combobox's edit.
 	int hscroll_pixels;  // The number of pixels for a listbox's horizontal scrollbar to be able to scroll.
 	int checked; // When zeroed, struct contains default starting state of checkbox/radio, i.e. BST_UNCHECKED.
 	int icon_number; // Which icon of a multi-icon file to use.  Zero means use-default, i.e. the first icon.
-	char password_char; // When zeroed, indicates "use default password" for an edit control with the password style.
 	#define GUI_MAX_TABSTOPS 50
 	UINT tabstop[GUI_MAX_TABSTOPS]; // Array of tabstops for the interior of a multi-line edit control.
 	UINT tabstop_count;  // The number of entries in the above array.
+	char password_char; // When zeroed, indicates "use default password" for an edit control with the password style.
+	bool color_changed; // To discern when a control has been put back to the default color. [v1.0.26]
 	bool start_new_section;
+	bool use_theme; // v1.0.32: Provides the means for the window's current setting of mUseTheme to be overridden.
 };
 
 LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lParam);
@@ -2229,10 +2230,10 @@ private:
 
 #ifdef AUTOHOTKEYSC
 	ResultType CloseAndReturn(HS_EXEArc_Read *fp, UCHAR *aBuf, ResultType return_value);
-	size_t GetLine(char *aBuf, int aMaxCharsToRead, UCHAR *&aMemFile);
+	size_t GetLine(char *aBuf, int aMaxCharsToRead, bool aInContinuationSection, UCHAR *&aMemFile);
 #else
 	ResultType CloseAndReturn(FILE *fp, UCHAR *aBuf, ResultType return_value);
-	size_t GetLine(char *aBuf, int aMaxCharsToRead, FILE *fp);
+	size_t GetLine(char *aBuf, int aMaxCharsToRead, bool aInContinuationSection, FILE *fp);
 #endif
 	ResultType IsDirective(char *aBuf);
 
@@ -2314,7 +2315,7 @@ public:
 	ResultType ExitApp(ExitReasons aExitReason, char *aBuf = NULL, int ExitCode = 0);
 	void TerminateApp(int aExitCode);
 	LineNumberType LoadFromFile();
-	ResultType LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude);
+	ResultType LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude, bool aIgnoreLoadFailure);
 	ResultType UpdateOrCreateTimer(Label *aLabel, char *aPeriod, char *aPriority, bool aEnable
 		, bool aUpdatePriorityOnly);
 
