@@ -1121,6 +1121,11 @@ int MsgBox(char *aText, UINT uType, char *aTitle, double aTimeout)
 	// a negative to be part of the text param.  But if it does happen, timeout after a short time,
 	// which may signal the user that the script passed a bad parameter.
 
+	// v1.0.33: The following is a workaround for the fact that an MsgBox with only an OK button
+	// doesn't obey EndDialog()'s parameter:
+	g.DialogHWND = NULL;
+	g.MsgBoxTimedOut = false;
+
 	POST_AHK_DIALOG((DWORD)(aTimeout * 1000))
 
 	++g_nMessageBoxes;  // This value will also be used as the Timer ID if there's a timeout.
@@ -1145,9 +1150,12 @@ int MsgBox(char *aText, UINT uType, char *aTitle, double aTimeout)
 	// be intrusively changed by this:
 	//WinActivateOurTopDialog();
 
+	// The following comment is apparently not always true -- sometimes the AHK_TIMEOUT from
+	// EndDialog() is received correctly.  But I haven't discovered the circumstances of how
+	// and why the behavior varies:
 	// Unfortunately, it appears that MessageBox() will return zero rather
 	// than AHK_TIMEOUT that was specified in EndDialog() at least under WinXP.
-	if (!g.MsgBoxResult && aTimeout > 0)
+	if (g.MsgBoxTimedOut || (!g.MsgBoxResult && aTimeout > 0)) // v1.0.33: Added g.MsgBoxTimedOut, see comment higher above.
 		// Assume it timed out rather than failed, since failure should be VERY rare.
 		g.MsgBoxResult = AHK_TIMEOUT;
 	// else let the caller handle the display of the error message because only it knows

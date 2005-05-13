@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.32.00"
+#define NAME_VERSION "1.0.33.00"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -114,11 +114,12 @@ enum ToggleValueType {TOGGLE_INVALID = 0, TOGGLED_ON, TOGGLED_OFF, ALWAYS_ON, AL
 enum SymbolType // For use with ExpandExpression() and IsPureNumeric().
 {
 	// The sPrecedence array in ExpandExpression() must be kept in sync with any additions, removals,
-	// or re-ordering of the below.  Also, callers rely on PURE_NOT_NUMERIC being zero/false,
-	// so that should be listed first.  Finally, IS_OPERAND() relies on all operand types being
-	// at the beginning of the list:
-	  PURE_NOT_NUMERIC, PURE_INTEGER, PURE_FLOAT
+	// or re-ordering of the below.  Also, IS_OPERAND() relies on all operand types being at the
+	// beginning of the list:
+	 PURE_NOT_NUMERIC // Must be zero/false because callers rely on that.
+	, PURE_INTEGER, PURE_FLOAT
 	, SYM_STRING = PURE_NOT_NUMERIC, SYM_INTEGER = PURE_INTEGER, SYM_FLOAT = PURE_FLOAT // Specific operand types.
+#define IS_NUMERIC(symbol) ((symbol) == SYM_INTEGER || (symbol) == SYM_FLOAT)
 	, SYM_VAR // An operand that is a variable's contents.
 	, SYM_OPERAND // Generic/undetermined type of operand.
 	, SYM_OPERAND_END // Marks the symbol after the last operand.  This value is used below.
@@ -307,12 +308,8 @@ class Func;  // Forward declaration.
 struct global_struct
 {
 	TitleMatchModes TitleMatchMode;
-	bool TitleFindFast; // Whether to use the fast mode of searching window text, or the more thorough slow mode.
-	bool DetectHiddenWindows; // Whether to detect the titles of hidden parent windows.
-	bool DetectHiddenText;    // Whether to detect the text of hidden child windows.
 	__int64 LinesPerCycle; // Use 64-bits for this so that user can specify really large values.
 	int IntervalBeforeRest;
-	bool AllowThisThreadToBeInterrupted;  // Whether this thread can be interrupted by custom menu items, hotkeys, or timers.
 	int UninterruptedLineCount; // Stored as a g-struct attribute in case OnExit sub interrupts it while uninterruptible.
 	int Priority;  // This thread's priority relative to others.
 	GuiEventType GuiEvent; // This thread's triggering event, e.g. DblClk vs. normal click.
@@ -323,18 +320,26 @@ struct global_struct
 	int KeyDelay;  // negative values may be used as special flags.
 	int PressDuration; // The delay between the up-event and down-event of each keystroke.
 	int MouseDelay;  // negative values may be used as special flags.
-	UCHAR DefaultMouseSpeed;
-	UCHAR CoordMode; // Bitwise collection of flags.
-	bool StoreCapslockMode;
-	bool AutoTrim;
-	bool StringCaseSense;
 	char FormatFloat[32];
-	bool FormatIntAsHex;
 	char ErrorLevel[128]; // Big in case user put something bigger than a number in g_ErrorLevel.
 	Func *CurrentFunc; // The function whose body is currently being processed at load-time, or being run at runtime (if any).
 	HWND hWndLastUsed;  // In many cases, it's better to use GetValidLastUsedWindow() when referring to this.
 	//HWND hWndToRestore;
 	int MsgBoxResult;  // Which button was pressed in the most recent MsgBox.
+	HWND DialogHWND;
+
+	// All these one-byte members are kept adjacent to make the struct smaller, which helps conserve stack space:
+	bool TitleFindFast; // Whether to use the fast mode of searching window text, or the more thorough slow mode.
+	bool DetectHiddenWindows; // Whether to detect the titles of hidden parent windows.
+	bool DetectHiddenText;    // Whether to detect the text of hidden child windows.
+	bool AllowThisThreadToBeInterrupted;  // Whether this thread can be interrupted by custom menu items, hotkeys, or timers.
+	UCHAR DefaultMouseSpeed;
+	UCHAR CoordMode; // Bitwise collection of flags.
+	bool StoreCapslockMode;
+	bool AutoTrim;
+	bool StringCaseSense;
+	bool FormatIntAsHex;
+	bool MsgBoxTimedOut; // Doesn't require initialization.
 	bool IsPaused;
 };
 

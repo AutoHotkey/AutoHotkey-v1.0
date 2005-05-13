@@ -77,7 +77,7 @@ ResultType Var::Assign(double aValueToAssign)
 
 
 
-ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt)
+ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt, bool aExactSize)
 // Returns OK or FAIL.
 // If aBuf isn't NULL, caller must ensure that aLength is either VARSIZE_MAX (which tells us
 // that the entire strlen() of aBuf should be used) or an explicit length (can be zero) that
@@ -158,12 +158,17 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt)
 				// never decrease in this section, which prevent a memory leak by only ever wasting a maximum
 				// of 2+7+MAX_ALLOC_SIMPLE for each variable (and then only in the worst case -- in the average
 				// case, it saves memory by avoiding the overhead incurred for each separate malloc'd block).
-				if (space_needed < 3)
+				if (space_needed < 3) // Even for aExactSize, seems best to prevent variables from having only a zero terminator in them.
 					alloc_size = 2;
-				else if (space_needed < 8)
-					alloc_size = 7;
-				else // space_needed <= MAX_ALLOC_SIMPLE
-					alloc_size = MAX_ALLOC_SIMPLE;
+				else if (aExactSize) // Allows VarSetCapacity() to make more flexible use of SimpleHeap.
+					alloc_size = space_needed;
+				else
+				{
+					if (space_needed < 8)
+						alloc_size = 7;
+					else // space_needed <= MAX_ALLOC_SIMPLE
+						alloc_size = MAX_ALLOC_SIMPLE;
+				}
 				if (   !(mContents = SimpleHeap::Malloc(alloc_size))   )
 					return FAIL; // It already displayed the error.
 				mHowAllocated = ALLOC_SIMPLE;  // In case it was ALLOC_NONE before.
@@ -182,18 +187,21 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt)
 			// else it's the empty string (a constant) or it points to memory on
 			// SimpleHeap, so don't attempt to free it.
 			alloc_size = space_needed;
-			// Allow a little room for future expansion to cut down on the number of
-			// free's and malloc's we expect to have to do in the future for this var:
-			if (alloc_size < MAX_PATH)
-				alloc_size = MAX_PATH;  // An amount that will fit all standard filenames seems good.
-			else if (alloc_size < (160 * 1024)) // MAX_PATH to 160 KB or less -> 10% extra.
-				alloc_size = (size_t)(alloc_size * 1.1);
-			else if (alloc_size < (1600 * 1024))  // 160 to 1600 KB -> 16 KB extra
-				alloc_size += (16 * 1024); 
-			else if (alloc_size < (6400 * 1024)) // 1600 to 6400 KB -> 1% extra
-				alloc_size = (size_t)(alloc_size * 1.01);
-			else  // 6400 KB or more: Cap the extra margin at some reasonable compromise of speed vs. mem usage: 64 KB
-				alloc_size += (64 * 1024);
+			if (!aExactSize)
+			{
+				// Allow a little room for future expansion to cut down on the number of
+				// free's and malloc's we expect to have to do in the future for this var:
+				if (alloc_size < MAX_PATH)
+					alloc_size = MAX_PATH;  // An amount that will fit all standard filenames seems good.
+				else if (alloc_size < (160 * 1024)) // MAX_PATH to 160 KB or less -> 10% extra.
+					alloc_size = (size_t)(alloc_size * 1.1);
+				else if (alloc_size < (1600 * 1024))  // 160 to 1600 KB -> 16 KB extra
+					alloc_size += (16 * 1024); 
+				else if (alloc_size < (6400 * 1024)) // 1600 to 6400 KB -> 1% extra
+					alloc_size = (size_t)(alloc_size * 1.01);
+				else  // 6400 KB or more: Cap the extra margin at some reasonable compromise of speed vs. mem usage: 64 KB
+					alloc_size += (64 * 1024);
+			}
 			if (alloc_size > g_MaxVarCapacity)
 				alloc_size = g_MaxVarCapacity;  // which has already been verified to be enough.
 			mHowAllocated = ALLOC_MALLOC; // This should be done first because even if the below fails, the old value of mContents (e.g. SimpleHeap) is lost.

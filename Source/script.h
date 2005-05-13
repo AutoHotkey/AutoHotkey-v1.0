@@ -505,6 +505,10 @@ typedef UCHAR ArgCountType;
 #define MAX_ARGS 20   // Maximum number of args used by any command.
 
 
+enum DllArgTypes {DLL_ARG_INVALID, DLL_ARG_STR, DLL_ARG_INT, DLL_ARG_SHORT, DLL_ARG_CHAR, DLL_ARG_INT64
+	, DLL_ARG_FLOAT, DLL_ARG_DOUBLE};
+
+
 // Note that currently this value must fit into a sc_type variable because that is how TextToKey()
 // stores it in the hotkey class.  sc_type is currently a UINT, and will always be at least a
 // WORD in size, so it shouldn't be much of an issue:
@@ -758,6 +762,7 @@ private:
 		, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType ScriptSendMessage(char *aMsg, char *awParam, char *alParam, char *aControl
 		, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
+	void DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 	ResultType ScriptProcess(char *aCmd, char *aProcess, char *aParam3);
 	ResultType WinSet(char *aAttrib, char *aValue, char *aTitle, char *aText
 		, char *aExcludeTitle, char *aExcludeText);
@@ -1674,7 +1679,7 @@ public:
 		if (!stricmp(aBuf, "ABORT")) return IDABORT;
 		if (!stricmp(aBuf, "IGNORE")) return IDIGNORE;
 		if (!stricmp(aBuf, "RETRY")) return IDRETRY;
-		if (!stricmp(aBuf, "TIMEOUT")) return AHK_TIMEOUT;  // Our custom result value.
+		if (!stricmp(aBuf, "Timeout")) return AHK_TIMEOUT;  // Our custom result value.  Lowercase to help compiler string pooling.
 		return 0;
 	}
 
@@ -1803,7 +1808,7 @@ public:
 
 enum FuncTypes
 {
-	FUNC_INVALID, FUNC_NORMAL, FUNC_WINEXIST, FUNC_WINACTIVE
+	FUNC_INVALID, FUNC_NORMAL, FUNC_WINEXIST, FUNC_WINACTIVE, FUNC_DLLCALL, FUNC_VARSETCAPACITY
 };
 typedef UCHAR FuncType;  // UCHAR vs. FuncTypes to save memory.
 

@@ -18,6 +18,7 @@ GNU General Public License for more details.
 #include <wininet.h> // For URLDownloadToFile().
 #include <olectl.h> // for OleLoadPicture()
 #include <winioctl.h> // For PREVENT_MEDIA_REMOVAL and CD lock/unlock.
+#include <malloc.h> // For _alloca()
 #include "qmath.h" // Used by Transform() [math.h incurs 2k larger code size just for ceil() & floor()]
 #include "mt19937ar-cok.h" // for sorting in random order
 #include "script.h"
@@ -1539,7 +1540,7 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 	switch(g_input.status)
 	{
 	case INPUT_TIMED_OUT:
-		g_ErrorLevel->Assign("Timeout");
+		g_ErrorLevel->Assign("Timeout"); // Lowercase to match IfMsgBox's string, which might help compiler string pooling.
 		break;
 	case INPUT_TERMINATED_BY_MATCH:
 		g_ErrorLevel->Assign("Match");
@@ -2897,6 +2898,628 @@ ResultType Line::ScriptSendMessage(char *aMsg, char *awParam, char *alParam, cha
 		return g_ErrorLevel->Assign("FAIL"); // Need a special value to distinguish this from numeric reply-values.
 	// By design (since this is a power user feature), no ControlDelay is done here.
 	return g_ErrorLevel->Assign(dwResult); // UINT seems best most of the time?
+}
+
+
+
+// Interface for DynaCall():
+#define  DC_MICROSOFT           0x0000      // Default
+#define  DC_BORLAND             0x0001      // Borland compat
+#define  DC_CALL_CDECL          0x0010      // __cdecl
+#define  DC_CALL_STD            0x0020      // __stdcall
+#define  DC_RETVAL_MATH4        0x0100      // Return value in ST
+#define  DC_RETVAL_MATH8        0x0200      // Return value in ST
+
+#define  DC_CALL_STD_BO         (DC_CALL_STD | DC_BORLAND)
+#define  DC_CALL_STD_MS         (DC_CALL_STD | DC_MICROSOFT)
+#define  DC_CALL_STD_M8         (DC_CALL_STD | DC_RETVAL_MATH8)
+
+union DYNARESULT                // Various result types
+{      
+    int     Int;                // Generic four-byte type
+    long    Long;               // Four-byte long
+    void   *Pointer;            // 32-bit pointer
+    float   Float;              // Four byte real
+    double  Double;             // 8-byte real
+    __int64 Int64;              // big int (64-bit)
+};
+
+struct DYNAPARM
+{
+    union
+	{
+		int value_int; // Args whose width is less than 32-bit are also put in here because they are right justified within a 32-bit block on the stack.
+		float value_float;
+		__int64 value_int64;
+		double value_double;
+		char *str;
+    };
+	// Might help reduce struct size to keep other members last and adjacent to each other (due to
+	// 8-byte alignment caused by the presence of double and __int64 members in the union above).
+	DllArgTypes type;
+	bool passed_by_address;
+	bool is_unsigned; // Allows return value and output parameters to be interpreted as unsigned vs. signed.
+};
+
+
+
+DYNARESULT DynaCall(int aFlags, void *aFunction, DYNAPARM aParam[], int aParamCount, DWORD &aException
+	, void *aRet, int aRetSize)
+// Based on the code by Ton Plooy <tonp@xs4all.nl>.
+// Call the specified function with the given parameters. Build a proper stack and take care of correct
+// return value processing.
+{
+	aException = 0;  // Set default output parameter for caller.
+
+	// Declaring all variables early should help minimize stack interference of C code with asm.
+	DWORD *our_stack;
+    int param_size;
+	DWORD stack_dword, our_stack_size = 0; // Both might have to be DWORD for _asm.
+	BYTE *cp;
+    DYNARESULT Res = {0}; // This struct is to be returned to caller by value.
+    DWORD esp_start, esp_end, dwEAX, dwEDX;
+	int esp_delta; // Declare this here rather than later to prevent C code from interfering with esp.
+
+	// Reserve enough space on the stack to handle the worst case of our args (which is currently a
+	// maximum of 8 bytes per arg). This avoids any chance that compiler-generated code will use
+	// the stack in a way that disrupts our insertion of args onto the stack.
+	DWORD reserved_stack_size = aParamCount * 8;
+	_asm
+	{
+		mov our_stack, esp  // our_stack is the location where we will write our args direction (bypassing "push").
+		sub esp, reserved_stack_size  // The stack grows downward, so this "allocates" space on the stack.
+	}
+
+	// "Push" args onto the portion of the stack reserved above. Every argument is aligned on a 4-byte boundary.
+	// We start at the rightmost argument (i.e. reverse order).
+	for (int i = aParamCount - 1; i >= 0; --i)
+	{
+		DYNAPARM &this_param = aParam[i]; // For performance and convenience.
+		// Push the arg or its address onto the portion of the stack that was reserved for our use above.
+		if (this_param.passed_by_address)
+		{
+			stack_dword = (DWORD)&this_param.value_int; // Any union member would work.
+			--our_stack;              // ESP = ESP - 4
+			*our_stack = stack_dword; // SS:[ESP] = stack_dword
+			our_stack_size += 4;      // Keep track of how many bytes are on our reserved portion of the stack.
+		}
+		else // this_param's value is contained directly inside the union.
+		{
+			param_size = (this_param.type == DLL_ARG_INT64 || this_param.type == DLL_ARG_DOUBLE) ? 8 : 4;
+			our_stack_size += param_size; // Must be done before our_stack_size is decremented below.  Keep track of how many bytes are on our reserved portion of the stack.
+			cp = (BYTE *)&this_param.value_int + param_size - 4; // Start at the right side of the arg and work leftward.
+			while (param_size > 0)
+			{
+				stack_dword = *(DWORD *)cp;  // Get first four bytes
+				cp -= 4;                     // Next part of argument
+				--our_stack;                 // ESP = ESP - 4
+				*our_stack = stack_dword;    // SS:[ESP] = stack_dword
+				param_size -= 4;
+			}
+		}
+    }
+
+	if ((aRet != NULL) && ((aFlags & DC_BORLAND) || (aRetSize > 8)))
+	{
+		// Return value isn't passed through registers, memory copy
+		// is performed instead. Pass the pointer as hidden arg.
+		our_stack_size += 4;       // Add stack size
+		our_stack--;               // ESP = ESP - 4
+		*our_stack = (DWORD)aRet;  // SS:[ESP] = pMem
+	}
+
+	__try // Checked code bloat of __try{} and it doesn't appear to add any size.
+	{
+		_asm
+		{
+			add esp, reserved_stack_size // Restore to original position
+			mov esp_start, esp      // For detecting whether a DC_CALL_STD function was sent too many or too few args.
+			sub esp, our_stack_size // Adjust for our new parameters
+			call [aFunction]        // Stack is now properly built, we can call the function
+		}
+	}
+	__except(EXCEPTION_EXECUTE_HANDLER)
+	{
+		aException = GetExceptionCode();
+	}
+
+	// Even if an exception occurred (perhaps due to the callee having been passed a bad pointer),
+	// attempt to restore the stack to prevent making things even worse.
+	_asm
+	{
+		mov esp_end, esp        // See below.
+		// For DC_CALL_STD functions (since they pop their own arguments off the stack):
+		// Since the stack grows downward in memory, if the value of esp after the call is less than
+		// that before the call's args were pushed onto the stack, there are still items leftover on
+		// the stack, meaning that too many args (or an arg too large) were passed to the callee.
+		// Conversely, if esp is now greater that it should be, too many args were popped off the
+		// stack by the callee, meaning that too few args were provided to it.  In either case,
+		// and even for CDECL, the following line restores esp to what it was before we pushed the
+		// function's args onto the stack, which in the case of DC_CALL_STD helps prevent crashes
+		// due too too many or to few args having been passed.
+		mov esp, esp_start      // See above.
+		mov dwEAX, eax          // Save eax/edx registers
+		mov dwEDX, edx
+	}
+
+	// Possibly adjust stack and read return values.
+	// The following is commented out because the stack (esp) is restored above, for both CDECL and STD.
+	//if (aFlags & DC_CALL_CDECL)
+	//	_asm add esp, our_stack_size    // CDECL requires us to restore the stack after the call.
+	if (aFlags & DC_RETVAL_MATH4)
+		_asm fstp dword ptr [Res]
+	else if (aFlags & DC_RETVAL_MATH8)
+		_asm fstp qword ptr [Res]
+	else if (!aRet)
+	{
+		_asm
+		{
+			mov  eax, [dwEAX]
+			mov  DWORD PTR [Res], eax
+			mov  edx, [dwEDX]
+			mov  DWORD PTR [Res + 4], edx
+		}
+	}
+	else if (((aFlags & DC_BORLAND) == 0) && (aRetSize <= 8))
+	{
+		// Microsoft optimized less than 8-bytes structure passing
+        _asm
+		{
+			mov ecx, DWORD PTR [aRet]
+			mov eax, [dwEAX]
+			mov DWORD PTR [ecx], eax
+			mov edx, [dwEDX]
+			mov DWORD PTR [ecx + 4], edx
+		}
+	}
+
+	char buf[32];
+	esp_delta = esp_start - esp_end; // Positive number means too many args were passed, negative means too few.
+	if (esp_delta && (aFlags & DC_CALL_STD))
+	{
+		*buf = 'A'; // The 'A' prefix indicates the call was made, but with too many or too few args.
+		_itoa(esp_delta, buf + 1, 10);
+		g_ErrorLevel->Assign(buf); // Assign buf not the _itoa()'s return value.
+	}
+	// Too many or too few args takes precedence over reporting the exception because it's more informative.
+	// In other words, any exception was likely caused by the fact that there were too many or too few.
+	else if (aException) // This ErrorLevel takes precedence over the too many/few error code, since it is more serious.
+	{
+		// It's a little easier to recongize the common ones when they're in hex format.
+		buf[0] = '0';
+		buf[1] = 'x';
+		_ultoa(aException, buf + 2, 16);
+		g_ErrorLevel->Assign(buf); // Positive ErrorLevel numbers are reserved for exception codes.
+	}
+	else
+		g_ErrorLevel->Assign(ERRORLEVEL_NONE);
+
+	return Res;
+}
+
+
+
+void ConvertDllArgType(char *aBuf, DYNAPARM &aDynaParam)
+// Helper function for DllCall().  Updates aDynaParam's type and other attributes.
+{
+	if (toupper(*aBuf) == 'U') // Unsigned
+	{
+		aDynaParam.is_unsigned = true;
+		++aBuf; // Omit the 'U' prefix from further consideration.
+	}
+	else
+		aDynaParam.is_unsigned = false;
+
+	char buf[32];
+	strlcpy(buf, aBuf, sizeof(buf)); // Make a modifiable copy for easier parsing below.
+
+	char *cp = StrChrAny(buf, "\t *"); // Tab, space, or asterisk.
+	if (cp)
+	{
+		aDynaParam.passed_by_address = (cp[0] == '*' || cp[1] == '*'); // Allow optional space in front of asterisk.
+		*cp = '\0'; // Remove trailing options so that stricmp() can be used below.
+	}
+	else
+		aDynaParam.passed_by_address = false;
+
+	aDynaParam.type = DLL_ARG_INVALID; // Set default.
+	if (!*buf) aDynaParam.type = DLL_ARG_INT;  // Assume int.  This is relied upon at least for having a return type such as a naked "CDecl".
+	else if (!stricmp(buf, "Str"))     aDynaParam.type = DLL_ARG_STR; // The few most common types are kept up top for performance.
+    else if (!stricmp(buf, "Int"))     aDynaParam.type = DLL_ARG_INT;
+	else if (!stricmp(buf, "Short"))   aDynaParam.type = DLL_ARG_SHORT;
+	else if (!stricmp(buf, "Char"))    aDynaParam.type = DLL_ARG_CHAR;
+    else if (!stricmp(buf, "Int64"))   aDynaParam.type = DLL_ARG_INT64;
+	else if (!stricmp(buf, "Float"))   aDynaParam.type = DLL_ARG_FLOAT;
+	else if (!stricmp(buf, "Double"))  aDynaParam.type = DLL_ARG_DOUBLE;
+	// Unnecessary: else if (!stricmp(buf, "None"))    aDynaParam.type = DLL_ARG_NONE;
+	// Otherwise, it's blank or an unknown type, leave it set at the default.
+}
+
+
+
+void Line::DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+// Stores a number or a SYM_STRING result in aResultToken.
+// Sets ErrorLevel to the error code appropriate to any problem that occurred.
+// Caller has set up aParam to be viewable as a left-to-right array of params rather than a stack.
+// It has also ensured that the array has exactly aParamCount items in it.
+// Author: Marcus Sonntag (Ultra)
+{
+	// Set default result in case of early return; a blank value:
+	aResultToken.symbol = SYM_STRING;
+	aResultToken.marker = "";
+
+	// Check that the mandatory first parameter (DLL+Function) is present and valid.
+	if (aParamCount < 1 || !IS_OPERAND(aParam[0]->symbol) || IS_NUMERIC(aParam[0]->symbol)) // Relies on short-circuit order.
+	{
+		g_ErrorLevel->Assign("-1"); // Stage 1 error: Too few params or blank/invalid first param.
+		return;
+	}
+
+	// Determine the type of return value.
+	DYNAPARM return_attrib = {0}; // Will store the type and other attributes of the function's return value.
+	int dll_call_mode = DC_CALL_STD; // Set default.  Can be overridden to DC_CALL_CDECL and flags can be OR'd into it.
+	if (aParamCount % 2) // Odd number of parameters indicates the return type has been omitted, so assume BOOL/INT.
+		return_attrib.type = DLL_ARG_INT;
+	else
+	{
+		// Check validity of this arg's return type:
+		ExprTokenType &token = *aParam[aParamCount - 1];
+		if (!IS_OPERAND(token.symbol) // Haven't found a way to produce this situation yet, but safe to assume it's possible.
+			|| IS_NUMERIC(token.symbol)) // The return type should be a string, not something purely numeric.
+		{
+			g_ErrorLevel->Assign("-2"); // Stage 2 error: Invalid return type or arg type.
+			return;
+		}
+		char *return_type_string = (token.symbol == SYM_VAR) ? token.var->Contents() : token.marker;
+		if (!strnicmp(return_type_string, "CDecl", 5)) // Alternate calling convention.
+		{
+			dll_call_mode = DC_CALL_CDECL;
+			return_type_string = omit_leading_whitespace(return_type_string + 5);
+		}
+		ConvertDllArgType(return_type_string, return_attrib);
+		if (return_attrib.type == DLL_ARG_INVALID)
+		{
+			g_ErrorLevel->Assign("-2"); // Stage 2 error: Invalid return type or arg type.
+			return;
+		}
+		--aParamCount;  // Remove the last parameter from further consideration.
+		if (!return_attrib.passed_by_address) // i.e. the special return flags below are not needed when an address is being returned.
+		{
+			if (return_attrib.type == DLL_ARG_DOUBLE)
+				dll_call_mode |= DC_RETVAL_MATH8;
+			else if (return_attrib.type == DLL_ARG_FLOAT)
+				dll_call_mode |= DC_RETVAL_MATH4;
+		}
+	}
+
+	// Using stack memory, create an array of dll args large enough to hold the actual number of args present.
+	// _alloca() has been checked for code-bloat and it doesn't appear to be an issue.
+	int arg_count = aParamCount/2; // Might provide one extra due to first/last params, which is inconsequential.
+	DYNAPARM *dyna_param;
+	if (arg_count)
+	{
+		if (   !(dyna_param = (DYNAPARM *)_alloca(arg_count * sizeof(DYNAPARM)))   ) // Realistically never happens, so indicate general error.
+		{
+			g_ErrorLevel->Assign("-2"); // Stage 2 error.
+			return;
+		}
+	}
+	else
+		dyna_param = NULL;
+
+	char *arg_type_string, *arg_as_string;
+	int i;
+
+	// Above has already ensured that after the first parameter, there are either zero additional parameters
+	// or an even number of them.  In other words, each arg type will have an arg value to go with it.
+	// It has also verified that the dyna_param array is large enough to hold all of the args.
+	for (arg_count = 0, i = 1; i < aParamCount; ++arg_count, i += 2)  // Same loop as used later below, so maintain them together.
+	{
+		// Check validity of this arg's type and contents:
+		if (!(IS_OPERAND(aParam[i]->symbol) && IS_OPERAND(aParam[i + 1]->symbol)) // Haven't found a way to produce this situation yet, but safe to assume it's possible.
+			|| IS_NUMERIC(aParam[i]->symbol)) // The arg type should be a string, not something purely numeric.
+		{
+			g_ErrorLevel->Assign("-2"); // Stage 2 error: Invalid return type or arg type.
+			return;
+		}
+		// Otherwise, this arg's type is a string as it should be, so retrieve it:
+		arg_type_string = (aParam[i]->symbol == SYM_VAR) ? aParam[i]->var->Contents() : aParam[i]->marker;
+
+		ExprTokenType &this_param = *aParam[i + 1];  // This and the next are resolved for performance and convenience.
+		DYNAPARM &this_dyna_param = dyna_param[arg_count];
+
+		// If the arg's contents is a string, resolve it once here to simplify things that reference it later:
+		if (IS_NUMERIC(this_param.symbol))
+			arg_as_string = NULL;
+		else
+			arg_as_string = (this_param.symbol == SYM_VAR) ? this_param.var->Contents() : this_param.marker;
+
+		// Based on the arg type, force the arg's contents to fit into a 32-bit value for later pushing
+		// onto the call stack as part of the call to the DLL function.
+		ConvertDllArgType(arg_type_string, this_dyna_param);
+		switch (this_dyna_param.type)
+		{
+		case DLL_ARG_STR:
+			if (arg_as_string)
+				this_dyna_param.str = arg_as_string;
+			else
+			{
+				// For now, string args must be real strings rather than floats or ints.  An alternative
+				// to this would be to convert it to number using persistent memory from the caller (which
+				// is necessary because our own stack memory should not be passed to any function since
+				// that might cause it to return a pointer to stack memory, or update an output-parameter
+				// to be stack memory, which would be invalid memory upon return to the caller).
+				// The complexity of this doesn't seem worth the rarity of the need, so this will be
+				// documented in the help file.
+				g_ErrorLevel->Assign("-2"); // Stage 2 error: Invalid return type or arg type.
+				return;
+			}
+			break;
+
+		case DLL_ARG_INT:
+		case DLL_ARG_SHORT:
+		case DLL_ARG_CHAR:
+		case DLL_ARG_INT64:
+			if (arg_as_string)
+			{
+				// Support for unsigned values that are 32 bits wide or less is done via ATOI64() since
+				// it should be able to handle both signed and unsigned values.  However, unsigned 64-bit
+				// values probably require ATOU64(), which will prevent something like -1 from being seen
+				// as the largest unsigned 64-bit int, but more importantly there are some other issues
+				// with unsigned 64-bit numbers: The script internals uses 64-bit signed values everywhere,
+				// so unsigned values can only be partially supported for incoming parameters, but probably
+				// not for outgoing parameters (values the function changed) or the return value.  Those
+				// should probably be written back out to the script as negatives so that other parts of
+				// the script, such as expressions, can see them as signed values.  In other words, if the
+				// script somehow gets a 64-bit unsigned value into a variable, and that value is larger
+				// that LLONG_MAX (i.e. too large for ATOI64 to handle), ATOU64() will be able to resolve
+				// it, but any output parameter should be written back out as a negative if it exceeds
+				// LLONG_MAX (return values can be written out as unsigned since the script can specify
+				// signed to avoid this, since they don't need the incoming detection for ATOU()).
+				if (this_dyna_param.is_unsigned && this_dyna_param.type == DLL_ARG_INT64)
+					this_dyna_param.value_int64 = (__int64)ATOU64(arg_as_string); // Cast should not prevent called function from seeing it as an undamaged unsigned number.
+				else
+					this_dyna_param.value_int64 = ATOI64(arg_as_string);
+			}
+			else if (this_param.symbol == SYM_INTEGER)
+				this_dyna_param.value_int64 = this_param.value_int64;
+			else
+				this_dyna_param.value_int64 = (__int64)this_param.value_double;
+
+			// Values less than or equal to 32-bits wide always get copied into a single 32-bit value
+			// because they should be right justified within it for insertion onto the call stack.
+			if (this_dyna_param.type != DLL_ARG_INT64) // Shift the 32-bit value into the high-order DWORD of the 64-bit value for later use by DynaCall().
+				this_dyna_param.value_int = (int)this_dyna_param.value_int64; // Force a failure if compiler generates code for this that corrupts the union (since the same method is used for the more obscure float vs. double below).
+			break;
+
+		case DLL_ARG_FLOAT:
+		case DLL_ARG_DOUBLE:
+			// This currently doesn't validate that this_dyna_param.is_unsigned==false, since it seems
+			// too rare and mostly harmless to worry about something like "Ufloat" having been specified.
+			if (arg_as_string)
+				this_dyna_param.value_double = (double)ATOF(arg_as_string);
+			else if (this_param.symbol == SYM_INTEGER)
+				this_dyna_param.value_double = (double)this_param.value_int64;
+			else
+				this_dyna_param.value_double = this_param.value_double;
+
+			if (this_dyna_param.type == DLL_ARG_FLOAT)
+				this_dyna_param.value_float = (float)this_dyna_param.value_double;
+			break;
+
+		default: // DLL_ARG_INVALID or a bug due to an unhandled type.
+			g_ErrorLevel->Assign("-2"); // Stage 2 error: Invalid return type or arg type.
+			return;
+		}
+	}
+    
+	void *function = NULL;
+	HMODULE hmodule, hmodule_to_free = NULL;
+	char param1_buf[MAX_PATH*2], *function_name, *dll_name; // Uses MAX_PATH*2 to hold worst-case PATH plus function name.
+
+	// Make a modifiable copy of param1 so that the DLL name and function name can be parsed out easily:
+	strlcpy(param1_buf, aParam[0]->symbol == SYM_VAR ? aParam[0]->var->Contents() : aParam[0]->marker, sizeof(param1_buf) - 1); // -1 to reserve space for the "A" suffix later below.
+	if (   !(function_name = strrchr(param1_buf, '\\'))   ) // No DLL name specified, so a search among standard defaults will be done.
+	{
+		dll_name = NULL;
+		function_name = param1_buf;
+
+		// Define the standard libraries here. If they reside in %SYSTEMROOT%\system32 it is not
+		// necessary to specify the full path (it wouldn't make sense anyway).
+		static HMODULE std_module[] = {GetModuleHandle("user32.dll"), GetModuleHandle("kernel32.dll")
+			, GetModuleHandle("comctl32.dll")}; // user32 is listed first for performance.
+		static int std_module_count = sizeof(std_module) / sizeof(HMODULE);
+
+		// Since no DLL was specified, search for the specified function among the standard modules.
+		for (i = 0; i < std_module_count; ++i)
+			if (   std_module[i] && (function = (void *)GetProcAddress(std_module[i], function_name))   )
+				break;
+		if (!function)
+		{
+			// Since the absence of the "A" suffix (e.g. MessageBoxA) is so common, try it that way
+			// but only here with the standard libraries since the risk of ambiguity (calling the wrong
+			// function) seems unacceptably high in a custom DLL.  For example, a custom DLL might have
+			// function called "AA" but not one called "A".
+			strcat(function_name, "A"); // 1 slot was already reserved above for the 'A'.
+			for (i = 0; i < std_module_count; ++i)
+				if (   std_module[i] && (function = (void *)GetProcAddress(std_module[i], function_name))   )
+					break;
+		}
+	}
+	else
+	{
+		dll_name = param1_buf;
+		*function_name = '\0';  // Terminate dll_name to split it off from function_name.
+		++function_name; // Set it to the character after the last backslash.
+
+		// Get module handle. This will work when DLL is already loaded.  If DLL isn't loaded then load it.
+		if (   !(hmodule = GetModuleHandle(dll_name))    )
+			if (   !(hmodule = hmodule_to_free = LoadLibrary(dll_name))   )
+			{
+				g_ErrorLevel->Assign("-3"); // Stage 3 error: DLL couldn't be loaded.
+				return;
+			}
+		function = (void *)GetProcAddress(hmodule, function_name);
+	}
+
+	if (!function)
+	{
+		g_ErrorLevel->Assign("-4"); // Stage 4 error: Function could not be found in the DLL(s).
+		goto end;
+	}
+
+	////////////////////////
+	// Call the DLL function
+	////////////////////////
+	DWORD exception_occurred;  // Must not be named "exception_code" to avoid interferences with MSVC macros.
+	DYNARESULT return_value; // Doing assignment as separate step avoids compiler warning about "goto end" skipping it.
+	return_value = DynaCall(dll_call_mode, function, dyna_param, arg_count, exception_occurred, NULL, 0);
+	// The above has also set g_ErrorLevel appropriately.
+
+	if (exception_occurred)
+	{
+		// If the called function generated an exception, I think it's impossible for the return value
+		// to be valid/meaningful since it the function never returned properly.  Confirmation of this
+		// would be good, but in the meantime it seems best to make the return value an empty string as
+		// an indicator (in addition to ErrorLevel) that the call failed.
+		aResultToken.symbol = SYM_STRING;
+		aResultToken.marker = "";
+		// But continue on to write out any output parameters because the called function might have
+		// had a chance to update them before aborting.
+	}
+	else
+	{
+		if (return_attrib.passed_by_address)
+		{
+			return_attrib.passed_by_address = false; // Because the address is about to be dereferenced/resolved.
+
+			switch(return_attrib.type)
+			{
+			case DLL_ARG_STR:  // Even strings can be passed by address, which is equivalent to "char **".
+			case DLL_ARG_INT:
+			case DLL_ARG_SHORT:
+			case DLL_ARG_CHAR:
+			case DLL_ARG_FLOAT:
+				// All the above are stored in four bytes, so a straight dereference will copy the value
+				// over unchanged, even if it's a float.
+				return_value.Int = *(int *)return_value.Pointer;
+				break;
+
+			case DLL_ARG_INT64:
+			case DLL_ARG_DOUBLE:
+				// Same as above but for eight bytes:
+				return_value.Int64 = *(__int64 *)return_value.Pointer;
+				break;
+			}
+		}
+
+		// Otherwise, the call was successful.  Interpret and store the return value.
+		switch(return_attrib.type)
+		{
+		case DLL_ARG_STR:
+			// The contents of the string returned from the function must not reside in our stack memory since
+			// that will vanish when we return to our caller.  As long as every string that went into the
+			// function isn't on our stack (which is the case), there should be no way for what comes out to be
+			// on it either.
+			aResultToken.symbol = SYM_STRING;
+			aResultToken.marker = (char *)return_value.Pointer;
+			break;
+		case DLL_ARG_INT: // If the function has a void return value (formerly DLL_ARG_NONE), the value assigned here is undefined and inconsequential since the script should be designed to ignore it.
+			aResultToken.symbol = SYM_INTEGER;
+			if (return_attrib.is_unsigned)
+				aResultToken.value_int64 = (UINT)return_value.Int; // Preserve unsigned nature upon promotion to signed 64-bit.
+			else // Signed.
+				aResultToken.value_int64 = return_value.Int;
+			break;
+		case DLL_ARG_SHORT:
+			aResultToken.symbol = SYM_INTEGER;
+			if (return_attrib.is_unsigned)
+				aResultToken.value_int64 = return_value.Int & 0x0000FFFF; // This also forces the value into the unsigned domain of a signed int.
+			else // Signed.
+				aResultToken.value_int64 = (SHORT)(WORD)return_value.Int; // These casts properly preserve negatives.
+			break;
+		case DLL_ARG_CHAR:
+			aResultToken.symbol = SYM_INTEGER;
+			if (return_attrib.is_unsigned)
+				aResultToken.value_int64 = return_value.Int & 0x000000FF; // This also forces the value into the unsigned domain of a signed int.
+			else // Signed.
+				aResultToken.value_int64 = (char)(BYTE)return_value.Int; // These casts properly preserve negatives.
+			break;
+		case DLL_ARG_INT64:
+			// Even for unsigned 64-bit values, it seems best both for simplicity and consistency to write
+			// them back out to the script as signed values because script internals are not currently
+			// equipped to handle unsigned 64-bit values.  This has been documented.
+			aResultToken.symbol = SYM_INTEGER;
+			aResultToken.value_int64 = return_value.Int64;
+			break;
+		case DLL_ARG_FLOAT:
+			aResultToken.symbol = SYM_FLOAT;
+			aResultToken.value_double = return_value.Float;
+			break;
+		case DLL_ARG_DOUBLE:
+			aResultToken.symbol = SYM_FLOAT; // There is no SYM_DOUBLE since all floats are stored as doubles.
+			aResultToken.value_double = return_value.Double;
+			break;
+		default: // Should never be reached unless there's a bug.
+			aResultToken.symbol = SYM_STRING;
+			aResultToken.marker = "";
+		} // switch(return_attrib.type)
+	} // No exception occurred, so store the return value.
+
+	// Store any output parameters back into the input variables.  This allows a function to change the
+	// contents of a variable for the following arg types: String and Pointer to <various number types>.
+	for (arg_count = 0, i = 1; i < aParamCount; ++arg_count, i += 2) // Same loop as used above, so maintain them together.
+	{
+		ExprTokenType &this_param = *aParam[i + 1];  // This and the next are resolved for performance and convenience.
+		DYNAPARM &this_dyna_param = dyna_param[arg_count];
+
+		if (this_param.symbol != SYM_VAR) // Output parameters are copied back only if its counterpart parameter is a naked variable.
+			continue;
+		if (this_dyna_param.type == DLL_ARG_STR) // The function might have altered Contents(), so update Length().
+		{
+			this_param.var->Length() = (VarSizeType)strlen(this_param.var->Contents());
+			continue;
+		}
+		// Since above didn't "continue", this arg wasn't passed as a string.  Of the remaining types, only
+		// those passed by address can possibly be output parameters, so skip the rest:
+		if (!this_dyna_param.passed_by_address)
+			continue;
+		switch (this_dyna_param.type)
+		{
+		// case DLL_ARG_STR:  Already handled above.
+		case DLL_ARG_INT:
+			if (this_dyna_param.is_unsigned)
+				this_param.var->Assign((DWORD)this_dyna_param.value_int);
+			else // Signed.
+				this_param.var->Assign(this_dyna_param.value_int);
+			break;
+		case DLL_ARG_SHORT:
+			if (this_dyna_param.is_unsigned) // Force omission of the high-order word in case it is non-zero from a parameter that was originally and erroneously larger than a short.
+				this_param.var->Assign(this_dyna_param.value_int & 0x0000FFFF); // This also forces the value into the unsigned domain of a signed int.
+			else // Signed.
+				this_param.var->Assign((int)(SHORT)(WORD)this_dyna_param.value_int); // These casts properly preserve negatives.
+			break;
+		case DLL_ARG_CHAR:
+			if (this_dyna_param.is_unsigned) // Force omission of the high-order word in case it is non-zero from a parameter that was originally and erroneously larger than a short.
+				this_param.var->Assign(this_dyna_param.value_int & 0x000000FF); // This also forces the value into the unsigned domain of a signed int.
+			else // Signed.
+				this_param.var->Assign((int)(char)(BYTE)this_dyna_param.value_int); // These casts properly preserve negatives.
+			break;
+		case DLL_ARG_INT64: // Unsigned and signed are both written as signed for the reasons described elsewhere above.
+			this_param.var->Assign(this_dyna_param.value_int64);
+			break;
+		case DLL_ARG_FLOAT:
+			this_param.var->Assign(this_dyna_param.value_float);
+			break;
+		case DLL_ARG_DOUBLE:
+			this_param.var->Assign(this_dyna_param.value_double);
+			break;
+		}
+	}
+
+end:
+	if (hmodule_to_free)
+		FreeLibrary(hmodule_to_free);
 }
 
 
@@ -4887,6 +5510,12 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		HWND top_box = FindOurTopDialog();
 		if (top_box)
 		{
+
+			// v1.0.33: The following is probably reliable since the AHK_DIALOG should
+			// be in front of any messages that would launch an interrupting thread.  In other
+			// words, the "g" struct should still be the one that owns this MsgBox/dialog window.
+			g.DialogHWND = top_box; // This is used to work around an AHK_TIMEOUT issue in which a MsgBox that has only an OK button fails to deliver the Timeout indicator to the script.
+
 			SetForegroundWindowEx(top_box);
 
 			// Setting the big icon makes AutoHotkey dialogs more distinct in the Alt-tab menu.
@@ -10644,7 +11273,7 @@ bool Line::Util_CopyDir (const char *szInputSource, const char *szInputDest, boo
 	FileOp.wFunc	= FO_COPY;
 	FileOp.fFlags	= FOF_SILENT | FOF_NOCONFIRMMKDIR | FOF_NOCONFIRMATION | FOF_NOERRORUI;
 
-	if ( SHFileOperation(&FileOp) ) 
+	if ( SHFileOperation(&FileOp) )
 		return false;								
 
 	return true;

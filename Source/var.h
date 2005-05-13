@@ -190,7 +190,8 @@ public:
 	ResultType Assign(__int64 aValueToAssign);
 	//ResultType Assign(unsigned __int64 aValueToAssign);
 	ResultType Assign(double aValueToAssign);
-	ResultType Assign(char *aBuf = NULL, VarSizeType aLength = VARSIZE_MAX, bool aTrimIt = false);
+	ResultType Assign(char *aBuf = NULL, VarSizeType aLength = VARSIZE_MAX, bool aTrimIt = false
+		, bool aExactSize = false);
 	VarSizeType Get(char *aBuf = NULL);
 
 	#define VAR_ALWAYS_FREE         0

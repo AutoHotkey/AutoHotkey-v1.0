@@ -5266,6 +5266,10 @@ Func *Script::FindFunc(char *aFuncName, size_t aFuncNameLength)
 		func_type = FUNC_WINEXIST;
 	else if (!stricmp(func_name, "WinActive"))
 		func_type = FUNC_WINACTIVE;
+	else if (!stricmp(func_name, "DllCall"))
+		func_type = FUNC_DLLCALL;
+	else if (!stricmp(func_name, "VarSetCapacity"))
+		func_type = FUNC_VARSETCAPACITY;
 	else
 		return NULL;
 
@@ -5278,7 +5282,15 @@ Func *Script::FindFunc(char *aFuncName, size_t aFuncNameLength)
 	{
 	case FUNC_WINEXIST:
 	case FUNC_WINACTIVE:
-		func.mParamCount = 4; // func.mMinParams defaults to 0, which is correct in these cases.
+		func.mParamCount = 4; // func.mMinParams defaults to 0 (correct in these cases).
+		break;
+	case FUNC_DLLCALL:
+		func.mMinParams = 1;
+		func.mParamCount = 10000; // Max params: An arbitrarily high limit that will never realistically be reached.
+		break;
+	case FUNC_VARSETCAPACITY:
+		func.mMinParams = 1;
+		func.mParamCount = 2; // Max params.
 		break;
 	}
 
@@ -10634,6 +10646,21 @@ void RestoreFunctionVars(Func &aFunc, VarBkp *&aVarBackup, int aVarBackupCount)
 
 
 
+UINT ExprTokenToUINT(ExprTokenType &aToken)
+// Helper function for ExpandExpression().
+{
+	switch (aToken.symbol)
+	{
+		case SYM_INTEGER: return (UINT)aToken.value_int64;
+		case SYM_FLOAT: return (UINT)aToken.value_double;
+		case SYM_VAR: return (UINT)ATOI64(aToken.var->Contents()); // Use 64-bit to preserve unsigned and also wrap any signed values into the unsigned domain.
+		default: // SYM_STRING or SYM_OPERAND
+			return (UINT)ATOI64(aToken.marker); // ATOI64(): See comment above.
+	}
+}
+
+
+
 char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget, char *&aDerefBuf
 	, size_t &aDerefBufSize, char *aArgDeref[], size_t aExtraSize)
 // Caller should ignore aResult unless this function returns NULL.
@@ -10647,8 +10674,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 // aTarget is left unchnaged except in case #4, in which case aTarget has been adjusted to the position after our
 // result-string's terminator.  In addition, in case #4, aDerefBuf, aDerefBufSize, and aArgDeref[] have been adjusted
 // for our caller if aDerefBuf was too small and needed to be enlarged.
-// Thanks to Joost Mulders for providing the expression evaluation code upon
-// which this function is based.
+// Thanks to Joost Mulders for providing the expression evaluation code upon which this function is based.
 {
 	// This is the location in aDerefBuf the caller told us is ours.  Caller has already ensured that
 	// our part of the buffer is large enough for our first stage expansion, but not necessarily
@@ -10870,7 +10896,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 			switch(this_map_item.type)
 			{
 			case EXP_DEREF_VAR:
-				infix[infix_count].symbol = SYM_VAR;
+				infix[infix_count].symbol = SYM_VAR; // DllCall() and possibly others rely on this having been done to support changing the value of the the parameter (similar to by-ref).
 				infix[infix_count].var = this_map_item.var;
 				break;
 			case EXP_DEREF_FUNC:
@@ -11535,11 +11561,47 @@ double_deref:
 		{
 			Func &func = *this_token.deref->func; // For performance.
 			actual_param_count = this_token.deref->param_count; // For performance.
+			if (actual_param_count > stack_count) // Prevent stack underflow (probably impossible if actual_param_count is accurate).
+				goto fail;
 
 			if (func.mType != FUNC_NORMAL)
 			{
 				switch (func.mType)
 				{
+				case FUNC_DLLCALL:
+					stack_count -= actual_param_count; // Adjust the stack early to simplify DllCall().  Above already confirmed that this won't underflow.
+					DllCall(this_token, stack + stack_count, actual_param_count); // It will see this portion of the stack as an array of its parameters.
+					if (IS_NUMERIC(this_token.symbol)) // Any numeric result can be considered final.
+						goto push_this_token;
+					//else it's a string, which might need to be moved to persistent memory further below.
+					result = this_token.marker; // Marker can be used because symbol will never be SYM_VAR in this case.
+					break;
+				case FUNC_VARSETCAPACITY:
+					stack_count -= actual_param_count; // Adjust the stack early to simplify.  Above already confirmed that this won't underflow.
+					this_token.symbol = SYM_INTEGER;
+					if (stack[0]->symbol == SYM_VAR)
+					{
+						if (actual_param_count > 1) // Second parameter is present.
+						{
+							VarSizeType new_capacity = ExprTokenToUINT(*stack[1]);
+							if (new_capacity)
+							{
+								stack[0]->var->Assign(NULL, new_capacity, false, true); // This also destroys the variables contents.
+								// By design, Assign() has already set the length of the variable to reflect new_capacity.
+								// This is not what is wanted in this case since it should be truly empty.
+								stack[0]->var->Length() = 0;
+							}
+							else // ALLOC_SIMPLE, due to its nature, will not actually be freed, which is documented.
+								stack[0]->var->Free();
+						}
+						//else the var is not altered; instead, the current capacity is reported, which seems more intuitive/useful than having it do a Free().
+						this_token.value_int64 = stack[0]->var->Capacity(); // Don't subtract 1 here; avoids underflow.
+						if (this_token.value_int64)
+							--this_token.value_int64; // Omit the room for the zero terminator since script capacity is definite as length vs. size.
+					}
+					else // Failure.
+						this_token.value_int64 = 0; // In spite of being ambiguous with the result of Free(), 0 seems a little better than -1 since it indicates "no capacity" and is also equal to "false" for easy use in expressions.
+					goto push_this_token;
 				case FUNC_WINEXIST:
 				case FUNC_WINACTIVE:
 					// Pop the actual number of params involved in this function-call off the stack.  Load-time
@@ -11553,9 +11615,8 @@ double_deref:
 							param[j] = "";
 							continue;
 						}
-						// Otherwise, assign actual parameter's value to the formal parameter:
-						if (!stack_count) // Prevent stack underflow (probably impossible if actual_param_count is accurate).
-							goto fail;
+						// Otherwise, assign actual parameter's value to the formal parameter.  A check
+						// higher above has already ensured that this won't cause stack underflow:
 						ExprTokenType &token = *STACK_POP;
 						// Below uses IS_OPERAND rather than checking for only SYM_OPERAND because the stack can contain
 						// both generic and specific operands.  Specific operands were evaluated by a previous iteration
@@ -11620,15 +11681,17 @@ double_deref:
 					{
 						if (j < actual_param_count) // This formal has an actual on the stack.
 						{
-							// Move on to the next item in the stack (without popping):
-							if (!s) // Prevent stack underflow. Impossible if actual_param_count is accurate.
-								goto fail;
+							// Move on to the next item in the stack (without popping):  A check higher above
+							// has already ensured that this won't cause stack underflow:
 							--s;
 							if (stack[s]->symbol == SYM_VAR && !func.mParam[j]->IsByRef())
 							{
 								// Since this formal parameter is passed by value, if it's SYM_VAR, convert it to
 								// SYM_OPERAND to allow the variables to be backed up and reset further below without
 								// corrupting any SYM_VARs that happen to be locals or params of this very same function:
+								// DllCall() relies on the fact that this transformation is only done for UDFs
+								// and not built-in functions such as DllCall().  This is because DllCall() sometimes
+								// needs the variable of a parameter for use as an output parameter.
 								stack[s]->marker = stack[s]->var->Contents();
 								stack[s]->symbol = SYM_OPERAND;
 							}
@@ -11665,9 +11728,8 @@ double_deref:
 						continue;
 					}
 					// Otherwise, assign actual parameter's value to the formal parameter (which is itself a
-					// local variable in the function).
-					if (!stack_count) // Prevent stack underflow (note that the previous loop will not have checked this if no backup was needed). Impossible if actual_param_count is accurate.
-						goto fail;
+					// local variable in the function).  A check higher above has already ensured that this
+					// won't cause stack underflow:
 					ExprTokenType &token = *STACK_POP;
 					// Below uses IS_OPERAND rather than checking for only SYM_OPERAND because the stack can contain
 					// both generic and specific operands.  Specific operands were evaluated by a previous iteration
@@ -11753,7 +11815,7 @@ double_deref:
 				g.CurrentFunc = prev_func;
 
 				early_return = (aResult == EARLY_EXIT || aResult == FAIL);
-			}
+			} // Call to a user defined function.
 
 			done = !stack_count && i == postfix_count - 1; // True if we've used up the last of the operators & operands.
 
@@ -11800,8 +11862,8 @@ double_deref:
 
 			if (make_result_persistent)
 			{
-				// Must cast to int to avoid loss of negative values:
 				result_size = strlen(result) + 1;
+				// Must cast to int to avoid loss of negative values:
 				if (result_size <= (int)(aDerefBufSize - (target - aDerefBuf))) // There is room at the end of our deref buf, so use it.
 				{
 					memcpy(target, result, result_size); // Benches slightly faster than strcpy().

@@ -1253,6 +1253,14 @@ VOID CALLBACK MsgBoxTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
 	if (IsWindow(hWnd))
 		EndDialog(hWnd, AHK_TIMEOUT);
 	KillTimer(hWnd, idEvent);
+	// v1.0.33: The following was added to fix the fact that a MsgBox with only an OK button
+	// does not acutally send back the code sent by EndDialog() above.  The HWND is checked
+	// in case "g" is no longer the original thread due to another thread having interrupted it.
+	// Consequently, MsgBox's with an OK button won't be 100% reliable with the timeout feature
+	// if an interrupting thread is running at the time the box times out.  This is in the help
+	// file as a known limitation:
+	if (g.DialogHWND == hWnd) // Regardless of whether IsWindow() is true.
+		g.MsgBoxTimedOut = true;
 }
 
 
