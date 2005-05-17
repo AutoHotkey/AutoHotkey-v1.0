@@ -244,7 +244,7 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt, bool aExac
 		if (aTrimIt)
 			mLength = (VarSizeType)trim(mContents);
 		else
-			mLength = aLength; // Above has ensured that aLength is accurate.
+			mLength = aLength; // aLength was verified accurate higher above.
 	}
 	else
 	{
@@ -253,7 +253,7 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt, bool aExac
 		// doesn't override this.
 		// Below: Already verified that the length value will fit into VarSizeType.
 		// Also, -1 because length is defined as not including zero terminator:
-		mLength = aLength; // Above has ensured that aLength is accurate.
+		mLength = aLength; // aLength was verified accurate higher above.
 		// Init for greater safety.  This is safe because in this case mContents is not a
 		// constant memory area:
 		*mContents = '\0';

@@ -3099,40 +3099,68 @@ DYNARESULT DynaCall(int aFlags, void *aFunction, DYNAPARM aParam[], int aParamCo
 
 
 
-void ConvertDllArgType(char *aBuf, DYNAPARM &aDynaParam)
+void ConvertDllArgType(char *aBuf[], DYNAPARM &aDynaParam)
 // Helper function for DllCall().  Updates aDynaParam's type and other attributes.
+// Caller has ensured that aBuf contains exactly two strings (though the second can be NULL).
 {
-	if (toupper(*aBuf) == 'U') // Unsigned
+	char buf[32], *type_string;
+	int i;
+
+	for (i = 0, type_string = aBuf[0]; i < 2 && type_string; type_string = aBuf[++i])
 	{
-		aDynaParam.is_unsigned = true;
-		++aBuf; // Omit the 'U' prefix from further consideration.
+		if (toupper(*type_string) == 'U') // Unsigned
+		{
+			aDynaParam.is_unsigned = true;
+			++type_string; // Omit the 'U' prefix from further consideration.
+		}
+		else
+			aDynaParam.is_unsigned = false;
+
+		strlcpy(buf, type_string, sizeof(buf)); // Make a modifiable copy for easier parsing below.
+
+		char *cp = StrChrAny(buf, "\t *"); // Tab, space, or asterisk.
+		if (cp)
+		{
+			aDynaParam.passed_by_address = (cp[0] == '*' || cp[1] == '*'); // Allow optional space in front of asterisk.
+			*cp = '\0'; // Remove trailing options so that stricmp() can be used below.
+		}
+		else
+			aDynaParam.passed_by_address = false;
+
+		if (!*buf)
+		{
+			// The following also serves to set the default in case this is the first iteration.
+			// Set default but perform second iteration in case the second type string isn't NULL.
+			// In other words, if the second type string is explicitly valid rather than blank,
+			// it should override the following default:
+			aDynaParam.type = DLL_ARG_INT;  // Assume int.  This is relied upon at least for having a return type such as a naked "CDecl".
+			continue; // OK to do this regardless of whether this is the first or second iteration.
+		}
+		else if (!stricmp(buf, "Str"))     aDynaParam.type = DLL_ARG_STR; // The few most common types are kept up top for performance.
+		else if (!stricmp(buf, "Int"))     aDynaParam.type = DLL_ARG_INT;
+		else if (!stricmp(buf, "Short"))   aDynaParam.type = DLL_ARG_SHORT;
+		else if (!stricmp(buf, "Char"))    aDynaParam.type = DLL_ARG_CHAR;
+		else if (!stricmp(buf, "Int64"))   aDynaParam.type = DLL_ARG_INT64;
+		else if (!stricmp(buf, "Float"))   aDynaParam.type = DLL_ARG_FLOAT;
+		else if (!stricmp(buf, "Double"))  aDynaParam.type = DLL_ARG_DOUBLE;
+		// Unnecessary: else if (!stricmp(buf, "None"))    aDynaParam.type = DLL_ARG_NONE;
+		// Otherwise, it's blank or an unknown type, leave it set at the default.
+		else
+		{
+			if (i > 0) // Second iteration.
+			{
+				// Reset flags to go with any blank value we're falling back to from the first iteration
+				// (in case our iteration changed the flags based on bogus contents of the second type_string):
+				aDynaParam.passed_by_address = false;
+				aDynaParam.is_unsigned = false;
+			}
+			else // First iteration, so aDynaParam.type's value will be set by the second.
+				continue;
+		}
+		// Since above didn't "continue", the type is explicitly valid so "return" to ensure that
+		// the second iteration doesn't run (in case this is the first iteration):
+		return;
 	}
-	else
-		aDynaParam.is_unsigned = false;
-
-	char buf[32];
-	strlcpy(buf, aBuf, sizeof(buf)); // Make a modifiable copy for easier parsing below.
-
-	char *cp = StrChrAny(buf, "\t *"); // Tab, space, or asterisk.
-	if (cp)
-	{
-		aDynaParam.passed_by_address = (cp[0] == '*' || cp[1] == '*'); // Allow optional space in front of asterisk.
-		*cp = '\0'; // Remove trailing options so that stricmp() can be used below.
-	}
-	else
-		aDynaParam.passed_by_address = false;
-
-	aDynaParam.type = DLL_ARG_INVALID; // Set default.
-	if (!*buf) aDynaParam.type = DLL_ARG_INT;  // Assume int.  This is relied upon at least for having a return type such as a naked "CDecl".
-	else if (!stricmp(buf, "Str"))     aDynaParam.type = DLL_ARG_STR; // The few most common types are kept up top for performance.
-    else if (!stricmp(buf, "Int"))     aDynaParam.type = DLL_ARG_INT;
-	else if (!stricmp(buf, "Short"))   aDynaParam.type = DLL_ARG_SHORT;
-	else if (!stricmp(buf, "Char"))    aDynaParam.type = DLL_ARG_CHAR;
-    else if (!stricmp(buf, "Int64"))   aDynaParam.type = DLL_ARG_INT64;
-	else if (!stricmp(buf, "Float"))   aDynaParam.type = DLL_ARG_FLOAT;
-	else if (!stricmp(buf, "Double"))  aDynaParam.type = DLL_ARG_DOUBLE;
-	// Unnecessary: else if (!stricmp(buf, "None"))    aDynaParam.type = DLL_ARG_NONE;
-	// Otherwise, it's blank or an unknown type, leave it set at the default.
 }
 
 
@@ -3170,11 +3198,26 @@ void Line::DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 			g_ErrorLevel->Assign("-2"); // Stage 2 error: Invalid return type or arg type.
 			return;
 		}
-		char *return_type_string = (token.symbol == SYM_VAR) ? token.var->Contents() : token.marker;
-		if (!strnicmp(return_type_string, "CDecl", 5)) // Alternate calling convention.
+		char *return_type_string[2];
+		if (token.symbol == SYM_VAR)
+		{
+			return_type_string[0] = token.var->Contents();
+			return_type_string[1] = token.var->mName; // v1.0.33.01: Improve convenience by falling back to the variable's name if the contents are not appropriate.
+		}
+		else
+		{
+			return_type_string[0] = token.marker;
+			return_type_string[1] = NULL;
+		}
+		if (!strnicmp(return_type_string[0], "CDecl", 5)) // Alternate calling convention.
 		{
 			dll_call_mode = DC_CALL_CDECL;
-			return_type_string = omit_leading_whitespace(return_type_string + 5);
+			return_type_string[0] = omit_leading_whitespace(return_type_string[0] + 5);
+		}
+		else if (return_type_string[1] && !strnicmp(return_type_string[1], "CDecl", 5)) // Alternate calling convention.
+		{
+			dll_call_mode = DC_CALL_CDECL;
+			return_type_string[1] = NULL; // Must be NULL since return_type_string[1] is the variable's name, by definition, so it can't have any spaces in it, and thus no space delimited items after "Cdecl".
 		}
 		ConvertDllArgType(return_type_string, return_attrib);
 		if (return_attrib.type == DLL_ARG_INVALID)
@@ -3207,7 +3250,7 @@ void Line::DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 	else
 		dyna_param = NULL;
 
-	char *arg_type_string, *arg_as_string;
+	char *arg_type_string[2], *arg_as_string;
 	int i;
 
 	// Above has already ensured that after the first parameter, there are either zero additional parameters
@@ -3223,7 +3266,20 @@ void Line::DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 			return;
 		}
 		// Otherwise, this arg's type is a string as it should be, so retrieve it:
-		arg_type_string = (aParam[i]->symbol == SYM_VAR) ? aParam[i]->var->Contents() : aParam[i]->marker;
+		if (aParam[i]->symbol == SYM_VAR)
+		{
+			arg_type_string[0] = aParam[i]->var->Contents();
+			arg_type_string[1] = aParam[i]->var->mName;
+			// v1.0.33.01: arg_type_string2 improves convenience by falling back to the variable's name
+			// if the contents are not appropriate.  In other words, both Int and "Int" are treated the same.
+			// It's done this way to allow the variable named "Int" to actually contain some other type
+			// name such as "Str".
+		}
+		else
+		{
+			arg_type_string[0] = aParam[i]->marker;
+			arg_type_string[1] = NULL;
+		}
 
 		ExprTokenType &this_param = *aParam[i + 1];  // This and the next are resolved for performance and convenience.
 		DYNAPARM &this_dyna_param = dyna_param[arg_count];
@@ -3422,7 +3478,12 @@ void Line::DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 			// function isn't on our stack (which is the case), there should be no way for what comes out to be
 			// on it either.
 			aResultToken.symbol = SYM_STRING;
-			aResultToken.marker = (char *)return_value.Pointer;
+			aResultToken.marker = (char *)(return_value.Pointer ? return_value.Pointer : "");
+			// Above: Fix for v1.0.33.01: Don't allow marker to be set to NULL, which prevents crash
+			// with something like the following, which in this case probably happens because the inner
+			// call produces a non-numeric string, which "int" then sees as zero, which CharLower() then
+			// sees as NULL, which causes CharLower to return NULL rather than a real string:
+			//result := DllCall("CharLower", "int", DllCall("CharUpper", "str", MyVar, "str"), "str")
 			break;
 		case DLL_ARG_INT: // If the function has a void return value (formerly DLL_ARG_NONE), the value assigned here is undefined and inconsequential since the script should be designed to ignore it.
 			aResultToken.symbol = SYM_INTEGER;

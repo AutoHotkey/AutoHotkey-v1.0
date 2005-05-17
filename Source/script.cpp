@@ -4621,6 +4621,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			// No action for these since they have a varying number of optional params:
 			//case GUI_CMD_SHOW:
 			//case GUI_CMD_FONT:
+			//case GUI_CMD_MARGIN:
 			//case GUI_CMD_TAB:
 			//case GUI_CMD_COLOR: No load-time param validation to avoid larger EXE size.
 			}

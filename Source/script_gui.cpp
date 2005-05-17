@@ -117,6 +117,13 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 			return ScriptError(ERR_GUICONTROL ERR_ABORT, aParam2);
 		return gui.AddControl(gui_control_type, aParam3, aParam4); // It already displayed any error.
 
+	case GUI_CMD_MARGIN:
+		if (*aParam2)
+			gui.mMarginX = ATOI(aParam2); // Seems okay to allow negative margins.
+		if (*aParam3)
+			gui.mMarginY = ATOI(aParam3); // Seems okay to allow negative margins.
+		return OK;
+		
 	case GUI_CMD_MENU:
 		UserMenu *menu;
 		if (*aParam2)
@@ -1127,11 +1134,13 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		return g_script.ScriptError("Too many tab controls." ERR_ABORT); // Short msg since so rare.
 
 	// If this is the first control, set the default margin for the window based on the size
-	// of the current font:
+	// of the current font, but only if the margins haven't already been set:
 	if (!mControlCount)
 	{
-		mMarginX = (int)(1.25 * sFont[mCurrentFontIndex].point_size);  // Seems to be a good rule of thumb.
-		mMarginY = (int)(0.75 * sFont[mCurrentFontIndex].point_size);  // Also seems good.
+		if (mMarginX == COORD_UNSPECIFIED)
+			mMarginX = (int)(1.25 * sFont[mCurrentFontIndex].point_size);  // Seems to be a good rule of thumb.
+		if (mMarginY == COORD_UNSPECIFIED)
+			mMarginY = (int)(0.75 * sFont[mCurrentFontIndex].point_size);  // Also seems good.
 		mPrevX = mMarginX;  // This makes first control be positioned correctly if it lacks both X & Y coords.
 	}
 
@@ -1982,8 +1991,11 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 					// MSDN says this is necessary in some cases:
 					// Since the window might be visbible at this point, send BM_SETSTYLE rather than
 					// SetWindowLong() so that the button will get redrawn.  Update: The redraw doesn't
-					// actually seem to happen, but this is kept because it also serves to change the
-					// default button appearance later, which is received in the WindowProc via WM_COMMAND:
+					// actually seem to happen (both the old and the new buttons retain the default-button
+					// appearance until the window gets entirely redraw such as via alt-tab).  This is fairly
+					// inexpicable since the exact same technique works with "GuiControl +Default".  In any
+					// case, this is kept because it also serves to change the default button appearance later,
+					// which is received in the WindowProc via WM_COMMAND:
 					SendMessage(mControl[mDefaultButtonIndex].hwnd, BM_SETSTYLE
 						, (WPARAM)LOWORD((GetWindowLong(mControl[mDefaultButtonIndex].hwnd, GWL_STYLE) & ~BS_DEFPUSHBUTTON))
 						, MAKELPARAM(TRUE, 0)); // Redraw = yes. It's probably smart enough not to do it if the window is hidden.
@@ -2003,10 +2015,12 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 				}
 				mDefaultButtonIndex = mControlCount;
 				SendMessage(mHwnd, DM_SETDEFID, (WPARAM)GUI_INDEX_TO_ID(mDefaultButtonIndex), 0);
-				// This is necessary to make the default button have its visual style when the dialog is first shown:
-				SendMessage(mControl[mDefaultButtonIndex].hwnd, BM_SETSTYLE
-					, (WPARAM)LOWORD((GetWindowLong(mControl[mDefaultButtonIndex].hwnd, GWL_STYLE) | BS_DEFPUSHBUTTON))
-					, MAKELPARAM(TRUE, 0)); // Redraw = yes. It's probably smart enough not to do it if the window is hidden.
+				// Strangely, in spite of the control having been created with the BS_DEFPUSHBUTTON style,
+				// need to send BM_SETSTYLE or else the default button will lack its visual style when the
+				// dialog is first shown.  Also strange is that the following must be done *after*
+				// removing the visual/default style from the old default button and/or after doing
+				// DM_SETDEFID above.
+				SendMessage(control.hwnd, BM_SETSTYLE, (WPARAM)LOWORD(style), MAKELPARAM(TRUE, 0)); // Redraw = yes. It's probably smart enough not to do it if the window is hidden.
 			}
 		}
 		break;
@@ -3617,6 +3631,47 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 				new_style = (new_style & ~BS_TYPEMASK) | BS_DEFPUSHBUTTON; // Done to ensure the lowest four bits are pure.
 			else
 				new_style &= ~BS_TYPEMASK;  // Force it to be the right type of button --> BS_PUSHBUTTON == 0
+			// Fixed for v1.0.33.01:
+			// The following must be done here rather than later because it's possible for the
+			// button to lack the BS_DEFPUSHBUTTON style even when it is the default button (such as when
+			// keyboard focus is on some other button).  Consequently, no difference in style might be
+			// detected further below, which is why it's done here:
+			if (aControlIndex == mDefaultButtonIndex)
+			{
+				if (aOpt.style_remove & BS_DEFPUSHBUTTON)
+				{
+					// Remove the default button (rarely needed so that's why there is current no
+					// "Gui, NoDefaultButton" command:
+					mDefaultButtonIndex = -1;
+					// This will alter the control id received via WM_COMMAND when the user presses ENTER:
+					SendMessage(mHwnd, DM_SETDEFID, (WPARAM)IDOK, 0); // restore to default
+					// Sometimes button visually has the default style even when GetWindowLong() says
+					// it doesn't.  Given how rare it is to not have a default button at all after having
+					// one, rather than try to analyze exactly what circumstances this happens in,
+					// unconditionally reset the style and redraw by indicating that current style is
+					// different from the new style:
+					current_style |= BS_DEFPUSHBUTTON;
+				}
+			}
+			else // This button isn't the default button yet, but is it becoming it?
+			{
+				// Remember that the default button doesn't always have the BS_DEFPUSHBUTTON, namely at
+				// times when it shouldn't visually appear to be the default, such as when keyboard focus
+				// is on some other button.  Therefore, don't rely on new_style or current_style's
+				// having or not having BS_DEFPUSHBUTTON as being a correct indicator.
+				if (aOpt.style_add & BS_DEFPUSHBUTTON)
+				{
+					// First remove the style from the old default button, if there is one:
+                    if (mDefaultButtonIndex < mControlCount)
+						SendMessage(mControl[mDefaultButtonIndex].hwnd, BM_SETSTYLE
+							, (WPARAM)LOWORD((GetWindowLong(mControl[mDefaultButtonIndex].hwnd, GWL_STYLE) & ~BS_DEFPUSHBUTTON))
+							, MAKELPARAM(TRUE, 0)); // Redraw = yes. It's probably smart enough not to do it if the window is hidden.
+					mDefaultButtonIndex = aControlIndex;
+					// This will alter the control id received via WM_COMMAND when the user presses ENTER:
+					SendMessage(mHwnd, DM_SETDEFID, (WPARAM)GUI_INDEX_TO_ID(mDefaultButtonIndex), 0);
+					// This button's visual/default appearance will be updated further below, if warranted.
+				}
+			}
 			break;
 		case GUI_CONTROL_CHECKBOX:
 			// Note: BS_AUTO3STATE and BS_AUTOCHECKBOX are mutually exclusive due to their overlap within
@@ -3703,25 +3758,14 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 			switch (aControl.type)
 			{
 			case GUI_CONTROL_BUTTON:
+				// For some reason, the following must be done *after* removing the visual/default style from
+				// the old default button and/or after doing DM_SETDEFID above.
 				// BM_SETSTYLE is much more likely to have an effect for buttons than SetWindowLong().
-				SendMessage(mControl[mDefaultButtonIndex].hwnd, BM_SETSTYLE, (WPARAM)LOWORD(new_style)
-					, MAKELPARAM(TRUE, 0)); // Redraw = yes, though it seems to be ineffective sometimes. It's probably smart enough not to do it if the window is hidden.
-				if ((new_style & BS_DEFPUSHBUTTON) && !(current_style & BS_DEFPUSHBUTTON))
-				{
-					mDefaultButtonIndex = aControlIndex;
-					// This will alter the control id received via WM_COMMAND when the user presses ENTER:
-					SendMessage(mHwnd, DM_SETDEFID, (WPARAM)GUI_INDEX_TO_ID(mDefaultButtonIndex), 0);
-				}
-				else if (!(new_style & BS_DEFPUSHBUTTON) && (current_style & BS_DEFPUSHBUTTON))
-				{
-					// Remove the default button (rarely needed so that's why there is current no
-					// "Gui, NoDefaultButton" command:
-					mDefaultButtonIndex = -1;
-					// This will alter the control id received via WM_COMMAND when the user presses ENTER:
-					SendMessage(mHwnd, DM_SETDEFID, (WPARAM)IDOK, 0); // restore to default
-				}
+				// Redraw = yes, though it seems to be ineffective sometimes. It's probably smart enough not to do
+				// it if the window is hidden.
+				// Fixed for v1.0.33.01: The HWND should be aControl.hwnd not mControl[mDefaultButtonIndex].hwnd
+				SendMessage(aControl.hwnd, BM_SETSTYLE, (WPARAM)LOWORD(new_style), MAKELPARAM(TRUE, 0));
 				break;
-
 			case GUI_CONTROL_LISTBOX:
 				if ((new_style & WS_HSCROLL) && !(current_style & WS_HSCROLL)) // Scroll bar being added.
 				{
@@ -3803,7 +3847,7 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 			if (aOpt.tabstop_count)
 			{
 				SendMessage(aControl.hwnd, LB_SETTABSTOPS, aOpt.tabstop_count, (LPARAM)aOpt.tabstop);
-				do_invalidate_rect = true; // The is done for the same reason that EDIT (above) does it.
+				do_invalidate_rect = true; // This is done for the same reason that EDIT (above) does it.
 			}
 			break;
 		}
