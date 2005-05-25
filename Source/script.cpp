@@ -1539,7 +1539,12 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			if (mNoHotkeyLabels)
 			{
 				mNoHotkeyLabels = false;
-				if (!AddLine(ACT_RETURN))
+				// Fix for v1.0.34: Don't point labels to this particular RETURN so that labels
+				// can point to the very first hotkey or hotstring in a script.  For example:
+				// Goto Test
+				// Test:
+				// ^!z::ToolTip Without the fix`, this is never displayed by "Goto Test".
+				if (!AddLine(ACT_RETURN, NULL, UCHAR_MAX)) // UCHAR_MAX signals it not to point any pending labels to this RETURN.
 					return CloseAndReturn(fp, script_buf, FAIL);
 				mCurrLine = NULL;  // To signify that we're in transition, trying to load a new one.
 			}
@@ -3378,7 +3383,7 @@ bool LegacyArgIsExpression(char *aArgText, char *aArgMap)
 	return *cp != g_DerefChar // If no deref, for simplicity assume it's an expression since any such non-numeric item would be extremely rare in pre-expression era.
 		|| !aArgMap || *(aArgMap + (cp != aArgText)) // There's no literal-map or this deref char is not really a deref char because it's marked as a literal.
 		|| !(cp = strchr(cp + 1, g_DerefChar)) // There is no next deref char.
-		|| (*(cp + 1) && !IsPureNumeric(cp + 1, false, true, true)); // But that next deref char is not the last char, which means this is not a single isolated deref. v1.0.29: Allow things like Sleep %Var%000.
+		|| (cp[1] && !IsPureNumeric(cp + 1, false, true, true)); // But that next deref char is not the last char, which means this is not a single isolated deref. v1.0.29: Allow things like Sleep %Var%000.
 		// Above does not need to check whether last deref char is marked literal in the
 		// arg map because if it is, it would mean the first deref char lacks a matching
 		// close-symbol, which will be caught as a syntax error below regardless of whether
@@ -3396,6 +3401,15 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	if (aActionType == ACT_INVALID)
 		return ScriptError("BAD AddLine", aArgc > 0 ? aArg[0] : "");
 #endif
+
+	bool do_update_labels;
+	if (!aArg && aArgc == UCHAR_MAX) // Special signal from caller to avoid pointing any pending labels to this particular line.
+	{
+		aArgc = 0;
+		do_update_labels = false;
+	}
+	else
+		do_update_labels = true;
 
 	Var *target_var;
 	DerefType deref[MAX_DEREFS_PER_ARG];  // Will be used to temporarily store the var-deref locations in each arg.
@@ -5058,32 +5072,35 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	// LaunchA:
 	// ...
 	// return
-	for (Label *label = mLastLabel; label != NULL && label->mJumpToLine == NULL; label = label->mPrevLabel)
+	if (do_update_labels)
 	{
-		if (line.mActionType == ACT_BLOCK_BEGIN && line.mAttribute) // Non-zero mAttribute signfies the open-brace of a function body.
-			return ScriptError("A label mustn't point to a function.");
-		if (line.mActionType == ACT_ELSE)
-			return ScriptError("A label mustn't point to an ELSE.");
-		// Don't allow this because it may cause problems in a case such as this because
-		// label1 points to the end-block which is at the same level (and thus normally
-		// an allowable jumppoint) as the goto.  But we don't want to allow jumping into
-		// a block that belongs to a control structure.  In this case, it would probably
-		// result in a runtime error when the execution unexpectedly encounters the ELSE
-		// after performing the goto:
-		// goto, label1
-		// if x
-		// {
-		//    ...
-		//    label1:
-		// }
-		// else
-		//    ...
-		//
-		// An alternate way to deal with the above would be to make each block-end be owned
-		// by its block-begin rather than the block that encloses them both.
-		if (line.mActionType == ACT_BLOCK_END)
-			return ScriptError("A label mustn't point to the end of a block.  For loops, use Continue vs. Goto.");
-		label->mJumpToLine = the_new_line;
+		for (Label *label = mLastLabel; label != NULL && label->mJumpToLine == NULL; label = label->mPrevLabel)
+		{
+			if (line.mActionType == ACT_BLOCK_BEGIN && line.mAttribute) // Non-zero mAttribute signfies the open-brace of a function body.
+				return ScriptError("A label mustn't point to a function.");
+			if (line.mActionType == ACT_ELSE)
+				return ScriptError("A label mustn't point to an ELSE.");
+			// Don't allow this because it may cause problems in a case such as this because
+			// label1 points to the end-block which is at the same level (and thus normally
+			// an allowable jumppoint) as the goto.  But we don't want to allow jumping into
+			// a block that belongs to a control structure.  In this case, it would probably
+			// result in a runtime error when the execution unexpectedly encounters the ELSE
+			// after performing the goto:
+			// goto, label1
+			// if x
+			// {
+			//    ...
+			//    label1:
+			// }
+			// else
+			//    ...
+			//
+			// An alternate way to deal with the above would be to make each block-end be owned
+			// by its block-begin rather than the block that encloses them both.
+			if (line.mActionType == ACT_BLOCK_END)
+				return ScriptError("A label mustn't point to the end of a block. For loops, use Continue vs. Goto.");
+			label->mJumpToLine = the_new_line;
+		}
 	}
 
 	++mLineCount;  // Right before returning "success", increment our count.
@@ -5263,14 +5280,56 @@ Func *Script::FindFunc(char *aFuncName, size_t aFuncNameLength)
 	// Since above didn't return, there is no match.  See if it's a built-in function that hasn't yet
 	// been added to the function list:
 	FuncType func_type;
-	if (!stricmp(func_name, "WinExist"))
-		func_type = FUNC_WINEXIST;
-	else if (!stricmp(func_name, "WinActive"))
-		func_type = FUNC_WINACTIVE;
+	if (!stricmp(func_name, "StrLen"))
+		func_type = FUNC_STRLEN;
+	else if (!stricmp(func_name, "Asc"))
+		func_type = FUNC_ASC;
+	else if (!stricmp(func_name, "Chr"))
+		func_type = FUNC_CHR;
+	else if (!stricmp(func_name, "InStr"))
+		func_type = FUNC_INSTR;
+	else if (!stricmp(func_name, "GetKeyState"))
+		func_type = FUNC_GETKEYSTATE;
 	else if (!stricmp(func_name, "DllCall"))
 		func_type = FUNC_DLLCALL;
 	else if (!stricmp(func_name, "VarSetCapacity"))
 		func_type = FUNC_VARSETCAPACITY;
+	else if (!stricmp(func_name, "FileExist"))
+		func_type = FUNC_FILEEXIST;
+	else if (!stricmp(func_name, "WinExist"))
+		func_type = FUNC_WINEXIST;
+	else if (!stricmp(func_name, "WinActive"))
+		func_type = FUNC_WINACTIVE;
+	else if (!stricmp(func_name, "Round"))
+		func_type = FUNC_ROUND;
+	else if (!stricmp(func_name, "Ceil"))
+		func_type = FUNC_CEIL;
+	else if (!stricmp(func_name, "Floor"))
+		func_type = FUNC_FLOOR;
+	else if (!stricmp(func_name, "Mod"))
+		func_type = FUNC_MOD;
+	else if (!stricmp(func_name, "Abs"))
+		func_type = FUNC_ABS;
+	else if (!stricmp(func_name, "Sin"))
+		func_type = FUNC_SIN;
+	else if (!stricmp(func_name, "Cos"))
+		func_type = FUNC_COS;
+	else if (!stricmp(func_name, "Tan"))
+		func_type = FUNC_TAN;
+	else if (!stricmp(func_name, "ASin"))
+		func_type = FUNC_ASIN;
+	else if (!stricmp(func_name, "ACos"))
+		func_type = FUNC_ACOS;
+	else if (!stricmp(func_name, "ATan"))
+		func_type = FUNC_ATAN;
+	else if (!stricmp(func_name, "Exp"))
+		func_type = FUNC_EXP;
+	else if (!stricmp(func_name, "Sqrt"))
+		func_type = FUNC_SQRT;
+	else if (!stricmp(func_name, "Log"))
+		func_type = FUNC_LOG;
+	else if (!stricmp(func_name, "Ln"))
+		func_type = FUNC_LN;
 	else
 		return NULL;
 
@@ -5281,6 +5340,30 @@ Func *Script::FindFunc(char *aFuncName, size_t aFuncNameLength)
 
 	switch(func_type)
 	{
+	case FUNC_STRLEN:
+	case FUNC_ABS:
+	case FUNC_ASC:
+	case FUNC_CHR:
+	case FUNC_FILEEXIST:
+	case FUNC_CEIL:
+	case FUNC_FLOOR:
+	case FUNC_SIN:
+	case FUNC_COS:
+	case FUNC_TAN:
+	case FUNC_ASIN:
+	case FUNC_ACOS:
+	case FUNC_ATAN:
+	case FUNC_EXP:
+	case FUNC_SQRT:
+	case FUNC_LOG:
+	case FUNC_LN:
+		func.mMinParams = 1;
+		func.mParamCount = 1; // Max params.
+		break;
+	case FUNC_INSTR:
+		func.mMinParams = 2;
+		func.mParamCount = 4; // Max params.
+		break;
 	case FUNC_WINEXIST:
 	case FUNC_WINACTIVE:
 		func.mParamCount = 4; // func.mMinParams defaults to 0 (correct in these cases).
@@ -5289,8 +5372,14 @@ Func *Script::FindFunc(char *aFuncName, size_t aFuncNameLength)
 		func.mMinParams = 1;
 		func.mParamCount = 10000; // Max params: An arbitrarily high limit that will never realistically be reached.
 		break;
+	case FUNC_ROUND:
+	case FUNC_GETKEYSTATE:
 	case FUNC_VARSETCAPACITY:
 		func.mMinParams = 1;
+		func.mParamCount = 2; // Max params.
+		break;
+	case FUNC_MOD:
+		func.mMinParams = 2;
 		func.mParamCount = 2; // Max params.
 		break;
 	}
@@ -6165,7 +6254,7 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 				if (   !(deref->func = FindFunc(deref->marker, deref->length))   ) // An earlier stage has ensured that if the function exists, it's mJumpToLine is non-NULL.
 					return line->PreparseError("Call to nonexistent function.", deref->marker);
 				Func &func = *deref->func; // For performance and convenience.
-				// Ealier stage has ensured that strchr() will always find an open-paren:
+				// Ealier stage has ensured that strchr() will always find an open-parenthesis:
 				for (deref->param_count = 0, param_start = omit_leading_whitespace(strchr(deref->marker, '(') + 1);;)
 				{
 					// For each parameter of this function-call.
@@ -8611,6 +8700,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		KeyStateTypes key_state_type;
 		JoyControls joy;
 		int joystick_id;
+		ExprTokenType token;
 
 		if (mActionType == ACT_KEYWAIT)
 		{
@@ -8646,6 +8736,9 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 					break;
 				}
 			}
+			// The following must be set for ScriptGetJoyState():
+			token.symbol = SYM_STRING;
+			token.marker = buf_temp;
 		}
 		else if (   (mActionType != ACT_RUNWAIT && mActionType != ACT_CLIPWAIT && *ARG3)
 			|| (mActionType == ACT_CLIPWAIT && *ARG1)   )
@@ -8745,7 +8838,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 				}
 				else // Waiting for joystick button
 				{
-					if ((bool)ScriptGetJoyState(joy, joystick_id, NULL) == wait_for_keydown)
+					if ((bool)ScriptGetJoyState(joy, joystick_id, token, false) == wait_for_keydown)
 						return OK;
 				}
 				break;
@@ -9124,6 +9217,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		return output_var->Assign((__int64)(mArgc > 1 && sArgVar[1] && sArgVar[1]->IsBinaryClip()
 			? sArgVar[1]->Length() + 1 // +1 to include the entire 4-byte terminator, which seems best in this case.
 			: strlen(ARG2)));
+		// The above must be kept in sync with the StringLen() function elsewhere.
 
 	case ACT_STRINGGETPOS:
 	{
@@ -10647,21 +10741,6 @@ void RestoreFunctionVars(Func &aFunc, VarBkp *&aVarBackup, int aVarBackupCount)
 
 
 
-UINT ExprTokenToUINT(ExprTokenType &aToken)
-// Helper function for ExpandExpression().
-{
-	switch (aToken.symbol)
-	{
-		case SYM_INTEGER: return (UINT)aToken.value_int64;
-		case SYM_FLOAT: return (UINT)aToken.value_double;
-		case SYM_VAR: return (UINT)ATOI64(aToken.var->Contents()); // Use 64-bit to preserve unsigned and also wrap any signed values into the unsigned domain.
-		default: // SYM_STRING or SYM_OPERAND
-			return (UINT)ATOI64(aToken.marker); // ATOI64(): See comment above.
-	}
-}
-
-
-
 char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget, char *&aDerefBuf
 	, size_t &aDerefBufSize, char *aArgDeref[], size_t aExtraSize)
 // Caller should ignore aResult unless this function returns NULL.
@@ -10843,7 +10922,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 		, 10             // SYM_BITAND
 		, 11, 11         // SYM_BITSHIFTLEFT, SYM_BITSHIFTRIGHT
 		, 12, 12         // SYM_PLUS, SYM_MINUS
-		, 13, 13         // SYM_TIMES, SYM_DIVIDE
+		, 13, 13, 13     // SYM_TIMES, SYM_DIVIDE, SYM_FLOORDIVIDE
 		, 14, 14, 14     // SYM_NEGATIVE (unary minus), SYM_HIGHNOT (the high precedence "not" operator), SYM_BITNOT
 		, 15             // SYM_POWER (see note below).
 		, 16             // SYM_FUNC -- Probably must be of highest precedence for it to work properly.
@@ -10996,10 +11075,16 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 				this_infix_item.symbol = SYM_COMMA; // It's serves only as a "do not auto-concatenate" indicator for later below.
 				break;
 			case '/':
-				this_infix_item.symbol = SYM_DIVIDE;
+				if (cp[1] == '/')
+				{
+					++cp; // An additional increment to have loop skip over the second '/' too.
+					this_infix_item.symbol = SYM_FLOORDIVIDE;
+				}
+				else
+					this_infix_item.symbol = SYM_DIVIDE;
 				break;
 			case '*':
-				if (*(cp + 1) == '*') // Seems best to reserve ^ for bitwise-xor.  Python, Perl, and other languages also use ** for power.
+				if (cp[1] == '*') // Python, Perl, and other languages also use ** for power.
 				{
 					++cp; // An additional increment to have loop skip over the second '*' too.
 					this_infix_item.symbol = SYM_POWER;
@@ -11008,7 +11093,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 					this_infix_item.symbol = SYM_TIMES;
 				break;
 			case '!':
-				if (*(cp + 1) == '=') // i.e. != is synonymous with <>, which is also already supported by legacy.
+				if (cp[1] == '=') // i.e. != is synonymous with <>, which is also already supported by legacy.
 				{
 					++cp; // An additional increment to have loop skip over the '=' too.
 					this_infix_item.symbol = SYM_NOTEQUAL;
@@ -11039,7 +11124,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 				this_infix_item.symbol = SYM_CPAREN;
 				break;
 			case '=':
-				if (*(cp + 1) == '=')
+				if (cp[1] == '=')
 				{
 					// In this case, it's not necessary to check cp >= this_map_item.end prior to ++cp,
 					// since symbols such as > and = can't appear in a double-deref, which at
@@ -11051,7 +11136,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 					this_infix_item.symbol = SYM_EQUAL;
 				break;
 			case '>':
-				switch (*(cp + 1))
+				switch (cp[1])
 				{
 				case '=':
 					++cp; // An additional increment to have loop skip over the '=' too.
@@ -11066,7 +11151,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 				}
 				break;
 			case '<':
-				switch (*(cp + 1))
+				switch (cp[1])
 				{
 				case '=':
 					++cp; // An additional increment to have loop skip over the '=' too.
@@ -11085,7 +11170,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 				}
 				break;
 			case '&':
-				if (*(cp + 1) == '&')
+				if (cp[1] == '&')
 				{
 					++cp; // An additional increment to have loop skip over the second '&' too.
 					this_infix_item.symbol = SYM_AND;
@@ -11094,7 +11179,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 					this_infix_item.symbol = SYM_BITAND;
 				break;
 			case '|':
-				if (*(cp + 1) == '|')
+				if (cp[1] == '|')
 				{
 					++cp; // An additional increment to have loop skip over the second '|' too.
 					this_infix_item.symbol = SYM_OR;
@@ -11567,78 +11652,205 @@ double_deref:
 
 			if (func.mType != FUNC_NORMAL)
 			{
+				// Adjust the stack early to simplify.  Above already confirmed that this won't underflow.
+				// Pop the actual number of params involved in this function-call off the stack.  Load-time
+				// validation has ensured that this number is always less than or equal to the number of
+				// parameters formally defined by the function.  Therefore, there should never be any leftover
+				// function-params on the stack after this is done:
+				stack_count -= actual_param_count;
+
 				switch (func.mType)
 				{
+				case FUNC_STRLEN: // The method here must be kept in sync with that of the ACT_STRINGLEN command.
+					this_token.symbol = SYM_INTEGER; // Result will always be an integer.
+					// Loadtime validation has ensured that there's exactly one actual parameter.
+					if (stack[stack_count]->symbol == SYM_VAR && stack[stack_count]->var->IsBinaryClip())
+						this_token.value_int64 = stack[stack_count]->var->Length() + 1;
+					else
+					{
+						if (   !(param[0] = ExprTokenToString(*stack[stack_count], param_buf[0]))   )
+							goto fail; // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
+						this_token.value_int64 = strlen(param[0]);
+					}
+					goto push_this_token; // i.e. any numeric result can be considered final.
+
+				case FUNC_ASC:
+					if (   !(param[0] = ExprTokenToString(*stack[stack_count], param_buf[0]))   )
+						goto fail; // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
+					this_token.symbol = SYM_INTEGER; // Result will always be an integer.
+					this_token.value_int64 = (UCHAR)param[0][0];
+					goto push_this_token; // i.e. any numeric result can be considered final.
+
+				case FUNC_CHR:
+				{
+					int param1 = (int)ExprTokenToInt64(*stack[stack_count]); // Convert to INT vs. UINT so that negatives can be detected.
+					result = param_buf[0]; // If necessary, "result" will be moved to a persistent memory location further below.
+					if (param1 < 0 || param1 > 255)
+						*result = '\0'; // Empty string indicates both Chr(0) and an out-of-bounds param1.
+					else
+					{
+						result[0] = param1;
+						result[1] = '\0';
+					}
+					break;
+				}
+
+				case FUNC_INSTR:
+				{
+					// Load-time validation has already ensured that at least two actual params are present.
+					char *haystack = ExprTokenToString(*stack[stack_count], param_buf[0]);
+					char *needle = ExprTokenToString(*stack[stack_count + 1], param_buf[1]);
+					if (!haystack || !needle)
+						goto fail; // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
+
+					this_token.symbol = SYM_INTEGER; // Init result type (it will always be an integer).
+					bool case_sensitive = actual_param_count >= 3 && ExprTokenToInt64(*stack[stack_count + 2]);
+					char *found_pos;
+					__int64 offset = 0; // Set default.
+
+					if (actual_param_count >= 4) // There is a starting position present.
+					{
+						offset = ExprTokenToInt64(*stack[stack_count + 3]) - 1; // +3 to get the fourth arg.
+						if (offset == -1) // Special mode to search from the right side.  Other negative values are reserved for possible future use as offsets from the right side.
+						{
+							found_pos = strrstr(haystack, needle, case_sensitive, 1);
+							this_token.value_int64 = found_pos ? (found_pos - haystack + 1) : 0;  // +1 to convert to 1-based, since 0 indicates "not found".
+							goto push_this_token; // i.e. any numeric result can be considered final.
+						}
+						// Otherwise, offset is less than -1 or >= 0.
+						// Since InStr("", "") yields 1, it seems consistent for InStr("Red", "", 4) to yield
+						// 4 rather than 0.  The below takes this into account:
+						if (offset < 0 || offset > strlen(haystack))
+						{
+							this_token.value_int64 = 0; // Match never found when offset is beyond length of string.
+							goto push_this_token; // i.e. any numeric result can be considered final.
+						}
+					}
+
+					haystack += offset; // Above has verified that this won't exceed the length of haystack.
+					found_pos = case_sensitive ? strstr(haystack, needle) : strcasestr(haystack, needle);
+					this_token.value_int64 = found_pos ? (found_pos - haystack + offset + 1) : 0;  // +1 to convert to 1-based, since 0 indicates "not found".
+					goto push_this_token; // i.e. any numeric result can be considered final.
+				}
+
+				case FUNC_GETKEYSTATE:
+				{
+					if (   !(param[0] = ExprTokenToString(*stack[stack_count], param_buf[0]))   )
+						goto fail; // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
+					// Keep this in sync with GetKeyJoyState().
+					// See GetKeyJoyState() for more comments about the following lines.
+					JoyControls joy;
+					int joystick_id;
+					vk_type vk = TextToVK(param[0]);
+					if (!vk)
+					{
+						if (   !(joy = (JoyControls)ConvertJoy(param[0], &joystick_id))   )
+							result = "";
+						else
+						{
+							// The following must be set for ScriptGetJoyState():
+							this_token.symbol = SYM_STRING;
+							this_token.marker = param_buf[1];
+							ScriptGetJoyState(joy, joystick_id, this_token, true);
+							if (IS_NUMERIC(this_token.symbol))
+								goto push_this_token; // i.e. any numeric result can be considered final.
+							result = this_token.marker; // If necessary, "result" will be moved to a persistent memory location further below.
+						}
+						break;
+					}
+					// Since above didn't "break": There is a virtual key (not a joystick control).
+					if (actual_param_count > 1)
+					{
+						if (   !(param[1] = ExprTokenToString(*stack[stack_count + 1], param_buf[1]))   )
+							goto fail; // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
+					}
+					else
+						param[1] = "";
+					KeyStateTypes key_state_type;
+					switch (toupper(*param[1])) // Second parameter.
+					{
+					case 'T': key_state_type = KEYSTATE_TOGGLE; break; // Whether a toggleable key such as CapsLock is currently turned on.
+					case 'P': key_state_type = KEYSTATE_PHYSICAL; break; // Physical state of key.
+					default: key_state_type = KEYSTATE_LOGICAL;
+					}
+					this_token.symbol = SYM_INTEGER; // Result will always be an integer.
+					this_token.value_int64 = ScriptGetKeyState(vk, key_state_type); // 1 for down and 0 for up.
+					goto push_this_token; // i.e. any numeric result can be considered final.
+				}
+
 				case FUNC_DLLCALL:
-					stack_count -= actual_param_count; // Adjust the stack early to simplify DllCall().  Above already confirmed that this won't underflow.
 					DllCall(this_token, stack + stack_count, actual_param_count); // It will see this portion of the stack as an array of its parameters.
 					if (IS_NUMERIC(this_token.symbol)) // Any numeric result can be considered final.
 						goto push_this_token;
 					//else it's a string, which might need to be moved to persistent memory further below.
 					result = this_token.marker; // Marker can be used because symbol will never be SYM_VAR in this case.
 					break;
+
 				case FUNC_VARSETCAPACITY:
-					stack_count -= actual_param_count; // Adjust the stack early to simplify.  Above already confirmed that this won't underflow.
 					this_token.symbol = SYM_INTEGER;
-					if (stack[0]->symbol == SYM_VAR)
+					if (stack[stack_count]->symbol == SYM_VAR)
 					{
 						if (actual_param_count > 1) // Second parameter is present.
 						{
-							VarSizeType new_capacity = ExprTokenToUINT(*stack[1]);
+							VarSizeType new_capacity = (UINT)ExprTokenToInt64(*stack[stack_count + 1]);
 							if (new_capacity)
 							{
-								stack[0]->var->Assign(NULL, new_capacity, false, true); // This also destroys the variables contents.
+								stack[stack_count]->var->Assign(NULL, new_capacity, false, true); // This also destroys the variables contents.
 								// By design, Assign() has already set the length of the variable to reflect new_capacity.
 								// This is not what is wanted in this case since it should be truly empty.
-								stack[0]->var->Length() = 0;
+								stack[stack_count]->var->Length() = 0;
 							}
 							else // ALLOC_SIMPLE, due to its nature, will not actually be freed, which is documented.
-								stack[0]->var->Free();
+								stack[stack_count]->var->Free();
 						}
 						//else the var is not altered; instead, the current capacity is reported, which seems more intuitive/useful than having it do a Free().
-						this_token.value_int64 = stack[0]->var->Capacity(); // Don't subtract 1 here; avoids underflow.
+						this_token.value_int64 = stack[stack_count]->var->Capacity(); // Don't subtract 1 here; avoids underflow.
 						if (this_token.value_int64)
 							--this_token.value_int64; // Omit the room for the zero terminator since script capacity is definite as length vs. size.
 					}
 					else // Failure.
 						this_token.value_int64 = 0; // In spite of being ambiguous with the result of Free(), 0 seems a little better than -1 since it indicates "no capacity" and is also equal to "false" for easy use in expressions.
 					goto push_this_token;
+
+				case FUNC_FILEEXIST:
+					if (   !(param[0] = ExprTokenToString(*stack[stack_count], param_buf[0]))   )
+						goto fail; // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
+					result = param_buf[1]; // If necessary, "result" will be moved to a persistent memory location further below.
+					DWORD attr;
+					if (DoesFilePatternExist(param[0], &attr))
+					{
+						// Yield the attributes of the first matching file.  If not match, yield an empty string.
+						// This relies upon the fact that a file's attributes are never legitimately zero, which
+						// seems true but in case it ever isn't, this forces a non-empty string be used.
+						if (!attr) // Seems impossible, but the use of 0xFFFFFFFF vs. 0 as "invalid" indicates otherwise.
+						{
+							// File exists but has no attributes!  Use a placeholder so that any expression will
+							// see the result as "true" (i.e. because the file does exist):
+							result[0] = 'X'; // Some arbirary letter so that it's seen as "true"; letter mustn't be reserved by RASHNDOCT.
+							result[1] = '\0';
+						}
+						else
+							FileAttribToStr(result, attr);
+					}
+					else // Empty string is the indicator of "not found" (seems more consistent than using an integer 0, since caller might rely on it being SYM_STRING).
+						*result = '\0';
+					break;
+
 				case FUNC_WINEXIST:
 				case FUNC_WINACTIVE:
-					// Pop the actual number of params involved in this function-call off the stack.  Load-time
-					// validation has ensured that this number is always less than or equal to the number of
-					// parameters formally defined by the function.  Therefore, there should never be any leftover
-					// params on the stack after this is done:
-					for (j = func.mParamCount - 1; j >= 0; --j) // For each formal parameter (reverse order to mirror the nature of the stack).
+					for (j = 0; j < func.mParamCount; ++j) // For each formal parameter, including optional ones.
 					{
 						if (j >= actual_param_count) // No actual to go with it (should be possible only if the parameter is optional or has a default value).
 						{
 							param[j] = "";
 							continue;
 						}
-						// Otherwise, assign actual parameter's value to the formal parameter.  A check
-						// higher above has already ensured that this won't cause stack underflow:
-						ExprTokenType &token = *STACK_POP;
-						// Below uses IS_OPERAND rather than checking for only SYM_OPERAND because the stack can contain
-						// both generic and specific operands.  Specific operands were evaluated by a previous iteration
-						// of this section.  Generic ones were pushed as-is onto the stack by a previous iteration.
-						if (!IS_OPERAND(token.symbol)) // Haven't found a way to produce this situation yet, but safe to assume it's possible.
-							goto fail;
-						switch(token.symbol)
-						{
-						case SYM_INTEGER:
-							param[j] = ITOA64(token.value_int64, param_buf[j]);
-							break;
-						case SYM_FLOAT:
-							snprintf(param_buf[j], MAX_FORMATTED_NUMBER_LENGTH + 1, g.FormatFloat, token.value_double);
-							param[j] = param_buf[j];
-							break;
-						case SYM_VAR:
-							param[j] = token.var->Contents();
-							break;
-						default: // SYM_STRING or SYM_OPERAND
-							param[j] = token.marker;
-						}
+						// Otherwise, assign actual parameter's value to the formal parameter.
+						// The stack can contain both generic and specific operands.  Specific operands were
+						// evaluated by a previous iteration of this section.  Generic ones were pushed as-is
+						// onto the stack by a previous iteration.
+						if (   !(param[j] = ExprTokenToString(*stack[stack_count + j], param_buf[j]))   )
+							goto fail; // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
 					}
 
 					// Should be called the same was as ACT_IFWINEXIST and ACT_IFWINACTIVE:
@@ -11648,8 +11860,173 @@ double_deref:
 					result = param_buf[0];
 					result[0] = '0';
 					result[1] = 'x';
-					_ui64toa((unsigned __int64)found_hwnd, result + 2, 16);
+					_ui64toa((unsigned __int64)found_hwnd, result + 2, 16); // If necessary, "result" will be moved to a persistent memory location further below.
 					break;
+
+				case FUNC_ROUND:
+				{
+					// See TRANS_CMD_ROUND for details.
+					int param2;
+					double multiplier;
+					if (actual_param_count > 1)
+					{
+						param2 = (int)ExprTokenToInt64(*stack[stack_count + 1]);
+						multiplier = qmathPow(10, param2);
+					}
+					else // Omitting the parameter is the same as explicitly specifying 0 for it.
+					{
+						param2 = 0;
+						multiplier = 1;
+					}
+					right_double = ExprTokenToDouble(*stack[stack_count]);
+					if (right_double >= 0.0)
+						this_token.value_double = qmathFloor(right_double * multiplier + 0.5) / multiplier;
+					else
+						this_token.value_double = qmathCeil(right_double * multiplier - 0.5) / multiplier;
+					// If incoming value is an integer, it seems best for flexibility to convert it to a
+					// floating point number whenever the second param is >0.  That way, it can be used
+					// to "cast" integers into floats.  Conversely, it seems best to yield an integer
+					// whenever the second param is <=0 or omitted.
+					if (param2 > 0)
+						this_token.symbol = SYM_FLOAT; // this_token.value_double already contains the result.
+					else
+					{
+						this_token.symbol = SYM_INTEGER;
+						this_token.value_int64 = (__int64)this_token.value_double;
+					}
+					goto push_this_token; // i.e. any numeric result can be considered final.
+				}
+
+				case FUNC_CEIL: // Although unconventional, it seems more intuitive in a scripting language to yield a pure integer rather than a double.
+					this_token.symbol = SYM_INTEGER;
+					this_token.value_int64 = (__int64)qmathCeil(ExprTokenToDouble(*stack[stack_count]));
+					goto push_this_token; // i.e. any numeric result can be considered final.
+
+				case FUNC_FLOOR: // Although unconventional, it seems more intuitive in a scripting language to yield a pure integer rather than a double.
+					this_token.symbol = SYM_INTEGER;
+					this_token.value_int64 = (__int64)qmathFloor(ExprTokenToDouble(*stack[stack_count]));
+					goto push_this_token; // i.e. any numeric result can be considered final.
+
+				case FUNC_MOD:
+					// Load-time validation has already ensured there are exactly two parameters.
+					// "Cast" each operand to Int64/Double depending on whether it has a decimal point.
+					if (!ExprTokenToDoubleOrInt(*stack[stack_count]) || !ExprTokenToDoubleOrInt(*stack[stack_count + 1]))
+						goto fail; // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
+					if (stack[stack_count]->symbol == SYM_INTEGER && stack[stack_count + 1]->symbol == SYM_INTEGER)
+					{
+						if (!stack[stack_count + 1]->value_int64) // Divide by zero.
+						{
+							this_token.symbol = SYM_STRING;
+							this_token.marker = "";
+						}
+						else
+						{
+							// For performance, % is used vs. qmath for integers.
+							this_token.symbol = SYM_INTEGER;
+							this_token.value_int64 = stack[stack_count]->value_int64 % stack[stack_count + 1]->value_int64;
+						}
+					}
+					else // At least one is a floating point number.
+					{
+						left_double = ExprTokenToDouble(*stack[stack_count]);
+						right_double = ExprTokenToDouble(*stack[stack_count + 1]);
+						if (right_double == 0.0) // Divide by zero.
+						{
+							this_token.symbol = SYM_STRING;
+							this_token.marker = "";
+						}
+						else
+						{
+							this_token.symbol = SYM_FLOAT;
+							this_token.value_double = qmathFmod(left_double, right_double);
+						}
+					}
+					goto push_this_token; // i.e. any numeric or empty-string result can be considered final.
+
+				case FUNC_ABS:
+					// Unlike TRANS_CMD_ABS, which removes the minus sign from the string if it has one,
+					// this is done in a more traditional way.  It's hard to imagine needing the minus
+					// sign removal method here since a negative hex literal such as -0xFF seems too rare
+					// to worry about.  One additional reason not to remove minus signs from strings is
+					// that it might produce inconsistent results depending on whether the operand is
+					// generic (SYM_OPERAND) and numeric.  In other words, abs() shouldn't treat a
+					// sub-expression differently than a numeric literal.
+					this_token.symbol = stack[stack_count]->symbol;
+					this_token.value_int64 = stack[stack_count]->value_int64; // Copy contents of union, independent of symbol type.
+					if (!ExprTokenToDoubleOrInt(this_token)) // "Cast" token to Int64/Double depending on whether it has a decimal point.
+						goto fail; // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
+					if (this_token.symbol == SYM_INTEGER)
+						this_token.value_int64 = _abs64(this_token.value_int64); // _abs64() was checked for code bloat and as expected it doesn't add any measurable size.
+					else // Must be SYM_FLOAT due to the conversion above.
+						this_token.value_double = qmathFabs(this_token.value_double);
+					goto push_this_token; // i.e. any numeric result can be considered final.
+
+				case FUNC_SIN:
+					this_token.symbol = SYM_FLOAT;
+					this_token.value_double = qmathSin(ExprTokenToDouble(*stack[stack_count]));
+					goto push_this_token; // i.e. any numeric result can be considered final.
+
+				case FUNC_COS:
+					this_token.symbol = SYM_FLOAT;
+					this_token.value_double = qmathCos(ExprTokenToDouble(*stack[stack_count]));
+					goto push_this_token; // i.e. any numeric result can be considered final.
+
+				case FUNC_TAN:
+					this_token.symbol = SYM_FLOAT;
+					this_token.value_double = qmathTan(ExprTokenToDouble(*stack[stack_count]));
+					goto push_this_token; // i.e. any numeric result can be considered final.
+
+				case FUNC_ASIN:
+				case FUNC_ACOS:
+					left_double = ExprTokenToDouble(*stack[stack_count]);
+					if (left_double > 1 || left_double < -1) // ASin and ACos aren't defined for other values.
+					{
+						this_token.symbol = SYM_STRING;
+						this_token.marker = "";
+					}
+					else
+					{
+						this_token.symbol = SYM_FLOAT;
+						this_token.value_double = (func.mType == FUNC_ASIN) ? qmathAsin(left_double) : qmathAcos(left_double);
+					}
+					goto push_this_token; // i.e. any numeric or empty-string result can be considered final.
+
+				case FUNC_ATAN:
+					this_token.symbol = SYM_FLOAT;
+					this_token.value_double = qmathAtan(ExprTokenToDouble(*stack[stack_count]));
+					goto push_this_token; // i.e. any numeric result can be considered final.
+
+				case FUNC_EXP:
+					this_token.symbol = SYM_FLOAT;
+					this_token.value_double = qmathExp(ExprTokenToDouble(*stack[stack_count]));
+					goto push_this_token; // i.e. any numeric result can be considered final.
+
+				case FUNC_SQRT:
+				case FUNC_LOG:
+				case FUNC_LN:
+					left_double = ExprTokenToDouble(*stack[stack_count]);
+					if (left_double < 0) // Result is undefined in these cases, so make blank to indicate.
+					{
+						this_token.symbol = SYM_STRING;
+						this_token.marker = "";
+					}
+					else
+					{
+						this_token.symbol = SYM_FLOAT;
+						switch(func.mType)
+						{
+						case FUNC_SQRT:
+							this_token.value_double = qmathSqrt(left_double);
+							break;
+						case FUNC_LOG:
+							this_token.value_double = qmathLog10(left_double);
+							break;
+						case FUNC_LN:
+							this_token.value_double = qmathLog(left_double);
+							break;
+						}
+					}
+					goto push_this_token; // i.e. any numeric or empty-string result can be considered final.
 
 				default: // Unknown/unhandled function type.
 					result = "";
@@ -12230,15 +12607,30 @@ double_deref:
 				case SYM_BITXOR:   this_token.value_int64 = left_int64 ^ right_int64; break;
 				case SYM_BITSHIFTLEFT:  this_token.value_int64 = left_int64 << right_int64; break;
 				case SYM_BITSHIFTRIGHT: this_token.value_int64 = left_int64 >> right_int64; break;
+				case SYM_FLOORDIVIDE:
+					// Since it's integer division, no need for explicit floor() of the result.
+					// Also, performance is much higher for integer vs. float division, which is part
+					// of the justification for a separate operator.
+					if (right_int64 == 0) // Divide by zero produces blank result (perhaps will produce exception if script's ever support exception handlers).
+					{
+						this_token.marker = "";
+						this_token.symbol = SYM_STRING;
+						goto push_this_token;
+					}
+					// Otherwise:
+					this_token.value_int64 = left_int64 / right_int64;
+					break;
 				case SYM_POWER:
+					// Note: The function pow() in math.h adds about 28 KB of code size (uncompressed)!
+					// Even assuming pow() supports negative bases such as (-2)**2, that's why it's not used.
 					// The following comment is from TRANS_CMD_POW.  For consistency, the same policy is applied here:
 					// Currently, a negative aValue1 isn't supported.
 					// The reason for this is that since fractional exponents are supported (e.g. 0.5, which
 					// results in the square root), there would have to be some extra detection to ensure
-					// that a negative aValue1 is never used with fractional exponent (since the sqrt of
+					// that a negative aValue1 is never used with fractional exponent (since the root of
 					// a negative is undefined).  In addition, qmathPow() doesn't support negatives, returning
 					// an unexpectedly large value or -1.#IND00 instead.  Also note that zero raised to
-					// a negative power is undefined, similar to division-by-zero, and thus treated as a failure.
+					// a negative power is undefined, similar to division-by-zero, and thus a blank value is yielded.
 					if (left_int64 < 0 || (!left_int64 && right_int64 < 0)) // See comments at TRANS_CMD_POW about this.
 					{
 						// Return a consistent result rather than something that varies:
@@ -12285,7 +12677,8 @@ double_deref:
 				case SYM_MINUS:	   this_token.value_double = left_double - right_double; break;
 				case SYM_TIMES:    this_token.value_double = left_double * right_double; break;
 				case SYM_DIVIDE:
-					if (right_double == 0.0)
+				case SYM_FLOORDIVIDE:
+					if (right_double == 0.0) // Divide by zero produces blank result (perhaps will produce exception if script's ever support exception handlers).
 					{
 						this_token.marker = "";
 						this_token.symbol = SYM_STRING;
@@ -12293,6 +12686,8 @@ double_deref:
 					}
 					// Otherwise:
 					this_token.value_double = left_double / right_double;
+					if (this_token.symbol == SYM_FLOORDIVIDE) // Like Python, the result is floor()'d, moving to the nearest integer to the left on the number line.
+						this_token.value_double = qmathFloor(this_token.value_double); // Result is always a double when at least one of the inputs was a double.
 					break;
 				case SYM_EQUALCASE: // Same behavior as SYM_EQUAL for numeric operands.
 				case SYM_EQUAL:    this_token.value_double = left_double == right_double; break;
@@ -12544,6 +12939,118 @@ end:
 
 
 
+__int64 Line::ExprTokenToInt64(ExprTokenType &aToken)
+// Converts the contents of aToken to an int.
+{
+	// Some callers, such as those that cast our return value to UINT, rely on the use of 64-bit to preserve
+	// unsigned values and also wrap any signed values into the unsigned domain.
+	switch (aToken.symbol)
+	{
+		case SYM_INTEGER: return (int)aToken.value_int64;
+		case SYM_FLOAT: return (int)aToken.value_double;
+		case SYM_VAR: return (int)ATOI(aToken.var->Contents());
+		default: // SYM_STRING or SYM_OPERAND
+			return ATOI(aToken.marker);
+	}
+}
+
+
+
+double Line::ExprTokenToDouble(ExprTokenType &aToken)
+// Converts the contents of aToken to a double.
+{
+	switch (aToken.symbol)
+	{
+		case SYM_INTEGER: return (double)aToken.value_int64;
+		case SYM_FLOAT: return aToken.value_double;
+		case SYM_VAR: return ATOF(aToken.var->Contents());
+		default: // SYM_STRING or SYM_OPERAND
+			return ATOF(aToken.marker);
+	}
+}
+
+
+
+char *Line::ExprTokenToString(ExprTokenType &aToken, char *aBuf)
+// Returns NULL on failure.  Otherwise, it returns either aBuf (if aBuf was needed for the conversion)
+// or the token's own string.  Caller has ensured that aBuf is at least MAX_FORMATTED_NUMBER_LENGTH+1 in size.
+{
+	switch (aToken.symbol)
+	{
+	case SYM_STRING:
+	case SYM_OPERAND:
+		return aToken.marker;
+	case SYM_VAR:
+		return aToken.var->Contents();
+	case SYM_INTEGER:
+		return ITOA64(aToken.value_int64, aBuf);
+	case SYM_FLOAT:
+		snprintf(aBuf, MAX_FORMATTED_NUMBER_LENGTH + 1, g.FormatFloat, aToken.value_double);
+		return aBuf;
+	default: // Not an operand.
+		return NULL;
+	}
+}
+
+
+
+ResultType Line::ExprTokenToVar(ExprTokenType &aToken, Var &aOutputVar)
+// Writes aToken's value into aOutputVar.
+// Returns FAIL if aToken isn't an operand or the assignment failed.  Returns OK on success.
+// Currently only supports SYM_VAR if the variable is a normal variable, not a built-in or env. var.
+{
+	switch (aToken.symbol)
+	{
+	case SYM_STRING:
+	case SYM_OPERAND:
+		return aOutputVar.Assign(aToken.marker);
+	case SYM_VAR:
+		return aOutputVar.Assign(aToken.var->Contents());
+	case SYM_INTEGER:
+		return aOutputVar.Assign(aToken.value_int64);
+	case SYM_FLOAT:
+		return aOutputVar.Assign(aToken.value_double);
+	default: // Not an operand.
+		return FAIL;
+	}
+}
+
+
+
+ResultType Line::ExprTokenToDoubleOrInt(ExprTokenType &aToken)
+// Converts aToken's contents to a numeric value, either int or float (whichever is more appropriate).
+{
+	char *str;
+	switch (aToken.symbol)
+	{
+		case SYM_INTEGER:
+		case SYM_FLOAT:
+			return OK;
+		case SYM_VAR:
+			str = aToken.var->Contents();
+			break;
+		default: // SYM_STRING or SYM_OPERAND
+			str = aToken.marker;
+	}
+	// Since above didn't return, interpret "str" as a number.
+	switch (IsPureNumeric(str, true, false, true))
+	{
+	case PURE_INTEGER:
+		aToken.symbol = SYM_INTEGER;
+		aToken.value_int64 = ATOI64(str);
+		break;
+	case PURE_FLOAT:
+		aToken.symbol = SYM_FLOAT;
+		aToken.value_double = ATOF(str);
+		break;
+	default: // Not a pure number.
+		return FAIL;
+	}
+	return OK; // Since above didn't return, indicate success.
+}
+
+
+
 ResultType Line::Deref(Var *aOutputVar, char *aBuf)
 // Similar to ExpandArg(), except it parses and expands all variable references contained in aBuf.
 {
@@ -12630,8 +13137,10 @@ ResultType Line::Deref(Var *aOutputVar, char *aBuf)
 			{
 				strlcpy(var_name, cp + 1, var_name_length + 1);  // +1 to convert var_name_length to size.
 				// The use of ALWAYS_PREFER_LOCAL below improves flexibility of assume-global functions
-				// by allowing this command to resolve to a local first if such a local exists:
-				if (   !(var = g_script.FindVar(var_name, var_name_length, NULL, ALWAYS_PREFER_LOCAL))   )
+				// by allowing this command to resolve to a local first if such a local exists.
+				// Fixed for v1.0.34: Use FindOrAddVar() vs. FindVar() so that environment or built-in
+				// variables that aren't directly referenced elsewhere in the script will still work:
+				if (   !(var = g_script.FindOrAddVar(var_name, var_name_length, ALWAYS_PREFER_LOCAL))   )
 					// Variable doesn't exist, but since it might be an environment variable never referenced
 					// directly elsewhere in the script, do special handling:
 					var = &temp_var;  // Relies on the fact that var_temp.mName *is* the var_name pointer.

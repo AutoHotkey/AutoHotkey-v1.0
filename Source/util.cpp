@@ -254,9 +254,12 @@ __int64 FileTimeSecondsUntil(FILETIME *pftStart, FILETIME *pftEnd)
 
 SymbolType IsPureNumeric(char *aBuf, bool aAllowNegative, bool aAllowAllWhitespace
 	, bool aAllowFloat, bool aAllowImpure)
-// Making this non-inline reduces the size of the compressed EXE by only 2K.  Since this function
-// is called so often, it seems preferable to keep it inline for performance.
 // String can contain whitespace.
+// If aBuf doesn't contain something purely numeric, PURE_NOT_NUMERIC is returned.  The same happens if
+// aBuf contains a float but aAllowFloat is false.  Otherwise, PURE_INTEGER or PURE_FLOAT is returned.
+// If aAllowAllWhitespace==true and the string is blank or all whitespace, PURE_INTEGER is returned.
+// Obsolete comment: Making this non-inline reduces the size of the compressed EXE by only 2K.  Since this
+// function is called so often, it seems preferable to keep it inline for performance.
 {
 	aBuf = omit_leading_whitespace(aBuf); // i.e. caller doesn't have to have ltrimmed, only rtrimmed.
 	if (!*aBuf) // The string is empty or consists entirely of whitespace.
@@ -347,6 +350,11 @@ int snprintf(char *aBuf, int aBufSize, const char *aFormat, ...)
 	// Must use _vsnprintf() not _snprintf() because of the way va_list is handled:
 	int result = _vsnprintf(aBuf, aBufSize, aFormat, ap); // "returns the number of characters written, not including the terminating null character, or a negative value if an output error occurs"
 	aBuf[aBufSize - 1] = '\0'; // Confirmed through testing: Must terminate at this exact spot because _vsnprintf() doesn't always do it.
+	// Fix for v1.0.34: If result==aBufSize, must reduce result by 1 to return an accurate result to the
+	// caller.  In other words, if the line above turned the last character into a terminator, one less character
+	// is now present in aBuf.
+	if (result == aBufSize)
+		--result;
 	return result >= 0 ? result : aBufSize - 1; // Never return a negative value.  See comment under function definition, above.
 }
 
@@ -879,8 +887,10 @@ char *TranslateLFtoCRLF(char *aString)
 
 
 
-bool DoesFilePatternExist(char *aFilePattern)
-// Adapted from the AutoIt3 source:
+bool DoesFilePatternExist(char *aFilePattern, DWORD *aFileAttr)
+// Returns true if the file/folder exists or false otherwise.
+// If non-NULL, aFileAttr's DWORD is set to the attributes of the file/folder if a match is found.
+// If there is no match, its contents are undefined.
 {
 	if (!aFilePattern || !*aFilePattern) return false;
 	if (StrChrAny(aFilePattern, "?*"))
@@ -890,12 +900,16 @@ bool DoesFilePatternExist(char *aFilePattern)
 		if (hFile == INVALID_HANDLE_VALUE)
 			return false;
 		FindClose(hFile);
+		if (aFileAttr)
+			*aFileAttr = wfd.dwFileAttributes;
 		return true;
 	}
     else
 	{
-		DWORD dwTemp = GetFileAttributes(aFilePattern);
-		return dwTemp != 0xFFFFFFFF;
+		DWORD attr = GetFileAttributes(aFilePattern);
+		if (aFileAttr)
+			*aFileAttr = attr;
+		return attr != 0xFFFFFFFF;
 	}
 }
 
@@ -1648,7 +1662,7 @@ bool IsStringInList(char *aStr, char *aList, bool aFindExactMatch, bool aCaseSen
 		{
 			if (*cp == ',')
 			{
-				if (*(cp + 1) == ',') // Make this pair into a single literal comma.
+				if (cp[1] == ',') // Make this pair into a single literal comma.
 				{
 					memmove(cp, cp + 1, strlen(cp + 1) + 1);  // +1 to include the zero terminator.
 					++next_field;  // An extra increment since the source string still has both commas of the pair.

@@ -320,6 +320,16 @@ void Hotkey::AllActivate()
 		sWhichHookActive = ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways
 			, (!g_ForceLaunch && !g_script.mIsRestart) || sHotkeysAreLocked);
 
+	// Fix for v1.0.34: If the auto-execute section uses the Hotkey command but returns before doing
+	// something that calls MsgSleep, the main timer won't have been turned on.  For example:
+	// Hotkey, Joy1, MySubroutine
+	// ;Sleep 1  ; This was a workaround before this fix.
+	// return
+	// By putting the following check here rather than in AutoHotkey.cpp, that problem is resolved.
+	// In addition...
+	if (sJoyHotkeyCount)  // Joystick hotkeys require the timer to be always on.
+		SET_MAIN_TIMER
+
 	// Signal that no new hotkeys should be defined after this point (i.e. that the definition
 	// stage is complete).  Do this only after the the above so that the above can use the old value.
 	// UPDATE (for dynamic hotkeys): This now indicates that all static hotkeys have been defined:
@@ -547,10 +557,16 @@ void Hotkey::TriggerJoyHotkeys(int aJoystickID, DWORD aButtonsNewlyDown)
 {
 	for (int i = 0; i < sHotkeyCount; ++i)
 	{
-		if (shk[i]->mType != HK_JOYSTICK || shk[i]->mVK != aJoystickID)
+		Hotkey &hk = *shk[i]; // For performance and convenience.
+		// Fix for v1.0.34: If hotkey isn't enabled, or hotkeys are suspended and this one isn't
+		// exempt, don't fire it.  These checks are necessary only for joystick hotkeys because 
+		// normal hotkeys are completely deactivated when turned off or suspended, but the joystick
+		// is still polled even when some joystick hotkeys are disabled.
+		if (hk.mType != HK_JOYSTICK || hk.mVK != aJoystickID || !hk.mEnabled
+			|| (g_IsSuspended && !hk.IsExemptFromSuspend()))
 			continue;
-		// Determine if this hotkey's button is among those newly pressed:
-		if (   aButtonsNewlyDown & ((DWORD)0x01 << (shk[i]->mSC - JOYCTRL_1))   )
+		// Determine if this hotkey's button is among those newly pressed.
+		if (   aButtonsNewlyDown & ((DWORD)0x01 << (hk.mSC - JOYCTRL_1))   )
 			// Post it to the thread because the message pump itself (not the WindowProc) will handle it:
 			PostMessage(NULL, WM_HOTKEY, (WPARAM)i, 0);
 	}
@@ -658,7 +674,7 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, Label *aJumpToLabel, HookActionTyp
 		switch(toupper(*cp))
 		{
 		case 'B':
-			max_threads_buffer = (*(cp + 1) != '0');  // i.e. if the char is NULL or something other than '0'.
+			max_threads_buffer = (cp[1] != '0');  // i.e. if the char is NULL or something other than '0'.
 			break;
 		// For options such as P & T: Use atoi() vs. ATOI() to avoid interpreting something like 0x01B
 		// as hex when in fact the B was meant to be an option letter:

@@ -207,7 +207,7 @@ inline size_t rtrim(char *aStr, size_t aLength = -1)
 	{
 		if (!IS_SPACE_OR_TAB(*cp))
 		{
-			*(cp + 1) = '\0';
+			cp[1] = '\0';
 			return aLength;
 		}
 		// Otherwise, it is a space or tab...
@@ -236,7 +236,7 @@ inline size_t rtrim_with_nbsp(char *aStr, size_t aLength = -1)
 	{
 		if (!IS_SPACE_OR_TAB_OR_NBSP(*cp))
 		{
-			*(cp + 1) = '\0';
+			cp[1] = '\0';
 			return aLength;
 		}
 		if (cp == aStr)
@@ -460,7 +460,7 @@ char *StrReplaceAll(char *aBuf, char *aOld, char *aNew, bool aAlwaysUseSlow, boo
 	, DWORD aReplacementsNeeded = UINT_MAX); // Caller can provide this value to avoid having to calculate it again.
 int StrReplaceAllSafe(char *aBuf, size_t aBufSize, char *aOld, char *aNew, bool aCaseSensitive = true);
 char *TranslateLFtoCRLF(char *aString);
-bool DoesFilePatternExist(char *aFilePattern);
+bool DoesFilePatternExist(char *aFilePattern, DWORD *aFileAttr = NULL);
 #ifdef _DEBUG
 	ResultType FileAppend(char *aFilespec, char *aLine, bool aAppendNewline = true);
 #endif

@@ -404,6 +404,21 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 				control.attrib &= ~GUI_CONTROL_ATTRIB_ALTBEHAVIOR;  // Flag it as a bitmap so that DeleteObject vs. DestroyIcon will be called for it.
 			else // Cursor or Icon, which are functionally identical.
 				control.attrib |= GUI_CONTROL_ATTRIB_ALTBEHAVIOR;
+			// Fix for v1.0.34: If this control belongs to a tab control and is visible (i.e. its page
+			// in the tab control is the current page), must redraw the tab control to get the picture/icon
+			// to update correctly:
+			if ((tab_control = gui.FindTabControl(control.tab_control_index)) && IsWindowVisible(control.hwnd))
+			{
+				GetWindowRect(control.hwnd, &rect); // Limit it to only that part of the client area that is receiving the rect.
+				MapWindowPoints(NULL, gui.mHwnd, (LPPOINT)&rect, 2); // Convert rect to client coordinates (not the same as GetClientRect()).
+				InvalidateRect(gui.mHwnd, &rect, TRUE); // Seems safer to use TRUE, not knowing all possible overlaps, etc.
+				//Overkill: InvalidateRect(gui.mHwnd, NULL, FALSE); // Erase doesn't seem to be necessary.
+				// None of the following is enough:
+				//Changes focused control, so no good: gui.ControlUpdateCurrentTab(*tab_control, false);
+				//RedrawWindow(tab_control->hwnd, NULL, NULL, 0 ..or.. RDW_INVALIDATE);
+				//InvalidateRect(control.hwnd, NULL, TRUE);
+				//InvalidateRect(tab_control->hwnd, NULL, TRUE);
+			}
 			return OK;
 		}
 
@@ -4417,7 +4432,7 @@ ResultType GuiType::Close()
 
 
 
-ResultType GuiType::Escape() // Similar to close, except typically called when the user presses ESCAPE.
+ResultType GuiType::Escape(bool aDoMsgSleep) // Similar to close, except typically called when the user presses ESCAPE.
 // If there is a GuiEscape label defined in for this event, launch it as a new thread.
 // In this case, don't close or hide the window.  It's up to the subroutine to do that
 // if it wants to.
@@ -4427,7 +4442,8 @@ ResultType GuiType::Escape() // Similar to close, except typically called when t
 		return OK;
 	// See lengthy comments in Event() about this section:
 	POST_AHK_GUI_ACTION(mHwnd, AHK_GUI_ESCAPE, GUI_EVENT_NORMAL);
-	MsgSleep(-1);
+	if (aDoMsgSleep)
+		MsgSleep(-1);
 	return OK;
 }
 
@@ -5164,7 +5180,7 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 		// will have altered the message we receive to be the ID of the actual default button.
 		if (wParam_loword == IDCANCEL) // The user pressed ESCAPE.
 		{
-			pgui->Escape();
+			pgui->Escape(true);
 			return 0;
 		}
 		GuiIndexType control_index = GUI_ID_TO_INDEX(wParam_loword); // Convert from ID to array index.

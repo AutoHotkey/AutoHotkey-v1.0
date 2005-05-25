@@ -413,7 +413,25 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 					//else fall through to the below.
 				}
 				//else fall through to the below.
+			} // Interception of keystrokes for navigation in tab control.
+
+			// v1.0.34: Fix for the fact that a multiline edit control will send WM_CLOSE to its parent
+			// when user presses ESC while it has focus.  The following check is similar to the block's above.
+			// The alternative to this approach would have been to override the edit control's WindowProc,
+			// but the following seemed to be less code. Although this fix is only necessary for multiline
+			// edits, its done for all edits since it doesn't do any harm.  In addition, there is no need to
+			// check what modifiers are down because we never receive the keystroke for Ctrl-Esc and Alt-Esc
+			// (the OS handles those beforehand) and both Win-Esc and Shift-Esc are identical to a naked Esc
+			// inside an edit.  The following check relies heavily on short-circuit eval. order.
+			if (msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE
+				&& (focused_control = GetFocus()) && (focused_parent = GetNonChildParent(focused_control))
+				&& (pgui = GuiType::FindGui(focused_parent)) && (pcontrol = pgui->FindControl(focused_control))
+				&& pcontrol->type == GUI_CONTROL_EDIT)
+			{
+				pgui->Escape(false); // "false" because no need to do MsgSleep since we'll empty the msg queue here prior to returning to our caller.
+				continue; // Omit this keystroke from any further processing.
 			}
+
 			for (i = 0, object_count = 0, msg_was_handled = false; i < MAX_GUI_WINDOWS; ++i)
 			{
 				// Note: indications are that IsDialogMessage() should not be called with NULL as

@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.33.01"
+#define NAME_VERSION "1.0.34.00"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -136,7 +136,7 @@ enum SymbolType // For use with ExpandExpression() and IsPureNumeric().
 	, SYM_BITAND
 	, SYM_BITSHIFTLEFT, SYM_BITSHIFTRIGHT // << >>
 	, SYM_PLUS, SYM_MINUS
-	, SYM_TIMES, SYM_DIVIDE
+	, SYM_TIMES, SYM_DIVIDE, SYM_FLOORDIVIDE
 	, SYM_NEGATIVE, SYM_HIGHNOT, SYM_BITNOT // Unary minus (unary plus is handled without needing a value here), !, and ~.
 	, SYM_POWER    // See below for why this takes precedence over negative.
 	, SYM_FUNC     // A call to a function.

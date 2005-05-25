@@ -215,18 +215,18 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 		case 'A':  // Non-Always-on-top.  Synonymous with A0 in early versions.
 			// Decided against this enforcement.  In the enhancement mentioned below is ever done (unlikely),
 			// it seems that A1 can turn always-on-top on and A0 or A by itself can turn it off:
-			//if (*(cp + 1) == '0') // The zero is required to allow for future enhancement: modify attrib. of existing window.
+			//if (cp[1] == '0') // The zero is required to allow for future enhancement: modify attrib. of existing window.
 			exstyle &= ~WS_EX_TOPMOST;
 			break;
 		case 'B': // Borderless and/or Titleless
 			style &= ~WS_CAPTION;
-			if (*(cp + 1) == '1')
+			if (cp[1] == '1')
 				style |= WS_BORDER;
-			else if (*(cp + 1) == '2')
+			else if (cp[1] == '2')
 				style |= WS_DLGFRAME;
 			break;
 		case 'C': // Colors
-			if (!*(cp + 1)) // Avoids out-of-bounds when the loop's own ++cp is done.
+			if (!cp[1]) // Avoids out-of-bounds when the loop's own ++cp is done.
 				break;
 			++cp; // Always increment to omit the next char from consideration by the next loop iteration.
 			switch(toupper(*cp))
@@ -269,10 +269,10 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 			}
 			default:
 				centered_sub = (*cp != '0');
-				centered_main = (*(cp + 1) != '0');
+				centered_main = (cp[1] != '0');
 			}
 		case 'F':
-			if (!*(cp + 1)) // Avoids out-of-bounds when the loop's own ++cp is done.
+			if (!cp[1]) // Avoids out-of-bounds when the loop's own ++cp is done.
 				break;
 			++cp; // Always increment to omit the next char from consideration by the next loop iteration.
 			switch(toupper(*cp))
@@ -289,9 +289,9 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 			break;
 		case 'M': // Movable and (optionally) resizable.
 			style &= ~WS_DISABLED;
-			if (*(cp + 1) == '1')
+			if (cp[1] == '1')
 				style |= WS_SIZEBOX;
-			if (*(cp + 1) == '2')
+			if (cp[1] == '2')
 				style |= WS_SIZEBOX|WS_MINIMIZEBOX|WS_MAXIMIZEBOX|WS_SYSMENU;
 			break;
 		case 'P': // Starting position of progress bar [v1.0.25]
@@ -299,13 +299,13 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 			bar_pos_has_been_set = true;
 			break;
 		case 'R': // Range of progress bar [v1.0.25]
-			if (!*(cp + 1)) // Ignore it because we don't want cp to ever point to the NULL terminator due to the loop's increment.
+			if (!cp[1]) // Ignore it because we don't want cp to ever point to the NULL terminator due to the loop's increment.
 				break;
 			range_min = ATOI(++cp); // Increment cp to point it to range_min.
 			if (cp2 = strchr(cp + 1, '-'))  // +1 to omit the min's minus sign, if it has one.
 			{
 				cp = cp2;
-				if (!*(cp + 1)) // Ignore it because we don't want cp to ever point to the NULL terminator due to the loop's increment.
+				if (!cp[1]) // Ignore it because we don't want cp to ever point to the NULL terminator due to the loop's increment.
 					break;
 				range_max = ATOI(++cp); // Increment cp to point it to range_max, which can be negative as in this example: R-100--50
 			}
@@ -317,7 +317,7 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 		// Use atoi() vs. ATOI() to avoid interpreting something like 0x01B as hex when in fact
 		// the B was meant to be an option letter:
 		case 'W':
-			if (!*(cp + 1)) // Avoids out-of-bounds when the loop's own ++cp is done.
+			if (!cp[1]) // Avoids out-of-bounds when the loop's own ++cp is done.
 				break;
 			++cp; // Always increment to omit the next char from consideration by the next loop iteration.
 			switch(toupper(*cp))
@@ -350,7 +350,7 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 			ypos = atoi(cp + 1);
 			break;
 		case 'Z':
-			if (!*(cp + 1)) // Avoids out-of-bounds when the loop's own ++cp is done.
+			if (!cp[1]) // Avoids out-of-bounds when the loop's own ++cp is done.
 				break;
 			++cp; // Always increment to omit the next char from consideration by the next loop iteration.
 			switch(toupper(*cp))
@@ -869,7 +869,7 @@ ResultType Line::TrayTip(char *aTitle, char *aText, char *aTimeout, char *aOptio
 	strlcpy(nic.szInfoTitle, aTitle, sizeof(nic.szInfoTitle)); // Empty title omits the title line entirely.
 	strlcpy(nic.szInfo, aText, sizeof(nic.szInfo));	// Empty text removes the balloon.
 	Shell_NotifyIcon(NIM_MODIFY, &nic);
-	return OK;
+	return OK; // i.e. never a critical error if it fails.
 }
 
 
@@ -3008,6 +3008,7 @@ DYNARESULT DynaCall(int aFlags, void *aFunction, DYNAPARM aParam[], int aParamCo
 		*our_stack = (DWORD)aRet;  // SS:[ESP] = pMem
 	}
 
+	// Call the function.
 	__try // Checked code bloat of __try{} and it doesn't appear to add any size.
 	{
 		_asm
@@ -3020,7 +3021,7 @@ DYNARESULT DynaCall(int aFlags, void *aFunction, DYNAPARM aParam[], int aParamCo
 	}
 	__except(EXCEPTION_EXECUTE_HANDLER)
 	{
-		aException = GetExceptionCode();
+		aException = GetExceptionCode(); // aException is an output parameter for our caller.
 	}
 
 	// Even if an exception occurred (perhaps due to the callee having been passed a bad pointer),
@@ -3030,7 +3031,7 @@ DYNARESULT DynaCall(int aFlags, void *aFunction, DYNAPARM aParam[], int aParamCo
 		mov esp_end, esp        // See below.
 		// For DC_CALL_STD functions (since they pop their own arguments off the stack):
 		// Since the stack grows downward in memory, if the value of esp after the call is less than
-		// that before the call's args were pushed onto the stack, there are still items leftover on
+		// that before the call's args were pushed onto the stack, there are still items left over on
 		// the stack, meaning that too many args (or an arg too large) were passed to the callee.
 		// Conversely, if esp is now greater that it should be, too many args were popped off the
 		// stack by the callee, meaning that too few args were provided to it.  In either case,
@@ -3083,9 +3084,9 @@ DYNARESULT DynaCall(int aFlags, void *aFunction, DYNAPARM aParam[], int aParamCo
 	}
 	// Too many or too few args takes precedence over reporting the exception because it's more informative.
 	// In other words, any exception was likely caused by the fact that there were too many or too few.
-	else if (aException) // This ErrorLevel takes precedence over the too many/few error code, since it is more serious.
+	else if (aException)
 	{
-		// It's a little easier to recongize the common ones when they're in hex format.
+		// It's a little easier to recongize the common error codes when they're in hex format.
 		buf[0] = '0';
 		buf[1] = 'x';
 		_ultoa(aException, buf + 2, 16);
@@ -3106,6 +3107,18 @@ void ConvertDllArgType(char *aBuf[], DYNAPARM &aDynaParam)
 	char buf[32], *type_string;
 	int i;
 
+	// Up to two iterations are done to cover the following cases:
+	// No second type because there was no SYM_VAR to get it from:
+	//	blank means int
+	//	invalid is err
+	// (for the below, note that 2nd can't be blank because var name can't be blank, and the first case above would have caught it if 2nd is NULL)
+	// 1Blank, 2Invalid: blank (but ensure is_unsigned and passed_by_address get reset)
+	// 1Blank, 2Valid: 2
+	// 1Valid, 2Invalid: 1 (second iteration would never have run, so no danger of it having erroneously reset is_unsigned/passed_by_address)
+	// 1Valid, 2Valid: 1 (same comment)
+	// 1Invalid, 2Invalid: invalid
+	// 1Invalid, 2Valid: 2
+
 	for (i = 0, type_string = aBuf[0]; i < 2 && type_string; type_string = aBuf[++i])
 	{
 		if (toupper(*type_string) == 'U') // Unsigned
@@ -3118,11 +3131,22 @@ void ConvertDllArgType(char *aBuf[], DYNAPARM &aDynaParam)
 
 		strlcpy(buf, type_string, sizeof(buf)); // Make a modifiable copy for easier parsing below.
 
-		char *cp = StrChrAny(buf, "\t *"); // Tab, space, or asterisk.
+		// v1.0.30.02: The addition of 'P' allows the quotes to be omitted around a pointer type.
+		// However, the current detection below relies upon the fact that not of the types currently
+		// contain the letter P anywhere in them, so it would have to be altered if that ever changes.
+		char *cp = StrChrAny(buf, "*pP"); // Asterisk or the letter P.
 		if (cp)
 		{
-			aDynaParam.passed_by_address = (cp[0] == '*' || cp[1] == '*'); // Allow optional space in front of asterisk.
-			*cp = '\0'; // Remove trailing options so that stricmp() can be used below.
+			aDynaParam.passed_by_address = true;
+			// Remove trailing options so that stricmp() can be used below.
+			// Allow optional space in front of asterisk (seems okay even for 'P').
+			if (cp > buf && IS_SPACE_OR_TAB(cp[-1]))
+			{
+				cp = omit_trailing_whitespace(buf, cp - 1);
+				cp[1] = '\0'; // Terminate at the leftmost whitespace to remove all whitespace and the suffix.
+			}
+			else
+				*cp = '\0'; // Terminate at the suffix to remove it.
 		}
 		else
 			aDynaParam.passed_by_address = false;
@@ -3184,7 +3208,7 @@ void Line::DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 	}
 
 	// Determine the type of return value.
-	DYNAPARM return_attrib = {0}; // Will store the type and other attributes of the function's return value.
+	DYNAPARM return_attrib = {0}; // Will hold the type and other attributes of the function's return value.
 	int dll_call_mode = DC_CALL_STD; // Set default.  Can be overridden to DC_CALL_CDECL and flags can be OR'd into it.
 	if (aParamCount % 2) // Odd number of parameters indicates the return type has been omitted, so assume BOOL/INT.
 		return_attrib.type = DLL_ARG_INT;
@@ -3214,6 +3238,10 @@ void Line::DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 			dll_call_mode = DC_CALL_CDECL;
 			return_type_string[0] = omit_leading_whitespace(return_type_string[0] + 5);
 		}
+		// This next part is a little iffy because if a legitimate return type is contained in a variable
+		// that happens to be named Cdecl, Cdecl will be put into effect regardless of what's in the variable.
+		// But the convenience of being able to omit the quotes around Cdecl seems to outweight the extreme
+		// rarity of such a thing happening.
 		else if (return_type_string[1] && !strnicmp(return_type_string[1], "CDecl", 5)) // Alternate calling convention.
 		{
 			dll_call_mode = DC_CALL_CDECL;
@@ -3236,11 +3264,11 @@ void Line::DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 	}
 
 	// Using stack memory, create an array of dll args large enough to hold the actual number of args present.
-	// _alloca() has been checked for code-bloat and it doesn't appear to be an issue.
 	int arg_count = aParamCount/2; // Might provide one extra due to first/last params, which is inconsequential.
 	DYNAPARM *dyna_param;
 	if (arg_count)
 	{
+		// _alloca() has been checked for code-bloat and it doesn't appear to be an issue.
 		if (   !(dyna_param = (DYNAPARM *)_alloca(arg_count * sizeof(DYNAPARM)))   ) // Realistically never happens, so indicate general error.
 		{
 			g_ErrorLevel->Assign("-2"); // Stage 2 error.
@@ -3272,8 +3300,8 @@ void Line::DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 			arg_type_string[1] = aParam[i]->var->mName;
 			// v1.0.33.01: arg_type_string2 improves convenience by falling back to the variable's name
 			// if the contents are not appropriate.  In other words, both Int and "Int" are treated the same.
-			// It's done this way to allow the variable named "Int" to actually contain some other type
-			// name such as "Str".
+			// It's done this way to allow the variable named "Int" to actually contain some other legitimate
+			// type-name such as "Str".
 		}
 		else
 		{
@@ -3290,8 +3318,7 @@ void Line::DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 		else
 			arg_as_string = (this_param.symbol == SYM_VAR) ? this_param.var->Contents() : this_param.marker;
 
-		// Based on the arg type, force the arg's contents to fit into a 32-bit value for later pushing
-		// onto the call stack as part of the call to the DLL function.
+		// Store the each arg into a dyna_param struct, using its arg type to determine how.
 		ConvertDllArgType(arg_type_string, this_dyna_param);
 		switch (this_dyna_param.type)
 		{
@@ -3373,18 +3400,18 @@ void Line::DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 	HMODULE hmodule, hmodule_to_free = NULL;
 	char param1_buf[MAX_PATH*2], *function_name, *dll_name; // Uses MAX_PATH*2 to hold worst-case PATH plus function name.
 
+	// Define the standard libraries here. If they reside in %SYSTEMROOT%\system32 it is not
+	// necessary to specify the full path (it wouldn't make sense anyway).
+	static HMODULE std_module[] = {GetModuleHandle("user32.dll"), GetModuleHandle("kernel32.dll")
+		, GetModuleHandle("comctl32.dll")}; // user32 is listed first for performance.
+	static int std_module_count = sizeof(std_module) / sizeof(HMODULE);
+
 	// Make a modifiable copy of param1 so that the DLL name and function name can be parsed out easily:
 	strlcpy(param1_buf, aParam[0]->symbol == SYM_VAR ? aParam[0]->var->Contents() : aParam[0]->marker, sizeof(param1_buf) - 1); // -1 to reserve space for the "A" suffix later below.
 	if (   !(function_name = strrchr(param1_buf, '\\'))   ) // No DLL name specified, so a search among standard defaults will be done.
 	{
 		dll_name = NULL;
 		function_name = param1_buf;
-
-		// Define the standard libraries here. If they reside in %SYSTEMROOT%\system32 it is not
-		// necessary to specify the full path (it wouldn't make sense anyway).
-		static HMODULE std_module[] = {GetModuleHandle("user32.dll"), GetModuleHandle("kernel32.dll")
-			, GetModuleHandle("comctl32.dll")}; // user32 is listed first for performance.
-		static int std_module_count = sizeof(std_module) / sizeof(HMODULE);
 
 		// Since no DLL was specified, search for the specified function among the standard modules.
 		for (i = 0; i < std_module_count; ++i)
@@ -3396,26 +3423,38 @@ void Line::DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 			// but only here with the standard libraries since the risk of ambiguity (calling the wrong
 			// function) seems unacceptably high in a custom DLL.  For example, a custom DLL might have
 			// function called "AA" but not one called "A".
-			strcat(function_name, "A"); // 1 slot was already reserved above for the 'A'.
+			strcat(function_name, "A"); // 1 byte of memory was already reserved above for the 'A'.
 			for (i = 0; i < std_module_count; ++i)
 				if (   std_module[i] && (function = (void *)GetProcAddress(std_module[i], function_name))   )
 					break;
 		}
 	}
-	else
+	else // DLL file name is explicitly present.
 	{
 		dll_name = param1_buf;
 		*function_name = '\0';  // Terminate dll_name to split it off from function_name.
 		++function_name; // Set it to the character after the last backslash.
 
-		// Get module handle. This will work when DLL is already loaded.  If DLL isn't loaded then load it.
+		// Get module handle. This will work when DLL is already loaded and might improve performance if
+		// LoadLibrary is a high-overhead call even when the library already being loaded.  If
+		// GetModuleHandle() fails, fall back to LoadLibrary().
 		if (   !(hmodule = GetModuleHandle(dll_name))    )
 			if (   !(hmodule = hmodule_to_free = LoadLibrary(dll_name))   )
 			{
 				g_ErrorLevel->Assign("-3"); // Stage 3 error: DLL couldn't be loaded.
 				return;
 			}
-		function = (void *)GetProcAddress(hmodule, function_name);
+		if (   !(function = (void *)GetProcAddress(hmodule, function_name))   )
+		{
+			// v1.0.34: If it's one of the standard libraries, try the "A" suffix.
+			for (i = 0; i < std_module_count; ++i)
+				if (hmodule == std_module[i]) // Match found.
+				{
+					strcat(function_name, "A"); // 1 byte of memory was already reserved above for the 'A'.
+					function = (void *)GetProcAddress(hmodule, function_name);
+					break;
+				}
+		}
 	}
 
 	if (!function)
@@ -3427,8 +3466,8 @@ void Line::DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 	////////////////////////
 	// Call the DLL function
 	////////////////////////
-	DWORD exception_occurred;  // Must not be named "exception_code" to avoid interferences with MSVC macros.
-	DYNARESULT return_value; // Doing assignment as separate step avoids compiler warning about "goto end" skipping it.
+	DWORD exception_occurred; // Must not be named "exception_code" to avoid interfering with MSVC macros.
+	DYNARESULT return_value;  // Doing assignment as separate step avoids compiler warning about "goto end" skipping it.
 	return_value = DynaCall(dll_call_mode, function, dyna_param, arg_count, exception_occurred, NULL, 0);
 	// The above has also set g_ErrorLevel appropriately.
 
@@ -3437,14 +3476,15 @@ void Line::DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 		// If the called function generated an exception, I think it's impossible for the return value
 		// to be valid/meaningful since it the function never returned properly.  Confirmation of this
 		// would be good, but in the meantime it seems best to make the return value an empty string as
-		// an indicator (in addition to ErrorLevel) that the call failed.
+		// an indicator that the call failed (in addition to ErrorLevel).
 		aResultToken.symbol = SYM_STRING;
 		aResultToken.marker = "";
 		// But continue on to write out any output parameters because the called function might have
 		// had a chance to update them before aborting.
 	}
-	else
+	else // The call was successful.  Interpret and store the return value.
 	{
+		// If the return value is passed by address, dereference it here.
 		if (return_attrib.passed_by_address)
 		{
 			return_attrib.passed_by_address = false; // Because the address is about to be dereferenced/resolved.
@@ -3469,14 +3509,13 @@ void Line::DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 			}
 		}
 
-		// Otherwise, the call was successful.  Interpret and store the return value.
 		switch(return_attrib.type)
 		{
 		case DLL_ARG_STR:
 			// The contents of the string returned from the function must not reside in our stack memory since
 			// that will vanish when we return to our caller.  As long as every string that went into the
 			// function isn't on our stack (which is the case), there should be no way for what comes out to be
-			// on it either.
+			// on the stack either.
 			aResultToken.symbol = SYM_STRING;
 			aResultToken.marker = (char *)(return_value.Pointer ? return_value.Pointer : "");
 			// Above: Fix for v1.0.33.01: Don't allow marker to be set to NULL, which prevents crash
@@ -3525,7 +3564,7 @@ void Line::DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 			aResultToken.symbol = SYM_STRING;
 			aResultToken.marker = "";
 		} // switch(return_attrib.type)
-	} // No exception occurred, so store the return value.
+	} // Storing the return value when no exception occurred.
 
 	// Store any output parameters back into the input variables.  This allows a function to change the
 	// contents of a variable for the following arg types: String and Pointer to <various number types>.
@@ -3538,13 +3577,21 @@ void Line::DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 			continue;
 		if (this_dyna_param.type == DLL_ARG_STR) // The function might have altered Contents(), so update Length().
 		{
-			this_param.var->Length() = (VarSizeType)strlen(this_param.var->Contents());
+			char *contents = this_param.var->Contents();
+			VarSizeType capacity = this_param.var->Capacity();
+			// Since the performance cost is low, ensure the string is terminated at the limit of its
+			// capacity (helps prevent crashes if DLL function didn't do its job and terminate the string):
+			if (capacity)
+				contents[capacity - 1] = '\0';
+			this_param.var->Length() = (VarSizeType)strlen(contents);
 			continue;
 		}
+
 		// Since above didn't "continue", this arg wasn't passed as a string.  Of the remaining types, only
 		// those passed by address can possibly be output parameters, so skip the rest:
 		if (!this_dyna_param.passed_by_address)
 			continue;
+
 		switch (this_dyna_param.type)
 		{
 		// case DLL_ARG_STR:  Already handled above.
@@ -8330,7 +8377,7 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 			g_SortCaseSensitive = true;
 			break;
 		case 'D':
-			if (!*(cp + 1)) // Avoids out-of-bounds when the loop's own ++cp is done.
+			if (!cp[1]) // Avoids out-of-bounds when the loop's own ++cp is done.
 				break;
 			++cp;
 			if (*cp)
@@ -8596,6 +8643,7 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 
 
 ResultType Line::GetKeyJoyState(char *aKeyName, char *aOption)
+// Keep this in sync with FUNC_GETKEYSTATE.
 {
 	Var *output_var = ResolveVarOfArg(0);
 	if (!output_var)
@@ -8607,8 +8655,15 @@ ResultType Line::GetKeyJoyState(char *aKeyName, char *aOption)
 	{
 		if (   !(joy = (JoyControls)ConvertJoy(aKeyName, &joystick_id))   )
 			return output_var->Assign("");
-		// Since the above didn't return, joy contains a valid joystick button/control ID:
-		ScriptGetJoyState(joy, joystick_id, output_var);
+		// Since the above didn't return, joy contains a valid joystick button/control ID.
+		// Caller needs a token with a buffer of at least this size:
+		char buf[MAX_FORMATTED_NUMBER_LENGTH + 1];
+		ExprTokenType token;
+		// The following must be set for ScriptGetJoyState():
+		token.symbol = SYM_STRING;
+		token.marker = buf;
+		ScriptGetJoyState(joy, joystick_id, token, false);
+		ExprTokenToVar(token, *output_var); // Write the result based on whether the token is a string or number.
 		// Always returns OK since ScriptGetJoyState() returns FAIL and sets output_var to be blank if
 		// the result is indeterminate or there was a problem reading the joystick.  We don't want
 		// such a failure to be considered a "critical failure" that will exit the current quasi-thread.
@@ -8655,7 +8710,7 @@ bool Line::ScriptGetKeyState(vk_type aVK, KeyStateTypes aKeyStateType)
 		//	return OK;
 		//}
 		//else
-		return IsKeyToggledOn(aVK);
+		return IsKeyToggledOn(aVK); // This also works for the INSERT key, but only on XP (and possibly Win2k).
 	case KEYSTATE_PHYSICAL: // Physical state of key.
 		if (VK_IS_MOUSE(aVK)) // mouse button
 		{
@@ -8697,17 +8752,20 @@ bool Line::ScriptGetKeyState(vk_type aVK, KeyStateTypes aKeyStateType)
 
 
 
-double Line::ScriptGetJoyState(JoyControls aJoy, int aJoystickID, Var *aOutputVar)
+double Line::ScriptGetJoyState(JoyControls aJoy, int aJoystickID, ExprTokenType &aToken, bool aUseBoolForUpDown)
+// Caller must ensure that aToken.marker is a buffer large enough to handle the longest thing put into
+// it here, which is currently jc.szPname (size=32). Caller has set aToken.symbol to be SYM_STRING.
 // For buttons: Returns 0 if "up", non-zero if down.
 // For axes and other controls: Returns a number indicating that controls position or status.
-// If there was a problem determining the position/state, aOutputVar is made blank and zero is returned.
+// If there was a problem determining the position/state, aToken is made blank and zero is returned.
 // Also returns zero in cases where a non-numerical result is requested, such as the joystick name.
-// In those cases, caller should normally have provided a non-NULL aOutputVar for the result.
+// In those cases, caller should use aToken.marker as the result.
 {
-	if (aOutputVar) // Set default in case of early return.
-		aOutputVar->Assign("");
-    if (!aJoy) // Currently never called this way.
-		return 0;
+	// Set default in case of early return.
+	*aToken.marker = '\0'; // Blank vs. string "0" serves as an indication of failure.
+
+	if (!aJoy) // Currently never called this way.
+		return 0; // And leave aToken set to blank.
 
 	bool aJoy_is_button = IS_JOYSTICK_BUTTON(aJoy);
 
@@ -8726,19 +8784,27 @@ double Line::ScriptGetJoyState(JoyControls aJoy, int aJoystickID, Var *aOutputVa
 		jie.dwSize = sizeof(JOYINFOEX);
 		jie.dwFlags = JOY_RETURNALL;
 		if (joyGetPosEx(aJoystickID, &jie) != JOYERR_NOERROR)
-			return 0; // And leave aOutputVar set to blank.
+			return 0; // And leave aToken set to blank.
 		if (aJoy_is_button)
 		{
 			bool is_down = ((jie.dwButtons >> (aJoy - JOYCTRL_1)) & (DWORD)0x01);
-			if (aOutputVar)
-				aOutputVar->Assign(is_down ? "D" : "U");
+			if (aUseBoolForUpDown) // i.e. Down==true and Up==false
+			{
+				aToken.symbol = SYM_INTEGER; // Override default type.
+				aToken.value_int64 = is_down; // Forced to be 1 or 0 above, since it's "bool".
+			}
+			else
+			{
+				aToken.marker[0] = is_down ? 'D' : 'U';
+				aToken.marker[1] = '\0';
+			}
 			return is_down;
 		}
 	}
 
 	// Otherwise:
 	UINT range;
-	char buf[128], *buf_ptr;
+	char *buf_ptr;
 	double result_double;  // Not initialized to help catch bugs.
 
 	switch(aJoy)
@@ -8771,62 +8837,57 @@ double Line::ScriptGetJoyState(JoyControls aJoy, int aJoystickID, Var *aOutputVa
 	case JOYCTRL_POV:  // Need to explicitly compare against JOY_POVCENTERED because it's a WORD not a DWORD.
 		if (jie.dwPOV == JOY_POVCENTERED)
 		{
-			if (aOutputVar)
-				aOutputVar->Assign("-1"); // Assign as string to ensure its written exactly as "-1". Documented behavior.
+			// Retain default SYM_STRING type.
+			strcpy(aToken.marker, "-1"); // Assign as string to ensure its written exactly as "-1". Documented behavior.
 			return -1;
 		}
 		else
 		{
-			if (aOutputVar)
-				aOutputVar->Assign(jie.dwPOV);
+			aToken.symbol = SYM_INTEGER; // Override default type.
+			aToken.value_int64 = jie.dwPOV;
 			return jie.dwPOV;
 		}
 		// No break since above always returns.
 
 	case JOYCTRL_NAME:
-		if (aOutputVar)
-			aOutputVar->Assign(jc.szPname);
+		strcpy(aToken.marker, jc.szPname);
 		return 0;  // Returns zero in cases where a non-numerical result is obtained.
 
 	case JOYCTRL_BUTTONS:
-		if (aOutputVar)
-			aOutputVar->Assign((DWORD)jc.wNumButtons);
+		aToken.symbol = SYM_INTEGER; // Override default type.
+		aToken.value_int64 = jc.wNumButtons;
 		return jc.wNumButtons;  // wMaxButtons is the *driver's* max supported buttons.
 
 	case JOYCTRL_AXES:
-		if (aOutputVar)
-			aOutputVar->Assign((DWORD)jc.wNumAxes); // wMaxAxes is the *driver's* max supported axes.
+		aToken.symbol = SYM_INTEGER; // Override default type.
+		aToken.value_int64 = jc.wNumAxes; // wMaxAxes is the *driver's* max supported axes.
 		return jc.wNumAxes;
 
 	case JOYCTRL_INFO:
-		if (aOutputVar)
+		buf_ptr = aToken.marker;
+		if (jc.wCaps & JOYCAPS_HASZ)
+			*buf_ptr++ = 'Z';
+		if (jc.wCaps & JOYCAPS_HASR)
+			*buf_ptr++ = 'R';
+		if (jc.wCaps & JOYCAPS_HASU)
+			*buf_ptr++ = 'U';
+		if (jc.wCaps & JOYCAPS_HASV)
+			*buf_ptr++ = 'V';
+		if (jc.wCaps & JOYCAPS_HASPOV)
 		{
-			buf_ptr = buf;
-			if (jc.wCaps & JOYCAPS_HASZ)
-				*buf_ptr++ = 'Z';
-			if (jc.wCaps & JOYCAPS_HASR)
-				*buf_ptr++ = 'R';
-			if (jc.wCaps & JOYCAPS_HASU)
-				*buf_ptr++ = 'U';
-			if (jc.wCaps & JOYCAPS_HASV)
-				*buf_ptr++ = 'V';
-			if (jc.wCaps & JOYCAPS_HASPOV)
-			{
-				*buf_ptr++ = 'P';
-				if (jc.wCaps & JOYCAPS_POV4DIR)
-					*buf_ptr++ = 'D';
-				if (jc.wCaps & JOYCAPS_POVCTS)
-					*buf_ptr++ = 'C';
-			}
-			*buf_ptr = '\0'; // Final termination.
-			aOutputVar->Assign(buf);
+			*buf_ptr++ = 'P';
+			if (jc.wCaps & JOYCAPS_POV4DIR)
+				*buf_ptr++ = 'D';
+			if (jc.wCaps & JOYCAPS_POVCTS)
+				*buf_ptr++ = 'C';
 		}
+		*buf_ptr = '\0'; // Final termination.
 		return 0;  // Returns zero in cases where a non-numerical result is obtained.
 	} // switch()
 
 	// If above didn't return, the result should now be in result_double.
-	if (aOutputVar)
-		aOutputVar->Assign(result_double);
+	aToken.symbol = SYM_FLOAT; // Override default type.
+	aToken.value_double = result_double;
 	return result_double;
 }
 
@@ -9881,7 +9942,7 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 				for (cp = file_buf;;)
 				{
 					for (; *cp; ++cp); // Find the next terminator.
-					if (!*(cp + 1)) // This is the last file because it's double-terminated, so we're done.
+					if (!cp[1]) // This is the last file because it's double-terminated, so we're done.
 						break;
 					*cp = '\n'; // Replace zero-delimiter with a visible/printable delimiter, for the user.
 				}
@@ -9898,7 +9959,7 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 			{
 				for (; *cp; ++cp); // Find the next terminator.
 				*cp = '\n'; // Replace zero-delimiter with a visible/printable delimiter, for the user.
-				if (!*(cp + 1)) // This is the last file because it's double-terminated, so we're done.
+				if (!cp[1]) // This is the last file because it's double-terminated, so we're done.
 					break;
 			}
 		}
@@ -12008,7 +12069,7 @@ int Line::ConvertEscapeChar(char *aFilespec, char aOldChar, char aNewChar, bool 
 			}
 
 			// Otherwise *cp == aOldChar:
-			next_char = *(cp + 1);
+			next_char = cp[1];
 			if (next_char == aOldChar)
 			{
 				// This is a double-escape (e.g. \\ in AutoIt2).  Replace it with a single

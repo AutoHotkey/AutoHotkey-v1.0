@@ -3137,6 +3137,17 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		}
 #ifdef INCLUDE_KEYBD_HOOK
 		else if (vk == VK_LMENU || vk == VK_RMENU)
+		{
+			// Fix for v1.0.34: For some reason, the release of the ALT key here causes the Start Menu
+			// to appear instantly for the hotkey #LAlt (and probably #RAlt), even when the hotkey does
+			// nothing other than return.  This seems like an OS quirk since it doesn't conform to any
+			// known Start Menu activation sequence.  This happens only when neither Shift nor Control is
+			// down.  To work around it, send the menu-suppressing Control keystroke here.  Another one
+			// will probably be sent later when the WIN key is physically released, but it seems best
+			// for simplicity and avoidance of side-effects not to make this one prevent that one.
+			if (   (g_modifiersLR_logical & (MOD_LWIN | MOD_RWIN))   // At least one WIN key is down.
+				&& !(g_modifiersLR_logical & (MOD_LSHIFT | MOD_RSHIFT | MOD_LCONTROL | MOD_RCONTROL))   ) // But no SHIFT or CONTROL key is down to help us.
+				KeyEvent(KEYDOWNANDUP, VK_CONTROL);
 			// Since this is a hotkey that fires on ALT-DOWN and it's a normal (suppressed) hotkey,
 			// send an up-event to "turn off" the OS's low-level handling for the alt key with
 			// respect to having it modify keypresses.  For example, the following hotkey would
@@ -3145,6 +3156,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 			// RAlt::Send f  ; Actually triggers !f, which activates the FILE menu if the active window has one.
 			// RAlt::Send {PgDn}  ; Fails to work because ALT-PgDn usually does nothing.
 			KeyEvent(KEYUP, vk, sc);
+		}
 #endif
 	}
 	

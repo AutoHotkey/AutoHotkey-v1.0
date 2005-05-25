@@ -669,7 +669,7 @@ private:
 
 	ResultType GetKeyJoyState(char *aKeyName, char *aOption);
 	bool ScriptGetKeyState(vk_type aVK, KeyStateTypes aKeyStateType);
-	double ScriptGetJoyState(JoyControls aJoy, int aJoystickID, Var *aOutputVar);
+	double ScriptGetJoyState(JoyControls aJoy, int aJoystickID, ExprTokenType &aToken, bool aUseBoolForUpDown);
 
 	ResultType DriveSpace(char *aPath, bool aGetFreeSpace);
 	ResultType Drive(char *aCmd, char *aValue, char *aValue2);
@@ -920,6 +920,13 @@ public:
 	char *ExpandArg(char *aBuf, int aArgIndex, Var *aArgVar = NULL);
 	char *ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget, char *&aDerefBuf
 		, size_t &aDerefBufSize, char *aArgDeref[], size_t aExtraSize);
+
+	__int64 ExprTokenToInt64(ExprTokenType &aToken);
+	double ExprTokenToDouble(ExprTokenType &aToken);
+	char *ExprTokenToString(ExprTokenType &aToken, char *aBuf);
+	ResultType ExprTokenToVar(ExprTokenType &aToken, Var &aOutputVar);
+	ResultType ExprTokenToDoubleOrInt(ExprTokenType &aToken);
+
 	ResultType Deref(Var *aOutputVar, char *aBuf);
 
 	bool FileIsFilteredOut(WIN32_FIND_DATA &aCurrentFile, FileLoopModeType aFileLoopMode, char *aFilePath);
@@ -1809,7 +1816,13 @@ public:
 
 enum FuncTypes
 {
-	FUNC_INVALID, FUNC_NORMAL, FUNC_WINEXIST, FUNC_WINACTIVE, FUNC_DLLCALL, FUNC_VARSETCAPACITY
+	FUNC_INVALID, FUNC_NORMAL
+	, FUNC_STRLEN, FUNC_ASC, FUNC_CHR
+	, FUNC_INSTR, FUNC_GETKEYSTATE, FUNC_DLLCALL, FUNC_VARSETCAPACITY
+	, FUNC_FILEEXIST, FUNC_WINEXIST, FUNC_WINACTIVE
+	, FUNC_ROUND, FUNC_CEIL, FUNC_FLOOR, FUNC_MOD, FUNC_ABS
+	, FUNC_SIN, FUNC_COS, FUNC_TAN, FUNC_ASIN, FUNC_ACOS, FUNC_ATAN
+	, FUNC_EXP, FUNC_SQRT, FUNC_LOG, FUNC_LN
 };
 typedef UCHAR FuncType;  // UCHAR vs. FuncTypes to save memory.
 
@@ -2130,7 +2143,7 @@ public:
 	ResultType Clear();
 	ResultType Cancel();
 	ResultType Close(); // Due to SC_CLOSE, etc.
-	ResultType Escape(); // Similar to close, except typically called when the user presses ESCAPE.
+	ResultType Escape(bool aDoMsgSleep); // Similar to close, except typically called when the user presses ESCAPE.
 	ResultType Submit(bool aHideIt);
 	ResultType ControlGetContents(Var &aOutputVar, GuiControlType &aControl, char *aMode = "");
 

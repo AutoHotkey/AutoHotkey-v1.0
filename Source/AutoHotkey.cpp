@@ -36,14 +36,15 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	// or InitCommonControlsEx() prior to displaying a MsgBox, other dialog, or other API window/control
 	// might prevent that feature from working properly (i.e. the MsgBox might never appear).  This is
 	// solely due to the fact that the exe.manifest file is present, which causes XP visual styles
-	// to be automatically called up when the app runs on XP:
-	INITCOMMONCONTROLSEX icce; // The struct consists of only 2 DWORDs so it's not that wasteful to have it here in WinMain().
-	icce.dwSize = sizeof(INITCOMMONCONTROLSEX);
-	// ICC_TAB_CLASSES provides Tab control and ToolTip support.  Although testing has yet to reveal any
-	// problem if this option is omitted for tooltips, it lends peace of mind (perhaps this is only needed
-	// when tooltips are used in conjunction with with SysTabControl32?)
-	icce.dwICC = ICC_TAB_CLASSES|ICC_HOTKEY_CLASS|ICC_BAR_CLASSES|ICC_PROGRESS_CLASS|ICC_DATE_CLASSES;
-	InitCommonControlsEx(&icce);
+	// to be automatically called up when the app runs on XP.  However, this is at odds with MSDN's
+	// statement that "If a manifest is used, InitCommonControlsEx is not required [on Windows XP]."
+	// I can't find any confirmation of that statement, so for now, it seems safer to assume that
+	// it's inaccurate and that InitCommonControls/Ex must be called unconditionally when the
+	// app uses any common controls or even just MessageBox().
+	// UPDATE: For v1.0.34, InitCommonControls() -- in spite of being "obsolete" -- because versions
+	// of Win95/NT that lack MSIE 3.0+ or similar patch do not have InitCommonControlsEx() and thus
+	// the program would fail to launch at all on them.
+	InitCommonControls();
 
 	if (!GetCurrentDirectory(sizeof(g_WorkingDir), g_WorkingDir)) // Needed for the FileSelectFile() workaround.
 		*g_WorkingDir = '\0';
@@ -55,8 +56,8 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 #ifndef AUTOHOTKEYSC
 	#ifdef _DEBUG
 		//char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
-		char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\GUI Demo.ahk";
-		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\MAIN.ahk";
+		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\GUI Demo.ahk";
+		char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\MAIN.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\Expressions.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\Line Continuation.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\DllCall.ahk";
@@ -240,8 +241,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	// interaction:
 	Hotkey::AllActivate();         // We want these active now in case auto-execute never returns (e.g. loop)
 	g_script.mIsReadyToExecute = true; // This is done only now for error reporting purposes in Hotkey.cpp.
-	if (Hotkey::sJoyHotkeyCount)       // Joystick hotkeys require the timer to be always on.
-		SET_MAIN_TIMER
+
 	// Run the auto-execute part at the top of the script:
 	ResultType result = g_script.AutoExecSection();
 	// If no hotkeys are in effect, the user hasn't requested a hook to be activated, and the script
