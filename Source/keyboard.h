@@ -193,12 +193,12 @@ enum KeyStateTypes {KEYSTATE_LOGICAL, KEYSTATE_PHYSICAL, KEYSTATE_TOGGLE}; // Fo
 enum KeyEventTypes {KEYDOWN, KEYUP, KEYDOWNANDUP};
 
 void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow = NULL);
-int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, modLR_type aModifiersLRPersistent
+int SendKey(vk_type aVK, sc_type aSC, modLR_type aModifiersLR, modLR_type aModifiersLRPersistent
 	, int aRepeatCount, KeyEventTypes aEventType, modLR_type aKeyAsModifiersLR, HWND aTargetWindow);
-int SendKeySpecial(char aChar, mod_type aModifiers, modLR_type aModifiersLRPersistent
+int SendKeySpecial(char aChar, modLR_type aModifiersLR, modLR_type aModifiersLRPersistent
 	, int aRepeatCount, KeyEventTypes aEventType, HWND aTargetWindow);
 int SendASC(char *aAscii, HWND aTargetWindow);
-int SendChar(char aChar, mod_type aModifiers, KeyEventTypes aEventType, HWND aTargetWindow);
+int SendChar(char aChar, modLR_type aModifiersLR, KeyEventTypes aEventType, HWND aTargetWindow);
 
 
 // A pseudo-random value.  It's best that this be constant so that if multiple instances of
@@ -273,7 +273,7 @@ void init_sc_to_vk();
 char *SCToKeyName(sc_type aSC, char *aBuf, int aBufSize);
 char *VKToKeyName(vk_type aVK, sc_type aSC, char *aBuf, int aBufSize);
 sc_type TextToSC(char *aText);
-vk_type TextToVK(char *aText, mod_type *pModifiers = NULL, bool aExcludeThoseHandledByScanCode = false
+vk_type TextToVK(char *aText, modLR_type *pModifiersLR = NULL, bool aExcludeThoseHandledByScanCode = false
 	, bool aAllowExplicitVK = true);
 vk_type TextToSpecial(char *aText, UINT aTextLength, KeyEventTypes &aEventTypem, modLR_type &aModifiersLR
 	, mod_type &aModifiers, bool aUpdatePersistent);

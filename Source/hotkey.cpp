@@ -1106,7 +1106,6 @@ ResultType Hotkey::TextToKey(char *aText, char *aHotkeyName, bool aIsModifier)
 
 	vk_type temp_vk; // No need to initialize this one.
 	sc_type temp_sc = 0;
-	mod_type modifiers = 0;
 	modLR_type modifiersLR = 0;
 	bool is_mouse = false;
 	int joystick_id;
@@ -1123,7 +1122,7 @@ ResultType Hotkey::TextToKey(char *aText, char *aHotkeyName, bool aIsModifier)
 		}
 	}
 
-	if (temp_vk = TextToVK(aText, &modifiers, true)) // Assign.
+	if (temp_vk = TextToVK(aText, &modifiersLR, true)) // Assign.
 	{
 		if (aIsModifier && (temp_vk == VK_WHEEL_DOWN || temp_vk == VK_WHEEL_UP))
 		{
@@ -1138,9 +1137,9 @@ ResultType Hotkey::TextToKey(char *aText, char *aHotkeyName, bool aIsModifier)
 			return FAIL;
 		}
 		is_mouse = VK_IS_MOUSE(temp_vk);
-		if (modifiers & MOD_SHIFT)
+		if (modifiersLR & (MOD_LSHIFT | MOD_RSHIFT))
 			if (temp_vk >= 'A' && temp_vk <= 'Z')  // VK of an alpha char is the same as the ASCII code of its uppercase version.
-				modifiers &= ~MOD_SHIFT;
+				modifiersLR &= ~(MOD_LSHIFT | MOD_RSHIFT);
 				// Above: Making alpha chars case insensitive seems much more friendly.  In other words,
 				// if the user defines ^Z as a hotkey, it will really be ^z, not ^+z.  By removing SHIFT
 				// from the modifiers here, we're only removing it from our modifiers, not the global
@@ -1195,8 +1194,7 @@ scan code array).
 	{
 		mVK = temp_vk;
 		mSC = temp_sc;
-		mModifiers |= modifiers;  // Turn on any additional modifiers.  e.g. SHIFT to realize '#'.
-		mModifiersLR |= modifiersLR;
+		mModifiersLR |= modifiersLR; // Turn on any additional modifiers.  e.g. SHIFT to realize '#'.
 		if (!is_mouse && mType != HK_JOYSTICK)
 		{
 			// For these, if it's Win9x, attempt to register them normally to give the user at least

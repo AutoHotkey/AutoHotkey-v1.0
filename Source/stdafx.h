@@ -27,12 +27,8 @@ GNU General Public License for more details.
 // Necessary to do this prior to including windows.h so that NT functions are unlocked:
 // UPDATE: Using 0x0500 now so that VK_XBUTTON1 and 2 can be supported:
 #define _WIN32_WINNT 0x0500
+#define _WIN32_IE 0x0501  // Added for v1.0.35 to have MCS_NOTODAY resolve as expected, and possibly solve other problems on newer systems.
 
-
-
-// AutoIt3: Only use the includes here if running Visual C - it is really slow under
-// MingW to use this method so we will comment out the headers unless the
-// compiler is VC (and manually include the required headers in the source files)
 #ifdef _MSC_VER
 	// C RunTime Header Files
 	#include <stdio.h>

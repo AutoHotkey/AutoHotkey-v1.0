@@ -2473,7 +2473,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 				if (var->Type() != VAR_NORMAL || !strlicmp(item, "ErrorLevel", (UINT)(item_end - item))) // Shouldn't be declared either way (global or local).
 					return ScriptError("Built-in variables are always global and should not be declared.", item);
 				for (int i = 0; i < g.CurrentFunc->mParamCount; ++i) // Search by name to find both global and local declarations.
-					if (!strlicmp(item, g.CurrentFunc->mParam[i]->mName, (UINT)(item_end - item)))
+					if (!strlicmp(item, g.CurrentFunc->mParam[i].var->mName, (UINT)(item_end - item)))
 						return ScriptError("Parameters must not be declared.", item);
 				if (is_exception)
 				{
@@ -5182,10 +5182,12 @@ ResultType Script::DefineFunc(char *aBuf, Var *aFuncExceptionVar[])
 
 	Func &func = *g.CurrentFunc; // For performance and convenience.
 	int insert_pos;
-	size_t param_length;
-	Var *param[MAX_FUNCTION_PARAMS];
+	size_t param_length, value_length;
+	FuncParam param[MAX_FUNCTION_PARAMS];
 	int param_count = 0;
+	char buf[MAX_FORMATTED_NUMBER_LENGTH + 1];
 	VarTypeType var_type; // Whether or not it will be ByRef.
+	bool param_must_have_default = false;
 
 	for (param_start = omit_leading_whitespace(param_start + 1);;)
 	{
@@ -5193,7 +5195,7 @@ ResultType Script::DefineFunc(char *aBuf, Var *aFuncExceptionVar[])
 			break;
 
 		// Must start the search at param_start, not param_start+1, so that something like fn(, x) will be properly handled:
-		if (   !*param_start || !(param_end = StrChrAny(param_start, ", \t)"))   ) // Look for first comma, space, tab, or close-paren.
+		if (   !*param_start || !(param_end = StrChrAny(param_start, ", \t=)"))   ) // Look for first comma, space, tab, =, or close-paren.
 			return ScriptError(ERR_MISSING_CLOSE_PAREN, aBuf);
 		// To enhance syntax error catching, consider ByRef to be a keyword; i.e. that can never be the name
 		// of a formal parameter:
@@ -5202,7 +5204,7 @@ ResultType Script::DefineFunc(char *aBuf, Var *aFuncExceptionVar[])
 		{
 			// Omit the ByRef keyword from further consideration:
 			param_start = omit_leading_whitespace(param_end);
-			if (   !*param_start || !(param_end = StrChrAny(param_start, ", \t)"))   ) // Look for first comma, space, tab, or close-paren.
+			if (   !*param_start || !(param_end = StrChrAny(param_start, ", \t=)"))   ) // Look for first comma, space, tab, =, or close-paren.
 				return ScriptError(ERR_MISSING_CLOSE_PAREN, aBuf);
 		}
 		if (   !(param_length = param_end - param_start)   )
@@ -5211,19 +5213,74 @@ ResultType Script::DefineFunc(char *aBuf, Var *aFuncExceptionVar[])
 		if (param_count >= MAX_FUNCTION_PARAMS)
 			return ScriptError("Too many params.", param_start); // Short msg since so rare.
 
+		FuncParam &this_param = param[param_count]; // For performance and convenience.
+
 		// This will search for local variables, never globals, by virtue of the fact that this
 		// new function's mDefaultVarType is always VAR_ASSUME_NONE at this early stage of its creation:
-		if (param[param_count] = FindVar(param_start, param_length, &insert_pos))  // Assign.
+		if (this_param.var = FindVar(param_start, param_length, &insert_pos))  // Assign.
 			return ScriptError("Duplicate parameter.", param_start);
-		if (   !(param[param_count] = AddVar(param_start, param_length, insert_pos, true, var_type))   )  //, VAR_ATTRIB_PARAM))   )
+		if (   !(this_param.var = AddVar(param_start, param_length, insert_pos, true, var_type))   )  //, VAR_ATTRIB_PARAM))   )
 			return FAIL; // It already displayed the error, including attempts to have reserved names as parameter names.
 
+		// v1.0.35: Check if a default value is specified for this parameter and set up for the next iteration.
+		this_param.default_type = PARAM_DEFAULT_NONE;  // Set default.
+		param_start = omit_leading_whitespace(param_end);
+		if (*param_start == '=') // This is the default value of the param just added.
+		{
+			if (var_type == VAR_BYREF)
+				return ScriptError("Default value not allowed with ByRef.", this_param.var->mName);
+			param_start = omit_leading_whitespace(param_start + 1); // Start of the default value.
+			if (!(param_end = StrChrAny(param_start, ", \t=)"))) // Somewhat debatable but stricter seems better.
+				return ScriptError(ERR_MISSING_COMMA, aBuf); // Reporting aBuf vs. param_start seems more informative since Vicinity isn't shown.
+			value_length = param_end - param_start;
+			if (value_length > MAX_FORMATTED_NUMBER_LENGTH) // Too rare to justify elaborate handling or error reporting.
+				value_length = MAX_FORMATTED_NUMBER_LENGTH;
+			strlcpy(buf, param_start, value_length + 1);  // Make a temp copy to simplify the below (especially IsPureNumeric).
+			if (!stricmp(buf, "\"\"")) // Empty pair of quotes "".
+			{
+				this_param.default_type = PARAM_DEFAULT_STR;
+				this_param.default_str = "";
+			}
+			else if (!stricmp(buf, "false"))
+			{
+				this_param.default_type = PARAM_DEFAULT_INT;
+				this_param.default_int64 = 0;
+			}
+			else if (!stricmp(buf, "true"))
+			{
+				this_param.default_type = PARAM_DEFAULT_INT;
+				this_param.default_int64 = 1;
+			}
+			else // The only other thing than the above that's supported is a pure integer or number.
+			{
+				switch(IsPureNumeric(buf, true, false, true))
+				{
+				case PURE_INTEGER:
+					this_param.default_type = PARAM_DEFAULT_INT;
+					this_param.default_int64 = ATOI64(buf);
+					break;
+				case PURE_FLOAT:
+					this_param.default_type = PARAM_DEFAULT_FLOAT;
+					this_param.default_double = ATOF(buf);
+					break;
+				default: // Not numeric.
+					return ScriptError("Bad default value.", buf);
+				}
+			}
+			param_must_have_default = true;  // For now, all other params after this one must also have default values.
+			// Set up for the next iteration:
+			param_start = omit_leading_whitespace(param_end);
+		}
+		else // This parameter does not have a default value specified.
+		{
+			if (param_must_have_default)
+				return ScriptError("Default value required.", this_param.var->mName);
+			++func.mMinParams;
+		}
 		++param_count;
 
-		// Set up for the next iteration:
-		param_start = omit_leading_whitespace(param_end);
 		if (*param_start != ',' && *param_start != ')') // Something like "fn(a, b c)" (missing comma) would cause this.
-			return ScriptError("Missing comma.", aBuf); // Reporting aBuf vs. param_start seems more informative since Vicinity isn't shown.
+			return ScriptError(ERR_MISSING_COMMA, aBuf); // Reporting aBuf vs. param_start seems more informative since Vicinity isn't shown.
 		if (*param_start == ',')
 		{
 			param_start = omit_leading_whitespace(param_start + 1);
@@ -5238,7 +5295,7 @@ ResultType Script::DefineFunc(char *aBuf, Var *aFuncExceptionVar[])
 	{
 		// Allocate memory only for the actual number of parameters actually present.
 		size_t size = param_count * sizeof(param[0]);
-		if (   !(func.mParam = (Var **)SimpleHeap::Malloc(size))   )
+		if (   !(func.mParam = (FuncParam *)SimpleHeap::Malloc(size))   )
 			return ScriptError(ERR_OUTOFMEM);
 		func.mParamCount = param_count;
 		memcpy(func.mParam, param, size);
@@ -5680,10 +5737,10 @@ Var *Script::FindVar(char *aVarName, size_t aVarNameLength, int *apInsertPos, in
 			if (g.CurrentFunc->mDefaultVarType == VAR_ASSUME_GLOBAL && !is_local) // g.CurrentFunc is also known to be non-NULL in this case.
 			{
 				for (i = 0; i < g.CurrentFunc->mParamCount; ++i)
-					if (!stricmp(var_name, g.CurrentFunc->mParam[i]->mName))
+					if (!stricmp(var_name, g.CurrentFunc->mParam[i].var->mName))
 					{
 						is_local = true;
-						found_var = g.CurrentFunc->mParam[i];
+						found_var = g.CurrentFunc->mParam[i].var;
 						break;
 					}
 			}
@@ -6326,7 +6383,7 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 					// If this parameter is formally declared as ByRef, report a load-time error if
 					// the actual-parameter is obviously not a variable (can't catch everything, such
 					// as invalid double derefs, e.g. Array%VarContainingSpaces%):
-					if (func.mType == FUNC_NORMAL && func.mParam[deref->param_count]->IsByRef())
+					if (func.mType == FUNC_NORMAL && func.mParam[deref->param_count].var->IsByRef())
 					{
 						// First check if there are any EXP_TELLTALES characters in this param, since the
 						// presence of an expression for this parameter means it can't resolve to a variable
@@ -6334,7 +6391,7 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 						for (cp = param_start, param_last_char = omit_trailing_whitespace(param_start, param_end - 1)
 							; cp <= param_last_char; ++cp)
 							if (strchr(EXP_ALL_SYMBOLS, *cp))
-								return line->PreparseError(ERR_BYREF, param_start);   // param_start seems more informative than func.mParam[deref->param_count]->mName
+								return line->PreparseError(ERR_BYREF, param_start);   // param_start seems more informative than func.mParam[deref->param_count].var->mName
 						// Below relies on the above having been done because the above should prevent
 						// any is_function derefs from being possible since their parentheses would have been caught
 						// as an error:
@@ -6349,7 +6406,7 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 								break;
 							}
 						if (!found)
-							return line->PreparseError(ERR_BYREF, param_start); // param_start seems more informative than func.mParam[deref->param_count]->mName
+							return line->PreparseError(ERR_BYREF, param_start); // param_start seems more informative than func.mParam[deref->param_count].var->mName
 					}
 
 					++deref->param_count;
@@ -6365,8 +6422,7 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 					//else it might be ')', in which case the next iteration will handle it.
 					// Above has ensured that param_start now points to the next parameter, or ')' if none.
 				} // for each parameter of this function call.
-				if (deref->param_count < func.mParamCount
-					&& (func.mType == FUNC_NORMAL || deref->param_count < func.mMinParams))
+				if (deref->param_count < func.mMinParams)
 					return line->PreparseError("Too few params passed to function.", deref->marker);
 			} // for each deref of this arg
 		} // for each arg of this line
@@ -11788,28 +11844,31 @@ double_deref:
 
 				case FUNC_VARSETCAPACITY:
 					this_token.symbol = SYM_INTEGER;
+					this_token.value_int64 = 0; // Set default. In spite of being ambiguous with the result of Free(), 0 seems a little better than -1 since it indicates "no capacity" and is also equal to "false" for easy use in expressions.
 					if (stack[stack_count]->symbol == SYM_VAR)
 					{
-						if (actual_param_count > 1) // Second parameter is present.
+						Var &var = *stack[stack_count]->var; // For performance and convenience.
+						if (var.Type() == VAR_NORMAL) // Don't allow resizing/reporting of built-in variables since Assign() isn't designed to work on them, and resizing the clipboard's memory area would serve no purpose and isn't intended for this anyway.
 						{
-							VarSizeType new_capacity = (UINT)ExprTokenToInt64(*stack[stack_count + 1]);
-							if (new_capacity)
+							if (actual_param_count > 1) // Second parameter is present.
 							{
-								stack[stack_count]->var->Assign(NULL, new_capacity, false, true); // This also destroys the variables contents.
-								// By design, Assign() has already set the length of the variable to reflect new_capacity.
-								// This is not what is wanted in this case since it should be truly empty.
-								stack[stack_count]->var->Length() = 0;
+								VarSizeType new_capacity = (UINT)ExprTokenToInt64(*stack[stack_count + 1]);
+								if (new_capacity)
+								{
+									var.Assign(NULL, new_capacity, false, true); // This also destroys the variables contents.
+									// By design, Assign() has already set the length of the variable to reflect new_capacity.
+									// This is not what is wanted in this case since it should be truly empty.
+									var.Length() = 0;
+								}
+								else // ALLOC_SIMPLE, due to its nature, will not actually be freed, which is documented.
+									var.Free();
 							}
-							else // ALLOC_SIMPLE, due to its nature, will not actually be freed, which is documented.
-								stack[stack_count]->var->Free();
+							//else the var is not altered; instead, the current capacity is reported, which seems more intuitive/useful than having it do a Free().
+							this_token.value_int64 = var.Capacity(); // Don't subtract 1 here; avoids underflow.
+							if (this_token.value_int64)
+								--this_token.value_int64; // Omit the room for the zero terminator since script capacity is definite as length vs. size.
 						}
-						//else the var is not altered; instead, the current capacity is reported, which seems more intuitive/useful than having it do a Free().
-						this_token.value_int64 = stack[stack_count]->var->Capacity(); // Don't subtract 1 here; avoids underflow.
-						if (this_token.value_int64)
-							--this_token.value_int64; // Omit the room for the zero terminator since script capacity is definite as length vs. size.
 					}
-					else // Failure.
-						this_token.value_int64 = 0; // In spite of being ambiguous with the result of Free(), 0 seems a little better than -1 since it indicates "no capacity" and is also equal to "false" for easy use in expressions.
 					goto push_this_token;
 
 				case FUNC_FILEEXIST:
@@ -12062,7 +12121,7 @@ double_deref:
 							// Move on to the next item in the stack (without popping):  A check higher above
 							// has already ensured that this won't cause stack underflow:
 							--s;
-							if (stack[s]->symbol == SYM_VAR && !func.mParam[j]->IsByRef())
+							if (stack[s]->symbol == SYM_VAR && !func.mParam[j].var->IsByRef())
 							{
 								// Since this formal parameter is passed by value, if it's SYM_VAR, convert it to
 								// SYM_OPERAND to allow the variables to be backed up and reset further below without
@@ -12100,9 +12159,24 @@ double_deref:
 				// params on the stack after this is done:
 				for (j = func.mParamCount - 1; j >= 0; --j) // For each formal parameter (reverse order to mirror the nature of the stack).
 				{
+					FuncParam &this_formal_param = func.mParam[j]; // For performance and convenience.
 					if (j >= actual_param_count) // No actual to go with it (should be possible only if the parameter is optional or has a default value).
 					{
-						func.mParam[j]->Assign(); // By not specifying "" as the first param, the var's memory is not freed, which seems best to help performance when the function is called repeatedly in a loop.
+						switch(this_formal_param.default_type)
+						{
+						case PARAM_DEFAULT_STR:
+							this_formal_param.var->Assign(this_formal_param.default_str);
+							break;
+						case PARAM_DEFAULT_INT:
+							this_formal_param.var->Assign(this_formal_param.default_int64);
+							break;
+						case PARAM_DEFAULT_FLOAT:
+							this_formal_param.var->Assign(this_formal_param.default_double);
+							break;
+						default: // PARAM_DEFAULT_NONE or some other value.  This is probably a bug; assign blank for now.
+							this_formal_param.var->Assign(); // By not specifying "" as the first param, the var's memory is not freed, which seems best to help performance when the function is called repeatedly in a loop.
+							break;
+						}
 						continue;
 					}
 					// Otherwise, assign actual parameter's value to the formal parameter (which is itself a
@@ -12114,7 +12188,7 @@ double_deref:
 					// of this section.  Generic ones were pushed as-is onto the stack by a previous iteration.
 					if (!IS_OPERAND(token.symbol)) // Haven't found a way to produce this situation yet, but safe to assume it's possible.
 						goto fail;
-					if (func.mParam[j]->IsByRef())
+					if (this_formal_param.var->IsByRef())
 					{
 						// Note that the previous loop might not have checked things like the following because that
 						// loop never ran unless a backup was needed:
@@ -12125,31 +12199,31 @@ double_deref:
 							// (though currently, only a double deref that resolves to a built-in variable
 							// would be able to get this far to trigger this error, because something like
 							// func(Array%VarContainingSpaces%) would have been caught at an earlier stage above.
-							LineError(ERR_BYREF ERR_ABORT, FAIL, func.mParam[j]->mName);
+							LineError(ERR_BYREF ERR_ABORT, FAIL, this_formal_param.var->mName);
 							aResult = FAIL;
 							result_to_return = NULL; // Use NULL to inform our caller that this entire thread is to be terminated.
 							goto end;
 						}
-						func.mParam[j]->UpdateAlias(token.var); // Make the formal parameter point directly to the actual parameter's contents.
+						this_formal_param.var->UpdateAlias(token.var); // Make the formal parameter point directly to the actual parameter's contents.
 					}
 					else // This parameter is passed "by value".
 					{
 						switch(token.symbol)
 						{
 						case SYM_INTEGER:
-							func.mParam[j]->Assign(token.value_int64);
+							this_formal_param.var->Assign(token.value_int64);
 							break;
 						case SYM_FLOAT:
-							func.mParam[j]->Assign(token.value_double);
+							this_formal_param.var->Assign(token.value_double);
 							break;
 						case SYM_VAR:
 							// This case can still happen because the previous loop's conversion of all
 							// by-value SYM_VAR operands into SYM_OPERAND would not have happened if no
 							// backup was needed for this function:
-							func.mParam[j]->Assign(token.var->Contents());
+							this_formal_param.var->Assign(token.var->Contents());
 							break;
 						default: // SYM_STRING or SYM_OPERAND
-							func.mParam[j]->Assign(token.marker);
+							this_formal_param.var->Assign(token.marker);
 						}
 					}
 				}

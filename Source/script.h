@@ -234,6 +234,7 @@ enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
 #define ERR_UNRECOGNIZED_ACTION "This line does not contain a recognized action."
 #define ERR_MISSING_OUTPUT_VAR "This command requires that at least one of its output variables be provided."
 #define ERR_MISSING_CLOSE_PAREN "Missing \")\""
+#define ERR_MISSING_COMMA "Missing comma."
 #define ERR_BLANK_PARAM "Blank parameter."
 #define ERR_BYREF "Caller must pass a variable to this ByRef parameter."
 #define ERR_ELSE_WITH_NO_IF "This ELSE doesn't appear to belong to any IF-statement."
@@ -580,12 +581,13 @@ typedef UCHAR GuiControls;
 #define GUI_CONTROL_COMBOBOX     8
 #define GUI_CONTROL_LISTBOX      9
 #define GUI_CONTROL_EDIT         10
-#define GUI_CONTROL_HOTKEY       11
-#define GUI_CONTROL_SLIDER       12
-#define GUI_CONTROL_PROGRESS     13
-#define GUI_CONTROL_TAB          14 // Keep below flush with above as a reminder to keep it in sync:
-#define GUI_CONTROL_TYPE_CAN_BE_FOCUSED(type) !(type == GUI_CONTROL_TEXT || type == GUI_CONTROL_PIC \
-	|| type == GUI_CONTROL_GROUPBOX || type == GUI_CONTROL_PROGRESS)
+#define GUI_CONTROL_DATETIME     11
+#define GUI_CONTROL_MONTHCAL     12
+#define GUI_CONTROL_HOTKEY       13
+#define GUI_CONTROL_UPDOWN       14
+#define GUI_CONTROL_SLIDER       15
+#define GUI_CONTROL_PROGRESS     16
+#define GUI_CONTROL_TAB          17 // Keep below flush with above as a reminder to keep it in sync:
 
 enum ThreadCommands {THREAD_CMD_INVALID, THREAD_CMD_PRIORITY, THREAD_CMD_INTERRUPT};
 
@@ -1496,11 +1498,14 @@ public:
 		if (!stricmp(aBuf, "ListBox")) return GUI_CONTROL_LISTBOX;
 		if (!stricmp(aBuf, "Edit")) return GUI_CONTROL_EDIT;
 		// Keep those seldom used at the bottom for performance:
+		if (!stricmp(aBuf, "UpDown")) return GUI_CONTROL_UPDOWN;
 		if (!stricmp(aBuf, "Slider")) return GUI_CONTROL_SLIDER;
 		if (!stricmp(aBuf, "Progress")) return GUI_CONTROL_PROGRESS;
 		if (!stricmp(aBuf, "Tab")) return GUI_CONTROL_TAB;
 		if (!stricmp(aBuf, "GroupBox")) return GUI_CONTROL_GROUPBOX;
 		if (!stricmp(aBuf, "Pic") || !stricmp(aBuf, "Picture")) return GUI_CONTROL_PIC;
+		if (!stricmp(aBuf, "DateTime")) return GUI_CONTROL_DATETIME;
+		if (!stricmp(aBuf, "MonthCal")) return GUI_CONTROL_MONTHCAL;
 		if (!stricmp(aBuf, "Hotkey")) return GUI_CONTROL_HOTKEY;
 		return GUI_CONTROL_INVALID;
 	}
@@ -1814,6 +1819,14 @@ public:
 
 
 
+enum FuncParamDefaults {PARAM_DEFAULT_NONE, PARAM_DEFAULT_STR, PARAM_DEFAULT_INT, PARAM_DEFAULT_FLOAT};
+struct FuncParam
+{
+	Var *var;
+	FuncParamDefaults default_type;
+	union {char *default_str; __int64 default_int64; double default_double;};
+};
+
 enum FuncTypes
 {
 	FUNC_INVALID, FUNC_NORMAL
@@ -1831,7 +1844,7 @@ class Func
 public:
 	char *mName;
 	Line *mJumpToLine;
-	Var **mParam;    // Will hold an array of Var*'s.
+	FuncParam *mParam;  // Will hold an array of FuncParams.
 	int mParamCount; // The number of items in the above array.  This is also the function's maximum number of params.
 	int mMinParams;  // Currently used only by built-in functions. Future: Support optional params for other functions.
 	Var **mVar, **mLazyVar; // Array of pointers-to-variable, allocated upon first use and later expanded as needed.
@@ -2001,7 +2014,7 @@ struct GuiControlType
 	#define GUI_CONTROL_ATTRIB_EXPLICITLY_DISABLED 0x10
 	#define GUI_CONTROL_ATTRIB_BACKGROUND_DEFAULT  0x20 // i.e. Don't conform to window/control background color; use default instead.
 	#define GUI_CONTROL_ATTRIB_BACKGROUND_TRANS    0x40 // i.e. Leave this control's background transparent.
-	#define GUI_CONTROL_ATTRIB_ALTBEHAVIOR         0x80 // For sliders: Reverse/Invert the value.
+	#define GUI_CONTROL_ATTRIB_ALTBEHAVIOR         0x80 // For sliders: Reverse/Invert the value. Also for up-down controls (ALT means 32-bit vs. 16-bit).
 	UCHAR attrib; // A field of option flags/bits defined above.
 	TabControlIndexType tab_control_index; // Which tab control this control belongs to, if any.
 	TabIndexType tab_index; // For type==TAB, this stores the tab control's index.  For other types, it stores the page.
@@ -2014,7 +2027,8 @@ struct GuiControlType
 		// Note: Pic controls cannot obey the text color, but they can obey the window's background
 		// color if the picture's background is transparent (at least in the case of icons on XP).
 	};
-	#define USES_FONT_AND_TEXT_COLOR(type) !(type == GUI_CONTROL_PIC || type == GUI_CONTROL_SLIDER || type == GUI_CONTROL_PROGRESS)
+	#define USES_FONT_AND_TEXT_COLOR(type) !(type == GUI_CONTROL_PIC || type == GUI_CONTROL_UPDOWN \
+		|| type == GUI_CONTROL_SLIDER || type == GUI_CONTROL_PROGRESS)
 };
 
 struct GuiControlOptionsType
@@ -2037,7 +2051,11 @@ struct GuiControlOptionsType
 	#define GUI_MAX_TABSTOPS 50
 	UINT tabstop[GUI_MAX_TABSTOPS]; // Array of tabstops for the interior of a multi-line edit control.
 	UINT tabstop_count;  // The number of entries in the above array.
+	SYSTEMTIME sys_time[2]; // Needs to support 2 elements for MONTHCAL's multi/range mode.
+	SYSTEMTIME sys_time_range[2];
+	DWORD gdtr, gdtr_range; // Used in connection with sys_time and sys_time_range.
 	char password_char; // When zeroed, indicates "use default password" for an edit control with the password style.
+	bool range_changed;
 	bool color_changed; // To discern when a control has been put back to the default color. [v1.0.26]
 	bool start_new_section;
 	bool use_theme; // v1.0.32: Provides the means for the window's current setting of mUseTheme to be overridden.
@@ -2055,6 +2073,7 @@ public:
 	// default style) to exactly match that of a Combo or DropDownList.  This type of spacing seems
 	// to be what other apps use too, and seems to make edits stand out a little nicer:
 	#define GUI_CTL_VERTICAL_DEADSPACE 8
+	#define PROGRESS_DEFAULT_THICKNESS (2 * sFont[mCurrentFontIndex].point_size)
 	HWND mHwnd;
 	// Control IDs are higher than their index in the array by the below amount.  This offset is
 	// necessary because windows that behave like dialogs automatically return IDOK and IDCANCEL in
@@ -2085,6 +2104,7 @@ public:
 	int mMarginX, mMarginY, mPrevX, mPrevY, mPrevWidth, mPrevHeight, mMaxExtentRight, mMaxExtentDown
 		, mSectionX, mSectionY, mMaxExtentRightSection, mMaxExtentDownSection;
 	bool mFirstGuiShowCmd, mFirstActivation, mShowIsInProgress, mDestroyWindowHasBeenCalled;
+	bool mControlWidthWasSetByContents; // Whether the most recently added control was auto-width'd to fit its contents.
 
 	#define MAX_GUI_FONTS 100
 	static FontType sFont[MAX_GUI_FONTS];
@@ -2123,7 +2143,7 @@ public:
 		, mSectionX(COORD_UNSPECIFIED), mSectionY(COORD_UNSPECIFIED)
 		, mMaxExtentRightSection(COORD_UNSPECIFIED), mMaxExtentDownSection(COORD_UNSPECIFIED)
 		, mFirstGuiShowCmd(true), mFirstActivation(true), mShowIsInProgress(false)
-		, mDestroyWindowHasBeenCalled(false)
+		, mDestroyWindowHasBeenCalled(false), mControlWidthWasSetByContents(false)
 	{
 		// The array of controls is left unitialized to catch bugs.  Each control's attributes should be
 		// fully populated when it is created.
@@ -2196,6 +2216,7 @@ public:
 	static WORD TextToHotkey(char *aText);
 	static char *HotkeyToText(WORD aHotkey, char *aBuf);
 	void ControlCheckRadioButton(GuiControlType &aControl, GuiIndexType aControlIndex, WPARAM aCheckType);
+	void ControlSetUpDownOptions(GuiControlType &aControl, GuiControlOptionsType &aOpt);
 	int ControlGetDefaultSliderThickness(DWORD aStyle, int aThumbThickness);
 	void ControlSetSliderOptions(GuiControlType &aControl, GuiControlOptionsType &aOpt);
 	int ControlInvertSliderIfNeeded(GuiControlType &aControl, int aPosition);

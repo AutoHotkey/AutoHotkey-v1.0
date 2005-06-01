@@ -439,6 +439,7 @@ inline void strlcpy (char *aDst, const char *aSrc, size_t aDstSize)
 int GetYDay(int aMon, int aDay, bool aIsLeapYear);
 int GetISOWeekNumber(char *aBuf, int aYear, int aYDay, int aWDay);
 ResultType YYYYMMDDToFileTime(char *aYYYYMMDD, FILETIME &aFileTime);
+DWORD YYYYMMDDToSystemTime2(char *aYYYYMMDD, SYSTEMTIME *aSystemTime);
 ResultType YYYYMMDDToSystemTime(char *aYYYYMMDD, SYSTEMTIME &aSystemTime, bool aDoValidate);
 char *FileTimeToYYYYMMDD(char *aBuf, FILETIME &aTime, bool aConvertToLocalTime = false);
 char *SystemTimeToYYYYMMDD(char *aBuf, SYSTEMTIME &aTime);

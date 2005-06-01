@@ -1283,7 +1283,7 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 	char single_char_string[2];
 	vk_type vk = 0;
 	sc_type sc = 0;
-	mod_type modifiers;
+	modLR_type modifiersLR;
 
 	for (; *aEndKeys; ++aEndKeys) // This a modified version of the processing loop used in SendKeys().
 	{
@@ -1324,8 +1324,8 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 		default:
 			single_char_string[0] = *aEndKeys;
 			single_char_string[1] = '\0';
-			modifiers = 0;  // Init prior to below.
-			if (vk = TextToVK(single_char_string, &modifiers, true))
+			modifiersLR = 0;  // Init prior to below.
+			if (vk = TextToVK(single_char_string, &modifiersLR, true))
 			{
 				end_vk[vk] |= END_KEY_ENABLED; // Use of |= is essential for cases such as ";:".
 				// Insist the shift key be down to form genuinely different symbols --
@@ -1339,7 +1339,7 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 					// That leaves mostly just the number keys (top row) and all
 					// punctuation chars, which are the ones that we want to be
 					// distinguished between shifted and unshifted:
-					if (modifiers & MOD_SHIFT)
+					if (modifiersLR & (MOD_LSHIFT | MOD_RSHIFT))
 						end_vk[vk] |= END_KEY_WITH_SHIFT;
 					else
 						end_vk[vk] |= END_KEY_WITHOUT_SHIFT;
@@ -3240,7 +3240,7 @@ void Line::DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 		}
 		// This next part is a little iffy because if a legitimate return type is contained in a variable
 		// that happens to be named Cdecl, Cdecl will be put into effect regardless of what's in the variable.
-		// But the convenience of being able to omit the quotes around Cdecl seems to outweight the extreme
+		// But the convenience of being able to omit the quotes around Cdecl seems to outweigh the extreme
 		// rarity of such a thing happening.
 		else if (return_type_string[1] && !strnicmp(return_type_string[1], "CDecl", 5)) // Alternate calling convention.
 		{
@@ -3575,15 +3575,16 @@ void Line::DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 
 		if (this_param.symbol != SYM_VAR) // Output parameters are copied back only if its counterpart parameter is a naked variable.
 			continue;
+		Var &output_var = *this_param.var; // For performance and convenience.
 		if (this_dyna_param.type == DLL_ARG_STR) // The function might have altered Contents(), so update Length().
 		{
-			char *contents = this_param.var->Contents();
-			VarSizeType capacity = this_param.var->Capacity();
+			char *contents = output_var.Contents();
+			VarSizeType capacity = output_var.Capacity();
 			// Since the performance cost is low, ensure the string is terminated at the limit of its
 			// capacity (helps prevent crashes if DLL function didn't do its job and terminate the string):
 			if (capacity)
 				contents[capacity - 1] = '\0';
-			this_param.var->Length() = (VarSizeType)strlen(contents);
+			output_var.Length() = (VarSizeType)strlen(contents);
 			continue;
 		}
 
@@ -3597,30 +3598,30 @@ void Line::DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 		// case DLL_ARG_STR:  Already handled above.
 		case DLL_ARG_INT:
 			if (this_dyna_param.is_unsigned)
-				this_param.var->Assign((DWORD)this_dyna_param.value_int);
+				output_var.Assign((DWORD)this_dyna_param.value_int);
 			else // Signed.
-				this_param.var->Assign(this_dyna_param.value_int);
+				output_var.Assign(this_dyna_param.value_int);
 			break;
 		case DLL_ARG_SHORT:
 			if (this_dyna_param.is_unsigned) // Force omission of the high-order word in case it is non-zero from a parameter that was originally and erroneously larger than a short.
-				this_param.var->Assign(this_dyna_param.value_int & 0x0000FFFF); // This also forces the value into the unsigned domain of a signed int.
+				output_var.Assign(this_dyna_param.value_int & 0x0000FFFF); // This also forces the value into the unsigned domain of a signed int.
 			else // Signed.
-				this_param.var->Assign((int)(SHORT)(WORD)this_dyna_param.value_int); // These casts properly preserve negatives.
+				output_var.Assign((int)(SHORT)(WORD)this_dyna_param.value_int); // These casts properly preserve negatives.
 			break;
 		case DLL_ARG_CHAR:
 			if (this_dyna_param.is_unsigned) // Force omission of the high-order word in case it is non-zero from a parameter that was originally and erroneously larger than a short.
-				this_param.var->Assign(this_dyna_param.value_int & 0x000000FF); // This also forces the value into the unsigned domain of a signed int.
+				output_var.Assign(this_dyna_param.value_int & 0x000000FF); // This also forces the value into the unsigned domain of a signed int.
 			else // Signed.
-				this_param.var->Assign((int)(char)(BYTE)this_dyna_param.value_int); // These casts properly preserve negatives.
+				output_var.Assign((int)(char)(BYTE)this_dyna_param.value_int); // These casts properly preserve negatives.
 			break;
 		case DLL_ARG_INT64: // Unsigned and signed are both written as signed for the reasons described elsewhere above.
-			this_param.var->Assign(this_dyna_param.value_int64);
+			output_var.Assign(this_dyna_param.value_int64);
 			break;
 		case DLL_ARG_FLOAT:
-			this_param.var->Assign(this_dyna_param.value_float);
+			output_var.Assign(this_dyna_param.value_float);
 			break;
 		case DLL_ARG_DOUBLE:
-			this_param.var->Assign(this_dyna_param.value_double);
+			output_var.Assign(this_dyna_param.value_double);
 			break;
 		}
 	}

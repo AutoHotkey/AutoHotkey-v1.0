@@ -168,8 +168,11 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 	char single_char_string[2];
 	vk_type vk = 0;
 	sc_type sc = 0;
-	mod_type modifiers_for_next_key = 0;
 	modLR_type key_as_modifiersLR = 0;
+	modLR_type modifiersLR_for_next_key = 0;
+	// Above: For v1.0.35, it was changed to modLR vs. mod so that AltGr keys such as backslash and {
+	// are supported on layouts such as German when sending to apps such as Putty that are fussy about
+	// which ALT key is held down to produce the character.
 
 	// For v1.0.25, the below is static to track it in between sends, so that the below will continue
 	// to work:
@@ -189,25 +192,25 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 			{
 			case '^':
 				if (!(modifiers_persistent & MOD_CONTROL))
-					modifiers_for_next_key |= MOD_CONTROL;
-				// else don't add it, because the value of modifiers_for_next_key may also used to determine
+					modifiersLR_for_next_key |= MOD_LCONTROL;
+				// else don't add it, because the value of modifiersLR_for_next_key may also used to determine
 				// which keys to release after the key to which this modifier applies is sent.
 				// We don't want persistent modifiers to ever be released because that's how
 				// AutoIt2 behaves and it seems like a reasonable standard.
 				continue;
 			case '+':
 				if (!(modifiers_persistent & MOD_SHIFT))
-					modifiers_for_next_key |= MOD_SHIFT;
+					modifiersLR_for_next_key |= MOD_LSHIFT;
 				continue;
 			case '!':
 				if (!(modifiers_persistent & MOD_ALT))
-					modifiers_for_next_key |= MOD_ALT;
+					modifiersLR_for_next_key |= MOD_LALT;
 				continue;
 			case '#':
 				if (g_script.mIsAutoIt2) // Since AutoIt2 ignores these, ignore them if script is in AutoIt2 mode.
 					continue;
 				if (!(modifiers_persistent & MOD_WIN))
-					modifiers_for_next_key |= MOD_WIN;
+					modifiersLR_for_next_key |= MOD_LWIN;
 				continue;
 			case '}': continue;  // Important that these be ignored.  Be very careful about changing this, see below.
 			case '{':
@@ -256,7 +259,7 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 					}
 				}
 
-				vk = TextToVK(aKeys + 1, &modifiers_for_next_key, true, false); // false must be passed due to below.
+				vk = TextToVK(aKeys + 1, &modifiersLR_for_next_key, true, false); // false must be passed due to below.
 				sc = vk ? 0 : TextToSC(aKeys + 1);  // If sc is 0, it will be resolved by KeyEvent() later.
 				if (!vk && !sc && toupper(*(aKeys + 1)) == 'V' && toupper(*(aKeys + 2)) == 'K')
 				{
@@ -326,12 +329,12 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 						// behaves also, which is good.  Example: Send, {AltDown}!f  ; this will cause
 						// Alt to still be down after the command is over, even though F is modified
 						// by Alt.
-						SendKey(vk, sc, modifiers_for_next_key, g_modifiersLR_persistent, repeat_count
+						SendKey(vk, sc, modifiersLR_for_next_key, g_modifiersLR_persistent, repeat_count
 							, event_type, key_as_modifiersLR, aTargetWindow);
 					}
 
 					else if (key_name_length == 1) // No vk/sc means a char of length one is sent via special method.
-						SendKeySpecial(aKeys[1], modifiers_for_next_key, g_modifiersLR_persistent, repeat_count
+						SendKeySpecial(aKeys[1], modifiersLR_for_next_key, g_modifiersLR_persistent, repeat_count
 							, event_type, aTargetWindow);
 
 					// See comment "else must never change modifiers_persistent" above about why
@@ -371,7 +374,7 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 				// the contents literally since that's almost certainly not what the user intended.
 				// In addition, reset the modifiers, since they were intended to apply only to
 				// the key inside {}.  Also, the below is done even if repeat-count is zero:
-				modifiers_for_next_key = 0;
+				modifiersLR_for_next_key = 0;
 				aKeys = end_pos;  // In prep for aKeys++ done by the loop.
 				continue;
 			} // case '{'
@@ -386,13 +389,13 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 			// value for modifiers.
 			single_char_string[0] = *aKeys;
 			single_char_string[1] = '\0';
-			vk = TextToVK(single_char_string, &modifiers_for_next_key, true);
+			vk = TextToVK(single_char_string, &modifiersLR_for_next_key, true);
 			sc = 0;
 			if (vk)
-				SendKey(vk, sc, modifiers_for_next_key, g_modifiersLR_persistent, 1, KEYDOWNANDUP, 0, aTargetWindow);
+				SendKey(vk, sc, modifiersLR_for_next_key, g_modifiersLR_persistent, 1, KEYDOWNANDUP, 0, aTargetWindow);
 			else // Try to send it by alternate means.
-				SendKeySpecial(*aKeys, modifiers_for_next_key, g_modifiersLR_persistent, 1, KEYDOWNANDUP, aTargetWindow);
-			modifiers_for_next_key = 0;  // Safest to reset this regardless of whether a key was sent.
+				SendKeySpecial(*aKeys, modifiersLR_for_next_key, g_modifiersLR_persistent, 1, KEYDOWNANDUP, aTargetWindow);
+			modifiersLR_for_next_key = 0;  // Safest to reset this regardless of whether a key was sent.
 		}
 	} // for()
 
@@ -467,7 +470,7 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 
 
 
-int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, modLR_type aModifiersLRPersistent
+int SendKey(vk_type aVK, sc_type aSC, modLR_type aModifiersLR, modLR_type aModifiersLRPersistent
 	, int aRepeatCount, KeyEventTypes aEventType, modLR_type aKeyAsModifiersLR, HWND aTargetWindow)
 // vk or sc may be zero, but not both.
 // Returns the number of keys actually sent for caller convenience.
@@ -504,7 +507,7 @@ int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, modLR_type aModifiers
 	// UPDATE: Not saving and restoring at all anymore, due to interference (side-effects)
 	// caused by the extra keybd events.
 
-	mod_type modifiers_specified = aModifiers | ConvertModifiersLR(aModifiersLRPersistent);
+	modLR_type modifiersLR_specified = aModifiersLR | aModifiersLRPersistent;
 
 	// Sending mouse clicks via ControlSend is not supported, so in that case fall back to the
 	// old method of sending the VK directly (which probably has no effect 99% of the time):
@@ -512,7 +515,7 @@ int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, modLR_type aModifiers
 	{
 		// Pass "true" so that WIN and ALT are disguised if they have to be released due to
 		// a hotkey such as !a::Send {LButton}
-		if (SetModifierState(modifiers_specified, GetModifierLRState(), aTargetWindow, true, KEY_IGNORE))
+		if (SetModifierLRState(modifiersLR_specified, GetModifierLRState(), aTargetWindow, true, KEY_IGNORE))
 			// Modifiers were changed by the above.
 			DoKeyDelay(g.PressDuration); // See comments in SendKeys() about why this is done.
 		// It will do its own MouseDelay:
@@ -541,7 +544,7 @@ int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, modLR_type aModifiers
 				// Pass "true" so that WIN and ALT are disguised if they have to be released due to
 				// a hotkey such as !a::Send test
 				// See keyboard.h for explantion of KEY_IGNORE:
-				if (SetModifierState(modifiers_specified, GetModifierLRState(), aTargetWindow, true, KEY_IGNORE))
+				if (SetModifierLRState(modifiersLR_specified, GetModifierLRState(), aTargetWindow, true, KEY_IGNORE))
 					// Modifiers were changed by the above.
 					DoKeyDelay(g.PressDuration); // See comments in SendKeys() about why this is done.
 			}
@@ -558,7 +561,7 @@ int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, modLR_type aModifiers
 
 	// Release any modifiers that were pressed down just for the sake of the above
 	// event (i.e. leave any persistent modifiers pressed down).  The caller should
-	// already have verified that aModifiers does not contain any of the modifiers
+	// already have verified that aModifiersLR does not contain any of the modifiers
 	// in aModifiersLRPersistent.  Also, call GetModifierLRState() again explicitly
 	// rather than trying to use a saved value from above, in case the above itself
 	// changed the value of the modifiers (i.e. aVk/aSC is a modifier).  Admittedly,
@@ -597,7 +600,7 @@ int SendKey(vk_type aVK, sc_type aSC, mod_type aModifiers, modLR_type aModifiers
 
 
 
-int SendKeySpecial(char aChar, mod_type aModifiers, modLR_type aModifiersLRPersistent
+int SendKeySpecial(char aChar, modLR_type aModifiersLR, modLR_type aModifiersLRPersistent
 	, int aRepeatCount, KeyEventTypes aEventType, HWND aTargetWindow)
 // Returns the number of keys actually sent for caller convenience.
 // This function has been adapted from the AutoIt3 source.
@@ -631,7 +634,7 @@ int SendKeySpecial(char aChar, mod_type aModifiers, modLR_type aModifiersLRPersi
 //                               0   1   2   3   4   5   6   7   8   9   A   B   C   D   E   F
 	static char g_cDiadicLetter[16] = {' ','a','A','e','E','i','I','o','O','u','U','y','Y','n','N',' '};
 
-	mod_type modifiers_specified = aModifiers | ConvertModifiersLR(aModifiersLRPersistent);
+	modLR_type modifiersLR_specified = aModifiersLR | aModifiersLRPersistent;
 
 	char asc_string[16] = "";
 
@@ -754,14 +757,14 @@ int SendKeySpecial(char aChar, mod_type aModifiers, modLR_type aModifiersLRPersi
 			if (*asc_string1)
 				SendASC(asc_string1, aTargetWindow); // aTargetWindow is always NULL, it's just for maintainability.
 			else
-				SendChar(ch1, modifiers_specified, KEYDOWNANDUP, aTargetWindow);
+				SendChar(ch1, modifiersLR_specified, KEYDOWNANDUP, aTargetWindow);
 		}
 		if (send2)
 		{
 			if (*asc_string2)
 				SendASC(asc_string2, aTargetWindow); // aTargetWindow is always NULL, it's just for maintainability.
 			else
-				SendChar(ch2, modifiers_specified, KEYDOWNANDUP, aTargetWindow);
+				SendChar(ch2, modifiersLR_specified, KEYDOWNANDUP, aTargetWindow);
 		}
 		DoKeyDelay();
 	}
@@ -840,7 +843,7 @@ int SendASC(char *aAscii, HWND aTargetWindow)
 
 
 
-int SendChar(char aChar, mod_type aModifiers, KeyEventTypes aEventType, HWND aTargetWindow)
+int SendChar(char aChar, modLR_type aModifiersLR, KeyEventTypes aEventType, HWND aTargetWindow)
 // Returns the number of keys sent (doesn't need to be exact).
 {
 	SHORT mod_plus_vk = VkKeyScan(aChar);
@@ -849,15 +852,16 @@ int SendChar(char aChar, mod_type aModifiers, KeyEventTypes aEventType, HWND aTa
 		return 0;
 
 	// Combine the modifiers needed to enact this key with those that the caller wanted to be in effect:
+	mod_type modifiers = ConvertModifiersLR(aModifiersLR);
 	if (keyscan_modifiers & 0x01)
-		aModifiers |= MOD_SHIFT;
+		modifiers |= MOD_SHIFT;
 	if (keyscan_modifiers & 0x02)
-		aModifiers |= MOD_CONTROL;
+		modifiers |= MOD_CONTROL;
 	if (keyscan_modifiers & 0x04)
-		aModifiers |= MOD_ALT;
+		modifiers |= MOD_ALT;
 
 	// It's the caller's responsibility to restore the modifiers if it needs to:
-	if (SetModifierState(aModifiers, GetModifierLRState(), aTargetWindow, true, KEY_IGNORE))
+	if (SetModifierState(modifiers, GetModifierLRState(), aTargetWindow, true, KEY_IGNORE))
 		// Modifiers were changed by the above.
 		DoKeyDelay(g.PressDuration); // See comments in SendKeys() about why this is done.
 	KeyEvent(aEventType, LOBYTE(mod_plus_vk), 0, aTargetWindow, true);
@@ -1957,7 +1961,7 @@ sc_type TextToSC(char *aText)
 
 
 
-vk_type TextToVK(char *aText, mod_type *pModifiers, bool aExcludeThoseHandledByScanCode, bool aAllowExplicitVK)
+vk_type TextToVK(char *aText, modLR_type *pModifiersLR, bool aExcludeThoseHandledByScanCode, bool aAllowExplicitVK)
 // If modifiers_p is non-NULL, place the modifiers that are needed to realize the key in there.
 // e.g. M is really +m (shift-m), # is really shift-3.
 {
@@ -1990,17 +1994,31 @@ vk_type TextToVK(char *aText, mod_type *pModifiers, bool aExcludeThoseHandledByS
 		// The win docs for VkKeyScan() are a bit confusing, referring to flag "bits" when it should really
 		// say flag "values".  In addition, it seems that these flag values are incompatible with
 		// MOD_ALT, MOD_SHIFT, and MOD_CONTROL, so they must be translated:
-		if (pModifiers) // The caller wants this info added to the output param
+		if (pModifiersLR) // The caller wants this info added to the output param
 		{
 			// Best not to reset this value because some callers want to retain what was in it before,
 			// merely merging these new values into it:
 			//*pModifiers = 0;
-			if (keyscan_modifiers & 0x01)
-				*pModifiers |= MOD_SHIFT;
-			if (keyscan_modifiers & 0x02)
-				*pModifiers |= MOD_CONTROL;
-			if (keyscan_modifiers & 0x04)
-				*pModifiers |= MOD_ALT;
+
+			// For v1.0.35, pModifiersLR was changed to modLR vs. mod so that AltGr keys such as backslash and {
+			// are supported on layouts such as German when sending to apps such as Putty that are fussy about
+			// which ALT key is held down to produce the character.  The following line detects AltGr by the
+			// assuming that any character that requires both CTRL and ALT (with optional SHIFT) to be held
+			// down is in fact an AltGr key (I don't think there are any that aren't AltGr in this case, but
+			// confirmation would be nice).  Also, this is not done for Win9x because the distinction between
+			// right and left-alt is not well-supported and it might cause more harm than good (testing is
+			// needed on fussy apps like Putty on Win9x).
+			if ((keyscan_modifiers & 0x06) == 0x06 && !g_os.IsWin9x()) // This character requires both CTRL and ALT (and possibly SHIFT, since I think Shift+AltGr combinations exist).
+				*pModifiersLR |= MOD_RALT; // The critical difference here is right vs. left ALT.  Must not include MOD_LCONTROL because simulating the RAlt keystroke on these keyboard layouts will automatically press LControl down.
+			else
+			{
+				if (keyscan_modifiers & 0x01)
+					*pModifiersLR |= MOD_LSHIFT;
+				if (keyscan_modifiers & 0x02)
+					*pModifiersLR |= MOD_LCONTROL;
+				if (keyscan_modifiers & 0x04)
+					*pModifiersLR |= MOD_LALT;
+			}
 		}
 		return vk;
 	}

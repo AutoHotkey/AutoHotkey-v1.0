@@ -92,7 +92,45 @@ ResultType YYYYMMDDToFileTime(char *aYYYYMMDD, FILETIME &aFileTime)
 
 
 
+DWORD YYYYMMDDToSystemTime2(char *aYYYYMMDD, SYSTEMTIME *aSystemTime)
+// Calls YYYYMMDDToSystemTime() to fill up to two elements of the aSystemTime array.
+// Returns a GDTR bitwise combination to indicate which of the two elements, or both, are valid.
+// Caller must ensure that aYYYYMMDD is a modifiable string since it's temporarily altered and restored here.
+{
+	DWORD gdtr = 0;
+	if (!*aYYYYMMDD)
+		return gdtr;
+	if (*aYYYYMMDD != '-') // Since first char isn't a dash, there is a minimum present.
+	{
+		char *cp;
+		if (cp = strchr(aYYYYMMDD + 1, '-'))
+			*cp = '\0'; // Temporarily terminate in case only the leading part of the YYYYMMDD format is present.  Otherwise, the dash and other chars would be considered invalid fields.
+		if (YYYYMMDDToSystemTime(aYYYYMMDD, aSystemTime[0], true)) // Date string is valid.
+			gdtr |= GDTR_MIN; // Indicate that minimum is present.
+		if (cp)
+		{
+			*cp = '-'; // Undo the temp. termination.
+			aYYYYMMDD = cp + 1; // Set it to the maximum's position for use below.
+		}
+		else // No dash, so there is no maximum.  Indicate this by making aYYYYMMDD empty.
+			aYYYYMMDD = "";
+	}
+	else // *aYYYYMMDD=='-', so only the maximum is present; thus there will be no minimum.
+		++aYYYYMMDD; // Skip over the dash to set it to the maximum's position.
+	if (*aYYYYMMDD) // There is a maximum.
+	{
+		if (YYYYMMDDToSystemTime(aYYYYMMDD, aSystemTime[1], true)) // Date string is valid.
+			gdtr |= GDTR_MAX; // Indicate that maximum is present.
+	}
+	return gdtr;
+}
+
+
+
 ResultType YYYYMMDDToSystemTime(char *aYYYYMMDD, SYSTEMTIME &aSystemTime, bool aDoValidate)
+// Although aYYYYMMDD need not be terminated at the end of the YYYYMMDDHH24MISS string (as long as
+// the string's capacity is at least 14), it should be terminated if only the leading part
+// of the YYYYMMDDHH24MISS format is present.
 // Caller must ensure that aYYYYMMDD is non-NULL.  If aDoValidate is false, OK is always
 // returned and aSystemTime might contain invalid elements.  Otherwise, FAIL will be returned
 // if the date and time contains any invalid elements, or if the year is less than 1601
@@ -161,8 +199,8 @@ ResultType YYYYMMDDToSystemTime(char *aYYYYMMDD, SYSTEMTIME &aSystemTime, bool a
 		// less than 1601, which for simplicity is enforced globally throughout the program
 		// since none of the Windows API calls seem to support earlier years.
 		return SystemTimeToFileTime(&aSystemTime, &ft) ? OK : FAIL;
-		// Above: The st.wDayOfWeek member is ignored, but that's okay since on the YYYYMMDDHH24MISS part
-		// needs valiation.
+		// Above: The st.wDayOfWeek member is ignored, but that's okay since only the YYYYMMDDHH24MISS part
+		// needs validation.
 	}
 	return OK;
 }
