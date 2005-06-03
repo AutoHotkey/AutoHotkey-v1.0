@@ -2098,7 +2098,7 @@ inline ResultType Script::IsDirective(char *aBuf)
 				// that at least one space or tab occur to its left for it to be considered a
 				// comment marker.
 				if (*parameter == '#' || *parameter == g_DerefChar || *parameter == g_EscapeChar || *parameter == g_delimiter)
-					return ScriptError(ERR_DEFINE_CHAR);
+					return ScriptError(ERR_PARAM1_INVALID);
 				// Exclude hotkey definition chars, such as ^ and !, because otherwise
 				// the following example wouldn't work:
 				// User defines ! as the comment flag.
@@ -2108,7 +2108,7 @@ inline ResultType Script::IsDirective(char *aBuf)
 				if (*parameter == '!' || *parameter == '^' || *parameter == '+' || *parameter == '$' || *parameter == '~' || *parameter == '*'
 					|| *parameter == '<' || *parameter == '>')
 					// Note that '#' is already covered by the other stmt. above.
-					return ScriptError(ERR_DEFINE_COMMENT);
+					return ScriptError(ERR_PARAM1_INVALID);
 			}
 			strlcpy(g_CommentFlag, parameter, MAX_COMMENT_FLAG_LENGTH + 1);
 			g_CommentFlagLength = strlen(g_CommentFlag);  // Keep this in sync with above.
@@ -2122,7 +2122,7 @@ inline ResultType Script::IsDirective(char *aBuf)
 			// Don't allow '.' since that can be part of literal floating point numbers:
 			if (   *parameter == '#' || *parameter == g_DerefChar || *parameter == g_delimiter || *parameter == '.'
 				|| (g_CommentFlagLength == 1 && *parameter == *g_CommentFlag)   )
-				return ScriptError(ERR_DEFINE_CHAR);
+				return ScriptError(ERR_PARAM1_INVALID);
 			g_EscapeChar = *parameter;
 		}
 		return CONDITION_TRUE;
@@ -2133,7 +2133,7 @@ inline ResultType Script::IsDirective(char *aBuf)
 		{
 			if (   *parameter == '#' || *parameter == g_EscapeChar || *parameter == g_delimiter || *parameter == '.'
 				|| (g_CommentFlagLength == 1 && *parameter == *g_CommentFlag)   )
-				return ScriptError(ERR_DEFINE_CHAR);
+				return ScriptError(ERR_PARAM1_INVALID);
 			g_DerefChar = *parameter;
 		}
 		return CONDITION_TRUE;
@@ -2148,7 +2148,7 @@ inline ResultType Script::IsDirective(char *aBuf)
 		{
 			if (   *parameter == '#' || *parameter == g_EscapeChar || *parameter == g_DerefChar || *parameter == '.'
 				|| (g_CommentFlagLength == 1 && *parameter == *g_CommentFlag)   )
-				return ScriptError(ERR_DEFINE_CHAR);
+				return ScriptError(ERR_PARAM1_INVALID);
 			g_delimiter = *parameter;
 		}
 		return CONDITION_TRUE;
@@ -2170,7 +2170,7 @@ inline ResultType Script::IsDirective(char *aBuf)
 		// delim-comma being there too, it is kept because filesnames that start with a comma seem
 		// exceedingly rare.  As a workaround, the script can do #Include ,,FilenameWithLeadingComma.ahk
 		if (!parameter)
-			return ScriptError(ERR_INCLUDE_FILE);
+			return ScriptError(ERR_PARAM1_REQUIRED);
 		// v1.0.32:
 		bool ignore_load_failure = (parameter[0] == '*' && toupper(parameter[1]) == 'I'); // Relies on short-circuit boolean order.
 		if (ignore_load_failure)
@@ -2331,7 +2331,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 {
 #ifdef _DEBUG
 	if (!aLineText || !*aLineText)
-		return ScriptError("ParseAndAddLine() called incorrectly.");
+		return ScriptError("DEBUG: ParseAndAddLine() called incorrectly.");
 #endif
 
 	// The characters below are ordered with most-often used ones first, for performance:
@@ -2471,7 +2471,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 				if (is_already_exception) // It was already in the exception list (previously declared).
 					return ScriptError("Duplicate declaration.", item);
 				if (var->Type() != VAR_NORMAL || !strlicmp(item, "ErrorLevel", (UINT)(item_end - item))) // Shouldn't be declared either way (global or local).
-					return ScriptError("Built-in variables are always global and should not be declared.", item);
+					return ScriptError("Built-in variables must not be declared.", item);
 				for (int i = 0; i < g.CurrentFunc->mParamCount; ++i) // Search by name to find both global and local declarations.
 					if (!strlicmp(item, g.CurrentFunc->mParam[i].var->mName, (UINT)(item_end - item)))
 						return ScriptError("Parameters must not be declared.", item);
@@ -2654,23 +2654,35 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 					break;
 				case 'b': // "Between"
 				case 'B':
-					if (strnicmp(operation, "between", 7)) // Seems too rare a thing to warrant falling back to ACT_IFEXPR for this.
-						return ScriptError("The word BETWEEN was expected but not found.", aLineText);
-					action_type = ACT_IFBETWEEN;
-					// Set things up to be parsed as args further down.  A delimiter is inserted later below:
-					memset(operation, ' ', 7);
+					// Seems too rare a thing to warrant falling back to ACT_IFEXPR for this.
+					// UPDATE: It must fall back to ACT_IFEXPR, otherwise "if not var_name_beginning_with_b"
+					// is a syntax error.
+					if (strnicmp(operation, "between", 7))
+						action_type = ACT_IFEXPR;
+					else
+					{
+						action_type = ACT_IFBETWEEN;
+						// Set things up to be parsed as args further down.  A delimiter is inserted later below:
+						memset(operation, ' ', 7);
+					}
 					break;
 				case 'c': // "Contains"
 				case 'C':
-					if (strnicmp(operation, "contains", 8)) // Seems too rare a thing to warrant falling back to ACT_IFEXPR for this.
-						return ScriptError("The word CONTAINS was expected but not found.", aLineText);
-					action_type = ACT_IFCONTAINS;
-					// Set things up to be parsed as args further down.  A delimiter is inserted later below:
-					memset(operation, ' ', 8);
+					// Seems too rare a thing to warrant falling back to ACT_IFEXPR for this.
+					// UPDATE: It must fall back to ACT_IFEXPR, otherwise "if not var_name_beginning_with_c"
+					// is a syntax error.
+					if (strnicmp(operation, "contains", 8))
+						action_type = ACT_IFEXPR;
+					else
+					{
+						action_type = ACT_IFCONTAINS;
+						// Set things up to be parsed as args further down.  A delimiter is inserted later below:
+						memset(operation, ' ', 8);
+					}
 					break;
 				case 'i':  // "is" or "is not"
 				case 'I':
-					switch (toupper(*(operation + 1))) // Seems too rare a thing to warrant falling back to ACT_IFEXPR for this.
+					switch (toupper(*(operation + 1)))
 					{
 					case 's':  // "IS"
 					case 'S':
@@ -2691,31 +2703,39 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 						*(operation + 1) = ' '; // Remove the 'N' in "IN".  'I' is replaced with ',' later below.
 						break;
 					default:
-						return ScriptError("The word IS or IN was expected but not found.", aLineText);
+						// v1.0.35.01 It must fall back to ACT_IFEXPR, otherwise "if not var_name_beginning_with_i"
+						// is a syntax error.
+						action_type = ACT_IFEXPR;
 					} // switch()
 					break;
 				case 'n':  // It's either "not in", "not between", or "not contains"
 				case 'N':
-					if (strnicmp(operation, "not", 3)) // Seems too rare a thing to warrant falling back to ACT_IFEXPR for this.
-						return ScriptError("The word NOT was expected but not found.", aLineText);
-					// Remove the "NOT" separately in case there is more than one space or tab between
-					// it and the following word, e.g. "not   between":
-					memset(operation, ' ', 3);
-					next_word = omit_leading_whitespace(operation + 3);
-					if (!strnicmp(next_word, "in", 2))
+					// Seems too rare a thing to warrant falling back to ACT_IFEXPR for this.
+					// UPDATE: It must fall back to ACT_IFEXPR, otherwise "if not var_name_beginning_with_n"
+					// is a syntax error.
+					if (strnicmp(operation, "not", 3))
+						action_type = ACT_IFEXPR;
+					else
 					{
-						action_type = ACT_IFNOTIN;
-						memset(next_word, ' ', 2);
-					}
-					else if (!strnicmp(next_word, "between", 7))
-					{
-						action_type = ACT_IFNOTBETWEEN;
-						memset(next_word, ' ', 7);
-					}
-					else if (!strnicmp(next_word, "contains", 8))
-					{
-						action_type = ACT_IFNOTCONTAINS;
-						memset(next_word, ' ', 8);
+						// Remove the "NOT" separately in case there is more than one space or tab between
+						// it and the following word, e.g. "not   between":
+						memset(operation, ' ', 3);
+						next_word = omit_leading_whitespace(operation + 3);
+						if (!strnicmp(next_word, "in", 2))
+						{
+							action_type = ACT_IFNOTIN;
+							memset(next_word, ' ', 2);
+						}
+						else if (!strnicmp(next_word, "between", 7))
+						{
+							action_type = ACT_IFNOTBETWEEN;
+							memset(next_word, ' ', 7);
+						}
+						else if (!strnicmp(next_word, "contains", 8))
+						{
+							action_type = ACT_IFNOTCONTAINS;
+							memset(next_word, ' ', 8);
+						}
 					}
 					break;
 
@@ -2976,9 +2996,9 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 	} // end of special handling for MsgBox.
 
 
-	////////////////////////////////////////////////////////////
-	// Parse the parmeter string into a list of separate params.
-	////////////////////////////////////////////////////////////
+	/////////////////////////////////////////////////////////////
+	// Parse the parameter string into a list of separate params.
+	/////////////////////////////////////////////////////////////
 	// MaxParams has already been verified as being <= MAX_ARGS.
 	// Any g_delimiter-delimited items beyond MaxParams will be included in a lump inside the last param:
 	int nArgs, nArgs_plus_one, open_parens;
@@ -3236,7 +3256,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 			break;
 #ifdef _DEBUG
 		default:
-			return ScriptError("Unhandled Old-Command.", action_name);
+			return ScriptError("DEBUG: Unhandled Old-Command.", action_name);
 #endif
 		} // switch()
 	}
@@ -3399,7 +3419,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 {
 #ifdef _DEBUG
 	if (aActionType == ACT_INVALID)
-		return ScriptError("BAD AddLine", aArgc > 0 ? aArg[0] : "");
+		return ScriptError("DEBUG: BAD AddLine", aArgc > 0 ? aArg[0] : "");
 #endif
 
 	bool do_update_labels;
@@ -3946,6 +3966,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	///////////////////////////////////////////////////////////////////
 	// Do any post-add validation & handling for specific action types.
 	///////////////////////////////////////////////////////////////////
+#ifndef AUTOHOTKEYSC // For v1.0.35.01, some syntax checking is removed in compiled scripts to reduce their size.
 	int value;    // For temp use during validation.
 	double value_float;
 	SYSTEMTIME st;  // same.
@@ -3970,8 +3991,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		if (aArgc > 0 && !line.ArgHasDeref(1))
 		{
 			if (!strcasestr(NEW_RAW_ARG1, "ms") && !IsPureNumeric(NEW_RAW_ARG1, true, false))
-				return ScriptError("Parameter #1 must be an integer, an interval string such as 15ms,"
-					" or a variable reference.", NEW_RAW_ARG1);
+				return ScriptError(ERR_PARAM1_INVALID, NEW_RAW_ARG1);
 		}
 		break;
 
@@ -3982,7 +4002,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 
 	case ACT_BLOCKINPUT:
 		if (aArgc > 0 && !line.ArgHasDeref(1) && !line.ConvertBlockInput(NEW_RAW_ARG1))
-			return ScriptError(ERR_BLOCKINPUT, NEW_RAW_ARG1);
+			return ScriptError(ERR_PARAM1_INVALID, NEW_RAW_ARG1);
 		break;
 
 	case ACT_PAUSE:
@@ -3995,17 +4015,17 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_SETSCROLLLOCKSTATE:
 	case ACT_SETCAPSLOCKSTATE:
 		if (aArgc > 0 && !line.ArgHasDeref(1) && !line.ConvertOnOffAlways(NEW_RAW_ARG1))
-			return ScriptError(ERR_ON_OFF_ALWAYS, NEW_RAW_ARG1);
+			return ScriptError(ERR_PARAM1_INVALID, NEW_RAW_ARG1);
 		break;
 
 	case ACT_STRINGMID:
 		if (aArgc > 4 && !line.ArgHasDeref(5) && stricmp(NEW_RAW_ARG5, "L"))
-			return ScriptError("Parameter #5 must be blank, the letter L, or a variable reference.", NEW_RAW_ARG5);
+			return ScriptError(ERR_PARAM5_INVALID, NEW_RAW_ARG5);
 		break;
 
 	case ACT_STRINGGETPOS:
 		if (*NEW_RAW_ARG4 && !line.ArgHasDeref(4) && !strchr("LR1", toupper(*NEW_RAW_ARG4)))
-			return ScriptError("If not blank or a variable reference, parameter #4 must be 1 or start with the letter L or R.", NEW_RAW_ARG4);
+			return ScriptError(ERR_PARAM4_INVALID, NEW_RAW_ARG4);
 		break;
 
 	case ACT_STRINGSPLIT:
@@ -4060,9 +4080,9 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				return ScriptError(ERR_PERCENT, NEW_RAW_ARG1);
 		}
 		if (*NEW_RAW_ARG2 && !line.ArgHasDeref(2) && !line.SoundConvertComponentType(NEW_RAW_ARG2))
-			return ScriptError("Parameter #2 specifies an invalid component type.", NEW_RAW_ARG2);
+			return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
 		if (*NEW_RAW_ARG3 && !line.ArgHasDeref(3) && !line.SoundConvertControlType(NEW_RAW_ARG3))
-			return ScriptError("Parameter #3 specifies an invalid control type.", NEW_RAW_ARG3);
+			return ScriptError(ERR_PARAM3_INVALID, NEW_RAW_ARG3);
 		break;
 
 	case ACT_SOUNDSETWAVEVOLUME:
@@ -4081,12 +4101,12 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 
 	case ACT_SOUNDPLAY:
 		if (*NEW_RAW_ARG2 && !line.ArgHasDeref(2) && stricmp(NEW_RAW_ARG2, "wait") && stricmp(NEW_RAW_ARG2, "1"))
-			return ScriptError("If not blank, parameter #2 must be 1, WAIT, or a variable reference.", NEW_RAW_ARG2);
+			return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
 		break;
 
 	case ACT_PIXELGETCOLOR:
 		if (*NEW_RAW_ARG4 && !line.ArgHasDeref(4) && stricmp(NEW_RAW_ARG4, "RGB"))
-			return ScriptError("Parameter #4 must be blank or the word RGB.", NEW_RAW_ARG4);
+			return ScriptError(ERR_PARAM4_INVALID, NEW_RAW_ARG4);
 		break;
 
 	case ACT_PIXELSEARCH:
@@ -4104,15 +4124,14 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				// sees a valid no-deref expression such as 300-200 as invalid.
 				value = ATOI(NEW_RAW_ARG8);
 				if (value < 0 || value > 255)
-					return ScriptError("Parameter #8 must be number between 0 and 255, blank, or a variable reference."
-						, NEW_RAW_ARG8);
+					return ScriptError(ERR_PARAM8_INVALID, NEW_RAW_ARG8);
 			}
 		}
 		break;
 
 	case ACT_COORDMODE:
 		if (*NEW_RAW_ARG1 && !line.ArgHasDeref(1) && !line.ConvertCoordModeAttrib(NEW_RAW_ARG1))
-			return ScriptError(ERR_COORDMODE, NEW_RAW_ARG1);
+			return ScriptError(ERR_PARAM1_INVALID, NEW_RAW_ARG1);
 		break;
 
 	case ACT_SETDEFAULTMOUSESPEED:
@@ -4143,7 +4162,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				return ScriptError(ERR_MOUSE_SPEED, NEW_RAW_ARG3);
 		}
 		if (*NEW_RAW_ARG4 && !line.ArgHasDeref(4) && toupper(*NEW_RAW_ARG4) != 'R')
-			return ScriptError("Parameter #4 (if present) must be the letter R.", NEW_RAW_ARG4);
+			return ScriptError(ERR_PARAM4_INVALID, NEW_RAW_ARG4);
 		if (!line.ValidateMouseCoords(NEW_RAW_ARG1, NEW_RAW_ARG2))
 			return ScriptError(ERR_MOUSE_COORD, NEW_RAW_ARG1);
 		break;
@@ -4162,9 +4181,9 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		}
 		if (*NEW_RAW_ARG6 && !line.ArgHasDeref(6))
 			if (strlen(NEW_RAW_ARG6) > 1 || !strchr("UD", toupper(*NEW_RAW_ARG6)))  // Up / Down
-				return ScriptError(ERR_MOUSE_UPDOWN, NEW_RAW_ARG6);
+				return ScriptError(ERR_PARAM6_INVALID, NEW_RAW_ARG6);
 		if (*NEW_RAW_ARG7 && !line.ArgHasDeref(7) && toupper(*NEW_RAW_ARG7) != 'R')
-			return ScriptError("Parameter #7 (if present) must be the letter R.", NEW_RAW_ARG7);
+			return ScriptError(ERR_PARAM7_INVALID, NEW_RAW_ARG7);
 		// Check that the button is valid (e.g. left/right/middle):
 		if (*NEW_RAW_ARG1 && !line.ArgHasDeref(1) && !line.ConvertMouseButton(NEW_RAW_ARG1)) // Treats blank as "Left".
 			return ScriptError(ERR_MOUSE_BUTTON, NEW_RAW_ARG1);
@@ -4176,7 +4195,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		// Even though we check for blanks here at load-time, we don't bother to do so at runtime
 		// (i.e. if a dereferenced var resolved to blank, it will be treated as a zero):
 		if (!*NEW_RAW_ARG4 || !*NEW_RAW_ARG5)
-			return ScriptError("Parameter #4 and #5 must not be blank.");
+			return ScriptError("Parameter #4 and 5 required.");
 		// Pass "true" so that double derefs (such as Array%i%) that have been transformed into
 		// input variables at an earlier stage will not be seen here as literal text capable of
 		// being validated:
@@ -4189,7 +4208,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				return ScriptError(ERR_MOUSE_SPEED, NEW_RAW_ARG6);
 		}
 		if (*NEW_RAW_ARG7 && !line.ArgHasDeref(7) && toupper(*NEW_RAW_ARG7) != 'R')
-			return ScriptError("Parameter #7 (if present) must be the letter R.", NEW_RAW_ARG7);
+			return ScriptError(ERR_PARAM7_INVALID, NEW_RAW_ARG7);
 		if (!line.ArgHasDeref(1))
 			if (!line.ConvertMouseButton(NEW_RAW_ARG1, false))
 				return ScriptError(ERR_MOUSE_BUTTON, NEW_RAW_ARG1);
@@ -4205,7 +4224,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		// be non-blank (but it's ok if its a dereferenced var that resolves to blank
 		// at runtime):
 		if (!*NEW_RAW_ARG2)
-			return ScriptError("Parameter #2 must not be blank.");
+			return ScriptError(ERR_PARAM2_REQUIRED);
 		break;
 
 	case ACT_CONTROLCLICK:
@@ -4221,7 +4240,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		{
 			if (*NEW_RAW_ARG3 && !line.ArgHasDeref(3))
 				if (!strchr("SMHD", toupper(*NEW_RAW_ARG3)))  // (S)econds, (M)inutes, (H)ours, or (D)ays
-					return ScriptError(ERR_COMPARE_TIMES, NEW_RAW_ARG3);
+					return ScriptError(ERR_PARAM3_INVALID, NEW_RAW_ARG3);
 			if (aActionType == ACT_SUB && *NEW_RAW_ARG2 && !line.ArgHasDeref(2))
 				if (!YYYYMMDDToSystemTime(NEW_RAW_ARG2, st, true))
 					return ScriptError(ERR_INVALID_DATETIME, NEW_RAW_ARG2);
@@ -4242,13 +4261,12 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			// sees a valid no-deref expression such as 2-1 as invalid.
 			if (strlen(NEW_RAW_ARG3) > 1 || *NEW_RAW_ARG3 < '0' || *NEW_RAW_ARG3 > '3')
 				if (aActionType != ACT_FILEMOVEDIR || toupper(*NEW_RAW_ARG3) != 'R')
-					return ScriptError("Parameter #3 is not valid.", NEW_RAW_ARG3);
+					return ScriptError(ERR_PARAM3_INVALID, NEW_RAW_ARG3);
 		}
 		if (aActionType == ACT_FILEINSTALL)
 		{
 			if (aArgc > 0 && line.ArgHasDeref(1))
-				return ScriptError("Parameter #1 must not contain references to variables."
-					, NEW_RAW_ARG1);
+				return ScriptError("Parameter #1 must not contain variables.", NEW_RAW_ARG1);
 		}
 		break;
 
@@ -4261,8 +4279,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			// The value of catching syntax errors at load-time seems to outweigh the fact that this check
 			// sees a valid no-deref expression such as 3-2 as invalid.
 			if (strlen(NEW_RAW_ARG2) > 1 || (*NEW_RAW_ARG2 != '0' && *NEW_RAW_ARG2 != '1'))
-				return ScriptError("Parameter #2 must be either blank, 0, 1, or a variable reference."
-					, NEW_RAW_ARG2);
+				return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
 		}
 		break;
 
@@ -4271,8 +4288,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		{
 			for (char *cp = NEW_RAW_ARG1; *cp; ++cp)
 				if (!strchr("+-^RASHNOT", toupper(*cp)))
-					return ScriptError("Parameter #1 contains unsupported file-attribute letters or symbols."
-						, NEW_RAW_ARG1);
+					return ScriptError(ERR_PARAM1_INVALID, NEW_RAW_ARG1);
 		}
 		// For the next two checks:
 		// Pass "true" so that double derefs (such as Array%i%) that have been transformed into
@@ -4281,18 +4297,16 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		// The value of catching syntax errors at load-time seems to outweigh the fact that this check
 		// sees a valid no-deref expression such as 300-200 as invalid.
 		if (aArgc > 2 && !line.ArgHasDeref(3) && line.ConvertLoopMode(NEW_RAW_ARG3) == FILE_LOOP_INVALID)
-			return ScriptError("If not blank, parameter #3 must be either 0, 1, 2, or a variable reference."
-				, NEW_RAW_ARG3);
+			return ScriptError(ERR_PARAM3_INVALID, NEW_RAW_ARG3);
 		if (*NEW_RAW_ARG4 && !line.ArgHasDeref(4))
 			if (strlen(NEW_RAW_ARG4) > 1 || (*NEW_RAW_ARG4 != '0' && *NEW_RAW_ARG4 != '1'))
-				return ScriptError("Parameter #4 must be either blank, 0, 1, or a variable reference."
-					, NEW_RAW_ARG4);
+				return ScriptError(ERR_PARAM4_INVALID, NEW_RAW_ARG4);
 		break;
 
 	case ACT_FILEGETTIME:
 		if (*NEW_RAW_ARG3 && !line.ArgHasDeref(3))
 			if (strlen(NEW_RAW_ARG3) > 1 || !strchr("MCA", toupper(*NEW_RAW_ARG3)))
-				return ScriptError(ERR_FILE_TIME, NEW_RAW_ARG3);
+				return ScriptError(ERR_PARAM3_INVALID, NEW_RAW_ARG3);
 		break;
 
 	case ACT_FILESETTIME:
@@ -4301,7 +4315,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				return ScriptError(ERR_INVALID_DATETIME, NEW_RAW_ARG1);
 		if (*NEW_RAW_ARG3 && !line.ArgHasDeref(3))
 			if (strlen(NEW_RAW_ARG3) > 1 || !strchr("MCA", toupper(*NEW_RAW_ARG3)))
-				return ScriptError(ERR_FILE_TIME, NEW_RAW_ARG3);
+				return ScriptError(ERR_PARAM3_INVALID, NEW_RAW_ARG3);
 		// For the next two checks:
 		// Pass "true" so that double derefs (such as Array%i%) that have been transformed into
 		// input variables at an earlier stage will not be seen here as literal text capable of
@@ -4309,19 +4323,16 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		// The value of catching syntax errors at load-time seems to outweigh the fact that this check
 		// sees a valid no-deref expression such as 300-200 as invalid.
 		if (aArgc > 3 && !line.ArgHasDeref(4) && line.ConvertLoopMode(NEW_RAW_ARG4) == FILE_LOOP_INVALID)
-			return ScriptError("If not blank, parameter #4 must be either 0, 1, 2, or a variable reference."
-				, NEW_RAW_ARG4);
+			return ScriptError(ERR_PARAM4_INVALID, NEW_RAW_ARG4);
 		if (*NEW_RAW_ARG5 && !line.ArgHasDeref(5))
 			if (strlen(NEW_RAW_ARG5) > 1 || (*NEW_RAW_ARG5 != '0' && *NEW_RAW_ARG5 != '1'))
-				return ScriptError("Parameter #5 must be either blank, 0, 1, or a variable reference."
-					, NEW_RAW_ARG5);
+				return ScriptError(ERR_PARAM5_INVALID, NEW_RAW_ARG5);
 		break;
 
 	case ACT_FILEGETSIZE:
 		if (*NEW_RAW_ARG3 && !line.ArgHasDeref(3))
 			if (strlen(NEW_RAW_ARG3) > 1 || !strchr("BKM", toupper(*NEW_RAW_ARG3))) // Allow B=Bytes as undocumented.
-				return ScriptError("Parameter #3 must be either blank, K, M, or a variable reference."
-					, NEW_RAW_ARG3);
+				return ScriptError(ERR_PARAM3_INVALID, NEW_RAW_ARG3);
 		break;
 
 	case ACT_FILESELECTFILE:
@@ -4332,8 +4343,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			else
                 value = ATOI(NEW_RAW_ARG2);
 			if (value < 0 || value > 31)
-				return ScriptError("Paremeter #2 must be either blank, a variable reference,"
-					" or contain a number between 0 and 31 inclusive.", NEW_RAW_ARG2);
+				return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
 		}
 		break;
 
@@ -4349,19 +4359,18 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			{
 				if (aArgc > 1 && !line.ArgHasDeref(2))
 				{
-					if (!IsPureNumeric(NEW_RAW_ARG2, true, false, true))
-						return ScriptError("Parameter #2 must be numeric when used with FLOAT.", NEW_RAW_ARG2);
-					if (strlen(NEW_RAW_ARG2) >= sizeof(g.FormatFloat) - 2)
-						return ScriptError("Parameter #2 is too long for use with FLOAT.", NEW_RAW_ARG2);
+					if (!IsPureNumeric(NEW_RAW_ARG2, true, false, true)
+						|| strlen(NEW_RAW_ARG2) >= sizeof(g.FormatFloat) - 2)
+						return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
 				}
 			}
 			else if (!stricmp(NEW_RAW_ARG1, "integer"))
 			{
 				if (aArgc > 1 && !line.ArgHasDeref(2) && toupper(*NEW_RAW_ARG2) != 'H' && toupper(*NEW_RAW_ARG2) != 'D')
-					return ScriptError("Parameter #2 must be either H or D when used with INTEGER.", NEW_RAW_ARG2);
+					return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
 			}
 			else
-				return ScriptError("Parameter #1 must be a variable reference or the word INTEGER or FLOAT.", NEW_RAW_ARG1);
+				return ScriptError(ERR_PARAM1_INVALID, NEW_RAW_ARG1);
 		}
 		// Size must be less than sizeof() minus 2 because need room to prepend the '%' and append
 		// the 'f' to make it a valid format specifier string:
@@ -4374,7 +4383,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			// for NEW_RAW_ARG3 be displayed because only here was it finally possible to call
 			// ArgHasDeref() [above].
 			if (trans_cmd == TRANS_CMD_INVALID)
-				return ScriptError(ERR_TRANSFORMCOMMAND, NEW_RAW_ARG2);
+				return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
 			if (trans_cmd == TRANS_CMD_UNICODE && !*line.mArg[0].text) // blank text means output-var is not a dynamically built one.
 			{
 				// If the output var isn't the clipboard, the mode is "retrieve clipboard text as UTF-8".
@@ -4434,7 +4443,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 						return ScriptError("Parameter #3 must be a positive integer in this case.", NEW_RAW_ARG3);
 					break;
 
-				// The following are not listed above because no validation of Paramter #3 is needed at this stage:
+				// The following are not listed above because no validation of Parameter #3 is needed at this stage:
 				// TRANS_CMD_ASC
 				// TRANS_CMD_UNICODE
 				// TRANS_CMD_HTML
@@ -4492,7 +4501,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				break;
 #ifdef _DEBUG
 			default:
-				return ScriptError("Unhandled", NEW_RAW_ARG2);  // To improve maintainability.
+				return ScriptError("DEBUG: Unhandled", NEW_RAW_ARG2);  // To improve maintainability.
 #endif
 			}
 
@@ -4503,15 +4512,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				{
 					value = ATOI(NEW_RAW_ARG3);
 					if (!IsPureNumeric(NEW_RAW_ARG3, false, false) || value < 0 || value > 255)
-						return ScriptError("Parameter #3 must be between 0 and 255 inclusive.", NEW_RAW_ARG3);
+						return ScriptError(ERR_PARAM3_INVALID, NEW_RAW_ARG3);
 				}
-				break;
-			case TRANS_CMD_DEREF:
-				// Seems best to issue a warning for this, since it's hard to imagine anyone ever intentionally
-				// doing it under any circumstances:
-				if (!line.ArgHasDeref(3))
-					return ScriptError("Because parameter #3 contains no variable reference(s), "
-						"this line serves no purpose.", NEW_RAW_ARG3);
 				break;
 			case TRANS_CMD_MOD:
 				if (!line.ArgHasDeref(4) && !ATOF(NEW_RAW_ARG4)) // Parameter is omitted or something that resolves to zero.
@@ -4548,7 +4550,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			switch (menu_cmd)
 			{
 			case MENU_CMD_INVALID:
-				return ScriptError(ERR_MENUCOMMAND, NEW_RAW_ARG2);
+				return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
 
 			case MENU_CMD_NODEFAULT:
 			case MENU_CMD_STANDARD:
@@ -4612,10 +4614,10 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			switch (gui_cmd)
 			{
 			case GUI_CMD_INVALID:
-				return ScriptError(ERR_GUICOMMAND, NEW_RAW_ARG1);
+				return ScriptError(ERR_PARAM1_INVALID, NEW_RAW_ARG1);
 			case GUI_CMD_ADD:
 				if (aArgc > 1 && !line.ArgHasDeref(2) && !line.ConvertGuiControl(NEW_RAW_ARG2))
-					return ScriptError(ERR_GUICONTROL, NEW_RAW_ARG2);
+					return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
 				break;
 			case GUI_CMD_CANCEL:
 			case GUI_CMD_MINIMIZE:
@@ -4644,7 +4646,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 
 	case ACT_THREAD:
 		if (aArgc > 0 && !line.ArgHasDeref(1) && !line.ConvertThreadCommand(NEW_RAW_ARG1))
-			return ScriptError(ERR_THREADCOMMAND, NEW_RAW_ARG1);
+			return ScriptError(ERR_PARAM1_INVALID, NEW_RAW_ARG1);
 		break;
 
 	case ACT_CONTROL:
@@ -4654,7 +4656,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			switch (control_cmd)
 			{
 			case CONTROL_CMD_INVALID:
-				return ScriptError(ERR_CONTROLCOMMAND, NEW_RAW_ARG1);
+				return ScriptError(ERR_PARAM1_INVALID, NEW_RAW_ARG1);
 			case CONTROL_CMD_STYLE:
 			case CONTROL_CMD_EXSTYLE:
 			case CONTROL_CMD_TABLEFT:
@@ -4681,7 +4683,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			switch (control_get_cmd)
 			{
 			case CONTROLGET_CMD_INVALID:
-				return ScriptError(ERR_CONTROLGETCOMMAND, NEW_RAW_ARG2);
+				return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
 			case CONTROLGET_CMD_FINDSTRING:
 			case CONTROLGET_CMD_LINE:
 				if (!*NEW_RAW_ARG3)
@@ -4696,14 +4698,14 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 
 	case ACT_GUICONTROL:
 		if (!*NEW_RAW_ARG2) // ControlID
-			return ScriptError("Parameter #2 must not be blank.");
+			return ScriptError(ERR_PARAM2_REQUIRED);
 		if (aArgc > 0 && !line.ArgHasDeref(1))
 		{
 			GuiControlCmds guicontrol_cmd = line.ConvertGuiControlCmd(NEW_RAW_ARG1);
 			switch (guicontrol_cmd)
 			{
 			case GUICONTROL_CMD_INVALID:
-				return ScriptError(ERR_GUICONTROLCOMMAND, NEW_RAW_ARG1);
+				return ScriptError(ERR_PARAM1_INVALID, NEW_RAW_ARG1);
 			case GUICONTROL_CMD_CONTENTS:
 			case GUICONTROL_CMD_TEXT:
 				break; // Do nothing for the above commands since Param3 is optional.
@@ -4728,7 +4730,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			switch (guicontrolget_cmd)
 			{
 			case GUICONTROLGET_CMD_INVALID:
-				return ScriptError(ERR_GUICONTROLGETCOMMAND, NEW_RAW_ARG2);
+				return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
 			case GUICONTROLGET_CMD_CONTENTS:
 				break; // Do nothing, since Param4 is optional in this case.
 			default: // All commands except the above should have a blank parameter here.
@@ -4750,7 +4752,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		{
 			DriveCmds drive_cmd = line.ConvertDriveCmd(NEW_RAW_ARG1);
 			if (!drive_cmd)
-				return ScriptError(ERR_DRIVECOMMAND, NEW_RAW_ARG1);
+				return ScriptError(ERR_PARAM1_INVALID, NEW_RAW_ARG1);
 			if (drive_cmd != DRIVE_CMD_EJECT && !*NEW_RAW_ARG2)
 				return ScriptError("Parameter #2 must not be blank in this case.");
 			// For DRIVE_CMD_LABEL: Note that is is possible and allowed for the new label to be blank.
@@ -4765,7 +4767,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		{
 			DriveGetCmds drive_get_cmd = line.ConvertDriveGetCmd(NEW_RAW_ARG2);
 			if (!drive_get_cmd)
-				return ScriptError(ERR_DRIVEGETCOMMAND, NEW_RAW_ARG2);
+				return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
 			if (drive_get_cmd != DRIVEGET_CMD_LIST && drive_get_cmd != DRIVEGET_CMD_STATUSCD && !*NEW_RAW_ARG3)
 				return ScriptError("Parameter #3 must not be blank in this case.");
 			if (drive_get_cmd != DRIVEGET_CMD_SETLABEL && (aArgc < 1 || line.mArg[0].type == ARG_TYPE_NORMAL))
@@ -4783,7 +4785,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			switch (process_cmd)
 			{
 			case PROCESS_CMD_INVALID:
-				return ScriptError(ERR_PROCESSCOMMAND, NEW_RAW_ARG1);
+				return ScriptError(ERR_PARAM1_INVALID, NEW_RAW_ARG1);
 			case PROCESS_CMD_EXIST:
 			case PROCESS_CMD_CLOSE:
 				if (*NEW_RAW_ARG3)
@@ -4791,8 +4793,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				break;
 			case PROCESS_CMD_PRIORITY:
 				if (!*NEW_RAW_ARG3 || (!line.ArgHasDeref(3) && !strchr(PROCESS_PRIORITY_LETTERS, toupper(*NEW_RAW_ARG3))))
-					return ScriptError("Parameter #3 must be one of the following letters: "
-						PROCESS_PRIORITY_LETTERS ".", NEW_RAW_ARG3);
+					return ScriptError(ERR_PARAM3_INVALID, NEW_RAW_ARG3);
 				break;
 			case PROCESS_CMD_WAIT:
 			case PROCESS_CMD_WAITCLOSE:
@@ -4834,7 +4835,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		// be non-blank (but it's ok if its a dereferenced var that resolves to blank
 		// at runtime):
 		if (!*NEW_RAW_ARG3)
-			return ScriptError("Parameter #3 must not be blank.");
+			return ScriptError(ERR_PARAM3_REQUIRED);
 		break;
 
 	case ACT_WINSET:
@@ -4847,8 +4848,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				{
 					value = ATOI(NEW_RAW_ARG2);
 					if (value < 0 || value > 255)
-						return ScriptError("Parameter #2 must be between 0 and 255 when used with TRANSPARENT."
-							, NEW_RAW_ARG2);
+						return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
 				}
 				break;
 			case WINSET_TRANSCOLOR:
@@ -4867,60 +4867,58 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					return ScriptError("Parameter #2 must be blank in this case.");
 				break;
 			case WINSET_INVALID:
-				return ScriptError(ERR_WINSET, NEW_RAW_ARG1);
+				return ScriptError(ERR_PARAM1_INVALID, NEW_RAW_ARG1);
 			}
 		}
 		break;
 
 	case ACT_WINGET:
 		if (!line.ArgHasDeref(2) && !line.ConvertWinGetCmd(NEW_RAW_ARG2)) // It's okay if ARG2 is blank.
-			return ScriptError(ERR_WINGET, NEW_RAW_ARG2);
+			return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
 		break;
 
 	case ACT_SYSGET:
 		if (!line.ArgHasDeref(2) && !line.ConvertSysGetCmd(NEW_RAW_ARG2))
-			return ScriptError(ERR_SYSGET, NEW_RAW_ARG2);
+			return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
 		break;
 
 	case ACT_INPUTBOX:
 		if (*NEW_RAW_ARG9)  // && !line.ArgHasDeref(9)
-			return ScriptError("Parameter #9 is for future use and should be left blank.", NEW_RAW_ARG9);
+			return ScriptError("Parameter #9 must be blank.", NEW_RAW_ARG9);
 		break;
 
 	case ACT_MSGBOX:
 		if (aArgc > 1) // i.e. this MsgBox is using the 3-param or 4-param style.
 			if (!line.ArgHasDeref(1)) // i.e. if it's a deref, we won't try to validate it now.
 				if (!IsPureNumeric(NEW_RAW_ARG1)) // Allow it to be entirely whitespace to indicate 0, like Aut2.
-					return ScriptError("When used with more than one parameter, MsgBox requires that"
-						" the 1st parameter be numeric or a variable reference.", NEW_RAW_ARG1);
+					return ScriptError(ERR_PARAM1_INVALID, NEW_RAW_ARG1);
 		if (aArgc > 3) // EVEN THOUGH IT'S NUMERIC, due to MsgBox's smart-comma handling, this cannot be an expression because it would never have been detected as the fourth parameter to begin with.
 			if (!line.ArgHasDeref(4)) // i.e. if it's a deref, we won't try to validate it now.
 				if (!IsPureNumeric(NEW_RAW_ARG4, false, true, true))
-					return ScriptError("MsgBox requires that the 4th parameter, if present, be numeric & positive,"
-						" or a variable reference.", NEW_RAW_ARG4);
+					return ScriptError(ERR_PARAM4_INVALID, NEW_RAW_ARG4);
 		break;
 
 	case ACT_IFMSGBOX:
 		if (aArgc > 0 && !line.ArgHasDeref(1) && !line.ConvertMsgBoxResult(NEW_RAW_ARG1))
-			return ScriptError(ERR_IFMSGBOX, NEW_RAW_ARG1);
+			return ScriptError(ERR_PARAM1_INVALID, NEW_RAW_ARG1);
 		break;
 
 	case ACT_IFIS:
 	case ACT_IFISNOT:
 		if (aArgc > 1 && !line.ArgHasDeref(2) && !line.ConvertVariableTypeName(NEW_RAW_ARG2))
-			// Don't refer to it as "Parameter #2" because this command isn't formatted/displayed that way:
-			return ScriptError("The type name must be either NUMBER, INTEGER, FLOAT, TIME, DATE, DIGIT, ALPHA, ALNUM, SPACE, or a variable reference."
-				, NEW_RAW_ARG2);
+			// Don't refer to it as "Parameter #2" because this command isn't formatted/displayed that way.
+			// Update: Param2 is more descriptive than the other (short) alternatives:
+			return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
 		break;
 
 	case ACT_GETKEYSTATE:
 		if (aArgc > 1 && !line.ArgHasDeref(2) && !TextToVK(NEW_RAW_ARG2) && !Line::ConvertJoy(NEW_RAW_ARG2))
-			return ScriptError("This is not a valid key, mouse, or joystick button.", NEW_RAW_ARG2);
+			return ScriptError(ERR_INVALID_KEY_OR_BUTTON, NEW_RAW_ARG2);
 		break;
 
 	case ACT_KEYWAIT:
 		if (aArgc > 0 && !line.ArgHasDeref(1) && !TextToVK(NEW_RAW_ARG1) && !Line::ConvertJoy(NEW_RAW_ARG1))
-			return ScriptError("This is not a valid key, mouse, or joystick button.", NEW_RAW_ARG1);
+			return ScriptError(ERR_INVALID_KEY_OR_BUTTON, NEW_RAW_ARG1);
 		break;
 
 	case ACT_DIV:
@@ -4947,14 +4945,12 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		{
 			if (*NEW_RAW_ARG2 && !line.ArgHasDeref(2))
 				if (strlen(NEW_RAW_ARG2) > 1 || toupper(*NEW_RAW_ARG2) != 'R')
-					return ScriptError("Parameter #2 must be either blank, R, or a variable reference."
-						, NEW_RAW_ARG2);
+					return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
 		}
 		else if (aActionType == ACT_GROUPCLOSE)
 			if (*NEW_RAW_ARG2 && !line.ArgHasDeref(2))
 				if (strlen(NEW_RAW_ARG2) > 1 || !strchr("RA", toupper(*NEW_RAW_ARG2)))
-					return ScriptError("Parameter #2 must be either blank, R, A, or a variable reference."
-						, NEW_RAW_ARG2);
+					return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
 		break;
 
 	case ACT_REPEAT: // These types of loops are always "NORMAL".
@@ -4994,25 +4990,24 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				{
 					// Validate whatever we can rather than waiting for runtime validation:
 					if (!line.ArgHasDeref(2) && Line::ConvertLoopMode(NEW_RAW_ARG2) == FILE_LOOP_INVALID)
-						return ScriptError(ERR_LOOP_FILE_MODE, NEW_RAW_ARG2);
+						return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
 					if (*NEW_RAW_ARG3 && !line.ArgHasDeref(3))
 						if (strlen(NEW_RAW_ARG3) > 1 || (*NEW_RAW_ARG3 != '0' && *NEW_RAW_ARG3 != '1'))
-							return ScriptError("Parameter #3 must be either blank, 0, 1, or a variable reference."
-								, NEW_RAW_ARG3);
+							return ScriptError(ERR_PARAM3_INVALID, NEW_RAW_ARG3);
 				}
 				else // Registry loop.
 				{
 					if (aArgc > 2 && !line.ArgHasDeref(3) && Line::ConvertLoopMode(NEW_RAW_ARG3) == FILE_LOOP_INVALID)
-						return ScriptError(ERR_LOOP_REG_MODE, NEW_RAW_ARG3);
+						return ScriptError(ERR_PARAM3_INVALID, NEW_RAW_ARG3);
 					if (*NEW_RAW_ARG4 && !line.ArgHasDeref(4))
 						if (strlen(NEW_RAW_ARG4) > 1 || (*NEW_RAW_ARG4 != '0' && *NEW_RAW_ARG4 != '1'))
-							return ScriptError("Parameter #4 must be either blank, 0, 1, or a variable reference."
-								, NEW_RAW_ARG4);
+							return ScriptError(ERR_PARAM4_INVALID, NEW_RAW_ARG4);
 				}
 			}
 		}
 		break; // Outer switch().
 	}
+#endif  // The above section is in place only if when not AUTOHOTKEYSC.
 
 	if (mNextLineIsFunctionBody)
 	{
@@ -5077,9 +5072,9 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		for (Label *label = mLastLabel; label != NULL && label->mJumpToLine == NULL; label = label->mPrevLabel)
 		{
 			if (line.mActionType == ACT_BLOCK_BEGIN && line.mAttribute) // Non-zero mAttribute signfies the open-brace of a function body.
-				return ScriptError("A label mustn't point to a function.");
+				return ScriptError("A label must not point to a function.");
 			if (line.mActionType == ACT_ELSE)
-				return ScriptError("A label mustn't point to an ELSE.");
+				return ScriptError("A label must not point to an ELSE.");
 			// Don't allow this because it may cause problems in a case such as this because
 			// label1 points to the end-block which is at the same level (and thus normally
 			// an allowable jumppoint) as the goto.  But we don't want to allow jumping into
@@ -5098,7 +5093,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			// An alternate way to deal with the above would be to make each block-end be owned
 			// by its block-begin rather than the block that encloses them both.
 			if (line.mActionType == ACT_BLOCK_END)
-				return ScriptError("A label mustn't point to the end of a block. For loops, use Continue vs. Goto.");
+				return ScriptError("A label must not point to the end of a block. For loops, use Continue vs. Goto.");
 			label->mJumpToLine = the_new_line;
 		}
 	}
@@ -5134,12 +5129,12 @@ ResultType Script::ParseDerefs(char *aArgText, char *aArgMap, DerefType *aDeref,
 			return ScriptError("This parameter contains a variable name missing its ending percent sign.", aArgText);
 		// Otherwise: Match was found; this should be the deref's close-symbol.
 		if (aArgMap && aArgMap[j])  // But it's mapped as literal g_DerefChar.
-			return ScriptError("This parameter contains a variable name with an invalid escaped percent sign.", aArgText);
+			return ScriptError("Invalid `%.", aArgText); // Short msg. since so rare.
 		deref_string_length = aArgText + j - this_deref.marker + 1;
 		if (deref_string_length == 2) // The percent signs were empty, e.g. %%
-			return ScriptError("This parmeter contains an empty variable reference (%%).", aArgText);
+			return ScriptError("Empty variable reference (%%).", aArgText); // Short msg. since so rare.
 		if (deref_string_length - 2 > MAX_VAR_NAME_LENGTH) // -2 for the opening & closing g_DerefChars
-			return ScriptError("This parmeter contains a variable name that is too long.", aArgText);
+			return ScriptError("Variable name too long.", aArgText); // Short msg. since so rare.
 		this_deref.is_function = false;
 		this_deref.length = (DerefLengthType)deref_string_length;
 		if (   !(this_deref.var = FindOrAddVar(this_deref.marker + 1, this_deref.length - 2))   )
@@ -5597,7 +5592,7 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 	
 	if (!vni)
 	{
-		LineError("This dynamic variable is blank.  If this variable was not intended to be dynamic,"
+		LineError("This dynamic variable is blank. If this variable was not intended to be dynamic,"
 			" remove the % symbols from it.", FAIL, this_arg.text);
 		return NULL;
 	}
@@ -6244,7 +6239,7 @@ ResultType Script::AddGroup(char *aGroupName)
 	if (strlen(aGroupName) > MAX_VAR_NAME_LENGTH)
 		return ScriptError("Group name too long.", aGroupName);
 	if (!Var::ValidateName(aGroupName, false, false)) // Seems best to use same validation as var names.
-		return ScriptError("Group name contains an illegal character.", aGroupName);
+		return ScriptError("Illegal group name.", aGroupName);
 
 	char *new_name = SimpleHeap::Malloc(aGroupName);
 	if (!new_name)
@@ -6475,7 +6470,7 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 			if (nest_level > 1000)
 			{
 				abort = true; // So that the caller doesn't also report an error.
-				return line->PreparseError("Nesting this deep might cause a stack overflow so is not allowed.");
+				return line->PreparseError("Nesting too deep."); // Short msg since so rare.
 			}
 			// Since the current convention is to store the line *after* the
 			// BLOCK_END as the BLOCK_BEGIN's related line, that line can
@@ -6488,8 +6483,7 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 				if (abort) // the above call already reported the error.
 					return NULL;
 				else
-					return line->PreparseError("This open block is never closed."
-						"  If this block is for a REPEAT command, its ENDREPEAT may be missing.");
+					return line->PreparseError("Missing \"}\"");
 			--nest_level;
 			// The convention is to have the BLOCK_BEGIN's related_line
 			// point to the line *after* the BLOCK_END.
@@ -6553,12 +6547,12 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 			line_temp = line->mNextLine;  // line_temp is now this IF's or LOOP's action-line.
 			if (line_temp == NULL) // This is an orphan IF/LOOP (has no action-line) at the end of the script.
 				// Update: this is now impossible because all scripts end in ACT_EXIT.
-				return line->PreparseError("This if-statement or loop has no action.");
+				return line->PreparseError("Q"); // Placeholder. Formerly "This if-statement or loop has no action."
 			if (line_temp->mActionType == ACT_ELSE || line_temp->mActionType == ACT_BLOCK_END)
-				return line->PreparseError("The line beneath this IF or LOOP is an invalid action.");
+				return line->PreparseError("Inappropriate line beneath IF or LOOP.");
 
 			// We're checking for ATTR_LOOP_FILE here to detect whether qualified commands enclosed
-			// in a true file loop are allowed to omit their filename paremeter:
+			// in a true file loop are allowed to omit their filename parameter:
 			loop_type_file = ATTR_NONE;
 			if (aLoopTypeFile == ATTR_LOOP_FILE || line->mAttribute == ATTR_LOOP_FILE)
 				// i.e. if either one is a file-loop, that's enough to establish
@@ -6625,7 +6619,7 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 
 			// Temporary check for something that should be impossible if design is correct:
 			if (line->mRelatedLine != NULL)
-				return line->PreparseError("This if-statement or LOOP unexpectedly already had an ELSE or end-point.");
+				return line->PreparseError("Q"); // Placeholder since it shouldn't happen.  Formerly "This if-statement or LOOP unexpectedly already had an ELSE or end-point."
 			// Set it to the else's action, rather than the else itself, since the else itself
 			// is never needed during execution.  UPDATE: No, instead set it to the ELSE itself
 			// (if it has one) since we jump here at runtime when the IF is finished (whether
@@ -6667,9 +6661,9 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 				line = line_temp->mNextLine;  // Set it to the else's action line.
 				if (line == NULL) // An else with no action.
 					// Update: this is now impossible because all scripts end in ACT_EXIT.
-					return line_temp->PreparseError("This ELSE has no action.");
+					return line_temp->PreparseError("Q"); // Placeholder since impossible. Formerly "This ELSE has no action."
 				if (line->mActionType == ACT_ELSE || line->mActionType == ACT_BLOCK_END)
-					return line_temp->PreparseError("The line beneath this ELSE is an invalid action.");
+					return line_temp->PreparseError("Inappropriate line beneath ELSE.");
 				// Assign to line rather than line_temp:
 				line = PreparseIfElse(line, ONLY_ONE_LINE, aLoopTypeFile, aLoopTypeReg, aLoopTypeRead
 					, aLoopTypeParse);
@@ -6708,7 +6702,7 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 				 // end-block.  UPDATE: I think this is impossible because callers only use
 				 // aMode == ONLY_ONE_LINE when aStartingLine's ActionType is already
 				 // known to be an IF or a BLOCK_BEGIN:
-				 return line->PreparseError("Unexpected end-of-block (single).");
+				return line->PreparseError("Q"); // Placeholder.  Formerly "Unexpected end-of-block (single)."
 			if (UNTIL_BLOCK_END)
 				// Return line rather than line->mNextLine because, if we're at the end of
 				// the script, it's up to the caller to differentiate between that condition
@@ -6716,11 +6710,11 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 				return line;
 			// Otherwise, we found an end-block we weren't looking for.  This should be
 			// impossible since the block pre-parsing already balanced all the blocks?
-			return line->PreparseError("Unexpected end-of-block (multi).");
+			return line->PreparseError("Q"); // Placeholder.  Formerly "Unexpected end-of-block (multi)."
 		case ACT_BREAK:
 		case ACT_CONTINUE:
 			if (!aLoopTypeFile && !aLoopTypeReg && !aLoopTypeRead && !aLoopTypeParse)
-				return line->PreparseError("This break or continue statement is not enclosed by a loop.");
+				return line->PreparseError("Break/Continue must be enclosed by a Loop.");
 			break;
 
 		case ACT_GOTO:  // These two must be done here (i.e. *after* all the script lines have been added),
@@ -6738,24 +6732,23 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 		case ACT_ONEXIT:
 			if (*LINE_RAW_ARG1 && !line->ArgHasDeref(1))
 				if (   !(line->mAttribute = FindLabel(LINE_RAW_ARG1))   )
-					return line->PreparseError(ERR_ONEXIT_LABEL);
+					return line->PreparseError(ERR_NO_LABEL);
 			break;
 
 		case ACT_HOTKEY:
 			if (*LINE_RAW_ARG2 && !line->ArgHasDeref(2))
 				if (   !(line->mAttribute = FindLabel(LINE_RAW_ARG2))   )
 					if (!Hotkey::ConvertAltTab(LINE_RAW_ARG2, true))
-						return line->PreparseError(ERR_HOTKEY_LABEL);
+						return line->PreparseError(ERR_NO_LABEL);
 			break;
 
 		case ACT_SETTIMER:
 			if (!line->ArgHasDeref(1))
 				if (   !(line->mAttribute = FindLabel(LINE_RAW_ARG1))   )
-					return line->PreparseError(ERR_SETTIMER);
+					return line->PreparseError(ERR_NO_LABEL);
 			if (*LINE_RAW_ARG2 && !line->ArgHasDeref(2))
 				if (!Line::ConvertOnOff(LINE_RAW_ARG2) && !IsPureNumeric(LINE_RAW_ARG2))
-					return line->PreparseError("If not blank or a variable reference, parameter #2"
-						" must be either a positive integer or the word ON or OFF.");
+					return line->PreparseError(ERR_PARAM2_INVALID);
 			break;
 
 		case ACT_GROUPADD: // This must be done here because it relies on all other lines already having been added.
@@ -6766,7 +6759,7 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 				// the value of MyLabel will change the behavior of the Gosub at runtime:
 				Label *label = FindLabel(LINE_RAW_ARG4);
 				if (!label)
-					return line->PreparseError(ERR_GROUPADD_LABEL);
+					return line->PreparseError(ERR_NO_LABEL);
 				line->mRelatedLine = label->mJumpToLine; // The script loader has ensured that this can't be NULL.
 				// Can't do this because the current line won't be the launching point for the
 				// Gosub.  Instead, the launching point will be the GroupActivate rather than the
@@ -6807,7 +6800,7 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 	// this should be impossible unless the design of this function is flawed.
 	if (aMode == UNTIL_BLOCK_END)
 #ifdef _DEBUG
-		return mLastLine->PreparseError("The script ended while a block was still open."); // This is a bug because the preparser already verified all blocks are balanced.
+		return mLastLine->PreparseError("DEBUG: The script ended while a block was still open."); // This is a bug because the preparser already verified all blocks are balanced.
 #else
 		return NULL; // Shouldn't happen, so just return failure.
 #endif
@@ -6815,7 +6808,7 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 	// If we were told to process a single line, we were recursed and it should have returned above,
 	// so it's an error here (can happen if we were called with aStartingLine == NULL?):
 	if (aMode == ONLY_ONE_LINE)
-		return mLastLine->PreparseError("The script ended while an action was still expected.");
+		return mLastLine->PreparseError("Q"); // Placeholder since probably impossible.  Formerly "The script ended while an action was still expected."
 
 	// Otherwise, return something non-NULL to indicate success to the top-level caller:
 	return mLastLine;
@@ -7316,13 +7309,13 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 			{
 				file_loop_mode = (line->mArgc <= 1) ? FILE_LOOP_FILES_ONLY : ConvertLoopMode(LINE_ARG2);
 				if (file_loop_mode == FILE_LOOP_INVALID)
-					return line->LineError(ERR_LOOP_FILE_MODE ERR_ABORT, FAIL, LINE_ARG2);
+					return line->LineError(ERR_PARAM2_INVALID ERR_ABORT, FAIL, LINE_ARG2);
 			}
 			else if (attr == ATTR_LOOP_REG)
 			{
 				file_loop_mode = (line->mArgc <= 2) ? FILE_LOOP_FILES_ONLY : ConvertLoopMode(LINE_ARG3);
 				if (file_loop_mode == FILE_LOOP_INVALID)
-					return line->LineError(ERR_LOOP_REG_MODE ERR_ABORT, FAIL, LINE_ARG3);
+					return line->LineError(ERR_PARAM3_INVALID ERR_ABORT, FAIL, LINE_ARG3);
 			}
 			else
 				file_loop_mode = FILE_LOOP_INVALID;
@@ -7534,7 +7527,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 				// the subroutine has put us into a waiting-for-return state rather than a
 				// waiting-for-block-end state, so when block-end's are encountered, that is
 				// considered a runtime error:
-				return line->LineError("Unexpected end-of-block (probably a Gosub without Return)." ERR_ABORT);
+				return line->LineError("Unexpected end-of-block (Gosub without Return?)." ERR_ABORT);
 			return OK; // It's the caller's responsibility to resume execution at the next line, if appropriate.
 		case ACT_ELSE:
 			// Shouldn't happen if the pre-parser and this function are designed properly?
@@ -7578,7 +7571,7 @@ inline ResultType Line::EvaluateCondition()
 {
 #ifdef _DEBUG
 	if (!ACT_IS_IF(mActionType))
-		return LineError("EvaluateCondition() was called with a line that isn't a condition."
+		return LineError("DEBUG: EvaluateCondition() was called with a line that isn't a condition."
 			ERR_ABORT);
 #endif
 
@@ -7872,13 +7865,13 @@ inline ResultType Line::EvaluateCondition()
 	{
 		int mb_result = ConvertMsgBoxResult(ARG1);
 		if (!mb_result)
-			return LineError(ERR_IFMSGBOX ERR_ABORT, FAIL, ARG1);
+			return LineError(ERR_PARAM1_INVALID ERR_ABORT, FAIL, ARG1);
 		if_condition = (g.MsgBoxResult == mb_result);
 		break;
 	}
 	default: // Should never happen, but return an error if it does.
 #ifdef _DEBUG
-		return LineError("EvaluateCondition(): Unhandled windowing action type." ERR_ABORT);
+		return LineError("DEBUG: EvaluateCondition(): Unhandled windowing action type." ERR_ABORT);
 #else
 		return FAIL;
 #endif
@@ -8220,7 +8213,7 @@ ResultType Line::PerformLoopParse(char **apReturnValue, WIN32_FIND_DATA *apCurre
 		if (   !(buf = (char *)malloc(space_needed))   )
 			// Probably best to consider this a critical error, since on the rare times it does happen, the user
 			// would probably want to know about it immediately.
-			return LineError("Failed to make a temp copy of the input variable.", FAIL, ARG2);
+			return LineError(ERR_OUTOFMEM, FAIL, ARG2);
 	}
 	strcpy(buf, ARG2); // Make the copy.
 
@@ -8317,7 +8310,7 @@ ResultType Line::PerformLoopParseCSV(char **apReturnValue, WIN32_FIND_DATA *apCu
 	else
 	{
 		if (   !(buf = (char *)malloc(space_needed))   )
-			return LineError("Failed to make a temp copy of the input variable.", FAIL, ARG2);
+			return LineError(ERR_OUTOFMEM, FAIL, ARG2);
 	}
 	strcpy(buf, ARG2); // Make the copy.
 
@@ -9037,7 +9030,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		// If it wasn't resolved at load-time, it must be a variable reference:
 		if (   !(target_label = (Label *)mAttribute)   )
 			if (   !(target_label = g_script.FindLabel(ARG1))   )
-				return LineError(ERR_ONEXIT_LABEL ERR_ABORT, FAIL, ARG1);
+				return LineError(ERR_NO_LABEL ERR_ABORT, FAIL, ARG1);
 		g_script.mOnExitLabel = target_label;
 		return OK;
 
@@ -9048,7 +9041,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		if (   !(target_label = (Label *)mAttribute)   )
 			if (   !(hook_action = Hotkey::ConvertAltTab(ARG2, true))   )
 				if (   *ARG2 && !(target_label = g_script.FindLabel(ARG2))   )  // Allow ARG2 to be blank.
-					return LineError(ERR_HOTKEY_LABEL ERR_ABORT, FAIL, ARG2);
+					return LineError(ERR_NO_LABEL ERR_ABORT, FAIL, ARG2);
 		return Hotkey::Dynamic(ARG1, target_label, hook_action, ARG3);
 	}
 
@@ -9057,7 +9050,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		// that allows us to figure out whether to "update or create" when searching the list of timers.
 		if (   !(target_label = (Label *)mAttribute)   ) // Since it wasn't resolved at load-time, it must be a variable reference.
 			if (   !(target_label = g_script.FindLabel(ARG1))   )
-				return LineError(ERR_SETTIMER ERR_ABORT, FAIL, ARG1);
+				return LineError(ERR_NO_LABEL ERR_ABORT, FAIL, ARG1);
 		// And don't update mAttribute (leave it NULL) because we want ARG1 to be dynamically resolved
 		// every time the command is executed (in case the contents of the referenced variable change).
 		// In the data structure that holds the timers, we store the target label rather than the target
@@ -9071,7 +9064,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		{
 			toggle = Line::ConvertOnOff(ARG2);
 			if (!toggle && !IsPureNumeric(ARG2, true, true, true)) // Allow it to be neg. or floating point at runtime.
-				return LineError("Parameter #2 must be either a pure number or the word ON or OFF.", FAIL, ARG2);
+				return LineError(ERR_PARAM2_INVALID, FAIL, ARG2);
 		}
 		else
 			toggle = TOGGLE_INVALID;
@@ -9127,7 +9120,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			{
 				Label *label = g_script.FindLabel(ARG4);
 				if (!label)
-					return LineError(ERR_GROUPADD_LABEL ERR_ABORT, FAIL, ARG4);
+					return LineError(ERR_NO_LABEL ERR_ABORT, FAIL, ARG4);
 				jump_to_line = label->mJumpToLine; // The script loader has ensured that this can't be NULL.
 			}
 			// Can't do this because the current line won't be the launching point for the
@@ -9812,7 +9805,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 				break;
 			// We know it's a variable because otherwise the loading validation would have caught it earlier:
 			case TOGGLE_INVALID:
-				return LineError("The variable in param #1 does not resolve to an allowed value.", FAIL, ARG1);
+				return LineError(ERR_PARAM1_INVALID, FAIL, ARG1);
 			}
 			if (*ARG2) // The user also specified a filename, so update the target filename.
 				KeyHistoryToFile(ARG2);
@@ -9831,17 +9824,18 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	case ACT_MSGBOX:
 	{
 		int result;
+		HWND dialog_owner = THREAD_DIALOG_OWNER; // Resolve macro only once to reduce code size.
 		// If the MsgBox window can't be displayed for any reason, always return FAIL to
 		// the caller because it would be unsafe to proceed with the execution of the
 		// current script subroutine.  For example, if the script contains an IfMsgBox after,
 		// this line, it's result would be unpredictable and might cause the subroutine to perform
 		// the opposite action from what was intended (e.g. Delete vs. don't delete a file).
 		if (!mArgc) // When called explicitly with zero params, it displays this default msg.
-			result = MsgBox("Press OK to continue.");
+			result = MsgBox("Press OK to continue.", MSGBOX_NORMAL, NULL, 0, dialog_owner);
 		else if (mArgc == 1) // In the special 1-parameter mode, the first param is the prompt.
-			result = MsgBox(ARG1);
+			result = MsgBox(ARG1, MSGBOX_NORMAL, NULL, 0, dialog_owner);
 		else
-			result = MsgBox(ARG3, ATOI(ARG1), ARG2, ATOF(ARG4));
+			result = MsgBox(ARG3, ATOI(ARG1), ARG2, ATOF(ARG4), dialog_owner); // dialog_owner passed via parameter to avoid internally-displayed MsgBoxes from being affected by script-thread's owner setting.
 		// Above allows backward compatibility with AutoIt2's param ordering while still
 		// permitting the new method of allowing only a single param.
 		if (!result)
@@ -9851,7 +9845,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			// the user of this via a final MessageBox dialog, so our call here will
 			// not have any effect.  The below only takes effect if MsgBox()'s call to
 			// MessageBox() failed in some unexpected way:
-			LineError("The MsgBox dialog could not be displayed." ERR_ABORT);
+			LineError("The MsgBox could not be displayed." ERR_ABORT);
 		return result ? OK : FAIL;
 	}
 
@@ -10088,7 +10082,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		case FIND_FAST: g.TitleFindFast = true; return OK;
 		case FIND_SLOW: g.TitleFindFast = false; return OK;
 		}
-		return LineError(ERR_TITLEMATCHMODE2, FAIL, ARG1);
+		return LineError(ERR_TITLEMATCHMODE ERR_ABORT, FAIL, ARG1);
 
 	case ACT_SETFORMAT:
 		// For now, it doesn't seem necessary to have runtime validation of the first parameter.
@@ -10204,7 +10198,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			break;
 		// We know it's a variable because otherwise the loading validation would have caught it earlier:
 		case TOGGLE_INVALID:
-			return LineError("The variable in param #1 does not resolve to an allowed value.", FAIL, ARG1);
+			return LineError(ERR_PARAM1_INVALID, FAIL, ARG1);
 		}
 		return OK;
 	case ACT_PAUSE:
@@ -10274,7 +10268,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	// Script::AddLine() forbids it.
 
 #ifdef _DEBUG
-	return LineError("Perform(): Unhandled action type." ERR_ABORT);
+	return LineError("DEBUG: Perform(): Unhandled action type." ERR_ABORT);
 #else
 	return FAIL;
 #endif
@@ -10720,7 +10714,7 @@ inline char *Line::ExpandArg(char *aBuf, int aArgIndex, Var *aArgVar)
 	// This should never be called if the given arg is an output var, so flag that in DEBUG mode:
 	if (this_arg.type == ARG_TYPE_OUTPUT_VAR)
 	{
-		LineError("ExpandArg() was called to expand an arg that contains only an output variable.");
+		LineError("DEBUG: ExpandArg() was called to expand an arg that contains only an output variable.");
 		return NULL;
 	}
 #endif
@@ -12110,7 +12104,7 @@ double_deref:
 					// documented as a known limitation.  Also, the below doesn't indicate a failure when stack
 					// underflow would occur because the loop after this one needs to do that (since this
 					// one will never execute if a backup isn't needed).  Note that this loop that reviews all
-					// actual paramters is necessary as a separate loop from the one further below because this
+					// actual parameters is necessary as a separate loop from the one further below because this
 					// first one's conversion must occur prior to calling BackupFunctionVars().  In addition, there
 					// might be other interdepencies between formals and actuals if a function is calling itself
 					// recursively.
@@ -14767,7 +14761,7 @@ ResultType Line::ChangePauseState(ToggleValueType aChangeTo)
 		return OK;
 	default: // TOGGLE_INVALID or some other disallowed value.
 		// We know it's a variable because otherwise the loading validation would have caught it earlier:
-		return LineError("The variable in param #1 does not resolve to an allowed value.", FAIL, ARG1);
+		return LineError(ERR_PARAM1_INVALID, FAIL, ARG1);
 	}
 }
 
@@ -15043,7 +15037,7 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 	if (strlen(aAction) >= LINE_SIZE) // This can happen if user runs the contents of a very large variable.
 	{
         if (aDisplayErrors)
-			ScriptError("The string to be run is too long." ERR_ABORT);
+			ScriptError("String too long." ERR_ABORT); // Short msg since so rare.
 		return FAIL;
 	}
 
@@ -15170,7 +15164,7 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 	if (use_runas && shell_action_is_system_verb)
 	{
 		if (aDisplayErrors)
-			ScriptError("System verbs aren't supported when RunAs is in effect." ERR_ABORT);
+			ScriptError("System verbs unsupported with RunAs." ERR_ABORT);
 		return FAIL;
 	}
 
@@ -15219,7 +15213,7 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 			if (!hinstLib)
 			{
 				if (aDisplayErrors)
-					ScriptError("RunAs: Could not load advapi32.dll." ERR_ABORT);
+					ScriptError("RunAs: Missing advapi32.dll." ERR_ABORT);
 				return FAIL;
 			}
 			MyCreateProcessWithLogonW lpfnDLLProc = (MyCreateProcessWithLogonW)GetProcAddress(hinstLib, "CreateProcessWithLogonW");

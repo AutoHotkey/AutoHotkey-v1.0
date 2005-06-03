@@ -27,10 +27,9 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 	char *options; // This will contain something that is meaningful only when gui_command == GUI_CMD_OPTIONS.
 	GuiCommands gui_command = Line::ConvertGuiCommand(aCommand, &window_index, &options);
 	if (gui_command == GUI_CMD_INVALID)
-		return ScriptError(ERR_GUICOMMAND ERR_ABORT, aCommand);
+		return ScriptError(ERR_PARAM1_INVALID ERR_ABORT, aCommand);
 	if (window_index < 0 || window_index >= MAX_GUI_WINDOWS)
-		return ScriptError("The window number must be between 1 and " MAX_GUI_WINDOWS_STR
-			"." ERR_ABORT, aCommand);
+		return ScriptError("Max window number is " MAX_GUI_WINDOWS_STR "." ERR_ABORT, aCommand);
 
 	// First completely handle any sub-command that doesn't require the window to exist.
 	// In other words, don't auto-create the window before doing this command like we do
@@ -86,9 +85,9 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 
 	// Now handle any commands that should be handled prior to creation of the window in the case
 	// where the window doesn't already exist:
-	bool set_last_found_window = false;
+	bool set_last_found_window = false, own_dialogs = false;
 	if (gui_command == GUI_CMD_OPTIONS)
-		if (!gui.ParseOptions(options, set_last_found_window))
+		if (!gui.ParseOptions(options, set_last_found_window, own_dialogs))
 			return FAIL;  // It already displayed the error.
 
 	// Create the window if needed.  Since it should not be possible for our window to get destroyed
@@ -102,6 +101,7 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 
 	if (set_last_found_window)
 		g.hWndLastUsed = gui.mHwnd;
+	g.DialogOwnerIndex = own_dialogs ? window_index : MAX_GUI_WINDOWS; // Reset to out-of-bounds when "-OwnDialogs" is present.
 
 	// After creating the window, return from any commands that were fully handled above:
 	if (gui_command == GUI_CMD_OPTIONS)
@@ -114,7 +114,7 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 	{
 	case GUI_CMD_ADD:
 		if (   !(gui_control_type = Line::ConvertGuiControl(aParam2))   )
-			return ScriptError(ERR_GUICONTROL ERR_ABORT, aParam2);
+			return ScriptError(ERR_PARAM2_INVALID ERR_ABORT, aParam2);
 		return gui.AddControl(gui_control_type, aParam3, aParam4); // It already displayed any error.
 
 	case GUI_CMD_MARGIN:
@@ -174,7 +174,7 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 			{
 				index = ATOI(aParam3) - 1;
 				if (index < 0 || index > MAX_TAB_CONTROLS - 1)
-					return ScriptError("Paramter #3 is out of bounds." ERR_ABORT, aParam2);
+					return ScriptError(ERR_PARAM3_INVALID ERR_ABORT, aParam3);
 				gui.mCurrentTabControlIndex = index;
 			}
 			if (*aParam2) // Index of a particular tab inside a control.
@@ -185,7 +185,7 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 				{
 					index = ATOI(aParam2) - 1;
 					if (index < 0 || index > MAX_TABS_PER_CONTROL - 1)
-						return ScriptError("Paramter #2 is out of bounds." ERR_ABORT, aParam2);
+						return ScriptError(ERR_PARAM2_INVALID ERR_ABORT, aParam2);
 				}
 				else
 				{
@@ -194,7 +194,7 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 					if (tab_control)
 						index = gui.FindTabIndexByName(*tab_control, aParam2); // Returns -1 on failure.
 					if (index == -1)
-						return ScriptError("This tab name doesn't exist yet." ERR_ABORT, aParam2);
+						return ScriptError("Tab name doesn't exist yet." ERR_ABORT, aParam2);
 				}
 				gui.mCurrentTabIndex = index;
 				if (!*aParam3 && gui.mCurrentTabControlIndex == MAX_TAB_CONTROLS)
@@ -223,7 +223,7 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 	case GUI_CMD_FLASH:
 		// Note that FlashWindowEx() would have to be loaded dynamically since it is not available
 		// on Win9x/NT.  But for now, just this simple method is provided.  In the future, more
-		// sophisticated paramters can be made available to flash the window a given number of times
+		// sophisticated parameters can be made available to flash the window a given number of times
 		// and at a certain frequency, and other options such as only-taskbar-button or only-caption.
 		// Set FlashWindowEx() for more ideas:
 		FlashWindow(gui.mHwnd, stricmp(aParam2, "Off") ? TRUE : FALSE);
@@ -411,7 +411,7 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 			// in the tab control is the current page), must redraw the tab control to get the picture/icon
 			// to update correctly:
 			do_redraw_if_in_tab = true;
-			break;
+			break; // Rather than return, continue on to do the redraw.
 		}
 
 		case GUI_CONTROL_CHECKBOX:
@@ -436,7 +436,7 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 				//else the default SetWindowText() action will be taken below.
 			}
 			// else assume it's the text/caption for the item, so the default SetWindowText() action will be taken below.
-			return OK;
+			break; // Fix for v1.0.35.01: Don't return, continue onward.
 
 		case GUI_CONTROL_DATETIME:
 			if (guicontrol_cmd == GUICONTROL_CMD_CONTENTS)
@@ -504,13 +504,14 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 					MonthCal_SetCurSel(control.hwnd, st);
 				//else invalid, so leave current sel. unchanged.
 				do_redraw_if_in_tab = true; // Confirmed necessary.
+				break;
 			}
 			//else blank, so do nothing (control does not support having "no selection").
-			break;
+			return OK; // Don't break since don't the other actions below to be taken.
 
 		case GUI_CONTROL_HOTKEY:
 			SendMessage(control.hwnd, HKM_SETHOTKEY, gui.TextToHotkey(aParam3), 0); // This will set it to "None" if aParam3 is blank.
-			return OK;
+			return OK; // Don't break since don't the other actions below to be taken.
 		
 		case GUI_CONTROL_UPDOWN:
 			if (*aParam3 == '+') // Apply as delta from its current position.
@@ -533,7 +534,7 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 			// valid value."
 			SendMessage(control.hwnd, (control.attrib & GUI_CONTROL_ATTRIB_ALTBEHAVIOR) ? UDM_SETPOS32 : UDM_SETPOS
 				, 0, new_pos); // Unnecessary to cast to short in the case of UDM_SETPOS, since it ignores the high-order word.
-			return OK;
+			return OK; // Don't break since don't the other actions below to be taken.
 
 		case GUI_CONTROL_SLIDER:
 			// Confirmed this fact from MSDN: That the control automatically deals with out-of-range values
@@ -552,7 +553,7 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 			else
 				SendMessage(control.hwnd, TBM_SETPOS, TRUE, gui.ControlInvertSliderIfNeeded(control, ATOI(aParam3)));
 				// Above msg has no return value.
-			return OK;
+			return OK; // Don't break since don't the other actions below to be taken.
 
 		case GUI_CONTROL_PROGRESS:
 			// Confirmed through testing (PBM_DELTAPOS was also tested): The control automatically deals
@@ -563,7 +564,7 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 				SendMessage(control.hwnd, PBM_DELTAPOS, ATOI(aParam3 + 1), 0);
 			else
 				SendMessage(control.hwnd, PBM_SETPOS, ATOI(aParam3), 0);
-			return OK;
+			return OK; // Don't break since don't the other actions below to be taken.
 
 		case GUI_CONTROL_DROPDOWNLIST:
 		case GUI_CONTROL_COMBOBOX:
@@ -609,15 +610,18 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 				// styles such as TCS_VERTICAL:
 				InvalidateRect(gui.mHwnd, NULL, TRUE); // TRUE = Seems safer to erase, not knowing all possible overlaps.
 			}
-			return OK;
+			return OK; // Don't break since don't the other actions below to be taken.
 		} // inner switch() for control's type
-		// Since above didn't return, it's either:
+
+		if (do_redraw_if_in_tab) // Excludes the SetWindowText() below, but might need changing for future control types.
+			break;
+		// Otherwise:
+		// The only other reason it wouldn't have already returned is to fall back to SetWindowText() here.
+		// Since above didn't return or break, it's either:
 		// 1) A control that uses the standard SetWindowText() method such as GUI_CONTROL_TEXT,
 		//    GUI_CONTROL_GROUPBOX, or GUI_CONTROL_BUTTON.
 		// 2) A radio or checkbox whose caption is being changed instead of its checked state.
 		SetWindowText(control.hwnd, aParam3);
-		if (do_redraw_if_in_tab)
-			break;
 		return OK;
 
 	case GUICONTROL_CMD_MOVE:
@@ -2846,9 +2850,9 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 
 
 
-ResultType GuiType::ParseOptions(char *aOptions, bool &aSetLastFoundWindow)
+ResultType GuiType::ParseOptions(char *aOptions, bool &aSetLastFoundWindow, bool &aOwnDialogs)
 // This function is similar to ControlParseOptions() further below, so should be maintained alongside it.
-// Caller must have already initialized aSetLastFoundWindow with desired starting values.
+// Caller must have already initialized aSetLastFoundWindow/, bool &aOwnDialogs with desired starting values.
 // Caller must ensure that aOptions is a modifiable string, since this method temporarily alters it.
 {
 	int owner_window_index;
@@ -2920,8 +2924,7 @@ ResultType GuiType::ParseOptions(char *aOptions, bool &aSetLastFoundWindow)
 						&& g_gui[owner_window_index] && g_gui[owner_window_index]->mHwnd) // Relies on short-circuit boolean order.
 						mOwner = g_gui[owner_window_index]->mHwnd;
 					else
-						return g_script.ScriptError("The owner window is not valid or does not yet exist."
-							ERR_ABORT, next_option);
+						return g_script.ScriptError("Invalid or nonexistent owner window." ERR_ABORT, next_option);
 				}
 				else
 					mOwner = g_hWnd; // Make a window owned (by script's main window) omits its taskbar button.
@@ -2965,6 +2968,9 @@ ResultType GuiType::ParseOptions(char *aOptions, bool &aSetLastFoundWindow)
 			// WS_MINIMIZEBOX requires WS_SYSMENU to take effect.  It can be explicitly omitted
 			// via "+MinimizeBox -SysMenu" if that functionality is ever needed.
 			if (adding) mStyle |= WS_MINIMIZEBOX|WS_SYSMENU; else mStyle &= ~WS_MINIMIZEBOX;
+
+		else if (!stricmp(next_option, "OwnDialogs"))
+			aOwnDialogs = adding;
 
 		else if (!stricmp(next_option, "Resize")) // Minus removes either or both.
 			if (adding) mStyle |= WS_SIZEBOX|WS_MAXIMIZEBOX; else mStyle &= ~(WS_SIZEBOX|WS_MAXIMIZEBOX);
@@ -3918,8 +3924,7 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 				// assigned to control types that have no present use for them.  Note: GroupBoxes do
 				// no support click-detection anyway, even if the BS_NOTIFY style is given to them
 				// (this has been verified twice):
-				if (aControl.type == GUI_CONTROL_GROUPBOX || aControl.type == GUI_CONTROL_PROGRESS
-					|| aControl.type == GUI_CONTROL_HOTKEY)
+				if (aControl.type == GUI_CONTROL_GROUPBOX || aControl.type == GUI_CONTROL_PROGRESS)
 					// If control's hwnd exists, we were called from a caller who wants ErrorLevel set
 					// instead of a message displayed:
 					return aControl.hwnd ? g_ErrorLevel->Assign(ERRORLEVEL_ERROR)
@@ -3939,7 +3944,7 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 					//	control.options |= GUI_CONTROL_ATTRIB_IMPLICIT_CLEAR;
 					else // Since a non-special label was explicitly specified, it's an error that it can't be found.
 						return aControl.hwnd ? g_ErrorLevel->Assign(ERRORLEVEL_ERROR)
-							: g_script.ScriptError(ERR_CONTROLLABEL ERR_ABORT, next_option - 1);
+							: g_script.ScriptError(ERR_NO_LABEL ERR_ABORT, next_option - 1);
 				}
 				// Apply the SS_NOTIFY style *only* if the control actually has an associated action.
 				// This is because otherwise the control would steal all clicks for any other controls
@@ -6239,6 +6244,11 @@ void GuiType::Event(GuiIndexType aControlIndex, UINT aNotifyCode)
 		if (aNotifyCode == EN_CHANGE)
 			break;
 		return; // No action for other notifications.
+
+	case GUI_CONTROL_HOTKEY: // The only notification sent by the hotkey control is EN_CHANGE.
+		if (control.output_var) // Above already confirmed it has a jump_to_label (or at least an implicit cancel).
+			ControlGetContents(*control.output_var, control);
+		break;
 
 	case GUI_CONTROL_TEXT:
 	case GUI_CONTROL_PIC:

@@ -32,7 +32,7 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 
 	MenuCommands menu_command = Line::ConvertMenuCommand(aCommand);
 	if (menu_command == MENU_CMD_INVALID)
-		RETURN_MENU_ERROR(ERR_MENUCOMMAND2, aCommand);
+		RETURN_MENU_ERROR(ERR_PARAM2_INVALID, aCommand);
 
 	bool is_tray = !stricmp(aMenu, "tray");
 
@@ -108,7 +108,7 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 		//HICON new_icon = LoadImage(NULL, aParam3, IMAGE_ICON, 32, 32, LR_LOADFROMFILE);
 		HICON new_icon = ExtractIcon(g_hInstance, aParam3, icon_number - 1);
 		if (!new_icon || new_icon == (HICON)1) // 1 means "incorrect file type".
-			RETURN_MENU_ERROR("Icon could not be loaded.", aParam3);
+			RETURN_MENU_ERROR("Can't load icon.", aParam3);
 		if (mCustomIcon) // Destroy the old one first to free its resources.
 			DestroyIcon(mCustomIcon);
 
@@ -223,11 +223,11 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 		if (menu == mTrayMenu)
 			RETURN_MENU_ERROR("Tray menu must not be deleted.", "");
 		if (!ScriptDeleteMenu(menu))
-			RETURN_MENU_ERROR("Can't delete menu. It might be in use.", menu->mName); // Possibly in use as a menu bar.
+			RETURN_MENU_ERROR("Can't delete menu (in use?).", menu->mName); // Possibly in use as a menu bar.
 		return OK;
 	case MENU_CMD_DELETEALL:
 		if (!menu->DeleteAllItems())
-			RETURN_MENU_ERROR("Can't delete items. Menu might be in use.", menu->mName); // Possibly in use as a menu bar.
+			RETURN_MENU_ERROR("Can't delete items (in use?).", menu->mName); // Possibly in use as a menu bar.
 		return OK;
 	case MENU_CMD_DEFAULT:
 		if (*aParam3) // Since a menu item has been specified, let a later switch() handle it.
@@ -291,11 +291,11 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 				// menu is not included anywhere in the nested hierarchy of that submenu's submenus.
 				// The OS doesn't seem to like that, creating empty or strange menus if it's attempted:
 				if (   submenu && (submenu == menu || submenu->ContainsMenu(menu))   )
-					RETURN_MENU_ERROR("This submenu must not contain its parent menu.", aParam4);
+					RETURN_MENU_ERROR("Submenu must not contain its parent menu.", aParam4);
 			}
 			else // It's a label.
 				if (   !(target_label = FindLabel(aParam4))   )
-					RETURN_MENU_ERROR(ERR_MENULABEL, aParam4);
+					RETURN_MENU_ERROR(ERR_NO_LABEL, aParam4);
 		}
 	}
 
@@ -305,7 +305,7 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 			// Seems best not to create menu items on-demand like this because they might get put into
 			// an incorrect position (i.e. it seems better than menu changes be kept separate from
 			// menu additions):
-			RETURN_MENU_ERROR("The specified menu item cannot be changed because it doesn't exist.", aParam3);
+			RETURN_MENU_ERROR("Nonexistent menu item.", aParam3);
 
 		// Otherwise: Adding a new item that doesn't yet exist.
 		// Need to find a menuID that isn't already in use by one of the other menu items.
@@ -379,7 +379,7 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 		return menu->ModifyItem(menu_item, target_label, submenu, aOptions);
 	case MENU_CMD_RENAME:
 		if (!menu->RenameItem(menu_item, new_name))
-			RETURN_MENU_ERROR("The menu item's new name is already in use or too long.", new_name);
+			RETURN_MENU_ERROR("Menu item name already in use (or too long).", new_name);
 		return OK;
 	case MENU_CMD_CHECK:
 		return menu->CheckItem(menu_item);

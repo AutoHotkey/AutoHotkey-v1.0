@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.35.00"
+#define NAME_VERSION "1.0.35.01"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -313,8 +313,11 @@ struct global_struct
 	int UninterruptedLineCount; // Stored as a g-struct attribute in case OnExit sub interrupts it while uninterruptible.
 	int Priority;  // This thread's priority relative to others.
 	GuiEventType GuiEvent; // This thread's triggering event, e.g. DblClk vs. normal click.
-	GuiIndexType GuiWindowIndex, GuiDefaultWindowIndex, GuiControlIndex; // The GUI window index and control index that launched this thread.
-	// Above: GuiDefaultWindowIndex is the thread's default GUI window, used except when specified "Gui, 2:Add, ..."
+	GuiIndexType GuiWindowIndex, GuiControlIndex; // The GUI window index and control index that launched this thread.
+	GuiIndexType GuiDefaultWindowIndex; // This thread's default GUI window, used except when specified "Gui, 2:Add, ..."
+	GuiIndexType DialogOwnerIndex; // This thread's GUI owner, if any. Stored as Index vs. HWND to insulate against the case where a GUI window has been destroyed and recreated with a new HWND.
+	#define THREAD_DIALOG_OWNER ((g.DialogOwnerIndex < MAX_GUI_WINDOWS && g_gui[g.DialogOwnerIndex]) \
+		? g_gui[g.DialogOwnerIndex]->mHwnd : NULL) // Above line relies on short-circuit eval. oder.
 	int WinDelay;  // negative values may be used as special flags.
 	int ControlDelay;  // negative values may be used as special flags.
 	int KeyDelay;  // negative values may be used as special flags.
@@ -354,6 +357,7 @@ inline void global_clear_state(global_struct &g)
 	g.MsgBoxResult = 0;
 	g.IsPaused = false;
 	g.UninterruptedLineCount = 0;
+	g.DialogOwnerIndex = MAX_GUI_WINDOWS; // Initialized to out-of-bounds.
 	g.GuiDefaultWindowIndex = 0;
 	// Above line is done because allowing it to be permanently changed by the auto-exec section
 	// seems like it would cause more confusion that it's worth.  A change to the global default

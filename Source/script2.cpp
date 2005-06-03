@@ -65,8 +65,8 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 							image_filename = blank_str;
 						window_index = ATOI(window_number_str) - 1;
 						if (window_index < 0 || window_index >= MAX_SPLASHIMAGE_WINDOWS)
-							return LineError("The window number must be between 1 and " MAX_SPLASHIMAGE_WINDOWS_STR
-								"." ERR_ABORT, FAIL, aOptions);
+							return LineError("Max window number is " MAX_SPLASHIMAGE_WINDOWS_STR "." ERR_ABORT
+								, FAIL, aOptions);
 					}
 				}
 			}
@@ -84,8 +84,7 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 		{
 			window_index = ATOI(aOptions) - 1;
 			if (window_index < 0 || window_index >= MAX_PROGRESS_WINDOWS)
-				return LineError("The window number must be between 1 and " MAX_PROGRESS_WINDOWS_STR "." ERR_ABORT
-					, FAIL, aOptions);
+				return LineError("Max window number is " MAX_PROGRESS_WINDOWS_STR "." ERR_ABORT, FAIL, aOptions);
 			++options;
 		}
 		if (!stricmp(options, "Off"))
@@ -598,8 +597,10 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 	//    prevent their owners from ever becoming active).
 	// However, it seems likely that some users would want the above to be configurable,
 	// so now there is an option to change this behavior.
+	HWND dialog_owner = THREAD_DIALOG_OWNER;  // Resolve macro only once to reduce code size.
 	if (!(splash.hwnd = CreateWindowEx(exstyle, WINDOW_CLASS_SPLASH, aTitle, style, xpos, ypos
-		, main_width, main_height, owned ? g_hWnd : NULL, NULL, g_hInstance, NULL)))
+		, main_width, main_height, owned ? (dialog_owner ? dialog_owner : g_hWnd) : NULL // v1.0.35.01: For flexibility, allow these windows to be owned by GUIs via +OwnDialogs.
+		, NULL, g_hInstance, NULL)))
 		return FAIL;  // No error msg since so rare.
 
 	if ((style & WS_SYSMENU) || !owned)
@@ -691,7 +692,7 @@ ResultType Line::ToolTip(char *aText, char *aX, char *aY, char *aID)
 {
 	int window_index = *aID ? ATOI(aID) - 1 : 0;
 	if (window_index < 0 || window_index >= MAX_TOOLTIPS)
-		return LineError("The window number must be between 1 and " MAX_TOOLTIPS_STR "." ERR_ABORT, FAIL, aID);
+		return LineError("Max window number is " MAX_TOOLTIPS_STR "." ERR_ABORT, FAIL, aID);
 	HWND tip_hwnd = g_hWndToolTip[window_index];
 
 	// Destroy windows except the first (for performance) so that resources/mem are conserved.
@@ -792,7 +793,6 @@ ResultType Line::ToolTip(char *aText, char *aX, char *aY, char *aID)
 	// 2) Common controls v6 (via manifest);
 	// 3) "Control Panel >> Display >> Effects >> Use transition >> Fade effect" setting is in effect.
 	SendMessage(tip_hwnd, TTM_UPDATETIPTEXT, 0, (LPARAM)&ti);
-
 
 	RECT ttw = {0};
 	GetWindowRect(tip_hwnd, &ttw); // Must be called this late to ensure the tooltip has been created by above.
@@ -3638,7 +3638,7 @@ ResultType Line::ScriptProcess(char *aCmd, char *aProcess, char *aParam3)
 	ProcessCmds process_cmd = ConvertProcessCmd(aCmd);
 	// Runtime error is rare since it is caught at load-time unless it's in a var. ref.
 	if (process_cmd == PROCESS_CMD_INVALID)
-		return LineError(ERR_PROCESSCOMMAND ERR_ABORT, FAIL, aCmd);
+		return LineError(ERR_PARAM1_INVALID ERR_ABORT, FAIL, aCmd);
 
 	HANDLE hProcess;
 	DWORD pid, priority;
@@ -3910,7 +3910,7 @@ ResultType Line::WinSet(char *aAttrib, char *aValue, char *aTitle, char *aText
 {
 	WinSetAttributes attrib = ConvertWinSetAttribute(aAttrib);
 	if (attrib == WINSET_INVALID)
-		return LineError(ERR_WINSET, FAIL, aAttrib);
+		return LineError(ERR_PARAM1_INVALID, FAIL, aAttrib);
 
 	// Set default ErrorLevel for any commands that change ErrorLevel.
 	// The default should be ERRORLEVEL_ERROR so that that value will be returned
@@ -4206,7 +4206,7 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 	// was contained in a variable reference.  But for simplicity of design here, return
 	// failure in this case (unlike other functions similar to this one):
 	if (cmd == WINGET_CMD_INVALID)
-		return LineError(ERR_WINGET ERR_ABORT, FAIL, aCmd);
+		return LineError(ERR_PARAM2_INVALID ERR_ABORT, FAIL, aCmd);
 
 	bool target_window_determined = true;  // Set default.
 	HWND target_window;
@@ -4628,7 +4628,7 @@ ResultType Line::SysGet(char *aCmd, char *aValue)
 	// was contained in a variable reference.  But for simplicity of design here, return
 	// failure in this case (unlike other functions similar to this one):
 	if (cmd == SYSGET_CMD_INVALID)
-		return LineError(ERR_SYSGET ERR_ABORT, FAIL, aCmd);
+		return LineError(ERR_PARAM2_INVALID ERR_ABORT, FAIL, aCmd);
 
 	MonitorInfoPackage mip = {0};  // Improves maintainability to initialize unconditionally, here.
 	mip.monitor_info_ex.cbSize = sizeof(MONITORINFOEX); // Also improves maintainability.
@@ -6344,10 +6344,10 @@ ResultType InputBox(Var *aOutputVar, char *aTitle, char *aText, bool aHideInput,
 	// At this point, we know a dialog will be displayed.  See macro's comments for details:
 	DIALOG_PREP
 
-	// Specify NULL as the owner window since we want to be able to have the main window in the foreground
-	// even if there are InputBox windows:
+	// Specify NULL as the owner window since we want to be able to have the main window in the foreground even
+	// if there are InputBox windows.  Update: A GUI window can now be the parent if thread has that setting.
 	++g_nInputBoxes;
-	int result = (int)DialogBox(g_hInstance, MAKEINTRESOURCE(IDD_INPUTBOX), NULL, InputBoxProc);
+	int result = (int)DialogBox(g_hInstance, MAKEINTRESOURCE(IDD_INPUTBOX), THREAD_DIALOG_OWNER, InputBoxProc);
 	--g_nInputBoxes;
 
 	// See the comments in InputBoxProc() for why ErrorLevel is set here rather than there.
@@ -9821,7 +9821,7 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 	// OPENFILENAME_SIZE_VERSION_400 for this member.  Windows 2000/XP: Use sizeof(OPENFILENAME)
 	// for this parameter."
 	ofn.lStructSize = g_os.IsWin2000orLater() ? sizeof(OPENFILENAME) : OPENFILENAME_SIZE_VERSION_400;
-	ofn.hwndOwner = NULL; // i.e. no need to have main window forced into the background for this.
+	ofn.hwndOwner = THREAD_DIALOG_OWNER; // Can be NULL, which is used instead of main window since no need to have main window forced into the background for this.
 	ofn.lpstrTitle = greeting;
 	ofn.lpstrFilter = *filter ? filter : "All Files (*.*)\0*.*\0Text Documents (*.txt)\0*.txt\0";
 	ofn.lpstrFile = file_buf;
@@ -10013,7 +10013,7 @@ ResultType Line::FileSelectFolder(char *aRootDir, DWORD aOptions, char *aGreetin
 
 	int iImage = 0;
 	browseInfo.iImage = iImage;
-	browseInfo.hwndOwner = NULL;  // i.e. no need to have main window forced into the background for this.
+	browseInfo.hwndOwner = THREAD_DIALOG_OWNER; // Can be NULL, which is used rather than main window since no need to have main window forced into the background by this.
 	char greeting[1024];
 	if (aGreeting && *aGreeting)
 		strlcpy(greeting, aGreeting, sizeof(greeting));
@@ -12150,9 +12150,9 @@ Line *Line::GetJumpTarget(bool aIsDereferenced)
 	if (!label)
 	{
 		if (aIsDereferenced)
-			LineError("This Goto/Gosub's target label does not exist." ERR_ABORT, FAIL, target_label);
+			LineError(ERR_NO_LABEL ERR_ABORT, FAIL, target_label);
 		else
-			LineError("This Goto/Gosub's target label does not exist.", FAIL, target_label);
+			LineError(ERR_NO_LABEL, FAIL, target_label);
 		return NULL;
 	}
 	if (!aIsDereferenced)
@@ -12194,7 +12194,7 @@ ResultType Line::IsJumpValid(Line *aDestination)
 	// This can happen if the Goto's target is at a deeper level than it, or if the target
 	// is at a more shallow level but is in some block totally unrelated to it!
 	// Returns FAIL by default, which is what we want because that value is zero:
-	return LineError("A Goto/Gosub mustn't jump into a block that doesn't enclose it."); // Omit GroupActivate from the error msg since that is rare enough to justify the increase in common-case clarify.
+	return LineError("A Goto/Gosub must not jump into a block that doesn't enclose it."); // Omit GroupActivate from the error msg since that is rare enough to justify the increase in common-case clarify.
 	// Above currently doesn't attempt to detect runtime vs. load-time for the purpose of appending
 	// ERR_ABORT.
 }

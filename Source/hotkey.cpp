@@ -596,7 +596,7 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, Label *aJumpToLabel, HookActionTyp
 		else // Hotkey needs to be created.
 		{
 			if (!aJumpToLabel) // Caller is trying to set new aOptions for a non-existent hotkey.
-				return g_script.ScriptError("This hotkey cannot be changed because it doesn't exist." ERR_ABORT, aHotkeyName);
+				return g_script.ScriptError(ERR_NONEXISTENT_HOTKEY ERR_ABORT, aHotkeyName);
 			// Otherwise, aJumpToLabel is the new target label.
 			result = AddHotkey(aJumpToLabel, 0, aHotkeyName);
 			if (result == OK)
@@ -608,14 +608,9 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, Label *aJumpToLabel, HookActionTyp
 				// to override a registered hotkey:
 				if (g_os.IsWin9x())
 				{
-					if (hk->mType == HK_NORMAL && hk->mEnabled && !hk->mIsRegistered)
-						return g_script.ScriptError("This hotkey could not be enabled, perhaps "
-							"because another script or application is already using it.  It could "
-							"also be that this hotkey is not supported on Windows 95/98/Me." ERR_ABORT
-							, aHotkeyName);
-					if (TYPE_IS_HOOK(hk->mType)) // Type was determined by either AddHotkey() or AllActivate().
-						return g_script.ScriptError("This hotkey is not supported on Windows 95/98/Me." ERR_ABORT
-							, aHotkeyName);
+					if (hk->mType == HK_NORMAL && hk->mEnabled && !hk->mIsRegistered
+						|| TYPE_IS_HOOK(hk->mType)) // Type was determined by either AddHotkey() or AllActivate().
+						return g_script.ScriptError("Hotkey in use or unsupported." ERR_ABORT, aHotkeyName);
 				}
 			}
 		}
@@ -624,7 +619,7 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, Label *aJumpToLabel, HookActionTyp
 	case HOTKEY_ID_OFF:
 	case HOTKEY_ID_TOGGLE:
 		if (!hk)
-			return g_script.ScriptError("This hotkey cannot be changed because it doesn't exist." ERR_ABORT, aHotkeyName);
+			return g_script.ScriptError(ERR_NONEXISTENT_HOTKEY ERR_ABORT, aHotkeyName);
 		switch (aHookAction)
 		{
 		case HOTKEY_ID_ON: result = hk->Enable(); break;
@@ -1541,8 +1536,7 @@ ResultType Hotstring::AddHotstring(Label *aJumpToLabel, char *aOptions, char *aH
 	// The length is limited for performance reasons, notably so that the hook does not have to move
 	// memory around in the buffer it uses to watch for hotstrings:
 	if (strlen(aHotstring) > MAX_HOTSTRING_LENGTH)
-		return g_script.ScriptError("A hotstring abbreviation must not be longer than " MAX_HOTSTRING_LENGTH_STR
-			" characters.", aHotstring);
+		return g_script.ScriptError("Hotstring max abbreviation length is " MAX_HOTSTRING_LENGTH_STR ".", aHotstring);
 
 	if (!shs)
 	{

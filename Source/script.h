@@ -232,66 +232,45 @@ enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
 #define WILL_EXIT "The program will exit."
 #define OLD_STILL_IN_EFFECT "The script was not reloaded; the old version will remain in effect."
 #define ERR_UNRECOGNIZED_ACTION "This line does not contain a recognized action."
-#define ERR_MISSING_OUTPUT_VAR "This command requires that at least one of its output variables be provided."
+#define ERR_NONEXISTENT_HOTKEY "Nonexistent hotkey."
+#define ERR_PARAM1_INVALID "Parameter #1 invalid."
+#define ERR_PARAM2_INVALID "Parameter #2 invalid."
+#define ERR_PARAM3_INVALID "Parameter #3 invalid."
+#define ERR_PARAM4_INVALID "Parameter #4 invalid."
+#define ERR_PARAM5_INVALID "Parameter #5 invalid."
+#define ERR_PARAM6_INVALID "Parameter #6 invalid."
+#define ERR_PARAM7_INVALID "Parameter #7 invalid."
+#define ERR_PARAM8_INVALID "Parameter #8 invalid."
+#define ERR_PARAM1_REQUIRED "Parameter #1 required."
+#define ERR_PARAM2_REQUIRED "Parameter #2 required."
+#define ERR_PARAM3_REQUIRED "Parameter #3 required."
+#define ERR_INVALID_KEY_OR_BUTTON "Invalid key or button name."
+#define ERR_MISSING_OUTPUT_VAR "Requires at least one of its output variables."
 #define ERR_MISSING_CLOSE_PAREN "Missing \")\""
 #define ERR_MISSING_COMMA "Missing comma."
 #define ERR_BLANK_PARAM "Blank parameter."
 #define ERR_BYREF "Caller must pass a variable to this ByRef parameter."
-#define ERR_ELSE_WITH_NO_IF "This ELSE doesn't appear to belong to any IF-statement."
+#define ERR_ELSE_WITH_NO_IF "ELSE with no matching IF."
 #define ERR_OUTOFMEM "Out of memory."
 #define ERR_MEM_LIMIT_REACHED "Memory limit reached (see #MaxMem in the help file)." ERR_ABORT
-#define ERR_SETTIMER "This timer's target label does not exist."
-#define ERR_ONEXIT_LABEL "Parameter #1 is not a valid label."
-#define ERR_HOTKEY_LABEL "Parameter #2 is not a valid label or action."
+#define ERR_NO_LABEL "Target label does not exist."
 #define ERR_MENU "Menu does not exist."
 #define ERR_SUBMENU "Submenu does not exist."
-#define ERR_MENULABEL "This menu item's target label does not exist."
-#define ERR_CONTROLLABEL "This control's target label does not exist."
-#define ERR_GROUPADD_LABEL "The target label in parameter #4 does not exist."
-#define ERR_WINDOW_PARAM "This command requires that at least one of its window parameters be non-blank."
-#define ERR_LOOP_FILE_MODE "If not blank or a variable reference, parameter #2 must be either 0, 1, 2."
-#define ERR_LOOP_REG_MODE  "If not blank or a variable reference, parameter #3 must be either 0, 1, 2."
-#define ERR_ON_OFF "If not blank or a variable reference, this parameter must be either ON or OFF."
-#define ERR_ON_OFF_ALWAYS "If not blank or a variable reference, this parameter must be either ON, OFF, ALWAYSON, or ALWAYSOFF."
-#define ERR_ON_OFF_TOGGLE "If not blank or a variable reference, this parameter must be either ON, OFF, or TOGGLE."
-#define ERR_ON_OFF_TOGGLE_PERMIT "If not blank or a variable reference, this parameter must be either ON, OFF, TOGGLE, or PERMIT."
-#define ERR_BLOCKINPUT "Parameter #1 is not a valid BlockInput mode."
-#define ERR_TITLEMATCHMODE "TitleMatchMode must be either 1, 2, 3, slow, fast, or a variable reference."
-#define ERR_TITLEMATCHMODE2 "The variable does not contain a valid TitleMatchMode." ERR_ABORT
-#define ERR_TRANSFORMCOMMAND "Parameter #2 is not a valid transform command."
-#define ERR_MENUCOMMAND "Parameter #2 is not a valid menu command."
-#define ERR_MENUCOMMAND2 "Parameter #2's variable does not contain a valid menu command."
-#define ERR_GUICOMMAND "Parameter #1 is not a valid GUI command."
-#define ERR_GUICONTROL "Parameter #2 is not a valid GUI control type."
-#define ERR_THREADCOMMAND "Parameter #1 is not a valid thread command."
+#define ERR_WINDOW_PARAM "Requires at least one of its window parameters."
+#define ERR_ON_OFF "Requires ON/OFF/blank."
+#define ERR_ON_OFF_TOGGLE "Requires ON/OFF/TOGGLE/blank."
+#define ERR_ON_OFF_TOGGLE_PERMIT "Requires ON/OFF/TOGGLE/PERMIT/blank."
+#define ERR_TITLEMATCHMODE "Requires 1/2/3/Slow/Fast."
 #define ERR_MENUTRAY "Supported only for the tray menu."
-#define ERR_CONTROLCOMMAND "Parameter #1 is not a valid Control command."
-#define ERR_CONTROLGETCOMMAND "Parameter #2 is not a valid ControlGet command."
-#define ERR_GUICONTROLCOMMAND "Parameter #1 is not a valid GuiControl command. Be sure to include a +/- sign if required."
-#define ERR_GUICONTROLGETCOMMAND "Parameter #2 is not a valid GuiControlGet command."
-#define ERR_DRIVECOMMAND "Parameter #1 is not a valid Drive command."
-#define ERR_DRIVEGETCOMMAND "Parameter #2 is not a valid DriveGet command."
-#define ERR_PROCESSCOMMAND "Parameter #1 is not a valid Process command."
-#define ERR_WINSET "Parameter #1 is not a valid WinSet attribute."
-#define ERR_WINGET "Parameter #2 is not a valid WinGet command."
-#define ERR_SYSGET "Parameter #2 is not a valid SysGet command."
-#define ERR_COORDMODE "Parameter #1 is not valid."
-#define ERR_IFMSGBOX "This line specifies an invalid MsgBox result."
 #define ERR_REG_KEY "Invalid registry root key."
 #define ERR_REG_VALUE_TYPE "Invalid registry value type."
-#define ERR_COMPARE_TIMES "Parameter #3 must be either blank, a variable reference, or one of these words: Seconds, Minutes, Hours, Days."
-#define ERR_INVALID_DATETIME "This date-time string contains at least one invalid component."
-#define ERR_FILE_TIME "Parameter #3 must be either blank, M, C, A, or a variable reference."
-#define ERR_MOUSE_BUTTON "This line specifies an invalid mouse button."
-#define ERR_MOUSE_COORD "The X & Y coordinates must be either both absent or both present."
-#define ERR_MOUSE_UPDOWN "Parameter #6 must be either blank, D, U, or a variable reference."
-#define ERR_DIVIDEBYZERO "This line would attempt to divide by zero."
-#define ERR_PERCENT "Parameter #1 must be a number between -100 and 100 (inclusive), or a variable reference."
+#define ERR_INVALID_DATETIME "Invalid YYYYMMDDHHMISS value."
+#define ERR_MOUSE_BUTTON "Invalid mouse button."
+#define ERR_MOUSE_COORD "X & Y must be either both absent or both present."
+#define ERR_DIVIDEBYZERO "Divide by zero."
+#define ERR_PERCENT "Must be between -100 and 100."
 #define ERR_MOUSE_SPEED "Mouse speed must be between 0 and " MAX_MOUSE_SPEED_STR "."
-#define ERR_VAR_IS_RESERVED "This variable is reserved and cannot be assigned to."
-#define ERR_DEFINE_CHAR "The character being defined must not be identical to another special or reserved character."
-#define ERR_INCLUDE_FILE "A filename must be specified for #Include."
-#define ERR_DEFINE_COMMENT "Comment flag must not be one of the hotkey definition symbols (e.g. ! ^ + $ ~ * < >)."
+#define ERR_VAR_IS_RESERVED "Not allowed as an output variable."
 
 //----------------------------------------------------------------------------------
 
@@ -1112,7 +1091,7 @@ public:
 #ifdef _DEBUG
 		if (!aArgNum)
 		{
-			LineError("BAD", WARN);
+			LineError("DEBUG: BAD", WARN);
 			++aArgNum;  // But let it continue.
 		}
 #endif
@@ -2154,7 +2133,7 @@ public:
 	ResultType Create();
 	static void UpdateMenuBars(HMENU aMenu);
 	ResultType AddControl(GuiControls aControlType, char *aOptions, char *aText);
-	ResultType ParseOptions(char *aOptions, bool &aSetLastFoundWindow);
+	ResultType ParseOptions(char *aOptions, bool &aSetLastFoundWindow, bool &aOwnDialogs);
 	ResultType ControlParseOptions(char *aOptions, GuiControlOptionsType &aOpt, GuiControlType &aControl
 		, GuiIndexType aControlIndex = -1); // aControlIndex is not needed upon control creation.
 	void ControlInitOptions(GuiControlOptionsType &aOpt, GuiControlType &aControl);

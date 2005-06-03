@@ -996,7 +996,7 @@ int MsgBox(int aValue)
 
 
 
-int MsgBox(char *aText, UINT uType, char *aTitle, double aTimeout)
+int MsgBox(char *aText, UINT uType, char *aTitle, double aTimeout, HWND aOwner)
 // Returns FAIL if the attempt failed because of too many existing MessageBox windows,
 // or if MessageBox() itself failed.
 {
@@ -1129,8 +1129,10 @@ int MsgBox(char *aText, UINT uType, char *aTitle, double aTimeout)
 	POST_AHK_DIALOG((DWORD)(aTimeout * 1000))
 
 	++g_nMessageBoxes;  // This value will also be used as the Timer ID if there's a timeout.
-	g.MsgBoxResult = MessageBox(NULL, text, title, uType);
+	g.MsgBoxResult = MessageBox(aOwner, text, title, uType);
 	--g_nMessageBoxes;
+	// Above's use of aOwner: MsgBox, FileSelectFile, and other dialogs seem to consider aOwner to be NULL
+	// when aOwner is minimized or hidden.
 
 	// If there's a timer, kill it for performance reasons since it's no longer needed.
 	// Actually, this isn't easy to do because we don't know what the HWND of the MsgBox

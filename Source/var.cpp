@@ -399,9 +399,10 @@ VarSizeType Var::Get(char *aBuf)
 			result = GetCurrentDirectory(sizeof(buf_temp), buf_temp);
 			if (!result)
 			{
+				// Disabled because it probably never happens:
 				// This is just a warning because this function isn't set up to cause a true
 				// failure.  So don't append ERR_ABORT to the below string:
-				g_script.ScriptError("GetCurrentDirectory."); // Short msg since probably can't realistically fail.
+				//g_script.ScriptError("GetCurrentDirectory."); // Short msg since probably can't realistically fail.
 				// Probably safer to return something so that caller reserves enough space for it
 				// in case the call works the next time?:
 				return MAX_PATH;
