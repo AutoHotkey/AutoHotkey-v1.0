@@ -3970,9 +3970,141 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	int value;    // For temp use during validation.
 	double value_float;
 	SYSTEMTIME st;  // same.
+#endif
 
 	switch(aActionType)
 	{
+	// Fix for v1.0.35.02:
+	// THESE FIRST FEW CASES MUST EXIT IN BOTH SELF-CONTAINED AND NORMAL VERSION since they make
+	// alterations to lines:
+	case ACT_LOOP:
+		// If possible, determine the type of loop so that the preparser can better
+		// validate some things:
+		switch (aArgc)
+		{
+		case 0:
+			line.mAttribute = ATTR_LOOP_NORMAL;
+			break;
+		case 1:
+			if (line.ArgHasDeref(1)) // Impossible to know now what type of loop (only at runtime).
+				line.mAttribute = ATTR_LOOP_UNKNOWN;
+			else
+			{
+				if (IsPureNumeric(NEW_RAW_ARG1, false))
+					line.mAttribute = ATTR_LOOP_NORMAL;
+				else
+					line.mAttribute = line.RegConvertRootKey(NEW_RAW_ARG1) ? ATTR_LOOP_REG : ATTR_LOOP_FILE;
+			}
+			break;
+		default:  // has 2 or more args.
+			if (line.ArgHasDeref(1)) // Impossible to know now what type of loop (only at runtime).
+				line.mAttribute = ATTR_LOOP_UNKNOWN;
+			else if (!stricmp(NEW_RAW_ARG1, "Read"))
+				line.mAttribute = ATTR_LOOP_READ_FILE;
+			else if (!stricmp(NEW_RAW_ARG1, "Parse"))
+				line.mAttribute = ATTR_LOOP_PARSE;
+			else // the 1st arg can either be a Root Key or a File Pattern, depending on the type of loop.
+			{
+				line.mAttribute = line.RegConvertRootKey(NEW_RAW_ARG1) ? ATTR_LOOP_REG : ATTR_LOOP_FILE;
+				if (line.mAttribute == ATTR_LOOP_FILE)
+				{
+					// Validate whatever we can rather than waiting for runtime validation:
+					if (!line.ArgHasDeref(2) && Line::ConvertLoopMode(NEW_RAW_ARG2) == FILE_LOOP_INVALID)
+						return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
+					if (*NEW_RAW_ARG3 && !line.ArgHasDeref(3))
+						if (strlen(NEW_RAW_ARG3) > 1 || (*NEW_RAW_ARG3 != '0' && *NEW_RAW_ARG3 != '1'))
+							return ScriptError(ERR_PARAM3_INVALID, NEW_RAW_ARG3);
+				}
+				else // Registry loop.
+				{
+					if (aArgc > 2 && !line.ArgHasDeref(3) && Line::ConvertLoopMode(NEW_RAW_ARG3) == FILE_LOOP_INVALID)
+						return ScriptError(ERR_PARAM3_INVALID, NEW_RAW_ARG3);
+					if (*NEW_RAW_ARG4 && !line.ArgHasDeref(4))
+						if (strlen(NEW_RAW_ARG4) > 1 || (*NEW_RAW_ARG4 != '0' && *NEW_RAW_ARG4 != '1'))
+							return ScriptError(ERR_PARAM4_INVALID, NEW_RAW_ARG4);
+				}
+			}
+		}
+		break; // Outer switch().
+
+	case ACT_REPEAT: // These types of loops are always "NORMAL".
+		line.mAttribute = ATTR_LOOP_NORMAL;
+		break;
+
+	// This one alters g_persistent so is present in its entirety (for simplicity) in both SC an non-SC version.
+	case ACT_GUI:
+		// By design, scripts that use the GUI cmd anywhere are persistent.  Doing this here
+		// also allows WinMain() to later detect whether this script should become #SingleInstance.
+		// Note: Don't directly change g_AllowOnlyOneInstance here in case the  remainder of the
+		// script-loading process comes across any explicit uses of #SinngleInstance,
+		// in which case it would take precedence.
+		g_persistent = true;
+#ifndef AUTOHOTKEYSC // For v1.0.35.01, some syntax checking is removed in compiled scripts to reduce their size.
+		if (aArgc > 0 && !line.ArgHasDeref(1))
+		{
+			GuiCommands gui_cmd = line.ConvertGuiCommand(NEW_RAW_ARG1);
+
+			switch (gui_cmd)
+			{
+			case GUI_CMD_INVALID:
+				return ScriptError(ERR_PARAM1_INVALID, NEW_RAW_ARG1);
+			case GUI_CMD_ADD:
+				if (aArgc > 1 && !line.ArgHasDeref(2) && !line.ConvertGuiControl(NEW_RAW_ARG2))
+					return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
+				break;
+			case GUI_CMD_CANCEL:
+			case GUI_CMD_MINIMIZE:
+			case GUI_CMD_MAXIMIZE:
+			case GUI_CMD_RESTORE:
+			case GUI_CMD_DESTROY:
+			case GUI_CMD_DEFAULT:
+				if (aArgc > 1)
+					return ScriptError("Parameter #2 and beyond should be omitted in this case.", NEW_RAW_ARG2);
+				break;
+			case GUI_CMD_SUBMIT:
+			case GUI_CMD_MENU:
+			case GUI_CMD_FLASH:
+				if (aArgc > 2)
+					return ScriptError("Parameter #3 and beyond should be omitted in this case.", NEW_RAW_ARG3);
+				break;
+			// No action for these since they have a varying number of optional params:
+			//case GUI_CMD_SHOW:
+			//case GUI_CMD_FONT:
+			//case GUI_CMD_MARGIN:
+			//case GUI_CMD_TAB:
+			//case GUI_CMD_COLOR: No load-time param validation to avoid larger EXE size.
+			}
+		}
+#endif
+		break;
+
+	case ACT_GROUPADD:
+	case ACT_GROUPACTIVATE:
+	case ACT_GROUPDEACTIVATE:
+	case ACT_GROUPCLOSE:
+		// For all these, store a pointer to the group to help performance.
+		// We create a non-existent group even for ACT_GROUPACTIVATE, ACT_GROUPDEACTIVATE
+		// and ACT_GROUPCLOSE because we can't rely on the ACT_GROUPADD commands having
+		// been parsed prior to them (e.g. something like "Gosub, DefineGroups" may appear
+		// in the auto-execute portion of the script).
+		if (!line.ArgHasDeref(1))
+			if (   !(line.mAttribute = FindOrAddGroup(NEW_RAW_ARG1))   )
+				return FAIL;  // The above already displayed the error.
+		if (aActionType == ACT_GROUPADD && !*NEW_RAW_ARG2 && !*NEW_RAW_ARG3 && !*NEW_RAW_ARG5 && !*NEW_RAW_ARG6) // ARG4 is the JumpToLine
+			return ScriptError(ERR_WINDOW_PARAM);
+		if (aActionType == ACT_GROUPACTIVATE || aActionType == ACT_GROUPDEACTIVATE)
+		{
+			if (*NEW_RAW_ARG2 && !line.ArgHasDeref(2))
+				if (strlen(NEW_RAW_ARG2) > 1 || toupper(*NEW_RAW_ARG2) != 'R')
+					return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
+		}
+		else if (aActionType == ACT_GROUPCLOSE)
+			if (*NEW_RAW_ARG2 && !line.ArgHasDeref(2))
+				if (strlen(NEW_RAW_ARG2) > 1 || !strchr("RA", toupper(*NEW_RAW_ARG2)))
+					return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
+		break;
+
+#ifndef AUTOHOTKEYSC // For v1.0.35.01, some syntax checking is removed in compiled scripts to reduce their size.
 	case ACT_RETURN:
 		if (aArgc > 0 && !g.CurrentFunc)
 			return ScriptError("Return's parameter should be blank except inside a function.");
@@ -4600,50 +4732,6 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		}
 		break;
 
-	case ACT_GUI:
-		// By design, scripts that use the GUI cmd anywhere are persistent.  Doing this here
-		// also allows WinMain() to later detect whether this script should become #SingleInstance.
-		// Note: Don't directly change g_AllowOnlyOneInstance here in case the  remainder of the
-		// script-loading process comes across any explicit uses of #SinngleInstance,
-		// in which case it would take precedence.
-		g_persistent = true;
-		if (aArgc > 0 && !line.ArgHasDeref(1))
-		{
-			GuiCommands gui_cmd = line.ConvertGuiCommand(NEW_RAW_ARG1);
-
-			switch (gui_cmd)
-			{
-			case GUI_CMD_INVALID:
-				return ScriptError(ERR_PARAM1_INVALID, NEW_RAW_ARG1);
-			case GUI_CMD_ADD:
-				if (aArgc > 1 && !line.ArgHasDeref(2) && !line.ConvertGuiControl(NEW_RAW_ARG2))
-					return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
-				break;
-			case GUI_CMD_CANCEL:
-			case GUI_CMD_MINIMIZE:
-			case GUI_CMD_MAXIMIZE:
-			case GUI_CMD_RESTORE:
-			case GUI_CMD_DESTROY:
-			case GUI_CMD_DEFAULT:
-				if (aArgc > 1)
-					return ScriptError("Parameter #2 and beyond should be omitted in this case.", NEW_RAW_ARG2);
-				break;
-			case GUI_CMD_SUBMIT:
-			case GUI_CMD_MENU:
-			case GUI_CMD_FLASH:
-				if (aArgc > 2)
-					return ScriptError("Parameter #3 and beyond should be omitted in this case.", NEW_RAW_ARG3);
-				break;
-			// No action for these since they have a varying number of optional params:
-			//case GUI_CMD_SHOW:
-			//case GUI_CMD_FONT:
-			//case GUI_CMD_MARGIN:
-			//case GUI_CMD_TAB:
-			//case GUI_CMD_COLOR: No load-time param validation to avoid larger EXE size.
-			}
-		}
-		break;
-
 	case ACT_THREAD:
 		if (aArgc > 0 && !line.ArgHasDeref(1) && !line.ConvertThreadCommand(NEW_RAW_ARG1))
 			return ScriptError(ERR_PARAM1_INVALID, NEW_RAW_ARG1);
@@ -4926,88 +5014,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			if (!ATOF(NEW_RAW_ARG2))
 				return ScriptError(ERR_DIVIDEBYZERO, NEW_RAW_ARG2);
 		break;
-
-	case ACT_GROUPADD:
-	case ACT_GROUPACTIVATE:
-	case ACT_GROUPDEACTIVATE:
-	case ACT_GROUPCLOSE:
-		// For all these, store a pointer to the group to help performance.
-		// We create a non-existent group even for ACT_GROUPACTIVATE, ACT_GROUPDEACTIVATE
-		// and ACT_GROUPCLOSE because we can't rely on the ACT_GROUPADD commands having
-		// been parsed prior to them (e.g. something like "Gosub, DefineGroups" may appear
-		// in the auto-execute portion of the script).
-		if (!line.ArgHasDeref(1))
-			if (   !(line.mAttribute = FindOrAddGroup(NEW_RAW_ARG1))   )
-				return FAIL;  // The above already displayed the error.
-		if (aActionType == ACT_GROUPADD && !*NEW_RAW_ARG2 && !*NEW_RAW_ARG3 && !*NEW_RAW_ARG5 && !*NEW_RAW_ARG6) // ARG4 is the JumpToLine
-			return ScriptError(ERR_WINDOW_PARAM);
-		if (aActionType == ACT_GROUPACTIVATE || aActionType == ACT_GROUPDEACTIVATE)
-		{
-			if (*NEW_RAW_ARG2 && !line.ArgHasDeref(2))
-				if (strlen(NEW_RAW_ARG2) > 1 || toupper(*NEW_RAW_ARG2) != 'R')
-					return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
-		}
-		else if (aActionType == ACT_GROUPCLOSE)
-			if (*NEW_RAW_ARG2 && !line.ArgHasDeref(2))
-				if (strlen(NEW_RAW_ARG2) > 1 || !strchr("RA", toupper(*NEW_RAW_ARG2)))
-					return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
-		break;
-
-	case ACT_REPEAT: // These types of loops are always "NORMAL".
-		line.mAttribute = ATTR_LOOP_NORMAL;
-		break;
-
-	case ACT_LOOP:
-		// If possible, determine the type of loop so that the preparser can better
-		// validate some things:
-		switch (aArgc)
-		{
-		case 0:
-			line.mAttribute = ATTR_LOOP_NORMAL;
-			break;
-		case 1:
-			if (line.ArgHasDeref(1)) // Impossible to know now what type of loop (only at runtime).
-				line.mAttribute = ATTR_LOOP_UNKNOWN;
-			else
-			{
-				if (IsPureNumeric(NEW_RAW_ARG1, false))
-					line.mAttribute = ATTR_LOOP_NORMAL;
-				else
-					line.mAttribute = line.RegConvertRootKey(NEW_RAW_ARG1) ? ATTR_LOOP_REG : ATTR_LOOP_FILE;
-			}
-			break;
-		default:  // has 2 or more args.
-			if (line.ArgHasDeref(1)) // Impossible to know now what type of loop (only at runtime).
-				line.mAttribute = ATTR_LOOP_UNKNOWN;
-			else if (!stricmp(NEW_RAW_ARG1, "Read"))
-				line.mAttribute = ATTR_LOOP_READ_FILE;
-			else if (!stricmp(NEW_RAW_ARG1, "Parse"))
-				line.mAttribute = ATTR_LOOP_PARSE;
-			else // the 1st arg can either be a Root Key or a File Pattern, depending on the type of loop.
-			{
-				line.mAttribute = line.RegConvertRootKey(NEW_RAW_ARG1) ? ATTR_LOOP_REG : ATTR_LOOP_FILE;
-				if (line.mAttribute == ATTR_LOOP_FILE)
-				{
-					// Validate whatever we can rather than waiting for runtime validation:
-					if (!line.ArgHasDeref(2) && Line::ConvertLoopMode(NEW_RAW_ARG2) == FILE_LOOP_INVALID)
-						return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
-					if (*NEW_RAW_ARG3 && !line.ArgHasDeref(3))
-						if (strlen(NEW_RAW_ARG3) > 1 || (*NEW_RAW_ARG3 != '0' && *NEW_RAW_ARG3 != '1'))
-							return ScriptError(ERR_PARAM3_INVALID, NEW_RAW_ARG3);
-				}
-				else // Registry loop.
-				{
-					if (aArgc > 2 && !line.ArgHasDeref(3) && Line::ConvertLoopMode(NEW_RAW_ARG3) == FILE_LOOP_INVALID)
-						return ScriptError(ERR_PARAM3_INVALID, NEW_RAW_ARG3);
-					if (*NEW_RAW_ARG4 && !line.ArgHasDeref(4))
-						if (strlen(NEW_RAW_ARG4) > 1 || (*NEW_RAW_ARG4 != '0' && *NEW_RAW_ARG4 != '1'))
-							return ScriptError(ERR_PARAM4_INVALID, NEW_RAW_ARG4);
-				}
-			}
-		}
-		break; // Outer switch().
-	}
 #endif  // The above section is in place only if when not AUTOHOTKEYSC.
+	}
 
 	if (mNextLineIsFunctionBody)
 	{
