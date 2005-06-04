@@ -231,6 +231,7 @@ enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
 #define ERR_ABORT "  " ERR_ABORT_NO_SPACES
 #define WILL_EXIT "The program will exit."
 #define OLD_STILL_IN_EFFECT "The script was not reloaded; the old version will remain in effect."
+#define ERR_COMBINED_LINE_TOO_LONG "Combined line would be too long."
 #define ERR_UNRECOGNIZED_ACTION "This line does not contain a recognized action."
 #define ERR_NONEXISTENT_HOTKEY "Nonexistent hotkey."
 #define ERR_PARAM1_INVALID "Parameter #1 invalid."
@@ -884,16 +885,16 @@ public:
 		, LoopReadFileStruct *aCurrentReadFile = NULL, char *aCurrentField = NULL
 		, __int64 aCurrentLoopIteration = 0); // Use signed, since script/ITOA64 aren't designed to work with unsigned.
 
-	// The characters common to both EXP_TELLTALES and EXP_OPERAND_TERMINATORS:
-	#define EXP_COMMON " \t<>=*/&|^~!(),"  // Space and Tab are included at the beginning for performance.
+	// The characters common to both EXPR_TELLTALES and EXPR_OPERAND_TERMINATORS:
+	#define EXPR_COMMON " \t<>=*/&|^~!(),"  // Space and Tab are included at the beginning for performance.
 	// Characters whose presence in a mandatory-numeric param make it an expression for certain.
 	// + and - are not included here because legacy numeric parameters can contain unary plus or minus,
 	// e.g. WinMove, -%x%, -%y%:
-	#define EXP_TELLTALES EXP_COMMON "\""
+	#define EXPR_TELLTALES EXPR_COMMON "\""
 	// Characters that mark the end of an operand inside an expression.  Double-quote must not be included:
-	#define EXP_OPERAND_TERMINATORS EXP_COMMON "+-"
-	#define EXP_ALL_SYMBOLS EXP_OPERAND_TERMINATORS "\""
-	#define EXP_ILLEGAL_CHARS "'\\:;`{}" // Characters illegal in an expression.
+	#define EXPR_OPERAND_TERMINATORS EXPR_COMMON "+-"
+	#define EXPR_ALL_SYMBOLS EXPR_OPERAND_TERMINATORS "\""
+	#define EXPR_ILLEGAL_CHARS "'\\:;`{}" // Characters illegal in an expression.
 
 	Var *ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary = true);
 	ResultType ExpandArgs(VarSizeType aSpaceNeeded = VARSIZE_ERROR, Var *aArgVar[] = NULL);

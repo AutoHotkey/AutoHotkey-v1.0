@@ -516,7 +516,7 @@ ResultType Hotkey::PerformID(HotkeyIDType aHotkeyID)
 		// involved somewhere.  Avoiding floats altogether may reduce EXE size
 		// and maybe other benefits (due to it not being "loaded")?
 		snprintf(error_text, sizeof(error_text), "%u hotkeys have been received in the last %ums.\n\n"
-			"Do you want to continue?\n(see #MaxHotkeysPerInterval in the help file for details)"  // In case its stuck in a loop.
+			"Do you want to continue?\n(see #MaxHotkeysPerInterval in the help file)"  // In case its stuck in a loop.
 			, throttled_key_count, time_until_now);
 
 		// Turn off any RunAgain flags that may be on, which in essense is the same as de-buffering
@@ -831,12 +831,7 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 				// Neutral modifier has been specified.  Future enhancement: improve this
 				// to try to guess which key, left or right, should be used based on the
 				// location of the suffix key on the keyboard.
-				snprintf(error_text, sizeof(error_text), "The hotkey \"%s\" is AltTab but has a "
-					"neutral modifying prefix key.  For this type, you must specify left "
-					"or right by using something like:\n\n"
-					"RWin" COMPOSITE_DELIMITER "RShift::AltTab\n"
-					"or\n"
-					">+RWin::AltTab", hotkey_name);
+				snprintf(error_text, sizeof(error_text), "The AltTab hotkey \"%s\" must specify which key (L or R).", hotkey_name);
 				if (g_script.mIsReadyToExecute) // Dynamically registered via the Hotkey command.
 				{
 					snprintfcat(error_text, sizeof(error_text), "\n\n%s", ERR_ABORT_NO_SPACES);
@@ -859,8 +854,8 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 				case MOD_LWIN: mModifierVK = VK_LWIN; break; // Win9x should support LWIN/RWIN.
 				case MOD_RWIN: mModifierVK = VK_RWIN; break;
 				default:
-					snprintf(error_text, sizeof(error_text), "The hotkey \"%s\" is AltTab but has "
-						"more than one modifying prefix key, which is not allowed.", hotkey_name);
+					snprintf(error_text, sizeof(error_text), "The AltTab hotkey \"%s\" must have exactly "
+						"one modifier/prefix.", hotkey_name);
 					if (g_script.mIsReadyToExecute) // Dynamically registered via the Hotkey command.
 					{
 						snprintfcat(error_text, sizeof(error_text), ERR_ABORT);
@@ -1087,8 +1082,7 @@ ResultType Hotkey::TextToKey(char *aText, char *aHotkeyName, bool aIsModifier)
 	if (!aText || !*aText)
 	{
 		snprintf(error_text, sizeof(error_text), "\"%s\" is not a valid hotkey."
-			"  Note that shifted hotkeys such as # and ? should be defined as +3 and +/, respectively."
-			, aHotkeyName);
+			" A shifted hotkey such as ? should be defined as +/.", aHotkeyName);
 		if (g_script.mIsReadyToExecute) // Dynamically registered via the Hotkey command.
 		{
 			snprintfcat(error_text, sizeof(error_text), ERR_ABORT);
@@ -1121,7 +1115,7 @@ ResultType Hotkey::TextToKey(char *aText, char *aHotkeyName, bool aIsModifier)
 	{
 		if (aIsModifier && (temp_vk == VK_WHEEL_DOWN || temp_vk == VK_WHEEL_UP))
 		{
-			snprintf(error_text, sizeof(error_text), "\"%s\" is not allowed to be used as a prefix key.", aText);
+			snprintf(error_text, sizeof(error_text), "\"%s\" is not allowed as a prefix key.", aText);
 			if (g_script.mIsReadyToExecute) // Dynamically registered via the Hotkey command.
 			{
 				snprintfcat(error_text, sizeof(error_text), ERR_ABORT);

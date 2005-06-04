@@ -847,7 +847,7 @@ LineNumberType Script::LoadFromFile()
 		if (!ActionExec("edit", buf, mFileDir, false))
 			if (!ActionExec("Notepad.exe", buf, mFileDir, false))
 			{
-				MsgBox("The new script file was created, but could not be opened with the default editor or with Notepad.");
+				MsgBox("Can't open script."); // Short msg since so rare.
 				return LOADING_FAILED;
 			}
 		// future: have it wait for the process to close, then try to open the script again:
@@ -912,7 +912,7 @@ LineNumberType Script::LoadFromFile()
 bool IsFunction(char *aBuf)
 // Helper function for LoadIncludedFile().
 {
-	char *action_end = StrChrAny(aBuf, EXP_ALL_SYMBOLS EXP_ILLEGAL_CHARS);
+	char *action_end = StrChrAny(aBuf, EXPR_ALL_SYMBOLS EXPR_ILLEGAL_CHARS);
 	// Can't be a function definition or call without an open-parenthesis as first char found by the above.
 	// In addition, if action_end isn't NULL, that confirms that the string in aBuf prior to action_end contains
 	// no spaces, tabs, colons, or equal-signs.  As a result, it can't be:
@@ -1051,7 +1051,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 
 	// For the line continuation mechanism:
 	bool do_ltrim, do_rtrim, literal_escapes, literal_derefs, literal_delimiters
-		, in_continuation_section, has_continuation_section;
+		, in_continuation_section, has_continuation_section, is_continuation_line;
 	char *next_option, *option_end, orig_char; // Line continuation mechanism's option parsing.
 	int continuation_line_count;
 
@@ -1089,7 +1089,6 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 	{
 		// For each whole line (a line with continuation section is counted as only a single line):
 
-
 		// This must be reset for each iteration because a prior iteration may have changed it, even
 		// indirectly by calling something that changed it:
 		mCurrLine = NULL;  // To signify that we're in transition, trying to load a new one.
@@ -1113,7 +1112,69 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			if (!in_continuation_section) // This is either the first iteration or the line after the end of a previous continuation section.
 			{
 				if (   !(in_continuation_section = (next_buf_length != -1 && *next_buf == '('))   ) // Compare directly to -1 since length is unsigned.
-					break; // There is no continuation section.  No further searching is needed.
+				{
+					if (next_buf_length != -1)  // Compare directly to -1 since length is unsigned.
+					{
+						is_continuation_line = false; // Set default.
+						switch(*next_buf)
+						{
+						case ',':
+							// Since normal (single-colon) labels can't contain commas, and since hotstrings
+							// begin with a colon not a comma, only hotkeys remain as a source of ambiguity.
+							// Ensure this isn't a hotkey:
+							cp = omit_leading_whitespace(next_buf + 1);
+							is_continuation_line = (strncmp(cp, HOTKEY_FLAG, HOTKEY_FLAG_LENGTH) // Exclude ",::" (comma as hotkey).
+								&& (strncmp(cp - 1, COMPOSITE_DELIMITER, COMPOSITE_DELIMITER_LENGTH)
+									|| !strstr(next_buf, HOTKEY_FLAG))); // Exclude ", & x::" (comma as prefix key).
+							break;
+						case '&':
+						case '|':
+							// Since && and || are always used in expressions, there should be no danger of
+							// any line of an expression legitimately ending in a colon (single, double or otherwise).
+							is_continuation_line = (next_buf[1] == next_buf[0] && next_buf[next_buf_length - 1] != ':');
+							break;
+						case 'A':
+						case 'a':
+							// Since && and || are always used in expressions, there should be no danger of
+							// any line of an expression legitimately ending in a colon (single, double or otherwise).
+							if (next_buf[next_buf_length - 1] != ':' && IS_SPACE_OR_TAB_OR_NBSP(next_buf[3])
+								&& !strnicmp(next_buf, "and", 3))
+							{
+								cp = omit_leading_whitespace(next_buf + 3);
+								if (!strchr(EXPR_OPERAND_TERMINATORS, *cp)) // Exclude "and:=x", "and = 1", "and += 1". This should be ok because AND/OR should always be followed immediately by a legtimate operand, not an operator.
+									is_continuation_line = true;
+							}
+							break;
+						case 'O':
+						case 'o':
+							// See comments above.
+							if (next_buf[next_buf_length - 1] != ':' && IS_SPACE_OR_TAB_OR_NBSP(next_buf[2])
+								&& toupper(next_buf[1]) == 'R')
+							{
+								cp = omit_leading_whitespace(next_buf + 2);
+								if (!strchr(EXPR_OPERAND_TERMINATORS, *cp)) // Exclude "and:=x", "and = 1", "and += 1". This should be ok because AND/OR should always be followed immediately by a legtimate operand, not an operator.
+									is_continuation_line = true;
+							}
+							break;
+						}
+						if (is_continuation_line)
+						{
+							if (buf_length + next_buf_length >= LINE_SIZE - 1) // -1 to account for the extra space added below.
+							{
+								ScriptError(ERR_COMBINED_LINE_TOO_LONG, next_buf);
+								return CloseAndReturn(fp, script_buf, FAIL);
+							}
+							if (*next_buf != ',') // Insert space before and/or/&&/|| so that built/combined expression works correctly and also for readability of ListLines.
+								buf[buf_length++] = ' ';
+							memcpy(buf + buf_length, next_buf, next_buf_length + 1); // Append this line to prev. and include the zero terminator.
+							buf_length += next_buf_length;
+							continue; // Check for yet more continuation lines after this one.
+						}
+					}
+					// Since above didn't continue, there is no continuation line or section.  No further
+					// searching is needed.
+					break; 
+				}
 				// "has_continuation_section" indicates whether the line we're about to construct is partially
 				// composed of continuation lines beneath it.  It's separate from continuation_line_count
 				// in case there is another continuation section immediately after/adjacent to the first one,
@@ -1194,7 +1255,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 				} // for() each item in option list
 
 				continue; // Now that the open-parenthesis of this continuation section has been processed, proceed to the next line.
-			}
+			} // if (!in_continuation_section)
 
 			// Since above didn't "continue", we're in the continuation section and thus next_buf contains
 			// either a line to be appended onto buf or the closing parenthesis of this continuation section.
@@ -1253,7 +1314,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			// Must check the combined length only after anything that might have expanded the string above.
 			if (buf_length + next_buf_length + suffix_length >= LINE_SIZE)
 			{
-				ScriptError("Combined line would be too long.", cp);
+				ScriptError(ERR_COMBINED_LINE_TOO_LONG, cp);
 				return CloseAndReturn(fp, script_buf, FAIL);
 			}
 
@@ -1472,7 +1533,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			//vs.
 			//^`::  (i.e. accent is the suffix key)
 			// First check if it has the composite delimiter.  If it does, it's 99.9% certain that it's
-			// a hotkey due to the extreme odds against " & `::" ever appearing literally in a command.
+			// a hotkey due to the extreme odds against " & `::" ever appearing *literally* in a command.
 			size_t available_length = hotkey_flag - buf;
 			if (available_length <= COMPOSITE_DELIMITER_LENGTH + 1  // i.e. it must long enough to contain "x & `::"
                 || strnicmp(hotkey_flag - 4, COMPOSITE_DELIMITER, COMPOSITE_DELIMITER_LENGTH)) // it's not it.
@@ -1783,55 +1844,53 @@ size_t Script::GetLine(char *aBuf, int aMaxCharsToRead, bool aInContinuationSect
 		//	Text
 		// ) ; Same line comment.
 		char *cp = omit_leading_whitespace(aBuf);
-		if (*cp == ')')
-			aInContinuationSection = false; // Caller needs to redetect this for itself, this is just for us.
+		if (*cp != ')')
+			return aBuf_length; // The above is responsible for keeping aBufLength up-to-date with any changes to aBuf.
 	}
 
-	if (!aInContinuationSection) // Check its value again in case the above changed it.
+	// Since above didn't return, either we're not in a continuation section or this is the final line of one.
+	// ltrim to support semicolons after tab keys or other whitespace.  Seems best to rtrim also:
+	aBuf_length = trim(aBuf);
+	if (!strncmp(aBuf, g_CommentFlag, g_CommentFlagLength)) // Case sensitive.
 	{
-		// ltrim to support semicolons after tab keys or other whitespace.  Seems best to rtrim also:
-		aBuf_length = trim(aBuf);
-		if (!strncmp(aBuf, g_CommentFlag, g_CommentFlagLength)) // Case sensitive.
+		*aBuf = '\0';
+		return 0;
+	}
+	if (g_AllowSameLineComments)
+	{
+		// Handle comment-flags that appear to the right of a valid line.  But don't
+		// allow these types of comments if the script is considers to be the AutoIt2
+		// style, to improve compatibility with old scripts that may use non-escaped
+		// comment-flags as literal characters rather than comments:
+		char *cp, *prevp;
+		for (cp = strstr(aBuf, g_CommentFlag); cp; cp = strstr(cp + g_CommentFlagLength, g_CommentFlag))
 		{
-			*aBuf = '\0';
-			return 0;
-		}
-		if (g_AllowSameLineComments)
-		{
-			// Handle comment-flags that appear to the right of a valid line.  But don't
-			// allow these types of comments if the script is considers to be the AutoIt2
-			// style, to improve compatibility with old scripts that may use non-escaped
-			// comment-flags as literal characters rather than comments:
-			char *cp, *prevp;
-			for (cp = strstr(aBuf, g_CommentFlag); cp; cp = strstr(cp + g_CommentFlagLength, g_CommentFlag))
+			// If no whitespace to its left, it's not a valid comment.
+			// We insist on this so that a semi-colon (for example) immediately after
+			// a word (as semi-colons are often used) will not be considered a comment.
+			prevp = cp - 1;
+			if (prevp < aBuf) // should never happen because we already checked above.
 			{
-				// If no whitespace to its left, it's not a valid comment.
-				// We insist on this so that a semi-colon (for example) immediately after
-				// a word (as semi-colons are often used) will not be considered a comment.
-				prevp = cp - 1;
-				if (prevp < aBuf) // should never happen because we already checked above.
+				*aBuf = '\0';
+				return 0;
+			}
+			if (IS_SPACE_OR_TAB_OR_NBSP(*prevp)) // consider it to be a valid comment flag
+			{
+				*prevp = '\0';
+				aBuf_length = rtrim_with_nbsp(aBuf, prevp - aBuf); // Since it's our responsibility to return a fully trimmed string.
+				break; // Once the first valid comment-flag is found, nothing after it can matter.
+			}
+			else // No whitespace to the left.
+				if (*prevp == g_EscapeChar) // Remove the escape char.
 				{
-					*aBuf = '\0';
-					return 0;
+					memmove(prevp, prevp + 1, strlen(prevp + 1) + 1);  // +1 for the terminator.
+					--aBuf_length;
+					// Then continue looking for others.
 				}
-				if (IS_SPACE_OR_TAB_OR_NBSP(*prevp)) // consider it to be a valid comment flag
-				{
-					*prevp = '\0';
-					aBuf_length = rtrim_with_nbsp(aBuf, prevp - aBuf); // Since it's our responsibility to return a fully trimmed string.
-					break; // Once the first valid comment-flag is found, nothing after it can matter.
-				}
-				else // No whitespace to the left.
-					if (*prevp == g_EscapeChar) // Remove the escape char.
-					{
-						memmove(prevp, prevp + 1, strlen(prevp + 1) + 1);  // +1 for the terminator.
-						--aBuf_length;
-						// Then continue looking for others.
-					}
-					// else there wasn't any whitespace to its left, so keep looking in case there's
-					// another further on in the line.
-			} // for()
-		} // if (g_AllowSameLineComments)
-	} // if (!aInContinuationSection)
+				// else there wasn't any whitespace to its left, so keep looking in case there's
+				// another further on in the line.
+		} // for()
+	} // if (g_AllowSameLineComments)
 
 	return aBuf_length; // The above is responsible for keeping aBufLength up-to-date with any changes to aBuf.
 }
@@ -3614,7 +3673,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 						// Since ACT_ASSIGNEXPR is not a legacy command, none of the legacy exceptions need
 						// to be applied to it.  For other commands, if any telltale character is present
 						// it's definitely an expression and the complex check after this one isn't needed:
-						if (aActionType == ACT_ASSIGNEXPR || StrChrAny(this_new_arg.text, EXP_TELLTALES))
+						if (aActionType == ACT_ASSIGNEXPR || StrChrAny(this_new_arg.text, EXPR_TELLTALES))
 							this_new_arg.is_expression = true;
 						else
 							this_new_arg.is_expression = LegacyArgIsExpression(this_new_arg.text, this_aArgMap);
@@ -3674,7 +3733,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				// of variables.
 				for (op_begin = this_new_arg.text; *op_begin; op_begin = op_end)
 				{
-					for (; *op_begin && strchr(EXP_OPERAND_TERMINATORS, *op_begin); ++op_begin); // Skip over whitespace, operators, and parentheses.
+					for (; *op_begin && strchr(EXPR_OPERAND_TERMINATORS, *op_begin); ++op_begin); // Skip over whitespace, operators, and parentheses.
 					if (!*op_begin) // The above loop reached the end of the string: No operands remaining.
 						break;
 
@@ -3702,7 +3761,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					}
 					
 					// Find the end of this operand (if *op_end is '\0', strchr() will find that too):
-					for (op_end = op_begin + 1; !strchr(EXP_OPERAND_TERMINATORS, *op_end); ++op_end); // Find first whitespace, operator, or paren.
+					for (op_end = op_begin + 1; !strchr(EXPR_OPERAND_TERMINATORS, *op_end); ++op_end); // Find first whitespace, operator, or paren.
 					// Now op_end marks the end of this operand.  The end might be the zero terminator, an operator, etc.
 
 					// Must be done only after op_end has been set above (since loop uses op_end):
@@ -3757,7 +3816,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					// Rather than forbidding g_delimiter and g_DerefChar, it seems best to assume they are at
 					// their default values for this purpose.  Otherwise, if g_delimiter is an operator, that
 					// operator would then become impossible inside the expression.
-					if (cp = StrChrAny(op_begin, EXP_ILLEGAL_CHARS))
+					if (cp = StrChrAny(op_begin, EXPR_ILLEGAL_CHARS))
 						return ScriptError(ERR_EXP_ILLEGAL_CHAR, cp);
 
 					// Below takes care of recognizing hexadecimal integers, which avoids the 'x' character
@@ -3886,7 +3945,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					if (aActionType == ACT_ASSIGNEXPR && !deref[0].is_function && deref[0].var->Type() == VAR_CLIPBOARDALL)
 						aActionType = ACT_ASSIGN;
 				}
-				else if (deref_count && !StrChrAny(this_new_arg.text, EXP_OPERAND_TERMINATORS)) // No spaces, tabs, etc.
+				else if (deref_count && !StrChrAny(this_new_arg.text, EXPR_OPERAND_TERMINATORS)) // No spaces, tabs, etc.
 				{
 					// Adjust if any of the following special cases apply:
 					// x := y  -> Mark as non-expression (after expression-parsing set up parsed derefs above)
@@ -6388,12 +6447,12 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 					// as invalid double derefs, e.g. Array%VarContainingSpaces%):
 					if (func.mType == FUNC_NORMAL && func.mParam[deref->param_count].var->IsByRef())
 					{
-						// First check if there are any EXP_TELLTALES characters in this param, since the
+						// First check if there are any EXPR_TELLTALES characters in this param, since the
 						// presence of an expression for this parameter means it can't resolve to a variable
 						// as required by ByRef:
 						for (cp = param_start, param_last_char = omit_trailing_whitespace(param_start, param_end - 1)
 							; cp <= param_last_char; ++cp)
-							if (strchr(EXP_ALL_SYMBOLS, *cp))
+							if (strchr(EXPR_ALL_SYMBOLS, *cp))
 								return line->PreparseError(ERR_BYREF, param_start);   // param_start seems more informative than func.mParam[deref->param_count].var->mName
 						// Below relies on the above having been done because the above should prevent
 						// any is_function derefs from being possible since their parentheses would have been caught
@@ -11073,12 +11132,12 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 		{
 			// Find the end of this operand.  StrChrAny() is not used because if *op_end is '\0'
 			// (i.e. this_map_item is the last operand), the strchr() below will find that too:
-			for (op_end = this_map_item.marker; !strchr(EXP_OPERAND_TERMINATORS, *op_end); ++op_end);
+			for (op_end = this_map_item.marker; !strchr(EXPR_OPERAND_TERMINATORS, *op_end); ++op_end);
 			// Note that above has deteremined op_end correctly because any expression, even those not
 			// properly formatted, will have an operator or whitespace between each operand and the next.
 			// In the following example, let's say var contains the string -3:
 			// %Index%Array var
-			// The whitespace-char between the two operands above is a member of EXP_OPERAND_TERMINATORS,
+			// The whitespace-char between the two operands above is a member of EXPR_OPERAND_TERMINATORS,
 			// so it (and not the minus inside "var") marks the end of the first operand. If there were no
 			// space, the entire thing would be one operand so it wouldn't matter (though in this case, it
 			// would form an invalid var-name since dashes can't exist in them, which is caught later).
@@ -11319,7 +11378,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 
 				// Find the end of this operand or keyword, even if that end is beyond this_map_item.end.
 				// StrChrAny() is not used because if *op_end is '\0', the strchr() below will find it too:
-				for (op_end = cp + 1; !strchr(EXP_OPERAND_TERMINATORS, *op_end); ++op_end);
+				for (op_end = cp + 1; !strchr(EXPR_OPERAND_TERMINATORS, *op_end); ++op_end);
 				// Now op_end marks the end of this operand or keyword.  That end might be the zero terminator
 				// or the next operator in the expression, or just a whitespace.
 				if (op_end >= this_map_item.end // This must be true to qualify as a double deref.

@@ -32,19 +32,27 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	// Init any globals not in "struct g" that need it:
 	g_hInstance = hInstance;
 
-	// There is a strong indication from discussions on the Usenet that not calling InitCommonControls()
-	// or InitCommonControlsEx() prior to displaying a MsgBox, other dialog, or other API window/control
-	// might prevent that feature from working properly (i.e. the MsgBox might never appear).  This is
-	// solely due to the fact that the exe.manifest file is present, which causes XP visual styles
-	// to be automatically called up when the app runs on XP.  However, this is at odds with MSDN's
-	// statement that "If a manifest is used, InitCommonControlsEx is not required [on Windows XP]."
-	// I can't find any confirmation of that statement, so for now, it seems safer to assume that
-	// it's inaccurate and that InitCommonControls/Ex must be called unconditionally when the
-	// app uses any common controls or even just MessageBox().
-	// UPDATE: For v1.0.34, InitCommonControls() -- in spite of being "obsolete" -- because versions
-	// of Win95/NT that lack MSIE 3.0+ or similar patch do not have InitCommonControlsEx() and thus
-	// the program would fail to launch at all on them.
-	InitCommonControls();
+	// MSDN: "Windows XP: If a manifest is used, InitCommonControlsEx is not required."
+	// Therefore, in case it's a high overhead call, it's not done on XP or later:
+	if (!g_os.IsWinXPorLater())
+	{
+		// Since InitCommonControls() is apparently incapable of initializing DateTime and MonthCal
+		// controls, InitCommonControlsEx() must be called.  But since Ex() requires comctl32.dll
+		// 4.70+, must get the function's address dynamically in case the program is running on
+		// Windows 95/NT without the updated DLL (otherwise the program would not launch at all).
+		typedef BOOL (WINAPI *MyInitCommonControlsExType)(LPINITCOMMONCONTROLSEX);
+		MyInitCommonControlsExType MyInitCommonControlsEx = (MyInitCommonControlsExType)
+			GetProcAddress(GetModuleHandle("comctl32.dll"), "InitCommonControlsEx"); // LoadLibrary shouldn't be necessary because comctl32 in linked by compiler.
+		if (MyInitCommonControlsEx)
+		{
+			INITCOMMONCONTROLSEX icce;
+			icce.dwSize = sizeof(INITCOMMONCONTROLSEX);
+			icce.dwICC = ICC_WIN95_CLASSES | ICC_DATE_CLASSES; // ICC_WIN95_CLASSES is equivalent to calling InitCommonControls().
+			MyInitCommonControlsEx(&icce);
+		}
+		else // InitCommonControlsEx not available, so must revert to non-Ex() to make controls work on Win95/NT4.
+			InitCommonControls();
+	}
 
 	if (!GetCurrentDirectory(sizeof(g_WorkingDir), g_WorkingDir)) // Needed for the FileSelectFile() workaround.
 		*g_WorkingDir = '\0';
