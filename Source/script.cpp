@@ -2684,27 +2684,27 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 				case '<':
 					// Note: User can use whitespace to differentiate a literal symbol from
 					// part of an operator, e.g. if var1 < =  <--- char is literal
-					switch(*(operation + 1))
+					switch(operation[1])
 					{
-					case '=': action_type = ACT_IFLESSOREQUAL; *(operation + 1) = ' '; break;
-					case '>': action_type = ACT_IFNOTEQUAL; *(operation + 1) = ' '; break;
+					case '=': action_type = ACT_IFLESSOREQUAL; operation[1] = ' '; break;
+					case '>': action_type = ACT_IFNOTEQUAL; operation[1] = ' '; break;
 					default: action_type = ACT_IFLESS;  // i.e. some other symbol follows '<'
 					}
 					break;
 				case '>': // Don't allow >< to be NotEqual since the '<' might be literal.
-					if (*(operation + 1) == '=')
+					if (operation[1] == '=')
 					{
 						action_type = ACT_IFGREATEROREQUAL;
-						*(operation + 1) = ' '; // Remove it from so that it won't be considered by later parsing.
+						operation[1] = ' '; // Remove it from so that it won't be considered by later parsing.
 					}
 					else
 						action_type = ACT_IFGREATER;
 					break;
 				case '!':
-					if (*(operation + 1) == '=')
+					if (operation[1] == '=')
 					{
 						action_type = ACT_IFNOTEQUAL;
-						*(operation + 1) = ' '; // Remove it from so that it won't be considered by later parsing.
+						operation[1] = ' '; // Remove it from so that it won't be considered by later parsing.
 					}
 					else
 						// To minimize the times where expressions must have an outer set of parentheses,
@@ -2741,7 +2741,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 					break;
 				case 'i':  // "is" or "is not"
 				case 'I':
-					switch (toupper(*(operation + 1)))
+					switch (toupper(operation[1]))
 					{
 					case 's':  // "IS"
 					case 'S':
@@ -2754,12 +2754,12 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 							// Remove the word "not" to set things up to be parsed as args further down.
 							memset(next_word, ' ', 3);
 						}
-						*(operation + 1) = ' '; // Remove the 'S' in "IS".  'I' is replaced with ',' later below.
+						operation[1] = ' '; // Remove the 'S' in "IS".  'I' is replaced with ',' later below.
 						break;
 					case 'n':  // "IN"
 					case 'N':
 						action_type = ACT_IFIN;
-						*(operation + 1) = ' '; // Remove the 'N' in "IN".  'I' is replaced with ',' later below.
+						operation[1] = ' '; // Remove the 'N' in "IN".  'I' is replaced with ',' later below.
 						break;
 					default:
 						// v1.0.35.01 It must fall back to ACT_IFEXPR, otherwise "if not var_name_beginning_with_i"
@@ -10702,15 +10702,30 @@ inline VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize, Var *aArgVar
 			// 1) Derefs whose type isn't VAR_NORMAL or that are env. vars (those whose length is zero but whose Get() is of non-zero length)
 			// 2) Derefs that are enclosed by the g_DerefChar character (%), which in expressions means that
 			//    must be copied into the buffer to support double references such as Array%i%.
-			if (!deref->is_function && (!this_arg.is_expression || *deref->marker == g_DerefChar
-				|| deref->var->Type() != VAR_NORMAL || !deref->var->Length())) // Relies on short-circuit boolean order.
-				space += deref->var->Get() + this_arg.is_expression; // If it's of zero length, Get() will give us either 0 or the size of the environment variable.
-				// Above adds 1 if this arg is an expression to the insertion of an extra space after
-				// every single deref (this space is unnecessary if Get() returns a size of zero to indicate
-				// a non-existent environment variable, but that seems harmless).  This is done for parsing
-				// reasons described in ExpandExpression().
-				// NOTE: Get() (with no params) can retrieve a size larger that what winds up actually
-				// being needed, so our callers should be aware that that can happen.
+			if (!deref->is_function)
+			{
+				if (this_arg.is_expression)
+				{
+					if (*deref->marker == g_DerefChar || deref->var->Type() != VAR_NORMAL || !deref->var->Length()) // Relies on short-circuit boolean order.
+						space += deref->var->Get(); // If it's of zero length, Get() will give us either 0 or the size of the environment variable.
+					space += 1;
+					// Fix for v1.0.35.04: The above now adds a space unconditionally because it is needed
+					// by the expression evaluation to provide an empty string (terminator) in the deref 
+					// buf for each variable, which prevents something like "x*y*z" from being seen as
+					// two asterisks in a row (since y doesn't take up any space).  Although the +1 might
+					// not be needed in a few sub-cases of the above, it is safer to do it and doesn't
+					// increase the size much anyway.  Note that function-calls do not need this fix because
+					// their parentheses and arg list are always in the deref buffer.
+					// Above adds 1 for the insertion of an extra space after every single deref.  This space
+					// is unnecessary if Get() returns a size of zero to indicate a non-existent environment
+					// variable, but that seems harmless).  This is done for parsing reasons described in
+					// ExpandExpression().
+					// NOTE: Get() (with no params) can retrieve a size larger that what winds up actually
+					// being needed, so our callers should be aware that that can happen.
+				}
+				else // Not an expression.
+					space += deref->var->Get(); // If it's of zero length, Get() will give us either 0 or the size of the environment variable.
+			}
 			//else it's a function-call's function name, in which case it's length is effectively zero.
 			// since the function name never gets copied into the deref buffer during ExpandExpression().
 		}
@@ -10892,8 +10907,8 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 	// needed would be twice that, plus one for the last raw text's marker.
 
 	///////////////////////////////////////////////////////////////////////////////////////
-	// EXPAND DEREFS AND MAKE A MAP THAT INDICATES THE POSITIONS IN THE BUFFER WHERE DEREFS
-	// VS. RAW TEXT BEGIN AND END.
+	// EXPAND DEREFS and make a map that indicates the positions in the buffer where derefs
+	// vs. raw text begin and end.
 	///////////////////////////////////////////////////////////////////////////////////////
 	char *pText, *this_marker;
 	DerefType *deref;
@@ -10983,7 +10998,16 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 				// are strings rather than numbers (such termination also simplifies number recognition).
 				// GetExpandedArgSize() has already ensured there is enough room in the deref buffer for these:
 			}
-			if (map[map_count].type == EXP_DEREF_SINGLE) // Originally SINGLE or it was overridden from VAR to SINGLE.
+			// Fix for v1.0.35.04: Each EXP_DEREF_VAR now gets a corresponding empty string in the buffer
+			// as a placeholder, which prevents an expression such as x*y*z from being seen as having
+			// two adjacent asterisks, which prevents it from being seen as SYM_POWER and other mistakes.
+			// This could have also been solved by having SYM_POWER and other double-symbol operators
+			// check to ensure the second symbol isn't at or beyond map[].end, but that would complicate
+			// the code and decrease maintainability, so this method seems better.  Also note that this
+			// fix isn't needed for EXP_DEREF_FUNC because the functions parentheses and arg list are
+			// always present in the deref buffer, which prevents SYM_POWER and similar from seeing
+			// the character after the first operator symbol as something that changes the operator.
+			if (map[map_count].type != EXP_DEREF_DOUBLE) // EXP_DEREF_VAR or EXP_DEREF_SINGLE.
 				*target++ = '\0'; // Always terminated since they can't form a part of a double-deref.
 			// For EXP_DEREF_VAR, if our caller will be assigning the result of our expression to
 			// one of the variables involved in the expression, that should be okay because:
@@ -10994,7 +11018,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 			//    variable our caller is assigning to (which can happen from something like
 			//    GlobalVar := YieldGlobalVar()), Var::Assign() handles that by checking if they're
 			//    the same and also using memmove(), at least when source and target overlap.
-		}
+		} // Not a function.
 		++map_count; // i.e. don't increment until after we're done using the old value.
 		// Finally, jump over the dereference text. Note that in the case of an expression, there might not
 		// be any percent signs within the text of the dereference, e.g. x + y, not %x% + %y%.
