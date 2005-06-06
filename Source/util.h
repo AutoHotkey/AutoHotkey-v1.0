@@ -292,7 +292,7 @@ inline bool IsHex(char *aBuf)
 // As of v1.0.30, ATOI(), ITOA() and the other related functions below are no longer macros
 // because there are too many places where something like ATOI(++cp) is done, which would be a
 // bug if not caught since cp would be incremented more than once if the macro referred to that
-// arg more than once.  In addition, a non-comprehensive, simple bench benchmark shows that the
+// arg more than once.  In addition, a non-comprehensive, simple benchmark shows that the
 // macros don't perform any better anyway, probably in part because there are many times when
 // something like ATOI(ARG1) is called, which forces the ARG1 macro to be expanded two or more
 // times within ATOI (when it was a macro).  So for now, the below are declared as inline.

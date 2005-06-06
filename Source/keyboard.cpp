@@ -2262,10 +2262,11 @@ char *GetKeyName(vk_type aVK, sc_type aSC, char *aBuf, int aBufSize)
 	// Use 0x02000000 to tell it that we want it to give left/right specific info, lctrl/rctrl etc.
 	if (!aSC || !GetKeyNameText((long)(aSC) << 16, aBuf, (int)(aBufSize/sizeof(TCHAR))))
 	{
-		for (int j = 0; j < g_key_to_vk_count; ++j)
+		int j;
+		for (j = 0; j < g_key_to_vk_count; ++j)
 			if (g_key_to_vk[j].vk == aVK)
 				break;
-		if (j < g_key_to_vk_count)
+		if (j < g_key_to_vk_count) // Match found.
 			strlcpy(aBuf, g_key_to_vk[j].key_name, aBufSize);
 		else
 		{

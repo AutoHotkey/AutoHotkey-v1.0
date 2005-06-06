@@ -3581,7 +3581,9 @@ void Line::DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 			char *contents = output_var.Contents();
 			VarSizeType capacity = output_var.Capacity();
 			// Since the performance cost is low, ensure the string is terminated at the limit of its
-			// capacity (helps prevent crashes if DLL function didn't do its job and terminate the string):
+			// capacity (helps prevent crashes if DLL function didn't do its job and terminate the string,
+			// or when a function is called that deliberately doesn't terminate the string, such as
+			// RtlMoveMemory()).
 			if (capacity)
 				contents[capacity - 1] = '\0';
 			output_var.Length() = (VarSizeType)strlen(contents);

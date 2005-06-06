@@ -99,13 +99,16 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 		return ScriptError("Could not create window." ERR_ABORT);
 	}
 
-	if (set_last_found_window)
-		g.hWndLastUsed = gui.mHwnd;
-	g.DialogOwnerIndex = own_dialogs ? window_index : MAX_GUI_WINDOWS; // Reset to out-of-bounds when "-OwnDialogs" is present.
-
 	// After creating the window, return from any commands that were fully handled above:
 	if (gui_command == GUI_CMD_OPTIONS)
+	{
+		if (set_last_found_window)
+			g.hWndLastUsed = gui.mHwnd;
+		// Fix for v1.0.35.05: Must do the following only if gui_command==GUI_CMD_OPTIONS, otherwise
+		// the own_dialogs setting will get reset during other commands such as "Gui Show", "Gui Add"
+		g.DialogOwnerIndex = own_dialogs ? window_index : MAX_GUI_WINDOWS; // Reset to out-of-bounds when "-OwnDialogs" is present.
 		return OK;
+	}
 
 	GuiControls gui_control_type = GUI_CONTROL_INVALID;
 	int index;
