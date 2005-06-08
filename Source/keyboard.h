@@ -193,7 +193,7 @@ enum KeyStateTypes {KEYSTATE_LOGICAL, KEYSTATE_PHYSICAL, KEYSTATE_TOGGLE}; // Fo
 enum KeyEventTypes {KEYDOWN, KEYUP, KEYDOWNANDUP};
 
 void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow = NULL);
-int SendKey(vk_type aVK, sc_type aSC, modLR_type aModifiersLR, modLR_type aModifiersLRPersistent
+int SendKey(vk_type aVK, sc_type aSC, bool aRequiresAltGr, modLR_type aModifiersLR, modLR_type aModifiersLRPersistent
 	, int aRepeatCount, KeyEventTypes aEventType, modLR_type aKeyAsModifiersLR, HWND aTargetWindow);
 int SendKeySpecial(char aChar, modLR_type aModifiersLR, modLR_type aModifiersLRPersistent
 	, int aRepeatCount, KeyEventTypes aEventType, HWND aTargetWindow);
@@ -234,7 +234,7 @@ void ToggleNumlockWin9x();
 modLR_type SetModifierState(mod_type aModifiersNew, modLR_type aModifiersLRnow, HWND aTargetWindow
 	, bool aDisguiseWinAlt, DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER);
 modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLRnow, HWND aTargetWindow
-	, bool aDisguiseWinAlt, DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER);
+	, bool aDisguiseWinAlt, DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER, bool aRequiresAltGr = false);
 void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLRnow, KeyEventTypes aEventType
 	, HWND aTargetWindow, DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER);
 
@@ -274,7 +274,7 @@ char *SCToKeyName(sc_type aSC, char *aBuf, int aBufSize);
 char *VKToKeyName(vk_type aVK, sc_type aSC, char *aBuf, int aBufSize);
 sc_type TextToSC(char *aText);
 vk_type TextToVK(char *aText, modLR_type *pModifiersLR = NULL, bool aExcludeThoseHandledByScanCode = false
-	, bool aAllowExplicitVK = true);
+	, bool aAllowExplicitVK = true, bool *pRequiresAltGr = NULL);
 vk_type TextToSpecial(char *aText, UINT aTextLength, KeyEventTypes &aEventTypem, modLR_type &aModifiersLR
 	, mod_type &aModifiers, bool aUpdatePersistent);
 

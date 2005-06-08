@@ -168,6 +168,7 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 	char single_char_string[2];
 	vk_type vk = 0;
 	sc_type sc = 0;
+	bool requires_altgr;
 	modLR_type key_as_modifiersLR = 0;
 	modLR_type modifiersLR_for_next_key = 0;
 	// Above: For v1.0.35, it was changed to modLR vs. mod so that AltGr keys such as backslash and {
@@ -259,7 +260,8 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 					}
 				}
 
-				vk = TextToVK(aKeys + 1, &modifiersLR_for_next_key, true, false); // false must be passed due to below.
+				// TextToVK() will always initialize requires_altgr for us even if it doesn't find a VK:
+				vk = TextToVK(aKeys + 1, &modifiersLR_for_next_key, true, false, &requires_altgr); // false must be passed due to below.
 				sc = vk ? 0 : TextToSC(aKeys + 1);  // If sc is 0, it will be resolved by KeyEvent() later.
 				if (!vk && !sc && toupper(*(aKeys + 1)) == 'V' && toupper(*(aKeys + 2)) == 'K')
 				{
@@ -329,8 +331,8 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 						// behaves also, which is good.  Example: Send, {AltDown}!f  ; this will cause
 						// Alt to still be down after the command is over, even though F is modified
 						// by Alt.
-						SendKey(vk, sc, modifiersLR_for_next_key, g_modifiersLR_persistent, repeat_count
-							, event_type, key_as_modifiersLR, aTargetWindow);
+						SendKey(vk, sc, requires_altgr, modifiersLR_for_next_key, g_modifiersLR_persistent
+							, repeat_count, event_type, key_as_modifiersLR, aTargetWindow);
 					}
 
 					else if (key_name_length == 1) // No vk/sc means a char of length one is sent via special method.
@@ -389,10 +391,11 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 			// value for modifiers.
 			single_char_string[0] = *aKeys;
 			single_char_string[1] = '\0';
-			vk = TextToVK(single_char_string, &modifiersLR_for_next_key, true);
+			// TextToVK() will always initialize requires_altgr for us even if it doesn't find a VK:
+			vk = TextToVK(single_char_string, &modifiersLR_for_next_key, true, true, &requires_altgr);
 			sc = 0;
 			if (vk)
-				SendKey(vk, sc, modifiersLR_for_next_key, g_modifiersLR_persistent, 1, KEYDOWNANDUP, 0, aTargetWindow);
+				SendKey(vk, sc, requires_altgr, modifiersLR_for_next_key, g_modifiersLR_persistent, 1, KEYDOWNANDUP, 0, aTargetWindow);
 			else // Try to send it by alternate means.
 				SendKeySpecial(*aKeys, modifiersLR_for_next_key, g_modifiersLR_persistent, 1, KEYDOWNANDUP, aTargetWindow);
 			modifiersLR_for_next_key = 0;  // Safest to reset this regardless of whether a key was sent.
@@ -470,7 +473,7 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 
 
 
-int SendKey(vk_type aVK, sc_type aSC, modLR_type aModifiersLR, modLR_type aModifiersLRPersistent
+int SendKey(vk_type aVK, sc_type aSC, bool aRequiresAltGr, modLR_type aModifiersLR, modLR_type aModifiersLRPersistent
 	, int aRepeatCount, KeyEventTypes aEventType, modLR_type aKeyAsModifiersLR, HWND aTargetWindow)
 // vk or sc may be zero, but not both.
 // Returns the number of keys actually sent for caller convenience.
@@ -544,7 +547,8 @@ int SendKey(vk_type aVK, sc_type aSC, modLR_type aModifiersLR, modLR_type aModif
 				// Pass "true" so that WIN and ALT are disguised if they have to be released due to
 				// a hotkey such as !a::Send test
 				// See keyboard.h for explantion of KEY_IGNORE:
-				if (SetModifierLRState(modifiersLR_specified, GetModifierLRState(), aTargetWindow, true, KEY_IGNORE))
+				if (SetModifierLRState(modifiersLR_specified, GetModifierLRState(), aTargetWindow, true
+					, KEY_IGNORE, aRequiresAltGr))
 					// Modifiers were changed by the above.
 					DoKeyDelay(g.PressDuration); // See comments in SendKeys() about why this is done.
 			}
@@ -1214,7 +1218,7 @@ MsgBox(error_text);
 
 
 modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLRnow, HWND aTargetWindow
-	, bool aDisguiseWinAlt, DWORD aExtraInfo)
+	, bool aDisguiseWinAlt, DWORD aExtraInfo, bool aRequiresAltGr)
 // Puts modifiers into the specified state, releasing or pressing down keys as needed.
 // Returns the set of modifiers that *changed* (i.e. went from down to up or vice versa).
 // Note that by design and as documented for ControlSend, aTargetWindow is not used as the target for the
@@ -1237,7 +1241,7 @@ modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLR
 	// are only sent when necessary (which helps avoid complications caused by keystroke interaction,
 	// while improving performance):
 	bool ctrl_not_down = !(aModifiersLRnow & (MOD_LCONTROL | MOD_RCONTROL)); // Neither CTRL key is down now.
-	bool ctrl_will_not_be_down = !(modifiersLRnew & (MOD_LCONTROL | MOD_RCONTROL)); // Nor will it be.
+	bool ctrl_will_not_be_down = !(modifiersLRnew & (MOD_LCONTROL | MOD_RCONTROL)) && !aRequiresAltGr; // Nor will it be.
 
 	bool ctrl_nor_shift_nor_alt_down = ctrl_not_down                             // Neither CTRL key is down now.
 		&& !(aModifiersLRnow & (MOD_LSHIFT | MOD_RSHIFT | MOD_LALT | MOD_RALT)); // Nor is any SHIFT/ALT key.
@@ -1320,7 +1324,18 @@ modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLR
 		}
 	}
 	else if (!(aModifiersLRnow & MOD_RALT) && (modifiersLRnew & MOD_RALT))
+	{
 		KeyEvent(KEYDOWN, VK_RMENU, 0, NULL, false, aExtraInfo);
+		if (aRequiresAltGr) // v1.0.35.07.  This also relies on the fact that "press down" is not subject to defer_alt_release.
+		{
+			// Indicate that control is both down and required so that the section after this one won't
+			// release it.  Without this fix, a hotkey that sends an AltGr char such as "^ä:: SendRaw, {"
+			// would fail to work under German layout because left-alt would be released after right-alt
+			// goes down.
+			aModifiersLRnow |= MOD_LCONTROL;
+			modifiersLRnew |= MOD_LCONTROL;
+		}
+	}
 
 	// CONTROL and SHIFT are done only after the above because the above might rely on them
 	// being down before for certain early operations.
@@ -1967,10 +1982,14 @@ sc_type TextToSC(char *aText)
 
 
 
-vk_type TextToVK(char *aText, modLR_type *pModifiersLR, bool aExcludeThoseHandledByScanCode, bool aAllowExplicitVK)
+vk_type TextToVK(char *aText, modLR_type *pModifiersLR, bool aExcludeThoseHandledByScanCode, bool aAllowExplicitVK
+	, bool *pRequiresAltGr)
+// *pRequiresAltGr is set to true only if OS is Win2k or greater and this key requires AltGr.
 // If modifiers_p is non-NULL, place the modifiers that are needed to realize the key in there.
 // e.g. M is really +m (shift-m), # is really shift-3.
 {
+	if (pRequiresAltGr)
+		*pRequiresAltGr = false; // Set default for caller in case of early return.
 	if (!aText || !*aText) return 0;
 
 	// Don't trim() aText or modify it because that will mess up the caller who expects it to be unchanged.
@@ -2021,7 +2040,11 @@ vk_type TextToVK(char *aText, modLR_type *pModifiersLR, bool aExcludeThoseHandle
 			// not suprising because the keyboard hook also receives neutral modifier keys on NT4 rather than
 			// a more specific left/right key.
 			if ((keyscan_modifiers & 0x06) == 0x06 && g_os.IsWin2000orLater()) // This character requires both CTRL and ALT (and possibly SHIFT, since I think Shift+AltGr combinations exist).
+			{
+				if (pRequiresAltGr)
+					*pRequiresAltGr = true; // Set to true only for Win2000 or later, by design.
 				*pModifiersLR |= MOD_RALT; // The critical difference here is right vs. left ALT.  Must not include MOD_LCONTROL because simulating the RAlt keystroke on these keyboard layouts will automatically press LControl down.
+			}
 			else
 			{
 				if (keyscan_modifiers & 0x01)
