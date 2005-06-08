@@ -1123,6 +1123,12 @@ ToggleValueType ToggleKeyState(vk_type aVK, ToggleValueType aToggleValue)
 	}
 	// Since it's not already in the desired state, toggle it:
 	KeyEvent(KEYDOWNANDUP, aVK);
+	// Fix for v1.0.35.06: // If it's Capslock and it didn't turn off as specified, it's probably because
+	// the OS is configured to turn Capslock off only in response to pressing the SHIFT key (via Ctrl Panel's
+	// Regional settings).  So send shift to do it instead:
+	if (aVK == VK_CAPITAL && aToggleValue == TOGGLED_OFF && IsKeyToggledOn(aVK))
+ 		KeyEvent(KEYDOWNANDUP, VK_SHIFT);
+
 	return starting_state;
 }
 
@@ -2007,8 +2013,14 @@ vk_type TextToVK(char *aText, modLR_type *pModifiersLR, bool aExcludeThoseHandle
 			// down is in fact an AltGr key (I don't think there are any that aren't AltGr in this case, but
 			// confirmation would be nice).  Also, this is not done for Win9x because the distinction between
 			// right and left-alt is not well-supported and it might cause more harm than good (testing is
-			// needed on fussy apps like Putty on Win9x).
-			if ((keyscan_modifiers & 0x06) == 0x06 && !g_os.IsWin9x()) // This character requires both CTRL and ALT (and possibly SHIFT, since I think Shift+AltGr combinations exist).
+			// needed on fussy apps like Putty on Win9x).  UPDATE: Windows NT4 is now excluded from this
+			// change because apparently it wants the left Alt key's virtual key and not the right's (though
+			// perhaps it would prefer the right scan code vs. the left in apps such as Putty, but until that
+			// is proven, the complexity is not added here).  Otherwise, on French and other layouts on NT4,
+			// AltGr-produced characters such as backslash do not get sent properly.  In hindsight, this is
+			// not suprising because the keyboard hook also receives neutral modifier keys on NT4 rather than
+			// a more specific left/right key.
+			if ((keyscan_modifiers & 0x06) == 0x06 && g_os.IsWin2000orLater()) // This character requires both CTRL and ALT (and possibly SHIFT, since I think Shift+AltGr combinations exist).
 				*pModifiersLR |= MOD_RALT; // The critical difference here is right vs. left ALT.  Must not include MOD_LCONTROL because simulating the RAlt keystroke on these keyboard layouts will automatically press LControl down.
 			else
 			{

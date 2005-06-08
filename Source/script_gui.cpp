@@ -85,7 +85,8 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 
 	// Now handle any commands that should be handled prior to creation of the window in the case
 	// where the window doesn't already exist:
-	bool set_last_found_window = false, own_dialogs = false;
+	bool set_last_found_window = false;
+	ToggleValueType own_dialogs = TOGGLE_INVALID;
 	if (gui_command == GUI_CMD_OPTIONS)
 		if (!gui.ParseOptions(options, set_last_found_window, own_dialogs))
 			return FAIL;  // It already displayed the error.
@@ -106,7 +107,8 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 			g.hWndLastUsed = gui.mHwnd;
 		// Fix for v1.0.35.05: Must do the following only if gui_command==GUI_CMD_OPTIONS, otherwise
 		// the own_dialogs setting will get reset during other commands such as "Gui Show", "Gui Add"
-		g.DialogOwnerIndex = own_dialogs ? window_index : MAX_GUI_WINDOWS; // Reset to out-of-bounds when "-OwnDialogs" is present.
+		if (own_dialogs != TOGGLE_INVALID) // v1.0.35.06: Plus or minus "OwnDialogs" was present rather than being entirely absent.
+			g.DialogOwnerIndex = (own_dialogs == TOGGLED_ON) ? window_index : MAX_GUI_WINDOWS; // Reset to out-of-bounds when "-OwnDialogs" is present.
 		return OK;
 	}
 
@@ -2853,7 +2855,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 
 
 
-ResultType GuiType::ParseOptions(char *aOptions, bool &aSetLastFoundWindow, bool &aOwnDialogs)
+ResultType GuiType::ParseOptions(char *aOptions, bool &aSetLastFoundWindow, ToggleValueType &aOwnDialogs)
 // This function is similar to ControlParseOptions() further below, so should be maintained alongside it.
 // Caller must have already initialized aSetLastFoundWindow/, bool &aOwnDialogs with desired starting values.
 // Caller must ensure that aOptions is a modifiable string, since this method temporarily alters it.
@@ -2973,7 +2975,7 @@ ResultType GuiType::ParseOptions(char *aOptions, bool &aSetLastFoundWindow, bool
 			if (adding) mStyle |= WS_MINIMIZEBOX|WS_SYSMENU; else mStyle &= ~WS_MINIMIZEBOX;
 
 		else if (!stricmp(next_option, "OwnDialogs"))
-			aOwnDialogs = adding;
+			aOwnDialogs = (adding ? TOGGLED_ON : TOGGLED_OFF);
 
 		else if (!stricmp(next_option, "Resize")) // Minus removes either or both.
 			if (adding) mStyle |= WS_SIZEBOX|WS_MAXIMIZEBOX; else mStyle &= ~(WS_SIZEBOX|WS_MAXIMIZEBOX);

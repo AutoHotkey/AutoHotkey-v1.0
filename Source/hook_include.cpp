@@ -1613,7 +1613,7 @@ LRESULT CALLBACK LowLevelKeybdProc(int code, WPARAM wParam, LPARAM lParam)
 	// since it seems like this translation will add value even in those cases:
 	// To help ensure consistency with Windows XP and 2k, for which this hook has been primarily
 	// designed and tested, translate neutral modifier keys into their left/right specific VKs,
-	// since beardboy's testing shows that NT receives the neutral keys like Win9x does:
+	// since beardboy's testing shows that NT4 receives the neutral keys like Win9x does:
 	switch (vk)
 	{
 	case VK_CONTROL: vk = (sc == SC_RCONTROL) ? VK_RCONTROL : VK_LCONTROL; break;

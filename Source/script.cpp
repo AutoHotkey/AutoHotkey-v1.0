@@ -54,7 +54,7 @@ Script::Script()
 #ifdef AUTOHOTKEYSC
 	, mCompiledHasCustomIcon(false)
 #endif;
-	, mCurrFileNumber(0), mCurrLineNumber(0), mNoHotkeyLabels(true), mMenuUseErrorLevel(false)
+	, mCurrFileNumber(0), mCombinedLineNumber(0), mNoHotkeyLabels(true), mMenuUseErrorLevel(false)
 	, mFileSpec(""), mFileDir(""), mFileName(""), mOurEXE(""), mOurEXEDir(""), mMainWindowTitle("")
 	, mIsReadyToExecute(false), AutoExecSectionIsRunning(false)
 	, mIsRestart(false), mIsAutoIt2(false), mErrorStdOut(false)
@@ -867,7 +867,7 @@ LineNumberType Script::LoadFromFile()
 	//if (mLastLine->mActionType == ACT_ELSE ||
 	//	ACT_IS_IF(mLastLine->mActionType)
 	//	...
-	++mCurrLineNumber;
+	++mCombinedLineNumber;
 	if (!AddLine(ACT_EXIT)) // First exit.
 		return LOADING_FAILED;
 
@@ -876,8 +876,8 @@ LineNumberType Script::LoadFromFile()
 	// a non-NULL target, which simplifies other aspects of script execution.
 	// Making sure that all scripts end with an EXIT ensures that if the script
 	// file ends with ELSEless IF or an ELSE, that IF's or ELSE's mRelatedLine
-	// will be non-NULL, which further simplifies script execution:
-	++mCurrLineNumber;
+	// will be non-NULL, which further simplifies script execution.
+	// Not done since it's number doesn't much matter: ++mCombinedLineNumber;
 	if (!AddLine(ACT_EXIT)) // Second exit to guaranty non-NULL mRelatedLine(s).
 		return LOADING_FAILED;
 
@@ -1059,14 +1059,14 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 	Var *func_exception_var[MAX_FUNC_VAR_EXCEPTIONS];
 
 	// Init both for main file and any included files loaded by this function:
-	mCurrFileNumber = source_file_number;  // source_file_number is kept on the stack due to recursion.
-	// Keep a copy of mCurrLineNumber on the stack to help with recursion:
+	mCurrFileNumber = source_file_number;  // source_file_number is kept on the stack due to recursion (from #include).
+
 #ifdef AUTOHOTKEYSC
 	// -1 (MAX_UINT in this case) to compensate for the fact that there is a comment containing
 	// the version number added to the top of each compiled script:
-	LineNumberType line_number = mCurrLineNumber = -1;
+	LineNumberType phys_line_number = -1;
 #else
-	LineNumberType line_number = mCurrLineNumber = 0;
+	LineNumberType phys_line_number = 0;
 #endif
 
 #ifdef AUTOHOTKEYSC
@@ -1087,7 +1087,13 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 		// The line above alternates buffers (toggles next_buf to be the unused buffer), which helps
 		// performance because it avoids memcpy from buf2 to buf1.
 	{
-		// For each whole line (a line with continuation section is counted as only a single line):
+		// For each whole line (a line with continuation section is counted as only a single line
+		// for the purpose of this outer loop).
+
+		// Keep track of this line's *physical* line number within its file for A_LineNumber and
+		// error reporting purposes.  This must be done only in the outer loop so that it tracks
+		// the topmost line of any set of lines merged due to continuation section/line(s)..
+		mCombinedLineNumber = phys_line_number + 1;
 
 		// This must be reset for each iteration because a prior iteration may have changed it, even
 		// indirectly by calling something that changed it:
@@ -1095,9 +1101,8 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 
 		for (has_continuation_section = false, in_continuation_section = false;;)
 		{
-			// These increments rely on the fact that this loop always has at least one iteration:
-			++mCurrLineNumber; // Keep track of the *physical* line number in the file for debugging purposes.
-			++line_number;     // A local copy on the stack to help with recursion (when a #Include directive recursively calls us).
+			// This increment relies on the fact that this loop always has at least one iteration:
+			++phys_line_number; // Tracks phys. line number in *this* file (independent of any recursion caused by #Include).
 #ifdef AUTOHOTKEYSC
 			// See similar section above for comments about the following:
 			script_buf_space_remaining = SCRIPT_BUF_SPACE_REMAINING;  // Resolve macro only once, for performance.
@@ -1107,74 +1112,119 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 #else
 			next_buf_length = GetLine(next_buf, LINE_SIZE - 1, in_continuation_section, fp);
 #endif
+			if (next_buf_length && next_buf_length != -1) // Prevents infinite loop when file ends with an unclosed "/*" section.  Compare directly to -1 since length is unsigned.
+			{
+				if (in_comment_section) // Look for the uncomment-flag.
+				{
+					if (!strncmp(next_buf, "*/", 2))
+					{
+						in_comment_section = false;
+						next_buf_length -= 2; // Adjust for removal of /* from the beginning of the string.
+						memmove(next_buf, next_buf + 2, next_buf_length + 1);  // +1 to include the string terminator.
+						next_buf_length = ltrim(next_buf, next_buf_length); // Get rid of any whitespace that was between the comment-end and remaining text.
+						if (!*next_buf) // The rest of the line is empty, so it was just a naked comment-end.
+							continue;
+					}
+					else
+						continue;
+				}
+				else if (!in_continuation_section && !strncmp(next_buf, "/*", 2))
+				{
+					in_comment_section = true;
+					continue; // It's now commented out, so the rest of this line is ignored.
+				}
+			}
+
 			if (in_comment_section) // Above has incremented and read the next line, which is everything needed while inside /* .. */
-				break;
+			{
+				if (next_buf_length == -1) // Compare directly to -1 since length is unsigned.
+					break; // By design, it's not an error.  This allows "/*" to be used to comment out the bottommost portion of the script without needing a matching "*/".
+				// Otherwise, continue reading lines so that they can be merged with the line above them
+				// if they qualify as continuation lines.
+				continue;
+			}
+
 			if (!in_continuation_section) // This is either the first iteration or the line after the end of a previous continuation section.
 			{
 				if (   !(in_continuation_section = (next_buf_length != -1 && *next_buf == '('))   ) // Compare directly to -1 since length is unsigned.
 				{
-					if (next_buf_length != -1)  // Compare directly to -1 since length is unsigned.
+					if (next_buf_length == -1)  // Compare directly to -1 since length is unsigned.
+						break;
+					if (!next_buf_length)
+						// It is permitted to have blank lines and comment lines in between the line above
+						// and any continuation section/line that might come after the end of the
+						// comment/blank lines:
+						continue;
+					// Since above didn't break/continue, buffer is non-blank.
+					is_continuation_line = false; // Set default.
+					switch(*next_buf)
 					{
-						is_continuation_line = false; // Set default.
-						switch(*next_buf)
+					case ',':
+						// Since normal (single-colon) labels can't contain commas, and since hotstrings
+						// begin with a colon not a comma, only hotkeys remain as a source of ambiguity.
+						// Ensure this isn't a hotkey:
+						cp = omit_leading_whitespace(next_buf + 1);
+						is_continuation_line = (strncmp(cp, HOTKEY_FLAG, HOTKEY_FLAG_LENGTH) // Exclude ",::" (comma as hotkey).
+							&& (strncmp(cp - 1, COMPOSITE_DELIMITER, COMPOSITE_DELIMITER_LENGTH)
+								|| !strstr(next_buf, HOTKEY_FLAG))); // Exclude ", & x::" (comma as prefix key).
+						break;
+					case '.': // Added for v1.0.35.06.
+						// Normal (single-colon) labels CAN contain commas, so those and hotkey labels
+						// are sources of ambiguity.  Ensure this isn't a hotkey or label:
+						cp = omit_leading_whitespace(next_buf + 1);
+						is_continuation_line = (next_buf[next_buf_length - 1] != ':' // Last char must not be a colon (since that would be a label).
+							&& IS_SPACE_OR_TAB_OR_NBSP(next_buf[1]) // The "." operator requires a space or tab after it to be legitimate (this is also done in case period is ever a legal character in var names).
+							&& strncmp(cp, HOTKEY_FLAG, HOTKEY_FLAG_LENGTH) // Exclude ".::" (period as hotkey).
+							&& (strncmp(cp - 1, COMPOSITE_DELIMITER, COMPOSITE_DELIMITER_LENGTH)
+								|| !strstr(next_buf, HOTKEY_FLAG))); // Exclude ". & x::" (period as prefix key).
+						break;
+					case '&':
+					case '|':
+						// Since && and || are always used in expressions, there should be no danger of
+						// any line of an expression legitimately ending in a colon (single, double or otherwise).
+						is_continuation_line = (next_buf[1] == next_buf[0] && next_buf[next_buf_length - 1] != ':');
+						break;
+					case 'A':
+					case 'a':
+						// Since && and || are always used in expressions, there should be no danger of
+						// any line of an expression legitimately ending in a colon (single, double or otherwise).
+						if (next_buf[next_buf_length - 1] != ':' && IS_SPACE_OR_TAB_OR_NBSP(next_buf[3])
+							&& !strnicmp(next_buf, "and", 3))
 						{
-						case ',':
-							// Since normal (single-colon) labels can't contain commas, and since hotstrings
-							// begin with a colon not a comma, only hotkeys remain as a source of ambiguity.
-							// Ensure this isn't a hotkey:
-							cp = omit_leading_whitespace(next_buf + 1);
-							is_continuation_line = (strncmp(cp, HOTKEY_FLAG, HOTKEY_FLAG_LENGTH) // Exclude ",::" (comma as hotkey).
-								&& (strncmp(cp - 1, COMPOSITE_DELIMITER, COMPOSITE_DELIMITER_LENGTH)
-									|| !strstr(next_buf, HOTKEY_FLAG))); // Exclude ", & x::" (comma as prefix key).
-							break;
-						case '&':
-						case '|':
-							// Since && and || are always used in expressions, there should be no danger of
-							// any line of an expression legitimately ending in a colon (single, double or otherwise).
-							is_continuation_line = (next_buf[1] == next_buf[0] && next_buf[next_buf_length - 1] != ':');
-							break;
-						case 'A':
-						case 'a':
-							// Since && and || are always used in expressions, there should be no danger of
-							// any line of an expression legitimately ending in a colon (single, double or otherwise).
-							if (next_buf[next_buf_length - 1] != ':' && IS_SPACE_OR_TAB_OR_NBSP(next_buf[3])
-								&& !strnicmp(next_buf, "and", 3))
-							{
-								cp = omit_leading_whitespace(next_buf + 3);
-								if (!strchr(EXPR_OPERAND_TERMINATORS, *cp)) // Exclude "and:=x", "and = 1", "and += 1". This should be ok because AND/OR should always be followed immediately by a legtimate operand, not an operator.
-									is_continuation_line = true;
-							}
-							break;
-						case 'O':
-						case 'o':
-							// See comments above.
-							if (next_buf[next_buf_length - 1] != ':' && IS_SPACE_OR_TAB_OR_NBSP(next_buf[2])
-								&& toupper(next_buf[1]) == 'R')
-							{
-								cp = omit_leading_whitespace(next_buf + 2);
-								if (!strchr(EXPR_OPERAND_TERMINATORS, *cp)) // Exclude "and:=x", "and = 1", "and += 1". This should be ok because AND/OR should always be followed immediately by a legtimate operand, not an operator.
-									is_continuation_line = true;
-							}
-							break;
+							cp = omit_leading_whitespace(next_buf + 3);
+							if (!strchr(EXPR_OPERAND_TERMINATORS, *cp)) // Exclude "and:=x", "and = 1", "and += 1". This should be ok because AND/OR should always be followed immediately by a legtimate operand, not an operator.
+								is_continuation_line = true;
 						}
-						if (is_continuation_line)
+						break;
+					case 'O':
+					case 'o':
+						// See comments above.
+						if (next_buf[next_buf_length - 1] != ':' && IS_SPACE_OR_TAB_OR_NBSP(next_buf[2])
+							&& toupper(next_buf[1]) == 'R')
 						{
-							if (buf_length + next_buf_length >= LINE_SIZE - 1) // -1 to account for the extra space added below.
-							{
-								ScriptError(ERR_COMBINED_LINE_TOO_LONG, next_buf);
-								return CloseAndReturn(fp, script_buf, FAIL);
-							}
-							if (*next_buf != ',') // Insert space before and/or/&&/|| so that built/combined expression works correctly and also for readability of ListLines.
-								buf[buf_length++] = ' ';
-							memcpy(buf + buf_length, next_buf, next_buf_length + 1); // Append this line to prev. and include the zero terminator.
-							buf_length += next_buf_length;
-							continue; // Check for yet more continuation lines after this one.
+							cp = omit_leading_whitespace(next_buf + 2);
+							if (!strchr(EXPR_OPERAND_TERMINATORS, *cp)) // Exclude "and:=x", "and = 1", "and += 1". This should be ok because AND/OR should always be followed immediately by a legtimate operand, not an operator.
+								is_continuation_line = true;
 						}
+						break;
 					}
-					// Since above didn't continue, there is no continuation line or section.  No further
-					// searching is needed.
-					break; 
-				}
+					if (is_continuation_line)
+					{
+						if (buf_length + next_buf_length >= LINE_SIZE - 1) // -1 to account for the extra space added below.
+						{
+							ScriptError(ERR_COMBINED_LINE_TOO_LONG, next_buf);
+							return CloseAndReturn(fp, script_buf, FAIL);
+						}
+						if (*next_buf != ',') // Insert space before and/or/./&&/|| so that built/combined expression works correctly and also for readability of ListLines.
+							buf[buf_length++] = ' ';
+						memcpy(buf + buf_length, next_buf, next_buf_length + 1); // Append this line to prev. and include the zero terminator.
+						buf_length += next_buf_length;
+						continue; // Check for yet more continuation lines after this one.
+					}
+					// Since above didn't continue, there is no continuation line or section.  In addition,
+					// since this line isn't blank, no further searching is needed.
+					break;
+				} // if (!in_continuation_section)
 				// "has_continuation_section" indicates whether the line we're about to construct is partially
 				// composed of continuation lines beneath it.  It's separate from continuation_line_count
 				// in case there is another continuation section immediately after/adjacent to the first one,
@@ -1188,7 +1238,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 				//    how command parsing works.
 				// 2) Copy & paste from the forum and perhaps other web sites leaves a space at the end of each
 				//    line.  Although this behavior is probably site/browser-specific, it's a consideration.
-				do_ltrim = false;
+				do_ltrim = g_ContinuationLTrim; // Start off at global default.
 				do_rtrim = true; // Seems best to rtrim even if this line is a hotstring, since it is very rare that trailing spaces and tabs would ever be desirable.
 				// For hotstrings (which could be detected via *buf==':'), it seems best not to default the
 				// escape character (`) to be literal because the ability to have `t `r and `n inside the
@@ -1266,7 +1316,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			}
 			if (*next_buf == ')')
 			{
-				in_continuation_section = false; // Facilitates back-to-back continuation sections and proper incrementing of line_number.
+				in_continuation_section = false; // Facilitates back-to-back continuation sections and proper incrementing of phys_line_number.
 				next_buf_length = rtrim(next_buf); // Done because GetLine() wouldn't have done it due to have told it we're in a continuation section.
 				// Anything that lies to the right of the close-parenthesis gets appended verbatim, with
 				// no trimming (for flexibility) and no options-driven translation:
@@ -1336,47 +1386,32 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 				memcpy(buf + buf_length, cp, next_buf_length + 1); // Append this line to prev. and include the zero terminator.
 				buf_length += next_buf_length; // Must be done only after the old value of buf_length was used above.
 			}
-		} // for each whole/constructed line.
+		} // For each sub-line (continued line) that composes this line.
 
+		// buf_length can't be -1 because outer loop's condition prevents it:
 		if (!buf_length) // Done only after the line number increments above so that the physical line number is properly tracked.
 			continue;
 
-		if (in_comment_section) // Look for the uncomment-flag.
-		{
-			if (!strncmp(buf, "*/", 2))
-			{
-				in_comment_section = false;
-				buf_length -= 2; // Adjust for removal of /* from the beginning of the string.
-				memmove(buf, buf + 2, buf_length + 1);  // +1 to include the string terminator.
-				buf_length = ltrim(buf, buf_length); // Get rid of any whitespace that was between the comment-end and remaining text.
-				if (!*buf) // The rest of the line is empty, so it was just a naked comment-end.
-					continue;
-			}
-			else
-				continue;
-		}
-		else if (!strncmp(buf, "/*", 2))
-		{
-			in_comment_section = true;
-			continue; // It's now commented out, so the rest of this line is ignored.
-		}
-
 		// Since the neither of the above executed, or they did but didn't "continue",
-		// buf now contains a non-commented line.
+		// buf now contains a non-commented line, either by itself or built from
+		// any continuation sections/lines that might have been present.  Also note that
+		// by design, phys_line_number will be greater than mCombinedLineNumber whenever
+		// a continuation section/lines were used to build this combined line.
+
 		// If there's a previous line waiting to be processed, its fate can now be determined based on the
 		// nature of *this* line:
 		if (*buf_prev)
 		{
 			// Somewhat messy to decrement then increment later, but it's probably easier than the
-			// alternatives due to the use of "continue" in some places above.  NOTE: line_number
+			// alternatives due to the use of "continue" in some places above.  NOTE: phys_line_number
 			// would not need to be decremented+incremented even if the below resulted in a recursive
 			// call to us (though it doesn't currently) because line_number's only purpose is to
 			// remember where this layer left off when the recursion collapses back to us.
-			// Fix for v1.0.31.05: It's not enough just to decrement mCurrLineNumber because there
+			// Fix for v1.0.31.05: It's not enough just to decrement mCombinedLineNumber because there
 			// might be some blank lines or commented-out lines between this function call/definition
-			// and the line that follows it, each of which will have previously incremented mCurrLineNumber.
-			saved_line_number = mCurrLineNumber;
-			mCurrLineNumber = buf_prev_line_number;  // Done so that any syntax errors that occur during the calls below will report the correct line number.
+			// and the line that follows it, each of which will have previously incremented mCombinedLineNumber.
+			saved_line_number = mCombinedLineNumber;
+			mCombinedLineNumber = buf_prev_line_number;  // Done so that any syntax errors that occur during the calls below will report the correct line number.
 			// Open brace means this is a function definition. NOTE: buf was already ltrimmed by GetLine().
 			// Could use *g_act[ACT_BLOCK_BEGIN].Name instead of '{', but it seems to elaborate to be worth it.
 			if (*buf == '{')
@@ -1407,7 +1442,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 					return CloseAndReturn(fp, script_buf, FAIL);
 				mCurrLine = NULL; // Prevents showing misleading vicinity lines if the line after a function call is a syntax error.
 			}
-			mCurrLineNumber = saved_line_number;
+			mCombinedLineNumber = saved_line_number;
 			*buf_prev = '\0'; // Now that it's been fully handled, reset the buf.
 			// Now fall through to the below so that *this* line (the one after it) will be processed.
 			// Note that this line might be a pre-processor directive, label, etc. that won't actually
@@ -1423,7 +1458,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			// Defer this line until the next line comes in, which helps determine whether this line is
 			// a function call vs. definition:
 			strcpy(buf_prev, buf);
-			buf_prev_line_number = mCurrLineNumber;
+			buf_prev_line_number = mCombinedLineNumber;
 			continue;
 		}
 
@@ -1684,6 +1719,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 		// It's not a label.
 		if (*buf == '#')
 		{
+			saved_line_number = mCombinedLineNumber; // Backup in case IsDirective() processes and include file, which would change mCombinedLineNumber's value.
 			switch(IsDirective(buf))
 			{
 			case CONDITION_TRUE:
@@ -1692,7 +1728,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 				// like this to avoid having to specify them in various calls, especially the
 				// hundreds of calls to ScriptError() and LineError():
 				mCurrFileNumber = source_file_number;
-				mCurrLineNumber = line_number;
+				mCombinedLineNumber = saved_line_number;
 				continue;
 			case FAIL:
 				return CloseAndReturn(fp, script_buf, FAIL); // It already reported the error.
@@ -1737,17 +1773,17 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			// Otherwise, there was either no same-line action or the same-line action was successfully added,
 			// so do nothing.
 		}
-	} // for each line.
+	} // for each whole/constructed line.
 
 	if (*buf_prev) // Since there's a previous line, but it's the last non-comment line, it must be a function call, not a function definition.
 	{
 		// Somewhat messy to decrement then increment later, but it's probably easier than the
 		// alternatives due to the use of "continue" in some places above.
-		saved_line_number = mCurrLineNumber;
-		mCurrLineNumber = buf_prev_line_number; // Done so that any syntax errors that occur during the calls below will report the correct line number.
+		saved_line_number = mCombinedLineNumber;
+		mCombinedLineNumber = buf_prev_line_number; // Done so that any syntax errors that occur during the calls below will report the correct line number.
 		if (!ParseAndAddLine(buf_prev, ACT_FUNCTIONCALL)) // Must be function call vs. definition since otherwise the above would have detected the opening brace beneath it and already cleared buf_prev.
 			return CloseAndReturn(fp, script_buf, FAIL);
-		mCurrLineNumber = saved_line_number;
+		mCombinedLineNumber = saved_line_number;
 	}
 
 #ifdef AUTOHOTKEYSC
@@ -2003,13 +2039,15 @@ inline ResultType Script::IsDirective(char *aBuf)
 		return CONDITION_TRUE;
 	}
 
+	if (IS_DIRECTIVE_MATCH("#LTrim"))
+	{
+		g_ContinuationLTrim = !parameter || Line::ConvertOnOff(parameter) != TOGGLED_OFF;
+		return CONDITION_TRUE;
+	}
+
 	if (IS_DIRECTIVE_MATCH("#UseHook"))
 	{
-		// Set the default mode that will be used if there's no parameter at all:
-		g_ForceKeybdHook = true;
-		if (parameter && Line::ConvertOnOff(parameter) == TOGGLED_OFF)
-			g_ForceKeybdHook = false;
-		// else leave the default to "true" as set above.
+		g_ForceKeybdHook = !parameter || Line::ConvertOnOff(parameter) != TOGGLED_OFF;
 		return CONDITION_TRUE;
 	}
 	if (IS_DIRECTIVE_MATCH("#InstallKeybdHook"))
@@ -2044,11 +2082,7 @@ inline ResultType Script::IsDirective(char *aBuf)
 	}
 	if (IS_DIRECTIVE_MATCH("#MaxThreadsBuffer"))
 	{
-		// Set the default mode that will be used if there's no parameter at all:
-		g_MaxThreadsBuffer = true;
-		if (parameter && Line::ConvertOnOff(parameter) == TOGGLED_OFF)
-			g_MaxThreadsBuffer = false;
-		// else leave the default to "true" as set above.
+		g_MaxThreadsBuffer = !parameter || Line::ConvertOnOff(parameter) != TOGGLED_OFF;
 		return CONDITION_TRUE;
 	}
 	if (IS_DIRECTIVE_MATCH("#ClipboardTimeout"))
@@ -4005,7 +4039,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	// Now the above has allocated some dynamic memory, the pointers to which we turn over
 	// to Line's constructor so that they can be anchored to the new line.
 	//////////////////////////////////////////////////////////////////////////////////////
-	Line *the_new_line = new Line(mCurrFileNumber, mCurrLineNumber, aActionType, new_arg, aArgc);
+	Line *the_new_line = new Line(mCurrFileNumber, mCombinedLineNumber, aActionType, new_arg, aArgc);
 	if (!the_new_line)
 		return ScriptError(ERR_OUTOFMEM);
 
@@ -14975,14 +15009,14 @@ ResultType Script::ScriptError(char *aErrorText, char *aExtraInfo) //, ResultTyp
 	// has not yet been successfully added to the linked list.  Such errors will always result
 	// in the program exiting.
 	if (!aErrorText)
-		aErrorText = "Unknown Error";
+		aErrorText = "Unk"; // Placeholder since it shouldn't be NULL.
 	if (!aExtraInfo) // In case the caller explicitly called it with NULL.
 		aExtraInfo = "";
 
 	if (g_script.mErrorStdOut && !g_script.mIsReadyToExecute) // i.e. runtime errors are always displayed via dialog.
 	{
 		// See LineError() for details.
-		printf("%s (%d): ==> %s\n", Line::sSourceFile[mCurrFileNumber], mCurrLineNumber, aErrorText);
+		printf("%s (%d): ==> %s\n", Line::sSourceFile[mCurrFileNumber], mCombinedLineNumber, aErrorText);
 		if (*aExtraInfo)
 			printf("     Specifically: %s\n", aExtraInfo);
 	}
@@ -14995,11 +15029,11 @@ ResultType Script::ScriptError(char *aErrorText, char *aExtraInfo) //, ResultTyp
 			*source_file = '\0'; // Don't bother cluttering the display if it's the main script file.
 
 		char buf[MSGBOX_TEXT_SIZE];
-		snprintf(buf, sizeof(buf), "Error at line %u%s%s." // Don't call it "critical" because it's usually a syntax error.
+		snprintf(buf, sizeof(buf), "Error at line %u%s." // Don't call it "critical" because it's usually a syntax error.
 			"\n\nLine Text: %-1.100s%s"
 			"\nError: %-1.500s"
 			"\n\n%s"
-			, mCurrLineNumber, source_file, mCurrLineNumber ? "" : " (unknown)"
+			, mCombinedLineNumber, source_file
 			, aExtraInfo // aExtraInfo defaults to "" so this is safe.
 			, strlen(aExtraInfo) > 100 ? "..." : ""
 			, aErrorText

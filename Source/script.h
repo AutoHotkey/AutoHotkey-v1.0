@@ -2134,7 +2134,7 @@ public:
 	ResultType Create();
 	static void UpdateMenuBars(HMENU aMenu);
 	ResultType AddControl(GuiControls aControlType, char *aOptions, char *aText);
-	ResultType ParseOptions(char *aOptions, bool &aSetLastFoundWindow, bool &aOwnDialogs);
+	ResultType ParseOptions(char *aOptions, bool &aSetLastFoundWindow, ToggleValueType &aOwnDialogs);
 	ResultType ControlParseOptions(char *aOptions, GuiControlOptionsType &aOpt, GuiControlType &aControl
 		, GuiIndexType aControlIndex = -1); // aControlIndex is not needed upon control creation.
 	void ControlInitOptions(GuiControlOptionsType &aOpt, GuiControlType &aControl);
@@ -2239,7 +2239,7 @@ private:
 	// These are used ONLY while loading the script into memory.  After that (while the script is running),
 	// only mCurrLine is kept up-to-date:
 	UCHAR mCurrFileNumber;
-	LineNumberType mCurrLineNumber;
+	LineNumberType mCombinedLineNumber; // In the case of a continuation section/line(s), this is always the top line.
 
 	bool mNoHotkeyLabels;
 	bool mMenuUseErrorLevel;  // Whether runtime errors should be displayed by the Menu command, vs. ErrorLevel.

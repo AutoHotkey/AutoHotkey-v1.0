@@ -172,6 +172,7 @@ global_struct g, g_default;
 char g_WorkingDir[MAX_PATH] = "";
 char *g_WorkingDirOrig = NULL;  // Assigned a value in WinMain().
 
+bool g_ContinuationLTrim = false;
 bool g_ForceKeybdHook = false;
 ToggleValueType g_ForceNumLock = NEUTRAL;
 ToggleValueType g_ForceCapsLock = NEUTRAL;
