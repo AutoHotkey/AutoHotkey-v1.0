@@ -154,8 +154,8 @@ END
 // that there's a way to tell which version they were compiled with):
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,0,35,07
- PRODUCTVERSION 1,0,35,07
+ FILEVERSION 1,0,35,08
+ PRODUCTVERSION 1,0,35,08
  FILEFLAGSMASK 0x17L
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -172,20 +172,20 @@ BEGIN
         BEGIN
 #ifdef AUTOHOTKEYSC
             VALUE "FileDescription", ""
-            VALUE "FileVersion", "1, 0, 35, 07"
+            VALUE "FileVersion", "1, 0, 35, 08"
             VALUE "InternalName", ""
             VALUE "LegalCopyright", ""
             VALUE "OriginalFilename", ""
             VALUE "ProductName", ""
-            VALUE "ProductVersion", "1, 0, 35, 07"
+            VALUE "ProductVersion", "1, 0, 35, 08"
 #else
             VALUE "FileDescription", "AutoHotkey"
-            VALUE "FileVersion", "1, 0, 35, 07"
+            VALUE "FileVersion", "1, 0, 35, 08"
             VALUE "InternalName", "AutoHotkey"
             VALUE "LegalCopyright", "Copyright (C) 2005"
             VALUE "OriginalFilename", "AutoHotkey.rc"
             VALUE "ProductName", "AutoHotkey"
-            VALUE "ProductVersion", "1, 0, 35, 07"
+            VALUE "ProductVersion", "1, 0, 35, 08"
 #endif
         END
     END

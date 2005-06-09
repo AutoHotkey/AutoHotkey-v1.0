@@ -1047,7 +1047,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 	LineNumberType buf_prev_line_number, saved_line_number;
 	HookActionType hook_action;
 	size_t buf_length, next_buf_length, suffix_length;
-	bool is_function, is_label, in_comment_section = false;
+	bool is_function, is_label;
 
 	// For the line continuation mechanism:
 	bool do_ltrim, do_rtrim, literal_escapes, literal_derefs, literal_delimiters
@@ -1079,6 +1079,13 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 #else
 	buf_length = GetLine(buf, LINE_SIZE - 1, false, fp);
 #endif
+	bool in_comment_section;
+	if (in_comment_section = !strncmp(buf, "/*", 2))
+	{
+		// Fixed for v1.0.35.08. Must reset buffer to allow a script's first line to be "/*".
+		*buf = '\0';
+		buf_length = 0;
+	}
 
 	for (; buf_length != -1  // Compare directly to -1 since length is unsigned.
 		; buf = next_buf
