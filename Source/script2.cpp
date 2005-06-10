@@ -5563,7 +5563,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 	switch (iMsg)
 	{
 	case WM_COMMAND:
-		if (HandleMenuItem(LOWORD(wParam), INT_MAX)) // It was handled fully. INT_MAX says "no gui window".
+		if (HandleMenuItem(hWnd, LOWORD(wParam), -1)) // It was handled fully. -1 flags it as a non-GUI menu item such as a tray menu or popup menu.
 			return 0; // If an application processes this message, it should return zero.
 		break; // Otherwise, let DefWindowProc() try to handle it (this actually seems to happen normally sometimes).
 
@@ -5580,7 +5580,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			//else fall through to the next case.
 		case WM_LBUTTONDBLCLK:
 			if (g_script.mTrayMenu->mDefault)
-				HANDLE_USER_MENU(g_script.mTrayMenu->mDefault->mMenuID, -1)
+				POST_AHK_USER_MENU(hWnd, g_script.mTrayMenu->mDefault->mMenuID, -1) // -1 flags it as a non-GUI menu item.
 #ifdef AUTOHOTKEYSC
 			else if (g_script.mTrayMenu->mIncludeStandardItems && g_AllowMainWindow)
 				ShowMainWindow();
@@ -5654,6 +5654,12 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		return 0;
 	}
 
+	case AHK_USER_MENU:
+		// Search for AHK_USER_MENU in GuiWindowProc() for comments about why this is done:
+		PostMessage(hWnd, iMsg, wParam, lParam);
+		MsgSleep(-1);
+		return 0;
+
 	case WM_HOTKEY: // As a result of this app having previously called RegisterHotkey().
 	case AHK_HOOK_HOTKEY:  // Sent from this app's keyboard or mouse hook.
 	{
@@ -5669,10 +5675,10 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			// call-stack than any dialog's message pump that might also be in the call stack
 			// beneath us.  This is because the current quasi-thread -- if displaying a dialog --
 			// is guaranteed to be interruptible (there is code to ensure this).  If some other
-			// thread interruptible a thread that was displaying dialog, by definition that new
+			// thread interrupted a thread that was displaying dialog, by definition that new
 			// thread would have an instance of MsgSleep() closer on the call stack than the
 			// dialog's message pump.  Thus, the message we just posted above will be processed
-			// by our message pump rather than the dialogs (because ours ensures the msg queue
+			// by our message pump rather than the dialog's (because ours ensures the msg queue
 			// is cleaned out prior to returning to its caller), which in turn prevents the
 			// dialog's message pump from discarding this null-hwnd message (since it doesn't
 			// know how to dispatch it).
@@ -6007,7 +6013,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 
 
 
-bool HandleMenuItem(WORD aMenuItemID, WPARAM aGuiIndex)
+bool HandleMenuItem(HWND aHwnd, WORD aMenuItemID, WPARAM aGuiIndex)
 // See if an item was selected from the tray menu or main menu.  Note that it is possible
 // for one of the standard menu items to be triggered from a GUI menu if the menu or one of
 // its submenus was modified with the "menu, MenuName, Standard" command.
@@ -6125,12 +6131,9 @@ bool HandleMenuItem(WORD aMenuItemID, WPARAM aGuiIndex)
 		if (!g_script.FindMenuItemByID(aMenuItemID)) // Do nothing, let caller try to handle it some other way.
 			return false;
 		// It seems best to treat the selection of a custom menu item in a way similar
-		// to how hotkeys are handled by the hook.
-		// Post it to the thread, just in case the OS tries to be "helpful" and
-		// directly call the WindowProc (i.e. this function) rather than actually
-		// posting the message.  We don't want to be called, we want the main loop
-		// to handle this message:
-		HANDLE_USER_MENU(aMenuItemID, aGuiIndex)  // Send the menu's cmd ID and the window index (index is safer than pointer, since pointer might get deleted).
+		// to how hotkeys are handled by the hook. See comments near the definition of
+		// POST_AHK_USER_MENU for more details.
+		POST_AHK_USER_MENU(aHwnd, aMenuItemID, aGuiIndex) // Send the menu's cmd ID and the window index (index is safer than pointer, since pointer might get deleted).
 		// Try to maintain a list here of all the ways the script can be uninterruptible
 		// at this moment in time, and whether that uninterruptibility should be overridden here:
 		// 1) YES: g_MenuIsVisible is true (which in turn means that the script is marked

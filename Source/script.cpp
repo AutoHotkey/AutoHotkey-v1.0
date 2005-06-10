@@ -4630,7 +4630,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				}
 				else
 					if (aArgc > 2)
-						return ScriptError("Parameter #3 must be blank in this case.", NEW_RAW_ARG3);
+						return ScriptError(ERR_PARAM3_MUST_BE_BLANK, NEW_RAW_ARG3);
 				break; // This type has been fully checked above.
 			}
 
@@ -4859,7 +4859,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				break;
 			default: // All commands except the above should have a blank Value parameter.
 				if (*NEW_RAW_ARG2)
-					return ScriptError("Parameter #2 must be blank in this case.", NEW_RAW_ARG2);
+					return ScriptError(ERR_PARAM2_MUST_BE_BLANK, NEW_RAW_ARG2);
 			}
 		}
 		break;
@@ -4879,7 +4879,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				break;
 			default: // All commands except the above should have a blank Value parameter.
 				if (*NEW_RAW_ARG3)
-					return ScriptError("Parameter #3 must be blank in this case.", NEW_RAW_ARG3);
+					return ScriptError(ERR_PARAM3_MUST_BE_BLANK, NEW_RAW_ARG3);
 			}
 		}
 		break;
@@ -4905,7 +4905,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				break;
 			default: // All commands except the above should have a blank Text parameter.
 				if (*NEW_RAW_ARG3)
-					return ScriptError("Parameter #3 must be blank in this case.", NEW_RAW_ARG3);
+					return ScriptError(ERR_PARAM3_MUST_BE_BLANK, NEW_RAW_ARG3);
 			}
 		}
 		break;
@@ -4923,12 +4923,12 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				break; // Do nothing, since Param4 is optional in this case.
 			default: // All commands except the above should have a blank parameter here.
 				if (*NEW_RAW_ARG4) // Currently true for all, since it's a FutureUse param.
-					return ScriptError("Parameter #4 must be blank in this case.", NEW_RAW_ARG4);
+					return ScriptError(ERR_PARAM4_MUST_BE_BLANK, NEW_RAW_ARG4);
 			}
 			if (guicontrolget_cmd == GUICONTROLGET_CMD_FOCUS)
 			{
 				if (*NEW_RAW_ARG3)
-					return ScriptError("Parameter #3 must be blank in this case.", NEW_RAW_ARG3);
+					return ScriptError(ERR_PARAM3_MUST_BE_BLANK, NEW_RAW_ARG3);
 			}
 			// else it can be optionally blank, in which case the output variable is used as the
 			// ControlID also.
@@ -4946,7 +4946,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			// For DRIVE_CMD_LABEL: Note that is is possible and allowed for the new label to be blank.
 			// Not currently done since all sub-commands take a mandatory or optional ARG3:
 			//if (drive_cmd != ... && *NEW_RAW_ARG3)
-			//	return ScriptError("Parameter #3 must be blank in this case.", NEW_RAW_ARG3);
+			//	return ScriptError(ERR_PARAM3_MUST_BE_BLANK, NEW_RAW_ARG3);
 		}
 		break;
 
@@ -4977,7 +4977,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			case PROCESS_CMD_EXIST:
 			case PROCESS_CMD_CLOSE:
 				if (*NEW_RAW_ARG3)
-					return ScriptError("Parameter #3 must be blank in this case.", NEW_RAW_ARG3);
+					return ScriptError(ERR_PARAM3_MUST_BE_BLANK, NEW_RAW_ARG3);
 				break;
 			case PROCESS_CMD_PRIORITY:
 				if (!*NEW_RAW_ARG3 || (!line.ArgHasDeref(3) && !strchr(PROCESS_PRIORITY_LETTERS, toupper(*NEW_RAW_ARG3))))
@@ -5052,7 +5052,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			case WINSET_ENABLE:
 			case WINSET_DISABLE:
 				if (*NEW_RAW_ARG2)
-					return ScriptError("Parameter #2 must be blank in this case.");
+					return ScriptError(ERR_PARAM2_MUST_BE_BLANK);
 				break;
 			case WINSET_INVALID:
 				return ScriptError(ERR_PARAM1_INVALID, NEW_RAW_ARG1);

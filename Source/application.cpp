@@ -356,7 +356,8 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 		// because they're >= WM_USER.  The exception is AHK_GUI_ACTION should always be handled
 		// here rather than by IsDialogMessage().  Note: sObjectCount is checked first to help
 		// performance, since all messages must come through this bottleneck.
-		if (GuiType::sObjectCount && msg.hwnd && msg.hwnd != g_hWnd && msg.message != AHK_GUI_ACTION)
+		if (GuiType::sObjectCount && msg.hwnd && msg.hwnd != g_hWnd && msg.message != AHK_GUI_ACTION
+			&& msg.message != AHK_USER_MENU)
 		{
 			// Relies heavily on short-circuit boolean order:
 			if (   msg.message == WM_KEYDOWN
@@ -428,7 +429,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				&& (pgui = GuiType::FindGui(focused_parent)) && (pcontrol = pgui->FindControl(focused_control))
 				&& pcontrol->type == GUI_CONTROL_EDIT)
 			{
-				pgui->Escape(false); // "false" because no need to do MsgSleep since we'll empty the msg queue here prior to returning to our caller.
+				pgui->Escape();
 				continue; // Omit this keystroke from any further processing.
 			}
 
@@ -809,7 +810,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				// Below: the menu type is passed with the message so that its value will be in sync
 				// with the timestamp of the message (in case this message has been stuck in the
 				// queue for a long time):
-				if (msg.wParam < MAX_GUI_WINDOWS) // Poster specified that this menu item was from a gui's menu bar.
+				if (msg.wParam < MAX_GUI_WINDOWS) // Poster specified that this menu item was from a gui's menu bar (since wParam is unsigned, any incoming -1 is seen as greater than max).
 				{
 					// msg.wParam is the index rather than a pointer to avoid any chance of problems with
 					// a gui object or its window having been destroyed while the msg was waiting in the queue.

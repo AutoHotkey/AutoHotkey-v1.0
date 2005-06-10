@@ -594,7 +594,8 @@ int SendKey(vk_type aVK, sc_type aSC, bool aRequiresAltGr, modLR_type aModifiers
 		// They are not needed because if our keystrokes were modified by either WIN or ALT, the
 		// release of the WIN or ALT key will already be disguised due to its having modified
 		// something while it was down.
-		if (SetModifierLRState(aModifiersLRPersistent, GetModifierLRState(), aTargetWindow, false))
+		if (SetModifierLRState(aModifiersLRPersistent, GetModifierLRState(), aTargetWindow, false
+			, KEY_IGNORE_ALL_EXCEPT_MODIFIER, aRequiresAltGr)) // v1.0.35.09: Pass aRequiresAltGr here too.
 			// Modifiers were changed by the above.
 			DoKeyDelay(g.PressDuration); // See comments in SendKeys() about why this is done.
 	}
@@ -1320,21 +1321,37 @@ modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLR
 		{
 			if (ctrl_not_down && aDisguiseWinAlt)
 				KeyEvent(KEYDOWNANDUP, VK_CONTROL, 0, NULL, false, aExtraInfo); // Disguise key release to suppress menu activation.
+			if (aRequiresAltGr)
+				g_IgnoreNextLControlUp = true;
 			KeyEvent(KEYUP, VK_RMENU, 0, NULL, false, aExtraInfo);
+			g_IgnoreNextLControlUp = false; // See comments below about g_IgnoreNextLControlDown.
 		}
 	}
 	else if (!(aModifiersLRnow & MOD_RALT) && (modifiersLRnew & MOD_RALT))
 	{
-		KeyEvent(KEYDOWN, VK_RMENU, 0, NULL, false, aExtraInfo);
 		if (aRequiresAltGr) // v1.0.35.07.  This also relies on the fact that "press down" is not subject to defer_alt_release.
 		{
+			// The following global is used to flag as our own the keyboard driver's LControl-down keystroke
+			// that is triggered by RAlt-down (AltGr).  This prevents it from triggering hotkeys such as
+			// "*Control::".  It probably fixes other obscure side-effects and bugs also, since the
+			// event should be considered script-generated even though indirect:
+			g_IgnoreNextLControlDown = true;
 			// Indicate that control is both down and required so that the section after this one won't
 			// release it.  Without this fix, a hotkey that sends an AltGr char such as "^ä:: SendRaw, {"
 			// would fail to work under German layout because left-alt would be released after right-alt
 			// goes down.
-			aModifiersLRnow |= MOD_LCONTROL;
-			modifiersLRnew |= MOD_LCONTROL;
+			aModifiersLRnow |= MOD_LCONTROL; // In prep. for the KeyEvent() call below.
+			modifiersLRnew |= MOD_LCONTROL;  //
 		}
+		// Above's global must be set prior to the below.
+		KeyEvent(KEYDOWN, VK_RMENU, 0, NULL, false, aExtraInfo);
+		// The following is done by us rather than by the hook to avoid problems where:
+		// 1) The hook is removed at a critical point during the operation, preventing the variable from
+		//    being reset to false.
+		// 2) For some reason this AltGr keystroke done above did not cause LControl to go down (perhaps
+		//    because the current keyboard layout doesn't have AltGr as we thought), which would be a bug
+		//    because some other Ctrl keystroke would then be wrongly ignored.
+		g_IgnoreNextLControlDown = false; // Unconditional reset.
 	}
 
 	// CONTROL and SHIFT are done only after the above because the above might rely on them
@@ -1372,7 +1389,12 @@ modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLR
 		if (release_lalt)
 			KeyEvent(KEYUP, VK_LMENU, 0, NULL, false, aExtraInfo);
 		if (release_ralt)
+		{
+			if (aRequiresAltGr)
+				g_IgnoreNextLControlUp = true; // See comments above about g_IgnoreNextLControlDown.
 			KeyEvent(KEYUP, VK_RMENU, 0, NULL, false, aExtraInfo);
+			g_IgnoreNextLControlUp = false;
+		}
 	}
 
 	// When calling KeyEvent(), probably best not to specify a scan code unless

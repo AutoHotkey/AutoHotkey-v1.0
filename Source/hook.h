@@ -63,16 +63,15 @@ enum UserMessages {AHK_HOOK_HOTKEY = WM_USER, AHK_HOTSTRING, AHK_USER_MENU, AHK_
 #define AHK_GUI_DROPFILES -4
 
 // And these macros are kept here so that all this trickery is centrally located and thus more maintainable:
-#define ASK_INSTANCE_TO_CLOSE(window, reason) PostMessage(window, WM_COMMNOTIFY, reason, 0);
-#define POST_AHK_USER_MENU(menu, gui_index) PostMessage(NULL, AHK_USER_MENU, gui_index, menu);
-#define POST_AHK_GUI_ACTION(window, control_index, gui_event) PostMessage(window, AHK_GUI_ACTION, control_index, gui_event);
+#define ASK_INSTANCE_TO_CLOSE(hwnd, reason) PostMessage(hwnd, WM_COMMNOTIFY, reason, 0);
+#define POST_AHK_USER_MENU(hwnd, menu, gui_index) PostMessage(hwnd, AHK_USER_MENU, gui_index, menu);
+#define POST_AHK_GUI_ACTION(hwnd, control_index, gui_event) PostMessage(hwnd, AHK_GUI_ACTION, control_index, gui_event);
 #define POST_AHK_DIALOG(timeout) PostMessage(g_hWnd, WM_COMMNOTIFY, AHK_DIALOG, (LPARAM)timeout);
-// Notes about POST_AHK_USER_MENU: a gui_index value >= 0 is passed with the message if it came from a
+// Notes about POST_AHK_USER_MENU: A gui_index value >= 0 is passed with the message if it came from a
 // GUI's menu bar.  This is done because it's good way to pass the info, but also so that its value will
 // be in sync with the timestamp of the message (in case the message is stuck in the queue for a long time).
 // No pointer is passed in this case since they might become invalid between the time the msg is posted vs.
 // processed.
-
 // Notes about POST_AHK_DIALOG above:
 // Post a special msg that will attempt to force it to the foreground after it has been displayed,
 // since the dialog often will flash in the task bar instead of becoming foreground.
@@ -85,23 +84,10 @@ enum UserMessages {AHK_HOOK_HOTKEY = WM_USER, AHK_HOTSTRING, AHK_USER_MENU, AHK_
 // MessageBox() and the other dialog invocating API calls (for FileSelectFile/Folder) likely
 // ensures its window really exists before dispatching messages.
 
-// Notes about the below: It is important to call MsgSleep() immediately after posting the message
-// in case a dialog's message pump is running, in which case the message would otherwise be lost
-// due to the dialog's message pump being unable to dispatch thread messages (those with a NULL window),
-// resulting in the loss of such messages:
-#define HANDLE_USER_MENU(menu_id, gui_index) \
-{\
-	POST_AHK_USER_MENU(menu_id, gui_index) \
-	MsgSleep(-1);\
-}
-
-
-
 enum DualNumpadKeys	{PAD_DECIMAL, PAD_NUMPAD0, PAD_NUMPAD1, PAD_NUMPAD2, PAD_NUMPAD3
 , PAD_NUMPAD4, PAD_NUMPAD5, PAD_NUMPAD6, PAD_NUMPAD7, PAD_NUMPAD8, PAD_NUMPAD9
 , PAD_DELETE, PAD_INSERT, PAD_END, PAD_DOWN, PAD_NEXT, PAD_LEFT, PAD_CLEAR
 , PAD_RIGHT, PAD_HOME, PAD_UP, PAD_PRIOR, PAD_TOTAL_COUNT};
-
 
 // Some reasoning behind the below data structures: Could build a new array for [sc][sc] and [vk][vk]
 // (since only two keys are allowed in a ModifierVK/SC combination, only 2 dimensions are needed).
@@ -113,7 +99,6 @@ enum DualNumpadKeys	{PAD_DECIMAL, PAD_NUMPAD0, PAD_NUMPAD1, PAD_NUMPAD2, PAD_NUM
 // inefficient because have to look up the right prefix in a loop.  But most suffixes probably won't
 // have more than one ModifierVK/SC anyway, so the lookup will usually find a match on the first
 // iteration.
-
 struct vk_hotkey
 {
 	vk_type vk;
@@ -264,5 +249,6 @@ void ResetHook(bool aAllModifiersUp = false, HookType aWhichHook = (HOOK_KEYBD |
 	, bool aResetKVKandKSC = false);
 
 void GetHookStatus(char *aBuf, int aBufSize);
+bool IsIgnored(ULONG_PTR aExtraInfo, vk_type aVK, bool aKeyUp);
 
 #endif

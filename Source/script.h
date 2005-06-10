@@ -245,6 +245,9 @@ enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
 #define ERR_PARAM1_REQUIRED "Parameter #1 required."
 #define ERR_PARAM2_REQUIRED "Parameter #2 required."
 #define ERR_PARAM3_REQUIRED "Parameter #3 required."
+#define ERR_PARAM2_MUST_BE_BLANK "Parameter #2 must be blank in this case."
+#define ERR_PARAM3_MUST_BE_BLANK "Parameter #3 must be blank in this case."
+#define ERR_PARAM4_MUST_BE_BLANK "Parameter #4 must be blank in this case."
 #define ERR_INVALID_KEY_OR_BUTTON "Invalid key or button name."
 #define ERR_MISSING_OUTPUT_VAR "Requires at least one of its output variables."
 #define ERR_MISSING_CLOSE_PAREN "Missing \")\""
@@ -349,7 +352,7 @@ BOOL CALLBACK EnumChildGetControlList(HWND aWnd, LPARAM lParam);
 BOOL CALLBACK EnumMonitorProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM lParam);
 BOOL CALLBACK EnumChildGetText(HWND aWnd, LPARAM lParam);
 LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lParam);
-bool HandleMenuItem(WORD aMenuItemID, WPARAM aGuiIndex);
+bool HandleMenuItem(HWND aHwnd, WORD aMenuItemID, WPARAM aGuiIndex);
 
 
 typedef UINT LineNumberType;
@@ -560,14 +563,16 @@ typedef UCHAR GuiControls;
 #define GUI_CONTROL_DROPDOWNLIST 7
 #define GUI_CONTROL_COMBOBOX     8
 #define GUI_CONTROL_LISTBOX      9
-#define GUI_CONTROL_EDIT         10
-#define GUI_CONTROL_DATETIME     11
-#define GUI_CONTROL_MONTHCAL     12
-#define GUI_CONTROL_HOTKEY       13
-#define GUI_CONTROL_UPDOWN       14
-#define GUI_CONTROL_SLIDER       15
-#define GUI_CONTROL_PROGRESS     16
-#define GUI_CONTROL_TAB          17 // Keep below flush with above as a reminder to keep it in sync:
+#define GUI_CONTROL_LISTVIEW     10
+#define GUI_CONTROL_ROW          11 // A quasi-control since it will have no HWND.
+#define GUI_CONTROL_EDIT         12
+#define GUI_CONTROL_DATETIME     13
+#define GUI_CONTROL_MONTHCAL     14
+#define GUI_CONTROL_HOTKEY       15
+#define GUI_CONTROL_UPDOWN       16
+#define GUI_CONTROL_SLIDER       17
+#define GUI_CONTROL_PROGRESS     18
+#define GUI_CONTROL_TAB          19 // Keep below flush with above as a reminder to keep it in sync:
 
 enum ThreadCommands {THREAD_CMD_INVALID, THREAD_CMD_PRIORITY, THREAD_CMD_INTERRUPT};
 
@@ -1476,6 +1481,8 @@ public:
 		if (!stricmp(aBuf, "DDL") || !stricmp(aBuf, "DropDownList")) return GUI_CONTROL_DROPDOWNLIST;
 		if (!stricmp(aBuf, "ComboBox")) return GUI_CONTROL_COMBOBOX;
 		if (!stricmp(aBuf, "ListBox")) return GUI_CONTROL_LISTBOX;
+		if (!stricmp(aBuf, "ListView")) return GUI_CONTROL_LISTVIEW;
+		if (!stricmp(aBuf, "Row")) return GUI_CONTROL_ROW;
 		if (!stricmp(aBuf, "Edit")) return GUI_CONTROL_EDIT;
 		// Keep those seldom used at the bottom for performance:
 		if (!stricmp(aBuf, "UpDown")) return GUI_CONTROL_UPDOWN;
@@ -2072,6 +2079,7 @@ public:
 	bool mUseTheme;  // Whether XP theme and styles should be applied to the parent window and subsequently added controls.
 	HWND mOwner;  // The window that owns this one, if any.  Note that Windows provides no way to change owners after window creation.
 	int mCurrentFontIndex;
+	GuiControlType *mCurrentListView; // The ListView to which new rows will be added.
 	TabControlIndexType mTabControlCount;
 	TabControlIndexType mCurrentTabControlIndex; // Which tab control of the window.
 	TabIndexType mCurrentTabIndex;// Which tab of a tab control is currently the default for newly added controls.
@@ -2111,6 +2119,7 @@ public:
 		, mExStyle(0) // This and the above should not be used once the window has been created since they might get out of date.
 		, mInRadioGroup(false), mUseTheme(true), mOwner(NULL)
 		, mCurrentFontIndex(FindOrCreateFont()) // Omit params to tell it to find or create DEFAULT_GUI_FONT.
+		, mCurrentListView(NULL)
 		, mTabControlCount(0), mCurrentTabControlIndex(MAX_TAB_CONTROLS), mCurrentTabIndex(0)
 		, mCurrentColor(CLR_DEFAULT)
 		, mBackgroundColorWin(CLR_DEFAULT), mBackgroundBrushWin(NULL)
@@ -2143,7 +2152,7 @@ public:
 	ResultType Clear();
 	ResultType Cancel();
 	ResultType Close(); // Due to SC_CLOSE, etc.
-	ResultType Escape(bool aDoMsgSleep); // Similar to close, except typically called when the user presses ESCAPE.
+	ResultType Escape(); // Similar to close, except typically called when the user presses ESCAPE.
 	ResultType Submit(bool aHideIt);
 	ResultType ControlGetContents(Var &aOutputVar, GuiControlType &aControl, char *aMode = "");
 

@@ -1251,6 +1251,8 @@ void GuiType::UpdateMenuBars(HMENU aMenu)
 ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *aText)
 // Caller must have ensured that mHwnd is non-NULL (i.e. that the parent window already exists).
 {
+	// Must do these checks even for GUI_CONTROL_ROW because although ROW doesn't consume a slot,
+	// a placeholder in the array is required for code-simplification reasons.
 	#define TOO_MANY_CONTROLS "Too many controls." ERR_ABORT // Short msg since so rare.
 	if (mControlCount >= MAX_CONTROLS_PER_GUI)
 		return g_script.ScriptError(TOO_MANY_CONTROLS);
@@ -1284,7 +1286,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 	// Set defaults for the various options, to be overridden individually by any specified.
 	////////////////////////////////////////////////////////////////////////////////////////
 	GuiControlType &control = mControl[mControlCount];
-	ZeroMemory(&control, sizeof(GuiControlType));
+	ZeroMemory(&control, sizeof(GuiControlType)); // Needed in general but also in case this control was previously used as a placeholder for GUI_CONTROL_ROW.
 	control.type = aControlType; // Improves maintainability to do this early.
 
 	if (aControlType == GUI_CONTROL_TAB)
@@ -1345,6 +1347,10 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 	// Some controls also have the WS_EX_CLIENTEDGE exstyle by default because they look pretty strange
 	// without them.  This seems to be the standard default used by most applications.
 	// Note: It seems that WS_BORDER is hardly ever used in practice with controls, just parent windows.
+	case GUI_CONTROL_ROW:  // Listed first for performance since ROWs are often created via a loop.
+		if (!mCurrentListView)
+			return g_script.ScriptError("No ListView to own it." ERR_ABORT);
+		break;
 	case GUI_CONTROL_GROUPBOX:
 		opt.style_add |= BS_MULTILINE;
 		break;
@@ -1372,6 +1378,9 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		// 3) LBS_USETABSTOPS can be explicitly removed by specifying -0x80 in the options of "Gui Add".
 		opt.style_add |= WS_TABSTOP|WS_VSCROLL|LBS_USETABSTOPS;  // WS_VSCROLL seems the most desirable default.
 		opt.exstyle_add |= WS_EX_CLIENTEDGE;
+		break;
+	case GUI_CONTROL_LISTVIEW:
+		opt.style_add |= WS_TABSTOP|LVS_REPORT;
 		break;
 	case GUI_CONTROL_EDIT:
 		opt.style_add |= WS_TABSTOP;
@@ -1427,6 +1436,13 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 	/////////////////////////////
 	if (!ControlParseOptions(aOptions, opt, control))
 		return FAIL;  // It already displayed the error.
+
+	if (aControlType == GUI_CONTROL_ROW) // Get this out of the way completely so that nothing further below needs to handle it.
+	{
+		ControlAddContents(*mCurrentListView, aText, INT_MIN); // INT_MIN is a special flag that indicates that a row is being added.
+		return OK;
+	}
+
 	DWORD style = opt.style_add & ~opt.style_remove;
 	DWORD exstyle = opt.exstyle_add & ~opt.exstyle_remove;
 	if (!mControlCount) // Always start new section for very first control, so override any false value from the above.
@@ -1523,6 +1539,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 	// Nothing extra for these currently:
 	//case GUI_CONTROL_TEXT:  Ensuring SS_BITMAP and such are absent seems too over-protective.
 	//case GUI_CONTROL_PIC:   SS_BITMAP/SS_ICON are applied after the control isn't created so that it doesn't try to auto-load a resource.
+	//case GUI_CONTROL_LISTVIEW:
 	//case GUI_CONTROL_DATETIME:
 	//case GUI_CONTROL_MONTHCAL:
 	//case GUI_CONTROL_HOTKEY:
@@ -1628,6 +1645,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 				calc_control_height_from_row_count = false; // Don't bother calculating the height (i.e. override the default).
 			break;
 		case GUI_CONTROL_LISTBOX:
+		case GUI_CONTROL_LISTVIEW:
 			opt.row_count = 3;  // Actual height will be calculated below using this.
 			break;
 		case GUI_CONTROL_GROUPBOX:
@@ -1744,6 +1762,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			case GUI_CONTROL_DROPDOWNLIST:
 			case GUI_CONTROL_COMBOBOX:
 			case GUI_CONTROL_LISTBOX:
+			case GUI_CONTROL_LISTVIEW:
 			case GUI_CONTROL_EDIT:
 			case GUI_CONTROL_DATETIME:
 			case GUI_CONTROL_HOTKEY:
@@ -1897,6 +1916,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		//case GUI_CONTROL_DROPDOWNLIST:  These last ones are given (later below) a standard width based on font size.
 		//case GUI_CONTROL_COMBOBOX:      In addition, their height has already been determined further above.
 		//case GUI_CONTROL_LISTBOX:
+		//case GUI_CONTROL_LISTVIEW:
 		//case GUI_CONTROL_DATETIME:
 		//case GUI_CONTROL_MONTHCAL:
 		//case GUI_CONTROL_HOTKEY:
@@ -1922,6 +1942,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		case GUI_CONTROL_EDIT:
 			opt.width = gui_standard_width;
 			break;
+		case GUI_CONTROL_LISTVIEW:
 		case GUI_CONTROL_DATETIME: // Seems better to have wider default to fit LongDate and because drop-down calendar is fairly wide (though the latter is a weak reason).
 			opt.width = gui_standard_width * 2;
 			break;
@@ -2327,6 +2348,14 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		}
 		break;
 
+	case GUI_CONTROL_LISTVIEW:
+		if (control.hwnd = CreateWindowEx(exstyle, WC_LISTVIEW, "", style
+			, opt.x, opt.y, opt.width, opt.height, mHwnd, control_id, g_hInstance, NULL))
+		{
+			mCurrentListView = &control;
+		}
+		break;
+
 	case GUI_CONTROL_EDIT:
 		if (!(style & ES_MULTILINE)) // ES_MULTILINE was not explicitly or automatically specified.
 		{
@@ -2542,6 +2571,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		//case GUI_CONTROL_UPDOWN: It will snap onto antoher up-down, but not have any meaningful effect.
 		//case GUI_CONTROL_DROPDOWNLIST:
 		//case GUI_CONTROL_COMBOBOX:
+		//case GUI_CONTROL_LISTVIEW:
 		//case GUI_CONTROL_HOTKEY:
 		//case GUI_CONTROL_UPDOWN:
 		//case GUI_CONTROL_SLIDER:
@@ -3277,6 +3307,7 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 			//case GUI_CONTROL_DROPDOWNLIST:
 			//case GUI_CONTROL_COMBOBOX:
 			//case GUI_CONTROL_LISTBOX:
+			//case GUI_CONTROL_LISTVIEW:
 			//case GUI_CONTROL_DATETIME:
 			//case GUI_CONTROL_MONTHCAL:
 			//case GUI_CONTROL_HOTKEY:
@@ -3644,6 +3675,7 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 				//case GUI_CONTROL_DROPDOWNLIST:
 				//case GUI_CONTROL_COMBOBOX:
 				//case GUI_CONTROL_LISTBOX:
+				//case GUI_CONTROL_LISTVIEW:
 				//case GUI_CONTROL_UPDOWN:
 				//case GUI_CONTROL_DATETIME:
 				//case GUI_CONTROL_MONTHCAL:
@@ -3685,6 +3717,7 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 				//case GUI_CONTROL_DROPDOWNLIST:
 				//case GUI_CONTROL_COMBOBOX:
 				//case GUI_CONTROL_LISTBOX:
+				//case GUI_CONTROL_LISTVIEW:
 				//case GUI_CONTROL_UPDOWN:
 				//case GUI_CONTROL_DATETIME:
 				//case GUI_CONTROL_MONTHCAL:
@@ -3737,6 +3770,7 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 				//case GUI_CONTROL_DROPDOWNLIST:
 				//case GUI_CONTROL_COMBOBOX:
 				//case GUI_CONTROL_LISTBOX:
+				//case GUI_CONTROL_LISTVIEW:
 				}
 			}
 			else // Removing.
@@ -3784,6 +3818,7 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 				//case GUI_CONTROL_DROPDOWNLIST:
 				//case GUI_CONTROL_COMBOBOX:
 				//case GUI_CONTROL_LISTBOX:
+				//case GUI_CONTROL_LISTVIEW:
 				}
 			}
 
@@ -3834,6 +3869,7 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 				//case GUI_CONTROL_DROPDOWNLIST:
 				//case GUI_CONTROL_COMBOBOX:
 				//case GUI_CONTROL_LISTBOX:
+				//case GUI_CONTROL_LISTVIEW:
 				}
 			}
 			else // Removing.
@@ -3873,6 +3909,7 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 				//case GUI_CONTROL_DROPDOWNLIST:
 				//case GUI_CONTROL_COMBOBOX:
 				//case GUI_CONTROL_LISTBOX:
+				//case GUI_CONTROL_LISTVIEW:
 				//case GUI_CONTROL_EDIT:
 				}
 			}
@@ -4261,6 +4298,7 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 			break;
 		// Nothing extra for these currently:
 		//case GUI_CONTROL_LISTBOX: i.e. allow LBS_NOTIFY to be removed in case anyone really wants to do that.
+		//case GUI_CONTROL_LISTVIEW:
 		//case GUI_CONTROL_EDIT:
 		//case GUI_CONTROL_TEXT:  Ensuring SS_BITMAP and such are absent seems too over-protective.
 		//case GUI_CONTROL_DATETIME:
@@ -4376,12 +4414,21 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 			//ELSE don't change the value of style_change_ok because we want it to retain the value set by
 			// the GWL_STYLE change above; i.e. a partial success on either style or exstyle counts as a full
 			// success.
-			SetLastError(0); // Prior to SetWindowLong(), as recommended by MSDN.
-			if (SetWindowLong(aControl.hwnd, GWL_EXSTYLE, new_exstyle) || !GetLastError()) // This is the precise way to detect success according to MSDN.
+			if (aControl.type == GUI_CONTROL_LISTVIEW)
 			{
-				// Even if it indicated success, sometimes it failed anyway.  Find out for sure:
+				ListView_SetExtendedListViewStyle(aControl.hwnd, new_exstyle); // Has no return value.
 				if (GetWindowLong(aControl.hwnd, GWL_EXSTYLE) != current_exstyle)
 					style_change_ok = true; // Even a partial change counts as a success.
+			}
+			else
+			{
+				SetLastError(0); // Prior to SetWindowLong(), as recommended by MSDN.
+				if (SetWindowLong(aControl.hwnd, GWL_EXSTYLE, new_exstyle) || !GetLastError()) // This is the precise way to detect success according to MSDN.
+				{
+					// Even if it indicated success, sometimes it failed anyway.  Find out for sure:
+					if (GetWindowLong(aControl.hwnd, GWL_EXSTYLE) != current_exstyle)
+						style_change_ok = true; // Even a partial change counts as a success.
+				}
 			}
 		}
 
@@ -4453,6 +4500,7 @@ void GuiType::ControlInitOptions(GuiControlOptionsType &aOpt, GuiControlType &aC
 
 
 void GuiType::ControlAddContents(GuiControlType &aControl, char *aContent, int aChoice)
+// If INT_MIN is specified for aChoice, aControl should be the ListView to which a new row is being added.
 // Caller must ensure that aContent is a writable memory area, since this function temporarily
 // alters the string.
 {
@@ -4460,9 +4508,16 @@ void GuiType::ControlAddContents(GuiControlType &aControl, char *aContent, int a
 		return;
 
 	UINT msg_add, msg_select;
+	GuiControls control_type = (aChoice == INT_MIN) ? GUI_CONTROL_ROW : aControl.type;
 
-	switch (aControl.type)
+	switch (control_type)
 	{
+	case GUI_CONTROL_ROW: // Listed first for performance.
+	case GUI_CONTROL_LISTVIEW:
+	case GUI_CONTROL_TAB:
+		msg_add = 0;
+		msg_select = 0;
+		break;
 	case GUI_CONTROL_DROPDOWNLIST:
 	case GUI_CONTROL_COMBOBOX:
 		msg_add = CB_ADDSTRING;
@@ -4473,8 +4528,6 @@ void GuiType::ControlAddContents(GuiControlType &aControl, char *aContent, int a
 		msg_select = (GetWindowLong(aControl.hwnd, GWL_STYLE) & (LBS_EXTENDEDSEL|LBS_MULTIPLESEL))
 			? LB_SETSEL : LB_SETCURSEL;
 		break;
-	case GUI_CONTROL_TAB:
-		break;
 	default:    // Do nothing for any other control type that doesn't require content to be added this way.
 		return; // e.g. GUI_CONTROL_SLIDER, which the caller should handle.
 	}
@@ -4482,12 +4535,19 @@ void GuiType::ControlAddContents(GuiControlType &aControl, char *aContent, int a
 	bool temporarily_terminated;
 	char *this_field, *next_field;
 	LRESULT item_index;
+	int requested_index = 0;
 
 	// For tab controls:
-	int requested_tab_index = 0;
 	TCITEM tci;
-	tci.mask = TCIF_TEXT | TCIF_IMAGE;
+	tci.mask = TCIF_TEXT | TCIF_IMAGE; // Simpler just to init unconditionally rather than checking control type.
 	tci.iImage = -1; 
+
+	// For ListView:
+	LVCOLUMN lvc;
+	lvc.mask = LVCF_TEXT | LVCF_WIDTH; // Simpler just to init unconditionally rather than checking control type.
+	LVITEM lvi;
+	lvi.mask = LVIF_TEXT | LVIF_STATE;
+	lvi.state = 0;
 
 	// Check *this_field at the top too, in case list ends in delimiter.
 	for (this_field = aContent; *this_field;)
@@ -4510,22 +4570,51 @@ void GuiType::ControlAddContents(GuiControlType &aControl, char *aContent, int a
 		}
 
 		// Add the item:
-		if (aControl.type == GUI_CONTROL_TAB)
+		switch (control_type)
 		{
-			if (requested_tab_index > MAX_TABS_PER_CONTROL - 1) // Unlikely, but indicate failure if so.
+		case GUI_CONTROL_ROW: // Listed first for performance, since it is called far more often with this value.
+			lvi.pszText = this_field;
+			if (this_field == aContent) // First column is the item, subsequent columns are the item's sub-items.
+			{
+				lvi.iItem = INT_MAX; // Signal it to insert at the end of all current items.
+				lvi.iSubItem = 0; // Must be zero to indicate this is an item vs. sub-item.
+				lvi.iItem = ListView_InsertItem(aControl.hwnd, &lvi); // item_index is used later below as an indicator of success.
+				if (lvi.iItem == -1) // Failure, so can't add the subitems. Might never happen realistically, so no error.
+					return;
+				//else lvi.iItem now contains the proper value for all subseqent iterations (which add the other columns as subitems).
+				lvi.iSubItem = 1; // Init for first of the subitems (if any).  This index is one-based not zero-based.
+			}
+			else // Columns after the first are the subitems of anchored to the item (the leftmost column).
+			{
+				ListView_SetItem(aControl.hwnd, &lvi); // item_index is used later below as an indicator of success.
+				// Even if it fails (via returning FALSE), still increment the index so that fields stay
+				// associated with the right columns:
+				++lvi.iSubItem;
+			}
+			break;
+		case GUI_CONTROL_TAB:
+			if (requested_index > MAX_TABS_PER_CONTROL - 1) // Unlikely, but indicate failure if so.
 				item_index = -1;
 			else
 			{
 				tci.pszText = this_field;
-				item_index = TabCtrl_InsertItem(aControl.hwnd, requested_tab_index, &tci);
+				item_index = TabCtrl_InsertItem(aControl.hwnd, requested_index, &tci);
 				if (item_index != -1) // item_index is used later below as an indicator of success.
-					++requested_tab_index;
+					++requested_index;
 			}
-		}
-		else
+			break;
+		case GUI_CONTROL_LISTVIEW:
+			lvc.pszText = this_field;
+			lvc.cx = ListView_GetStringWidth(aControl.hwnd, this_field) + 15;  // +12 is not enough.
+			item_index = ListView_InsertColumn(aControl.hwnd, requested_index, &lvc);
+			if (item_index != -1) // item_index is used later below as an indicator of success.
+				++requested_index;
+			break;
+		default:
 			item_index = SendMessage(aControl.hwnd, msg_add, 0, (LPARAM)this_field); // In this case, ignore any errors, namely CB_ERR/LB_ERR and CB_ERRSPACE).
 			// For the above, item_index must be retrieved and used as the item's index because it might
 			// be different than expected if the control's SORT style is in effect.
+		}
 
 		if (temporarily_terminated)
 		{
@@ -4535,7 +4624,7 @@ void GuiType::ControlAddContents(GuiControlType &aControl, char *aContent, int a
 			{
 				if (item_index >= 0) // The item was successfully added.
 				{
-					if (aControl.type == GUI_CONTROL_TAB)
+					if (control_type == GUI_CONTROL_TAB)
 						// MSDN: "A tab control does not send a TCN_SELCHANGING or TCN_SELCHANGE notification message
 						// when a tab is selected using the TCM_SETCURSEL message."
 						TabCtrl_SetCurSel(aControl.hwnd, item_index);
@@ -4556,7 +4645,7 @@ void GuiType::ControlAddContents(GuiControlType &aControl, char *aContent, int a
 		return;
 	--aChoice;
 
-	if (aControl.type == GUI_CONTROL_TAB)
+	if (control_type == GUI_CONTROL_TAB)
 		// MSDN: "A tab control does not send a TCN_SELCHANGING or TCN_SELCHANGE notification message
 		// when a tab is selected using the TCM_SETCURSEL message."
 		TabCtrl_SetCurSel(aControl.hwnd, aChoice);
@@ -4981,15 +5070,14 @@ ResultType GuiType::Close()
 {
 	if (!mLabelForClose)
 		return Cancel();
-	// See lengthy comments in Event() about this section:
 	POST_AHK_GUI_ACTION(mHwnd, AHK_GUI_CLOSE, GUI_EVENT_NORMAL);
-	MsgSleep(-1);
+	// MsgSleep() is not done because GuiWindowProc() takes care of it.  See its comments for why.
 	return OK;
 }
 
 
 
-ResultType GuiType::Escape(bool aDoMsgSleep) // Similar to close, except typically called when the user presses ESCAPE.
+ResultType GuiType::Escape() // Similar to close, except typically called when the user presses ESCAPE.
 // If there is a GuiEscape label defined in for this event, launch it as a new thread.
 // In this case, don't close or hide the window.  It's up to the subroutine to do that
 // if it wants to.
@@ -4999,8 +5087,7 @@ ResultType GuiType::Escape(bool aDoMsgSleep) // Similar to close, except typical
 		return OK;
 	// See lengthy comments in Event() about this section:
 	POST_AHK_GUI_ACTION(mHwnd, AHK_GUI_ESCAPE, GUI_EVENT_NORMAL);
-	if (aDoMsgSleep)
-		MsgSleep(-1);
+	// MsgSleep() is not done because GuiWindowProc() takes care of it.  See its comments for why.
 	return OK;
 }
 
@@ -5726,7 +5813,7 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 	{
 	// Let the default handler take care of WM_CREATE.
 
-	case WM_SIZE:
+	case WM_SIZE: // Listed first for performance.
 		if (   !(pgui = GuiType::FindGui(hWnd))   )
 			break; // Let default proc handle it.
 		if (pgui->mLabelForSize) // There is an event handler in the script.
@@ -5734,13 +5821,7 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 			pgui->mSizeType = wParam;
 			pgui->mSizeWidthHeight = lParam; // A slight aid to performance to only divide it into halves upon demand (later).
 			POST_AHK_GUI_ACTION(pgui->mHwnd, AHK_GUI_SIZE, GUI_EVENT_NORMAL);
-			if (!pgui->mShowIsInProgress) // v1.0.25
-				MsgSleep(-1); // See Gui::Event() for details about this.
-			//else don't do the MsgSleep now.  Let Gui::Show() do it so that the launch of the GuiSize
-			// label does not occur until after Show() has unhidden the window and completely finished
-			// its various other activities.  This avoids the need to turn on DetectHiddenWindows in the
-			// script for the first launch of GuiSize.  It also avoids an unnecessary MsgSleep() call,
-			// since Gui::Show() will be doing that for us.
+			// MsgSleep() is not done because GuiWindowProc() takes care of it.  See its comments for why.
 		}
 		return 0; // "If an application processes this message, it should return zero."
 		// Testing shows that the window still resizes correctly (controls are revealed as the window
@@ -5756,7 +5837,7 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 		// which falsely indicates that the message is from a menu:
 		if (id == IDCANCEL) // IDCANCEL is a special Control ID.  The user pressed esc.
 		{
-			pgui->Escape(true);
+			pgui->Escape();
 			return 0; // Might be necessary to prevent auto-window-close.
 			// Note: It is not necessary to check for IDOK because:
 			// 1) If there is no default button, the IDOK message is ignored.
@@ -5770,7 +5851,7 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 			// a user defined menu item ID or a bogus message due to it corresponding to
 			// a non-existent menu item or a main/tray menu item (which should never be
 			// received or processed here).
-			HandleMenuItem(id, pgui->mWindowIndex);
+			HandleMenuItem(hWnd, id, pgui->mWindowIndex);
 			return 0; // Indicate fully handled.
 		}
 		// Otherwise id should contain the ID of an actual control.  Validate that in case of bogus msg.
@@ -5815,9 +5896,7 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 			//else ignore all others here, for performance.
 			return 0; // 0 is appropriate for all DATETIME notifications.
 		case GUI_CONTROL_MONTHCAL: // NMDATETIMECHANGE struct contains an NMHDR as it's first member.
-			if (nmhdr.code == ((control.attrib & GUI_CONTROL_ATTRIB_ALTSUBMIT) ? MCN_SELECT : MCN_SELCHANGE))
-				pgui->Event(control_index, nmhdr.code);
-			//else ignore all others here, for performance.
+			pgui->Event(control_index, nmhdr.code);
 			return 0; // 0 is appropriate for all MONTHCAL notifications.
 		case GUI_CONTROL_UPDOWN:
 			// Now it just returns 0 for simplicity, but the following are kept for reference.
@@ -6090,9 +6169,27 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 		control_index = pcontrol ? GUI_HWND_TO_INDEX(pcontrol->hwnd) : MAX_CONTROLS_PER_GUI;
 		// Above: MAX_CONTROLS_PER_GUI indicates to GetGuiControl() that there is no control in this case.
 		POST_AHK_GUI_ACTION(pgui->mHwnd, AHK_GUI_DROPFILES, control_index);
-		MsgSleep(-1); // See Gui::Event() for details about this.
+		// MsgSleep() is not done because GuiWindowProc() takes care of it.  See its comments for why.
 		return 0; // "An application should return zero if it processes this message."
 	}
+
+	case AHK_GUI_ACTION:
+	case AHK_USER_MENU:
+		// Handling these messages here by reposting them to our thread relieves the one who posted them
+		// from ever having to do a MsgSleep(-1), which in turn allows it or its caller to acknowledge
+		// its message in a timely fashion, which in turn prevents undesirable side-effects when a
+		// g-labeled DateTime's drop-down is navigated via its arrow buttons (jumps ahead two months
+		// instead of one, infinite loop with mouse button stuck down on some systems, etc.). Another
+		// side-effect is the failure of a g-labeled MonthCal to be able to notify of date change when
+		// the user clicks the year and uses the spinner to select a new year.  This solves both of
+		// those issues and almost certainly others:
+		PostMessage(hWnd, iMsg, wParam, lParam);
+		// MsgSleep() is the critical step.  It forces our thread msg pump to handle the message now
+		// because otherwise it would probably become a CPU-maxing loop wherein the dialog or MonthCal
+		// msg pump that called us dispatches the above message right back to us, causing it to
+		// bounce around thousands of times until that other msg pump finally finishes.
+		MsgSleep(-1);
+		return 0;
 
 	case WM_CLOSE: // For now, take the same action as SC_CLOSE.
 		if (   !(pgui = GuiType::FindGui(hWnd))   )
@@ -6280,12 +6377,40 @@ void GuiType::Event(GuiIndexType aControlIndex, UINT aNotifyCode)
 		// almost certainly just passes back a pointer to its self-maintained struct).
 		if (control.output_var) // Above already confirmed it has a jump_to_label (or at least an implicit cancel).
 			ControlGetContents(*control.output_var, control);
+		// Both MonthCal's year spinner (when year is clicked on) and DateTime's drop-down calendar
+		// seem to start a new message pump.  This is one of the reason things were redesigned to
+		// avoid doing a MsgSleep(-1) after POST_AHK_GUI_ACTION() at the bottom of this function.
+		// See its comments for details.
 		break;
 
 	case GUI_CONTROL_MONTHCAL: // Caller has ensured that we're only called for MCN_SELCHANGE/MCN_SELECT notifications.
 		// Although the NMSELCHANGE notification struct contains the control's current date/time,
 		// it simplifies the code to fetch it again (performance is probably good since the control
 		// almost certainly just passes back a pointer to its self-maintained structs).
+		// v1.0.35.09 adds more useful g-label in AltSubmit mode by passing all events and indicating
+		// which ones they are.  This was done because the old way of launching the g-label only for
+		// MCN_SELECT wasn't very useful because the label was not launched when the user scrolled
+		// to a new month via the calendar's arrow buttons, even though doing so sets a new date inside
+		// the control.  The label was also not launched when a new year or month was chosen by clicking
+		// directly on the month or year.
+		switch (aNotifyCode)
+		{
+		case MCN_SELCHANGE:
+			break; // Leave gui_event at its default of "normal".
+		case MCN_SELECT:
+		case NM_RELEASEDCAPTURE:
+			if (!(control.attrib & GUI_CONTROL_ATTRIB_ALTSUBMIT))
+				return;
+			// Signal it to store the digit '1' or '2'.  Unlike slider -- which uses 0 so that the numbers
+			// match those defined in the API -- avoiding 0 seems best for this one since zero is equivalent
+			// and no conformance with API is desired.
+			gui_event = 49 + (aNotifyCode == NM_RELEASEDCAPTURE);
+			break;
+		default: // MCN_GETDAYSTATE or any others that are specifically undesired.
+			return;
+		}
+		// Since the above did a "break" vs. "return", the label will be launched.
+		// Update output-var if that is called for:
 		if (control.output_var) // Above already confirmed it has a jump_to_label (or at least an implicit cancel).
 			ControlGetContents(*control.output_var, control);
 		break;
@@ -6357,7 +6482,7 @@ void GuiType::Event(GuiIndexType aControlIndex, UINT aNotifyCode)
 	//     sequence of events that occurred in the GUI.  For example, if some events were re-queued
 	//     due to uninterruptibility, but other more recent ones were not (because the thread became
 	//     interruptible again at a critical moment), the more recent events would take effect before
-	//     the older ones!  Requeuing all events ensures that when they do take effect, they do so
+	//     the older ones.  Requeuing all events ensures that when they do take effect, they do so
 	//     in their original order.
 	//
 	// More explanation about Case #1 above.  Consider this order of events: 1) Current thread is
@@ -6366,7 +6491,7 @@ void GuiType::Event(GuiIndexType aControlIndex, UINT aNotifyCode)
 	// this happened due to automating the form with the Send command).  3) Due to uninterruptibility,
 	// this event would be re-queued to the thread's msg queue.  4) If the first thread ends before any
 	// call to MsgSleep(), we'll be back at the dialog's msg pump again, and thus the requeued message
-	// would be misrouted or discarded by its automatic dispatching.
+	// would be misrouted or discarded due to automatic dispatching.
 	//
 	// Info about why events are buffered when script is uninterruptible:
  	// It seems best to buffer GUI events that would trigger a new thread, rather than ignoring
@@ -6378,15 +6503,22 @@ void GuiType::Event(GuiIndexType aControlIndex, UINT aNotifyCode)
 	// other than our own is running (such as MsgBox or another dialog), the msg will stay
 	// buffered (the msg might bounce around fiercely if we kept posting it to our WindowProc,
 	// since any other msg pump would not have the buffering filter in place that ours has).
-
+	//
+	// UPDATE: I think some of the above might be obsolete now.  Consider this order of events:
+	// 1) Current thread is waiting for dialog, thus that dialog's msg pump is running. 2) User presses
+	// a button on GUI window. 3) We receive that message here and post it below. 4) When we exit,
+	// the dialog's msg pump receives the message and dispatches it to GuiWindowProc. 5) GuiWindowProc
+	// posts the message and immediately does a MsgSleep to force our msg pump to handle the message.
+	// 6) Everything is fine unless our msg pump leaves the message queued due to uninterruptibility,
+	// in which case the msg will bounce around, possibly maxing the CPU, until either the dialog's msg
+	// pump ends or the other thread becomes interruptible (which usually doesn't take more than 20 ms).
+	// If the script is uninterruptible due to some long operation such as sending keystrokes or trying
+	// to open the clipboard when it is locked, any dialog message pump underneath on the call stack
+	// shouldn't be an issue because the long-operation (clipboard/Send) does not return to that
+	// msg pump until the operation is complete, which in turn causes the message to stay queued
+	// rather than bouncing around.
 	POST_AHK_GUI_ACTION(mHwnd, (WPARAM)aControlIndex, (LPARAM)gui_event);
-	MsgSleep(-1);
-	// The above MsgSleep() is for the case when there is a dialog message pump nearer on the
-	// call stack than an instance of MsgSleep(), in which case the message would be dispatched
-	// to our GUI Window Proc, which doesn't know what to do with it and would just discard it.
-	// If the script happens to be uninterruptible, that shouldn't be a problem because it implies
-	// that there is an instance of MsgSleep() nearer on the call stack than any dialog's message
-	// pump.  Search for "call stack" to find more comments about this.
+	// MsgSleep() is not done because GuiWindowProc() takes care of it.  See its comments for why.
 }
 
 
@@ -6842,6 +6974,7 @@ void GuiType::ControlUpdateCurrentTab(GuiControlType &aTabControl, bool aFocusFi
 			//case GUI_CONTROL_DROPDOWNLIST:
 			//case GUI_CONTROL_COMBOBOX:
 			//case GUI_CONTROL_LISTBOX:
+			//case GUI_CONTROL_LISTVIEW:
 			//case GUI_CONTROL_EDIT:
 			//case GUI_CONTROL_DATETIME:
 			//case GUI_CONTROL_HOTKEY:

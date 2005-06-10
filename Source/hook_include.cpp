@@ -39,15 +39,6 @@ key is actually down at the moment of consideration.
 #endif
 
 
-// KEY_PHYS_IGNORE events must be mostly ignored because currently there is no way for a given
-// hook instance to detect if it sent the event or some other instance.  Therefore, to treat
-// such events as true physical events might cause infinite loops or other side-effects in
-// the instance that generated the event.  More review of this is needed if KEY_PHYS_IGNORE
-// events ever need to be treated as true physical events by the instances of the hook that
-// didn't originate them:
-#define IS_IGNORED (event.dwExtraInfo == KEY_IGNORE || event.dwExtraInfo == KEY_PHYS_IGNORE \
-	|| event.dwExtraInfo == KEY_IGNORE_ALL_EXCEPT_MODIFIER)
-
 
 #ifdef INCLUDE_KEYBD_HOOK
 // Used to help make a workaround for the way the keyboard driver generates physical
@@ -740,7 +731,7 @@ void UpdateKeyState(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool key_up,
 	// to happen and we didn't check for it, and endless loop of keyboard events
 	// might be caused due to the keybd events sent below.
 #ifdef INCLUDE_KEYBD_HOOK
-	if (vk == VK_NUMLOCK && !key_up && !IS_IGNORED)
+	if (vk == VK_NUMLOCK && !key_up && !IsIgnored(event.dwExtraInfo, vk, key_up))
 	{
 		// This seems to undo the faulty indicator light problem and toggle
 		// the key back to the state it was in prior to when the user pressed it.
@@ -1365,8 +1356,8 @@ LRESULT AllowIt(HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, vk_type vk, s
 	// numlock events due to the keybd events that SuppressThisKey sends.
 	// It's a little more readable and comfortable not to rely on short-circuit
 	// booleans and instead do these conditions as separate IF statements.
-	KBDLLHOOKSTRUCT &event = *(PKBDLLHOOKSTRUCT)lParam; // Needed by IS_IGNORED below.
-	bool is_ignored = IS_IGNORED;
+	KBDLLHOOKSTRUCT &event = *(PKBDLLHOOKSTRUCT)lParam; // Needed by IsIgnored() and SuppressThisKey below.
+	bool is_ignored = IsIgnored(event.dwExtraInfo, vk, key_up);
 	if (!is_ignored)
 	{
 		if (kvk[vk].pForceToggle) // Key is a toggleable key.
@@ -1651,7 +1642,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	// the hook, which would make become a non-doubleclick.
 	vk_type vk = 0;
 	short wheel_delta = 0;
-	bool key_up = true;  // Init to safest value.
+	bool key_up = true;  // Set default to safest value.
 	switch (wParam)
 	{
 		case WM_MOUSEWHEEL:
@@ -1686,7 +1677,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 
 #endif
 
-	bool is_ignored = IS_IGNORED;
+	bool is_ignored = IsIgnored(event.dwExtraInfo, vk, key_up);
 	// This is done for more than just convenience.  It solves problems that would otherwise arise
 	// due to the value of a global var such as KeyHistoryNext changing due to the reentrancy of
 	// this procedure.  For example, a call to KeyEvent() in here would alter the value of

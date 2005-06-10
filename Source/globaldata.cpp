@@ -48,6 +48,8 @@ WORD g_mouse_buttons_logical = 0;
 // not work as advertised, at least under WinXP.  Note that this array is also used by	),
 // so it's format should be the same as that returned from GetKeyboardState():
 BYTE g_PhysicalKeyState[VK_ARRAY_COUNT] = {0};
+bool g_IgnoreNextLControlDown = false;
+bool g_IgnoreNextLControlUp = false;
 
 int g_HotkeyModifierTimeout = 50;  // Reduced from 100, which was a little too large for fast typists.
 int g_ClipboardTimeout = 1000; // v1.0.31
