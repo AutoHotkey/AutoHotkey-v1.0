@@ -19,6 +19,7 @@ GNU General Public License for more details.
 #include "globaldata.h" // for a lot of things
 #include "application.h" // for MsgSleep()
 #include "window.h" // for SetForegroundWindowEx()
+#include "qmath.h" // for qmathLog()
 
 
 ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char *aParam4)
@@ -218,7 +219,23 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 		if (*aParam2)
 			AssignColor(aParam2, gui.mBackgroundColorWin, gui.mBackgroundBrushWin);
 		if (*aParam3)
+		{
 			AssignColor(aParam3, gui.mBackgroundColorCtl, gui.mBackgroundBrushCtl);
+			// As documented, the following is not done.  Primary reasons:
+			// 1) Allows any custom color that was explicitly specified via "Gui, Add, ListView, BackgroundGreen"
+			//    to stay in effect rather than being overridden by this change.  You could argue that this
+			//    could be detected by asking the control its background color and if it matches the previous
+			//    mBackgroundColorCtl (which might be CLR_DEFAULT?), it's 99% likely it was not an
+			//    individual/explicit custom color and thus should be changed here.  But that would be even
+			//    more complexity so it seems better to keep it simple.
+			// 2) Reduce code size.
+			//for (GuiIndexType u = 0; u < gui.mControlCount; ++u)
+			//	if (gui.mControl[u].type == GUI_CONTROL_LISTVIEW && ListView_GetTextBkColor(..) != prev_bk_color_ctl)
+			//	{
+			//		ListView_SetTextBkColor(gui.mControl[u].hwnd, gui.mBackgroundColorCtl);
+			//		ListView_SetBkColor(gui.mControl[u].hwnd, gui.mBackgroundColorCtl);
+			//	}
+		}
 		if (IsWindowVisible(gui.mHwnd))
 			// Force the window to repaint so that colors take effect immediately.
 			// UpdateWindow() isn't enough sometimes/always, so do something more aggressive:
@@ -887,11 +904,19 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 		if (USES_FONT_AND_TEXT_COLOR(control.type)) // Must check this to avoid trashing union_hbitmap.
 		{
 			control.union_color = gui.mCurrentColor;
-			// Since message MCM_SETCOLOR != DTM_SETMCCOLOR, can't combine:
-			if (control.type == GUI_CONTROL_DATETIME) // Hopefully below will revert to default if color is CLR_DEFAULT.
-				DateTime_SetMonthCalColor(control.hwnd, MCSC_TEXT, control.union_color);
-			else if (control.type == GUI_CONTROL_MONTHCAL) // Hopefully below will revert to default if color is CLR_DEFAULT.
-				MonthCal_SetColor(control.hwnd, MCSC_TEXT, control.union_color);
+			switch (control.type)
+			{
+			case GUI_CONTROL_LISTVIEW:
+				ListView_SetTextColor(control.hwnd, control.union_color);
+				break;
+			case GUI_CONTROL_DATETIME:
+				// Since message MCM_SETCOLOR != DTM_SETMCCOLOR, can't combine the two types:
+				DateTime_SetMonthCalColor(control.hwnd, MCSC_TEXT, control.union_color); // Hopefully below will revert to default if color is CLR_DEFAULT.
+				break;
+			case GUI_CONTROL_MONTHCAL:
+				MonthCal_SetColor(control.hwnd, MCSC_TEXT, control.union_color); // Hopefully below will revert to default if color is CLR_DEFAULT.
+				break;
+			}
 		}
 		InvalidateRect(control.hwnd, NULL, TRUE); // Required for refresh, at least for edit controls, probably some others.
 		// Note: The DateTime_SetMonthCalFont() macro is not used for GUI_CONTROL_DATETIME because
@@ -1252,7 +1277,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 // Caller must have ensured that mHwnd is non-NULL (i.e. that the parent window already exists).
 {
 	// Must do these checks even for GUI_CONTROL_ROW because although ROW doesn't consume a slot,
-	// a placeholder in the array is required for code-simplification reasons.
+	// a placeholder in the array is required for code-simplification reasons:
 	#define TOO_MANY_CONTROLS "Too many controls." ERR_ABORT // Short msg since so rare.
 	if (mControlCount >= MAX_CONTROLS_PER_GUI)
 		return g_script.ScriptError(TOO_MANY_CONTROLS);
@@ -1380,7 +1405,15 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		opt.exstyle_add |= WS_EX_CLIENTEDGE;
 		break;
 	case GUI_CONTROL_LISTVIEW:
-		opt.style_add |= WS_TABSTOP|LVS_REPORT;
+		opt.style_add |= WS_TABSTOP|LVS_REPORT|LVS_SHOWSELALWAYS; // WS_THICKFRAME allows the control itself to be drag-resized.
+		opt.exstyle_add |= WS_EX_CLIENTEDGE; // WS_EX_STATICEDGE/WS_EX_WINDOWEDGE/WS_BORDER(non-ex) don't look as nice. WS_EX_DLGMODALFRAME is a weird but interesting effect.
+		// The ListView extended styles are actually an entirely separate class of styles that exist
+		// separately from ExStyles.  This explains why Get/SetWindowLong doesn't work on them.
+		// But keep in mind that some of the normal/classic extended styles can still be applied
+		// to a ListView via Get/SetWindowLong.
+		// The following require ComCtl32.dll 4.70+ and thus will have no effect in Win 95/NT
+		// unless they have MSIE 3.x or similar patch installed: LVS_EX_FULLROWSELECT and LVS_EX_HEADERDRAGDROP.
+		opt.listview_style |= LVS_EX_FULLROWSELECT|LVS_EX_HEADERDRAGDROP;
 		break;
 	case GUI_CONTROL_EDIT:
 		opt.style_add |= WS_TABSTOP;
@@ -1437,9 +1470,11 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 	if (!ControlParseOptions(aOptions, opt, control))
 		return FAIL;  // It already displayed the error.
 
-	if (aControlType == GUI_CONTROL_ROW) // Get this out of the way completely so that nothing further below needs to handle it.
+	// Get GUI_CONTROL_ROW out of the way completely so that nothing further below needs to handle it.
+	// At the very least, must return prior to doing any update of the window's attributes such as mMaxExtentRight.
+	if (aControlType == GUI_CONTROL_ROW)
 	{
-		ControlAddContents(*mCurrentListView, aText, INT_MIN); // INT_MIN is a special flag that indicates that a row is being added.
+		ControlAddContents(*mCurrentListView, aText, INT_MIN, &opt); // INT_MIN is a special flag that indicates that a row is being added.
 		return OK;
 	}
 
@@ -1615,7 +1650,8 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 	// Set default for all control types.  GUI_CONTROL_MONTHCAL must be set up here because
 	// an explictly specified row-count must also avoid calculating height from row count
 	// in the standard way.
-	bool calc_control_height_from_row_count = (aControlType != GUI_CONTROL_MONTHCAL);
+	bool calc_height_later = aControlType == GUI_CONTROL_MONTHCAL || aControlType == GUI_CONTROL_LISTVIEW;
+	bool calc_control_height_from_row_count = !calc_height_later; // Set default.
 
 	if (opt.height == COORD_UNSPECIFIED && opt.row_count <= 0)
 	{
@@ -1745,7 +1781,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		{
 		case GUI_CONTROL_GROUPBOX:
 		case GUI_CONTROL_DROPDOWNLIST:
-		case GUI_CONTROL_COMBOBOX:
+		case GUI_CONTROL_COMBOBOX: // LISTVIEW has custom handling later on, so isn't listed here.
 			++opt.row_count;
 			break;
 		}
@@ -1762,7 +1798,6 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			case GUI_CONTROL_DROPDOWNLIST:
 			case GUI_CONTROL_COMBOBOX:
 			case GUI_CONTROL_LISTBOX:
-			case GUI_CONTROL_LISTVIEW:
 			case GUI_CONTROL_EDIT:
 			case GUI_CONTROL_DATETIME:
 			case GUI_CONTROL_HOTKEY:
@@ -1804,8 +1839,9 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			// shouldn't matter (within reason) since calc_control_height_from_row_count is telling us this type of
 			// control will not obey the height anyway.  Update: It seems better to use a small constant
 			// value to help catch bugs while still allowing the control to be created:
-			if (aControlType != GUI_CONTROL_MONTHCAL) // MONTHCAL must keep its "unspecified" flag.
-				opt.height = 30;  // formerly: (int)(13 * opt.row_count);
+			if (!calc_height_later)
+				opt.height = 30;
+			//else MONTHCAL and others must keep their "unspecified height" value for later detection.
 	}
 
 	bool control_width_was_set_by_contents = false;
@@ -1913,12 +1949,13 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		//case GUI_CONTROL_EDIT:          It is included, but only if it has default text inside it.
 		//case GUI_CONTROL_TAB:           Seems too rare than anyone would want its width determined by tab-count.
 
+		//case GUI_CONTROL_LISTVIEW:      Has custom handling later below.
+		//case GUI_CONTROL_MONTHCAL:      Same.
+
 		//case GUI_CONTROL_DROPDOWNLIST:  These last ones are given (later below) a standard width based on font size.
 		//case GUI_CONTROL_COMBOBOX:      In addition, their height has already been determined further above.
 		//case GUI_CONTROL_LISTBOX:
-		//case GUI_CONTROL_LISTVIEW:
 		//case GUI_CONTROL_DATETIME:
-		//case GUI_CONTROL_MONTHCAL:
 		//case GUI_CONTROL_HOTKEY:
 		//case GUI_CONTROL_UPDOWN:
 		//case GUI_CONTROL_SLIDER:
@@ -2029,7 +2066,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 	//
 	//////////////////////
 	bool do_strip_theme = !opt.use_theme;   // Set defaults.
-	bool retrieve_dimensions = false;   // "
+	bool retrieve_dimensions = false;       //
 	int item_height, min_list_height;
 	RECT rect;
 	char *malloc_buf;
@@ -2349,10 +2386,33 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		break;
 
 	case GUI_CONTROL_LISTVIEW:
-		if (control.hwnd = CreateWindowEx(exstyle, WC_LISTVIEW, "", style
-			, opt.x, opt.y, opt.width, opt.height, mHwnd, control_id, g_hInstance, NULL))
+		if (control.hwnd = CreateWindowEx(exstyle, WC_LISTVIEW, "", style, opt.x, opt.y // exstyle does apply to ListViews.
+			, opt.width, opt.height == COORD_UNSPECIFIED ? 200 : opt.height, mHwnd, control_id, g_hInstance, NULL))
 		{
 			mCurrentListView = &control;
+			if (opt.listview_style) // This is a third set of styles that exist in addition to normal & extended.
+				ListView_SetExtendedListViewStyle(control.hwnd, opt.listview_style); // No return value.
+			opt.color_changed = (control.union_color != CLR_DEFAULT); // In case a custom font color is in effect with an explicit "cBlue" in control's options.
+			if (opt.color_bk == CLR_DEFAULT) // Explicitly specified as "default" since the value isn't at its default of "invalid".
+				opt.color_bk = CLR_INVALID; // Tell ControlSetListViewOptions "no color change requested".
+			else if (opt.color_bk == CLR_INVALID && mBackgroundColorCtl != CLR_DEFAULT) // Bk color was not explicitly specified in options.
+				opt.color_bk = mBackgroundColorCtl; // Use window's global custom, control background.
+			//else leave it as invalid so that ControlSetListViewOptions() won't bother changing it.
+			ControlSetListViewOptions(control, opt);
+			if (opt.height == COORD_UNSPECIFIED) // Adjust the control's size to fit opt.row_count rows.
+			{
+				GUI_SETFONT  // Required before asking it for a height estimate.
+				// The following formula has been tested on XP with the point sizes 8, 9, 10, 12, 14, and 18 for:
+				// Verdana
+				// Courier New
+				// Gui Default Font
+				// Times New Roman
+				opt.height = 4 + HIWORD(ListView_ApproximateViewRect(control.hwnd, -1, -1, (WPARAM)opt.row_count - 1));
+				// Above: It seems best to exclude any horiz. scroll bar from consideration, even though it will
+				// block the last row if bar is present.  The bar can be dismissed by manually dragging the
+				// column dividers or using the GuiControl auto-size methods.
+				MoveWindow(control.hwnd, opt.x, opt.y, opt.width, opt.height, TRUE); // Repaint should be smart enough not to do it if window is hidden.
+			}
 		}
 		break;
 
@@ -2681,6 +2741,9 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		if (control.hwnd = CreateWindowEx(exstyle, PROGRESS_CLASS, "", style
 			, opt.x, opt.y, opt.width, opt.height, mHwnd, control_id, g_hInstance, NULL))
 		{
+			// Progress bars don't default to mBackgroundColorCtl for their background color because it
+			// would be undesired by the user 99% of the time (it usually would look bad since the bar's
+			// bk-color almost always matches that of its parent window).
 			ControlSetProgressOptions(control, opt, style); // Fix for v1.0.27.01: This must be done prior to the below.
 			// This has been confirmed though testing, even when the range is dynamically changed
 			// after the control is created to something that no longer includes the bar's current
@@ -2782,16 +2845,16 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		|| (control.type == GUI_CONTROL_GROUPBOX && (control.attrib & GUI_CONTROL_ATTRIB_BACKGROUND_TRANS))   ) // Tested and found to be necessary.)
 		MySetWindowTheme(control.hwnd, L"", L"");
 
-	///////////////////////////////////////////////////
-	// Add any content to the control and set its font.
-	///////////////////////////////////////////////////
-	ControlAddContents(control, aText, opt.choice);
-
 	// Must set the font even if mCurrentFontIndex > 0, otherwise the bold SYSTEM_FONT will be used.
 	// Note: Neither the slider's buddies nor itself are affected by the font setting, so it's not applied.
 	// However, the buddies are affected at the time they are created if they are a type that uses a font.
 	if (!font_was_set && uses_font_and_text_color)
 		GUI_SETFONT
+
+	///////////////////////////////////////////////////
+	// Add any content to the control and set its font.
+	///////////////////////////////////////////////////
+	ControlAddContents(control, aText, opt.choice); // Must be done after font-set above so that ListView columns can be auto-sized to fit their text.
 
 	if (control.type == GUI_CONTROL_TAB && opt.row_count > 0)
 	{
@@ -3159,8 +3222,7 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 			if (adding) aControl.attrib |= GUI_CONTROL_ATTRIB_ALTSUBMIT; else aControl.attrib &= ~GUI_CONTROL_ATTRIB_ALTSUBMIT;
 
 		// Content of control (these are currently only effective if the control is being newly created):
-		else if ((aControl.type == GUI_CONTROL_CHECKBOX || aControl.type == GUI_CONTROL_RADIO)
-			&& !strnicmp(next_option, "Checked", 7))
+		else if (!strnicmp(next_option, "Checked", 7)) // Caller knows to ignore if inapplicable. Applicable for ListView too.
 		{
 			// As of v1.0.26, Checked/Hidden/Disabled can be followed by an optional 1/0/-1 so that
 			// there is a way for a script to set the starting state by reading from an INI or registry
@@ -3171,16 +3233,21 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 			// else
 			//    Enable =
 			// Gui Add, checkbox, %Enable%, My checkbox.
-			if (next_option[7]) // There's more after the word, namely a 1, 0, or -1.
-			{
-				aOpt.checked = ATOI(next_option + 7);
-				if (aOpt.checked == -1)
-					aOpt.checked = BST_INDETERMINATE;
-			}
+			if (aControl.type == GUI_CONTROL_LISTVIEW)
+				if (adding) aOpt.listview_style |= LVS_EX_CHECKBOXES; else aOpt.listview_style &= ~LVS_EX_CHECKBOXES;
 			else
-				if (adding) aOpt.checked = BST_CHECKED; else aOpt.checked = BST_UNCHECKED;
+			{
+				if (next_option[7]) // There's more after the word, namely a 1, 0, or -1.
+				{
+					aOpt.checked = ATOI(next_option + 7);
+					if (aOpt.checked == -1)
+						aOpt.checked = BST_INDETERMINATE;
+				}
+				else
+					if (adding) aOpt.checked = BST_CHECKED; else aOpt.checked = BST_UNCHECKED;
+			}
 		}
-		else if (aControl.type == GUI_CONTROL_CHECKBOX && !stricmp(next_option, "CheckedGray")) // Radios can't have the 3rd/gray state.
+		else if (!stricmp(next_option, "CheckedGray")) // Radios can't have the 3rd/gray state.
 			if (adding) aOpt.checked = BST_INDETERMINATE; else aOpt.checked = BST_UNCHECKED;
 		else if (!strnicmp(next_option, "Choose", 6)) // Caller should ignore aOpt.choice if it isn't applicable for this control type.
 		{
@@ -3189,17 +3256,20 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 			if (adding)
 			{
 				next_option += 6;
-				if (aControl.type == GUI_CONTROL_DATETIME)
+				switch (aControl.type)
 				{
+				case GUI_CONTROL_ROW: // Listed first for perf.
+					aOpt.choice = (*next_option != '0');  // Allows explicit "Choose0" so that something like "Choose%State%" can be used.
+					break;
+				case GUI_CONTROL_DATETIME:
 					if (!stricmp(next_option, "None"))
 						aOpt.choice = 2; // Special flag value to indicate "none".
 					else // See if it's a valid date-time.
 						if (YYYYMMDDToSystemTime(next_option, aOpt.sys_time[0], true)) // Date string is valid.
 							aOpt.choice = 1; // Overwrite 0 to flag sys_time as both present and valid.
 						//else leave choice at its 0 default to indicate no valid Choose option was present.
-				}
-				else if (aControl.type == GUI_CONTROL_MONTHCAL)
-				{
+					break;
+				case GUI_CONTROL_MONTHCAL:
 					aOpt.gdtr = YYYYMMDDToSystemTime2(next_option, aOpt.sys_time);
 					// For code simplicity, both min and max must be present to enable a selected-range.
 					if (aOpt.gdtr == (GDTR_MIN | GDTR_MAX))
@@ -3207,9 +3277,8 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 					//else never remove the style since it's valid to create a range-capable control via
 					// "Multi" that has only a single date selected (or none).  Also, if the control already
 					// exists, MSDN says that MCS_MULTISELECT cannot be added or removed.
-				}
-				else
-				{
+					break;
+				default:
 					aOpt.choice = ATOI(next_option);
 					if (aOpt.choice < 1) // Invalid: number should be 1 or greater.
 						aOpt.choice = 0; // Flag it as invalid.
@@ -3318,24 +3387,24 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 		else if (!strnicmp(next_option, "Background", 10))
 		{
 			next_option += 10;  // To help maintainability, point it to the optional suffix here.
-			if (aControl.type == GUI_CONTROL_PROGRESS)
+			if (aControl.type == GUI_CONTROL_PROGRESS || aControl.type == GUI_CONTROL_LISTVIEW)
 			{
 				// Note that GUI_CONTROL_ATTRIB_BACKGROUND_DEFAULT and GUI_CONTROL_ATTRIB_BACKGROUND_TRANS
-				// don't apply to Progress controls because the window proc never receives CTLCOLOR messages
-				// for them.
+				// don't apply to Progress or ListView controls because the window proc never receives
+				// CTLCOLOR messages for them.
 				if (adding)
 				{
-					aOpt.progress_color_bk = ColorNameToBGR(next_option);
-					if (aOpt.progress_color_bk == CLR_NONE) // A matching color name was not found, so assume it's in hex format.
+					aOpt.color_bk = ColorNameToBGR(next_option);
+					if (aOpt.color_bk == CLR_NONE) // A matching color name was not found, so assume it's in hex format.
 						// It seems strtol() automatically handles the optional leading "0x" if present:
-						aOpt.progress_color_bk = rgb_to_bgr(strtol(next_option, NULL, 16));
+						aOpt.color_bk = rgb_to_bgr(strtol(next_option, NULL, 16));
 						// if next_option did not contain something hex-numeric, black (0x00) will be assumed,
 						// which seems okay given how rare such a problem would be.
 				}
 				else // Removing
-					aOpt.progress_color_bk = CLR_DEFAULT;
+					aOpt.color_bk = CLR_DEFAULT;
 			}
-			else
+			else // Other control types don't yet support custom colors other than TRANS.
 			{
 				if (adding)
 				{
@@ -3409,6 +3478,9 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 			case GUI_CONTROL_LISTBOX:
 				if (adding) aOpt.style_add |= LBS_EXTENDEDSEL; else aOpt.style_remove |= LBS_EXTENDEDSEL;
 				break;
+			case GUI_CONTROL_LISTVIEW:
+				if (adding) aOpt.style_remove |= LVS_SINGLESEL; else aOpt.style_add |= LVS_SINGLESEL;
+				break;
 			case GUI_CONTROL_MONTHCAL:
 				if (adding) aOpt.style_add |= MCS_MULTISELECT; else aOpt.style_remove |= MCS_MULTISELECT;
 				break;
@@ -3470,15 +3542,32 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 				aOpt.limit = INT_MIN; // Signal it to remove the limit.
 		}
 
-		// Combo/DropDownList/ListBox
+		// Combo/DropDownList/ListBox/ListView
 		else if (aControl.type == GUI_CONTROL_COMBOBOX && !stricmp(next_option, "Simple")) // DDL is not equipped to handle this style.
 			if (adding) aOpt.style_add |= CBS_SIMPLE; else aOpt.style_remove |= CBS_SIMPLE;
 		else if (!stricmp(next_option, "Sort"))
 		{
-			if (aControl.type == GUI_CONTROL_LISTBOX)
+			switch(aControl.type)
+			{
+			case GUI_CONTROL_LISTBOX:
 				if (adding) aOpt.style_add |= LBS_SORT; else aOpt.style_remove |= LBS_SORT;
-			else if (aControl.type == GUI_CONTROL_COMBOBOX || aControl.type == GUI_CONTROL_DROPDOWNLIST)
+				break;
+			case GUI_CONTROL_LISTVIEW: // LVS_SORTDESCENDING is not a named style due to rarity of use.
+				if (adding) aOpt.style_add |= LVS_SORTASCENDING; else aOpt.style_remove |= LVS_SORTASCENDING;
+				break;
+			case GUI_CONTROL_DROPDOWNLIST:
+			case GUI_CONTROL_COMBOBOX:
 				if (adding) aOpt.style_add |= CBS_SORT; else aOpt.style_remove |= CBS_SORT;
+				break;
+			}
+		}
+		else if (aControl.type == GUI_CONTROL_LISTVIEW && !strnicmp(next_option, "AutoCol", 7) && aControl.hwnd)
+		{
+			// Control must exist.  Removal (!adding) is not supported (it has the same effect as adding).
+			int mode = (toupper(next_option[7]) == 'H') ? LVSCW_AUTOSIZE_USEHEADER : LVSCW_AUTOSIZE;
+			for (int i = 0;; ++i)
+				if (!ListView_SetColumnWidth(aControl.hwnd, i, mode)) // Failure means last column has already been processed.
+					break;
 		}
 
 		// UpDown
@@ -4414,21 +4503,34 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 			//ELSE don't change the value of style_change_ok because we want it to retain the value set by
 			// the GWL_STYLE change above; i.e. a partial success on either style or exstyle counts as a full
 			// success.
-			if (aControl.type == GUI_CONTROL_LISTVIEW)
+			SetLastError(0); // Prior to SetWindowLong(), as recommended by MSDN.
+			if (SetWindowLong(aControl.hwnd, GWL_EXSTYLE, new_exstyle) || !GetLastError()) // This is the precise way to detect success according to MSDN.
 			{
-				ListView_SetExtendedListViewStyle(aControl.hwnd, new_exstyle); // Has no return value.
+				// Even if it indicated success, sometimes it failed anyway.  Find out for sure:
 				if (GetWindowLong(aControl.hwnd, GWL_EXSTYLE) != current_exstyle)
 					style_change_ok = true; // Even a partial change counts as a success.
 			}
-			else
+		}
+
+		if (aControl.type == GUI_CONTROL_LISTVIEW)
+		{
+			// These ListView "extended styles" exist entirely separate from normal extended styles.
+			// In other words, a ListView may have three types of styles: Normal, Extended, and its
+			// own set of LV Extended styles.
+			DWORD current_lv_style = ListView_GetExtendedListViewStyle(aControl.hwnd);
+			if (current_exstyle != aOpt.listview_style)
 			{
-				SetLastError(0); // Prior to SetWindowLong(), as recommended by MSDN.
-				if (SetWindowLong(aControl.hwnd, GWL_EXSTYLE, new_exstyle) || !GetLastError()) // This is the precise way to detect success according to MSDN.
+				if (!style_needed_changing)
 				{
-					// Even if it indicated success, sometimes it failed anyway.  Find out for sure:
-					if (GetWindowLong(aControl.hwnd, GWL_EXSTYLE) != current_exstyle)
-						style_change_ok = true; // Even a partial change counts as a success.
+					style_needed_changing = true; // Either style, exstyle, or lv_exstyle is changing.
+					style_change_ok = false; // Starting assumption.
 				}
+				//ELSE don't change the value of style_change_ok because we want it to retain the value set by
+				// the GWL_STYLE or EXSTYLE change above; i.e. a partial success on either style or exstyle
+				// counts as a full success.
+				ListView_SetExtendedListViewStyle(aControl.hwnd, aOpt.listview_style); // Has no return value.
+				if (ListView_GetExtendedListViewStyle(aControl.hwnd) != current_exstyle)
+					style_change_ok = true; // Even a partial change counts as a success.
 			}
 		}
 
@@ -4448,6 +4550,9 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 			ControlSetSliderOptions(aControl, aOpt);
 			if (aOpt.style_remove & TBS_TOOLTIPS)
 				SendMessage(aControl.hwnd, TBM_SETTOOLTIPS, NULL, 0); // i.e. removing the TBS_TOOLTIPS style is not enough.
+			break;
+		case GUI_CONTROL_LISTVIEW:
+			ControlSetListViewOptions(aControl, aOpt);
 			break;
 		case GUI_CONTROL_PROGRESS:
 			ControlSetProgressOptions(aControl, aOpt, new_style);
@@ -4487,20 +4592,23 @@ void GuiType::ControlInitOptions(GuiControlOptionsType &aOpt, GuiControlType &aC
 // Not done as class to avoid code-size overhead of initializer list, etc.
 {
 	ZeroMemory(&aOpt, sizeof(GuiControlOptionsType));
+	if (aControl.type == GUI_CONTROL_LISTVIEW && aControl.hwnd) // Since this doesn't have the _add and _remove components, must initialize.
+		aOpt.listview_style = ListView_GetExtendedListViewStyle(aControl.hwnd);
 	aOpt.x = aOpt.y = aOpt.width = aOpt.height = COORD_UNSPECIFIED;
-	aOpt.progress_color_bk = aControl.hwnd ? CLR_INVALID : CLR_DEFAULT; // If control doesn't yet exist, default it to CLR_DEFAULT;
+	aOpt.color_bk = CLR_INVALID;
 	// Above: If it stays unaltered, CLR_INVALID means "leave color as it is".  This is for
-	// use with "GuiControl, +option" so that ControlSetProgressOptions() knows that
+	// use with "GuiControl, +option" so that ControlSetProgressOptions() and others know that
 	// the "+/-Background" item was not among the options in the list.  The reason this is needed
 	// for background color but not bar color is that bar_color is stored as a control attribute,
-	// but to save memory, background color is not.  In addition, there is no good way to ask the
-	// control what its background color currently is.
+	// but to save memory, background color is not.  In addition, there is no good way to ask a
+	// progress control what its background color currently is.
 }
 
 
 
-void GuiType::ControlAddContents(GuiControlType &aControl, char *aContent, int aChoice)
+void GuiType::ControlAddContents(GuiControlType &aControl, char *aContent, int aChoice, GuiControlOptionsType *aOpt)
 // If INT_MIN is specified for aChoice, aControl should be the ListView to which a new row is being added.
+// In that case, aOpt should be non-NULL.
 // Caller must ensure that aContent is a writable memory area, since this function temporarily
 // alters the string.
 {
@@ -4514,7 +4622,7 @@ void GuiType::ControlAddContents(GuiControlType &aControl, char *aContent, int a
 	{
 	case GUI_CONTROL_ROW: // Listed first for performance.
 	case GUI_CONTROL_LISTVIEW:
-	case GUI_CONTROL_TAB:
+	case GUI_CONTROL_TAB: // These cases must be listed anyway to do a break vs. return, so might as well init conditionally rather than unconditionally.
 		msg_add = 0;
 		msg_select = 0;
 		break;
@@ -4544,7 +4652,7 @@ void GuiType::ControlAddContents(GuiControlType &aControl, char *aContent, int a
 
 	// For ListView:
 	LVCOLUMN lvc;
-	lvc.mask = LVCF_TEXT | LVCF_WIDTH; // Simpler just to init unconditionally rather than checking control type.
+	lvc.mask = LVCF_TEXT; // Simpler just to init unconditionally rather than checking control type.
 	LVITEM lvi;
 	lvi.mask = LVIF_TEXT | LVIF_STATE;
 	lvi.state = 0;
@@ -4576,6 +4684,12 @@ void GuiType::ControlAddContents(GuiControlType &aControl, char *aContent, int a
 			lvi.pszText = this_field;
 			if (this_field == aContent) // First column is the item, subsequent columns are the item's sub-items.
 			{
+				if (aOpt->choice)
+				{
+					lvi.mask |= LVIF_STATE;
+					lvi.stateMask = LVIS_SELECTED;
+					lvi.state = LVIS_SELECTED;
+				}
 				lvi.iItem = INT_MAX; // Signal it to insert at the end of all current items.
 				lvi.iSubItem = 0; // Must be zero to indicate this is an item vs. sub-item.
 				lvi.iItem = ListView_InsertItem(aControl.hwnd, &lvi); // item_index is used later below as an indicator of success.
@@ -4583,6 +4697,7 @@ void GuiType::ControlAddContents(GuiControlType &aControl, char *aContent, int a
 					return;
 				//else lvi.iItem now contains the proper value for all subseqent iterations (which add the other columns as subitems).
 				lvi.iSubItem = 1; // Init for first of the subitems (if any).  This index is one-based not zero-based.
+				lvi.mask &= ~LVIF_STATE; // State member should be ignored for the row's sub-items.
 			}
 			else // Columns after the first are the subitems of anchored to the item (the leftmost column).
 			{
@@ -4605,7 +4720,6 @@ void GuiType::ControlAddContents(GuiControlType &aControl, char *aContent, int a
 			break;
 		case GUI_CONTROL_LISTVIEW:
 			lvc.pszText = this_field;
-			lvc.cx = ListView_GetStringWidth(aControl.hwnd, this_field) + 15;  // +12 is not enough.
 			item_index = ListView_InsertColumn(aControl.hwnd, requested_index, &lvc);
 			if (item_index != -1) // item_index is used later below as an indicator of success.
 				++requested_index;
@@ -4639,6 +4753,12 @@ void GuiType::ControlAddContents(GuiControlType &aControl, char *aContent, int a
 		}
 		this_field = next_field;
 	} // for()
+
+	// This method of auto-sizing each column to fit its text works much better than setting
+	// lvc.cx to ListView_GetStringWidth upon creation of the column:
+	if (control_type == GUI_CONTROL_LISTVIEW)
+		for (int i = 0; i < requested_index + 1; ++i) // Auto-size each column.
+			ListView_SetColumnWidth(aControl.hwnd, i, LVSCW_AUTOSIZE_USEHEADER);
 
 	// Have aChoice take precedence over any double-piped item(s) that appeared in the list:
 	if (aChoice <= 0)
@@ -5184,9 +5304,10 @@ ResultType GuiType::Submit(bool aHideIt)
 
 ResultType GuiType::ControlGetContents(Var &aOutputVar, GuiControlType &aControl, char *aMode)
 {
-	char buf[1024]; // For various uses.
+	char *cp, *contents, buf[1024]; // For various uses.
 	bool submit_mode = !stricmp(aMode, "Submit");
 	int pos;
+	LRESULT item_count, sel_count, index, i;  // LRESULT is a signed type (same as int/long).
 	SYSTEMTIME st[2];
 
 	// First handle any control types that behave the same regardless of aMode:
@@ -5201,18 +5322,83 @@ ResultType GuiType::ControlGetContents(Var &aOutputVar, GuiControlType &aControl
 		else // 16-bit.  Must cast to short to omit the error portion (see comment above).
 			pos = (short)SendMessage(aControl.hwnd, UDM_GETPOS, 0, 0);
 		return aOutputVar.Assign(pos);
+
 	case GUI_CONTROL_SLIDER: // Doesn't seem useful to ever retrieve the control's actual caption, which is invisible.
 		return aOutputVar.Assign(ControlInvertSliderIfNeeded(aControl, (int)SendMessage(aControl.hwnd, TBM_GETPOS, 0, 0)));
 		// Above assigns it as a signed value because testing shows a slider can have part or all of its
 		// available range consist of negative values.  32-bit values are supported if the range is set
 		// with the right messages.
+
 	case GUI_CONTROL_PROGRESS:
 		return submit_mode ? OK : aOutputVar.Assign((int)SendMessage(aControl.hwnd, PBM_GETPOS, 0, 0));
 		// Above does not save to control during submit mode, since progress bars do not receive
 		// user input so it seems wasteful 99% of the time.  "GuiControlGet, MyProgress" can be used instead.
+
+	case GUI_CONTROL_LISTVIEW:
+		bool has_checkboxes;
+		// Fetch LVS_EX_CHECKBOXES dynamically because testing shows it is possible to effectively change
+		// it via "GuiControl +/-Checked".
+		if (has_checkboxes = ListView_GetExtendedListViewStyle(aControl.hwnd) & LVS_EX_CHECKBOXES) // Assign.
+		{
+			// Since a ListView can have hundreds of thousands of items in it, it seems best to make
+			// two passes through the list rather than using malloc+realloc.
+			item_count = ListView_GetItemCount(aControl.hwnd);
+			if (item_count <= 0)
+				return aOutputVar.Assign();
+			for (sel_count = 0, i = 0; i < item_count; ++i)
+				if (ListView_GetCheckState(aControl.hwnd, i)) // Item's box is checked.
+					++sel_count;
+		}
+		else
+			sel_count = ListView_GetSelectedCount(aControl.hwnd);
+		if (sel_count <= 0) // ListView_GetSelectedCount probably never returns negative, but just to be safe.
+			return aOutputVar.Assign();
+		// Size the variable for worst-case size:
+		// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
+		// this call will set up the clipboard for writing.
+		if (aOutputVar.Assign(NULL, (VarSizeType)(sel_count * ((int)qmathLog(sel_count) + 2))) != OK) // +2: 1 for each delimiter and 1 to compensation for truncation of Log().
+			return FAIL;  // It already displayed the error.
+		cp = contents = aOutputVar.Contents(); // Init for both loops.
+		if (has_checkboxes)
+		{
+			// Since app. is not multi-threaded, it should be impossible in the absence of MsgSleep for the
+			// actual number of boxes checked to vary from the estimate calculated above.  Thus, no need to
+			// check for buffer overflow.
+			bool first_item_has_been_written = false;
+			for (i = 0; i < item_count; ++i)
+			{
+				// There doesn't appear to be any higher performing way to find the set of checked items:
+				if (ListView_GetCheckState(aControl.hwnd, i)) // Item's box is checked.
+				{
+					if (first_item_has_been_written) // Serves to avoid a pipe after the very last item.
+						*cp++ = '|';
+					else
+						first_item_has_been_written = true;
+					_itoa((int)i + 1, cp, 10); // +1 to convert from zero to one-based.  Never stored in hex format because memory sizing above didn't allow enough room.
+					cp += strlen(cp);  // Point it to the terminator in preparation for the next write.
+				}
+			}
+		}
+		else
+		{
+			for (index = -1, i = 0; i < sel_count; ++i) // Explicitly restrict to sel_count in case it finds more items than expected, which would be an mem overflow.
+			{
+				index = ListView_GetNextItem(aControl.hwnd, index, LVNI_SELECTED);
+				if (index == -1) // No next item, which should never happen if count was accurate.
+					break;
+				if (i) // Serves to avoid a pipe after the very last item.
+					*cp++ = '|';
+				_itoa((int)index + 1, cp, 10); // +1 to convert from zero to one-based.  Never stored in hex format because memory sizing above didn't allow enough room.
+				cp += strlen(cp);  // Point it to the terminator in preparation for the next write.
+			}
+		}
+		aOutputVar.Length() = (VarSizeType)(cp - contents);  // Update it to the actual length, which can vary from the estimate.
+		return aOutputVar.Close(); // In case it's the clipboard.
+
 	case GUI_CONTROL_DATETIME:
 		return aOutputVar.Assign(DateTime_GetSystemtime(aControl.hwnd, st) == GDT_VALID
 			? SystemTimeToYYYYMMDD(buf, st[0]) : ""); // Blank string whenever GDT_NONE/GDT_ERROR.
+
 	case GUI_CONTROL_MONTHCAL:
 		if (GetWindowLong(aControl.hwnd, GWL_STYLE) & MCS_MULTISELECT)
 		{
@@ -5232,6 +5418,7 @@ ResultType GuiType::ControlGetContents(Var &aOutputVar, GuiControlType &aControl
 			MonthCal_GetCurSel(aControl.hwnd, st);
 			return aOutputVar.Assign(SystemTimeToYYYYMMDD(buf, st[0]), 8); // Limit to 8 chars to omit the time portion, which is unreliable (not relevant anyway).
 		}
+
 	case GUI_CONTROL_HOTKEY:
 		// Testing shows that neither GetWindowText() nor WM_GETTEXT can pull anything out of a hotkey
 		// control, so the only type of retrieval that can be offered is the HKM_GETHOTKEY method:
@@ -5324,27 +5511,26 @@ ResultType GuiType::ControlGetContents(Var &aOutputVar, GuiControlType &aControl
 		case GUI_CONTROL_LISTBOX:
 			if (GetWindowLong(aControl.hwnd, GWL_STYLE) & (LBS_EXTENDEDSEL|LBS_MULTIPLESEL))
 			{
-				LRESULT item_count = SendMessage(aControl.hwnd, LB_GETSELCOUNT, 0, 0);
-				if (item_count <= 0)  // <=0 to check for LB_ERR too (but it should be impossible in this case).
+				sel_count = SendMessage(aControl.hwnd, LB_GETSELCOUNT, 0, 0);
+				if (sel_count <= 0)  // <=0 to check for LB_ERR too (but it should be impossible in this case).
 					return aOutputVar.Assign();
-				int *item = (int *)malloc(item_count * sizeof(int)); // dynamic since there can be a very large number of items.
+				int *item = (int *)malloc(sel_count * sizeof(int)); // dynamic since there can be a very large number of items.
 				if (!item)
 					return aOutputVar.Assign();
-				item_count = SendMessage(aControl.hwnd, LB_GETSELITEMS, (WPARAM)item_count, (LPARAM)item);
-				if (item_count <= 0)  // 0 or LB_ERR, but both these conditions should be impossible in this case.
+				sel_count = SendMessage(aControl.hwnd, LB_GETSELITEMS, (WPARAM)sel_count, (LPARAM)item);
+				if (sel_count <= 0)  // 0 or LB_ERR, but both these conditions should be impossible in this case.
 				{
 					free(item);
 					return aOutputVar.Assign();
 				}
-				LRESULT u;
 				if (aControl.attrib & GUI_CONTROL_ATTRIB_ALTSUBMIT) // Caller wanted the positions, not the text retrieved.
 				{
 					// Accumulate the length of delimited list of positions.
-					// length is initialized to item_count - 1 to account for all the delimiter
+					// length is initialized to sel_count - 1 to account for all the delimiter
 					// characters in the list, one delim after each item except the last:
-					for (length = item_count - 1, u = 0; u < item_count; ++u)
+					for (length = sel_count - 1, i = 0; i < sel_count; ++i)
 					{
-						_itoa(item[u] + 1, buf, 10);  // +1 to convert from zero-based to 1-based.
+						_itoa(item[i] + 1, buf, 10);  // +1 to convert from zero-based to 1-based.
 						length += strlen(buf);
 					}
 				}
@@ -5352,9 +5538,9 @@ ResultType GuiType::ControlGetContents(Var &aOutputVar, GuiControlType &aControl
 				{
 					// Accumulate the length of delimited list of selected items (not positions in this case).
 					// See above loop for more comments.
-					for (length = item_count - 1, u = 0; u < item_count; ++u)
+					for (length = sel_count - 1, i = 0; i < sel_count; ++i)
 					{
-						item_length = SendMessage(aControl.hwnd, LB_GETTEXTLEN, (WPARAM)item[u], 0);
+						item_length = SendMessage(aControl.hwnd, LB_GETTEXTLEN, (WPARAM)item[i], 0);
 						if (item_length == LB_ERR) // Realistically impossible based on MSDN.
 						{
 							free(item);
@@ -5370,36 +5556,27 @@ ResultType GuiType::ControlGetContents(Var &aOutputVar, GuiControlType &aControl
 				// this call will set up the clipboard for writing:
 				if (aOutputVar.Assign(NULL, (VarSizeType)length) != OK)
 					return FAIL;  // It already displayed the error.
-				char *cp = aOutputVar.Contents(); // Init for both of the loops below.
+				cp = aOutputVar.Contents(); // Init for both of the loops below.
 				if (aControl.attrib & GUI_CONTROL_ATTRIB_ALTSUBMIT) // Caller wanted the positions, not the text retrieved.
 				{
 					// In this case, the original length estimate should be the same as the actual, so
 					// it is not re-accumulated.
 					// See above loop for more comments.
-					for (u = 0; u < item_count; ++u)
+					for (i = 0; i < sel_count; ++i)
 					{
-						_itoa(item[u] + 1, cp, 10);  // +1 to convert from zero-based to 1-based.
+						if (i) // Serves to add delimiter after each item except the last (helps parsing loop).
+							*cp++ = '|';
+						_itoa(item[i] + 1, cp, 10);  // +1 to convert from zero-based to 1-based.
 						cp += strlen(cp);  // Point it to the terminator in preparation for the next write.
-						if (u < item_count - 1)
-							*cp++ = '|'; // Add delimiter after each item except the last (helps parsing loop).
 					}
 				}
-				else
+				else // Store item text vs. position.
 				{
 					// See above loop for more comments.
-					for (length = item_count - 1, u = 0; u < item_count; ++u)
+					for (length = sel_count - 1, i = 0; i < sel_count; ++i)
 					{
-						item_length = SendMessage(aControl.hwnd, LB_GETTEXT, (WPARAM)item[u], (LPARAM)cp);
-						if (length == LB_ERR) // Given the way it was called, this should be impossible based on MSDN docs.
-						{
-							aOutputVar.Close(); // In case it's the clipboard.
-							free(item);
-							return aOutputVar.Assign();
-						}
-						length += item_length; // Accumulate actual vs. estimated length.
-						cp += item_length;  // Point it to the terminator in preparation for the next write.
-						if (u < item_count - 1)
-							*cp++ = '|'; // Add delimiter after each item except the last (helps parsing loop).
+						if (i) // Serves to add delimiter after each item except the last (helps parsing loop).
+							*cp++ = '|';
 						// Above:
 						// A hard-coded pipe delimiter is used for now because it seems fairly easy to
 						// add an option later for a custom delimtier (such as '\n') via an Param4 of
@@ -5408,6 +5585,15 @@ ResultType GuiType::ControlGetContents(Var &aOutputVar, GuiControlType &aControl
 						// into another ListBox because it's already in the right format with the
 						// right delimiter.  In addition, literal pipes should be rare since that is
 						// the delimiter used when insertting and appending entries into a ListBox.
+						item_length = SendMessage(aControl.hwnd, LB_GETTEXT, (WPARAM)item[i], (LPARAM)cp);
+						if (length == LB_ERR) // Given the way it was called, this should be impossible based on MSDN docs.
+						{
+							aOutputVar.Close(); // In case it's the clipboard.
+							free(item);
+							return aOutputVar.Assign();
+						}
+						length += item_length; // Accumulate actual vs. estimated length.
+						cp += item_length;  // Point it to the terminator in preparation for the next write.
 					}
 				}
 				free(item);
@@ -5890,6 +6076,13 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 			break;
 		switch(control.type)
 		{
+		case GUI_CONTROL_LISTVIEW:
+			if (nmhdr.code == LVN_ITEMCHANGED || nmhdr.code == NM_DBLCLK)
+			{
+				pgui->Event(control_index, nmhdr.code);
+				return 0; // Must return 0 for LVN_ITEMACTIVATE.
+			}
+			break;
 		case GUI_CONTROL_DATETIME: // NMDATETIMECHANGE struct contains an NMHDR as it's first member.
 			if (nmhdr.code == DTN_DATETIMECHANGE)
 				pgui->Event(control_index, nmhdr.code);
@@ -6008,7 +6201,8 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 			//case GUI_CONTROL_BUTTON:       Can't reach this point because WM_CTLCOLORBTN is not handled above.
 			//case GUI_CONTROL_DROPDOWNLIST: Can't reach this point because WM_CTLCOLORxxx is never received for it.
 			//case GUI_CONTROL_COMBOBOX:     I believe WM_CTLCOLOREDIT is not received for it.
-			//case GUI_CONTROL_PROGRESS:     Can't reach this point because WM_CTLCOLORxxx is never received for it.
+			//case GUI_CONTROL_LISTVIEW:     Can't reach this point because WM_CTLCOLORxxx is never received for it.
+			//case GUI_CONTROL_PROGRESS:     Same (verified).
 			//case GUI_CONTROL_UPDOWN:       Same (verified).
 			//case GUI_CONTROL_DATETIME:     Same (verified).
 			//case GUI_CONTROL_MONTHCAL:     Same (verified).
@@ -6338,6 +6532,12 @@ void GuiType::Event(GuiIndexType aControlIndex, UINT aNotifyCode)
 		default:
 			return;
 		}
+		break;
+
+	case GUI_CONTROL_LISTVIEW:
+		if (aNotifyCode == NM_DBLCLK)
+			gui_event = GUI_EVENT_DBLCLK;
+		//else caller has already ensured its a normal event eligible for g-label.
 		break;
 
 	case GUI_CONTROL_EDIT:
@@ -6763,16 +6963,38 @@ void GuiType::ControlSetSliderOptions(GuiControlType &aControl, GuiControlOption
 
 
 
+void GuiType::ControlSetListViewOptions(GuiControlType &aControl, GuiControlOptionsType &aOpt)
+// Caller has ensured that aControl.type is ListView.
+// Caller has ensured that aOpt.color_bk is CLR_INVALID if no change should be made to the
+// current background color.
+{
+	if (aOpt.color_changed)
+		ListView_SetTextColor(aControl.hwnd, aControl.union_color);
+	if (aOpt.color_bk != CLR_INVALID) // Explicit color change was requested.
+	{
+		// Making both the same seems the best default because BkColor only applies to the portion
+		// of the control that doesn't have text in it, which is typically very little.
+		// Unlike ListView_SetTextBkColor, ListView_SetBkColor() treats CLR_DEFAULT as black.
+		// therefore, make them both GetSysColor(COLOR_WINDOW) for consistency.  This color is
+		// probably the default anyway:
+		COLORREF color = (aOpt.color_bk == CLR_DEFAULT) ? GetSysColor(COLOR_WINDOW) : aOpt.color_bk;
+		ListView_SetTextBkColor(aControl.hwnd, color);
+		ListView_SetBkColor(aControl.hwnd, color);
+	}
+}
+
+
+
 void GuiType::ControlSetProgressOptions(GuiControlType &aControl, GuiControlOptionsType &aOpt, DWORD aStyle)
 // Caller has ensured that aControl.type is Progress.
-// Caller has ensured that aOpt.progress_color_bk is CLR_INVALID if no change should be made to the
+// Caller has ensured that aOpt.color_bk is CLR_INVALID if no change should be made to the
 // bar's current background color.
 {
 	// If any options are present that cannot be manifest while a visual theme is in effect, ensure any
 	// such theme is removed from the control (currently, once removed it is never put back on):
 	// Override the default so that colors/smooth can be manifest even when non-classic theme is in effect.
 	if (aControl.union_color != CLR_DEFAULT
-		|| !(aOpt.progress_color_bk == CLR_DEFAULT || aOpt.progress_color_bk == CLR_INVALID)
+		|| !(aOpt.color_bk == CLR_DEFAULT || aOpt.color_bk == CLR_INVALID)
 		|| (aStyle & PBS_SMOOTH))
 		MySetWindowTheme(aControl.hwnd, L"", L"");
 
@@ -6789,7 +7011,7 @@ void GuiType::ControlSetProgressOptions(GuiControlType &aControl, GuiControlOpti
 	if (aOpt.color_changed)
 		SendMessage(aControl.hwnd, PBM_SETBARCOLOR, 0, aControl.union_color);
 
-	switch (aOpt.progress_color_bk)
+	switch (aOpt.color_bk)
 	{
 	case CLR_DEFAULT:
 		// If background color is default, mBackgroundColorWin won't take effect if there is a visual theme
@@ -6803,7 +7025,7 @@ void GuiType::ControlSetProgressOptions(GuiControlType &aControl, GuiControlOpti
 	case CLR_INVALID: // Do nothing in this case because caller didn't want existing bkgnd color changed.
 		break;
 	default: // Custom background color.  In this case, theme would already have been stripped above.
-		SendMessage(aControl.hwnd, PBM_SETBKCOLOR, 0, aOpt.progress_color_bk);
+		SendMessage(aControl.hwnd, PBM_SETBKCOLOR, 0, aOpt.color_bk);
 	}
 }
 

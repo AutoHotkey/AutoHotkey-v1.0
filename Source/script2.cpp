@@ -5553,6 +5553,7 @@ ResultType Line::PixelGetColor(int aX, int aY, bool aUseRGB)
 LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lParam)
 {
 	int i;
+	DWORD dwTemp;
 
 	// Detect Explorer crashes so that tray icon can be recreated.  I think this only works on Win98
 	// and beyond, since the feature was never properly implemented in Win95:
@@ -5993,6 +5994,22 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		// msg uses TRANSLATE_AHK_MSG() to prevent it from ever being filtered out (and thus
 		// delayed) while the script is uninterruptible.
 		ReplyMessage(GetCurrentProcessId());
+		return 0;
+
+	case WM_DRAWCLIPBOARD:
+		if (g_script.mOnClipboardChangeLabel) // In case it's a bogus msg, it's our responsibility to avoid posting the msg if there's no label to launch.
+			PostMessage(NULL, AHK_CLIPBOARD_CHANGE, 0, 0); // It's done this way to buffer it when the script is uninterruptible, etc.
+		if (g_script.mNextClipboardViewer) // Will be NULL if there are no other windows in the chain.
+			SendMessageTimeout(g_script.mNextClipboardViewer, iMsg, wParam, lParam, SMTO_ABORTIFHUNG, 2000, &dwTemp);
+		return 0;
+
+	case WM_CHANGECBCHAIN:
+		// MSDN: If the next window is closing, repair the chain. 
+		if ((HWND)wParam == g_script.mNextClipboardViewer)
+			g_script.mNextClipboardViewer = (HWND)lParam;
+		// MSDN: Otherwise, pass the message to the next link. 
+		else if (g_script.mNextClipboardViewer)
+			SendMessageTimeout(g_script.mNextClipboardViewer, iMsg, wParam, lParam, SMTO_ABORTIFHUNG, 2000, &dwTemp);
 		return 0;
 
 	HANDLE_MENU_LOOP // Cases for WM_ENTERMENULOOP and WM_EXITMENULOOP.

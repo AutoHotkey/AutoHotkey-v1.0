@@ -2020,7 +2020,7 @@ struct GuiControlType
 
 struct GuiControlOptionsType
 {
-	DWORD style_add, style_remove, exstyle_add, exstyle_remove;
+	DWORD style_add, style_remove, exstyle_add, exstyle_remove, listview_style;
 	int x, y, width, height;  // Position info.
 	float row_count;
 	int choice;  // Which item of a DropDownList/ComboBox/ListBox to initially choose.
@@ -2030,7 +2030,7 @@ struct GuiControlOptionsType
 	int thickness;  // Thickness of slider's thumb.
 	int tip_side; // Which side of the control to display the tip on (0 to use default side).
 	GuiControlType *buddy1, *buddy2;
-	COLORREF progress_color_bk;
+	COLORREF color_bk; // Control's background color.
 	int limit;   // The max number of characters to permit in an edit or combobox's edit.
 	int hscroll_pixels;  // The number of pixels for a listbox's horizontal scrollbar to be able to scroll.
 	int checked; // When zeroed, struct contains default starting state of checkbox/radio, i.e. BST_UNCHECKED.
@@ -2147,7 +2147,7 @@ public:
 	ResultType ControlParseOptions(char *aOptions, GuiControlOptionsType &aOpt, GuiControlType &aControl
 		, GuiIndexType aControlIndex = -1); // aControlIndex is not needed upon control creation.
 	void ControlInitOptions(GuiControlOptionsType &aOpt, GuiControlType &aControl);
-	void ControlAddContents(GuiControlType &aControl, char *aContent, int aChoice);
+	void ControlAddContents(GuiControlType &aControl, char *aContent, int aChoice, GuiControlOptionsType *aOpt = NULL);
 	ResultType Show(char *aOptions, char *aTitle);
 	ResultType Clear();
 	ResultType Cancel();
@@ -2209,6 +2209,7 @@ public:
 	int ControlGetDefaultSliderThickness(DWORD aStyle, int aThumbThickness);
 	void ControlSetSliderOptions(GuiControlType &aControl, GuiControlOptionsType &aOpt);
 	int ControlInvertSliderIfNeeded(GuiControlType &aControl, int aPosition);
+	void ControlSetListViewOptions(GuiControlType &aControl, GuiControlOptionsType &aOpt);
 	void ControlSetProgressOptions(GuiControlType &aControl, GuiControlOptionsType &aOpt, DWORD aStyle);
 	bool ControlOverrideBkColor(GuiControlType &aControl);
 
@@ -2290,7 +2291,9 @@ public:
 	char mThisMenuItemName[MAX_MENU_NAME_LENGTH + 1];
 	char mThisMenuName[MAX_MENU_NAME_LENGTH + 1];
 	char *mThisHotkeyName, *mPriorHotkeyName;
-	Label *mOnExitLabel;  // The label to run when the script terminates (NULL if none).
+	HWND mNextClipboardViewer;
+	bool mOnClipboardChangeIsRunning;
+	Label *mOnClipboardChangeLabel, *mOnExitLabel;  // The label to run when the script terminates (NULL if none).
 	ExitReasons mExitReason;
 
 	ScriptTimer *mFirstTimer, *mLastTimer;  // The first and last script timers in the linked list.

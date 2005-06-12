@@ -43,6 +43,7 @@ Script::Script()
 	, mLoopFile(NULL), mLoopRegItem(NULL), mLoopReadFile(NULL), mLoopField(NULL), mLoopIteration(0)
 	, mThisHotkeyName(""), mPriorHotkeyName(""), mThisHotkeyStartTime(0), mPriorHotkeyStartTime(0)
 	, mEndChar(0), mThisHotkeyModifiersLR(0)
+	, mNextClipboardViewer(NULL), mOnClipboardChangeIsRunning(false), mOnClipboardChangeLabel(NULL)
 	, mOnExitLabel(NULL), mExitReason(EXIT_NONE)
 	, mFirstLabel(NULL), mLastLabel(NULL)
 	, mFirstFunc(NULL), mLastFunc(NULL)
@@ -185,6 +186,9 @@ Script::~Script()
 
 	if (g_hFontSplash) // The splash window itself should auto-destroyed, since it's owned by main.
 		DeleteObject(g_hFontSplash);
+
+	if (mOnClipboardChangeLabel) // Remove from viewer chain.
+		ChangeClipboardChain(g_hWnd, mNextClipboardViewer);
 
 	// Close any open sound item to prevent hang-on-exit in certain operating systems or conditions.
 	// If there's any chance that a sound was played and not closed out, or that it is still playing,
@@ -473,6 +477,10 @@ ResultType Script::CreateWindows()
 		// or something.  In other words, it is expected to fail under certain circumstances and
 		// we want to tolerate that:
 		CreateTrayIcon();
+
+	if (mOnClipboardChangeLabel)
+		mNextClipboardViewer = SetClipboardViewer(g_hWnd);
+
 	return OK;
 }
 
@@ -2417,6 +2425,8 @@ ResultType Script::AddLabel(char *aLabelName)
 		// This must be done after the above:
 		mLastLabel = the_new_label;
 	}
+	if (!stricmp(new_name, "OnClipboardChange"))
+		mOnClipboardChangeLabel = the_new_label;
 	return OK;
 }
 

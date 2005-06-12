@@ -1007,8 +1007,15 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 			pending_dead_key_used_shift = g_modifiersLR_logical & (MOD_LSHIFT | MOD_RSHIFT);
 			// Detect AltGr as fully and completely as possible in case the current keyboard layout
 			// doesn't even have an AltGr key.  The section above which references
-			// pending_dead_key_used_altgr relies on this check having been done here:
-			pending_dead_key_used_altgr = (g_modifiersLR_logical & (MOD_LCONTROL | MOD_RALT)) == (MOD_LCONTROL | MOD_RALT);
+			// pending_dead_key_used_altgr relies on this check having been done here.  UPDATE:
+			// v1.0.35.10: Allow Ctrl+Alt to be seen as AltGr too, which allows users to press Ctrl+Alt+Deadkey
+			// rather than AltGr+Deadkey.  It might also resolve other issues.  This change seems okay since
+			// the mere fact that this IS a dead key (as checked above) should mean that it's a deadkey made
+			// manifest through AltGr.
+			// Previous method:
+			//pending_dead_key_used_altgr = (g_modifiersLR_logical & (MOD_LCONTROL | MOD_RALT)) == (MOD_LCONTROL | MOD_RALT);
+			pending_dead_key_used_altgr = (g_modifiersLR_logical & (MOD_LCONTROL | MOD_RCONTROL))
+				&& (g_modifiersLR_logical & (MOD_LALT | MOD_RALT));
 		}
 		// Dead keys must always be hidden, otherwise they would be shown twice literally due to
 		// having been "damaged" by ToAsciiEx():

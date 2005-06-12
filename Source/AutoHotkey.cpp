@@ -32,28 +32,6 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	// Init any globals not in "struct g" that need it:
 	g_hInstance = hInstance;
 
-	// MSDN: "Windows XP: If a manifest is used, InitCommonControlsEx is not required."
-	// Therefore, in case it's a high overhead call, it's not done on XP or later:
-	if (!g_os.IsWinXPorLater())
-	{
-		// Since InitCommonControls() is apparently incapable of initializing DateTime and MonthCal
-		// controls, InitCommonControlsEx() must be called.  But since Ex() requires comctl32.dll
-		// 4.70+, must get the function's address dynamically in case the program is running on
-		// Windows 95/NT without the updated DLL (otherwise the program would not launch at all).
-		typedef BOOL (WINAPI *MyInitCommonControlsExType)(LPINITCOMMONCONTROLSEX);
-		MyInitCommonControlsExType MyInitCommonControlsEx = (MyInitCommonControlsExType)
-			GetProcAddress(GetModuleHandle("comctl32.dll"), "InitCommonControlsEx"); // LoadLibrary shouldn't be necessary because comctl32 in linked by compiler.
-		if (MyInitCommonControlsEx)
-		{
-			INITCOMMONCONTROLSEX icce;
-			icce.dwSize = sizeof(INITCOMMONCONTROLSEX);
-			icce.dwICC = ICC_WIN95_CLASSES | ICC_DATE_CLASSES; // ICC_WIN95_CLASSES is equivalent to calling InitCommonControls().
-			MyInitCommonControlsEx(&icce);
-		}
-		else // InitCommonControlsEx not available, so must revert to non-Ex() to make controls work on Win95/NT4.
-			InitCommonControls();
-	}
-
 	if (!GetCurrentDirectory(sizeof(g_WorkingDir), g_WorkingDir)) // Needed for the FileSelectFile() workaround.
 		*g_WorkingDir = '\0';
 	g_WorkingDirOrig = SimpleHeap::Malloc(g_WorkingDir); // Needed by the Reload command.
@@ -70,10 +48,10 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\Line Continuation.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\DllCall.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\GUI UpDown.ahk";
-		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\GUI Date.ahk";
+		char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\GUI Date.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\GUI ListView.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Ref\\ImageSearch\\TEST SUITE\\MAIN.ahk";
-		char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\New Text Document.ahk";
+		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\New Text Document.ahk";
 	#else
 		char *script_filespec = NAME_P ".ini";  // Use this extension for better file association with editor(s).
 	#endif
@@ -244,6 +222,28 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	if (g_MaxHistoryKeys && (g_KeyHistory = (KeyHistoryItem *)malloc(g_MaxHistoryKeys * sizeof(KeyHistoryItem))))
 		ZeroMemory(g_KeyHistory, g_MaxHistoryKeys * sizeof(KeyHistoryItem)); // Must be zeroed.
 	//else leave it NULL as it was initialized in globaldata.
+
+	// MSDN: "Windows XP: If a manifest is used, InitCommonControlsEx is not required."
+	// Therefore, in case it's a high overhead call, it's not done on XP or later:
+	if (!g_os.IsWinXPorLater())
+	{
+		// Since InitCommonControls() is apparently incapable of initializing DateTime and MonthCal
+		// controls, InitCommonControlsEx() must be called.  But since Ex() requires comctl32.dll
+		// 4.70+, must get the function's address dynamically in case the program is running on
+		// Windows 95/NT without the updated DLL (otherwise the program would not launch at all).
+		typedef BOOL (WINAPI *MyInitCommonControlsExType)(LPINITCOMMONCONTROLSEX);
+		MyInitCommonControlsExType MyInitCommonControlsEx = (MyInitCommonControlsExType)
+			GetProcAddress(GetModuleHandle("comctl32.dll"), "InitCommonControlsEx"); // LoadLibrary shouldn't be necessary because comctl32 in linked by compiler.
+		if (MyInitCommonControlsEx)
+		{
+			INITCOMMONCONTROLSEX icce;
+			icce.dwSize = sizeof(INITCOMMONCONTROLSEX);
+			icce.dwICC = ICC_WIN95_CLASSES | ICC_DATE_CLASSES; // ICC_WIN95_CLASSES is equivalent to calling InitCommonControls().
+			MyInitCommonControlsEx(&icce);
+		}
+		else // InitCommonControlsEx not available, so must revert to non-Ex() to make controls work on Win95/NT4.
+			InitCommonControls();
+	}
 
 	// Activate the hotkeys and any hooks that are required prior to executing the
 	// top part (the auto-execute part) of the script so that they will be in effect
