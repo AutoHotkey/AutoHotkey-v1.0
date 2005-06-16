@@ -234,6 +234,7 @@ enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
 #define ERR_COMBINED_LINE_TOO_LONG "Combined line would be too long."
 #define ERR_UNRECOGNIZED_ACTION "This line does not contain a recognized action."
 #define ERR_NONEXISTENT_HOTKEY "Nonexistent hotkey."
+#define ERR_EXE_CORRUPTED "EXE corrupted."
 #define ERR_PARAM1_INVALID "Parameter #1 invalid."
 #define ERR_PARAM2_INVALID "Parameter #2 invalid."
 #define ERR_PARAM3_INVALID "Parameter #3 invalid."
@@ -400,23 +401,23 @@ struct ExprTokenType  // Something in the compiler hates the name TokenType, so 
 	// Due to the presence of 8-byte members (double and __int64) this entire struct is aligned on 8-byte
 	// vs. 4-byte boundaries.  The compiler defaults to this because otherwise an 8-byte member might
 	// sometimes not start at an even address, which would hurt performance on Pentiums, etc.
-	// The above two probably need to be adjacent to each other to conserve memory due to 8-byte alignment,
-	// which is the default alignment (for performance reasons) in any struct that contains 8-byte members
-	// such as double and __int64.
-	union // Which of its members is used depends on the value of symbol, above.
+	union // Which of its members is used depends on the value of symbol, below.
 	{
 		__int64 value_int64; // for SYM_INTEGER
 		double value_double; // for SYM_FLOAT
 		DerefType *deref;    // for SYM_FUNC
 		Var *var;            // for SYM_VAR
-		char *marker;        // for SYM_STRING and SYM_OPERAND
+		struct {char *marker; char *buf;};  // for SYM_STRING and SYM_OPERAND (buf is used by built-in functions).
 	};
-	// Note that marker's length should not be stored in this struct, even though it might be readily
+	// Note that marker's str-length should not be stored in this struct, even though it might be readily
 	// available in places and thus help performance.  This is because if it were stored and the marker
 	// or SYM_VAR's var pointed to a location that was changed as a side effect of an expression's
 	// call to a script function, the length would then be invalid.
 	SymbolType symbol; // Short-circuit benchmark is currently much faster with this and the next beneath the union, but not sure why.
 	ExprTokenType *circuit_token; // Facilitates short-circuit boolean evaluation.
+	// The above two probably need to be adjacent to each other to conserve memory due to 8-byte alignment,
+	// which is the default alignment (for performance reasons) in any struct that contains 8-byte members
+	// such as double and __int64.
 };
 
 typedef UCHAR ArgTypeType;  // UCHAR vs. an enum, to save memory.
@@ -653,11 +654,7 @@ private:
 	ResultType StringSplit(char *aArrayName, char *aInputString, char *aDelimiterList, char *aOmitList);
 	ResultType SplitPath(char *aFileSpec);
 	ResultType PerformSort(char *aContents, char *aOptions);
-
 	ResultType GetKeyJoyState(char *aKeyName, char *aOption);
-	bool ScriptGetKeyState(vk_type aVK, KeyStateTypes aKeyStateType);
-	double ScriptGetJoyState(JoyControls aJoy, int aJoystickID, ExprTokenType &aToken, bool aUseBoolForUpDown);
-
 	ResultType DriveSpace(char *aPath, bool aGetFreeSpace);
 	ResultType Drive(char *aCmd, char *aValue, char *aValue2);
 	ResultType DriveLock(char aDriveLetter, bool aLockIt);
@@ -749,7 +746,6 @@ private:
 		, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType ScriptSendMessage(char *aMsg, char *awParam, char *alParam, char *aControl
 		, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
-	void DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 	ResultType ScriptProcess(char *aCmd, char *aProcess, char *aParam3);
 	ResultType WinSet(char *aAttrib, char *aValue, char *aTitle, char *aText
 		, char *aExcludeTitle, char *aExcludeText);
@@ -907,12 +903,6 @@ public:
 	char *ExpandArg(char *aBuf, int aArgIndex, Var *aArgVar = NULL);
 	char *ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget, char *&aDerefBuf
 		, size_t &aDerefBufSize, char *aArgDeref[], size_t aExtraSize);
-
-	__int64 ExprTokenToInt64(ExprTokenType &aToken);
-	double ExprTokenToDouble(ExprTokenType &aToken);
-	char *ExprTokenToString(ExprTokenType &aToken, char *aBuf);
-	ResultType ExprTokenToVar(ExprTokenType &aToken, Var &aOutputVar);
-	ResultType ExprTokenToDoubleOrInt(ExprTokenType &aToken);
 
 	ResultType Deref(Var *aOutputVar, char *aBuf);
 
@@ -1249,50 +1239,6 @@ public:
 		if (!stricmp(aBuf, "Equalizer")) return MIXERCONTROL_CONTROLTYPE_EQUALIZER;
 		#define MIXERCONTROL_CONTROLTYPE_INVALID 0 // 0 seems like a safe "undefined" indicator for this type.
 		return MIXERCONTROL_CONTROLTYPE_INVALID;
-	}
-
-	static int ConvertJoy(char *aBuf, int *aJoystickID = NULL, bool aAllowOnlyButtons = false)
-	{
-		if (aJoystickID)
-			*aJoystickID = 0;  // Set default output value for the caller.
-		if (!aBuf || !*aBuf) return JOYCTRL_INVALID;
-		char *aBuf_orig = aBuf;
-		for (; *aBuf >= '0' && *aBuf <= '9'; ++aBuf); // self-contained loop to find the first non-digit.
-		if (aBuf > aBuf_orig) // The string starts with a number.
-		{
-			int joystick_id = ATOI(aBuf_orig) - 1;
-			if (joystick_id < 0 || joystick_id >= MAX_JOYSTICKS)
-				return JOYCTRL_INVALID;
-			if (aJoystickID)
-				*aJoystickID = joystick_id;  // Use ATOI vs. atoi even though hex isn't supported yet.
-		}
-
-		if (!strnicmp(aBuf, "Joy", 3))
-		{
-			if (IsPureNumeric(aBuf + 3, false, false))
-			{
-				int offset = ATOI(aBuf + 3);
-				if (offset < 1 || offset > MAX_JOY_BUTTONS)
-					return JOYCTRL_INVALID;
-				return JOYCTRL_1 + offset - 1;
-			}
-		}
-		if (aAllowOnlyButtons)
-			return JOYCTRL_INVALID;
-
-		// Otherwise:
-		if (!stricmp(aBuf, "JoyX")) return JOYCTRL_XPOS;
-		if (!stricmp(aBuf, "JoyY")) return JOYCTRL_YPOS;
-		if (!stricmp(aBuf, "JoyZ")) return JOYCTRL_ZPOS;
-		if (!stricmp(aBuf, "JoyR")) return JOYCTRL_RPOS;
-		if (!stricmp(aBuf, "JoyU")) return JOYCTRL_UPOS;
-		if (!stricmp(aBuf, "JoyV")) return JOYCTRL_VPOS;
-		if (!stricmp(aBuf, "JoyPOV")) return JOYCTRL_POV;
-		if (!stricmp(aBuf, "JoyName")) return JOYCTRL_NAME;
-		if (!stricmp(aBuf, "JoyButtons")) return JOYCTRL_BUTTONS;
-		if (!stricmp(aBuf, "JoyAxes")) return JOYCTRL_AXES;
-		if (!stricmp(aBuf, "JoyInfo")) return JOYCTRL_INFO;
-		return JOYCTRL_INVALID;
 	}
 
 	static TitleMatchModes ConvertTitleMatchMode(char *aBuf)
@@ -1814,23 +1760,13 @@ struct FuncParam
 	union {char *default_str; __int64 default_int64; double default_double;};
 };
 
-enum FuncTypes
-{
-	FUNC_INVALID, FUNC_NORMAL
-	, FUNC_STRLEN, FUNC_ASC, FUNC_CHR
-	, FUNC_INSTR, FUNC_GETKEYSTATE, FUNC_DLLCALL, FUNC_VARSETCAPACITY
-	, FUNC_FILEEXIST, FUNC_WINEXIST, FUNC_WINACTIVE
-	, FUNC_ROUND, FUNC_CEIL, FUNC_FLOOR, FUNC_MOD, FUNC_ABS
-	, FUNC_SIN, FUNC_COS, FUNC_TAN, FUNC_ASIN, FUNC_ACOS, FUNC_ATAN
-	, FUNC_EXP, FUNC_SQRT, FUNC_LOG, FUNC_LN
-};
-typedef UCHAR FuncType;  // UCHAR vs. FuncTypes to save memory.
+typedef void (* BuiltInFunctionType)(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 
 class Func
 {
 public:
 	char *mName;
-	Line *mJumpToLine;
+	union {BuiltInFunctionType mBIF; Line *mJumpToLine;};
 	FuncParam *mParam;  // Will hold an array of FuncParams.
 	int mParamCount; // The number of items in the above array.  This is also the function's maximum number of params.
 	int mMinParams;  // Currently used only by built-in functions. Future: Support optional params for other functions.
@@ -1844,16 +1780,19 @@ public:
 	#define VAR_ASSUME_GLOBAL 2
 	// Keep small members adjacent to each other to save space and improve perf. due to byte alignment:
 	UCHAR mDefaultVarType;
-	FuncType mType;  // Keep adjacent/contiguous with the above.
+	bool mIsBuiltIn; // Determines contents of union. Keep this member adjacent/contiguous with the above.
+	// Note that it's possible for a built-in function such as WinExist() to become a normal/UDF via
+	// override in the script.  So mIsBuiltIn should always be used to determine whether the function
+	// is truly built-in, not its name.
 
-	Func(char *aFuncName, FuncType aType)
+	Func(char *aFuncName, bool aIsBuiltIn)
 		: mName(aFuncName) // Caller gave us a pointer to dynamic memory for this.
-		, mJumpToLine(NULL)
+		, mBIF(NULL)
 		, mParam(NULL), mParamCount(0), mMinParams(0)
 		, mVar(NULL), mVarCount(0), mVarCountMax(0), mLazyVar(NULL), mLazyVarCount(0)
 		, mInstances(0), mNextFunc(NULL)
 		, mDefaultVarType(VAR_ASSUME_NONE)
-		, mType(aType)
+		, mIsBuiltIn(aIsBuiltIn)
 	{}
 	void *operator new(size_t aBytes) {return SimpleHeap::Malloc(aBytes);}
 	void *operator new[](size_t aBytes) {return SimpleHeap::Malloc(aBytes);}
@@ -2353,7 +2292,7 @@ public:
 
 	ResultType DefineFunc(char *aBuf, Var *aFuncExceptionVar[]);
 	Func *FindFunc(char *aFuncName, size_t aFuncNameLength = 0);
-	Func *AddFunc(char *aFuncName, size_t aFuncNameLength, FuncType aFuncType);
+	Func *AddFunc(char *aFuncName, size_t aFuncNameLength, bool aIsBuiltIn);
 
 	#define ALWAYS_USE_DEFAULT  0
 	#define ALWAYS_USE_GLOBAL   1
@@ -2488,5 +2427,41 @@ public:
 	// the memory used by the abandoned linked lists (otherwise, a memory
 	// leak will result).
 };
+
+
+
+void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_StrLen(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_Asc(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_Chr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_InStr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_GetKeyState(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_VarSetCapacity(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_FileExist(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_WinExistActive(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_Round(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_Ceil(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_Floor(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_Mod(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_Abs(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_Sin(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_Cos(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_Tan(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_ASinACos(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_ATan(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_Exp(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_SqrtLogLn(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+
+void BIF_LV_GetNextItem(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+
+__int64 ExprTokenToInt64(ExprTokenType &aToken);
+double ExprTokenToDouble(ExprTokenType &aToken);
+char *ExprTokenToString(ExprTokenType &aToken, char *aBuf);
+ResultType ExprTokenToVar(ExprTokenType &aToken, Var &aOutputVar);
+ResultType ExprTokenToDoubleOrInt(ExprTokenType &aToken);
+
+int ConvertJoy(char *aBuf, int *aJoystickID = NULL, bool aAllowOnlyButtons = false);
+bool ScriptGetKeyState(vk_type aVK, KeyStateTypes aKeyStateType);
+double ScriptGetJoyState(JoyControls aJoy, int aJoystickID, ExprTokenType &aToken, bool aUseBoolForUpDown);
 
 #endif

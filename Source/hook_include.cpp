@@ -988,7 +988,7 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 			// performance/readability: KeyEvent() results in a recursive call to this hook function,
 			// which causes g_modifiersLR_logical to be different after the call.
 			bool apply_altgr = pending_dead_key_used_altgr && !(g_modifiersLR_logical & MOD_RALT);
-			if (apply_altgr)
+			if (apply_altgr) // Push down RAlt even if the dead key was achieved via Ctrl+Alt: 1) For code simplicity; 2) It might improve compatibility with Putty and other apps that demand that AltGr be RAlt (not Ctrl+Alt).
 				KeyEvent(KEYDOWN, VK_RMENU); // This will also push down LCTRL as an intrinsic part of AltGr's functionality.
 			// Since it's a substitute for the previously suppressed physical dead key event, mark it as physical:
 			KEYEVENT_PHYS(KEYDOWNANDUP, vk_to_send, pending_dead_key_sc);

@@ -863,8 +863,16 @@ LineNumberType Script::LoadFromFile()
 	}
 #endif
 
+	// Load the main script file.  This will also load any files it includes with #Include.
 	if (LoadIncludedFile(mFileSpec, false, false) != OK)
 		return LOADING_FAILED;
+
+	// v1.0.35.11: Restore original working directory so that changes made to it by the above
+	// (via "#Include C:\Scripts" or "#Include %A_ScriptDir%") do not affect the script's
+	// runtime working directory.  This preserves the flexibility of having a startup-determined
+	// working directory for the script's runtime (i.e. it seems best that the mere presence of
+	// "#Include NewDir" should not entirely eliminate this flexibility).
+	SetCurrentDirectory(g_WorkingDirOrig); // g_WorkingDirOrig previously set by WinMain().
 
 	// Rather than do this, which seems kinda nasty if ever someday support same-line
 	// else actions such as "else return", just add two EXITs to the end of every script.
@@ -1014,7 +1022,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 	// the files from any other exe that is passed."
 	if (oRead.Open(aFileSpec, "") != HS_EXEARC_E_OK)
 	{
-		MsgBox("Could not open the script inside the EXE.", 0, aFileSpec);
+		MsgBox(ERR_EXE_CORRUPTED, 0, aFileSpec); // Usually caused by virus corruption.
 		return FAIL;
 	}
 	// AutoIt3: Read the script (the func allocates the memory for the buffer :) )
@@ -1949,6 +1957,8 @@ size_t Script::GetLine(char *aBuf, int aMaxCharsToRead, bool aInContinuationSect
 
 
 inline ResultType Script::IsDirective(char *aBuf)
+// aBuf must be a modifiable string since this function modifies it in the case of "#Include %A_ScriptDir%"
+// changes it.  It must also be large enough to accept the replacement of %A_ScriptDir% with a larger string.
 // Returns CONDITION_TRUE, CONDITION_FALSE, or FAIL.
 // Note: Don't assume that every line in the script that starts with '#' is a directive
 // because hotkeys can legitimately start with that as well.  i.e., the following line should
@@ -2287,7 +2297,19 @@ inline ResultType Script::IsDirective(char *aBuf)
 			if (IS_SPACE_OR_TAB(*parameter)) // Skip over at most one space or tab, since others might be a literal part of the filename.
 				++parameter;
 		}
-		// This will also display any error that occurs:
+		StrReplace(parameter, "%A_ScriptDir%", mFileDir, false); // v1.0.35.11.  Maximum of one replacement.  Caller has ensured string is writable.
+		DWORD attr = GetFileAttributes(parameter);
+		if (attr != 0xFFFFFFFF && (attr & FILE_ATTRIBUTE_DIRECTORY)) // File exists and its a directory (possibly A_ScriptDir set above).
+		{
+			// v1.0.35.11 allow changing of load-time directory to increase flexibility.  This feature has
+			// been asked for directly or indirectly several times.
+			// If a filename every wants to use the string "%A_ScriptDir%" literally in an include's filename,
+			// that would not work.  But that seems too rare to worry about.
+			SetCurrentDirectory(parameter);
+			return CONDITION_TRUE;
+		}
+		// Since above didn't return, it's a file (or non-existent file, in which case the below will display
+		// the error).  This will also display any other errors that occur:
 		return (LoadIncludedFile(parameter, include_again, ignore_load_failure) == FAIL) ? FAIL : CONDITION_TRUE;
 #endif
 	}
@@ -4508,7 +4530,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		if (aActionType == ACT_FILEINSTALL)
 		{
 			if (aArgc > 0 && line.ArgHasDeref(1))
-				return ScriptError("Parameter #1 must not contain variables.", NEW_RAW_ARG1);
+				return ScriptError("Must not contain variables.", NEW_RAW_ARG1);
 		}
 		break;
 
@@ -5110,12 +5132,12 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_GETKEYSTATE:
-		if (aArgc > 1 && !line.ArgHasDeref(2) && !TextToVK(NEW_RAW_ARG2) && !Line::ConvertJoy(NEW_RAW_ARG2))
+		if (aArgc > 1 && !line.ArgHasDeref(2) && !TextToVK(NEW_RAW_ARG2) && !ConvertJoy(NEW_RAW_ARG2))
 			return ScriptError(ERR_INVALID_KEY_OR_BUTTON, NEW_RAW_ARG2);
 		break;
 
 	case ACT_KEYWAIT:
-		if (aArgc > 0 && !line.ArgHasDeref(1) && !TextToVK(NEW_RAW_ARG1) && !Line::ConvertJoy(NEW_RAW_ARG1))
+		if (aArgc > 0 && !line.ArgHasDeref(1) && !TextToVK(NEW_RAW_ARG1) && !ConvertJoy(NEW_RAW_ARG1))
 			return ScriptError(ERR_INVALID_KEY_OR_BUTTON, NEW_RAW_ARG1);
 		break;
 
@@ -5150,8 +5172,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		// which yields a more informative error message that we could here.
 		if (mLastFunc && !mLastFunc->mJumpToLine) // If this stmt is true, caller has ensured that g.CurrentFunc isn't NULL.
 		{
-			// The above check relies upon the fact that mLastFunc->mType must be FUNC_NORMAL at this stage,
-			// which is true because any non-overridden built-in function won't get added until after all
+			// The above check relies upon the fact that mLastFunc->mIsBuiltIn must be false at this stage,
+			// which is the case because any non-overridden built-in function won't get added until after all
 			// lines have been added, namely PreparseBlocks().
 			line.mAttribute = ATTR_TRUE;  // Flag this ACT_BLOCK_BEGIN as the opening brace of the function's body.
 			// For efficiency, and to prevent ExecUntil from starting a new recursion layer for the function's
@@ -5277,20 +5299,20 @@ ResultType Script::DefineFunc(char *aBuf, Var *aFuncExceptionVar[])
 	Func *found_func = FindFunc(aBuf, param_start - aBuf);
 	if (found_func)
 	{
-		if (found_func->mType == FUNC_NORMAL)
+		if (!found_func->mIsBuiltIn)
 			return ScriptError("Duplicate function definition.", aBuf); // Seems more descriptive than "Function already defined."
 		else // It's a built-in function that the user wants to override with a custom definition.
 		{
-			found_func->mType = FUNC_NORMAL;  // Override built-in type with NORMAL.
-			found_func->mParamCount = 0; // Revert to the default appropriate for FUNC_NORMAL.
-			found_func->mMinParams = 0;
+			found_func->mIsBuiltIn = false;  // Override built-in with custom.
+			found_func->mParamCount = 0; // Revert to the default appropriate for non-built-in functions.
+			found_func->mMinParams = 0;  //
 			g.CurrentFunc = found_func;
 		}
 	}
 	else
 		// The value of g.CurrentFunc must be set here rather than by our caller since AddVar(), which we call,
 		// relies upon it having been done.
-		if (   !(g.CurrentFunc = AddFunc(aBuf, param_start - aBuf, FUNC_NORMAL))   )
+		if (   !(g.CurrentFunc = AddFunc(aBuf, param_start - aBuf, false))   )
 			return FAIL; // It already displayed the error.
 
 	Func &func = *g.CurrentFunc; // For performance and convenience.
@@ -5448,118 +5470,109 @@ Func *Script::FindFunc(char *aFuncName, size_t aFuncNameLength)
 			return pfunc;
 
 	// Since above didn't return, there is no match.  See if it's a built-in function that hasn't yet
-	// been added to the function list:
-	FuncType func_type;
-	if (!stricmp(func_name, "StrLen"))
-		func_type = FUNC_STRLEN;
-	else if (!stricmp(func_name, "Asc"))
-		func_type = FUNC_ASC;
-	else if (!stricmp(func_name, "Chr"))
-		func_type = FUNC_CHR;
-	else if (!stricmp(func_name, "InStr"))
-		func_type = FUNC_INSTR;
-	else if (!stricmp(func_name, "GetKeyState"))
-		func_type = FUNC_GETKEYSTATE;
-	else if (!stricmp(func_name, "DllCall"))
-		func_type = FUNC_DLLCALL;
-	else if (!stricmp(func_name, "VarSetCapacity"))
-		func_type = FUNC_VARSETCAPACITY;
-	else if (!stricmp(func_name, "FileExist"))
-		func_type = FUNC_FILEEXIST;
-	else if (!stricmp(func_name, "WinExist"))
-		func_type = FUNC_WINEXIST;
-	else if (!stricmp(func_name, "WinActive"))
-		func_type = FUNC_WINACTIVE;
-	else if (!stricmp(func_name, "Round"))
-		func_type = FUNC_ROUND;
-	else if (!stricmp(func_name, "Ceil"))
-		func_type = FUNC_CEIL;
-	else if (!stricmp(func_name, "Floor"))
-		func_type = FUNC_FLOOR;
-	else if (!stricmp(func_name, "Mod"))
-		func_type = FUNC_MOD;
-	else if (!stricmp(func_name, "Abs"))
-		func_type = FUNC_ABS;
-	else if (!stricmp(func_name, "Sin"))
-		func_type = FUNC_SIN;
-	else if (!stricmp(func_name, "Cos"))
-		func_type = FUNC_COS;
-	else if (!stricmp(func_name, "Tan"))
-		func_type = FUNC_TAN;
-	else if (!stricmp(func_name, "ASin"))
-		func_type = FUNC_ASIN;
-	else if (!stricmp(func_name, "ACos"))
-		func_type = FUNC_ACOS;
-	else if (!stricmp(func_name, "ATan"))
-		func_type = FUNC_ATAN;
-	else if (!stricmp(func_name, "Exp"))
-		func_type = FUNC_EXP;
-	else if (!stricmp(func_name, "Sqrt"))
-		func_type = FUNC_SQRT;
-	else if (!stricmp(func_name, "Log"))
-		func_type = FUNC_LOG;
-	else if (!stricmp(func_name, "Ln"))
-		func_type = FUNC_LN;
-	else
-		return NULL;
+	// been added to the function list.
 
-	// Since the above would have found it if it were already in the list, add this built-in function to the list:
-	if (   !(pfunc = AddFunc(func_name, aFuncNameLength, func_type))   )
-		return NULL;
-	Func &func = *pfunc; // For performance and convenience.
+	// Set defaults to be possibly overridden below:
+	int min_params = 1;
+	int max_params = 1;
+	BuiltInFunctionType bif;
 
-	switch(func_type)
+	if (!strnicmp(func_name, "LV_", 3)) // ListView function.
 	{
-	case FUNC_STRLEN:
-	case FUNC_ABS:
-	case FUNC_ASC:
-	case FUNC_CHR:
-	case FUNC_FILEEXIST:
-	case FUNC_CEIL:
-	case FUNC_FLOOR:
-	case FUNC_SIN:
-	case FUNC_COS:
-	case FUNC_TAN:
-	case FUNC_ASIN:
-	case FUNC_ACOS:
-	case FUNC_ATAN:
-	case FUNC_EXP:
-	case FUNC_SQRT:
-	case FUNC_LOG:
-	case FUNC_LN:
-		func.mMinParams = 1;
-		func.mParamCount = 1; // Max params.
-		break;
-	case FUNC_INSTR:
-		func.mMinParams = 2;
-		func.mParamCount = 4; // Max params.
-		break;
-	case FUNC_WINEXIST:
-	case FUNC_WINACTIVE:
-		func.mParamCount = 4; // func.mMinParams defaults to 0 (correct in these cases).
-		break;
-	case FUNC_DLLCALL:
-		func.mMinParams = 1;
-		func.mParamCount = 10000; // Max params: An arbitrarily high limit that will never realistically be reached.
-		break;
-	case FUNC_ROUND:
-	case FUNC_GETKEYSTATE:
-	case FUNC_VARSETCAPACITY:
-		func.mMinParams = 1;
-		func.mParamCount = 2; // Max params.
-		break;
-	case FUNC_MOD:
-		func.mMinParams = 2;
-		func.mParamCount = 2; // Max params.
-		break;
+		char *suffix = func_name + 3;
+		if (!stricmp(suffix, "GetNextItem"))
+		{
+			bif = BIF_LV_GetNextItem;
+			min_params = 0;
+			max_params = 2;
+		}
+		else
+			return NULL;
 	}
+	else if (!stricmp(func_name, "StrLen"))
+		bif = BIF_StrLen;
+	else if (!stricmp(func_name, "Asc"))
+		bif = BIF_Asc;
+	else if (!stricmp(func_name, "Chr"))
+		bif = BIF_Chr;
+	else if (!stricmp(func_name, "InStr"))
+	{
+		bif = BIF_InStr;
+		min_params = 2;
+		max_params = 4;
+	}
+	else if (!stricmp(func_name, "GetKeyState"))
+	{
+		bif = BIF_GetKeyState;
+		max_params = 2;
+	}
+	else if (!stricmp(func_name, "DllCall"))
+	{
+		bif = BIF_DllCall;
+		max_params = 10000; // An arbitrarily high limit that will never realistically be reached.
+	}
+	else if (!stricmp(func_name, "VarSetCapacity"))
+	{
+		bif = BIF_VarSetCapacity;
+		max_params = 2;
+	}
+	else if (!stricmp(func_name, "FileExist"))
+		bif = BIF_FileExist;
+	else if (!stricmp(func_name, "WinExist") || !stricmp(func_name, "WinActive"))
+	{
+		bif = BIF_WinExistActive;
+		min_params = 0;
+		max_params = 4;
+	}
+	else if (!stricmp(func_name, "Round"))
+	{
+		bif = BIF_Round;
+		max_params = 2;
+	}
+	else if (!stricmp(func_name, "Ceil"))
+		bif = BIF_Ceil;
+	else if (!stricmp(func_name, "Floor"))
+		bif = BIF_Floor;
+	else if (!stricmp(func_name, "Mod"))
+	{
+		bif = BIF_Mod;
+		min_params = 2;
+		max_params = 2;
+	}
+	else if (!stricmp(func_name, "Abs"))
+		bif = BIF_Abs;
+	else if (!stricmp(func_name, "Sin"))
+		bif = BIF_Sin;
+	else if (!stricmp(func_name, "Cos"))
+		bif = BIF_Cos;
+	else if (!stricmp(func_name, "Tan"))
+		bif = BIF_Tan;
+	else if (!stricmp(func_name, "ASin") || !stricmp(func_name, "ACos"))
+		bif = BIF_ASinACos;
+	else if (!stricmp(func_name, "ATan"))
+		bif = BIF_ATan;
+	else if (!stricmp(func_name, "Exp"))
+		bif = BIF_Exp;
+	else if (!stricmp(func_name, "Sqrt") || !stricmp(func_name, "Log") || !stricmp(func_name, "Ln"))
+		bif = BIF_SqrtLogLn;
+	else
+		return NULL; // Maint: There may be other lines above that also return NULL.
+
+	// Since above didn't return, this is a built-in function that hasn't yet been added to the list.
+	// Add it now:
+	if (   !(pfunc = AddFunc(func_name, aFuncNameLength, true))   )
+		return NULL;
+
+	pfunc->mBIF = bif;
+	pfunc->mMinParams = min_params;
+	pfunc->mParamCount = max_params;
 
 	return pfunc;
 }
 
 
 
-Func *Script::AddFunc(char *aFuncName, size_t aFuncNameLength, FuncType aFuncType)
+Func *Script::AddFunc(char *aFuncName, size_t aFuncNameLength, bool aIsBuiltIn)
 // This function should probably not be called by anyone except FindOrAddFunc, which has already done
 // the dupe-checking.
 // Returns the address of the new function or NULL on failure.
@@ -5598,7 +5611,7 @@ Func *Script::AddFunc(char *aFuncName, size_t aFuncNameLength, FuncType aFuncTyp
 		// to bother varying the error message to include ERR_ABORT if this occurs during runtime.
 		return NULL;
 
-	Func *the_new_func = new Func(new_name, aFuncType);
+	Func *the_new_func = new Func(new_name, aIsBuiltIn);
 	if (!the_new_func)
 	{
 		ScriptError(ERR_OUTOFMEM);
@@ -6496,7 +6509,7 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 					// If this parameter is formally declared as ByRef, report a load-time error if
 					// the actual-parameter is obviously not a variable (can't catch everything, such
 					// as invalid double derefs, e.g. Array%VarContainingSpaces%):
-					if (func.mType == FUNC_NORMAL && func.mParam[deref->param_count].var->IsByRef())
+					if (!func.mIsBuiltIn && func.mParam[deref->param_count].var->IsByRef())
 					{
 						// First check if there are any EXPR_TELLTALES characters in this param, since the
 						// presence of an expression for this parameter means it can't resolve to a variable
@@ -11811,6 +11824,8 @@ double_deref:
 	char *right_string, *left_string;
 	char *right_contents, *left_contents;
 	size_t right_length, left_length;
+	char left_buf[MAX_FORMATTED_NUMBER_LENGTH + 1]; // Only needed for holding numbers.
+	char right_buf[MAX_FORMATTED_NUMBER_LENGTH + 1];
 	int j, s, actual_param_count;
 	Func *prev_func;
 	char *result; // "result" is used for return values and also the final result.
@@ -11819,10 +11834,6 @@ double_deref:
 	ExprTokenType *circuit_token;
 	VarBkp *var_backup;   // If needed, it will hold an array of VarBkp objects.
 	int var_backup_count; // The number of items in the above array.
-	HWND found_hwnd;
-	#define MAX_EXPR_PARAMS 4  // For now, until some better approach is devised for supporting more without wasting a lot of call-stack space.
-	char param_buf[MAX_EXPR_PARAMS][MAX_FORMATTED_NUMBER_LENGTH + 1]; // Only needed for holding numbers.
-	char *param[MAX_EXPR_PARAMS];
 
 	// For each item in the postfix array: if it's an operand, push it onto stack; if it's an operator or
 	// function call, evaluate it and push its result onto the stack.
@@ -11841,395 +11852,25 @@ double_deref:
 			actual_param_count = this_token.deref->param_count; // For performance.
 			if (actual_param_count > stack_count) // Prevent stack underflow (probably impossible if actual_param_count is accurate).
 				goto fail;
-
-			if (func.mType != FUNC_NORMAL)
+			if (func.mIsBuiltIn)
 			{
 				// Adjust the stack early to simplify.  Above already confirmed that this won't underflow.
 				// Pop the actual number of params involved in this function-call off the stack.  Load-time
 				// validation has ensured that this number is always less than or equal to the number of
 				// parameters formally defined by the function.  Therefore, there should never be any leftover
 				// function-params on the stack after this is done:
-				stack_count -= actual_param_count;
-
-				switch (func.mType)
-				{
-				case FUNC_STRLEN: // The method here must be kept in sync with that of the ACT_STRINGLEN command.
-					this_token.symbol = SYM_INTEGER; // Result will always be an integer.
-					// Loadtime validation has ensured that there's exactly one actual parameter.
-					if (stack[stack_count]->symbol == SYM_VAR && stack[stack_count]->var->IsBinaryClip())
-						this_token.value_int64 = stack[stack_count]->var->Length() + 1;
-					else
-					{
-						if (   !(param[0] = ExprTokenToString(*stack[stack_count], param_buf[0]))   )
-							goto fail; // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
-						this_token.value_int64 = strlen(param[0]);
-					}
-					goto push_this_token; // i.e. any numeric result can be considered final.
-
-				case FUNC_ASC:
-					if (   !(param[0] = ExprTokenToString(*stack[stack_count], param_buf[0]))   )
-						goto fail; // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
-					this_token.symbol = SYM_INTEGER; // Result will always be an integer.
-					this_token.value_int64 = (UCHAR)param[0][0];
-					goto push_this_token; // i.e. any numeric result can be considered final.
-
-				case FUNC_CHR:
-				{
-					int param1 = (int)ExprTokenToInt64(*stack[stack_count]); // Convert to INT vs. UINT so that negatives can be detected.
-					result = param_buf[0]; // If necessary, "result" will be moved to a persistent memory location further below.
-					if (param1 < 0 || param1 > 255)
-						*result = '\0'; // Empty string indicates both Chr(0) and an out-of-bounds param1.
-					else
-					{
-						result[0] = param1;
-						result[1] = '\0';
-					}
-					break;
-				}
-
-				case FUNC_INSTR:
-				{
-					// Load-time validation has already ensured that at least two actual params are present.
-					char *haystack = ExprTokenToString(*stack[stack_count], param_buf[0]);
-					char *needle = ExprTokenToString(*stack[stack_count + 1], param_buf[1]);
-					if (!haystack || !needle)
-						goto fail; // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
-
-					this_token.symbol = SYM_INTEGER; // Init result type (it will always be an integer).
-					bool case_sensitive = actual_param_count >= 3 && ExprTokenToInt64(*stack[stack_count + 2]);
-					char *found_pos;
-					__int64 offset = 0; // Set default.
-
-					if (actual_param_count >= 4) // There is a starting position present.
-					{
-						offset = ExprTokenToInt64(*stack[stack_count + 3]) - 1; // +3 to get the fourth arg.
-						if (offset == -1) // Special mode to search from the right side.  Other negative values are reserved for possible future use as offsets from the right side.
-						{
-							found_pos = strrstr(haystack, needle, case_sensitive, 1);
-							this_token.value_int64 = found_pos ? (found_pos - haystack + 1) : 0;  // +1 to convert to 1-based, since 0 indicates "not found".
-							goto push_this_token; // i.e. any numeric result can be considered final.
-						}
-						// Otherwise, offset is less than -1 or >= 0.
-						// Since InStr("", "") yields 1, it seems consistent for InStr("Red", "", 4) to yield
-						// 4 rather than 0.  The below takes this into account:
-						if (offset < 0 || offset > strlen(haystack))
-						{
-							this_token.value_int64 = 0; // Match never found when offset is beyond length of string.
-							goto push_this_token; // i.e. any numeric result can be considered final.
-						}
-					}
-
-					haystack += offset; // Above has verified that this won't exceed the length of haystack.
-					found_pos = case_sensitive ? strstr(haystack, needle) : strcasestr(haystack, needle);
-					this_token.value_int64 = found_pos ? (found_pos - haystack + offset + 1) : 0;  // +1 to convert to 1-based, since 0 indicates "not found".
-					goto push_this_token; // i.e. any numeric result can be considered final.
-				}
-
-				case FUNC_GETKEYSTATE:
-				{
-					if (   !(param[0] = ExprTokenToString(*stack[stack_count], param_buf[0]))   )
-						goto fail; // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
-					// Keep this in sync with GetKeyJoyState().
-					// See GetKeyJoyState() for more comments about the following lines.
-					JoyControls joy;
-					int joystick_id;
-					vk_type vk = TextToVK(param[0]);
-					if (!vk)
-					{
-						if (   !(joy = (JoyControls)ConvertJoy(param[0], &joystick_id))   )
-							result = "";
-						else
-						{
-							// The following must be set for ScriptGetJoyState():
-							this_token.symbol = SYM_STRING;
-							this_token.marker = param_buf[1];
-							ScriptGetJoyState(joy, joystick_id, this_token, true);
-							if (IS_NUMERIC(this_token.symbol))
-								goto push_this_token; // i.e. any numeric result can be considered final.
-							result = this_token.marker; // If necessary, "result" will be moved to a persistent memory location further below.
-						}
-						break;
-					}
-					// Since above didn't "break": There is a virtual key (not a joystick control).
-					if (actual_param_count > 1)
-					{
-						if (   !(param[1] = ExprTokenToString(*stack[stack_count + 1], param_buf[1]))   )
-							goto fail; // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
-					}
-					else
-						param[1] = "";
-					KeyStateTypes key_state_type;
-					switch (toupper(*param[1])) // Second parameter.
-					{
-					case 'T': key_state_type = KEYSTATE_TOGGLE; break; // Whether a toggleable key such as CapsLock is currently turned on.
-					case 'P': key_state_type = KEYSTATE_PHYSICAL; break; // Physical state of key.
-					default: key_state_type = KEYSTATE_LOGICAL;
-					}
-					this_token.symbol = SYM_INTEGER; // Result will always be an integer.
-					this_token.value_int64 = ScriptGetKeyState(vk, key_state_type); // 1 for down and 0 for up.
-					goto push_this_token; // i.e. any numeric result can be considered final.
-				}
-
-				case FUNC_DLLCALL:
-					DllCall(this_token, stack + stack_count, actual_param_count); // It will see this portion of the stack as an array of its parameters.
-					if (IS_NUMERIC(this_token.symbol)) // Any numeric result can be considered final.
-						goto push_this_token;
-					//else it's a string, which might need to be moved to persistent memory further below.
-					result = this_token.marker; // Marker can be used because symbol will never be SYM_VAR in this case.
-					break;
-
-				case FUNC_VARSETCAPACITY:
-					this_token.symbol = SYM_INTEGER;
-					this_token.value_int64 = 0; // Set default. In spite of being ambiguous with the result of Free(), 0 seems a little better than -1 since it indicates "no capacity" and is also equal to "false" for easy use in expressions.
-					if (stack[stack_count]->symbol == SYM_VAR)
-					{
-						Var &var = *stack[stack_count]->var; // For performance and convenience.
-						if (var.Type() == VAR_NORMAL) // Don't allow resizing/reporting of built-in variables since Assign() isn't designed to work on them, and resizing the clipboard's memory area would serve no purpose and isn't intended for this anyway.
-						{
-							if (actual_param_count > 1) // Second parameter is present.
-							{
-								VarSizeType new_capacity = (UINT)ExprTokenToInt64(*stack[stack_count + 1]);
-								if (new_capacity)
-								{
-									var.Assign(NULL, new_capacity, false, true); // This also destroys the variables contents.
-									// By design, Assign() has already set the length of the variable to reflect new_capacity.
-									// This is not what is wanted in this case since it should be truly empty.
-									var.Length() = 0;
-								}
-								else // ALLOC_SIMPLE, due to its nature, will not actually be freed, which is documented.
-									var.Free();
-							}
-							//else the var is not altered; instead, the current capacity is reported, which seems more intuitive/useful than having it do a Free().
-							this_token.value_int64 = var.Capacity(); // Don't subtract 1 here; avoids underflow.
-							if (this_token.value_int64)
-								--this_token.value_int64; // Omit the room for the zero terminator since script capacity is definite as length vs. size.
-						}
-					}
+				stack_count -= actual_param_count; // The function called below will see this portion of the stack as an array of its parameters.
+				this_token.symbol = SYM_INTEGER; // Set default return type so that functions don't have to do it if they return INTs.
+				this_token.marker = func.mName;  // Inform function of which built-in function called it (allows code sharing/reduction). Can't use circuit_token because it's value is still needed later below.
+				this_token.buf = left_buf;       // mBIF() can use this to store a string result, and for other purposes.
+				func.mBIF(this_token, stack + stack_count, actual_param_count);
+				if (IS_NUMERIC(this_token.symbol)) // Any numeric result can be considered final.
 					goto push_this_token;
-
-				case FUNC_FILEEXIST:
-					if (   !(param[0] = ExprTokenToString(*stack[stack_count], param_buf[0]))   )
-						goto fail; // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
-					result = param_buf[1]; // If necessary, "result" will be moved to a persistent memory location further below.
-					DWORD attr;
-					if (DoesFilePatternExist(param[0], &attr))
-					{
-						// Yield the attributes of the first matching file.  If not match, yield an empty string.
-						// This relies upon the fact that a file's attributes are never legitimately zero, which
-						// seems true but in case it ever isn't, this forces a non-empty string be used.
-						if (!attr) // Seems impossible, but the use of 0xFFFFFFFF vs. 0 as "invalid" indicates otherwise.
-						{
-							// File exists but has no attributes!  Use a placeholder so that any expression will
-							// see the result as "true" (i.e. because the file does exist):
-							result[0] = 'X'; // Some arbirary letter so that it's seen as "true"; letter mustn't be reserved by RASHNDOCT.
-							result[1] = '\0';
-						}
-						else
-							FileAttribToStr(result, attr);
-					}
-					else // Empty string is the indicator of "not found" (seems more consistent than using an integer 0, since caller might rely on it being SYM_STRING).
-						*result = '\0';
-					break;
-
-				case FUNC_WINEXIST:
-				case FUNC_WINACTIVE:
-					for (j = 0; j < func.mParamCount; ++j) // For each formal parameter, including optional ones.
-					{
-						if (j >= actual_param_count) // No actual to go with it (should be possible only if the parameter is optional or has a default value).
-						{
-							param[j] = "";
-							continue;
-						}
-						// Otherwise, assign actual parameter's value to the formal parameter.
-						// The stack can contain both generic and specific operands.  Specific operands were
-						// evaluated by a previous iteration of this section.  Generic ones were pushed as-is
-						// onto the stack by a previous iteration.
-						if (   !(param[j] = ExprTokenToString(*stack[stack_count + j], param_buf[j]))   )
-							goto fail; // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
-					}
-
-					// Should be called the same was as ACT_IFWINEXIST and ACT_IFWINACTIVE:
-					found_hwnd = (func.mType == FUNC_WINEXIST)
-						? WinExist(param[0], param[1], param[2], param[3], false, true)
-						: WinActive(param[0], param[1], param[2], param[3], true);
-					result = param_buf[0];
-					result[0] = '0';
-					result[1] = 'x';
-					_ui64toa((unsigned __int64)found_hwnd, result + 2, 16); // If necessary, "result" will be moved to a persistent memory location further below.
-					break;
-
-				case FUNC_ROUND:
-				{
-					// See TRANS_CMD_ROUND for details.
-					int param2;
-					double multiplier;
-					if (actual_param_count > 1)
-					{
-						param2 = (int)ExprTokenToInt64(*stack[stack_count + 1]);
-						multiplier = qmathPow(10, param2);
-					}
-					else // Omitting the parameter is the same as explicitly specifying 0 for it.
-					{
-						param2 = 0;
-						multiplier = 1;
-					}
-					right_double = ExprTokenToDouble(*stack[stack_count]);
-					if (right_double >= 0.0)
-						this_token.value_double = qmathFloor(right_double * multiplier + 0.5) / multiplier;
-					else
-						this_token.value_double = qmathCeil(right_double * multiplier - 0.5) / multiplier;
-					// If incoming value is an integer, it seems best for flexibility to convert it to a
-					// floating point number whenever the second param is >0.  That way, it can be used
-					// to "cast" integers into floats.  Conversely, it seems best to yield an integer
-					// whenever the second param is <=0 or omitted.
-					if (param2 > 0)
-						this_token.symbol = SYM_FLOAT; // this_token.value_double already contains the result.
-					else
-					{
-						this_token.symbol = SYM_INTEGER;
-						this_token.value_int64 = (__int64)this_token.value_double;
-					}
-					goto push_this_token; // i.e. any numeric result can be considered final.
-				}
-
-				case FUNC_CEIL: // Although unconventional, it seems more intuitive in a scripting language to yield a pure integer rather than a double.
-					this_token.symbol = SYM_INTEGER;
-					this_token.value_int64 = (__int64)qmathCeil(ExprTokenToDouble(*stack[stack_count]));
-					goto push_this_token; // i.e. any numeric result can be considered final.
-
-				case FUNC_FLOOR: // Although unconventional, it seems more intuitive in a scripting language to yield a pure integer rather than a double.
-					this_token.symbol = SYM_INTEGER;
-					this_token.value_int64 = (__int64)qmathFloor(ExprTokenToDouble(*stack[stack_count]));
-					goto push_this_token; // i.e. any numeric result can be considered final.
-
-				case FUNC_MOD:
-					// Load-time validation has already ensured there are exactly two parameters.
-					// "Cast" each operand to Int64/Double depending on whether it has a decimal point.
-					if (!ExprTokenToDoubleOrInt(*stack[stack_count]) || !ExprTokenToDoubleOrInt(*stack[stack_count + 1]))
-						goto fail; // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
-					if (stack[stack_count]->symbol == SYM_INTEGER && stack[stack_count + 1]->symbol == SYM_INTEGER)
-					{
-						if (!stack[stack_count + 1]->value_int64) // Divide by zero.
-						{
-							this_token.symbol = SYM_STRING;
-							this_token.marker = "";
-						}
-						else
-						{
-							// For performance, % is used vs. qmath for integers.
-							this_token.symbol = SYM_INTEGER;
-							this_token.value_int64 = stack[stack_count]->value_int64 % stack[stack_count + 1]->value_int64;
-						}
-					}
-					else // At least one is a floating point number.
-					{
-						left_double = ExprTokenToDouble(*stack[stack_count]);
-						right_double = ExprTokenToDouble(*stack[stack_count + 1]);
-						if (right_double == 0.0) // Divide by zero.
-						{
-							this_token.symbol = SYM_STRING;
-							this_token.marker = "";
-						}
-						else
-						{
-							this_token.symbol = SYM_FLOAT;
-							this_token.value_double = qmathFmod(left_double, right_double);
-						}
-					}
-					goto push_this_token; // i.e. any numeric or empty-string result can be considered final.
-
-				case FUNC_ABS:
-					// Unlike TRANS_CMD_ABS, which removes the minus sign from the string if it has one,
-					// this is done in a more traditional way.  It's hard to imagine needing the minus
-					// sign removal method here since a negative hex literal such as -0xFF seems too rare
-					// to worry about.  One additional reason not to remove minus signs from strings is
-					// that it might produce inconsistent results depending on whether the operand is
-					// generic (SYM_OPERAND) and numeric.  In other words, abs() shouldn't treat a
-					// sub-expression differently than a numeric literal.
-					this_token.symbol = stack[stack_count]->symbol;
-					this_token.value_int64 = stack[stack_count]->value_int64; // Copy contents of union, independent of symbol type.
-					if (!ExprTokenToDoubleOrInt(this_token)) // "Cast" token to Int64/Double depending on whether it has a decimal point.
-						goto fail; // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
-					if (this_token.symbol == SYM_INTEGER)
-						this_token.value_int64 = _abs64(this_token.value_int64); // _abs64() was checked for code bloat and as expected it doesn't add any measurable size.
-					else // Must be SYM_FLOAT due to the conversion above.
-						this_token.value_double = qmathFabs(this_token.value_double);
-					goto push_this_token; // i.e. any numeric result can be considered final.
-
-				case FUNC_SIN:
-					this_token.symbol = SYM_FLOAT;
-					this_token.value_double = qmathSin(ExprTokenToDouble(*stack[stack_count]));
-					goto push_this_token; // i.e. any numeric result can be considered final.
-
-				case FUNC_COS:
-					this_token.symbol = SYM_FLOAT;
-					this_token.value_double = qmathCos(ExprTokenToDouble(*stack[stack_count]));
-					goto push_this_token; // i.e. any numeric result can be considered final.
-
-				case FUNC_TAN:
-					this_token.symbol = SYM_FLOAT;
-					this_token.value_double = qmathTan(ExprTokenToDouble(*stack[stack_count]));
-					goto push_this_token; // i.e. any numeric result can be considered final.
-
-				case FUNC_ASIN:
-				case FUNC_ACOS:
-					left_double = ExprTokenToDouble(*stack[stack_count]);
-					if (left_double > 1 || left_double < -1) // ASin and ACos aren't defined for other values.
-					{
-						this_token.symbol = SYM_STRING;
-						this_token.marker = "";
-					}
-					else
-					{
-						this_token.symbol = SYM_FLOAT;
-						this_token.value_double = (func.mType == FUNC_ASIN) ? qmathAsin(left_double) : qmathAcos(left_double);
-					}
-					goto push_this_token; // i.e. any numeric or empty-string result can be considered final.
-
-				case FUNC_ATAN:
-					this_token.symbol = SYM_FLOAT;
-					this_token.value_double = qmathAtan(ExprTokenToDouble(*stack[stack_count]));
-					goto push_this_token; // i.e. any numeric result can be considered final.
-
-				case FUNC_EXP:
-					this_token.symbol = SYM_FLOAT;
-					this_token.value_double = qmathExp(ExprTokenToDouble(*stack[stack_count]));
-					goto push_this_token; // i.e. any numeric result can be considered final.
-
-				case FUNC_SQRT:
-				case FUNC_LOG:
-				case FUNC_LN:
-					left_double = ExprTokenToDouble(*stack[stack_count]);
-					if (left_double < 0) // Result is undefined in these cases, so make blank to indicate.
-					{
-						this_token.symbol = SYM_STRING;
-						this_token.marker = "";
-					}
-					else
-					{
-						this_token.symbol = SYM_FLOAT;
-						switch(func.mType)
-						{
-						case FUNC_SQRT:
-							this_token.value_double = qmathSqrt(left_double);
-							break;
-						case FUNC_LOG:
-							this_token.value_double = qmathLog10(left_double);
-							break;
-						case FUNC_LN:
-							this_token.value_double = qmathLog(left_double);
-							break;
-						}
-					}
-					goto push_this_token; // i.e. any numeric or empty-string result can be considered final.
-
-				default: // Unknown/unhandled function type.
-					result = "";
-				} // switch (func.mType)
-
+				//else it's a string, which might need to be moved to persistent memory further below.
+				result = this_token.marker; // Marker can be used because symbol will never be SYM_VAR in this case.
 				early_return = false; // For maintainability.
 			}
-			else // func.mType == FUNC_NORMAL (i.e. it's not a built-in function, or it's a built-in that was overridden with a custom function)
+			else // It's not a built-in function, or it's a built-in that was overridden with a custom function.
 			{
 				// If there are other instances of this function already running, either via recursion or
 				// an interrupted quasi-thread, backup the local variables of the instance that lies immediately
@@ -12423,7 +12064,7 @@ double_deref:
 				make_result_persistent = false;
 			else // There are more operators/operands to be evaluated, but if there are no more function calls, we don't have to make it persistent since their deref buf won't be overwritten by anything during the time we need it.
 			{
-				if (func.mType != FUNC_NORMAL)
+				if (func.mIsBuiltIn)
 					make_result_persistent = true; // Future operators/operands might use the buffer where the result is stored, so must copy it somewhere else.
 				else
 				{
@@ -12481,7 +12122,7 @@ double_deref:
 				}
 			}
 
-			if (func.mType == FUNC_NORMAL)
+			if (!func.mIsBuiltIn)
 			{
 				// Free the memory of all the just-completed function's local variables.  This is done in
 				// both of the following cases:
@@ -12518,7 +12159,7 @@ double_deref:
 					result_to_return = NULL; // Use NULL to inform our caller that this entire thread is to be terminated.
 					goto end;
 				}
-			} // if (func.mType == FUNC_NORMAL)
+			} // if (!func.mIsBuiltIn)
 
 			// Convert this_token's symbol only as the final step in case anything above ever uses its old
 			// union member.  Mark it as generic, not string, so that any operator of function call that uses
@@ -12678,16 +12319,16 @@ double_deref:
 				switch (right.symbol)
 				{
 				// Seems best to obey SetFormat for these two, though it's debatable:
-				case SYM_INTEGER: right_string = ITOA64(right.value_int64, param_buf[0]); break;
-				case SYM_FLOAT: snprintf(param_buf[0], sizeof(param_buf[0]), g.FormatFloat, right.value_double); right_string = param_buf[0]; break;
+				case SYM_INTEGER: right_string = ITOA64(right.value_int64, right_buf); break;
+				case SYM_FLOAT: snprintf(right_buf, sizeof(right_buf), g.FormatFloat, right.value_double); right_string = right_buf; break;
 				default: right_string = right_contents; // SYM_STRING/SYM_OPERAND/SYM_VAR, which is already in the right format.
 				}
 
 				switch (left.symbol)
 				{
 				// Seems best to obey SetFormat for these two, though it's debatable:
-				case SYM_INTEGER: left_string = ITOA64(left.value_int64, param_buf[1]); break;
-				case SYM_FLOAT: snprintf(param_buf[1], sizeof(param_buf[1]), g.FormatFloat, left.value_double); left_string = param_buf[1]; break;
+				case SYM_INTEGER: left_string = ITOA64(left.value_int64, left_buf); break;
+				case SYM_FLOAT: snprintf(left_buf, sizeof(left_buf), g.FormatFloat, left.value_double); left_string = left_buf; break;
 				default: left_string = left_contents; // SYM_STRING or SYM_OPERAND, which is already in the right format.
 				}
 				
@@ -13145,118 +12786,6 @@ end:
 	for (i = 0; i < mem_count; ++i) // Free any temporary memory blocks that were used.
 		free(mem[i]);
 	return result_to_return;
-}
-
-
-
-__int64 Line::ExprTokenToInt64(ExprTokenType &aToken)
-// Converts the contents of aToken to an int.
-{
-	// Some callers, such as those that cast our return value to UINT, rely on the use of 64-bit to preserve
-	// unsigned values and also wrap any signed values into the unsigned domain.
-	switch (aToken.symbol)
-	{
-		case SYM_INTEGER: return (int)aToken.value_int64;
-		case SYM_FLOAT: return (int)aToken.value_double;
-		case SYM_VAR: return (int)ATOI(aToken.var->Contents());
-		default: // SYM_STRING or SYM_OPERAND
-			return ATOI(aToken.marker);
-	}
-}
-
-
-
-double Line::ExprTokenToDouble(ExprTokenType &aToken)
-// Converts the contents of aToken to a double.
-{
-	switch (aToken.symbol)
-	{
-		case SYM_INTEGER: return (double)aToken.value_int64;
-		case SYM_FLOAT: return aToken.value_double;
-		case SYM_VAR: return ATOF(aToken.var->Contents());
-		default: // SYM_STRING or SYM_OPERAND
-			return ATOF(aToken.marker);
-	}
-}
-
-
-
-char *Line::ExprTokenToString(ExprTokenType &aToken, char *aBuf)
-// Returns NULL on failure.  Otherwise, it returns either aBuf (if aBuf was needed for the conversion)
-// or the token's own string.  Caller has ensured that aBuf is at least MAX_FORMATTED_NUMBER_LENGTH+1 in size.
-{
-	switch (aToken.symbol)
-	{
-	case SYM_STRING:
-	case SYM_OPERAND:
-		return aToken.marker;
-	case SYM_VAR:
-		return aToken.var->Contents();
-	case SYM_INTEGER:
-		return ITOA64(aToken.value_int64, aBuf);
-	case SYM_FLOAT:
-		snprintf(aBuf, MAX_FORMATTED_NUMBER_LENGTH + 1, g.FormatFloat, aToken.value_double);
-		return aBuf;
-	default: // Not an operand.
-		return NULL;
-	}
-}
-
-
-
-ResultType Line::ExprTokenToVar(ExprTokenType &aToken, Var &aOutputVar)
-// Writes aToken's value into aOutputVar.
-// Returns FAIL if aToken isn't an operand or the assignment failed.  Returns OK on success.
-// Currently only supports SYM_VAR if the variable is a normal variable, not a built-in or env. var.
-{
-	switch (aToken.symbol)
-	{
-	case SYM_STRING:
-	case SYM_OPERAND:
-		return aOutputVar.Assign(aToken.marker);
-	case SYM_VAR:
-		return aOutputVar.Assign(aToken.var->Contents());
-	case SYM_INTEGER:
-		return aOutputVar.Assign(aToken.value_int64);
-	case SYM_FLOAT:
-		return aOutputVar.Assign(aToken.value_double);
-	default: // Not an operand.
-		return FAIL;
-	}
-}
-
-
-
-ResultType Line::ExprTokenToDoubleOrInt(ExprTokenType &aToken)
-// Converts aToken's contents to a numeric value, either int or float (whichever is more appropriate).
-{
-	char *str;
-	switch (aToken.symbol)
-	{
-		case SYM_INTEGER:
-		case SYM_FLOAT:
-			return OK;
-		case SYM_VAR:
-			str = aToken.var->Contents();
-			break;
-		default: // SYM_STRING or SYM_OPERAND
-			str = aToken.marker;
-	}
-	// Since above didn't return, interpret "str" as a number.
-	switch (IsPureNumeric(str, true, false, true))
-	{
-	case PURE_INTEGER:
-		aToken.symbol = SYM_INTEGER;
-		aToken.value_int64 = ATOI64(str);
-		break;
-	case PURE_FLOAT:
-		aToken.symbol = SYM_FLOAT;
-		aToken.value_double = ATOF(str);
-		break;
-	default: // Not a pure number.
-		return FAIL;
-	}
-	return OK; // Since above didn't return, indicate success.
 }
 
 

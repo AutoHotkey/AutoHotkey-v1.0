@@ -34,6 +34,8 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 
 	if (!GetCurrentDirectory(sizeof(g_WorkingDir), g_WorkingDir)) // Needed for the FileSelectFile() workaround.
 		*g_WorkingDir = '\0';
+	// Unlike the below, the above must not be Malloc'd because the contents can later change to something
+	// as large as MAX_PATH by means of the SetWorkingDir command.
 	g_WorkingDirOrig = SimpleHeap::Malloc(g_WorkingDir); // Needed by the Reload command.
 
 	// Set defaults, to be overridden by command line args we receive:
@@ -48,8 +50,8 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\Line Continuation.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\DllCall.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\GUI UpDown.ahk";
-		char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\GUI Date.ahk";
-		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\GUI ListView.ahk";
+		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\GUI Date.ahk";
+		char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\GUI ListView.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Ref\\ImageSearch\\TEST SUITE\\MAIN.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\New Text Document.ahk";
 	#else

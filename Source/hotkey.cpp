@@ -1136,7 +1136,7 @@ ResultType Hotkey::TextToKey(char *aText, char *aHotkeyName, bool aIsModifier)
 	}
 	else // no VK was found.  Is there a scan code?
 		if (   !(temp_sc = TextToSC(aText))   )
-			if (   !(temp_sc = (sc_type)Line::ConvertJoy(aText, &joystick_id, true))   )  // Is there a joystick control/button?
+			if (   !(temp_sc = (sc_type)ConvertJoy(aText, &joystick_id, true))   )  // Is there a joystick control/button?
 			{
 				snprintf(error_text, sizeof(error_text), "\"%s\" is not a valid key name within a hotkey label.", aText);
 				if (g_script.mIsReadyToExecute) // Dynamically registered via the Hotkey command.

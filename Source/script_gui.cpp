@@ -4686,7 +4686,7 @@ void GuiType::ControlAddContents(GuiControlType &aControl, char *aContent, int a
 			{
 				if (aOpt->choice)
 				{
-					lvi.mask |= LVIF_STATE;
+					lvi.mask |= LVIF_STATE; // Indicates that the state and stateMask members are present.
 					lvi.stateMask = LVIS_SELECTED;
 					lvi.state = LVIS_SELECTED;
 				}
@@ -4697,7 +4697,9 @@ void GuiType::ControlAddContents(GuiControlType &aControl, char *aContent, int a
 					return;
 				//else lvi.iItem now contains the proper value for all subseqent iterations (which add the other columns as subitems).
 				lvi.iSubItem = 1; // Init for first of the subitems (if any).  This index is one-based not zero-based.
-				lvi.mask &= ~LVIF_STATE; // State member should be ignored for the row's sub-items.
+				lvi.mask &= ~LVIF_STATE; // Tell it to ignore state member for the row's sub-items.
+				if (aOpt->checked == BST_CHECKED) // There might be some way to create the item in a checked state, but this message is simpler.
+					ListView_SetCheckState(aControl.hwnd, lvi.iItem, TRUE); // TRUE = Check the row's checkbox.
 			}
 			else // Columns after the first are the subitems of anchored to the item (the leftmost column).
 			{
@@ -4754,8 +4756,14 @@ void GuiType::ControlAddContents(GuiControlType &aControl, char *aContent, int a
 		this_field = next_field;
 	} // for()
 
+	// It seems a useful default to do a basic auto-size upon creation, even though it won't take into
+	// account contents of the rows or the later presence of a vertical scroll bar. The last column
+	// will be overlapped when/if a vscroll bar appears, which would produce an hscroll bar too.
+	// It seems best to retain this behavior rather than trying to shrink the last column to allow
+	// room for a scroll bar because: 1) Having it use all available width is desirable at least
+	// some of the time (such as times when there will be only a few rows; 2) It simplifies the code.
 	// This method of auto-sizing each column to fit its text works much better than setting
-	// lvc.cx to ListView_GetStringWidth upon creation of the column:
+	// lvc.cx to ListView_GetStringWidth upon creation of the column.
 	if (control_type == GUI_CONTROL_LISTVIEW)
 		for (int i = 0; i < requested_index + 1; ++i) // Auto-size each column.
 			ListView_SetColumnWidth(aControl.hwnd, i, LVSCW_AUTOSIZE_USEHEADER);
@@ -5304,10 +5312,10 @@ ResultType GuiType::Submit(bool aHideIt)
 
 ResultType GuiType::ControlGetContents(Var &aOutputVar, GuiControlType &aControl, char *aMode)
 {
-	char *cp, *contents, buf[1024]; // For various uses.
+	char *cp, buf[1024]; // For various uses.
 	bool submit_mode = !stricmp(aMode, "Submit");
 	int pos;
-	LRESULT item_count, sel_count, index, i;  // LRESULT is a signed type (same as int/long).
+	LRESULT sel_count, i;  // LRESULT is a signed type (same as int/long).
 	SYSTEMTIME st[2];
 
 	// First handle any control types that behave the same regardless of aMode:
@@ -5333,67 +5341,6 @@ ResultType GuiType::ControlGetContents(Var &aOutputVar, GuiControlType &aControl
 		return submit_mode ? OK : aOutputVar.Assign((int)SendMessage(aControl.hwnd, PBM_GETPOS, 0, 0));
 		// Above does not save to control during submit mode, since progress bars do not receive
 		// user input so it seems wasteful 99% of the time.  "GuiControlGet, MyProgress" can be used instead.
-
-	case GUI_CONTROL_LISTVIEW:
-		bool has_checkboxes;
-		// Fetch LVS_EX_CHECKBOXES dynamically because testing shows it is possible to effectively change
-		// it via "GuiControl +/-Checked".
-		if (has_checkboxes = ListView_GetExtendedListViewStyle(aControl.hwnd) & LVS_EX_CHECKBOXES) // Assign.
-		{
-			// Since a ListView can have hundreds of thousands of items in it, it seems best to make
-			// two passes through the list rather than using malloc+realloc.
-			item_count = ListView_GetItemCount(aControl.hwnd);
-			if (item_count <= 0)
-				return aOutputVar.Assign();
-			for (sel_count = 0, i = 0; i < item_count; ++i)
-				if (ListView_GetCheckState(aControl.hwnd, i)) // Item's box is checked.
-					++sel_count;
-		}
-		else
-			sel_count = ListView_GetSelectedCount(aControl.hwnd);
-		if (sel_count <= 0) // ListView_GetSelectedCount probably never returns negative, but just to be safe.
-			return aOutputVar.Assign();
-		// Size the variable for worst-case size:
-		// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
-		// this call will set up the clipboard for writing.
-		if (aOutputVar.Assign(NULL, (VarSizeType)(sel_count * ((int)qmathLog(sel_count) + 2))) != OK) // +2: 1 for each delimiter and 1 to compensation for truncation of Log().
-			return FAIL;  // It already displayed the error.
-		cp = contents = aOutputVar.Contents(); // Init for both loops.
-		if (has_checkboxes)
-		{
-			// Since app. is not multi-threaded, it should be impossible in the absence of MsgSleep for the
-			// actual number of boxes checked to vary from the estimate calculated above.  Thus, no need to
-			// check for buffer overflow.
-			bool first_item_has_been_written = false;
-			for (i = 0; i < item_count; ++i)
-			{
-				// There doesn't appear to be any higher performing way to find the set of checked items:
-				if (ListView_GetCheckState(aControl.hwnd, i)) // Item's box is checked.
-				{
-					if (first_item_has_been_written) // Serves to avoid a pipe after the very last item.
-						*cp++ = '|';
-					else
-						first_item_has_been_written = true;
-					_itoa((int)i + 1, cp, 10); // +1 to convert from zero to one-based.  Never stored in hex format because memory sizing above didn't allow enough room.
-					cp += strlen(cp);  // Point it to the terminator in preparation for the next write.
-				}
-			}
-		}
-		else
-		{
-			for (index = -1, i = 0; i < sel_count; ++i) // Explicitly restrict to sel_count in case it finds more items than expected, which would be an mem overflow.
-			{
-				index = ListView_GetNextItem(aControl.hwnd, index, LVNI_SELECTED);
-				if (index == -1) // No next item, which should never happen if count was accurate.
-					break;
-				if (i) // Serves to avoid a pipe after the very last item.
-					*cp++ = '|';
-				_itoa((int)index + 1, cp, 10); // +1 to convert from zero to one-based.  Never stored in hex format because memory sizing above didn't allow enough room.
-				cp += strlen(cp);  // Point it to the terminator in preparation for the next write.
-			}
-		}
-		aOutputVar.Length() = (VarSizeType)(cp - contents);  // Update it to the actual length, which can vary from the estimate.
-		return aOutputVar.Close(); // In case it's the clipboard.
 
 	case GUI_CONTROL_DATETIME:
 		return aOutputVar.Assign(DateTime_GetSystemtime(aControl.hwnd, st) == GDT_VALID
@@ -5436,19 +5383,6 @@ ResultType GuiType::ControlGetContents(Var &aOutputVar, GuiControlType &aControl
 
 		switch (aControl.type)
 		{
-		case GUI_CONTROL_TEXT:
-		case GUI_CONTROL_PIC:
-		case GUI_CONTROL_GROUPBOX:
-		case GUI_CONTROL_BUTTON:
-		case GUI_CONTROL_PROGRESS:
-			if (submit_mode) // In submit mode, do not waste memory & cpu time to save the above.
-				return OK;
-				// There doesn't seem to be a strong/net advantage to setting the vars to be blank
-				// because even if that were done, it seems it would not do much to reserve flexibility
-				// for future features in which these associated variables are used for a purpose other
-				// than uniquely identifying the control with GuiControl & GuiControlGet.
-			break;
-
 		case GUI_CONTROL_CHECKBOX:
 		case GUI_CONTROL_RADIO:
 			// Submit() handles GUI_CONTROL_RADIO on its own, but other callers might need us to handle it.
@@ -5639,6 +5573,21 @@ ResultType GuiType::ControlGetContents(Var &aOutputVar, GuiControlType &aControl
 			if (TabCtrl_GetItem(aControl.hwnd, index, &tci))
 				return aOutputVar.Assign(tci.pszText);
 			return aOutputVar.Assign();
+
+		case GUI_CONTROL_TEXT:
+		case GUI_CONTROL_PIC:
+		case GUI_CONTROL_GROUPBOX:
+		case GUI_CONTROL_BUTTON:
+		case GUI_CONTROL_PROGRESS:
+		case GUI_CONTROL_LISTVIEW: // This one does not obey Submit.  Instead, more flexible methods are available to the script.
+			if (submit_mode) // In submit mode, do not waste memory & cpu time to save the above.
+				// There doesn't seem to be a strong/net advantage to setting the vars to be blank
+				// because even if that were done, it seems it would not do much to reserve flexibility
+				// for future features in which these associated variables are used for a purpose other
+				// than uniquely identifying the control with GuiControl & GuiControlGet.
+				return OK;
+			//else an explicit Get was called on the control, so it seems best to try to get it's text (if any).
+			break;
 		// Types specifically not handled here.  They will be handled by the section below this switch():
 		//case GUI_CONTROL_EDIT:
 		} // switch()
