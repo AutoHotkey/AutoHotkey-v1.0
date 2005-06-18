@@ -208,6 +208,8 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 	GuiIndexType gui_index;  // Don't use pgui because pointer can become invalid if ExecUntil() executes "Gui Destroy".
 	bool *pgui_label_is_running;
 	Label *gui_label;
+	RECT rect;
+	DWORD event_info;
 	HDROP hdrop_to_free;
 	DWORD drop_count;
 	DWORD tick_before, tick_after;
@@ -503,43 +505,19 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 			// the time has expired:
 			continue;
 
+		case AHK_GUI_ACTION:   // The user pressed a button on a GUI window, or some other actionable event. Listed first for performance.
 		case WM_HOTKEY:        // As a result of this app having previously called RegisterHotkey().
 		case AHK_HOOK_HOTKEY:  // Sent from this app's keyboard or mouse hook.
 		case AHK_HOTSTRING:    // Sent from keybd hook to activate a non-auto-replace hotstring.
 		case AHK_USER_MENU:    // The user selected a custom menu item.
-		case AHK_GUI_ACTION:   // The user pressed a button on a GUI window, or some other actionable event.
 		case AHK_CLIPBOARD_CHANGE: // Listed so that hdrop_to_free is initialized.
 			// MSG_FILTER_MAX should prevent us from receiving these messages (except AHK_USER_MENU)
 			// whenever g_AllowInterruption or g.AllowThisThreadToBeInterrupted is false.
 			hdrop_to_free = NULL;  // Set default for this message's processing (simplifies code).
+			event_info = UINT_MAX; // Set default for all of the above event types.  A flag that indicates "no event info".
 			switch(msg.message)
 			{
-			case AHK_USER_MENU: // user-defined menu item
-				if (   !(menu_item = g_script.FindMenuItemByID((UINT)msg.lParam))   ) // Item not found.
-					continue; // ignore the msg
-				// And just in case a menu item that lacks a label (such as a separator) is ever
-				// somehow selected (perhaps via someone sending direct messages to us, bypassing
-				// the menu):
-				if (!menu_item->mLabel)
-					continue;
-				break;
-			case AHK_HOTSTRING:
-				if (msg.wParam >= Hotstring::sHotstringCount) // Invalid hotstring ID (perhaps spoofed by external app)
-					continue; // Do nothing.
-				hs = Hotstring::shs[msg.wParam];  // For performance and convenience.
-				// Do a simple replacement for the hotstring if that's all that's called for.
-				// Don't create a new quasi-thread or any of that other complexity done further
-				// below.  But also do the backspacing (if specified) for a non-autoreplace hotstring,
-				// even if it can't launch due to MaxThreads, MaxThreadsPerHotkey, or some other reason:
-				hs->DoReplace(msg.lParam);  // Does only the backspacing if it's not an auto-replace hotstring.
-				if (*hs->mReplacement) // Fully handled by the above.
-					continue;
-				// Otherwise, continue on and let a new thread be created to handle this hotstring.
-				// But first, since this isn't an auto-replace hotstring, set this value to support
-				// the built-in variable A_EndChar:
-				g_script.mEndChar = (char)LOWORD(msg.lParam);
-				break;
-			case AHK_GUI_ACTION:
+			case AHK_GUI_ACTION: // Listed first for performance.
 				// Assume that it is possible that this message's GUI window has been destroyed
 				// (and maybe even recreated) since the time the msg was posted.  If this can happen,
 				// that's another reason for finding which GUI this control is associate with (it also
@@ -548,6 +526,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				if (   !(pgui = GuiType::FindGui(msg.hwnd))   ) // No associated GUI object, so ignore this event.
 					continue;
 				gui_index = pgui->mWindowIndex;  // Needed in case ExecUntil() performs "Gui Destroy" further below.
+				pgui_label_is_running = NULL; // Set default (in cases other than AHK_GUI_ACTION it is not used, so not initialized).
 				switch(msg.wParam)
 				{
 				case AHK_GUI_SIZE: // This is the signal to run the window's OnEscape label. Listed first for performance.
@@ -565,6 +544,13 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 						continue;
 					pgui_label_is_running = &pgui->mLabelForEscapeIsRunning;
 					break;
+				case AHK_GUI_CONTEXTMENU:
+					if (   !(gui_label = pgui->mLabelForContextMenu)   ) // In case it became NULL since the msg was posted.
+						continue;
+					// Unlike most other Gui labels, it seems best by default to allow GuiContextMenu to be
+					// launched multiple times so that multiple items in the menu can be running simultaneously
+					// as separate threads.  Therefore, leave pgui_label_is_running at its default of NULL.
+					break;
 				case AHK_GUI_DROPFILES: // This is the signal to run the window's DropFiles label.
 					hdrop_to_free = pgui->mHdrop; // This variable simplifies the code further below.
 					if (   !(gui_label = pgui->mLabelForDropFiles) // In case it became NULL since the msg was posted.
@@ -580,9 +566,11 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 					}
 					// It is not necessary to check if the label is running in this case because
 					// the caller who posted this message to us has ensured that it isn't running.
-					pgui_label_is_running = NULL;
+					// Therefore, leave pgui_label_is_running at its default of NULL.
 					break;
 				default: // This is an action from a particular control in the GUI window.
+					event_info = HIWORD(msg.wParam); // Assigned as an unsigned value to preserve the USHORT's full unsigned capacity.
+					msg.wParam = LOWORD(msg.wParam); // Remove the extra-info word from further consideration below.
 					if (msg.wParam >= pgui->mControlCount) // Index beyond the quantity of controls, so ignore this event.
 						continue;
 					if (   !(gui_label = pgui->mControl[msg.wParam].jump_to_label)   )
@@ -594,23 +582,51 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 						// This event might lack both a label and an action if its control was changed to be
 						// non-actionable since the time the msg was posted.
 					}
-					pgui_label_is_running = NULL; // This signals below to use alternate variable.
+					// And leave pgui_label_is_running at its default of NULL, which signals below to use
+					// alternate variable.
 				} // switch(msg.wParam)
 				break; // case AHK_GUI_ACTION
+
+			case AHK_USER_MENU: // user-defined menu item
+				if (   !(menu_item = g_script.FindMenuItemByID((UINT)msg.lParam))   ) // Item not found.
+					continue; // ignore the msg
+				// And just in case a menu item that lacks a label (such as a separator) is ever
+				// somehow selected (perhaps via someone sending direct messages to us, bypassing
+				// the menu):
+				if (!menu_item->mLabel)
+					continue;
+				break;
+
+			case AHK_HOTSTRING:
+				if (msg.wParam >= Hotstring::sHotstringCount) // Invalid hotstring ID (perhaps spoofed by external app)
+					continue; // Do nothing.
+				hs = Hotstring::shs[msg.wParam];  // For performance and convenience.
+				// Do a simple replacement for the hotstring if that's all that's called for.
+				// Don't create a new quasi-thread or any of that other complexity done further
+				// below.  But also do the backspacing (if specified) for a non-autoreplace hotstring,
+				// even if it can't launch due to MaxThreads, MaxThreadsPerHotkey, or some other reason:
+				hs->DoReplace(msg.lParam);  // Does only the backspacing if it's not an auto-replace hotstring.
+				if (*hs->mReplacement) // Fully handled by the above.
+					continue;
+				// Otherwise, continue on and let a new thread be created to handle this hotstring.
+				// But first, since this isn't an auto-replace hotstring, set this value to support
+				// the built-in variable A_EndChar:
+				g_script.mEndChar = (char)LOWORD(msg.lParam);
+				break;
 			} // switch(msg.message)
 
 			if (g_nThreads >= g_MaxThreadsTotal)
 			{
 				switch(msg.message)
 				{
+				case AHK_GUI_ACTION: // Listed first for performance.
+					type_of_first_line = gui_label->mJumpToLine->mActionType;
+					break;
 				case AHK_USER_MENU: // user-defined menu item
 					type_of_first_line = menu_item->mLabel->mJumpToLine->mActionType;
 					break;
 				case AHK_HOTSTRING:
 					type_of_first_line = hs->mJumpToLabel->mJumpToLine->mActionType;
-					break;
-				case AHK_GUI_ACTION:
-					type_of_first_line = gui_label->mJumpToLine->mActionType;
 					break;
 				case AHK_CLIPBOARD_CHANGE: // Due to the presence of an OnClipboardChange label in the script.
 					// Caller has ensured that mOnClipboardChangeLabel is a non-NULL, valid pointer.
@@ -647,15 +663,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 
 			switch(msg.message)
 			{
-			case AHK_USER_MENU: // user-defined menu item
-				// Ignore/discard a hotkey or custom menu item event if the current thread's priority
-				// is higher than it's:
-				priority = menu_item->mPriority;
-				break;
-			case AHK_HOTSTRING:
-				priority = hs->mPriority;
-				break;
-			case AHK_GUI_ACTION:
+			case AHK_GUI_ACTION: // Listed first for performance.
 				// It seems best by default not to allow multiple threads for the same control.
 				// Such events are discarded because it seems likely that most script designers
 				// would want to see the effects of faulty design (e.g. long running timers or
@@ -666,10 +674,21 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 					if (*pgui_label_is_running)
 						continue;
 				}
-				else if (msg.wParam != AHK_GUI_DROPFILES) // A control's label.
+				else if (msg.wParam != AHK_GUI_DROPFILES && msg.wParam != AHK_GUI_CONTEXTMENU) // It's a control's label.
 					if (pgui->mControl[msg.wParam].attrib & GUI_CONTROL_ATTRIB_LABEL_IS_RUNNING)
 						continue;
+					//else this control's label is eligible to run now.
+				//else the check wasn't needed because it was done elsewhere (AHK_GUI_DROPFILES) or the
+				// action is not thread-restricted (AHK_GUI_CONTEXTMENU).
 				priority = 0;  // Always use default for now.
+				break;
+			case AHK_USER_MENU: // user-defined menu item
+				// Ignore/discard a hotkey or custom menu item event if the current thread's priority
+				// is higher than it's:
+				priority = menu_item->mPriority;
+				break;
+			case AHK_HOTSTRING:
+				priority = hs->mPriority;
 				break;
 			case AHK_CLIPBOARD_CHANGE: // Due to the presence of an OnClipboardChange label in the script.
 				if (g_script.mOnClipboardChangeIsRunning)
@@ -744,14 +763,14 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 
 			switch(msg.message)
 			{
+			case AHK_GUI_ACTION: // Listed first for performance.
+			case AHK_CLIPBOARD_CHANGE:
+				break; // Do nothing at this stage.
 			case AHK_USER_MENU: // user-defined menu item
 				// Safer to make a full copies than point to something potentially volatile.
 				strlcpy(g_script.mThisMenuItemName, menu_item->mName, sizeof(g_script.mThisMenuItemName));
 				strlcpy(g_script.mThisMenuName, menu_item->mMenu->mName, sizeof(g_script.mThisMenuName));
 				break;
-			case AHK_GUI_ACTION:
-			case AHK_CLIPBOARD_CHANGE:
-				break; // Do nothing at this stage.
 			default: // hotkey or hotstring
 				// Just prior to launching the hotkey, update these values to support built-in
 				// variables such as A_TimeSincePriorHotkey:
@@ -808,22 +827,77 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 			// Perform the new thread's subroutine:
 			return_value = true; // We will return this value to indicate that we launched at least one new thread.
 			++g_nThreads;
+
 			switch(msg.message)
 			{
 			case AHK_GUI_ACTION: // Listed first for performance.
 				// This indicates whether a double-click or other non-standard event launched it:
-				g.GuiEvent = (msg.wParam == AHK_GUI_DROPFILES) ? GUI_EVENT_DROPFILES : (GuiEventType)msg.lParam;
+				switch (msg.wParam)
+				{
+				case AHK_GUI_CONTEXTMENU:
+					// Caller turned on the high-order bit if this context-menu was generated via the
+					// keyboard (such as AppsKey or Shift-F10).
+					if (msg.lParam & 0x80000000)
+					{
+						msg.lParam &= ~0x80000000; // Turn off the high-order bit to reveal the control index for later use below.
+						g.GuiEvent = GUI_EVENT_NORMAL;
+					}
+					else
+						g.GuiEvent = GUI_EVENT_RCLK;
+					break;
+				case AHK_GUI_DROPFILES:
+					g.GuiEvent = GUI_EVENT_DROPFILES;
+					break;
+				default:
+					g.GuiEvent = (GuiEventType)msg.lParam;
+				}
 				g.GuiWindowIndex = pgui->mWindowIndex; // g.GuiControlIndex is conditionally set later below.
 				g.GuiDefaultWindowIndex = pgui->mWindowIndex; // GUI threads default to operating upon their own window.
-				if (msg.wParam == AHK_GUI_SIZE)
+
+				// Set A_EventInfo and ErrorLevel for anything that calls for it:
+				switch (msg.wParam)
+				{
+				case AHK_GUI_SIZE:
 					// Note that SIZE_MAXSHOW/SIZE_MAXHIDE don't seem to ever be received under the conditions
-					// described at MSDN, even if the window has WS_POPUP style.  Therefore, ErrorLevel will
+					// described at MSDN, even if the window has WS_POPUP style.  Therefore, event_info will
 					// probably never contain those values, and as a result they are not documented in the help file.
-					g_ErrorLevel->Assign((DWORD)pgui->mSizeType);
-				else if (msg.wParam == AHK_GUI_DROPFILES)
-					g_ErrorLevel->Assign(drop_count);
-				else // Reset for potential future uses (may help avoid breaking existing scripts if ErrorLevel is ever set).
+					event_info = (DWORD)pgui->mSizeType;
+					break;
+				case AHK_GUI_CONTEXTMENU:
+					if ((GuiIndexType)msg.lParam < pgui->mControlCount) // Index is in bounds, so this context menu is for a control.
+					{
+						GuiControlType &control = pgui->mControl[msg.lParam];
+						if (control.type == GUI_CONTROL_LISTBOX) // +1 to convert to one-based index.
+							event_info = 1 + (int)SendMessage(control.hwnd, LB_GETCARETINDEX, 0, 0); // Cast to int to preserve any -1 value.
+						else if (control.type == GUI_CONTROL_LISTVIEW)
+							event_info = 1 + ListView_GetNextItem(control.hwnd, -1, LVNI_FOCUSED);
+							// Testing shows that only one item at a time can have focus, even when mulitple
+							// items are selected.
+						//else leave event_info as the default set higher above.
+					}
+					//else leave ErrorLevel as the default set higher above.
+					break;
+				case AHK_GUI_DROPFILES:
+					event_info = drop_count;
+					break;
+				}
+
+				// event_info is a separate variable because it is sometimes set before g.EventInfo is available
+				// for the new thread.  It also serves to indicate whether g_ErrorLevel should be made blank
+				// vs. assigned a number.
+				if (event_info == UINT_MAX) // No event info.
+					// Reset to blank to reserve it for potential future uses (may help avoid breaking existing
+					// scripts if ErrorLevel is ever set), but only for AHK_GUI_ACTION to retain backward
+					// compatibility and because A_EventInfo should probably be used in lieu of ErrorLevel
+					// for any future event info to be passed to the script.
 					g_ErrorLevel->Assign();
+				else
+				{
+					// Override the thread-default of zero with this event info number:
+					g.EventInfo = event_info;
+					g_ErrorLevel->Assign(event_info); // For backward compatibility.
+				}
+
 				// Set last found window (as documented).  It's not necessary to check IsWindow/IsWindowVisible/
 				// DetectHiddenWindows since GetValidLastUsedWindow() takes care of that whenever the script
 				// actually tries to use the last found window.  UPDATE: Definitely don't want to check
@@ -834,13 +908,35 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				if (pgui_label_is_running) // i.e. GuiClose, GuiEscape, and related window-level events.
 					*pgui_label_is_running = true;
 					// and leave g.GuiControlIndex at its default
-				else if (msg.wParam == AHK_GUI_DROPFILES)
+				else if (msg.wParam == AHK_GUI_CONTEXTMENU || msg.wParam == AHK_GUI_DROPFILES) // No label-is-running attribute to set.
 				{
 					g.GuiControlIndex = (GuiIndexType)msg.lParam; // Index is in lParam vs. wParam in this case.
-					// Visually indicate that drops aren't allowed while and existing drop is still being processed.
-					// Fix for v1.0.31.02: The window's current ExStyle is fetched every time in case a non-GUI
-					// command altered it (such as making it transparent):
-					SetWindowLong(pgui->mHwnd, GWL_EXSTYLE, GetWindowLong(pgui->mHwnd, GWL_EXSTYLE) & ~WS_EX_ACCEPTFILES);
+					// By definition, g.GuiControlIndex should be the focused control.  However, testing shows
+					// that it can also be the only control in a window that lacks any focus-capable controls.
+					// If the window has no controls at all, testing shows that g.GuiControlIndex will be out
+					// of bounds, so the below will fall back to cursor position for AppsKey.
+					if (msg.wParam == AHK_GUI_CONTEXTMENU && g.GuiEvent == GUI_EVENT_NORMAL // Context menu was invoked via keyboard.
+						&& g.GuiControlIndex < pgui->mControlCount) // Context menu event occurred while a control had focus.
+					{
+						pgui->ControlGetPosOfFocusedItem(pgui->mControl[g.GuiControlIndex], g.GuiPoint);
+					}
+					else// This is a drop-files event or a context-menu event that was invoked via normal mouse click.
+						// This also happens when there is no focused control, in which case it seems best to report
+						// the cursor's position rather than some arbitrary center-point, or top-left point in the
+						// parent window.  This is because it might be more convenient for the user to move the
+						// mouse to select a menu item (since menu will be close to mouse cursor).
+						GetCursorPos(&g.GuiPoint); // For simplicity, report the cursor position now rather than what it was at the time of the event.
+					// Convert screen coordinates to window coordinates.  Window coords seem best by default because
+					// the "Menu Show" command uses them by default.  A CoordMode option can be added to change this
+					// if it is ever needed.
+					GetWindowRect(pgui->mHwnd, &rect);
+					g.GuiPoint.x -= rect.left;
+					g.GuiPoint.y -= rect.top;
+					if (msg.wParam == AHK_GUI_DROPFILES)
+						// Visually indicate that drops aren't allowed while and existing drop is still being
+						// processed. Fix for v1.0.31.02: The window's current ExStyle is fetched every time
+						// in case a non-GUI command altered it (such as making it transparent):
+						SetWindowLong(pgui->mHwnd, GWL_EXSTYLE, GetWindowLong(pgui->mHwnd, GWL_EXSTYLE) & ~WS_EX_ACCEPTFILES);
 				}
 				else // It's a control's action, so set its attribute.
 				{
@@ -869,6 +965,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 					case AHK_GUI_SIZE:   pgui->mLabelForSizeIsRunning = false; break;   // Safe to reset even if there is
 					case AHK_GUI_CLOSE:  pgui->mLabelForCloseIsRunning = false; break;  // no label due to the window having
 					case AHK_GUI_ESCAPE: pgui->mLabelForEscapeIsRunning = false; break; // been destroyed and recreated.
+					case AHK_GUI_CONTEXTMENU: break; // Do nothing, but avoid the default case below.
 					case AHK_GUI_DROPFILES:
 						if (pgui->mHdrop) // It's no longer safer to refer to hdrop_to_free (see comments above).
 						{
@@ -914,11 +1011,12 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				break;
 
 			case AHK_CLIPBOARD_CHANGE:
-				g_ErrorLevel->Assign(CountClipboardFormats() ? (IsClipboardFormatAvailable(CF_TEXT) || IsClipboardFormatAvailable(CF_HDROP) ? 1 : 2) : 0);
+				g.EventInfo = CountClipboardFormats() ? (IsClipboardFormatAvailable(CF_TEXT) || IsClipboardFormatAvailable(CF_HDROP) ? 1 : 2) : 0;
+				g_ErrorLevel->Assign(g.EventInfo); // For backward compatibility.
 				// ACT_IS_ALWAYS_ALLOWED() was already checked above.
 				// The message poster has ensured that g_script.mOnClipboardChangeLabel is non-NULL and valid.
 				g_script.mOnClipboardChangeIsRunning = true;
-				g_script.mOnClipboardChangeLabel->mJumpToLine->ExecUntil(UNTIL_RETURN);
+				g_script.mOnClipboardChangeLabel->mJumpToLine->ExecUntil(UNTIL_RETURN); // EXECUTE.
 				g_script.mOnClipboardChangeIsRunning = false;
 				break;
 
@@ -1006,7 +1104,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 		// This little part is from the Miranda source code.  But it doesn't seem
 		// to provide any additional functionality: You still can't use keyboard
 		// keys to navigate in the dialog unless it's the topmost dialog.
-		// UPDATE: The reason it doens't work for non-topmost MessageBoxes is that
+		// UPDATE: The reason it doesn't work for non-topmost MessageBoxes is that
 		// this message pump isn't even the one running.  It's the pump of the
 		// top-most MessageBox itself, which apparently doesn't properly dispatch
 		// all types of messages to other MessagesBoxes.  However, keeping this

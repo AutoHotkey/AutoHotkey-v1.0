@@ -1202,6 +1202,13 @@ ResultType GuiType::Create()
 		strcpy(label_name, "GuiSize");
 	mLabelForSize = g_script.FindLabel(label_name);  // OK if NULL.
 
+	// Find the label to run automatically when the user invokes context menu via AppsKey, Rightclick, or Shift-F10:
+	if (mWindowIndex > 0) // Prepend the window number for windows other than the first.
+		snprintf(label_name, sizeof(label_name), "%dGuiContextMenu", mWindowIndex + 1);
+	else
+		strcpy(label_name, "GuiContextMenu");
+	mLabelForContextMenu = g_script.FindLabel(label_name);  // OK if NULL (leaves context menu unhandled).
+
 	// Find the label to run automatically when files are dropped onto the window:
 	if (mWindowIndex > 0) // Prepend the window number for windows other than the first.
 		snprintf(label_name, sizeof(label_name), "%dGuiDropFiles", mWindowIndex + 1);
@@ -4687,8 +4694,14 @@ void GuiType::ControlAddContents(GuiControlType &aControl, char *aContent, int a
 				if (aOpt->choice)
 				{
 					lvi.mask |= LVIF_STATE; // Indicates that the state and stateMask members are present.
-					lvi.stateMask = LVIS_SELECTED;
-					lvi.state = LVIS_SELECTED;
+					// Also specify LVIS_FOCUSED so that the most recently pre-selected item will have focus
+					// when all rows have been added. Not doing this causes A_GuiX/Y to report top-left of
+					// control if user navigates via the tab key to a ListView with pre-selected items.
+					// If the focused item happens to be beneath the viewable area, the context menu gets
+					// displayed beneath the ListView, but this behavior seems okay because of the rarity
+					// and because Windows Explorer behaves the same way:
+					lvi.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
+					lvi.state = LVIS_SELECTED | LVIS_FOCUSED;
 				}
 				lvi.iItem = INT_MAX; // Signal it to insert at the end of all current items.
 				lvi.iSubItem = 0; // Must be zero to indicate this is an item vs. sub-item.
@@ -5955,7 +5968,7 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 		{
 			pgui->mSizeType = wParam;
 			pgui->mSizeWidthHeight = lParam; // A slight aid to performance to only divide it into halves upon demand (later).
-			POST_AHK_GUI_ACTION(pgui->mHwnd, AHK_GUI_SIZE, GUI_EVENT_NORMAL);
+			POST_AHK_GUI_ACTION(hWnd, AHK_GUI_SIZE, GUI_EVENT_NORMAL);
 			// MsgSleep() is not done because GuiWindowProc() takes care of it.  See its comments for why.
 		}
 		return 0; // "If an application processes this message, it should return zero."
@@ -6023,23 +6036,72 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 		GuiControlType &control = pgui->mControl[control_index]; // For performance and convenience.
 		if (control.hwnd != nmhdr.hwndFrom) // Handles match (this filters out bogus msgs).
 			break;
+		USHORT event_info;
+		bool is_actionable;
 		switch(control.type)
 		{
 		case GUI_CONTROL_LISTVIEW:
-			if (nmhdr.code == LVN_ITEMCHANGED || nmhdr.code == NM_DBLCLK)
+			event_info = 0;  // Set default.
+			is_actionable = true;
+			switch (nmhdr.code)
 			{
-				pgui->Event(control_index, nmhdr.code);
-				return 0; // Must return 0 for LVN_ITEMACTIVATE.
+			case LVN_HOTTRACK:     // Listed first for performance.
+			case NM_CUSTOMDRAW:    // Return CDRF_DODEFAULT (0).  Occurs for every redraw, such as mouse cursor sliding over control or window activation.
+			case LVN_ITEMCHANGING: // Not yet supported (seems rarely needed), so always allow the change by returning 0 (FALSE).
+			case LVN_INSERTITEM: // Any ways other than ListView_InsertItem() to insert items?
+			case LVN_DELETEITEM: // Might be received for each individual (non-DeleteAll) deletion).
+				return 0; // Return immediately for performance. A return value of 0 is suitable for all of the above.
+			case 0xFFFFFF4F: // Couldn't find these in commctrl.h anywhere. They seem to occur when control is first created and once for each row in the first set of added rows.
+			case 0xFFFFFF5F:
+			case 0xFFFFFF5D: // Probably something to do with incremental search since it seems to happen only when items are present and the user types a visible-character key.
+				is_actionable = false;
+				break; // Let default proc handle them since they might mean something to it.
+			case LVN_KEYDOWN:
+			{
+				NMLVKEYDOWN &kd = *(LPNMLVKEYDOWN)lParam;
+				// For simplicity and flexibility, it seems best to store the VK itself since it
+				// might not correspond to a visible character (such as a function key or modifier).
+				// This also helps to reduce code size since scripts will only rarely want to have
+				// key-down info.
+				event_info = kd.wVKey; // The one-based column number that was clicked.
+				break;
 			}
-			break;
+			case LVN_COLUMNCLICK:
+			{
+				NMLISTVIEW &lv = *(LPNMLISTVIEW)lParam;
+				event_info = lv.iSubItem + 1; // The one-based column number that was clicked.
+				break;
+			}
+			case LVN_DELETEALLITEMS: // For performance, tell it not to notify us as each individual item is deleted.
+				return TRUE; // For LVN_ENDLABELEDIT, this allows the edit to occur.
+			} // switch(nmhdr.code).
+
+			// Since above didn't return, make it an event.
+			if (is_actionable)
+				pgui->Event(control_index, nmhdr.code, event_info);
+			// After the event, explicitly return a special value for any notifications that absolutely
+			// require it, and let default proc handle all the others.
+			switch (nmhdr.code)
+			{
+			case LVN_ENDLABELEDITW: // Received even for non-Unicode apps, at least on XP.  Even so, the text contained it the struct is apparently always ANSI vs. Unicode.
+			case LVN_ENDLABELEDITA: // Never received, at least not on XP?
+				// MSDN: "If the pszText member of the LVITEM structure is NULL, the return value is ignored."
+				// Therefore, returning TRUE to allow the edit should be the correct value in every case, at
+				// least until such time as the ability for a script to override individual edits is provided.
+				return TRUE;
+			}
+			break; // Let default proc handle them all in case // Must return 0 for LVN_ITEMACTIVATE.
+
 		case GUI_CONTROL_DATETIME: // NMDATETIMECHANGE struct contains an NMHDR as it's first member.
 			if (nmhdr.code == DTN_DATETIMECHANGE)
 				pgui->Event(control_index, nmhdr.code);
 			//else ignore all others here, for performance.
 			return 0; // 0 is appropriate for all DATETIME notifications.
+
 		case GUI_CONTROL_MONTHCAL: // NMDATETIMECHANGE struct contains an NMHDR as it's first member.
 			pgui->Event(control_index, nmhdr.code);
 			return 0; // 0 is appropriate for all MONTHCAL notifications.
+
 		case GUI_CONTROL_UPDOWN:
 			// Now it just returns 0 for simplicity, but the following are kept for reference.
 			//if (nmhdr.code == UDN_DELTAPOS) // No script control/intervention over this currently.
@@ -6047,6 +6109,7 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 			// Strangely, NM_RELEASEDCAPTURE never seems to be received.  In fact, nothing other than
 			// UDN_DELTAPOS is ever received.  Therefore, WM_VSCROLL/WM_HSCROLL are relied upon instead.
 			return 0;  // 0 is appropriate for all notifications in this case (no need to let DefDlgProc handle it).
+
 		case GUI_CONTROL_TAB:
 			if (nmhdr.code == TCN_SELCHANGE)
 			{
@@ -6058,7 +6121,7 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 					pgui->ControlGetContents(*control.output_var, control);
 			return 0; // 0 is appropriate for all TAB notifications.
 		}
-		break; // outer switch()
+		break; // outermost switch()
 	}
 
 	case WM_VSCROLL: // These two should only be received for sliders and up-downs.
@@ -6286,6 +6349,36 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 		break;
 	}
 
+	case WM_CONTEXTMENU:
+		if ((pgui = GuiType::FindGui(hWnd)) && pgui->mLabelForContextMenu)
+		{
+			bool from_keyboard; // Whether Context Menu was generated from keyboard (AppsKey or Shift-F10).
+			if (!(from_keyboard = (lParam == 0xFFFFFFFF))) // Mouse click vs. keyboard event.
+			{
+				// If the click occurred above the client area, assume it was in title/menu bar or border.
+				// Let default proc handle it.
+				POINT pt = {LOWORD(lParam), HIWORD(lParam)};
+				if (!ScreenToClient(hWnd, &pt) || pt.y < 0)
+					break; // Allows default proc to display standard system context menu for title bar.
+			}
+			// GUI_HWND_TO_INDEX() will produce a small negative value on failure, which due to unsigned
+			// is seen as a large positive number.
+			control_index = GUI_HWND_TO_INDEX((HWND)wParam);
+			if (control_index >= pgui->mControlCount) // The user probably clicked the parent window rather than inside one of its controls.
+				control_index = MAX_CONTROLS_PER_GUI;
+				// Above flags it as a non-control event. Must use MAX_CONTROLS_PER_GUI rather than something
+				// like 0xFFFFFFFF so that high-order bit is preserved for use below.
+			if (from_keyboard)
+				control_index |= 0x80000000; // Turn on the high-order bit to flag it as a keyboard-generated menu.
+			POST_AHK_GUI_ACTION(hWnd, AHK_GUI_CONTEXTMENU, control_index); // Last two params are swapped in this case.
+			return 0; // Return value doesn't matter.
+		}
+		//else the following never seems to happen, so apparently it doesn't work this way:
+		// It's probably for a control.  Let DefDlgProc() handle it so that the control will decide
+		// whether to forward this message back to use as a WM_CONTEXTMENU event for the parent-window.
+		// For example, an Edit control has its own context menu so it won't echo back the message.
+		break;
+	
 	case WM_DROPFILES:
 	{
 		if (   !(pgui = GuiType::FindGui(hWnd))   )
@@ -6304,14 +6397,14 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 		// DragQueryPoint()'s return value is non-zero if the drop occurred in the client area.
 		// However, that info seems too rarely needed to justify storing it anywhere:
 		DragQueryPoint(hdrop, &pah.pt);
-		ClientToScreen(pgui->mHwnd, &pah.pt); // EnumChildFindPoint() requires screen coords.
-		EnumChildWindows(pgui->mHwnd, EnumChildFindPoint, (LPARAM)&pah); // Find topmost control containing point.
+		ClientToScreen(hWnd, &pah.pt); // EnumChildFindPoint() requires screen coords.
+		EnumChildWindows(hWnd, EnumChildFindPoint, (LPARAM)&pah); // Find topmost control containing point.
 		// Look up the control in case the drop occurred in a child of a child, such as the edit portion
 		// of a ComboBox (FindControl will take that into account):
 		pcontrol = pah.hwnd_found ? pgui->FindControl(pah.hwnd_found) : NULL;
 		control_index = pcontrol ? GUI_HWND_TO_INDEX(pcontrol->hwnd) : MAX_CONTROLS_PER_GUI;
 		// Above: MAX_CONTROLS_PER_GUI indicates to GetGuiControl() that there is no control in this case.
-		POST_AHK_GUI_ACTION(pgui->mHwnd, AHK_GUI_DROPFILES, control_index);
+		POST_AHK_GUI_ACTION(hWnd, AHK_GUI_DROPFILES, control_index); // Last two params are swapped in this case.
 		// MsgSleep() is not done because GuiWindowProc() takes care of it.  See its comments for why.
 		return 0; // "An application should return zero if it processes this message."
 	}
@@ -6400,7 +6493,7 @@ LRESULT CALLBACK TabWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 
 
 
-void GuiType::Event(GuiIndexType aControlIndex, UINT aNotifyCode)
+void GuiType::Event(GuiIndexType aControlIndex, UINT aNotifyCode, USHORT aEventInfo)
 // Handles events within a GUI window that caused one of its controls to change in a meaningful way,
 // or that is an event that could trigger an external action, such as clicking a button or icon.
 {
@@ -6422,6 +6515,7 @@ void GuiType::Event(GuiIndexType aControlIndex, UINT aNotifyCode)
 	//	continue
 
 	GuiEventType gui_event = GUI_EVENT_NORMAL;  // Set default.  Don't use NONE since that means "not a GUI thread".
+	bool ignore_unless_alt_submit;
 
 	// Explicitly cover all control types in the switch() rather than relying solely on
 	// aNotifyCode in case it's ever possible for the code to be context-sensitive
@@ -6484,9 +6578,54 @@ void GuiType::Event(GuiIndexType aControlIndex, UINT aNotifyCode)
 		break;
 
 	case GUI_CONTROL_LISTVIEW:
-		if (aNotifyCode == NM_DBLCLK)
-			gui_event = GUI_EVENT_DBLCLK;
-		//else caller has already ensured its a normal event eligible for g-label.
+		ignore_unless_alt_submit = true; // To be set to "false" only for the most important and/or rarely occuring of the notifications below.
+		switch (aNotifyCode)
+		{
+		// For LVN_ITEMCHANGED: It's received for selection/deselection, which means clicking a new item
+		// generates at least two of them (in practice, it generates between 1 and 3 but not sure why).
+		// It's also received for checking/unchecking an item.  Extending a selection via Shift-ArrowKey
+		// generates between 1 and 3 of them, perhaps at random?  Maybe all we can count on is that you
+		// get at least one when the selection has changed or a box is (un)checked.
+		case LVN_ITEMCHANGED: gui_event = 'I'; break;
+		case LVN_ITEMACTIVATE: gui_event = 'A'; break;
+		case LVN_KEYDOWN: gui_event = 'K'; break;
+		case LVN_COLUMNCLICK: gui_event = GUI_EVENT_COLCLICK; ignore_unless_alt_submit = false; break;
+		case LVN_BEGINDRAG: gui_event = 'D'; break;
+		case LVN_BEGINRDRAG: gui_event = 'd'; break; // Right-drag. Lowercase to distinguish it.
+		case (LVN_FIRST-80): gui_event = 'S'; break; // LVN_BEGINSCROLL (_WIN32_WINNT >= 0x501)
+		case (LVN_FIRST-81): gui_event = 's'; break; // LVN_ENDSCROLL. Lowercase to distinguish it.
+		case LVN_BEGINLABELEDITW: // Received even for non-Unicode apps, at least on XP.  Even so, the text contained it the struct is apparently always ANSI vs. Unicode.
+		case LVN_BEGINLABELEDITA: // Never received, at least not on XP?
+			gui_event = 'E';
+			break;
+		case LVN_ENDLABELEDITW: // See comment above.
+		case LVN_ENDLABELEDITA:
+			ignore_unless_alt_submit = false; // Seems best to default to notifying only when data may have been changed.
+			gui_event = 'e'; // Lowercase to distinguish it.
+			break;
+		case LVN_MARQUEEBEGIN: gui_event = 'M'; break;
+
+		// Seems best to ignore all clicks except doubles by default, since right-click should normally be handled
+		// via GuiContenxtMenu instead (to allow AppsKey to work, etc.); and since left-clicks can be used to
+		// extend a selection (ctrl-click or shift-click), so are pretty vague events that most scripts probably
+		// wouldn't have explicit handling for.  A script that needs to know when the selection changes can
+		// turn on AltSubmit to catch a wide variety of ways the selection can change, the most all-encompassing
+		// of which is probably LVN_ITEMCHANGED.
+		case NM_CLICK: break; // Retain the default gui_event set earlier.
+		case NM_RCLICK: gui_event = GUI_EVENT_RCLK; break;
+		case NM_DBLCLK: gui_event = GUI_EVENT_DBLCLK; ignore_unless_alt_submit = false; break;
+		case NM_RDBLCLK: gui_event = 'R'; ignore_unless_alt_submit = false; break; // Rare, so just a simple mnemonic is stored (seems better than a digit).
+		//case NM_HOVER: gui_event = 'H'; break; // Never received?
+		case NM_RELEASEDCAPTURE: gui_event = 'C'; break;
+		case NM_SETFOCUS: gui_event = 'F'; break;
+		case NM_KILLFOCUS: gui_event = 'f'; break;  // Lowercase to distinguish it.
+		default: gui_event = '*'; // Flagged as an unknown event (shouldn't happen unless there are unhandled events either here or in WM_NOTIFY).
+		//case NM_HOVER: Spy++ indicates that the msg is never received.  Maybe a style has to be set to get it.
+		//case LVN_HOTTRACK: We're currently not called for it since it's received so often.
+		//case NM_RETURN (user has pressed the ENTER key): Apparently never received. Requires a style?
+		}
+		if (ignore_unless_alt_submit && !(control.attrib & GUI_CONTROL_ATTRIB_ALTSUBMIT))
+			return;
 		break;
 
 	case GUI_CONTROL_EDIT:
@@ -6664,9 +6803,33 @@ void GuiType::Event(GuiIndexType aControlIndex, UINT aNotifyCode)
 	// If the script is uninterruptible due to some long operation such as sending keystrokes or trying
 	// to open the clipboard when it is locked, any dialog message pump underneath on the call stack
 	// shouldn't be an issue because the long-operation (clipboard/Send) does not return to that
-	// msg pump until the operation is complete, which in turn causes the message to stay queued
-	// rather than bouncing around.
-	POST_AHK_GUI_ACTION(mHwnd, (WPARAM)aControlIndex, (LPARAM)gui_event);
+	// msg pump until the operation is complete; in other words, the message to stay queued rather than
+	// bouncing around.
+	//
+	// Concerning the practice of saving to a control's output variable prior to posting this message:
+	// It's true that this would cause any other queued/unprocessed messages of the same event/control
+	// to share the same value, which is undesirable but rare in practice (and usually inconsequential,
+	// since only the most recent value tends to matter, not those that happened very quickly in between).
+	// The code-simplicity of this approach seems worthwhile for now.
+	// More info: In many cases (e.g. Slider), the control's output var is set to the value before posting
+	// the message.  Therefore, if there are any of the same messages still in the queue when a new one
+	// is posted, they will all have the same output-var value.  If you consider that output-var update is
+	// just a convenience, this isn't much of an issue because if the script were to do GuiControlGet on it,
+	// the same effect would occur.  But still, it should be fixed for those situations where it's important
+	// (there don't appear to be any control types where this is important, but here's the list of those
+	// whose g-labels change the value of the output-var):
+	//GUI_CONTROL_LISTVIEW?
+	//GUI_CONTROL_HOTKEY
+	//GUI_CONTROL_DATETIME
+	//GUI_CONTROL_MONTHCAL
+	//GUI_CONTROL_UPDOWN
+	//GUI_CONTROL_SLIDER
+	//GUI_CONTROL_TAB (in GuiWindowProc)
+
+	// aEventInfo is packed into the HIWORD of WPARAM, but if more info ever needs to be sent with a message,
+	// could perhaps redesign things so that control.hwnd is sent in place of mHwnd, which would free up
+	// the entire WPARAM for use.  See definition of AHK_GUI_CLOSE for more comments.
+	POST_AHK_GUI_ACTION(mHwnd, (WPARAM)(((UINT)aEventInfo << 16) | LOWORD(aControlIndex)), (LPARAM)gui_event);
 	// MsgSleep() is not done because GuiWindowProc() takes care of it.  See its comments for why.
 }
 
@@ -7323,4 +7486,85 @@ ResultType GuiType::SelectAdjacentTab(GuiControlType &aTabControl, bool aMoveToR
 		Event(GUI_HWND_TO_INDEX(aTabControl.hwnd), TCN_SELCHANGE);
 
 	return OK;
+}
+
+
+
+void GuiType::ControlGetPosOfFocusedItem(GuiControlType &aControl, POINT &aPoint)
+// Caller has ensured that aControl is the focused control if the window has one.  If not,
+// aControl can be any other control.
+// Based on the control type, the position of the focused subitem within the control is
+// returned (in screen coords) If the control has no focused item, the position of the
+// control's caret (which seems to work okay on all control types, even pictures) is returned.
+{
+	LRESULT index;
+	RECT rect;
+	rect.left = COORD_UNSPECIFIED; // Init to detect whether rect has been set yet.
+
+	switch (aControl.type)
+	{
+	case GUI_CONTROL_LISTBOX:  // Testing shows that GetCaret() doesn't report focused row's position for either of these.
+	case GUI_CONTROL_LISTVIEW: //
+		index = (aControl.type == GUI_CONTROL_LISTBOX) ? SendMessage(aControl.hwnd, LB_GETCARETINDEX, 0, 0)
+			: ListView_GetNextItem(aControl.hwnd, -1, LVNI_FOCUSED); // Testing shows that only one item at a time can have focus, even when mulitple items are selected.
+		if (index == -1) //  LB_ERR == -1
+			break; // Fall through to get default position instead.
+		if (aControl.type == GUI_CONTROL_LISTBOX)
+		{
+			if (SendMessage(aControl.hwnd, LB_GETITEMRECT, index, (LPARAM)&rect) == LB_ERR)
+				break; // Fall through to get default position instead.
+		}
+		else
+		{
+			// If the focused item happens to be beneath the viewable area, the context menu gets
+			// displayed beneath the ListView, but this behavior seems okay because of the rarity
+			// and because Windows Explorer behaves the same way.
+			// Don't use the ListView_GetItemRect macro in this case (to cut down on its code size).
+			rect.left = LVIR_LABEL; // Seems better than LVIR_ICON in case icon is on right vs. left side of item.
+			if (!SendMessage(aControl.hwnd, LVM_GETITEMRECT, index, (LPARAM)&rect))
+				break; // Fall through to get default position instead.
+		}
+		break;
+
+	case GUI_CONTROL_SLIDER: // GetCaretPos() doesn't retrieve thumb position, so it seems best to do so in case slider is very tall or long.
+		SendMessage(aControl.hwnd, TBM_GETTHUMBRECT, 0, (WPARAM)&rect); // No return value.
+		break;
+	}
+
+	// Notes about control types not handled above:
+	//case GUI_CONTROL_TEXT:
+	//case GUI_CONTROL_PIC:
+	//case GUI_CONTROL_GROUPBOX:
+	//case GUI_CONTROL_BUTTON:
+	//case GUI_CONTROL_CHECKBOX:
+	//case GUI_CONTROL_RADIO:
+	//case GUI_CONTROL_DROPDOWNLIST:
+	//case GUI_CONTROL_COMBOBOX:
+	//case GUI_CONTROL_ROW:
+	//case GUI_CONTROL_EDIT:         Has it's own context menu.
+	//case GUI_CONTROL_DATETIME:
+	//case GUI_CONTROL_MONTHCAL:     Has it's own context menu. Can't be focused anyway.
+	//case GUI_CONTROL_HOTKEY:
+	//case GUI_CONTROL_UPDOWN:
+	//case GUI_CONTROL_PROGRESS:
+	//case GUI_CONTROL_TAB:  For simplicity, just do basic reporting rather than trying to find pos. of focused tab.
+
+	if (rect.left == COORD_UNSPECIFIED) // Control's rect hasn't yet been fetched, so fall back to default method.
+	{
+		GetWindowRect(aControl.hwnd, &rect);
+		// Decided againt this since it doesn't seem to matter for any current control types.  If a custom
+		// context menu is ever supported for Edit controls, maybe use GetCaretPos() for them.
+		//GetCaretPos(&aPoint); // For some control types, this might give a more precise/appropriate position than GetWindowRect().
+		//ClientToScreen(aControl.hwnd, &aPoint);
+		//// A little nicer for most control types (such as DateTime) to shift it down a little so that popup/context
+		//// menu or tooltip doesn't fully obstruct the control's contents.
+		//aPoint.y += 10;  // A constant 10 is used because varying it by font doesn't seem worthwhile given that menu/tooltip fonts are of fixed size.
+	}
+	else
+		MapWindowPoints(aControl.hwnd, NULL, (LPPOINT)&rect, 2); // Convert rect from client coords to screen coords.
+
+	aPoint.x = rect.left;
+	aPoint.y = rect.top + 2 + (rect.bottom - rect.top)/2;  // +2 to shift it down a tad, revealing more of the selected item.
+	// Above: Moving it down a little by default seems desirable 95% of the time to prevent it
+	// from covering up the focused row, the slider's thumb, a datetime's single row, etc.
 }

@@ -5306,6 +5306,7 @@ ResultType Script::DefineFunc(char *aBuf, Var *aFuncExceptionVar[])
 			found_func->mIsBuiltIn = false;  // Override built-in with custom.
 			found_func->mParamCount = 0; // Revert to the default appropriate for non-built-in functions.
 			found_func->mMinParams = 0;  //
+			found_func->mJumpToLine = NULL; // Fixed for v1.0.35.12: Must reset for detection elsewhere.
 			g.CurrentFunc = found_func;
 		}
 	}
@@ -6331,8 +6332,11 @@ VarTypes Script::GetVarType(char *aVarName)
 	if (!stricmp(aVarName, "A_Gui")) return VAR_GUI;
 	if (!stricmp(aVarName, "A_GuiControl")) return VAR_GUICONTROL;
 	if (!stricmp(aVarName, "A_GuiControlEvent")) return VAR_GUICONTROLEVENT;
+	if (!stricmp(aVarName, "A_EventInfo")) return VAR_EVENTINFO; // It's called "EventInfo" vs. "GuiEventInfo" because it applies to non-Gui events such as OnClipboardChange.
 	if (!stricmp(aVarName, "A_GuiWidth")) return VAR_GUIWIDTH;
 	if (!stricmp(aVarName, "A_GuiHeight")) return VAR_GUIHEIGHT;
+	if (!stricmp(aVarName, "A_GuiX")) return VAR_GUIX; // Naming: Brevity seems more a benefit than would A_GuiEventX's improved clarity.
+	if (!stricmp(aVarName, "A_GuiY")) return VAR_GUIY; // These can be overloaded if a GuiMove label or similar is ever needed.
 
 	if (!stricmp(aVarName, "A_TimeIdle")) return VAR_TIMEIDLE;
 	if (!stricmp(aVarName, "A_TimeIdlePhysical")) return VAR_TIMEIDLEPHYSICAL;
@@ -13117,21 +13121,6 @@ VarSizeType Script::GetExitReason(char *aBuf)
 
 
 
-VarSizeType Script::GetTimeIdlePhysical(char *aBuf)
-// This is here rather than in script.h with the others because it depends on
-// hotkey.h and globaldata.h, which can't be easily included in script.h due to
-// mutual dependency issues.
-{
-	// If neither hook is active, default this to the same as the regular idle time:
-	if (!Hotkey::HookIsActive())
-		return GetTimeIdle(aBuf);
-	if (!aBuf)
-		return MAX_NUMBER_LENGTH;
-	return (VarSizeType)strlen(ITOA64(GetTickCount() - g_TimeLastInputPhysical, aBuf));
-}
-
-
-
 VarSizeType Script::GetSpace(VarTypeType aType, char *aBuf)
 {
 	if (!aBuf) return 1;  // i.e. the length of a single space char.
@@ -14005,10 +13994,7 @@ VarSizeType Script::GetGui(VarTypeType aVarType, char *aBuf)
 
 	switch (aVarType)
 	{
-	case VAR_GUI:
-		_itoa(g.GuiWindowIndex + 1, buf, 10);  // Always stored as decimal vs. hex, regardless of script settings.
-		break;
-	case VAR_GUIWIDTH:
+	case VAR_GUIWIDTH: // Listed first for perfommance.
 	case VAR_GUIHEIGHT:
 		if (   !(pgui = g_gui[g.GuiWindowIndex])   ) // Gui window doesn't currently exist, so return a blank.
 		{
@@ -14020,7 +14006,17 @@ VarSizeType Script::GetGui(VarTypeType aVarType, char *aBuf)
 		_itoa(aVarType == VAR_GUIWIDTH ? LOWORD(pgui->mSizeWidthHeight) : HIWORD(pgui->mSizeWidthHeight), buf, 10);
 		// Above is always stored as decimal vs. hex, regardless of script settings.
 		break;
+	case VAR_GUIX:
+		_itoa(g.GuiPoint.x, buf, 10);
+		break;
+	case VAR_GUIY:
+		_itoa(g.GuiPoint.y, buf, 10);
+		break;
+	case VAR_GUI:
+		_itoa(g.GuiWindowIndex + 1, buf, 10);  // Always stored as decimal vs. hex, regardless of script settings.
+		break;
 	}
+
 	if (aBuf)
 		strcpy(aBuf, buf);
 	return (VarSizeType)strlen(buf);
@@ -14136,6 +14132,16 @@ VarSizeType Script::GetGuiControlEvent(char *aBuf)
 
 
 
+VarSizeType Script::GetEventInfo(char *aBuf)
+// We're returning the length of the var's contents, not the size.
+{
+	if (!aBuf)
+		return MAX_NUMBER_LENGTH;
+	return (VarSizeType)strlen(UTOA(g.EventInfo, aBuf));
+}
+
+
+
 VarSizeType Script::GetTimeIdle(char *aBuf)
 {
 	if (!aBuf)
@@ -14156,6 +14162,21 @@ VarSizeType Script::GetTimeIdle(char *aBuf)
 		}
 	}
 	return (VarSizeType)strlen(aBuf);
+}
+
+
+
+VarSizeType Script::GetTimeIdlePhysical(char *aBuf)
+// This is here rather than in script.h with the others because it depends on
+// hotkey.h and globaldata.h, which can't be easily included in script.h due to
+// mutual dependency issues.
+{
+	// If neither hook is active, default this to the same as the regular idle time:
+	if (!Hotkey::HookIsActive())
+		return GetTimeIdle(aBuf);
+	if (!aBuf)
+		return MAX_NUMBER_LENGTH;
+	return (VarSizeType)strlen(ITOA64(GetTickCount() - g_TimeLastInputPhysical, aBuf));
 }
 
 

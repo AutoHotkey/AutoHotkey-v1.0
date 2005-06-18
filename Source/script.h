@@ -221,7 +221,7 @@ enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
 	, ID_MAIN_FIRST = 65400, ID_MAIN_LAST = 65534}; // These should match the range used by resource.h
 
 #define GUI_INDEX_TO_ID(index) (index + CONTROL_ID_FIRST)
-#define GUI_ID_TO_INDEX(id) (id - CONTROL_ID_FIRST)
+#define GUI_ID_TO_INDEX(id) (id - CONTROL_ID_FIRST) // Returns a negative if "id" is invalid, such as 0.
 #define GUI_HWND_TO_INDEX(hwnd) GUI_ID_TO_INDEX(GetDlgCtrlID(hwnd)) // Returns -1 on failure (e.g. HWND not found)	
 // Testing shows that GetDlgCtrlID() is dramatically faster than looping through a GUI window's control
 // array to find a matching HWND.
@@ -2009,7 +2009,7 @@ public:
 	GuiIndexType mControlCapacity; // How many controls can fit into the current memory size of mControl.
 	GuiControlType *mControl; // Will become an array of controls when the window is first created.
 	GuiIndexType mDefaultButtonIndex; // Index vs. pointer is needed for some things.
-	Label *mLabelForClose, *mLabelForEscape, *mLabelForSize, *mLabelForDropFiles;
+	Label *mLabelForClose, *mLabelForEscape, *mLabelForSize, *mLabelForDropFiles, *mLabelForContextMenu;
 	bool mLabelForCloseIsRunning, mLabelForEscapeIsRunning, mLabelForSizeIsRunning; // DropFiles doesn't need one of these.
 	WPARAM mSizeType; // And it does not need to be initalized since its contents are documented as being defined only in the GuiSize subroutine.
 	LPARAM mSizeWidthHeight; // Same comment as above.
@@ -2046,7 +2046,8 @@ public:
 
 	GuiType(int aWindowIndex) // Constructor
 		: mHwnd(NULL), mWindowIndex(aWindowIndex), mControlCount(0), mControlCapacity(0)
-		, mDefaultButtonIndex(-1), mLabelForClose(NULL), mLabelForEscape(NULL), mLabelForSize(NULL), mLabelForDropFiles(NULL)
+		, mDefaultButtonIndex(-1), mLabelForClose(NULL), mLabelForEscape(NULL), mLabelForSize(NULL)
+		, mLabelForDropFiles(NULL), mLabelForContextMenu(NULL)
 		, mLabelForCloseIsRunning(false), mLabelForEscapeIsRunning(false), mLabelForSizeIsRunning(false)
 		// The styles DS_CENTER and DS_3DLOOK appear to be ineffectual in this case.
 		// Also note that WS_CLIPSIBLINGS winds up on the window even if unspecified, which is a strong hint
@@ -2139,7 +2140,7 @@ public:
 		, COLORREF *aColor = NULL);
 	static int FindFont(FontType &aFont);
 
-	void Event(GuiIndexType aControlIndex, UINT aNotifyCode);
+	void Event(GuiIndexType aControlIndex, UINT aNotifyCode, USHORT aEventInfo = 0);
 
 	static WORD TextToHotkey(char *aText);
 	static char *HotkeyToText(WORD aHotkey, char *aBuf);
@@ -2159,6 +2160,7 @@ public:
 	POINT GetPositionOfTabClientArea(GuiControlType &aTabControl);
 	ResultType SelectAdjacentTab(GuiControlType &aTabControl, bool aMoveToRight, bool aFocusFirstControl
 		, bool aWrapAround);
+	void ControlGetPosOfFocusedItem(GuiControlType &aControl, POINT &aPoint);
 };
 
 
@@ -2356,7 +2358,6 @@ public:
 	VarSizeType GetIconFile(char *aBuf = NULL);
 	VarSizeType GetIconNumber(char *aBuf = NULL);
 	VarSizeType GetExitReason(char *aBuf = NULL);
-	VarSizeType GetTimeIdlePhysical(char *aBuf = NULL);
 	VarSizeType GetSpace(VarTypeType aType, char *aBuf = NULL);
 	VarSizeType GetAhkVersion(char *aBuf = NULL);
 	VarSizeType GetMMMM(char *aBuf = NULL);
@@ -2417,7 +2418,9 @@ public:
 	VarSizeType GetGui(VarTypeType aVarType, char *aBuf = NULL);
 	VarSizeType GetGuiControl(char *aBuf = NULL);
 	VarSizeType GetGuiControlEvent(char *aBuf = NULL);
+	VarSizeType GetEventInfo(char *aBuf = NULL);
 	VarSizeType GetTimeIdle(char *aBuf = NULL);
+	VarSizeType GetTimeIdlePhysical(char *aBuf = NULL);
 
 	Script();
 	~Script();

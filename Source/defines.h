@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.35.11"
+#define NAME_VERSION "1.0.35.12"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -286,10 +286,13 @@ typedef UINT GuiIndexType; // Some things rely on it being unsigned to avoid the
 typedef UINT GuiEventType; // Made a UINT vs. enum so that illegal/underflow/overflow values are easier to detect.
 #define GUI_EVENT_NONE        0 // NONE must be zero for any uses of ZeroMemory(), etc.
 #define GUI_EVENT_NORMAL      1
-#define GUI_EVENT_DBLCLK      2
-#define GUI_EVENT_ILLEGAL     3 // This item must always be last, and it must be 1 greater than the previous.
-#define GUI_EVENT_DROPFILES   4 // A special value separate from the above and yet less than ASCII values of '1' through '9' used by Slider controls.
-#define GUI_EVENT_NAMES {"", "Normal", "DoubleClick"}  // THIS MUST BE KEPT IN SYNC WITH THE ABOVE.
+#define GUI_EVENT_DBLCLK      2 // Try to avoid changing this and the other numbers in case anyone automates a script via SendMessage (though that does seem exceedingly unlikely).
+#define GUI_EVENT_RCLK        3
+#define GUI_EVENT_COLCLICK    4
+#define GUI_EVENT_ILLEGAL     5 // This item must always be last, and it must be 1 greater than the previous.
+#define GUI_EVENT_DROPFILES   6 // A special value separate from the above and yet less than 49 (ASCII values of '1' through '9' used by Slider controls).
+#define GUI_EVENT_DIGIT_0     48 // Values here and higher are reserved so that a single digit or character (mnemonic) can be sent.
+#define GUI_EVENT_NAMES {"", "Normal", "DoubleClick", "RightClick", "ColClick"}  // THIS MUST BE KEPT IN SYNC WITH THE ABOVE.
 
 // Bitwise flags:
 typedef UCHAR CoordModeAttribType;
@@ -298,6 +301,9 @@ typedef UCHAR CoordModeAttribType;
 #define COORD_MODE_TOOLTIP 0x04
 #define COORD_MODE_CARET   0x08
 #define COORD_MODE_MENU    0x10
+
+#define COORD_UNSPECIFIED INT_MIN
+#define COORD_CENTERED (INT_MIN + 1)
 
 // Same reason as above struct.  It's best to keep this struct as small as possible
 // because it's used as a local (stack) var by at least one recursive function:
@@ -313,6 +319,8 @@ struct global_struct
 	int UninterruptedLineCount; // Stored as a g-struct attribute in case OnExit sub interrupts it while uninterruptible.
 	int Priority;  // This thread's priority relative to others.
 	GuiEventType GuiEvent; // This thread's triggering event, e.g. DblClk vs. normal click.
+	DWORD EventInfo; // Not named "GuiEventInfo" because it applies to non-GUI events such as clipboard.
+	POINT GuiPoint; // The position of GuiEvent. Stored as a thread vs. window attribute so that underlying threads see their original values when resumed.
 	GuiIndexType GuiWindowIndex, GuiControlIndex; // The GUI window index and control index that launched this thread.
 	GuiIndexType GuiDefaultWindowIndex; // This thread's default GUI window, used except when specified "Gui, 2:Add, ..."
 	GuiIndexType DialogOwnerIndex; // This thread's GUI owner, if any. Stored as Index vs. HWND to insulate against the case where a GUI window has been destroyed and recreated with a new HWND.
@@ -385,6 +393,9 @@ inline void global_init(global_struct &g)
 	#define PRIORITY_MINIMUM INT_MIN
 	g.Priority = 0;
 	g.GuiEvent = GUI_EVENT_NONE;
+	g.EventInfo = 0;
+	g.GuiPoint.x = COORD_UNSPECIFIED;
+	g.GuiPoint.y = COORD_UNSPECIFIED;
 	// For these, indexes rather than pointers are stored because handles can become invalid during the
 	// lifetime of a thread (while it's suspended, or if it destroys the control or window that created itself):
 	g.GuiWindowIndex = MAX_GUI_WINDOWS;  // Default them to out-of-bounds.
@@ -399,8 +410,6 @@ inline void global_init(global_struct &g)
 	#define DEFAULT_MOUSE_SPEED 2
 	#define MAX_MOUSE_SPEED 100
 	#define MAX_MOUSE_SPEED_STR "100"
-	#define COORD_UNSPECIFIED INT_MIN
-	#define COORD_CENTERED (INT_MIN + 1)
 	g.DefaultMouseSpeed = DEFAULT_MOUSE_SPEED;
 	g.CoordMode = 0;  // All the flags it contains are off by default.
 	g.StoreCapslockMode = true;  // AutoIt2 (and probably 3's) default, and it makes a lot of sense.

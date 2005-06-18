@@ -931,7 +931,12 @@ bool DoesFilePatternExist(char *aFilePattern, DWORD *aFileAttr)
 // If there is no match, its contents are undefined.
 {
 	if (!aFilePattern || !*aFilePattern) return false;
-	if (StrChrAny(aFilePattern, "?*"))
+	// Fix for v1.0.35.12: Don't consider the question mark in "\\?\Volume{GUID}\" to be a wildcard.
+	// Such volume names are obtained from GetVolumeNameForVolumeMountPoint() and perhaps other functions.
+	// However, testing shows that wildcards beyond that first one should be seen as real wildcards
+	// because the wildcard match-method below does work for such volume names.
+	char *cp = strncmp(aFilePattern, "\\\\?\\", 4) ? aFilePattern : aFilePattern + 4;
+	if (StrChrAny(cp, "?*"))
 	{
 		WIN32_FIND_DATA wfd;
 		HANDLE hFile = FindFirstFile(aFilePattern, &wfd);

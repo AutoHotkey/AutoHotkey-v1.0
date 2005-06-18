@@ -57,10 +57,14 @@ enum UserMessages {AHK_HOOK_HOTKEY = WM_USER, AHK_HOTSTRING, AHK_USER_MENU, AHK_
 		wparam = 0;\
 	} // In the above, wparam is made zero to help catch bugs.
 
-#define AHK_GUI_CLOSE     -1
-#define AHK_GUI_ESCAPE    -2
-#define AHK_GUI_SIZE      -3
-#define AHK_GUI_DROPFILES -4
+// These negative values will be seen as large unsigned values in most contexts.  The must be large
+// values to distinguish them from any reasonable combination of aEventInfo and aControlIndex that
+// might be produced by Gui::Event():
+#define AHK_GUI_CLOSE       -1
+#define AHK_GUI_ESCAPE      -2
+#define AHK_GUI_SIZE        -3
+#define AHK_GUI_DROPFILES   -4
+#define AHK_GUI_CONTEXTMENU -5
 
 // And these macros are kept here so that all this trickery is centrally located and thus more maintainable:
 #define ASK_INSTANCE_TO_CLOSE(hwnd, reason) PostMessage(hwnd, WM_COMMNOTIFY, reason, 0);

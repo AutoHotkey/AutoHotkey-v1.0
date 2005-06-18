@@ -388,6 +388,43 @@ VarSizeType Var::Get(char *aBuf)
 			return 1; // The length of the value.
 		break;
 
+	case VAR_GUIWIDTH:  // For performance, these are listed listed first in their group, and this group is
+	case VAR_GUIHEIGHT: // relatively high up in the switch (might not matter depending on how switch() is compiled).
+	case VAR_GUIX:
+	case VAR_GUIY:
+	case VAR_GUI:
+		if (!aBuf) return g_script.GetGui(mType); else aBuf += g_script.GetGui(mType, aBuf); break;
+
+	case VAR_GUICONTROL: if (!aBuf) return g_script.GetGuiControl(); else aBuf += g_script.GetGuiControl(aBuf); break;
+	case VAR_GUICONTROLEVENT: if (!aBuf) return g_script.GetGuiControlEvent(); else aBuf += g_script.GetGuiControlEvent(aBuf); break;
+
+	case VAR_EVENTINFO: // It's called "EventInfo" vs. "GuiEventInfo" because it applies to non-Gui events such as OnClipboardChange.
+		if (!aBuf) return g_script.GetEventInfo(); else aBuf += g_script.GetEventInfo(aBuf); break;
+
+	// In case compiler generates if/else ladder, these are listed relatively high up in the switch() for performance:
+	case VAR_INDEX: if (!aBuf) return g_script.GetLoopIndex(); else aBuf += g_script.GetLoopIndex(aBuf); break;
+	case VAR_LOOPREADLINE: if (!aBuf) return g_script.GetLoopReadLine(); else aBuf += g_script.GetLoopReadLine(aBuf); break;
+	case VAR_LOOPFIELD: if (!aBuf) return g_script.GetLoopField(); else aBuf += g_script.GetLoopField(aBuf); break;
+	case VAR_LOOPFILENAME: if (!aBuf) return g_script.GetLoopFileName(); else aBuf += g_script.GetLoopFileName(aBuf); break;
+	case VAR_LOOPFILESHORTNAME: if (!aBuf) return g_script.GetLoopFileShortName(); else aBuf += g_script.GetLoopFileShortName(aBuf); break;
+	case VAR_LOOPFILEDIR: if (!aBuf) return g_script.GetLoopFileDir(); else aBuf += g_script.GetLoopFileDir(aBuf); break;
+	case VAR_LOOPFILEFULLPATH: if (!aBuf) return g_script.GetLoopFileFullPath(); else aBuf += g_script.GetLoopFileFullPath(aBuf); break;
+	case VAR_LOOPFILELONGPATH: if (!aBuf) return g_script.GetLoopFileLongPath(); else aBuf += g_script.GetLoopFileLongPath(aBuf); break;
+	case VAR_LOOPFILESHORTPATH: if (!aBuf) return g_script.GetLoopFileShortPath(); else aBuf += g_script.GetLoopFileShortPath(aBuf); break;
+	case VAR_LOOPFILETIMEMODIFIED: if (!aBuf) return g_script.GetLoopFileTimeModified(); else aBuf += g_script.GetLoopFileTimeModified(aBuf); break;
+	case VAR_LOOPFILETIMECREATED: if (!aBuf) return g_script.GetLoopFileTimeCreated(); else aBuf += g_script.GetLoopFileTimeCreated(aBuf); break;
+	case VAR_LOOPFILETIMEACCESSED: if (!aBuf) return g_script.GetLoopFileTimeAccessed(); else aBuf += g_script.GetLoopFileTimeAccessed(aBuf); break;
+	case VAR_LOOPFILEATTRIB: if (!aBuf) return g_script.GetLoopFileAttrib(); else aBuf += g_script.GetLoopFileAttrib(aBuf); break;
+	case VAR_LOOPFILESIZE: if (!aBuf) return g_script.GetLoopFileSize(NULL, 0); else aBuf += g_script.GetLoopFileSize(aBuf, 0); break;
+	case VAR_LOOPFILESIZEKB: if (!aBuf) return g_script.GetLoopFileSize(NULL, 1024); else aBuf += g_script.GetLoopFileSize(aBuf, 1024); break;
+	case VAR_LOOPFILESIZEMB: if (!aBuf) return g_script.GetLoopFileSize(NULL, 1024*1024); else aBuf += g_script.GetLoopFileSize(aBuf, 1024*1024); break;
+
+	case VAR_LOOPREGTYPE: if (!aBuf) return g_script.GetLoopRegType(); else aBuf += g_script.GetLoopRegType(aBuf); break;
+	case VAR_LOOPREGKEY: if (!aBuf) return g_script.GetLoopRegKey(); else aBuf += g_script.GetLoopRegKey(aBuf); break;
+	case VAR_LOOPREGSUBKEY: if (!aBuf) return g_script.GetLoopRegSubKey(); else aBuf += g_script.GetLoopRegSubKey(aBuf); break;
+	case VAR_LOOPREGNAME: if (!aBuf) return g_script.GetLoopRegName(); else aBuf += g_script.GetLoopRegName(aBuf); break;
+	case VAR_LOOPREGTIMEMODIFIED: if (!aBuf) return g_script.GetLoopRegTimeModified(); else aBuf += g_script.GetLoopRegTimeModified(aBuf); break;
+
 	case VAR_WORKINGDIR:
 		// Use GetCurrentDirectory() vs. g_WorkingDir because any in-progrses FileSelectFile()
 		// dialog is able to keep functioning even when it's quasi-thread is suspended.  The
@@ -489,30 +526,6 @@ VarSizeType Var::Get(char *aBuf)
 		break;
 #endif
 
-	case VAR_LOOPFILENAME: if (!aBuf) return g_script.GetLoopFileName(); else aBuf += g_script.GetLoopFileName(aBuf); break;
-	case VAR_LOOPFILESHORTNAME: if (!aBuf) return g_script.GetLoopFileShortName(); else aBuf += g_script.GetLoopFileShortName(aBuf); break;
-	case VAR_LOOPFILEDIR: if (!aBuf) return g_script.GetLoopFileDir(); else aBuf += g_script.GetLoopFileDir(aBuf); break;
-	case VAR_LOOPFILEFULLPATH: if (!aBuf) return g_script.GetLoopFileFullPath(); else aBuf += g_script.GetLoopFileFullPath(aBuf); break;
-	case VAR_LOOPFILELONGPATH: if (!aBuf) return g_script.GetLoopFileLongPath(); else aBuf += g_script.GetLoopFileLongPath(aBuf); break;
-	case VAR_LOOPFILESHORTPATH: if (!aBuf) return g_script.GetLoopFileShortPath(); else aBuf += g_script.GetLoopFileShortPath(aBuf); break;
-	case VAR_LOOPFILETIMEMODIFIED: if (!aBuf) return g_script.GetLoopFileTimeModified(); else aBuf += g_script.GetLoopFileTimeModified(aBuf); break;
-	case VAR_LOOPFILETIMECREATED: if (!aBuf) return g_script.GetLoopFileTimeCreated(); else aBuf += g_script.GetLoopFileTimeCreated(aBuf); break;
-	case VAR_LOOPFILETIMEACCESSED: if (!aBuf) return g_script.GetLoopFileTimeAccessed(); else aBuf += g_script.GetLoopFileTimeAccessed(aBuf); break;
-	case VAR_LOOPFILEATTRIB: if (!aBuf) return g_script.GetLoopFileAttrib(); else aBuf += g_script.GetLoopFileAttrib(aBuf); break;
-	case VAR_LOOPFILESIZE: if (!aBuf) return g_script.GetLoopFileSize(NULL, 0); else aBuf += g_script.GetLoopFileSize(aBuf, 0); break;
-	case VAR_LOOPFILESIZEKB: if (!aBuf) return g_script.GetLoopFileSize(NULL, 1024); else aBuf += g_script.GetLoopFileSize(aBuf, 1024); break;
-	case VAR_LOOPFILESIZEMB: if (!aBuf) return g_script.GetLoopFileSize(NULL, 1024*1024); else aBuf += g_script.GetLoopFileSize(aBuf, 1024*1024); break;
-
-	case VAR_LOOPREGTYPE: if (!aBuf) return g_script.GetLoopRegType(); else aBuf += g_script.GetLoopRegType(aBuf); break;
-	case VAR_LOOPREGKEY: if (!aBuf) return g_script.GetLoopRegKey(); else aBuf += g_script.GetLoopRegKey(aBuf); break;
-	case VAR_LOOPREGSUBKEY: if (!aBuf) return g_script.GetLoopRegSubKey(); else aBuf += g_script.GetLoopRegSubKey(aBuf); break;
-	case VAR_LOOPREGNAME: if (!aBuf) return g_script.GetLoopRegName(); else aBuf += g_script.GetLoopRegName(aBuf); break;
-	case VAR_LOOPREGTIMEMODIFIED: if (!aBuf) return g_script.GetLoopRegTimeModified(); else aBuf += g_script.GetLoopRegTimeModified(aBuf); break;
-
-	case VAR_LOOPREADLINE: if (!aBuf) return g_script.GetLoopReadLine(); else aBuf += g_script.GetLoopReadLine(aBuf); break;
-	case VAR_LOOPFIELD: if (!aBuf) return g_script.GetLoopField(); else aBuf += g_script.GetLoopField(aBuf); break;
-	case VAR_INDEX: if (!aBuf) return g_script.GetLoopIndex(); else aBuf += g_script.GetLoopIndex(aBuf); break;
-
 	case VAR_THISMENUITEM: if (!aBuf) return g_script.GetThisMenuItem(); else aBuf += g_script.GetThisMenuItem(aBuf); break;
 	case VAR_THISMENUITEMPOS: if (!aBuf) return g_script.GetThisMenuItemPos(); else aBuf += g_script.GetThisMenuItemPos(aBuf); break;
 	case VAR_THISMENU: if (!aBuf) return g_script.GetThisMenu(); else aBuf += g_script.GetThisMenu(aBuf); break;
@@ -521,13 +534,6 @@ VarSizeType Var::Get(char *aBuf)
 	case VAR_TIMESINCETHISHOTKEY: if (!aBuf) return g_script.GetTimeSinceThisHotkey(); else aBuf += g_script.GetTimeSinceThisHotkey(aBuf); break;
 	case VAR_TIMESINCEPRIORHOTKEY: if (!aBuf) return g_script.GetTimeSincePriorHotkey(); else aBuf += g_script.GetTimeSincePriorHotkey(aBuf); break;
 	case VAR_ENDCHAR: if (!aBuf) return g_script.GetEndChar(); else aBuf += g_script.GetEndChar(aBuf); break;
-
-	case VAR_GUICONTROL: if (!aBuf) return g_script.GetGuiControl(); else aBuf += g_script.GetGuiControl(aBuf); break;
-	case VAR_GUICONTROLEVENT: if (!aBuf) return g_script.GetGuiControlEvent(); else aBuf += g_script.GetGuiControlEvent(aBuf); break;
-	case VAR_GUI:
-	case VAR_GUIWIDTH:
-	case VAR_GUIHEIGHT: // All of the above use the below.
-		if (!aBuf) return g_script.GetGui(mType); else aBuf += g_script.GetGui(mType, aBuf); break;
 
 	case VAR_TIMEIDLE: if (!aBuf) return g_script.GetTimeIdle(); else aBuf += g_script.GetTimeIdle(aBuf); break;
 	case VAR_TIMEIDLEPHYSICAL: if (!aBuf) return g_script.GetTimeIdlePhysical(); else aBuf += g_script.GetTimeIdlePhysical(aBuf); break;
