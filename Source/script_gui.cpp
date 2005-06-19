@@ -6493,6 +6493,72 @@ LRESULT CALLBACK TabWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 
 
 
+struct LV_SortType
+{
+	LVFINDINFO lvfi;
+	LVITEM lvi;
+	HWND hwnd;
+	#define LV_SORT_BUF_SIZE 8192
+	char buf1[LV_SORT_BUF_SIZE];
+	char buf2[LV_SORT_BUF_SIZE];
+};
+
+
+
+int CALLBACK LV_StringSort(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort)
+// ListView sorting by string.
+{
+	int index;
+	LV_SortType &lvs = *(LV_SortType *)lParamSort;
+
+	// Fetch Item #1:
+	lvs.lvfi.lParam = lParam1;
+	index = ListView_FindItem(lvs.hwnd, -1, &lvs.lvfi);
+	if (index > -1) // Using the macro ListView_GetItemText() is avoided since it defines its own struct.
+	{
+		lvs.lvi.pszText = lvs.buf1; // lvi's other members were already set by the caller.
+		SendMessage(lvs.hwnd, LVM_GETITEMTEXT, index, (LPARAM)&lvs.lvi);
+	}
+	else // Not found.  Impossible if caller set the LParam to a unique value.
+		*lvs.buf1 = '\0';
+
+	// Fetch Item #2:
+	lvs.lvfi.lParam = lParam2;
+	index = ListView_FindItem(lvs.hwnd, -1, &lvs.lvfi);
+	if (index > -1) // Using the macro ListView_GetItemText() is avoided since it defines its own struct.
+	{
+		lvs.lvi.pszText = lvs.buf2; // lvi's other members were already set by the caller.
+		SendMessage(lvs.hwnd, LVM_GETITEMTEXT, index, (LPARAM)&lvs.lvi);
+	}
+	else // Not found.  Impossible if caller set the LParam to a unique value.
+		*lvs.buf2 = '\0';
+
+	return stricmp(lvs.buf1, lvs.buf2);
+}
+
+
+
+void LV_Sort(GuiControlType &aControl, int aColumnIndex)
+{
+	LV_SortType lvs;
+	int item_count = ListView_GetItemCount(aControl.hwnd);
+	lvs.lvi.mask = LVIF_PARAM; // Indicate to ListView_SetItem() that only the item's LParam attribute is to be changed.
+	lvs.lvi.iSubItem = 0;      // Indicate that an item vs. subitem is being operated on.
+	// Ensure unique LParam.  This must be done every time in case rows have been inserted/deleted since
+	// the last time, in which case uniqueness would not be certain otherwise:
+	for (lvs.lvi.lParam = 0, lvs.lvi.iItem = 0; lvs.lvi.lParam < item_count; ++lvs.lvi.lParam, ++lvs.lvi.iItem)
+		ListView_SetItem(aControl.hwnd, &lvs.lvi);
+	// Initialize struct members as much as possible so that the sort callback function doesn't have to do it
+	// each time it's called:
+	lvs.hwnd = aControl.hwnd;
+	lvs.lvi.iSubItem = aColumnIndex; // Zero-based column index to indicate whether the item or one of its sub-items should be retrieved.
+	lvs.lvfi.flags = LVFI_PARAM;  // i.e. the sort function will find each item based on its LPARAM.
+	lvs.lvi.cchTextMax = LV_SORT_BUF_SIZE - 1; // -1 because of that nagging doubt about size vs. length.
+	ListView_SortItems(aControl.hwnd, LV_StringSort, &lvs); // Returns TRUE if successful.
+}
+
+
+
 void GuiType::Event(GuiIndexType aControlIndex, UINT aNotifyCode, USHORT aEventInfo)
 // Handles events within a GUI window that caused one of its controls to change in a meaningful way,
 // or that is an event that could trigger an external action, such as clicking a button or icon.
@@ -6589,7 +6655,6 @@ void GuiType::Event(GuiIndexType aControlIndex, UINT aNotifyCode, USHORT aEventI
 		case LVN_ITEMCHANGED: gui_event = 'I'; break;
 		case LVN_ITEMACTIVATE: gui_event = 'A'; break;
 		case LVN_KEYDOWN: gui_event = 'K'; break;
-		case LVN_COLUMNCLICK: gui_event = GUI_EVENT_COLCLICK; ignore_unless_alt_submit = false; break;
 		case LVN_BEGINDRAG: gui_event = 'D'; break;
 		case LVN_BEGINRDRAG: gui_event = 'd'; break; // Right-drag. Lowercase to distinguish it.
 		case (LVN_FIRST-80): gui_event = 'S'; break; // LVN_BEGINSCROLL (_WIN32_WINNT >= 0x501)
@@ -6619,6 +6684,12 @@ void GuiType::Event(GuiIndexType aControlIndex, UINT aNotifyCode, USHORT aEventI
 		case NM_RELEASEDCAPTURE: gui_event = 'C'; break;
 		case NM_SETFOCUS: gui_event = 'F'; break;
 		case NM_KILLFOCUS: gui_event = 'f'; break;  // Lowercase to distinguish it.
+		case LVN_COLUMNCLICK:
+			if (!(control.attrib & GUI_CONTROL_ATTRIB_ALTBEHAVIOR)) // Automatic sorting is in effect.
+				LV_Sort(control, aEventInfo - 1); // -1 to convert column index back to zero-based.
+			gui_event = GUI_EVENT_COLCLICK;
+			ignore_unless_alt_submit = false;
+			break;
 		default: gui_event = '*'; // Flagged as an unknown event (shouldn't happen unless there are unhandled events either here or in WM_NOTIFY).
 		//case NM_HOVER: Spy++ indicates that the msg is never received.  Maybe a style has to be set to get it.
 		//case LVN_HOTTRACK: We're currently not called for it since it's received so often.

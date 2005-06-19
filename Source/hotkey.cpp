@@ -1177,7 +1177,6 @@ scan code array).
 		mModifierSC = temp_sc;
 		if (!is_mouse && mType != HK_JOYSTICK)
 			mType = HK_KEYBD_HOOK;  // Always use the hook for keys that have a mModifierVK or SC
-		return OK;
 	}
 	else
 	{
@@ -1224,8 +1223,8 @@ scan code array).
 					mType = HK_KEYBD_HOOK;
 			}
 		}
-		return OK;
 	}
+	return OK;
 }
 
 

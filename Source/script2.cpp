@@ -12506,6 +12506,69 @@ void BIF_LV_GetNextItem(ExprTokenType &aResultToken, ExprTokenType *aParam[], in
 
 
 
+//void BIF_LV_SetCol(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+//{
+//	aResultToken.value_int64 = 0;
+//	// Above sets default result in case of early return.  For code reduction, a zero is returned for all
+//	// the following conditions:
+//	// Window doesn't exist.
+//	// Control doesn't exist (i.e. no ListView in window).
+//	// Column not found in ListView.
+//	if (!g_gui[g.GuiDefaultWindowIndex]) // Return a blank value to indicate the window doesn't exist.
+//		return;
+//	GuiType &gui = *g_gui[g.GuiDefaultWindowIndex]; // Always operate on thread's default window to simplify the syntax.
+//	if (!gui.mCurrentListView)
+//		return;
+//	GuiControlType &control = *gui.mCurrentListView;
+//
+//	// Load-time validation should have ensured that aParamCount >= 2:
+//	int index = (int)ExprTokenToInt64(*aParam[0]) - 1; // -1 to convert to zero-based.
+//
+//	// Load-time validation should have ensured that aParamCount >= 2:
+//	char *options;
+//	if (   !(options = ExprTokenToString(*aParam[1], aResultToken.buf))   ) // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
+//		return; // Due to rarity of this condition, keep 0/false value as the result.
+//
+//	LVCOLUMN lvc;
+//	lvc.mask = LVCF_FMT; // Unconditional, for simplicity.
+//	lvc.fmt = 0;
+//	lvc.iSubItem = 0;
+//
+//	// Must check number formats prior to alignment formats so that alignment can be used to override the
+//	// default for the type; e.g. "Integer Left"
+//	if (!*options)
+//		lvc.mask = 0; // Leave existing alignment and other settings as they are.
+//	else if (strstr(options, "Integer"))
+//	{
+//		lvc.fmt |= LVCFMT_RIGHT;
+//	}
+//	else if (strstr(options, "Float"))
+//	{
+//		lvc.fmt |= LVCFMT_RIGHT;
+//	}
+//	else if (strstr(options, "Text")) // Seems more approp. name than "Str" or "String"
+//	{
+//		// Since "Text" is so general, it seems to leave existing alignment (Center/Right) as it is.
+//	}
+//	else if (strstr(options, "Right"))
+//	{
+//		lvc.fmt |= LVCFMT_RIGHT;
+//	}
+//	else if (strstr(options, "Center"))
+//	{
+//		lvc.fmt |= LVCFMT_CENTER;
+//	}
+//	else if (strstr(options, "Left")) // Supported so that existing right-aligned column can be changed back to left.
+//	{
+//		lvc.fmt |= LVCFMT_CENTER;
+//	}
+//
+//	aResultToken.value_int64 = 1; // Indicate success.
+//	return;
+//}
+
+
+
 ////////////////////////////////////////////////////////
 // HELPER FUNCTIONS FOR TOKENS AND BUILT-IN FUNCTIONS //
 ////////////////////////////////////////////////////////

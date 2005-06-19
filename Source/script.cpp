@@ -1411,7 +1411,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			}
 		} // For each sub-line (continued line) that composes this line.
 
-		// buf_length can't be -1 because outer loop's condition prevents it:
+		// buf_length can't be -1 (though next_buf_length can) because outer loop's condition prevents it:
 		if (!buf_length) // Done only after the line number increments above so that the physical line number is properly tracked.
 			continue;
 
@@ -5487,6 +5487,12 @@ Func *Script::FindFunc(char *aFuncName, size_t aFuncNameLength)
 			min_params = 0;
 			max_params = 2;
 		}
+		//else if (!stricmp(suffix, "SetCol"))
+		//{
+		//	bif = BIF_LV_SetCol;
+		//	min_params = 2;
+		//	max_params = 3;
+		//}
 		else
 			return NULL;
 	}

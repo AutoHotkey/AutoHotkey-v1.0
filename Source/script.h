@@ -2456,6 +2456,7 @@ void BIF_Exp(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCou
 void BIF_SqrtLogLn(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 
 void BIF_LV_GetNextItem(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+//void BIF_LV_SetCol(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 
 __int64 ExprTokenToInt64(ExprTokenType &aToken);
 double ExprTokenToDouble(ExprTokenType &aToken);

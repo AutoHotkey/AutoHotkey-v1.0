@@ -226,7 +226,7 @@ void SetModifierAsPrefix(vk_type aVK, sc_type aSC, bool aAlwaysSetAsPrefix = fal
 			if (aAlwaysSetAsPrefix)
 				kvk[aVK].used_as_prefix = true;
 			else
-				if (Hotkey::FindHotkeyContainingModLR(kvk[aSC].as_modifiersLR) != HOTKEY_ID_INVALID)
+				if (Hotkey::FindHotkeyContainingModLR(kvk[aVK].as_modifiersLR) != HOTKEY_ID_INVALID) // Fixed for v1.0.35.13 (used to be aSC vs. aVK).
 					kvk[aVK].used_as_prefix = true;
 				// else allow its suffix action to fire when key is pressed down,
 				// under the fairly safe assumption that the user hasn't configured
@@ -608,7 +608,7 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 		{
 			if (hk.mModifierSC)
 			{
-				if (kvk[hk.mModifierSC].as_modifiersLR)
+				if (ksc[hk.mModifierSC].as_modifiersLR)  // Fixed for v1.0.35.13 (used to be kvk vs. ksc).
 					// The hotkey's ModifierSC is itself a modifier.
 					SetModifierAsPrefix(0, hk.mModifierSC, true);
 				else

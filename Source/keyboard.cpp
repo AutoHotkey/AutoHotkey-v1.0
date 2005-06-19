@@ -2084,7 +2084,7 @@ vk_type TextToVK(char *aText, modLR_type *pModifiersLR, bool aExcludeThoseHandle
 //	if (strlen(text) == 1 && toupper(*text) >= 'A' && toupper(*text) <= 'Z')
 //		return toupper(*text);  // VK is the same as the ASCII code in this case, maybe for other chars too?
 
-	if (aAllowExplicitVK && toupper(*aText) == 'V' && toupper(*(aText + 1)) == 'K')
+	if (aAllowExplicitVK && toupper(aText[0]) == 'V' && toupper(aText[1]) == 'K')
 		return (vk_type)strtol(aText + 2, NULL, 16);  // Convert from hex.
 
 	for (int i = 0; i < g_key_to_vk_count; ++i)
