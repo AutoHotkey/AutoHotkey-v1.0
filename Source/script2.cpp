@@ -12523,48 +12523,79 @@ void BIF_LV_GetNextItem(ExprTokenType &aResultToken, ExprTokenType *aParam[], in
 //
 //	// Load-time validation should have ensured that aParamCount >= 2:
 //	int index = (int)ExprTokenToInt64(*aParam[0]) - 1; // -1 to convert to zero-based.
+//	if (index < 0 || index >= LV_MAX_COLUMNS)
+//		return; // Avoid array under/overflow below.
+//	lv_col_type &col = control.union_col[index];
 //
 //	// Load-time validation should have ensured that aParamCount >= 2:
 //	char *options;
 //	if (   !(options = ExprTokenToString(*aParam[1], aResultToken.buf))   ) // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
 //		return; // Due to rarity of this condition, keep 0/false value as the result.
 //
+//	UCHAR specified_fmt = LVCFMT_JUSTIFYMASK; // Default to unspecified.
+//	col.unidirectional = false;         // Init to defaults so that there's a way to turn them off.
+//	col.primary_is_descending = false;  //
+//
+//	if (*options)
+//	{
+//		// Must check number formats prior to alignment formats so that alignment can be used to override the
+//		// default for the type; e.g. "Integer Left"
+//		if (strstr(options, "Integer"))
+//		{
+//			specified_fmt = LVCFMT_RIGHT;
+//			col.type = 'I';
+//			col.is_now_in_primary_order = false;
+//		}
+//		else if (strstr(options, "Float"))
+//		{
+//			specified_fmt = LVCFMT_RIGHT;
+//			col.type = 'F';
+//			col.is_now_in_primary_order = false;
+//		}
+//		else if (strstr(options, "Text")) // Seems more approp. name than "Str" or "String"
+//		{
+//			// Since "Text" is so general, it seems to leave existing alignment (Center/Right) as it is.
+//			col.type = 'T';
+//			col.is_now_in_primary_order = false;
+//		}
+//
+//		// The following can exist by themselves or in conjunction with the above:
+//		if (strstr(options, "Right"))
+//			specified_fmt = LVCFMT_RIGHT;
+//		else if (strstr(options, "Center"))
+//			specified_fmt = LVCFMT_CENTER;
+//		else if (strstr(options, "Left")) // Supported so that existing right-aligned column can be changed back to left.
+//			specified_fmt = LVCFMT_LEFT;
+//
+//		// Misc. options, which if absent cause the defaults set higher above to be kept:
+//		if (strstr(options, "Uni"))
+//			col.unidirectional = true;
+//		if (strstr(options, "Desc"))
+//			col.primary_is_descending = true;
+//	}
+//
+//	if (specified_fmt != LVCFMT_JUSTIFYMASK) // A format was explicitly specified, so apply it by making the last 2 bits pure.
+//        col.justify = (col.justify & ~LVCFMT_JUSTIFYMASK) | specified_fmt; // LVCFMT_LEFT == 0
+//
 //	LVCOLUMN lvc;
 //	lvc.mask = LVCF_FMT; // Unconditional, for simplicity.
-//	lvc.fmt = 0;
-//	lvc.iSubItem = 0;
+//	lvc.fmt = col.justify;
+//	//lvc.iSubItem = 0; // Not necessary if the LVCF_SUBITEM mask-bit is absent.
 //
-//	// Must check number formats prior to alignment formats so that alignment can be used to override the
-//	// default for the type; e.g. "Integer Left"
-//	if (!*options)
-//		lvc.mask = 0; // Leave existing alignment and other settings as they are.
-//	else if (strstr(options, "Integer"))
+//	if (aParamCount > 2) // Parameter #3 (width) is present.
 //	{
-//		lvc.fmt |= LVCFMT_RIGHT;
-//	}
-//	else if (strstr(options, "Float"))
-//	{
-//		lvc.fmt |= LVCFMT_RIGHT;
-//	}
-//	else if (strstr(options, "Text")) // Seems more approp. name than "Str" or "String"
-//	{
-//		// Since "Text" is so general, it seems to leave existing alignment (Center/Right) as it is.
-//	}
-//	else if (strstr(options, "Right"))
-//	{
-//		lvc.fmt |= LVCFMT_RIGHT;
-//	}
-//	else if (strstr(options, "Center"))
-//	{
-//		lvc.fmt |= LVCFMT_CENTER;
-//	}
-//	else if (strstr(options, "Left")) // Supported so that existing right-aligned column can be changed back to left.
-//	{
-//		lvc.fmt |= LVCFMT_CENTER;
+//		lvc.mask |= LVCF_WIDTH;
+//		lvc.cx = (int)ExprTokenToInt64(*aParam[2]);
 //	}
 //
-//	aResultToken.value_int64 = 1; // Indicate success.
-//	return;
+//	if (aParamCount > 3) // Parameter #4 (text) is present.
+//	{
+//		if (lvc.pszText = ExprTokenToString(*aParam[3], aResultToken.buf)) // Assign.
+//			lvc.mask |= LVCF_TEXT;
+//		//else not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
+//	}
+//
+//	aResultToken.value_int64 = ListView_SetColumn(control.hwnd, index, &lvc); // Indicate success or failure.
 //}
 
 

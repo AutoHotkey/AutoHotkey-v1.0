@@ -901,20 +901,21 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 		// Done in regardless of USES_FONT_AND_TEXT_COLOR to allow future OSes or common control updates
 		// to be given an explicit font, even though it would have no effect currently:
 		SendMessage(control.hwnd, WM_SETFONT, (WPARAM)gui.sFont[gui.mCurrentFontIndex].hfont, 0);
-		if (USES_FONT_AND_TEXT_COLOR(control.type)) // Must check this to avoid trashing union_hbitmap.
+		if (USES_FONT_AND_TEXT_COLOR(control.type)) // Must check this to avoid corrupting union_hbitmap.
 		{
-			control.union_color = gui.mCurrentColor;
+			if (control.type != GUI_CONTROL_LISTVIEW) // Must check this to avoid corrupting union_col.
+				control.union_color = gui.mCurrentColor;
 			switch (control.type)
 			{
 			case GUI_CONTROL_LISTVIEW:
-				ListView_SetTextColor(control.hwnd, control.union_color);
+				ListView_SetTextColor(control.hwnd, gui.mCurrentColor); // Must use gui.mCurrentColor not control.union_color, see above.
 				break;
 			case GUI_CONTROL_DATETIME:
 				// Since message MCM_SETCOLOR != DTM_SETMCCOLOR, can't combine the two types:
-				DateTime_SetMonthCalColor(control.hwnd, MCSC_TEXT, control.union_color); // Hopefully below will revert to default if color is CLR_DEFAULT.
+				DateTime_SetMonthCalColor(control.hwnd, MCSC_TEXT, gui.mCurrentColor); // Hopefully below will revert to default if color is CLR_DEFAULT.
 				break;
 			case GUI_CONTROL_MONTHCAL:
-				MonthCal_SetColor(control.hwnd, MCSC_TEXT, control.union_color); // Hopefully below will revert to default if color is CLR_DEFAULT.
+				MonthCal_SetColor(control.hwnd, MCSC_TEXT, gui.mCurrentColor); // Hopefully below will revert to default if color is CLR_DEFAULT.
 				break;
 			}
 		}
@@ -1125,14 +1126,17 @@ ResultType GuiType::Destroy(GuiIndexType aWindowIndex)
 	// all the abandoned pointers:
 	for (u = 0; u < gui.mControlCount; ++u)
 	{
-		if (gui.mControl[u].type == GUI_CONTROL_PIC && gui.mControl[u].union_hbitmap)
+		GuiControlType &control = gui.mControl[u];
+		if (control.type == GUI_CONTROL_PIC && control.union_hbitmap)
 		{
-			if (gui.mControl[u].attrib & GUI_CONTROL_ATTRIB_ALTBEHAVIOR)
-				DestroyIcon((HICON)gui.mControl[u].union_hbitmap); // Works on cursors too.  See notes in LoadPicture().
+			if (control.attrib & GUI_CONTROL_ATTRIB_ALTBEHAVIOR)
+				DestroyIcon((HICON)control.union_hbitmap); // Works on cursors too.  See notes in LoadPicture().
 			else // union_hbitmap is a bitmap rather than an icon or cursor.
-				DeleteObject(gui.mControl[u].union_hbitmap);
+				DeleteObject(control.union_hbitmap);
 			//else do nothing, since it isn't the right type to have a valid union_hbitmap member.
 		}
+		else if (control.type == GUI_CONTROL_LISTVIEW && control.union_col)
+			free(control.union_col);
 	}
 	// Not necessary since the object itself is about to be destroyed:
 	//gui.mHwnd = NULL;
@@ -1368,11 +1372,11 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 
 	// Set control's default text color:
 	bool uses_font_and_text_color = USES_FONT_AND_TEXT_COLOR(aControlType); // Resolve macro only once.
-	if (uses_font_and_text_color)
+	if (uses_font_and_text_color && control.type != GUI_CONTROL_LISTVIEW) // Must check this to avoid corrupting union_col.
 		control.union_color = mCurrentColor; // Default to the most recently set color.
 	else if (aControlType == GUI_CONTROL_PROGRESS) // This must be done to detect custom Progress color.
 		control.union_color = CLR_DEFAULT; // Set progress to default color avoids unnecessary stripping of theme.
-	//else don't change union_color since it shares the same address as union_hbitmap.
+	//else don't change union_color since it shares the same address as union_hbitmap & union_col.
 
 	switch (aControlType) // Set starting defaults based on control type (the above also does some of that).
 	{
@@ -2397,9 +2401,11 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			, opt.width, opt.height == COORD_UNSPECIFIED ? 200 : opt.height, mHwnd, control_id, g_hInstance, NULL))
 		{
 			mCurrentListView = &control;
+			if (control.union_col = (lv_col_type *)malloc(sizeof(lv_col_type) * LV_MAX_COLUMNS))
+				ZeroMemory(control.union_col, sizeof(lv_col_type) * LV_MAX_COLUMNS);
 			if (opt.listview_style) // This is a third set of styles that exist in addition to normal & extended.
 				ListView_SetExtendedListViewStyle(control.hwnd, opt.listview_style); // No return value.
-			opt.color_changed = (control.union_color != CLR_DEFAULT); // In case a custom font color is in effect with an explicit "cBlue" in control's options.
+			opt.color_changed = (opt.color_listview != CLR_DEFAULT); // In case a custom font color was put into effect via the Font command vs. "cBlue" in control's options.
 			if (opt.color_bk == CLR_DEFAULT) // Explicitly specified as "default" since the value isn't at its default of "invalid".
 				opt.color_bk = CLR_INVALID; // Tell ControlSetListViewOptions "no color change requested".
 			else if (opt.color_bk == CLR_INVALID && mBackgroundColorCtl != CLR_DEFAULT) // Bk color was not explicitly specified in options.
@@ -3181,6 +3187,10 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 // Caller must have already initialized aOpt with zeroes or any other desired starting values.
 // Caller must ensure that aOptions is a modifiable string, since this method temporarily alters it.
 {
+	// If control type uses aControl's union for something other than color, communicate the chosen color
+	// back through a means that doesn't corrupt the union:
+	COLORREF &color_main = (aControl.type == GUI_CONTROL_LISTVIEW || aControl.type == GUI_CONTROL_PIC)
+		? aOpt.color_listview : aControl.union_color;
 	char *next_option, *option_end, orig_char;
 	bool adding; // Whether this option is beeing added (+) or removed (-).
 	GuiControlType *tab_control;
@@ -4037,9 +4047,9 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 				switch (toupper(next_option[-1]))
 				{
 				case 'C':
-					if (!adding && aControl.type != GUI_CONTROL_PIC && aControl.union_color != CLR_DEFAULT)
+					if (!adding && aControl.type != GUI_CONTROL_PIC && color_main != CLR_DEFAULT)
 					{
-						aControl.union_color = CLR_DEFAULT; // i.e. treat "-C" as return to the default color.
+						color_main = CLR_DEFAULT; // i.e. treat "-C" as return to the default color. color_main is a reference to the right struct member.
 						aOpt.color_changed = true;
 					}
 					break;
@@ -4159,7 +4169,7 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 				break;
 
 			case 'C':  // Color
-				if (aControl.type == GUI_CONTROL_PIC) // Don't trash the union's hbitmap member.
+				if (aControl.type == GUI_CONTROL_PIC) // Don't corrupt the union's hbitmap member.
 					break;
 				COLORREF new_color;
 				new_color = ColorNameToBGR(next_option);
@@ -4168,9 +4178,9 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 					new_color = rgb_to_bgr(strtol(next_option, NULL, 16));
 					// if next_option did not contain something hex-numeric, black (0x00) will be assumed,
 					// which seems okay given how rare such a problem would be.
-				if (aControl.union_color != new_color)
+				if (color_main != new_color || &color_main == &aOpt.color_listview) // Always indicate that it changed if it's not a stored attribute of the control (so that cDefault can be detected).
 				{
-					aControl.union_color = new_color;
+					color_main = new_color; // color_main is a reference to the right struct member.
 					aOpt.color_changed = true;
 				}
 				break;
@@ -4609,6 +4619,7 @@ void GuiType::ControlInitOptions(GuiControlOptionsType &aOpt, GuiControlType &aC
 	// for background color but not bar color is that bar_color is stored as a control attribute,
 	// but to save memory, background color is not.  In addition, there is no good way to ask a
 	// progress control what its background color currently is.
+	aOpt.color_listview = CLR_DEFAULT; // But this one uses DEFAULT vs. INVALID because it has simpler logic.
 }
 
 
@@ -7152,7 +7163,7 @@ void GuiType::ControlSetListViewOptions(GuiControlType &aControl, GuiControlOpti
 // current background color.
 {
 	if (aOpt.color_changed)
-		ListView_SetTextColor(aControl.hwnd, aControl.union_color);
+		ListView_SetTextColor(aControl.hwnd, aOpt.color_listview);
 	if (aOpt.color_bk != CLR_INVALID) // Explicit color change was requested.
 	{
 		// Making both the same seems the best default because BkColor only applies to the portion

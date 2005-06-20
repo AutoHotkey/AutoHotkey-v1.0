@@ -1206,10 +1206,15 @@ ResultType UserMenu::Display(bool aForceToForeground, int aX, int aY)
 		}
 	}
 
+	// UPDATE: For v1.0.35.14, must ensure one of the script's windows is active before showing the menu
+	// because otherwise the menu cannot be dismissed via the escape key or by clicking outside the menu.
+	// Testing shows that ensuring any of our thread's windows is active allows both the tray menu and
+	// any popup or context menus to work correctly.
 	// UPDATE: For v1.0.35.12, the script's main window (g_hWnd) is activated only for the tray menu because:
 	// 1) Doing so for GUI context menus seems to prevent mouse clicks in the menu or elsewhere in the window.
 	// 2) It would probably have other side effects for other uses of popup menus.
-	if (this == g_script.mTrayMenu)
+	HWND fore_win = GetForegroundWindow();
+	if (!fore_win || GetWindowThreadProcessId(fore_win, NULL) != GetCurrentThreadId())
 	{
 		// Always bring main window to foreground right before TrackPopupMenu(), even if window is hidden.
 		// UPDATE: This is a problem because SetForegroundWindowEx() will restore the window if it's hidden,
@@ -1254,6 +1259,8 @@ ResultType UserMenu::Display(bool aForceToForeground, int aX, int aY)
 			//...
 		}
 	}
+	// Apparently, the HWND parameter of TrackPopupMenuEx() can be g_hWnd even if one of the script's
+	// other (non-main) windows is foreground. The menu still seems to operate correctly.
 	g_MenuIsVisible = MENU_TYPE_POPUP;
 	TrackPopupMenuEx(mMenu, TPM_LEFTALIGN | TPM_LEFTBUTTON, pt.x, pt.y, g_hWnd, NULL);
 	g_MenuIsVisible = MENU_TYPE_NONE;

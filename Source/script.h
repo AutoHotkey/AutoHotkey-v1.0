@@ -1922,6 +1922,16 @@ struct FontType
 	HFONT hfont;
 };
 
+#define LV_MAX_COLUMNS 200
+struct lv_col_type
+{
+	bool unidirectional;
+	bool primary_is_descending;
+	bool is_now_in_primary_order;
+	UCHAR justify; // Contains only the LVCFMT_JUSTIFYMASK portion.
+	char type; // Integer, Float, Text
+};
+
 typedef UCHAR TabControlIndexType;
 typedef UCHAR TabIndexType;
 // Keep the below in sync with the size of the types above:
@@ -1952,6 +1962,7 @@ struct GuiControlType
 		HBITMAP union_hbitmap; // For PIC controls, stores the bitmap.
 		// Note: Pic controls cannot obey the text color, but they can obey the window's background
 		// color if the picture's background is transparent (at least in the case of icons on XP).
+		lv_col_type *union_col; // For ListView: An allocated array of columns.
 	};
 	#define USES_FONT_AND_TEXT_COLOR(type) !(type == GUI_CONTROL_PIC || type == GUI_CONTROL_UPDOWN \
 		|| type == GUI_CONTROL_SLIDER || type == GUI_CONTROL_PROGRESS)
@@ -1969,6 +1980,7 @@ struct GuiControlOptionsType
 	int thickness;  // Thickness of slider's thumb.
 	int tip_side; // Which side of the control to display the tip on (0 to use default side).
 	GuiControlType *buddy1, *buddy2;
+	COLORREF color_listview; // Used only for those controls that need control.union_color for something other than color.
 	COLORREF color_bk; // Control's background color.
 	int limit;   // The max number of characters to permit in an edit or combobox's edit.
 	int hscroll_pixels;  // The number of pixels for a listbox's horizontal scrollbar to be able to scroll.
