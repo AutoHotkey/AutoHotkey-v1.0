@@ -1271,12 +1271,26 @@ ResultType UserMenu::Display(bool aForceToForeground, int aX, int aY)
 	if (this == g_script.mTrayMenu)
 		PostMessage(g_hWnd, WM_NULL, 0, 0);
 	else // Seems best to avoid the following for the tray menu since it doesn't seem work and might produce side-effects in some cases.
+	{
 		if (change_fore && fore_win && GetForegroundWindow() == g_hWnd)
+		{
 			// The last of the conditions above is checked in case the user clicked the taskbar or some
 			// other window to dismiss the menu.  In that case, the following isn't done because it typically
 			// steals focus from the user's intended window, and this attempt usually fails due to the OS's
 			// anti-focus-stealing measure, which in turn would cause fore_win's taskbar button to flash annoyingly.
 			SetForegroundWindow(fore_win); // See comments above for why SetForegroundWindowEx() isn't used.
+			// The following resolves the issue where the window would not have enough time to become active
+			// before we continued using our timeslice to return to our caller and launch our new thread.
+			// In other words, the menu thread would launch before SetForegroundWindow() actually had a chance
+			// to take effect:
+			// 0 is exactly the amount of time (-1 is not enough because it doesn't yeild) needed for that
+			// other process to actually ack/perform the activation of its window and clean out its queue using
+			// one timeslice.  This has been tested even when the CPU is maxed from some third-party process.
+			// For performance and code simplicity, it seems best not to do a GetForegroundWindow() loop that
+			// waits for it to become active, unless others report that this method is significantly unreliable:
+			SLEEP_WITHOUT_INTERRUPTION(0);
+		}
+	}
 	return OK;
 }
 

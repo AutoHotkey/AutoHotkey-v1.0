@@ -1618,7 +1618,7 @@ void Hotstring::ParseOptions(char *aOptions, int &aPriority, int &aKeyDelay, boo
 {
 	// In this case, colon rather than zero marks the end of the string.  However, the string
 	// might be empty so check for that too.  In addition, this is now called from
-	// IsPreprocessDirective(), so that's another reason to check for normal string termination.
+	// IsDirective(), so that's another reason to check for normal string termination.
 	char *cp1;
 	for (char *cp = aOptions; *cp && *cp != ':'; ++cp)
 	{

@@ -1942,6 +1942,12 @@ size_t Script::GetLine(char *aBuf, int aMaxCharsToRead, bool aInContinuationSect
 			else // No whitespace to the left.
 				if (*prevp == g_EscapeChar) // Remove the escape char.
 				{
+					// The following isn't exactly correct because it prevents an include filename from ever
+					// containing the literal string "`;".  This is because attempts to escape the accent via
+					// "``;" are not supported.  This is documented here as a known limitation because fixing
+					// it would probably break existing scripts that rely on the fact that accents do not need
+					// to be escaped inside #Include.  Also, the likelihood of "`;" appearing literally in a
+					// legitimate #Include file seems vanishingly small.
 					memmove(prevp, prevp + 1, strlen(prevp + 1) + 1);  // +1 for the terminator.
 					--aBuf_length;
 					// Then continue looking for others.
