@@ -1214,7 +1214,8 @@ ResultType UserMenu::Display(bool aForceToForeground, int aX, int aY)
 	// 1) Doing so for GUI context menus seems to prevent mouse clicks in the menu or elsewhere in the window.
 	// 2) It would probably have other side effects for other uses of popup menus.
 	HWND fore_win = GetForegroundWindow();
-	if (!fore_win || GetWindowThreadProcessId(fore_win, NULL) != GetCurrentThreadId())
+	bool change_fore;
+	if (change_fore = (!fore_win || GetWindowThreadProcessId(fore_win, NULL) != GetCurrentThreadId()))
 	{
 		// Always bring main window to foreground right before TrackPopupMenu(), even if window is hidden.
 		// UPDATE: This is a problem because SetForegroundWindowEx() will restore the window if it's hidden,
@@ -1269,6 +1270,13 @@ ResultType UserMenu::Display(bool aForceToForeground, int aX, int aY)
 	// its done only for the tray menu in v1.0.35.12:
 	if (this == g_script.mTrayMenu)
 		PostMessage(g_hWnd, WM_NULL, 0, 0);
+	else // Seems best to avoid the following for the tray menu since it doesn't seem work and might produce side-effects in some cases.
+		if (change_fore && fore_win && GetForegroundWindow() == g_hWnd)
+			// The last of the conditions above is checked in case the user clicked the taskbar or some
+			// other window to dismiss the menu.  In that case, the following isn't done because it typically
+			// steals focus from the user's intended window, and this attempt usually fails due to the OS's
+			// anti-focus-stealing measure, which in turn would cause fore_win's taskbar button to flash annoyingly.
+			SetForegroundWindow(fore_win); // See comments above for why SetForegroundWindowEx() isn't used.
 	return OK;
 }
 
