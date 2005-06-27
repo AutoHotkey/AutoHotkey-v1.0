@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.35.16"
+#define NAME_VERSION "1.0.36.00"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -288,7 +288,7 @@ typedef UINT GuiEventType; // Made a UINT vs. enum so that illegal/underflow/ove
 #define GUI_EVENT_NORMAL      1
 #define GUI_EVENT_DBLCLK      2 // Try to avoid changing this and the other numbers in case anyone automates a script via SendMessage (though that does seem exceedingly unlikely).
 #define GUI_EVENT_RCLK        3
-#define GUI_EVENT_COLCLICK    4
+#define GUI_EVENT_COLCLK      4
 #define GUI_EVENT_ILLEGAL     5 // This item must always be last, and it must be 1 greater than the previous.
 #define GUI_EVENT_DROPFILES   6 // A special value separate from the above and yet less than 49 (ASCII values of '1' through '9' used by Slider controls).
 #define GUI_EVENT_DIGIT_0     48 // Values here and higher are reserved so that a single digit or character (mnemonic) can be sent.

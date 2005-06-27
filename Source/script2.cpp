@@ -2916,7 +2916,7 @@ ResultType Line::ScriptProcess(char *aCmd, char *aProcess, char *aParam3)
 	switch (process_cmd)
 	{
 	case PROCESS_CMD_EXIST:
-		return g_ErrorLevel->Assign(ProcessExist(aProcess)); // The discovered PID or zero if none.
+		return g_ErrorLevel->Assign(*aProcess ? ProcessExist(aProcess) : GetCurrentProcessId()); // The discovered PID or zero if none.
 
 	case PROCESS_CMD_CLOSE:
 		if (pid = ProcessExist(aProcess))  // Assign
@@ -2928,7 +2928,7 @@ ResultType Line::ScriptProcess(char *aCmd, char *aProcess, char *aParam3)
 				return g_ErrorLevel->Assign(result ? pid : 0); // Indicate success or failure.
 			}
 		}
-		// Otherwise, return a PID of 0 to indicate failure.
+		// Since above didn't return, yield a PID of 0 to indicate failure.
 		return g_ErrorLevel->Assign("0");
 
 	case PROCESS_CMD_PRIORITY:
@@ -12464,7 +12464,90 @@ void BIF_SqrtLogLn(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 
 
 
-void BIF_LV_GetNextItem(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+void BIF_LV_GetNextOrCount(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+// Returns: The index of the found item, or 0 on failure.
+// Parameters:
+// 1: Starting index (one-based when it comes in).  If absent, search starts at the top.
+// 2: Options string.
+// 3: (FUTURE): Possible for use with LV_FindItem (though I think it can only search item text, not subitem text).
+{
+	bool mode_is_count = toupper(aResultToken.marker[6] == 'C'); // Marker contains the function name. LV_Get[C]ount.
+	char *buf = aResultToken.buf; // Must be saved early since below overwrites the union (better maintainability too).
+	aResultToken.value_int64 = 0;
+	// Above sets default result in case of early return.  For code reduction, a zero is returned for all
+	// the following conditions:
+	// Window doesn't exist.
+	// Control doesn't exist (i.e. no ListView in window).
+	// Item not found in ListView.
+	if (!g_gui[g.GuiDefaultWindowIndex])
+		return;
+	GuiType &gui = *g_gui[g.GuiDefaultWindowIndex]; // Always operate on thread's default window to simplify the syntax.
+	if (!gui.mCurrentListView)
+		return;
+	HWND control_hwnd = gui.mCurrentListView->hwnd;
+
+	char *options;
+	if (mode_is_count)
+	{
+		int msg = aParamCount > 0 && (options = ExprTokenToString(*aParam[0], buf))
+			&& toupper(*omit_leading_whitespace(options)) == 'S' // Relies on short-circuit order.
+			? LVM_GETSELECTEDCOUNT : LVM_GETITEMCOUNT;
+		aResultToken.value_int64 = SendMessage(control_hwnd, msg, 0, 0);
+		return;
+	}
+	// Since above didn't return, this is GetNext() mode.
+
+	int index = (int)((aParamCount > 0) ? ExprTokenToInt64(*aParam[0]) - 1 : -1); // -1 to convert to zero-based.
+	// For flexibility, allow index to be less than -1 to avoid first-iteration complications in script loops
+	// (such as when deleting rows, which shifts the row index upward, require the search to resume at
+	// the previously found index rather than the row after it).  However, reset it to -1 to ensure
+	// proper return values from the API in the "find checked item" mode used below.
+	if (index < -1)
+		index = -1;  // Signal it to start at the top.
+
+	if (aParamCount < 2)
+		options = "";
+	else
+		if (   !(options = ExprTokenToString(*aParam[1], buf))   ) // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
+			return; // Due to rarity of this condition, keep 0/false value as the result.
+
+	// For performance, decided to always find next selected item when the "C" option hasn't been specified,
+	// even when the checkboxes style is in effect.  Otherwise, would have to fetch and check checkbox style
+	// bit for each call, which would slow down this heavily-called function.
+
+	char first_char = toupper(*omit_leading_whitespace(options));
+	// To retain compatibility in the future, also allow "Check(ed)" and "Focus(ed)" since any word that
+	// starts with C or F is already supported.
+
+	switch(first_char)
+	{
+	case '\0': // Listed first for performance.
+	case 'F':
+		aResultToken.value_int64 = ListView_GetNextItem(control_hwnd, index
+			, first_char ? LVNI_FOCUSED : LVNI_SELECTED) + 1; // +1 to convert to 1-based.
+		break;
+	case 'C': // Checkbox: Find checked items. For performance assume that the control really has checkboxes.
+		int item_count = ListView_GetItemCount(control_hwnd);
+		for (int i = index + 1; i < item_count; ++i) // Start at index+1 to omit the first item from the search (for consistency with the other mode above).
+			if (ListView_GetCheckState(control_hwnd, i)) // Item's box is checked.
+			{
+				aResultToken.value_int64 = i + 1; // +1 to convert from zero-based to one-based.
+				return;
+			}
+		// Since above didn't return, no match found.  The 0/false value previously set as the default is retained.
+		break;
+	}
+}
+
+
+
+void BIF_LV_GetText(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+// Returns: 1 on success and 0 on failure.
+// Parameters:
+// 1: Output variable (doing it this way allows success/fail return value to more closely mirror the API and
+//    simplifies the code since there is currently no easy means of passing back large strings to our caller.
+// 2: Row index (one-based when it comes in).
+// 3: Column index (one-based when it comes in).
 {
 	aResultToken.value_int64 = 0;
 	// Above sets default result in case of early return.  For code reduction, a zero is returned for all
@@ -12472,131 +12555,774 @@ void BIF_LV_GetNextItem(ExprTokenType &aResultToken, ExprTokenType *aParam[], in
 	// Window doesn't exist.
 	// Control doesn't exist (i.e. no ListView in window).
 	// Item not found in ListView.
-	if (!g_gui[g.GuiDefaultWindowIndex]) // Return a blank value to indicate the window doesn't exist.
+	// And others.
+	if (!g_gui[g.GuiDefaultWindowIndex])
 		return;
 	GuiType &gui = *g_gui[g.GuiDefaultWindowIndex]; // Always operate on thread's default window to simplify the syntax.
 	if (!gui.mCurrentListView)
 		return;
-	int index = (int)((aParamCount > 0) ? ExprTokenToInt64(*aParam[0]) - 1 : -1); // -1 to convert to zero-based.
-	// For performance, always find next selected item when the "C" option hasn't been specified, even
-	// when the checkboxes style is in effect.  Otherwise, would have to fetch and check checkbox style bit
-	// for each call, which would slow down this heavily-called function.
-	HWND control_hwnd = gui.mCurrentListView->hwnd;
-	if (aParamCount < 2)
-	{
-		aResultToken.value_int64 = ListView_GetNextItem(control_hwnd, index, LVNI_SELECTED) + 1; // +1 to convert to 1-based.
+	// Caller has ensured there is at least two parameters:
+	if (aParam[0]->symbol != SYM_VAR) // No output variable.  Supporting a NULL for the purpose of checking for the existence of a cell seems too rarely needed.
 		return;
+
+	// Caller has ensured there is at least two parameters.
+	int row_index = (int)ExprTokenToInt64(*aParam[1]) - 1; // -1 to convert to zero-based.
+	// If parameter 3 is omitted, default to the first column (index 0):
+	int col_index = (aParamCount > 2) ? (int)ExprTokenToInt64(*aParam[2]) - 1 : 0; // -1 to convert to zero-based.
+	if (row_index < -1 || col_index < 0) // row_index==-1 is reserved to mean "get column heading's text".
+		return;
+
+	Var &output_var = *aParam[0]->var; // It was already ensured higher above that symbol==SYM_VAR.
+	char buf[LV_TEXT_BUF_SIZE];
+
+	if (row_index == -1) // Special mode to get column's text.
+	{
+		LVCOLUMN lvc;
+		lvc.cchTextMax = LV_TEXT_BUF_SIZE - 1;  // See notes below about -1.
+		lvc.pszText = buf;
+		lvc.mask = LVCF_TEXT;
+		if (aResultToken.value_int64 = SendMessage(gui.mCurrentListView->hwnd, LVM_GETCOLUMN, col_index, (LPARAM)&lvc)) // Assign.
+			output_var.Assign(lvc.pszText); // See notes below about why pszText is used instead of buf (might apply to this too).
+		else // On failure, it seems best to also clear the output var for better consistency and in case the script doesn't check the return value.
+			output_var.Assign();
 	}
-	char *options;
-	if (   !(options = ExprTokenToString(*aParam[1], aResultToken.buf))   ) // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
-		return; // Due to rarity of this condition, keep 0/false value as the result.
-	if (toupper(*options) != 'C')
-		return; // Invalid option, so retail 0/false to indicate failure.
-	// Otherwise, the "C" (Checkbox) option is present, so for performance assume that the control really
-	// has checkboxes.
-	int item_count = ListView_GetItemCount(control_hwnd);
-	for (int i = index + 1; i < item_count; ++i) // Start at index+1 to omit the first item from the search (for consistency with the other mode above).
-		if (ListView_GetCheckState(control_hwnd, i)) // Item's box is checked.
-		{
-			aResultToken.value_int64 = i + 1; // +1 to convert from zero-based to one-based.
-			return;
-		}
-	// Since above didn't return, no match found.  The 0/false value previously set as the default is retained.
+	else // Get row's indicated item or subitem text.
+	{
+		LVITEM lvi;
+		// Subtract 1 because of that nagging doubt about size vs. length. Some MSDN examples such as
+		// TabCtrl_GetItem()'s cchTextMax subtract one.
+		lvi.cchTextMax = LV_TEXT_BUF_SIZE - 1; // Note that LVM_GETITEM doesn't update this member to reflect the new length.
+		lvi.pszText = buf;
+		lvi.mask = LVIF_TEXT;
+		lvi.iItem = row_index;
+		lvi.iSubItem = col_index; // Which field to fetch.  If it's zero, the item vs. subitem will be fetched.
+		// Unlike LVM_GETITEMTEXT, LVM_GETITEM indicates success or failure, which seems more useful/preferable
+		// as a return value since a text length of zero would be ambiguous: could be an empty field or a failure.
+		if (aResultToken.value_int64 = SendMessage(gui.mCurrentListView->hwnd, LVM_GETITEM, 0, (LPARAM)&lvi)) // Assign
+			// Must use lvi.pszText vs. buf because MSDN says: "Applications should not assume that the text will
+			// necessarily be placed in the specified buffer. The control may instead change the pszText member
+			// of the structure to point to the new text rather than place it in the buffer."
+			output_var.Assign(lvi.pszText);
+		else // On failure, it seems best to also clear the output var for better consistency and in case the script doesn't check the return value.
+			output_var.Assign();
+	}
 }
 
 
 
-//void BIF_LV_SetCol(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
-//{
-//	aResultToken.value_int64 = 0;
-//	// Above sets default result in case of early return.  For code reduction, a zero is returned for all
-//	// the following conditions:
-//	// Window doesn't exist.
-//	// Control doesn't exist (i.e. no ListView in window).
-//	// Column not found in ListView.
-//	if (!g_gui[g.GuiDefaultWindowIndex]) // Return a blank value to indicate the window doesn't exist.
-//		return;
-//	GuiType &gui = *g_gui[g.GuiDefaultWindowIndex]; // Always operate on thread's default window to simplify the syntax.
-//	if (!gui.mCurrentListView)
-//		return;
-//	GuiControlType &control = *gui.mCurrentListView;
-//
-//	// Load-time validation should have ensured that aParamCount >= 2:
-//	int index = (int)ExprTokenToInt64(*aParam[0]) - 1; // -1 to convert to zero-based.
-//	if (index < 0 || index >= LV_MAX_COLUMNS)
-//		return; // Avoid array under/overflow below.
-//	lv_col_type &col = control.union_col[index];
-//
-//	// Load-time validation should have ensured that aParamCount >= 2:
-//	char *options;
-//	if (   !(options = ExprTokenToString(*aParam[1], aResultToken.buf))   ) // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
-//		return; // Due to rarity of this condition, keep 0/false value as the result.
-//
-//	UCHAR specified_fmt = LVCFMT_JUSTIFYMASK; // Default to unspecified.
-//	col.unidirectional = false;         // Init to defaults so that there's a way to turn them off.
-//	col.primary_is_descending = false;  //
-//
-//	if (*options)
-//	{
-//		// Must check number formats prior to alignment formats so that alignment can be used to override the
-//		// default for the type; e.g. "Integer Left"
-//		if (strstr(options, "Integer"))
-//		{
-//			specified_fmt = LVCFMT_RIGHT;
-//			col.type = 'I';
-//			col.is_now_in_primary_order = false;
-//		}
-//		else if (strstr(options, "Float"))
-//		{
-//			specified_fmt = LVCFMT_RIGHT;
-//			col.type = 'F';
-//			col.is_now_in_primary_order = false;
-//		}
-//		else if (strstr(options, "Text")) // Seems more approp. name than "Str" or "String"
-//		{
-//			// Since "Text" is so general, it seems to leave existing alignment (Center/Right) as it is.
-//			col.type = 'T';
-//			col.is_now_in_primary_order = false;
-//		}
-//
-//		// The following can exist by themselves or in conjunction with the above:
-//		if (strstr(options, "Right"))
-//			specified_fmt = LVCFMT_RIGHT;
-//		else if (strstr(options, "Center"))
-//			specified_fmt = LVCFMT_CENTER;
-//		else if (strstr(options, "Left")) // Supported so that existing right-aligned column can be changed back to left.
-//			specified_fmt = LVCFMT_LEFT;
-//
-//		// Misc. options, which if absent cause the defaults set higher above to be kept:
-//		if (strstr(options, "Uni"))
-//			col.unidirectional = true;
-//		if (strstr(options, "Desc"))
-//			col.primary_is_descending = true;
-//	}
-//
-//	if (specified_fmt != LVCFMT_JUSTIFYMASK) // A format was explicitly specified, so apply it by making the last 2 bits pure.
-//        col.justify = (col.justify & ~LVCFMT_JUSTIFYMASK) | specified_fmt; // LVCFMT_LEFT == 0
-//
-//	LVCOLUMN lvc;
-//	lvc.mask = LVCF_FMT; // Unconditional, for simplicity.
-//	lvc.fmt = col.justify;
-//	//lvc.iSubItem = 0; // Not necessary if the LVCF_SUBITEM mask-bit is absent.
-//
-//	if (aParamCount > 2) // Parameter #3 (width) is present.
-//	{
-//		lvc.mask |= LVCF_WIDTH;
-//		lvc.cx = (int)ExprTokenToInt64(*aParam[2]);
-//	}
-//
-//	if (aParamCount > 3) // Parameter #4 (text) is present.
-//	{
-//		if (lvc.pszText = ExprTokenToString(*aParam[3], aResultToken.buf)) // Assign.
-//			lvc.mask |= LVCF_TEXT;
-//		//else not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
-//	}
-//
-//	aResultToken.value_int64 = ListView_SetColumn(control.hwnd, index, &lvc); // Indicate success or failure.
-//}
+void BIF_LV_AddInsertModify(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+// Returns: 1 on success and 0 on failure.
+// Parameters:
+// 1: For Add(), this is the options.  For Insert/Modify, it's the row index (one-based when it comes in).
+// 2: For Add(), this is the first field's text.  For Insert/Modify, it's the options.
+// 3 and beyond: Additional field text.
+// In Add/Insert mode, if there are no text fields present, a blank for is appended/inserted.
+{
+	char mode = toupper(aResultToken.marker[3]); // Marker contains the function name. e.g. LV_[I]nsert.
+	char *buf = aResultToken.buf; // Must be saved early since below overwrites the union (better maintainability too).
+	aResultToken.value_int64 = 0;
+	// Above sets default result in case of early return.  For code reduction, a zero is returned for all
+	// the following conditions:
+	// Window doesn't exist.
+	// Control doesn't exist (i.e. no ListView in window).
+	// And others as shown below.
+
+	int index;
+	if (mode == 'A') // For Add mode (A), use INT_MAX as a signal to append the item rather than inserting it.
+	{
+		index = INT_MAX;
+		mode = 'I'; // Add has now been set up to be the same as insert, so change the mode to simplify other things.
+	}
+	else // Insert or Modify: the target row-index is their first parameter, which load-time has ensured is present.
+	{
+		index = (int)ExprTokenToInt64(*aParam[0]) - 1; // -1 to convert to zero-based.
+		if (index < -1 || (mode != 'M' && index < 0)) // Allow -1 to mean "all rows" when in modify mode.
+			return;
+		++aParam;  // Remove the first parameter from further consideration to make Insert/Modify symmetric with Add.
+		--aParamCount;
+	}
+
+	if (!g_gui[g.GuiDefaultWindowIndex])
+		return;
+	GuiType &gui = *g_gui[g.GuiDefaultWindowIndex]; // Always operate on thread's default window to simplify the syntax.
+	if (!gui.mCurrentListView)
+		return;
+	GuiControlType &control = *gui.mCurrentListView;
+
+	char *options;
+	if (aParamCount > 0)
+	{
+		if (   !(options = ExprTokenToString(*aParam[0], buf))   ) // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
+			return; // Due to rarity of this condition, keep 0/false value as the result.
+	}
+	else  // No options parameter is present.
+		options = "";
+
+	bool is_checked = false;  // Checkmark.
+	int col_start_index = 0;
+	LVITEM lvi;
+	lvi.mask = LVIF_STATE; // LVIF_STATE: state member is valid, but only to the extent that corresponding bits are set in stateMask (the rest will be ignored).
+	lvi.stateMask = 0;
+	lvi.state = 0;
+
+	// Parse list of space-delimited options:
+	char *next_option, *option_end, orig_char;
+	bool adding; // Whether this option is beeing added (+) or removed (-).
+
+	for (next_option = options; *next_option; next_option = omit_leading_whitespace(option_end))
+	{
+		if (*next_option == '-')
+		{
+			adding = false;
+			// omit_leading_whitespace() is not called, which enforces the fact that the option word must
+			// immediately follow the +/- sign.  This is done to allow the flexibility to have options
+			// omit the plus/minus sign, and also to reserve more flexibility for future option formats.
+			++next_option;  // Point it to the option word itself.
+		}
+		else
+		{
+			// Assume option is being added in the absence of either sign.  However, when we were
+			// called by GuiControl(), the first option in the list must begin with +/- otherwise the cmd
+			// would never have been properly detected as GUICONTROL_CMD_OPTIONS in the first place.
+			adding = true;
+			if (*next_option == '+')
+				++next_option;  // Point it to the option word itself.
+			//else do not increment, under the assumption that the plus has been omitted from a valid
+			// option word and is thus an implicit plus.
+		}
+
+		if (!*next_option) // In case the entire option string ends in a naked + or -.
+			break;
+		// Find the end of this option item:
+		if (   !(option_end = StrChrAny(next_option, " \t"))   )  // Space or tab.
+			option_end = next_option + strlen(next_option); // Set to position of zero terminator instead.
+		if (option_end == next_option)
+			continue; // i.e. the string contains a + or - with a space or tab after it, which is intentionally ignored.
+
+		// Temporarily terminate to help eliminate ambiguity for words contained inside other words,
+		// such as "Checked" inside of "CheckedGray":
+		orig_char = *option_end;
+		*option_end = '\0';
+
+		if (!strnicmp(next_option, "Select", 6)) // Could further allow "ed" suffix by checking for that inside, but "Selected" is getting long so it doesn't seem something many would want to use.
+		{
+			next_option += 6;
+			// If it's Select0, invert the mode to become "no select". This allows a boolean variable
+			// to be more easily applied, such as this expression: "Check" . VarContainingState
+			if (*next_option && !ATOI(next_option))
+				adding = !adding;
+			// Another reason for not having "Select" imply "Focus" by default is that it would probably
+			// reduce performance when selecting all or a large number of rows.
+			// Because a row might or might not have focus, the script may wish to retain its current
+			// focused state.  For this reason, "select" does not imply "focus", which allows the
+			// LVIS_FOCUSED bit to be omitted from the stateMask, which in turn retains the current
+			// focus-state of the row rather than disrupting it.
+			lvi.stateMask |= LVIS_SELECTED;
+			if (adding)
+				lvi.state |= LVIS_SELECTED;
+			//else removing, so the presence of LVIS_SELECTED in the stateMask above will cause it to be de-selected.
+		}
+		else if (!strnicmp(next_option, "Focus", 5))
+		{
+			next_option += 5;
+			if (*next_option && !ATOI(next_option)) // If it's Focus0, invert the mode to become "no focus".
+				adding = !adding;
+			lvi.stateMask |= LVIS_FOCUSED;
+			if (adding)
+				lvi.state |= LVIS_FOCUSED;
+			//else removing, so the presence of LVIS_FOCUSED in the stateMask above will cause it to be de-focused.
+		}
+		else if (!strnicmp(next_option, "Check", 5))
+		{
+			// The rationale for not checking for an optional "ed" suffix here and incrementing next_option by 2
+			// is that: 1) It would be inconsistent with the lack of support for "selected" (see reason above);
+			// 2) Checkboxes in a ListView are fairly rarely used, so code size reduction might be more important.
+			next_option += 5;
+			if (*next_option && !ATOI(next_option)) // If it's Check0, invert the mode to become "unchecked".
+				adding = !adding;
+			lvi.stateMask |= LVIS_STATEIMAGEMASK;
+			lvi.state |= INDEXTOSTATEIMAGEMASK(adding ? 2 : 1); // The #1 image is "unchecked" and the #2 is "checked".
+			is_checked = adding;
+		}
+		else if (!strnicmp(next_option, "Col", 3))
+		{
+			if (adding)
+			{
+				col_start_index = ATOI(next_option + 3) - 1; // The ability start start at a column other than 1 (i.e. subitem vs. item).
+				if (col_start_index < 0)
+					col_start_index = 0;
+			}
+		}
+		else if (!strnicmp(next_option, "Icon", 4))
+		{
+			// Testing shows that there is no way to avoid having an item icon in report view if the
+			// ListView has an associated small-icon ImageList (well, perhaps you could have it show
+			// a blank square by specifying an invalid icon index, but that doesn't seem useful).
+			// If LVIF_IMAGE is entirely omitted when adding and item/row, the item will take on the
+			// first icon in the list.  This is probably by design because the control wants to make
+			// each item look consistent by indenting its first field by a certain amount for the icon.
+			if (adding)
+			{
+				lvi.mask |= LVIF_IMAGE;
+				lvi.iImage = ATOI(next_option + 4) - 1;  // -1 to convert to zero-based.
+			}
+			//else removal of icon currently not supported (see comment above), so do nothing in order
+			// to reserve "-Icon" in case a future way can be found to do it.
+		}
+
+		// If the item was not handled by the above, ignore it because it is unknown.
+		*option_end = orig_char; // Undo the temporary termination because the caller needs aOptions to be unaltered.
+	}
+
+	// More maintainable and performs better to have a separate struct for subitems vs. items.
+	LVITEM lvi_sub;
+	// Ensure mask is pure to avoid giving it any excuse to fail due to the fact that
+	// "You cannot set the state or lParam members for subitems."
+	lvi_sub.mask = LVIF_TEXT;
+
+	int i, j, rows_to_change;
+	if (index == -1) // Modify all rows (above has ensured that this is only happens in modify-mode).
+	{
+		rows_to_change = ListView_GetItemCount(control.hwnd);
+		lvi.iItem = 0;
+	}
+	else // Modify or insert a single row.  Set it up for the loop to perform exactly one iteration.
+	{
+		rows_to_change = 1;
+		lvi.iItem = index; // Which row to operate upon.  This can be a huge number such as 999999 if the caller wanted to append vs. insert.
+	}
+	lvi.iSubItem = 0;  // Always zero to operate upon the item vs. sub-item (subitems have their own LVITEM struct).
+	aResultToken.value_int64 = 1; // Set default from this point forward to be true/success. It will be overridden in insert mode to be the index of the new row.
+
+	for (j = 0; j < rows_to_change; ++j, ++lvi.iItem) // ++lvi.iItem because if the loop has more than one iteration, by definition it is modifying all rows starting at 0.
+	{
+		if (aParamCount > 1 && col_start_index == 0) // 2nd parameter: item's text (first field) is present, so include that when setting the item.
+		{
+			if (lvi.pszText = ExprTokenToString(*aParam[1], buf)) // Fairly low-overhead, so called every iteration for simplicity (so that buf can be used for both items and subitems).
+				lvi.mask |= LVIF_TEXT;
+			//else not an operand, so don't add the mask.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
+		}
+		if (mode == 'I') // Insert or Add.
+		{
+			// Note that ListView_InsertItem() will append vs. insert if the index is too large, in which case
+			// it returns the items new index (which will be the last item in the list unless the control has
+			// auto-sort style).
+			// Below uses +1 to convert from zero-based to 1-based.  This also converts a failure result of -1 to 0.
+			if (   !(aResultToken.value_int64 = ListView_InsertItem(control.hwnd, &lvi) + 1)   )
+				return; // Since item can't be inserted, no reason to try attaching any subitems to it.
+			// Update iItem with the actual index assigned to the item, which might be different than the
+			// specified index if the control has an auto-sort style in effect.  This new iItem value
+			// is used for ListView_SetCheckState() and for the attaching of any subitems to this item.
+			lvi_sub.iItem = (int)aResultToken.value_int64 - 1;  // -1 to convert back to zero-based.
+			// For add/insert (but not modify), testing shows that checkmark must be added only after
+			// the item has been inserted rather than provided in the lvi.state/stateMask fields.
+			// MSDN confirms this by saying "When an item is added with [LVS_EX_CHECKBOXES],
+			// it will always be set to the unchecked state [ignoring any value placed in bits
+			// 12 through 15 of the state member]."
+			if (is_checked)
+				ListView_SetCheckState(control.hwnd, lvi_sub.iItem, TRUE); // TRUE = Check the row's checkbox.
+				// Note that 95/NT4 systems that lack comctl32.dll 4.70+ distributed with MSIE 3.x
+				// do not support LVS_EX_CHECKBOXES, so the above will have no effect for them.
+		}
+		else // Modify.
+		{
+			// Rather than trying to detect if anything was actually changed, this is called
+			// unconditionally to simplify the code.
+			// By design (to help catch script bugs), a failure here does not revert to append mode.
+			if (!ListView_SetItem(control.hwnd, &lvi)) // Returns TRUE/FALSE.
+				aResultToken.value_int64 = 0; // Indicate partial failure, but attempt to continue in case it failed for reason other than "row doesn't exist".
+			lvi_sub.iItem = lvi.iItem; // In preparation for modifying any subitems that need it.
+		}
+
+		// For each remainining parameter, assign its text to a subitem.  
+		for (lvi_sub.iSubItem = (col_start_index > 1) ? col_start_index : 1 // Start at the first subitem unless we were told to start at or after the third column.
+			// "i" starts at 2 (the third parameter) unless col_start_index is greater than 0, in which case
+			// it starts at 1 (the second parameter) because that parameter has not yet been assigned to anything:
+			, i = 2 - (col_start_index > 0)
+			; i < aParamCount
+			; ++i, ++lvi_sub.iSubItem)
+			if (lvi_sub.pszText = ExprTokenToString(*aParam[i], buf)) // Done every time through the outer loop since it's not high-overhead, and for code simplicity.
+				if (!ListView_SetItem(control.hwnd, &lvi_sub) && mode != 'I') // Relies on short-circuit. Seems best to avoid loss of item's index in insert mode, since failure here should be rare.
+					aResultToken.value_int64 = 0; // Indicate partial failure, but attempt to continue in case it failed for reason other than "row doesn't exist".
+			// else not an operand, but it's simplest just to try to continue.
+	} // outer for()
+
+	// When the control has no rows, work around the fact that LVM_SETITEMCOUNT delivers less than 20%
+	// of its full benefit unless done after the first row is added (at least on XP SP1).  A non-zero
+	// row_count_hint tells us that this message should be sent after the row has been inserted/appended:
+	if (control.union_lv_attrib->row_count_hint > 0 && mode == 'I')
+	{
+		SendMessage(control.hwnd, LVM_SETITEMCOUNT, control.union_lv_attrib->row_count_hint, 0); // Last parameter should be 0 for LVS_OWNERDATA (verified if you look at the definition of ListView_SetItemCount macro).
+		control.union_lv_attrib->row_count_hint = 0; // Reset so that it only gets set once per request.
+	}
+}
+
+
+
+void BIF_LV_Delete(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+// Returns: 1 on success and 0 on failure.
+// Parameters:
+// 1: Row index (one-based when it comes in).
+{
+	aResultToken.value_int64 = 0;
+	// Above sets default result in case of early return.  For code reduction, a zero is returned for all
+	// the following conditions:
+	// Window doesn't exist.
+	// Control doesn't exist (i.e. no ListView in window).
+	// And others as shown below.
+
+	if (!g_gui[g.GuiDefaultWindowIndex])
+		return;
+	GuiType &gui = *g_gui[g.GuiDefaultWindowIndex]; // Always operate on thread's default window to simplify the syntax.
+	if (!gui.mCurrentListView)
+		return;
+	GuiControlType &control = *gui.mCurrentListView;
+
+	if (aParamCount < 1)
+	{
+		aResultToken.value_int64 = SendMessage(control.hwnd, LVM_DELETEALLITEMS, 0, 0); // Returns TRUE/FALSE.
+		return;
+	}
+
+	// Since above didn't return, there is a first paramter present.
+	int index = (int)ExprTokenToInt64(*aParam[0]) - 1; // -1 to convert to zero-based.
+	if (index >= 0)
+		aResultToken.value_int64 = SendMessage(control.hwnd, LVM_DELETEITEM, index, 0); // Returns TRUE/FALSE.
+}
+
+
+
+void BIF_LV_InsertModifyDeleteCol(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+// Returns: 1 on success and 0 on failure.
+// Parameters:
+// 1: Column index (one-based when it comes in).
+// 2: String of options
+// 3: New text of column
+// There are also some special modes when only zero or one parameter is present, see below.
+{
+	char mode = toupper(aResultToken.marker[3]); // Marker contains the function name. LV_[I]nsertCol.
+	char *buf = aResultToken.buf; // Must be saved early since below overwrites the union (better maintainability too).
+	aResultToken.value_int64 = 0;
+	// Above sets default result in case of early return.  For code reduction, a zero is returned for all
+	// the following conditions:
+	// Window doesn't exist.
+	// Control doesn't exist (i.e. no ListView in window).
+	// Column not found in ListView.
+
+	if (!g_gui[g.GuiDefaultWindowIndex])
+		return;
+	GuiType &gui = *g_gui[g.GuiDefaultWindowIndex]; // Always operate on thread's default window to simplify the syntax.
+	if (!gui.mCurrentListView)
+		return;
+	GuiControlType &control = *gui.mCurrentListView;
+	lv_attrib_type &lv_attrib = *control.union_lv_attrib;
+
+	int index;
+	if (aParamCount > 0)
+		index = (int)ExprTokenToInt64(*aParam[0]) - 1; // -1 to convert to zero-based.
+	else // Zero parameters.  Load-time validation has ensured that the 'D' (delete) mode cannot have zero params.
+	{
+		if (mode == 'M')
+		{
+			for (int i = 0; ; ++i) // Don't limit it to lv_attrib.col_count in case script added extra columns via direct API calls.
+				if (!ListView_SetColumnWidth(control.hwnd, i, LVSCW_AUTOSIZE)) // Failure means last column has already been processed.
+				{
+					aResultToken.value_int64 = 1; // Always successful (for consistency).
+					break; // Break vs. return in case there are zero columns.
+				}
+			return;
+		}
+		// Since above didn't return, mode must be 'I' (insert).
+		index = lv_attrib.col_count; // When no insertion index was specified, append to the end of the list.
+	}
+
+	// Do this prior to checking if index is in bounds so that it can support columns beyond LV_MAX_COLUMNS:
+	if (mode == 'D') // Delete a column.  In this mode, index parameter was made mandatory via load-time validation.
+	{
+		if (aResultToken.value_int64 = ListView_DeleteColumn(control.hwnd, index))  // Returns TRUE/FALSE.
+		{
+			// It's important to note that when the user slides columns around via drag and drop, the
+			// column index as seen by the script is not changed.  This is fortunate because otherwise,
+			// the lv_attrib.col array would get out of sync with the column indices.  Testing shows that
+			// all of the following operations respect the original column index, regardless of where the
+			// user may have moved the column physically: InsertCol, DeleteCol, ModifyCol.  Insert and Delete
+			// shifts the indices of those columns that *originally* lay to the right of the affected column.
+			if (lv_attrib.col_count > 0) // Avoid going negative, which would otherwise happen if script previously added columns by calling the API directly.
+				--lv_attrib.col_count; // Must be done prior to the below.
+			if (index < lv_attrib.col_count) // When a column other than the last was removed, adjust the array so that it stays in sync with actual columns.
+				MoveMemory(lv_attrib.col+index, lv_attrib.col+index+1, sizeof(lv_col_type)*(lv_attrib.col_count-index));
+		}
+		return;
+	}
+	// Do this prior to checking if index is in bounds so that it can support columns beyond LV_MAX_COLUMNS:
+	if (mode == 'M' && aParamCount < 2) // A single parameter is a special modify-mode to auto-size that column.
+	{
+		aResultToken.value_int64 = ListView_SetColumnWidth(control.hwnd, index, LVSCW_AUTOSIZE);
+		return;
+	}
+	if (mode == 'I')
+	{
+		if (lv_attrib.col_count >= LV_MAX_COLUMNS) // No room to insert or append.
+			return;
+		if (index >= lv_attrib.col_count) // For convenience, fall back to "append" when index too large.
+			index = lv_attrib.col_count;
+	}
+	//else do nothing so that modification and deletion of columns that were added via script's
+	// direct calls to the API can sort-of work (it's documented in the help file that it's not supported,
+	// since col-attrib array can get out of sync with actual columns that way).
+
+	if (index < 0 || index >= LV_MAX_COLUMNS) // For simplicity, do nothing else if index out of bounds.
+		return; // Avoid array under/overflow below.
+
+	// It's done the following way so that when in insert-mode, if the column fails to be inserted, don't
+	// have to remove the inserted array element from the lv_attrib.col array:
+	lv_col_type temp_col = {0}; // Init unconditionally even though only needed for mode=='I'.
+	lv_col_type &col = (mode == 'I') ? temp_col : lv_attrib.col[index]; // Done only after index has been confirmed in-bounds.
+
+	// In addition to other reasons, must convert any numeric value to a string so that an isolated width is
+	// recognized, e.g. LV_SetCol(1, old_width + 10):
+	char *options;
+	if (aParamCount > 1) // Second parameter is present.
+	{
+		if (   !(options = ExprTokenToString(*aParam[1], buf))   ) // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
+			return; // Due to rarity of this condition, keep 0/false value as the result.
+	}
+	else
+		options = "";
+
+	LVCOLUMN lvc;
+	lvc.mask = LVCF_FMT;
+	if (mode == 'M') // Fetch the current format so that it's possible to leave parts of it unaltered.
+		ListView_GetColumn(control.hwnd, index, &lvc);
+	else // Mode is "insert".
+		lvc.fmt = 0;
+
+	// Init defaults prior to parsing options:
+	bool sort_now = false;
+	int do_auto_size = (mode == 'I') ? LVSCW_AUTOSIZE_USEHEADER : 0;  // Default to auto-size for new columns.
+	char sort_now_direction = 'A'; // Ascending.
+	int new_justify = lvc.fmt & LVCFMT_JUSTIFYMASK; // Simplifies the handling of the justification bitfield.
+	//lvc.iSubItem = 0; // Not necessary if the LVCF_SUBITEM mask-bit is absent.
+
+	// Parse list of space-delimited options:
+	char *next_option, *option_end, orig_char;
+	bool adding; // Whether this option is beeing added (+) or removed (-).
+
+	for (next_option = options; *next_option; next_option = omit_leading_whitespace(option_end))
+	{
+		if (*next_option == '-')
+		{
+			adding = false;
+			// omit_leading_whitespace() is not called, which enforces the fact that the option word must
+			// immediately follow the +/- sign.  This is done to allow the flexibility to have options
+			// omit the plus/minus sign, and also to reserve more flexibility for future option formats.
+			++next_option;  // Point it to the option word itself.
+		}
+		else
+		{
+			// Assume option is being added in the absence of either sign.  However, when we were
+			// called by GuiControl(), the first option in the list must begin with +/- otherwise the cmd
+			// would never have been properly detected as GUICONTROL_CMD_OPTIONS in the first place.
+			adding = true;
+			if (*next_option == '+')
+				++next_option;  // Point it to the option word itself.
+			//else do not increment, under the assumption that the plus has been omitted from a valid
+			// option word and is thus an implicit plus.
+		}
+
+		if (!*next_option) // In case the entire option string ends in a naked + or -.
+			break;
+		// Find the end of this option item:
+		if (   !(option_end = StrChrAny(next_option, " \t"))   )  // Space or tab.
+			option_end = next_option + strlen(next_option); // Set to position of zero terminator instead.
+		if (option_end == next_option)
+			continue; // i.e. the string contains a + or - with a space or tab after it, which is intentionally ignored.
+
+		// Temporarily terminate to help eliminate ambiguity for words contained inside other words,
+		// such as "Checked" inside of "CheckedGray":
+		orig_char = *option_end;
+		*option_end = '\0';
+
+		// For simplicity, the value of "adding" is ignored for this and the other number/alignment options.
+		if (!stricmp(next_option, "Integer"))
+		{
+			// For simplicity, changing the col.type dynamically (since it's so rarely needed)
+			// does not try to set up col.is_now_sorted_ascending so that the next click on the column
+			// puts it into default starting order (which is ascending unless the Desc flag was originally
+			// present).
+			col.type = LV_COL_INTEGER;
+			new_justify = LVCFMT_RIGHT;
+		}
+		else if (!stricmp(next_option, "Float"))
+		{
+			col.type = LV_COL_FLOAT;
+			new_justify = LVCFMT_RIGHT;
+		}
+		else if (!stricmp(next_option, "Text")) // Seems more approp. name than "Str" or "String"
+			// Since "Text" is so general, it seems to leave existing alignment (Center/Right) as it is.
+			col.type = LV_COL_TEXT;
+
+		// The following can exist by themselves or in conjunction with the above.  They can also occur
+		// *after* one of the above words so that alignment can be used to override the default for the type;
+		// e.g. "Integer Left" to have left-aligned integers.
+		else if (!stricmp(next_option, "Right"))
+			new_justify = adding ? LVCFMT_RIGHT : LVCFMT_LEFT;
+		else if (!stricmp(next_option, "Center"))
+			new_justify = adding ? LVCFMT_CENTER : LVCFMT_LEFT;
+		else if (!stricmp(next_option, "Left")) // Supported so that existing right/center column can be changed back to left.
+			new_justify = LVCFMT_LEFT; // The value of "adding" seems inconsequential so is ignored.
+
+		else if (!stricmp(next_option, "Uni")) // Unidirectional sort (clicking the column will not invert to the opposite direction).
+			col.unidirectional = adding;
+		else if (!stricmp(next_option, "Desc")) // Make descending order the default order (applies to uni and first click of col for non-uni).
+			col.prefer_descending = adding; // So that the next click will toggle to the opposite direction.
+		else if (!stricmp(next_option, "Case"))
+			col.case_sensitive = adding;
+
+		else if (!strnicmp(next_option, "Sort", 4)) // This is done as an option vs. LV_SortCol/LV_Sort so that the column's options can be changed simultaneously with a "sort now" to refresh.
+		{
+			// Defer the sort until after all options have been parsed and applied.
+			sort_now = true;
+			if (!stricmp(next_option + 4, "Desc"))
+				sort_now_direction = 'D'; // Descending.
+		}
+		else if (!stricmp(next_option, "NoSort")) // Called "NoSort" so that there's a way to enable and disable the setting via +/-.
+			col.sort_disabled = adding;
+
+		else if (!strnicmp(next_option, "Auto", 4)) // No separate failure result is reported for this item.
+			// In case the mode is "insert", defer auto-width of column until col exists.
+			do_auto_size = stricmp(next_option + 4, "Hdr") ? LVSCW_AUTOSIZE : LVSCW_AUTOSIZE_USEHEADER;
+
+		else if (!strnicmp(next_option, "Icon", 4))
+		{
+			next_option += 4;
+			if (!stricmp(next_option, "Right"))
+			{
+				if (adding)
+					lvc.fmt |= LVCFMT_BITMAP_ON_RIGHT;
+				else
+					lvc.fmt &= ~LVCFMT_BITMAP_ON_RIGHT;
+			}
+			else // Assume its an icon number or the removal of the icon via -Icon.
+			{
+				if (adding)
+				{
+					lvc.mask |= LVCF_IMAGE;
+					lvc.fmt |= LVCFMT_IMAGE; // Flag this column as displaying an image.
+					lvc.iImage = ATOI(next_option) - 1; // -1 to convert to zero based.
+				}
+				else
+					lvc.fmt &= ~LVCFMT_IMAGE; // Flag this column as NOT displaying an image.
+			}
+		}
+
+		else // Handle things that are more general than the above, such as single letter options and pure numbers.
+		{
+			// Width does not have a W prefix to permit a naked expression to be used as the entirely of
+			// options.  For example: LV_SetCol(1, old_width + 10)
+			if (IsPureNumeric(next_option)) // Above has already verified that *next_option can't be whitespace.
+			{
+				do_auto_size = 0; // Turn off any auto-sizing that may have been put into effect by default (such as for insertion).
+				lvc.mask |= LVCF_WIDTH;
+				lvc.cx = ATOI(next_option);
+			}
+		}
+
+		// If the item was not handled by the above, ignore it because it is unknown.
+		*option_end = orig_char; // Undo the temporary termination because the caller needs aOptions to be unaltered.
+	}
+
+	// Apply any changed justification/alignment to the fmt bit field:
+	lvc.fmt = (lvc.fmt & ~LVCFMT_JUSTIFYMASK) | new_justify;
+
+	if (aParamCount > 2) // Parameter #3 (text) is present.
+	{
+		if (lvc.pszText = ExprTokenToString(*aParam[2], buf)) // Assign.
+			lvc.mask |= LVCF_TEXT;
+		//else not an operand, so don't add the mask.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
+	}
+
+	if (mode == 'M') // Modify vs. Insert (Delete was already returned from, higher above).
+		// For code simplicity, this is called unconditionally even if nothing internal the control's column
+		// needs updating.  This seems justified given how rarely columns are modified.
+		aResultToken.value_int64 = ListView_SetColumn(control.hwnd, index, &lvc); // Returns TRUE/FALSE.
+	else // Insert
+	{
+		// It's important to note that when the user slides columns around via drag and drop, the
+		// column index as seen by the script is not changed.  This is fortunate because otherwise,
+		// the lv_attrib.col array would get out of sync with the column indices.  Testing shows that
+		// all of the following operations respect the original column index, regardless of where the
+		// user may have moved the column physically: InsertCol, DeleteCol, ModifyCol.  Insert and Delete
+		// shifts the indices of those columns that *originally* lay to the right of the affected column.
+		// Doesn't seem to do anything -- not even with respect to inserting a new first column with it's
+		// unusual behavior of inheriting the previously column's contents -- so it's disabled for now.
+		// Testing shows that it also does not seem to cause a new column to inherit the indicated subitem's
+		// text, even when iSubItem is set to index + 1 vs. index:
+		//lvc.mask |= LVCF_SUBITEM;
+		//lvc.iSubItem = index;
+		// Testing shows that the following serve to set the column's physical/display position in the
+		// heading to iOrder without affecting the specified index.  This concept is very similar to
+		// when the user drags and drops a column heading to a new position: it's index doesn't change,
+		// only it's displayed position:
+		//lvc.mask |= LVCF_ORDER;
+		//lvc.iOrder = index + 1;
+		if (   !(aResultToken.value_int64 = ListView_InsertColumn(control.hwnd, index, &lvc) + 1)   ) // +1 to convert the new index to 1-based.
+			return; // In this case, return so that below and sort-now is not done.
+		index = (int)aResultToken.value_int64 - 1; // Update in case some other index was assigned. -1 to convert back to zero-based.
+		if (index < lv_attrib.col_count) // Since col is not being appended to the end, make room in the array to insert this column.
+			MoveMemory(lv_attrib.col+index+1, lv_attrib.col+index, sizeof(lv_col_type)*(lv_attrib.col_count-index));
+			// Above: Shift columns to the right by one.
+		lv_attrib.col[index] = col; // Copy temp struct's members to the correct element in the array.
+		// The above is done even when index==0 because "col" may contain attributes set via the Options
+		// parameter.  Therefore, for code simplicity and rarity of real-world need, no attempt is made
+		// to make the following idea work:
+		// When index==0, retain the existing attributes due to the unique behavior of inserting a new first
+		// column: The new first column inherit's the old column's values (fields), so it seems best to also have it
+		// inherit the old column's attributs.
+		++lv_attrib.col_count; // New column successfully added.  Must be done only after the MoveMemory() above.
+	}
+
+	if (do_auto_size) // Done only now, in case column was just created above.
+		// Note that ListView_SetColumn() apparently does not support LVSCW_AUTOSIZE_USEHEADER for it's "cx" member.
+		ListView_SetColumnWidth(control.hwnd, index, do_auto_size);
+
+	if (sort_now)
+		GuiType::LV_Sort(control, index, false, sort_now_direction);
+}
+
+
+
+void BIF_LV_SetImageList(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+// Returns (MSDN): "handle to the image list previously associated with the control if successful; NULL otherwise."
+// Parameters:
+// 1: HIMAGELIST obtained from somewhere such as IL_Create().
+// 2: Optional: Type of list.
+{
+	aResultToken.value_int64 = 0;
+	// Above sets default result in case of early return.  For code reduction, a zero is returned for all
+	// the following conditions:
+	// Window doesn't exist.
+	// Control doesn't exist (i.e. no ListView in window).
+	// Column not found in ListView.
+	if (!g_gui[g.GuiDefaultWindowIndex])
+		return;
+	GuiType &gui = *g_gui[g.GuiDefaultWindowIndex]; // Always operate on thread's default window to simplify the syntax.
+	if (!gui.mCurrentListView)
+		return;
+	// Caller has ensured that there is at least one incoming parameter:
+	HIMAGELIST himl = (HIMAGELIST)ExprTokenToInt64(*aParam[0]);
+	int list_type;
+	if (aParamCount > 1)
+		list_type = (int)ExprTokenToInt64(*aParam[1]);
+	else // Auto-detect large vs. small icons based on the actual icon size in the image list.
+	{
+		int cx, cy;
+		ImageList_GetIconSize(himl, &cx, &cy);
+		list_type = (cx > GetSystemMetrics(SM_CXSMICON)) ? LVSIL_NORMAL : LVSIL_SMALL;
+	}
+	aResultToken.value_int64 = (__int64)ListView_SetImageList(gui.mCurrentListView->hwnd, himl, list_type);
+}
+
+
+
+void BIF_IL_Create(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+// Returns: Handle to the new image list, or 0 on failure.
+// Parameters:
+// 1: Initial image count (ImageList_Create() ignores values <=0, so no need for error checking).
+// 2: Grow count (testing shows it can grow multiple times, even when this is set <=0, so it's apparently only a performance aid)
+// 3: Width of each image (overloaded to mean small icon size when omitted or false, large icon size otherwise).
+// 4: Future: Height of each image [if this param is present and >0, it would mean param 3 is not being used in its TRUE/FALSE mode)
+// 5: Future: Flags/Color depth
+{
+	// So that param3 can be reserved as a future "specified width" param, to go along with "specified height"
+	// after it, only when the parameter is both present and numerically zero are large icons used.  Otherwise,
+	// small icons are used.
+	int param3 = aParamCount > 2 ? (int)ExprTokenToInt64(*aParam[2]) : 0;
+	aResultToken.value_int64 = (__int64)ImageList_Create(GetSystemMetrics(param3 ? SM_CXICON : SM_CXSMICON)
+		, GetSystemMetrics(param3 ? SM_CYICON : SM_CYSMICON)
+		, ILC_MASK | ILC_COLOR32  // ILC_COLOR32 or at least something higher than ILC_COLOR is necessary to support true-color icons.
+		, aParamCount > 0 ? (int)ExprTokenToInt64(*aParam[0]) : 2    // cInitial. 2 seems a better default than one, since it might be common to have only two icons in the list.
+		, aParamCount > 1 ? (int)ExprTokenToInt64(*aParam[1]) : 5);  // cGrow.  Somewhat arbitrary default.
+}
+
+
+
+void BIF_IL_Destroy(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+// Returns: 1 on success and 0 on failure.
+// Parameters:
+// 1: HIMAGELIST obtained from somewhere such as IL_Create().
+{
+	// Load-time validation has ensured there is at least one parameter.
+	// Returns nonzero if successful, or zero otherwise, so force it to conform to TRUE/FALSE for
+	// better consistency with other functions:
+	aResultToken.value_int64 = ImageList_Destroy((HIMAGELIST)ExprTokenToInt64(*aParam[0])) ? 1 : 0;
+}
+
+
+
+void BIF_IL_Add(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+// Returns: the one-based index of the newly added icon, or zero on failure.
+// Parameters:
+// 1: HIMAGELIST: Handle of an existing ImageList.
+// 2: Filename from which to load the icon or bitmap.
+// 3: Icon number within the filename (or mask color for non-icon images).
+// 4: The mere presence of this parameter indicates that param #3 is mask RGB-color vs. icon number.
+//    This param's value should be "true" to resize the image to fit the image-list's size or false
+//    to divide up the image into a series of separate images based on its width.
+//    (this parameter could be overloaded to be the filename containing the mask image, or perhaps an HBITMAP
+//    provided directly by the script)
+// 5: Future: can be the scaling height to go along with an overload of #4 as the width.  However,
+//    since all images in an image list are of the same size, the use of this would be limited to
+//    only those times when the imagelist would be scaled prior to dividing it into separate images.
+// The parameters above (at least #4) can be overloaded in the future calling ImageList_GetImageInfo() to determine
+// whether the imagelist has a mask.
+{
+	char *buf = aResultToken.buf; // Must be saved early since below overwrites the union (better maintainability too).
+	aResultToken.value_int64 = 0; // Set default in case of early return.
+	HIMAGELIST himl = (HIMAGELIST)ExprTokenToInt64(*aParam[0]); // Load-time validation has ensured there is a first parameter.
+	if (!himl)
+		return;
+
+	// Load-time validation has ensured there are at least two parameters:
+	char *filespec;
+	if (   !(filespec = ExprTokenToString(*aParam[1], buf))   ) // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
+		return; // Due to rarity of this condition, keep 0/false value as the result.
+
+	int param3 = (aParamCount > 2) ? (int)ExprTokenToInt64(*aParam[2]) : 0; // Default to zero so that -1 later below will get passed to LoadPicture().
+
+	int icon_number, width = 0, height = 0; // Zero width/height causes image to be loaded at its actual width/height.
+	if (aParamCount > 3) // Presence of fourth parameter switches mode to be "load a non-icon image".
+	{
+		icon_number = -1;
+		if (ExprTokenToInt64(*aParam[3])) // A value of True indicates that the image should be scaled to fit the imagelist's image size.
+			ImageList_GetIconSize(himl, &width, &height); // Determine the width/height to which it should be scaled.
+		//else retain defaults of zero for width/height, which loads the image at actual size, which in turn
+		// lets ImageList_AddMasked() divide it up into separate images based on its width.
+	}
+	else
+		icon_number = param3 - 1; // Param3 can be explicitly 1, which results in a zero to force the ExtractIcon method.
+
+	int image_type;
+	HBITMAP hbitmap = LoadPicture(filespec, width, height, image_type
+		, icon_number // -1 means "unspecified", which allows the use of LoadImage vs. ExtractIcon.
+		, false); // Defaulting to "false" for "use GDIplus" provides more consistent appearance across multiple OSes.
+	if (!hbitmap)
+		return;
+
+	if (image_type == IMAGE_BITMAP) // In this mode, param3 is always assumed to be an RGB color.
+	{
+		// Return the index of the new image or 0 on failure.
+		aResultToken.value_int64 = ImageList_AddMasked(himl, hbitmap, rgb_to_bgr((int)param3)) + 1; // +1 to convert to one-based.
+		DeleteObject(hbitmap);
+	}
+	else // ICON or CURSOR.
+	{
+		// Return the index of the new image or 0 on failure.
+		aResultToken.value_int64 = ImageList_AddIcon(himl, (HICON)hbitmap) + 1; // +1 to convert to one-based.
+		DestroyIcon((HICON)hbitmap); // Works on cursors too.  See notes in LoadPicture().
+	}
+}
+
 
 
 

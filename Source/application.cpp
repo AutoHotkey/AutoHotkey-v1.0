@@ -547,6 +547,11 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				case AHK_GUI_CONTEXTMENU:
 					if (   !(gui_label = pgui->mLabelForContextMenu)   ) // In case it became NULL since the msg was posted.
 						continue;
+					// UPDATE: Must allow multiple threads because otherwise the user cannot right-click twice
+					// consecutively (the second click is blocked because the menu is still displayed at the
+					// instant of the click.  The following comment is probably not entirely correct because
+					// the display of a popup menu via "Menu, MyMenu, Show" will spin off a new thread if the
+					// user selects an item in the menu:
 					// Unlike most other Gui labels, it seems best by default to allow GuiContextMenu to be
 					// launched multiple times so that multiple items in the menu can be running simultaneously
 					// as separate threads.  Therefore, leave pgui_label_is_running at its default of NULL.
@@ -850,6 +855,17 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 					break;
 				default:
 					g.GuiEvent = (GuiEventType)msg.lParam;
+					if (g.GuiEvent == GUI_EVENT_DBLCLK) // For simplicity, this is not done for NM_RDBLCLK (right-double-click), since it might be possible for more than one item to be selected then.
+					{
+						GuiControlType &control = pgui->mControl[msg.wParam]; // wParam vs. lParam in this case.
+						if (control.type == GUI_CONTROL_LISTBOX) // +1 to convert to one-based index.
+							event_info = 1 + (int)SendMessage(control.hwnd, LB_GETCARETINDEX, 0, 0); // Cast to int to preserve any -1 value.
+						else if (control.type == GUI_CONTROL_LISTVIEW)
+							event_info = 1 + ListView_GetNextItem(control.hwnd, -1, LVNI_FOCUSED);
+							// Testing shows that only one item at a time can have focus, even when mulitple
+							// items are selected.
+						//else leave event_info as the default set higher above.
+					}
 				}
 				g.GuiWindowIndex = pgui->mWindowIndex; // g.GuiControlIndex is conditionally set later below.
 				g.GuiDefaultWindowIndex = pgui->mWindowIndex; // GUI threads default to operating upon their own window.

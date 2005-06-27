@@ -67,6 +67,7 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 		case GUI_CMD_RESTORE:
 			return OK; // Nothing needs to be done since the window object doesn't exist.
 		}
+
 		// Otherwise: Create the object and (later) its window, since all the other sub-commands below need it:
 		if (   !(g_gui[window_index] = new GuiType(window_index))   )
 			return FAIL; // No error displayed since extremely rare.
@@ -170,6 +171,17 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 
 	case GUI_CMD_FONT:
 		return gui.SetCurrentFont(aParam2, aParam3);
+
+	case GUI_CMD_LISTVIEW:
+		if (*aParam2)
+		{
+			GuiIndexType control_index = gui.FindControl(aParam2); // Search on either the control's variable name or its ClassNN.
+			if (control_index != -1) // Must compare directly to -1 due to unsigned.
+				gui.mCurrentListView = &gui.mControl[control_index];
+			//else it seems best never to change gui.mCurrentTabControlIndex to be "no control" since
+			// it doesn't seem to have much use.
+		}
+		return OK;
 
 	case GUI_CMD_TAB:
 		if (!*aParam2 && !*aParam3) // Both the tab control number and the tab number were omitted.
@@ -600,15 +612,19 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 			//if (guicontrol_cmd == GUICONTROL_CMD_TEXT)
 			//	break;
 			bool list_replaced;
-			if (*aParam3 == '|') // The signal to overwrite rather than append to the list.
+			if (*aParam3 == gui.mDelimiter) // The signal to overwrite rather than append to the list.
 			{
 				list_replaced = true;
 				++aParam3;  // Exclude the initial pipe from further consideration.
-				if (control.type == GUI_CONTROL_TAB)
-					TabCtrl_DeleteAllItems(control.hwnd);
-				else
-					SendMessage(control.hwnd, (control.type == GUI_CONTROL_LISTBOX)
-						? LB_RESETCONTENT : CB_RESETCONTENT, 0, 0); // Delete all items currently in the list.
+				int msg;
+				switch (control.type)
+				{
+				case GUI_CONTROL_TAB: msg = TCM_DELETEALLITEMS; break; // Same as TabCtrl_DeleteAllItems().
+				case GUI_CONTROL_LISTBOX: msg = LB_RESETCONTENT; break;
+				default: // DropDownList or ComboBox
+					msg = CB_RESETCONTENT;
+				}
+				SendMessage(control.hwnd, msg, 0, 0);  // Delete all items currently in the list.
 			}
 			else
 				list_replaced = false;
@@ -633,7 +649,13 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 				InvalidateRect(gui.mHwnd, NULL, TRUE); // TRUE = Seems safer to erase, not knowing all possible overlaps.
 			}
 			return OK; // Don't break since don't the other actions below to be taken.
-		} // inner switch() for control's type
+
+		case GUI_CONTROL_LISTVIEW:
+			// Due to the fact that an LV's first col. can't be directly deleted and other complexities,
+			// this is not currently supported (also helps reduce code size).  The built-in function
+			// for modifying columns should be used instead.
+			return OK;
+		} // inner switch() for control's type for contents/txt sub-commands.
 
 		if (do_redraw_if_in_tab) // Excludes the SetWindowText() below, but might need changing for future control types.
 			break;
@@ -776,7 +798,7 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 	{
 		int selection_index;
 		int extra_actions = 0; // Set default.
-		if (*aParam3 == '|') // First extra action.
+		if (*aParam3 == gui.mDelimiter) // First extra action.
 		{
 			++aParam3; // Omit this pipe char from further consideration below.
 			++extra_actions;
@@ -819,7 +841,7 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 			return OK;
 		}
 		// Otherwise, it's not a tab control, but a ListBox/DropDownList/Combo or other control:
-		if (*aParam3 == '|' && control.type != GUI_CONTROL_TAB) // Second extra action.
+		if (*aParam3 == gui.mDelimiter && control.type != GUI_CONTROL_TAB) // Second extra action.
 		{
 			++aParam3; // Omit this pipe char from further consideration below.
 			++extra_actions;
@@ -829,8 +851,6 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 		UINT msg, x_msg, y_msg;
 		switch(control.type)
 		{
-		case GUI_CONTROL_TAB:
-			break; // i.e. don't do the "default" section.
 		case GUI_CONTROL_DROPDOWNLIST:
 		case GUI_CONTROL_COMBOBOX:
 			msg = (guicontrol_cmd == GUICONTROL_CMD_CHOOSE) ? CB_SETCURSEL : CB_SELECTSTRING;
@@ -1135,8 +1155,8 @@ ResultType GuiType::Destroy(GuiIndexType aWindowIndex)
 				DeleteObject(control.union_hbitmap);
 			//else do nothing, since it isn't the right type to have a valid union_hbitmap member.
 		}
-		else if (control.type == GUI_CONTROL_LISTVIEW && control.union_col)
-			free(control.union_col);
+		else if (control.type == GUI_CONTROL_LISTVIEW) // It was ensured at an earlier stage that union_lv_attrib != NULL.
+			free(control.union_lv_attrib);
 	}
 	// Not necessary since the object itself is about to be destroyed:
 	//gui.mHwnd = NULL;
@@ -1287,8 +1307,6 @@ void GuiType::UpdateMenuBars(HMENU aMenu)
 ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *aText)
 // Caller must have ensured that mHwnd is non-NULL (i.e. that the parent window already exists).
 {
-	// Must do these checks even for GUI_CONTROL_ROW because although ROW doesn't consume a slot,
-	// a placeholder in the array is required for code-simplification reasons:
 	#define TOO_MANY_CONTROLS "Too many controls." ERR_ABORT // Short msg since so rare.
 	if (mControlCount >= MAX_CONTROLS_PER_GUI)
 		return g_script.ScriptError(TOO_MANY_CONTROLS);
@@ -1322,7 +1340,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 	// Set defaults for the various options, to be overridden individually by any specified.
 	////////////////////////////////////////////////////////////////////////////////////////
 	GuiControlType &control = mControl[mControlCount];
-	ZeroMemory(&control, sizeof(GuiControlType)); // Needed in general but also in case this control was previously used as a placeholder for GUI_CONTROL_ROW.
+	ZeroMemory(&control, sizeof(GuiControlType));
 	control.type = aControlType; // Improves maintainability to do this early.
 
 	if (aControlType == GUI_CONTROL_TAB)
@@ -1372,7 +1390,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 
 	// Set control's default text color:
 	bool uses_font_and_text_color = USES_FONT_AND_TEXT_COLOR(aControlType); // Resolve macro only once.
-	if (uses_font_and_text_color && control.type != GUI_CONTROL_LISTVIEW) // Must check this to avoid corrupting union_col.
+	if (uses_font_and_text_color && control.type != GUI_CONTROL_LISTVIEW) // Must check this to avoid corrupting union_lv_attrib.
 		control.union_color = mCurrentColor; // Default to the most recently set color.
 	else if (aControlType == GUI_CONTROL_PROGRESS) // This must be done to detect custom Progress color.
 		control.union_color = CLR_DEFAULT; // Set progress to default color avoids unnecessary stripping of theme.
@@ -1383,10 +1401,6 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 	// Some controls also have the WS_EX_CLIENTEDGE exstyle by default because they look pretty strange
 	// without them.  This seems to be the standard default used by most applications.
 	// Note: It seems that WS_BORDER is hardly ever used in practice with controls, just parent windows.
-	case GUI_CONTROL_ROW:  // Listed first for performance since ROWs are often created via a loop.
-		if (!mCurrentListView)
-			return g_script.ScriptError("No ListView to own it." ERR_ABORT);
-		break;
 	case GUI_CONTROL_GROUPBOX:
 		opt.style_add |= BS_MULTILINE;
 		break;
@@ -1416,15 +1430,16 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		opt.exstyle_add |= WS_EX_CLIENTEDGE;
 		break;
 	case GUI_CONTROL_LISTVIEW:
-		opt.style_add |= WS_TABSTOP|LVS_REPORT|LVS_SHOWSELALWAYS; // WS_THICKFRAME allows the control itself to be drag-resized.
-		opt.exstyle_add |= WS_EX_CLIENTEDGE; // WS_EX_STATICEDGE/WS_EX_WINDOWEDGE/WS_BORDER(non-ex) don't look as nice. WS_EX_DLGMODALFRAME is a weird but interesting effect.
 		// The ListView extended styles are actually an entirely separate class of styles that exist
 		// separately from ExStyles.  This explains why Get/SetWindowLong doesn't work on them.
 		// But keep in mind that some of the normal/classic extended styles can still be applied
 		// to a ListView via Get/SetWindowLong.
-		// The following require ComCtl32.dll 4.70+ and thus will have no effect in Win 95/NT
-		// unless they have MSIE 3.x or similar patch installed: LVS_EX_FULLROWSELECT and LVS_EX_HEADERDRAGDROP.
-		opt.listview_style |= LVS_EX_FULLROWSELECT|LVS_EX_HEADERDRAGDROP;
+		// The listview extended styles all require at least ComCtl32.dll 4.70 (some might require more)
+		// and thus will have no effect in Win 95/NT unless they have MSIE 3.x or similar patch installed.
+		// Thus, things like LVS_EX_FULLROWSELECT and LVS_EX_HEADERDRAGDROP will have no effect on those systems.
+		opt.listview_style |= LVS_EX_FULLROWSELECT|LVS_EX_HEADERDRAGDROP; // LVS_AUTOARRANGE seems to disrupt the display of the column separators and have other weird effects in Report view.
+		opt.style_add |= WS_TABSTOP|LVS_REPORT|LVS_SHOWSELALWAYS; // WS_THICKFRAME allows the control itself to be drag-resized.
+		opt.exstyle_add |= WS_EX_CLIENTEDGE; // WS_EX_STATICEDGE/WS_EX_WINDOWEDGE/WS_BORDER(non-ex) don't look as nice. WS_EX_DLGMODALFRAME is a weird but interesting effect.
 		break;
 	case GUI_CONTROL_EDIT:
 		opt.style_add |= WS_TABSTOP;
@@ -1480,15 +1495,6 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 	/////////////////////////////
 	if (!ControlParseOptions(aOptions, opt, control))
 		return FAIL;  // It already displayed the error.
-
-	// Get GUI_CONTROL_ROW out of the way completely so that nothing further below needs to handle it.
-	// At the very least, must return prior to doing any update of the window's attributes such as mMaxExtentRight.
-	if (aControlType == GUI_CONTROL_ROW)
-	{
-		ControlAddContents(*mCurrentListView, aText, INT_MIN, &opt); // INT_MIN is a special flag that indicates that a row is being added.
-		return OK;
-	}
-
 	DWORD style = opt.style_add & ~opt.style_remove;
 	DWORD exstyle = opt.exstyle_add & ~opt.exstyle_remove;
 	if (!mControlCount) // Always start new section for very first control, so override any false value from the above.
@@ -1692,8 +1698,10 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 				calc_control_height_from_row_count = false; // Don't bother calculating the height (i.e. override the default).
 			break;
 		case GUI_CONTROL_LISTBOX:
-		case GUI_CONTROL_LISTVIEW:
 			opt.row_count = 3;  // Actual height will be calculated below using this.
+			break;
+		case GUI_CONTROL_LISTVIEW:
+			opt.row_count = 5;  // Actual height will be calculated below using this.
 			break;
 		case GUI_CONTROL_GROUPBOX:
 			// Seems more appropriate to give GUI_CONTROL_GROUPBOX exactly two rows: the first for the
@@ -2400,11 +2408,21 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		if (control.hwnd = CreateWindowEx(exstyle, WC_LISTVIEW, "", style, opt.x, opt.y // exstyle does apply to ListViews.
 			, opt.width, opt.height == COORD_UNSPECIFIED ? 200 : opt.height, mHwnd, control_id, g_hInstance, NULL))
 		{
+			if (   !(control.union_lv_attrib = (lv_attrib_type *)malloc(sizeof(lv_attrib_type)))   )
+			{
+				// Since mem alloc problem is so rare just get rid of the control and flag it to be reported
+				// later below as "cannot create control".  Doing this avoids the need to every worry whether
+				// control.union_lv_attrib is NULL in other places.
+				DestroyWindow(control.hwnd);
+				control.hwnd = NULL;
+				break;
+			}
+			// Otherwise:
 			mCurrentListView = &control;
-			if (control.union_col = (lv_col_type *)malloc(sizeof(lv_col_type) * LV_MAX_COLUMNS))
-				ZeroMemory(control.union_col, sizeof(lv_col_type) * LV_MAX_COLUMNS);
+			ZeroMemory(control.union_lv_attrib, sizeof(lv_attrib_type));
+			control.union_lv_attrib->sorted_by_col = -1; // Indicate that there is currently no sort order.
 			if (opt.listview_style) // This is a third set of styles that exist in addition to normal & extended.
-				ListView_SetExtendedListViewStyle(control.hwnd, opt.listview_style); // No return value.
+				ListView_SetExtendedListViewStyle(control.hwnd, opt.listview_style); // No return value. Will have no effect on Win95/NT that lack comctl32.dll 4.70+ distributed with MSIE 3.x.
 			opt.color_changed = (opt.color_listview != CLR_DEFAULT); // In case a custom font color was put into effect via the Font command vs. "cBlue" in control's options.
 			if (opt.color_bk == CLR_DEFAULT) // Explicitly specified as "default" since the value isn't at its default of "invalid".
 				opt.color_bk = CLR_INVALID; // Tell ControlSetListViewOptions "no color change requested".
@@ -2415,15 +2433,61 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			if (opt.height == COORD_UNSPECIFIED) // Adjust the control's size to fit opt.row_count rows.
 			{
 				GUI_SETFONT  // Required before asking it for a height estimate.
-				// The following formula has been tested on XP with the point sizes 8, 9, 10, 12, 14, and 18 for:
-				// Verdana
-				// Courier New
-				// Gui Default Font
-				// Times New Roman
-				opt.height = 4 + HIWORD(ListView_ApproximateViewRect(control.hwnd, -1, -1, (WPARAM)opt.row_count - 1));
-				// Above: It seems best to exclude any horiz. scroll bar from consideration, even though it will
-				// block the last row if bar is present.  The bar can be dismissed by manually dragging the
-				// column dividers or using the GuiControl auto-size methods.
+				int view_type = style & LVS_TYPEMASK;
+				switch (view_type)
+				{
+				case LVS_REPORT:
+					// The following formula has been tested on XP with the point sizes 8, 9, 10, 12, 14, and 18 for:
+					// Verdana
+					// Courier New
+					// Gui Default Font
+					// Times New Roman
+					opt.height = 4 + HIWORD(ListView_ApproximateViewRect(control.hwnd, -1, -1
+						, (WPARAM)opt.row_count - 1)); // -1 seems to be needed to make it calculate right for LVS_REPORT.
+					// Above: It seems best to exclude any horiz. scroll bar from consideration, even though it will
+					// block the last row if bar is present.  The bar can be dismissed by manually dragging the
+					// column dividers or using the GuiControl auto-size methods.
+					// Note that ListView_ApproximateViewRect() is not available on 95/NT4 that lack
+					// comctl32.dll 4.70+ distributed with MSIE 3.x  Therefore, rather than having a possibly-
+					// complicated work around in the code to detect DLL version, it will be documented in
+					// the help file that the "rows" method will produce an incorrect height on those platforms.
+					break;
+				case LVS_ICON:
+				case LVS_SMALLICON:
+				case LVS_LIST:
+					// For these non-report views, it seems far better to define row_count as the number of
+					// icons that can fit vertically rather than as the total number of icons, because the
+					// latter can result in heights that vary based on too many factors, resulting in too
+					// much inconsistency.
+					GUI_SET_HDC
+					GetTextMetrics(hdc, &tm);
+					if (view_type == LVS_ICON)
+					{
+						// The vertical space between icons is not dependent upon font size.  In other words,
+						// the control's total height to fit exactly N rows would be icon_height*N plus
+						// icon_spacing*(N-1).  However, the font height is added so that the last row has
+						// enough extra room to display one line of text beneath the icon.  The first/constant
+						// number below is a combination of two components: 1) The control's internal margin
+						// that it maintains to decide when to display scroll bars (perhaps 3 above and 3 below).
+						// The space between the icon and its first line of text (which seems constant, perhaps 10).
+						opt.height = 16 + tm.tmHeight + (int)(GetSystemMetrics(SM_CYICON) * opt.row_count
+							+ HIWORD(ListView_GetItemSpacing(control.hwnd, FALSE) * (opt.row_count - 1)));
+						// More complex and doesn't seem as accurate:
+						//float half_icon_spacing = 0.5F * HIWORD(ListView_GetItemSpacing(control.hwnd, FALSE));
+						//opt.height = (int)(((HIWORD(ListView_ApproximateViewRect(control.hwnd, 5, 5, 1)) 
+						//	+ half_icon_spacing + 4) * opt.row_count) + ((half_icon_spacing - 17) * (opt.row_count - 1)));
+					}
+					else // SMALLICON or LIST. For simplicity, it's done the same way for both, though it doesn't work as well for LIST.
+					{
+						// Seems way too high even with "TRUE": HIWORD(ListView_GetItemSpacing(control.hwnd, TRUE)
+						int cy_smicon = GetSystemMetrics(SM_CYSMICON);
+						// 11 seems to be the right value to prevent unwanted vertical scroll bar in SMALLICON view:
+						opt.height = 11 + (int)((cy_smicon > tm.tmHeight ? cy_smicon : tm.tmHeight) * opt.row_count
+							+ 1 * (opt.row_count - 1));
+						break;
+					}
+					break;
+				}
 				MoveWindow(control.hwnd, opt.x, opt.y, opt.width, opt.height, TRUE); // Repaint should be smart enough not to do it if window is hidden.
 			}
 		}
@@ -2825,7 +2889,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 
 	// Below also serves as a bug check, i.e. GUI_CONTROL_INVALID or some unknown type.
 	if (!control.hwnd)
-		return g_script.ScriptError("The control could not be created." ERR_ABORT);
+		return g_script.ScriptError("Can't create control." ERR_ABORT);
 	// Otherwise the above control creation succeeed.
 	++mControlCount;
 	mControlWidthWasSetByContents = control_width_was_set_by_contents; // Set for use by next control, if any.
@@ -2863,6 +2927,13 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 	// However, the buddies are affected at the time they are created if they are a type that uses a font.
 	if (!font_was_set && uses_font_and_text_color)
 		GUI_SETFONT
+
+	if (opt.redraw == CONDITION_FALSE)
+		SendMessage(control.hwnd, WM_SETREDRAW, FALSE, 0); // Disable redrawing for this control to allow contents to be added to it more quickly.
+		// It's not necessary to do the following because by definition the control has just been created
+		// and thus redraw can't have been off for it previously:
+		//if (opt.redraw == CONDITION_TRUE) // Since redrawing is being turned back on, invalidate the control so that it updates itself.
+		//	InvalidateRect(control.hwnd, NULL, TRUE);
 
 	///////////////////////////////////////////////////
 	// Add any content to the control and set its font.
@@ -3061,6 +3132,18 @@ ResultType GuiType::ParseOptions(char *aOptions, bool &aSetLastFoundWindow, Togg
 			// To remove title bar successfully, the WS_POPUP style must also be applied:
 			if (adding) mStyle |= WS_CAPTION; else mStyle = mStyle & ~WS_CAPTION | WS_POPUP;
 
+		else if (!strnicmp(next_option, "Delimiter", 9))
+		{
+			next_option += 9;
+			// For simplicity, the value of "adding" is ignored since no use is forseeable for "-Delimiter".
+			if (!stricmp(next_option, "Tab"))
+				mDelimiter = '\t';
+			else if (!stricmp(next_option, "Space"))
+				mDelimiter = ' ';
+			else
+				mDelimiter = *next_option ? *next_option : '|';
+		}
+
 		else if (!stricmp(next_option, "Disabled"))
 		{
 			if (mHwnd)
@@ -3241,43 +3324,45 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 		// Content of control (these are currently only effective if the control is being newly created):
 		else if (!strnicmp(next_option, "Checked", 7)) // Caller knows to ignore if inapplicable. Applicable for ListView too.
 		{
-			// As of v1.0.26, Checked/Hidden/Disabled can be followed by an optional 1/0/-1 so that
-			// there is a way for a script to set the starting state by reading from an INI or registry
-			// entry that contains 1 or 0 instead of needing the literal word "checked" stored in there.
-			// Otherwise, a script would have to do something like the following before every "Gui Add":
-			// if Box1Enabled
-			//    Enable = Enabled
-			// else
-			//    Enable =
-			// Gui Add, checkbox, %Enable%, My checkbox.
-			if (aControl.type == GUI_CONTROL_LISTVIEW)
-				if (adding) aOpt.listview_style |= LVS_EX_CHECKBOXES; else aOpt.listview_style &= ~LVS_EX_CHECKBOXES;
+			next_option += 7;
+			if (!stricmp(next_option, "Gray")) // Radios can't have the 3rd/gray state, but for simplicity it's permitted.
+				if (adding) aOpt.checked = BST_INDETERMINATE; else aOpt.checked = BST_UNCHECKED;
 			else
 			{
-				if (next_option[7]) // There's more after the word, namely a 1, 0, or -1.
-				{
-					aOpt.checked = ATOI(next_option + 7);
-					if (aOpt.checked == -1)
-						aOpt.checked = BST_INDETERMINATE;
-				}
+				if (aControl.type == GUI_CONTROL_LISTVIEW)
+					if (adding) aOpt.listview_style |= LVS_EX_CHECKBOXES; else aOpt.listview_style &= ~LVS_EX_CHECKBOXES;
 				else
-					if (adding) aOpt.checked = BST_CHECKED; else aOpt.checked = BST_UNCHECKED;
+				{
+					// As of v1.0.26, Checked/Hidden/Disabled can be followed by an optional 1/0/-1 so that
+					// there is a way for a script to set the starting state by reading from an INI or registry
+					// entry that contains 1 or 0 instead of needing the literal word "checked" stored in there.
+					// Otherwise, a script would have to do something like the following before every "Gui Add":
+					// if Box1Enabled
+					//    Enable = Enabled
+					// else
+					//    Enable =
+					// Gui Add, checkbox, %Enable%, My checkbox.
+					if (*next_option) // There's more after the word, namely a 1, 0, or -1.
+					{
+						aOpt.checked = ATOI(next_option);
+						if (aOpt.checked == -1)
+							aOpt.checked = BST_INDETERMINATE;
+					}
+					else
+						aOpt.checked = adding; // BST_CHECKED == 1, BST_UNCHECKED == 0
+				}
 			}
 		}
-		else if (!stricmp(next_option, "CheckedGray")) // Radios can't have the 3rd/gray state.
-			if (adding) aOpt.checked = BST_INDETERMINATE; else aOpt.checked = BST_UNCHECKED;
-		else if (!strnicmp(next_option, "Choose", 6)) // Caller should ignore aOpt.choice if it isn't applicable for this control type.
+		else if (!strnicmp(next_option, "Choose", 6))
 		{
 			// "CHOOSE" provides an easier way to conditionally select a different item at the time
 			// the control is added.  Example: gui, add, ListBox, vMyList Choose%choice%, %MyItemList%
+			// Caller should ignore aOpt.choice if it isn't applicable for this control type.
 			if (adding)
 			{
 				next_option += 6;
 				switch (aControl.type)
 				{
-				case GUI_CONTROL_ROW: // Listed first for perf.
-					aOpt.choice = (*next_option != '0');  // Allows explicit "Choose0" so that something like "Choose%State%" can be used.
-					break;
 				case GUI_CONTROL_DATETIME:
 					if (!stricmp(next_option, "None"))
 						aOpt.choice = 2; // Special flag value to indicate "none".
@@ -3326,8 +3411,10 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 			if (adding) aOpt.style_add |= WS_TABSTOP; else aOpt.style_remove |= WS_TABSTOP;
 		else if (!stricmp(next_option, "NoTab")) // Supported for backward compatibility and it might be more ergonomic for "Gui Add".
 			if (adding) aOpt.style_remove |= WS_TABSTOP; else aOpt.style_add |= WS_TABSTOP;
-		else if (!stricmp(next_option, "Group")) // This overlaps with g-label, but seems well worth it in this case.
+		else if (!stricmp(next_option, "Group")) // Because it starts with 'G', this overlaps with g-label, but seems well worth it in this case.
 			if (adding) aOpt.style_add |= WS_GROUP; else aOpt.style_remove |= WS_GROUP;
+		else if (!stricmp(next_option, "Redraw"))  // Seems a little more intuitive/memorable than "Draw".
+			aOpt.redraw = adding ? CONDITION_TRUE : CONDITION_FALSE; // Otherwise leave it at its default of 0.
 		else if (!strnicmp(next_option, "Disabled", 8))
 		{
 			// As of v1.0.26, Checked/Hidden/Disabled can be followed by an optional 1/0/-1 so that
@@ -3454,12 +3541,57 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 		else if (!stricmp(next_option, "Theme"))
 			aOpt.use_theme = adding;
 
-		// Picture
+		// Picture / ListView
 		else if (!strnicmp(next_option, "Icon", 4)) // Caller should ignore aOpt.icon_number if it isn't applicable for this control type.
 		{
-			if (adding)
-				aOpt.icon_number = ATOI(next_option + 4);
-			//else do nothing (not currently implemented)
+			next_option += 4;
+			if (aControl.type == GUI_CONTROL_LISTVIEW) // Unconditional regardless of the value of "adding".
+			{
+				if (!stricmp(next_option, "Small"))
+				{
+					// Unconditional regardless of the value of "adding".  It's done in the following way so that
+					// it does not matter whether style_add is applied prior to remove:
+					aOpt.style_add |= LVS_SMALLICON;
+					aOpt.style_remove |= LVS_REPORT;
+				}
+				else // The word "Icon" by itself.
+					aOpt.style_remove |= LVS_TYPEMASK; // Remove all types because LVS_ICON==0.
+			}
+			else
+				if (adding)
+					aOpt.icon_number = ATOI(next_option);
+				//else do nothing (not currently implemented)
+		}
+		else if (aControl.type == GUI_CONTROL_LISTVIEW && !stricmp(next_option, "Report"))
+		{
+			// Unconditional regardless of the value of "adding".  It's done in the following way so that
+			// it does not matter whether style_add is applied prior to remove:
+			aOpt.style_add |= LVS_REPORT;
+			aOpt.style_remove |= LVS_SMALLICON;
+		}
+		else if (aControl.type == GUI_CONTROL_LISTVIEW && !stricmp(next_option, "List"))
+			aOpt.style_add |= LVS_LIST; // Unconditional regardless of the value of "adding".
+		else if (aControl.type == GUI_CONTROL_LISTVIEW && !stricmp(next_option, "Hdr"))
+			if (adding) aOpt.style_remove |= LVS_NOCOLUMNHEADER; else aOpt.style_add |= LVS_NOCOLUMNHEADER;
+		else if (aControl.type == GUI_CONTROL_LISTVIEW && !strnicmp(next_option, "NoSort", 6))
+		{
+			if (!stricmp(next_option + 6, "Hdr")) // Prevents the header from being clickable like a set of buttons.
+				if (adding) aOpt.style_add |= LVS_NOSORTHEADER; else aOpt.style_remove |= LVS_NOSORTHEADER; // Testing shows it can't be changed after the control is created.
+			else // Header is still clickable (unless above is *also* specified), but has no automatic sorting.
+				if (adding) aControl.attrib |= GUI_CONTROL_ATTRIB_ALTBEHAVIOR; else aControl.attrib &= ~GUI_CONTROL_ATTRIB_ALTBEHAVIOR;
+		}
+		else if (aControl.type == GUI_CONTROL_LISTVIEW && !stricmp(next_option, "Grid"))
+			if (adding) aOpt.listview_style |= LVS_EX_GRIDLINES; else aOpt.listview_style &= ~LVS_EX_GRIDLINES;
+		else if (!strnicmp(next_option, "Count", 5)) // Script should only provide the option for ListViews.
+			aOpt.limit = ATOI(next_option + 5); // For simplicity, the value of "adding" is ignored.
+		else if (!strnicmp(next_option, "LV", 2))
+		{
+			next_option += 2;
+			if (IsPureNumeric(next_option, false, false)) // Disallow whitespace in case option string ends in naked "LV".
+			{
+				DWORD given_lvstyle = ATOU(next_option); // ATOU() for unsigned.
+				if (adding) aOpt.listview_style |= given_lvstyle; else aOpt.listview_style &= ~given_lvstyle;
+			}
 		}
 
 		// Button
@@ -3471,15 +3603,21 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 		// Edit (and upper/lowercase for combobox/ddl, and others)
 		else if (!stricmp(next_option, "ReadOnly"))
 		{
-			if (aControl.type == GUI_CONTROL_EDIT)
+			switch (aControl.type)
 			{
+			case GUI_CONTROL_EDIT:
 				if (aControl.hwnd) // Update the existing edit.  Must use SendMessage() vs. changing the style.
 					SendMessage(aControl.hwnd, EM_SETREADONLY, adding, 0);
 				else
 					if (adding) aOpt.style_add |= ES_READONLY; else aOpt.style_remove |= ES_READONLY;
-			}
-			else if (aControl.type == GUI_CONTROL_LISTBOX)
+				break;
+			case GUI_CONTROL_LISTBOX:
 				if (adding) aOpt.style_add |= LBS_NOSEL; else aOpt.style_remove |= LBS_NOSEL;
+				break;
+			case GUI_CONTROL_LISTVIEW:
+				if (adding) aOpt.style_remove |= LVS_EDITLABELS; else aOpt.style_add |= LVS_EDITLABELS;
+				break;
+			}
 		}
 		else if (!stricmp(next_option, "Multi"))
 		{
@@ -3562,7 +3700,7 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 		// Combo/DropDownList/ListBox/ListView
 		else if (aControl.type == GUI_CONTROL_COMBOBOX && !stricmp(next_option, "Simple")) // DDL is not equipped to handle this style.
 			if (adding) aOpt.style_add |= CBS_SIMPLE; else aOpt.style_remove |= CBS_SIMPLE;
-		else if (!stricmp(next_option, "Sort"))
+		else if (!strnicmp(next_option, "Sort", 4))
 		{
 			switch(aControl.type)
 			{
@@ -3570,21 +3708,16 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 				if (adding) aOpt.style_add |= LBS_SORT; else aOpt.style_remove |= LBS_SORT;
 				break;
 			case GUI_CONTROL_LISTVIEW: // LVS_SORTDESCENDING is not a named style due to rarity of use.
-				if (adding) aOpt.style_add |= LVS_SORTASCENDING; else aOpt.style_remove |= LVS_SORTASCENDING;
+				if (adding)
+					aOpt.style_add |= stricmp(next_option + 4, "Desc") ? LVS_SORTASCENDING : LVS_SORTDESCENDING;
+				else
+					aOpt.style_remove |= LVS_SORTASCENDING|LVS_SORTDESCENDING;
 				break;
 			case GUI_CONTROL_DROPDOWNLIST:
 			case GUI_CONTROL_COMBOBOX:
 				if (adding) aOpt.style_add |= CBS_SORT; else aOpt.style_remove |= CBS_SORT;
 				break;
 			}
-		}
-		else if (aControl.type == GUI_CONTROL_LISTVIEW && !strnicmp(next_option, "AutoCol", 7) && aControl.hwnd)
-		{
-			// Control must exist.  Removal (!adding) is not supported (it has the same effect as adding).
-			int mode = (toupper(next_option[7]) == 'H') ? LVSCW_AUTOSIZE_USEHEADER : LVSCW_AUTOSIZE;
-			for (int i = 0;; ++i)
-				if (!ListView_SetColumnWidth(aControl.hwnd, i, mode)) // Failure means last column has already been processed.
-					break;
 		}
 
 		// UpDown
@@ -4534,8 +4667,11 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 			// These ListView "extended styles" exist entirely separate from normal extended styles.
 			// In other words, a ListView may have three types of styles: Normal, Extended, and its
 			// own set of LV Extended styles.
+			// Since LV extended styles are not supported on Win95/NT that lack comctl32.dll 4.70+ distributed
+			// with MSIE 3.x, the following should already serve to indicate that via ErrorLevel since
+			// the replies to the macros/messages will probably be zero:
 			DWORD current_lv_style = ListView_GetExtendedListViewStyle(aControl.hwnd);
-			if (current_exstyle != aOpt.listview_style)
+			if (current_lv_style != aOpt.listview_style)
 			{
 				if (!style_needed_changing)
 				{
@@ -4546,7 +4682,7 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 				// the GWL_STYLE or EXSTYLE change above; i.e. a partial success on either style or exstyle
 				// counts as a full success.
 				ListView_SetExtendedListViewStyle(aControl.hwnd, aOpt.listview_style); // Has no return value.
-				if (ListView_GetExtendedListViewStyle(aControl.hwnd) != current_exstyle)
+				if (ListView_GetExtendedListViewStyle(aControl.hwnd) != current_lv_style)
 					style_change_ok = true; // Even a partial change counts as a success.
 			}
 		}
@@ -4593,6 +4729,13 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 			break;
 		}
 
+		if (aOpt.redraw)
+		{
+			SendMessage(aControl.hwnd, WM_SETREDRAW, aOpt.redraw == CONDITION_TRUE, 0);
+			if (aOpt.redraw == CONDITION_TRUE) // Since redrawing is being turned back on, invalidate the control so that it updates itself.
+				do_invalidate_rect = true;
+		}
+
 		if (do_invalidate_rect)
 			InvalidateRect(aControl.hwnd, NULL, TRUE); // Assume there's text in the control.
 
@@ -4610,7 +4753,7 @@ void GuiType::ControlInitOptions(GuiControlOptionsType &aOpt, GuiControlType &aC
 {
 	ZeroMemory(&aOpt, sizeof(GuiControlOptionsType));
 	if (aControl.type == GUI_CONTROL_LISTVIEW && aControl.hwnd) // Since this doesn't have the _add and _remove components, must initialize.
-		aOpt.listview_style = ListView_GetExtendedListViewStyle(aControl.hwnd);
+		aOpt.listview_style = ListView_GetExtendedListViewStyle(aControl.hwnd); // Will have no effect on 95/NT4 that lack comctl32.dll 4.70+ distributed with MSIE 3.x
 	aOpt.x = aOpt.y = aOpt.width = aOpt.height = COORD_UNSPECIFIED;
 	aOpt.color_bk = CLR_INVALID;
 	// Above: If it stays unaltered, CLR_INVALID means "leave color as it is".  This is for
@@ -4634,11 +4777,9 @@ void GuiType::ControlAddContents(GuiControlType &aControl, char *aContent, int a
 		return;
 
 	UINT msg_add, msg_select;
-	GuiControls control_type = (aChoice == INT_MIN) ? GUI_CONTROL_ROW : aControl.type;
 
-	switch (control_type)
+	switch (aControl.type)
 	{
-	case GUI_CONTROL_ROW: // Listed first for performance.
 	case GUI_CONTROL_LISTVIEW:
 	case GUI_CONTROL_TAB: // These cases must be listed anyway to do a break vs. return, so might as well init conditionally rather than unconditionally.
 		msg_add = 0;
@@ -4671,9 +4812,6 @@ void GuiType::ControlAddContents(GuiControlType &aControl, char *aContent, int a
 	// For ListView:
 	LVCOLUMN lvc;
 	lvc.mask = LVCF_TEXT; // Simpler just to init unconditionally rather than checking control type.
-	LVITEM lvi;
-	lvi.mask = LVIF_TEXT | LVIF_STATE;
-	lvi.state = 0;
 
 	// Check *this_field at the top too, in case list ends in delimiter.
 	for (this_field = aContent; *this_field;)
@@ -4682,9 +4820,9 @@ void GuiType::ControlAddContents(GuiControlType &aControl, char *aContent, int a
 		// For example, it's easier to pick out the list of choices at a glance rather than having to
 		// figure out where the commas delimit the beginning and end of "real" parameters vs. those params
 		// that are a self-contained CSV list.  Of course, the pipe character itself is "sacrificed" and
-		// cannot be used literally due to this method.  That limitation could be removed in a future
-		// version by allowing a different delimiter to be optionally specified.
-		if (next_field = strchr(this_field, '|')) // Assign
+		// cannot be used literally due to this method.  That limitation can now be avoided by specifying
+		// a custom delimiter.
+		if (next_field = strchr(this_field, mDelimiter)) // Assign
 		{
 			*next_field = '\0';  // Temporarily terminate (caller has ensured this is safe).
 			temporarily_terminated = true;
@@ -4696,43 +4834,8 @@ void GuiType::ControlAddContents(GuiControlType &aControl, char *aContent, int a
 		}
 
 		// Add the item:
-		switch (control_type)
+		switch (aControl.type)
 		{
-		case GUI_CONTROL_ROW: // Listed first for performance, since it is called far more often with this value.
-			lvi.pszText = this_field;
-			if (this_field == aContent) // First column is the item, subsequent columns are the item's sub-items.
-			{
-				if (aOpt->choice)
-				{
-					lvi.mask |= LVIF_STATE; // Indicates that the state and stateMask members are present.
-					// Also specify LVIS_FOCUSED so that the most recently pre-selected item will have focus
-					// when all rows have been added. Not doing this causes A_GuiX/Y to report top-left of
-					// control if user navigates via the tab key to a ListView with pre-selected items.
-					// If the focused item happens to be beneath the viewable area, the context menu gets
-					// displayed beneath the ListView, but this behavior seems okay because of the rarity
-					// and because Windows Explorer behaves the same way:
-					lvi.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
-					lvi.state = LVIS_SELECTED | LVIS_FOCUSED;
-				}
-				lvi.iItem = INT_MAX; // Signal it to insert at the end of all current items.
-				lvi.iSubItem = 0; // Must be zero to indicate this is an item vs. sub-item.
-				lvi.iItem = ListView_InsertItem(aControl.hwnd, &lvi); // item_index is used later below as an indicator of success.
-				if (lvi.iItem == -1) // Failure, so can't add the subitems. Might never happen realistically, so no error.
-					return;
-				//else lvi.iItem now contains the proper value for all subseqent iterations (which add the other columns as subitems).
-				lvi.iSubItem = 1; // Init for first of the subitems (if any).  This index is one-based not zero-based.
-				lvi.mask &= ~LVIF_STATE; // Tell it to ignore state member for the row's sub-items.
-				if (aOpt->checked == BST_CHECKED) // There might be some way to create the item in a checked state, but this message is simpler.
-					ListView_SetCheckState(aControl.hwnd, lvi.iItem, TRUE); // TRUE = Check the row's checkbox.
-			}
-			else // Columns after the first are the subitems of anchored to the item (the leftmost column).
-			{
-				ListView_SetItem(aControl.hwnd, &lvi); // item_index is used later below as an indicator of success.
-				// Even if it fails (via returning FALSE), still increment the index so that fields stay
-				// associated with the right columns:
-				++lvi.iSubItem;
-			}
-			break;
 		case GUI_CONTROL_TAB:
 			if (requested_index > MAX_TABS_PER_CONTROL - 1) // Unlikely, but indicate failure if so.
 				item_index = -1;
@@ -4758,22 +4861,22 @@ void GuiType::ControlAddContents(GuiControlType &aControl, char *aContent, int a
 
 		if (temporarily_terminated)
 		{
-			*next_field = '|';  // Restore the original char.
+			*next_field = mDelimiter;  // Restore the original char.
 			++next_field;
-			if (*next_field == '|')  // An item ending in two delimiters is a default (pre-selected) item.
+			if (*next_field == mDelimiter)  // An item ending in two delimiters is a default (pre-selected) item.
 			{
 				if (item_index >= 0) // The item was successfully added.
 				{
-					if (control_type == GUI_CONTROL_TAB)
+					if (aControl.type == GUI_CONTROL_TAB)
 						// MSDN: "A tab control does not send a TCN_SELCHANGING or TCN_SELCHANGE notification message
 						// when a tab is selected using the TCM_SETCURSEL message."
 						TabCtrl_SetCurSel(aControl.hwnd, item_index);
 					else if (msg_select == LB_SETSEL) // Multi-select box requires diff msg to have a cumulative effect.
 						SendMessage(aControl.hwnd, msg_select, (WPARAM)TRUE, (LPARAM)item_index);
-					else
+					else if (msg_select) // Ensure 
 						SendMessage(aControl.hwnd, msg_select, (WPARAM)item_index, 0);  // Select this item.
 				}
-				++next_field;  // Now this could be a third '|', which would in effect be an empty item.
+				++next_field;  // Now this could be a third mDelimiter, which would in effect be an empty item.
 				// It can also be the zero terminator if the list ends in a delimiter, e.g. item1|item2||
 			}
 		}
@@ -4782,22 +4885,27 @@ void GuiType::ControlAddContents(GuiControlType &aControl, char *aContent, int a
 
 	// It seems a useful default to do a basic auto-size upon creation, even though it won't take into
 	// account contents of the rows or the later presence of a vertical scroll bar. The last column
-	// will be overlapped when/if a vscroll bar appears, which would produce an hscroll bar too.
+	// will be overlapped when/if a v-scrollbar appears, which would produce an h-scrollbar too.
 	// It seems best to retain this behavior rather than trying to shrink the last column to allow
 	// room for a scroll bar because: 1) Having it use all available width is desirable at least
 	// some of the time (such as times when there will be only a few rows; 2) It simplifies the code.
 	// This method of auto-sizing each column to fit its text works much better than setting
 	// lvc.cx to ListView_GetStringWidth upon creation of the column.
-	if (control_type == GUI_CONTROL_LISTVIEW)
-		for (int i = 0; i < requested_index + 1; ++i) // Auto-size each column.
-			ListView_SetColumnWidth(aControl.hwnd, i, LVSCW_AUTOSIZE_USEHEADER);
+	if (aControl.type == GUI_CONTROL_LISTVIEW)
+	{
+		++requested_index; // Convert index to total count of columns.
+		aControl.union_lv_attrib->col_count = requested_index; // Keep track of column count, mostly so that LV_ModifyCol and such can properly maintain the array of columns).
+		if (GetWindowLong(aControl.hwnd, GWL_STYLE) & LVS_REPORT)
+			for (int i = 0; i < requested_index; ++i) // Auto-size each column.
+				ListView_SetColumnWidth(aControl.hwnd, i, LVSCW_AUTOSIZE_USEHEADER);
+	}
 
 	// Have aChoice take precedence over any double-piped item(s) that appeared in the list:
 	if (aChoice <= 0)
 		return;
 	--aChoice;
 
-	if (control_type == GUI_CONTROL_TAB)
+	if (aControl.type == GUI_CONTROL_TAB)
 		// MSDN: "A tab control does not send a TCN_SELCHANGING or TCN_SELCHANGE notification message
 		// when a tab is selected using the TCM_SETCURSEL message."
 		TabCtrl_SetCurSel(aControl.hwnd, aChoice);
@@ -5523,7 +5631,7 @@ ResultType GuiType::ControlGetContents(Var &aOutputVar, GuiControlType &aControl
 					for (i = 0; i < sel_count; ++i)
 					{
 						if (i) // Serves to add delimiter after each item except the last (helps parsing loop).
-							*cp++ = '|';
+							*cp++ = mDelimiter;
 						_itoa(item[i] + 1, cp, 10);  // +1 to convert from zero-based to 1-based.
 						cp += strlen(cp);  // Point it to the terminator in preparation for the next write.
 					}
@@ -5534,7 +5642,7 @@ ResultType GuiType::ControlGetContents(Var &aOutputVar, GuiControlType &aControl
 					for (length = sel_count - 1, i = 0; i < sel_count; ++i)
 					{
 						if (i) // Serves to add delimiter after each item except the last (helps parsing loop).
-							*cp++ = '|';
+							*cp++ = mDelimiter;
 						// Above:
 						// A hard-coded pipe delimiter is used for now because it seems fairly easy to
 						// add an option later for a custom delimtier (such as '\n') via an Param4 of
@@ -5544,14 +5652,11 @@ ResultType GuiType::ControlGetContents(Var &aOutputVar, GuiControlType &aControl
 						// right delimiter.  In addition, literal pipes should be rare since that is
 						// the delimiter used when insertting and appending entries into a ListBox.
 						item_length = SendMessage(aControl.hwnd, LB_GETTEXT, (WPARAM)item[i], (LPARAM)cp);
-						if (length == LB_ERR) // Given the way it was called, this should be impossible based on MSDN docs.
+						if (item_length > 0) // Given the way it was called, LB_ERR (-1) should be impossible based on MSDN docs.  But if it happens, just skip that field.
 						{
-							aOutputVar.Close(); // In case it's the clipboard.
-							free(item);
-							return aOutputVar.Assign();
+							length += item_length; // Accumulate actual vs. estimated length.
+							cp += item_length;  // Point it to the terminator in preparation for the next write.
 						}
-						length += item_length; // Accumulate actual vs. estimated length.
-						cp += item_length;  // Point it to the terminator in preparation for the next write.
 					}
 				}
 				free(item);
@@ -6049,14 +6154,13 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 			break;
 		USHORT event_info;
 		bool is_actionable;
-		switch(control.type)
+		switch (control.type)
 		{
 		case GUI_CONTROL_LISTVIEW:
 			event_info = 0;  // Set default.
 			is_actionable = true;
 			switch (nmhdr.code)
 			{
-			case LVN_HOTTRACK:     // Listed first for performance.
 			case NM_CUSTOMDRAW:    // Return CDRF_DODEFAULT (0).  Occurs for every redraw, such as mouse cursor sliding over control or window activation.
 			case LVN_ITEMCHANGING: // Not yet supported (seems rarely needed), so always allow the change by returning 0 (FALSE).
 			case LVN_INSERTITEM: // Any ways other than ListView_InsertItem() to insert items?
@@ -6081,6 +6185,9 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 			{
 				NMLISTVIEW &lv = *(LPNMLISTVIEW)lParam;
 				event_info = lv.iSubItem + 1; // The one-based column number that was clicked.
+				// The following must be done here rather than in Event() in case the control has no g-label:
+				if (!(control.attrib & GUI_CONTROL_ATTRIB_ALTBEHAVIOR)) // Automatic sorting is in effect.
+					GuiType::LV_Sort(control, lv.iSubItem, true); // -1 to convert column index back to zero-based.
 				break;
 			}
 			case LVN_DELETEALLITEMS: // For performance, tell it not to notify us as each individual item is deleted.
@@ -6504,72 +6611,6 @@ LRESULT CALLBACK TabWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 
 
 
-struct LV_SortType
-{
-	LVFINDINFO lvfi;
-	LVITEM lvi;
-	HWND hwnd;
-	#define LV_SORT_BUF_SIZE 8192
-	char buf1[LV_SORT_BUF_SIZE];
-	char buf2[LV_SORT_BUF_SIZE];
-};
-
-
-
-int CALLBACK LV_StringSort(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort)
-// ListView sorting by string.
-{
-	int index;
-	LV_SortType &lvs = *(LV_SortType *)lParamSort;
-
-	// Fetch Item #1:
-	lvs.lvfi.lParam = lParam1;
-	index = ListView_FindItem(lvs.hwnd, -1, &lvs.lvfi);
-	if (index > -1) // Using the macro ListView_GetItemText() is avoided since it defines its own struct.
-	{
-		lvs.lvi.pszText = lvs.buf1; // lvi's other members were already set by the caller.
-		SendMessage(lvs.hwnd, LVM_GETITEMTEXT, index, (LPARAM)&lvs.lvi);
-	}
-	else // Not found.  Impossible if caller set the LParam to a unique value.
-		*lvs.buf1 = '\0';
-
-	// Fetch Item #2:
-	lvs.lvfi.lParam = lParam2;
-	index = ListView_FindItem(lvs.hwnd, -1, &lvs.lvfi);
-	if (index > -1) // Using the macro ListView_GetItemText() is avoided since it defines its own struct.
-	{
-		lvs.lvi.pszText = lvs.buf2; // lvi's other members were already set by the caller.
-		SendMessage(lvs.hwnd, LVM_GETITEMTEXT, index, (LPARAM)&lvs.lvi);
-	}
-	else // Not found.  Impossible if caller set the LParam to a unique value.
-		*lvs.buf2 = '\0';
-
-	return stricmp(lvs.buf1, lvs.buf2);
-}
-
-
-
-void LV_Sort(GuiControlType &aControl, int aColumnIndex)
-{
-	LV_SortType lvs;
-	int item_count = ListView_GetItemCount(aControl.hwnd);
-	lvs.lvi.mask = LVIF_PARAM; // Indicate to ListView_SetItem() that only the item's LParam attribute is to be changed.
-	lvs.lvi.iSubItem = 0;      // Indicate that an item vs. subitem is being operated on.
-	// Ensure unique LParam.  This must be done every time in case rows have been inserted/deleted since
-	// the last time, in which case uniqueness would not be certain otherwise:
-	for (lvs.lvi.lParam = 0, lvs.lvi.iItem = 0; lvs.lvi.lParam < item_count; ++lvs.lvi.lParam, ++lvs.lvi.iItem)
-		ListView_SetItem(aControl.hwnd, &lvs.lvi);
-	// Initialize struct members as much as possible so that the sort callback function doesn't have to do it
-	// each time it's called:
-	lvs.hwnd = aControl.hwnd;
-	lvs.lvi.iSubItem = aColumnIndex; // Zero-based column index to indicate whether the item or one of its sub-items should be retrieved.
-	lvs.lvfi.flags = LVFI_PARAM;  // i.e. the sort function will find each item based on its LPARAM.
-	lvs.lvi.cchTextMax = LV_SORT_BUF_SIZE - 1; // -1 because of that nagging doubt about size vs. length.
-	ListView_SortItems(aControl.hwnd, LV_StringSort, &lvs); // Returns TRUE if successful.
-}
-
-
-
 void GuiType::Event(GuiIndexType aControlIndex, UINT aNotifyCode, USHORT aEventInfo)
 // Handles events within a GUI window that caused one of its controls to change in a meaningful way,
 // or that is an event that could trigger an external action, such as clicking a button or icon.
@@ -6663,6 +6704,7 @@ void GuiType::Event(GuiIndexType aControlIndex, UINT aNotifyCode, USHORT aEventI
 		// It's also received for checking/unchecking an item.  Extending a selection via Shift-ArrowKey
 		// generates between 1 and 3 of them, perhaps at random?  Maybe all we can count on is that you
 		// get at least one when the selection has changed or a box is (un)checked.
+		case LVN_HOTTRACK: gui_event = 'H'; break; // Listed first for performance. This could be used to detect hover by using SetTimer to refresh a timer for each msg?
 		case LVN_ITEMCHANGED: gui_event = 'I'; break;
 		case LVN_ITEMACTIVATE: gui_event = 'A'; break;
 		case LVN_KEYDOWN: gui_event = 'K'; break;
@@ -6691,19 +6733,16 @@ void GuiType::Event(GuiIndexType aControlIndex, UINT aNotifyCode, USHORT aEventI
 		case NM_RCLICK: gui_event = GUI_EVENT_RCLK; break;
 		case NM_DBLCLK: gui_event = GUI_EVENT_DBLCLK; ignore_unless_alt_submit = false; break;
 		case NM_RDBLCLK: gui_event = 'R'; ignore_unless_alt_submit = false; break; // Rare, so just a simple mnemonic is stored (seems better than a digit).
-		//case NM_HOVER: gui_event = 'H'; break; // Never received?
 		case NM_RELEASEDCAPTURE: gui_event = 'C'; break;
 		case NM_SETFOCUS: gui_event = 'F'; break;
 		case NM_KILLFOCUS: gui_event = 'f'; break;  // Lowercase to distinguish it.
-		case LVN_COLUMNCLICK:
-			if (!(control.attrib & GUI_CONTROL_ATTRIB_ALTBEHAVIOR)) // Automatic sorting is in effect.
-				LV_Sort(control, aEventInfo - 1); // -1 to convert column index back to zero-based.
-			gui_event = GUI_EVENT_COLCLICK;
-			ignore_unless_alt_submit = false;
-			break;
+		case LVN_COLUMNCLICK: gui_event = GUI_EVENT_COLCLK; ignore_unless_alt_submit = false; break;
 		default: gui_event = '*'; // Flagged as an unknown event (shouldn't happen unless there are unhandled events either here or in WM_NOTIFY).
-		//case NM_HOVER: Spy++ indicates that the msg is never received.  Maybe a style has to be set to get it.
-		//case LVN_HOTTRACK: We're currently not called for it since it's received so often.
+		// Spy++ indicates that NM_HOVER is never received.  Maybe a style has to be set to get it:
+		//case NM_HOVER: gui_event = 'V'; break; // Note: 'V' is used for Hover because 'H' is used for LVN_HOTTRACK.
+		// Never received, even with LVS_EX_INFOTIP applied and even in large icon view with text that's
+		// too long to display:
+		//case LVN_GETINFOTIP: gui_event = 'T'; break;
 		//case NM_RETURN (user has pressed the ENTER key): Apparently never received. Requires a style?
 		}
 		if (ignore_unless_alt_submit && !(control.attrib & GUI_CONTROL_ATTRIB_ALTSUBMIT))
@@ -7107,7 +7146,7 @@ int GuiType::ControlInvertSliderIfNeeded(GuiControlType &aControl, int aPosition
 // Caller has ensured that aControl.type is slider.
 {
 	return (aControl.attrib & GUI_CONTROL_ATTRIB_ALTBEHAVIOR)
-		? (SendMessage(aControl.hwnd, TBM_GETRANGEMAX, 0, 0) - aPosition) + SendMessage(aControl.hwnd, TBM_GETRANGEMIN, 0, 0)
+		? ((int)SendMessage(aControl.hwnd, TBM_GETRANGEMAX, 0, 0) - aPosition) + (int)SendMessage(aControl.hwnd, TBM_GETRANGEMIN, 0, 0)
 		: aPosition;  // No inversion necessary.
 }
 
@@ -7162,18 +7201,35 @@ void GuiType::ControlSetListViewOptions(GuiControlType &aControl, GuiControlOpti
 // Caller has ensured that aOpt.color_bk is CLR_INVALID if no change should be made to the
 // current background color.
 {
-	if (aOpt.color_changed)
-		ListView_SetTextColor(aControl.hwnd, aOpt.color_listview);
-	if (aOpt.color_bk != CLR_INVALID) // Explicit color change was requested.
+	if (aOpt.limit)
 	{
-		// Making both the same seems the best default because BkColor only applies to the portion
-		// of the control that doesn't have text in it, which is typically very little.
-		// Unlike ListView_SetTextBkColor, ListView_SetBkColor() treats CLR_DEFAULT as black.
-		// therefore, make them both GetSysColor(COLOR_WINDOW) for consistency.  This color is
-		// probably the default anyway:
-		COLORREF color = (aOpt.color_bk == CLR_DEFAULT) ? GetSysColor(COLOR_WINDOW) : aOpt.color_bk;
-		ListView_SetTextBkColor(aControl.hwnd, color);
-		ListView_SetBkColor(aControl.hwnd, color);
+		if (ListView_GetItemCount(aControl.hwnd) > 0)
+			SendMessage(aControl.hwnd, LVM_SETITEMCOUNT, aOpt.limit, 0); // Last parameter should be 0 for LVS_OWNERDATA (verified if you look at the definition of ListView_SetItemCount macro).
+		else
+			// When the control has no rows, work around the fact that LVM_SETITEMCOUNT delivers less than 20%
+			// of its full benefit unless done after the first row is added (at least on XP SP1).  The message
+			// is deferred until later by setting this flag:
+			aControl.union_lv_attrib->row_count_hint = aOpt.limit;
+	}
+	if (aOpt.color_changed || aOpt.color_bk != CLR_INVALID)
+	{
+		if (aOpt.color_changed)
+			ListView_SetTextColor(aControl.hwnd, aOpt.color_listview);
+		if (aOpt.color_bk != CLR_INVALID) // Explicit color change was requested.
+		{
+			// Making both the same seems the best default because BkColor only applies to the portion
+			// of the control that doesn't have text in it, which is typically very little.
+			// Unlike ListView_SetTextBkColor, ListView_SetBkColor() treats CLR_DEFAULT as black.
+			// therefore, make them both GetSysColor(COLOR_WINDOW) for consistency.  This color is
+			// probably the default anyway:
+			COLORREF color = (aOpt.color_bk == CLR_DEFAULT) ? GetSysColor(COLOR_WINDOW) : aOpt.color_bk;
+			ListView_SetTextBkColor(aControl.hwnd, color);
+			ListView_SetBkColor(aControl.hwnd, color);
+		}
+		// It used to work without this; I don't know what conditions changed, but apparently it's needed
+		// at least sometimes.  The last param must be TRUE otherwise an space not filled by rows or columns
+		// doesn't get updated:
+		InvalidateRect(aControl.hwnd, NULL, TRUE);
 	}
 }
 
@@ -7622,7 +7678,6 @@ void GuiType::ControlGetPosOfFocusedItem(GuiControlType &aControl, POINT &aPoint
 	//case GUI_CONTROL_RADIO:
 	//case GUI_CONTROL_DROPDOWNLIST:
 	//case GUI_CONTROL_COMBOBOX:
-	//case GUI_CONTROL_ROW:
 	//case GUI_CONTROL_EDIT:         Has it's own context menu.
 	//case GUI_CONTROL_DATETIME:
 	//case GUI_CONTROL_MONTHCAL:     Has it's own context menu. Can't be focused anyway.
@@ -7649,4 +7704,188 @@ void GuiType::ControlGetPosOfFocusedItem(GuiControlType &aControl, POINT &aPoint
 	aPoint.y = rect.top + 2 + (rect.bottom - rect.top)/2;  // +2 to shift it down a tad, revealing more of the selected item.
 	// Above: Moving it down a little by default seems desirable 95% of the time to prevent it
 	// from covering up the focused row, the slider's thumb, a datetime's single row, etc.
+}
+
+
+
+struct LV_SortType
+{
+	LVFINDINFO lvfi;
+	LVITEM lvi;
+	HWND hwnd;
+	lv_col_type col;
+	char buf1[LV_TEXT_BUF_SIZE];
+	char buf2[LV_TEXT_BUF_SIZE];
+	bool sort_ascending;
+	bool incoming_is_index;
+};
+
+
+
+int CALLBACK LV_GeneralSort(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort)
+// ListView sorting by field's text or something derived from the text for each call.
+{
+	LV_SortType &lvs = *(LV_SortType *)lParamSort;
+
+	// MSDN: "During the sorting process, the list-view contents are unstable. If the [ListView_SortItems]
+	// callback function sends any messages to the list-view control, the results are unpredictable."
+	// But this seems hard to believe because how could you ever use ListView_SortItems() without either
+	// having LVS_OWNERDATA or allocating temp memory for the entire column (to whose rows lParam would point)?
+
+	// Fetch Item #1:
+	lvs.lvi.pszText = lvs.buf1; // lvi's other members were already set by the caller.
+	if (lvs.incoming_is_index) // Serves to avoid the potentially high performance overhead of ListView_FindItem() where possible.
+	{
+		lvs.lvi.iItem = (int)lParam1;
+		SendMessage(lvs.hwnd, LVM_GETITEM, 0, (LPARAM)&lvs.lvi); // Use LVM_GETITEM vs. LVM_GETITEMTEXT because MSDN says that only LVM_GETITEM is safe during the sort.
+	}
+	else
+	{
+		// Unfortunately, lParam cannot be used as the index itself because apparently, the sorting
+		// process puts the item indices into a state of flux.  In other words, the indices are
+		// changing while the sort progresses, so it's not possible to use an item's original index
+		// as a way to uniquely identify it.
+		lvs.lvfi.lParam = lParam1;
+		lvs.lvi.iItem = ListView_FindItem(lvs.hwnd, -1, &lvs.lvfi);
+		if (lvs.lvi.iItem < 0) // Not found.  Impossible if caller set the LParam to a unique value.
+			*lvs.buf1 = '\0';
+		else
+			SendMessage(lvs.hwnd, LVM_GETITEM, 0, (LPARAM)&lvs.lvi);
+	}
+
+	// Must use lvi.pszText vs. buf because MSDN says (for LVM_GETITEM, but it might also apply to
+	// LVM_GETITEMTEXT even though it isn't documented): "Applications should not assume that the text will
+	// necessarily be placed in the specified buffer. The control may instead change the pszText member
+	// of the structure to point to the new text rather than place it in the buffer."
+	char *field1 = lvs.lvi.pszText; // Save value of pszText in case it no longer points to lvs.buf1.
+
+	// Fetch Item #2 (see comments in #1 above):
+	lvs.lvi.pszText = lvs.buf2; // lvi's other members were already set by the caller.
+	if (lvs.incoming_is_index)
+	{
+		lvs.lvi.iItem = (int)lParam2;
+		SendMessage(lvs.hwnd, LVM_GETITEM, 0, (LPARAM)&lvs.lvi); // Use LVM_GETITEM vs. LVM_GETITEMTEXT because MSDN says that only LVM_GETITEM is safe during the sort.
+	}
+	else
+	{
+		// Set any lvfi members not already set by the caller.  Note that lvi.mask was set to LVIF_TEXT by the caller.
+		lvs.lvfi.lParam = lParam2;
+		lvs.lvi.iItem = ListView_FindItem(lvs.hwnd, -1, &lvs.lvfi);
+		if (lvs.lvi.iItem < 0) // Not found.  Impossible if caller set the LParam to a unique value.
+			*lvs.buf2 = '\0';
+		else
+			SendMessage(lvs.hwnd, LVM_GETITEM, 0, (LPARAM)&lvs.lvi);
+	}
+
+	// MSDN: "return a negative value if the first item should precede the second"
+	int result;
+	if (lvs.col.type == LV_COL_TEXT)
+		result = lvs.col.case_sensitive ? strcmp(field1, lvs.lvi.pszText) : stricmp(field1, lvs.lvi.pszText); // Must not refer to buf1/buf2 directly, see above.
+	else
+		// Unlike ACT_SORT, supporting hex for an explicit-floating point column seems far too rare to
+		// justify, hence atof() is used vs. ATOF():
+		result = (int)(atof(field1) - atof(lvs.lvi.pszText)); // Must not refer to buf1/buf2 directly, see above.
+	return lvs.sort_ascending ? result : -result;
+}
+
+
+
+int CALLBACK LV_Int32Sort(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort)
+{
+	// Caller-provided value of lParamSort is TRUE (non-zero) when ascending order is desired.
+	// MSDN: "return a negative value if the first item should precede the second"
+	return (int)(lParamSort ? (lParam1 - lParam2) : (lParam2 - lParam1));
+}
+
+
+
+void GuiType::LV_Sort(GuiControlType &aControl, int aColumnIndex, bool aSortOnlyIfEnabled, char aForceDirection)
+// aForceDirection should be 'A' to force ascending, 'D' to force ascending, or '\0' to use the column's
+// current default direction.
+{
+	if (aColumnIndex < 0 || aColumnIndex >= LV_MAX_COLUMNS) // Invalid (avoids array access violation).
+		return;
+	lv_attrib_type &lv_attrib = *aControl.union_lv_attrib;
+	lv_col_type &col = lv_attrib.col[aColumnIndex];
+
+	int item_count = ListView_GetItemCount(aControl.hwnd);
+	if ((col.sort_disabled && aSortOnlyIfEnabled) || item_count < 2) // This column cannot be sorted or doesn't need to be.
+		return; // Below relies on having returned here when control is empty or contains 1 item.
+
+	// Init any lvs members that are needed by both LV_Int32Sort and the other sorting functions.
+	// The new sort order is determined by the column's primary order unless the user clicked the current
+	// sort-column, in which case the direction is reversed (unless the column is unidirectional):
+	LV_SortType lvs;
+	if (aForceDirection)
+		lvs.sort_ascending = (aForceDirection == 'A');
+	else
+		lvs.sort_ascending = (aColumnIndex == lv_attrib.sorted_by_col && !col.unidirectional)
+			? !lv_attrib.is_now_sorted_ascending : !col.prefer_descending;
+
+	// Init those members needed for LVM_GETITEM if it turns out to be needed.  This section
+	// also serves to permanently init cchTextMax for use by the sorting functions too:
+	lvs.lvi.pszText = lvs.buf1;
+	lvs.lvi.cchTextMax = LV_TEXT_BUF_SIZE - 1; // Subtracts 1 because of that nagging doubt about size vs. length. Some MSDN examples such as TabCtrl_GetItem()'s cchTextMax subtract one.
+
+	if (col.type == LV_COL_INTEGER)
+	{
+		// Testing indicates that the following approach is 25 times faster than the general-sort method.
+		// Assign the 32-bit integer as the items lParam at this early stage rather than getting the text
+		// and converting it to an integer for every call of the sort proc.
+		for (lvs.lvi.lParam = 0, lvs.lvi.iItem = 0; lvs.lvi.iItem < item_count; ++lvs.lvi.iItem)
+		{
+			lvs.lvi.mask = LVIF_TEXT;
+			lvs.lvi.iSubItem = aColumnIndex; // Which field to fetch (must be reset each time since it's set to 0 below).
+			lvs.lvi.lParam = SendMessage(aControl.hwnd, LVM_GETITEM, 0, (LPARAM)&lvs.lvi)
+				? ATOI(lvs.lvi.pszText) : 0; // Must not refer to lvs.buf1 directly because MSDN says LVM_GETITEMTEXT might have changed pszText to point to some other string.
+			lvs.lvi.mask = LVIF_PARAM;
+			lvs.lvi.iSubItem = 0; // Indicate that an item vs. subitem is being operated on (subitems can't have an lParam).
+			ListView_SetItem(aControl.hwnd, &lvs.lvi);
+		}
+		// Always use non-Ex() for this one because it's likely to perform best due to the lParam setup above.
+		// The value of iSubItem is not reset to aColumnIndex because LV_Int32Sort() doesn't use it.
+        SendMessage(aControl.hwnd, LVM_SORTITEMS, lvs.sort_ascending, (LPARAM)LV_Int32Sort); // Should always succeed since it uses non-Ex() version.
+	}
+	else // It's LV_COL_TEXT or LV_COL_FLOAT.
+	{
+		// Since LVM_SORTITEMSEX requires comctl32.dll version 5.80+, the non-Ex version is used
+		// whenever the EX version fails to work.  One reason to strongly prefer the Ex version
+		// is that MSDN says the non-Ex version shouldn't query the control during the sort,
+		// which although hard to believe, is a concern.  Therefore:
+		// Try to use the SortEx() method first. If it doesn't work, fall back to the non-Ex method under
+		// the assumption that the OS doesn't support the Ex() method.
+		// Initialize struct members as much as possible so that the sort callback function doesn't have to do it
+		// each time it's called.   Some of the others were already initialized higher above for internal use here.
+		lvs.hwnd = aControl.hwnd;
+		lvs.lvi.iSubItem = aColumnIndex; // Zero-based column index to indicate whether the item or one of its sub-items should be retrieved.
+		lvs.col = col; // Struct copy, which should enhance sorting performance over a pointer.
+		lvs.incoming_is_index = true;
+		lvs.lvi.pszText = NULL; // Serves to detect whether the sort-proc actually ran (it won't if this is Win95 or some other OS that lacks SortEx).
+		lvs.lvi.mask = LVIF_TEXT;
+		SendMessage(aControl.hwnd, LVM_SORTITEMSEX, (WPARAM)&lvs, (LPARAM)LV_GeneralSort);
+		if (!lvs.lvi.pszText)
+		{
+			// Since SortEx() didn't run (above has already ensured that this wasn't because the control is empty),
+			// fall back to Sort() method.
+			// Use a simple sequential lParam to guarantee uniqueness. This must be done every time in case
+			// rows have been inserted/deleted since the last time, in which case uniqueness would not be
+			// certain otherwise:
+			lvs.lvi.iSubItem = 0; // Indicate that an item vs. subitem is to be updated (subitems can't have an lParam).
+			lvs.lvi.mask = LVIF_PARAM; // Indicate which member is to be updated.
+			for (lvs.lvi.lParam = 0, lvs.lvi.iItem = 0; lvs.lvi.iItem < item_count; ++lvs.lvi.lParam, ++lvs.lvi.iItem)
+				ListView_SetItem(aControl.hwnd, &lvs.lvi);
+			// Initialize struct members as much as possible so that the sort callback function doesn't have to do it
+			// each time it's called.   Some of the others were already initialized higher above for internal use here.
+			lvs.incoming_is_index = false;
+			lvs.lvfi.flags = LVFI_PARAM; // This is the find-method; i.e. the sort function will find each item based on its LPARAM.
+			lvs.lvi.mask = LVIF_TEXT; // Sort proc. uses LVIF_TEXT internally because the PARAM mask only applies to lvfi vs. lvi.
+			lvs.lvi.iSubItem = aColumnIndex; // Zero-based column index to indicate whether the item or one of its sub-items should be retrieved.
+			SendMessage(aControl.hwnd, LVM_SORTITEMS, (WPARAM)&lvs, (LPARAM)LV_GeneralSort);
+		}
+	}
+
+	// For simplicity, ListView_SortItems()'s return value (TRUE/FALSE) is ignored since it shouldn't
+	// realistically fail.  Just update things to indicate the current sort-column and direction:
+	lv_attrib.sorted_by_col = aColumnIndex;
+	lv_attrib.is_now_sorted_ascending = lvs.sort_ascending;
 }

@@ -538,7 +538,7 @@ enum MenuCommands {MENU_CMD_INVALID, MENU_CMD_SHOW, MENU_CMD_USEERRORLEVEL
 
 enum GuiCommands {GUI_CMD_INVALID, GUI_CMD_OPTIONS, GUI_CMD_ADD, GUI_CMD_MARGIN, GUI_CMD_MENU
 	, GUI_CMD_SHOW, GUI_CMD_SUBMIT, GUI_CMD_CANCEL, GUI_CMD_MINIMIZE, GUI_CMD_MAXIMIZE, GUI_CMD_RESTORE
-	, GUI_CMD_DESTROY, GUI_CMD_FONT, GUI_CMD_TAB, GUI_CMD_DEFAULT
+	, GUI_CMD_DESTROY, GUI_CMD_FONT, GUI_CMD_TAB, GUI_CMD_LISTVIEW, GUI_CMD_DEFAULT
 	, GUI_CMD_COLOR, GUI_CMD_FLASH
 };
 
@@ -565,15 +565,14 @@ typedef UCHAR GuiControls;
 #define GUI_CONTROL_COMBOBOX     8
 #define GUI_CONTROL_LISTBOX      9
 #define GUI_CONTROL_LISTVIEW     10
-#define GUI_CONTROL_ROW          11 // A quasi-control since it will have no HWND.
-#define GUI_CONTROL_EDIT         12
-#define GUI_CONTROL_DATETIME     13
-#define GUI_CONTROL_MONTHCAL     14
-#define GUI_CONTROL_HOTKEY       15
-#define GUI_CONTROL_UPDOWN       16
-#define GUI_CONTROL_SLIDER       17
-#define GUI_CONTROL_PROGRESS     18
-#define GUI_CONTROL_TAB          19 // Keep below flush with above as a reminder to keep it in sync:
+#define GUI_CONTROL_EDIT         11
+#define GUI_CONTROL_DATETIME     12
+#define GUI_CONTROL_MONTHCAL     13
+#define GUI_CONTROL_HOTKEY       14
+#define GUI_CONTROL_UPDOWN       15
+#define GUI_CONTROL_SLIDER       16
+#define GUI_CONTROL_PROGRESS     17
+#define GUI_CONTROL_TAB          18 // Keep below flush with above as a reminder to keep it in sync:
 
 enum ThreadCommands {THREAD_CMD_INVALID, THREAD_CMD_PRIORITY, THREAD_CMD_INTERRUPT};
 
@@ -1376,6 +1375,7 @@ public:
 		if (!stricmp(aBuf, "Menu")) return GUI_CMD_MENU;
 		if (!stricmp(aBuf, "Font")) return GUI_CMD_FONT;
 		if (!stricmp(aBuf, "Tab")) return GUI_CMD_TAB;
+		if (!stricmp(aBuf, "ListView")) return GUI_CMD_LISTVIEW;
 		if (!stricmp(aBuf, "Default")) return GUI_CMD_DEFAULT;
 		if (!stricmp(aBuf, "Color")) return GUI_CMD_COLOR;
 		if (!stricmp(aBuf, "Flash")) return GUI_CMD_FLASH;
@@ -1428,7 +1428,6 @@ public:
 		if (!stricmp(aBuf, "ComboBox")) return GUI_CONTROL_COMBOBOX;
 		if (!stricmp(aBuf, "ListBox")) return GUI_CONTROL_LISTBOX;
 		if (!stricmp(aBuf, "ListView")) return GUI_CONTROL_LISTVIEW;
-		if (!stricmp(aBuf, "Row")) return GUI_CONTROL_ROW;
 		if (!stricmp(aBuf, "Edit")) return GUI_CONTROL_EDIT;
 		// Keep those seldom used at the bottom for performance:
 		if (!stricmp(aBuf, "UpDown")) return GUI_CONTROL_UPDOWN;
@@ -1674,18 +1673,18 @@ public:
 	// Returns the matching type, or zero if none.
 	{
 		if (!aBuf || !*aBuf) return VAR_TYPE_INVALID;
-		if (!stricmp(aBuf, "integer")) return VAR_TYPE_INTEGER;
-		if (!stricmp(aBuf, "float")) return VAR_TYPE_FLOAT;
-		if (!stricmp(aBuf, "number")) return VAR_TYPE_NUMBER;
-		if (!stricmp(aBuf, "time")) return VAR_TYPE_TIME;
-		if (!stricmp(aBuf, "date")) return VAR_TYPE_TIME;  // "date" is just an alias for "time".
-		if (!stricmp(aBuf, "digit")) return VAR_TYPE_DIGIT;
-		if (!stricmp(aBuf, "xdigit")) return VAR_TYPE_XDIGIT;
-		if (!stricmp(aBuf, "alnum")) return VAR_TYPE_ALNUM;
-		if (!stricmp(aBuf, "alpha")) return VAR_TYPE_ALPHA;
-		if (!stricmp(aBuf, "upper")) return VAR_TYPE_UPPER;
-		if (!stricmp(aBuf, "lower")) return VAR_TYPE_LOWER;
-		if (!stricmp(aBuf, "space")) return VAR_TYPE_SPACE;
+		if (!stricmp(aBuf, "Integer")) return VAR_TYPE_INTEGER;
+		if (!stricmp(aBuf, "Float")) return VAR_TYPE_FLOAT;
+		if (!stricmp(aBuf, "Number")) return VAR_TYPE_NUMBER;
+		if (!stricmp(aBuf, "Time")) return VAR_TYPE_TIME;
+		if (!stricmp(aBuf, "Date")) return VAR_TYPE_TIME;  // "date" is just an alias for "time".
+		if (!stricmp(aBuf, "Digit")) return VAR_TYPE_DIGIT;
+		if (!stricmp(aBuf, "Xdigit")) return VAR_TYPE_XDIGIT;
+		if (!stricmp(aBuf, "Alnum")) return VAR_TYPE_ALNUM;
+		if (!stricmp(aBuf, "Alpha")) return VAR_TYPE_ALPHA;
+		if (!stricmp(aBuf, "Upper")) return VAR_TYPE_UPPER;
+		if (!stricmp(aBuf, "Lower")) return VAR_TYPE_LOWER;
+		if (!stricmp(aBuf, "Space")) return VAR_TYPE_SPACE;
 		return VAR_TYPE_INVALID;
 	}
 
@@ -1922,14 +1921,25 @@ struct FontType
 	HFONT hfont;
 };
 
-#define LV_MAX_COLUMNS 200
+#define LV_TEXT_BUF_SIZE 8192  // Max amount of text in a ListView sub-item.  Somewhat arbitrary: not sure what the real limit is, if any.
+enum LVColTypes {LV_COL_TEXT, LV_COL_INTEGER, LV_COL_FLOAT}; // LV_COL_TEXT must be zero so that it's the default with ZeroMemory.
 struct lv_col_type
 {
-	bool unidirectional;
-	bool primary_is_descending;
-	bool is_now_in_primary_order;
-	UCHAR justify; // Contains only the LVCFMT_JUSTIFYMASK portion.
-	char type; // Integer, Float, Text
+	UCHAR type; // UCHAR vs. enum LVColTypes to save memory.
+	bool sort_disabled;  // If true, clicking the column will have no automatic effect.
+	bool case_sensitive; // Ignored if type isn't LV_COL_TEXT.
+	bool unidirectional; // Sorting cannot be reversed/toggled.
+	bool prefer_descending; // Whether this column defaults to descending order (on first click or for unidirectional).
+};
+
+struct lv_attrib_type
+{
+	int sorted_by_col; // Index of column by which the control is currently sorted (-1 if none).
+	bool is_now_sorted_ascending; // The direction in which the above column is currently sorted.
+	#define LV_MAX_COLUMNS 200
+	lv_col_type col[LV_MAX_COLUMNS];
+	int col_count; // Number of columns currently in teh above array.
+	int row_count_hint;
 };
 
 typedef UCHAR TabControlIndexType;
@@ -1962,7 +1972,7 @@ struct GuiControlType
 		HBITMAP union_hbitmap; // For PIC controls, stores the bitmap.
 		// Note: Pic controls cannot obey the text color, but they can obey the window's background
 		// color if the picture's background is transparent (at least in the case of icons on XP).
-		lv_col_type *union_col; // For ListView: An allocated array of columns.
+		lv_attrib_type *union_lv_attrib; // For ListView: Some attributes and an array of columns.
 	};
 	#define USES_FONT_AND_TEXT_COLOR(type) !(type == GUI_CONTROL_PIC || type == GUI_CONTROL_UPDOWN \
 		|| type == GUI_CONTROL_SLIDER || type == GUI_CONTROL_PROGRESS)
@@ -1982,7 +1992,7 @@ struct GuiControlOptionsType
 	GuiControlType *buddy1, *buddy2;
 	COLORREF color_listview; // Used only for those controls that need control.union_color for something other than color.
 	COLORREF color_bk; // Control's background color.
-	int limit;   // The max number of characters to permit in an edit or combobox's edit.
+	int limit;   // The max number of characters to permit in an edit or combobox's edit (also used by ListView).
 	int hscroll_pixels;  // The number of pixels for a listbox's horizontal scrollbar to be able to scroll.
 	int checked; // When zeroed, struct contains default starting state of checkbox/radio, i.e. BST_UNCHECKED.
 	int icon_number; // Which icon of a multi-icon file to use.  Zero means use-default, i.e. the first icon.
@@ -1992,6 +2002,7 @@ struct GuiControlOptionsType
 	SYSTEMTIME sys_time[2]; // Needs to support 2 elements for MONTHCAL's multi/range mode.
 	SYSTEMTIME sys_time_range[2];
 	DWORD gdtr, gdtr_range; // Used in connection with sys_time and sys_time_range.
+	ResultType redraw;  // Whether the state of WM_REDRAW should be changed.
 	char password_char; // When zeroed, indicates "use default password" for an edit control with the password style.
 	bool range_changed;
 	bool color_changed; // To discern when a control has been put back to the default color. [v1.0.26]
@@ -2029,6 +2040,7 @@ public:
 	bool mInRadioGroup; // Whether the control currently being created is inside a prior radio-group.
 	bool mUseTheme;  // Whether XP theme and styles should be applied to the parent window and subsequently added controls.
 	HWND mOwner;  // The window that owns this one, if any.  Note that Windows provides no way to change owners after window creation.
+	char mDelimiter;  // The default field delimiter when adding items to ListBox, DropDownList, ListView, etc.
 	int mCurrentFontIndex;
 	GuiControlType *mCurrentListView; // The ListView to which new rows will be added.
 	TabControlIndexType mTabControlCount;
@@ -2069,7 +2081,7 @@ public:
 		// removed, which implies that POPUP windows are more flexible than OVERLAPPED windows.
 		, mStyle(WS_POPUP|WS_CLIPSIBLINGS|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX) // WS_CLIPCHILDREN (doesn't seem helpful currently)
 		, mExStyle(0) // This and the above should not be used once the window has been created since they might get out of date.
-		, mInRadioGroup(false), mUseTheme(true), mOwner(NULL)
+		, mInRadioGroup(false), mUseTheme(true), mOwner(NULL), mDelimiter('|')
 		, mCurrentFontIndex(FindOrCreateFont()) // Omit params to tell it to find or create DEFAULT_GUI_FONT.
 		, mCurrentListView(NULL)
 		, mTabControlCount(0), mCurrentTabControlIndex(MAX_TAB_CONTROLS), mCurrentTabIndex(0)
@@ -2173,6 +2185,7 @@ public:
 	ResultType SelectAdjacentTab(GuiControlType &aTabControl, bool aMoveToRight, bool aFocusFirstControl
 		, bool aWrapAround);
 	void ControlGetPosOfFocusedItem(GuiControlType &aControl, POINT &aPoint);
+	static void LV_Sort(GuiControlType &aControl, int aColumnIndex, bool aSortOnlyIfEnabled, char aForceDirection = '\0');
 };
 
 
@@ -2467,8 +2480,16 @@ void BIF_ATan(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCo
 void BIF_Exp(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_SqrtLogLn(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 
-void BIF_LV_GetNextItem(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
-//void BIF_LV_SetCol(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_LV_GetNextOrCount(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_LV_GetText(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_LV_AddInsertModify(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_LV_Delete(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_LV_InsertModifyDeleteCol(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_LV_SetImageList(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+
+void BIF_IL_Create(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_IL_Destroy(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_IL_Add(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 
 __int64 ExprTokenToInt64(ExprTokenType &aToken);
 double ExprTokenToDouble(ExprTokenType &aToken);

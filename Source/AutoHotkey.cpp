@@ -258,7 +258,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	ResultType result = g_script.AutoExecSection();
 	// If no hotkeys are in effect, the user hasn't requested a hook to be activated, and the script
 	// doesn't contain the #Persistent directive we're done unless the OnExit subroutine doesn't exit:
-	if (!IS_PERSISTENT)
+	if (!IS_PERSISTENT) // Resolve macro again in case any of its components changed since the last time.
 		g_script.ExitApp(result == FAIL ? EXIT_ERROR : EXIT_EXIT);
 
 	// The below is done even if AutoExecSectionTimeout() already set the values once.

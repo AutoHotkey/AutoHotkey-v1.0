@@ -4196,11 +4196,13 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			case GUI_CMD_RESTORE:
 			case GUI_CMD_DESTROY:
 			case GUI_CMD_DEFAULT:
+			case GUI_CMD_OPTIONS:
 				if (aArgc > 1)
 					return ScriptError("Parameter #2 and beyond should be omitted in this case.", NEW_RAW_ARG2);
 				break;
 			case GUI_CMD_SUBMIT:
 			case GUI_CMD_MENU:
+			case GUI_CMD_LISTVIEW:
 			case GUI_CMD_FLASH:
 				if (aArgc > 2)
 					return ScriptError("Parameter #3 and beyond should be omitted in this case.", NEW_RAW_ARG3);
@@ -4625,7 +4627,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_SETFORMAT:
 		if (aArgc > 0 && !line.ArgHasDeref(1))
 		{
-            if (!stricmp(NEW_RAW_ARG1, "float"))
+            if (!stricmp(NEW_RAW_ARG1, "Float"))
 			{
 				if (aArgc > 1 && !line.ArgHasDeref(2))
 				{
@@ -4634,7 +4636,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 						return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
 				}
 			}
-			else if (!stricmp(NEW_RAW_ARG1, "integer"))
+			else if (!stricmp(NEW_RAW_ARG1, "Integer"))
 			{
 				if (aArgc > 1 && !line.ArgHasDeref(2) && toupper(*NEW_RAW_ARG2) != 'H' && toupper(*NEW_RAW_ARG2) != 'D')
 					return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
@@ -5006,7 +5008,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		if (aArgc > 0 && !line.ArgHasDeref(1))
 		{
 			ProcessCmds process_cmd = line.ConvertProcessCmd(NEW_RAW_ARG1);
-			if (process_cmd != PROCESS_CMD_PRIORITY && !*NEW_RAW_ARG2)
+			if (process_cmd != PROCESS_CMD_PRIORITY && process_cmd != PROCESS_CMD_EXIST && !*NEW_RAW_ARG2)
 				return ScriptError("Parameter #2 must not be blank in this case.");
 			switch (process_cmd)
 			{
@@ -5483,22 +5485,96 @@ Func *Script::FindFunc(char *aFuncName, size_t aFuncNameLength)
 	int min_params = 1;
 	int max_params = 1;
 	BuiltInFunctionType bif;
+	char *suffix = func_name + 3;
 
-	if (!strnicmp(func_name, "LV_", 3)) // ListView function.
+	if (!strnicmp(func_name, "LV_", 3)) // It's a ListView function.
 	{
-		char *suffix = func_name + 3;
-		if (!stricmp(suffix, "GetNextItem"))
+		suffix = func_name + 3;
+		if (!stricmp(suffix, "GetNext"))
 		{
-			bif = BIF_LV_GetNextItem;
+			bif = BIF_LV_GetNextOrCount;
 			min_params = 0;
 			max_params = 2;
 		}
-		//else if (!stricmp(suffix, "SetCol"))
-		//{
-		//	bif = BIF_LV_SetCol;
-		//	min_params = 2;
-		//	max_params = 3;
-		//}
+		else if (!stricmp(suffix, "GetCount"))
+		{
+			bif = BIF_LV_GetNextOrCount;
+			min_params = 0; // But leave max at its default of 1.
+		}
+		else if (!stricmp(suffix, "GetText"))
+		{
+			bif = BIF_LV_GetText;
+			min_params = 2;
+			max_params = 3;
+		}
+		else if (!stricmp(suffix, "Add"))
+		{
+			bif = BIF_LV_AddInsertModify;
+			min_params = 0; // 0 params means append a blank row.
+			max_params = 10000; // An arbitrarily high limit that will never realistically be reached.
+		}
+		else if (!stricmp(suffix, "Insert"))
+		{
+			bif = BIF_LV_AddInsertModify;
+			// Leave min_params at 1.  Passing only 1 param to it means "insert a blank row".
+			max_params = 10000; // An arbitrarily high limit that will never realistically be reached.
+		}
+		else if (!stricmp(suffix, "Modify"))
+		{
+			bif = BIF_LV_AddInsertModify; // Although it shares the same function with "Insert", it can still have its own min/max params.
+			min_params = 2;
+			max_params = 10000; // An arbitrarily high limit that will never realistically be reached.
+		}
+		else if (!stricmp(suffix, "Delete"))
+		{
+			bif = BIF_LV_Delete;
+			min_params = 0; // Leave max at its default of 1.
+		}
+		else if (!stricmp(suffix, "InsertCol"))
+		{
+			bif = BIF_LV_InsertModifyDeleteCol;
+			// Leave min_params at 1 because inserting a blank column ahead of the first column
+			// does not seem useful enough to sacrifice the no-parameter mode, which might have
+			// potential future uses.
+			max_params = 3;
+		}
+		else if (!stricmp(suffix, "ModifyCol"))
+		{
+			bif = BIF_LV_InsertModifyDeleteCol;
+			min_params = 0;
+			max_params = 3;
+		}
+		else if (!stricmp(suffix, "DeleteCol"))
+		{
+			bif = BIF_LV_InsertModifyDeleteCol; // Leave min/max set to 1.
+		}
+		else if (!stricmp(suffix, "SetImageList"))
+		{
+			bif = BIF_LV_SetImageList;
+			max_params = 2; // Leave min at 1.
+		}
+		else
+			return NULL;
+	}
+	else if (!strnicmp(func_name, "IL_", 3)) // It's an ImageList function.
+	{
+		suffix = func_name + 3;
+		if (!stricmp(suffix, "Create"))
+		{
+			bif = BIF_IL_Create;
+			min_params = 0;
+			max_params = 3;
+		}
+		else if (!stricmp(suffix, "Destroy"))
+		{
+			bif = BIF_IL_Destroy; // Leave Min/Max set to 1.
+		}
+		else if (!stricmp(suffix, "Add"))
+		{
+			bif = BIF_IL_Add;
+			min_params = 2;
+			max_params = 4;
+		}
 		else
 			return NULL;
 	}
@@ -6343,7 +6419,9 @@ VarTypes Script::GetVarType(char *aVarName)
 	if (!stricmp(aVarName, "A_EndChar")) return VAR_ENDCHAR;
 	if (!stricmp(aVarName, "A_Gui")) return VAR_GUI;
 	if (!stricmp(aVarName, "A_GuiControl")) return VAR_GUICONTROL;
-	if (!stricmp(aVarName, "A_GuiControlEvent")) return VAR_GUICONTROLEVENT;
+	// v1.0.36: A_GuiEvent was added as a synonym for A_GuiControlEvent because it seems unlikely that
+	// A_GuiEvent will ever be needed for anything:
+	if (!stricmp(aVarName, "A_GuiControlEvent") || !stricmp(aVarName, "A_GuiEvent")) return VAR_GUICONTROLEVENT;
 	if (!stricmp(aVarName, "A_EventInfo")) return VAR_EVENTINFO; // It's called "EventInfo" vs. "GuiEventInfo" because it applies to non-Gui events such as OnClipboardChange.
 	if (!stricmp(aVarName, "A_GuiWidth")) return VAR_GUIWIDTH;
 	if (!stricmp(aVarName, "A_GuiHeight")) return VAR_GUIHEIGHT;
@@ -6451,7 +6529,10 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 				if (!deref->is_function)
 					continue;
 				if (   !(deref->func = FindFunc(deref->marker, deref->length))   ) // An earlier stage has ensured that if the function exists, it's mJumpToLine is non-NULL.
+				{
+					abort = true; // So that the caller doesn't also report an error.
 					return line->PreparseError("Call to nonexistent function.", deref->marker);
+				}
 				Func &func = *deref->func; // For performance and convenience.
 				// Ealier stage has ensured that strchr() will always find an open-parenthesis:
 				for (deref->param_count = 0, param_start = omit_leading_whitespace(strchr(deref->marker, '(') + 1);;)
@@ -6460,14 +6541,20 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 					if (*param_start == ')') // No more params.
 						break;
 					if (*param_start == ',')
+					{
+						abort = true; // So that the caller doesn't also report an error.
 						return line->PreparseError(ERR_BLANK_PARAM, deref->marker);
+					}
 					// Although problems such as blank/empty parameters and missing close-paren were already
 					// checked by DefineFunc(), that was done only for the function's formal definition, not
 					// the calls to it.  And although parentheses were balanced in all expressions at an earlier
 					// stage, it's done again here in case function calls are ever allowed to be occur in
 					// a non-expression (or dynamic functions calls such as FnArray%i%() are ever supported):
 					if (!*param_start)
+					{
+						abort = true; // So that the caller doesn't also report an error.
 						return line->PreparseError(ERR_MISSING_CLOSE_PAREN, deref->marker);
+					}
 
 					// Find the end of this function-param by taking into account nested parentheses, omitting
 					// from consideration any parentheses inside of quoted/literal strings.  When this loop is done,
@@ -6509,9 +6596,12 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 							// inside any mandatory-numeric arg that is an expression such as x=="red,blue"
 							in_quotes = !in_quotes;
 						else if (!c) // This function lacks a closing paren.
+						{
 							// Might happen if this is a syntax error not catchable by the earlier stage of syntax
 							// checking (paren balancing, quote balancing, etc.)
+							abort = true; // So that the caller doesn't also report an error.
 							return line->PreparseError(ERR_MISSING_CLOSE_PAREN, deref->marker);
+						}
 						//else it's some other, non-special character, so ignore it.
 					} // for() that finds the end of this param of this function.
 
@@ -6519,7 +6609,10 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 					// one that terminates this parameter of this function).
 
 					if (deref->param_count >= func.mParamCount) // Check this every iteration to avoid going beyond MAX_FUNCTION_PARAMS.
+					{
+						abort = true; // So that the caller doesn't also report an error.
 						return line->PreparseError("Too many params passed to function.", deref->marker);
+					}
 					// Below relies on the above check having been done first to avoid reading beyond the
 					// end of the mParam array.
 					// If this parameter is formally declared as ByRef, report a load-time error if
@@ -6533,7 +6626,10 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 						for (cp = param_start, param_last_char = omit_trailing_whitespace(param_start, param_end - 1)
 							; cp <= param_last_char; ++cp)
 							if (strchr(EXPR_ALL_SYMBOLS, *cp))
+							{
+								abort = true; // So that the caller doesn't also report an error.
 								return line->PreparseError(ERR_BYREF, param_start);   // param_start seems more informative than func.mParam[deref->param_count].var->mName
+							}
 						// Below relies on the above having been done because the above should prevent
 						// any is_function derefs from being possible since their parentheses would have been caught
 						// as an error:
@@ -6548,7 +6644,10 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 								break;
 							}
 						if (!found)
+						{
+							abort = true; // So that the caller doesn't also report an error.
 							return line->PreparseError(ERR_BYREF, param_start); // param_start seems more informative than func.mParam[deref->param_count].var->mName
+						}
 					}
 
 					++deref->param_count;
@@ -6559,13 +6658,19 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 					{
 						param_start = omit_leading_whitespace(param_start + 1);
 						if (*param_start == ')')
+						{
+							abort = true; // So that the caller doesn't also report an error.
 							return line->PreparseError(ERR_BLANK_PARAM, param_start); // Report param_start vs. aBuf to give an idea of where the blank parameter is in a possibly long list of params.
+						}
 					}
 					//else it might be ')', in which case the next iteration will handle it.
 					// Above has ensured that param_start now points to the next parameter, or ')' if none.
 				} // for each parameter of this function call.
 				if (deref->param_count < func.mMinParams)
+				{
+					abort = true; // So that the caller doesn't also report an error.
 					return line->PreparseError("Too few params passed to function.", deref->marker);
+				}
 			} // for each deref of this arg
 		} // for each arg of this line
 
@@ -6646,7 +6751,7 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 			// which will become the caller's mRelatedLine.  UPDATE: Return the
 			// END_BLOCK line itself so that the caller can differentiate between
 			// a NULL due to end-of-script and a NULL caused by an error:
-			return aFindBlockEnd ? line
+			return aFindBlockEnd ? line  // Doesn't seem necessary to set abort to true.
 				: line->PreparseError("Attempt to close a non-existent block.");
 		default: // Continue line-by-line.
 			line = line->mNextLine;
@@ -10234,7 +10339,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	case ACT_SETFORMAT:
 		// For now, it doesn't seem necessary to have runtime validation of the first parameter.
 		// Just ignore the command if it's not valid:
-		if (!stricmp(ARG1, "float"))
+		if (!stricmp(ARG1, "Float"))
 		{
 			// -2 to allow room for the letter 'f' and the '%' that will be added:
 			if (strlen(ARG2) >= sizeof(g.FormatFloat) - 2) // A variable that resolved to something too long.
@@ -10250,7 +10355,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			// Note that %f can handle doubles in MSVC++:
 			sprintf(g.FormatFloat, "%%%s%sf", ARG2, dot_pos ? "" : ".");
 		}
-		else if (!stricmp(ARG1, "integer"))
+		else if (!stricmp(ARG1, "Integer"))
 		{
 			switch(*ARG2)
 			{
