@@ -3227,6 +3227,11 @@ ResultType Line::WinSet(char *aAttrib, char *aValue, char *aTitle, char *aText
 		// to the bottom:
 		SetWindowPos(target_window, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
 		break;
+	case WINSET_TOP:
+		// Note: SWP_NOACTIVATE must be specified otherwise the target window often/always fails to go
+		// to the bottom:
+		SetWindowPos(target_window, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
+		break;
 
 	case WINSET_TRANSPARENT:
 	case WINSET_TRANSCOLOR:
@@ -9282,7 +9287,7 @@ ResultType Line::FileCreateDir(char *aDirSpec)
 	DWORD attr = GetFileAttributes(aDirSpec);
 	if (attr != 0xFFFFFFFF)  // aDirSpec already exists.
 	{
-		if ((attr & FILE_ATTRIBUTE_DIRECTORY))
+		if (attr & FILE_ATTRIBUTE_DIRECTORY)
 			g_ErrorLevel->Assign(ERRORLEVEL_NONE);  // Indicate success since it already exists as a dir.
 		// else leave as failure, since aDirSpec exists as a file, not a dir.
 		return OK;
@@ -10098,9 +10103,8 @@ int Line::FileSetAttrib(char *aAttributes, char *aFilePattern, FileLoopModeType 
 		for (; file_found; file_found = FindNextFile(file_search, &current_file))
 		{
 			LONG_OPERATION_UPDATE
-			if (!(current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
-				continue;
-			if (!strcmp(current_file.cFileName, "..") || !strcmp(current_file.cFileName, "."))
+			if (!(current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+				|| !strcmp(current_file.cFileName, "..") || !strcmp(current_file.cFileName, "."))
 				continue; // Never recurse into these.
 			// This will build the string CurrentDir+SubDir+FilePatternOrName.
 			// If FilePatternOrName doesn't contain a wildcard, the recursion
@@ -10302,9 +10306,8 @@ int Line::FileSetTime(char *aYYYYMMDD, char *aFilePattern, char aWhichTime
 		for (; file_found; file_found = FindNextFile(file_search, &current_file))
 		{
 			LONG_OPERATION_UPDATE
-			if (!(current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
-				continue;
-			if (!strcmp(current_file.cFileName, "..") || !strcmp(current_file.cFileName, "."))
+			if (!(current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+				|| !strcmp(current_file.cFileName, "..") || !strcmp(current_file.cFileName, "."))
 				continue;
 			snprintf(target_filespec, sizeof(target_filespec), "%s%s\\%s"
 				, file_path, current_file.cFileName, naked_filename_or_pattern);
@@ -10594,7 +10597,7 @@ bool Line::Util_RemoveDir (const char *szInputSource, bool bRecurse)
 
 
 ///////////////////////////////////////////////////////////////////////////////
-// TAKEN FROM THE AUTOIT3 SOURCE
+// TAKEN FROM THE AUTOIT3 SOURCE (but there have been many changes).
 ///////////////////////////////////////////////////////////////////////////////
 // Util_CopyFile()
 // (moves files too)
@@ -10603,29 +10606,18 @@ bool Line::Util_RemoveDir (const char *szInputSource, bool bRecurse)
 
 int Line::Util_CopyFile(const char *szInputSource, const char *szInputDest, bool bOverwrite, bool bMove)
 {
-	WIN32_FIND_DATA	findData;
-	HANDLE			hSearch;
-	bool			bLoop;
-	bool			bFound = false;				// Not found initially
-	BOOL			bRes;
-
 	char			szSource[_MAX_PATH+1];
 	char			szDest[_MAX_PATH+1];
 	char			szExpandedDest[MAX_PATH+1];
 	char			szTempPath[_MAX_PATH+1];
-
 	char			szDrive[_MAX_PATH+1];
 	char			szDir[_MAX_PATH+1];
 	char			szFile[_MAX_PATH+1];
 	char			szExt[_MAX_PATH+1];
-	bool			bDiffVol;
 
 	// Get local version of our source/dest with full path names, strip trailing \s
 	Util_GetFullPathName(szInputSource, szSource);
 	Util_GetFullPathName(szInputDest, szDest);
-
-	// Check if the files are on different volumes (affects how we do a Move operation)
-	bDiffVol = Util_IsDifferentVolumes(szSource, szDest);
 
 	// If the source or dest is a directory then add *.* to the end
 	if (Util_IsDir(szSource))
@@ -10633,101 +10625,78 @@ int Line::Util_CopyFile(const char *szInputSource, const char *szInputDest, bool
 	if (Util_IsDir(szDest))
 		strcat(szDest, "\\*.*");
 
-
 	// Split source into file and extension (we need this info in the loop below to recontstruct the path)
 	_splitpath( szSource, szDrive, szDir, szFile, szExt );
 
 	// Note we now rely on the SOURCE being the contents of szDrive, szDir, szFile, etc.
 
-	// Does the source file exist?
-	hSearch = FindFirstFile(szSource, &findData);
-	bLoop = true;
-
-	// AutoHotkey:
-	int failure_count = 0;
 	LONG_OPERATION_INIT
 
-	while (hSearch != INVALID_HANDLE_VALUE && bLoop == true)
+	bool is_found;
+	int failure_count;
+	WIN32_FIND_DATA	findData;
+	HANDLE hSearch = FindFirstFile(szSource, &findData);
+
+	for (failure_count = 0, is_found = (hSearch != INVALID_HANDLE_VALUE)
+		; is_found
+		; is_found = FindNextFile(hSearch, &findData))
 	{
-		LONG_OPERATION_UPDATE  // AutoHotkey
-		bFound = true;							// Found at least one match
+		LONG_OPERATION_UPDATE
 
 		// Make sure the returned handle is a file and not a directory before we
 		// try and do copy type things on it!
-		if ( (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != FILE_ATTRIBUTE_DIRECTORY)
+		if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) // dwFileAttributes should never be invalid (0xFFFFFFFF) in this case.
+			continue;
+
+		// Expand the destination based on this found file
+		Util_ExpandFilenameWildcard(findData.cFileName, szDest, szExpandedDest);
+	
+		// The find struct only returns the file NAME, we need to reconstruct the path!
+		strcpy(szTempPath, szDrive);	
+		strcat(szTempPath, szDir);
+		strcat(szTempPath, findData.cFileName);
+
+		// Fixed for v1.0.36.01: This section has been revised to avoid unnecessary calls; but more
+		// importantly, it now avoids the deletion and complete loss of a file when it is copied or
+		// moved onto itself.  That used to happen because any existing destination file used to be
+		// deleted prior to attempting the move/copy.
+		if (bMove)  // Move vs. copy mode.
 		{
-			// Expand the destination based on this found file
-			Util_ExpandFilenameWildcard(findData.cFileName, szDest, szExpandedDest);
-		
-			// The find struct only returns the file NAME, we need to reconstruct the path!
-			strcpy(szTempPath, szDrive);	
-			strcat(szTempPath, szDir);
-			strcat(szTempPath, findData.cFileName);
+			// Note that MoveFile() is capable of moving a file to a different volume, regardless of
+			// operating system version.  That's enough for what we need because this function never
+			// moves directories, only files.
 
-			// Does the destination exist? - delete it first if it does (unless we not overwriting)
-			if ( Util_DoesFileExist(szExpandedDest) )
+			// The following call will report success if source and dest are the same file, even if
+			// source is something like "..\Folder\Filename.txt" and dest is something like
+			// "C:\Folder\Filename.txt" (or if source is an 8.3 filename and dest is the long name
+			// of the same file).  This is good because it avoids the need to devise code
+			// to determine whether two different path names refer to the same physical file
+			// (note that GetFullPathName() has shown itself to be inadequate for this purpose due
+			// to problems with short vs. long names, UNC vs. mapped drive, and possibly NTFS hard
+			// links (aliases) that might all cause two different filenames to point to the same
+			// physical file on disk (hopefully MoveFile handles all of these correctly by indicating
+			// success [below] when a file is moved onto itself, though it has only been tested for
+			// basic cases of relative vs. absolute path).
+			if (!MoveFile(szTempPath, szExpandedDest))
 			{
-				if (bOverwrite == false)
-				{
-					// AutoHotkey:
-					++failure_count;
-					if (FindNextFile(hSearch, &findData) == FALSE)
-						bLoop = false;
-					continue;
-					//FindClose(hSearch);
-					//return false;					// Destination already exists and we not overwriting
-				}
-				else
-					// AutoHotkey:
-					if (!DeleteFile(szExpandedDest))
-					{
-						++failure_count;
-						if (FindNextFile(hSearch, &findData) == FALSE)
-							bLoop = false;
-						continue;
-					}
+				// If overwrite mode was not specified by the caller, or it was but the existing
+				// destination file cannot be deleted (perhaps because it is a folder rather than
+				// a file), or it can be deleted but the source cannot be moved, indicate a failure.
+				// But by design, continue the operation.  The following relies heavily on
+				// short-circuit boolean evaluation order:
+				if (   !(bOverwrite && DeleteFile(szExpandedDest) && MoveFile(szTempPath, szExpandedDest))   )
+					++failure_count; // At this stage, any of the above 3 being false is cause for failure.
+				//else everything succeeded, so nothing extra needs to be done.  In either case,
+				// continue on to the next file.
 			}
-		
-			// Move or copy operation?
-			if (bMove == true)
-			{
-				if (bDiffVol == false)
-				{
-					bRes = MoveFile(szTempPath, szExpandedDest);
-				}
-				else
-				{
-					// Do a copy then delete (simulated copy)
-					if ( (bRes = CopyFile(szTempPath, szExpandedDest, FALSE)) != FALSE )
-						bRes = DeleteFile(szTempPath);
-				}
-			}
-			else
-				bRes = CopyFile(szTempPath, szExpandedDest, FALSE);
-			
-			if (bRes == FALSE)
-			{
-				// AutoHotkey:
+		}
+		else // The mode is "Copy" vs. "Move"
+			if (!CopyFile(szTempPath, szExpandedDest, !bOverwrite)) // Force it to fail if bOverwrite==false.
 				++failure_count;
-				if (FindNextFile(hSearch, &findData) == FALSE)
-					bLoop = false;
-				continue;
-				// FindClose(hSearch);
-				// return false;						// Error copying/moving one of the files
-			}
-
-		} // End If
-
-		if (FindNextFile(hSearch, &findData) == FALSE)
-			bLoop = false;
-
-	} // End while
+	} // for() each file.
 
 	FindClose(hSearch);
-
-	// AutoHotkey:
 	return failure_count;
-	//return bFound;
 
 } // Util_CopyFile()
 
@@ -10864,13 +10833,12 @@ bool Line::Util_CreateDir(const char *szDirName)
 	char	*psz_Loc = NULL;
 
 	dwTemp = GetFileAttributes(szDirName);
-	if (dwTemp == FILE_ATTRIBUTE_DIRECTORY)
-		return true;							// Directory exists, yay!
 
 	if (dwTemp == 0xffffffff) 
 	{	// error getting attribute - what was the error?
-		if (GetLastError() == ERROR_PATH_NOT_FOUND) 
+		switch (GetLastError())
 		{
+		case ERROR_PATH_NOT_FOUND:
 			// Create path
 			szTemp = new char[strlen(szDirName)+1];
 			strcpy(szTemp, szDirName);
@@ -10895,21 +10863,19 @@ bool Line::Util_CreateDir(const char *szDirName)
 
 				return bRes;
 			}
-		} 
-		else 
-		{
-			if (GetLastError() == ERROR_FILE_NOT_FOUND) 
-			{
-				// Create directory
-				if (CreateDirectory(szDirName, NULL))
-					return true;
-				else
-					return false;
-			}
-		}
-	} 
+			// All paths above "return".
+		case ERROR_FILE_NOT_FOUND:
+			// Create directory
+			return CreateDirectory(szDirName, NULL);
+		// Otherwise, it's some unforeseen error, so fall through to the end, which reports failure.
+		} // switch()
+	}
+	else // The specified name already exists as a file or directory.
+		if (dwTemp & FILE_ATTRIBUTE_DIRECTORY) // Fixed for v1.0.36.01 (previously it used == vs &).
+			return true;							// Directory exists, yay!
+		//else it exists, but it's a file! Not allowed, so fall through and report failure.
 			
-	return false;								// Unforeseen error
+	return false;
 
 } // Util_CreateDir()
 
@@ -10951,23 +10917,11 @@ bool Line::Util_DoesFileExist(const char *szFilename)
 
 
 
-///////////////////////////////////////////////////////////////////////////////
-// TAKEN FROM THE AUTOIT3 SOURCE
-///////////////////////////////////////////////////////////////////////////////
-// Util_IsDir()
-// Returns true if the path is a directory
-///////////////////////////////////////////////////////////////////////////////
-
-bool Line::Util_IsDir(const char *szPath)
+bool Line::Util_IsDir(const char *szPath) // Returns true if the path is a directory
 {
-	DWORD dwTemp;
-
-	dwTemp = GetFileAttributes(szPath);
-	if ( dwTemp != 0xffffffff && (dwTemp & FILE_ATTRIBUTE_DIRECTORY) )
-		return true;
-	else
-		return false;
-} // Util_IsDir
+	DWORD dwTemp = GetFileAttributes(szPath);
+	return dwTemp != 0xffffffff && (dwTemp & FILE_ATTRIBUTE_DIRECTORY);
+}
 
 
 
@@ -10982,7 +10936,6 @@ bool Line::Util_IsDir(const char *szPath)
 void Line::Util_GetFullPathName(const char *szIn, char *szOut)
 {
 	char	*szFilePart;
-
 	GetFullPathName(szIn, _MAX_PATH, szOut, &szFilePart);
 	Util_StripTrailingDir(szOut);
 } // Util_GetFullPathName()

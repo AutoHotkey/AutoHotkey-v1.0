@@ -1052,6 +1052,7 @@ char *ConvertFilespecToCorrectCase(char *aFullFileSpec)
 
 
 char *FileAttribToStr(char *aBuf, DWORD aAttr)
+// Caller must ensure that aAttr is valid (i.e. that it's not 0xFFFFFFFF).
 {
 	if (!aBuf) return aBuf;
 	int length = 0;

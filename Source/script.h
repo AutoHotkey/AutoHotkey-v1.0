@@ -601,8 +601,8 @@ enum DriveGetCmds {DRIVEGET_CMD_INVALID, DRIVEGET_CMD_LIST, DRIVEGET_CMD_FILESYS
 	, DRIVEGET_CMD_STATUSCD, DRIVEGET_CMD_CAPACITY};
 
 enum WinSetAttributes {WINSET_INVALID, WINSET_TRANSPARENT, WINSET_TRANSCOLOR, WINSET_ALWAYSONTOP
-	, WINSET_BOTTOM, WINSET_STYLE, WINSET_EXSTYLE, WINSET_REDRAW, WINSET_ENABLE, WINSET_DISABLE, WINSET_REGION};
-
+	, WINSET_BOTTOM, WINSET_TOP, WINSET_STYLE, WINSET_EXSTYLE, WINSET_REDRAW, WINSET_ENABLE, WINSET_DISABLE
+	, WINSET_REGION};
 
 
 class Line
@@ -1536,6 +1536,7 @@ public:
 		if (!stricmp(aBuf, "TransColor")) return WINSET_TRANSCOLOR;
 		if (!stricmp(aBuf, "AlwaysOnTop") || !stricmp(aBuf, "Topmost")) return WINSET_ALWAYSONTOP;
 		if (!stricmp(aBuf, "Bottom")) return WINSET_BOTTOM;
+		if (!stricmp(aBuf, "Top")) return WINSET_TOP;
 		if (!stricmp(aBuf, "Style")) return WINSET_STYLE;
 		if (!stricmp(aBuf, "ExStyle")) return WINSET_EXSTYLE;
 		if (!stricmp(aBuf, "Redraw")) return WINSET_REDRAW;

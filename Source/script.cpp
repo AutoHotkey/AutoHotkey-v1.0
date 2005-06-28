@@ -1302,22 +1302,28 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 						do_ltrim = (next_option[5] != '0');  // i.e. Only an explicit zero will turn it off.
 					else if (!strnicmp(next_option, "RTrim", 5))
 						do_rtrim = (next_option[5] != '0');
-
-					// Within this terminated option substring, allow the characters to be adjacent to
-					// improve usability:
-					for (; *next_option; ++next_option)
+					else
 					{
-						switch (*next_option)
+						// Fix for v1.0.36.01: Missing "else" above, because otherwise, the option Join`r`n
+						// would be processed above but also be processed again below, this time seeing the
+						// accent and thinking it's the signal to treat accents literally for the entire
+						// continuation section rather than as escape characters.
+						// Within this terminated option substring, allow the characters to be adjacent to
+						// improve usability:
+						for (; *next_option; ++next_option)
 						{
-						case '`': // Not using g_EscapeChar (reduces code size/complexity).
-							literal_escapes = true;
-							break;
-						case '%':
-							literal_derefs = true;
-							break;
-						case ',': // Not using g_delimiter (reduces code size/complexity).
-							literal_delimiters = false;
-							break;
+							switch (*next_option)
+							{
+							case '`': // Not using g_EscapeChar (reduces code size/complexity).
+								literal_escapes = true;
+								break;
+							case '%':
+								literal_derefs = true;
+								break;
+							case ',': // Not using g_delimiter (reduces code size/complexity).
+								literal_delimiters = false;
+								break;
+							}
 						}
 					}
 
@@ -5088,6 +5094,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					return ScriptError(ERR_ON_OFF_TOGGLE, NEW_RAW_ARG2);
 				break;
 			case WINSET_BOTTOM:
+			case WINSET_TOP:
 			case WINSET_REDRAW:
 			case WINSET_ENABLE:
 			case WINSET_DISABLE:
@@ -8271,10 +8278,9 @@ ResultType Line::PerformLoop(char **apReturnValue, WIN32_FIND_DATA *apCurrentFil
 
 	for (; file_found; file_found = FindNextFile(file_search, &new_current_file))
 	{
-		if (!(new_current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) // We only want directories.
+		if (!(new_current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) // We only want directories.
+			|| !strcmp(new_current_file.cFileName, "..") || !strcmp(new_current_file.cFileName, ".")) // Never recurse into these.
 			continue;
-		if (!strcmp(new_current_file.cFileName, "..") || !strcmp(new_current_file.cFileName, "."))
-			continue; // Never recurse into these.
 		// Build the new search pattern, which consists of the original file_path + the subfolder name
 		// we just discovered + the original pattern:
 		snprintf(append_location, (int)(sizeof(file_path) - (append_location - file_path)), "%s\\%s"  // Cast to int to preserve any negative results.
