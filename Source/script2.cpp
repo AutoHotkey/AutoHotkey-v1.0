@@ -4935,6 +4935,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 
 	case WM_HOTKEY: // As a result of this app having previously called RegisterHotkey().
 	case AHK_HOOK_HOTKEY:  // Sent from this app's keyboard or mouse hook.
+	case AHK_HOTSTRING: // Added for v1.0.36.02 so that hotstrings work even while an InputBox or other non-standard msg pump is running.
 	{
 		// Post it with a NULL hwnd to avoid any chance that our message pump will dispatch it
 		// back to us.  We want these events to always be handled there, where almost all new
@@ -11648,7 +11649,10 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 		ExprTokenType &this_param = *aParam[i + 1];  // This and the next are resolved for performance and convenience.
 		DYNAPARM &this_dyna_param = dyna_param[arg_count];
 
-		// If the arg's contents is a string, resolve it once here to simplify things that reference it later:
+		// If the arg's contents is a string, resolve it once here to simplify things that reference it later.
+		// NOTE: aResultToken.buf is not used here to resolve a number to a string because although it would
+		// add a little flexibility by allowing up to one string parameter to be a numeric expression, it
+		// seems to add more complexity and confusion than its worth to other sections further below:
 		if (IS_NUMERIC(this_param.symbol))
 			arg_as_string = NULL;
 		else

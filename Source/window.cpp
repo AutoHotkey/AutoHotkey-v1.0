@@ -569,7 +569,7 @@ HWND WinExist(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
 	ws.mAlreadyVisited = aAlreadyVisited;
 	ws.mAlreadyVisitedCount = aAlreadyVisitedCount;
 
-	if (ws.mCriterion == CRITERION_ID) // "ahk_id" will be satisified if that HWND still exists and is valid.
+	if (ws.mCriteria & CRITERION_ID) // "ahk_id" will be satisified if that HWND still exists and is valid.
 	{
 		// Explicitly allow HWND_BROADCAST for all commands that use WinExist (which is just about all
 		// window commands), even though it's only valid with ScriptSendMessage() and ScriptPostMessage().
@@ -584,7 +584,7 @@ HWND WinExist(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
 
 		// Otherwise, the window is valid and detectible.
 		ws.SetCandidate(ws.mCriterionHwnd);
-		if (!ws.IsMatch()) // This checks if it matches any WinText/ExcludeTitle, as well as anything in the aAlreadyVisited list.
+		if (!ws.IsMatch()) // Checks if it matches any other criteria: WinTitle, WinText, ExcludeTitle, and anything in the aAlreadyVisited list.
 			return NULL;
 		//else fall through to the section below, since ws.mFoundCount and ws.mFoundParent were set by ws.IsMatch().
 	}
@@ -889,12 +889,12 @@ HWND ControlExist(HWND aParentWindow, char *aClassNameAndNum)
 	{
 		// Tell EnumControlFind() to search by Class+Num.  Don't call ws.SetCriteria() because
 		// that has special handling for ahk_id, ahk_class, etc. in the first parameter.
-		strlcpy(ws.mCriterionBuf, aClassNameAndNum, sizeof(ws.mCriterionBuf));
+		strlcpy(ws.mCriterionClass, aClassNameAndNum, sizeof(ws.mCriterionClass));
 		ws.mCriterionText = "";
 	}
 	else // Tell EnumControlFind() to search the control's text.
 	{
-		*ws.mCriterionBuf = '\0';
+		*ws.mCriterionClass = '\0';
 		ws.mCriterionText = aClassNameAndNum;
 	}
 
@@ -906,7 +906,7 @@ HWND ControlExist(HWND aParentWindow, char *aClassNameAndNum)
 		// to match the title/text of another control), search again only after the search
 		// for the ClassNameAndNum didn't turn up anything.
 		// Tell EnumControlFind() to search the control's text.
-		*ws.mCriterionBuf = '\0';
+		*ws.mCriterionClass = '\0';
 		ws.mCriterionText = aClassNameAndNum;
 		EnumChildWindows(aParentWindow, EnumControlFind, (LPARAM)&ws); // ws.mFoundChild is already initialized to NULL due to the above check.
 	}
@@ -919,7 +919,7 @@ HWND ControlExist(HWND aParentWindow, char *aClassNameAndNum)
 BOOL CALLBACK EnumControlFind(HWND aWnd, LPARAM lParam)
 {
 	WindowSearch &ws = *((WindowSearch *)lParam);  // For performance and convenience.
-	if (*ws.mCriterionBuf) // Caller told us to search by class name and number.
+	if (*ws.mCriterionClass) // Caller told us to search by class name and number.
 	{
 		int length = GetClassName(aWnd, ws.mCandidateTitle, WINDOW_CLASS_SIZE); // Restrict the length to a small fraction of the buffer's size (also serves to leave room to append the sequence number).
 		// Below: i.e. this control's title (e.g. List) in contained entirely
@@ -932,11 +932,11 @@ BOOL CALLBACK EnumControlFind(HWND aWnd, LPARAM lParam)
 		// more certain to work even though it's a little ugly.  It's also
 		// necessary to do this in a way functionally identical to the below
 		// so that Window Spy's sequence numbers match the ones generated here:
-		if (length && !strnicmp(ws.mCriterionBuf, ws.mCandidateTitle, length)) // Preliminary match of base class name.
+		if (length && !strnicmp(ws.mCriterionClass, ws.mCandidateTitle, length)) // Preliminary match of base class name.
 		{
 			// mAlreadyVisitedCount was initialized to zero by WindowSearch's constructor.  It is used
 			// to accumulate how many quasi-matches on this class have been found so far.  Also,
-			// comparing ws.mAlreadyVisitedCount to atoi(ws.mCriterionBuf + length) would not be
+			// comparing ws.mAlreadyVisitedCount to atoi(ws.mCriterionClass + length) would not be
 			// the same as the below examples such as the following:
 			// Say the ClassNN being searched for is List01 (where List0 is the class name and 1
 			// is the sequence number). If a class called "List" exists in the parent window, it
@@ -944,7 +944,7 @@ BOOL CALLBACK EnumControlFind(HWND aWnd, LPARAM lParam)
 			// which is correctly deemed not to match "01".  By contrast, the atoi() method would give
 			// the wrong result because the two numbers are numerically equal.
 			_itoa(++ws.mAlreadyVisitedCount, ws.mCandidateTitle, 10);  // Overwrite the buffer to contain only the count.
-			if (!stricmp(ws.mCandidateTitle, ws.mCriterionBuf + length)) // The counts match too, so it's a full match.
+			if (!stricmp(ws.mCandidateTitle, ws.mCriterionClass + length)) // The counts match too, so it's a full match.
 			{
 				ws.mFoundChild = aWnd; // Save this in here for return to the caller.
 				return FALSE; // stop the enumeration.
@@ -1450,16 +1450,39 @@ ResultType WindowSearch::SetCriteria(char *aTitle, char *aText, char *aExcludeTi
 	mCriterionText = aText;
 	mCriterionExcludeText = aExcludeText;
 
-	WindowCriteria orig_criterion = mCriterion;
-	mCriterion = CRITERION_TITLE;  // Set default, possibly to be overridden below.
+	DWORD orig_criteria = mCriteria;
+	char *ahk_flag, *cp, buf[MAX_VAR_NAME_LENGTH + 1];
+	int criteria_count;
+	size_t size;
 
-	if (!strnicmp(aTitle, "ahk_", 4))
+	for (mCriteria = 0, ahk_flag = aTitle, criteria_count = 0;; ++criteria_count, ahk_flag += 4) // +4 only since an "ahk_" string that isn't qualified may have been found.
 	{
-		char *cp = aTitle + 4; // Use a temp. variable in case it turns out to be something like "ahk_something_else".
+		if (   !(ahk_flag = strcasestr(ahk_flag, "ahk_"))   ) // No other special strings are present.
+		{
+			if (!criteria_count) // Since no special "ahk_" criteria were present, it is CRITERION_TITLE by default.
+			{
+				mCriteria = CRITERION_TITLE; // In this case, there is only one criterion.
+				strlcpy(mCriterionTitle, aTitle, sizeof(mCriterionTitle));
+				mCriterionTitleLength = strlen(mCriterionTitle); // Pre-calculated for performance.
+			}
+			break;
+		}
+		// Since above didn't break, another instance of "ahk_" has been found. To reduce ambiguity,
+		// the following requires that any "ahk_" criteria beyond the first be preceded by at least
+		// one space or tab:
+		if (criteria_count && !IS_SPACE_OR_TAB(ahk_flag[-1])) // Relies on short-circuit boolean order.
+		{
+			--criteria_count; // Decrement criteria_count to compensate for the loop's increment.
+			continue;
+		}
+		// Since above didn't "continue", it meets the basic test.  But is it an exact match for one of the
+		// special criteria strings?  If not, it's really part of the title criterion instead.
+		cp = ahk_flag + 4;
 		if (!strnicmp(cp, "id", 2))
 		{
-			mCriterion = CRITERION_ID;
-			mCriterionHwnd = (HWND)ATOU64(cp + 2);
+			cp += 2;
+			mCriteria |= CRITERION_ID;
+			mCriterionHwnd = (HWND)ATOU64(cp);
 			if (mCriterionHwnd != HWND_BROADCAST && !IsWindow(mCriterionHwnd)) // Checked here once rather than each call to IsMatch().
 			{
 				mCriterionHwnd = NULL;
@@ -1468,33 +1491,76 @@ ResultType WindowSearch::SetCriteria(char *aTitle, char *aText, char *aExcludeTi
 		}
 		else if (!strnicmp(cp, "pid", 3))
 		{
-			mCriterion = CRITERION_PID;
-			mCriterionPID = ATOU(cp + 3);
+			cp += 3;
+			mCriteria |= CRITERION_PID;
+			mCriterionPID = ATOU(cp);
 		}
 		else if (!strnicmp(cp, "class", 5))
 		{
-			mCriterion = CRITERION_CLASS;
-			strlcpy(mCriterionBuf, omit_leading_whitespace(cp + 5), sizeof(mCriterionBuf));
-			// For performance, mCriterionBufLength is not set because it is not used.
+			cp += 5;
+			mCriteria |= CRITERION_CLASS;
+			strlcpy(mCriterionClass, omit_leading_whitespace(cp), sizeof(mCriterionClass)); // Copy all of the remaining string to simplify the below.
+			for (cp = mCriterionClass; cp = strstr(cp, "ahk_"); cp += 4)
+			{
+				// This loop truncates any other criteria from the class criteria.  It's not a complete
+				// solution because it doesn't validate that what comes after the "ahk_" string is a
+				// valid criterion name. But for it not to be and yet also be part of some valid class
+				// name seems far too unlikely to worry about.  It would have to be a legitimate class name
+				// such as "ahk_class SomeClassName ahk_wrong".
+				if (cp == mCriterionClass) // This check prevents underflow in the next check.
+				{
+					*cp = '\0';
+					break;
+				}
+				else
+					if (IS_SPACE_OR_TAB(cp[-1]))
+					{
+						cp[-1] = '\0';
+						break;
+					}
+					//else assume this "ahk_" string is part of the literal text, continue looping in case
+					// there is a legitimate "ahk_" string after this one.
+			} // for()
 		}
 		else if (!strnicmp(cp, "group", 5))
 		{
-			mCriterion = CRITERION_GROUP;
-			if (   !(mCriterionGroup = g_script.FindOrAddGroup(omit_leading_whitespace(cp + 5), true))   )
+			cp += 5;
+			mCriteria |= CRITERION_GROUP;
+			strlcpy(buf, omit_leading_whitespace(cp), sizeof(buf));
+			if (cp = StrChrAny(buf, " \t")) // Group names can't contain spaces, so terminate at the first one to exclude any "ahk_" criteria that come afterward.
+				*cp = '\0';
+			if (   !(mCriterionGroup = g_script.FindOrAddGroup(buf, true))   )
 				return FAIL; // Inform caller of invalid criteria.  No need to do anything else further below.
 		}
-	}
-	
-	if (mCriterion == CRITERION_TITLE) // Since the above didn't change the default, it stays CRITERION_TITLE.
-	{
-		strlcpy(mCriterionBuf, aTitle, sizeof(mCriterionBuf));
-		mCriterionBufLength = strlen(mCriterionBuf); // Pre-calculated for performance.
+		else // It doesn't qualify as a special criteria name even though it starts with "ahk_".
+		{
+			--criteria_count; // Decrement criteria_count to compensate for the loop's increment.
+			continue;
+		}
+		// Since above didn't return or continue, a valid "ahk_" criterion has been discovered.
+		// If this is the first such criterion, any text that lies to its left should be interpreted
+		// as CRITERION_TITLE.  However, for backward compatibility it seems best to disqualify any title
+		// consisting entirely of whitespace.  This is because some scripts might have a variable containing
+		// whitespace followed by the string ahk_class, etc. (however, any such whitespace is included as a
+		// literal part of the title criterion for flexibilty and backward compatibility).
+		if (!criteria_count && ahk_flag > omit_leading_whitespace(aTitle))
+		{
+			mCriteria |= CRITERION_TITLE;
+			// Omit exactly one space or tab from the title criterion. That space or tab is the one
+			// required to delimit the special "ahk_" string.  Any other spaces or tabs to the left of
+			// that one are considered literal (for flexibility):
+			size = ahk_flag - aTitle; // This will always be greater than one due to other checks above, which will result in at least one non-whitespace character in the title criterion.
+			if (size > sizeof(mCriterionTitle)) // Prevent overflow.
+				size = sizeof(mCriterionTitle);
+			strlcpy(mCriterionTitle, aTitle, size); // Copy only the eligible substring as the criteria.
+			mCriterionTitleLength = strlen(mCriterionTitle); // Pre-calculated for performance.
+		}
 	}
 
 	// Since this function doesn't change mCandidateParent, there is no need to update the candidate's
 	// attributes unless the type of criterion has changed or if mExcludeTitle became non-blank as
 	// a result of our action above:
-	if (mCriterion != orig_criterion || exclude_title_became_non_blank)
+	if (mCriteria != orig_criteria || exclude_title_became_non_blank)
 		UpdateCandidateAttributes(); // In case mCandidateParent isn't NULL, fetch different attributes based on what was set above.
 	//else for performance reasons, avoid unnecessary updates.
 	return OK;
@@ -1507,26 +1573,18 @@ void WindowSearch::UpdateCandidateAttributes()
 	// Nothing to do until SetCandidate() is called with a non-NULL candidate and SetCriteria()
 	// has been called for the first time (otherwise, mCriterionExcludeTitle and other things
 	// are not yet initialized:
-	if (!mCandidateParent || mCriterion == CRITERION_INVALID)
+	if (!mCandidateParent || !mCriteria)
 		return;
-
-	if (mCriterion == CRITERION_TITLE || *mCriterionExcludeTitle) // Need the window's title in both these cases.
+	if ((mCriteria & CRITERION_TITLE) || *mCriterionExcludeTitle) // Need the window's title in both these cases.
 		if (!GetWindowText(mCandidateParent, mCandidateTitle, sizeof(mCandidateTitle)))
 			*mCandidateTitle = '\0'; // Failure or blank title is okay.
-
-	switch(mCriterion)
-	{
-	case CRITERION_PID:  // In which case mCriterionPID should already be filled in, though it might be an explicitly specified zero.
+	if (mCriteria & CRITERION_PID) // In which case mCriterionPID should already be filled in, though it might be an explicitly specified zero.
 		GetWindowThreadProcessId(mCandidateParent, &mCandidatePID);
-		break;
-	case CRITERION_CLASS:
+	if (mCriteria & CRITERION_CLASS)
 		GetClassName(mCandidateParent, mCandidateClass, sizeof(mCandidateClass)); // Limit to WINDOW_CLASS_SIZE in this case since that's the maximum that can be searched.
-		break;
-	// Nothing to do in these cases:
-	//case CRITERION_TITLE:    Already handled higher above.
-	//case CRITERION_GROUP:    Can't be pre-processed at this stage.
-	//case CRITERION_ID:       It is mCandidateParent, which was set at an earlier stage.
-	}
+	// Nothing to do for these:
+	//CRITERION_GROUP:    Can't be pre-processed at this stage.
+	//CRITERION_ID:       It is mCandidateParent, which has already been set by SetCandidate().
 }
 
 
@@ -1536,66 +1594,53 @@ HWND WindowSearch::IsMatch(bool aInvert)
 // (title/pid/id/class/group) or NULL otherwise.  Upon NULL, it doesn't reset mFoundParent or mFoundCount
 // in case previous match(es) were found when mFindLastMatch is in effect.
 {
-	if (!mCandidateParent) // Nothing to check, so no match.
+	if (!mCandidateParent || !mCriteria) // Nothing to check, so no match.
 		return NULL;
 
-	switch(mCriterion)
+	if ((mCriteria & CRITERION_TITLE) && *mCriterionTitle)
 	{
-	case CRITERION_TITLE: // Listed first for performance, since it's the most common.
-		if (*mCriterionBuf)
+		switch(g.TitleMatchMode)
 		{
-			switch(g.TitleMatchMode)
-			{
-			case FIND_ANYWHERE:
-				if (!strstr(mCandidateTitle, mCriterionBuf))
-					return NULL;
-				break;
-			case FIND_IN_LEADING_PART:
-				if (strncmp(mCandidateTitle, mCriterionBuf, mCriterionBufLength))
-					return NULL;
-				break;
-			default: // Exact match.
-				if (strcmp(mCandidateTitle, mCriterionBuf))
-					return NULL;
-			}
-			// If above didn't return, it's a match so far so continue onward to the other checks.
+		case FIND_ANYWHERE:
+			if (!strstr(mCandidateTitle, mCriterionTitle))
+				return NULL;
+			break;
+		case FIND_IN_LEADING_PART:
+			if (strncmp(mCandidateTitle, mCriterionTitle, mCriterionTitleLength))
+				return NULL;
+			break;
+		default: // Exact match.
+			if (strcmp(mCandidateTitle, mCriterionTitle))
+				return NULL;
 		}
-		break;
-
-	case CRITERION_CLASS:
-		if (strcmp(mCandidateClass, mCriterionBuf)) // No match.
-			return NULL;
-		//else it's a match so far, but continue onward to check exclude-title/text.
-		break;
-
-	case CRITERION_PID:  // In which case mCriterionPID should already be filled in, though it might be an explicitly specified zero.
-		if (mCandidatePID != mCriterionPID)
-			return NULL;
-		//else it's a match so far, but continue onward to check exclude-title/text.
-		break;
-
-	case CRITERION_GROUP:
-		// This also handles the fact that mCriterionGroup might be NULL if the specified group
-		// does not exist or was never successfully created:
-		if (!mCriterionGroup || !mCriterionGroup->IsMember(mCandidateParent))
-			return NULL;
-		//else it's a match so far, but continue onward to check exclude-title/text (a little strange in this case, but might be useful).
-		break;
-
-	case CRITERION_ID: // Listed last since in terms of calling frequency, this case is hardly ever executed.
-		// Called this way from WinActive(), and possibly indirectly by an ahk_group that contains an ahk_id
-		// specification.  It's also called by WinGetList()'s EnumWindows(), though extremely rarely.
-		// It's also called this way from other places to determine whether an ahk_id window matches the
-		// other criteria such as WinText, ExcludeTitle, and mAlreadyVisited.
-		// mCriterionHwnd should already be filled in, though it might be an explicitly specified zero.
-		if (mCandidateParent != mCriterionHwnd) // IsWindow(mCriterionHwnd) was already called by SetCriteria().
-			return NULL;
-		//else it's a match so far, but continue onward to check exclude-title/text.
-		break;
-
-	default: // CRITERION_INVALID, etc.
-		return NULL;
+		// If above didn't return, it's a match so far so continue onward to the other checks.
 	}
+
+	if ((mCriteria & CRITERION_CLASS) && strcmp(mCandidateClass, mCriterionClass)) // Doesn't match required class name.
+		return NULL;
+	//else it's a match so far, but continue onward to check exclude-title/text.
+
+	// For the following, mCriterionPID would already be filled in, though it might be an explicitly specified zero.
+	if ((mCriteria & CRITERION_PID) && mCandidatePID != mCriterionPID) // Doesn't match required PID.
+		return NULL;
+	//else it's a match so far, but continue onward to check exclude-title/text.
+
+	// The following also handles the fact that mCriterionGroup might be NULL if the specified group
+	// does not exist or was never successfully created:
+	if ((mCriteria & CRITERION_GROUP) && (!mCriterionGroup || !mCriterionGroup->IsMember(mCandidateParent))) // Isn't a member of specified group.
+		return NULL;
+	//else it's a match so far, but continue onward to check exclude-title/text (a little strange in this case, but might be useful).
+
+	// CRITERION_ID is listed last since in terms of actual calling frequency, this part is hardly ever
+	// executed: It's only ever called this way from WinActive(), and possibly indirectly by an ahk_group
+	// that contains an ahk_id specification.  It's also called by WinGetList()'s EnumWindows(), though
+	// extremely rarely. It's also called this way from other places to determine whether an ahk_id window
+	// matches the other criteria such as WinText, ExcludeTitle, and mAlreadyVisited.
+	// mCriterionHwnd should already be filled in, though it might be an explicitly specified zero.
+	// Note: IsWindow(mCriterionHwnd) was already called by SetCriteria().
+	if ((mCriteria & CRITERION_ID) && mCandidateParent != mCriterionHwnd) // Doesn't match the required HWND.
+		return NULL;
+	//else it's a match so far, but continue onward to check exclude-title/text.
 
 	// The above would have returned if the candidate window isn't a match for what was specified by
 	// the script's WinTitle parameter.  So now check that the ExcludeTitle criterion is satisfied.
@@ -1640,7 +1685,7 @@ HWND WindowSearch::IsMatch(bool aInvert)
 			return NULL;
 	}
 
-	// Since the above didn't return or didn't need to be checked, it's a complete match.
+	// Since the above didn't return or none of the checks above were needed, it's a complete match.
 	// If mFindLastMatch is true, this new value for mFoundParent will stay in effect until
 	// overridden by another matching window later:
 	if (!aInvert)

@@ -1908,6 +1908,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	if (!this_key.used_as_prefix && !this_key.used_as_suffix)
 		return AllowKeyToGoToSystem;
 
+	bool is_key_up_hotkey = false; // Set default.
 	HotkeyIDType hotkey_id_with_flags = HOTKEY_ID_INVALID; // Set default.
 	HotkeyIDType hotkey_id_temp; // For informal/temp storage of the ID-without-flags.
 
@@ -1923,6 +1924,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		if (this_key.hotkey_to_fire_upon_release != HOTKEY_ID_INVALID)
 		{
 			hotkey_id_with_flags = this_key.hotkey_to_fire_upon_release;
+			is_key_up_hotkey = true; // Can't rely on (hotkey_id_with_flags & HOTKEY_KEY_UP) because some key-up hotkeys (such as the hotkey_up array) might not be flagged that way.
 			// The line below is done even though the down-event also resets it in case it is ever
 			// possible for keys to generate mulitple consecutive key-up events (faulty or unusual keyboards?)
 			this_key.hotkey_to_fire_upon_release = HOTKEY_ID_INVALID;
@@ -3067,12 +3069,13 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 			// Used as either a prefix for a hotkey or just a plain modifier for another key.
 			// ... && (*this_key.pForceToggle != NEUTRAL || this_key.was_just_used);
 			if ((!(this_key.no_suppress & NO_SUPPRESS_PREFIX) || this_key.hotkey_down_was_suppressed) // Down was suppressed.
+				&& !is_key_up_hotkey // v1.0.36.02: Prevents a hotkey such as "~5 up::" from generating double characters, regardless of whether it's paired with a "~5::" hotkey.
 				&& !suppress_to_prevent_toggle)
-				KeyEvent(KEYDOWN, vk, sc); // Substitute this to make up for the suppression.
+				KeyEvent(KEYDOWN, vk, sc); // Substitute this to make up for the suppression (a check higher above has already determined that no_supress==true).
 				// Now allow the up-event to go through.  The DOWN should always wind up taking effect
 				// before the UP because the above should already have "finished" by now, since
 				// it resulted in a recursive call to this function (using our current thread
-				// rather than some other re-entrant thread):
+				// rather than some other reentrant thread):
 			return suppress_to_prevent_toggle ? SuppressThisKey : AllowKeyToGoToSystem;
 #else // Mouse hook.
 // Currently not supporting the mouse buttons for the above method, because KeyEvent()

@@ -1238,7 +1238,7 @@ ResultType GuiType::Create()
 		snprintf(label_name, sizeof(label_name), "%dGuiDropFiles", mWindowIndex + 1);
 	else
 		strcpy(label_name, "GuiDropFiles");
-	if (mLabelForDropFiles = g_script.FindLabel(label_name))  // OK if NULL (dropping files).
+	if (mLabelForDropFiles = g_script.FindLabel(label_name))  // OK if NULL (dropping files is disallowed).
 		mExStyle |= WS_EX_ACCEPTFILES; // Makes the window accept drops. Otherwise, the WM_DROPFILES msg is not received.
 
 	// The above is done prior to creating the window so that mLabelForDropFiles can determine
@@ -3120,9 +3120,8 @@ ResultType GuiType::ParseOptions(char *aOptions, bool &aSetLastFoundWindow, Togg
 			if (mHwnd)
 				SetWindowPos(mHwnd, adding ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0
 					, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE); // SWP_NOACTIVATE prevents the side-effect of activating the window, which is undesirable if only its style is changing.
-			else // Must do the below ONLY if the window doesn't exist, other will window will be broken.
-				if (adding) mExStyle |= WS_EX_TOPMOST; else mStyle = mExStyle & ~WS_EX_TOPMOST;
-
+			else // Must do the below ONLY if the window doesn't exist, otherwise the window will be broken.
+				if (adding) mExStyle |= WS_EX_TOPMOST; else mExStyle &= ~WS_EX_TOPMOST;
 		}
 
 		else if (!stricmp(next_option, "Border"))
@@ -3181,7 +3180,7 @@ ResultType GuiType::ParseOptions(char *aOptions, bool &aSetLastFoundWindow, Togg
 		else if (!stricmp(next_option, "ToolWindow"))
 			// WS_EX_TOOLWINDOW provides narrower title bar, omits task bar button, and omits
 			// entry in the alt-tab menu.
-			if (adding) mExStyle |= WS_EX_TOOLWINDOW; else mStyle &= ~WS_EX_TOOLWINDOW;
+			if (adding) mExStyle |= WS_EX_TOOLWINDOW; else mExStyle &= ~WS_EX_TOOLWINDOW;
 
 		// This one should be near the bottom since "E" is fairly vague and might be contained at the start
 		// of future option words such as Edge, Exit, etc.

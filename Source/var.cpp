@@ -280,6 +280,7 @@ VarSizeType Var::Get(char *aBuf)
 	DWORD result;
 	static DWORD timestamp_tick = 0, now_tick; // static should be thread + recursion safe in this case.
 	static SYSTEMTIME st_static = {0};
+	static Var *cached_empty_var = NULL; // Doubles the speed of accessing empty variables that aren't environment variables (i.e. most of them).
 
 	// Just a fake buffer to pass to some API functions in lieu of a NULL, to avoid
 	// any chance of misbehavior:
@@ -296,10 +297,22 @@ VarSizeType Var::Get(char *aBuf)
 			// aBuf is NULL and twice in the case where it's not.  There may be some
 			// way to reduce it to one call always, but that is an optimization for
 			// the future.  Another reason: Calling it twice seems safer, because we can't
-			// be completely sure that it wouldn't act up our (possibly undersized) aBuf
-			// buffer even if it doesn't find the env. var:
-			if (   result = GetEnvironmentVariable(mName, buf_temp, sizeof(buf_temp))   )
+			// be completely sure that it wouldn't act on our (possibly undersized) aBuf
+			// buffer even if it doesn't find the env. var.
+			// UPDATE: v1.0.36.02: It turns out that GetEnvironmentVariable() is a fairly
+			// high overhead call. To improve the speed of accessing blank variables that
+			// aren't environment variables (and most aren't), cached_empty_var is used
+			// to indicate that the previous size-estimation call to us yielded "no such
+			// environment variable" so that the upcoming get-contents call to us can avoid
+			// calling GetEnvironmentVariable() again.  Testing shows that this doubles
+			// the speed of a simple loop that accesses an empty variable such as the following:
+			// SetBatchLines -1
+			// Loop 500000
+			//    if Var = Test
+			//    ...
+			if (!(cached_empty_var == this && aBuf) && (result = GetEnvironmentVariable(mName, buf_temp, sizeof(buf_temp))))
 			{
+				cached_empty_var = NULL; // i.e. one use only to avoid cache from hiding the fact that an environment variable has newly come into existence since the previous call.
 				// This env. var exists.
 				if (!aBuf)
 					return result - 1;  // since GetEnvironmentVariable() returns total size needed in this case.
@@ -312,10 +325,15 @@ VarSizeType Var::Get(char *aBuf)
 				aBuf += GetEnvironmentVariable(mName, aBuf, 32767);
 				break;
 			}
-			else // No matching env. var.
+			else // No matching env. var. or the cache indicates that GetEnvironmentVariable() need not be called.
 			{
 				if (aBuf)
+				{
 					*aBuf = '\0';
+					cached_empty_var = NULL; // i.e. one use only to avoid cache from hiding the fact that an environment variable has newly come into existence since the previous call.
+				}
+				else // Size estimation phase: Since there is no such env. var., flag it for the upcoming get-contents phase.
+					cached_empty_var = this;
 				return 0;
 			}
 		}
@@ -407,6 +425,7 @@ VarSizeType Var::Get(char *aBuf)
 	case VAR_LOOPFIELD: if (!aBuf) return g_script.GetLoopField(); else aBuf += g_script.GetLoopField(aBuf); break;
 	case VAR_LOOPFILENAME: if (!aBuf) return g_script.GetLoopFileName(); else aBuf += g_script.GetLoopFileName(aBuf); break;
 	case VAR_LOOPFILESHORTNAME: if (!aBuf) return g_script.GetLoopFileShortName(); else aBuf += g_script.GetLoopFileShortName(aBuf); break;
+	case VAR_LOOPFILEEXT: if (!aBuf) return g_script.GetLoopFileExt(); else aBuf += g_script.GetLoopFileExt(aBuf); break;
 	case VAR_LOOPFILEDIR: if (!aBuf) return g_script.GetLoopFileDir(); else aBuf += g_script.GetLoopFileDir(aBuf); break;
 	case VAR_LOOPFILEFULLPATH: if (!aBuf) return g_script.GetLoopFileFullPath(); else aBuf += g_script.GetLoopFileFullPath(aBuf); break;
 	case VAR_LOOPFILELONGPATH: if (!aBuf) return g_script.GetLoopFileLongPath(); else aBuf += g_script.GetLoopFileLongPath(aBuf); break;
@@ -721,11 +740,14 @@ ResultType Var::ValidateName(char *aName, bool aIsRuntime, bool aDisplayError)
 		// | future: "or" or "bitwise or"
 		// ~ future: "bitwise not"
 		c = *cp;  // For performance.
-		if (IS_SPACE_OR_TAB(c) || c == g_delimiter || c == g_DerefChar
-			|| c == '!' || c == '%' || c == '&' || c == '"' || c == '\'' || c == '(' || c == ')'
-			|| c == '*' || c == '+' || c == '-' || c == '^' || c == '.' || c == '/' || c == '\\'
-			|| c == ':' || c == ';' || c == ',' || c == '<' || c == '=' || c == '>'
-			|| c == '`' || c == '~' || c == '|' || c == '{' || c == '}')
+
+		// Rewritten for v1.0.36.02 to enhance performance and also forbid characters such as linefeed and
+		// alert/bell inside variable names.  Ordered to maximize short-circuit performance for the most-often
+		// used characters in variables names:
+		if ((c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') // It's not a core/legacy alpha-numberic.
+			&& c >= 0 // It's not an extended ASCII character such as €/¶/¿ (for simplicity and backward compatibility, these are always allowed).
+			&& !strchr("_[]$?#@", c)) // It's not a permitted punctunation mark.
+		{
 			if (aDisplayError)
 				if (aIsRuntime)
 					return g_script.ScriptError("This variable or function name contains an illegal character." ERR_ABORT, aName);
@@ -733,6 +755,7 @@ ResultType Var::ValidateName(char *aName, bool aIsRuntime, bool aDisplayError)
 					return g_script.ScriptError("This variable or function name contains an illegal character.", aName);
 			else
 				return FAIL;
+		}
 	}
 	// Otherwise:
 	return OK;

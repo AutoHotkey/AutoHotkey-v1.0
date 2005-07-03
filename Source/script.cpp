@@ -6394,6 +6394,7 @@ VarTypes Script::GetVarType(char *aVarName)
 
 	if (!stricmp(aVarName, "A_LoopFileName")) return VAR_LOOPFILENAME;
 	if (!stricmp(aVarName, "A_LoopFileShortName")) return VAR_LOOPFILESHORTNAME;
+	if (!stricmp(aVarName, "A_LoopFileExt")) return VAR_LOOPFILEEXT;
 	if (!stricmp(aVarName, "A_LoopFileDir")) return VAR_LOOPFILEDIR;
 	if (!stricmp(aVarName, "A_LoopFileFullPath")) return VAR_LOOPFILEFULLPATH;
 	if (!stricmp(aVarName, "A_LoopFileLongPath")) return VAR_LOOPFILELONGPATH;
@@ -13755,6 +13756,22 @@ VarSizeType Script::GetLoopFileShortName(char *aBuf)
 			// so use the long name whenever a short name is unavailable for any reason (could
 			// also happen if NTFS has short-name generation disabled?)
 			return GetLoopFileName(aBuf);
+	}
+	if (aBuf)
+		strcpy(aBuf, str);
+	return (VarSizeType)strlen(str);
+}
+
+VarSizeType Script::GetLoopFileExt(char *aBuf)
+{
+	char *str = "";  // Set default.
+	if (mLoopFile)
+	{
+		// The loop handler already prepended the script's directory in here for us:
+		if (str = strrchr(mLoopFile->cFileName, '.'))
+			++str;
+		else // Reset to empty string vs. NULL.
+			str = "";
 	}
 	if (aBuf)
 		strcpy(aBuf, str);

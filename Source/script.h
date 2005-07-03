@@ -2416,6 +2416,7 @@ public:
 	VarSizeType GetLineFile(char *aBuf = NULL);
 	VarSizeType GetLoopFileName(char *aBuf = NULL);
 	VarSizeType GetLoopFileShortName(char *aBuf = NULL);
+	VarSizeType GetLoopFileExt(char *aBuf = NULL);
 	VarSizeType GetLoopFileDir(char *aBuf = NULL);
 	VarSizeType GetLoopFileFullPath(char *aBuf = NULL);
 	VarSizeType GetLoopFileLongPath(char *aBuf = NULL);

@@ -66,8 +66,12 @@ inline bool IsTextMatch(char *aHaystack, char *aNeedle)
 #define WINDOW_TEXT_SIZE 32767
 #define WINDOW_CLASS_SIZE 1024  // Haven't found anything that documents how long one can be, so use this.
 
-enum WindowCriteria {CRITERION_INVALID, CRITERION_TITLE, CRITERION_ID, CRITERION_PID
-	, CRITERION_CLASS, CRITERION_GROUP};
+// Bitwise fields to support multiple criteria in v1.0.36.02
+#define CRITERION_TITLE 0x01
+#define CRITERION_ID    0x02
+#define CRITERION_PID   0x04
+#define CRITERION_CLASS 0x08
+#define CRITERION_GROUP 0x10
 
 class WindowSearch
 {
@@ -77,18 +81,19 @@ class WindowSearch
 	// the old way, while eliminating some redundant code as well.
 
 public:
-	WindowCriteria mCriterion; // Which primary criterion is currently in effect (ID, PID, Class, Title, etc.)
+	DWORD mCriteria; // Which criteria are currently in effect (ID, PID, Class, Title, etc.)
 
 	// Controlled and initialized by SetCriteria():
-	char mCriterionBuf[SEARCH_PHRASE_SIZE];  // For storing the title or the extracted "ahk_class" class name.
-	size_t mCriterionBufLength;              // Length of the above.
-	char *mCriterionExcludeTitle;            // ExcludeTitle.
-	size_t mCriterionExcludeTitleLength;     // Length of the above.
-	char *mCriterionText;                    // WinText.
-	char *mCriterionExcludeText;             // ExcludeText.
-	HWND mCriterionHwnd;                     // For "ahk_id".
-	DWORD mCriterionPID;                     // For "ahk_pid".
-	WinGroup *mCriterionGroup;               // For "ahk_group".
+	char mCriterionTitle[SEARCH_PHRASE_SIZE]; // For storing the title.
+	char mCriterionClass[SEARCH_PHRASE_SIZE]; // For storing the "ahk_class" class name.
+	size_t mCriterionTitleLength;             // Length of mCriterionTitle.
+	char *mCriterionExcludeTitle;             // ExcludeTitle.
+	size_t mCriterionExcludeTitleLength;      // Length of the above.
+	char *mCriterionText;                     // WinText.
+	char *mCriterionExcludeText;              // ExcludeText.
+	HWND mCriterionHwnd;                      // For "ahk_id".
+	DWORD mCriterionPID;                      // For "ahk_pid".
+	WinGroup *mCriterionGroup;                // For "ahk_group".
 
 	bool mFindLastMatch; // Whether to keep searching even after a match is found, so that last one is found.
 	int mFoundCount;     // Accumulates how many matches have been found (either 0 or 1 unless mFindLastMatch==true).
@@ -125,7 +130,7 @@ public:
 	WindowSearch() // Constructor.
 		// For performance and code size, only the most essential members are initialized.
 		// The others do not require it or are intialized by SetCriteria() or SetCandidate().
-		: mCriterion(CRITERION_INVALID), mCriterionExcludeTitle("") // ExcludeTitle is referenced often, so should be initialized.
+		: mCriteria(0), mCriterionExcludeTitle("") // ExcludeTitle is referenced often, so should be initialized.
 		, mFoundCount(0), mFoundParent(NULL) // Must be initialized here since none of the member functions is allowed to do it.
 		, mFoundChild(NULL) // ControlExist() relies upon this.
 		, mCandidateParent(NULL)

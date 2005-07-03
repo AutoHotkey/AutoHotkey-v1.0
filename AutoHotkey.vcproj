@@ -44,6 +44,7 @@
 				GenerateDebugInformation="TRUE"
 				ProgramDatabaseFile="$(OutDir)/AutoHotkey.pdb"
 				SubSystem="2"
+				StackReserveSize="4194304"
 				OptimizeForWindows98="1"
 				TargetMachine="1"/>
 			<Tool
@@ -104,6 +105,7 @@
 				LinkIncremental="1"
 				GenerateDebugInformation="FALSE"
 				SubSystem="2"
+				StackReserveSize="4194304"
 				LargeAddressAware="1"
 				TerminalServerAware="1"
 				OptimizeReferences="2"
@@ -168,6 +170,7 @@
 				IgnoreDefaultLibraryNames="LIBCMT"
 				GenerateDebugInformation="FALSE"
 				SubSystem="2"
+				StackReserveSize="4194304"
 				LargeAddressAware="1"
 				TerminalServerAware="1"
 				OptimizeReferences="2"
