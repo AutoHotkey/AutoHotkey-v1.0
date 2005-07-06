@@ -448,10 +448,10 @@ int snprintfcat(char *aBuf, int aBufSize, const char *aFormat, ...)
 int strlicmp(char *aBuf1, char *aBuf2, UINT aLength1, UINT aLength2)
 // Similar to strnicmp but considers each aBuf to be a string of length aLength if aLength was
 // specified.  In other words, unlike strnicmp() which would consider strnicmp("ab", "abc", 2)
-// [example verified correct] to be a match, this function would consider
-// them to be a mismatch.  Another way of looking at it: aBuf1 and aBuf2 will
-// be directly compared to one another as though they were actually of length
-// aLength1 and aLength2, respectively and then passed to stricmp() as those
+// [example verified correct] to be a match, this function would consider them to be
+// a mismatch.  Another way of looking at it: aBuf1 and aBuf2 will be directly
+// compared to one another as though they were actually of length aLength1 and
+// aLength2, respectively and then passed to stricmp() (not strnicmp) as those
 // shorter strings.  This behavior is useful for cases where you don't want
 // to have to bother with temporarily terminating a string so you can compare
 // only a substring to something else.  The return value meaning is the

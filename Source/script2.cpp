@@ -9054,13 +9054,28 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 
 
 
-ResultType Line::FileSelectFolder(char *aRootDir, DWORD aOptions, char *aGreeting)
+int CALLBACK FileSelectFolderCallback(HWND hwnd, UINT uMsg, LPARAM lParam, LPARAM lpData)
+{
+	if (uMsg == BFFM_INITIALIZED) // Caller has ensured that lpData isn't NULL by having set a valid lParam value.
+		SendMessage(hwnd, BFFM_SETSELECTION, TRUE, lpData);
+	// In spite of the quote below, the behavior does not seem to vary regardless of what value is returned
+	// upon receipt of BFFM_VALIDATEFAILED, at least on XP.  But in case it matters on other OSes, preserve
+	// compatibilty with versions older than 1.0.36.03 by keeping the dialog displayed even if the user enters
+	// an invalid folder:
+	// MSDN: "Returns zero except in the case of BFFM_VALIDATEFAILED. For that flag, returns zero to dismiss
+	// the dialog or nonzero to keep the dialog displayed."
+	return uMsg == BFFM_VALIDATEFAILED; // i.e. zero should be returned in almost every case.
+}
+
+
+
+ResultType Line::FileSelectFolder(char *aRootDir, char *aOptions, char *aGreeting)
 // Adapted from the AutoIt3 source.
 {
 	Var *output_var = ResolveVarOfArg(0);
 	if (!output_var)
 		return FAIL;
-	if (!aRootDir) aRootDir = "";
+
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 	if (!output_var->Assign())  // Initialize the output variable.
 		return FAIL;
@@ -9076,8 +9091,37 @@ ResultType Line::FileSelectFolder(char *aRootDir, DWORD aOptions, char *aGreetin
     if (SHGetMalloc(&pMalloc) != NOERROR)	// Initialize
 		return OK;  // Let ErrorLevel tell the story.
 
-	BROWSEINFO browseInfo;
-	if (*aRootDir)
+	// v1.0.36.03: Support initial folder, which is different than the root folder because the root only
+	// controls the origin point (above which the control cannot navigate).
+	char *initial_folder;
+	char root_dir[MAX_PATH*2 + 5];  // Up to two paths might be present inside, including an asterisk and spaces between them.
+	strlcpy(root_dir, aRootDir, sizeof(root_dir)); // Make a modifiable copy.
+	if (initial_folder = strchr(root_dir, '*'))
+	{
+		*initial_folder = '\0'; // Terminate so that root_dir becomes an isolated string.
+		// Must eliminate the trailing whitespace or it won't work.  However, only up to one space or tab
+		// so that path names that really do end in literal spaces can be used:
+		if (initial_folder > root_dir && IS_SPACE_OR_TAB(initial_folder[-1]))
+			initial_folder[-1] = '\0';
+		// In case absolute paths can ever have literal leading whitespace, preserve that whitespace
+		// by incremently by only one and not calling omit_leading_whitespace().  This has been documented.
+		++initial_folder;
+	}
+	else
+		initial_folder = NULL;
+	if (!*(omit_leading_whitespace(root_dir))) // Count all-whitespace as a blank string, but retain leading whitespace if there is also non-whitespace inside.
+		*root_dir = '\0';
+
+	BROWSEINFO bi;
+	if (initial_folder)
+	{
+		bi.lpfn = FileSelectFolderCallback;
+		bi.lParam = (LPARAM)initial_folder;  // Used by the callback above.
+	}
+	else
+		bi.lpfn = NULL;  // It will ignore the value of bi.lParam when lpfn is NULL.
+
+	if (*root_dir)
 	{
 		IShellFolder *pDF;
 		if (SHGetDesktopFolder(&pDF) == NOERROR)
@@ -9086,36 +9130,37 @@ ResultType Line::FileSelectFolder(char *aRootDir, DWORD aOptions, char *aGreetin
 			ULONG        chEaten;
 			ULONG        dwAttributes;
 			OLECHAR olePath[MAX_PATH];			// wide-char version of path name
-			MultiByteToWideChar(CP_ACP, MB_PRECOMPOSED, aRootDir, -1, olePath, sizeof(olePath));
+			MultiByteToWideChar(CP_ACP, MB_PRECOMPOSED, root_dir, -1, olePath, sizeof(olePath));
 			pDF->ParseDisplayName(NULL, NULL, olePath, &chEaten, &pIdl, &dwAttributes);
 			pDF->Release();
-			browseInfo.pidlRoot = pIdl;
+			bi.pidlRoot = pIdl;
 		}
 	}
-	else
-		browseInfo.pidlRoot = NULL;  // Since aRootDir, this should make it use "My Computer" as the root dir.
+	else // No root directory.
+		bi.pidlRoot = NULL;  // Make it use "My Computer" as the root dir.
 
 	int iImage = 0;
-	browseInfo.iImage = iImage;
-	browseInfo.hwndOwner = THREAD_DIALOG_OWNER; // Can be NULL, which is used rather than main window since no need to have main window forced into the background by this.
+	bi.iImage = iImage;
+	bi.hwndOwner = THREAD_DIALOG_OWNER; // Can be NULL, which is used rather than main window since no need to have main window forced into the background by this.
 	char greeting[1024];
 	if (aGreeting && *aGreeting)
 		strlcpy(greeting, aGreeting, sizeof(greeting));
 	else
 		snprintf(greeting, sizeof(greeting), "Select Folder - %s", g_script.mFileName);
-	browseInfo.lpszTitle = greeting;
-	browseInfo.lpfn = NULL;
-	browseInfo.ulFlags = 0x0040 | ((aOptions & FSF_ALLOW_CREATE) ? 0 : 0x200) | ((aOptions & (DWORD)FSF_EDITBOX) ? BIF_EDITBOX : 0);
+	bi.lpszTitle = greeting;
+
+	DWORD options = *aOptions ? ATOI(aOptions) : FSF_ALLOW_CREATE;
+	bi.ulFlags = 0x0040 | ((options & FSF_ALLOW_CREATE) ? 0 : 0x200) | ((options & (DWORD)FSF_EDITBOX) ? BIF_EDITBOX : 0);
 
 	char Result[2048];
-	browseInfo.pszDisplayName = Result;  // This will hold the user's choice.
+	bi.pszDisplayName = Result;  // This will hold the user's choice.
 
 	// At this point, we know a dialog will be displayed.  See macro's comments for details:
 	DIALOG_PREP
 	POST_AHK_DIALOG(0) // Do this only after the above.  Must pass 0 for timeout in this case.
 
 	++g_nFolderDialogs;
-	LPITEMIDLIST lpItemIDList = SHBrowseForFolder(&browseInfo);  // Spawn Dialog
+	LPITEMIDLIST lpItemIDList = SHBrowseForFolder(&bi);  // Spawn Dialog
 	--g_nFolderDialogs;
 
 	if (!lpItemIDList)
@@ -12446,10 +12491,17 @@ void BIF_LV_GetNextOrCount(ExprTokenType &aResultToken, ExprTokenType *aParam[],
 	char *options;
 	if (mode_is_count)
 	{
-		int msg = aParamCount > 0 && (options = ExprTokenToString(*aParam[0], buf))
-			&& toupper(*omit_leading_whitespace(options)) == 'S' // Relies on short-circuit order.
-			? LVM_GETSELECTEDCOUNT : LVM_GETITEMCOUNT;
-		aResultToken.value_int64 = SendMessage(control_hwnd, msg, 0, 0);
+		options = (aParamCount > 0) ? omit_leading_whitespace(ExprTokenToString(*aParam[0], buf)) : "";
+		if (*options)
+		{
+			if (toupper(*options) == 'S')
+				aResultToken.value_int64 = SendMessage(control_hwnd, LVM_GETSELECTEDCOUNT, 0, 0);
+			else if (!strnicmp(options, "Col", 3)) // "Col" or "Column". Don't allow "C" by itself, so that "Checked" can be added in the future.
+				aResultToken.value_int64 = gui.mCurrentListView->union_lv_attrib->col_count;
+			//else some unsupported value, leave aResultToken.value_int64 set to zero to indicate failure.
+		}
+		else
+			aResultToken.value_int64 = SendMessage(control_hwnd, LVM_GETITEMCOUNT, 0, 0);
 		return;
 	}
 	// Since above didn't return, this is GetNext() mode.
@@ -12881,12 +12933,15 @@ void BIF_LV_InsertModifyDeleteCol(ExprTokenType &aResultToken, ExprTokenType *aP
 	{
 		if (mode == 'M')
 		{
+			if (GuiType::ControlGetListViewMode(control.hwnd) != LVS_REPORT)
+				return; // And leave aResultToken.value_int64 at 0 to indicate failure.
+			// Otherwise:
+			aResultToken.value_int64 = 1; // Always successful (for consistency), regardless of what happens below.
+			// v1.0.36.03: Don't attempt to auto-size the columns while the view is not report-view because
+			// that causes any subsequent switch to the "list" view to be corrupted (invisible icons and items):
 			for (int i = 0; ; ++i) // Don't limit it to lv_attrib.col_count in case script added extra columns via direct API calls.
 				if (!ListView_SetColumnWidth(control.hwnd, i, LVSCW_AUTOSIZE)) // Failure means last column has already been processed.
-				{
-					aResultToken.value_int64 = 1; // Always successful (for consistency).
-					break; // Break vs. return in case there are zero columns.
-				}
+					break; // Break vs. return in case the loop has zero iterations due to zero columns (not currently possible, but helps maintainability).
 			return;
 		}
 		// Since above didn't return, mode must be 'I' (insert).
@@ -12914,7 +12969,11 @@ void BIF_LV_InsertModifyDeleteCol(ExprTokenType &aResultToken, ExprTokenType *aP
 	// Do this prior to checking if index is in bounds so that it can support columns beyond LV_MAX_COLUMNS:
 	if (mode == 'M' && aParamCount < 2) // A single parameter is a special modify-mode to auto-size that column.
 	{
-		aResultToken.value_int64 = ListView_SetColumnWidth(control.hwnd, index, LVSCW_AUTOSIZE);
+		// v1.0.36.03: Don't attempt to auto-size the columns while the view is not report-view because
+		// that causes any subsequent switch to the "list" view to be corrupted (invisible icons and items):
+		if (GuiType::ControlGetListViewMode(control.hwnd) == LVS_REPORT)
+			aResultToken.value_int64 = ListView_SetColumnWidth(control.hwnd, index, LVSCW_AUTOSIZE);
+		//else leave aResultToken.value_int64 set to 0.
 		return;
 	}
 	if (mode == 'I')
@@ -13124,7 +13183,7 @@ void BIF_LV_InsertModifyDeleteCol(ExprTokenType &aResultToken, ExprTokenType *aP
 		//lvc.mask |= LVCF_ORDER;
 		//lvc.iOrder = index + 1;
 		if (   !(aResultToken.value_int64 = ListView_InsertColumn(control.hwnd, index, &lvc) + 1)   ) // +1 to convert the new index to 1-based.
-			return; // In this case, return so that below and sort-now is not done.
+			return; // Since column could not be inserted, return so that below, sort-now, etc. are not done.
 		index = (int)aResultToken.value_int64 - 1; // Update in case some other index was assigned. -1 to convert back to zero-based.
 		if (index < lv_attrib.col_count) // Since col is not being appended to the end, make room in the array to insert this column.
 			MoveMemory(lv_attrib.col+index+1, lv_attrib.col+index, sizeof(lv_col_type)*(lv_attrib.col_count-index));
@@ -13139,9 +13198,12 @@ void BIF_LV_InsertModifyDeleteCol(ExprTokenType &aResultToken, ExprTokenType *aP
 		++lv_attrib.col_count; // New column successfully added.  Must be done only after the MoveMemory() above.
 	}
 
-	if (do_auto_size) // Done only now, in case column was just created above.
-		// Note that ListView_SetColumn() apparently does not support LVSCW_AUTOSIZE_USEHEADER for it's "cx" member.
-		ListView_SetColumnWidth(control.hwnd, index, do_auto_size);
+	// Auto-size is done only at this late a stage, in case column was just created above.
+	// Note that ListView_SetColumn() apparently does not support LVSCW_AUTOSIZE_USEHEADER for it's "cx" member.
+	if (do_auto_size && GuiType::ControlGetListViewMode(control.hwnd) == LVS_REPORT)
+		ListView_SetColumnWidth(control.hwnd, index, do_auto_size); // aResultToken.value_int64 was previous set to the more important result above.
+	//else v1.0.36.03: Don't attempt to auto-size the columns while the view is not report-view because
+	// that causes any subsequent switch to the "list" view to be corrupted (invisible icons and items).
 
 	if (sort_now)
 		GuiType::LV_Sort(control, index, false, sort_now_direction);

@@ -669,7 +669,7 @@ private:
 	// Bitwise flags:
 	#define FSF_ALLOW_CREATE 0x01
 	#define FSF_EDITBOX      0x02
-	ResultType FileSelectFolder(char *aRootDir, DWORD aOptions, char *aGreeting);
+	ResultType FileSelectFolder(char *aRootDir, char *aOptions, char *aGreeting);
 
 	ResultType FileGetShortcut(char *aShortcutFile);
 	ResultType FileCreateShortcut(char *aTargetFile, char *aShortcutFile, char *aWorkingDir, char *aArgs
@@ -1806,7 +1806,7 @@ class ScriptTimer
 {
 public:
 	Label *mLabel;
-	int mPeriod;
+	DWORD mPeriod; // v1.0.36.33: Changed from int to DWORD to double its capacity.
 	int mPriority;  // Thread priority relative to other threads, default 0.
 	UCHAR mExistingThreads;  // Whether this timer is already running its subroutine.
 	DWORD mTimeLastRun;  // TickCount
@@ -1939,7 +1939,7 @@ struct lv_attrib_type
 	bool is_now_sorted_ascending; // The direction in which the above column is currently sorted.
 	#define LV_MAX_COLUMNS 200
 	lv_col_type col[LV_MAX_COLUMNS];
-	int col_count; // Number of columns currently in teh above array.
+	int col_count; // Number of columns currently in the above array.
 	int row_count_hint;
 };
 
@@ -2009,6 +2009,7 @@ struct GuiControlOptionsType
 	bool color_changed; // To discern when a control has been put back to the default color. [v1.0.26]
 	bool start_new_section;
 	bool use_theme; // v1.0.32: Provides the means for the window's current setting of mUseTheme to be overridden.
+	bool listview_tile; // Whether to use tile-view, which is available only on XP or later.
 };
 
 LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lParam);
@@ -2187,6 +2188,7 @@ public:
 		, bool aWrapAround);
 	void ControlGetPosOfFocusedItem(GuiControlType &aControl, POINT &aPoint);
 	static void LV_Sort(GuiControlType &aControl, int aColumnIndex, bool aSortOnlyIfEnabled, char aForceDirection = '\0');
+	static DWORD ControlGetListViewMode(HWND aWnd);
 };
 
 

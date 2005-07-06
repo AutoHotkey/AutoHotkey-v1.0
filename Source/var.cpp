@@ -739,12 +739,12 @@ ResultType Var::ValidateName(char *aName, bool aIsRuntime, bool aDisplayError)
 		// {} reserved: blocks
 		// | future: "or" or "bitwise or"
 		// ~ future: "bitwise not"
-		c = *cp;  // For performance.
 
 		// Rewritten for v1.0.36.02 to enhance performance and also forbid characters such as linefeed and
 		// alert/bell inside variable names.  Ordered to maximize short-circuit performance for the most-often
 		// used characters in variables names:
-		if ((c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') // It's not a core/legacy alpha-numberic.
+		c = *cp;  // For performance.
+		if ((c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') // It's not a core/legacy alphanumberic.
 			&& c >= 0 // It's not an extended ASCII character such as €/¶/¿ (for simplicity and backward compatibility, these are always allowed).
 			&& !strchr("_[]$?#@", c)) // It's not a permitted punctunation mark.
 		{

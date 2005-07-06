@@ -577,11 +577,12 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 					event_info = HIWORD(msg.wParam); // Assigned as an unsigned value to preserve the USHORT's full unsigned capacity.
 					msg.wParam = LOWORD(msg.wParam); // Remove the extra-info word from further consideration below.
 					if (msg.wParam >= pgui->mControlCount) // Index beyond the quantity of controls, so ignore this event.
-						continue;
-					if (   !(gui_label = pgui->mControl[msg.wParam].jump_to_label)   )
+						continue; // Discarding an invalid message here is relied upon both other sections below.
+					pcontrol = &pgui->mControl[msg.wParam]; // Set for use here and in other places below.
+					if (   !(gui_label = pcontrol->jump_to_label)   )
 					{
 						// On if there's no label is the implicit action considered.
-						if (pgui->mControl[msg.wParam].attrib & GUI_CONTROL_ATTRIB_IMPLICIT_CANCEL)
+						if (pcontrol->attrib & GUI_CONTROL_ATTRIB_IMPLICIT_CANCEL)
 							pgui->Cancel();
 						continue; // Fully handled by the above; or there was no label.
 						// This event might lack both a label and an action if its control was changed to be
@@ -625,7 +626,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				switch(msg.message)
 				{
 				case AHK_GUI_ACTION: // Listed first for performance.
-					type_of_first_line = gui_label->mJumpToLine->mActionType;
+					type_of_first_line = gui_label->mJumpToLine->mActionType; // Above would already have discarded this message if it there was no label.
 					break;
 				case AHK_USER_MENU: // user-defined menu item
 					type_of_first_line = menu_item->mLabel->mJumpToLine->mActionType;
@@ -679,8 +680,8 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 					if (*pgui_label_is_running)
 						continue;
 				}
-				else if (msg.wParam != AHK_GUI_DROPFILES && msg.wParam != AHK_GUI_CONTEXTMENU) // It's a control's label.
-					if (pgui->mControl[msg.wParam].attrib & GUI_CONTROL_ATTRIB_LABEL_IS_RUNNING)
+				else if (msg.wParam != AHK_GUI_DROPFILES && msg.wParam != AHK_GUI_CONTEXTMENU) // It's a control's label (the above IF catches AHK_GUI_CLOSE and related).
+					if (pcontrol->attrib & GUI_CONTROL_ATTRIB_LABEL_IS_RUNNING) // pcontrol was set higher above for control-specific events.
 						continue;
 					//else this control's label is eligible to run now.
 				//else the check wasn't needed because it was done elsewhere (AHK_GUI_DROPFILES) or the
@@ -833,7 +834,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 			return_value = true; // We will return this value to indicate that we launched at least one new thread.
 			++g_nThreads;
 
-			switch(msg.message)
+			switch (msg.message)
 			{
 			case AHK_GUI_ACTION: // Listed first for performance.
 				// This indicates whether a double-click or other non-standard event launched it:
@@ -853,20 +854,38 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				case AHK_GUI_DROPFILES:
 					g.GuiEvent = GUI_EVENT_DROPFILES;
 					break;
-				default:
+				case AHK_GUI_CLOSE:
+				case AHK_GUI_ESCAPE:
+				case AHK_GUI_SIZE:
 					g.GuiEvent = (GuiEventType)msg.lParam;
-					if (g.GuiEvent == GUI_EVENT_DBLCLK) // For simplicity, this is not done for NM_RDBLCLK (right-double-click), since it might be possible for more than one item to be selected then.
+					break;
+				default: // Control-specific event.
+					g.GuiEvent = (GuiEventType)msg.lParam;
+					if (pcontrol->type == GUI_CONTROL_LISTBOX && g.GuiEvent == GUI_EVENT_DBLCLK)
+						event_info = 1 + (int)SendMessage(pcontrol->hwnd, LB_GETCARETINDEX, 0, 0); // +1 to convert to one-based index.
+					if (pcontrol->type != GUI_CONTROL_LISTVIEW)
+						break; // No further action (leave event_info as the default set higher above).
+					switch (g.GuiEvent) // Don't use toupper() on it to avoid possible corruption of non-alpha values.
 					{
-						GuiControlType &control = pgui->mControl[msg.wParam]; // wParam vs. lParam in this case.
-						if (control.type == GUI_CONTROL_LISTBOX) // +1 to convert to one-based index.
-							event_info = 1 + (int)SendMessage(control.hwnd, LB_GETCARETINDEX, 0, 0); // Cast to int to preserve any -1 value.
-						else if (control.type == GUI_CONTROL_LISTVIEW)
-							event_info = 1 + ListView_GetNextItem(control.hwnd, -1, LVNI_FOCUSED);
-							// Testing shows that only one item at a time can have focus, even when mulitple
-							// items are selected.
-						//else leave event_info as the default set higher above.
+					case 'A': // LVN_ITEMACTIVATE
+					case 'E': // LVN_BEGINLABELEDIT
+					case 'e': // LVN_ENDLABELEDIT
+					case GUI_EVENT_DBLCLK: // Double-click.
+					// v1.0.36.03: For the following, it's somewhat debatable to set event_info when the ListView
+					// isn't single-select, but the usefulness seems to outweigh any confusion it might cause:
+					case GUI_EVENT_NORMAL: // Left-click
+					case GUI_EVENT_RCLK:   // Right-click
+					case 'D': // LVN_BEGINDRAG
+					case 'd': // LVN_BEGINRDRAG (right-drag)
+					case 'R': // NM_RDBLCLK (right-double-click)
+					//case 'I': // LVN_ITEMCHANGED. This one is not done because in the future, might want to have it report the row-number of the changed row rather than always the currently focused row.
+						event_info = 1 + ListView_GetNextItem(pcontrol->hwnd, -1, LVNI_FOCUSED);
+						// Testing shows that only one item at a time can have focus, even when mulitple
+						// items are selected.
+						break;
 					}
-				}
+				} // switch (msg.message)
+
 				g.GuiWindowIndex = pgui->mWindowIndex; // g.GuiControlIndex is conditionally set later below.
 				g.GuiDefaultWindowIndex = pgui->mWindowIndex; // GUI threads default to operating upon their own window.
 
@@ -896,6 +915,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				case AHK_GUI_DROPFILES:
 					event_info = drop_count;
 					break;
+				//default: No action for the other cases.
 				}
 
 				// event_info is a separate variable because it is sometimes set before g.EventInfo is available
@@ -956,7 +976,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				}
 				else // It's a control's action, so set its attribute.
 				{
-					pgui->mControl[msg.wParam].attrib |= GUI_CONTROL_ATTRIB_LABEL_IS_RUNNING;
+					pcontrol->attrib |= GUI_CONTROL_ATTRIB_LABEL_IS_RUNNING;
 					g.GuiControlIndex = (GuiIndexType)msg.wParam;
 				}
 
@@ -994,7 +1014,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 						break;
 					default: // It's a control's action, so set its attribute.
 						if (msg.wParam < pgui->mControlCount) // Recheck to ensure that control still exists (in case window was recreated as explained above).
-							pgui->mControl[msg.wParam].attrib &= ~GUI_CONTROL_ATTRIB_LABEL_IS_RUNNING;
+							pgui->mControl[msg.wParam].attrib &= ~GUI_CONTROL_ATTRIB_LABEL_IS_RUNNING; // Don't use pcontrol here for the reasons above.
 					}
 				} // if (this gui window wasn't destroyed-without-recreation by the thread we just launched).
 				break;
@@ -1262,7 +1282,10 @@ bool CheckScriptTimers()
 	for (launched_threads = 0, timer = g_script.mFirstTimer; timer != NULL; timer = timer->mNextTimer)
 	{
 		// Call GetTickCount() every time in case a previous iteration of the loop took a long
-		// time to execute:
+		// time to execute.  Also, as of v1.0.36.03, the following subtracts two DWORDs to support
+		// intervals of 49.7 vs. 24.8 days.  This should work as long as the distance between the
+		// values being compared isn't greater than 49.7 days. This is because 1 minus 2 in unsigned
+		// math yields 0xFFFFFFFF milliseconds (49.7 days).
 		if (timer->mEnabled && timer->mExistingThreads < 1 && timer->mPriority >= g.Priority // thread priorities
 			&& (tick_start = GetTickCount()) - timer->mTimeLastRun >= (DWORD)timer->mPeriod)
 		{

@@ -613,7 +613,7 @@ ResultType Script::Edit()
 	{
 		char class_name[32];
 		GetClassName(hwnd, class_name, sizeof(class_name));
-		if (!strcmp(class_name, "#32770"))  // MessageBox(), InputBox(), or FileSelectFile() window.
+		if (!strcmp(class_name, "#32770") || !strnicmp(class_name, "AutoHotkey", 10)) // MessageBox(), InputBox(), FileSelectFile(), or GUI/script-owned window.
 			hwnd = NULL;  // Exclude it from consideration.
 	}
 	if (hwnd)  // File appears to already be open for editing, so use the current window.
@@ -2392,12 +2392,8 @@ ResultType Script::UpdateOrCreateTimer(Label *aLabel, char *aPeriod, char *aPrio
 	}
 
 	if (*aPeriod) // Caller wanted us to update this member.
-	{
-		int period = ATOI(aPeriod);  // Always use this method & check to retain compatibility with existing scripts.
-		// Allow a period of zero even though CheckScriptTimers() is usually called no more often than every 10ms:
-		if (period >= 0)
-			timer->mPeriod = period; // Read any float in a runtime variable reference as an int.
-	}
+		// v1.0.36.33: Changed from int to DWORD, and ATOI to ATOU, to double its capacity:
+		timer->mPeriod = ATOU(aPeriod);  // Always use this method & check to retain compatibility with existing scripts.
 
 	if (*aPriority) // Caller wants this member to be changed from its current or default value.
 		timer->mPriority = ATOI(aPriority); // Read any float in a runtime variable reference as an int.
@@ -9890,7 +9886,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		return FileSelectFile(ARG2, ARG3, ARG4, ARG5);
 
 	case ACT_FILESELECTFOLDER:
-		return FileSelectFolder(ARG2, (DWORD)(*ARG3 ? ATOI(ARG3) : FSF_ALLOW_CREATE), ARG4);
+		return FileSelectFolder(ARG2, ARG3, ARG4);
 
 	case ACT_FILEGETSHORTCUT:
 		return FileGetShortcut(ARG1);

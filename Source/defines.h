@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.36.02"
+#define NAME_VERSION "1.0.36.03"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -46,7 +46,7 @@ GNU General Public License for more details.
 // should keep class name strings as short a possible:
 #define WINDOW_CLASS_MAIN "AutoHotkey"
 #define WINDOW_CLASS_SPLASH "AutoHotkey2"
-#define WINDOW_CLASS_GUI "AutoHotkeyGUI"
+#define WINDOW_CLASS_GUI "AutoHotkeyGUI" // There's a section in Script::Edit() that relies on these all starting with "AutoHotkey".
 
 #define EXT_AUTOIT2 ".aut"
 #define EXT_AUTOHOTKEY ".ahk"

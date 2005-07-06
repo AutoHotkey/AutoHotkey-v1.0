@@ -2421,6 +2421,17 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			mCurrentListView = &control;
 			ZeroMemory(control.union_lv_attrib, sizeof(lv_attrib_type));
 			control.union_lv_attrib->sorted_by_col = -1; // Indicate that there is currently no sort order.
+
+			// Seems best to put tile view into effect before applying any styles that might be dependent upon it:
+			int view_type;
+			if (opt.listview_tile) // An earlier stage has verified that this is true only if OS is XP or later.
+			{
+				opt.listview_tile = false; // Tell ControlSetListViewOptions() that we already did it.
+				SendMessage(control.hwnd, LVM_SETVIEW, LV_VIEW_TILE, 0); // Control automatically ignores it if OS isn't XP or later.
+				view_type = LV_VIEW_TILE; // This new XP mode can be safely integrated since it doesn't overlap with the old modes.
+			}
+			else
+				view_type = (style & LVS_TYPEMASK);
 			if (opt.listview_style) // This is a third set of styles that exist in addition to normal & extended.
 				ListView_SetExtendedListViewStyle(control.hwnd, opt.listview_style); // No return value. Will have no effect on Win95/NT that lack comctl32.dll 4.70+ distributed with MSIE 3.x.
 			opt.color_changed = (opt.color_listview != CLR_DEFAULT); // In case a custom font color was put into effect via the Font command vs. "cBlue" in control's options.
@@ -2430,10 +2441,10 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 				opt.color_bk = mBackgroundColorCtl; // Use window's global custom, control background.
 			//else leave it as invalid so that ControlSetListViewOptions() won't bother changing it.
 			ControlSetListViewOptions(control, opt);
+
 			if (opt.height == COORD_UNSPECIFIED) // Adjust the control's size to fit opt.row_count rows.
 			{
 				GUI_SETFONT  // Required before asking it for a height estimate.
-				int view_type = style & LVS_TYPEMASK;
 				switch (view_type)
 				{
 				case LVS_REPORT:
@@ -2452,9 +2463,26 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 					// complicated work around in the code to detect DLL version, it will be documented in
 					// the help file that the "rows" method will produce an incorrect height on those platforms.
 					break;
-				case LVS_ICON:
-				case LVS_SMALLICON:
-				case LVS_LIST:
+
+				case LV_VIEW_TILE: // This one can be safely integrated with the LVS ones because it doesn't overlap with them.
+					// The following approach doesn't seem to give back useful info about the total height of a
+					// tile and the border beneath it, so it isn't used:
+					//LVTILEVIEWINFO tvi;
+					//tvi.cbSize = sizeof(LVTILEVIEWINFO);
+					//tvi.dwMask = LVTVIM_TILESIZE | LVTVIM_LABELMARGIN;
+					//ListView_GetTileViewInfo(control.hwnd, &tvi);
+					// The following might not be perfect for integral scrolling purposes, but it does seem
+					// correct in terms of allowing exactly the right number of rows to be visible when the
+					// control is scrolled all the way to the top. It's also correct for eliminating a
+					// vertical scroll bar if the icons all fit into the specified number of rows. Tested on
+					// XP Theme and Classic theme.
+					opt.height = 7 + (int)((HIWORD(ListView_GetItemSpacing(control.hwnd, FALSE)) - 3) * opt.row_count);
+					break;
+
+				default: // Namely the following:
+				//case LVS_ICON:
+				//case LVS_SMALLICON:
+				//case LVS_LIST:
 					// For these non-report views, it seems far better to define row_count as the number of
 					// icons that can fit vertically rather than as the total number of icons, because the
 					// latter can result in heights that vary based on too many factors, resulting in too
@@ -2487,10 +2515,10 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 						break;
 					}
 					break;
-				}
+				} // switch()
 				MoveWindow(control.hwnd, opt.x, opt.y, opt.width, opt.height, TRUE); // Repaint should be smart enough not to do it if window is hidden.
-			}
-		}
+			} // if (opt.height == COORD_UNSPECIFIED)
+		} // CreateWindowEx() succeeded.
 		break;
 
 	case GUI_CONTROL_EDIT:
@@ -3570,6 +3598,8 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 		}
 		else if (aControl.type == GUI_CONTROL_LISTVIEW && !stricmp(next_option, "List"))
 			aOpt.style_add |= LVS_LIST; // Unconditional regardless of the value of "adding".
+		else if (!stricmp(next_option, "Tile")) // Fortunately, subsequent changes to the control's style do not pop it out of Tile mode. It's apparently smart enough to do that only when the LVS_TYPEMASK bits change.
+			aOpt.listview_tile = g_os.IsWinXPorLater(); // Ignores the value of "adding". Checking OS version here simplifies code in other places.
 		else if (aControl.type == GUI_CONTROL_LISTVIEW && !stricmp(next_option, "Hdr"))
 			if (adding) aOpt.style_remove |= LVS_NOCOLUMNHEADER; else aOpt.style_add |= LVS_NOCOLUMNHEADER;
 		else if (aControl.type == GUI_CONTROL_LISTVIEW && !strnicmp(next_option, "NoSort", 6))
@@ -4882,19 +4912,21 @@ void GuiType::ControlAddContents(GuiControlType &aControl, char *aContent, int a
 		this_field = next_field;
 	} // for()
 
-	// It seems a useful default to do a basic auto-size upon creation, even though it won't take into
-	// account contents of the rows or the later presence of a vertical scroll bar. The last column
-	// will be overlapped when/if a v-scrollbar appears, which would produce an h-scrollbar too.
-	// It seems best to retain this behavior rather than trying to shrink the last column to allow
-	// room for a scroll bar because: 1) Having it use all available width is desirable at least
-	// some of the time (such as times when there will be only a few rows; 2) It simplifies the code.
-	// This method of auto-sizing each column to fit its text works much better than setting
-	// lvc.cx to ListView_GetStringWidth upon creation of the column.
 	if (aControl.type == GUI_CONTROL_LISTVIEW)
 	{
-		++requested_index; // Convert index to total count of columns.
+		// Fix for v1.0.36.03: requested_index is already one beyond the number of columns that were added
+		// because it's always set up for the next column that would be added if there were any.
+		// Therefore, there is no need to add one to it to get the column count.
 		aControl.union_lv_attrib->col_count = requested_index; // Keep track of column count, mostly so that LV_ModifyCol and such can properly maintain the array of columns).
-		if (GetWindowLong(aControl.hwnd, GWL_STYLE) & LVS_REPORT)
+		// It seems a useful default to do a basic auto-size upon creation, even though it won't take into
+		// account contents of the rows or the later presence of a vertical scroll bar. The last column
+		// will be overlapped when/if a v-scrollbar appears, which would produce an h-scrollbar too.
+		// It seems best to retain this behavior rather than trying to shrink the last column to allow
+		// room for a scroll bar because: 1) Having it use all available width is desirable at least
+		// some of the time (such as times when there will be only a few rows; 2) It simplifies the code.
+		// This method of auto-sizing each column to fit its text works much better than setting
+		// lvc.cx to ListView_GetStringWidth upon creation of the column.
+		if (ControlGetListViewMode(aControl.hwnd) == LVS_REPORT)
 			for (int i = 0; i < requested_index; ++i) // Auto-size each column.
 				ListView_SetColumnWidth(aControl.hwnd, i, LVSCW_AUTOSIZE_USEHEADER);
 	}
@@ -6528,20 +6560,41 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 
 	case AHK_GUI_ACTION:
 	case AHK_USER_MENU:
-		// Handling these messages here by reposting them to our thread relieves the one who posted them
-		// from ever having to do a MsgSleep(-1), which in turn allows it or its caller to acknowledge
-		// its message in a timely fashion, which in turn prevents undesirable side-effects when a
-		// g-labeled DateTime's drop-down is navigated via its arrow buttons (jumps ahead two months
-		// instead of one, infinite loop with mouse button stuck down on some systems, etc.). Another
-		// side-effect is the failure of a g-labeled MonthCal to be able to notify of date change when
-		// the user clicks the year and uses the spinner to select a new year.  This solves both of
-		// those issues and almost certainly others:
-		PostMessage(hWnd, iMsg, wParam, lParam);
-		// MsgSleep() is the critical step.  It forces our thread msg pump to handle the message now
+		// v1.0.36.03: The g_MenuIsVisible check was added as a means to discard the message. Otherwise
+		// MSG_FILTER_MAX would result in a bouncing effect or something else that disrupts a popup menu,
+		// namely a context menu shown by an AltSubmit ListView (regardless of whether it's shown by
+		// GuiContextMenu or in response to a RightClick event).  This is because a ListView apparently
+		// generates the following notifications while the context menu is displayed:
+		// C: release mouse capture
+		// H: hottrack
+		// f: lost focus
+		// I think the issue here is that there are times when messages should be reposted and
+		// other times when they should not be.  The MonthCal and DateTime cases mentioned below are
+		// times when they should, because the MSG_FILTER_MAX filter is not in effect then.  But when a
+		// script's own popup menu is displayed, any message subject to filtering (which includes
+		// AHK_GUI_ACTION and AHK_USER_MENU) should probably never be reposted because that disrupts
+		// the ability to select an item in the menu or dismiss it (possibly due to the theoretical
+		// bouncing-around effect described below).
+		// OLDER: I don't think the below is a complete explanation since it doesn't take into account
+		// the fact that the message filter might be in effect due to a menu being visible, which if
+		// true would prevent MsgSleep from processing the message.
+		// OLDEST: MsgSleep() is the critical step.  It forces our thread msg pump to handle the message now
 		// because otherwise it would probably become a CPU-maxing loop wherein the dialog or MonthCal
 		// msg pump that called us dispatches the above message right back to us, causing it to
 		// bounce around thousands of times until that other msg pump finally finishes.
-		MsgSleep(-1);
+		if (!g_MenuIsVisible)
+		{
+			// Handling these messages here by reposting them to our thread relieves the one who posted them
+			// from ever having to do a MsgSleep(-1), which in turn allows it or its caller to acknowledge
+			// its message in a timely fashion, which in turn prevents undesirable side-effects when a
+			// g-labeled DateTime's drop-down is navigated via its arrow buttons (jumps ahead two months
+			// instead of one, infinite loop with mouse button stuck down on some systems, etc.). Another
+			// side-effect is the failure of a g-labeled MonthCal to be able to notify of date change when
+			// the user clicks the year and uses the spinner to select a new year.  This solves both of
+			// those issues and almost certainly others:
+			PostMessage(hWnd, iMsg, wParam, lParam);
+			MsgSleep(-1);
+		}
 		return 0;
 
 	case WM_CLOSE: // For now, take the same action as SC_CLOSE.
@@ -6728,7 +6781,7 @@ void GuiType::Event(GuiIndexType aControlIndex, UINT aNotifyCode, USHORT aEventI
 		// wouldn't have explicit handling for.  A script that needs to know when the selection changes can
 		// turn on AltSubmit to catch a wide variety of ways the selection can change, the most all-encompassing
 		// of which is probably LVN_ITEMCHANGED.
-		case NM_CLICK: break; // Retain the default gui_event set earlier.
+		case NM_CLICK: break; // Retain the default gui_event==GUI_EVENT_NORMAL set earlier.
 		case NM_RCLICK: gui_event = GUI_EVENT_RCLK; break;
 		case NM_DBLCLK: gui_event = GUI_EVENT_DBLCLK; ignore_unless_alt_submit = false; break;
 		case NM_RDBLCLK: gui_event = 'R'; ignore_unless_alt_submit = false; break; // Rare, so just a simple mnemonic is stored (seems better than a digit).
@@ -7200,6 +7253,10 @@ void GuiType::ControlSetListViewOptions(GuiControlType &aControl, GuiControlOpti
 // Caller has ensured that aOpt.color_bk is CLR_INVALID if no change should be made to the
 // current background color.
 {
+	// Concerning TILE mode: Fortunately, subsequent changes to the control's style do not pop it out of
+	// Tile mode. The control is apparently smart enough to do that only when the LVS_TYPEMASK bits change.
+	if (aOpt.listview_tile) // An earlier stage has verified that this is true only if OS is XP or later.
+		SendMessage(aControl.hwnd, LVM_SETVIEW, LV_VIEW_TILE, 0);
 	if (aOpt.limit)
 	{
 		if (ListView_GetItemCount(aControl.hwnd) > 0)
@@ -7887,4 +7944,21 @@ void GuiType::LV_Sort(GuiControlType &aControl, int aColumnIndex, bool aSortOnly
 	// realistically fail.  Just update things to indicate the current sort-column and direction:
 	lv_attrib.sorted_by_col = aColumnIndex;
 	lv_attrib.is_now_sorted_ascending = lvs.sort_ascending;
+}
+
+
+
+DWORD GuiType::ControlGetListViewMode(HWND aWnd)
+// Caller has ensured that aWnd is non-NULL and a valid ListView control.
+// Returns one of the following:
+// LV_VIEW_ICON        0x0000 (LVS_ICON also equals 0x0000)
+// LV_VIEW_DETAILS     0x0001 (LVS_REPORT also equals 0x0001)
+// LV_VIEW_SMALLICON   0x0002 (LVS_SMALLICON also equals 0x0002)
+// LV_VIEW_LIST        0x0003 (LVS_LIST also equals 0x0003)
+// LV_VIEW_TILE        0x0004
+{
+	// On XP or later, use the new method of finding the view so that tile-view can be detected.
+	// Also, the following relies on the fact that LV_VIEW_ICON==LVS_ICON, LV_VIEW_DETAILS==LVS_REPORT,
+	// LVS_SMALLICON==LV_VIEW_SMALLICON, and LVS_LIST==LV_VIEW_LIST.
+	return g_os.IsWinXPorLater() ? ListView_GetView(aWnd) : (GetWindowLong(aWnd, GWL_STYLE) & LVS_TYPEMASK);
 }

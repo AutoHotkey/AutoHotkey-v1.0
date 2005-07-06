@@ -26,7 +26,8 @@ GNU General Public License for more details.
 // Windows Header Files:
 // Necessary to do this prior to including windows.h so that NT functions are unlocked:
 // UPDATE: Using 0x0500 now so that VK_XBUTTON1 and 2 can be supported:
-#define _WIN32_WINNT 0x0500
+// UPDATE v1.0.36.03: Using 0x0501 now so that various ListView constants and other things can be used.
+#define _WIN32_WINNT 0x0501
 #define _WIN32_IE 0x0501  // Added for v1.0.35 to have MCS_NOTODAY resolve as expected, and possibly solve other problems on newer systems.
 
 #ifdef _MSC_VER
