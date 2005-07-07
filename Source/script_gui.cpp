@@ -1438,8 +1438,9 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		// and thus will have no effect in Win 95/NT unless they have MSIE 3.x or similar patch installed.
 		// Thus, things like LVS_EX_FULLROWSELECT and LVS_EX_HEADERDRAGDROP will have no effect on those systems.
 		opt.listview_style |= LVS_EX_FULLROWSELECT|LVS_EX_HEADERDRAGDROP; // LVS_AUTOARRANGE seems to disrupt the display of the column separators and have other weird effects in Report view.
-		opt.style_add |= WS_TABSTOP|LVS_REPORT|LVS_SHOWSELALWAYS; // WS_THICKFRAME allows the control itself to be drag-resized.
+		opt.style_add |= WS_TABSTOP|LVS_SHOWSELALWAYS; // LVS_REPORT is omitted to help catch bugs involving opt.listview_view.  WS_THICKFRAME allows the control itself to be drag-resized.
 		opt.exstyle_add |= WS_EX_CLIENTEDGE; // WS_EX_STATICEDGE/WS_EX_WINDOWEDGE/WS_BORDER(non-ex) don't look as nice. WS_EX_DLGMODALFRAME is a weird but interesting effect.
+		opt.listview_view = LVS_REPORT; // Improves maintainability by avoiding the need to check if it's -1 in other places.
 		break;
 	case GUI_CONTROL_EDIT:
 		opt.style_add |= WS_TABSTOP;
@@ -2405,6 +2406,8 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		break;
 
 	case GUI_CONTROL_LISTVIEW:
+		if (opt.listview_view != LV_VIEW_TILE) // It was ensured earlier that listview_view can be set to LV_VIEW_TILE only for XP or later.
+			style = (style & ~LVS_TYPEMASK) | opt.listview_view; // Create control in the correct view mode whenever possible (TILE is the exception because it can't be expressed via style).
 		if (control.hwnd = CreateWindowEx(exstyle, WC_LISTVIEW, "", style, opt.x, opt.y // exstyle does apply to ListViews.
 			, opt.width, opt.height == COORD_UNSPECIFIED ? 200 : opt.height, mHwnd, control_id, g_hInstance, NULL))
 		{
@@ -2423,15 +2426,8 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			control.union_lv_attrib->sorted_by_col = -1; // Indicate that there is currently no sort order.
 
 			// Seems best to put tile view into effect before applying any styles that might be dependent upon it:
-			int view_type;
-			if (opt.listview_tile) // An earlier stage has verified that this is true only if OS is XP or later.
-			{
-				opt.listview_tile = false; // Tell ControlSetListViewOptions() that we already did it.
-				SendMessage(control.hwnd, LVM_SETVIEW, LV_VIEW_TILE, 0); // Control automatically ignores it if OS isn't XP or later.
-				view_type = LV_VIEW_TILE; // This new XP mode can be safely integrated since it doesn't overlap with the old modes.
-			}
-			else
-				view_type = (style & LVS_TYPEMASK);
+			if (opt.listview_view == LV_VIEW_TILE) // An earlier stage has verified that this is true only if OS is XP or later.
+				SendMessage(control.hwnd, LVM_SETVIEW, LV_VIEW_TILE, 0);
 			if (opt.listview_style) // This is a third set of styles that exist in addition to normal & extended.
 				ListView_SetExtendedListViewStyle(control.hwnd, opt.listview_style); // No return value. Will have no effect on Win95/NT that lack comctl32.dll 4.70+ distributed with MSIE 3.x.
 			opt.color_changed = (opt.color_listview != CLR_DEFAULT); // In case a custom font color was put into effect via the Font command vs. "cBlue" in control's options.
@@ -2445,7 +2441,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			if (opt.height == COORD_UNSPECIFIED) // Adjust the control's size to fit opt.row_count rows.
 			{
 				GUI_SETFONT  // Required before asking it for a height estimate.
-				switch (view_type)
+				switch (opt.listview_view)
 				{
 				case LVS_REPORT:
 					// The following formula has been tested on XP with the point sizes 8, 9, 10, 12, 14, and 18 for:
@@ -2489,7 +2485,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 					// much inconsistency.
 					GUI_SET_HDC
 					GetTextMetrics(hdc, &tm);
-					if (view_type == LVS_ICON)
+					if (opt.listview_view == LVS_ICON)
 					{
 						// The vertical space between icons is not dependent upon font size.  In other words,
 						// the control's total height to fit exactly N rows would be icon_height*N plus
@@ -3573,33 +3569,21 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 		{
 			next_option += 4;
 			if (aControl.type == GUI_CONTROL_LISTVIEW) // Unconditional regardless of the value of "adding".
-			{
-				if (!stricmp(next_option, "Small"))
-				{
-					// Unconditional regardless of the value of "adding".  It's done in the following way so that
-					// it does not matter whether style_add is applied prior to remove:
-					aOpt.style_add |= LVS_SMALLICON;
-					aOpt.style_remove |= LVS_REPORT;
-				}
-				else // The word "Icon" by itself.
-					aOpt.style_remove |= LVS_TYPEMASK; // Remove all types because LVS_ICON==0.
-			}
+				aOpt.listview_view = stricmp(next_option, "Small") ? LVS_ICON : LVS_SMALLICON;
 			else
 				if (adding)
 					aOpt.icon_number = ATOI(next_option);
 				//else do nothing (not currently implemented)
 		}
-		else if (aControl.type == GUI_CONTROL_LISTVIEW && !stricmp(next_option, "Report"))
-		{
-			// Unconditional regardless of the value of "adding".  It's done in the following way so that
-			// it does not matter whether style_add is applied prior to remove:
-			aOpt.style_add |= LVS_REPORT;
-			aOpt.style_remove |= LVS_SMALLICON;
-		}
-		else if (aControl.type == GUI_CONTROL_LISTVIEW && !stricmp(next_option, "List"))
-			aOpt.style_add |= LVS_LIST; // Unconditional regardless of the value of "adding".
+		else if (!stricmp(next_option, "Report"))
+			aOpt.listview_view = LVS_REPORT; // Unconditional regardless of the value of "adding".
+		else if (!stricmp(next_option, "List"))
+			aOpt.listview_view = LVS_LIST; // Unconditional regardless of the value of "adding".
 		else if (!stricmp(next_option, "Tile")) // Fortunately, subsequent changes to the control's style do not pop it out of Tile mode. It's apparently smart enough to do that only when the LVS_TYPEMASK bits change.
-			aOpt.listview_tile = g_os.IsWinXPorLater(); // Ignores the value of "adding". Checking OS version here simplifies code in other places.
+		{
+			if (g_os.IsWinXPorLater()) // Checking OS version here simplifies code in other places.
+				aOpt.listview_view = LV_VIEW_TILE; // LV_VIEW_TILE is compatible with LVS values such as LVS_REPORT because it doesn't overlap/conflict with them.
+		}
 		else if (aControl.type == GUI_CONTROL_LISTVIEW && !stricmp(next_option, "Hdr"))
 			if (adding) aOpt.style_remove |= LVS_NOCOLUMNHEADER; else aOpt.style_add |= LVS_NOCOLUMNHEADER;
 		else if (aControl.type == GUI_CONTROL_LISTVIEW && !strnicmp(next_option, "NoSort", 6))
@@ -4564,9 +4548,24 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 			else
 				new_style = (new_style & ~0x0F) | CBS_DROPDOWN; // Done to ensure the lowest four bits are pure.
 			break;
+		case GUI_CONTROL_LISTVIEW: // Being in the switch serves to verify control's type because it isn't verified in places where listview_view is set.
+			if (aOpt.listview_view != -1) // A new view was explicitly specified.
+			{
+				// Fix for v1.0.36.04:
+				// For XP, must always use ListView_SetView() because otherwise switching from Tile view back to
+				// the *same* view that was in effect prior to tile view wouldn't work (since the the control's
+				// style LVS_TYPEMASK bits would not have changed).  This is because LV_VIEW_TILE is a special
+				// view that cannot be set via style change.
+				if (g_os.IsWinXPorLater())
+					ListView_SetView(aControl.hwnd, aOpt.listview_view);
+				// Regardless of whether SetView was called above, adjust the style too so that the upcoming
+				// style change won't undo what was just done above:
+				if (aOpt.listview_view != LV_VIEW_TILE) // It was ensured earlier that listview_view can be set to LV_VIEW_TILE only for XP or later.
+					new_style = (new_style & ~LVS_TYPEMASK) | aOpt.listview_view;
+			}
+			break;
 		// Nothing extra for these currently:
 		//case GUI_CONTROL_LISTBOX: i.e. allow LBS_NOTIFY to be removed in case anyone really wants to do that.
-		//case GUI_CONTROL_LISTVIEW:
 		//case GUI_CONTROL_EDIT:
 		//case GUI_CONTROL_TEXT:  Ensuring SS_BITMAP and such are absent seems too over-protective.
 		//case GUI_CONTROL_DATETIME:
@@ -4781,8 +4780,12 @@ void GuiType::ControlInitOptions(GuiControlOptionsType &aOpt, GuiControlType &aC
 // Not done as class to avoid code-size overhead of initializer list, etc.
 {
 	ZeroMemory(&aOpt, sizeof(GuiControlOptionsType));
-	if (aControl.type == GUI_CONTROL_LISTVIEW && aControl.hwnd) // Since this doesn't have the _add and _remove components, must initialize.
-		aOpt.listview_style = ListView_GetExtendedListViewStyle(aControl.hwnd); // Will have no effect on 95/NT4 that lack comctl32.dll 4.70+ distributed with MSIE 3.x
+	if (aControl.type == GUI_CONTROL_LISTVIEW) // Since this doesn't have the _add and _remove components, must initialize.
+	{
+		if (aControl.hwnd)
+			aOpt.listview_style = ListView_GetExtendedListViewStyle(aControl.hwnd); // Will have no effect on 95/NT4 that lack comctl32.dll 4.70+ distributed with MSIE 3.x
+		aOpt.listview_view = -1;  // Indicate "unspecified" so that changes can be detected.
+	}
 	aOpt.x = aOpt.y = aOpt.width = aOpt.height = COORD_UNSPECIFIED;
 	aOpt.color_bk = CLR_INVALID;
 	// Above: If it stays unaltered, CLR_INVALID means "leave color as it is".  This is for
@@ -6192,7 +6195,10 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 			is_actionable = true;
 			switch (nmhdr.code)
 			{
-			case NM_CUSTOMDRAW:    // Return CDRF_DODEFAULT (0).  Occurs for every redraw, such as mouse cursor sliding over control or window activation.
+			// MSDN: LVN_HOTTRACK: "Return zero to allow the list view to perform its normal track select processing."
+			// Also, LVN_HOTTRACK is listed first for performance since it arrives far more often than any other notification.
+			case LVN_HOTTRACK:  // v1.0.36.04: No longer an event because it occurs so often: Due to single-thread limit, it was decreasing the reliability of AltSubmit ListViews' receipt of other events such as "I", such as Toralf's Icon Viewer.
+			case NM_CUSTOMDRAW: // Return CDRF_DODEFAULT (0).  Occurs for every redraw, such as mouse cursor sliding over control or window activation.
 			case LVN_ITEMCHANGING: // Not yet supported (seems rarely needed), so always allow the change by returning 0 (FALSE).
 			case LVN_INSERTITEM: // Any ways other than ListView_InsertItem() to insert items?
 			case LVN_DELETEITEM: // Might be received for each individual (non-DeleteAll) deletion).
@@ -6751,12 +6757,14 @@ void GuiType::Event(GuiIndexType aControlIndex, UINT aNotifyCode, USHORT aEventI
 		ignore_unless_alt_submit = true; // To be set to "false" only for the most important and/or rarely occuring of the notifications below.
 		switch (aNotifyCode)
 		{
+		// LVN_HOTTRACK was disabled in v1.0.36.04 (search code for LVN_HOTTRACK for explanation):
+		//case LVN_HOTTRACK: gui_event = 'H'; break;  // Listed first for performance. This could be used to detect hover by using SetTimer to refresh a timer for each msg?
+
 		// For LVN_ITEMCHANGED: It's received for selection/deselection, which means clicking a new item
 		// generates at least two of them (in practice, it generates between 1 and 3 but not sure why).
 		// It's also received for checking/unchecking an item.  Extending a selection via Shift-ArrowKey
 		// generates between 1 and 3 of them, perhaps at random?  Maybe all we can count on is that you
 		// get at least one when the selection has changed or a box is (un)checked.
-		case LVN_HOTTRACK: gui_event = 'H'; break; // Listed first for performance. This could be used to detect hover by using SetTimer to refresh a timer for each msg?
 		case LVN_ITEMCHANGED: gui_event = 'I'; break;
 		case LVN_ITEMACTIVATE: gui_event = 'A'; break;
 		case LVN_KEYDOWN: gui_event = 'K'; break;
@@ -7253,10 +7261,6 @@ void GuiType::ControlSetListViewOptions(GuiControlType &aControl, GuiControlOpti
 // Caller has ensured that aOpt.color_bk is CLR_INVALID if no change should be made to the
 // current background color.
 {
-	// Concerning TILE mode: Fortunately, subsequent changes to the control's style do not pop it out of
-	// Tile mode. The control is apparently smart enough to do that only when the LVS_TYPEMASK bits change.
-	if (aOpt.listview_tile) // An earlier stage has verified that this is true only if OS is XP or later.
-		SendMessage(aControl.hwnd, LVM_SETVIEW, LV_VIEW_TILE, 0);
 	if (aOpt.limit)
 	{
 		if (ListView_GetItemCount(aControl.hwnd) > 0)

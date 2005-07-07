@@ -1927,7 +1927,7 @@ enum LVColTypes {LV_COL_TEXT, LV_COL_INTEGER, LV_COL_FLOAT}; // LV_COL_TEXT must
 struct lv_col_type
 {
 	UCHAR type; // UCHAR vs. enum LVColTypes to save memory.
-	bool sort_disabled;  // If true, clicking the column will have no automatic effect.
+	bool sort_disabled;  // If true, clicking the column will have no automatic sorting effect.
 	bool case_sensitive; // Ignored if type isn't LV_COL_TEXT.
 	bool unidirectional; // Sorting cannot be reversed/toggled.
 	bool prefer_descending; // Whether this column defaults to descending order (on first click or for unidirectional).
@@ -1961,7 +1961,7 @@ struct GuiControlType
 	#define GUI_CONTROL_ATTRIB_EXPLICITLY_DISABLED 0x10
 	#define GUI_CONTROL_ATTRIB_BACKGROUND_DEFAULT  0x20 // i.e. Don't conform to window/control background color; use default instead.
 	#define GUI_CONTROL_ATTRIB_BACKGROUND_TRANS    0x40 // i.e. Leave this control's background transparent.
-	#define GUI_CONTROL_ATTRIB_ALTBEHAVIOR         0x80 // For sliders: Reverse/Invert the value. Also for up-down controls (ALT means 32-bit vs. 16-bit).
+	#define GUI_CONTROL_ATTRIB_ALTBEHAVIOR         0x80 // For sliders: Reverse/Invert the value. Also for up-down controls (ALT means 32-bit vs. 16-bit). Also for ListView.
 	UCHAR attrib; // A field of option flags/bits defined above.
 	TabControlIndexType tab_control_index; // Which tab control this control belongs to, if any.
 	TabIndexType tab_index; // For type==TAB, this stores the tab control's index.  For other types, it stores the page.
@@ -1982,6 +1982,7 @@ struct GuiControlType
 struct GuiControlOptionsType
 {
 	DWORD style_add, style_remove, exstyle_add, exstyle_remove, listview_style;
+	int listview_view; // Viewing mode, such as LVS_ICON, LVS_REPORT.  Int vs. DWORD to more easily use any negative value as "invalid".
 	int x, y, width, height;  // Position info.
 	float row_count;
 	int choice;  // Which item of a DropDownList/ComboBox/ListBox to initially choose.
@@ -2009,7 +2010,6 @@ struct GuiControlOptionsType
 	bool color_changed; // To discern when a control has been put back to the default color. [v1.0.26]
 	bool start_new_section;
 	bool use_theme; // v1.0.32: Provides the means for the window's current setting of mUseTheme to be overridden.
-	bool listview_tile; // Whether to use tile-view, which is available only on XP or later.
 };
 
 LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lParam);
