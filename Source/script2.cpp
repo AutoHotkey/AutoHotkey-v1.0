@@ -753,7 +753,7 @@ ResultType Line::ToolTip(char *aText, char *aX, char *aY, char *aID)
 		pt.y = ATOI(aY) + rect.top;
 
 	TOOLINFO ti;
-	ti.cbSize	= sizeof(ti);
+	ti.cbSize	= sizeof(ti) - sizeof(void *); // Fixed for v1.0.36.05: Tooltips fail to work on Win9x and probably NT4/2000 unless the size for the *lpReserved member in _WIN32_WINNT 0x0501 is omitted.
 	ti.uFlags	= TTF_TRACK;
 	ti.hwnd		= NULL;  // Doesn't work: GetDesktopWindow()
 	ti.hinst	= NULL;

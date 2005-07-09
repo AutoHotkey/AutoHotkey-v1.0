@@ -30,9 +30,12 @@ ResultType WinGroup::AddWindow(char *aTitle, char *aText, void *aJumpToLine, cha
 // Caller should ensure that at least one param isn't NULL/blank.
 // GroupActivate will tell its caller to jump to aJumpToLine if a WindowSpec isn't found.
 {
-	// For now, it seems best not to add the specification if all the params are blank:
+	// v1.0.36.05: If all four window parameters are blank, allow it to be added but provide
+	// a non-blank ExcludeTitle so that the window-finding routines won't see it as the
+	// "last found window".  99.99% of the time, it is undesirable to have Program Manager
+	// in a window group of any kind, so that is used as the placeholder:
 	if (!(*aTitle || *aText || *aExcludeTitle || *aExcludeText))
-		return OK;
+		aExcludeTitle = "Program Manager";
 
 	// Though the documentation is clear on this, some users will still probably execute
 	// each GroupAdd statement more than once.  Thus, to prevent more and more memory

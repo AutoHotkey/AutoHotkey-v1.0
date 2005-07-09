@@ -4232,8 +4232,6 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		if (!line.ArgHasDeref(1))
 			if (   !(line.mAttribute = FindOrAddGroup(NEW_RAW_ARG1))   )
 				return FAIL;  // The above already displayed the error.
-		if (aActionType == ACT_GROUPADD && !*NEW_RAW_ARG2 && !*NEW_RAW_ARG3 && !*NEW_RAW_ARG5 && !*NEW_RAW_ARG6) // ARG4 is the JumpToLine
-			return ScriptError(ERR_WINDOW_PARAM);
 		if (aActionType == ACT_GROUPACTIVATE || aActionType == ACT_GROUPDEACTIVATE)
 		{
 			if (*NEW_RAW_ARG2 && !line.ArgHasDeref(2))
@@ -9356,14 +9354,6 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 
 	case ACT_GROUPADD: // Adding a WindowSpec *to* a group, not adding a group.
 	{
-		if (!*ARG2 && !*ARG3 && !*ARG5 && !*ARG6) // Arg4 is the jump-to label.
-			// Unlike commands such as IfWinExist, we DO validate that the
-			// expanded (dereferenced) window params have at least one non-blank
-			// string among them, since it seems likely to be an error the user
-			// would want to know about.  It's also likely the error would
-			// occur immediately since ACT_GROUPADD tends to be used only in the
-			// auto-execute part of the script:
-			return LineError(ERR_WINDOW_PARAM, WARN);
 		if (   !(group = (WinGroup *)mAttribute)   )
 			if (   !(group = g_script.FindOrAddGroup(ARG1))   )
 				return FAIL;  // It already displayed the error for us.

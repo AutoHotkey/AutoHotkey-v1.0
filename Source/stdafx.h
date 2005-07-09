@@ -27,6 +27,11 @@ GNU General Public License for more details.
 // Necessary to do this prior to including windows.h so that NT functions are unlocked:
 // UPDATE: Using 0x0500 now so that VK_XBUTTON1 and 2 can be supported:
 // UPDATE v1.0.36.03: Using 0x0501 now so that various ListView constants and other things can be used.
+// UPDATE v1.0.36.05: 0x0501 broke the Tooltip cmd on on Win9x/NT4/2000 by increasing the size of the TOOLINFO
+// struct by 4 bytes.  However, rather than forever go without 0x501 and the many upgrades and constants
+// it makes available in the code, it seems best to stick with it and instead patch anything that needs it
+// (such as ToolTip).  Hopefully, ToolTip is the only thing in the current code base that needs patching
+// (perhaps the only reason it was broken in the first place was a bug or oversight by MS).
 #define _WIN32_WINNT 0x0501
 #define _WIN32_IE 0x0501  // Added for v1.0.35 to have MCS_NOTODAY resolve as expected, and possibly solve other problems on newer systems.
 
