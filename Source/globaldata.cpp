@@ -48,6 +48,8 @@ WORD g_mouse_buttons_logical = 0;
 // not work as advertised, at least under WinXP.  Note that this array is also used by	),
 // so it's format should be the same as that returned from GetKeyboardState():
 BYTE g_PhysicalKeyState[VK_ARRAY_COUNT] = {0};
+bool g_LayoutHasAltGr = false; // Seems safer to assume false upon startup and have all other detect geared toward proving this assumption wrong.
+bool g_HookReceiptOfLControlMeansAltGr = false;
 bool g_IgnoreNextLControlDown = false;
 bool g_IgnoreNextLControlUp = false;
 

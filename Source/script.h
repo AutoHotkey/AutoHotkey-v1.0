@@ -1961,7 +1961,7 @@ struct GuiControlType
 	#define GUI_CONTROL_ATTRIB_EXPLICITLY_DISABLED 0x10
 	#define GUI_CONTROL_ATTRIB_BACKGROUND_DEFAULT  0x20 // i.e. Don't conform to window/control background color; use default instead.
 	#define GUI_CONTROL_ATTRIB_BACKGROUND_TRANS    0x40 // i.e. Leave this control's background transparent.
-	#define GUI_CONTROL_ATTRIB_ALTBEHAVIOR         0x80 // For sliders: Reverse/Invert the value. Also for up-down controls (ALT means 32-bit vs. 16-bit). Also for ListView.
+	#define GUI_CONTROL_ATTRIB_ALTBEHAVIOR         0x80 // For sliders: Reverse/Invert the value. Also for up-down controls (ALT means 32-bit vs. 16-bit). Also for ListView and Tab.
 	UCHAR attrib; // A field of option flags/bits defined above.
 	TabControlIndexType tab_control_index; // Which tab control this control belongs to, if any.
 	TabIndexType tab_index; // For type==TAB, this stores the tab control's index.  For other types, it stores the page.

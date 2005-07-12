@@ -1127,6 +1127,17 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 			// the edit window:
 			break;
 
+		case WM_INPUTLANGCHANGEREQUEST:
+			// WM_INPUTLANGCHANGE does not appear to be received.  I think that msg is sent directly to
+			// the Window Proc of the Edit control in the main window. By contrast, MSDN says:
+			// "[WM_INPUTLANGCHANGE] is posted, not sent, to the application, so the return value is ignored."
+			// In addition, although WM_INPUTLANGCHANGEREQUEST is dispatched via DispatchMessage(),
+			// MainWindowProc() apparently never receives it (once again, this is because msg.hwnd is that
+			// of the main window's Edit control rather than the main window itself). But all we need to do
+			// is reset the AltGr indicator, so it's okay to handle it here.
+			g_LayoutHasAltGr = false; // Seems safest to assume it doesn't have one until proven otherwise.
+			break; // MSDN says, "to accept the change, the application should pass the message to DefWindowProc."
+
 		case WM_QUIT:
 			// The app normally terminates before WM_QUIT is ever seen here because of the way
 			// WM_CLOSE is handled by MainWindowProc().  However, this is kept here in case anything

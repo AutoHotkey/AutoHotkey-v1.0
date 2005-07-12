@@ -941,7 +941,7 @@ void ResetHook(bool aAllModifiersUp, HookType aWhichHook, bool aResetKVKandKSC)
 			= alt_tab_menu_is_visible = false;
 		vk_to_ignore_next_time_down = 0;
 
-		ZeroMemory(pad_state, sizeof(pad_state));
+		ZeroMemory(sPadState, sizeof(sPadState));
 
 		*g_HSBuf = '\0';
 		g_HSBufLength = 0;

@@ -1576,7 +1576,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 	case GUI_CONTROL_TAB:
 		style |= WS_CLIPSIBLINGS; // MSDN: Both the parent window and the tab control must have the WS_CLIPSIBLINGS window style.
 		// TCS_OWNERDRAWFIXED is required to implement custom Text color in the tabs.
-		// For some reason, it's also required for TabWindowProc's WM_ERASEBACKGROUND to be able to
+		// For some reason, it's also required for TabWindowProc's WM_ERASEBKGND to be able to
 		// override the background color of the control's interior, at least when an XP theme is in effect.
 		// (which is currently impossible since theme is always removed from a tab).
 		// Even if that weren't the case, would still want owner-draw because otherwise the background
@@ -2268,7 +2268,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 					// SetWindowLong() so that the button will get redrawn.  Update: The redraw doesn't
 					// actually seem to happen (both the old and the new buttons retain the default-button
 					// appearance until the window gets entirely redraw such as via alt-tab).  This is fairly
-					// inexpicable since the exact same technique works with "GuiControl +Default".  In any
+					// inexplicable since the exact same technique works with "GuiControl +Default".  In any
 					// case, this is kept because it also serves to change the default button appearance later,
 					// which is received in the WindowProc via WM_COMMAND:
 					SendMessage(mControl[mDefaultButtonIndex].hwnd, BM_SETSTYLE
@@ -2424,6 +2424,12 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			mCurrentListView = &control;
 			ZeroMemory(control.union_lv_attrib, sizeof(lv_attrib_type));
 			control.union_lv_attrib->sorted_by_col = -1; // Indicate that there is currently no sort order.
+
+			// v1.0.36.06: If this ListView is owned by a tab control, flag that tab control as needing
+			// to stay after all of its controls in the z-order.  This solves ListView-inside-Tab redrawing
+			// problems, namely the disappearance of the ListView or an incomplete drawing of it.
+			if (owning_tab_control)
+				owning_tab_control->attrib |= GUI_CONTROL_ATTRIB_ALTBEHAVIOR;
 
 			// Seems best to put tile view into effect before applying any styles that might be dependent upon it:
 			if (opt.listview_view == LV_VIEW_TILE) // An earlier stage has verified that this is true only if OS is XP or later.
@@ -3021,6 +3027,19 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		MapWindowPoints(NULL, mHwnd, (LPPOINT)&rect, 2); // Convert rect to client coordinates (not the same as GetClientRect()).
 		InvalidateRect(mHwnd, &rect, FALSE); // Seems safer to use TRUE, not knowing all possible overlaps, etc.
 	}
+	// v1.0.36.06: If this tab control contains a ListView, keep the tab control after all of its controls
+	// in the z-order.  This solves ListView-inside-Tab redrawing problems, namely the disappearance of
+	// the ListView or an incomplete drawing of it.  Doing it this way preserves the tab-navigation
+	// order of controls inside the tab control, both those above and those beneath the ListView.
+	// The only thing it alters is the tab navigation to the tab control itself, which will now occur
+	// after rather than before all the controls inside it. For most uses, this a very minor difference,
+	// especially given the rarity of having ListViews inside tab controls.  If this solution ever
+	// proves undesirable, one alternative is to somehow force the ListView to properly redraw whenever
+	// its inside a tab control.  Perhaps this could be done by subclassing the ListView or Tab control
+	// and having it do something different or additional in response to WM_ERASEBKGND.  It might
+	// also be done in the parent window's proc in response to WM_ERASEBKGND.
+	if (owning_tab_control && owning_tab_control->attrib & GUI_CONTROL_ATTRIB_ALTBEHAVIOR)
+		SetWindowPos(owning_tab_control->hwnd, control.hwnd, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
 
 	////////////////////////////////////////////////////////////////////////////////////////////////////
 	// Save the details of this control's position for posible use in auto-positioning the next control.

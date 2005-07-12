@@ -168,7 +168,6 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 	char single_char_string[2];
 	vk_type vk = 0;
 	sc_type sc = 0;
-	bool requires_altgr;
 	modLR_type key_as_modifiersLR = 0;
 	modLR_type modifiersLR_for_next_key = 0;
 	// Above: For v1.0.35, it was changed to modLR vs. mod so that AltGr keys such as backslash and {
@@ -260,8 +259,7 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 					}
 				}
 
-				// TextToVK() will always initialize requires_altgr for us even if it doesn't find a VK:
-				vk = TextToVK(aKeys + 1, &modifiersLR_for_next_key, true, false, &requires_altgr); // false must be passed due to below.
+				vk = TextToVK(aKeys + 1, &modifiersLR_for_next_key, true, false); // false must be passed due to below.
 				sc = vk ? 0 : TextToSC(aKeys + 1);  // If sc is 0, it will be resolved by KeyEvent() later.
 				if (!vk && !sc && toupper(*(aKeys + 1)) == 'V' && toupper(*(aKeys + 2)) == 'K')
 				{
@@ -293,7 +291,7 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 				#define DISGUISE_IF_NEEDED \
 					if (sPrevEventType == KEYDOWN && sPreviousEventModifierDown != vk \
 						&& ((vk == VK_LWIN || vk == VK_RWIN) && (sPrevVK == VK_LWIN || sPrevVK == VK_RWIN)\
-							|| (vk == VK_LMENU || vk == VK_RMENU) && (sPrevVK == VK_LMENU || sPrevVK == VK_RMENU)))\
+							|| (vk == VK_LMENU || (vk == VK_RMENU && !g_LayoutHasAltGr)) && (sPrevVK == VK_LMENU || sPrevVK == VK_RMENU)))\
 						KeyEvent(KEYDOWNANDUP, VK_CONTROL); // Disguise it to suppress Start Menu or prevent activation of active window's menu bar.
 
 				if (repeat_count)
@@ -331,7 +329,7 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 						// behaves also, which is good.  Example: Send, {AltDown}!f  ; this will cause
 						// Alt to still be down after the command is over, even though F is modified
 						// by Alt.
-						SendKey(vk, sc, requires_altgr, modifiersLR_for_next_key, g_modifiersLR_persistent
+						SendKey(vk, sc, modifiersLR_for_next_key, g_modifiersLR_persistent
 							, repeat_count, event_type, key_as_modifiersLR, aTargetWindow);
 					}
 
@@ -391,11 +389,10 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 			// value for modifiers.
 			single_char_string[0] = *aKeys;
 			single_char_string[1] = '\0';
-			// TextToVK() will always initialize requires_altgr for us even if it doesn't find a VK:
-			vk = TextToVK(single_char_string, &modifiersLR_for_next_key, true, true, &requires_altgr);
+			vk = TextToVK(single_char_string, &modifiersLR_for_next_key, true, true);
 			sc = 0;
 			if (vk)
-				SendKey(vk, sc, requires_altgr, modifiersLR_for_next_key, g_modifiersLR_persistent, 1, KEYDOWNANDUP, 0, aTargetWindow);
+				SendKey(vk, sc, modifiersLR_for_next_key, g_modifiersLR_persistent, 1, KEYDOWNANDUP, 0, aTargetWindow);
 			else // Try to send it by alternate means.
 				SendKeySpecial(*aKeys, modifiersLR_for_next_key, g_modifiersLR_persistent, 1, KEYDOWNANDUP, aTargetWindow);
 			modifiersLR_for_next_key = 0;  // Safest to reset this regardless of whether a key was sent.
@@ -473,7 +470,7 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 
 
 
-int SendKey(vk_type aVK, sc_type aSC, bool aRequiresAltGr, modLR_type aModifiersLR, modLR_type aModifiersLRPersistent
+int SendKey(vk_type aVK, sc_type aSC, modLR_type aModifiersLR, modLR_type aModifiersLRPersistent
 	, int aRepeatCount, KeyEventTypes aEventType, modLR_type aKeyAsModifiersLR, HWND aTargetWindow)
 // vk or sc may be zero, but not both.
 // Returns the number of keys actually sent for caller convenience.
@@ -547,8 +544,7 @@ int SendKey(vk_type aVK, sc_type aSC, bool aRequiresAltGr, modLR_type aModifiers
 				// Pass "true" so that WIN and ALT are disguised if they have to be released due to
 				// a hotkey such as !a::Send test
 				// See keyboard.h for explantion of KEY_IGNORE:
-				if (SetModifierLRState(modifiersLR_specified, GetModifierLRState(), aTargetWindow, true
-					, KEY_IGNORE, aRequiresAltGr))
+				if (SetModifierLRState(modifiersLR_specified, GetModifierLRState(), aTargetWindow, true, KEY_IGNORE))
 					// Modifiers were changed by the above.
 					DoKeyDelay(g.PressDuration); // See comments in SendKeys() about why this is done.
 			}
@@ -594,8 +590,7 @@ int SendKey(vk_type aVK, sc_type aSC, bool aRequiresAltGr, modLR_type aModifiers
 		// They are not needed because if our keystrokes were modified by either WIN or ALT, the
 		// release of the WIN or ALT key will already be disguised due to its having modified
 		// something while it was down.
-		if (SetModifierLRState(aModifiersLRPersistent, GetModifierLRState(), aTargetWindow, false
-			, KEY_IGNORE_ALL_EXCEPT_MODIFIER, aRequiresAltGr)) // v1.0.35.09: Pass aRequiresAltGr here too.
+		if (SetModifierLRState(aModifiersLRPersistent, GetModifierLRState(), aTargetWindow, false, KEY_IGNORE_ALL_EXCEPT_MODIFIER))
 			// Modifiers were changed by the above.
 			DoKeyDelay(g.PressDuration); // See comments in SendKeys() about why this is done.
 	}
@@ -820,9 +815,10 @@ int SendASC(char *aAscii, HWND aTargetWindow)
 
 	int keys_sent = 0;  // Track this value and return it to the caller.
 
-	if (!(GetModifierState() & MOD_ALT)) // Neither ALT key is down.
+	modLR_type which_alt_was_already_down;
+	if (!(which_alt_was_already_down = (GetModifierLRState() & (MOD_LALT|MOD_RALT)))) // Neither ALT key is down.
 	{
-		KeyEvent(KEYDOWN, VK_MENU);
+		KeyEvent(KEYDOWN, VK_MENU); // Send the neutral ALT key to support Win9x/NT4.
 		++keys_sent;
 	}
 
@@ -841,8 +837,13 @@ int SendASC(char *aAscii, HWND aTargetWindow)
 	// Must release the key regardless of whether it was already down, so that the
 	// sequence will take effect immediately rather than waiting for the user to
 	// release the ALT key (if it's physically down).  It's the caller's responsibility
-	// to put it back down if it needs to be:
-	KeyEvent(KEYUP, VK_MENU);
+	// to put it back down if it needs to be.
+	// Fix for v1.0.36.06: Release the right-Alt key if that was the one already down prior
+	// to the operation. Logic in both GetModifierLRState() above and KeyEvent() below ensures
+	// that VK_RMENU either never comes about for Win9x/NT4 or that even if it does, KeyEvent()
+	// translates it to a more appropriate event for those OSes.  This change fixed a hotkey
+	// such as the following if it was fired by holding down AltGr: <^>!i:: Send {ASC 00256}
+	KeyEvent(KEYUP, which_alt_was_already_down == MOD_RALT ? VK_RMENU : VK_MENU);
 	return ++keys_sent;
 }
 
@@ -1031,12 +1032,58 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 			&& g_os.IsWinNT4orLater();
 		if (we_turned_blockinput_off)
 			Line::ScriptBlockInput(false);
+
+		vk_type control_vk;
+		bool lcontrol_was_down, do_detect_altgr;
+		if (do_detect_altgr = (aVK == VK_RMENU && !g_LayoutHasAltGr)) // Keyboard layout isn't yet marked as having an AltGr key, so auto-detect it here as well as other places.
+		{
+			control_vk = g_os.IsWin2000orLater() ? VK_LCONTROL : VK_CONTROL;
+			lcontrol_was_down = GetAsyncKeyState(control_vk) & 0x80000000; // In this case, must use GetAsyncKeyState() vs. GetKeyState() to detect the change, at least on XP.
+			// Add extra detection of AltGr if hook is installed, which has been show to be useful for some
+			// scripts where the other AltGr detection methods don't occur in a timely enough fashion.
+			// The following method relies upon the fact that it's impossible for the hook to receive
+			// events from the user while it's processing our keybd_event() here.  This is because
+			// any physical keystrokes that happen to occur at the exact moment of our keybd_event()
+			// will stay queued until the main event loop routes them to the hook via GetMessage().
+			g_HookReceiptOfLControlMeansAltGr = true;
+		}
+
 		if (aEventType != KEYUP)  // i.e. always do it for KEYDOWNANDUP
 		{
+			// v1.0.35.07 was when g_IgnoreNextLControlDown/Up were originally added.
+			// The following global is used to flag as our own the keyboard driver's LControl-down keystroke
+			// that is triggered by RAlt-down (AltGr).  This prevents it from triggering hotkeys such as
+			// "*Control::".  It probably fixes other obscure side-effects and bugs also, since the
+			// event should be considered script-generated even though indirect.  Note: The problem with
+			// having the hook detect AltGr's automatic LControl-down is that the keyboard driver seems
+			// to generate the LControl-down *before* notifying the system of the RAlt-down.  That makes
+			// it impossible for the hook to flag the LControl keystroke in advance, so it would have to
+			// retroactively undo the effects.  But that is impossible because the previous keystroke might
+			// already have wrongly fired a hotkey.
+			if (aVK == VK_RMENU && g_LayoutHasAltGr) // VK_RMENU vs. VK_MENU should be safe since this logic is only needed for the hook, which is never in effect on Win9x.
+				g_IgnoreNextLControlDown = true; // Must be set prior to keybd_event() to be effective.
 			keybd_event(aVK
 				, LOBYTE(aSC)  // naked scan code (the 0xE0 prefix, if any, is omitted)
 				, (HIBYTE(aSC) ? KEYEVENTF_EXTENDEDKEY : 0)
 				, aExtraInfo);
+			// The following is done by us rather than by the hook to avoid problems where:
+			// 1) The hook is removed at a critical point during the operation, preventing the variable from
+			//    being reset to false.
+			// 2) For some reason this AltGr keystroke done above did not cause LControl to go down (perhaps
+			//    because the current keyboard layout doesn't have AltGr as we thought), which would be a bug
+			//    because some other Ctrl keystroke would then be wrongly ignored.
+			g_IgnoreNextLControlDown = false; // Unconditional reset.
+
+			if (do_detect_altgr) // i.e. g_LayoutHasAltGr is currently false, so make it true if called for.
+			{
+				do_detect_altgr = false; // Indicate that the second half has been done (for later below).
+				g_HookReceiptOfLControlMeansAltGr = false; // Must reset promptly in case key-delay below routes physical keystrokes to hook.
+				// Do it the following way rather than setting g_LayoutHasAltGr directly to the result of
+				// the boolean expression because keybd_event() above may have changed the value of
+				// g_LayoutHasAltGr to true, in which case that should be given precedence over the below.
+				if (!lcontrol_was_down && (GetAsyncKeyState(control_vk) & 0x80000000)) // It wasn't down before but now it is.  Thus, RAlt is really AltGr.
+					g_LayoutHasAltGr = true;
+			}
 
 			if (aVK == VK_NUMLOCK && g_os.IsWin9x()) // Under Win9x, Numlock needs special treatment.
 				ToggleNumlockWin9x();
@@ -1051,11 +1098,25 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 			DoKeyDelay(g.PressDuration);
 		if (aEventType != KEYDOWN)  // i.e. always do it for KEYDOWNANDUP
 		{
+			// See comments above for details about g_LayoutHasAltGr and g_IgnoreNextLControlUp:
+			if (aVK == VK_RMENU && g_LayoutHasAltGr) // VK_RMENU vs. VK_MENU should be safe since this logic is only needed for the hook, which is never in effect on Win9x.
+				g_IgnoreNextLControlUp = true; // Must be set prior to keybd_event() to be effective.
 			keybd_event(aVK, LOBYTE(aSC), (HIBYTE(aSC) ? KEYEVENTF_EXTENDEDKEY : 0)
 				| KEYEVENTF_KEYUP, aExtraInfo);
+			g_IgnoreNextLControlUp = false; // Unconditional reset.
+			if (do_detect_altgr) // This should be true only when aEventType==KEYUP. See similar section above for comments.
+			{
+				g_HookReceiptOfLControlMeansAltGr = false;
+				// Do it the following way rather than setting g_LayoutHasAltGr directly to the result of
+				// the boolean expression because keybd_event() above may have changed the value of
+				// g_LayoutHasAltGr to true, in which case that should be given precedence over the below.
+				if (lcontrol_was_down && !(GetAsyncKeyState(control_vk) & 0x80000000)) // RAlt is really AltGr.
+					g_LayoutHasAltGr = true;
+			}
 			if (!g_KeybdHook) // Hook isn't logging, so we'll log just the keys we send, here.
 				UpdateKeyEventHistory(true, aVK, aSC);
 		}
+
 		if (we_turned_blockinput_off)  // Turn it back on.
 			Line::ScriptBlockInput(true);
 	}
@@ -1128,7 +1189,7 @@ ToggleValueType ToggleKeyState(vk_type aVK, ToggleValueType aToggleValue)
 	}
 	// Since it's not already in the desired state, toggle it:
 	KeyEvent(KEYDOWNANDUP, aVK);
-	// Fix for v1.0.35.06: // If it's Capslock and it didn't turn off as specified, it's probably because
+	// Fix for v1.0.36.06: // If it's Capslock and it didn't turn off as specified, it's probably because
 	// the OS is configured to turn Capslock off only in response to pressing the SHIFT key (via Ctrl Panel's
 	// Regional settings).  So send shift to do it instead:
 	if (aVK == VK_CAPITAL && aToggleValue == TOGGLED_OFF && IsKeyToggledOn(aVK))
@@ -1219,7 +1280,7 @@ MsgBox(error_text);
 
 
 modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLRnow, HWND aTargetWindow
-	, bool aDisguiseWinAlt, DWORD aExtraInfo, bool aRequiresAltGr)
+	, bool aDisguiseWinAlt, DWORD aExtraInfo)
 // Puts modifiers into the specified state, releasing or pressing down keys as needed.
 // Returns the set of modifiers that *changed* (i.e. went from down to up or vice versa).
 // Note that by design and as documented for ControlSend, aTargetWindow is not used as the target for the
@@ -1242,7 +1303,8 @@ modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLR
 	// are only sent when necessary (which helps avoid complications caused by keystroke interaction,
 	// while improving performance):
 	bool ctrl_not_down = !(aModifiersLRnow & (MOD_LCONTROL | MOD_RCONTROL)); // Neither CTRL key is down now.
-	bool ctrl_will_not_be_down = !(modifiersLRnew & (MOD_LCONTROL | MOD_RCONTROL)) && !aRequiresAltGr; // Nor will it be.
+	bool ctrl_will_not_be_down = !(modifiersLRnew & (MOD_LCONTROL | MOD_RCONTROL)) // Nor will it be.
+		&& !(g_LayoutHasAltGr && (modifiersLRnew & MOD_RALT)); // Nor will it be pushed down indirectly due to AltGr.
 
 	bool ctrl_nor_shift_nor_alt_down = ctrl_not_down                             // Neither CTRL key is down now.
 		&& !(aModifiersLRnow & (MOD_LSHIFT | MOD_RSHIFT | MOD_LALT | MOD_RALT)); // Nor is any SHIFT/ALT key.
@@ -1317,41 +1379,34 @@ modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLR
 
 	if (release_ralt)
 	{
-		if (!defer_alt_release)
+		if (!defer_alt_release || g_LayoutHasAltGr) // No need to defer if RAlt==AltGr. But don't change the value of defer_alt_release because LAlt uses it too.
 		{
-			if (ctrl_not_down && aDisguiseWinAlt)
-				KeyEvent(KEYDOWNANDUP, VK_CONTROL, 0, NULL, false, aExtraInfo); // Disguise key release to suppress menu activation.
-			if (aRequiresAltGr)
-				g_IgnoreNextLControlUp = true;
+			if (g_LayoutHasAltGr)
+			{
+				// Indicate that control is both up and required so that the section after this one won't
+				// push it down.  This change might not be strictly necessary to fix anything but it does
+				// eliminate redundant keystrokes.  See similar section below for more details.
+				aModifiersLRnow &= ~MOD_LCONTROL; // To reflect what KeyEvent(KEYUP, VK_RMENU) below will do.
+				modifiersLRnew &= ~MOD_LCONTROL;  //
+			}
+			else // No AltGr, so check if disguise is necessary (AltGr itself never needs disguise).
+				if (ctrl_not_down && aDisguiseWinAlt)
+					KeyEvent(KEYDOWNANDUP, VK_CONTROL, 0, NULL, false, aExtraInfo); // Disguise key release to suppress menu activation.
 			KeyEvent(KEYUP, VK_RMENU, 0, NULL, false, aExtraInfo);
-			g_IgnoreNextLControlUp = false; // See comments below about g_IgnoreNextLControlDown.
 		}
 	}
 	else if (!(aModifiersLRnow & MOD_RALT) && (modifiersLRnew & MOD_RALT))
 	{
-		if (aRequiresAltGr) // v1.0.35.07.  This also relies on the fact that "press down" is not subject to defer_alt_release.
+		KeyEvent(KEYDOWN, VK_RMENU, 0, NULL, false, aExtraInfo);
+		if (g_LayoutHasAltGr) // Note that KeyEvent() might have just altered the value of g_LayoutHasAltGr.
 		{
-			// The following global is used to flag as our own the keyboard driver's LControl-down keystroke
-			// that is triggered by RAlt-down (AltGr).  This prevents it from triggering hotkeys such as
-			// "*Control::".  It probably fixes other obscure side-effects and bugs also, since the
-			// event should be considered script-generated even though indirect:
-			g_IgnoreNextLControlDown = true;
 			// Indicate that control is both down and required so that the section after this one won't
 			// release it.  Without this fix, a hotkey that sends an AltGr char such as "^ä:: SendRaw, {"
 			// would fail to work under German layout because left-alt would be released after right-alt
 			// goes down.
-			aModifiersLRnow |= MOD_LCONTROL; // In prep. for the KeyEvent() call below.
-			modifiersLRnew |= MOD_LCONTROL;  //
+			aModifiersLRnow |= MOD_LCONTROL; // To reflect what KeyEvent() did above.
+			modifiersLRnew |= MOD_LCONTROL;  // All callers want LControl to be down if they wanted AltGr to be down.
 		}
-		// Above's global must be set prior to the below.
-		KeyEvent(KEYDOWN, VK_RMENU, 0, NULL, false, aExtraInfo);
-		// The following is done by us rather than by the hook to avoid problems where:
-		// 1) The hook is removed at a critical point during the operation, preventing the variable from
-		//    being reset to false.
-		// 2) For some reason this AltGr keystroke done above did not cause LControl to go down (perhaps
-		//    because the current keyboard layout doesn't have AltGr as we thought), which would be a bug
-		//    because some other Ctrl keystroke would then be wrongly ignored.
-		g_IgnoreNextLControlDown = false; // Unconditional reset.
 	}
 
 	// CONTROL and SHIFT are done only after the above because the above might rely on them
@@ -1388,13 +1443,8 @@ modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLR
 	{
 		if (release_lalt)
 			KeyEvent(KEYUP, VK_LMENU, 0, NULL, false, aExtraInfo);
-		if (release_ralt)
-		{
-			if (aRequiresAltGr)
-				g_IgnoreNextLControlUp = true; // See comments above about g_IgnoreNextLControlDown.
+		if (release_ralt && !g_LayoutHasAltGr) // If g_LayoutHasAltGr==true, RAlt would already have been released earlier since defer_alt_release would have been ignored for it.
 			KeyEvent(KEYUP, VK_RMENU, 0, NULL, false, aExtraInfo);
-			g_IgnoreNextLControlUp = false;
-		}
 	}
 
 	// When calling KeyEvent(), probably best not to specify a scan code unless
@@ -1426,7 +1476,7 @@ modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLR
 			SLEEP_WITHOUT_INTERRUPTION(-1)
 	}
 
-	return aModifiersLRnow ^ modifiersLRnew; // Calculate the set of modifiers that changed.
+	return aModifiersLRnow ^ modifiersLRnew; // Calculate the set of modifiers that changed (currently excludes AltGr's change of LControl's state).
 }
 
 
@@ -1444,7 +1494,8 @@ void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLR
 		return;
 
 	bool ctrl_not_down = !(aModifiersLRnow & (MOD_LCONTROL | MOD_RCONTROL)); // Neither CTRL key is down now.
-	bool ctrl_wont_be_down = aEventType == KEYUP || !(aModifiersLR & (MOD_LCONTROL | MOD_RCONTROL));
+	bool ctrl_wont_be_down = aEventType == KEYUP || !((aModifiersLR & (MOD_LCONTROL | MOD_RCONTROL))
+		|| (g_LayoutHasAltGr && (aModifiersLR & MOD_RALT))); // Nor will it be pushed down indirectly due to AltGr.
 	// Control won't be going down if aEventType==KEYUP because nothing is ever pressed down in that mode.
 
 	// To prevent it from activating the menu bar, the release of the ALT key should be disguised
@@ -1466,7 +1517,7 @@ void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLR
 	// The #2 case above is the one handled below by ctrl_wont_be_down.  It is especially necessary
 	// when the user releases the ALT key prior to releasing the hotkey suffix, which would otherwise
 	// cause the menu bar (if any) of the active window to be activated.
-	bool disguise_alt_key = ctrl_not_down && ctrl_wont_be_down;
+	bool disguise_alt_key = ctrl_not_down && ctrl_wont_be_down; // Since this applies to both Left and Right Alt, don't take g_LayoutHasAltGr into account here. That is done later below.
 
 	// Some of the same comments above for ALT key apply to the WIN key.  More about this issue:
 	// Although the disguise of the down-event is usually not needed, it is needed in the rare case
@@ -1540,12 +1591,22 @@ void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLR
 	}
 	if (aModifiersLR & MOD_RALT)
 	{
-		if (disguise_alt_key)
+		// For the below: There should never be a need to disguise AltGr.  Doing so would likely cause unwanted
+		// side-effects. Also, disguise_alt_key does not take g_LayoutHasAltGr into account because
+		// disguise_alt_key also applies to the left alt key.
+		if (disguise_alt_key && !g_LayoutHasAltGr)
+		{
 			KeyEvent(KEYDOWN, VK_CONTROL, 0, NULL, false, aExtraInfo); // Ensures that menu bar is not activated.
-		KeyEvent(aEventType, VK_RMENU, 0, NULL, false, aExtraInfo);
-		if (disguise_alt_key)
+			KeyEvent(aEventType, VK_RMENU, 0, NULL, false, aExtraInfo);
 			KeyEvent(KEYUP, VK_CONTROL, 0, NULL, false, aExtraInfo);
-	}
+		}
+		else // No disguise needed.
+		{
+			KeyEvent(aEventType, VK_RMENU, 0, NULL, false, aExtraInfo);
+			if (g_LayoutHasAltGr) // Note that KeyEvent() might have just changed the value of g_LayoutHasAltGr.
+				aModifiersLR &= ~MOD_LCONTROL; // Ensure that the step later below won't send an LControl keystroke (neither up nor down).
+		}
+	} // RAlt
 
 	if (aModifiersLR & MOD_LSHIFT) KeyEvent(aEventType, VK_LSHIFT, 0, NULL, false, aExtraInfo);
 	if (aModifiersLR & MOD_RSHIFT) KeyEvent(aEventType, VK_RSHIFT, 0, NULL, false, aExtraInfo);
@@ -2004,14 +2065,10 @@ sc_type TextToSC(char *aText)
 
 
 
-vk_type TextToVK(char *aText, modLR_type *pModifiersLR, bool aExcludeThoseHandledByScanCode, bool aAllowExplicitVK
-	, bool *pRequiresAltGr)
-// *pRequiresAltGr is set to true only if OS is Win2k or greater and this key requires AltGr.
+vk_type TextToVK(char *aText, modLR_type *pModifiersLR, bool aExcludeThoseHandledByScanCode, bool aAllowExplicitVK)
 // If modifiers_p is non-NULL, place the modifiers that are needed to realize the key in there.
 // e.g. M is really +m (shift-m), # is really shift-3.
 {
-	if (pRequiresAltGr)
-		*pRequiresAltGr = false; // Set default for caller in case of early return.
 	if (!aText || !*aText) return 0;
 
 	// Don't trim() aText or modify it because that will mess up the caller who expects it to be unchanged.
@@ -2038,36 +2095,47 @@ vk_type TextToVK(char *aText, modLR_type *pModifiersLR, bool aExcludeThoseHandle
 				return 0;
 		}
 
+		// For v1.0.35, pModifiersLR was changed to modLR vs. mod so that AltGr keys such as backslash and {
+		// are supported on layouts such as German when sending to apps such as Putty that are fussy about
+		// which ALT key is held down to produce the character.  The following section detects AltGr by the
+		// assuming that any character that requires both CTRL and ALT (with optional SHIFT) to be held
+		// down is in fact an AltGr key (I don't think there are any that aren't AltGr in this case, but
+		// confirmation would be nice).  Also, this is not done for Win9x because the distinction between
+		// right and left-alt is not well-supported and it might do more harm than good (testing is
+		// needed on fussy apps like Putty on Win9x).  UPDATE: Windows NT4 is now excluded from this
+		// change because apparently it wants the left Alt key's virtual key and not the right's (though
+		// perhaps it would prefer the right scan code vs. the left in apps such as Putty, but until that
+		// is proven, the complexity is not added here).  Otherwise, on French and other layouts on NT4,
+		// AltGr-produced characters such as backslash do not get sent properly.  In hindsight, this is
+		// not suprising because the keyboard hook also receives neutral modifier keys on NT4 rather than
+		// a more specific left/right key.
+
+		// For v1.0.36.06: The following should be a 99% reliable indicator that current layout has an AltGr key.
+		// But is there a better way?  Maybe could use IOCTL to query the keyboard driver's AltGr flag whenever
+		// the main event loop receives WM_INPUTLANGCHANGEREQUEST.  Making such a thing work on both Win9x and
+		// 2000/XP might be an issue.
+		bool requires_altgr = (keyscan_modifiers & 0x06) == 0x06;
+		if (requires_altgr) // This character requires both CTRL and ALT (and possibly SHIFT, since I think Shift+AltGr combinations exist).
+			g_LayoutHasAltGr = true;
+
 		// The win docs for VkKeyScan() are a bit confusing, referring to flag "bits" when it should really
 		// say flag "values".  In addition, it seems that these flag values are incompatible with
 		// MOD_ALT, MOD_SHIFT, and MOD_CONTROL, so they must be translated:
-		if (pModifiersLR) // The caller wants this info added to the output param
+		if (pModifiersLR) // The caller wants this info added to the output param.
 		{
 			// Best not to reset this value because some callers want to retain what was in it before,
 			// merely merging these new values into it:
 			//*pModifiers = 0;
-
-			// For v1.0.35, pModifiersLR was changed to modLR vs. mod so that AltGr keys such as backslash and {
-			// are supported on layouts such as German when sending to apps such as Putty that are fussy about
-			// which ALT key is held down to produce the character.  The following line detects AltGr by the
-			// assuming that any character that requires both CTRL and ALT (with optional SHIFT) to be held
-			// down is in fact an AltGr key (I don't think there are any that aren't AltGr in this case, but
-			// confirmation would be nice).  Also, this is not done for Win9x because the distinction between
-			// right and left-alt is not well-supported and it might cause more harm than good (testing is
-			// needed on fussy apps like Putty on Win9x).  UPDATE: Windows NT4 is now excluded from this
-			// change because apparently it wants the left Alt key's virtual key and not the right's (though
-			// perhaps it would prefer the right scan code vs. the left in apps such as Putty, but until that
-			// is proven, the complexity is not added here).  Otherwise, on French and other layouts on NT4,
-			// AltGr-produced characters such as backslash do not get sent properly.  In hindsight, this is
-			// not suprising because the keyboard hook also receives neutral modifier keys on NT4 rather than
-			// a more specific left/right key.
-			if ((keyscan_modifiers & 0x06) == 0x06 && g_os.IsWin2000orLater()) // This character requires both CTRL and ALT (and possibly SHIFT, since I think Shift+AltGr combinations exist).
+			if (requires_altgr && g_os.IsWin2000orLater())
 			{
-				if (pRequiresAltGr)
-					*pRequiresAltGr = true; // Set to true only for Win2000 or later, by design.
-				*pModifiersLR |= MOD_RALT; // The critical difference here is right vs. left ALT.  Must not include MOD_LCONTROL because simulating the RAlt keystroke on these keyboard layouts will automatically press LControl down.
+				// v1.0.35: The critical difference below is right vs. left ALT.  Must not include MOD_LCONTROL
+				// because simulating the RAlt keystroke on these keyboard layouts will automatically
+				// press LControl down.
+				*pModifiersLR |= MOD_RALT;
+				if (keyscan_modifiers & 0x01) // Added for v1.0.36.06 because presence of AltGr should not preclude the presence of Shift.
+					*pModifiersLR |= MOD_LSHIFT;
 			}
-			else
+			else // Do normal/default translation.
 			{
 				if (keyscan_modifiers & 0x01)
 					*pModifiersLR |= MOD_LSHIFT;
