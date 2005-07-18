@@ -235,7 +235,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		// Windows 95/NT without the updated DLL (otherwise the program would not launch at all).
 		typedef BOOL (WINAPI *MyInitCommonControlsExType)(LPINITCOMMONCONTROLSEX);
 		MyInitCommonControlsExType MyInitCommonControlsEx = (MyInitCommonControlsExType)
-			GetProcAddress(GetModuleHandle("comctl32.dll"), "InitCommonControlsEx"); // LoadLibrary shouldn't be necessary because comctl32 in linked by compiler.
+			GetProcAddress(GetModuleHandle("comctl32"), "InitCommonControlsEx"); // LoadLibrary shouldn't be necessary because comctl32 in linked by compiler.
 		if (MyInitCommonControlsEx)
 		{
 			INITCOMMONCONTROLSEX icce;

@@ -1492,7 +1492,8 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		// on Control is all that is necessary to disguise the key.  This is because the OS will see
 		// that the Control keystroke occurred while ALT or WIN is still down because we haven't
 		// done CallNextHookEx() yet.
-		return AllowKeyToGoToSystem;
+		// Fix for v1.0.36.07: Don't return here because this release might also be a hotkey such as
+		// "~LWin Up::".
 	}
 
 #else // Mouse hook

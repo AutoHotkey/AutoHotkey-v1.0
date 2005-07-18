@@ -40,8 +40,8 @@ GNU General Public License for more details.
 	#include <stdio.h>
 	#include <stdlib.h>
 	#include <stdarg.h> // used by snprintfcat()
-	#include <limits.h>  // for UINT_MAX, UCHAR_MAX, etc.
-	//#include <malloc.h>
+	#include <limits.h> // for UINT_MAX, UCHAR_MAX, etc.
+	#include <malloc.h> // For _alloca()
 	//#include <memory.h>
 	//#include <tchar.h>
 

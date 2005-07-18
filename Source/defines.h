@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.36.06"
+#define NAME_VERSION "1.0.36.07"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -124,9 +124,9 @@ enum SymbolType // For use with ExpandExpression() and IsPureNumeric().
 	, SYM_OPERAND // Generic/undetermined type of operand.
 	, SYM_OPERAND_END // Marks the symbol after the last operand.  This value is used below.
 	, SYM_BEGIN = SYM_OPERAND_END  // SYM_BEGIN is a special marker to simplify the code.
-#define IS_OPERAND(symbol) (symbol < SYM_OPERAND_END)
+#define IS_OPERAND(symbol) ((symbol) < SYM_OPERAND_END)
 	, SYM_CPAREN, SYM_OPAREN, SYM_COMMA  // CPAREN (close-paren) must come right before OPAREN and must be the first non-operand symbol other than SYM_BEGIN.
-#define IS_OPERAND_OR_CPAREN(symbol) (symbol < SYM_OPAREN)
+#define IS_OPERAND_OR_CPAREN(symbol) ((symbol) < SYM_OPAREN) // Definitely needs the parentheses around symbol.
 	, SYM_OR, SYM_AND, SYM_LOWNOT  // LOWNOT is the word "not", the low precedence counterpart of !
 	, SYM_EQUAL, SYM_EQUALCASE, SYM_NOTEQUAL // =, ==, <>
 	, SYM_GT, SYM_LT, SYM_GTOE, SYM_LTOE  // >, <, >=, <=
@@ -137,8 +137,9 @@ enum SymbolType // For use with ExpandExpression() and IsPureNumeric().
 	, SYM_BITSHIFTLEFT, SYM_BITSHIFTRIGHT // << >>
 	, SYM_PLUS, SYM_MINUS
 	, SYM_TIMES, SYM_DIVIDE, SYM_FLOORDIVIDE
-	, SYM_NEGATIVE, SYM_HIGHNOT, SYM_BITNOT // Unary minus (unary plus is handled without needing a value here), !, and ~.
+	, SYM_NEGATIVE, SYM_HIGHNOT, SYM_BITNOT, SYM_ADDRESS  // Unary minus (unary plus is handled without needing a value here), !, ~, and &var.
 	, SYM_POWER    // See below for why this takes precedence over negative.
+	, SYM_DEREF
 	, SYM_FUNC     // A call to a function.
 	, SYM_COUNT    // Must be last.
 };

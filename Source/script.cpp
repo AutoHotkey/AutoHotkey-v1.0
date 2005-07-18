@@ -5604,7 +5604,7 @@ Func *Script::FindFunc(char *aFuncName, size_t aFuncNameLength)
 	else if (!stricmp(func_name, "VarSetCapacity"))
 	{
 		bif = BIF_VarSetCapacity;
-		max_params = 2;
+		max_params = 3;
 	}
 	else if (!stricmp(func_name, "FileExist"))
 		bif = BIF_FileExist;
@@ -11242,9 +11242,10 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 		, 11, 11         // SYM_BITSHIFTLEFT, SYM_BITSHIFTRIGHT
 		, 12, 12         // SYM_PLUS, SYM_MINUS
 		, 13, 13, 13     // SYM_TIMES, SYM_DIVIDE, SYM_FLOORDIVIDE
-		, 14, 14, 14     // SYM_NEGATIVE (unary minus), SYM_HIGHNOT (the high precedence "not" operator), SYM_BITNOT
+		, 14, 14, 14, 14 // SYM_NEGATIVE (unary minus), SYM_HIGHNOT (the high precedence "not" operator), SYM_BITNOT, SYM_ADDRESS
 		, 15             // SYM_POWER (see note below).
-		, 16             // SYM_FUNC -- Probably must be of highest precedence for it to work properly.
+		, 16             // SYM_DEREF -- Giving this a higher precedence than the above allows !*Var to work, and also -*Var and ~*Var.
+		, 17             // SYM_FUNC -- Probably must be of highest precedence for it to work properly.
 	};
 	// Most programming languages give exponentiation a higher precedence than unary minus and !/not.
 	// For example, -2**2 is evaluated as -(2**2), not (-2)**2 (the latter is unsupported by qmathPow anyway).
@@ -11260,7 +11261,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 	// scenarios and avoid having to check for overflow.  For the infix-to-postfix conversion, the
 	// stack must be large enough to hold a malformed expression consisting entirely of operators
 	// (though other checks might prevent this).  It must also be large enough for use by the final
-	// expression evaluation phase, the worst-case of which is unknown but certainly not larger
+	// expression evaluation phase, the worst case of which is unknown but certainly not larger
 	// than MAX_TOKENS.
 
 	///////////////////////////////////////////////////////////////////////////////////////////////
@@ -11409,7 +11410,12 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 					this_infix_item.symbol = SYM_POWER;
 				}
 				else
-					this_infix_item.symbol = SYM_TIMES;
+				{
+					// Differentiate between unary dereference (*) and the "multiply" operator:
+					// See '-' above for more details:
+					this_infix_item.symbol = IS_OPERAND_OR_CPAREN(infix_count ? infix[infix_count - 1].symbol : SYM_OPAREN)
+						? SYM_TIMES : SYM_DEREF;
+				}
 				break;
 			case '!':
 				if (cp[1] == '=') // i.e. != is synonymous with <>, which is also already supported by legacy.
@@ -11495,7 +11501,12 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 					this_infix_item.symbol = SYM_AND;
 				}
 				else
-					this_infix_item.symbol = SYM_BITAND;
+				{
+					// Differentiate between unary "take the address of" and the "bitwise and" operator:
+					// See '-' above for more details:
+					this_infix_item.symbol = IS_OPERAND_OR_CPAREN(infix_count ? infix[infix_count - 1].symbol : SYM_OPAREN)
+						? SYM_BITAND : SYM_ADDRESS;
+				}
 				break;
 			case '|':
 				if (cp[1] == '|')
@@ -11900,10 +11911,15 @@ double_deref:
 			{
 				// The line above is a workaround to allow 2^-2 to be evaluated as 2^(-2) rather
 				// than being seen as an error.  However, for simplicity of code, consecutive
-				// unary operators are not supported:
+				// unary operators are not supported (they currently produce a failure [blank value]
+				// because they wind up in the postfix array in the wrong order).
 				// !-3  ; Not supported (seems of little use anyway; can be written as !(-3) to make it work).
 				// -!3  ; Not supported (seems useless anyway, can be written as -(!3) to make it work).
 				// !x   ; Supported even if X contains a negative number, since x is recognized as an isolated operand and not something containing unary minus.
+				// !&Var ; Not supported (seems useless anyway; can be written with parentheses to make it work).
+				// -&Var ; Same
+				// ~&Var ; Same
+				// !*Var, -*Var and ~*Var: These are supported by means of having * be a higher precedence than the other unary operators.
 
 				// To facilitate short-circuit boolean evaluation, right before an AND/OR is pushed onto the
 				// stack, connect the end of it's left branch to it.  Note that the following postfix token
@@ -12016,7 +12032,8 @@ double_deref:
 							{
 								// Since this formal parameter is passed by value, if it's SYM_VAR, convert it to
 								// SYM_OPERAND to allow the variables to be backed up and reset further below without
-								// corrupting any SYM_VARs that happen to be locals or params of this very same function:
+								// corrupting any SYM_VARs that happen to be locals or params of this very same
+								// function.
 								// DllCall() relies on the fact that this transformation is only done for UDFs
 								// and not built-in functions such as DllCall().  This is because DllCall() sometimes
 								// needs the variable of a parameter for use as an output parameter.
@@ -12224,7 +12241,7 @@ double_deref:
 					//   (unusual because the deref buf expands in block-increments, and also because
 					//   return values are usually small, such as numbers).
 					if (mem_count == MAX_EXPR_MEM_ITEMS // No more slots left (should be nearly impossible).
-						|| !(mem[mem_count] = (char *)malloc(result_size)))
+						|| !(mem[mem_count] = (char *)malloc(result_size))) // Use malloc() vs. _alloca() because string can be very large.
 					{
 						LineError(ERR_OUTOFMEM ERR_ABORT, FAIL, func.mName);
 						aResult = FAIL;
@@ -12377,11 +12394,12 @@ double_deref:
 			break;
 
 		case SYM_BITNOT: // The tilde (~) operator.
+		case SYM_DEREF:  // Dereference an address.
 			if (right_is_number == PURE_INTEGER) // But in this case, it can be hex, so use ATOI64().
-				this_token.value_int64 = right.symbol == SYM_INTEGER ? right.value_int64 : ATOI64(right_contents);
+				right_int64 = right.symbol == SYM_INTEGER ? right.value_int64 : ATOI64(right_contents);
 			else if (right_is_number == PURE_FLOAT)
-				// Overwrite this_token's union with a float. No need to have the overhead of ATOI64() since PURE_FLOAT can't be hex.
-				this_token.value_int64 = right.symbol == SYM_FLOAT ? (__int64)right.value_double : _atoi64(right_contents);
+				// No need to have the overhead of ATOI64() since PURE_FLOAT can't be hex:
+				right_int64 = right.symbol == SYM_FLOAT ? (__int64)right.value_double : _atoi64(right_contents);
 			else // String.  Seems best to consider the application of unary minus to a string, even a quoted string literal such as "15", to be a failure.
 			{
 				this_token.marker = "";
@@ -12389,14 +12407,53 @@ double_deref:
 				break;
 			}
 			// Since above didn't "break":
-			// Note that it is not legal to perform ~, &, |, or ^ on doubles.  Because of this, and also to
-			// conform to the behavior of the Transform command, any floating point operand is truncated to
-			// an integer above.
-			if (this_token.value_int64 < 0 || this_token.value_int64 > UINT_MAX)
-				this_token.value_int64 = ~this_token.value_int64;
-			else // See comments at TRANS_CMD_BITNOT for why it's done this way.
-				this_token.value_int64 = ~((DWORD)this_token.value_int64);
-			this_token.symbol = right_is_number; // Convert generic SYM_OPERAND into a specific type: float or int.
+			if (this_token.symbol == SYM_DEREF)
+			{
+				// Reasons for resolving *Var to a number rather than a single-char string:
+				// 1) More consistent with future uses of * that might operate on the address of 2-byte,
+				//    4-byte, and 8-byte targets.
+				// 2) Performs better in things like ExtractInteger() that would otherwise have to call Asc().
+				// 3) Converting it to a one-char string would add no value beyond convenience because script
+				//    could do "if (*var = 65)" if it's concerned with avoiding a Chr() call for performance
+				//    reasons.  Also, it seems somewhat rare that a script will access a string's characters
+				//    one-by-one via the * method because that a parsing loop can already do that more easily.
+				// 4) Reduces code size and improves performance (however, the single-char string method would
+				//    use _alloca(2) to get some temporary memory, so it wouldn't be too bad in performance).
+				//
+				// The following does a basic bounds check to prevent crashes due to dereferencing addresses
+				// that are obviously bad.  In terms of percentage impact on performance, this seems quite
+				// justified.  In the future, could also put a __try/__except block around this (like DllCall
+				// uses) to prevent buggy scripts from crashing.  In addition to ruling out the dereferencing of
+				// a NULL address, the >255 check also rules out common-bug addresses (I don't think addresses
+				// this low can realistically never be legitimate, but it would be nice to get confirmation).
+				// For simplicity and due to rarity, a zero is yielded in such cases rather than an empty string.
+				// If address is valid, dereference it to extract one unsigned character, just like Asc().
+				this_token.value_int64 = (right_int64 < 256 || right_int64 > 0xFFFFFFFF) ? 0 : *(UCHAR *)right_int64;
+			}
+			else // SYM_BITNOT
+			{
+				// Note that it is not legal to perform ~, &, |, or ^ on doubles.  Because of this, and also to
+				// conform to the behavior of the Transform command, any floating point operand is truncated to
+				// an integer above.
+				if (right_int64 < 0 || right_int64 > UINT_MAX)
+					this_token.value_int64 = ~right_int64;
+				else // See comments at TRANS_CMD_BITNOT for why it's done this way.
+					this_token.value_int64 = ~((DWORD)right_int64);
+			}
+			this_token.symbol = SYM_INTEGER; // Must be done only after its old value was used above. v1.0.36.07: Fixed to be SYM_INTEGER vs. right_is_number for SYM_BITNOT.
+			break;
+
+		case SYM_ADDRESS: // Take the address of a variable.
+			if (right.symbol == SYM_VAR) // SYM_VAR is always a normal variable, never a built-in one, so taking its address should be safe.
+			{
+				this_token.symbol = SYM_INTEGER;
+				this_token.value_int64 = (__int64)right_contents;
+			}
+			else // Invalid, so make it a localized blank value.
+			{
+				this_token.symbol = SYM_STRING;
+				this_token.marker = "";
+			}
 			break;
 
 		default: // Non-unary operator.
@@ -12492,7 +12549,7 @@ double_deref:
 						//   (unusual because the deref buf expands in block-increments, and also because
 						//   return values are usually small, such as numbers).
 						if (mem_count == MAX_EXPR_MEM_ITEMS // No more slots left (should be nearly impossible).
-							|| !(mem[mem_count] = (char *)malloc(result_size)))
+							|| !(mem[mem_count] = (char *)malloc(result_size))) // Use malloc() vs. _alloca() because string can be very large.
 						{
 							LineError(ERR_OUTOFMEM ERR_ABORT, FAIL);
 							aResult = FAIL;
@@ -14278,7 +14335,7 @@ VarSizeType Script::GetTimeIdle(char *aBuf)
 		// Must fetch it at runtime, otherwise the program can't even be launched on Win9x/NT:
 		typedef BOOL (WINAPI *MyGetLastInputInfoType)(PLASTINPUTINFO);
 		static MyGetLastInputInfoType MyGetLastInputInfo = (MyGetLastInputInfoType)
-			GetProcAddress(GetModuleHandle("User32.dll"), "GetLastInputInfo");
+			GetProcAddress(GetModuleHandle("user32"), "GetLastInputInfo");
 		if (MyGetLastInputInfo)
 		{
 			LASTINPUTINFO lii;
@@ -14302,7 +14359,7 @@ VarSizeType Script::GetTimeIdlePhysical(char *aBuf)
 		return GetTimeIdle(aBuf);
 	if (!aBuf)
 		return MAX_NUMBER_LENGTH;
-	return (VarSizeType)strlen(ITOA64(GetTickCount() - g_TimeLastInputPhysical, aBuf));
+	return (VarSizeType)strlen(ITOA64(GetTickCount() - g_TimeLastInputPhysical, aBuf)); // Switching keyboard layouts/languages sometimes sees to throw off the timestamps of the incoming events in the hook.
 }
 
 
@@ -14592,7 +14649,7 @@ ResultType Line::ScriptBlockInput(bool aEnable)
 	// We must dynamically load the function to retain compatibility with Win95 (program won't launch
 	// at all otherwise).
 	typedef void (CALLBACK *BlockInput)(BOOL);
-	static BlockInput lpfnDLLProc = (BlockInput)GetProcAddress(GetModuleHandle("User32.dll"), "BlockInput");
+	static BlockInput lpfnDLLProc = (BlockInput)GetProcAddress(GetModuleHandle("user32"), "BlockInput");
 	// Always turn input ON/OFF even if g_BlockInput says its already in the right state.  This is because
 	// BlockInput can be externally and undetectibly disabled, e.g. if the user presses Ctrl-Alt-Del:
 	if (lpfnDLLProc)
@@ -15027,7 +15084,7 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 				LPPROCESS_INFORMATION lpProcessInfo // process information
 				);
 			// Get a handle to the DLL module that contains CreateProcessWithLogonW
-			HINSTANCE hinstLib = LoadLibrary("advapi32.dll");
+			HINSTANCE hinstLib = LoadLibrary("advapi32");
 			if (!hinstLib)
 			{
 				if (aDisplayErrors)

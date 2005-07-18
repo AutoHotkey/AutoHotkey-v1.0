@@ -18,7 +18,6 @@ GNU General Public License for more details.
 #include <wininet.h> // For URLDownloadToFile().
 #include <olectl.h> // for OleLoadPicture()
 #include <winioctl.h> // For PREVENT_MEDIA_REMOVAL and CD lock/unlock.
-#include <malloc.h> // For _alloca()
 #include "qmath.h" // Used by Transform() [math.h incurs 2k larger code size just for ceil() & floor()]
 #include "mt19937ar-cok.h" // for sorting in random order
 #include "script.h"
@@ -3257,7 +3256,7 @@ ResultType Line::WinSet(char *aAttrib, char *aValue, char *aTitle, char *aText
 		// GetClassLong) if aValue is entirely blank.
 		typedef BOOL (WINAPI *MySetLayeredWindowAttributesType)(HWND, COLORREF, BYTE, DWORD);
 		static MySetLayeredWindowAttributesType MySetLayeredWindowAttributes = (MySetLayeredWindowAttributesType)
-			GetProcAddress(GetModuleHandle("User32.dll"), "SetLayeredWindowAttributes");
+			GetProcAddress(GetModuleHandle("user32"), "SetLayeredWindowAttributes");
 		if (!MySetLayeredWindowAttributes || !(exstyle = GetWindowLong(target_window, GWL_EXSTYLE)))
 			return OK;  // Do nothing on OSes that don't support it.
 		if (!stricmp(aValue, "Off"))
@@ -3592,7 +3591,7 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 			return output_var->Assign();
 		typedef BOOL (WINAPI *MyGetLayeredWindowAttributesType)(HWND, COLORREF*, BYTE*, DWORD*);
 		static MyGetLayeredWindowAttributesType MyGetLayeredWindowAttributes = (MyGetLayeredWindowAttributesType)
-			GetProcAddress(GetModuleHandle("User32.dll"), "GetLayeredWindowAttributes");
+			GetProcAddress(GetModuleHandle("user32"), "GetLayeredWindowAttributes");
 		COLORREF color;
 		BYTE alpha;
 		DWORD flags;
@@ -3910,7 +3909,7 @@ ResultType Line::SysGet(char *aCmd, char *aValue)
 	// EnumDisplayMonitors() must be dynamically loaded; otherwise, the app won't launch at all on Win95/NT.
 	typedef BOOL (WINAPI* EnumDisplayMonitorsType)(HDC, LPCRECT, MONITORENUMPROC, LPARAM);
 	static EnumDisplayMonitorsType MyEnumDisplayMonitors = (EnumDisplayMonitorsType)
-		GetProcAddress(GetModuleHandle("user32.dll"), "EnumDisplayMonitors");
+		GetProcAddress(GetModuleHandle("user32"), "EnumDisplayMonitors");
 
 	switch(cmd)
 	{
@@ -4039,7 +4038,7 @@ BOOL CALLBACK EnumMonitorProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMoni
 	// GetMonitorInfo() must be dynamically loaded; otherwise, the app won't launch at all on Win95/NT.
 	typedef BOOL (WINAPI* GetMonitorInfoType)(HMONITOR, LPMONITORINFO);
 	static GetMonitorInfoType MyGetMonitorInfo = (GetMonitorInfoType)
-		GetProcAddress(GetModuleHandle("user32.dll"), "GetMonitorInfoA");
+		GetProcAddress(GetModuleHandle("user32"), "GetMonitorInfoA");
 	if (!MyGetMonitorInfo) // Shouldn't normally happen since caller wouldn't have called us if OS is Win95/NT. 
 		return FALSE;
 	if (!MyGetMonitorInfo(hMonitor, &mip.monitor_info_ex)) // Failed.  Probably very rare.
@@ -8010,7 +8009,7 @@ ResultType Line::DriveSpace(char *aPath, bool aGetFreeSpace)
 	// at runtime:
 	typedef BOOL (WINAPI *GetDiskFreeSpaceExType)(LPCTSTR, PULARGE_INTEGER, PULARGE_INTEGER, PULARGE_INTEGER);
 	static GetDiskFreeSpaceExType MyGetDiskFreeSpaceEx =
-		(GetDiskFreeSpaceExType)GetProcAddress(GetModuleHandle("kernel32.dll"), "GetDiskFreeSpaceExA");
+		(GetDiskFreeSpaceExType)GetProcAddress(GetModuleHandle("kernel32"), "GetDiskFreeSpaceExA");
 
 	// MSDN: "The GetDiskFreeSpaceEx function returns correct values for all volumes, including those
 	// that are greater than 2 gigabytes."
@@ -8714,7 +8713,7 @@ ResultType Line::URLDownloadToFile(char *aURL, char *aFilespec)
 // This has been adapted from the AutoIt3 source.
 {
 	// Check that we have IE3 and access to wininet.dll
-	HINSTANCE hinstLib = LoadLibrary("wininet.dll");
+	HINSTANCE hinstLib = LoadLibrary("wininet");
 	if (!hinstLib)
 		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
 
@@ -9899,7 +9898,7 @@ ResultType Line::FileRecycleEmpty(char *aDriveLetter)
 {
 	// Not using GetModuleHandle() because there is doubt that SHELL32 (unlike USER32/KERNEL32), is
 	// always automatically present in every process (e.g. if shell is something other than Explorer):
-	HINSTANCE hinstLib = LoadLibrary("shell32.dll");
+	HINSTANCE hinstLib = LoadLibrary("shell32");
 	if (!hinstLib)
 		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
 	// au3: Get the address of all the functions we require
@@ -11647,18 +11646,13 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 
 	// Using stack memory, create an array of dll args large enough to hold the actual number of args present.
 	int arg_count = aParamCount/2; // Might provide one extra due to first/last params, which is inconsequential.
-	DYNAPARM *dyna_param;
-	if (arg_count)
-	{
-		// _alloca() has been checked for code-bloat and it doesn't appear to be an issue.
-		if (   !(dyna_param = (DYNAPARM *)_alloca(arg_count * sizeof(DYNAPARM)))   ) // Realistically never happens, so indicate general error.
-		{
-			g_ErrorLevel->Assign("-2"); // Stage 2 error.
-			return;
-		}
-	}
-	else
-		dyna_param = NULL;
+	DYNAPARM *dyna_param = arg_count ? (DYNAPARM *)_alloca(arg_count * sizeof(DYNAPARM)) : NULL;
+	// Above: _alloca() has been checked for code-bloat and it doesn't appear to be an issue.
+	// Above: Fix for v1.0.36.07: According to MSDN, on failure, this implementation of _alloca() generates a
+	// stack overflow exception rather than returning a NULL value.  Therefore, NULL is no longer checked,
+	// nor is an exception block used since stack overflow in this case should be exceptionally rare (if it
+	// does happen, it would probably mean the script or the program has a design flaw somewhere, such as
+	// infinite recursion).
 
 	char *arg_type_string[2], *arg_as_string;
 	int i;
@@ -11787,8 +11781,8 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 
 	// Define the standard libraries here. If they reside in %SYSTEMROOT%\system32 it is not
 	// necessary to specify the full path (it wouldn't make sense anyway).
-	static HMODULE std_module[] = {GetModuleHandle("user32.dll"), GetModuleHandle("kernel32.dll")
-		, GetModuleHandle("comctl32.dll")}; // user32 is listed first for performance.
+	static HMODULE std_module[] = {GetModuleHandle("user32"), GetModuleHandle("kernel32")
+		, GetModuleHandle("comctl32"), GetModuleHandle("gdi32")}; // user32 is listed first for performance.
 	static int std_module_count = sizeof(std_module) / sizeof(HMODULE);
 
 	// Make a modifiable copy of param1 so that the DLL name and function name can be parsed out easily:
@@ -12041,7 +12035,8 @@ void BIF_StrLen(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParam
 
 void BIF_Asc(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
 {
-	// Result will always be an integer.
+	// Result will always be an integer (this simplifies scripts that work with binary zeros since an
+	// empy string yields zero).
 	// Caller has set aResultToken.symbol to a default of SYM_INTEGER, so no need to set it here.
 	char *cp;
 	if (   !(cp = ExprTokenToString(*aParam[0], aResultToken.buf))   ) // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
@@ -12165,6 +12160,11 @@ void BIF_GetKeyState(ExprTokenType &aResultToken, ExprTokenType *aParam[], int a
 
 
 void BIF_VarSetCapacity(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+// Returns: The variable's new capacity.
+// Parameters:
+// 1: Target variable (unquoted).
+// 2: Requested capacity.
+// 3: Byte-value to fill the variable with (e.g. 0 to have the same effect as ZeroMemory).
 {
 	// Caller has set aResultToken.symbol to a default of SYM_INTEGER, so no need to set it here.
 	aResultToken.value_int64 = 0; // Set default. In spite of being ambiguous with the result of Free(), 0 seems a little better than -1 since it indicates "no capacity" and is also equal to "false" for easy use in expressions.
@@ -12175,13 +12175,28 @@ void BIF_VarSetCapacity(ExprTokenType &aResultToken, ExprTokenType *aParam[], in
 		{
 			if (aParamCount > 1) // Second parameter is present.
 			{
-				VarSizeType new_capacity = (UINT)ExprTokenToInt64(*aParam[1]);
+				VarSizeType new_capacity = (VarSizeType)ExprTokenToInt64(*aParam[1]);
 				if (new_capacity)
 				{
 					var.Assign(NULL, new_capacity, false, true); // This also destroys the variables contents.
-					// By design, Assign() has already set the length of the variable to reflect new_capacity.
-					// This is not what is wanted in this case since it should be truly empty.
-					var.Length() = 0;
+					VarSizeType capacity;
+					if (aParamCount > 2 && (capacity = var.Capacity()) > 1) // Third parameter is present and var has enough capacity to make FillMemory() meaningful.
+					{
+						--capacity; // Convert to script-POV capacity. To avoid underflow, do this only now that Capacity() is known not to be zero.
+						// The following uses capacity-1 because the last byte of a variable should always
+						// be left as a binary zero to avoid crashes and problems due to unterminated strings.
+						// In other words, a variable's usable capacity from the script's POV is always one
+						// less than its actual capacity:
+						BYTE fill_byte = (BYTE)ExprTokenToInt64(*aParam[2]); // For simplicity, only numeric characters are supported, not something like "a" to mean the character 'a'.
+						char *contents = var.Contents();
+						FillMemory(contents, capacity, fill_byte); // Last byte of variable is always left as a binary zero.
+						contents[capacity] = '\0'; // Must terminate because nothing else is explicitly reponsible for doing it.
+						var.Length() = fill_byte ? capacity : 0; // Length is same as capacity unless fill_byte is zero.
+					}
+					else
+						// By design, Assign() has already set the length of the variable to reflect new_capacity.
+						// This is not what is wanted in this case since it should be truly empty.
+						var.Length() = 0;
 				}
 				else // ALLOC_SIMPLE, due to its nature, will not actually be freed, which is documented.
 					var.Free();

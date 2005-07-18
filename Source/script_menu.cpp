@@ -1032,7 +1032,7 @@ void UserMenu::ApplyColor(bool aApplyToSubmenus)
 {
 	// Must fetch function address dynamically or program won't launch at all on Win95/NT:
 	typedef BOOL (WINAPI *MySetMenuInfoType)(HMENU, LPCMENUINFO);
-	static MySetMenuInfoType MySetMenuInfo = (MySetMenuInfoType)GetProcAddress(GetModuleHandle("User32.dll"), "SetMenuInfo");
+	static MySetMenuInfoType MySetMenuInfo = (MySetMenuInfoType)GetProcAddress(GetModuleHandle("user32"), "SetMenuInfo");
 	if (!MySetMenuInfo)
 		return;
 	MENUINFO mi = {0}; 

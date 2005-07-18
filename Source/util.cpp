@@ -1299,7 +1299,7 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, i
 	bool keep_aspect_ratio = (aWidth == -1 || aHeight == -1);
 
 	HINSTANCE hinstGDI = NULL;
-	if (aUseGDIPlusIfAvailable && !(hinstGDI = LoadLibrary("GdiPlus.dll")))
+	if (aUseGDIPlusIfAvailable && !(hinstGDI = LoadLibrary("gdiplus")))
 		aUseGDIPlusIfAvailable = false; // Override this value as a signal for the section below.
 
 	if (!hbitmap && aImageType >= 0 && !aUseGDIPlusIfAvailable)
@@ -1347,7 +1347,7 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, i
 		if (aUseGDIPlusIfAvailable || !file_ext || (stricmp(file_ext, "jpg")
 			&& stricmp(file_ext, "jpeg") && stricmp(file_ext, "gif"))) // Non-standard file type (BMP is already handled above).
 			if (!hinstGDI) // We don't yet have a handle from an earlier call to LoadLibary().
-				hinstGDI = LoadLibrary("GdiPlus.dll");
+				hinstGDI = LoadLibrary("gdiplus");
 		// If it is suspected that the file type isn't supported, try to use GdiPlus if available.
 		// If it's not available, fall back to the old method in case the filename doesn't properly
 		// reflect its true contents (i.e. in case it really is a JPG/GIF/BMP internally).
@@ -1609,7 +1609,7 @@ HRESULT MySetWindowTheme(HWND hwnd, LPCWSTR pszSubAppName, LPCWSTR pszSubIdList)
 	// Theme DLL is normally available only on XP+, but an attempt to load it is made unconditionally
 	// in case older OSes can ever have it.
 	HRESULT hresult = !S_OK; // Set default as "failure".
-	HINSTANCE hinstTheme = LoadLibrary("UxTheme.dll");
+	HINSTANCE hinstTheme = LoadLibrary("uxtheme");
 	if (hinstTheme)
 	{
 		typedef HRESULT (WINAPI *MySetWindowThemeType)(HWND, LPCWSTR, LPCWSTR);
@@ -1629,7 +1629,7 @@ HRESULT MySetWindowTheme(HWND hwnd, LPCWSTR pszSubAppName, LPCWSTR pszSubIdList)
 //	// Theme DLL is normally available only on XP+, but an attempt to load it is made unconditionally
 //	// in case older OSes can ever have it.
 //	HRESULT hresult = !S_OK; // Set default as "failure".
-//	HINSTANCE hinstTheme = LoadLibrary("UxTheme.dll");
+//	HINSTANCE hinstTheme = LoadLibrary("uxtheme");
 //	if (hinstTheme)
 //	{
 //		typedef HRESULT (WINAPI *MyEnableThemeDialogTextureType)(HWND, DWORD);

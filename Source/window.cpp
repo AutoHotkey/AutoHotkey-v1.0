@@ -779,7 +779,7 @@ ResultType StatusBarUtil(Var *aOutputVar, HWND aControlWindow, int aPartNumber
 			// Perhaps it meant that only NT and/or 2k require dynamic functions whereas XP doesn't:
 			typedef LPVOID (WINAPI *MyVirtualAllocEx)(HANDLE, LPVOID, SIZE_T, DWORD, DWORD);
 			// Static for performance, since value should be always the same.
-			static MyVirtualAllocEx lpfnAlloc = (MyVirtualAllocEx)GetProcAddress(GetModuleHandle("kernel32.dll")
+			static MyVirtualAllocEx lpfnAlloc = (MyVirtualAllocEx)GetProcAddress(GetModuleHandle("kernel32")
 				, "VirtualAllocEx");
 			pMem = lpfnAlloc(hProcess, NULL, sizeof(buf), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 
@@ -831,7 +831,7 @@ ResultType StatusBarUtil(Var *aOutputVar, HWND aControlWindow, int aPartNumber
 			// AutoIt3: Dynamic functions to retain 95 compatibility
 			typedef BOOL (WINAPI *MyVirtualFreeEx)(HANDLE, LPVOID, SIZE_T, DWORD);
 			// Static for performance, since value should be always the same.
-			static MyVirtualFreeEx lpfnFree = (MyVirtualFreeEx)GetProcAddress(GetModuleHandle("kernel32.dll")
+			static MyVirtualFreeEx lpfnFree = (MyVirtualFreeEx)GetProcAddress(GetModuleHandle("kernel32")
 				, "VirtualFreeEx");
 			lpfnFree(hProcess, pMem, 0, MEM_RELEASE); // Size 0 is used with MEM_RELEASE.
 			CloseHandle(hProcess);
@@ -1350,7 +1350,7 @@ bool IsWindowHung(HWND aWnd)
 	if (g_os.IsWin9x())
 	{
 		typedef BOOL (WINAPI *MyIsHungThread)(DWORD);
-		static MyIsHungThread IsHungThread = (MyIsHungThread)GetProcAddress(GetModuleHandle("User32.dll")
+		static MyIsHungThread IsHungThread = (MyIsHungThread)GetProcAddress(GetModuleHandle("user32")
 			, "IsHungThread");
 		// When function not available, fall back to the old method:
 		return IsHungThread ? IsHungThread(GetWindowThreadProcessId(aWnd, NULL)) : Slow_IsWindowHung;
@@ -1358,7 +1358,7 @@ bool IsWindowHung(HWND aWnd)
 	else // Otherwise: NT/2k/XP/2003 or some later OS (e.g. 64 bit?), so try to use the newer method.
 	{
 		typedef BOOL (WINAPI *MyIsHungAppWindow)(HWND);
-		static MyIsHungAppWindow IsHungAppWindow = (MyIsHungAppWindow)GetProcAddress(GetModuleHandle("User32.dll")
+		static MyIsHungAppWindow IsHungAppWindow = (MyIsHungAppWindow)GetProcAddress(GetModuleHandle("user32")
 			, "IsHungAppWindow");
 		// When function not available, fall back to the old method:
 		return IsHungAppWindow ? IsHungAppWindow(aWnd) : Slow_IsWindowHung;
@@ -1764,9 +1764,9 @@ DWORD ProcessExist9x2000(char *aProcess, char *aProcessName)
 	typedef BOOL (WINAPI *PROCESSWALK)(HANDLE hSnapshot, LPPROCESSENTRY32 lppe);
 	typedef HANDLE (WINAPI *CREATESNAPSHOT)(DWORD dwFlags, DWORD th32ProcessID);
 
-	static CREATESNAPSHOT lpfnCreateToolhelp32Snapshot = (CREATESNAPSHOT)GetProcAddress(GetModuleHandle("kernel32.dll"), "CreateToolhelp32Snapshot");
-    static PROCESSWALK lpfnProcess32First = (PROCESSWALK)GetProcAddress(GetModuleHandle("kernel32.dll"), "Process32First");
-    static PROCESSWALK lpfnProcess32Next = (PROCESSWALK)GetProcAddress(GetModuleHandle("kernel32.dll"), "Process32Next");
+	static CREATESNAPSHOT lpfnCreateToolhelp32Snapshot = (CREATESNAPSHOT)GetProcAddress(GetModuleHandle("kernel32"), "CreateToolhelp32Snapshot");
+    static PROCESSWALK lpfnProcess32First = (PROCESSWALK)GetProcAddress(GetModuleHandle("kernel32"), "Process32First");
+    static PROCESSWALK lpfnProcess32Next = (PROCESSWALK)GetProcAddress(GetModuleHandle("kernel32"), "Process32Next");
 
 	if (!lpfnCreateToolhelp32Snapshot || !lpfnProcess32First || !lpfnProcess32Next)
 		return 0;
@@ -1844,7 +1844,7 @@ DWORD ProcessExistNT4(char *aProcess, char *aProcessName)
 
 	// We must dynamically load the function or program will probably not launch at all on Win95.
     // Get a handle to the DLL module that contains EnumProcesses
-	HINSTANCE hinstLib = LoadLibrary("psapi.dll");
+	HINSTANCE hinstLib = LoadLibrary("psapi");
 	if (!hinstLib)
 		return 0;
 
