@@ -47,12 +47,14 @@ inline bool IsTextMatch(char *aHaystack, char *aNeedle)
 // Generic helper function used by WindowSearch and other things.
 // To help performance, it's the caller's responsibility to ensure that all params are not NULL.
 {
+	if (!*aNeedle) // The empty string is always found, regardless of mode.
+		return true;
 	if (g.TitleMatchMode == FIND_ANYWHERE)
-		return !*aNeedle || strstr(aHaystack, aNeedle);
-	else if (g.TitleMatchMode == FIND_IN_LEADING_PART)
-		return !*aNeedle || !strncmp(aHaystack, aNeedle, strlen(aNeedle));
-	else // Exact match.
-		return !*aNeedle || !strcmp(aHaystack, aNeedle);
+		return strstr(aHaystack, aNeedle);
+	if (g.TitleMatchMode == FIND_IN_LEADING_PART)
+		return !strncmp(aHaystack, aNeedle, strlen(aNeedle));
+	// Otherwise: Exact match.
+	return !strcmp(aHaystack, aNeedle);
 }
 
 
@@ -232,8 +234,8 @@ BOOL CALLBACK EnumChildFind(HWND hwnd, LPARAM lParam);
 // Use a fairly long default for aCheckInterval since the contents of this function's loops
 // might be somewhat high in overhead (especially SendMessageTimeout):
 #define SB_DEFAULT_CHECK_INTERVAL 50
-ResultType StatusBarUtil(Var *aOutputVar, HWND aControlWindow, int aPartNumber = 1
-	, char *aTextToWaitFor = "", int aWaitTime = -1, int aCheckInterval = SB_DEFAULT_CHECK_INTERVAL);
+ResultType StatusBarUtil(Var *aOutputVar, HWND aBarHwnd, int aPartNumber = 1, char *aTextToWaitFor = ""
+	, int aWaitTime = -1, int aCheckInterval = SB_DEFAULT_CHECK_INTERVAL);
 HWND ControlExist(HWND aParentWindow, char *aClassNameAndNum = NULL);
 BOOL CALLBACK EnumControlFind(HWND aWnd, LPARAM lParam);
 

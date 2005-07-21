@@ -699,21 +699,29 @@ BOOL CALLBACK EnumChildFind(HWND aWnd, LPARAM lParam)
 
 
 
-ResultType StatusBarUtil(Var *aOutputVar, HWND aControlWindow, int aPartNumber
-	, char *aTextToWaitFor, int aWaitTime, int aCheckInterval)
-// Most of this courtesy of AutoIt3 source.
-// aOutputVar is allowed to be NULL if aTextToWaitFor isn't NULL or blank.
-// aControlWindow is allowed to be NULL because we want to set the output var
-// to be the empty string in that case.
+ResultType StatusBarUtil(Var *aOutputVar, HWND aBarHwnd, int aPartNumber, char *aTextToWaitFor
+	, int aWaitTime, int aCheckInterval)
+// aOutputVar is allowed to be NULL if aTextToWaitFor isn't NULL or blank. aBarHwnd is allowed
+// to be NULL because in that case, the caller wants us to set ErrorLevel appropriately and also
+// make aOutputVar empty.
 {
+	if (aOutputVar)
+		aOutputVar->Assign(); // Init to blank in case of early return.
 	// Set default ErrorLevel, which is a special value (2 vs. 1) in the case of StatusBarWait:
 	g_ErrorLevel->Assign(aOutputVar ? ERRORLEVEL_ERROR : ERRORLEVEL_ERROR2);
-	if (aCheckInterval <= 0) aCheckInterval = SB_DEFAULT_CHECK_INTERVAL; // Caller relies on us doing this.
 
-	// Must have at least one of these.  UPDATE: We want to allow this so
-	// that the command can be used to wait for the status bar text to
-	// become blank:
-	//if (!aOutputVar && !*aTextToWaitFor) return FAIL;
+	// Legacy: Waiting 500ms in place of a "0" seems more useful than a true zero, which doens't need
+	// to be supported because it's the same thing as something like "IfWinExist":
+	if (!aWaitTime)
+		aWaitTime = 500;
+	if (aCheckInterval <= 0)
+		aCheckInterval = SB_DEFAULT_CHECK_INTERVAL; // Caller relies on us doing this.
+	if (aPartNumber < 1)
+		aPartNumber = 1;  // Caller relies on us to set default in this case.
+
+	// Must have at least one of these.  UPDATE: We want to allow this so that the command can be
+	// used to wait for the status bar text to become blank:
+	//if (!aOutputVar && !*aTextToWaitFor) return OK;
 
 	// Whenever using SendMessageTimeout(), our app will be unresponsive until
 	// the call returns, since our message loop isn't running.  In addition,
@@ -721,156 +729,96 @@ ResultType StatusBarUtil(Var *aOutputVar, HWND aControlWindow, int aPartNumber
 	// this call.  So keep the timeout value fairly short.  Update for v1.0.24:
 	// There have been at least two reports of the StatusBarWait command ending
 	// prematurely with an ErrorLevel of 2.  The most likely culprit is the below,
-	// which has now been increased from 100 to 2000, since it seems preferable
+	// which has now been increased from 100 to 2000 because it seems preferable
 	// to have mouse lag in exchange for better bar-waiting reliability.  The
 	// mouse/keybd lag issue will hopefully go away someday anyway, when the hooks
 	// get a dedicated thread:
 	#define SB_TIMEOUT 2000
 
-	// AutoIt3: How many parts does this bar have?
-	DWORD nParts = 0;
-	if (aControlWindow)
-		if (!SendMessageTimeout(aControlWindow, SB_GETPARTS, (WPARAM)0, (LPARAM)0
-			, SMTO_ABORTIFHUNG, SB_TIMEOUT, &nParts)) // It failed or timed out.
-			nParts = 0; // It case it set it to some other value before failing.
+	HANDLE handle;
+	LPVOID remote_buf;
+	LRESULT part_count; // The number of parts this status bar has.
+	if (!aBarHwnd  // These condtions rely heavily on short-circuit boolean order.
+		|| !SendMessageTimeout(aBarHwnd, SB_GETPARTS, 0, 0, SMTO_ABORTIFHUNG, SB_TIMEOUT, (PDWORD_PTR)&part_count) // It failed or timed out.
+		|| aPartNumber > part_count
+		|| !(remote_buf = AllocInterProcMem(handle, WINDOW_TEXT_SIZE + 1, aBarHwnd))) // Alloc mem last.
+		return OK; // Let ErrorLevel tell the story.
 
-	if (aPartNumber < 1)
-		aPartNumber = 1;  // Caller relies on us to set default in this case.
-	if (aPartNumber > (int)nParts)
-		aPartNumber = 0; // Set this as an indicator for below.
+	char buf_for_nt[WINDOW_TEXT_SIZE + 1]; // Needed only for NT/2k/XP: the local counterpart to the buf allocated remotely above.
+	bool is_win9x = g_os.IsWin9x();
+	char *local_buf = is_win9x ? (char *)remote_buf : buf_for_nt; // Local is the same as remote for Win9x.
 
-	if (!aControlWindow || !aPartNumber)
+	DWORD result, start_time;
+	--aPartNumber; // Convert to zero-based for use below.
+
+	// Always do the first iteration so that at least one check is done.  Also,  start_time is initialized
+	// unconditionally in the name of code size reduction (it's a low overhead call):
+	for (*local_buf = '\0', start_time = GetTickCount();;)
 	{
-		if (aOutputVar)
-			return aOutputVar->Assign();
-		// else caller didn't want the text.
-		return OK;
-	}
-
-	char buf[WINDOW_TEXT_SIZE + 1] = ""; // +1 is needed in this case.
-	DWORD dwResult;
-	if (!SendMessageTimeout(aControlWindow, SB_GETTEXTLENGTH, (WPARAM)(aPartNumber - 1), (LPARAM)0
-		, SMTO_ABORTIFHUNG, SB_TIMEOUT, &dwResult))
-		// It timed out or failed.  Since we can't even find the length, don't bother
-		// with anything else:
-		return FAIL;
-	if (LOWORD(dwResult) > WINDOW_TEXT_SIZE) // extremely unlikely, perhaps impossible.
-		return FAIL;
-	if (!aWaitTime)
-		// Waiting 500ms in place of a "0" seems more useful than a true zero, which
-		// doens't need to be supported because it's the same thing as something like
-		// "IfWinExist".
-		aWaitTime = 500;
-	DWORD start_time;
-	#define WAIT_INDEFINITELY (aWaitTime < 0)
-	if (!WAIT_INDEFINITELY)
-		start_time = GetTickCount();
-
-	LPVOID pMem;
-	if (g_os.IsWinNT())  // NT/2k/XP/2003 and family
-	{
-		DWORD dwPid;
-		GetWindowThreadProcessId(aControlWindow, &dwPid);
-		HANDLE hProcess = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE, FALSE, dwPid);
-		if (hProcess)
+		// MSDN recommends always checking the length of the bar text.  It implies that the length is
+		// unrestricted, so a crash due to buffer overflow could otherwise occur:
+		if (SendMessageTimeout(aBarHwnd, SB_GETTEXTLENGTH, aPartNumber, 0, SMTO_ABORTIFHUNG, SB_TIMEOUT, &result))
 		{
-			// AutoIt3: Dynamic functions to retain 95 compatibility
-			// My: The above comment seems wrong since this section is only for NT/2k/XP+.
-			// Perhaps it meant that only NT and/or 2k require dynamic functions whereas XP doesn't:
-			typedef LPVOID (WINAPI *MyVirtualAllocEx)(HANDLE, LPVOID, SIZE_T, DWORD, DWORD);
-			// Static for performance, since value should be always the same.
-			static MyVirtualAllocEx lpfnAlloc = (MyVirtualAllocEx)GetProcAddress(GetModuleHandle("kernel32")
-				, "VirtualAllocEx");
-			pMem = lpfnAlloc(hProcess, NULL, sizeof(buf), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-
-			for (;;)
-			{ // Always do the first iteration so that at least one check is done.
-				if (!SendMessageTimeout(aControlWindow, SB_GETTEXT, (WPARAM)(aPartNumber - 1), (LPARAM)pMem
-					, SMTO_ABORTIFHUNG, SB_TIMEOUT, &dwResult))
-					// It failed or timed out; buf stays as it was: initialized to empty string.
-					// Also ErrorLevel stays set to 2, the default set above.
-					break;
-				if (!ReadProcessMemory(hProcess, pMem, buf, WINDOW_TEXT_SIZE, NULL))
+			// Testing confirms that LOWORD(result) [the length] does not include the zero terminator.
+			if (LOWORD(result) > WINDOW_TEXT_SIZE) // Text would be too large (very unlikely but good to check for security).
+				break; // Abort the operation and leave ErrorLevel set to its default to indicate the problem.
+			// Retrieve the bar's text:
+			if (SendMessageTimeout(aBarHwnd, SB_GETTEXT, aPartNumber, (LPARAM)remote_buf, SMTO_ABORTIFHUNG, SB_TIMEOUT, &result))
+			{
+				if (!is_win9x)
 				{
-					*buf = '\0';  // In case it changed the buf before failing.
-					break;
+					if (!ReadProcessMemory(handle, remote_buf, local_buf, LOWORD(result) + 1, NULL)) // +1 to include the terminator (verified: length doesn't include zero terminator).
+					{
+						// Fairly critical error (though rare) so seems best to abort.
+						*local_buf = '\0';  // In case it changed the buf before failing.
+						break;
+					}
 				}
-				buf[sizeof(buf) - 1] = '\0';  // Just to be sure.
+				//else Win9x, in which case the local and remote buffers are the same (no copying is needed).
 
-				// Below: In addition to normal/intuitive matching, a match is also achieved if
-				// both are empty string:
-				#define BREAK_IF_MATCH_FOUND_OR_IF_NOT_WAITING \
-				if ((!*aTextToWaitFor && !*buf) || (aTextToWaitFor && IsTextMatch(buf, aTextToWaitFor))) \
-				{\
-					g_ErrorLevel->Assign(ERRORLEVEL_NONE);\
-					break;\
-				}\
-				if (aOutputVar)\
-					break;  // i.e. If an output variable was given, we're not waiting for a match.
-				BREAK_IF_MATCH_FOUND_OR_IF_NOT_WAITING
-
-				// Don't continue to the wait if the target window is destroyed:
-				// Must cast to int or any negative result will be lost due to DWORD type.
-				// Also: Last param false because we don't want it to restore the
-				// current active window after the time expires (in case
-				// our subroutine is suspended).  Also, ERRORLEVEL_ERROR is the value that
-				// indicates that we timed out rather than having ever found a match:
-				#define SB_SLEEP_IF_NEEDED \
-				if (!IsWindow(aControlWindow))\
-					break;\
-				if (WAIT_INDEFINITELY || (int)(aWaitTime - (GetTickCount() - start_time)) > SLEEP_INTERVAL_HALF)\
-					MsgSleep(aCheckInterval);\
-				else\
-				{\
-					g_ErrorLevel->Assign(ERRORLEVEL_ERROR);\
-					break;\
-				}
-				SB_SLEEP_IF_NEEDED
-			}
-
-			// AutoIt3: Dynamic functions to retain 95 compatibility
-			typedef BOOL (WINAPI *MyVirtualFreeEx)(HANDLE, LPVOID, SIZE_T, DWORD);
-			// Static for performance, since value should be always the same.
-			static MyVirtualFreeEx lpfnFree = (MyVirtualFreeEx)GetProcAddress(GetModuleHandle("kernel32")
-				, "VirtualFreeEx");
-			lpfnFree(hProcess, pMem, 0, MEM_RELEASE); // Size 0 is used with MEM_RELEASE.
-			CloseHandle(hProcess);
-		} // if (hProcess)
-	} // WinNT
-	else // Win9x
-	{
-		HANDLE hMapping = CreateFileMapping(INVALID_HANDLE_VALUE, 0, PAGE_READWRITE, 0, WINDOW_TEXT_SIZE, NULL);
-		if (hMapping)
-		{
-			pMem = MapViewOfFile(hMapping, FILE_MAP_ALL_ACCESS, 0, 0, 0);
-			for (;;)
-			{ // Always do the first iteration so that at least one check is done.
-				if (SendMessageTimeout(aControlWindow, SB_GETTEXT, (WPARAM)(aPartNumber - 1), (LPARAM)pMem
-					, SMTO_ABORTIFHUNG, SB_TIMEOUT, &dwResult))
+				// Check if the retrieved text matches the caller's criteria. In addition to
+				// normal/intuitive matching, a match is also achieved if both are empty strings.
+				// In fact, IsTextMatch() yields "true" whenever aTextToWaitFor is the empty string:
+				if (IsTextMatch(local_buf, aTextToWaitFor))
 				{
-					// Not sure why AutoIt3 doesn't use use strcpy() for this, but leave it to be safe:
-					CopyMemory(buf, pMem, WINDOW_TEXT_SIZE);
-					buf[sizeof(buf) - 1] = '\0';  // Just to be sure.
-					BREAK_IF_MATCH_FOUND_OR_IF_NOT_WAITING
-				}
-				else // it failed or timed out; buf stays as it was: initialized to empty string.
+					g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate "match found".
 					break;
-
-				SB_SLEEP_IF_NEEDED
+				}
 			}
-			UnmapViewOfFile(pMem);
-			CloseHandle(hMapping);
+			//else SB_GETTEXT msg timed out or failed.  Leave local_buf unaltered.  See comment below.
 		}
-	}
+		//else SB_GETTEXTLENGTH msg timed out or failed.  For v1.0.37, continue to wait (if other checks
+		// say its okay below) rather than aborting the operation.  This should help prevent an abort
+		// when the target window (or the entire system) is unresponsive for a long time, perhaps due
+		// to a drive spinning up, etc.
 
-	// Consider this to be always successful, even if aControlWindow == NULL
+		// Only when above didn't break are the following secondary conditions checked.  When aOutputVar
+		// is non-NULL, the caller wanted a single check only (no waiting) [however, in most such cases,
+		// the checking above would already have done a "break" because of aTextToWaitFor being blank when
+		// passed to IsTextMatch()].  Also, don't continue to wait if the status bar no longer exists
+		// (which is usually caused by the parent window having been destroyed):
+		if (aOutputVar || !IsWindow(aBarHwnd))
+			break; // Leave ErrorLevel at its default to indicate bar text retrieval problem in both cases.
+
+		// Since above didn't break, we're in "wait" mode (more than one iteration).
+		// In the following, must cast to int or any negative result will be lost due to DWORD type.
+		// Note: A negative aWaitTime means we're waiting indefinitely for a match to appear.
+		if (aWaitTime < 0 || (int)(aWaitTime - (GetTickCount() - start_time)) > SLEEP_INTERVAL_HALF)
+			MsgSleep(aCheckInterval);
+		else // Timed out.
+		{
+			g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Override default to indicate timeout vs. "other error".
+			break;
+		}
+	} // for()
+
+	// Consider this to be always successful, even if aBarHwnd == NULL
 	// or the status bar didn't have the part number provided, unless the below fails.
-	if (aOutputVar)
-		// Note we use a temp buf rather than writing directly to the var contents above, because
-		// we don't know how long the text will be until after the above operation finishes.
-		return aOutputVar->Assign(buf);
-	// else caller didn't want the text.
-	return OK;
+	// Note we use a temp buf rather than writing directly to the var contents above, because
+	// we don't know how long the text will be until after the above operation finishes.
+	ResultType result_to_return = aOutputVar ? aOutputVar->Assign(local_buf) : OK;
+	FreeInterProcMem(handle, remote_buf); // Don't free until after the above because above needs file mapping for Win9x.
+	return result_to_return;
 }
 
 

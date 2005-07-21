@@ -2542,6 +2542,212 @@ ResultType Line::Control(char *aCmd, char *aValue, char *aControl, char *aTitle,
 
 
 
+ResultType ControlGetListView(Var &aOutputVar, HWND aHwnd, char *aOptions)
+// Called by ControlGet() below.  It has ensured that aHwnd is a valid handle to a ListView.
+// It has also initialized g_ErrorLevel to be ERRORLEVEL_ERROR, which will be overridden
+// if we succeed here.
+{
+	aOutputVar.Assign(); // Init to blank in case of early return.  Caller has already initialized g_ErrorLevel for us.
+
+	// GET ROW COUNT
+	LRESULT row_count;
+	if (!SendMessageTimeout(aHwnd, LVM_GETITEMCOUNT, 0, 0, SMTO_ABORTIFHUNG, 2000, (PDWORD_PTR)&row_count)) // Timed out or failed.
+		return OK;  // Let ErrorLevel tell the story.
+
+	// GET COLUMN COUNT
+	// The following approach might be the only simple yet reliable way to get the column count (sending
+	// LVM_GETITEM until it returns false doesn't work because it apparently returns true even for
+	// nonexistent subitems).  Fortunately, testing shows that a ListView always has a header control
+	// (at least on XP), even if you can't see it (such as when the view is Icon/Tile or when -Hdr has
+	// been specified in the options).
+	HWND header_control;
+	LRESULT col_count;
+	if (!SendMessageTimeout(aHwnd, LVM_GETHEADER, 0, 0, SMTO_ABORTIFHUNG, 2000, (PDWORD_PTR)&header_control) // Timed out or failed.
+		|| !header_control  // Never happens, at least not on XP (see comments above).
+		|| !SendMessageTimeout(header_control, HDM_GETITEMCOUNT, 0, 0, SMTO_ABORTIFHUNG, 2000, (PDWORD_PTR)&col_count)) // Timed out or failed.
+		return OK;  // Let ErrorLevel tell the story.
+
+	// PARSE OPTIONS
+	bool get_count = strcasestr(aOptions, "Count");
+	bool include_selected_only = strcasestr(aOptions, "Selected"); // Explicit "ed" to reserve "Select" for possible future use.
+	bool include_focused_only = strcasestr(aOptions, "Focused");  // Same.
+	char *col_option = strcasestr(aOptions, "Col"); // Also used for mode "Count Col"
+	int single_col = col_option ? ATOI(col_option + 3) - 1 : -1;
+	// If the above yields a negative col number for any reason, it's ok because below will just ignore it.
+	if (single_col > -1 && single_col >= col_count) // Specified column does not exist.
+		return OK;  // Let ErrorLevel tell the story.
+
+	DWORD result;
+	if (get_count)
+	{
+		if (include_focused_only) // Listed first so that it takes precedence over include_selected_only.
+		{
+			if (!SendMessageTimeout(aHwnd, LVM_GETNEXTITEM, -1, LVNI_FOCUSED, SMTO_ABORTIFHUNG, 2000, &result)) // Timed out or failed.
+				return OK;  // Let ErrorLevel tell the story.
+			++result; // i.e. Set it to 0 if not found, or the 1-based row-number otherwise.
+		}
+		else if (include_selected_only)
+		{
+			if (!SendMessageTimeout(aHwnd, LVM_GETSELECTEDCOUNT, 0, 0, SMTO_ABORTIFHUNG, 2000, &result)) // Timed out or failed.
+				return OK;  // Let ErrorLevel tell the story.
+		}
+		else if (col_option) // "Count Col" returns the number of columns.
+			result = (DWORD)col_count;
+		else // Total row count.
+			result = (DWORD)row_count;
+		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
+		return aOutputVar.Assign(result);
+	}
+
+	if (row_count < 1 || col_count < 1)
+		return g_ErrorLevel->Assign(ERRORLEVEL_NONE);  // No text in the control, so indicate success.
+
+	HANDLE handle;
+	LPVOID p_remote_lvi; // Not of type LPLVITEM to help catch bugs where p_remote_lvi->member is wrongly accessed here in our process.
+	if (   !(p_remote_lvi = AllocInterProcMem(handle, LV_REMOTE_BUF_SIZE + sizeof(LVITEM), aHwnd))   ) // Allocate the right type of memory (depending on OS type).
+		return OK;  // Let ErrorLevel tell the story.
+	bool is_win9x = g_os.IsWin9x(); // Resolve once for possible slight perf./code size benefit.
+
+	// PREP LVI STRUCT MEMBERS FOR TEXT RETRIEVAL
+	// Subtract 1 because of that nagging doubt about size vs. length. Some MSDN examples such as
+	// TabCtrl_GetItem()'s cchTextMax subtract one:
+	LVITEM lvi_for_nt; // Only used for NT/2k/XP method.
+	LVITEM &local_lvi = is_win9x ? *(LPLVITEM)p_remote_lvi : lvi_for_nt; // Local is the same as remote for Win9x.
+	local_lvi.cchTextMax = LV_REMOTE_BUF_SIZE - 1; // Note that LVM_GETITEM doesn't update this member to reflect the new length.
+	local_lvi.pszText = (char *)p_remote_lvi + sizeof(LVITEM); // The next buffer is the memory area adjacent to, but after the struct.
+	LRESULT i, next, length, total_length;
+
+	// ESTIMATE THE AMOUNT OF MEMORY NEEDED TO STORE ALL THE TEXT
+	// It's important to note that a ListView might legitimately have a collection of rows whose
+	// fields are all empty.  Since it is difficult to know whether the control is truly owner-drawn
+	// (checking its style might not be enough?), there is no way to distinguish this condition
+	// from one where the control's text can't be retrieved due to being owner-drawn.  In any case,
+	// this all-empty-field behavior simplifies the code and will be documented in the help file.
+	bool is_selective = include_focused_only || include_selected_only;
+	for (i = 0, next = -1, total_length = 0; i < row_count; ++i) // For each row:
+	{
+		if (is_selective)
+		{
+			if (!SendMessageTimeout(aHwnd, LVM_GETNEXTITEM, next, include_focused_only ? LVNI_FOCUSED : LVNI_SELECTED
+				, SMTO_ABORTIFHUNG, 2000, (PDWORD_PTR)&next)) // Timed out or failed.
+				continue; // Omit from estimate (if estimate is too small, the text retrieval below will truncate it).
+			if (next == -1) // No next item.
+				break;
+		}
+		else
+			next = i;
+		for (local_lvi.iSubItem = (single_col > -1) ? single_col : 0 // iSubItem is which field to fetch. If it's zero, the item vs. subitem will be fetched.
+			; local_lvi.iSubItem < col_count
+			; ++local_lvi.iSubItem) // For each column:
+		{
+			if ((is_win9x || WriteProcessMemory(handle, p_remote_lvi, &local_lvi, sizeof(LVITEM), NULL)) // Relies on short-circuit boolean order.
+				&& SendMessageTimeout(aHwnd, LVM_GETITEMTEXT, next, (LPARAM)p_remote_lvi, SMTO_ABORTIFHUNG, 2000, (PDWORD_PTR)&length))
+				total_length += length;
+			//else timed out or failed, don't include the length in the estimate.  Instead, the
+			// text-fetching routine below will ensure the text doesn't overflow the var capacity.
+			if (single_col > -1) // Single column mode is in effect, so only the first iteration is done.
+				break;
+		}
+	}
+	// Add to total_length enough room for one linefeed per row, and one tab after each column
+	// except the last (formula verified correct, though it's inflated by 1 for safety). "i" contains the
+	// actual number of rows that will be transcribed, which might be less than row_count if is_selective==true.
+	total_length += i * (single_col > -1 ? 1 : col_count);
+
+	// SET UP THE OUTPUT VARIABLE, ENLARGING IT IF NECESSARY
+	// If the aOutputVar is of type VAR_CLIPBOARD, this call will set up the clipboard for writing:
+	aOutputVar.Assign(NULL, (VarSizeType)total_length); // Since failure is extremely rare, continue onward using the available capacity.
+	char *contents = aOutputVar.Contents();
+	LRESULT capacity = (int)aOutputVar.Capacity(); // LRESULT avoids signed vs. unsigned compiler warnings.
+	if (capacity > 0) // For maintainability, avoid going negative.
+		--capacity; // Adjust to exclude the zero terminator, which simplifies things below.
+
+	// RETRIEVE THE TEXT FROM THE REMOTE LISTVIEW
+	// Start total_length at zero in case actual size is greater than estimate, in which case only a partial set of text along with its '\t' and '\n' chars will be written.
+	for (i = 0, next = -1, total_length = 0; i < row_count; ++i) // For each row:
+	{
+		if (is_selective)
+		{
+			if (!SendMessageTimeout(aHwnd, LVM_GETNEXTITEM, next, include_focused_only ? LVNI_FOCUSED : LVNI_SELECTED
+				, SMTO_ABORTIFHUNG, 2000, (PDWORD_PTR)&next)) // Timed out or failed.
+				continue; // Omit this row.
+			if (next == -1) // No next item.
+				break;
+		}
+		else
+			next = i;
+		// Insert a linefeed before each row except the first:
+		if (i && total_length < capacity) // If we're at capacity, it will exit the loops when the next field is read.
+		{
+			*contents++ = '\n';
+			++total_length;
+		}
+
+		// iSubItem is which field to fetch. If it's zero, the item vs. subitem will be fetched:
+		for (local_lvi.iSubItem = (single_col > -1) ? single_col : 0
+			; local_lvi.iSubItem < col_count
+			; ++local_lvi.iSubItem) // For each column:
+		{
+			// Insert a tab before each column except the first and except when in single-column mode:
+			if (single_col < 0 && local_lvi.iSubItem && total_length < capacity)  // If we're at capacity, it will exit the loops when the next field is read.
+			{
+				*contents++ = '\t';
+				++total_length;
+			}
+
+			if (!(is_win9x || WriteProcessMemory(handle, p_remote_lvi, &local_lvi, sizeof(LVITEM), NULL)) // Relies on short-circuit boolean order.
+				|| !SendMessageTimeout(aHwnd, LVM_GETITEMTEXT, next, (LPARAM)p_remote_lvi, SMTO_ABORTIFHUNG, 2000, (PDWORD_PTR)&length))
+				continue; // Timed out or failed. It seems more useful to continue getting text rather than aborting the operation.
+
+			// Otheriwse, the message was successfully sent.
+			if (length > 0)
+			{
+				if (total_length + length > capacity)
+					goto break_both; // "goto" for simplicity and code size reduction.
+				// Otherwise:
+				// READ THE TEXT FROM THE REMOTE PROCESS
+				// Although MSDN has the following comment about LVM_GETITEM, it is not present for
+				// LVM_GETITEMTEXT. Therefore, to improve performance (by avoiding a second call to
+				// ReadProcessMemory) and to reduce code size, we'll take them at their word until
+				// proven otherwise.  Here is the MSDN comment about LVM_GETITEM: "Applications
+				// should not assume that the text will necessarily be placed in the specified
+				// buffer. The control may instead change the pszText member of the structure
+				// to point to the new text, rather than place it in the buffer."
+				if (is_win9x)
+				{
+					memcpy(contents, local_lvi.pszText, length); // Usually benches a little faster than strcpy().
+					contents += length; // Point it to the position where the next char will be written.
+					total_length += length; // Recalculate length in case its different than the estimate (for any reason).
+				}
+				else
+				{
+					if (ReadProcessMemory(handle, local_lvi.pszText, contents, length, NULL)) // local_lvi.pszText == p_remote_lvi->pszText
+					{
+						contents += length; // Point it to the position where the next char will be written.
+						total_length += length; // Recalculate length in case its different than the estimate (for any reason).
+					}
+					//else it failed; but even so, continue on to put in a tab (if called for).
+				}
+			}
+			//else length is zero; but even so, continue on to put in a tab (if called for).
+			if (single_col > -1) // Single column mode is in effect, so only the first iteration is done.
+				break;
+		} // for() each column
+	} // for() each row
+
+break_both:
+	if (contents) // Might be NULL if Assign() failed and thus var has zero capacity.
+		*contents = '\0'; // Final termination.  Above has reserved room for for this one byte.
+
+	// CLEAN UP
+	FreeInterProcMem(handle, p_remote_lvi);
+	aOutputVar.Close(); // In case it's the clipboard.
+	aOutputVar.Length() = (VarSizeType)total_length; // Update to actual vs. estimated length.
+	return g_ErrorLevel->Assign(ERRORLEVEL_NONE);  // Indicate success.
+}
+
+
+
 ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTitle, char *aText
 	, char *aExcludeTitle, char *aExcludeText)
 // This function has been adapted from the AutoIt3 source.
@@ -2650,6 +2856,8 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 		break;
 
 	case CONTROLGET_CMD_LIST:
+		if (!strnicmp(aControl, "SysListView32", 13))
+			return ControlGetListView(*output_var, control_window, aValue); // It will also set ErrorLevel to "success" if successful.
 		// This is done here as the special LIST sub-command rather than just being built into
 		// ControlGetText because ControlGetText already has a function for ComboBoxes: it fetches
 		// the current selection.  Although ListBox does not have such a function, it seem best
@@ -2835,8 +3043,7 @@ ResultType Line::StatusBarGetText(char *aPart, char *aTitle, char *aText
 	HWND control_window = target_window ? ControlExist(target_window, "msctls_statusbar321") : NULL;
 	// Call this even if control_window is NULL because in that case, it will set the output var to
 	// be blank for us:
-	StatusBarUtil(output_var, control_window, ATOI(aPart)); // It will handle any zero part# for us.
-	return OK; // Even if it fails, seems best to return OK so that subroutine can continue.
+	return StatusBarUtil(output_var, control_window, ATOI(aPart)); // It will handle any zero part# for us.
 }
 
 
@@ -2852,10 +3059,9 @@ ResultType Line::StatusBarWait(char *aTextToWaitFor, char *aSeconds, char *aPart
 	char text_to_wait_for[4096];
 	strlcpy(text_to_wait_for, aTextToWaitFor, sizeof(text_to_wait_for));
 	HWND control_window = target_window ? ControlExist(target_window, "msctls_statusbar321") : NULL;
-	StatusBarUtil(NULL, control_window, ATOI(aPart) // It will handle a NULL control_window or zero part# for us.
+	return StatusBarUtil(NULL, control_window, ATOI(aPart) // It will handle a NULL control_window or zero part# for us.
 		, text_to_wait_for, *aSeconds ? (int)(ATOF(aSeconds)*1000) : -1 // Blank->indefinite.  0 means 500ms.
 		, ATOI(aInterval));
-	return OK; // Even if it fails, seems best to return OK so that subroutine can continue.
 }
 
 
@@ -9434,7 +9640,7 @@ ResultType Line::FileRead(char *aFilespec)
 	// clipboard file should already have the (UINT)0 as its ending terminator.
 
 	// The program is currently compiled with a 2GB address limit, so loading files larger than that
-	// would probably fail or perhaps crash the program.  Therefore, just putting a basic 1.5 GB sanity
+	// would probably fail or perhaps crash the program.  Therefore, just putting a basic 1.0 GB sanity
 	// limit on the file here, for now.  Note: a variable can still be operated upon without necessarily
 	// using the deref buffer, since that buffer only comes into play when there is no other way to
 	// manipulate the variable.  In other words, the deref buffer won't necessarily grow to be the same
@@ -13151,7 +13357,8 @@ void BIF_LV_InsertModifyDeleteCol(ExprTokenType &aResultToken, ExprTokenType *aP
 		{
 			// Width does not have a W prefix to permit a naked expression to be used as the entirely of
 			// options.  For example: LV_SetCol(1, old_width + 10)
-			if (IsPureNumeric(next_option)) // Above has already verified that *next_option can't be whitespace.
+			// v1.0.37: Fixed to allow floating point (although ATOI below will convert it to integer).
+			if (IsPureNumeric(next_option, true, false, true)) // Above has already verified that *next_option can't be whitespace.
 			{
 				do_auto_size = 0; // Turn off any auto-sizing that may have been put into effect by default (such as for insertion).
 				lvc.mask |= LVCF_WIDTH;

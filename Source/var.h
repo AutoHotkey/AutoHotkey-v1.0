@@ -252,7 +252,10 @@ public:
 	}
 	VarSizeType Capacity() // Capacity includes the zero terminator.
 	{
-		return (mType == VAR_ALIAS) ? mAliasFor->mCapacity : mCapacity;
+		// Fix for v1.0.37: Callers want the clipboard's capacity returned, if it has a capacity.  This is
+		// because Capacity() is defined as being the size available in Contents(), which for the clipboard
+		// would be a pointer to the clipboard-buffer-to-be-written (or zero if none).
+		return (mType == VAR_ALIAS) ? mAliasFor->Capacity() : (mType == VAR_CLIPBOARD ? g_clip.mCapacity : mCapacity);
 	}
 
 	VarSizeType &Length()

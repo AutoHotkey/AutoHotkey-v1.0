@@ -31,6 +31,7 @@ public:
 	HGLOBAL mClipMemNow, mClipMemNew;
 	char *mClipMemNowLocked, *mClipMemNewLocked;
 	size_t mLength;  // Last-known length of the clipboard contents.
+	UINT mCapacity;  // Capacity of mClipMemNewLocked.
 	bool mIsOpen;  // Whether the clipboard is physically open due to action by this class.
 
 	// It seems best to default to many attempts, because a failure
@@ -76,7 +77,7 @@ public:
 		: mIsOpen(false)  // Assumes our app doesn't already have it open.
 		, mClipMemNow(NULL), mClipMemNew(NULL)
 		, mClipMemNowLocked(NULL), mClipMemNewLocked(NULL)
-		, mLength(0)
+		, mLength(0), mCapacity(0)
 	{}
 };
 

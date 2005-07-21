@@ -48,20 +48,20 @@ size_t Clipboard::Get(char *aBuf)
 
 	if (!mIsOpen)
 	{
+		// As a precaution, don't give the caller anything from the clipboard
+		// if the clipboard isn't already open from the caller's previous
+		// call to determine the size of what's on the clipboard (no other app
+		// can alter its size while we have it open).  The is to prevent a
+		// buffer overflow from happening in a scenario such as the following:
+		// Caller calls us and we return zero size, either because there's no
+		// CF_TEXT on the clipboard orthere was a problem opening the clipboard.
+		// In these two cases, the clipboard isn't open, so by the time the
+		// caller calls us again, there's a chance (vanishingly small perhaps)
+		// that another app (if our thread were preempted long enough, or the
+		// platform is multiprocessor) will have changed the contents of the
+		// clipboard to something larger than zero.  Thus, if we copy that
+		// into the caller's buffer, the buffer might overflow:
 		if (aBuf)
-			// As a precaution, don't give the caller anything from the clipboard
-			// if the clipboard isn't already open from the caller's previous
-			// call to determine the size of what's on the clipboard (no other app
-			// can alter its size while we have it open).  The is to prevent a
-			// buffer overflow from happening in a scenario such as the following:
-			// Caller calls us and we return zero size, either because there's no
-			// CF_TEXT on the clipboard orthere was a problem opening the clipboard.
-			// In these two cases, the clipboard isn't open, so by the time the
-			// caller calls us again, there's a chance (vanishingly small perhaps)
-			// that another app (if our thread were preempted long enough, or the
-			// platform is multiprocessor) will have changed the contents of the
-			// clipboard to something larger than zero.  Thus, if we copy that
-			// into the caller's buffer, the buffer might overflow.
 			return 0;
 		if (!Open())
 		{
@@ -115,12 +115,8 @@ size_t Clipboard::Get(char *aBuf)
 		}
 		else // clipboard_contains_text
 			mLength = strlen(mClipMemNowLocked);
-		if (mLength >= CLIPBOARD_FAILURE)
-		{
-			// Not likely in the near future; but here for completeness:
-			Close("Clipboard too large"); // Over 4GB in size.
+		if (mLength >= CLIPBOARD_FAILURE) // Can't realistically happen, so just indicate silent failure.
 			return CLIPBOARD_FAILURE;
-		}
 	}
 	if (!aBuf)
 		return mLength;
@@ -150,7 +146,16 @@ size_t Clipboard::Get(char *aBuf)
 	}
 	else
 		strcpy(aBuf, mClipMemNowLocked);  // Caller has already ensured that aBuf is large enough.
-	Close();
+	// Fix for v1.0.37: Close() is no longer called here because it prevents the clipboard variable
+	// from being referred to more than once in a line.  For example:
+	// Msgbox %Clipboard%%Clipboard%
+	// ToolTip % StrLen(Clipboard) . Clipboard
+	// Instead, the clipboard is later closed in other places (search on CLOSE_CLIPBOARD_IF_OPEN
+	// to find them).  The alternative to fixing it this way would be to let it reopen the clipboard
+	// by means getting rid of the following lines above:
+	//if (aBuf)
+	//	return 0;
+	// However, that has the risks described in the comments above those two lines.
 	return mLength;
 }
 
@@ -214,6 +219,7 @@ char *Clipboard::PrepareForWrite(size_t aAllocSize)
 		g_script.ScriptError("GlobalLock"); // Short error message since so rare.
 		return NULL;
 	}
+	mCapacity = (UINT)aAllocSize; // Keep mCapacity in sync with the state of mClipMemNewLocked.
 	*mClipMemNewLocked = '\0'; // Init for caller.
 	return mClipMemNewLocked;  // The caller can now write to this mem.
 }
@@ -246,6 +252,7 @@ ResultType Clipboard::Commit(UINT aFormat)
 			new_is_empty = !*mClipMemNewLocked;
 			GlobalUnlock(mClipMemNew); // mClipMemNew not mClipMemNewLocked.
 			mClipMemNewLocked = NULL;  // Keep this in sync with the above action.
+			mCapacity = 0; // Keep mCapacity in sync with the state of mClipMemNewLocked.
 		}
 		if (new_is_empty)
 			// Leave the clipboard truly empty rather than setting it to be the
@@ -287,6 +294,7 @@ ResultType Clipboard::AbortWrite(char *aErrorMessage)
 	{
 		GlobalUnlock(mClipMemNew); // mClipMemNew not mClipMemNewLocked.
 		mClipMemNewLocked = NULL;
+		mCapacity = 0; // Keep mCapacity in sync with the state of mClipMemNewLocked.
 	}
 	// Above: Unlock prior to freeing below.
 	if (mClipMemNew)
@@ -321,6 +329,7 @@ ResultType Clipboard::Close(char *aErrorMessage)
 	//{
 	//	GlobalUnlock(mClipMemNew); // mClipMemNew not mClipMemNewLocked.
 	//	mClipMemNewLocked = NULL;
+	//	mCapacity = 0; // Keep mCapacity in sync with the state of mClipMemNewLocked.
 	//}
 	//// Above: Unlock prior to freeing below.
 	//if (mClipMemNew)

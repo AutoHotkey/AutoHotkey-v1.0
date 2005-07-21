@@ -1244,6 +1244,65 @@ ResultType RegReadString(HKEY aRootKey, char *aSubkey, char *aValueName, char *a
 
 
 
+LPVOID AllocInterProcMem(HANDLE &aHandle, DWORD aSize, HWND aHwnd)
+// aHandle is an output parameter that holds the mapping for Win9x and the process handle for NT.
+// Returns NULL on failure (in which case caller should ignore the value of aHandle).
+{
+	// ALLOCATE APPROPRIATE TYPE OF MEMORY (depending on OS type)
+	LPVOID mem;
+	if (g_os.IsWin9x()) // Use file-mapping method.
+	{
+		if (   !(aHandle = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, aSize, NULL))   )
+			return NULL;
+		mem = MapViewOfFile(aHandle, FILE_MAP_ALL_ACCESS, 0, 0, 0);
+	}
+	else // NT/2k/XP/2003 or later.  Use the VirtualAllocEx() + ReadProcessMemory() method.
+	{
+		DWORD pid;
+		GetWindowThreadProcessId(aHwnd, &pid);
+		// Even if the PID is our own, open the process anyway to simplify the code. After all, it would be
+		// pretty silly for a script to access its own ListViews via this method.
+		if (   !(aHandle = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE, FALSE, pid))   )
+			return NULL; // Let ErrorLevel tell the story.
+		// Load function dynamically to allow program to launch on win9x:
+		typedef LPVOID (WINAPI *MyVirtualAllocExType)(HANDLE, LPVOID, SIZE_T, DWORD, DWORD);
+		static MyVirtualAllocExType MyVirtualAllocEx = (MyVirtualAllocExType)GetProcAddress(GetModuleHandle("kernel32")
+			, "VirtualAllocEx");
+		// Reason for using VirtualAllocEx(): When sending LVITEM structures to a control in a remote process, the
+		// structure and its pszText buffer must both be memory inside the remote process rather than in our own.
+		// Allocate both the LVITEM struct and its internal string buffer in one go because MyVirtualAllocEx() is
+		// probably a high overhead call:
+		mem = MyVirtualAllocEx(aHandle, NULL, aSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+	}
+	if (!mem)
+		CloseHandle(aHandle); // Closes the mapping for Win9x and the process handle for other OSes. Caller should ignore the value of aHandle when return value is NULL.
+	//else leave the handle open (required for both methods).  It's the caller's responsibility to close it.
+	return mem;
+}
+
+
+
+void FreeInterProcMem(HANDLE aHandle, LPVOID aMem)
+// Caller has ensured that aMem is a file-mapping for Win9x and a VirtualAllocEx block for NT/2k/XP+.
+// Similarly, it has ensured that aHandle is a file-mapping handle for Win9x and a process handle for NT/2k/XP+.
+{
+	if (g_os.IsWin9x())
+		UnmapViewOfFile(aMem);
+	else
+	{
+		// Load function dynamically to allow program to launch on win9x:
+		typedef BOOL (WINAPI *MyVirtualFreeExType)(HANDLE, LPVOID, SIZE_T, DWORD);
+		static MyVirtualFreeExType MyVirtualFreeEx = (MyVirtualFreeExType)GetProcAddress(GetModuleHandle("kernel32")
+			, "VirtualFreeEx");
+		MyVirtualFreeEx(aHandle, aMem, 0, MEM_RELEASE); // Size 0 is used with MEM_RELEASE.
+	}
+	// The following closes either the mapping or the process handle, depending on OS type.
+	// But close it only after the above is done using it.
+	CloseHandle(aHandle);
+}
+
+
+
 HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, int aIconIndex, bool aUseGDIPlusIfAvailable)
 // Loads a JPG/GIF/BMP/ICO/etc. and returns an HBITMAP or HICON to the caller (which it may call
 // DeleteObject()/DestroyIcon() upon, though upon program termination all such handles are freed

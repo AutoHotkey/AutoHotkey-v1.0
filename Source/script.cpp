@@ -4917,6 +4917,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				if (!*NEW_RAW_ARG3)
 					return ScriptError("Parameter #3 must not be blank in this case.");
 				break;
+			case CONTROLGET_CMD_LIST:
+				break; // Simply break for any sub-commands that have an optional parameter 3.
 			default: // All commands except the above should have a blank Value parameter.
 				if (*NEW_RAW_ARG3)
 					return ScriptError(ERR_PARAM3_MUST_BE_BLANK, NEW_RAW_ARG3);

@@ -477,6 +477,8 @@ char *ConvertEscapeSequences(char *aBuf, char aEscapeChar, bool aAllowEscapedSpa
 POINT CenterWindow(int aWidth, int aHeight);
 bool FontExist(HDC aHdc, char *aTypeface);
 void GetVirtualDesktopRect(RECT &aRect);
+LPVOID AllocInterProcMem(HANDLE &aHandle, DWORD aSize, HWND aHwnd);
+void FreeInterProcMem(HANDLE aHandle, LPVOID aMem);
 ResultType RegReadString(HKEY aRootKey, char *aSubkey, char *aValueName, char *aBuf, size_t aBufSize);
 HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, int aIconIndex
 	, bool aUseGDIPlusIfAvailable);
