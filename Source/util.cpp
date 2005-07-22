@@ -1256,7 +1256,7 @@ LPVOID AllocInterProcMem(HANDLE &aHandle, DWORD aSize, HWND aHwnd)
 			return NULL;
 		mem = MapViewOfFile(aHandle, FILE_MAP_ALL_ACCESS, 0, 0, 0);
 	}
-	else // NT/2k/XP/2003 or later.  Use the VirtualAllocEx() + ReadProcessMemory() method.
+	else // NT/2k/XP/2003 or later.  Use the VirtualAllocEx() so that caller can use Read/WriteProcessMemory().
 	{
 		DWORD pid;
 		GetWindowThreadProcessId(aHwnd, &pid);
@@ -1359,7 +1359,7 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, i
 
 	HINSTANCE hinstGDI = NULL;
 	if (aUseGDIPlusIfAvailable && !(hinstGDI = LoadLibrary("gdiplus")))
-		aUseGDIPlusIfAvailable = false; // Override this value as a signal for the section below.
+		aUseGDIPlusIfAvailable = false; // Override any original "true" value as a signal for the section below.
 
 	if (!hbitmap && aImageType >= 0 && !aUseGDIPlusIfAvailable)
 	{

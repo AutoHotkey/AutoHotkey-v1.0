@@ -2557,49 +2557,65 @@ ResultType ControlGetListView(Var &aOutputVar, HWND aHwnd, char *aOptions)
 	// GET COLUMN COUNT
 	// The following approach might be the only simple yet reliable way to get the column count (sending
 	// LVM_GETITEM until it returns false doesn't work because it apparently returns true even for
-	// nonexistent subitems).  Fortunately, testing shows that a ListView always has a header control
-	// (at least on XP), even if you can't see it (such as when the view is Icon/Tile or when -Hdr has
-	// been specified in the options).
+	// nonexistent subitems -- the same is reported to happen with LVM_GETCOLUMN and such, though I seem
+	// to remember that LVM_SETCOLUMN fails on non-existent columns -- but calling that on a ListView
+	// that isn't in Report view has been known to traumatize the control).  Fortunately, testing shows
+	// that a ListView always has a header control (at least on XP), even if you can't see it (such as
+	// when the view is Icon/Tile or when -Hdr has been specified in the options).
+	// Fix for v1.0.37.01: It appears that the header doesn't always exist.  For example, when an
+	// Explorer window opens and is *initially* in icon or list mode vs. details/tiles mode, testing
+	// shows that there is no header control.  Testing also shows that there is exactly one column
+	// in such cases but only for Explorer and other things that avoid creating the invisible columns.
+	// For example, a script can create a ListView in Icon-mode and give it retrievable column data for
+	// columns beyond the first.  Thus, having the undetermined-col-count mode preserves flexibility
+	// by allowing individual columns beyond the first to be retrieved.  On a related note, testing shows
+	// that attempts to explicitly retrieve columns (i.e. fields/subitems) other than the first in the
+	// case of Explorer's Icon/List view modes behave the same as fetching the first column (i.e. Col3
+	// would retrieve the same text as specifying Col1 or not having the Col option at all).
 	HWND header_control;
-	LRESULT col_count;
-	if (!SendMessageTimeout(aHwnd, LVM_GETHEADER, 0, 0, SMTO_ABORTIFHUNG, 2000, (PDWORD_PTR)&header_control) // Timed out or failed.
-		|| !header_control  // Never happens, at least not on XP (see comments above).
-		|| !SendMessageTimeout(header_control, HDM_GETITEMCOUNT, 0, 0, SMTO_ABORTIFHUNG, 2000, (PDWORD_PTR)&col_count)) // Timed out or failed.
-		return OK;  // Let ErrorLevel tell the story.
+	LRESULT col_count = -1;  // Fix for v1.0.37.01: Use -1 to indicate "undetermined col count".
+	if (SendMessageTimeout(aHwnd, LVM_GETHEADER, 0, 0, SMTO_ABORTIFHUNG, 2000, (PDWORD_PTR)&header_control)
+		&& header_control) // Relies on short-circuit boolean order.
+		SendMessageTimeout(header_control, HDM_GETITEMCOUNT, 0, 0, SMTO_ABORTIFHUNG, 2000, (PDWORD_PTR)&col_count);
+		// Return value is not checked because if it fails, col_count is left at its default of -1 set above.
+		// In fact, if any of the above conditions made it impossible to determine col_count, col_count stays
+		// at -1 to indicate "undetermined".
 
 	// PARSE OPTIONS
 	bool get_count = strcasestr(aOptions, "Count");
 	bool include_selected_only = strcasestr(aOptions, "Selected"); // Explicit "ed" to reserve "Select" for possible future use.
 	bool include_focused_only = strcasestr(aOptions, "Focused");  // Same.
 	char *col_option = strcasestr(aOptions, "Col"); // Also used for mode "Count Col"
-	int single_col = col_option ? ATOI(col_option + 3) - 1 : -1;
+	int requested_col = col_option ? ATOI(col_option + 3) - 1 : -1;
 	// If the above yields a negative col number for any reason, it's ok because below will just ignore it.
-	if (single_col > -1 && single_col >= col_count) // Specified column does not exist.
+	if (col_count > -1 && requested_col > -1 && requested_col >= col_count) // Specified column does not exist.
 		return OK;  // Let ErrorLevel tell the story.
 
-	DWORD result;
+	// IF THE "COUNT" OPTION IS PRESENT, FULLY HANDLE THAT AND RETURN
 	if (get_count)
 	{
+		int result; // Must be signed to support writing a col count of -1 to aOutputVar.
 		if (include_focused_only) // Listed first so that it takes precedence over include_selected_only.
 		{
-			if (!SendMessageTimeout(aHwnd, LVM_GETNEXTITEM, -1, LVNI_FOCUSED, SMTO_ABORTIFHUNG, 2000, &result)) // Timed out or failed.
+			if (!SendMessageTimeout(aHwnd, LVM_GETNEXTITEM, -1, LVNI_FOCUSED, SMTO_ABORTIFHUNG, 2000, (PDWORD_PTR)&result)) // Timed out or failed.
 				return OK;  // Let ErrorLevel tell the story.
 			++result; // i.e. Set it to 0 if not found, or the 1-based row-number otherwise.
 		}
 		else if (include_selected_only)
 		{
-			if (!SendMessageTimeout(aHwnd, LVM_GETSELECTEDCOUNT, 0, 0, SMTO_ABORTIFHUNG, 2000, &result)) // Timed out or failed.
+			if (!SendMessageTimeout(aHwnd, LVM_GETSELECTEDCOUNT, 0, 0, SMTO_ABORTIFHUNG, 2000, (PDWORD_PTR)&result)) // Timed out or failed.
 				return OK;  // Let ErrorLevel tell the story.
 		}
 		else if (col_option) // "Count Col" returns the number of columns.
-			result = (DWORD)col_count;
+			result = (int)col_count;
 		else // Total row count.
-			result = (DWORD)row_count;
+			result = (int)row_count;
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 		return aOutputVar.Assign(result);
 	}
 
-	if (row_count < 1 || col_count < 1)
+	// DO FINAL CHECKS AND ALLOCATE INTERPROCESS MEMORY FOR TEXT RETRIEVAL
+	if (row_count < 1 || !col_count) // But don't return when col_count == -1 (i.e. always make the attempt when col count is undetermined).
 		return g_ErrorLevel->Assign(ERRORLEVEL_NONE);  // No text in the control, so indicate success.
 
 	HANDLE handle;
@@ -2609,13 +2625,16 @@ ResultType ControlGetListView(Var &aOutputVar, HWND aHwnd, char *aOptions)
 	bool is_win9x = g_os.IsWin9x(); // Resolve once for possible slight perf./code size benefit.
 
 	// PREP LVI STRUCT MEMBERS FOR TEXT RETRIEVAL
-	// Subtract 1 because of that nagging doubt about size vs. length. Some MSDN examples such as
-	// TabCtrl_GetItem()'s cchTextMax subtract one:
 	LVITEM lvi_for_nt; // Only used for NT/2k/XP method.
 	LVITEM &local_lvi = is_win9x ? *(LPLVITEM)p_remote_lvi : lvi_for_nt; // Local is the same as remote for Win9x.
+	// Subtract 1 because of that nagging doubt about size vs. length. Some MSDN examples such as
+	// TabCtrl_GetItem()'s cchTextMax subtract one:
 	local_lvi.cchTextMax = LV_REMOTE_BUF_SIZE - 1; // Note that LVM_GETITEM doesn't update this member to reflect the new length.
 	local_lvi.pszText = (char *)p_remote_lvi + sizeof(LVITEM); // The next buffer is the memory area adjacent to, but after the struct.
+
 	LRESULT i, next, length, total_length;
+	bool is_selective = include_focused_only || include_selected_only;
+	bool single_col_mode = (requested_col > -1 || col_count == -1); // Get only one column in these cases.
 
 	// ESTIMATE THE AMOUNT OF MEMORY NEEDED TO STORE ALL THE TEXT
 	// It's important to note that a ListView might legitimately have a collection of rows whose
@@ -2623,21 +2642,28 @@ ResultType ControlGetListView(Var &aOutputVar, HWND aHwnd, char *aOptions)
 	// (checking its style might not be enough?), there is no way to distinguish this condition
 	// from one where the control's text can't be retrieved due to being owner-drawn.  In any case,
 	// this all-empty-field behavior simplifies the code and will be documented in the help file.
-	bool is_selective = include_focused_only || include_selected_only;
 	for (i = 0, next = -1, total_length = 0; i < row_count; ++i) // For each row:
 	{
 		if (is_selective)
 		{
+			// Fix for v1.0.37.01: Prevent an infinite loop that might occur if the target control no longer
+			// exists (perhaps having been closed in the middle of the operation) or is permanently hung.
+			// If GetLastError() were to return zero after the below, it would mean the function timed out.
+			// However, rather than checking and retrying, it seems better to abort the operation because:
+			// 1) Timeout should be quite rare.
+			// 2) Reduces code size.
+			// 3) Having a retry really should be accompanied by SLEEP_WITHOUT_INTERRUPTION because all this
+			//    time our thread would not pumping messages (and worse, if the keyboard/mouse hooks are installed,
+			//    mouse/key lag would occur).
 			if (!SendMessageTimeout(aHwnd, LVM_GETNEXTITEM, next, include_focused_only ? LVNI_FOCUSED : LVNI_SELECTED
-				, SMTO_ABORTIFHUNG, 2000, (PDWORD_PTR)&next)) // Timed out or failed.
-				continue; // Omit from estimate (if estimate is too small, the text retrieval below will truncate it).
-			if (next == -1) // No next item.
-				break;
+				, SMTO_ABORTIFHUNG, 2000, (PDWORD_PTR)&next) // Timed out or failed.
+				|| next == -1) // No next item.  Relies on short-circuit boolean order.
+				break; // End of estimation phase (if estimate is too small, the text retrieval below will truncate it).
 		}
 		else
 			next = i;
-		for (local_lvi.iSubItem = (single_col > -1) ? single_col : 0 // iSubItem is which field to fetch. If it's zero, the item vs. subitem will be fetched.
-			; local_lvi.iSubItem < col_count
+		for (local_lvi.iSubItem = (requested_col > -1) ? requested_col : 0 // iSubItem is which field to fetch. If it's zero, the item vs. subitem will be fetched.
+			; col_count == -1 || local_lvi.iSubItem < col_count // If column count is undetermined (-1), always make the attempt.
 			; ++local_lvi.iSubItem) // For each column:
 		{
 			if ((is_win9x || WriteProcessMemory(handle, p_remote_lvi, &local_lvi, sizeof(LVITEM), NULL)) // Relies on short-circuit boolean order.
@@ -2645,14 +2671,14 @@ ResultType ControlGetListView(Var &aOutputVar, HWND aHwnd, char *aOptions)
 				total_length += length;
 			//else timed out or failed, don't include the length in the estimate.  Instead, the
 			// text-fetching routine below will ensure the text doesn't overflow the var capacity.
-			if (single_col > -1) // Single column mode is in effect, so only the first iteration is done.
+			if (single_col_mode)
 				break;
 		}
 	}
 	// Add to total_length enough room for one linefeed per row, and one tab after each column
 	// except the last (formula verified correct, though it's inflated by 1 for safety). "i" contains the
 	// actual number of rows that will be transcribed, which might be less than row_count if is_selective==true.
-	total_length += i * (single_col > -1 ? 1 : col_count);
+	total_length += i * (single_col_mode ? 1 : col_count);
 
 	// SET UP THE OUTPUT VARIABLE, ENLARGING IT IF NECESSARY
 	// If the aOutputVar is of type VAR_CLIPBOARD, this call will set up the clipboard for writing:
@@ -2668,13 +2694,13 @@ ResultType ControlGetListView(Var &aOutputVar, HWND aHwnd, char *aOptions)
 	{
 		if (is_selective)
 		{
+			// Fix for v1.0.37.01: Prevent an infinite loop (for details, see comments in the estimation phase above).
 			if (!SendMessageTimeout(aHwnd, LVM_GETNEXTITEM, next, include_focused_only ? LVNI_FOCUSED : LVNI_SELECTED
-				, SMTO_ABORTIFHUNG, 2000, (PDWORD_PTR)&next)) // Timed out or failed.
-				continue; // Omit this row.
-			if (next == -1) // No next item.
-				break;
+				, SMTO_ABORTIFHUNG, 2000, (PDWORD_PTR)&next) // Timed out or failed.
+				|| next == -1) // No next item.
+				break; // See comment above for why unconditional break vs. continue.
 		}
-		else
+		else // Retrieve every row, so the "next" row becomes the "i" index.
 			next = i;
 		// Insert a linefeed before each row except the first:
 		if (i && total_length < capacity) // If we're at capacity, it will exit the loops when the next field is read.
@@ -2684,12 +2710,12 @@ ResultType ControlGetListView(Var &aOutputVar, HWND aHwnd, char *aOptions)
 		}
 
 		// iSubItem is which field to fetch. If it's zero, the item vs. subitem will be fetched:
-		for (local_lvi.iSubItem = (single_col > -1) ? single_col : 0
-			; local_lvi.iSubItem < col_count
+		for (local_lvi.iSubItem = (requested_col > -1) ? requested_col : 0
+			; col_count == -1 || local_lvi.iSubItem < col_count // If column count is undetermined (-1), always make the attempt.
 			; ++local_lvi.iSubItem) // For each column:
 		{
 			// Insert a tab before each column except the first and except when in single-column mode:
-			if (single_col < 0 && local_lvi.iSubItem && total_length < capacity)  // If we're at capacity, it will exit the loops when the next field is read.
+			if (!single_col_mode && local_lvi.iSubItem && total_length < capacity)  // If we're at capacity, it will exit the loops when the next field is read.
 			{
 				*contents++ = '\t';
 				++total_length;
@@ -2699,7 +2725,7 @@ ResultType ControlGetListView(Var &aOutputVar, HWND aHwnd, char *aOptions)
 				|| !SendMessageTimeout(aHwnd, LVM_GETITEMTEXT, next, (LPARAM)p_remote_lvi, SMTO_ABORTIFHUNG, 2000, (PDWORD_PTR)&length))
 				continue; // Timed out or failed. It seems more useful to continue getting text rather than aborting the operation.
 
-			// Otheriwse, the message was successfully sent.
+			// Otherwise, the message was successfully sent.
 			if (length > 0)
 			{
 				if (total_length + length > capacity)
@@ -2730,7 +2756,7 @@ ResultType ControlGetListView(Var &aOutputVar, HWND aHwnd, char *aOptions)
 				}
 			}
 			//else length is zero; but even so, continue on to put in a tab (if called for).
-			if (single_col > -1) // Single column mode is in effect, so only the first iteration is done.
+			if (single_col_mode)
 				break;
 		} // for() each column
 	} // for() each row
