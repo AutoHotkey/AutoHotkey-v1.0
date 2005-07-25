@@ -2314,8 +2314,8 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 			if (key_up)
 				// These sequence is basically the same as the one used in Case #3
 				// when a prefix key that isn't a suffix failed to modify anything
-				// and was then released, so make modifications made here or there
-				// are considered for inclusion in the other one.  UPDATE: Since
+				// and was then released, so consider any modifications made here
+				// or there for inclusion in the other one.  UPDATE: Since
 				// the previous sentence is a bit obsolete, describe this better:
 				// If it's a toggleable key that the user wants to allow to be
 				// toggled, just allow this up-event to go through because the
@@ -2325,10 +2325,15 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 				// NO_SUPPRESS_PREFIX can occur if it fell through from Case #3 but the right
 				// modifier keys aren't down to have triggered a key-up hotkey:
 				return (this_key.as_modifiersLR || (this_key.no_suppress & NO_SUPPRESS_PREFIX)
+					// The following line was added for v1.0.37.02 to take into account key-up hotkeys,
+					// the release of which should never be suppressed if it didn't actually fire the
+					// up-hotkey (due to the wrong modifiers being down):
+					|| !this_key.used_as_prefix
 					// The order on this line important; it relies on short-circuit boolean:
 					|| this_toggle_key_can_be_toggled) ? AllowKeyToGoToSystem : SuppressThisKey;
 #else
-				return (this_key.no_suppress & NO_SUPPRESS_PREFIX) ? AllowKeyToGoToSystem : SuppressThisKey;
+				// v1.0.37.02: Added !this_key.used_as_prefix (see comment above):
+				return !this_key.used_as_prefix || (this_key.no_suppress & NO_SUPPRESS_PREFIX) ? AllowKeyToGoToSystem : SuppressThisKey;
 #endif
 			// For execution to have reached this point, the current key must be both a prefix and
 			// suffix, but be acting in its capacity as a suffix.  Since no hotkey action will fire,

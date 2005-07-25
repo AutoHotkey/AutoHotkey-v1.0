@@ -2555,13 +2555,19 @@ ResultType ControlGetListView(Var &aOutputVar, HWND aHwnd, char *aOptions)
 		return OK;  // Let ErrorLevel tell the story.
 
 	// GET COLUMN COUNT
+	// Through testing, could probably get to a level of 90% certainty that a ListView for which
+	// InsertColumn() was never called (or was called only once) might lack a header control if the LV is
+	// created in List/Icon view-mode and/or with LVS_NOCOLUMNHEADER. The problem is that 90% doesn't
+	// seem to be enough to justify elimination of the code for "undetermined column count" mode.  If it
+	// ever does become a certainly, the following could be changed:
+	// 1) The extra code for "undetermined" mode rather than simply forcing col_count to be 1.
+	// 2) Probably should be kept for compatibility: -1 being returned when undetermined "col count".
+	//
 	// The following approach might be the only simple yet reliable way to get the column count (sending
 	// LVM_GETITEM until it returns false doesn't work because it apparently returns true even for
 	// nonexistent subitems -- the same is reported to happen with LVM_GETCOLUMN and such, though I seem
 	// to remember that LVM_SETCOLUMN fails on non-existent columns -- but calling that on a ListView
-	// that isn't in Report view has been known to traumatize the control).  Fortunately, testing shows
-	// that a ListView always has a header control (at least on XP), even if you can't see it (such as
-	// when the view is Icon/Tile or when -Hdr has been specified in the options).
+	// that isn't in Report view has been known to traumatize the control).
 	// Fix for v1.0.37.01: It appears that the header doesn't always exist.  For example, when an
 	// Explorer window opens and is *initially* in icon or list mode vs. details/tiles mode, testing
 	// shows that there is no header control.  Testing also shows that there is exactly one column
@@ -2572,6 +2578,9 @@ ResultType ControlGetListView(Var &aOutputVar, HWND aHwnd, char *aOptions)
 	// that attempts to explicitly retrieve columns (i.e. fields/subitems) other than the first in the
 	// case of Explorer's Icon/List view modes behave the same as fetching the first column (i.e. Col3
 	// would retrieve the same text as specifying Col1 or not having the Col option at all).
+	// Obsolete because not always true: Testing shows that a ListView always has a header control
+	// (at least on XP), even if you can't see it (such as when the view is Icon/Tile or when -Hdr has
+	// been specified in the options).
 	HWND header_control;
 	LRESULT col_count = -1;  // Fix for v1.0.37.01: Use -1 to indicate "undetermined col count".
 	if (SendMessageTimeout(aHwnd, LVM_GETHEADER, 0, 0, SMTO_ABORTIFHUNG, 2000, (PDWORD_PTR)&header_control)
@@ -2581,7 +2590,7 @@ ResultType ControlGetListView(Var &aOutputVar, HWND aHwnd, char *aOptions)
 		// In fact, if any of the above conditions made it impossible to determine col_count, col_count stays
 		// at -1 to indicate "undetermined".
 
-	// PARSE OPTIONS
+	// PARSE OPTIONS (a simple vs. strict method is used to reduce code size)
 	bool get_count = strcasestr(aOptions, "Count");
 	bool include_selected_only = strcasestr(aOptions, "Selected"); // Explicit "ed" to reserve "Select" for possible future use.
 	bool include_focused_only = strcasestr(aOptions, "Focused");  // Same.
@@ -2627,8 +2636,8 @@ ResultType ControlGetListView(Var &aOutputVar, HWND aHwnd, char *aOptions)
 	// PREP LVI STRUCT MEMBERS FOR TEXT RETRIEVAL
 	LVITEM lvi_for_nt; // Only used for NT/2k/XP method.
 	LVITEM &local_lvi = is_win9x ? *(LPLVITEM)p_remote_lvi : lvi_for_nt; // Local is the same as remote for Win9x.
-	// Subtract 1 because of that nagging doubt about size vs. length. Some MSDN examples such as
-	// TabCtrl_GetItem()'s cchTextMax subtract one:
+	// Subtract 1 because of that nagging doubt about size vs. length. Some MSDN examples subtract one,
+	// such as TabCtrl_GetItem()'s cchTextMax:
 	local_lvi.cchTextMax = LV_REMOTE_BUF_SIZE - 1; // Note that LVM_GETITEM doesn't update this member to reflect the new length.
 	local_lvi.pszText = (char *)p_remote_lvi + sizeof(LVITEM); // The next buffer is the memory area adjacent to, but after the struct.
 
@@ -12845,8 +12854,8 @@ void BIF_LV_GetText(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aP
 	else // Get row's indicated item or subitem text.
 	{
 		LVITEM lvi;
-		// Subtract 1 because of that nagging doubt about size vs. length. Some MSDN examples such as
-		// TabCtrl_GetItem()'s cchTextMax subtract one.
+		// Subtract 1 because of that nagging doubt about size vs. length. Some MSDN examples subtract one, such as
+		// TabCtrl_GetItem()'s cchTextMax:
 		lvi.cchTextMax = LV_TEXT_BUF_SIZE - 1; // Note that LVM_GETITEM doesn't update this member to reflect the new length.
 		lvi.pszText = buf;
 		lvi.mask = LVIF_TEXT;

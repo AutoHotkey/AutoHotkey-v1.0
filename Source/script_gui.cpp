@@ -6731,7 +6731,7 @@ void GuiType::Event(GuiIndexType aControlIndex, UINT aNotifyCode, USHORT aEventI
 			// Fix for v1.0.24: The below excludes from consideration messages from radios that are
 			// being unchecked.  This prevents a radio group's g-label from being fired twice when the
 			// user navigates to a new radio via the arrow keys.  It also filters out the BN_CLICKED that
-			// occurs when the user tabs over to a radio group that lacks a selected button.  Such
+			// occurs when the user tabs over to a radio group that lacks a selected button.  This new
 			// behavior seems like it would be desirable most of the time.
 			if (control.type == GUI_CONTROL_RADIO && SendMessage(control.hwnd, BM_GETCHECK, 0, 0) == BST_UNCHECKED)
 				return;
@@ -7904,7 +7904,7 @@ void GuiType::LV_Sort(GuiControlType &aControl, int aColumnIndex, bool aSortOnly
 	// Init those members needed for LVM_GETITEM if it turns out to be needed.  This section
 	// also serves to permanently init cchTextMax for use by the sorting functions too:
 	lvs.lvi.pszText = lvs.buf1;
-	lvs.lvi.cchTextMax = LV_TEXT_BUF_SIZE - 1; // Subtracts 1 because of that nagging doubt about size vs. length. Some MSDN examples such as TabCtrl_GetItem()'s cchTextMax subtract one.
+	lvs.lvi.cchTextMax = LV_TEXT_BUF_SIZE - 1; // Subtracts 1 because of that nagging doubt about size vs. length. Some MSDN examples subtract one, such as TabCtrl_GetItem()'s cchTextMax.
 
 	if (col.type == LV_COL_INTEGER)
 	{

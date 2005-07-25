@@ -738,7 +738,7 @@ ResultType StatusBarUtil(Var *aOutputVar, HWND aBarHwnd, int aPartNumber, char *
 	HANDLE handle;
 	LPVOID remote_buf;
 	LRESULT part_count; // The number of parts this status bar has.
-	if (!aBarHwnd  // These condtions rely heavily on short-circuit boolean order.
+	if (!aBarHwnd  // These conditions rely heavily on short-circuit boolean order.
 		|| !SendMessageTimeout(aBarHwnd, SB_GETPARTS, 0, 0, SMTO_ABORTIFHUNG, SB_TIMEOUT, (PDWORD_PTR)&part_count) // It failed or timed out.
 		|| aPartNumber > part_count
 		|| !(remote_buf = AllocInterProcMem(handle, WINDOW_TEXT_SIZE + 1, aBarHwnd))) // Alloc mem last.
