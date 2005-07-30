@@ -2269,35 +2269,35 @@ sc_type vk_to_sc(vk_type aVK, bool aReturnSecondary)
 	{
 	// Yield a manually translation for virtual keys that MapVirtualKey() doesn't support or for which it
 	// doesn't yield consistent result (such as Win9x supporting only SHIFT rather than VK_LSHIFT/VK_RSHIFT).
-	case VK_LSHIFT:   sc = SC_LSHIFT;
-	case VK_RSHIFT:   sc = SC_RSHIFT;
-	case VK_LCONTROL: sc = SC_LCONTROL;
-	case VK_RCONTROL: sc = SC_RCONTROL;
-	case VK_LMENU:    sc = SC_LALT;
-	case VK_RMENU:    sc = SC_RALT;
-	case VK_LWIN:     sc = SC_LWIN; // Earliest versions of Win95/NT might not support these, so map them manually.
-	case VK_RWIN:     sc = SC_RWIN; //
+	case VK_LSHIFT:   sc = SC_LSHIFT; break;
+	case VK_RSHIFT:   sc = SC_RSHIFT; break;
+	case VK_LCONTROL: sc = SC_LCONTROL; break;
+	case VK_RCONTROL: sc = SC_RCONTROL; break;
+	case VK_LMENU:    sc = SC_LALT; break;
+	case VK_RMENU:    sc = SC_RALT; break;
+	case VK_LWIN:     sc = SC_LWIN; break; // Earliest versions of Win95/NT might not support these, so map them manually.
+	case VK_RWIN:     sc = SC_RWIN; break; //
 
 	// According to http://support.microsoft.com/default.aspx?scid=kb;en-us;72583
 	// most or all numeric keypad keys cannot be mapped reliably under any OS. The article is
 	// a little unclear about which direction, if any, that MapVirtualKey() does work in for
 	// the numpad keys, so for peace-of-mind map them all manually for now:
-	case VK_NUMPAD0:  sc = SC_NUMPAD0;
-	case VK_NUMPAD1:  sc = SC_NUMPAD1;
-	case VK_NUMPAD2:  sc = SC_NUMPAD2;
-	case VK_NUMPAD3:  sc = SC_NUMPAD3;
-	case VK_NUMPAD4:  sc = SC_NUMPAD4;
-	case VK_NUMPAD5:  sc = SC_NUMPAD5;
-	case VK_NUMPAD6:  sc = SC_NUMPAD6;
-	case VK_NUMPAD7:  sc = SC_NUMPAD7;
-	case VK_NUMPAD8:  sc = SC_NUMPAD8;
-	case VK_NUMPAD9:  sc = SC_NUMPAD9;
-	case VK_DECIMAL:  sc = SC_NUMPADDOT;
-	case VK_NUMLOCK:  sc = SC_NUMLOCK;
-	case VK_DIVIDE:   sc = SC_NUMPADDIV;
-	case VK_MULTIPLY: sc = SC_NUMPADMULT;
-	case VK_SUBTRACT: sc = SC_NUMPADSUB;
-	case VK_ADD:      sc = SC_NUMPADADD;
+	case VK_NUMPAD0:  sc = SC_NUMPAD0; break;
+	case VK_NUMPAD1:  sc = SC_NUMPAD1; break;
+	case VK_NUMPAD2:  sc = SC_NUMPAD2; break;
+	case VK_NUMPAD3:  sc = SC_NUMPAD3; break;
+	case VK_NUMPAD4:  sc = SC_NUMPAD4; break;
+	case VK_NUMPAD5:  sc = SC_NUMPAD5; break;
+	case VK_NUMPAD6:  sc = SC_NUMPAD6; break;
+	case VK_NUMPAD7:  sc = SC_NUMPAD7; break;
+	case VK_NUMPAD8:  sc = SC_NUMPAD8; break;
+	case VK_NUMPAD9:  sc = SC_NUMPAD9; break;
+	case VK_DECIMAL:  sc = SC_NUMPADDOT; break;
+	case VK_NUMLOCK:  sc = SC_NUMLOCK; break;
+	case VK_DIVIDE:   sc = SC_NUMPADDIV; break;
+	case VK_MULTIPLY: sc = SC_NUMPADMULT; break;
+	case VK_SUBTRACT: sc = SC_NUMPADSUB; break;
+	case VK_ADD:      sc = SC_NUMPADADD; break;
 	}
 
 	if (sc) // Above found a match.
