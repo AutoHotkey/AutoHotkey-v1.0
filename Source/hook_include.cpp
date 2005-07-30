@@ -1226,8 +1226,8 @@ LRESULT CALLBACK LowLevelKeybdProc(int code, WPARAM wParam, LPARAM lParam)
 	bool key_up = (wParam == WM_KEYUP || wParam == WM_SYSKEYUP);
 	vk_type vk = (vk_type)event.vkCode;
 	sc_type sc = (sc_type)event.scanCode;
-	if (vk && !sc) // It might be possible for another app to call keybd_event with a zero scan code.
-		sc = g_vk_to_sc[vk].a;
+	if (vk && !sc) // Might happen if another app calls keybd_event with a zero scan code.
+		sc = vk_to_sc(vk);
 	// MapVirtualKey() does *not* include 0xE0 in HIBYTE if key is extended.  In case it ever
 	// does in the future (or if event.scanCode ever does), force sc to be an 8-bit value
 	// so that it's guaranteed consistent and to ensure it won't exceed SC_MAX (which might cause

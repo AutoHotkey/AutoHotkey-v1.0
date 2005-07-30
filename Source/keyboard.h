@@ -174,21 +174,6 @@ struct key_to_sc_type // Map key names to scan codes.
 	sc_type sc;
 };
 
-
-// SC_ARRAY_COUNT in case anyone ever tries to reference g_sc_to_vk[SC_MAX] itself:
-struct vk2_type
-{
-	vk_type a;
-	vk_type b;
-};
-
-struct sc2_type
-{
-	sc_type a;
-	sc_type b;
-};
-
-
 enum KeyStateTypes {KEYSTATE_LOGICAL, KEYSTATE_PHYSICAL, KEYSTATE_TOGGLE}; // For use with GetKeyJoyState(), etc.
 enum KeyEventTypes {KEYDOWN, KEYUP, KEYDOWNANDUP};
 
@@ -267,10 +252,8 @@ char *ModifiersLRToText(modLR_type aModifiersLR, char *aBuf);
 
 //---------------------------------------------------------------------
 
-void init_vk_to_sc();
-void init_sc_to_vk();
-char *SCToKeyName(sc_type aSC, char *aBuf, int aBufSize);
-char *VKToKeyName(vk_type aVK, sc_type aSC, char *aBuf, int aBufSize);
+char *SCtoKeyName(sc_type aSC, char *aBuf, int aBufSize);
+char *VKtoKeyName(vk_type aVK, sc_type aSC, char *aBuf, int aBufSize);
 sc_type TextToSC(char *aText);
 vk_type TextToVK(char *aText, modLR_type *pModifiersLR = NULL, bool aExcludeThoseHandledByScanCode = false
 	, bool aAllowExplicitVK = true);
@@ -283,5 +266,7 @@ ResultType KeyHistoryToFile(char *aFilespec = NULL, char aType = '\0', bool aKey
 #endif
 
 char *GetKeyName(vk_type aVK, sc_type aSC, char *aBuf, int aBufSize);
+sc_type vk_to_sc(vk_type aVK, bool aReturnSecondary = false);
+vk_type sc_to_vk(sc_type aSC);
 
 #endif

@@ -16,7 +16,7 @@ GNU General Public License for more details.
 
 #include "stdafx.h" // pre-compiled headers
 #include "hotkey.h"
-#include "globaldata.h"  // For access to g_vk_to_sc and several other global vars.
+#include "globaldata.h"  // For g_os and other global vars.
 #include "window.h" // For MsgBox()
 //#include "application.h" // For ExitApp()
 
@@ -112,7 +112,7 @@ void Hotkey::AllActivate()
 			// a hotkey, ^Enter will also trigger the hotkey, which is not what would be expected).
 			// Therefore, I'm changing it now to have all dual-state keys handled by the hook so that
 			// the counterpart key will never trigger an unexpected firing:
-			if (g_vk_to_sc[hot.mVK].b)
+			if (vk_to_sc(hot.mVK, true))
 			{
 				if (!g_os.IsWin9x())
 					hot.mType = HK_KEYBD_HOOK;
@@ -137,7 +137,7 @@ void Hotkey::AllActivate()
 					// two keys exists as a "scan code" hotkey.  If so, This hotkey must be handled
 					// by the hook to prevent it from firing for both scan codes.  modifiersLR should be
 					// zero here because otherwise type would have already been set to HK_KEYBD_HOOK:
-					//if (FindHotkeyBySC(g_vk_to_sc[hot.mVK], hot.mModifiers, hot.mModifiersLR) != HOTKEY_ID_INVALID))
+					//if (FindHotkeyBySC(vk_to_sc(hot.mVK), hot.mModifiers, hot.mModifiersLR) != HOTKEY_ID_INVALID))
 					//	hot.mType = HK_KEYBD_HOOK;
 				}
 			}
@@ -961,14 +961,18 @@ char *Hotkey::TextToModifiers(char *aText)
 // But come to think of it, +{+} isn't valid because + itself is already shift-equals.  So += would be
 // used instead, e.g. +==action.  Similarly, all the others, except =, would be invalid as hotkeys also.
 {
-	if (!aText) return aText;
-	if (!*aText) return aText;
+	if (!aText || !*aText) return aText; // Below relies on this having ensured that aText isn't blank.
 
 	// Explicitly avoids initializing modifiers to 0 because the caller may have already included
 	// some set some modifiers in there.
 	char *marker;
 	bool key_left, key_right;
-	for (marker = aText, key_left = key_right = false; *marker; ++marker)
+
+	// Improved for v1.0.37.03: The loop's condition is now marker[1] vs. marker[0] so that
+	// the last character is never considered a modifier.  This allows a modifier symbol
+	// to double as the name of a suffix key.  It also fixes issues on layouts where the
+	// symbols +^#! do not require the shift key to be held down, such as the German layout.
+	for (marker = aText, key_left = false, key_right = false; marker[1]; ++marker)
 	{
 		switch (*marker)
 		{
@@ -1134,7 +1138,7 @@ ResultType Hotkey::TextToKey(char *aText, char *aHotkeyName, bool aIsModifier)
 				// from the modifiers here, we're only removing it from our modifiers, not the global
 				// modifiers that have already been set elsewhere for this key (e.g. +Z will still be +z).
 	}
-	else // no VK was found.  Is there a scan code?
+	else // No virtual key was found.  Is there a scan code?
 		if (   !(temp_sc = TextToSC(aText))   )
 			if (   !(temp_sc = (sc_type)ConvertJoy(aText, &joystick_id, true))   )  // Is there a joystick control/button?
 			{
@@ -1161,7 +1165,7 @@ ResultType Hotkey::TextToKey(char *aText, char *aHotkeyName, bool aIsModifier)
 If ever do this, be sure to avoid doing it for keys that must be tracked by scan code (e.g. those in the
 scan code array).
 	if (!temp_vk && !is_mouse)  // sc must be non-zero or else it would have already returned above.
-		if (temp_vk = g_sc_to_vk[temp_sc])
+		if (temp_vk = sc_to_vk(temp_sc))
 		{
 			snprintf(error_text, sizeof(error_text), "DEBUG: \"%s\" (scan code %X) was successfully mapped to virtual key %X", text, temp_sc, temp_vk);
 			MsgBox(error_text);
@@ -1182,7 +1186,14 @@ scan code array).
 	{
 		mVK = temp_vk;
 		mSC = temp_sc;
-		mModifiersLR |= modifiersLR; // Turn on any additional modifiers.  e.g. SHIFT to realize '#'.
+		// Turn on any additional modifiers.  e.g. SHIFT to realize '#'.
+		// Fix for v1.0.37.03: To avoid using the keyboard hook for something like "+::", which in
+		// turn would allow the hotkey fire only for LShift+Equals rather than RShift+Equals, convert
+		// modifiers from left-right to neutral.  But exclude right-side modifiers (except RWin) so that
+		// things like AltGr are more precisely handled (the implications of this policy could use
+		// further review).  Currently, right-Alt (via AltGr) is the only possible right-side key.
+		mModifiers |= ConvertModifiersLR(modifiersLR & (MOD_RWIN|MOD_LWIN|MOD_LCONTROL|MOD_LALT|MOD_LSHIFT));
+		mModifiersLR |= (modifiersLR & (MOD_RSHIFT|MOD_RALT|MOD_RCONTROL)); // Not MOD_RWIN since it belongs above.
 		if (!is_mouse && mType != HK_JOYSTICK)
 		{
 			// For these, if it's Win9x, attempt to register them normally to give the user at least
@@ -1205,7 +1216,7 @@ scan code array).
 				// prefix or option can be added someday to handle this, perhaps #LinkPairedKeys
 				// to avoid having yet another reserved hotkey prefix/symbol.
 				if (!mVK)
-					mVK = g_sc_to_vk[temp_sc].a;
+					mVK = sc_to_vk(temp_sc);
 			}
 			else // OS isn't Win9x.
 			{

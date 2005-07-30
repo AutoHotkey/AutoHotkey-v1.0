@@ -1009,7 +1009,7 @@ void GetHookStatus(char *aBuf, int aBufSize)
 					, g_KeyHistory[item].key_up ? 'u' : 'd'
 					, g_KeyHistory[item].elapsed_time
 					, GetKeyName(g_KeyHistory[item].vk, g_KeyHistory[item].sc, KeyName, sizeof(KeyName))
-					, strcmp(title_curr, title_prev) ? title_curr : "" // Display title only if it's changed.
+					, strcmp(title_curr, title_prev) ? title_curr : "" // Display title only when it changes.
 					);
 		}
 	}

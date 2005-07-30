@@ -53,7 +53,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\GUI Date.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\GUI ListView.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Ref\\ImageSearch\\TEST SUITE\\MAIN.ahk";
-		char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\ControlGet ListView.ahk";
+		char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\New Text Document.ahk";
 	#else
 		char *script_filespec = NAME_P ".ini";  // Use this extension for better file association with editor(s).
 	#endif
@@ -140,10 +140,6 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	// instance terminates, so it should work ok:
 	//CreateMutex(NULL, FALSE, script_filespec); // script_filespec seems a good choice for uniqueness.
 	//if (!g_ForceLaunch && !restart_mode && GetLastError() == ERROR_ALREADY_EXISTS)
-
-	// Init global arrays after chances to exit have passed:
-	init_vk_to_sc();
-	init_sc_to_vk();
 
 	LineNumberType load_result = g_script.LoadFromFile();
 	if (load_result == LOADING_FAILED) // Error during load (was already displayed by the function call).

@@ -882,7 +882,7 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 // For keys like NumpadEnter -- that have have a unique scancode but a non-unique virtual key --
 // caller can just specify the sc.  In addition, the scan code should be specified for keys
 // like NumpadPgUp and PgUp.  In that example, the caller would send the same scan code for
-// both except that PgUp would be extended.   g_sc_to_vk would map both of them to the same
+// both except that PgUp would be extended.   sc_to_vk() would map both of them to the same
 // virtual key, which is fine since it's the scan code that matters to apps that can
 // differentiate between keys with the same vk.
 
@@ -895,11 +895,11 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 {
 	if (!aVK && !aSC) return FAIL;
 
-	// Even if the g_sc_to_vk mapping results in a zero-value vk, don't return.
+	// Even if the sc_to_vk() mapping results in a zero-value vk, don't return.
 	// I think it may be valid to send keybd_events	that have a zero vk.
 	// In any case, it's unlikely to hurt anything:
 	if (!aVK)
-		aVK = g_sc_to_vk[aSC].a;
+		aVK = sc_to_vk(aSC);
 	else
 		if (!aSC)
 			// In spite of what the MSDN docs say, the scan code parameter *is* used, as evidenced by
@@ -911,7 +911,7 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 			// current OS is Win9x, we must map it here manually (above) because otherwise the hook
 			// wouldn't be able to differentiate left/right on keys such as RCONTROL, which is detected
 			// via its scan code.
-			aSC = g_vk_to_sc[aVK].a;
+			aSC = vk_to_sc(aVK);
 
 	// Do this only after the above, so that the SC is left/right specific if the VK was such,
 	// even on Win9x (though it's probably never called that way for Win9x; it's probably aways
@@ -1857,163 +1857,8 @@ char *ModifiersLRToText(modLR_type aModifiersLR, char *aBuf)
 }
 
 
-//----------------------------------------------------------------------------------
 
-
-void init_vk_to_sc()
-{
-	ZeroMemory(g_vk_to_sc, sizeof(g_vk_to_sc));  // Sets default.
-
-	// These are mapped manually because MapVirtualKey() doesn't support them correctly, at least
-	// on some -- if not all -- OSs.
-
-	// Try to minimize the number of keys set manually because MapVirtualKey is a more reliable
-	// way to get the mapping if user has a non-English or non-standard keyboard.
-
-	// MapVirtualKey() should include 0xE0 in HIBYTE if key is extended, UPDATE: BUT IT DOESN'T.
-
-	// Because MapVirtualKey can only accept (and return) naked scan codes (the low-order byte),
-	// handle extended scan codes that have a non-extended counterpart manually.
-	// In addition, according to http://support.microsoft.com/default.aspx?scid=kb;en-us;72583
-	// most or all numeric keypad keys cannot be mapped reliably under any OS.
-	// This article is a little unclear about which direction, if any, that MapVirtualKey does
-	// work in for the numpad keys, so for peace-of-mind map them all manually for now.
-
-	// Even though Map() should work for these under Win2k/XP, I'm not sure it would work
-	// under all versions of NT.  Therefore, for now just standardize to be sure they're
-	// the same -- and thus the program will behave the same -- across the board, on all OS's.
-	g_vk_to_sc[VK_LCONTROL].a = SC_LCONTROL;
-	g_vk_to_sc[VK_RCONTROL].a = SC_RCONTROL;
-	g_vk_to_sc[VK_LSHIFT].a = SC_LSHIFT;  // Map() wouldn't work for these two under Win9x.
-	g_vk_to_sc[VK_RSHIFT].a = SC_RSHIFT;
-	g_vk_to_sc[VK_LMENU].a = SC_LALT;
-	g_vk_to_sc[VK_RMENU].a = SC_RALT;
-	// Lwin and Rwin have their own VK's so should be supported, except maybe on Win95?
-	// VK_CONTROL/SHIFT/MENU will be handled by Map(), which should assign the left scan code by default?
-
-	g_vk_to_sc[VK_NUMPAD0].a = SC_NUMPAD0;
-	g_vk_to_sc[VK_NUMPAD1].a = SC_NUMPAD1;
-	g_vk_to_sc[VK_NUMPAD2].a = SC_NUMPAD2;
-	g_vk_to_sc[VK_NUMPAD3].a = SC_NUMPAD3;
-	g_vk_to_sc[VK_NUMPAD4].a = SC_NUMPAD4;
-	g_vk_to_sc[VK_NUMPAD5].a = SC_NUMPAD5;
-	g_vk_to_sc[VK_NUMPAD6].a = SC_NUMPAD6;
-	g_vk_to_sc[VK_NUMPAD7].a = SC_NUMPAD7;
-	g_vk_to_sc[VK_NUMPAD8].a = SC_NUMPAD8;
-	g_vk_to_sc[VK_NUMPAD9].a = SC_NUMPAD9;
-	g_vk_to_sc[VK_DECIMAL].a = SC_NUMPADDOT;
-
-	g_vk_to_sc[VK_NUMLOCK].a = SC_NUMLOCK;
-	g_vk_to_sc[VK_DIVIDE].a = SC_NUMPADDIV;
-	g_vk_to_sc[VK_MULTIPLY].a = SC_NUMPADMULT;
-	g_vk_to_sc[VK_SUBTRACT].a = SC_NUMPADSUB;
-	g_vk_to_sc[VK_ADD].a = SC_NUMPADADD;
-
-	// Use the OS API call to resolve any not manually set above:
-	vk_type vk;
-	for (vk = 0; vk < VK_MAX; ++vk)
-		if (!g_vk_to_sc[vk].a)
-			g_vk_to_sc[vk].a = MapVirtualKey(vk, 0);
-
-	// Just in case the above didn't find a mapping for these, perhaps due to Win95 not supporting them:
-	if (!g_vk_to_sc[VK_LWIN].a)
-		g_vk_to_sc[VK_LWIN].a = SC_LWIN;
-	if (!g_vk_to_sc[VK_RWIN].a)
-		g_vk_to_sc[VK_RWIN].a = SC_RWIN;
-
-	// There doesn't appear to be any built-in function to determine whether a vk's scan code
-	// is extended or not.  See MSDN topic "keyboard input" for the below list.
-	// Note: NumpadEnter is probably the only extended key that doesn't have a unique VK of its own.
-	// So in that case, probably safest not to set the extended flag.  To send a true NumpadEnter,
-	// as well as a true NumPadDown and any other key that shares the same VK with another, the
-	// caller should specify the sc param to circumvent the need for KeyEvent() to use the below:
-	// Turn on the extended flag for those that need it.  Do this for all known extended keys
-	// even if it was already done due to a manual assignment above.  That way, this list can always
-	// be defined as the list of all keys with extended scan codes:
-	g_vk_to_sc[VK_LWIN].a |= 0x0100;
-	g_vk_to_sc[VK_RWIN].a |= 0x0100;
-	g_vk_to_sc[VK_APPS].a |= 0x0100;  // Application key on keyboards with LWIN/RWIN/Apps.  Not listed in MSDN?
-	g_vk_to_sc[VK_RMENU].a |= 0x0100;
-	g_vk_to_sc[VK_RCONTROL].a |= 0x0100;
-	g_vk_to_sc[VK_RSHIFT].a |= 0x0100; // WinXP needs this to be extended for keybd_event() to work properly.
-	g_vk_to_sc[VK_CANCEL].a |= 0x0100; // Ctrl-break
-	g_vk_to_sc[VK_SNAPSHOT].a |= 0x0100;  // PrintScreen
-	g_vk_to_sc[VK_NUMLOCK].a |= 0x0100;
-	g_vk_to_sc[VK_DIVIDE].a |= 0x0100; // NumpadDivide (slash)
-	// In addition, these VKs have more than one physical key:
-	g_vk_to_sc[VK_RETURN].b = g_vk_to_sc[VK_RETURN].a | 0x0100;
-	g_vk_to_sc[VK_INSERT].b = g_vk_to_sc[VK_INSERT].a | 0x0100;
-	g_vk_to_sc[VK_DELETE].b = g_vk_to_sc[VK_DELETE].a | 0x0100;
-	g_vk_to_sc[VK_PRIOR].b = g_vk_to_sc[VK_PRIOR].a | 0x0100; // PgUp
-	g_vk_to_sc[VK_NEXT].b = g_vk_to_sc[VK_NEXT].a | 0x0100;  // PgDn
-	g_vk_to_sc[VK_HOME].b = g_vk_to_sc[VK_HOME].a | 0x0100;
-	g_vk_to_sc[VK_END].b = g_vk_to_sc[VK_END].a | 0x0100;
-	g_vk_to_sc[VK_UP].b = g_vk_to_sc[VK_UP].a | 0x0100;
-	g_vk_to_sc[VK_DOWN].b = g_vk_to_sc[VK_DOWN].a | 0x0100;
-	g_vk_to_sc[VK_LEFT].b = g_vk_to_sc[VK_LEFT].a | 0x0100;
-	g_vk_to_sc[VK_RIGHT].b = g_vk_to_sc[VK_RIGHT].a | 0x0100;
-}
-
-
-
-void init_sc_to_vk()
-{
-	ZeroMemory(g_sc_to_vk, sizeof(g_sc_to_vk));
-
-	// These are mapped manually because MapVirtualKey() doesn't support them correctly, at least
-	// on some -- if not all -- OSs.  The main app also relies upon the values assigned below to
-	// determine which keys should be handled by scan code rather than vk:
-	g_sc_to_vk[SC_NUMLOCK].a = VK_NUMLOCK;
-	g_sc_to_vk[SC_NUMPADDIV].a = VK_DIVIDE;
-	g_sc_to_vk[SC_NUMPADMULT].a = VK_MULTIPLY;
-	g_sc_to_vk[SC_NUMPADSUB].a = VK_SUBTRACT;
-	g_sc_to_vk[SC_NUMPADADD].a = VK_ADD;
-	g_sc_to_vk[SC_NUMPADENTER].a = VK_RETURN;
-
-	// The following are ambiguous because each maps to more than one VK.  But be careful
-	// changing the value to the other choice due to the above comment:
-	g_sc_to_vk[SC_NUMPADDEL].a = VK_DELETE; g_sc_to_vk[SC_NUMPADDEL].b = VK_DECIMAL;
-	g_sc_to_vk[SC_NUMPADCLEAR].a = VK_CLEAR; g_sc_to_vk[SC_NUMPADCLEAR].b = VK_NUMPAD5; // Same key as Numpad5 on most keyboards?
-	g_sc_to_vk[SC_NUMPADINS].a = VK_INSERT; g_sc_to_vk[SC_NUMPADINS].b = VK_NUMPAD0;
-	g_sc_to_vk[SC_NUMPADUP].a = VK_UP; g_sc_to_vk[SC_NUMPADUP].b = VK_NUMPAD8;
-	g_sc_to_vk[SC_NUMPADDOWN].a = VK_DOWN; g_sc_to_vk[SC_NUMPADDOWN].b = VK_NUMPAD2;
-	g_sc_to_vk[SC_NUMPADLEFT].a = VK_LEFT; g_sc_to_vk[SC_NUMPADLEFT].b = VK_NUMPAD4;
-	g_sc_to_vk[SC_NUMPADRIGHT].a = VK_RIGHT; g_sc_to_vk[SC_NUMPADRIGHT].b = VK_NUMPAD6;
-	g_sc_to_vk[SC_NUMPADHOME].a = VK_HOME; g_sc_to_vk[SC_NUMPADHOME].b = VK_NUMPAD7;
-	g_sc_to_vk[SC_NUMPADEND].a = VK_END; g_sc_to_vk[SC_NUMPADEND].b = VK_NUMPAD1;
-	g_sc_to_vk[SC_NUMPADPGUP].a = VK_PRIOR; g_sc_to_vk[SC_NUMPADPGUP].b = VK_NUMPAD9;
-	g_sc_to_vk[SC_NUMPADPGDN].a = VK_NEXT; g_sc_to_vk[SC_NUMPADPGDN].b = VK_NUMPAD3;
-
-	// Even though neither of the SHIFT keys are extended, and thus could be mapped with
-	// MapVirtualKey(), it seems better to define them explicitly because under Win9x (maybe just Win95),
-	// I'm pretty sure MapVirtualKey() would return VK_SHIFT instead of the left/right VK.
-	g_sc_to_vk[SC_LSHIFT].a = VK_LSHIFT;
-	g_sc_to_vk[SC_RSHIFT].a = VK_RSHIFT;
-	g_sc_to_vk[SC_LCONTROL].a = VK_LCONTROL;
-	g_sc_to_vk[SC_RCONTROL].a = VK_RCONTROL;
-	g_sc_to_vk[SC_LALT].a = VK_LMENU;
-	g_sc_to_vk[SC_RALT].a = VK_RMENU;
-
-	// Use the OS API call to resolve any not manually set above.  This should correctly
-	// resolve even elements such as g_sc_to_vk[SC_INSERT], which is an extended scan code,
-	// because it passes in only the low-order byte which is SC_NUMPADINS.  In that
-	// example, Map() will return the same vk for both, which is correct.
-	sc_type sc;
-	for (sc = 0; sc < SC_MAX; ++sc)
-		if (!g_sc_to_vk[sc].a)
-			// Only pass the LOBYTE because I think it fails to work properly otherwise.
-			// Also, DO NOT pass 3 for the 2nd param of MapVirtualKey() because apparently
-			// that is not compatible with Win9x so it winds up returning zero for keys
-			// such as UP, LEFT, HOME, and PGUP (maybe other sorts of keys too).  This
-			// should be okay even on XP because the left/right specific keys have already
-			// been resolved above so don't need to be looked up here (LWIN and RWIN
-			// each have their own VK's so shouldn't be problem for the below call to resolve):
-			g_sc_to_vk[sc].a = MapVirtualKey((BYTE)sc, 1);
-}
-
-
-
-char *SCToKeyName(sc_type aSC, char *aBuf, int aBufSize)
+char *SCtoKeyName(sc_type aSC, char *aBuf, int aBufSize)
 // aBufSize is an int so that any negative values passed in from caller are not lost.
 // Always produces a non-empty string.
 {
@@ -2032,7 +1877,7 @@ char *SCToKeyName(sc_type aSC, char *aBuf, int aBufSize)
 
 
 
-char *VKToKeyName(vk_type aVK, sc_type aSC, char *aBuf, int aBufSize)
+char *VKtoKeyName(vk_type aVK, sc_type aSC, char *aBuf, int aBufSize)
 // aBufSize is an int so that any negative values passed in from caller are not lost.
 // Caller may omit aSC and it will be derived if needed.
 {
@@ -2165,7 +2010,7 @@ vk_type TextToVK(char *aText, modLR_type *pModifiersLR, bool aExcludeThoseHandle
 	// Otherwise check if aText is the name of a key handled by scan code and if so, map that
 	// scan code to its corresponding virtual key:
 	sc_type sc = TextToSC(aText);
-	return sc ? g_sc_to_vk[sc].a : 0;
+	return sc ? sc_to_vk(sc) : 0;
 }
 
 
@@ -2329,10 +2174,10 @@ ResultType KeyHistoryToFile(char *aFilespec, char aType, bool aKeyUp, vk_type aV
 		return OK; // No target filename has ever been specified, so don't even attempt to open the file.
 
 	if (!aVK)
-		aVK = g_sc_to_vk[aSC].a;
+		aVK = sc_to_vk(aSC);
 	else
 		if (!aSC)
-			aSC = g_vk_to_sc[aVK].a;
+			aSC = vk_to_sc(aVK);
 
 	char buf[2048] = "", win_title[1024] = "<Init>", key_name[128] = "";
 	HWND curr_foreground_window = GetForegroundWindow();
@@ -2379,10 +2224,10 @@ char *GetKeyName(vk_type aVK, sc_type aSC, char *aBuf, int aBufSize)
 		return aBuf;
 
 	if (!aVK)
-		aVK = g_sc_to_vk[aSC].a;
+		aVK = sc_to_vk(aSC);
 	else
 		if (!aSC)
-			aSC = g_vk_to_sc[aVK].a;
+			aSC = vk_to_sc(aVK);
 
 	// Use 0x02000000 to tell it that we want it to give left/right specific info, lctrl/rctrl etc.
 	if (!aSC || !GetKeyNameText((long)(aSC) << 16, aBuf, (int)(aBufSize/sizeof(TCHAR))))
@@ -2405,4 +2250,179 @@ char *GetKeyName(vk_type aVK, sc_type aSC, char *aBuf, int aBufSize)
 		}
 	}
 	return aBuf;
+}
+
+
+
+sc_type vk_to_sc(vk_type aVK, bool aReturnSecondary)
+// For v1.0.37.03, vk_to_sc() was converted into a function rather than being an array because if the
+// script's keyboard layout changes while it's running, the array would get out-of-date.
+// If caller passes true for aReturnSecondary, the non-primary scan code will be returned for
+// virtual keys that two scan codes (if there's only one scan code, callers rely on zero being returned).
+{
+	// Try to minimize the number mappings done manually because MapVirtualKey is a more reliable
+	// way to get the mapping if user has non-standard or custom keyboard layout.
+
+	sc_type sc = 0;
+
+	switch (aVK)
+	{
+	// Yield a manually translation for virtual keys that MapVirtualKey() doesn't support or for which it
+	// doesn't yield consistent result (such as Win9x supporting only SHIFT rather than VK_LSHIFT/VK_RSHIFT).
+	case VK_LSHIFT:   sc = SC_LSHIFT;
+	case VK_RSHIFT:   sc = SC_RSHIFT;
+	case VK_LCONTROL: sc = SC_LCONTROL;
+	case VK_RCONTROL: sc = SC_RCONTROL;
+	case VK_LMENU:    sc = SC_LALT;
+	case VK_RMENU:    sc = SC_RALT;
+	case VK_LWIN:     sc = SC_LWIN; // Earliest versions of Win95/NT might not support these, so map them manually.
+	case VK_RWIN:     sc = SC_RWIN; //
+
+	// According to http://support.microsoft.com/default.aspx?scid=kb;en-us;72583
+	// most or all numeric keypad keys cannot be mapped reliably under any OS. The article is
+	// a little unclear about which direction, if any, that MapVirtualKey() does work in for
+	// the numpad keys, so for peace-of-mind map them all manually for now:
+	case VK_NUMPAD0:  sc = SC_NUMPAD0;
+	case VK_NUMPAD1:  sc = SC_NUMPAD1;
+	case VK_NUMPAD2:  sc = SC_NUMPAD2;
+	case VK_NUMPAD3:  sc = SC_NUMPAD3;
+	case VK_NUMPAD4:  sc = SC_NUMPAD4;
+	case VK_NUMPAD5:  sc = SC_NUMPAD5;
+	case VK_NUMPAD6:  sc = SC_NUMPAD6;
+	case VK_NUMPAD7:  sc = SC_NUMPAD7;
+	case VK_NUMPAD8:  sc = SC_NUMPAD8;
+	case VK_NUMPAD9:  sc = SC_NUMPAD9;
+	case VK_DECIMAL:  sc = SC_NUMPADDOT;
+	case VK_NUMLOCK:  sc = SC_NUMLOCK;
+	case VK_DIVIDE:   sc = SC_NUMPADDIV;
+	case VK_MULTIPLY: sc = SC_NUMPADMULT;
+	case VK_SUBTRACT: sc = SC_NUMPADSUB;
+	case VK_ADD:      sc = SC_NUMPADADD;
+	}
+
+	if (sc) // Above found a match.
+		return aReturnSecondary ? 0 : sc; // Callers rely on zero being returned for VKs that don't have secondary SCs.
+
+	// Use the OS API's MapVirtualKey() to resolve any not manually done above:
+	if (   !(sc = MapVirtualKey(aVK, 0))   )
+		return 0; // Indicate "no mapping".
+
+	// Turn on the extended flag for those that need it.
+	// Because MapVirtualKey can only accept (and return) naked scan codes (the low-order byte),
+	// handle extended scan codes that have a non-extended counterpart manually.
+	// Older comment: MapVirtualKey() should include 0xE0 in HIBYTE if key is extended, BUT IT DOESN'T.
+	// There doesn't appear to be any built-in function to determine whether a vk's scan code
+	// is extended or not.  See MSDN topic "keyboard input" for the below list.
+	// Note: NumpadEnter is probably the only extended key that doesn't have a unique VK of its own.
+	// So in that case, probably safest not to set the extended flag.  To send a true NumpadEnter,
+	// as well as a true NumPadDown and any other key that shares the same VK with another, the
+	// caller should specify the sc param to circumvent the need for KeyEvent() to use the below:
+	switch (aVK)
+	{
+	case VK_APPS:     // Application key on keyboards with LWIN/RWIN/Apps.  Not listed in MSDN as "extended"?
+	case VK_CANCEL:   // Ctrl-break
+	case VK_SNAPSHOT: // PrintScreen
+	case VK_DIVIDE:   // NumpadDivide (slash)
+	case VK_NUMLOCK:
+	// Below are extended but were already handled and returned from higher above:
+	//case VK_LWIN:
+	//case VK_RWIN:
+	//case VK_RMENU:
+	//case VK_RCONTROL:
+	//case VK_RSHIFT: // WinXP needs this to be extended for keybd_event() to work properly.
+		sc |= 0x0100;
+		break;
+
+	// The following virtual keys have more than one physical key, and thus more than one scan code.
+	// If the caller passed true for aReturnSecondary, the extended version of the scan code will be
+	// returned (all of the following VKs have two SCs):
+	case VK_RETURN:
+	case VK_INSERT:
+	case VK_DELETE:
+	case VK_PRIOR: // PgUp
+	case VK_NEXT:  // PgDn
+	case VK_HOME:
+	case VK_END:
+	case VK_UP:
+	case VK_DOWN:
+	case VK_LEFT:
+	case VK_RIGHT:
+		return aReturnSecondary ? (sc | 0x0100) : sc; // Below relies on the fact that these cases return early.
+	}
+
+	// Since above didn't return, if aReturnSecondary==true, return 0 to indicate "no secondary SC for this VK".
+	return aReturnSecondary ? 0 : sc; // Callers rely on zero being returned for VKs that don't have secondary SCs.
+}
+
+
+
+vk_type sc_to_vk(sc_type aSC)
+{
+	// These are mapped manually because MapVirtualKey() doesn't support them correctly, at least
+	// on some -- if not all -- OSs.  The main app also relies upon the values assigned below to
+	// determine which keys should be handled by scan code rather than vk:
+	switch (aSC)
+	{
+	// Even though neither of the SHIFT keys are extended -- and thus could be mapped with MapVirtualKey()
+	// -- it seems better to define them explicitly because under Win9x (maybe just Win95).
+	// I'm pretty sure MapVirtualKey() would return VK_SHIFT instead of the left/right VK.
+	case SC_LSHIFT:      return VK_LSHIFT;
+	case SC_RSHIFT:      return VK_RSHIFT;
+	case SC_LCONTROL:    return VK_LCONTROL;
+	case SC_RCONTROL:    return VK_RCONTROL;
+	case SC_LALT:        return VK_LMENU;
+	case SC_RALT:        return VK_RMENU;
+
+	// Numpad keys require explicit mapping because MapVirtualKey() doesn't support them on all OSes.
+	// See comments in vk_to_sc() for details.
+	case SC_NUMLOCK:     return VK_NUMLOCK;
+	case SC_NUMPADDIV:   return VK_DIVIDE;
+	case SC_NUMPADMULT:  return VK_MULTIPLY;
+	case SC_NUMPADSUB:   return VK_SUBTRACT;
+	case SC_NUMPADADD:   return VK_ADD;
+	case SC_NUMPADENTER: return VK_RETURN;
+
+	// The following are ambiguous because each maps to more than one VK.  But be careful
+	// changing the value to the other choice because some callers rely upon the values
+	// assigned below to determine which keys should be handled by scan code rather than vk:
+	case SC_NUMPADDEL:   return VK_DELETE;
+	case SC_NUMPADCLEAR: return VK_CLEAR;
+	case SC_NUMPADINS:   return VK_INSERT;
+	case SC_NUMPADUP:    return VK_UP;
+	case SC_NUMPADDOWN:  return VK_DOWN;
+	case SC_NUMPADLEFT:  return VK_LEFT;
+	case SC_NUMPADRIGHT: return VK_RIGHT;
+	case SC_NUMPADHOME:  return VK_HOME;
+	case SC_NUMPADEND:   return VK_END;
+	case SC_NUMPADPGUP:  return VK_PRIOR;
+	case SC_NUMPADPGDN:  return VK_NEXT;
+
+	// No callers currently need the following alternate virtual key mappings.  If it is ever needed,
+	// could have a new aReturnSecondary parameter that if true, causes these to be returned rather
+	// than the above:
+	//case SC_NUMPADDEL:   return VK_DECIMAL;
+	//case SC_NUMPADCLEAR: return VK_NUMPAD5; // Same key as Numpad5 on most keyboards?
+	//case SC_NUMPADINS:   return VK_NUMPAD0;
+	//case SC_NUMPADUP:    return VK_NUMPAD8;
+	//case SC_NUMPADDOWN:  return VK_NUMPAD2;
+	//case SC_NUMPADLEFT:  return VK_NUMPAD4;
+	//case SC_NUMPADRIGHT: return VK_NUMPAD6;
+	//case SC_NUMPADHOME:  return VK_NUMPAD7;
+	//case SC_NUMPADEND:   return VK_NUMPAD1;
+	//case SC_NUMPADPGUP:  return VK_NUMPAD9;
+	//case SC_NUMPADPGDN:  return VK_NUMPAD3;	
+	}
+
+	// Use the OS API call to resolve any not manually set above.  This should correctly
+	// resolve even elements such as SC_INSERT, which is an extended scan code, because
+	// it passes in only the low-order byte which is SC_NUMPADINS.  In the case of SC_INSERT
+	// and similar ones, MapVirtualKey() will return the same vk for both, which is correct.
+	// Only pass the LOBYTE because I think it fails to work properly otherwise.
+	// Also, DO NOT pass 3 for the 2nd param of MapVirtualKey() because apparently
+	// that is not compatible with Win9x so it winds up returning zero for keys
+	// such as UP, LEFT, HOME, and PGUP (maybe other sorts of keys too).  This
+	// should be okay even on XP because the left/right specific keys have already
+	// been resolved above so don't need to be looked up here (LWIN and RWIN
+	// each have their own VK's so shouldn't be problem for the below call to resolve):
+	return MapVirtualKey((BYTE)aSC, 1);
 }

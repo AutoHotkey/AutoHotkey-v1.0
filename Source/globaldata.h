@@ -155,9 +155,6 @@ extern ToggleValueType g_ForceScrollLock;
 extern ToggleValueType g_BlockInputMode;
 extern bool g_BlockInput;  // Whether input blocking is currently enabled.
 
-extern vk2_type g_sc_to_vk[SC_ARRAY_COUNT];
-extern sc2_type g_vk_to_sc[VK_ARRAY_COUNT];
-
 extern Action g_act[];
 extern int g_ActionCount;
 extern Action g_old_act[];

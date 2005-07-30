@@ -1560,13 +1560,13 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 			// number key combinations.
 			BYTE state[256] = {0};
 			state[VK_SHIFT] |= 0x80; // Indicate that the neutral shift key is down for conversion purposes.
-			int count = ToAscii(g_input.EndingVK, g_vk_to_sc[g_input.EndingVK].a, (PBYTE)&state
+			int count = ToAscii(g_input.EndingVK, vk_to_sc(g_input.EndingVK), (PBYTE)&state
 				, (LPWORD)(key_name + 7), g_MenuIsVisible ? 1 : 0);
 			*(key_name + 7 + count) = '\0';  // Terminate the string.
 		}
 		else
-			g_input.EndedBySC ? SCToKeyName(g_input.EndingSC, key_name + 7, sizeof(key_name) - 7)
-				: VKToKeyName(g_input.EndingVK, g_input.EndingSC, key_name + 7, sizeof(key_name) - 7);
+			g_input.EndedBySC ? SCtoKeyName(g_input.EndingSC, key_name + 7, sizeof(key_name) - 7)
+				: VKtoKeyName(g_input.EndingVK, g_input.EndingSC, key_name + 7, sizeof(key_name) - 7);
 		g_ErrorLevel->Assign(key_name);
 		break;
 	}
@@ -2396,7 +2396,7 @@ ResultType Line::Control(char *aCmd, char *aValue, char *aControl, char *aTitle,
 	case CONTROL_CMD_TABRIGHT: // must be a Tab Control
 		key_count = *aValue ? ATOI(aValue) : 1;
 		vk = (control_cmd == CONTROL_CMD_TABLEFT) ? VK_LEFT : VK_RIGHT;
-		lparam = (LPARAM)(g_vk_to_sc[vk].a << 16);
+		lparam = (LPARAM)(vk_to_sc(vk) << 16);
 		for (int i = 0; i < key_count; ++i)
 		{
 			// DoControlDelay isn't done for every iteration because it seems likely that
@@ -2559,7 +2559,7 @@ ResultType ControlGetListView(Var &aOutputVar, HWND aHwnd, char *aOptions)
 	// InsertColumn() was never called (or was called only once) might lack a header control if the LV is
 	// created in List/Icon view-mode and/or with LVS_NOCOLUMNHEADER. The problem is that 90% doesn't
 	// seem to be enough to justify elimination of the code for "undetermined column count" mode.  If it
-	// ever does become a certainly, the following could be changed:
+	// ever does become a certainty, the following could be changed:
 	// 1) The extra code for "undetermined" mode rather than simply forcing col_count to be 1.
 	// 2) Probably should be kept for compatibility: -1 being returned when undetermined "col count".
 	//
@@ -2623,17 +2623,18 @@ ResultType ControlGetListView(Var &aOutputVar, HWND aHwnd, char *aOptions)
 		return aOutputVar.Assign(result);
 	}
 
-	// DO FINAL CHECKS AND ALLOCATE INTERPROCESS MEMORY FOR TEXT RETRIEVAL
+	// FINAL CHECKS
 	if (row_count < 1 || !col_count) // But don't return when col_count == -1 (i.e. always make the attempt when col count is undetermined).
 		return g_ErrorLevel->Assign(ERRORLEVEL_NONE);  // No text in the control, so indicate success.
 
+	// ALLOCATE INTERPROCESS MEMORY FOR TEXT RETRIEVAL
 	HANDLE handle;
 	LPVOID p_remote_lvi; // Not of type LPLVITEM to help catch bugs where p_remote_lvi->member is wrongly accessed here in our process.
 	if (   !(p_remote_lvi = AllocInterProcMem(handle, LV_REMOTE_BUF_SIZE + sizeof(LVITEM), aHwnd))   ) // Allocate the right type of memory (depending on OS type).
 		return OK;  // Let ErrorLevel tell the story.
 	bool is_win9x = g_os.IsWin9x(); // Resolve once for possible slight perf./code size benefit.
 
-	// PREP LVI STRUCT MEMBERS FOR TEXT RETRIEVAL
+	// PREPARE LVI STRUCT MEMBERS FOR TEXT RETRIEVAL
 	LVITEM lvi_for_nt; // Only used for NT/2k/XP method.
 	LVITEM &local_lvi = is_win9x ? *(LPLVITEM)p_remote_lvi : lvi_for_nt; // Local is the same as remote for Win9x.
 	// Subtract 1 because of that nagging doubt about size vs. length. Some MSDN examples subtract one,
@@ -11702,7 +11703,7 @@ DYNARESULT DynaCall(int aFlags, void *aFunction, DYNAPARM aParam[], int aParamCo
 	{
 		*buf = 'A'; // The 'A' prefix indicates the call was made, but with too many or too few args.
 		_itoa(esp_delta, buf + 1, 10);
-		g_ErrorLevel->Assign(buf); // Assign buf not the _itoa()'s return value.
+		g_ErrorLevel->Assign(buf); // Assign buf not _itoa()'s return value, which is the wrong location.
 	}
 	// Too many or too few args takes precedence over reporting the exception because it's more informative.
 	// In other words, any exception was likely caused by the fact that there were too many or too few.

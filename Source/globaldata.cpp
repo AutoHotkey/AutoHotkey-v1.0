@@ -183,10 +183,6 @@ ToggleValueType g_ForceScrollLock = NEUTRAL;
 ToggleValueType g_BlockInputMode = TOGGLE_DEFAULT;
 bool g_BlockInput = false;
 
-vk2_type g_sc_to_vk[SC_ARRAY_COUNT] = {{0}};
-sc2_type g_vk_to_sc[VK_ARRAY_COUNT] = {{0}};
-
-
 // The order of initialization here must match the order in the enum contained in script.h
 // It's in there rather than in globaldata.h so that the action-type constants can be referred
 // to without having access to the global array itself (i.e. it avoids having to include
@@ -542,11 +538,11 @@ key_to_vk_type g_key_to_vk[] =
 , {"ScrollLock", VK_SCROLL}
 , {"CapsLock", VK_CAPITAL}
 
-, {"Escape", VK_ESCAPE}  // So that VKToKeyName() delivers consistent results, always have the preferred name first.
+, {"Escape", VK_ESCAPE}  // So that VKtoKeyName() delivers consistent results, always have the preferred name first.
 , {"Esc", VK_ESCAPE}
 , {"Tab", VK_TAB}
 , {"Space", VK_SPACE}
-, {"Backspace", VK_BACK} // So that VKToKeyName() delivers consistent results, always have the preferred name first.
+, {"Backspace", VK_BACK} // So that VKtoKeyName() delivers consistent results, always have the preferred name first.
 , {"BS", VK_BACK}
 
 // These keys each have a counterpart on the number pad with the same VK.  Use the VK for these,
@@ -562,7 +558,7 @@ key_to_vk_type g_key_to_vk[] =
 // Even though ENTER is probably less likely to be assigned than NumpadEnter, must have ENTER as
 // the primary vk because otherwise, if the user configures only naked-NumPadEnter to do something,
 // RegisterHotkey() would register that vk and ENTER would also be configured to do the same thing.
-, {"Enter", VK_RETURN}  // So that VKToKeyName() delivers consistent results, always have the preferred name first.
+, {"Enter", VK_RETURN}  // So that VKtoKeyName() delivers consistent results, always have the preferred name first.
 , {"Return", VK_RETURN}
 
 , {"NumpadDel", VK_DELETE}
@@ -579,7 +575,7 @@ key_to_vk_type g_key_to_vk[] =
 
 , {"PrintScreen", VK_SNAPSHOT}
 , {"CtrlBreak", VK_CANCEL}  // Might want to verify this, and whether it has any peculiarities.
-, {"Pause", VK_PAUSE} // So that VKToKeyName() delivers consistent results, always have the preferred name first.
+, {"Pause", VK_PAUSE} // So that VKtoKeyName() delivers consistent results, always have the preferred name first.
 , {"Break", VK_PAUSE}
 , {"Help", VK_HELP}  // VK_HELP is probably not the extended HELP key.  Not sure what this one is.
 , {"Sleep", VK_SLEEP}
@@ -588,8 +584,8 @@ key_to_vk_type g_key_to_vk[] =
 
 // UPDATE: For the NT/2k/XP version, now doing these by VK since it's likely to be
 // more compatible with non-standard or non-English keyboards:
-, {"LControl", VK_LCONTROL} // So that VKToKeyName() delivers consistent results, always have the preferred name first.
-, {"RControl", VK_RCONTROL} // So that VKToKeyName() delivers consistent results, always have the preferred name first.
+, {"LControl", VK_LCONTROL} // So that VKtoKeyName() delivers consistent results, always have the preferred name first.
+, {"RControl", VK_RCONTROL} // So that VKtoKeyName() delivers consistent results, always have the preferred name first.
 , {"LCtrl", VK_LCONTROL} // Support this alternate to be like AutoIt3.
 , {"RCtrl", VK_RCONTROL} // Support this alternate to be like AutoIt3.
 , {"LShift", VK_LSHIFT}
@@ -602,7 +598,7 @@ key_to_vk_type g_key_to_vk[] =
 , {"RWin", VK_RWIN}
 
 // The left/right versions of these are handled elsewhere since their virtual keys aren't fully API-supported:
-, {"Control", VK_CONTROL} // So that VKToKeyName() delivers consistent results, always have the preferred name first.
+, {"Control", VK_CONTROL} // So that VKtoKeyName() delivers consistent results, always have the preferred name first.
 , {"Ctrl", VK_CONTROL}  // An alternate for convenience.
 , {"Alt", VK_MENU}
 , {"Shift", VK_SHIFT}
@@ -712,7 +708,6 @@ key_to_sc_type g_key_to_sc[] =
 , {"RAlt", SC_RALT}
 */
 };
-
 
 
 // Can calc the counts only after the arrays are initialized above:

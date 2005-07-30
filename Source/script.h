@@ -2182,7 +2182,7 @@ public:
 
 	void ControlUpdateCurrentTab(GuiControlType &aTabControl, bool aFocusFirstControl);
 	GuiControlType *FindTabControl(TabControlIndexType aTabControlIndex);
-	int FindTabIndexByName(GuiControlType &aTabControl, char *aName);
+	int FindTabIndexByName(GuiControlType &aTabControl, char *aName, bool aExactMatch = false);
 	int GetControlCountOnTabPage(TabControlIndexType aTabControlIndex, TabIndexType aTabIndex);
 	POINT GetPositionOfTabClientArea(GuiControlType &aTabControl);
 	ResultType SelectAdjacentTab(GuiControlType &aTabControl, bool aMoveToRight, bool aFocusFirstControl

@@ -197,9 +197,10 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 			}
 			if (*aParam2) // Index of a particular tab inside a control.
 			{
+				bool exact_match = !stricmp(aParam4, "Exact"); // v1.0.37.03.
 				// Unlike "GuiControl, Choose", in this case, don't allow negatives since that would just
 				// generate an error msg further below:
-				if (IsPureNumeric(aParam2, false, false))
+				if (!exact_match && IsPureNumeric(aParam2, false, false))
 				{
 					index = ATOI(aParam2) - 1;
 					if (index < 0 || index > MAX_TABS_PER_CONTROL - 1)
@@ -210,7 +211,7 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 					index = -1;  // Set default to be "failure".
 					GuiControlType *tab_control = gui.FindTabControl(gui.mCurrentTabControlIndex);
 					if (tab_control)
-						index = gui.FindTabIndexByName(*tab_control, aParam2); // Returns -1 on failure.
+						index = gui.FindTabIndexByName(*tab_control, aParam2, exact_match); // Returns -1 on failure.
 					if (index == -1)
 						return ScriptError("Tab name doesn't exist yet." ERR_ABORT, aParam2);
 				}
@@ -5556,7 +5557,7 @@ ResultType GuiType::ControlGetContents(Var &aOutputVar, GuiControlType &aControl
 		// control, so the only type of retrieval that can be offered is the HKM_GETHOTKEY method:
 		HotkeyToText((WORD)SendMessage(aControl.hwnd, HKM_GETHOTKEY, 0, 0), buf);
 		return aOutputVar.Assign(buf);
-	}
+	} // switch (aControl.type)
 
 	if (stricmp(aMode, "Text")) // Non-text, i.e. don't unconditionally use the simple GetWindowText() method.
 	{
@@ -7039,10 +7040,10 @@ WORD GuiType::TextToHotkey(char *aText)
 // Returns a WORD (not a DWORD -- MSDN is wrong about that) compatible with the HKM_SETHOTKEY message:
 // LOBYTE is the virtual key.
 // HIBYTE is a set of modifiers:
-	//HOTKEYF_ALT ALT key
-	//HOTKEYF_CONTROL CONTROL key
-	//HOTKEYF_SHIFT SHIFT key
-	//HOTKEYF_EXT Extended key
+// HOTKEYF_ALT ALT key
+// HOTKEYF_CONTROL CONTROL key
+// HOTKEYF_SHIFT SHIFT key
+// HOTKEYF_EXT Extended key
 {
 	BYTE modifiers = 0; // Set default.
 	for (bool done = false; *aText; ++aText)
@@ -7057,14 +7058,43 @@ WORD GuiType::TextToHotkey(char *aText)
 		if (done) // This must be checked prior here otherwise the loop's ++aText will increment one too many.
 			break;
 	}
+
+	// For translating the virtual key below, the following notes apply:
+	// The following extended keys are unlikely, and in any case don't have a non-extended counterpart,
+	// so no special handling:
+	// VK_CANCEL (Ctrl-break)
+	// VK_SNAPSHOT (PrintScreen).
+	//
+	// These do not have a non-extended counterpart, i.e. their VK has only one possible scan code:
+	// VK_DIVIDE (NumpadDivide/slash)
+	// VK_NUMLOCK
+	//
+	// All of the following are handled properly via the scan code logic below:
+	// VK_INSERT
+	// VK_PRIOR
+	// VK_NEXT
+	// VK_HOME
+	// VK_END
+	// VK_UP
+	// VK_DOWN
+	// VK_LEFT
+	// VK_RIGHT
+	//
+	// Same note as above but these cannot be typed by the user, only programmatically inserted via
+	// initial value of "Gui Add" or via "GuiControl,, MyHotkey, ^Delete":
+	// VK_DELETE
+	// VK_RETURN
+	// Note: NumpadEnter (not Enter) is extended, unlike Home/End/Pgup/PgDn/Arrows, which are
+	// NON-extended on the keypad.
+
 	BYTE vk = TextToVK(aText);
     if (!vk)
 		return 0;  // Indicate total failure because a hotkey control can't contain just modifiers without a VK.
 	// Find out if the HOTKEYF_EXT flag should be set.
-	sc_type sc = TextToSC(aText); // Better than g_vk_to_sc[] since g_vk_to_sc has both an a & b to choose from.
+	sc_type sc = TextToSC(aText); // Better than vk_to_sc() since that has both an primary and secondary scan codes to choose from.
 	if (!sc) // Since not found above, default to the primary scan code.
-		sc = g_vk_to_sc[vk].a;
-	if (sc & 0x100) // It's extended.
+		sc = vk_to_sc(vk);
+	if (sc & 0x100) // The scan code derived above is extended.
 		modifiers |= HOTKEYF_EXT;
 	return MAKEWORD(vk, modifiers);
 }
@@ -7085,48 +7115,25 @@ char *GuiType::HotkeyToText(WORD aHotkey, char *aBuf)
 		*cp++ = '!';
 	BYTE vk = LOBYTE(aHotkey);
 
-	// For translating the virtual key, the following notes apply:
-	// These are unlikely, and in any case don't have a non-extended counterpart so no special handling:
-	//g_vk_to_sc[VK_CANCEL].a |= 0x0100; // Ctrl-break
-	//g_vk_to_sc[VK_SNAPSHOT].a |= 0x0100;  // PrintScreen
-
-	// These do not have an extended counterpart, i.e. their VK is unique.
-	//g_vk_to_sc[VK_DIVIDE].a |= 0x0100; // NumpadDivide (slash)
-	//g_vk_to_sc[VK_NUMLOCK].a |= 0x0100;
-
-	// All of the following are handled properly via the scan code logic below:
-	//g_vk_to_sc[VK_INSERT].b = g_vk_to_sc[VK_INSERT].a | 0x0100;
-	//g_vk_to_sc[VK_PRIOR].b = g_vk_to_sc[VK_PRIOR].a | 0x0100; // PgUp
-	//g_vk_to_sc[VK_NEXT].b = g_vk_to_sc[VK_NEXT].a | 0x0100;  // PgDn
-	//g_vk_to_sc[VK_HOME].b = g_vk_to_sc[VK_HOME].a | 0x0100;
-	//g_vk_to_sc[VK_END].b = g_vk_to_sc[VK_END].a | 0x0100;
-	//g_vk_to_sc[VK_UP].b = g_vk_to_sc[VK_UP].a | 0x0100;
-	//g_vk_to_sc[VK_DOWN].b = g_vk_to_sc[VK_DOWN].a | 0x0100;
-	//g_vk_to_sc[VK_LEFT].b = g_vk_to_sc[VK_LEFT].a | 0x0100;
-	//g_vk_to_sc[VK_RIGHT].b = g_vk_to_sc[VK_RIGHT].a | 0x0100;
-
-	// Same note as above but these cannot be typed by the user, only programmatically inserted via
-	// initial value of "Gui Add" or via "GuiControl,, MyHotkey, ^Delete":
-	//g_vk_to_sc[VK_DELETE].b = g_vk_to_sc[VK_DELETE].a | 0x0100;
-	//g_vk_to_sc[VK_RETURN].b = g_vk_to_sc[VK_RETURN].a | 0x0100;
-	// Note: NumpadEnter (not Enter) is extended, unlike Home/End/Pgup/PgDn/Arrows, which are
-	// NON-extended on the keypad.
-
 	if (modifiers & HOTKEYF_EXT) // Try to find the extended version of this VK if it has two versions.
 	{
-		sc_type sc = g_vk_to_sc[vk].b;
-		if (!(sc & 0x100)) // No "b" scan code at all or it's not extended.  Try "a".
-			sc = g_vk_to_sc[vk].a;
-		if (sc & 0x100) // It has a non-zero scan code and it's extended.
+		// Fix for v1.0.37.03: A virtual key that has only one scan code should be resolved by VK
+		// rather than SC.  Otherwise, Numlock will wind up being SC145 and NumpadDiv something similar.
+		// If a hotkey control could capture AppsKey, PrintScreen, Ctrl-Break (VK_CANCEL), which it can't, this
+		// would also apply to them.
+		sc_type sc1 = vk_to_sc(vk); // Primary scan code for this virtual key.
+		sc_type sc2 = vk_to_sc(vk, true); // Secondary scan code (will be the same as above if the VK has only one SC).
+		sc_type sc = (sc2 & 0x100) ? sc2 : sc1;
+		if ((sc & 0x100) && sc1 != sc2) // "sc" is both non-zero and extended, and this isn't a single-scan-code VK.
 		{
-			SCToKeyName(sc, cp, 100);
+			SCtoKeyName(sc, cp, 100);
 			return aBuf;
 		}
 	}
 	// Since above didn't return, use a simple lookup on VK, since it gives preference to non-extended keys.
-	VKToKeyName(vk, 0, cp, 100);
+	VKtoKeyName(vk, 0, cp, 100);
 	// The above call might be produce an unknown key-name via GetKeyName().  Since it seems so rare and
-	// the exact return value (e.g. SC vs. VK) is uncertain/debatable: For now, it seems best to
+	// the exact string to be returned (e.g. SC vs. VK) is uncertain/debatable: For now, it seems best to
 	// leave it as its native-language name rather than attempting to convert it to an SC or VK that
 	// can be compatible with GetKeyState or the Hotkey command:
 	//if (!TextToVK(cp))
@@ -7590,7 +7597,7 @@ GuiControlType *GuiType::FindTabControl(TabControlIndexType aTabControlIndex)
 
 
 
-int GuiType::FindTabIndexByName(GuiControlType &aTabControl, char *aName)
+int GuiType::FindTabIndexByName(GuiControlType &aTabControl, char *aName, bool aExactMatch)
 // Find the first tab in this tab control whose leading-part-of-name matches aName.
 // Return int vs. TabIndexType so that failure can be indicated.
 {
@@ -7607,7 +7614,7 @@ int GuiType::FindTabIndexByName(GuiControlType &aTabControl, char *aName)
 	size_t aName_length = strlen(aName);
 	for (int i = 0; i < tab_count; ++i)
 		if (TabCtrl_GetItem(aTabControl.hwnd, i, &tci))
-			if (!strnicmp(tci.pszText, aName, aName_length))
+			if (   !(aExactMatch ? strcmp(tci.pszText, aName) : strnicmp(tci.pszText, aName, aName_length))   )
 				return i; // Match found.
 	return -1; // No match found.
 }
