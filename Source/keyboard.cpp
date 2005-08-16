@@ -2269,7 +2269,7 @@ sc_type vk_to_sc(vk_type aVK, bool aReturnSecondary)
 	{
 	// Yield a manually translation for virtual keys that MapVirtualKey() doesn't support or for which it
 	// doesn't yield consistent result (such as Win9x supporting only SHIFT rather than VK_LSHIFT/VK_RSHIFT).
-	case VK_LSHIFT:   sc = SC_LSHIFT; break;
+	case VK_LSHIFT:   sc = SC_LSHIFT; break; // Modifiers are listed first for performance.
 	case VK_RSHIFT:   sc = SC_RSHIFT; break;
 	case VK_LCONTROL: sc = SC_LCONTROL; break;
 	case VK_RCONTROL: sc = SC_RCONTROL; break;
@@ -2366,7 +2366,7 @@ vk_type sc_to_vk(sc_type aSC)
 	// Even though neither of the SHIFT keys are extended -- and thus could be mapped with MapVirtualKey()
 	// -- it seems better to define them explicitly because under Win9x (maybe just Win95).
 	// I'm pretty sure MapVirtualKey() would return VK_SHIFT instead of the left/right VK.
-	case SC_LSHIFT:      return VK_LSHIFT;
+	case SC_LSHIFT:      return VK_LSHIFT; // Modifiers are listed first for performance.
 	case SC_RSHIFT:      return VK_RSHIFT;
 	case SC_LCONTROL:    return VK_LCONTROL;
 	case SC_RCONTROL:    return VK_RCONTROL;

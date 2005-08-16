@@ -847,7 +847,7 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 			++aParam3; // Omit this pipe char from further consideration below.
 			++extra_actions;
 		}
-		if (guicontrol_cmd == GUICONTROL_CMD_CHOOSE && !IsPureNumeric(aParam3, true, false))
+		if (guicontrol_cmd == GUICONTROL_CMD_CHOOSE && !IsPureNumeric(aParam3, true, false)) // Must be done only after the above.
 			guicontrol_cmd = GUICONTROL_CMD_CHOOSESTRING;
 		UINT msg, x_msg, y_msg;
 		switch(control.type)
@@ -892,8 +892,8 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 				if (SendMessage(control.hwnd, LB_SETSEL, TRUE, found_item) == CB_ERR) // CB_ERR == LB_ERR
 					return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
 			}
-			else
-				if (SendMessage(control.hwnd, msg, 1, (LPARAM)aParam3) == CB_ERR) // CB_ERR == LB_ERR
+			else // Fixed 1 to be -1 in v1.0.35.05:
+				if (SendMessage(control.hwnd, msg, -1, (LPARAM)aParam3) == CB_ERR) // CB_ERR == LB_ERR
 					return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
 		}
 		else // Choose by position vs. string.
@@ -2552,7 +2552,6 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			// have asterisk vs. bullet/closed-circle on OSes that default to bullet.
 			if ((style & ES_PASSWORD) && opt.password_char) // Override default.
 				SendMessage(control.hwnd, EM_SETPASSWORDCHAR, (WPARAM)opt.password_char, 0);
-			// For the below, note that EM_LIMITTEXT == EM_SETLIMITTEXT.
 			if (opt.limit < 0)
 				opt.limit = 0;
 			//else leave it as the zero (unlimited) or positive (restricted) limit already set.
@@ -2561,7 +2560,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			// amount of memory used for controls containing small amounts of text.  All it does is allow
 			// the control to allocate more memory as the user enters text.  By specifying zero, a max
 			// of 64K becomes available on Windows 9x, and perhaps as much as 4 GB on NT/2k/XP.
-			SendMessage(control.hwnd, EM_LIMITTEXT, (WPARAM)opt.limit, 0);
+			SendMessage(control.hwnd, EM_LIMITTEXT, (WPARAM)opt.limit, 0); // EM_LIMITTEXT == EM_SETLIMITTEXT
 			if (opt.tabstop_count)
 				SendMessage(control.hwnd, EM_SETTABSTOPS, opt.tabstop_count, (LPARAM)opt.tabstop);
 		}

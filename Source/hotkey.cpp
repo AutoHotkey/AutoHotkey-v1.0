@@ -52,9 +52,24 @@ void Hotkey::AllActivate()
 	// inconsequential even when it does happen.  This could perhaps be resolved by
 	// storing the original mType with each hotkey so that those types can be restored
 	// by the caller, if desired, before calling us.
+
+	// v1.0.37.05: A prefix key such as "a" in "a & b" should cause any use of "a" as a suffix
+	// (such as ^!a) also to be a hook hotkey.  Otherwise, the ^!a hotkey won't fire because the
+	// hook prevents the OS's hotkey monitor from seeing that the hotkey was pressed.  NOTE:
+	// This is done only for vitual keys because prefix keys that are done by scan code (mModifierSC)
+	// should already be hook hotkeys when used as suffix keys (there may be a few unusual exceptions,
+	// but they seem too rare to justify the extra code size).
+	bool vk_is_prefix[VK_ARRAY_COUNT] = {false};
+	int j;
+	for (j = 0; j < sHotkeyCount; ++j)
+	{
+		Hotkey &hot = *shk[j]; // For performance and convenience.
+		if (hot.mModifierVK && hot.mEnabled && (!g_IsSuspended || hot.IsExemptFromSuspend())) // Ordered for short-circuit performance.
+			vk_is_prefix[hot.mModifierVK] = true;
+	}
+
 	bool is_neutral, suppress_hotkey_warnings = false;
 	modLR_type modifiersLR;
-	int j;
 	for (int i = 0; i < sHotkeyCount; ++i)
 	{
 		Hotkey &hot = *shk[i]; // For performance and convenience.
@@ -112,7 +127,8 @@ void Hotkey::AllActivate()
 			// a hotkey, ^Enter will also trigger the hotkey, which is not what would be expected).
 			// Therefore, I'm changing it now to have all dual-state keys handled by the hook so that
 			// the counterpart key will never trigger an unexpected firing:
-			if (vk_to_sc(hot.mVK, true))
+			if (vk_to_sc(hot.mVK, true) // This virtual key corresponds to two scan codes...
+				|| vk_is_prefix[hot.mVK]) // ... or it's a suffix that is also used as a prefix (allows ^!a to work without $ when "a & b" is a hotkey).
 			{
 				if (!g_os.IsWin9x())
 					hot.mType = HK_KEYBD_HOOK;

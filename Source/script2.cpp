@@ -5177,73 +5177,34 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 	case WM_HOTKEY: // As a result of this app having previously called RegisterHotkey().
 	case AHK_HOOK_HOTKEY:  // Sent from this app's keyboard or mouse hook.
 	case AHK_HOTSTRING: // Added for v1.0.36.02 so that hotstrings work even while an InputBox or other non-standard msg pump is running.
-	{
-		// Post it with a NULL hwnd to avoid any chance that our message pump will dispatch it
-		// back to us.  We want these events to always be handled there, where almost all new
-		// quasi-threads get launched:
+		// If the following facts are ever confirmed, there would be no need to post the message in cases where
+		// the MsgSleep() won't be done:
+		// 1) The mere fact that any of the above messages has been received here in MainWindowProc means that a
+		//    message pump other than our own main one is running (i.e. it is the closest pump on the call stack).
+		//    This is because our main message pump would never have dispatched the types of messages above because
+		//    it is designed to fully handle then discard them.
+		// 2) All of these types of non-main message pumps would discard a message with a NULL hwnd.
+		//
+		// One source of confusion is that there are quite a few different types of message pumps that might
+		// be running:
+		// - InputBox/MsgBox, or other dialog
+		// - Popup menu (tray menu, popup menu from Menu command, or context menu of an Edit/MonthCal, including
+		//   our main window's edit control g_hWndEdit).
+		// - Probably others, such as ListView marquee-drag, that should be listed here as they are
+		//   remembered/discovered.
+		//
+		// Due to maintainability and the uncertainty over backward compatibility (see comments above), the
+		// following message is posted event when INTERRUPTIBLE==false.
+		// Post it with a NULL hwnd (update: also for backward compatibility) to avoid any chance that our
+		// message pump will dispatch it back to us.  We want these events to always be handled there,
+		// where almost all new quasi-threads get launched:
 		PostMessage(NULL, iMsg, wParam, lParam);
-		if (!INTERRUPTIBLE)
-			// If the script is uninterruptible, don't incur the overhead of doing a MsgSleep()
-			// right now.  Instead, let this message sit in the queue until the current quasi-
-			// thread either becomes interruptible or ends.  NOTE: THE MERE FACT that the script
-			// is uninterruptible implies that there is an instance of MsgSleep() closer on the
-			// call-stack than any dialog's message pump that might also be in the call stack
-			// beneath us.  This is because the current quasi-thread -- if displaying a dialog --
-			// is guaranteed to be interruptible (there is code to ensure this).  If some other
-			// thread interrupted a thread that was displaying dialog, by definition that new
-			// thread would have an instance of MsgSleep() closer on the call stack than the
-			// dialog's message pump.  Thus, the message we just posted above will be processed
-			// by our message pump rather than the dialog's (because ours ensures the msg queue
-			// is cleaned out prior to returning to its caller), which in turn prevents the
-			// dialog's message pump from discarding this null-hwnd message (since it doesn't
-			// know how to dispatch it).
-			return 0;
-		if (g_MenuIsVisible == MENU_TYPE_POPUP || (iMsg == AHK_HOOK_HOTKEY && lParam && g_hWnd == GetForegroundWindow()))
-		{
-			// UPDATE: Since it didn't return above, the script is interruptible, which should
-			// mean that none of the script's or thread's menus should be currently displayed.
-			// So part of the reason for this section might be obsolete now.  But more review
-			// would be needed before changing it.  OLDER INFO:
-			// Ok this is a little strange, but the thought here is that if the tray menu is
-			// displayed, it should be closed prior to executing any new hotkey.  This is
-			// because hotkeys usually cause other windows to become active, and once that
-			// happens, the tray menu cannot be closed except by choosing a menu item in it
-			// (which is often undesirable).  This is also done if the hook told us that
-			// this event is something that may have invoked the tray menu or a context
-			// menu in our own main window, because otherwise such menus can't be dismissed
-			// by another mouseclick or (in the case of the tray menu) they don't work reliably.
-			// However, I'm not sure that this AHK_HOOK_HOTKEY workaround won't cause more
-			// problems than it solves (i.e. WM_CANCELMODE might be called in some cases
-			// when it doesn't need to be, and then might have some undesirable side-effect
-			// since I believe it has other purposes besides dismissing menus).  But such
-			// side effects should be minimal since WM_CANCELMODE mode is only set if
-			// this AutoHotkey instance's own main window is active (foreground).  UPDATE:
-			// Testing shows that it is not necessary to do this when the MAIN MENU is displayed,
-			// so it's safer not to do it in that case:
-			SendMessage(hWnd, WM_CANCELMODE, 0, 0);
-			// The menu is now gone because the above should have called this function
-			// recursively to close the it.  Now, rather than continuing in this
-			// recursion layer, it seems best to return to the caller so that the menu
-			// will be destroyed and g_MenuIsVisible updated.  After that is done,
-			// the next call to MsgSleep() should notice the hotkey we posted above and
-			// act upon it.
-			// The above section has been tested and seems to work as expected.
-			// UPDATE: Below doesn't work if there's a MsgBox() window displayed because
-			// the caller to which we return is the MsgBox's msg pump, and that pump
-			// ignores any messages for our thread so they just sit there.  So instead
-			// of returning, call MsgSleep() without resetting the value of
-			// g_MenuIsVisible (so that it can use it).  When MsgSleep() returns,
-			// we will return to our caller, which in this case should be TrackPopupMenuEx's
-			// msg pump.  That pump should immediately return also since we've already
-			// closed the menu.  And we will let it set the value of g_MenuIsVisible
-			// to "none" at that time rather than doing it here or in IsCycleComplete().
-			// In keeping with the above, don't return:
-			//return 0;
-		}
-		// Now call the main loop to handle the message we just posted (and any others):
-		MsgSleep(-1);
+		if (INTERRUPTIBLE)
+			MsgSleep(-1);
+		//else let the other pump discard this hotkey event since in most cases it would do more harm than good
+		// (see comments above for why the message is posted even when it is 90% certain it will be discarded
+		// in all cases where MsgSleep isn't done).
 		return 0;
-	}
 
 	case WM_TIMER:
 		// MSDN: "When you specify a TimerProc callback function, the default window procedure calls

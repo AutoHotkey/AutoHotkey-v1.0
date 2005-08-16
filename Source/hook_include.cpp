@@ -1504,8 +1504,22 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	// a hotkey, it can't launch now anyway due to the script being uninterruptible while
 	// a menu is visible.  And since it can't launch, it can't do its typical "MouseClick
 	// left" to send a true mouse-click through as a replacement for the suppressed
-	// button-down and button-up events caused by the hotkey:
-	if (!vk || (g_MenuIsVisible && vk == VK_LBUTTON))
+	// button-down and button-up events caused by the hotkey.  Also, for simplicity this
+	// is done regardless of which modifier keys the user is holding down since the desire
+	// to fire mouse hotkeys while a context or popup menu is displayed seems too rare.
+	// Update for 1.0.37.05: The below has been extended to look for menus beyond those
+	// supported by g_MenuIsVisible, namely the context menus of a MonthCal or Edit control
+	// (even the script's main window's edit control's context menu).  It has also been
+	// extended to include RButton because:
+	// 1) Right and left buttons may have been swapped via control panel to take on each others' functions.
+	// 2) Right-click is a valid way to select a context menu items (but apparently not popup or menu bar items).
+	// 3) Right-click should invoke another instance of the context menu (or dismiss existing menu, depending
+	//    on where the click occurs) if user clicks outside of our thread's existing context menu.
+	HWND menu_hwnd;
+	if (   !vk
+		|| ((vk == VK_LBUTTON || vk == VK_RBUTTON) && (g_MenuIsVisible // Ordered for short-circuit performance.
+			|| ((menu_hwnd = FindWindow("#32768", NULL))
+				&& GetWindowThreadProcessId(menu_hwnd, NULL) == GetCurrentThreadId())))   )
 	{
 		// Bug-fix for v1.0.22: If "LControl & LButton::" (and perhaps similar combinations)
 		// is a hotkey, the foreground window would think that the mouse is stuck down, at least
@@ -1724,8 +1738,16 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	// in its capacity as a suffix instead) has been released.
 	// This is done before Case #3 for performance reasons.
 	//////////////////////////////////////////////////////////////////////////////////
-	if (this_key.used_as_suffix && pPrefixKey != &this_key && key_up) // Note: hotkey_id_with_flags might be already valid due to this_key.hotkey_to_fire_upon_release.
+	// v1.0.37.05: Added "|| down_performed_action" to the final check below because otherwise a
+	// script such as the following would send two M's for +b, one upon down and one upon up:
+	// +b::Send, M
+	// b & z::return
+	// I don't remember exactly what the "pPrefixKey != &this_key" check is for below, but it is kept
+	// to minimize the chance of breaking other things:
+	if (this_key.used_as_suffix && key_up && (pPrefixKey != &this_key || down_performed_action)) // Note: hotkey_id_with_flags might be already valid due to this_key.hotkey_to_fire_upon_release.
 	{
+		if (pPrefixKey == &this_key) // v1.0.37.05: Added so that scripts such as the example above don't leave pPrefixKey wrongly non-NULL.
+			pPrefixKey = NULL;       // Also, it seems unnecessary to check this_key.it_put_alt_down and such like is done in Case #3.
 		// If it did perform an action, suppress this key-up event.  Do this even
 		// if this key is a modifier because it's previous key-down would have
 		// already been suppressed (since this case is for suffixes that aren't
@@ -1748,12 +1770,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		// v1.0.28: The following check is done to support certain keyboards whose keys or scroll wheels
 		// generate up events without first having generated any down-event for the key:
 		if (!this_key.used_as_key_up) // Let it be processed normally.
-		{
-			if (down_performed_action)
-				return suppress_up_event ? SuppressThisKey : AllowKeyToGoToSystem;
-			// Otherwise:
-			return AllowKeyToGoToSystem;
-		}
+			return (down_performed_action && suppress_up_event) ? SuppressThisKey : AllowKeyToGoToSystem;
 		//else continue checking to see if the right modifiers are down to trigger one of this
 		// suffix key's key-up hotkeys.
 	}
@@ -1866,14 +1883,15 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		// low-level hook installed that receives events before us, and it's not
 		// well-implemented (i.e. it sometimes sends ups without downs), this check
 		// may help prevent unexpected behavior.  UPDATE: The check "!this_key.used_as_key_up"
-		// is now done too so that explicit key-up hotkey can operate even if the key wasn't
+		// is now done too so that an explicit key-up hotkey can operate even if the key wasn't
 		// thought to be down before. One thing this helps with is certain keyboards (e.g. some
 		// Dells) that generate only up events for some of their special keys but no down events,
 		// even when *no* keyboard management software is installed). Some keyboards also have
 		// scroll wheels which generate up events in one direction and down in the other.
-		if (!(was_down_before_up || this_key.used_as_key_up))
+		if (!(was_down_before_up || this_key.used_as_key_up)) // Verified correct.
 			return AllowKeyToGoToSystem;
 
+		// v1.0.37.05: When a prefix key is released, it's suffix action should never fire...
 		// Since no suffix action was triggered while it was held down, fall through rather than
 		// returning, so that the key's own suffix action will be considered -- to be fired only if
 		// the right modifiers -- typically none -- are currently down:
@@ -2626,33 +2644,28 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 			break;
 		}
 		default:
-		// UPDATE to below: Since this function is only called from a single thread (namely ours),
-		// albeit recursively, it's apparently not reentrant (unless our own main app itself becomes
-		// multithreaded someday, and even then it might not matter?) there's no advantage to using
-		// PostMessage() because the message can't be acted upon until after we return from this
-		// function.  Therefore, avoid the overhead (and possible delays while system is under
-		// heavy load?) of using PostMessage and simply execute the hotkey right here before
-		// returning.  UPDATE AGAIN: No, I don't think this will work reliably because this
-		// function is called invisibly by GetMessage(), without it even telling us that
-		// it's calling it.  Therefore, if we call a subroutine in the script from here,
-		// we can't return until after the subroutine is over, thus GetMessage() will
-		// probably hang, or be forced to start a new thread or something?  An alternative to
-		// using PostMessage() (if it really is susceptible to delays due to system being under
-		// load, which is far from certain), is to change the value of a global var to signal
-		// to MsgSleep() that a hotkey has been fired.  However, this doesn't seem likely
-		// to work because a call to GetMessage() will likely call this function without
-		// actually returning any messages to its caller, thus the hotkeys would never be
-		// seen during periods when there are no messages.  PostMessage() works reliably, so
-		// it seems best not to change it without good reason and without a full understanding
-		// of what's really going on.
-#ifdef INCLUDE_KEYBD_HOOK
 			PostMessage(g_hWnd, AHK_HOOK_HOTKEY, hotkey_id_to_fire, 0);  // Returns non-zero on success.
-#else
-			// In the case of a mouse hotkey whose native function the user didn't want suppressed,
-			// tell our hotkey handler to also dismiss any menus that the mouseclick itself may
-			// have invoked:
-			PostMessage(g_hWnd, AHK_HOOK_HOTKEY, hotkey_id_to_fire, no_suppress);
-#endif
+			// Comments about the above line:
+			// UPDATE to below: Since this function is only called from a single thread (namely ours),
+			// albeit recursively, it's apparently not reentrant (unless our own main app itself becomes
+			// multithreaded someday, and even then it might not matter?) there's no advantage to using
+			// PostMessage() because the message can't be acted upon until after we return from this
+			// function.  Therefore, avoid the overhead (and possible delays while system is under
+			// heavy load?) of using PostMessage and simply execute the hotkey right here before
+			// returning.  UPDATE AGAIN: No, I don't think this will work reliably because this
+			// function is called invisibly by GetMessage(), without it even telling us that
+			// it's calling it.  Therefore, if we call a subroutine in the script from here,
+			// we can't return until after the subroutine is over, thus GetMessage() will
+			// probably hang, or be forced to start a new thread or something?  An alternative to
+			// using PostMessage() (if it really is susceptible to delays due to system being under
+			// load, which is far from certain), is to change the value of a global var to signal
+			// to MsgSleep() that a hotkey has been fired.  However, this doesn't seem likely
+			// to work because a call to GetMessage() will likely call this function without
+			// actually returning any messages to its caller, thus the hotkeys would never be
+			// seen during periods when there are no messages.  PostMessage() works reliably, so
+			// it seems best not to change it without good reason and without a full understanding
+			// of what's really going on.
+
 			// Don't execute it directly because if whatever it does takes a long time, this keystroke
 			// and instance of the function will be left hanging until it returns:
 			//Hotkey::PerformID(hotkey_id_to_fire);
