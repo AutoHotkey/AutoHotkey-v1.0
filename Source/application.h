@@ -54,47 +54,6 @@ bool MsgSleep(int aSleepDuration = INTERVAL_UNSPECIFIED, MessageMode aMode = RET
 // not g.AllowThisThreadToBeInterrupted.
 #define INTERRUPTIBLE (g.AllowThisThreadToBeInterrupted && g_AllowInterruption && !g_MenuIsVisible)
 
-// To reduce the expectation that a newly launched hotkey or timed subroutine will
-// be immediately interrupted by a timed subroutine or hotkey, interruptions are
-// forbidden for a short time (user-configurable).  If the subroutine is a quick one --
-// finishing prior to when PerformID()'s call of ExecUntil() or the Timer would have set
-// g_AllowInterruption to be true -- we will set it to be true afterward so that it
-// gets done as quickly as possible.
-// The following rules of precedence apply:
-// If either UninterruptibleTime or UninterruptedLineCountMax is zero, newly launched subroutines
-// are always interruptible.  Otherwise: If both are negative, newly launched subroutines are
-// never interruptible.  If only one is negative, newly launched subroutines cannot be interrupted
-// due to that component, only the other one (which is now known to be positive otherwise the
-// first rule of precedence would have applied).
-// Notes that apply to the macro:
-// Both must be non-zero.
-// ...
-// Use g.AllowThisThreadToBeInterrupted vs. g_AllowInterruption in case g_AllowInterruption
-// just happens to have been set to true for some other reason (e.g. SendKeys()).
-// ...
-// It's much better to set a timer than have ExecUntil() watch for the time
-// to expire.  This is because it performs better, but more importantly
-// consider the case when ExecUntil() calls a WinWait, FileSetAttrib, or any
-// single command that might take a long time to execute.  While that command
-// is executing, ExecUntil() would be unable to keep an eye on things, thus
-// the script would stay uninterruptible for far longer than intended unless
-// many checks were added in various places, which would be cumbersome to
-// maintain.  By using a timer, the message loop (which is called frequently
-// by just about every long-running script command) will be able to make the
-// script interruptible again much closer to the desired moment in time.
-// ...
-// Known to be either negative or positive (but not zero) at this point.
-// ...
-// else if it's negative, it's considered to be infinite, so no timer need be set.
-
-#define INIT_NEW_THREAD \
-CopyMemory(&g, &g_default, sizeof(global_struct));\
-if (g_script.mUninterruptibleTime && g_script.mUninterruptedLineCountMax)\
-{\
-	g.AllowThisThreadToBeInterrupted = false;\
-	if (g_script.mUninterruptibleTime > 0)\
-		SET_UNINTERRUPTIBLE_TIMER \
-}
 
 // The DISABLE_UNINTERRUPTIBLE_SUB macro below must always kill the timer if it exists -- even if
 // the timer hasn't expired yet.  This is because if the timer were to fire when interruptibility had
@@ -104,7 +63,7 @@ if (g_script.mUninterruptibleTime && g_script.mUninterruptedLineCountMax)\
 // set a second time "just to be sure" because by then it may already by in use by someone else
 // for some other purpose.
 // It's possible for the SetBatchLines command to have changed the values of g_script.mUninterruptibleTime
-// and g_script.mUninterruptedLineCountMax since the time INIT_NEW_THREAD was called.  If they were
+// and g_script.mUninterruptedLineCountMax since the time InitNewThread() was called.  If they were
 // changed so that subroutines are always interruptible, that seems to be handled correctly.
 // If they were changed so that subroutines are never interruptible, that seems to be okay too.
 // It doesn't seem like any combination of starting vs. ending interruptibility is a particular
@@ -128,40 +87,6 @@ if (g_script.mUninterruptibleTime && g_script.mUninterruptedLineCountMax)\
 //	KILL_UNINTERRUPTIBLE_TIMER \
 //}
 //#define DISABLE_UNINTERRUPTIBLE_SUB	KILL_UNINTERRUPTIBLE_TIMER
-
-
-// The unpause logic is done immediately after the most recently suspended thread's
-// global settings are restored so that that thread is set up properly to be resumed.
-// Comments about macro:
-//    g_UnpauseWhenResumed = false --> because we've "used up" this unpause ticket.
-//    g_ErrorLevel->Assign(g.ErrorLevel) --> restores the variable from the stored value.
-// If the thread to be resumed has not been unpaused, it will automatically be resumed in
-// a paused state because when we return from this function, we should be returning to
-// an instance of ExecUntil() (our caller), which should be in a pause loop still.
-// But always update the tray icon in case the paused state of the subroutine
-// we're about to resume is different from our previous paused state.  Do this even
-// when the macro is used by CheckScriptTimers(), which although it might not techically
-// need it, lends maintainability and peace of mind.
-// UPDATE: Doing "g.AllowThisThreadToBeInterrupted = true" seems like a good idea to be safe,
-// at least in the case where CheckScriptTimers() calls this macro at a time when there
-// is no thread other than the "idle thread" to resume.  A resumed thread should always
-// be interruptible anyway, since otherwise it couldn't have been interrupted in the
-// first place to get us here:
-#define RESUME_UNDERLYING_THREAD \
-{\
-	CopyMemory(&g, &global_saved, sizeof(global_struct));\
-	g_ErrorLevel->Assign(g.ErrorLevel);\
-	if (g_UnpauseWhenResumed && g.IsPaused)\
-	{\
-		g_UnpauseWhenResumed = false;\
-		g.IsPaused = false;\
-		--g_nPausedThreads;\
-		CheckMenuItem(GetMenu(g_hWnd), ID_FILE_PAUSE, MF_UNCHECKED);\
-	}\
-	g_script.UpdateTrayIcon();\
-	g.AllowThisThreadToBeInterrupted = true;\
-}
-
 
 // Have this be dynamically resolved each time.  For example, when MsgSleep() uses this
 // while in mode WAIT_FOR_MESSSAGES, its msg loop should use this macro in case the
@@ -202,6 +127,9 @@ bool CheckScriptTimers();
 
 void PollJoysticks();
 #define POLL_JOYSTICK_IF_NEEDED if (Hotkey::sJoyHotkeyCount) PollJoysticks();
+
+void InitNewThread(int aPriority, bool aSkipUninterruptible, bool aIncrementThreadCount);
+void ResumeUnderlyingThread(global_struct *pSavedStruct);
 
 VOID CALLBACK MsgBoxTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);
 VOID CALLBACK AutoExecSectionTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);

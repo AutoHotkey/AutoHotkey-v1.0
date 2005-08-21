@@ -4259,11 +4259,11 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 						return aControl.hwnd ? g_ErrorLevel->Assign(ERRORLEVEL_ERROR)
 							: g_script.ScriptError(ERR_NO_LABEL ERR_ABORT, next_option - 1);
 				}
-				// Apply the SS_NOTIFY style *only* if the control actually has an associated action.
-				// This is because otherwise the control would steal all clicks for any other controls
-				// drawn on top of it (e.g. a picture control with some edit fields drawn on top of it).
-				// See comments in the creation of GUI_CONTROL_PIC for more info:
 				if (aControl.type == GUI_CONTROL_TEXT || aControl.type == GUI_CONTROL_PIC)
+					// Apply the SS_NOTIFY style *only* if the control actually has an associated action.
+					// This is because otherwise the control would steal all clicks for any other controls
+					// drawn on top of it (e.g. a picture control with some edit fields drawn on top of it).
+					// See comments in the creation of GUI_CONTROL_PIC for more info:
 					aOpt.style_add |= SS_NOTIFY;
 				aControl.jump_to_label = candidate_label; // Will be NULL if something like gCancel (implicit was used).
 				break;

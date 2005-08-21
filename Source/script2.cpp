@@ -5573,17 +5573,15 @@ bool HandleMenuItem(HWND aHwnd, WORD aMenuItemID, WPARAM aGuiIndex)
 		return true;
 	case ID_TRAY_PAUSE:
 	case ID_FILE_PAUSE:
-		if (!g.IsPaused && g_nThreads < 1)
+		if (g_nThreads > 0) // v1.0.37.06: Pausing the "idle thread" (which is not included in the thread count) is an easy means by which to disable all timers.
 		{
-			MsgBox("The script cannot be paused while it is doing nothing.  If you wish to prevent new"
-				" hotkey subroutines from running, use Suspend instead.");
-			// i.e. we don't want idle scripts to ever be in a paused state.
-			return true;
+			if (g.IsPaused)
+				--g_nPausedThreads;
+			else
+				++g_nPausedThreads;
 		}
-		if (g.IsPaused)
-			--g_nPausedThreads;
-		else
-			++g_nPausedThreads;
+		else // Toggle the pause state of the idle thread.
+			g_IdleIsPaused = !g_IdleIsPaused;
 		g.IsPaused = !g.IsPaused;
 		g_script.UpdateTrayIcon();
 		CheckMenuItem(GetMenu(g_hWnd), ID_FILE_PAUSE, g.IsPaused ? MF_CHECKED : MF_UNCHECKED);
@@ -5638,7 +5636,7 @@ bool HandleMenuItem(HWND aHwnd, WORD aMenuItemID, WPARAM aGuiIndex)
 		// 2) YES: A new hotkey or timed subroutine was just launched and it's still in its
 		//    grace period.  In this case, ExecUntil()'s call of PeekMessage() every 10ms
 		//    or so will catch the item we just posted.  But it seems okay to interrupt
-		//    here directly in most such cases.  INIT_NEW_THREAD: Newly launched
+		//    here directly in most such cases.  InitNewThread(): Newly launched
 		//    timed subroutine or hotkey subroutine.
 		// 3) YES: Script is engaged in an uninterruptible activity such as SendKeys().  In this
 		//    case, since the user has managed to get the tray menu open, it's probably
@@ -8663,14 +8661,14 @@ ResultType Line::SoundSetGet(char *aSetting, DWORD aComponentType, int aComponen
 		// number for the indicated component type:
 		int source_count;
 		bool found = false;
-		for (int d = 0, found_instance = 0; d < dest_count && !found; ++d)
+		for (int d = 0, found_instance = 0; d < dest_count && !found; ++d) // For each destination of this mixer.
 		{
 			ml.dwDestination = d;
 			if (mixerGetLineInfo((HMIXEROBJ)hMixer, &ml, MIXER_GETLINEINFOF_DESTINATION) != MMSYSERR_NOERROR)
 				// Keep trying in case the others can be retrieved.
 				continue;
 			source_count = ml.cConnections;  // Make a copy of this value so that the struct can be reused.
-			for (int s = 0; s < source_count && !found; ++s)
+			for (int s = 0; s < source_count && !found; ++s) // For each source of this destination.
 			{
 				ml.dwDestination = d; // Set it again in case it was changed.
 				ml.dwSource = s;
@@ -8695,9 +8693,8 @@ ResultType Line::SoundSetGet(char *aSetting, DWORD aComponentType, int aComponen
 	}
 
 	// Find the mixer control (aControlType) for the above component:
-    MIXERCONTROL mc = {0};
-    mc.cbStruct = sizeof(mc);
-    MIXERLINECONTROLS mlc = {0};
+    MIXERCONTROL mc; // MSDN: "No initialization of the buffer pointed to by [pamxctrl below] is required"
+    MIXERLINECONTROLS mlc;
 	mlc.cbStruct = sizeof(mlc);
 	mlc.pamxctrl = &mc;
 	mlc.cbmxctrl = sizeof(mc);
@@ -8734,22 +8731,31 @@ ResultType Line::SoundSetGet(char *aSetting, DWORD aComponentType, int aComponen
 		}
 	}
 
+	bool control_type_is_boolean;
+	switch (aControlType)
+	{
+	case MIXERCONTROL_CONTROLTYPE_ONOFF:
+	case MIXERCONTROL_CONTROLTYPE_MUTE:
+	case MIXERCONTROL_CONTROLTYPE_MONO:
+	case MIXERCONTROL_CONTROLTYPE_LOUDNESS:
+	case MIXERCONTROL_CONTROLTYPE_STEREOENH:
+	case MIXERCONTROL_CONTROLTYPE_BASS_BOOST:
+		control_type_is_boolean = true;
+		break;
+	default: // For all others, assume the control can have more than just ON/OFF as its allowed states.
+		control_type_is_boolean = false;
+	}
+
 	if (SOUND_MODE_IS_SET)
 	{
-		switch (aControlType)
+		if (control_type_is_boolean)
 		{
-		case MIXERCONTROL_CONTROLTYPE_ONOFF:
-		case MIXERCONTROL_CONTROLTYPE_MUTE:
-		case MIXERCONTROL_CONTROLTYPE_MONO:
-		case MIXERCONTROL_CONTROLTYPE_LOUDNESS:
-		case MIXERCONTROL_CONTROLTYPE_STEREOENH:
-		case MIXERCONTROL_CONTROLTYPE_BASS_BOOST:
 			if (adjust_current_setting) // The user wants this toggleable control to be toggled to its opposite state:
 				mcdMeter.dwValue = (mcdMeter.dwValue > mc.Bounds.dwMinimum) ? mc.Bounds.dwMinimum : mc.Bounds.dwMaximum;
 			else // Set the value according to whether the user gave us a setting that is greater than zero:
 				mcdMeter.dwValue = (setting_percent > 0.0) ? mc.Bounds.dwMaximum : mc.Bounds.dwMinimum;
-			break;
-		default: // For all others, assume the control can have more than just ON/OFF as its allowed states.
+		}
+		else // For all others, assume the control can have more than just ON/OFF as its allowed states.
 		{
 			// Make this an __int64 vs. DWORD to avoid underflow (so that a setting_percent of -100
 			// is supported whenenver the difference between Min and Max is large, such as MAXDWORD):
@@ -8767,7 +8773,6 @@ ResultType Line::SoundSetGet(char *aSetting, DWORD aComponentType, int aComponen
 			else
 				mcdMeter.dwValue = (DWORD)specified_vol; // Due to the above, it's known to be positive in this case.
 		}
-		} // switch()
 
 		MMRESULT result = mixerSetControlDetails((HMIXEROBJ)hMixer, &mcd, MIXER_GETCONTROLDETAILSF_VALUE);
 		mixerClose(hMixer);
@@ -8778,21 +8783,13 @@ ResultType Line::SoundSetGet(char *aSetting, DWORD aComponentType, int aComponen
 	mixerClose(hMixer);
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 
-	switch (aControlType)
-	{
-	case MIXERCONTROL_CONTROLTYPE_ONOFF:
-	case MIXERCONTROL_CONTROLTYPE_MUTE:
-	case MIXERCONTROL_CONTROLTYPE_MONO:
-	case MIXERCONTROL_CONTROLTYPE_LOUDNESS:
-	case MIXERCONTROL_CONTROLTYPE_STEREOENH:
-	case MIXERCONTROL_CONTROLTYPE_BASS_BOOST:
+	if (control_type_is_boolean)
 		return output_var->Assign(mcdMeter.dwValue ? "On" : "Off");
-	default: // For all others, assume the control can have more than just ON/OFF as its allowed states.
+	else // For all others, assume the control can have more than just ON/OFF as its allowed states.
 		// The MSDN docs imply that values fetched via the above method do not distinguish between
 		// left and right volume levels, unlike waveOutGetVolume():
 		return output_var->Assign(   ((double)100 * (mcdMeter.dwValue - (DWORD)mc.Bounds.dwMinimum))
 			/ (mc.Bounds.dwMaximum - mc.Bounds.dwMinimum)   );
-	}
 }
 
 
@@ -9509,9 +9506,9 @@ ResultType Line::FileCreateShortcut(char *aTargetFile, char *aShortcutFile, char
 			psl->SetShowCmd(ATOI(aRunState)); // No validation is done since there's a chance other numbers might be valid now or in the future.
 
 		IPersistFile *ppf;
-		WORD wsz[MAX_PATH];
 		if(SUCCEEDED(psl->QueryInterface(IID_IPersistFile,(LPVOID *)&ppf)))
 		{
+			WORD wsz[MAX_PATH];
 			MultiByteToWideChar(CP_ACP, 0, aShortcutFile, -1, (LPWSTR)wsz, MAX_PATH);
 			if (SUCCEEDED(ppf->Save((LPCWSTR)wsz, TRUE)))
 				g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.

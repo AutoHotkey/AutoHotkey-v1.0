@@ -81,7 +81,7 @@ bool g_AllowInterruption = true;
 int g_nLayersNeedingTimer = 0;
 int g_nThreads = 0;
 int g_nPausedThreads = 0;
-bool g_UnpauseWhenResumed = false;  // Start off "false" because the Unpause mode must be explicitly triggered.
+bool g_IdleIsPaused = false;
 int g_MaxHistoryKeys = 40;
 
 // g_MaxVarCapacity is used to prevent a buggy script from consuming all available system RAM. It is defined
@@ -464,7 +464,7 @@ Action g_act[] =
 	, {"FormatTime", 1, 3, NULL} // OutputVar, YYYYMMDDHH24MISS, Format (format is last to avoid having to escape commas in it).
 
 	, {"Suspend", 0, 1, NULL} // On/Off/Toggle/Permit/Blank (blank is the same as toggle)
-	, {"Pause", 0, 1, NULL} // On/Off/Toggle/Blank (blank is the same as toggle)
+	, {"Pause", 0, 2, NULL} // On/Off/Toggle/Blank (blank is the same as toggle), AlwaysAffectUnderlying
 	, {"AutoTrim", 1, 1, NULL} // On/Off
 	, {"StringCaseSense", 1, 1, NULL} // On/Off
 	, {"DetectHiddenWindows", 1, 1, NULL} // On/Off

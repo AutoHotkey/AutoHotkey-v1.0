@@ -762,10 +762,12 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				// Also: Don't use var->Get() because need better control over the size:
 				strlcpy(g.ErrorLevel, g_ErrorLevel->Contents(), sizeof(g.ErrorLevel));
 				// Could also use copy constructor but that would probably incur more overhead?:
-				CopyMemory(&global_saved, &g, sizeof(global_struct));
 				// Next, change the value of globals to reflect the fact that we're about
 				// to launch a new subroutine.
 			}
+			// v1.0.37.06: The following must ben done regardless of aMode because the idle thread is now
+			// resumed via ResumeUnderlyingThread():
+			CopyMemory(&global_saved, &g, sizeof(global_struct));
 
 			switch(msg.message)
 			{
@@ -809,16 +811,18 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				// navigates is "undone" here:
 				SetCurrentDirectory(g_WorkingDir);
 
-			// If the current quasi-thread is paused, the thread we're about to launch
-			// will not be, so the icon needs to be checked:
-			g_script.UpdateTrayIcon();
 			// Make every newly launched subroutine start off with the global default values that
 			// the user set up in the auto-execute part of the script (e.g. KeyDelay, WinDelay, etc.).
 			// However, we do not set ErrorLevel to anything special here (except for GUI threads, later
 			// below) because it's more flexible that way (i.e. the user may want one hotkey subroutine
 			// to use the value of ErrorLevel set by another):
-			INIT_NEW_THREAD
-			g.Priority = priority;  // Set thread priority.
+			InitNewThread(priority, false, true);
+
+			// Fix for v1.0.37.06:  Must do the following only after InitNewThread() has updated
+			// g.IsPaused for the new thread.
+			// If the current quasi-thread is paused, the thread we're about to launch
+			// will not be, so the icon needs to be checked:
+			g_script.UpdateTrayIcon();
 
 			// Do this last, right before the PerformID():
 			// It seems best to reset these unconditionally, because the user has pressed a hotkey
@@ -832,7 +836,6 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 
 			// Perform the new thread's subroutine:
 			return_value = true; // We will return this value to indicate that we launched at least one new thread.
-			++g_nThreads;
 
 			switch (msg.message)
 			{
@@ -1060,14 +1063,15 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				Hotkey::PerformID((HotkeyIDType)msg.wParam);
 			}
 
-			--g_nThreads;
-
 			MAKE_THREAD_INTERRUPTIBLE
+			// v1.0.37.06: Call ResumeUnderlyingThread() even if aMode==WAIT_FOR_MESSAGES; this is for
+			// maintainability and also in case the pause command has been used to unpause the idle thread.
+			ResumeUnderlyingThread(&global_saved);
 
-			if (aMode == RETURN_AFTER_MESSAGES)
+			if (aMode == WAIT_FOR_MESSAGES) // This is the "idle thread", meaning that the end of the thread above has returned the script to an idle state.
+				g.Priority = PRIORITY_MINIMUM; // Ensure minimum priority so that idle state can always be "interrupted".
+			else // Some thread other than the idle thread.
 			{
-				RESUME_UNDERLYING_THREAD
-
 				if (IsCycleComplete(aSleepDuration, start_time, allow_early_return))
 				{
 					// Check for messages once more in case the subroutine that just completed
@@ -1086,15 +1090,6 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 					SET_MAIN_TIMER // This won't do anything if it's already on.
 				// and now if the cycle isn't complete, stay in the blessed GetMessage() state until the time
 				// has expired.
-			}
-			else
-			{
-				// Make double sure this "idle thread" is interruptible, because there might still ways
-				// it could otherwise acuire a permanent false value:
-				// Since the script is now idle again, this must done because they indicate that the
-				// "idle thread" can always be interrupted:
-				g.AllowThisThreadToBeInterrupted = true;
-				g.Priority = PRIORITY_MINIMUM; // Minimum priority so that idle state can always be "interrupted".
 			}
 			continue;
 
@@ -1278,8 +1273,11 @@ bool CheckScriptTimers()
 	// the current thread is paused isn't worth defaulting to the opposite approach.  In the future,
 	// and if there's demand, perhaps a config option can added that allows a different default behavior.
 	// UPDATE: It seems slightly better (more consistent) to disallow all timed subroutines whenever
-	// there is even one paused thread anywhere in the "stack":
-	if (!INTERRUPTIBLE || g_nPausedThreads > 0 || g_nThreads >= g_MaxThreadsTotal)
+	// there is even one paused thread anywhere in the "stack".  UPDATE for v1.0.37.06: g_IdleIsPaused is
+	// now checked in case the "idle thread" is paused (since that thread is not counted in
+	// g_nPausedThreads).  However, g_nPausedThreads must still be checked in case the uppermost thread
+	// isn't paused but some other thread isn't (as documented, timers don't run when any thread is paused).
+	if (!INTERRUPTIBLE || g_nPausedThreads > 0 || g_IdleIsPaused || g_nThreads >= g_MaxThreadsTotal)
 		return false; // Above: To be safe (prevent stack faults) don't allow max threads to be exceeded.
 
 	ScriptTimer *timer;
@@ -1313,7 +1311,6 @@ bool CheckScriptTimers()
 				// if the user happens to do it at the moment a timed subroutine is running, which
 				// seems best since some timed subroutines might take a long time to run:
 				++g_nThreads;
-
 				// Next, save the current state of the globals so that they can be restored just prior
 				// to returning to our caller:
 				strlcpy(g.ErrorLevel, g_ErrorLevel->Contents(), sizeof(g.ErrorLevel)); // Save caller's errorlevel.
@@ -1357,8 +1354,7 @@ bool CheckScriptTimers()
 			// the user set up in the auto-execute part of the script (e.g. KeyDelay, WinDelay, etc.).
 			// However, we do not set ErrorLevel to NONE here because it's more flexible that way
 			// (i.e. the user may want one hotkey subroutine to use the value of ErrorLevel set by another):
-			INIT_NEW_THREAD
-			g.Priority = timer->mPriority;  // Set thread priority.
+			InitNewThread(timer->mPriority, false, false); // False as last param because ++g_nThreads should be done only once rather than each Init().
 
 			++timer->mExistingThreads;
 			timer->mLabel->mJumpToLine->ExecUntil(UNTIL_RETURN);
@@ -1370,8 +1366,7 @@ bool CheckScriptTimers()
 
 	if (launched_threads) // Since at least one subroutine was run above, restore various values for our caller.
 	{
-		--g_nThreads;  // Since this instance of this function only had one thread in use at a time.
-		RESUME_UNDERLYING_THREAD // For explanation, see comments where the macro is defined.
+		ResumeUnderlyingThread(&global_saved);
 		return true;
 	}
 	return false;
@@ -1419,6 +1414,102 @@ void PollJoysticks()
 		// be processed when messages are next checked:
 		Hotkey::TriggerJoyHotkeys(i, buttons_newly_down);
 	}
+}
+
+
+
+void InitNewThread(int aPriority, bool aSkipUninterruptible, bool aIncrementThreadCount)
+// To reduce the expectation that a newly launched hotkey or timed subroutine will
+// be immediately interrupted by a timed subroutine or hotkey, interruptions are
+// forbidden for a short time (user-configurable).  If the subroutine is a quick one --
+// finishing prior to when PerformID()'s call of ExecUntil() or the Timer would have set
+// g_AllowInterruption to be true -- we will set it to be true afterward so that it
+// gets done as quickly as possible.
+// The following rules of precedence apply:
+// If either UninterruptibleTime or UninterruptedLineCountMax is zero, newly launched subroutines
+// are always interruptible.  Otherwise: If both are negative, newly launched subroutines are
+// never interruptible.  If only one is negative, newly launched subroutines cannot be interrupted
+// due to that component, only the other one (which is now known to be positive otherwise the
+// first rule of precedence would have applied).
+{
+	if (aIncrementThreadCount)
+		++g_nThreads; // It is the caller's responsibility to avoid calling us if the thread count is too high.
+
+	bool underlying_thread_is_paused = g.IsPaused;  // Indicate in the upcoming thread whether the thread to be interrupted is paused.
+	CopyMemory(&g, &g_default, sizeof(global_struct));
+	g.UnderlyingThreadIsPaused = underlying_thread_is_paused;
+	g.Priority = aPriority;
+
+	if (aSkipUninterruptible)
+		return;
+	if (g_script.mUninterruptibleTime && g_script.mUninterruptedLineCountMax)
+	{
+		// Use g.AllowThisThreadToBeInterrupted vs. g_AllowInterruption in case g_AllowInterruption
+		// just happens to have been set to true for some other reason (e.g. SendKeys()):
+		g.AllowThisThreadToBeInterrupted = false;
+		if (g_script.mUninterruptibleTime > 0) // Known to be either negative or positive (but not zero) at this point.
+			// It's much better to set a timer than have ExecUntil() watch for the time
+			// to expire.  This is because it performs better, but more importantly
+			// consider the case when ExecUntil() calls a WinWait, FileSetAttrib, or any
+			// single command that might take a long time to execute.  While that command
+			// is executing, ExecUntil() would be unable to keep an eye on things, thus
+			// the script would stay uninterruptible for far longer than intended unless
+			// many checks were added in various places, which would be cumbersome to
+			// maintain.  By using a timer, the message loop (which is called frequently
+			// by just about every long-running script command) will be able to make the
+			// script interruptible again much closer to the desired moment in time.
+			SET_UNINTERRUPTIBLE_TIMER
+		// else if it's negative, it's considered to be infinite, so no timer need be set.
+	}
+}
+
+
+
+void ResumeUnderlyingThread(global_struct *pSavedStruct)
+{
+	--g_nThreads; // Below relies on this having been done early.
+	bool underlying_thread_is_paused = g.UnderlyingThreadIsPaused; // Done this way for performance (to avoid multiple indirections).
+	CopyMemory(&g, pSavedStruct, sizeof(global_struct));
+	g_ErrorLevel->Assign(g.ErrorLevel);
+
+	// The below relies on the above having restored "g":
+	if (g.IsPaused != underlying_thread_is_paused) // The thread to be resumed has been marked with a new state by the thread above.
+	{
+		if (g.IsPaused = underlying_thread_is_paused) // The thread to be resumed is being put into a paused state.
+		{
+			if (g_nThreads) // The script is not about to become idle (i.e. a non-idle thread is being paused now).
+				++g_nPausedThreads;
+			else
+				g_IdleIsPaused = true;
+		}
+		else // The thread to be resumed is being unpaused.
+		{
+			if (g_nThreads) // The script is not about to become idle.
+				--g_nPausedThreads;
+			else // The script is about to become idle, so by definition the "idle thread" is being unpaused.
+				g_IdleIsPaused = false;
+		}
+		CheckMenuItem(GetMenu(g_hWnd), ID_FILE_PAUSE, g.IsPaused ? MF_CHECKED : MF_UNCHECKED);
+	}
+
+	// If the thread to be resumed was paused and has not been unpaused above, it will automatically be
+	// resumed in a paused state because when we return from this function, we should be returning to
+	// an instance of ExecUntil() (our caller), which should be in a pause loop still.  Conversely,
+	// if the thread to be resumed wasn't paused but was just paused above, the icon will be changed now
+	// but the thread won't actually pause until ExecUntil() goes into its pause loop (which should be
+	// immediately after the current command finishes, if execution is right in the middle of a command
+	// due to the command having done a MsgSleep to allow a thread to interrupt).
+	// Older comment: Always update the tray icon in case the paused state of the subroutine
+	// we're about to resume is different from our previous paused state.  Do this even
+	// when the macro is used by CheckScriptTimers(), which although it might not techically
+	// need it, lends maintainability and peace of mind.
+	// UPDATE: Doing "g.AllowThisThreadToBeInterrupted = true" seems like a good idea to be safe,
+	// at least in the case where CheckScriptTimers() calls this macro at a time when there
+	// is no thread other than the "idle thread" to resume.  A resumed thread should always
+	// be interruptible anyway, since otherwise it couldn't have been interrupted in the
+	// first place to get us here:
+	g_script.UpdateTrayIcon();
+	g.AllowThisThreadToBeInterrupted = true;
 }
 
 
@@ -1481,9 +1572,9 @@ VOID CALLBACK AutoExecSectionTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD d
 	if (!g_script.AutoExecSectionIsRunning)
 		return;
 
-	// Otherwise, update global DEFAULTS, which are for all threads launched in the future:
+	// Otherwise, it's still running (or paused). So update global DEFAULTS, which are for all threads launched in the future:
 	CopyMemory(&g_default, &g, sizeof(global_struct));
-	global_clear_state(g_default);  // Only clear g_default, not g.
+	global_clear_state(g_default);  // Only clear g_default, not g.  This also ensures that IsPaused gets set to false in case it's true in "g".
 }
 
 

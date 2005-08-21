@@ -268,7 +268,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	// is launched.  Each launched subroutine may then change the values for its own purposes without
 	// affecting the settings for other subroutines:
 	global_clear_state(g);  // Start with a "clean slate" in both g and g_default.
-	CopyMemory(&g_default, &g, sizeof(global_struct));
+	CopyMemory(&g_default, &g, sizeof(global_struct)); // Above has set g.IsPaused==false in case it's ever possible that it's true as a result of AutoExecSection().
 	// After this point, the values in g_default should never be changed.
 
 	// It seems best to set ErrorLevel to NONE after the auto-execute part of the script is done.

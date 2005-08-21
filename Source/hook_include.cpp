@@ -520,10 +520,10 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 		// letters as just the plain letter key, which we don't want.
 		return treat_as_visible;
 
-	static vk_type pending_dead_key_vk = 0;
-	static sc_type pending_dead_key_sc = 0; // Need to track this separately because sometimes default mapping isn't correct.
-	static bool pending_dead_key_used_shift = false;
-	static bool pending_dead_key_used_altgr = false;
+	static vk_type sPendingDeadKeyVK = 0;
+	static sc_type sPendingDeadKeySC = 0; // Need to track this separately because sometimes default mapping isn't correct.
+	static bool sPendingDeadKeyUsedShift = false;
+	static bool sPendingDeadKeyUsedAltGr = false;
 
 	// v1.0.21: Only true (unmodified) backspaces are recognized by the below.  Another reason to do
 	// this is that ^backspace has a native function (delete word) different than backspace in many editors.
@@ -536,8 +536,8 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 				g_input.buffer[--g_input.BufferLength] = '\0';
 		if (do_monitor_hotstring && g_HSBufLength)
 			g_HSBuf[--g_HSBufLength] = '\0';
-		if (pending_dead_key_vk) // Doing this produces the expected behavior when a backspace occurs immediately after a dead key.
-			pending_dead_key_vk = 0;
+		if (sPendingDeadKeyVK) // Doing this produces the expected behavior when a backspace occurs immediately after a dead key.
+			sPendingDeadKeyVK = 0;
 		return treat_as_visible;
 	}
 
@@ -565,7 +565,7 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 	// More notes about dead keys: The dead key behavior of Enter/Space/Backspace is already properly
 	// maintained when an Input or hotstring monitoring is in effect.  In addition, keys such as the
 	// following already work okay (i.e. the user can press them in between the pressing of a dead
-	// key and it's finishing/base/trigger key without disrupting the production of diacritic letters)
+	// key and it's finishing/base/trigger key without disrupting the production of diacritical letters)
 	// because ToAsciiEx() finds no translation-to-char for them:
 	// pgup/dn/home/end/ins/del/arrowkeys/f1-f24/etc.
 	// Note that if a pending dead key is followed by the press of another dead key (including itself),
@@ -583,73 +583,25 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 	// completing/triggering it, do a workaround for the side-effects of ToAsciiEx().  This workaround
 	// allows dead keys to continue to operate properly in the user's foreground window, while still
 	// being capturable by the Input command and recognizable by any defined hotstrings whose
-	// abbreviations use diacritic letters:
-	if (pending_dead_key_vk && vk != VK_TAB && vk != VK_ESCAPE)
-	{
-		vk_type vk_to_send = pending_dead_key_vk;
-		pending_dead_key_vk = 0; // First reset this because below results in a recursive call to keyboard hook.
-		// If there's an Input in progress and it's invisible, the foreground app won't see the keystrokes,
-		// thus no need to re-insert the dead key into the keyboard buffer.  Note that the Input might have
-		// been in progress upon entry to this function but now isn't due to INPUT_TERMINATED_BY_ENDKEY above.
-		if (treat_as_visible)
-		{
-			// Tell the recursively called next instance of the keyboard hook not do the following for
-			// the below KEYEVENT_PHYS: Do not call ToAsciiEx() on it and do not capture it as part of
-			// the Input itself.  Although this is only needed for the case where the statement
-			// "(do_input && g_input.status == INPUT_IN_PROGRESS && !g_input.IgnoreAHKInput)" is true
-			// (since hotstrings don't capture/monitor AHK-generated input), it's simpler and about the
-			// same in performance to do it unconditonally:
-			vk_to_ignore_next_time_down = vk_to_send;
-			// Ensure the correct shift-state is set for the below event.  The correct shift key (left or
-			// right) must be used to prevent sticking keys and other side-effects:
-			vk_type which_shift_down = 0;
-			if (g_modifiersLR_logical & MOD_LSHIFT)
-				which_shift_down = VK_LSHIFT;
-			else if (g_modifiersLR_logical & MOD_RSHIFT)
-				which_shift_down = VK_RSHIFT;
-			vk_type which_shift_to_send = which_shift_down ? which_shift_down : VK_LSHIFT;
-			if (pending_dead_key_used_shift != (bool)which_shift_down)
-				KeyEvent(pending_dead_key_used_shift ? KEYDOWN : KEYUP, which_shift_to_send);
-			// v1.0.25.14: Apply AltGr too, if necessary.  This is necessary because some keyboard
-			// layouts have dead keys that are manifest only by holding down AltGr and pressing
-			// another key.  If this weren't done, a hotstring script running on Belgian/French
-			// layout (and probably many others that have AltGr dead keys) would disrupt the user's
-			// ability to use the tilde dead key.  For example, pressing AltGr+Slash (equals sign
-			// on Belgian keyboard) followed by the letter o should produce the tilde-over-o
-			// character, but it would not if the following AltGr fix isn't in effect.
-			// If pending_dead_key_used_altgr is true, the current keyboard layout has an AltGr key.
-			// That plus the fact that VK_RMENU is not down should mean definitively that AltGr is not
-			// down. Also, it might be necessary to assign the below to a variable more than just for
-			// performance/readability: KeyEvent() results in a recursive call to this hook function,
-			// which causes g_modifiersLR_logical to be different after the call.
-			bool apply_altgr = pending_dead_key_used_altgr && !(g_modifiersLR_logical & MOD_RALT);
-			if (apply_altgr) // Push down RAlt even if the dead key was achieved via Ctrl+Alt: 1) For code simplicity; 2) It might improve compatibility with Putty and other apps that demand that AltGr be RAlt (not Ctrl+Alt).
-				KeyEvent(KEYDOWN, VK_RMENU); // This will also push down LCTRL as an intrinsic part of AltGr's functionality.
-			// Since it's a substitute for the previously suppressed physical dead key event, mark it as physical:
-			KEYEVENT_PHYS(KEYDOWNANDUP, vk_to_send, pending_dead_key_sc);
-			if (apply_altgr)
-				KeyEvent(KEYUP, VK_RMENU); // This will also release LCTRL as an intrinsic part of AltGr's functionality.
-			if (pending_dead_key_used_shift != (bool)which_shift_down) // Restore the original shift state.
-				KeyEvent(pending_dead_key_used_shift ? KEYUP : KEYDOWN, which_shift_to_send);
-		}
-	}
-	else if (byte_count < 0) // It's a dead key not already handled by the above (i.e. that does not immediately follow a pending dead key).
+	// abbreviations use diacritical letters:
+	bool dead_key_sequence_complete = sPendingDeadKeyVK && vk != VK_TAB && vk != VK_ESCAPE;
+	if (byte_count < 0 && !dead_key_sequence_complete) // It's a dead key and it doesn't complete a sequence (i.e. there is no pending dead key before it).
 	{
 		if (treat_as_visible)
 		{
-			pending_dead_key_vk = vk;
-			pending_dead_key_sc = sc;
-			pending_dead_key_used_shift = g_modifiersLR_logical & (MOD_LSHIFT | MOD_RSHIFT);
+			sPendingDeadKeyVK = vk;
+			sPendingDeadKeySC = sc;
+			sPendingDeadKeyUsedShift = g_modifiersLR_logical & (MOD_LSHIFT | MOD_RSHIFT);
 			// Detect AltGr as fully and completely as possible in case the current keyboard layout
 			// doesn't even have an AltGr key.  The section above which references
-			// pending_dead_key_used_altgr relies on this check having been done here.  UPDATE:
+			// sPendingDeadKeyUsedAltGr relies on this check having been done here.  UPDATE:
 			// v1.0.35.10: Allow Ctrl+Alt to be seen as AltGr too, which allows users to press Ctrl+Alt+Deadkey
 			// rather than AltGr+Deadkey.  It might also resolve other issues.  This change seems okay since
 			// the mere fact that this IS a dead key (as checked above) should mean that it's a deadkey made
 			// manifest through AltGr.
 			// Previous method:
-			//pending_dead_key_used_altgr = (g_modifiersLR_logical & (MOD_LCONTROL | MOD_RALT)) == (MOD_LCONTROL | MOD_RALT);
-			pending_dead_key_used_altgr = (g_modifiersLR_logical & (MOD_LCONTROL | MOD_RCONTROL))
+			//sPendingDeadKeyUsedAltGr = (g_modifiersLR_logical & (MOD_LCONTROL | MOD_RALT)) == (MOD_LCONTROL | MOD_RALT);
+			sPendingDeadKeyUsedAltGr = (g_modifiersLR_logical & (MOD_LCONTROL | MOD_RCONTROL))
 				&& (g_modifiersLR_logical & (MOD_LALT | MOD_RALT));
 		}
 		// Dead keys must always be hidden, otherwise they would be shown twice literally due to
@@ -694,7 +646,7 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 		if (g_HSBufLength)
 		{
 			char *cphs, *cpbuf, *cpcase_start, *cpcase_end;
-			int characters_with_case;
+			int case_capable_characters;
 			bool first_char_with_case_is_upper, first_char_with_case_has_gone_by;
 			CaseConformModes case_conform_mode;
 
@@ -736,14 +688,14 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 					//::áê::Replacement Text
 					// Update #2: On balance, it's not a clear win to use CharUpper since it
 					// is expected to perform significantly worse than toupper.  Others have
-					// said these Windows API functions that support diacritic letters can be
+					// said these Windows API functions that support diacritical letters can be
 					// dramatically slower than the C-lib functions, though I haven't specifically
 					// seen anything about CharUpper() being bad.  But since performance is of
 					// particular concern here in the hook -- especially if there are hundreds
 					// of hotstrings that need to be checked after each keystroke -- it seems
 					// best to stick to toupper() (note that the Input command's searching loops
 					// [further below] also use toupper() via stricmp().  One justification for
-					// this is that it is rare to have diacritic letters in hotstrings, and even
+					// this is that it is rare to have diacritical letters in hotstrings, and even
 					// rarer that someone would require them to be case insensitive.  There
 					// are ways to script hotstring variants to work around this limitation.
 					for (; cphs >= hs.mString; --cpbuf, --cphs)
@@ -771,10 +723,10 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 							--cpcase_end;
 						// Bug-fix for v1.0.19: First find out how many of the characters in the abbreviation
 						// have upper and lowercase versions (i.e. exclude digits, punctuation, etc):
-						for (characters_with_case = 0, first_char_with_case_is_upper = first_char_with_case_has_gone_by = false
+						for (case_capable_characters = 0, first_char_with_case_is_upper = first_char_with_case_has_gone_by = false
 							, cpcase_start = cpcase_end - hs.mStringLength
 							; cpcase_start < cpcase_end; ++cpcase_start)
-							if (IsCharLower(*cpcase_start) || IsCharUpper(*cpcase_start)) // A case-potential char.
+							if (IsCharLower(*cpcase_start) || IsCharUpper(*cpcase_start)) // A case-capable char.
 							{
 								if (!first_char_with_case_has_gone_by)
 								{
@@ -782,11 +734,11 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 									if (IsCharUpper(*cpcase_start))
 										first_char_with_case_is_upper = true; // Override default.
 								}
-								++characters_with_case;
+								++case_capable_characters;
 							}
-						if (!characters_with_case) // All characters in the abbreviation are caseless.
+						if (!case_capable_characters) // All characters in the abbreviation are caseless.
 							case_conform_mode = CASE_CONFORM_NONE;
-						else if (characters_with_case == 1)
+						else if (case_capable_characters == 1)
 							// Since there is only a single character with case potential, it seems best as
 							// a default behavior to capitalize the first letter of the replacment whenever
 							// that character was typed in uppercase.  The behavior can be overridden by
@@ -823,10 +775,10 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 					//:*?B0:11::
 					//MsgBox,0,test,%A_ThisHotkey%,1 ; Show which key was pressed and close the window after a second.
 					//return
-					// There are probably many other (albeit obscure) uses for the reset option (this has
+					// There are probably many other uses (albeit obscure) for the reset option (this has
 					// been brought up in the forum at least twice).
 					if (hs.mDoReset)
-						g_HSBufLength = 0; // The buffer will be terminated further below.
+						g_HSBufLength = 0; // Further below, the buffer will be terminated to reflect this change.
 					if (*hs.mReplacement)
 					{
 						// Since the buffer no longer reflects what is actually on screen to the left
@@ -887,6 +839,65 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 			} // for()
 		} // if buf not empty
 	} // Yes, do collect hotstring input.
+
+	// Fix for v1.0.37.06: The following section was moved beneath the hotstring section so that
+	// the hotstring section has a chance to set treat_as_visible to false for use below. This fixes
+	// wildcard hotstrings whose final character is diacritic, which would otherwise have the
+	// dead key reinserted below, which in turn would cause the hotstring's first backspace to fire
+	// the dead key (which kills the backspace, turning it into the dead key character itself).
+	// For example:
+	// :*:jsá::jsmith@somedomain.com
+	// On the Spanish (Mexico) keyboard layout, one would type accent (English left bracket) followed by
+	// the letter "a" to produce á.
+	if (dead_key_sequence_complete)
+	{
+		vk_type vk_to_send = sPendingDeadKeyVK; // To facilitate early reset below.
+		sPendingDeadKeyVK = 0; // First reset this because below results in a recursive call to keyboard hook.
+		// If there's an Input in progress and it's invisible, the foreground app won't see the keystrokes,
+		// thus no need to re-insert the dead key into the keyboard buffer.  Note that the Input might have
+		// been in progress upon entry to this function but now isn't due to INPUT_TERMINATED_BY_ENDKEY above.
+		if (treat_as_visible)
+		{
+			// Tell the recursively called next instance of the keyboard hook not do the following for
+			// the below KEYEVENT_PHYS: Do not call ToAsciiEx() on it and do not capture it as part of
+			// the Input itself.  Although this is only needed for the case where the statement
+			// "(do_input && g_input.status == INPUT_IN_PROGRESS && !g_input.IgnoreAHKInput)" is true
+			// (since hotstrings don't capture/monitor AHK-generated input), it's simpler and about the
+			// same in performance to do it unconditonally:
+			sVKtoIgnoreNextTimeDown = vk_to_send;
+			// Ensure the correct shift-state is set for the below event.  The correct shift key (left or
+			// right) must be used to prevent sticking keys and other side-effects:
+			vk_type which_shift_down = 0;
+			if (g_modifiersLR_logical & MOD_LSHIFT)
+				which_shift_down = VK_LSHIFT;
+			else if (g_modifiersLR_logical & MOD_RSHIFT)
+				which_shift_down = VK_RSHIFT;
+			vk_type which_shift_to_send = which_shift_down ? which_shift_down : VK_LSHIFT;
+			if (sPendingDeadKeyUsedShift != (bool)which_shift_down)
+				KeyEvent(sPendingDeadKeyUsedShift ? KEYDOWN : KEYUP, which_shift_to_send);
+			// v1.0.25.14: Apply AltGr too, if necessary.  This is necessary because some keyboard
+			// layouts have dead keys that are manifest only by holding down AltGr and pressing
+			// another key.  If this weren't done, a hotstring script running on Belgian/French
+			// layout (and probably many others that have AltGr dead keys) would disrupt the user's
+			// ability to use the tilde dead key.  For example, pressing AltGr+Slash (equals sign
+			// on Belgian keyboard) followed by the letter o should produce the tilde-over-o
+			// character, but it would not if the following AltGr fix isn't in effect.
+			// If sPendingDeadKeyUsedAltGr is true, the current keyboard layout has an AltGr key.
+			// That plus the fact that VK_RMENU is not down should mean definitively that AltGr is not
+			// down. Also, it might be necessary to assign the below to a variable more than just for
+			// performance/readability: KeyEvent() results in a recursive call to this hook function,
+			// which causes g_modifiersLR_logical to be different after the call.
+			bool apply_altgr = sPendingDeadKeyUsedAltGr && !(g_modifiersLR_logical & MOD_RALT);
+			if (apply_altgr) // Push down RAlt even if the dead key was achieved via Ctrl+Alt: 1) For code simplicity; 2) It might improve compatibility with Putty and other apps that demand that AltGr be RAlt (not Ctrl+Alt).
+				KeyEvent(KEYDOWN, VK_RMENU); // This will also push down LCTRL as an intrinsic part of AltGr's functionality.
+			// Since it's a substitute for the previously suppressed physical dead key event, mark it as physical:
+			KEYEVENT_PHYS(KEYDOWNANDUP, vk_to_send, sPendingDeadKeySC);
+			if (apply_altgr)
+				KeyEvent(KEYUP, VK_RMENU); // This will also release LCTRL as an intrinsic part of AltGr's functionality.
+			if (sPendingDeadKeyUsedShift != (bool)which_shift_down) // Restore the original shift state.
+				KeyEvent(sPendingDeadKeyUsedShift ? KEYUP : KEYDOWN, which_shift_to_send);
+		}
+	}
 
 	// Note that it might have been in progress upon entry to this function but now isn't due to
 	// INPUT_TERMINATED_BY_ENDKEY above:
@@ -1012,8 +1023,8 @@ LRESULT AllowIt(HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, vk_type vk, s
 
 	// This is done unconditionally so that even if a qualified Input is not in progress, the
 	// variable will be correctly reset anyway:
-	if (vk_to_ignore_next_time_down && vk_to_ignore_next_time_down == vk && !key_up)
-		vk_to_ignore_next_time_down = 0;  // i.e. this ignore-for-the-sake-of-CollectInput() ticket has now been used.
+	if (sVKtoIgnoreNextTimeDown && sVKtoIgnoreNextTimeDown == vk && !key_up)
+		sVKtoIgnoreNextTimeDown = 0;  // i.e. this ignore-for-the-sake-of-CollectInput() ticket has now been used.
 	else if ((Hotstring::shs && !is_ignored) || (g_input.status == INPUT_IN_PROGRESS && !(g_input.IgnoreAHKInput && is_ignored)))
 		if (!CollectInput(*pEvent, vk, sc, key_up, is_ignored)) // Key should be invisible (suppressed).
 			return SuppressThisKey;
@@ -1092,17 +1103,17 @@ LRESULT AllowIt(HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, vk_type vk, s
 	}
 
 	// Bug-fix for v1.0.20: The below section was moved out of LowLevelKeybdProc() to here because
-	// alt_tab_menu_is_visible should not be set to true prior to knowing whether the current tab-down
+	// sAltTabMenuIsVisible should not be set to true prior to knowing whether the current tab-down
 	// event will be suppressed.  This is because if it is suppressed, the menu will not become visible
 	// after all since the system will never see the tab-down event.
-	// Having this extra check here, in addition to the other(s) that set alt_tab_menu_is_visible to be
+	// Having this extra check here, in addition to the other(s) that set sAltTabMenuIsVisible to be
 	// true, allows AltTab and ShiftAltTab hotkeys to function even when the AltTab menu was invoked by
 	// means other than an AltTabMenu or AltTabAndMenu hotkey.  The alt-tab menu becomes visible only
 	// under these exact conditions, at least under WinXP:
-	if (vk == VK_TAB && !key_up && !alt_tab_menu_is_visible
+	if (vk == VK_TAB && !key_up && !sAltTabMenuIsVisible
 		&& (g_modifiersLR_logical & (MOD_LALT | MOD_RALT)) // At least one ALT key is down.
 		&& !(g_modifiersLR_logical & (MOD_LCONTROL | MOD_RCONTROL))) // Neither CTRL key is down.
-		alt_tab_menu_is_visible = true;
+		sAltTabMenuIsVisible = true;
 
 	if (!kvk[vk].as_modifiersLR)
 		return CallNextHookEx(hhk, code, wParam, lParam);
@@ -1110,16 +1121,16 @@ LRESULT AllowIt(HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, vk_type vk, s
 	// Due to above, we now know it's a modifier.
 
 	// Don't do it this way because then the alt key itself can't be reliable used as "AltTabMenu"
-	// (due to ShiftAltTab causing alt_tab_menu_is_visible to become false):
-	//if (   alt_tab_menu_is_visible && !((g_modifiersLR_logical & MOD_LALT) || (g_modifiersLR_logical & MOD_RALT))
+	// (due to ShiftAltTab causing sAltTabMenuIsVisible to become false):
+	//if (   sAltTabMenuIsVisible && !((g_modifiersLR_logical & MOD_LALT) || (g_modifiersLR_logical & MOD_RALT))
 	//	&& !(key_up && pKeyHistoryCurr->event_type == 'h')   )  // In case the alt key itself is "AltTabMenu"
-	if (   alt_tab_menu_is_visible && (vk == VK_MENU || vk == VK_LMENU || vk == VK_RMENU) && key_up
+	if (   sAltTabMenuIsVisible && (vk == VK_MENU || vk == VK_LMENU || vk == VK_RMENU) && key_up
 		// In case the alt key itself is "AltTabMenu":
 		&& pKeyHistoryCurr->event_type != 'h' && pKeyHistoryCurr->event_type != 's'   )
-		// It's important to reset in this case because if alt_tab_menu_is_visible were to
+		// It's important to reset in this case because if sAltTabMenuIsVisible were to
 		// stay true and the user presses ALT in the future for a purpose other than to
 		// display the Alt-tab menu, we would incorrectly believe the menu to be displayed:
-		alt_tab_menu_is_visible = false;
+		sAltTabMenuIsVisible = false;
 
 	bool vk_is_win = vk == VK_LWIN || vk == VK_RWIN;
 	if (DisguiseWinAlt && key_up && (vk_is_win || vk == VK_LMENU
@@ -1370,7 +1381,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 			strcpy(pKeyHistoryCurr->target_window, "N/A");
 		g_HistoryHwndPrev = fore_win;  // Updated unconditionally in case fore_win is NULL.
 	}
-	// The following is done even if key history is disabled because alt_tab_menu_is_visible relies on it:
+	// The following is done even if key history is disabled because sAltTabMenuIsVisible relies on it:
 	pKeyHistoryCurr->event_type = is_ignored ? 'i' : ' ';
 
 #ifdef INCLUDE_KEYBD_HOOK
@@ -1459,14 +1470,14 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	// on the vk variable being available.  It also relies upon the fact that sc has
 	// already been properly determined. Also, in rare cases it may be necessary to disguise
 	// both left and right, which is why it's not done as a generic windows key:
-	if (   key_up && ((disguise_next_lwin_up && vk == VK_LWIN) || (disguise_next_rwin_up && vk == VK_RWIN)
-		 || (disguise_next_lalt_up && vk == VK_LMENU) || (disguise_next_ralt_up && vk == VK_RMENU))   )
+	if (   key_up && ((sDisguiseNextLWinUp && vk == VK_LWIN) || (sDisguiseNextRWinUp && vk == VK_RWIN)
+		 || (sDisguiseNextLAltUp && vk == VK_LMENU) || (sDisguiseNextRAltUp && vk == VK_RMENU))   )
 	{
 		// Do this first to avoid problems with reentrancy triggered by the KeyEvent() calls further below.
 		switch (vk)
 		{
-		case VK_LWIN: disguise_next_lwin_up = false; break;
-		case VK_RWIN: disguise_next_rwin_up = false; break;
+		case VK_LWIN: sDisguiseNextLWinUp = false; break;
+		case VK_RWIN: sDisguiseNextRWinUp = false; break;
 		// UPDATE: The comment below is no longer a concern since neutral keys are translated higher above
 		// into their left/right-specific counterpart:
 		// For now, assume VK_MENU the left alt key.  This neutral key is probably never received anyway
@@ -1474,8 +1485,8 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		// optimized to check the scan code and such (what's being done here isn't that essential to
 		// start with, so it's not a high priority -- but when it is done, be sure to review the
 		// above IF statement also).
-		case VK_LMENU: disguise_next_lalt_up = false; break;
-		case VK_RMENU: disguise_next_ralt_up = false; break;
+		case VK_LMENU: sDisguiseNextLAltUp = false; break;
+		case VK_RMENU: sDisguiseNextRAltUp = false; break;
 		}
 		// Send our own up-event to replace this one.  But since ours has the Shift key
 		// held down for it, the Start Menu or foreground window's menu bar won't be invoked.
@@ -1718,7 +1729,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		// Alt-tab need not be checked here (like it is in the similar section below) because all
 		// such hotkeys use (or were converted at load-time to use) a modifier_vk, not a set of
 		// modifiers or modifierlr's:
-		//if (hotkey_id_with_flags == HOTKEY_ID_INVALID && alt_tab_menu_is_visible)
+		//if (hotkey_id_with_flags == HOTKEY_ID_INVALID && sAltTabMenuIsVisible)
 		//...
 
 		if (hotkey_id_with_flags == HOTKEY_ID_INVALID)
@@ -2262,7 +2273,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		// down due to support displaying the menu) outweighs the cost, which seems low since
 		// it would be rare that anyone would press another hotkey while they are navigating through
 		// the Alt-Tab menu.
-		if (hotkey_id_with_flags == HOTKEY_ID_INVALID && alt_tab_menu_is_visible && vk != VK_TAB)
+		if (hotkey_id_with_flags == HOTKEY_ID_INVALID && sAltTabMenuIsVisible && vk != VK_TAB)
 		{
 			// Try again, this time without the ALT key in case the user is trying to
 			// activate an alt-tab related key (i.e. a special hotkey action such as AltTab
@@ -2271,7 +2282,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 			hotkey_id_with_flags = ksc[sc].sc_takes_precedence ? Kscm(modifiersLRnew, sc) : Kvkm(modifiersLRnew, vk);
 #else // Mouse hook:
 		hotkey_id_with_flags = Kvkm(g_modifiersLR_logical_non_ignored, vk);
-		if (hotkey_id_with_flags == HOTKEY_ID_INVALID && alt_tab_menu_is_visible)
+		if (hotkey_id_with_flags == HOTKEY_ID_INVALID && sAltTabMenuIsVisible)
 		{
 			modifiersLRnew &= ~(MOD_LALT | MOD_RALT);
 			hotkey_id_with_flags = Kvkm(modifiersLRnew, vk);
@@ -2403,9 +2414,9 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		// to disguise the key this way since the prefix-handling logic already does that
 		// whenever necessary:
 		if ((g_modifiersLR_logical & MOD_LWIN) && !kvk[VK_LWIN].used_as_prefix)
-			disguise_next_lwin_up = true;
+			sDisguiseNextLWinUp = true;
 		if ((g_modifiersLR_logical & MOD_RWIN) && !kvk[VK_RWIN].used_as_prefix)
-			disguise_next_rwin_up = true;
+			sDisguiseNextRWinUp = true;
 	}
 #else // Mouse hook
 	// The mouse hook requires suppression in more situations than the keyboard because the
@@ -2415,9 +2426,9 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	// #+MButton::return
 	// #^MButton::return
 	if ((g_modifiersLR_logical & MOD_LWIN) && !(g_modifiersLR_logical & (MOD_LALT|MOD_RALT)) && !kvk[VK_LWIN].used_as_prefix)
-		disguise_next_lwin_up = true;
+		sDisguiseNextLWinUp = true;
 	else if ((g_modifiersLR_logical & MOD_RWIN) && !(g_modifiersLR_logical & (MOD_LALT|MOD_RALT)) && !kvk[VK_RWIN].used_as_prefix)
-		disguise_next_rwin_up = true;
+		sDisguiseNextRWinUp = true;
 	// An earlier stage has ensured that the keyboard hook is installed for the above, because the sending
 	// of CTRL directly (here) would otherwise not suppress the Start Menu for LWin/RWin (though it does
 	// supress menu bar activation for ALT hotkeys, as described below).
@@ -2436,7 +2447,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	// keystrokes that comprise the hotkey.
 	else if ((g_modifiersLR_logical & MOD_LALT) && !kvk[VK_LMENU].used_as_prefix)
 		if (g_KeybdHook)
-			disguise_next_lalt_up = true;
+			sDisguiseNextLAltUp = true;
 		else
 			// Since no keyboard hook, no point in setting the variable because it would never be acted up.
 			// Instead, disguise the key now with a CTRL keystroke. Note that this is not done for
@@ -2449,7 +2460,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		// The two else if's above: If it's used as a prefix, there's no need (and it would probably break something)
 		// to disguise the key this way since the prefix-handling logic already does that whenever necessary.
 		if (g_KeybdHook)
-			disguise_next_ralt_up = true;
+			sDisguiseNextRAltUp = true;
 		else
 			KeyEvent(KEYDOWNANDUP, VK_CONTROL);
 
@@ -2470,7 +2481,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 	switch (hotkey_id_to_fire)
 	{
 		case HOTKEY_ID_ALT_TAB_MENU_DISMISS: // This case must occur before HOTKEY_ID_ALT_TAB_MENU due to non-break.
-			if (!alt_tab_menu_is_visible)
+			if (!sAltTabMenuIsVisible)
 				// Even if the menu really is displayed by other means, we can't easily detect it
 				// because it's not a real window?
 				return AllowKeyToGoToSystem;  // Let the key do its native function.
@@ -2484,7 +2495,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 			else if (g_modifiersLR_logical & MOD_RALT)
 				which_alt_down = VK_RMENU;
 
-			if (alt_tab_menu_is_visible)  // Can be true even if which_alt_down is zero.
+			if (sAltTabMenuIsVisible)  // Can be true even if which_alt_down is zero.
 			{
 				if (hotkey_id_to_fire != HOTKEY_ID_ALT_TAB_AND_MENU) // then it is MENU or DISMISS.
 				{
@@ -2505,7 +2516,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 						// the start menu in certain hotkey configurations.  This policy
 						// might not be the right one for everyone, however:
 						KeyEvent(KEYUP, vk); // Can't send sc here since it's not defined for the mouse hook.
-					alt_tab_menu_is_visible = false;
+					sAltTabMenuIsVisible = false;
 					break;
 				}
 				// else HOTKEY_ID_ALT_TAB_AND_MENU, do nothing (don't break) because we want
@@ -2592,7 +2603,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 				// go back to the first icon in the menu, it seems best to leave it where
 				// it is because usually the user will want to go forward at least one item.
 				// Going backward through the menu is a lot more rare for most people.
-				alt_tab_menu_is_visible = true;
+				sAltTabMenuIsVisible = true;
 				break;
 			}
 		}
@@ -2607,7 +2618,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 			// MButton::AltTabMenu
 			// WheelDown::AltTab     ; But if the menu is displayed, the wheel will function normally.
 			// WheelUp::ShiftAltTab  ; But if the menu is displayed, the wheel will function normally.
-			if (!alt_tab_menu_is_visible)
+			if (!sAltTabMenuIsVisible)
 				// Even if the menu really is displayed by other means, we can't easily detect it
 				// because it's not a real window?
 				return AllowKeyToGoToSystem;

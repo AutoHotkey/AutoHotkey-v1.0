@@ -77,7 +77,7 @@ extern bool g_IsSuspended;
 extern int g_nLayersNeedingTimer;
 extern int g_nThreads;
 extern int g_nPausedThreads;
-extern bool g_UnpauseWhenResumed;
+extern bool g_IdleIsPaused;
 extern int g_MaxHistoryKeys;
 
 extern VarSizeType g_MaxVarCapacity;

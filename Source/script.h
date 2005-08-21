@@ -1215,16 +1215,21 @@ public:
 		if (!strlicmp(aBuf, "Wave", length_to_check)) return MIXERLINE_COMPONENTTYPE_SRC_WAVEOUT;
 		if (!strlicmp(aBuf, "Aux", length_to_check)) return MIXERLINE_COMPONENTTYPE_SRC_AUXILIARY;
 		if (!strlicmp(aBuf, "Analog", length_to_check)) return MIXERLINE_COMPONENTTYPE_SRC_ANALOG;
-		return MIXERLINE_COMPONENTTYPE_DST_UNDEFINED;
+		// v1.0.37.06: The following was added because it's legitimate on some sound cards such as
+		// SB Audigy's recording (dest #2) Wave/Mp3 volume:
+		if (!strlicmp(aBuf, "N/A", length_to_check)) return MIXERLINE_COMPONENTTYPE_SRC_UNDEFINED; // 0x1000
+		return MIXERLINE_COMPONENTTYPE_DST_UNDEFINED; // Zero.
 	}
 	static DWORD SoundConvertControlType(char *aBuf)
 	{
-		// These are the types that seem to correspond to actual sound attributes.  Some of the values
-		// are not included here, such as MIXERCONTROL_CONTROLTYPE_FADER, which seems to be a type of
-		// sound control rather than a quality of the sound itself.  For performance, put the most
-		// often used ones up top:
-		if (!stricmp(aBuf, "Vol")) return MIXERCONTROL_CONTROLTYPE_VOLUME;
-		if (!stricmp(aBuf, "Volume")) return MIXERCONTROL_CONTROLTYPE_VOLUME;
+		// v1.0.37.06: The following was added to allow unnamed control types (if any) to be accessed via number:
+		if (IsPureNumeric(aBuf, false, false, true)) // Seems best to allowing floating point here, since .000 on the end might happen sometimes.
+			return ATOU(aBuf);
+		// The following are the types that seem to correspond to actual sound attributes.  Some of the
+		// values are not included here, such as MIXERCONTROL_CONTROLTYPE_FADER, which seems to be a type
+		// of sound control rather than a quality of the sound itself.  For performance, put the most
+		// often used ones up top.
+		if (!stricmp(aBuf, "Vol") || !stricmp(aBuf, "Volume")) return MIXERCONTROL_CONTROLTYPE_VOLUME;
 		if (!stricmp(aBuf, "OnOff")) return MIXERCONTROL_CONTROLTYPE_ONOFF;
 		if (!stricmp(aBuf, "Mute")) return MIXERCONTROL_CONTROLTYPE_MUTE;
 		if (!stricmp(aBuf, "Mono")) return MIXERCONTROL_CONTROLTYPE_MONO;
@@ -1236,7 +1241,7 @@ public:
 		if (!stricmp(aBuf, "Bass")) return MIXERCONTROL_CONTROLTYPE_BASS;
 		if (!stricmp(aBuf, "Treble")) return MIXERCONTROL_CONTROLTYPE_TREBLE;
 		if (!stricmp(aBuf, "Equalizer")) return MIXERCONTROL_CONTROLTYPE_EQUALIZER;
-		#define MIXERCONTROL_CONTROLTYPE_INVALID 0 // 0 seems like a safe "undefined" indicator for this type.
+		#define MIXERCONTROL_CONTROLTYPE_INVALID 0xFFFFFFFF // 0 might be a valid type, so use something definitely undefined.
 		return MIXERCONTROL_CONTROLTYPE_INVALID;
 	}
 
@@ -1702,7 +1707,7 @@ public:
 	char *ToText(char *aBuf, int aBufSize, bool aCRLF, DWORD aElapsed = 0, bool aLineWasResumed = false);
 
 	static void ToggleSuspendState();
-	ResultType ChangePauseState(ToggleValueType aChangeTo);
+	ResultType ChangePauseState(ToggleValueType aChangeTo, bool aAlwaysOperateOnUnderlyingThread);
 	static ResultType ScriptBlockInput(bool aEnable);
 
 	Line *PreparseError(char *aErrorText, char *aExtraInfo = "");

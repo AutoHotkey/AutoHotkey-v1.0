@@ -699,7 +699,7 @@ ResultType Script::ExitApp(ExitReasons aExitReason, char *aBuf, int aExitCode)
 	strlcpy(g.ErrorLevel, g_ErrorLevel->Contents(), sizeof(g.ErrorLevel)); // Save caller's errorlevel.
 	global_struct global_saved;
 	CopyMemory(&global_saved, &g, sizeof(global_struct));
-	CopyMemory(&g, &g_default, sizeof(global_struct)); // Mirrors the behavior of INIT_NEW_THREAD
+	InitNewThread(0, true, true); // Since this special thread should always run, no checking of g_MaxThreadsTotal is done before calling this.
 
 	// Make it start fresh to avoid unnecessary delays due to SetBatchLines:
 	g_script.mLinesExecutedThisCycle = 0;
@@ -739,19 +739,17 @@ ResultType Script::ExitApp(ExitReasons aExitReason, char *aBuf, int aExitCode)
 	g_script.UpdateTrayIcon();
 
 	sExitLabelIsRunning = true;
-	++g_nThreads;  // i.e. This special thread does not obey g_MaxThreadsTotal.
 	if (mOnExitLabel->mJumpToLine->ExecUntil(UNTIL_RETURN) == FAIL)
 		// If the subroutine encounters a failure condition such as a runtime error, exit immediately.
 		// Otherwise, there will be no way to exit the script if the subroutine fails on each attempt.
 		TerminateApp(aExitCode);
-	--g_nThreads;  // Since this instance of this function only had one thread in use at a time.
 	sExitLabelIsRunning = false;  // In case the user wanted the thread to end normally (see above).
 
 	if (terminate_afterward)
 		TerminateApp(aExitCode);
 
 	// Otherwise:
-	RESUME_UNDERLYING_THREAD // For explanation, see comments where the macro is defined.
+	ResumeUnderlyingThread(&global_saved);
 	g_AllowInterruption = g_AllowInterruption_prev;  // Restore original setting.
 	if (uninterruptible_timer_was_pending)
 		// Update: An alternative to the below would be to make the current thread interruptible
@@ -4353,7 +4351,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		}
 		if (*NEW_RAW_ARG2 && !line.ArgHasDeref(2) && !line.SoundConvertComponentType(NEW_RAW_ARG2))
 			return ScriptError(ERR_PARAM2_INVALID, NEW_RAW_ARG2);
-		if (*NEW_RAW_ARG3 && !line.ArgHasDeref(3) && !line.SoundConvertControlType(NEW_RAW_ARG3))
+		if (*NEW_RAW_ARG3 && !line.ArgHasDeref(3) && line.SoundConvertControlType(NEW_RAW_ARG3) == MIXERCONTROL_CONTROLTYPE_INVALID)
 			return ScriptError(ERR_PARAM3_INVALID, NEW_RAW_ARG3);
 		break;
 
@@ -10449,7 +10447,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		}
 		return OK;
 	case ACT_PAUSE:
-		return ChangePauseState(ConvertOnOffToggle(ARG1));
+		return ChangePauseState(ConvertOnOffToggle(ARG1), (bool)ATOI(ARG2));
 	case ACT_AUTOTRIM:
 		if (   (toggle = ConvertOnOff(ARG1, NEUTRAL)) != NEUTRAL   )
 			g.AutoTrim = (toggle == TOGGLED_ON);
@@ -14588,7 +14586,7 @@ void Line::ToggleSuspendState()
 
 
 
-ResultType Line::ChangePauseState(ToggleValueType aChangeTo)
+ResultType Line::ChangePauseState(ToggleValueType aChangeTo, bool aAlwaysOperateOnUnderlyingThread)
 // Returns OK or FAIL.
 // Note: g_Idle must be false since we're always called from a script subroutine, not from
 // the tray menu.  Therefore, the value of g_Idle need never be checked here.
@@ -14596,50 +14594,60 @@ ResultType Line::ChangePauseState(ToggleValueType aChangeTo)
 	switch (aChangeTo)
 	{
 	case TOGGLED_ON:
-		// Pause the current subroutine (which by definition isn't paused since it had to be 
-		// active to call us).  It seems best not to attempt to change the Hotkey mRunAgainAfterFinished
-		// attribute for the current hotkey (assuming it's even a hotkey that got us here) or
-		// for them all.  This is because it's conceivable that this Pause command occurred
-		// in a background thread, such as a timed subroutine, in which case we wouldn't want the
-		// pausing of that thread to affect anything else the user might be doing with hotkeys.
-		// UPDATE: The above is flawed because by definition the script's quasi-thread that got
-		// us here is now active.  Since it is active, the script will immediately become dormant
-		// when this is executed, waiting for the user to press a hotkey to launch a new
-		// quasi-thread.  Thus, it seems best to reset all the mRunAgainAfterFinished flags
-		// in case we are in a hotkey subroutine and in case this hotkey has a buffered repeat-again
-		// action pending, which the user probably wouldn't want to happen after the script is unpaused:
-		#define PAUSE_CURRENT_THREAD \
-		{\
-			Hotkey::ResetRunAgainAfterFinished();\
-			g.IsPaused = true;\
-			++g_nPausedThreads;\
-			g_script.UpdateTrayIcon();\
-			CheckMenuItem(GetMenu(g_hWnd), ID_FILE_PAUSE, MF_CHECKED);\
-		}
-		PAUSE_CURRENT_THREAD
-		return OK;
+		break; // By breaking insteading of returning, pause will be put into effect further below.
 	case TOGGLED_OFF:
-		// Unpause the uppermost underlying paused subroutine.  If none of the interrupted subroutines
-		// are paused, do nothing. This relies on the fact that the current script subroutine,
-		// which got us here, cannot itself be currently paused by definition:
-		if (g_nPausedThreads > 0)
-			g_UnpauseWhenResumed = true;
+		// v1.0.37.06: The old method was to unpause the the nearest paused thread on the call stack;
+		// but it was flawed because if the thread that made the flag true is interrupted, and the new
+		// thread is paused via the pause command, and that thread is then interrupted, when the paused
+		// thread resumes it would automatically and wrongly be unpaused (i.e. the unpause ticket would
+		// be used at a level higher in the call stack than intended).
+		// Flag this thread so that when it ends, the thread beneath it will be unpaused.  If that thread
+		// (which can be the idle thread) isn't paused the following flag-change will be ignored at a later
+		// stage. This method also relies on the fact that the current thread cannot itself be paused right
+		// now because it is what got us here.
+		g.UnderlyingThreadIsPaused = false; // Necessary even for the "idle thread" (otherwise, the Pause command wouldn't be able to unpause it).
 		return OK;
 	case NEUTRAL: // the user omitted the parameter entirely, which is considered the same as "toggle"
 	case TOGGLE:
-		// See TOGGLED_OFF comment above:
-		if (g_nPausedThreads > 0)
-			g_UnpauseWhenResumed = true;
-		else
-			// Since there are no underlying paused subroutines, pause the current subroutine.
-			// There must be a current subroutine (i.e. the script can't be idle) because
-			// it's the one that called us directly, and we know it's not paused:
-			PAUSE_CURRENT_THREAD
-		return OK;
+		// Update for v1.0.37.06: "Pause" and "Pause Toggle" are more useful if they always apply to the
+		// thread immediately beneath the current thread rather than "any underlying thread that's paused".
+		if (g.UnderlyingThreadIsPaused)
+		{
+			g.UnderlyingThreadIsPaused = false; // Flag it to be unpaused when it gets resumed.
+			return OK;
+		}
+		// Otherwise, since the underlying thread is not paused, continue onward to do the "pause enabled"
+		// logic below:
+		break;
 	default: // TOGGLE_INVALID or some other disallowed value.
 		// We know it's a variable because otherwise the loading validation would have caught it earlier:
 		return LineError(ERR_PARAM1_INVALID, FAIL, ARG1);
 	}
+
+	// Since above didn't return, pause should be turned on.
+	if (aAlwaysOperateOnUnderlyingThread) // v1.0.37.06: Allow underlying thread to be directly paused rather than pausing the current thread.
+	{
+		g.UnderlyingThreadIsPaused = true; // If the underlying thread is already paused, this flag change will be ignored at a later stage.
+		return OK;
+	}
+	// Otherwise, pause the current subroutine (which by definition isn't paused since it had to be 
+	// active to call us).  It seems best not to attempt to change the Hotkey mRunAgainAfterFinished
+	// attribute for the current hotkey (assuming it's even a hotkey that got us here) or
+	// for them all.  This is because it's conceivable that this Pause command occurred
+	// in a background thread, such as a timed subroutine, in which case we wouldn't want the
+	// pausing of that thread to affect anything else the user might be doing with hotkeys.
+	// UPDATE: The above is flawed because by definition the script's quasi-thread that got
+	// us here is now active.  Since it is active, the script will immediately become dormant
+	// when this is executed, waiting for the user to press a hotkey to launch a new
+	// quasi-thread.  Thus, it seems best to reset all the mRunAgainAfterFinished flags
+	// in case we are in a hotkey subroutine and in case this hotkey has a buffered repeat-again
+	// action pending, which the user probably wouldn't want to happen after the script is unpaused:
+	Hotkey::ResetRunAgainAfterFinished();
+	g.IsPaused = true;
+	++g_nPausedThreads; // Always incremented because we're never called to pause the "idle thread", only real threads.
+	g_script.UpdateTrayIcon();
+	CheckMenuItem(GetMenu(g_hWnd), ID_FILE_PAUSE, MF_CHECKED);
+	return OK;
 }
 
 

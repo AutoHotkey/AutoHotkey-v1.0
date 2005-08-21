@@ -1498,8 +1498,7 @@ void Hotstring::DoReplace(LPARAM alParam)
 		int backspace_count = mStringLength - 1;
 		if (mEndCharRequired)
 			++backspace_count;
-		int i;
-		for (start_of_replacement = SendBuf, i = 0; i < backspace_count; ++i)
+		for (int i = 0; i < backspace_count; ++i)
 			*start_of_replacement++ = '\b';  // Use raw backspaces, not {BS n}, in case the send will be raw.
 		*start_of_replacement = '\0';
 	}

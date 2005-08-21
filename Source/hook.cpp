@@ -27,12 +27,12 @@ GNU General Public License for more details.
 // These are made global, rather than static inside the hook function, so that
 // we can ensure they are initialized by the keyboard init function every
 // time it's called (currently it can be only called once):
-static bool disguise_next_lwin_up = false;
-static bool disguise_next_rwin_up = false;
-static bool disguise_next_lalt_up = false;
-static bool disguise_next_ralt_up = false;
-static bool alt_tab_menu_is_visible = false;
-static vk_type vk_to_ignore_next_time_down = 0;
+static bool sDisguiseNextLWinUp = false;
+static bool sDisguiseNextRWinUp = false;
+static bool sDisguiseNextLAltUp = false;
+static bool sDisguiseNextRAltUp = false;
+static bool sAltTabMenuIsVisible = false;
+static vk_type sVKtoIgnoreNextTimeDown = 0;
 
 #ifdef HOOK_WARNING
 static HANDLE keybd_hook_mutex = NULL; 
@@ -937,9 +937,9 @@ void ResetHook(bool aAllModifiersUp, HookType aWhichHook, bool aResetKVKandKSC)
 		ZeroMemory(g_PhysicalKeyState, sizeof(g_PhysicalKeyState));
 		pPrefixKey = NULL;
 
-		disguise_next_lwin_up = disguise_next_rwin_up = disguise_next_lalt_up = disguise_next_ralt_up
-			= alt_tab_menu_is_visible = false;
-		vk_to_ignore_next_time_down = 0;
+		sDisguiseNextLWinUp = sDisguiseNextRWinUp = sDisguiseNextLAltUp = sDisguiseNextRAltUp
+			= sAltTabMenuIsVisible = false;
+		sVKtoIgnoreNextTimeDown = 0;
 
 		ZeroMemory(sPadState, sizeof(sPadState));
 
