@@ -89,7 +89,9 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 		{
 			if (mCustomIcon)
 			{
-				DestroyIcon(mCustomIcon);
+				GuiType::DestroyIconIfUnused(mCustomIcon); // v1.0.37.07: Solves reports of Gui windows losing their icons.
+				// If the above doesn't destroy the icon, the GUI window(s) still using it are responsible for
+				// destroying it later.
 				mCustomIcon = NULL;  // To indicate that there is no custom icon.
 				if (mCustomIconFile)
 					*mCustomIconFile = '\0';
@@ -109,8 +111,7 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 		HICON new_icon = ExtractIcon(g_hInstance, aParam3, icon_number - 1);
 		if (!new_icon || new_icon == (HICON)1) // 1 means "incorrect file type".
 			RETURN_MENU_ERROR("Can't load icon.", aParam3);
-		if (mCustomIcon) // Destroy the old one first to free its resources.
-			DestroyIcon(mCustomIcon);
+		GuiType::DestroyIconIfUnused(mCustomIcon); // This destroys it if non-NULL and it's not used by an GUI windows.
 
 		mCustomIcon = new_icon;
 		mCustomIconNumber = icon_number;

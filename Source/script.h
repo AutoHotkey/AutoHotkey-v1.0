@@ -2060,6 +2060,7 @@ public:
 	COLORREF mBackgroundColorCtl; // Background color for controls.
 	HBRUSH mBackgroundBrushCtl;   // Brush corresponding to the above.
 	HDROP mHdrop;                 // Used for drag and drop operations.
+	HICON mIconEligibleForDestruction; // The window's SysMenu icon, which can be destroyed when the window is destroyed if nothing else is using it.
 	int mMarginX, mMarginY, mPrevX, mPrevY, mPrevWidth, mPrevHeight, mMaxExtentRight, mMaxExtentDown
 		, mSectionX, mSectionY, mMaxExtentRightSection, mMaxExtentDownSection;
 	bool mFirstGuiShowCmd, mFirstActivation, mShowIsInProgress, mDestroyWindowHasBeenCalled;
@@ -2096,7 +2097,7 @@ public:
 		, mCurrentColor(CLR_DEFAULT)
 		, mBackgroundColorWin(CLR_DEFAULT), mBackgroundBrushWin(NULL)
 		, mBackgroundColorCtl(CLR_DEFAULT), mBackgroundBrushCtl(NULL)
-		, mHdrop(NULL)
+		, mHdrop(NULL), mIconEligibleForDestruction(NULL)
 		, mMarginX(COORD_UNSPECIFIED), mMarginY(COORD_UNSPECIFIED) // These will be set when the first control is added.
 		, mPrevX(0), mPrevY(0)
 		, mPrevWidth(0), mPrevHeight(0) // Needs to be zero for first control to start off at right offset.
@@ -2112,6 +2113,7 @@ public:
 	}
 
 	static ResultType Destroy(GuiIndexType aWindowIndex);
+	static void DestroyIconIfUnused(HICON ahIcon);
 	ResultType Create();
 	static void UpdateMenuBars(HMENU aMenu);
 	ResultType AddControl(GuiControls aControlType, char *aOptions, char *aText);

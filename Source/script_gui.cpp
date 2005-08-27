@@ -1162,14 +1162,41 @@ ResultType GuiType::Destroy(GuiIndexType aWindowIndex)
 	// Not necessary since the object itself is about to be destroyed:
 	//gui.mHwnd = NULL;
 	//gui.mControlCount = 0; // All child windows (controls) are automatically destroyed with parent.
+	HICON icon_eligible_for_destruction = gui.mIconEligibleForDestruction;
 	free(gui.mControl); // Free the control array, which was previously malloc'd.
 	delete g_gui[aWindowIndex]; // After this, the var "gui" is invalid so should not be referenced, i.e. the next line.
 	g_gui[aWindowIndex] = NULL;
 	--sObjectCount; // This count is maintained to help performance in the main event loop and other places.
-	// For simplicity and performance, any fonts used by a destroyed window are destroyed
+	if (icon_eligible_for_destruction && icon_eligible_for_destruction != g_script.mCustomIcon) // v1.0.37.07.
+		DestroyIconIfUnused(icon_eligible_for_destruction); // Must be done only after "g_gui[aWindowIndex] = NULL".
+	// For simplicity and performance, any fonts used *solely* by a destroyed window are destroyed
 	// only when the program terminates.  Another reason for this is that sometimes a destroyed window
 	// is soon recreated to use the same fonts it did before.
 	return OK;
+}
+
+
+
+void GuiType::DestroyIconIfUnused(HICON ahIcon)
+// Caller has ensured that the GUI window previously using ahIcon has been destroyed prior to calling
+// this function.
+{
+	if (!ahIcon) // Caller relies on this check.
+		return;
+	int i, object_count;
+	for (i = 0, object_count = 0; i < MAX_GUI_WINDOWS && object_count < sObjectCount; ++i)
+		if (g_gui[i]) // This GUI window exists as an object.
+		{
+			// If another window is using this icon, don't destroy the because that has been reported to disrupt
+			// the window's display of the icon in some cases (apparently WM_SETICON doesn't make a copy of the
+			// icon).  The windows still using the icon will be responsible for destroying it later.
+			if (g_gui[i]->mIconEligibleForDestruction == ahIcon)
+				return;
+			++object_count;
+		}
+	// Since above didn't return, this icon is not currently in use by a GUI window.  The caller has
+	// authorized us to destroy it.
+	DestroyIcon(ahIcon);
 }
 
 
@@ -1251,18 +1278,31 @@ ResultType GuiType::Create()
 		, mOwner, NULL, g_hInstance, NULL))   )
 		return FAIL;
 
-	if ((mStyle & WS_SYSMENU) || !mOwner)
+	HICON main_icon;
+	if (g_script.mCustomIcon)
 	{
-		// Setting the small icon puts it in the upper left corner of the dialog window.
-		// Setting the big icon makes the dialog show up correctly in the Alt-Tab menu (but big seems to
-		// have no effect unless the window is unowned, i.e. it has a button on the task bar).
-		LPARAM main_icon = (LPARAM)(g_script.mCustomIcon ? g_script.mCustomIcon
-			: LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_MAIN)));
-		if (mStyle & WS_SYSMENU)
-			SendMessage(mHwnd, WM_SETICON, ICON_SMALL, main_icon);
-		if (!mOwner)
-			SendMessage(mHwnd, WM_SETICON, ICON_BIG, main_icon);
+		main_icon = g_script.mCustomIcon;
+		mIconEligibleForDestruction = main_icon;
 	}
+	else
+		main_icon = LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_MAIN));
+		// Unlike mCustomIcon, leave mIconEligibleForDestruction NULL because a shared HICON such as
+		// that from LoadIcon() should never be destroyed.
+	// Setting the small icon puts it in the upper left corner of the dialog window.
+	// Setting the big icon makes the dialog show up correctly in the Alt-Tab menu (but big seems to
+	// have no effect unless the window is unowned, i.e. it has a button on the task bar).
+	// Change for v1.0.37.07: Set both icons unconditionally for code simplicity, and also in case
+	// it's possible for the window to change after creation in a way that would make a custom icon
+	// become relevant.  Set the big icon even if it's owned because there might be ways
+	// an owned window can have an entry in the alt-tab menu.  The following ways come close
+	// but don't actually succeed:
+	// 1) It's owned by the main window but the main window isn't visible: It acquires the main window's icon
+	//    in the alt-tab menu regardless of whether it was given a big icon of its own.
+	// 2) It's owned by another GUI window but it has the WS_EX_APPWINDOW style (might force a taskbar button):
+	//    Same effect as in #1.
+	// 3) Possibly other ways.
+	SendMessage(mHwnd, WM_SETICON, ICON_SMALL, (LPARAM)main_icon); // Testing shows that a zero is returned for both;
+	SendMessage(mHwnd, WM_SETICON, ICON_BIG, (LPARAM)main_icon);   // i.e. there is no previous icon to destroy in this case.
 
 	return OK;
 }

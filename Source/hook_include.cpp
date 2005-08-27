@@ -811,7 +811,7 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 					// In case the above changed the value of g_HSBufLength, terminate the buffer at that position:
 					g_HSBuf[g_HSBufLength] = '\0';
 
-					if (hs.mDoBackspace)
+					if (hs.mDoBackspace || hs.mOmitEndChar) // Fix for v1.0.37.07: Added hs.mOmitEndChar so that B0+O will omit the ending character.
 					{
 						// Have caller suppress this final key pressed by the user, since it would have
 						// to be backspaced over anyway.  Even if there is a visible Input command in
@@ -1124,7 +1124,9 @@ LRESULT AllowIt(HHOOK hhk, int code, WPARAM wParam, LPARAM lParam, vk_type vk, s
 	// (due to ShiftAltTab causing sAltTabMenuIsVisible to become false):
 	//if (   sAltTabMenuIsVisible && !((g_modifiersLR_logical & MOD_LALT) || (g_modifiersLR_logical & MOD_RALT))
 	//	&& !(key_up && pKeyHistoryCurr->event_type == 'h')   )  // In case the alt key itself is "AltTabMenu"
-	if (   sAltTabMenuIsVisible && (vk == VK_MENU || vk == VK_LMENU || vk == VK_RMENU) && key_up
+	if (   sAltTabMenuIsVisible && // Release of Alt key or press down of Escape:
+		(key_up && (vk == VK_LMENU || vk == VK_RMENU || vk == VK_MENU)
+			|| !key_up && vk == VK_ESCAPE)
 		// In case the alt key itself is "AltTabMenu":
 		&& pKeyHistoryCurr->event_type != 'h' && pKeyHistoryCurr->event_type != 's'   )
 		// It's important to reset in this case because if sAltTabMenuIsVisible were to
@@ -1431,6 +1433,40 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 		g_PhysicalKeyState[vk] = key_up ? 0 : STATE_DOWN;
 	key_type &this_key = *(kvk + vk);
 #endif
+
+	// v1.0.37.07: Cancel the alt-tab menu upon receipt of Escape so that it behaves like the OS's native Alt-Tab.
+	// Even if is_ignored==true, it seems more flexible/useful to cancel the Alt-Tab menu upon receiving
+	// an Escape keystroke of any kind:
+	if (sAltTabMenuIsVisible && vk == VK_ESCAPE && !key_up)
+	{
+		HWND alt_tab_window;
+		if ((alt_tab_window = FindWindow("#32771", NULL)) // There is an alt-tab window...
+			&& GetWindowThreadProcessId(alt_tab_window, NULL) == GetCurrentThreadId()) // ...and it's owned by our thread.
+		{
+			// When the alt-tab window is owned by the script (it is owned by csrss.exe unless the script
+			// is the process that invoked the alt-tab window), testing shows that the script must be the
+			// originator of the Escape keystroke.  Therefore, substitute a simulated keystroke for the
+			// user's physical keystroke. It might be necessary to do this even if is_ignored==true because
+			// a keystroke from some other script/process might not qualify as a valid means to cancel it.
+			KeyEvent(KEYDOWN, VK_ESCAPE);
+			// By definition, an Alt key should be logically down if the alt-tab menu is visible (even if it
+			// isn't, sending an extra up-event seems harmless).  Releasing that Alt key seems best because:
+			// 1) If the prefix key that pushed down the alt key is still physically held down and the user
+			//    presses a new (non-alt-tab) suffix key to form a hotkey, it avoids any alt-key disruption
+			//    of things such as MouseClick that that subroutine might due.
+			// 2) If the user holds down the prefix, presses Escape to dismiss the menu, then presses an
+			//    alt-tab suffix, testing shows that the existing alt-tab logic here in the hook will put
+			//    alt or shift-alt back down if it needs to.
+			KeyEvent(KEYUP, (g_modifiersLR_logical & MOD_RALT) ? VK_RMENU : VK_LMENU);
+			return SuppressThisKey; // Testing shows that by contrast, the upcoming key-up on Escape doesn't require this logic.
+		}
+		// Otherwise, the alt-tab window doesn't exist or (more likely) it's owned by some other process
+		// such as crss.exe.  Do nothing extra to avoid inteferring with the native function of Escape or
+		// any remappings or hotkeys assigned to Escape.  Also, do not set sAltTabMenuIsVisible to false
+		// in any of the cases here because there is logic elsewhere in the hook that does that more
+		// reliably; it takes into account things such as whether the Escape keystroke will be suppressed
+		// due to being a hotkey).
+	}
 
 	// Do this after above since AllowKeyToGoToSystem requires that sc be properly determined.
 	// Another reason to do it after the above is due to the fact that KEY_PHYS_IGNORE permits

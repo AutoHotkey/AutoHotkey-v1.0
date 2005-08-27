@@ -41,7 +41,6 @@
 #define ID_VIEW_REFRESH                 65410
 #define ID_HELP_USERMANUAL              65411
 #define ID_HELP_WEBSITE                 65412
-#define ID_HELP_EMAIL                   65413
 
 // Next default values for new objects
 // 

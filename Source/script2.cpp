@@ -5609,10 +5609,6 @@ bool HandleMenuItem(HWND aHwnd, WORD aMenuItemID, WPARAM aGuiIndex)
 		if (!g_script.ActionExec("http://www.autohotkey.com", "", NULL, false))
 			MsgBox("Could not open URL http://www.autohotkey.com in default browser.");
 		return true;
-	case ID_HELP_EMAIL:
-		if (!g_script.ActionExec("mailto:support@autohotkey.com", "", NULL, false))
-			MsgBox("Could not open URL mailto:support@autohotkey.com in default e-mail client.");
-		return true;
 	default:
 		// See if this command ID is one of the user's custom menu items.  Due to the possibility
 		// that some items have been deleted from the menu, can't rely on comparing

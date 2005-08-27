@@ -122,9 +122,6 @@ Script::~Script()
 	RemoveAllHooks();
 	if (mNIC.hWnd) // Tray icon is installed.
 		Shell_NotifyIcon(NIM_DELETE, &mNIC); // Remove it.
-	// Only after the above do we get rid of the icon:
-	if (mCustomIcon) // A custom icon was installed
-		DestroyIcon(mCustomIcon);
 	// Destroy any Progress/SplashImage windows that haven't already been destroyed.  This is necessary
 	// because sometimes these windows aren't owned by the main window:
 	int i;
@@ -165,6 +162,11 @@ Script::~Script()
 	// The above might attempt to delete an HFONT from GetStockObject(DEFAULT_GUI_FONT), etc.
 	// But that should be harmless:
 	// MSDN: "It is not necessary (but it is not harmful) to delete stock objects by calling DeleteObject."
+
+	// Above: Probably best to have removed icon from tray and destroyed any Gui/Splash windows that were
+	// using it prior to getting rid of the script's custom icon below:
+	if (mCustomIcon)
+		DestroyIcon(mCustomIcon);
 
 	// Since they're not associated with a window, we must free the resources for all popup menus.
 	// Update: Even if a menu is being used as a GUI window's menu bar, see note above for why menu

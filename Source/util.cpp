@@ -1640,7 +1640,7 @@ HBITMAP IconToBitmap(HICON ahIcon, bool aDestroyIcon)
 					HBRUSH hbrush = CreateSolidBrush(CLR_DEFAULT);
 					FillRect(hdc, &rect, hbrush);
 					DeleteObject(hbrush);
-					//FillRect(hdc, &rect, (HBRUSH)GetStockObject(NULL_BRUSH));
+					// Probably something tried and abandoned: FillRect(hdc, &rect, (HBRUSH)GetStockObject(NULL_BRUSH));
 					DrawIconEx(hdc, 0, 0, ahIcon, icon_bitmap.bmWidth, icon_bitmap.bmHeight, 0, NULL, DI_NORMAL);
 					// Debug: Find out properties of new bitmap.
 					//BITMAP b;
