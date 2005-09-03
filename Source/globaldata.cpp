@@ -109,6 +109,8 @@ SplashType g_Progress[MAX_PROGRESS_WINDOWS] = {{0}};
 SplashType g_SplashImage[MAX_SPLASHIMAGE_WINDOWS] = {{0}};
 GuiType *g_gui[MAX_GUI_WINDOWS] = {NULL};
 HWND g_hWndToolTip[MAX_TOOLTIPS] = {NULL};
+MsgMonitorStruct *g_MsgMonitor = NULL; // An array to be allocated upon first use (if any).
+int g_MsgMonitorCount = 0;
 
 // Init not needed for these:
 bool g_SortCaseSensitive;
@@ -586,8 +588,8 @@ key_to_vk_type g_key_to_vk[] =
 // more compatible with non-standard or non-English keyboards:
 , {"LControl", VK_LCONTROL} // So that VKtoKeyName() delivers consistent results, always have the preferred name first.
 , {"RControl", VK_RCONTROL} // So that VKtoKeyName() delivers consistent results, always have the preferred name first.
-, {"LCtrl", VK_LCONTROL} // Support this alternate to be like AutoIt3.
-, {"RCtrl", VK_RCONTROL} // Support this alternate to be like AutoIt3.
+, {"LCtrl", VK_LCONTROL} // Abbreviated versions of the above.
+, {"RCtrl", VK_RCONTROL} //
 , {"LShift", VK_LSHIFT}
 , {"RShift", VK_RSHIFT}
 , {"LAlt", VK_LMENU}
@@ -654,12 +656,12 @@ modifier is specified along with it:
 , {"Volume_Mute", VK_VOLUME_MUTE}
 , {"Volume_Down", VK_VOLUME_DOWN}
 , {"Volume_Up", VK_VOLUME_UP}
-, {"Media_Next", VK_MEDIA_NEXT_TRACK}  // Use the AutoIt3 convention of omitting "_Track" from the name.
-, {"Media_Prev", VK_MEDIA_PREV_TRACK}  // Use the AutoIt3 convention of omitting "_Track" from the name.
+, {"Media_Next", VK_MEDIA_NEXT_TRACK}
+, {"Media_Prev", VK_MEDIA_PREV_TRACK}
 , {"Media_Stop", VK_MEDIA_STOP}
 , {"Media_Play_Pause", VK_MEDIA_PLAY_PAUSE}
 , {"Launch_Mail", VK_LAUNCH_MAIL}
-, {"Launch_Media", VK_LAUNCH_MEDIA_SELECT} // Use the AutoIt3 name.
+, {"Launch_Media", VK_LAUNCH_MEDIA_SELECT}
 , {"Launch_App1", VK_LAUNCH_APP1}
 , {"Launch_App2", VK_LAUNCH_APP2}
 

@@ -600,10 +600,15 @@ int SendKey(vk_type aVK, sc_type aSC, modLR_type aModifiersLR, modLR_type aModif
 
 
 
+///////////////////////////////////////////////////////////////////////////////
+// SendKeySpecial's non-ANSI methods are based on AutoIt v3 source code, which is:
+// Copyright 1999-2003 Jonathan Bennett and others listed at
+// http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
+///////////////////////////////////////////////////////////////////////////////
 int SendKeySpecial(char aChar, modLR_type aModifiersLR, modLR_type aModifiersLRPersistent
 	, int aRepeatCount, KeyEventTypes aEventType, HWND aTargetWindow)
 // Returns the number of keys actually sent for caller convenience.
-// This function has been adapted from the AutoIt3 source.
 // This function uses some of the same code as SendKey() above, so maintain them together.
 {
 	// Avoid changing modifier states and other things if there is nothing to be sent.

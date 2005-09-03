@@ -100,6 +100,8 @@ extern SplashType g_Progress[MAX_PROGRESS_WINDOWS];
 extern SplashType g_SplashImage[MAX_SPLASHIMAGE_WINDOWS];
 EXTERN_GUI;
 extern HWND g_hWndToolTip[MAX_TOOLTIPS];
+extern MsgMonitorStruct *g_MsgMonitor; // An array to be allocated upon first use (if any).
+extern int g_MsgMonitorCount;
 
 extern bool g_SortCaseSensitive;
 extern bool g_SortNumeric;

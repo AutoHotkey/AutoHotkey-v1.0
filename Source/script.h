@@ -334,7 +334,7 @@ struct SplashType
 #define PROGRESS_BAR_POS  splash.margin_x, bar_y, control_width, splash.object_height
 #define PROGRESS_SUB_POS  splash.margin_x, sub_y, control_width, (client_rect.bottom - client_rect.top) - sub_y
 
-// From AutoIt3's inputbox:
+// From AutoIt3's InputBox:
 template <class T>
 inline void swap(T &v1, T &v2) {
 	T tmp=v1;
@@ -610,7 +610,7 @@ class Line
 public:
 	// AutoIt3 functions:
 	static bool Util_CopyDir (const char *szInputSource, const char *szInputDest, bool bOverwrite);
-	static bool Util_MoveDir (const char *szInputSource, const char *szInputDest, bool bOverwrite);
+	static bool Util_MoveDir (const char *szInputSource, const char *szInputDest, int OverwriteMode);
 	static bool Util_RemoveDir (const char *szInputSource, bool bRecurse);
 	static int Util_CopyFile(const char *szInputSource, const char *szInputDest, bool bOverwrite, bool bMove);
 	static void Util_ExpandFilenameWildcard(const char *szSource, const char *szDest, char *szExpandedDest);
@@ -1831,6 +1831,16 @@ public:
 
 
 
+struct MsgMonitorStruct
+{
+	UINT msg;
+	Func *func;
+	// Keep any members smaller than 4 bytes adjacent to save memory:
+	bool label_is_running;  // Distinct from func.mInstances because the script might have called the function explicitly.
+};
+
+
+
 #define MAX_MENU_NAME_LENGTH MAX_PATH // For both menu and menu item names.
 class UserMenuItem;  // Forward declaration since classes use each other (i.e. a menu *item* can have a submenu).
 class UserMenu
@@ -2474,6 +2484,7 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 void BIF_StrLen(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_Asc(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_Chr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_IsLabel(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_InStr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_GetKeyState(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_VarSetCapacity(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
@@ -2492,6 +2503,8 @@ void BIF_ATan(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCo
 void BIF_Exp(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_SqrtLogLn(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 
+void BIF_OnMessage(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+
 void BIF_LV_GetNextOrCount(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_LV_GetText(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_LV_AddInsertModify(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
@@ -2508,6 +2521,9 @@ double ExprTokenToDouble(ExprTokenType &aToken);
 char *ExprTokenToString(ExprTokenType &aToken, char *aBuf);
 ResultType ExprTokenToVar(ExprTokenType &aToken, Var &aOutputVar);
 ResultType ExprTokenToDoubleOrInt(ExprTokenType &aToken);
+
+ResultType BackupFunctionVars(Func &aFunc, VarBkp *&aVarBackup, int &aVarBackupCount);
+void RestoreFunctionVars(Func &aFunc, VarBkp *&aVarBackup, int aVarBackupCount);
 
 int ConvertJoy(char *aBuf, int *aJoystickID = NULL, bool aAllowOnlyButtons = false);
 bool ScriptGetKeyState(vk_type aVK, KeyStateTypes aKeyStateType);

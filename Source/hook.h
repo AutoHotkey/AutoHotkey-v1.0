@@ -23,7 +23,9 @@ GNU General Public License for more details.
 // WM_USER is the lowest number that can be a user-defined message.  Anything above that is also valid.
 // NOTE: Any msg about WM_USER will be kept buffered (unreplied-to) whenever the script is uninterruptible.
 // If this is a problem, try making the msg have an ID less than WM_USER via a technique such as that used
-// for AHK_USER_MENU (perhaps WM_COMMNOTIFY can be "overloaded" to contain more than one type of msg):
+// for AHK_USER_MENU (perhaps WM_COMMNOTIFY can be "overloaded" to contain more than one type of msg).
+// Also, it has been announced in OnMessage() that message numbers between WM_USER and 0x1000 are earmarked
+// for possible future use by the program, so don't use a message above 0x1000 without good reason.
 enum UserMessages {AHK_HOOK_HOTKEY = WM_USER, AHK_HOTSTRING, AHK_USER_MENU, AHK_DIALOG, AHK_NOTIFYICON
 	, AHK_RETURN_PID, AHK_EXIT_BY_RELOAD, AHK_EXIT_BY_SINGLEINSTANCE
 	, AHK_GUI_ACTION = WM_USER + 100  // Allow some room in between for more "exit" type msgs to be added in the future (see below comment).

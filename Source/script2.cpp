@@ -683,8 +683,13 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 
 
 
+///////////////////////////////////////////////////////////////////////////////
+// The following function is based on AutoIt v3 source code, which is:
+// Copyright 1999-2003 Jonathan Bennett and others listed at
+// http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
+///////////////////////////////////////////////////////////////////////////////
 ResultType Line::ToolTip(char *aText, char *aX, char *aY, char *aID)
-// Adapted from the AutoIt3 source.
 // au3: Creates a tooltip with the specified text at any location on the screen.
 // The window isn't created until it's first needed, so no resources are used until then.
 // Also, the window is destroyed in AutoIt_Script's destructor so no resource leaks occur.
@@ -1141,7 +1146,12 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 		return output_var->Assign(qmathLog(ATOF(aValue1)));
 
 	case TRANS_CMD_ROUND:
-		// Adapted from the AutoIt3 source.
+		///////////////////////////////////////////////////////////////////////////////
+		// TRANS_CMD_ROUND is based on AutoIt v3 source code, which is:
+		// Copyright 1999-2003 Jonathan Bennett and others listed at
+		// http://www.autoitscript.com/autoit3/docs/credits.htm
+		// License: GNU GPL version 2 or (at your option) any later version.
+		///////////////////////////////////////////////////////////////////////////////
 		// In the future, a string conversion algorithm might be better to avoid the loss
 		// of 64-bit integer precision that it currently caused by the use of doubles in
 		// the calculation:
@@ -1695,10 +1705,15 @@ ResultType Line::WinMove(char *aTitle, char *aText, char *aX, char *aY
 
 
 
+///////////////////////////////////////////////////////////////////////////////
+// The following function is based on AutoIt v3 source code, which is:
+// Copyright 1999-2003 Jonathan Bennett and others listed at
+// http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
+///////////////////////////////////////////////////////////////////////////////
 ResultType Line::WinMenuSelectItem(char *aTitle, char *aText, char *aMenu1, char *aMenu2
 	, char *aMenu3, char *aMenu4, char *aMenu5, char *aMenu6, char *aMenu7
 	, char *aExcludeTitle, char *aExcludeText)
-// Adapted from the AutoIt3 source.
 {
 	// Set up a temporary array make it easier to traverse nested menus & submenus
 	// in a loop.  Also add a NULL at the end to simplify the loop a little:
@@ -1897,8 +1912,8 @@ ResultType Line::ControlClick(vk_type aVK, int aClickCount, char *aOptions, char
 	RECT rect;
 	if (click.x == COORD_UNSPECIFIED || click.y == COORD_UNSPECIFIED)
 	{
-		// AutoIt3: Get the dimensions of the control so we can click the centre of it
-		// (maybe safer and more natural than 0,0).
+		// The following idea is from AutoIt3. It states: "Get the dimensions of the control so we can click
+		// the centre of it" (maybe safer and more natural than 0,0).
 		// My: In addition, this is probably better for some large controls (e.g. SysListView32) because
 		// clicking at 0,0 might activate a part of the control that is not even visible:
 		if (!GetWindowRect(control_window, &rect))
@@ -1958,7 +1973,6 @@ ResultType Line::ControlClick(vk_type aVK, int aClickCount, char *aOptions, char
 	// that SetActiveWindow() resolved some problems for some users.  In any case, it seems best
 	// to do this in case the window really is foreground, in which case MSDN indicates that
 	// it will help for certain types of dialogs.
-	// AutoIt3: See BM_CLICK documentation, applies to this too
 	ATTACH_THREAD_INPUT
 	SetActiveWindow(target_window);
 
@@ -2273,9 +2287,14 @@ ResultType Line::ControlGetText(char *aControl, char *aTitle, char *aText
 
 
 
+///////////////////////////////////////////////////////////////////////////////
+// The following function is based on AutoIt v3 source code, which is:
+// Copyright 1999-2003 Jonathan Bennett and others listed at
+// http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
+///////////////////////////////////////////////////////////////////////////////
 ResultType Line::Control(char *aCmd, char *aValue, char *aControl, char *aTitle, char *aText
 	, char *aExcludeTitle, char *aExcludeText)
-// This function has been adapted from the AutoIt3 source.
 // ATTACH_THREAD_INPUT has been tested to see if they help any of these work with controls
 // in MSIE (whose Internet Explorer_TridentCmboBx2 does not respond to "Control Choose" but
 // does respond to "Control Focus").  But it didn't help.
@@ -2784,9 +2803,14 @@ break_both:
 
 
 
+///////////////////////////////////////////////////////////////////////////////
+// The following function is based on AutoIt v3 source code, which is:
+// Copyright 1999-2003 Jonathan Bennett and others listed at
+// http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
+///////////////////////////////////////////////////////////////////////////////
 ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTitle, char *aText
 	, char *aExcludeTitle, char *aExcludeText)
-// This function has been adapted from the AutoIt3 source.
 {
 	Var *output_var = ResolveVarOfArg(0);
 	if (!output_var)
@@ -3633,7 +3657,7 @@ ResultType Line::WinSet(char *aAttrib, char *aValue, char *aTitle, char *aText
 
 
 ResultType Line::WinSetTitle(char *aTitle, char *aText, char *aNewTitle, char *aExcludeTitle, char *aExcludeText)
-// Like AutoIt, this function and others like it always return OK, even if the target window doesn't
+// Like AutoIt2, this function and others like it always return OK, even if the target window doesn't
 // exist or there action doesn't actually succeed.
 {
 	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
@@ -5024,8 +5048,13 @@ end:
 
 
 
+///////////////////////////////////////////////////////////////////////////////
+// The following function is based on AutoIt v3 source code, which is:
+// Copyright 1999-2003 Jonathan Bennett and others listed at
+// http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
+///////////////////////////////////////////////////////////////////////////////
 ResultType Line::PixelGetColor(int aX, int aY, bool aUseRGB)
-// This has been adapted from the AutoIt3 source.
 {
 	Var *output_var = ResolveVarOfArg(0);
 	if (!output_var)
@@ -5071,6 +5100,12 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 	// Detect Explorer crashes so that tray icon can be recreated.  I think this only works on Win98
 	// and beyond, since the feature was never properly implemented in Win95:
 	static UINT WM_TASKBARCREATED = RegisterWindowMessage("TaskbarCreated");
+
+	// See GuiWindowProc() for details about this first part:
+	LRESULT msg_reply;
+	if (g_MsgMonitorCount && !g.CalledByIsDialogMessageOrDispatch // Count is checked here to avoid function-call overhead.
+		&& MsgMonitor(hWnd, iMsg, wParam, lParam, NULL, msg_reply))
+		return msg_reply; // MsgMonitor has returned "true", indicating that this message should be omitted from further processing.
 
 	TRANSLATE_AHK_MSG(iMsg, wParam)
 	
@@ -5463,13 +5498,12 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		// This is obsolete in light of WinGet's support for fetching the PID of any window.
 		// But since it's simple, it is retained for backward compatibility.
 		// Rajat wanted this so that it's possible to discover the PID based on the title of each
-		// script's main window (i.e. if there are multiple scripts running).  Note that
-		// ReplyMessage() has no effect if our own thread sent this message to us.  In other words,
-		// if a script asks itself what its PID is, the answer will be 0.  Also note that this
-		// msg uses TRANSLATE_AHK_MSG() to prevent it from ever being filtered out (and thus
-		// delayed) while the script is uninterruptible.
-		ReplyMessage(GetCurrentProcessId());
-		return 0;
+		// script's main window (i.e. if there are multiple scripts running).  Also note that this
+		// msg can be sent via TRANSLATE_AHK_MSG() to prevent it from ever being filtered out (and
+		// thus delayed) while the script is uninterruptible.  For example:
+		// SendMessage, 0x44, 1029,,, %A_ScriptFullPath% - AutoHotkey
+		// SendMessage, 1029,,,, %A_ScriptFullPath% - AutoHotkey  ; Same as above but not sent via TRANSLATE.
+		return GetCurrentProcessId(); // Don't use ReplyMessage because then our thread can't reply to itself with this answer.
 
 	case WM_DRAWCLIPBOARD:
 		if (g_script.mOnClipboardChangeLabel) // In case it's a bogus msg, it's our responsibility to avoid posting the msg if there's no label to launch.
@@ -5882,6 +5916,12 @@ BOOL CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 // and FALSE if it did not. If the dialog box procedure returns FALSE, the dialog
 // manager performs the default dialog operation in response to the message.
 {
+	// See GuiWindowProc() for details about this first part:
+	LRESULT msg_reply;
+	if (g_MsgMonitorCount && !g.CalledByIsDialogMessageOrDispatch // Count is checked here to avoid function-call overhead.
+		&& MsgMonitor(hWndDlg, uMsg, wParam, lParam, NULL, msg_reply))
+		return (BOOL)msg_reply; // MsgMonitor has returned "true", indicating that this message should be omitted from further processing.
+
 	HWND hControl;
 
 	// Set default array index for g_InputBox[].  Caller has ensured that g_nInputBoxes > 0:
@@ -6195,8 +6235,13 @@ VOID CALLBACK InputBoxTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
 // Mouse related //
 ///////////////////
 
+///////////////////////////////////////////////////////////////////////////////
+// The following function is based on AutoIt v3 source code, which is:
+// Copyright 1999-2003 Jonathan Bennett and others listed at
+// http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
+///////////////////////////////////////////////////////////////////////////////
 ResultType Line::MouseClickDrag(vk_type aVK, int aX1, int aY1, int aX2, int aY2, int aSpeed, bool aMoveRelative)
-// Note: This is based on code in the AutoIt3 source.
 {
 	// Autoit3: Check for x without y
 	// MY: In case this was called from a source that didn't already validate this:
@@ -6285,9 +6330,14 @@ ResultType Line::MouseClickDrag(vk_type aVK, int aX1, int aY1, int aX2, int aY2,
 
 
 
+///////////////////////////////////////////////////////////////////////////////
+// The following function is based on AutoIt v3 source code, which is:
+// Copyright 1999-2003 Jonathan Bennett and others listed at
+// http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
+///////////////////////////////////////////////////////////////////////////////
 ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aSpeed, KeyEventTypes aEventType
 	, bool aMoveRelative)
-// Note: This is based on code in the AutoIt3 source.
 {
 	// Autoit3: Check for x without y
 	// MY: In case this was called from a source that didn't already validate this:
@@ -6415,8 +6465,13 @@ ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aS
 
 
 
+///////////////////////////////////////////////////////////////////////////////
+// The following function is based on AutoIt v3 source code, which is:
+// Copyright 1999-2003 Jonathan Bennett and others listed at
+// http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
+///////////////////////////////////////////////////////////////////////////////
 void Line::MouseMove(int aX, int aY, int aSpeed, bool aMoveRelative)
-// Note: This is based on code in the AutoIt3 source.
 {
 	POINT ptCur;
 	int xCur, yCur;
@@ -7394,7 +7449,9 @@ ResultType Line::PerformAssign()
 
 
 ///////////////////////////////////////////////////////////////////////////////
-// FROM AUTOIT3
+// The following function is Copyright 1999-2003 Jonathan Bennett and others
+// listed at http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
 ///////////////////////////////////////////////////////////////////////////////
 // Util_Shutdown()
 // Shutdown or logoff the system
@@ -7454,8 +7511,12 @@ flags can be a combination of:
 
 
 
+///////////////////////////////////////////////////////////////////////////////
+// The following function is Copyright 1999-2003 Jonathan Bennett and others
+// listed at http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
+///////////////////////////////////////////////////////////////////////////////
 BOOL Util_ShutdownHandler(HWND hwnd, DWORD lParam)
-// From AutoIt3.
 {
 	// if the window is me, don't terminate!
 	if (hwnd != g_hWnd && hwnd != g_hWndSplash)
@@ -7468,8 +7529,12 @@ BOOL Util_ShutdownHandler(HWND hwnd, DWORD lParam)
 
 
 
+///////////////////////////////////////////////////////////////////////////////
+// The following function is Copyright 1999-2003 Jonathan Bennett and others
+// listed at http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
+///////////////////////////////////////////////////////////////////////////////
 void Util_WinKill(HWND hWnd)
-// From AutoIt3.
 {
 	DWORD      pid = 0;
 	LRESULT    lResult;
@@ -8174,8 +8239,13 @@ ResultType Line::GetKeyJoyState(char *aKeyName, char *aOption)
 
 
 
+///////////////////////////////////////////////////////////////////////////////
+// The following function is based on AutoIt v3 source code, which is:
+// Copyright 1999-2003 Jonathan Bennett and others listed at
+// http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
+///////////////////////////////////////////////////////////////////////////////
 ResultType Line::DriveSpace(char *aPath, bool aGetFreeSpace)
-// Adapted from the AutoIt3 source.
 // Because of NTFS's ability to mount volumes into a directory, a path might not necessarily
 // have the same amount of free space as its root drive.  However, I'm not sure if this
 // method here actually takes that into account.
@@ -8404,8 +8474,13 @@ ResultType Line::DriveLock(char aDriveLetter, bool aLockIt)
 
 
 
+///////////////////////////////////////////////////////////////////////////////
+// The following function is based on AutoIt v3 source code, which is:
+// Copyright 1999-2003 Jonathan Bennett and others listed at
+// http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
+///////////////////////////////////////////////////////////////////////////////
 ResultType Line::DriveGet(char *aCmd, char *aValue)
-// This function has been adapted from the AutoIt3 source.
 {
 	DriveGetCmds drive_get_cmd = ConvertDriveGetCmd(aCmd);
 	if (drive_get_cmd == DRIVEGET_CMD_CAPACITY)
@@ -8858,14 +8933,18 @@ ResultType Line::SoundSetWaveVolume(char *aVolume, HWAVEOUT aDeviceID)
 
 
 
+///////////////////////////////////////////////////////////////////////////////
+// The following function is based on AutoIt v3 source code, which is:
+// Copyright 1999-2003 Jonathan Bennett and others listed at
+// http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
+///////////////////////////////////////////////////////////////////////////////
 ResultType Line::SoundPlay(char *aFilespec, bool aSleepUntilDone)
 {
 	char *cp = omit_leading_whitespace(aFilespec);
 	if (*cp == '*')
 		return g_ErrorLevel->Assign(MessageBeep(ATOU(cp + 1)) ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
 		// ATOU() returns 0xFFFFFFFF for -1, which is relied upon to support the -1 sound.
-
-	// Adapted from the AutoIt3 source.
 	// See http://msdn.microsoft.com/library/default.asp?url=/library/en-us/multimed/htm/_win32_play.asp
 	// for some documentation mciSendString() and related.
 	char buf[MAX_PATH * 2]; // Allow room for filename and commands.
@@ -8905,8 +8984,13 @@ ResultType Line::SoundPlay(char *aFilespec, bool aSleepUntilDone)
 
 
 
+///////////////////////////////////////////////////////////////////////////////
+// The following function is based on AutoIt v3 source code, which is:
+// Copyright 1999-2003 Jonathan Bennett and others listed at
+// http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
+///////////////////////////////////////////////////////////////////////////////
 ResultType Line::URLDownloadToFile(char *aURL, char *aFilespec)
-// This has been adapted from the AutoIt3 source.
 {
 	// Check that we have IE3 and access to wininet.dll
 	HINSTANCE hinstLib = LoadLibrary("wininet");
@@ -9104,7 +9188,7 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 	ofn.lpstrTitle = greeting;
 	ofn.lpstrFilter = *filter ? filter : "All Files (*.*)\0*.*\0Text Documents (*.txt)\0*.txt\0";
 	ofn.lpstrFile = file_buf;
-	ofn.nMaxFile = sizeof(file_buf) - 1; // -1 to be extra safe, like AutoIt3.
+	ofn.nMaxFile = sizeof(file_buf) - 1; // -1 to be extra safe.
 	// Specifying NULL will make it default to the last used directory (at least in Win2k):
 	ofn.lpstrInitialDir = *working_dir ? working_dir : NULL;
 
@@ -9264,8 +9348,13 @@ int CALLBACK FileSelectFolderCallback(HWND hwnd, UINT uMsg, LPARAM lParam, LPARA
 
 
 
+///////////////////////////////////////////////////////////////////////////////
+// The following function is based on AutoIt v3 source code, which is:
+// Copyright 1999-2003 Jonathan Bennett and others listed at
+// http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
+///////////////////////////////////////////////////////////////////////////////
 ResultType Line::FileSelectFolder(char *aRootDir, char *aOptions, char *aGreeting)
-// Adapted from the AutoIt3 source.
 {
 	Var *output_var = ResolveVarOfArg(0);
 	if (!output_var)
@@ -9372,8 +9461,14 @@ ResultType Line::FileSelectFolder(char *aRootDir, char *aOptions, char *aGreetin
 
 
 
+///////////////////////////////////////////////////////////////////////////////
+// The following function is based on AutoIt v3 source code, which is:
+// Copyright 1999-2003 Jonathan Bennett and others listed at
+// http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
+///////////////////////////////////////////////////////////////////////////////
+// Credited to Holger <Holger.Kotsch at GMX de>.
 ResultType Line::FileGetShortcut(char *aShortcutFile)
-// Adapted from AutoIt3 source code, credited to Holger <Holger.Kotsch at GMX de>.
 {
 	// These might be omitted in the parameter list, so it's okay if they resolve to NULL.
 	Var *output_var_target = ResolveVarOfArg(1);
@@ -9469,9 +9564,14 @@ ResultType Line::FileGetShortcut(char *aShortcutFile)
 
 
 
+///////////////////////////////////////////////////////////////////////////////
+// The following function is based on AutoIt v3 source code, which is:
+// Copyright 1999-2003 Jonathan Bennett and others listed at
+// http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
+///////////////////////////////////////////////////////////////////////////////
 ResultType Line::FileCreateShortcut(char *aTargetFile, char *aShortcutFile, char *aWorkingDir, char *aArgs
 	, char *aDescription, char *aIconFile, char *aHotkey, char *aIconNumber, char *aRunState)
-// Adapted from the AutoIt3 source.
 {
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 	CoInitialize(NULL);
@@ -10057,8 +10157,13 @@ ResultType Line::FileDelete(char *aFilePattern)
 
 
 
+///////////////////////////////////////////////////////////////////////////////
+// The following function is based on AutoIt v3 source code, which is:
+// Copyright 1999-2003 Jonathan Bennett and others listed at
+// http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
+///////////////////////////////////////////////////////////////////////////////
 ResultType Line::FileRecycle(char *aFilePattern)
-// Adapted from the AutoIt3 source.
 {
 	if (!aFilePattern || !*aFilePattern)
 		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);  // Since this is probably not what the user intended.
@@ -10089,8 +10194,13 @@ ResultType Line::FileRecycle(char *aFilePattern)
 
 
 
+///////////////////////////////////////////////////////////////////////////////
+// The following function is based on AutoIt v3 source code, which is:
+// Copyright 1999-2003 Jonathan Bennett and others listed at
+// http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
+///////////////////////////////////////////////////////////////////////////////
 ResultType Line::FileRecycleEmpty(char *aDriveLetter)
-// Adapted from the AutoIt3 source.
 {
 	// Not using GetModuleHandle() because there is doubt that SHELL32 (unlike USER32/KERNEL32), is
 	// always automatically present in every process (e.g. if shell is something other than Explorer):
@@ -10120,7 +10230,7 @@ ResultType Line::FileRecycleEmpty(char *aDriveLetter)
 ResultType Line::FileInstall(char *aSource, char *aDest, char *aFlag)
 {
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
-	bool allow_overwrite = aFlag && *aFlag == '1';
+	bool allow_overwrite = (ATOI(aFlag) == 1);
 #ifdef AUTOHOTKEYSC
 	if (!allow_overwrite && Util_DoesFileExist(aDest))
 		return OK; // Let ErrorLevel tell the story.
@@ -10368,8 +10478,13 @@ int Line::FileSetAttrib(char *aAttributes, char *aFilePattern, FileLoopModeType 
 
 
 
+///////////////////////////////////////////////////////////////////////////////
+// The following function is based on AutoIt v3 source code, which is:
+// Copyright 1999-2003 Jonathan Bennett and others listed at
+// http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
+///////////////////////////////////////////////////////////////////////////////
 ResultType Line::FileGetTime(char *aFilespec, char aWhichTime)
-// Adapted from the AutoIt3 source.
 {
 	Var *output_var = ResolveVarOfArg(0);
 	if (!output_var)
@@ -10565,8 +10680,13 @@ int Line::FileSetTime(char *aYYYYMMDD, char *aFilePattern, char aWhichTime
 
 
 
+///////////////////////////////////////////////////////////////////////////////
+// The following function is based on AutoIt v3 source code, which is:
+// Copyright 1999-2003 Jonathan Bennett and others listed at
+// http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
+///////////////////////////////////////////////////////////////////////////////
 ResultType Line::FileGetSize(char *aFilespec, char *aGranularity)
-// Adapted from the AutoIt3 source.
 {
 	Var *output_var = ResolveVarOfArg(0);
 	if (!output_var)
@@ -10623,8 +10743,13 @@ ResultType Line::FileGetSize(char *aFilespec, char *aGranularity)
 
 
 
+///////////////////////////////////////////////////////////////////////////////
+// The following function is based on AutoIt v3 source code, which is:
+// Copyright 1999-2003 Jonathan Bennett and others listed at
+// http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
+///////////////////////////////////////////////////////////////////////////////
 ResultType Line::FileGetVersion(char *aFilespec)
-// Adapted from the AutoIt3 source.
 {
 	Var *output_var = ResolveVarOfArg(0);
 	if (!output_var)
@@ -10669,7 +10794,10 @@ ResultType Line::FileGetVersion(char *aFilespec)
 
 
 ///////////////////////////////////////////////////////////////////////////////
-// TAKEN FROM THE AUTOIT3 SOURCE
+// The following function is Copyright 1999-2003 Jonathan Bennett and others
+// listed at http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
+///////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
 // Util_CopyDir()
 ///////////////////////////////////////////////////////////////////////////////
@@ -10730,12 +10858,14 @@ bool Line::Util_CopyDir (const char *szInputSource, const char *szInputDest, boo
 
 
 ///////////////////////////////////////////////////////////////////////////////
-// TAKEN FROM THE AUTOIT3 SOURCE
+// The following function is Copyright 1999-2003 Jonathan Bennett and others
+// listed at http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
 ///////////////////////////////////////////////////////////////////////////////
 // Util_MoveDir()
 ///////////////////////////////////////////////////////////////////////////////
 
-bool Line::Util_MoveDir (const char *szInputSource, const char *szInputDest, bool bOverwrite)
+bool Line::Util_MoveDir (const char *szInputSource, const char *szInputDest, int OverwriteMode)
 {
 	SHFILEOPSTRUCT	FileOp;
 	char			szSource[_MAX_PATH+2];
@@ -10750,9 +10880,10 @@ bool Line::Util_MoveDir (const char *szInputSource, const char *szInputDest, boo
 		return false;							// Nope
 
 	// Does the destination dir exist?
-	if (Util_IsDir(szDest))
+	bool dest_exists_as_dir = Util_IsDir(szDest);  // v1.0.38
+	if (dest_exists_as_dir) // Untested: If a file vs. dir of this name exists, SHFileOperation() will fail later below.
 	{
-		if (bOverwrite == false)
+		if (OverwriteMode != 1 && OverwriteMode != 2) // Strict validation for safety.
 			return false;
 	}
 
@@ -10769,9 +10900,22 @@ bool Line::Util_MoveDir (const char *szInputSource, const char *szInputDest, boo
 			return true;
 	}
 
+	// Since above didn't return, source and dest are on same volume.
+	if (dest_exists_as_dir && OverwriteMode == 2) // v1.0.38: New behavior only when OverwriteMode==2 to preserve backward compatibility.
+	{
+		// Since szDest exists as a directory (not a file, since that should automatically produce
+		// the expected failure in SHFileOperation()), alter szDest to be the parent directory
+		// so that the operation overwrite the target directory rather than moving the source
+		// directory into it.  Since szDest shouldn't be a root directory in this mode, it should
+		// always have a parent directory.
+		char *last_backslash = strrchr(szDest, '\\'); // Util_GetFullPathName() has already ensured that szDest doesn't end in a backslash.
+		if (last_backslash)
+			*last_backslash = '\0';
+	}
+
 	// We must also make source\dest double nulled strings for the SHFileOp API
-	szSource[strlen(szSource)+1] = '\0';	
-	szDest[strlen(szDest)+1] = '\0';	
+	szSource[strlen(szSource)+1] = '\0';
+	szDest[strlen(szDest)+1] = '\0';
 
 	// Setup the struct
 	FileOp.pFrom					= szSource;
@@ -10791,7 +10935,9 @@ bool Line::Util_MoveDir (const char *szInputSource, const char *szInputDest, boo
 
 
 ///////////////////////////////////////////////////////////////////////////////
-// TAKEN FROM THE AUTOIT3 SOURCE
+// The following function is Copyright 1999-2003 Jonathan Bennett and others
+// listed at http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
 ///////////////////////////////////////////////////////////////////////////////
 // Util_RemoveDir()
 ///////////////////////////////////////////////////////////////////////////////
@@ -10838,7 +10984,10 @@ bool Line::Util_RemoveDir (const char *szInputSource, bool bRecurse)
 
 
 ///////////////////////////////////////////////////////////////////////////////
-// TAKEN FROM THE AUTOIT3 SOURCE (but there have been many changes).
+// The following function is based on AutoIt v3 source code, which is:
+// Copyright 1999-2003 Jonathan Bennett and others listed at
+// http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
 ///////////////////////////////////////////////////////////////////////////////
 // Util_CopyFile()
 // (moves files too)
@@ -10944,7 +11093,9 @@ int Line::Util_CopyFile(const char *szInputSource, const char *szInputDest, bool
 
 
 ///////////////////////////////////////////////////////////////////////////////
-// TAKEN FROM THE AUTOIT3 SOURCE
+// The following function is Copyright 1999-2003 Jonathan Bennett and others
+// listed at http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
 ///////////////////////////////////////////////////////////////////////////////
 // Util_ExpandFilenameWildcard()
 ///////////////////////////////////////////////////////////////////////////////
@@ -11018,7 +11169,9 @@ void Line::Util_ExpandFilenameWildcard(const char *szSource, const char *szDest,
 
 
 ///////////////////////////////////////////////////////////////////////////////
-// TAKEN FROM THE AUTOIT3 SOURCE
+// The following function is Copyright 1999-2003 Jonathan Bennett and others
+// listed at http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
 ///////////////////////////////////////////////////////////////////////////////
 // Util_ExpandFilenameWildcardPart()
 ///////////////////////////////////////////////////////////////////////////////
@@ -11060,7 +11213,9 @@ void Line::Util_ExpandFilenameWildcardPart(const char *szSource, const char *szD
 
 
 ///////////////////////////////////////////////////////////////////////////////
-// TAKEN FROM THE AUTOIT3 SOURCE
+// The following function is Copyright 1999-2003 Jonathan Bennett and others
+// listed at http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
 ///////////////////////////////////////////////////////////////////////////////
 // Util_CreateDir()
 // Recursive directory creation function
@@ -11123,7 +11278,9 @@ bool Line::Util_CreateDir(const char *szDirName)
 
 
 ///////////////////////////////////////////////////////////////////////////////
-// TAKEN FROM THE AUTOIT3 SOURCE
+// The following function is Copyright 1999-2003 Jonathan Bennett and others
+// listed at http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
 ///////////////////////////////////////////////////////////////////////////////
 // Util_DoesFileExist()
 // Returns true if file or directory exists
@@ -11167,7 +11324,9 @@ bool Line::Util_IsDir(const char *szPath) // Returns true if the path is a direc
 
 
 ///////////////////////////////////////////////////////////////////////////////
-// TAKEN FROM THE AUTOIT3 SOURCE
+// The following function is Copyright 1999-2003 Jonathan Bennett and others
+// listed at http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
 ///////////////////////////////////////////////////////////////////////////////
 // Util_GetFullPathName()
 // Returns the full pathname and strips any trailing \s.  Assumes output
@@ -11194,7 +11353,9 @@ void Line::Util_StripTrailingDir(char *szPath)
 
 
 ///////////////////////////////////////////////////////////////////////////////
-// TAKEN FROM THE AUTOIT3 SOURCE
+// The following function is Copyright 1999-2003 Jonathan Bennett and others
+// listed at http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
 ///////////////////////////////////////////////////////////////////////////////
 // Util_IsDifferentVolumes()
 // Checks two paths to see if they are on the same volume
@@ -11924,7 +12085,7 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 				// it should be able to handle both signed and unsigned values.  However, unsigned 64-bit
 				// values probably require ATOU64(), which will prevent something like -1 from being seen
 				// as the largest unsigned 64-bit int, but more importantly there are some other issues
-				// with unsigned 64-bit numbers: The script internals uses 64-bit signed values everywhere,
+				// with unsigned 64-bit numbers: The script internals use 64-bit signed values everywhere,
 				// so unsigned values can only be partially supported for incoming parameters, but probably
 				// not for outgoing parameters (values the function changed) or the return value.  Those
 				// should probably be written back out to the script as negatives so that other parts of
@@ -12256,6 +12417,23 @@ void BIF_Chr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCou
 	}
 	aResultToken.symbol = SYM_STRING;
 	aResultToken.marker = cp;
+}
+
+
+
+void BIF_IsLabel(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+// For performance and code-size reasons, this function does not currently return what
+// type of label it is (hotstring, hotkey, or generic).  To preserve the option to do
+// this in the future, it has been documented that the function returns non-zero rather
+// than "true".  However, if performance is an issue (since scripts that use IsLabel are
+// often performance sensitive), it might be better to add a second parameter that tells
+// IsLabel to look up the type of label, and return it as a number or letter.
+{
+	char *label_name;
+	if (   !(label_name = ExprTokenToString(*aParam[0], aResultToken.buf))   ) // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
+		aResultToken.value_int64 = 0; // Indicate false, to conform to boolean return type.
+	else
+		aResultToken.value_int64 = g_script.FindLabel(label_name) ? 1 : 0;
 }
 
 
@@ -12673,6 +12851,110 @@ void BIF_SqrtLogLn(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 			aResultToken.value_double = qmathLog(value);
 		}
 	}
+}
+
+
+
+void BIF_OnMessage(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+// Returns: An empty string on failure or the name of a function (depends on mode) on success.
+// Parameters:
+// 1: Message number to monitor.
+// 2: Name of the function that will monitor the message.
+// 3: (FUTURE): A flex-list of space-delimited option words/letters.
+{
+	char *buf = aResultToken.buf; // Must be saved early since below overwrites the union (better maintainability too).
+	// Set default result in case of early return; a blank value:
+	aResultToken.symbol = SYM_STRING;
+	aResultToken.marker = "";
+
+	// Load-time validation has ensured there's at least one parameters for use here:
+	UINT specified_msg = (UINT)ExprTokenToInt64(*aParam[0]); // Parameter #1
+
+	Func *func = NULL;           // Set defaults.
+	bool mode_is_delete = false; //
+	if (aParamCount > 1) // Parameter #2 is present.
+	{
+		char *func_name = ExprTokenToString(*aParam[1], buf); // Resolve parameter #2.
+		if (*func_name)
+		{
+			if (   !(func = g_script.FindFunc(func_name))   )
+				return; // Yield the default return value set earlier.
+			// If too many formal parameters or any are ByRef/optional, indicate failure.
+			// This helps catch bugs in scripts that are assigning the wrong function to a monitor.
+			// It also preserves additional parameters for possible future use (i.e. avoids breaking
+			// existing scripts if more formal parameters are supported in a future version).
+			if (func->mIsBuiltIn || func->mParamCount > 4 || func->mMinParams < func->mParamCount) // Too many params, or some are optional.
+				return; // Yield the default return value set earlier.
+			for (int i = 0; i < func->mParamCount; ++i) // Check if any formal parameters are ByRef.
+				if (func->mParam[i].var->IsByRef())
+					return; // Yield the default return value set earlier.
+		}
+		else // Explicitly blank function name ("") means delete this item.  By contrast, an omitted second parameter means "give me current function of this message".
+			mode_is_delete = true;
+	}
+
+	// If this is the first use of the g_MsgMonitor array, create it now rather than later to reduce code size
+	// and help the maintainability of sections further below. The following relies on short-circuit boolean order:
+	if (!g_MsgMonitor && !(g_MsgMonitor = (MsgMonitorStruct *)malloc(sizeof(MsgMonitorStruct) * MAX_MSG_MONITORS)))
+		return; // Yield the default return value set earlier.
+
+	// Check if this message already exists in the array:
+	int msg_index;
+	for (msg_index = 0; msg_index < g_MsgMonitorCount; ++msg_index)
+		if (g_MsgMonitor[msg_index].msg == specified_msg)
+			break;
+	bool item_already_exists = (msg_index < g_MsgMonitorCount);
+	MsgMonitorStruct &monitor = g_MsgMonitor[msg_index == MAX_MSG_MONITORS ? 0 : msg_index]; // The 0th item is just a placeholder.
+
+	if (item_already_exists)
+	{
+		// In all cases, yield the OLD function's name as the return value:
+		strcpy(buf, monitor.func->mName); // Caller has ensured that buf large enough to support max function name.
+		aResultToken.marker = buf;
+		if (mode_is_delete)
+		{
+			// The msg-monitor is deleted from the array for two reasons:
+			// 1) It improves performance because every incoming message for the app now needs to be compared
+			//    to one less filter. If the count will now be zero, performance is improved even more because
+			//    the overhead of the call to MsgMonitor() is completely avoided for every incoming message.
+			// 2) It conserves space in the array in a situation where the script creates hundreds of
+			//    msg-monitors and then later deletes them, then later creates hundreds of filters for entirely
+			//    different message numbers.
+			// The main disadvantage to deleting message filters from the array is that the deletion might
+			// occur while the monitor is currently running, which requires more complex handling within
+			// MsgMonitor() (see its comments for details).
+			--g_MsgMonitorCount;  // Must be done prior to the below.
+			if (msg_index < g_MsgMonitorCount) // An element other than the last is being removed. Shift the array to cover/delete it.
+				MoveMemory(g_MsgMonitor+msg_index, g_MsgMonitor+msg_index+1, sizeof(MsgMonitorStruct)*(g_MsgMonitorCount-msg_index));
+			return;
+		}
+		if (aParamCount < 2) // Single-parameter mode: Report existing item's function name.
+			return; // Everything was already set up above to yield the proper return value.
+		// Otherwise, an existing item is being assigned a new function (the function has already
+		// been verified valid above). Continue on to update this item's attributes.
+	}
+	else // This message doesn't exist in array yet.
+	{
+		if (mode_is_delete || aParamCount < 2) // Delete or report function-name of a non-existent item.
+			return; // Yield the default return value set earlier (an empty string).
+		// Since above didn't return, the message is to be added as a new element. The above already
+		// verified that func is not NULL.
+		if (msg_index == MAX_MSG_MONITORS) // No room in array.
+			return; // Indicate failure by yielding the default return value set earlier.
+		// Otherwise, the message is to be added, so increment the total:
+		++g_MsgMonitorCount;
+		strcpy(buf, func->mName); // Yield the NEW name as an indicator of success. Caller has ensured that buf large enough to support max function name.
+		aResultToken.marker = buf;
+		// Continue on to the update-or-create logic below.
+	}
+
+	// Since above didn't return, above has ensured that msg_index is the index of the existing or new
+	// MsgMonitorStruct in the array.  In addition, it has set the proper return value for us.
+	// Regardless of whether this is an update or creation, update all the struct attributes:
+	monitor.msg = specified_msg;
+	monitor.func = func;
+	if (!item_already_exists) // Reset label_is_running only for new items since existing items might currently be running.
+		monitor.label_is_running = false;
 }
 
 

@@ -213,6 +213,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 	HDROP hdrop_to_free;
 	DWORD drop_count;
 	DWORD tick_before, tick_after;
+	LRESULT msg_reply;
 	MSG msg;
 
 	for (;;)
@@ -352,6 +353,21 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 			// else Peek() found a message, so process it below.
 		}
 
+		// Since above didn't return or "continue", a message has been received that is eligible
+		// for further processing.
+
+		// For max. flexibility, it seems best to allow the message filter to have the first
+		// crack at looking at the message, before even TRANSLATE_AHK_MSG:
+		if (g_MsgMonitorCount && MsgMonitor(msg.hwnd, msg.message, msg.wParam, msg.lParam, &msg, msg_reply))  // Count is checked here to avoid function-call overhead.
+			continue; // MsgMonitor has returned "true", indicating that this message should be omitted from further processing.
+			// Above does "continue" and ignores msg_reply.  This is because testing shows that
+			// messages received via Get/PeekMessage() were always sent via PostMessage.  If an
+			// another thread sends ours a message, MSDN implies that Get/PeekMessage() internally
+			// calls the message's WindowProc directly and sends the reply back to the other thread.
+			// That makes sense because it seems unlikely that DispatchMessage contains any means
+			// of replying to a message because it has no way of knowing whether the MSG struct
+			// arrived via Post vs. SendMessage.
+
 		// If this message might be for one of our GUI windows, check that before doing anything
 		// else with the message.  This must be done first because some of the standard controls
 		// also use WM_USER messages, so we must not assume they're generic thread messages just
@@ -446,10 +462,16 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				// There are probably other side-effects as well.
 				if (g_gui[i])
 				{
-					if (g_gui[i]->mHwnd && IsDialogMessage(g_gui[i]->mHwnd, &msg))
+					if (g_gui[i]->mHwnd)
 					{
-						msg_was_handled = true;
-						break;
+						g.CalledByIsDialogMessageOrDispatch = true;
+						if (IsDialogMessage(g_gui[i]->mHwnd, &msg))
+						{
+							msg_was_handled = true;
+							g.CalledByIsDialogMessageOrDispatch = false;
+							break;
+						}
+						g.CalledByIsDialogMessageOrDispatch = false;
 					}
 					if (GuiType::sObjectCount == ++object_count) // No need to keep searching.
 						break;
@@ -964,7 +986,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 						// the cursor's position rather than some arbitrary center-point, or top-left point in the
 						// parent window.  This is because it might be more convenient for the user to move the
 						// mouse to select a menu item (since menu will be close to mouse cursor).
-						GetCursorPos(&g.GuiPoint); // For simplicity, report the cursor position now rather than what it was at the time of the event.
+						g.GuiPoint = msg.pt; // v1.0.38: More accurate/customary to use msg.pt than GetCursorPos().
 					// Convert screen coordinates to window coordinates.  Window coords seem best by default because
 					// the "Menu Show" command uses them by default.  A CoordMode option can be added to change this
 					// if it is ever needed.
@@ -1063,10 +1085,9 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				Hotkey::PerformID((HotkeyIDType)msg.wParam);
 			}
 
-			MAKE_THREAD_INTERRUPTIBLE
 			// v1.0.37.06: Call ResumeUnderlyingThread() even if aMode==WAIT_FOR_MESSAGES; this is for
 			// maintainability and also in case the pause command has been used to unpause the idle thread.
-			ResumeUnderlyingThread(&global_saved);
+			ResumeUnderlyingThread(&global_saved, true);
 
 			if (aMode == WAIT_FOR_MESSAGES) // This is the "idle thread", meaning that the end of the thread above has returned the script to an idle state.
 				g.Priority = PRIORITY_MINIMUM; // Ensure minimum priority so that idle state can always be "interrupted".
@@ -1166,6 +1187,8 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 			{
 				GetClassName(fore_window, fore_class_name, sizeof(fore_class_name));
 				if (!strcmp(fore_class_name, "#32770"))  // MessageBox(), InputBox(), or FileSelectFile() window.
+				{
+					g.CalledByIsDialogMessageOrDispatch = true; // In case there is any way IsDialogMessage() can call one of our own window proc's rather than that of a MsgBox, etc.
 					if (IsDialogMessage(fore_window, &msg))  // This message is for it, so let it process it.
 					{
 						// If it is likely that a FileSelectFile dialog is active, this
@@ -1189,15 +1212,20 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 							// is not a very high overhead call when it is called many times here:
 							//if (msg.message == WM_ERASEBKGND || msg.message == WM_DELETEITEM)
 							SetCurrentDirectory(g_WorkingDir);
+						g.CalledByIsDialogMessageOrDispatch = false;
 						continue;  // This message is done, so start a new iteration to get another msg.
 					}
+					g.CalledByIsDialogMessageOrDispatch = false;
+				}
 			}
 		}
 		// Translate keyboard input for any of our thread's windows that need it:
 		if (!g_hAccelTable || !TranslateAccelerator(g_hWnd, g_hAccelTable, &msg))
 		{
 			TranslateMessage(&msg);
-			DispatchMessage(&msg); // This is needed to send keyboard input to various windows and for some WM_TIMERs.
+			g.CalledByIsDialogMessageOrDispatch = true; // Relies on the fact that the types of messages we dispatch can't result in a reentrant call back to this function.
+			DispatchMessage(&msg); // This is needed to send keyboard input and other messages to various windows and for some WM_TIMERs.
+			g.CalledByIsDialogMessageOrDispatch = false;
 		}
 	} // infinite-loop
 }
@@ -1341,6 +1369,11 @@ bool CheckScriptTimers()
 			// run all the way through to completion rather than being interrupted by the press of
 			// a hotkey, and thus potentially buried in the stack:
 			g_script.mLinesExecutedThisCycle = 0;
+			// mLastScriptRest is not set to GetTickCount() here because unlike other events -- which
+			// are typically in response to an explicit action by the user such as pressing a button
+			// or hotkey -- times are lower priority and more relaxed.  Also, mLastScriptRest really
+			// should only be set when a call to Get/PeekMsg has just occurred, so it should be left
+			// as the responsibilty of the section in MsgSleep that launches new threads.
 
 			if (g_nFileDialogs) // See MsgSleep() for comments on this.
 				SetCurrentDirectory(g_WorkingDir);
@@ -1366,7 +1399,7 @@ bool CheckScriptTimers()
 
 	if (launched_threads) // Since at least one subroutine was run above, restore various values for our caller.
 	{
-		ResumeUnderlyingThread(&global_saved);
+		ResumeUnderlyingThread(&global_saved, false); // Last param "false" because MAKE_THREAD_INTERRUPTIBLE already done above.
 		return true;
 	}
 	return false;
@@ -1418,6 +1451,178 @@ void PollJoysticks()
 
 
 
+bool MsgMonitor(HWND aWnd, UINT aMsg, WPARAM awParam, LPARAM alParam, MSG *apMsg, LRESULT &aMsgReply)
+// Returns false if the message is not being monitored, or it is but the called function indicated
+// that the message should be given its normal processing.  Returns true when the caller should
+// not process this message but should instead immediately reply with aMsgReply (if a reply is possible).
+// When false is returned, caller should ignore the value of aMsgReply.
+{
+	// This function directly launches new threads rather than posting them as something like
+	// AHK_GUI_ACTION (which would allow them to be queued by means of MSG_FILTER_MAX) because a message
+	// monitor function in the script can return "true" to exempt the message from further processing.
+	// Consequently, the MSG_FILTER_MAX queuing effect will only occur for monitored messages that are
+	// numerically greater than WM_HOTKEY. Other messages will not be subject to the filter and thus
+	// will arrive here even when the script is currently uninterruptible, in which case it seems best
+	// to discard the message because the current design doesn't allow for interruptions. The design
+	// could be reviewed to find out what the consequences of interruption would be.  Also, the message
+	// could be suppressed (via return 1) and reposted, but if there are other messages already in
+	// the queue that qualify to fire a msg-filter (or even messages such as WM_LBUTTONDOWN that have
+	// a normal effect that relies on ordering), the messages would then be processed out of their
+	// original order, which would be very undesirable in many cases.
+	//
+	// In light of the above, INTERRUPTIBLE_IF_NECESSARY is used instead of INTERRUPTIBLE_IN_EMERGENCY
+	// to reduce on the unreliability of message filters that are numerically less than WM_HOTKEY.
+	// For example, if the user presses a hotkey and an instant later a qualified WM_LBUTTONDOWN arrives,
+	// the filter will still be able to run by interrupting the uinterruptible thread.  In this case,
+	// ResumeUnderlyingThread() sets g.AllowThisThreadToBeInterrupted to false for us in case the
+	// timer "TIMER_ID_UNINTERRUPTIBLE" fired for the new thread rather than for the old one (this
+	// prevents the interrupted thread from becoming permanently uninterruptible).
+	if (!INTERRUPTIBLE_IN_EMERGENCY)
+		return false;
+
+	// Linear search vs. binary search should perform better on average because the vast majority
+	// of message monitoring scripts are expected to monitor only a few message numbers.
+	int msg_index;
+	for (msg_index = 0; msg_index < g_MsgMonitorCount; ++msg_index)
+		if (g_MsgMonitor[msg_index].msg == aMsg)
+			break;
+	if (msg_index == g_MsgMonitorCount) // No match found, so the script isn't monitoring this message.
+		return false; // Tell the caller to give this message any additional/default processing.
+	// Otherwise, the script is monitoring this message, so continue on.
+
+	MsgMonitorStruct &monitor = g_MsgMonitor[msg_index]; // For performance and convenience.
+	Func &func = *monitor.func;                          // Above, but also in case monitor item gets deleted while the function is running (e.g. by the function itself).
+
+	// Many of the things done below are similar to the thread-launch procedure used in MsgSleep(),
+	// so maintain them together and see MsgSleep() for more detailed commments.
+	if (g_nThreads >= g_MaxThreadsTotal)
+		// Below: Only a subset of ACT_IS_ALWAYS_ALLOWED is done here because:
+		// 1) The omitted action types seem too obscure to grant always-run permission for msg-monitor events.
+		// 2) Reduction in code size.
+		if (g_nThreads > MAX_THREADS_LIMIT
+			|| func.mJumpToLine->mActionType != ACT_EXITAPP && func.mJumpToLine->mActionType != ACT_RELOAD)
+			return false;
+	if (monitor.label_is_running || g.Priority > 0) // Monitor is already running its function or existing thread's priority is too high to be interrupted.
+		return false;
+
+	// Need to check if backup is needed in case script explicitly called the function rather than using
+	// it solely as a callback.
+	// See ExpandExpression() for detailed comments about the following section.
+	bool backup_needed;
+	VarBkp *var_backup;   // If needed, it will hold an array of VarBkp objects.
+	int var_backup_count; // The number of items in the above array.
+	if (backup_needed = (func.mInstances > 0))
+		if (!BackupFunctionVars(func, var_backup, var_backup_count)) // Out of memory.
+			return false;
+			// Since we're in the middle of processing messages, and since out-of-memory is so rare,
+			// it seems justifiable not to have any error reporting and instead just avoid launching
+			// the new thread.
+
+	// Since above didn't return, the launch of the new thread is now considered unavoidable.
+
+	// See MsgSleep() for comments about the following section.
+	strlcpy(g.ErrorLevel, g_ErrorLevel->Contents(), sizeof(g.ErrorLevel));
+	global_struct global_saved;
+	CopyMemory(&global_saved, &g, sizeof(global_struct));
+	if (g_nFileDialogs)
+		SetCurrentDirectory(g_WorkingDir);
+
+	monitor.label_is_running = true;
+	InitNewThread(0, false, true);
+	g_script.UpdateTrayIcon();
+	g_script.mLinesExecutedThisCycle = 0; // See comments in CheckScriptTimers() for why g_script.mLastScriptRest isn't altered here.
+
+	// Set last found window (as documented).  Can be NULL.
+	// Nested controls like ComboBoxes require more than a simple call to GetParent().
+	if (g.hWndLastUsed = GetNonChildParent(aWnd)) // Assign parent window as the last found window (it's ok if it's hidden).
+	{
+		GuiType *pgui = GuiType::FindGui(g.hWndLastUsed);
+		if (pgui) // This parent window is a GUI window.
+		{
+			g.GuiWindowIndex = pgui->mWindowIndex;  // Update the built-in variable A_GUI.
+			g.GuiDefaultWindowIndex = pgui->mWindowIndex; // Consider this a GUI thread; so it defaults to operating upon its own window.
+			GuiIndexType control_index = GUI_HWND_TO_INDEX(aWnd);
+			if (control_index != -1) // Match found (compares directly to -1 due to unsigned).
+				g.GuiControlIndex = control_index;
+			//else leave it at its default, which was set when the new thread was initialized.
+		}
+		//else leave the above members at their default values set when the new thread was initialized.
+	}
+	if (apMsg)
+	{
+		g.GuiPoint = apMsg->pt;
+		g.EventInfo = apMsg->time;
+	}
+	//else leave them at their init-thread defaults.
+
+	// See ExpandExpression() for detailed comments about the following section.
+	if (func.mParamCount > 0)
+	{
+		// Copy the appropriate values into each of the function's formal parameters.
+		func.mParam[0].var->Assign((DWORD)awParam); // Assign parameter #1: wParam
+		if (func.mParamCount > 1) // Assign parameter #2: lParam
+		{
+			func.mParam[1].var->Assign((int)alParam);
+			if (func.mParamCount > 2) // Assign parameter #3: Message number (in case this function monitors more than one).
+			{
+				func.mParam[2].var->AssignHWND((HWND)aMsg); // Write msg number as hex because it's a lot more common. Casting issues make it easier to retain the name "AssignHWND".
+				if (func.mParamCount > 3) // Assign parameter #4: HWND (listed last since most scripts won't use it for anything).
+					func.mParam[3].var->AssignHWND(aWnd); // Can be a parent or child window.
+			}
+		}
+	}
+
+	char *return_value = ""; // Init to default in case function doesn't return a value or it EXITs or fails.
+
+	// See ExpandExpression() for detailed comments about the following section.
+	Func *prev_func = g.CurrentFunc; // This will be non-NULL when a function is called from inside another function.
+	g.CurrentFunc = &func;
+	++func.mInstances;
+	ResultType result = func.mJumpToLine->ExecUntil(UNTIL_BLOCK_END, &return_value);
+	--func.mInstances;
+	g.CurrentFunc = prev_func;
+
+	int i;
+	for (i = 0; i < func.mVarCount; ++i)
+		func.mVar[i]->Free(VAR_FREE_EXCLUDE_STATIC, true); // Pass "true" to exclude aliases, since their targets should not be freed (they don't belong to this function).
+	for (i = 0; i < func.mLazyVarCount; ++i)
+		func.mLazyVar[i]->Free(VAR_FREE_EXCLUDE_STATIC, true);
+	if (backup_needed) // This is the indicator that a backup was made, a restore is also needed.
+		RestoreFunctionVars(func, var_backup, var_backup_count); // It avoids restoring statics.
+
+	ResumeUnderlyingThread(&global_saved, true);
+	// Check that the msg_index item still exists (it may have been deleted during the thread that just finished,
+	// either by the thread itself or some other thread that interrupted it).  BIF_OnMessage has been sure to
+	// reset deleted array elements to have a NULL func.  Even so, the following scenario could happen:
+	// 1) The message element is deleted.
+	// 2) It is recreated to be the same as before, but now it has a different array index.
+	// 3) It's label_is_running member would have been set to false upon creation, and the thread for the same
+	//    message might have launched the same function we did above, or some other.
+	// 4) Everything seems okay in this case, especially given its rarity.
+	//
+	// But what if step 2 above created the same msg+func in the same position as before?  It's label_is_running
+	// member would have been wrongly set to false, which would have allowed this msg-monitor thread to launch
+	// while it was techically still running above.  This scenario seems too rare and the consequences too small
+	// to justify the extra code size, so it is documented here as a known limitation.
+	//
+	// Thus, if "monitor" is defunct due to deletion, setting its label_is_running to false is harmless.
+	// However, "monitor" might have been reused by BIF_OnMessage() to create a new msg-monitor, so the
+	// thing that must be checked is the message number to avoid wrongly setting some other msg-monitor's
+	// label_is_running to false:
+	if (monitor.msg == aMsg)
+		monitor.label_is_running = false;
+	//else "monitor" is now some other msg-monitor, so do don't change it (see above comments).
+
+	if (!*return_value || result == EARLY_EXIT || result == FAIL) // Tell the caller to process this message normally.
+		return false; // The caller should ignore the value of aMsgReply in this case.
+	// Otherwise true will be returned, in which case the aMsgReply contains the reply to be sent for
+	// this message.
+	aMsgReply = (LPARAM)ATOI64(return_value); // Use 64-bit in case it's an unsigned number greater than 0x7FFFFFFF, in which case this allows it to wrap around to a negative.
+	return true;
+}
+
+
+
 void InitNewThread(int aPriority, bool aSkipUninterruptible, bool aIncrementThreadCount)
 // To reduce the expectation that a newly launched hotkey or timed subroutine will
 // be immediately interrupted by a timed subroutine or hotkey, interruptions are
@@ -1465,9 +1670,13 @@ void InitNewThread(int aPriority, bool aSkipUninterruptible, bool aIncrementThre
 
 
 
-void ResumeUnderlyingThread(global_struct *pSavedStruct)
+void ResumeUnderlyingThread(global_struct *pSavedStruct, bool aMakeThreadInterruptible)
 {
 	--g_nThreads; // Below relies on this having been done early.
+
+	if (aMakeThreadInterruptible)
+		MAKE_THREAD_INTERRUPTIBLE
+
 	bool underlying_thread_is_paused = g.UnderlyingThreadIsPaused; // Done this way for performance (to avoid multiple indirections).
 	CopyMemory(&g, pSavedStruct, sizeof(global_struct));
 	g_ErrorLevel->Assign(g.ErrorLevel);
@@ -1507,7 +1716,8 @@ void ResumeUnderlyingThread(global_struct *pSavedStruct)
 	// at least in the case where CheckScriptTimers() calls this macro at a time when there
 	// is no thread other than the "idle thread" to resume.  A resumed thread should always
 	// be interruptible anyway, since otherwise it couldn't have been interrupted in the
-	// first place to get us here:
+	// first place to get us here. UPDATE #2: Making it "true" is now also relied upon by MsgMonitor(),
+	// which sometimes launches a new thread even when the current thread is interruptible.
 	g_script.UpdateTrayIcon();
 	g.AllowThisThreadToBeInterrupted = true;
 }

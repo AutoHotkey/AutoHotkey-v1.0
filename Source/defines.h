@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.37.07"
+#define NAME_VERSION "1.0.38.00"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -161,6 +161,7 @@ enum SymbolType // For use with ExpandExpression() and IsPureNumeric().
 #define MAX_SPLASHIMAGE_WINDOWS_STR "10" // Keep this in sync with above.
 #define MAX_GUI_WINDOWS 99  // Things that parse the "NN:" prefix for Gui/GuiControl might rely on this being 2-digit.
 #define MAX_GUI_WINDOWS_STR "99" // Keep this in sync with above.
+#define MAX_MSG_MONITORS 500
 
 // IMPORTANT: Before ever changing the below, note that it will impact the IDs of menu items created
 // with the MENU command, as well as the number of such menu items that are possible (currently about
@@ -341,6 +342,7 @@ struct global_struct
 	HWND DialogHWND;
 
 	// All these one-byte members are kept adjacent to make the struct smaller, which helps conserve stack space:
+	bool CalledByIsDialogMessageOrDispatch;  // This would probably be okay if it were a normal global rather than in the g-struct, but due to messaging complexity, this lends peace of mind and robustness.
 	bool TitleFindFast; // Whether to use the fast mode of searching window text, or the more thorough slow mode.
 	bool DetectHiddenWindows; // Whether to detect the titles of hidden parent windows.
 	bool DetectHiddenText;    // Whether to detect the text of hidden child windows.
@@ -369,6 +371,7 @@ inline void global_clear_state(global_struct &g)
 	g.UnderlyingThreadIsPaused = false;
 	g.UninterruptedLineCount = 0;
 	g.DialogOwnerIndex = MAX_GUI_WINDOWS; // Initialized to out-of-bounds.
+	g.CalledByIsDialogMessageOrDispatch = false;
 	g.GuiDefaultWindowIndex = 0;
 	// Above line is done because allowing it to be permanently changed by the auto-exec section
 	// seems like it would cause more confusion that it's worth.  A change to the global default
@@ -409,7 +412,6 @@ inline void global_init(global_struct &g)
 	g.KeyDelay = 10;
 	g.PressDuration = -1;
 	g.MouseDelay = 10;
-	// AutoIt3's default:
 	#define DEFAULT_MOUSE_SPEED 2
 	#define MAX_MOUSE_SPEED 100
 	#define MAX_MOUSE_SPEED_STR "100"

@@ -214,8 +214,6 @@ HWND SetForegroundWindowEx(HWND aWnd)
 	{
 		// Based on MSDN docs, these calls should always succeed due to the other
 		// checks done above (e.g. that none of the HWND's are NULL):
-		// AutoIt3: Get the details of all the input threads involved (myappswin,
-		// foreground win, target win):
 		fore_thread = GetWindowThreadProcessId(orig_foreground_wnd, NULL);
 		my_thread  = GetCurrentThreadId();  // It's probably best not to have this var be static.
 		target_thread = GetWindowThreadProcessId(aWnd, NULL);
@@ -406,7 +404,7 @@ HWND WinClose(char *aTitle, char *aText, int aTimeToWaitForClose
 
 HWND WinClose(HWND aWnd, int aTimeToWaitForClose, bool aKillIfHung)
 {
-	if (aKillIfHung) // This part is based on te AutoIt3 source.
+	if (aKillIfHung) // This part is based on the AutoIt3 source.
 	{
 		// Update: Another reason not to wait a long time with the below is that WinKill
 		// is normally only used when the target window is suspected of being hung.  It
@@ -1192,7 +1190,7 @@ BOOL CALLBACK EnumParentFindOwned(HWND aWnd, LPARAM lParam)
 HWND GetNonChildParent(HWND aWnd)
 // Returns the first ancestor of aWnd that isn't itself a child.  aWnd itself is returned if
 // it is not a child.  Returns NULL only if aWnd is NULL.  Also, it should always succeed
-// based on the axiom that any window with the WS_CHILD (aka WS_CHILDWINDOW) style must have
+// based on the axiom that any window with the WS_CHILD style (aka WS_CHILDWINDOW) must have
 // a non-child ancestor somewhere up the line.
 // This function doesn't do anything special with owned vs. unowned windows.  Despite what MSDN
 // says, GetParent() does not return the owner window, at least in some cases on Windows XP
@@ -1702,8 +1700,13 @@ void SetForegroundLockTimeout()
 // PROCESS ROUTINES
 ////////////////////
 
+///////////////////////////////////////////////////////////////////////////////
+// The following function is based on AutoIt v3 source code, which is:
+// Copyright 1999-2003 Jonathan Bennett and others listed at
+// http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
+///////////////////////////////////////////////////////////////////////////////
 DWORD ProcessExist9x2000(char *aProcess, char *aProcessName)
-// Adapted from the AutoIt3 source.
 {
 	if (aProcessName) // Init this output variable in case of early return.
 		*aProcessName = '\0';
@@ -1762,8 +1765,13 @@ DWORD ProcessExist9x2000(char *aProcess, char *aProcessName)
 
 
 
+///////////////////////////////////////////////////////////////////////////////
+// The following function is based on AutoIt v3 source code, which is:
+// Copyright 1999-2003 Jonathan Bennett and others listed at
+// http://www.autoitscript.com/autoit3/docs/credits.htm
+// License: GNU GPL version 2 or (at your option) any later version.
+///////////////////////////////////////////////////////////////////////////////
 DWORD ProcessExistNT4(char *aProcess, char *aProcessName)
-// Adapted from the AutoIt3 source.
 {
 	if (aProcessName) // Init this output variable in case of early return.
 		*aProcessName = '\0';

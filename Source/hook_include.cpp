@@ -500,11 +500,17 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 	// some such keys (e.g. Ctrl-LeftArrow or RightArrow if I recall correctly), disrupts the native
 	// function of those keys.  That is the reason for the existence of the
 	// g_input.TranscribeModifiedKeys option.
-	if (g_modifiersLR_physical
+	// Fix for v1.0.38: Below now uses g_modifiersLR_logical vs. g_modifiersLR_physical because
+	// it's the logical state that determines what will actually be produced on the screen and
+	// by ToAsciiEx() below.  This fixes the Input command to properly capture simulated
+	// keystrokes even when they were sent via hotkey such #c or a hotstring for which the user
+	// might still be holding down a modifier, such as :*:<t>::Test (if '>' requires shift key).
+	// It might also fix other issues.
+	if (g_modifiersLR_logical
 		&& !(g_input.status == INPUT_IN_PROGRESS && g_input.TranscribeModifiedKeys)
-		&& g_modifiersLR_physical != MOD_LSHIFT && g_modifiersLR_physical != MOD_RSHIFT
-		&& g_modifiersLR_physical != (MOD_LSHIFT & MOD_RSHIFT)
-		&& !((g_modifiersLR_physical & (MOD_LALT | MOD_RALT)) && (g_modifiersLR_physical & (MOD_LCONTROL | MOD_RCONTROL))))
+		&& g_modifiersLR_logical != MOD_LSHIFT && g_modifiersLR_logical != MOD_RSHIFT
+		&& g_modifiersLR_logical != (MOD_LSHIFT & MOD_RSHIFT)
+		&& !((g_modifiersLR_logical & (MOD_LALT | MOD_RALT)) && (g_modifiersLR_logical & (MOD_LCONTROL | MOD_RCONTROL))))
 		// Since in some keybd layouts, AltGr (Ctrl+Alt) will produce valid characters (such as the @ symbol,
 		// which is Ctrl+Alt+Q in the German/IBM layout and Ctrl+Alt+2 in the Spanish layout), an attempt
 		// will now be made to transcribe all of the following modifier combinations:
@@ -527,7 +533,11 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 
 	// v1.0.21: Only true (unmodified) backspaces are recognized by the below.  Another reason to do
 	// this is that ^backspace has a native function (delete word) different than backspace in many editors.
-	if (vk == VK_BACK && !g_modifiersLR_physical) // Backspace
+	// Fix for v1.0.38: Below now uses g_modifiersLR_logical vs. physical because it's the logical state
+	// that determines whether the backspace behaves like an unmodified backspace.  This solves the issue
+	// of the Input command collecting simulated backspaces as real characters rather than recognizing
+	// them as a means to erase the previous character in the buffer.
+	if (vk == VK_BACK && !g_modifiersLR_logical) // Backspace
 	{
 		// Note that it might have been in progress upon entry to this function but now isn't due to
 		// INPUT_TERMINATED_BY_ENDKEY above:
@@ -545,7 +555,7 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 	memcpy(key_state, g_PhysicalKeyState, 256);
 	// As of v1.0.25.10, the below fixes the Input command so that when it is capturing artificial input,
 	// such as from the Send command or a hotstring's replacement text, the captured input will reflect
-	// any modifiers that are logically but not physically down:
+	// any modifiers that are logically but not physically down (or vice versa):
 	AdjustKeyState(key_state, g_modifiersLR_logical);
 	// Make the state of capslock accurate so that ToAscii() will return upper vs. lower if appropriate:
 	if (IsKeyToggledOn(VK_CAPITAL))

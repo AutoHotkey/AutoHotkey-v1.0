@@ -53,7 +53,7 @@ bool MsgSleep(int aSleepDuration = INTERVAL_UNSPECIFIED, MessageMode aMode = RET
 // completion of that operation to affect only the status of g_AllowInterruption,
 // not g.AllowThisThreadToBeInterrupted.
 #define INTERRUPTIBLE (g.AllowThisThreadToBeInterrupted && g_AllowInterruption && !g_MenuIsVisible)
-
+#define INTERRUPTIBLE_IN_EMERGENCY (g_AllowInterruption && !g_MenuIsVisible)
 
 // The DISABLE_UNINTERRUPTIBLE_SUB macro below must always kill the timer if it exists -- even if
 // the timer hasn't expired yet.  This is because if the timer were to fire when interruptibility had
@@ -128,8 +128,10 @@ bool CheckScriptTimers();
 void PollJoysticks();
 #define POLL_JOYSTICK_IF_NEEDED if (Hotkey::sJoyHotkeyCount) PollJoysticks();
 
+bool MsgMonitor(HWND aWnd, UINT aMsg, WPARAM awParam, LPARAM alParam, MSG *apMsg, LRESULT &aMsgReply);
+
 void InitNewThread(int aPriority, bool aSkipUninterruptible, bool aIncrementThreadCount);
-void ResumeUnderlyingThread(global_struct *pSavedStruct);
+void ResumeUnderlyingThread(global_struct *pSavedStruct, bool aMakeThreadInterruptible);
 
 VOID CALLBACK MsgBoxTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);
 VOID CALLBACK AutoExecSectionTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);

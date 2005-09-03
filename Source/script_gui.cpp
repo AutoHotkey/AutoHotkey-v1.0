@@ -605,6 +605,8 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 		case GUI_CONTROL_COMBOBOX:
 		case GUI_CONTROL_LISTBOX:
 		case GUI_CONTROL_TAB:
+			if (control.type == GUI_CONTROL_COMBOBOX && guicontrol_cmd == GUICONTROL_CMD_TEXT)
+				break; // v1.30.38: Fall through to the SetWindowText() method, which works to set combo's edit field.
 			// Seems best not to do the below due to the extreme rarity of anyone wanting to change a
 			// ListBox or ComboBox's hidden caption.  That can be done via ControlSetText if it is
 			// ever needed.  The advantage of not doing this is that the "TEXT" command can be used
@@ -5424,7 +5426,8 @@ ResultType GuiType::Close()
 	if (!mLabelForClose)
 		return Cancel();
 	POST_AHK_GUI_ACTION(mHwnd, AHK_GUI_CLOSE, GUI_EVENT_NORMAL);
-	// MsgSleep() is not done because GuiWindowProc() takes care of it.  See its comments for why.
+	// MsgSleep() is not done because "case AHK_GUI_ACTION" in GuiWindowProc() takes care of it.
+	// See its comments for why.
 	return OK;
 }
 
@@ -5440,7 +5443,8 @@ ResultType GuiType::Escape() // Similar to close, except typically called when t
 		return OK;
 	// See lengthy comments in Event() about this section:
 	POST_AHK_GUI_ACTION(mHwnd, AHK_GUI_ESCAPE, GUI_EVENT_NORMAL);
-	// MsgSleep() is not done because GuiWindowProc() takes care of it.  See its comments for why.
+	// MsgSleep() is not done because "case AHK_GUI_ACTION" in GuiWindowProc() takes care of it.
+	// See its comments for why.
 	return OK;
 }
 
@@ -6159,6 +6163,29 @@ int GuiType::FindFont(FontType &aFont)
 
 LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lParam)
 {
+	// If a message pump other than our own is running -- such as that of a dialog like MsgBox -- it will
+	// dispatch messages directly here.  This is detected by means of g.CalledByIsDialogMessageOrDispatch==false.
+	// Such messages need to be checked here because MsgSleep hasn't seen the message and thus hasn't
+	// done the check. The g.CalledByIsDialogMessageOrDispatch method relies on the fact that we never call
+	// MsgSleep here for the types of messages dispatched from MsgSleep, which seems true.  Also, if
+	// we do lauch a monitor thread here via MsgMonitor, that means g.CalledByIsDialogMessageOrDispatch==false.
+	// Therefore, any calls to MsgSleep made by the new thread can't corrupt our caller's settings of
+	// g.CalledByIsDialogMessageOrDispatch because in that case, our caller isn't MsgSleep's IsDialog/Dispatch.
+	// As an added precaution against the complexity of these message issues (only one of several such scenarios
+	// is described above), CalledByIsDialogMessageOrDispatch is put into the g-struct rather than being
+	// a normal global.  That way, a thread's calls to MsgSleep can't interfere with the value of
+	// CalledByIsDialogMessageOrDispatch for any threads beneath it.  Although this may technically be
+	// unnecessary, it adds maintainability.
+	LRESULT msg_reply;
+	if (g_MsgMonitorCount && !g.CalledByIsDialogMessageOrDispatch // Count is checked here to avoid function-call overhead.
+		&& MsgMonitor(hWnd, iMsg, wParam, lParam, NULL, msg_reply))
+		return msg_reply; // MsgMonitor has returned "true", indicating that this message should be omitted from further processing.
+	// Known limitation: If the above launched a thread but the thread didn't cause it turn return,
+	// and iMsg is something like AHK_GUI_ACTION that will be reposted via PostMessage(), the monitor
+	// will be launched again when MsgSleep is called in conjunction with the repost. Given the rarity
+	// and the minimal consequences of this, no extra code (such as passing a new parameter to MsgSleep)
+	// is added to handle this.
+
 	GuiType *pgui;
 	GuiControlType *pcontrol;
 	GuiIndexType control_index;
@@ -6178,7 +6205,8 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 			pgui->mSizeType = wParam;
 			pgui->mSizeWidthHeight = lParam; // A slight aid to performance to only divide it into halves upon demand (later).
 			POST_AHK_GUI_ACTION(hWnd, AHK_GUI_SIZE, GUI_EVENT_NORMAL);
-			// MsgSleep() is not done because GuiWindowProc() takes care of it.  See its comments for why.
+			// MsgSleep() is not done because "case AHK_GUI_ACTION" in GuiWindowProc() takes care of it.
+			// See its comments for why.
 		}
 		return 0; // "If an application processes this message, it should return zero."
 		// Testing shows that the window still resizes correctly (controls are revealed as the window
@@ -6619,7 +6647,8 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 		control_index = pcontrol ? GUI_HWND_TO_INDEX(pcontrol->hwnd) : MAX_CONTROLS_PER_GUI;
 		// Above: MAX_CONTROLS_PER_GUI indicates to GetGuiControl() that there is no control in this case.
 		POST_AHK_GUI_ACTION(hWnd, AHK_GUI_DROPFILES, control_index); // Last two params are swapped in this case.
-		// MsgSleep() is not done because GuiWindowProc() takes care of it.  See its comments for why.
+		// MsgSleep() is not done because "case AHK_GUI_ACTION" in GuiWindowProc() takes care of it.
+		// See its comments for why.
 		return 0; // "An application should return zero if it processes this message."
 	}
 
@@ -7070,7 +7099,8 @@ void GuiType::Event(GuiIndexType aControlIndex, UINT aNotifyCode, USHORT aEventI
 	// could perhaps redesign things so that control.hwnd is sent in place of mHwnd, which would free up
 	// the entire WPARAM for use.  See definition of AHK_GUI_CLOSE for more comments.
 	POST_AHK_GUI_ACTION(mHwnd, (WPARAM)(((UINT)aEventInfo << 16) | LOWORD(aControlIndex)), (LPARAM)gui_event);
-	// MsgSleep() is not done because GuiWindowProc() takes care of it.  See its comments for why.
+	// MsgSleep() is not done because "case AHK_GUI_ACTION" in GuiWindowProc() takes care of it.
+	// See its comments for why.
 }
 
 

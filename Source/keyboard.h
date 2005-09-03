@@ -189,7 +189,7 @@ int SendChar(char aChar, modLR_type aModifiersLR, KeyEventTypes aEventType, HWND
 // Below uses a pseudo-random value.  It's best that this be constant so that if multiple instances
 // of the app are running, they will all ignore each other's keyboard & mouse events.  Also, a value
 // close to UINT_MAX might be a little better since it's might be less likely to be used as a pointer
-// value by any apps that send keybd events whose ExtraInfo is really a pointer value (hard to imagine?):
+// value by any apps that send keybd events whose ExtraInfo is really a pointer value:
 #define KEY_IGNORE 0xFFC3D44F
 #define KEY_PHYS_IGNORE (KEY_IGNORE - 1)  // Same as above but marked as physical for other instances of the hook.
 #define KEY_IGNORE_ALL_EXCEPT_MODIFIER (KEY_IGNORE - 2)  // Non-physical and ignored only if it's not a modifier.
