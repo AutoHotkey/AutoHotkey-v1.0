@@ -3135,6 +3135,8 @@ ResultType Line::ScriptPostMessage(char *aMsg, char *awParam, char *alParam, cha
 	HWND control_window = *aControl ? ControlExist(target_window, aControl) : target_window;
 	if (!control_window)
 		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+	// UPDATE: Note that ATOU(), in both past and current versions, supports negative numbers too.
+	// For example, ATOU("-1") has always produced 0xFFFFFFFF.
 	// Use ATOU() to support unsigned (i.e. UINT, LPARAM, and WPARAM are all 32-bit unsigned values).
 	// ATOU() also supports hex strings in the script, such as 0xFF, which is why it's commonly
 	// used in functions such as this:
@@ -3154,6 +3156,8 @@ ResultType Line::ScriptSendMessage(char *aMsg, char *awParam, char *alParam, cha
 	HWND control_window = *aControl ? ControlExist(target_window, aControl) : target_window;
 	if (!control_window)
 		return g_ErrorLevel->Assign("FAIL");
+	// UPDATE: Note that ATOU(), in both past and current versions, supports negative numbers too.
+	// For example, ATOU("-1") has always produced 0xFFFFFFFF.
 	// Use ATOI64 to support unsigned (i.e. UINT, LPARAM, and WPARAM are all 32-bit unsigned values).
 	// ATOI64 also supports hex strings in the script, such as 0xFF, which is why it's commonly
 	// used in functions such as this:

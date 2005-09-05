@@ -6594,6 +6594,7 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 	case WM_CONTEXTMENU:
 		if ((pgui = GuiType::FindGui(hWnd)) && pgui->mLabelForContextMenu)
 		{
+			HWND clicked_hwnd = (HWND)wParam;
 			bool from_keyboard; // Whether Context Menu was generated from keyboard (AppsKey or Shift-F10).
 			if (!(from_keyboard = (lParam == 0xFFFFFFFF))) // Mouse click vs. keyboard event.
 			{
@@ -6602,10 +6603,14 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 				POINT pt = {LOWORD(lParam), HIWORD(lParam)};
 				if (!ScreenToClient(hWnd, &pt) || pt.y < 0)
 					break; // Allows default proc to display standard system context menu for title bar.
+				// v1.0.38.01: Recognize clicks on pictures and text controls as occuring in that control
+				// (via A_GuiControl) rather than generically in the window:
+				if (clicked_hwnd == pgui->mHwnd)
+					clicked_hwnd = ChildWindowFromPoint(clicked_hwnd, pt); // WindowFromPoint() apparently doesn't work for static controls and perhaps not GroupBoxes.
 			}
 			// GUI_HWND_TO_INDEX() will produce a small negative value on failure, which due to unsigned
 			// is seen as a large positive number.
-			control_index = GUI_HWND_TO_INDEX((HWND)wParam);
+			control_index = GUI_HWND_TO_INDEX(clicked_hwnd);
 			if (control_index >= pgui->mControlCount) // The user probably clicked the parent window rather than inside one of its controls.
 				control_index = MAX_CONTROLS_PER_GUI;
 				// Above flags it as a non-control event. Must use MAX_CONTROLS_PER_GUI rather than something
@@ -6615,10 +6620,7 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 			POST_AHK_GUI_ACTION(hWnd, AHK_GUI_CONTEXTMENU, control_index); // Last two params are swapped in this case.
 			return 0; // Return value doesn't matter.
 		}
-		//else the following never seems to happen, so apparently it doesn't work this way:
-		// It's probably for a control.  Let DefDlgProc() handle it so that the control will decide
-		// whether to forward this message back to use as a WM_CONTEXTMENU event for the parent-window.
-		// For example, an Edit control has its own context menu so it won't echo back the message.
+		//else it's for some non-GUI window (probably impossible).  Let DefDlgProc() handle it.
 		break;
 	
 	case WM_DROPFILES:

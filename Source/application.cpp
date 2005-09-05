@@ -1562,7 +1562,11 @@ bool MsgMonitor(HWND aWnd, UINT aMsg, WPARAM awParam, LPARAM alParam, MSG *apMsg
 		func.mParam[0].var->Assign((DWORD)awParam); // Assign parameter #1: wParam
 		if (func.mParamCount > 1) // Assign parameter #2: lParam
 		{
-			func.mParam[1].var->Assign((int)alParam);
+			// v1.0.38.01: LPARAM is now written out as a DWORD because the majority of system messages
+			// use LPARAM as a pointer or other unsigned value.  This shouldn't affect most scripts because
+			// of the way ATOI64() and ATOU() wrap a negative number back into the unsigned domain for
+			// commands such as PostMessage/SendMessage.
+			func.mParam[1].var->Assign((DWORD)alParam);
 			if (func.mParamCount > 2) // Assign parameter #3: Message number (in case this function monitors more than one).
 			{
 				func.mParam[2].var->AssignHWND((HWND)aMsg); // Write msg number as hex because it's a lot more common. Casting issues make it easier to retain the name "AssignHWND".

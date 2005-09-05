@@ -277,6 +277,9 @@ inline bool IsHex(char *aBuf)
 // Note: AHK support for hex ints reduces performance by only 10% for decimal ints, even in the tightest
 // of math loops that have SetBatchLines set to -1.
 {
+	// For whatever reason, omit_leading_whitespace() benches consistently faster (albeit slightly) than
+	// the same code put inline:
+	//for (; IS_SPACE_OR_TAB(*aBuf); ++aBuf);
 	aBuf = omit_leading_whitespace(aBuf); // i.e. caller doesn't have to have ltrimmed.
 	if (!*aBuf)
 		return false;
@@ -302,13 +305,15 @@ inline bool IsHex(char *aBuf)
 // the performance isn't any better.
 
 inline __int64 ATOI64(char *buf)
+// The following comment only applies if the code is a macro or actually put inline by the compiler,
+// which is no longer true:
 // A more complex macro is used for ATOI64(), since it is more often called from places where
-// performance matters (e.g. ACT_ADD).  It adds about 500 bytes to the code size in exchance for
+// performance matters (e.g. ACT_ADD).  It adds about 500 bytes to the code size  in exchance for
 // a 8% faster math loops.  But it's probably about 8% slower when used with hex integers, but
 // those are so rare that the speed-up seems worth the extra code size:
 //#define ATOI64(buf) _strtoi64(buf, NULL, 0) // formerly used _atoi64()
 {
-	return IsHex(buf) ? _strtoi64(buf, NULL, 16) : _atoi64(buf);
+	return IsHex(buf) ? _strtoi64(buf, NULL, 16) : _atoi64(buf);  // _atoi64() has superior performance, so use it when possible.
 }
 
 inline unsigned __int64 ATOU64(char *buf)
@@ -321,13 +326,21 @@ inline int ATOI(char *buf)
 	// Below has been updated because values with leading zeros were being intepreted as
 	// octal, which is undesirable.
 	// Formerly: #define ATOI(buf) strtol(buf, NULL, 0) // Use zero as last param to support both hex & dec.
-	return IsHex(buf) ? strtol(buf, NULL, 16) : atoi(buf);
+	return IsHex(buf) ? strtol(buf, NULL, 16) : atoi(buf); // atoi() has superior performance, so use it when possible.
 }
 
-inline unsigned long ATOU(char *buf)
-{
-	return strtoul(buf, NULL, IsHex(buf) ? 16 : 10);
-}
+// v1.0.38.01: Make ATOU a macro that refers to ATOI64() to improve performance (takes advantage of _atoi64()
+// being considerably faster than strtoul(), at least when the number is non-hex).  This relies on the fact
+// that ATOU() and (UINT)ATOI64() produce the same result due to the way casting works.  For example:
+// ATOU("-1") == (UINT)ATOI64("-1")
+// ATOU("-0xFFFFFFFF") == (UINT)ATOI64("-0xFFFFFFFF")
+#define ATOU(buf) (UINT)ATOI64(buf)
+//inline unsigned long ATOU(char *buf)
+//{
+//	// As a reminder, strtoul() also handles negative numbers.  For example, ATOU("-1") is
+//	// 4294967295 (0xFFFFFFFF) and ATOU("-2") is 4294967294.
+//	return strtoul(buf, NULL, IsHex(buf) ? 16 : 10);
+//}
 
 inline double ATOF(char *buf)
 // Unlike some Unix versions of strtod(), the VC++ version does not seem to handle hex strings
