@@ -130,32 +130,33 @@ void Hotkey::AllActivate()
 			if (vk_to_sc(hot.mVK, true) // This virtual key corresponds to two scan codes...
 				|| vk_is_prefix[hot.mVK]) // ... or it's a suffix that is also used as a prefix (allows ^!a to work without $ when "a & b" is a hotkey).
 			{
-				if (!g_os.IsWin9x())
-					hot.mType = HK_KEYBD_HOOK;
-				else
-				{
-					// Since the hook is not yet supported on these OSes, try not to use it.
-					// If the hook must be used, we'll mark it as needing the hook so that
-					// other reporting (e.g. ListHotkeys) can easily tell which keys won't work
-					// on Win9x.  The first condition: e.g. a naked NumpadEnd or NumpadEnter shouldn't
-					// be allowed to be Registered() because it would cause the hotkey to also fire on
-					// END or ENTER (the non-Numpad versions of these keys).  UPDATE: But it seems
-					// best to allow this on Win9x because it's more flexible to do so (i.e. some
-					// people might have a use for it):
-					//if (!hot.mModifiers)
-					//	hot.mType = HK_KEYBD_HOOK;
-					hot.mType = HK_NORMAL;
-					// Second condition (now disabled): Since both keys (e.g. NumpadEnd and End) are
-					// configured as hotkeys with the same modifiers, only one of them can be registered.
-					// It's probably best to allow one of them to be registered, arbitrarily, so that some
-					// functionality is offered.  That's why this is disabled:
-					// This hotkey's vk has a counterpart key with the same vk.  Check if either of those
-					// two keys exists as a "scan code" hotkey.  If so, This hotkey must be handled
-					// by the hook to prevent it from firing for both scan codes.  modifiersLR should be
-					// zero here because otherwise type would have already been set to HK_KEYBD_HOOK:
-					//if (FindHotkeyBySC(vk_to_sc(hot.mVK), hot.mModifiers, hot.mModifiersLR) != HOTKEY_ID_INVALID))
-					//	hot.mType = HK_KEYBD_HOOK;
-				}
+				// v1.0.38.02: The line below now makes an explicit VK hotkey such as "VK24::" (which is VK_HOME)
+				// to be handled via RegisterHotkey() vs. the hook.  Someone asked for this ability, but even if it
+				// weren't for that it seems more correct to recognize an explicitly-specified VK as a "neutral VK"
+				// (i.e. one that fires for both scan codes if the VK has two scan codes). The user can always
+				// specify "SCnnn::" as a hotkey to avoid this fire-on-both-scan-codes behavior.
+				hot.mType = (g_os.IsWin9x() || hot.mVK_WasSpecifiedByNumber) ? HK_NORMAL : HK_KEYBD_HOOK;
+				// Older comments (some might be obsolete in light of the v1.0.38.02 change above):
+				// If the hook must be used, we'll mark it as needing the hook so that
+				// other reporting (e.g. ListHotkeys) can easily tell which keys won't work
+				// on Win9x.  The first condition: e.g. a naked NumpadEnd or NumpadEnter shouldn't
+				// be allowed to be Registered() because it would cause the hotkey to also fire on
+				// END or ENTER (the non-Numpad versions of these keys).  UPDATE: But it seems
+				// best to allow this on Win9x because it's more flexible to do so (i.e. some
+				// people might have a use for it):
+				//if (!hot.mModifiers)
+				//	hot.mType = HK_KEYBD_HOOK;
+				//
+				// Second condition (now disabled): Since both keys (e.g. NumpadEnd and End) are
+				// configured as hotkeys with the same modifiers, only one of them can be registered.
+				// It's probably best to allow one of them to be registered, arbitrarily, so that some
+				// functionality is offered.  That's why this is disabled:
+				// This hotkey's vk has a counterpart key with the same vk.  Check if either of those
+				// two keys exists as a "scan code" hotkey.  If so, This hotkey must be handled
+				// by the hook to prevent it from firing for both scan codes.  modifiersLR should be
+				// zero here because otherwise type would have already been set to HK_KEYBD_HOOK:
+				//if (FindHotkeyBySC(vk_to_sc(hot.mVK), hot.mModifiers, hot.mModifiersLR) != HOTKEY_ID_INVALID))
+				//	hot.mType = HK_KEYBD_HOOK;
 			}
 
 			// Fall back to default checks if more specific ones above didn't set it to use the hook:
@@ -652,6 +653,7 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, Label *aJumpToLabel, HookActionTyp
 	if (!*aOptions)
 		return OK;  // New hotkeys will have been created using the current values of g_MaxThreadsBuffer, etc.
 
+	result = OK; // Set new default from this point forward.
 	int max_threads_per_hotkey;
 	bool max_threads_buffer;
 	int priority;
@@ -684,6 +686,13 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, Label *aJumpToLabel, HookActionTyp
 	{
 		switch(toupper(*cp))
 		{
+		case 'O': // v1.0.38.02.  Note that there is no "Off" counterpart because it seems too rarely needed.
+			if (toupper(cp[1]) == 'N') // Full validation for maintainability.
+			{
+				++cp; // Omit the 'N' from further consideration in case it ever becomes a valid option letter.
+				result = hk->Enable();
+			}
+			break;
 		case 'B':
 			max_threads_buffer = (cp[1] != '0');  // i.e. if the char is NULL or something other than '0'.
 			break;
@@ -706,7 +715,7 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, Label *aJumpToLabel, HookActionTyp
 	hk->mMaxThreadsBuffer = max_threads_buffer;
 	hk->mMaxThreads = max_threads_per_hotkey;
 	hk->mPriority = priority;
-	return OK;
+	return result;
 }
 
 
@@ -807,6 +816,7 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 	, mModifierSC(0)
 	, mModifiersConsolidatedLR(0)
 	, mType(HK_UNDETERMINED)
+	, mVK_WasSpecifiedByNumber(false)
 	, mUnregisterDuringThread(false)
 	, mIsRegistered(false)
 	, mEnabled(true)
@@ -1133,18 +1143,25 @@ ResultType Hotkey::TextToKey(char *aText, char *aHotkeyName, bool aIsModifier)
 
 	if (temp_vk = TextToVK(aText, &modifiersLR, true)) // Assign.
 	{
-		if (aIsModifier && (temp_vk == VK_WHEEL_DOWN || temp_vk == VK_WHEEL_UP))
+		if (aIsModifier)
 		{
-			snprintf(error_text, sizeof(error_text), "\"%s\" is not allowed as a prefix key.", aText);
-			if (g_script.mIsReadyToExecute) // Dynamically registered via the Hotkey command.
+			if (temp_vk == VK_WHEEL_DOWN || temp_vk == VK_WHEEL_UP)
 			{
-				snprintfcat(error_text, sizeof(error_text), ERR_ABORT);
-				g_script.ScriptError(error_text);
+				snprintf(error_text, sizeof(error_text), "\"%s\" is not allowed as a prefix key.", aText);
+				if (g_script.mIsReadyToExecute) // Dynamically registered via the Hotkey command.
+				{
+					snprintfcat(error_text, sizeof(error_text), ERR_ABORT);
+					g_script.ScriptError(error_text);
+				}
+				else
+					MsgBox(error_text);
+				return FAIL;
 			}
-			else
-				MsgBox(error_text);
-			return FAIL;
 		}
+		else
+			// This is done here rather than at some later stage because we have access to the raw
+			// name of the suffix key (with any leading modifiers such as ^ omitted from the beginning):
+			mVK_WasSpecifiedByNumber = !strnicmp(aText, "VK", 2);
 		is_mouse = VK_IS_MOUSE(temp_vk);
 		if (modifiersLR & (MOD_LSHIFT | MOD_RSHIFT))
 			if (temp_vk >= 'A' && temp_vk <= 'Z')  // VK of an alpha char is the same as the ASCII code of its uppercase version.

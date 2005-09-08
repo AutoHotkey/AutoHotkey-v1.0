@@ -207,6 +207,7 @@ public:
 	UCHAR mNoSuppress;  // Normally 0, but can be overridden by using the hotkey tilde (~) prefix.
 	bool mAllowExtraModifiers;  // False if the hotkey should not fire when extraneous modifiers are held down.
 	bool mKeyUp; // A hotkey that should fire on key-up.
+	bool mVK_WasSpecifiedByNumber; // A hotkey defined by something like "VK24::" or "Hotkey, VK24, ..."
 	bool mUnregisterDuringThread; // Whether this hotkey should be unregistered during the execution of its own subroutine.
 	bool mIsRegistered;  // Whether this hotkey has been successfully registered.
 	bool mEnabled;

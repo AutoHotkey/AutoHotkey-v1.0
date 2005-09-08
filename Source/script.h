@@ -1401,13 +1401,21 @@ public:
 		if (!stricmp(aBuf, "Text")) return GUICONTROL_CMD_TEXT;
 		if (!stricmp(aBuf, "Move")) return GUICONTROL_CMD_MOVE;
 		if (!stricmp(aBuf, "Focus")) return GUICONTROL_CMD_FOCUS;
-		if (!stricmp(aBuf, "Enable")) return GUICONTROL_CMD_ENABLE;
-		if (!stricmp(aBuf, "Disable")) return GUICONTROL_CMD_DISABLE;
-		if (!stricmp(aBuf, "Show")) return GUICONTROL_CMD_SHOW;
-		if (!stricmp(aBuf, "Hide")) return GUICONTROL_CMD_HIDE;
 		if (!stricmp(aBuf, "Choose")) return GUICONTROL_CMD_CHOOSE;
 		if (!stricmp(aBuf, "ChooseString")) return GUICONTROL_CMD_CHOOSESTRING;
 		if (!stricmp(aBuf, "Font")) return GUICONTROL_CMD_FONT;
+
+		// v1.0.38.02: Anything not already returned from above supports an optional boolean suffix.
+		// The following example would hide the control: GuiControl, Show%VarContainingFalse%, MyControl
+		// To support hex (due to the 'x' in it), search from the left rather than the right for the
+		// first digit:
+		for (char *suffix = aBuf; *suffix && !isdigit(*suffix); ++suffix);
+		bool invert = (*suffix ? !ATOI(suffix) : false);
+		if (!strnicmp(aBuf, "Enable", 6)) return invert ? GUICONTROL_CMD_DISABLE : GUICONTROL_CMD_ENABLE;
+		if (!strnicmp(aBuf, "Disable", 7)) return invert ? GUICONTROL_CMD_ENABLE : GUICONTROL_CMD_DISABLE;
+		if (!strnicmp(aBuf, "Show", 4)) return invert ? GUICONTROL_CMD_HIDE : GUICONTROL_CMD_SHOW;
+		if (!strnicmp(aBuf, "Hide", 4)) return invert ? GUICONTROL_CMD_SHOW : GUICONTROL_CMD_HIDE;
+
 		return GUICONTROL_CMD_INVALID;
 	}
 

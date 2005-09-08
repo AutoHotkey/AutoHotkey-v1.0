@@ -3338,7 +3338,7 @@ ResultType WinSetRegion(HWND aWnd, char *aPoints)
 		if (pt_count >= MAX_REGION_POINTS)
 			return OK; // Let ErrorLevel tell the story.
 
-		if (isdigit(*cp))
+		if (isdigit(*cp) || *cp == '-' || *cp == '+') // v1.0.38.02: Recognize leading minus/plus sign so that the X-coord is just as tolerant as the Y.
 		{
 			// Assume it's a pair of X/Y coordinates.  It's done this way rather than using X and Y
 			// as option letters because:
@@ -3348,10 +3348,10 @@ ResultType WinSetRegion(HWND aWnd, char *aPoints)
 			pt[pt_count].x = ATOI(cp);
 			// For the delimiter, dash is more readable than pipe, even though it overlaps with "minus sign".
 			// "x" is not used to avoid detecting "x" inside hex numbers.
-			#define REGION_DELIMITER '-' 
-			if (   !(cp = strchr(cp, REGION_DELIMITER))   )
+			#define REGION_DELIMITER '-'
+			if (   !(cp = strchr(cp + 1, REGION_DELIMITER))   ) // v1.0.38.02: cp + 1 to omit any leading minus sign.
 				return OK; // Let ErrorLevel tell the story.
-			pt[pt_count].y = ATOI(++cp);
+			pt[pt_count].y = ATOI(++cp);  // Increment cp by only 1 to support negative Y-coord.
 			++pt_count; // Move on to the next element of the pt array.
 		}
 		else

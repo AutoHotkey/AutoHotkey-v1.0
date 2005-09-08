@@ -184,6 +184,9 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 		return OK;
 
 	case GUI_CMD_TAB:
+	{
+		TabIndexType prev_tab_index = gui.mCurrentTabIndex;
+		TabControlIndexType prev_tab_control_index = gui.mCurrentTabControlIndex;
 		if (!*aParam2 && !*aParam3) // Both the tab control number and the tab number were omitted.
 			gui.mCurrentTabControlIndex = MAX_TAB_CONTROLS; // i.e. "no tab"
 		else
@@ -193,7 +196,13 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 				index = ATOI(aParam3) - 1;
 				if (index < 0 || index > MAX_TAB_CONTROLS - 1)
 					return ScriptError(ERR_PARAM3_INVALID ERR_ABORT, aParam3);
-				gui.mCurrentTabControlIndex = index;
+				if (index != gui.mCurrentTabControlIndex) // This is checked early in case of early return in the next section due to error.
+				{
+					gui.mCurrentTabControlIndex = index;
+					// Fix for v1.0.38.02: Changing to a different tab control (or none at all when there
+					// was one before, or vice versa) should start a new radio group:
+					gui.mInRadioGroup = false;
+				}
 			}
 			if (*aParam2) // Index of a particular tab inside a control.
 			{
@@ -222,8 +231,11 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 					// to be created in the future):
 					gui.mCurrentTabControlIndex = gui.mTabControlCount ? gui.mTabControlCount - 1 : 0;
 			}
+			if (gui.mCurrentTabIndex != prev_tab_index || gui.mCurrentTabControlIndex != prev_tab_control_index)
+				gui.mInRadioGroup = false; // A fix for v1.0.38.02, see comments at similar line above.
 		}
 		return OK;
+	}
 		
 	case GUI_CMD_COLOR:
 		// AssignColor() takes care of deleting old brush, etc.
