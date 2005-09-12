@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2005 Chris Mallett
+Copyright 2003-2005 Chris Mallett (support@autohotkey.com)
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -374,82 +374,98 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 		// because they're >= WM_USER.  The exception is AHK_GUI_ACTION should always be handled
 		// here rather than by IsDialogMessage().  Note: sObjectCount is checked first to help
 		// performance, since all messages must come through this bottleneck.
-		if (GuiType::sObjectCount && msg.hwnd && msg.hwnd != g_hWnd && msg.message != AHK_GUI_ACTION
-			&& msg.message != AHK_USER_MENU && msg.message != AHK_CLIPBOARD_CHANGE)
+		if (GuiType::sObjectCount && msg.hwnd && msg.hwnd != g_hWnd && !(msg.message == AHK_GUI_ACTION
+			|| msg.message == AHK_USER_MENU || msg.message == AHK_CLIPBOARD_CHANGE))
 		{
-			// Relies heavily on short-circuit boolean order:
-			if (   msg.message == WM_KEYDOWN
-				&& (msg.wParam == VK_NEXT || msg.wParam == VK_PRIOR || msg.wParam == VK_TAB
-					|| msg.wParam == VK_LEFT || msg.wParam == VK_RIGHT)
-				&& (focused_control = GetFocus()) && (focused_parent = GetNonChildParent(focused_control))
-				&& (pgui = GuiType::FindGui(focused_parent)) && pgui->mTabControlCount
-				&& (pcontrol = pgui->FindControl(focused_control)) && pcontrol->type != GUI_CONTROL_HOTKEY   )
+			if (msg.message == WM_KEYDOWN)
 			{
-				ptab_control = NULL; // Set default.
-				if (pcontrol->type == GUI_CONTROL_TAB) // The focused control is a tab control itself.
+				// Relies heavily on short-circuit boolean order:
+				if (  (msg.wParam == VK_NEXT || msg.wParam == VK_PRIOR || msg.wParam == VK_TAB
+					|| msg.wParam == VK_LEFT || msg.wParam == VK_RIGHT)
+					&& (focused_control = GetFocus()) && (focused_parent = GetNonChildParent(focused_control))
+					&& (pgui = GuiType::FindGui(focused_parent)) && pgui->mTabControlCount
+					&& (pcontrol = pgui->FindControl(focused_control)) && pcontrol->type != GUI_CONTROL_HOTKEY   )
 				{
-					ptab_control = pcontrol;
-					// For the below, note that Alt-left and Alt-right are automatically excluded,
-					// as desired, since any key modified only by alt would be WM_SYSKEYDOWN vs. WM_KEYDOWN.
-					if (msg.wParam == VK_LEFT || msg.wParam == VK_RIGHT)
+					ptab_control = NULL; // Set default.
+					if (pcontrol->type == GUI_CONTROL_TAB) // The focused control is a tab control itself.
 					{
-						pgui->SelectAdjacentTab(*ptab_control, msg.wParam == VK_RIGHT, false, false);
-						// Pass false for both the above since that's the whole point of having arrow
-						// keys handled separately from the below: Focus should stay on the tabs
-						// rather than jumping to the first control of the tab, it focus should not
-						// wrap around to the beginning or end (to conform to standard behavior for
-						// arrow keys).
-						continue; // Suppress this key even if the above failed (probably impossible in this case).
+						ptab_control = pcontrol;
+						// For the below, note that Alt-left and Alt-right are automatically excluded,
+						// as desired, since any key modified only by alt would be WM_SYSKEYDOWN vs. WM_KEYDOWN.
+						if (msg.wParam == VK_LEFT || msg.wParam == VK_RIGHT)
+						{
+							pgui->SelectAdjacentTab(*ptab_control, msg.wParam == VK_RIGHT, false, false);
+							// Pass false for both the above since that's the whole point of having arrow
+							// keys handled separately from the below: Focus should stay on the tabs
+							// rather than jumping to the first control of the tab, it focus should not
+							// wrap around to the beginning or end (to conform to standard behavior for
+							// arrow keys).
+							continue; // Suppress this key even if the above failed (probably impossible in this case).
+						}
+						//else fall through to the next part.
 					}
-					//else fall through to the next part.
-				}
-				// If focus is in a multiline edit control, don't act upon Control-Tab (and
-				// shift-control-tab -> for simplicity & consistency) since Control-Tab is a special
-				// keystroke that inserts a literal tab in the edit control:
-				if (   msg.wParam != VK_LEFT && msg.wParam != VK_RIGHT
-					&& (GetKeyState(VK_CONTROL) & 0x8000) // Even if other modifiers are down, it still qualifies.
-					&& (msg.wParam != VK_TAB || pcontrol->type != GUI_CONTROL_EDIT
-						|| !(GetWindowLong(pcontrol->hwnd, GWL_STYLE) & ES_MULTILINE))   )
-				{
-					// If ptab_control wasn't determined above, check if focused control is owned by a tab control:
-					if (!ptab_control && !(ptab_control = pgui->FindTabControl(pcontrol->tab_control_index))   )
-						// Fall back to the first tab control (for consistency & simplicty, seems best
-						// to always use the first rather than something fancier such as "nearest in z-order".
-						ptab_control = pgui->FindTabControl(0);
-					if (ptab_control)
+					// If focus is in a multiline edit control, don't act upon Control-Tab (and
+					// shift-control-tab -> for simplicity & consistency) since Control-Tab is a special
+					// keystroke that inserts a literal tab in the edit control:
+					if (   msg.wParam != VK_LEFT && msg.wParam != VK_RIGHT
+						&& (GetKeyState(VK_CONTROL) & 0x8000) // Even if other modifiers are down, it still qualifies.
+						&& (msg.wParam != VK_TAB || pcontrol->type != GUI_CONTROL_EDIT
+							|| !(GetWindowLong(pcontrol->hwnd, GWL_STYLE) & ES_MULTILINE))   )
 					{
-						pgui->SelectAdjacentTab(*ptab_control
-							, msg.wParam == VK_NEXT || (msg.wParam == VK_TAB && !(GetKeyState(VK_SHIFT) & 0x8000))
-							, true, true);
-						// Update to the below: Must suppress the tab key at least, to prevent it
-						// from navigating *and* changing the tab.  And since this one is suppressed,
-						// might as well suppress the others for consistency.
-						// Older: Since WM_KEYUP is not handled/suppressed here, it seems best not to
-						// suppress this WM_KEYDOWN either (it should do nothing in this case
-						// anyway, but for balance this seems best): Fall through to the next section.
-						continue;
+						// If ptab_control wasn't determined above, check if focused control is owned by a tab control:
+						if (!ptab_control && !(ptab_control = pgui->FindTabControl(pcontrol->tab_control_index))   )
+							// Fall back to the first tab control (for consistency & simplicty, seems best
+							// to always use the first rather than something fancier such as "nearest in z-order".
+							ptab_control = pgui->FindTabControl(0);
+						if (ptab_control)
+						{
+							pgui->SelectAdjacentTab(*ptab_control
+								, msg.wParam == VK_NEXT || (msg.wParam == VK_TAB && !(GetKeyState(VK_SHIFT) & 0x8000))
+								, true, true);
+							// Update to the below: Must suppress the tab key at least, to prevent it
+							// from navigating *and* changing the tab.  And since this one is suppressed,
+							// might as well suppress the others for consistency.
+							// Older: Since WM_KEYUP is not handled/suppressed here, it seems best not to
+							// suppress this WM_KEYDOWN either (it should do nothing in this case
+							// anyway, but for balance this seems best): Fall through to the next section.
+							continue;
+						}
+						//else fall through to the below.
 					}
 					//else fall through to the below.
-				}
-				//else fall through to the below.
-			} // Interception of keystrokes for navigation in tab control.
+				} // Interception of keystrokes for navigation in tab control.
 
-			// v1.0.34: Fix for the fact that a multiline edit control will send WM_CLOSE to its parent
-			// when user presses ESC while it has focus.  The following check is similar to the block's above.
-			// The alternative to this approach would have been to override the edit control's WindowProc,
-			// but the following seemed to be less code. Although this fix is only necessary for multiline
-			// edits, its done for all edits since it doesn't do any harm.  In addition, there is no need to
-			// check what modifiers are down because we never receive the keystroke for Ctrl-Esc and Alt-Esc
-			// (the OS handles those beforehand) and both Win-Esc and Shift-Esc are identical to a naked Esc
-			// inside an edit.  The following check relies heavily on short-circuit eval. order.
-			if (msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE
-				&& (focused_control = GetFocus()) && (focused_parent = GetNonChildParent(focused_control))
-				&& (pgui = GuiType::FindGui(focused_parent)) && (pcontrol = pgui->FindControl(focused_control))
-				&& pcontrol->type == GUI_CONTROL_EDIT)
-			{
-				pgui->Escape();
-				continue; // Omit this keystroke from any further processing.
-			}
+				// v1.0.34: Fix for the fact that a multiline edit control will send WM_CLOSE to its parent
+				// when user presses ESC while it has focus.  The following check is similar to the block's above.
+				// The alternative to this approach would have been to override the edit control's WindowProc,
+				// but the following seemed to be less code. Although this fix is only necessary for multiline
+				// edits, its done for all edits since it doesn't do any harm.  In addition, there is no need to
+				// check what modifiers are down because we never receive the keystroke for Ctrl-Esc and Alt-Esc
+				// (the OS handles those beforehand) and both Win-Esc and Shift-Esc are identical to a naked Esc
+				// inside an edit.  The following check relies heavily on short-circuit eval. order.
+				if (   (msg.wParam == VK_ESCAPE || msg.wParam == VK_TAB) // v1.0.38.03: Added VK_TAB handling for "WantTab".
+					&& (focused_control = GetFocus()) && (focused_parent = GetNonChildParent(focused_control))
+					&& (pgui = GuiType::FindGui(focused_parent)) && (pcontrol = pgui->FindControl(focused_control))
+					&& pcontrol->type == GUI_CONTROL_EDIT)
+				{
+					if (msg.wParam == VK_ESCAPE)
+					{
+						pgui->Escape();
+						continue; // Omit this keystroke from any further processing.
+					}
+					else // msg.wParam == VK_TAB
+						if (pcontrol->attrib & GUI_CONTROL_ATTRIB_ALTBEHAVIOR) // It has the "WantTab" property.
+						{
+							// For flexibility, do this even for single-line edit controls, though in that
+							// case the tab keystroke will produce an "empty box" character.
+							// Strangely, if a message pump other than this one (MsgSleep) is running,
+							// such as that of a MsgBox, "WantTab" is already in effect unconditionally,
+							// perhaps because MsgBox and others respond to WM_GETDLGCODE with DLGC_WANTTAB.
+							SendMessage(pcontrol->hwnd, EM_REPLACESEL, TRUE, (LPARAM)"\t");
+							continue; // Omit this keystroke from any further processing.
+						}
+				}
+			} // if (msg.message == WM_KEYDOWN)
 
 			for (i = 0, object_count = 0, msg_was_handled = false; i < MAX_GUI_WINDOWS; ++i)
 			{

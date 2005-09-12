@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2005 Chris Mallett
+Copyright 2003-2005 Chris Mallett (support@autohotkey.com)
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -385,15 +385,6 @@ void UpdateKeyState(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool key_up,
 	UpdateKeyState(event, vk, sc, key_up, true);
 #endif
 
-	// Use PostMessage() rather than directly calling the function to write the key to
-	// the log file.  This is done so that we can return sooner, which reduces the keyboard
-	// and mouse lag that would otherwise be caused by us not being in a pumping-messages state.
-	// IN ADDITION, this method may also help to keep the keystrokes in order (due to recursive
-	// calls to the hook via keybd_event(), etc), I'm not sure.  UPDATE: No, that seems impossible
-	// when you think about it.  Also, to simplify this the function is now called directly rather
-	// than posting a message to avoid complications that might be caused by the script being
-	// uninterruptible for a long period (rare), which would thus cause the posted msg to stay
-	// buffered for a long time:
 #ifdef ENABLE_KEY_HISTORY_FILE
 	if (g_KeyHistoryToFile && pKeyHistoryCurr)
 		KeyHistoryToFile(NULL, pKeyHistoryCurr->event_type, pKeyHistoryCurr->key_up
@@ -2701,7 +2692,7 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 			break;
 		}
 		default:
-			PostMessage(g_hWnd, AHK_HOOK_HOTKEY, hotkey_id_to_fire, 0);  // Returns non-zero on success.
+			PostMessage(g_hWnd, AHK_HOOK_HOTKEY, hotkey_id_to_fire, 0);
 			// Comments about the above line:
 			// UPDATE to below: Since this function is only called from a single thread (namely ours),
 			// albeit recursively, it's apparently not reentrant (unless our own main app itself becomes
@@ -2722,7 +2713,18 @@ LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam)
 			// seen during periods when there are no messages.  PostMessage() works reliably, so
 			// it seems best not to change it without good reason and without a full understanding
 			// of what's really going on.
-
+			//
+			// Older:
+			// Use PostMessage() rather than directly calling the function to write the key to
+			// the log file.  This is done so that we can return sooner, which reduces the keyboard
+			// and mouse lag that would otherwise be caused by us not being in a pumping-messages state.
+			// IN ADDITION, this method may also help to keep the keystrokes in order (due to recursive
+			// calls to the hook via keybd_event(), etc), I'm not sure.  UPDATE: No, that seems impossible
+			// when you think about it.  Also, to simplify this the function is now called directly rather
+			// than posting a message to avoid complications that might be caused by the script being
+			// uninterruptible for a long period (rare), which would thus cause the posted msg to stay
+			// buffered for a long time.
+			//
 			// Don't execute it directly because if whatever it does takes a long time, this keystroke
 			// and instance of the function will be left hanging until it returns:
 			//Hotkey::PerformID(hotkey_id_to_fire);

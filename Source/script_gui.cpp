@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2005 Chris Mallett
+Copyright 2003-2005 Chris Mallett (support@autohotkey.com)
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -3729,6 +3729,8 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 		}
 		else if (aControl.type == GUI_CONTROL_EDIT && !stricmp(next_option, "WantReturn"))
 			if (adding) aOpt.style_add |= ES_WANTRETURN; else aOpt.style_remove |= ES_WANTRETURN;
+		else if (aControl.type == GUI_CONTROL_EDIT && !stricmp(next_option, "WantTab"))
+			if (adding) aControl.attrib |= GUI_CONTROL_ATTRIB_ALTBEHAVIOR; else aControl.attrib &= ~GUI_CONTROL_ATTRIB_ALTBEHAVIOR;
 		else if (aControl.type == GUI_CONTROL_EDIT && !stricmp(next_option, "Number"))
 			if (adding) aOpt.style_add |= ES_NUMBER; else aOpt.style_remove |= ES_NUMBER;
 		else if (!stricmp(next_option, "Lowercase"))

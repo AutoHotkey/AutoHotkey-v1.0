@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2005 Chris Mallett
+Copyright 2003-2005 Chris Mallett (support@autohotkey.com)
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -156,6 +156,25 @@ int sort_most_general_before_least(const void *a1, const void *a2)
 		// a1 and a2 have non-zero modifiersLRs that are different.  e.g. >+^a and +>^a
 		// I don't think I want to try to figure out which of those should take precedence,
 		// and how they overlap.  Maybe another day.
+
+		// v1.0.38.03: The following check is added to handle a script containing hotkeys
+		// such as the following (in this order):
+		// *MButton::
+		// *Mbutton Up::
+		// MButton::
+		// MButton Up::
+		// What would happen before is that the qsort() would sometimes cause "MButton Up" from the
+		// list above to be processed prior to "MButton", which would set hotkey_up[*MButton's ID]
+		// to be MButton Up's ID.  Then when "MButton" was processed, it would set its_table_entry
+		// to MButton's ID, but hotkey_up[MButton's ID] would be wrongly left INVALID when it should
+		// have received a copy of the asterisk hotkey ID's counterpart key-up ID.  However, even
+		// giving it a copy would not be quite correct because then *MButton's ID would wrongly
+		// be left associated with MButton's Up's ID rather than *MButton Up's.  By solving the
+		// problem here in the sort rather than copying the ID, both bugs are resolved.
+		if ((b1.id_with_flags & HOTKEY_KEY_UP) != (b2.id_with_flags & HOTKEY_KEY_UP))
+			return (b1.id_with_flags & HOTKEY_KEY_UP) ? 1 : -1; // Put key-up hotkeys higher in the list than their down counterparts (see comment above).
+
+		// Otherwise, consider them to be equal for the purpose of the sort:
 		return 0;
 	}
 
@@ -708,46 +727,57 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 					// scan codes don't need the switch() stmt below because, for example,
 					// the hook knows to look up left-control by only SC_LCONTROL,
 					// not VK_LCONTROL.
-					HotkeyIDType &prev_hk_element = Kscm(modifiersLR, this_hk.sc);
-					if (prev_hk_element == HOTKEY_ID_INVALID) // Since there is no ID currently in the slot, key-up/down doesn't matter.
-						prev_hk_element = this_hk.id_with_flags;
+					HotkeyIDType &its_table_entry = Kscm(modifiersLR, this_hk.sc);
+					if (its_table_entry == HOTKEY_ID_INVALID) // Since there is no ID currently in the slot, key-up/down doesn't matter.
+						its_table_entry = this_hk.id_with_flags;
 					else
 					{
-						prev_hk_is_key_up = prev_hk_element & HOTKEY_KEY_UP;
-						if (this_hk_is_key_up && !prev_hk_is_key_up)
-							hotkey_up[prev_hk_element & HOTKEY_ID_MASK] = this_hk.id_with_flags;
+						prev_hk_is_key_up = its_table_entry & HOTKEY_KEY_UP;
+						// Known limitation for a set of hotkeys such as the following:
+						// *MButton::
+						// *Mbutton Up::
+						// MButton Up::  ; This is the key point: that this hotkey lacks a counterpart down-key.
+						// Because there's no down-counterpart to the non-asterisk hotkey, the non-asterik
+						// hotkey's MButton Up takes over completely and *MButton is ignored.  This is because
+						// a given hotkey ID can only have one entry in the hotkey_up array.  What should
+						// really happen is that every Up hotkey should have an implicit identical down hotkey
+						// just for the purpose of having a unique ID in the hotkey_up array.  But that seems
+						// like too much code given the rarity of doing something like this, especially since
+						// it can be easily avoided simply by defining MButton:: as a hotkey in the script.
+						if (this_hk_is_key_up && !prev_hk_is_key_up) // Override any existing key-up hotkey for this down hotkey ID, e.g. "LButton Up" takes precedence over "*LButton Up".
+							hotkey_up[its_table_entry & HOTKEY_ID_MASK] = this_hk.id_with_flags;
 						else if (!this_hk_is_key_up && prev_hk_is_key_up)
 						{
 							// Swap them so that the down-hotkey is in the main array and the up in the secondary:
-							hotkey_up[this_hk_id] = prev_hk_element;
-							prev_hk_element = this_hk.id_with_flags;
+							hotkey_up[this_hk_id] = its_table_entry;
+							its_table_entry = this_hk.id_with_flags;
 						}
 						else // Either both are key-up hotkeys or both are key-down:
-							prev_hk_element = this_hk.id_with_flags;
+							its_table_entry = this_hk.id_with_flags;
 					}
 				}
 				else // This hotkey is a virtual key (non-scan code) hotkey, which is more typical.
 				{
 					bool do_cascade = true;
-					HotkeyIDType &prev_hk_element = Kvkm(modifiersLR, this_hk.vk);
-					if (prev_hk_element == HOTKEY_ID_INVALID) // Since there is no ID currently in the slot, key-up/down doesn't matter.
-						prev_hk_element = this_hk.id_with_flags;
+					HotkeyIDType &its_table_entry = Kvkm(modifiersLR, this_hk.vk);
+					if (its_table_entry == HOTKEY_ID_INVALID) // Since there is no ID currently in the slot, key-up/down doesn't matter.
+						its_table_entry = this_hk.id_with_flags;
 					else
 					{
-						prev_hk_is_key_up = prev_hk_element & HOTKEY_KEY_UP;
-						if (this_hk_is_key_up && !prev_hk_is_key_up)
+						prev_hk_is_key_up = its_table_entry & HOTKEY_KEY_UP;
+						if (this_hk_is_key_up && !prev_hk_is_key_up) // Override any existing key-up hotkey for this down hotkey ID, e.g. "LButton Up" takes precedence over "*LButton Up".
 						{
-							hotkey_up[prev_hk_element & HOTKEY_ID_MASK] = this_hk.id_with_flags;
+							hotkey_up[its_table_entry & HOTKEY_ID_MASK] = this_hk.id_with_flags;
 							do_cascade = false;  // Every place the down-hotkey ID already appears, it will point to this same key-up hotkey.
 						}
 						else if (!this_hk_is_key_up && prev_hk_is_key_up)
 						{
 							// Swap them so that the down-hotkey is in the main array and the up in the secondary:
-							hotkey_up[this_hk_id] = prev_hk_element;
-							prev_hk_element = this_hk.id_with_flags;
+							hotkey_up[this_hk_id] = its_table_entry;
+							its_table_entry = this_hk.id_with_flags;
 						}
 						else // Either both are key-up hotkeys or both are key-down:
-							prev_hk_element = this_hk.id_with_flags;
+							its_table_entry = this_hk.id_with_flags;
 					}
 					
 					if (do_cascade)
