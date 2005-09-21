@@ -49,17 +49,17 @@ bool MsgSleep(int aSleepDuration = INTERVAL_UNSPECIFIED, MessageMode aMode = RET
 // either a newly pressed hotkey or a timed subroutine that is due to be run.
 // Note that the 2 variables used here are independent of each other to support
 // the case where an uninterruptible operation such as SendKeys() happens to occur
-// while g.AllowThisThreadToBeInterrupted is true, in which case we would want the
+// while g.AllowThreadToBeInterrupted is true, in which case we would want the
 // completion of that operation to affect only the status of g_AllowInterruption,
-// not g.AllowThisThreadToBeInterrupted.
-#define INTERRUPTIBLE (g.AllowThisThreadToBeInterrupted && g_AllowInterruption && !g_MenuIsVisible)
+// not g.AllowThreadToBeInterrupted.
+#define INTERRUPTIBLE (g.AllowThreadToBeInterrupted && g_AllowInterruption && !g_MenuIsVisible)
 #define INTERRUPTIBLE_IN_EMERGENCY (g_AllowInterruption && !g_MenuIsVisible)
 
 // The DISABLE_UNINTERRUPTIBLE_SUB macro below must always kill the timer if it exists -- even if
 // the timer hasn't expired yet.  This is because if the timer were to fire when interruptibility had
-// already been previously restored, it's possible that it would set g.AllowThisThreadToBeInterrupted
+// already been previously restored, it's possible that it would set g.AllowThreadToBeInterrupted
 // to be true even when some other code had had the opporutunity to set it to false by intent.
-// In other words, once g.AllowThisThreadToBeInterrupted is set to true the first time, it should not be
+// In other words, once g.AllowThreadToBeInterrupted is set to true the first time, it should not be
 // set a second time "just to be sure" because by then it may already by in use by someone else
 // for some other purpose.
 // It's possible for the SetBatchLines command to have changed the values of g_script.mUninterruptibleTime
@@ -68,7 +68,7 @@ bool MsgSleep(int aSleepDuration = INTERVAL_UNSPECIFIED, MessageMode aMode = RET
 // If they were changed so that subroutines are never interruptible, that seems to be okay too.
 // It doesn't seem like any combination of starting vs. ending interruptibility is a particular
 // problem, so no special handling is done here (just keep it simple).
-// UPDATE: g.AllowThisThreadToBeInterrupted is always made true even if both settings are negative,
+// UPDATE: g.AllowThreadToBeInterrupted is always made true even if both settings are negative,
 // since our callers would all want us to do it unconditionally.  This is because there's no need to
 // keep it false even when all subroutines are permanently uninterruptible, since it will be made
 // false every time a new subroutine launches.
@@ -83,7 +83,7 @@ bool MsgSleep(int aSleepDuration = INTERVAL_UNSPECIFIED, MessageMode aMode = RET
 // have finished running the current thread (i.e. the current thread is about to be destroyed):
 //#define DISABLE_UNINTERRUPTIBLE_SUB \
 //{\
-//	g.AllowThisThreadToBeInterrupted = true;\
+//	g.AllowThreadToBeInterrupted = true;\
 //	KILL_UNINTERRUPTIBLE_TIMER \
 //}
 //#define DISABLE_UNINTERRUPTIBLE_SUB	KILL_UNINTERRUPTIBLE_TIMER
@@ -130,8 +130,8 @@ void PollJoysticks();
 
 bool MsgMonitor(HWND aWnd, UINT aMsg, WPARAM awParam, LPARAM alParam, MSG *apMsg, LRESULT &aMsgReply);
 
-void InitNewThread(int aPriority, bool aSkipUninterruptible, bool aIncrementThreadCount);
-void ResumeUnderlyingThread(global_struct *pSavedStruct, bool aMakeThreadInterruptible);
+void InitNewThread(int aPriority, bool aSkipUninterruptible, bool aIncrementThreadCount, ActionTypeType aTypeOfFirstLine);
+void ResumeUnderlyingThread(global_struct *pSavedStruct, bool aKillInterruptibleTimer);
 
 VOID CALLBACK MsgBoxTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);
 VOID CALLBACK AutoExecSectionTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);

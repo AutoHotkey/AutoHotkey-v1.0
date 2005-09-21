@@ -251,7 +251,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	Hotkey::AllActivate();         // We want these active now in case auto-execute never returns (e.g. loop)
 	g_script.mIsReadyToExecute = true; // This is done only now for error reporting purposes in Hotkey.cpp.
 
-	// Run the auto-execute part at the top of the script:
+	// Run the auto-execute part at the top of the script (this call might never return):
 	ResultType result = g_script.AutoExecSection();
 	// If no hotkeys are in effect, the user hasn't requested a hook to be activated, and the script
 	// doesn't contain the #Persistent directive we're done unless the OnExit subroutine doesn't exit:
@@ -283,6 +283,9 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	// be minimum priority so that it can always be "interrupted" (though technically,
 	// there is no actual idle quasi-thread, so it can't really be interrupted):
 	g.Priority = PRIORITY_MINIMUM;
+	g.ThreadIsCritical = false;            // v1.0.38.04: Prevent the idle thread from being seen as uninterruptible.
+	g.AllowThreadToBeInterrupted = true;   // This is the primary line, the one above is not strictly necessary (just for maintainability).
+
 	// Call it in this special mode to kick off the main event loop.
 	// Be sure to pass something >0 for the first param or it will
 	// return (and we never want this to return):

@@ -96,7 +96,7 @@ enum enum_act {
 , ACT_STATUSBARWAIT
 , ACT_CLIPWAIT, ACT_KEYWAIT
 , ACT_SLEEP, ACT_RANDOM
-, ACT_GOTO, ACT_GOSUB, ACT_ONEXIT, ACT_HOTKEY, ACT_SETTIMER, ACT_THREAD, ACT_RETURN, ACT_EXIT
+, ACT_GOTO, ACT_GOSUB, ACT_ONEXIT, ACT_HOTKEY, ACT_SETTIMER, ACT_CRITICAL, ACT_THREAD, ACT_RETURN, ACT_EXIT
 , ACT_LOOP, ACT_BREAK, ACT_CONTINUE
 , ACT_BLOCK_BEGIN, ACT_BLOCK_END
 , ACT_WINACTIVATE, ACT_WINACTIVATEBOTTOM
@@ -1749,7 +1749,7 @@ public:
 		// being suspended themselves except when their first parameter is the literal
 		// word "on":
 		return mJumpToLine->mActionType == ACT_SUSPEND && (!mJumpToLine->mArgc || mJumpToLine->ArgHasDeref(1)
-			|| stricmp(mJumpToLine->mArg[0].text, "on"));
+			|| stricmp(mJumpToLine->mArg[0].text, "On"));
 	}
 
 	Label(char *aLabelName)

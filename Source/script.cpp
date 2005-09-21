@@ -582,7 +582,7 @@ ResultType Script::AutoExecSection()
 		SET_AUTOEXEC_TIMER(100);
 		AutoExecSectionIsRunning = true;
 
-		// v1.0.25: This is no done here, closer to the actual execution of the first line in the script,
+		// v1.0.25: This is now done here, closer to the actual execution of the first line in the script,
 		// to avoid an unnecessary Sleep(10) that would otherwise occur in ExecUntil:
 		mLastScriptRest = mLastPeekTime = GetTickCount();
 
@@ -590,7 +590,7 @@ ResultType Script::AutoExecSection()
 		ResultType result = mFirstLine->ExecUntil(UNTIL_RETURN);
 		--g_nThreads;
 
-		KILL_AUTOEXEC_TIMER  // This also does "g.AllowThisThreadToBeInterrupted = true"
+		KILL_AUTOEXEC_TIMER  // This also does "g.AllowThreadToBeInterrupted = true"
 		AutoExecSectionIsRunning = false;
 
 		return result;
@@ -701,15 +701,12 @@ ResultType Script::ExitApp(ExitReasons aExitReason, char *aBuf, int aExitCode)
 	strlcpy(g.ErrorLevel, g_ErrorLevel->Contents(), sizeof(g.ErrorLevel)); // Save caller's errorlevel.
 	global_struct global_saved;
 	CopyMemory(&global_saved, &g, sizeof(global_struct));
-	InitNewThread(0, true, true); // Since this special thread should always run, no checking of g_MaxThreadsTotal is done before calling this.
-
-	// Make it start fresh to avoid unnecessary delays due to SetBatchLines:
-	g_script.mLinesExecutedThisCycle = 0;
+	InitNewThread(0, true, true, ACT_INVALID); // Since this special thread should always run, no checking of g_MaxThreadsTotal is done before calling this.
 
 	if (g_nFileDialogs) // See MsgSleep() for comments on this.
 		SetCurrentDirectory(g_WorkingDir);
 
-	// Use g.AllowThisThreadToBeInterrupted to forbid any hotkeys, timers, or user defined menu items
+	// Use g.AllowThreadToBeInterrupted to forbid any hotkeys, timers, or user defined menu items
 	// to interrupt.  This is mainly done for peace-of-mind (since possible interactions due to
 	// interruptions have not been studied) and the fact that this most users would not want this
 	// subroutine to be interruptible (it usually runs quickly anyway).  Another reason to make
@@ -719,7 +716,7 @@ ResultType Script::ExitApp(ExitReasons aExitReason, char *aBuf, int aExitCode)
 	// timed subroutines from running -- which might take too much time and prevent the exit from
 	// occurring in a timely fashion.  An option can be added via the FutureUse param to make it
 	// interruptible if there is ever a demand for that.  UPDATE: g_AllowInterruption is now used
-	// instead of g.AllowThisThreadToBeInterrupted for two reasons:
+	// instead of g.AllowThreadToBeInterrupted for two reasons:
 	// 1) It avoids the need to do "int mUninterruptedLineCountMax_prev = g_script.mUninterruptedLineCountMax;"
 	//    (Disable this item so that ExecUntil() won't automatically make our new thread uninterruptible
 	//    after it has executed a certain number of lines).
@@ -1623,6 +1620,10 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 		{
 			if (g.CurrentFunc)
 			{
+				// Even if it weren't for the reasons below, the first hotkey/hotstring label in a script
+				// will end the auto-execute section with a "return".  Therefore, if this restriction here
+				// is ever removed, be sure that that extra return doesn't get put inside the function.
+				//
 				// The reason for not allowing hotkeys and hotstrings inside a function's body is that
 				// when the subroutine is launched, the hotstring/hotkey would be using the function's
 				// local variables.  But that is not appropriate and it's likely to cause problems even
@@ -4261,6 +4262,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	case ACT_DETECTHIDDENWINDOWS:
 	case ACT_DETECTHIDDENTEXT:
 	case ACT_SETSTORECAPSLOCKMODE:
+	case ACT_CRITICAL:
 		if (aArgc > 0 && !line.ArgHasDeref(1) && !line.ConvertOnOff(new_raw_arg1))
 			return ScriptError(ERR_ON_OFF, new_raw_arg1);
 		break;
@@ -7151,33 +7153,36 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 		//    Peek() is apparently enough to route all pending input to the hooks (though it's inexplicable
 		//    why calling MsgSleep(-1) does not achieve this goal, since it too does a Peek().
 		//    Nevertheless, that is the testing result that was obtained: the mouse cursor lagged
-		//    in tight script loops even when MsgSleep(-1) or (0) was called ever 10ms or so.
+		//    in tight script loops even when MsgSleep(-1) or (0) was called every 10ms or so.
 		// 2) The app is maximally responsive while executing with a high or infinite BatchLines.
 		// 3) Hotkeys are maximally responsive.  For example, if a user has game hotkeys, using
 		//    a GetTickCount() method (which very slightly improves performance by cutting back on
 		//    the number of Peek() calls) would introduce up to 10ms of delay before the hotkey
 		//    finally takes effect.  10ms can be significant in games, where ping (latency) itself
-		//    can sometimes be only 10 or 20ms.
+		//    can sometimes be only 10 or 20ms. UPDATE: It looks like PeekMessage() yields CPU time
+		//    automatically, similar to a Sleep(0), when our queue has no messages.  Since this would
+		//    make scripts slow to a crawl, only do the Peek() every 5ms or so (though the timer
+		//    granularity is 10ms on mosts OSes, so that's the true interval).  Perhaps GetQueueStatus()
+		//    can be used as a substitute once a dedicated thread is added for the hooks.
 		// 4) Timed subroutines are run as consistently as possible (to help with this, a check
 		//    similar to the below is also done for single commmands that take a long time, such
 		//    as URLDownloadToFile, FileSetAttrib, etc.
-		// UPDATE: It looks like PeekMessage() yields CPU time automatically, similar to a
-		// Sleep(0).  Since this would make scripts slow to a crawl, only do the Peek() every 5ms
-		// or so (though the timer grandurity is 10ms on mosts OSes, so that's the true interval):
 		LONG_OPERATION_UPDATE
 
 		// If interruptions are currently forbidden, it's our responsibility to check if the number
 		// of lines that have been run since this quasi-thread started now indicate that
 		// interruptibility should be reenabled.  But if UninterruptedLineCountMax is negative, don't
-		// bother checking because this quasi-thread will stay non-interruptible until it finishes:
-		if (!g.AllowThisThreadToBeInterrupted && g_script.mUninterruptedLineCountMax >= 0)
+		// bother checking because this quasi-thread will stay non-interruptible until it finishes.
+		// v1.0.38.04: If g.ThreadIsCritical==true, no need to check or accumulate g.UninterruptedLineCount
+		// because the script is now in charge of this thread's interruptibility.
+		if (!g.AllowThreadToBeInterrupted && !g.ThreadIsCritical && g_script.mUninterruptedLineCountMax >= 0) // Ordered for short-circuit performance.
 		{
 			// Note that there is a timer that handles the UninterruptibleTime setting, so we don't
 			// have handle that setting here.  But that timer is killed by the DISABLE_UNINTERRUPTIBLE
 			// macro we call below.  This is because we don't want the timer to "fire" after we've
 			// already met the conditions which allow interruptibility to be restored, because if
 			// it did, it might interfere with the fact that some other code might already be using
-			// g.AllowThisThreadToBeInterrupted again for its own purpose:
+			// g.AllowThreadToBeInterrupted again for its own purpose:
 			if (g.UninterruptedLineCount > g_script.mUninterruptedLineCountMax)
 				MAKE_THREAD_INTERRUPTIBLE
 			else
@@ -7199,13 +7204,8 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 
 		// At this point, a pause may have been triggered either by the above MsgSleep()
 		// or due to the action of a command (e.g. Pause, or perhaps tray menu "pause" was selected during Sleep):
-		for (;;)
-		{
-			if (g.IsPaused)
-				MsgSleep(INTERVAL_UNSPECIFIED);  // Must check often to periodically run timed subroutines.
-			else
-				break;
-		}
+		for (; g.IsPaused;) // Benches slightly faster than while() for some reason. Also, an initial "if (g.IsPaused)" prior to the loop doesn't make it any faster.
+			MsgSleep(INTERVAL_UNSPECIFIED);  // Must check often to periodically run timed subroutines.
 
 		// Do these only after the above has had its opportunity to spend a significant amount
 		// of time doing what it needed to do.  i.e. do these immediately before the line will actually
@@ -9338,6 +9338,21 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		// If ARG2 is blank but ARG3 (priority) isn't, tell it to update only the priority and nothing else:
 		default: g_script.UpdateOrCreateTimer(target_label, ARG2, ARG3, true, !*ARG2 && *ARG3);
 		}
+		return OK;
+
+	case ACT_CRITICAL:
+		// For code size reduction, no runtime validation is done (only load-time).  Thus, anything other
+		// than "Off" (especially NEUTRAL) is considered to be "On":
+		g.AllowThreadToBeInterrupted = !(g.ThreadIsCritical = (ConvertOnOff(ARG1, NEUTRAL) != TOGGLED_OFF));
+		// If it's being turned off, allow thread to be immediately interrupted regardless of any
+		// "Thread Interrupt" settings.
+		// Now that the thread's interruptibility has been explicitly set, the script is in charge
+		// of managing this thread's interruptibility, thus kill the timer unconditionally:
+		KILL_UNINTERRUPTIBLE_TIMER  // Done here for maintainability and performance, even though UninteruptibleTimeout() will also kill it.
+		// Although the above kills the timer, it does not remove any WM_TIMER message that it might already
+		// have placed into the queue.  And since we have other types of timers, purging the queue of all
+		// WM_TIMERS would be too great a loss of maintainability and reliability.  To solve this,
+		// UninteruptibleTimeout() checks the value of g.ThreadIsCritical.
 		return OK;
 
 	case ACT_THREAD:
@@ -12279,7 +12294,7 @@ double_deref:
 				//    the contents made blank for these reasons:
 				//    a) Prevents locals from all being static in duration, and users coming to rely on that,
 				//       since in the future local variables might be implemented using a non-persistent method
-				//       such as hashing (rather than maintaining a permanently list of Var*'s for each function).
+				//       such as hashing (rather than maintaining a permanent list of Var*'s for each function).
 				//    b) To conserve memory between calls (in case the function's locals use a lot of memory).
 				//    c) To yield results consistent with when the same function is called while other instances
 				//       of itself exist on the call stack.  In other words, it would be inconsistent to make

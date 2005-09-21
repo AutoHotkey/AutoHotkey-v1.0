@@ -349,6 +349,7 @@ Action g_act[] =
 	, {"OnExit", 0, 2, NULL}  // Optional label, future use (since labels are allowed to contain commas)
 	, {"Hotkey", 1, 3, NULL}  // Mod+Keys, Label/Action (blank to avoid changing curr. label), Options
 	, {"SetTimer", 1, 3, {3, 0}}  // Label (or dereference that resolves to a label), period (or ON/OFF), Priority
+	, {"Critical", 0, 1, NULL}  // On|Off
 	, {"Thread", 1, 3, {2, 3, 0}}  // Command, value1 (can be blank for interrupt), value2
 	, {"Return", 0, 1, {1, 0}}
 	, {"Exit", 0, 1, {1, 0}} // ExitCode

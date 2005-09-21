@@ -771,15 +771,6 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 					PostMessage(g_hWnd, AHK_HOTSTRING, u, MAKELONG(hs.mEndCharRequired
 						? (UCHAR)g_HSBuf[g_HSBufLength - 1] : 0, case_conform_mode));
 					// Clean up.
-					// v1.0.30: mDoReset was added to prevent hotstrings such as the following
-					// from firing twice in a row, if you type 11 followed by another 1 afterward:
-					//:*?B0:11::
-					//MsgBox,0,test,%A_ThisHotkey%,1 ; Show which key was pressed and close the window after a second.
-					//return
-					// There are probably many other uses (albeit obscure) for the reset option (this has
-					// been brought up in the forum at least twice).
-					if (hs.mDoReset)
-						g_HSBufLength = 0; // Further below, the buffer will be terminated to reflect this change.
 					if (*hs.mReplacement)
 					{
 						// Since the buffer no longer reflects what is actually on screen to the left
@@ -808,6 +799,18 @@ inline bool CollectInput(KBDLLHOOKSTRUCT &event, vk_type vk, sc_type sc, bool ke
 						if (hs.mEndCharRequired)
 							--g_HSBufLength;
 					}
+
+					// v1.0.38.04: Fixed the following mDoReset section by moving it beneath the above because
+					// the above relies on the fact that the buffer has not yet been reset.
+					// v1.0.30: mDoReset was added to prevent hotstrings such as the following
+					// from firing twice in a row, if you type 11 followed by another 1 afterward:
+					//:*?B0:11::
+					//MsgBox,0,test,%A_ThisHotkey%,1 ; Show which key was pressed and close the window after a second.
+					//return
+					// There are probably many other uses (albeit obscure) for the reset option (this has
+					// been brought up in the forum at least twice).
+					if (hs.mDoReset)
+						g_HSBufLength = 0; // Further below, the buffer will be terminated to reflect this change.
 
 					// In case the above changed the value of g_HSBufLength, terminate the buffer at that position:
 					g_HSBuf[g_HSBufLength] = '\0';

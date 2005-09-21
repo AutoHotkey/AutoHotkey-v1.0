@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.38.03"
+#define NAME_VERSION "1.0.38.04"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -234,10 +234,11 @@ typedef UCHAR HookType;
 // Notes applying to the macro:
 // Store tick_now for use later, in case the Peek() isn't done, though not all callers need it later.
 // ...
-// Since the Peek() might (must?) yield, and thus take a long time to return even when no msg is found,
-// must update tick_now again to avoid having to Peek() immediately after the next iteration:
+// Since the Peek() will yield when there are no messages, it will often take 20ms or more to return.
+// Therefore, must update tick_now again (its value is used by macro and possibly by its caller)
+// to avoid having to Peek() immediately after the next iteration.
 // ...
-// Perversely, the code may run faster when "g_script.mLastPeekTime = tick_now" is a sep. operation rather
+// The code might bench faster when "g_script.mLastPeekTime = tick_now" is a sep. operation rather
 // than combined in a chained assignment statement.
 #define LONG_OPERATION_UPDATE \
 {\
@@ -346,7 +347,8 @@ struct global_struct
 	bool TitleFindFast; // Whether to use the fast mode of searching window text, or the more thorough slow mode.
 	bool DetectHiddenWindows; // Whether to detect the titles of hidden parent windows.
 	bool DetectHiddenText;    // Whether to detect the text of hidden child windows.
-	bool AllowThisThreadToBeInterrupted;  // Whether this thread can be interrupted by custom menu items, hotkeys, or timers.
+	bool AllowThreadToBeInterrupted;  // Whether this thread can be interrupted by custom menu items, hotkeys, or timers.
+	bool ThreadIsCritical; // Whether this thread has been marked (un)interruptible by the "Critical" command.
 	UCHAR DefaultMouseSpeed;
 	UCHAR CoordMode; // Bitwise collection of flags.
 	bool StoreCapslockMode;
@@ -395,7 +397,8 @@ inline void global_init(global_struct &g)
 	// Not sure what the optimal default is.  1 seems too low (scripts would be very slow by default):
 	g.LinesPerCycle = -1;
 	g.IntervalBeforeRest = 10;  // sleep for 10ms every 10ms
-	g.AllowThisThreadToBeInterrupted = true; // Separate from g_AllowInterruption so that they can have independent values.
+	g.AllowThreadToBeInterrupted = true; // Separate from g_AllowInterruption so that they can have independent values.
+	g.ThreadIsCritical = false;
 	#define PRIORITY_MINIMUM INT_MIN
 	g.Priority = 0;
 	g.GuiEvent = GUI_EVENT_NONE;

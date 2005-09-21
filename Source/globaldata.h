@@ -235,18 +235,22 @@ if (!g_MainTimerExists && !(g_MainTimerExists = SetTimer(g_hWnd, TIMER_ID_MAIN, 
 #define SET_UNINTERRUPTIBLE_TIMER \
 if (!g_UninterruptibleTimerExists && !(g_UninterruptibleTimerExists = SetTimer(g_hWnd, TIMER_ID_UNINTERRUPTIBLE \
 	, g_script.mUninterruptibleTime < 10 ? 10 : g_script.mUninterruptibleTime, UninteruptibleTimeout)))\
-	g_script.ExitApp(EXIT_CRITICAL, "SetTimer() unexpectedly failed.");
+	g_script.ExitApp(EXIT_CRITICAL, "SetTimer"); // Short msg since so rare.
 
-// See AutoExecSectionTimeout() for why g.AllowThisThreadToBeInterrupted is used rather than the other var.
+#define KILL_UNINTERRUPTIBLE_TIMER \
+if (g_UninterruptibleTimerExists && KillTimer(g_hWnd, TIMER_ID_UNINTERRUPTIBLE))\
+	g_UninterruptibleTimerExists = false;
+
+// See AutoExecSectionTimeout() for why g.AllowThreadToBeInterrupted is used rather than the other var.
 // Also, from MSDN: "When you specify a TimerProc callback function, the default window procedure calls the
 // callback function when it processes WM_TIMER. Therefore, you need to dispatch messages in the calling thread,
 // even when you use TimerProc instead of processing WM_TIMER."  My: This is why all TimerProc type timers
 // should probably have a window rather than passing NULL as first param of SetTimer().
 #define SET_AUTOEXEC_TIMER(aTimeoutValue) \
 {\
-	g.AllowThisThreadToBeInterrupted = false;\
+	g.AllowThreadToBeInterrupted = false;\
 	if (!g_AutoExecTimerExists && !(g_AutoExecTimerExists = SetTimer(g_hWnd, TIMER_ID_AUTOEXEC, aTimeoutValue, AutoExecSectionTimeout)))\
-		g_script.ExitApp(EXIT_CRITICAL, "SetTimer() unexpectedly failed.");\
+		g_script.ExitApp(EXIT_CRITICAL, "SetTimer");\
 }
 
 #define SET_INPUT_TIMER(aTimeoutValue) \
@@ -265,18 +269,25 @@ if (!g_UninterruptibleTimerExists && !(g_UninterruptibleTimerExists = SetTimer(g
 if (g_MainTimerExists && KillTimer(g_hWnd, TIMER_ID_MAIN))\
 	g_MainTimerExists = false;
 
-// Although the caller doesn't always need g.AllowThisThreadToBeInterrupted reset to true,
+// Although the caller doesn't always need g.AllowThreadToBeInterrupted reset to true,
 // it's much more maintainable and nicer to do it unconditionally due to the complexity of
 // managing quasi-threads.  At the very least, it's needed for when the "idle thread"
 // is "resumed" (see MsgSleep for explanation).
 #define MAKE_THREAD_INTERRUPTIBLE \
 {\
-	g.AllowThisThreadToBeInterrupted = true;\
-	if (g_UninterruptibleTimerExists && KillTimer(g_hWnd, TIMER_ID_UNINTERRUPTIBLE))\
-		g_UninterruptibleTimerExists = false;\
+	g.AllowThreadToBeInterrupted = true;\
+	KILL_UNINTERRUPTIBLE_TIMER \
 }
 
 // Notes about the below macro:
+// Update for v1.0.38.04: Rather than setting AllowThreadToBeInterrupted unconditionally to
+// true, make it reflect the state of g.ThreadIsCritical.  This increases flexbility by allowing
+// threads to stay interrruptible even when they're displaying a dialog.  In such cases, an
+// incoming thread-event such as a hotkey will get routed to our MainWindowProc by the dialog's
+// message pump; and from there it will get reposted to our queue, and then get pumped again.
+// This bouncing effect may impact performance slightly but seems warranted to maintain
+// flexibility of the "Critical" command as well as its ability to buffer incoming events.
+//
 // If our thread's message queue has any message pending whose HWND member is NULL -- or even
 // normal messages which would be routed back to the thread by the WindowProc() -- clean them
 // out of the message queue before launching the dialog's message pump below.  That message pump
@@ -298,18 +309,19 @@ if (g_MainTimerExists && KillTimer(g_hWnd, TIMER_ID_MAIN))\
 // our timeslice if the CPU is under heavy load, which would be good to improve performance here.
 #define DIALOG_PREP \
 {\
-	MAKE_THREAD_INTERRUPTIBLE \
+	g.AllowThreadToBeInterrupted = !g.ThreadIsCritical;\
+	KILL_UNINTERRUPTIBLE_TIMER \
 	if (HIWORD(GetQueueStatus(QS_ALLEVENTS)))\
 		MsgSleep(-1);\
 }
 
 
-// See above comment about g.AllowThisThreadToBeInterrupted.
+// See above comment about g.AllowThreadToBeInterrupted.
 // Also, must restore to true in this case since auto-exec section isn't run as a new thread
 // (i.e. there's nothing to resume).
 #define KILL_AUTOEXEC_TIMER \
 {\
-	g.AllowThisThreadToBeInterrupted = true;\
+	g.AllowThreadToBeInterrupted = !g.ThreadIsCritical;\
 	if (g_AutoExecTimerExists && KillTimer(g_hWnd, TIMER_ID_AUTOEXEC))\
 		g_AutoExecTimerExists = false;\
 }

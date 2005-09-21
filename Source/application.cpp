@@ -228,16 +228,14 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 			// PeekMessage(), depending on how, and how often it's called, will also do this, but
 			// I'm not as confident in it.
 			if (GetMessage(&msg, NULL, 0, MSG_FILTER_MAX) == -1) // -1 is an error, 0 means WM_QUIT
-			{
 				// This probably can't happen since the above GetMessage() is getting any
 				// message belonging to a thread we already know exists (i.e. the one we're
 				// in now).
 				//MsgBox("GetMessage() unexpectedly returned an error.  Press OK to continue running.");
 				continue;
-			}
 			//else let any WM_QUIT be handled below.
 			// The below was added for v1.0.20 to solve the following issue: If BatchLines is 10ms
-			// (its default) and there are one or more 10ms script-timers active, those timers will
+			// (its default) and there are one or more 10ms script-timers active, those timers would
 			// actually only run about every 20ms.  In addition to solving that problem, the below
 			// might also improve reponsiveness of hotkeys, menus, buttons, etc. when the CPU is
 			// under heavy load:
@@ -262,7 +260,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				// because the most recent PeekMessage() has just yielded our prior timeslice.
 				// This is because when Peek() doesn't find any messages, it automatically
 				// behaves as though it did a Sleep(0). UPDATE: This is apparently not quite
-				// true.  All Peek() does yield, it is somehow not as long or as good as
+				// true.  Although Peek() does yield, it is somehow not as long or as good as
 				// Sleep(0).  This is evidenced by the fact that some of my script's
 				// WinWaitClose's now finish too quickly when DoKeyDelay(0) is done for them,
 				// but replacing DoKeyDelay(0) with Sleep(0) makes it work as it did before.
@@ -351,7 +349,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				RETURN_FROM_MSGSLEEP
 			}
 			// else Peek() found a message, so process it below.
-		}
+		} // PeekMessage() vs. GetMessage()
 
 		// Since above didn't return or "continue", a message has been received that is eligible
 		// for further processing.
@@ -510,6 +508,10 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 			// (a fast button press-and-release might occur in less than 50ms, which could be missed if
 			// the polling frequency is too low):
 			POLL_JOYSTICK_IF_NEEDED // Do this first since it's much faster.
+			// v1.0.38.04: The following line is done prior to the timer-check to reduce situations
+			// in which a timer thread is interrupted before it can execute even a single line.
+			// Search for mLastPeekTime in MsgSleep() for detailed explanation.
+			g_script.mLastPeekTime = GetTickCount(); // It's valid to reset this because by definition, "msg" just came in via Get() or Peek(), both of which qualify as a Peek() for this purpose.
 			CHECK_SCRIPT_TIMERS_IF_NEEDED
 			if (aMode == WAIT_FOR_MESSAGES)
 				// Timer should have already been killed if we're in this state.
@@ -550,7 +552,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 		case AHK_USER_MENU:    // The user selected a custom menu item.
 		case AHK_CLIPBOARD_CHANGE: // Listed so that hdrop_to_free is initialized.
 			// MSG_FILTER_MAX should prevent us from receiving these messages (except AHK_USER_MENU)
-			// whenever g_AllowInterruption or g.AllowThisThreadToBeInterrupted is false.
+			// whenever g_AllowInterruption or g.AllowThreadToBeInterrupted is false.
 			hdrop_to_free = NULL;  // Set default for this message's processing (simplifies code).
 			event_info = UINT_MAX; // Set default for all of the above event types.  A flag that indicates "no event info".
 			switch(msg.message)
@@ -629,6 +631,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 					// And leave pgui_label_is_running at its default of NULL, which signals below to use
 					// alternate variable.
 				} // switch(msg.wParam)
+				type_of_first_line = gui_label->mJumpToLine->mActionType; // Above would already have discarded this message if it there was no label.
 				break; // case AHK_GUI_ACTION
 
 			case AHK_USER_MENU: // user-defined menu item
@@ -639,6 +642,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				// the menu):
 				if (!menu_item->mLabel)
 					continue;
+				type_of_first_line = menu_item->mLabel->mJumpToLine->mActionType;
 				break;
 
 			case AHK_HOTSTRING:
@@ -656,29 +660,20 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				// But first, since this isn't an auto-replace hotstring, set this value to support
 				// the built-in variable A_EndChar:
 				g_script.mEndChar = (char)LOWORD(msg.lParam);
+				type_of_first_line = hs->mJumpToLabel->mJumpToLine->mActionType;
 				break;
+
+			case AHK_CLIPBOARD_CHANGE: // Due to the presence of an OnClipboardChange label in the script.
+				// Caller has ensured that mOnClipboardChangeLabel is a non-NULL, valid pointer.
+				type_of_first_line = g_script.mOnClipboardChangeLabel->mJumpToLine->mActionType;
+				break;
+
+			default: // hotkey
+				type_of_first_line = Hotkey::GetTypeOfFirstLine((HotkeyIDType)msg.wParam);
 			} // switch(msg.message)
 
 			if (g_nThreads >= g_MaxThreadsTotal)
 			{
-				switch(msg.message)
-				{
-				case AHK_GUI_ACTION: // Listed first for performance.
-					type_of_first_line = gui_label->mJumpToLine->mActionType; // Above would already have discarded this message if it there was no label.
-					break;
-				case AHK_USER_MENU: // user-defined menu item
-					type_of_first_line = menu_item->mLabel->mJumpToLine->mActionType;
-					break;
-				case AHK_HOTSTRING:
-					type_of_first_line = hs->mJumpToLabel->mJumpToLine->mActionType;
-					break;
-				case AHK_CLIPBOARD_CHANGE: // Due to the presence of an OnClipboardChange label in the script.
-					// Caller has ensured that mOnClipboardChangeLabel is a non-NULL, valid pointer.
-					type_of_first_line = g_script.mOnClipboardChangeLabel->mJumpToLine->mActionType;
-					break;
-				default: // hotkey
-					type_of_first_line = Hotkey::GetTypeOfFirstLine((HotkeyIDType)msg.wParam);
-				}
 				// The below allows 1 thread beyond the limit in case the script's configured
 				// #MaxThreads is exactly equal to the absolute limit.  This is because we want
 				// subroutines whose first line is something like ExitApp to take effect even
@@ -854,7 +849,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 			// However, we do not set ErrorLevel to anything special here (except for GUI threads, later
 			// below) because it's more flexible that way (i.e. the user may want one hotkey subroutine
 			// to use the value of ErrorLevel set by another):
-			InitNewThread(priority, false, true);
+			InitNewThread(priority, false, true, type_of_first_line);
 
 			// Fix for v1.0.37.06:  Must do the following only after InitNewThread() has updated
 			// g.IsPaused for the new thread.
@@ -863,14 +858,34 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 			g_script.UpdateTrayIcon();
 
 			// Do this last, right before the PerformID():
-			// It seems best to reset these unconditionally, because the user has pressed a hotkey
-			// or selected a custom menu item, so would expect maximum responsiveness (e.g. in a game
-			// where split second timing can matter) rather than the risk that a "rest" will be done
-			// immediately by ExecUntil() just because mLinesExecutedThisCycle happens to be
-			// large some prior subroutine.  The same applies to mLastScriptRest, which is why
-			// that is reset also:
-			g_script.mLinesExecutedThisCycle = 0;
-			g_script.mLastScriptRest = GetTickCount();
+			// It seems best to reset mLinesExecutedThisCycle unconditionally (now done by InitNewThread),
+			// because the user has pressed a hotkey or selected a custom menu item, so would expect
+			// maximum responsiveness (e.g. in a game where split second timing can matter) rather than
+			// the risk that a "rest" will be done immediately by ExecUntil() just because
+			// mLinesExecutedThisCycle happens to be large some prior subroutine.  The same applies to
+			// mLastScriptRest, which is why that is reset also:
+			g_script.mLastScriptRest = g_script.mLastPeekTime = GetTickCount();
+			// v1.0.38.04: The above now resets mLastPeekTime too to reduce situations in which a thread
+			// doesn't even run one line before being interrupted by another thread.  Here's how that would
+			// happen: ExecUntil() would see that a Peek() is due and call PeekMessage().  The Peek() will
+			// yield if we have no messages and the CPU is under heavy load, and thus the script might not
+			// get another timeslice for 20ms (or even longer if there is more than one other needy process).
+			// Even if the Peek() doesn't yield (i.e. we have messages), those messages might take a long time
+			// to process (such as WM_PAINT) even though the script is uninterruptible.  Either way, when the
+			// Peek-check completes, a long time might have passed, and the thread might now be interruptible
+			// due to the interruptible-timer having expired (which is probably possible only in the no-yield
+			// scenario above, since in the case of yield, ExecUntil wouldn't check messages again after the
+			// yield).  Thus, the Peek-check's MsgSleep() might launch an interrupting thread before the prior
+			// thread had a chance to execute even one line.  Resetting mLastPeekTime above should alleviate that,
+			// perhaps even completely resolve it due to the way tickcounts tend not to change early on in
+			// a timeslice (perhaps because timeslices fall exactly upon tick-count boundaries).  If it doesn't
+			// completely resolve it, mLastPeekTime could instead be set to zero as a special value that
+			// ExecUntil recognizes to do the following processing, but this processing reduces performance
+			// by 2.5% in a simple addition-loop benchmark:
+			//if (g_script.mLastPeekTime)
+			//	LONG_OPERATION_UPDATE
+			//else
+			//	g_script.mLastPeekTime = GetTickCount();
 
 			// Perform the new thread's subroutine:
 			return_value = true; // We will return this value to indicate that we launched at least one new thread.
@@ -1106,7 +1121,15 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 			ResumeUnderlyingThread(&global_saved, true);
 
 			if (aMode == WAIT_FOR_MESSAGES) // This is the "idle thread", meaning that the end of the thread above has returned the script to an idle state.
+			{
+				// v1.0.38.04: The following line is for maintainability and reliability.  It avoids the need
+				// for other sections to figure out whether they should reset g.ThreadIsCritical to false
+				// when a thread is resumed (a resumed thread might still be critical if it was interrupted
+				// by an emergency thread such as OnExit or OnMessage).
+				g.AllowThreadToBeInterrupted = true; // This one is probably necessary due to the way it conforms to ThreadIsCritical in other sections.
+				g.ThreadIsCritical = false; // Not strictly necessary but improves maintainability.
 				g.Priority = PRIORITY_MINIMUM; // Ensure minimum priority so that idle state can always be "interrupted".
+			}
 			else // Some thread other than the idle thread.
 			{
 				if (IsCycleComplete(aSleepDuration, start_time, allow_early_return))
@@ -1277,6 +1300,12 @@ ResultType IsCycleComplete(int aSleepDuration, DWORD aStartTime, bool aAllowEarl
 		g_script.mLinesExecutedThisCycle = 0;
 		g_script.mLastScriptRest = tick_now;
 	}
+	// v1.0.38.04: Reset mLastPeekTime because caller has just done a GetMessage() or PeekMessage(),
+	// both of which should have routed events to the keyboard/mouse hooks like LONG_OPERATION_UPDATE's
+	// PeekMessage() and thus satisified the reason that mLastPeekTime is tracked in the first place.
+	// This might also improve performance slightly by avoiding extra Peek() calls, while also reducing
+	// premature thread interruptions.
+	g_script.mLastPeekTime = tick_now;
 	return OK;
 }
 
@@ -1381,16 +1410,6 @@ bool CheckScriptTimers()
 			timer->mTimeLastRun = tick_start;
 			++launched_threads;
 
-			// This should slightly increase the expectation that any short timed subroutine will
-			// run all the way through to completion rather than being interrupted by the press of
-			// a hotkey, and thus potentially buried in the stack:
-			g_script.mLinesExecutedThisCycle = 0;
-			// mLastScriptRest is not set to GetTickCount() here because unlike other events -- which
-			// are typically in response to an explicit action by the user such as pressing a button
-			// or hotkey -- times are lower priority and more relaxed.  Also, mLastScriptRest really
-			// should only be set when a call to Get/PeekMsg has just occurred, so it should be left
-			// as the responsibilty of the section in MsgSleep that launches new threads.
-
 			if (g_nFileDialogs) // See MsgSleep() for comments on this.
 				SetCurrentDirectory(g_WorkingDir);
 
@@ -1403,19 +1422,28 @@ bool CheckScriptTimers()
 			// the user set up in the auto-execute part of the script (e.g. KeyDelay, WinDelay, etc.).
 			// However, we do not set ErrorLevel to NONE here because it's more flexible that way
 			// (i.e. the user may want one hotkey subroutine to use the value of ErrorLevel set by another):
-			InitNewThread(timer->mPriority, false, false); // False as last param because ++g_nThreads should be done only once rather than each Init().
+			InitNewThread(timer->mPriority, false, false, timer->mLabel->mJumpToLine->mActionType); // False as last param because ++g_nThreads should be done only once rather than each Init().
+			// The above also resets g_script.mLinesExecutedThisCycle to zero, which should slightly
+			// increase the expectation that any short timed subroutine will run all the way through
+			// to completion rather than being interrupted by the press of a hotkey, and thus potentially
+			// buried in the stack.  However, mLastScriptRest is not set to GetTickCount() here because
+			// unlike other events -- which are typically in response to an explicit action by the user
+			// such as pressing a button or hotkey -- times are lower priority and more relaxed.
+			// Also, mLastScriptRest really should only be set when a call to Get/PeekMsg has just
+			// occurred, so it should be left as the responsibilty of the section in MsgSleep that
+			// launches new threads.
 
 			++timer->mExistingThreads;
 			timer->mLabel->mJumpToLine->ExecUntil(UNTIL_RETURN);
 			--timer->mExistingThreads;
 
-			MAKE_THREAD_INTERRUPTIBLE
-		}
-	}
+			KILL_UNINTERRUPTIBLE_TIMER
+		} // if timer is due to launch.
+	} // for() each timer.
 
 	if (launched_threads) // Since at least one subroutine was run above, restore various values for our caller.
 	{
-		ResumeUnderlyingThread(&global_saved, false); // Last param "false" because MAKE_THREAD_INTERRUPTIBLE already done above.
+		ResumeUnderlyingThread(&global_saved, false); // Last param "false" because KILL_UNINTERRUPTIBLE_TIMER was already done above.
 		return true;
 	}
 	return false;
@@ -1490,7 +1518,7 @@ bool MsgMonitor(HWND aWnd, UINT aMsg, WPARAM awParam, LPARAM alParam, MSG *apMsg
 	// to reduce on the unreliability of message filters that are numerically less than WM_HOTKEY.
 	// For example, if the user presses a hotkey and an instant later a qualified WM_LBUTTONDOWN arrives,
 	// the filter will still be able to run by interrupting the uinterruptible thread.  In this case,
-	// ResumeUnderlyingThread() sets g.AllowThisThreadToBeInterrupted to false for us in case the
+	// ResumeUnderlyingThread() sets g.AllowThreadToBeInterrupted to false for us in case the
 	// timer "TIMER_ID_UNINTERRUPTIBLE" fired for the new thread rather than for the old one (this
 	// prevents the interrupted thread from becoming permanently uninterruptible).
 	if (!INTERRUPTIBLE_IN_EMERGENCY)
@@ -1544,9 +1572,8 @@ bool MsgMonitor(HWND aWnd, UINT aMsg, WPARAM awParam, LPARAM alParam, MSG *apMsg
 		SetCurrentDirectory(g_WorkingDir);
 
 	monitor.label_is_running = true;
-	InitNewThread(0, false, true);
+	InitNewThread(0, false, true, func.mJumpToLine->mActionType);
 	g_script.UpdateTrayIcon();
-	g_script.mLinesExecutedThisCycle = 0; // See comments in CheckScriptTimers() for why g_script.mLastScriptRest isn't altered here.
 
 	// Set last found window (as documented).  Can be NULL.
 	// Nested controls like ComboBoxes require more than a simple call to GetParent().
@@ -1592,6 +1619,10 @@ bool MsgMonitor(HWND aWnd, UINT aMsg, WPARAM awParam, LPARAM alParam, MSG *apMsg
 		}
 	}
 
+	// v1.0.38.04: Below was added to maximize responsiveness to incoming messages.  The reasoning
+	// is similar to why the same thing is done in MsgSleep() prior to its launch of a thread, so see
+	// MsgSleep for more comments:
+	g_script.mLastScriptRest = g_script.mLastPeekTime = GetTickCount();
 	char *return_value = ""; // Init to default in case function doesn't return a value or it EXITs or fails.
 
 	// See ExpandExpression() for detailed comments about the following section.
@@ -1643,7 +1674,9 @@ bool MsgMonitor(HWND aWnd, UINT aMsg, WPARAM awParam, LPARAM alParam, MSG *apMsg
 
 
 
-void InitNewThread(int aPriority, bool aSkipUninterruptible, bool aIncrementThreadCount)
+void InitNewThread(int aPriority, bool aSkipUninterruptible, bool aIncrementThreadCount
+	, ActionTypeType aTypeOfFirstLine)
+// The value of aTypeOfFirstLine is ignored when aSkipUninterruptible==true.
 // To reduce the expectation that a newly launched hotkey or timed subroutine will
 // be immediately interrupted by a timed subroutine or hotkey, interruptions are
 // forbidden for a short time (user-configurable).  If the subroutine is a quick one --
@@ -1660,6 +1693,11 @@ void InitNewThread(int aPriority, bool aSkipUninterruptible, bool aIncrementThre
 	if (aIncrementThreadCount)
 		++g_nThreads; // It is the caller's responsibility to avoid calling us if the thread count is too high.
 
+	// v1.0.38.04: mLinesExecutedThisCycle is now reset in this function for maintainability. For simplicity,
+	// the reset is unconditional because it is desirable 99% of the time.
+	// See comments in CheckScriptTimers() for why g_script.mLastScriptRest isn't altered here.
+	g_script.mLinesExecutedThisCycle = 0; // Make it start fresh to avoid unnecessary delays due to SetBatchLines.
+
 	bool underlying_thread_is_paused = g.IsPaused;  // Indicate in the upcoming thread whether the thread to be interrupted is paused.
 	CopyMemory(&g, &g_default, sizeof(global_struct));
 	g.UnderlyingThreadIsPaused = underlying_thread_is_paused;
@@ -1667,12 +1705,34 @@ void InitNewThread(int aPriority, bool aSkipUninterruptible, bool aIncrementThre
 
 	if (aSkipUninterruptible)
 		return;
-	if (g_script.mUninterruptibleTime && g_script.mUninterruptedLineCountMax)
+
+	// v1.0.38.04: Mark the thread critical here, for maintainability and also to avoid doing
+	// SET_UNINTERRUPTIBLE_TIMER when the script has taken explicit control of this thread's
+	// interruptibility.
+	// OLDER (somewhat obsolete but good background): There is no need to set g.ThreadIsCritical here
+	// because when actually encountered, "Critical [On]" will do it (and we're sure that first line
+	// will execute because: 1) g.AllowThreadToBeInterrupted was set to false above; and 2) the
+	// the uinterruptible timer will not be activated. Thus, the thread cannot be interrupted by
+	// anything short of OnExit/OnMessage, in which case g.ThreadIsCritical's value doesn't matter,
+	// and it will be set later when "Critical [On]" is actually encountered by the resumed thread.
+	// Update: But there might be a tiny window of opportunity for a critical thread to get interrupted
+	// by a non-emergency thread after it was previously interrupted by an emergency thread, therefore
+	// the following line is here for maintainability and reliability:
+	if (!g.ThreadIsCritical) // If the thread default isn't "critical", make this thread critical only if it's explicitly marked that way.
+		g.ThreadIsCritical = (aTypeOfFirstLine == ACT_CRITICAL);
+	//else it's already critical, so leave it that way until "Critical Off" (which may be the very first line) is encountered at runtime.
+
+	if (g_script.mUninterruptibleTime && g_script.mUninterruptedLineCountMax // Both components must be non-zero to start off uninterruptible.
+		|| g.ThreadIsCritical) // v1.0.38.04.
 	{
-		// Use g.AllowThisThreadToBeInterrupted vs. g_AllowInterruption in case g_AllowInterruption
+		// Use g.AllowThreadToBeInterrupted vs. g_AllowInterruption in case g_AllowInterruption
 		// just happens to have been set to true for some other reason (e.g. SendKeys()):
-		g.AllowThisThreadToBeInterrupted = false;
-		if (g_script.mUninterruptibleTime > 0) // Known to be either negative or positive (but not zero) at this point.
+		g.AllowThreadToBeInterrupted = false;
+		// v1.0.38.04: If the first line is "Critical" (even "Critical Off"), don't activate the timer
+		// because "Critical [On]" means uninterruptible until it's turned off.  And "Critical Off"
+		// means immediately interruptible.
+		if (g_script.mUninterruptibleTime > 0  // Known to be either negative or positive (but not zero) at this point.
+			&& !g.ThreadIsCritical)
 			// It's much better to set a timer than have ExecUntil() watch for the time
 			// to expire.  This is because it performs better, but more importantly
 			// consider the case when ExecUntil() calls a WinWait, FileSetAttrib, or any
@@ -1690,12 +1750,12 @@ void InitNewThread(int aPriority, bool aSkipUninterruptible, bool aIncrementThre
 
 
 
-void ResumeUnderlyingThread(global_struct *pSavedStruct, bool aMakeThreadInterruptible)
+void ResumeUnderlyingThread(global_struct *pSavedStruct, bool aKillInterruptibleTimer)
 {
 	--g_nThreads; // Below relies on this having been done early.
 
-	if (aMakeThreadInterruptible)
-		MAKE_THREAD_INTERRUPTIBLE
+	if (aKillInterruptibleTimer)
+		KILL_UNINTERRUPTIBLE_TIMER // g.AllowThreadToBeInterrupted is set later below, after the g struct has been restored.
 
 	bool underlying_thread_is_paused = g.UnderlyingThreadIsPaused; // Done this way for performance (to avoid multiple indirections).
 	CopyMemory(&g, pSavedStruct, sizeof(global_struct));
@@ -1732,14 +1792,17 @@ void ResumeUnderlyingThread(global_struct *pSavedStruct, bool aMakeThreadInterru
 	// we're about to resume is different from our previous paused state.  Do this even
 	// when the macro is used by CheckScriptTimers(), which although it might not techically
 	// need it, lends maintainability and peace of mind.
-	// UPDATE: Doing "g.AllowThisThreadToBeInterrupted = true" seems like a good idea to be safe,
+	// UPDATE: Doing "g.AllowThreadToBeInterrupted = true" seems like a good idea to be safe,
 	// at least in the case where CheckScriptTimers() calls this macro at a time when there
 	// is no thread other than the "idle thread" to resume.  A resumed thread should always
 	// be interruptible anyway, since otherwise it couldn't have been interrupted in the
 	// first place to get us here. UPDATE #2: Making it "true" is now also relied upon by MsgMonitor(),
 	// which sometimes launches a new thread even when the current thread is interruptible.
+	// UPDATE #3: In v1.0.38.04, make it reflect the state of ThreadIsCritical for cases where
+	// a critical thread was interrupted by an OnExit or OnMessage thread.  Upon being resumed after
+	// such an emergency interruption, a critical thread should be uninterruptible again.
 	g_script.UpdateTrayIcon();
-	g.AllowThisThreadToBeInterrupted = true;
+	g.AllowThreadToBeInterrupted = !g.ThreadIsCritical;
 }
 
 
@@ -1786,9 +1849,9 @@ VOID CALLBACK AutoExecSectionTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD d
 	// the desired action hasn't already occurred.  Finally, the macro is used here because
 	// it's possible that the timer has already been killed, so we don't want to risk any
 	// problems that might arise from killing a non-existent timer (which this prevents):
-	// The below also sets "g.AllowThisThreadToBeInterrupted = true".  Notes about this:
+	// The below also sets "g.AllowThreadToBeInterrupted = true".  Notes about this:
 	// And since the AutoExecute is taking a long time (or might never complete), we now allow
-	// interruptions such as hotkeys and timed subroutines. Use g.AllowThisThreadToBeInterrupted
+	// interruptions such as hotkeys and timed subroutines. Use g.AllowThreadToBeInterrupted
 	// vs. g_AllowInterruption in case commands in the AutoExecute section need exclusive use of
 	// g_AllowInterruption (i.e. they might change its value to false and then back to true,
 	// which would interfere with our use of that var):
@@ -1811,7 +1874,13 @@ VOID CALLBACK AutoExecSectionTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD d
 
 VOID CALLBACK UninteruptibleTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
 {
-	MAKE_THREAD_INTERRUPTIBLE // Best to use the macro so that g_UninterruptibleTimerExists is reset to false.
+	// v1.0.38.04: Make AllowThreadToBeInterrupted conform to ThreadIsCritical. This is necessary
+	// in the case where the timer was killed by the "Critical" command but not before a WM_TIMER message
+	// got posted to our queue.
+	g.AllowThreadToBeInterrupted = !g.ThreadIsCritical;
+	// But unconditionally kill the timer since it should be killed even when g.ThreadIsCritical==true.
+	// This is because any thread that uses the command "Critical" has taken charge of its own interruptibility.
+	KILL_UNINTERRUPTIBLE_TIMER // Best to use the macro so that g_UninterruptibleTimerExists is reset to false.
 }
 
 

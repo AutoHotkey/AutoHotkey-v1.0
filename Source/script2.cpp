@@ -47,6 +47,7 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 		if (*aImageFile)
 		{
 			char *colon_pos = strchr(aImageFile, ':');
+			char *image_filename_omit_leading_whitespace = omit_leading_whitespace(image_filename); // Added in v1.0.38.04 per someone's suggestion.
 			if (colon_pos)
 			{
 				char window_number_str[32];  // Allow extra room in case leading spaces or in hex format, e.g. 0x02
@@ -59,9 +60,9 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 						// Note that filenames can start with spaces, so omit_leading_whitespace() is only
 						// used if the string is entirely blank:
 						image_filename = colon_pos + 1;
-						char *blank_str = omit_leading_whitespace(image_filename);
-						if (!*blank_str)
-							image_filename = blank_str;
+						image_filename_omit_leading_whitespace = omit_leading_whitespace(image_filename); // Update to reflect the change above.
+						if (!*image_filename_omit_leading_whitespace)
+							image_filename = image_filename_omit_leading_whitespace;
 						window_index = ATOI(window_number_str) - 1;
 						if (window_index < 0 || window_index >= MAX_SPLASHIMAGE_WINDOWS)
 							return LineError("Max window number is " MAX_SPLASHIMAGE_WINDOWS_STR "." ERR_ABORT
@@ -69,9 +70,9 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 					}
 				}
 			}
-			if (!stricmp(image_filename, "Off"))
+			if (!stricmp(image_filename_omit_leading_whitespace, "Off")) // v1.0.38.04: Ignores leading whitespace per someone's suggestion.
 				turn_off = true;
-			else if (!stricmp(image_filename, "Show"))
+			else if (!stricmp(image_filename_omit_leading_whitespace, "Show")) // v1.0.38.04: Ignores leading whitespace per someone's suggestion.
 				show_it_only = true;
 		}
 	}
@@ -86,6 +87,7 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 				return LineError("Max window number is " MAX_PROGRESS_WINDOWS_STR "." ERR_ABORT, FAIL, aOptions);
 			++options;
 		}
+		options = omit_leading_whitespace(options); // Added in v1.0.38.04 per someone's suggestion.
 		if (!stricmp(options, "Off"))
             turn_off = true;
 		else if (!stricmp(options, "Show"))
@@ -576,7 +578,7 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 	if (main_height > work_height)
 		main_height = work_height;
 
-	// Centering doesn'tcurrently handle multi-monitor systems explicitly, since those calculations
+	// Centering doesn't currently handle multi-monitor systems explicitly, since those calculations
 	// require API functions that don't exist in Win95/NT (and thus would have to be loaded
 	// dynamically to allow the program to launch).  Therefore, windows will likely wind up
 	// being centered across the total dimensions of all monitors, which usually results in
