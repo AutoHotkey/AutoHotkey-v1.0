@@ -8898,13 +8898,14 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		// Only support 32-bit values for this command, since it seems unlikely anyone would to have
 		// it sleep more than 24.8 days or so.  It also helps performance on 32-bit hardware because
 		// MsgSleep() is so heavily called and checks the value of the first parameter frequently:
-		int sleep_time = ATOI(ARG1);
+		int sleep_time = ATOI(ARG1); // Keep it signed vs. unsigned for backward compatibility (e.g. scripts that do Sleep -1).
 
 		// Do a true sleep on Win9x because the MsgSleep() method is very inaccurate on Win9x
 		// for some reason (a MsgSleep(1) causes a sleep between 10 and 55ms, for example).
 		// But only do so for short sleeps, for which the user has a greater expectation of
-		// accuracy:
-		if (sleep_time < 25 && g_os.IsWin9x())
+		// accuracy.  UPDATE: Do not change the 25 below without also changing it in Critical's
+		// documentation.
+		if (sleep_time < 25 && sleep_time > 0 && g_os.IsWin9x()) // Ordered for short-circuit performance. v1.0.38.05: Added "sleep_time > 0" so that Sleep -1/0 will work the same on Win9x as it does on other OSes.
 			Sleep(sleep_time);
 		else
 			MsgSleep(sleep_time);
@@ -11218,7 +11219,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 			// 1) The expression's result is normally not EXP_DEREF_VAR because any kind of operation
 			//    that is performed, such as addition or concatenation, would have transformed it into
 			//    SYM_OPERAND, SYM_STRING, SYM_INTEGER, or SYM_FLOAT.
-			// 2) If if the result of the expression is the exact same address as the contents of the
+			// 2) If the result of the expression is the exact same address as the contents of the
 			//    variable our caller is assigning to (which can happen from something like
 			//    GlobalVar := YieldGlobalVar()), Var::Assign() handles that by checking if they're
 			//    the same and also using memmove(), at least when source and target overlap.

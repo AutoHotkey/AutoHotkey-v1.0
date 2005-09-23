@@ -9779,7 +9779,7 @@ ResultType Line::FileRead(char *aFilespec)
 	{
 		output_buf[bytes_actually_read] = '\0';  // Ensure text is terminated where indicated.
 		// Since a larger string is being replaced with a smaller, there's a good chance the 2 GB
-		// address limit will not be exceeded by StrReplaceAll even if if the file is close to the
+		// address limit will not be exceeded by StrReplaceAll even if the file is close to the
 		// 1 GB limit as described above:
 		if (translate_crlf_to_lf)
 			StrReplaceAll(output_buf, "\r\n", "\n", false); // Safe only because larger string is being replaced with smaller.

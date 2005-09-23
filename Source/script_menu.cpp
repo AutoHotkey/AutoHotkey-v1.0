@@ -1288,10 +1288,29 @@ ResultType UserMenu::Display(bool aForceToForeground, int aX, int aY)
 			// other process to actually ack/perform the activation of its window and clean out its queue using
 			// one timeslice.  This has been tested even when the CPU is maxed from some third-party process.
 			// For performance and code simplicity, it seems best not to do a GetForegroundWindow() loop that
-			// waits for it to become active, unless others report that this method is significantly unreliable:
+			// waits for it to become active (unless others report that this method is significantly unreliable):
 			SLEEP_WITHOUT_INTERRUPTION(0);
 		}
 	}
+	// Fix for v1.0.38.05: If the current thread is interruptible (which it should be since a menu was just
+	// displayed, which almost certainly timed out the default Thread Interrupt setting), the following
+	// MsgSleep() will launch the selected menu item's subroutine.  This fix is needed because of a change
+	// in v1.0.38.04, namely the line "g_script.mLastPeekTime = tick_now;" in IsCycleComplete().
+	// The root problem here is that it would not be intuitive to allow the command after
+	// "Menu, MyMenu, Show" should to run before the menu item's subroutine launches as a new thread.
+	// 
+	// You could argue that selecting a menu item should immediately Gosub the selected menu item's
+	// subroutine rather than queuing it up as a new thread.  However, even if that is a better method,
+	// it would break existing scripts that rely on new-thread behavior (such as fresh default for
+	// SetKeyDelay).
+	//
+	// Without this fix, a script such as the following (and many other things similar) would
+	// counterintuitively fail to launch the selected item's subroutine:
+	// Menu, MyMenu, Add, NOTEPAD
+	// Menu, MyMenu, Show
+	// ; Sleep 0  ; Uncommenting this line was necessary in v1.0.38.04 but not any other versions.
+	// ExitApp
+	MsgSleep(-1);
 	return OK;
 }
 

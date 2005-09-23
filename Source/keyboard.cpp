@@ -1666,7 +1666,7 @@ modLR_type GetModifierLRState(bool aExplicitlyGet)
 // alone could.
 {
 	// Rather than old/below method, in light of the fact that new low-level hook is being tried,
-	// try relying on only the hook's tracked value rather than calling Get() (if if the hook
+	// try relying on only the hook's tracked value rather than calling Get() (if the hook
 	// is active:
 	if (g_KeybdHook && !aExplicitlyGet)
 		return g_modifiersLR_logical;
