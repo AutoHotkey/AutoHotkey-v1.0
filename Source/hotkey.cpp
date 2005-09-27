@@ -287,8 +287,8 @@ void Hotkey::AllActivate()
 					// a CTRL keystroke to disguise them, a trick that is unfortunately not reliable for
 					// when it happens while the while key is down (though it does disguise a Win-up).
 					|| ((hot.mModifiersConsolidatedLR & (MOD_LWIN|MOD_RWIN)) && !(hot.mModifiersConsolidatedLR & (MOD_LALT|MOD_RALT))) // For v1.0.30, this has been expanded to include Win+Shift and Win+Control modifiers.
-					|| (hot.mVK && !VK_IS_MOUSE(hot.mVK)) // e.g. "RButton & Space"
-					|| (hot.mModifierVK && !VK_IS_MOUSE(hot.mModifierVK))   ) // e.g. "Space & RButton"
+					|| (hot.mVK && !IsMouseVK(hot.mVK)) // e.g. "RButton & Space"
+					|| (hot.mModifierVK && !IsMouseVK(hot.mModifierVK))   ) // e.g. "Space & RButton"
 				{
 					hot.mType = HK_BOTH_HOOKS;  // Needed by ChangeHookState().
 					sWhichHookNeeded |= HOOK_KEYBD;
@@ -1162,7 +1162,7 @@ ResultType Hotkey::TextToKey(char *aText, char *aHotkeyName, bool aIsModifier)
 			// This is done here rather than at some later stage because we have access to the raw
 			// name of the suffix key (with any leading modifiers such as ^ omitted from the beginning):
 			mVK_WasSpecifiedByNumber = !strnicmp(aText, "VK", 2);
-		is_mouse = VK_IS_MOUSE(temp_vk);
+		is_mouse = IsMouseVK(temp_vk);
 		if (modifiersLR & (MOD_LSHIFT | MOD_RSHIFT))
 			if (temp_vk >= 'A' && temp_vk <= 'Z')  // VK of an alpha char is the same as the ASCII code of its uppercase version.
 				modifiersLR &= ~(MOD_LSHIFT | MOD_RSHIFT);

@@ -885,8 +885,12 @@ public:
 		, LoopReadFileStruct *aCurrentReadFile = NULL, char *aCurrentField = NULL
 		, __int64 aCurrentLoopIteration = 0); // Use signed, since script/ITOA64 aren't designed to work with unsigned.
 
+	// The following are characters that can't legally occur after an AND or OR.  It excludes all unary operators
+	// "!~*&-+" as well as the parentheses chars "()":
+	// continuation lines:
+	#define EXPR_CORE "<>=/|^,"
 	// The characters common to both EXPR_TELLTALES and EXPR_OPERAND_TERMINATORS:
-	#define EXPR_COMMON " \t<>=*/&|^~!(),"  // Space and Tab are included at the beginning for performance.
+	#define EXPR_COMMON " \t" EXPR_CORE "*&~!()"  // Space and Tab are included at the beginning for performance.
 	// Characters whose presence in a mandatory-numeric param make it an expression for certain.
 	// + and - are not included here because legacy numeric parameters can contain unary plus or minus,
 	// e.g. WinMove, -%x%, -%y%:

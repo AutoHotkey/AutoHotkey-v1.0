@@ -511,7 +511,7 @@ int SendKey(vk_type aVK, sc_type aSC, modLR_type aModifiersLR, modLR_type aModif
 
 	// Sending mouse clicks via ControlSend is not supported, so in that case fall back to the
 	// old method of sending the VK directly (which probably has no effect 99% of the time):
-	if (VK_IS_MOUSE(aVK) && !aTargetWindow)
+	if (IsMouseVK(aVK) && !aTargetWindow)
 	{
 		// Pass "true" so that WIN and ALT are disguised if they have to be released due to
 		// a hotkey such as !a::Send {LButton}
@@ -2430,4 +2430,22 @@ vk_type sc_to_vk(sc_type aSC)
 	// been resolved above so don't need to be looked up here (LWIN and RWIN
 	// each have their own VK's so shouldn't be problem for the below call to resolve):
 	return MapVirtualKey((BYTE)aSC, 1);
+}
+
+
+
+bool IsMouseVK(vk_type aVK)
+{
+	switch (aVK)
+	{
+	case VK_LBUTTON:
+	case VK_RBUTTON:
+	case VK_MBUTTON:
+	case VK_XBUTTON1:
+	case VK_XBUTTON2:
+	case VK_WHEEL_DOWN:
+	case VK_WHEEL_UP:
+		return true;
+	}
+	return false;
 }

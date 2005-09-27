@@ -90,11 +90,6 @@ enum UserMessages {AHK_HOOK_HOTKEY = WM_USER, AHK_HOTSTRING, AHK_USER_MENU, AHK_
 // MessageBox() and the other dialog invocating API calls (for FileSelectFile/Folder) likely
 // ensures its window really exists before dispatching messages.
 
-enum DualNumpadKeys	{PAD_DECIMAL, PAD_NUMPAD0, PAD_NUMPAD1, PAD_NUMPAD2, PAD_NUMPAD3
-, PAD_NUMPAD4, PAD_NUMPAD5, PAD_NUMPAD6, PAD_NUMPAD7, PAD_NUMPAD8, PAD_NUMPAD9
-, PAD_DELETE, PAD_INSERT, PAD_END, PAD_DOWN, PAD_NEXT, PAD_LEFT, PAD_CLEAR
-, PAD_RIGHT, PAD_HOME, PAD_UP, PAD_PRIOR, PAD_TOTAL_COUNT};
-
 // Some reasoning behind the below data structures: Could build a new array for [sc][sc] and [vk][vk]
 // (since only two keys are allowed in a ModifierVK/SC combination, only 2 dimensions are needed).
 // But this would be a 512x512 array of shorts just for the SC part, which is 512K.  Instead, what we
@@ -161,17 +156,6 @@ struct key_type
 	item.no_suppress = false;\
 	item.sc_takes_precedence = false;\
 }
-
-#define RESET_KEYTYPE_STATE(item) \
-{\
-	item.is_down = false;\
-	item.it_put_alt_down = false;\
-	item.it_put_shift_down = false;\
-	item.down_performed_action = false;\
-	item.was_just_used = 0;\
-}
-
-
 
 // Since index zero is a placeholder for the invalid virtual key or scan code, add one to each MAX value
 // to compute the number of elements actually needed to accomodate 0 up to and including VK_MAX or SC_MAX:
@@ -242,8 +226,25 @@ struct KeyHistoryItem
 //-------------------------------------------
 
 
-LRESULT CALLBACK LowLevelKeybdProc(int code, WPARAM wParam, LPARAM lParam);
-LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wParam, LPARAM lParam);
+LRESULT CALLBACK LowLevelKeybdProc(int aCode, WPARAM wParam, LPARAM lParam);
+LRESULT CALLBACK LowLevelMouseProc(int aCode, WPARAM wParam, LPARAM lParam);
+LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lParam, const vk_type aVK
+, const sc_type aSC, bool aKeyUp, ULONG_PTR aExtraInfo, DWORD aEventFlags, DWORD aEventTime);
+
+#define SuppressThisKey SuppressThisKeyFunc(aHook, lParam, aVK, aSC, aKeyUp, pKeyHistoryCurr)
+LRESULT SuppressThisKeyFunc(const HHOOK aHook, LPARAM lParam, const vk_type aVK, const sc_type aSC
+	, bool aKeyUp, KeyHistoryItem *pKeyHistoryCurr);
+
+#define AllowKeyToGoToSystem AllowIt(aHook, aCode, wParam, lParam, aVK, aSC, aKeyUp, pKeyHistoryCurr, false)
+#define AllowKeyToGoToSystemButDisguiseWinAlt AllowIt(aHook, aCode, wParam, lParam, aVK, aSC, aKeyUp, pKeyHistoryCurr, true)
+LRESULT AllowIt(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lParam, const vk_type aVK, const sc_type aSC
+	, bool aKeyUp, KeyHistoryItem *pKeyHistoryCurr, bool aDisguiseWinAlt);
+
+bool CollectInput(KBDLLHOOKSTRUCT &aEvent, const vk_type aVK, const sc_type aSC, bool aKeyUp, bool aIsIgnored);
+void UpdateKeybdState(KBDLLHOOKSTRUCT &aEvent, const vk_type aVK, const sc_type aSC, bool aKeyUp, bool aIsSuppressed);
+bool KeybdEventIsPhysical(DWORD aEventFlags, DWORD aEventTime, const vk_type aVK, bool aKeyUp);
+bool DualStateNumpadKeyIsDown();
+bool IsDualStateNumpadKey(const vk_type aVK, const sc_type aSC);
 
 HookType RemoveAllHooks();
 HookType RemoveKeybdHook();
@@ -254,6 +255,7 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 void ResetHook(bool aAllModifiersUp = false, HookType aWhichHook = (HOOK_KEYBD | HOOK_MOUSE)
 	, bool aResetKVKandKSC = false);
 
+void ResetKeyTypeState(key_type &key);
 void GetHookStatus(char *aBuf, int aBufSize);
 bool IsIgnored(ULONG_PTR aExtraInfo, vk_type aVK, bool aKeyUp);
 

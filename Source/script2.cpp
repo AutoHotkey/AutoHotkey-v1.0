@@ -5858,7 +5858,7 @@ ResultType InputBox(Var *aOutputVar, char *aTitle, char *aText, bool aHideInput,
 	g_InputBox[g_nInputBoxes].text = text;
 	g_InputBox[g_nInputBoxes].default_string = default_string;
 
-	if (aTimeout > 2147483) // This is approximately the max number of seconds that SetTimer can handle.
+	if (aTimeout > 2147483) // This is approximately the max number of seconds that SetTimer() can handle.
 		aTimeout = 2147483;
 	if (aTimeout < 0) // But it can be equal to zero to indicate no timeout at all.
 		aTimeout = 0.1;  // A value that might cue the user that something is wrong.
@@ -14037,7 +14037,7 @@ bool ScriptGetKeyState(vk_type aVK, KeyStateTypes aKeyStateType)
 		//else
 		return IsKeyToggledOn(aVK); // This also works for the INSERT key, but only on XP (and possibly Win2k).
 	case KEYSTATE_PHYSICAL: // Physical state of key.
-		if (VK_IS_MOUSE(aVK)) // mouse button
+		if (IsMouseVK(aVK)) // mouse button
 		{
 			if (g_MouseHook) // mouse hook is installed, so use it's tracking of physical state.
 				return g_PhysicalKeyState[aVK] & STATE_DOWN;

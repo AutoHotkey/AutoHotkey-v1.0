@@ -240,10 +240,6 @@ modLR_type GetModifierLRState(bool aExplicitlyGet = false);
 // systems wind up implementing it properly:
 #define IsPhysicallyDown(vk) (GetAsyncKeyState(vk) & 0x80000000)
 
-#define VK_IS_MOUSE(vk) (vk == VK_LBUTTON || vk == VK_RBUTTON || vk == VK_MBUTTON\
-	|| vk == VK_XBUTTON1 || vk == VK_XBUTTON2\
-	|| vk == VK_WHEEL_DOWN || vk == VK_WHEEL_UP)
-
 void AdjustKeyState(BYTE aKeyState[], modLR_type aModifiersLR);
 modLR_type KeyToModifiersLR(vk_type aVK, sc_type aSC = 0, bool *pIsNeutral = NULL);
 modLR_type ConvertModifiers(mod_type aModifiers);
@@ -268,5 +264,6 @@ ResultType KeyHistoryToFile(char *aFilespec = NULL, char aType = '\0', bool aKey
 char *GetKeyName(vk_type aVK, sc_type aSC, char *aBuf, int aBufSize);
 sc_type vk_to_sc(vk_type aVK, bool aReturnSecondary = false);
 vk_type sc_to_vk(sc_type aSC);
+bool IsMouseVK(vk_type aVK);
 
 #endif

@@ -1166,7 +1166,13 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 
 			if (!in_continuation_section) // This is either the first iteration or the line after the end of a previous continuation section.
 			{
-				if (   !(in_continuation_section = (next_buf_length != -1 && *next_buf == '('))   ) // Compare directly to -1 since length is unsigned.
+				// v1.0.38.06: The following has been fixed to exclude "(:" and "(::".  These should be
+				// labels/hotkeys, not the start of a contination section.  In addition, a line that starts
+				// with '(' but that ends with ':' should be treated as a label because labels such as
+				// "(label):" are far more common than something obscure like a continuation section whose
+				// join character is colon, namely "(Join:".
+				if (   !(in_continuation_section = (next_buf_length != -1 && *next_buf == '(' // Compare directly to -1 since length is unsigned.
+					&& next_buf[1] != ':' && next_buf[next_buf_length - 1] != ':'))   ) // Relies on short-circuit boolean order.
 				{
 					if (next_buf_length == -1)  // Compare directly to -1 since length is unsigned.
 						break;
@@ -1212,7 +1218,9 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 							&& !strnicmp(next_buf, "and", 3))
 						{
 							cp = omit_leading_whitespace(next_buf + 3);
-							if (!strchr(EXPR_OPERAND_TERMINATORS, *cp)) // Exclude "and:=x", "and = 1", "and += 1". This should be ok because AND/OR should always be followed immediately by a legtimate operand, not an operator.
+							// v1.0.38.06: The following was fixed to use EXPR_CORE vs. EXPR_OPERAND_TERMINATORS
+							// to properly detect a continuation line whose first char after AND/OR is "!~*&-+()":
+							if (!strchr(EXPR_CORE, *cp)) // Exclude "and:=x", "and = 1", "and += 1". This should be ok because AND/OR should always be followed immediately by a legtimate operand, not an operator.
 								is_continuation_line = true;
 						}
 						break;
@@ -1223,7 +1231,9 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 							&& toupper(next_buf[1]) == 'R')
 						{
 							cp = omit_leading_whitespace(next_buf + 2);
-							if (!strchr(EXPR_OPERAND_TERMINATORS, *cp)) // Exclude "and:=x", "and = 1", "and += 1". This should be ok because AND/OR should always be followed immediately by a legtimate operand, not an operator.
+							// v1.0.38.06: The following was fixed to use EXPR_CORE vs. EXPR_OPERAND_TERMINATORS
+							// to properly detect a continuation line whose first char after AND/OR is "!~*&-+()":
+							if (!strchr(EXPR_CORE, *cp)) // Exclude "and:=x", "and = 1", "and += 1". This should be ok because AND/OR should always be followed immediately by a legtimate operand, not an operator.
 								is_continuation_line = true;
 						}
 						break;
