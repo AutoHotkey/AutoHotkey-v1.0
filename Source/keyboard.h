@@ -128,12 +128,15 @@ GNU General Public License for more details.
 #define SC_LWIN 0x15B
 #define SC_RWIN 0x15C
 
-typedef UCHAR vk_type;  // Probably better than using UCHAR, since UCHAR might be two bytes.
-// Although only need 9 bits for compressed and 16 for uncompressed scan code, use a full 32 bits so that
-// mouse messages (WPARAM) can be stored as scan codes.  Formerly USHORT (which is always 16-bit).
-typedef UINT sc_type;
-typedef UINT mod_type; // Standard Windows modifier type.
-
+// UPDATE for v1.0.39: Changed sc_type to USHORT vs. UINT to save memory in structs such as sc_hotkey.
+// This saves 60K of memory in one place, and possibly there are other large savings too.
+// The following older comment dates back to 2003/inception and I don't remember its exact intent,
+// but there is no current storage of mouse message constants in scan code variables:
+// OLD: Although only need 9 bits for compressed and 16 for uncompressed scan code, use a full 32 bits 
+// so that mouse messages (WPARAM) can be stored as scan codes.  Formerly USHORT (which is always 16-bit).
+typedef USHORT sc_type; // Scan code.
+typedef UCHAR vk_type;  // Virtual key.
+typedef UINT mod_type;  // Standard Windows modifier type for storing MOD_CONTROL, MOD_WIN, MOD_ALT, MOD_SHIFT.
 
 // The maximum number of virtual keys and scan codes that can ever exist.
 // As of WinXP, these are absolute limits, except for scan codes for which there might conceivably
@@ -147,7 +150,6 @@ typedef UINT mod_type; // Standard Windows modifier type.
 // 1 to make it 0xFF, thus ensuring array indexes will always be in-bounds if they are 8-bit values.
 #define VK_MAX 0xFF
 #define SC_MAX 0x1FF
-
 
 typedef UCHAR modLR_type; // Only the left-right win/alt/ctrl/shift rather than their generic counterparts.
 #define MODLR_MAX 0xFF
@@ -206,7 +208,7 @@ int SendChar(char aChar, modLR_type aModifiersLR, KeyEventTypes aEventType, HWND
 // 2) The wrong hotkey firing because Send has temporarily put a modifier into effect and (once again)
 //    the user is holding down the hotkey to auto-repeat it.  If the Send's temp-down modifier happens
 //    to make the hotkey suffix match a different set of modifiers, the wrong hotkey would fire.
-ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC = 0, HWND aTargetWindow = NULL
+void KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC = 0, HWND aTargetWindow = NULL
 	, bool aDoKeyDelay = false, DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER);
 void UpdateKeyEventHistory(bool aKeyUp, vk_type aVK, sc_type aSC);
 #define KEYEVENT_PHYS(event_type, vk, sc) KeyEvent(event_type, vk, sc, NULL, false, KEY_PHYS_IGNORE)

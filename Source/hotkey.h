@@ -70,7 +70,6 @@ private:
 	static bool sHotkeysAreLocked; // Whether the definition-stage of hotkey creation is finished.
 	static HookType sWhichHookNeeded;
 	static HookType sWhichHookAlways;
-	static HookType sWhichHookActive;
 	static DWORD sTimePrev;
 	static DWORD sTimeNow;
 	static HotkeyIDType sNextID;
@@ -234,7 +233,6 @@ public:
 	static ResultType AllDeactivate(bool aObeySuspend, bool aChangeHookStatus = true, bool aKeepHookIfNeeded = false);
 	static void AllActivate();
 	static void RequireHook(HookType aWhichHook) {sWhichHookAlways |= aWhichHook;}
-	static HookType HookIsActive() {return sWhichHookActive;} // Returns bitwise values: HOOK_MOUSE, HOOK_KEYBD.
 
 	static void InstallKeybdHook();
 

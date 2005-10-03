@@ -26,7 +26,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 // Returns true if it launched at least one thread, and false otherwise.
 // aSleepDuration can be be zero to do a true Sleep(0), or less than 0 to avoid sleeping or
 // waiting at all (i.e. messages are checked and if there are none, the function will return
-// immediately).  aMode is RETURN_AFTER_MESSAGES (default) or WAIT_FOR_MESSAGES.
+// immediately).  aMode is either RETURN_AFTER_MESSAGES (default) or WAIT_FOR_MESSAGES.
 // If the caller doesn't specify aSleepDuration, this function will return after a
 // time less than or equal to SLEEP_INTERVAL (i.e. the exact amount of the sleep
 // isn't important to the caller).  This mode is provided for performance reasons
@@ -37,14 +37,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 	// This is done here for performance reasons.  UPDATE: This probably never needs
 	// to close the clipboard now that Line::ExecUntil() also calls CLOSE_CLIPBOARD_IF_OPEN:
 	CLOSE_CLIPBOARD_IF_OPEN;
-	// I know of no way to simulate a Sleep(0), so for now we do this.
-	// UPDATE: It's more urgent that messages be checked than for the Sleep
-	// duration to be zero, so for now, just let zero be handled like any other.
-	//if (aMode == RETURN_AFTER_MESSAGES && aSleepDuration == 0)
-	//{
-	//	Sleep(0);
-	//	return OK;
-	//}
+
 	// While in mode RETURN_AFTER_MESSAGES, there are different things that can happen:
 	// 1) We launch a new hotkey subroutine, interrupting/suspending the old one.  But
 	//    subroutine calls this function again, so now it's recursed.  And thus the
@@ -88,7 +81,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 	// will be executed in sequence prior to resuming the suspended subroutine).
 	// Never static because we could be recursed (e.g. when one hotkey iterruptes
 	// a hotkey that has already been interrupted) and each recursion layer should
-	// have it's own value for this?:
+	// have it's own value for this:
 	global_struct global_saved;
 
 	// Decided to support a true Sleep(0) for aSleepDuration == 0, as well
@@ -102,7 +95,8 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 	// probably not a good idea due to the exclusive nature of the GUI
 	// (i.e. it's probably better to suspend existing subroutines rather than
 	// letting them continue to run because they might activate windows and do
-	// other stuff that would interfere with the GUI activities of other threads)
+	// other stuff that would interfere with the window automation activities of
+	// other threads)
 
 	// If caller didn't specify, the exact amount of the Sleep() isn't
 	// critical to it, only that we handles messages and do Sleep()
@@ -221,6 +215,11 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 		tick_before = GetTickCount();
 		if (aSleepDuration > 0 && !empty_the_queue_via_peek)
 		{
+			// The following comment is mostly obsolete as of v1.0.39 (which introduces a thread
+			// dedicated to the hooks).  However, using GetMessage() is still superior to
+			// PeekMessage() for performance reason.  Add to that the risk of breaking things
+			// and it seems clear that it's best to retain GetMessage().
+			// Older comment:
 			// Use GetMessage() whenever possible -- rather than PeekMessage() or a technique such
 			// MsgWaitForMultipleObjects() -- because it's the "engine" that passes all keyboard
 			// and mouse events immediately to the low-level keyboard and mouse hooks
@@ -228,11 +227,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 			// PeekMessage(), depending on how, and how often it's called, will also do this, but
 			// I'm not as confident in it.
 			if (GetMessage(&msg, NULL, 0, MSG_FILTER_MAX) == -1) // -1 is an error, 0 means WM_QUIT
-				// This probably can't happen since the above GetMessage() is getting any
-				// message belonging to a thread we already know exists (i.e. the one we're
-				// in now).
-				//MsgBox("GetMessage() unexpectedly returned an error.  Press OK to continue running.");
-				continue;
+				continue; // Error probably happens only when bad parameters were passed to GetMessage().
 			//else let any WM_QUIT be handled below.
 			// The below was added for v1.0.20 to solve the following issue: If BatchLines is 10ms
 			// (its default) and there are one or more 10ms script-timers active, those timers would
@@ -541,8 +536,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 			// peek were to detect a recursable message):
 			if (IsCycleComplete(aSleepDuration, start_time, allow_early_return))
 				RETURN_FROM_MSGSLEEP
-			// Otherwise, stay in the blessed GetMessage() state until
-			// the time has expired:
+			// Otherwise, stay in the blessed GetMessage() state until the time has expired:
 			continue;
 
 		case AHK_GUI_ACTION:   // The user pressed a button on a GUI window, or some other actionable event. Listed first for performance.
@@ -1137,9 +1131,12 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 					// Check for messages once more in case the subroutine that just completed
 					// above didn't check them that recently.  This is done to minimize the time
 					// our thread spends *not* pumping messages, which in turn minimizes keyboard
-					// and mouse lag if the hooks are installed.  Set the state of this function
-					// layer/instance so that it will use peek-mode.  UPDATE: Don't change the
-					// value of aSleepDuration to -1 because IsCycleComplete() needs to know the
+					// and mouse lag if the hooks are installed (even though this is no longer
+					// true due to v1.0.39's dedicated hook thread, it seems best to continue this
+					// practice to maximize responsiveness of hotkeys, the app itself [e.g. tray
+					// menu], and also to retain backward compatibility).  Set the state of this
+					// function/layer/instance so that it will use peek-mode.  UPDATE: Don't change
+					// the value of aSleepDuration to -1 because IsCycleComplete() needs to know the
 					// original sleep time specified by the caller to determine whether
 					// to decrement g_nLayersNeedingTimer:
 					empty_the_queue_via_peek = true;
@@ -1262,7 +1259,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 		if (!g_hAccelTable || !TranslateAccelerator(g_hWnd, g_hAccelTable, &msg))
 		{
 			TranslateMessage(&msg);
-			g.CalledByIsDialogMessageOrDispatch = true; // Relies on the fact that the types of messages we dispatch can't result in a reentrant call back to this function.
+			g.CalledByIsDialogMessageOrDispatch = true; // Relies on the fact that the types of messages we dispatch can't result in a recursive call back to this function.
 			DispatchMessage(&msg); // This is needed to send keyboard input and other messages to various windows and for some WM_TIMERs.
 			g.CalledByIsDialogMessageOrDispatch = false;
 		}
@@ -1323,12 +1320,12 @@ bool CheckScriptTimers()
 // This function will go through the list of timed subroutines only once and then return to its caller.
 // It does it only once so that it won't keep a thread beneath it permanently suspended if the sum
 // total of all timer durations is too large to be run at their specified frequencies.
-// This function is allowed to be called reentrantly, which handles certain situations better:
+// This function is allowed to be called recursively, which handles certain situations better:
 // 1) A hotkey subroutine interrupted and "buried" one of the timer subroutines in the stack.
-//    In this case, we don't want all the timers blocked just because that one is, so reentrant
+//    In this case, we don't want all the timers blocked just because that one is, so recursive
 //    calls from ExecUntil() are allowed, and they might discover other timers to run.
 // 2) If the script is idle but one of the timers winds up taking a long time to execute (perhaps
-//    it gets stuck in a long WinWait), we want a reentrant call (from MsgSleep() in this example)
+//    it gets stuck in a long WinWait), we want a recursive call (from MsgSleep() in this example)
 //    to launch any other enabled timers concurrently with the first, so that they're not neglected
 //    just because one of the timers happens to be long-running.
 // Of course, it's up to the user to design timers so that they don't cause problems when they

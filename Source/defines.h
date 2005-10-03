@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.38.06"
+#define NAME_VERSION "1.0.39.00"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -177,7 +177,7 @@ enum SymbolType // For use with ExpandExpression() and IsPureNumeric().
 // Above is the maximum length of a 64-bit number when expressed as decimal or hex string.
 // e.g. -9223372036854775808 or (unsigned) 18446744073709551616
 
-// Hot strings:
+// Hot-strings:
 // memmove() and proper detection of long hotstrings rely on buf being at least this large:
 #define HS_BUF_SIZE (MAX_HOTSTRING_LENGTH * 2 + 10)
 #define HS_BUF_DELETE_COUNT (HS_BUF_SIZE / 2)
@@ -198,39 +198,33 @@ typedef UCHAR HookType;
 #define CLIPBOARD_CONTAINS_ONLY_FILES (!IsClipboardFormatAvailable(CF_TEXT) && IsClipboardFormatAvailable(CF_HDROP))
 
 
-// These macros used to keep app responsive during a long operation.  They may prove to
-// be unnecessary if a 2nd thread can be dedicated to checking the message loop, which might
-// then prevent keyboard and mouse lag whenever either of the hooks is installed.
-// The sleep duration must be greater than zero when the hooks are installed, so that
-// MsgSleep() will enter the GetMessage() state, which is the only state that seems to
-// pass off keyboard & mouse input to the hooks.
-// A value of 8 for how_often_to_sleep seems best if avoiding keyboard/mouse lag is
-// top priority.  UPDATE: 18 is now being used because 8 sometimes causes a delay after every keystroke
-// (and perhaps ever file in FileSetAttrib() and such), possibly because the system's tickcount
-// gets synchronized exactly with the calls to GetTickCount, which means that the first tick
-// is fetched less than 1ms before the system is about to update to a new tickcount.  In any case,
-// 18 seems like a good trade-off of performance vs. lag (lag is barely noticeable).
-// For example, a value of 15 (or maybe it was 25) makes the mouse cursor
-// move with an almost imperceptible jumpiness.  Of course, the granularity of GetTickCount()
-// is usually 10ms, so it's best to choose a value such as 8, 18, 28, etc. to be sure
-// that the proper interval is really being used.
-// Making time_of_last_sleep static so that recursive functions, such as FileSetAttrib(),
+// These macros used to keep app responsive during a long operation.  In v1.0.39, the
+// hooks have a dedicated thread.  However, mLastPeekTime is still compared to 5 rather
+// than some higher value for the following reasons:
+// 1) Want hotkeys pressed during a long operation to take effect as quickly as possible.
+//    For example, in games a hotkey's response time is critical.
+// 2) Benchmarking shows less than a 0.5% performance improvement from this comparing
+//    to a higher value (even one as high as 500), even when the system is under heavy
+//    load from other processes).
+//
+// mLastPeekTime is global/static so that recursive functions, such as FileSetAttrib(),
 // will sleep as often as intended even if the target files require frequent recursion.
-// Making this static is not friendly to reentrant calls to the function (i.e. calls maded
-// as a consequence of the current script subroutine being interrupted by another during
+// The use of a global/static is not friendly to recursive calls to the function (i.e. calls
+// maded as a consequence of the current script subroutine being interrupted by another during
 // this instance's MsgSleep()).  However, it doesn't seem to be that much of a consequence
-// since the exact interval period of the MsgSleep()'s isn't that important.  It's also
+// since the exact interval/period of the MsgSleep()'s isn't that important.  It's also
 // pretty unlikely that the interrupting subroutine will also just happen to call the same
-// function rather than some other.  UPDATE: These macros were greatly simplified when
-// it was discovered that PeekMessage(), when called directly as below, is enough to prevent
-// keyboard and mouse lag when the hooks are installed:
+// function rather than some other.
+//
+// Older comment that applies if there is ever again no dedicated thread for the hooks:
+// These macros were greatly simplified when it was discovered that PeekMessage(), when called
+// directly as below, is enough to prevent keyboard and mouse lag when the hooks are installed
 #define LONG_OPERATION_INIT MSG msg; DWORD tick_now;
 
 // MsgSleep() is used rather than SLEEP_WITHOUT_INTERRUPTION to allow other hotkeys to
 // launch and interrupt (suspend) the operation.  It seems best to allow that, since
-// the user may want to press some fast window activation hotkeys, for example,
-// during the operation.  The operation will be resumed after the interrupting subroutine
-// finishes.
+// the user may want to press some fast window activation hotkeys, for example, during
+// the operation.  The operation will be resumed after the interrupting subroutine finishes.
 // Notes applying to the macro:
 // Store tick_now for use later, in case the Peek() isn't done, though not all callers need it later.
 // ...
@@ -252,7 +246,7 @@ typedef UCHAR HookType;
 	}\
 }
 
-// Same as the above except for SendKeys() and related functions (uses SLEEP_WITHOUT_INTERRUPTION vs. MsgSleep):
+// Same as the above except for SendKeys() and related functions (uses SLEEP_WITHOUT_INTERRUPTION vs. MsgSleep).
 #define LONG_OPERATION_UPDATE_FOR_SENDKEYS \
 {\
 	tick_now = GetTickCount();\

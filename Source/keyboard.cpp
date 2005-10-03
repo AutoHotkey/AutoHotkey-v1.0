@@ -30,13 +30,6 @@ static vk_type sPrevVK = 0;
 
 
 inline void DoKeyDelay(int aDelay = g.KeyDelay)
-// A small inline to help with tracking things in our effort to track the physical
-// state of the modifier keys, since GetAsyncKeyState() does not appear to be
-// reliable (not properly implemented), at least on Windows XP.  UPDATE: Tracking the
-// modifiers this way would require that the hotkey's modifiers be put back down between
-// every key event, which can sometimes interfere with the send itself (i.e. since the ALT
-// key can activate the menu bar in the foreground window).  So using the new physical
-// modifier tracking method instead.
 {
 	if (aDelay < 0) // To support user-specified KeyDelay of -1 (fastest send rate).
 		return;
@@ -134,13 +127,12 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 
 	// Might be better to do this prior to changing capslock state:
 	bool threads_are_attached = false; // Set default.
-	DWORD my_thread, target_thread;
+	DWORD target_thread;
 	if (aTargetWindow)
 	{
-		my_thread  = GetCurrentThreadId();
 		target_thread = GetWindowThreadProcessId(aTargetWindow, NULL);
-		if (target_thread && target_thread != my_thread && !IsWindowHung(aTargetWindow))
-			threads_are_attached = AttachThreadInput(my_thread, target_thread, TRUE) != 0;
+		if (target_thread && target_thread != g_MainThreadID && !IsWindowHung(aTargetWindow))
+			threads_are_attached = AttachThreadInput(g_MainThreadID, target_thread, TRUE) != 0;
 	}
 
 	// The default behavior is to turn the capslock key off prior to sending any keys
@@ -265,7 +257,7 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 				{
 					char *sc_string = StrChrAny(aKeys + 3, "Ss"); // Look for the "SC" that demarks the scan code.
 					if (sc_string && toupper(*(sc_string + 1)) == 'C')
-						sc = strtol(sc_string + 2, NULL, 16);  // Convert from hex.
+						sc = (sc_type)strtol(sc_string + 2, NULL, 16);  // Convert from hex.
 					// else leave sc set to zero and just get the specified VK.  This supports Send {VKnn}.
 					vk = (vk_type)strtol(aKeys + 3, NULL, 16);  // Convert from hex.
 				}
@@ -462,7 +454,7 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 	// Might be better to do this after changing capslock state, since having the threads attached
 	// tends to help with updating the global state of keys (perhaps only under Win9x in this case):
 	if (threads_are_attached)
-		AttachThreadInput(my_thread, target_thread, FALSE);
+		AttachThreadInput(g_MainThreadID, target_thread, FALSE);
 
 	if (do_selective_blockinput && !blockinput_prev) // Turn it back off only if it wasn't ON before we started.
 		Line::ScriptBlockInput(false);
@@ -881,24 +873,36 @@ int SendChar(char aChar, modLR_type aModifiersLR, KeyEventTypes aEventType, HWND
 
 
 
-ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTargetWindow
+void KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTargetWindow
 	, bool aDoKeyDelay, DWORD aExtraInfo)
-// sc or vk, but not both, can be zero to indicate unspecified.
+// aSC or aVK (but not both), can be zero to cause the default to be used.
 // For keys like NumpadEnter -- that have have a unique scancode but a non-unique virtual key --
 // caller can just specify the sc.  In addition, the scan code should be specified for keys
 // like NumpadPgUp and PgUp.  In that example, the caller would send the same scan code for
 // both except that PgUp would be extended.   sc_to_vk() would map both of them to the same
 // virtual key, which is fine since it's the scan code that matters to apps that can
 // differentiate between keys with the same vk.
-
+//
+// Thread-safe: This function is not fully thread-safe in the sense that keystrokes can get interleaved,
+// but that's always a risk with anything short of SendInput (and SendInput would be a challenge to
+// implement due to the interaction between sending and detecting modifiers and keystrokes).  In fact,
+// when the hook ISN'T installed, keystrokes can occur in another thread, causing the key state to
+// change in the middle of KeyEvent, which is the same effect as not having thread-safe key-states
+// such as GetKeyboardState in here.  Also, the odds of both our threads being in here simultaneously
+// is greatly reduced by the fact that the hook thread never passes "true" for aDoKeyDelay, thus
+// its calls should always be very fast.  Even if a collision does occur, there are thread-safety
+// things done in here that should reduce the impact to nearly as low as having a dedicated
+// KeyEvent function solely for calling by the hook thread (which might have other problems of its own).
+// Older note:
 // Later, switch to using SendInput() on OS's that support it.  But this is non-trivial due to
 // the following observation when it was attempted:
 // The problem with SendInput is that there are many assumptions in SendKeys() and all the functions
 // it calls about things already being in effect as the Send sends its keystrokes.  But when the
-// sendinput method is used, these events haven't yet occurred so the logic is not correct,
+// SendInput method is used, these events haven't yet occurred so the logic is not correct,
 // and it would probably be very complex to fix it.
 {
-	if (!aVK && !aSC) return FAIL;
+	if (!aVK && !aSC)
+		return;
 
 	// Even if the sc_to_vk() mapping results in a zero-value vk, don't return.
 	// I think it may be valid to send keybd_events	that have a zero vk.
@@ -914,7 +918,7 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 			// with any apps that may rely on scan code (and such would be the case if the hook isn't
 			// active because the user doesn't need it; also for some games maybe).  In addition, if the
 			// current OS is Win9x, we must map it here manually (above) because otherwise the hook
-			// wouldn't be able to differentiate left/right on keys such as RCONTROL, which is detected
+			// wouldn't be able to differentiate left/right on keys such as RControl, which is detected
 			// via its scan code.
 			aSC = vk_to_sc(aVK);
 
@@ -1005,7 +1009,7 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 		// themselves to the window, for greater reliability (same as AutoIt3).
 	}
 
-	if (aTargetWindow)
+	if (aTargetWindow) // This block should be thread-safe because hook thread never calls it in this mode.
 	{
 		// lowest 16 bits: repeat count: always 1 for up events, probably 1 for down in our case.
 		// highest order bits: 11000000 (0xC0) for keyup, usually 00000000 (0x00) for keydown.
@@ -1022,6 +1026,11 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 	}
 	else // Keystrokes are to be sent with keybd_event() rather than PostMessage().
 	{
+		// The following static variables are intentionally NOT thread-safe because their whole purpose
+		// is to watch the combined stream of keystrokes from all our threads.  Due to our threads'
+		// keystrokes getting interleaved with the user's and those of other threads, this kind of
+		// monitoring is never 100% reliable.  All we can do is aim for an astronomically low chance
+		// of failure.
 		// Users of the below want them updated only for keybd_event() keystrokes (not PostMessage ones):
 		sPrevEventType = aEventType;
 		sPrevVK = aVK;
@@ -1033,11 +1042,21 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 		// to work again."  In light of this, it seems best to unconditionally and momentarily disable
 		// input blocking regardless of which OS is being used (except Win9x, since no simulated input
 		// is even possible for those OSes).
+		// For thread safety, allow block-input modification only by the main thread.  This should avoid
+		// any chance that block-input will get stuck on due to two threads simultaneously reading+changing
+		// g_BlockInput (changes occur via calls to ScriptBlockInput).
 		bool we_turned_blockinput_off = g_BlockInput && (aVK == VK_MENU || aVK == VK_LMENU || aVK == VK_RMENU)
-			&& g_os.IsWinNT4orLater();
+			&& g_os.IsWinNT4orLater() && GetCurrentThreadId() == g_MainThreadID; // Ordered for short-circuit performance.
 		if (we_turned_blockinput_off)
 			Line::ScriptBlockInput(false);
 
+		// Thread-safe: g_HookReceiptOfLControlMeansAltGr isn't thread-safe, but by its very nature it probably
+		// shouldn't be (ways to do it might introduce an unwarranted amount of complexity and performance loss
+		// given that the odds of collision might be astronimically low in this case, and the consequences too
+		// mild).  The whole point of g_HookReceiptOfLControlMeansAltGr and related altgr things below is to
+		// watch what keystrokes the hook receives in response to simulating a press of the right-alt key.
+		// Due to their global/system nature, keystrokes are never thread-safe in the sense that any process
+		// in the entire system can be sending keystrokes simultaneously with ours.
 		vk_type control_vk;
 		bool lcontrol_was_down, do_detect_altgr;
 		if (do_detect_altgr = (aVK == VK_RMENU && !g_LayoutHasAltGr)) // Keyboard layout isn't yet marked as having an AltGr key, so auto-detect it here as well as other places.
@@ -1094,13 +1113,13 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 				ToggleNumlockWin9x();
 
 			if (!g_KeybdHook) // Hook isn't logging, so we'll log just the keys we send, here.
-				UpdateKeyEventHistory(false, aVK, aSC);
+				UpdateKeyEventHistory(false, aVK, aSC); // Should be thread-safe since if no hook means only one thread ever sends keystrokes (with possible exception of mouse hook, but that seems too rare).
 		}
 		// The press-duration delay is done only when this is a down-and-up because otherwise,
 		// the normal g.KeyDelay will be in effect.  In other words, it seems undesirable in
 		// most cases to do both delays for only "one half" of a keystroke:
 		if (aDoKeyDelay && aEventType == KEYDOWNANDUP)
-			DoKeyDelay(g.PressDuration);
+			DoKeyDelay(g.PressDuration); // DoKeyDelay() is not thread safe but since the hook thread should never pass true for aKeyDelay, it shouldn't be an issue.
 		if (aEventType != KEYDOWN)  // i.e. always do it for KEYDOWNANDUP
 		{
 			// See comments above for details about g_LayoutHasAltGr and g_IgnoreNextLControlUp:
@@ -1122,13 +1141,12 @@ ResultType KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTa
 				UpdateKeyEventHistory(true, aVK, aSC);
 		}
 
-		if (we_turned_blockinput_off)  // Turn it back on.
-			Line::ScriptBlockInput(true);
+		if (we_turned_blockinput_off)  // Aready made thread-safe by action higher above.
+			Line::ScriptBlockInput(true);  // Turn BlockInput back on.
 	}
 
 	if (aDoKeyDelay)
-		DoKeyDelay();
-	return OK;
+		DoKeyDelay(); // Thread-safe because only called by main thread.  See notes above.
 }
 
 
@@ -1470,16 +1488,43 @@ modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLR
 	// Update: Another bug-fix for v1.0.21, as was the above: If the keyboard hook is installed,
 	// the modifier keystrokes must have a way to get routed through the hook BEFORE the
 	// keystrokes get sent via PostMessage().  If not, the correct modifier state will usually
-	// not be in effect (or at least not be in sync) for the keys sent via PostMessage() afterward:
-	if (aTargetWindow) // ControlSend mode is in effect.
-	{
-		if (g_KeybdHook)  // This check must come first (it should take precedence if both conditions are true).
-			// -1 has been verified to be insufficient, at least for the very first letter sent if it is
-			// supposed to be capitalized:
-			SLEEP_WITHOUT_INTERRUPTION(0)
-		else if (GetWindowThreadProcessId(aTargetWindow, NULL) == GetCurrentThreadId())
-			SLEEP_WITHOUT_INTERRUPTION(-1)
+	// not be in effect (or at least not be in sync) for the keys sent via PostMessage() afterward.
+	// Notes about the macro below:
+	// aTargetWindow!=NULL means ControlSend mode is in effect.
+	// The g_KeybdHook check must come first (it should take precedence if both conditions are true).
+	// -1 has been verified to be insufficient, at least for the very first letter sent if it is
+	// supposed to be capitalized.
+	// g_MainThreadID is the only thread of our process that owns any windows.
+
+	// IMPORTANT UPDATE for v1.0.39: Now that the hooks are in a separate thread from the part
+	// of the program that sends keystrokes for the script, you might think synchronization of
+	// keystrokes would become problematic or at least change.  However, this is apparently not
+	// the case.  MSDN doesn't spell this out, but testing shows that what happens with a low-level
+	// hook is that the moment a keystroke comes into a thread (either physical or simulated), the OS
+	// immediately calls something similar to SendMessage() from that thread to notify the hook
+	// thread that a keystroke has arrived.  However, if the hook thread's priority is lower than
+	// some other thread next in line for a timeslice, it might take some time for the hook thread
+	// to get a timeslice (that's why the hook thread is given a high priority).
+	// The SendMessage() call doesn't return until its timeout expires (as set in the registry for
+	// hooks) or the hook thread processes the keystroke (which requires that it call something like
+	// GetMessage/PeekMessage followed by a HookProc "return").  This is good news because it serializes
+	// keyboard and mouse input to make the presence of the hook transparent to other threads (unless
+	// the hook does something to reveal itself, such as suppressing keystrokes). Serialization avoids
+	// any chance of synchronization problems such as a program that changes the state of a key then
+	// immediately checks the state of that same key via GetAsyncKeyState().  Another way to look at
+	// all of this is that in essense, a single-threaded hook program that simulates keystrokes or
+	// mouse clicks should behave the same when the hook is moved into a separate thread because from
+	// the program's point-of-view, keystrokes & mouse clicks result in a calling the hook almost
+	// exactly as if the hook were in the same thread.
+#define SLEEP_IF_CONTROLSEND \
+	if (aTargetWindow)\
+	{\
+		if (g_KeybdHook)\
+			SLEEP_WITHOUT_INTERRUPTION(0)\
+		else if (GetWindowThreadProcessId(aTargetWindow, NULL) == g_MainThreadID)\
+			SLEEP_WITHOUT_INTERRUPTION(-1)\
 	}
+	SLEEP_IF_CONTROLSEND
 
 	return aModifiersLRnow ^ modifiersLRnew; // Calculate the set of modifiers that changed (currently excludes AltGr's change of LControl's state).
 }
@@ -1618,9 +1663,7 @@ void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLR
 	if (aModifiersLR & MOD_LCONTROL) KeyEvent(aEventType, VK_LCONTROL, 0, NULL, false, aExtraInfo);
 	if (aModifiersLR & MOD_RCONTROL) KeyEvent(aEventType, VK_RCONTROL, 0, NULL, false, aExtraInfo);
 
-	// See comments at the bottom of SetModifierLRState() about this:
-	if (aTargetWindow && GetWindowThreadProcessId(aTargetWindow, NULL) == GetCurrentThreadId())
-		SLEEP_WITHOUT_INTERRUPTION(-1)
+	SLEEP_IF_CONTROLSEND
 
 	// Other notes about disguising ALT and WIN:
 	// Registered Alt hotkeys don't quite work if the Alt key is released prior to the suffix.
@@ -1665,25 +1708,11 @@ modLR_type GetModifierLRState(bool aExplicitlyGet)
 // Try to report a more reliable state of the modifier keys than GetKeyboardState
 // alone could.
 {
-	// Rather than old/below method, in light of the fact that new low-level hook is being tried,
-	// try relying on only the hook's tracked value rather than calling Get() (if the hook
-	// is active:
+	// If the hook is active, rely only on its tracked value rather than calling Get():
 	if (g_KeybdHook && !aExplicitlyGet)
 		return g_modifiersLR_logical;
 
-	// I decided to call GetKeyboardState() rather than tracking the state of these keys with the
-	// hook itself because that method wasn't reliable.  Hopefully, this method will always
-	// report the correct physical state of the keys (unless the OS itself thinks they're stuck
-	// down even when they're physically up, which seems to happen sometimes on some keyboards).
-	// It's probably better to make any vars (large ones at least) static for performance reasons.
-	// Normal/automatic vars have to be reallocated on the stack every time the function is called.
-	// This should be safe because it now seems that a KeyboardProc() is not called re-entrantly
-	// (though it is possible it's called that way sometimes?  Couldn't find an answer).
-	// This is the alternate, lower-performance method.
-
-	// Now, at the last possible moment (for performance), set the correct status for all
-	// the bits in g_modifiersLR_get.
-
+	// Very old comment:
 	// Use GetKeyState() rather than GetKeyboardState() because it's the only way to get
 	// accurate key state when a console window is active, it seems.  I've also seen other
 	// cases where GetKeyboardState() is incorrect (at least under WinXP) when GetKeyState(),
@@ -1713,6 +1742,11 @@ modLR_type GetModifierLRState(bool aExplicitlyGet)
 		if (IsKeyDown2kXP(VK_RWIN)) modifiersLR |= MOD_RWIN;
 	}
 
+	// Thread-safe: The following section isn't thread-safe because either the hook thread
+	// or the main thread can be calling it.  However, given that anything dealing with
+	// keystrokes isn't thread-safe in the sense that keystrokes can be coming in simultaneously
+	// from multiple sources, it seems acceptable to keep it this way (especially since
+	// the consequences of a thread collision seem very mild in this case).
 	if (g_KeybdHook)
 	{
 		// Since hook is installed, fix any modifiers that it incorrectly thinks are down.
@@ -1727,16 +1761,16 @@ modLR_type GetModifierLRState(bool aExplicitlyGet)
 		// being logically down (i.e. during a Send command where the user is phyiscally holding
 		// down a modifier, but the Send command needs to put it up temporarily), so do not
 		// change the hook's physical state for such keys in that case.
-		modLR_type hook_wrongly_down = g_modifiersLR_logical & ~modifiersLR;
-		if (hook_wrongly_down)
+		modLR_type modifiers_wrongly_down = g_modifiersLR_logical & ~modifiersLR;
+		if (modifiers_wrongly_down)
 		{
 			// Adjust the physical and logical hook state to release the keys that are wrongly down.
 			// If a key is wrongly logically down, it seems best to release it both physically and
 			// logically, since the hook's failure to see the up-event probably makes its physical
 			// state wrong in most such cases.
-			g_modifiersLR_physical &= ~hook_wrongly_down;
-			g_modifiersLR_logical &= ~hook_wrongly_down;
-			g_modifiersLR_logical_non_ignored &= ~hook_wrongly_down;
+			g_modifiersLR_physical &= ~modifiers_wrongly_down;
+			g_modifiersLR_logical &= ~modifiers_wrongly_down;
+			g_modifiersLR_logical_non_ignored &= ~modifiers_wrongly_down;
 			// Also adjust physical state so that the GetKeyState command will retrieve the correct values:
 			AdjustKeyState(g_PhysicalKeyState, g_modifiersLR_physical);
 		}
@@ -1909,7 +1943,7 @@ sc_type TextToSC(char *aText)
 			return g_key_to_sc[i].sc;
 	// Do this only after the above, in case any valid key names ever start with SC:
 	if (toupper(*aText) == 'S' && toupper(*(aText + 1)) == 'C')
-		return strtol(aText + 2, NULL, 16);  // Convert from hex.
+		return (sc_type)strtol(aText + 2, NULL, 16);  // Convert from hex.
 	return 0; // Indicate "not found".
 }
 

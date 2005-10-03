@@ -17,9 +17,9 @@ GNU General Public License for more details.
 #include "stdafx.h" // pre-compiled headers
 #include "hook.h"
 #include "globaldata.h"  // for access to several global vars
-#include "hotkey.h" // ChangeHookState() reads directly from static Hotkey class vars.
 #include "util.h" // for snprintfcat()
 #include "window.h" // for MsgBox()
+#include "application.h" // For MsgSleep().
 
 // Declare static variables (global to only this file/module, i.e. no external linkage):
 
@@ -27,26 +27,18 @@ GNU General Public License for more details.
 // These are made global, rather than static inside the hook function, so that
 // we can ensure they are initialized by the keyboard init function every
 // time it's called (currently it can be only called once):
-static bool sDisguiseNextLWinUp = false;
-static bool sDisguiseNextRWinUp = false;
-static bool sDisguiseNextLAltUp = false;
-static bool sDisguiseNextRAltUp = false;
-static bool sAltTabMenuIsVisible = false;
-static vk_type sVKtoIgnoreNextTimeDown = 0;
-
-#ifdef HOOK_WARNING
-static HANDLE keybd_hook_mutex = NULL; 
-static HANDLE mouse_hook_mutex = NULL;
-#endif
+static bool sDisguiseNextLWinUp;  // Initialized by ResetHook().
+static bool sDisguiseNextRWinUp;  //
+static bool sDisguiseNextLAltUp;  //
+static bool sDisguiseNextRAltUp;  //
+static bool sAltTabMenuIsVisible; //
+static vk_type sVKtoIgnoreNextTimeDown; // Initialized by ResetHook().
 
 // The prefix key that's currently down (i.e. in effect).
 // It's tracked this way, rather than as a count of the number of prefixes currently down, out of
 // concern that such a count might accidentally wind up above zero (due to a key-up being missed somehow)
 // and never come back down, thus penalizing performance until the program is restarted:
-static key_type *pPrefixKey = NULL;
-
-static key_type *kvk = NULL;
-static key_type *ksc = NULL;
+static key_type *pPrefixKey;  // Initialized by ResetHook().
 
 // Less memory overhead (space and performance) to allocate a solid block for multidimensional arrays:
 // These store all the valid modifier+suffix combinations (those that result in hotkey actions) except
@@ -58,6 +50,8 @@ static key_type *ksc = NULL;
 static HotkeyIDType *kvkm = NULL;
 static HotkeyIDType *kscm = NULL;
 static HotkeyIDType *hotkey_up = NULL;
+static key_type *kvk = NULL;
+static key_type *ksc = NULL;
 // Macros for convenience in accessing the above arrays as multidimensional objects.
 // When using them, be sure to consistently access the first index as ModLR (i.e. the rows)
 // and the second as VK or SC (i.e. the columns):
@@ -115,15 +109,15 @@ static HotkeyIDType *hotkey_up = NULL;
 // before or after some other keyboard event.  The elapsed time is usually zero, but using 22ms
 // here just in case slower systems or systems under load have longer delays between keystrokes:
 #define SHIFT_KEY_WORKAROUND_TIMEOUT 22
-static bool sNextPhysShiftDownIsNoPhys = false;
-static vk_type sPriorVK = 0;
-static sc_type sPriorSC = 0;
-static bool sPriorEventWasKeyUp = false;
-static bool sPriorEventWasPhysical = false;
-static DWORD sPriorEventTickCount = 0;
-static modLR_type sPriorModifiersLR_physical = 0;
-static BYTE sPriorShiftState = 0;  // i.e. default to "key is up".
-static BYTE sPriorLShiftState = 0; //
+static bool sNextPhysShiftDownIsNoPhys; // All of these are initialized by ResetHook().
+static vk_type sPriorVK;
+static sc_type sPriorSC;
+static bool sPriorEventWasKeyUp;
+static bool sPriorEventWasPhysical;
+static DWORD sPriorEventTickCount;
+static modLR_type sPriorModifiersLR_physical;
+static BYTE sPriorShiftState;
+static BYTE sPriorLShiftState;
 
 enum DualNumpadKeys	{PAD_DECIMAL, PAD_NUMPAD0, PAD_NUMPAD1, PAD_NUMPAD2, PAD_NUMPAD3
 , PAD_NUMPAD4, PAD_NUMPAD5, PAD_NUMPAD6, PAD_NUMPAD7, PAD_NUMPAD8, PAD_NUMPAD9
@@ -205,6 +199,16 @@ LRESULT CALLBACK LowLevelKeybdProc(int aCode, WPARAM wParam, LPARAM lParam)
 	// It shouldn't be necessary to check what type of LControl event (up or down) is received, since
 	// it should be impossible for any unrelated keystrokes to be received while g_HookReceiptOfLControlMeansAltGr
 	// is true.  This is because all unrelated keystrokes stay buffered until the main thread calls GetMessage().
+	// UPDATE for v1.0.39: Now that the hook has a dedicated thread, the above is no longer 100% certain.
+	// However, I think confidence is very high that this AltGr detection method is okay as it is because:
+	// 1) Hook thread has high priority, which means it generally shouldn't get backlogged with buffered keystrokes.
+	// 2) When the main thread calls keybd_event(), there is strong evidence that the OS immediately preempts
+	//    the main thread (or executes a SendMessage(), which is the same as preemption) and gives the next
+	//    timeslice to the hook thread, which then immediately processes the incoming keystroke as long
+	//    as there are no keystrokes in the queue ahead of it (see #1).
+	// 3) Even if #1 and #2 fail to hold, the probability of misclassifying an LControl event seems very low.
+	//    If there is ever concern, adding a call to IsIgnored(aExtraInfo, aVK, aKeyUp) below would help weed
+	//    out physical keystrokes (or those of other programs) that arrive during a vulnerable time.
 	if (g_HookReceiptOfLControlMeansAltGr && vk == VK_LCONTROL)
 		g_LayoutHasAltGr = true;
 		// But don't reset g_HookReceiptOfLControlMeansAltGr here to avoid timing problems where the hook
@@ -375,15 +379,30 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 	// an Escape keystroke of any kind:
 	if (sAltTabMenuIsVisible && aVK == VK_ESCAPE && !aKeyUp)
 	{
+		// When the alt-tab window is owned by the script (it is owned by csrss.exe unless the script
+		// is the process that invoked the alt-tab window), testing shows that the script must be the
+		// originator of the Escape keystroke.  Therefore, substitute a simulated keystroke for the
+		// user's physical keystroke. It might be necessary to do this even if is_ignored==true because
+		// a keystroke from some other script/process might not qualify as a valid means to cancel it.
+		// UPDATE for v1.0.39: The escape handler below works only if the hook's thread invoked the
+		// alt-tab window, not if the script's thread did via something like "Send {Alt down}{tab down}".
+		// This is true even if the process ID is checked instead of the thread ID below.  I think this
+		// behavior is due to the window obeying escape only when its own thread sends it.  This
+		// is probably done to allow a program to automate the alt-tab menu without interference
+		// from Escape keystrokes typed by the user.  Although this could probably be fixed by
+		// sending a message to the main thread and having it send the Escape keystroke, it seems
+		// best not to do this because:
+		// 1) The ability to dismiss a script-invoked alt-tab menu with escape would vary depending on
+		//    whether the keyboard hook is installed (i.e. it's inconsistent).
+		// 2) It's more flexible to preserve the ability to protect the alt-tab menu from physical
+		//    escape keystrokes typed by the user.  The script can simulate an escape key to explicitly
+		//    close an alt-tab window it invoked (a simulated escape keystroke can apparently also close
+		//    any alt-tab menu, even one invoked by physical keystrokes; but the converse isn't true).
+		// 3) Lesser reason: Reduces code size and complexity.
 		HWND alt_tab_window;
 		if ((alt_tab_window = FindWindow("#32771", NULL)) // There is an alt-tab window...
-			&& GetWindowThreadProcessId(alt_tab_window, NULL) == GetCurrentThreadId()) // ...and it's owned by our thread.
+			&& GetWindowThreadProcessId(alt_tab_window, NULL) == GetCurrentThreadId()) // ...and it's owned by the hook thread (not the main thread).
 		{
-			// When the alt-tab window is owned by the script (it is owned by csrss.exe unless the script
-			// is the process that invoked the alt-tab window), testing shows that the script must be the
-			// originator of the Escape keystroke.  Therefore, substitute a simulated keystroke for the
-			// user's physical keystroke. It might be necessary to do this even if is_ignored==true because
-			// a keystroke from some other script/process might not qualify as a valid means to cancel it.
 			KeyEvent(KEYDOWN, VK_ESCAPE);
 			// By definition, an Alt key should be logically down if the alt-tab menu is visible (even if it
 			// isn't, sending an extra up-event seems harmless).  Releasing that Alt key seems best because:
@@ -472,7 +491,7 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 			// which might cause the use of SHIFT as the disguise key to trigger the language switch.
 			if (!(g_modifiersLR_logical & (MOD_LCONTROL | MOD_RCONTROL))) // Neither CTRL key is down.
 				KeyEvent(KEYDOWNANDUP, VK_CONTROL);
-			// Since the above call to KeyEvent() calls the keybd hook reentrantly, a quick down-and-up
+			// Since the above call to KeyEvent() calls the keybd hook recursively, a quick down-and-up
 			// on Control is all that is necessary to disguise the key.  This is because the OS will see
 			// that the Control keystroke occurred while ALT or WIN is still down because we haven't
 			// done CallNextHookEx() yet.
@@ -483,6 +502,8 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 	else // Mouse hook
 	{
 		// If no vk, there's no mapping for this key, so currently there's no way to process it.
+		if (!aVK)
+			return AllowKeyToGoToSystem;
 		// Also, if the script is displaying a menu (tray, main, or custom popup menu), always
 		// pass left-button events through -- even if LButton is defined as a hotkey -- so
 		// that menu items can be properly selected.  This is necessary because if LButton is
@@ -492,6 +513,7 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 		// button-down and button-up events caused by the hotkey.  Also, for simplicity this
 		// is done regardless of which modifier keys the user is holding down since the desire
 		// to fire mouse hotkeys while a context or popup menu is displayed seems too rare.
+		//
 		// Update for 1.0.37.05: The below has been extended to look for menus beyond those
 		// supported by g_MenuIsVisible, namely the context menus of a MonthCal or Edit control
 		// (even the script's main window's edit control's context menu).  It has also been
@@ -501,10 +523,9 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 		// 3) Right-click should invoke another instance of the context menu (or dismiss existing menu, depending
 		//    on where the click occurs) if user clicks outside of our thread's existing context menu.
 		HWND menu_hwnd;
-		if (   !aVK
-			|| ((aVK == VK_LBUTTON || aVK == VK_RBUTTON) && (g_MenuIsVisible // Ordered for short-circuit performance.
+		if (   (aVK == VK_LBUTTON || aVK == VK_RBUTTON) && (g_MenuIsVisible // Ordered for short-circuit performance.
 				|| ((menu_hwnd = FindWindow("#32768", NULL))
-					&& GetWindowThreadProcessId(menu_hwnd, NULL) == GetCurrentThreadId())))   )
+					&& GetWindowThreadProcessId(menu_hwnd, NULL) == g_MainThreadID))   ) // Don't call GetCurrentThreadId() because our thread is different than main's.
 		{
 			// Bug-fix for v1.0.22: If "LControl & LButton::" (and perhaps similar combinations)
 			// is a hotkey, the foreground window would think that the mouse is stuck down, at least
@@ -514,11 +535,8 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 			// ...because down_performed_action was true when it should have been false
 			// ...because the while-menu-was-displayed up-event never set it to false
 			// ...because it returned too early here before it could get to that part further below.
-			if (aVK)
-			{
-				this_key.down_performed_action = false; // Seems ok in this case to do this for both aKeyUp and !aKeyUp.
-				this_key.is_down = !aKeyUp;
-			}
+			this_key.down_performed_action = false; // Seems ok in this case to do this for both aKeyUp and !aKeyUp.
+			this_key.is_down = !aKeyUp;
 			return AllowKeyToGoToSystem;
 		}
 	} // Mouse hook.
@@ -1613,42 +1631,8 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 			break;
 		}
 		default:
+			// Notify the main thread (via its main window) of which hotkey has been pressed:
 			PostMessage(g_hWnd, AHK_HOOK_HOTKEY, hotkey_id_to_fire, 0);
-			// Comments about the above line:
-			// UPDATE to below: Since this function is only called from a single thread (namely ours),
-			// albeit recursively, it's apparently not reentrant (unless our own main app itself becomes
-			// multithreaded someday, and even then it might not matter?) there's no advantage to using
-			// PostMessage() because the message can't be acted upon until after we return from this
-			// function.  Therefore, avoid the overhead (and possible delays while system is under
-			// heavy load?) of using PostMessage and simply execute the hotkey right here before
-			// returning.  UPDATE AGAIN: No, I don't think this will work reliably because this
-			// function is called invisibly by GetMessage(), without it even telling us that
-			// it's calling it.  Therefore, if we call a subroutine in the script from here,
-			// we can't return until after the subroutine is over, thus GetMessage() will
-			// probably hang, or be forced to start a new thread or something?  An alternative to
-			// using PostMessage() (if it really is susceptible to delays due to system being under
-			// load, which is far from certain), is to change the value of a global var to signal
-			// to MsgSleep() that a hotkey has been fired.  However, this doesn't seem likely
-			// to work because a call to GetMessage() will likely call this function without
-			// actually returning any messages to its caller, thus the hotkeys would never be
-			// seen during periods when there are no messages.  PostMessage() works reliably, so
-			// it seems best not to change it without good reason and without a full understanding
-			// of what's really going on.
-			//
-			// Older:
-			// Use PostMessage() rather than directly calling the function to write the key to
-			// the log file.  This is done so that we can return sooner, which reduces the keyboard
-			// and mouse lag that would otherwise be caused by us not being in a pumping-messages state.
-			// IN ADDITION, this method may also help to keep the keystrokes in order (due to recursive
-			// calls to the hook via keybd_event(), etc), I'm not sure.  UPDATE: No, that seems impossible
-			// when you think about it.  Also, to simplify this the function is now called directly rather
-			// than posting a message to avoid complications that might be caused by the script being
-			// uninterruptible for a long period (rare), which would thus cause the posted msg to stay
-			// buffered for a long time.
-			//
-			// Don't execute it directly because if whatever it does takes a long time, this keystroke
-			// and instance of the function will be left hanging until it returns:
-			//Hotkey::PerformID(hotkey_id_to_fire);
 	}
 
 	pKeyHistoryCurr->event_type = 'h'; // h = hook hotkey (not one registered with RegisterHotkey)
@@ -1727,8 +1711,8 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 				KeyEvent(KEYDOWN, aVK, aSC); // Substitute this to make up for the suppression (a check higher above has already determined that no_supress==true).
 				// Now allow the up-event to go through.  The DOWN should always wind up taking effect
 				// before the UP because the above should already have "finished" by now, since
-				// it resulted in a recursive call to this function (using our current thread
-				// rather than some other reentrant thread):
+				// it resulted in a recursive call to this function (using our hook-thread
+				// rather than our main thread or some other thread):
 			return suppress_to_prevent_toggle ? SuppressThisKey : AllowKeyToGoToSystem;
 		} // no_suppress
 	}
@@ -2072,7 +2056,7 @@ LRESULT AllowIt(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lParam, cons
 			disguise_it = false; // LCTRL or RCTRL is already down, so disguise is already in effect.
 		else if (   vk_is_win && (g_modifiersLR_logical & (MOD_LSHIFT | MOD_RSHIFT | MOD_LALT | MOD_RALT))   )
 			disguise_it = false; // WIN key disguise is easier to satisfy, so don't need it in these cases either.
-		// Since the below call to KeyEvent() calls the keybd hook reentrantly, a quick down-and-up
+		// Since the below call to KeyEvent() calls the keybd hook recursively, a quick down-and-up
 		// on Control is all that is necessary to disguise the key.  This is because the OS will see
 		// that the Control keystroke occurred while ALT or WIN is still down because we haven't
 		// done CallNextHookEx() yet.
@@ -2901,11 +2885,13 @@ bool IsDualStateNumpadKey(const vk_type aVK, const sc_type aSC)
 struct hk_sorted_type
 {
 	int id_with_flags;
-	vk_type vk;
-	sc_type sc;
 	mod_type modifiers;
 	modLR_type modifiersLR;
+	// Keep sub-32-bit members contiguous to save memory without having to sacrifice performance of
+	// 32-bit alignment:
 	bool AllowExtraModifiers;
+	vk_type vk;
+	sc_type sc;
 };
 
 
@@ -3088,75 +3074,13 @@ void SetModifierAsPrefix(vk_type aVK, sc_type aSC, bool aAlwaysSetAsPrefix = fal
 
 
 
-HookType RemoveAllHooks()
-{
-	RemoveKeybdHook();
-	RemoveMouseHook();
-	if (kvk) delete [] kvk;
-	if (ksc) delete [] ksc;
-	if (kvkm) delete [] kvkm;
-	if (kscm) delete [] kscm;
-	if (hotkey_up) delete [] hotkey_up;
-	kvk = ksc = NULL;
-	kvkm = kscm = NULL;
-	hotkey_up = NULL;
-	return 0;
-}
-
-
-
-HookType RemoveKeybdHook()
-{
-	if (g_KeybdHook)
-		if (UnhookWindowsHookEx(g_KeybdHook))
-		{
-			g_KeybdHook = NULL;
-#ifdef HOOK_WARNING
-			if (keybd_hook_mutex)
-			{
-				CloseHandle(keybd_hook_mutex);
-				keybd_hook_mutex = NULL;  // Keep this in sync with the above, since this can be run more than once.
-			}
-#endif
-		}
-	return GetActiveHooks();
-}
-
-
-
-HookType RemoveMouseHook()
-{
-	if (g_MouseHook)
-		if (UnhookWindowsHookEx(g_MouseHook))
-		{
-			g_MouseHook = NULL;
-#ifdef HOOK_WARNING
-			if (mouse_hook_mutex)
-			{
-				CloseHandle(mouse_hook_mutex);
-				mouse_hook_mutex = NULL;  // Keep this in sync with the above, since this can be run more than once.
-			}
-#endif
-		}
-	return GetActiveHooks();
-}
-
-
-
-HookType GetActiveHooks()
-{
-	HookType hooks_currently_active = 0;
-	if (g_KeybdHook)
-		hooks_currently_active |= HOOK_KEYBD;
-	if (g_MouseHook)
-		hooks_currently_active |= HOOK_MOUSE;
-	return hooks_currently_active;
-}
-
-
-
-HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, HookType aWhichHookAlways
+void ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, HookType aWhichHookAlways
 	, bool aWarnIfHooksAlreadyInstalled)
+// The caller of this function should always be the main thread, never the hook thread.
+// One reason is that this function isn't thread-safe.  Another is that new/delete/malloc/free
+// themselves might not be thread-safe when the single-threaded CRT libraries are in effect
+// (not using multi-threaded libraries due to a 3.5 KB increase in compressed code size).
+//
 // The input params are unnecessary because could just access directly by using Hotkey::shk[].
 // But aHK is a little more concise.
 // aWhichHookAlways was added to force the hooks to be installed (or stay installed) in the case
@@ -3165,20 +3089,27 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 // hooks.
 // Returns the set of hooks that are active after processing is complete.
 {
-	HookType hooks_currently_active = GetActiveHooks();
+	// v1.0.39: For simplicity and maintainability, don't even make the attempt on Win9x since it
+	// seems too rare that they would have LL hook capability somehow (such as in an emultator).
+	// NOTE: Some sections rely on the fact that no warning dialogs are displayed if the hook is
+	// called for but the OS doesn't support it.  For example, AllActivate() doesn't check the OS version
+	// in many cases when marking hotkeys as hook hotkeys.
+	if (g_os.IsWin9x())
+		return;
 
-	if (!aWhichHook && !aWhichHookAlways)
-		// Deinstall all hooks and free the memory in any of these cases (though it's currently never
-		// called this way).  NOTE: Even if aHK_count is zero, still want to install the hook(s)
-		// whenever aWhichHookAlways specifies that the should be.  This is done so that the
-		// #InstallKeybdHook and #InstallMouseHook directives can have the hooks installed just
-		// for use with the KeyHistory feature, for example.
-		return RemoveAllHooks();
+	if (!aWhichHook && !aWhichHookAlways) // No need to check any further in this case.  Just remove all hooks.
+	{
+		AddRemoveHooks(0); // Remove all hooks.
+		return;
+	}
 
-	// Even if aWhichHook == hooks_currently_active, we still need to continue in case
-	// this is a suspend or unsuspend operation.  In both of those cases, though the
-	// hook(s) may already be installed, the hotkey configuration probably needs to be
-	// updated.
+	// Even if aWhichHook indicates no change to hook status, we still need to continue in case
+	// this is a suspend or unsuspend operation.  In both of those cases, though the hook(s)
+	// may already be active , the hotkey configuration probably needs to be updated.
+	// Related: Even if aHK_count is zero, still want to install the hook(s) whenever
+	// aWhichHookAlways specifies that they should be.  This is done so that the
+	// #InstallKeybdHook and #InstallMouseHook directives can have the hooks installed just
+	// for use with something such as the KeyHistory feature.
 
 	// Now we know that at least one of the hooks is a candidate for activation.
 	// Set up the arrays process all of the hook hotkeys even if the corresponding hook won't
@@ -3193,28 +3124,18 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 	// performance would be slightly worse for the "average" script).  Presumably, the
 	// caller is requesting the keyboard hook with zero hotkeys to support the forcing
 	// of Num/Caps/ScrollLock always on or off (a fairly rare situation, probably):
-	if (!kvk)  // Since its an initialzied global, this indicates that all 4 objects are not yet allocated.
+	if (!kvk)  // Since it's an initialzied global, this indicates that all 4 objects are not yet allocated.
 	{
-		if (kvk = new key_type[VK_ARRAY_COUNT])
-			if (ksc = new key_type[SC_ARRAY_COUNT])
-				if (kvkm = new HotkeyIDType[KVKM_SIZE])
-					if (kscm = new HotkeyIDType[KSCM_SIZE])
-						hotkey_up = new HotkeyIDType[MAX_HOTKEYS];
-		if (!(kvk && ksc && kvkm && kscm && hotkey_up)) // at least one of the allocations failed
+		if (   !(kvk = new key_type[VK_ARRAY_COUNT])
+			|| !(ksc = new key_type[SC_ARRAY_COUNT])
+			|| !(kvkm = new HotkeyIDType[KVKM_SIZE])
+			|| !(kscm = new HotkeyIDType[KSCM_SIZE])
+			|| !(hotkey_up = new HotkeyIDType[MAX_HOTKEYS])   )
 		{
+			// At least one of the allocations failed.
 			// Keep all 4 objects in sync with one another (i.e. either all allocated, or all not allocated):
-			if (kvk) delete [] kvk;
-			if (ksc) delete [] ksc;
-			if (kvkm) delete [] kvkm;
-			if (kscm) delete [] kscm;
-			if (hotkey_up) delete [] hotkey_up;
-			kvk = ksc = NULL;
-			kvkm = kscm = NULL;
-			hotkey_up = NULL;
-			// In this case, indicate that none of the hooks is installed, since if we're here, this
-			// is the first call to this function and there hasn't yet been any opportunity to install
-			// a hook:
-			return 0;
+			FreeHookMem(); // Since none of the hooks is active, just free any of the above memory that was partially allocated.
+			return;
 		}
 
 		// Done once immediately after allocation to init attributes such as pForceToggle and as_modifiersLR,
@@ -3279,9 +3200,9 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 
 	// These have to be initialized with with element value INVALID.
 	// Don't use FillMemory because the array elements are too big (bigger than bytes):
-	for (i = 0; i < KVKM_SIZE; ++i)
+	for (i = 0; i < KVKM_SIZE; ++i) // Simplify by viewing 2-dimensional array as a 1-dimensional array.
 		kvkm[i] = HOTKEY_ID_INVALID;
-	for (i = 0; i < KSCM_SIZE; ++i)
+	for (i = 0; i < KSCM_SIZE; ++i) // Simplify by viewing 2-dimensional array as a 1-dimensional array.
 		kscm[i] = HOTKEY_ID_INVALID;
 	for (i = 0; i < MAX_HOTKEYS; ++i)
 		hotkey_up[i] = HOTKEY_ID_INVALID;
@@ -3504,11 +3425,14 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 
 	if (!(keybd_hook_hotkey_count || mouse_hook_hotkey_count || force_CapsNumScroll || aWhichHookAlways
 		|| Hotstring::AtLeastOneEnabled()))
+	{
 		// Since there are no hotkeys whatsover (not even an AlwaysOn/Off toggleable key),
 		// remove all hooks.  Currently, this should only happen if g_IsSuspended is true
 		// (i.e. there were no Suspend-type hotkeys to activate). Note: When "suspend" mode
 		// is in effect, the Num/Scroll/CapsLock AlwaysOn/Off feature is not disabled, by design:
-		return RemoveAllHooks();
+		AddRemoveHooks(0); // Remove all hooks.
+		return;
+	}
 
 	if (hk_sorted_count)
 	{
@@ -3659,110 +3583,243 @@ HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, Hook
 		}
 	}
 
-	// Install any hooks that aren't already installed:
-	// Even if OS is Win9x, try LL hooks anyway.  This will probably fail on WinNT if it doesn't have SP3+
-	if (   !g_KeybdHook && ((aWhichHookAlways & HOOK_KEYBD)
-		|| ((aWhichHook & HOOK_KEYBD) && (keybd_hook_hotkey_count || force_CapsNumScroll || Hotstring::AtLeastOneEnabled())))   )
+	// Determine the set of hooks that should be activated or deactivated.
+	HookType hooks_to_be_active = 0;
+
+	// Deinstall hook if the caller omitted it from aWhichHook, or if it had no corresponding hotkeys
+	// (currently the latter only happens in the case of g_IsSuspended is true):
+	if (   (aWhichHookAlways & HOOK_KEYBD) || ((aWhichHook & HOOK_KEYBD)
+		&& (keybd_hook_hotkey_count || force_CapsNumScroll || Hotstring::AtLeastOneEnabled()))   )
+		hooks_to_be_active |= HOOK_KEYBD;
+	else
+		hooks_to_be_active &= ~HOOK_KEYBD;
+
+	if (   (aWhichHookAlways & HOOK_MOUSE) || ((aWhichHook & HOOK_MOUSE) && mouse_hook_hotkey_count)   )
+		hooks_to_be_active |= HOOK_MOUSE;
+	else
+		hooks_to_be_active &= ~HOOK_MOUSE;
+
+	AddRemoveHooks(hooks_to_be_active); // No change is made if the hooks are already in the correct state.
+}
+
+
+
+void AddRemoveHooks(HookType aHooksToBeActive)
+// Caller has already ensured that OS isn't Win9x.
+// Caller is always the main thread, never the hook thread (since this function is not thread-safe).
+// Caller has ensured that any static memory arrays used by the hook functions have been allocated.
+{
+	HookType hooks_currently_active = GetActiveHooks();
+	if (aHooksToBeActive == hooks_currently_active) // It's already in the right state.
+		return;
+
+	// It's unclear that zero is always an invalid thread ID (not even GetWindowThreadProcessId's
+	// documentation gives any hint), so its safer to assume that a thread ID can be zero.
+	static DWORD sHookThreadID;
+	static HANDLE sThreadHandle = NULL;
+
+	if (!hooks_currently_active) // Neither hook is active now but at least one will be or the above would have returned.
 	{
-#ifdef HOOK_WARNING
-		if (!keybd_hook_mutex) // else we already have ownership of the mutex so no need for this check.
+		// Assert: sThreadHandle should be NULL at this point.  The only way this isn't true is if
+		// a previous call to AddRemoveHooks() timed out while waiting for the hook thread to exit,
+		// which seems far too rare to add extra code for.
+
+		// It's not necessary to link to the multi-threading C runtime (which bloats that code by 3.5 KB
+		// compressed) as long as the new thread doesn't call any C-library functions that aren't thread-safe
+		// (in addition to the C functions that obviously use static data, calls to things like malloc(),
+		// new, and other memory management functions probably aren't thread-safe unless the multi-threaded
+		// library is used). The memory leak described in MSDN for ExitThread() applies only to the
+		// multi-threaded libraries, so it isn't a concern either.
+		//
+		// The hooks are designed to make miminmal use of C-library calls, currently calling only things
+		// like memcpy() and strlen(), which are thread safe in the single-threaded library (according to
+		// its source code).  However, the hooks may indirectly call other library functions via calls to
+		// KeyEvent() and other functions, which has already been reviewed for thread-safety but needs
+		// to be kept in mind as changes are made in the future.
+		//
+		// CreateThread's second parameter is the new thread's initial stack size. The stack will grow
+		// automatically if more is needed, so it's kept small here to greatly reduce the amount of
+		// memory used by the hook thread.  The XP Task Manager's "VM Size" column (which seems much
+		// more accurate than "Mem Usage") indicates that a new thread consumes 28 KB + its stack size.
+		if (sThreadHandle = CreateThread(NULL, 8*1024, HookThreadProc, NULL, 0, &sHookThreadID)) // Win9x: Last parameter cannot be NULL.
+			SetThreadPriority(sThreadHandle, THREAD_PRIORITY_TIME_CRITICAL); // See below for explanation.
+			// The above priority level seems optimal because if some other process has high priority,
+			// the keyboard and mouse hooks will still take precedence, which avoids the mouse cursor
+			// and keystroke lag that would otherwise occur (confirmed through testing).  Due to their
+			// return-ASAP nature, the hooks are an ideal candidate for almost-realtime priority because
+			// they run only rarely and only for tiny bursts of time.
+			// Note that the above must also be done in such a way that it works on NT4, which doesn't support
+			// below-normal and above-normal process priorities, nor perhaps other aspects of priority.
+			// So what is the actual priority given to the hooks by the OS?  Assuming that the script's
+			// process is set to NORMAL_PRIORITY_CLASS (which is the default), the following applies:
+			// First of all, a definition: "base priority" is the actual/net priority of the thread.
+			// It determines how the OS will schedule a thread relative to all other threads on the system.
+			// So in a sense, if you look only at base priority, the thread's process's priority has no
+			// bearing on how the thread will get scheduled (except to the extent that it contributes
+			// to the calculation of the base priority itself).  Here are some common base priorities
+			// along with where the hook priority (15) fits in:
+			// 7 = NORMAL_PRIORITY_CLASS process + THREAD_PRIORITY_NORMAL thread.
+			// 9 = NORMAL_PRIORITY_CLASS process + THREAD_PRIORITY_HIGHEST thread.
+			// 13 = HIGH_PRIORITY_CLASS process + THREAD_PRIORITY_NORMAL thread.
+			// 15 = NORMAL_PRIORITY_CLASS process + THREAD_PRIORITY_TIME_CRITICAL thread. <-- Seems like the optimal compromise.
+			// 15 = HIGH_PRIORITY_CLASS process + THREAD_PRIORITY_HIGHEST thread.
+			// 24 = REALTIME_PRIORITY_CLASS process + THREAD_PRIORITY_NORMAL thread.
+		else // Failed to create thread.  Seems to rare to justify the display of an error.
 		{
-			keybd_hook_mutex = CreateMutex(NULL, FALSE, NAME_P "KeybdHook");
-			if (aWarnIfHooksAlreadyInstalled && !(sWhichHookSkipWarning & HOOK_KEYBD)
-				&& GetLastError() == ERROR_ALREADY_EXISTS)
-			{
-				int result = MsgBox("Another instance of this program already has the KEYBOARD hook"
-					" installed (perhaps because some of its hotkeys require it)."
-					"  Installing it a second time might produce unexpected behavior.  Do it anyway?"
-					"\n\nChoose NO to exit the program."
-					"\n\nYou can disable this warning by adding this line to the script:"
-					"\n#InstallKeybdHook force"
-					, MB_YESNO);
-				if (result != IDYES)
-					g_script.ExitApp(EXIT_CRITICAL);
-				// Note: It's not necessary to ever close the Mutex with CloseHandle() because:
-				// "The system closes the handle automatically when the process terminates.
-				// The mutex object is destroyed when its last handle has been closed."
-			}
-		}
-#endif
-		if (g_KeybdHook = SetWindowsHookEx(WH_KEYBOARD_LL, LowLevelKeybdProc, g_hInstance, 0))
-		{
-			hooks_currently_active |= HOOK_KEYBD;
-			ResetHook(false, HOOK_KEYBD, true);
-		}
-		else
-		{
-			if (!g_os.IsWin9x())
-				MsgBox("Warning: The keyboard hook could not be activated; some parts of the script will not function.");
-			//else // i.e. it failed because the OS does't support it.
-				// Currently, this never happens because there are other checks that intercept
-				// attempts to get this far if the OS is Win9x.  UPDATE: I think it does happen
-				// sometimes, perhaps only when you have the line #InstallKeybdHook in the script.
-				// It seems best to disable this so that the same script can be used without
-				// a warning on Win9x (and since it's so rare anyway):
-				//MsgBox("Note: This script attempts to use keyboard or hotkey features that aren't yet supported"
-				//	" on Win95/98/Me.  Those parts of the script will not function.");
-			return -1;
+			FreeHookMem(); // If everything's designed right, there should be no hooks now (even if therre is, they can't be functional because their thread is nonexistent).
+			return;
 		}
 	}
-	else
-		// Deinstall hook if the caller omitted it from aWhichHook, or if it had no
-		// corresponding hotkeys (currently the latter only happens in the case of
-		// g_IsSuspended is true):
-		if (g_KeybdHook && !(aWhichHookAlways & HOOK_KEYBD)
-			&& (!(aWhichHook & HOOK_KEYBD) || !(keybd_hook_hotkey_count || force_CapsNumScroll || Hotstring::AtLeastOneEnabled())))
-			hooks_currently_active = RemoveKeybdHook();
+	//else there is at least one hook already active, which guarantees that the hook thread exists (assuming
+	// everything is designed right).
 
-	if (   !g_MouseHook && ((aWhichHookAlways & HOOK_MOUSE)
-		|| ((aWhichHook & HOOK_MOUSE) && mouse_hook_hotkey_count))   )
+	// Above has ensured that the hook thread now exists, so send it the status-change message.
+
+	// Post the AHK_CHANGE_HOOK_STATE message to the new thread to put the right hooks into effect.
+	// If both hooks are to be deactivated, AHK_CHANGE_HOOK_STATE also causes the hook thread to exit.
+	// PostThreadMessage() has been observed to fail, such as when a script replaces a previous instance
+	// of itself via #SingleInstance.  I think this happens because the new thread hasn't yet had a
+	// chance to create its message queue via GetMessage().  So rather than using something like
+	// WaitForSingleObject() -- which might not be reliable due to split-second timing of when the
+	// queue actually gets created -- just keep retrying until time-out or PostThreadMessage() succeeds.
+	int i;
+	for (i = 0; i < 50 && !PostThreadMessage(sHookThreadID, AHK_CHANGE_HOOK_STATE, aHooksToBeActive, 0); ++i)
+		Sleep(10);
+		// Above: Sleep(10) seems better than Sleep(0), which would max the CPU while waiting.
+		// MUST USE Sleep vs. MsgSleep, otherwise an infinite recursion of ExitApp is possible.
+		// This can be reproduced by running a script consisting only of the line #InstallMouseHook
+		// and then exiting via the tray menu.  I tried fixing it in TerminateApp with the following,
+		// but it's just not enough.  So rather than spend a long time on it, it's fixed directly here:
+			// Because of the below, our callers must NOT assume that an exit will actually take place.
+			//static is_running = false;
+			//if (is_running)
+			//	return OK;
+			//is_running = true; // Since we're exiting, there should be no need to set it to false further below.
+
+	// If it times out I think it's realistically impossible that the new thread really exists because
+	// if it did, it certainly would have had time to execute GetMessage() in all but extreme/theoretical
+	// cases.  Therefore, no thread check/termination attempt is done.  Alternatively, a check for
+	// GetExitCodeThread() could be done followed by closing the handle and setting it to NULL, but once
+	// again the code size doesn't seem worth it for a situation that is probably impossible.
+	//
+	// Also, a timeout itself seems too rare (perhaps even impossible) to justify a warning dialog.
+	// So do nothing, which retains the current values of g_KeybdHook and g_MouseHook.
+
+	// For safety, serialize the termination of the hook thread so that this function can't be called
+	// again by the main thread before the hook thread has had a chance to exit in response to the
+	// previous call.  This improves reliability, especially by ensuring a clean exit (if our caller
+	// is about to exit the app via exit(), which might not cleanly close all threads).
+	// UPDATE: Also serialize all changes to the hook status so that our caller can rely on the new
+	// hook state being in effect immediately.  For example, the Input command installs the keyboard
+	// hook and it's more maintainable if we ensure the status is correct prior to returning.
+	DWORD exit_code;
+	for (i = 0; i < 50; ++i) // For our caller, wait for hook thread to update the status of the hooks.
 	{
-#ifdef HOOK_WARNING
-		if (!mouse_hook_mutex) // else we already have ownership of the mutex so no need for this check.
+		if (aHooksToBeActive) // Wait for the hook thread to change the hook state.
 		{
-			mouse_hook_mutex = CreateMutex(NULL, FALSE, NAME_P "MouseHook");
-			if (aWarnIfHooksAlreadyInstalled && !(sWhichHookSkipWarning & HOOK_MOUSE)
-				&& GetLastError() == ERROR_ALREADY_EXISTS)
+			if (aHooksToBeActive == GetActiveHooks())
+				break;
+		}
+		else // Since the hook thread has been asked to deactivate both hooks, wait for the thread to terminate.
+		{
+			GetExitCodeThread(sThreadHandle, &exit_code);
+			if (exit_code != STILL_ACTIVE) // The hook thread is now gone.
 			{
-				int result = MsgBox("Another instance of this program already has the MOUSE hook"
-					" installed (perhaps because some of its hotkeys require it)."
-					"  Installing it a second time might produce unexpected behavior.  Do it anyway?"
-					"\n\nChoose NO to exit the program."
-					"\n\nYou can disable this warning by adding this line to the script:"
-					"\n#InstallMouseHook force"
-					, MB_YESNO);
-				if (result != IDYES)
-					g_script.ExitApp(EXIT_CRITICAL);
+				// Do the following only if it actually exited (i.e. not if this loop timed out):
+				CloseHandle(sThreadHandle); // Release our refererence to it to allow the OS to delete the thread object.
+				sThreadHandle = NULL;
+				FreeHookMem(); // There should be no hooks now (even if therre is, they can't be functional because their thread is nonexistent).
+				break;
 			}
 		}
-#endif
-		if (g_MouseHook = SetWindowsHookEx(WH_MOUSE_LL, LowLevelMouseProc, g_hInstance, 0))
-		{
-			hooks_currently_active |= HOOK_MOUSE;
-			ResetHook(false, HOOK_MOUSE, true);
-		}
-		else
-		{
-			if (!g_os.IsWin9x())
-				MsgBox("Warning: The mouse hook could not be activated; some parts of the script will not function.");
-			return -1;
-		}
+		Sleep(10); // See the other "Sleep(10)" above for why this is done instead of MsgSleep().
 	}
-	else
-		// Deinstall hook if the caller omitted it from aWhichHook, or if it had no
-		// corresponding hotkeys (currently the latter only happens in the case of
-		// g_IsSuspended is true):
-		if (g_MouseHook && !(aWhichHookAlways & HOOK_MOUSE)
-			&& (!(aWhichHook & HOOK_MOUSE) || !mouse_hook_hotkey_count))
-			hooks_currently_active = RemoveMouseHook();
+	// If the above loop timed out without the hook thread exiting (if it was asked to exit), sThreadHandle
+	// is left as non-NULL to reflect this condition.
+}
 
-	return hooks_currently_active;
+
+
+DWORD WINAPI HookThreadProc(LPVOID aUnused)
+// The creator of this thread relies on the fact that this function always exits its thread
+// when both hooks are deactivated.
+{
+	MSG msg;
+	bool failure;
+
+	for (;;) // Infinite loop for pumping messages in this thread. This thread will exit via any use of "return" below.
+	{
+		if (GetMessage(&msg, NULL, 0, 0) == -1) // -1 is an error, 0 means WM_QUIT.
+			continue; // Probably happens only when bad parameters are passed to GetMessage().
+
+		switch (msg.message)
+		{
+		case WM_QUIT:
+			msg.wParam = 0; // Indicate to AHK_CHANGE_HOOK_STATE that both hooks should be deactivated.
+			// Now fall through to the case below so that the hooks will be removed before
+			// exiting this thread.
+
+		case AHK_CHANGE_HOOK_STATE:
+			// In this case, wParam contains the bitwise set of hooks that should be active.
+			failure = false;
+			if (msg.wParam & HOOK_KEYBD) // Activate the keyboard hook (if it isn't already).
+			{
+				if (!g_KeybdHook)
+				{
+					// v1.0.39: Reset *before* hook is installed to avoid any chance that events can
+					// flow into the hook prior to the reset:
+					ResetHook(false, HOOK_KEYBD, true);
+					if (   !(g_KeybdHook = SetWindowsHookEx(WH_KEYBOARD_LL, LowLevelKeybdProc, g_hInstance, 0))   )
+						failure = true;
+				}
+			}
+			else // Caller specified that the keyboard hook is to be deactivated (if it isn't already).
+				if (g_KeybdHook)
+					if (UnhookWindowsHookEx(g_KeybdHook))
+						g_KeybdHook = NULL;
+
+			if (msg.wParam & HOOK_MOUSE) // Activate the mouse hook (if it isn't already).
+			{
+				if (!g_MouseHook)
+				{
+					ResetHook(false, HOOK_MOUSE, true);
+					if (   !(g_MouseHook = SetWindowsHookEx(WH_MOUSE_LL, LowLevelMouseProc, g_hInstance, 0))   )
+						failure = true;
+				}
+			}
+			else // Caller specified that the keyboard hook is to be deactivated (if it isn't already).
+				if (g_MouseHook)
+					if (UnhookWindowsHookEx(g_MouseHook))
+						g_MouseHook = NULL;
+
+			if (failure) // The creator of this thread has already ensured that OS isn't Win9x.
+				// Don't display MsgBox here because although MsgBox's own message pump would
+				// service the other hook (if it's active), it's best to avoid any blocking
+				// calls here so that this event loop will continue to run.  For example,
+				// the script or OS might ask this thread to terminate, which it couldn't do
+				// cleanly if it was in a blocking call.
+				SendMessage(g_hWnd, AHK_HOOK_FAIL, 0, 0);
+
+			if (!(g_KeybdHook || g_MouseHook)) // Both hooks are inactive, so this thread is no longer needed.
+				return 0; // This automatically calls ExitThread().
+				// 1) Due to this thread's non-GUI nature, there doesn't seem to be any need to call
+				// the somewhat mysterious PostQuitMessage() here.
+				// 2) For thread safety and maintainability, it seems best to have the caller take
+				// full responsibility for freeing the hook's memory.
+			break;
+
+		} // switch (msg.message)
+	} // for(;;)
 }
 
 
 
 void ResetHook(bool aAllModifiersUp, HookType aWhichHook, bool aResetKVKandKSC)
+// Caller should ensure that aWhichHook indicates at least one of the hooks (not none).
 {
+	// Reset items common to both hooks:
+	pPrefixKey = NULL;
+
 	if (aWhichHook & HOOK_MOUSE)
 	{
 		// Initialize some things, a very limited subset of what is initialized when the
@@ -3804,13 +3861,12 @@ void ResetHook(bool aAllModifiersUp, HookType aWhichHook, bool aResetKVKandKSC)
 		g_modifiersLR_logical = g_modifiersLR_logical_non_ignored = (aAllModifiersUp ? 0 : GetModifierLRState(true));
 
 		ZeroMemory(g_PhysicalKeyState, sizeof(g_PhysicalKeyState));
-		pPrefixKey = NULL;
 
 		sDisguiseNextLWinUp = false;
 		sDisguiseNextRWinUp = false;
 		sDisguiseNextLAltUp = false;
 		sDisguiseNextRAltUp = false;
-		sAltTabMenuIsVisible = false;
+		sAltTabMenuIsVisible = (FindWindow("#32771", NULL) != NULL); // I've seen indications that MS wants this to work on all operating systems.
 		sVKtoIgnoreNextTimeDown = 0;
 
 		ZeroMemory(sPadState, sizeof(sPadState));
@@ -3818,6 +3874,17 @@ void ResetHook(bool aAllModifiersUp, HookType aWhichHook, bool aResetKVKandKSC)
 		*g_HSBuf = '\0';
 		g_HSBufLength = 0;
 		g_HShwnd = GetForegroundWindow(); // Not needed by some callers, but shouldn't hurt even then.
+
+		// Variables for the Shift+Numpad workaround:
+		sNextPhysShiftDownIsNoPhys = false;
+		sPriorVK = 0;
+		sPriorSC = 0;
+		sPriorEventWasKeyUp = false;
+		sPriorEventWasPhysical = false;
+		sPriorEventTickCount = 0;
+		sPriorModifiersLR_physical = 0;
+		sPriorShiftState = 0;  // i.e. default to "key is up".
+		sPriorLShiftState = 0; //
 
 		if (aResetKVKandKSC)
 		{
@@ -3828,6 +3895,53 @@ void ResetHook(bool aAllModifiersUp, HookType aWhichHook, bool aResetKVKandKSC)
 			for (i = 0; i < SC_ARRAY_COUNT; ++i)
 				ResetKeyTypeState(ksc[i]);
 		}
+	}
+}
+
+
+
+HookType GetActiveHooks()
+{
+	HookType hooks_currently_active = 0;
+	if (g_KeybdHook)
+		hooks_currently_active |= HOOK_KEYBD;
+	if (g_MouseHook)
+		hooks_currently_active |= HOOK_MOUSE;
+	return hooks_currently_active;
+}
+
+
+
+void FreeHookMem()
+// For maintainability, only the main thread should ever call this function.
+// This is because new/delete/malloc/free themselves might not be thread-safe
+// when the single-threaded CRT libraries are in effect (not using multi-threaded
+// libraries due to a 3.5 KB increase in compressed code size).
+{
+	if (kvk)
+	{
+		delete [] kvk;
+		kvk = NULL;
+	}
+	if (ksc)
+	{
+		delete [] ksc;
+		ksc = NULL;
+	}
+	if (kvkm)
+	{
+		delete [] kvkm;
+		kvkm = NULL;
+	}
+	if (kscm)
+	{
+		delete [] kscm;
+		kscm = NULL;
+	}
+	if (hotkey_up)
+	{
+		delete [] hotkey_up;
+		hotkey_up = NULL;
 	}
 }
 

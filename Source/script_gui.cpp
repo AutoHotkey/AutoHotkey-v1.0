@@ -6209,7 +6209,7 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 
 	switch (iMsg)
 	{
-	// Let the default handler take care of WM_CREATE.
+	// case WM_CREATE: --> Do nothing extra becuase DefDlgProc() appears to be sufficient.
 
 	case WM_SIZE: // Listed first for performance.
 		if (   !(pgui = GuiType::FindGui(hWnd))   )

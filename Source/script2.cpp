@@ -127,9 +127,9 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 		// If there is an existing window, just update its bar position and text.
 		// If not, do nothing since we don't have the original text of the window to recreate it.
 		// Since this is our thread's window, it shouldn't be necessary to use SendMessageTimeout()
-		// since the window cannot be hung if our thread is active.  Also, setting a text item
-		// from non-blank to blank is not supported so that elements can be omitted from an update
-		// command without changing the text that's in the window.  The script can specify %a_space%
+		// since the window cannot be hung since by definition our thread isn't hung.  Also, setting
+		// a text item from non-blank to blank is not supported so that elements can be omitted from an
+		// update command without changing the text that's in the window.  The script can specify %a_space%
 		// to explicitly make an element blank.
 		if (!aSplashImage && bar_pos_has_been_set && splash.bar_pos != bar_pos) // Avoid unnecessary redrawing.
 		{
@@ -5153,7 +5153,8 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			// the left button from being able to select a menu item from the tray menu.  It might
 			// solve other problems also, and it seems fairly common for other apps to open the
 			// menu upon UP rather than down.  Even Explorer's own context menus are like this.
-			// The following example is trivial and serves only to illustrate the former problem:
+			// The following example is trivial and serves only to illustrate the problem caused
+			// by the old open-tray-on-mouse-down method:
 			//MButton::Send {RButton down}
 			//MButton up::Send {RButton up}
 			g_script.mTrayMenu->Display(false);
@@ -5527,10 +5528,17 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			SendMessageTimeout(g_script.mNextClipboardViewer, iMsg, wParam, lParam, SMTO_ABORTIFHUNG, 2000, &dwTemp);
 		return 0;
 
+	case AHK_HOOK_FAIL:
+		ReplyMessage(0); // Allow the calling thread to continue to run (since it is a different thread in this case).
+		// Generic message to reduce code size and also to show only one dialog rather than two if both hooks
+		// fail (failure is rare, but has been known to happen when certain types of games are running).
+		MsgBox("Warning: The keyboard and/or mouse hook could not be activated; some parts of the script will not function.");
+		break;
+
 	HANDLE_MENU_LOOP // Cases for WM_ENTERMENULOOP and WM_EXITMENULOOP.
 
 	default:
-		// This iMsg can't be in the switch() since it's not constant:
+		// The following iMsg can't be in the switch() since it's not constant:
 		if (iMsg == WM_TASKBARCREATED && !g_NoTrayIcon) // !g_NoTrayIcon --> the tray icon should be always visible.
 		{
 			g_script.CreateTrayIcon();
@@ -6275,6 +6283,11 @@ ResultType Line::MouseClickDrag(vk_type aVK, int aX1, int aY1, int aX2, int aY2,
 	// a true Sleep() is done because it is much more accurate than the MsgSleep() method,
 	// at least on Win98SE when short sleeps are done.  UPDATE: A true sleep is now done
 	// unconditionally if the delay period is small.  This fixes a small issue where if
+	// LButton is a hotkey that includes "MouseClick left" somewhere in its subroutine,
+	// the script's own main window's title bar buttons for min/max/close would not
+	// properly respond to left-clicks.  By contrast, the following is no longer an issue
+	// due to the dedicated thread in v1.0.39 (or more likely, due to an older change that
+	// causes the tray menu to upon upon RButton-up rather than down):
 	// RButton is a hotkey that includes "MouseClick right" somewhere in its subroutine,
 	// the user would not be able to correctly open the script's own tray menu via
 	// right-click (note that this issue affected only the one script itself, not others).
@@ -8357,10 +8370,7 @@ ResultType Line::Drive(char *aCmd, char *aValue, char *aValue2) // aValue not aV
 		// Note: The following comment is obsolete because research of MSDN indicates that there is no way
 		// not to wait when the tray must be physically opened or closed, at least on Windows XP.  Omitting
 		// the word "wait" from both "close cd wait" and "set cd door open/closed wait" does not help, nor
-		// does replacing wait with the word notify in "set cdaudio door open/closed wait".  Obsolete:
-		// By default, don't wait for the operation to complete since that will cause keyboard/mouse lag
-		// if the keyboard/mouse hooks are installed.  That limitation will be resolved when/if the
-		// hooks get a dedicated thread.
+		// does replacing wait with the word notify in "set cdaudio door open/closed wait".
 		// The word "wait" is always specified with these operations to ensure consistent behavior across
 		// all OSes (on the off-chance that the absence of "wait" really avoids waiting on Win9x or future
 		// OSes, or perhaps under certain conditions or for certain types of drives).  See above comment
@@ -11748,7 +11758,7 @@ DYNARESULT DynaCall(int aFlags, void *aFunction, DYNAPARM aParam[], int aParamCo
 		// Return value isn't passed through registers, memory copy
 		// is performed instead. Pass the pointer as hidden arg.
 		our_stack_size += 4;       // Add stack size
-		our_stack--;               // ESP = ESP - 4
+		--our_stack;               // ESP = ESP - 4
 		*our_stack = (DWORD)aRet;  // SS:[ESP] = pMem
 	}
 
@@ -13962,6 +13972,9 @@ ResultType ExprTokenToDoubleOrInt(ExprTokenType &aToken)
 
 
 int ConvertJoy(char *aBuf, int *aJoystickID, bool aAllowOnlyButtons)
+// The caller TextToKey() currently relies on the fact that when aAllowOnlyButtons==true, a value
+// that can fit in a sc_type (USHORT) is returned, which is true since the joystick buttons
+// are very small numbers (JOYCTRL_1==12).
 {
 	if (aJoystickID)
 		*aJoystickID = 0;  // Set default output value for the caller.
@@ -14024,14 +14037,13 @@ bool ScriptGetKeyState(vk_type aVK, KeyStateTypes aKeyStateType)
 		// In addition, this was attempted but it didn't seem to help:
 		//if (g_os.IsWin9x())
 		//{
-		//	DWORD my_thread  = GetCurrentThreadId();
 		//	DWORD fore_thread = GetWindowThreadProcessId(GetForegroundWindow(), NULL);
 		//	bool is_attached_my_to_fore = false;
-		//	if (fore_thread && fore_thread != my_thread)
-		//		is_attached_my_to_fore = AttachThreadInput(my_thread, fore_thread, TRUE) != 0;
+		//	if (fore_thread && fore_thread != g_MainThreadID)
+		//		is_attached_my_to_fore = AttachThreadInput(g_MainThreadID, fore_thread, TRUE) != 0;
 		//	output_var->Assign(IsKeyToggledOn(aVK) ? "D" : "U");
 		//	if (is_attached_my_to_fore)
-		//		AttachThreadInput(my_thread, fore_thread, FALSE);
+		//		AttachThreadInput(g_MainThreadID, fore_thread, FALSE);
 		//	return OK;
 		//}
 		//else

@@ -45,6 +45,7 @@
 				ProgramDatabaseFile="$(OutDir)/AutoHotkey.pdb"
 				SubSystem="2"
 				StackReserveSize="4194304"
+				StackCommitSize="0"
 				OptimizeForWindows98="1"
 				TargetMachine="1"/>
 			<Tool
@@ -103,9 +104,11 @@
 				AdditionalDependencies="wsock32.lib winmm.lib version.lib comctl32.lib"
 				OutputFile="$(OutDir)/AutoHotkey.exe"
 				LinkIncremental="1"
+				IgnoreDefaultLibraryNames="LibCMT;MSVCrt"
 				GenerateDebugInformation="FALSE"
 				SubSystem="2"
 				StackReserveSize="4194304"
+				StackCommitSize="0"
 				LargeAddressAware="1"
 				TerminalServerAware="1"
 				OptimizeReferences="2"
@@ -167,7 +170,7 @@
 				ShowProgress="0"
 				OutputFile="$(OutDir)/AutoHotkeySC.bin"
 				LinkIncremental="1"
-				IgnoreDefaultLibraryNames="LIBCMT"
+				IgnoreDefaultLibraryNames="LibCMT;MSVCrt"
 				GenerateDebugInformation="FALSE"
 				SubSystem="2"
 				StackReserveSize="4194304"

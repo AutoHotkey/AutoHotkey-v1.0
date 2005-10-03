@@ -18,7 +18,7 @@ GNU General Public License for more details.
 #define hook_h
 
 #include "stdafx.h" // pre-compiled headers
-#include "hotkey.h"
+#include "hotkey.h" // Use here and also by hook.cpp for ChangeHookState(), which reads from static Hotkey class vars.
 
 // WM_USER is the lowest number that can be a user-defined message.  Anything above that is also valid.
 // NOTE: Any msg about WM_USER will be kept buffered (unreplied-to) whenever the script is uninterruptible.
@@ -29,7 +29,7 @@ GNU General Public License for more details.
 enum UserMessages {AHK_HOOK_HOTKEY = WM_USER, AHK_HOTSTRING, AHK_USER_MENU, AHK_DIALOG, AHK_NOTIFYICON
 	, AHK_RETURN_PID, AHK_EXIT_BY_RELOAD, AHK_EXIT_BY_SINGLEINSTANCE
 	, AHK_GUI_ACTION = WM_USER + 100  // Allow some room in between for more "exit" type msgs to be added in the future (see below comment).
-	, AHK_CLIPBOARD_CHANGE, AHK_HOOK_TEST_MSG};
+	, AHK_CLIPBOARD_CHANGE, AHK_HOOK_TEST_MSG, AHK_CHANGE_HOOK_STATE, AHK_HOOK_FAIL};
 // NOTE: TRY NEVER TO CHANGE the specific numbers of the above messages, since some users might be
 // using the Post/SendMessage commands to automate AutoHotkey itself.  Here is the original order
 // that should be maintained:
@@ -111,24 +111,16 @@ struct sc_hotkey
 	HotkeyIDType id_with_flags;
 };
 
-
-
-// User is likely to use more modifying vks than we do sc's, since sc's are rare:
-#define MAX_MODIFIER_VKS_PER_SUFFIX 50
-#define MAX_MODIFIER_SCS_PER_SUFFIX 16
 // Style reminder: Any POD structs (those without any methods) don't use the "m" prefix
 // for member variables because there's no need: the variables are always prefixed by
 // the struct that owns them, so there's never any ambiguity:
 struct key_type
 {
-	vk_hotkey ModifierVK[MAX_MODIFIER_VKS_PER_SUFFIX];
-	sc_hotkey ModifierSC[MAX_MODIFIER_SCS_PER_SUFFIX];
-	UCHAR nModifierVK;
-	UCHAR nModifierSC;
-//	vk_type toggleable_vk;  // If this key is CAPS/NUM/SCROLL-lock, its virtual key value is stored here.
 	ToggleValueType *pForceToggle;  // Pointer to a global variable for toggleable keys only.  NULL for others.
 	modLR_type as_modifiersLR; // If this key is a modifier, this will have the corresponding bit(s) for that key.
 	HotkeyIDType hotkey_to_fire_upon_release; // A up-event hotkey queued by a prior down-event.
+	// Keep sub-32-bit members contiguous to save memory without having to sacrifice performance of
+	// 32-bit alignment:
 	bool used_as_prefix;  // whether a given virtual key or scan code is even used by a hotkey.
 	bool used_as_suffix;  // whether a given virtual key or scan code is even used by a hotkey.
 	bool used_as_key_up;  // Whether this suffix also has an enabled key-up hotkey.
@@ -144,6 +136,13 @@ struct key_type
 	#define AS_PREFIX 1
 	#define AS_PREFIX_FOR_HOTKEY 2
 	bool sc_takes_precedence; // used only by the scan code array: this scan code should take precedence over vk.
+	UCHAR nModifierVK;
+	UCHAR nModifierSC;
+	// User is likely to use more modifying vks than we do sc's, since sc's are rare:
+	#define MAX_MODIFIER_VKS_PER_SUFFIX 50
+	#define MAX_MODIFIER_SCS_PER_SUFFIX 16
+	vk_hotkey ModifierVK[MAX_MODIFIER_VKS_PER_SUFFIX];
+	sc_hotkey ModifierSC[MAX_MODIFIER_SCS_PER_SUFFIX];
 }; // Keep the macro below in sync with the above.
 
 #define RESET_KEYTYPE_ATTRIB(item) \
@@ -246,15 +245,15 @@ bool KeybdEventIsPhysical(DWORD aEventFlags, DWORD aEventTime, const vk_type aVK
 bool DualStateNumpadKeyIsDown();
 bool IsDualStateNumpadKey(const vk_type aVK, const sc_type aSC);
 
-HookType RemoveAllHooks();
-HookType RemoveKeybdHook();
-HookType RemoveMouseHook();
-HookType GetActiveHooks();
-HookType ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, HookType aWhichHookAlways
+void ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, HookType aWhichHookAlways
 	, bool aWarnIfHooksAlreadyInstalled);
+void AddRemoveHooks(HookType aHooksToBeActive);
+DWORD WINAPI HookThreadProc(LPVOID aUnused);
+
 void ResetHook(bool aAllModifiersUp = false, HookType aWhichHook = (HOOK_KEYBD | HOOK_MOUSE)
 	, bool aResetKVKandKSC = false);
-
+HookType GetActiveHooks();
+void FreeHookMem();
 void ResetKeyTypeState(key_type &key);
 void GetHookStatus(char *aBuf, int aBufSize);
 bool IsIgnored(ULONG_PTR aExtraInfo, vk_type aVK, bool aKeyUp);

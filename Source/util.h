@@ -214,7 +214,10 @@ inline size_t rtrim(char *aStr, size_t aLength = -1)
 		if (cp == aStr) // ... and we're now at the first character of the string...
 		{
 			if (IS_SPACE_OR_TAB(*cp)) // ... and that first character is also a space or tab...
+			{
 				*cp = '\0'; // ... so the entire string is made empty...
+				return 0; // Fix for v1.0.39: Must return 0 not aLength in this case.
+			}
 			return aLength; // ... and we return in any case.
 		}
 		// else it's a space or tab, and there are still more characters to check.  Let the loop
@@ -241,9 +244,12 @@ inline size_t rtrim_with_nbsp(char *aStr, size_t aLength = -1)
 		}
 		if (cp == aStr)
 		{
-			if (IS_SPACE_OR_TAB_OR_NBSP(*cp))
-				*cp = '\0';
-			return aLength;
+			if (IS_SPACE_OR_TAB_OR_NBSP(*cp)) // ... and that first character is also a space or tab...
+			{
+				*cp = '\0'; // ... so the entire string is made empty...
+				return 0; // Fix for v1.0.39: Must return 0 not aLength in this case.
+			}
+			return aLength; // ... and we return in any case.
 		}
 	}
 }

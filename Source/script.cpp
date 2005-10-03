@@ -119,7 +119,7 @@ Script::~Script()
 {
 	// MSDN: "Before terminating, an application must call the UnhookWindowsHookEx function to free
 	// system resources associated with the hook."
-	RemoveAllHooks();
+	AddRemoveHooks(0); // Remove all hooks.
 	if (mNIC.hWnd) // Tray icon is installed.
 		Shell_NotifyIcon(NIM_DELETE, &mNIC); // Remove it.
 	// Destroy any Progress/SplashImage windows that haven't already been destroyed.  This is necessary
@@ -913,7 +913,9 @@ LineNumberType Script::LoadFromFile()
 		// a FILETIME, which is "the number of 100-nanosecond intervals since January 1, 1601."
 		FILETIME ft;
 		GetSystemTimeAsFileTime(&ft);
-		init_genrand(ft.dwLowDateTime); // Use the low-order DWORD since the high-order one rarely changes.
+		// Use the low-order DWORD since the high-order one rarely changes.  If my calculations are correct,
+		// the low-order 32-bits changes every 7.2 minutes, which makes it a better seed than GetTickCount:
+		init_genrand(ft.dwLowDateTime);
 		return mLineCount; // The count of runnable lines that were loaded, which might be zero.
 	}
 	else
@@ -2104,13 +2106,7 @@ inline ResultType Script::IsDirective(char *aBuf)
 		// of a script on Win9x:
 		//MsgBox("#InstallKeybdHook is not supported on Windows 95/98/Me.  This line will be ignored.");
 		if (!g_os.IsWin9x())
-		{
 			Hotkey::RequireHook(HOOK_KEYBD);
-#ifdef HOOK_WARNING
-			if (parameter && !stricmp(parameter, "Force"))
-				sWhichHookSkipWarning |= HOOK_KEYBD;
-#endif
-		}
 		return CONDITION_TRUE;
 	}
 	if (IS_DIRECTIVE_MATCH("#InstallMouseHook"))
@@ -2119,13 +2115,7 @@ inline ResultType Script::IsDirective(char *aBuf)
 		// of a script on Win9x:
 		//MsgBox("#InstallMouseHook is not supported on Windows 95/98/Me.  This line will be ignored.");
 		if (!g_os.IsWin9x())
-		{
 			Hotkey::RequireHook(HOOK_MOUSE);
-#ifdef HOOK_WARNING
-			if (parameter && !stricmp(parameter, "Force"))
-				sWhichHookSkipWarning |= HOOK_MOUSE;
-#endif
-		}
 		return CONDITION_TRUE;
 	}
 	if (IS_DIRECTIVE_MATCH("#MaxThreadsBuffer"))
@@ -7155,7 +7145,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 		// in Clipboard::Open() for details):
 		CLOSE_CLIPBOARD_IF_OPEN;
 
-		// The below must be done at least when Hotkey::HookIsActive() is true, but is currently
+		// The below must be done at least when the keybd or mouse hook is active, but is currently
 		// always done since it's a very low overhead call, and has the side-benefit of making
 		// the app maximally responsive when the script is busy during high BatchLines.
 		// This low-overhead call achieves at least two purposes optimally:
@@ -7172,8 +7162,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 		//    can sometimes be only 10 or 20ms. UPDATE: It looks like PeekMessage() yields CPU time
 		//    automatically, similar to a Sleep(0), when our queue has no messages.  Since this would
 		//    make scripts slow to a crawl, only do the Peek() every 5ms or so (though the timer
-		//    granularity is 10ms on mosts OSes, so that's the true interval).  Perhaps GetQueueStatus()
-		//    can be used as a substitute once a dedicated thread is added for the hooks.
+		//    granularity is 10ms on mosts OSes, so that's the true interval).
 		// 4) Timed subroutines are run as consistently as possible (to help with this, a check
 		//    similar to the below is also done for single commmands that take a long time, such
 		//    as URLDownloadToFile, FileSetAttrib, etc.
@@ -14412,7 +14401,7 @@ VarSizeType Script::GetTimeIdlePhysical(char *aBuf)
 // mutual dependency issues.
 {
 	// If neither hook is active, default this to the same as the regular idle time:
-	if (!Hotkey::HookIsActive())
+	if (!(g_KeybdHook || g_MouseHook))
 		return GetTimeIdle(aBuf);
 	if (!aBuf)
 		return MAX_NUMBER_LENGTH;

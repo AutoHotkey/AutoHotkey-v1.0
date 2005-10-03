@@ -170,14 +170,13 @@ enum enum_act_old {
 
 #define ATTACH_THREAD_INPUT \
 	bool threads_are_attached = false;\
-	DWORD my_thread  = GetCurrentThreadId();\
 	DWORD target_thread = GetWindowThreadProcessId(target_window, NULL);\
-	if (target_thread && target_thread != my_thread && !IsWindowHung(target_window))\
-		threads_are_attached = AttachThreadInput(my_thread, target_thread, TRUE) != 0;
+	if (target_thread && target_thread != g_MainThreadID && !IsWindowHung(target_window))\
+		threads_are_attached = AttachThreadInput(g_MainThreadID, target_thread, TRUE) != 0;
 
 #define DETACH_THREAD_INPUT \
 	if (threads_are_attached)\
-		AttachThreadInput(my_thread, target_thread, FALSE);
+		AttachThreadInput(g_MainThreadID, target_thread, FALSE);
 
 // Notes about the below macro:
 // One of the menus in the menu bar has been displayed, and the we know the user is is still in
@@ -196,7 +195,7 @@ enum enum_act_old {
 		g_MenuIsVisible = MENU_TYPE_NONE;\
 		break;
 
-#define IS_PERSISTENT (Hotkey::sHotkeyCount || Hotstring::sHotstringCount || Hotkey::HookIsActive() || g_persistent)
+#define IS_PERSISTENT (Hotkey::sHotkeyCount || Hotstring::sHotstringCount || g_KeybdHook || g_MouseHook || g_persistent)
 
 // Since WM_COMMAND IDs must be shared among all menus and controls, they are carefully conserved,
 // especially since there are only 65,535 possible IDs.  In addition, they are assigned to ranges

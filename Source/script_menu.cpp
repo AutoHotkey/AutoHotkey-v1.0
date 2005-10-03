@@ -1216,7 +1216,7 @@ ResultType UserMenu::Display(bool aForceToForeground, int aX, int aY)
 	// 2) It would probably have other side effects for other uses of popup menus.
 	HWND fore_win = GetForegroundWindow();
 	bool change_fore;
-	if (change_fore = (!fore_win || GetWindowThreadProcessId(fore_win, NULL) != GetCurrentThreadId()))
+	if (change_fore = (!fore_win || GetWindowThreadProcessId(fore_win, NULL) != g_MainThreadID))
 	{
 		// Always bring main window to foreground right before TrackPopupMenu(), even if window is hidden.
 		// UPDATE: This is a problem because SetForegroundWindowEx() will restore the window if it's hidden,

@@ -24,7 +24,6 @@ GNU General Public License for more details.
 bool Hotkey::sHotkeysAreLocked = false;
 HookType Hotkey::sWhichHookNeeded = 0;
 HookType Hotkey::sWhichHookAlways = 0;
-HookType Hotkey::sWhichHookActive = 0;
 DWORD Hotkey::sTimePrev = {0};
 DWORD Hotkey::sTimeNow = {0};
 Hotkey *Hotkey::shk[MAX_HOTKEYS] = {NULL};
@@ -68,7 +67,7 @@ void Hotkey::AllActivate()
 			vk_is_prefix[hot.mModifierVK] = true;
 	}
 
-	bool is_neutral, suppress_hotkey_warnings = false;
+	bool is_neutral;
 	modLR_type modifiersLR;
 	for (int i = 0; i < sHotkeyCount; ++i)
 	{
@@ -90,7 +89,13 @@ void Hotkey::AllActivate()
 				// In addition, there is no need to check shk[j]->mKeyUp because that can't be
 				// true if it's mType is HK_NORMAL:
 				if (shk[j]->mType == HK_NORMAL && shk[j]->mVK == hot.mVK && shk[j]->mModifiersConsolidatedLR == hot.mModifiersConsolidatedLR)
+				{
+					// v1.0.39: Unregister in case previous iteration registered it.
+					// This could be avoided by putting this loop outside the main loop, but that would
+					// require two passes through the hotkey list, hurting performance and increasing code size.
+					shk[j]->Unregister();
 					shk[j]->mType = HK_KEYBD_HOOK;
+				}
 			}
 		}
 
@@ -232,87 +237,61 @@ void Hotkey::AllActivate()
 			}
 		}
 
-		char buf[1024];
+		// Check if this mouse hotkey also requires the keyboard hook (e.g. #LButton).
+		// Some mouse hotkeys, such as those with normal modifiers, don't require it
+		// since the mouse hook has logic to handle that situation.  But those that
+		// are composite hotkeys such as "RButton & Space" or "Space & RButton" need
+		// the keyboard hook:
+		if (hot.mType == HK_MOUSE_HOOK && (
+			hot.mModifierSC || hot.mSC // i.e. since it's an SC, the modifying key isn't a mouse button.
+			|| hot.mHookAction // v1.0.25.05: At least some alt-tab actions require the keyboard hook. For example, a script consisting only of "MButton::AltTabAndMenu" would not work properly otherwise.
+			// v1.0.25.05: The line below was added to prevent the Start Menu from appearing, which
+			// requires the keyboard hook. ALT hotkeys don't need it because the mouse hook sends
+			// a CTRL keystroke to disguise them, a trick that is unfortunately not reliable for
+			// when it happens while the while key is down (though it does disguise a Win-up).
+			|| ((hot.mModifiersConsolidatedLR & (MOD_LWIN|MOD_RWIN)) && !(hot.mModifiersConsolidatedLR & (MOD_LALT|MOD_RALT)))
+			// For v1.0.30, above has been expanded to include Win+Shift and Win+Control modifiers.
+			|| (hot.mVK && !IsMouseVK(hot.mVK)) // e.g. "RButton & Space"
+			|| (hot.mModifierVK && !IsMouseVK(hot.mModifierVK)))   ) // e.g. "Space & RButton"
+			hot.mType = HK_BOTH_HOOKS;  // Needed by ChangeHookState().
+			// For the above, the following types of mouse hotkeys do not need the keyboard hook:
+			// 1) mAllowExtraModifiers: Already handled since the mouse hook fetches the modifier state
+			//    manually when the keyboard hook isn't installed.
+			// 2) mModifiersConsolidatedLR (i.e. the mouse button is modified by a normal modifier
+			//    such as CTRL): Same reason as #1.
+			// 3) As a subset of #2, mouse hotkeys that use WIN as a modifier will not have the
+			//    Start Menu suppressed unless the keyboard hook is installed.  It's debatable,
+			//    but that seems a small price to pay (esp. given how rare it is just to have
+			//    the mouse hook with no keyboard hook) to avoid the overhead of the keyboard hook.
+		
+		// If the hotkey is normal, try to register it.  If the register fails, use the hook to try
+		// to override any other script or program that might have it registered (as documented):
 		if (hot.mType == HK_NORMAL && (!g_IsSuspended || hot.IsExemptFromSuspend()) && !hot.Register())
+			hot.mType = HK_KEYBD_HOOK;
+			// The old Win9x warning dialog was removed to reduce code size (since usage of
+			// Win9x is becoming very rare).
+
+		// If this is a hook hotkey and the OS is Win9x, the old warning has been removed to
+		// reduce code size (since usage of Win9x is becoming very rare).  Older comment:
+		// Since it's flagged as a hook in spite of the fact that the OS is Win9x, it means
+		// that some previous logic determined that it's not even worth trying to register
+		// it because it's just plain not supported.
+		switch (hot.mType) // It doesn't matter if the OS is Win9x because in that case, other sections just ignore hook hotkeys.
 		{
-			if (g_os.IsWin9x())
-			{
-				// The case where g_script.mIsReadyToExecute == true is handled by Dynamic().
-				if (!g_script.mIsReadyToExecute && !suppress_hotkey_warnings)
-				{
-					snprintf(buf, sizeof(buf), "Hotkey \"%s\" could not be enabled, perhaps "
-						"because another script or application is already using it.  It could "
-						"also be that this hotkey is not supported on Windows 95/98/Me."
-						"\n\nContinue to display this type of warning?"
-						, hot.mName);
-					int response = MsgBox(buf, 4);
-					if (response != IDYES)
-						suppress_hotkey_warnings = true;
-				}
-			} // Win9x warning.
-			else // Not Win9x, so use the hook to try to override anyone else who might have it registered.
-				hot.mType = HK_KEYBD_HOOK;
-		}
-		if (TYPE_IS_HOOK(hot.mType) && g_os.IsWin9x())
-		{
-			// Since it's flagged as a hook in spite of the fact that the OS is Win9x, it means
-			// that some previous logic determined that it's not even worth trying to register
-			// it because it's just plain not supported.
-			// The case where g_script.mIsReadyToExecute == true is handled by Dynamic().
-			if (!g_script.mIsReadyToExecute && !suppress_hotkey_warnings)
-			{
-				snprintf(buf, sizeof(buf), "Hotkey \"%s\" is not supported on Windows 95/98/Me."
-					"\n\nContinue to display this type of warning?", hot.mName);
-				int response = MsgBox(buf, 4);
-				if (response != IDYES)
-					suppress_hotkey_warnings = true;
-			}
-		}
-		else
-		{
-			if (hot.mType == HK_KEYBD_HOOK)
-				sWhichHookNeeded |= HOOK_KEYBD;
-			else if (hot.mType == HK_MOUSE_HOOK)
-			{
-				sWhichHookNeeded |= HOOK_MOUSE;
-				// Check if this mouse hotkey also requires the keyboard hook (e.g. #LButton).
-				// Some mouse hotkeys, such as those with normal modifiers, don't require it
-				// since the mouse hook has logic to handle that situation.  But those that
-				// are composite hotkeys such as "RButton & Space" or "Space & RButton" need
-				// the keyboard hook:
-				if (   hot.mModifierSC || hot.mSC // i.e. since it's an SC, the modifying key isn't a mouse button.
-					|| (hot.mHookAction) // v1.0.25.05: At least some alt-tab actions require the keyboard hook. For example, a script consisting only of "MButton::AltTabAndMenu" would not work properly otherwise.
-					// v1.0.25.05: The line below was added to prevent the Start Menu from appearing, which
-					// requires the keyboard hook. ALT hotkeys don't need it because the mouse hook sends
-					// a CTRL keystroke to disguise them, a trick that is unfortunately not reliable for
-					// when it happens while the while key is down (though it does disguise a Win-up).
-					|| ((hot.mModifiersConsolidatedLR & (MOD_LWIN|MOD_RWIN)) && !(hot.mModifiersConsolidatedLR & (MOD_LALT|MOD_RALT))) // For v1.0.30, this has been expanded to include Win+Shift and Win+Control modifiers.
-					|| (hot.mVK && !IsMouseVK(hot.mVK)) // e.g. "RButton & Space"
-					|| (hot.mModifierVK && !IsMouseVK(hot.mModifierVK))   ) // e.g. "Space & RButton"
-				{
-					hot.mType = HK_BOTH_HOOKS;  // Needed by ChangeHookState().
-					sWhichHookNeeded |= HOOK_KEYBD;
-				}
-				// For the above, the following types of mouse hotkeys do not need the keyboard hook:
-				// 1) mAllowExtraModifiers: Already handled since the mouse hook fetches the modifier state
-				//    manually when the keyboard hook isn't installed.
-				// 2) mModifiersConsolidatedLR (i.e. the mouse button is modified by a normal modifier
-				//    such as CTRL): Same reason as #1.
-				// 3) As a subset of #2, mouse hotkeys that use WIN as a modifier will not have the
-				//    Start Menu suppressed unless the keyboard hook is installed.  It's debatable,
-				//    but that seems a small price to pay (esp. given how rare it is just to have
-				//    the mouse hook with no keyboard hook) to avoid the overhead of the keyboard hook.
-			}
+		case HK_KEYBD_HOOK: sWhichHookNeeded |= HOOK_KEYBD; break;
+		case HK_MOUSE_HOOK: sWhichHookNeeded |= HOOK_MOUSE; break;
+		case HK_BOTH_HOOKS: sWhichHookNeeded |= HOOK_KEYBD|HOOK_MOUSE; break;
 		}
 	} // for()
 
+	// Check if anything else requires the hook.
 	// But do this part outside of the above block because these values may have changed since
 	// this function was first called.  The Win9x warning message was removed so that scripts can be
 	// run on multiple OSes without a continual warning message just because it happens to be running
 	// on Win9x:
-	if (!(sWhichHookNeeded & HOOK_KEYBD) && !g_os.IsWin9x() // Check if these other things require the hook.
+	if (   !(sWhichHookNeeded & HOOK_KEYBD)
 		&& (!(g_ForceNumLock == NEUTRAL && g_ForceCapsLock == NEUTRAL && g_ForceScrollLock == NEUTRAL)
-			|| Hotstring::AtLeastOneEnabled()))
+			|| Hotstring::AtLeastOneEnabled())   ) // Called last for performance due to short-circuit boolean.
 		sWhichHookNeeded |= HOOK_KEYBD;
 
 	// Install or deinstall either or both hooks, if necessary, based on these param values.
@@ -332,9 +311,9 @@ void Hotkey::AllActivate()
 	// So for now, when in restart mode, just acquire the mutex but don't display
 	// any warning if another instance also has the mutex:
 	if (g_IsSuspended)
-		sWhichHookActive = ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways, false);
+		ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways, false);
 	else
-		sWhichHookActive = ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways
+		ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways
 			, (!g_ForceLaunch && !g_script.mIsRestart) || sHotkeysAreLocked);
 
 	// Fix for v1.0.34: If the auto-execute section uses the Hotkey command but returns before doing
@@ -363,35 +342,40 @@ ResultType Hotkey::AllDeactivate(bool aObeySuspend, bool aChangeHookStatus, bool
 	if (aChangeHookStatus)
 	{
 		if (aObeySuspend && g_IsSuspended) // Have the hook keep active only those that are exempt from suspension.
-			sWhichHookActive = ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways, false);
-		else if (aKeepHookIfNeeded)
+			ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways, false);
+		else
 		{
-			// Caller has already changed the set of hotkeys, perhaps to disable one of them.  If there
-			// are any remaining enabled hotkeys which require a particular hook, do not remove that hook.
-			// This is done for performance reasons (removing the hook is probably a high overhead operation,
-			// and sometimes it seems to take a while to get it installed again) and also to avoid having
-			// a time gap in the hook's tracking of key states:
-			int i;
-			if (g_KeybdHook && !Hotstring::AtLeastOneEnabled())
+			HookType hooks_to_be_active;
+			if (aKeepHookIfNeeded)
 			{
-				for (i = 0; i < sHotkeyCount; ++i)
-					if (   shk[i]->mEnabled && (shk[i]->mType == HK_KEYBD_HOOK || shk[i]->mType == HK_BOTH_HOOKS)   )
-						break;
-				if (i == sHotkeyCount) // No enabled hotkey that requires this hook was found, so remove the hook.
-					sWhichHookActive = RemoveKeybdHook();
+				hooks_to_be_active = GetActiveHooks();
+				// Caller has already changed the set of hotkeys, perhaps to disable one of them.  If there
+				// are any remaining enabled hotkeys which require a particular hook, do not remove that hook.
+				// This is done for performance reasons (removing the hook is probably a high overhead operation,
+				// and sometimes it seems to take a while to get it installed again) and also to avoid having
+				// a time gap in the hook's tracking of key states:
+				int i;
+				if (g_KeybdHook && !Hotstring::AtLeastOneEnabled())
+				{
+					for (i = 0; i < sHotkeyCount; ++i)
+						if (   shk[i]->mEnabled && (shk[i]->mType == HK_KEYBD_HOOK || shk[i]->mType == HK_BOTH_HOOKS)   )
+							break;
+					if (i == sHotkeyCount) // No enabled hotkey that requires this hook was found, so remove the hook.
+						hooks_to_be_active &= ~HOOK_KEYBD;
+				}
+				if (g_MouseHook)
+				{
+					for (i = 0; i < sHotkeyCount; ++i)
+						if (   shk[i]->mEnabled && (shk[i]->mType == HK_MOUSE_HOOK || shk[i]->mType == HK_BOTH_HOOKS)   )
+							break;
+					if (i == sHotkeyCount) // No enabled hotkey that requires this hook was found, so remove the hook.
+						hooks_to_be_active &= ~HOOK_MOUSE;
+				}
 			}
-			if (g_MouseHook)
-			{
-				for (i = 0; i < sHotkeyCount; ++i)
-					if (   shk[i]->mEnabled && (shk[i]->mType == HK_MOUSE_HOOK || shk[i]->mType == HK_BOTH_HOOKS)   )
-						break;
-				if (i == sHotkeyCount) // No enabled hotkey that requires this hook was found, so remove the hook.
-					sWhichHookActive = RemoveMouseHook();
-			}
+			else // remove all hooks
+				hooks_to_be_active = 0;
+			AddRemoveHooks(hooks_to_be_active); // No change is made if the hooks are already in the correct state.
 		}
-		else // remove all hooks
-			if (sWhichHookActive)
-				sWhichHookActive = RemoveAllHooks();
 	}
 	// Unregister all hotkeys except when aObeySuspend is true.  In that case, don't
 	// unregister those whose subroutines have ACT_SUSPEND as their first line.  This allows
@@ -409,7 +393,7 @@ ResultType Hotkey::AllDeactivate(bool aObeySuspend, bool aChangeHookStatus, bool
 			shk[i]->mRunAgainAfterFinished = false;  // ACT_SUSPEND, at least, relies on us to do this.
 		}
 	}
-	// Hot strings are handled by ToggleSuspendState.
+	// Hot-strings are handled by ToggleSuspendState.
 
 	return OK;
 }
@@ -434,7 +418,7 @@ void Hotkey::AllDestructAndExit(int aExitCode)
 {
 	// Might be needed to prevent hang-on-exit.  Once this is done, no message boxes or other dialogs
 	// can be displayed.  MSDN: "The exit value returned to the system must be the wParam parameter
-	// of the WM_QUIT message."  In our case, PostQuiteMessage() should announce the same exit code
+	// of the WM_QUIT message."  In our case, PostQuitMessage() should announce the same exit code
 	// that we will eventually call exit() with:
 	PostQuitMessage(aExitCode);
 	AllDestruct();
@@ -486,7 +470,9 @@ void Hotkey::AllDestructAndExit(int aExitCode)
 	// at the time the user exits (in which case our main event loop would be "buried" underneath
 	// the event loops of the dialogs themselves), this is the only reliable way I've found to exit
 	// so far.  The caller has already called PostQuitMessage(), which might not help but it doesn't hurt:
-	exit(aExitCode);
+	exit(aExitCode); // exit() is insignificant in code size.  It does more than ExitProcess(), but perhaps nothing more that this application actually requires.
+	// By contrast to _exit(), exit() flushes all file buffers before terminating the process. It also
+	// calls any functions registered via atexit or _onexit.
 }
 
 
@@ -1253,18 +1239,30 @@ scan code array).
 			}
 			else // OS isn't Win9x.
 			{
-				if (mVK == VK_NUMLOCK || mVK == VK_CAPITAL || mVK == VK_SCROLL)
-					mType = HK_KEYBD_HOOK;
-				// But these flag for the hook even if the OS is Win9x so that a warning will be
-				// displayed when it comes time to register them:
-				else if (   !mVK || mVK == VK_LCONTROL || mVK == VK_RCONTROL || mVK == VK_LSHIFT || mVK == VK_RSHIFT
-					|| mVK == VK_LMENU || mVK == VK_RMENU   )
-					// Scan codes having no available virtual key must always be handled by the hook.
+				if (mType != HK_MOUSE_HOOK) // Added in v1.0.39 to make a hotkey such as "LButton & LCtrl" install the mouse hook.
+				{
+					
+					switch (mVK)
+					{
+					case 0: // Scan codes having no available virtual key must always be handled by the hook.
 					// In addition, to support preventing the toggleable keys from toggling, handle those
-					// with the hook also.  Finally, the non-neutral (left-right) modifier keys must
-					// also be done with the hook because even if RegisterHotkey() claims to succeed
-					// on them, I'm 99% sure I tried it and the hotkeys don't really work.
-					mType = HK_KEYBD_HOOK;
+					// with the hook also:
+					case VK_NUMLOCK:
+					case VK_CAPITAL:
+					case VK_SCROLL:
+					// Finally, the non-neutral (left-right) modifier keys (except LWin and RWin) must also
+					// be done with the hook because even if RegisterHotkey() claims to succeed on them,
+					// I'm 99% sure I tried it and the hotkeys don't actually work with that method:
+					case VK_LCONTROL:
+					case VK_RCONTROL:
+					case VK_LSHIFT:
+					case VK_RSHIFT:
+					case VK_LMENU:
+					case VK_RMENU:
+						mType = HK_KEYBD_HOOK;
+						break;
+					}
+				}
 			}
 		}
 	}
@@ -1342,7 +1340,7 @@ ResultType Hotkey::Unregister()
 void Hotkey::InstallKeybdHook()
 {
 	sWhichHookAlways |= HOOK_KEYBD;
-	sWhichHookActive = ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways, false);
+	ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways, false);
 }
 
 

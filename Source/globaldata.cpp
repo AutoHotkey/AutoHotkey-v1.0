@@ -27,6 +27,7 @@ GNU General Public License for more details.
 // which are necessary to save and restore (even though it would clean
 // up the code and might make maintaining it easier):
 HINSTANCE g_hInstance = NULL; // Set by WinMain().
+DWORD g_MainThreadID = GetCurrentThreadId();
 bool g_DestroyWindowCalled = false;
 HWND g_hWnd = NULL;
 HWND g_hWndEdit = NULL;
@@ -58,9 +59,6 @@ int g_ClipboardTimeout = 1000; // v1.0.31
 
 HHOOK g_KeybdHook = NULL;
 HHOOK g_MouseHook = NULL;
-#ifdef HOOK_WARNING
-	HookType sWhichHookSkipWarning = 0;
-#endif
 bool g_ForceLaunch = false;
 bool g_WinActivateForce = false;
 SingleInstanceType g_AllowOnlyOneInstance = ALLOW_MULTI_INSTANCE;
@@ -122,12 +120,12 @@ char g_delimiter = ',';
 char g_DerefChar = '%';
 char g_EscapeChar = '`';
 
-// Hot string vars (initialized when ResetHook() is first called):
+// Hot-string vars (initialized when ResetHook() is first called):
 char g_HSBuf[HS_BUF_SIZE];
 int g_HSBufLength;
 HWND g_HShwnd;
 
-// Hot string global settings:
+// Hot-string global settings:
 int g_HSPriority = 0;  // default priority is always 0
 int g_HSKeyDelay = 0;  // Fast sends are much nicer for auto-replace and auto-backspace.
 bool g_HSCaseSensitive = false;

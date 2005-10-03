@@ -23,6 +23,7 @@ GNU General Public License for more details.
 #include "os_version.h" // For the global OS_Version object
 
 extern HINSTANCE g_hInstance;
+extern DWORD g_MainThreadID;
 extern bool g_DestroyWindowCalled;
 extern HWND g_hWnd;  // The main window
 extern HWND g_hWndEdit;  // The edit window, child of main.
@@ -54,9 +55,6 @@ extern int g_ClipboardTimeout;
 
 extern HHOOK g_KeybdHook;
 extern HHOOK g_MouseHook;
-#ifdef HOOK_WARNING
-	extern HookType sWhichHookSkipWarning;
-#endif
 extern bool g_ForceLaunch;
 extern bool g_WinActivateForce;
 extern SingleInstanceType g_AllowOnlyOneInstance;
@@ -112,12 +110,12 @@ extern char g_delimiter;
 extern char g_DerefChar;
 extern char g_EscapeChar;
 
-// Hot string vars:
+// Hot-string vars:
 extern char g_HSBuf[HS_BUF_SIZE];
 extern int g_HSBufLength;
 extern HWND g_HShwnd;
 
-// Hot string global settings:
+// Hot-string global settings:
 extern int g_HSPriority;
 extern int g_HSKeyDelay;
 extern bool g_HSCaseSensitive;
@@ -216,8 +214,16 @@ enum OurTimers {TIMER_ID_MAIN = MAX_MSGBOXES + 2, TIMER_ID_UNINTERRUPTIBLE, TIME
 // MSDN docs for SetTimer(): "Windows 2000/XP: If uElapse is less than 10,
 // the timeout is set to 10."
 #define SET_MAIN_TIMER \
-if (!g_MainTimerExists && !(g_MainTimerExists = SetTimer(g_hWnd, TIMER_ID_MAIN, SLEEP_INTERVAL, (TIMERPROC)NULL)))\
-	g_script.ExitApp(EXIT_CRITICAL, "SetTimer"); // Just a brief msg to cut down on mem overhead, since it should basically never happen.
+if (!g_MainTimerExists)\
+	g_MainTimerExists = SetTimer(g_hWnd, TIMER_ID_MAIN, SLEEP_INTERVAL, (TIMERPROC)NULL);
+// v1.0.39 for above: Apparently, one of the few times SetTimer fails is after the thread has done
+// PostQuitMessage. That particular failure was causing an unwanted recursive call to ExitApp(),
+// which is why the above no longer calls ExitApp on failure.  Here's the sequence:
+// Someone called ExitApp (such as the max-hotkeys-per-interval warning dialog).
+// ExitApp() removes the hooks.
+// The hook-removal function calls MsgSleep() while waiting for the hook-thread to finish.
+// MsgSleep attempts to set the main timer so that it can judge how long to wait.
+// The timer fails and calls ExitApp even though a previous call to ExitApp is currently underway.
 
 // When someone calls SET_UNINTERRUPTIBLE_TIMER, by definition the current script subroutine is
 // becoming non-interruptible.  Therefore, their should never be a need to have more than one
@@ -233,9 +239,10 @@ if (!g_MainTimerExists && !(g_MainTimerExists = SetTimer(g_hWnd, TIMER_ID_MAIN, 
 // script becoming permanently uninterruptible (which prevents new hotkeys from being activated
 // even though the program is still responsive).
 #define SET_UNINTERRUPTIBLE_TIMER \
-if (!g_UninterruptibleTimerExists && !(g_UninterruptibleTimerExists = SetTimer(g_hWnd, TIMER_ID_UNINTERRUPTIBLE \
-	, g_script.mUninterruptibleTime < 10 ? 10 : g_script.mUninterruptibleTime, UninteruptibleTimeout)))\
-	g_script.ExitApp(EXIT_CRITICAL, "SetTimer"); // Short msg since so rare.
+if (!g_UninterruptibleTimerExists)\
+	g_UninterruptibleTimerExists = SetTimer(g_hWnd, TIMER_ID_UNINTERRUPTIBLE \
+		, g_script.mUninterruptibleTime < 10 ? 10 : g_script.mUninterruptibleTime, UninteruptibleTimeout);
+// v1.0.39 for above: Removed the call to ExitApp() upon failure.  See SET_MAIN_TIMER for details.
 
 #define KILL_UNINTERRUPTIBLE_TIMER \
 if (g_UninterruptibleTimerExists && KillTimer(g_hWnd, TIMER_ID_UNINTERRUPTIBLE))\
@@ -249,13 +256,13 @@ if (g_UninterruptibleTimerExists && KillTimer(g_hWnd, TIMER_ID_UNINTERRUPTIBLE))
 #define SET_AUTOEXEC_TIMER(aTimeoutValue) \
 {\
 	g.AllowThreadToBeInterrupted = false;\
-	if (!g_AutoExecTimerExists && !(g_AutoExecTimerExists = SetTimer(g_hWnd, TIMER_ID_AUTOEXEC, aTimeoutValue, AutoExecSectionTimeout)))\
-		g_script.ExitApp(EXIT_CRITICAL, "SetTimer");\
-}
+	if (!g_AutoExecTimerExists)\
+		g_AutoExecTimerExists = SetTimer(g_hWnd, TIMER_ID_AUTOEXEC, aTimeoutValue, AutoExecSectionTimeout);\
+} // v1.0.39 for above: Removed the call to ExitApp() upon failure.  See SET_MAIN_TIMER for details.
 
 #define SET_INPUT_TIMER(aTimeoutValue) \
-	if (!g_InputTimerExists)\
-		g_InputTimerExists = SetTimer(g_hWnd, TIMER_ID_INPUT, aTimeoutValue, InputTimeout);
+if (!g_InputTimerExists)\
+	g_InputTimerExists = SetTimer(g_hWnd, TIMER_ID_INPUT, aTimeoutValue, InputTimeout);
 
 // For this one, SetTimer() is called unconditionally because our caller wants the timer reset
 // (as though it were killed and recreated) uncondtionally.  MSDN's comments are a little vague

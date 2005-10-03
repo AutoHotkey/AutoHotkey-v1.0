@@ -209,13 +209,12 @@ HWND SetForegroundWindowEx(HWND aWnd)
 #endif
 
 	bool is_attached_my_to_fore = false, is_attached_fore_to_target = false;
-	DWORD fore_thread, my_thread, target_thread;
+	DWORD fore_thread, target_thread;
 	if (orig_foreground_wnd) // Might be NULL from above.
 	{
 		// Based on MSDN docs, these calls should always succeed due to the other
 		// checks done above (e.g. that none of the HWND's are NULL):
 		fore_thread = GetWindowThreadProcessId(orig_foreground_wnd, NULL);
-		my_thread  = GetCurrentThreadId();  // It's probably best not to have this var be static.
 		target_thread = GetWindowThreadProcessId(aWnd, NULL);
 
 		// MY: Normally, it's suggested that you only need to attach the thread of the
@@ -234,10 +233,10 @@ HWND SetForegroundWindowEx(HWND aWnd)
 		// Therefore, idAttachTo cannot equal idAttach.  Update: It appears that of the three,
 		// this first call does not offer any additional benefit, at least on XP, so not
 		// using it for now:
-		//if (my_thread != target_thread) // Don't attempt the call otherwise.
-		//	AttachThreadInput(my_thread, target_thread, TRUE);
-		if (fore_thread && my_thread != fore_thread && !IsWindowHung(orig_foreground_wnd))
-			is_attached_my_to_fore = AttachThreadInput(my_thread, fore_thread, TRUE) != 0;
+		//if (g_MainThreadID != target_thread) // Don't attempt the call otherwise.
+		//	AttachThreadInput(g_MainThreadID, target_thread, TRUE);
+		if (fore_thread && g_MainThreadID != fore_thread && !IsWindowHung(orig_foreground_wnd))
+			is_attached_my_to_fore = AttachThreadInput(g_MainThreadID, fore_thread, TRUE) != 0;
 		if (fore_thread && target_thread && fore_thread != target_thread && !IsWindowHung(aWnd))
 			is_attached_fore_to_target = AttachThreadInput(fore_thread, target_thread, TRUE) != 0;
 	}
@@ -304,10 +303,10 @@ HWND SetForegroundWindowEx(HWND aWnd)
 		//KeyEvent(KEYUP, VK_MENU);
 		// Also replacing "2-alts" with "alt-tab" below, for now:
 
-		IF_ATTEMPT_SET_FORE
 #ifndef _DEBUG
-			0; // Do nothing.
-#else
+		new_foreground_wnd = AttemptSetForeground(aWnd, orig_foreground_wnd, "");
+#else // debug mode
+		IF_ATTEMPT_SET_FORE
 			FileAppend(LOGF, "2-alts ok: ", false);
 		else
 		{
@@ -331,7 +330,7 @@ HWND SetForegroundWindowEx(HWND aWnd)
 	// for these particular windows may result in a hung thread or other
 	// undesirable effect:
 	if (is_attached_my_to_fore)
-		AttachThreadInput(my_thread, fore_thread, FALSE);
+		AttachThreadInput(g_MainThreadID, fore_thread, FALSE);
 	if (is_attached_fore_to_target)
 		AttachThreadInput(fore_thread, target_thread, FALSE);
 
@@ -727,10 +726,7 @@ ResultType StatusBarUtil(Var *aOutputVar, HWND aBarHwnd, int aPartNumber, char *
 	// this call.  So keep the timeout value fairly short.  Update for v1.0.24:
 	// There have been at least two reports of the StatusBarWait command ending
 	// prematurely with an ErrorLevel of 2.  The most likely culprit is the below,
-	// which has now been increased from 100 to 2000 because it seems preferable
-	// to have mouse lag in exchange for better bar-waiting reliability.  The
-	// mouse/keybd lag issue will hopefully go away someday anyway, when the hooks
-	// get a dedicated thread:
+	// which has now been increased from 100 to 2000:
 	#define SB_TIMEOUT 2000
 
 	HANDLE handle;
