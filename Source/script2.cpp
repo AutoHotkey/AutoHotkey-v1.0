@@ -5239,7 +5239,11 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		// following message is posted event when INTERRUPTIBLE==false.
 		// Post it with a NULL hwnd (update: also for backward compatibility) to avoid any chance that our
 		// message pump will dispatch it back to us.  We want these events to always be handled there,
-		// where almost all new quasi-threads get launched:
+		// where almost all new quasi-threads get launched.  Update: Even if it were safe in terms of
+		// backward compatibility to change NULL to gHwnd, testing shows it causes problems when a hotkey
+		// is pressed while one of the script's menus is displayed (at least a menu bar).  For example:
+		// *LCtrl::Send {Blind}{Ctrl up}{Alt down}
+		// *LCtrl up::Send {Blind}{Alt up}
 		PostMessage(NULL, iMsg, wParam, lParam);
 		if (INTERRUPTIBLE)
 			MsgSleep(-1);
@@ -5527,13 +5531,6 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		else if (g_script.mNextClipboardViewer)
 			SendMessageTimeout(g_script.mNextClipboardViewer, iMsg, wParam, lParam, SMTO_ABORTIFHUNG, 2000, &dwTemp);
 		return 0;
-
-	case AHK_HOOK_FAIL:
-		ReplyMessage(0); // Allow the calling thread to continue to run (since it is a different thread in this case).
-		// Generic message to reduce code size and also to show only one dialog rather than two if both hooks
-		// fail (failure is rare, but has been known to happen when certain types of games are running).
-		MsgBox("Warning: The keyboard and/or mouse hook could not be activated; some parts of the script will not function.");
-		break;
 
 	HANDLE_MENU_LOOP // Cases for WM_ENTERMENULOOP and WM_EXITMENULOOP.
 
@@ -9157,7 +9154,7 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 
 	// The filter must be terminated by two NULL characters.  One is explicit, the other automatic:
 	char filter[1024] = "", pattern[1024] = "";  // Set default.
-	if (aFilter && *aFilter)
+	if (*aFilter)
 	{
 		char *pattern_start = strchr(aFilter, '(');
 		if (pattern_start)
@@ -9186,9 +9183,8 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 			// Also include the All Files (*.*) filter, since there doesn't seem to be much
 			// point to making this an option.  This is because the user could always type
 			// *.* and press ENTER in the filename field and achieve the same result:
-			snprintf(filter, sizeof(filter), "%s%c%s%c" "All Files (*.*)%c*.*%c"
-				, aFilter, '\0', pattern, '\0'
-				, '\0', '\0'); // double-terminate.
+			snprintf(filter, sizeof(filter), "%s%c%s%cAll Files (*.*)%c*.*%c"
+				, aFilter, '\0', pattern, '\0', '\0', '\0'); // The final '\0' double-terminates by virtue of the fact that snprintf() itself provides a final terminator.
 		}
 		else
 			*filter = '\0';  // It will use a standard default below.

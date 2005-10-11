@@ -29,7 +29,7 @@ GNU General Public License for more details.
 enum UserMessages {AHK_HOOK_HOTKEY = WM_USER, AHK_HOTSTRING, AHK_USER_MENU, AHK_DIALOG, AHK_NOTIFYICON
 	, AHK_RETURN_PID, AHK_EXIT_BY_RELOAD, AHK_EXIT_BY_SINGLEINSTANCE
 	, AHK_GUI_ACTION = WM_USER + 100  // Allow some room in between for more "exit" type msgs to be added in the future (see below comment).
-	, AHK_CLIPBOARD_CHANGE, AHK_HOOK_TEST_MSG, AHK_CHANGE_HOOK_STATE, AHK_HOOK_FAIL};
+	, AHK_CLIPBOARD_CHANGE, AHK_HOOK_TEST_MSG, AHK_CHANGE_HOOK_STATE};
 // NOTE: TRY NEVER TO CHANGE the specific numbers of the above messages, since some users might be
 // using the Post/SendMessage commands to automate AutoHotkey itself.  Here is the original order
 // that should be maintained:

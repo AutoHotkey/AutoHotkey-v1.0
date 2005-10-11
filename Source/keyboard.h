@@ -182,10 +182,8 @@ enum KeyEventTypes {KEYDOWN, KEYUP, KEYDOWNANDUP};
 void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow = NULL);
 int SendKey(vk_type aVK, sc_type aSC, modLR_type aModifiersLR, modLR_type aModifiersLRPersistent
 	, int aRepeatCount, KeyEventTypes aEventType, modLR_type aKeyAsModifiersLR, HWND aTargetWindow);
-int SendKeySpecial(char aChar, modLR_type aModifiersLR, modLR_type aModifiersLRPersistent
-	, int aRepeatCount, KeyEventTypes aEventType, HWND aTargetWindow);
-int SendASC(char *aAscii, HWND aTargetWindow);
-int SendChar(char aChar, modLR_type aModifiersLR, KeyEventTypes aEventType, HWND aTargetWindow);
+int SendKeySpecial(char aChar, modLR_type aModifiersLRPersistent, int aRepeatCount);
+int SendASC(char *aAscii);
 
 
 // Below uses a pseudo-random value.  It's best that this be constant so that if multiple instances
@@ -217,14 +215,11 @@ ToggleValueType ToggleKeyState(vk_type aVK, ToggleValueType aToggleValue);
 void ToggleNumlockWin9x();
 //void CapslockOffWin9x();
 
-modLR_type SetModifierState(mod_type aModifiersNew, modLR_type aModifiersLRnow, HWND aTargetWindow
-	, bool aDisguiseWinAlt, DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER);
 modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLRnow, HWND aTargetWindow
 	, bool aDisguiseWinAlt, DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER);
 void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLRnow, KeyEventTypes aEventType
 	, HWND aTargetWindow, DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER);
 
-mod_type GetModifierState();
 modLR_type GetModifierLRState(bool aExplicitlyGet = false);
 
 // The IsKeyDown9xNT() method is needed because GetKeyState() does not return the proper
@@ -255,8 +250,9 @@ char *VKtoKeyName(vk_type aVK, sc_type aSC, char *aBuf, int aBufSize);
 sc_type TextToSC(char *aText);
 vk_type TextToVK(char *aText, modLR_type *pModifiersLR = NULL, bool aExcludeThoseHandledByScanCode = false
 	, bool aAllowExplicitVK = true);
+vk_type CharToVKAndModifiers(char aChar, modLR_type *pModifiersLR);
 vk_type TextToSpecial(char *aText, UINT aTextLength, KeyEventTypes &aEventTypem, modLR_type &aModifiersLR
-	, mod_type &aModifiers, bool aUpdatePersistent);
+	, bool aUpdatePersistent);
 
 #ifdef ENABLE_KEY_HISTORY_FILE
 ResultType KeyHistoryToFile(char *aFilespec = NULL, char aType = '\0', bool aKeyUp = false

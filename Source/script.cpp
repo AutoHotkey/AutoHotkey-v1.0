@@ -1064,6 +1064,13 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 	size_t buf_length, next_buf_length, suffix_length;
 	bool is_function, is_label;
 
+	// For the remap mechanism, e.g. a::b
+	int remap_stage;
+	vk_type remap_source_vk, remap_dest_vk = 0; // Only dest is initialized to enforce the fact that it is the flag/signal to indicate whether remapping is in progress.
+	char remap_source[32], remap_dest[32], remap_dest_modifiers[8]; // Must fit the longest key name (currently Browser_Favorites [17]), but buffer overflow is checked just in case.
+	char *extra_event;
+	bool remap_source_is_mouse, remap_dest_is_mouse, remap_keybd_to_mouse;
+
 	// For the line continuation mechanism:
 	bool do_ltrim, do_rtrim, literal_escapes, literal_derefs, literal_delimiters
 		, in_continuation_section, has_continuation_section, is_continuation_line;
@@ -1102,12 +1109,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 		buf_length = 0;
 	}
 
-	for (; buf_length != -1  // Compare directly to -1 since length is unsigned.
-		; buf = next_buf
-		, buf_length = next_buf_length
-		, next_buf = (buf == buf1) ? buf2 : buf1)
-		// The line above alternates buffers (toggles next_buf to be the unused buffer), which helps
-		// performance because it avoids memcpy from buf2 to buf1.
+	for (; buf_length != -1;)  // Compare directly to -1 since length is unsigned.
 	{
 		// For each whole line (a line with continuation section is counted as only a single line
 		// for the purpose of this outer loop).
@@ -1424,11 +1426,11 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 				memcpy(buf + buf_length, cp, next_buf_length + 1); // Append this line to prev. and include the zero terminator.
 				buf_length += next_buf_length; // Must be done only after the old value of buf_length was used above.
 			}
-		} // For each sub-line (continued line) that composes this line.
+		} // for() each sub-line (continued line) that composes this line.
 
 		// buf_length can't be -1 (though next_buf_length can) because outer loop's condition prevents it:
 		if (!buf_length) // Done only after the line number increments above so that the physical line number is properly tracked.
-			continue;
+			goto continue_main_loop; // In lieu of "continue", for performance.
 
 		// Since the neither of the above executed, or they did but didn't "continue",
 		// buf now contains a non-commented line, either by itself or built from
@@ -1497,14 +1499,28 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			// a function call vs. definition:
 			strcpy(buf_prev, buf);
 			buf_prev_line_number = mCombinedLineNumber;
-			continue;
+			goto continue_main_loop; // In lieu of "continue", for performance.
 		}
 
+		// The following "examine_line" label skips the following parts above:
+		// 1) IsFunction() because that's only for a function call or definition alone on a line
+		//    e.g. not "if fn()" or x := fn().  Those who goto this label don't need that processing.
+		// 2) The "if (*buf_prev)" block: Doesn't seem applicable for the callers of this label.
+		// 3) The inner loop that handles continuation sections: Not needed by the callers of this label.
+		// 4) Things like the following should be skipped because callers of this label don't want the
+		//    physical line number changed (which would throw off the count of lines that lie beneath a remap):
+		//    mCombinedLineNumber = phys_line_number + 1;
+		//    ++phys_line_number;
+		// 5) "mCurrLine = NULL": Probably not necessary since it's only for error reporting.  Worst thing
+		//    that could happen is that syntax errors would be thrown off, which testing shows isn't the case.
+examine_line:
 		// "::" alone isn't a hotstring, it's a label whose name is colon.
 		// Below relies on the fact that no valid hotkey can start with a colon, since
 		// ": & somekey" is not valid (since colon is a shifted key) and colon itself
 		// should instead be defined as "+;::".  It also relies on short-circuit boolean:
-		hotstring_start = hotstring_options = hotkey_flag = NULL;
+		hotstring_start = NULL;
+		hotstring_options = NULL;
+		hotkey_flag = NULL;
 		if (buf[0] == ':' && buf[1])
 		{
 			if (buf[1] != ':')
@@ -1575,60 +1591,26 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 				hotstring_start = NULL;  // Indicate that this isn't a hotstring after all.
 		}
 		else // Not a hotstring
-			// Note that there may be an action following the HOTKEY_FLAG (on the same line).
-			hotkey_flag = strstr(buf, HOTKEY_FLAG); // Find the first one from the left, in case there's more than 1.
-
-		// The below considers all of the following to be non-hotkey labels:
-		// A naked "::", which is treated as a normal label whose label name is colon.
-		// A command containing an escaped literal double-colon, e.g. Run, Something.exe `:: /b
-		//    In the above case, the escape sequence just tell us here not to process it as a label,
-		//    and later the escape sequence `: resolves to a single colon.
-		// But the below also ensures that `:: is a valid hotkey label whose hotkey is accent.
-		// And it relies on short-circuit boolean:
-		is_label = (hotkey_flag && hotkey_flag > buf);
-		if (is_label && !hotstring_start && *(hotkey_flag - 1) == g_EscapeChar && hotkey_flag - buf > 2)
 		{
-			// Greater-than 2 is used above because "x=`::" is currently the smallest possible command
-			// that might be confused as a hotkey label.
-			// Since it appears to be a hotkey label and it's known not to be a hotstring label (hotstrings
-			// can't suffer from this type of ambiguity because a leading colon or pair of colons makes them
-			// easier to detect), ensure it really is a hotkey label rather than an escaped double-colon by
-			// eliminating ambiguity as much as possible.  Examples of ambiguity:
-			//run Enter & `::
-			//vs.
-			//Enter & `::   (i.e. accent is the suffix of a composite hotkey)
-			//
-			//x = Enter & `::
-			//vs.
-			//Enter & `::
-			//
-			//x=^`::
-			//vs.
-			//^`::  (i.e. accent is the suffix key)
-			// First check if it has the composite delimiter.  If it does, it's 99.9% certain that it's
-			// a hotkey due to the extreme odds against " & `::" ever appearing *literally* in a command.
-			size_t available_length = hotkey_flag - buf;
-			if (available_length <= COMPOSITE_DELIMITER_LENGTH + 1  // i.e. it must long enough to contain "x & `::"
-                || strnicmp(hotkey_flag - 4, COMPOSITE_DELIMITER, COMPOSITE_DELIMITER_LENGTH)) // it's not it.
+			// Note that there may be an action following the HOTKEY_FLAG (on the same line).
+			if (hotkey_flag = strstr(buf, HOTKEY_FLAG)) // Find the first one from the left, in case there's more than 1.
 			{
-				// Assume it's not a label unless it's short, contains no spaces, and contains only
-				// hotkey modifiers.
-				is_label = false;
-				if (available_length < 10)  // Longest possible non-composite hotkey: "$*~<^+!#`::"
-				{
-					char *bcp;
-					for (bcp = buf; bcp < hotkey_flag - 1; ++bcp)
-						if (!strchr("><*~$!^+#", *bcp))
-							break;
-					if (bcp == hotkey_flag - 1)
-						// It appears to be a hotkey after all, since only modifiers exist to the left of "`::"
-						is_label = true;
-				}
-				//else it's too long to be a hotkey.
+				// v1.0.40: It appears to be a hotkey, but validate it as such before committing to processing
+				// it as a hotkey.  If it fails validation as a hotkey, treat it as a command that just happens
+				// to contain a double colon somewhere.  This avoids the need to escape double colons in scripts.
+				// Note: Hotstrings can't suffer from this type of ambiguity because a leading colon or pair of
+				// colons makes them easier to detect.
+				cp = omit_trailing_whitespace(buf, hotkey_flag); // For maintainability.
+				orig_char = *cp;
+				*cp = '\0'; // Temporarily terminate.
+				if (!Hotkey::TextInterpret(omit_leading_whitespace(buf), NULL)) // Passing NULL calls it in validate-only mode.
+					hotkey_flag = NULL; // It's not a valid hotkey, so indicate that it's a command instead.
+				*cp = orig_char; // Undo the temp. termination above.
 			}
 		}
 
-		if (is_label) // It's a hotkey/hotstring label.
+		// Treat a naked "::" as a normal label whose label name is colon:
+		if (is_label = (hotkey_flag && hotkey_flag > buf)) // It's a hotkey/hotstring label.
 		{
 			if (g.CurrentFunc)
 			{
@@ -1651,6 +1633,41 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			{
 				ltrim(hotkey_flag); // Has already been rtrimmed by GetLine().
 				rtrim(buf); // Trim the new substring inside of buf (due to temp termination). It has already been ltrimmed.
+				// v1.0.40: Check if this is a remap rather than hotkey:
+				if (*hotkey_flag // This hotkey's action is on the same line as its label.
+					&& (remap_dest_vk = TextToVK(cp = Hotkey::TextToModifiers(hotkey_flag, NULL))) // And the action appears to be a remap destination rather than a command.
+					&& (remap_source_vk = TextToVK(cp1 = Hotkey::TextToModifiers(buf, NULL))))
+				{
+					// These will be ignored in other stages if it turns out not to be a remap later below:
+					remap_source_is_mouse = IsMouseVK(remap_source_vk);
+					remap_dest_is_mouse = IsMouseVK(remap_dest_vk);
+					remap_keybd_to_mouse = !remap_source_is_mouse && remap_dest_is_mouse;
+					snprintf(remap_source, sizeof(remap_source), "%s%s"
+						, strlen(cp1) == 1 && IsCharUpper(*cp1) ? "+" : ""  // Allow A::b to be different than a::b.
+						, buf); // Include any modifiers too, e.g. ^b::c.
+					strlcpy(remap_dest, cp, sizeof(remap_dest));      // But exclude modifiers here; they're wanted separately.
+					strlcpy(remap_dest_modifiers, hotkey_flag, sizeof(remap_dest_modifiers));
+					if (cp - hotkey_flag < sizeof(remap_dest_modifiers)) // Avoid reading beyond the end.
+						remap_dest_modifiers[cp - hotkey_flag] = '\0';   // Terminate at the proper end of the modifier string.
+					remap_stage = 0; // Init for use in the next stage.
+					// In the unlikely event that the dest key has the same name as a command, disqualify it
+					// from being a remap (as documented):
+					switch (remap_dest_vk)
+					{
+					case VK_CONTROL: // Checked in case it was specified as "Control" rather than "Ctrl".
+					case VK_SLEEP:
+						if (StrChrAny(hotkey_flag, " \t,")) // Not using g_delimiter (reduces code size/complexity).
+							break; // Any space, tab, or enter means this is a command rather than a remap destination.
+						goto continue_main_loop; // It will see that remap_dest_vk is non-zero and act accordingly.
+					case VK_RETURN: // These two are always considered commands rather than remap destinations (as documented).
+					case VK_PAUSE:  // Used for both "Pause" and "Break"
+						break;
+					default: // All other VKs are valid destinations and thus the remap is valid.
+						goto continue_main_loop; // It will see that remap_dest_vk is non-zero and act accordingly.
+					}
+					// Since above didn't goto, indicate that this is not a remap:
+					remap_dest_vk = 0;
+				}
 			}
 			// else don't trim hotstrings since literal spaces in both substrings are significant.
 
@@ -1734,7 +1751,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			else
 				if (Hotkey::AddHotkey(mLastLabel, hook_action) != OK) // Set hotkey to jump to this label.
 					return CloseAndReturn(fp, script_buf, FAIL);
-			continue;
+			goto continue_main_loop; // In lieu of "continue", for performance.
 		}
 
 		// Otherwise, not a hotkey.  Check if it's a generic, non-hotkey label:
@@ -1756,7 +1773,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			rtrim(buf, buf_length); // Has already been ltrimmed.
 			if (!AddLabel(buf))
 				return CloseAndReturn(fp, script_buf, FAIL);
-			continue;
+			goto continue_main_loop; // In lieu of "continue", for performance.
 		}
 		// It's not a label.
 		if (*buf == '#')
@@ -1771,7 +1788,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 				// hundreds of calls to ScriptError() and LineError():
 				mCurrFileNumber = source_file_number;
 				mCombinedLineNumber = saved_line_number;
-				continue;
+				goto continue_main_loop; // In lieu of "continue", for performance.
 			case FAIL:
 				return CloseAndReturn(fp, script_buf, FAIL); // It already reported the error.
 			// Otherwise it's CONDITION_FALSE.  Do nothing.
@@ -1815,6 +1832,99 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			// Otherwise, there was either no same-line action or the same-line action was successfully added,
 			// so do nothing.
 		}
+
+continue_main_loop: // This method is used in lieu of "continue" for performance and code size reduction.
+		if (remap_dest_vk)
+		{
+			// For remapping, decided to use a "macro expansion" approach because I think it's considerably
+			// smaller in code size and complexity than other approaches would be.  I originally wanted to
+			// do it with the hook by changing the incoming event prior to passing it back out again (for
+			// example, a::b would transform an incoming 'a' keystroke into 'b' directly without having
+			// to suppress the original keystroke and simulate a new one).  Unfortunately, the low-level
+			// hooks apparently do not allow this.  Here is the test that confirmed it:
+			// if (event.vkCode == 'A')
+			// {
+			//	event.vkCode = 'B';
+			//	event.scanCode = 0x30; // Or use vk_to_sc(event.vkCode).
+			//	return CallNextHookEx(g_KeybdHook, aCode, wParam, lParam);
+			// }
+			switch (++remap_stage)
+			{
+			case 1: // Stage 1: Add key-down hotkey label, e.g. *LButton::
+				sprintf(buf, "*%s::", remap_source); // Should be no risk of buffer overflow due to prior validation.
+				buf_length = strlen(buf);
+				goto examine_line; // Have the main loop process the contents of "buf" as though it came in from the script.
+			case 2: // Stage 2.
+				strcpy(buf, "-1");
+				// The primary reason for adding Key/MouseDelay -1 is to minimize the chance that a one of
+				// these hotkey threads will get buried under some other thread such as a timer, which
+				// would disrupt the remapping if #MaxThreadsPerHotkey is at its default of 1.
+				AddLine(remap_dest_is_mouse ? ACT_SETMOUSEDELAY : ACT_SETKEYDELAY, &buf, 1, NULL); // PressDuration doesn't need to be specified because it doesn't affect down-only and up-only events.
+				if (remap_keybd_to_mouse)
+				{
+					// Since source is keybd and dest is mouse, prevent keyboard auto-repeat from auto-repeating
+					// the mouse button (since that would be undesirable 90% of the time).  This is done
+					// by inserting a single extra IF-statement above the Send that produces the down-event:
+					sprintf(buf, "if not GetKeyState(\"%s\")", remap_dest); // Should be no risk of buffer overflow due to prior validation.
+					buf_length = strlen(buf);
+					remap_stage = 9; // Have it hit special stage 9+1 next time for code reduction purposes.
+					goto examine_line; // Have the main loop process the contents of "buf" as though it came in from the script.
+				}
+				// Otherwise, remap_keybd_to_mouse==false, so fall through to next case.
+			case 10:
+				extra_event = ""; // Set default.
+				switch (remap_dest_vk)
+				{
+				case VK_LMENU:
+				case VK_RMENU:
+				case VK_MENU:
+					switch (remap_source_vk)
+					{
+					case VK_LCONTROL:
+					case VK_CONTROL:
+						extra_event = "{LCtrl up}"; // Somewhat surprisingly, this is enough to make "Ctrl::Alt" properly remap both right and left control.
+						break;
+					case VK_RCONTROL:
+						extra_event = "{RCtrl up}";
+						break;
+					// Below is commented out because its only purpose was to allow a shift key remapped to alt
+					// to be able to alt-tab.  But that wouldn't work correctly due to the need for the following
+					// hotkey, which does more harm than good by impacting the normal Alt key's ability to alt-tab
+					// (if the normal Alt key isn't remapped): *Tab::Send {Blind}{Tab}
+					//case VK_LSHIFT:
+					//case VK_SHIFT:
+					//	extra_event = "{LShift up}";
+					//	break;
+					//case VK_RSHIFT:
+					//	extra_event = "{RShift up}";
+					//	break;
+					}
+					break;
+				}
+				sprintf(buf, "{Blind}%s%s{%s down}", extra_event, remap_dest_modifiers, remap_dest);
+				AddLine(ACT_SEND, &buf, 1, NULL);
+				AddLine(ACT_RETURN);
+				// Add key-up hotkey label, e.g. *LButton up::
+				sprintf(buf, "*%s up::", remap_source); // Should be no risk of buffer overflow due to prior validation.
+				buf_length = strlen(buf);
+				remap_stage = 2; // Adjust to hit stage 3 next time (in case this is stage 10).
+				goto examine_line; // Have the main loop process the contents of "buf" as though it came in from the script.
+			case 3: // Stage 3.
+				strcpy(buf, "-1");
+				AddLine(remap_dest_is_mouse ? ACT_SETMOUSEDELAY : ACT_SETKEYDELAY, &buf, 1, NULL);
+				sprintf(buf, "{Blind}{%s up}", remap_dest); // Unlike the down-event above, remap_dest_modifiers is not included for the up-event; e.g. ^{b up} is inappropriate.
+				AddLine(ACT_SEND, &buf, 1, NULL);
+				AddLine(ACT_RETURN);
+				remap_dest_vk = 0; // Reset to signal that the remapping expansion is now complete.
+				break; // Fall through to the next section so that script loading can resume at the next line.
+			}
+		}
+		// Since above didn't "continue", resume loading script line by line:
+		buf = next_buf;
+		buf_length = next_buf_length;
+		next_buf = (buf == buf1) ? buf2 : buf1;
+		// The line above alternates buffers (toggles next_buf to be the unused buffer), which helps
+		// performance because it avoids memcpy from buf2 to buf1.
 	} // for each whole/constructed line.
 
 	if (*buf_prev) // Since there's a previous line, but it's the last non-comment line, it must be a function call, not a function definition.
@@ -2662,8 +2772,10 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 		switch(*action_args)
 		{
 		case '=':  // i.e. var=value  (with no spaces around operator)
-		case ':':  // i.e. var:=value (with no spaces around operator)
 			is_var_and_operator = true;
+			break;
+		case ':':  // i.e. var:=value (with no spaces around operator)
+			is_var_and_operator = (action_args[1] == '='); // v1.0.40: Allow things like "MsgBox :: test" to be valid.
 			break;
 		case '(':  // i.e. "if(expr)" (with no space between the if and the open-paren).
 			is_var_and_operator = !stricmp(action_name, "IF"); // Fixed for v1.0.31.01.
@@ -2944,7 +3056,9 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 			}
 		}
 		if (action_type == ACT_INVALID)
-			return ScriptError(ERR_UNRECOGNIZED_ACTION, aLineText);
+			// v1.0.40: Give a more specific error message now now that hotkeys can make it here due to
+			// the change that avoids the need to escape double-colons:
+			return ScriptError(strstr(aLineText, HOTKEY_FLAG) ? "Invalid hotkey." : ERR_UNRECOGNIZED_ACTION, aLineText);
 	} // If no matching command found.
 
 	Action *this_action = (action_type == ACT_INVALID) ? &g_old_act[old_action_type] : &g_act[action_type];
@@ -3555,7 +3669,9 @@ bool LegacyArgIsExpression(char *aArgText, char *aArgMap)
 
 ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountType aArgc, char *aArgMap[])
 // aArg must be a collection of pointers to memory areas that are modifiable, and there
-// must be at least MAX_ARGS number of pointers in the aArg array.
+// must be at least aArgc number of pointers in the aArg array.  In v1.0.40, a caller (namely
+// the "macro expansion" for remappings such as "a::b") is allowed to pass a non-NULL value for
+// aArg but a NULL value for aArgMap.
 // Returns OK or FAIL.
 {
 #ifdef _DEBUG
@@ -3689,13 +3805,14 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				// need to review other sections to ensure they will tolerate it.  Also, the following
 				// would probably need revision to get it to be detected as an output-variable:
 				// % Array%i% = value
-				if (*this_aArg == g_DerefChar && !*this_aArgMap // It's a non-literal deref character.
+				if (*this_aArg == g_DerefChar && !(this_aArgMap && *this_aArgMap) // It's a non-literal deref character.
 					&& IS_SPACE_OR_TAB(this_aArg[1])) // Followed by a space or tab.
 				{
 					this_new_arg.is_expression = true;
 					// Omit the percent sign and the space after it from further consideration.
 					this_aArg += 2;
-					this_aArgMap += 2;
+					if (this_aArgMap)
+						this_aArgMap += 2;
 					// ACT_ASSIGN isn't capable of dealing with expressions because ExecUntil() does not
 					// call ExpandArgs() automatically for it.  Thus its function, PerformAssign(), would
 					// not be given the expanded result of the expression.
@@ -3918,7 +4035,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 							// the deref array must be ordered according to the physical position of
 							// derefs inside the arg.  In the following example, the order of derefs
 							// must be x,i,y: if (x = Array%i% and y = 3)
-							if (!ParseDerefs(op_begin, this_aArgMap + (op_begin - this_new_arg.text), deref, deref_count))
+							if (!ParseDerefs(op_begin, this_aArgMap ? this_aArgMap + (op_begin - this_new_arg.text) : NULL
+								, deref, deref_count))
 								return FAIL; // It already displayed the error.  No need to undo temp. termination.
 							// And now leave this operand "raw" so that it will later be dereferenced again.
 							// In the following example, i made into a deref but the result (Array33) must be

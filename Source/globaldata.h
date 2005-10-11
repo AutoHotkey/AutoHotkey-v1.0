@@ -35,7 +35,7 @@ extern WNDPROC g_TabClassProc;
 extern modLR_type g_modifiersLR_logical;   // Tracked by hook (if hook is active).
 extern modLR_type g_modifiersLR_logical_non_ignored;
 extern modLR_type g_modifiersLR_physical;  // Same as above except it's which modifiers are PHYSICALLY down.
-extern modLR_type g_modifiersLR_persistent; // Maintained by SendKeys().
+extern modLR_type g_modifiersLR_persistent; // Global to keep track of this script's own lifetime/persistent modifiers (the ones it caused to be persistent and thus is responsible for tracking).
 
 #ifdef FUTURE_USE_MOUSE_BUTTONS_LOGICAL
 extern WORD g_mouse_buttons_logical; // A bitwise combination of MK_LBUTTON, etc.

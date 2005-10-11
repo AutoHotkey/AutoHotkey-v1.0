@@ -74,10 +74,6 @@ private:
 	static DWORD sTimeNow;
 	static HotkeyIDType sNextID;
 
-	ResultType TextInterpret(char *aName);
-	char *TextToModifiers(char *aText);
-	ResultType TextToKey(char *aText, char *aHotkeyName, bool aIsModifier);
-
 	bool PerformIsAllowed()
 	{
 		// For now, attempts to launch another simultaneous instance of this subroutine
@@ -233,6 +229,9 @@ public:
 	static ResultType AllDeactivate(bool aObeySuspend, bool aChangeHookStatus = true, bool aKeepHookIfNeeded = false);
 	static void AllActivate();
 	static void RequireHook(HookType aWhichHook) {sWhichHookAlways |= aWhichHook;}
+	static ResultType TextInterpret(char *aName, Hotkey *aThisHotkey);
+	static char *TextToModifiers(char *aText, Hotkey *aThisHotkey);
+	static ResultType TextToKey(char *aText, char *aHotkeyName, bool aIsModifier, Hotkey *aThisHotkey);
 
 	static void InstallKeybdHook();
 

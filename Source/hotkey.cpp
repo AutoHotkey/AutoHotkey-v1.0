@@ -58,21 +58,22 @@ void Hotkey::AllActivate()
 	// This is done only for vitual keys because prefix keys that are done by scan code (mModifierSC)
 	// should already be hook hotkeys when used as suffix keys (there may be a few unusual exceptions,
 	// but they seem too rare to justify the extra code size).
+	// Update for v1.0.40: This first pass through the hotkeys now also checks things for hotkeys
+	// that can affect other hotkeys. If this weren't done in the first pass, it might be possible
+	// for a hotkey to make some other hotkey into a hook hotkey, but then the hook might not be
+	// installed if that hotkey had already been processed earlier in the second pass.  Similarly,
+	// a hotkey processed earlier in the second pass might have been registered when in fact it
+	// should have become a hook hotkey due to something learned only later in the second pass.
+	// Doing these types of things in the first pass resolves such situations.
 	bool vk_is_prefix[VK_ARRAY_COUNT] = {false};
-	int j;
-	for (j = 0; j < sHotkeyCount; ++j)
-	{
-		Hotkey &hot = *shk[j]; // For performance and convenience.
-		if (hot.mModifierVK && hot.mEnabled && (!g_IsSuspended || hot.IsExemptFromSuspend())) // Ordered for short-circuit performance.
-			vk_is_prefix[hot.mModifierVK] = true;
-	}
-
-	bool is_neutral;
-	modLR_type modifiersLR;
-	for (int i = 0; i < sHotkeyCount; ++i)
+	int i, j;
+	for (i = 0; i < sHotkeyCount; ++i) // First pass.
 	{
 		Hotkey &hot = *shk[i]; // For performance and convenience.
-
+		if (!hot.mEnabled || (g_IsSuspended && !hot.IsExemptFromSuspend()))
+			continue;
+		if (hot.mModifierVK)
+			vk_is_prefix[hot.mModifierVK] = true;
 		if (hot.mKeyUp && hot.mVK) // No need to do the below for mSC hotkeys since their down hotkeys would already be handled by the hook.
 		{
 			// For each key-up hotkey, search for any its counterpart that's a down-hotkey (if any).
@@ -88,26 +89,58 @@ void Hotkey::AllActivate()
 				// mNoSuppress
 				// In addition, there is no need to check shk[j]->mKeyUp because that can't be
 				// true if it's mType is HK_NORMAL:
-				if (shk[j]->mType == HK_NORMAL && shk[j]->mVK == hot.mVK && shk[j]->mModifiersConsolidatedLR == hot.mModifiersConsolidatedLR)
-				{
-					// v1.0.39: Unregister in case previous iteration registered it.
-					// This could be avoided by putting this loop outside the main loop, but that would
-					// require two passes through the hotkey list, hurting performance and increasing code size.
-					shk[j]->Unregister();
+				// Also, g_IsSuspended and mEnabled aren't checked because it's harmless to operate on disabled hotkeys in this way.
+				if (shk[j]->mVK == hot.mVK && (shk[j]->mType == HK_NORMAL || shk[j]->mType == HK_UNDETERMINED) // Ordered for short-circuit performance.
+					&& shk[j]->mModifiersConsolidatedLR == hot.mModifiersConsolidatedLR)
 					shk[j]->mType = HK_KEYBD_HOOK;
-				}
 			}
 		}
 
-		// For simplicity, don't try to undo keys that are already considered to be
-		// handled by the hook, since it's not easy to know if they were set that
-		// way using "#UseHook, on" or really qualified some other way.
-		// Instead, just remove any modifiers that are obviously redundant from all
-		// keys (do them all due to cases where RegisterHotkey() fails and the key
-		// is then auto-enabled via the hook).  No attempt is currently made to
-		// correct a silly hotkey such as "lwin & lwin".  In addition, weird hotkeys
-		// such as <^Control and ^LControl are not currently validated and might
-		// yield unpredictable results:
+		// v1.0.40: If this is a wildcard hotkey, any hotkeys it eclipses (i.e. includes as subsets)
+		// should be made into hook hotkeys also, because otherwise they would be overridden by hook.
+		// The following criteria are checked:
+		// 1) Exclude those that have a ModifierSC/VK because in those cases, mAllowExtraModifiers is
+		//    ignored.
+		// 2) Exclude those that lack an mVK because those with mSC can't eclipse registered hotkeys
+		//   (since any would-be eclipsed mSC hotkey is already a hook hotkey due to is SC nature).
+		// 3) It must not have any mModifiersLR because such hotkeys can't completely eclipse
+		//    registered hotkeys since they always have neutral vs. left/right-specific modifiers.
+		//    For example, if *<^a is a hotkey, ^a can still be a registered hotkey because it could
+		//    still be activated by pressing RControl+a.
+		// 4) For maintainability, it doesn't check mNoSuppress because the hook is needed anyway,
+		//    so might as well handle eclipsed hotkeys with it too.
+		if (hot.mAllowExtraModifiers && hot.mVK && !hot.mModifiersLR && !(hot.mModifierSC || hot.mModifierVK))
+		{
+			for (j = 0; j < sHotkeyCount; ++j)
+			{
+				// If it's not of type HK_NORMAL, there's no need to change its type regardless
+				// of the values of its other members.  Also, if the wildcard hotkey (hot) has
+				// any neutral modifiers, this hotkey must have at least those neutral modifiers
+				// too or else it's not eclipsed (and thus registering it is okay).  In other words,
+				// the wildcard hotkey's neutral modifiers must be a perfect subset of this hotkey's
+				// modifiers for this one to be eclipsed by it. Note: Neither mModifiersLR nor
+				// mModifiersConsolidated is checked for simplicity and also because it seems to add
+				// flexibility.  For example, *<^>^a would require both left AND right ctrl to be down,
+				// not EITHER. In other words, mModifiersLR can never in effect contain a neutral modifier.
+				if (shk[j]->mVK == hot.mVK && (shk[j]->mType == HK_NORMAL || shk[j]->mType == HK_UNDETERMINED) // Ordered for short-circuit performance.
+					&& (hot.mModifiers & shk[j]->mModifiers) == hot.mModifiers)
+					// Note: No need to check mModifiersLR because it would already be a hook hotkey in that case;
+					// that is, the check of shk[j]->mType precludes it.  It also precludes the possibility
+					// of shk[j] being a key-up hotkey, wildcard hotkey, etc.
+					shk[j]->mType = HK_KEYBD_HOOK;
+			}
+		}
+	} // First pass through the hotkeys.
+
+	bool is_neutral;
+	modLR_type modifiersLR;
+	for (i = 0; i < sHotkeyCount; ++i) // Second pass.
+	{
+		Hotkey &hot = *shk[i]; // For performance and convenience.
+		
+		if (!hot.mEnabled || (g_IsSuspended && !hot.IsExemptFromSuspend()))
+			continue; // v1.0.40: Treat disabled hotkeys as though they're not even present.
+
 		if (modifiersLR = KeyToModifiersLR(hot.mVK, hot.mSC, &is_neutral))
 			// This hotkey's action-key is itself a modifier, so ensure that it's not defined
 			// to modify itself.  Other sections might rely on us doing this:
@@ -118,6 +151,16 @@ void Hotkey::AllActivate()
 			else
 				hot.mModifiersLR &= ~modifiersLR;
 
+		// For simplicity, don't try to undo keys that are already considered to be
+		// handled by the hook, since it's not easy to know if they were set that
+		// way using "#UseHook, on" or really qualified some other way.
+		// Instead, just remove any modifiers that are obviously redundant from all
+		// keys (do them all due to cases where RegisterHotkey() fails and the key
+		// is then auto-enabled via the hook).  No attempt is currently made to
+		// correct a silly hotkey such as "lwin & lwin".  In addition, weird hotkeys
+		// such as <^Control and ^LControl are not currently validated and might
+		// yield unpredictable results.
+		//
 		// HK_MOUSE_HOOK type, and most HK_KEYBD types, are handled by the hotkey constructor.
 		// What we do here is change the type of any normal or undetermined key if there are other
 		// keys that overlap with it (i.e. because only now are all these keys available for checking).
@@ -266,7 +309,7 @@ void Hotkey::AllActivate()
 		
 		// If the hotkey is normal, try to register it.  If the register fails, use the hook to try
 		// to override any other script or program that might have it registered (as documented):
-		if (hot.mType == HK_NORMAL && (!g_IsSuspended || hot.IsExemptFromSuspend()) && !hot.Register())
+		if (hot.mType == HK_NORMAL && !hot.Register())
 			hot.mType = HK_KEYBD_HOOK;
 			// The old Win9x warning dialog was removed to reduce code size (since usage of
 			// Win9x is becoming very rare).
@@ -827,7 +870,7 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 	}
 
 	char *hotkey_name = aName ? aName : aJumpToLabel->mName;
-	if (!TextInterpret(hotkey_name)) // The called function already displayed the error.
+	if (!TextInterpret(hotkey_name, this)) // The called function already displayed the error.
 		return;
 
 	if (mType == HK_JOYSTICK)
@@ -933,8 +976,12 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 
 
 
-ResultType Hotkey::TextInterpret(char *aName)
-// Returns OK or FAIL.
+ResultType Hotkey::TextInterpret(char *aName, Hotkey *aThisHotkey)
+// Returns OK or FAIL.  This function is static and aThisHotkey is passed in as a parameter
+// so that aThisHotkey can be NULL. NULL signals that aName should be checked as a valid
+// hotkey only rather than populating the members of the new hotkey aThisHotkey. This function
+// and those it calls should avoid showing any error dialogs in validation mode.  Instead,
+// I should simply return OK if aName is a valid hotkey and FAIL otherwise.
 {
 	// Make a copy that can be modified:
 	char hotkey_name[256];
@@ -942,17 +989,18 @@ ResultType Hotkey::TextInterpret(char *aName)
 	char *term1 = hotkey_name;
 	char *term2 = strstr(term1, COMPOSITE_DELIMITER);
 	if (!term2)
-		return TextToKey(TextToModifiers(term1), aName, false);
+		return TextToKey(TextToModifiers(term1, aThisHotkey), aName, false, aThisHotkey);
 	if (*term1 == '~')
 	{
-		mNoSuppress |= NO_SUPPRESS_PREFIX;
+		if (aThisHotkey)
+			aThisHotkey->mNoSuppress |= NO_SUPPRESS_PREFIX;
 		term1 = omit_leading_whitespace(term1 + 1);
 	}
     char *end_of_term1 = omit_trailing_whitespace(term1, term2) + 1;
 	// Temporarily terminate the string so that the 2nd term is hidden:
 	char ctemp = *end_of_term1;
 	*end_of_term1 = '\0';
-	ResultType result = TextToKey(term1, aName, true);
+	ResultType result = TextToKey(term1, aName, true, aThisHotkey);
 	*end_of_term1 = ctemp;  // Undo the termination.
 	if (result == FAIL)
 		return FAIL;
@@ -961,24 +1009,32 @@ ResultType Hotkey::TextInterpret(char *aName)
 	// Even though modifiers on keys already modified by a mModifierVK are not supported, call
 	// TextToModifiers() anyway to use its output (for consistency).  The modifiers it sets
 	// are currently ignored because the mModifierVK takes precedence.
-	return TextToKey(TextToModifiers(term2), aName, false);
+	return TextToKey(TextToModifiers(term2, aThisHotkey), aName, false, aThisHotkey);
 }
 
 
 
-char *Hotkey::TextToModifiers(char *aText)
+char *Hotkey::TextToModifiers(char *aText, Hotkey *aThisHotkey)
+// This function and those it calls should avoid showing any error dialogs when caller passes NULL for aThisHotkey.
 // Takes input param <text> to support receiving only a subset of object.text.
 // Returns the location in <text> of the first non-modifier key.
 // Checks only the first char(s) for modifiers in case these characters appear elsewhere (e.g. +{+}).
 // But come to think of it, +{+} isn't valid because + itself is already shift-equals.  So += would be
 // used instead, e.g. +==action.  Similarly, all the others, except =, would be invalid as hotkeys also.
 {
-	if (!aText || !*aText) return aText; // Below relies on this having ensured that aText isn't blank.
+	if (!*aText)
+		return aText; // Below relies on this having ensured that aText isn't blank.
 
 	// Explicitly avoids initializing modifiers to 0 because the caller may have already included
 	// some set some modifiers in there.
 	char *marker;
 	bool key_left, key_right;
+
+	// Simplifies and reduces code size below:
+	modLR_type temp_modifiersLR;
+	modLR_type &modifiersLR = aThisHotkey ? aThisHotkey->mModifiersLR : temp_modifiersLR;
+	mod_type temp_modifiers;
+	mod_type &modifiers = aThisHotkey ? aThisHotkey->mModifiers : temp_modifiers; // Simplifies and reduces code size below.
 
 	// Improved for v1.0.37.03: The loop's condition is now marker[1] vs. marker[0] so that
 	// the last character is never considered a modifier.  This allows a modifier symbol
@@ -995,85 +1051,91 @@ char *Hotkey::TextToModifiers(char *aText)
 			key_left = true;
 			break;
 		case '*':
-			mAllowExtraModifiers = true;
+			if (aThisHotkey)
+				aThisHotkey->mAllowExtraModifiers = true;
 			break;
 		case '~':
-			mNoSuppress |= NO_SUPPRESS_SUFFIX;
+			if (aThisHotkey)
+				aThisHotkey->mNoSuppress |= NO_SUPPRESS_SUFFIX;
 			break;
 		case '$':
 			if (g_os.IsWin9x())
-				mUnregisterDuringThread = true;
+			{
+				if (aThisHotkey)
+					aThisHotkey->mUnregisterDuringThread = true;
+			}
 			else
-				mType = HK_KEYBD_HOOK;
-			// else ignore the flag and try to register normally, which in most cases seems better
-			// than disabling the hotkey.
+				if (aThisHotkey)
+					aThisHotkey->mType = HK_KEYBD_HOOK;
+				// else ignore the flag and try to register normally, which in most cases seems better
+				// than disabling the hotkey.
 			break;
 		case '!':
 			if ((!key_right && !key_left))
 			{
-				mModifiers |= MOD_ALT;
+				modifiers |= MOD_ALT;
 				break;
 			}
 			// Both left and right may be specified, e.g. ><+a means both shift keys must be held down:
 			if (key_left)
 			{
-				mModifiersLR |= MOD_LALT;
+				modifiersLR |= MOD_LALT;
 				key_left = false;
 			}
 			if (key_right)
 			{
-				mModifiersLR |= MOD_RALT;
+				modifiersLR |= MOD_RALT;
 				key_right = false;
 			}
 			break;
 		case '^':
 			if ((!key_right && !key_left))
 			{
-				mModifiers |= MOD_CONTROL;
+				modifiers |= MOD_CONTROL;
 				break;
 			}
 			if (key_left)
 			{
-				mModifiersLR |= MOD_LCONTROL;
+				modifiersLR |= MOD_LCONTROL;
 				key_left = false;
 			}
 			if (key_right)
 			{
-				mModifiersLR |= MOD_RCONTROL;
+				modifiersLR |= MOD_RCONTROL;
 				key_right = false;
 			}
 			break;
 		case '+':
 			if ((!key_right && !key_left))
 			{
-				mModifiers |= MOD_SHIFT;
+				modifiers |= MOD_SHIFT;
 				break;
 			}
 			if (key_left)
 			{
-				mModifiersLR |= MOD_LSHIFT;
+				modifiersLR |= MOD_LSHIFT;
 				key_left = false;
 			}
 			if (key_right)
 			{
-				mModifiersLR |= MOD_RSHIFT;
+				modifiersLR |= MOD_RSHIFT;
 				key_right = false;
 			}
 			break;
 		case '#':
 			if ((!key_right && !key_left))
 			{
-				mModifiers |= MOD_WIN;
+				modifiers |= MOD_WIN;
 				break;
 			}
 			if (key_left)
 			{
-				mModifiersLR |= MOD_LWIN;
+				modifiersLR |= MOD_LWIN;
 				key_left = false;
 			}
 			if (key_right)
 			{
-				mModifiersLR |= MOD_RWIN;
+				modifiersLR |= MOD_RWIN;
 				key_right = false;
 			}
 			break;
@@ -1086,7 +1148,8 @@ char *Hotkey::TextToModifiers(char *aText)
 
 
 
-ResultType Hotkey::TextToKey(char *aText, char *aHotkeyName, bool aIsModifier)
+ResultType Hotkey::TextToKey(char *aText, char *aHotkeyName, bool aIsModifier, Hotkey *aThisHotkey)
+// This function and those it calls should avoid showing any error dialogs when caller passes NULL for aThisHotkey.
 // Caller must ensure that aText is a modifiable string.
 // Takes input param aText to support receiving only a subset of mName.
 // In private members, sets the values of vk/sc or ModifierVK/ModifierSC depending on aIsModifier.
@@ -1095,25 +1158,14 @@ ResultType Hotkey::TextToKey(char *aText, char *aHotkeyName, bool aIsModifier)
 // Returns OK or FAIL.
 {
 	char error_text[512];
-	if (!aText || !*aText)
-	{
-		snprintf(error_text, sizeof(error_text), "\"%s\" is not a valid hotkey."
-			" A shifted hotkey such as ? should be defined as +/.", aHotkeyName);
-		if (g_script.mIsReadyToExecute) // Dynamically registered via the Hotkey command.
-		{
-			snprintfcat(error_text, sizeof(error_text), ERR_ABORT);
-			g_script.ScriptError(error_text);
-		}
-		else
-			MsgBox(error_text);
-		return FAIL;
-	}
-
 	vk_type temp_vk; // No need to initialize this one.
 	sc_type temp_sc = 0;
 	modLR_type modifiersLR = 0;
 	bool is_mouse = false;
 	int joystick_id;
+
+	HotkeyTypeType hotkey_type_temp;
+	HotkeyTypeType &hotkey_type = aThisHotkey ? aThisHotkey->mType : hotkey_type_temp; // Simplifies and reduces code size below.
 
 	if (!aIsModifier)
 	{
@@ -1122,7 +1174,8 @@ ResultType Hotkey::TextToKey(char *aText, char *aHotkeyName, bool aIsModifier)
 		if (cp && !stricmp(omit_leading_whitespace(cp), "Up"))
 		{
 			// This is a key-up hotkey, such as "Ctrl Up::".
-			mKeyUp = true;
+			if (aThisHotkey)
+				aThisHotkey->mKeyUp = true;
 			*cp = '\0'; // Terminate at the first space so that the word "up" is removed from further consideration by us and callers.
 		}
 	}
@@ -1133,6 +1186,10 @@ ResultType Hotkey::TextToKey(char *aText, char *aHotkeyName, bool aIsModifier)
 		{
 			if (temp_vk == VK_WHEEL_DOWN || temp_vk == VK_WHEEL_UP)
 			{
+				// In this case, aThisHotkey is NOT checked because it seems better to yield a double
+				// syntax error at load-time (once for Hotkey failure and again for "unrecognized action"
+				// than to show only the generic error message.  Note that the Hotkey command (at runtime)
+				// also uses the below to show a single error dialog.
 				snprintf(error_text, sizeof(error_text), "\"%s\" is not allowed as a prefix key.", aText);
 				if (g_script.mIsReadyToExecute) // Dynamically registered via the Hotkey command.
 				{
@@ -1147,7 +1204,8 @@ ResultType Hotkey::TextToKey(char *aText, char *aHotkeyName, bool aIsModifier)
 		else
 			// This is done here rather than at some later stage because we have access to the raw
 			// name of the suffix key (with any leading modifiers such as ^ omitted from the beginning):
-			mVK_WasSpecifiedByNumber = !strnicmp(aText, "VK", 2);
+			if (aThisHotkey)
+				aThisHotkey->mVK_WasSpecifiedByNumber = !strnicmp(aText, "VK", 2);
 		is_mouse = IsMouseVK(temp_vk);
 		if (modifiersLR & (MOD_LSHIFT | MOD_RSHIFT))
 			if (temp_vk >= 'A' && temp_vk <= 'Z')  // VK of an alpha char is the same as the ASCII code of its uppercase version.
@@ -1161,20 +1219,27 @@ ResultType Hotkey::TextToKey(char *aText, char *aHotkeyName, bool aIsModifier)
 		if (   !(temp_sc = TextToSC(aText))   )
 			if (   !(temp_sc = (sc_type)ConvertJoy(aText, &joystick_id, true))   )  // Is there a joystick control/button?
 			{
-				snprintf(error_text, sizeof(error_text), "\"%s\" is not a valid key name within a hotkey label.", aText);
-				if (g_script.mIsReadyToExecute) // Dynamically registered via the Hotkey command.
+				if (aThisHotkey)
 				{
-					snprintfcat(error_text, sizeof(error_text), ERR_ABORT);
+					// If it fails while aThisHotkey!=NULL, that should mean that this was called as
+					// a result of the Hotkey command rather than at loadtime.  This is because at 
+					// loadtime, the first call here (for validation, i.e. aThisHotkey==NULL) should have
+					// caught the error and converted the line into a non-hotkey (command), which in turn
+					// would make loadtime's second call to create the hotkey always succeed. Also, it's
+					// more appropriate to say "key name" than "hotkey" in this message because it's only
+					// showing the one bad key name when it's a composite hotkey such as "Capslock & y".
+					snprintf(error_text, sizeof(error_text), "\"%s\" is not a valid key name." ERR_ABORT, aText);
 					g_script.ScriptError(error_text);
 				}
-				else
-					MsgBox(error_text);
+				//else do not show an error in this case because the loader will attempt to interpret
+				// this line as a commmand.  If that too fails, it will show an "unrecognized action"
+				// dialog.
 				return FAIL;
 			}
 			else
 			{
 				++sJoyHotkeyCount;
-				mType = HK_JOYSTICK;
+				hotkey_type = HK_JOYSTICK;
 				temp_vk = (vk_type)joystick_id;  // 0 is the 1st joystick, 1 the 2nd, etc.
 				sJoystickHasHotkeys[joystick_id] = true;
 			}
@@ -1192,28 +1257,34 @@ scan code array).
 		}
 */
 	if (is_mouse)
-		mType = HK_MOUSE_HOOK;
+		hotkey_type = HK_MOUSE_HOOK;
 
 	if (aIsModifier)
 	{
-		mModifierVK = temp_vk;
-		mModifierSC = temp_sc;
-		if (!is_mouse && mType != HK_JOYSTICK)
-			mType = HK_KEYBD_HOOK;  // Always use the hook for keys that have a mModifierVK or SC
+		if (aThisHotkey)
+		{
+			aThisHotkey->mModifierVK = temp_vk;
+			aThisHotkey->mModifierSC = temp_sc;
+		}
+		if (!is_mouse && hotkey_type != HK_JOYSTICK)
+			hotkey_type = HK_KEYBD_HOOK;  // Always use the hook for keys that have a mModifierVK or SC
 	}
 	else
 	{
-		mVK = temp_vk;
-		mSC = temp_sc;
-		// Turn on any additional modifiers.  e.g. SHIFT to realize '#'.
-		// Fix for v1.0.37.03: To avoid using the keyboard hook for something like "+::", which in
-		// turn would allow the hotkey fire only for LShift+Equals rather than RShift+Equals, convert
-		// modifiers from left-right to neutral.  But exclude right-side modifiers (except RWin) so that
-		// things like AltGr are more precisely handled (the implications of this policy could use
-		// further review).  Currently, right-Alt (via AltGr) is the only possible right-side key.
-		mModifiers |= ConvertModifiersLR(modifiersLR & (MOD_RWIN|MOD_LWIN|MOD_LCONTROL|MOD_LALT|MOD_LSHIFT));
-		mModifiersLR |= (modifiersLR & (MOD_RSHIFT|MOD_RALT|MOD_RCONTROL)); // Not MOD_RWIN since it belongs above.
-		if (!is_mouse && mType != HK_JOYSTICK)
+		if (aThisHotkey)
+		{
+			aThisHotkey->mVK = temp_vk;
+            aThisHotkey->mSC = temp_sc;
+			// Turn on any additional modifiers.  e.g. SHIFT to realize '#'.
+			// Fix for v1.0.37.03: To avoid using the keyboard hook for something like "+::", which in
+			// turn would allow the hotkey fire only for LShift+Equals rather than RShift+Equals, convert
+			// modifiers from left-right to neutral.  But exclude right-side modifiers (except RWin) so that
+			// things like AltGr are more precisely handled (the implications of this policy could use
+			// further review).  Currently, right-Alt (via AltGr) is the only possible right-side key.
+			aThisHotkey->mModifiers |= ConvertModifiersLR(modifiersLR & (MOD_RWIN|MOD_LWIN|MOD_LCONTROL|MOD_LALT|MOD_LSHIFT));
+			aThisHotkey->mModifiersLR |= (modifiersLR & (MOD_RSHIFT|MOD_RALT|MOD_RCONTROL)); // Not MOD_RWIN since it belongs above.
+		}
+		if (!is_mouse && hotkey_type != HK_JOYSTICK)
 		{
 			// For these, if it's Win9x, attempt to register them normally to give the user at least
 			// some partial functiality.  The key will probably be toggled to its opposite state when
@@ -1234,15 +1305,14 @@ scan code array).
 				// would be the only hotkeys using it.  If there is ever a need, a new hotkey
 				// prefix or option can be added someday to handle this, perhaps #LinkPairedKeys
 				// to avoid having yet another reserved hotkey prefix/symbol.
-				if (!mVK)
-					mVK = sc_to_vk(temp_sc);
+				if (aThisHotkey && !aThisHotkey->mVK)
+					aThisHotkey->mVK = sc_to_vk(temp_sc);
 			}
 			else // OS isn't Win9x.
 			{
-				if (mType != HK_MOUSE_HOOK) // Added in v1.0.39 to make a hotkey such as "LButton & LCtrl" install the mouse hook.
+				if (aThisHotkey && hotkey_type != HK_MOUSE_HOOK) // Added in v1.0.39 to make a hotkey such as "LButton & LCtrl" install the mouse hook.
 				{
-					
-					switch (mVK)
+					switch (aThisHotkey->mVK)
 					{
 					case 0: // Scan codes having no available virtual key must always be handled by the hook.
 					// In addition, to support preventing the toggleable keys from toggling, handle those
@@ -1259,7 +1329,7 @@ scan code array).
 					case VK_RSHIFT:
 					case VK_LMENU:
 					case VK_RMENU:
-						mType = HK_KEYBD_HOOK;
+						hotkey_type = HK_KEYBD_HOOK;
 						break;
 					}
 				}

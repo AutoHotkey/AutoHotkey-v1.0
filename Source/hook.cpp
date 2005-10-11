@@ -457,7 +457,9 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 	if (aHook == g_KeybdHook)
 	{
 		// The below DISGUISE events are done only after ignored events are returned from, above.
-		// In other words, only non-ignored events (usually physical) are disguised.
+		// In other words, only non-ignored events (usually physical) are disguised.  The Send {Blind}
+		// method is designed with this in mind, since it's more concerned that simulated keystrokes
+		// don't get disguised (i.e. it seems best to disguise physical keystrokes even during {Blind} mode).
 		// Do this only after the above because the SuppressThisKey macro relies
 		// on the vk variable being available.  It also relies upon the fact that sc has
 		// already been properly determined. Also, in rare cases it may be necessary to disguise
@@ -2706,7 +2708,7 @@ void UpdateKeybdState(KBDLLHOOKSTRUCT &aEvent, const vk_type aVK, const sc_type 
 
 	// If this function was called from SuppressThisKey(), these comments apply:
 	// Currently SuppressThisKey is only called with a modifier in the rare case
-	// when disguise_next_lwin/rwin_up is in effect.  But there may be other cases in the
+	// when sDisguiseNextLWinUp/RWinUp is in effect.  But there may be other cases in the
 	// future, so we need to make sure the physical state of the modifiers is updated
 	// in our tracking system even though the key is being suppressed:
 	modLR_type modLR;
@@ -3606,8 +3608,9 @@ void ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, HookType
 
 void AddRemoveHooks(HookType aHooksToBeActive)
 // Caller has already ensured that OS isn't Win9x.
-// Caller is always the main thread, never the hook thread (since this function is not thread-safe).
 // Caller has ensured that any static memory arrays used by the hook functions have been allocated.
+// Caller is always the main thread, never the hook thread because this function isn't thread-safe
+// and it also calls PeekMessage() for the main thread.
 {
 	HookType hooks_currently_active = GetActiveHooks();
 	if (aHooksToBeActive == hooks_currently_active) // It's already in the right state.
@@ -3624,17 +3627,18 @@ void AddRemoveHooks(HookType aHooksToBeActive)
 		// a previous call to AddRemoveHooks() timed out while waiting for the hook thread to exit,
 		// which seems far too rare to add extra code for.
 
-		// It's not necessary to link to the multi-threading C runtime (which bloats that code by 3.5 KB
+		// CreateThread() vs. _beginthread():
+		// It's not necessary to link to the multi-threading C runtime (which bloats the code by 3.5 KB
 		// compressed) as long as the new thread doesn't call any C-library functions that aren't thread-safe
 		// (in addition to the C functions that obviously use static data, calls to things like malloc(),
 		// new, and other memory management functions probably aren't thread-safe unless the multi-threaded
 		// library is used). The memory leak described in MSDN for ExitThread() applies only to the
-		// multi-threaded libraries, so it isn't a concern either.
+		// multi-threaded libraries (multiple sources confirm this), so it isn't a concern either.
 		//
 		// The hooks are designed to make miminmal use of C-library calls, currently calling only things
 		// like memcpy() and strlen(), which are thread safe in the single-threaded library (according to
-		// its source code).  However, the hooks may indirectly call other library functions via calls to
-		// KeyEvent() and other functions, which has already been reviewed for thread-safety but needs
+		// their source code).  However, the hooks may indirectly call other library functions via calls
+		// to KeyEvent() and other functions, which has already been reviewed for thread-safety but needs
 		// to be kept in mind as changes are made in the future.
 		//
 		// CreateThread's second parameter is the new thread's initial stack size. The stack will grow
@@ -3713,12 +3717,36 @@ void AddRemoveHooks(HookType aHooksToBeActive)
 	// hook state being in effect immediately.  For example, the Input command installs the keyboard
 	// hook and it's more maintainable if we ensure the status is correct prior to returning.
 	DWORD exit_code;
-	for (i = 0; i < 50; ++i) // For our caller, wait for hook thread to update the status of the hooks.
+	MSG msg;
+	bool success;
+	for (success = true, i = 0; i < 50; ++i) // For our caller, wait for hook thread to update the status of the hooks.
 	{
 		if (aHooksToBeActive) // Wait for the hook thread to change the hook state.
 		{
-			if (aHooksToBeActive == GetActiveHooks())
+			// In this mode, the hook thread knows we want a report of success or failure via message.
+			if (PeekMessage(&msg, NULL, AHK_CHANGE_HOOK_STATE, AHK_CHANGE_HOOK_STATE, PM_REMOVE))
+			{
+				if (!msg.wParam) // The hook thread indicated failure.
+				{
+					// This is done so that the MsgBox warning won't be shown until after these loops finish,
+					// which seems safer to prevent any parts of the script from running as a result
+					// the MsgBox pumping hotkey messages and such, which could result in a script
+					// subroutine launching while we're in here:
+					success = false;
+					if (!GetActiveHooks()) // The failure is such that no hooks are now active, so the hook thread will exit.
+					{
+						// Convert this loop into the mode that waits for the hook thread to exit.
+						// This allows the thead handle to be closed and the memory to be freed.
+						aHooksToBeActive = 0;
+						continue;
+					}
+					// It failed but one hook is still active, so we're done waiting.  Fall through to "break" below.
+				}
+				//else it successfully changed the state.
+				// In either case, we're done waiting:
 				break;
+			}
+			//else no AHK_CHANGE_HOOK_STATE message has arrived yet, so keep waiting until it does or timeout occurs.
 		}
 		else // Since the hook thread has been asked to deactivate both hooks, wait for the thread to terminate.
 		{
@@ -3736,6 +3764,21 @@ void AddRemoveHooks(HookType aHooksToBeActive)
 	}
 	// If the above loop timed out without the hook thread exiting (if it was asked to exit), sThreadHandle
 	// is left as non-NULL to reflect this condition.
+
+	// For maintainability, it seems best to display the MsgBox only at the very end.
+	if (!success)
+	{
+		// Prevent hotkeys and other subroutines from running (which could happen via MsgBox's message pump)
+		// to avoid the possibility that the script will continue to call this function recursively, resulting
+		// in an infinite stack of MsgBoxes. This approach is similar to that used in Hotkey::PerformID()
+		// for the #MaxHotkeysPerInterval warning dialog:
+		g_AllowInterruption = false; 
+		// Below is a generic message to reduce code size.  Failure is rare, but has been known to happen when
+		// certain types of games are running).
+		MsgBox("Warning: The keyboard and/or mouse hook could not be activated; "
+			"some parts of the script will not function.");
+		g_AllowInterruption = true;
+	}
 }
 
 
@@ -3745,7 +3788,7 @@ DWORD WINAPI HookThreadProc(LPVOID aUnused)
 // when both hooks are deactivated.
 {
 	MSG msg;
-	bool failure;
+	bool success;
 
 	for (;;) // Infinite loop for pumping messages in this thread. This thread will exit via any use of "return" below.
 	{
@@ -3761,16 +3804,16 @@ DWORD WINAPI HookThreadProc(LPVOID aUnused)
 
 		case AHK_CHANGE_HOOK_STATE:
 			// In this case, wParam contains the bitwise set of hooks that should be active.
-			failure = false;
+			success = true;
 			if (msg.wParam & HOOK_KEYBD) // Activate the keyboard hook (if it isn't already).
 			{
-				if (!g_KeybdHook)
+				if (!g_KeybdHook) // The creator of this thread has already ensured that OS isn't Win9x.
 				{
 					// v1.0.39: Reset *before* hook is installed to avoid any chance that events can
 					// flow into the hook prior to the reset:
 					ResetHook(false, HOOK_KEYBD, true);
 					if (   !(g_KeybdHook = SetWindowsHookEx(WH_KEYBOARD_LL, LowLevelKeybdProc, g_hInstance, 0))   )
-						failure = true;
+						success = false;
 				}
 			}
 			else // Caller specified that the keyboard hook is to be deactivated (if it isn't already).
@@ -3780,11 +3823,11 @@ DWORD WINAPI HookThreadProc(LPVOID aUnused)
 
 			if (msg.wParam & HOOK_MOUSE) // Activate the mouse hook (if it isn't already).
 			{
-				if (!g_MouseHook)
+				if (!g_MouseHook) // The creator of this thread has already ensured that OS isn't Win9x.
 				{
 					ResetHook(false, HOOK_MOUSE, true);
 					if (   !(g_MouseHook = SetWindowsHookEx(WH_MOUSE_LL, LowLevelMouseProc, g_hInstance, 0))   )
-						failure = true;
+						success = false;
 				}
 			}
 			else // Caller specified that the keyboard hook is to be deactivated (if it isn't already).
@@ -3792,16 +3835,21 @@ DWORD WINAPI HookThreadProc(LPVOID aUnused)
 					if (UnhookWindowsHookEx(g_MouseHook))
 						g_MouseHook = NULL;
 
-			if (failure) // The creator of this thread has already ensured that OS isn't Win9x.
-				// Don't display MsgBox here because although MsgBox's own message pump would
-				// service the other hook (if it's active), it's best to avoid any blocking
-				// calls here so that this event loop will continue to run.  For example,
-				// the script or OS might ask this thread to terminate, which it couldn't do
-				// cleanly if it was in a blocking call.
-				SendMessage(g_hWnd, AHK_HOOK_FAIL, 0, 0);
+			// Upon failure, don't display MsgBox here because although MsgBox's own message pump would
+			// service the hook that didn't fail (if it's active), it's best to avoid any blocking calls
+			// here so that this event loop will continue to run.  For example, the script or OS might
+			// ask this thread to terminate, which it couldn't do cleanly if it was in a blocking call.
+			// Instead, send a reply back to the caller.
+			// It's safe to post directly to thread because the creator of this thread should be
+			// explicitly waiting for this message (so there's no chance that a MsgBox msg pump
+			// will discard the message unless the caller has timed out, which seems impossible
+			// in this case).
+			if (msg.wParam) // The caller wants a reply only when it didn't ask us to terminate via deactiving both hooks.
+				PostThreadMessage(g_MainThreadID, AHK_CHANGE_HOOK_STATE, success, 0);
+			//else this is WM_QUIT or the caller wanted this thread to terminate.  Send no reply.
 
-			if (!(g_KeybdHook || g_MouseHook)) // Both hooks are inactive, so this thread is no longer needed.
-				return 0; // This automatically calls ExitThread().
+			if (!(g_KeybdHook || g_MouseHook)) // Both hooks are inactive (for whatever reason).
+				return 0; // Thread is no longer needed. The "return" automatically calls ExitThread().
 				// 1) Due to this thread's non-GUI nature, there doesn't seem to be any need to call
 				// the somewhat mysterious PostQuitMessage() here.
 				// 2) For thread safety and maintainability, it seems best to have the caller take
