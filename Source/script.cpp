@@ -830,13 +830,13 @@ LineNumberType Script::LoadFromFile()
 "; and it launches a new Notepad window (or activates an existing one).  To\n"
 "; try out these hotkeys, run AutoHotkey again, which will load this file.\n"
 "\n"
-"#z::Run, www.autohotkey.com\n"
+"#z::Run www.autohotkey.com\n"
 "\n"
 "^!n::\n"
-"IfWinExist, Untitled - Notepad\n"
+"IfWinExist Untitled - Notepad\n"
 "\tWinActivate\n"
 "else\n"
-"\tRun, Notepad\n"
+"\tRun Notepad\n"
 "return\n"
 "\n"
 "\n"
@@ -1634,9 +1634,13 @@ examine_line:
 				ltrim(hotkey_flag); // Has already been rtrimmed by GetLine().
 				rtrim(buf); // Trim the new substring inside of buf (due to temp termination). It has already been ltrimmed.
 				// v1.0.40: Check if this is a remap rather than hotkey:
-				if (*hotkey_flag // This hotkey's action is on the same line as its label.
-					&& (remap_dest_vk = TextToVK(cp = Hotkey::TextToModifiers(hotkey_flag, NULL))) // And the action appears to be a remap destination rather than a command.
-					&& (remap_source_vk = TextToVK(cp1 = Hotkey::TextToModifiers(buf, NULL))))
+				if (   *hotkey_flag // This hotkey's action is on the same line as its label.
+					&& (remap_source_vk = TextToVK(cp1 = Hotkey::TextToModifiers(buf, NULL)))
+					&& (remap_dest_vk = TextToVK(cp = Hotkey::TextToModifiers(hotkey_flag, NULL)))   ) // And the action appears to be a remap destination rather than a command.
+					// Fix for v1.0.40.01: Since remap_dest_vk is also used as the flag to indicate whether
+					// this line qualifies as a remap, must do it last in the statement above.  Otherwise,
+					// the statement might short-circuit and leave remap_dest_vk as non-zero even though
+					// the line shouldn't be a remap.
 				{
 					// These will be ignored in other stages if it turns out not to be a remap later below:
 					remap_source_is_mouse = IsMouseVK(remap_source_vk);
@@ -1855,7 +1859,7 @@ continue_main_loop: // This method is used in lieu of "continue" for performance
 				buf_length = strlen(buf);
 				goto examine_line; // Have the main loop process the contents of "buf" as though it came in from the script.
 			case 2: // Stage 2.
-				strcpy(buf, "-1");
+				strcpy(buf, "-1"); // Copied into a writable buffer for maintainability: AddLine() might rely on this.
 				// The primary reason for adding Key/MouseDelay -1 is to minimize the chance that a one of
 				// these hotkey threads will get buried under some other thread such as a timer, which
 				// would disrupt the remapping if #MaxThreadsPerHotkey is at its default of 1.
@@ -1978,7 +1982,7 @@ size_t Script::GetLine(char *aBuf, int aMaxCharsToRead, bool aInContinuationSect
 	size_t aBuf_length = 0;
 #ifdef AUTOHOTKEYSC
 	if (!aBuf || !aMemFile) return -1;
-	if (aMaxCharsToRead <= 0) return -1; // We're signaling to caller that the end of the memory file has been reached.
+	if (aMaxCharsToRead < 1) return -1; // We're signaling to caller that the end of the memory file has been reached.
 	// Otherwise, continue reading characters from the memory file until either a newline is
 	// reached or aMaxCharsToRead have been read:
 	// Track "i" separately from aBuf_length because we want to read beyond the bounds of the memory file.
@@ -2007,7 +2011,7 @@ size_t Script::GetLine(char *aBuf, int aMaxCharsToRead, bool aInContinuationSect
 	aBuf[aBuf_length] = '\0';
 #else
 	if (!aBuf || !fp) return -1;
-	if (aMaxCharsToRead <= 0) return 0;
+	if (aMaxCharsToRead < 1) return 0;
 	if (feof(fp)) return -1; // Previous call to this function probably already read the last line.
 	if (fgets(aBuf, aMaxCharsToRead, fp) == NULL) // end-of-file or error
 	{
@@ -2300,7 +2304,7 @@ inline ResultType Script::IsDirective(char *aBuf)
 		if (parameter)
 		{
 			g_MaxHotkeysPerInterval = ATOI(parameter);  // parameter was set to the right position by the above macro
-			if (g_MaxHotkeysPerInterval <= 0) // sanity check
+			if (g_MaxHotkeysPerInterval < 1) // sanity check
 				g_MaxHotkeysPerInterval = 1;
 		}
 		return CONDITION_TRUE;
@@ -6376,7 +6380,7 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, int aInsertPos, bool 
 	// the last item in the main list.  Above has already ensured that the main list is large enough
 	// to accept all items in the lazy list.
 	for (i = lazy_var_count - 1, target_name = var[var_count - 1]->mName
-		; i >= 0 && stricmp(target_name, lazy_var[i]->mName) < 0
+		; i > -1 && stricmp(target_name, lazy_var[i]->mName) < 0
 		; --i);
 	// Above is a self-contained loop.
 	// Now do a separate loop to append (in the *correct* order) anything found above.
@@ -6385,7 +6389,7 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, int aInsertPos, bool 
 	lazy_var_count = i + 1; // The number of items that remain after moving out those that qualified.
 
 	// This will have zero iterations if the above already moved them all:
-	for (insert_pos = var + var_count, i = lazy_var_count - 1; i >= 0; --i)
+	for (insert_pos = var + var_count, i = lazy_var_count - 1; i > -1; --i)
 	{
 		// Modified binary search that relies on the fact that caller has ensured a match will never
 		// be found in the main list for each item in the lazy list:
@@ -7292,7 +7296,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 		// bother checking because this quasi-thread will stay non-interruptible until it finishes.
 		// v1.0.38.04: If g.ThreadIsCritical==true, no need to check or accumulate g.UninterruptedLineCount
 		// because the script is now in charge of this thread's interruptibility.
-		if (!g.AllowThreadToBeInterrupted && !g.ThreadIsCritical && g_script.mUninterruptedLineCountMax >= 0) // Ordered for short-circuit performance.
+		if (!g.AllowThreadToBeInterrupted && !g.ThreadIsCritical && g_script.mUninterruptedLineCountMax > -1) // Ordered for short-circuit performance.
 		{
 			// Note that there is a timer that handles the UninterruptibleTime setting, so we don't
 			// have handle that setting here.  But that timer is killed by the DISABLE_UNINTERRUPTIBLE
@@ -7311,8 +7315,8 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 		// The below handles the message-loop checking regardless of whether
 		// aMode is ONLY_ONE_LINE (i.e. recursed) or not (i.e. we're using
 		// the for-loop to execute the script linearly):
-		if ((g.LinesPerCycle >= 0 && g_script.mLinesExecutedThisCycle >= g.LinesPerCycle)
-			|| (g.IntervalBeforeRest >= 0 && tick_now - g_script.mLastScriptRest >= (DWORD)g.IntervalBeforeRest))
+		if ((g.LinesPerCycle > -1 && g_script.mLinesExecutedThisCycle >= g.LinesPerCycle)
+			|| (g.IntervalBeforeRest > -1 && tick_now - g_script.mLastScriptRest >= (DWORD)g.IntervalBeforeRest))
 			// Sleep in between batches of lines, like AutoIt, to reduce the chance that
 			// a maxed CPU will interfere with time-critical apps such as games,
 			// video capture, or video playback.  Note: MsgSleep() will reset
@@ -8071,7 +8075,7 @@ inline ResultType Line::EvaluateCondition()
 	case ACT_IFLESSOREQUAL:
 		DETERMINE_NUMERIC_TYPES
 		IF_EITHER_IS_NON_NUMERIC
-			if_condition = STRING_COMPARE <= 0;
+			if_condition = STRING_COMPARE < 1;
 		else IF_EITHER_IS_FLOAT  // It might perform better to only do float conversions & math when necessary.
 			if_condition = ATOF(ARG1) <= ATOF(ARG2);
 		else
@@ -8089,7 +8093,7 @@ inline ResultType Line::EvaluateCondition()
 	case ACT_IFGREATEROREQUAL:
 		DETERMINE_NUMERIC_TYPES
 		IF_EITHER_IS_NON_NUMERIC
-			if_condition = STRING_COMPARE >= 0;
+			if_condition = STRING_COMPARE > -1;
 		else IF_EITHER_IS_FLOAT  // It might perform better to only do float conversions & math when necessary.
 			if_condition = ATOF(ARG1) >= ATOF(ARG2);
 		else
@@ -9173,7 +9177,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			// otherwise, the loading validation would have prevented the script from loading.
 			wait_indefinitely = false;
 			sleep_duration = (int)(ATOF(mActionType == ACT_CLIPWAIT ? ARG1 : ARG3) * 1000); // Can be zero.
-			if (sleep_duration <= 0)
+			if (sleep_duration < 1)
 				// Waiting 500ms in place of a "0" seems more useful than a true zero, which
 				// doens't need to be supported because it's the same thing as something like
 				// "IfWinExist".  A true zero for clipboard would be the same as
@@ -9466,11 +9470,11 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		// "Thread Interrupt" settings.
 		// Now that the thread's interruptibility has been explicitly set, the script is in charge
 		// of managing this thread's interruptibility, thus kill the timer unconditionally:
-		KILL_UNINTERRUPTIBLE_TIMER  // Done here for maintainability and performance, even though UninteruptibleTimeout() will also kill it.
+		KILL_UNINTERRUPTIBLE_TIMER  // Done here for maintainability and performance, even though UninterruptibleTimeout() will also kill it.
 		// Although the above kills the timer, it does not remove any WM_TIMER message that it might already
 		// have placed into the queue.  And since we have other types of timers, purging the queue of all
 		// WM_TIMERS would be too great a loss of maintainability and reliability.  To solve this,
-		// UninteruptibleTimeout() checks the value of g.ThreadIsCritical.
+		// UninterruptibleTimeout() checks the value of g.ThreadIsCritical.
 		return OK;
 
 	case ACT_THREAD:
@@ -9485,6 +9489,9 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 				g_script.mUninterruptibleTime = ATOI(ARG2);  // 32-bit (for compatibility with DWORDs returned by GetTickCount).
 			if (*ARG2)
 				g_script.mUninterruptedLineCountMax = ATOI(ARG3);  // 32-bit also, to help performance (since huge values seem unnecessary).
+			break;
+		case THREAD_CMD_NOTIMERS:
+			g.AllowTimers = (*ARG2 && ATOI64(ARG2) == 0);
 			break;
 		// If invalid command, do nothing since that is always caught at load-time unless the command
 		// is in a variable reference (very rare in this case).
@@ -10222,14 +10229,19 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			result = MsgBox(ARG3, ATOI(ARG1), ARG2, ATOF(ARG4), dialog_owner); // dialog_owner passed via parameter to avoid internally-displayed MsgBoxes from being affected by script-thread's owner setting.
 		// Above allows backward compatibility with AutoIt2's param ordering while still
 		// permitting the new method of allowing only a single param.
-		if (!result)
-			// It will fail if the text is too large (say, over 150K or so on XP), but that
-			// has since been fixed by limiting how much it tries to display.
-			// If there were too many message boxes displayed, it will already have notified
-			// the user of this via a final MessageBox dialog, so our call here will
-			// not have any effect.  The below only takes effect if MsgBox()'s call to
-			// MessageBox() failed in some unexpected way:
-			LineError("The MsgBox could not be displayed." ERR_ABORT);
+		// v1.0.40.01: Rather than displaying another MsgBox in response to a failed attempt to display
+		// a MsgBox, it seems better (less likely to cause trouble) just to abort the thread.  This also
+		// solves a double-msgbox issue when the maximum number of MsgBoxes is reached.  In addition, the
+		// max-msgbox limit is the most common reason for failure, in which case a warning dialog has
+		// already been displayed, so there is no need to display another:
+		//if (!result)
+		//	// It will fail if the text is too large (say, over 150K or so on XP), but that
+		//	// has since been fixed by limiting how much it tries to display.
+		//	// If there were too many message boxes displayed, it will already have notified
+		//	// the user of this via a final MessageBox dialog, so our call here will
+		//	// not have any effect.  The below only takes effect if MsgBox()'s call to
+		//	// MessageBox() failed in some unexpected way:
+		//	LineError("The MsgBox could not be displayed." ERR_ABORT);
 		return result ? OK : FAIL;
 	}
 
@@ -12165,7 +12177,7 @@ double_deref:
 					// first one's conversion must occur prior to calling BackupFunctionVars().  In addition, there
 					// might be other interdepencies between formals and actuals if a function is calling itself
 					// recursively.
-					for (j = func.mParamCount - 1, s = stack_count; j >= 0; --j) // For each formal parameter (reverse order to mirror the nature of the stack).
+					for (j = func.mParamCount - 1, s = stack_count; j > -1; --j) // For each formal parameter (reverse order to mirror the nature of the stack).
 					{
 						if (j < actual_param_count) // This formal has an actual on the stack.
 						{
@@ -12209,7 +12221,7 @@ double_deref:
 				// validation has ensured that this number is always less than or equal to the number of
 				// parameters formally defined by the function.  Therefore, there should never be any leftover
 				// params on the stack after this is done:
-				for (j = func.mParamCount - 1; j >= 0; --j) // For each formal parameter (reverse order to mirror the nature of the stack).
+				for (j = func.mParamCount - 1; j > -1; --j) // For each formal parameter (reverse order to mirror the nature of the stack).
 				{
 					FuncParam &this_formal_param = func.mParam[j]; // For performance and convenience.
 					if (j >= actual_param_count) // No actual to go with it (should be possible only if the parameter is optional or has a default value).
@@ -12658,8 +12670,8 @@ double_deref:
 				case SYM_NOTEQUAL:  this_token.value_int64 = STRING_COMPARE ? 1 : 0; break;
 				case SYM_GT:        this_token.value_int64 = STRING_COMPARE > 0; break;
 				case SYM_LT:        this_token.value_int64 = STRING_COMPARE < 0; break;
-				case SYM_GTOE:      this_token.value_int64 = STRING_COMPARE >= 0; break;
-				case SYM_LTOE:      this_token.value_int64 = STRING_COMPARE <= 0; break;
+				case SYM_GTOE:      this_token.value_int64 = STRING_COMPARE > -1; break;
+				case SYM_LTOE:      this_token.value_int64 = STRING_COMPARE < 1; break;
 
 				case SYM_CONCAT:
 					// Even if the left or right is "", must copy the result to temporary memory, at least
@@ -13227,7 +13239,7 @@ VarSizeType Script::GetBatchLines(char *aBuf)
 	// The BatchLine value can be either a numerical string or a string that ends in "ms".
 	char buf[256];
 	char *target_buf = aBuf ? aBuf : buf;
-	if (g.IntervalBeforeRest >= 0) // Have this new method take precedence, if it's in use by the script.
+	if (g.IntervalBeforeRest > -1) // Have this new method take precedence, if it's in use by the script.
 		sprintf(target_buf, "%dms", g.IntervalBeforeRest); // Not snprintf().
 	else
 		ITOA64(g.LinesPerCycle, target_buf);

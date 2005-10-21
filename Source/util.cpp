@@ -382,7 +382,7 @@ int snprintf(char *aBuf, int aBufSize, const char *aFormat, ...)
 {
 	// The following should probably never be changed without a full suite of tests to ensure the
 	// change doesn't cause the finicky _vsnprintf() to break something.
-	if (aBufSize <= 0 || !aBuf || !aFormat) return 0; // It's called from so many places that the extra checks seem warranted.
+	if (aBufSize < 1 || !aBuf || !aFormat) return 0; // It's called from so many places that the extra checks seem warranted.
 	va_list ap;
 	va_start(ap, aFormat);
 	// Must use _vsnprintf() not _snprintf() because of the way va_list is handled:
@@ -393,7 +393,7 @@ int snprintf(char *aBuf, int aBufSize, const char *aFormat, ...)
 	// is now present in aBuf.
 	if (result == aBufSize)
 		--result;
-	return result >= 0 ? result : aBufSize - 1; // Never return a negative value.  See comment under function definition, above.
+	return result > -1 ? result : aBufSize - 1; // Never return a negative value.  See comment under function definition, above.
 }
 
 
@@ -415,7 +415,7 @@ int snprintfcat(char *aBuf, int aBufSize, const char *aFormat, ...)
 	// change doesn't cause the finicky _vsnprintf() to break something.
 	size_t length = strlen(aBuf);
 	int space_remaining = (int)(aBufSize - length); // Must cast to int to avoid loss of negative values.
-	if (space_remaining <= 0) // Can't even terminate it (no room) so just indicate that no characters were copied.
+	if (space_remaining < 1) // Can't even terminate it (no room) so just indicate that no characters were copied.
 		return 0;
 	aBuf += length;  // aBuf is now the spot where the new text will be written.
 	va_list ap;
@@ -423,7 +423,7 @@ int snprintfcat(char *aBuf, int aBufSize, const char *aFormat, ...)
 	// Must use vsnprintf() not snprintf() because of the way va_list is handled:
 	int result = _vsnprintf(aBuf, (size_t)space_remaining, aFormat, ap); // "returns the number of characters written, not including the terminating null character, or a negative value if an output error occurs"
 	aBuf[space_remaining - 1] = '\0'; // Confirmed through testing: Must terminate at this exact spot because _vsnprintf() doesn't always do it.
-	return result >= 0 ? result : space_remaining - 1; // Never return a negative value.  See comment under function definition, above.
+	return result > -1 ? result : space_remaining - 1; // Never return a negative value.  See comment under function definition, above.
 }
 
 
@@ -479,7 +479,7 @@ int strlicmp(char *aBuf1, char *aBuf2, UINT aLength1, UINT aLength2)
 char *strrstr(char *aStr, char *aPattern, bool aCaseSensitive, int aOccurrence)
 // Returns NULL if not found, otherwise the address of the found string.
 {
-	if (aOccurrence <= 0) return NULL;
+	if (aOccurrence < 1) return NULL;
 	size_t aStr_length = strlen(aStr);
 	if (!*aPattern)
 		// The empty string is found in every string, and since we're searching from the right, return
@@ -1095,7 +1095,7 @@ unsigned __int64 GetFileSize64(HANDLE aFileHandle)
 char *GetLastErrorText(char *aBuf, int aBufSize)
 // aBufSize is an int to preserve any negative values the caller might pass in.
 {
-	if (aBufSize <= 0)
+	if (aBufSize < 1)
 		return aBuf;
 	if (aBufSize == 1)
 	{
@@ -1325,7 +1325,7 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, i
 	// Must use ExtractIcon() if either of the following is true:
 	// 1) Caller gave an explicit icon index, i.e. it wants us to use ExtractIcon() even for the first icon.
 	// 2) The target file is an EXE or DLL (LoadImage() is documented not to work on those file types).
-	bool ExtractIcon_was_used = aIconIndex >= 0 || (file_ext && (!stricmp(file_ext, "exe") || !stricmp(file_ext, "dll")));
+	bool ExtractIcon_was_used = aIconIndex > -1 || (file_ext && (!stricmp(file_ext, "exe") || !stricmp(file_ext, "dll")));
 	if (ExtractIcon_was_used)
 	{
 		aImageType = IMAGE_ICON;
@@ -1361,7 +1361,7 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, i
 	if (aUseGDIPlusIfAvailable && !(hinstGDI = LoadLibrary("gdiplus")))
 		aUseGDIPlusIfAvailable = false; // Override any original "true" value as a signal for the section below.
 
-	if (!hbitmap && aImageType >= 0 && !aUseGDIPlusIfAvailable)
+	if (!hbitmap && aImageType > -1 && !aUseGDIPlusIfAvailable)
 	{
 		// Since image hasn't yet be loaded and since the file type appears to be one supported by
 		// LoadImage() [icon/cursor/bitmap], attempt that first.  If it fails, fall back to the other

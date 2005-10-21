@@ -613,8 +613,14 @@ void Hotkey::TriggerJoyHotkeys(int aJoystickID, DWORD aButtonsNewlyDown)
 			continue;
 		// Determine if this hotkey's button is among those newly pressed.
 		if (   aButtonsNewlyDown & ((DWORD)0x01 << (hk.mSC - JOYCTRL_1))   )
-			// Post it to the thread because the message pump itself (not the WindowProc) will handle it:
-			PostMessage(NULL, WM_HOTKEY, (WPARAM)i, 0);
+			// Post it to the thread because the message pump itself (not the WindowProc) will handle it.
+			// UPDATE: Posting to NULL would have a risk of discarding the message if a MsgBox pump or
+			// pump other than MsgSleep() were running.  The only reason it doesn't is that this function
+			// is only ever called from MsgSleep(), which is careful to process all messages (at least
+			// those that aren't kept queued due to the message filter) prior to returning to its caller.
+			// But for maintainability, it seems best to change this to g_hWnd vs. NULL to make joystick
+			// hotkeys behave more like standard hotkeys:
+			PostMessage(g_hWnd, WM_HOTKEY, (WPARAM)i, 0);
 	}
 }
 
@@ -1040,7 +1046,10 @@ char *Hotkey::TextToModifiers(char *aText, Hotkey *aThisHotkey)
 	// the last character is never considered a modifier.  This allows a modifier symbol
 	// to double as the name of a suffix key.  It also fixes issues on layouts where the
 	// symbols +^#! do not require the shift key to be held down, such as the German layout.
-	for (marker = aText, key_left = false, key_right = false; marker[1]; ++marker)
+	//
+	// Improved for v1.0.40.01: The loop's condition now stops when it reaches a single space followed
+	// by the word "Up" so that hotkeys like "< up" and "+ up" are supported.
+	for (marker = aText, key_left = false, key_right = false; marker[1] && stricmp(marker + 1, " Up"); ++marker)
 	{
 		switch (*marker)
 		{

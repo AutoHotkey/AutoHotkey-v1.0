@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.40.00"
+#define NAME_VERSION "1.0.40.01"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -342,6 +342,7 @@ struct global_struct
 	bool DetectHiddenWindows; // Whether to detect the titles of hidden parent windows.
 	bool DetectHiddenText;    // Whether to detect the text of hidden child windows.
 	bool AllowThreadToBeInterrupted;  // Whether this thread can be interrupted by custom menu items, hotkeys, or timers.
+	bool AllowTimers; // v1.0.40.01 Whether new timer threads are allowed to start during this thread.
 	bool ThreadIsCritical; // Whether this thread has been marked (un)interruptible by the "Critical" command.
 	UCHAR DefaultMouseSpeed;
 	UCHAR CoordMode; // Bitwise collection of flags.
@@ -392,6 +393,7 @@ inline void global_init(global_struct &g)
 	g.LinesPerCycle = -1;
 	g.IntervalBeforeRest = 10;  // sleep for 10ms every 10ms
 	g.AllowThreadToBeInterrupted = true; // Separate from g_AllowInterruption so that they can have independent values.
+	g.AllowTimers = true;
 	g.ThreadIsCritical = false;
 	#define PRIORITY_MINIMUM INT_MIN
 	g.Priority = 0;

@@ -241,7 +241,7 @@ if (!g_MainTimerExists)\
 #define SET_UNINTERRUPTIBLE_TIMER \
 if (!g_UninterruptibleTimerExists)\
 	g_UninterruptibleTimerExists = SetTimer(g_hWnd, TIMER_ID_UNINTERRUPTIBLE \
-		, g_script.mUninterruptibleTime < 10 ? 10 : g_script.mUninterruptibleTime, UninteruptibleTimeout);
+		, g_script.mUninterruptibleTime < 10 ? 10 : g_script.mUninterruptibleTime, UninterruptibleTimeout);
 // v1.0.39 for above: Removed the call to ExitApp() upon failure.  See SET_MAIN_TIMER for details.
 
 #define KILL_UNINTERRUPTIBLE_TIMER \
@@ -285,43 +285,6 @@ if (g_MainTimerExists && KillTimer(g_hWnd, TIMER_ID_MAIN))\
 	g.AllowThreadToBeInterrupted = true;\
 	KILL_UNINTERRUPTIBLE_TIMER \
 }
-
-// Notes about the below macro:
-// Update for v1.0.38.04: Rather than setting AllowThreadToBeInterrupted unconditionally to
-// true, make it reflect the state of g.ThreadIsCritical.  This increases flexbility by allowing
-// threads to stay interrruptible even when they're displaying a dialog.  In such cases, an
-// incoming thread-event such as a hotkey will get routed to our MainWindowProc by the dialog's
-// message pump; and from there it will get reposted to our queue, and then get pumped again.
-// This bouncing effect may impact performance slightly but seems warranted to maintain
-// flexibility of the "Critical" command as well as its ability to buffer incoming events.
-//
-// If our thread's message queue has any message pending whose HWND member is NULL -- or even
-// normal messages which would be routed back to the thread by the WindowProc() -- clean them
-// out of the message queue before launching the dialog's message pump below.  That message pump
-// doesn't know how to properly handle such messages (it would either lose them or dispatch them
-// at times we don't want them dispatched).  But first ensure the current quasi-thread is
-// interruptible, since it's about to display a dialog so there little benefit (and a high cost)
-// to leaving it uninterruptible.  The "high cost" is that MsgSleep (our main message pump) would
-// filter out (leave queued) certain messages if the script were uninterruptible.  Then when it
-// returned, the dialog message pump below would start, and it would discard or misroute the
-// messages.
-// If this is not done, the following scenario would also be a problem:
-// A newly launched thread (in its period of uninterruptibility) displays a dialog.  As a consequence,
-// the dialog's message pump starts dispatching all messages.  If during this brief time (before the
-// thread becomes interruptible) a hotkey/hotstring/custom menu item/gui thread is dispatched to one
-// of our WindowProc's, and then posted to our thread via PostMessage(NULL,...), the item would be lost
-// because the dialog message pump discards messages that lack an HWND (since it doesn't know how to
-// dispatch them to a Window Proc).
-// GetQueueStatus() is used because unlike PeekMessage() or GetMessage(), it might not yield
-// our timeslice if the CPU is under heavy load, which would be good to improve performance here.
-#define DIALOG_PREP \
-{\
-	g.AllowThreadToBeInterrupted = !g.ThreadIsCritical;\
-	KILL_UNINTERRUPTIBLE_TIMER \
-	if (HIWORD(GetQueueStatus(QS_ALLEVENTS)))\
-		MsgSleep(-1);\
-}
-
 
 // See above comment about g.AllowThreadToBeInterrupted.
 // Also, must restore to true in this case since auto-exec section isn't run as a new thread

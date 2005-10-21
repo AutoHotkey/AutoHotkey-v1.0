@@ -315,6 +315,7 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 	int new_pos;
 	SYSTEMTIME st[2];
 	bool do_redraw_if_in_tab = false;
+	bool do_redraw_unconditionally = false;
 
 	switch(guicontrol_cmd)
 	{
@@ -330,16 +331,11 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 	case GUICONTROL_CMD_TEXT:
 		switch (control.type)
 		{
-		case GUI_CONTROL_EDIT:
-			// Note that TranslateLFtoCRLF() will return the original buffer we gave it if no translation
-			// is needed.  Otherwise, it will return a new buffer which we are responsible for freeing
-			// when done (or NULL if it failed to allocate the memory).
-			malloc_buf = (*aParam3 && (GetWindowLong(control.hwnd, GWL_STYLE) & ES_MULTILINE))
-				? TranslateLFtoCRLF(aParam3) : aParam3; // Automatic translation, as documented.
-			SetWindowText(control.hwnd,  malloc_buf ? malloc_buf : aParam3); // malloc_buf is checked again in case the mem alloc failed.
-			if (malloc_buf && malloc_buf != aParam3)
-				free(malloc_buf);
-			return OK;
+		case GUI_CONTROL_TEXT:
+		case GUI_CONTROL_GROUPBOX:
+			do_redraw_unconditionally = (control.attrib & GUI_CONTROL_ATTRIB_BACKGROUND_TRANS); // v1.0.40.01.
+			// Note that it isn't sufficient in this case to do InvalidateRect(control.hwnd, ...).
+			break;
 
 		case GUI_CONTROL_PIC:
 		{
@@ -456,10 +452,15 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 				control.attrib |= GUI_CONTROL_ATTRIB_ALTBEHAVIOR;
 			// Fix for v1.0.33.02: If this control belongs to a tab control and is visible (i.e. its page
 			// in the tab control is the current page), must redraw the tab control to get the picture/icon
-			// to update correctly:
-			do_redraw_if_in_tab = true;
+			// to update correctly.  v1.0.40.01: Pictures such as .Gif sometimes disappear (even if they're
+			// not in a tab control):
+			//do_redraw_if_in_tab = true;
+			do_redraw_unconditionally = true;
 			break; // Rather than return, continue on to do the redraw.
 		}
+
+		case GUI_CONTROL_BUTTON:
+			break;
 
 		case GUI_CONTROL_CHECKBOX:
 		case GUI_CONTROL_RADIO:
@@ -484,6 +485,23 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 			}
 			// else assume it's the text/caption for the item, so the default SetWindowText() action will be taken below.
 			break; // Fix for v1.0.35.01: Don't return, continue onward.
+
+		case GUI_CONTROL_LISTVIEW:
+			// Due to the fact that an LV's first col. can't be directly deleted and other complexities,
+			// this is not currently supported (also helps reduce code size).  The built-in function
+			// for modifying columns should be used instead.
+			return OK;
+
+		case GUI_CONTROL_EDIT:
+			// Note that TranslateLFtoCRLF() will return the original buffer we gave it if no translation
+			// is needed.  Otherwise, it will return a new buffer which we are responsible for freeing
+			// when done (or NULL if it failed to allocate the memory).
+			malloc_buf = (*aParam3 && (GetWindowLong(control.hwnd, GWL_STYLE) & ES_MULTILINE))
+				? TranslateLFtoCRLF(aParam3) : aParam3; // Automatic translation, as documented.
+			SetWindowText(control.hwnd,  malloc_buf ? malloc_buf : aParam3); // malloc_buf is checked again in case the mem alloc failed.
+			if (malloc_buf && malloc_buf != aParam3)
+				free(malloc_buf);
+			return OK;
 
 		case GUI_CONTROL_DATETIME:
 			if (guicontrol_cmd == GUICONTROL_CMD_CONTENTS)
@@ -613,10 +631,11 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 				SendMessage(control.hwnd, PBM_SETPOS, ATOI(aParam3), 0);
 			return OK; // Don't break since don't the other actions below to be taken.
 
-		case GUI_CONTROL_DROPDOWNLIST:
-		case GUI_CONTROL_COMBOBOX:
-		case GUI_CONTROL_LISTBOX:
-		case GUI_CONTROL_TAB:
+		default: // Namely the following:
+		//case GUI_CONTROL_DROPDOWNLIST:
+		//case GUI_CONTROL_COMBOBOX:
+		//case GUI_CONTROL_LISTBOX:
+		//case GUI_CONTROL_TAB:
 			if (control.type == GUI_CONTROL_COMBOBOX && guicontrol_cmd == GUICONTROL_CMD_TEXT)
 				break; // v1.30.38: Fall through to the SetWindowText() method, which works to set combo's edit field.
 			// Seems best not to do the below due to the extreme rarity of anyone wanting to change a
@@ -664,12 +683,6 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 				InvalidateRect(gui.mHwnd, NULL, TRUE); // TRUE = Seems safer to erase, not knowing all possible overlaps.
 			}
 			return OK; // Don't break since don't the other actions below to be taken.
-
-		case GUI_CONTROL_LISTVIEW:
-			// Due to the fact that an LV's first col. can't be directly deleted and other complexities,
-			// this is not currently supported (also helps reduce code size).  The built-in function
-			// for modifying columns should be used instead.
-			return OK;
 		} // inner switch() for control's type for contents/txt sub-commands.
 
 		if (do_redraw_if_in_tab) // Excludes the SetWindowText() below, but might need changing for future control types.
@@ -680,7 +693,9 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 		// 1) A control that uses the standard SetWindowText() method such as GUI_CONTROL_TEXT,
 		//    GUI_CONTROL_GROUPBOX, or GUI_CONTROL_BUTTON.
 		// 2) A radio or checkbox whose caption is being changed instead of its checked state.
-		SetWindowText(control.hwnd, aParam3);
+		SetWindowText(control.hwnd, aParam3); // Seems more reliable to set text before doing the redraw, plus it saves code size.
+		if (do_redraw_unconditionally)
+			break;
 		return OK;
 
 	case GUICONTROL_CMD_MOVE:
@@ -961,7 +976,8 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 	} // switch()
 
 	// If the above didn't return, it wants this check:
-	if ((tab_control = gui.FindTabControl(control.tab_control_index)) && IsWindowVisible(control.hwnd))
+	if (   do_redraw_unconditionally
+		|| (tab_control = gui.FindTabControl(control.tab_control_index)) && IsWindowVisible(control.hwnd)   )
 	{
 		GetWindowRect(control.hwnd, &rect); // Limit it to only that part of the client area that is receiving the rect.
 		MapWindowPoints(NULL, gui.mHwnd, (LPPOINT)&rect, 2); // Convert rect to client coordinates (not the same as GetClientRect()).
@@ -1726,7 +1742,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 	bool calc_height_later = aControlType == GUI_CONTROL_MONTHCAL || aControlType == GUI_CONTROL_LISTVIEW;
 	bool calc_control_height_from_row_count = !calc_height_later; // Set default.
 
-	if (opt.height == COORD_UNSPECIFIED && opt.row_count <= 0)
+	if (opt.height == COORD_UNSPECIFIED && opt.row_count < 1)
 	{
 		switch(aControlType)
 		{
@@ -1975,7 +1991,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 				// alternative, (2 * GetSystemMetrics(SM_CXEDGE)), seems to add a little
 				// too much width (namely 4 vs. 2).
 				GetTextMetrics(hdc, &tm);
-				extra_width += GetSystemMetrics(SM_CXMENUCHECK) + tm.tmAveCharWidth + 2;
+				extra_width += GetSystemMetrics(SM_CXMENUCHECK) + tm.tmAveCharWidth + 3;
 			}
 			if (opt.width != COORD_UNSPECIFIED) // Since a width was given, auto-expand the height via word-wrapping.
 				draw_format |= DT_WORDBREAK;
@@ -2008,7 +2024,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			}
 			if (opt.width == COORD_UNSPECIFIED || draw_width > opt.width)
 			{
-				opt.width = draw_width + extra_width;
+				opt.width = draw_width + extra_width;  // See comments above for why specified width is overridden.
 				if (aControlType == GUI_CONTROL_BUTTON)
 					// Allow room for border and an internal margin proportional to the font height.
 					// Button's border is 3D by default, so SM_CXEDGE vs. SM_CXBORDER is used?
@@ -2099,7 +2115,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 	/////////////////////////////////////////////////////////////////////////////////////////
 	if (aControlType == GUI_CONTROL_EDIT && !(style & ES_MULTILINE))
 	{
-		if (opt.row_count <= 0) // Determine the row-count to auto-detect multi-line vs. single-line.
+		if (opt.row_count < 1) // Determine the row-count to auto-detect multi-line vs. single-line.
 		{
 			GUI_SET_HDC
 			GetTextMetrics(hdc, &tm);
@@ -3198,7 +3214,7 @@ ResultType GuiType::ParseOptions(char *aOptions, bool &aSetLastFoundWindow, Togg
 					// Using ATOI() vs. atoi() seems okay in these cases since spaces are required
 					// between options:
 					owner_window_index = ATOI(next_option + 5) - 1;
-					if (owner_window_index >= 0 && owner_window_index < MAX_GUI_WINDOWS
+					if (owner_window_index > -1 && owner_window_index < MAX_GUI_WINDOWS
 						&& owner_window_index != mWindowIndex  // Window can't own itself!
 						&& g_gui[owner_window_index] && g_gui[owner_window_index]->mHwnd) // Relies on short-circuit boolean order.
 						mOwner = g_gui[owner_window_index]->mHwnd;
@@ -4972,7 +4988,7 @@ void GuiType::ControlAddContents(GuiControlType &aControl, char *aContent, int a
 			++next_field;
 			if (*next_field == mDelimiter)  // An item ending in two delimiters is a default (pre-selected) item.
 			{
-				if (item_index >= 0) // The item was successfully added.
+				if (item_index > -1) // The item was successfully added.
 				{
 					if (aControl.type == GUI_CONTROL_TAB)
 						// MSDN: "A tab control does not send a TCN_SELCHANGING or TCN_SELCHANGE notification message
@@ -5010,7 +5026,7 @@ void GuiType::ControlAddContents(GuiControlType &aControl, char *aContent, int a
 	}
 
 	// Have aChoice take precedence over any double-piped item(s) that appeared in the list:
-	if (aChoice <= 0)
+	if (aChoice < 1)
 		return;
 	--aChoice;
 
@@ -5689,13 +5705,13 @@ ResultType GuiType::ControlGetContents(Var &aOutputVar, GuiControlType &aControl
 			if (GetWindowLong(aControl.hwnd, GWL_STYLE) & (LBS_EXTENDEDSEL|LBS_MULTIPLESEL))
 			{
 				sel_count = SendMessage(aControl.hwnd, LB_GETSELCOUNT, 0, 0);
-				if (sel_count <= 0)  // <=0 to check for LB_ERR too (but it should be impossible in this case).
+				if (sel_count < 1)  // <=0 to check for LB_ERR too (but it should be impossible in this case).
 					return aOutputVar.Assign();
 				int *item = (int *)malloc(sel_count * sizeof(int)); // dynamic since there can be a very large number of items.
 				if (!item)
 					return aOutputVar.Assign();
 				sel_count = SendMessage(aControl.hwnd, LB_GETSELITEMS, (WPARAM)sel_count, (LPARAM)item);
-				if (sel_count <= 0)  // 0 or LB_ERR, but both these conditions should be impossible in this case.
+				if (sel_count < 1)  // 0 or LB_ERR, but both these conditions should be impossible in this case.
 				{
 					free(item);
 					return aOutputVar.Assign();
@@ -5943,7 +5959,7 @@ ResultType GuiType::SetCurrentFont(char *aOptions, char *aFontName)
 	int font_index = FindOrCreateFont(aOptions, aFontName, &sFont[mCurrentFontIndex], &color);
 	if (color != CLR_NONE) // Even if the above call failed, it returns a color if one was specified.
 		mCurrentColor = color;
-	if (font_index >= 0) // Success.
+	if (font_index > -1) // Success.
 	{
 		mCurrentFontIndex = font_index;
 		return OK;
@@ -6194,6 +6210,11 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 	if (g_MsgMonitorCount && !g.CalledByIsDialogMessageOrDispatch // Count is checked here to avoid function-call overhead.
 		&& MsgMonitor(hWnd, iMsg, wParam, lParam, NULL, msg_reply))
 		return msg_reply; // MsgMonitor has returned "true", indicating that this message should be omitted from further processing.
+	g.CalledByIsDialogMessageOrDispatch = false;
+	// Fixed for v1.0.40.01: The above line was added to resolve a case where our caller did make the value
+	// true but the message it sent us results in a recursive call to us (such as when the user resizes a
+	// window by dragging its borders: that apparently starts a loop in DefDlgProc that calls this
+	// function recursively).  This fixes OnMessage(0x24, "WM_GETMINMAXINFO") and probably others.
 	// Known limitation: If the above launched a thread but the thread didn't cause it turn return,
 	// and iMsg is something like AHK_GUI_ACTION that will be reposted via PostMessage(), the monitor
 	// will be launched again when MsgSleep is called in conjunction with the repost. Given the rarity
@@ -6614,13 +6635,22 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 			{
 				// If the click occurred above the client area, assume it was in title/menu bar or border.
 				// Let default proc handle it.
-				POINT pt = {LOWORD(lParam), HIWORD(lParam)};
-				if (!ScreenToClient(hWnd, &pt) || pt.y < 0)
+				point_and_hwnd_type pah = {0};
+				pah.pt.x = LOWORD(lParam);
+				pah.pt.y = HIWORD(lParam);
+				POINT client_pt = pah.pt;
+				if (!ScreenToClient(hWnd, &client_pt) || client_pt.y < 0)
 					break; // Allows default proc to display standard system context menu for title bar.
 				// v1.0.38.01: Recognize clicks on pictures and text controls as occuring in that control
 				// (via A_GuiControl) rather than generically in the window:
 				if (clicked_hwnd == pgui->mHwnd)
-					clicked_hwnd = ChildWindowFromPoint(clicked_hwnd, pt); // WindowFromPoint() apparently doesn't work for static controls and perhaps not GroupBoxes.
+				{
+					// v1.0.40.01: Rather than doing "ChildWindowFromPoint(clicked_hwnd, client_pt)" -- which fails to
+					// detect text and picture controls (and perhaps others) when they're inside GroupBoxes and
+					// Tab controls -- use the MouseGetPos() method, which seems much more accurate.
+					EnumChildWindows(clicked_hwnd, EnumChildFindPoint, (LPARAM)&pah); // Find topmost control containing point.
+					clicked_hwnd = pah.hwnd_found; // Okay if NULL; the next stage will handle it.
+				}
 			}
 			// GUI_HWND_TO_INDEX() will produce a small negative value on failure, which due to unsigned
 			// is seen as a large positive number.
@@ -6636,7 +6666,7 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 		}
 		//else it's for some non-GUI window (probably impossible).  Let DefDlgProc() handle it.
 		break;
-	
+
 	case WM_DROPFILES:
 	{
 		if (   !(pgui = GuiType::FindGui(hWnd))   )
@@ -7300,7 +7330,7 @@ void GuiType::ControlSetUpDownOptions(GuiControlType &aControl, GuiControlOption
 
 int GuiType::ControlGetDefaultSliderThickness(DWORD aStyle, int aThumbThickness)
 {
-	if (aThumbThickness <= 0)
+	if (aThumbThickness < 1)
 		aThumbThickness = 20;  // Set default.
 	// Provide a small margin on both sides, otherwise the bar is sometimes truncated.
 	aThumbThickness += 5; // 5 looks better than 4 in most styles/themes.
@@ -7421,7 +7451,7 @@ void GuiType::ControlSetProgressOptions(GuiControlType &aControl, GuiControlOpti
 
 	if (aOpt.range_min || aOpt.range_max) // Must check like this because although it valid for one to be zero, both should not be.
 	{
-		if (aOpt.range_min >= 0 && aOpt.range_min <= 0xFFFF && aOpt.range_max >= 0 && aOpt.range_max <= 0xFFFF)
+		if (aOpt.range_min > -1 && aOpt.range_min < 0x10000 && aOpt.range_max > -1 && aOpt.range_max < 0x10000)
 			// Since the values fall within the bounds for Win95/NT to support, use the old method
 			// in case Win95/NT lacks MSIE 3.0:
 			SendMessage(aControl.hwnd, PBM_SETRANGE, 0, MAKELPARAM(aOpt.range_min, aOpt.range_max));

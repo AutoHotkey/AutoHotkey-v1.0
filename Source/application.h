@@ -98,7 +98,7 @@ bool MsgSleep(int aSleepDuration = INTERVAL_UNSPECIFIED, MessageMode aMode = RET
 // Do a true Sleep() for short sleeps on Win9x because it is much more accurate than the MsgSleep()
 // method on that OS, at least for when short sleeps are done on Win98SE:
 #define DoWinDelay \
-	if (g.WinDelay >= 0)\
+	if (g.WinDelay > -1)\
 	{\
 		if (g.WinDelay < 25 && g_os.IsWin9x())\
 			Sleep(g.WinDelay);\
@@ -107,7 +107,7 @@ bool MsgSleep(int aSleepDuration = INTERVAL_UNSPECIFIED, MessageMode aMode = RET
 	}
 
 #define DoControlDelay \
-	if (g.ControlDelay >= 0)\
+	if (g.ControlDelay > -1)\
 	{\
 		if (g.ControlDelay < 25 && g_os.IsWin9x())\
 			Sleep(g.ControlDelay);\
@@ -135,7 +135,7 @@ void ResumeUnderlyingThread(global_struct *pSavedStruct, bool aKillInterruptible
 
 VOID CALLBACK MsgBoxTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);
 VOID CALLBACK AutoExecSectionTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);
-VOID CALLBACK UninteruptibleTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);
+VOID CALLBACK UninterruptibleTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);
 VOID CALLBACK InputTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);
 VOID CALLBACK DerefTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);
 

@@ -149,8 +149,7 @@ HWND SetForegroundWindowEx(HWND aWnd)
 	if (!orig_foreground_wnd)
 		orig_foreground_wnd = FindWindow("Shell_TrayWnd", NULL);
 
-	// AutoIt3: If the target window is currently top - don't bother:
-	if (aWnd == orig_foreground_wnd)
+	if (aWnd == orig_foreground_wnd) // It's already the active window.
 		return aWnd;
 
 	if (IsIconic(aWnd))
@@ -711,7 +710,7 @@ ResultType StatusBarUtil(Var *aOutputVar, HWND aBarHwnd, int aPartNumber, char *
 	// to be supported because it's the same thing as something like "IfWinExist":
 	if (!aWaitTime)
 		aWaitTime = 500;
-	if (aCheckInterval <= 0)
+	if (aCheckInterval < 1)
 		aCheckInterval = SB_DEFAULT_CHECK_INTERVAL; // Caller relies on us doing this.
 	if (aPartNumber < 1)
 		aPartNumber = 1;  // Caller relies on us to set default in this case.
@@ -939,17 +938,14 @@ int MsgBox(int aValue)
 
 
 int MsgBox(char *aText, UINT uType, char *aTitle, double aTimeout, HWND aOwner)
-// Returns FAIL if the attempt failed because of too many existing MessageBox windows,
+// Returns 0 if the attempt failed because of too many existing MessageBox windows,
 // or if MessageBox() itself failed.
 {
 	// Set the below globals so that any WM_TIMER messages dispatched by this call to
 	// MsgBox() (which may result in a recursive call back to us) know not to display
 	// any more MsgBoxes:
 	if (g_nMessageBoxes > MAX_MSGBOXES + 1)  // +1 for the final warning dialog.  Verified correct.
-		return FAIL;
-
-	// At this point, we know a dialog will be displayed.  See macro's comments for details:
-	DIALOG_PREP // Must be done prior to POST_AHK_DIALOG() below.
+		return 0;
 
 	if (g_nMessageBoxes == MAX_MSGBOXES)
 	{
@@ -959,7 +955,7 @@ int MsgBox(char *aText, UINT uType, char *aTitle, double aTimeout, HWND aOwner)
 		++g_nMessageBoxes;
 		MsgBox("The maximum number of MsgBoxes has been reached.");
 		--g_nMessageBoxes;
-		return FAIL;
+		return 0;
 	}
 
 	// Set these in case the caller explicitly called it with a NULL, overriding the default:
@@ -1068,6 +1064,8 @@ int MsgBox(char *aText, UINT uType, char *aTitle, double aTimeout, HWND aOwner)
 	g.DialogHWND = NULL;
 	g.MsgBoxTimedOut = false;
 
+	// At this point, we know a dialog will be displayed.  See macro's comments for details:
+	DIALOG_PREP // Must be done prior to POST_AHK_DIALOG() below.
 	POST_AHK_DIALOG((DWORD)(aTimeout * 1000))
 
 	++g_nMessageBoxes;  // This value will also be used as the Timer ID if there's a timeout.
@@ -1075,6 +1073,8 @@ int MsgBox(char *aText, UINT uType, char *aTitle, double aTimeout, HWND aOwner)
 	--g_nMessageBoxes;
 	// Above's use of aOwner: MsgBox, FileSelectFile, and other dialogs seem to consider aOwner to be NULL
 	// when aOwner is minimized or hidden.
+
+	DIALOG_END
 
 	// If there's a timer, kill it for performance reasons since it's no longer needed.
 	// Actually, this isn't easy to do because we don't know what the HWND of the MsgBox
@@ -1688,6 +1688,19 @@ void SetForegroundLockTimeout()
 	}
 //	else
 //		MsgBox("Enable focus-stealing: neither needed nor supported under Win95 and WinNT.");
+}
+
+
+
+bool DialogPrep()
+// Having it as a function vs. macro should reduce code size due to expansion of macros inside.
+{
+	bool thread_was_critical = g.ThreadIsCritical;
+	g.ThreadIsCritical = false;
+	MAKE_THREAD_INTERRUPTIBLE
+	if (HIWORD(GetQueueStatus(QS_ALLEVENTS)))
+		MsgSleep(-1);
+	return thread_was_critical; // Caller is responsible for using this to later restore g.ThreadIsCritical.
 }
 
 

@@ -296,6 +296,57 @@ inline int GetWindowTextByTitleMatchMode(HWND aWnd, char *aBuf = NULL, int aBufS
 
 
 
+// Notes about the below macro:
+// Update for v1.0.40.01:
+// In earlier versions, a critical thread that displayed a dialog would discard any pending events
+// that were waiting to start new threads (since in most cases, the dialog message pump would
+// route those events directly to a window proc, which would then repost them with a NULL hwnd
+// to prevent bouncing, which in turn would cause the dialog pump to discard them).  To avoid
+// this and make the behavior more useful and intuitive, this has been changed so that any
+// pending threads will launch right before the dialog is displayed.  But when the dialog is
+// dismissed, the thread becomes critical again.
+// 
+// Update for v1.0.38.04: Rather than setting AllowThreadToBeInterrupted unconditionally to
+// true, make it reflect the state of g.ThreadIsCritical.  This increases flexbility by allowing
+// threads to stay interrruptible even when they're displaying a dialog.  In such cases, an
+// incoming thread-event such as a hotkey will get routed to our MainWindowProc by the dialog's
+// message pump; and from there it will get reposted to our queue, and then get pumped again.
+// This bouncing effect may impact performance slightly but seems warranted to maintain
+// flexibility of the "Critical" command as well as its ability to buffer incoming events.
+//
+// If our thread's message queue has any message pending whose HWND member is NULL -- or even
+// normal messages which would be routed back to the thread by the WindowProc() -- clean them
+// out of the message queue before launching the dialog's message pump below.  That message pump
+// doesn't know how to properly handle such messages (it would either lose them or dispatch them
+// at times we don't want them dispatched).  But first ensure the current quasi-thread is
+// interruptible, since it's about to display a dialog so there little benefit (and a high cost)
+// to leaving it uninterruptible.  The "high cost" is that MsgSleep (our main message pump) would
+// filter out (leave queued) certain messages if the script were uninterruptible.  Then when it
+// returned, the dialog message pump below would start, and it would discard or misroute the
+// messages.
+// If this is not done, the following scenario would also be a problem:
+// A newly launched thread (in its period of uninterruptibility) displays a dialog.  As a consequence,
+// the dialog's message pump starts dispatching all messages.  If during this brief time (before the
+// thread becomes interruptible) a hotkey/hotstring/custom menu item/gui thread is dispatched to one
+// of our WindowProc's, and then posted to our thread via PostMessage(NULL,...), the item would be lost
+// because the dialog message pump discards messages that lack an HWND (since it doesn't know how to
+// dispatch them to a Window Proc).
+// GetQueueStatus() is used because unlike PeekMessage() or GetMessage(), it might not yield
+// our timeslice if the CPU is under heavy load, which would be good to improve performance here.
+#define DIALOG_PREP bool thread_was_critical = DialogPrep();
+// v1.0.40.01: Turning off critical during the dialog is relied upon by ResumeUnderlyingThread(),
+// UninterruptibleTimeout(), and KILL_AUTOEXEC_TIMER.  Doing it this way also seems more maintainable
+// than some other approach such as storing a new flag in the "g" struct that says whether it is currently
+// displaying a dialog and waiting for it to finish.
+#define DIALOG_END \
+{\
+	g.ThreadIsCritical = thread_was_critical;\
+	g.AllowThreadToBeInterrupted = !thread_was_critical;\
+}
+bool DialogPrep();
+
+
+
 ////////////////////
 // PROCESS ROUTINES
 ////////////////////

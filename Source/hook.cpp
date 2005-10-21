@@ -244,7 +244,7 @@ LRESULT CALLBACK LowLevelMouseProc(int aCode, WPARAM wParam, LPARAM lParam)
 	// But what about the middle button?  It's undocumented, but it is received.
 	// What about doubleclicks (e.g. WM_LBUTTONDBLCLK): I checked: They are NOT received.
 	// This is expected because each click in a doubleclick could be separately suppressed by
-	// the hook, which would make become a non-doubleclick.
+	// the hook, which would make it become a non-doubleclick.
 	vk_type vk = 0;
 	short wheel_delta = 0;
 	bool key_up = true;  // Set default to safest value.
@@ -287,7 +287,7 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 	, const sc_type aSC, bool aKeyUp, ULONG_PTR aExtraInfo, DWORD aEventFlags, DWORD aEventTime)
 // v1.0.38.06: The keyboard and mouse hooks now call this common function to reduce code size and improve
 // maintainability.  The code size savings as of v1.0.38.06 is 3.5 KB of uncompressed code, but that
-// savings will grow larger if more complexity is added to the hooks.
+// savings will grow larger if more complexity is ever added to the hooks.
 {
 	bool is_ignored = IsIgnored(aExtraInfo, aVK, aKeyUp);
 	// This is done for more than just convenience.  It solves problems that would otherwise arise
@@ -758,7 +758,29 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 		// previous key-down event would have been suppressed in order for
 		// down_performed_action to be true.  UPDATE: Added handling for
 		// NO_SUPPRESS_NEXT_UP_EVENT and also applied this next part to both
-		// mouse and keyboard:
+		// mouse and keyboard.
+		// v1.0.40.01: It was observed that a hotkey that consists of a mouse button as a prefix and
+		// a keyboard key as a suffix can cause sticking keys in rare cases.  For example, when
+		// "MButton & LShift" is a hotkey, if you hold down LShift long enough for it to begin
+		// auto-repeating then press MButton, the hotkey fires the next time LShift auto-repeats (since
+		// pressing a mouse button doesn't stop a keyboard key from auto-repeating).  Fixing that type
+		// of firing seems likely to break more things than it fixes.  But since it isn't fixed, when
+		// the user releases LShift, the up-event is suppressed here, which causes the key to get
+		// stuck down.  That could be fixed in the following ways, but all of them seem likely to break
+		// more things than they fix, especially given the rarity that both a hotkey of this type would
+		// exist and its mirror image does something useful that isn't a hotkey (for example, Shift+MButton
+		// is a meaningful action in few if any applications):
+		// 1) Don't suppress the physical release of a suffix key if that key is logically down (as reported
+		//    by GetKeyState/GetAsyncKeyState): Seems too broad in scope because there might be cases where
+		//    the script or user wants the key to stay logically down (e.g. Send {Shift down}{a down}).
+		// 2) Same as #1 but limit the non-suppression to only times when the suffix key was logically down
+		//    when its first qualified physical down-event came in.  This is definitely better but like
+		//    #1, the uncertainty of breaking existing scripts and/or causing more harm than good seems too
+		//    high.
+		// 3) Same as #2 but limit it only to cases where the suffix key is a keyboard key and its prefix
+		//    is a mouse key.  Although very selective, it doesn't mitigate the fact it might still do more
+		//    harm than good and/or break existing scripts.
+		// In light of the above, it seems best to keep this documented here as a known limitation for now.
 		bool suppress_up_event;
 		if (this_key.no_suppress & NO_SUPPRESS_NEXT_UP_EVENT)
 		{

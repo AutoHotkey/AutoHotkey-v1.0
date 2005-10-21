@@ -525,7 +525,7 @@ int SendKey(vk_type aVK, sc_type aSC, modLR_type aModifiersLR, modLR_type aModif
 	// Avoid changing modifier states and other things if there is nothing to be sent.
 	// Otherwise, menu bar might activated due to ALT keystrokes that don't modify any key,
 	// the Start Menu might appear due to WIN keystrokes that don't modify anything, etc:
-	if (aRepeatCount <= 0) return aRepeatCount;
+	if (aRepeatCount < 1) return aRepeatCount;
 
 	// I thought maybe it might be best not to release unwanted modifier keys that are already down
 	// (perhaps via something like "Send, {altdown}{esc}{altup}"), but that harms the case where
@@ -652,7 +652,7 @@ int SendKeySpecial(char aChar, modLR_type aModifiersLRPersistent, int aRepeatCou
 	// Avoid changing modifier states and other things if there is nothing to be sent.
 	// Otherwise, menu bar might activated due to ALT keystrokes that don't modify any key,
 	// the Start Menu might appear due to WIN keystrokes that don't modify anything, etc:
-	if (aRepeatCount <= 0)
+	if (aRepeatCount < 1)
 		return aRepeatCount;
 
 	// v1.0.40: This function was heavily simplified because the old method of simulating

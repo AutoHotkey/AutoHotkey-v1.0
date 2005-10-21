@@ -238,7 +238,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 			if (tick_after - tick_before > 3)  // 3 is somewhat arbitrary, just want to make sure it rested for a meaningful amount of time.
 				g_script.mLastScriptRest = tick_after;
 		}
-		else // aSleepDuration <= 0 || empty_the_queue_via_peek
+		else // aSleepDuration < 1 || empty_the_queue_via_peek
 		{
 			// In the above cases, we don't want to be stuck in GetMessage() for even 10ms:
 			if (!PeekMessage(&msg, NULL, 0, MSG_FILTER_MAX, PM_REMOVE)) // No more messages
@@ -332,7 +332,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 					return return_value;\
 				}
 				// Function should always return OK in this case.  Also, was_interrupted
-				// will always be false because if this "aSleepDuration <= 0" call
+				// will always be false because if this "aSleepDuration < 1" call
 				// really was interrupted, it would already have returned in the
 				// hotkey cases of the switch().  UPDATE: was_interrupted can now
 				// be true since the hotkey case in the switch() doesn't return,
@@ -520,7 +520,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				// eye on, which is why the mTimerEnabledCount value is checked above
 				// prior to starting a new iteration.
 				continue;
-			if (aSleepDuration <= 0) // In this case, WM_TIMER messages have already fulfilled their function, above.
+			if (aSleepDuration < 1) // In this case, WM_TIMER messages have already fulfilled their function, above.
 				continue;
 			// Otherwise aMode == RETURN_AFTER_MESSAGES:
 			// Realistically, there shouldn't be any more messages in our queue
@@ -1122,6 +1122,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				// by an emergency thread such as OnExit or OnMessage).
 				g.AllowThreadToBeInterrupted = true; // This one is probably necessary due to the way it conforms to ThreadIsCritical in other sections.
 				g.ThreadIsCritical = false; // Not strictly necessary but improves maintainability.
+				g.AllowTimers = true; // Same as above.
 				g.Priority = PRIORITY_MINIMUM; // Ensure minimum priority so that idle state can always be "interrupted".
 			}
 			else // Some thread other than the idle thread.
@@ -1292,7 +1293,7 @@ ResultType IsCycleComplete(int aSleepDuration, DWORD aStartTime, bool aAllowEarl
 	// (e.g. to be more friendly toward time-critical apps such as games,
 	// video capture, video playback).  UPDATE: mLastScriptRest is also reset
 	// here because it has a very similar purpose.
-	if (aSleepDuration >= 0)
+	if (aSleepDuration > -1)
 	{
 		g_script.mLinesExecutedThisCycle = 0;
 		g_script.mLastScriptRest = tick_now;
@@ -1347,7 +1348,7 @@ bool CheckScriptTimers()
 	// now checked in case the "idle thread" is paused (since that thread is not counted in
 	// g_nPausedThreads).  However, g_nPausedThreads must still be checked in case the uppermost thread
 	// isn't paused but some other thread isn't (as documented, timers don't run when any thread is paused).
-	if (!INTERRUPTIBLE || g_nPausedThreads > 0 || g_IdleIsPaused || g_nThreads >= g_MaxThreadsTotal)
+	if (!INTERRUPTIBLE || g_nPausedThreads > 0 || g_IdleIsPaused || !g.AllowTimers || g_nThreads >= g_MaxThreadsTotal)
 		return false; // Above: To be safe (prevent stack faults) don't allow max threads to be exceeded.
 
 	ScriptTimer *timer;
@@ -1869,7 +1870,7 @@ VOID CALLBACK AutoExecSectionTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD d
 
 
 
-VOID CALLBACK UninteruptibleTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
+VOID CALLBACK UninterruptibleTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
 {
 	// v1.0.38.04: Make AllowThreadToBeInterrupted conform to ThreadIsCritical. This is necessary
 	// in the case where the timer was killed by the "Critical" command but not before a WM_TIMER message

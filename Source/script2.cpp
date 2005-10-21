@@ -391,8 +391,8 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 	// If both are zero or less, reset object height/width for maintainability and sizing later.
 	// However, if one of them is -1, the caller is asking for that dimension to be auto-calc'd
 	// to "keep aspect ratio" with the the other specified dimension:
-	if (   splash.object_height <= 0 && splash.object_height != COORD_UNSPECIFIED
-		&& splash.object_width <= 0 && splash.object_width != COORD_UNSPECIFIED
+	if (   splash.object_height < 1 && splash.object_height != COORD_UNSPECIFIED
+		&& splash.object_width < 1 && splash.object_width != COORD_UNSPECIFIED
 		|| !splash.object_height || !splash.object_width   )
 		splash.object_height = splash.object_width = 0;
 
@@ -642,7 +642,7 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 		{
 			if (range_min || range_max) // i.e. if both are zero, leave it at the default range, which is 0-100.
 			{
-				if (range_min >= 0 && range_min <= 0xFFFF && range_max >= 0 && range_max <= 0xFFFF)
+				if (range_min > -1 && range_min < 0x10000 && range_max > -1 && range_max < 0x10000)
 					// Since the values fall within the bounds for Win95/NT to support, use the old method
 					// in case Win95/NT lacks MSIE 3.0:
 					SendMessage(splash.hwnd_bar, PBM_SETRANGE, 0, MAKELPARAM(range_min, range_max));
@@ -1731,7 +1731,7 @@ ResultType Line::WinMenuSelectItem(char *aTitle, char *aText, char *aMenu1, char
 		return OK;  // Let ErrorLevel tell the story.
 
 	int menu_item_count = GetMenuItemCount(hMenu);
-	if (menu_item_count <= 0) // Menu bar has no menus.
+	if (menu_item_count < 1) // Menu bar has no menus.
 		return OK;  // Let ErrorLevel tell the story.
 	
 	#define MENU_ITEM_IS_SUBMENU 0xFFFFFFFF
@@ -1746,7 +1746,7 @@ ResultType Line::WinMenuSelectItem(char *aTitle, char *aText, char *aMenu1, char
 			return OK;  // Let ErrorLevel tell the story.
 		menu_param_length = strlen(menu_param[i]);
 		target_menu_pos = (menu_param[i][menu_param_length - 1] == '&') ? ATOI(menu_param[i]) - 1 : -1;
-		if (target_menu_pos >= 0)
+		if (target_menu_pos > -1)
 		{
 			if (target_menu_pos >= menu_item_count)  // Invalid menu position (doesn't exist).
 				return OK;  // Let ErrorLevel tell the story.
@@ -1905,7 +1905,7 @@ ResultType Line::ControlClick(vk_type aVK, int aClickCount, char *aOptions, char
 
 	// This is done this late because it seems better to set an ErrorLevel of 1 whenever the target
 	// window or control isn't found, or any other error condition occurs above:
-	if (aClickCount <= 0)
+	if (aClickCount < 1)
 		// Allow this to simply "do nothing", because it increases flexibility
 		// in the case where the number of clicks is a dereferenced script variable
 		// that may sometimes (by intent) resolve to zero or negative:
@@ -2939,7 +2939,7 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 		else // Must be ComboBox or ListBox
 			return output_var->Assign();  // Let ErrorLevel tell the story.
 		if (!(SendMessageTimeout(control_window, msg, 0, 0, SMTO_ABORTIFHUNG, 5000, &item_count))
-			|| item_count <= 0) // No items in ListBox/ComboBox or there was a problem getting the count.
+			|| item_count < 1) // No items in ListBox/ComboBox or there was a problem getting the count.
 			return output_var->Assign();  // Let ErrorLevel tell the story.
 		// Calculate the length of delimited list of items.  Length is initialized to provide enough
 		// room for each item's delimiter (the last item does not have a delimiter).
@@ -4522,7 +4522,7 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, COLOR
 			for (i = 0; i < screen_pixel_count; ++i)
 				screen_pixel[i] &= 0xF8F8F8F8;
 
-		if (aVariation <= 0) // Caller wants an exact match on one particular color.
+		if (aVariation < 1) // Caller wants an exact match on one particular color.
 		{
 			if (screen_is_16bit)
 				aColorRGB &= 0xF8F8F8F8;
@@ -4637,7 +4637,7 @@ fast_end:
 			; ypos += bottom_to_top ? -1 : 1)
 		{
 			pixel = GetPixel(hdc, xpos, ypos); // Returns a BGR value, not RGB.
-			if (aVariation <= 0)  // User wanted an exact match.
+			if (aVariation < 1)  // User wanted an exact match.
 			{
 				if (pixel == aColorBGR)
 				{
@@ -4879,7 +4879,7 @@ ResultType Line::ImageSearch(int aLeft, int aTop, int aRight, int aBottom, char 
 	}
 
 	// Search the specified region for the first occurrence of the image:
-	if (aVariation <= 0) // Caller wants an exact match.
+	if (aVariation < 1) // Caller wants an exact match.
 	{
 		// Concerning the following use of 0x00FFFFFF, the use of 0x00F8F8F8 above is related (both have high order byte 00).
 		// The following needs to be done only when shades-of-variation mode isn't in effect because
@@ -5107,11 +5107,12 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 	// and beyond, since the feature was never properly implemented in Win95:
 	static UINT WM_TASKBARCREATED = RegisterWindowMessage("TaskbarCreated");
 
-	// See GuiWindowProc() for details about this first part:
+	// See GuiWindowProc() for details about this first section:
 	LRESULT msg_reply;
 	if (g_MsgMonitorCount && !g.CalledByIsDialogMessageOrDispatch // Count is checked here to avoid function-call overhead.
 		&& MsgMonitor(hWnd, iMsg, wParam, lParam, NULL, msg_reply))
 		return msg_reply; // MsgMonitor has returned "true", indicating that this message should be omitted from further processing.
+	g.CalledByIsDialogMessageOrDispatch = false; // v1.0.40.01.
 
 	TRANSLATE_AHK_MSG(iMsg, wParam)
 	
@@ -5236,7 +5237,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		//   remembered/discovered.
 		//
 		// Due to maintainability and the uncertainty over backward compatibility (see comments above), the
-		// following message is posted event when INTERRUPTIBLE==false.
+		// following message is posted even when INTERRUPTIBLE==false.
 		// Post it with a NULL hwnd (update: also for backward compatibility) to avoid any chance that our
 		// message pump will dispatch it back to us.  We want these events to always be handled there,
 		// where almost all new quasi-threads get launched.  Update: Even if it were safe in terms of
@@ -5886,6 +5887,8 @@ ResultType InputBox(Var *aOutputVar, char *aTitle, char *aText, bool aHideInput,
 	int result = (int)DialogBox(g_hInstance, MAKEINTRESOURCE(IDD_INPUTBOX), THREAD_DIALOG_OWNER, InputBoxProc);
 	--g_nInputBoxes;
 
+	DIALOG_END
+
 	// See the comments in InputBoxProc() for why ErrorLevel is set here rather than there.
 	switch(result)
 	{
@@ -5932,6 +5935,7 @@ BOOL CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 	if (g_MsgMonitorCount && !g.CalledByIsDialogMessageOrDispatch // Count is checked here to avoid function-call overhead.
 		&& MsgMonitor(hWndDlg, uMsg, wParam, lParam, NULL, msg_reply))
 		return (BOOL)msg_reply; // MsgMonitor has returned "true", indicating that this message should be omitted from further processing.
+	g.CalledByIsDialogMessageOrDispatch = false; // v1.0.40.01.
 
 	HWND hControl;
 
@@ -6112,7 +6116,7 @@ BOOL CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 		// we would be called with an hWndDlg whose index is less than the most recent
 		// one's index (g_nInputBoxes - 1).  Instead, search the array for a match.
 		// Work backward because the most recent one(s) are more likely to be a match:
-		for (; target_index >= 0; --target_index)
+		for (; target_index > -1; --target_index)
 			if (g_InputBox[target_index].hwnd == hWndDlg)
 				break;
 		if (target_index < 0)  // Should never happen if things are designed right.
@@ -6246,6 +6250,18 @@ VOID CALLBACK InputBoxTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
 // Mouse related //
 ///////////////////
 
+void DoMouseSleep() // Helper function for the mouse functions below.
+{
+	if (g.MouseDelay > -1)
+	{
+		if (g.MouseDelay < 11 || (g.MouseDelay < 25 && g_os.IsWin9x()))
+			Sleep(g.MouseDelay);
+		else
+			SLEEP_WITHOUT_INTERRUPTION(g.MouseDelay)
+	}
+}
+
+
 ///////////////////////////////////////////////////////////////////////////////
 // The following function is based on AutoIt v3 source code, which is:
 // Copyright 1999-2003 Jonathan Bennett and others listed at
@@ -6275,6 +6291,29 @@ ResultType Line::MouseClickDrag(vk_type aVK, int aX1, int aY1, int aX2, int aY2,
 	//if (aSpeed < 2)
 	//	aSpeed = 2;
 
+	DWORD event_down, event_up, event_data = 0; // Set default.
+	switch (aVK)
+	{
+	case VK_LBUTTON:
+		event_down = MOUSEEVENTF_LEFTDOWN;
+		event_up = MOUSEEVENTF_LEFTUP;
+		break;
+	case VK_RBUTTON:
+		event_down = MOUSEEVENTF_RIGHTDOWN;
+		event_up = MOUSEEVENTF_RIGHTUP;
+		break;
+	case VK_MBUTTON:
+		event_down = MOUSEEVENTF_MIDDLEDOWN;
+		event_up = MOUSEEVENTF_MIDDLEUP;
+		break;
+	case VK_XBUTTON1:
+	case VK_XBUTTON2:
+		event_down = MOUSEEVENTF_XDOWN;
+		event_up = MOUSEEVENTF_XUP;
+		event_data = (aVK == VK_XBUTTON1) ? XBUTTON1 : XBUTTON2;
+		break;
+	}
+
 	// Always sleep a certain minimum amount of time between events to improve reliability,
 	// but allow the user to specify a higher time if desired.  Note that for Win9x,
 	// a true Sleep() is done because it is much more accurate than the MsgSleep() method,
@@ -6288,59 +6327,19 @@ ResultType Line::MouseClickDrag(vk_type aVK, int aX1, int aY1, int aX2, int aY2,
 	// RButton is a hotkey that includes "MouseClick right" somewhere in its subroutine,
 	// the user would not be able to correctly open the script's own tray menu via
 	// right-click (note that this issue affected only the one script itself, not others).
-	#define MOUSE_SLEEP \
-		if (g.MouseDelay >= 0)\
-		{\
-			if (g.MouseDelay < 11 || (g.MouseDelay < 25 && g_os.IsWin9x()))\
-				Sleep(g.MouseDelay);\
-			else\
-				SLEEP_WITHOUT_INTERRUPTION(g.MouseDelay)\
-		}
 
 	// Do the drag operation
-	switch (aVK)
-	{
-	case VK_LBUTTON:
-		MouseEvent(MOUSEEVENTF_LEFTDOWN);
-		MOUSE_SLEEP;
-		MouseMove(aX2, aY2, aSpeed, aMoveRelative);
-		MOUSE_SLEEP;
-		MouseEvent(MOUSEEVENTF_LEFTUP);
-		break;
-	case VK_RBUTTON:
-		MouseEvent(MOUSEEVENTF_RIGHTDOWN);
-		MOUSE_SLEEP;
-		MouseMove(aX2, aY2, aSpeed, aMoveRelative);
-		MOUSE_SLEEP;
-		MouseEvent(MOUSEEVENTF_RIGHTUP);
-		break;
-	case VK_MBUTTON:
-		MouseEvent(MOUSEEVENTF_MIDDLEDOWN);
-		MOUSE_SLEEP;
-		MouseMove(aX2, aY2, aSpeed, aMoveRelative);
-		MOUSE_SLEEP;
-		MouseEvent(MOUSEEVENTF_MIDDLEUP);
-		break;
-	case VK_XBUTTON1:
-		MouseEvent(MOUSEEVENTF_XDOWN, 0, 0, XBUTTON1);
-		MOUSE_SLEEP;
-		MouseMove(aX2, aY2, aSpeed, aMoveRelative);
-		MOUSE_SLEEP;
-		MouseEvent(MOUSEEVENTF_XUP, 0, 0, XBUTTON1);
-		break;
-	case VK_XBUTTON2:
-		MouseEvent(MOUSEEVENTF_XDOWN, 0, 0, XBUTTON2);
-		MOUSE_SLEEP;
-		MouseMove(aX2, aY2, aSpeed, aMoveRelative);
-		MOUSE_SLEEP;
-		MouseEvent(MOUSEEVENTF_XUP, 0, 0, XBUTTON2);
-		break;
-	}
+	MouseEvent(event_down, 0, 0, event_data);
+	DoMouseSleep();
+	MouseMove(aX2, aY2, aSpeed, aMoveRelative);
+	DoMouseSleep();
+	MouseEvent(event_up, 0, 0, event_data);
+
 	// It seems best to always do this one too in case the script line that caused
 	// us to be called here is followed immediately by another script line which
 	// is either another mouse click or something that relies upon this mouse drag
 	// having been completed:
-	MOUSE_SLEEP;
+	DoMouseSleep();
 	return OK;
 }
 
@@ -6363,7 +6362,7 @@ ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aS
 		// in the app, rather than by a script line:
 		return FAIL;
 
-	if (aClickCount <= 0)
+	if (aClickCount < 1)
 		// Allow this to simply "do nothing", because it increases flexibility
 		// in the case where the number of clicks is a dereferenced script variable
 		// that may sometimes (by intent) resolve to zero or negative:
@@ -6396,84 +6395,148 @@ ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aS
 		MouseEvent(MOUSEEVENTF_WHEEL, 0, 0, -(aClickCount * WHEEL_DELTA));
 		return OK;
 	}
-
 	// Otherwise:
+
+	// Although not thread-safe, the following static vars seem okay because:
+	// 1) This function is currently only called by the main thread.
+	// 2) Even if that isn't true, the serialized nature of simulated mouse clicks makes it likely that
+	//    the statics will produce the correct behavior anyway.
+	// 3) Even if that isn't true, the consequences of incorrect behavior seem minimal in this case.
+	static vk_type sWorkaroundVK = 0;
+	static LRESULT sWorkaroundHitTest;  // Not initialized because the above will be the sole signal of whether the workaround is in progress.
+	DWORD event_down, event_up, event_data = 0; // Set default.
+
+	switch (aVK)
+	{
+	case VK_LBUTTON:
+	case VK_RBUTTON:
+		if (aEventType == KEYDOWN || (aEventType == KEYUP && sWorkaroundVK)) // i.e. this is a down-only event or up-only event.
+		{
+			// v1.0.40.01: The following section corrects misbehavior caused by a thread sending
+			// simulated mouse clicks to one of its own windows.  A script consisting only of the
+			// following two lines can reproduce this issue:
+			// F1::LButton
+			// F2::RButton
+			// The problems came about from the following sequence of events:
+			// 1) Script simulates a left-click-down in the title bar's close, minimize, or maximize button.
+			// 2) WM_NCRBUTTONDOWN is sent to the window's window proc, which then passes it on to
+			//    DefWindowProc or DefDlgProc, which then apparently enters a loop in which no messages
+			//    (or a very limited subset) are pumped.
+			// 3) Thus, if the user presses a hotkey while the thread is in this state, that hotkey is
+			//    queued/buffered until DefWindowProc/DefDlgProc exits its loop.
+			// 4) But the buffered hotkey is the very thing that's supposed to exit the loop via sending a
+			//    simulated left-click-up event.
+			// 5) Thus, a deadlock occurs.
+			// 6) A similar situation arises when a right-click-down is sent to the title bar or sys-menu-icon.
+			//
+			// The following workaround operates by suppressing qualified click-down events until the
+			// corresponding click-up occurs, at which time the click-up is transformed into a down+up if
+			// the click-up is still in the same position as the down. It seems preferable to fix this here
+			// rather than changing each window proc. to always respond to click-down rather vs. click-up
+			// because that would make all of the script's windows behave in a non-standard way, possibly
+			// producing side-effects and defeating other programs' attempts to interact with them.
+			// (Thanks to Shimanov for this solution.)
+			//
+			// Remaining known limitations:
+			// 1) Title bar buttons are not visibly in a pressed down state when a simulated click-down is snet
+			//    to them.
+			// 2) A window that should not be activated, such as AlwaysOnTop+Disabled, is activated anyway
+			//    by SetForegroundWindowEx().  Not yet fixed due to its rarity and minimal consequences.
+			// 3) A related problem for which no solution has been discovered (and perhaps it's too obscure
+			//    an issue to justify any added code size): If a remapping such as "F1::LButton" is in effect,
+			//    pressing and releasing F1 while the cursor is over a script window's title bar will cause the
+			//    window to move slightly the next time the mouse is moved.
+			// 4) Clicking one of the script's window's title bar with a key/button that has been remapped to
+			//    become the left mouse button sometimes causes the button to get stuck down from the window's
+			//    point of view.  The reasons are related to those in #1 above.  In both #1 and #2, the workaround
+			//    is not at fault because it's not in effect then.  Instead, the issue is that DefWindowProc enters
+			//    a non-msg-pumping loop while it waits for the user to drag-move the window.  If instead the user
+			//    releases the button without dragging, the loop exits on its own after a 500ms delay or so.
+			// 5) Obscure behavior cause by keyboard's auto-repeat feature: Use a key that's been remapped to
+			//    become the left mouse button to click and hold the minimize button of one of the script's windows.
+			//    Drag to the left.  The window starts moving.  This is caused by the fact that the down-click is
+			//    suppressed, thus the remap's hotkey subroutine thinks the mouse button is down, thus its
+			//    auto-repeat suppression doesn't work and it sends another click.
+			POINT point;
+			GetCursorPos(&point); // Assuming success seems harmless.
+			// Despite what MSDN says, WindowFromPoint() appears to fetch
+			// a non-NULL value even when the mouse is hovering over a disabled control (at least on XP).
+			HWND child_under_cursor, parent_under_cursor;
+			if (   (child_under_cursor = WindowFromPoint(point))
+				&& (parent_under_cursor = GetNonChildParent(child_under_cursor)) // WM_NCHITTEST below probably requires parent vs. child.
+				&& GetWindowThreadProcessId(parent_under_cursor, NULL) == g_MainThreadID   ) // It's one of our thread's windows.
+			{
+				LRESULT hit_test = SendMessage(parent_under_cursor, WM_NCHITTEST, 0, MAKELPARAM(point.x, point.y));
+				if (   aVK == VK_LBUTTON && (hit_test == HTCLOSE || hit_test == HTMAXBUTTON // Title bar buttons: Close, Maximize.
+						|| hit_test == HTMINBUTTON || hit_test == HTHELP) // Title bar buttons: Minimize, Help.
+					|| aVK == VK_RBUTTON && (hit_test == HTCAPTION || hit_test == HTSYSMENU)   )
+				{
+					if (aEventType == KEYDOWN)
+					{
+						sWorkaroundVK = aVK;
+						sWorkaroundHitTest = hit_test;
+						SetForegroundWindowEx(parent_under_cursor); // Try to reproduce customary behavior.
+						// For simplicity, aClickCount>1 is ignored and DoMouseDelay() is not done.
+						return OK;
+					}
+					else // KEYUP
+					{
+						if (sWorkaroundHitTest == hit_test) // To weed out cases where user clicked down on a button then released somewhere other than the button.
+							aEventType = KEYDOWNANDUP; // Translate this click-up into down+up to make up for the fact that the down was previously suppressed.
+						//else let the click-up occur in case it does something or user wants it.
+					}
+				}
+			} // Work-around for sending mouse clicks to one of our thread's own windows.
+		}
+		sWorkaroundVK = 0; // Reset this indicator in all cases except those for which above already returned.
+
+		// Since above didn't return, the work-around isn't in effect and normal click(s) will be sent:
+		if (aVK == VK_LBUTTON)
+		{
+			event_down = MOUSEEVENTF_LEFTDOWN;
+			event_up = MOUSEEVENTF_LEFTUP;
+		}
+		else // aVK == VK_RBUTTON
+		{
+			event_down = MOUSEEVENTF_RIGHTDOWN;
+			event_up = MOUSEEVENTF_RIGHTUP;
+		}
+		break;
+	case VK_MBUTTON:
+		event_down = MOUSEEVENTF_MIDDLEDOWN;
+		event_up = MOUSEEVENTF_MIDDLEUP;
+		break;
+	case VK_XBUTTON1:
+	case VK_XBUTTON2:
+		event_down = MOUSEEVENTF_XDOWN;
+		event_up = MOUSEEVENTF_XUP;
+		event_data = (aVK == VK_XBUTTON1) ? XBUTTON1 : XBUTTON2;
+		break;
+	} // switch()
+
 	for (int i = 0; i < aClickCount; ++i)
 	{
-		// Note: It seems best to always Sleep a certain minimum time between events
-		// because the click-down event may cause the target app to do something which
-		// changes the context or nature of the click-up event.  AutoIt3 has also been
-		// revised to do this.
-		switch (aVK)
-		{
 		// The below calls to MouseEvent() do not specify coordinates because such are only
 		// needed if we were to include MOUSEEVENTF_MOVE in the dwFlags parameter, which
-		// we don't since we've already moved the mouse (above) if that was needed:
-		case VK_LBUTTON:
-			if (aEventType != KEYUP) // It's either KEYDOWN or KEYDOWNANDUP.
-			{
-				MouseEvent(MOUSEEVENTF_LEFTDOWN);
-				MOUSE_SLEEP;
-			}
-			if (aEventType != KEYDOWN) // It's either KEYUP or KEYDOWNANDUP.
-			{
-				MouseEvent(MOUSEEVENTF_LEFTUP);
-				// It seems best to always do this one too in case the script line that caused
-				// us to be called here is followed immediately by another script line which
-				// is either another mouse click or something that relies upon the mouse click
-				// having been completed:
-				MOUSE_SLEEP;
-			}
-			break;
-		case VK_RBUTTON:
-			if (aEventType != KEYUP) // It's either KEYDOWN or KEYDOWNANDUP.
-			{
-				MouseEvent(MOUSEEVENTF_RIGHTDOWN);
-				MOUSE_SLEEP;
-			}
-			if (aEventType != KEYDOWN) // It's either KEYUP or KEYDOWNANDUP.
-			{
-				MouseEvent(MOUSEEVENTF_RIGHTUP);
-				MOUSE_SLEEP;
-			}
-			break;
-		case VK_MBUTTON:
-			if (aEventType != KEYUP) // It's either KEYDOWN or KEYDOWNANDUP.
-			{
-				MouseEvent(MOUSEEVENTF_MIDDLEDOWN);
-				MOUSE_SLEEP;
-			}
-			if (aEventType != KEYDOWN) // It's either KEYUP or KEYDOWNANDUP.
-			{
-				MouseEvent(MOUSEEVENTF_MIDDLEUP);
-				MOUSE_SLEEP;
-			}
-			break;
-		case VK_XBUTTON1:
-			if (aEventType != KEYUP) // It's either KEYDOWN or KEYDOWNANDUP.
-			{
-				MouseEvent(MOUSEEVENTF_XDOWN, 0, 0, XBUTTON1);
-				MOUSE_SLEEP;
-			}
-			if (aEventType != KEYDOWN) // It's either KEYUP or KEYDOWNANDUP.
-			{
-				MouseEvent(MOUSEEVENTF_XUP, 0, 0, XBUTTON1);
-				MOUSE_SLEEP;
-			}
-			break;
-		case VK_XBUTTON2:
-			if (aEventType != KEYUP) // It's either KEYDOWN or KEYDOWNANDUP.
-			{
-				MouseEvent(MOUSEEVENTF_XDOWN, 0, 0, XBUTTON2);
-				MOUSE_SLEEP;
-			}
-			if (aEventType != KEYDOWN) // It's either KEYUP or KEYDOWNANDUP.
-			{
-				MouseEvent(MOUSEEVENTF_XUP, 0, 0, XBUTTON2);
-				MOUSE_SLEEP;
-			}
-			break;
-		} // switch()
+		// we don't since we've already moved the mouse (above) if that was needed.
+		if (aEventType != KEYUP) // It's either KEYDOWN or KEYDOWNANDUP.
+		{
+			MouseEvent(event_down, 0, 0, event_data);
+			// It seems best to always Sleep a certain minimum time between events
+			// because the click-down event may cause the target app to do something which
+			// changes the context or nature of the click-up event.  AutoIt3 has also been
+			// revised to do this.
+			DoMouseSleep();
+		}
+		if (aEventType != KEYDOWN) // It's either KEYUP or KEYDOWNANDUP.
+		{
+			MouseEvent(event_up, 0, 0, event_data);
+			// It seems best to always do this one too in case the script line that caused
+			// us to be called here is followed immediately by another script line which
+			// is either another mouse click or something that relies upon the mouse click
+			// having been completed:
+			DoMouseSleep();
+		}
 	} // for()
 
 	return OK;
@@ -6545,7 +6608,7 @@ void Line::MouseMove(int aX, int aY, int aSpeed, bool aMoveRelative)
 	if (aSpeed == 0)
 	{
 		MouseEvent(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, aX, aY);
-		MOUSE_SLEEP; // Should definitely do this in case the action immediately after this is a click.
+		DoMouseSleep(); // Should definitely do this in case the action immediately after this is a click.
 		return;
 	}
 
@@ -6606,7 +6669,7 @@ void Line::MouseMove(int aX, int aY, int aSpeed, bool aMoveRelative)
 			}
 
 		MouseEvent(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, xCur, yCur);
-		MOUSE_SLEEP;
+		DoMouseSleep();
 	}
 }
 
@@ -7474,7 +7537,6 @@ ResultType Line::PerformAssign()
 //
 // Returns false if the function could not get the rights to shutdown 
 ///////////////////////////////////////////////////////////////////////////////
-
 bool Util_Shutdown(int nFlag)
 {
 
@@ -9256,6 +9318,8 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 		? GetSaveFileName(&ofn) : GetOpenFileName(&ofn);
 	--g_nFileDialogs;
 
+	DIALOG_END
+
 	// Both GetOpenFileName() and GetSaveFileName() change the working directory as a side-effect
 	// of their operation.  The below is not a 100% workaround for the problem because even while
 	// a new quasi-thread is running (having interrupted this one while the dialog is still
@@ -9459,6 +9523,7 @@ ResultType Line::FileSelectFolder(char *aRootDir, char *aOptions, char *aGreetin
 	LPITEMIDLIST lpItemIDList = SHBrowseForFolder(&bi);  // Spawn Dialog
 	--g_nFolderDialogs;
 
+	DIALOG_END
 	if (!lpItemIDList)
 		return OK;  // Let ErrorLevel tell the story.
 
@@ -9822,7 +9887,7 @@ ResultType Line::FileReadLine(char *aFilespec, char *aLineNumber)
 		return FAIL;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 	__int64 line_number = ATOI64(aLineNumber);
-	if (line_number <= 0)
+	if (line_number < 1)
 		return OK;  // Return OK because g_ErrorLevel tells the story.
 	FILE *fp = fopen(aFilespec, "r");
 	if (!fp)
@@ -10813,7 +10878,6 @@ ResultType Line::FileGetVersion(char *aFilespec)
 ///////////////////////////////////////////////////////////////////////////////
 // Util_CopyDir()
 ///////////////////////////////////////////////////////////////////////////////
-
 bool Line::Util_CopyDir (const char *szInputSource, const char *szInputDest, bool bOverwrite)
 {
 	SHFILEOPSTRUCT	FileOp;
@@ -10876,7 +10940,6 @@ bool Line::Util_CopyDir (const char *szInputSource, const char *szInputDest, boo
 ///////////////////////////////////////////////////////////////////////////////
 // Util_MoveDir()
 ///////////////////////////////////////////////////////////////////////////////
-
 bool Line::Util_MoveDir (const char *szInputSource, const char *szInputDest, int OverwriteMode)
 {
 	SHFILEOPSTRUCT	FileOp;
@@ -10953,7 +11016,6 @@ bool Line::Util_MoveDir (const char *szInputSource, const char *szInputDest, int
 ///////////////////////////////////////////////////////////////////////////////
 // Util_RemoveDir()
 ///////////////////////////////////////////////////////////////////////////////
-
 bool Line::Util_RemoveDir (const char *szInputSource, bool bRecurse)
 {
 	SHFILEOPSTRUCT	FileOp;
@@ -11005,7 +11067,6 @@ bool Line::Util_RemoveDir (const char *szInputSource, bool bRecurse)
 // (moves files too)
 // Returns the number of files that could not be copied or moved due to error.
 ///////////////////////////////////////////////////////////////////////////////
-
 int Line::Util_CopyFile(const char *szInputSource, const char *szInputDest, bool bOverwrite, bool bMove)
 {
 	char			szSource[_MAX_PATH+1];
@@ -11111,7 +11172,6 @@ int Line::Util_CopyFile(const char *szInputSource, const char *szInputDest, bool
 ///////////////////////////////////////////////////////////////////////////////
 // Util_ExpandFilenameWildcard()
 ///////////////////////////////////////////////////////////////////////////////
-
 void Line::Util_ExpandFilenameWildcard(const char *szSource, const char *szDest, char *szExpandedDest)
 {
 	// copy one.two.three  *.txt     = one.two   .txt
@@ -11187,7 +11247,6 @@ void Line::Util_ExpandFilenameWildcard(const char *szSource, const char *szDest,
 ///////////////////////////////////////////////////////////////////////////////
 // Util_ExpandFilenameWildcardPart()
 ///////////////////////////////////////////////////////////////////////////////
-
 void Line::Util_ExpandFilenameWildcardPart(const char *szSource, const char *szDest, char *szExpandedDest)
 {
 	char	*lpTemp;
@@ -11232,7 +11291,6 @@ void Line::Util_ExpandFilenameWildcardPart(const char *szSource, const char *szD
 // Util_CreateDir()
 // Recursive directory creation function
 ///////////////////////////////////////////////////////////////////////////////
-
 bool Line::Util_CreateDir(const char *szDirName)
 {
 	DWORD	dwTemp;
@@ -11297,7 +11355,6 @@ bool Line::Util_CreateDir(const char *szDirName)
 // Util_DoesFileExist()
 // Returns true if file or directory exists
 ///////////////////////////////////////////////////////////////////////////////
-
 bool Line::Util_DoesFileExist(const char *szFilename)
 {
 	if ( strchr(szFilename,'*')||strchr(szFilename,'?') )
@@ -11344,7 +11401,6 @@ bool Line::Util_IsDir(const char *szPath) // Returns true if the path is a direc
 // Returns the full pathname and strips any trailing \s.  Assumes output
 // is _MAX_PATH in size
 ///////////////////////////////////////////////////////////////////////////////
-
 void Line::Util_GetFullPathName(const char *szIn, char *szOut)
 {
 	char	*szFilePart;
@@ -11372,7 +11428,6 @@ void Line::Util_StripTrailingDir(char *szPath)
 // Util_IsDifferentVolumes()
 // Checks two paths to see if they are on the same volume
 ///////////////////////////////////////////////////////////////////////////////
-
 bool Line::Util_IsDifferentVolumes(const char *szPath1, const char *szPath2)
 {
 	char			szP1Drive[_MAX_DRIVE+1];
@@ -11554,7 +11609,7 @@ int Line::ConvertEscapeChar(char *aFilespec, char aOldChar, char aNewChar, bool 
 size_t Line::ConvertEscapeCharGetLine(char *aBuf, int aMaxCharsToRead, FILE *fp)
 {
 	if (!aBuf || !fp) return -1;
-	if (aMaxCharsToRead <= 0) return 0;
+	if (aMaxCharsToRead < 1) return 0;
 	if (feof(fp)) return -1; // Previous call to this function probably already read the last line.
 	if (fgets(aBuf, aMaxCharsToRead, fp) == NULL) // end-of-file or error
 	{
@@ -11722,7 +11777,7 @@ DYNARESULT DynaCall(int aFlags, void *aFunction, DYNAPARM aParam[], int aParamCo
 
 	// "Push" args onto the portion of the stack reserved above. Every argument is aligned on a 4-byte boundary.
 	// We start at the rightmost argument (i.e. reverse order).
-	for (int i = aParamCount - 1; i >= 0; --i)
+	for (int i = aParamCount - 1; i > -1; --i)
 	{
 		DYNAPARM &this_param = aParam[i]; // For performance and convenience.
 		// Push the arg or its address onto the portion of the stack that was reserved for our use above.
@@ -13400,7 +13455,7 @@ void BIF_LV_Delete(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 
 	// Since above didn't return, there is a first paramter present.
 	int index = (int)ExprTokenToInt64(*aParam[0]) - 1; // -1 to convert to zero-based.
-	if (index >= 0)
+	if (index > -1)
 		aResultToken.value_int64 = SendMessage(control.hwnd, LVM_DELETEITEM, index, 0); // Returns TRUE/FALSE.
 }
 

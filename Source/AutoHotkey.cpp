@@ -284,6 +284,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	// there is no actual idle quasi-thread, so it can't really be interrupted):
 	g.Priority = PRIORITY_MINIMUM;
 	g.ThreadIsCritical = false;            // v1.0.38.04: Prevent the idle thread from being seen as uninterruptible.
+	g.AllowTimers = true;                  // v1.0.40.01: Similar to above.
 	g.AllowThreadToBeInterrupted = true;   // This is the primary line, the one above is not strictly necessary (just for maintainability).
 
 	// Call it in this special mode to kick off the main event loop.

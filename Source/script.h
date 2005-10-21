@@ -573,7 +573,7 @@ typedef UCHAR GuiControls;
 #define GUI_CONTROL_PROGRESS     17
 #define GUI_CONTROL_TAB          18 // Keep below flush with above as a reminder to keep it in sync:
 
-enum ThreadCommands {THREAD_CMD_INVALID, THREAD_CMD_PRIORITY, THREAD_CMD_INTERRUPT};
+enum ThreadCommands {THREAD_CMD_INVALID, THREAD_CMD_PRIORITY, THREAD_CMD_INTERRUPT, THREAD_CMD_NOTIMERS};
 
 #define PROCESS_PRIORITY_LETTERS "LBNAHR"
 enum ProcessCmds {PROCESS_CMD_INVALID, PROCESS_CMD_EXIST, PROCESS_CMD_CLOSE, PROCESS_CMD_PRIORITY
@@ -872,7 +872,7 @@ public:
 		, int aClickCount = 1, int aSpeed = DEFAULT_MOUSE_SPEED, KeyEventTypes aEventType = KEYDOWNANDUP, bool aMoveRelative = false);
 	static void MouseMove(int aX, int aY, int aSpeed = DEFAULT_MOUSE_SPEED, bool aMoveRelative = false);
 	ResultType MouseGetPos(bool aSimpleMode);
-	static void MouseEvent(DWORD aEventFlags, DWORD aX = 0, DWORD aY = 0, DWORD aData = 0)
+	static void MouseEvent(DWORD aEventFlags, DWORD aX, DWORD aY, DWORD aData = 0)
 	// A small inline to help us remember to use KEY_IGNORE so that our own mouse
 	// events won't be falsely detected as hotkeys by the hooks (if they are installed).
 	{
@@ -1463,6 +1463,7 @@ public:
 		if (!aBuf || !*aBuf) return THREAD_CMD_INVALID;
 		if (!stricmp(aBuf, "Priority")) return THREAD_CMD_PRIORITY;
 		if (!stricmp(aBuf, "Interrupt")) return THREAD_CMD_INTERRUPT;
+		if (!stricmp(aBuf, "NoTimers")) return THREAD_CMD_NOTIMERS;
 		return THREAD_CMD_INVALID;
 	}
 	
