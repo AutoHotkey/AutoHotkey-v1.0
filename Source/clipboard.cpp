@@ -141,6 +141,7 @@ size_t Clipboard::Get(char *aBuf)
 					*aBuf++ = '\r';  // These two are the proper newline sequence that the OS prefers.
 					*aBuf++ = '\n';
 				}
+				//else DragQueryFile() has ensured that aBuf is terminated.
 			}
 		// else aBuf has already been terminated upon entrance to this function.
 	}
@@ -247,9 +248,10 @@ ResultType Clipboard::Commit(UINT aFormat)
 		// Unlock prior to calling SetClipboardData:
 		if (mClipMemNewLocked) // probably always true if we're here.
 		{
-			// Best to access the memory while it's still locked, which is why
-			// this temp var is used:
-			new_is_empty = !*mClipMemNewLocked;
+			// Best to access the memory while it's still locked, which is why this temp var is used:
+			// v1.0.40.02: The following was fixed to properly recognize 0x0000 as the Unicode string terminator,
+			// which fixes problems with Transform Unicode.
+			new_is_empty = !mClipMemNewLocked[0] && (aFormat != CF_UNICODETEXT || !mClipMemNewLocked[1]);
 			GlobalUnlock(mClipMemNew); // mClipMemNew not mClipMemNewLocked.
 			mClipMemNewLocked = NULL;  // Keep this in sync with the above action.
 			mCapacity = 0; // Keep mCapacity in sync with the state of mClipMemNewLocked.

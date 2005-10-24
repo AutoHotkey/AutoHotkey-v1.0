@@ -968,10 +968,10 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 			// First, get the number of characters needed for the buffer size.  This count includes
 			// room for the terminating char:
 			if (   !(char_count = MultiByteToWideChar(CP_UTF8, 0, aValue1, -1, NULL, 0))   )
-				return output_var->Assign(); // Make clipboard blank to indicate failure.
+				return output_var->Assign(); // Make output_var (i.e. the clipboard) blank to indicate failure.
 			LPVOID clip_buf = g_clip.PrepareForWrite(char_count * sizeof(WCHAR));
 			if (!clip_buf)
-				return output_var->Assign(); // Make clipboard blank to indicate failure.
+				return output_var->Assign(); // Make output_var (the clipboard in this case) blank to indicate failure.
 			// Perform the conversion:
 			if (!MultiByteToWideChar(CP_UTF8, 0, aValue1, -1, (LPWSTR)clip_buf, char_count))
 			{
@@ -1015,23 +1015,23 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 		// needed (by passing a mode setting for aValue2):
 		// €‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ ¡¢£¤¥¦§¨©ª«¬­®¯°±²³´µ¶·¸¹º»¼½¾¿
 		// ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ
-		static const char *html[128] = {
-			  "&euro;", "&#129;", "&sbquo;", "&fnof;", "&bdquo;", "&hellip;", "&dagger;", "&Dagger;"
-			, "&circ;", "&permil;", "&Scaron;", "&lsaquo;", "&OElig;", "&#141;", "&#381;", "&#143;"
-			, "&#144;", "&lsquo;", "&rsquo;", "&ldquo;", "&rdquo;", "&bull;", "&ndash;", "&mdash;"
-			, "&tilde;", "&trade;", "&scaron;", "&rsaquo;", "&oelig;", "&#157;", "&#382;", "&Yuml;"
-			, "&nbsp;", "&iexcl;", "&cent;", "&pound;", "&curren;", "&yen;", "&brvbar;", "&sect;"
-			, "&uml;", "&copy;", "&ordf;", "&laquo;", "&not;", "&shy;", "&reg;", "&macr;"
-			, "&deg;", "&plusmn;", "&sup2;", "&sup3;", "&acute;", "&micro;", "&para;", "&middot;"
-			, "&cedil;", "&sup1;", "&ordm;", "&raquo;", "&frac14;", "&frac12;", "&frac34;", "&iquest;"
-			, "&Agrave;", "&Aacute;", "&Acirc;", "&Atilde;", "&Auml;", "&Aring;", "&AElig;", "&Ccedil;"
-			, "&Egrave;", "&Eacute;", "&Ecirc;", "&Euml;", "&Igrave;", "&Iacute;", "&Icirc;", "&Iuml;"
-			, "&ETH;", "&Ntilde;", "&Ograve;", "&Oacute;", "&Ocirc;", "&Otilde;", "&Ouml;", "&times;"
-			, "&Oslash;", "&Ugrave;", "&Uacute;", "&Ucirc;", "&Uuml;", "&Yacute;", "&THORN;", "&szlig;"
-			, "&agrave;", "&aacute;", "&acirc;", "&atilde;", "&auml;", "&aring;", "&aelig;", "&ccedil;"
-			, "&egrave;", "&eacute;", "&ecirc;", "&euml;", "&igrave;", "&iacute;", "&icirc;", "&iuml;"
-			, "&eth;", "&ntilde;", "&ograve;", "&oacute;", "&ocirc;", "&otilde;", "&ouml;", "&divide;"
-			, "&oslash;", "&ugrave;", "&uacute;", "&ucirc;", "&uuml;", "&yacute;", "&thorn;", "&yuml;"
+		static const char *sHtml[128] = { // v1.0.40.02: Removed leading '&' and trailing ';' to reduce code size.
+			  "euro", "#129", "sbquo", "fnof", "bdquo", "hellip", "dagger", "Dagger"
+			, "circ", "permil", "Scaron", "lsaquo", "OElig", "#141", "#381", "#143"
+			, "#144", "lsquo", "rsquo", "ldquo", "rdquo", "bull", "ndash", "mdash"
+			, "tilde", "trade", "scaron", "rsaquo", "oelig", "#157", "#382", "Yuml"
+			, "nbsp", "iexcl", "cent", "pound", "curren", "yen", "brvbar", "sect"
+			, "uml", "copy", "ordf", "laquo", "not", "shy", "reg", "macr"
+			, "deg", "plusmn", "sup2", "sup3", "acute", "micro", "para", "middot"
+			, "cedil", "sup1", "ordm", "raquo", "frac14", "frac12", "frac34", "iquest"
+			, "Agrave", "Aacute", "Acirc", "Atilde", "Auml", "Aring", "AElig", "Ccedil"
+			, "Egrave", "Eacute", "Ecirc", "Euml", "Igrave", "Iacute", "Icirc", "Iuml"
+			, "ETH", "Ntilde", "Ograve", "Oacute", "Ocirc", "Otilde", "Ouml", "times"
+			, "Oslash", "Ugrave", "Uacute", "Ucirc", "Uuml", "Yacute", "THORN", "szlig"
+			, "agrave", "aacute", "acirc", "atilde", "auml", "aring", "aelig", "ccedil"
+			, "egrave", "eacute", "ecirc", "euml", "igrave", "iacute", "icirc", "iuml"
+			, "eth", "ntilde", "ograve", "oacute", "ocirc", "otilde", "ouml", "divide"
+			, "oslash", "ugrave", "uacute", "ucirc", "uuml", "yacute", "thorn", "yuml"
 		};
 
 		// Determine how long the result string will be so that the output variable can be expanded
@@ -1053,7 +1053,7 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 				length += 4;
 			default:
 				if (*ucp > 127)
-					length += (VarSizeType)strlen(html[*ucp - 128]);
+					length += (VarSizeType)strlen(sHtml[*ucp - 128]) + 2; // +2 for the leading '&' and the trailing ';'.
 				else
 					++length;
 			}
@@ -1092,8 +1092,11 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 				break;
 			default:
 				if (*ucp > 127)
-					for (char *dp = (char *)html[*ucp - 128]; *dp; ++dp)
-						*contents++ = *dp;
+				{
+					*contents++ = '&'; // v1.0.40.02
+					strcpy(contents, sHtml[*ucp - 128]);
+					*contents++ = ';'; // v1.0.40.02
+				}
 				else
 					*contents++ = *ucp;
 			}
@@ -5312,43 +5315,39 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		break;
 
 	case WM_CLOSE:
-	case WM_ENDSESSION:
-	case AHK_EXIT_BY_RELOAD:
-	case AHK_EXIT_BY_SINGLEINSTANCE:
 		if (hWnd == g_hWnd) // i.e. not the SplashText window or anything other than the main.
 		{
 			// Receiving this msg is fairly unusual since SC_CLOSE is intercepted and redefined above.
 			// However, it does happen if an external app is asking us to close, such as another
 			// instance of this same script during the Reload command.  So treat it in a way similar
 			// to the user having chosen Exit from the menu.
-
+			//
 			// Leave it up to ExitApp() to decide whether to terminate based upon whether
 			// there is an OnExit subroutine, whether that subroutine is already running at
 			// the time a new WM_CLOSE is received, etc.  It's also its responsibility to call
 			// DestroyWindow() upon termination so that the WM_DESTROY message winds up being
 			// received and process in this function (which is probably necessary for a clean
 			// termination of the app and all its windows):
-			switch (iMsg)
-			{
-			case WM_CLOSE:
-				g_script.ExitApp(EXIT_WM_CLOSE);
-				break;
-			case WM_ENDSESSION: // MSDN: "A window receives this message through its WindowProc function."
-				if (wParam) // the session is being ended (otherwise, a prior WM_QUERYENDSESSION was aborted).
-					g_script.ExitApp((lParam & ENDSESSION_LOGOFF) ? EXIT_LOGOFF : EXIT_SHUTDOWN);
-				break;
-			case AHK_EXIT_BY_RELOAD:
-				g_script.ExitApp(EXIT_RELOAD);
-				break;
-			case AHK_EXIT_BY_SINGLEINSTANCE:
-				g_script.ExitApp(EXIT_SINGLEINSTANCE);
-				break;
-			}
+			g_script.ExitApp(EXIT_WM_CLOSE);
 			return 0;  // Verified correct.
 		}
 		// Otherwise, some window of ours other than our main window was destroyed
 		// (perhaps the splash window).  Let DefWindowProc() handle it:
 		break;
+
+	case WM_ENDSESSION: // MSDN: "A window receives this message through its WindowProc function."
+		if (wParam) // The session is being ended.
+			g_script.ExitApp((lParam & ENDSESSION_LOGOFF) ? EXIT_LOGOFF : EXIT_SHUTDOWN);
+		//else a prior WM_QUERYENDSESSION was aborted; i.e. the session really isn't ending.
+		return 0;  // Verified correct.
+
+	case AHK_EXIT_BY_RELOAD:
+		g_script.ExitApp(EXIT_RELOAD);
+		return 0; // Whether ExitApp() terminates depends on whether there's an OnExit subroutine and what it does.
+
+	case AHK_EXIT_BY_SINGLEINSTANCE:
+		g_script.ExitApp(EXIT_SINGLEINSTANCE);
+		return 0; // Whether ExitApp() terminates depends on whether there's an OnExit subroutine and what it does.
 
 	case WM_DESTROY:
 		if (hWnd == g_hWnd) // i.e. not the SplashText window or anything other than the main.
@@ -6246,11 +6245,18 @@ VOID CALLBACK InputBoxTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
 
 
 
+VOID CALLBACK DerefTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
+{
+	Line::FreeDerefBufIfLarge(); // It will also kill the timer, if appropriate.
+}
+
+
+
 ///////////////////
 // Mouse related //
 ///////////////////
 
-void DoMouseSleep() // Helper function for the mouse functions below.
+void DoMouseDelay() // Helper function for the mouse functions below.
 {
 	if (g.MouseDelay > -1)
 	{
@@ -6330,16 +6336,16 @@ ResultType Line::MouseClickDrag(vk_type aVK, int aX1, int aY1, int aX2, int aY2,
 
 	// Do the drag operation
 	MouseEvent(event_down, 0, 0, event_data);
-	DoMouseSleep();
+	DoMouseDelay();
 	MouseMove(aX2, aY2, aSpeed, aMoveRelative);
-	DoMouseSleep();
+	DoMouseDelay();
 	MouseEvent(event_up, 0, 0, event_data);
 
 	// It seems best to always do this one too in case the script line that caused
 	// us to be called here is followed immediately by another script line which
 	// is either another mouse click or something that relies upon this mouse drag
 	// having been completed:
-	DoMouseSleep();
+	DoMouseDelay();
 	return OK;
 }
 
@@ -6438,7 +6444,7 @@ ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aS
 			// (Thanks to Shimanov for this solution.)
 			//
 			// Remaining known limitations:
-			// 1) Title bar buttons are not visibly in a pressed down state when a simulated click-down is snet
+			// 1) Title bar buttons are not visibly in a pressed down state when a simulated click-down is sent
 			//    to them.
 			// 2) A window that should not be activated, such as AlwaysOnTop+Disabled, is activated anyway
 			//    by SetForegroundWindowEx().  Not yet fixed due to its rarity and minimal consequences.
@@ -6488,7 +6494,7 @@ ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aS
 				}
 			} // Work-around for sending mouse clicks to one of our thread's own windows.
 		}
-		sWorkaroundVK = 0; // Reset this indicator in all cases except those for which above already returned.
+		// sWorkaroundVK is reset later below.
 
 		// Since above didn't return, the work-around isn't in effect and normal click(s) will be sent:
 		if (aVK == VK_LBUTTON)
@@ -6525,8 +6531,11 @@ ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aS
 			// It seems best to always Sleep a certain minimum time between events
 			// because the click-down event may cause the target app to do something which
 			// changes the context or nature of the click-up event.  AutoIt3 has also been
-			// revised to do this.
-			DoMouseSleep();
+			// revised to do this. v1.0.40.02: Avoid doing the Sleep between the down and up
+			// events when the workaround is in effect because any MouseDelay greater than 10
+			// would cause DoMouseDelay() to pump messages, which would defeat the workaround:
+			if (!sWorkaroundVK)
+				DoMouseDelay();
 		}
 		if (aEventType != KEYDOWN) // It's either KEYUP or KEYDOWNANDUP.
 		{
@@ -6535,10 +6544,11 @@ ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aS
 			// us to be called here is followed immediately by another script line which
 			// is either another mouse click or something that relies upon the mouse click
 			// having been completed:
-			DoMouseSleep();
+			DoMouseDelay();
 		}
 	} // for()
 
+	sWorkaroundVK = 0; // Reset this indicator in all cases except those for which above already returned.
 	return OK;
 }
 
@@ -6608,7 +6618,7 @@ void Line::MouseMove(int aX, int aY, int aSpeed, bool aMoveRelative)
 	if (aSpeed == 0)
 	{
 		MouseEvent(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, aX, aY);
-		DoMouseSleep(); // Should definitely do this in case the action immediately after this is a click.
+		DoMouseDelay(); // Should definitely do this in case the action immediately after this is a click.
 		return;
 	}
 
@@ -6669,7 +6679,7 @@ void Line::MouseMove(int aX, int aY, int aSpeed, bool aMoveRelative)
 			}
 
 		MouseEvent(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, xCur, yCur);
-		DoMouseSleep();
+		DoMouseDelay();
 	}
 }
 
@@ -12205,9 +12215,9 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 
 	// Define the standard libraries here. If they reside in %SYSTEMROOT%\system32 it is not
 	// necessary to specify the full path (it wouldn't make sense anyway).
-	static HMODULE std_module[] = {GetModuleHandle("user32"), GetModuleHandle("kernel32")
+	static HMODULE sStdModule[] = {GetModuleHandle("user32"), GetModuleHandle("kernel32")
 		, GetModuleHandle("comctl32"), GetModuleHandle("gdi32")}; // user32 is listed first for performance.
-	static int std_module_count = sizeof(std_module) / sizeof(HMODULE);
+	static int sStdModule_count = sizeof(sStdModule) / sizeof(HMODULE);
 
 	// Make a modifiable copy of param1 so that the DLL name and function name can be parsed out easily:
 	strlcpy(param1_buf, aParam[0]->symbol == SYM_VAR ? aParam[0]->var->Contents() : aParam[0]->marker, sizeof(param1_buf) - 1); // -1 to reserve space for the "A" suffix later below.
@@ -12217,8 +12227,8 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 		function_name = param1_buf;
 
 		// Since no DLL was specified, search for the specified function among the standard modules.
-		for (i = 0; i < std_module_count; ++i)
-			if (   std_module[i] && (function = (void *)GetProcAddress(std_module[i], function_name))   )
+		for (i = 0; i < sStdModule_count; ++i)
+			if (   sStdModule[i] && (function = (void *)GetProcAddress(sStdModule[i], function_name))   )
 				break;
 		if (!function)
 		{
@@ -12227,8 +12237,8 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 			// function) seems unacceptably high in a custom DLL.  For example, a custom DLL might have
 			// function called "AA" but not one called "A".
 			strcat(function_name, "A"); // 1 byte of memory was already reserved above for the 'A'.
-			for (i = 0; i < std_module_count; ++i)
-				if (   std_module[i] && (function = (void *)GetProcAddress(std_module[i], function_name))   )
+			for (i = 0; i < sStdModule_count; ++i)
+				if (   sStdModule[i] && (function = (void *)GetProcAddress(sStdModule[i], function_name))   )
 					break;
 		}
 	}
@@ -12250,8 +12260,8 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 		if (   !(function = (void *)GetProcAddress(hmodule, function_name))   )
 		{
 			// v1.0.34: If it's one of the standard libraries, try the "A" suffix.
-			for (i = 0; i < std_module_count; ++i)
-				if (hmodule == std_module[i]) // Match found.
+			for (i = 0; i < sStdModule_count; ++i)
+				if (hmodule == sStdModule[i]) // Match found.
 				{
 					strcat(function_name, "A"); // 1 byte of memory was already reserved above for the 'A'.
 					function = (void *)GetProcAddress(hmodule, function_name);
@@ -12830,7 +12840,13 @@ void BIF_Abs(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCou
 		return;
 	}
 	if (aResultToken.symbol == SYM_INTEGER)
-		aResultToken.value_int64 = _abs64(aResultToken.value_int64); // _abs64() was checked for code bloat and as expected it doesn't add any measurable size.
+	{
+		// The following method is used instead of __abs64() to allow linking against the multi-threaded
+		// DLLs (vs. libs) if that option is ever used (such as for a minimum size AutoHotkeySC.bin file).
+		// It might be somewhat faster than __abs64() anyway, unless __abs64() is a macro or inline or something.
+		if (aResultToken.value_int64 < 0)
+			aResultToken.value_int64 = -aResultToken.value_int64;
+	}
 	else // Must be SYM_FLOAT due to the conversion above.
 		aResultToken.value_double = qmathFabs(aResultToken.value_double);
 }

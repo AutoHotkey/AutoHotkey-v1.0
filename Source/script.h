@@ -346,6 +346,7 @@ ResultType InputBox(Var *aOutputVar, char *aTitle, char *aText, bool aHideInput
 	, int aWidth, int aHeight, int aX, int aY, double aTimeout, char *aDefault);
 BOOL CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
 VOID CALLBACK InputBoxTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);
+VOID CALLBACK DerefTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime);
 BOOL CALLBACK EnumChildFindSeqNum(HWND aWnd, LPARAM lParam);
 BOOL CALLBACK EnumChildFindPoint(HWND aWnd, LPARAM lParam);
 BOOL CALLBACK EnumChildGetControlList(HWND aWnd, LPARAM lParam);
@@ -811,26 +812,26 @@ public:
 	#define NEW_RAW_ARG7 (aArgc > 6 ? new_arg[6].text : "")
 	#define NEW_RAW_ARG8 (aArgc > 7 ? new_arg[7].text : "")
 	#define NEW_RAW_ARG9 (aArgc > 8 ? new_arg[8].text : "")
-	#define LINE_ARG1 (line->mArgc > 0 ? line->sArgDeref[0] : "")
-	#define LINE_ARG2 (line->mArgc > 1 ? line->sArgDeref[1] : "")
-	#define LINE_ARG3 (line->mArgc > 2 ? line->sArgDeref[2] : "")
-	#define LINE_ARG4 (line->mArgc > 3 ? line->sArgDeref[3] : "")
+	#define LINE_ARG1 sArgDeref[0]
+	#define LINE_ARG2 sArgDeref[1]
+	#define LINE_ARG3 sArgDeref[2]
+	#define LINE_ARG4 sArgDeref[3]
 	#define SAVED_ARG1 (mArgc > 0 ? arg[0] : "")
 	#define SAVED_ARG2 (mArgc > 1 ? arg[1] : "")
 	#define SAVED_ARG3 (mArgc > 2 ? arg[2] : "")
 	#define SAVED_ARG4 (mArgc > 3 ? arg[3] : "")
 	#define SAVED_ARG5 (mArgc > 4 ? arg[4] : "")
-	#define ARG1 (mArgc > 0 ? sArgDeref[0] : "")
-	#define ARG2 (mArgc > 1 ? sArgDeref[1] : "")
-	#define ARG3 (mArgc > 2 ? sArgDeref[2] : "")
-	#define ARG4 (mArgc > 3 ? sArgDeref[3] : "")
-	#define ARG5 (mArgc > 4 ? sArgDeref[4] : "")
-	#define ARG6 (mArgc > 5 ? sArgDeref[5] : "")
-	#define ARG7 (mArgc > 6 ? sArgDeref[6] : "")
-	#define ARG8 (mArgc > 7 ? sArgDeref[7] : "")
-	#define ARG9 (mArgc > 8 ? sArgDeref[8] : "")
-	#define ARG10 (mArgc > 9 ? sArgDeref[9] : "")
-	#define ARG11 (mArgc > 10 ? sArgDeref[10] : "")
+	#define ARG1 sArgDeref[0]
+	#define ARG2 sArgDeref[1]
+	#define ARG3 sArgDeref[2]
+	#define ARG4 sArgDeref[3]
+	#define ARG5 sArgDeref[4]
+	#define ARG6 sArgDeref[5]
+	#define ARG7 sArgDeref[6]
+	#define ARG8 sArgDeref[7]
+	#define ARG9 sArgDeref[8]
+	#define ARG10 sArgDeref[9]
+	#define ARG11 sArgDeref[10]
 	#define TWO_ARGS ARG1, ARG2
 	#define THREE_ARGS  ARG1, ARG2, ARG3
 	#define FOUR_ARGS   ARG1, ARG2, ARG3, ARG4

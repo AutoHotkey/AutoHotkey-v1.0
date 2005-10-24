@@ -303,8 +303,8 @@ inline int GetWindowTextByTitleMatchMode(HWND aWnd, char *aBuf = NULL, int aBufS
 // route those events directly to a window proc, which would then repost them with a NULL hwnd
 // to prevent bouncing, which in turn would cause the dialog pump to discard them).  To avoid
 // this and make the behavior more useful and intuitive, this has been changed so that any
-// pending threads will launch right before the dialog is displayed.  But when the dialog is
-// dismissed, the thread becomes critical again.
+// pending threads will launch right before the dialog is displayed.  But later, when the user
+// dismisses the dialog, the thread becomes critical again.
 // 
 // Update for v1.0.38.04: Rather than setting AllowThreadToBeInterrupted unconditionally to
 // true, make it reflect the state of g.ThreadIsCritical.  This increases flexbility by allowing

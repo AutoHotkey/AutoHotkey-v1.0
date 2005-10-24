@@ -68,7 +68,8 @@
 extern "C" {
 #endif
 
-static char quickmath_id[] = "$Id: qmath.h,v 1.1 2004/01/15 19:50:35 jonbennett Exp $";
+// Commented out in AutoHotkey v1.0.40.02 to help reduce code size:
+//static char quickmath_id[] = "$Id: qmath.h,v 1.1 2004/01/15 19:50:35 jonbennett Exp $";
 
 // for silly C compilers allowing inlining
 // try using "static" definition otherwise

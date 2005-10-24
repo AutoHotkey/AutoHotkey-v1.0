@@ -146,11 +146,11 @@
 			WholeProgramOptimization="FALSE">
 			<Tool
 				Name="VCCLCompilerTool"
-				Optimization="2"
+				Optimization="1"
 				GlobalOptimizations="TRUE"
 				InlineFunctionExpansion="0"
 				EnableIntrinsicFunctions="TRUE"
-				FavorSizeOrSpeed="1"
+				FavorSizeOrSpeed="2"
 				OmitFramePointers="TRUE"
 				PreprocessorDefinitions="WIN32;NDEBUG;_WINDOWS;AUTOHOTKEYSC"
 				StringPooling="TRUE"
@@ -171,6 +171,73 @@
 				OutputFile="$(OutDir)/AutoHotkeySC.bin"
 				LinkIncremental="1"
 				IgnoreDefaultLibraryNames="LibCMT;MSVCrt"
+				GenerateDebugInformation="FALSE"
+				SubSystem="2"
+				StackReserveSize="4194304"
+				LargeAddressAware="1"
+				TerminalServerAware="1"
+				OptimizeReferences="2"
+				EnableCOMDATFolding="2"
+				OptimizeForWindows98="1"
+				TargetMachine="1"/>
+			<Tool
+				Name="VCMIDLTool"/>
+			<Tool
+				Name="VCPostBuildEventTool"/>
+			<Tool
+				Name="VCPreBuildEventTool"/>
+			<Tool
+				Name="VCPreLinkEventTool"/>
+			<Tool
+				Name="VCResourceCompilerTool"
+				PreprocessorDefinitions="AUTOHOTKEYSC"/>
+			<Tool
+				Name="VCWebServiceProxyGeneratorTool"/>
+			<Tool
+				Name="VCXMLDataGeneratorTool"/>
+			<Tool
+				Name="VCWebDeploymentTool"/>
+			<Tool
+				Name="VCManagedWrapperGeneratorTool"/>
+			<Tool
+				Name="VCAuxiliaryManagedWrapperGeneratorTool"/>
+		</Configuration>
+		<Configuration
+			Name="SC (minimum size)|Win32"
+			OutputDirectory="$(ConfigurationName)"
+			IntermediateDirectory="$(ConfigurationName)"
+			ConfigurationType="1"
+			CharacterSet="2"
+			WholeProgramOptimization="FALSE">
+			<Tool
+				Name="VCCLCompilerTool"
+				Optimization="1"
+				GlobalOptimizations="TRUE"
+				InlineFunctionExpansion="1"
+				EnableIntrinsicFunctions="TRUE"
+				FavorSizeOrSpeed="2"
+				OmitFramePointers="TRUE"
+				OptimizeForProcessor="0"
+				OptimizeForWindowsApplication="FALSE"
+				PreprocessorDefinitions="WIN32;NDEBUG;_WINDOWS;AUTOHOTKEYSC"
+				StringPooling="TRUE"
+				ExceptionHandling="FALSE"
+				RuntimeLibrary="2"
+				StructMemberAlignment="0"
+				BufferSecurityCheck="FALSE"
+				UsePrecompiledHeader="3"
+				WarningLevel="3"
+				Detect64BitPortabilityProblems="FALSE"
+				DebugInformationFormat="3"/>
+			<Tool
+				Name="VCCustomBuildTool"/>
+			<Tool
+				Name="VCLinkerTool"
+				AdditionalDependencies="wsock32.lib winmm.lib version.lib comctl32.lib $(InputDir)\source\lib\exearc_read_mt.lib"
+				ShowProgress="0"
+				OutputFile="$(OutDir)/AutoHotkeySC.bin"
+				LinkIncremental="1"
+				IgnoreDefaultLibraryNames="libc;libcmt"
 				GenerateDebugInformation="FALSE"
 				SubSystem="2"
 				StackReserveSize="4194304"
@@ -242,6 +309,32 @@
 			</File>
 			<File
 				RelativePath=".\source\script2.cpp">
+			</File>
+			<File
+				RelativePath=".\source\script_expression.cpp">
+				<FileConfiguration
+					Name="Release|Win32">
+					<Tool
+						Name="VCCLCompilerTool"
+						Optimization="2"
+						FavorSizeOrSpeed="1"/>
+				</FileConfiguration>
+				<FileConfiguration
+					Name="SC (self-contained)|Win32">
+					<Tool
+						Name="VCCLCompilerTool"
+						Optimization="2"
+						FavorSizeOrSpeed="1"
+						UsePrecompiledHeader="0"/>
+				</FileConfiguration>
+				<FileConfiguration
+					Name="SC (minimum size)|Win32">
+					<Tool
+						Name="VCCLCompilerTool"
+						Optimization="2"
+						FavorSizeOrSpeed="1"
+						UsePrecompiledHeader="0"/>
+				</FileConfiguration>
 			</File>
 			<File
 				RelativePath=".\source\script_gui.cpp">

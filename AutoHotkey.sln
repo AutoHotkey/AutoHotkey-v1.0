@@ -16,6 +16,7 @@ Global
 	GlobalSection(SolutionConfiguration) = preSolution
 		Debug = Debug
 		Release = Release
+		SC (minimum size) = SC (minimum size)
 		SC (self-contained) = SC (self-contained)
 	EndGlobalSection
 	GlobalSection(ProjectConfiguration) = postSolution
@@ -23,6 +24,8 @@ Global
 		{76EFDEE3-81CF-4ADA-94DC-EA5509FF6FFC}.Debug.Build.0 = Debug|Win32
 		{76EFDEE3-81CF-4ADA-94DC-EA5509FF6FFC}.Release.ActiveCfg = Release|Win32
 		{76EFDEE3-81CF-4ADA-94DC-EA5509FF6FFC}.Release.Build.0 = Release|Win32
+		{76EFDEE3-81CF-4ADA-94DC-EA5509FF6FFC}.SC (minimum size).ActiveCfg = SC (minimum size)|Win32
+		{76EFDEE3-81CF-4ADA-94DC-EA5509FF6FFC}.SC (minimum size).Build.0 = SC (minimum size)|Win32
 		{76EFDEE3-81CF-4ADA-94DC-EA5509FF6FFC}.SC (self-contained).ActiveCfg = SC (self-contained)|Win32
 		{76EFDEE3-81CF-4ADA-94DC-EA5509FF6FFC}.SC (self-contained).Build.0 = SC (self-contained)|Win32
 	EndGlobalSection

@@ -2014,7 +2014,7 @@ vk_type TextToSpecial(char *aText, UINT aTextLength, KeyEventTypes &aEventType, 
 #ifdef ENABLE_KEY_HISTORY_FILE
 ResultType KeyHistoryToFile(char *aFilespec, char aType, bool aKeyUp, vk_type aVK, sc_type aSC)
 {
-	static char target_filespec[MAX_PATH] = "";
+	static char sTargetFilespec[MAX_PATH] = "";
 	static FILE *fp = NULL;
 	static HWND last_foreground_window = NULL;
 	static DWORD last_tickcount = GetTickCount();
@@ -2032,19 +2032,19 @@ ResultType KeyHistoryToFile(char *aFilespec, char aType, bool aKeyUp, vk_type aV
 		return OK;
 	}
 
-	if (aFilespec && *aFilespec && stricmp(aFilespec, target_filespec)) // Target filename has changed.
+	if (aFilespec && *aFilespec && stricmp(aFilespec, sTargetFilespec)) // Target filename has changed.
 	{
 		if (fp)
 		{
 			fclose(fp);
 			fp = NULL;  // To indicate to future calls to this function that it's closed.
 		}
-		strlcpy(target_filespec, aFilespec, sizeof(target_filespec));
+		strlcpy(sTargetFilespec, aFilespec, sizeof(sTargetFilespec));
 	}
 
 	if (!aVK && !aSC) // Caller didn't want us to log anything this time.
 		return OK;
-	if (!*target_filespec)
+	if (!*sTargetFilespec)
 		return OK; // No target filename has ever been specified, so don't even attempt to open the file.
 
 	if (!aVK)
@@ -2077,7 +2077,7 @@ ResultType KeyHistoryToFile(char *aFilespec, char aType, bool aKeyUp, vk_type aV
 		);
 	last_tickcount = curr_tickcount;
 	if (!fp)
-		if (   !(fp = fopen(target_filespec, "a"))   )
+		if (   !(fp = fopen(sTargetFilespec, "a"))   )
 			return OK;
 	fputs(buf, fp);
 	return OK;

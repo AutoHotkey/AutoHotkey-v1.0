@@ -1888,10 +1888,3 @@ VOID CALLBACK InputTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
 	KILL_INPUT_TIMER
 	g_input.status = INPUT_TIMED_OUT;
 }
-
-
-
-VOID CALLBACK DerefTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
-{
-	Line::FreeDerefBufIfLarge(); // It will also kill the timer, if appropriate.
-}
