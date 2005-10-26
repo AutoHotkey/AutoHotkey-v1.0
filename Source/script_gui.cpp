@@ -1991,7 +1991,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 				// alternative, (2 * GetSystemMetrics(SM_CXEDGE)), seems to add a little
 				// too much width (namely 4 vs. 2).
 				GetTextMetrics(hdc, &tm);
-				extra_width += GetSystemMetrics(SM_CXMENUCHECK) + tm.tmAveCharWidth + 3;
+				extra_width += GetSystemMetrics(SM_CXMENUCHECK) + tm.tmAveCharWidth + 2; // v1.0.40.03: Reverted to +2 vs. +3 (it had been changed to +3 in v1.0.40.01).
 			}
 			if (opt.width != COORD_UNSPECIFIED) // Since a width was given, auto-expand the height via word-wrapping.
 				draw_format |= DT_WORDBREAK;

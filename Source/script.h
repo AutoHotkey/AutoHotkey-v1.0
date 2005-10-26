@@ -812,10 +812,6 @@ public:
 	#define NEW_RAW_ARG7 (aArgc > 6 ? new_arg[6].text : "")
 	#define NEW_RAW_ARG8 (aArgc > 7 ? new_arg[7].text : "")
 	#define NEW_RAW_ARG9 (aArgc > 8 ? new_arg[8].text : "")
-	#define LINE_ARG1 sArgDeref[0]
-	#define LINE_ARG2 sArgDeref[1]
-	#define LINE_ARG3 sArgDeref[2]
-	#define LINE_ARG4 sArgDeref[3]
 	#define SAVED_ARG1 (mArgc > 0 ? arg[0] : "")
 	#define SAVED_ARG2 (mArgc > 1 ? arg[1] : "")
 	#define SAVED_ARG3 (mArgc > 2 ? arg[2] : "")

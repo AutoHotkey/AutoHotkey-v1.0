@@ -7048,9 +7048,10 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 				// Now use line vs. line_temp to hold the new values, so that line_temp
 				// stays as a marker to the ELSE line itself:
 				line = line_temp->mNextLine;  // Set it to the else's action line.
-				if (line == NULL) // An else with no action.
-					// Update: this is now impossible because all scripts end in ACT_EXIT.
-					return line_temp->PreparseError("Q"); // Placeholder since impossible. Formerly "This ELSE has no action."
+				// Update: The following is now impossible because all scripts end in ACT_EXIT.
+				// Thus, it's commented out:
+				//if (line == NULL) // An else with no action.
+				//	return line_temp->PreparseError("Q"); // Placeholder since impossible. Formerly "This ELSE has no action."
 				if (line->mActionType == ACT_ELSE || line->mActionType == ACT_BLOCK_END)
 					return line_temp->PreparseError("Inappropriate line beneath ELSE.");
 				// Assign to line rather than line_temp:
@@ -7577,11 +7578,11 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 			++g_script.mLinesExecutedThisCycle; // Always increment for GroupActivate.
 			WinGroup *group;
 			if (   !(group = (WinGroup *)mAttribute)   )
-				if (   !(group = g_script.FindOrAddGroup(LINE_ARG1))   )
+				if (   !(group = g_script.FindOrAddGroup(ARG1))   )
 					return FAIL;  // It already displayed the error for us.
 			Line *jump_to_line;
 			// Note: This will take care of DoWinDelay if needed:
-			group->Activate(*LINE_ARG2 && !stricmp(LINE_ARG2, "R"), NULL, (void **)&jump_to_line);
+			group->Activate(*ARG2 && !stricmp(ARG2, "R"), NULL, (void **)&jump_to_line);
 			if (jump_to_line)
 			{
 				if (!line->IsJumpValid(jump_to_line))
@@ -7612,7 +7613,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 			// be a function call that does something, so it should be called even though
 			// its return value is discarded.
 			if (apReturnValue) // Caller wants the return value.
-				*apReturnValue = LINE_ARG1; // This sets it to blank if this return lacks an arg.
+				*apReturnValue = ARG1; // This sets it to blank if this return lacks an arg.
 			//else the return value, if any, is discarded.
 			// Don't count returns against the total since they should be nearly instantaneous:
 			//++g_script.mLinesExecutedThisCycle;
@@ -7631,7 +7632,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 			AttributeType attr = line->mAttribute;
 			HKEY root_key_type = NULL; // This will hold the type of root key, independent of whether it is local or remote.
 			if (attr == ATTR_LOOP_REG)
-				root_key_type = RegConvertRootKey(LINE_ARG1);
+				root_key_type = RegConvertRootKey(ARG1);
 			else if (attr == ATTR_LOOP_UNKNOWN || attr == ATTR_NONE)
 			{
 				// Since it couldn't be determined at load-time (probably due to derefs),
@@ -7652,16 +7653,16 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 					// but not at load-time (since it doesn't make sense to have a literal floating
 					// point number as the iteration count, but a variable containing a pure float
 					// should be allowed):
-					if (IsPureNumeric(LINE_ARG1, true, true, true))
+					if (IsPureNumeric(ARG1, true, true, true))
 						attr = ATTR_LOOP_NORMAL;
 					else
 					{
-						root_key_type = RegConvertRootKey(LINE_ARG1);
+						root_key_type = RegConvertRootKey(ARG1);
 						attr = root_key_type ? ATTR_LOOP_REG : ATTR_LOOP_FILE;
 					}
 					break;
 				default: // 2 or more args.
-					if (!stricmp(LINE_ARG1, "Read"))
+					if (!stricmp(ARG1, "Read"))
 						attr = ATTR_LOOP_READ_FILE;
 					// Note that a "Parse" loop is not allowed to have it's first param be a variable reference
 					// that resolves to the word "Parse" at runtime.  This is because the input variable would not
@@ -7670,21 +7671,21 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 					// virtually no conceivable use for allowing it be a variable reference.
 					else
 					{
-						root_key_type = RegConvertRootKey(LINE_ARG1);
+						root_key_type = RegConvertRootKey(ARG1);
 						attr = root_key_type ? ATTR_LOOP_REG : ATTR_LOOP_FILE;
 					}
 				}
 			}
 
-			bool recurse_subfolders = (attr == ATTR_LOOP_FILE && *LINE_ARG3 == '1' && !*(LINE_ARG3 + 1))
-				|| (attr == ATTR_LOOP_REG && *LINE_ARG4 == '1' && !*(LINE_ARG4 + 1));
+			bool recurse_subfolders = (attr == ATTR_LOOP_FILE && *ARG3 == '1' && !*(ARG3 + 1))
+				|| (attr == ATTR_LOOP_REG && *ARG4 == '1' && !*(ARG4 + 1));
 
 			__int64 iteration_limit = 0;
 			bool is_infinite = line->mArgc < 1;
 			if (!is_infinite)
 				// Must be set to zero at least for ATTR_LOOP_FILE:
 				iteration_limit = (attr == ATTR_LOOP_FILE || attr == ATTR_LOOP_REG || attr == ATTR_LOOP_READ_FILE
-					||  attr == ATTR_LOOP_PARSE) ? 0 : ATOI64(LINE_ARG1);
+					||  attr == ATTR_LOOP_PARSE) ? 0 : ATOI64(ARG1);
 
 			if (line->mActionType == ACT_REPEAT && !iteration_limit)
 				is_infinite = true;  // Because a 0 means infinite in AutoIt2 for the REPEAT command.
@@ -7693,15 +7694,15 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 			FileLoopModeType file_loop_mode;
 			if (attr == ATTR_LOOP_FILE)
 			{
-				file_loop_mode = (line->mArgc <= 1) ? FILE_LOOP_FILES_ONLY : ConvertLoopMode(LINE_ARG2);
+				file_loop_mode = (line->mArgc <= 1) ? FILE_LOOP_FILES_ONLY : ConvertLoopMode(ARG2);
 				if (file_loop_mode == FILE_LOOP_INVALID)
-					return line->LineError(ERR_PARAM2_INVALID ERR_ABORT, FAIL, LINE_ARG2);
+					return line->LineError(ERR_PARAM2_INVALID ERR_ABORT, FAIL, ARG2);
 			}
 			else if (attr == ATTR_LOOP_REG)
 			{
-				file_loop_mode = (line->mArgc <= 2) ? FILE_LOOP_FILES_ONLY : ConvertLoopMode(LINE_ARG3);
+				file_loop_mode = (line->mArgc <= 2) ? FILE_LOOP_FILES_ONLY : ConvertLoopMode(ARG3);
 				if (file_loop_mode == FILE_LOOP_INVALID)
-					return line->LineError(ERR_PARAM3_INVALID ERR_ABORT, FAIL, LINE_ARG3);
+					return line->LineError(ERR_PARAM3_INVALID ERR_ABORT, FAIL, ARG3);
 			}
 			else
 				file_loop_mode = FILE_LOOP_INVALID;
@@ -7721,7 +7722,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 			{
 				// The phrase "csv" is unique enough since user can always rearrange the letters
 				// to do a literal parse using C, S, and V as delimiters:
-				if (stricmp(LINE_ARG3, "CSV"))
+				if (stricmp(ARG3, "CSV"))
 					result = line->PerformLoopParse(apReturnValue, aCurrentFile, aCurrentRegItem, aCurrentReadFile
 						, continue_main_loop, jump_to_line, script_iteration);
 				else
@@ -7731,11 +7732,11 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 			else if (attr == ATTR_LOOP_READ_FILE)
 			{
 				// Open the input file:
-				FILE *read_file = fopen(LINE_ARG2, "r");
+				FILE *read_file = fopen(ARG2, "r");
 				if (read_file)
 				{
 					result = line->PerformLoopReadFile(apReturnValue, aCurrentFile, aCurrentRegItem, aCurrentField
-						, continue_main_loop, jump_to_line, read_file, LINE_ARG3, script_iteration);
+						, continue_main_loop, jump_to_line, read_file, ARG3, script_iteration);
 					fclose(read_file);
 				}
 				else
@@ -7752,13 +7753,13 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 				// be done at a later time:
 				bool is_remote_registry;
 				// This will open the key if it's remote:
-				HKEY root_key = RegConvertRootKey(LINE_ARG1, &is_remote_registry);
+				HKEY root_key = RegConvertRootKey(ARG1, &is_remote_registry);
 				if (root_key)
 				{
 					// root_key_type needs to be passed in order to support GetLoopRegKey():
 					result = line->PerformLoopReg(apReturnValue, aCurrentFile, aCurrentReadFile, aCurrentField
 						, continue_main_loop, jump_to_line, file_loop_mode, recurse_subfolders
-						, root_key_type, root_key, LINE_ARG2, script_iteration);
+						, root_key_type, root_key, ARG2, script_iteration);
 					if (is_remote_registry)
 						RegCloseKey(root_key);
 				}
@@ -7773,7 +7774,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 			else // All other loops types are handled this way:
 				result = line->PerformLoop(apReturnValue, aCurrentFile, aCurrentRegItem, aCurrentReadFile
 					, aCurrentField, continue_main_loop, jump_to_line, attr, file_loop_mode, recurse_subfolders
-					, LINE_ARG1, iteration_limit, is_infinite, script_iteration);
+					, ARG1, iteration_limit, is_infinite, script_iteration);
 
 			if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT)
 				return result;
@@ -7831,10 +7832,10 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 			else
 				// This has been tested and it does yield to the OS the error code indicated in ARG1,
 				// if present (otherwise it returns 0, naturally) as expected:
-				return g_script.ExitApp(EXIT_EXIT, NULL, ATOI(LINE_ARG1));
+				return g_script.ExitApp(EXIT_EXIT, NULL, ATOI(ARG1));
 
 		case ACT_EXITAPP: // Unconditional exit.
-			return g_script.ExitApp(EXIT_EXIT, NULL, ATOI(LINE_ARG1));
+			return g_script.ExitApp(EXIT_EXIT, NULL, ATOI(ARG1));
 
 		case ACT_BLOCK_BEGIN:
 			if (line->mAttribute) // This is the ACT_BLOCK_BEGIN that starts a function's body.
@@ -8868,7 +8869,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	// one, just have one or two for general purpose use (helps conserve stack space):
 	char buf_temp[LINE_SIZE]; // Work area for use in various places.  Some things rely on it being large.
 	WinGroup *group; // For the group commands.
-	Var *output_var = NULL; // Init to help catch bugs.
+	Var *output_var;
 	VarSizeType space_needed; // For the commands that assign directly to an output var.
 	ToggleValueType toggle;  // For commands that use on/off/neutral.
 	int x, y;   // For mouse commands.
