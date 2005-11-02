@@ -70,6 +70,9 @@ size_t Clipboard::Get(char *aBuf)
 			Close(CANT_OPEN_CLIPBOARD_READ);
 			return CLIPBOARD_FAILURE;
 		}
+		// GetClipboardData() apparently fails when the text on the clipboard is greater than a certain size
+		// (Even though GetLastError() reports "Operation completed successfully").  The data size at which
+		// this occurs is somewhere between 20 to 96 MB (perhaps depending on system's memory and CPU speed).
 		if (   !(mClipMemNow = GetClipboardData(clipboard_contains_files ? CF_HDROP : CF_TEXT))   )
 		{
 			// Fix for v1.0.31.02: GetClipboardData() apparently fails when there are files on the clipboard

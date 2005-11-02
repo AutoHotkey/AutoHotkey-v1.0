@@ -4930,7 +4930,7 @@ void GuiType::ControlAddContents(GuiControlType &aControl, char *aContent, int a
 	// For tab controls:
 	TCITEM tci;
 	tci.mask = TCIF_TEXT | TCIF_IMAGE; // Simpler just to init unconditionally rather than checking control type.
-	tci.iImage = -1; 
+	tci.iImage = -1;
 
 	// For ListView:
 	LVCOLUMN lvc;

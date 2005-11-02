@@ -946,7 +946,9 @@ bool IsFunction(char *aBuf)
 	// lies to the left of its first open-parenthesis can't contain any colons anyway because the above would
 	// have caught it as first-expr-char-is-not-open-parenthesis.  In other words, there's no way for a function's
 	// opening parenthesis to occur after a legtimate/quoted colon or double-colon in its parameters.
-	return action_end && *action_end == '(' && (action_end - aBuf != 2 || strnicmp(aBuf, "IF", 2))
+	// v1.0.40.04: Added condition "action_end != aBuf" to allow a hotkey or remap or hotkey such as
+	// such as "(::" to work even if it ends in a close-parenthesis such as "(::)" or "(::MsgBox )"
+	return action_end && *action_end == '(' && action_end != aBuf && (action_end - aBuf != 2 || strnicmp(aBuf, "IF", 2))
 		&& action_end[strlen(action_end) - 1] == ')'; // This last check avoids detecting a label such as "Label(x):" as a function.
 	// Also, it seems best never to allow if(...) to be a function call, even if it's blank inside such as if().
 	// In addition, it seems best not to allow if(...) to ever be a function definition since such a function
@@ -1910,8 +1912,10 @@ continue_main_loop: // This method is used in lieu of "continue" for performance
 					}
 					break;
 				}
+				mCurrLine = NULL; // v1.0.40.04: Prevents showing misleading vicinity lines for a syntax-error such as %::%
 				sprintf(buf, "{Blind}%s%s{%s down}", extra_event, remap_dest_modifiers, remap_dest);
-				AddLine(ACT_SEND, &buf, 1, NULL);
+				if (!AddLine(ACT_SEND, &buf, 1, NULL)) // v1.0.40.04: Check for failure due to bad remaps such as %::%.
+					return CloseAndReturn(fp, script_buf, FAIL);
 				AddLine(ACT_RETURN);
 				// Add key-up hotkey label, e.g. *LButton up::
 				sprintf(buf, "*%s up::", remap_source); // Should be no risk of buffer overflow due to prior validation.
@@ -3919,7 +3923,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 						if (!in_quotes)
 						{
 							if (!open_parens)
-								return ScriptError("Close-paren with no open-paren.", cp); // And indicate cp as the exact spot.
+								return ScriptError("Missing \"(\"", cp); // And indicate cp as the exact spot.
 							--open_parens;
 						}
 						break;
@@ -6872,7 +6876,10 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 				if (abort) // the above call already reported the error.
 					return NULL;
 				else
+				{
+					abort = true; // So that the caller doesn't also report an error.
 					return line->PreparseError("Missing \"}\"");
+				}
 			--nest_level;
 			// The convention is to have the BLOCK_BEGIN's related_line
 			// point to the line *after* the BLOCK_END.
@@ -6889,7 +6896,7 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 			// END_BLOCK line itself so that the caller can differentiate between
 			// a NULL due to end-of-script and a NULL caused by an error:
 			return aFindBlockEnd ? line  // Doesn't seem necessary to set abort to true.
-				: line->PreparseError("Attempt to close a non-existent block.");
+				: line->PreparseError("Missing \"{\"");
 		default: // Continue line-by-line.
 			line = line->mNextLine;
 		} // switch()
@@ -6934,9 +6941,11 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 		{
 			// ActionType is an IF or a LOOP.
 			line_temp = line->mNextLine;  // line_temp is now this IF's or LOOP's action-line.
-			if (line_temp == NULL) // This is an orphan IF/LOOP (has no action-line) at the end of the script.
-				// Update: this is now impossible because all scripts end in ACT_EXIT.
-				return line->PreparseError("Q"); // Placeholder. Formerly "This if-statement or loop has no action."
+			// Update: Below is commented out because it's now impossible (since all scripts end in ACT_EXIT):
+			//if (line_temp == NULL) // This is an orphan IF/LOOP (has no action-line) at the end of the script.
+			//	return line->PreparseError("Q"); // Placeholder. Formerly "This if-statement or loop has no action."
+
+			// Other things rely on this check having been done, such as "if (line->mRelatedLine != NULL)":
 			if (line_temp->mActionType == ACT_ELSE || line_temp->mActionType == ACT_BLOCK_END)
 				return line->PreparseError("Inappropriate line beneath IF or LOOP.");
 
@@ -7006,7 +7015,8 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 			if (line_temp == NULL) // Error or end-of-script was reached.
 				return NULL;
 
-			// Temporary check for something that should be impossible if design is correct:
+			// Seems best to keep this check for mainability because changes to other checks can impact
+			// whether this check will ever be "true":
 			if (line->mRelatedLine != NULL)
 				return line->PreparseError("Q"); // Placeholder since it shouldn't happen.  Formerly "This if-statement or LOOP unexpectedly already had an ELSE or end-point."
 			// Set it to the else's action, rather than the else itself, since the else itself
@@ -7040,7 +7050,9 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 					if (aMode != ONLY_ONE_LINE)
 						// This ELSE was encountered while sequentially scanning the contents
 						// of a block or at the otuermost nesting layer.  More thought is required
-						// to verify this is correct:
+						// to verify this is correct.  UPDATE: This check is very old and I haven't
+						// found a case that can produce it yet, but until proven otherwise its safer
+						// to assume it's possible.
 						return line_temp->PreparseError(ERR_ELSE_WITH_NO_IF);
 					// Let the caller handle this else, since it can't be ours:
 					return line_temp;

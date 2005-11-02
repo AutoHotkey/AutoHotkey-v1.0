@@ -22,7 +22,7 @@ GNU General Public License for more details.
 SimpleHeap *SimpleHeap::sFirst = NULL;
 SimpleHeap *SimpleHeap::sLast  = NULL;
 char *SimpleHeap::sMostRecentlyAllocated = NULL;
-UINT SimpleHeap::sBlockCount   = 0;
+UINT SimpleHeap::sBlockCount = 0;
 
 char *SimpleHeap::Malloc(char *aBuf)
 {
@@ -53,16 +53,29 @@ char *SimpleHeap::Malloc(size_t aSize)
 {
 	if (aSize < 1 || aSize > BLOCK_SIZE)
 		return NULL;
-	if (NULL == sFirst) // We need at least one block to do anything, so create it.
-		if (NULL == (sFirst = new SimpleHeap))
+	if (!sFirst) // We need at least one block to do anything, so create it.
+		if (   !(sFirst = CreateBlock())   )
 			return NULL;
 	if (aSize > sLast->mSpaceAvailable)
-		if (NULL == (sLast->mNextBlock = new SimpleHeap))
+		if (   !(sLast->mNextBlock = CreateBlock())   )
 			return NULL;
-	char *return_address = sMostRecentlyAllocated = sLast->mFreeMarker;
-	sLast->mFreeMarker += aSize;
-	sLast->mSpaceAvailable -= aSize;
-	return return_address;
+	sMostRecentlyAllocated = sLast->mFreeMarker;
+	// v1.0.40.04: Set up the next chunk to be aligned on a 32-bit boundary (the first chunk in each block
+	// should always be aligned since the block's address came from malloc()).  On average, this change
+	// "wastes" only 1.5 bytes per chunk. In a 200 KB script of typical contents, this change requires less
+	// than 8 KB of additional memory (as shown by temporarily making BLOCK_SIZE a smaller value such as 8 KB
+	// for a more accurate measurement).  That cost seems well worth the following benefits:
+	// 1) Solves failure of API functions like GetRawInputDeviceList() when passed a non-aligned address.
+	// 2) May solve other obscure issues (past and future), which improves sanity due to not chasing bugs
+	//    for hours on end that were caused solely by non-alignment.
+	// 3) May slightly improve performance since aligned data is easier for the CPU to access and cache.
+	size_t remainder = aSize % 4;
+	size_t size_consumed = remainder ? aSize + (4 - remainder) : aSize;
+	if (size_consumed > sLast->mSpaceAvailable) // For maintainability, don't allow mFreeMarker to go out of bounds or
+		size_consumed = sLast->mSpaceAvailable; // mSpaceAvailable to go negative (which it can't due to be unsigned).
+	sLast->mFreeMarker += size_consumed;
+	sLast->mSpaceAvailable -= size_consumed;
+	return sMostRecentlyAllocated;
 }
 
 
@@ -82,29 +95,49 @@ void SimpleHeap::Delete(void *aPtr)
 
 
 
-void SimpleHeap::DeleteAll()
-// See Hotkey::AllDestructAndExit for comments about why this isn't actually called.
+// Commented out because not currently used:
+//void SimpleHeap::DeleteAll()
+//// See Hotkey::AllDestructAndExit for comments about why this isn't actually called.
+//{
+//	SimpleHeap *next, *curr;
+//	for (curr = sFirst; curr != NULL;)
+//	{
+//		next = curr->mNextBlock;  // Save this member's value prior to deleting the object.
+//		delete curr;
+//		curr = next;
+//	}
+//}
+
+
+
+SimpleHeap *SimpleHeap::CreateBlock()
+// Added for v1.0.40.04 to try to solve the fact that some functions such as GetRawInputDeviceList()
+// will sometimes fail if passed memory from SimpleHeap. Although this change didn't actually solve
+// the issue (it turned out to be a 32-bit alignment issue), using malloc() appears to save memory
+// (compared to using "new" on a class that contains a large buffer such as "char mBlock[BLOCK_SIZE]").
+// In a 200 KB script, it saves 8 KB of VM Size as shown by Task Manager.
 {
-	SimpleHeap *next, *curr;
-	for (curr = sFirst; curr != NULL;)
+	SimpleHeap *block;
+	if (   !(block = new SimpleHeap)   )
+		return NULL;
+	// The new block's mFreeMarker starts off pointing to the first byte in the new block:
+	if (   !(block->mBlock = block->mFreeMarker = (char *)malloc(BLOCK_SIZE))   )
 	{
-		next = curr->mNextBlock;  // Save this member's value prior to deleting the object.
-		delete curr;
-		curr = next;
+		delete block;
+		return NULL;
 	}
+	// Since above didn't return, block was successfully created:
+	block->mSpaceAvailable = BLOCK_SIZE;
+	sLast = block;  // Constructing a new block always results in it becoming the current block.
+	++sBlockCount;
+	return block;
 }
 
 
 
-SimpleHeap::SimpleHeap()  // Construct a new block.
+SimpleHeap::SimpleHeap()  // Construct a new block.  Caller is responsible for initializing other members.
 	: mNextBlock(NULL)
-	, mFreeMarker(mBlock)  // Starts off pointing to the first byte in the new block.
-	, mSpaceAvailable(BLOCK_SIZE)
 {
-	// Initialize static members here rather than in initializer list, to avoid
-	// compiler warning:
-	sLast = this;  // Constructing a new block always results in it becoming the current block.
-	++sBlockCount;
 }
 
 
@@ -119,5 +152,7 @@ SimpleHeap::~SimpleHeap()
 // allocated by the constructor and any other methods that call "new" will be reclaimed
 // by the OS.  UPDATE: This is now called by static method DeleteAll().
 {
+	if (mBlock) // v1.0.40.04
+		free(mBlock);
 	return;
 }

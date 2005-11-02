@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.40.03"
+#define NAME_VERSION "1.0.40.04"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -56,7 +56,7 @@ GNU General Public License for more details.
 // AutoIt2 supports lines up to 16384 characters long, and we want to be able to do so too
 // so that really long lines from aut2 scripts, such as a chain of IF commands, can be
 // brought in and parsed:
-#define LINE_SIZE (16384 + 1)
+#define LINE_SIZE (16384 + 1)  // +1 for terminator.
 
 // Items that may be needed for VC++ 6.X:
 #ifndef SPI_GETFOREGROUNDLOCKTIMEOUT

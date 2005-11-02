@@ -863,7 +863,7 @@ ResultType Line::ToolTip(char *aText, char *aX, char *aY, char *aID)
 
 ResultType Line::TrayTip(char *aTitle, char *aText, char *aTimeout, char *aOptions)
 {
-	if (!g_os.IsWin2000orLater()) // Older OSes not supported, so by design it does nothing.
+	if (!g_os.IsWin2000orLater()) // Older OSes do not support it, so do nothing.
 		return OK;
 	NOTIFYICONDATA nic = {0};
 	nic.cbSize = sizeof(nic);
@@ -2271,10 +2271,8 @@ ResultType Line::ControlGetText(char *aControl, char *aTitle, char *aText
 	// in certain circumstances, see MS docs):
 	if (control_window)
 	{
-		output_var->Length() = (VarSizeType)GetWindowTextTimeout(control_window
-			, output_var->Contents(), space_needed);
-		if (!output_var->Length())
-			// There was no text to get or GetWindowTextTimeout() failed.
+		if (   !(output_var->Length() = (VarSizeType)GetWindowTextTimeout(control_window
+			, output_var->Contents(), space_needed))   ) // There was no text to get or GetWindowTextTimeout() failed.
 			*output_var->Contents() = '\0';  // Safe because Assign() gave us a non-constant memory area.
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 	}
@@ -3034,7 +3032,7 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 		output_var->Assign(buf);
 		break;
 
-	case CONTROLGET_CMD_SELECTED: //Must be an Edit
+	case CONTROLGET_CMD_SELECTED: // Must be an Edit.
 		// Note: The RichEdit controls of certain apps such as Metapad don't return the right selection
 		// with this technique.  Au3 has the same problem with them, so for now it's just documented here
 		// as a limitation.
@@ -4023,7 +4021,8 @@ ResultType Line::WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char
 
 	length_and_buf_type sab;
 	sab.buf = NULL; // Tell it just to calculate the length this time around.
-	sab.total_length = sab.capacity = 0; // Init
+	sab.total_length = 0; // Init
+	sab.capacity = 0;     //
 	EnumChildWindows(target_window, EnumChildGetText, (LPARAM)&sab);
 
 	if (!sab.total_length) // No text in window.
@@ -4043,7 +4042,7 @@ ResultType Line::WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char
 		return FAIL;  // It already displayed the error.
 
 	// Fetch the text directly into the var.  Also set the length explicitly
-	// in case actual size written was off from the esimated size (since
+	// in case actual size written was different than the esimated size (since
 	// GetWindowTextLength() can return more space that will actually be required
 	// in certain circumstances, see MSDN):
 	sab.buf = output_var->Contents();
@@ -4062,9 +4061,8 @@ ResultType Line::WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char
 	output_var->Length() = (VarSizeType)sab.total_length;
 	if (sab.total_length)
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-	else
-		// Something went wrong, so make sure we set to empty string.
-		*output_var->Contents() = '\0';  // Safe because Assign() gave us a non-constant memory area.
+	else // Something went wrong, so make sure we set to empty string.
+		*sab.buf = '\0';  // Safe because Assign() gave us a non-constant memory area.
 	return output_var->Close();  // In case it's the clipboard.
 }
 
@@ -4096,7 +4094,7 @@ BOOL CALLBACK EnumChildGetText(HWND aWnd, LPARAM lParam)
 		else
 			lab.total_length += 2; // Since buf is NULL, accumulate the size that *would* be needed.
 	}
-	return TRUE; // Continue enumeration through all the windows.
+	return TRUE; // Continue enumeration through all the child windows of this parent.
 }
 
 
@@ -11773,7 +11771,7 @@ DYNARESULT DynaCall(int aFlags, void *aFunction, DYNAPARM aParam[], int aParamCo
 	BYTE *cp;
     DYNARESULT Res = {0}; // This struct is to be returned to caller by value.
     DWORD esp_start, esp_end, dwEAX, dwEDX;
-	int esp_delta; // Declare this here rather than later to prevent C code from interfering with esp.
+	int i, esp_delta; // Declare this here rather than later to prevent C code from interfering with esp.
 
 	// Reserve enough space on the stack to handle the worst case of our args (which is currently a
 	// maximum of 8 bytes per arg). This avoids any chance that compiler-generated code will use
@@ -11781,13 +11779,13 @@ DYNARESULT DynaCall(int aFlags, void *aFunction, DYNAPARM aParam[], int aParamCo
 	DWORD reserved_stack_size = aParamCount * 8;
 	_asm
 	{
-		mov our_stack, esp  // our_stack is the location where we will write our args direction (bypassing "push").
+		mov our_stack, esp  // our_stack is the location where we will write our args (bypassing "push").
 		sub esp, reserved_stack_size  // The stack grows downward, so this "allocates" space on the stack.
 	}
 
 	// "Push" args onto the portion of the stack reserved above. Every argument is aligned on a 4-byte boundary.
 	// We start at the rightmost argument (i.e. reverse order).
-	for (int i = aParamCount - 1; i > -1; --i)
+	for (i = aParamCount - 1; i > -1; --i)
 	{
 		DYNAPARM &this_param = aParam[i]; // For performance and convenience.
 		// Push the arg or its address onto the portion of the stack that was reserved for our use above.
@@ -11830,7 +11828,7 @@ DYNARESULT DynaCall(int aFlags, void *aFunction, DYNAPARM aParam[], int aParamCo
 		{
 			add esp, reserved_stack_size // Restore to original position
 			mov esp_start, esp      // For detecting whether a DC_CALL_STD function was sent too many or too few args.
-			sub esp, our_stack_size // Adjust for our new parameters
+			sub esp, our_stack_size // Adjust ESP to indicate that the args have already been pushed onto the stack.
 			call [aFunction]        // Stack is now properly built, we can call the function
 		}
 	}

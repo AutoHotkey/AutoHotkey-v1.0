@@ -19,9 +19,14 @@ GNU General Public License for more details.
 
 #include "stdafx.h" // pre-compiled headers
 
-// May greatly improve the efficiency of dynamic memory for callers that would otherwise want to do many
-// small new's or malloc's.  Savings of both RAM space overhead and performance are achieved.  In addition,
-// the OS's overall memory fragmentation may be reduced, especially if the apps uses this class over
+// In a large script (200 KB) of a typical nature, using SimpleHeap rather than malloc() saves
+// nearly 200 KB of memory as shown by Task Manager's "VM Size" column (2384 vs. 2580 KB).
+// This is because many callers allocate chunks of memory that are very small on average.  If each
+// such chunk were allocated with malloc (or worse, "new"), the percentage of system overhead
+// compared to the memory actually used for such blocks would be enormous (perhaps 40 bytes of
+// overhead for each malloc(), even if it's only for 3 or 4 bytes).  In addition, SimpleHeap improves
+// performance to the extent that it is faster than malloc(), which it almost certainly is.  Finally,
+// the OS's overall memory fragmentation may be reduced, especially if the app uses this class over
 // a long period of time (hours or days).
 
 // The size of each block in bytes.  Use a size that's a good compromise
@@ -35,7 +40,7 @@ GNU General Public License for more details.
 class SimpleHeap
 {
 private:
-	char mBlock[BLOCK_SIZE]; // This object's memory block.  Although private, its contents are public.
+	char *mBlock; // This object's memory block.  Although private, its contents are public.
 	char *mFreeMarker;  // Address inside the above block of the first unused byte.
 	size_t mSpaceAvailable;
 	static UINT sBlockCount;
@@ -43,6 +48,7 @@ private:
 	static char *sMostRecentlyAllocated; // For use with Delete().
 	SimpleHeap *mNextBlock;  // The object after this one in the linked list; NULL if none.
 
+	static SimpleHeap *CreateBlock();
 	SimpleHeap();  // Private constructor, since we want only the static methods to be able to create new objects.
 	~SimpleHeap();
 public:
@@ -50,7 +56,7 @@ public:
 	static char *Malloc(char *aBuf); // Return a block of memory to the caller and copy aBuf into it.
 	static char *Malloc(size_t aSize); // Return a block of memory to the caller.
 	static void Delete(void *aPtr);
-	static void DeleteAll();
+	//static void DeleteAll();
 };
 
 #endif

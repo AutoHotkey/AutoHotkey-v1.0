@@ -1329,18 +1329,20 @@ int GetWindowTextTimeout(HWND aWnd, char *aBuf, int aBufSize, UINT aTimeout)
 // things like WinGetText and ControlGetText, in which getting the maximum amount and types
 // of text is more important than performance.
 {
-	if (!aWnd)
-		return 0; // Seems better than -1 or some error code.
-	if (aBuf && aBufSize < 1)
-		aBuf = NULL; // Flag the pointer itself as NULL for detection further below.
-	if (aBuf)
-		*aBuf = '\0';  // Init just to get it out of the way in case of early return/error.
+	if (!aWnd || (aBuf && aBufSize < 1)) // No HWND or no room left in buffer (some callers rely on this check).
+		return 0; // v1.0.40.04: Fixed to return 0 rather than setting aBuf to NULL and continuing (callers don't want that).
+
 	// Override for Win95 because AutoIt3 author says it might crash otherwise:
-	if (aBufSize > WINDOW_TEXT_SIZE && g_os.IsWin95()) aBufSize = WINDOW_TEXT_SIZE;
-	DWORD result;
-	LRESULT lresult;
+	if (aBufSize > WINDOW_TEXT_SIZE && g_os.IsWin95())
+		aBufSize = WINDOW_TEXT_SIZE;
+
+	LRESULT result, length;
 	if (aBuf)
 	{
+		*aBuf = '\0';  // Init just to get it out of the way in case of early return/error.
+		if (aBufSize == 1) // Room only for the terminator, so go no further (some callers rely on this check).
+			return 0;
+
 		// Below demonstrated that GetWindowText() is dramatically faster than either SendMessage()
 		// or SendMessageTimeout() (noticeably faster when you have hotkeys that activate
 		// windows, or toggle between two windows):
@@ -1351,18 +1353,70 @@ int GetWindowTextTimeout(HWND aWnd, char *aBuf, int aBufSize, UINT aTimeout)
 		// nearly instantly if the OS already "knows" that the target window has
 		// be unresponsive for 5 seconds or so (i.e. it keeps track of such things
 		// on an ongoing basis, at least XP seems to).
-		lresult = SendMessageTimeout(aWnd, WM_GETTEXT, (WPARAM)aBufSize, (LPARAM)aBuf
-			, SMTO_ABORTIFHUNG, aTimeout, &result);
-		// Just to make sure because MSDN docs aren't clear that it will always be terminated:
-		aBuf[aBufSize - 1] = '\0';
+		result = SendMessageTimeout(aWnd, WM_GETTEXT, (WPARAM)aBufSize, (LPARAM)aBuf
+			, SMTO_ABORTIFHUNG, aTimeout, (LPDWORD)&length);
+		if (length >= aBufSize) // Happens sometimes (at least ==aBufSize) for apps that wrongly include the terminator in the reported length.
+			length = aBufSize - 1; // Override.
+
+		// v1.0.40.04: The following check was added because when the text is too large to to fit in the
+		// buffer, the OS (or at least certain applications such as AIM) return a length that *includes*
+		// the zero terminator, violating the documented behavior of WM_GETTEXT.  In case the returned
+		// length is too long by 1 (or even more than 1), calculate the length explicitly by checking if
+		// there's another terminator to the left of the indicated length.  The following loop
+		// is used in lieu of strlen() for performance reasons (because sometimes the text is huge).
+		// It assumes that there will be no more than one additional terminator to the left of the
+		// indicated length, which so far seems to be true:
+		for (char *cp = aBuf + length; cp >= aBuf; --cp)
+		{
+			if (!*cp)
+			{
+				// Keep going to the left until the last consecutive terminator is found.
+				// Necessary for AIM when compiled in release mode (but not in debug mode
+				// for some reason!):
+				for (; cp > aBuf && !cp[-1]; --cp); // Self-contained loop.  Verified correct.
+				length = cp - aBuf;
+				break;
+			}
+		}
+		// If the above loop didn't "break", a terminator wasn't found.
+		// Terminate explicitly because MSDN docs aren't clear that it will always be terminated automatically.
+		// Update: This also protects against misbehaving apps that might handle the WM_GETTEXT message
+		// rather than passing it to DefWindowProc() but that don't terminate the buffer.  This has been
+		// confirmed to be necessary at least for AIM when aBufSize==1 (although 1 is no longer possible due
+		// to a check that has been added further above):
+		aBuf[length] = '\0';
 	}
 	else
-		lresult = SendMessageTimeout(aWnd, WM_GETTEXTLENGTH, (WPARAM)0, (LPARAM)0  // Both must be zero.
-			, SMTO_ABORTIFHUNG, aTimeout, &result);
-	if (!lresult) // It failed or timed out.
-		return 0;
-	// <result> contains the length of what was (or would have been) copied, not including the terminator:
-	return (int)result;
+	{
+		result = SendMessageTimeout(aWnd, WM_GETTEXTLENGTH, 0, 0, SMTO_ABORTIFHUNG, aTimeout, (LPDWORD)&length);
+		// The following can be temporarily uncommented out to demonstrate how some apps such as AIM's
+		// write-an-instant-message window have some controls that respond to WM_GETTEXTLENGTH with a
+		// length that's completely different than the length with which they respond to WM_GETTEXT.
+		// Here are some of the discrepancies:
+		// WM_GETTEXTLENGTH vs. WM_GETTEXT:
+		// 92 vs. 318 (bigger)
+		// 50 vs. 159 (bigger)
+		// 3 vs. 0 (smaller)
+		// 24 vs. 88 (etc.)
+		// 80 vs. 188
+		// 24 vs. 88
+		// 80 vs. 188
+		//char buf[32000];
+		//LRESULT length2;
+		//result = SendMessageTimeout(aWnd, WM_GETTEXT, (WPARAM)sizeof(buf), (LPARAM)buf
+		//	, SMTO_ABORTIFHUNG, aTimeout, (LPDWORD)&length2);
+		//if (length2 != length)
+		//{
+		//	int x = 0;  // Put breakpoint here.
+		//}
+		// An attempt to fix the size estimate to be larger for misbehaving apps like AIM, but it's ineffective
+		// so commented out:
+		//if (!length)
+		//	length = GetWindowTextLength(aWnd);
+	}
+
+	// "length" contains the length of what was (or would have been) copied, not including the terminator:
+	return result ? (int)length : 0;  // "result" is zero upon failure or timeout.
 }
 
 

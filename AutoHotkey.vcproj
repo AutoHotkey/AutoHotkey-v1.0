@@ -5,10 +5,6 @@
 	Name="AutoHotkey"
 	ProjectGUID="{76EFDEE3-81CF-4ADA-94DC-EA5509FF6FFC}"
 	RootNamespace="AutoHotkey"
-	SccProjectName="SAK"
-	SccAuxPath="SAK"
-	SccLocalPath="SAK"
-	SccProvider="SAK"
 	Keyword="Win32Proj">
 	<Platforms>
 		<Platform
@@ -30,7 +26,7 @@
 				RuntimeLibrary="5"
 				StructMemberAlignment="0"
 				BufferSecurityCheck="TRUE"
-				UsePrecompiledHeader="3"
+				UsePrecompiledHeader="2"
 				WarningLevel="3"
 				Detect64BitPortabilityProblems="TRUE"
 				DebugInformationFormat="4"/>
@@ -84,6 +80,7 @@
 				EnableIntrinsicFunctions="TRUE"
 				FavorSizeOrSpeed="1"
 				OmitFramePointers="TRUE"
+				OptimizeForProcessor="0"
 				PreprocessorDefinitions="WIN32;NDEBUG;_WINDOWS"
 				StringPooling="TRUE"
 				ExceptionHandling="FALSE"
@@ -91,7 +88,7 @@
 				RuntimeLibrary="4"
 				StructMemberAlignment="0"
 				BufferSecurityCheck="FALSE"
-				UsePrecompiledHeader="3"
+				UsePrecompiledHeader="2"
 				WarningLevel="3"
 				WarnAsError="TRUE"
 				Detect64BitPortabilityProblems="FALSE"
@@ -158,7 +155,7 @@
 				RuntimeLibrary="4"
 				StructMemberAlignment="0"
 				BufferSecurityCheck="FALSE"
-				UsePrecompiledHeader="3"
+				UsePrecompiledHeader="2"
 				WarningLevel="3"
 				Detect64BitPortabilityProblems="FALSE"
 				DebugInformationFormat="3"/>
@@ -166,7 +163,7 @@
 				Name="VCCustomBuildTool"/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="wsock32.lib winmm.lib version.lib comctl32.lib $(InputDir)\source\lib\exearc_read_mt.lib"
+				AdditionalDependencies="wsock32.lib winmm.lib version.lib comctl32.lib &quot;$(InputDir)\source\lib\exearc_read_mt.lib&quot;"
 				ShowProgress="0"
 				OutputFile="$(OutDir)/AutoHotkeySC.bin"
 				LinkIncremental="1"
@@ -225,7 +222,7 @@
 				RuntimeLibrary="2"
 				StructMemberAlignment="0"
 				BufferSecurityCheck="FALSE"
-				UsePrecompiledHeader="3"
+				UsePrecompiledHeader="2"
 				WarningLevel="3"
 				Detect64BitPortabilityProblems="FALSE"
 				DebugInformationFormat="3"/>
@@ -233,7 +230,7 @@
 				Name="VCCustomBuildTool"/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="wsock32.lib winmm.lib version.lib comctl32.lib $(InputDir)\source\lib\exearc_read_mt.lib"
+				AdditionalDependencies="wsock32.lib winmm.lib version.lib comctl32.lib &quot;$(InputDir)\source\lib\exearc_read_mt.lib&quot;"
 				ShowProgress="0"
 				OutputFile="$(OutDir)/AutoHotkeySC.bin"
 				LinkIncremental="1"
