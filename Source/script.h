@@ -741,10 +741,7 @@ private:
 		, char *aExcludeTitle, char *aExcludeText);
 	ResultType StatusBarWait(char *aTextToWaitFor, char *aSeconds, char *aPart, char *aTitle, char *aText
 		, char *aInterval, char *aExcludeTitle, char *aExcludeText);
-	ResultType ScriptPostMessage(char *aMsg, char *awParam, char *alParam, char *aControl
-		, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
-	ResultType ScriptSendMessage(char *aMsg, char *awParam, char *alParam, char *aControl
-		, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
+	ResultType ScriptPostSendMessage(bool aUseSend);
 	ResultType ScriptProcess(char *aCmd, char *aProcess, char *aParam3);
 	ResultType WinSet(char *aAttrib, char *aValue, char *aTitle, char *aText
 		, char *aExcludeTitle, char *aExcludeText);
@@ -2500,8 +2497,7 @@ void BIF_VarSetCapacity(ExprTokenType &aResultToken, ExprTokenType *aParam[], in
 void BIF_FileExist(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_WinExistActive(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_Round(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
-void BIF_Ceil(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
-void BIF_Floor(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_FloorCeil(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_Mod(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_Abs(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_Sin(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);

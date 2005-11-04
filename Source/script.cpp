@@ -1662,7 +1662,10 @@ examine_line:
 						remap_dest_modifiers[cp - hotkey_flag] = '\0';   // Terminate at the proper end of the modifier string.
 					remap_stage = 0; // Init for use in the next stage.
 					// In the unlikely event that the dest key has the same name as a command, disqualify it
-					// from being a remap (as documented):
+					// from being a remap (as documented).  v1.0.40.05: If the destination key has any modifiers,
+					// it is unambiguously a key name rather than a command, so the switch() isn't necessary.
+					if (*remap_dest_modifiers)
+						goto continue_main_loop; // It will see that remap_dest_vk is non-zero and act accordingly.
 					switch (remap_dest_vk)
 					{
 					case VK_CONTROL: // Checked in case it was specified as "Control" rather than "Ctrl".
@@ -1670,7 +1673,15 @@ examine_line:
 						if (StrChrAny(hotkey_flag, " \t,")) // Not using g_delimiter (reduces code size/complexity).
 							break; // Any space, tab, or enter means this is a command rather than a remap destination.
 						goto continue_main_loop; // It will see that remap_dest_vk is non-zero and act accordingly.
-					case VK_RETURN: // These two are always considered commands rather than remap destinations (as documented).
+					// "Return" and "Pause" as destination keys are always considered commands instead.
+					// This is documented and is done to preserve backward compatibility.
+					case VK_RETURN:
+						// v1.0.40.05: Although "Return" can't be a destination, "Enter" can be.  Must compare
+						// to "Return" not "Enter" so that things like "vk0d" (the VK of "Enter") can also be a
+						// destination key:
+						if (!stricmp(remap_dest, "Return"))
+							break;
+						goto continue_main_loop; // It will see that remap_dest_vk is non-zero and act accordingly.
 					case VK_PAUSE:  // Used for both "Pause" and "Break"
 						break;
 					default: // All other VKs are valid destinations and thus the remap is valid.
@@ -4110,7 +4121,11 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					// cp is now the character after the first literal string's ending quote.
 					// If that char is the terminator, that first string is the only string and this
 					// is a simple assignment of a string literal to be converted here.
-					if (!*cp)
+					// v1.0.40.05: Leave Send/PostMessage args (all of them, but specifically
+					// wParam and lParam) as expressions so that at runtime, the leading '"' in a
+					// quoted numeric string such as "123" can be used to differentiate that string
+					// from a numeric value/expression such as 123 or 122+1.
+					if (!*cp && !(aActionType == ACT_SENDMESSAGE || aActionType == ACT_POSTMESSAGE))
 					{
 						this_new_arg.is_expression = false;
 						// Bugfix for 1.0.25.06: The below has been disabled because:
@@ -4127,7 +4142,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 						StrReplaceAll(this_new_arg.text, "\"\"", "\"", true);
 						// Above relies on the fact that StrReplaceAll() does not do cascading replacements,
 						// meaning that a series of characters such as """" would be correctly converted into
-						// two double quotes rather than just collapsing into one.
+						// two double quotes rather than collapsing into only one.
 					}
 				}
 				// Make things like "Sleep Var" and "Var := X" into non-expressions.  At runtime,
@@ -5740,10 +5755,8 @@ Func *Script::FindFunc(char *aFuncName, size_t aFuncNameLength)
 		bif = BIF_Round;
 		max_params = 2;
 	}
-	else if (!stricmp(func_name, "Ceil"))
-		bif = BIF_Ceil;
-	else if (!stricmp(func_name, "Floor"))
-		bif = BIF_Floor;
+	else if (!stricmp(func_name, "Floor") || !stricmp(func_name, "Ceil"))
+		bif = BIF_FloorCeil;
 	else if (!stricmp(func_name, "Mod"))
 	{
 		bif = BIF_Mod;
@@ -9380,9 +9393,8 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	case ACT_STATUSBARWAIT:
 		return StatusBarWait(EIGHT_ARGS);
 	case ACT_POSTMESSAGE:
-		return ScriptPostMessage(EIGHT_ARGS);
 	case ACT_SENDMESSAGE:
-		return ScriptSendMessage(EIGHT_ARGS);
+		return ScriptPostSendMessage(mActionType == ACT_SENDMESSAGE);
 	case ACT_PROCESS:
 		return ScriptProcess(THREE_ARGS);
 	case ACT_WINSET:

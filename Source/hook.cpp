@@ -3656,6 +3656,12 @@ void AddRemoveHooks(HookType aHooksToBeActive)
 		// new, and other memory management functions probably aren't thread-safe unless the multi-threaded
 		// library is used). The memory leak described in MSDN for ExitThread() applies only to the
 		// multi-threaded libraries (multiple sources confirm this), so it isn't a concern either.
+		// That's true even if the program is linked against the multi-threaded DLLs (MSVCRT.dll) rather
+		// than the libraries (e.g. for a minimum-sized SC.bin file), as confirmed by the following quotes:
+		// "This applies only to the static-link version of the runtime. For this and other reasons, I
+		// *highly* recommend using the DLL runtime, which lets you use CreateThread() without prejudice.
+		// Confirmation from MSDN: "Another work around is to link the *executable* to the CRT in a *DLL*
+		// instead of the static CRT."
 		//
 		// The hooks are designed to make miminmal use of C-library calls, currently calling only things
 		// like memcpy() and strlen(), which are thread safe in the single-threaded library (according to

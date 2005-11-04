@@ -573,9 +573,11 @@ HWND WinExist(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
 		// should be no danger of any reasonable script ever passing that value in as a real target window,
 		// which should thus minimize the chance of a crash due to calling various API functions
 		// with invalid window handles.
-		if (ws.mCriterionHwnd != HWND_BROADCAST // It's not exempt from the other checks on the two lines below.
+		if (   ws.mCriterionHwnd != HWND_BROADCAST // It's not exempt from the other checks on the two lines below.
 			&& (!IsWindow(ws.mCriterionHwnd)    // And it's either not a valid window...
-			|| !(g.DetectHiddenWindows || IsWindowVisible(ws.mCriterionHwnd)))) // ...or the window is not detectible.
+				// ...or the window is not detectible (in v1.0.40.05, child windows are always detectible):
+				|| !(g.DetectHiddenWindows || IsWindowVisible(ws.mCriterionHwnd)
+					|| (GetWindowLong(ws.mCriterionHwnd, GWL_STYLE) & WS_CHILD)))   )
 			return NULL;
 
 		// Otherwise, the window is valid and detectible.
@@ -602,7 +604,8 @@ HWND GetValidLastUsedWindow()
 {
 	if (!g.hWndLastUsed || !IsWindow(g.hWndLastUsed))
 		return NULL;
-	if (g.DetectHiddenWindows || IsWindowVisible(g.hWndLastUsed))
+	if (   g.DetectHiddenWindows || IsWindowVisible(g.hWndLastUsed)
+		|| (GetWindowLong(g.hWndLastUsed, GWL_STYLE) & WS_CHILD)   ) // v1.0.40.05: Child windows (via ahk_id) are always detectible.
 		return g.hWndLastUsed;
 	// Otherwise, DetectHiddenWindows is OFF and the window is not visible.  Return NULL
 	// unless this is a GUI window belonging to this particular script, in which case
@@ -1479,6 +1482,7 @@ ResultType WindowSearch::SetCriteria(char *aTitle, char *aText, char *aExcludeTi
 			cp += 2;
 			mCriteria |= CRITERION_ID;
 			mCriterionHwnd = (HWND)ATOU64(cp);
+			// Note that this can validly be the HWND of a child window; i.e. ahk_id %ChildWindowHwnd% is supported.
 			if (mCriterionHwnd != HWND_BROADCAST && !IsWindow(mCriterionHwnd)) // Checked here once rather than each call to IsMatch().
 			{
 				mCriterionHwnd = NULL;

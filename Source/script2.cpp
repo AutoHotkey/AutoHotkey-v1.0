@@ -1169,13 +1169,12 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 			result_double = qmathCeil(value_double1 * multiplier - 0.5) / multiplier;
 		ASSIGN_BASED_ON_TYPE_SINGLE_ROUND
 
-	// These next two might be improved by to avoid loss of 64-bit integer precision
-	// by using a string conversion algorithm rather than converting to double:
 	case TRANS_CMD_CEIL:
-		return output_var->Assign((INT64)qmathCeil(ATOF(aValue1)));
-
 	case TRANS_CMD_FLOOR:
-		return output_var->Assign((INT64)qmathFloor(ATOF(aValue1)));
+		// The code here is similar to that in BIF_FloorCeil(), so maintain them together.
+		result_double = ATOF(aValue1);
+		result_double = (trans_cmd == TRANS_CMD_FLOOR) ? qmathFloor(result_double) : qmathCeil(result_double);
+		return output_var->Assign((__int64)(result_double + (result_double > 0 ? 0.2 : -0.2))); // Fixed for v1.0.40.05: See comments in BIF_FloorCeil() for details.
 
 	case TRANS_CMD_ABS:
 	{
@@ -3129,47 +3128,43 @@ ResultType Line::StatusBarWait(char *aTextToWaitFor, char *aSeconds, char *aPart
 
 
 
-ResultType Line::ScriptPostMessage(char *aMsg, char *awParam, char *alParam, char *aControl
-	, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
+ResultType Line::ScriptPostSendMessage(bool aUseSend)
+// Arg list:
+// sArgDeref[0]: Msg number
+// sArgDeref[1]: wParam
+// sArgDeref[2]: lParam
+// sArgDeref[3]: Control
+// sArgDeref[4]: WinTitle
+// sArgDeref[5]: WinText
+// sArgDeref[6]: ExcludeTitle
+// sArgDeref[7]: ExcludeText
 {
-	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
-	if (!target_window)
-		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
-	HWND control_window = *aControl ? ControlExist(target_window, aControl) : target_window;
-	if (!control_window)
-		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+	HWND target_window, control_window;
+	if (   !(target_window = DetermineTargetWindow(sArgDeref[4], sArgDeref[5], sArgDeref[6], sArgDeref[7]))
+		|| !(control_window = *sArgDeref[3] ? ControlExist(target_window, sArgDeref[3]) : target_window)   ) // Relies on short-circuit boolean order.
+		return g_ErrorLevel->Assign(aUseSend ? "FAIL" : ERRORLEVEL_ERROR); // Need a special value to distinguish this from numeric reply-values.
+	UINT msg = ATOU(sArgDeref[0]);
 	// UPDATE: Note that ATOU(), in both past and current versions, supports negative numbers too.
 	// For example, ATOU("-1") has always produced 0xFFFFFFFF.
 	// Use ATOU() to support unsigned (i.e. UINT, LPARAM, and WPARAM are all 32-bit unsigned values).
 	// ATOU() also supports hex strings in the script, such as 0xFF, which is why it's commonly
-	// used in functions such as this:
-	return g_ErrorLevel->Assign(PostMessage(control_window, ATOU(aMsg), ATOU(awParam)
-		, ATOU(alParam)) ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
+	// used in functions such as this.  v1.0.40.05: Support the passing of a literal (quoted) string
+	// by checking whether the original/raw arg's first character is '"'.  The avoids the need to
+	// put the string into a variable and then pass something like &MyVar.
+	WPARAM wparam = (mArgc > 1 && mArg[1].text[0] == '"') ? (WPARAM)sArgDeref[1] : ATOU(sArgDeref[1]);
+	LPARAM lparam = (mArgc > 2 && mArg[2].text[0] == '"') ? (LPARAM)sArgDeref[2] : ATOU(sArgDeref[2]);
+	if (aUseSend)
+	{
+		DWORD dwResult;
+		// Timeout increased from 2000 to 5000 in v1.0.27:
+		if (!SendMessageTimeout(control_window, msg, wparam, lparam, SMTO_ABORTIFHUNG, 5000, &dwResult))
+			return g_ErrorLevel->Assign("FAIL"); // Need a special value to distinguish this from numeric reply-values.
+		return g_ErrorLevel->Assign(dwResult); // UINT seems best most of the time?
+	}
+	else // Post vs. Send
+		return g_ErrorLevel->Assign(PostMessage(control_window, msg, wparam, lparam)
+			? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
 	// By design (since this is a power user feature), no ControlDelay is done here.
-}
-
-
-
-ResultType Line::ScriptSendMessage(char *aMsg, char *awParam, char *alParam, char *aControl
-	, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
-{
-	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
-	if (!target_window)
-		return g_ErrorLevel->Assign("FAIL"); // Need a special value to distinguish this from numeric reply-values.
-	HWND control_window = *aControl ? ControlExist(target_window, aControl) : target_window;
-	if (!control_window)
-		return g_ErrorLevel->Assign("FAIL");
-	// UPDATE: Note that ATOU(), in both past and current versions, supports negative numbers too.
-	// For example, ATOU("-1") has always produced 0xFFFFFFFF.
-	// Use ATOI64 to support unsigned (i.e. UINT, LPARAM, and WPARAM are all 32-bit unsigned values).
-	// ATOI64 also supports hex strings in the script, such as 0xFF, which is why it's commonly
-	// used in functions such as this:
-	DWORD dwResult;
-	if (!SendMessageTimeout(control_window, ATOU(aMsg), ATOU(awParam), ATOU(alParam)
-		, SMTO_ABORTIFHUNG, 5000, &dwResult)) // Increased from 2000 in v1.0.27.
-		return g_ErrorLevel->Assign("FAIL"); // Need a special value to distinguish this from numeric reply-values.
-	// By design (since this is a power user feature), no ControlDelay is done here.
-	return g_ErrorLevel->Assign(dwResult); // UINT seems best most of the time?
 }
 
 
@@ -12762,18 +12757,27 @@ void BIF_Round(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 
 
 
-void BIF_Ceil(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+void BIF_FloorCeil(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+// Probably saves little code size to merge extremely short/fast functions, hence FloorCeil.
+// Floor() rounds down to the nearest integer; that is, to the integer that lies to the left on the
+// number line (this is not the same as truncation because Floor(-1.2) is -2, not -1).
+// Ceil() rounds up to the nearest integer; that is, to the integer that lies to the right on the number line.
 {
+	// The code here is similar to that in TRANS_CMD_FLOOR/CEIL, so maintain them together.
+	// The qmath routines are used because Floor() and Ceil() are deceptively difficult to implement in a way
+	// that gives the correct result in all permutations of the following:
+	// 1) Negative vs. positive input.
+	// 2) Whether or not the input is already an integer.
+	// Therefore, do not change this without conduction a thorough test.
+	double x = ExprTokenToDouble(*aParam[0]);
+	x = (toupper(aResultToken.marker[0]) == 'F') ? qmathFloor(x) : qmathCeil(x);
+	// Fix for v1.0.40.05: For some inputs, qmathCeil/Floor yield a number slightly to the left of the target
+	// integer, while for others they yield one slightly to the right.  For example, Ceil(62/61) and Floor(-4/3)
+	// yield a double that would give an incorrect answer if it were simply truncated to an integer via
+	// type casting.  The below seems to fix this without breaking the answers for other inputs (which is
+	// surprisingly harder than it seemed).
+	aResultToken.value_int64 = (__int64)(x + (x > 0 ? 0.2 : -0.2));
 	// Caller has set aResultToken.symbol to a default of SYM_INTEGER, so no need to set it here.
-	aResultToken.value_int64 = (__int64)qmathCeil(ExprTokenToDouble(*aParam[0]));
-}
-
-
-
-void BIF_Floor(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
-{
-	// Caller has set aResultToken.symbol to a default of SYM_INTEGER, so no need to set it here.
-	aResultToken.value_int64 = (__int64)qmathFloor(ExprTokenToDouble(*aParam[0]));
 }
 
 
