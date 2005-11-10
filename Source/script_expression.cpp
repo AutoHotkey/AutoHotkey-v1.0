@@ -376,7 +376,50 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 				if (sym_prev == SYM_NEGATIVE) // Have this negative cancel out the previous negative.
 					infix_count -= 2;  // Subtracts 1 for the loop's increment, and 1 to remove the previous item.
 				else // Differentiate between unary minus and the "subtract" operator:
-					this_infix_item.symbol = IS_OPERAND_OR_CPAREN(sym_prev) ? SYM_MINUS : SYM_NEGATIVE;
+				{
+					if (IS_OPERAND_OR_CPAREN(sym_prev))
+						this_infix_item.symbol = SYM_MINUS;
+					else // Unary minus.
+					{
+						// Set default for cases where the processing below this line doesn't determine
+						// it's a negative numeric literal:
+						this_infix_item.symbol = SYM_NEGATIVE;
+						// v1.0.40.06: The smallest signed 64-bit number (-0x8000000000000000) wasn't properly
+						// supported in previous versions because its unary minus was being seen as an operator,
+						// and thus the raw number was being passed as a positive to _atoi64() or _strtoi64(),
+						// neither of which would recognize it as a valid value.  To correct this, a unary
+						// minus followed by a raw numeric literal is now treated as a single literal number
+						// rather than unary minus operator followed by a positive number.
+						//
+						// To be a valid "literal negative number", the character immediately following
+						// the unary minus must not be:
+						// 1) Whitespace (atoi() and such don't support it, nor is it at all conventional).
+						// 2) An open-parenthesis such as the one in -(x).
+						// 3) Another unary minus or operator such as --2 (which should evaluate to 2).
+						// To cover the above and possibly other unforeseen things, insist that the first
+						// character be a digit (even a hex literal must start with 0).
+						if (cp[1] >= '0' && cp[1] <= '9')
+						{
+							// Find the end of this number (this also sets op_end correctly for use by
+							// "goto numeric_literal"):
+							for (op_end = cp + 2; !strchr(EXPR_OPERAND_TERMINATORS, *op_end); ++op_end);
+							if (op_end < this_map_item.end) // Detect numeric double derefs such as one created via "12%i% = value".
+							{
+								// Because the power operator takes precedence over unary minus, don't collapse
+								// unary minus into a literal numeric literal if the number is immediately
+								// followed by the power operator.  This is correct behavior even for
+								// -0x8000000000000000 because -0x8000000000000000**2 would in fact be undefined
+								// because +0x8000000000000000 is beyond the signed 64-bit range.
+								// Use a temp variable because numeric_literal requires that op_end be set properly:
+								char *pow_temp = omit_leading_whitespace(op_end);
+								if (!(pow_temp[0] == '*' && pow_temp[1] == '*'))
+									goto numeric_literal; // Goto is used for performance and also as a patch to minimize the change of breaking other things with a redesign.
+								//else leave this unary minus as an operator.
+							}
+							//else possible double deref, so leave this unary minus as an operator.
+						}
+					}
+				}
 				break;
 			case ',':
 				this_infix_item.symbol = SYM_COMMA; // It's serves only as a "do not auto-concatenate" indicator for later below.
@@ -579,6 +622,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 				// Find the end of this operand or keyword, even if that end is beyond this_map_item.end.
 				// StrChrAny() is not used because if *op_end is '\0', the strchr() below will find it too:
 				for (op_end = cp + 1; !strchr(EXPR_OPERAND_TERMINATORS, *op_end); ++op_end);
+numeric_literal:
 				// Now op_end marks the end of this operand or keyword.  That end might be the zero terminator
 				// or the next operator in the expression, or just a whitespace.
 				if (op_end >= this_map_item.end // This must be true to qualify as a double deref.
@@ -896,7 +940,7 @@ double_deref:
 			if (   sPrecedence[stack_symbol] < sPrecedence[infix_symbol]
 				|| stack_symbol == SYM_POWER && infix_symbol == SYM_NEGATIVE   )
 			{
-				// The line above is a workaround to allow 2^-2 to be evaluated as 2^(-2) rather
+				// The line above is a workaround to allow 2**-2 to be evaluated as 2**(-2) rather
 				// than being seen as an error.  However, for simplicity of code, consecutive
 				// unary operators are not supported (they currently produce a failure [blank value]
 				// because they wind up in the postfix array in the wrong order).

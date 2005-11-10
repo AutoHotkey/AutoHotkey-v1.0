@@ -12786,9 +12786,8 @@ void BIF_Mod(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCou
 {
 	// Load-time validation has already ensured there are exactly two parameters.
 	// "Cast" each operand to Int64/Double depending on whether it has a decimal point.
-	if (!ExprTokenToDoubleOrInt(*aParam[0]) || !ExprTokenToDoubleOrInt(*aParam[1]))
+	if (!ExprTokenToDoubleOrInt(*aParam[0]) || !ExprTokenToDoubleOrInt(*aParam[1])) // Non-operand or non-numeric string.
 	{
-		// Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
 		aResultToken.symbol = SYM_STRING;
 		aResultToken.marker = "";
 		return;
@@ -12833,14 +12832,13 @@ void BIF_Abs(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCou
 	// that it might produce inconsistent results depending on whether the operand is
 	// generic (SYM_OPERAND) and numeric.  In other words, abs() shouldn't treat a
 	// sub-expression differently than a numeric literal.
-	aResultToken.symbol = aParam[0]->symbol;
-	aResultToken.value_int64 = aParam[0]->value_int64; // Copy contents of union, independent of symbol type.
+	aResultToken = *aParam[0]; // Structure/union copy.
+	// v1.0.40.06: ExprTokenToDoubleOrInt() and here has been fixed to set proper result to be empty string
+	// when the incoming parameter is non-numeric.
 	if (!ExprTokenToDoubleOrInt(aResultToken)) // "Cast" token to Int64/Double depending on whether it has a decimal point.
-	{
-		// Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
-		aResultToken.value_int64 = -1; // Use out-of-bounds value to flag this unexpected condition.
+		// Non-operand or non-numeric string. ExprTokenToDoubleOrInt() has already set the token to be an
+		// empty string for us.
 		return;
-	}
 	if (aResultToken.symbol == SYM_INTEGER)
 	{
 		// The following method is used instead of __abs64() to allow linking against the multi-threaded
@@ -14008,6 +14006,7 @@ ResultType ExprTokenToVar(ExprTokenType &aToken, Var &aOutputVar)
 
 ResultType ExprTokenToDoubleOrInt(ExprTokenType &aToken)
 // Converts aToken's contents to a numeric value, either int or float (whichever is more appropriate).
+// Returns FAIL when aToken isn't an operand or is but contains a string that isn't purely numeric.
 {
 	char *str;
 	switch (aToken.symbol)
@@ -14018,21 +14017,24 @@ ResultType ExprTokenToDoubleOrInt(ExprTokenType &aToken)
 		case SYM_VAR:
 			str = aToken.var->Contents();
 			break;
-		default: // SYM_STRING or SYM_OPERAND
+		case SYM_STRING:   // v1.0.40.06: Fixed to be listed explicitly so that "default" case can return failure.
+		case SYM_OPERAND:
 			str = aToken.marker;
+			break;
+		default:  // Not an operand. Haven't found a way to produce this situation yet, but safe to assume it's possible.
+			return FAIL;
 	}
 	// Since above didn't return, interpret "str" as a number.
-	switch (IsPureNumeric(str, true, false, true))
+	switch (aToken.symbol = IsPureNumeric(str, true, false, true))
 	{
 	case PURE_INTEGER:
-		aToken.symbol = SYM_INTEGER;
 		aToken.value_int64 = ATOI64(str);
 		break;
 	case PURE_FLOAT:
-		aToken.symbol = SYM_FLOAT;
 		aToken.value_double = ATOF(str);
 		break;
 	default: // Not a pure number.
+		aToken.marker = ""; // For completeness.  Some callers such as BIF_Abs() rely on this being done.
 		return FAIL;
 	}
 	return OK; // Since above didn't return, indicate success.
