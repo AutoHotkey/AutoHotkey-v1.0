@@ -1550,10 +1550,9 @@ bool MsgMonitor(HWND aWnd, UINT aMsg, WPARAM awParam, LPARAM alParam, MSG *apMsg
 	// Need to check if backup is needed in case script explicitly called the function rather than using
 	// it solely as a callback.
 	// See ExpandExpression() for detailed comments about the following section.
-	bool backup_needed;
-	VarBkp *var_backup;   // If needed, it will hold an array of VarBkp objects.
+	VarBkp *var_backup = NULL;   // If needed, it will hold an array of VarBkp objects.
 	int var_backup_count; // The number of items in the above array.
-	if (backup_needed = (func.mInstances > 0))
+	if (func.mInstances > 0) // Backup is needed.
 		if (!BackupFunctionVars(func, var_backup, var_backup_count)) // Out of memory.
 			return false;
 			// Since we're in the middle of processing messages, and since out-of-memory is so rare,
@@ -1633,10 +1632,10 @@ bool MsgMonitor(HWND aWnd, UINT aMsg, WPARAM awParam, LPARAM alParam, MSG *apMsg
 
 	int i;
 	for (i = 0; i < func.mVarCount; ++i)
-		func.mVar[i]->Free(VAR_FREE_EXCLUDE_STATIC, true); // Pass "true" to exclude aliases, since their targets should not be freed (they don't belong to this function).
+		func.mVar[i]->Free(VAR_ALWAYS_FREE_EXCLUDE_STATIC, true); // Pass "true" to exclude aliases, since their targets should not be freed (they don't belong to this function).
 	for (i = 0; i < func.mLazyVarCount; ++i)
-		func.mLazyVar[i]->Free(VAR_FREE_EXCLUDE_STATIC, true);
-	if (backup_needed) // This is the indicator that a backup was made, a restore is also needed.
+		func.mLazyVar[i]->Free(VAR_ALWAYS_FREE_EXCLUDE_STATIC, true);
+	if (var_backup) // This is the indicator that a backup was made, a restore is also needed.
 		RestoreFunctionVars(func, var_backup, var_backup_count); // It avoids restoring statics.
 
 	ResumeUnderlyingThread(&global_saved, true);

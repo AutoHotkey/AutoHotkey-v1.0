@@ -526,7 +526,7 @@ ResultType Hotkey::PerformID(HotkeyIDType aHotkeyID)
 	// Currently, hotkey_id can't be < 0 due to its type, so we only check if it's too large:
 	if (aHotkeyID >= sHotkeyCount)
 	{
-		MsgBox("Hotkey ID too large");
+		MsgBox("ID"); // Short msg since so rare.
 		return FAIL;  // Not a critical error in case some other app is sending us bogus messages?
 	}
 

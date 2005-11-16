@@ -195,10 +195,12 @@ public:
 		, bool aExactSize = false);
 	VarSizeType Get(char *aBuf = NULL);
 
-	#define VAR_ALWAYS_FREE         0
-	#define VAR_NEVER_FREE          1
-	#define VAR_FREE_IF_LARGE       2
-	#define VAR_FREE_EXCLUDE_STATIC 3
+	// Not an enum so that it can be global more easily:
+	#define VAR_ALWAYS_FREE                0 // This item and the next must be be numerically adjacent to each other
+	#define VAR_ALWAYS_FREE_EXCLUDE_STATIC 1 // so that VAR_ALWAYS_FREE_LAST can be used to include both of them.
+	#define VAR_ALWAYS_FREE_LAST           2 // Never actually passed as a parameter, just a placeholder.
+	#define VAR_NEVER_FREE                 3
+	#define VAR_FREE_IF_LARGE              4
 	void Free(int aWhenToFree = VAR_ALWAYS_FREE, bool aExcludeAliases = false);
 
 	static ResultType ValidateName(char *aName, bool aIsRuntime = false, bool aDisplayError = true);

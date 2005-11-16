@@ -643,7 +643,7 @@ void Var::Free(int aWhenToFree, bool aExcludeAliases)
 
 	// Must check this one first because caller relies not only on var not being freed in this case,
 	// but also on its contents not being set to an empty string:
-	if (aWhenToFree == VAR_FREE_EXCLUDE_STATIC && (mAttrib & VAR_ATTRIB_STATIC))
+	if (aWhenToFree == VAR_ALWAYS_FREE_EXCLUDE_STATIC && (mAttrib & VAR_ATTRIB_STATIC))
 		return;
 
 	mLength = 0;
@@ -670,7 +670,7 @@ void Var::Free(int aWhenToFree, bool aExcludeAliases)
 		// might introduce too much memory fragmentation and overhead (since in many cases,
 		// it would likely need to grow back to its former size in the near future).  So we
 		// only free relatively large vars:
-		if (   mCapacity > 0 && (aWhenToFree == VAR_ALWAYS_FREE
+		if (   mCapacity > 0 && (aWhenToFree < VAR_ALWAYS_FREE_LAST  // Fixed for v1.0.40.07 to prevent memory leak in recursive script-function calls.
 			|| (aWhenToFree == VAR_FREE_IF_LARGE && mCapacity > (4 * 1024)))   )
 		{
 			free(mContents);

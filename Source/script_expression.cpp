@@ -991,9 +991,9 @@ double_deref:
 	Func *prev_func;
 	char *result; // "result" is used for return values and also the final result.
 	size_t result_size;
-	bool done, make_result_persistent, early_return, backup_needed, left_branch_is_true;
+	bool done, make_result_persistent, early_return, left_branch_is_true;
 	ExprTokenType *circuit_token;
-	VarBkp *var_backup;   // If needed, it will hold an array of VarBkp objects.
+	VarBkp *var_backup = NULL;  // If needed, it will hold an array of VarBkp objects. v1.0.40.07: Initialized to NULL to facilitate and approach that's more maintainable.
 	int var_backup_count; // The number of items in the above array.
 
 	// For each item in the postfix array: if it's an operand, push it onto stack; if it's an operator or
@@ -1038,14 +1038,22 @@ double_deref:
 				// beneath ours (in turn, that instance is responsible for backup up any instance that lies
 				// beneath it, and so on, since when recursion collapses or threads resume, they always do so
 				// in the reverse order in which they were created.
-				if (backup_needed = (func.mInstances > 0)) // i.e. treat negatives as zero to help catch any bugs in the way mInstances is maintained.
+				//
+				// I think the backup-and-restore approach to local variables might enhance performance over
+				// other approaches, perhaps a lot.  This is because most of the time there will be no other
+				// instances of a given function on the call stack, thus no backup/restore is needed, and thus
+				// the function's existing local variables can be reused as though they're globals (i.e.
+				// memory allocation/deallocation overhead is often completely avoided for calls to a function
+				// after the first).
+				if (func.mInstances > 0) // i.e. treat negatives as zero to help catch any bugs in the way mInstances is maintained.
 				{
+					// Backup/restore of function's variables is needed.
 					// Only when a backup is needed is it possible for this function to be calling itself recursively,
 					// either directly or indirectly by means of an intermediate function.  As a consequence, it's
 					// possible for this function to be passing one or more of its own params or locals to itself.
 					// The following section compensates for that to handle parameters passed by-value, but it
-					// doesn't correctly handle passing its own locals/params to itself ByRef, which will be
-					// documented as a known limitation.  Also, the below doesn't indicate a failure when stack
+					// doesn't correctly handle passing its own locals/params to itself ByRef, which is in the
+					// help file as a known limitation.  Also, the below doesn't indicate a failure when stack
 					// underflow would occur because the loop after this one needs to do that (since this
 					// one will never execute if a backup isn't needed).  Note that this loop that reviews all
 					// actual parameters is necessary as a separate loop from the one further below because this
@@ -1126,7 +1134,7 @@ double_deref:
 					// both generic and specific operands.  Specific operands were evaluated by a previous iteration
 					// of this section.  Generic ones were pushed as-is onto the stack by a previous iteration.
 					if (!IS_OPERAND(token.symbol)) // Haven't found a way to produce this situation yet, but safe to assume it's possible.
-						goto fail;
+						goto abort_udf;  // Done in lieu of "goto end/fail" so that Free()+RestoreFunctionVars() can be called.
 					if (this_formal_param.var->IsByRef())
 					{
 						// Note that the previous loop might not have checked things like the following because that
@@ -1139,9 +1147,7 @@ double_deref:
 							// would be able to get this far to trigger this error, because something like
 							// func(Array%VarContainingSpaces%) would have been caught at an earlier stage above.
 							LineError(ERR_BYREF ERR_ABORT, FAIL, this_formal_param.var->mName);
-							aResult = FAIL;
-							result_to_return = NULL; // Use NULL to inform our caller that this entire thread is to be terminated.
-							goto end;
+							goto abort_udf;  // Done in lieu of "goto end/fail" so that Free()+RestoreFunctionVars() can be called.
 						}
 						this_formal_param.var->UpdateAlias(token.var); // Make the formal parameter point directly to the actual parameter's contents.
 					}
@@ -1292,8 +1298,8 @@ double_deref:
 				//    the memory to prevent a memory leak for any variable that existed prior to the call
 				//    we just did.  Although any local variables newly created as a result of our call
 				//    technically don't need to be freed, they are freed for simplicity of code and also
-				//    because not doing so might result in side-effects for instances of our function that
-				//    lie beneath ours that would expect such nonexistent variable to have blank contents
+				//    because not doing so might result in side-effects for instances of this function that
+				//    lie beneath ours that would expect such nonexistent variables to have blank contents
 				//    when *they* create it.
 				// 2) No other instances of this function exist on the call stack: The memory is freed and
 				//    the contents made blank for these reasons:
@@ -1304,18 +1310,28 @@ double_deref:
 				//    c) To yield results consistent with when the same function is called while other instances
 				//       of itself exist on the call stack.  In other words, it would be inconsistent to make
 				//       all variables blank for case #1 above but not do it here in case #2.
+				goto skip_abort_udf;
+abort_udf:
+// v1.0.40.07: The labels here were added so that an abort of a call to a non-built-in function will collapse
+// cleanly.  A goto/label is used rather than some other method because:
+// 1) It performs better (the whole reason for having this function be so monolithic is performance).
+// 2) Constrained by the performance goal above, it's more maintainable and less code size to do it this way.
+				aResult = FAIL;
+				early_return = true;
+skip_abort_udf:
 				for (j = 0; j < func.mVarCount; ++j)
-					func.mVar[j]->Free(VAR_FREE_EXCLUDE_STATIC, true); // Pass "true" to exclude aliases, since their targets should not be freed (they don't belong to this function).
+					func.mVar[j]->Free(VAR_ALWAYS_FREE_EXCLUDE_STATIC, true); // Pass "true" to exclude aliases, since their targets should not be freed (they don't belong to this function).
 				for (j = 0; j < func.mLazyVarCount; ++j)
-					func.mLazyVar[j]->Free(VAR_FREE_EXCLUDE_STATIC, true);
+					func.mLazyVar[j]->Free(VAR_ALWAYS_FREE_EXCLUDE_STATIC, true);
 
 				// The following call to RestoreFunctionVars() relies on the fact that Free() was already called above.
 				// The previous call to BackupFunctionVars() has ensured that none of the variables Free()'d above
 				// were ALLOC_SIMPLE, because that would be a memory leak since there's no way to free that type.
-				if (backup_needed) // This is the indicator that a backup was made, a restore is also needed
+				if (var_backup) // This is the indicator that a backup was made, a restore is also needed
 					RestoreFunctionVars(func, var_backup, var_backup_count); // It avoids restoring statics.
 
-				// Our callers know to ignore the value of aResult unless we return NULL:
+				// The callers of this function know that the value of aResult (which contains the reason
+				// for early exit) should be considered valid/meaningful only if result_to_return is NULL.
 				if (early_return) // aResult has already been set above for our caller.
 				{
 					result_to_return = NULL; // Use NULL to inform our caller that this entire thread is to be terminated.
@@ -2496,11 +2512,12 @@ char *Line::ExpandArg(char *aBuf, int aArgIndex, Var *aArgVar)
 
 ResultType BackupFunctionVars(Func &aFunc, VarBkp *&aVarBackup, int &aVarBackupCount)
 // Helper function for ExpandExpression().  All parameters except the first are output parameters that
-// are set for our caller.  However, if there is nothing to backup, only the aVarBackupCount is changed
-// (to zero).  Returns OK or FAIL.
+// are set for our caller (though caller is responsible for having initialized aVarBackup to NULL).
+// If there is nothing to backup, only the aVarBackupCount is changed (to zero).
+// Returns OK or FAIL.
 {
 	if (   !(aVarBackupCount = aFunc.mVarCount + aFunc.mLazyVarCount)   )  // Nothing needs to be backed up.
-		return OK;
+		return OK; // Leave aVarBackup set to NULL as set by the caller.
 
 	// Since Var is not a POD struct (it contains private members, a custom constructor, etc.), the VarBkp
 	// POD struct is used to hold the backup because it's probably better performance than using Var's
@@ -2523,6 +2540,7 @@ ResultType BackupFunctionVars(Func &aFunc, VarBkp *&aVarBackup, int &aVarBackupC
 
 
 void RestoreFunctionVars(Func &aFunc, VarBkp *&aVarBackup, int aVarBackupCount)
+// Caller must ensure that aVarBackup isn't NULL.
 // Helper function for ExpandExpression().  Restores aVarBackup back into their original variables and
 // frees aVarBackup afterward.
 {
@@ -2531,4 +2549,5 @@ void RestoreFunctionVars(Func &aFunc, VarBkp *&aVarBackup, int aVarBackupCount)
 	for (int i = 0; i < aVarBackupCount; ++i)
 		aVarBackup[i].mVar->Restore(aVarBackup[i]);
 	free(aVarBackup);
+	aVarBackup = NULL; // So that the caller knows it's been freed.  Currently only for maintainability.
 }
