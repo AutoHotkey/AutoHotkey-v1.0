@@ -637,7 +637,18 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 		//case GUI_CONTROL_LISTBOX:
 		//case GUI_CONTROL_TAB:
 			if (control.type == GUI_CONTROL_COMBOBOX && guicontrol_cmd == GUICONTROL_CMD_TEXT)
-				break; // v1.30.38: Fall through to the SetWindowText() method, which works to set combo's edit field.
+			{
+				// Fix for v1.0.40.08: Must clear the current selection to avoid Submit/GuiControlGet
+				// retrieving it instead of the text that's about to be put into the Edit field.  Note that
+				// whatever changes are done here should tested to work with ComboBox's AltSubmit option also.
+				// After the next text is added to the Edit field, upon GuiControlGet or "Gui Submit", that
+				// text will be checked against the drop-list to see if it matches any of the selections
+				// It's done at that stage rather than here because doing it there also solves the issue
+				// of the user manually entering a selection into the Edit field and then failing to get
+				// the position of the matching item when the ComboBox is set to AltSubmit mode.
+				SendMessage(control.hwnd, CB_SETCURSEL, -1, 0);
+				break; // v1.0.38: Fall through to the SetWindowText() method, which works to set combo's edit field.
+			}
 			// Seems best not to do the below due to the extreme rarity of anyone wanting to change a
 			// ListBox or ComboBox's hidden caption.  That can be done via ControlSetText if it is
 			// ever needed.  The advantage of not doing this is that the "TEXT" command can be used
@@ -5679,7 +5690,23 @@ ResultType GuiType::ControlGetContents(Var &aOutputVar, GuiControlType &aControl
 		case GUI_CONTROL_COMBOBOX:
 			index = SendMessage(aControl.hwnd, CB_GETCURSEL, 0, 0); // Get index of currently selected item.
 			if (index == CB_ERR) // There is no selection (or very rarely, some other type of problem).
-				break; // Break out of the switch rather than returning so that the GetWindowText() method can be applied.
+			{
+				// Fix for v1.0.40.08: It seems that any text put into a ComboBox's edit field via GuiControl or
+				// even the user typing/pasting it does not cause the box to update its current selection/position.
+				// Since this can be the reason for the CB_ERR retrieved above, check if the Edit field
+				// contains text that exactly matches one of the items in the drop-list.  If it does, that
+				// item's position should be retrieved in AltSubmit mode (even for non-AltSubmit mode, this
+				// should be done because the case of the item in the drop-list is usually preferable to any
+				// varying case the user may have manually typed).
+				if (GetWindowText(aControl.hwnd, buf, sizeof(buf))) // Buf size should be enough for anything realistic.
+				{
+					index = SendMessage(aControl.hwnd, CB_FINDSTRINGEXACT, -1, (LPARAM)&buf); // It's not case sensitive.
+					if (index == CB_ERR)
+						break;  // Break out of the switch rather than returning so that the GetWindowText() method can be applied.
+				}
+				else // Failure of GetWindowText() in this case might be nearly impossible, so just fall through to default handling.
+					break; // Same comment as above.
+			}
 			if (aControl.attrib & GUI_CONTROL_ATTRIB_ALTSUBMIT) // Caller wanted the position, not the text retrieved.
 				return aOutputVar.Assign((int)index + 1);
 			length = SendMessage(aControl.hwnd, CB_GETLBTEXTLEN, (WPARAM)index, 0);
