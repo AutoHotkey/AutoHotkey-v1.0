@@ -1387,8 +1387,13 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, i
 				return hbitmap;
 			// Otherwise, continue on so that the image can be resized via a second call to LoadImage().
 		}
-		//else continue on so that the other methods are attempted in case file's contents differ
-		// from what the file extension indicates, or in case the other methods can be successful
+		// v1.0.40.10: Abort if file doesn't exist so that GDIPlus isn't even attempted. This is done because
+		// loading GDIPlus apparently disrupts the color palette of certain games, at least old ones that use
+		// DirectDraw in 256-color depth.
+		else if (GetFileAttributes(aFilespec) == 0xFFFFFFFF) // For simplicity, we don't check if it's a directory vs. file, since that should be too rare.
+			return NULL;
+		//else file exists, so continue on so that the other methods are attempted in case file's contents
+		// differ from what the file extension indicates, or in case the other methods can be successful
 		// even when the above failed.
 	}
 

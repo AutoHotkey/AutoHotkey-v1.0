@@ -6402,7 +6402,7 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 			//else ignore all others here, for performance.
 			return 0; // 0 is appropriate for all DATETIME notifications.
 
-		case GUI_CONTROL_MONTHCAL: // NMDATETIMECHANGE struct contains an NMHDR as it's first member.
+		case GUI_CONTROL_MONTHCAL:
 			pgui->Event(control_index, nmhdr.code);
 			return 0; // 0 is appropriate for all MONTHCAL notifications.
 

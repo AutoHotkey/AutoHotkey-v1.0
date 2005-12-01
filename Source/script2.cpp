@@ -4333,7 +4333,7 @@ BOOL CALLBACK EnumMonitorProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMoni
 
 
 
-LPCOLORREF getbits(HBITMAP ahImage, HDC hdc, LONG &aWidth, LONG &aHeight, bool &aIs16Bit, int aMinColorDepth = 16)
+LPCOLORREF getbits(HBITMAP ahImage, HDC hdc, LONG &aWidth, LONG &aHeight, bool &aIs16Bit, int aMinColorDepth = 8)
 // Helper function used by PixelSearch below.
 // Returns an array of pixels to the caller, which it must free when done.  Returns NULL on failure,
 // in which case the contents of the output parameters is indeterminate.
@@ -4358,7 +4358,7 @@ LPCOLORREF getbits(HBITMAP ahImage, HDC hdc, LONG &aWidth, LONG &aHeight, bool &
 	struct BITMAPINFO3
 	{
 		BITMAPINFOHEADER    bmiHeader;
-		RGBQUAD             bmiColors[3];  // 3 vs. 1.
+		RGBQUAD             bmiColors[260];  // v1.0.40.10: 260 vs. 3 to allow room for color table when color depth is 8-bit or less.
 	} bmi;
 
 	bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
@@ -4372,13 +4372,18 @@ LPCOLORREF getbits(HBITMAP ahImage, HDC hdc, LONG &aWidth, LONG &aHeight, bool &
 	aWidth = bmi.bmiHeader.biWidth;
 	aHeight = bmi.bmiHeader.biHeight;
 
-	size_t size = bmi.bmiHeader.biWidth * bmi.bmiHeader.biHeight;
-	if (   !(image_pixel = new DWORD[size])   )
+	int image_pixel_count = aWidth * aHeight;
+	if (   !(image_pixel = (LPCOLORREF)malloc(image_pixel_count * sizeof(COLORREF)))   )
 		goto end;
-	memset(image_pixel, 0xAA, size*4);
 
-	bmi.bmiHeader.biBitCount = 32;
-	bmi.bmiHeader.biHeight = -bmi.bmiHeader.biHeight;
+	// v1.0.40.10: To preserve compatibility with callers who check for transparency in icons, don't do any
+	// of the extra color table handling for 1-bpp images.  Update: For code simplification, support only
+	// 8-bpp images.  If ever support lower color depths, use something like "bmi.bmiHeader.biBitCount > 1
+	// && bmi.bmiHeader.biBitCount < 9";
+	bool is_8bit = (bmi.bmiHeader.biBitCount == 8);
+	if (!is_8bit)
+		bmi.bmiHeader.biBitCount = 32;
+	bmi.bmiHeader.biHeight = -bmi.bmiHeader.biHeight; // Storing a negative inside the bmiHeader struct is a signal for GetDIBits().
 
 	// Must be done only after GetDIBits() because: "The bitmap identified by the hbmp parameter
 	// must not be selected into a device context when the application calls GetDIBits()."
@@ -4388,10 +4393,45 @@ LPCOLORREF getbits(HBITMAP ahImage, HDC hdc, LONG &aWidth, LONG &aHeight, bool &
 	// Perhaps that is normal.
 	tdc_orig_select = SelectObject(tdc, ahImage); // Returns NULL when we're called the second time?
 
-	if (   !(GetDIBits(tdc, ahImage, 0, -bmi.bmiHeader.biHeight, image_pixel, (LPBITMAPINFO)&bmi, DIB_RGB_COLORS))   )
+	// Appparently there is no need to specify DIB_PAL_COLORS below when color depth is 8-bit because
+	// DIB_RGB_COLORS also retrieves the color indices.
+	if (   !(GetDIBits(tdc, ahImage, 0, aHeight, image_pixel, (LPBITMAPINFO)&bmi, DIB_RGB_COLORS))   )
 		goto end;
 
-	success = true; // Flag for use below.
+	if (is_8bit) // This section added in v1.0.40.10.
+	{
+		// Convert the color indicies to RGB colors by going through the array in reverse order.
+		// Reverse order allows an in-place conversion of each 8-bit color index to its corresponding
+		// 32-bit RGB color.
+		LPDWORD palette = (LPDWORD)_alloca(256 * sizeof(PALETTEENTRY));
+		GetSystemPaletteEntries(tdc, 0, 256, (LPPALETTEENTRY)palette); // Even if failure can realistically happen, consequences of using uninitialized palette seem acceptable.
+		// Above: GetSystemPaletteEntries() is the only approach that provided the correct palette.
+		// The following other approaches didn't give the right one:
+		// GetDIBits(): The palette it stores in bmi.bmiColors seems completely wrong.
+		// GetPaletteEntries()+GetCurrentObject(hdc, OBJ_PAL): Returned only 20 entries rather than the expected 256.
+		// GetDIBColorTable(): I think same as above or maybe it returns 0.
+
+		// The following section is necessary because apparently each new row in the region starts on
+		// a DWORD boundary.  So if the number of pixels in each row isn't an exact multiple of 4, there
+		// are between 1 and 3 zero-bytes at the end of each row.
+		int remainder = aWidth % 4;
+		int empty_bytes_at_end_of_each_row = remainder ? (4 - remainder) : 0;
+
+		// Start at the last RGB slot and the last color index slot:
+		BYTE *byte = (BYTE *)image_pixel + image_pixel_count - 1 + (aHeight * empty_bytes_at_end_of_each_row); // Pointer to 8-bit color indices.
+		DWORD *pixel = image_pixel + image_pixel_count - 1; // Pointer to 32-bit RGB entries.
+
+		int row, col;
+		for (row = 0; row < aHeight; ++row) // For each row.
+		{
+			byte -= empty_bytes_at_end_of_each_row;
+			for (col = 0; col < aWidth; ++col) // For each column.
+				*pixel-- = rgb_to_bgr(palette[*byte--]); // Caller always wants RGB vs. BGR format.
+		}
+	}
+	
+	// Since above didn't "goto end", indicate success:
+	success = true;
 
 end:
 	if (tdc_orig_select) // i.e. the original call to SelectObject() didn't fail.
@@ -4399,7 +4439,7 @@ end:
 	DeleteDC(tdc);
 	if (!success && image_pixel)
 	{
-		delete [] image_pixel;
+		free(image_pixel);
 		image_pixel = NULL;
 	}
 	return image_pixel;
@@ -4592,7 +4632,7 @@ fast_end:
 		if (hbitmap_screen)
 			DeleteObject(hbitmap_screen);
 		if (screen_pixel)
-			delete [] screen_pixel;
+			free(screen_pixel);
 
 		if (!found) // Let ErrorLevel, which is either "1" or "2" as set earlier, tell the story.
 			return OK;
@@ -5028,11 +5068,11 @@ end:
 	if (hbitmap_screen)
 		DeleteObject(hbitmap_screen);
 	if (image_pixel)
-		delete [] image_pixel;
+		free(image_pixel);
 	if (image_mask)
-		delete [] image_mask;
+		free(image_mask);
 	if (screen_pixel)
-		delete [] screen_pixel;
+		free(screen_pixel);
 
 	if (!found) // Let ErrorLevel, which is either "1" or "2" as set earlier, tell the story.
 		return OK;
@@ -5081,9 +5121,10 @@ ResultType Line::PixelGetColor(int aX, int aY, bool aUseRGB)
 	// is zero padded to make it easier to convert to RGB and more consistent in
 	// appearance:
 	COLORREF color = GetPixel(hdc, aX, aY);
+	ReleaseDC(NULL, hdc);
+
 	char buf[32];
 	sprintf(buf, "0x%06X", aUseRGB ? bgr_to_rgb(color) : color);
-	ReleaseDC(NULL, hdc);
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 	return output_var->Assign(buf);
 }
