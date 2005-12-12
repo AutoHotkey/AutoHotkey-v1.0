@@ -138,7 +138,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 				// it's a normal empty variable and thus it stays of type EXP_DEREF_VAR.
 				if (this_deref.var->Length())
 					map[map_count].var = this_deref.var;
-				else // Check if it's an environment variable.
+				else // Zero-length, so check if it's an environment variable.
 				{
 					map[map_count].marker = target;  // Indicate its position in the buffer.
 					target += this_deref.var->Get(target);

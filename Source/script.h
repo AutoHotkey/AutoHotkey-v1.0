@@ -1390,10 +1390,17 @@ public:
 		if (aOptions)
 			*aOptions = aBuf; // Return position where options start to the caller.
 		// If it's blank without a deref, that's CONTENTS.  Otherwise, assume it's OPTIONS for better
-		// runtime flexibility (i.e. user can leave the variable blank to make the command do nothing):
-		if (!*aBuf && !ArgHasDeref(1))
+		// runtime flexibility (i.e. user can leave the variable blank to make the command do nothing).
+		// Fix for v1.0.40.11: Since the above is counterintuitive and undocumented, it has been fixed
+		// to behave the way most users would expect; that is, the contents of any deref in parameter 1
+		// will behave the same as when such contents is present literally as parametter 1.  Another
+		// reason for doing this is that otherwise, there is no way to specify the CONTENTS sub-command
+		// in a variable.  For example, the following wouldn't work:
+		// GuiControl, %WindowNumber%:, ...
+		// GuiControl, %WindowNumberWithColon%, ...
+		if (!*aBuf)
 			return GUICONTROL_CMD_CONTENTS;
-		if (!*aBuf || *aBuf == '+' || *aBuf == '-') // Assume a var ref that resolves to blank is "options" (for runtime flexibility).
+		if (*aBuf == '+' || *aBuf == '-') // Assume a var ref that resolves to blank is "options" (for runtime flexibility).
 			return GUICONTROL_CMD_OPTIONS;
 		if (!stricmp(aBuf, "Text")) return GUICONTROL_CMD_TEXT;
 		if (!stricmp(aBuf, "Move")) return GUICONTROL_CMD_MOVE;

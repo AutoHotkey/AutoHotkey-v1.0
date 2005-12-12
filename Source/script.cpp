@@ -1011,6 +1011,11 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 	UCHAR *script_buf = NULL;  // Init for the case when the buffer isn't used (non-standalone mode).
 	ULONG nDataSize = 0;
 
+	// <buf> should be no larger than LINE_SIZE because some later functions rely upon that:
+	char buf1[LINE_SIZE], buf2[LINE_SIZE], suffix[16], buf_prev[LINE_SIZE] = "";
+	char *buf = buf1, *next_buf = buf2; // Oscillate between bufs to improve performance (avoids memcpy from buf2 to buf1).
+	size_t buf_length, next_buf_length, suffix_length;
+
 #ifndef AUTOHOTKEYSC
 	// Future: might be best to put a stat() or GetFileAttributes() in here for better handling.
 	FILE *fp = fopen(aFileSpec, "r");
@@ -1024,6 +1029,20 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 		MsgBox(msg_text);
 		return FAIL;
 	}
+	// v1.0.40.11: Otherwise, check if the first three bytes of the file are the UTF-8 BOM marker (and if
+	// so omit them from further consideration).  Apps such as Notepad, WordPad, and Word all insert this
+	// marker if the file is saved in UTF-8 format.  This omits such markers from both the main script and
+	// any files it includes via #Include.
+	// NOTE: To save code size, any UTF-8 BOM bytes at the beginning of a compiled script have already been
+	// stripped out by the script compiler.  Thus, there is no need to check for them in the AUTOHOTKEYSC
+	// section further below.
+	if (fgets(buf, 4, fp)) // Success (the fourth character is the terminator).
+	{
+		if (strcmp(buf, "﻿"))  // UTF-8 BOM marker is NOT present.
+			rewind(fp);  // Go back to the beginning so that the first three bytes aren't omitted during loading.
+			// The code size of rewind() has been checked and it seems very tiny.
+	}
+	//else file read error or EOF, let a later section handle it.
 
 #else // Stand-alone mode (there are no include files in this mode since all of them were merged into the main script at the time of compiling).
 	HS_EXEArc_Read oRead;
@@ -1068,13 +1087,9 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 
 	// File is now open, read lines from it.
 
-	// <buf> should be no larger than LINE_SIZE because some later functions rely upon that:
-	char buf1[LINE_SIZE], buf2[LINE_SIZE], suffix[16], buf_prev[LINE_SIZE] = "";
-	char *buf = buf1, *next_buf = buf2; // Oscillate between bufs to improve performance (avoids memcpy from buf2 to buf1).
 	char *hotkey_flag, *cp, *cp1, *action_end, *hotstring_start, *hotstring_options;
 	LineNumberType buf_prev_line_number, saved_line_number;
 	HookActionType hook_action;
-	size_t buf_length, next_buf_length, suffix_length;
 	bool is_function, is_label;
 
 	// For the remap mechanism, e.g. a::b
@@ -1100,11 +1115,6 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 	// -1 (MAX_UINT in this case) to compensate for the fact that there is a comment containing
 	// the version number added to the top of each compiled script:
 	LineNumberType phys_line_number = -1;
-#else
-	LineNumberType phys_line_number = 0;
-#endif
-
-#ifdef AUTOHOTKEYSC
 	// For compiled scripts, limit the number of characters to read to however many remain in the memory
 	// file or the size of the buffer, whichever is less.
 	script_buf_space_remaining = SCRIPT_BUF_SPACE_REMAINING;  // Resolve macro only once, for performance.
@@ -1112,6 +1122,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 		: script_buf_space_remaining;
 	buf_length = GetLine(buf, max_chars_to_read, false, script_buf_marker);
 #else
+	LineNumberType phys_line_number = 0;
 	buf_length = GetLine(buf, LINE_SIZE - 1, false, fp);
 #endif
 	bool in_comment_section;
