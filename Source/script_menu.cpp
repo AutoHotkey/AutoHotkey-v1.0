@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2005 Chris Mallett (support@autohotkey.com)
+Copyright 2003-2006 Chris Mallett (support@autohotkey.com)
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License

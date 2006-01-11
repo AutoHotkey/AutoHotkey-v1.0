@@ -308,6 +308,14 @@
 				RelativePath=".\source\script2.cpp">
 			</File>
 			<File
+				RelativePath=".\source\script_autoit.cpp">
+				<FileConfiguration
+					Name="SC (self-contained)|Win32">
+					<Tool
+						Name="VCCLCompilerTool"/>
+				</FileConfiguration>
+			</File>
+			<File
 				RelativePath=".\source\script_expression.cpp">
 				<FileConfiguration
 					Name="Release|Win32">

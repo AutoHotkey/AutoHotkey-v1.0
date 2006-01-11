@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2005 Chris Mallett (support@autohotkey.com)
+Copyright 2003-2006 Chris Mallett (support@autohotkey.com)
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -993,7 +993,7 @@ double_deref:
 	size_t result_size;
 	bool done, make_result_persistent, early_return, left_branch_is_true;
 	ExprTokenType *circuit_token;
-	VarBkp *var_backup = NULL;  // If needed, it will hold an array of VarBkp objects. v1.0.40.07: Initialized to NULL to facilitate and approach that's more maintainable.
+	VarBkp *var_backup = NULL;  // If needed, it will hold an array of VarBkp objects. v1.0.40.07: Initialized to NULL to facilitate an approach that's more maintainable.
 	int var_backup_count; // The number of items in the above array.
 
 	// For each item in the postfix array: if it's an operand, push it onto stack; if it's an operator or

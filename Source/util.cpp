@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2005 Chris Mallett (support@autohotkey.com)
+Copyright 2003-2006 Chris Mallett (support@autohotkey.com)
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -1318,6 +1318,9 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, i
 	HBITMAP hbitmap = NULL;
 	aImageType = -1; // The type of image currently inside hbitmap.  Set default value for output parameter as "unknown".
 
+	if (!*aFilespec) // Allow blank filename to yield NULL bitmap (and currently, some callers do call it this way).
+		return NULL;
+
 	char *file_ext = strrchr(aFilespec, '.');
 	if (file_ext)
 		++file_ext;
@@ -1416,7 +1419,7 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, i
 		// If it's not available, fall back to the old method in case the filename doesn't properly
 		// reflect its true contents (i.e. in case it really is a JPG/GIF/BMP internally).
 		// If the below LoadLibrary() succeeds, either the OS is XP+ or the GdiPlus extensions have been
-		// installed on an older OS.  Below relies on short-circuit boolean.
+		// installed on an older OS.
 		if (hinstGDI)
 		{
 			// LPVOID and "int" are used to avoid compiler errors caused by... namespace issues?
@@ -1595,6 +1598,7 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, i
 		//> was made. But still, it is annoying when you see 'DestroyCursor' even though
 		//> there is 'DestroyIcon'.
 		// "Can't be helped. Icons and cursors are the same thing" (Tim Robinson (MVP, Windows SDK)).
+		//
 		// Finally, the reason this is important is that it eliminates one handle type
 		// that we would otherwise have to track.  For example, if a gui window is destroyed and
 		// and recreated multiple times, its bitmap and icon handles should all be destroyed each time.

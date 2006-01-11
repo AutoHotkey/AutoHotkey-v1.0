@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2005 Chris Mallett (support@autohotkey.com)
+Copyright 2003-2006 Chris Mallett (support@autohotkey.com)
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -277,6 +277,15 @@ enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
 #define ERR_VAR_IS_RESERVED "Not allowed as an output variable."
 
 //----------------------------------------------------------------------------------
+
+DWORD ProcessExist9x2000(char *aProcess, char *aProcessName);
+DWORD ProcessExistNT4(char *aProcess, char *aProcessName);
+
+inline DWORD ProcessExist(char *aProcess, char *aProcessName = NULL)
+{
+	return g_os.IsWinNT4() ? ProcessExistNT4(aProcess, aProcessName)
+		: ProcessExist9x2000(aProcess, aProcessName);
+}
 
 bool Util_Shutdown(int nFlag);
 BOOL Util_ShutdownHandler(HWND hwnd, DWORD lParam);
@@ -706,8 +715,16 @@ private:
 	ResultType PerformShowWindow(ActionTypeType aActionType, char *aTitle = "", char *aText = ""
 		, char *aExcludeTitle = "", char *aExcludeText = "");
 
+	#define DESTROY_SPLASH \
+	{\
+		if (g_hWndSplash && IsWindow(g_hWndSplash))\
+			DestroyWindow(g_hWndSplash);\
+		g_hWndSplash = NULL;\
+	}
+	ResultType SplashTextOn(int aWidth, int aHeight, char *aTitle, char *aText);
 	ResultType Splash(char *aOptions, char *aSubText, char *aMainText, char *aTitle, char *aFontName
 		, char *aImageFile, bool aSplashImage);
+
 	ResultType ToolTip(char *aText, char *aX, char *aY, char *aID);
 	ResultType TrayTip(char *aTitle, char *aText, char *aTimeout, char *aOptions);
 	ResultType Transform(char *aCmd, char *aValue1, char *aValue2);
@@ -731,6 +748,7 @@ private:
 		, char *aExcludeTitle, char *aExcludeText);
 	ResultType ControlGetText(char *aControl, char *aTitle, char *aText
 		, char *aExcludeTitle, char *aExcludeText);
+	ResultType ControlGetListView(Var &aOutputVar, HWND aHwnd, char *aOptions);
 	ResultType Control(char *aCmd, char *aValue, char *aControl, char *aTitle, char *aText
 		, char *aExcludeTitle, char *aExcludeText);
 	ResultType ControlGet(char *aCommand, char *aValue, char *aControl, char *aTitle, char *aText
@@ -859,6 +877,7 @@ public:
 
 	static void FreeDerefBufIfLarge();
 
+	static void DoMouseDelay();
 	static ResultType MouseClickDrag(vk_type aVK // Which button.
 		, int aX1, int aY1, int aX2, int aY2, int aSpeed, bool aMoveRelative);
 	static ResultType MouseClick(vk_type aVK // Which button.
@@ -2371,9 +2390,13 @@ public:
 	WinGroup *FindOrAddGroup(char *aGroupName, bool aNoCreate = false);
 	ResultType AddGroup(char *aGroupName);
 	Label *FindLabel(char *aLabelName);
+
+	ResultType DoRunAs(char *aCommandLine, char *aWorkingDir, bool aDisplayErrors, WORD aShowWindow
+		, Var *aOutputVar, PROCESS_INFORMATION &aPI, bool &aSuccess, HANDLE &aNewProcess, char *aSystemErrorText);
 	ResultType ActionExec(char *aAction, char *aParams = NULL, char *aWorkingDir = NULL
 		, bool aDisplayErrors = true, char *aRunShowMode = NULL, HANDLE *aProcess = NULL
 		, bool aUseRunAs = false, Var *aOutputVar = NULL);
+
 	char *ListVars(char *aBuf, int aBufSize);
 	char *ListKeyHistory(char *aBuf, int aBufSize);
 

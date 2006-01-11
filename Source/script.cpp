@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2005 Chris Mallett (support@autohotkey.com)
+Copyright 2003-2006 Chris Mallett (support@autohotkey.com)
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -15,7 +15,6 @@ GNU General Public License for more details.
 */
 
 #include "stdafx.h" // pre-compiled headers
-#include <winsock.h>  // for WSADATA.  This also requires wsock32.lib to be linked in.
 #include "script.h"
 #include "globaldata.h" // for a lot of things
 #include "util.h" // for strlcpy() etc.
@@ -10307,93 +10306,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			);
 
 	case ACT_SPLASHTEXTON:
-	{
-		///////////////////////////////////////////////////////////////////////////////
-		// SplashTextOn is based on AutoIt v3 source code, which is:
-		// Copyright 1999-2003 Jonathan Bennett and others listed at
-		// http://www.autoitscript.com/autoit3/docs/credits.htm
-		// License: GNU GPL version 2 or (at your option) any later version.
-		///////////////////////////////////////////////////////////////////////////////
-		int W = *ARG1 ? ATOI(ARG1) : 200;
-		int H = *ARG2 ? ATOI(ARG2) : 0;
-
-		// Add some caption and frame size to window:
-		W += GetSystemMetrics(SM_CXFIXEDFRAME) * 2;
-		int min_height = GetSystemMetrics(SM_CYCAPTION) + (GetSystemMetrics(SM_CXFIXEDFRAME) * 2);
-		if (g_script.mIsAutoIt2)
-		{
-			// I think this is probably something like how AutoIt2 does things:
-			if (H < min_height)
-				H = min_height;
-		}
-		else // Use the new, AutoIt3 method.
-			H += min_height;
-
-		POINT pt = CenterWindow(W, H);  // Determine how to center the window in the region that excludes the task bar.
-
-		// My: Probably not to much overhead to do this, though it probably would
-		// perform better to resize and "re-text" the existing window rather than
-		// recreating it:
-		#define DESTROY_SPLASH \
-		{\
-			if (g_hWndSplash && IsWindow(g_hWndSplash))\
-				DestroyWindow(g_hWndSplash);\
-			g_hWndSplash = NULL;\
-		}
-		DESTROY_SPLASH
-
-		// Doesn't seem necessary to have it owned by the main window, but neither
-		// does doing so seem to cause any harm.  Feels safer to have it be
-		// an independent window.  Update: Must make it owned by the parent window
-		// otherwise it will get its own task-bar icon, which is usually undesirable.
-		// In addition, making it an owned window should automatically cause it to be
-		// destroyed when it's parent window is destroyed:
-		g_hWndSplash = CreateWindowEx(WS_EX_TOPMOST, WINDOW_CLASS_SPLASH, ARG3  // ARG3 is the window title
-			, WS_DISABLED|WS_POPUP|WS_CAPTION, pt.x, pt.y, W, H, g_hWnd, (HMENU)NULL, g_hInstance, NULL);
-
-		RECT rect;
-		GetClientRect(g_hWndSplash, &rect);	// get the client size
-
-		// CREATE static label full size of client area
-		HWND static_win = CreateWindowEx(0, "static", ARG4 // ARG4 is the window's text
-			, WS_CHILD|WS_VISIBLE|SS_CENTER
-			, 0, 0, rect.right - rect.left, rect.bottom - rect.top
-			, g_hWndSplash, (HMENU)NULL, g_hInstance, NULL);
-
-		if (!g_hFontSplash)
-		{
-			char default_font_name[65];
-			int CyPixels, nSize = 12, nWeight = FW_NORMAL;
-			HDC hdc = CreateDC("DISPLAY", NULL, NULL, NULL);
-			SelectObject(hdc, (HFONT)GetStockObject(DEFAULT_GUI_FONT));		// Get Default Font Name
-			GetTextFace(hdc, sizeof(default_font_name) - 1, default_font_name); // -1 just in case, like AutoIt3.
-			CyPixels = GetDeviceCaps(hdc, LOGPIXELSY);			// For Some Font Size Math
-			DeleteDC(hdc);
-			//strcpy(default_font_name,vParams[7].szValue());	// Font Name
-			//nSize = vParams[8].nValue();		// Font Size
-			//if ( vParams[9].nValue() >= 0 && vParams[9].nValue() <= 1000 )
-			//	nWeight = vParams[9].nValue();			// Font Weight
-			g_hFontSplash = CreateFont(0-(nSize*CyPixels)/72,0,0,0,nWeight,0,0,0,DEFAULT_CHARSET,
-				OUT_TT_PRECIS,CLIP_DEFAULT_PRECIS,PROOF_QUALITY,FF_DONTCARE,default_font_name);	// Create Font
-			// The font is deleted when by g_script's destructor.
-		}
-
-		SendMessage(static_win, WM_SETFONT, (WPARAM)g_hFontSplash, MAKELPARAM(TRUE, 0));	// Do Font
-		ShowWindow(g_hWndSplash, SW_SHOWNOACTIVATE);				// Show the Splash
-		// Doesn't help with the brief delay in updating the window that happens when
-		// something like URLDownloadToFile is used immediately after SplashTextOn:
-		//InvalidateRect(g_hWndSplash, NULL, TRUE);
-		// But this does, but for now it seems unnecessary since the user can always do
-		// a manual sleep in the extremely rare cases this ever happens (even when it does
-		// happen, the window updates eventually, after the download starts, at least on
-		// my system.  Update: Might as well do it since it's a little nicer this way
-		// (the text appears more quickly when the command after the splash is something
-		// that might keep our thread tied up and unable to check messages).
-		SLEEP_WITHOUT_INTERRUPTION(-1)
-		// UpdateWindow() would probably achieve the same effect as the above, but it feels safer to do
-		// the above because it ensures that our message queue is empty prior to returning to our caller.
-		return OK;
-	}
+		return SplashTextOn(*ARG1 ? ATOI(ARG1) : 200, *ARG2 ? ATOI(ARG2) : 0, ARG3, ARG4);
 	case ACT_SPLASHTEXTOFF:
 		DESTROY_SPLASH
 		return OK;
@@ -11145,12 +11058,6 @@ VarSizeType Script::GetOSType(char *aBuf)
 	return (VarSizeType)strlen(type); // Return length of type, not aBuf.
 }
 
-///////////////////////////////////////////////////////////////////////////////
-// The following function is based on AutoIt v3 source code, which is:
-// Copyright 1999-2003 Jonathan Bennett and others listed at
-// http://www.autoitscript.com/autoit3/docs/credits.htm
-// License: GNU GPL version 2 or (at your option) any later version.
-///////////////////////////////////////////////////////////////////////////////
 VarSizeType Script::GetOSVersion(char *aBuf)
 {
 	char *version = "";  // Init in case OS is something later than Win2003.
@@ -11291,98 +11198,6 @@ VarSizeType Script::GetMyDocuments(char *aBuf)
 
 
 
-///////////////////////////////////////////////////////////////////////////////
-// The following function is based on AutoIt v3 source code, which is:
-// Copyright 1999-2003 Jonathan Bennett and others listed at
-// http://www.autoitscript.com/autoit3/docs/credits.htm
-// License: GNU GPL version 2 or (at your option) any later version.
-///////////////////////////////////////////////////////////////////////////////
-VarSizeType Script::GetIsAdmin(char *aBuf)
-{
-	if (!aBuf)
-		return 1;  // The length of the string "1" or "0".
-	char result = '0';  // Default.
-	if (g_os.IsWin9x())
-		result = '1';
-	else
-	{
-		SC_HANDLE h = OpenSCManager(NULL, NULL, SC_MANAGER_LOCK);
-		if (h)
-		{
-			SC_LOCK lock = LockServiceDatabase(h);
-			if (lock)
-			{
-				UnlockServiceDatabase(lock);
-				result = '1';
-			}
-			else
-			{
-				DWORD lastErr = GetLastError();
-				if (lastErr == ERROR_SERVICE_DATABASE_LOCKED)
-					result = '1';
-			}
-			CloseServiceHandle(h);
-		}
-	}
-	aBuf[0] = result;
-	aBuf[1] = '\0';
-	return 1; // Length of aBuf.
-}
-
-
-
-///////////////////////////////////////////////////////////////////////////////
-// The following function is based on AutoIt v3 source code, which is:
-// Copyright 1999-2003 Jonathan Bennett and others listed at
-// http://www.autoitscript.com/autoit3/docs/credits.htm
-// License: GNU GPL version 2 or (at your option) any later version.
-///////////////////////////////////////////////////////////////////////////////
-VarSizeType Script::ScriptGetCursor(char *aBuf)
-{
-	if (!aBuf)
-		return SMALL_STRING_LENGTH;  // we're returning the length of the var's contents, not the size.
-
-	POINT point;
-	GetCursorPos(&point);
-	HWND target_window = WindowFromPoint(point);
-
-	// MSDN docs imply that threads must be attached for GetCursor() to work.
-	// A side-effect of attaching threads or of GetCursor() itself is that mouse double-clicks
-	// are interfered with, at least if this function is called repeatedly at a high frequency.
-	ATTACH_THREAD_INPUT
-	HCURSOR current_cursor = GetCursor();
-	DETACH_THREAD_INPUT
-
-	if (!current_cursor)
-	{
-		#define CURSOR_UNKNOWN "Unknown"
-		strlcpy(aBuf, CURSOR_UNKNOWN, SMALL_STRING_LENGTH + 1);
-		return (VarSizeType)strlen(aBuf);
-	}
-
-	// Static so that it's initialized on first use (should help performance after the first time):
-	static HCURSOR sCursor[] = {LoadCursor(0,IDC_APPSTARTING), LoadCursor(0,IDC_ARROW), LoadCursor(0,IDC_CROSS)
-		, LoadCursor(0,IDC_HELP), LoadCursor(0,IDC_IBEAM), LoadCursor(0,IDC_ICON), LoadCursor(0,IDC_NO)
-		, LoadCursor(0,IDC_SIZE), LoadCursor(0,IDC_SIZEALL), LoadCursor(0,IDC_SIZENESW), LoadCursor(0,IDC_SIZENS)
-		, LoadCursor(0,IDC_SIZENWSE), LoadCursor(0,IDC_SIZEWE), LoadCursor(0,IDC_UPARROW), LoadCursor(0,IDC_WAIT)};
-	// The order in the below array must correspond to the order in the above array:
-	static char *sCursorName[] = {"AppStarting", "Arrow", "Cross"
-		, "Help", "IBeam", "Icon", "No"
-		, "Size", "SizeAll", "SizeNESW", "SizeNS"  // NESW = NorthEast or SouthWest
-		, "SizeNWSE", "SizeWE", "UpArrow", "Wait", CURSOR_UNKNOWN};  // The last item is used to mark end-of-array.
-	static int cursor_count = sizeof(sCursor) / sizeof(HCURSOR);
-
-	int a;
-	for (a = 0; a < cursor_count; ++a)
-		if (sCursor[a] == current_cursor)
-			break;
-
-	strlcpy(aBuf, sCursorName[a], SMALL_STRING_LENGTH + 1);  // If a is out-of-bounds, "Unknown" will be used.
-	return (VarSizeType)strlen(aBuf);
-}
-
-
-
 VarSizeType Script::ScriptGetCaret(VarTypeType aVarType, char *aBuf)
 {
 	if (!aBuf)
@@ -11460,50 +11275,6 @@ VarSizeType Script::GetScreenHeight(char *aBuf)
 	if (!aBuf)
 		return MAX_NUMBER_LENGTH;
 	return (VarSizeType)strlen(ITOA(GetSystemMetrics(SM_CYSCREEN), aBuf));
-}
-
-
-
-///////////////////////////////////////////////////////////////////////////////
-// The following function is based on AutoIt v3 source code, which is:
-// Copyright 1999-2003 Jonathan Bennett and others listed at
-// http://www.autoitscript.com/autoit3/docs/credits.htm
-// License: GNU GPL version 2 or (at your option) any later version.
-///////////////////////////////////////////////////////////////////////////////
-VarSizeType Script::GetIP(int aAdapterIndex, char *aBuf)
-{
-	// aaa.bbb.ccc.ddd = 15, but allow room for larger IP's in the future.
-	#define IP_ADDRESS_SIZE 32 // The maximum size of any of the strings we return, including terminator.
-	if (!aBuf)
-		return IP_ADDRESS_SIZE - 1;  // -1 since we're returning the length of the var's contents, not the size.
-
-	WSADATA wsadata;
-	if (WSAStartup(MAKEWORD(1, 1), &wsadata)) // Failed (it returns 0 on success).
-	{
-		*aBuf = '\0';
-		return 0;
-	}
-
-	char host_name[256];
-	gethostname(host_name, sizeof(host_name));
-	HOSTENT *lpHost = gethostbyname(host_name);
-
-	// au3: How many adapters have we?
-	int adapter_count = 0;
-	while (lpHost->h_addr_list[adapter_count])
-		++adapter_count;
-
-	if (aAdapterIndex >= adapter_count)
-		strlcpy(aBuf, "0.0.0.0", IP_ADDRESS_SIZE);
-	else
-	{
-		IN_ADDR inaddr;
-		memcpy(&inaddr, lpHost->h_addr_list[aAdapterIndex], 4);
-		strlcpy(aBuf, (char *)inet_ntoa(inaddr), IP_ADDRESS_SIZE);
-	}
-
-	WSACleanup();
-	return (VarSizeType)strlen(aBuf);
 }
 
 
@@ -12863,76 +12634,11 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 
 		if (use_runas)
 		{
-			///////////////////////////////////////////////////////////////////////////////
-			// This RunAs section is based on AutoIt v3 source code, which is:
-			// Copyright 1999-2003 Jonathan Bennett and others listed at
-			// http://www.autoitscript.com/autoit3/docs/credits.htm
-			// License: GNU GPL version 2 or (at your option) any later version.
-			///////////////////////////////////////////////////////////////////////////////
-			typedef BOOL (WINAPI *MyCreateProcessWithLogonW)(
-				LPCWSTR lpUsername,                 // user's name
-				LPCWSTR lpDomain,                   // user's domain
-				LPCWSTR lpPassword,                 // user's password
-				DWORD dwLogonFlags,                 // logon option
-				LPCWSTR lpApplicationName,          // executable module name
-				LPWSTR lpCommandLine,               // command-line string
-				DWORD dwCreationFlags,              // creation flags
-				LPVOID lpEnvironment,               // new environment block
-				LPCWSTR lpCurrentDirectory,         // current directory name
-				LPSTARTUPINFOW lpStartupInfo,       // startup information
-				LPPROCESS_INFORMATION lpProcessInfo // process information
-				);
-			// Get a handle to the DLL module that contains CreateProcessWithLogonW
-			HINSTANCE hinstLib = LoadLibrary("advapi32");
-			if (!hinstLib)
-			{
-				if (aDisplayErrors)
-					ScriptError("RunAs: Missing advapi32.dll." ERR_ABORT);
-				return FAIL;
-			}
-			MyCreateProcessWithLogonW lpfnDLLProc = (MyCreateProcessWithLogonW)GetProcAddress(hinstLib, "CreateProcessWithLogonW");
-			if (!lpfnDLLProc)
-			{
-				FreeLibrary(hinstLib);
-				if (aDisplayErrors)
-					ScriptError("CreateProcessWithLogonW." ERR_ABORT); // Short msg since it probably never happens.
-				return FAIL;
-			}
-			// Set up wide char version that we need for CreateProcessWithLogon
-			// init structure for running programs (wide char version)
-			STARTUPINFOW wsi;
-			wsi.cb			= sizeof(STARTUPINFOW);
-			wsi.lpReserved	= NULL;
-			wsi.lpDesktop	= NULL;
-			wsi.lpTitle		= NULL;
-			wsi.dwFlags		= STARTF_USESHOWWINDOW;
-			wsi.cbReserved2	= 0;
-			wsi.lpReserved2	= NULL;
-			wsi.wShowWindow = si.wShowWindow;				// Default is same as si
-
-			// Convert to wide character format:
-			wchar_t command_line_wide[LINE_SIZE], working_dir_wide[MAX_PATH];
-			mbstowcs(command_line_wide, command_line, sizeof(command_line_wide));
-			if (aWorkingDir && *aWorkingDir)
-				mbstowcs(working_dir_wide, aWorkingDir, sizeof(working_dir_wide));
-			else
-				*working_dir_wide = 0;  // wide-char terminator.
-
-			if (lpfnDLLProc(mRunAsUser, mRunAsDomain, mRunAsPass, LOGON_WITH_PROFILE, 0
-				, command_line_wide, 0, 0, *working_dir_wide ? working_dir_wide : NULL, &wsi, &pi))
-			{
-				success = true;
-				if (pi.hThread)
-					CloseHandle(pi.hThread); // Required to avoid memory leak.
-				new_process = pi.hProcess;
-				if (aOutputVar)
-					aOutputVar->Assign(pi.dwProcessId);
-			}
-			else
-				GetLastErrorText(system_error_text, sizeof(system_error_text));
-			FreeLibrary(hinstLib);
+			if (!DoRunAs(command_line, aWorkingDir, aDisplayErrors, si.wShowWindow  // wShowWindow (min/max/hide).
+				, aOutputVar, pi, success, new_process, system_error_text)) // These are output parameters it will set for us.
+				return FAIL; // It already displayed the error, if appropriate.
 		}
-		else // use_runas==false
+		else
 		{
 			// MSDN: "If [lpCurrentDirectory] is NULL, the new process is created with the same
 			// current drive and directory as the calling process." (i.e. since caller may have

@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2005 Chris Mallett (support@autohotkey.com)
+Copyright 2003-2006 Chris Mallett (support@autohotkey.com)
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -344,20 +344,5 @@ inline int GetWindowTextByTitleMatchMode(HWND aWnd, char *aBuf = NULL, int aBufS
 	g.AllowThreadToBeInterrupted = !thread_was_critical;\
 }
 bool DialogPrep();
-
-
-
-////////////////////
-// PROCESS ROUTINES
-////////////////////
-
-DWORD ProcessExist9x2000(char *aProcess, char *aProcessName);
-DWORD ProcessExistNT4(char *aProcess, char *aProcessName);
-
-inline DWORD ProcessExist(char *aProcess, char *aProcessName = NULL)
-{
-	return g_os.IsWinNT4() ? ProcessExistNT4(aProcess, aProcessName)
-		: ProcessExist9x2000(aProcess, aProcessName);
-}
 
 #endif

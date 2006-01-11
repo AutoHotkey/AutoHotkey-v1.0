@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2005 Chris Mallett (support@autohotkey.com)
+Copyright 2003-2006 Chris Mallett (support@autohotkey.com)
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -140,7 +140,7 @@ key is actually down at the moment of consideration.
 
 LRESULT CALLBACK LowLevelKeybdProc(int aCode, WPARAM wParam, LPARAM lParam)
 {
-	if (aCode != HC_ACTION)  // MSDN docs specify that Both LL keybd & mouse hook should return in this case.
+	if (aCode != HC_ACTION)  // MSDN docs specify that both LL keybd & mouse hook should return in this case.
 		return CallNextHookEx(g_KeybdHook, aCode, wParam, lParam);
 
 	KBDLLHOOKSTRUCT &event = *(PKBDLLHOOKSTRUCT)lParam;  // For convenience, maintainability, and possibly performance.

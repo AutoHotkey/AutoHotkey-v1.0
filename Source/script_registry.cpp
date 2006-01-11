@@ -1,12 +1,12 @@
-////////////////////////////////////////////////////////////
-// This file has been adapted to work with this application.
 ///////////////////////////////////////////////////////////////////////////////
 //
 // AutoIt
 //
-// Copyright (C)1999-2003:
+// Copyright (C)1999-2006:
 //		- Jonathan Bennett <jon@hiddensoft.com>
-//		- See "AUTHORS.txt" for contributors.
+//		- Others listed at http://www.autoitscript.com/autoit3/docs/credits.htm
+//      - Chris Mallett (support@autohotkey.com): adaptation of this file's
+//        functions to interface with AutoHotkey.
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by

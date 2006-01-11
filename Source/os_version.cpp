@@ -5,7 +5,7 @@
 //
 // Copyright (C)1999-2003:
 //		- Jonathan Bennett <jon@hiddensoft.com>
-//		- See "AUTHORS.txt" for contributors.
+//		- Others listed at http://www.autoitscript.com/autoit3/docs/credits.htm
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by

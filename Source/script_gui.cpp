@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2005 Chris Mallett (support@autohotkey.com)
+Copyright 2003-2006 Chris Mallett (support@autohotkey.com)
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -359,11 +359,12 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 			// to NULL sometimes or always shrinks the control down to zero dimensions:
 			// Although all HBITMAPs are freed upon program termination, if the program changes
 			// the picture frequently, memory/resources would continue to rise in the meantime
-			// unless this is done:
+			// unless this is done.
+			// 1.0.40.12: For maintainability, destroy the handle returned by STM_SETIMAGE, even though it
+			// should be identical to control.union_hbitmap (due to a call to STM_GETIMAGE in another section).
 			if (control.union_hbitmap)
 				if (control.attrib & GUI_CONTROL_ATTRIB_ALTBEHAVIOR) // union_hbitmap is an icon or cursor.
-				{
-					// The control's image is set to NULL is done for the following reasons:
+					// The control's image is set to NULL for the following reasons:
 					// 1) It turns off the control's animation timer in case the new image is not animated.
 					// 2) It feels a little bit safter to destroy the image only after it has been removed
 					//    from the control.
@@ -371,14 +372,10 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 					// animated property of the control (via a timer that the control created) will remain
 					// in effect for the next image, even if it isn't animated, which results in a
 					// flashing/redrawing effect:
-					SendMessage(control.hwnd, STM_SETIMAGE, IMAGE_CURSOR, NULL);
-					DestroyIcon((HICON)control.union_hbitmap); // Works on cursors too.  See notes in LoadPicture().
-				}
+					DestroyIcon((HICON)SendMessage(control.hwnd, STM_SETIMAGE, IMAGE_CURSOR, NULL));
+					// DestroyIcon() works on cursors too.  See notes in LoadPicture().
 				else // union_hbitmap is a bitmap
-				{
-					SendMessage(control.hwnd, STM_SETIMAGE, IMAGE_BITMAP, NULL);
-					DeleteObject(control.union_hbitmap);
-				}
+					DeleteObject((HGDIOBJ)SendMessage(control.hwnd, STM_SETIMAGE, IMAGE_BITMAP, NULL));
 
 			// Parse any options that are present in front of the filename:
 			char *next_option = omit_leading_whitespace(aParam3);
@@ -445,7 +442,35 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 			// LoadPicture() uses CopyImage() to scale the image, which seems to provide better scaling
 			// quality than using MoveWindow() (followed by redrawing the parent window) on the static
 			// control that contains the image.
-			SendMessage(control.hwnd, STM_SETIMAGE, image_type, (LPARAM)control.union_hbitmap);
+			SendMessage(control.hwnd, STM_SETIMAGE, image_type, (LPARAM)control.union_hbitmap); // Always returns NULL due to previous call to STM_SETIMAGE above.
+			// Fix for 1.0.40.12: The below was added because STM_SETIMAGE above may have caused the control to
+			// create a new hbitmap (possibly only for alpha channel bitmaps on XP, but might also apply to icons),
+			// in which case we now have two handles: the one inside the control and the one from which
+			// it was copied.  Task Manager confirms that the control does not delete the original
+			// handle when it creates a new handle.  Rather than waiting until later to delete the handle,
+			// it seems best to do it here so that:
+			// 1) The script uses less memory during the time that the picture control exists.
+			// 2) Don't have to delete two handles (control.union_hbitmap and the one returned by STM_SETIMAGE)
+			//    when the time comes to change the image inside the control.
+			//
+			// MSDN: "With Microsoft Windows XP, if the bitmap passed in the STM_SETIMAGE message contains pixels
+			// with non-zero alpha, the static control takes a copy of the bitmap. This copied bitmap is returned
+			// by the next STM_SETIMAGE message... if it does not check and release the bitmaps returned from
+			// STM_SETIMAGE messages, the bitmaps are leaked."
+			HBITMAP hbitmap_actual;
+			if (   (hbitmap_actual = (HBITMAP)SendMessage(control.hwnd, STM_GETIMAGE, image_type, 0)) // Assign
+				&& hbitmap_actual != control.union_hbitmap   )  // The control decided to make a new handle.
+			{
+				if (image_type == IMAGE_BITMAP)
+					DeleteObject(control.union_hbitmap);
+				else // Icon or cursor.
+					DestroyIcon((HICON)control.union_hbitmap); // Works on cursors too.
+				// In additional to improving maintainability, the following might also be necessary to allow
+				// Gui::Destroy() to avoid  a memory leak when the picture control is destroyed as a result
+				// of its parent being destroyed (though I've read that the control is supposed to destroy its
+				// hbitmap when it was directly responsible for creating it originally [but not otherwise]):
+				control.union_hbitmap = hbitmap_actual;
+			}
 			if (image_type == IMAGE_BITMAP)
 				control.attrib &= ~GUI_CONTROL_ATTRIB_ALTBEHAVIOR;  // Flag it as a bitmap so that DeleteObject vs. DestroyIcon will be called for it.
 			else // Cursor or Icon, which are functionally identical.
@@ -6284,6 +6309,26 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 		// which falsely indicates that the message is from a menu:
 		if (id == IDCANCEL) // IDCANCEL is a special Control ID.  The user pressed esc.
 		{
+			// Known limitation:
+			// Example:
+			//Gui, Add, Text,, Gui1
+			//Gui, Add, Text,, Gui2
+			//Gui, Show, w333
+			//GuiControl, Disable, Gui1
+			//return
+			//
+			//GuiEscape:
+			//MsgBox GuiEscape
+			//return
+			// It appears that in cases like the above, the OS doesn't send the WM_COMMAND+IDCANCEL message
+			// to the program when you press Escape. Although it could be fixed by having the escape keystroke
+			// unconditionally call the GuiEscape label, that might break existing features and scripts that
+			// rely on escape's ability to perform other functions in a window. 
+			// I'm not sure whether such functions exist and how many of them there are. Examples might include
+			// using escape to close a menu, drop-list, or other pop-up attribute of a control inside the window.
+			// Escape also cancels a user's drag-move of the window (restoring the window to its pre-drag location).
+			// If pressing escape were to unconditionally call the GuiEscape label, features like these might be
+			// broken.  So currently this behavior is documented in the help file as a known limitation.
 			pgui->Escape();
 			return 0; // Might be necessary to prevent auto-window-close.
 			// Note: It is not necessary to check for IDOK because:

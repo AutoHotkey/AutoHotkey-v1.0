@@ -1,7 +1,7 @@
 /*
 AutoHotkey
 
-Copyright 2003-2005 Chris Mallett (support@autohotkey.com)
+Copyright 2003-2006 Chris Mallett (support@autohotkey.com)
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -15,7 +15,6 @@ GNU General Public License for more details.
 */
 
 #include "stdafx.h" // pre-compiled headers
-#include <tlhelp32.h> // For ScriptProcess()
 #include "window.h"
 #include "util.h" // for strlcpy()
 #include "application.h" // for MsgSleep()
@@ -403,30 +402,16 @@ HWND WinClose(char *aTitle, char *aText, int aTimeToWaitForClose
 HWND WinClose(HWND aWnd, int aTimeToWaitForClose, bool aKillIfHung)
 {
 	if (aKillIfHung) // This part is based on the AutoIt3 source.
-	{
 		// Update: Another reason not to wait a long time with the below is that WinKill
 		// is normally only used when the target window is suspected of being hung.  It
 		// seems bad to wait something like 2 seconds in such a case, when the caller
 		// probably already knows it's hung.
-		// AutoIt3 waits for 500ms.  But because this app is much more sensitive to being
-		// in a "not-pumping-messages" state, due to the keyboard & mouse hooks, it seems
-		// better to wait for less (e.g. in case the user is gaming and there's a script
+		// Obsolete in light of dedicated hook thread: Because this app is much more sensitive to being
+		// in a "not-pumping-messages" state, due to the keyboard & mouse hooks, it seems better to wait
+		// for only 200 ms (e.g. in case the user is gaming and there's a script
 		// running in the background that uses WinKill, we don't want key and mouse events
-		// to freeze for a long time).  Also, always use WM_CLOSE vs. SC_CLOSE in this case
-		// since the target window is slightly more likely to respond to that:
-		DWORD dwResult;
-		if (!SendMessageTimeout(aWnd, WM_CLOSE, 0, 0, SMTO_ABORTIFHUNG, 200, &dwResult))
-		{
-			// Use more force - Mwuahaha
-			DWORD pid = GetWindowThreadProcessId(aWnd, NULL);
-			HANDLE hProcess = pid ? OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid) : NULL;
-			if (hProcess)
-			{
-				TerminateProcess(hProcess, 0);
-				CloseHandle(hProcess);
-			}
-		}
-	}
+		// to freeze for a long time).
+		Util_WinKill(aWnd);
 	else // Don't kill.
 		// SC_CLOSE is the same as clicking a window's "X"(close) button or using Alt-F4.
 		// Although it's a more friendly way to close windows than WM_CLOSE (and thus
@@ -1759,186 +1744,4 @@ bool DialogPrep()
 	if (HIWORD(GetQueueStatus(QS_ALLEVENTS)))
 		MsgSleep(-1);
 	return thread_was_critical; // Caller is responsible for using this to later restore g.ThreadIsCritical.
-}
-
-
-
-////////////////////
-// PROCESS ROUTINES
-////////////////////
-
-///////////////////////////////////////////////////////////////////////////////
-// The following function is based on AutoIt v3 source code, which is:
-// Copyright 1999-2003 Jonathan Bennett and others listed at
-// http://www.autoitscript.com/autoit3/docs/credits.htm
-// License: GNU GPL version 2 or (at your option) any later version.
-///////////////////////////////////////////////////////////////////////////////
-DWORD ProcessExist9x2000(char *aProcess, char *aProcessName)
-{
-	if (aProcessName) // Init this output variable in case of early return.
-		*aProcessName = '\0';
-
-	// We must dynamically load the function or program will probably not launch at all on NT4.
-	typedef BOOL (WINAPI *PROCESSWALK)(HANDLE hSnapshot, LPPROCESSENTRY32 lppe);
-	typedef HANDLE (WINAPI *CREATESNAPSHOT)(DWORD dwFlags, DWORD th32ProcessID);
-
-	static CREATESNAPSHOT lpfnCreateToolhelp32Snapshot = (CREATESNAPSHOT)GetProcAddress(GetModuleHandle("kernel32"), "CreateToolhelp32Snapshot");
-    static PROCESSWALK lpfnProcess32First = (PROCESSWALK)GetProcAddress(GetModuleHandle("kernel32"), "Process32First");
-    static PROCESSWALK lpfnProcess32Next = (PROCESSWALK)GetProcAddress(GetModuleHandle("kernel32"), "Process32Next");
-
-	if (!lpfnCreateToolhelp32Snapshot || !lpfnProcess32First || !lpfnProcess32Next)
-		return 0;
-
-	PROCESSENTRY32 proc;
-    proc.dwSize = sizeof(proc);
-	HANDLE snapshot = lpfnCreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-	lpfnProcess32First(snapshot, &proc);
-
-	// Determine the PID if aProcess is a pure, non-negative integer (any negative number
-	// is more likely to be the name of a process [with a leading dash], rather than the PID).
-	DWORD specified_pid = IsPureNumeric(aProcess) ? ATOU(aProcess) : 0;
-	char szDrive[_MAX_PATH+1], szDir[_MAX_PATH+1], szFile[_MAX_PATH+1], szExt[_MAX_PATH+1];
-
-	while (lpfnProcess32Next(snapshot, &proc))
-	{
-		if (specified_pid && specified_pid == proc.th32ProcessID)
-		{
-			if (aProcessName) // Caller wanted process name also.
-			{
-				// For consistency in results, use _splitpath() both here and below rather than
-				// something that just checks for a rightmost backslash.
-				_splitpath(proc.szExeFile, szDrive, szDir, aProcessName, szExt);
-				strcat(aProcessName, szExt);
-			}
-			CloseHandle(snapshot);
-			return specified_pid;
-		}
-		// Otherwise, check for matching name even if aProcess is purely numeric (i.e. a number might
-		// also be a valid name?):
-		// It seems that proc.szExeFile never contains a path, just the executable name.
-		// But in case it ever does, ensure consistency by removing the path:
-		_splitpath(proc.szExeFile, szDrive, szDir, szFile, szExt);
-		strcat(szFile, szExt);
-		if (!stricmp(szFile, aProcess))
-		{
-			if (aProcessName) // Caller wanted process name also.
-				strcpy(aProcessName, szFile);
-			CloseHandle(snapshot);
-			return proc.th32ProcessID;
-		}
-	}
-	CloseHandle(snapshot);
-	return 0;  // Not found.
-}
-
-
-
-///////////////////////////////////////////////////////////////////////////////
-// The following function is based on AutoIt v3 source code, which is:
-// Copyright 1999-2003 Jonathan Bennett and others listed at
-// http://www.autoitscript.com/autoit3/docs/credits.htm
-// License: GNU GPL version 2 or (at your option) any later version.
-///////////////////////////////////////////////////////////////////////////////
-DWORD ProcessExistNT4(char *aProcess, char *aProcessName)
-{
-	if (aProcessName) // Init this output variable in case of early return.
-		*aProcessName = '\0';
-	//BOOL EnumProcesses(
-	//  DWORD *lpidProcess,  // array of process identifiers
-	//  DWORD cb,            // size of array
-	//  DWORD *cbNeeded      // number of bytes returned
-	//);
-	typedef BOOL (WINAPI *MyEnumProcesses)(DWORD*, DWORD, DWORD*);
-
-	//BOOL EnumProcessModules(
-	//  HANDLE hProcess,      // handle to process
-	//  HMODULE *lphModule,   // array of module handles
-	//  DWORD cb,             // size of array
-	//  LPDWORD lpcbNeeded    // number of bytes required
-	//);
-	typedef BOOL (WINAPI *MyEnumProcessModules)(HANDLE, HMODULE*, DWORD, LPDWORD);
-
-	//DWORD GetModuleBaseName(
-	//  HANDLE hProcess,    // handle to process
-	//  HMODULE hModule,    // handle to module
-	//  LPTSTR lpBaseName,  // base name buffer
-	//  DWORD nSize         // maximum characters to retrieve
-	//);
-	typedef DWORD (WINAPI *MyGetModuleBaseName)(HANDLE, HMODULE, LPTSTR, DWORD);
-
-	// We must dynamically load the function or program will probably not launch at all on Win95.
-    // Get a handle to the DLL module that contains EnumProcesses
-	HINSTANCE hinstLib = LoadLibrary("psapi");
-	if (!hinstLib)
-		return 0;
-
-	// Not static in this case, since address can change with each new load of the library:
-  	MyEnumProcesses lpfnEnumProcesses = (MyEnumProcesses)GetProcAddress(hinstLib, "EnumProcesses");
-	MyEnumProcessModules lpfnEnumProcessModules = (MyEnumProcessModules)GetProcAddress(hinstLib, "EnumProcessModules");
-	MyGetModuleBaseName lpfnGetModuleBaseName = (MyGetModuleBaseName)GetProcAddress(hinstLib, "GetModuleBaseNameA");
-
-	DWORD idProcessArray[512];		// 512 processes max
-	DWORD cbNeeded;					// Bytes returned
-	if (!lpfnEnumProcesses || !lpfnEnumProcessModules || !lpfnGetModuleBaseName
-		|| !lpfnEnumProcesses(idProcessArray, sizeof(idProcessArray), &cbNeeded))
-	{
-		FreeLibrary(hinstLib);
-		return 0;
-	}
-
-	// Get the count of PIDs in the array
-	DWORD cProcesses = cbNeeded / sizeof(DWORD);
-	// Determine the PID if aProcess is a pure, non-negative integer (any negative number
-	// is more likely to be the name of a process [with a leading dash], rather than the PID).
-	DWORD specified_pid = IsPureNumeric(aProcess) ? ATOU(aProcess) : 0;
-	char szDrive[_MAX_PATH+1], szDir[_MAX_PATH+1], szFile[_MAX_PATH+1], szExt[_MAX_PATH+1];
-	char szProcessName[_MAX_PATH+1];
-	HMODULE hMod;
-	HANDLE hProcess;
-
-	for (UINT i = 0; i < cProcesses; ++i)
-	{
-		if (specified_pid && specified_pid == idProcessArray[i])
-		{
-			if (aProcessName) // Caller wanted process name also.
-			{
-				if (hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, idProcessArray[i])) // Assign
-				{
-					lpfnEnumProcessModules(hProcess, &hMod, sizeof(hMod), &cbNeeded);
-					if (lpfnGetModuleBaseName(hProcess, hMod, szProcessName, _MAX_PATH))
-					{
-						// For consistency in results, use _splitpath() both here and below rather than
-						// something that just checks for a rightmost backslash.
-						_splitpath(szProcessName, szDrive, szDir, aProcessName, szExt);
-						strcat(aProcessName, szExt);
-					}
-					CloseHandle(hProcess);
-				}
-			}
-			FreeLibrary(hinstLib);
-			return specified_pid;
-		}
-		// Otherwise, check for matching name even if aProcess is purely numeric (i.e. a number might
-		// also be a valid name?):
-		if (hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, idProcessArray[i])) // Assign
-		{
-			lpfnEnumProcessModules(hProcess, &hMod, sizeof(hMod), &cbNeeded);
-			if (lpfnGetModuleBaseName(hProcess, hMod, szProcessName, _MAX_PATH))
-			{
-				_splitpath(szProcessName, szDrive, szDir, szFile, szExt);
-				strcat(szFile, szExt);
-				if (!stricmp(szFile, aProcess))
-				{
-					if (aProcessName) // Caller wanted process name also.
-						strcpy(aProcessName, szProcessName);
-					CloseHandle(hProcess);
-					FreeLibrary(hinstLib);
-					return idProcessArray[i];  // The PID.
-				}
-			}
-			CloseHandle(hProcess);
-		}
-	}
-	FreeLibrary(hinstLib);
-	return 0;  // Not found.
 }
