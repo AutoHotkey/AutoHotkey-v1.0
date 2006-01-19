@@ -612,7 +612,7 @@ ResultType Script::Edit()
 	// Script" menu item is not available for compiled scripts, it can't be called from there.
 	TitleMatchModes old_mode = g.TitleMatchMode;
 	g.TitleMatchMode = FIND_ANYWHERE;
-	HWND hwnd = WinExist(mFileName, "", mMainWindowTitle, ""); // Exclude our own main window.
+	HWND hwnd = WinExist(g, mFileName, "", mMainWindowTitle, ""); // Exclude our own main window.
 	g.TitleMatchMode = old_mode;
 	if (hwnd)
 	{
@@ -934,8 +934,13 @@ LineNumberType Script::LoadFromFile()
 
 
 
-bool IsFunction(char *aBuf)
+bool IsFunction(char *aBuf, bool *aPendingFunctionHasBrace = NULL)
 // Helper function for LoadIncludedFile().
+// Caller has ensured that aBuf is rtrim'd.
+// Caller should pass NULL for aPendingFunctionHasBrace to indicate that function definitions (open-brace
+// on same line as function) are not allowed.  When non-NULL *and* aBuf is a function call/def,
+// *aPendingFunctionHasBrace is set to true if a brace is present at the end, or false otherwise.
+// In addition, any open-brace is removed from aBuf in this mode.
 {
 	char *action_end = StrChrAny(aBuf, EXPR_ALL_SYMBOLS EXPR_ILLEGAL_CHARS);
 	// Can't be a function definition or call without an open-parenthesis as first char found by the above.
@@ -954,8 +959,19 @@ bool IsFunction(char *aBuf)
 	// opening parenthesis to occur after a legtimate/quoted colon or double-colon in its parameters.
 	// v1.0.40.04: Added condition "action_end != aBuf" to allow a hotkey or remap or hotkey such as
 	// such as "(::" to work even if it ends in a close-parenthesis such as "(::)" or "(::MsgBox )"
-	return action_end && *action_end == '(' && action_end != aBuf && (action_end - aBuf != 2 || strnicmp(aBuf, "IF", 2))
-		&& action_end[strlen(action_end) - 1] == ')'; // This last check avoids detecting a label such as "Label(x):" as a function.
+	if (   !(action_end && *action_end == '(' && action_end != aBuf
+		&& (action_end - aBuf != 2 || strnicmp(aBuf, "IF", 2)))   )
+		return false;
+	char *aBuf_last_char = action_end + strlen(action_end) - 1; // Above has already ensured that action_end is "(...".
+	if (aPendingFunctionHasBrace) // Caller specified that an optional open-brace may be present at the end of aBuf.
+	{
+		if (*aPendingFunctionHasBrace = (*aBuf_last_char == '{')) // Caller has ensured that aBuf is rtrim'd.
+		{
+			*aBuf_last_char = '\0'; // For the caller, remove it from further consideration.
+			aBuf_last_char = aBuf + rtrim(aBuf, aBuf_last_char - aBuf) - 1; // Omit trailing whitespace too.
+		}
+	}
+	return *aBuf_last_char == ')'; // This last check avoids detecting a label such as "Label(x):" as a function.
 	// Also, it seems best never to allow if(...) to be a function call, even if it's blank inside such as if().
 	// In addition, it seems best not to allow if(...) to ever be a function definition since such a function
 	// could never be called as ACT_FUNCTIONCALL since it would be seen as an IF-stmt instead.
@@ -1011,9 +1027,10 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 	ULONG nDataSize = 0;
 
 	// <buf> should be no larger than LINE_SIZE because some later functions rely upon that:
-	char buf1[LINE_SIZE], buf2[LINE_SIZE], suffix[16], buf_prev[LINE_SIZE] = "";
+	char buf1[LINE_SIZE], buf2[LINE_SIZE], suffix[16], pending_function[LINE_SIZE] = "";
 	char *buf = buf1, *next_buf = buf2; // Oscillate between bufs to improve performance (avoids memcpy from buf2 to buf1).
 	size_t buf_length, next_buf_length, suffix_length;
+	bool pending_function_has_brace;
 
 #ifndef AUTOHOTKEYSC
 	// Future: might be best to put a stat() or GetFileAttributes() in here for better handling.
@@ -1087,9 +1104,9 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 	// File is now open, read lines from it.
 
 	char *hotkey_flag, *cp, *cp1, *action_end, *hotstring_start, *hotstring_options;
-	LineNumberType buf_prev_line_number, saved_line_number;
+	LineNumberType pending_function_line_number, saved_line_number;
 	HookActionType hook_action;
-	bool is_function, is_label;
+	bool is_label;
 
 	// For the remap mechanism, e.g. a::b
 	int remap_stage;
@@ -1463,7 +1480,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 
 		// If there's a previous line waiting to be processed, its fate can now be determined based on the
 		// nature of *this* line:
-		if (*buf_prev)
+		if (*pending_function)
 		{
 			// Somewhat messy to decrement then increment later, but it's probably easier than the
 			// alternatives due to the use of "continue" in some places above.  NOTE: phys_line_number
@@ -1474,10 +1491,10 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			// might be some blank lines or commented-out lines between this function call/definition
 			// and the line that follows it, each of which will have previously incremented mCombinedLineNumber.
 			saved_line_number = mCombinedLineNumber;
-			mCombinedLineNumber = buf_prev_line_number;  // Done so that any syntax errors that occur during the calls below will report the correct line number.
+			mCombinedLineNumber = pending_function_line_number;  // Done so that any syntax errors that occur during the calls below will report the correct line number.
 			// Open brace means this is a function definition. NOTE: buf was already ltrimmed by GetLine().
-			// Could use *g_act[ACT_BLOCK_BEGIN].Name instead of '{', but it seems to elaborate to be worth it.
-			if (*buf == '{')
+			// Could use *g_act[ACT_BLOCK_BEGIN].Name instead of '{', but it seems too elaborate to be worth it.
+			if (*buf == '{' || pending_function_has_brace) // v1.0.41: Support one-true-brace, e.g. fn(...) {
 			{
 				// Note that two consecutive function definitions aren't possible:
 				// fn1()
@@ -1493,20 +1510,23 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 					// access to their parent functions' local variables, or perhaps just to improve
 					// script readability and maintainability -- it's currently not allowed because of
 					// the practice of maintaining the func_exception_var list on our stack:
-					ScriptError("Functions cannot contain functions.", buf_prev);
+					ScriptError("Functions cannot contain functions.", pending_function);
 					return CloseAndReturn(fp, script_buf, FAIL);
 				}
-				if (!DefineFunc(buf_prev, func_exception_var))
+				if (!DefineFunc(pending_function, func_exception_var))
 					return CloseAndReturn(fp, script_buf, FAIL);
+				if (pending_function_has_brace) // v1.0.41: Support one-true-brace for function def, e.g. fn() {
+					if (!AddLine(ACT_BLOCK_BEGIN))
+						return CloseAndReturn(fp, script_buf, FAIL);
 			}
-			else // It's either a function call on a line by itself, such as fn(x). It can't be if(..) because another section checked that.
+			else // It's a function call on a line by itself, such as fn(x). It can't be if(..) because another section checked that.
 			{
-				if (!ParseAndAddLine(buf_prev, ACT_FUNCTIONCALL))
+				if (!ParseAndAddLine(pending_function, ACT_FUNCTIONCALL))
 					return CloseAndReturn(fp, script_buf, FAIL);
 				mCurrLine = NULL; // Prevents showing misleading vicinity lines if the line after a function call is a syntax error.
 			}
 			mCombinedLineNumber = saved_line_number;
-			*buf_prev = '\0'; // Now that it's been fully handled, reset the buf.
+			*pending_function = '\0'; // Reset now that it's been fully handled, as an indicator for subsequent iterations.
 			// Now fall through to the below so that *this* line (the one after it) will be processed.
 			// Note that this line might be a pre-processor directive, label, etc. that won't actually
 			// become a runtime line per se.
@@ -1515,20 +1535,20 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 		// By doing the following section prior to checking for hotkey and hotstring labels, double colons do
 		// not need to be escaped inside naked function calls and function definitions such as the following:
 		// fn("::")      ; Function call.
-		// fn(Str="::")  ; Function definition with default value for its param.
-		if (is_function = IsFunction(buf)) // If true, it's either a function definition or a function call (to be distinguished later).
+		// fn(Str="::")  ; Function definition with default value for its param (though technically, strings other than "" aren't yet supported).
+		if (IsFunction(buf, &pending_function_has_brace)) // If true, it's either a function definition or a function call (to be distinguished later).
 		{
 			// Defer this line until the next line comes in, which helps determine whether this line is
 			// a function call vs. definition:
-			strcpy(buf_prev, buf);
-			buf_prev_line_number = mCombinedLineNumber;
+			strcpy(pending_function, buf);
+			pending_function_line_number = mCombinedLineNumber;
 			goto continue_main_loop; // In lieu of "continue", for performance.
 		}
 
 		// The following "examine_line" label skips the following parts above:
 		// 1) IsFunction() because that's only for a function call or definition alone on a line
 		//    e.g. not "if fn()" or x := fn().  Those who goto this label don't need that processing.
-		// 2) The "if (*buf_prev)" block: Doesn't seem applicable for the callers of this label.
+		// 2) The "if (*pending_function)" block: Doesn't seem applicable for the callers of this label.
 		// 3) The inner loop that handles continuation sections: Not needed by the callers of this label.
 		// 4) Things like the following should be skipped because callers of this label don't want the
 		//    physical line number changed (which would throw off the count of lines that lie beneath a remap):
@@ -1835,6 +1855,19 @@ examine_line:
 		}
 
 		// Otherwise it's just a normal script line.
+		// v1.0.41: Support the "} else {" style in one-true-brace (OTB).  As a side-effect,
+		// any command, not just an else, is probably supported to the right of '}', not just "else".
+		// This is undocumented because it would make for less readable scripts, and doesn't seem
+		// to have much value.
+		if (*buf == '}')
+		{
+			if (!AddLine(ACT_BLOCK_END))
+				return CloseAndReturn(fp, script_buf, FAIL);
+			// The following allows the next stage to see "else" or "else {" if it's present:
+			if (   !*(buf = omit_leading_whitespace(buf + 1))   )
+				goto continue_main_loop; // It's just a naked "}", so no more processing needed for this line.
+			buf_length = strlen(buf); // Update for possible use below.
+		}
 		// First do a little special handling to support actions on the same line as their
 		// ELSE, e.g.:
 		// else if x = 1
@@ -1843,7 +1876,8 @@ examine_line:
 		// literal_map has to be properly passed in a recursive call to itself, as well
 		// as properly detecting special commands that don't have keywords such as
 		// IF comparisons, ACT_ASSIGN, +=, -=, etc.
-		if (!(action_end = StrChrAny(buf, "\t ,"))) // Position of first tab/space/comma.  For simplicitly, a non-standard g_delimiter is not supported.
+		// v1.0.41: '{' was added to the line below to support no spaces inside "}else{".
+		if (!(action_end = StrChrAny(buf, "\t ,{"))) // Position of first tab/space/comma/open-brace.  For simplicitly, a non-standard g_delimiter is not supported.
 			action_end = buf + buf_length; // It's done this way so that ELSE can be fully handled here; i.e. that ELSE does not have to be in the list of commands recognizable by ParseAndAddLine().
 		// The following method ensures that words or variables that start with "Else", e.g. ElseAction, are not
 		// incorrectly detected as an Else command:
@@ -1968,13 +2002,13 @@ continue_main_loop: // This method is used in lieu of "continue" for performance
 		// performance because it avoids memcpy from buf2 to buf1.
 	} // for each whole/constructed line.
 
-	if (*buf_prev) // Since there's a previous line, but it's the last non-comment line, it must be a function call, not a function definition.
+	if (*pending_function) // Since this is the last non-comment line, the pending function must be a function call, not a function definition.
 	{
 		// Somewhat messy to decrement then increment later, but it's probably easier than the
 		// alternatives due to the use of "continue" in some places above.
 		saved_line_number = mCombinedLineNumber;
-		mCombinedLineNumber = buf_prev_line_number; // Done so that any syntax errors that occur during the calls below will report the correct line number.
-		if (!ParseAndAddLine(buf_prev, ACT_FUNCTIONCALL)) // Must be function call vs. definition since otherwise the above would have detected the opening brace beneath it and already cleared buf_prev.
+		mCombinedLineNumber = pending_function_line_number; // Done so that any syntax errors that occur during the calls below will report the correct line number.
+		if (!ParseAndAddLine(pending_function, ACT_FUNCTIONCALL)) // Must be function call vs. definition since otherwise the above would have detected the opening brace beneath it and already cleared pending_function.
 			return CloseAndReturn(fp, script_buf, FAIL);
 		mCombinedLineNumber = saved_line_number;
 	}
@@ -2175,6 +2209,48 @@ inline ResultType Script::IsDirective(char *aBuf)
 	#define IS_DIRECTIVE_MATCH(directive) (!strlicmp(aBuf, directive, directive_name_length))
 	UINT directive_name_length = (UINT)(directive_end - aBuf); // To avoid calculating it every time in the macro above.
 
+	bool is_include_again = false; // Set default in case of short-circuit boolean.
+	if (IS_DIRECTIVE_MATCH("#Include") || (is_include_again = IS_DIRECTIVE_MATCH("#IncludeAgain")))
+	{
+		// Standalone EXEs ignore this directive since the included files were already merged in
+		// with the main file when the script was compiled.  These should have been removed
+		// or commented out by Ahk2Exe, but just in case, it's safest to ignore them:
+#ifdef AUTOHOTKEYSC
+		return CONDITION_TRUE;
+#else
+		// If the below decision is ever changed, be sure to update ahk2exe with the same change:
+		// "parameter" is checked rather than parameter_raw for backward compatibility with earlier versions,
+		// in which a leading comma is not considered part of the filename.  Although this behavior is incorrect
+		// because it prevents files whose names start with a comma from being included without the first
+		// delim-comma being there too, it is kept because filesnames that start with a comma seem
+		// exceedingly rare.  As a workaround, the script can do #Include ,,FilenameWithLeadingComma.ahk
+		if (!parameter)
+			return ScriptError(ERR_PARAM1_REQUIRED, aBuf);
+		// v1.0.32:
+		bool ignore_load_failure = (parameter[0] == '*' && toupper(parameter[1]) == 'I'); // Relies on short-circuit boolean order.
+		if (ignore_load_failure)
+		{
+			parameter += 2;
+			if (IS_SPACE_OR_TAB(*parameter)) // Skip over at most one space or tab, since others might be a literal part of the filename.
+				++parameter;
+		}
+		StrReplace(parameter, "%A_ScriptDir%", mFileDir, false); // v1.0.35.11.  Maximum of one replacement.  Caller has ensured string is writable.
+		DWORD attr = GetFileAttributes(parameter);
+		if (attr != 0xFFFFFFFF && (attr & FILE_ATTRIBUTE_DIRECTORY)) // File exists and its a directory (possibly A_ScriptDir set above).
+		{
+			// v1.0.35.11 allow changing of load-time directory to increase flexibility.  This feature has
+			// been asked for directly or indirectly several times.
+			// If a filename every wants to use the string "%A_ScriptDir%" literally in an include's filename,
+			// that would not work.  But that seems too rare to worry about.
+			SetCurrentDirectory(parameter);
+			return CONDITION_TRUE;
+		}
+		// Since above didn't return, it's a file (or non-existent file, in which case the below will display
+		// the error).  This will also display any other errors that occur:
+		return (LoadIncludedFile(parameter, is_include_again, ignore_load_failure) == FAIL) ? FAIL : CONDITION_TRUE;
+#endif
+	}
+
 	if (IS_DIRECTIVE_MATCH("#NoTrayIcon"))
 	{
 		g_NoTrayIcon = true;
@@ -2183,21 +2259,6 @@ inline ResultType Script::IsDirective(char *aBuf)
 	if (IS_DIRECTIVE_MATCH("#Persistent"))
 	{
 		g_persistent = true;
-		return CONDITION_TRUE;
-	}
-	if (IS_DIRECTIVE_MATCH("#WinActivateForce"))
-	{
-		g_WinActivateForce = true;
-		return CONDITION_TRUE;
-	}
-	if (IS_DIRECTIVE_MATCH("#ErrorStdOut"))
-	{
-		mErrorStdOut = true;
-		return CONDITION_TRUE;
-	}
-	if (IS_DIRECTIVE_MATCH("#AllowSameLineComments"))  // i.e. There's no way to turn it off, only on.
-	{
-		g_AllowSameLineComments = true;
 		return CONDITION_TRUE;
 	}
 	if (IS_DIRECTIVE_MATCH("#SingleInstance"))
@@ -2214,6 +2275,103 @@ inline ResultType Script::IsDirective(char *aBuf)
 		}
 		return CONDITION_TRUE;
 	}
+	if (IS_DIRECTIVE_MATCH("#InstallKeybdHook"))
+	{
+		// It seems best not to report this warning because a user may want to use partial functionality
+		// of a script on Win9x:
+		//MsgBox("#InstallKeybdHook is not supported on Windows 95/98/Me.  This line will be ignored.");
+		if (!g_os.IsWin9x())
+			Hotkey::RequireHook(HOOK_KEYBD);
+		return CONDITION_TRUE;
+	}
+	if (IS_DIRECTIVE_MATCH("#InstallMouseHook"))
+	{
+		// It seems best not to report this warning because a user may want to use partial functionality
+		// of a script on Win9x:
+		//MsgBox("#InstallMouseHook is not supported on Windows 95/98/Me.  This line will be ignored.");
+		if (!g_os.IsWin9x())
+			Hotkey::RequireHook(HOOK_MOUSE);
+		return CONDITION_TRUE;
+	}
+	if (IS_DIRECTIVE_MATCH("#UseHook"))
+	{
+		g_ForceKeybdHook = !parameter || Line::ConvertOnOff(parameter) != TOGGLED_OFF;
+		return CONDITION_TRUE;
+	}
+
+	if (!strnicmp(aBuf, "#IfWin", 6))
+	{
+		bool invert = !strnicmp(aBuf + 6, "Not", 3);
+		if (!strnicmp(aBuf + (invert ? 9 : 6), "Active", 6)) // It matches #IfWin[Not]Active.
+			g_HotCriterion = invert ? HOT_IF_NOT_ACTIVE : HOT_IF_ACTIVE;
+		else if (!strnicmp(aBuf + (invert ? 9 : 6), "Exist", 5))
+			g_HotCriterion = invert ? HOT_IF_NOT_EXIST : HOT_IF_EXIST;
+		else // It starts with #IfWin but isn't Active or Exist: Don't alter g_HotCriterion.
+			return CONDITION_FALSE; // Indicate unknown directive since there are currently no other possibilities.
+		// A new hotkey/hotstring criteria has been specified (or it's being turned off).
+		// The following is done to conserve memory and simplify the code.  It relies on the fact that
+		// currently, criteria can't be changed.  If the script uses #IfWinXXX to declare criteria
+		// it had previously declared at some point, a little bit of memory is wasted due to duplicates in the
+		// heap, but such scripts are rare.
+		// Allocate memory for the entire string (title + text), then terminate WinTitle at the WinText
+		// parameter (if there is one).  If no hotkey or hotstring ever uses this criteria, the memory is
+		// leaked -- but that is inconsequential because SimpleHeap is designed to allocate memory that
+		// is persistent for the *entire* duration of the script.  All memory, including any small bits
+		// leaked here due to strangeness in the script, gets reclaimed automatically when the program exits.
+		if (!parameter || !(g_HotWinTitle = SimpleHeap::Malloc(parameter))) // The omission of the parameter indicates that any existing criteria should be turned off.
+		{
+			g_HotCriterion = HOT_NO_CRITERION; // Indicate that no criteria are in effect for subsequent hotkeys.
+			return CONDITION_TRUE;
+		}
+		// Scan for the first non-escaped comma.  If there is one, it marks the second paramter: WinText.
+		char *cp, *first_non_escaped_comma;
+		for (first_non_escaped_comma = NULL, cp = g_HotWinTitle; ; ++cp)  // Increment to skip over the symbol just found by the inner for().
+		{
+			for (; *cp && !(*cp == g_EscapeChar || *cp == g_delimiter || *cp == g_DerefChar); ++cp);  // Find the next escape char, comma, or %.
+			if (!*cp) // End of string was found.
+				break;
+#define ERR_ESCAPED_COMMA_PERCENT "Literal commas and percent signs must be escaped (e.g. `%)"
+			if (*cp == g_DerefChar)
+				return ScriptError(ERR_ESCAPED_COMMA_PERCENT, aBuf);
+			if (*cp == g_delimiter) // non-escaped delimiter was found.
+			{
+				// Preserve the ability to add future-use parameters such as section of window
+				// over which the mouse is hovering, e.g. #IfWinActive, Untitled - Notepad,, TitleBar
+				if (first_non_escaped_comma) // A second non-escaped comma was found.
+					return ScriptError(ERR_ESCAPED_COMMA_PERCENT, aBuf);
+				// Otherwise:
+				first_non_escaped_comma = cp;
+				continue; // Check if there are any more non-escaped commas.
+			}
+			// Otherwise, an escape character was found, so skip over the next character (if any).
+			if (!*(++cp)) // The string unexpectedly ends in an escape character, so avoid out-of-bounds.
+				break;
+			// Otherwise, the ++cp above has skipped over the escape-char itself, and the loop's ++cp will now
+			// skip over the char-to-be-escaped, which is not the one we want (even if it is a comma).
+		}
+		if (first_non_escaped_comma) // Above found a non-escaped comma, so there is a second parameter (WinText).
+		{
+			// Omit whitespace to (seems best to conform to convention/expectations rather than give
+			// strange whitespace flexibility that would likely cause unwanted bugs due to inadvertently
+			// have two spaces instead of one).  The user may use `s and `t to put literal leading/trailing
+			// spaces/tabs into these paramters.
+			g_HotWinText = omit_leading_whitespace(first_non_escaped_comma + 1);
+			*first_non_escaped_comma = '\0'; // Terminate at the comma to split off g_HotWinTitle on its own.
+			rtrim(g_HotWinTitle, first_non_escaped_comma - g_HotWinTitle);  // Omit whitespace (see similar comment above).
+			// The following must be done only after trimming and omitting whitespace above, so that
+			// `s and `t can be used to insert leading/trailing spaces/tabs.  ConvertEscapeSequences()
+			// also supports insertion of literal commas via escaped sequences.
+			ConvertEscapeSequences(g_HotWinText, g_EscapeChar, true);
+		}
+		else
+			g_HotWinText = Var::sEmptyString; // Modifiable empty string (for maintainability). And leave g_HotWinTitle set to the entire string because there's only one parameter.
+		// The following must be done only after trimming and omitting whitespace above (see similar comment above).
+		ConvertEscapeSequences(g_HotWinTitle, g_EscapeChar, true);
+		if (!(*g_HotWinTitle || *g_HotWinText)) // In case of something weird but legit like: #IfWinActive, , 
+			g_HotCriterion = HOT_NO_CRITERION; // Don't allow blank title+text to avoid having it interpreted as the last-found-window.
+		return CONDITION_TRUE;
+	} // Above completely handles all directives and non-directives that start with "#IfWin".
+
 	if (IS_DIRECTIVE_MATCH("#Hotstring"))
 	{
 		if (parameter)
@@ -2240,90 +2398,10 @@ inline ResultType Script::IsDirective(char *aBuf)
 		return CONDITION_TRUE;
 	}
 
-	if (IS_DIRECTIVE_MATCH("#LTrim"))
-	{
-		g_ContinuationLTrim = !parameter || Line::ConvertOnOff(parameter) != TOGGLED_OFF;
-		return CONDITION_TRUE;
-	}
-
-	if (IS_DIRECTIVE_MATCH("#UseHook"))
-	{
-		g_ForceKeybdHook = !parameter || Line::ConvertOnOff(parameter) != TOGGLED_OFF;
-		return CONDITION_TRUE;
-	}
-	if (IS_DIRECTIVE_MATCH("#InstallKeybdHook"))
-	{
-		// It seems best not to report this warning because a user may want to use partial functionality
-		// of a script on Win9x:
-		//MsgBox("#InstallKeybdHook is not supported on Windows 95/98/Me.  This line will be ignored.");
-		if (!g_os.IsWin9x())
-			Hotkey::RequireHook(HOOK_KEYBD);
-		return CONDITION_TRUE;
-	}
-	if (IS_DIRECTIVE_MATCH("#InstallMouseHook"))
-	{
-		// It seems best not to report this warning because a user may want to use partial functionality
-		// of a script on Win9x:
-		//MsgBox("#InstallMouseHook is not supported on Windows 95/98/Me.  This line will be ignored.");
-		if (!g_os.IsWin9x())
-			Hotkey::RequireHook(HOOK_MOUSE);
-		return CONDITION_TRUE;
-	}
-	if (IS_DIRECTIVE_MATCH("#MaxThreadsBuffer"))
-	{
-		g_MaxThreadsBuffer = !parameter || Line::ConvertOnOff(parameter) != TOGGLED_OFF;
-		return CONDITION_TRUE;
-	}
-	if (IS_DIRECTIVE_MATCH("#ClipboardTimeout"))
-	{
-		if (parameter)
-			g_ClipboardTimeout = ATOI(parameter);  // parameter was set to the right position by the above macro
-		return CONDITION_TRUE;
-	}
 	if (IS_DIRECTIVE_MATCH("#HotkeyModifierTimeout"))
 	{
 		if (parameter)
 			g_HotkeyModifierTimeout = ATOI(parameter);  // parameter was set to the right position by the above macro
-		return CONDITION_TRUE;
-	}
-	if (IS_DIRECTIVE_MATCH("#MaxMem"))
-	{
-		if (parameter)
-		{
-			double valuef = ATOF(parameter);  // parameter was set to the right position by the above macro
-			if (valuef > 4095)  // Don't exceed capacity of VarSizeType, which is currently a DWORD (4 gig).
-				valuef = 4095;  // Don't use 4096 since that might be a special/reserved value for some functions.
-			else if (valuef  < 1)
-				valuef = 1;
-			g_MaxVarCapacity = (VarSizeType)(valuef * 1024 * 1024);
-		}
-		return CONDITION_TRUE;
-	}
-	if (IS_DIRECTIVE_MATCH("#MaxThreads"))
-	{
-		if (parameter)
-		{
-			value = ATOI(parameter);  // parameter was set to the right position by the above macro
-			if (value > MAX_THREADS_LIMIT) // For now, keep this limited to prevent stack overflow due to too many pseudo-threads.
-				value = MAX_THREADS_LIMIT;
-			else if (value < 1)
-				value = 1;
-			g_MaxThreadsTotal = value;
-		}
-		return CONDITION_TRUE;
-	}
-	if (IS_DIRECTIVE_MATCH("#MaxThreadsPerHotkey"))
-	{
-		if (parameter)
-		{
-			// Use value as a temp holder since it's int vs. UCHAR and can thus detect very large or negative values:
-			value = ATOI(parameter);  // parameter was set to the right position by the above macro
-			if (value > MAX_THREADS_LIMIT) // For now, keep this limited to prevent stack overflow due to too many pseudo-threads.
-				value = MAX_THREADS_LIMIT;
-			else if (value < 1)
-				value = 1;
-			g_MaxThreadsPerHotkey = value; // Note: g_MaxThreadsPerHotkey is UCHAR.
-		}
 		return CONDITION_TRUE;
 	}
 	if (IS_DIRECTIVE_MATCH("#HotkeyInterval"))
@@ -2343,6 +2421,79 @@ inline ResultType Script::IsDirective(char *aBuf)
 			g_MaxHotkeysPerInterval = ATOI(parameter);  // parameter was set to the right position by the above macro
 			if (g_MaxHotkeysPerInterval < 1) // sanity check
 				g_MaxHotkeysPerInterval = 1;
+		}
+		return CONDITION_TRUE;
+	}
+	if (IS_DIRECTIVE_MATCH("#MaxThreadsPerHotkey"))
+	{
+		if (parameter)
+		{
+			// Use value as a temp holder since it's int vs. UCHAR and can thus detect very large or negative values:
+			value = ATOI(parameter);  // parameter was set to the right position by the above macro
+			if (value > MAX_THREADS_LIMIT) // For now, keep this limited to prevent stack overflow due to too many pseudo-threads.
+				value = MAX_THREADS_LIMIT;
+			else if (value < 1)
+				value = 1;
+			g_MaxThreadsPerHotkey = value; // Note: g_MaxThreadsPerHotkey is UCHAR.
+		}
+		return CONDITION_TRUE;
+	}
+	if (IS_DIRECTIVE_MATCH("#MaxThreadsBuffer"))
+	{
+		g_MaxThreadsBuffer = !parameter || Line::ConvertOnOff(parameter) != TOGGLED_OFF;
+		return CONDITION_TRUE;
+	}
+	if (IS_DIRECTIVE_MATCH("#MaxThreads"))
+	{
+		if (parameter)
+		{
+			value = ATOI(parameter);  // parameter was set to the right position by the above macro
+			if (value > MAX_THREADS_LIMIT) // For now, keep this limited to prevent stack overflow due to too many pseudo-threads.
+				value = MAX_THREADS_LIMIT;
+			else if (value < 1)
+				value = 1;
+			g_MaxThreadsTotal = value;
+		}
+		return CONDITION_TRUE;
+	}
+
+	if (IS_DIRECTIVE_MATCH("#ClipboardTimeout"))
+	{
+		if (parameter)
+			g_ClipboardTimeout = ATOI(parameter);  // parameter was set to the right position by the above macro
+		return CONDITION_TRUE;
+	}
+	if (IS_DIRECTIVE_MATCH("#LTrim"))
+	{
+		g_ContinuationLTrim = !parameter || Line::ConvertOnOff(parameter) != TOGGLED_OFF;
+		return CONDITION_TRUE;
+	}
+
+	if (IS_DIRECTIVE_MATCH("#WinActivateForce"))
+	{
+		g_WinActivateForce = true;
+		return CONDITION_TRUE;
+	}
+	if (IS_DIRECTIVE_MATCH("#ErrorStdOut"))
+	{
+		mErrorStdOut = true;
+		return CONDITION_TRUE;
+	}
+	if (IS_DIRECTIVE_MATCH("#AllowSameLineComments"))  // i.e. There's no way to turn it off, only on.
+	{
+		g_AllowSameLineComments = true;
+		return CONDITION_TRUE;
+	}
+	if (IS_DIRECTIVE_MATCH("#MaxMem"))
+	{
+		if (parameter)
+		{
+			double valuef = ATOF(parameter);  // parameter was set to the right position by the above macro
+			if (valuef > 4095)  // Don't exceed capacity of VarSizeType, which is currently a DWORD (4 gig).
+				valuef = 4095;  // Don't use 4096 since that might be a special/reserved value for some functions.
+			else if (valuef  < 1)
+				valuef = 1;
+			g_MaxVarCapacity = (VarSizeType)(valuef * 1024 * 1024);
 		}
 		return CONDITION_TRUE;
 	}
@@ -2380,7 +2531,7 @@ inline ResultType Script::IsDirective(char *aBuf)
 				// that at least one space or tab occur to its left for it to be considered a
 				// comment marker.
 				if (*parameter == '#' || *parameter == g_DerefChar || *parameter == g_EscapeChar || *parameter == g_delimiter)
-					return ScriptError(ERR_PARAM1_INVALID);
+					return ScriptError(ERR_PARAM1_INVALID, aBuf);
 				// Exclude hotkey definition chars, such as ^ and !, because otherwise
 				// the following example wouldn't work:
 				// User defines ! as the comment flag.
@@ -2390,7 +2541,7 @@ inline ResultType Script::IsDirective(char *aBuf)
 				if (*parameter == '!' || *parameter == '^' || *parameter == '+' || *parameter == '$' || *parameter == '~' || *parameter == '*'
 					|| *parameter == '<' || *parameter == '>')
 					// Note that '#' is already covered by the other stmt. above.
-					return ScriptError(ERR_PARAM1_INVALID);
+					return ScriptError(ERR_PARAM1_INVALID, aBuf);
 			}
 			strlcpy(g_CommentFlag, parameter, MAX_COMMENT_FLAG_LENGTH + 1);
 			g_CommentFlagLength = strlen(g_CommentFlag);  // Keep this in sync with above.
@@ -2404,7 +2555,7 @@ inline ResultType Script::IsDirective(char *aBuf)
 			// Don't allow '.' since that can be part of literal floating point numbers:
 			if (   *parameter == '#' || *parameter == g_DerefChar || *parameter == g_delimiter || *parameter == '.'
 				|| (g_CommentFlagLength == 1 && *parameter == *g_CommentFlag)   )
-				return ScriptError(ERR_PARAM1_INVALID);
+				return ScriptError(ERR_PARAM1_INVALID, aBuf);
 			g_EscapeChar = *parameter;
 		}
 		return CONDITION_TRUE;
@@ -2415,7 +2566,7 @@ inline ResultType Script::IsDirective(char *aBuf)
 		{
 			if (   *parameter == '#' || *parameter == g_EscapeChar || *parameter == g_delimiter || *parameter == '.'
 				|| (g_CommentFlagLength == 1 && *parameter == *g_CommentFlag)   )
-				return ScriptError(ERR_PARAM1_INVALID);
+				return ScriptError(ERR_PARAM1_INVALID, aBuf);
 			g_DerefChar = *parameter;
 		}
 		return CONDITION_TRUE;
@@ -2430,52 +2581,10 @@ inline ResultType Script::IsDirective(char *aBuf)
 		{
 			if (   *parameter == '#' || *parameter == g_EscapeChar || *parameter == g_DerefChar || *parameter == '.'
 				|| (g_CommentFlagLength == 1 && *parameter == *g_CommentFlag)   )
-				return ScriptError(ERR_PARAM1_INVALID);
+				return ScriptError(ERR_PARAM1_INVALID, aBuf);
 			g_delimiter = *parameter;
 		}
 		return CONDITION_TRUE;
-	}
-
-	bool include_again = false; // Set default in case of short-circuit boolean.
-	if (IS_DIRECTIVE_MATCH("#Include") || (include_again = IS_DIRECTIVE_MATCH("#IncludeAgain")))
-	{
-		// Standalone EXEs ignore this directive since the included files were already merged in
-		// with the main file when the script was compiled.  These should have been removed
-		// or commented out by Ahk2Exe, but just in case, it's safest to ignore them:
-#ifdef AUTOHOTKEYSC
-		return CONDITION_TRUE;
-#else
-		// If the below decision is ever changed, be sure to update ahk2exe with the same change:
-		// "parameter" is checked rather than parameter_raw for backward compatibility with earlier versions,
-		// in which a leading comma is not considered part of the filename.  Although this behavior is incorrect
-		// because it prevents files whose names start with a comma from being included without the first
-		// delim-comma being there too, it is kept because filesnames that start with a comma seem
-		// exceedingly rare.  As a workaround, the script can do #Include ,,FilenameWithLeadingComma.ahk
-		if (!parameter)
-			return ScriptError(ERR_PARAM1_REQUIRED);
-		// v1.0.32:
-		bool ignore_load_failure = (parameter[0] == '*' && toupper(parameter[1]) == 'I'); // Relies on short-circuit boolean order.
-		if (ignore_load_failure)
-		{
-			parameter += 2;
-			if (IS_SPACE_OR_TAB(*parameter)) // Skip over at most one space or tab, since others might be a literal part of the filename.
-				++parameter;
-		}
-		StrReplace(parameter, "%A_ScriptDir%", mFileDir, false); // v1.0.35.11.  Maximum of one replacement.  Caller has ensured string is writable.
-		DWORD attr = GetFileAttributes(parameter);
-		if (attr != 0xFFFFFFFF && (attr & FILE_ATTRIBUTE_DIRECTORY)) // File exists and its a directory (possibly A_ScriptDir set above).
-		{
-			// v1.0.35.11 allow changing of load-time directory to increase flexibility.  This feature has
-			// been asked for directly or indirectly several times.
-			// If a filename every wants to use the string "%A_ScriptDir%" literally in an include's filename,
-			// that would not work.  But that seems too rare to worry about.
-			SetCurrentDirectory(parameter);
-			return CONDITION_TRUE;
-		}
-		// Since above didn't return, it's a file (or non-existent file, in which case the below will display
-		// the error).  This will also display any other errors that occur:
-		return (LoadIncludedFile(parameter, include_again, ignore_load_failure) == FAIL) ? FAIL : CONDITION_TRUE;
-#endif
 	}
 
 	// Otherwise:
@@ -2818,7 +2927,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 		case ':':  // i.e. var:=value (with no spaces around operator)
 			is_var_and_operator = (action_args[1] == '='); // v1.0.40: Allow things like "MsgBox :: test" to be valid.
 			break;
-		case '(':  // i.e. "if(expr)" (with no space between the if and the open-paren).
+		case '(':  // i.e. "if(expr)" (with no space between the if and the open-parenthesis).
 			is_var_and_operator = !stricmp(action_name, "IF"); // Fixed for v1.0.31.01.
 			break;
 		case '*':
@@ -2861,6 +2970,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 	if (action_type == ACT_INVALID && old_action_type == OLD_INVALID && !is_var_and_operator)
 		if (   (action_type = ConvertActionType(action_name)) == ACT_INVALID   )
 			old_action_type = ConvertOldActionType(action_name);
+	bool add_openbrace_afterward = false; // v1.0.41: Set default for use in supporting brace in "if (expr) {".
 
 	/////////////////////////////////////////////////////////////////////////////
 	// Special handling for ACT_ASSIGN/ADD/SUB/MULT/DIV and IFEQUAL/GREATER/LESS.
@@ -3066,7 +3176,18 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 						}
 					} // ACT_IFBETWEEN
 				} // action_type != ACT_IFEXPR
-			} // operation isn't "if (expr)"
+			} // operation isn't the type of "if (expr)" that starts with "if(".
+			if (action_type == ACT_IFEXPR)
+			{
+				// Since this is ACT_IFEXPR, action_args is known not to be the empty string, which is relied on below.
+				char *action_args_last_char = action_args + strlen(action_args) - 1; // Shouldn't be a whitespace char since those should already have been removed at an earlier stage.
+				if (*action_args_last_char == '{') // This is an if-expression statement with an open-brace on the same line.
+				{
+					*action_args_last_char = '\0';
+					rtrim(action_args, action_args_last_char - action_args);  // Remove the '{' and all its whitespace from further consideration.
+					add_openbrace_afterward = true;
+				}
+			}
 		}
 		else // The action type is something other than an IF.
 		{
@@ -3097,9 +3218,17 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 			}
 		}
 		if (action_type == ACT_INVALID)
-			// v1.0.40: Give a more specific error message now now that hotkeys can make it here due to
-			// the change that avoids the need to escape double-colons:
-			return ScriptError(strstr(aLineText, HOTKEY_FLAG) ? "Invalid hotkey." : ERR_UNRECOGNIZED_ACTION, aLineText);
+			// v1.0.41: Support one-true brace style even if there's no space, but make it strict so that
+			// things like "Loop{ string" are reported as errors (in case user intended a file-pattern loop).
+			if (!stricmp(action_name, "Loop{") && !*action_args)
+			{
+				action_type = ACT_LOOP;
+				add_openbrace_afterward = true;
+			}
+			else
+				// v1.0.40: Give a more specific error message now now that hotkeys can make it here due to
+				// the change that avoids the need to escape double-colons:
+				return ScriptError(strstr(aLineText, HOTKEY_FLAG) ? "Invalid hotkey." : ERR_UNRECOGNIZED_ACTION, aLineText);
 	} // If no matching command found.
 
 	Action &this_action = (action_type == ACT_INVALID) ? g_old_act[old_action_type] : g_act[action_type];
@@ -3459,9 +3588,9 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 			return ScriptError(error_msg, aLineText);
 		}
 
-	////////////////
-	//
-	////////////////
+	////////////////////////////////////////////////////////////////////////
+	// Handle legacy commands that are supported for backward compatibility.
+	////////////////////////////////////////////////////////////////////////
 	if (old_action_type != OLD_INVALID)
 	{
 		switch(old_action_type)
@@ -3596,8 +3725,45 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 		}
 	}
 
+	// In v1.0.41, the following one-true-brace styles are also supported:
+	// Loop {   ; Known limitation: Overlaps with file-pattern loop that retrieves single file of name "{".
+	// Loop 5 { ; Also overlaps, this time with file-pattern loop that retrieves numeric filename ending in '{'.
+	// Loop %Var% {  ; Similar, but like the above seems acceptable given extreme rarity of user intending a file pattern.
+	if (action_type == ACT_LOOP && nArgs == 1 && arg[0][0])  // A loop with exactly one, non-blank arg.
+	{
+		char *arg1 = arg[0]; // For readability and possibly performance.
+		// A loop with the above criteria (exactly one arg) can only validly be a normal/counting loop or
+		// a file-pattern loop if its parameter's last character is '{'.  For the following reasons, any
+		// single-parameter loop that ends in '{' is considered to be one-true brace:
+		// 1) Extremely rare that a file-pattern loop such as "Loop filename {" would ever be used,
+		//    and even if it is, the syntax checker will report an unclosed block, making it apparent
+		//    to the user that a workaround is needed, such as putting the filename into a variable first.
+		// 2) Difficulty and code size of distinguishing all possible valid-one-true-braces from those
+		//    that aren't.  For example, the following are ambiguous, so it seems best for consistency
+		//    and code size reduction just to treat them as one-truce-brace, which will immediately alert
+		//    the user if the brace isn't closed:
+		//    a) Loop % (expression) {   ; Ambiguous because expression could resolve to a string, thus it would be seen as a file-pattern loop.
+		//    b) Loop %Var% {            ; Similar as above, which means all three of these unintentionally support
+		//    c) Loop filename{          ; OTB for some types of file loops because it's not worth the code size to "unsupport" them.
+		//    d) Loop *.txt {            ; Like the above: Unintentionally supported, but not documnented.
+		//
+		// Insist that no characters follow the '{' in case the user intended it to be a file-pattern loop
+		// such as "Loop {literal-filename".
+		char *arg1_last_char = arg1 + strlen(arg1) - 1;
+		if (*arg1_last_char == '{')
+		{
+			add_openbrace_afterward = true;
+			*arg1_last_char = '\0';  // Since it will be fully handled here, remove the brace from further consideration.
+			if (!rtrim(arg1)) // Trimmed down to nothing, so only a brace was present: remove the arg completely.
+				nArgs = 0;    // This makes later stages recognize it as an infinite loop rather than a zero-iteration loop.
+		}
+	}
+
 	if (!AddLine(action_type, arg, nArgs, arg_map))
 		return FAIL;
+	if (add_openbrace_afterward)
+		if (!AddLine(ACT_BLOCK_BEGIN))
+			return FAIL;
 	if (!subaction_type && !suboldaction_type) // There is no subaction in this case.
 		return OK;
 	// Otherwise, recursively add the subaction, and any subactions it might have, beneath
@@ -4285,8 +4451,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 	switch(aActionType)
 	{
 	// Fix for v1.0.35.02:
-	// THESE FIRST FEW CASES MUST EXIT IN BOTH SELF-CONTAINED AND NORMAL VERSION since they make
-	// alterations to lines:
+	// THESE FIRST FEW CASES MUST EXIT IN BOTH SELF-CONTAINED AND NORMAL VERSION since they alter the
+	// attributes/members of some types of lines:
 	case ACT_LOOP:
 		// If possible, determine the type of loop so that the preparser can better
 		// validate some things:
@@ -4295,7 +4461,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		case 0:
 			line.mAttribute = ATTR_LOOP_NORMAL;
 			break;
-		case 1:
+		case 1: // With only 1 arg, it must be a normal loop, file-pattern loop, or registry loop.
 			if (line.ArgHasDeref(1)) // Impossible to know now what type of loop (only at runtime).
 				line.mAttribute = ATTR_LOOP_UNKNOWN;
 			else
@@ -4400,7 +4566,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		// been parsed prior to them (e.g. something like "Gosub, DefineGroups" may appear
 		// in the auto-execute portion of the script).
 		if (!line.ArgHasDeref(1))
-			if (   !(line.mAttribute = FindOrAddGroup(new_raw_arg1))   )
+			if (   !(line.mAttribute = FindGroup(new_raw_arg1, true))   ) // Create-if-not-found so that performance is enhanced at runtime.
 				return FAIL;  // The above already displayed the error.
 		if (aActionType == ACT_GROUPACTIVATE || aActionType == ACT_GROUPDEACTIVATE)
 		{
@@ -6604,6 +6770,7 @@ VarTypes Script::GetVarType(char *aVarName)
 	if (!stricmp(aVarName, "A_Space")) return VAR_SPACE;
 	if (!stricmp(aVarName, "A_Tab")) return VAR_TAB;
 	if (!stricmp(aVarName, "A_AhkVersion")) return VAR_AHKVERSION;
+	if (!stricmp(aVarName, "A_AhkPath")) return VAR_AHKPATH;
 
 	// Since above didn't return:
 	return VAR_NORMAL;
@@ -6611,9 +6778,12 @@ VarTypes Script::GetVarType(char *aVarName)
 
 
 
-WinGroup *Script::FindOrAddGroup(char *aGroupName, bool aNoCreate)
+WinGroup *Script::FindGroup(char *aGroupName, bool aCreateIfNotFound)
 // Caller must ensure that aGroupName isn't NULL.  But if it's the empty string, NULL is returned.
-// Returns the Group whose name matches aGroupName.  If it doesn't exist, it is created.
+// Returns the Group whose name matches aGroupName.  If it doesn't exist, it is created if aCreateIfNotFound==true.
+// Thread-safety: This function is thread-safe (except when when called with aCreateIfNotFound==true) even when
+// the main thread happens to be calling AddGroup() and changing the linked list while it's being traversed here
+// by the hook thread.  However, any subsequent changes to this function or AddGroup() must be carefully reviewed.
 {
 	if (!*aGroupName)
 		return NULL;
@@ -6621,7 +6791,7 @@ WinGroup *Script::FindOrAddGroup(char *aGroupName, bool aNoCreate)
 		if (!stricmp(group->mName, aGroupName)) // Match found.
 			return group;
 	// Otherwise, no match found, so create a new group.
-	if (aNoCreate || AddGroup(aGroupName) != OK)
+	if (!aCreateIfNotFound || AddGroup(aGroupName) != OK)
 		return NULL;
 	return mLastGroup;
 }
@@ -6631,6 +6801,9 @@ WinGroup *Script::FindOrAddGroup(char *aGroupName, bool aNoCreate)
 ResultType Script::AddGroup(char *aGroupName)
 // Returns OK or FAIL.
 // The caller must already have verfied that this isn't a duplicate group.
+// This function is not thread-safe because it adds an entry to the quasi-global list of window groups.
+// In addition, if this function is being called by one thread while another thread is calling FindGroup(),
+// the thread-safety notes in FindGroup() apply.
 {
 	if (strlen(aGroupName) > MAX_VAR_NAME_LENGTH)
 		return ScriptError("Group name too long.", aGroupName);
@@ -6641,6 +6814,9 @@ ResultType Script::AddGroup(char *aGroupName)
 	if (!new_name)
 		return FAIL;  // It already displayed the error for us.
 
+	// The precise method by which the follows steps are done should be thread-safe even if
+	// some other thread calls FindGroup() in the middle of the operation.  But any changes
+	// must be carefully reviewed:
 	WinGroup *the_new_group = new WinGroup(new_name);
 	if (the_new_group == NULL)
 		return ScriptError(ERR_OUTOFMEM);
@@ -7620,26 +7796,29 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 			++g_script.mLinesExecutedThisCycle; // Always increment for GroupActivate.
 			WinGroup *group;
 			if (   !(group = (WinGroup *)mAttribute)   )
-				if (   !(group = g_script.FindOrAddGroup(ARG1))   )
-					return FAIL;  // It already displayed the error for us.
-			Line *jump_to_line;
-			// Note: This will take care of DoWinDelay if needed:
-			group->Activate(*ARG2 && !stricmp(ARG2, "R"), NULL, (void **)&jump_to_line);
-			if (jump_to_line)
+				group = g_script.FindGroup(ARG1);
+			if (group)
 			{
-				if (!line->IsJumpValid(jump_to_line))
-					// This check probably isn't necessary since IsJumpValid() is mostly
-					// for Goto's.  But just in case the gosub's target label is some
-					// crazy place:
-					return FAIL;
-				// This section is just like the Gosub code above, so maintain them together.
-				result = jump_to_line->ExecUntil(UNTIL_RETURN, NULL, NULL, aCurrentFile, aCurrentRegItem
-					, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
-				if (result == FAIL || result == EARLY_EXIT)
-					return result;
-				if (aMode == ONLY_ONE_LINE)
-					return (result == EARLY_RETURN) ? OK : result;
+				Line *jump_to_line;
+				// Note: This will take care of DoWinDelay if needed:
+				group->Activate(*ARG2 && !stricmp(ARG2, "R"), NULL, (void **)&jump_to_line);
+				if (jump_to_line)
+				{
+					if (!line->IsJumpValid(jump_to_line))
+						// This check probably isn't necessary since IsJumpValid() is mostly
+						// for Goto's.  But just in case the gosub's target label is some
+						// crazy place:
+						return FAIL;
+					// This section is just like the Gosub code above, so maintain them together.
+					result = jump_to_line->ExecUntil(UNTIL_RETURN, NULL, NULL, aCurrentFile, aCurrentRegItem
+						, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
+					if (result == FAIL || result == EARLY_EXIT)
+						return result;
+					if (aMode == ONLY_ONE_LINE)
+						return (result == EARLY_RETURN) ? OK : result;
+				}
 			}
+			//else no such group, so just proceed.
 			line = line->mNextLine;
 			break;
 		}
@@ -8036,16 +8215,16 @@ inline ResultType Line::EvaluateCondition()
 	// handle all-blank params:
 	case ACT_IFWINEXIST:
 		// NULL-check this way avoids compiler warnings:
-		if_condition = (WinExist(FOUR_ARGS, false, true) != NULL);
+		if_condition = (WinExist(g, FOUR_ARGS, false, true) != NULL);
 		break;
 	case ACT_IFWINNOTEXIST:
-		if_condition = !WinExist(FOUR_ARGS, false, true); // Seems best to update last-used even here.
+		if_condition = !WinExist(g, FOUR_ARGS, false, true); // Seems best to update last-used even here.
 		break;
 	case ACT_IFWINACTIVE:
-		if_condition = (WinActive(FOUR_ARGS, true) != NULL);
+		if_condition = (WinActive(g, FOUR_ARGS, true) != NULL);
 		break;
 	case ACT_IFWINNOTACTIVE:
-		if_condition = !WinActive(FOUR_ARGS, true);
+		if_condition = !WinActive(g, FOUR_ARGS, true);
 		break;
 
 	case ACT_IFEXIST:
@@ -8942,7 +9121,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	{
 	case ACT_WINACTIVATE:
 	case ACT_WINACTIVATEBOTTOM:
-		if (WinActivate(FOUR_ARGS, mActionType == ACT_WINACTIVATEBOTTOM))
+		if (WinActivate(g, FOUR_ARGS, mActionType == ACT_WINACTIVATEBOTTOM))
 			// It seems best to do these sleeps here rather than in the windowing
 			// functions themselves because that way, the program can use the
 			// windowing functions without being subject to the script's delay
@@ -8983,14 +9162,14 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			if (*ARG3)
 				is_ahk_group = false;  // Override the default.
 		// Act upon all members of this group (WinText/ExcludeTitle/ExcludeText are ignored in this mode).
-		if (is_ahk_group && (group = g_script.FindOrAddGroup(omit_leading_whitespace(ARG1 + 9), true))) // Assign.
+		if (is_ahk_group && (group = g_script.FindGroup(omit_leading_whitespace(ARG1 + 9)))) // Assign.
 			return group->ActUponAll(mActionType, wait_time); // It will do DoWinDelay if appropriate.
 		//else try to act upon it as though "ahk_group something" is a literal window title.
 	
 		// Since above didn't return, it's not "ahk_group", so do the normal single-window behavior.
 		if (mActionType == ACT_WINCLOSE || mActionType == ACT_WINKILL)
 		{
-			if (WinClose(ARG1, ARG2, wait_time, ARG4, ARG5, mActionType == ACT_WINKILL)) // It closed something.
+			if (WinClose(g, ARG1, ARG2, wait_time, ARG4, ARG5, mActionType == ACT_WINKILL)) // It closed something.
 				DoWinDelay;
 			return OK;
 		}
@@ -9269,28 +9448,28 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			{
 			case ACT_WINWAIT:
 				#define SAVED_WIN_ARGS SAVED_ARG1, SAVED_ARG2, SAVED_ARG4, SAVED_ARG5
-				if (WinExist(SAVED_WIN_ARGS, false, true))
+				if (WinExist(g, SAVED_WIN_ARGS, false, true))
 				{
 					DoWinDelay;
 					return OK;
 				}
 				break;
 			case ACT_WINWAITCLOSE:
-				if (!WinExist(SAVED_WIN_ARGS))
+				if (!WinExist(g, SAVED_WIN_ARGS))
 				{
 					DoWinDelay;
 					return OK;
 				}
 				break;
 			case ACT_WINWAITACTIVE:
-				if (WinActive(SAVED_WIN_ARGS, true))
+				if (WinActive(g, SAVED_WIN_ARGS, true))
 				{
 					DoWinDelay;
 					return OK;
 				}
 				break;
 			case ACT_WINWAITNOTACTIVE:
-				if (!WinActive(SAVED_WIN_ARGS, true))
+				if (!WinActive(g, SAVED_WIN_ARGS, true))
 				{
 					DoWinDelay;
 					return OK;
@@ -9548,7 +9727,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	case ACT_GROUPADD: // Adding a WindowSpec *to* a group, not adding a group.
 	{
 		if (   !(group = (WinGroup *)mAttribute)   )
-			if (   !(group = g_script.FindOrAddGroup(ARG1))   )
+			if (   !(group = g_script.FindGroup(ARG1, true))   )  // Last parameter -> create-if-not-found.
 				return FAIL;  // It already displayed the error for us.
 		Line *jump_to_line = NULL;
 		if (*ARG4)
@@ -9573,19 +9752,21 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	// Note ACT_GROUPACTIVATE is handled by ExecUntil(), since it's better suited to do the Gosub.
 	case ACT_GROUPDEACTIVATE:
 		if (   !(group = (WinGroup *)mAttribute)   )
-			if (   !(group = g_script.FindOrAddGroup(ARG1))   )
-				return FAIL;  // It already displayed the error for us.
-		group->Deactivate(*ARG2 && !stricmp(ARG2, "R"));  // Note: It will take care of DoWinDelay if needed.
+			group = g_script.FindGroup(ARG1);
+		if (group)
+			group->Deactivate(*ARG2 && !stricmp(ARG2, "R"));  // Note: It will take care of DoWinDelay if needed.
+		//else nonexistent group: By design, do nothing.
 		return OK;
 
 	case ACT_GROUPCLOSE:
 		if (   !(group = (WinGroup *)mAttribute)   )
-			if (   !(group = g_script.FindOrAddGroup(ARG1))   )
-				return FAIL;  // It already displayed the error for us.
-		if (*ARG2 && !stricmp(ARG2, "A"))
-			group->ActUponAll(ACT_WINCLOSE, 0);  // Note: It will take care of DoWinDelay if needed.
-		else
-			group->CloseAndGoToNext(*ARG2 && !stricmp(ARG2, "R"));  // Note: It will take care of DoWinDelay if needed.
+			group = g_script.FindGroup(ARG1);
+		if (group)
+			if (*ARG2 && !stricmp(ARG2, "A"))
+				group->ActUponAll(ACT_WINCLOSE, 0);  // Note: It will take care of DoWinDelay if needed.
+			else
+				group->CloseAndGoToNext(*ARG2 && !stricmp(ARG2, "R"));  // Note: It will take care of DoWinDelay if needed.
+		//else nonexistent group: By design, do nothing.
 		return OK;
 
 	case ACT_TRANSFORM:
@@ -10660,7 +10841,7 @@ ResultType Line::Deref(Var *aOutputVar, char *aBuf)
 
 	for (int which_pass = 0; which_pass < 2; ++which_pass)
 	{
-		if (which_pass) // Start of second pass.
+		if (which_pass) // Starting second pass.
 		{
 			// Set up aOutputVar, enlarging it if necessary.  If it is of type VAR_CLIPBOARD,
 			// this call will set up the clipboard for writing:
@@ -10698,7 +10879,7 @@ ResultType Line::Deref(Var *aOutputVar, char *aBuf)
 						case 'r': *dest = '\r'; break;  // carriage return
 						case 't': *dest = '\t'; break;  // horizontal tab
 						case 'v': *dest = '\v'; break;  // vertical tab
-						default:  *dest = *cp1; // Other characters are resolved just as they are.
+						default:  *dest = *cp1; // These other characters are resolved just as they are, including '\0'.
 					}
 					++dest;
 				}
@@ -10978,6 +11159,30 @@ VarSizeType Script::GetAhkVersion(char *aBuf)
 	if (aBuf)
 		strcpy(aBuf, NAME_VERSION);
 	return (VarSizeType)strlen(NAME_VERSION);
+}
+
+VarSizeType Script::GetAhkPath(char *aBuf) // v1.0.41.
+{
+#ifdef AUTOHOTKEYSC
+	if (aBuf)
+	{
+		GetAHKInstallDir(aBuf);
+		if (*aBuf)
+		{
+			char *cp = aBuf + strlen(aBuf); // Position of terminator.
+			// Name "AutoHotkey.exe" is assumed for code size reduction and because it's not stored in the registry:
+			strlcpy(cp, "\\AutoHotkey.exe", MAX_PATH - (cp - aBuf)); // strlcpy() in case registry has a path that is too close to MAX_PATH to fit AutoHotkey.exe
+		}
+		//else leave it blank as documented.
+		return (VarSizeType)strlen(aBuf);
+	}
+	// Otherwise: Always return an estimate of MAX_PATH in case the registry entry changes between the
+	// first call and the second.
+	return MAX_PATH;
+#else
+	char buf[MAX_PATH];
+	return (VarSizeType)GetModuleFileName(NULL, aBuf ? aBuf : buf, MAX_PATH);
+#endif
 }
 
 

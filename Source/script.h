@@ -1272,24 +1272,6 @@ public:
 		return MATCHMODE_INVALID;
 	}
 
-	static WinGetCmds ConvertWinGetCmd(char *aBuf)
-	{
-		if (!aBuf || !*aBuf) return WINGET_CMD_ID;  // If blank, return the default command.
-		if (!stricmp(aBuf, "ID")) return WINGET_CMD_ID;
-		if (!stricmp(aBuf, "IDLast")) return WINGET_CMD_IDLAST;
-		if (!stricmp(aBuf, "PID")) return WINGET_CMD_PID;
-		if (!stricmp(aBuf, "ProcessName")) return WINGET_CMD_PROCESSNAME;
-		if (!stricmp(aBuf, "Count")) return WINGET_CMD_COUNT;
-		if (!stricmp(aBuf, "List")) return WINGET_CMD_LIST;
-		if (!stricmp(aBuf, "MinMax")) return WINGET_CMD_MINMAX;
-		if (!stricmp(aBuf, "ControlList")) return WINGET_CMD_CONTROLLIST;
-		if (!stricmp(aBuf, "Style")) return WINGET_CMD_STYLE;
-		if (!stricmp(aBuf, "ExStyle")) return WINGET_CMD_EXSTYLE;
-		if (!stricmp(aBuf, "Transparent")) return WINGET_CMD_TRANSPARENT;
-		if (!stricmp(aBuf, "TransColor")) return WINGET_CMD_TRANSCOLOR;
-		return WINGET_CMD_INVALID;
-	}
-
 	static SysGetCmds ConvertSysGetCmd(char *aBuf)
 	{
 		if (!aBuf || !*aBuf) return SYSGET_CMD_INVALID;
@@ -1583,6 +1565,24 @@ public:
 		return WINSET_INVALID;
 	}
 
+
+	static WinGetCmds ConvertWinGetCmd(char *aBuf)
+	{
+		if (!aBuf || !*aBuf) return WINGET_CMD_ID;  // If blank, return the default command.
+		if (!stricmp(aBuf, "ID")) return WINGET_CMD_ID;
+		if (!stricmp(aBuf, "IDLast")) return WINGET_CMD_IDLAST;
+		if (!stricmp(aBuf, "PID")) return WINGET_CMD_PID;
+		if (!stricmp(aBuf, "ProcessName")) return WINGET_CMD_PROCESSNAME;
+		if (!stricmp(aBuf, "Count")) return WINGET_CMD_COUNT;
+		if (!stricmp(aBuf, "List")) return WINGET_CMD_LIST;
+		if (!stricmp(aBuf, "MinMax")) return WINGET_CMD_MINMAX;
+		if (!stricmp(aBuf, "ControlList")) return WINGET_CMD_CONTROLLIST;
+		if (!stricmp(aBuf, "Style")) return WINGET_CMD_STYLE;
+		if (!stricmp(aBuf, "ExStyle")) return WINGET_CMD_EXSTYLE;
+		if (!stricmp(aBuf, "Transparent")) return WINGET_CMD_TRANSPARENT;
+		if (!stricmp(aBuf, "TransColor")) return WINGET_CMD_TRANSCOLOR;
+		return WINGET_CMD_INVALID;
+	}
 
 	static ToggleValueType ConvertOnOff(char *aBuf, ToggleValueType aDefault = TOGGLE_INVALID)
 	// Returns aDefault if aBuf isn't either ON, OFF, or blank.
@@ -2387,7 +2387,7 @@ public:
 		, VarTypeType aVarType = VAR_INVALID); // Not currently needed (e.g. for VAR_ATTRIB_PARAM): , VarAttribType aAttrib = 0);
 	static VarTypes GetVarType(char *aVarName);
 
-	WinGroup *FindOrAddGroup(char *aGroupName, bool aNoCreate = false);
+	WinGroup *FindGroup(char *aGroupName, bool aCreateIfNotFound = false);
 	ResultType AddGroup(char *aGroupName);
 	Label *FindLabel(char *aLabelName);
 
@@ -2442,6 +2442,7 @@ public:
 	VarSizeType GetExitReason(char *aBuf = NULL);
 	VarSizeType GetSpace(VarTypeType aType, char *aBuf = NULL);
 	VarSizeType GetAhkVersion(char *aBuf = NULL);
+	VarSizeType GetAhkPath(char *aBuf = NULL);
 	VarSizeType GetMMMM(char *aBuf = NULL);
 	VarSizeType GetMMM(char *aBuf = NULL);
 	VarSizeType GetDDDD(char *aBuf = NULL);

@@ -87,6 +87,9 @@ extern int g_MaxThreadsTotal;
 extern int g_MaxHotkeysPerInterval;
 extern int g_HotkeyThrottleInterval;
 extern bool g_MaxThreadsBuffer;
+extern HotCriterionType g_HotCriterion;
+extern char *g_HotWinTitle;
+extern char *g_HotWinText;
 
 extern MenuTypeType g_MenuIsVisible;
 extern int g_nMessageBoxes;

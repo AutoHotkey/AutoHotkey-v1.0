@@ -38,7 +38,7 @@ public:
 		// Caller should have allocated some dynamic memory for the given args if they're not
 		// the empty string.  We just set our member variables to be equal to the given pointers.
 		: mTitle(aTitle), mText(aText), mExcludeTitle(aExcludeTitle), mExcludeText(aExcludeText)
-		, mJumpToLine(aJumpToLine), mNextWindow(NULL)
+		, mJumpToLine(aJumpToLine), mNextWindow(NULL) // mNextWindow(NULL) is also required for thread-safety.
 	{}
 	void *operator new(size_t aBytes) {return SimpleHeap::Malloc(aBytes);}
 	void *operator new[](size_t aBytes) {return SimpleHeap::Malloc(aBytes);}
@@ -86,13 +86,13 @@ public:
 	ResultType Activate(bool aStartWithMostRecent, WindowSpec *aWinSpec = NULL, void **aJumpToLine = NULL);
 	ResultType Deactivate(bool aStartWithMostRecent);
 	bool IsEmpty() {return mFirstWindow == NULL;}
-	WindowSpec *IsMember(HWND aWnd);
+	WindowSpec *IsMember(HWND aWnd, global_struct &aSettings);
 	WinGroup(char *aGroupName)
 		// The caller must ensure that aGroupName is non-null and non-empty-string.
 		: mName(aGroupName) // Caller gave us a pointer to dynamic memory for this.
 		, mFirstWindow(NULL), mLastWindow(NULL)
 		, mWindowCount(0)
-		, mNextGroup(NULL)
+		, mNextGroup(NULL) // v1.0.41: Required for thread-safety, but also for maintainability.
 		, mIsModeActivate(true) // arbitrary default.
 	{}
 	void *operator new(size_t aBytes) {return SimpleHeap::Malloc(aBytes);}

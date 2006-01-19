@@ -60,6 +60,12 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	#endif
 #endif
 
+	// The problem of some command line parameters such as /r being "reserved" is a design flaw (one that
+	// can't be fixed without breaking existing scripts).  Fortunately, I think it affects only compiled
+	// scripts because running a script via AutoHotkey.exe should avoid treating anything after the
+	// filename as switches. This flaw probably occurred because when this part of the program was designed,
+	// there was no plan to have compiled scripts.
+	// 
 	// Examine command line args.  Rules:
 	// Any special flags (e.g. /force and /restart) must appear prior to the script filespec.
 	// The script filespec (if present) must be the first non-backslash arg.
@@ -87,7 +93,6 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		else if (!stricmp(__argv[i], "/R") || !stricmp(__argv[i], "/restart"))
 			restart_mode = true;
 		else if (!stricmp(__argv[i], "/F") || !stricmp(__argv[i], "/force"))
-			// Force the keybd/mouse hook(s) to be installed again even if another instance already did.
 			g_ForceLaunch = true;
 		else if (!stricmp(__argv[i], "/ErrorStdOut"))
 			g_script.mErrorStdOut = true;

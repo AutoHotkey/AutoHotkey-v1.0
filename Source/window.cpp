@@ -20,7 +20,7 @@ GNU General Public License for more details.
 #include "application.h" // for MsgSleep()
 
 
-HWND WinActivate(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
+HWND WinActivate(global_struct &aSettings, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
 	, bool aFindLastMatch, HWND aAlreadyVisited[], int aAlreadyVisitedCount)
 {
 	// If window is already active, be sure to leave it that way rather than activating some
@@ -38,14 +38,14 @@ HWND WinActivate(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeT
 		// However, if the active (foreground) window is hidden and DetectHiddenWindows is
 		// off, the below will set target_window to be NULL, which seems like the most
 		// consistent result to use:
-		SET_TARGET_TO_ALLOWABLE_FOREGROUND
+		SET_TARGET_TO_ALLOWABLE_FOREGROUND(aSettings.DetectHiddenWindows)
 		return target_window;
 	}
 
 	if (!aFindLastMatch && !*aTitle && !*aText && !*aExcludeTitle && !*aExcludeText)
 	{
 		// User passed no params, so use the window most recently found by WinExist():
-		if (   !(target_window = GetValidLastUsedWindow())   )
+		if (   !(target_window = GetValidLastUsedWindow(aSettings))   )
 			return NULL;
 	}
 	else
@@ -59,7 +59,7 @@ HWND WinActivate(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeT
 		// Don't activate in this case, because the top-most window might be an
 		// always-on-top but not-meant-to-be-activated window such as AutoIt's
 		// splash text:
-		if (   !(target_window = WinExist(aTitle, aText, aExcludeTitle, aExcludeText, aFindLastMatch
+		if (   !(target_window = WinExist(aSettings, aTitle, aText, aExcludeTitle, aExcludeText, aFindLastMatch
 			, false, aAlreadyVisited, aAlreadyVisitedCount))   )
 			return NULL;
 	}
@@ -367,13 +367,13 @@ HWND SetForegroundWindowEx(HWND aWnd)
 
 
 
-HWND WinClose(char *aTitle, char *aText, int aTimeToWaitForClose
+HWND WinClose(global_struct &aSettings, char *aTitle, char *aText, int aTimeToWaitForClose
 	, char *aExcludeTitle, char *aExcludeText, bool aKillIfHung)
 // Return the HWND of any found-window to the caller so that it has the option of waiting
 // for it to become an invalid (closed) window.
 {
 	HWND target_window;
-	IF_USE_FOREGROUND_WINDOW(aTitle, aText, aExcludeTitle, aExcludeText)
+	IF_USE_FOREGROUND_WINDOW(aSettings.DetectHiddenWindows, aTitle, aText, aExcludeTitle, aExcludeText)
 		// Close topmost (better than !F4 since that uses the alt key, effectively resetting
 		// its status to UP if it was down before.  Use WM_CLOSE rather than WM_EXIT because
 		// I think that's what Alt-F4 sends (and otherwise, app may quit without offering
@@ -387,12 +387,12 @@ HWND WinClose(char *aTitle, char *aText, int aTimeToWaitForClose
 		// bottomost (though it almost certainly does), do it this way to ensure that the
 		// topmost window is closed in preference to any other windows with the same <aTitle>
 		// and <aText>:
-		if (   !(target_window = WinActive(aTitle, aText, aExcludeTitle, aExcludeText))   )
-			if (   !(target_window = WinExist(aTitle, aText, aExcludeTitle, aExcludeText))   )
+		if (   !(target_window = WinActive(aSettings, aTitle, aText, aExcludeTitle, aExcludeText))   )
+			if (   !(target_window = WinExist(aSettings, aTitle, aText, aExcludeTitle, aExcludeText))   )
 				return NULL;
 	}
 	else
-		target_window = GetValidLastUsedWindow();
+		target_window = GetValidLastUsedWindow(aSettings);
 
 	return target_window ? WinClose(target_window, aTimeToWaitForClose, aKillIfHung) : NULL;
 }
@@ -480,18 +480,21 @@ HWND WinClose(HWND aWnd, int aTimeToWaitForClose, bool aKillIfHung)
 
 
 	
-HWND WinActive(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText, bool aUpdateLastUsed)
+HWND WinActive(global_struct &aSettings, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
+	, bool aUpdateLastUsed)
+// This function must be kept thread-safe because it may be called (indirectly) by hook thread too.
+// In addition, it must not change the value of anything in aSettings except when aUpdateLastUsed==true.
 {
 	HWND target_window;
 	if (USE_FOREGROUND_WINDOW(aTitle, aText, aExcludeTitle, aExcludeText))
 	{
 		// User asked us if the "active" window is active, which is true if it's not a
 		// hidden window, or if DetectHiddenWindows is ON:
-		SET_TARGET_TO_ALLOWABLE_FOREGROUND
+		SET_TARGET_TO_ALLOWABLE_FOREGROUND(aSettings.DetectHiddenWindows)
 		#define UPDATE_AND_RETURN_LAST_USED_WINDOW(hwnd) \
 		{\
 			if (aUpdateLastUsed && hwnd)\
-				g.hWndLastUsed = hwnd;\
+				aSettings.hWndLastUsed = hwnd;\
 			return hwnd;\
 		}
 		UPDATE_AND_RETURN_LAST_USED_WINDOW(target_window)
@@ -502,17 +505,17 @@ HWND WinActive(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeTex
 		return NULL;
 
 	if (!(*aTitle || *aText || *aExcludeTitle || *aExcludeText)) // Use the "last found" window.
-		return (fore_win == GetValidLastUsedWindow()) ? fore_win : NULL;
+		return (fore_win == GetValidLastUsedWindow(aSettings)) ? fore_win : NULL;
 
 	// Only after the above check should the below be done.  This is because "IfWinActive" (with no params)
 	// should be "true" if one of the script's GUI windows is active:
-	if (!(g.DetectHiddenWindows || IsWindowVisible(fore_win))) // In this case, the caller's window can't be active.
+	if (!(aSettings.DetectHiddenWindows || IsWindowVisible(fore_win))) // In this case, the caller's window can't be active.
 		return NULL;
 
 	WindowSearch ws;
 	ws.SetCandidate(fore_win);
 
-	if (ws.SetCriteria(aTitle, aText, aExcludeTitle, aExcludeText) && ws.IsMatch()) // g.DetectHiddenWindows was already checked above.
+	if (ws.SetCriteria(aSettings, aTitle, aText, aExcludeTitle, aExcludeText) && ws.IsMatch()) // aSettings.DetectHiddenWindows was already checked above.
 		UPDATE_AND_RETURN_LAST_USED_WINDOW(fore_win) // This also does a "return".
 	else // If the line above didn't return, indicate that the specified window is not active.
 		return NULL;
@@ -520,15 +523,17 @@ HWND WinActive(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeTex
 
 
 
-HWND WinExist(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
+HWND WinExist(global_struct &aSettings, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
 	, bool aFindLastMatch, bool aUpdateLastUsed, HWND aAlreadyVisited[], int aAlreadyVisitedCount)
+// This function must be kept thread-safe because it may be called (indirectly) by hook thread too.
+// In addition, it must not change the value of anything in aSettings except when aUpdateLastUsed==true.
 {
 	HWND target_window;
 	if (USE_FOREGROUND_WINDOW(aTitle, aText, aExcludeTitle, aExcludeText))
 	{
 		// User asked us if the "active" window exists, which is true if it's not a
 		// hidden window or DetectHiddenWindows is ON:
-		SET_TARGET_TO_ALLOWABLE_FOREGROUND
+		SET_TARGET_TO_ALLOWABLE_FOREGROUND(aSettings.DetectHiddenWindows)
 		// Updating LastUsed to be hwnd even if it's NULL seems best for consistency?
 		// UPDATE: No, it's more flexible not to never set it to NULL, because there
 		// will be times when the old value is still useful:
@@ -540,10 +545,10 @@ HWND WinExist(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
 		// It's correct to do this even in this function because it's called by
 		// WINWAITCLOSE and IFWINEXIST specifically to discover if the Last-Used
 		// window still exists.
-		return GetValidLastUsedWindow();
+		return GetValidLastUsedWindow(aSettings);
 
 	WindowSearch ws;
-	if (!ws.SetCriteria(aTitle, aText, aExcludeTitle, aExcludeText)) // No match is possible with these criteria.
+	if (!ws.SetCriteria(aSettings, aTitle, aText, aExcludeTitle, aExcludeText)) // No match is possible with these criteria.
 		return NULL;
 
 	ws.mFindLastMatch = aFindLastMatch;
@@ -560,8 +565,8 @@ HWND WinExist(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
 		// with invalid window handles.
 		if (   ws.mCriterionHwnd != HWND_BROADCAST // It's not exempt from the other checks on the two lines below.
 			&& (!IsWindow(ws.mCriterionHwnd)    // And it's either not a valid window...
-				// ...or the window is not detectible (in v1.0.40.05, child windows are always detectible):
-				|| !(g.DetectHiddenWindows || IsWindowVisible(ws.mCriterionHwnd)
+				// ...or the window is not detectible (in v1.0.40.05, child windows are detectible even if hidden):
+				|| !(aSettings.DetectHiddenWindows || IsWindowVisible(ws.mCriterionHwnd)
 					|| (GetWindowLong(ws.mCriterionHwnd, GWL_STYLE) & WS_CHILD)))   )
 			return NULL;
 
@@ -579,7 +584,7 @@ HWND WinExist(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
 
 
 
-HWND GetValidLastUsedWindow()
+HWND GetValidLastUsedWindow(global_struct &aSettings)
 // If the last found window is one of the script's own GUI windows, it is considered valid even if
 // DetectHiddenWindows is ON.  Note that this exemption does not apply to things like "IfWinExist,
 // My Gui Title", "WinActivate, ahk_id <gui id>", etc.
@@ -587,25 +592,27 @@ HWND GetValidLastUsedWindow()
 // Gui +LastFound
 // The launch of a GUI thread that explicitly set the last found window to be that GUI window.
 {
-	if (!g.hWndLastUsed || !IsWindow(g.hWndLastUsed))
+	if (!aSettings.hWndLastUsed || !IsWindow(aSettings.hWndLastUsed))
 		return NULL;
-	if (   g.DetectHiddenWindows || IsWindowVisible(g.hWndLastUsed)
-		|| (GetWindowLong(g.hWndLastUsed, GWL_STYLE) & WS_CHILD)   ) // v1.0.40.05: Child windows (via ahk_id) are always detectible.
-		return g.hWndLastUsed;
+	if (   aSettings.DetectHiddenWindows || IsWindowVisible(aSettings.hWndLastUsed)
+		|| (GetWindowLong(aSettings.hWndLastUsed, GWL_STYLE) & WS_CHILD)   ) // v1.0.40.05: Child windows (via ahk_id) are always detectible.
+		return aSettings.hWndLastUsed;
 	// Otherwise, DetectHiddenWindows is OFF and the window is not visible.  Return NULL
 	// unless this is a GUI window belonging to this particular script, in which case
 	// the setting of DetectHiddenWindows is ignored (as of v1.0.25.13).
-	return GuiType::FindGui(g.hWndLastUsed) ? g.hWndLastUsed : NULL;
+	return GuiType::FindGui(aSettings.hWndLastUsed) ? aSettings.hWndLastUsed : NULL;
 }
 
 
 
 BOOL CALLBACK EnumParentFind(HWND aWnd, LPARAM lParam)
+// This function must be kept thread-safe because it may be called (indirectly) by hook thread too.
 // To continue enumeration, the function must return TRUE; to stop enumeration, it must return FALSE. 
 // It's a little strange, but I think EnumWindows() returns FALSE when the callback stopped
 // the enumeration prematurely by returning false to its caller.  Otherwise (the enumeration went
 // through every window), it returns TRUE:
 {
+	WindowSearch &ws = *((WindowSearch *)lParam);  // For performance and convenience.
 	// According to MSDN, GetWindowText() will hang only if it's done against
 	// one of your own app's windows and that window is hung.  I suspect
 	// this might not be true in Win95, and possibly not even Win98, but
@@ -618,9 +625,8 @@ BOOL CALLBACK EnumParentFind(HWND aWnd, LPARAM lParam)
 	// of one of its controls or child windows).  UPDATE: Trying GetWindowTextTimeout()
 	// now, which might be the best compromise.  UPDATE: It's annoyingly slow,
 	// so went back to using the old method.
-	if (!(g.DetectHiddenWindows || IsWindowVisible(aWnd))) // Skip windows the script isn't supposed to detect.
+	if (!(ws.mSettings->DetectHiddenWindows || IsWindowVisible(aWnd))) // Skip windows the script isn't supposed to detect.
 		return TRUE;
-	WindowSearch &ws = *((WindowSearch *)lParam);  // For performance and convenience.
 	ws.SetCandidate(aWnd);
 	// If this window doesn't match, continue searching for more windows (via TRUE).  Likewise, if
 	// mFindLastMatch is true, continue searching even if this window is a match.  Otherwise, this
@@ -631,6 +637,7 @@ BOOL CALLBACK EnumParentFind(HWND aWnd, LPARAM lParam)
 
 
 BOOL CALLBACK EnumChildFind(HWND aWnd, LPARAM lParam)
+// This function must be kept thread-safe because it may be called (indirectly) by hook thread too.
 // Although this function could be rolled into a generalized version of the EnumWindowsProc(),
 // it will perform better this way because there's less checking required and no mode/flag indicator
 // is needed inside lParam to indicate which struct element should be searched for.  In addition,
@@ -643,12 +650,26 @@ BOOL CALLBACK EnumChildFind(HWND aWnd, LPARAM lParam)
 	// buffer because ws.mFindLastMatch might be true, in which case the original title must
 	// be preserved.
 	char win_text[WINDOW_TEXT_SIZE];
+	WindowSearch &ws = *((WindowSearch *)lParam);  // For performance and convenience.
 
-	if (!(g.DetectHiddenText || IsWindowVisible(aWnd)) // This text element should not be detectible by the script.
-		|| !GetWindowTextByTitleMatchMode(aWnd, win_text, sizeof(win_text))) // Or it has no text (or failure to fetch it).
+	if (!(ws.mSettings->DetectHiddenText || IsWindowVisible(aWnd))) // This text element should not be detectible by the script.
 		return TRUE;  // Skip this child and keep enumerating to try to find a match among the other children.
 
-	WindowSearch &ws = *((WindowSearch *)lParam);  // For performance and convenience.
+	// The below was formerly outsourced to the following function, but since it is only called from here,
+	// it has been moved inline:
+	// int GetWindowTextByTitleMatchMode(HWND aWnd, char *aBuf = NULL, int aBufSize = 0)
+	int text_length = ws.mSettings->TitleFindFast ? GetWindowText(aWnd, win_text, sizeof(win_text))
+		: GetWindowTextTimeout(aWnd, win_text, sizeof(win_text));  // The slower method that is able to get text from more types of controls (e.g. large edit controls).
+	// Older idea that for the above that was not adopted:
+	// Only if GetWindowText() gets 0 length would we try the other method (and of course, don't bother
+	// using GetWindowTextTimeout() at all if "fast" mode is in effect).  The problem with this is that
+	// many controls always return 0 length regardless of which method is used, so this would slow things
+	// down a little (but not too badly since GetWindowText() is so much faster than GetWindowTextTimeout()).
+	// Another potential problem is that some controls may return less text, or different text, when used
+	// with the fast mode vs. the slow mode (unverified).  So it seems best NOT to do this and stick with
+	// the simple approach above.
+	if (!text_length) // It has no text (or failure to fetch it).
+		return TRUE;  // Skip this child and keep enumerating to try to find a match among the other children.
 
 	// For compatibility with AutoIt v2, strstr() is always used for control/child text elements.
 
@@ -1298,6 +1319,7 @@ bool IsWindowHung(HWND aWnd)
 
 
 int GetWindowTextTimeout(HWND aWnd, char *aBuf, int aBufSize, UINT aTimeout)
+// This function must be kept thread-safe because it may be called (indirectly) by hook thread too.
 // aBufSize is an int so that any negative values passed in from caller are not lost.
 // Returns the length of what would be copied (not including the zero terminator).
 // In addition, if aBuf is not NULL, the window text is copied into aBuf (not to exceed aBufSize).
@@ -1413,7 +1435,7 @@ int GetWindowTextTimeout(HWND aWnd, char *aBuf, int aBufSize, UINT aTimeout)
 
 
 
-ResultType WindowSearch::SetCriteria(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
+ResultType WindowSearch::SetCriteria(global_struct &aSettings, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
 // Returns FAIL if the new criteria can't possibly match a window (due to ahk_id being in invalid
 // window or the specfied ahk_group not existing).  Otherwise, it returns OK.
 // Callers must ensure that aText, aExcludeTitle, and aExcludeText point to buffers whose contents
@@ -1422,17 +1444,19 @@ ResultType WindowSearch::SetCriteria(char *aTitle, char *aText, char *aExcludeTi
 // of the sDeref buffer (which might contain the contents).  Things like mFoundHWND and mFoundCount
 // are not initialized here because sometimes the caller changes the criteria without wanting to
 // reset the search.
+// This function must be kept thread-safe because it may be called (indirectly) by hook thread too.
 {
 	// Set any criteria which are not context sensitive.  It doesn't seem necessary to make copies of
 	// mCriterionText, mCriterionExcludeTitle, and mCriterionExcludeText because they're never altered
 	// here, nor does there seem to be a risk that deref buffer's contents will get overwritten
-	// while this set of criteria is in effect because our callers never allow interrupting threads
+	// while this set of criteria is in effect because our callers never allow interrupting script-threads
 	// *during* the duration of any one set of criteria.
 	bool exclude_title_became_non_blank = *aExcludeTitle && !*mCriterionExcludeTitle;
 	mCriterionExcludeTitle = aExcludeTitle;
 	mCriterionExcludeTitleLength = strlen(mCriterionExcludeTitle); // Pre-calculated for performance.
 	mCriterionText = aText;
 	mCriterionExcludeText = aExcludeText;
+	mSettings = &aSettings;
 
 	DWORD orig_criteria = mCriteria;
 	char *ahk_flag, *cp, buf[MAX_VAR_NAME_LENGTH + 1];
@@ -1514,8 +1538,8 @@ ResultType WindowSearch::SetCriteria(char *aTitle, char *aText, char *aExcludeTi
 			strlcpy(buf, omit_leading_whitespace(cp), sizeof(buf));
 			if (cp = StrChrAny(buf, " \t")) // Group names can't contain spaces, so terminate at the first one to exclude any "ahk_" criteria that come afterward.
 				*cp = '\0';
-			if (   !(mCriterionGroup = g_script.FindOrAddGroup(buf, true))   )
-				return FAIL; // Inform caller of invalid criteria.  No need to do anything else further below.
+			if (   !(mCriterionGroup = g_script.FindGroup(buf))   )
+				return FAIL; // No such group: Inform caller of invalid criteria.  No need to do anything else further below.
 		}
 		else // It doesn't qualify as a special criteria name even though it starts with "ahk_".
 		{
@@ -1554,6 +1578,7 @@ ResultType WindowSearch::SetCriteria(char *aTitle, char *aText, char *aExcludeTi
 
 
 void WindowSearch::UpdateCandidateAttributes()
+// This function must be kept thread-safe because it may be called (indirectly) by hook thread too.
 {
 	// Nothing to do until SetCandidate() is called with a non-NULL candidate and SetCriteria()
 	// has been called for the first time (otherwise, mCriterionExcludeTitle and other things
@@ -1575,16 +1600,21 @@ void WindowSearch::UpdateCandidateAttributes()
 
 
 HWND WindowSearch::IsMatch(bool aInvert)
+// Caller must have called SetCriteria prior to calling this method, at least for the purpose of setting
+// mSettings to a valid address (and possibly other reasons).
 // This method returns the HWND of mCandidateParent if it matches the previously specified criteria
 // (title/pid/id/class/group) or NULL otherwise.  Upon NULL, it doesn't reset mFoundParent or mFoundCount
 // in case previous match(es) were found when mFindLastMatch is in effect.
+// Thread-safety: With the following exception, this function must be kept thread-safe because it may be
+// called (indirectly) by hook thread too: The hook thread must never call here directly or indirectly with
+// mArrayStart!=NULL because the corresponding section below is probably not thread-safe.
 {
 	if (!mCandidateParent || !mCriteria) // Nothing to check, so no match.
 		return NULL;
 
 	if ((mCriteria & CRITERION_TITLE) && *mCriterionTitle)
 	{
-		switch(g.TitleMatchMode)
+		switch(mSettings->TitleMatchMode)
 		{
 		case FIND_ANYWHERE:
 			if (!strstr(mCandidateTitle, mCriterionTitle))
@@ -1603,18 +1633,18 @@ HWND WindowSearch::IsMatch(bool aInvert)
 
 	if ((mCriteria & CRITERION_CLASS) && strcmp(mCandidateClass, mCriterionClass)) // Doesn't match required class name.
 		return NULL;
-	//else it's a match so far, but continue onward to check exclude-title/text.
+	//else it's a match so far, but continue onward in case there are other criteria.
 
 	// For the following, mCriterionPID would already be filled in, though it might be an explicitly specified zero.
 	if ((mCriteria & CRITERION_PID) && mCandidatePID != mCriterionPID) // Doesn't match required PID.
 		return NULL;
-	//else it's a match so far, but continue onward to check exclude-title/text.
+	//else it's a match so far, but continue onward in case there are other criteria.
 
 	// The following also handles the fact that mCriterionGroup might be NULL if the specified group
 	// does not exist or was never successfully created:
-	if ((mCriteria & CRITERION_GROUP) && (!mCriterionGroup || !mCriterionGroup->IsMember(mCandidateParent))) // Isn't a member of specified group.
-		return NULL;
-	//else it's a match so far, but continue onward to check exclude-title/text (a little strange in this case, but might be useful).
+	if ((mCriteria & CRITERION_GROUP) && (!mCriterionGroup || !mCriterionGroup->IsMember(mCandidateParent, *mSettings)))
+		return NULL; // Isn't a member of specified group.
+	//else it's a match so far, but continue onward in case there are other criteria (a little strange in this case, but might be useful).
 
 	// CRITERION_ID is listed last since in terms of actual calling frequency, this part is hardly ever
 	// executed: It's only ever called this way from WinActive(), and possibly indirectly by an ahk_group
@@ -1625,7 +1655,7 @@ HWND WindowSearch::IsMatch(bool aInvert)
 	// Note: IsWindow(mCriterionHwnd) was already called by SetCriteria().
 	if ((mCriteria & CRITERION_ID) && mCandidateParent != mCriterionHwnd) // Doesn't match the required HWND.
 		return NULL;
-	//else it's a match so far, but continue onward to check exclude-title/text.
+	//else it's a match so far, but continue onward in case there are other criteria.
 
 	// The above would have returned if the candidate window isn't a match for what was specified by
 	// the script's WinTitle parameter.  So now check that the ExcludeTitle criterion is satisfied.
@@ -1633,7 +1663,7 @@ HWND WindowSearch::IsMatch(bool aInvert)
 
 	if (*mCriterionExcludeTitle)
 	{
-		switch(g.TitleMatchMode)
+		switch(mSettings->TitleMatchMode)
 		{
 		case FIND_ANYWHERE:
 			if (strstr(mCandidateTitle, mCriterionExcludeTitle))
@@ -1680,7 +1710,7 @@ HWND WindowSearch::IsMatch(bool aInvert)
 	}
 	//else aInvert==true, which means caller doesn't want the above set.
 
-	if (mArrayStart)
+	if (mArrayStart) // Probably not thread-safe due to FindOrAddVar(), so hook thread must call only with NULL mArrayStart.
 	{
 		// Make it longer than Max var name so that FindOrAddVar() will be able to spot and report
 		// var names that are too long:

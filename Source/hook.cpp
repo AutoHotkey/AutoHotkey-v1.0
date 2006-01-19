@@ -371,8 +371,9 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 		if (!(aEventFlags & LLMHF_INJECTED)) // Physical mouse event.
 			g_PhysicalKeyState[aVK] = aKeyUp ? 0 : STATE_DOWN;
 
+	bool sc_takes_precedence = ksc[aSC].sc_takes_precedence;
 	// Check hook type too in case a script every explicitly specifies scan code zero as a hotkey:
-	key_type &this_key = *((aHook == g_KeybdHook && ksc[aSC].sc_takes_precedence) ? (ksc + aSC) : (kvk + aVK));
+	key_type &this_key = *((aHook == g_KeybdHook && sc_takes_precedence) ? (ksc + aSC) : (kvk + aVK));
 
 	// v1.0.37.07: Cancel the alt-tab menu upon receipt of Escape so that it behaves like the OS's native Alt-Tab.
 	// Even if is_ignored==true, it seems more flexible/useful to cancel the Alt-Tab menu upon receiving
@@ -452,6 +453,12 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 	{
 		this_key.hotkey_down_was_suppressed = false;
 		this_key.hotkey_to_fire_upon_release = HOTKEY_ID_INVALID;
+		// Don't do the following because of the keyboard key-repeat feature.  In other words,
+		// the NO_SUPPRESS_NEXT_UP_EVENT should stay pending even in the face of consecutive
+		// down-events.  Even if it's possible for the flag to never be cleared due to never
+		// reaching any of the parts that clear it (which currently seems impossible), it seems
+		// inconsequential since by its very nature, this_key never consults the flag.
+		// this_key.no_suppress &= ~NO_SUPPRESS_NEXT_UP_EVENT;
 	}
 
 	if (aHook == g_KeybdHook)
@@ -549,10 +556,10 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 	// if pPrefixKey happens to also be a suffix, its suffix action won't fire
 	// when the key is released, which is probably the correct thing to do 90%
 	// or more of the time.  But don't consider the modifiers themselves to have
-	// been modified by  prefix key, since that is almost never desirable:
-	if (pPrefixKey && pPrefixKey != &this_key && !aKeyUp)
+	// been modified by a prefix key, since that is almost never desirable:
+	if (pPrefixKey && pPrefixKey != &this_key && !aKeyUp) // There is a prefix key being held down and the user has now pressed some other key.
 		if (   (aHook == g_KeybdHook) ? !this_key.as_modifiersLR : pPrefixKey->as_modifiersLR   )
-			pPrefixKey->was_just_used = AS_PREFIX;
+			pPrefixKey->was_just_used = AS_PREFIX; // Indicate that currently-down prefix key has been "used".
 	// Formerly, the above was done only for keyboard hook, not the mouse.  This was because
 	// most people probably would not want a prefix key's suffix-action to be stopped
 	// from firing just because a non-hotkey mouse button was pressed while the key
@@ -573,11 +580,11 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 	if (!this_key.used_as_prefix && !this_key.used_as_suffix)
 		return AllowKeyToGoToSystem;
 
-	bool is_key_up_hotkey = false; // Set default.
+	bool is_explicit_key_up_hotkey = false; // Set default.
 	HotkeyIDType hotkey_id_with_flags = HOTKEY_ID_INVALID; // Set default.
 	HotkeyIDType hotkey_id_temp; // For informal/temp storage of the ID-without-flags.
 
-	int down_performed_action, was_down_before_up;
+	bool down_performed_action, was_down_before_up;
 	if (aKeyUp)
 	{
 		// Save prior to reset.  These var's should only be used further below in conjunction with aKeyUp
@@ -589,7 +596,7 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 		if (this_key.hotkey_to_fire_upon_release != HOTKEY_ID_INVALID)
 		{
 			hotkey_id_with_flags = this_key.hotkey_to_fire_upon_release;
-			is_key_up_hotkey = true; // Can't rely on (hotkey_id_with_flags & HOTKEY_KEY_UP) because some key-up hotkeys (such as the hotkey_up array) might not be flagged that way.
+			is_explicit_key_up_hotkey = true; // Can't rely on (hotkey_id_with_flags & HOTKEY_KEY_UP) because some key-up hotkeys (such as the hotkey_up array) might not be flagged that way.
 			// The line below is done even though the down-event also resets it in case it is ever
 			// possible for keys to generate mulitple consecutive key-up events (faulty or unusual keyboards?)
 			this_key.hotkey_to_fire_upon_release = HOTKEY_ID_INVALID;
@@ -638,99 +645,126 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 	///////////////////////////////////////////////////////////////////////////////////////
 	if (this_key.used_as_prefix && !aKeyUp && (!pPrefixKey || !this_key.used_as_suffix || &this_key == pPrefixKey))
 	{
-		// This check is necessary in cases such as the following, in which the "A" key continues
-		// to repeat becauses pressing a mouse button (unlike pressing a keyboard key) does not
-		// stop the prefix key from repeating:
-		// $a::send, a
-		// a & lbutton::
-		if (&this_key != pPrefixKey)
+		// v1.0.41: Even if this prefix key is non-suppressed (passes through to active window),
+		// still call PrefixHasNoEnabledSuffixes() because don't want to overwrite the old value of
+		// pPrefixKey (see comments in "else" later below).
+		bool has_no_enabled_suffixes;
+		if (   !(has_no_enabled_suffixes = Hotkey::PrefixHasNoEnabledSuffixes(sc_takes_precedence ? aSC : aVK
+			, sc_takes_precedence))   )
 		{
-			// Override any other prefix key that might be in effect with this one, in case the
-			// prior one, due to be old for example, was invalid somehow.  UPDATE: It seems better
-			// to leave the old one in effect to support the case where one prefix key is modifying
-			// a second one in its role as a suffix.  In other words, if key1 is a prefix and
-			// key2 is both a prefix and a suffix, we want to leave key1 in effect as a prefix,
-			// rather than key2.  Hence, a null-check was added in the above if-stmt:
-			pPrefixKey = &this_key;
-			// It should be safe to init this because even if the current key is repeating,
-			// it should be impossible to receive here the key-downs that occurred after
-			// the first, because there's a return-on-repeat check farther above (update: that check
-			// is gone now).  Even if that check weren't done, it's safe to reinitialize this to zero
-			// because on most (all?) keyboards & OSs, the moment the user presses another key while
-			// this one is held down, the key-repeating ceases and does not resume for
-			// this key (though the second key will begin to repeat if it too is held down).
-			// In other words, the fear that this would be wrongly initialized and thus cause
-			// this prefix's suffix-action to fire upon key-release seems unfounded.
-			// It seems easier (and may perform better than alternative ways) to init this
-			// here rather than say, upon the release of the prefix key:
-			pPrefixKey->was_just_used = 0;
-		}
-
-		// This new section was added May 30, 2004, to fix scenarios such as the following example:
-		// a & b::Msgbox a & b
-		// $^a::MsgBox a
-		// Previously, the ^a hotkey would only fire on key-up (unless it was registered, in which
-		// case it worked as intended on the down-event).  When the user presses A, it's okay (and
-		// probably desirable) to have recorded that event as a prefix-key-down event (above).
-		// But in addition to that, we now check if this is a normal, modified hotkey that should
-		// fire now rather than waiting for the key-up event.  This is done because it makes sense,
-		// it's more correct, and also it makes the behavior of a hooked ^a hotkey consistent with
-		// that of a registered ^a.
-
-		// Prior to considering whether to fire a hotkey, correct the hook's modifier state.
-		// Although this is rarely needed, there are times when the OS disables the hook, thus
-		// it is possible for it to miss keystrokes.  See comments in GetModifierLRState()
-		// for more info:
-		if (!modifiers_were_corrected)
-		{
-			modifiers_were_corrected = true;
-			GetModifierLRState(true);
-		}
-
-		// non_ignored is always used when considering whether a key combination is in place to
-		// trigger a hotkey:
-		modifiersLRnew = g_modifiersLR_logical_non_ignored;
-		if (this_key.as_modifiersLR) // This will always be false if our caller is the mouse hook.
-			// Hotkeys are not defined to modify themselves, so look for a match accordingly.
-			modifiersLRnew &= ~this_key.as_modifiersLR;
-		// For this case to be checked, there must be at least one modifier key currently down (other
-		// than this key itself if it's a modifier), because if there isn't and this prefix is also
-		// a suffix, its suffix action should only fire on key-up (i.e. not here, but later on):
-		if (modifiersLRnew)
-		{
-			// Check hook type too in case a script every explicitly specifies scan code zero as a hotkey:
-			hotkey_id_with_flags = (aHook == g_KeybdHook && ksc[aSC].sc_takes_precedence)
-				? Kscm(modifiersLRnew, aSC) : Kvkm(modifiersLRnew, aVK);
-			if (hotkey_id_with_flags & HOTKEY_KEY_UP) // And it's okay even if it's is HOTKEY_ID_INVALID.
+			// This check is necessary in cases such as the following, in which the "A" key continues
+			// to repeat becauses pressing a mouse button (unlike pressing a keyboard key) does not
+			// stop the prefix key from repeating:
+			// $a::send, a
+			// a & lbutton::
+			if (&this_key != pPrefixKey)
 			{
-				// Queue it for later, which is done here rather than upon release of the key so that
-				// the user can release the key's modifiers before releasing the key itself, which
-				// is likely to happen pretty often:
-				this_key.hotkey_to_fire_upon_release = hotkey_id_with_flags;
-				hotkey_id_with_flags = HOTKEY_ID_INVALID;
-			}
-			else // hotkey_id_with_flags is either HOTKEY_ID_INVALID or a valid key-down hotkey.
-			{
-				hotkey_id_temp = hotkey_id_with_flags & HOTKEY_ID_MASK;
-				if (hotkey_id_temp < Hotkey::sHotkeyCount)
-					this_key.hotkey_to_fire_upon_release = hotkey_up[hotkey_id_temp]; // Might assign HOTKEY_ID_INVALID.
+				// Override any other prefix key that might be in effect with this one, in case the
+				// prior one, due to be old for example, was invalid somehow.  UPDATE: It seems better
+				// to leave the old one in effect to support the case where one prefix key is modifying
+				// a second one in its role as a suffix.  In other words, if key1 is a prefix and
+				// key2 is both a prefix and a suffix, we want to leave key1 in effect as a prefix,
+				// rather than key2.  Hence, a null-check was added in the above if-stmt:
+				pPrefixKey = &this_key;
+				// It should be safe to init this because even if the current key is repeating,
+				// it should be impossible to receive here the key-downs that occurred after
+				// the first, because there's a return-on-repeat check farther above (update: that check
+				// is gone now).  Even if that check weren't done, it's safe to reinitialize this to zero
+				// because on most (all?) keyboards & OSs, the moment the user presses another key while
+				// this one is held down, the key-repeating ceases and does not resume for
+				// this key (though the second key will begin to repeat if it too is held down).
+				// In other words, the fear that this would be wrongly initialized and thus cause
+				// this prefix's suffix-action to fire upon key-release seems unfounded.
+				// It seems easier (and may perform better than alternative ways) to init this
+				// here rather than say, upon the release of the prefix key:
+				this_key.was_just_used = 0; // Init to indicate it hasn't yet been used in its role as a prefix.
 			}
 		}
-		// Alt-tab need not be checked here (like it is in the similar section below) because all
-		// such hotkeys use (or were converted at load-time to use) a modifier_vk, not a set of
-		// modifiers or modifierlr's:
-		//if (hotkey_id_with_flags == HOTKEY_ID_INVALID && sAltTabMenuIsVisible)
-		//...
+		//else this prefix has no enabled suffixes, so its role as prefix is also disabled.
+		// Therefore, don't set pPrefixKey to this_key because don't want the following line
+		// (in another section) to execute when a suffix comes in (there may be other reasons too,
+		// such as not wanting to lose track of the previous prefix key in cases where the user is
+		// holding down more than one prefix):
+		// pPrefixKey->was_just_used = AS_PREFIX
+
+		if (this_key.used_as_suffix) // v1.0.41: Added this check to avoid doing all of the below when unnecessary.
+		{
+			// This new section was added May 30, 2004, to fix scenarios such as the following example:
+			// a & b::Msgbox a & b
+			// $^a::MsgBox a
+			// Previously, the ^a hotkey would only fire on key-up (unless it was registered, in which
+			// case it worked as intended on the down-event).  When the user presses A, it's okay (and
+			// probably desirable) to have recorded that event as a prefix-key-down event (above).
+			// But in addition to that, we now check if this is a normal, modified hotkey that should
+			// fire now rather than waiting for the key-up event.  This is done because it makes sense,
+			// it's more correct, and also it makes the behavior of a hooked ^a hotkey consistent with
+			// that of a registered ^a.
+
+			// Prior to considering whether to fire a hotkey, correct the hook's modifier state.
+			// Although this is rarely needed, there are times when the OS disables the hook, thus
+			// it is possible for it to miss keystrokes.  See comments in GetModifierLRState()
+			// for more info:
+			if (!modifiers_were_corrected)
+			{
+				modifiers_were_corrected = true;
+				GetModifierLRState(true);
+			}
+
+			// non_ignored is always used when considering whether a key combination is in place to
+			// trigger a hotkey:
+			modifiersLRnew = g_modifiersLR_logical_non_ignored;
+			if (this_key.as_modifiersLR) // This will always be false if our caller is the mouse hook.
+				// Hotkeys are not defined to modify themselves, so look for a match accordingly.
+				modifiersLRnew &= ~this_key.as_modifiersLR;
+			// For this case to be checked, there must be at least one modifier key currently down (other
+			// than this key itself if it's a modifier), because if there isn't and this prefix is also
+			// a suffix, its suffix action should only fire on key-up (i.e. not here, but later on).
+			// UPDATE: In v1.0.41, an exception to the above is when a prefix is disabled via
+			// has_no_enabled_suffixes, in which case it seems desirable for most uses to have its
+			// suffix action fire on key-down rather than key-up.
+			if (modifiersLRnew || has_no_enabled_suffixes)
+			{
+				// Check hook type too in case a script every explicitly specifies scan code zero as a hotkey:
+				hotkey_id_with_flags = (aHook == g_KeybdHook && sc_takes_precedence)
+					? Kscm(modifiersLRnew, aSC) : Kvkm(modifiersLRnew, aVK);
+				if (hotkey_id_with_flags & HOTKEY_KEY_UP) // And it's okay even if it's is HOTKEY_ID_INVALID.
+				{
+					// Queue it for later, which is done here rather than upon release of the key so that
+					// the user can release the key's modifiers before releasing the key itself, which
+					// is likely to happen pretty often:
+					this_key.hotkey_to_fire_upon_release = hotkey_id_with_flags;
+					hotkey_id_with_flags = HOTKEY_ID_INVALID;
+				}
+				else // hotkey_id_with_flags is either HOTKEY_ID_INVALID or a valid key-down hotkey.
+				{
+					hotkey_id_temp = hotkey_id_with_flags & HOTKEY_ID_MASK;
+					if (hotkey_id_temp < Hotkey::sHotkeyCount)
+						this_key.hotkey_to_fire_upon_release = hotkey_up[hotkey_id_temp]; // Might assign HOTKEY_ID_INVALID.
+					// Since this prefix key is being used in its capacity as a suffix instead,
+					// hotkey_id_with_flags now contains a hotkey ready for firing later below.
+				}
+			}
+			// Alt-tab need not be checked here (like it is in the similar section below) because all
+			// such hotkeys use (or were converted at load-time to use) a modifier_vk, not a set of
+			// modifiers or modifierlr's.
+		} // if (this_key.used_as_suffix)
 
 		if (hotkey_id_with_flags == HOTKEY_ID_INVALID)
 		{
+			if (has_no_enabled_suffixes)
+			{
+				this_key.no_suppress |= NO_SUPPRESS_NEXT_UP_EVENT; // Since the "down" is non-suppressed, so should the "up".
+				pKeyHistoryCurr->event_type = '#'; // '#' to indicate this prefix key is disabled due to #IfWin criterion.
+			}
 			// In this case, a key-down event can't trigger a suffix, so return immediately.
 			// If our caller is the mouse hook, both of the following will always be false:
 			// this_key.as_modifiersLR
 			// this_toggle_key_can_be_toggled
 			return (this_key.as_modifiersLR || (this_key.no_suppress & NO_SUPPRESS_PREFIX)
-				|| this_toggle_key_can_be_toggled) ? AllowKeyToGoToSystem : SuppressThisKey;
+				|| this_toggle_key_can_be_toggled || has_no_enabled_suffixes)
+				? AllowKeyToGoToSystem : SuppressThisKey;
 		}
+		//else valid suffix hotkey has been found; this will now fall through to Case #4 by virtue of aKeyUp==false.
 	}
 
 	//////////////////////////////////////////////////////////////////////////////////
@@ -781,18 +815,21 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 		//    is a mouse key.  Although very selective, it doesn't mitigate the fact it might still do more
 		//    harm than good and/or break existing scripts.
 		// In light of the above, it seems best to keep this documented here as a known limitation for now.
-		bool suppress_up_event;
-		if (this_key.no_suppress & NO_SUPPRESS_NEXT_UP_EVENT)
-		{
-			suppress_up_event = false;
-			this_key.no_suppress &= ~NO_SUPPRESS_NEXT_UP_EVENT;  // This ticket has been used up.
-		}
-		else // the default is to suppress the up-event.
-			suppress_up_event = true;
+		//
 		// v1.0.28: The following check is done to support certain keyboards whose keys or scroll wheels
 		// generate up events without first having generated any down-event for the key:
-		if (!this_key.used_as_key_up) // Let it be processed normally.
+		if (!this_key.used_as_key_up)
+		{
+			bool suppress_up_event;
+			if (this_key.no_suppress & NO_SUPPRESS_NEXT_UP_EVENT)
+			{
+				suppress_up_event = false;
+				this_key.no_suppress &= ~NO_SUPPRESS_NEXT_UP_EVENT;  // This ticket has been used up.
+			}
+			else // the default is to suppress the up-event.
+				suppress_up_event = true;
 			return (down_performed_action && suppress_up_event) ? SuppressThisKey : AllowKeyToGoToSystem;
+		}
 		//else continue checking to see if the right modifiers are down to trigger one of this
 		// suffix key's key-up hotkeys.
 	}
@@ -822,6 +859,12 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 		{
 			this_key.it_put_shift_down = false;
 			KeyEvent(KEYUP, VK_SHIFT);
+		}
+
+		if (this_key.no_suppress & NO_SUPPRESS_NEXT_UP_EVENT)  // v1.0.41
+		{
+			this_key.no_suppress &= ~NO_SUPPRESS_NEXT_UP_EVENT;  // This ticket has been used up.
+			return AllowKeyToGoToSystem; // This should handle pForceToggle for us, suppressing if necessary.
 		}
 
 		if (this_toggle_key_can_be_toggled) // Always false if our caller is the mouse hook.
@@ -872,6 +915,10 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 				return (this_key.no_suppress & NO_SUPPRESS_PREFIX) ? AllowKeyToGoToSystem : SuppressThisKey;
 			}
 
+		// v1.0.41: This spot cannot be reached when a disabled prefix key fires on key-down in Case #1
+		// because upon release, that prefix key would be returned from in Case #2 (by virtue of
+		// its check of down_performed_action).
+
 		// Since above didn't return, this key-up for this prefix key wasn't used in it's role
 		// as a prefix.  If it's not a suffix, we're done, so just return.  Don't do
 		// "DisguiseWinAlt" because we want the key's native key-up function to take effect.
@@ -901,14 +948,12 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 		// thought to be down before. One thing this helps with is certain keyboards (e.g. some
 		// Dells) that generate only up events for some of their special keys but no down events,
 		// even when *no* keyboard management software is installed). Some keyboards also have
-		// scroll wheels which generate up events in one direction and down in the other.
+		// scroll wheels that generate a stream of up events in one direction and down in the other.
 		if (!(was_down_before_up || this_key.used_as_key_up)) // Verified correct.
 			return AllowKeyToGoToSystem;
-
-		// v1.0.37.05: When a prefix key is released, it's suffix action should never fire...
-		// Since no suffix action was triggered while it was held down, fall through rather than
-		// returning, so that the key's own suffix action will be considered -- to be fired only if
-		// the right modifiers -- typically none -- are currently down:
+		//else v1.0.37.05: Since no suffix action was triggered while it was held down, fall through
+		// rather than returning so that the key's own unmodified/naked suffix action will be considered.
+		// For example:
 		// a & b::
 		// a::   // Prefix fires on key-up.
 	}
@@ -980,8 +1025,11 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 		} // for each prefix of this suffix
 		if (hotkey_id_with_flags != HOTKEY_ID_INVALID)
 		{
+			// Update pPrefixKey, even though it was probably already done close to the top of the function,
+			// just in case this for-loop changed the value pPrefixKey (perhaps because there
+			// is currently more than one prefix being held down).
 			// Since the hook is now designed to receive only left/right specific modifier keys
-			// -- never the neutral keys -- don't say that a neutral prefix key is down because
+			// -- never the neutral keys -- never indicate that a neutral prefix key is down because
 			// then it would never be released properly by the other main prefix/suffix handling
 			// cases of the hook.  Instead, always identify which prefix key (left or right) is
 			// in effect:
@@ -992,10 +1040,6 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 			case VK_MENU: pPrefixKey = kvk + (kvk[VK_RMENU].is_down ? VK_RMENU : VK_LMENU); break;
 			default: pPrefixKey = kvk + modifier_vk;
 			}
-			// Do this, even though it was probably already done close to the top of the function,
-			// just in case this for-loop changed the value pPrefixKey (perhaps because there
-			// is currently more than one prefix being held down):
-			pPrefixKey->was_just_used = AS_PREFIX_FOR_HOTKEY;
 		}
 		else // Now check scan codes since above didn't find a valid hotkey.
 		{
@@ -1031,11 +1075,11 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 				}
 			} // for()
 			if (hotkey_id_with_flags != HOTKEY_ID_INVALID)
-			{
+				// Update pPrefixKey, even though it was probably already done close to the top of the function,
+				// just in case this for-loop changed the value pPrefixKey (perhaps because there
+				// is currently more than one prefix being held down).
 				pPrefixKey = ksc + modifier_sc;
-				pPrefixKey->was_just_used = AS_PREFIX_FOR_HOTKEY;
-			}
-		}
+		} // The check for scan code vs. VK.
 		if (hotkey_id_with_flags == HOTKEY_ID_INVALID)
 		{
 			// Search again, but this time do it with this_key translated into its neutral counterpart.
@@ -1100,7 +1144,6 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 					case VK_MENU: pPrefixKey = kvk + (kvk[VK_RMENU].is_down ? VK_RMENU : VK_LMENU); break;
 					default: pPrefixKey = kvk + modifier_vk;
 					}
-					pPrefixKey->was_just_used = AS_PREFIX_FOR_HOTKEY;
 				}
 				else  // Now check scan codes since above didn't find one.
 				{
@@ -1136,17 +1179,24 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 						}
 					} // for()
 					if (hotkey_id_with_flags != HOTKEY_ID_INVALID)
-					{
-						pPrefixKey = ksc + modifier_sc;
-						pPrefixKey->was_just_used = AS_PREFIX_FOR_HOTKEY;
-					}
-				}
-			}
-		}
+						pPrefixKey = ksc + modifier_sc; // See the nearly identical section above for comments.
+				} // SC vs. VK
+			} // If this_key has a counterpart neutral modifer.
+		} // Above block searched for match using neutral modifier.
 
-		// Alt-tab: handled directly here rather than via posting a message back to the main window.
-		// In part, this is because it would be difficult to design a way to tell the main window when
-		// to release the alt-key:
+		if (hotkey_id_with_flags != HOTKEY_ID_INVALID)
+		{
+			// v1.0.41:
+			if (Hotkey::CriterionForbidsFiring(hotkey_id_with_flags, aKeyUp, this_key.no_suppress
+				, &pKeyHistoryCurr->event_type))
+				return AllowKeyToGoToSystem; // This should handle pForceToggle for us, suppressing if necessary.
+			pPrefixKey->was_just_used = AS_PREFIX_FOR_HOTKEY;
+		}
+		//else: No "else" here to avoid an extra indentation for the whole section below (it's not needed anyway).
+
+		// Alt-tab: Alt-tab actions that require a prefix key are handled directly here rather than via
+		// posting a message back to the main window.  In part, this is because it would be difficult
+		// to design a way to tell the main window when to release the alt-key.
 		hotkey_id_temp = hotkey_id_with_flags & HOTKEY_ID_MASK;
 		if (hotkey_id_temp == HOTKEY_ID_ALT_TAB || hotkey_id_temp == HOTKEY_ID_ALT_TAB_SHIFT)
 		{
@@ -1249,16 +1299,18 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 				this_key.hotkey_down_was_suppressed = true;
 			return SuppressThisKey;
 		} // end of alt-tab section.
+		// Since abov didn't return, this isn't a prefix-triggered alt-tab action (though it might be
+		// a non-prefix alt-tab action, which is handled later below).
 	} // end of section that searches for a suffix modified by the prefix that's currently held down.
 
-	if (hotkey_id_with_flags == HOTKEY_ID_INVALID)  // Keep checking since above didn't find one.
+	if (hotkey_id_with_flags == HOTKEY_ID_INVALID)  // Since above didn't find a hotkey, check if modifiers+this_key qualifies a firing.
 	{
 		modifiersLRnew = g_modifiersLR_logical_non_ignored;
 		if (this_key.as_modifiersLR)
 			// Hotkeys are not defined to modify themselves, so look for a match accordingly.
 			modifiersLRnew &= ~this_key.as_modifiersLR;
 		// Check hook type too in case a script every explicitly specifies scan code zero as a hotkey:
-		hotkey_id_with_flags = (aHook == g_KeybdHook && ksc[aSC].sc_takes_precedence)
+		hotkey_id_with_flags = (aHook == g_KeybdHook && sc_takes_precedence)
 			? Kscm(modifiersLRnew, aSC) : Kvkm(modifiersLRnew, aVK);
 		// Bug fix for v1.0.20: The below second attempt is no longer made if the current keystroke
 		// is a tab-down/up  This is because doing so causes any naked TAB that has been defined as
@@ -1282,7 +1334,7 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 			// activate an alt-tab related key (i.e. a special hotkey action such as AltTab
 			// that relies on the Alt key being logically but not physically down).
 			modifiersLRnew &= ~(MOD_LALT | MOD_RALT);
-			hotkey_id_with_flags = (aHook == g_KeybdHook && ksc[aSC].sc_takes_precedence)
+			hotkey_id_with_flags = (aHook == g_KeybdHook && sc_takes_precedence)
 				? Kscm(modifiersLRnew, aSC) : Kvkm(modifiersLRnew, aVK);
 			// Fix for v1.0.28: If the ID isn't an alt-tab type, don't consider it to be valid.
 			// Someone pointed out that pressing Alt-Tab and then pressing ESC while still holding
@@ -1290,7 +1342,7 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 			// Note: Both of the below checks must be done because the high-order bits of the
 			// hotkey_id_with_flags might be set to indicate no-suppress, etc:
 			hotkey_id_temp = hotkey_id_with_flags & HOTKEY_ID_MASK;
-			if (hotkey_id_temp >= HOTKEY_ID_INVALID || hotkey_id_temp <= HOTKEY_ID_MAX) // Ordered for short-circuit performance.
+			if (!IS_ALT_TAB(hotkey_id_temp))
 				hotkey_id_with_flags = HOTKEY_ID_INVALID; // Since it's not an Alt-tab action, don't fire this hotkey.
 		}
 
@@ -1358,10 +1410,14 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 					|| this_toggle_key_can_be_toggled) ? AllowKeyToGoToSystem : SuppressThisKey;
 				// v1.0.37.02: Added !this_key.used_as_prefix for mouse hook too (see comment above).
 
-			// For execution to have reached this point, the current key must be both a prefix and
-			// suffix, but be acting in its capacity as a suffix.  Since no hotkey action will fire,
-			// and since the key wasn't used as a prefix, I think that must mean that not all of
-			// the required modifiers aren't present.  Example "a & b = calc ... lshift & a = notepad".
+			// For execution to have reached this point, the following must be true:
+			// 1) aKeyUp==false
+			// 2) this_key must be both a prefix and suffix, but be acting in its capacity as a suffix.
+			// 3) No hotkey is eligible to fire.
+			// Since no hotkey action will fire, and since this_key wasn't used as a prefix, I think that
+			// must mean that not all of the required modifiers aren't present.  For example:
+			// a & b::Run calc
+			// LShift & a:: Run Notepad
 			// In that case, if the 'a' key is pressed and released by itself, perhaps its native
 			// function should be performed by suppressing this key-up event, replacing it with a
 			// down and up of our own.  However, it seems better not to do this, for now, since this
@@ -1373,27 +1429,50 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 			// it (at least it seems that I do this).  In any case, this default behavior can be
 			// changed by explicitly configuring 'a', in the example above, to be "Send, a".
 			// Here's a more complete example:
-			// a & b = notepad
-			// lcontrol & a = calc
-			// a = Send, a
+			// a & b:: Run Notepad
+			// LControl & a:: Run Calc
+			// a::Send a
 			// So the bottom line is that by default, a prefix key's native function is always
 			// suppressed except if it's a toggleable key such as num/caps/scroll-lock.
 			return (this_key.hotkey_to_fire_upon_release == HOTKEY_ID_INVALID
 				|| this_key.hotkey_to_fire_upon_release & HOTKEY_NO_SUPPRESS)
-				? AllowKeyToGoToSystem : SuppressThisKey;
+				? AllowKeyToGoToSystem : SuppressThisKey; // If the future up-event won't be suppressed, don't suppress this down either.
 		}
+		//else an eligible hotkey was found.
+	} // Final attempt to find hotkey based on suffix have the right combo of modifiers.
+
+	// Since above didn't return, hotkey_id_with_flags is now a valid hotkey.  The only thing that can
+	// stop it from firing now is CriterionForbidsFiring().
+
+	// v1.0.41: Below should be done prior to checking CriterionForbidsFiring() so that the
+	// NO_SUPPRESS_NEXT_UP_EVENT ticket is used up rather than staying around to possibly take effect for
+	// a future key-up for which it wasn't intended.
+	// Handling for NO_SUPPRESS_NEXT_UP_EVENT was added because it seems more correct that key-up
+	// hotkeys should obey NO_SUPPRESS_NEXT_UP_EVENT too.  The absence of this might have been inconsequential
+	// due to other safety/redundancies; but it seems more maintainable this way.
+	bool fire_with_no_suppress;
+	if ((this_key.no_suppress & NO_SUPPRESS_NEXT_UP_EVENT) && aKeyUp)
+	{
+		fire_with_no_suppress = true;
+		this_key.no_suppress &= ~NO_SUPPRESS_NEXT_UP_EVENT;  // This ticket has been used up.
 	}
+	else
+		fire_with_no_suppress = hotkey_id_with_flags & HOTKEY_NO_SUPPRESS;
+
+	// v1.0.41: This must be done prior to the setting of sDisguiseNextLWinUp and similar items below.
+	if (Hotkey::CriterionForbidsFiring(hotkey_id_with_flags, aKeyUp, this_key.no_suppress
+		, &pKeyHistoryCurr->event_type))
+		return AllowKeyToGoToSystem;
 
 	// Now above has ensured that everything is in place for an action to be performed.
 	// Determine the final ID at this late stage to improve maintainability:
 	HotkeyIDType hotkey_id_to_fire = hotkey_id_with_flags & HOTKEY_ID_MASK;
-	bool no_suppress = hotkey_id_with_flags & HOTKEY_NO_SUPPRESS; // Set default.
 
 	// If only a windows key was held down (and no other modifiers) to activate this hotkey,
-	// suppress the next win-up event so that the start menu won't appear (if other modifiers are present,
-	// there's no need to do this because the Start Menu doesn't appear, at least on WinXP).
-	// The appearance of the Start Menu would be caused by the fact that the hotkeys suffix key
-	// was suppressed, therefore the OS does not see that the WIN key "modified" anything while
+	// suppress the next win-up event so that the Start Menu won't appear (if other modifiers are
+	// present, there's no need to do this because the Start Menu doesn't appear, at least on WinXP).
+	// The appearance of the Start Menu would be caused by the fact that the hotkey's suffix key
+	// was suppressed, therefore the OS doesn't see that the WIN key "modified" anything while
 	// it was held down.  Note that if the WIN key is auto-repeating due to the user having held
 	// it down long enough, when the user presses the hotkey's suffix key, the auto-repeating
 	// stops, probably because auto-repeat is a very low-level feature.  It's also interesting
@@ -1468,15 +1547,6 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 		else
 			KeyEvent(KEYDOWNANDUP, VK_CONTROL);
 	}
-
-// This handles a pair of hotkeys such as the following by forcing tilde in front of the other:
-// ~a & b::
-// a::
-// However, the converse is not done because there is another workaround for that. Search
-// on "send a down event to make up" to find that section.
-	if (   aKeyUp && (aVK && (kvk[aVK].no_suppress & NO_SUPPRESS_PREFIX))
-		|| (aSC && (ksc[aSC].no_suppress & NO_SUPPRESS_PREFIX))   )
-		no_suppress = true;
 
 	switch (hotkey_id_to_fire)
 	{
@@ -1655,7 +1725,11 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 			break;
 		}
 		default:
-			// Notify the main thread (via its main window) of which hotkey has been pressed:
+			// Notify the main thread (via its main window) of which hotkey has been pressed.
+			// Post the message rather than sending it, because Send would need
+			// SendMessageTimeout(), which is undesirable because the whole point of
+			// making this hook thread separate from the main thread is to have it be
+			// maximally responsive (especially to prevent mouse cursor lag).
 			PostMessage(g_hWnd, AHK_HOOK_HOTKEY, hotkey_id_to_fire, 0);
 	}
 
@@ -1669,7 +1743,7 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 		// the what it was before the user pressed it (due to the policy that
 		// the natural function of a key should never take effect when that
 		// key is used as a hotkey suffix).  You could argue that instead
-		// of doing this, we should *pForceToggle's value to make the
+		// of doing this, we should change *pForceToggle's value to make the
 		// key untoggleable whenever it's both a prefix and a naked
 		// (key-up triggered) suffix.  However, this isn't too much harder
 		// and has the added benefit of allowing the key to be toggled if
@@ -1680,22 +1754,30 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 		return SuppressThisKey;
 	}
 
-	if (this_key.as_modifiersLR && aKeyUp)
-		// Since this hotkey is fired on a key-up event, and since it's a modifier, must
-		// not suppress the key because otherwise the system's state for this modifier
-		// key would be stuck down due to the fact that the previous down-event for this
-		// key (which is presumably a prefix *and* a suffix) was not suppressed. UPDATE:
-		// For v1.0.28, if the new field hotkey_down_was_suppressed is true, also suppress
-		// this up event, one purpose of which is to allow a pair of remappings such
-		// as the following to display the Start Menu (because otherwise the non-suppressed
-		// Alt key events would prevent it):
-		// *LAlt up::Send {LWin up}
-		// *LAlt::Send {LWin down}
-		return this_key.hotkey_down_was_suppressed ? SuppressThisKey : AllowKeyToGoToSystemButDisguiseWinAlt;
-
 	if (aKeyUp)
 	{
-		if (no_suppress) // Plus we know it's not a modifier since otherwise it would've returned above.
+		if (this_key.as_modifiersLR)
+			// Since this hotkey is fired on a key-up event, and since it's a modifier, must
+			// not suppress the key because otherwise the system's state for this modifier
+			// key would be stuck down due to the fact that the previous down-event for this
+			// key (which is presumably a prefix *and* a suffix) was not suppressed. UPDATE:
+			// For v1.0.28, if the new field hotkey_down_was_suppressed is true, also suppress
+			// this up event, one purpose of which is to allow a pair of remappings such
+			// as the following to display the Start Menu (because otherwise the non-suppressed
+			// Alt key events would prevent it):
+			// *LAlt up::Send {LWin up}
+			// *LAlt::Send {LWin down}
+			return this_key.hotkey_down_was_suppressed ? SuppressThisKey : AllowKeyToGoToSystemButDisguiseWinAlt;
+
+		// Adding the check of this_key.no_suppress fixes a pair of hotkeys such as the following by forcing
+		// tilde in front of the other:
+		// ~a & b::
+		// a::
+		// However, the converse is not done because there is another workaround for that. Search
+		// on "send a down event to make up" to find that section.
+		// Fixed in v1.0.41 to use this_key rather than referring to both kvk[aVK] and ksc[aSC].
+		// Although this bug had no known consequences, I suspect there were some obscure ones.
+		if (fire_with_no_suppress || (this_key.no_suppress & NO_SUPPRESS_PREFIX)) // Plus we know it's not a modifier since otherwise it would've returned above.
 		{
 			// Currently not supporting the mouse buttons for the above method, because KeyEvent()
 			// doesn't support the translation of a mouse-VK into a mouse_event() call.
@@ -1729,8 +1811,8 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 			// this_key.was_just_used is AS_PREFIX/AS_PREFIX_FOR_HOTKEY.
 			// Used as either a prefix for a hotkey or just a plain modifier for another key.
 			// ... && (*this_key.pForceToggle != NEUTRAL || this_key.was_just_used);
-			if ((!(this_key.no_suppress & NO_SUPPRESS_PREFIX) || this_key.hotkey_down_was_suppressed) // Down was suppressed.
-				&& !is_key_up_hotkey // v1.0.36.02: Prevents a hotkey such as "~5 up::" from generating double characters, regardless of whether it's paired with a "~5::" hotkey.
+			if (this_key.hotkey_down_was_suppressed // Down was suppressed.
+				&& !is_explicit_key_up_hotkey // v1.0.36.02: Prevents a hotkey such as "~5 up::" from generating double characters, regardless of whether it's paired with a "~5::" hotkey.
 				&& !suppress_to_prevent_toggle)
 				KeyEvent(KEYDOWN, aVK, aSC); // Substitute this to make up for the suppression (a check higher above has already determined that no_supress==true).
 				// Now allow the up-event to go through.  The DOWN should always wind up taking effect
@@ -1738,7 +1820,7 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 				// it resulted in a recursive call to this function (using our hook-thread
 				// rather than our main thread or some other thread):
 			return suppress_to_prevent_toggle ? SuppressThisKey : AllowKeyToGoToSystem;
-		} // no_suppress
+		} // No suppression.
 	}
 	else // Key Down
 	{
@@ -1749,9 +1831,9 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 		// This is because otherwise, a prefix key would not perform its normal function when it
 		// modifies a hook suffix that doesn't belong to it.  For example, if "Capslock & A"
 		// and "MButton" are both hotkeys, clicking the middle button while holding down Capslock
-		// will turn CapsLock On or Off as expected.  This should be okay because AS_PREFIX_FOR_HOTKEY
-		// in other places it needs to be except the following, which are still correctly handled
-		// here:
+		// should turn CapsLock On or Off as expected.  This should be okay because
+		// AS_PREFIX_FOR_HOTKEY is set in other places it needs to be except the following,
+		// which are still correctly handled here:
 		// 1) Fall through from Case #1, in which case this hotkey is one that uses normal
 		//    modifiers (i.e. not something like "Capslock & A").
 		// 2) Any hotkey similar to Case #1 that isn't actually handled by Case #1.
@@ -1760,7 +1842,7 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 		// consider the state of any prefix keys other than those that happen to be modifiers).
 		// In other words, pPrefixKey is down only incidentally and has nothing to do with
 		// triggering this hotkey.
-		// Update pPrefixKey in case the currently-down Prefix key is both a modifier
+		// Update pPrefixKey in case the currently-down prefix key is both a modifier
 		// and a normal prefix key (in which case it isn't stored in this_key's array
 		// of VK and SC prefixes, so this value wouldn't have yet been set).
 		// Update: The below is done even if pPrefixKey != &this_key, which happens
@@ -1770,7 +1852,7 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 		if (pPrefixKey && pPrefixKey->as_modifiersLR)
 			pPrefixKey->was_just_used = AS_PREFIX_FOR_HOTKEY;
 
-		if (no_suppress) // Plus we know it's not a modifier since otherwise it would've returned above.
+		if (fire_with_no_suppress)
 		{
 			// Since this hotkey is firing on key-down but the user specified not to suppress its native
 			// function, substitute an DOWN+UP pair of events for this event, since we want the
@@ -1802,7 +1884,7 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 				KeyEvent(KEYDOWNANDUP, VK_CONTROL);
 			// Since this is a hotkey that fires on ALT-DOWN and it's a normal (suppressed) hotkey,
 			// send an up-event to "turn off" the OS's low-level handling for the alt key with
-			// respect to having it modify keypresses.  For example, the following hotkey would
+			// respect to having it modify keypresses.  For example, the following hotkeys would
 			// fail to work properly without this workaround because the OS apparently sees that
 			// the ALT key is physically down even though it is not logically down:
 			// RAlt::Send f  ; Actually triggers !f, which activates the FILE menu if the active window has one.
@@ -2397,147 +2479,160 @@ bool CollectInput(KBDLLHOOKSTRUCT &aEvent, const vk_type aVK, const sc_type aSC,
 					for (; cphs >= hs.mString; --cpbuf, --cphs)
 						if (toupper(*cpbuf) != toupper(*cphs))
 							break;
-				// Relies on short-circuit boolean order:
-				if (cphs < hs.mString && (hs.mDetectWhenInsideWord || cpbuf < g_HSBuf || !IsCharAlphaNumeric(*cpbuf)))
+
+				// Check if one of the loops above found a matching hotstring (relies heavily on
+				// short-circuit boolean order):
+				if (   cphs >= hs.mString // One of the loops above stopped early due discovering "no match"...
+					// ... or it did but the "?" option is not present to protect from the fact that
+					// what lies to the left of this hotstring abbreviation is an alphanumberic character:
+					|| !hs.mDetectWhenInsideWord && cpbuf >= g_HSBuf && IsCharAlphaNumeric(*cpbuf)
+					// ... v1.0.41: Or it's a perfect match but the right window isn't active or doesn't exist.
+					// In that case, continue searching for other matches in case the script contains
+					// hotstrings that would trigger simultaneously were it not for the "only one" rule.
+					|| HotCriterionForbidsFiring(hs.mHotCriterion, hs.mHotWinTitle, hs.mHotWinText)   )
+					continue; // No match or not eligible to fire.
+
+				// MATCHING HOTSTRING WAS FOUND (since above didn't continue).
+				// Since default KeyDelay is 0, and since that is expected to be typical, it seems
+				// best to unconditionally post a message rather than trying to handle the backspacing
+				// and replacing here.  This is because a KeyDelay of 0 might be fairly slow at
+				// sending keystrokes if the system is under heavy load, in which case we would
+				// not be returning to our caller in a timely fashion, which would case the OS to
+				// think the hook is unreponsive, which in turn would cause it to timeout and
+				// route the key through anyway (testing confirms this).
+				if (!hs.mConformToCase)
+					case_conform_mode = CASE_CONFORM_NONE;
+				else
 				{
-					// MATCH FOUND
-					// Since default KeyDelay is 0, and since that is expected to be typical, it seems
-					// best to unconditionally post a message rather than trying to handle the backspacing
-					// and replacing here.  This is because a KeyDelay of 0 might be fairly slow at
-					// sending keystrokes if the system is under heavy load, in which case we would
-					// not be returning to our caller in a timely fashion, which would case the OS to
-					// think the hook is unreponsive, which in turn would cause it to timeout and
-					// route the key through anyway (testing confirms this).
-					if (!hs.mConformToCase)
+					// Find out what case the user typed the string in so that we can have the
+					// replacement produced in similar case:
+					cpcase_end = g_HSBuf + g_HSBufLength;
+					if (hs.mEndCharRequired)
+						--cpcase_end;
+					// Bug-fix for v1.0.19: First find out how many of the characters in the abbreviation
+					// have upper and lowercase versions (i.e. exclude digits, punctuation, etc):
+					for (case_capable_characters = 0, first_char_with_case_is_upper = first_char_with_case_has_gone_by = false
+						, cpcase_start = cpcase_end - hs.mStringLength
+						; cpcase_start < cpcase_end; ++cpcase_start)
+						if (IsCharLower(*cpcase_start) || IsCharUpper(*cpcase_start)) // A case-capable char.
+						{
+							if (!first_char_with_case_has_gone_by)
+							{
+								first_char_with_case_has_gone_by = true;
+								if (IsCharUpper(*cpcase_start))
+									first_char_with_case_is_upper = true; // Override default.
+							}
+							++case_capable_characters;
+						}
+					if (!case_capable_characters) // All characters in the abbreviation are caseless.
 						case_conform_mode = CASE_CONFORM_NONE;
-					else
+					else if (case_capable_characters == 1)
+						// Since there is only a single character with case potential, it seems best as
+						// a default behavior to capitalize the first letter of the replacment whenever
+						// that character was typed in uppercase.  The behavior can be overridden by
+						// turning off the case-conform mode.
+						case_conform_mode = first_char_with_case_is_upper ? CASE_CONFORM_FIRST_CAP : CASE_CONFORM_NONE;
+					else // At least two characters have case potential. If all of them are upper, use ALL_CAPS.
 					{
-						// Find out what case the user typed the string in so that we can have the
-						// replacement produced in similar case:
-						cpcase_end = g_HSBuf + g_HSBufLength;
-						if (hs.mEndCharRequired)
-							--cpcase_end;
-						// Bug-fix for v1.0.19: First find out how many of the characters in the abbreviation
-						// have upper and lowercase versions (i.e. exclude digits, punctuation, etc):
-						for (case_capable_characters = 0, first_char_with_case_is_upper = first_char_with_case_has_gone_by = false
-							, cpcase_start = cpcase_end - hs.mStringLength
-							; cpcase_start < cpcase_end; ++cpcase_start)
-							if (IsCharLower(*cpcase_start) || IsCharUpper(*cpcase_start)) // A case-capable char.
-							{
-								if (!first_char_with_case_has_gone_by)
-								{
-									first_char_with_case_has_gone_by = true;
-									if (IsCharUpper(*cpcase_start))
-										first_char_with_case_is_upper = true; // Override default.
-								}
-								++case_capable_characters;
-							}
-						if (!case_capable_characters) // All characters in the abbreviation are caseless.
+						if (!first_char_with_case_is_upper) // It can't be either FIRST_CAP or ALL_CAPS.
 							case_conform_mode = CASE_CONFORM_NONE;
-						else if (case_capable_characters == 1)
-							// Since there is only a single character with case potential, it seems best as
-							// a default behavior to capitalize the first letter of the replacment whenever
-							// that character was typed in uppercase.  The behavior can be overridden by
-							// turning off the case-conform mode.
-							case_conform_mode = first_char_with_case_is_upper ? CASE_CONFORM_FIRST_CAP : CASE_CONFORM_NONE;
-						else // At least two characters have case potential. If all of them are upper, use ALL_CAPS.
+						else // First char is uppercase, and if all the others are too, this will be ALL_CAPS.
 						{
-							if (!first_char_with_case_is_upper) // It can't be either FIRST_CAP or ALL_CAPS.
-								case_conform_mode = CASE_CONFORM_NONE;
-							else // First char is uppercase, and if all the others are too, this will be ALL_CAPS.
-							{
-								case_conform_mode = CASE_CONFORM_FIRST_CAP; // Set default.
-								// Bug-fix for v1.0.19: Changed !IsCharUpper() below to IsCharLower() so that
-								// caseless characters such as the @ symbol do not disqualify an abbreviation
-								// from being considered "all uppercase":
-								for (cpcase_start = cpcase_end - hs.mStringLength; cpcase_start < cpcase_end; ++cpcase_start)
-									if (IsCharLower(*cpcase_start)) // Use IsCharLower to better support chars from non-English languages.
-										break; // Any lowercase char disqualifies CASE_CONFORM_ALL_CAPS.
-								if (cpcase_start == cpcase_end) // All case-possible characters are uppercase.
-									case_conform_mode = CASE_CONFORM_ALL_CAPS;
-								//else leave it at the default set above.
-							}
+							case_conform_mode = CASE_CONFORM_FIRST_CAP; // Set default.
+							// Bug-fix for v1.0.19: Changed !IsCharUpper() below to IsCharLower() so that
+							// caseless characters such as the @ symbol do not disqualify an abbreviation
+							// from being considered "all uppercase":
+							for (cpcase_start = cpcase_end - hs.mStringLength; cpcase_start < cpcase_end; ++cpcase_start)
+								if (IsCharLower(*cpcase_start)) // Use IsCharLower to better support chars from non-English languages.
+									break; // Any lowercase char disqualifies CASE_CONFORM_ALL_CAPS.
+							if (cpcase_start == cpcase_end) // All case-possible characters are uppercase.
+								case_conform_mode = CASE_CONFORM_ALL_CAPS;
+							//else leave it at the default set above.
 						}
 					}
-
-					// Put the end char in the LOWORD and the case_conform_mode in the HIWORD.
-					// Casting to UCHAR might be necessary to avoid problems when MAKELONG
-					// casts a signed char to an unsigned WORD:
-					PostMessage(g_hWnd, AHK_HOTSTRING, u, MAKELONG(hs.mEndCharRequired
-						? (UCHAR)g_HSBuf[g_HSBufLength - 1] : 0, case_conform_mode));
-					// Clean up.
-					if (*hs.mReplacement)
-					{
-						// Since the buffer no longer reflects what is actually on screen to the left
-						// of the caret position (since a replacement is about to be done), reset the
-						// buffer, except for any end-char (since that might legitimately form part
-						// of another hot string adjacent to the one just typed).  The end-char
-						// sent by DoReplace() won't be captured (since it's "ignored input", which
-						// is why it's put into the buffer manually here):
-						if (hs.mEndCharRequired)
-						{
-							*g_HSBuf = g_HSBuf[g_HSBufLength - 1];
-							g_HSBufLength = 1;
-						}
-						else
-							g_HSBufLength = 0;
-					}
-					else if (hs.mDoBackspace)
-					{
-						// It's *not* a replacement, but we're doing backspaces, so adjust buf for backspaces
-						// and the fact that the final char of the HS (if no end char) or the end char
-						// (if end char required) will have been suppressed and never made it to the
-						// active window.  A simpler way to understand is to realize that the buffer now
-						// contains (for recognition purposes, in its right side) the hotstring and its
-						// end char (if applicable), so remove both:
-						g_HSBufLength -= hs.mStringLength;
-						if (hs.mEndCharRequired)
-							--g_HSBufLength;
-					}
-
-					// v1.0.38.04: Fixed the following mDoReset section by moving it beneath the above because
-					// the above relies on the fact that the buffer has not yet been reset.
-					// v1.0.30: mDoReset was added to prevent hotstrings such as the following
-					// from firing twice in a row, if you type 11 followed by another 1 afterward:
-					//:*?B0:11::
-					//MsgBox,0,test,%A_ThisHotkey%,1 ; Show which key was pressed and close the window after a second.
-					//return
-					// There are probably many other uses (albeit obscure) for the reset option (this has
-					// been brought up in the forum at least twice).
-					if (hs.mDoReset)
-						g_HSBufLength = 0; // Further below, the buffer will be terminated to reflect this change.
-
-					// In case the above changed the value of g_HSBufLength, terminate the buffer at that position:
-					g_HSBuf[g_HSBufLength] = '\0';
-
-					if (hs.mDoBackspace || hs.mOmitEndChar) // Fix for v1.0.37.07: Added hs.mOmitEndChar so that B0+O will omit the ending character.
-					{
-						// Have caller suppress this final key pressed by the user, since it would have
-						// to be backspaced over anyway.  Even if there is a visible Input command in
-						// progress, this should still be okay since the input will still see the key,
-						// it's just that the active window won't see it, which is okay since once again
-						// it would have to be backspaced over anyway.  UPDATE: If an Input is in progress,
-						// it should not receive this final key because otherwise the hotstring's backspacing
-						// would backspace one too few times from the Input's point of view, thus the input
-						// would have one extra, unwanted character left over (namely the first character
-						// of the hotstring's abbreviation).  However, this method is not a complete
-						// solution because it fails to work under a situation such as the following:
-						// A hotstring script is started, followed by a separate script that uses the
-						// Input command.  The Input script's hook will take precedence (since it was
-						// started most recently), thus when the Hotstring's script's hook does sends
-						// its replacement text, the Input script's hook will get a hold of it first
-						// before the Hotstring's script has a chance to suppress it.  In other words,
-						// The Input command command capture the ending character and then there will
-						// be insufficient backspaces sent to clear the abbrevation out of it.  This
-						// situation is quite rare so for now it's just mentioned here as a known limitation.
-						treat_as_visible = false; // It might already have been false due to an invisible-input in progress, etc.
-						suppress_hotstring_final_char = true; // This var probably must be separate from treat_as_visible to support invisible inputs.
-					}
-					break;
 				}
+
+				// Post the message rather than sending it, because Send would need
+				// SendMessageTimeout(), which is undesirable because the whole point of
+				// making this hook thread separate from the main thread is to have it be
+				// maximally responsive (especially to prevent mouse cursor lag).
+				// Put the end char in the LOWORD and the case_conform_mode in the HIWORD.
+				// Casting to UCHAR might be necessary to avoid problems when MAKELONG
+				// casts a signed char to an unsigned WORD:
+				PostMessage(g_hWnd, AHK_HOTSTRING, u, MAKELONG(hs.mEndCharRequired
+					? (UCHAR)g_HSBuf[g_HSBufLength - 1] : 0, case_conform_mode));
+				// Clean up.
+				if (*hs.mReplacement)
+				{
+					// Since the buffer no longer reflects what is actually on screen to the left
+					// of the caret position (since a replacement is about to be done), reset the
+					// buffer, except for any end-char (since that might legitimately form part
+					// of another hot string adjacent to the one just typed).  The end-char
+					// sent by DoReplace() won't be captured (since it's "ignored input", which
+					// is why it's put into the buffer manually here):
+					if (hs.mEndCharRequired)
+					{
+						*g_HSBuf = g_HSBuf[g_HSBufLength - 1];
+						g_HSBufLength = 1;
+					}
+					else
+						g_HSBufLength = 0;
+				}
+				else if (hs.mDoBackspace)
+				{
+					// It's *not* a replacement, but we're doing backspaces, so adjust buf for backspaces
+					// and the fact that the final char of the HS (if no end char) or the end char
+					// (if end char required) will have been suppressed and never made it to the
+					// active window.  A simpler way to understand is to realize that the buffer now
+					// contains (for recognition purposes, in its right side) the hotstring and its
+					// end char (if applicable), so remove both:
+					g_HSBufLength -= hs.mStringLength;
+					if (hs.mEndCharRequired)
+						--g_HSBufLength;
+				}
+
+				// v1.0.38.04: Fixed the following mDoReset section by moving it beneath the above because
+				// the above relies on the fact that the buffer has not yet been reset.
+				// v1.0.30: mDoReset was added to prevent hotstrings such as the following
+				// from firing twice in a row, if you type 11 followed by another 1 afterward:
+				//:*?B0:11::
+				//MsgBox,0,test,%A_ThisHotkey%,1 ; Show which key was pressed and close the window after a second.
+				//return
+				// There are probably many other uses for the reset option (albeit obscure, but they have
+				// been brought up in the forum at least twice).
+				if (hs.mDoReset)
+					g_HSBufLength = 0; // Further below, the buffer will be terminated to reflect this change.
+
+				// In case the above changed the value of g_HSBufLength, terminate the buffer at that position:
+				g_HSBuf[g_HSBufLength] = '\0';
+
+				if (hs.mDoBackspace || hs.mOmitEndChar) // Fix for v1.0.37.07: Added hs.mOmitEndChar so that B0+O will omit the ending character.
+				{
+					// Have caller suppress this final key pressed by the user, since it would have
+					// to be backspaced over anyway.  Even if there is a visible Input command in
+					// progress, this should still be okay since the input will still see the key,
+					// it's just that the active window won't see it, which is okay since once again
+					// it would have to be backspaced over anyway.  UPDATE: If an Input is in progress,
+					// it should not receive this final key because otherwise the hotstring's backspacing
+					// would backspace one too few times from the Input's point of view, thus the input
+					// would have one extra, unwanted character left over (namely the first character
+					// of the hotstring's abbreviation).  However, this method is not a complete
+					// solution because it fails to work under a situation such as the following:
+					// A hotstring script is started, followed by a separate script that uses the
+					// Input command.  The Input script's hook will take precedence (since it was
+					// started most recently), thus when the Hotstring's script's hook does sends
+					// its replacement text, the Input script's hook will get a hold of it first
+					// before the Hotstring's script has a chance to suppress it.  In other words,
+					// The Input command will capture the ending character and then there will
+					// be insufficient backspaces sent to clear the abbrevation out of it.  This
+					// situation is quite rare so for now it's just mentioned here as a known limitation.
+					treat_as_visible = false; // It might already have been false due to an invisible-input in progress, etc.
+					suppress_hotstring_final_char = true; // This var probably must be separate from treat_as_visible to support invisible inputs.
+				}
+				break; // Above would have done "continue" if a match wasn't found.
 			} // for()
 		} // if buf not empty
-	} // Yes, do collect hotstring input.
+	} // Yes, collect hotstring input.
 
 	// Fix for v1.0.37.06: The following section was moved beneath the hotstring section so that
 	// the hotstring section has a chance to set treat_as_visible to false for use below. This fixes
@@ -4074,7 +4169,8 @@ void GetHookStatus(char *aBuf, int aBufSize)
 		"of the history buffer.  For example: #KeyHistory 100  (Default is 40, Max is 500)"
 		"\r\n\r\nThe oldest are listed first.  VK=Virtual Key, SC=Scan Code, Elapsed=Seconds since the previous event"
 		", Types: h=Hook Hotkey"
-		", s=Suppressed (hidden from system), i=Ignored because it was generated by the script itself.\r\n\r\n"
+		", s=Suppressed (hidden from system), i=Ignored because it was generated by the script itself"
+		", #=Disabled via #IfWinActive/Exist.\r\n\r\n"
 		"VK  SC\tType\tUp/Dn\tElapsed\tKey\t\tWindow\r\n"
 		"-------------------------------------------------------------------------------------------------------------");
 

@@ -29,16 +29,16 @@ GNU General Public License for more details.
 // window like the shell or the desktop:
 #define USE_FOREGROUND_WINDOW(title, text, exclude_title, exclude_text)\
 	((*title == 'A' || *title == 'a') && !*(title + 1) && !*text && !*exclude_title && !*exclude_text)
-#define SET_TARGET_TO_ALLOWABLE_FOREGROUND \
+#define SET_TARGET_TO_ALLOWABLE_FOREGROUND(detect_hidden_windows) \
 {\
 	if (target_window = GetForegroundWindow())\
-		if (!g.DetectHiddenWindows && !IsWindowVisible(target_window))\
+		if (!(detect_hidden_windows) && !IsWindowVisible(target_window))\
 			target_window = NULL;\
 }
-#define IF_USE_FOREGROUND_WINDOW(title, text, exclude_title, exclude_text)\
+#define IF_USE_FOREGROUND_WINDOW(detect_hidden_windows, title, text, exclude_title, exclude_text)\
 if (USE_FOREGROUND_WINDOW(title, text, exclude_title, exclude_text))\
 {\
-	SET_TARGET_TO_ALLOWABLE_FOREGROUND\
+	SET_TARGET_TO_ALLOWABLE_FOREGROUND(detect_hidden_windows)\
 }
 
 
@@ -86,6 +86,7 @@ public:
 	DWORD mCriteria; // Which criteria are currently in effect (ID, PID, Class, Title, etc.)
 
 	// Controlled and initialized by SetCriteria():
+	global_struct *mSettings;                 // Settings such as TitleMatchMode and DetectHiddenWindows.
 	char mCriterionTitle[SEARCH_PHRASE_SIZE]; // For storing the title.
 	char mCriterionClass[SEARCH_PHRASE_SIZE]; // For storing the "ahk_class" class name.
 	size_t mCriterionTitleLength;             // Length of mCriterionTitle.
@@ -115,7 +116,7 @@ public:
 	char mCandidateTitle[WINDOW_TEXT_SIZE];  // For storing title or class name of the given mCandidateParent.
 	char mCandidateClass[WINDOW_CLASS_SIZE]; // Must not share mem with mCandidateTitle because even if ahk_class is in effect, ExcludeTitle can also be in effect.
 
-	void SetCandidate(HWND aWnd)
+	void SetCandidate(HWND aWnd) // Must be kept thread-safe since it may be called indirectly by the hook thread.
 	{
 		// For performance reasons, update the attributes only if the candidate window changed:
 		if (mCandidateParent != aWnd)
@@ -125,7 +126,7 @@ public:
 		}
 	}
 
-	ResultType SetCriteria(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
+	ResultType SetCriteria(global_struct &aSettings, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	void UpdateCandidateAttributes();
 	HWND IsMatch(bool aInvert = false);
 
@@ -207,7 +208,7 @@ struct point_and_hwnd_type
 };
 
 
-HWND WinActivate(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
+HWND WinActivate(global_struct &aSettings, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
 	, bool aFindLastMatch = false
 	, HWND aAlreadyVisited[] = NULL, int aAlreadyVisitedCount = 0);
 HWND SetForegroundWindowEx(HWND aWnd);
@@ -215,17 +216,18 @@ HWND SetForegroundWindowEx(HWND aWnd);
 // Defaulting to a non-zero wait-time solves a lot of script problems that would otherwise
 // require the user to specify the last param (or use WinWaitClose):
 #define DEFAULT_WINCLOSE_WAIT 20
-HWND WinClose(char *aTitle, char *aText, int aTimeToWaitForClose = DEFAULT_WINCLOSE_WAIT
+HWND WinClose(global_struct &aSettings, char *aTitle, char *aText, int aTimeToWaitForClose = DEFAULT_WINCLOSE_WAIT
 	, char *aExcludeTitle = "", char *aExcludeText = "", bool aKillIfHung = false);
 HWND WinClose(HWND aWnd, int aTimeToWaitForClose = DEFAULT_WINCLOSE_WAIT, bool aKillIfHung = false);
 
-HWND WinActive(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText, bool aUpdateLastUsed = false);
+HWND WinActive(global_struct &aSettings, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
+	, bool aUpdateLastUsed = false);
 
-HWND WinExist(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
+HWND WinExist(global_struct &aSettings, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText
 	, bool aFindLastMatch = false, bool aUpdateLastUsed = false
 	, HWND aAlreadyVisited[] = NULL, int aAlreadyVisitedCount = 0);
 
-HWND GetValidLastUsedWindow();
+HWND GetValidLastUsedWindow(global_struct &aSettings);
 
 BOOL CALLBACK EnumParentFind(HWND hwnd, LPARAM lParam);
 BOOL CALLBACK EnumChildFind(HWND hwnd, LPARAM lParam);
@@ -270,30 +272,6 @@ bool IsWindowHung(HWND aWnd);
 // Windows uses as the cutoff for determining if a window has become "unresponsive":
 int GetWindowTextTimeout(HWND aWnd, char *aBuf = NULL, int aBufSize = 0, UINT aTimeout = 5000);
 void SetForegroundLockTimeout();
-
-
-inline int GetWindowTextByTitleMatchMode(HWND aWnd, char *aBuf = NULL, int aBufSize = 0)
-// aBufSize is an int so that any negative values passed in from caller are not lost.
-{
-	// Due to potential key and mouse lag caused by GetWindowTextTimeout() preventing us
-	// from pumping messages for up to several seconds at a time (only if the user has specified
-	// that the hook(s) be installed), it might be best to always attempt GetWindowText() prior
-	// to the GetWindowTextTimeout().  Only if GetWindowText() gets 0 length would we try the other
-	// method (and of course, don't bother using GetWindowTextTimeout() at all if "fast" mode is in
-	// effect).  The problem with this is that many controls always return 0 length regardless of
-	// which method is used, so this would slow things down a little (but not too badly since
-	// GetWindowText() is so much faster than GetWindowTextTimeout()).  Another potential problem
-	// is that some controls may return less text, or different text, when used with the fast mode
-	// vs. the slow mode (unverified).  So it seems best NOT to do this and stick with the simple
-	// approach below.
-	if (g.TitleFindFast)
-		return GetWindowText(aWnd, aBuf, aBufSize);
-	else
-		// We're using the slower method that is able to get text from more types of
-		// controls (e.g. large edit controls).
-		return GetWindowTextTimeout(aWnd, aBuf, aBufSize);
-}
-
 
 
 // Notes about the below macro:

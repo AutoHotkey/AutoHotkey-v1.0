@@ -42,6 +42,7 @@ EXTERN_SCRIPT;  // For g_script.
 #define HOTKEY_ID_ON                   0x01  // This and the next 2 are used only for convenience by ConvertAltTab().
 #define HOTKEY_ID_OFF                  0x02
 #define HOTKEY_ID_TOGGLE               0x03
+#define IS_ALT_TAB(id) (id > HOTKEY_ID_MAX && id < HOTKEY_ID_INVALID)
 
 #define COMPOSITE_DELIMITER " & "
 #define COMPOSITE_DELIMITER_LENGTH 3
@@ -59,6 +60,8 @@ typedef UCHAR HotkeyTypeType;
 #define HK_JOYSTICK     5
 #define TYPE_IS_HOOK(type) (type == HK_KEYBD_HOOK || type == HK_MOUSE_HOOK || type == HK_BOTH_HOOKS)
 
+enum HotCriterionType {HOT_NO_CRITERION, HOT_IF_ACTIVE, HOT_IF_NOT_ACTIVE, HOT_IF_EXIST, HOT_IF_NOT_EXIST}; // HOT_NO_CRITERION must be zero.
+bool HotCriterionForbidsFiring(HotCriterionType aHotCriterion, char *aWinTitle, char *aWinText); // Used by hotkeys and hotstrings.
 
 class Hotkey
 {
@@ -199,7 +202,7 @@ public:
 	#define NO_SUPPRESS_SUFFIX 0x01 // Bitwise: Bit #1
 	#define NO_SUPPRESS_PREFIX 0x02 // Bitwise: Bit #2
 	#define NO_SUPPRESS_NEXT_UP_EVENT 0x04 // Bitwise: Bit #3
-	UCHAR mNoSuppress;  // Normally 0, but can be overridden by using the hotkey tilde (~) prefix.
+	UCHAR mNoSuppress;  // Uses the flags above.  Normally 0, but can be overridden by using the hotkey tilde (~) prefix).
 	bool mAllowExtraModifiers;  // False if the hotkey should not fire when extraneous modifiers are held down.
 	bool mKeyUp; // A hotkey that should fire on key-up.
 	bool mVK_WasSpecifiedByNumber; // A hotkey defined by something like "VK24::" or "Hotkey, VK24, ..."
@@ -210,7 +213,9 @@ public:
 	bool mRunAgainAfterFinished;
 	bool mConstructedOK;
 	UCHAR mExistingThreads, mMaxThreads;
+	HotCriterionType mHotCriterion;
 
+	char *mHotWinTitle, *mHotWinText;
 	Label *mJumpToLabel;
 	int mPriority;
 	DWORD mRunAgainTime;
@@ -224,6 +229,9 @@ public:
 	static ResultType Dynamic(char *aHotkeyName, Label *aJumpToLabel, HookActionType aHookAction, char *aOptions);
 	ResultType UpdateHotkey(Label *aJumpToLabel, HookActionType aHookAction);
 	static ResultType AddHotkey(Label *aJumpToLabel, HookActionType aHookAction, char *aName = NULL);
+	static bool PrefixHasNoEnabledSuffixes(int aVKorSC, bool aIsSC);
+	static bool CriterionForbidsFiring(HotkeyIDType aHotkeyIDwithFlags, bool aKeyUp, UCHAR &aNoSuppress
+		, char *aSingleChar);
 	static ResultType PerformID(HotkeyIDType aHotkeyID);
 	static void TriggerJoyHotkeys(int aJoystickID, DWORD aButtonsNewlyDown);
 	static ResultType AllDeactivate(bool aObeySuspend, bool aChangeHookStatus = true, bool aKeepHookIfNeeded = false);
@@ -329,11 +337,14 @@ public:
 	static HotstringIDType sHotstringCountMax;
 
 	Label *mJumpToLabel;
-	char *mString, *mReplacement;
+	char *mString, *mReplacement, *mHotWinTitle, *mHotWinText;
+	int mPriority, mKeyDelay;
+
+	// Keep members that are smaller than 32-bit adjacent with each other to conserve memory (due to 4-byte alignment).
+	HotCriterionType mHotCriterion;
 	UCHAR mStringLength;
 	bool mSuspended;
 	UCHAR mExistingThreads, mMaxThreads;
-	int mPriority, mKeyDelay;
 	bool mCaseSensitive, mConformToCase, mDoBackspace, mOmitEndChar, mSendRaw, mEndCharRequired
 		, mDetectWhenInsideWord, mDoReset, mConstructedOK;
 

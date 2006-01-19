@@ -413,7 +413,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 								// Use a temp variable because numeric_literal requires that op_end be set properly:
 								char *pow_temp = omit_leading_whitespace(op_end);
 								if (!(pow_temp[0] == '*' && pow_temp[1] == '*'))
-									goto numeric_literal; // Goto is used for performance and also as a patch to minimize the change of breaking other things with a redesign.
+									goto numeric_literal; // Goto is used for performance and also as a patch to minimize the chance of breaking other things via redesign.
 								//else leave this unary minus as an operator.
 							}
 							//else possible double deref, so leave this unary minus as an operator.

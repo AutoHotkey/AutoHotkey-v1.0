@@ -29,7 +29,12 @@ int WinGroup::sAlreadyVisitedCount = 0;
 ResultType WinGroup::AddWindow(char *aTitle, char *aText, void *aJumpToLine, char *aExcludeTitle, char *aExcludeText)
 // Caller should ensure that at least one param isn't NULL/blank.
 // GroupActivate will tell its caller to jump to aJumpToLine if a WindowSpec isn't found.
+// This function is not thread-safe because it adds an entry to the list of window specs.
+// In addition, if this function is being called by one thread while another thread is calling IsMember(),
+// the thread-safety notes in IsMember() apply.
 {
+	// v1.0.41: If a window group can ever be deleted (or its window specs), that might defeat the
+	// thread-safety of WinExist/WinActive.
 	// v1.0.36.05: If all four window parameters are blank, allow it to be added but provide
 	// a non-blank ExcludeTitle so that the window-finding routines won't see it as the
 	// "last found window".  99.99% of the time, it is undesirable to have Program Manager
@@ -56,6 +61,9 @@ ResultType WinGroup::AddWindow(char *aTitle, char *aText, void *aJumpToLine, cha
 	if (!(new_exclude_title = SimpleHeap::Malloc(aExcludeTitle))) return FAIL;
 	if (!(new_exclude_text = SimpleHeap::Malloc(aExcludeText)))   return FAIL;
 
+	// The precise method by which the follows steps are done should be thread-safe even if
+	// some other thread calls IsMember() in the middle of the operation.  But any changes
+	// must be carefully reviewed:
 	WindowSpec *the_new_win = new WindowSpec(new_title, new_text, aJumpToLine, new_exclude_title, new_exclude_text);
 	if (the_new_win == NULL)
 		return g_script.ScriptError(ERR_OUTOFMEM);
@@ -104,7 +112,7 @@ ResultType WinGroup::CloseAndGoToNext(bool aStartWithMostRecent)
 	HWND fore_win = GetForegroundWindow();
 	// Even if it's NULL, don't return since the legacy behavior is to continue on to the final part below.
 
-	WindowSpec *win_spec = IsMember(fore_win);
+	WindowSpec *win_spec = IsMember(fore_win, g);
 	if (   (mIsModeActivate && win_spec) || (!mIsModeActivate && !win_spec)   )
 	{
 		// If the user is using a GroupActivate hotkey, we don't want to close
@@ -157,7 +165,7 @@ ResultType WinGroup::Activate(bool aStartWithMostRecent, WindowSpec *aWinSpec, v
 		// marking it as visited, because we want to stay on this window under
 		// the assumption that it was newly revealed due to a window on top
 		// of it having just been closed:
-		if (win_to_activate_next == IsMember(fore_hwnd))
+		if (win_to_activate_next == IsMember(fore_hwnd, g))
 		{
 			group_is_active = true;
 			MarkAsVisited(fore_hwnd);
@@ -170,7 +178,7 @@ ResultType WinGroup::Activate(bool aStartWithMostRecent, WindowSpec *aWinSpec, v
 	}
 	else // Caller didn't tell us which, so determine it.
 	{
-		if (win_to_activate_next = IsMember(fore_hwnd)) // Foreground window is a member of this group.
+		if (win_to_activate_next = IsMember(fore_hwnd, g)) // Foreground window is a member of this group.
 		{
 			// Set it to activate this same WindowSpec again in case there's
 			// more than one that matches (e.g. multiple notepads).  But first,
@@ -211,7 +219,7 @@ ResultType WinGroup::Activate(bool aStartWithMostRecent, WindowSpec *aWinSpec, v
 		// because when the sequence wraps around to the beginning, the windows will
 		// occur in the same order that they did the first time, rather than going
 		// backwards through the sequence (which is counterintuitive for the user):
-		if (   activate_win = WinActivate(win->mTitle, win->mText, win->mExcludeTitle, win->mExcludeText
+		if (   activate_win = WinActivate(g, win->mTitle, win->mText, win->mExcludeTitle, win->mExcludeText
 			// This next line is whether to find last or first match.  We always find the oldest
 			// (bottommost) match except when the user has specifically asked to start with the
 			// most recent.  But it only makes sense to start with the most recent if the
@@ -290,7 +298,7 @@ ResultType WinGroup::Deactivate(bool aStartWithMostRecent)
 		return FAIL;  // It already displayed the error for us.
 
 	HWND fore_hwnd = GetForegroundWindow();
-	if (IsMember(fore_hwnd))
+	if (IsMember(fore_hwnd, g))
 		sAlreadyVisitedCount = 0;
 
 	// Activate the next unvisited non-member:
@@ -371,19 +379,25 @@ inline ResultType WinGroup::Update(bool aIsModeActivate)
 
 
 
-WindowSpec *WinGroup::IsMember(HWND aWnd)
+WindowSpec *WinGroup::IsMember(HWND aWnd, global_struct &aSettings)
+// Thread-safety: This function is thread-safe even when the main thread happens to be calling AddWindow()
+// and changing the linked list while it's being traversed here by the hook thread.  However, any subsequent
+// changes to this function or AddWindow() must be carefully reviewed.
+// Although our caller may be a WindowSearch method, and thus we might make
+// a recursive call back to that same method, things have been reviewed to ensure that
+// thread-safety is maintained, even if the calling thread is the hook.
 {
 	if (!aWnd)
 		return NULL;  // Some callers on this.
 	WindowSearch ws;
 	ws.SetCandidate(aWnd);
-	for (WindowSpec *win = mFirstWindow;;)
+	for (WindowSpec *win = mFirstWindow; win != NULL;)  // v1.0.41: "win != NULL" was added for thread-safety.
 	{
-		if (ws.SetCriteria(win->mTitle, win->mText, win->mExcludeTitle, win->mExcludeText) && ws.IsMatch())
+		if (ws.SetCriteria(aSettings, win->mTitle, win->mText, win->mExcludeTitle, win->mExcludeText) && ws.IsMatch())
 			return win;
 		// Otherwise, no match, so go onto the next one:
 		win = win->mNextWindow;
-		if (win == mFirstWindow)
+		if (!win || win == mFirstWindow) // v1.0.41: The check of !win was added for thread-safety.
 			// We've made one full circuit of the circular linked list,
 			// discovering that the foreground window isn't a member
 			// of the group:
@@ -440,7 +454,7 @@ BOOL CALLBACK EnumParentFindAnyExcept(HWND aWnd, LPARAM lParam)
 	for (WindowSpec *win = ws.mFirstWinSpec;;)
 	{
 		// For each window in the linked list, check if aWnd is a match for it:
-		if (ws.SetCriteria(win->mTitle, win->mText, win->mExcludeTitle, win->mExcludeText) && ws.IsMatch(true))
+		if (ws.SetCriteria(g, win->mTitle, win->mText, win->mExcludeTitle, win->mExcludeText) && ws.IsMatch(true))
 			// Match found, so aWnd is a member of the group. But we want to find non-members only,
 			// so keep searching:
 			return TRUE;
@@ -486,7 +500,7 @@ BOOL CALLBACK EnumParentActUponAll(HWND aWnd, LPARAM lParam)
 	for (WindowSpec *win = ws.mFirstWinSpec;;)
 	{
 		// For each window in the linked list, check if aWnd is a match for it:
-		if (ws.SetCriteria(win->mTitle, win->mText, win->mExcludeTitle, win->mExcludeText) && ws.IsMatch())
+		if (ws.SetCriteria(g, win->mTitle, win->mText, win->mExcludeTitle, win->mExcludeText) && ws.IsMatch())
 		{
 			// Match found, so aWnd is a member of the group.  In addition, IsMatch() has set
 			// the value of ws.mFoundParent to tell our caller that at least one window was acted upon.

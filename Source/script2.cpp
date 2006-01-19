@@ -707,7 +707,7 @@ ResultType Line::ToolTip(char *aText, char *aX, char *aY, char *aID)
 		return OK;
 	}
 
-	// Use virtual destop so that tooltip can move onto non-primary monitor in a multi-monitor system:
+	// Use virtual desktop so that tooltip can move onto non-primary monitor in a multi-monitor system:
 	RECT dtw;
 	GetVirtualDesktopRect(dtw);
 
@@ -1083,6 +1083,7 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 				{
 					*contents++ = '&'; // v1.0.40.02
 					strcpy(contents, sHtml[*ucp - 128]);
+					contents += strlen(contents); // Added as a fix in v1.0.41 (broken in v1.0.40.02).
 					*contents++ = ';'; // v1.0.40.02
 				}
 				else
@@ -3054,7 +3055,7 @@ ResultType WinGetList(Var *output_var, WinGetCmds aCmd, char *aTitle, char *aTex
 	ws.mArrayStart = (aCmd == WINGET_CMD_LIST) ? output_var : NULL; // Provide the position in the var list of where the array-element vars will be.
 	// If aTitle is ahk_id nnnn, the Enum() below will be inefficient.  However, ahk_id is almost unheard of
 	// in this context because it makes little sense, so no extra code is added to make that case efficient.
-	if (ws.SetCriteria(aTitle, aText, aExcludeTitle, aExcludeText)) // These criteria allow the possibilty of a match.
+	if (ws.SetCriteria(g, aTitle, aText, aExcludeTitle, aExcludeText)) // These criteria allow the possibilty of a match.
 		EnumWindows(EnumParentFind, (LPARAM)&ws);
 	//else leave ws.mFoundCount set to zero (by the constructor).
 	return output_var->Assign(ws.mFoundCount);
@@ -3077,10 +3078,10 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 
 	bool target_window_determined = true;  // Set default.
 	HWND target_window;
-	IF_USE_FOREGROUND_WINDOW(aTitle, aText, aExcludeTitle, aExcludeText)
+	IF_USE_FOREGROUND_WINDOW(g.DetectHiddenWindows, aTitle, aText, aExcludeTitle, aExcludeText)
 	else if (!(*aTitle || *aText || *aExcludeTitle || *aExcludeText)
 		&& !(cmd == WINGET_CMD_LIST || cmd == WINGET_CMD_COUNT)) // v1.0.30.02/v1.0.30.03: Have "list"/"count" get all windows on the system when there are no parameters.
-		target_window = GetValidLastUsedWindow();
+		target_window = GetValidLastUsedWindow(g);
 	else
 		target_window_determined = false;  // A different method is required.
 
@@ -3094,7 +3095,7 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 	case WINGET_CMD_ID:
 	case WINGET_CMD_IDLAST:
 		if (!target_window_determined)
-			target_window = WinExist(aTitle, aText, aExcludeTitle, aExcludeText, cmd == WINGET_CMD_IDLAST);
+			target_window = WinExist(g, aTitle, aText, aExcludeTitle, aExcludeText, cmd == WINGET_CMD_IDLAST);
 		if (target_window)
 			return output_var->AssignHWND(target_window);
 		else
@@ -3103,7 +3104,7 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 	case WINGET_CMD_PID:
 	case WINGET_CMD_PROCESSNAME:
 		if (!target_window_determined)
-			target_window = WinExist(aTitle, aText, aExcludeTitle, aExcludeText);
+			target_window = WinExist(g, aTitle, aText, aExcludeTitle, aExcludeText);
 		if (target_window)
 		{
 			DWORD pid;
@@ -3153,7 +3154,7 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 
 	case WINGET_CMD_MINMAX:
 		if (!target_window_determined)
-			target_window = WinExist(aTitle, aText, aExcludeTitle, aExcludeText);
+			target_window = WinExist(g, aTitle, aText, aExcludeTitle, aExcludeText);
 		// Testing shows that it's not possible for a minimized window to also be maximized (under
 		// the theory that upon restoration, it *would* be maximized.  This is unfortunate if there
 		// is no other way to determine what the restoration size and maxmized state will be for a
@@ -3165,13 +3166,13 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 
 	case WINGET_CMD_CONTROLLIST:
 		if (!target_window_determined)
-			target_window = WinExist(aTitle, aText, aExcludeTitle, aExcludeText);
+			target_window = WinExist(g, aTitle, aText, aExcludeTitle, aExcludeText);
 		return target_window ? WinGetControlList(output_var, target_window) : output_var->Assign();
 
 	case WINGET_CMD_STYLE:
 	case WINGET_CMD_EXSTYLE:
 		if (!target_window_determined)
-			target_window = WinExist(aTitle, aText, aExcludeTitle, aExcludeText);
+			target_window = WinExist(g, aTitle, aText, aExcludeTitle, aExcludeText);
 		if (!target_window)
 			return output_var->Assign();
 		sprintf(buf, "0x%08X", GetWindowLong(target_window, cmd == WINGET_CMD_STYLE ? GWL_STYLE : GWL_EXSTYLE));
@@ -3180,7 +3181,7 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 	case WINGET_CMD_TRANSPARENT:
 	case WINGET_CMD_TRANSCOLOR:
 		if (!target_window_determined)
-			target_window = WinExist(aTitle, aText, aExcludeTitle, aExcludeText);
+			target_window = WinExist(g, aTitle, aText, aExcludeTitle, aExcludeText);
 		if (!target_window)
 			return output_var->Assign();
 		typedef BOOL (WINAPI *MyGetLayeredWindowAttributesType)(HWND, COLORREF*, BYTE*, DWORD*);
@@ -9425,11 +9426,11 @@ ResultType Line::SetToggleState(vk_type aVK, ToggleValueType &ForceLock, char *a
 HWND Line::DetermineTargetWindow(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
 {
 	HWND target_window; // A variable of this name is used by the macros below.
-	IF_USE_FOREGROUND_WINDOW(aTitle, aText, aExcludeTitle, aExcludeText)
+	IF_USE_FOREGROUND_WINDOW(g.DetectHiddenWindows, aTitle, aText, aExcludeTitle, aExcludeText)
 	else if (*aTitle || *aText || *aExcludeTitle || *aExcludeText)
-		target_window = WinExist(aTitle, aText, aExcludeTitle, aExcludeText);
+		target_window = WinExist(g, aTitle, aText, aExcludeTitle, aExcludeText);
 	else // Use the "last found" window.
-		target_window = GetValidLastUsedWindow();
+		target_window = GetValidLastUsedWindow(g);
 	return target_window;
 }
 
@@ -10633,8 +10634,8 @@ void BIF_WinExistActive(ExprTokenType &aResultToken, ExprTokenType *aParam[], in
 
 	// Should be called the same was as ACT_IFWINEXIST and ACT_IFWINACTIVE:
 	HWND found_hwnd = (toupper(bif_name[3]) == 'E') // Win[E]xist.
-		? WinExist(param[0], param[1], param[2], param[3], false, true)
-		: WinActive(param[0], param[1], param[2], param[3], true);
+		? WinExist(g, param[0], param[1], param[2], param[3], false, true)
+		: WinActive(g, param[0], param[1], param[2], param[3], true);
 	aResultToken.marker = aResultToken.buf;
 	aResultToken.marker[0] = '0';
 	aResultToken.marker[1] = 'x';

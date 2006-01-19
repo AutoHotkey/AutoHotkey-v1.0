@@ -34,6 +34,29 @@ DWORD Hotkey::sJoyHotkeyCount = 0;
 
 
 
+bool HotCriterionForbidsFiring(HotCriterionType aHotCriterion, char *aWinTitle, char *aWinText)
+// v1.0.41
+// This is a global function because it's used by both hotkeys and hotstrings.
+{
+	bool window_was_found;
+	switch(aHotCriterion)
+	{
+	case HOT_IF_ACTIVE:
+	case HOT_IF_NOT_ACTIVE:
+		window_was_found = (NULL != WinActive(g_default, aWinTitle, aWinText, "", "", false)); // Thread-safe.
+		break;
+	case HOT_IF_EXIST:
+	case HOT_IF_NOT_EXIST:
+		window_was_found = (NULL != WinExist(g_default, aWinTitle, aWinText, "", "", false, false)); // Thread-safe.
+		break;
+	default: // HOT_NO_CRITERION (listed last because most callers avoids calling here by checking this value first).
+		return false; // Always allow hotkey to fire.
+	}
+	return (aHotCriterion == HOT_IF_ACTIVE || aHotCriterion == HOT_IF_EXIST) ? !window_was_found : window_was_found;
+}
+
+
+
 void Hotkey::AllActivate()
 // This function can also be called to install the keyboard hook if the state
 // of g_ForceNumLock and such have changed, even if the hotkeys are already
@@ -520,6 +543,64 @@ void Hotkey::AllDestructAndExit(int aExitCode)
 
 
 
+bool Hotkey::PrefixHasNoEnabledSuffixes(int aVKorSC, bool aIsSC)
+// aVKorSC contains the virtual key or scan code of the specified prefix key (it's a scan code if aIsSC is true).
+// Returns true if this prefix key has no suffixes that can possibly.  Each such suffix is prevented from
+// firing by one or more of the following:
+// 1) Hotkey is completely disabled via mEnabled.
+// 2) Hotkey has criterion and those criterion do not allow the hotkey to fire.
+{
+	for (int i = 0; i < sHotkeyCount; ++i)
+	{
+		Hotkey &hk = *shk[i];
+		if (aVKorSC == (aIsSC ? hk.mModifierSC : hk.mModifierVK) // This hotkey uses the specified key as a prefix.
+			&& hk.mEnabled // This hotkey is enabled...
+			// ...and it has no criterion or that criteron doesn't forbid it from firing:
+			&& !(hk.mHotCriterion && HotCriterionForbidsFiring(hk.mHotCriterion, hk.mHotWinTitle, hk.mHotWinText)))
+			return false; // At least one of this prefix's suffixes is eligible for firing.
+	}
+	// Since above didn't return, no hotkeys were found for this prefix that are capable of firing.
+	return true;
+}
+
+
+
+bool Hotkey::CriterionForbidsFiring(HotkeyIDType aHotkeyIDwithFlags, bool aKeyUp, UCHAR &aNoSuppress
+	, char *aSingleChar)
+// v1.0.41
+// aHotkeyToFireUponRelease is sometimes modified for the caller here, as is *aSingleChar
+// (if aSingleChar isn't NULL).
+// Caller has ensured that aHotkeyIDwithFlags contains a valid/existing hotkey ID.
+// Technically, aHotkeyIDwithMask can be with or without a the flags in the high bits.
+// If present, they're removed.
+{
+	HotkeyIDType hotkey_id = aHotkeyIDwithFlags & HOTKEY_ID_MASK;
+	if (hotkey_id >= sHotkeyCount) // Must check in case caller passed HOTKEY_ID_ALT_TAB or similar.
+		return false; // For unknown ID or AltTab hotkey, assume it's allowed to fire.
+	Hotkey hk = *shk[hotkey_id];
+	if (hk.mHotCriterion && HotCriterionForbidsFiring(hk.mHotCriterion, hk.mHotWinTitle, hk.mHotWinText))
+	{
+		// If this is a key-down hotkey:
+		// Leave aHotkeyToFireUponRelease set to whatever it was so that the critieria are
+		// evaluated later, at the time of release.  It seems more correct that way, though the actual
+		// change (hopefully improvement) in usability is unknown.
+		// Since the down-event of this key won't be suppressed, it seems best never to suppress the
+		// key-up hotkey (if it has one), if nothing else than to be sure the logical key state of that
+		// key as shown by GetAsyncKeyState() returns the correct value (for modifiers, this is even more
+		// important since them getting stuck down causes undesirable behavior).  If it doesn't have a
+		// key-up hotkey, the up-keystroke should wind up being non-suppressed anyway due to default
+		// processing).
+		if (!aKeyUp)
+			aNoSuppress |= NO_SUPPRESS_NEXT_UP_EVENT;  // Update output parameter for the caller.
+		if (aSingleChar)
+			*aSingleChar = '#'; // '#' in KeyHistory to indicate this hotkey is disabled due to #IfWin criterion.
+		return true;
+	}
+	return false;
+}
+
+
+
 ResultType Hotkey::PerformID(HotkeyIDType aHotkeyID)
 // Returns OK or FAIL.
 {
@@ -611,8 +692,10 @@ void Hotkey::TriggerJoyHotkeys(int aJoystickID, DWORD aButtonsNewlyDown)
 		if (hk.mType != HK_JOYSTICK || hk.mVK != aJoystickID || !hk.mEnabled
 			|| (g_IsSuspended && !hk.IsExemptFromSuspend()))
 			continue;
-		// Determine if this hotkey's button is among those newly pressed.
-		if (   aButtonsNewlyDown & ((DWORD)0x01 << (hk.mSC - JOYCTRL_1))   )
+		if (   aButtonsNewlyDown & ((DWORD)0x01 << (hk.mSC - JOYCTRL_1)) // This hotkey's button is among those newly pressed.
+			// ... v1.0.41: and this hotkey has no window-criterion or it does but the right window is
+			// active or exists:
+			&& !(hk.mHotCriterion && HotCriterionForbidsFiring(hk.mHotCriterion, hk.mHotWinTitle, hk.mHotWinText))   )
 			// Post it to the thread because the message pump itself (not the WindowProc) will handle it.
 			// UPDATE: Posting to NULL would have a risk of discarding the message if a MsgBox pump or
 			// pump other than MsgSleep() were running.  The only reason it doesn't is that this function
@@ -855,12 +938,16 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 	, mUnregisterDuringThread(false)
 	, mIsRegistered(false)
 	, mEnabled(true)
-	, mHookAction(aHookAction)
-	, mJumpToLabel(aJumpToLabel)  // Can be NULL for dynamic hotkeys that are hook actions such as Alt-Tab.
+	, mHookAction(aHookAction)   // Alt-tab and possibly other uses.
+	, mJumpToLabel(aJumpToLabel) // Can be NULL for dynamic hotkeys that are hook actions such as Alt-Tab.
 	, mExistingThreads(0)
 	, mMaxThreads(g_MaxThreadsPerHotkey)  // The value of g_MaxThreadsPerHotkey can vary during load-time.
 	, mMaxThreadsBuffer(g_MaxThreadsBuffer) // same comment as above
 	, mPriority(0) // default priority is always 0
+	// mHotCriterion should be set to HOT_NO_CRITERION for unsupported alt-tab actions because otherwise,
+	// PrefixHasNoEnabledSuffixes() would incorrectly think the stored criteria apply to it:
+	, mHotCriterion(IS_ALT_TAB(aHookAction) ? HOT_NO_CRITERION : g_HotCriterion) // Can vary during load-time.
+	, mHotWinTitle(g_HotWinTitle), mHotWinText(g_HotWinText)                     //
 	, mRunAgainAfterFinished(false), mRunAgainTime(0), mConstructedOK(false)
 
 // It's better to receive the hotkey_id as a param, since only the caller has better knowledge and
@@ -943,7 +1030,8 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 		}
 
 		if (mType != HK_MOUSE_HOOK && mType != HK_JOYSTICK)
-			if ((g_ForceKeybdHook || mModifiersLR || mAllowExtraModifiers || mNoSuppress || aHookAction || mKeyUp)
+			if ((g_ForceKeybdHook || mModifiersLR || mAllowExtraModifiers || mNoSuppress || aHookAction
+				|| mKeyUp || mHotCriterion)
 				&& !g_os.IsWin9x())
 				// Do this for both NO_SUPPRESS_SUFFIX and NO_SUPPRESS_PREFIX.  In the case of
 				// NO_SUPPRESS_PREFIX, the hook is needed anyway since the only way to get
@@ -1692,6 +1780,8 @@ Hotstring::Hotstring(Label *aJumpToLabel, char *aOptions, char *aHotstring, char
 	, mCaseSensitive(g_HSCaseSensitive), mConformToCase(g_HSConformToCase), mDoBackspace(g_HSDoBackspace)
 	, mOmitEndChar(g_HSOmitEndChar), mSendRaw(aHasContinuationSection ? true : g_HSSendRaw)
 	, mEndCharRequired(g_HSEndCharRequired), mDetectWhenInsideWord(g_HSDetectWhenInsideWord), mDoReset(g_HSDoReset)
+	, mHotCriterion(g_HotCriterion)
+	, mHotWinTitle(g_HotWinTitle), mHotWinText(g_HotWinText)
 	, mConstructedOK(false)
 {
 	// Insist on certain qualities so that they never need to be checked other than here:
