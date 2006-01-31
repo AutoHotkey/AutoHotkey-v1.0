@@ -5130,18 +5130,7 @@ ResultType ShowMainWindow(MainWindowModes aMode, bool aRestricted)
 ResultType GetAHKInstallDir(char *aBuf)
 // Caller must ensure that aBuf is at least MAX_PATH in capacity.
 {
-	*aBuf = '\0';  // Init in case of failure.  Some callers may rely on this.
-	HKEY hRegKey;
-	if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, "SOFTWARE\\AutoHotkey", 0, KEY_READ, &hRegKey) != ERROR_SUCCESS)
-		return FAIL;
-	DWORD aBufSize = MAX_PATH;
-	if (RegQueryValueEx(hRegKey, "InstallDir", NULL, NULL, (LPBYTE)aBuf, &aBufSize) != ERROR_SUCCESS)
-	{
-		RegCloseKey(hRegKey);
-		return FAIL;
-	}
-	RegCloseKey(hRegKey);
-	return OK;
+	return RegReadString(HKEY_LOCAL_MACHINE, "SOFTWARE\\AutoHotkey", "InstallDir", aBuf, MAX_PATH);
 }
 
 
@@ -7204,6 +7193,8 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 				//		count += 1
 				//}
 				//Msgbox %count%
+				//
+				// I e-mailed the author about this sometime around/prior to 12/1/04 but never got a response.
 			item_curr += unit_size; // i.e. Don't use [] indexing for the reason described above.
 			*item_curr = cp + 1; // Make a pointer to the next item's place in aContents.
 		}

@@ -1308,7 +1308,12 @@ modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLR
 	// being down before for certain early operations.
 
 	// ** CONTROL
-	if ((aModifiersLRnow & MOD_LCONTROL) && !(modifiersLRnew & MOD_LCONTROL))
+	if (   (aModifiersLRnow & MOD_LCONTROL) && !(modifiersLRnew & MOD_LCONTROL)
+		// v1.0.41.01: The following line was added to fix the fact that callers do not want LControl
+		// released when the new modifier state includes AltGr.  This solves a hotkey such as the following and
+		// probably several other circumstances:
+		// <^>!a::send \  ; Backslash is solved by this fix; it's manifest via AltGr+Dash on German layout.
+		&& !((modifiersLRnew & MOD_RALT) && g_LayoutHasAltGr)   )
 		KeyEvent(KEYUP, VK_LCONTROL, 0, NULL, false, aExtraInfo);
 	else if (!(aModifiersLRnow & MOD_LCONTROL) && (modifiersLRnew & MOD_LCONTROL))
 		KeyEvent(KEYDOWN, VK_LCONTROL, 0, NULL, false, aExtraInfo);
@@ -1903,7 +1908,7 @@ vk_type CharToVKAndModifiers(char aChar, modLR_type *pModifiersLR)
 		}
 		else // Do normal/default translation.
 		{
-			// v1.0.40: If caller-supplied modifiers already contains the right-side key, no need to
+			// v1.0.40: If caller-supplied modifiers already include the right-side key, no need to
 			// add the left-side key (avoids unnecessary keystrokes).
 			if (   (keyscan_modifiers & 0x02) && !(*pModifiersLR & (MOD_LCONTROL|MOD_RCONTROL))   )
 				*pModifiersLR |= MOD_LCONTROL; // Must not be done if requires_altgr==true, see above.

@@ -1795,7 +1795,7 @@ examine_line:
 					// the hotstring (as a label) does not actually exist as a line.  But it seems
 					// best to report it this way in case the hotstring is inside a #Include file,
 					// so that the correct file name and approximate line number are shown:
-					ScriptError("This hotstring is missing its abbreviation.", hotkey_flag);
+					ScriptError("This hotstring is missing its abbreviation.", buf); // Display buf vs. hotkey_flag in case the line is simply "::::".
 					return CloseAndReturn(fp, script_buf, FAIL);
 				}
 				// In the case of hotstrings, hotstring_start is the beginning of the hotstring itself,
@@ -1815,6 +1815,12 @@ examine_line:
 
 		// Otherwise, not a hotkey.  Check if it's a generic, non-hotkey label:
 		if (buf[buf_length - 1] == ':') // Labels must end in a colon (buf was previously rtrimmed).
+		{
+			if (buf_length == 1) // v1.0.41.01: Properly handle the fact that this line consists of only a colon.
+			{
+				ScriptError(ERR_UNRECOGNIZED_ACTION, buf);
+				return CloseAndReturn(fp, script_buf, FAIL);
+			}
 			// Labels (except hotkeys) must contain no whitespace, delimiters, or escape-chars.
 			// This is to avoid problems where a legitimate action-line ends in a colon,
 			// such as WinActivate, SomeTitle:
@@ -1826,6 +1832,7 @@ examine_line:
 					is_label = false;
 					break;
 				}
+		}
 		if (is_label)
 		{
 			buf[--buf_length] = '\0';  // Remove the trailing colon.
@@ -1885,8 +1892,24 @@ examine_line:
 		{
 			// It's not an ELSE.  Also, it can't be ACT_FUNCTIONCALL at this stage because it would have
 			// been already handled higher above.
-			if (!ParseAndAddLine(buf))
-				return CloseAndReturn(fp, script_buf, FAIL);
+			// v1.0.41.01: Check if there is a command/action on the same line as the '{'.  This is apparently
+			// a style that some people use, and it also supports "{}" as a shorthand way of writing an empty block.
+			if (*buf == '{')
+			{
+				if (!AddLine(ACT_BLOCK_BEGIN))
+					return CloseAndReturn(fp, script_buf, FAIL);
+				if (   *(action_end = omit_leading_whitespace(buf + 1))   )  // There is an action to the right of the '{'.
+				{
+					mCurrLine = NULL;  // To signify that we're in transition, trying to load a new one.
+					if (!ParseAndAddLine(action_end, IsFunction(action_end) ? ACT_FUNCTIONCALL : ACT_INVALID)) // If it's a function, it must be a call vs. a definition because a function can't be defined on the same line as an open-brace.
+						return CloseAndReturn(fp, script_buf, FAIL);
+				}
+				// Otherwise, there was either no same-line action or the same-line action was successfully added,
+				// so do nothing.
+			}
+			else
+				if (!ParseAndAddLine(buf))
+					return CloseAndReturn(fp, script_buf, FAIL);
 		}
 		else // This line is an ELSE, possibly with another command immediately after it (on the same line).
 		{
@@ -2692,7 +2715,8 @@ Label *Script::FindLabel(char *aLabelName)
 ResultType Script::AddLabel(char *aLabelName)
 // Returns OK or FAIL.
 {
-	if (!aLabelName || !*aLabelName) return FAIL;
+	if (!*aLabelName)
+		return FAIL; // For now, silent failure because callers should check this beforehand.
 	Label *duplicate_label = FindLabel(aLabelName);
 	if (duplicate_label)
 		// Don't attempt to dereference "duplicate_label->mJumpToLine because it might not

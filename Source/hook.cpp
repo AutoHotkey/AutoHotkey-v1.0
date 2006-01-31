@@ -377,7 +377,10 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 
 	// v1.0.37.07: Cancel the alt-tab menu upon receipt of Escape so that it behaves like the OS's native Alt-Tab.
 	// Even if is_ignored==true, it seems more flexible/useful to cancel the Alt-Tab menu upon receiving
-	// an Escape keystroke of any kind:
+	// an Escape keystroke of any kind.
+	// Update: Must not handle Alt-Up here in a way similar to Esc-down in case the hook sent Alt-up to
+	// dismiss its own menu. Otherwise, the shift key might get stuck down if Shift-Alt-Tab was in effect.
+	// Instead, the release-of-prefix-key section should handle it via its checks of this_key.it_put_shift_down, etc.
 	if (sAltTabMenuIsVisible && aVK == VK_ESCAPE && !aKeyUp)
 	{
 		// When the alt-tab window is owned by the script (it is owned by csrss.exe unless the script
@@ -731,7 +734,9 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 				{
 					// Queue it for later, which is done here rather than upon release of the key so that
 					// the user can release the key's modifiers before releasing the key itself, which
-					// is likely to happen pretty often:
+					// is likely to happen pretty often. v1.0.41: This is done even if the hotkey is subject
+					// to #IfWin because it seems more correct to check those criteria at the actual time
+					// the key is released rather than now:
 					this_key.hotkey_to_fire_upon_release = hotkey_id_with_flags;
 					hotkey_id_with_flags = HOTKEY_ID_INVALID;
 				}
@@ -742,6 +747,10 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 						this_key.hotkey_to_fire_upon_release = hotkey_up[hotkey_id_temp]; // Might assign HOTKEY_ID_INVALID.
 					// Since this prefix key is being used in its capacity as a suffix instead,
 					// hotkey_id_with_flags now contains a hotkey ready for firing later below.
+					// v1.0.41: Above is done even if the hotkey is subject to #IfWin because:
+					// 1) The down-hotkey's #IfWin criteria might be different from that of the up's.
+					// 2) It seems more correct to check those criteria at the actual time the key is
+					// released rather than now (and also probably reduces code size).
 				}
 			}
 			// Alt-tab need not be checked here (like it is in the similar section below) because all
@@ -915,9 +924,9 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 				return (this_key.no_suppress & NO_SUPPRESS_PREFIX) ? AllowKeyToGoToSystem : SuppressThisKey;
 			}
 
-		// v1.0.41: This spot cannot be reached when a disabled prefix key fires on key-down in Case #1
-		// because upon release, that prefix key would be returned from in Case #2 (by virtue of
-		// its check of down_performed_action).
+		// v1.0.41: This spot cannot be reached when a disabled prefix key's up-action fires on
+		// key-down instead (via Case #1).  This is because upon release, that prefix key would be
+		// returned from in Case #2 (by virtue of its check of down_performed_action).
 
 		// Since above didn't return, this key-up for this prefix key wasn't used in it's role
 		// as a prefix.  If it's not a suffix, we're done, so just return.  Don't do
@@ -996,7 +1005,9 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 					{
 						// Queue the up-hotkey for later so that the user is free to release the
 						// prefix key prior to releasing the suffix (which seems quite common and
-						// thus desirable):
+						// thus desirable).  v1.0.41: This is done even if the hotkey is subject
+						// to #IfWin because it seems more correct to check those criteria at the actual time
+						// the key is released rather than now:
 						this_key.hotkey_to_fire_upon_release = this_modifier_vk.id_with_flags;
 						if (hotkey_id_with_flags != HOTKEY_ID_INVALID) // i.e. a previous iteration already found the down-event to fire.
 							break;
@@ -1350,10 +1361,7 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 		{
 			if (!aKeyUp) // Key-up hotkey but the event is a down-event.
 			{
-				// Queue the up-hotkey for later so that the user is free to release the
-				// prefix key prior to releasing the suffix (which seems quite common and
-				// thus desirable):
-				this_key.hotkey_to_fire_upon_release = hotkey_id_with_flags;
+				this_key.hotkey_to_fire_upon_release = hotkey_id_with_flags; // Seem comments above in other occurrences of this line.
 				hotkey_id_with_flags = HOTKEY_ID_INVALID;
 			}
 			//else hotkey_id_with_flags contains the up-hotkey that is now eligible for firing.

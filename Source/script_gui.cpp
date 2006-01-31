@@ -3267,10 +3267,19 @@ ResultType GuiType::ParseOptions(char *aOptions, bool &aSetLastFoundWindow, Togg
 			// If the window already exists, SetWindowLong() isn't enough.  Must use SetWindowPos()
 			// to make it take effect.
 			if (mHwnd)
+			{
 				SetWindowPos(mHwnd, adding ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0
 					, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE); // SWP_NOACTIVATE prevents the side-effect of activating the window, which is undesirable if only its style is changing.
-			else // Must do the below ONLY if the window doesn't exist, otherwise the window will be broken.
-				if (adding) mExStyle |= WS_EX_TOPMOST; else mExStyle &= ~WS_EX_TOPMOST;
+				// Fix for v1.0.41.01: Update the original style too, so that the call to SetWindowLong() later below
+				// is made only if multiple styles are being changed on the same line, e.g. Gui +Disabled -SysMenu
+				if (adding) exstyle_orig |= WS_EX_TOPMOST; else exstyle_orig &= ~WS_EX_TOPMOST;
+			}
+			// Fix for v1.0.41.01: The following line is now done unconditionally.  Previously, it wasn't
+			// done if the window already existed, which caused an example such as the following to first
+			// set the window always on top and then immediately afterward try to unset it via SetWindowLong
+			// (because mExStyle hadn't been updated to reflect the change made by SetWindowPos):
+			// Gui, +AlwaysOnTop +Disabled -SysMenu
+			if (adding) mExStyle |= WS_EX_TOPMOST; else mExStyle &= ~WS_EX_TOPMOST;
 		}
 
 		else if (!stricmp(next_option, "Border"))
@@ -3295,9 +3304,18 @@ ResultType GuiType::ParseOptions(char *aOptions, bool &aSetLastFoundWindow, Togg
 		else if (!stricmp(next_option, "Disabled"))
 		{
 			if (mHwnd)
+			{
 				EnableWindow(mHwnd, adding ? FALSE : TRUE);  // Must not not apply WS_DISABLED directly because that breaks the window.
-			else
-				if (adding) mStyle |= WS_DISABLED; else mStyle = mStyle & ~WS_DISABLED;
+				// Fix for v1.0.41.01: Update the original style too, so that the call to SetWindowLong() later below
+				// is made only if multiple styles are being changed on the same line, e.g. Gui +Disabled -SysMenu
+				if (adding) style_orig |= WS_DISABLED; else style_orig &= ~WS_DISABLED;
+			}
+			// Fix for v1.0.41.01: The following line is now done unconditionally.  Previously, it wasn't
+			// done if the window already existed, which caused an example such as the following to first
+			// disable the window and then immediately afterward try to enable it via SetWindowLong
+			// (because mStyle hadn't been updated to reflect the change made by SetWindowPos):
+			// Gui, +AlwaysOnTop +Disabled -SysMenu
+			if (adding) mStyle |= WS_DISABLED; else mStyle &= ~WS_DISABLED;
 		}
 
 		else if (!stricmp(next_option, "LastFound"))
@@ -7318,6 +7336,17 @@ char *GuiType::HotkeyToText(WORD aHotkey, char *aBuf)
 		}
 	}
 	// Since above didn't return, use a simple lookup on VK, since it gives preference to non-extended keys.
+	// KNOWN ISSUE: Someone pointed out that the following will typically produce ^A instead of ^a, which will
+	// produce an unwanted shift keystroke if for some reason the script uses the Send command to send the hotkey.
+	// However, for the following reasons, it seems best not to try to "fix" it:
+	// 1) It's not easy to fix it since VKtoKeyName indirectly calls GetKeyNameText() to get the key's name,
+	//    and there's no telling what names (single-character or otherwise) various keyboard layouts/languages
+	//    might produce.
+	// 2) ^A seems more readable than ^a (which is probably the exact reason the OS's hotkey control displays it
+	//     in uppercase).  Of course, this has merit only when the script actually displays the hotkey somewhere.
+	// 3) There's a slight possibility that changing it would break existing scripts that rely on uppercase.
+	// 4) Using the Send command to send the hotkey seems very rare; the script would normally Gosub the hotkey's
+	//    subroutine instead.
 	VKtoKeyName(vk, 0, cp, 100);
 	// The above call might be produce an unknown key-name via GetKeyName().  Since it seems so rare and
 	// the exact string to be returned (e.g. SC vs. VK) is uncertain/debatable: For now, it seems best to
