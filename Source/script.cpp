@@ -5279,6 +5279,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			case GUICONTROL_CMD_TEXT:
 				break; // Do nothing for the above commands since Param3 is optional.
 			case GUICONTROL_CMD_MOVE:
+			case GUICONTROL_CMD_MOVEDRAW:
 			case GUICONTROL_CMD_CHOOSE:
 			case GUICONTROL_CMD_CHOOSESTRING:
 				if (!*new_raw_arg3)

@@ -317,7 +317,7 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 	bool do_redraw_if_in_tab = false;
 	bool do_redraw_unconditionally = false;
 
-	switch(guicontrol_cmd)
+	switch (guicontrol_cmd)
 	{
 
 	case GUICONTROL_CMD_OPTIONS:
@@ -735,6 +735,7 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 		return OK;
 
 	case GUICONTROL_CMD_MOVE:
+	case GUICONTROL_CMD_MOVEDRAW:
 	{
 		int xpos = COORD_UNSPECIFIED;
 		int ypos = COORD_UNSPECIFIED;
@@ -799,12 +800,17 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 			}
 		}
 
-		// This must be done, at least in cases such as GroupBox under certain themes/conditions.
-		// More than just control.hwnd must be invalided, otherwise the interior of the GroupBox retains
-		// a ghost image of whatever was in it before the move:
-		GetWindowRect(control.hwnd, &rect); // Limit it to only that part of the client area that is receiving the rect.
-		MapWindowPoints(NULL, gui.mHwnd, (LPPOINT)&rect, 2); // Convert rect to client coordinates (not the same as GetClientRect()).
-		InvalidateRect(gui.mHwnd, &rect, TRUE); // Seems safer to use TRUE, not knowing all possible overlaps, etc.
+		// v1.0.41.02 to prevent severe flickering when resizing ListViews and other controls,
+		// the MOVE mode now avoids doing the invalidate-rect, but the MOVEDRAW mode does do it.
+		if (guicontrol_cmd == GUICONTROL_CMD_MOVEDRAW)
+		{
+			// This must be done, at least in cases such as GroupBox under certain themes/conditions.
+			// More than just control.hwnd must be invalided, otherwise the interior of the GroupBox retains
+			// a ghost image of whatever was in it before the move:
+			GetWindowRect(control.hwnd, &rect); // Limit it to only that part of the client area that is receiving the rect.
+			MapWindowPoints(NULL, gui.mHwnd, (LPPOINT)&rect, 2); // Convert rect to client coordinates (not the same as GetClientRect()).
+			InvalidateRect(gui.mHwnd, &rect, TRUE); // Seems safer to use TRUE, not knowing all possible overlaps, etc.
+		}
 		return OK;
 	}
 
