@@ -232,7 +232,8 @@ enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
 #define OLD_STILL_IN_EFFECT "The script was not reloaded; the old version will remain in effect."
 #define ERR_COMBINED_LINE_TOO_LONG "Combined line would be too long."
 #define ERR_UNRECOGNIZED_ACTION "This line does not contain a recognized action."
-#define ERR_NONEXISTENT_HOTKEY "Nonexistent hotkey"  // No period after short phrases.
+#define ERR_NONEXISTENT_HOTKEY "Nonexistent hotkey."  // No period after short phrases.
+#define ERR_NONEXISTENT_VARIANT "Nonexistent hotkey variant (IfWin)."
 #define ERR_EXE_CORRUPTED "EXE corrupted"
 #define ERR_PARAM1_INVALID "Parameter #1 invalid"
 #define ERR_PARAM2_INVALID "Parameter #2 invalid"
@@ -255,7 +256,7 @@ enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
 #define ERR_BLANK_PARAM "Blank parameter"
 #define ERR_BYREF "Caller must pass a variable to this ByRef parameter."
 #define ERR_ELSE_WITH_NO_IF "ELSE with no matching IF"
-#define ERR_OUTOFMEM "Out of memory"
+#define ERR_OUTOFMEM "Out of memory."
 #define ERR_MEM_LIMIT_REACHED "Memory limit reached (see #MaxMem in the help file)." ERR_ABORT
 #define ERR_NO_LABEL "Target label does not exist."
 #define ERR_MENU "Menu does not exist."
@@ -1778,7 +1779,7 @@ public:
 	}
 
 	Label(char *aLabelName)
-		: mName(aLabelName) // Caller gave us a pointer to dynamic memory for this.
+		: mName(aLabelName) // Caller gave us a pointer to dynamic memory for this (or an empty string in the case of mPlaceholderLabel).
 		, mJumpToLine(NULL)
 		, mPrevLabel(NULL), mNextLabel(NULL)
 	{}
@@ -2294,7 +2295,7 @@ private:
 	char *ParseActionType(char *aBufTarget, char *aBufSource, bool aDisplayErrors);
 	static ActionTypeType ConvertActionType(char *aActionTypeString);
 	static ActionTypeType ConvertOldActionType(char *aActionTypeString);
-	ResultType AddLabel(char *aLabelName);
+	ResultType AddLabel(char *aLabelName, bool aAllowDupe);
 	ResultType AddLine(ActionTypeType aActionType, char *aArg[] = NULL, ArgCountType aArgc = 0, char *aArgMap[] = NULL);
 
 	// These aren't in the Line class because I think they're easier to implement
@@ -2308,6 +2309,7 @@ private:
 
 public:
 	Line *mCurrLine;     // Seems better to make this public than make Line our friend.
+	Label *mPlaceholderLabel; // Used in place of a NULL label to simplify code.
 	char mThisMenuItemName[MAX_MENU_NAME_LENGTH + 1];
 	char mThisMenuName[MAX_MENU_NAME_LENGTH + 1];
 	char *mThisHotkeyName, *mPriorHotkeyName;

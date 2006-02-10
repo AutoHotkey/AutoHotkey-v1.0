@@ -253,7 +253,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	// top part (the auto-execute part) of the script so that they will be in effect
 	// even if the top part is something that's very involved and requires user
 	// interaction:
-	Hotkey::AllActivate();         // We want these active now in case auto-execute never returns (e.g. loop)
+	Hotkey::ManifestAllHotkeys();      // We want these active now in case auto-execute never returns (e.g. loop)
 	g_script.mIsReadyToExecute = true; // This is done only now for error reporting purposes in Hotkey.cpp.
 
 	// Run the auto-execute part at the top of the script (this call might never return):

@@ -48,20 +48,47 @@ EXTERN_SCRIPT;  // For g_script.
 #define COMPOSITE_DELIMITER_LENGTH 3
 
 // Smallest workable size: to save mem in some large arrays that use this:
-typedef USHORT HotkeyIDType;
+typedef USHORT HotkeyIDType; // This is relied upon to be unsigned; e.g. many places omit a check for ID < 0.
 typedef HotkeyIDType HookActionType;
 
 typedef UCHAR HotkeyTypeType;
-#define HK_UNDETERMINED 0
-#define HK_NORMAL       1
-#define HK_KEYBD_HOOK   2
-#define HK_MOUSE_HOOK   3
-#define HK_BOTH_HOOKS   4
-#define HK_JOYSTICK     5
-#define TYPE_IS_HOOK(type) (type == HK_KEYBD_HOOK || type == HK_MOUSE_HOOK || type == HK_BOTH_HOOKS)
+enum HotkeyTypeEnum {HK_NORMAL, HK_KEYBD_HOOK, HK_MOUSE_HOOK, HK_BOTH_HOOKS, HK_JOYSTICK};
+// If above numbers are ever changed/reshuffled, update the macros below.
+#define HK_TYPE_CAN_BECOME_KEYBD_HOOK(type) (type == HK_NORMAL)
+#define HK_TYPE_IS_HOOK(type) (type > HK_NORMAL && type < HK_JOYSTICK)
 
-enum HotCriterionType {HOT_NO_CRITERION, HOT_IF_ACTIVE, HOT_IF_NOT_ACTIVE, HOT_IF_EXIST, HOT_IF_NOT_EXIST}; // HOT_NO_CRITERION must be zero.
-bool HotCriterionForbidsFiring(HotCriterionType aHotCriterion, char *aWinTitle, char *aWinText); // Used by hotkeys and hotstrings.
+typedef UCHAR HotCriterionType;
+enum HotCriterionEnum {HOT_NO_CRITERION, HOT_IF_ACTIVE, HOT_IF_NOT_ACTIVE, HOT_IF_EXIST, HOT_IF_NOT_EXIST}; // HOT_NO_CRITERION must be zero.
+HWND HotCriterionAllowsFiring(HotCriterionType aHotCriterion, char *aWinTitle, char *aWinText); // Used by hotkeys and hotstrings.
+ResultType SetGlobalHotTitleText(char *aWinTitle, char *aWinText);
+
+
+
+struct HotkeyCriterion
+{
+	char *mHotWinTitle, *mHotWinText;
+	HotkeyCriterion *mNextCriterion;
+};
+
+
+
+struct HotkeyVariant
+{
+	Label *mJumpToLabel;
+	DWORD mRunAgainTime;
+	char *mHotWinTitle, *mHotWinText;
+	HotkeyVariant *mNextVariant;
+	int mPriority;
+	// Keep members that are less than 32-bit adjacent to each other to conserve memory in with the default
+	// 4-byte alignment:
+	HotCriterionType mHotCriterion;
+	UCHAR mExistingThreads, mMaxThreads;
+	bool mMaxThreadsBuffer;
+	bool mRunAgainAfterFinished;
+	bool mEnabled; // Whether this variant has been disabled via the Hotkey command.
+};
+
+
 
 class Hotkey
 {
@@ -70,103 +97,43 @@ private:
 	// the hotkey ID is used as the array index for performance reasons.  Having an outer class implies
 	// the potential future use of more than one set of hotkeys, which could still be implemented
 	// within static data and methods to retain the indexing/performance method:
-	static bool sHotkeysAreLocked; // Whether the definition-stage of hotkey creation is finished.
 	static HookType sWhichHookNeeded;
 	static HookType sWhichHookAlways;
 	static DWORD sTimePrev;
 	static DWORD sTimeNow;
 	static HotkeyIDType sNextID;
 
-	bool PerformIsAllowed()
+	bool Enable(HotkeyVariant &aVariant) // Returns true if the variant needed to be disabled, in which case caller should generally call ManifestAllHotkeys().
 	{
-		// For now, attempts to launch another simultaneous instance of this subroutine
-		// are ignored if MaxThreadsPerHotkey (for this particular hotkey) has been reached.
-		// In the future, it might be better to have this user-configurable, i.e. to devise
-		// some way for the hotkeys to be kept queued up so that they take effect only when
-		// the number of currently active threads drops below the max.  But doing such
-		// might make "infinite key loops" harder to catch because the rate of incoming hotkeys
-		// would be slowed down to prevent the subroutines from running concurrently:
-		return mExistingThreads < mMaxThreads
-			|| (mJumpToLabel && ACT_IS_ALWAYS_ALLOWED(mJumpToLabel->mJumpToLine->mActionType));
+		if (aVariant.mEnabled) // Added for v1.0.23 to greatly improve performance when hotkey is already in the right state.
+			return false; // Indicate that it's already enabled.
+		aVariant.mEnabled = true;
+		return true;
 	}
 
-	ResultType Perform() // Returns OK or FAIL.
+	bool Disable(HotkeyVariant &aVariant) // Returns true if the variant needed to be disabled, in which case caller should generally call ManifestAllHotkeys().
 	{
-		if (!PerformIsAllowed() || !mJumpToLabel)
-			return FAIL;
-		ResultType result;
-		bool unregistered_during_thread;
-		++mExistingThreads;  // This is the thread count for this particular hotkey only.
-		for (;;)
-		{
-			// This is stored as an attribute of the script (semi-globally) rather than passed
-			// as a param to ExecUntil (and from their on to any calls to SendKeys() that it
-			// makes) because it's possible for SendKeys to be called asynchronously, namely
-			// by a timed subroutine, while #HotkeyModifierTimeout is still in effect,
-			// in which case we would want SendKeys() to take not of these modifiers even
-			// if it was called from an ExecUntil() other than ours here:
-			g_script.mThisHotkeyModifiersLR = mModifiersConsolidatedLR;
-			// For v1.0.23, the below allows the $ hotkey prefix to unregister the hotkey on
-			// Windows 9x, which allows the send command to send the hotkey itself without
-			// causing an infinite loop of keystrokes.  For simplicity, the hotkey is kept
-			// unregistered during the entire duration of the thread, rather than trying to
-			// selectively do it before and after each Send command of the thread:
-			if (unregistered_during_thread = (mUnregisterDuringThread && mIsRegistered)) // Assign.
-				Unregister(); // This takes care of other details for us.
-			result = mJumpToLabel->mJumpToLine->ExecUntil(UNTIL_RETURN);
-			if (unregistered_during_thread)
-				Register();
-			if (result == FAIL)
-			{
-				mRunAgainAfterFinished = false;  // Ensure this is reset due to the error.
-				break;
-			}
-			if (mRunAgainAfterFinished)
-			{
-				// But MsgSleep() can change it back to true again, when called by the above call
-				// to ExecUntil(), to keep it auto-repeating:
-				mRunAgainAfterFinished = false;  // i.e. this "run again" ticket has now been used up.
-				// And if it was posted too long ago, don't do it.  This is because most users wouldn't
-				// want a buffered hotkey to stay pending for a long time after it was pressed, because
-				// that might lead to unexpected behavior:
-				if (GetTickCount() - mRunAgainTime > 1000)
-					break;
-				// else don't break, but continue the loop until the flag becomes false.
-			}
-			else
-				break;
-		}
-		--mExistingThreads;
-		return (result == FAIL) ? FAIL : OK;
+		if (!aVariant.mEnabled) // Added for v1.0.23 to greatly improve performance when hotkey is already in the right state.
+			return false; // Indicate that it's already disabled.
+		aVariant.mEnabled = false;
+		aVariant.mRunAgainAfterFinished = false; // ManifestAllHotkeys() won't do this unless the entire hotkey is disabled/unregistered.
+		return true;
 	}
 
-	ResultType Enable()
+	bool EnableParent() // Returns true if the hotkey needed to be disabled, in which case caller should generally call ManifestAllHotkeys().
 	{
-		if (mEnabled) // Added for v1.0.23 to greatly improve performance when hotkey is already in the right state.
-			return OK;
-		mEnabled = true;
-		// For now, call AllDeactivate() for cases such as the following:
-		// the newly added hotkey has an interaction/dependency
-		// with another hotkey, causing it to be promoted from a registered hotkey to a hook hotkey.
-		// In such a case, the key should be unregistered for maximum reliability, even though'
-		// the hook could probably override the registration in most cases:
-		// Older: AllDeactivate() shouldn't be necessary in this case, since there's no chance that
-		// hooks will be removed as a result of this action?
-		AllDeactivate(false, false);  // Avoid removing the hooks when enabling a key.
-		AllActivate();
-		return OK;
+		if (mParentEnabled)
+			return false; // Indicate that it's already enabled.
+		mParentEnabled = true;
+		return true;
 	}
 
-	ResultType Disable()
+	bool DisableParent() // Returns true if the hotkey needed to be disabled, in which case caller should generally call ManifestAllHotkeys().
 	{
-		if (!mEnabled) // Added for v1.0.23 to greatly improve performance when hotkey is already in the right state.
-			return OK;
-		mEnabled = false;
-		// AllDeactivate() is done in case this is the last hook hotkey (mouse or keyboard hook) and
-		// the hook(s) are no longer needed:
-		AllDeactivate(false, TYPE_IS_HOOK(mType), true);
-		AllActivate();
-		return OK;
+		if (!mParentEnabled)
+			return false; // Indicate that it's already disabled.
+		mParentEnabled = false;
+		return true;
 	}
 
 	ResultType Register();
@@ -180,7 +147,7 @@ private:
 
 	// For now, constructor & destructor are private so that only static methods can create new
 	// objects.  This allow proper tracking of which OS hotkey IDs have been used.
-	Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction, char *aName = NULL);
+	Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction, char *aName, bool aUseErrorLevel);
 	~Hotkey() {if (mIsRegistered) Unregister();}
 
 public:
@@ -203,22 +170,16 @@ public:
 	#define NO_SUPPRESS_PREFIX 0x02 // Bitwise: Bit #2
 	#define NO_SUPPRESS_NEXT_UP_EVENT 0x04 // Bitwise: Bit #3
 	UCHAR mNoSuppress;  // Uses the flags above.  Normally 0, but can be overridden by using the hotkey tilde (~) prefix).
+	bool mKeybdHookMandatory;
 	bool mAllowExtraModifiers;  // False if the hotkey should not fire when extraneous modifiers are held down.
 	bool mKeyUp; // A hotkey that should fire on key-up.
 	bool mVK_WasSpecifiedByNumber; // A hotkey defined by something like "VK24::" or "Hotkey, VK24, ..."
-	bool mUnregisterDuringThread; // Whether this hotkey should be unregistered during the execution of its own subroutine.
+	bool mUnregisterDuringThread; // Win9x: Whether this hotkey should be unregistered during its own subroutine (to prevent its own Send commmand from firing itself).  Seems okay to apply this to all variants.
 	bool mIsRegistered;  // Whether this hotkey has been successfully registered.
-	bool mEnabled;
-	bool mMaxThreadsBuffer;
-	bool mRunAgainAfterFinished;
+	bool mParentEnabled; // When true, the individual variants' mEnabled flags matter. When false, the entire hotkey is disabled.
 	bool mConstructedOK;
-	UCHAR mExistingThreads, mMaxThreads;
-	HotCriterionType mHotCriterion;
 
-	char *mHotWinTitle, *mHotWinText;
-	Label *mJumpToLabel;
-	int mPriority;
-	DWORD mRunAgainTime;
+	HotkeyVariant *mFirstVariant, *mLastVariant; // v1.0.42: Linked list of variant hotkeys created via #IfWin directives.
 
 	// Make sHotkeyCount an alias for sNextID.  Make it const to enforce modifying the value in only one way:
 	static const HotkeyIDType &sHotkeyCount;
@@ -226,70 +187,91 @@ public:
 	static DWORD sJoyHotkeyCount;
 
 	static void AllDestructAndExit(int exit_code);
-	static ResultType Dynamic(char *aHotkeyName, Label *aJumpToLabel, HookActionType aHookAction, char *aOptions);
-	ResultType UpdateHotkey(Label *aJumpToLabel, HookActionType aHookAction);
-	static ResultType AddHotkey(Label *aJumpToLabel, HookActionType aHookAction, char *aName = NULL);
+
+	#define HOTKEY_EL_BADLABEL           "1" // Set as strings so that SetFormat doesn't affect their appearance (for use with "If ErrorLevel in 5,6").
+	#define HOTKEY_EL_INVALID_KEYNAME    "2"
+	#define HOTKEY_EL_UNSUPPORTED_PREFIX "3"
+	#define HOTKEY_EL_ALTTAB             "4"
+	#define HOTKEY_EL_NOTEXIST           "5"
+	#define HOTKEY_EL_NOTEXISTVARIANT    "6"
+	#define HOTKEY_EL_WIN9X              "50"
+	#define HOTKEY_EL_NOREG              "51"
+	#define HOTKEY_EL_MAXCOUNT           "98" // 98 allows room for other ErrorLevels to be added in between.
+	#define HOTKEY_EL_MEM                "99"
+	static ResultType Dynamic(char *aHotkeyName, char *aLabelName, char *aOptions, Label *aJumpToLabel);
+
+	static Hotkey *AddHotkey(Label *aJumpToLabel, HookActionType aHookAction, char *aName, bool aUseErrorLevel);
+	HotkeyVariant *FindVariant();
+	HotkeyVariant *AddVariant(Label *aJumpToLabel);
 	static bool PrefixHasNoEnabledSuffixes(int aVKorSC, bool aIsSC);
-	static bool CriterionForbidsFiring(HotkeyIDType aHotkeyIDwithFlags, bool aKeyUp, UCHAR &aNoSuppress
+	HotkeyVariant *CriterionAllowsFiring(HWND *aFoundHWND = NULL);
+	static HotkeyVariant *CriterionAllowsFiring(HotkeyIDType aHotkeyID, HWND &aFoundHWND);
+	static bool CriterionFiringIsCertain(HotkeyIDType aHotkeyIDwithFlags, bool aKeyUp, UCHAR &aNoSuppress
 		, char *aSingleChar);
-	static ResultType PerformID(HotkeyIDType aHotkeyID);
 	static void TriggerJoyHotkeys(int aJoystickID, DWORD aButtonsNewlyDown);
-	static ResultType AllDeactivate(bool aObeySuspend, bool aChangeHookStatus = true, bool aKeepHookIfNeeded = false);
-	static void AllActivate();
+	void Perform(HotkeyVariant &aVariant);
+	static void ManifestAllHotkeys();
 	static void RequireHook(HookType aWhichHook) {sWhichHookAlways |= aWhichHook;}
-	static ResultType TextInterpret(char *aName, Hotkey *aThisHotkey);
-	static char *TextToModifiers(char *aText, Hotkey *aThisHotkey);
-	static ResultType TextToKey(char *aText, char *aHotkeyName, bool aIsModifier, Hotkey *aThisHotkey);
+	static ResultType TextInterpret(char *aName, Hotkey *aThisHotkey, bool aUseErrorLevel);
+
+	#define HK_PROP_ASTERISK 0x1  // Bitwise flags for use in aProperties.
+	#define HK_PROP_TILDE    0x2  //
+	static char *TextToModifiers(char *aText, Hotkey *aThisHotkey, mod_type *aModifiers = NULL
+		, modLR_type *aModifiersLR = NULL, UCHAR *aProperties = NULL);
+
+	static ResultType TextToKey(char *aText, char *aHotkeyName, bool aIsModifier, Hotkey *aThisHotkey, bool aUseErrorLevel);
 
 	static void InstallKeybdHook();
 
-	bool IsExemptFromSuspend()
+	bool PerformIsAllowed(HotkeyVariant &aVariant)
 	{
-		return mJumpToLabel && mJumpToLabel->IsExemptFromSuspend();
+		// For now, attempts to launch another simultaneous instance of this subroutine
+		// are ignored if MaxThreadsPerHotkey (for this particular hotkey) has been reached.
+		// In the future, it might be better to have this user-configurable, i.e. to devise
+		// some way for the hotkeys to be kept queued up so that they take effect only when
+		// the number of currently active threads drops below the max.  But doing such
+		// might make "infinite key loops" harder to catch because the rate of incoming hotkeys
+		// would be slowed down to prevent the subroutines from running concurrently:
+		return aVariant.mExistingThreads < aVariant.mMaxThreads
+			|| (ACT_IS_ALWAYS_ALLOWED(aVariant.mJumpToLabel->mJumpToLine->mActionType));
 	}
 
-	static bool PerformIsAllowed(HotkeyIDType aHotkeyID)
+	bool IsExemptFromSuspend() // A hotkey is considered exempt if even one of its variants is exempt.
 	{
-		return (aHotkeyID >= 0 && aHotkeyID < sHotkeyCount) ? shk[aHotkeyID]->PerformIsAllowed() : false;
+		// It's the caller's responsibility to check vp->mEnabled; that isn't done here.
+		if (mHookAction) // An alt-tab hotkey (which overrides all its variants) is never exempt.
+			return false;
+		for (HotkeyVariant *vp = mFirstVariant; vp; vp = vp->mNextVariant)
+			if (vp->mJumpToLabel->IsExemptFromSuspend()) // If it has no label, it's never exempt.
+				return true; // Even a single exempt variant makes the entire hotkey exempt.
+		// Otherwise, since the above didn't find any exempt variants, the entire hotkey is non-exempt:
+		return false;
 	}
 
-	static void RunAgainAfterFinished(HotkeyIDType aHotkeyID)
+	bool IsCompletelyDisabled()
 	{
-		if (aHotkeyID >= 0 && aHotkeyID < sHotkeyCount && shk[aHotkeyID]->mMaxThreadsBuffer) // short-circuit order
-		{
-			shk[aHotkeyID]->mRunAgainAfterFinished = true;
-			shk[aHotkeyID]->mRunAgainTime = GetTickCount();
-			// Above: The time this event was buffered, to make sure it doesn't get too old.
-		}
+		if (mHookAction) // Alt tab hotkeys are disabled completely if and only if the parent is disabled.
+			return !mParentEnabled;
+		for (HotkeyVariant *vp = mFirstVariant; vp; vp = vp->mNextVariant)
+			if (vp->mEnabled)
+				return false;
+		return true;
 	}
 
-	static void ResetRunAgainAfterFinished()  // For all hotkeys.
+	static void RunAgainAfterFinished(HotkeyVariant &aVariant)
 	{
+		if (aVariant.mMaxThreadsBuffer)
+			aVariant.mRunAgainAfterFinished = true;
+		aVariant.mRunAgainTime = GetTickCount();
+		// Above: The time this event was buffered, to make sure it doesn't get too old.
+	}
+
+	static void ResetRunAgainAfterFinished()  // For all hotkeys and all variants of each.
+	{
+		HotkeyVariant *vp;
 		for (int i = 0; i < sHotkeyCount; ++i)
-			shk[i]->mRunAgainAfterFinished = false;
-	}
-
-	static int GetPriority(HotkeyIDType aHotkeyID)
-	{
-		return (aHotkeyID >= 0 && aHotkeyID < sHotkeyCount) ? shk[aHotkeyID]->mPriority : PRIORITY_MINIMUM;
-	}
-
-	static char *GetName(HotkeyIDType aHotkeyID)
-	{
-		return (aHotkeyID >= 0 && aHotkeyID < sHotkeyCount) ? shk[aHotkeyID]->mName : "";
-	}
-
-	static Label *GetLabel(HotkeyIDType aHotkeyID)
-	{
-		return (aHotkeyID >= 0 && aHotkeyID < sHotkeyCount) ? shk[aHotkeyID]->mJumpToLabel : NULL;
-	}
-
-	static ActionTypeType GetTypeOfFirstLine(HotkeyIDType aHotkeyID)
-	{
-		Label *label = GetLabel(aHotkeyID);
-		if (!label)
-			return ACT_INVALID;
-		return label->mJumpToLine->mActionType;
+			for (vp = shk[i]->mFirstVariant; vp; vp = vp->mNextVariant)
+				vp->mRunAgainAfterFinished = false;
 	}
 
 	static HookActionType ConvertAltTab(char *aBuf, bool aAllowOnOff)
@@ -309,10 +291,10 @@ public:
 		return 0;
 	}
 
-	static int FindHotkeyByName(char *aName);
-	static int FindHotkeyWithThisModifier(vk_type aVK, sc_type aSC);
-	static int FindHotkeyContainingModLR(modLR_type aModifiersLR);  //, int hotkey_id_to_omit);
-	//static int FindHotkeyBySC(sc2_type aSC2, mod_type aModifiers, modLR_type aModifiersLR);
+	static Hotkey *FindHotkeyByTrueNature(char *aName);
+	static Hotkey *FindHotkeyContainingModLR(modLR_type aModifiersLR);  //, HotkeyIDType hotkey_id_to_omit);
+	//static Hotkey *FindHotkeyWithThisModifier(vk_type aVK, sc_type aSC);
+	//static Hotkey *FindHotkeyBySC(sc2_type aSC2, mod_type aModifiers, modLR_type aModifiersLR);
 
 	static char *ListHotkeys(char *aBuf, int aBufSize);
 	char *ToText(char *aBuf, int aBufSize, bool aAppendNewline);

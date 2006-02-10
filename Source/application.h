@@ -73,8 +73,7 @@ bool MsgSleep(int aSleepDuration = INTERVAL_UNSPECIFIED, MessageMode aMode = RET
 // keep it false even when all subroutines are permanently uninterruptible, since it will be made
 // false every time a new subroutine launches.
 // Macro notes:
-// Reset in case the timer hasn't yet expired and PerformID()'s call of ExecUntil()
-// didn't get a chance to do it:
+// Reset in case the timer hasn't yet expired and ExecUntil() didn't get a chance to do it:
 // ...
 // Since this timer is of the type that calls a function directly, rather than placing
 // msgs in our msg queue, it should not be necessary to worry about removing its messages

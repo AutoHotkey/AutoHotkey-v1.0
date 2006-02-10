@@ -37,7 +37,7 @@ static size_t g_CommentFlagLength = 1; // pre-calculated for performance
 
 
 Script::Script()
-	: mFirstLine(NULL), mLastLine(NULL), mCurrLine(NULL), mLineCount(0)
+	: mFirstLine(NULL), mLastLine(NULL), mCurrLine(NULL), mPlaceholderLabel(NULL), mLineCount(0)
 	, mLoopFile(NULL), mLoopRegItem(NULL), mLoopReadFile(NULL), mLoopField(NULL), mLoopIteration(0)
 	, mThisHotkeyName(""), mPriorHotkeyName(""), mThisHotkeyStartTime(0), mPriorHotkeyStartTime(0)
 	, mEndChar(0), mThisHotkeyModifiersLR(0)
@@ -870,6 +870,13 @@ LineNumberType Script::LoadFromFile()
 	}
 #endif
 
+	// v1.0.42: Placeholder to use in place of a NULL label to simplify code in some places.
+	// This must be created before loading the script because it's relied upon when creating
+	// hotkeys to provide an alternative to having a NULL label. It will be given a non-NULL
+	// mJumpToLine further down.
+	if (   !(mPlaceholderLabel = new Label(""))   ) // Not added to linked list since it's never looked up.
+		return LOADING_FAILED;
+
 	// Load the main script file.  This will also load any files it includes with #Include.
 	if (LoadIncludedFile(mFileSpec, false, false) != OK)
 		return LOADING_FAILED;
@@ -903,6 +910,7 @@ LineNumberType Script::LoadFromFile()
 	// Not done since it's number doesn't much matter: ++mCombinedLineNumber;
 	if (!AddLine(ACT_EXIT)) // Second exit to guaranty non-NULL mRelatedLine(s).
 		return LOADING_FAILED;
+	mPlaceholderLabel->mJumpToLine = mLastLine; // To follow the rule "all labels should have a non-NULL line before the script starts running".
 
 	// Always preparse the blocks before the If/Else's because If/Else may rely on blocks:
 	if (PreparseBlocks(mFirstLine) && PreparseIfElse(mFirstLine))
@@ -924,7 +932,8 @@ LineNumberType Script::LoadFromFile()
 		FILETIME ft;
 		GetSystemTimeAsFileTime(&ft);
 		// Use the low-order DWORD since the high-order one rarely changes.  If my calculations are correct,
-		// the low-order 32-bits changes every 7.2 minutes, which makes it a better seed than GetTickCount:
+		// the low-order 32-bits traverses its full 32-bit range every 7.2 minutes, which seems to make
+		// using it as a seed superior to GetTickCount for most purposes.
 		init_genrand(ft.dwLowDateTime);
 		return mLineCount; // The count of runnable lines that were loaded, which might be zero.
 	}
@@ -1104,6 +1113,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 	// File is now open, read lines from it.
 
 	char *hotkey_flag, *cp, *cp1, *action_end, *hotstring_start, *hotstring_options;
+	Hotkey *hk;
 	LineNumberType pending_function_line_number, saved_line_number;
 	HookActionType hook_action;
 	bool is_label;
@@ -1646,7 +1656,7 @@ examine_line:
 				cp = omit_trailing_whitespace(buf, hotkey_flag); // For maintainability.
 				orig_char = *cp;
 				*cp = '\0'; // Temporarily terminate.
-				if (!Hotkey::TextInterpret(omit_leading_whitespace(buf), NULL)) // Passing NULL calls it in validate-only mode.
+				if (!Hotkey::TextInterpret(omit_leading_whitespace(buf), NULL, false)) // Passing NULL calls it in validate-only mode.
 					hotkey_flag = NULL; // It's not a valid hotkey, so indicate that it's a command instead.
 				*cp = orig_char; // Undo the temp. termination above.
 			}
@@ -1668,6 +1678,12 @@ examine_line:
 				// safely exist inside a function body and since the body is a block, other validation
 				// ensures that a Gosub or Goto can't jump to it from outside the function.
 				ScriptError("Hotkeys/hotstrings are not allowed inside functions.", buf);
+				return CloseAndReturn(fp, script_buf, FAIL);
+			}
+			if (mLastLine && mLastLine->mActionType == ACT_IFWINACTIVE)
+			{
+				mCurrLine = mLastLine; // To show vicinity lines.
+				ScriptError("IfWin should be #IfWin.", buf);
 				return CloseAndReturn(fp, script_buf, FAIL);
 			}
 			*hotkey_flag = '\0'; // Terminate so that buf is now the label itself.
@@ -1767,8 +1783,9 @@ examine_line:
 			// the following two hotstring labels to be unique rather than considered duplicates:
 			// ::abc::
 			// :c:abc::
-			if (!AddLabel(buf)) // Always add a label before adding the first line of its section.
+			if (!AddLabel(buf, true)) // Always add a label before adding the first line of its section.
 				return CloseAndReturn(fp, script_buf, FAIL);
+			hook_action = 0; // Set default.
 			if (*hotkey_flag) // This hotkey's action is on the same line as its label.
 			{
 				if (!hotstring_start)
@@ -1784,8 +1801,6 @@ examine_line:
 				if (!AddLine(ACT_RETURN))
 					return CloseAndReturn(fp, script_buf, FAIL);
 			}
-			else
-				hook_action = 0;
 
 			if (hotstring_start)
 			{
@@ -1803,17 +1818,51 @@ examine_line:
 				// otherwise it's the first character in the options list (option string is not terminated,
 				// but instead ends in a colon).  hotkey_flag is blank if it's not an auto-replace
 				// hotstring, otherwise it contains the auto-replace text.
+				// v1.0.42: Unlike hotkeys, duplicate hotstrings are not detected.  This is because
+				// hotstrings are less commonly used and also because it requires more code to find
+				// hotstring duplicates (and performs a lot worse if a script has thousands of
+				// hotstrings) because of all the hotstring options.
 				if (!Hotstring::AddHotstring(mLastLabel, hotstring_options ? hotstring_options : ""
 					, hotstring_start, hotkey_flag, has_continuation_section))
 					return CloseAndReturn(fp, script_buf, FAIL);
 			}
-			else
-				if (Hotkey::AddHotkey(mLastLabel, hook_action) != OK) // Set hotkey to jump to this label.
-					return CloseAndReturn(fp, script_buf, FAIL);
+			else // It's a hotkey vs. hotstring.
+			{
+				if (hk = Hotkey::FindHotkeyByTrueNature(buf)) // Parent hotkey found.  Add a child/variant hotkey for it.
+				{
+					if (hook_action)
+					{
+						// Hotkey::Dynamic() contains logic and comments similar to this, so maintain them together.
+						// An attempt to add an alt-tab variant to an existing hotkey.  This might have
+						// merit if the intention is to make it alt-tab now but to later disable that alt-tab
+						// aspect via the Hotkey cmd to let the context-sensitive variants shine through
+						// (take effect).
+						hk->mHookAction = hook_action;
+					}
+					else
+					{
+						// Detect duplicate hotkey variants to help spot bugs in scripts.
+						if (hk->FindVariant()) // See if there's already a variant matching the current criteria.
+						{
+							mCurrLine = NULL;  // Prevents showing unhelpful vicinity lines.
+							ScriptError("Duplicate hotkey.", buf);
+							return CloseAndReturn(fp, script_buf, FAIL);
+						}
+						if (!hk->AddVariant(mLastLabel))
+						{
+							ScriptError(ERR_OUTOFMEM, buf);
+							return CloseAndReturn(fp, script_buf, FAIL);
+						}
+					}
+				}
+				else // No parent hotkey yet, so create it.
+					if (   !(hk = Hotkey::AddHotkey(mLastLabel, hook_action, NULL, false))   )
+						return CloseAndReturn(fp, script_buf, FAIL); // It already displayed the error.
+			}
 			goto continue_main_loop; // In lieu of "continue", for performance.
 		}
 
-		// Otherwise, not a hotkey.  Check if it's a generic, non-hotkey label:
+		// Otherwise, not a hotkey or hotstring.  Check if it's a generic, non-hotkey label:
 		if (buf[buf_length - 1] == ':') // Labels must end in a colon (buf was previously rtrimmed).
 		{
 			if (buf_length == 1) // v1.0.41.01: Properly handle the fact that this line consists of only a colon.
@@ -1833,11 +1882,11 @@ examine_line:
 					break;
 				}
 		}
-		if (is_label)
+		if (is_label) // It's a generic, non-hotkey/non-hotstring label.
 		{
 			buf[--buf_length] = '\0';  // Remove the trailing colon.
 			rtrim(buf, buf_length); // Has already been ltrimmed.
-			if (!AddLabel(buf))
+			if (!AddLabel(buf, false))
 				return CloseAndReturn(fp, script_buf, FAIL);
 			goto continue_main_loop; // In lieu of "continue", for performance.
 		}
@@ -1845,7 +1894,7 @@ examine_line:
 		if (*buf == '#')
 		{
 			saved_line_number = mCombinedLineNumber; // Backup in case IsDirective() processes and include file, which would change mCombinedLineNumber's value.
-			switch(IsDirective(buf))
+			switch(IsDirective(buf)) // Note that it may alter the contents of buf, at least in the case of #IfWin.
 			{
 			case CONDITION_TRUE:
 				// Since the directive may have been a #include which called us recursively,
@@ -2331,24 +2380,17 @@ inline ResultType Script::IsDirective(char *aBuf)
 			g_HotCriterion = invert ? HOT_IF_NOT_EXIST : HOT_IF_EXIST;
 		else // It starts with #IfWin but isn't Active or Exist: Don't alter g_HotCriterion.
 			return CONDITION_FALSE; // Indicate unknown directive since there are currently no other possibilities.
-		// A new hotkey/hotstring criteria has been specified (or it's being turned off).
-		// The following is done to conserve memory and simplify the code.  It relies on the fact that
-		// currently, criteria can't be changed.  If the script uses #IfWinXXX to declare criteria
-		// it had previously declared at some point, a little bit of memory is wasted due to duplicates in the
-		// heap, but such scripts are rare.
-		// Allocate memory for the entire string (title + text), then terminate WinTitle at the WinText
-		// parameter (if there is one).  If no hotkey or hotstring ever uses this criteria, the memory is
-		// leaked -- but that is inconsequential because SimpleHeap is designed to allocate memory that
-		// is persistent for the *entire* duration of the script.  All memory, including any small bits
-		// leaked here due to strangeness in the script, gets reclaimed automatically when the program exits.
-		if (!parameter || !(g_HotWinTitle = SimpleHeap::Malloc(parameter))) // The omission of the parameter indicates that any existing criteria should be turned off.
+		if (!parameter) // The omission of the parameter indicates that any existing criteria should be turned off.
 		{
 			g_HotCriterion = HOT_NO_CRITERION; // Indicate that no criteria are in effect for subsequent hotkeys.
+			g_HotWinTitle = ""; // Helps maintainability and some things might rely on it.
+			g_HotWinText = "";  //
 			return CONDITION_TRUE;
 		}
+		char *hot_win_title = parameter, *hot_win_text; // Set default for title; text is determined later.
 		// Scan for the first non-escaped comma.  If there is one, it marks the second paramter: WinText.
 		char *cp, *first_non_escaped_comma;
-		for (first_non_escaped_comma = NULL, cp = g_HotWinTitle; ; ++cp)  // Increment to skip over the symbol just found by the inner for().
+		for (first_non_escaped_comma = NULL, cp = hot_win_title; ; ++cp)  // Increment to skip over the symbol just found by the inner for().
 		{
 			for (; *cp && !(*cp == g_EscapeChar || *cp == g_delimiter || *cp == g_DerefChar); ++cp);  // Find the next escape char, comma, or %.
 			if (!*cp) // End of string was found.
@@ -2378,20 +2420,22 @@ inline ResultType Script::IsDirective(char *aBuf)
 			// strange whitespace flexibility that would likely cause unwanted bugs due to inadvertently
 			// have two spaces instead of one).  The user may use `s and `t to put literal leading/trailing
 			// spaces/tabs into these paramters.
-			g_HotWinText = omit_leading_whitespace(first_non_escaped_comma + 1);
-			*first_non_escaped_comma = '\0'; // Terminate at the comma to split off g_HotWinTitle on its own.
-			rtrim(g_HotWinTitle, first_non_escaped_comma - g_HotWinTitle);  // Omit whitespace (see similar comment above).
+			hot_win_text = omit_leading_whitespace(first_non_escaped_comma + 1);
+			*first_non_escaped_comma = '\0'; // Terminate at the comma to split off hot_win_title on its own.
+			rtrim(hot_win_title, first_non_escaped_comma - hot_win_title);  // Omit whitespace (see similar comment above).
 			// The following must be done only after trimming and omitting whitespace above, so that
 			// `s and `t can be used to insert leading/trailing spaces/tabs.  ConvertEscapeSequences()
 			// also supports insertion of literal commas via escaped sequences.
-			ConvertEscapeSequences(g_HotWinText, g_EscapeChar, true);
+			ConvertEscapeSequences(hot_win_text, g_EscapeChar, true);
 		}
 		else
-			g_HotWinText = Var::sEmptyString; // Modifiable empty string (for maintainability). And leave g_HotWinTitle set to the entire string because there's only one parameter.
+			hot_win_text = Var::sEmptyString; // Modifiable empty string (for maintainability). And leave hot_win_title set to the entire string because there's only one parameter.
 		// The following must be done only after trimming and omitting whitespace above (see similar comment above).
-		ConvertEscapeSequences(g_HotWinTitle, g_EscapeChar, true);
-		if (!(*g_HotWinTitle || *g_HotWinText)) // In case of something weird but legit like: #IfWinActive, , 
-			g_HotCriterion = HOT_NO_CRITERION; // Don't allow blank title+text to avoid having it interpreted as the last-found-window.
+		ConvertEscapeSequences(hot_win_title, g_EscapeChar, true);
+		// The following also handles the case where both title and text are blank, which could happen
+		// due to something weird but legit like: #IfWinActive, ,
+		if (!SetGlobalHotTitleText(hot_win_title, hot_win_text))
+			return ScriptError(ERR_OUTOFMEM); // So rare that no second param is provided (since its contents may have been temp-terminated or altered above).
 		return CONDITION_TRUE;
 	} // Above completely handles all directives and non-directives that start with "#IfWin".
 
@@ -2701,7 +2745,11 @@ ResultType Script::UpdateOrCreateTimer(Label *aLabel, char *aPeriod, char *aPrio
 
 
 Label *Script::FindLabel(char *aLabelName)
-// Returns the label whose name matches aLabelName, or NULL if not found.
+// Returns the first label whose name matches aLabelName, or NULL if not found.
+// v1.0.42: Since duplicates labels are now possible (to support #IfWin variants of a particular
+// hotkey or hotstring), callers must be aware that only the first match is returned.
+// This helps performance by requiring on average only half the labels to be searched before
+// a match is found.
 {
 	if (!aLabelName || !*aLabelName) return NULL;
 	for (Label *label = mFirstLabel; label != NULL; label = label->mNextLabel)
@@ -2712,13 +2760,12 @@ Label *Script::FindLabel(char *aLabelName)
 
 
 
-ResultType Script::AddLabel(char *aLabelName)
+ResultType Script::AddLabel(char *aLabelName, bool aAllowDupe)
 // Returns OK or FAIL.
 {
 	if (!*aLabelName)
 		return FAIL; // For now, silent failure because callers should check this beforehand.
-	Label *duplicate_label = FindLabel(aLabelName);
-	if (duplicate_label)
+	if (!aAllowDupe && FindLabel(aLabelName)) // Relies on short-circuit boolean order.
 		// Don't attempt to dereference "duplicate_label->mJumpToLine because it might not
 		// exist yet.  Example:
 		// label1:
@@ -3044,7 +3091,14 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 				else
 					operation = omit_leading_whitespace(operation);
 
+				// v1.0.42: Fix "If not Installed" not be seen as "If var-called-not in MatchList", being
+				// careful not to break "If NotInstalled in MatchList".  The following are also fixed in
+				// a similar way:
+				// If not BetweenXXX
+				// If not ContainsXXX
+				bool first_word_is_not = !strnicmp(action_args, "Not", 3) && strchr(end_flags, action_args[3]);
 				char *next_word;
+
 				switch (*operation)
 				{
 				case '=': // But don't allow == to be "Equals" since the 2nd '=' might be literal.
@@ -3085,7 +3139,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 					// Seems too rare a thing to warrant falling back to ACT_IFEXPR for this.
 					// UPDATE: It must fall back to ACT_IFEXPR, otherwise "if not var_name_beginning_with_b"
 					// is a syntax error.
-					if (strnicmp(operation, "between", 7))
+					if (first_word_is_not || strnicmp(operation, "between", 7))
 						action_type = ACT_IFEXPR;
 					else
 					{
@@ -3099,7 +3153,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 					// Seems too rare a thing to warrant falling back to ACT_IFEXPR for this.
 					// UPDATE: It must fall back to ACT_IFEXPR, otherwise "if not var_name_beginning_with_c"
 					// is a syntax error.
-					if (strnicmp(operation, "contains", 8))
+					if (first_word_is_not || strnicmp(operation, "contains", 8))
 						action_type = ACT_IFEXPR;
 					else
 					{
@@ -3127,8 +3181,13 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 						break;
 					case 'n':  // "IN"
 					case 'N':
-						action_type = ACT_IFIN;
-						operation[1] = ' '; // Remove the 'N' in "IN".  'I' is replaced with ',' later below.
+						if (first_word_is_not)
+							action_type = ACT_IFEXPR;
+						else
+						{
+							action_type = ACT_IFIN;
+							operation[1] = ' '; // Remove the 'N' in "IN".  'I' is replaced with ',' later below.
+						}
 						break;
 					default:
 						// v1.0.35.01 It must fall back to ACT_IFEXPR, otherwise "if not var_name_beginning_with_i"
@@ -7369,7 +7428,8 @@ Line *Script::PreparseIfElse(Line *aStartingLine, ExecUntilMode aMode, Attribute
 			break;
 
 		case ACT_HOTKEY:
-			if (*LINE_RAW_ARG2 && !line->ArgHasDeref(2))
+			if (   *LINE_RAW_ARG2 && !line->ArgHasDeref(2)
+				&& !line->ArgHasDeref(1) && strnicmp(LINE_RAW_ARG1, "IfWin", 5)   ) // v1.0.42: Omit IfWinXX from validation.
 				if (   !(line->mAttribute = FindLabel(LINE_RAW_ARG2))   )
 					if (!Hotkey::ConvertAltTab(LINE_RAW_ARG2, true))
 						return line->PreparseError(ERR_NO_LABEL);
@@ -7499,13 +7559,14 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 // the caller is indicating it doesn't need this value, so it won't (and can't) be set by
 // the called recursion layer.
 {
+	Line *unused_jump_to_line;
+	Line *&caller_jump_to_line = apJumpToLine ? *apJumpToLine : unused_jump_to_line; // Simplifies code in other places.
 	// Important to init, since most of the time it will keep this value.
 	// Tells caller that no jump is required (default):
-	if (apJumpToLine)
-		*apJumpToLine = NULL;
+	caller_jump_to_line = NULL;
 
 	Line *jump_to_line; // Don't use *apJumpToLine because it might not exist.
-	Line *jump_target;  // For use with Gosub & Goto
+	Line *jump_target;  // For use with Gosub & Goto & GroupActivate.
 	ResultType if_condition, result;
 	LONG_OPERATION_INIT
 
@@ -7663,14 +7724,16 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 					// else
 					//   ...
 					continue;
-				if (aMode == ONLY_ONE_LINE && jump_to_line != NULL && apJumpToLine != NULL)
-					// The above call to ExecUntil() told us to jump somewhere.  But since we're in
-					// ONLY_ONE_LINE mode, our caller must handle it because only it knows how
+				if (aMode == ONLY_ONE_LINE)
+				{
+					// When jump_to_line!=NULL, the above call to ExecUntil() told us to jump somewhere.
+					// But since we're in ONLY_ONE_LINE mode, our caller must handle it because only it knows how
 					// to extricate itself from whatever it's doing:
-					*apJumpToLine = jump_to_line; // Tell the caller to handle this jump.
+					caller_jump_to_line = jump_to_line; // Tell the caller to handle this jump (if applicable). jump_to_line==NULL is ok.
+					return result;
+				}
 				if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT
-					|| result == LOOP_BREAK || result == LOOP_CONTINUE
-					|| aMode == ONLY_ONE_LINE)
+					|| result == LOOP_BREAK || result == LOOP_CONTINUE)
 					// EARLY_RETURN can occur if this if's action was a block, and that block
 					// contained a RETURN, or if this if's only action is RETURN.  It can't
 					// occur if we just executed a Gosub, because that Gosub would have been
@@ -7684,8 +7747,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 				// call to ExecUntil told us to do that instead:
 				if (jump_to_line != NULL && jump_to_line->mParentLine != line->mParentLine)
 				{
-					if (apJumpToLine != NULL) // In this case, it should always be non-NULL?
-						*apJumpToLine = jump_to_line; // Tell the caller to handle this jump.
+					caller_jump_to_line = jump_to_line; // Tell the caller to handle this jump.
 					return OK;
 				}
 				if (jump_to_line != NULL) // jump to where the caller told us to go, rather than the end of IF.
@@ -7724,19 +7786,20 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 					// Preparser has ensured that every ELSE has a non-NULL next line:
 					result = line->mNextLine->ExecUntil(ONLY_ONE_LINE, apReturnValue, &jump_to_line, aCurrentFile
 						, aCurrentRegItem, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
-					if (aMode == ONLY_ONE_LINE && jump_to_line != NULL && apJumpToLine != NULL)
-						// The above call to ExecUntil() told us to jump somewhere.  But since we're in
-						// ONLY_ONE_LINE mode, our caller must handle it because only it knows how
+					if (aMode == ONLY_ONE_LINE)
+					{
+						// When jump_to_line!=NULL, the above call to ExecUntil() told us to jump somewhere.
+						// But since we're in ONLY_ONE_LINE mode, our caller must handle it because only it knows how
 						// to extricate itself from whatever it's doing:
-						*apJumpToLine = jump_to_line; // Tell the caller to handle this jump.
+						caller_jump_to_line = jump_to_line; // Tell the caller to handle this jump (if applicable). jump_to_line==NULL is ok.
+						return result;
+					}
 					if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT
-						|| result == LOOP_BREAK || result == LOOP_CONTINUE
-						|| aMode == ONLY_ONE_LINE)
+						|| result == LOOP_BREAK || result == LOOP_CONTINUE)
 						return result;
 					if (jump_to_line != NULL && jump_to_line->mParentLine != line->mParentLine)
 					{
-						if (apJumpToLine != NULL) // In this case, it should always be non-NULL?
-							*apJumpToLine = jump_to_line; // Tell the caller to handle this jump.
+						caller_jump_to_line = jump_to_line; // Tell the caller to handle this jump.
 						return OK;
 					}
 					if (jump_to_line != NULL)
@@ -7806,8 +7869,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 			// caller).
 			if (aMode == ONLY_ONE_LINE || line->mParentLine != jump_target->mParentLine)
 			{
-				if (apJumpToLine != NULL)
-					*apJumpToLine = jump_target; // Tell the caller to handle this jump.
+				caller_jump_to_line = jump_target; // Tell the caller to handle this jump.
 				return OK;
 			}
 			// Otherwise, we will handle this Goto since it's in our nesting layer:
@@ -7824,18 +7886,17 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 				group = g_script.FindGroup(ARG1);
 			if (group)
 			{
-				Line *jump_to_line;
 				// Note: This will take care of DoWinDelay if needed:
-				group->Activate(*ARG2 && !stricmp(ARG2, "R"), NULL, (void **)&jump_to_line);
-				if (jump_to_line)
+				group->Activate(*ARG2 && !stricmp(ARG2, "R"), NULL, (void **)&jump_target);
+				if (jump_target)
 				{
-					if (!line->IsJumpValid(jump_to_line))
+					if (!line->IsJumpValid(jump_target))
 						// This check probably isn't necessary since IsJumpValid() is mostly
 						// for Goto's.  But just in case the gosub's target label is some
 						// crazy place:
 						return FAIL;
 					// This section is just like the Gosub code above, so maintain them together.
-					result = jump_to_line->ExecUntil(UNTIL_RETURN, NULL, NULL, aCurrentFile, aCurrentRegItem
+					result = jump_target->ExecUntil(UNTIL_RETURN, NULL, NULL, aCurrentFile, aCurrentRegItem
 						, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
 					if (result == FAIL || result == EARLY_EXIT)
 						return result;
@@ -8030,11 +8091,10 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 
 			if (aMode == ONLY_ONE_LINE)
 			{
-				if (jump_to_line != NULL && apJumpToLine != NULL)
-					// The above call to ExecUntil() told us to jump somewhere.  But since we're in
-					// ONLY_ONE_LINE mode, our caller must handle it because only it knows how
-					// to extricate itself from whatever it's doing:
-					*apJumpToLine = jump_to_line; // Tell the caller to handle this jump.
+				// When jump_to_line!=NULL, the above call to ExecUntil() told us to jump somewhere.
+				// But since we're in ONLY_ONE_LINE mode, our caller must handle it because only it knows how
+				// to extricate itself from whatever it's doing:
+				caller_jump_to_line = jump_to_line; // Tell the caller to handle this jump (if any).  jump_to_line==NULL is ok.
 				// Return OK even if our result was LOOP_CONTINUE because we already handled the continue:
 				return OK;
 			}
@@ -8045,8 +8105,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 					// Our caller must handle the jump if it doesn't share the same parent as the
 					// current line (i.e. it's not at the same nesting level) because that means
 					// the jump target is at a more shallow nesting level than where we are now:
-					if (apJumpToLine != NULL) // i.e. caller gave us a place to store the jump target.
-						*apJumpToLine = jump_to_line; // Tell the caller to handle this jump.
+					caller_jump_to_line = jump_to_line; // Tell the caller to handle this jump (if applicable).
 					return OK;
 				}
 				// Since above didn't return, we're supposed to handle this jump.  So jump and then
@@ -8118,14 +8177,16 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 				// else
 				//   ...
 				continue;
-			if (aMode == ONLY_ONE_LINE && jump_to_line != NULL && apJumpToLine != NULL)
-				// The above call to ExecUntil() told us to jump somewhere.  But since we're in
-				// ONLY_ONE_LINE mode, our caller must handle it because only it knows how
+			if (aMode == ONLY_ONE_LINE)
+			{
+				// When jump_to_line!=NULL, the above call to ExecUntil() told us to jump somewhere.
+				// But since we're in ONLY_ONE_LINE mode, our caller must handle it because only it knows how
 				// to extricate itself from whatever it's doing:
-				*apJumpToLine = jump_to_line; // Tell the caller to handle this jump.
+				caller_jump_to_line = jump_to_line; // Tell the caller to handle this jump (if applicable).  jump_to_line==NULL is ok.
+				return result;
+			}
 			if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT
-				|| result == LOOP_BREAK || result == LOOP_CONTINUE
-				|| aMode == ONLY_ONE_LINE)
+				|| result == LOOP_BREAK || result == LOOP_CONTINUE)
 				return result;
 			// Currently, all blocks are normally executed in ONLY_ONE_LINE mode because
 			// they are the direct actions of an IF, an ELSE, or a LOOP.  So the
@@ -8134,8 +8195,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 			// Check to see if we need to jump somewhere:
 			if (jump_to_line != NULL && line->mParentLine != jump_to_line->mParentLine)
 			{
-				if (apJumpToLine != NULL) // In this case, it should always be non-NULL?
-					*apJumpToLine = jump_to_line; // Tell the caller to handle this jump.
+				caller_jump_to_line = jump_to_line; // Tell the caller to handle this jump (if applicable).
 				return OK;
 			}
 			if (jump_to_line != NULL) // jump to where the caller told us to go, rather than the end of our block.
@@ -9667,15 +9727,8 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		return OK;
 
 	case ACT_HOTKEY:
-	{
-		HookActionType hook_action = 0; // Set default.
-		// If it wasn't resolved at load-time, it must be a variable reference or a special value:
-		if (   !(target_label = (Label *)mAttribute)   )
-			if (   !(hook_action = Hotkey::ConvertAltTab(ARG2, true))   )
-				if (   *ARG2 && !(target_label = g_script.FindLabel(ARG2))   )  // Allow ARG2 to be blank.
-					return LineError(ERR_NO_LABEL ERR_ABORT, FAIL, ARG2);
-		return Hotkey::Dynamic(ARG1, target_label, hook_action, ARG3);
-	}
+		// mAttribute is the label resolved at loadtime, if available (for performance).
+		return Hotkey::Dynamic(THREE_ARGS, (Label *)mAttribute);
 
 	case ACT_SETTIMER: // A timer is being created, changed, or enabled/disabled.
 		// Note that only one timer per label is allowed because the label is the unique identifier
@@ -12352,19 +12405,13 @@ char *Line::ToText(char *aBuf, int aBufSize, bool aCRLF, DWORD aElapsed, bool aL
 
 void Line::ToggleSuspendState()
 {
+	// If suspension is being turned on:
+	// It seems unnecessary, and possibly undesirable, to purge any pending hotkey msgs from the msg queue.
+	// Even if there are some, it's possible that they are exempt from suspension so we wouldn't want to
+	// globally purge all messages anyway.
 	g_IsSuspended = !g_IsSuspended;
-	Hotstring::SuspendAll(g_IsSuspended);  // Must do this prior to AllActivate() to avoid incorrect removal of hook.
-	if (g_IsSuspended)
-		Hotkey::AllDeactivate(true); // This will also reset the RunAgainAfterFinished flags for all those deactivated.
-		// It seems unnecessary, and possibly undesirable, to purge any pending hotkey msgs from the msg queue.
-		// Even if there are some, it's possible that they are exempt from suspension so we wouldn't want to
-		// globally purge all messages anyway.
-	else
-		// For now, it seems best to call it with "true" in case the any hotkeys were dynamically added
-		// while the suspension was in effect, in which case the nature of some old hotkeys may have changed
-		// from registered to hook due to an interdependency with a newly added hotkey.  There are comments
-		// in AllActivate() that describe these interdependencies:
-		Hotkey::AllActivate();
+	Hotstring::SuspendAll(g_IsSuspended);  // Must do this prior to ManifestAllHotkeys() to avoid incorrect removal of hook.
+	Hotkey::ManifestAllHotkeys(); // Update the state of all hotkeys based on the complex interdependencies hotkeys have with each another.
 	g_script.UpdateTrayIcon();
 	CheckMenuItem(GetMenu(g_hWnd), ID_FILE_SUSPEND, g_IsSuspended ? MF_CHECKED : MF_UNCHECKED);
 }

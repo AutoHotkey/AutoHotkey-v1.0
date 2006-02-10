@@ -544,9 +544,9 @@ ResultType Line::Control(char *aCmd, char *aValue, char *aControl, char *aTitle,
 		break;
 
 	case CONTROL_CMD_ADD:
-		if (!strnicmp(aControl, "Combo", 5))
+		if (strcasestr(aControl, "Combo")) // v1.0.42: Changed to strcasestr vs. !strnicmp for TListBox/TComboBox.
 			msg = CB_ADDSTRING;
-		else if (!strnicmp(aControl, "List", 4))
+		else if (strcasestr(aControl, "List"))
 			msg = LB_ADDSTRING;
 		else
 			return OK;  // Must be ComboBox or ListBox.  Let ErrorLevel tell the story.
@@ -563,9 +563,9 @@ ResultType Line::Control(char *aCmd, char *aValue, char *aControl, char *aTitle,
 		control_index = ATOI(aValue) - 1;
 		if (control_index < 0)
 			return OK;
-		if (!strnicmp(aControl, "Combo", 5))
+		if (strcasestr(aControl, "Combo")) // v1.0.42: Changed to strcasestr vs. strnicmp for TListBox/TComboBox.
 			msg = CB_DELETESTRING;
-		else if (!strnicmp(aControl, "List", 4))
+		else if (strcasestr(aControl, "List"))
 			msg = LB_DELETESTRING;
 		else
 			return OK;  // Must be ComboBox or ListBox.  Let ErrorLevel tell the story.
@@ -581,13 +581,13 @@ ResultType Line::Control(char *aCmd, char *aValue, char *aControl, char *aTitle,
 		control_index = ATOI(aValue) - 1;
 		if (control_index < 0)
 			return OK;  // Let ErrorLevel tell the story.
-		if (!strnicmp(aControl, "Combo", 5))
+		if (strcasestr(aControl, "Combo")) // v1.0.42: Changed to strcasestr vs. strnicmp for TListBox/TComboBox.
 		{
 			msg = CB_SETCURSEL;
 			x_msg = CBN_SELCHANGE;
 			y_msg = CBN_SELENDOK;
 		}
-		else if (!strnicmp(aControl, "List" ,4))
+		else if (strcasestr(aControl, "List"))
 		{
 			if (GetWindowLong(control_window, GWL_STYLE) & (LBS_EXTENDEDSEL|LBS_MULTIPLESEL))
 				msg = LB_SETSEL;
@@ -622,13 +622,13 @@ ResultType Line::Control(char *aCmd, char *aValue, char *aControl, char *aTitle,
 		break;
 
 	case CONTROL_CMD_CHOOSESTRING:
-		if (!strnicmp(aControl, "ComboBox",8))
+		if (strcasestr(aControl, "Combo")) // v1.0.42: Changed to strcasestr vs. strnicmp for TListBox/TComboBox.
 		{
 			msg = CB_SELECTSTRING;
 			x_msg = CBN_SELCHANGE;
 			y_msg = CBN_SELENDOK;
 		}
-		else if (!strnicmp(aControl, "ListBox", 7))
+		else if (strcasestr(aControl, "List"))
 		{
 			if (GetWindowLong(control_window, GWL_STYLE) & (LBS_EXTENDEDSEL|LBS_MULTIPLESEL))
 				msg = LB_FINDSTRING;
@@ -729,9 +729,9 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 		break;
 
 	case CONTROLGET_CMD_FINDSTRING:
-		if (!strnicmp(aControl, "Combo", 5))
+		if (strcasestr(aControl, "Combo")) // v1.0.42: Changed to strcasestr vs. strnicmp for TListBox/TComboBox.
 			msg = CB_FINDSTRINGEXACT;
-		else if (!strnicmp(aControl, "List", 4))
+		else if (strcasestr(aControl, "List"))
 			msg = LB_FINDSTRINGEXACT;
 		else // Must be ComboBox or ListBox
 			return output_var->Assign();  // Let ErrorLevel tell the story.
@@ -743,13 +743,13 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 		break;
 
 	case CONTROLGET_CMD_CHOICE:
-		if (!strnicmp(aControl, "ComboBox", 8))
+		if (strcasestr(aControl, "Combo")) // v1.0.42: Changed to strcasestr vs. strnicmp for TListBox/TComboBox.
 		{
 			msg = CB_GETCURSEL;
 			x_msg = CB_GETLBTEXTLEN;
 			y_msg = CB_GETLBTEXT;
 		}
-		else if (!strnicmp(aControl, "ListBox" ,7))
+		else if (strcasestr(aControl, "List"))
 		{
 			msg = LB_GETCURSEL;
 			x_msg = LB_GETTEXTLEN;
@@ -785,19 +785,19 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 		break;
 
 	case CONTROLGET_CMD_LIST:
-		if (!strnicmp(aControl, "SysListView32", 13))
+		if (!strnicmp(aControl, "SysListView32", 13)) // Tried strcasestr(aControl, "ListView") to get it to work with IZArc's Delphi TListView1, but none of the modes or options worked.
 			return ControlGetListView(*output_var, control_window, aValue); // It will also set ErrorLevel to "success" if successful.
 		// This is done here as the special LIST sub-command rather than just being built into
 		// ControlGetText because ControlGetText already has a function for ComboBoxes: it fetches
 		// the current selection.  Although ListBox does not have such a function, it seem best
 		// to consolidate both methods here.
-		if (!strnicmp(aControl, "ComboBox", 8))
+		if (strcasestr(aControl, "Combo")) // v1.0.42: Changed to strcasestr vs. strnicmp for TListBox/TComboBox.
 		{
 			msg = CB_GETCOUNT;
 			x_msg = CB_GETLBTEXTLEN;
 			y_msg = CB_GETLBTEXT;
 		}
-		else if (!strnicmp(aControl, "ListBox" ,7))
+		else if (strcasestr(aControl, "List"))
 		{
 			msg = LB_GETCOUNT;
 			x_msg = LB_GETTEXTLEN;

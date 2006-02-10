@@ -189,15 +189,16 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 
 	int i, object_count;
 	bool msg_was_handled;
-	HWND fore_window;
+	HWND fore_window, focused_control, focused_parent, criterion_found_hwnd;
 	DWORD fore_pid;
 	char fore_class_name[32];
 	UserMenuItem *menu_item;
+	Hotkey *hk;
+	HotkeyVariant *variant;
 	ActionTypeType type_of_first_line;
 	int priority;
 	Hotstring *hs;
 	GuiType *pgui; // This is just a temp variable and should not be referred to once the below has been determined.
-	HWND focused_control, focused_parent;
 	GuiControlType *pcontrol, *ptab_control;
 	GuiIndexType gui_index;  // Don't use pgui because pointer can become invalid if ExecUntil() executes "Gui Destroy".
 	bool *pgui_label_is_running;
@@ -540,7 +541,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 			continue;
 
 		case AHK_GUI_ACTION:   // The user pressed a button on a GUI window, or some other actionable event. Listed first for performance.
-		case WM_HOTKEY:        // As a result of this app having previously called RegisterHotkey().
+		case WM_HOTKEY:        // As a result of this app having previously called RegisterHotkey(), or from TriggerJoyHotkeys().
 		case AHK_HOOK_HOTKEY:  // Sent from this app's keyboard or mouse hook.
 		case AHK_HOTSTRING:    // Sent from keybd hook to activate a non-auto-replace hotstring.
 		case AHK_USER_MENU:    // The user selected a custom menu item.
@@ -643,15 +644,31 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				if (msg.wParam >= Hotstring::sHotstringCount) // Invalid hotstring ID (perhaps spoofed by external app)
 					continue; // Do nothing.
 				hs = Hotstring::shs[msg.wParam];  // For performance and convenience.
+				if (hs->mHotCriterion)
+				{
+					// For details, see comments in the hotkey section of this switch().
+					if (   !(criterion_found_hwnd = HotCriterionAllowsFiring(hs->mHotCriterion, hs->mHotWinTitle, hs->mHotWinText))   )
+						// Hotstring is no longer eligible to fire even though it was when the hook sent us
+						// the message.  Abort the firing even though the hook may have already started
+						// executing the hotstring by suppressing the final end-character or other actions.
+						// It seems preferable to abort midway through the execution than to continue sending
+						// keystrokes to the wrong window, or when the hotstring has become suspended.
+						continue;
+					// For details, see comments in the hotkey section of this switch().
+					if (!(hs->mHotCriterion == HOT_IF_ACTIVE || hs->mHotCriterion == HOT_IF_EXIST))
+						criterion_found_hwnd = NULL; // For "NONE" and "NOT", there is no last found window.
+				}
+				else // No criterion, so it's a global hotstring.  It can always fire, but it has no "last found window".
+					criterion_found_hwnd = NULL;
 				// Do a simple replacement for the hotstring if that's all that's called for.
 				// Don't create a new quasi-thread or any of that other complexity done further
 				// below.  But also do the backspacing (if specified) for a non-autoreplace hotstring,
 				// even if it can't launch due to MaxThreads, MaxThreadsPerHotkey, or some other reason:
 				hs->DoReplace(msg.lParam);  // Does only the backspacing if it's not an auto-replace hotstring.
-				if (*hs->mReplacement) // Fully handled by the above.
+				if (*hs->mReplacement) // Fully handled by the above; i.e. it's an auto-replace hotstring.
 					continue;
 				// Otherwise, continue on and let a new thread be created to handle this hotstring.
-				// But first, since this isn't an auto-replace hotstring, set this value to support
+				// Since this isn't an auto-replace hotstring, set this value to support
 				// the built-in variable A_EndChar:
 				g_script.mEndChar = (char)LOWORD(msg.lParam);
 				type_of_first_line = hs->mJumpToLabel->mJumpToLine->mActionType;
@@ -663,7 +680,63 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				break;
 
 			default: // hotkey
-				type_of_first_line = Hotkey::GetTypeOfFirstLine((HotkeyIDType)msg.wParam);
+				if (msg.wParam >= Hotkey::sHotkeyCount) // Invalid hotkey ID.
+					continue;
+				hk = Hotkey::shk[msg.wParam];
+				// Check if criterion allows firing.
+				// For maintainability, this is done here rather than a little further down
+				// past the MAX_THREADS_LIMIT and thread-priority checks.  Those checks hardly
+				// ever abort a hotkey launch anyway.
+				//
+				// If message is WM_HOTKEY, it's either:
+				// 1) A joystick hotkey from TriggerJoyHotkeys(), in which case the lParam is ignored.
+				// 2) A hotkey message sent by the OS, in which case lParam contains currently-unused info set by the OS.
+				//
+				// An incoming WM_HOTKEY can be subject to #IfWin at this stage under the following conditions:
+				// 1) Joystick hotkey, because it relies on us to do the check so that the check is done only
+				//    once rather than twice.
+				// 2) Win9x's support for #IfWin, which never uses the hook but instead simply does nothing if
+				//    none of the hotkey's criteria is satisfied.
+				// 3) #IfWin keybd hotkeys that were made non-hook because they have a non-suspended, global variant.
+				//
+				// If message is AHK_HOOK_HOTKEY:
+				// Rather than having the hook pass the qualified variant to us, it seems preferable
+				// to search through all the criteria again and rediscover it.  This is because conditions
+				// may have changed since the message was posted, and although the hotkey might still be
+				// eligible for firing, a different variant might now be called for (e.g. due to a change
+				// in the active window).  Since most criteria hotkeys have at most only a few criteria,
+				// and since most such criteria are #IfWinActive rather than Exist, the performance will
+				// typically not be reduced much at all.  Futhermore, trading performance for greater
+				// reliability seems worth it in this case.
+				// 
+				// The inefficiency of calling HotCriterionAllowsFiring() twice for each hotkey --
+				// once in the hook and again here -- seems justifed for the following reasons:
+				// - It only happens twice if the hotkey a hook hotkey (multi-variant keyboard hotkeys
+				//   that have a global variant are usually non-hook, even on NT/2k/XP).
+				// - The hook avoids doing its first check of WinActive/Exist if it sees that the hotkey
+				//   has a non-suspended, global variant.  That way, hotkeys that are hook-hotkeys for
+				//   reasons other than #IfWin (such as mouse, overriding OS hotkeys, or hotkeys
+				//   that are too fancy for RegisterHotkey) will not have to do the check twice.
+				// - It provides the ability to set the last-found-window for #IfWinActive/Exist
+				//   (though it's not needed for the "Not" counterparts).  This HWND could be passed
+				//   via the message, but that would require malloc-there and free-here, and might
+				//   result in memory leaks if its ever possible for messages to get discarded by the OS.
+				// - It allows hotkeys that were eligible for firing at the time the message was
+				//   posted but that have since become ineligible to be aborted.  This seems like a
+				//   good precaution for most users/situations because such hotkey subroutines will
+				//   often assume (for scripting simplicity) that the specified window is active or
+				//   exists when the subroutine executes its first line.
+				// - Most criterion hotkeys use #IfWinActive, which is a very fast call.  Also, although
+				//   WinText and/or "SetTitleMatchMode Slow" slow down window searches, those are rarely
+				//   used too.
+				if (   !(variant = hk->CriterionAllowsFiring(&criterion_found_hwnd))   )
+					continue; // No criterion is eligible, so ignore this hotkey event (see other comments).
+					// If this is AHK_HOOK_HOTKEY, criterion was eligible at time message was posted,
+					// but not now.  Seems best to abort (see other comments).
+				// Now that above has ensured variant is non-NULL:
+				if (!(variant->mHotCriterion == HOT_IF_ACTIVE || variant->mHotCriterion == HOT_IF_EXIST))
+					criterion_found_hwnd = NULL; // For "NONE" and "NOT", there is no last found window.
+				type_of_first_line = variant->mJumpToLabel->mJumpToLine->mActionType;
 			} // switch(msg.message)
 
 			if (g_nThreads >= g_MaxThreadsTotal)
@@ -732,7 +805,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				// Due to the key-repeat feature and the fact that most scripts use a value of 1
 				// for their #MaxThreadsPerHotkey, this check will often help average performance
 				// by avoiding a lot of unncessary overhead that would otherwise occur:
-				if (!Hotkey::PerformIsAllowed((HotkeyIDType)msg.wParam))
+				if (!hk->PerformIsAllowed(*variant))
 				{
 					// The key is buffered in this case to boost the responsiveness of hotkeys
 					// that are being held down by the user to activate the keyboard's key-repeat
@@ -740,10 +813,10 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 					// which will be fired almost the instant the previous iteration of the subroutine
 					// finishes (this above descript applies only when MaxThreadsPerHotkey is 1,
 					// which it usually is).
-					Hotkey::RunAgainAfterFinished((HotkeyIDType)msg.wParam);
+					hk->RunAgainAfterFinished(*variant);
 					continue;
 				}
-				priority = Hotkey::GetPriority((HotkeyIDType)msg.wParam);
+				priority = variant->mPriority;
 			}
 
 			if (priority < g.Priority) // Ignore this event because its priority is too low.
@@ -814,8 +887,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				// Unlike hotkeys -- which can have a name independent of their label by being created or updated
 				// with the HOTKEY command -- a hot string's unique name is always its label since that includes
 				// the options that distinguish between (for example) :c:ahk:: and ::ahk::
-				g_script.mThisHotkeyName = (msg.message == AHK_HOTSTRING) ? hs->mJumpToLabel->mName
-					: Hotkey::GetName((HotkeyIDType)msg.wParam);
+				g_script.mThisHotkeyName = (msg.message == AHK_HOTSTRING) ? hs->mJumpToLabel->mName : hk->mName;
 				g_script.mThisHotkeyStartTime = GetTickCount(); // Fixed for v1.0.35.10 to not happen for GUI threads.
 			}
 
@@ -851,7 +923,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 			// will not be, so the icon needs to be checked:
 			g_script.UpdateTrayIcon();
 
-			// Do this last, right before the PerformID():
+			// Do this last, right before launching the thread:
 			// It seems best to reset mLinesExecutedThisCycle unconditionally (now done by InitNewThread),
 			// because the user has pressed a hotkey or selected a custom menu item, so would expect
 			// maximum responsiveness (e.g. in a game where split second timing can matter) rather than
@@ -1093,6 +1165,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				break;
 
 			case AHK_HOTSTRING:
+				g.hWndLastUsed = criterion_found_hwnd; // v1.0.42. Even if the window is invalid for some reason, IsWindow() and such are called whenever the script accesses it (GetValidLastUsedWindow()).
 				hs->Perform();
 				break;
 
@@ -1107,7 +1180,8 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				break;
 
 			default: // hotkey
-				Hotkey::PerformID((HotkeyIDType)msg.wParam);
+				g.hWndLastUsed = criterion_found_hwnd; // v1.0.42. Even if the window is invalid for some reason, IsWindow() and such are called whenever the script accesses it (GetValidLastUsedWindow()).
+				hk->Perform(*variant);
 			}
 
 			// v1.0.37.06: Call ResumeUnderlyingThread() even if aMode==WAIT_FOR_MESSAGES; this is for
@@ -1677,9 +1751,8 @@ void InitNewThread(int aPriority, bool aSkipUninterruptible, bool aIncrementThre
 // To reduce the expectation that a newly launched hotkey or timed subroutine will
 // be immediately interrupted by a timed subroutine or hotkey, interruptions are
 // forbidden for a short time (user-configurable).  If the subroutine is a quick one --
-// finishing prior to when PerformID()'s call of ExecUntil() or the Timer would have set
-// g_AllowInterruption to be true -- we will set it to be true afterward so that it
-// gets done as quickly as possible.
+// finishing prior to when ExecUntil() or the Timer would have set g_AllowInterruption to be
+// true -- we will set it to be true afterward so that it gets done as quickly as possible.
 // The following rules of precedence apply:
 // If either UninterruptibleTime or UninterruptedLineCountMax is zero, newly launched subroutines
 // are always interruptible.  Otherwise: If both are negative, newly launched subroutines are

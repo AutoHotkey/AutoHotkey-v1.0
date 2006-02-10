@@ -583,8 +583,9 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 	if (!this_key.used_as_prefix && !this_key.used_as_suffix)
 		return AllowKeyToGoToSystem;
 
-	bool is_explicit_key_up_hotkey = false; // Set default.
-	HotkeyIDType hotkey_id_with_flags = HOTKEY_ID_INVALID; // Set default.
+	bool is_explicit_key_up_hotkey = false;                // Set default.
+	HotkeyIDType hotkey_id_with_flags = HOTKEY_ID_INVALID; //
+	bool hotkey_criteria_were_checked = false;             //
 	HotkeyIDType hotkey_id_temp; // For informal/temp storage of the ID-without-flags.
 
 	bool down_performed_action, was_down_before_up;
@@ -1195,20 +1196,21 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 			} // If this_key has a counterpart neutral modifer.
 		} // Above block searched for match using neutral modifier.
 
+		hotkey_id_temp = hotkey_id_with_flags & HOTKEY_ID_MASK; // For use both inside and outside the block below.
 		if (hotkey_id_with_flags != HOTKEY_ID_INVALID)
 		{
 			// v1.0.41:
-			if (Hotkey::CriterionForbidsFiring(hotkey_id_with_flags, aKeyUp, this_key.no_suppress
-				, &pKeyHistoryCurr->event_type))
-				return AllowKeyToGoToSystem; // This should handle pForceToggle for us, suppressing if necessary.
+			if (hotkey_id_temp < Hotkey::sHotkeyCount) // Don't call the below for Alt-tab hotkeys and similar.
+				if (   !(hotkey_criteria_were_checked = Hotkey::CriterionFiringIsCertain(hotkey_id_with_flags
+					, aKeyUp, this_key.no_suppress, &pKeyHistoryCurr->event_type))   )
+					return AllowKeyToGoToSystem; // This should handle pForceToggle for us, suppressing if necessary.
 			pPrefixKey->was_just_used = AS_PREFIX_FOR_HOTKEY;
 		}
-		//else: No "else" here to avoid an extra indentation for the whole section below (it's not needed anyway).
+		//else: No "else if" here to avoid an extra indentation for the whole section below (it's not needed anyway).
 
 		// Alt-tab: Alt-tab actions that require a prefix key are handled directly here rather than via
 		// posting a message back to the main window.  In part, this is because it would be difficult
 		// to design a way to tell the main window when to release the alt-key.
-		hotkey_id_temp = hotkey_id_with_flags & HOTKEY_ID_MASK;
 		if (hotkey_id_temp == HOTKEY_ID_ALT_TAB || hotkey_id_temp == HOTKEY_ID_ALT_TAB_SHIFT)
 		{
 			// Not sure if it's necessary to set this in this case.  Review.
@@ -1450,9 +1452,9 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 	} // Final attempt to find hotkey based on suffix have the right combo of modifiers.
 
 	// Since above didn't return, hotkey_id_with_flags is now a valid hotkey.  The only thing that can
-	// stop it from firing now is CriterionForbidsFiring().
+	// stop it from firing now is CriterionFiringIsCertain().
 
-	// v1.0.41: Below should be done prior to checking CriterionForbidsFiring() so that the
+	// v1.0.41: Below should be done prior to checking CriterionFiringIsCertain() so that the
 	// NO_SUPPRESS_NEXT_UP_EVENT ticket is used up rather than staying around to possibly take effect for
 	// a future key-up for which it wasn't intended.
 	// Handling for NO_SUPPRESS_NEXT_UP_EVENT was added because it seems more correct that key-up
@@ -1468,13 +1470,16 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 		fire_with_no_suppress = hotkey_id_with_flags & HOTKEY_NO_SUPPRESS;
 
 	// v1.0.41: This must be done prior to the setting of sDisguiseNextLWinUp and similar items below.
-	if (Hotkey::CriterionForbidsFiring(hotkey_id_with_flags, aKeyUp, this_key.no_suppress
-		, &pKeyHistoryCurr->event_type))
-		return AllowKeyToGoToSystem;
+	hotkey_id_temp = hotkey_id_with_flags & HOTKEY_ID_MASK;
+	if (hotkey_id_temp < Hotkey::sHotkeyCount) // Don't call the below for Alt-tab hotkeys and similar.
+		if (   !hotkey_criteria_were_checked   // It wasn't already checked earlier.
+			&& !(hotkey_criteria_were_checked = Hotkey::CriterionFiringIsCertain(hotkey_id_with_flags, aKeyUp
+				, this_key.no_suppress, &pKeyHistoryCurr->event_type))   )
+			return AllowKeyToGoToSystem;
 
 	// Now above has ensured that everything is in place for an action to be performed.
 	// Determine the final ID at this late stage to improve maintainability:
-	HotkeyIDType hotkey_id_to_fire = hotkey_id_with_flags & HOTKEY_ID_MASK;
+	HotkeyIDType hotkey_id_to_fire = hotkey_id_temp;
 
 	// If only a windows key was held down (and no other modifiers) to activate this hotkey,
 	// suppress the next win-up event so that the Start Menu won't appear (if other modifiers are
@@ -1738,6 +1743,9 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 			// SendMessageTimeout(), which is undesirable because the whole point of
 			// making this hook thread separate from the main thread is to have it be
 			// maximally responsive (especially to prevent mouse cursor lag).
+			// v1.0.42: The hotkey variant is not passed via the message below because
+			// upon receipt of the message, the variant is recalculated in case conditions
+			// have changed between msg-post and arrival.  See comments in the message loop for details.
 			PostMessage(g_hWnd, AHK_HOOK_HOTKEY, hotkey_id_to_fire, 0);
 	}
 
@@ -2497,8 +2505,19 @@ bool CollectInput(KBDLLHOOKSTRUCT &aEvent, const vk_type aVK, const sc_type aSC,
 					// ... v1.0.41: Or it's a perfect match but the right window isn't active or doesn't exist.
 					// In that case, continue searching for other matches in case the script contains
 					// hotstrings that would trigger simultaneously were it not for the "only one" rule.
-					|| HotCriterionForbidsFiring(hs.mHotCriterion, hs.mHotWinTitle, hs.mHotWinText)   )
+					|| !HotCriterionAllowsFiring(hs.mHotCriterion, hs.mHotWinTitle, hs.mHotWinText)   )
 					continue; // No match or not eligible to fire.
+					// v1.0.42: The following scenario defeats the ability to give criterion hotstrings
+					// precedence over non-criterion:
+					// A global/non-criterion hotstring is higher up in the file than some criterion hotstring,
+					// but both are eligible to fire at the same instant.  In v1.0.41, the global one would
+					// take precedence because it's higher up (and this behavior is preserved not just for
+					// backward compatibility, but also because it might be more flexible -- this is because
+					// unlike hotkeys, variants aren't stored under a parent hotstring, so we don't know which
+					// ones are exact dupes of each other (same options+abbreviation).  Thus, it would take
+					// extra code to determine this at runtime; and even if it were added, it might be
+					// more flexible not to do it; instead, to let the script determine (even by resorting to
+					// #IfWinNOTActive) what precedence hotstrings have with respect to each other.
 
 				// MATCHING HOTSTRING WAS FOUND (since above didn't continue).
 				// Since default KeyDelay is 0, and since that is expected to be typical, it seems
@@ -3011,7 +3030,6 @@ bool IsDualStateNumpadKey(const vk_type aVK, const sc_type aSC)
 
 struct hk_sorted_type
 {
-	int id_with_flags;
 	mod_type modifiers;
 	modLR_type modifiersLR;
 	// Keep sub-32-bit members contiguous to save memory without having to sacrifice performance of
@@ -3019,6 +3037,7 @@ struct hk_sorted_type
 	bool AllowExtraModifiers;
 	vk_type vk;
 	sc_type sc;
+	HotkeyIDType id_with_flags;
 };
 
 
@@ -3147,7 +3166,7 @@ void SetModifierAsPrefix(vk_type aVK, sc_type aSC, bool aAlwaysSetAsPrefix = fal
 				{
 					Hotkey &h = *Hotkey::shk[i]; // For performance and convenience.
 					if (h.mVK == aVK && h.mKeyUp && !h.mModifiersConsolidatedLR && !h.mModifierVK && !h.mModifierSC
-						&& h.mEnabled)
+						&& !h.IsCompletelyDisabled())
 						return; // Since caller didn't specify aAlwaysSetAsPrefix==true, don't make this key a prefix.
 				}
 			}
@@ -3181,7 +3200,7 @@ void SetModifierAsPrefix(vk_type aVK, sc_type aSC, bool aAlwaysSetAsPrefix = fal
 			if (aAlwaysSetAsPrefix)
 				kvk[aVK].used_as_prefix = true;
 			else
-				if (Hotkey::FindHotkeyContainingModLR(kvk[aVK].as_modifiersLR) != HOTKEY_ID_INVALID) // Fixed for v1.0.35.13 (used to be aSC vs. aVK).
+				if (Hotkey::FindHotkeyContainingModLR(kvk[aVK].as_modifiersLR)) // Fixed for v1.0.35.13 (used to be aSC vs. aVK).
 					kvk[aVK].used_as_prefix = true;
 				// else allow its suffix action to fire when key is pressed down,
 				// under the fairly safe assumption that the user hasn't configured
@@ -3195,14 +3214,13 @@ void SetModifierAsPrefix(vk_type aVK, sc_type aSC, bool aAlwaysSetAsPrefix = fal
 	if (aAlwaysSetAsPrefix)
 		ksc[aSC].used_as_prefix = true;
 	else
-		if (Hotkey::FindHotkeyContainingModLR(ksc[aSC].as_modifiersLR) != HOTKEY_ID_INVALID)
+		if (Hotkey::FindHotkeyContainingModLR(ksc[aSC].as_modifiersLR))
 			ksc[aSC].used_as_prefix = true;
 }
 
 
 
-void ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, HookType aWhichHookAlways
-	, bool aWarnIfHooksAlreadyInstalled)
+void ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, HookType aWhichHookAlways)
 // The caller of this function should always be the main thread, never the hook thread.
 // One reason is that this function isn't thread-safe.  Another is that new/delete/malloc/free
 // themselves might not be thread-safe when the single-threaded CRT libraries are in effect
@@ -3219,8 +3237,8 @@ void ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, HookType
 	// v1.0.39: For simplicity and maintainability, don't even make the attempt on Win9x since it
 	// seems too rare that they would have LL hook capability somehow (such as in an emultator).
 	// NOTE: Some sections rely on the fact that no warning dialogs are displayed if the hook is
-	// called for but the OS doesn't support it.  For example, AllActivate() doesn't check the OS version
-	// in many cases when marking hotkeys as hook hotkeys.
+	// called for but the OS doesn't support it.  For example, ManifestAllHotkeys() doesn't check
+	// the OS version in many cases when marking hotkeys as hook hotkeys.
 	if (g_os.IsWin9x())
 		return;
 
@@ -3340,16 +3358,14 @@ void ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, HookType
 	key_type *pThisKey = NULL;
 	for (i = 0; i < aHK_count; ++i)
 	{
-		Hotkey &hk = *(aHK[i]); // For performance and convenience.
+		Hotkey &hk = *aHK[i]; // For performance and convenience.
 
 		// If it's not a hook hotkey (e.g. it was already registered with RegisterHotkey() or it's a joystick
-		// hotkey) don't process it here:
-		if (!TYPE_IS_HOOK(hk.mType) || !hk.mEnabled)
-			continue;
-
-		// So aHK[i] is a hook hotkey.  But if g_IsSuspended is true, we won't include it unless it's
+		// hotkey) don't process it here.  Similarly, if g_IsSuspended is true, we won't include it unless it's
 		// exempt from suspension:
-		if (g_IsSuspended && !hk.IsExemptFromSuspend())
+		if (   !HK_TYPE_IS_HOOK(hk.mType)
+			|| (g_IsSuspended && !hk.IsExemptFromSuspend())
+			|| hk.IsCompletelyDisabled()   ) // Listed last for short-circuit performance.
 			continue;
 
 		// Rule out the possibility of obnoxious values right away, preventing array-out-of bounds, etc.:
@@ -3917,7 +3933,7 @@ void AddRemoveHooks(HookType aHooksToBeActive)
 	{
 		// Prevent hotkeys and other subroutines from running (which could happen via MsgBox's message pump)
 		// to avoid the possibility that the script will continue to call this function recursively, resulting
-		// in an infinite stack of MsgBoxes. This approach is similar to that used in Hotkey::PerformID()
+		// in an infinite stack of MsgBoxes. This approach is similar to that used in Hotkey::Perform()
 		// for the #MaxHotkeysPerInterval warning dialog:
 		g_AllowInterruption = false; 
 		// Below is a generic message to reduce code size.  Failure is rare, but has been known to happen when

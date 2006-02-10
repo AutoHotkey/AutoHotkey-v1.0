@@ -800,7 +800,7 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 			}
 		}
 
-		// v1.0.41.02 to prevent severe flickering when resizing ListViews and other controls,
+		// v1.0.41.02: To prevent severe flickering when resizing ListViews and other controls,
 		// the MOVE mode now avoids doing the invalidate-rect, but the MOVEDRAW mode does do it.
 		if (guicontrol_cmd == GUICONTROL_CMD_MOVEDRAW)
 		{

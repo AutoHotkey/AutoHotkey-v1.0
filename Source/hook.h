@@ -245,8 +245,7 @@ bool KeybdEventIsPhysical(DWORD aEventFlags, DWORD aEventTime, const vk_type aVK
 bool DualStateNumpadKeyIsDown();
 bool IsDualStateNumpadKey(const vk_type aVK, const sc_type aSC);
 
-void ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, HookType aWhichHookAlways
-	, bool aWarnIfHooksAlreadyInstalled);
+void ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, HookType aWhichHookAlways);
 void AddRemoveHooks(HookType aHooksToBeActive);
 DWORD WINAPI HookThreadProc(LPVOID aUnused);
 

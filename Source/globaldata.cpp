@@ -97,8 +97,9 @@ int g_MaxHotkeysPerInterval = 70; // Increased to 70 because 60 was still causin
 int g_HotkeyThrottleInterval = 2000; // Milliseconds.
 bool g_MaxThreadsBuffer = false;  // This feature usually does more harm than good, so it defaults to OFF.
 HotCriterionType g_HotCriterion = HOT_NO_CRITERION;
-char *g_HotWinTitle; // Doesn't require init because g_HotCriterion above is the sole indicator for all three of these.
-char *g_HotWinText;  //
+char *g_HotWinTitle = ""; // In spite of the above being the primary indicator,
+char *g_HotWinText = "";  // these are initialized for maintainability.
+HotkeyCriterion *g_FirstHotCriterion = NULL, *g_LastHotCriterion = NULL;
 
 MenuTypeType g_MenuIsVisible = MENU_TYPE_NONE;
 int g_nMessageBoxes = 0;
