@@ -289,6 +289,7 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 // maintainability.  The code size savings as of v1.0.38.06 is 3.5 KB of uncompressed code, but that
 // savings will grow larger if more complexity is ever added to the hooks.
 {
+	HotkeyIDType hotkey_id_to_post = HOTKEY_ID_INVALID; // Set default.
 	bool is_ignored = IsIgnored(aExtraInfo, aVK, aKeyUp);
 	// This is done for more than just convenience.  It solves problems that would otherwise arise
 	// due to the value of a global var such as KeyHistoryNext changing due to the reentrancy of
@@ -349,9 +350,8 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 			}
 		}
 
-		// Track physical state of keyboard & mouse buttons since GetAsyncKeyState() doesn't seem
-		// to do so, at least under WinXP.  Also, if it's a modifier, let another section handle it
-		// because it's not as simple as just setting the value to true or false (e.g. if LShift
+		// Track physical state of keyboard & mouse buttons. Also, if it's a modifier, let another section
+		// handle it because it's not as simple as just setting the value to true or false (e.g. if LShift
 		// goes up, the state of VK_SHIFT should stay down if VK_RSHIFT is down, or up otherwise).
 		// Also, even if this input event will wind up being suppressed (usually because of being
 		// a hotkey), still update the physical state anyway, because we want the physical state to
@@ -1746,7 +1746,30 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 			// v1.0.42: The hotkey variant is not passed via the message below because
 			// upon receipt of the message, the variant is recalculated in case conditions
 			// have changed between msg-post and arrival.  See comments in the message loop for details.
-			PostMessage(g_hWnd, AHK_HOOK_HOTKEY, hotkey_id_to_fire, 0);
+			// v1.0.42.01: the message is now posted at the latest possible moment to avoid
+			// situations in which the message arrives and is processed by the main thread
+			// before we finish processing the hotkey's final keystroke here.  This avoids
+			// problems with a script calling GetKeyState() and getting an inaccurate value
+			// because the hook thread is either pre-empted or is running in parallel
+			// (multiprocessor) and hasn't yet returned 1 or 0 to determine whether the final
+			// keystroke is suppressed or passed through to the active window.  Similarly, this solves
+			// the fact that previously, g_PhysicalKeyState was not updated for modifier keys until after
+			// the hotkey message was posted, which on some PCs caused the hotkey subroutine to see
+			// the wrong key state via KeyWait (which defaults to detecting the physical key state).
+			// For example, the following hotkeys would be a problem on certain PCs, presumably due to
+			// split-second timing where the hook thread gets preempted and the main thread gets a
+			// timeslice that allows it to launch a script subroutine before the hook can get
+			// another timeslice to finish up:
+			//$LAlt::
+			//if not GetKeyState("LAlt", "P")
+			//	ToolTip `nProblem 1`n
+			//return
+			//
+			//~LControl::
+			//if not (DllCall("GetAsyncKeyState", int, 0xA2) & 0x8000)
+			//    ToolTip `nProblem 2`n
+			//return
+			hotkey_id_to_post = hotkey_id_to_fire; // Set this only when it is certain that this ID should be sent to the main thread via msg.
 	}
 
 	pKeyHistoryCurr->event_type = 'h'; // h = hook hotkey (not one registered with RegisterHotkey)
@@ -1918,7 +1941,7 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 
 
 LRESULT SuppressThisKeyFunc(const HHOOK aHook, LPARAM lParam, const vk_type aVK, const sc_type aSC, bool aKeyUp
-	, KeyHistoryItem *pKeyHistoryCurr)
+	, KeyHistoryItem *pKeyHistoryCurr, HotkeyIDType aHotkeyIDToPost, WPARAM aHSwParamToPost, LPARAM aHSlParamToPost)
 // Always use the parameter vk rather than event.vkCode because the caller or caller's caller
 // might have adjusted vk, namely to make it a left/right specific modifier key rather than a
 // neutral one.
@@ -1970,17 +1993,32 @@ LRESULT SuppressThisKeyFunc(const HHOOK aHook, LPARAM lParam, const vk_type aVK,
 			, pKeyHistoryCurr->vk, pKeyHistoryCurr->sc);  // A fairly low overhead operation.
 #endif
 
+	// These should be posted only at the last possible moment before returning in order to
+	// minimize the chance that the main thread will receive and process the message before
+	// our thread can finish updating key states and other maintenance.  This has been proven
+	// to be a problem on single-processor systems when the hook thread gets preempted
+	// before it can return.  Apparently, the fact that the hook thread is much higher in priority
+	// than the main thread is not enough to prevent the main thread from getting a timeslice
+	// before the hook thread gets back another (at least on some systems, perhaps due to their
+	// system settings of the same ilk as "favor background processes").
+	if (aHotkeyIDToPost != HOTKEY_ID_INVALID)
+		PostMessage(g_hWnd, AHK_HOOK_HOTKEY, aHotkeyIDToPost, 0);
+	if (aHSwParamToPost != HOTSTRING_INDEX_INVALID)
+		PostMessage(g_hWnd, AHK_HOTSTRING, aHSwParamToPost, aHSlParamToPost);
 	return 1;
 }
 
 
 
 LRESULT AllowIt(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lParam, const vk_type aVK, const sc_type aSC
-	, bool aKeyUp, KeyHistoryItem *pKeyHistoryCurr, bool aDisguiseWinAlt)
+	, bool aKeyUp, KeyHistoryItem *pKeyHistoryCurr, HotkeyIDType aHotkeyIDToPost, bool aDisguiseWinAlt)
 // Always use the parameter vk rather than event.vkCode because the caller or caller's caller
 // might have adjusted vk, namely to make it a left/right specific modifier key rather than a
 // neutral one.
 {
+	WPARAM hs_wparam_to_post = HOTSTRING_INDEX_INVALID; // Set default.
+	LPARAM hs_lparam_to_post; // Not initialized because the above is the sole indicator of whether its contents should even be examined.
+
 	// Prevent toggleable keys from being toggled (if the user wanted that) by suppressing it.
 	// Seems best to suppress key-up events as well as key-down, since a key-up by itself,
 	// if seen by the system, doesn't make much sense and might have unwanted side-effects
@@ -2023,174 +2061,185 @@ LRESULT AllowIt(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lParam, cons
 			KeyHistoryToFile(NULL, pKeyHistoryCurr->event_type, pKeyHistoryCurr->key_up
 				, pKeyHistoryCurr->vk, pKeyHistoryCurr->sc);  // A fairly low overhead operation.
 #endif
-		return CallNextHookEx(aHook, aCode, wParam, lParam);
 	}
-
-	// Since above didn't return, our caller is the keyboard hook.
-	KBDLLHOOKSTRUCT &event = *(PKBDLLHOOKSTRUCT)lParam;
-
-	bool is_ignored = IsIgnored(event.dwExtraInfo, aVK, aKeyUp);
-	if (!is_ignored)
+	else // Our caller is the keyboard hook.
 	{
-		if (kvk[aVK].pForceToggle) // Key is a toggleable key.
+		KBDLLHOOKSTRUCT &event = *(PKBDLLHOOKSTRUCT)lParam;
+
+		bool is_ignored = IsIgnored(event.dwExtraInfo, aVK, aKeyUp);
+		if (!is_ignored)
 		{
-			// Dereference to get the global var's value:
-			if (*(kvk[aVK].pForceToggle) != NEUTRAL) // Prevent toggle.
-				return SuppressThisKeyFunc(aHook, lParam, aVK, aSC, aKeyUp, pKeyHistoryCurr);
+			if (kvk[aVK].pForceToggle) // Key is a toggleable key.
+			{
+				// Dereference to get the global var's value:
+				if (*(kvk[aVK].pForceToggle) != NEUTRAL) // Prevent toggle.
+					return SuppressThisKeyFunc(aHook, lParam, aVK, aSC, aKeyUp, pKeyHistoryCurr, aHotkeyIDToPost);
+			}
 		}
-	}
 
-	// This is done unconditionally so that even if a qualified Input is not in progress, the
-	// variable will be correctly reset anyway:
-	if (sVKtoIgnoreNextTimeDown && sVKtoIgnoreNextTimeDown == aVK && !aKeyUp)
-		sVKtoIgnoreNextTimeDown = 0;  // i.e. this ignore-for-the-sake-of-CollectInput() ticket has now been used.
-	else if ((Hotstring::shs && !is_ignored) || (g_input.status == INPUT_IN_PROGRESS && !(g_input.IgnoreAHKInput && is_ignored)))
-		if (!CollectInput(event, aVK, aSC, aKeyUp, is_ignored)) // Key should be invisible (suppressed).
-			return SuppressThisKeyFunc(aHook, lParam, aVK, aSC, aKeyUp, pKeyHistoryCurr);
+		// This is done unconditionally so that even if a qualified Input is not in progress, the
+		// variable will be correctly reset anyway:
+		if (sVKtoIgnoreNextTimeDown && sVKtoIgnoreNextTimeDown == aVK && !aKeyUp)
+			sVKtoIgnoreNextTimeDown = 0;  // i.e. this ignore-for-the-sake-of-CollectInput() ticket has now been used.
+		else if ((Hotstring::shs && !is_ignored) || (g_input.status == INPUT_IN_PROGRESS && !(g_input.IgnoreAHKInput && is_ignored)))
+			if (!CollectInput(event, aVK, aSC, aKeyUp, is_ignored, hs_wparam_to_post, hs_lparam_to_post)) // Key should be invisible (suppressed).
+				return SuppressThisKeyFunc(aHook, lParam, aVK, aSC, aKeyUp, pKeyHistoryCurr, aHotkeyIDToPost, hs_wparam_to_post, hs_lparam_to_post);
 
-	// Do these here since the above "return SuppressThisKey" will have already done it in that case.
+		// Do these here since the above "return SuppressThisKey" will have already done it in that case.
 #ifdef ENABLE_KEY_HISTORY_FILE
-	if (g_KeyHistoryToFile)
-		KeyHistoryToFile(NULL, pKeyHistoryCurr->event_type, pKeyHistoryCurr->key_up
-			, pKeyHistoryCurr->vk, pKeyHistoryCurr->sc);  // A fairly low overhead operation.
+		if (g_KeyHistoryToFile)
+			KeyHistoryToFile(NULL, pKeyHistoryCurr->event_type, pKeyHistoryCurr->key_up
+				, pKeyHistoryCurr->vk, pKeyHistoryCurr->sc);  // A fairly low overhead operation.
 #endif
 
-	UpdateKeybdState(event, aVK, aSC, aKeyUp, false);
+		UpdateKeybdState(event, aVK, aSC, aKeyUp, false);
 
-	// UPDATE: The Win-L and Ctrl-Alt-Del workarounds below are still kept in effect in spite of the
-	// anti-stick workaround done via GetModifierLRState().  This is because ResetHook() resets more
-	// than just the modifiers and physical key state, which seems appropriate since the user might
-	// be away for a long period of time while the computer is locked or the security screen is displayed.
-	// Win-L uses logical keys, unlike Ctrl-Alt-Del which uses physical keys (i.e. Win-L can be simulated,
-	// but Ctrl-Alt-Del must be physically pressed by the user):
-	if (   aVK == 'L' && !aKeyUp && (g_modifiersLR_logical == MOD_LWIN  // i.e. *no* other keys but WIN.
-		|| g_modifiersLR_logical == MOD_RWIN || g_modifiersLR_logical == (MOD_LWIN | MOD_RWIN))
-		&& g_os.IsWinXPorLater())
-	{
-		// Since the user has pressed Win-L with *no* other modifier keys held down, and since
-		// this key isn't being suppressed (since we're here in this function), the computer
-		// is about to be locked.  When that happens, the hook is apparently disabled or
-		// deinstalled until the user logs back in.  Because it is disabled, it will not be
-		// notified when the user releases the LWIN or RWIN key, so we should assume that
-		// it's now not in the down position.  This avoids it being thought to be down when the
-		// user logs back in, which might cause hook hotkeys to accidentally fire.
-		// Update: I've received an indication from a single Win2k user (unconfirmed from anyone
-		// else) that the Win-L hotkey doesn't work on Win2k.  AutoIt3 docs confirm this.
-		// Thus, it probably doesn't work on NT either.  So it's been changed to happen only on XP:
-		ResetHook(true); // We already know that *only* the WIN key is down.
-		// Above will reset g_PhysicalKeyState, especially for the windows keys and the 'L' key
-		// (in our case), in preparation for re-logon:
-	}
+		// UPDATE: The Win-L and Ctrl-Alt-Del workarounds below are still kept in effect in spite of the
+		// anti-stick workaround done via GetModifierLRState().  This is because ResetHook() resets more
+		// than just the modifiers and physical key state, which seems appropriate since the user might
+		// be away for a long period of time while the computer is locked or the security screen is displayed.
+		// Win-L uses logical keys, unlike Ctrl-Alt-Del which uses physical keys (i.e. Win-L can be simulated,
+		// but Ctrl-Alt-Del must be physically pressed by the user):
+		if (   aVK == 'L' && !aKeyUp && (g_modifiersLR_logical == MOD_LWIN  // i.e. *no* other keys but WIN.
+			|| g_modifiersLR_logical == MOD_RWIN || g_modifiersLR_logical == (MOD_LWIN | MOD_RWIN))
+			&& g_os.IsWinXPorLater())
+		{
+			// Since the user has pressed Win-L with *no* other modifier keys held down, and since
+			// this key isn't being suppressed (since we're here in this function), the computer
+			// is about to be locked.  When that happens, the hook is apparently disabled or
+			// deinstalled until the user logs back in.  Because it is disabled, it will not be
+			// notified when the user releases the LWIN or RWIN key, so we should assume that
+			// it's now not in the down position.  This avoids it being thought to be down when the
+			// user logs back in, which might cause hook hotkeys to accidentally fire.
+			// Update: I've received an indication from a single Win2k user (unconfirmed from anyone
+			// else) that the Win-L hotkey doesn't work on Win2k.  AutoIt3 docs confirm this.
+			// Thus, it probably doesn't work on NT either.  So it's been changed to happen only on XP:
+			ResetHook(true); // We already know that *only* the WIN key is down.
+			// Above will reset g_PhysicalKeyState, especially for the windows keys and the 'L' key
+			// (in our case), in preparation for re-logon:
+		}
 
-	// Although the delete key itself can be simulated (logical or physical), the user must be physically
-	// (not logically) holding down CTRL and ALT for the ctrl-alt-del sequence to take effect,
-	// which is why g_modifiersLR_physical is used vs. g_modifiersLR_logical (which is used above since
-	// it's different).  Also, this is now done for XP -- in addition to NT4 & Win2k -- in case XP is
-	// configured to display the NT/2k style security window instead of the task manager.  This is
-	// probably very common because whenever the welcome screen is diabled, that's the default behavior?:
-	// Control Panel > User Accounts > Use the welcome screen for fast and easy logon
-	if (   (aVK == VK_DELETE || aVK == VK_DECIMAL) && !aKeyUp         // Both of these qualify, see notes.
-		&& (g_modifiersLR_physical & (MOD_LCONTROL | MOD_RCONTROL)) // At least one CTRL key is physically down.
-		&& (g_modifiersLR_physical & (MOD_LALT | MOD_RALT))         // At least one ALT key is physically down.
-		&& !(g_modifiersLR_physical & (MOD_LSHIFT | MOD_RSHIFT))    // Neither shift key is phys. down (WIN is ok).
-		&& g_os.IsWinNT4orLater()   )
-	{
-		// Similar to the above case except for Windows 2000.  I suspect it also applies to NT,
-		// but I'm not sure.  It seems safer to apply it to NT until confirmed otherwise.
-		// Note that Ctrl-Alt-Delete works with *either* delete key, and it works regardless
-		// of the state of Numlock (at least on XP, so it's probably that way on Win2k/NT also,
-		// though it would be nice if this too is someday confirmed).  Here's the key history
-		// someone for when the pressed ctrl-alt-del and then pressed esc to dismiss the dialog
-		// on Win2k (Win2k invokes a 6-button dialog, with choices such as task manager and lock
-		// workstation, if I recall correctly -- unlike XP which invokes task mgr by default):
-		// A4  038	 	d	21.24	Alt            	
-		// A2  01D	 	d	0.00	Ctrl           	
-		// A2  01D	 	d	0.52	Ctrl           	
-		// 2E  053	 	d	0.02	Num Del        	<-- notice how there's no following up event
-		// 1B  001	 	u	2.80	Esc             <-- notice how there's no preceding down event
-		// Other notes: On XP at least, shift key must not be down, otherwise Ctrl-Alt-Delete does
-		// not take effect.  Windows key can be down, however.
-		// Since the user will be gone for an unknown amount of time, it seems best just to reset
-		// all hook tracking of the modifiers to the "up" position.  The user can always press them
-		// down again upon return.  It also seems best to reset both logical and physical, just for
-		// peace of mind and simplicity:
-		ResetHook(true);
-		// The above will also reset g_PhysicalKeyState so that especially the following will not
-		// be thought to be physically down:CTRL, ALT, and DEL keys.  This is done in preparation
-		// for returning from the security screen.  The neutral keys (VK_MENU and VK_CONTROL)
-		// must also be reset -- not just because it's correct but because CollectInput() relies on it.
-	}
+		// Although the delete key itself can be simulated (logical or physical), the user must be physically
+		// (not logically) holding down CTRL and ALT for the ctrl-alt-del sequence to take effect,
+		// which is why g_modifiersLR_physical is used vs. g_modifiersLR_logical (which is used above since
+		// it's different).  Also, this is now done for XP -- in addition to NT4 & Win2k -- in case XP is
+		// configured to display the NT/2k style security window instead of the task manager.  This is
+		// probably very common because whenever the welcome screen is diabled, that's the default behavior?:
+		// Control Panel > User Accounts > Use the welcome screen for fast and easy logon
+		if (   (aVK == VK_DELETE || aVK == VK_DECIMAL) && !aKeyUp         // Both of these qualify, see notes.
+			&& (g_modifiersLR_physical & (MOD_LCONTROL | MOD_RCONTROL)) // At least one CTRL key is physically down.
+			&& (g_modifiersLR_physical & (MOD_LALT | MOD_RALT))         // At least one ALT key is physically down.
+			&& !(g_modifiersLR_physical & (MOD_LSHIFT | MOD_RSHIFT))    // Neither shift key is phys. down (WIN is ok).
+			&& g_os.IsWinNT4orLater()   )
+		{
+			// Similar to the above case except for Windows 2000.  I suspect it also applies to NT,
+			// but I'm not sure.  It seems safer to apply it to NT until confirmed otherwise.
+			// Note that Ctrl-Alt-Delete works with *either* delete key, and it works regardless
+			// of the state of Numlock (at least on XP, so it's probably that way on Win2k/NT also,
+			// though it would be nice if this too is someday confirmed).  Here's the key history
+			// someone for when the pressed ctrl-alt-del and then pressed esc to dismiss the dialog
+			// on Win2k (Win2k invokes a 6-button dialog, with choices such as task manager and lock
+			// workstation, if I recall correctly -- unlike XP which invokes task mgr by default):
+			// A4  038	 	d	21.24	Alt            	
+			// A2  01D	 	d	0.00	Ctrl           	
+			// A2  01D	 	d	0.52	Ctrl           	
+			// 2E  053	 	d	0.02	Num Del        	<-- notice how there's no following up event
+			// 1B  001	 	u	2.80	Esc             <-- notice how there's no preceding down event
+			// Other notes: On XP at least, shift key must not be down, otherwise Ctrl-Alt-Delete does
+			// not take effect.  Windows key can be down, however.
+			// Since the user will be gone for an unknown amount of time, it seems best just to reset
+			// all hook tracking of the modifiers to the "up" position.  The user can always press them
+			// down again upon return.  It also seems best to reset both logical and physical, just for
+			// peace of mind and simplicity:
+			ResetHook(true);
+			// The above will also reset g_PhysicalKeyState so that especially the following will not
+			// be thought to be physically down:CTRL, ALT, and DEL keys.  This is done in preparation
+			// for returning from the security screen.  The neutral keys (VK_MENU and VK_CONTROL)
+			// must also be reset -- not just because it's correct but because CollectInput() relies on it.
+		}
 
-	// Bug-fix for v1.0.20: The below section was moved out of LowLevelKeybdProc() to here because
-	// sAltTabMenuIsVisible should not be set to true prior to knowing whether the current tab-down
-	// event will be suppressed.  This is because if it is suppressed, the menu will not become visible
-	// after all since the system will never see the tab-down event.
-	// Having this extra check here, in addition to the other(s) that set sAltTabMenuIsVisible to be
-	// true, allows AltTab and ShiftAltTab hotkeys to function even when the AltTab menu was invoked by
-	// means other than an AltTabMenu or AltTabAndMenu hotkey.  The alt-tab menu becomes visible only
-	// under these exact conditions, at least under WinXP:
-	if (aVK == VK_TAB && !aKeyUp && !sAltTabMenuIsVisible
-		&& (g_modifiersLR_logical & (MOD_LALT | MOD_RALT)) // At least one ALT key is down.
-		&& !(g_modifiersLR_logical & (MOD_LCONTROL | MOD_RCONTROL))) // Neither CTRL key is down.
-		sAltTabMenuIsVisible = true;
+		// Bug-fix for v1.0.20: The below section was moved out of LowLevelKeybdProc() to here because
+		// sAltTabMenuIsVisible should not be set to true prior to knowing whether the current tab-down
+		// event will be suppressed.  This is because if it is suppressed, the menu will not become visible
+		// after all since the system will never see the tab-down event.
+		// Having this extra check here, in addition to the other(s) that set sAltTabMenuIsVisible to be
+		// true, allows AltTab and ShiftAltTab hotkeys to function even when the AltTab menu was invoked by
+		// means other than an AltTabMenu or AltTabAndMenu hotkey.  The alt-tab menu becomes visible only
+		// under these exact conditions, at least under WinXP:
+		if (aVK == VK_TAB && !aKeyUp && !sAltTabMenuIsVisible
+			&& (g_modifiersLR_logical & (MOD_LALT | MOD_RALT)) // At least one ALT key is down.
+			&& !(g_modifiersLR_logical & (MOD_LCONTROL | MOD_RCONTROL))) // Neither CTRL key is down.
+			sAltTabMenuIsVisible = true;
 
-	if (!kvk[aVK].as_modifiersLR)
-		return CallNextHookEx(aHook, aCode, wParam, lParam);
+		if (kvk[aVK].as_modifiersLR) // It's a modifier key.
+		{
+			// Don't do it this way because then the alt key itself can't be reliable used as "AltTabMenu"
+			// (due to ShiftAltTab causing sAltTabMenuIsVisible to become false):
+			//if (   sAltTabMenuIsVisible && !((g_modifiersLR_logical & MOD_LALT) || (g_modifiersLR_logical & MOD_RALT))
+			//	&& !(aKeyUp && pKeyHistoryCurr->event_type == 'h')   )  // In case the alt key itself is "AltTabMenu"
+			if (   sAltTabMenuIsVisible && // Release of Alt key or press down of Escape:
+				(aKeyUp && (aVK == VK_LMENU || aVK == VK_RMENU || aVK == VK_MENU)
+					|| !aKeyUp && aVK == VK_ESCAPE)
+				// In case the alt key itself is "AltTabMenu":
+				&& pKeyHistoryCurr->event_type != 'h' && pKeyHistoryCurr->event_type != 's'   )
+				// It's important to reset in this case because if sAltTabMenuIsVisible were to
+				// stay true and the user presses ALT in the future for a purpose other than to
+				// display the Alt-tab menu, we would incorrectly believe the menu to be displayed:
+				sAltTabMenuIsVisible = false;
 
-	// Due to above, we now know it's a modifier.
+			bool vk_is_win = aVK == VK_LWIN || aVK == VK_RWIN;
+			if (aDisguiseWinAlt && aKeyUp && (vk_is_win || aVK == VK_LMENU
+				|| (aVK == VK_RMENU && !g_LayoutHasAltGr) // AltGr should never need disguising, and avoiding it may help avoid unwanted side-effects.
+				|| aVK == VK_MENU))
+			{
+				// I think the best way to do this is to suppress the given key-event and substitute
+				// some new events to replace it.  This is because otherwise we would probably have to
+				// Sleep() or wait for the shift key-down event to take effect before calling
+				// CallNextHookEx(), so that the shift key will be in effect in time for the win
+				// key-up event to be disguised properly.  UPDATE: Currently, this doesn't check
+				// to see if a shift key is already down for some other reason; that would be
+				// pretty rare anyway, and I have more confidence in the reliability of putting
+				// the shift key down every time.  UPDATE #2: Ctrl vs. Shift is now used to avoid
+				// issues with the system's language-switch hotkey.  See detailed comments in
+				// SetModifierLRState() about this.
+				// Also, check the current logical state of CTRL to see if it's already down, for these reasons:
+				// 1) There is no need to push it down again, since the release of ALT or WIN will be
+				//    successfully disguised as long as it's down currently.
+				// 2) If it's already down, the up-event part of the disguise keystroke would put it back
+				//    up, which might mess up other things that rely upon it being down.
+				bool disguise_it = true;  // Starting default.
+				if (g_modifiersLR_logical & (MOD_LCONTROL | MOD_RCONTROL))
+					disguise_it = false; // LCTRL or RCTRL is already down, so disguise is already in effect.
+				else if (   vk_is_win && (g_modifiersLR_logical & (MOD_LSHIFT | MOD_RSHIFT | MOD_LALT | MOD_RALT))   )
+					disguise_it = false; // WIN key disguise is easier to satisfy, so don't need it in these cases either.
+				// Since the below call to KeyEvent() calls the keybd hook recursively, a quick down-and-up
+				// on Control is all that is necessary to disguise the key.  This is because the OS will see
+				// that the Control keystroke occurred while ALT or WIN is still down because we haven't
+				// done CallNextHookEx() yet.
+				if (disguise_it)
+					KeyEvent(KEYDOWNANDUP, VK_CONTROL); // Fix for v1.0.25: Use Ctrl vs. Shift to avoid triggering the LAlt+Shift language-change hotkey.
+			}
+		} // It's a modifier key.
+	} // Keyboard vs. mouse hook.
 
-	// Don't do it this way because then the alt key itself can't be reliable used as "AltTabMenu"
-	// (due to ShiftAltTab causing sAltTabMenuIsVisible to become false):
-	//if (   sAltTabMenuIsVisible && !((g_modifiersLR_logical & MOD_LALT) || (g_modifiersLR_logical & MOD_RALT))
-	//	&& !(aKeyUp && pKeyHistoryCurr->event_type == 'h')   )  // In case the alt key itself is "AltTabMenu"
-	if (   sAltTabMenuIsVisible && // Release of Alt key or press down of Escape:
-		(aKeyUp && (aVK == VK_LMENU || aVK == VK_RMENU || aVK == VK_MENU)
-			|| !aKeyUp && aVK == VK_ESCAPE)
-		// In case the alt key itself is "AltTabMenu":
-		&& pKeyHistoryCurr->event_type != 'h' && pKeyHistoryCurr->event_type != 's'   )
-		// It's important to reset in this case because if sAltTabMenuIsVisible were to
-		// stay true and the user presses ALT in the future for a purpose other than to
-		// display the Alt-tab menu, we would incorrectly believe the menu to be displayed:
-		sAltTabMenuIsVisible = false;
-
-	bool vk_is_win = aVK == VK_LWIN || aVK == VK_RWIN;
-	if (aDisguiseWinAlt && aKeyUp && (vk_is_win || aVK == VK_LMENU
-		|| (aVK == VK_RMENU && !g_LayoutHasAltGr) // AltGr should never need disguising, and avoiding it may help avoid unwanted side-effects.
-		|| aVK == VK_MENU))
-	{
-		// I think the best way to do this is to suppress the given key-event and substitute
-		// some new events to replace it.  This is because otherwise we would probably have to
-		// Sleep() or wait for the shift key-down event to take effect before calling
-		// CallNextHookEx(), so that the shift key will be in effect in time for the win
-		// key-up event to be disguised properly.  UPDATE: Currently, this doesn't check
-		// to see if a shift key is already down for some other reason; that would be
-		// pretty rare anyway, and I have more confidence in the reliability of putting
-		// the shift key down every time.  UPDATE #2: Ctrl vs. Shift is now used to avoid
-		// issues with the system's language-switch hotkey.  See detailed comments in
-		// SetModifierLRState() about this.
-		// Also, check the current logical state of CTRL to see if it's already down, for these reasons:
-		// 1) There is no need to push it down again, since the release of ALT or WIN will be
-		//    successfully disguised as long as it's down currently.
-		// 2) If it's already down, the up-event part of the disguise keystroke would put it back
-		//    up, which might mess up other things that rely upon it being down.
-		bool disguise_it = true;  // Starting default.
-		if (g_modifiersLR_logical & (MOD_LCONTROL | MOD_RCONTROL))
-			disguise_it = false; // LCTRL or RCTRL is already down, so disguise is already in effect.
-		else if (   vk_is_win && (g_modifiersLR_logical & (MOD_LSHIFT | MOD_RSHIFT | MOD_LALT | MOD_RALT))   )
-			disguise_it = false; // WIN key disguise is easier to satisfy, so don't need it in these cases either.
-		// Since the below call to KeyEvent() calls the keybd hook recursively, a quick down-and-up
-		// on Control is all that is necessary to disguise the key.  This is because the OS will see
-		// that the Control keystroke occurred while ALT or WIN is still down because we haven't
-		// done CallNextHookEx() yet.
-		if (disguise_it)
-			KeyEvent(KEYDOWNANDUP, VK_CONTROL); // Fix for v1.0.25: Use Ctrl vs. Shift to avoid triggering the LAlt+Shift language-change hotkey.
-	}
-	return CallNextHookEx(aHook, aCode, wParam, lParam);
+	// Since above didn't return, this keystroke is being passed through rather than suppressed.
+	// In case CallNextHookEx() is high overhead or can sometimes take a long time to return,
+	// call it before posting the messages.  This solves conditions in which the main thread is
+	// able to launch a script subroutine before the hook thread can finish updating its key state.
+	// Search on AHK_HOOK_HOTKEY in this file for more comments.
+	LRESULT result_to_return = CallNextHookEx(aHook, aCode, wParam, lParam);
+	if (aHotkeyIDToPost != HOTKEY_ID_INVALID)
+		PostMessage(g_hWnd, AHK_HOOK_HOTKEY, aHotkeyIDToPost, 0);
+	if (hs_wparam_to_post != HOTSTRING_INDEX_INVALID)
+		PostMessage(g_hWnd, AHK_HOTSTRING, hs_wparam_to_post, hs_lparam_to_post);
+	return result_to_return;
 }
 
 
 
-bool CollectInput(KBDLLHOOKSTRUCT &aEvent, const vk_type aVK, const sc_type aSC, bool aKeyUp, bool aIsIgnored)
+bool CollectInput(KBDLLHOOKSTRUCT &aEvent, const vk_type aVK, const sc_type aSC, bool aKeyUp, bool aIsIgnored
+	, WPARAM &aHotstringWparamToPost, LPARAM &aHotstringLparamToPost)
+// Caller is reponsible for having initialized aHotstringWparamToPost to HOTSTRING_INDEX_INVALID.
 // Returns true if the caller should treat the key as visible (non-suppressed).
 // Always use the parameter vk rather than event.vkCode because the caller or caller's caller
 // might have adjusted vk, namely to make it a left/right specific modifier key rather than a
@@ -2585,9 +2634,17 @@ bool CollectInput(KBDLLHOOKSTRUCT &aEvent, const vk_type aVK, const sc_type aSC,
 				// maximally responsive (especially to prevent mouse cursor lag).
 				// Put the end char in the LOWORD and the case_conform_mode in the HIWORD.
 				// Casting to UCHAR might be necessary to avoid problems when MAKELONG
-				// casts a signed char to an unsigned WORD:
-				PostMessage(g_hWnd, AHK_HOTSTRING, u, MAKELONG(hs.mEndCharRequired
-					? (UCHAR)g_HSBuf[g_HSBufLength - 1] : 0, case_conform_mode));
+				// casts a signed char to an unsigned WORD.
+				// UPDATE: In v1.0.42.01, the message is posted later (by our caller) to avoid
+				// situations in which the message arrives and is processed by the main thread
+				// before we finish processing the hotstring's final keystroke here.  This avoids
+				// problems with a script calling GetKeyState() and getting an inaccurate value
+				// because the hook thread is either pre-empted or is running in parallel
+				// (multiprocessor) and hasn't yet returned 1 or 0 to determine whether the final
+				// keystroke is suppressed or passed through to the active window.
+				aHotstringWparamToPost = u; // Override the default set by caller.
+				aHotstringLparamToPost = MAKELONG(hs.mEndCharRequired ? (UCHAR)g_HSBuf[g_HSBufLength - 1] : 0
+					, case_conform_mode);
 				// Clean up.
 				if (*hs.mReplacement)
 				{
@@ -3828,7 +3885,7 @@ void AddRemoveHooks(HookType aHooksToBeActive)
 			// 7 = NORMAL_PRIORITY_CLASS process + THREAD_PRIORITY_NORMAL thread.
 			// 9 = NORMAL_PRIORITY_CLASS process + THREAD_PRIORITY_HIGHEST thread.
 			// 13 = HIGH_PRIORITY_CLASS process + THREAD_PRIORITY_NORMAL thread.
-			// 15 = NORMAL_PRIORITY_CLASS process + THREAD_PRIORITY_TIME_CRITICAL thread. <-- Seems like the optimal compromise.
+			// 15 = (ANY)_PRIORITY_CLASS process + THREAD_PRIORITY_TIME_CRITICAL thread. <-- Seems like the optimal compromise.
 			// 15 = HIGH_PRIORITY_CLASS process + THREAD_PRIORITY_HIGHEST thread.
 			// 24 = REALTIME_PRIORITY_CLASS process + THREAD_PRIORITY_NORMAL thread.
 		else // Failed to create thread.  Seems to rare to justify the display of an error.

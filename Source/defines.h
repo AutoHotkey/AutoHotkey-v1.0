@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.42.00"
+#define NAME_VERSION "1.0.42.01"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -174,6 +174,7 @@ enum SymbolType // For use with ExpandExpression() and IsPureNumeric().
 #define MAX_FILEDIALOGS 4
 #define MAX_FOLDERDIALOGS 4
 #define MAX_NUMBER_LENGTH 20
+#define MAX_NUMBER_SIZE (MAX_NUMBER_LENGTH + 1)
 // Above is the maximum length of a 64-bit number when expressed as decimal or hex string.
 // e.g. -9223372036854775808 or (unsigned) 18446744073709551616
 

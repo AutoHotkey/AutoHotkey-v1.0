@@ -63,9 +63,8 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 	// prior to every send.
 	modLR_type modifiersLR_current = GetModifierLRState(true); // Current "logical" modifier state.
 
-	// Make a best guess of what the physical state of the keys is prior to starting,
-	// since GetAsyncKeyState() is unreliable (it seems to always report the logical vs.
-	// physical state, at least under Windows XP).  Note: We're only want those physical
+	// Make a best guess of what the physical state of the keys is prior to starting (there's no way
+	// to be certain without the keyboard hook). Note: We only want those physical
 	// keys that are also logically down (it's possible for a key to be down physically
 	// but not logically such as well R-control, for example, is a suffix hotkey and the
 	// user is physically holding it down):
@@ -101,8 +100,8 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 	}
 	// Any of the external modifiers that are down but NOT due to the hotkey are probably
 	// logically down rather than physically (perhaps from a prior command such as
-	// "Send, {CtrlDown}".  Since there's no way to be sure due to the unreliability of
-	// GetAsyncKeyState() under XP and perhaps other OSes, it seems best to assume that
+	// "Send, {CtrlDown}".  Since there's no way to be sure without the keyboard hook or some
+	// driver-level monitoring, it seems best to assume that
 	// they are logically vs. physically down.  This value contains the modifiers that
 	// we will not attempt to change (e.g. "Send, A" will not release the LWin
 	// before sending "A" if this value indicates that LWin is down).  The below sets
@@ -970,7 +969,7 @@ void KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTargetWi
 		if (do_detect_altgr = (aVK == VK_RMENU && !g_LayoutHasAltGr)) // Keyboard layout isn't yet marked as having an AltGr key, so auto-detect it here as well as other places.
 		{
 			control_vk = g_os.IsWin2000orLater() ? VK_LCONTROL : VK_CONTROL;
-			lcontrol_was_down = GetAsyncKeyState(control_vk) & 0x80000000; // In this case, must use GetAsyncKeyState() vs. GetKeyState() to detect the change, at least on XP.
+			lcontrol_was_down = GetAsyncKeyState(control_vk) & 0x8000;
 			// Add extra detection of AltGr if hook is installed, which has been show to be useful for some
 			// scripts where the other AltGr detection methods don't occur in a timely enough fashion.
 			// The following method relies upon the fact that it's impossible for the hook to receive
@@ -1013,7 +1012,7 @@ void KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTargetWi
 				// Do it the following way rather than setting g_LayoutHasAltGr directly to the result of
 				// the boolean expression because keybd_event() above may have changed the value of
 				// g_LayoutHasAltGr to true, in which case that should be given precedence over the below.
-				if (!lcontrol_was_down && (GetAsyncKeyState(control_vk) & 0x80000000)) // It wasn't down before but now it is.  Thus, RAlt is really AltGr.
+				if (!lcontrol_was_down && (GetAsyncKeyState(control_vk) & 0x8000)) // It wasn't down before but now it is.  Thus, RAlt is really AltGr.
 					g_LayoutHasAltGr = true;
 			}
 
@@ -1042,7 +1041,7 @@ void KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTargetWi
 				// Do it the following way rather than setting g_LayoutHasAltGr directly to the result of
 				// the boolean expression because keybd_event() above may have changed the value of
 				// g_LayoutHasAltGr to true, in which case that should be given precedence over the below.
-				if (lcontrol_was_down && !(GetAsyncKeyState(control_vk) & 0x80000000)) // RAlt is really AltGr.
+				if (lcontrol_was_down && !(GetAsyncKeyState(control_vk) & 0x8000)) // RAlt is really AltGr.
 					g_LayoutHasAltGr = true;
 			}
 			if (!g_KeybdHook) // Hook isn't logging, so we'll log just the keys we send, here.
@@ -1575,8 +1574,18 @@ void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLR
 
 
 modLR_type GetModifierLRState(bool aExplicitlyGet)
-// Try to report a more reliable state of the modifier keys than GetKeyboardState
-// alone could.
+// Try to report a more reliable state of the modifier keys than GetKeyboardState alone could.
+// Fix for v1.0.42.01: On Windows 2000/XP or later, GetAsyncKeyState() should be called rather than
+// GetKeyState().  This is because our callers always want the current state of the modifier keys
+// rather than their state at the time of the currently-in-process message was posted.  For example,
+// if the control key wasn't down at the time our thread's current message was posted, but it's logically
+// down according to the system, we would want to release that control key before sending non-control
+// keystrokes, even if one of our thread's own windows has keyboard focus (because if it does, the
+// control-up keystroke should wind up getting processed after our thread realizes control is down).
+// This applies even when the keyboard/mouse hook call use because keystrokes routed to the hook via
+// the hook's message pump aren't messages per se, and thus GetKeyState and GetAsyncKeyState probably
+// return the exact same thing whenever there are no messages in the hook's thread-queue (which is almost
+// always the case).
 {
 	// If the hook is active, rely only on its tracked value rather than calling Get():
 	if (g_KeybdHook && !aExplicitlyGet)
@@ -1602,14 +1611,14 @@ modLR_type GetModifierLRState(bool aExplicitlyGet)
 	}
 	else
 	{
-		if (IsKeyDown2kXP(VK_LSHIFT)) modifiersLR |= MOD_LSHIFT;
-		if (IsKeyDown2kXP(VK_RSHIFT)) modifiersLR |= MOD_RSHIFT;
-		if (IsKeyDown2kXP(VK_LCONTROL)) modifiersLR |= MOD_LCONTROL;
-		if (IsKeyDown2kXP(VK_RCONTROL)) modifiersLR |= MOD_RCONTROL;
-		if (IsKeyDown2kXP(VK_LMENU)) modifiersLR |= MOD_LALT;
-		if (IsKeyDown2kXP(VK_RMENU)) modifiersLR |= MOD_RALT;
-		if (IsKeyDown2kXP(VK_LWIN)) modifiersLR |= MOD_LWIN;
-		if (IsKeyDown2kXP(VK_RWIN)) modifiersLR |= MOD_RWIN;
+		if (IsKeyDownAsync(VK_LSHIFT)) modifiersLR |= MOD_LSHIFT;
+		if (IsKeyDownAsync(VK_RSHIFT)) modifiersLR |= MOD_RSHIFT;
+		if (IsKeyDownAsync(VK_LCONTROL)) modifiersLR |= MOD_LCONTROL;
+		if (IsKeyDownAsync(VK_RCONTROL)) modifiersLR |= MOD_RCONTROL;
+		if (IsKeyDownAsync(VK_LMENU)) modifiersLR |= MOD_LALT;
+		if (IsKeyDownAsync(VK_RMENU)) modifiersLR |= MOD_RALT;
+		if (IsKeyDownAsync(VK_LWIN)) modifiersLR |= MOD_LWIN;
+		if (IsKeyDownAsync(VK_RWIN)) modifiersLR |= MOD_RWIN;
 	}
 
 	// Thread-safe: The following section isn't thread-safe because either the hook thread

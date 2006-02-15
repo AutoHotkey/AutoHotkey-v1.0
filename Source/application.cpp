@@ -402,7 +402,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 					// shift-control-tab -> for simplicity & consistency) since Control-Tab is a special
 					// keystroke that inserts a literal tab in the edit control:
 					if (   msg.wParam != VK_LEFT && msg.wParam != VK_RIGHT
-						&& (GetKeyState(VK_CONTROL) & 0x8000) // Even if other modifiers are down, it still qualifies.
+						&& (GetKeyState(VK_CONTROL) & 0x8000) // Even if other modifiers are down, it still qualifies. Use GetKeyState() vs. GetAsyncKeyState() because the former's definition is more suitable.
 						&& (msg.wParam != VK_TAB || pcontrol->type != GUI_CONTROL_EDIT
 							|| !(GetWindowLong(pcontrol->hwnd, GWL_STYLE) & ES_MULTILINE))   )
 					{
@@ -414,7 +414,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 						if (ptab_control)
 						{
 							pgui->SelectAdjacentTab(*ptab_control
-								, msg.wParam == VK_NEXT || (msg.wParam == VK_TAB && !(GetKeyState(VK_SHIFT) & 0x8000))
+								, msg.wParam == VK_NEXT || (msg.wParam == VK_TAB && !(GetKeyState(VK_SHIFT) & 0x8000)) // Use GetKeyState() vs. GetAsyncKeyState() because the former's definition is more suitable.
 								, true, true);
 							// Update to the below: Must suppress the tab key at least, to prevent it
 							// from navigating *and* changing the tab.  And since this one is suppressed,

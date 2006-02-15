@@ -11028,64 +11028,60 @@ VarSizeType Script::GetBatchLines(char *aBuf)
 
 VarSizeType Script::GetTitleMatchMode(char *aBuf)
 {
-	if (!aBuf)
-		return MAX_NUMBER_LENGTH;  // Just in case it's ever allowed to go beyond 3
-	_itoa(g.TitleMatchMode, aBuf, 10);  // Always output as decimal vs. hex in this case.
-	return (VarSizeType)strlen(aBuf);
+	// Done this way in case it's ever allowed to go beyond a single-digit number.
+	char buf[MAX_NUMBER_SIZE];
+	char *target_buf = aBuf ? aBuf : buf;
+	_itoa(g.TitleMatchMode, target_buf, 10);  // Always output as decimal vs. hex in this case (so that scripts can use "If var in list" with confidence).
+	return (VarSizeType)strlen(target_buf);
 }
 
 VarSizeType Script::GetTitleMatchModeSpeed(char *aBuf)
 {
-	if (!aBuf)
-		return 4;
-	// For backward compatibility (due to StringCaseSense), never change the case used here:
-	strcpy(aBuf, g.TitleFindFast ? "Fast" : "Slow");
+	if (aBuf)  // For backward compatibility (due to StringCaseSense), never change the case used here:
+		strcpy(aBuf, g.TitleFindFast ? "Fast" : "Slow");
 	return 4;  // Always length 4
 }
 
 VarSizeType Script::GetDetectHiddenWindows(char *aBuf)
 {
 	if (!aBuf)
-		return 3;  // Room for either On or Off
+		return 3;  // Room for either On or Off (in the estimation phase).
 	// For backward compatibility (due to StringCaseSense), never change the case used here:
-	strcpy(aBuf, g.DetectHiddenWindows ? "On" : "Off");
-	return 3;
+	return (VarSizeType)strlen(strcpy(aBuf, g.DetectHiddenWindows ? "On" : "Off")); // Fixed in v1.0.42.01 to return exact length (required).
 }
 
 VarSizeType Script::GetDetectHiddenText(char *aBuf)
 {
 	if (!aBuf)
-		return 3;  // Room for either On or Off
+		return 3;  // Room for either On or Off (in the estimation phase).
 	// For backward compatibility (due to StringCaseSense), never change the case used here:
-	strcpy(aBuf, g.DetectHiddenText ? "On" : "Off");
-	return 3;
+	return (VarSizeType)strlen(strcpy(aBuf, g.DetectHiddenText ? "On" : "Off")); // Fixed in v1.0.42.01 to return exact length (required).
 }
 
 VarSizeType Script::GetAutoTrim(char *aBuf)
 {
 	if (!aBuf)
-		return 3;  // Room for either On or Off
+		return 3;  // Room for either On or Off (in the estimation phase).
 	// For backward compatibility (due to StringCaseSense), never change the case used here:
-	strcpy(aBuf, g.AutoTrim ? "On" : "Off");
-	return 3;
+	return (VarSizeType)strlen(strcpy(aBuf, g.AutoTrim ? "On" : "Off")); // Fixed in v1.0.42.01 to return exact length (required).
 }
 
 VarSizeType Script::GetStringCaseSense(char *aBuf)
 {
 	if (!aBuf)
-		return 3;  // Room for either On or Off
+		return 3;  // Room for either On or Off (in the estimation phase).
 	// For backward compatibility (due to StringCaseSense), never change the case used here:
-	strcpy(aBuf, g.StringCaseSense ? "On" : "Off");
-	return 3;
+	return (VarSizeType)strlen(strcpy(aBuf, g.StringCaseSense ? "On" : "Off")); // Fixed in v1.0.42.01 to return exact length (required).
 }
 
 VarSizeType Script::GetFormatInteger(char *aBuf)
 {
-	if (!aBuf)
-		return 1;
-	// For backward compatibility (due to StringCaseSense), never change the case used here:
-	*aBuf = g.FormatIntAsHex ? 'H' : 'D';
-	*(aBuf + 1) = '\0';
+	if (aBuf)
+	{
+		// For backward compatibility (due to StringCaseSense), never change the case used here:
+		*aBuf = g.FormatIntAsHex ? 'H' : 'D';
+		*(aBuf + 1) = '\0';
+	}
 	return 1;
 }
 
@@ -11094,47 +11090,47 @@ VarSizeType Script::GetFormatFloat(char *aBuf)
 	if (!aBuf)
 		return (VarSizeType)strlen(g.FormatFloat);  // Include the extra chars since this is just an estimate.
 	strlcpy(aBuf, g.FormatFloat + 1, strlen(g.FormatFloat + 1));   // Omit the leading % and the trailing 'f'.
-	return (VarSizeType)strlen(aBuf);
+	return (VarSizeType)strlen(aBuf); // Must return exact length when aBuf isn't NULL.
 }
 
 VarSizeType Script::GetKeyDelay(char *aBuf)
 {
-	if (!aBuf)
-		return MAX_NUMBER_LENGTH;
-	_itoa(g.KeyDelay, aBuf, 10);  // Always output as decimal vs. hex in this case.
-	return (VarSizeType)strlen(aBuf);
+	char buf[MAX_NUMBER_SIZE];
+	char *target_buf = aBuf ? aBuf : buf;
+	_itoa(g.KeyDelay, target_buf, 10);  // Always output as decimal vs. hex in this case (so that scripts can use "If var in list" with confidence).
+	return (VarSizeType)strlen(target_buf);
 }
 
 VarSizeType Script::GetWinDelay(char *aBuf)
 {
-	if (!aBuf)
-		return MAX_NUMBER_LENGTH;
-	_itoa(g.WinDelay, aBuf, 10);  // Always output as decimal vs. hex in this case.
-	return (VarSizeType)strlen(aBuf);
+	char buf[MAX_NUMBER_SIZE];
+	char *target_buf = aBuf ? aBuf : buf;
+	_itoa(g.WinDelay, target_buf, 10);  // Always output as decimal vs. hex in this case (so that scripts can use "If var in list" with confidence).
+	return (VarSizeType)strlen(target_buf);
 }
 
 VarSizeType Script::GetControlDelay(char *aBuf)
 {
-	if (!aBuf)
-		return MAX_NUMBER_LENGTH;
-	_itoa(g.ControlDelay, aBuf, 10);  // Always output as decimal vs. hex in this case.
-	return (VarSizeType)strlen(aBuf);
+	char buf[MAX_NUMBER_SIZE];
+	char *target_buf = aBuf ? aBuf : buf;
+	_itoa(g.ControlDelay, target_buf, 10);  // Always output as decimal vs. hex in this case (so that scripts can use "If var in list" with confidence).
+	return (VarSizeType)strlen(target_buf);
 }
 
 VarSizeType Script::GetMouseDelay(char *aBuf)
 {
-	if (!aBuf)
-		return MAX_NUMBER_LENGTH;
-	_itoa(g.MouseDelay, aBuf, 10);  // Always output as decimal vs. hex in this case.
-	return (VarSizeType)strlen(aBuf);
+	char buf[MAX_NUMBER_SIZE];
+	char *target_buf = aBuf ? aBuf : buf;
+	_itoa(g.MouseDelay, target_buf, 10);  // Always output as decimal vs. hex in this case (so that scripts can use "If var in list" with confidence).
+	return (VarSizeType)strlen(target_buf);
 }
 
 VarSizeType Script::GetDefaultMouseSpeed(char *aBuf)
 {
-	if (!aBuf)
-		return MAX_NUMBER_LENGTH;  // Just in case it's ever allowed to go beyond 100.
-	_itoa(g.DefaultMouseSpeed, aBuf, 10);  // Always output as decimal vs. hex in this case.
-	return (VarSizeType)strlen(aBuf);
+	char buf[MAX_NUMBER_SIZE];
+	char *target_buf = aBuf ? aBuf : buf;
+	_itoa(g.DefaultMouseSpeed, target_buf, 10);  // Always output as decimal vs. hex in this case (so that scripts can use "If var in list" with confidence).
+	return (VarSizeType)strlen(target_buf);
 }
 
 
@@ -11154,10 +11150,7 @@ VarSizeType Script::GetIconTip(char *aBuf)
 	if (!aBuf)
 		return g_script.mTrayIconTip ? (VarSizeType)strlen(g_script.mTrayIconTip) : 0;
 	if (g_script.mTrayIconTip)
-	{
-		strcpy(aBuf, g_script.mTrayIconTip);
-		return (VarSizeType)strlen(aBuf);
-	}
+		return (VarSizeType)strlen(strcpy(aBuf, g_script.mTrayIconTip));
 	else
 	{
 		*aBuf = '\0';
@@ -11170,10 +11163,7 @@ VarSizeType Script::GetIconFile(char *aBuf)
 	if (!aBuf)
 		return g_script.mCustomIconFile ? (VarSizeType)strlen(g_script.mCustomIconFile) : 0;
 	if (g_script.mCustomIconFile)
-	{
-		strcpy(aBuf, g_script.mCustomIconFile);
-		return (VarSizeType)strlen(aBuf);
-	}
+		return (VarSizeType)strlen(strcpy(aBuf, g_script.mCustomIconFile));
 	else
 	{
 		*aBuf = '\0';
@@ -11183,14 +11173,14 @@ VarSizeType Script::GetIconFile(char *aBuf)
 
 VarSizeType Script::GetIconNumber(char *aBuf)
 {
-	if (!aBuf)
-		return MAX_NUMBER_LENGTH;
-	if (!g_script.mCustomIconNumber)
+	char buf[MAX_NUMBER_SIZE];
+	char *target_buf = aBuf ? aBuf : buf;
+	if (!g_script.mCustomIconNumber) // Yield an empty string rather than the digit "0".
 	{
-		*aBuf = '\0';
+		*target_buf = '\0';
 		return 0;
 	}
-	return (VarSizeType)strlen(UTOA(g_script.mCustomIconNumber, aBuf));
+	return (VarSizeType)strlen(UTOA(g_script.mCustomIconNumber, target_buf));
 }
 
 
@@ -11226,9 +11216,11 @@ VarSizeType Script::GetExitReason(char *aBuf)
 
 VarSizeType Script::GetSpace(VarTypeType aType, char *aBuf)
 {
-	if (!aBuf) return 1;  // i.e. the length of a single space char.
-	*(aBuf++) = aType == VAR_SPACE ? ' ' : '\t';
-	*aBuf = '\0';
+	if (aBuf)
+	{
+		*(aBuf++) = aType == VAR_SPACE ? ' ' : '\t';
+		*aBuf = '\0';
+	}
 	return 1;
 }
 
@@ -11305,7 +11297,7 @@ VarSizeType Script::MyGetTickCount(char *aBuf)
 	// it will probably work correctly due to the nature of implicit unsigned math.
 	// Thus, we use %d vs. %u in the snprintf() call below.
 	if (!aBuf)
-		return MAX_NUMBER_LENGTH; // Especially in this case, since tick might change between 1st & 2nd calls.
+		return MAX_NUMBER_LENGTH; // IMPORTANT: Conservative estimate because tick might change between 1st & 2nd calls.
 	return (VarSizeType)strlen(ITOA64(GetTickCount(), aBuf));
 }
 
@@ -11372,39 +11364,37 @@ VarSizeType Script::GetOSVersion(char *aBuf)
 	}
 	if (aBuf)
 		strcpy(aBuf, version);
-	return (VarSizeType)strlen(version); // Always return length of version, not aBuf.
+	return (VarSizeType)strlen(version); // Always return the length of version, not aBuf.
 }
 
 VarSizeType Script::GetLanguage(char *aBuf)
 // Registry locations from J-Paul Mesnage.
 {
 	char buf[MAX_PATH];
+	char *target_buf = aBuf ? aBuf : buf;
 	if (g_os.IsWinNT())  // NT/2k/XP+
 	{
 		if (g_os.IsWin2000orLater())
-			RegReadString(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Nls\\Language", "InstallLanguage", buf, MAX_PATH);
+			RegReadString(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Nls\\Language", "InstallLanguage", target_buf, MAX_PATH);
 		else // NT4
-			RegReadString(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Nls\\Language", "Default", buf, MAX_PATH);
+			RegReadString(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Nls\\Language", "Default", target_buf, MAX_PATH);
 	}
 	else // Win9x
 	{
-		RegReadString(HKEY_USERS, ".DEFAULT\\Control Panel\\Desktop\\ResourceLocale", "", buf, MAX_PATH);
-		memmove(buf, buf + 4, strlen(buf + 4) + 1); // +1 to include the zero terminator.
+		RegReadString(HKEY_USERS, ".DEFAULT\\Control Panel\\Desktop\\ResourceLocale", "", target_buf, MAX_PATH);
+		memmove(target_buf, target_buf + 4, strlen(target_buf + 4) + 1); // +1 to include the zero terminator.
 	}
-	if (aBuf)
-		strcpy(aBuf, buf);
-	return (VarSizeType)strlen(buf);
+	return (VarSizeType)strlen(target_buf);
 }
 
 VarSizeType Script::GetUserOrComputer(bool aGetUser, char *aBuf)
 {
 	char buf[MAX_PATH];  // Doesn't use MAX_COMPUTERNAME_LENGTH + 1 in case longer names are allowed in the future.
+	char *target_buf = aBuf ? aBuf : buf;
 	DWORD buf_size = MAX_PATH;
-	if (   !(aGetUser ? GetUserName(buf, &buf_size) : GetComputerName(buf, &buf_size))   )
-		*buf = '\0';
-	if (aBuf)
-		strcpy(aBuf, buf);
-	return (VarSizeType)strlen(buf);
+	if (   !(aGetUser ? GetUserName(target_buf, &buf_size) : GetComputerName(target_buf, &buf_size))   )
+		*target_buf = '\0';
+	return (VarSizeType)strlen(target_buf);
 }
 
 
@@ -11412,71 +11402,69 @@ VarSizeType Script::GetUserOrComputer(bool aGetUser, char *aBuf)
 VarSizeType Script::GetProgramFiles(char *aBuf)
 {
 	char buf[MAX_PATH];
-	RegReadString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion", "ProgramFilesDir", buf, MAX_PATH);
-	if (aBuf)
-		strcpy(aBuf, buf);
-	return (VarSizeType)strlen(buf);
+	char *target_buf = aBuf ? aBuf : buf;
+	RegReadString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion", "ProgramFilesDir", target_buf, MAX_PATH);
+	return (VarSizeType)strlen(target_buf);
 }
 
 VarSizeType Script::GetDesktop(bool aGetCommon, char *aBuf)
 {
-	char buf[MAX_PATH] = "";
+	char buf[MAX_PATH];
+	char *target_buf = aBuf ? aBuf : buf;
+	*target_buf = '\0'; // Set default.
 	if (aGetCommon)
-		RegReadString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Desktop", buf, MAX_PATH);
-	if (!*buf) // Either the above failed or we were told to get the user/private dir instead.
-		RegReadString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Desktop", buf, MAX_PATH);
-	if (aBuf)
-		strcpy(aBuf, buf);
-	return (VarSizeType)strlen(buf);
+		RegReadString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Desktop", target_buf, MAX_PATH);
+	if (!*target_buf) // Either the above failed or we were told to get the user/private dir instead.
+		RegReadString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Desktop", target_buf, MAX_PATH);
+	return (VarSizeType)strlen(target_buf);
 }
 
 VarSizeType Script::GetStartMenu(bool aGetCommon, char *aBuf)
 {
-	char buf[MAX_PATH] = "";
+	char buf[MAX_PATH];
+	char *target_buf = aBuf ? aBuf : buf;
+	*target_buf = '\0'; // Set default.
 	if (aGetCommon)
-		RegReadString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Start Menu", buf, MAX_PATH);
-	if (!*buf) // Either the above failed or we were told to get the user/private dir instead.
-		RegReadString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Start Menu", buf, MAX_PATH);
-	if (aBuf)
-		strcpy(aBuf, buf);
-	return (VarSizeType)strlen(buf);
+		RegReadString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Start Menu", target_buf, MAX_PATH);
+	if (!*target_buf) // Either the above failed or we were told to get the user/private dir instead.
+		RegReadString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Start Menu", target_buf, MAX_PATH);
+	return (VarSizeType)strlen(target_buf);
 }
 
 VarSizeType Script::GetPrograms(bool aGetCommon, char *aBuf)
 {
-	char buf[MAX_PATH] = "";
+	char buf[MAX_PATH];
+	char *target_buf = aBuf ? aBuf : buf;
+	*target_buf = '\0'; // Set default.
 	if (aGetCommon)
-		RegReadString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Programs", buf, MAX_PATH);
-	if (!*buf) // Either the above failed or we were told to get the user/private dir instead.
-		RegReadString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Programs", buf, MAX_PATH);
-	if (aBuf)
-		strcpy(aBuf, buf);
-	return (VarSizeType)strlen(buf);
+		RegReadString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Programs", target_buf, MAX_PATH);
+	if (!*target_buf) // Either the above failed or we were told to get the user/private dir instead.
+		RegReadString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Programs", target_buf, MAX_PATH);
+	return (VarSizeType)strlen(target_buf);
 }
 
 VarSizeType Script::GetStartup(bool aGetCommon, char *aBuf)
 {
-	char buf[MAX_PATH] = "";
+	char buf[MAX_PATH];
+	char *target_buf = aBuf ? aBuf : buf;
+	*target_buf = '\0'; // Set default.
 	if (aGetCommon)
-		RegReadString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Startup", buf, MAX_PATH);
-	if (!*buf) // Either the above failed or we were told to get the user/private dir instead.
-		RegReadString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Startup", buf, MAX_PATH);
-	if (aBuf)
-		strcpy(aBuf, buf);
-	return (VarSizeType)strlen(buf);
+		RegReadString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Startup", target_buf, MAX_PATH);
+	if (!*target_buf) // Either the above failed or we were told to get the user/private dir instead.
+		RegReadString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Startup", target_buf, MAX_PATH);
+	return (VarSizeType)strlen(target_buf);
 }
 
 VarSizeType Script::GetMyDocuments(char *aBuf)
 {
 	char buf[MAX_PATH];
-	RegReadString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Personal", buf, MAX_PATH);
+	char *target_buf = aBuf ? aBuf : buf;
+	RegReadString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Personal", target_buf, MAX_PATH);
 	// Since it is common (such as in networked environments) to have My Documents on the root of a drive
 	// (such as a mapped drive letter), remove the backslash from something like M:\ because M: is more
 	// appropriate for most uses:
-	Line::Util_StripTrailingDir(buf);
-	if (aBuf)
-		strcpy(aBuf, buf);
-	return (VarSizeType)strlen(buf);
+	Line::Util_StripTrailingDir(target_buf);
+	return (VarSizeType)strlen(target_buf);
 }
 
 
@@ -11484,7 +11472,7 @@ VarSizeType Script::GetMyDocuments(char *aBuf)
 VarSizeType Script::ScriptGetCaret(VarTypeType aVarType, char *aBuf)
 {
 	if (!aBuf)
-		return MAX_NUMBER_LENGTH;
+		return MAX_NUMBER_LENGTH; // Conservative, both for performance and in case the value changes between first and second call.
 
 	// These static variables are used to keep the X and Y coordinates in sync with each other, as a snapshot
 	// of where the caret was at one precise instant in time.  This is because the X and Y vars are resolved
@@ -11540,7 +11528,7 @@ VarSizeType Script::ScriptGetCaret(VarTypeType aVarType, char *aBuf)
 		}
 	}
 	// Now the above has ensured that sPoint contains valid coordinates that are up-to-date enough to be used.
-	_itoa(aVarType == VAR_CARETX ? sPoint.x : sPoint.y, aBuf, 10);  // Always output as decimal vs. hex in this case.
+	_itoa(aVarType == VAR_CARETX ? sPoint.x : sPoint.y, aBuf, 10);  // Always output as decimal vs. hex in this case (so that scripts can use "If var in list" with confidence).
 	return (VarSizeType)strlen(aBuf);
 }
 
@@ -11571,18 +11559,17 @@ VarSizeType Script::GetFilename(char *aBuf)
 
 VarSizeType Script::GetFileDir(char *aBuf)
 {
-	char str[MAX_PATH + 1] = "";  // Set default.  Uses +1 to append final backslash for AutoIt2 (.aut) scripts.
-	strlcpy(str, mFileDir, sizeof(str));
-	size_t length = strlen(str); // Needed not just for AutoIt2.
+	char buf[MAX_PATH + 1];  // Uses +1 to append final backslash for AutoIt2 (.aut) scripts.
+	char *target_buf = aBuf ? aBuf : buf;
+	strlcpy(target_buf, mFileDir, MAX_PATH);
+	size_t length = strlen(target_buf); // Needed not just for AutoIt2.
 	// If it doesn't already have a final backslash, namely due to it being a root directory,
 	// provide one so that it is backward compatible with AutoIt v2:
-	if (mIsAutoIt2 && length && str[length - 1] != '\\')
+	if (mIsAutoIt2 && length && target_buf[length - 1] != '\\')
 	{
-		str[length++] = '\\';
-		str[length] = '\0';
+		target_buf[length++] = '\\';
+		target_buf[length] = '\0';
 	}
-	if (aBuf)
-		strcpy(aBuf, str);
 	return (VarSizeType)length;
 }
 
@@ -11613,55 +11600,57 @@ VarSizeType Script::GetLineFile(char *aBuf)
 
 VarSizeType Script::GetLoopFileName(char *aBuf)
 {
-	char *str = "";  // Set default.
+	char *naked_filename;
 	if (mLoopFile)
 	{
 		// The loop handler already prepended the script's directory in here for us:
-		if (str = strrchr(mLoopFile->cFileName, '\\'))
-			++str;
+		if (naked_filename = strrchr(mLoopFile->cFileName, '\\'))
+			++naked_filename;
 		else // No backslash, so just make it the entire file name.
-			str = mLoopFile->cFileName;
+			naked_filename = mLoopFile->cFileName;
 	}
+	else
+		naked_filename = "";
 	if (aBuf)
-		strcpy(aBuf, str);
-	return (VarSizeType)strlen(str);
+		strcpy(aBuf, naked_filename);
+	return (VarSizeType)strlen(naked_filename);
 }
 
 VarSizeType Script::GetLoopFileShortName(char *aBuf)
 {
-	char *str = "";  // Set default.
+	char *short_filename = "";  // Set default.
 	if (mLoopFile)
 	{
-		if (   !*(str = mLoopFile->cAlternateFileName)   )
+		if (   !*(short_filename = mLoopFile->cAlternateFileName)   )
 			// Files whose long name is shorter than the 8.3 usually don't have value stored here,
 			// so use the long name whenever a short name is unavailable for any reason (could
 			// also happen if NTFS has short-name generation disabled?)
 			return GetLoopFileName(aBuf);
 	}
 	if (aBuf)
-		strcpy(aBuf, str);
-	return (VarSizeType)strlen(str);
+		strcpy(aBuf, short_filename);
+	return (VarSizeType)strlen(short_filename);
 }
 
 VarSizeType Script::GetLoopFileExt(char *aBuf)
 {
-	char *str = "";  // Set default.
+	char *file_ext = "";  // Set default.
 	if (mLoopFile)
 	{
 		// The loop handler already prepended the script's directory in here for us:
-		if (str = strrchr(mLoopFile->cFileName, '.'))
-			++str;
+		if (file_ext = strrchr(mLoopFile->cFileName, '.'))
+			++file_ext;
 		else // Reset to empty string vs. NULL.
-			str = "";
+			file_ext = "";
 	}
 	if (aBuf)
-		strcpy(aBuf, str);
-	return (VarSizeType)strlen(str);
+		strcpy(aBuf, file_ext);
+	return (VarSizeType)strlen(file_ext);
 }
 
 VarSizeType Script::GetLoopFileDir(char *aBuf)
 {
-	char *str = "";  // Set default.
+	char *file_dir = "";  // Set default.
 	char *last_backslash = NULL;
 	if (mLoopFile)
 	{
@@ -11672,19 +11661,19 @@ VarSizeType Script::GetLoopFileDir(char *aBuf)
 		if (last_backslash = strrchr(mLoopFile->cFileName, '\\'))
 		{
 			*last_backslash = '\0'; // Temporarily terminate.
-			str = mLoopFile->cFileName;
+			file_dir = mLoopFile->cFileName;
 		}
 		else // No backslash, so there is no directory in this case.
-			str = "";
+			file_dir = "";
 	}
-	VarSizeType length = (VarSizeType)strlen(str);
+	VarSizeType length = (VarSizeType)strlen(file_dir);
 	if (!aBuf)
 	{
 		if (last_backslash)
 			*last_backslash = '\\';  // Restore the orginal value.
 		return length;
 	}
-	strcpy(aBuf, str);
+	strcpy(aBuf, file_dir);
 	if (last_backslash)
 		*last_backslash = '\\';  // Restore the orginal value.
 	return length;
@@ -11692,18 +11681,18 @@ VarSizeType Script::GetLoopFileDir(char *aBuf)
 
 VarSizeType Script::GetLoopFileFullPath(char *aBuf)
 {
-	char *str = "";  // Set default.
-	if (mLoopFile)
-		// The loop handler already prepended the script's directory in here for us:
-		str = mLoopFile->cFileName;
+	// The loop handler already prepended the script's directory in cFileName for us:
+	char *full_path = mLoopFile ? mLoopFile->cFileName : "";
 	if (aBuf)
-		strcpy(aBuf, str);
-	return (VarSizeType)strlen(str);
+		strcpy(aBuf, full_path);
+	return (VarSizeType)strlen(full_path);
 }
 
 VarSizeType Script::GetLoopFileLongPath(char *aBuf)
 {
-	char *temp, buf[MAX_PATH] = ""; // Set default.
+	char *unused, buf[MAX_PATH];
+	char *target_buf = aBuf ? aBuf : buf;
+	*target_buf = '\0';  // Set default.
 	if (mLoopFile)
 	{
 		// GetFullPathName() is done in addition to ConvertFilespecToCorrectCase() for the following reasons:
@@ -11719,17 +11708,15 @@ VarSizeType Script::GetLoopFileLongPath(char *aBuf)
 		// The below also serves to make a copy because changing the original would yield
 		// unexpected/inconsistent results in a script that retrieves the A_LoopFileFullPath
 		// but only conditionally retrieves A_LoopFileLongPath.
-		if (!GetFullPathName(mLoopFile->cFileName, sizeof(buf), buf, &temp))
-			*buf = '\0'; // It might fail if NtfsDisable8dot3NameCreation is turned on in the registry, and possibly for other reasons.
+		if (!GetFullPathName(mLoopFile->cFileName, MAX_PATH, target_buf, &unused))
+			*target_buf = '\0'; // It might fail if NtfsDisable8dot3NameCreation is turned on in the registry, and possibly for other reasons.
 		else
 			// The below is called in case the loop is being used to convert filename specs that were passed
 			// in from the command line, which thus might not be the proper case (at least in the path
 			// portion of the filespec), as shown in the file system:
-			ConvertFilespecToCorrectCase(buf);
+			ConvertFilespecToCorrectCase(target_buf);
 	}
-	if (aBuf)
-		strcpy(aBuf, buf);
-	return (VarSizeType)strlen(buf); // Must explicitly calculate the length rather than using the return value from GetFullPathName(), because ConvertFilespecToCorrectCase() expands 8.3 path components.
+	return (VarSizeType)strlen(target_buf); // Must explicitly calculate the length rather than using the return value from GetFullPathName(), because ConvertFilespecToCorrectCase() expands 8.3 path components.
 }
 
 VarSizeType Script::GetLoopFileShortPath(char *aBuf)
@@ -11741,55 +11728,55 @@ VarSizeType Script::GetLoopFileShortPath(char *aBuf)
 // But to detect if that short name is really a long name, A_LoopFileShortPath could be checked
 // and if it's blank, there is no short name available.
 {
-	char buf[MAX_PATH] = "";  // Set default.
-	DWORD length = 0;         // Set default.
+	char buf[MAX_PATH];
+	char *target_buf = aBuf ? aBuf : buf;
+	*target_buf = '\0'; // Set default.
+	DWORD length = 0;   //
 	if (mLoopFile)
 		// The loop handler already prepended the script's directory in cFileName for us:
-		if (   !(length = GetShortPathName(mLoopFile->cFileName, buf, sizeof(buf)))   )
-			*buf = '\0'; // It might fail if NtfsDisable8dot3NameCreation is turned on in the registry, and possibly for other reasons.
-	if (aBuf)
-		strcpy(aBuf, buf);
+		if (   !(length = GetShortPathName(mLoopFile->cFileName, target_buf, MAX_PATH))   )
+			*target_buf = '\0'; // It might fail if NtfsDisable8dot3NameCreation is turned on in the registry, and possibly for other reasons.
 	return (VarSizeType)length;
 }
 
 VarSizeType Script::GetLoopFileTimeModified(char *aBuf)
 {
-	char str[64] = "";  // Set default.
+	char buf[64];
+	char *target_buf = aBuf ? aBuf : buf;
+	*target_buf = '\0'; // Set default.
 	if (mLoopFile)
-		FileTimeToYYYYMMDD(str, mLoopFile->ftLastWriteTime, true);
-	if (aBuf)
-		strcpy(aBuf, str);
-	return (VarSizeType)strlen(str);
+		FileTimeToYYYYMMDD(target_buf, mLoopFile->ftLastWriteTime, true);
+	return (VarSizeType)strlen(target_buf);
 }
 
 VarSizeType Script::GetLoopFileTimeCreated(char *aBuf)
 {
-	char str[64] = "";  // Set default.
+	char buf[64];
+	char *target_buf = aBuf ? aBuf : buf;
+	*target_buf = '\0'; // Set default.
 	if (mLoopFile)
-		FileTimeToYYYYMMDD(str, mLoopFile->ftCreationTime, true);
-	if (aBuf)
-		strcpy(aBuf, str);
-	return (VarSizeType)strlen(str);
+		FileTimeToYYYYMMDD(target_buf, mLoopFile->ftCreationTime, true);
+	return (VarSizeType)strlen(target_buf);
 }
 
 VarSizeType Script::GetLoopFileTimeAccessed(char *aBuf)
 {
-	char str[64] = "";  // Set default.
+	char buf[64];
+	char *target_buf = aBuf ? aBuf : buf;
+	*target_buf = '\0'; // Set default.
 	if (mLoopFile)
-		FileTimeToYYYYMMDD(str, mLoopFile->ftLastAccessTime, true);
-	if (aBuf)
-		strcpy(aBuf, str);
-	return (VarSizeType)strlen(str);
+		FileTimeToYYYYMMDD(target_buf, mLoopFile->ftLastAccessTime, true);
+	return (VarSizeType)strlen(target_buf);
 }
 
 VarSizeType Script::GetLoopFileAttrib(char *aBuf)
 {
-	char str[64] = "";  // Set default.
+	char buf[64];
+	char *target_buf = aBuf ? aBuf : buf;
+	*target_buf = '\0'; // Set default.
 	if (mLoopFile)
-		FileAttribToStr(str, mLoopFile->dwFileAttributes);
-	if (aBuf)
-		strcpy(aBuf, str);
-	return (VarSizeType)strlen(str);
+		FileAttribToStr(target_buf, mLoopFile->dwFileAttributes);
+	return (VarSizeType)strlen(target_buf);
 }
 
 VarSizeType Script::GetLoopFileSize(char *aBuf, int aDivider)
@@ -11818,30 +11805,28 @@ VarSizeType Script::GetLoopFileSize(char *aBuf, int aDivider)
 
 VarSizeType Script::GetLoopRegType(char *aBuf)
 {
-	char str[256] = "";  // Set default.
+	char buf[MAX_PATH];
+	char *target_buf = aBuf ? aBuf : buf;
+	*target_buf = '\0'; // Set default.
 	if (mLoopRegItem)
-		Line::RegConvertValueType(str, sizeof(str), mLoopRegItem->type);
-	if (aBuf)
-		strcpy(aBuf, str);
-	return (VarSizeType)strlen(str);
+		Line::RegConvertValueType(target_buf, MAX_PATH, mLoopRegItem->type);
+	return (VarSizeType)strlen(target_buf);
 }
 
 VarSizeType Script::GetLoopRegKey(char *aBuf)
 {
-	char str[256] = "";  // Set default.
+	char buf[MAX_PATH];
+	char *target_buf = aBuf ? aBuf : buf;
+	*target_buf = '\0'; // Set default.
 	if (mLoopRegItem)
 		// Use root_key_type, not root_key (which might be a remote vs. local HKEY):
-		Line::RegConvertRootKey(str, sizeof(str), mLoopRegItem->root_key_type);
-	if (aBuf)
-		strcpy(aBuf, str);
-	return (VarSizeType)strlen(str);
+		Line::RegConvertRootKey(target_buf, MAX_PATH, mLoopRegItem->root_key_type);
+	return (VarSizeType)strlen(target_buf);
 }
 
 VarSizeType Script::GetLoopRegSubKey(char *aBuf)
 {
-	char *str = "";  // Set default.
-	if (mLoopRegItem)
-		str = mLoopRegItem->subkey;
+	char *str = mLoopRegItem ? mLoopRegItem->subkey : "";
 	if (aBuf)
 		strcpy(aBuf, str);
 	return (VarSizeType)strlen(str);
@@ -11849,9 +11834,8 @@ VarSizeType Script::GetLoopRegSubKey(char *aBuf)
 
 VarSizeType Script::GetLoopRegName(char *aBuf)
 {
-	char *str = "";  // Set default.
-	if (mLoopRegItem)
-		str = mLoopRegItem->name; // This can be either the name of a subkey or the name of a value.
+	// This can be either the name of a subkey or the name of a value.
+	char *str = mLoopRegItem ? mLoopRegItem->name : "";
 	if (aBuf)
 		strcpy(aBuf, str);
 	return (VarSizeType)strlen(str);
@@ -11859,21 +11843,19 @@ VarSizeType Script::GetLoopRegName(char *aBuf)
 
 VarSizeType Script::GetLoopRegTimeModified(char *aBuf)
 {
-	char str[64] = "";  // Set default.
+	char buf[64];
+	char *target_buf = aBuf ? aBuf : buf;
+	*target_buf = '\0'; // Set default.
 	// Only subkeys (not values) have a time.  In addition, Win9x doesn't support retrieval
 	// of the time (nor does it store it), so make the var blank in that case:
 	if (mLoopRegItem && mLoopRegItem->type == REG_SUBKEY && !g_os.IsWin9x())
-		FileTimeToYYYYMMDD(str, mLoopRegItem->ftLastWriteTime, true);
-	if (aBuf)
-		strcpy(aBuf, str);
-	return (VarSizeType)strlen(str);
+		FileTimeToYYYYMMDD(target_buf, mLoopRegItem->ftLastWriteTime, true);
+	return (VarSizeType)strlen(target_buf);
 }
 
 VarSizeType Script::GetLoopReadLine(char *aBuf)
 {
-	char *str = "";  // Set default.
-	if (mLoopReadFile)
-		str = mLoopReadFile->mCurrentLine;
+	char *str = mLoopReadFile ? mLoopReadFile->mCurrentLine : "";
 	if (aBuf)
 		strcpy(aBuf, str);
 	return (VarSizeType)strlen(str);
@@ -11881,9 +11863,7 @@ VarSizeType Script::GetLoopReadLine(char *aBuf)
 
 VarSizeType Script::GetLoopField(char *aBuf)
 {
-	char *str = "";  // Set default.
-	if (mLoopField)
-		str = mLoopField;
+	char *str = mLoopField ? mLoopField : "";
 	if (aBuf)
 		strcpy(aBuf, str);
 	return (VarSizeType)strlen(str);
@@ -11891,9 +11871,9 @@ VarSizeType Script::GetLoopField(char *aBuf)
 
 VarSizeType Script::GetLoopIndex(char *aBuf)
 {
-	if (!aBuf)
+	if (!aBuf) // Probably performs better to return a conservative estimate for the first pass than to call ITOA64 for both passes.
 		return MAX_NUMBER_LENGTH;
-	return (VarSizeType)strlen(ITOA64(mLoopIteration, aBuf));
+	return (VarSizeType)strlen(ITOA64(mLoopIteration, aBuf)); // Must return exact length when aBuf isn't NULL.
 }
 
 
@@ -11907,7 +11887,7 @@ VarSizeType Script::GetThisMenuItem(char *aBuf)
 
 VarSizeType Script::GetThisMenuItemPos(char *aBuf)
 {
-	if (!aBuf)
+	if (!aBuf) // To avoid doing possibly high-overhead calls twice, merely return a conservative estimate for the first pass.
 		return MAX_NUMBER_LENGTH;
 	// The menu item's position is discovered through this process -- rather than doing
 	// something higher performance such as storing the menu handle or pointer to menu/item
@@ -11959,7 +11939,7 @@ VarSizeType Script::GetPriorHotkey(char *aBuf)
 
 VarSizeType Script::GetTimeSinceThisHotkey(char *aBuf)
 {
-	if (!aBuf)
+	if (!aBuf) // IMPORTANT: Conservative estimate because the time might change between 1st & 2nd calls.
 		return MAX_NUMBER_LENGTH;
 	// It must be the type of hotkey that has a label because we want the TimeSinceThisHotkey
 	// value to be "in sync" with the value of ThisHotkey itself (i.e. use the same method
@@ -11978,7 +11958,7 @@ VarSizeType Script::GetTimeSinceThisHotkey(char *aBuf)
 
 VarSizeType Script::GetTimeSincePriorHotkey(char *aBuf)
 {
-	if (!aBuf)
+	if (!aBuf) // IMPORTANT: Conservative estimate because the time might change between 1st & 2nd calls.
 		return MAX_NUMBER_LENGTH;
 	if (*mPriorHotkeyName)
 		// See MyGetTickCount() for explanation for explanation:
@@ -11991,10 +11971,11 @@ VarSizeType Script::GetTimeSincePriorHotkey(char *aBuf)
 
 VarSizeType Script::GetEndChar(char *aBuf)
 {
-	if (!aBuf)
-		return 1;
-	*aBuf = mEndChar;
-	*(aBuf + 1) = '\0';
+	if (aBuf)
+	{
+		*aBuf = mEndChar;
+		*(aBuf + 1) = '\0';
+	}
 	return 1;
 }
 
@@ -12003,15 +11984,16 @@ VarSizeType Script::GetEndChar(char *aBuf)
 VarSizeType Script::GetGui(VarTypeType aVarType, char *aBuf)
 // We're returning the length of the var's contents, not the size.
 {
+	char buf[MAX_NUMBER_SIZE];
+	char *target_buf = aBuf ? aBuf : buf;
+
 	if (g.GuiWindowIndex >= MAX_GUI_WINDOWS) // The current thread was not launched as a result of GUI action.
 	{
-		if (aBuf)
-			*aBuf = '\0';
+		*target_buf = '\0';
 		return 0;
 	}
 
 	GuiType *pgui;
-	char buf[MAX_NUMBER_LENGTH + 1];
 
 	switch (aVarType)
 	{
@@ -12019,28 +12001,25 @@ VarSizeType Script::GetGui(VarTypeType aVarType, char *aBuf)
 	case VAR_GUIHEIGHT:
 		if (   !(pgui = g_gui[g.GuiWindowIndex])   ) // Gui window doesn't currently exist, so return a blank.
 		{
-			if (aBuf)
-				*aBuf = '\0';
+			*target_buf = '\0';
 			return 0;
 		}
 		// Otherwise:
-		_itoa(aVarType == VAR_GUIWIDTH ? LOWORD(pgui->mSizeWidthHeight) : HIWORD(pgui->mSizeWidthHeight), buf, 10);
+		_itoa(aVarType == VAR_GUIWIDTH ? LOWORD(pgui->mSizeWidthHeight) : HIWORD(pgui->mSizeWidthHeight), target_buf, 10);
 		// Above is always stored as decimal vs. hex, regardless of script settings.
 		break;
 	case VAR_GUIX:
-		_itoa(g.GuiPoint.x, buf, 10);
+		_itoa(g.GuiPoint.x, target_buf, 10);
 		break;
 	case VAR_GUIY:
-		_itoa(g.GuiPoint.y, buf, 10);
+		_itoa(g.GuiPoint.y, target_buf, 10);
 		break;
 	case VAR_GUI:
-		_itoa(g.GuiWindowIndex + 1, buf, 10);  // Always stored as decimal vs. hex, regardless of script settings.
+		_itoa(g.GuiWindowIndex + 1, target_buf, 10);  // Always stored as decimal vs. hex, regardless of script settings.
 		break;
 	}
 
-	if (aBuf)
-		strcpy(aBuf, buf);
-	return (VarSizeType)strlen(buf);
+	return (VarSizeType)strlen(target_buf);
 }
 
 
@@ -12158,14 +12137,14 @@ VarSizeType Script::GetEventInfo(char *aBuf)
 {
 	if (!aBuf)
 		return MAX_NUMBER_LENGTH;
-	return (VarSizeType)strlen(UTOA(g.EventInfo, aBuf));
+	return (VarSizeType)strlen(UTOA(g.EventInfo, aBuf)); // Must return exact length when aBuf isn't NULL.
 }
 
 
 
 VarSizeType Script::GetTimeIdle(char *aBuf)
 {
-	if (!aBuf)
+	if (!aBuf) // IMPORTANT: Conservative estimate because tick might change between 1st & 2nd calls.
 		return MAX_NUMBER_LENGTH;
 	*aBuf = '\0';  // Set default.
 	if (g_os.IsWin2000orLater()) // Checked in case the function is present but "not implemented".
@@ -12196,7 +12175,7 @@ VarSizeType Script::GetTimeIdlePhysical(char *aBuf)
 	if (!(g_KeybdHook || g_MouseHook))
 		return GetTimeIdle(aBuf);
 	if (!aBuf)
-		return MAX_NUMBER_LENGTH;
+		return MAX_NUMBER_LENGTH; // IMPORTANT: Conservative estimate because tick might change between 1st & 2nd calls.
 	return (VarSizeType)strlen(ITOA64(GetTickCount() - g_TimeLastInputPhysical, aBuf)); // Switching keyboard layouts/languages sometimes sees to throw off the timestamps of the incoming events in the hook.
 }
 

@@ -12036,15 +12036,14 @@ bool ScriptGetKeyState(vk_type aVK, KeyStateTypes aKeyStateType)
 			if (g_MouseHook) // mouse hook is installed, so use it's tracking of physical state.
 				return g_PhysicalKeyState[aVK] & STATE_DOWN;
 			else // Even for Win9x/NT, it seems slightly better to call this rather than IsKeyDown9xNT():
-				return IsPhysicallyDown(aVK);
+				return IsKeyDownAsync(aVK);
 		}
 		else // keyboard
 		{
 			if (g_KeybdHook)
 			{
 				// Since the hook is installed, use its value rather than that from
-				// GetAsyncKeyState(), which doesn't seem to return the physical state
-				// as expected/advertised, least under WinXP.
+				// GetAsyncKeyState(), which doesn't seem to return the physical state.
 				// But first, correct the hook modifier state if it needs it.  See comments
 				// in GetModifierLRState() for why this is needed:
 				if (KeyToModifiersLR(aVK))     // It's a modifier.
@@ -12052,17 +12051,21 @@ bool ScriptGetKeyState(vk_type aVK, KeyStateTypes aKeyStateType)
 				return g_PhysicalKeyState[aVK] & STATE_DOWN;
 			}
 			else // Even for Win9x/NT, it seems slightly better to call this rather than IsKeyDown9xNT():
-				return IsPhysicallyDown(aVK);
+				return IsKeyDownAsync(aVK);
 		}
 	} // switch()
 
 	// Otherwise, use the default state-type: KEYSTATE_LOGICAL
 	if (g_os.IsWin9x() || g_os.IsWinNT4())
-		return IsKeyDown9xNT(aVK); // This seems more likely to be reliable.
+		return IsKeyDown9xNT(aVK); // See its comments for why it's more reliable on these OSes.
 	else
 		// On XP/2K at least, a key can be physically down even if it isn't logically down,
 		// which is why the below specifically calls IsKeyDown2kXP() rather than some more
 		// comprehensive method such as consulting the physical key state as tracked by the hook:
+		// v1.0.42.01: For backward compatibility, the following hasn't been changed to IsKeyDownAsync().
+		// For example, a script might rely on being able to detect whether Control was down at the
+		// time the current Gui thread was launched rather than whether than whether it's down right now.
+		// A new mode can be added to KeyWait & GetKeyState if Async is ever explicitly needed.
 		return IsKeyDown2kXP(aVK);
 		// Known limitation: For some reason, both the above and IsKeyDown9xNT() will indicate
 		// that the CONTROL key is up whenever RButton is down, at least if the mouse hook is

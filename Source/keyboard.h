@@ -226,16 +226,13 @@ modLR_type GetModifierLRState(bool aExplicitlyGet = false);
 // state under Win9x, at least for the modifier keys under certain conditions.  The
 // AutoIt3 author indicates that GetAsyncKeyState() is also unreliable and he uses
 // this same method, so it seems best for now.  Specify GetAsyncKeyState() first due
-// to performance of short-circuit boolean:
-#define IsKeyDown9xNT(vk) (   (GetAsyncKeyState(vk) & 0x80000000) || ((GetKeyState(vk) & 0x8000))   )
+// to performance of short-circuit boolean.  v1.0.42.01: Fixed to use 0x8000 vs. 0x80000000
+// with GetAsyncKeyState (though luckily, because of the way a negative short gets promoted
+// to a negative int, the old way of using 0x80000000 worked too).
+#define IsKeyDown9xNT(vk) (   (GetAsyncKeyState(vk) & 0x8000) || ((GetKeyState(vk) & 0x8000))   )
 #define IsKeyDown2kXP(vk) (GetKeyState(vk) & 0x8000)
+#define IsKeyDownAsync(vk) (GetAsyncKeyState(vk) & 0x8000)
 #define IsKeyToggledOn(vk) (GetKeyState(vk) & 0x01)
-
-// GetAsyncKeyState() doesn't always seem to work as advertised, at least under WinXP
-// (the docs imply that it's supposed to fetch the *physical* state of the key).  But for now,
-// this is used for the script's GetKeyState command in case Windows 2003 or later operating
-// systems wind up implementing it properly:
-#define IsPhysicallyDown(vk) (GetAsyncKeyState(vk) & 0x80000000)
 
 void AdjustKeyState(BYTE aKeyState[], modLR_type aModifiersLR);
 modLR_type KeyToModifiersLR(vk_type aVK, sc_type aSC = 0, bool *pIsNeutral = NULL);

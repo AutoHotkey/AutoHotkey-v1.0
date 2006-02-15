@@ -46,8 +46,8 @@ WORD g_mouse_buttons_logical = 0;
 #endif
 
 // Used by the hook to track physical state of all virtual keys, since GetAsyncKeyState() does
-// not work as advertised, at least under WinXP.  Note that this array is also used by	),
-// so it's format should be the same as that returned from GetKeyboardState():
+// not retrieve the physical state of a key.  Note that this array is sometimes used in a way that
+// requires its format to be the same as that returned from GetKeyboardState():
 BYTE g_PhysicalKeyState[VK_ARRAY_COUNT] = {0};
 bool g_LayoutHasAltGr = false; // Seems safer to assume false upon startup and have all other detect geared toward proving this assumption wrong.
 bool g_HookReceiptOfLControlMeansAltGr = false;
@@ -581,7 +581,7 @@ key_to_vk_type g_key_to_vk[] =
 , {"PrintScreen", VK_SNAPSHOT}
 , {"CtrlBreak", VK_CANCEL}  // Might want to verify this, and whether it has any peculiarities.
 , {"Pause", VK_PAUSE} // So that VKtoKeyName() delivers consistent results, always have the preferred name first.
-, {"Break", VK_PAUSE}
+, {"Break", VK_PAUSE} // Not really meaningful, but kept for as a synonym of Pause for backward compatibility.  See CtrlBreak.
 , {"Help", VK_HELP}  // VK_HELP is probably not the extended HELP key.  Not sure what this one is.
 , {"Sleep", VK_SLEEP}
 
