@@ -4319,7 +4319,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 						if (strchr(op_begin, g_DerefChar)) // This operand contains at least one double dereference.
 						{
 							if (is_function)
-								return ScriptError("Dynamic function-calls are not supported.", op_begin);
+								return ScriptError("Dynamic function calls are not supported.", op_begin);
 							// The derefs are parsed and added to the deref array at this stage (on a
 							// per-operand basis) rather than all at once for the entire arg because
 							// the deref array must be ordered according to the physical position of
@@ -11529,6 +11529,70 @@ VarSizeType Script::ScriptGetCaret(VarTypeType aVarType, char *aBuf)
 	}
 	// Now the above has ensured that sPoint contains valid coordinates that are up-to-date enough to be used.
 	_itoa(aVarType == VAR_CARETX ? sPoint.x : sPoint.y, aBuf, 10);  // Always output as decimal vs. hex in this case (so that scripts can use "If var in list" with confidence).
+	return (VarSizeType)strlen(aBuf);
+}
+
+
+
+VarSizeType Script::ScriptGetCursor(char *aBuf)
+{
+	if (!aBuf)
+		return SMALL_STRING_LENGTH;  // we're returning the length of the var's contents, not the size.
+
+	// Must fetch it at runtime, otherwise the program can't even be launched on Windows 95:
+	typedef BOOL (WINAPI *MyGetCursorInfoType)(PCURSORINFO);
+	static MyGetCursorInfoType MyGetCursorInfo = (MyGetCursorInfoType)GetProcAddress(GetModuleHandle("user32"), "GetCursorInfo");
+
+	HCURSOR current_cursor;
+	if (MyGetCursorInfo) // v1.0.42.02: This method is used to avoid ATTACH_THREAD_INPUT, which interferes with double-clicking if called repeatedly at a high frequency.
+	{
+		CURSORINFO ci;
+		ci.cbSize = sizeof(CURSORINFO);
+		current_cursor = MyGetCursorInfo(&ci) ? ci.hCursor : NULL;
+	}
+	else // Windows 95/NT requires the old method.
+	{
+		POINT point;
+		GetCursorPos(&point);
+		HWND target_window = WindowFromPoint(point);
+
+		// MSDN docs imply that threads must be attached for GetCursor() to work.
+		// A side-effect of attaching threads or of GetCursor() itself is that mouse double-clicks
+		// are interfered with, at least if this function is called repeatedly at a high frequency.
+		ATTACH_THREAD_INPUT
+		current_cursor = GetCursor();
+		DETACH_THREAD_INPUT
+	}
+
+	if (!current_cursor)
+	{
+		#define CURSOR_UNKNOWN "Unknown"
+		strlcpy(aBuf, CURSOR_UNKNOWN, SMALL_STRING_LENGTH + 1);
+		return (VarSizeType)strlen(aBuf);
+	}
+
+	// Static so that it's initialized on first use (should help performance after the first time):
+	static HCURSOR sCursor[] = {LoadCursor(NULL, IDC_APPSTARTING), LoadCursor(NULL, IDC_ARROW)
+		, LoadCursor(NULL, IDC_CROSS), LoadCursor(NULL, IDC_HELP), LoadCursor(NULL, IDC_IBEAM)
+		, LoadCursor(NULL, IDC_ICON), LoadCursor(NULL, IDC_NO), LoadCursor(NULL, IDC_SIZE)
+		, LoadCursor(NULL, IDC_SIZEALL), LoadCursor(NULL, IDC_SIZENESW), LoadCursor(NULL, IDC_SIZENS)
+		, LoadCursor(NULL, IDC_SIZENWSE), LoadCursor(NULL, IDC_SIZEWE), LoadCursor(NULL, IDC_UPARROW)
+		, LoadCursor(NULL, IDC_WAIT)}; // If IDC_HAND were added, it would break existing scripts that rely on Unknown being synonymous with Hand.  If ever added, IDC_HAND should return NULL on Win95/NT.
+	// The order in the below array must correspond to the order in the above array:
+	static char *sCursorName[] = {"AppStarting", "Arrow"
+		, "Cross", "Help", "IBeam"
+		, "Icon", "No", "Size"
+		, "SizeAll", "SizeNESW", "SizeNS"  // NESW = NorthEast or SouthWest
+		, "SizeNWSE", "SizeWE", "UpArrow"
+		, "Wait", CURSOR_UNKNOWN};  // The last item is used to mark end-of-array.
+	static int cursor_count = sizeof(sCursor) / sizeof(HCURSOR);
+
+	int a;
+	for (a = 0; a < cursor_count; ++a)
+		if (sCursor[a] == current_cursor)
+			break;
+
+	strlcpy(aBuf, sCursorName[a], SMALL_STRING_LENGTH + 1);  // If a is out-of-bounds, "Unknown" will be used.
 	return (VarSizeType)strlen(aBuf);
 }
 

@@ -169,52 +169,6 @@ VarSizeType Script::GetIsAdmin(char *aBuf)
 
 
 
-VarSizeType Script::ScriptGetCursor(char *aBuf)
-{
-	if (!aBuf)
-		return SMALL_STRING_LENGTH;  // we're returning the length of the var's contents, not the size.
-
-	POINT point;
-	GetCursorPos(&point);
-	HWND target_window = WindowFromPoint(point);
-
-	// MSDN docs imply that threads must be attached for GetCursor() to work.
-	// A side-effect of attaching threads or of GetCursor() itself is that mouse double-clicks
-	// are interfered with, at least if this function is called repeatedly at a high frequency.
-	ATTACH_THREAD_INPUT
-	HCURSOR current_cursor = GetCursor();
-	DETACH_THREAD_INPUT
-
-	if (!current_cursor)
-	{
-		#define CURSOR_UNKNOWN "Unknown"
-		strlcpy(aBuf, CURSOR_UNKNOWN, SMALL_STRING_LENGTH + 1);
-		return (VarSizeType)strlen(aBuf);
-	}
-
-	// Static so that it's initialized on first use (should help performance after the first time):
-	static HCURSOR sCursor[] = {LoadCursor(0,IDC_APPSTARTING), LoadCursor(0,IDC_ARROW), LoadCursor(0,IDC_CROSS)
-		, LoadCursor(0,IDC_HELP), LoadCursor(0,IDC_IBEAM), LoadCursor(0,IDC_ICON), LoadCursor(0,IDC_NO)
-		, LoadCursor(0,IDC_SIZE), LoadCursor(0,IDC_SIZEALL), LoadCursor(0,IDC_SIZENESW), LoadCursor(0,IDC_SIZENS)
-		, LoadCursor(0,IDC_SIZENWSE), LoadCursor(0,IDC_SIZEWE), LoadCursor(0,IDC_UPARROW), LoadCursor(0,IDC_WAIT)};
-	// The order in the below array must correspond to the order in the above array:
-	static char *sCursorName[] = {"AppStarting", "Arrow", "Cross"
-		, "Help", "IBeam", "Icon", "No"
-		, "Size", "SizeAll", "SizeNESW", "SizeNS"  // NESW = NorthEast or SouthWest
-		, "SizeNWSE", "SizeWE", "UpArrow", "Wait", CURSOR_UNKNOWN};  // The last item is used to mark end-of-array.
-	static int cursor_count = sizeof(sCursor) / sizeof(HCURSOR);
-
-	int a;
-	for (a = 0; a < cursor_count; ++a)
-		if (sCursor[a] == current_cursor)
-			break;
-
-	strlcpy(aBuf, sCursorName[a], SMALL_STRING_LENGTH + 1);  // If a is out-of-bounds, "Unknown" will be used.
-	return (VarSizeType)strlen(aBuf);
-}
-
-
-
 ResultType Line::PixelGetColor(int aX, int aY, bool aUseRGB)
 {
 	Var *output_var = ResolveVarOfArg(0);

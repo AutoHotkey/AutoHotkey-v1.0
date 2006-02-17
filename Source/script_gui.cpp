@@ -2847,7 +2847,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		//case GUI_CONTROL_RADIO:
 		//case GUI_CONTROL_LISTBOX:
 		// (But testing shows, not these):
-		//case GUI_CONTROL_UPDOWN: It will snap onto antoher up-down, but not have any meaningful effect.
+		//case GUI_CONTROL_UPDOWN: An up-down will snap onto another up-down, but not have any meaningful effect.
 		//case GUI_CONTROL_DROPDOWNLIST:
 		//case GUI_CONTROL_COMBOBOX:
 		//case GUI_CONTROL_LISTVIEW:
@@ -2856,6 +2856,15 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		//case GUI_CONTROL_SLIDER:
 		//case GUI_CONTROL_PROGRESS:
 		//case GUI_CONTROL_TAB:
+
+		// v1.0.42.02: This is a fix for tab controls that contain a ListView so that up-downs in the
+		// tab control don't snap onto the tab control (due to the z-order change done by the ListView creation
+		// section whenever a ListView exists inside a tab control).
+		bool provide_buddy_manually;
+		if (   provide_buddy_manually = (style & UDS_AUTOBUDDY) && owning_tab_control // mControlCount is greater than zero whenever owning_tab_control!=NULL
+			&& (owning_tab_control->attrib & GUI_CONTROL_ATTRIB_ALTBEHAVIOR)   )
+			style &= ~UDS_AUTOBUDDY; // Remove it during control creation to avoid up-down snapping onto tab control.
+
 		// The control is created unconditionally because if UDS_AUTOBUDDY is in effect, need to create the
 		// control to find out its position and size (since it snaps to its buddy).  That size can then be
 		// retrieved and used to figure out how to resize the buddy in cases where its width-set-automatically
@@ -2864,7 +2873,10 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		if (control.hwnd = CreateWindowEx(exstyle, UPDOWN_CLASS, "", style
 			, opt.x, opt.y, opt.width, opt.height, mHwnd, control_id, g_hInstance, NULL))
 		{
-			if (style & UDS_AUTOBUDDY)
+			if (provide_buddy_manually) // v1.0.42.02 (see comment where provide_buddy_manually is initialized).
+				SendMessage(control.hwnd, UDM_SETBUDDY, (WPARAM)mControl[mControlCount - 1].hwnd, 0); // mControlCount>0 whenever provide_buddy_manually==true.
+			if (   mControlCount // Ensure there is a previous control to snap onto (below relies on this check).
+				&& ((style & UDS_AUTOBUDDY) || provide_buddy_manually)   )
 			{
 				// Since creation of a buddied up-down ignored the specified x/y and width/height, update them
 				// for use here and also later below for updating mMaxExtentRight, etc.
@@ -2924,7 +2936,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 					else
 						opt.range_min = UD_MAXVAL;  // ListBox needs an inverted UpDown to work the way you'd expect.
 				}
-			} // (style & UDS_AUTOBUDDY)
+			} // The up-down snapped onto a buddy control.
 			if (!opt.range_changed) // Control's default is wacky inverted negative, so provide 0-100 as a better/traditional default.
 			{
 				opt.range_changed = true;

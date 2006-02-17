@@ -796,6 +796,7 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, char *aLabelName, char *aOptions, 
 	Hotkey *hk = FindHotkeyByTrueNature(aHotkeyName); // NULL if not found.
 	HotkeyVariant *variant = hk ? hk->FindVariant() : NULL;
 	bool update_all_hotkeys = false;  // This method avoids multiple calls to ManifestAllHotkeys() (which is high-overhead).
+	bool variant_was_just_created = false;
 
 	switch (hook_action)
 	{
@@ -838,6 +839,7 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, char *aLabelName, char *aOptions, 
 				return use_errorlevel ? OK : FAIL; // AddHotkey() already displayed the error (or set ErrorLevel).
 			variant = hk->mLastVariant; // Update for use with the options-parsing section further below.
 			update_all_hotkeys = true;
+			variant_was_just_created = true;
 		}
 		else // Hotkey already exists (though possibly not the required variant).  Update the hotkey if appropriate.
 		{
@@ -903,6 +905,7 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, char *aLabelName, char *aOptions, 
 				{
 					if (   !(variant = hk->AddVariant(aJumpToLabel))   ) // Out of memory.
 						RETURN_HOTKEY_ERROR(HOTKEY_EL_MEM, ERR_OUTOFMEM, aHotkeyName);
+					variant_was_just_created = true;
 					update_all_hotkeys = true;
 				}
 			}
@@ -931,12 +934,20 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, char *aLabelName, char *aOptions, 
 		{
 			switch(toupper(*cp))
 			{
-			case 'O': // v1.0.38.02.  Note that there is no "Off" counterpart because it seems too rarely needed.
+			case 'O': // v1.0.38.02.
 				if (toupper(cp[1]) == 'N') // Full validation for maintainability.
 				{
 					++cp; // Omit the 'N' from further consideration in case it ever becomes a valid option letter.
-					if (hk->mHookAction ? hk->EnableParent() : hk->Enable(*variant))
+					if (hk->mHookAction ? hk->EnableParent() : hk->Enable(*variant)) // Under these conditions, earlier logic has ensured variant is non-NULL.
 						update_all_hotkeys = true; // Do it this way so that any previous "true" value isn't lost.
+				}
+				else if (!strnicmp(cp, "Off", 3))
+				{
+					cp += 2; // Omit the letters of the word from further consideration in case "f" ever becomes a valid option letter.
+					if (hk->mHookAction ? hk->DisableParent() : hk->Disable(*variant)) // Under these conditions, earlier logic has ensured variant is non-NULL.
+						update_all_hotkeys = true; // Do it this way so that any previous "true" value isn't lost.
+					if (variant_was_just_created) // This variant (and possibly its parent hotkey) was just created above.
+						update_all_hotkeys = false; // Override the "true" that was set (either right above *or* anywhere earlier) because this new hotkey/variant won't affect other hotkeys.
 				}
 				break;
 			case 'B':
