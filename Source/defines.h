@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.42.02"
+#define NAME_VERSION "1.0.42.03"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -324,6 +324,7 @@ struct global_struct
 	int IntervalBeforeRest;
 	int UninterruptedLineCount; // Stored as a g-struct attribute in case OnExit sub interrupts it while uninterruptible.
 	int Priority;  // This thread's priority relative to others.
+	DWORD LastError; // The result of GetLastError() after the most recent DllCall.
 	GuiEventType GuiEvent; // This thread's triggering event, e.g. DblClk vs. normal click.
 	DWORD EventInfo; // Not named "GuiEventInfo" because it applies to non-GUI events such as clipboard.
 	POINT GuiPoint; // The position of GuiEvent. Stored as a thread vs. window attribute so that underlying threads see their original values when resumed.
@@ -406,6 +407,7 @@ inline void global_init(global_struct &g)
 	g.ThreadIsCritical = false;
 	#define PRIORITY_MINIMUM INT_MIN
 	g.Priority = 0;
+	g.LastError = 0;
 	g.GuiEvent = GUI_EVENT_NONE;
 	g.EventInfo = 0;
 	g.GuiPoint.x = COORD_UNSPECIFIED;

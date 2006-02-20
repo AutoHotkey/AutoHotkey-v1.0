@@ -2223,6 +2223,11 @@ LRESULT AllowIt(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lParam, cons
 	} // Keyboard vs. mouse hook.
 
 	// Since above didn't return, this keystroke is being passed through rather than suppressed.
+	if (g_HSResetUponMouseClick && (aVK == VK_LBUTTON || aVK == VK_RBUTTON)) // v1.0.42.03
+	{
+		*g_HSBuf = '\0';
+		g_HSBufLength = 0;
+	}
 	// In case CallNextHookEx() is high overhead or can sometimes take a long time to return,
 	// call it before posting the messages.  This solves conditions in which the main thread is
 	// able to launch a script subroutine before the hook thread can finish updating its key state.
@@ -3278,7 +3283,11 @@ void SetModifierAsPrefix(vk_type aVK, sc_type aSC, bool aAlwaysSetAsPrefix = fal
 
 
 void ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, HookType aWhichHookAlways)
-// The caller of this function should always be the main thread, never the hook thread.
+// Caller must verify that aWhichHook and aWhichHookAlways accurately reflect the hooks that should
+// be active when we return.  For example, the caller must have already taken into account which
+// hotkeys/hotstrings are suspended, disabled, etc.
+//
+// Caller should always be the main thread, never the hook thread.
 // One reason is that this function isn't thread-safe.  Another is that new/delete/malloc/free
 // themselves might not be thread-safe when the single-threaded CRT libraries are in effect
 // (not using multi-threaded libraries due to a 3.5 KB increase in compressed code size).
@@ -3287,31 +3296,35 @@ void ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, HookType
 // But aHK is a little more concise.
 // aWhichHookAlways was added to force the hooks to be installed (or stay installed) in the case
 // of #InstallKeybdHook and #InstallMouseHook.  This is so that these two commands will always
-// still be in effect even if hotkeys are suspended, so that key logging can take place via the
-// hooks.
+// still be in effect even if hotkeys are suspended, so that key history can still be monitored via
+// the hooks.
 // Returns the set of hooks that are active after processing is complete.
 {
 	// v1.0.39: For simplicity and maintainability, don't even make the attempt on Win9x since it
 	// seems too rare that they would have LL hook capability somehow (such as in an emultator).
 	// NOTE: Some sections rely on the fact that no warning dialogs are displayed if the hook is
-	// called for but the OS doesn't support it.  For example, ManifestAllHotkeys() doesn't check
-	// the OS version in many cases when marking hotkeys as hook hotkeys.
+	// called for but the OS doesn't support it.  For example, ManifestAllHotkeysHotstringsHooks()
+	// doesn't check the OS version in many cases when marking hotkeys as hook hotkeys.
 	if (g_os.IsWin9x())
 		return;
 
-	if (!aWhichHook && !aWhichHookAlways) // No need to check any further in this case.  Just remove all hooks.
+	// Determine the set of hooks that should be activated or deactivated.
+	HookType hooks_to_be_active = aWhichHook | aWhichHookAlways; // Bitwise union.
+
+	if (!hooks_to_be_active) // No need to check any further in this case.  Just remove all hooks.
 	{
 		AddRemoveHooks(0); // Remove all hooks.
 		return;
 	}
 
-	// Even if aWhichHook indicates no change to hook status, we still need to continue in case
+	// Even if hooks_to_be_active indicates no change to hook status, we still need to continue in case
 	// this is a suspend or unsuspend operation.  In both of those cases, though the hook(s)
-	// may already be active , the hotkey configuration probably needs to be updated.
+	// may already be active, the hotkey configuration probably needs to be updated.
 	// Related: Even if aHK_count is zero, still want to install the hook(s) whenever
 	// aWhichHookAlways specifies that they should be.  This is done so that the
 	// #InstallKeybdHook and #InstallMouseHook directives can have the hooks installed just
-	// for use with something such as the KeyHistory feature.
+	// for use with something such as the KeyHistory feature, or for Hotstrings, Numlock AlwaysOn,
+	// the Input command, and possibly others.
 
 	// Now we know that at least one of the hooks is a candidate for activation.
 	// Set up the arrays process all of the hook hotkeys even if the corresponding hook won't
@@ -3411,7 +3424,7 @@ void ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, HookType
 
 	hk_sorted_type hk_sorted[MAX_HOTKEYS];
 	ZeroMemory(hk_sorted, sizeof(hk_sorted));
-	int hk_sorted_count = 0, keybd_hook_hotkey_count = 0, mouse_hook_hotkey_count = 0;
+	int hk_sorted_count = 0;
 	key_type *pThisKey = NULL;
 	for (i = 0; i < aHK_count; ++i)
 	{
@@ -3428,18 +3441,6 @@ void ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, HookType
 		// Rule out the possibility of obnoxious values right away, preventing array-out-of bounds, etc.:
 		if ((!hk.mVK && !hk.mSC) || hk.mVK > VK_MAX || hk.mSC > SC_MAX)
 			continue;
-
-		// Now that any conditions under which we would exclude the hotkey have been checked above,
-		// accumulate these values:
-		if (hk.mType == HK_KEYBD_HOOK)
-			++keybd_hook_hotkey_count;
-		else if (hk.mType == HK_MOUSE_HOOK)
-			++mouse_hook_hotkey_count;
-		else // HK_BOTH_HOOKS
-		{
-			++keybd_hook_hotkey_count;
-			++mouse_hook_hotkey_count;
-		}
 
 		if (!hk.mVK)
 		{
@@ -3620,20 +3621,6 @@ void ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, HookType
 		++hk_sorted_count;
 	}
 
-	// Note: the values of g_ForceNum/Caps/ScrollLock are TOGGLED_ON/OFF or neutral, never ALWAYS_ON/ALWAYS_OFF:
-	bool force_CapsNumScroll = g_ForceNumLock != NEUTRAL || g_ForceCapsLock != NEUTRAL || g_ForceScrollLock != NEUTRAL;
-
-	if (!(keybd_hook_hotkey_count || mouse_hook_hotkey_count || force_CapsNumScroll || aWhichHookAlways
-		|| Hotstring::AtLeastOneEnabled()))
-	{
-		// Since there are no hotkeys whatsover (not even an AlwaysOn/Off toggleable key),
-		// remove all hooks.  Currently, this should only happen if g_IsSuspended is true
-		// (i.e. there were no Suspend-type hotkeys to activate). Note: When "suspend" mode
-		// is in effect, the Num/Scroll/CapsLock AlwaysOn/Off feature is not disabled, by design:
-		AddRemoveHooks(0); // Remove all hooks.
-		return;
-	}
-
 	if (hk_sorted_count)
 	{
 		// It's necessary to get them into this order to avoid problems that would be caused by
@@ -3799,23 +3786,8 @@ void ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, HookType
 		}
 	}
 
-	// Determine the set of hooks that should be activated or deactivated.
-	HookType hooks_to_be_active = 0;
-
-	// Deinstall hook if the caller omitted it from aWhichHook, or if it had no corresponding hotkeys
-	// (currently the latter only happens in the case of g_IsSuspended is true):
-	if (   (aWhichHookAlways & HOOK_KEYBD) || ((aWhichHook & HOOK_KEYBD)
-		&& (keybd_hook_hotkey_count || force_CapsNumScroll || Hotstring::AtLeastOneEnabled()))   )
-		hooks_to_be_active |= HOOK_KEYBD;
-	else
-		hooks_to_be_active &= ~HOOK_KEYBD;
-
-	if (   (aWhichHookAlways & HOOK_MOUSE) || ((aWhichHook & HOOK_MOUSE) && mouse_hook_hotkey_count)   )
-		hooks_to_be_active |= HOOK_MOUSE;
-	else
-		hooks_to_be_active &= ~HOOK_MOUSE;
-
-	AddRemoveHooks(hooks_to_be_active); // No change is made if the hooks are already in the correct state.
+	// Add or remove hooks, as needed.  No change is made if the hooks are already in the correct state.
+	AddRemoveHooks(hooks_to_be_active);
 }
 
 

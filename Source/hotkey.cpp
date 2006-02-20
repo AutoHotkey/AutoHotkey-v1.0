@@ -124,8 +124,8 @@ ResultType SetGlobalHotTitleText(char *aWinTitle, char *aWinText)
 
 
 
-void Hotkey::ManifestAllHotkeys()
-// This function examines all hotkeys to determine:
+void Hotkey::ManifestAllHotkeysHotstringsHooks()
+// This function examines all hotkeys and hotstrings to determine:
 // - Which hotkeys to register/unregister, or activate/deactivate in the hook.
 // - Which hotkeys to be changed from HK_NORMAL to HK_KEYBD_HOOK (or vice versa).
 // - In pursuit of the above, also assess the interdependencies between hotkeys (the presence or
@@ -374,11 +374,21 @@ void Hotkey::ManifestAllHotkeys()
 	// But do this part outside of the above block because these values may have changed since
 	// this function was first called.  The Win9x warning message was removed so that scripts can be
 	// run on multiple OSes without a continual warning message just because it happens to be running
-	// on Win9x:
-	if (   !(sWhichHookNeeded & HOOK_KEYBD)
+	// on Win9x.  By design, the Num/Scroll/CapsLock AlwaysOn/Off setting stays in effect even when
+	// Suspend in ON.
+	int AtLeastOneHotstringEnabled = 2;  // Set to non-bool value to indicate "not yet called".
+	if (   !(sWhichHookNeeded & HOOK_KEYBD || sWhichHookAlways & HOOK_KEYBD)
 		&& (!(g_ForceNumLock == NEUTRAL && g_ForceCapsLock == NEUTRAL && g_ForceScrollLock == NEUTRAL)
-			|| Hotstring::AtLeastOneEnabled())   ) // Called last for performance due to short-circuit boolean.
+			|| (AtLeastOneHotstringEnabled = Hotstring::AtLeastOneEnabled()))   ) // Called last for performance due to short-circuit boolean.
 		sWhichHookNeeded |= HOOK_KEYBD;
+
+	if (!(sWhichHookNeeded & HOOK_MOUSE || sWhichHookAlways & HOOK_MOUSE) && g_HSResetUponMouseClick)
+	{
+		if (AtLeastOneHotstringEnabled == 2) // The function Hotstring::AtLeastOneEnabled() was not yet called above.
+			AtLeastOneHotstringEnabled = Hotstring::AtLeastOneEnabled();
+		if (AtLeastOneHotstringEnabled)
+			sWhichHookNeeded |= HOOK_MOUSE;
+	}
 
 	// Install or deinstall either or both hooks, if necessary, based on these param values.
 	ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways);
@@ -795,7 +805,7 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, char *aLabelName, char *aOptions, 
 
 	Hotkey *hk = FindHotkeyByTrueNature(aHotkeyName); // NULL if not found.
 	HotkeyVariant *variant = hk ? hk->FindVariant() : NULL;
-	bool update_all_hotkeys = false;  // This method avoids multiple calls to ManifestAllHotkeys() (which is high-overhead).
+	bool update_all_hotkeys = false;  // This method avoids multiple calls to ManifestAllHotkeysHotstringsHooks() (which is high-overhead).
 	bool variant_was_just_created = false;
 
 	switch (hook_action)
@@ -984,7 +994,7 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, char *aLabelName, char *aOptions, 
 	} // if (*aOptions)
 
 	if (update_all_hotkeys)
-		ManifestAllHotkeys(); // See its comments for why it's done in so many of the above situations.
+		ManifestAllHotkeysHotstringsHooks(); // See its comments for why it's done in so many of the above situations.
 
 	// Somewhat debatable, but the following special ErrorLevels are set even if the above didn't
 	// need to re-manifest the hotkeys.
@@ -1013,7 +1023,7 @@ Hotkey *Hotkey::AddHotkey(Label *aJumpToLabel, HookActionType aHookAction, char 
 // points to a hotkey label rather than a normal label).  The only time aJumpToLabel should
 // be NULL is when the caller is creating a dynamic hotkey that has an aHookAction.
 // Returns the address of the new hotkey on success, or NULL otherwise.
-// The caller is responsible for calling ManifestAllHotkeys(), if appropriate.
+// The caller is responsible for calling ManifestAllHotkeysHotstringsHooks(), if appropriate.
 {
 	if (   !(shk[sNextID] = new Hotkey(sNextID, aJumpToLabel, aHookAction, aName, aUseErrorLevel))   )
 	{
@@ -1311,10 +1321,11 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 		//     However, ones that were implemented as <#x rather than "LWin & x" were inappropriately enabled.
 		//     as a naked/unmodified "x" hotkey (due to mModifiersLR paragraph above, and the fact that
 		//     aHookAction hotkeys really should be explicitly disabled since they can't function on Win9x.
-		//     This disabling-by-setting-to-type-hook is now ALSO done in ManifestAllHotkeys() because the
-		//     hotkey command is capable of changing a hotkey to/from the alt-tab type.
-		// mKeyUp: Disabled as an unintended/benevolent side-effect of older loop processing in ManifestAllHotkeys().
-		//     This is retained, though now it's made more explicit via below, for maintainability.
+		//     This disabling-by-setting-to-type-hook is now ALSO done in ManifestAllHotkeysHotstringsHooks() because
+		//     the hotkey command is capable of changing a hotkey to/from the alt-tab type.
+		// mKeyUp: Disabled as an unintended/benevolent side-effect of older loop processing in
+		//     ManifestAllHotkeysHotstringsHooks().  This is retained, though now it's made more explicit via below,
+		//     for maintainability.
 		// Older Note: Do this for both NO_SUPPRESS_SUFFIX and NO_SUPPRESS_PREFIX.  In the case of
 		// NO_SUPPRESS_PREFIX, the hook is needed anyway since the only way to get NO_SUPPRESS_PREFIX in
 		// effect is with a hotkey that has a ModifierVK/SC.
@@ -1389,7 +1400,7 @@ HotkeyVariant *Hotkey::AddVariant(Label *aJumpToLabel)
 // Returns NULL upon out-of-memory; otherwise, the address of the new variant.
 // Even if aJumpToLabel is NULL, a non-NULL mJumpToLabel will be stored in each variant so that
 // NULL doesn't have to be constantly checked during script runtime.
-// The caller is responsible for calling ManifestAllHotkeys(), if appropriate.
+// The caller is responsible for calling ManifestAllHotkeysHotstringsHooks(), if appropriate.
 {
 	HotkeyVariant *vp;
 	if (   !(vp = (HotkeyVariant *)SimpleHeap::Malloc(sizeof(HotkeyVariant)))   )
@@ -1839,9 +1850,14 @@ ResultType Hotkey::Unregister()
 
 
 void Hotkey::InstallKeybdHook()
+// Caller must ensure that sWhichHookNeeded and sWhichHookAlways contain HOOK_MOUSE, if appropriate.
+// Generally, this is achieved by having ensured that ManifestAllHotkeysHotstringsHooks() was called at least
+// once since the last time any hotstrings or hotkeys were disabled/enabled/changed, but in any case at least
+// once since the program started.
 {
-	sWhichHookAlways |= HOOK_KEYBD;
-	ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways);
+	sWhichHookNeeded |= HOOK_KEYBD;
+	if (!g_KeybdHook)
+		ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways);
 }
 
 

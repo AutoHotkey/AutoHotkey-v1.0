@@ -140,6 +140,7 @@ bool g_HSSendRaw = false;
 bool g_HSEndCharRequired = true;
 bool g_HSDetectWhenInsideWord = false;
 bool g_HSDoReset = false;
+bool g_HSResetUponMouseClick = true;
 char g_EndChars[HS_MAX_END_CHARS + 1] = "-()[]{}:;'\"/\\,.?!\n \t";  // Hotstring default end chars, including a space.
 // The following were considered but seemed too rare and/or too likely to result in undesirable replacements
 // (such as while programming or scripting, or in usernames or passwords): <>*+=_%^&|@#$|
@@ -344,7 +345,7 @@ Action g_act[] =
 	, {"KeyWait", 1, 2, 2, NULL} // KeyName, Options
 
 	, {"Sleep", 1, 1, 1, {1, 0}} // Sleep time in ms (numeric)
-	, {"Random", 1, 3, 3, {2, 3, 0}} // Output var, Min, Max (Note: MinParams is 1 so that param2 can be blank).
+	, {"Random", 0, 3, 3, {2, 3, 0}} // Output var, Min, Max (Note: MinParams is 1 so that param2 can be blank).
 
 	, {"Goto", 1, 1, 1, NULL}
 	, {"Gosub", 1, 1, 1, NULL}   // Label (or dereference that resolves to a label).

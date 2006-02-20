@@ -103,7 +103,7 @@ private:
 	static DWORD sTimeNow;
 	static HotkeyIDType sNextID;
 
-	bool Enable(HotkeyVariant &aVariant) // Returns true if the variant needed to be disabled, in which case caller should generally call ManifestAllHotkeys().
+	bool Enable(HotkeyVariant &aVariant) // Returns true if the variant needed to be disabled, in which case caller should generally call ManifestAllHotkeysHotstringsHooks().
 	{
 		if (aVariant.mEnabled) // Added for v1.0.23 to greatly improve performance when hotkey is already in the right state.
 			return false; // Indicate that it's already enabled.
@@ -111,16 +111,16 @@ private:
 		return true;
 	}
 
-	bool Disable(HotkeyVariant &aVariant) // Returns true if the variant needed to be disabled, in which case caller should generally call ManifestAllHotkeys().
+	bool Disable(HotkeyVariant &aVariant) // Returns true if the variant needed to be disabled, in which case caller should generally call ManifestAllHotkeysHotstringsHooks().
 	{
 		if (!aVariant.mEnabled) // Added for v1.0.23 to greatly improve performance when hotkey is already in the right state.
 			return false; // Indicate that it's already disabled.
 		aVariant.mEnabled = false;
-		aVariant.mRunAgainAfterFinished = false; // ManifestAllHotkeys() won't do this unless the entire hotkey is disabled/unregistered.
+		aVariant.mRunAgainAfterFinished = false; // ManifestAllHotkeysHotstringsHooks() won't do this unless the entire hotkey is disabled/unregistered.
 		return true;
 	}
 
-	bool EnableParent() // Returns true if the hotkey needed to be disabled, in which case caller should generally call ManifestAllHotkeys().
+	bool EnableParent() // Returns true if the hotkey needed to be disabled, in which case caller should generally call ManifestAllHotkeysHotstringsHooks().
 	{
 		if (mParentEnabled)
 			return false; // Indicate that it's already enabled.
@@ -128,7 +128,7 @@ private:
 		return true;
 	}
 
-	bool DisableParent() // Returns true if the hotkey needed to be disabled, in which case caller should generally call ManifestAllHotkeys().
+	bool DisableParent() // Returns true if the hotkey needed to be disabled, in which case caller should generally call ManifestAllHotkeysHotstringsHooks().
 	{
 		if (!mParentEnabled)
 			return false; // Indicate that it's already disabled.
@@ -210,7 +210,7 @@ public:
 		, char *aSingleChar);
 	static void TriggerJoyHotkeys(int aJoystickID, DWORD aButtonsNewlyDown);
 	void Perform(HotkeyVariant &aVariant);
-	static void ManifestAllHotkeys();
+	static void ManifestAllHotkeysHotstringsHooks();
 	static void RequireHook(HookType aWhichHook) {sWhichHookAlways |= aWhichHook;}
 	static ResultType TextInterpret(char *aName, Hotkey *aThisHotkey, bool aUseErrorLevel);
 

@@ -487,7 +487,7 @@ bool DoesFilePatternExist(char *aFilePattern, DWORD *aFileAttr = NULL);
 char *ConvertFilespecToCorrectCase(char *aFullFileSpec);
 char *FileAttribToStr(char *aBuf, DWORD aAttr);
 unsigned __int64 GetFileSize64(HANDLE aFileHandle);
-char *GetLastErrorText(char *aBuf, int aBufSize);
+char *GetLastErrorText(char *aBuf, int aBufSize, bool aUpdateLastError = false);
 void AssignColor(char *aColorName, COLORREF &aColor, HBRUSH &aBrush);
 COLORREF ColorNameToBGR(char *aColorName);
 HRESULT MySetWindowTheme(HWND hwnd, LPCWSTR pszSubAppName, LPCWSTR pszSubIdList);

@@ -1092,7 +1092,7 @@ unsigned __int64 GetFileSize64(HANDLE aFileHandle)
 
 
 
-char *GetLastErrorText(char *aBuf, int aBufSize)
+char *GetLastErrorText(char *aBuf, int aBufSize, bool aUpdateLastError)
 // aBufSize is an int to preserve any negative values the caller might pass in.
 {
 	if (aBufSize < 1)
@@ -1102,7 +1102,10 @@ char *GetLastErrorText(char *aBuf, int aBufSize)
 		*aBuf = '\0';
 		return aBuf;
 	}
-	FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM, NULL, GetLastError(), 0, aBuf, (DWORD)aBufSize - 1, NULL);
+	DWORD last_error = GetLastError();
+	if (aUpdateLastError)
+		g.LastError = last_error;
+	FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM, NULL, last_error, 0, aBuf, (DWORD)aBufSize - 1, NULL);
 	return aBuf;
 }
 

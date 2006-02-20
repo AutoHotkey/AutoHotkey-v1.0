@@ -2456,6 +2456,11 @@ inline ResultType Script::IsDirective(char *aBuf)
 				ConvertEscapeSequences(g_EndChars, g_EscapeChar, false);
 				return CONDITION_TRUE;
 			}
+			if (!strnicmp(parameter, "NoMouse", 7)) // v1.0.42.03
+			{
+				g_HSResetUponMouseClick = false;
+				return CONDITION_TRUE;
+			}
 			// Otherwise assume it's a list of options.  Note that for compatibility with its
 			// other caller, it will stop at end-of-string or ':', whichever comes first.
 			Hotstring::ParseOptions(parameter, g_HSPriority, g_HSKeyDelay, g_HSCaseSensitive, g_HSConformToCase
@@ -6838,6 +6843,8 @@ VarTypes Script::GetVarType(char *aVarName)
 	if (!stricmp(aVarName, "A_TimeSinceThisHotkey")) return VAR_TIMESINCETHISHOTKEY;
 	if (!stricmp(aVarName, "A_TimeSincePriorHotkey")) return VAR_TIMESINCEPRIORHOTKEY;
 	if (!stricmp(aVarName, "A_EndChar")) return VAR_ENDCHAR;
+	if (!stricmp(aVarName, "A_LastError")) return VAR_LASTERROR;
+
 	if (!stricmp(aVarName, "A_Gui")) return VAR_GUI;
 	if (!stricmp(aVarName, "A_GuiControl")) return VAR_GUICONTROL;
 	// v1.0.36: A_GuiEvent was added as a synonym for A_GuiControlEvent because it seems unlikely that
@@ -9407,23 +9414,23 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	case ACT_RUN: // Be sure to pass NULL for 2nd param.
 		if (strcasestr(ARG3, "UseErrorLevel"))
 			return g_ErrorLevel->Assign(g_script.ActionExec(ARG1, NULL, ARG2, false, ARG3, NULL, true
-				, ResolveVarOfArg(3)) ? ERRORLEVEL_NONE : "ERROR");
+				, true, ResolveVarOfArg(3)) ? ERRORLEVEL_NONE : "ERROR");
 			// The special string ERROR is used, rather than a number like 1, because currently
 			// RunWait might in the future be able to return any value, including 259 (STATUS_PENDING).
 		else // If launch fails, display warning dialog and terminate current thread.
-			return g_script.ActionExec(ARG1, NULL, ARG2, true, ARG3, NULL, true, ResolveVarOfArg(3));
+			return g_script.ActionExec(ARG1, NULL, ARG2, true, ARG3, NULL, false, true, ResolveVarOfArg(3));
 
 	case ACT_RUNWAIT:
 		if (strcasestr(ARG3, "UseErrorLevel"))
 		{
-			if (!g_script.ActionExec(ARG1, NULL, ARG2, false, ARG3, &running_process, true, ResolveVarOfArg(3)))
+			if (!g_script.ActionExec(ARG1, NULL, ARG2, false, ARG3, &running_process, true, true, ResolveVarOfArg(3)))
 				return g_ErrorLevel->Assign("ERROR"); // See above comment for explanation.
 			//else fall through to the waiting-phase of the operation.
 			// Above: The special string ERROR is used, rather than a number like 1, because currently
 			// RunWait might in the future be able to return any value, including 259 (STATUS_PENDING).
 		}
 		else // If launch fails, display warning dialog and terminate current thread.
-			if (!g_script.ActionExec(ARG1, NULL, ARG2, true, ARG3, &running_process, true, ResolveVarOfArg(3)))
+			if (!g_script.ActionExec(ARG1, NULL, ARG2, true, ARG3, &running_process, false, true, ResolveVarOfArg(3)))
 				return FAIL;
 			//else fall through to the waiting-phase of the operation.
 
@@ -10132,8 +10139,11 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 
 	case ACT_RANDOM:
 	{
-		if (   !(output_var = ResolveVarOfArg(0))   )
-			return FAIL;
+		if (   !(output_var = ResolveVarOfArg(0))   ) // v1.0.42.03: Special mode to change the seed.
+		{
+			init_genrand(ATOU(ARG2)); // It's documented that an unsigned 32-bit number is required.
+			return OK;
+		}
 		bool use_float = IsPureNumeric(ARG2, true, false, true) == PURE_FLOAT
 			|| IsPureNumeric(ARG3, true, false, true) == PURE_FLOAT;
 		if (use_float)
@@ -11133,6 +11143,14 @@ VarSizeType Script::GetDefaultMouseSpeed(char *aBuf)
 	return (VarSizeType)strlen(target_buf);
 }
 
+VarSizeType Script::ScriptGetLastError(char *aBuf)
+{
+	char buf[MAX_NUMBER_SIZE];
+	char *target_buf = aBuf ? aBuf : buf;
+	_itoa(g.LastError, target_buf, 10);  // Always output as decimal vs. hex in this case (so that scripts can use "If var in list" with confidence).
+	return (VarSizeType)strlen(target_buf);
+}
+
 
 
 VarSizeType Script::GetIconHidden(char *aBuf)
@@ -11550,7 +11568,7 @@ VarSizeType Script::ScriptGetCursor(char *aBuf)
 		ci.cbSize = sizeof(CURSORINFO);
 		current_cursor = MyGetCursorInfo(&ci) ? ci.hCursor : NULL;
 	}
-	else // Windows 95/NT requires the old method.
+	else // Windows 95 and old-service-pack versions of NT4 require the old method.
 	{
 		POINT point;
 		GetCursorPos(&point);
@@ -11582,17 +11600,17 @@ VarSizeType Script::ScriptGetCursor(char *aBuf)
 	static char *sCursorName[] = {"AppStarting", "Arrow"
 		, "Cross", "Help", "IBeam"
 		, "Icon", "No", "Size"
-		, "SizeAll", "SizeNESW", "SizeNS"  // NESW = NorthEast or SouthWest
+		, "SizeAll", "SizeNESW", "SizeNS"  // NESW = NorthEast+SouthWest
 		, "SizeNWSE", "SizeWE", "UpArrow"
 		, "Wait", CURSOR_UNKNOWN};  // The last item is used to mark end-of-array.
 	static int cursor_count = sizeof(sCursor) / sizeof(HCURSOR);
 
-	int a;
-	for (a = 0; a < cursor_count; ++a)
-		if (sCursor[a] == current_cursor)
+	int i;
+	for (i = 0; i < cursor_count; ++i)
+		if (sCursor[i] == current_cursor)
 			break;
 
-	strlcpy(aBuf, sCursorName[a], SMALL_STRING_LENGTH + 1);  // If a is out-of-bounds, "Unknown" will be used.
+	strlcpy(aBuf, sCursorName[i], SMALL_STRING_LENGTH + 1);  // If a is out-of-bounds, "Unknown" will be used.
 	return (VarSizeType)strlen(aBuf);
 }
 
@@ -12453,8 +12471,8 @@ void Line::ToggleSuspendState()
 	// Even if there are some, it's possible that they are exempt from suspension so we wouldn't want to
 	// globally purge all messages anyway.
 	g_IsSuspended = !g_IsSuspended;
-	Hotstring::SuspendAll(g_IsSuspended);  // Must do this prior to ManifestAllHotkeys() to avoid incorrect removal of hook.
-	Hotkey::ManifestAllHotkeys(); // Update the state of all hotkeys based on the complex interdependencies hotkeys have with each another.
+	Hotstring::SuspendAll(g_IsSuspended);  // Must do this prior to ManifestAllHotkeysHotstringsHooks() to avoid incorrect removal of hook.
+	Hotkey::ManifestAllHotkeysHotstringsHooks(); // Update the state of all hotkeys based on the complex interdependencies hotkeys have with each another.
 	g_script.UpdateTrayIcon();
 	CheckMenuItem(GetMenu(g_hWnd), ID_FILE_SUSPEND, g_IsSuspended ? MF_CHECKED : MF_UNCHECKED);
 }
@@ -12778,7 +12796,7 @@ char *Script::ListKeyHistory(char *aBuf, int aBufSize) // aBufSize should be an 
 
 
 ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, bool aDisplayErrors
-	, char *aRunShowMode, HANDLE *aProcess, bool aUseRunAs, Var *aOutputVar)
+	, char *aRunShowMode, HANDLE *aProcess, bool aUpdateLastError, bool aUseRunAs, Var *aOutputVar)
 // Caller should specify NULL for aParams if it wants us to attempt to parse out params from
 // within aAction.  Caller may specify empty string ("") instead to specify no params at all.
 // Remember that aAction and aParams can both be NULL, so don't dereference without checking first.
@@ -12786,8 +12804,9 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 // the aActionString at runtime, here, rather than at load-time because Run & RunWait might contain
 // deferenced variable(s), which can only be resolved at runtime.
 {
-	if (aProcess) // Init output param if the caller gave us memory to store it.
-		*aProcess = NULL;
+	HANDLE hprocess_local;
+	HANDLE &hprocess = aProcess ? *aProcess : hprocess_local; // To simplify other things.
+	hprocess = NULL; // Init output param if the caller gave us memory to store it.  Even if caller didn't, other things below may rely on this being initialized.
 	if (aOutputVar) // Same
 		aOutputVar->Assign();
 
@@ -12913,11 +12932,10 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 		}
 	}
 
-	// This is distinct from new_process being non-NULL because the two aren't always the
+	// This is distinct from hprocess being non-NULL because the two aren't always the
 	// same.  For example, if the user does "Run, find D:\" or "RunWait, www.yahoo.com",
 	// no new process handle will be available even though the launch was successful:
 	bool success = false;
-	HANDLE new_process = NULL;  // This will hold the handle to the newly created process.
 	char system_error_text[512] = "";
 
 	bool use_runas = aUseRunAs && mRunAsUser && (*mRunAsUser || *mRunAsPass || *mRunAsDomain);
@@ -12954,8 +12972,8 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 
 		if (use_runas)
 		{
-			if (!DoRunAs(command_line, aWorkingDir, aDisplayErrors, si.wShowWindow  // wShowWindow (min/max/hide).
-				, aOutputVar, pi, success, new_process, system_error_text)) // These are output parameters it will set for us.
+			if (!DoRunAs(command_line, aWorkingDir, aDisplayErrors, aUpdateLastError, si.wShowWindow  // wShowWindow (min/max/hide).
+				, aOutputVar, pi, success, hprocess, system_error_text)) // These are output parameters it will set for us.
 				return FAIL; // It already displayed the error, if appropriate.
 		}
 		else
@@ -12981,12 +12999,12 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 				success = true;
 				if (pi.hThread)
 					CloseHandle(pi.hThread); // Required to avoid memory leak.
-				new_process = pi.hProcess;
+				hprocess = pi.hProcess;
 				if (aOutputVar)
 					aOutputVar->Assign(pi.dwProcessId);
 			}
 			else
-				GetLastErrorText(system_error_text, sizeof(system_error_text));
+				GetLastErrorText(system_error_text, sizeof(system_error_text), aUpdateLastError);
 		}
 	}
 
@@ -13027,7 +13045,7 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 		}
 		if (ShellExecuteEx(&sei)) // Relies on short-circuit boolean order.
 		{
-			new_process = sei.hProcess;
+			hprocess = sei.hProcess;
 			// aOutputVar is left blank because:
 			// ProcessID is not available when launched this way, and since GetProcessID() is only
 			// available in WinXP SP1, no effort is currently made to dynamically load it from
@@ -13035,7 +13053,7 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 			success = true;
 		}
 		else
-			GetLastErrorText(system_error_text, sizeof(system_error_text));
+			GetLastErrorText(system_error_text, sizeof(system_error_text), aUpdateLastError);
 	}
 
 	if (!success) // The above attempt(s) to launch failed.
@@ -13063,9 +13081,14 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 		return FAIL;
 	}
 
-	if (aProcess) // The caller wanted the process handle and it must eventually call CloseHandle().
-		*aProcess = new_process;
-	else if (new_process) // It can be NULL in the case of launching things like "find D:\" or "www.yahoo.com"
-		CloseHandle(new_process); // Required to avoid memory leak.
+	// Otherwise, success:
+	if (aUpdateLastError)
+		g.LastError = 0; // Force zero to indicate success, which seems more maintainable and reliable than calling GetLastError() right here.
+
+	// If aProcess isn't NULL, the caller wanted the process handle left open and so it must eventually call
+	// CloseHandle().  Otherwise, we should close the process if it's non-NULL (it can be NULL in the case of
+	// launching things like "find D:\" or "www.yahoo.com").
+	if (!aProcess && hprocess)
+		CloseHandle(hprocess); // Required to avoid memory leak.
 	return OK;
 }

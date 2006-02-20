@@ -70,22 +70,22 @@ size_t Clipboard::Get(char *aBuf)
 			Close(CANT_OPEN_CLIPBOARD_READ);
 			return CLIPBOARD_FAILURE;
 		}
-		// GetClipboardData() apparently fails when the text on the clipboard is greater than a certain size
-		// (Even though GetLastError() reports "Operation completed successfully").  The data size at which
-		// this occurs is somewhere between 20 to 96 MB (perhaps depending on system's memory and CPU speed).
-		if (   !(mClipMemNow = GetClipboardData(clipboard_contains_files ? CF_HDROP : CF_TEXT))   )
+		if (   !(mClipMemNow = g_clip.GetClipboardDataTimeout(clipboard_contains_files ? CF_HDROP : CF_TEXT))   )
 		{
-			// Fix for v1.0.31.02: GetClipboardData() apparently fails when there are files on the clipboard
-			// but either: 1) zero of them; 2) the CF_HDROP on the clipboard is somehow misformatted.
-			// If you select the parent ".." folder in WinRar then use the following hotkey, the script
-			// would previously yield a runtime error:
-			//#q::
-			//Send, ^c
-			//ClipWait, 0.5, 1
-			//msgbox %Clipboard%
-			//Return
-			if (clipboard_contains_files) // Tolerate failure in this case, see above.
+			if (clipboard_contains_files)
 			{
+				// v1.0.42.03: For the fix below, GetClipboardDataTimeout() knows not to try more than once
+				// for CF_HDROP.
+				// Fix for v1.0.31.02: When clipboard_contains_files==true, tolerate failure, which happens
+				// as a normal/expected outcome when there are files on the clipboard but either:
+				// 1) zero of them; 2) the CF_HDROP on the clipboard is somehow misformatted.
+				// If you select the parent ".." folder in WinRar then use the following hotkey, the script
+				// would previously yield a runtime error:
+				//#q::
+				//Send, ^c
+				//ClipWait, 0.5, 1
+				//msgbox %Clipboard%
+				//Return
 				Close();
 				if (aBuf)
 					*aBuf = '\0';
@@ -351,6 +351,42 @@ ResultType Clipboard::Close(char *aErrorMessage)
 
 
 
+HANDLE Clipboard::GetClipboardDataTimeout(UINT uFormat)
+// Same as GetClipboardData() except that it doesn't give up if the first call to GetClipboardData() fails.
+// Instead, it continues to retry the operation for the number of milliseconds in g_ClipboardTimeout.
+// This is necessary because GetClipboardData() has been observed to fail in repeatable situations (this
+// is strange because our thread already has the clipboard locked open -- presumably it happens because the
+// GetClipboardData() is unable to start a data stream from the application that actually serves up the data).
+// If cases where the first call to GetClipboardData() fails, a subsequent call will often succeed if you give
+// the owning application (such as Excel and Word) a little time to catch up.  This is especially necessary in
+// the OnClipboardChange label, where sometimes a clipboard-change notification comes in before the owning
+// app has finished preparing its data for subsequent readers of the clipboard.
+{
+	HANDLE h;
+	for (DWORD start_time = GetTickCount();;)
+	{
+		// Known failure conditions:
+		// GetClipboardData() apparently fails when the text on the clipboard is greater than a certain size
+		// (Even though GetLastError() reports "Operation completed successfully").  The data size at which
+		// this occurs is somewhere between 20 to 96 MB (perhaps depending on system's memory and CPU speed).
+		if (h = GetClipboardData(uFormat)) // Assign
+			return h;
+		if (g_ClipboardTimeout != -1) // We were not told to wait indefinitely and...
+			if (!g_ClipboardTimeout   // ...we were told to make only one attempt, or ...
+				|| uFormat == CF_HDROP // ... making only one attempt because this format can fail "normally" for the reasons described at "clipboard_contains_files".
+				|| (int)(g_ClipboardTimeout - (GetTickCount() - start_time)) <= SLEEP_INTERVAL_HALF) //...it timed out.
+				// Above must cast to int or any negative result will be lost due to DWORD type.
+				return NULL;
+		// Use SLEEP_WITHOUT_INTERRUPTION to prevent MainWindowProc() from accepting new hotkeys
+		// during our operation, since a new hotkey subroutine might interfere with
+		// what we're doing here (e.g. if it tries to use the clipboard, or perhaps overwrites
+		// the deref buffer if this object's caller gave it any pointers into that memory area):
+		SLEEP_WITHOUT_INTERRUPTION(INTERVAL_UNSPECIFIED)
+	}
+}
+
+
+
 ResultType Clipboard::Open()
 {
 	if (mIsOpen)
@@ -362,8 +398,8 @@ ResultType Clipboard::Open()
 			mIsOpen = true;
 			return OK;
 		}
-		if (g_ClipboardTimeout != -1) // We were told not to wait indefinitely.
-			if (!g_ClipboardTimeout   // We were told to make only one attempt, or ...
+		if (g_ClipboardTimeout != -1) // We were not told to wait indefinitely...
+			if (!g_ClipboardTimeout   // ...and we were told to make only one attempt, or ...
 				|| (int)(g_ClipboardTimeout - (GetTickCount() - start_time)) <= SLEEP_INTERVAL_HALF) //...it timed out.
 				// Above must cast to int or any negative result will be lost due to DWORD type.
 				return FAIL;

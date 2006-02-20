@@ -71,15 +71,15 @@ HWND WinActivate(global_struct &aSettings, char *aTitle, char *aText, char *aExc
 
 
 
-inline HWND AttemptSetForeground(HWND aTargetWnd, HWND aForeWnd, char *aTargetTitle = NULL)
-// A small inline to help with SetForegroundWindowEx() below.
-// Returns NULL if aTargetWnd or its owned-window couldn't be brought to the foreground.
-// Otherwise, on success, it returns either aTargetWnd or an HWND owned by aTargetWnd.
+#ifdef _DEBUG_WINACTIVATE
 #define LOGF "c:\\AutoHotkey SetForegroundWindowEx.txt"
-{
-#ifdef _DEBUG
-	if (!aTargetTitle) aTargetTitle = "";
+HWND AttemptSetForeground(HWND aTargetWindow, HWND aForeWindow, char *aTargetTitle)
+#else
+HWND AttemptSetForeground(HWND aTargetWindow, HWND aForeWindow)
 #endif
+// Returns NULL if aTargetWindow or its owned-window couldn't be brought to the foreground.
+// Otherwise, on success, it returns either aTargetWindow or an HWND owned by aTargetWindow.
+{
 	// Probably best not to trust its return value.  It's been shown to be unreliable at times.
 	// Example: I've confirmed that SetForegroundWindow() sometimes (perhaps about 10% of the time)
 	// indicates failure even though it succeeds.  So we specifically check to see if it worked,
@@ -95,31 +95,33 @@ inline HWND AttemptSetForeground(HWND aTargetWnd, HWND aForeWnd, char *aTargetTi
 	// a modal dialog (such as MSIE's find dialog), this call might never return, locking up
 	// our thread.  So now we do this fast-check for whether the window is hung first (and
 	// this call is indeed very fast: its worst case is at least 30x faster than the worst-case
-	// performance of the ABORT-IF-HUNG method used with SendMessageTimeout:
-	BOOL result = IsWindowHung(aTargetWnd) ? NULL : SetForegroundWindow(aTargetWnd);
+	// performance of the ABORT-IF-HUNG method used with SendMessageTimeout.
+	// UPDATE for v1.0.42.03: To avoid a very rare crashing issue, IsWindowHung() is no longer called
+	// here, but instead by our caller.  Search on "v1.0.42.03" for more comments.
+	BOOL result = SetForegroundWindow(aTargetWindow);
 	// Note: Increasing the sleep time below did not help with occurrences of "indicated success
 	// even though it failed", at least with metapad.exe being activated while command prompt
 	// and/or AutoIt2's InputBox were active or present on the screen:
 	SLEEP_WITHOUT_INTERRUPTION(SLEEP_INTERVAL); // Specify param so that it will try to specifically sleep that long.
 	HWND new_fore_window = GetForegroundWindow();
-	if (new_fore_window == aTargetWnd)
+	if (new_fore_window == aTargetWindow)
 	{
-#ifdef _DEBUG
+#ifdef _DEBUG_WINACTIVATE
 		if (!result)
 		{
 			FileAppend(LOGF, "SetForegroundWindow() indicated failure even though it succeeded: ", false);
 			FileAppend(LOGF, aTargetTitle);
 		}
 #endif
-		return aTargetWnd;
+		return aTargetWindow;
 	}
-	if (new_fore_window != aForeWnd && aTargetWnd == GetWindow(new_fore_window, GW_OWNER))
+	if (new_fore_window != aForeWindow && aTargetWindow == GetWindow(new_fore_window, GW_OWNER))
 		// The window we're trying to get to the foreground is the owner of the new foreground window.
 		// This is considered to be a success because a window that owns other windows can never be
 		// made the foreground window, at least if the windows it owns are visible.
 		return new_fore_window;
 	// Otherwise, failure:
-#ifdef _DEBUG
+#ifdef _DEBUG_WINACTIVATE
 	if (result)
 	{
 		FileAppend(LOGF, "SetForegroundWindow() indicated success even though it failed: ", false);
@@ -131,15 +133,23 @@ inline HWND AttemptSetForeground(HWND aTargetWnd, HWND aForeWnd, char *aTargetTi
 
 
 
-HWND SetForegroundWindowEx(HWND aWnd)
-// Caller must have ensured that aWnd is a valid window or NULL, since we
+HWND SetForegroundWindowEx(HWND aTargetWindow)
+// Caller must have ensured that aTargetWindow is a valid window or NULL, since we
 // don't call IsWindow() here.
 {
-	if (!aWnd) return NULL;  // When called this way (as it is sometimes), do nothing.
+	if (!aTargetWindow)
+		return NULL;  // When called this way (as it is sometimes), do nothing.
 
-#ifdef _DEBUG
+	// v1.0.42.03: Calling IsWindowHung() once here rather than potentially more than once in AttemptSetForeground()
+	// solves a crash that is not fully understood, nor is it easily reproduced (it occurs only in release mode,
+	// not debug mode).  It's likely a bug in the API's IsHungAppWindow(), but that is far from confirmed.
+	DWORD target_thread = GetWindowThreadProcessId(aTargetWindow, NULL);
+	if (target_thread != g_MainThreadID && IsWindowHung(aTargetWindow)) // Calls to IsWindowHung should probably be avoided if the window belongs to our thread.  Relies upon short-circuit boolean order.
+		return NULL;
+
+#ifdef _DEBUG_WINACTIVATE
 	char win_name[64];
-	GetWindowText(aWnd, win_name, sizeof(win_name));
+	GetWindowText(aTargetWindow, win_name, sizeof(win_name));
 #endif
 
 	HWND orig_foreground_wnd = GetForegroundWindow();
@@ -148,11 +158,11 @@ HWND SetForegroundWindowEx(HWND aWnd)
 	if (!orig_foreground_wnd)
 		orig_foreground_wnd = FindWindow("Shell_TrayWnd", NULL);
 
-	if (aWnd == orig_foreground_wnd) // It's already the active window.
-		return aWnd;
+	if (aTargetWindow == orig_foreground_wnd) // It's already the active window.
+		return aTargetWindow;
 
-	if (IsIconic(aWnd))
-		// This might never return if aWnd is a hung window.  But it seems better
+	if (IsIconic(aTargetWindow))
+		// This might never return if aTargetWindow is a hung window.  But it seems better
 		// to do it this way than to use the PostMessage() method, which might not work
 		// reliably with apps that don't handle such messages in a standard way.
 		// A minimized window must be restored or else SetForegroundWindow() always(?)
@@ -160,14 +170,14 @@ HWND SetForegroundWindowEx(HWND aWnd)
 		// probably shouldn't use it because we rely on the fact that the message
 		// has been acted on prior to trying to activate the window (and all Async()
 		// does is post a message to its queue):
-		ShowWindow(aWnd, SW_RESTORE);
+		ShowWindow(aTargetWindow, SW_RESTORE);
 
 	// This causes more trouble than it's worth.  In fact, the AutoIt author said that
 	// he didn't think it even helped with the IE 5.5 related issue it was originally
 	// intended for, so it seems a good idea to NOT to this, especially since I'm 80%
 	// sure it messes up the Z-order in certain circumstances, causing an unexpected
 	// window to pop to the foreground immediately after a modal dialog is dismissed:
-	//BringWindowToTop(aWnd); // AutoIt3: IE 5.5 related hack.
+	//BringWindowToTop(aTargetWindow); // AutoIt3: IE 5.5 related hack.
 
 	HWND new_foreground_wnd;
 
@@ -175,10 +185,10 @@ HWND SetForegroundWindowEx(HWND aWnd)
 	// if (g_os.IsWin95() || (!g_os.IsWin9x() && !g_os.IsWin2000orLater())))  // Win95 or NT
 		// Try a simple approach first for these two OS's, since they don't have
 		// any restrictions on focus stealing:
-#ifdef _DEBUG
-#define IF_ATTEMPT_SET_FORE if (new_foreground_wnd = AttemptSetForeground(aWnd, orig_foreground_wnd, win_name))
+#ifdef _DEBUG_WINACTIVATE
+#define IF_ATTEMPT_SET_FORE if (new_foreground_wnd = AttemptSetForeground(aTargetWindow, orig_foreground_wnd, win_name))
 #else
-#define IF_ATTEMPT_SET_FORE if (new_foreground_wnd = AttemptSetForeground(aWnd, orig_foreground_wnd, ""))
+#define IF_ATTEMPT_SET_FORE if (new_foreground_wnd = AttemptSetForeground(aTargetWindow, orig_foreground_wnd))
 #endif
 		IF_ATTEMPT_SET_FORE
 			return new_foreground_wnd;
@@ -202,18 +212,17 @@ HWND SetForegroundWindowEx(HWND aWnd)
 	// below.  So that's another reason to just keep it simple and do it this way
 	// only.
 
-#ifdef _DEBUG
+#ifdef _DEBUG_WINACTIVATE
 	char buf[1024];
 #endif
 
 	bool is_attached_my_to_fore = false, is_attached_fore_to_target = false;
-	DWORD fore_thread, target_thread;
+	DWORD fore_thread;
 	if (orig_foreground_wnd) // Might be NULL from above.
 	{
 		// Based on MSDN docs, these calls should always succeed due to the other
 		// checks done above (e.g. that none of the HWND's are NULL):
 		fore_thread = GetWindowThreadProcessId(orig_foreground_wnd, NULL);
-		target_thread = GetWindowThreadProcessId(aWnd, NULL);
 
 		// MY: Normally, it's suggested that you only need to attach the thread of the
 		// foreground window to our thread.  However, I've confirmed that doing all three
@@ -235,7 +244,7 @@ HWND SetForegroundWindowEx(HWND aWnd)
 		//	AttachThreadInput(g_MainThreadID, target_thread, TRUE);
 		if (fore_thread && g_MainThreadID != fore_thread && !IsWindowHung(orig_foreground_wnd))
 			is_attached_my_to_fore = AttachThreadInput(g_MainThreadID, fore_thread, TRUE) != 0;
-		if (fore_thread && target_thread && fore_thread != target_thread && !IsWindowHung(aWnd))
+		if (fore_thread && target_thread && fore_thread != target_thread) // IsWindowHung(aTargetWindow) was called earlier.
 			is_attached_fore_to_target = AttachThreadInput(fore_thread, target_thread, TRUE) != 0;
 	}
 
@@ -246,7 +255,7 @@ HWND SetForegroundWindowEx(HWND aWnd)
 	{
 		IF_ATTEMPT_SET_FORE
 		{
-#ifdef _DEBUG
+#ifdef _DEBUG_WINACTIVATE
 			if (i > 0) // More than one attempt was needed.
 			{
 				snprintf(buf, sizeof(buf), "AttachThreadInput attempt #%d indicated success: %s"
@@ -261,7 +270,7 @@ HWND SetForegroundWindowEx(HWND aWnd)
 	// I decided to avoid the quick minimize + restore method of activation.  It's
 	// not that much more effective (if at all), and there are some significant
 	// disadvantages:
-	// - This call will often hang our thread if aWnd is a hung window: ShowWindow(aWnd, SW_MINIMIZE)
+	// - This call will often hang our thread if aTargetWindow is a hung window: ShowWindow(aTargetWindow, SW_MINIMIZE)
 	// - Using SW_FORCEMINIMIZE instead of SW_MINIMIZE has at least one (and probably more)
 	// side effect: When the window is restored, at least via SW_RESTORE, it is no longer
 	// maximized even if it was before the minmize.  So don't use it.
@@ -301,8 +310,8 @@ HWND SetForegroundWindowEx(HWND aWnd)
 		//KeyEvent(KEYUP, VK_MENU);
 		// Also replacing "2-alts" with "alt-tab" below, for now:
 
-#ifndef _DEBUG
-		new_foreground_wnd = AttemptSetForeground(aWnd, orig_foreground_wnd, "");
+#ifndef _DEBUG_WINACTIVATE
+		new_foreground_wnd = AttemptSetForeground(aTargetWindow, orig_foreground_wnd);
 #else // debug mode
 		IF_ATTEMPT_SET_FORE
 			FileAppend(LOGF, "2-alts ok: ", false);
@@ -357,9 +366,9 @@ HWND SetForegroundWindowEx(HWND aWnd)
 		// its causing more trouble than it's worth.  But seems safer to leave
 		// this one enabled in case it does resolve IE 5.5 related issues and
 		// possible other issues:
-		BringWindowToTop(aWnd);
-		//SetWindowPos(aWnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
-		return new_foreground_wnd; // Return this rather than aWnd because it's more appropriate.
+		BringWindowToTop(aTargetWindow);
+		//SetWindowPos(aTargetWindow, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+		return new_foreground_wnd; // Return this rather than aTargetWindow because it's more appropriate.
 	}
 	else
 		return NULL;

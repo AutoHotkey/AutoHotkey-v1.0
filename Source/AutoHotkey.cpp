@@ -249,11 +249,10 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 			InitCommonControls();
 	}
 
-	// Activate the hotkeys and any hooks that are required prior to executing the
-	// top part (the auto-execute part) of the script so that they will be in effect
-	// even if the top part is something that's very involved and requires user
-	// interaction:
-	Hotkey::ManifestAllHotkeys();      // We want these active now in case auto-execute never returns (e.g. loop)
+	// Activate the hotkeys, hotstrings, and any hooks that are required prior to executing the
+	// top part (the auto-execute part) of the script so that they will be in effect even if the
+	// top part is something that's very involved and requires user interaction:
+	Hotkey::ManifestAllHotkeysHotstringsHooks(); // We want these active now in case auto-execute never returns (e.g. loop)
 	g_script.mIsReadyToExecute = true; // This is done only now for error reporting purposes in Hotkey.cpp.
 
 	// Run the auto-execute part at the top of the script (this call might never return):

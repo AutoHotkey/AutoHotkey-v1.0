@@ -2896,7 +2896,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 				{
 					// Since the previous control's width was determined solely by the size of its contents,
 					// enlarge the control to undo the narrowing just done by the buddying process.
-					// This relies on the fact that upon creation, the UpDown was auto-sized and positioned
+					// This relies on the fact that during buddying, the UpDown was auto-sized and positioned
 					// to fit its buddy.
 					if (style & UDS_ALIGNRIGHT)
 					{

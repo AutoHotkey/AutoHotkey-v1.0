@@ -972,7 +972,7 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 		// the result into a normal variable.
 		if (!IsClipboardFormatAvailable(CF_UNICODETEXT) || !g_clip.Open()) // Relies on short-circuit boolean order.
 			return output_var->Assign(); // Make the (non-clipboard) output_var blank to indicate failure.
-		if (   !(g_clip.mClipMemNow = GetClipboardData(CF_UNICODETEXT)) // Relies on short-circuit boolean order.
+		if (   !(g_clip.mClipMemNow = g_clip.GetClipboardDataTimeout(CF_UNICODETEXT)) // Relies on short-circuit boolean order.
 			|| !(g_clip.mClipMemNowLocked = (char *)GlobalLock(g_clip.mClipMemNow))
 			|| !(char_count = WideCharToMultiByte(CP_UTF8, 0, (LPCWSTR)g_clip.mClipMemNowLocked, -1, NULL, 0, NULL, NULL))   )
 		{
@@ -1507,8 +1507,12 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 	g_input.EndVK = end_vk;
 	g_input.EndSC = end_sc;
 	g_input.status = INPUT_IN_PROGRESS; // Signal the hook to start the input.
-	if (!g_KeybdHook) // Install the hook (if needed) upon first use of this feature.
-		Hotkey::InstallKeybdHook();
+
+	// Make script persistent.  This is mostly for backward compatibility because it is documented behavior.
+	// even though as of v1.0.42.03, the keyboard hook does not become permanent (which allows a subsequent
+	// use of the commands Suspend/Hotkey to deinstall it, which seems to add flexibility/benefit).
+	g_persistent = true;
+	Hotkey::InstallKeybdHook(); // Install the hook (if needed).
 
 	// A timer is used rather than monitoring the elapsed time here directly because
 	// this script's quasi-thread might be interrupted by a Timer or Hotkey subroutine,
@@ -6467,7 +6471,7 @@ ResultType Line::PerformAssign()
 			// text). Because of this example, it seems likely it can fail in other places or under
 			// other circumstances, perhaps by design of the app. Therefore, be tolerant of failures
 			// because partially saving the clipboard seems much better than aborting the operation.
-			if (hglobal = GetClipboardData(format))
+			if (hglobal = g_clip.GetClipboardDataTimeout(format))
 			{
 				space_needed += (VarSizeType)(sizeof(format) + sizeof(size) + GlobalSize(hglobal)); // The total amount of storage space required for this item.
 				if (format_is_text) // If this is true, then text_format_to_include must be 0 since above didn't "continue".
@@ -6523,7 +6527,7 @@ ResultType Line::PerformAssign()
 			// size, it does happen, at least in MS Word and for CF_BITMAP.  Therefore, in order to save
 			// the clipboard as accurately as possible, also save formats whose size is zero.  Note that
 			// GlobalLock() fails to work on hglobals of size zero, so don't do it for them.
-			if ((hglobal = GetClipboardData(format)) // This and the next line rely on short-circuit boolean order.
+			if ((hglobal = g_clip.GetClipboardDataTimeout(format)) // This and the next line rely on short-circuit boolean order.
 				&& (!(size = GlobalSize(hglobal)) || (hglobal_locked = GlobalLock(hglobal)))) // Size of zero or lock succeeded: Include this format.
 			{
 				// Any changes made to how things are stored here should also be made to the size-estimation
@@ -8704,7 +8708,7 @@ ResultType Line::WriteClipboardToFile(char *aFilespec)
 		else if (format_is_meta)
 			meta_was_already_written = true;
 
-		if ((hglobal = GetClipboardData(format)) // Relies on short-circuit boolean order:
+		if ((hglobal = g_clip.GetClipboardDataTimeout(format)) // Relies on short-circuit boolean order:
 			&& (!(size = GlobalSize(hglobal)) || (hglobal_locked = GlobalLock(hglobal)))) // Size of zero or lock succeeded: Include this format.
 		{
 			if (!WriteFile(hfile, &format, sizeof(format), &bytes_written, NULL)
@@ -9394,8 +9398,7 @@ ResultType Line::SetToggleState(vk_type aVK, ToggleValueType &ForceLock, char *a
 		// The hook is currently needed to support keeping these keys AlwaysOn or AlwaysOff, though
 		// there may be better ways to do it (such as registering them as a hotkey, but
 		// that may introduce quite a bit of complexity):
-		if (!g_KeybdHook)
-			Hotkey::InstallKeybdHook();
+		Hotkey::InstallKeybdHook();
 		break;
 	case NEUTRAL:
 		// Note: No attempt is made to detect whether the keybd hook should be deinstalled
@@ -9748,6 +9751,7 @@ DYNARESULT DynaCall(int aFlags, void *aFunction, DYNAPARM aParam[], int aParamCo
 	_asm
 	{
 		mov esp_end, esp        // See below.
+		mov esp, esp_start      //
 		// For DC_CALL_STD functions (since they pop their own arguments off the stack):
 		// Since the stack grows downward in memory, if the value of esp after the call is less than
 		// that before the call's args were pushed onto the stack, there are still items left over on
@@ -9757,7 +9761,6 @@ DYNARESULT DynaCall(int aFlags, void *aFunction, DYNAPARM aParam[], int aParamCo
 		// and even for CDECL, the following line restores esp to what it was before we pushed the
 		// function's args onto the stack, which in the case of DC_CALL_STD helps prevent crashes
 		// due too too many or to few args having been passed.
-		mov esp, esp_start      // See above.
 		mov dwEAX, eax          // Save eax/edx registers
 		mov dwEDX, edx
 	}
@@ -9792,6 +9795,14 @@ DYNARESULT DynaCall(int aFlags, void *aFunction, DYNAPARM aParam[], int aParamCo
 			mov DWORD PTR [ecx + 4], edx
 		}
 	}
+
+	// v1.0.42.03: The following supports A_LastError. It's called even if an exception occurred because it
+	// might add value in some such cases.  Benchmarks show that this has no measurable impact on performance.
+	// A_LastError was implemented rather than trying to change things so that a script could use DllCall to
+	// call GetLastError() because: Even if we could avoid calling any API function that resets LastError
+	// (which seems unlikely) it would be difficult to maintain (and thus a source of bugs) as revisions are
+	// made in the future.
+	g.LastError = GetLastError();
 
 	char buf[32];
 	esp_delta = esp_start - esp_end; // Positive number means too many args were passed, negative means too few.

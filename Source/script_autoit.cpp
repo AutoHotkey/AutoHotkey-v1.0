@@ -25,8 +25,8 @@
 #include "application.h" // For SLEEP_WITHOUT_INTERRUPTION and MsgSleep().
 
 
-ResultType Script::DoRunAs(char *aCommandLine, char *aWorkingDir, bool aDisplayErrors, WORD aShowWindow
-	, Var *aOutputVar, PROCESS_INFORMATION &aPI, bool &aSuccess // Output parameters we set for caller.
+ResultType Script::DoRunAs(char *aCommandLine, char *aWorkingDir, bool aDisplayErrors, bool aUpdateLastError, WORD aShowWindow
+	, Var *aOutputVar, PROCESS_INFORMATION &aPI, bool &aSuccess // Output parameters we set for caller, but caller must have initialized aSuccess to false.
 	, HANDLE &aNewProcess, char *aSystemErrorText)              // Same.  Caller must ensure aSystemErrorText is at least 512 in size.
 {
 	typedef BOOL (WINAPI *MyCreateProcessWithLogonW)(
@@ -90,7 +90,7 @@ ResultType Script::DoRunAs(char *aCommandLine, char *aWorkingDir, bool aDisplayE
 			aOutputVar->Assign(aPI.dwProcessId);
 	}
 	else
-		GetLastErrorText(aSystemErrorText, 512);  // Caller has ensured that aSystemErrorText is at least this size.
+		GetLastErrorText(aSystemErrorText, 512, aUpdateLastError);  // Caller has ensured that aSystemErrorText is at least this size.
 	FreeLibrary(hinstLib);
 	return OK;
 }

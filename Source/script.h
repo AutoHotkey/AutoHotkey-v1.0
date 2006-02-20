@@ -2394,11 +2394,11 @@ public:
 	ResultType AddGroup(char *aGroupName);
 	Label *FindLabel(char *aLabelName);
 
-	ResultType DoRunAs(char *aCommandLine, char *aWorkingDir, bool aDisplayErrors, WORD aShowWindow
+	ResultType DoRunAs(char *aCommandLine, char *aWorkingDir, bool aDisplayErrors, bool aUpdateLastError, WORD aShowWindow
 		, Var *aOutputVar, PROCESS_INFORMATION &aPI, bool &aSuccess, HANDLE &aNewProcess, char *aSystemErrorText);
 	ResultType ActionExec(char *aAction, char *aParams = NULL, char *aWorkingDir = NULL
 		, bool aDisplayErrors = true, char *aRunShowMode = NULL, HANDLE *aProcess = NULL
-		, bool aUseRunAs = false, Var *aOutputVar = NULL);
+		, bool aUpdateLastError = false, bool aUseRunAs = false, Var *aOutputVar = NULL);
 
 	char *ListVars(char *aBuf, int aBufSize);
 	char *ListKeyHistory(char *aBuf, int aBufSize);
@@ -2438,6 +2438,7 @@ public:
 	VarSizeType GetControlDelay(char *aBuf = NULL);
 	VarSizeType GetMouseDelay(char *aBuf = NULL);
 	VarSizeType GetDefaultMouseSpeed(char *aBuf = NULL);
+	VarSizeType ScriptGetLastError(char *aBuf = NULL);
 	VarSizeType GetIconHidden(char *aBuf = NULL);
 	VarSizeType GetIconTip(char *aBuf = NULL);
 	VarSizeType GetIconFile(char *aBuf = NULL);
