@@ -875,10 +875,15 @@ void KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTargetWi
 // SendInput method is used, these events haven't yet occurred so the logic is not correct,
 // and it would probably be very complex to fix it.
 {
-	if (!aVK && !aSC)
-		return;
 	if (!aExtraInfo) // Shouldn't be called this way because 0 is considered false in some places below (search on " = aExtraInfo" to find them).
 		aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER; // Seems slightly better to use a standard default rather than something arbitrary like 1.
+
+	// THE ABOVE MUST OCCUR prior to the below because otherwise MSVC++ 7.1 generates much larger code.
+	// This is the first such anomaly I recall seeing.  The generated OBJ file would be about 8 KB larger,
+	// which causes a 5.5 KB increase in uncompressed EXE size).
+
+	if (!aVK && !aSC)
+		return;
 
 	// Even if the sc_to_vk() mapping results in a zero-value vk, don't return.
 	// I think it may be valid to send keybd_events	that have a zero vk.

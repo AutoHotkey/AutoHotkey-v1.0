@@ -371,6 +371,7 @@ HANDLE Clipboard::GetClipboardDataTimeout(UINT uFormat)
 		*format_name = '\0'; // Don't need the name if it's a standard/CF_* format.
 	else
 	{
+		// v1.0.42.04:
 		// Probably need to call GetClipboardFormatName() rather than comparing directly to uFormat because
 		// MSDN implies that OwnerLink and other registered formats might not always have the same ID under
 		// all OSes (past and future).
@@ -415,6 +416,8 @@ HANDLE Clipboard::GetClipboardDataTimeout(UINT uFormat)
 		// Certain standard (numerically constant) clipboard formats are known to validly yield NULL from a
 		// call to GetClipboardData().  Never retry these because it would only cause unnecessary delays
 		// (i.e. a failure until timeout).
+		// v1.0.42.04: More importantly, retrying them appears to cause problems with saving a Word/Excel
+		// clipboard via ClipboardAll.
 		if (uFormat == CF_HDROP // This format can fail "normally" for the reasons described at "clipboard_contains_files".
 			|| !stricmp(format_name, "OwnerLink")) // Known to validly yield NULL from a call to GetClipboardData(), so don't retry it to avoid having to wait the full timeout period.
 			return NULL;
