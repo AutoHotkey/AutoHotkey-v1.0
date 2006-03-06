@@ -228,7 +228,7 @@ struct KeyHistoryItem
 LRESULT CALLBACK LowLevelKeybdProc(int aCode, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK LowLevelMouseProc(int aCode, WPARAM wParam, LPARAM lParam);
 LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lParam, const vk_type aVK
-, const sc_type aSC, bool aKeyUp, ULONG_PTR aExtraInfo, DWORD aEventFlags, DWORD aEventTime);
+, const sc_type aSC, bool aKeyUp, ULONG_PTR aExtraInfo, DWORD aEventFlags);
 
 #define HOTSTRING_INDEX_INVALID INT_MAX  // Use a signed maximum rather than unsigned, in case indexes ever become signed.
 #define SuppressThisKey SuppressThisKeyFunc(aHook, lParam, aVK, aSC, aKeyUp, pKeyHistoryCurr, hotkey_id_to_post)
@@ -244,7 +244,7 @@ LRESULT AllowIt(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lParam, cons
 bool CollectInput(KBDLLHOOKSTRUCT &aEvent, const vk_type aVK, const sc_type aSC, bool aKeyUp, bool aIsIgnored
 	, WPARAM &aHotstringWparamToPost, LPARAM &aHotstringLparamToPost);
 void UpdateKeybdState(KBDLLHOOKSTRUCT &aEvent, const vk_type aVK, const sc_type aSC, bool aKeyUp, bool aIsSuppressed);
-bool KeybdEventIsPhysical(DWORD aEventFlags, DWORD aEventTime, const vk_type aVK, bool aKeyUp);
+bool KeybdEventIsPhysical(DWORD aEventFlags, const vk_type aVK, bool aKeyUp);
 bool DualStateNumpadKeyIsDown();
 bool IsDualStateNumpadKey(const vk_type aVK, const sc_type aSC);
 
@@ -258,6 +258,5 @@ HookType GetActiveHooks();
 void FreeHookMem();
 void ResetKeyTypeState(key_type &key);
 void GetHookStatus(char *aBuf, int aBufSize);
-bool IsIgnored(ULONG_PTR aExtraInfo, vk_type aVK, bool aKeyUp);
 
 #endif

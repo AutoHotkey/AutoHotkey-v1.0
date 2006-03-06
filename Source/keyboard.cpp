@@ -26,6 +26,11 @@ GNU General Public License for more details.
 // Added for v1.0.25.  Search on sPrevEventType for more comments:
 static KeyEventTypes sPrevEventType;
 static vk_type sPrevVK = 0;
+// For v1.0.25, the below is static to track it in between sends, so that the below will continue
+// to work:
+// Send {LWinDown}
+// Send {LWinUp}  ; Should still open the Start Menu even though it's a separate Send.
+static vk_type sPrevEventModifierDown = 0;
 
 
 
@@ -41,6 +46,35 @@ void DoKeyDelay(int aDelay = g.KeyDelay)
 		return;
 	}
 	SLEEP_WITHOUT_INTERRUPTION(aDelay);
+}
+
+
+
+void DisguiseWinAltIfNeeded(vk_type aVK, bool aInBlindMode)
+// For v1.0.25, the following situation is fixed by the code below: If LWin or LAlt
+// becomes a persistent modifier (e.g. via Send {LWin down}) and the user physically
+// releases LWin immediately before: 1) the {LWin up} is scheduled; and 2) SendKey()
+// returns.  Then SendKey() will push the modifier back down so that it is in effect
+// for other things done by its caller (SendKeys) and also so that if the Send
+// operation ends, the key will still be down as the user intended (to modify future
+// keystrokes, physical or simulated).  However, since that down-event is followed
+// immediately by an up-event, the Start Menu appears for WIN-key or the active
+// window's menu bar is activated for ALT-key.  SOLUTION: Disguise Win-up and Alt-up
+// events in these cases.  This workaround has been successfully tested.  It's also
+// limited is scope so that a script can still explicitly invoke the Start Menu with
+// "Send {LWin}", or activate the menu bar with "Send {Alt}".
+// The check of sPrevEventModifierDown allows "Send {LWinDown}{LWinUp}" etc., to
+// continue to work.
+// v1.0.40: For maximum flexibility and minimum interference while in blind mode,
+// don't disguise Win and Alt keystrokes then.
+{
+	// Caller has ensured that aVK is about to have a key-up event, so if the event immediately
+	// prior to this one is a key-down of the same type of modifier key, it's our job here
+	// to send the disguising keystrokes now (if appropriate).
+	if (sPrevEventType == KEYDOWN && sPrevEventModifierDown != aVK && !aInBlindMode
+		&& ((aVK == VK_LWIN || aVK == VK_RWIN) && (sPrevVK == VK_LWIN || sPrevVK == VK_RWIN)
+			|| (aVK == VK_LMENU || (aVK == VK_RMENU && !g_LayoutHasAltGr)) && (sPrevVK == VK_LMENU || sPrevVK == VK_RMENU)))
+		KeyEvent(KEYDOWNANDUP, VK_CONTROL); // Disguise it to suppress Start Menu or prevent activation of active window's menu bar.
 }
 
 
@@ -61,43 +95,39 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 
 	// Below is now called with "true" so that the hook's modifier state will be corrected (if necessary)
 	// prior to every send.
-	modLR_type modifiersLR_current = GetModifierLRState(true); // Current "logical" modifier state.
+	modLR_type mods_current = GetModifierLRState(true); // Current "logical" modifier state.
 
 	// Make a best guess of what the physical state of the keys is prior to starting (there's no way
 	// to be certain without the keyboard hook). Note: We only want those physical
 	// keys that are also logically down (it's possible for a key to be down physically
-	// but not logically such as well R-control, for example, is a suffix hotkey and the
+	// but not logically such as when R-control, for example, is a suffix hotkey and the
 	// user is physically holding it down):
-	modLR_type modifiersLR_down_physically_and_logically, modifiersLR_down_physically_but_not_logically;
+	modLR_type mods_down_physically_orig, mods_down_physically_and_logically
+		, mods_down_physically_but_not_logically_orig;
 	if (g_KeybdHook)
 	{
 		// Since hook is installed, use its more reliable tracking to determine which
 		// modifiers are down.
-		// Update: modifiersLR_down_physically_but_not_logically is now used to distinguish
-		// between the following two cases, allowing modifiers to be properly restored to
-		// the down position when the hook is installed:
-		// 1) naked modifier key used only as suffix: when the user phys. presses it, it isn't
-		//    logically down because the hook suppressed it.
-		// 2) A modifier that is a prefix, that triggers a hotkey via a suffix, and that hotkey sends
-		//    that modifier.  The modifier will go back up after the SEND, so the key will be physically
-		//    down but not logically.
-		modifiersLR_down_physically_but_not_logically = g_modifiersLR_physical & ~g_modifiersLR_logical;
-		modifiersLR_down_physically_and_logically = g_modifiersLR_physical & g_modifiersLR_logical; // intersect
+		mods_down_physically_orig = g_modifiersLR_physical;
+		mods_down_physically_and_logically = g_modifiersLR_physical & g_modifiersLR_logical; // intersect
+		mods_down_physically_but_not_logically_orig = g_modifiersLR_physical & ~g_modifiersLR_logical;
 	}
 	else // Use best-guess instead.
 	{
-		modifiersLR_down_physically_but_not_logically = 0; // There's no way of knowing, so assume none.
 		// Even if TickCount has wrapped due to system being up more than about 49 days,
 		// DWORD math still gives the right answer as long as g_script.mThisHotkeyStartTime
 		// itself isn't more than about 49 days ago:
 		if ((GetTickCount() - g_script.mThisHotkeyStartTime) < (DWORD)g_HotkeyModifierTimeout) // Elapsed time < timeout-value
-			modifiersLR_down_physically_and_logically = modifiersLR_current & g_script.mThisHotkeyModifiersLR; // Bitwise AND is set intersection.
+			mods_down_physically_orig = mods_current & g_script.mThisHotkeyModifiersLR; // Bitwise AND is set intersection.
 		else
 			// Since too much time as passed since the user pressed the hotkey, it seems best,
 			// based on the action that will occur below, to assume that no hotkey modifiers
 			// are physically down:
-			modifiersLR_down_physically_and_logically = 0;
+			mods_down_physically_orig = 0;
+		mods_down_physically_and_logically = mods_down_physically_orig;
+		mods_down_physically_but_not_logically_orig = 0; // There's no way of knowing, so assume none.
 	}
+
 	// Any of the external modifiers that are down but NOT due to the hotkey are probably
 	// logically down rather than physically (perhaps from a prior command such as
 	// "Send, {CtrlDown}".  Since there's no way to be sure without the keyboard hook or some
@@ -105,7 +135,7 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 	// they are logically vs. physically down.  This value contains the modifiers that
 	// we will not attempt to change (e.g. "Send, A" will not release the LWin
 	// before sending "A" if this value indicates that LWin is down).  The below sets
-	// the value to be all the down-keys in modifiersLR_current except any that are physically
+	// the value to be all the down-keys in mods_current except any that are physically
 	// down due to the hotkey itself.  UPDATE: To improve the above, we now exclude from
 	// the set of persistent modifiers any that weren't made persistent by this script.
 	// Such a policy seems likely to do more good than harm as there have been cases where
@@ -114,35 +144,42 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 	// this logic here would think it's still persistent and push it back down again
 	// to enforce it as "always-down" during the send operation.  Thus, the key would
 	// basically get stuck down even after the send was over:
-	g_modifiersLR_persistent &= modifiersLR_current & ~modifiersLR_down_physically_and_logically;
-	modLR_type persistent_modifiers_for_this_send, extra_persistent_modifiers_for_blind_mode;
+	g_modifiersLR_persistent &= mods_current & ~mods_down_physically_and_logically;
+	modLR_type persistent_modifiers_for_this_SendKeys, extra_persistent_modifiers_for_blind_mode;
 	bool in_blind_mode; // For performance and also to reserve future flexibility, recognize {Blind} only when it's the first item in the string.
 	if (in_blind_mode = !aSendRaw && !strnicmp(aKeys, "{Blind}", 7)) // Don't allow {Blind} while in raw mode due to slight chance {Blind} is intended to be sent as a literal string.
 	{
 		// Blind Mode (since this seems too obscure to document, it's mentioned here):  Blind Mode relies
 		// on modifiers already down for something like ^c because ^c is saying "manifest a ^c", which will
-		// happen if ctrl is already down.  By contrast, Bind does not release shift to produce lowercase
+		// happen if ctrl is already down.  By contrast, Blind does not release shift to produce lowercase
 		// letters because avoiding that adds flexibility that couldn't be achieved otherwise.
 		// Thus, ^c::Send {Blind}c produces the same result when ^c is substituted for the final c.
-		// By contrast, Send {Blind}{LControl down} will generate the extra events even if ctrl already down.
+		// But Send {Blind}{LControl down} will generate the extra events even if ctrl already down.
 		aKeys += 7; // Remove "{Blind}" from further consideration (essential for "SendRaw {Blind}").
 		// The following value is usually zero unless the user is currently holding down
 		// some modifiers as part of a hotkey. These extra modifiers are the ones that
 		// this send operation (along with all its calls to SendKey and similar) should
 		// consider to be down for the duration of the Send (unless they go up via an
 		// explicit {LWin up}, etc.)
-		extra_persistent_modifiers_for_blind_mode = modifiersLR_current & ~g_modifiersLR_persistent;
-		persistent_modifiers_for_this_send = modifiersLR_current; // Update to reflect the above.
+		extra_persistent_modifiers_for_blind_mode = mods_current & ~g_modifiersLR_persistent;
+		persistent_modifiers_for_this_SendKeys = mods_current;
 	}
 	else
 	{
 		extra_persistent_modifiers_for_blind_mode = 0;
-		persistent_modifiers_for_this_send = g_modifiersLR_persistent;
+		persistent_modifiers_for_this_SendKeys = g_modifiersLR_persistent;
 	}
-	// Keep g_modifiersLR_persistent and persistent_modifiers_for_this_send in sync with each other from now on.
-	// By contrast to persistent_modifiers_for_this_send, g_modifiersLR_persistent is the lifetime modifiers for
+	// Keep g_modifiersLR_persistent and persistent_modifiers_for_this_SendKeys in sync with each other from now on.
+	// By contrast to persistent_modifiers_for_this_SendKeys, g_modifiersLR_persistent is the lifetime modifiers for
 	// this script that stay in effect between sends.  For example, "Send {LAlt down}" leaves the alt key down
 	// even after the Send ends, by design.
+	//
+	// It seems best not to change persistent_modifiers_for_this_SendKeys in response to the user making physical
+	// modifier changes during the course of the Send.  This is because it seems more often desirable that a constant
+	// state of modifiers be kept in effect for the entire Send rather than having the user's release of a hotkey
+	// modifier key, which typically occurs at some unpredictable time during the Send, to suddenly alter the nature
+	// of the Send in mid-stride.  Another reason is that SendInput (when implemented) wouldn't be able to make such
+	// adjustments in the middle of the Send, and thus its behavior would be inconsistent with that of the keybd_event Send.
 
 	// Might be better to do this prior to changing capslock state:
 	bool threads_are_attached = false; // Set default.
@@ -155,7 +192,7 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 	}
 
 	// The default behavior is to turn the capslock key off prior to sending any keys
-	// because otherwise lowercase letters would come through as uppercase:
+	// because otherwise lowercase letters would come through as uppercase and vice versa.
 	ToggleValueType prior_capslock_state;
 	if (threads_are_attached || !g_os.IsWin9x())
 		// Only under either of the above conditions can the state of Capslock be reliably
@@ -181,19 +218,14 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 	vk_type vk = 0;
 	sc_type sc = 0;
 	modLR_type key_as_modifiersLR = 0;
-	modLR_type modifiersLR_for_next_key = 0;
+	modLR_type mods_for_next_key = 0;
 	// Above: For v1.0.35, it was changed to modLR vs. mod so that AltGr keys such as backslash and '{'
 	// are supported on layouts such as German when sending to apps such as Putty that are fussy about
 	// which ALT key is held down to produce the character.
 
-	// For v1.0.25, the below is static to track it in between sends, so that the below will continue
-	// to work:
-	// Send {LWinDown}
-	// Send {LWinUp}  ; Should still open the Start Menu even though it's a separate Send.
-	static vk_type sPreviousEventModifierDown = 0;
 	vk_type this_event_modifier_down;
 
-	for (; *aKeys; ++aKeys, sPreviousEventModifierDown = this_event_modifier_down)
+	for (; *aKeys; ++aKeys, sPrevEventModifierDown = this_event_modifier_down)
 	{
 		LONG_OPERATION_UPDATE_FOR_SENDKEYS
 		this_event_modifier_down = 0; // Set default for this iteration, overridden selectively below.
@@ -203,26 +235,26 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 			switch (*aKeys)
 			{
 			case '^':
-				if (!(persistent_modifiers_for_this_send & (MOD_LCONTROL|MOD_RCONTROL)))
-					modifiersLR_for_next_key |= MOD_LCONTROL;
-				// else don't add it, because the value of modifiersLR_for_next_key may also used to determine
+				if (!(persistent_modifiers_for_this_SendKeys & (MOD_LCONTROL|MOD_RCONTROL)))
+					mods_for_next_key |= MOD_LCONTROL;
+				// else don't add it, because the value of mods_for_next_key may also used to determine
 				// which keys to release after the key to which this modifier applies is sent.
 				// We don't want persistent modifiers to ever be released because that's how
 				// AutoIt2 behaves and it seems like a reasonable standard.
 				continue;
 			case '+':
-				if (!(persistent_modifiers_for_this_send & (MOD_LSHIFT|MOD_RSHIFT)))
-					modifiersLR_for_next_key |= MOD_LSHIFT;
+				if (!(persistent_modifiers_for_this_SendKeys & (MOD_LSHIFT|MOD_RSHIFT)))
+					mods_for_next_key |= MOD_LSHIFT;
 				continue;
 			case '!':
-				if (!(persistent_modifiers_for_this_send & (MOD_LALT|MOD_RALT)))
-					modifiersLR_for_next_key |= MOD_LALT;
+				if (!(persistent_modifiers_for_this_SendKeys & (MOD_LALT|MOD_RALT)))
+					mods_for_next_key |= MOD_LALT;
 				continue;
 			case '#':
 				if (g_script.mIsAutoIt2) // Since AutoIt2 ignores these, ignore them if script is in AutoIt2 mode.
 					continue;
-				if (!(persistent_modifiers_for_this_send & (MOD_LWIN|MOD_RWIN)))
-					modifiersLR_for_next_key |= MOD_LWIN;
+				if (!(persistent_modifiers_for_this_SendKeys & (MOD_LWIN|MOD_RWIN)))
+					mods_for_next_key |= MOD_LWIN;
 				continue;
 			case '}': continue;  // Important that these be ignored.  Be very careful about changing this, see below.
 			case '{':
@@ -265,13 +297,13 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 						else
 						{
 							repeat_count = ATOI(next_word);
-							if (repeat_count < 0) // But seems best to allow zero itself, for possibly use with environment vars
+							if (repeat_count < 0) // But seems best to allow zero itself, e.g. Send {a %Count%}
 								repeat_count = 0;
 						}
 					}
 				}
 
-				vk = TextToVK(aKeys + 1, &modifiersLR_for_next_key, true, false); // false must be passed due to below.
+				vk = TextToVK(aKeys + 1, &mods_for_next_key, true, false); // false must be passed due to below.
 				sc = vk ? 0 : TextToSC(aKeys + 1);  // If sc is 0, it will be resolved by KeyEvent() later.
 				if (!vk && !sc && toupper(aKeys[1]) == 'V' && toupper(aKeys[2]) == 'K')
 				{
@@ -285,28 +317,6 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 				if (space_pos)  // undo the temporary termination
 					*space_pos = old_char;
 				*end_pos = '}';  // undo the temporary termination
-
-				// For v1.0.25, the following situation is fixed by the code below: If LWin or LAlt
-				// becomes a persistent modifier (e.g. via Send {LWin down}) and the user physically
-				// releases LWin immediately before: 1) the {LWin up} is scheduled; and 2) SendKey()
-				// returns.  Then SendKey() will push the modifier back down so that it is in effect
-				// for other things done by its caller (SendKeys) and also so that if the Send
-				// operation ends, the key will still be down as the user intended (to modify future
-				// keystrokes, physical or simulated).  However, since that down-event is followed
-				// immediately by an up-event, the Start Menu appears for WIN-key or the active
-				// window's menu bar is activated for ALT-key.  SOLUTION: Disguise Win-up and Alt-up
-				// events in these cases.  This workaround has been successfully tested.  It's also
-				// limited is scope so that a script can still explicitly invoke the start menu with
-				// "Send {LWin}" or the menu bar with "Send {Alt}".
-				// The check of sPreviousEventModifierDown allows "Send {LWinDown}{LWinUp}" etc., to
-				// continue to work.
-				// v1.0.40: For maximum flexibility and minimum interference while in blind mode,
-				// don't disguise Win and Alt keystrokes then.
-				#define DISGUISE_IF_NEEDED \
-					if (sPrevEventType == KEYDOWN && sPreviousEventModifierDown != vk && !in_blind_mode \
-						&& ((vk == VK_LWIN || vk == VK_RWIN) && (sPrevVK == VK_LWIN || sPrevVK == VK_RWIN)\
-							|| (vk == VK_LMENU || (vk == VK_RMENU && !g_LayoutHasAltGr)) && (sPrevVK == VK_LMENU || sPrevVK == VK_RMENU)))\
-						KeyEvent(KEYDOWNANDUP, VK_CONTROL); // Disguise it to suppress Start Menu or prevent activation of active window's menu bar.
 
 				if (repeat_count)
 				{
@@ -323,7 +333,7 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 								}
 								else if (event_type == KEYUP) // *not* KEYDOWNANDUP, since that would be an intentional activation of the Start Menu or menu bar.
 								{
-									DISGUISE_IF_NEEDED
+									DisguiseWinAltIfNeeded(vk, in_blind_mode);
 									g_modifiersLR_persistent &= ~key_as_modifiersLR;
 									// By contrast with KEYDOWN, KEYUP should also remove this modifer
 									// from extra_persistent_modifiers_for_blind_mode if it happens to be
@@ -338,7 +348,7 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 								// or {Shift down}.
 
 								// Since key_as_modifiersLR isn't 0, update to reflect changes made above:
-								persistent_modifiers_for_this_send = g_modifiersLR_persistent | extra_persistent_modifiers_for_blind_mode;
+								persistent_modifiers_for_this_SendKeys = g_modifiersLR_persistent | extra_persistent_modifiers_for_blind_mode;
 							}
 							//else don't add this event to g_modifiersLR_persistent because it will not be
 							// manifest via keybd_event.  Instead, it will done via less intrusively
@@ -351,7 +361,7 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 						// behaves also, which is good.  Example: Send, {AltDown}!f  ; this will cause
 						// Alt to still be down after the command is over, even though F is modified
 						// by Alt.
-						SendKey(vk, sc, modifiersLR_for_next_key, persistent_modifiers_for_this_send
+						SendKey(vk, sc, mods_for_next_key, persistent_modifiers_for_this_SendKeys
 							, repeat_count, event_type, key_as_modifiersLR, aTargetWindow);
 					}
 
@@ -359,30 +369,38 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 					{
 						// v1.0.40: SendKeySpecial sends only keybd_event keystrokes, not ControlSend style
 						// keystrokes:
-						if (!aTargetWindow) // In this mode, modifiersLR_for_next_key and event_type are ignored due to being unsupported.
-							SendKeySpecial(aKeys[1], persistent_modifiers_for_this_send, repeat_count);
+						if (!aTargetWindow) // In this mode, mods_for_next_key and event_type are ignored due to being unsupported.
+							SendKeySpecial(aKeys[1], repeat_count);
 						//else do nothing since it's there's no known way to send the keystokes.
 					}
 
 					// See comment "else must never change g_modifiersLR_persistent" above about why
 					// !aTargetWindow is used below:
 					else if (vk = TextToSpecial(aKeys + 1, (UINT)key_text_length, event_type
-						, persistent_modifiers_for_this_send, !aTargetWindow)) // Assign.
+						, persistent_modifiers_for_this_SendKeys, !aTargetWindow)) // Assign.
 					{
 						if (!aTargetWindow)
 						{
 							if (event_type == KEYDOWN)
 								this_event_modifier_down = vk;
-							else // KEYUP (TextToSpecial() never returns KEYDOWNANDUP)
-								DISGUISE_IF_NEEDED
+							else // It must be KEYUP because TextToSpecial() never returns KEYDOWNANDUP.
+								DisguiseWinAltIfNeeded(vk, in_blind_mode);
 						}
-						for (UINT i = 0; i < repeat_count; ++i)
+						if (repeat_count)
 						{
-							// Don't tell it to save & restore modifiers because special keys like this one
-							// should have maximum flexibility (i.e. nothing extra should be done so that the
-							// user can have more control):
-							KeyEvent(event_type, vk, 0, aTargetWindow, true);
-							LONG_OPERATION_UPDATE_FOR_SENDKEYS
+							// v1.0.42.04: A previous call to SendKey() or SendKeySpecial() might have left modifiers
+							// in the wrong state (e.g. Send +{F1}{ControlDown}).  Since modifiers can sometimes affect
+							// each other, make sure they're in the state intended by the user before beginning:
+							SetModifierLRState(persistent_modifiers_for_this_SendKeys, GetModifierLRState()
+								, aTargetWindow, false, false); // It also does DoKeyDelay(g.PressDuration).
+							for (UINT i = 0; i < repeat_count; ++i)
+							{
+								// Don't tell it to save & restore modifiers because special keys like this one
+								// should have maximum flexibility (i.e. nothing extra should be done so that the
+								// user can have more control):
+								KeyEvent(event_type, vk, 0, aTargetWindow, true);
+								LONG_OPERATION_UPDATE_FOR_SENDKEYS
+							}
 						}
 					}
 
@@ -395,13 +413,13 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 						DoKeyDelay();
 					}
 					//else do nothing since it isn't recognized as any of the above "else if" cases (see below).
-				} // repeat_count is non-zero
+				} // if (repeat_count)
 
 				// If what's between {} is unrecognized, such as {Bogus}, it's safest not to send
 				// the contents literally since that's almost certainly not what the user intended.
 				// In addition, reset the modifiers, since they were intended to apply only to
 				// the key inside {}.  Also, the below is done even if repeat-count is zero:
-				modifiersLR_for_next_key = 0;
+				mods_for_next_key = 0;
 				aKeys = end_pos;  // In prep for aKeys++ done by the loop.
 				continue;
 			} // case '{'
@@ -416,82 +434,112 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 			// value for modifiers.
 			single_char_string[0] = *aKeys;
 			single_char_string[1] = '\0';
-			vk = TextToVK(single_char_string, &modifiersLR_for_next_key, true, true);
-			sc = 0;
-			if (vk)
-				SendKey(vk, sc, modifiersLR_for_next_key, persistent_modifiers_for_this_send, 1, KEYDOWNANDUP
+			if (vk = TextToVK(single_char_string, &mods_for_next_key, true, true))
+				SendKey(vk, 0, mods_for_next_key, persistent_modifiers_for_this_SendKeys, 1, KEYDOWNANDUP
 					, 0, aTargetWindow);
 			else // Try to send it by alternate means.
 			{
 				// v1.0.40: SendKeySpecial sends only keybd_event keystrokes, not ControlSend style keystrokes:
-				if (!aTargetWindow) // In this mode, modifiersLR_for_next_key is ignored due to being unsupported.
-					SendKeySpecial(*aKeys, persistent_modifiers_for_this_send, 1);
+				if (!aTargetWindow) // In this mode, mods_for_next_key is ignored due to being unsupported.
+					SendKeySpecial(*aKeys, 1);
 				//else do nothing since it's there's no known way to send the keystokes.
 			}
-			modifiersLR_for_next_key = 0;  // Safest to reset this regardless of whether a key was sent.
+			mods_for_next_key = 0;  // Safest to reset this regardless of whether a key was sent.
 		}
 	} // for()
 
+	// Determine (or use best-guess, if necessary) which modifiers are down physically now as opposed
+	// to right before the Send began.
+	modLR_type mods_down_physically; // As compared to mods_down_physically_orig.
+	if (g_KeybdHook)
+		mods_down_physically = g_modifiersLR_physical;
+	else // No hook, so consult g_HotkeyModifierTimeout to make the determination.
+		// Assume that the same modifiers that were phys+logically down before the Send are still
+		// physically down (though not necessarily logically, since the Send may have released them),
+		// but do this only if the timeout period didn't expire (or the user specified that it never
+		// times out; i.e. elapsed time < timeout-value; DWORD math gives the right answer even if
+		// tick-count has wrapped around).
+		mods_down_physically = (g_HotkeyModifierTimeout < 0 // It never times out or...
+			|| (GetTickCount() - g_script.mThisHotkeyStartTime) < (DWORD)g_HotkeyModifierTimeout) // It didn't time out.
+			? mods_down_physically_orig : 0;
+
+	// Restore the state of the modifiers to be those the user is physically holding down right now.
+	// Any modifiers that are logically "persistent", as detected upon entrance to this function
+	// (e.g. due to something such as a prior "Send, {LWinDown}"), are also pushed down if they're not already.
 	// Don't press back down the modifiers that were used to trigger this hotkey if there's
 	// any doubt that they're still down, since doing so when they're not physically down
 	// would cause them to be stuck down, which might cause unwanted behavior when the unsuspecting
 	// user resumes typing.
-	// v1.0.40: For maximum flexibility and minimum interference while in blind mode,
-	// never restore modifiers to the down position then:
-	if (!in_blind_mode && (g_KeybdHook
-		|| g_HotkeyModifierTimeout < 0 // User specified that the below should always be done.
-		|| (GetTickCount() - g_script.mThisHotkeyStartTime) < (DWORD)g_HotkeyModifierTimeout)) // Elapsed time < timeout-value
+	// v1.0.42.04: Now that SendKey() is lazy about releasing Ctrl and/or Shift (but not Win/Alt),
+	// the section below also releases Ctrl/Shift if appropriate.  See SendKey() for more details.
+	modLR_type mods_to_set = persistent_modifiers_for_this_SendKeys; // Set default.
+	if (in_blind_mode)
 	{
-		// If possible, update the set of modifier keys that are being physically held down.
-		// This is done because the user may have released some keys during the send operation
-		// (especially if KeyDelay > 0 and the Send is a large one).
-		// Update: Include all keys that are phsyically down except those that were down
-		// physically but not logically at the *start* of the send operation (since the send
-		// operation may have changed the logical state).  In other words, we want to restore
-		// the keys to their former logical-down position to match the fact that the user is still
-		// holding them down physically.  The previously-down keys we don't do this for are those 
-		// that were physically but not logically down, such as a naked Control key that's used
-		// as a suffix without being a prefix.  See above comments for more details:
-		if (g_KeybdHook)
-			modifiersLR_down_physically_and_logically = g_modifiersLR_physical
-				& ~modifiersLR_down_physically_but_not_logically; // intersect
-		//else leave it set to what it was originally (above has already checked that we're within
-		// the g_HotkeyModifierTimeout period since there is no keyboard hook).
+		// At the end of a blind-mode send, modifers are restored differently than normal. One
+		// reason for this is to support the explicit ability for a Send to turn off a hotkey's
+		// modifiers even if the user is still physically holding them down.  For example:
+		//   #space::Send {LWin up}  ; Fails to release it, by design and for backward compatibility.
+		//   #space::Send {Blind}{LWin up}  ; Succeeds, allowing LWin to be logically up even though it's physically down.
+		modLR_type mods_changed_physically_during_send = mods_down_physically_orig ^ mods_down_physically;
+		// Fix for v1.0.42.04: To prevent keys from getting stuck down, compensate for any modifiers
+		// the user physically pressed or released during the Send (especially those released).
+		// Remove any modifiers physically released during the send so that they don't get pushed back down:
+		mods_to_set &= ~(mods_changed_physically_during_send & mods_down_physically_orig); // Remove those that changed from down to up.
+		// Conversely, add any modifiers newly, physically pressed down during the Send, because in
+		// most cases the user would want such modifiers to be logically down after the Send.
+		// Obsolete comment from v1.0.40: For maximum flexibility and minimum interference while
+		// in blind mode, never restore modifiers to the down position then.
+		mods_to_set |= mods_changed_physically_during_send & mods_down_physically; // Add those that changed from up to down.
+	}
+	else // Regardless of whether the keyboard hook is present, the following formula applies.
+		mods_to_set |= mods_down_physically & ~mods_down_physically_but_not_logically_orig; // intersect
+		// Above: It takes into account the fact that the user may have pressed and/or released some
+		// modifiers during the Send.
+		// So it includes all keys that are physically down except those that were down physically but not
+		// logically at the *start* of the send operation (since the send operation may have changed the
+		// logical state).  In other words, we want to restore the keys to their former logical-down
+		// position to match the fact that the user is still holding them down physically.  The
+		// previously-down keys we don't do this for are those that were physically but not logically down,
+		// such as a naked Control key that's used as a suffix without being a prefix.  More details:
+		// mods_down_physically_but_not_logically_orig is used to distinguish between the following two cases,
+		// allowing modifiers to be properly restored to the down position when the hook is installed:
+		// 1) naked modifier key used only as suffix: when the user phys. presses it, it isn't
+		//    logically down because the hook suppressed it.
+		// 2) A modifier that is a prefix, that triggers a hotkey via a suffix, and that hotkey sends
+		//    that modifier.  The modifier will go back up after the SEND, so the key will be physically
+		//    down but not logically.
 
-		// Restore the state of the modifiers to be those believed to be physically held down
-		// by the user.  Do not restore any that were logically "persistent", as detected upon
-		// entrance to this function (e.g. due to something such as a prior "Send, {LWinDown}"),
-		// since their state should already been correct if things above are designed right:
-		modifiersLR_current = GetModifierLRState();
-		modLR_type keys_to_press_down = modifiersLR_down_physically_and_logically & ~modifiersLR_current;
-		// Use KEY_IGNORE_ALL_EXCEPT_MODIFIER to tell the hook to adjust g_modifiersLR_logical_non_ignored
-		// because these keys being put back down match the physical pressing of those same keys by the
-		// user, and we want such modifiers to be taken into account for the purpose of deciding whether
-		// other hotkeys should fire (or the same one again if auto-repeating):
-		if (keys_to_press_down)
-		{
-			SetModifierLRStateSpecific(keys_to_press_down, modifiersLR_current, KEYDOWN, aTargetWindow);
-			// Since modifiers were changed by the above, do a key-delay if the special intra-keystroke
-			// delay is in effect.
-			// Since there normally isn't a delay between a change in modifiers and the first keystroke,
-			// if a PressDuration is in effect, also do it here to improve reliability (I have observed
-			// cases where modifiers need to be left alone for a short time in order for the keystrokes
-			// that follow to be be modified by the intended set of modifiers).
-			DoKeyDelay(g.PressDuration);
-		}
+	// Use KEY_IGNORE_ALL_EXCEPT_MODIFIER to tell the hook to adjust g_modifiersLR_logical_non_ignored
+	// because these keys being put back down match the physical pressing of those same keys by the
+	// user, and we want such modifiers to be taken into account for the purpose of deciding whether
+	// other hotkeys should fire (or the same one again if auto-repeating):
+	// v1.0.42.04: A previous call to SendKey() might have left Shift/Ctrl in the down position
+	// because by procrastinatating, extraneous keystrokes in examples such as "Send ABCD" are
+	// eliminated (previously, such that example released the shift key after sending each key,
+	// only to have to press it down again for the next one.  For this reason, some modifiers
+	// might get released here in addition to any that need to get pressed down.  That's why
+	// SetModifierLRState() is called rather than the old method of pushing keys down only,
+	// never releasing them.
+	// Put the modifiers in mods_to_set into effect.  Although "true" is passed to disguise up-events,
+	// there generally shouldn't be any up-events for Alt or Win because SendKey() would have already
+	// released them.  One possible exception to this is when the user physically released Alt or Win
+	// during the send (perhaps only during specific sensitive/vulnerable moments).
+	SetModifierLRState(mods_to_set, GetModifierLRState(), aTargetWindow, true, true); // It also does DoKeyDelay(g.PressDuration).
 
-		if (g_KeybdHook)
-		{
-			// Ensure that g_modifiersLR_logical_non_ignored does not contain any down-modifiers
-			// that aren't down in g_modifiersLR_logical.  This is done mostly for peace-of-mind,
-			// since there might be ways, via combinations of physical user input and the Send
-			// commands own input (overlap and interference) for one to get out of sync with the
-			// other.  The below uses ^ to find the differences between the two, then uses & to
-			// find which are down in non_ignored that aren't in logical, then inverts those bits
-			// in g_modifiersLR_logical_non_ignored, which sets those keys to be in the up position:
-			g_modifiersLR_logical_non_ignored &= ~((g_modifiersLR_logical ^ g_modifiersLR_logical_non_ignored)
-				& g_modifiersLR_logical_non_ignored);
-		}
+	// For peace of mind and because that's how it was tested originally, the following is done
+	// only after adjusting the modifier state above (since that adjustment might be able to
+	// affect the global variables used below in a meaningful way).
+	if (g_KeybdHook)
+	{
+		// Ensure that g_modifiersLR_logical_non_ignored does not contain any down-modifiers
+		// that aren't down in g_modifiersLR_logical.  This is done mostly for peace-of-mind,
+		// since there might be ways, via combinations of physical user input and the Send
+		// commands own input (overlap and interference) for one to get out of sync with the
+		// other.  The below uses ^ to find the differences between the two, then uses & to
+		// find which are down in non_ignored that aren't in logical, then inverts those bits
+		// in g_modifiersLR_logical_non_ignored, which sets those keys to be in the up position:
+		g_modifiersLR_logical_non_ignored &= ~((g_modifiersLR_logical ^ g_modifiersLR_logical_non_ignored)
+			& g_modifiersLR_logical_non_ignored);
 	}
 
 	if (prior_capslock_state == TOGGLED_ON) // The current user setting requires us to turn it back on.
@@ -508,23 +556,20 @@ void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow)
 
 
 
-int SendKey(vk_type aVK, sc_type aSC, modLR_type aModifiersLR, modLR_type aModifiersLRPersistent
+void SendKey(vk_type aVK, sc_type aSC, modLR_type aModifiersLR, modLR_type aModifiersLRPersistent
 	, int aRepeatCount, KeyEventTypes aEventType, modLR_type aKeyAsModifiersLR, HWND aTargetWindow)
-// vk or sc may be zero, but not both.
-// Returns the number of keys actually sent for caller convenience.
-// The function is reponsible for first setting the correct modifier state,
-// as specified by the caller, before sending the key.  After sending,
-// it should put the system's modifier state back to the way it was
-// originally, except, for safely, it seems best not to put back down
-// any modifiers that were originally down unless those keys are physically
-// down.
+// Caller has ensured that: 1) vk or sc may be zero, but not both; 2) aRepeatCount > 0.
+// This function is reponsible for first setting the correct state of the modifier keys
+// (as specified by the caller) before sending the key.  After sending, it should put the
+// modifier keys  back to the way they were originally (UPDATE: It does this only for Win/Alt
+// for the reasons described near the end of this function).
 {
-	if (!aVK && !aSC) return 0;
-
+	// Caller is now responsible for verifying this:
 	// Avoid changing modifier states and other things if there is nothing to be sent.
 	// Otherwise, menu bar might activated due to ALT keystrokes that don't modify any key,
 	// the Start Menu might appear due to WIN keystrokes that don't modify anything, etc:
-	if (aRepeatCount < 1) return aRepeatCount;
+	//if ((!aVK && !aSC) || aRepeatCount < 1)
+	//	return;
 
 	// I thought maybe it might be best not to release unwanted modifier keys that are already down
 	// (perhaps via something like "Send, {altdown}{esc}{altup}"), but that harms the case where
@@ -534,70 +579,73 @@ int SendKey(vk_type aVK, sc_type aSC, modLR_type aModifiersLR, modLR_type aModif
 	// proper down/up position prior to sending any Keybd events.  UPDATE: This has been changed
 	// so that only modifiers that were actually used to trigger that hotkey are released during
 	// the send.  Other modifiers that are down may be down intentially, e.g. due to a previous
-	// call to send, something like Send, {ShiftDown}.
+	// call to Send such as: Send {ShiftDown}.
 	// UPDATE: It seems best to save the initial state only once, prior to sending the key-group,
 	// because only at the beginning can the original state be determined without having to
 	// save and restore it in each loop iteration.
 	// UPDATE: Not saving and restoring at all anymore, due to interference (side-effects)
 	// caused by the extra keybd events.
 
+	// The combination of aModifiersLR and aModifiersLRPersistent are the modifier keys that
+	// should be down prior to sending the specified aVK/aSC. aModifiersLR are the modifiers
+	// for this particular aVK keystroke, but aModifiersLRPersistent are the ones that will stay
+	// in pressed down even after it's sent.
 	modLR_type modifiersLR_specified = aModifiersLR | aModifiersLRPersistent;
+	bool vk_is_mouse = IsMouseVK(aVK); // Caller has ensured that VK is non-zero when it wants a mouse click.
 
-	// Sending mouse clicks via ControlSend is not supported, so in that case fall back to the
-	// old method of sending the VK directly (which probably has no effect 99% of the time):
-	if (IsMouseVK(aVK) && !aTargetWindow)
+	LONG_OPERATION_INIT
+	for (int i = 0; i < aRepeatCount; ++i)
 	{
-		// Pass "true" so that WIN and ALT are disguised if they have to be released due to
-		// a hotkey such as !a::Send {LButton}
-		// v1.0.40: It seems okay to tell SetModifierLRState to disguise Win/Alt regardless of
-		// whether our caller is in blind mode.  This is because our caller already put any extra
-		// blind-mode modifiers into modifiersLR_specified, which prevents any actual need to
-		// disguise anything (only the release of Win/Alt is ever disguised).
-		if (SetModifierLRState(modifiersLR_specified, GetModifierLRState(), aTargetWindow, true, KEY_IGNORE))
-			// Modifiers were changed by the above.
-			DoKeyDelay(g.PressDuration); // See comments in SendKeys() about why this is done.
-		// It will do its own MouseDelay:
-		Line::MouseClick(aVK, COORD_UNSPECIFIED, COORD_UNSPECIFIED, aRepeatCount, g.DefaultMouseSpeed, aEventType);
-	}
-	else
-	{
-		LONG_OPERATION_INIT
-		for (int i = 0; i < aRepeatCount; ++i)
+		LONG_OPERATION_UPDATE_FOR_SENDKEYS
+		// These modifiers above stay in effect for each of these keypresses.
+		// Always on the first iteration, and thereafter only if the send won't be essentially
+		// instantaneous.  The modifiers are checked before every key is sent because
+		// if a high repeat-count was specified, the user may have time to release one or more
+		// of the modifier keys that were used to trigger a hotkey.  That physical release
+		// will cause a key-up event which will cause the state of the modifiers, as seen
+		// by the system, to change.  For example, if user releases control-key during the operation,
+		// some of the D's won't be control-D's:
+		// ^c::Send,^{d 15}
+		// Also: Seems best to do SetModifierLRState() even if Keydelay < 0:
+		// Update: If this key is itself a modifier, don't change the state of the other
+		// modifier keys just for it, since most of the time that is unnecessary and in
+		// some cases, the extra generated keystrokes would cause complications/side-effects.
+		if (!aKeyAsModifiersLR)
 		{
-			LONG_OPERATION_UPDATE_FOR_SENDKEYS
-			// These modifiers above stay in effect for each of these keypresses.
-			// Always on the first iteration, and thereafter only if the send won't be essentially
-			// instantaneous.  The modifiers are checked before every key is sent because
-			// if a high repeat-count was specified, the user may have time to release one or more
-			// of the modifier keys that were used to trigger a hotkey.  That physical release
-			// will cause a key-up event which will cause the state of the modifiers, as seen
-			// by the system, to change.  Example: If user releases control-key during the operation,
-			// some of the D's won't be control-D's:
-			// ^c::Send,^{d 15}
-			// Also: Seems best to do SetModifierLRState() even if Keydelay < 0:
-			// Update: If this key is itself a modifier, don't change the state of the other
-			// modifier keys just for it, since most of the time that is unnecessary and in
-			// some cases, the extra generated keystrokes would cause complications/side-effects.
-			if (!aKeyAsModifiersLR)
-			{
-				// Pass "true" so that WIN and ALT are disguised if they have to be released due to
-				// a hotkey such as !a::Send test
-				// See keyboard.h for explantion of KEY_IGNORE:
-				// See v1.0.40 above for why passing "true" is okay even if our caller is in blind mode:
-				if (SetModifierLRState(modifiersLR_specified, GetModifierLRState(), aTargetWindow, true, KEY_IGNORE))
-					// Modifiers were changed by the above.
-					DoKeyDelay(g.PressDuration); // See comments in SendKeys() about why this is done.
-			}
-			KeyEvent(aEventType, aVK, aSC, aTargetWindow, true);
+			// DISGUISE UP: Pass "true" to disguise UP-events on WIN and ALT due to hotkeys such as:
+			// !a::Send test
+			// !a::Send {LButton}
+			// v1.0.40: It seems okay to tell SetModifierLRState to disguise Win/Alt regardless of
+			// whether our caller is in blind mode.  This is because our caller already put any extra
+			// blind-mode modifiers into modifiersLR_specified, which prevents any actual need to
+			// disguise anything (only the release of Win/Alt is ever disguised).
+			// DISGUISE DOWN: Pass "false" to avoid disguising DOWN-events on Win and Alt because Win/Alt
+			// will be immediately followed by some key for them to "modify".  The exceptions to this are
+			// when aVK is a mouse button (e.g. sending !{LButton} or #{LButton}).  But both of those are
+			// so rare that the flexibility of doing exactly what the script specifies seems better than
+			// a possibly unwanted disguising.  Also note that hotkeys such as #LButton automatically use
+			// both hooks so that the Start Menu doesn't appear when the Win key is released, so we're
+			// not responsible for that type of disguising here.
+			SetModifierLRState(modifiersLR_specified, GetModifierLRState(), aTargetWindow
+				, false, true, KEY_IGNORE); // See keyboard.h for explantion of KEY_IGNORE.
+			// SetModifierLRState() also does DoKeyDelay(g.PressDuration).
 		}
-	}
 
-	// The final iteration by the above loop does its key delay prior to us changing the
-	// modifiers below.  This is a good thing because otherwise the modifiers would sometimes
-	// be released so soon after the keys they modify that the modifiers are not in effect.
+		// v1.0.42.04: Mouse clicks are now handled here in the same loop as keystrokes so that the modifiers
+		// will be readjusted (above) if the user presses/releases modifier keys during the mouse clicks.
+		// Sending mouse clicks via ControlSend is not supported, so in that case fall back to the
+		// old method of sending the VK directly (which probably has no effect 99% of the time):
+		if (vk_is_mouse && !aTargetWindow)
+			Line::MouseClick(aVK, COORD_UNSPECIFIED, COORD_UNSPECIFIED, 1, g.DefaultMouseSpeed, aEventType);
+		else
+			KeyEvent(aEventType, aVK, aSC, aTargetWindow, true);
+	} // for() [aRepeatCount]
+
+	// The final iteration by the above loop does a key or mouse delay (KeyEvent and MouseClick do it internally)
+	// prior to us changing the modifiers below.  This is a good thing because otherwise the modifiers would
+	// sometimes be released so soon after the keys they modify that the modifiers are not in effect.
 	// This can be seen sometimes when/ ctrl-shift-tabbing back through a multi-tabbed dialog:
-	// The last ^+{tab} might otherwise not take effect because the CTRL key would be released
-	// too quickly.
+	// The last ^+{tab} might otherwise not take effect because the CTRL key would be released too quickly.
 
 	// Release any modifiers that were pressed down just for the sake of the above
 	// event (i.e. leave any persistent modifiers pressed down).  The caller should
@@ -605,7 +653,9 @@ int SendKey(vk_type aVK, sc_type aSC, modLR_type aModifiersLR, modLR_type aModif
 	// in aModifiersLRPersistent.  Also, call GetModifierLRState() again explicitly
 	// rather than trying to use a saved value from above, in case the above itself
 	// changed the value of the modifiers (i.e. aVk/aSC is a modifier).  Admittedly,
-	// that would be pretty strange but it seems the most correct thing to do.
+	// that would be pretty strange but it seems the most correct thing to do (another
+	// reason is that the user may have pressed or released modifier keys during the
+	// final mouse/key delay that was done above).
 	if (!aKeyAsModifiersLR) // See prior use of this var for explanation.
 	{
 		// It seems best not to use KEY_IGNORE_ALL_EXCEPT_MODIFIER in this case, though there's
@@ -626,39 +676,51 @@ int SendKey(vk_type aVK, sc_type aSC, modLR_type aModifiersLR, modLR_type aModif
 		//    during the course of a SendKeys() operation.  Since the persistent modifiers were
 		//    (by definition) already in effect prior to the Send, putting them back down for the
 		//    purpose of firing hook hotkeys does not seem unreasonable, and may in fact add value.
-		// Also, the below is called with "false" to avoid generating unnecessary disguise-keystrokes.
-		// They are not needed because if our keystrokes were modified by either WIN or ALT, the
-		// release of the WIN or ALT key will already be disguised due to its having modified
-		// something while it was down.
-		if (SetModifierLRState(aModifiersLRPersistent, GetModifierLRState(), aTargetWindow, false, KEY_IGNORE_ALL_EXCEPT_MODIFIER))
-			// Modifiers were changed by the above.
-			DoKeyDelay(g.PressDuration); // See comments in SendKeys() about why this is done.
+		// DISGUISE DOWN: When SetModifierLRState() is called below, it should only release keys, not press
+		// any down (except if the user's physical keystrokes interferred).  Therefore, passing true or false
+		// for the disguise-down-events paramater doesn't matter much (but pass "true" in case the user's
+		// keystrokes did interfere in a way that requires a Alt or Win to be pressed back down, because
+		// disguising it seems best).
+		// DISGUISE UP: When SetModifierLRState() is called below, it is passed "false" for disguise-up
+		// to avoid generating unnecessary disguise-keystrokes.  They are not needed because if our keystrokes
+		// were modified by either WIN or ALT, the release of the WIN or ALT key will already be disguised due to
+		// its having modified something while it was down.  The exceptions to this are when aVK is a mouse button
+		// (e.g. sending !{LButton} or #{LButton}).  But both of those are so rare that the flexibility of doing
+		// exactly what the script specifies seems better than a possibly unwanted disguising.
+		// UPDATE for v1.0.42.04: Only release Win and Alt (if appropriate), not Ctrl and Shift, since we know
+		// Win/Alt don't have to be disguised but our caller would have trouble tracking that info or making that
+		// determination.  This avoids extra keystrokes, while still procrastinating the release of Ctrl/Shift so
+		// that those can be left down if the caller's next keystroke happens to need them.
+		modLR_type state_now = GetModifierLRState();
+		modLR_type win_alt_to_be_released = ((state_now ^ aModifiersLRPersistent) & state_now) // The modifiers to be released...
+			& (MOD_LWIN|MOD_RWIN|MOD_LALT|MOD_RALT); // ... but restrict them to only Win/Alt.
+		if (win_alt_to_be_released)
+			SetModifierLRState(state_now & ~win_alt_to_be_released
+				, state_now, aTargetWindow, true, false); // It also does DoKeyDelay(g.PressDuration).
 	}
-
-	return aRepeatCount;
 }
 
 
 
-int SendKeySpecial(char aChar, modLR_type aModifiersLRPersistent, int aRepeatCount)
+void SendKeySpecial(char aChar, int aRepeatCount)
 // Caller must be aware that keystrokes are sent directly (i.e. never to a target window via ControlSend mode).
 // It must also be aware that the event type KEYDOWNANDUP is always what's used since there's no way
 // to support anything else.  Furthermore, there's no way to support "modifiersLR_for_next_key" such as ^€
 // (assuming € is a character for which SendKeySpecial() is required in the current layout).
-// Returns the number of keys actually sent for caller convenience.
 // This function uses some of the same code as SendKey() above, so maintain them together.
 {
+	// Caller must verify that aRepeatCount > 1.
 	// Avoid changing modifier states and other things if there is nothing to be sent.
 	// Otherwise, menu bar might activated due to ALT keystrokes that don't modify any key,
 	// the Start Menu might appear due to WIN keystrokes that don't modify anything, etc:
-	if (aRepeatCount < 1)
-		return aRepeatCount;
+	//if (aRepeatCount < 1)
+	//	return;
 
 	// v1.0.40: This function was heavily simplified because the old method of simulating
 	// characters via dead keys apparently never executed under any keyboard layout.  It never
 	// got past the following on the layouts I tested (Russian, German, Danish, Spanish):
 	//		if (!send1 && !send2) // Can't simulate aChar.
-	//			return 0;
+	//			return;
 	// This might be partially explained by the fact that the following old code always exceeded
 	// the bounds of the array (because aChar was always between 0 and 127), so it was never valid
 	// in the first place:
@@ -685,7 +747,7 @@ int SendKeySpecial(char aChar, modLR_type aModifiersLRPersistent, int aRepeatCou
 	// characters (tested in English and Russian so far), probably because VkKeyScan() finds a way to
 	// manifest them via Control+VK combinations:
 	//if (aChar > -1 && aChar < 32)
-	//	return 0;
+	//	return;
 	if (aChar < 0)    // Try using ANSI.
 		*cp++ = '0';  // ANSI mode is achieved via leading zero in the Alt+Numpad keystrokes.
 	//else use Alt+Numpad without the leading zero, which allows the characters a-z, A-Z, and quite
@@ -700,25 +762,62 @@ int SendKeySpecial(char aChar, modLR_type aModifiersLRPersistent, int aRepeatCou
 		SendASC(asc_string);
 		DoKeyDelay();
 	}
-
-	// See notes in SendKey():
-	if (SetModifierLRState(aModifiersLRPersistent, GetModifierLRState(), NULL, false))
-		DoKeyDelay(g.PressDuration); // See comments in SendKeys() about why this is done.
-	return aRepeatCount;
+	// It is not necessary to do SetModifierLRState() to put a caller-specified set of persistent modifier
+	// keys back into effect because:
+	// 1) Our call to SendASC above (if any) at most would have released some of the modifiers (though never
+	//    WIN because it isn't necessary); but never pusheed any new modifiers down (it even releases ALT
+	//    prior to returning).
+	// 2) Our callers, if they need to push ALT back down because we didn't do it, will either disguise it
+	//    or avoid doing so because they're about to send a keystroke (just about anything) that ALT will
+	//    modify and thus not need to be disguised.
 }
 
 
 
-int SendASC(char *aAscii)
+void SendASC(char *aAscii)
 // Caller must be aware that keystrokes are sent directly (i.e. never to a target window via ControlSend mode).
 // aAscii is a string to support explicit leading zeros because sending 216, for example, is not the same as
-// sending 0216.
-// Returns the number of keys sent (doesn't need to be exact).
+// sending 0216.  The caller is also responsible for restoring any desired modifier keys to the down position
+// (this function needs to release some of them if they're down).
 {
-	int value = ATOI(aAscii);
+	// UPDATE: In v1.0.42.04, the left Alt key is always used below because:
+	// 1) It might be required on Win95/NT (though testing shows that RALT works okay on Windows 98se).
+	// 2) It improves maintainability because if the keyboard layout has AltGr, and the Control portion
+	//    of AltGr is released without releasing the RAlt portion, anything that expects LControl to
+	//    be down whenever RControl is down would be broken.
+	// The following test demonstrates that on previous versions under German layout, the right-Alt key
+	// portion of AltGr could be used to manifest Alt+Numpad combinations:
+	//   Send {RAlt down}{Asc 67}{RAlt up}  ; Should create a C character even when both the active window an AHK are set to German layout.
+	//   KeyHistory  ; Shows that the right-Alt key was successfully used rather than the left.
+	// Changing the modifier state via SetModifierLRState() (rather than some more error-prone multi-step method)
+	// also ensures that the ALT key is pressed down only after releasing any shift key that needed it above.
+	// Otherwise, the OS's switch-keyboard-layout hotkey would be triggered accidentally; e.g. the following
+	// in English layout: Send ~~âÂ{^}.
+	//
+	// Make sure modifier state is correct: ALT pressed down and other modifiers UP
+	// because CTRL and SHIFT seem to interfere with this technique if they are down,
+	// at least under WinXP (though the Windows key doesn't seem to be a problem).
+	// Specify KEY_IGNORE so that this action does not affect the modifiers that the
+	// hook uses to determine which hotkey should be triggered for a suffix key that
+	// has more than one set of triggering modifiers (for when the user is holding down
+	// that suffix to auto-repeat it -- see keyboard.h for details).
+	modLR_type modifiersLR_now = GetModifierLRState();
+	SetModifierLRState((modifiersLR_now | MOD_LALT) & ~(MOD_RALT | MOD_LCONTROL | MOD_RCONTROL | MOD_LSHIFT | MOD_RSHIFT)
+		, modifiersLR_now, NULL, false // Pass false because there's no need to disguise the down-event of LALT.
+		, true, KEY_IGNORE); // Pass true so that any release of RALT is disguised (Win is never released here).
+	// Note: It seems best never to press back down any key released above because the
+	// act of doing so may do more harm than good (i.e. the keystrokes may caused
+	// unexpected side-effects.
+
+	// Known limitation (but obscure): There appears to be some OS limitation that prevents the following
+	// AltGr hotkey from working more than once in a row:
+	// <^>!i::Send {ASC 97}
+	// Key history indicates it's doing what it should, but it doesn't actually work.  You have to press the
+	// left-Alt key (not RAlt) once to get the hotkey working again.
 
 	// This is not correct because it is possible to generate unicode characters by typing
 	// Alt+256 and beyond:
+	// int value = ATOI(aAscii);
 	// if (value < 0 || value > 255) return 0; // Sanity check.
 
 	// Known issue: If the hotkey that triggers this Send command is CONTROL-ALT
@@ -726,56 +825,24 @@ int SendASC(char *aAscii)
 	// might not work reliably due to strangeness with that OS feature, at least on
 	// WinXP.  I already tried adding delays between the keystrokes and it didn't help.
 
-	// Make sure modifier state is correct: ALT pressed down and other modifiers UP
-	// because CTRL and SHIFT seem to interfere with this technique if they are down,
-	// at least under WinXP (though the Windows key doesn't seem to be a problem):
-	modLR_type modifiersLR_to_release = GetModifierLRState()
-		& (MOD_LCONTROL | MOD_RCONTROL | MOD_LSHIFT | MOD_RSHIFT);
-	if (modifiersLR_to_release)
-	{
-		// Note: It seems best never to put them back down, because the act of doing so
-		// may do more harm than good (i.e. the keystrokes may caused unexpected
-		// side-effects.  Specify KEY_IGNORE so that this action does not affect the
-		// modifiers that the hook uses to determine which hotkey should be triggered
-		// for a suffix key that has more than one set of triggering modifiers
-		// (for when the user is holding down that suffix to auto-repeat it --
-		// see keyboard.h for details):
-		SetModifierLRStateSpecific(modifiersLR_to_release, GetModifierLRState(), KEYUP, NULL, KEY_IGNORE);
-		DoKeyDelay(g.PressDuration); // See comments in SendKeys() about why this is done.
-	}
-
-	int keys_sent = 0;  // Track this value and return it to the caller.
-
-	modLR_type which_alt_was_already_down;
-	if (!(which_alt_was_already_down = (GetModifierLRState() & (MOD_LALT|MOD_RALT)))) // Neither ALT key is down.
-	{
-		KeyEvent(KEYDOWN, VK_MENU); // Send the neutral ALT key to support Win9x/NT4.
-		++keys_sent;
-	}
-
 	// Caller relies upon us to stop upon reaching the first non-digit character:
 	for (char *cp = aAscii; *cp >= '0' && *cp <= '9'; ++cp)
-	{
 		// A comment from AutoIt3: ASCII 0 is 48, NUMPAD0 is 96, add on 48 to the ASCII.
 		// Also, don't do WinDelay after each keypress in this case because it would make
 		// such keys take up to 3 or 4 times as long to send (AutoIt3 avoids doing the
 		// delay also).  Note that strings longer than 4 digits are allowed because
 		// some or all OSes support Unicode characters 0 through 65535.
 		KeyEvent(KEYDOWNANDUP, *cp + 48);
-		++keys_sent;
-	}
 
-	// Must release the key regardless of whether it was already down, so that the
-	// sequence will take effect immediately rather than waiting for the user to
-	// release the ALT key (if it's physically down).  It's the caller's responsibility
-	// to put it back down if it needs to be.
-	// Fix for v1.0.36.06: Release the right-Alt key if that was the one already down prior
-	// to the operation. Logic in both GetModifierLRState() above and KeyEvent() below ensures
-	// that VK_RMENU either never comes about for Win9x/NT4 or that even if it does, KeyEvent()
-	// translates it to a more appropriate event for those OSes.  This change fixed a hotkey
-	// such as the following if it was fired by holding down AltGr: <^>!i:: Send {ASC 00256}
-	KeyEvent(KEYUP, which_alt_was_already_down == MOD_RALT ? VK_RMENU : VK_MENU);
-	return ++keys_sent;
+	// Must release the key regardless of whether it was already down, so that the sequence will take effect
+	// immediately.  Otherwise, our caller might not release the Alt key (since it might need to stay down for
+	// other purposes), in which case Alt+Numpad character would never appear and the caller's subsequent
+	// keystrokes might get absorbed by the OS's special state of "waiting for Alt+Numpad sequence to complete".
+	// Another reason is that the user may be physically holding down Alt, in which case the caller might never
+	// release it.  In that case, we want the Alt+Numpad character to appear immediately rather than waiting for
+	// the user to release Alt (in the meantime, the caller will likely press Alt back down to match the physical
+	// state).
+	KeyEvent(KEYUP, VK_MENU);
 }
 
 
@@ -790,7 +857,7 @@ void KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTargetWi
 // virtual key, which is fine since it's the scan code that matters to apps that can
 // differentiate between keys with the same vk.
 //
-// Thread-safe: This function is not fully thread-safe in the sense that keystrokes can get interleaved,
+// Thread-safe: This function is not fully thread-safe because keystrokes can get interleaved,
 // but that's always a risk with anything short of SendInput (and SendInput would be a challenge to
 // implement due to the interaction between sending and detecting modifiers and keystrokes).  In fact,
 // when the hook ISN'T installed, keystrokes can occur in another thread, causing the key state to
@@ -810,6 +877,8 @@ void KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTargetWi
 {
 	if (!aVK && !aSC)
 		return;
+	if (!aExtraInfo) // Shouldn't be called this way because 0 is considered false in some places below (search on " = aExtraInfo" to find them).
+		aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER; // Seems slightly better to use a standard default rather than something arbitrary like 1.
 
 	// Even if the sc_to_vk() mapping results in a zero-value vk, don't return.
 	// I think it may be valid to send keybd_events	that have a zero vk.
@@ -976,12 +1045,12 @@ void KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTargetWi
 			// events from the user while it's processing our keybd_event() here.  This is because
 			// any physical keystrokes that happen to occur at the exact moment of our keybd_event()
 			// will stay queued until the main event loop routes them to the hook via GetMessage().
-			g_HookReceiptOfLControlMeansAltGr = true;
+			g_HookReceiptOfLControlMeansAltGr = aExtraInfo;
 		}
 
 		if (aEventType != KEYUP)  // i.e. always do it for KEYDOWNANDUP
 		{
-			// v1.0.35.07 was when g_IgnoreNextLControlDown/Up were originally added.
+			// In v1.0.35.07, g_IgnoreNextLControlDown/Up was added.
 			// The following global is used to flag as our own the keyboard driver's LControl-down keystroke
 			// that is triggered by RAlt-down (AltGr).  This prevents it from triggering hotkeys such as
 			// "*Control::".  It probably fixes other obscure side-effects and bugs also, since the
@@ -992,7 +1061,7 @@ void KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTargetWi
 			// retroactively undo the effects.  But that is impossible because the previous keystroke might
 			// already have wrongly fired a hotkey.
 			if (aVK == VK_RMENU && g_LayoutHasAltGr) // VK_RMENU vs. VK_MENU should be safe since this logic is only needed for the hook, which is never in effect on Win9x.
-				g_IgnoreNextLControlDown = true; // Must be set prior to keybd_event() to be effective.
+				g_IgnoreNextLControlDown = aExtraInfo; // Must be set prior to keybd_event() to be effective.
 			keybd_event(aVK
 				, LOBYTE(aSC)  // naked scan code (the 0xE0 prefix, if any, is omitted)
 				, (HIBYTE(aSC) ? KEYEVENTF_EXTENDEDKEY : 0)
@@ -1003,12 +1072,12 @@ void KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTargetWi
 			// 2) For some reason this AltGr keystroke done above did not cause LControl to go down (perhaps
 			//    because the current keyboard layout doesn't have AltGr as we thought), which would be a bug
 			//    because some other Ctrl keystroke would then be wrongly ignored.
-			g_IgnoreNextLControlDown = false; // Unconditional reset.
+			g_IgnoreNextLControlDown = 0; // Unconditional reset.
 
 			if (do_detect_altgr) // i.e. g_LayoutHasAltGr is currently false, so make it true if called for.
 			{
 				do_detect_altgr = false; // Indicate that the second half has been done (for later below).
-				g_HookReceiptOfLControlMeansAltGr = false; // Must reset promptly in case key-delay below routes physical keystrokes to hook.
+				g_HookReceiptOfLControlMeansAltGr = 0; // Must reset promptly in case key-delay below routes physical keystrokes to hook.
 				// Do it the following way rather than setting g_LayoutHasAltGr directly to the result of
 				// the boolean expression because keybd_event() above may have changed the value of
 				// g_LayoutHasAltGr to true, in which case that should be given precedence over the below.
@@ -1031,13 +1100,13 @@ void KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTargetWi
 		{
 			// See comments above for details about g_LayoutHasAltGr and g_IgnoreNextLControlUp:
 			if (aVK == VK_RMENU && g_LayoutHasAltGr) // VK_RMENU vs. VK_MENU should be safe since this logic is only needed for the hook, which is never in effect on Win9x.
-				g_IgnoreNextLControlUp = true; // Must be set prior to keybd_event() to be effective.
+				g_IgnoreNextLControlUp = aExtraInfo; // Must be set prior to keybd_event() to be effective.
 			keybd_event(aVK, LOBYTE(aSC), (HIBYTE(aSC) ? KEYEVENTF_EXTENDEDKEY : 0)
 				| KEYEVENTF_KEYUP, aExtraInfo);
-			g_IgnoreNextLControlUp = false; // Unconditional reset.
+			g_IgnoreNextLControlUp = 0; // Unconditional reset.
 			if (do_detect_altgr) // This should be true only when aEventType==KEYUP. See similar section above for comments.
 			{
-				g_HookReceiptOfLControlMeansAltGr = false;
+				g_HookReceiptOfLControlMeansAltGr = 0;
 				// Do it the following way rather than setting g_LayoutHasAltGr directly to the result of
 				// the boolean expression because keybd_event() above may have changed the value of
 				// g_LayoutHasAltGr to true, in which case that should be given precedence over the below.
@@ -1173,16 +1242,22 @@ void SetKeyState (vk_type vk, int aKeyUp)
 
 
 
-modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLRnow, HWND aTargetWindow
-	, bool aDisguiseWinAlt, DWORD aExtraInfo)
+void SetModifierLRState(modLR_type aModifiersLRnew, modLR_type aModifiersLRnow, HWND aTargetWindow
+	, bool aDisguiseDownWinAlt, bool aDisguiseUpWinAlt, DWORD aExtraInfo)
 // Puts modifiers into the specified state, releasing or pressing down keys as needed.
-// Returns the set of modifiers that *changed* (i.e. went from down to up or vice versa).
+// The modifiers are released and pressed down in a very delicate order due to their interactions with
+// each other and their ability to show the Start Menu, activate the menu bar, or trigger the OS's language
+// bar hotkeys.  Side-effects like these would occur if a more simple approach were used, such as releasing
+// all modifiers that are going up prior to pushing down the ones that are going down.
+// When g_LayoutHasAltGr==true, it is tempting to try to simplify things by removing MOD_LCONTROL from
+// aModifiersLRnew whenever aModifiersLRnew contains MOD_RALT.  However, this a careful review how that
+// would impact various places below where g_LayoutHasAltGr is checked indicates that it wouldn't help.
 // Note that by design and as documented for ControlSend, aTargetWindow is not used as the target for the
 // various calls to KeyEvent() here.  It is only used as a workaround for the GUI window issue described
 // at the bottom.
 {
-	if (aModifiersLRnow == modifiersLRnew) // They're already in the right state, so avoid doing all the checks.
-		return 0;
+	if (aModifiersLRnow == aModifiersLRnew) // They're already in the right state, so avoid doing all the checks.
+		return; // Especially avoids the aTargetWindow check at the bottom.
 
 	// Notes about modifier key behavior on Windows XP (these probably apply to NT/2k also, and has also
 	// been tested to be true on Win98): The WIN and ALT keys are the problem keys, because if either is
@@ -1191,35 +1266,98 @@ modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLR
 	// For example, a hook hotkey such as "$#c::Send text" (text must start with a lowercase letter
 	// to reproduce the issue, because otherwise WIN would be auto-disguised as a side effect of the SHIFT
 	// keystroke) would cause the Start Menu to appear if the disguise method below weren't used.
-	// See comments in SetModifierLRStateSpecific() for more details about this.
+	//
+	// Here are more comments formerly in SetModifierLRStateSpecific(), which has since been eliminated
+	// because this function is sufficient:
+	// To prevent it from activating the menu bar, the release of the ALT key should be disguised
+	// unless a CTRL key is currently down.  This is because CTRL always seems to avoid the
+	// activation of the menu bar (unlike SHIFT, which sometimes allows the menu to be activated,
+	// though this is hard to reproduce on XP).  Another reason not to use SHIFT is that the OS
+	// uses LAlt+Shift as a hotkey to switch languages.  Such a hotkey would be triggered if SHIFT
+	// were pressed down to disguise the release of LALT.
+	//
+	// Alt-down events are also disguised whenever they won't be accompanied by a Ctrl-down.
+	// This is necessary whenever our caller does not plan to disguise the key itself.  For example,
+	// if "!a::Send Test" is a registered hotkey, two things must be done to avoid complications:
+	// 1) Prior to sending the word test, ALT must be released in a way that does not activate the
+	//    menu bar.  This is done by sandwiching it between a CTRL-down and a CTRL-up.
+	// 2) After the send is complete, SendKeys() will restore the ALT key to the down position if
+	//    the user is still physically holding ALT down (this is done to make the logical state of
+	//    the key match its physical state, which allows the same hotkey to be fired twice in a row
+	//    without the user having to release and press down the ALT key physically).
+	// The #2 case above is the one handled below by ctrl_wont_be_down.  It is especially necessary
+	// when the user releases the ALT key prior to releasing the hotkey suffix, which would otherwise
+	// cause the menu bar (if any) of the active window to be activated.
+	//
+	// Some of the same comments above for ALT key apply to the WIN key.  More about this issue:
+	// Although the disguise of the down-event is usually not needed, it is needed in the rare case
+	// where the user releases the WIN or ALT key prior to releasing the hotkey's suffix.
+	// Although the hook could be told to disguise the physical release of ALT or WIN in these
+	// cases, it's best not to rely on the hook since it is not always installed.
+	//
+	// Registered WIN and ALT hotkeys that don't use the Send command work okay except ALT hotkeys,
+	// which if the user releases ALT prior the hotkey's suffix key, cause the menu bar to be activated.
+	// Since it is unusual for users to do this and because it is standard behavior for  ALT hotkeys
+	// registered in the OS, fixing it via the hook seems like a low priority, and perhaps isn't worth
+	// the added code complexity/size.  But if there is ever a need to do so, the following note applies:
+	// If the hook is installed, could tell it to disguise any need-to-be-disguised Alt-up that occurs
+	// after receipt of the registered ALT hotkey.  But what if that hotkey uses the send command:
+	// there might be intereference?  Doesn't seem so, because the hook only disguises non-ignored events.
 
 	// Set up some conditions so that the keystrokes that disguise the release of Win or Alt
 	// are only sent when necessary (which helps avoid complications caused by keystroke interaction,
 	// while improving performance):
+	modLR_type aModifiersLRunion = aModifiersLRnow | aModifiersLRnew; // The set of keys that were or will be down.
 	bool ctrl_not_down = !(aModifiersLRnow & (MOD_LCONTROL | MOD_RCONTROL)); // Neither CTRL key is down now.
-	bool ctrl_will_not_be_down = !(modifiersLRnew & (MOD_LCONTROL | MOD_RCONTROL)) // Nor will it be.
-		&& !(g_LayoutHasAltGr && (modifiersLRnew & MOD_RALT)); // Nor will it be pushed down indirectly due to AltGr.
+	bool ctrl_will_not_be_down = !(aModifiersLRnew & (MOD_LCONTROL | MOD_RCONTROL)) // Nor will it be.
+		&& !(g_LayoutHasAltGr && (aModifiersLRnew & MOD_RALT)); // Nor will it be pushed down indirectly due to AltGr.
 
 	bool ctrl_nor_shift_nor_alt_down = ctrl_not_down                             // Neither CTRL key is down now.
 		&& !(aModifiersLRnow & (MOD_LSHIFT | MOD_RSHIFT | MOD_LALT | MOD_RALT)); // Nor is any SHIFT/ALT key.
 
-	bool ctrl_or_shift_or_alt_will_be_down = !ctrl_will_not_be_down            // CTRL will be down.
-		|| (modifiersLRnew & (MOD_LSHIFT | MOD_RSHIFT | MOD_LALT | MOD_RALT)); // or SHIFT or ALT will be.
+	bool ctrl_or_shift_or_alt_will_be_down = !ctrl_will_not_be_down             // CTRL will be down.
+		|| (aModifiersLRnew & (MOD_LSHIFT | MOD_RSHIFT | MOD_LALT | MOD_RALT)); // or SHIFT or ALT will be.
 
 	// If the required disguise keys aren't down now but will be, defer the release of Win and/or Alt
 	// until after the disguise keys are in place (since in that case, the caller wanted them down
 	// as part of the normal operation here):
 	bool defer_win_release = ctrl_nor_shift_nor_alt_down && ctrl_or_shift_or_alt_will_be_down;
-	bool defer_alt_release = ctrl_not_down && !ctrl_will_not_be_down;
+	bool defer_alt_release = ctrl_not_down && !ctrl_will_not_be_down;  // i.e. Ctrl not down but it will be.
+	bool release_shift_before_alt_ctrl = defer_alt_release // i.e. Control is moving into the down position or...
+		|| !(aModifiersLRnow & (MOD_LALT | MOD_RALT)) && (aModifiersLRnew & (MOD_LALT | MOD_RALT)); // ...Alt is moving into the down position.
+	// Concerning "release_shift_before_alt_ctrl" above: Its purpose is to prevent unwanted firing of the OS's
+	// language bar hotkey.  See the bottom of this function for more explanation.
 
-	bool release_lwin = (aModifiersLRnow & MOD_LWIN) && !(modifiersLRnew & MOD_LWIN);
-	bool release_rwin = (aModifiersLRnow & MOD_RWIN) && !(modifiersLRnew & MOD_RWIN);
-	bool release_lalt = (aModifiersLRnow & MOD_LALT) && !(modifiersLRnew & MOD_LALT);
-	bool release_ralt = (aModifiersLRnow & MOD_RALT) && !(modifiersLRnew & MOD_RALT);
+	// ALT:
+	bool disguise_alt_down = aDisguiseDownWinAlt && ctrl_not_down && ctrl_will_not_be_down; // Since this applies to both Left and Right Alt, don't take g_LayoutHasAltGr into account here. That is done later below.
 
-	// ** WIN (must be done before ALT in case it is relying on ALT being down to disguise the release WIN).
+	// WIN: The WIN key is successfully disguised under a greater number of conditions than ALT.
+	bool disguise_win_down = aDisguiseDownWinAlt && ctrl_not_down && ctrl_will_not_be_down
+		&& !(aModifiersLRunion & (MOD_LSHIFT | MOD_RSHIFT)) // And neither SHIFT key is down, nor will it be.
+		&& !(aModifiersLRunion & (MOD_LALT | MOD_RALT));    // And neither ALT key is down, nor will it be.
+
+	bool release_lwin = (aModifiersLRnow & MOD_LWIN) && !(aModifiersLRnew & MOD_LWIN);
+	bool release_rwin = (aModifiersLRnow & MOD_RWIN) && !(aModifiersLRnew & MOD_RWIN);
+	bool release_lalt = (aModifiersLRnow & MOD_LALT) && !(aModifiersLRnew & MOD_LALT);
+	bool release_ralt = (aModifiersLRnow & MOD_RALT) && !(aModifiersLRnew & MOD_RALT);
+	bool release_lshift = (aModifiersLRnow & MOD_LSHIFT) && !(aModifiersLRnew & MOD_LSHIFT);
+	bool release_rshift = (aModifiersLRnow & MOD_RSHIFT) && !(aModifiersLRnew & MOD_RSHIFT);
+
+	// Handle ALT and WIN prior to the other modifiers because the "disguise" methods below are
+	// only needed upon release of ALT or WIN.  This is because such releases tend to have a better
+	// chance of being "disguised" if SHIFT or CTRL is down at the time of the release.  Thus, the
+	// release of SHIFT or CTRL (if called for) is deferred until afterward.
+
+	// ** WIN
+	// Must be done before ALT in case it is relying on ALT being down to disguise the release WIN.
 	// If ALT is going to be pushed down further below, defer_win_release should be true, which will make sure
 	// the WIN key isn't released until after the ALT key is pushed down here at the top.
+	// Also, WIN is a little more troublesome than ALT, so it is done first in case the ALT key
+	// is down but will be going up, since the ALT key being down might help the WIN key.
+	// For example, if you hold down CTRL, then hold down LWIN long enough for it to auto-repeat,
+	// then release CTRL before releasing LWIN, the Start Menu would appear, at least on XP.
+	// But it does not appear if CTRL is released after LWIN.
+	// Also note that the ALT key can disguise the WIN key, but not vice versa.
 	if (release_lwin)
 	{
 		if (!defer_win_release)
@@ -1229,7 +1367,7 @@ modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLR
 			// rather than the Shift key.  This is definitely needed for ALT, but is done here for
 			// WIN also in case ALT is down, which might cause the use of SHIFT as the disguise key
 			// to trigger the language switch.
-			if (ctrl_nor_shift_nor_alt_down && aDisguiseWinAlt) // Nor will they be pushed down later below, otherwise defer_win_release would have been true and we couldn't get to this point.
+			if (ctrl_nor_shift_nor_alt_down && aDisguiseUpWinAlt) // Nor will they be pushed down later below, otherwise defer_win_release would have been true and we couldn't get to this point.
 				KeyEvent(KEYDOWNANDUP, VK_CONTROL, 0, NULL, false, aExtraInfo); // Disguise key release to suppress Start Menu.
 				// The above event is safe because if we're here, it means VK_CONTROL will not be
 				// pressed down further below.  In other words, we're not defeating the job
@@ -1238,38 +1376,61 @@ modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLR
 		}
 		// else release it only after the normal operation of the function pushes down the disguise keys.
 	}
-	else if (!(aModifiersLRnow & MOD_LWIN) && (modifiersLRnew & MOD_LWIN)) // Press down is needed.
-		// Note that no disguising of WIN or ALT is done for ALT-down since those events should not
-		// need disguising since a Send command's activity uses them to modify other keys, which
-		// is an automatic disguise.  Even if it didn't modify other keys with them, activation of
-		// the Start Menu or the menu bar might be the intended outcome of the script.
+	else if (!(aModifiersLRnow & MOD_LWIN) && (aModifiersLRnew & MOD_LWIN)) // Press down is needed.
+	{
+		if (disguise_win_down)
+			KeyEvent(KEYDOWN, VK_CONTROL, 0, NULL, false, aExtraInfo); // Ensures that the Start Menu does not appear.
 		KeyEvent(KEYDOWN, VK_LWIN, 0, NULL, false, aExtraInfo);
+		if (disguise_win_down)
+			KeyEvent(KEYUP, VK_CONTROL, 0, NULL, false, aExtraInfo); // Ensures that the Start Menu does not appear.
+	}
 
 	if (release_rwin)
 	{
 		if (!defer_win_release)
 		{
-			if (ctrl_nor_shift_nor_alt_down && aDisguiseWinAlt)
+			if (ctrl_nor_shift_nor_alt_down && MOD_RWIN)
 				KeyEvent(KEYDOWNANDUP, VK_CONTROL, 0, NULL, false, aExtraInfo); // Disguise key release to suppress Start Menu.
 			KeyEvent(KEYUP, VK_RWIN, 0, NULL, false, aExtraInfo);
 		}
 		// else release it only after the normal operation of the function pushes down the disguise keys.
 	}
-	else if (!(aModifiersLRnow & MOD_RWIN) && (modifiersLRnew & MOD_RWIN))
+	else if (!(aModifiersLRnow & MOD_RWIN) && (aModifiersLRnew & MOD_RWIN))
+	{
+		if (disguise_win_down)
+			KeyEvent(KEYDOWN, VK_CONTROL, 0, NULL, false, aExtraInfo); // Ensures that the Start Menu does not appear.
 		KeyEvent(KEYDOWN, VK_RWIN, 0, NULL, false, aExtraInfo);
+		if (disguise_win_down)
+			KeyEvent(KEYUP, VK_CONTROL, 0, NULL, false, aExtraInfo); // Ensures that the Start Menu does not appear.
+	}
+
+	// ** SHIFT (PART 1 OF 2)
+	if (release_shift_before_alt_ctrl)
+	{
+		if (release_lshift)
+			KeyEvent(KEYUP, VK_LSHIFT, 0, NULL, false, aExtraInfo);
+		if (release_rshift)
+			KeyEvent(KEYUP, VK_RSHIFT, 0, NULL, false, aExtraInfo);
+	}
 
 	// ** ALT
 	if (release_lalt)
 	{
 		if (!defer_alt_release)
 		{
-			if (ctrl_not_down && aDisguiseWinAlt)
+			if (ctrl_not_down && aDisguiseUpWinAlt)
 				KeyEvent(KEYDOWNANDUP, VK_CONTROL, 0, NULL, false, aExtraInfo); // Disguise key release to suppress menu activation.
 			KeyEvent(KEYUP, VK_LMENU, 0, NULL, false, aExtraInfo);
 		}
 	}
-	else if (!(aModifiersLRnow & MOD_LALT) && (modifiersLRnew & MOD_LALT))
+	else if (!(aModifiersLRnow & MOD_LALT) && (aModifiersLRnew & MOD_LALT))
+	{
+		if (disguise_alt_down)
+			KeyEvent(KEYDOWN, VK_CONTROL, 0, NULL, false, aExtraInfo); // Ensures that menu bar is not activated.
 		KeyEvent(KEYDOWN, VK_LMENU, 0, NULL, false, aExtraInfo);
+		if (disguise_alt_down)
+			KeyEvent(KEYUP, VK_CONTROL, 0, NULL, false, aExtraInfo);
+	}
 
 	if (release_ralt)
 	{
@@ -1277,29 +1438,41 @@ modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLR
 		{
 			if (g_LayoutHasAltGr)
 			{
-				// Indicate that control is both up and required so that the section after this one won't
+				// Indicate that control is both up and required up so that the section after this one won't
 				// push it down.  This change might not be strictly necessary to fix anything but it does
 				// eliminate redundant keystrokes.  See similar section below for more details.
 				aModifiersLRnow &= ~MOD_LCONTROL; // To reflect what KeyEvent(KEYUP, VK_RMENU) below will do.
-				modifiersLRnew &= ~MOD_LCONTROL;  //
+				aModifiersLRnew &= ~MOD_LCONTROL; //
 			}
 			else // No AltGr, so check if disguise is necessary (AltGr itself never needs disguise).
-				if (ctrl_not_down && aDisguiseWinAlt)
+				if (ctrl_not_down && aDisguiseUpWinAlt)
 					KeyEvent(KEYDOWNANDUP, VK_CONTROL, 0, NULL, false, aExtraInfo); // Disguise key release to suppress menu activation.
 			KeyEvent(KEYUP, VK_RMENU, 0, NULL, false, aExtraInfo);
 		}
 	}
-	else if (!(aModifiersLRnow & MOD_RALT) && (modifiersLRnew & MOD_RALT))
+	else if (!(aModifiersLRnow & MOD_RALT) && (aModifiersLRnew & MOD_RALT))
 	{
-		KeyEvent(KEYDOWN, VK_RMENU, 0, NULL, false, aExtraInfo);
-		if (g_LayoutHasAltGr) // Note that KeyEvent() might have just altered the value of g_LayoutHasAltGr.
+		// For the below: There should never be a need to disguise AltGr.  Doing so would likely cause unwanted
+		// side-effects. Also, disguise_alt_key does not take g_LayoutHasAltGr into account because
+		// disguise_alt_key also applies to the left alt key.
+		if (disguise_alt_down && !g_LayoutHasAltGr)
 		{
-			// Indicate that control is both down and required so that the section after this one won't
-			// release it.  Without this fix, a hotkey that sends an AltGr char such as "^ä:: SendRaw, {"
-			// would fail to work under German layout because left-alt would be released after right-alt
-			// goes down.
-			aModifiersLRnow |= MOD_LCONTROL; // To reflect what KeyEvent() did above.
-			modifiersLRnew |= MOD_LCONTROL;  // All callers want LControl to be down if they wanted AltGr to be down.
+			KeyEvent(KEYDOWN, VK_CONTROL, 0, NULL, false, aExtraInfo); // Ensures that menu bar is not activated.
+			KeyEvent(KEYDOWN, VK_RMENU, 0, NULL, false, aExtraInfo);
+			KeyEvent(KEYUP, VK_CONTROL, 0, NULL, false, aExtraInfo);
+		}
+		else // No disguise needed.
+		{
+			KeyEvent(KEYDOWN, VK_RMENU, 0, NULL, false, aExtraInfo);
+			if (g_LayoutHasAltGr) // Note that KeyEvent() might have just changed the value of g_LayoutHasAltGr.
+			{
+				// Indicate that control is both down and required down so that the section after this one won't
+				// release it.  Without this fix, a hotkey that sends an AltGr char such as "^ä:: SendRaw, {"
+				// would fail to work under German layout because left-alt would be released after right-alt
+				// goes down.
+				aModifiersLRnow |= MOD_LCONTROL; // To reflect what KeyEvent() did above.
+				aModifiersLRnew |= MOD_LCONTROL; // All callers want LControl to be down if they wanted AltGr to be down.
+			}
 		}
 	}
 
@@ -1307,30 +1480,35 @@ modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLR
 	// being down before for certain early operations.
 
 	// ** CONTROL
-	if (   (aModifiersLRnow & MOD_LCONTROL) && !(modifiersLRnew & MOD_LCONTROL)
+	if (   (aModifiersLRnow & MOD_LCONTROL) && !(aModifiersLRnew & MOD_LCONTROL)
 		// v1.0.41.01: The following line was added to fix the fact that callers do not want LControl
 		// released when the new modifier state includes AltGr.  This solves a hotkey such as the following and
 		// probably several other circumstances:
 		// <^>!a::send \  ; Backslash is solved by this fix; it's manifest via AltGr+Dash on German layout.
-		&& !((modifiersLRnew & MOD_RALT) && g_LayoutHasAltGr)   )
+		&& !((aModifiersLRnew & MOD_RALT) && g_LayoutHasAltGr)   )
 		KeyEvent(KEYUP, VK_LCONTROL, 0, NULL, false, aExtraInfo);
-	else if (!(aModifiersLRnow & MOD_LCONTROL) && (modifiersLRnew & MOD_LCONTROL))
+	else if (!(aModifiersLRnow & MOD_LCONTROL) && (aModifiersLRnew & MOD_LCONTROL))
 		KeyEvent(KEYDOWN, VK_LCONTROL, 0, NULL, false, aExtraInfo);
-	if ((aModifiersLRnow & MOD_RCONTROL) && !(modifiersLRnew & MOD_RCONTROL))
+	if ((aModifiersLRnow & MOD_RCONTROL) && !(aModifiersLRnew & MOD_RCONTROL))
 		KeyEvent(KEYUP, VK_RCONTROL, 0, NULL, false, aExtraInfo);
-	else if (!(aModifiersLRnow & MOD_RCONTROL) && (modifiersLRnew & MOD_RCONTROL))
+	else if (!(aModifiersLRnow & MOD_RCONTROL) && (aModifiersLRnew & MOD_RCONTROL))
 		KeyEvent(KEYDOWN, VK_RCONTROL, 0, NULL, false, aExtraInfo);
 	
-	// ** SHIFT
-	if ((aModifiersLRnow & MOD_LSHIFT) && !(modifiersLRnew & MOD_LSHIFT))
+	// ** SHIFT (PART 2 OF 2)
+	// Must follow CTRL and ALT because a release of SHIFT while ALT/CTRL is down-but-soon-to-be-up
+	// would switch languages via the OS hotkey.  It's okay if defer_alt_release==true because in that case,
+	// CTRL just went down above (by definition of defer_alt_release), which will prevent the language hotkey
+	// from firing.
+	if (release_lshift && !release_shift_before_alt_ctrl)
 		KeyEvent(KEYUP, VK_LSHIFT, 0, NULL, false, aExtraInfo);
-	else if (!(aModifiersLRnow & MOD_LSHIFT) && (modifiersLRnew & MOD_LSHIFT))
+	else if (!(aModifiersLRnow & MOD_LSHIFT) && (aModifiersLRnew & MOD_LSHIFT))
 		KeyEvent(KEYDOWN, VK_LSHIFT, 0, NULL, false, aExtraInfo);
-	if ((aModifiersLRnow & MOD_RSHIFT) && !(modifiersLRnew & MOD_RSHIFT))
+	if (release_rshift && !release_shift_before_alt_ctrl)
 		KeyEvent(KEYUP, VK_RSHIFT, 0, NULL, false, aExtraInfo);
-	else if (!(aModifiersLRnow & MOD_RSHIFT) && (modifiersLRnew & MOD_RSHIFT))
+	else if (!(aModifiersLRnow & MOD_RSHIFT) && (aModifiersLRnew & MOD_RSHIFT))
 		KeyEvent(KEYDOWN, VK_RSHIFT, 0, NULL, false, aExtraInfo);
 
+	// ** KEYS DEFERRED FROM EARLIER
 	if (defer_win_release) // Must be done before ALT because it might rely on ALT being down to disguise release of WIN key.
 	{
 		if (release_lwin)
@@ -1372,176 +1550,76 @@ modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLR
 	// supposed to be capitalized.
 	// g_MainThreadID is the only thread of our process that owns any windows.
 
-	// IMPORTANT UPDATE for v1.0.39: Now that the hooks are in a separate thread from the part
-	// of the program that sends keystrokes for the script, you might think synchronization of
-	// keystrokes would become problematic or at least change.  However, this is apparently not
-	// the case.  MSDN doesn't spell this out, but testing shows that what happens with a low-level
-	// hook is that the moment a keystroke comes into a thread (either physical or simulated), the OS
-	// immediately calls something similar to SendMessage() from that thread to notify the hook
-	// thread that a keystroke has arrived.  However, if the hook thread's priority is lower than
-	// some other thread next in line for a timeslice, it might take some time for the hook thread
-	// to get a timeslice (that's why the hook thread is given a high priority).
-	// The SendMessage() call doesn't return until its timeout expires (as set in the registry for
-	// hooks) or the hook thread processes the keystroke (which requires that it call something like
-	// GetMessage/PeekMessage followed by a HookProc "return").  This is good news because it serializes
-	// keyboard and mouse input to make the presence of the hook transparent to other threads (unless
-	// the hook does something to reveal itself, such as suppressing keystrokes). Serialization avoids
-	// any chance of synchronization problems such as a program that changes the state of a key then
-	// immediately checks the state of that same key via GetAsyncKeyState().  Another way to look at
-	// all of this is that in essense, a single-threaded hook program that simulates keystrokes or
-	// mouse clicks should behave the same when the hook is moved into a separate thread because from
-	// the program's point-of-view, keystrokes & mouse clicks result in a calling the hook almost
-	// exactly as if the hook were in the same thread.
-#define SLEEP_IF_CONTROLSEND \
-	if (aTargetWindow)\
-	{\
-		if (g_KeybdHook)\
-			SLEEP_WITHOUT_INTERRUPTION(0)\
-		else if (GetWindowThreadProcessId(aTargetWindow, NULL) == g_MainThreadID)\
-			SLEEP_WITHOUT_INTERRUPTION(-1)\
-	}
-	SLEEP_IF_CONTROLSEND
-
-	return aModifiersLRnow ^ modifiersLRnew; // Calculate the set of modifiers that changed (currently excludes AltGr's change of LControl's state).
-}
-
-
-
-void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLRnow, KeyEventTypes aEventType
-	, HWND aTargetWindow, DWORD aExtraInfo)
-// Press or release only the specific keys whose bits are set to 1 in aModifiersLR.
-// aEventType should be either KEYDOWN or KEYUP (not KEYDOWNANDUP).
-// If aEventType == KEYDOWN, it is assumed that the caller wants any ALT or WIN keystroke
-// disguised (if needed) to prevent the Start Menu from appearing or the menu bar from being
-// activated.  In other words, it is assumed that the caller will not be sending any keystrokes
-// afterward that would avert the need for disguising.
-{
-	if (!aModifiersLR) // Nothing to do (especially avoids the aTargetWindow check at the bottom).
-		return;
-
-	bool ctrl_not_down = !(aModifiersLRnow & (MOD_LCONTROL | MOD_RCONTROL)); // Neither CTRL key is down now.
-	bool ctrl_wont_be_down = aEventType == KEYUP || !((aModifiersLR & (MOD_LCONTROL | MOD_RCONTROL))
-		|| (g_LayoutHasAltGr && (aModifiersLR & MOD_RALT))); // Nor will it be pushed down indirectly due to AltGr.
-	// Control won't be going down if aEventType==KEYUP because nothing is ever pressed down in that mode.
-
-	// To prevent it from activating the menu bar, the release of the ALT key should be disguised
-	// unless a CTRL key is currently down.  This is because CTRL always seems to avoid the
-	// activation of the menu bar (unlike SHIFT, which sometimes allows the menu to be activated,
-	// though this is hard to reproduce on XP).  Another reason not to use SHIFT is that the OS
-	// uses LAlt+Shift as a hotkey to switch languages.  Such a hotkey would be triggered if SHIFT
-	// were pressed down to disguise the release of LALT.
-
-	// Alt-down events are also disguised whenever they won't be accompanied by a Ctrl-down.
-	// This is necessary whenever our caller does not plan to disguise the key itself.  For example,
-	// if "!a::Send Test" is a registered hotkey, two things must be done to avoid complications:
-	// 1) Prior to sending the word test, ALT must be released in a way that does not activate the
-	//    menu bar.  This is done by sandwiching it between a CTRL-down and a CTRL-up.
-	// 2) After the send is complete, SendKeys() will restore the ALT key to the down position if
-	//    the user is still physically holding ALT down (this is done to make the logical state of
-	//    the key match its physical state, which allows the same hotkey to be fired twice in a row
-	//    without the user having to release and press down the ALT key physically).
-	// The #2 case above is the one handled below by ctrl_wont_be_down.  It is especially necessary
-	// when the user releases the ALT key prior to releasing the hotkey suffix, which would otherwise
-	// cause the menu bar (if any) of the active window to be activated.
-	bool disguise_alt_key = ctrl_not_down && ctrl_wont_be_down; // Since this applies to both Left and Right Alt, don't take g_LayoutHasAltGr into account here. That is done later below.
-
-	// Some of the same comments above for ALT key apply to the WIN key.  More about this issue:
-	// Although the disguise of the down-event is usually not needed, it is needed in the rare case
-	// where the user releases the WIN or ALT key prior to releasing the hotkey's suffix.
-	// Although the hook could be told to disguise the physical release of ALT or WIN in these
-	// cases, it's best not to rely on the hook since it is not always installed.
-
-	// Registered WIN and ALT hotkeys that don't use the Send command work okay except ALT hotkeys,
-	// which if the user releases ALT prior the hotkey's suffix key, cause the menu bar to be activated.
-	// Since it is unusual for users to do this and because it is standard behavior for  ALT hotkeys
-	// registered in the OS, fixing it via the hook seems like a low priority, and perhaps isn't worth
-	// the added code complexity/size.  But if there is ever a need to do so, the following note applies:
-	// If the hook is installed, could tell it to disguise any need-to-be-disguised Alt-up that occurs
-	// after receipt of the registered ALT hotkey.  But what if that hotkey uses the send command:
-	// there might be intereference?  Doesn't seem so, because the hook only disguises non-ignored events.
-
-	// The WIN key is successfully disguised under a greater number of conditions than ALT:
-	bool disguise_win_key = ctrl_not_down && ctrl_wont_be_down
-		&& !(aModifiersLRnow & (MOD_LSHIFT | MOD_RSHIFT)) // And neither SHIFT key is down.
-		&& (aEventType == KEYUP || !(aModifiersLR & (MOD_LSHIFT | MOD_RSHIFT))) // Nor will it be.
-		&& !(aModifiersLRnow & (MOD_LALT | MOD_RALT))     // And neither ALT key is down.
-		&& (aEventType == KEYUP || !(aModifiersLR & (MOD_LALT | MOD_RALT))); // Nor will it be.
-
-	// Handle ALT and WIN prior to the other modifiers because the "disguise" methods below are
-	// only needed upon release of ALT or WIN.  This is because such releases tend to have a better
-	// chance of being "disguised" if SHIFT or CTRL is down at the time of the release.  Thus, the
-	// release of SHIFT or CTRL (if called for) is deferred until afterward.
-	// Also, WIN is a little more troublesome than ALT, so it is done first in case the ALT key
-	// is down but will be going up, since the ALT key being down might help the WIN key.
-	// For example, if you hold down CTRL, then hold down LWIN long enough for it to auto-repeat,
-	// then release CTRL before releasing LWIN, the Start Menu would appear, at least on XP.
-	// But it does not appear if CTRL is released after LWIN.
-
-	// WIN must be handled before ALT because if aEventType indicates that all these keys are being released,
-	// we would want to leave ALT down (if it is down and will be going up later) until after LWIN/RWIN
-	// are released so that no extra steps are needed to prevent the Start Menu from appearing.  This is
-	// because the ALT key can disguise the WIN key, but not vice versa.
-	if (aModifiersLR & MOD_LWIN)
+	if (g.PressDuration > -1)
+		// Since modifiers were changed by the above, do a key-delay if the special intra-keystroke
+		// delay is in effect.
+		// Since there normally isn't a delay between a change in modifiers and the first keystroke,
+		// if a PressDuration is in effect, also do it here to improve reliability (I have observed
+		// cases where modifiers need to be left alone for a short time in order for the keystrokes
+		// that follow to be be modified by the intended set of modifiers).
+		DoKeyDelay(g.PressDuration);
+	else
 	{
-		// Fixed for v1.0.25: To avoid triggering the system's LAlt+Shift language hotkey, the
-		// Control key is now used to suppress LWIN/RWIN (preventing the Start Menu from appearing)
-		// rather than the Shift key.  This is definitely needed for ALT, but is done here for
-		// WIN also in case ALT is down, which might cause the use of SHIFT as the disguise key
-		// to trigger the language switch.
-		if (disguise_win_key)
-			KeyEvent(KEYDOWN, VK_CONTROL, 0, NULL, false, aExtraInfo); // Ensures that the Start Menu does not appear.
-		KeyEvent(aEventType, VK_LWIN, 0, NULL, false, aExtraInfo);
-		if (disguise_win_key)
-			KeyEvent(KEYUP, VK_CONTROL, 0, NULL, false, aExtraInfo); // Ensures that the Start Menu does not appear.
-		// The above and the next three sections like it must not be done as a KEYDOWNANDUP like
-		// SetModifierLRState() uses, since our aEventType might be either down or up.  In the case of DOWN,
-		// a the KEYDOWNANDUP for CTRL could come *after* the key is pressed down, probably with the same effect
-		// as the above.  However, the above seems slightly simpler and has been tested.
-	}
-	if (aModifiersLR & MOD_RWIN)
-	{
-		if (disguise_win_key)
-			KeyEvent(KEYDOWN, VK_CONTROL, 0, NULL, false, aExtraInfo); // Ensures that the Start Menu does not appear.
-		KeyEvent(aEventType, VK_RWIN, 0, NULL, false, aExtraInfo);
-		if (disguise_win_key)
-			KeyEvent(KEYUP, VK_CONTROL, 0, NULL, false, aExtraInfo);
-	}
-
-	if (aModifiersLR & MOD_LALT)
-	{
-		if (disguise_alt_key)
-			KeyEvent(KEYDOWN, VK_CONTROL, 0, NULL, false, aExtraInfo); // Ensures that menu bar is not activated.
-		KeyEvent(aEventType, VK_LMENU, 0, NULL, false, aExtraInfo);
-		if (disguise_alt_key)
-			KeyEvent(KEYUP, VK_CONTROL, 0, NULL, false, aExtraInfo);
-	}
-	if (aModifiersLR & MOD_RALT)
-	{
-		// For the below: There should never be a need to disguise AltGr.  Doing so would likely cause unwanted
-		// side-effects. Also, disguise_alt_key does not take g_LayoutHasAltGr into account because
-		// disguise_alt_key also applies to the left alt key.
-		if (disguise_alt_key && !g_LayoutHasAltGr)
+		// IMPORTANT UPDATE for v1.0.39: Now that the hooks are in a separate thread from the part
+		// of the program that sends keystrokes for the script, you might think synchronization of
+		// keystrokes would become problematic or at least change.  However, this is apparently not
+		// the case.  MSDN doesn't spell this out, but testing shows that what happens with a low-level
+		// hook is that the moment a keystroke comes into a thread (either physical or simulated), the OS
+		// immediately calls something similar to SendMessage() from that thread to notify the hook
+		// thread that a keystroke has arrived.  However, if the hook thread's priority is lower than
+		// some other thread next in line for a timeslice, it might take some time for the hook thread
+		// to get a timeslice (that's why the hook thread is given a high priority).
+		// The SendMessage() call doesn't return until its timeout expires (as set in the registry for
+		// hooks) or the hook thread processes the keystroke (which requires that it call something like
+		// GetMessage/PeekMessage followed by a HookProc "return").  This is good news because it serializes
+		// keyboard and mouse input to make the presence of the hook transparent to other threads (unless
+		// the hook does something to reveal itself, such as suppressing keystrokes). Serialization avoids
+		// any chance of synchronization problems such as a program that changes the state of a key then
+		// immediately checks the state of that same key via GetAsyncKeyState().  Another way to look at
+		// all of this is that in essense, a single-threaded hook program that simulates keystrokes or
+		// mouse clicks should behave the same when the hook is moved into a separate thread because from
+		// the program's point-of-view, keystrokes & mouse clicks result in a calling the hook almost
+		// exactly as if the hook were in the same thread.
+		if (aTargetWindow)
 		{
-			KeyEvent(KEYDOWN, VK_CONTROL, 0, NULL, false, aExtraInfo); // Ensures that menu bar is not activated.
-			KeyEvent(aEventType, VK_RMENU, 0, NULL, false, aExtraInfo);
-			KeyEvent(KEYUP, VK_CONTROL, 0, NULL, false, aExtraInfo);
+			if (g_KeybdHook)
+				SLEEP_WITHOUT_INTERRUPTION(0) // Don't use ternary operator to combine this with next due to "else if".
+			else if (GetWindowThreadProcessId(aTargetWindow, NULL) == g_MainThreadID)
+				SLEEP_WITHOUT_INTERRUPTION(-1)
 		}
-		else // No disguise needed.
-		{
-			KeyEvent(aEventType, VK_RMENU, 0, NULL, false, aExtraInfo);
-			if (g_LayoutHasAltGr) // Note that KeyEvent() might have just changed the value of g_LayoutHasAltGr.
-				aModifiersLR &= ~MOD_LCONTROL; // Ensure that the step later below won't send an LControl keystroke (neither up nor down).
-		}
-	} // RAlt
+	}
 
-	if (aModifiersLR & MOD_LSHIFT) KeyEvent(aEventType, VK_LSHIFT, 0, NULL, false, aExtraInfo);
-	if (aModifiersLR & MOD_RSHIFT) KeyEvent(aEventType, VK_RSHIFT, 0, NULL, false, aExtraInfo);
-	if (aModifiersLR & MOD_LCONTROL) KeyEvent(aEventType, VK_LCONTROL, 0, NULL, false, aExtraInfo);
-	if (aModifiersLR & MOD_RCONTROL) KeyEvent(aEventType, VK_RCONTROL, 0, NULL, false, aExtraInfo);
+	// Commented out because a return value is no longer needed by callers (since we do the key-delay here,
+	// if appropriate).
+	//return aModifiersLRnow ^ aModifiersLRnew; // Calculate the set of modifiers that changed (currently excludes AltGr's change of LControl's state).
 
-	SLEEP_IF_CONTROLSEND
 
-	// Other notes about disguising ALT and WIN:
+	// NOTES about "release_shift_before_alt_ctrl":
+	// If going down on alt or control (but not both, though it might not matter), and shift is to be released:
+	//	Release shift first.
+	// If going down on shift, and control or alt (but not both) is to be released:
+	//	Release ctrl/alt first (this is already the case so nothing needs to be done).
+	//
+	// Release both shifts before going down on lalt/ralt or lctrl/rctrl (but not necessary if going down on
+	// *both* alt+ctrl?
+	// Release alt and both controls before going down on lshift/rshift.
+	// Rather than the below, do the above (for the reason below).
+	// But if do this, don't want to prevent a legit/intentional language switch such as:
+	//    Send {LAlt down}{Shift}{LAlt up}.
+	// If both Alt and Shift are down, Win or Ctrl (or any other key for that matter) must be pressed before either
+	// is released.
+	// If both Ctrl and Shift are down, Win or Alt (or any other key) must be pressed before either is released.
+	// remind: Despite what the Regional Settings window says, RAlt+Shift (and Shift+RAlt) is also a language hotkey (i.e. not just LAlt), at least when RAlt isn't AltGr!
+	// remind: Control being down suppresses language switch only once.  After that, control being down doesn't help if lalt is re-pressed prior to re-pressing shift.
+	//
+	// Language switch occurs when:
+	// alt+shift (upon release of shift)
+	// shift+alt (upon release of lalt)
+	// ctrl+shift (upon release of shift)
+	// shift+ctrl (upon release of ctrl)
+	// Because language hotkey only takes effect upon release of Shift, it can be disguised via a Control keystroke if that is ever needed.
+
+	// NOTES: More details about disguising ALT and WIN:
 	// Registered Alt hotkeys don't quite work if the Alt key is released prior to the suffix.
 	// Key history for Alt-B hotkey released this way, which undesirably activates the menu bar:
 	// A4  038	 	d	0.03	Alt            	
@@ -1716,7 +1794,7 @@ modLR_type KeyToModifiersLR(vk_type aVK, sc_type aSC, bool *pIsNeutral)
 		case VK_RWIN: return MOD_RWIN;
 		default: return 0;
 		}
-	// If above didn't return, rely on the non-zero sc instead:
+	// If above didn't return, rely on the non-zero scan code instead:
 	switch(aSC)
 	{
 	case SC_LSHIFT: return MOD_LSHIFT;

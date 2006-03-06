@@ -1220,21 +1220,22 @@ public:
 			else
 				*aInstanceNumber = 1;
 		}
-		if (!strlicmp(aBuf, "Master", length_to_check)) return MIXERLINE_COMPONENTTYPE_DST_SPEAKERS;
-		if (!strlicmp(aBuf, "Speakers", length_to_check)) return MIXERLINE_COMPONENTTYPE_DST_SPEAKERS;
-		if (!strlicmp(aBuf, "Digital", length_to_check)) return MIXERLINE_COMPONENTTYPE_SRC_DIGITAL;
-		if (!strlicmp(aBuf, "Line", length_to_check)) return MIXERLINE_COMPONENTTYPE_SRC_LINE;
-		if (!strlicmp(aBuf, "Microphone", length_to_check)) return MIXERLINE_COMPONENTTYPE_SRC_MICROPHONE;
-		if (!strlicmp(aBuf, "Synth", length_to_check)) return MIXERLINE_COMPONENTTYPE_SRC_SYNTHESIZER;
-		if (!strlicmp(aBuf, "CD", length_to_check)) return MIXERLINE_COMPONENTTYPE_SRC_COMPACTDISC;
-		if (!strlicmp(aBuf, "Telephone", length_to_check)) return MIXERLINE_COMPONENTTYPE_SRC_TELEPHONE;
-		if (!strlicmp(aBuf, "PCSpeaker", length_to_check)) return MIXERLINE_COMPONENTTYPE_SRC_PCSPEAKER;
-		if (!strlicmp(aBuf, "Wave", length_to_check)) return MIXERLINE_COMPONENTTYPE_SRC_WAVEOUT;
-		if (!strlicmp(aBuf, "Aux", length_to_check)) return MIXERLINE_COMPONENTTYPE_SRC_AUXILIARY;
-		if (!strlicmp(aBuf, "Analog", length_to_check)) return MIXERLINE_COMPONENTTYPE_SRC_ANALOG;
+		if (!strlicmp(aBuf, "Master", length_to_check)
+			|| !strlicmp(aBuf, "Speakers", length_to_check))   return MIXERLINE_COMPONENTTYPE_DST_SPEAKERS;
+		if (!strlicmp(aBuf, "Headphones", length_to_check))    return MIXERLINE_COMPONENTTYPE_DST_HEADPHONES;
+		if (!strlicmp(aBuf, "Digital", length_to_check))       return MIXERLINE_COMPONENTTYPE_SRC_DIGITAL;
+		if (!strlicmp(aBuf, "Line", length_to_check))          return MIXERLINE_COMPONENTTYPE_SRC_LINE;
+		if (!strlicmp(aBuf, "Microphone", length_to_check))    return MIXERLINE_COMPONENTTYPE_SRC_MICROPHONE;
+		if (!strlicmp(aBuf, "Synth", length_to_check))         return MIXERLINE_COMPONENTTYPE_SRC_SYNTHESIZER;
+		if (!strlicmp(aBuf, "CD", length_to_check))            return MIXERLINE_COMPONENTTYPE_SRC_COMPACTDISC;
+		if (!strlicmp(aBuf, "Telephone", length_to_check))     return MIXERLINE_COMPONENTTYPE_SRC_TELEPHONE;
+		if (!strlicmp(aBuf, "PCSpeaker", length_to_check))     return MIXERLINE_COMPONENTTYPE_SRC_PCSPEAKER;
+		if (!strlicmp(aBuf, "Wave", length_to_check))          return MIXERLINE_COMPONENTTYPE_SRC_WAVEOUT;
+		if (!strlicmp(aBuf, "Aux", length_to_check))           return MIXERLINE_COMPONENTTYPE_SRC_AUXILIARY;
+		if (!strlicmp(aBuf, "Analog", length_to_check))        return MIXERLINE_COMPONENTTYPE_SRC_ANALOG;
 		// v1.0.37.06: The following was added because it's legitimate on some sound cards such as
 		// SB Audigy's recording (dest #2) Wave/Mp3 volume:
-		if (!strlicmp(aBuf, "N/A", length_to_check)) return MIXERLINE_COMPONENTTYPE_SRC_UNDEFINED; // 0x1000
+		if (!strlicmp(aBuf, "N/A", length_to_check))           return MIXERLINE_COMPONENTTYPE_SRC_UNDEFINED; // 0x1000
 		return MIXERLINE_COMPONENTTYPE_DST_UNDEFINED; // Zero.
 	}
 	static DWORD SoundConvertControlType(char *aBuf)
@@ -1246,17 +1247,18 @@ public:
 		// values are not included here, such as MIXERCONTROL_CONTROLTYPE_FADER, which seems to be a type
 		// of sound control rather than a quality of the sound itself.  For performance, put the most
 		// often used ones up top.
-		if (!stricmp(aBuf, "Vol") || !stricmp(aBuf, "Volume")) return MIXERCONTROL_CONTROLTYPE_VOLUME;
-		if (!stricmp(aBuf, "OnOff")) return MIXERCONTROL_CONTROLTYPE_ONOFF;
-		if (!stricmp(aBuf, "Mute")) return MIXERCONTROL_CONTROLTYPE_MUTE;
-		if (!stricmp(aBuf, "Mono")) return MIXERCONTROL_CONTROLTYPE_MONO;
-		if (!stricmp(aBuf, "Loudness")) return MIXERCONTROL_CONTROLTYPE_LOUDNESS;
+		if (!stricmp(aBuf, "Vol")
+			|| !stricmp(aBuf, "Volume")) return MIXERCONTROL_CONTROLTYPE_VOLUME;
+		if (!stricmp(aBuf, "OnOff"))     return MIXERCONTROL_CONTROLTYPE_ONOFF;
+		if (!stricmp(aBuf, "Mute"))      return MIXERCONTROL_CONTROLTYPE_MUTE;
+		if (!stricmp(aBuf, "Mono"))      return MIXERCONTROL_CONTROLTYPE_MONO;
+		if (!stricmp(aBuf, "Loudness"))  return MIXERCONTROL_CONTROLTYPE_LOUDNESS;
 		if (!stricmp(aBuf, "StereoEnh")) return MIXERCONTROL_CONTROLTYPE_STEREOENH;
 		if (!stricmp(aBuf, "BassBoost")) return MIXERCONTROL_CONTROLTYPE_BASS_BOOST;
-		if (!stricmp(aBuf, "Pan")) return MIXERCONTROL_CONTROLTYPE_PAN;
+		if (!stricmp(aBuf, "Pan"))       return MIXERCONTROL_CONTROLTYPE_PAN;
 		if (!stricmp(aBuf, "QSoundPan")) return MIXERCONTROL_CONTROLTYPE_QSOUNDPAN;
-		if (!stricmp(aBuf, "Bass")) return MIXERCONTROL_CONTROLTYPE_BASS;
-		if (!stricmp(aBuf, "Treble")) return MIXERCONTROL_CONTROLTYPE_TREBLE;
+		if (!stricmp(aBuf, "Bass"))      return MIXERCONTROL_CONTROLTYPE_BASS;
+		if (!stricmp(aBuf, "Treble"))    return MIXERCONTROL_CONTROLTYPE_TREBLE;
 		if (!stricmp(aBuf, "Equalizer")) return MIXERCONTROL_CONTROLTYPE_EQUALIZER;
 		#define MIXERCONTROL_CONTROLTYPE_INVALID 0xFFFFFFFF // 0 might be a valid type, so use something definitely undefined.
 		return MIXERCONTROL_CONTROLTYPE_INVALID;

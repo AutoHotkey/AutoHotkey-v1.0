@@ -45,9 +45,9 @@ extern WORD g_mouse_buttons_logical; // A bitwise combination of MK_LBUTTON, etc
 #define STATE_ON 0x01
 extern BYTE g_PhysicalKeyState[VK_ARRAY_COUNT];
 extern bool g_LayoutHasAltGr;
-extern bool g_HookReceiptOfLControlMeansAltGr;
-extern bool g_IgnoreNextLControlDown;
-extern bool g_IgnoreNextLControlUp;
+extern DWORD g_HookReceiptOfLControlMeansAltGr;
+extern DWORD g_IgnoreNextLControlDown;
+extern DWORD g_IgnoreNextLControlUp;
 
 // If a SendKeys() operation takes longer than this, hotkey's modifiers won't be pressed back down:
 extern int g_HotkeyModifierTimeout;

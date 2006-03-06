@@ -180,10 +180,10 @@ enum KeyStateTypes {KEYSTATE_LOGICAL, KEYSTATE_PHYSICAL, KEYSTATE_TOGGLE}; // Fo
 enum KeyEventTypes {KEYDOWN, KEYUP, KEYDOWNANDUP};
 
 void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow = NULL);
-int SendKey(vk_type aVK, sc_type aSC, modLR_type aModifiersLR, modLR_type aModifiersLRPersistent
+void SendKey(vk_type aVK, sc_type aSC, modLR_type aModifiersLR, modLR_type aModifiersLRPersistent
 	, int aRepeatCount, KeyEventTypes aEventType, modLR_type aKeyAsModifiersLR, HWND aTargetWindow);
-int SendKeySpecial(char aChar, modLR_type aModifiersLRPersistent, int aRepeatCount);
-int SendASC(char *aAscii);
+void SendKeySpecial(char aChar, int aRepeatCount);
+void SendASC(char *aAscii);
 
 
 // Below uses a pseudo-random value.  It's best that this be constant so that if multiple instances
@@ -215,11 +215,9 @@ ToggleValueType ToggleKeyState(vk_type aVK, ToggleValueType aToggleValue);
 void ToggleNumlockWin9x();
 //void CapslockOffWin9x();
 
-modLR_type SetModifierLRState(modLR_type modifiersLRnew, modLR_type aModifiersLRnow, HWND aTargetWindow
-	, bool aDisguiseWinAlt, DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER);
-void SetModifierLRStateSpecific(modLR_type aModifiersLR, modLR_type aModifiersLRnow, KeyEventTypes aEventType
-	, HWND aTargetWindow, DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER);
-
+#define STD_MODS_TO_DISGUISE (MOD_LALT|MOD_RALT|MOD_LWIN|MOD_RWIN)
+void SetModifierLRState(modLR_type aModifiersLRnew, modLR_type aModifiersLRnow, HWND aTargetWindow
+	, bool aDisguiseDownWinAlt, bool aDisguiseUpWinAlt, DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER);
 modLR_type GetModifierLRState(bool aExplicitlyGet = false);
 
 // The IsKeyDown9xNT() method is needed because GetKeyState() does not return the proper

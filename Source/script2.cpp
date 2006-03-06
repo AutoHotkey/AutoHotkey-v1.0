@@ -5757,7 +5757,7 @@ ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aS
 			//    is not at fault because it's not in effect then.  Instead, the issue is that DefWindowProc enters
 			//    a non-msg-pumping loop while it waits for the user to drag-move the window.  If instead the user
 			//    releases the button without dragging, the loop exits on its own after a 500ms delay or so.
-			// 5) Obscure behavior cause by keyboard's auto-repeat feature: Use a key that's been remapped to
+			// 5) Obscure behavior caused by keyboard's auto-repeat feature: Use a key that's been remapped to
 			//    become the left mouse button to click and hold the minimize button of one of the script's windows.
 			//    Drag to the left.  The window starts moving.  This is caused by the fact that the down-click is
 			//    suppressed, thus the remap's hotkey subroutine thinks the mouse button is down, thus its
@@ -5819,6 +5819,8 @@ ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aS
 		break;
 	} // switch()
 
+	// For simplicity and possibly backward compatibility, LONG_OPERATION_INIT/UPDATE isn't done.
+	// In addition, some callers might do it for themselves, at least when aClickCount==1.
 	for (int i = 0; i < aClickCount; ++i)
 	{
 		// The below calls to MouseEvent() do not specify coordinates because such are only

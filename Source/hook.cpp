@@ -109,7 +109,7 @@ static key_type *ksc = NULL;
 // before or after some other keyboard event.  The elapsed time is usually zero, but using 22ms
 // here just in case slower systems or systems under load have longer delays between keystrokes:
 #define SHIFT_KEY_WORKAROUND_TIMEOUT 22
-static bool sNextPhysShiftDownIsNoPhys; // All of these are initialized by ResetHook().
+static bool sNextPhysShiftDownIsNotPhys; // All of these are initialized by ResetHook().
 static vk_type sPriorVK;
 static sc_type sPriorSC;
 static bool sPriorEventWasKeyUp;
@@ -137,6 +137,19 @@ Another way is to avoid API or system calls that might have a high overhead.  Th
 every prefix key is tracked independently, rather than calling the WinAPI to determine if the
 key is actually down at the moment of consideration.
 */
+
+inline bool IsIgnored(ULONG_PTR aExtraInfo)
+// KEY_PHYS_IGNORE events must be mostly ignored because currently there is no way for a given
+// hook instance to detect if it sent the event or some other instance.  Therefore, to treat
+// such events as true physical events might cause infinite loops or other side-effects in
+// the instance that generated the event.  More review of this is needed if KEY_PHYS_IGNORE
+// events ever need to be treated as true physical events by the instances of the hook that
+// didn't originate them:
+{
+	return aExtraInfo == KEY_IGNORE || aExtraInfo == KEY_PHYS_IGNORE || aExtraInfo == KEY_IGNORE_ALL_EXCEPT_MODIFIER;
+}
+
+
 
 LRESULT CALLBACK LowLevelKeybdProc(int aCode, WPARAM wParam, LPARAM lParam)
 {
@@ -195,27 +208,74 @@ LRESULT CALLBACK LowLevelKeybdProc(int aCode, WPARAM wParam, LPARAM lParam)
 	case VK_MENU: vk = (sc == SC_RALT) ? VK_RMENU : VK_LMENU; break;
 	}
 
-	// The following helps hasten AltGr detection after script startup.
-	// It shouldn't be necessary to check what type of LControl event (up or down) is received, since
-	// it should be impossible for any unrelated keystrokes to be received while g_HookReceiptOfLControlMeansAltGr
-	// is true.  This is because all unrelated keystrokes stay buffered until the main thread calls GetMessage().
-	// UPDATE for v1.0.39: Now that the hook has a dedicated thread, the above is no longer 100% certain.
-	// However, I think confidence is very high that this AltGr detection method is okay as it is because:
-	// 1) Hook thread has high priority, which means it generally shouldn't get backlogged with buffered keystrokes.
-	// 2) When the main thread calls keybd_event(), there is strong evidence that the OS immediately preempts
-	//    the main thread (or executes a SendMessage(), which is the same as preemption) and gives the next
-	//    timeslice to the hook thread, which then immediately processes the incoming keystroke as long
-	//    as there are no keystrokes in the queue ahead of it (see #1).
-	// 3) Even if #1 and #2 fail to hold, the probability of misclassifying an LControl event seems very low.
-	//    If there is ever concern, adding a call to IsIgnored(aExtraInfo, aVK, aKeyUp) below would help weed
-	//    out physical keystrokes (or those of other programs) that arrive during a vulnerable time.
-	if (g_HookReceiptOfLControlMeansAltGr && vk == VK_LCONTROL)
-		g_LayoutHasAltGr = true;
-		// But don't reset g_HookReceiptOfLControlMeansAltGr here to avoid timing problems where the hook
-		// is installed at a time when g_HookReceiptOfLControlMeansAltGr is wrongly true because the
-		// inactive hook never made it false.  Let KeyEvent() do that.
+	// Now that the above has translated VK_CONTROL to VK_LCONTROL (if necessary):
+	if (vk == VK_LCONTROL)
+	{
+		// The following helps hasten AltGr detection after script startup.
+		// It shouldn't be necessary to check what type of LControl event (up or down) is received, since
+		// it should be impossible for any unrelated keystrokes to be received while g_HookReceiptOfLControlMeansAltGr
+		// is true.  This is because all unrelated keystrokes stay buffered until the main thread calls GetMessage().
+		// UPDATE for v1.0.39: Now that the hook has a dedicated thread, the above is no longer 100% certain.
+		// However, I think confidence is very high that this AltGr detection method is okay as it is because:
+		// 1) Hook thread has high priority, which means it generally shouldn't get backlogged with buffered keystrokes.
+		// 2) When the main thread calls keybd_event(), there is strong evidence that the OS immediately preempts
+		//    the main thread (or executes a SendMessage(), which is the same as preemption) and gives the next
+		//    timeslice to the hook thread, which then immediately processes the incoming keystroke as long
+		//    as there are no keystrokes in the queue ahead of it (see #1).
+		// 3) Even if #1 and #2 fail to hold, the probability of misclassifying an LControl event seems very low.
+		//    If there is ever concern, adding a call to IsIgnored() below would help weed out physical keystrokes
+		//    (or those of other programs) that arrive during a vulnerable time.
+		if (g_HookReceiptOfLControlMeansAltGr)
+		{
+			// But don't reset g_HookReceiptOfLControlMeansAltGr here to avoid timing problems where the hook
+			// is installed at a time when g_HookReceiptOfLControlMeansAltGr is wrongly true because the
+			// inactive hook never made it false.  Let KeyEvent() do that.
+			g_LayoutHasAltGr = true;
+			// The following must be done; otherwise, if g_LayoutHasAltGr hasn't yet been autodetected by the
+			// time the first AltGr keystroke comes through, that keystroke would cause LControl to get stuck down
+			// as seen in g_modifiersLR_physical.
+			event.flags |= LLKHF_INJECTED; // Flag it as artificial for any other instances of the hook that may be running.
+			event.dwExtraInfo = g_HookReceiptOfLControlMeansAltGr; // The one who set this variable put the desired ExtraInfo in here.
+		}
+		else // Since AltGr wasn't detected above, see if any other means is ready to detect it.
+		{
+			// v1.0.42.04: This section was moved out of IsIgnored() to here because:
+			// 1) Immediately correcting the incoming event simplifies other parts of the hook.
+			// 2) It allows this instance of the hook to communicate with other instances of the hook by
+			//    correcting the bogus values directly inside the event structure.  This is something those
+			//    other hooks can't do easily if the keystrokes were generated/simulated inside our instance
+			//    (due to our instance's KeyEvent() function communicating corrections via
+			//    g_HookReceiptOfLControlMeansAltGr and g_IgnoreNextLControlDown/Up).
+			//
+			// This new approach solves an AltGr keystroke's disruption of A_TimeIdlePhysical and related
+			// problems that were caused by AltGr's incoming keystroke being marked by the driver or OS as a
+			// physical event (even when the AltGr keystroke that caused it was artificial).  It might not
+			// be a perfect solution, but it's pretty complete. For example, with the exception of artificial
+			// AltGr keystrokes from non-AHK sources, it completely solves the A_TimeIdlePhysical issue because
+			// by definition, any script that *uses* A_TimeIdlePhysical in a way that the fix applies to also
+			// has the keyboard hook installed (if it only has the mouse hook installed, the fix isn't in effect,
+			// but it also doesn't matter because that script detects only mouse events as true physical events,
+			// as described in the documentation for A_TimeIdlePhysical).
+			if (key_up)
+			{
+				if (g_IgnoreNextLControlUp)
+				{
+					event.flags |= LLKHF_INJECTED; // Flag it as artificial for any other instances of the hook that may be running.
+					event.dwExtraInfo = g_IgnoreNextLControlUp; // The one who set this variable put the desired ExtraInfo in here.
+				}
+			}
+			else // key-down event
+			{
+				if (g_IgnoreNextLControlDown)
+				{
+					event.flags |= LLKHF_INJECTED; // Flag it as artificial for any other instances of the hook that may be running.
+					event.dwExtraInfo = g_IgnoreNextLControlDown; // The one who set this variable put the desired ExtraInfo in here.
+				}
+			}
+		}
+	} // if (vk == VK_LCONTROL)
 
-	return LowLevelCommon(g_KeybdHook, aCode, wParam, lParam, vk, sc, key_up, event.dwExtraInfo, event.flags, event.time);
+	return LowLevelCommon(g_KeybdHook, aCode, wParam, lParam, vk, sc, key_up, event.dwExtraInfo, event.flags);
 }
 
 
@@ -235,7 +295,11 @@ LRESULT CALLBACK LowLevelMouseProc(int aCode, WPARAM wParam, LPARAM lParam)
 	//event.flags &= ~LLMHF_INJECTED;
 
 	if (!(event.flags & LLMHF_INJECTED)) // Physical mouse movement or button action (uses LLMHF vs. LLKHF).
-		g_TimeLastInputPhysical = event.time;
+		g_TimeLastInputPhysical = GetTickCount();
+		// Above: Don't use event.time, mostly because SendInput can produce invalid timestamps on such events
+		// (though in truth, that concern isn't valid because SendInput's input isn't marked as physical).
+		// Another concern is the comments at the other update of "g_TimeLastInputPhysical" elsewhere in this file.
+		// A final concern is that some drivers might be faulty and might not generate an accurate timestamp.
 
 	if (wParam == WM_MOUSEMOVE) // Only after updating for physical input, above, is this checked.
 		return CallNextHookEx(g_MouseHook, aCode, wParam, lParam);
@@ -278,19 +342,19 @@ LRESULT CALLBACK LowLevelMouseProc(int aCode, WPARAM wParam, LPARAM lParam)
 		case WM_XBUTTONDOWN: vk = (HIWORD(event.mouseData) == XBUTTON1) ? VK_XBUTTON1 : VK_XBUTTON2; key_up = false; break;
 	}
 
-	return LowLevelCommon(g_MouseHook, aCode, wParam, lParam, vk, 0, key_up, event.dwExtraInfo, event.flags, event.time);
+	return LowLevelCommon(g_MouseHook, aCode, wParam, lParam, vk, 0, key_up, event.dwExtraInfo, event.flags);
 }
 
 
 
 LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lParam, const vk_type aVK
-	, const sc_type aSC, bool aKeyUp, ULONG_PTR aExtraInfo, DWORD aEventFlags, DWORD aEventTime)
+	, const sc_type aSC, bool aKeyUp, ULONG_PTR aExtraInfo, DWORD aEventFlags)
 // v1.0.38.06: The keyboard and mouse hooks now call this common function to reduce code size and improve
 // maintainability.  The code size savings as of v1.0.38.06 is 3.5 KB of uncompressed code, but that
 // savings will grow larger if more complexity is ever added to the hooks.
 {
 	HotkeyIDType hotkey_id_to_post = HOTKEY_ID_INVALID; // Set default.
-	bool is_ignored = IsIgnored(aExtraInfo, aVK, aKeyUp);
+	bool is_ignored = IsIgnored(aExtraInfo);
 	// This is done for more than just convenience.  It solves problems that would otherwise arise
 	// due to the value of a global var such as KeyHistoryNext changing due to the reentrancy of
 	// this procedure.  For example, a call to KeyEvent() in here would alter the value of
@@ -323,11 +387,18 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 			strcpy(pKeyHistoryCurr->target_window, "N/A");
 		g_HistoryHwndPrev = fore_win;  // Updated unconditionally in case fore_win is NULL.
 	}
-	// The following is done even if key history is disabled because sAltTabMenuIsVisible relies on it:
-	pKeyHistoryCurr->event_type = is_ignored ? 'i' : ' ';
 
-	if (aHook == g_KeybdHook)
+	bool is_artificial;
+	if (aHook == g_MouseHook)
 	{
+		if (   !(is_artificial = (aEventFlags & LLMHF_INJECTED))   ) // It's a physical mouse event.
+			g_PhysicalKeyState[aVK] = aKeyUp ? 0 : STATE_DOWN;
+	}
+	else // Keybd hook.
+	{
+		// Even if the below is set to false, the event might be reclassified as artificial later (though it
+		// won't be logged as such).  See comments in KeybdEventIsPhysical() for details.
+		is_artificial = aEventFlags & LLKHF_INJECTED; // LLKHF vs. LLMHF
 		// If the scan code is extended, the key that was pressed is not a dual-state numpad key,
 		// i.e. it could be the counterpart key, such as End vs. NumpadEnd, located elsewhere on
 		// the keyboard, but we're not interested in those.  Also, Numlock must be ON because
@@ -357,7 +428,7 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 		// a hotkey), still update the physical state anyway, because we want the physical state to
 		// be entirely independent of the logical state (i.e. we want the key to be reported as
 		// physically down even if it isn't logically down):
-		if (!kvk[aVK].as_modifiersLR && KeybdEventIsPhysical(aEventFlags, aEventTime, aVK, aKeyUp))
+		if (!kvk[aVK].as_modifiersLR && KeybdEventIsPhysical(aEventFlags, aVK, aKeyUp))
 			g_PhysicalKeyState[aVK] = aKeyUp ? 0 : STATE_DOWN;
 
 		// Pointer to the key record for the current key event.  Establishes this_key as an alias
@@ -367,9 +438,9 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 		// a true alias to the object, not a copy of it, because it's address (&this_key) is compared
 		// to other addresses for equality further below.
 	}
-	else // Mouse hook.
-		if (!(aEventFlags & LLMHF_INJECTED)) // Physical mouse event.
-			g_PhysicalKeyState[aVK] = aKeyUp ? 0 : STATE_DOWN;
+
+	// The following is done even if key history is disabled because sAltTabMenuIsVisible relies on it:
+	pKeyHistoryCurr->event_type = is_ignored ? 'i' : (is_artificial ? 'a' : ' '); // v1.0.42.04: 'a' was added, but 'i' takes precedence over 'a'.
 
 	bool sc_takes_precedence = ksc[aSC].sc_takes_precedence;
 	// Check hook type too in case a script every explicitly specifies scan code zero as a hotkey:
@@ -1968,7 +2039,7 @@ LRESULT SuppressThisKeyFunc(const HHOOK aHook, LPARAM lParam, const vk_type aVK,
 	if (aHook == g_KeybdHook)
 	{
 		KBDLLHOOKSTRUCT &event = *(PKBDLLHOOKSTRUCT)lParam;
-		if (aVK == VK_NUMLOCK && !aKeyUp && !IsIgnored(event.dwExtraInfo, aVK, aKeyUp))
+		if (aVK == VK_NUMLOCK && !aKeyUp && !IsIgnored(event.dwExtraInfo))
 		{
 			// This seems to undo the faulty indicator light problem and toggle
 			// the key back to the state it was in prior to when the user pressed it.
@@ -2066,7 +2137,7 @@ LRESULT AllowIt(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lParam, cons
 	{
 		KBDLLHOOKSTRUCT &event = *(PKBDLLHOOKSTRUCT)lParam;
 
-		bool is_ignored = IsIgnored(event.dwExtraInfo, aVK, aKeyUp);
+		bool is_ignored = IsIgnored(event.dwExtraInfo);
 		if (!is_ignored)
 		{
 			if (kvk[aVK].pForceToggle) // Key is a toggleable key.
@@ -2890,7 +2961,7 @@ void UpdateKeybdState(KBDLLHOOKSTRUCT &aEvent, const vk_type aVK, const sc_type 
 		bool fix_it = (!sPriorEventWasKeyUp && DualStateNumpadKeyIsDown())  // Case #4 of the workaround.
 			|| (sPriorEventWasKeyUp && aKeyUp && current_is_dual_state); // Case #5
 		if (fix_it)
-			sNextPhysShiftDownIsNoPhys = true;
+			sNextPhysShiftDownIsNotPhys = true;
 		// In the first case, both the numpad key-up and down events are eligible:
 		if (   fix_it || (sPriorEventWasKeyUp && current_is_dual_state)   )
 		{
@@ -2923,14 +2994,14 @@ void UpdateKeybdState(KBDLLHOOKSTRUCT &aEvent, const vk_type aVK, const sc_type 
 		// Caller has ensured that vk has been translated from neutral to left/right if necessary
 		// (e.g. VK_CONTROL -> VK_LCONTROL). For this reason, always use the parameter vk rather
 		// than the raw event.vkCode.
-		// Below excludes KEY_IGNORE_ALL_EXCEPT_MODIFIER since that type of event shouldn't be
-		// ignored by this function.  UPDATE: KEY_PHYS_IGNORE is now considered to be something
-		// that shouldn't be ignored because if more than one instance has the hook installed,
-		// it is possible for g_modifiersLR_logical_non_ignored to say that a key is down in one
-		// instance when that instance's g_modifiersLR_logical doesn't say it's down, which is
-		// definitely wrong.  So it is now omitted from the below:
+		// Below excludes KEY_IGNORE_ALL_EXCEPT_MODIFIER since that type of event shouldn't be ignored by
+		// this function.  UPDATE: KEY_PHYS_IGNORE is now considered to be something that shouldn't be
+		// ignored in this case because if more than one instance has the hook installed, it is
+		// possible for g_modifiersLR_logical_non_ignored to say that a key is down in one instance when
+		// that instance's g_modifiersLR_logical doesn't say it's down, which is definitely wrong.  So it
+		// is now omitted below:
 		bool is_not_ignored = (aEvent.dwExtraInfo != KEY_IGNORE);
-		bool event_is_physical = KeybdEventIsPhysical(aEvent.flags, aEvent.time, aVK, aKeyUp);
+		bool event_is_physical = KeybdEventIsPhysical(aEvent.flags, aVK, aKeyUp);
 
 		if (aKeyUp)
 		{
@@ -2996,17 +3067,18 @@ void UpdateKeybdState(KBDLLHOOKSTRUCT &aEvent, const vk_type aVK, const sc_type 
 	} // vk is a modifier key.
 
 	// Now that we're done using the old values (updating modifier state and calls to KeybdEventIsPhysical()
-	// above used them, as well as a section higher above), update these to their new values:
+	// above used them, as well as a section higher above), update these to their new values then call
+	// KeybdEventIsPhysical() again.
 	sPriorVK = aVK;
 	sPriorSC = aSC;
 	sPriorEventWasKeyUp = aKeyUp;
-	sPriorEventWasPhysical = KeybdEventIsPhysical(aEvent.flags, aEvent.time, aVK, aKeyUp);
+	sPriorEventWasPhysical = KeybdEventIsPhysical(aEvent.flags, aVK, aKeyUp);
 	sPriorEventTickCount = GetTickCount();
 }
 
 
 
-bool KeybdEventIsPhysical(DWORD aEventFlags, DWORD aEventTime, const vk_type aVK, bool aKeyUp)
+bool KeybdEventIsPhysical(DWORD aEventFlags, const vk_type aVK, bool aKeyUp)
 // Always use the parameter vk rather than event.vkCode because the caller or caller's caller
 // might have adjusted vk, namely to make it a left/right specific modifier key rather than a
 // neutral one.
@@ -3022,9 +3094,9 @@ bool KeybdEventIsPhysical(DWORD aEventFlags, DWORD aEventTime, const vk_type aVK
 	// holding down at any given time:
 	if (   (aVK == VK_LSHIFT || aVK == VK_SHIFT) && !aKeyUp   ) // But not RSHIFT.
 	{
-		if (sNextPhysShiftDownIsNoPhys && !DualStateNumpadKeyIsDown())
+		if (sNextPhysShiftDownIsNotPhys && !DualStateNumpadKeyIsDown())
 		{
-			sNextPhysShiftDownIsNoPhys = false;
+			sNextPhysShiftDownIsNotPhys = false;
 			return false;
 		}
 		// Otherwise (see notes about SHIFT_KEY_WORKAROUND_TIMEOUT above for details):
@@ -3032,8 +3104,19 @@ bool KeybdEventIsPhysical(DWORD aEventFlags, DWORD aEventTime, const vk_type aVK
 			&& (DWORD)(GetTickCount() - sPriorEventTickCount) < (DWORD)SHIFT_KEY_WORKAROUND_TIMEOUT   )
 			return false;
 	}
-	// Otherwise, it's physical:
-	g_TimeLastInputPhysical = aEventTime;
+
+	// Otherwise, it's physical.
+	// v1.0.42.04:
+	// The time member of the incoming event struct has been observed to be wrongly zero sometimes, perhaps only
+	// for AltGr keyboard layouts that generate LControl events when RAlt is pressed (but in such cases, I think
+	// it's only sometimes zero, not always).  It might also occur during simultation of Alt+Numpad keystrokes
+	// to support {Asc NNNN}.  In addition, SendInput() is documented to have the ability to set its own timestamps;
+	// if it's callers put in a bad timestamp, it will probably arrive here that way too.  Thus, use GetTickCount().
+	// More importantly, when a script or other application simulates an AltGr keystroke (either down or up),
+	// the LControl event received here is marked as physical by the OS or keyboard driver.  This is undesirable
+	// primarly because it makes g_TimeLastInputPhysical inaccurate, but also because falsely marked physical
+	// events can impact the script's calls to GetKeyState("LControl", "P"), etc.
+	g_TimeLastInputPhysical = GetTickCount();
 	return true;
 }
 
@@ -3990,11 +4073,11 @@ DWORD WINAPI HookThreadProc(LPVOID aUnused)
 		switch (msg.message)
 		{
 		case WM_QUIT:
-			msg.wParam = 0; // Indicate to AHK_CHANGE_HOOK_STATE that both hooks should be deactivated.
-			// Now fall through to the case below so that the hooks will be removed before
+			// After this message, fall through to the next case below so that the hooks will be removed before
 			// exiting this thread.
-
-		case AHK_CHANGE_HOOK_STATE:
+			msg.wParam = 0; // Indicate to AHK_CHANGE_HOOK_STATE that both hooks should be deactivated.
+		// No break in above, fall into:
+		case AHK_CHANGE_HOOK_STATE: // No blank line between this in the above to indicate fall-through.
 			// In this case, wParam contains the bitwise set of hooks that should be active.
 			success = true;
 			if (msg.wParam & HOOK_KEYBD) // Activate the keyboard hook (if it isn't already).
@@ -4116,7 +4199,7 @@ void ResetHook(bool aAllModifiersUp, HookType aWhichHook, bool aResetKVKandKSC)
 		g_HShwnd = GetForegroundWindow(); // Not needed by some callers, but shouldn't hurt even then.
 
 		// Variables for the Shift+Numpad workaround:
-		sNextPhysShiftDownIsNoPhys = false;
+		sNextPhysShiftDownIsNotPhys = false;
 		sPriorVK = 0;
 		sPriorSC = 0;
 		sPriorEventWasKeyUp = false;
@@ -4221,9 +4304,8 @@ void GetHookStatus(char *aBuf, int aBufSize)
 		"anywhere in the script.  The same method can be used to change the size "
 		"of the history buffer.  For example: #KeyHistory 100  (Default is 40, Max is 500)"
 		"\r\n\r\nThe oldest are listed first.  VK=Virtual Key, SC=Scan Code, Elapsed=Seconds since the previous event"
-		", Types: h=Hook Hotkey"
-		", s=Suppressed (hidden from system), i=Ignored because it was generated by the script itself"
-		", #=Disabled via #IfWinActive/Exist.\r\n\r\n"
+		".  Types: h=Hook Hotkey, s=Suppressed (blocked), i=Ignored because it was generated by an AHK script"
+		", a=Artificial, #=Disabled via #IfWinActive/Exist.\r\n\r\n"
 		"VK  SC\tType\tUp/Dn\tElapsed\tKey\t\tWindow\r\n"
 		"-------------------------------------------------------------------------------------------------------------");
 
@@ -4251,18 +4333,4 @@ void GetHookStatus(char *aBuf, int aBufSize)
 					);
 		}
 	}
-}
-
-
-
-bool IsIgnored(ULONG_PTR aExtraInfo, vk_type aVK, bool aKeyUp)
-// KEY_PHYS_IGNORE events must be mostly ignored because currently there is no way for a given
-// hook instance to detect if it sent the event or some other instance.  Therefore, to treat
-// such events as true physical events might cause infinite loops or other side-effects in
-// the instance that generated the event.  More review of this is needed if KEY_PHYS_IGNORE
-// events ever need to be treated as true physical events by the instances of the hook that
-// didn't originate them:
-{
-	return aExtraInfo == KEY_IGNORE || aExtraInfo == KEY_PHYS_IGNORE || aExtraInfo == KEY_IGNORE_ALL_EXCEPT_MODIFIER
-		|| (aVK == VK_LCONTROL && ((g_IgnoreNextLControlDown && !aKeyUp) || ((g_IgnoreNextLControlUp && aKeyUp))));
 }

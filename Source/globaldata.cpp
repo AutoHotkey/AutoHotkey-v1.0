@@ -50,9 +50,9 @@ WORD g_mouse_buttons_logical = 0;
 // requires its format to be the same as that returned from GetKeyboardState():
 BYTE g_PhysicalKeyState[VK_ARRAY_COUNT] = {0};
 bool g_LayoutHasAltGr = false; // Seems safer to assume false upon startup and have all other detect geared toward proving this assumption wrong.
-bool g_HookReceiptOfLControlMeansAltGr = false;
-bool g_IgnoreNextLControlDown = false;
-bool g_IgnoreNextLControlUp = false;
+DWORD g_HookReceiptOfLControlMeansAltGr = 0; // In these cases, zero is used as a false value, any others are true.
+DWORD g_IgnoreNextLControlDown = 0;          //
+DWORD g_IgnoreNextLControlUp = 0;            //
 
 int g_HotkeyModifierTimeout = 50;  // Reduced from 100, which was a little too large for fast typists.
 int g_ClipboardTimeout = 1000; // v1.0.31

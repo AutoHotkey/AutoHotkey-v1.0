@@ -362,6 +362,45 @@ HANDLE Clipboard::GetClipboardDataTimeout(UINT uFormat)
 // the OnClipboardChange label, where sometimes a clipboard-change notification comes in before the owning
 // app has finished preparing its data for subsequent readers of the clipboard.
 {
+#ifdef DEBUG_BY_LOGGING_CLIPBOARD_FORMATS  // Provides a convenient log of clipboard formats for analysis.
+	static FILE *fp = fopen("c:\\debug_clipboard_formats.txt", "w");
+#endif
+
+	char format_name[MAX_PATH + 1]; // MSDN's RegisterClipboardFormat() doesn't document any max length, but the ones we're interested in certainly don't exceed MAX_PATH.
+	if (uFormat < 0xC000 || uFormat > 0xFFFF) // It's a registered format (you're supposted to verify in-range before calling GetClipboardFormatName()).  Also helps performance.
+		*format_name = '\0'; // Don't need the name if it's a standard/CF_* format.
+	else
+	{
+		// Probably need to call GetClipboardFormatName() rather than comparing directly to uFormat because
+		// MSDN implies that OwnerLink and other registered formats might not always have the same ID under
+		// all OSes (past and future).
+		GetClipboardFormatName(uFormat, format_name, MAX_PATH);
+		// Since RegisterClipboardFormat() is case insensitive, the case might vary.  So use stricmp() when
+		// comparing format_name to anything.
+		// "Link Source", "Link Source Descriptor" , and anything else starting with "Link Source" is likely
+		// to be data that should not be attempted to be retrieved because:
+		// 1) It causes unwanted bookmark effects in various versions of MS Word.
+		// 2) Tests show that these formats are on the clipboard only if MS Word is open at the time
+		//    ClipboardAll is accessed.  That implies they're transitory formats that aren't as essential
+		//    or well suited to ClipboardAll as the other formats (but if it weren't for #1 above, this
+		//    wouldn't be enough reason to omit it).
+		// 3) Although there is hardly any documentation to be found at MSDN or elsewhere about these formats,
+		//    it seems they're related to OLE, with further implications that the data is transitory.
+		// Here are the formats that Word 2002 removes from the clipboard when it the app closes:
+		// 0xC002 ObjectLink  >>> Causes WORD bookmarking problem.
+		// 0xC003 OwnerLink
+		// 0xC00D Link Source  >>> Causes WORD bookmarking problem.
+		// 0xC00F Link Source Descriptor  >>> Doesn't directly cause bookmarking, but probably goes with above.
+		// 0xC0DC Hyperlink
+		if (   !strnicmp(format_name, "Link Source", 11) || !stricmp(format_name, "ObjectLink")
+			|| !stricmp(format_name, "OwnerLink")   )
+			return NULL;
+	}
+
+#ifdef DEBUG_BY_LOGGING_CLIPBOARD_FORMATS
+	fprintf(fp, "%04X\t%s\n", uFormat, format_name);  // The program has to be closed to close/release the file.
+#endif
+
 	HANDLE h;
 	for (DWORD start_time = GetTickCount();;)
 	{
@@ -371,12 +410,21 @@ HANDLE Clipboard::GetClipboardDataTimeout(UINT uFormat)
 		// this occurs is somewhere between 20 to 96 MB (perhaps depending on system's memory and CPU speed).
 		if (h = GetClipboardData(uFormat)) // Assign
 			return h;
+
+		// It failed, so act according to the type of format and the timeout that's in effect.
+		// Certain standard (numerically constant) clipboard formats are known to validly yield NULL from a
+		// call to GetClipboardData().  Never retry these because it would only cause unnecessary delays
+		// (i.e. a failure until timeout).
+		if (uFormat == CF_HDROP // This format can fail "normally" for the reasons described at "clipboard_contains_files".
+			|| !stricmp(format_name, "OwnerLink")) // Known to validly yield NULL from a call to GetClipboardData(), so don't retry it to avoid having to wait the full timeout period.
+			return NULL;
+
 		if (g_ClipboardTimeout != -1) // We were not told to wait indefinitely and...
 			if (!g_ClipboardTimeout   // ...we were told to make only one attempt, or ...
-				|| uFormat == CF_HDROP // ... making only one attempt because this format can fail "normally" for the reasons described at "clipboard_contains_files".
 				|| (int)(g_ClipboardTimeout - (GetTickCount() - start_time)) <= SLEEP_INTERVAL_HALF) //...it timed out.
 				// Above must cast to int or any negative result will be lost due to DWORD type.
 				return NULL;
+
 		// Use SLEEP_WITHOUT_INTERRUPTION to prevent MainWindowProc() from accepting new hotkeys
 		// during our operation, since a new hotkey subroutine might interfere with
 		// what we're doing here (e.g. if it tries to use the clipboard, or perhaps overwrites
