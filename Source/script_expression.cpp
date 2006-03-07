@@ -88,7 +88,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 			map[map_count].type = EXP_RAW;
 			map[map_count].marker = target;  // Indicate its position in the buffer.
 			// Copy the chars that occur prior to this_deref.marker into the buffer:
-            for (this_marker = this_deref.marker; pText < this_marker; *target++ = *pText++); // this_marker is used to help performance.
+			for (this_marker = this_deref.marker; pText < this_marker; *target++ = *pText++); // this_marker is used to help performance.
 			map[map_count].end = target; // Since RAWS are never empty due to the check above, this will always be the character after the last.
 			++map_count;
 		}

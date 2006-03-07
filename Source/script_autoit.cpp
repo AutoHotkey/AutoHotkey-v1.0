@@ -121,7 +121,7 @@ VarSizeType Script::GetIP(int aAdapterIndex, char *aBuf)
 		++adapter_count;
 
 	if (aAdapterIndex >= adapter_count)
-		strlcpy(aBuf, "0.0.0.0", IP_ADDRESS_SIZE);
+		strcpy(aBuf, "0.0.0.0");
 	else
 	{
 		IN_ADDR inaddr;

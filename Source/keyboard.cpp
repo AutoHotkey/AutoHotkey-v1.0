@@ -878,6 +878,7 @@ void KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTargetWi
 	if (!aExtraInfo) // Shouldn't be called this way because 0 is considered false in some places below (search on " = aExtraInfo" to find them).
 		aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER; // Seems slightly better to use a standard default rather than something arbitrary like 1.
 
+	// 1.0.42.05:
 	// THE ABOVE MUST OCCUR prior to the below because otherwise MSVC++ 7.1 generates much larger code.
 	// This is the first such anomaly I recall seeing.  The generated OBJ file would be about 8 KB larger,
 	// which causes a 5.5 KB increase in uncompressed EXE size).

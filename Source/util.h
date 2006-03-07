@@ -24,12 +24,15 @@ EXTERN_G;  // For ITOA() and related functions' use of g.FormatIntAsHex
 #define IS_SPACE_OR_TAB(c) (c == ' ' || c == '\t')
 #define IS_SPACE_OR_TAB_OR_NBSP(c) (c == ' ' || c == '\t' || c == -96) // Use a negative to support signed chars.
 
-//inline int iround(double x)  // Taken from someone's "Snippets".
-//{
-//	return (int)floor(x + ((x >= 0) ? 0.5 : -0.5));
-//}
+// NOTE: MOVING THINGS OUT OF THIS FILE AND INTO util.cpp can hurt benchmarks by 10% or more, so be careful
+// when doing so (even when the change seems inconsequential, it can impact benchmarks due to quirks of code
+// generation and caching).
 
-
+// Inline functions like the following probably don't actually get put inline by the compiler (since it knows
+// it's not worth it).  However, changing this to be non-inline has a significant impact on benchmarks even
+// though the function is never called by those benchmarks, probably due to coincidences in how the generated
+// code gets cached in the CPU.  So it seems best not to meess with anything without making sure it doesn't
+// drop the benchmarks significantly.
 inline char *StrToTitleCase(char *aStr)
 {
 	if (!aStr) return aStr;
@@ -57,10 +60,11 @@ inline char *StrToTitleCase(char *aStr)
 
 
 inline size_t strnlen(char *aBuf, size_t aMax)
+// Caller has ensured that aBuf isn't NULL.
 // Returns the length of aBuf or aMax, whichever is least.
 // But it does so efficiently, in case aBuf is huge.
 {
-	if (!aMax || !aBuf || !*aBuf) return 0;
+	if (!aMax || !*aBuf) return 0;
 	size_t i;
 	for (i = 0; aBuf[i] && i < aMax; ++i);
 	return i;
@@ -422,24 +426,6 @@ inline char *UTOA(unsigned long value, char *buf)
 
 
 
-inline void strlcpy (char *aDst, const char *aSrc, size_t aDstSize)
-// Same as strncpy() but guarantees null-termination of aDst upon return.
-// No more than aDstSize - 1 characters will be copied from aSrc into aDst
-// (leaving room for the zero terminator, which is always inserted).
-// This function is defined in some Unices but is not standard.  But unlike
-// other versions, this one uses void for return value for reduced code size
-// (since it's called in so many places).
-{
-	// Disabled for performance and reduced code size:
-	//if (!aDst || !aSrc || !aDstSize) return aDstSize;  // aDstSize must not be zero due to the below method.
-	// It might be worthwhile to have a custom char-copying-loop here someday so that number of characters
-	// actually copied (not including the zero terminator) can be returned to callers who want it.
-	strncpy(aDst, aSrc, aDstSize - 1);
-	aDst[aDstSize - 1] = '\0';
-}
-
-
-
 //inline char *strcatmove(char *aDst, char *aSrc)
 //// Same as strcat() but allows aSrc and aDst to overlap.
 //// Unlike strcat(), it doesn't return aDst.  Instead, it returns the position
@@ -468,6 +454,7 @@ __int64 FileTimeSecondsUntil(FILETIME *pftStart, FILETIME *pftEnd);
 SymbolType IsPureNumeric(char *aBuf, bool aAllowNegative = false
 	, bool aAllowAllWhitespace = true, bool aAllowFloat = false, bool aAllowImpure = false);
 
+void strlcpy(char *aDst, const char *aSrc, size_t aDstSize);
 int snprintf(char *aBuf, int aBufSize, const char *aFormat, ...);
 int snprintfcat(char *aBuf, int aBufSize, const char *aFormat, ...);
 // Not currently used by anything, so commented out to possibly reduce code size:

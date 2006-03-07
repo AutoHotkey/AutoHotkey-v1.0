@@ -6714,154 +6714,195 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, int aInsertPos, bool 
 
 VarTypes Script::GetVarType(char *aVarName)
 {
-	if (toupper(*aVarName) != 'A' || *(aVarName + 1) != '_')  // This check helps average performance.
+	// Convert to lowercase to help performance a little (it typically only helps loadtime performance because
+	// this function is rarely called during script-runtime).
+	char lowercase[MAX_VAR_NAME_LENGTH + 1];
+	strlcpy(lowercase, aVarName, sizeof(lowercase)); // Caller should have ensured it fits, but call strlcpy() for maintainability.
+	CharLower(lowercase);
+	// Above: CharLower() is smaller in code size than strlwr(), but CharLower uses the OS locale and strlwr uses
+	// the setlocal() locale (which is always the same if setlocal() is never called).  However, locale
+	// differences shouldn't affect the cases checked below; some evidence of this is at MSDN:
+	// "CharLower always maps uppercase I to lowercase I, even when the current language is Turkish or Azeri."
+
+	if (lowercase[0] != 'a' || lowercase[1] != '_')  // This check helps average-case performance.
 	{
-		if (!stricmp(aVarName, "true")) return VAR_TRUE;
-		if (!stricmp(aVarName, "false")) return VAR_FALSE;
-		if (!stricmp(aVarName, "Clipboard")) return VAR_CLIPBOARD;
-		if (!stricmp(aVarName, "ClipboardAll")) return VAR_CLIPBOARDALL;
+		if (!strcmp(lowercase, "true")) return VAR_TRUE;
+		if (!strcmp(lowercase, "false")) return VAR_FALSE;
+		if (!strcmp(lowercase, "clipboard")) return VAR_CLIPBOARD;
+		if (!strcmp(lowercase, "clipboardall")) return VAR_CLIPBOARDALL;
 		// Otherwise:
 		return VAR_NORMAL;
 	}
 
-	// Otherwise, aVarName begins with "A_", so it's probably one of the built-in variables.
-	// Keeping the most common ones near the top helps performance a little:
+	// Otherwise, lowercase begins with "a_", so it's probably one of the built-in variables.
+	char *lower = lowercase + 2;
 
-	if (!stricmp(aVarName, "A_YYYY") || !stricmp(aVarName, "A_Year")) return VAR_YYYY;
-	if (!stricmp(aVarName, "A_MMMM")) return VAR_MMMM; // Long name of month.
-	if (!stricmp(aVarName, "A_MMM")) return VAR_MMM;   // 3-char abbrev. month name.
-	if (!stricmp(aVarName, "A_MM") || !stricmp(aVarName, "A_Mon")) return VAR_MM;  // 01 thru 12
-	if (!stricmp(aVarName, "A_DDDD")) return VAR_DDDD; // Name of weekday, e.g. Sunday
-	if (!stricmp(aVarName, "A_DDD")) return VAR_DDD;   // Abbrev., e.g. Sun
-	if (!stricmp(aVarName, "A_DD") || !stricmp(aVarName, "A_Mday")) return VAR_DD; // 01 thru 31
-	if (!stricmp(aVarName, "A_Wday")) return VAR_WDAY;
-	if (!stricmp(aVarName, "A_Yday")) return VAR_YDAY;
-	if (!stricmp(aVarName, "A_Yweek")) return VAR_YWEEK;
+	// Keeping the most common ones near the top helps performance a little.
+	if (!strcmp(lower, "index")) return VAR_INDEX;  // A short name since it's typed so often.
 
-	if (!stricmp(aVarName, "A_Hour")) return VAR_HOUR;
-	if (!stricmp(aVarName, "A_Min")) return VAR_MIN;
-	if (!stricmp(aVarName, "A_Sec")) return VAR_SEC;
-	if (!stricmp(aVarName, "A_MSec")) return VAR_MSEC;
-	if (!stricmp(aVarName, "A_TickCount")) return VAR_TICKCOUNT;
-	if (!stricmp(aVarName, "A_Now")) return VAR_NOW;
-	if (!stricmp(aVarName, "A_NowUTC")) return VAR_NOWUTC;
+	if (!strcmp(lower, "yyyy") || !strcmp(lower, "year")) return VAR_YYYY;
+	if (!strcmp(lower, "mmmm")) return VAR_MMMM; // Long name of month.
+	if (!strcmp(lower, "mmm")) return VAR_MMM;   // 3-char abbrev. month name.
+	if (!strcmp(lower, "mm") || !strcmp(lower, "mon")) return VAR_MM;  // 01 thru 12
+	if (!strcmp(lower, "dddd")) return VAR_DDDD; // Name of weekday, e.g. Sunday
+	if (!strcmp(lower, "ddd")) return VAR_DDD;   // Abbrev., e.g. Sun
+	if (!strcmp(lower, "dd") || !strcmp(lower, "mday")) return VAR_DD; // 01 thru 31
+	if (!strcmp(lower, "wday")) return VAR_WDAY;
+	if (!strcmp(lower, "yday")) return VAR_YDAY;
+	if (!strcmp(lower, "yweek")) return VAR_YWEEK;
 
-	if (!stricmp(aVarName, "A_WorkingDir")) return VAR_WORKINGDIR;
-	if (!stricmp(aVarName, "A_ScriptName")) return VAR_SCRIPTNAME;
-	if (!stricmp(aVarName, "A_ScriptDir")) return VAR_SCRIPTDIR;
-	if (!stricmp(aVarName, "A_ScriptFullPath")) return VAR_SCRIPTFULLPATH;
-	if (!stricmp(aVarName, "A_LineNumber")) return VAR_LINENUMBER;
-	if (!stricmp(aVarName, "A_LineFile")) return VAR_LINEFILE;
+	if (!strcmp(lower, "hour")) return VAR_HOUR;
+	if (!strcmp(lower, "min")) return VAR_MIN;
+	if (!strcmp(lower, "sec")) return VAR_SEC;
+	if (!strcmp(lower, "msec")) return VAR_MSEC;
+	if (!strcmp(lower, "tickcount")) return VAR_TICKCOUNT;
+	if (!strcmp(lower, "now")) return VAR_NOW;
+	if (!strcmp(lower, "nowutc")) return VAR_NOWUTC;
+
+	if (!strcmp(lower, "workingdir")) return VAR_WORKINGDIR;
+	if (!strcmp(lower, "scriptname")) return VAR_SCRIPTNAME;
+	if (!strcmp(lower, "scriptdir")) return VAR_SCRIPTDIR;
+	if (!strcmp(lower, "scriptfullpath")) return VAR_SCRIPTFULLPATH;
+	if (!strcmp(lower, "linenumber")) return VAR_LINENUMBER;
+	if (!strcmp(lower, "linefile")) return VAR_LINEFILE;
 
 // A_IsCompiled is undefined in uncompiled scripts.
 #ifdef AUTOHOTKEYSC
-	if (!stricmp(aVarName, "A_IsCompiled")) return VAR_ISCOMPILED;
+	if (!strcmp(lower, "iscompiled")) return VAR_ISCOMPILED;
 #endif
 
-	if (!stricmp(aVarName, "A_BatchLines") || !stricmp(aVarName, "A_NumBatchLines")) return VAR_BATCHLINES;
-	if (!stricmp(aVarName, "A_TitleMatchMode")) return VAR_TITLEMATCHMODE;
-	if (!stricmp(aVarName, "A_TitleMatchModeSpeed")) return VAR_TITLEMATCHMODESPEED;
-	if (!stricmp(aVarName, "A_DetectHiddenWindows")) return VAR_DETECTHIDDENWINDOWS;
-	if (!stricmp(aVarName, "A_DetectHiddenText")) return VAR_DETECTHIDDENTEXT;
-	if (!stricmp(aVarName, "A_AutoTrim")) return VAR_AUTOTRIM;
-	if (!stricmp(aVarName, "A_StringCaseSense")) return VAR_STRINGCASESENSE;
-	if (!stricmp(aVarName, "A_FormatInteger")) return VAR_FORMATINTEGER;
-	if (!stricmp(aVarName, "A_FormatFloat")) return VAR_FORMATFLOAT;
-	if (!stricmp(aVarName, "A_KeyDelay")) return VAR_KEYDELAY;
-	if (!stricmp(aVarName, "A_WinDelay")) return VAR_WINDELAY;
-	if (!stricmp(aVarName, "A_ControlDelay")) return VAR_CONTROLDELAY;
-	if (!stricmp(aVarName, "A_MouseDelay")) return VAR_MOUSEDELAY;
-	if (!stricmp(aVarName, "A_DefaultMouseSpeed")) return VAR_DEFAULTMOUSESPEED;
-	if (!stricmp(aVarName, "A_IsSuspended")) return VAR_ISSUSPENDED;
+	if (!strcmp(lower, "batchlines") || !strcmp(lower, "numbatchlines")) return VAR_BATCHLINES;
+	if (!strcmp(lower, "titlematchmode")) return VAR_TITLEMATCHMODE;
+	if (!strcmp(lower, "titlematchmodespeed")) return VAR_TITLEMATCHMODESPEED;
+	if (!strcmp(lower, "detecthiddenwindows")) return VAR_DETECTHIDDENWINDOWS;
+	if (!strcmp(lower, "detecthiddentext")) return VAR_DETECTHIDDENTEXT;
+	if (!strcmp(lower, "autotrim")) return VAR_AUTOTRIM;
+	if (!strcmp(lower, "stringcasesense")) return VAR_STRINGCASESENSE;
+	if (!strcmp(lower, "formatinteger")) return VAR_FORMATINTEGER;
+	if (!strcmp(lower, "formatfloat")) return VAR_FORMATFLOAT;
+	if (!strcmp(lower, "keydelay")) return VAR_KEYDELAY;
+	if (!strcmp(lower, "windelay")) return VAR_WINDELAY;
+	if (!strcmp(lower, "controldelay")) return VAR_CONTROLDELAY;
+	if (!strcmp(lower, "mousedelay")) return VAR_MOUSEDELAY;
+	if (!strcmp(lower, "defaultmousespeed")) return VAR_DEFAULTMOUSESPEED;
+	if (!strcmp(lower, "issuspended")) return VAR_ISSUSPENDED;
 
-	if (!stricmp(aVarName, "A_IconHidden")) return VAR_ICONHIDDEN;
-	if (!stricmp(aVarName, "A_IconTip")) return VAR_ICONTIP;
-	if (!stricmp(aVarName, "A_IconFile")) return VAR_ICONFILE;
-	if (!stricmp(aVarName, "A_IconNumber")) return VAR_ICONNUMBER;
+	if (!strcmp(lower, "iconhidden")) return VAR_ICONHIDDEN;
+	if (!strcmp(lower, "icontip")) return VAR_ICONTIP;
+	if (!strcmp(lower, "iconfile")) return VAR_ICONFILE;
+	if (!strcmp(lower, "iconnumber")) return VAR_ICONNUMBER;
 
-	if (!stricmp(aVarName, "A_ExitReason")) return VAR_EXITREASON;
+	if (!strcmp(lower, "exitreason")) return VAR_EXITREASON;
 
-	if (!stricmp(aVarName, "A_OStype")) return VAR_OSTYPE;
-	if (!stricmp(aVarName, "A_OSversion")) return VAR_OSVERSION;
-	if (!stricmp(aVarName, "A_Language")) return VAR_LANGUAGE;
-	if (!stricmp(aVarName, "A_ComputerName")) return VAR_COMPUTERNAME;
-	if (!stricmp(aVarName, "A_UserName")) return VAR_USERNAME;
+	if (!strcmp(lower, "ostype")) return VAR_OSTYPE;
+	if (!strcmp(lower, "osversion")) return VAR_OSVERSION;
+	if (!strcmp(lower, "language")) return VAR_LANGUAGE;
+	if (!strcmp(lower, "computername")) return VAR_COMPUTERNAME;
+	if (!strcmp(lower, "username")) return VAR_USERNAME;
 
-	if (!stricmp(aVarName, "A_WinDir")) return VAR_WINDIR;
-	if (!stricmp(aVarName, "A_ProgramFiles")) return VAR_PROGRAMFILES;
-	if (!stricmp(aVarName, "A_Desktop")) return VAR_DESKTOP;
-	if (!stricmp(aVarName, "A_DesktopCommon")) return VAR_DESKTOPCOMMON;
-	if (!stricmp(aVarName, "A_StartMenu")) return VAR_STARTMENU;
-	if (!stricmp(aVarName, "A_StartMenuCommon")) return VAR_STARTMENUCOMMON;
-	if (!stricmp(aVarName, "A_Programs")) return VAR_PROGRAMS;
-	if (!stricmp(aVarName, "A_ProgramsCommon")) return VAR_PROGRAMSCOMMON;
-	if (!stricmp(aVarName, "A_Startup")) return VAR_STARTUP;
-	if (!stricmp(aVarName, "A_StartupCommon")) return VAR_STARTUPCOMMON;
-	if (!stricmp(aVarName, "A_MyDocuments")) return VAR_MYDOCUMENTS;
+	if (!strcmp(lower, "windir")) return VAR_WINDIR;
+	if (!strcmp(lower, "programfiles")) return VAR_PROGRAMFILES;
+	if (!strcmp(lower, "desktop")) return VAR_DESKTOP;
+	if (!strcmp(lower, "desktopcommon")) return VAR_DESKTOPCOMMON;
+	if (!strcmp(lower, "startmenu")) return VAR_STARTMENU;
+	if (!strcmp(lower, "startmenucommon")) return VAR_STARTMENUCOMMON;
+	if (!strcmp(lower, "programs")) return VAR_PROGRAMS;
+	if (!strcmp(lower, "programscommon")) return VAR_PROGRAMSCOMMON;
+	if (!strcmp(lower, "startup")) return VAR_STARTUP;
+	if (!strcmp(lower, "startupcommon")) return VAR_STARTUPCOMMON;
+	if (!strcmp(lower, "mydocuments")) return VAR_MYDOCUMENTS;
 
-	if (!stricmp(aVarName, "A_IsAdmin")) return VAR_ISADMIN;
-	if (!stricmp(aVarName, "A_Cursor")) return VAR_CURSOR;
-	if (!stricmp(aVarName, "A_CaretX")) return VAR_CARETX;
-	if (!stricmp(aVarName, "A_CaretY")) return VAR_CARETY;
-	if (!stricmp(aVarName, "A_ScreenWidth")) return VAR_SCREENWIDTH;
-	if (!stricmp(aVarName, "A_ScreenHeight")) return VAR_SCREENHEIGHT;
-	if (!stricmp(aVarName, "A_IPAddress1")) return VAR_IPADDRESS1;
-	if (!stricmp(aVarName, "A_IPAddress2")) return VAR_IPADDRESS2;
-	if (!stricmp(aVarName, "A_IPAddress3")) return VAR_IPADDRESS3;
-	if (!stricmp(aVarName, "A_IPAddress4")) return VAR_IPADDRESS4;
+	if (!strcmp(lower, "isadmin")) return VAR_ISADMIN;
+	if (!strcmp(lower, "cursor")) return VAR_CURSOR;
+	if (!strcmp(lower, "caretx")) return VAR_CARETX;
+	if (!strcmp(lower, "carety")) return VAR_CARETY;
+	if (!strcmp(lower, "screenwidth")) return VAR_SCREENWIDTH;
+	if (!strcmp(lower, "screenheight")) return VAR_SCREENHEIGHT;
 
-	if (!stricmp(aVarName, "A_LoopFileName")) return VAR_LOOPFILENAME;
-	if (!stricmp(aVarName, "A_LoopFileShortName")) return VAR_LOOPFILESHORTNAME;
-	if (!stricmp(aVarName, "A_LoopFileExt")) return VAR_LOOPFILEEXT;
-	if (!stricmp(aVarName, "A_LoopFileDir")) return VAR_LOOPFILEDIR;
-	if (!stricmp(aVarName, "A_LoopFileFullPath")) return VAR_LOOPFILEFULLPATH;
-	if (!stricmp(aVarName, "A_LoopFileLongPath")) return VAR_LOOPFILELONGPATH;
-	if (!stricmp(aVarName, "A_LoopFileShortPath")) return VAR_LOOPFILESHORTPATH;
-	if (!stricmp(aVarName, "A_LoopFileTimeModified")) return VAR_LOOPFILETIMEMODIFIED;
-	if (!stricmp(aVarName, "A_LoopFileTimeCreated")) return VAR_LOOPFILETIMECREATED;
-	if (!stricmp(aVarName, "A_LoopFileTimeAccessed")) return VAR_LOOPFILETIMEACCESSED;
-	if (!stricmp(aVarName, "A_LoopFileAttrib")) return VAR_LOOPFILEATTRIB;
-	if (!stricmp(aVarName, "A_LoopFileSize")) return VAR_LOOPFILESIZE;
-	if (!stricmp(aVarName, "A_LoopFileSizeKB")) return VAR_LOOPFILESIZEKB;
-	if (!stricmp(aVarName, "A_LoopFileSizeMB")) return VAR_LOOPFILESIZEMB;
+	if (!strncmp(lower, "ipaddress", 9))
+	{
+		lower += 9;
+		if (*lower && !lower[1]) // Make sure has only one more character rather than none or several (e.g. A_IPAddress1abc should not be match).
+		{
+			switch(*lower) // More maintainable to use switch() vs. something more optimized.
+			{
+			case '1': return VAR_IPADDRESS1;
+			case '2': return VAR_IPADDRESS2;
+			case '3': return VAR_IPADDRESS3;
+			case '4': return VAR_IPADDRESS4;
+			}
+		}
+		// Otherwise, it can't be a match for any built-in variable:
+		return VAR_NORMAL;
+	}
 
-	if (!stricmp(aVarName, "A_LoopRegType")) return VAR_LOOPREGTYPE;
-	if (!stricmp(aVarName, "A_LoopRegKey")) return VAR_LOOPREGKEY;
-	if (!stricmp(aVarName, "A_LoopRegSubKey")) return VAR_LOOPREGSUBKEY;
-	if (!stricmp(aVarName, "A_LoopRegName")) return VAR_LOOPREGNAME;
-	if (!stricmp(aVarName, "A_LoopRegTimeModified")) return VAR_LOOPREGTIMEMODIFIED;
+	if (!strncmp(lower, "loop", 4))
+	{
+		lower += 4;
+		if (!strcmp(lower, "readline")) return VAR_LOOPREADLINE;
+		if (!strcmp(lower, "field")) return VAR_LOOPFIELD;
 
-	if (!stricmp(aVarName, "A_LoopReadLine")) return VAR_LOOPREADLINE;
-	if (!stricmp(aVarName, "A_LoopField")) return VAR_LOOPFIELD;
-	if (!stricmp(aVarName, "A_Index")) return VAR_INDEX;  // A short name since it maybe be typed so often.
+		if (!strncmp(lower, "file", 4))
+		{
+			lower += 4;
+			if (!strcmp(lower, "name")) return VAR_LOOPFILENAME;
+			if (!strcmp(lower, "shortname")) return VAR_LOOPFILESHORTNAME;
+			if (!strcmp(lower, "ext")) return VAR_LOOPFILEEXT;
+			if (!strcmp(lower, "dir")) return VAR_LOOPFILEDIR;
+			if (!strcmp(lower, "fullpath")) return VAR_LOOPFILEFULLPATH;
+			if (!strcmp(lower, "longpath")) return VAR_LOOPFILELONGPATH;
+			if (!strcmp(lower, "shortpath")) return VAR_LOOPFILESHORTPATH;
+			if (!strcmp(lower, "timemodified")) return VAR_LOOPFILETIMEMODIFIED;
+			if (!strcmp(lower, "timecreated")) return VAR_LOOPFILETIMECREATED;
+			if (!strcmp(lower, "timeaccessed")) return VAR_LOOPFILETIMEACCESSED;
+			if (!strcmp(lower, "attrib")) return VAR_LOOPFILEATTRIB;
+			if (!strcmp(lower, "size")) return VAR_LOOPFILESIZE;
+			if (!strcmp(lower, "sizekb")) return VAR_LOOPFILESIZEKB;
+			if (!strcmp(lower, "sizemb")) return VAR_LOOPFILESIZEMB;
+			// Otherwise, it can't be a match for any built-in variable:
+			return VAR_NORMAL;
+		}
 
-	if (!stricmp(aVarName, "A_ThisMenuItem")) return VAR_THISMENUITEM;
-	if (!stricmp(aVarName, "A_ThisMenuItemPos")) return VAR_THISMENUITEMPOS;
-	if (!stricmp(aVarName, "A_ThisMenu")) return VAR_THISMENU;
-	if (!stricmp(aVarName, "A_ThisHotkey")) return VAR_THISHOTKEY;
-	if (!stricmp(aVarName, "A_PriorHotkey")) return VAR_PRIORHOTKEY;
-	if (!stricmp(aVarName, "A_TimeSinceThisHotkey")) return VAR_TIMESINCETHISHOTKEY;
-	if (!stricmp(aVarName, "A_TimeSincePriorHotkey")) return VAR_TIMESINCEPRIORHOTKEY;
-	if (!stricmp(aVarName, "A_EndChar")) return VAR_ENDCHAR;
-	if (!stricmp(aVarName, "A_LastError")) return VAR_LASTERROR;
+		if (!strncmp(lower, "reg", 3))
+		{
+			lower += 3;
+			if (!strcmp(lower, "type")) return VAR_LOOPREGTYPE;
+			if (!strcmp(lower, "key")) return VAR_LOOPREGKEY;
+			if (!strcmp(lower, "subkey")) return VAR_LOOPREGSUBKEY;
+			if (!strcmp(lower, "name")) return VAR_LOOPREGNAME;
+			if (!strcmp(lower, "timemodified")) return VAR_LOOPREGTIMEMODIFIED;
+			// Otherwise, it can't be a match for any built-in variable:
+			return VAR_NORMAL;
+		}
+	}
 
-	if (!stricmp(aVarName, "A_Gui")) return VAR_GUI;
-	if (!stricmp(aVarName, "A_GuiControl")) return VAR_GUICONTROL;
+	if (!strcmp(lower, "thismenuitem")) return VAR_THISMENUITEM;
+	if (!strcmp(lower, "thismenuitempos")) return VAR_THISMENUITEMPOS;
+	if (!strcmp(lower, "thismenu")) return VAR_THISMENU;
+	if (!strcmp(lower, "thishotkey")) return VAR_THISHOTKEY;
+	if (!strcmp(lower, "priorhotkey")) return VAR_PRIORHOTKEY;
+	if (!strcmp(lower, "timesincethishotkey")) return VAR_TIMESINCETHISHOTKEY;
+	if (!strcmp(lower, "timesincepriorhotkey")) return VAR_TIMESINCEPRIORHOTKEY;
+	if (!strcmp(lower, "endchar")) return VAR_ENDCHAR;
+	if (!strcmp(lower, "lasterror")) return VAR_LASTERROR;
+
+	if (!strcmp(lower, "gui")) return VAR_GUI;
+	if (!strcmp(lower, "guicontrol")) return VAR_GUICONTROL;
 	// v1.0.36: A_GuiEvent was added as a synonym for A_GuiControlEvent because it seems unlikely that
 	// A_GuiEvent will ever be needed for anything:
-	if (!stricmp(aVarName, "A_GuiControlEvent") || !stricmp(aVarName, "A_GuiEvent")) return VAR_GUICONTROLEVENT;
-	if (!stricmp(aVarName, "A_EventInfo")) return VAR_EVENTINFO; // It's called "EventInfo" vs. "GuiEventInfo" because it applies to non-Gui events such as OnClipboardChange.
-	if (!stricmp(aVarName, "A_GuiWidth")) return VAR_GUIWIDTH;
-	if (!stricmp(aVarName, "A_GuiHeight")) return VAR_GUIHEIGHT;
-	if (!stricmp(aVarName, "A_GuiX")) return VAR_GUIX; // Naming: Brevity seems more a benefit than would A_GuiEventX's improved clarity.
-	if (!stricmp(aVarName, "A_GuiY")) return VAR_GUIY; // These can be overloaded if a GuiMove label or similar is ever needed.
+	if (!strcmp(lower, "guicontrolevent") || !strcmp(lower, "guievent")) return VAR_GUICONTROLEVENT;
+	if (!strcmp(lower, "eventinfo")) return VAR_EVENTINFO; // It's called "EventInfo" vs. "GuiEventInfo" because it applies to non-Gui events such as OnClipboardChange.
+	if (!strcmp(lower, "guiwidth")) return VAR_GUIWIDTH;
+	if (!strcmp(lower, "guiheight")) return VAR_GUIHEIGHT;
+	if (!strcmp(lower, "guix")) return VAR_GUIX; // Naming: Brevity seems more a benefit than would A_GuiEventX's improved clarity.
+	if (!strcmp(lower, "guiy")) return VAR_GUIY; // These can be overloaded if a GuiMove label or similar is ever needed.
 
-	if (!stricmp(aVarName, "A_TimeIdle")) return VAR_TIMEIDLE;
-	if (!stricmp(aVarName, "A_TimeIdlePhysical")) return VAR_TIMEIDLEPHYSICAL;
-	if (!stricmp(aVarName, "A_Space")) return VAR_SPACE;
-	if (!stricmp(aVarName, "A_Tab")) return VAR_TAB;
-	if (!stricmp(aVarName, "A_AhkVersion")) return VAR_AHKVERSION;
-	if (!stricmp(aVarName, "A_AhkPath")) return VAR_AHKPATH;
+	if (!strcmp(lower, "timeidle")) return VAR_TIMEIDLE;
+	if (!strcmp(lower, "timeidlephysical")) return VAR_TIMEIDLEPHYSICAL;
+	if (!strcmp(lower, "space")) return VAR_SPACE;
+	if (!strcmp(lower, "tab")) return VAR_TAB;
+	if (!strcmp(lower, "ahkversion")) return VAR_AHKVERSION;
+	if (!strcmp(lower, "ahkpath")) return VAR_AHKPATH;
 
 	// Since above didn't return:
 	return VAR_NORMAL;
@@ -11265,7 +11306,8 @@ VarSizeType Script::GetAhkPath(char *aBuf) // v1.0.41.
 		return (VarSizeType)strlen(aBuf);
 	}
 	// Otherwise: Always return an estimate of MAX_PATH in case the registry entry changes between the
-	// first call and the second.
+	// first call and the second.  This is also relied upon by strlcpy() above, which zero-fills the tail
+	// of the destination up through the limit of its capacity (due to calling strncpy, which does this).
 	return MAX_PATH;
 #else
 	char buf[MAX_PATH];
@@ -11555,7 +11597,7 @@ VarSizeType Script::ScriptGetCaret(VarTypeType aVarType, char *aBuf)
 VarSizeType Script::ScriptGetCursor(char *aBuf)
 {
 	if (!aBuf)
-		return SMALL_STRING_LENGTH;  // we're returning the length of the var's contents, not the size.
+		return SMALL_STRING_LENGTH;  // We're returning the length of the var's contents, not the size.
 
 	// Must fetch it at runtime, otherwise the program can't even be launched on Windows 95:
 	typedef BOOL (WINAPI *MyGetCursorInfoType)(PCURSORINFO);
@@ -11641,16 +11683,21 @@ VarSizeType Script::GetFilename(char *aBuf)
 
 VarSizeType Script::GetFileDir(char *aBuf)
 {
-	char buf[MAX_PATH + 1];  // Uses +1 to append final backslash for AutoIt2 (.aut) scripts.
-	char *target_buf = aBuf ? aBuf : buf;
-	strlcpy(target_buf, mFileDir, MAX_PATH);
-	size_t length = strlen(target_buf); // Needed not just for AutoIt2.
+	// v1.0.42.06: This function has been fixed not to call the following when we're called with aBuf!=NULL:
+	// strlcpy(target_buf, mFileDir, MAX_PATH);
+	// The above could crash because strlcpy() calls strncpy(), which zero fills the tail of the destination
+	// up through the limit of its capacity.  But we might have returned an estimate less than MAX_PATH
+	// when the caller called us the first time, which usually means that aBuf is smaller than MAX_PATH.
+	if (!aBuf)
+		return (VarSizeType)strlen(mFileDir) + 1; // +1 for conservative estimate in case mIsAutoIt2 (see below).
+	// Otherwise, write the result to the buffer and return its exact length, not an estimate:
+	size_t length = strlen(strcpy(aBuf, mFileDir)); // Caller has ensured that aBuf is large enough.
 	// If it doesn't already have a final backslash, namely due to it being a root directory,
 	// provide one so that it is backward compatible with AutoIt v2:
-	if (mIsAutoIt2 && length && target_buf[length - 1] != '\\')
+	if (mIsAutoIt2 && length && aBuf[length - 1] != '\\')
 	{
-		target_buf[length++] = '\\';
-		target_buf[length] = '\0';
+		aBuf[length++] = '\\';
+		aBuf[length] = '\0';
 	}
 	return (VarSizeType)length;
 }
@@ -13041,7 +13088,12 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 		{
 			sei.lpVerb = NULL;  // A better choice than "open" because NULL causes default verb to be used.
 			sei.lpFile = shell_action;
-			sei.lpParameters = shell_params;
+			sei.lpParameters = *shell_params ? shell_params : NULL; // Above has ensured that shell_params isn't NULL.
+			// Above was fixed v1.0.42.06 to be NULL rather than the empty string to prevent passing an
+			// extra space at the end of a parameter list (this might happen only when launching a shortcut
+			// [.lnk file]).  MSDN states: "If the lpFile member specifies a document file, lpParameters should
+			// be NULL."  This implies that NULL is a suitable value for lpParameters in cases where you don't
+			// want to pass any parameters at all.
 		}
 		if (ShellExecuteEx(&sei)) // Relies on short-circuit boolean order.
 		{
