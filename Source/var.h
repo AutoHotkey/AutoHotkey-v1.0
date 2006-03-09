@@ -134,7 +134,7 @@ public:
 	{
 		aVarBkp.mVar = this; // Allows the Restore() to always know its target without searching.
 		aVarBkp.mContents = mContents;
-		aVarBkp.mLength = mLength;
+		aVarBkp.mLength = mLength; // Since it's a union, it might actually be backing up mAliasFor (happens at least for recursive functions that pass parameters ByRef).
 		aVarBkp.mCapacity = mCapacity;
 		aVarBkp.mHowAllocated = mHowAllocated; // This might be ALLOC_SIMPLE or ALLOC_NONE if backed up variable was at the lowest layer of the call stack.
 		aVarBkp.mAttrib = mAttrib;
@@ -151,7 +151,8 @@ public:
 		if (mAttrib & VAR_ATTRIB_STATIC) // By definition, static variables retain their contents between calls.
 			return;
 		mContents = sEmptyString;
-		mLength = 0;
+		if (mType != VAR_ALIAS) // Fix for v1.0.42.07: Don't reset mLength if the other member of the union is in effect.
+			mLength = 0;
 		mCapacity = 0;
 		mHowAllocated = ALLOC_MALLOC;
 		mAttrib &= ~VAR_ATTRIB_BINARY_CLIP;  // But the VAR_ATTRIB_PARAM/STATIC flags are unaltered.
@@ -164,7 +165,7 @@ public:
 		if (mAttrib & VAR_ATTRIB_STATIC)
 			return;
 		mContents = aVarBkp.mContents;
-		mLength = aVarBkp.mLength;
+		mLength = aVarBkp.mLength; // Since it's a union, it might actually be restoring mAliasFor, which is okay since it should be the same value as what's already in there.
 		mCapacity = aVarBkp.mCapacity;
 		mHowAllocated = aVarBkp.mHowAllocated; // This might be ALLOC_SIMPLE or ALLOC_NONE if backed up variable was at the lowest layer of the call stack.
 		mAttrib = aVarBkp.mAttrib;
@@ -310,11 +311,11 @@ public:
 
 		// The following is done only after the above in case there's ever a way for the above
 		// to circle back to become this variable.
-		// Short-circuit potential infinite loops in other methods by refusing to change an alias
+		// Prevent potential infinite loops in other methods by refusing to change an alias
 		// to point to itself.  This case probably only matters the first time this alias is
 		// updated (i.e. while it's still of type VAR_BYREF), since once it's a valid alias,
 		// changing it to point to itself would be handled correctly by the code further below
-		// (it would mAliasFor to be the same value that it had previously):
+		// (it would set mAliasFor to be the same value that it had previously):
 		if (aTargetVar == this)
 			return;
 

@@ -242,7 +242,7 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt, bool aExac
 		// caller only wanted a substring of aBuf copied:
 
 		if (aTrimIt)
-			mLength = (VarSizeType)trim(mContents);
+			mLength = (VarSizeType)trim(mContents); // Writing to union is safe because above already ensured that "this" isn't an alias.
 		else
 			mLength = aLength; // aLength was verified accurate higher above.
 	}
@@ -648,7 +648,7 @@ void Var::Free(int aWhenToFree, bool aExcludeAliases)
 	if (aWhenToFree == VAR_ALWAYS_FREE_EXCLUDE_STATIC && (mAttrib & VAR_ATTRIB_STATIC))
 		return;
 
-	mLength = 0;
+	mLength = 0; // Writing to union is safe because above already ensured that "this" isn't an alias.
 
 	switch (mHowAllocated)
 	{
