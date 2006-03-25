@@ -293,7 +293,7 @@
 				RelativePath=".\source\hotkey.cpp">
 			</File>
 			<File
-				RelativePath=".\source\keyboard.cpp">
+				RelativePath=".\source\keyboard_mouse.cpp">
 			</File>
 			<File
 				RelativePath=".\source\mt19937ar-cok.cpp">
@@ -390,7 +390,7 @@
 				RelativePath=".\source\hotkey.h">
 			</File>
 			<File
-				RelativePath=".\source\keyboard.h">
+				RelativePath=".\source\keyboard_mouse.h">
 			</File>
 			<File
 				RelativePath=".\source\mt19937ar-cok.h">

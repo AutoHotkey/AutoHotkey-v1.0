@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.42.07"
+#define NAME_VERSION "1.0.43.00"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -97,6 +97,14 @@ enum ResultType {FAIL = 0, OK, WARN = OK, CRITICAL_ERROR  // Some things might r
 	, LOOP_BREAK, LOOP_CONTINUE
 	, EARLY_RETURN, EARLY_EXIT}; // EARLY_EXIT needs to be distinct from FAIL for ExitApp() and AutoExecSection().
 
+enum SendModes {SM_EVENT, SM_INPUT, SM_PLAY, SM_INPUT_FALLBACK_TO_EVENT, SM_INVALID}; // SM_EVENT must be zero.
+// In above, SM_INPUT falls back to SM_PLAY when the SendInput mode would be defeated by the presence
+// of a keyboard/mouse hooks in another script.  By contrast, SM_INPUT_FALLBACK_TO_EVENT falls back to
+// the SendEvent mode (it does this because SendEvent is superior to a crippled/interruptible
+// SendInput due to SendEvent being able to dynamically adjust to changing conditions [such as the
+// user releasing a modifier key during the Send]).
+// SendInput has this extra behavior because it's generally preferred over SendPlay due to being faster.
+
 enum ExitReasons {EXIT_NONE, EXIT_CRITICAL, EXIT_ERROR, EXIT_DESTROY, EXIT_LOGOFF, EXIT_SHUTDOWN
 	, EXIT_WM_QUIT, EXIT_WM_CLOSE, EXIT_MENU, EXIT_EXIT, EXIT_RELOAD, EXIT_SINGLEINSTANCE};
 
@@ -143,6 +151,122 @@ enum SymbolType // For use with ExpandExpression() and IsPureNumeric().
 	, SYM_FUNC     // A call to a function.
 	, SYM_COUNT    // Must be last.
 };
+
+// But the array that goes with these actions is in globaldata.cpp because
+// otherwise it would be a little cumbersome to declare the extern version
+// of the array in here (since it's only extern to modules other than
+// script.cpp):
+enum enum_act {
+// Seems best to make this one zero so that it will be the ZeroMemory() default within
+// any POD structures that contain an action_type field:
+  ACT_INVALID = FAIL  // These should both be zero for initialization and function-return-value purposes.
+, ACT_ASSIGN, ACT_ASSIGNEXPR, ACT_FUNCTIONCALL, ACT_ADD, ACT_SUB, ACT_MULT, ACT_DIV
+, ACT_ASSIGN_FIRST = ACT_ASSIGN, ACT_ASSIGN_LAST = ACT_DIV
+, ACT_REPEAT // Never parsed directly, only provided as a translation target for the old command (see other notes).
+, ACT_ELSE   // Parsed at a lower level than most commands to support same-line ELSE-actions (e.g. "else if").
+, ACT_IFBETWEEN, ACT_IFNOTBETWEEN, ACT_IFIN, ACT_IFNOTIN, ACT_IFCONTAINS, ACT_IFNOTCONTAINS, ACT_IFIS, ACT_IFISNOT
+, ACT_IFEXPR  // i.e. if (expr)
+ // *** *** *** KEEP ALL OLD-STYLE/AUTOIT V2 IFs AFTER THIS (v1.0.20 bug fix). *** *** ***
+ , ACT_FIRST_IF_ALLOWING_SAME_LINE_ACTION
+ // *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***
+ // ACT_IS_IF_OLD() relies upon ACT_IFEQUAL through ACT_IFLESSOREQUAL being adjacent to one another
+ // and it relies upon the fact that ACT_IFEQUAL is first in the series and ACT_IFLESSOREQUAL last.
+, ACT_IFEQUAL = ACT_FIRST_IF_ALLOWING_SAME_LINE_ACTION, ACT_IFNOTEQUAL, ACT_IFGREATER, ACT_IFGREATEROREQUAL
+, ACT_IFLESS, ACT_IFLESSOREQUAL
+, ACT_FIRST_COMMAND // i.e the above aren't considered commands for parsing/searching purposes.
+, ACT_IFWINEXIST = ACT_FIRST_COMMAND
+, ACT_IFWINNOTEXIST, ACT_IFWINACTIVE, ACT_IFWINNOTACTIVE
+, ACT_IFINSTRING, ACT_IFNOTINSTRING
+, ACT_IFEXIST, ACT_IFNOTEXIST, ACT_IFMSGBOX
+, ACT_FIRST_IF = ACT_IFBETWEEN, ACT_LAST_IF = ACT_IFMSGBOX  // Keep this range updated with any new IFs that are added.
+, ACT_MSGBOX, ACT_INPUTBOX, ACT_SPLASHTEXTON, ACT_SPLASHTEXTOFF, ACT_PROGRESS, ACT_SPLASHIMAGE
+, ACT_TOOLTIP, ACT_TRAYTIP, ACT_INPUT
+, ACT_TRANSFORM, ACT_STRINGLEFT, ACT_STRINGRIGHT, ACT_STRINGMID
+, ACT_STRINGTRIMLEFT, ACT_STRINGTRIMRIGHT, ACT_STRINGLOWER, ACT_STRINGUPPER
+, ACT_STRINGLEN, ACT_STRINGGETPOS, ACT_STRINGREPLACE, ACT_STRINGSPLIT, ACT_SPLITPATH, ACT_SORT
+, ACT_ENVSET, ACT_ENVUPDATE
+, ACT_RUNAS, ACT_RUN, ACT_RUNWAIT, ACT_URLDOWNLOADTOFILE
+, ACT_GETKEYSTATE
+, ACT_SEND, ACT_SENDRAW, ACT_SENDINPUT, ACT_SENDPLAY, ACT_SENDEVENT
+, ACT_CONTROLSEND, ACT_CONTROLSENDRAW, ACT_CONTROLCLICK, ACT_CONTROLMOVE, ACT_CONTROLGETPOS, ACT_CONTROLFOCUS
+, ACT_CONTROLGETFOCUS, ACT_CONTROLSETTEXT, ACT_CONTROLGETTEXT, ACT_CONTROL, ACT_CONTROLGET
+, ACT_SENDMODE, ACT_COORDMODE, ACT_SETDEFAULTMOUSESPEED
+, ACT_CLICK, ACT_MOUSEMOVE, ACT_MOUSECLICK, ACT_MOUSECLICKDRAG, ACT_MOUSEGETPOS
+, ACT_STATUSBARGETTEXT
+, ACT_STATUSBARWAIT
+, ACT_CLIPWAIT, ACT_KEYWAIT
+, ACT_SLEEP, ACT_RANDOM
+, ACT_GOTO, ACT_GOSUB, ACT_ONEXIT, ACT_HOTKEY, ACT_SETTIMER, ACT_CRITICAL, ACT_THREAD, ACT_RETURN, ACT_EXIT
+, ACT_LOOP, ACT_BREAK, ACT_CONTINUE
+, ACT_BLOCK_BEGIN, ACT_BLOCK_END
+, ACT_WINACTIVATE, ACT_WINACTIVATEBOTTOM
+, ACT_WINWAIT, ACT_WINWAITCLOSE, ACT_WINWAITACTIVE, ACT_WINWAITNOTACTIVE
+, ACT_WINMINIMIZE, ACT_WINMAXIMIZE, ACT_WINRESTORE
+, ACT_WINHIDE, ACT_WINSHOW
+, ACT_WINMINIMIZEALL, ACT_WINMINIMIZEALLUNDO
+, ACT_WINCLOSE, ACT_WINKILL, ACT_WINMOVE, ACT_WINMENUSELECTITEM, ACT_PROCESS
+, ACT_WINSET, ACT_WINSETTITLE, ACT_WINGETTITLE, ACT_WINGETCLASS, ACT_WINGET, ACT_WINGETPOS, ACT_WINGETTEXT
+, ACT_SYSGET, ACT_POSTMESSAGE, ACT_SENDMESSAGE
+// Keep rarely used actions near the bottom for parsing/performance reasons:
+, ACT_PIXELGETCOLOR, ACT_PIXELSEARCH, ACT_IMAGESEARCH
+, ACT_GROUPADD, ACT_GROUPACTIVATE, ACT_GROUPDEACTIVATE, ACT_GROUPCLOSE
+, ACT_DRIVESPACEFREE, ACT_DRIVE, ACT_DRIVEGET
+, ACT_SOUNDGET, ACT_SOUNDSET, ACT_SOUNDGETWAVEVOLUME, ACT_SOUNDSETWAVEVOLUME, ACT_SOUNDBEEP, ACT_SOUNDPLAY
+, ACT_FILEAPPEND, ACT_FILEREAD, ACT_FILEREADLINE, ACT_FILEDELETE, ACT_FILERECYCLE, ACT_FILERECYCLEEMPTY
+, ACT_FILEINSTALL, ACT_FILECOPY, ACT_FILEMOVE, ACT_FILECOPYDIR, ACT_FILEMOVEDIR
+, ACT_FILECREATEDIR, ACT_FILEREMOVEDIR
+, ACT_FILEGETATTRIB, ACT_FILESETATTRIB, ACT_FILEGETTIME, ACT_FILESETTIME
+, ACT_FILEGETSIZE, ACT_FILEGETVERSION
+, ACT_SETWORKINGDIR, ACT_FILESELECTFILE, ACT_FILESELECTFOLDER, ACT_FILEGETSHORTCUT, ACT_FILECREATESHORTCUT
+, ACT_INIREAD, ACT_INIWRITE, ACT_INIDELETE
+, ACT_REGREAD, ACT_REGWRITE, ACT_REGDELETE, ACT_OUTPUTDEBUG
+, ACT_SETKEYDELAY, ACT_SETMOUSEDELAY, ACT_SETWINDELAY, ACT_SETCONTROLDELAY, ACT_SETBATCHLINES
+, ACT_SETTITLEMATCHMODE, ACT_SETFORMAT, ACT_FORMATTIME
+, ACT_SUSPEND, ACT_PAUSE
+, ACT_AUTOTRIM, ACT_STRINGCASESENSE, ACT_DETECTHIDDENWINDOWS, ACT_DETECTHIDDENTEXT, ACT_BLOCKINPUT
+, ACT_SETNUMLOCKSTATE, ACT_SETSCROLLLOCKSTATE, ACT_SETCAPSLOCKSTATE, ACT_SETSTORECAPSLOCKMODE
+, ACT_KEYHISTORY, ACT_LISTLINES, ACT_LISTVARS, ACT_LISTHOTKEYS
+, ACT_EDIT, ACT_RELOAD, ACT_MENU, ACT_GUI, ACT_GUICONTROL, ACT_GUICONTROLGET
+, ACT_EXITAPP
+, ACT_SHUTDOWN
+// Make these the last ones before the count so they will be less often processed.  This helps
+// performance because this one doesn't actually have a keyword so will never result
+// in a match anyway.  UPDATE: No longer used because Run/RunWait is now required, which greatly
+// improves syntax checking during load:
+//, ACT_EXEC
+// It's safer not to do this here.  It's better set by a
+// calculation immediately after the array is declared and initialized,
+// at which time we know its true size:
+// , ACT_COUNT
+};
+
+enum enum_act_old {
+  OLD_INVALID = FAIL  // These should both be zero for initialization and function-return-value purposes.
+  , OLD_SETENV, OLD_ENVADD, OLD_ENVSUB, OLD_ENVMULT, OLD_ENVDIV
+  // ACT_IS_IF_OLD() relies on the items in this next line being adjacent to one another and in this order:
+  , OLD_IFEQUAL, OLD_IFNOTEQUAL, OLD_IFGREATER, OLD_IFGREATEROREQUAL, OLD_IFLESS, OLD_IFLESSOREQUAL
+  , OLD_LEFTCLICK, OLD_RIGHTCLICK, OLD_LEFTCLICKDRAG, OLD_RIGHTCLICKDRAG
+  , OLD_HIDEAUTOITWIN, OLD_REPEAT, OLD_ENDREPEAT
+  , OLD_WINGETACTIVETITLE, OLD_WINGETACTIVESTATS
+};
+
+// It seems best not to include ACT_SUSPEND in the below, since the user may have marked
+// a large number of subroutines as "Suspend, Permit".  Even PAUSE is iffy, since the user
+// may be using it as "Pause, off/toggle", but it seems best to support PAUSE because otherwise
+// hotkey such as "#z::pause" would not be able to unpause the script if its MaxThreadsPerHotkey
+// was 1 (the default).
+#define ACT_IS_ALWAYS_ALLOWED(ActionType) (ActionType == ACT_EXITAPP || ActionType == ACT_PAUSE \
+	|| ActionType == ACT_EDIT || ActionType == ACT_RELOAD || ActionType == ACT_KEYHISTORY \
+	|| ActionType == ACT_LISTLINES || ActionType == ACT_LISTVARS || ActionType == ACT_LISTHOTKEYS)
+#define ACT_IS_ASSIGN(ActionType) (ActionType >= ACT_ASSIGN_FIRST && ActionType <= ACT_ASSIGN_LAST)
+#define ACT_IS_IF(ActionType) (ActionType >= ACT_FIRST_IF && ActionType <= ACT_LAST_IF)
+#define ACT_IS_IF_OLD(ActionType, OldActionType) (ActionType >= ACT_FIRST_IF_ALLOWING_SAME_LINE_ACTION && ActionType <= ACT_LAST_IF) \
+	&& (ActionType < ACT_IFEQUAL || ActionType > ACT_IFLESSOREQUAL || (OldActionType >= OLD_IFEQUAL && OldActionType <= OLD_IFLESSOREQUAL))
+	// All the checks above must be done so that cmds such as IfMsgBox (which are both "old" and "new")
+	// can support parameters on the same line or on the next line.  For example, both of the above are allowed:
+	// IfMsgBox, No, Gosub, XXX
+	// IfMsgBox, No
+	//     Gosub, XXX
 
 // For convenience in many places.  Must cast to int to avoid loss of negative values.
 #define BUF_SPACE_REMAINING ((int)(aBufSize - (aBuf - aBuf_orig)))
@@ -308,8 +432,9 @@ typedef UCHAR CoordModeAttribType;
 #define COORD_MODE_CARET   0x08
 #define COORD_MODE_MENU    0x10
 
-#define COORD_UNSPECIFIED INT_MIN
 #define COORD_CENTERED (INT_MIN + 1)
+#define COORD_UNSPECIFIED INT_MIN
+#define COORD_UNSPECIFIED_SHORT SHRT_MIN  // This essentially makes coord -32768 "reserved", but it seems acceptable given usefulness and the rarity of a real coord like that.
 
 // Same reason as above struct.  It's best to keep this struct as small as possible
 // because it's used as a local (stack) var by at least one recursive function:
@@ -334,10 +459,13 @@ struct global_struct
 	#define THREAD_DIALOG_OWNER ((g.DialogOwnerIndex < MAX_GUI_WINDOWS && g_gui[g.DialogOwnerIndex]) \
 		? g_gui[g.DialogOwnerIndex]->mHwnd : NULL) // Above line relies on short-circuit eval. oder.
 	int WinDelay;  // negative values may be used as special flags.
-	int ControlDelay;  // negative values may be used as special flags.
-	int KeyDelay;  // negative values may be used as special flags.
-	int PressDuration; // The delay between the up-event and down-event of each keystroke.
-	int MouseDelay;  // negative values may be used as special flags.
+	int ControlDelay; // negative values may be used as special flags.
+	int KeyDelay;     //
+	int KeyDelayPlay; //
+	int PressDuration;     // The delay between the up-event and down-event of each keystroke.
+	int PressDurationPlay; // 
+	int MouseDelay;     // negative values may be used as special flags.
+	int MouseDelayPlay; //
 	char FormatFloat[32];
 	char ErrorLevel[128]; // Big in case user put something bigger than a number in g_ErrorLevel.
 	Func *CurrentFunc; // The function whose body is currently being processed at load-time, or being run at runtime (if any).
@@ -347,6 +475,7 @@ struct global_struct
 	HWND DialogHWND;
 
 	// All these one-byte members are kept adjacent to make the struct smaller, which helps conserve stack space:
+	SendModes SendMode;
 	bool CalledByIsDialogMessageOrDispatch;  // This would probably be okay if it were a normal global rather than in the g-struct, but due to messaging complexity, this lends peace of mind and robustness.
 	bool TitleFindFast; // Whether to use the fast mode of searching window text, or the more thorough slow mode.
 	bool DetectHiddenWindows; // Whether to detect the titles of hidden parent windows.
@@ -395,6 +524,7 @@ inline void global_init(global_struct &g)
 	// deeper recursion.  When the interrupting subroutine returns, the former
 	// subroutine's values for these are restored prior to resuming execution:
 	global_clear_state(g);
+	g.SendMode = SM_EVENT;  // v1.0.43: Default to SM_EVENT for backward compatibility.
 	g.TitleMatchMode = FIND_IN_LEADING_PART; // Standard default for AutoIt2 and 3.
 	g.TitleFindFast = true; // Since it's so much faster in many cases.
 	g.DetectHiddenWindows = false;  // Same as AutoIt2 but unlike AutoIt3; seems like a more intuitive default.
@@ -420,8 +550,11 @@ inline void global_init(global_struct &g)
 	g.WinDelay = 100;
 	g.ControlDelay = 20;
 	g.KeyDelay = 10;
+	g.KeyDelayPlay = -1;
 	g.PressDuration = -1;
+	g.PressDurationPlay = -1;
 	g.MouseDelay = 10;
+	g.MouseDelayPlay = -1;
 	#define DEFAULT_MOUSE_SPEED 2
 	#define MAX_MOUSE_SPEED 100
 	#define MAX_MOUSE_SPEED_STR "100"

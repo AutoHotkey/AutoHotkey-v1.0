@@ -24,6 +24,7 @@ GNU General Public License for more details.
 
 extern HINSTANCE g_hInstance;
 extern DWORD g_MainThreadID;
+extern DWORD g_HookThreadID;
 extern bool g_DestroyWindowCalled;
 extern HWND g_hWnd;  // The main window
 extern HWND g_hWndEdit;  // The edit window, child of main.
@@ -35,7 +36,6 @@ extern WNDPROC g_TabClassProc;
 extern modLR_type g_modifiersLR_logical;   // Tracked by hook (if hook is active).
 extern modLR_type g_modifiersLR_logical_non_ignored;
 extern modLR_type g_modifiersLR_physical;  // Same as above except it's which modifiers are PHYSICALLY down.
-extern modLR_type g_modifiersLR_persistent; // Global to keep track of this script's own lifetime/persistent modifiers (the ones it caused to be persistent and thus is responsible for tracking).
 
 #ifdef FUTURE_USE_MOUSE_BUTTONS_LOGICAL
 extern WORD g_mouse_buttons_logical; // A bitwise combination of MK_LBUTTON, etc.
@@ -45,6 +45,7 @@ extern WORD g_mouse_buttons_logical; // A bitwise combination of MK_LBUTTON, etc
 #define STATE_ON 0x01
 extern BYTE g_PhysicalKeyState[VK_ARRAY_COUNT];
 extern bool g_LayoutHasAltGr;
+extern bool g_BlockWinKeys;
 extern DWORD g_HookReceiptOfLControlMeansAltGr;
 extern DWORD g_IgnoreNextLControlDown;
 extern DWORD g_IgnoreNextLControlUp;
@@ -55,6 +56,7 @@ extern int g_ClipboardTimeout;
 
 extern HHOOK g_KeybdHook;
 extern HHOOK g_MouseHook;
+extern HHOOK g_PlaybackHook;
 extern bool g_ForceLaunch;
 extern bool g_WinActivateForce;
 extern SingleInstanceType g_AllowOnlyOneInstance;
@@ -122,6 +124,7 @@ extern HWND g_HShwnd;
 // Hot-string global settings:
 extern int g_HSPriority;
 extern int g_HSKeyDelay;
+extern SendModes g_HSSendMode;
 extern bool g_HSCaseSensitive;
 extern bool g_HSConformToCase;
 extern bool g_HSDoBackspace;

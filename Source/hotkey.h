@@ -17,7 +17,7 @@ GNU General Public License for more details.
 #ifndef hotkey_h
 #define hotkey_h
 
-#include "keyboard.h"
+#include "keyboard_mouse.h"
 #include "script.h"  // For which label (and in turn which line) in the script to jump to.
 EXTERN_SCRIPT;  // For g_script.
 
@@ -138,7 +138,6 @@ private:
 
 	ResultType Register();
 	ResultType Unregister();
-	static ResultType AllDestruct();
 
 	void *operator new(size_t aBytes) {return SimpleHeap::Malloc(aBytes);}
 	void *operator new[](size_t aBytes) {return SimpleHeap::Malloc(aBytes);}
@@ -323,6 +322,7 @@ public:
 	int mPriority, mKeyDelay;
 
 	// Keep members that are smaller than 32-bit adjacent with each other to conserve memory (due to 4-byte alignment).
+	SendModes mSendMode;
 	HotCriterionType mHotCriterion;
 	UCHAR mStringLength;
 	bool mSuspended;
@@ -356,8 +356,8 @@ public:
 	void DoReplace(LPARAM alParam);
 	static ResultType AddHotstring(Label *aJumpToLabel, char *aOptions, char *aHotstring, char *aReplacement
 		, bool aHasContinuationSection);
-	static void ParseOptions(char *aOptions, int &aPriority, int &aKeyDelay, bool &aCaseSensitive
-		, bool &aConformToCase, bool &aDoBackspace, bool &aOmitEndChar, bool &aSendRaw
+	static void ParseOptions(char *aOptions, int &aPriority, int &aKeyDelay, SendModes &aSendMode
+		, bool &aCaseSensitive, bool &aConformToCase, bool &aDoBackspace, bool &aOmitEndChar, bool &aSendRaw
 		, bool &aEndCharRequired, bool &aDetectWhenInsideWord, bool &aDoReset);
 
 	// Constructor & destructor:

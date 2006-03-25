@@ -1190,21 +1190,8 @@ ResultType UserMenu::Display(bool aForceToForeground, int aX, int aY)
 			pt.x = aX;
 		if (aY != COORD_UNSPECIFIED)
 			pt.y = aY;
-		// The below section is very similar to the one is MouseMove():
 		if (!(g.CoordMode & COORD_MODE_MENU))  // Using coords relative to the active window (rather than screen).
-		{
-			HWND fore = GetForegroundWindow();
-			// Revert to screen coordinates if the foreground window is minimized.  Although it might be
-			// impossible for a visible window to be both foreground and minmized, it seems that hidden
-			// windows -- such as the script's own main window when activated for the purpose of showing
-			// a popup menu -- can be foreground while simulateously being minimized.
-			RECT rect;
-			if (fore && !IsIconic(fore) && GetWindowRect(fore, &rect))
-			{
-				pt.x += rect.left;
-				pt.y += rect.top;
-			}
-		}
+			WindowToScreen((int &)pt.x, (int &)pt.y);
 	}
 
 	// UPDATE: For v1.0.35.14, must ensure one of the script's windows is active before showing the menu

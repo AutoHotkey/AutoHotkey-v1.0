@@ -92,7 +92,7 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt, bool aExac
 // To explicitly free the memory, use Assign("").
 {
 	if (mType == VAR_ALIAS) // For simplicity and reduced code size, just make a recursive call to self.
-		return mAliasFor->Assign(aBuf, aLength, aTrimIt);
+		return mAliasFor->Assign(aBuf, aLength, aTrimIt, aExactSize);
 
 	bool do_assign = true; // Set default.
 	bool free_it_if_large = true;  // Default.
@@ -637,10 +637,10 @@ void Var::Free(int aWhenToFree, bool aExcludeAliases)
 {
 	if (mType == VAR_ALIAS) // For simplicity and reduced code size, just make a recursive call to self.
 	{
-		if (aExcludeAliases) // Caller didn't want the target of the alias freed.
-			return;
-		else
+		if (!aExcludeAliases)
 			mAliasFor->Free(aWhenToFree);
+		//else caller didn't want the target of the alias freed, so do nothing.
+		return;
 	}
 
 	// Must check this one first because caller relies not only on var not being freed in this case,

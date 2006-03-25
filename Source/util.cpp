@@ -1241,6 +1241,29 @@ int CALLBACK FontEnumProc(ENUMLOGFONTEX *lpelfe, NEWTEXTMETRICEX *lpntme, DWORD 
 
 
 
+void WindowToScreen(int &aX, int &aY)
+// aX and aY are assumed to be relative to the currently active window.  Here they are converted to
+// screen coordinates based on the position of the active window upper-left corner (not its client area).
+{
+	RECT rect;
+	HWND fore_hwnd = GetForegroundWindow();
+	if (fore_hwnd && !IsIconic(fore_hwnd) && GetWindowRect(fore_hwnd, &rect))
+	{
+		aX += rect.left;
+		aY += rect.top;
+	}
+	//else no active window per se, so don't convert the coordinates.  Leave them as-is as desired by the
+	// caller.  More details:
+	// Revert to screen coordinates if the foreground window is minimized.  Although it might be
+	// impossible for a visible window to be both foreground and minmized, it seems that hidden
+	// windows -- such as the script's own main window when activated for the purpose of showing
+	// a popup menu -- can be foreground while simultaneously being minimized.  This fixes an
+	// issue where the mouse will move to the upper-left corner of the screen rather than the
+	// intended coordinates (v1.0.17):
+}
+
+
+
 void GetVirtualDesktopRect(RECT &aRect)
 {
 	aRect.right = GetSystemMetrics(SM_CXVIRTUALSCREEN);

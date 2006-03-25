@@ -915,131 +915,6 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 
 
 
-void Line::MouseMove(int aX, int aY, int aSpeed, bool aMoveRelative)
-{
-	POINT ptCur;
-	int xCur, yCur;
-	int delta;
-	const int	nMinSpeed = 32;
-	RECT rect;
-
-	if (aSpeed < 0) // This can happen during script's runtime due to MouseClick's speed being a var containing a neg.
-		aSpeed = 0;  // 0 is the fastest.
-	else
-		if (aSpeed > MAX_MOUSE_SPEED)
-			aSpeed = MAX_MOUSE_SPEED;
-
-	if (aMoveRelative)  // We're moving the mouse cursor relative to its current position.
-	{
-		GetCursorPos(&ptCur);
-		aX += ptCur.x;
-		aY += ptCur.y;
-	}
-	else if (!(g.CoordMode & COORD_MODE_MOUSE))  // Moving mouse relative to the active window (rather than screen).
-	{
-		HWND fore = GetForegroundWindow();
-		// Revert to screen coordinates if the foreground window is minimized.  Although it might be
-		// impossible for a visible window to be both foreground and minmized, it seems that hidden
-		// windows -- such as the script's own main window when activated for the purpose of showing
-		// a popup menu -- can be foreground while simulateously being minimized.  This fixes an
-		// issue where the mouse will move to the upper-left corner of the screen rather than the
-		// intended coordinates (v1.0.17):
-		if (fore && !IsIconic(fore) && GetWindowRect(fore, &rect))
-		{
-			aX += rect.left;
-			aY += rect.top;
-		}
-	}
-
-	// AutoIt3: Get size of desktop
-	if (!GetWindowRect(GetDesktopWindow(), &rect)) // Might fail if there is no desktop (e.g. user not logged in).
-		rect.bottom = rect.left = rect.right = rect.top = 0;  // Arbitrary defaults.
-
-	// AutoIt3: Convert our coords to MOUSEEVENTF_ABSOLUTE coords
-	// v1.0.21: No actual change was made, but the below comments were added:
-	// Jack Horsfield reports that MouseMove works properly on his multi-monitor system which has
-	// its secondary display to the right of the primary.  He said that MouseClick is able to click on
-	// windows that exist entirely on the secondary display. That's a bit baffling because the below
-	// formula should yield a value greater than 65535 when the destination coordinates are to
-	// the right of the primary display (due to the fact that GetDesktopWindow() called above yields
-	// the rect for the primary display only).  Chances are, mouse_event() in Win2k/XP (and possibly
-	// Win98, but that is far more doubtful given some of the things mentioned on MSDN) has been
-	// enhanced (undocumented) to support values greater than 65535 (and perhaps even negative by
-	// taking advantage of DWORD overflow?)
-	aX = ((65535 * aX) / (rect.right - 1)) + 1;
-	aY = ((65535 * aY) / (rect.bottom - 1)) + 1;
-
-	// AutoIt3: Are we slowly moving or insta-moving?
-	if (aSpeed == 0)
-	{
-		MouseEvent(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, aX, aY);
-		DoMouseDelay(); // Should definitely do this in case the action immediately after this is a click.
-		return;
-	}
-
-	// AutoIt3: Sanity check for speed
-	if (aSpeed < 0 || aSpeed > MAX_MOUSE_SPEED)
-		aSpeed = g.DefaultMouseSpeed;
-
-	// AutoIt3: So, it's a more gradual speed that is needed :)
-	GetCursorPos(&ptCur);
-	// Convert to MOUSEEVENTF_ABSOLUTE coords
-	xCur = ((ptCur.x * 65535) / (rect.right - 1)) + 1;
-	yCur = ((ptCur.y * 65535) / (rect.bottom - 1)) + 1;
-
-	while (xCur != aX || yCur != aY)
-	{
-		if (xCur < aX)
-		{
-			delta = (aX - xCur) / aSpeed;
-			if (delta == 0 || delta < nMinSpeed)
-				delta = nMinSpeed;
-			if ((xCur + delta) > aX)
-				xCur = aX;
-			else
-				xCur += delta;
-		} 
-		else 
-			if (xCur > aX)
-			{
-				delta = (xCur - aX) / aSpeed;
-				if (delta == 0 || delta < nMinSpeed)
-					delta = nMinSpeed;
-				if ((xCur - delta) < aX)
-					xCur = aX;
-				else
-					xCur -= delta;
-			}
-
-		if (yCur < aY)
-		{
-			delta = (aY - yCur) / aSpeed;
-			if (delta == 0 || delta < nMinSpeed)
-				delta = nMinSpeed;
-			if ((yCur + delta) > aY)
-				yCur = aY;
-			else
-				yCur += delta;
-		} 
-		else 
-			if (yCur > aY)
-			{
-				delta = (yCur - aY) / aSpeed;
-				if (delta == 0 || delta < nMinSpeed)
-					delta = nMinSpeed;
-				if ((yCur - delta) < aY)
-					yCur = aY;
-				else
-					yCur -= delta;
-			}
-
-		MouseEvent(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, xCur, yCur);
-		DoMouseDelay();
-	}
-}
-
-
-
 ResultType Line::URLDownloadToFile(char *aURL, char *aFilespec)
 {
 	// Check that we have IE3 and access to wininet.dll
@@ -2100,6 +1975,70 @@ void Util_WinKill(HWND hWnd)
 			CloseHandle(hProcess);
 		}
 	}
+}
+
+
+
+void DoIncrementalMouseMove(int aX1, int aY1, int aX2, int aY2, int aSpeed)
+// aX1 and aY1 are the starting coordinates, and "2" are the destination coordinates.
+// Caller has ensured that aSpeed is in the range 0 to 100, inclusive.
+{
+	// AutoIt3: So, it's a more gradual speed that is needed :)
+	int delta;
+	#define INCR_MOUSE_MIN_SPEED 32
+
+	while (aX1 != aX2 || aY1 != aY2)
+	{
+		if (aX1 < aX2)
+		{
+			delta = (aX2 - aX1) / aSpeed;
+			if (delta == 0 || delta < INCR_MOUSE_MIN_SPEED)
+				delta = INCR_MOUSE_MIN_SPEED;
+			if ((aX1 + delta) > aX2)
+				aX1 = aX2;
+			else
+				aX1 += delta;
+		} 
+		else 
+			if (aX1 > aX2)
+			{
+				delta = (aX1 - aX2) / aSpeed;
+				if (delta == 0 || delta < INCR_MOUSE_MIN_SPEED)
+					delta = INCR_MOUSE_MIN_SPEED;
+				if ((aX1 - delta) < aX2)
+					aX1 = aX2;
+				else
+					aX1 -= delta;
+			}
+
+		if (aY1 < aY2)
+		{
+			delta = (aY2 - aY1) / aSpeed;
+			if (delta == 0 || delta < INCR_MOUSE_MIN_SPEED)
+				delta = INCR_MOUSE_MIN_SPEED;
+			if ((aY1 + delta) > aY2)
+				aY1 = aY2;
+			else
+				aY1 += delta;
+		} 
+		else 
+			if (aY1 > aY2)
+			{
+				delta = (aY1 - aY2) / aSpeed;
+				if (delta == 0 || delta < INCR_MOUSE_MIN_SPEED)
+					delta = INCR_MOUSE_MIN_SPEED;
+				if ((aY1 - delta) < aY2)
+					aY1 = aY2;
+				else
+					aY1 -= delta;
+			}
+
+		MouseEvent(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, 0, aX1, aY1);
+		DoMouseDelay();
+		// Above: A delay is required for backward compatibility and because it's just how the incremental-move
+		// feature was originally designed in AutoIt v3.  It may in fact improve reliability in some cases,
+		// especially with the mouse_event() method vs. SendInput/Play.
+	} // while()
 }
 
 

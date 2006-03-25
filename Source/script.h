@@ -20,7 +20,7 @@ GNU General Public License for more details.
 #include "stdafx.h" // pre-compiled headers
 #include "defines.h"
 #include "SimpleHeap.h" // for overloaded new/delete operators.
-#include "keyboard.h" // for modLR_type
+#include "keyboard_mouse.h" // for modLR_type
 #include "var.h" // for a script's variables.
 #include "WinGroup.h" // for a script's Window Groups.
 #include "Util.h" // for FileTimeToYYYYMMDD(), strlcpy()
@@ -53,120 +53,6 @@ enum FileLoopModeType {FILE_LOOP_INVALID, FILE_LOOP_FILES_ONLY, FILE_LOOP_FILES_
 enum VariableTypeType {VAR_TYPE_INVALID, VAR_TYPE_NUMBER, VAR_TYPE_INTEGER, VAR_TYPE_FLOAT
 	, VAR_TYPE_TIME	, VAR_TYPE_DIGIT, VAR_TYPE_XDIGIT, VAR_TYPE_ALNUM, VAR_TYPE_ALPHA
 	, VAR_TYPE_UPPER, VAR_TYPE_LOWER, VAR_TYPE_SPACE};
-
-// But the array that goes with these actions is in globaldata.cpp because
-// otherwise it would be a little cumbersome to declare the extern version
-// of the array in here (since it's only extern to modules other than
-// script.cpp):
-enum enum_act {
-// Seems best to make this one zero so that it will be the ZeroMemory() default within
-// any POD structures that contain an action_type field:
-  ACT_INVALID = FAIL  // These should both be zero for initialization and function-return-value purposes.
-, ACT_ASSIGN, ACT_ASSIGNEXPR, ACT_FUNCTIONCALL, ACT_ADD, ACT_SUB, ACT_MULT, ACT_DIV
-, ACT_ASSIGN_FIRST = ACT_ASSIGN, ACT_ASSIGN_LAST = ACT_DIV
-, ACT_REPEAT // Never parsed directly, only provided as a translation target for the old command (see other notes).
-, ACT_ELSE   // Parsed at a lower level than most commands to support same-line ELSE-actions (e.g. "else if").
-, ACT_IFBETWEEN, ACT_IFNOTBETWEEN, ACT_IFIN, ACT_IFNOTIN, ACT_IFCONTAINS, ACT_IFNOTCONTAINS, ACT_IFIS, ACT_IFISNOT
-, ACT_IFEXPR  // i.e. if (expr)
- // *** *** *** KEEP ALL OLD-STYLE/AUTOIT V2 IFs AFTER THIS (v1.0.20 bug fix). *** *** ***
- , ACT_FIRST_IF_ALLOWING_SAME_LINE_ACTION
- // *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***
- // ACT_IS_IF_OLD() relies upon ACT_IFEQUAL through ACT_IFLESSOREQUAL being adjacent to one another
- // and it relies upon the fact that ACT_IFEQUAL is first in the series and ACT_IFLESSOREQUAL last.
-, ACT_IFEQUAL = ACT_FIRST_IF_ALLOWING_SAME_LINE_ACTION, ACT_IFNOTEQUAL, ACT_IFGREATER, ACT_IFGREATEROREQUAL
-, ACT_IFLESS, ACT_IFLESSOREQUAL
-, ACT_FIRST_COMMAND // i.e the above aren't considered commands for parsing/searching purposes.
-, ACT_IFWINEXIST = ACT_FIRST_COMMAND
-, ACT_IFWINNOTEXIST, ACT_IFWINACTIVE, ACT_IFWINNOTACTIVE
-, ACT_IFINSTRING, ACT_IFNOTINSTRING
-, ACT_IFEXIST, ACT_IFNOTEXIST, ACT_IFMSGBOX
-, ACT_FIRST_IF = ACT_IFBETWEEN, ACT_LAST_IF = ACT_IFMSGBOX  // Keep this range updated with any new IFs that are added.
-, ACT_MSGBOX, ACT_INPUTBOX, ACT_SPLASHTEXTON, ACT_SPLASHTEXTOFF, ACT_PROGRESS, ACT_SPLASHIMAGE
-, ACT_TOOLTIP, ACT_TRAYTIP, ACT_INPUT
-, ACT_TRANSFORM, ACT_STRINGLEFT, ACT_STRINGRIGHT, ACT_STRINGMID
-, ACT_STRINGTRIMLEFT, ACT_STRINGTRIMRIGHT, ACT_STRINGLOWER, ACT_STRINGUPPER
-, ACT_STRINGLEN, ACT_STRINGGETPOS, ACT_STRINGREPLACE, ACT_STRINGSPLIT, ACT_SPLITPATH, ACT_SORT
-, ACT_ENVSET, ACT_ENVUPDATE
-, ACT_RUNAS, ACT_RUN, ACT_RUNWAIT, ACT_URLDOWNLOADTOFILE
-, ACT_GETKEYSTATE
-, ACT_SEND, ACT_SENDRAW, ACT_CONTROLSEND, ACT_CONTROLSENDRAW, ACT_CONTROLCLICK, ACT_CONTROLMOVE, ACT_CONTROLGETPOS
-, ACT_CONTROLFOCUS, ACT_CONTROLGETFOCUS, ACT_CONTROLSETTEXT, ACT_CONTROLGETTEXT, ACT_CONTROL, ACT_CONTROLGET
-, ACT_COORDMODE, ACT_SETDEFAULTMOUSESPEED, ACT_MOUSEMOVE, ACT_MOUSECLICK, ACT_MOUSECLICKDRAG, ACT_MOUSEGETPOS
-, ACT_STATUSBARGETTEXT
-, ACT_STATUSBARWAIT
-, ACT_CLIPWAIT, ACT_KEYWAIT
-, ACT_SLEEP, ACT_RANDOM
-, ACT_GOTO, ACT_GOSUB, ACT_ONEXIT, ACT_HOTKEY, ACT_SETTIMER, ACT_CRITICAL, ACT_THREAD, ACT_RETURN, ACT_EXIT
-, ACT_LOOP, ACT_BREAK, ACT_CONTINUE
-, ACT_BLOCK_BEGIN, ACT_BLOCK_END
-, ACT_WINACTIVATE, ACT_WINACTIVATEBOTTOM
-, ACT_WINWAIT, ACT_WINWAITCLOSE, ACT_WINWAITACTIVE, ACT_WINWAITNOTACTIVE
-, ACT_WINMINIMIZE, ACT_WINMAXIMIZE, ACT_WINRESTORE
-, ACT_WINHIDE, ACT_WINSHOW
-, ACT_WINMINIMIZEALL, ACT_WINMINIMIZEALLUNDO
-, ACT_WINCLOSE, ACT_WINKILL, ACT_WINMOVE, ACT_WINMENUSELECTITEM, ACT_PROCESS
-, ACT_WINSET, ACT_WINSETTITLE, ACT_WINGETTITLE, ACT_WINGETCLASS, ACT_WINGET, ACT_WINGETPOS, ACT_WINGETTEXT
-, ACT_SYSGET, ACT_POSTMESSAGE, ACT_SENDMESSAGE
-// Keep rarely used actions near the bottom for parsing/performance reasons:
-, ACT_PIXELGETCOLOR, ACT_PIXELSEARCH, ACT_IMAGESEARCH
-, ACT_GROUPADD, ACT_GROUPACTIVATE, ACT_GROUPDEACTIVATE, ACT_GROUPCLOSE
-, ACT_DRIVESPACEFREE, ACT_DRIVE, ACT_DRIVEGET
-, ACT_SOUNDGET, ACT_SOUNDSET, ACT_SOUNDGETWAVEVOLUME, ACT_SOUNDSETWAVEVOLUME, ACT_SOUNDBEEP, ACT_SOUNDPLAY
-, ACT_FILEAPPEND, ACT_FILEREAD, ACT_FILEREADLINE, ACT_FILEDELETE, ACT_FILERECYCLE, ACT_FILERECYCLEEMPTY
-, ACT_FILEINSTALL, ACT_FILECOPY, ACT_FILEMOVE, ACT_FILECOPYDIR, ACT_FILEMOVEDIR
-, ACT_FILECREATEDIR, ACT_FILEREMOVEDIR
-, ACT_FILEGETATTRIB, ACT_FILESETATTRIB, ACT_FILEGETTIME, ACT_FILESETTIME
-, ACT_FILEGETSIZE, ACT_FILEGETVERSION
-, ACT_SETWORKINGDIR, ACT_FILESELECTFILE, ACT_FILESELECTFOLDER, ACT_FILEGETSHORTCUT, ACT_FILECREATESHORTCUT
-, ACT_INIREAD, ACT_INIWRITE, ACT_INIDELETE
-, ACT_REGREAD, ACT_REGWRITE, ACT_REGDELETE, ACT_OUTPUTDEBUG
-, ACT_SETKEYDELAY, ACT_SETMOUSEDELAY, ACT_SETWINDELAY, ACT_SETCONTROLDELAY, ACT_SETBATCHLINES
-, ACT_SETTITLEMATCHMODE, ACT_SETFORMAT, ACT_FORMATTIME
-, ACT_SUSPEND, ACT_PAUSE
-, ACT_AUTOTRIM, ACT_STRINGCASESENSE, ACT_DETECTHIDDENWINDOWS, ACT_DETECTHIDDENTEXT, ACT_BLOCKINPUT
-, ACT_SETNUMLOCKSTATE, ACT_SETSCROLLLOCKSTATE, ACT_SETCAPSLOCKSTATE, ACT_SETSTORECAPSLOCKMODE
-, ACT_KEYHISTORY, ACT_LISTLINES, ACT_LISTVARS, ACT_LISTHOTKEYS
-, ACT_EDIT, ACT_RELOAD, ACT_MENU, ACT_GUI, ACT_GUICONTROL, ACT_GUICONTROLGET
-, ACT_EXITAPP
-, ACT_SHUTDOWN
-// Make these the last ones before the count so they will be less often processed.  This helps
-// performance because this one doesn't actually have a keyword so will never result
-// in a match anyway.  UPDATE: No longer used because Run/RunWait is now required, which greatly
-// improves syntax checking during load:
-//, ACT_EXEC
-// It's safer not to do this here.  It's better set by a
-// calculation immediately after the array is declared and initialized,
-// at which time we know its true size:
-// , ACT_COUNT
-};
-
-enum enum_act_old {
-  OLD_INVALID = FAIL  // These should both be zero for initialization and function-return-value purposes.
-  , OLD_SETENV, OLD_ENVADD, OLD_ENVSUB, OLD_ENVMULT, OLD_ENVDIV
-  // ACT_IS_IF_OLD() relies on the items in this next line being adjacent to one another and in this order:
-  , OLD_IFEQUAL, OLD_IFNOTEQUAL, OLD_IFGREATER, OLD_IFGREATEROREQUAL, OLD_IFLESS, OLD_IFLESSOREQUAL
-  , OLD_LEFTCLICK, OLD_RIGHTCLICK, OLD_LEFTCLICKDRAG, OLD_RIGHTCLICKDRAG
-  , OLD_HIDEAUTOITWIN, OLD_REPEAT, OLD_ENDREPEAT
-  , OLD_WINGETACTIVETITLE, OLD_WINGETACTIVESTATS
-};
-
-// It seems best not to include ACT_SUSPEND in the below, since the user may have marked
-// a large number of subroutines as "Suspend, Permit".  Even PAUSE is iffy, since the user
-// may be using it as "Pause, off/toggle", but it seems best to support PAUSE because otherwise
-// hotkey such as "#z::pause" would not be able to unpause the script if its MaxThreadsPerHotkey
-// was 1 (the default).
-#define ACT_IS_ALWAYS_ALLOWED(ActionType) (ActionType == ACT_EXITAPP || ActionType == ACT_PAUSE \
-	|| ActionType == ACT_EDIT || ActionType == ACT_RELOAD || ActionType == ACT_KEYHISTORY \
-	|| ActionType == ACT_LISTLINES || ActionType == ACT_LISTVARS || ActionType == ACT_LISTHOTKEYS)
-#define ACT_IS_ASSIGN(ActionType) (ActionType >= ACT_ASSIGN_FIRST && ActionType <= ACT_ASSIGN_LAST)
-#define ACT_IS_IF(ActionType) (ActionType >= ACT_FIRST_IF && ActionType <= ACT_LAST_IF)
-#define ACT_IS_IF_OLD(ActionType, OldActionType) (ActionType >= ACT_FIRST_IF_ALLOWING_SAME_LINE_ACTION && ActionType <= ACT_LAST_IF) \
-	&& (ActionType < ACT_IFEQUAL || ActionType > ACT_IFLESSOREQUAL || (OldActionType >= OLD_IFEQUAL && OldActionType <= OLD_IFLESSOREQUAL))
-	// All the checks above must be done so that cmds such as IfMsgBox (which are both "old" and "new")
-	// can support parameters on the same line or on the next line.  For example, both of the above are allowed:
-	// IfMsgBox, No, Gosub, XXX
-	// IfMsgBox, No
-	//     Gosub, XXX
 
 #define ATTACH_THREAD_INPUT \
 	bool threads_are_attached = false;\
@@ -279,6 +165,7 @@ enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
 
 //----------------------------------------------------------------------------------
 
+void DoIncrementalMouseMove(int aX1, int aY1, int aX2, int aY2, int aSpeed);
 DWORD ProcessExist9x2000(char *aProcess, char *aProcessName);
 DWORD ProcessExistNT4(char *aProcess, char *aProcessName);
 
@@ -658,6 +545,8 @@ private:
 		, char *aCurrentField, bool &aContinueMainLoop, Line *&aJumpToLine, FILE *aReadFile, char *aWriteFileName
 		, __int64 &aIndex);
 	ResultType Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aCurrentRegItem, LoopReadFileStruct *aCurrentReadFile);
+
+	ResultType MouseGetPos(bool aSimpleMode);
 	ResultType FormatTime(char *aYYYYMMDD, char *aFormat);
 	ResultType PerformAssign();
 	ResultType StringSplit(char *aArrayName, char *aInputString, char *aDelimiterList, char *aOmitList);
@@ -778,6 +667,7 @@ private:
 	ResultType PixelGetColor(int aX, int aY, bool aUseRGB);
 
 	static ResultType SetToggleState(vk_type aVK, ToggleValueType &ForceLock, char *aToggleText);
+
 public:
 	// Keep any fields that aren't an even multiple of 4 adjacent to each other.  This conserves memory
 	// due to byte-alignment:
@@ -877,21 +767,6 @@ public:
 	static int nSourceFiles; // An int vs. UCHAR so that it can be exactly 256 without overflowing.
 
 	static void FreeDerefBufIfLarge();
-
-	static void DoMouseDelay();
-	static ResultType MouseClickDrag(vk_type aVK // Which button.
-		, int aX1, int aY1, int aX2, int aY2, int aSpeed, bool aMoveRelative);
-	static ResultType MouseClick(vk_type aVK // Which button.
-		, int aX = COORD_UNSPECIFIED, int aY = COORD_UNSPECIFIED // These values signal us not to move the mouse.
-		, int aClickCount = 1, int aSpeed = DEFAULT_MOUSE_SPEED, KeyEventTypes aEventType = KEYDOWNANDUP, bool aMoveRelative = false);
-	static void MouseMove(int aX, int aY, int aSpeed = DEFAULT_MOUSE_SPEED, bool aMoveRelative = false);
-	ResultType MouseGetPos(bool aSimpleMode);
-	static void MouseEvent(DWORD aEventFlags, DWORD aX, DWORD aY, DWORD aData = 0)
-	// A small inline to help us remember to use KEY_IGNORE so that our own mouse
-	// events won't be falsely detected as hotkeys by the hooks (if they are installed).
-	{
-		mouse_event(aEventFlags, aX, aY, aData, KEY_IGNORE);
-	}
 
 	ResultType ExecUntil(ExecUntilMode aMode, char **apReturnValue = NULL, Line **apJumpToLine = NULL
 		, WIN32_FIND_DATA *aCurrentFile = NULL, RegItemStruct *aCurrentRegItem = NULL
@@ -1641,6 +1516,15 @@ public:
 		return TOGGLE_INVALID;
 	}
 
+	static SendModes ConvertSendMode(char *aBuf, SendModes aValueToReturnIfInvalid)
+	{
+		if (!stricmp(aBuf, "Play")) return SM_PLAY;
+		if (!stricmp(aBuf, "Input")) return SM_INPUT;
+		if (!stricmp(aBuf, "InputThenEvent")) return SM_INPUT_FALLBACK_TO_EVENT;
+		if (!stricmp(aBuf, "Event")) return SM_EVENT;
+		return aValueToReturnIfInvalid;
+	}
+
 	static FileLoopModeType ConvertLoopMode(char *aBuf)
 	// Returns the file loop mode, or FILE_LOOP_INVALID if aBuf contains an invalid mode.
 	{
@@ -1683,12 +1567,12 @@ public:
 		return SW_SHOWNORMAL;
 	}
 
-	static int ConvertMouseButton(char *aBuf, bool aAllowWheel = true)
+	static int ConvertMouseButton(char *aBuf, bool aAllowWheel = true, bool aUseLogicalButton = false)
 	// Returns the matching VK, or zero if none.
 	{
-		if (!aBuf || !*aBuf) return VK_LBUTTON; // Some callers rely on this default.
-		if (!stricmp(aBuf, "LEFT") || !stricmp(aBuf, "L")) return VK_LBUTTON;
-		if (!stricmp(aBuf, "RIGHT") || !stricmp(aBuf, "R")) return VK_RBUTTON;
+		if (!*aBuf || !stricmp(aBuf, "LEFT") || !stricmp(aBuf, "L"))
+			return aUseLogicalButton ? VK_LBUTTON_LOGICAL : VK_LBUTTON; // Some callers rely on this default when !*aBuf.
+		if (!stricmp(aBuf, "RIGHT") || !stricmp(aBuf, "R")) return aUseLogicalButton ? VK_RBUTTON_LOGICAL : VK_RBUTTON;
 		if (!stricmp(aBuf, "MIDDLE") || !stricmp(aBuf, "M")) return VK_MBUTTON;
 		if (!stricmp(aBuf, "X1")) return VK_XBUTTON1;
 		if (!stricmp(aBuf, "X2")) return VK_XBUTTON2;
@@ -1732,10 +1616,10 @@ public:
 
 	static ResultType ValidateMouseCoords(char *aX, char *aY)
 	{
-		if (!aX) aX = "";  if (!aY) aY = "";
-		if (!*aX && !*aY) return OK;  // Both are absent, which is the signal to use the current position.
-		if (*aX && *aY) return OK; // Both are present (that they are numeric is validated elsewhere).
-		return FAIL; // Otherwise, one is blank but the other isn't, which is not allowed.
+		// OK: Both are absent, which is the signal to use the current position.
+		// OK: Both are present (that they are numeric is validated elsewhere).
+		// FAIL: One is absent but the other is present.
+		return (!*aX && !*aY) || (*aX && *aY) ? OK : FAIL;
 	}
 
 	static char *LogToText(char *aBuf, int aBufSize);

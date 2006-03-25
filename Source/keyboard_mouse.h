@@ -58,11 +58,15 @@ GNU General Public License for more details.
 // fairly safe to use for the foreseeable future.  0xFF should probably
 // be avoided since it's sometimes used as a failure indictor by API
 // calls.  And 0x00 should definitely be avoided because it is used
-// to indicate failure by many functions that deal with virtual keys:
+// to indicate failure by many functions that deal with virtual keys.
 // 0x88 - 0x8F : unassigned
 // 0x97 - 0x9F : unassigned (this range seems less likely to be used)
-#define VK_WHEEL_DOWN 0x9E
-#define VK_WHEEL_UP 0x9F
+#define VK_NEW_MOUSE_FIRST 0x9C
+#define VK_LBUTTON_LOGICAL 0x9C // v1.0.43: Added to support swapping of left/right mouse buttons in Control Panel.
+#define VK_RBUTTON_LOGICAL 0x9D //
+#define VK_WHEEL_DOWN      0x9E
+#define VK_WHEEL_UP        0x9F
+#define VK_NEW_MOUSE_LAST  0x9F
 
 // These are the only keys for which another key with the same VK exists.  Therefore, use scan code for these.
 // If use VK for some of these (due to them being more likely to be used as hotkeys, thus minimizing the
@@ -179,11 +183,43 @@ struct key_to_sc_type // Map key names to scan codes.
 enum KeyStateTypes {KEYSTATE_LOGICAL, KEYSTATE_PHYSICAL, KEYSTATE_TOGGLE}; // For use with GetKeyJoyState(), etc.
 enum KeyEventTypes {KEYDOWN, KEYUP, KEYDOWNANDUP};
 
-void SendKeys(char *aKeys, bool aSendRaw, HWND aTargetWindow = NULL);
+void SendKeys(char *aKeys, bool aSendRaw, SendModes aSendModeOrig, HWND aTargetWindow = NULL);
 void SendKey(vk_type aVK, sc_type aSC, modLR_type aModifiersLR, modLR_type aModifiersLRPersistent
-	, int aRepeatCount, KeyEventTypes aEventType, modLR_type aKeyAsModifiersLR, HWND aTargetWindow);
+	, int aRepeatCount, KeyEventTypes aEventType, modLR_type aKeyAsModifiersLR, HWND aTargetWindow
+	, int aX = COORD_UNSPECIFIED, int aY = COORD_UNSPECIFIED, bool aMoveOffset = false);
 void SendKeySpecial(char aChar, int aRepeatCount);
 void SendASC(char *aAscii);
+
+struct PlaybackEvent
+{
+	UINT message;
+	union
+	{
+		struct
+		{
+			sc_type sc; // Placed above vk for possibly better member stacking/alignment.
+			vk_type vk;
+		};
+		struct
+		{
+			// Screen coordinates, which can be negative.  SHORT vs. INT is used because the likelihood
+			// have having a virtual display surface wider or taller than 32,767 seems too remote to
+			// justify increasing the struct size, which would impact the stack space and dynamic memory
+			// used by every script every time it uses the playback method to send keystrokes or clicks.
+			// Note: WM_LBUTTONDOWN uses WORDs vs. SHORTs, but they're not really comparable because
+			// journal playback/record both use screen coordinates but WM_LBUTTONDOWN et. al. use client
+			// coordinates.
+			SHORT x;
+			SHORT y;
+		};
+		DWORD time_to_wait; // This member is present only when message==0; otherwise, the struct below is present.
+	};
+};
+LRESULT CALLBACK PlaybackProc(int aCode, WPARAM wParam, LPARAM lParam);
+//#define JOURNAL_RECORD_MODE  // Uncomment this line to debug/analyze via a crude journal record feature in place of SendPlay.
+#ifdef JOURNAL_RECORD_MODE
+	LRESULT CALLBACK RecordProc(int aCode, WPARAM wParam, LPARAM lParam);
+#endif
 
 
 // Below uses a pseudo-random value.  It's best that this be constant so that if multiple instances
@@ -208,6 +244,34 @@ void SendASC(char *aAscii);
 //    to make the hotkey suffix match a different set of modifiers, the wrong hotkey would fire.
 void KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC = 0, HWND aTargetWindow = NULL
 	, bool aDoKeyDelay = false, DWORD aExtraInfo = KEY_IGNORE_ALL_EXCEPT_MODIFIER);
+
+ResultType PerformClick(char *aOptions);
+void ParseClickOptions(char *aOptions, int &aX, int &aY, vk_type &aVK, KeyEventTypes &aEventType
+	, int &aRepeatCount, bool &aMoveOffset);
+ResultType PerformMouse(ActionTypeType aActionType, char *aButton, char *aX1, char *aY1, char *aX2, char *aY2
+	, char *aSpeed, char *aOffsetMode, char *aRepeatCount = "", char *aDownUp = "");
+void PerformMouseCommon(ActionTypeType aActionType, vk_type aVK, int aX1, int aY1, int aX2, int aY2
+	, int aRepeatCount, KeyEventTypes aEventType, int aSpeed, bool aMoveOffset);
+
+void MouseClickDrag(vk_type aVK // Which button.
+	, int aX1, int aY1, int aX2, int aY2, int aSpeed, bool aMoveOffset);
+void MouseClick(vk_type aVK // Which button.
+	, int aX, int aY, int aRepeatCount, int aSpeed, KeyEventTypes aEventType, bool aMoveOffset = false);
+void MouseMove(int &aX, int &aY, DWORD &aEventFlags, int aSpeed, bool aMoveOffset);
+void MouseEvent(DWORD aEventFlags, DWORD aData, DWORD aX = COORD_UNSPECIFIED, DWORD aY = COORD_UNSPECIFIED);
+
+#define MSG_OFFSET_MOUSE_MOVE 0x80000000  // Bitwise flag, should be near/at high-order bit to avoid overlap messages.
+void PutKeybdEventIntoArray(modLR_type aKeyAsModifiersLR, vk_type aVK, sc_type aSC, DWORD aEventFlags, DWORD aExtraInfo);
+void PutMouseEventIntoArray(DWORD aEventFlags, DWORD aData, DWORD aX, DWORD aY);
+ResultType ExpandEventArray();
+void InitEventArray(void *aMem, UINT aMaxEvents, modLR_type aModifiersLR);
+void SendEventArray(int &aFinalKeyDelay, modLR_type aModsDuringSend);
+void CleanupEventArray(int aFinalKeyDelay);
+
+EXTERN_G; // For the DoKeyDelay() prototype below.
+extern SendModes sSendMode;
+void DoKeyDelay(int aDelay = (sSendMode == SM_PLAY) ? g.KeyDelayPlay : g.KeyDelay);
+void DoMouseDelay();
 void UpdateKeyEventHistory(bool aKeyUp, vk_type aVK, sc_type aSC);
 #define KEYEVENT_PHYS(event_type, vk, sc) KeyEvent(event_type, vk, sc, NULL, false, KEY_PHYS_IGNORE)
 
@@ -257,6 +321,11 @@ ResultType KeyHistoryToFile(char *aFilespec = NULL, char aType = '\0', bool aKey
 char *GetKeyName(vk_type aVK, sc_type aSC, char *aBuf, int aBufSize);
 sc_type vk_to_sc(vk_type aVK, bool aReturnSecondary = false);
 vk_type sc_to_vk(sc_type aSC);
-bool IsMouseVK(vk_type aVK);
+
+inline bool IsMouseVK(vk_type aVK)
+{
+	return aVK >= VK_LBUTTON && aVK <= VK_XBUTTON2 && aVK != VK_CANCEL
+		|| aVK >= VK_NEW_MOUSE_FIRST && aVK <= VK_NEW_MOUSE_LAST;
+}
 
 #endif

@@ -28,6 +28,7 @@ GNU General Public License for more details.
 // up the code and might make maintaining it easier):
 HINSTANCE g_hInstance = NULL; // Set by WinMain().
 DWORD g_MainThreadID = GetCurrentThreadId();
+DWORD g_HookThreadID; // Not initialized by design because 0 itself might be a valid thread ID.
 bool g_DestroyWindowCalled = false;
 HWND g_hWnd = NULL;
 HWND g_hWndEdit = NULL;
@@ -39,7 +40,6 @@ WNDPROC g_TabClassProc = NULL;
 modLR_type g_modifiersLR_logical = 0;
 modLR_type g_modifiersLR_logical_non_ignored = 0;
 modLR_type g_modifiersLR_physical = 0;
-modLR_type g_modifiersLR_persistent = 0;
 
 #ifdef FUTURE_USE_MOUSE_BUTTONS_LOGICAL
 WORD g_mouse_buttons_logical = 0;
@@ -50,6 +50,7 @@ WORD g_mouse_buttons_logical = 0;
 // requires its format to be the same as that returned from GetKeyboardState():
 BYTE g_PhysicalKeyState[VK_ARRAY_COUNT] = {0};
 bool g_LayoutHasAltGr = false; // Seems safer to assume false upon startup and have all other detect geared toward proving this assumption wrong.
+bool g_BlockWinKeys = false;
 DWORD g_HookReceiptOfLControlMeansAltGr = 0; // In these cases, zero is used as a false value, any others are true.
 DWORD g_IgnoreNextLControlDown = 0;          //
 DWORD g_IgnoreNextLControlUp = 0;            //
@@ -59,6 +60,7 @@ int g_ClipboardTimeout = 1000; // v1.0.31
 
 HHOOK g_KeybdHook = NULL;
 HHOOK g_MouseHook = NULL;
+HHOOK g_PlaybackHook = NULL;
 bool g_ForceLaunch = false;
 bool g_WinActivateForce = false;
 SingleInstanceType g_AllowOnlyOneInstance = ALLOW_MULTI_INSTANCE;
@@ -132,6 +134,7 @@ HWND g_HShwnd;
 // Hot-string global settings:
 int g_HSPriority = 0;  // default priority is always 0
 int g_HSKeyDelay = 0;  // Fast sends are much nicer for auto-replace and auto-backspace.
+SendModes g_HSSendMode = SM_INPUT; // v1.0.43: New default for more reliable hotstrings.
 bool g_HSCaseSensitive = false;
 bool g_HSConformToCase = true;
 bool g_HSDoBackspace = true;
@@ -313,8 +316,11 @@ Action g_act[] =
 	, {"URLDownloadToFile", 2, 2, 2, NULL} // URL, save-as-filename
 
 	, {"GetKeyState", 2, 3, 3, NULL} // OutputVar, key name, mode (optional) P = Physical, T = Toggle
-	, {"Send", 1, 1, 1, NULL} // But that first param can be a deref that resolves to a blank param
-	, {"SendRaw", 1, 1, 1, NULL} // But that first param can be a deref that resolves to a blank param
+	, {"Send", 1, 1, 1, NULL}         // But that first param can validly be a deref that resolves to a blank param.
+	, {"SendRaw", 1, 1, 1, NULL}      //
+	, {"SendInput", 1, 1, 1, NULL}    //
+	, {"SendPlay", 1, 1, 1, NULL}     //
+	, {"SendEvent", 1, 1, 1, NULL}    // (due to rarity, there is no raw counterpart for this one)
 
 	// For these, the "control" param can be blank.  The window's first visible control will
 	// be used.  For this first one, allow a minimum of zero, otherwise, the first param (control)
@@ -332,8 +338,10 @@ Action g_act[] =
 	, {"Control", 1, 7, 7, NULL}   // Command, Value, Control, std. 4 window params
 	, {"ControlGet", 2, 8, 8, NULL}   // Output-var, Command, Value, Control, std. 4 window params
 
+	, {"SendMode", 1, 1, 1, NULL}
 	, {"CoordMode", 1, 2, 2, NULL} // Attribute, screen|relative
 	, {"SetDefaultMouseSpeed", 1, 1, 1, {1, 0}} // speed (numeric)
+	, {"Click", 0, 1, 1, NULL} // Flex-list of options.
 	, {"MouseMove", 2, 4, 4, {1, 2, 3, 0}} // x, y, speed, option
 	, {"MouseClick", 0, 7, 7, {2, 3, 4, 5, 0}} // which-button, x, y, ClickCount, speed, d=hold-down/u=release, Relative
 	, {"MouseClickDrag", 1, 7, 7, {2, 3, 4, 5, 6, 0}} // which-button, x1, y1, x2, y2, speed, Relative
@@ -460,8 +468,8 @@ Action g_act[] =
 
 	, {"OutputDebug", 1, 1, 1, NULL}
 
-	, {"SetKeyDelay", 0, 2, 2, {1, 2, 0}} // Delay in ms (numeric, negative allowed), PressDuration
-	, {"SetMouseDelay", 1, 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)
+	, {"SetKeyDelay", 0, 3, 3, {1, 2, 0}} // Delay in ms (numeric, negative allowed), PressDuration [, Play]
+	, {"SetMouseDelay", 1, 2, 2, {1, 0}} // Delay in ms (numeric, negative allowed) [, Play]
 	, {"SetWinDelay", 1, 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)
 	, {"SetControlDelay", 1, 1, 1, {1, 0}} // Delay in ms (numeric, negative allowed)
 	, {"SetBatchLines", 1, 1, 1, NULL} // Can be non-numeric, such as 15ms, or a number (to indicate line count).

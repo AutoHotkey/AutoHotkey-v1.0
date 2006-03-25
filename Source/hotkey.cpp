@@ -128,7 +128,7 @@ void Hotkey::ManifestAllHotkeysHotstringsHooks()
 // This function examines all hotkeys and hotstrings to determine:
 // - Which hotkeys to register/unregister, or activate/deactivate in the hook.
 // - Which hotkeys to be changed from HK_NORMAL to HK_KEYBD_HOOK (or vice versa).
-// - In pursuit of the above, also assess the interdependencies between hotkeys (the presence or
+// - In pursuit of the above, also assess the interdependencies between hotkeys: the presence or
 //   absence of a given hotkey can sometimes impact whether other hotkeys need to be converted from
 //   HK_NORMAL to HK_KEYBD_HOOK.  For example, a newly added/enabled global hotkey variant can
 //   cause a HK_KEYBD_HOOK hotkey to become HK_NORMAL, and the converse is also true.
@@ -406,26 +406,20 @@ void Hotkey::ManifestAllHotkeysHotstringsHooks()
 
 
 
-ResultType Hotkey::AllDestruct()
-// Returns OK or FAIL (but currently not failure modes).
-{
-	AddRemoveHooks(0); // Remove all hooks. By contrast, registered hotkeys are unregistered below.
-	for (int i = 0; i < sHotkeyCount; ++i)
-		delete shk[i]; // Unregisters before destroying.
-	sNextID = 0;
-	return OK;
-}
-
-
-
 void Hotkey::AllDestructAndExit(int aExitCode)
 {
-	// Might be needed to prevent hang-on-exit.  Once this is done, no message boxes or other dialogs
-	// can be displayed.  MSDN: "The exit value returned to the system must be the wParam parameter
-	// of the WM_QUIT message."  In our case, PostQuitMessage() should announce the same exit code
+	// PostQuitMessage() might be needed to prevent hang-on-exit.  Once this is done, no message boxes or
+	// other dialogs can be displayed.  MSDN: "The exit value returned to the system must be the wParam
+	// parameterof the WM_QUIT message."  In our case, PostQuitMessage() should announce the same exit code
 	// that we will eventually call exit() with:
 	PostQuitMessage(aExitCode);
-	AllDestruct();
+
+	AddRemoveHooks(0); // Remove all hooks. By contrast, registered hotkeys are unregistered below.
+	if (g_PlaybackHook) // Would be unusual for this to be installed during exit, but should be checked for completeness.
+		UnhookWindowsHookEx(g_PlaybackHook);
+	for (int i = 0; i < sHotkeyCount; ++i)
+		delete shk[i]; // Unregisters before destroying.
+
 	// Do this only at the last possible moment prior to exit() because otherwise
 	// it may free memory that is still in use by objects that depend on it.
 	// This is actually kinda wrong because when exit() is called, the destructors
@@ -2062,8 +2056,11 @@ void Hotstring::DoReplace(LPARAM alParam)
 // LOWORD(alParam) is the char from the set of EndChars that the user had to press to trigger the hotkey.
 // This is not applicable if mEndCharRequired is false, in which case caller should have passed zero.
 {
-	char SendBuf[LINE_SIZE + 20] = "";  // Allow extra room for the optional backspaces.
+	// The below buffer allows room for the longest replacement text plus MAX_HOTSTRING_LENGTH for the
+	// optional backspaces, +10 for the possible presence of {Raw} and a safety margin.
+	char SendBuf[LINE_SIZE + MAX_HOTSTRING_LENGTH + 10] = "";
 	char *start_of_replacement = SendBuf;  // Set default.
+
 	if (mDoBackspace)
 	{
 		// Subtract 1 from backspaces because the final key pressed by the user to make a
@@ -2076,45 +2073,64 @@ void Hotstring::DoReplace(LPARAM alParam)
 			++backspace_count;
 		for (int i = 0; i < backspace_count; ++i)
 			*start_of_replacement++ = '\b';  // Use raw backspaces, not {BS n}, in case the send will be raw.
-		*start_of_replacement = '\0';
+		*start_of_replacement = '\0'; // Terminate the string created above.
 	}
+
 	if (*mReplacement)
 	{
-		// Below casts to int to preserve any negaive results:
-		snprintf(start_of_replacement, (int)(sizeof(SendBuf) - (start_of_replacement - SendBuf)), "%s", mReplacement);
+		strcpy(start_of_replacement, mReplacement);
 		CaseConformModes case_conform_mode = (CaseConformModes)HIWORD(alParam);
 		if (case_conform_mode == CASE_CONFORM_ALL_CAPS)
 			CharUpper(start_of_replacement);
 		else if (case_conform_mode == CASE_CONFORM_FIRST_CAP)
 			*start_of_replacement = (char)CharUpper((LPTSTR)(UCHAR)*start_of_replacement);
 	}
-	int old_delay = g.KeyDelay;
-	int old_press_duration = g.PressDuration;
-	g.KeyDelay = mKeyDelay; // This is relatively safe since SendKeys() normally can't be interrupted by a new thread.
-	g.PressDuration = -1;   // Always -1, since Send command can be used in body of hotstring to have a custom press duration.
-	if (*SendBuf)
-		SendKeys(SendBuf, mSendRaw);
-	if (   *mReplacement && !mOmitEndChar && (*SendBuf = (char)LOWORD(alParam))   ) // Assign
+
+	if (*mReplacement && !mOmitEndChar) // The ending character (if present) needs to be sent too.
 	{
 		// Send the final character in raw mode so that chars such as !{} are sent properly.
-		SendBuf[1] = '\0'; // Terminate.
-		// Fix for v1.0.25.08: CollectInput() translates the user's Enter keystrokes into `n
-		// instead of `r for use with the Input command. Since the an Input command may be in progress
-		// while monitoring hotstrings, it is probably best not to try to change things in the hook
-		// (unless the policy of translating Enter to `n is someday reversed).  Instead, any `n
-		// received here, which corresponds to the user's physical press of Enter or Shift-Enter
-		// (Ctrl-Enter doesn't seem to have an ascii counterpart), is translated back to `r.  This
-		// prevents the user's Enter keystroke (which would be the end-char that triggers this
-		// hotstring) from being translated into Ctrl-Enter.  Ctrl-Enter has a different effect in
-		// most word processors than Enter, producing a page break or something else undesirable.
-		// Update for v1.0.25.12: The below is no longer necessary because SendKeys() treats
-		// \n the same as \r now:
-		//if (*SendBuf == '\n')
-		//	*SendBuf = '\r';
-		SendKeys(SendBuf, true);
+		// v1.0.43: Avoid two separate calls to SendKeys because:
+		// 1) It defeats the uninterruptibility of the hotstring's replacement by allowing the user's
+		//    buffered keystrokes to take effect in between the two calls to SendKeys.
+		// 2) Performance: Avoids having to install the playback hook twice, etc.
+		char end_char;
+		if (end_char = (char)LOWORD(alParam))
+		{
+			start_of_replacement += strlen(start_of_replacement);
+			sprintf(start_of_replacement, "{Raw}%c", (char)end_char);
+		}
 	}
-	g.KeyDelay = old_delay;  // Restore
-	g.PressDuration = old_press_duration;  // Restore
+
+	if (!*SendBuf) // No keys to send.
+		return;
+
+	// For the following, mSendMode isn't checked because the backup/restore is needed to varying extents
+	// by every mode.
+	int old_delay = g.KeyDelay;
+	int old_press_duration = g.PressDuration;
+	int old_delay_play = g.KeyDelayPlay;
+	int old_press_duration_play = g.PressDurationPlay;
+	g.KeyDelay = mKeyDelay; // This is relatively safe since SendKeys() normally can't be interrupted by a new thread.
+	g.PressDuration = -1;   // Always -1, since Send command can be used in body of hotstring to have a custom press duration.
+	g.KeyDelayPlay = -1;
+	g.PressDurationPlay = mKeyDelay; // Seems likely to be more useful (such as in games) to apply mKeyDelay to press duration rather than above.
+
+	// v1.0.43: The following section gives time for the hook to pass the final keystroke of the hotstring to the
+	// system.  This is necessary only for modes other than the original/SendEvent mode because that one takes
+	// advantage of the serialized nature of the keyboard hook to ensure the user's final character always appears
+	// on screen before the replacement text can appear.
+	// By contrast, when the mode is SendPlay (and less frequently, SendInput), the system and/or hook needs
+	// another timeslice to ensure that AllowKeyToGoToSystem() actually takes effect on screen (SuppressThisKey()
+	// doesn't seem to have this problem).
+	if (!(mDoBackspace || mOmitEndChar) && mSendMode != SM_EVENT) // The final character of the abbreviation (or its EndChar) was not suppressed by the hook.
+		Sleep(0);
+
+	SendKeys(SendBuf, mSendRaw, mSendMode); // Send the backspaces and/or replacement.
+
+	g.KeyDelay = old_delay;                        // Restore original values.
+	g.PressDuration = old_press_duration;          //
+	g.KeyDelayPlay = old_delay_play;               //
+	g.PressDurationPlay = old_press_duration_play; //
 }
 
 
@@ -2172,7 +2188,7 @@ Hotstring::Hotstring(Label *aJumpToLabel, char *aOptions, char *aHotstring, char
 	, mSuspended(false)
 	, mExistingThreads(0)
 	, mMaxThreads(g_MaxThreadsPerHotkey)  // The value of g_MaxThreadsPerHotkey can vary during load-time.
-	, mPriority(g_HSPriority), mKeyDelay(g_HSKeyDelay)  // And all these can vary too.
+	, mPriority(g_HSPriority), mKeyDelay(g_HSKeyDelay), mSendMode(g_HSSendMode)  // And all these can vary too.
 	, mCaseSensitive(g_HSCaseSensitive), mConformToCase(g_HSConformToCase), mDoBackspace(g_HSDoBackspace)
 	, mOmitEndChar(g_HSOmitEndChar), mSendRaw(aHasContinuationSection ? true : g_HSSendRaw)
 	, mEndCharRequired(g_HSEndCharRequired), mDetectWhenInsideWord(g_HSDetectWhenInsideWord), mDoReset(g_HSDoReset)
@@ -2184,8 +2200,8 @@ Hotstring::Hotstring(Label *aJumpToLabel, char *aOptions, char *aHotstring, char
 	if (!mJumpToLabel) // Caller has already ensured that aHotstring is not blank.
 		return;
 
-	ParseOptions(aOptions, mPriority, mKeyDelay, mCaseSensitive, mConformToCase, mDoBackspace, mOmitEndChar
-		, mSendRaw, mEndCharRequired, mDetectWhenInsideWord, mDoReset);
+	ParseOptions(aOptions, mPriority, mKeyDelay, mSendMode, mCaseSensitive, mConformToCase, mDoBackspace
+		, mOmitEndChar, mSendRaw, mEndCharRequired, mDetectWhenInsideWord, mDoReset);
 
 	// To avoid memory leak, this is done only when it is certain the hotkey will be created:
 	if (   !(mString = SimpleHeap::Malloc(aHotstring))   )
@@ -2217,9 +2233,9 @@ Hotstring::Hotstring(Label *aJumpToLabel, char *aOptions, char *aHotstring, char
 
 
 
-void Hotstring::ParseOptions(char *aOptions, int &aPriority, int &aKeyDelay, bool &aCaseSensitive
-	, bool &aConformToCase, bool &aDoBackspace, bool &aOmitEndChar, bool &aSendRaw, bool &aEndCharRequired
-	, bool &aDetectWhenInsideWord, bool &aDoReset)
+void Hotstring::ParseOptions(char *aOptions, int &aPriority, int &aKeyDelay, SendModes &aSendMode
+	, bool &aCaseSensitive, bool &aConformToCase, bool &aDoBackspace, bool &aOmitEndChar, bool &aSendRaw
+	, bool &aEndCharRequired, bool &aDetectWhenInsideWord, bool &aDoReset)
 {
 	// In this case, colon rather than zero marks the end of the string.  However, the string
 	// might be empty so check for that too.  In addition, this is now called from
@@ -2262,13 +2278,25 @@ void Hotstring::ParseOptions(char *aOptions, int &aPriority, int &aKeyDelay, boo
 		// For options such as K & P: Use atoi() vs. ATOI() to avoid interpreting something like 0x01C
 		// as hex when in fact the C was meant to be an option letter:
 		case 'K':
-			aKeyDelay = atoi(cp + 1);
+			aKeyDelay = atoi(cp1);
 			break;
 		case 'P':
-			aPriority = atoi(cp + 1);
+			aPriority = atoi(cp1);
 			break;
 		case 'R':
 			aSendRaw = (*cp1 != '0');
+			break;
+		case 'S':
+			if (*cp1)
+				++cp; // Skip over S's sub-letter (if any) to exclude it from  further consideration.
+			switch (toupper(*cp1))
+			{
+			// There is no means to choose SM_INPUT_FALLBACK_TO_EVENT because it seems too rarely desired.
+			case 'I': aSendMode = SM_INPUT; break;
+			case 'E': aSendMode = SM_EVENT; break;
+			case 'P': aSendMode = SM_PLAY; break;
+			//default: leave it unchanged.
+			}
 			break;
 		case 'Z':
 			aDoReset = (*cp1 != '0');

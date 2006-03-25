@@ -1623,8 +1623,6 @@ ResultType Line::PerformShowWindow(ActionTypeType aActionType, char *aTitle, cha
 	// UPDATE: For now, not using "force" every time because it has undesirable side-effects such
 	// as the window not being restored to its maximized state after it was minimized
 	// this way.
-	// Note: The use of IsHungAppWindow() (supported under Win2k+) is discouraged by MS,
-	// so we won't use it here even though it probably performs much better.
 	case ACT_WINMINIMIZE:
 		if (IsWindowHung(target_window))
 		{
@@ -1707,7 +1705,7 @@ ResultType Line::ControlSend(char *aControl, char *aKeysToSend, char *aTitle, ch
 		: target_window;
 	if (!control_window)
 		return OK;
-	SendKeys(aKeysToSend, aSendRaw, control_window);
+	SendKeys(aKeysToSend, aSendRaw, SM_EVENT, control_window);
 	// But don't do WinDelay because KeyDelay should have been in effect for the above.
 	return g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 }
@@ -4829,17 +4827,6 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		}
 		break;
 
-	case AHK_RETURN_PID:
-		// This is obsolete in light of WinGet's support for fetching the PID of any window.
-		// But since it's simple, it is retained for backward compatibility.
-		// Rajat wanted this so that it's possible to discover the PID based on the title of each
-		// script's main window (i.e. if there are multiple scripts running).  Also note that this
-		// msg can be sent via TRANSLATE_AHK_MSG() to prevent it from ever being filtered out (and
-		// thus delayed) while the script is uninterruptible.  For example:
-		// SendMessage, 0x44, 1029,,, %A_ScriptFullPath% - AutoHotkey
-		// SendMessage, 1029,,,, %A_ScriptFullPath% - AutoHotkey  ; Same as above but not sent via TRANSLATE.
-		return GetCurrentProcessId(); // Don't use ReplyMessage because then our thread can't reply to itself with this answer.
-
 	case WM_DRAWCLIPBOARD:
 		if (g_script.mOnClipboardChangeLabel) // In case it's a bogus msg, it's our responsibility to avoid posting the msg if there's no label to launch.
 			PostMessage(NULL, AHK_CLIPBOARD_CHANGE, 0, 0); // It's done this way to buffer it when the script is uninterruptible, etc.
@@ -4855,6 +4842,23 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		else if (g_script.mNextClipboardViewer)
 			SendMessageTimeout(g_script.mNextClipboardViewer, iMsg, wParam, lParam, SMTO_ABORTIFHUNG, 2000, &dwTemp);
 		return 0;
+
+	case WM_INPUTLANGCHANGE:
+		DiscoverAltGr();
+		if (!(wParam || lParam)) // This message is one that MsgSleep posted manually to us (see comments there for details).
+			return 0; // Don't pass it to DefWindowProc() because it lacks proper wParam/lParam.
+		break; // Currently never reached because apparently the system-sent messages are sent directly to the main window's edit control.  But in case it ever is, pass it on to DefWindowProc.
+
+	case AHK_RETURN_PID:
+		// This is obsolete in light of WinGet's support for fetching the PID of any window.
+		// But since it's simple, it is retained for backward compatibility.
+		// Rajat wanted this so that it's possible to discover the PID based on the title of each
+		// script's main window (i.e. if there are multiple scripts running).  Also note that this
+		// msg can be sent via TRANSLATE_AHK_MSG() to prevent it from ever being filtered out (and
+		// thus delayed) while the script is uninterruptible.  For example:
+		// SendMessage, 0x44, 1029,,, %A_ScriptFullPath% - AutoHotkey
+		// SendMessage, 1029,,,, %A_ScriptFullPath% - AutoHotkey  ; Same as above but not sent via TRANSLATE.
+		return GetCurrentProcessId(); // Don't use ReplyMessage because then our thread can't reply to itself with this answer.
 
 	HANDLE_MENU_LOOP // Cases for WM_ENTERMENULOOP and WM_EXITMENULOOP.
 
@@ -5561,296 +5565,6 @@ VOID CALLBACK InputBoxTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
 VOID CALLBACK DerefTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
 {
 	Line::FreeDerefBufIfLarge(); // It will also kill the timer, if appropriate.
-}
-
-
-
-///////////////////
-// Mouse related //
-///////////////////
-
-void Line::DoMouseDelay() // Helper function for the mouse functions below.
-{
-	if (g.MouseDelay > -1)
-	{
-		if (g.MouseDelay < 11 || (g.MouseDelay < 25 && g_os.IsWin9x()))
-			Sleep(g.MouseDelay);
-		else
-			SLEEP_WITHOUT_INTERRUPTION(g.MouseDelay)
-	}
-}
-
-
-
-ResultType Line::MouseClickDrag(vk_type aVK, int aX1, int aY1, int aX2, int aY2, int aSpeed, bool aMoveRelative)
-{
-	// Check if one of the coordinates is missing, which can happen in cases where this was called from
-	// a source that didn't already validate it:
-	if (   (aX1 == COORD_UNSPECIFIED && aY1 != COORD_UNSPECIFIED) || (aX1 != COORD_UNSPECIFIED && aY1 == COORD_UNSPECIFIED)   )
-		return FAIL;
-	if (   (aX2 == COORD_UNSPECIFIED && aY2 != COORD_UNSPECIFIED) || (aX2 != COORD_UNSPECIFIED && aY2 == COORD_UNSPECIFIED)   )
-		return FAIL;
-
-	// If the drag isn't starting at the mouse's current position, move the mouse to the specified position:
-	if (aX1 != COORD_UNSPECIFIED && aY1 != COORD_UNSPECIFIED)
-		MouseMove(aX1, aY1, aSpeed, aMoveRelative);
-
-	// I asked Jon, "Have you discovered that insta-drags almost always fail?" and he said
-	// "Yeah, it was weird, absolute lack of drag... Don't know if it was my config or what."
-	// However, testing reveals "insta-drags" work ok, at least on my system, so leaving them enabled.
-	// User can easily increase the speed if there's any problem:
-	//if (aSpeed < 2)
-	//	aSpeed = 2;
-
-	DWORD event_down, event_up, event_data = 0; // Set default.
-	switch (aVK)
-	{
-	case VK_LBUTTON:
-		event_down = MOUSEEVENTF_LEFTDOWN;
-		event_up = MOUSEEVENTF_LEFTUP;
-		break;
-	case VK_RBUTTON:
-		event_down = MOUSEEVENTF_RIGHTDOWN;
-		event_up = MOUSEEVENTF_RIGHTUP;
-		break;
-	case VK_MBUTTON:
-		event_down = MOUSEEVENTF_MIDDLEDOWN;
-		event_up = MOUSEEVENTF_MIDDLEUP;
-		break;
-	case VK_XBUTTON1:
-	case VK_XBUTTON2:
-		event_down = MOUSEEVENTF_XDOWN;
-		event_up = MOUSEEVENTF_XUP;
-		event_data = (aVK == VK_XBUTTON1) ? XBUTTON1 : XBUTTON2;
-		break;
-	}
-
-	// Always sleep a certain minimum amount of time between events to improve reliability,
-	// but allow the user to specify a higher time if desired.  Note that for Win9x,
-	// a true Sleep() is done because it is much more accurate than the MsgSleep() method,
-	// at least on Win98SE when short sleeps are done.  UPDATE: A true sleep is now done
-	// unconditionally if the delay period is small.  This fixes a small issue where if
-	// LButton is a hotkey that includes "MouseClick left" somewhere in its subroutine,
-	// the script's own main window's title bar buttons for min/max/close would not
-	// properly respond to left-clicks.  By contrast, the following is no longer an issue
-	// due to the dedicated thread in v1.0.39 (or more likely, due to an older change that
-	// causes the tray menu to upon upon RButton-up rather than down):
-	// RButton is a hotkey that includes "MouseClick right" somewhere in its subroutine,
-	// the user would not be able to correctly open the script's own tray menu via
-	// right-click (note that this issue affected only the one script itself, not others).
-
-	// Now that the mouse button has been pushed down, move the mouse to perform the drag:
-	MouseEvent(event_down, 0, 0, event_data);
-	DoMouseDelay();
-	MouseMove(aX2, aY2, aSpeed, aMoveRelative);
-	DoMouseDelay();
-	MouseEvent(event_up, 0, 0, event_data);
-
-	// It seems best to always do this one too in case the script line that caused
-	// us to be called here is followed immediately by another script line which
-	// is either another mouse click or something that relies upon this mouse drag
-	// having been completed:
-	DoMouseDelay();
-	return OK;
-}
-
-
-
-ResultType Line::MouseClick(vk_type aVK, int aX, int aY, int aClickCount, int aSpeed, KeyEventTypes aEventType
-	, bool aMoveRelative)
-{
-	// Check if one of the coordinates is missing, which can happen in cases where this was called from
-	// a source that didn't already validate it:
-	if (   (aX == COORD_UNSPECIFIED && aY != COORD_UNSPECIFIED) || (aX != COORD_UNSPECIFIED && aY == COORD_UNSPECIFIED)   )
-		// This was already validated during load so should never happen
-		// unless this function was called directly from somewhere else
-		// in the app, rather than by a script line:
-		return FAIL;
-
-	if (aClickCount < 1)
-		// Allow this to simply "do nothing", because it increases flexibility
-		// in the case where the number of clicks is a dereferenced script variable
-		// that may sometimes (by intent) resolve to zero or negative:
-		return OK;
-
-	// If the click isn't occurring at the mouse's current position, move the mouse to the specified position:
-	if (aX != COORD_UNSPECIFIED && aY != COORD_UNSPECIFIED)
-		MouseMove(aX, aY, aSpeed, aMoveRelative);
-
-	// For wheel movement, if the user activated this command via a hotkey, and that hotkey
-	// has a modifier such as CTRL, the user is probably still holding down the CTRL key
-	// at this point.  Therefore, there's some merit to the fact that we should release
-	// those modifier keys prior to turning the mouse wheel (since some apps disable the
-	// wheel or give it different behavior when the CTRL key is down -- for example, MSIE
-	// changes the font size when you use the wheel while CTRL is down).  However, if that
-	// were to be done, there would be no way to ever hold down the CTRL key explicitly
-	// (via Send, {CtrlDown}) unless the hook were installed.  The same argument could probably
-	// be made for mouse button clicks: modifier keys can often affect their behavior.  But
-	// changing this function to adjust modifiers for all types of events would probably break
-	// some existing scripts.  Maybe it can be a script option in the future.  In the meantime,
-	// it seems best not to adjust the modifiers for any mouse events and just document that
-	// behavior in the MouseClick command.
-	if (aVK == VK_WHEEL_UP)
-	{
-		MouseEvent(MOUSEEVENTF_WHEEL, 0, 0, aClickCount * WHEEL_DELTA);
-		return OK;
-	}
-	else if (aVK == VK_WHEEL_DOWN)
-	{
-		MouseEvent(MOUSEEVENTF_WHEEL, 0, 0, -(aClickCount * WHEEL_DELTA));
-		return OK;
-	}
-	// Otherwise:
-
-	// Although not thread-safe, the following static vars seem okay because:
-	// 1) This function is currently only called by the main thread.
-	// 2) Even if that isn't true, the serialized nature of simulated mouse clicks makes it likely that
-	//    the statics will produce the correct behavior anyway.
-	// 3) Even if that isn't true, the consequences of incorrect behavior seem minimal in this case.
-	static vk_type sWorkaroundVK = 0;
-	static LRESULT sWorkaroundHitTest;  // Not initialized because the above will be the sole signal of whether the workaround is in progress.
-	DWORD event_down, event_up, event_data = 0; // Set default.
-
-	switch (aVK)
-	{
-	case VK_LBUTTON:
-	case VK_RBUTTON:
-		if (aEventType == KEYDOWN || (aEventType == KEYUP && sWorkaroundVK)) // i.e. this is a down-only event or up-only event.
-		{
-			// v1.0.40.01: The following section corrects misbehavior caused by a thread sending
-			// simulated mouse clicks to one of its own windows.  A script consisting only of the
-			// following two lines can reproduce this issue:
-			// F1::LButton
-			// F2::RButton
-			// The problems came about from the following sequence of events:
-			// 1) Script simulates a left-click-down in the title bar's close, minimize, or maximize button.
-			// 2) WM_NCRBUTTONDOWN is sent to the window's window proc, which then passes it on to
-			//    DefWindowProc or DefDlgProc, which then apparently enters a loop in which no messages
-			//    (or a very limited subset) are pumped.
-			// 3) Thus, if the user presses a hotkey while the thread is in this state, that hotkey is
-			//    queued/buffered until DefWindowProc/DefDlgProc exits its loop.
-			// 4) But the buffered hotkey is the very thing that's supposed to exit the loop via sending a
-			//    simulated left-click-up event.
-			// 5) Thus, a deadlock occurs.
-			// 6) A similar situation arises when a right-click-down is sent to the title bar or sys-menu-icon.
-			//
-			// The following workaround operates by suppressing qualified click-down events until the
-			// corresponding click-up occurs, at which time the click-up is transformed into a down+up if
-			// the click-up is still in the same position as the down. It seems preferable to fix this here
-			// rather than changing each window proc. to always respond to click-down rather vs. click-up
-			// because that would make all of the script's windows behave in a non-standard way, possibly
-			// producing side-effects and defeating other programs' attempts to interact with them.
-			// (Thanks to Shimanov for this solution.)
-			//
-			// Remaining known limitations:
-			// 1) Title bar buttons are not visibly in a pressed down state when a simulated click-down is sent
-			//    to them.
-			// 2) A window that should not be activated, such as AlwaysOnTop+Disabled, is activated anyway
-			//    by SetForegroundWindowEx().  Not yet fixed due to its rarity and minimal consequences.
-			// 3) A related problem for which no solution has been discovered (and perhaps it's too obscure
-			//    an issue to justify any added code size): If a remapping such as "F1::LButton" is in effect,
-			//    pressing and releasing F1 while the cursor is over a script window's title bar will cause the
-			//    window to move slightly the next time the mouse is moved.
-			// 4) Clicking one of the script's window's title bar with a key/button that has been remapped to
-			//    become the left mouse button sometimes causes the button to get stuck down from the window's
-			//    point of view.  The reasons are related to those in #1 above.  In both #1 and #2, the workaround
-			//    is not at fault because it's not in effect then.  Instead, the issue is that DefWindowProc enters
-			//    a non-msg-pumping loop while it waits for the user to drag-move the window.  If instead the user
-			//    releases the button without dragging, the loop exits on its own after a 500ms delay or so.
-			// 5) Obscure behavior caused by keyboard's auto-repeat feature: Use a key that's been remapped to
-			//    become the left mouse button to click and hold the minimize button of one of the script's windows.
-			//    Drag to the left.  The window starts moving.  This is caused by the fact that the down-click is
-			//    suppressed, thus the remap's hotkey subroutine thinks the mouse button is down, thus its
-			//    auto-repeat suppression doesn't work and it sends another click.
-			POINT point;
-			GetCursorPos(&point); // Assuming success seems harmless.
-			// Despite what MSDN says, WindowFromPoint() appears to fetch a non-NULL value even when the
-			// mouse is hovering over a disabled control (at least on XP).
-			HWND child_under_cursor, parent_under_cursor;
-			if (   (child_under_cursor = WindowFromPoint(point))
-				&& (parent_under_cursor = GetNonChildParent(child_under_cursor)) // WM_NCHITTEST below probably requires parent vs. child.
-				&& GetWindowThreadProcessId(parent_under_cursor, NULL) == g_MainThreadID   ) // It's one of our thread's windows.
-			{
-				LRESULT hit_test = SendMessage(parent_under_cursor, WM_NCHITTEST, 0, MAKELPARAM(point.x, point.y));
-				if (   aVK == VK_LBUTTON && (hit_test == HTCLOSE || hit_test == HTMAXBUTTON // Title bar buttons: Close, Maximize.
-						|| hit_test == HTMINBUTTON || hit_test == HTHELP) // Title bar buttons: Minimize, Help.
-					|| aVK == VK_RBUTTON && (hit_test == HTCAPTION || hit_test == HTSYSMENU)   )
-				{
-					if (aEventType == KEYDOWN)
-					{
-						sWorkaroundVK = aVK;
-						sWorkaroundHitTest = hit_test;
-						SetForegroundWindowEx(parent_under_cursor); // Try to reproduce customary behavior.
-						// For simplicity, aClickCount>1 is ignored and DoMouseDelay() is not done.
-						return OK;
-					}
-					else // KEYUP
-					{
-						if (sWorkaroundHitTest == hit_test) // To weed out cases where user clicked down on a button then released somewhere other than the button.
-							aEventType = KEYDOWNANDUP; // Translate this click-up into down+up to make up for the fact that the down was previously suppressed.
-						//else let the click-up occur in case it does something or user wants it.
-					}
-				}
-			} // Work-around for sending mouse clicks to one of our thread's own windows.
-		}
-		// sWorkaroundVK is reset later below.
-
-		// Since above didn't return, the work-around isn't in effect and normal click(s) will be sent:
-		if (aVK == VK_LBUTTON)
-		{
-			event_down = MOUSEEVENTF_LEFTDOWN;
-			event_up = MOUSEEVENTF_LEFTUP;
-		}
-		else // aVK == VK_RBUTTON
-		{
-			event_down = MOUSEEVENTF_RIGHTDOWN;
-			event_up = MOUSEEVENTF_RIGHTUP;
-		}
-		break;
-	case VK_MBUTTON:
-		event_down = MOUSEEVENTF_MIDDLEDOWN;
-		event_up = MOUSEEVENTF_MIDDLEUP;
-		break;
-	case VK_XBUTTON1:
-	case VK_XBUTTON2:
-		event_down = MOUSEEVENTF_XDOWN;
-		event_up = MOUSEEVENTF_XUP;
-		event_data = (aVK == VK_XBUTTON1) ? XBUTTON1 : XBUTTON2;
-		break;
-	} // switch()
-
-	// For simplicity and possibly backward compatibility, LONG_OPERATION_INIT/UPDATE isn't done.
-	// In addition, some callers might do it for themselves, at least when aClickCount==1.
-	for (int i = 0; i < aClickCount; ++i)
-	{
-		// The below calls to MouseEvent() do not specify coordinates because such are only
-		// needed if we were to include MOUSEEVENTF_MOVE in the dwFlags parameter, which
-		// we don't since we've already moved the mouse (above) if that was needed.
-		if (aEventType != KEYUP) // It's either KEYDOWN or KEYDOWNANDUP.
-		{
-			MouseEvent(event_down, 0, 0, event_data);
-			// It seems best to always Sleep a certain minimum time between events
-			// because the click-down event may cause the target app to do something which
-			// changes the context or nature of the click-up event.  AutoIt3 has also been
-			// revised to do this. v1.0.40.02: Avoid doing the Sleep between the down and up
-			// events when the workaround is in effect because any MouseDelay greater than 10
-			// would cause DoMouseDelay() to pump messages, which would defeat the workaround:
-			if (!sWorkaroundVK)
-				DoMouseDelay();
-		}
-		if (aEventType != KEYDOWN) // It's either KEYUP or KEYDOWNANDUP.
-		{
-			MouseEvent(event_up, 0, 0, event_data);
-			// It seems best to always do this one too in case the script line that caused
-			// us to be called here is followed immediately by another script line which
-			// is either another mouse click or something that relies upon the mouse click
-			// having been completed:
-			DoMouseDelay();
-		}
-	} // for()
-
-	sWorkaroundVK = 0; // Reset this indicator in all cases except those for which above already returned.
-	return OK;
 }
 
 
@@ -12059,7 +11773,7 @@ bool ScriptGetKeyState(vk_type aVK, KeyStateTypes aKeyStateType)
 				// GetAsyncKeyState(), which doesn't seem to return the physical state.
 				// But first, correct the hook modifier state if it needs it.  See comments
 				// in GetModifierLRState() for why this is needed:
-				if (KeyToModifiersLR(aVK))     // It's a modifier.
+				if (KeyToModifiersLR(aVK))    // It's a modifier.
 					GetModifierLRState(true); // Correct hook's physical state if needed.
 				return g_PhysicalKeyState[aVK] & STATE_DOWN;
 			}
@@ -12078,6 +11792,8 @@ bool ScriptGetKeyState(vk_type aVK, KeyStateTypes aKeyStateType)
 		// v1.0.42.01: For backward compatibility, the following hasn't been changed to IsKeyDownAsync().
 		// For example, a script might rely on being able to detect whether Control was down at the
 		// time the current Gui thread was launched rather than whether than whether it's down right now.
+		// Another example is the journal playback hook: when a window owned by the script receives
+		// such a keystroke, only GetKeyState() can detect the changed state of the key, not GetAsyncKeyState().
 		// A new mode can be added to KeyWait & GetKeyState if Async is ever explicitly needed.
 		return IsKeyDown2kXP(aVK);
 		// Known limitation: For some reason, both the above and IsKeyDown9xNT() will indicate

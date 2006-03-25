@@ -249,7 +249,9 @@ bool DualStateNumpadKeyIsDown();
 bool IsDualStateNumpadKey(const vk_type aVK, const sc_type aSC);
 
 void ChangeHookState(Hotkey *aHK[], int aHK_count, HookType aWhichHook, HookType aWhichHookAlways);
-void AddRemoveHooks(HookType aHooksToBeActive);
+void AddRemoveHooks(HookType aHooksToBeActive, bool aChangeIsTemporary = false);
+bool SystemHasAnotherKeybdHook();
+bool SystemHasAnotherMouseHook();
 DWORD WINAPI HookThreadProc(LPVOID aUnused);
 
 void ResetHook(bool aAllModifiersUp = false, HookType aWhichHook = (HOOK_KEYBD | HOOK_MOUSE)

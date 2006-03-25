@@ -1317,6 +1317,9 @@ bool IsWindowHung(HWND aWnd)
 	}
 	else // Otherwise: NT/2k/XP/2003 or some later OS (e.g. 64 bit?), so try to use the newer method.
 	{
+		// The use of IsHungAppWindow() (supported under Win2k+) is discouraged by MS,
+		// but it's useful to prevent the script from getting hung when it tries to do something
+		// to a hung window.
 		typedef BOOL (WINAPI *MyIsHungAppWindow)(HWND);
 		static MyIsHungAppWindow IsHungAppWindow = (MyIsHungAppWindow)GetProcAddress(GetModuleHandle("user32")
 			, "IsHungAppWindow");

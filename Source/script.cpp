@@ -2463,9 +2463,9 @@ inline ResultType Script::IsDirective(char *aBuf)
 			}
 			// Otherwise assume it's a list of options.  Note that for compatibility with its
 			// other caller, it will stop at end-of-string or ':', whichever comes first.
-			Hotstring::ParseOptions(parameter, g_HSPriority, g_HSKeyDelay, g_HSCaseSensitive, g_HSConformToCase
-				, g_HSDoBackspace, g_HSOmitEndChar, g_HSSendRaw, g_HSEndCharRequired, g_HSDetectWhenInsideWord
-				, g_HSDoReset);
+			Hotstring::ParseOptions(parameter, g_HSPriority, g_HSKeyDelay, g_HSSendMode, g_HSCaseSensitive
+				, g_HSConformToCase, g_HSDoBackspace, g_HSOmitEndChar, g_HSSendRaw, g_HSEndCharRequired
+				, g_HSDetectWhenInsideWord, g_HSDoReset);
 		}
 		return CONDITION_TRUE;
 	}
@@ -4699,6 +4699,11 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 
 	case ACT_BLOCKINPUT:
 		if (aArgc > 0 && !line.ArgHasDeref(1) && !line.ConvertBlockInput(new_raw_arg1))
+			return ScriptError(ERR_PARAM1_INVALID, new_raw_arg1);
+		break;
+
+	case ACT_SENDMODE:
+		if (aArgc > 0 && !line.ArgHasDeref(1) && line.ConvertSendMode(new_raw_arg1, SM_INVALID) == SM_INVALID)
 			return ScriptError(ERR_PARAM1_INVALID, new_raw_arg1);
 		break;
 
@@ -9226,12 +9231,11 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	Var *output_var;
 	VarSizeType space_needed; // For the commands that assign directly to an output var.
 	ToggleValueType toggle;  // For commands that use on/off/neutral.
-	int x, y;   // For mouse commands.
 	// Use signed values for these in case they're really given an explicit negative value:
 	int start_char_num, chars_to_extract; // For String commands.
 	size_t source_length; // For String commands.
 	SymbolType var_is_pure_numeric, value_is_pure_numeric; // For math operations.
-	vk_type vk; // For mouse commands and GetKeyState.
+	vk_type vk; // For GetKeyState.
 	Label *target_label;  // For ACT_SETTIMER and ACT_HOTKEY
 	int instance_number;  // For sound commands.
 	DWORD component_type; // For sound commands.
@@ -9241,7 +9245,6 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	ResultType result;  // General purpose.
 	HANDLE running_process; // For RUNWAIT
 	DWORD exit_code; // For RUNWAIT
-	bool do_selective_blockinput, blockinput_prev;  // For the mouse commands.
 
 	// Even though the loading-parser already checked, check again, for now,
 	// at least until testing raises confidence.  UPDATE: Don't this because
@@ -10638,79 +10641,26 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 
 	case ACT_SEND:
 	case ACT_SENDRAW:
-		SendKeys(ARG1, mActionType == ACT_SENDRAW);
+		SendKeys(ARG1, mActionType == ACT_SENDRAW, g.SendMode);
+		return OK;
+	case ACT_SENDINPUT: // Raw mode is supported via {Raw} in ARG1.
+		SendKeys(ARG1, false, g.SendMode == SM_INPUT_FALLBACK_TO_EVENT ? SM_INPUT_FALLBACK_TO_EVENT : SM_INPUT);
+		return OK;
+	case ACT_SENDPLAY: // Raw mode is supported via {Raw} in ARG1.
+		SendKeys(ARG1, false, SM_PLAY);
+		return OK;
+	case ACT_SENDEVENT:
+		SendKeys(ARG1, false, SM_EVENT);
 		return OK;
 
-
-	// Macros used by the Mouse commands.  These macros are executed here rather than inside the various
-	// MouseXXX() functions because some of those functions call the others.  Notes:
-	// Turn it on unconditionally even if it was on, since Ctrl-Alt-Del might have disabled it.
-	// Turn it back off only if it wasn't ON before we started.
-	#define MOUSE_BLOCKINPUT_ON \
-		if (do_selective_blockinput = (g_BlockInputMode == TOGGLE_MOUSE || g_BlockInputMode == TOGGLE_SENDANDMOUSE) \
-			&& g_os.IsWinNT4orLater())\
-		{\
-			blockinput_prev = g_BlockInput;\
-			ScriptBlockInput(true);\
-		}
-	#define MOUSE_BLOCKINPUT_OFF \
-	if (do_selective_blockinput && !blockinput_prev)\
-		ScriptBlockInput(false);
-
-
+	case ACT_CLICK:
+		return PerformClick(ARG1);
 	case ACT_MOUSECLICKDRAG:
-		if (   !(vk = ConvertMouseButton(ARG1, false))   )
-			return LineError(ERR_MOUSE_BUTTON ERR_ABORT, FAIL, ARG1);
-		if (!ValidateMouseCoords(ARG2, ARG3))
-			return LineError(ERR_MOUSE_COORD ERR_ABORT, FAIL, ARG2);
-		if (!ValidateMouseCoords(ARG4, ARG5))
-			return LineError(ERR_MOUSE_COORD ERR_ABORT, FAIL, ARG4);
-		// If no starting coords are specified, we tell the function to start at the
-		// current mouse position:
-		x = *ARG2 ? ATOI(ARG2) : COORD_UNSPECIFIED;
-		y = *ARG3 ? ATOI(ARG3) : COORD_UNSPECIFIED;
-		MOUSE_BLOCKINPUT_ON
-		MouseClickDrag(vk, x, y, ATOI(ARG4), ATOI(ARG5), *ARG6 ? ATOI(ARG6) : g.DefaultMouseSpeed
-			, toupper(*ARG7) == 'R');
-		MOUSE_BLOCKINPUT_OFF
-		return OK;
-
+		return PerformMouse(mActionType, SEVEN_ARGS);
 	case ACT_MOUSECLICK:
-		if (   !(vk = ConvertMouseButton(ARG1))   ) // Treats blank as "Left".
-			return LineError(ERR_MOUSE_BUTTON ERR_ABORT, FAIL, ARG1);
-		if (!ValidateMouseCoords(ARG2, ARG3))
-			return LineError(ERR_MOUSE_COORD ERR_ABORT, FAIL, ARG2);
-		x = *ARG2 ? ATOI(ARG2) : COORD_UNSPECIFIED;
-		y = *ARG3 ? ATOI(ARG3) : COORD_UNSPECIFIED;
-		KeyEventTypes event_type;
-		switch(*ARG6)
-		{
-		case 'u':
-		case 'U':
-			event_type = KEYUP;
-			break;
-		case 'd':
-		case 'D':
-			event_type = KEYDOWN;
-			break;
-		default:
-			event_type = KEYDOWNANDUP;
-		}
-		MOUSE_BLOCKINPUT_ON
-		MouseClick(vk, x, y, *ARG4 ? ATOI(ARG4) : 1, *ARG5 ? ATOI(ARG5) : g.DefaultMouseSpeed, event_type
-			, toupper(*ARG7) == 'R');
-		MOUSE_BLOCKINPUT_OFF
-		return OK;
-
+		return PerformMouse(mActionType, THREE_ARGS, "", "", ARG5, ARG7, ARG4, ARG6);
 	case ACT_MOUSEMOVE:
-		if (!ValidateMouseCoords(ARG1, ARG2))
-			return LineError(ERR_MOUSE_COORD ERR_ABORT, FAIL, ARG1);
-		x = *ARG1 ? ATOI(ARG1) : COORD_UNSPECIFIED;
-		y = *ARG2 ? ATOI(ARG2) : COORD_UNSPECIFIED;
-		MOUSE_BLOCKINPUT_ON
-		MouseMove(x, y, *ARG3 ? ATOI(ARG3) : g.DefaultMouseSpeed, toupper(*ARG4) == 'R');
-		MOUSE_BLOCKINPUT_OFF
-		return OK;
+		return PerformMouse(mActionType, "", ARG1, ARG2, "", "", ARG3, ARG4);
 
 	case ACT_MOUSEGETPOS:
 		return MouseGetPos(ATOI(ARG5) == 1);
@@ -10743,6 +10693,65 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		// In case it was a deref, force it to be some default value if it's out of range:
 		if (g.DefaultMouseSpeed < 0 || g.DefaultMouseSpeed > MAX_MOUSE_SPEED)
 			g.DefaultMouseSpeed = DEFAULT_MOUSE_SPEED;
+		return OK;
+
+	case ACT_SENDMODE:
+		g.SendMode = ConvertSendMode(ARG1, g.SendMode); // Leave value unchanged if ARG1 is invalid.
+		return OK;
+
+	case ACT_SETKEYDELAY:
+		if (!stricmp(ARG3, "Play"))
+		{
+			if (*ARG1)
+				g.KeyDelayPlay = ATOI(ARG1);
+			if (*ARG2)
+				g.PressDurationPlay = ATOI(ARG2);
+		}
+		else
+		{
+			if (*ARG1)
+				g.KeyDelay = ATOI(ARG1);
+			if (*ARG2)
+				g.PressDuration = ATOI(ARG2);
+		}
+		return OK;
+	case ACT_SETMOUSEDELAY:
+		if (!stricmp(ARG2, "Play"))
+			g.MouseDelayPlay = ATOI(ARG1);
+		else
+			g.MouseDelay = ATOI(ARG1);
+		return OK;
+	case ACT_SETWINDELAY:
+		g.WinDelay = ATOI(ARG1);
+		return OK;
+	case ACT_SETCONTROLDELAY:
+		g.ControlDelay = ATOI(ARG1);
+		return OK;
+
+	case ACT_SETBATCHLINES:
+		// This below ensures that IntervalBeforeRest and LinesPerCycle aren't both in effect simultaneously
+		// (i.e. that both aren't greater than -1), even though ExecUntil() has code to prevent a double-sleep
+		// even if that were to happen.
+		if (strcasestr(ARG1, "ms")) // This detection isn't perfect, but it doesn't seem necessary to be too demanding.
+		{
+			g.LinesPerCycle = -1;  // Disable the old BatchLines method in favor of the new one below.
+			g.IntervalBeforeRest = ATOI(ARG1);  // If negative, script never rests.  If 0, it rests after every line.
+		}
+		else
+		{
+			g.IntervalBeforeRest = -1;  // Disable the new method in favor of the old one below:
+			// This value is signed 64-bits to support variable reference (i.e. containing a large int)
+			// the user might throw at it:
+			if (   !(g.LinesPerCycle = ATOI64(ARG1))   )
+				// Don't interpret zero as "infinite" because zero can accidentally
+				// occur if the dereferenced var was blank:
+				g.LinesPerCycle = 10;  // The old default, which is retained for compatbility with existing scripts.
+		}
+		return OK;
+
+	case ACT_SETSTORECAPSLOCKMODE:
+		if (   (toggle = ConvertOnOff(ARG1, NEUTRAL)) != NEUTRAL   )
+			g.StoreCapslockMode = (toggle == TOGGLED_ON);
 		return OK;
 
 	case ACT_SETTITLEMATCHMODE:
@@ -10809,46 +10818,11 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	case ACT_GUICONTROLGET:
 		return GuiControlGet(ARG2, ARG3, ARG4);
 
-	case ACT_SETCONTROLDELAY: g.ControlDelay = ATOI(ARG1); return OK;
-	case ACT_SETWINDELAY: g.WinDelay = ATOI(ARG1); return OK;
-	case ACT_SETMOUSEDELAY: g.MouseDelay = ATOI(ARG1); return OK;
-	case ACT_SETKEYDELAY:
-		if (*ARG1)
-			g.KeyDelay = ATOI(ARG1);
-		if (*ARG2)
-			g.PressDuration = ATOI(ARG2);
-		return OK;
-
-	case ACT_SETBATCHLINES:
-		// This below ensures that IntervalBeforeRest and LinesPerCycle aren't both in effect simultaneously
-		// (i.e. that both aren't greater than -1), even though ExecUntil() has code to prevent a double-sleep
-		// even if that were to happen.
-		if (strcasestr(ARG1, "ms")) // This detection isn't perfect, but it doesn't seem necessary to be too demanding.
-		{
-			g.LinesPerCycle = -1;  // Disable the old BatchLines method in favor of the new one below.
-			g.IntervalBeforeRest = ATOI(ARG1);  // If negative, script never rests.  If 0, it rests after every line.
-		}
-		else
-		{
-			g.IntervalBeforeRest = -1;  // Disable the new method in favor of the old one below:
-			// This value is signed 64-bits to support variable reference (i.e. containing a large int)
-			// the user might throw at it:
-			if (   !(g.LinesPerCycle = ATOI64(ARG1))   )
-				// Don't interpret zero as "infinite" because zero can accidentally
-				// occur if the dereferenced var was blank:
-				g.LinesPerCycle = 10;  // The old default, which is retained for compatbility with existing scripts.
-		}
-		return OK;
-
 	////////////////////////////////////////////////////////////////////////////////////////
 	// For these, it seems best not to report an error during runtime if there's
 	// an invalid value (e.g. something other than On/Off/Blank) in a param containing
 	// a dereferenced variable, since settings are global and affect all subroutines,
 	// not just the one that we would otherwise report failure for:
-	case ACT_SETSTORECAPSLOCKMODE:
-		if (   (toggle = ConvertOnOff(ARG1, NEUTRAL)) != NEUTRAL   )
-			g.StoreCapslockMode = (toggle == TOGGLED_ON);
-		return OK;
 	case ACT_SUSPEND:
 		switch (ConvertOnOffTogglePermit(ARG1))
 		{

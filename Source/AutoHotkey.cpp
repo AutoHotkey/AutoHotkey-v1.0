@@ -53,9 +53,9 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\GUI Date.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\GUI ListView.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\OnMessage.ahk";
-		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\Send command.ahk";
+		char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\Send command.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Ref\\ImageSearch\\TEST SUITE\\MAIN.ahk";
-		char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\New Text Document.ahk";
+		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\New Text Document.ahk";
 	#else
 		char *script_filespec = NAME_P ".ini";  // Use this extension for better file association with editor(s).
 	#endif
@@ -224,6 +224,12 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	if (g_script.CreateWindows() != OK)
 		return CRITICAL_ERROR;
 
+	// At this point, it is nearly certain that the script will be executed.
+
+	// v1.0.43: Added DiscoverAltGr(), which is a very fast call. It's called upon startup for
+	// simplicity and reliability, especially since the expected prevalence of the SendPlay/Input
+	// methods provide fewer opportunities for the keyboard hook to detect AltGr.
+	DiscoverAltGr();
 	if (g_MaxHistoryKeys && (g_KeyHistory = (KeyHistoryItem *)malloc(g_MaxHistoryKeys * sizeof(KeyHistoryItem))))
 		ZeroMemory(g_KeyHistory, g_MaxHistoryKeys * sizeof(KeyHistoryItem)); // Must be zeroed.
 	//else leave it NULL as it was initialized in globaldata.
