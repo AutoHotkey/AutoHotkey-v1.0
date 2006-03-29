@@ -168,6 +168,7 @@ public:
 	#define NO_SUPPRESS_SUFFIX 0x01 // Bitwise: Bit #1
 	#define NO_SUPPRESS_PREFIX 0x02 // Bitwise: Bit #2
 	#define NO_SUPPRESS_NEXT_UP_EVENT 0x04 // Bitwise: Bit #3
+	#define NO_SUPPRESS_STATES NO_SUPPRESS_NEXT_UP_EVENT  // Those of the above that represent a the key's dynamically changing state as the user types.
 	UCHAR mNoSuppress;  // Uses the flags above.  Normally 0, but can be overridden by using the hotkey tilde (~) prefix).
 	bool mKeybdHookMandatory;
 	bool mAllowExtraModifiers;  // False if the hotkey should not fire when extraneous modifiers are held down.

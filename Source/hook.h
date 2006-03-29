@@ -124,7 +124,7 @@ struct key_type
 	bool used_as_prefix;  // whether a given virtual key or scan code is even used by a hotkey.
 	bool used_as_suffix;  // whether a given virtual key or scan code is even used by a hotkey.
 	bool used_as_key_up;  // Whether this suffix also has an enabled key-up hotkey.
-	UCHAR no_suppress;
+	UCHAR no_suppress; // Contains bitwise flags such as NO_SUPPRESS_PREFIX.
 	bool is_down; // this key is currently down.
 	bool it_put_alt_down;  // this key resulted in ALT being pushed down (due to alt-tab).
 	bool it_put_shift_down;  // this key resulted in SHIFT being pushed down (due to shift-alt-tab).
@@ -145,6 +145,11 @@ struct key_type
 	sc_hotkey ModifierSC[MAX_MODIFIER_SCS_PER_SUFFIX];
 }; // Keep the macro below in sync with the above.
 
+// Fix for v1.0.43.01: Caller wants item.no_suppress initialized to remove all flags except NO_SUPPRESS_STATES.
+// Otherwise, a hotkey that removes the mouse hook will cause a non-suppressed key-up to become suppressed,
+// causing the key to get stuck down.  The following two-line script can reproduce this:
+//   ~LCtrl::Hotkey, RButton, Off
+//   RButton::return
 #define RESET_KEYTYPE_ATTRIB(item) \
 {\
 	item.nModifierVK = 0;\
@@ -152,7 +157,7 @@ struct key_type
 	item.used_as_prefix = false;\
 	item.used_as_suffix = false;\
 	item.used_as_key_up = false;\
-	item.no_suppress = false;\
+	item.no_suppress &= NO_SUPPRESS_STATES;\
 	item.sc_takes_precedence = false;\
 }
 

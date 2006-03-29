@@ -4219,7 +4219,7 @@ DWORD WINAPI HookThreadProc(LPVOID aUnused)
 						problem_activating_hooks = true;
 				}
 			}
-			else // Caller specified that the keyboard hook is to be deactivated (if it isn't already).
+			else // Caller specified that the mouse hook is to be deactivated (if it isn't already).
 				if (g_MouseHook)
 					if (UnhookWindowsHookEx(g_MouseHook))
 						g_MouseHook = NULL;

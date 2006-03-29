@@ -2188,7 +2188,10 @@ void MouseEvent(DWORD aEventFlags, DWORD aData, DWORD aX, DWORD aY)
 	if (sSendMode)
 		PutMouseEventIntoArray(aEventFlags, aData, aX, aY);
 	else
-		mouse_event(aEventFlags, aX, aY, aData, KEY_IGNORE); // It ignores aX and aY if the caller didn't include MOUSEEVENTF_MOVE in aEventFlags.
+		mouse_event(aEventFlags
+			, aX == COORD_UNSPECIFIED ? 0 : aX // v1.0.43.01: Must be zero if no change in position is desired
+			, aY == COORD_UNSPECIFIED ? 0 : aY // (fixes compatibility with certain apps/games).
+			, aData, KEY_IGNORE);
 }
 
 
@@ -2295,8 +2298,8 @@ void PutMouseEventIntoArray(DWORD aEventFlags, DWORD aData, DWORD aX, DWORD aY)
 	{
 		INPUT &this_event = sEventSI[sEventCount]; // For performance and convenience.
 		this_event.type = INPUT_MOUSE;
-		this_event.mi.dx = aX;
-		this_event.mi.dy = aY;
+		this_event.mi.dx = (aX == COORD_UNSPECIFIED) ? 0 : aX; // v1.0.43.01: Must be zero if no change in position is
+		this_event.mi.dy = (aY == COORD_UNSPECIFIED) ? 0 : aY; // desired (fixes compatibility with certain apps/games).
 		this_event.mi.dwFlags = aEventFlags;
 		this_event.mi.mouseData = aData;
 		this_event.mi.dwExtraInfo = KEY_IGNORE; // Although our hook won't be installed (or won't detect, in the case of playback), that of other scripts might be, so set this for them.
