@@ -225,7 +225,7 @@ void SendKeys(char *aKeys, bool aSendRaw, SendModes aSendModeOrig, HWND aTargetW
 	// sent; but the behavior seems inconsistent and might vary depending on OS type, so it seems best
 	// not to rely on it.
 	sSendMode = aSendModeOrig;
-	if (sSendMode == SM_INPUT || sSendMode == SM_INPUT_FALLBACK_TO_EVENT)
+	if (sSendMode == SM_INPUT || sSendMode == SM_INPUT_FALLBACK_TO_PLAY)
 	{
 		// Both of these modes fall back to a different mode depending on whether some other script
 		// is running with a keyboard/mouse hook active.  Of course, the detection of this isn't foolproof
@@ -246,9 +246,9 @@ void SendKeys(char *aKeys, bool aSendRaw, SendModes aSendModeOrig, HWND aTargetW
 			// Finally, checking aSendRaw isn't foolproof because the string might contain {Raw} prior to {Click,
 			// but the complexity and performance of checking for that seems unjustified given the rarity,
 			// especially since there are almost never any consequences to reverting to hook mode vs. SendInput.
-			sSendMode = (sSendMode == SM_INPUT) ? SM_PLAY : SM_EVENT;
+			sSendMode = (sSendMode == SM_INPUT) ? SM_EVENT : SM_PLAY;
 		else // SendInput is available and no other impacting hooks are obviously present on the system, so use SendInput unconditionally.
-			sSendMode = SM_INPUT; // Resolve early so that other sections don't have to consider SM_INPUT_FALLBACK_TO_EVENT a valid value.
+			sSendMode = SM_INPUT; // Resolve early so that other sections don't have to consider SM_INPUT_FALLBACK_TO_PLAY a valid value.
 	}
 	if (sSendMode) // Build an array.  We're also responsible for setting sSendMode to SM_EVENT prior to returning.
 	{
@@ -1690,12 +1690,12 @@ void PerformMouseCommon(ActionTypeType aActionType, vk_type aVK, int aX1, int aY
 	INPUT event_array[MAX_PERFORM_MOUSE_EVENTS]; // Use type INPUT vs. PlaybackEvent since the former is larger (i.e. enough to hold either one).
 
 	sSendMode = g.SendMode;
-	if (sSendMode == SM_INPUT || sSendMode == SM_INPUT_FALLBACK_TO_EVENT)
+	if (sSendMode == SM_INPUT || sSendMode == SM_INPUT_FALLBACK_TO_PLAY)
 	{
 		if (!sMySendInput || SystemHasAnotherMouseHook()) // See similar section in SendKeys() for details.
-			sSendMode = (sSendMode == SM_INPUT) ? SM_PLAY : SM_EVENT;
+			sSendMode = (sSendMode == SM_INPUT) ? SM_EVENT : SM_PLAY;
 		else
-			sSendMode = SM_INPUT; // Resolve early so that other sections don't have to consider SM_INPUT_FALLBACK_TO_EVENT a valid value.
+			sSendMode = SM_INPUT; // Resolve early so that other sections don't have to consider SM_INPUT_FALLBACK_TO_PLAY a valid value.
 	}
 	if (sSendMode) // We're also responsible for setting sSendMode to SM_EVENT prior to returning.
 		InitEventArray(event_array, MAX_PERFORM_MOUSE_EVENTS, 0);

@@ -10644,7 +10644,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		SendKeys(ARG1, mActionType == ACT_SENDRAW, g.SendMode);
 		return OK;
 	case ACT_SENDINPUT: // Raw mode is supported via {Raw} in ARG1.
-		SendKeys(ARG1, false, g.SendMode == SM_INPUT_FALLBACK_TO_EVENT ? SM_INPUT_FALLBACK_TO_EVENT : SM_INPUT);
+		SendKeys(ARG1, false, g.SendMode == SM_INPUT_FALLBACK_TO_PLAY ? SM_INPUT_FALLBACK_TO_PLAY : SM_INPUT);
 		return OK;
 	case ACT_SENDPLAY: // Raw mode is supported via {Raw} in ARG1.
 		SendKeys(ARG1, false, SM_PLAY);

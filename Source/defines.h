@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.43.01"
+#define NAME_VERSION "1.0.43.02"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -97,13 +97,13 @@ enum ResultType {FAIL = 0, OK, WARN = OK, CRITICAL_ERROR  // Some things might r
 	, LOOP_BREAK, LOOP_CONTINUE
 	, EARLY_RETURN, EARLY_EXIT}; // EARLY_EXIT needs to be distinct from FAIL for ExitApp() and AutoExecSection().
 
-enum SendModes {SM_EVENT, SM_INPUT, SM_PLAY, SM_INPUT_FALLBACK_TO_EVENT, SM_INVALID}; // SM_EVENT must be zero.
-// In above, SM_INPUT falls back to SM_PLAY when the SendInput mode would be defeated by the presence
-// of a keyboard/mouse hooks in another script.  By contrast, SM_INPUT_FALLBACK_TO_EVENT falls back to
-// the SendEvent mode (it does this because SendEvent is superior to a crippled/interruptible
-// SendInput due to SendEvent being able to dynamically adjust to changing conditions [such as the
-// user releasing a modifier key during the Send]).
-// SendInput has this extra behavior because it's generally preferred over SendPlay due to being faster.
+enum SendModes {SM_EVENT, SM_INPUT, SM_PLAY, SM_INPUT_FALLBACK_TO_PLAY, SM_INVALID}; // SM_EVENT must be zero.
+// In above, SM_INPUT falls back to SM_EVENT when the SendInput mode would be defeated by the presence
+// of a keyboard/mouse hooks in another script (it does this because SendEvent is superior to a
+// crippled/interruptible SendInput due to SendEvent being able to dynamically adjust to changing
+// conditions [such as the user releasing a modifier key during the Send]).  By contrast,
+// SM_INPUT_FALLBACK_TO_PLAY falls back to the SendPlay mode.  SendInput has this extra fallback behavior
+// because it's likely to become the most popular sending method.
 
 enum ExitReasons {EXIT_NONE, EXIT_CRITICAL, EXIT_ERROR, EXIT_DESTROY, EXIT_LOGOFF, EXIT_SHUTDOWN
 	, EXIT_WM_QUIT, EXIT_WM_CLOSE, EXIT_MENU, EXIT_EXIT, EXIT_RELOAD, EXIT_SINGLEINSTANCE};

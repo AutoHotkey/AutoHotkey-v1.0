@@ -2097,7 +2097,7 @@ void Hotstring::DoReplace(LPARAM alParam)
 		if (end_char = (char)LOWORD(alParam))
 		{
 			start_of_replacement += strlen(start_of_replacement);
-			sprintf(start_of_replacement, "{Raw}%c", (char)end_char);
+			sprintf(start_of_replacement, "%s%c", mSendRaw ? "" : "{Raw}", (char)end_char); // v1.0.43.02: Don't send "{Raw}" if already in raw mode!
 		}
 	}
 
@@ -2291,8 +2291,10 @@ void Hotstring::ParseOptions(char *aOptions, int &aPriority, int &aKeyDelay, Sen
 				++cp; // Skip over S's sub-letter (if any) to exclude it from  further consideration.
 			switch (toupper(*cp1))
 			{
-			// There is no means to choose SM_INPUT_FALLBACK_TO_EVENT because it seems too rarely desired.
-			case 'I': aSendMode = SM_INPUT; break;
+			// There is no means to choose SM_INPUT because it seems too rarely desired (since auto-replace
+			// hotstrings would then become interruptible, allowing the keystrokes of fast typists to get
+			// interspersed with the replacement text).
+			case 'I': aSendMode = SM_INPUT_FALLBACK_TO_PLAY; break;
 			case 'E': aSendMode = SM_EVENT; break;
 			case 'P': aSendMode = SM_PLAY; break;
 			//default: leave it unchanged.

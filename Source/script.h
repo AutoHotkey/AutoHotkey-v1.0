@@ -1519,9 +1519,16 @@ public:
 	static SendModes ConvertSendMode(char *aBuf, SendModes aValueToReturnIfInvalid)
 	{
 		if (!stricmp(aBuf, "Play")) return SM_PLAY;
-		if (!stricmp(aBuf, "Input")) return SM_INPUT;
-		if (!stricmp(aBuf, "InputThenEvent")) return SM_INPUT_FALLBACK_TO_EVENT;
 		if (!stricmp(aBuf, "Event")) return SM_EVENT;
+		if (!strnicmp(aBuf, "Input", 5)) // This IF must be listed last so that it can fall through to bottom line.
+		{
+			aBuf += 5;
+			if (!*aBuf || !stricmp(aBuf, "ThenEvent")) // "ThenEvent" is supported for backward compatibiltity with 1.0.43.00.
+				return SM_INPUT;
+			if (!stricmp(aBuf, "ThenPlay"))
+				return SM_INPUT_FALLBACK_TO_PLAY;
+			//else fall through and return the indication of invalidity.
+		}
 		return aValueToReturnIfInvalid;
 	}
 
