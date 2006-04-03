@@ -712,8 +712,9 @@ void Hotkey::Perform(HotkeyVariant &aVariant)
 		return;
 
 	ResultType result;
-	bool unregistered_during_thread;
+	bool unregistered_during_thread = mUnregisterDuringThread && mIsRegistered;
 	++aVariant.mExistingThreads;  // This is the thread count for this particular hotkey only.
+
 	for (;;)
 	{
 		// This is stored as an attribute of the script (semi-globally) rather than passed
@@ -722,17 +723,20 @@ void Hotkey::Perform(HotkeyVariant &aVariant)
 		// by a timed subroutine, while #HotkeyModifierTimeout is still in effect,
 		// in which case we would want SendKeys() to take not of these modifiers even
 		// if it was called from an ExecUntil() other than ours here:
-		g_script.mThisHotkeyModifiersLR = mModifiersConsolidatedLR;
+		g_script.mThisHotkeyModifiersLR = mModifiersConsolidatedLR; // Do this every iteration because some other thread may have interrupted this one and overwrote this value.
+
+		// LAUNCH HOTKEY SUBROUTINE:
 		// For v1.0.23, the below allows the $ hotkey prefix to unregister the hotkey on
 		// Windows 9x, which allows the send command to send the hotkey itself without
 		// causing an infinite loop of keystrokes.  For simplicity, the hotkey is kept
 		// unregistered during the entire duration of the thread, rather than trying to
 		// selectively do it before and after each Send command of the thread:
-		if (unregistered_during_thread = (mUnregisterDuringThread && mIsRegistered)) // Assign.
+		if (unregistered_during_thread) // Do it every time through the loop in case the hotkey is re-registered by its own subroutine.
 			Unregister(); // This takes care of other details for us.
 		result = aVariant.mJumpToLabel->mJumpToLine->ExecUntil(UNTIL_RETURN);
 		if (unregistered_during_thread)
 			Register();
+
 		if (result == FAIL)
 		{
 			aVariant.mRunAgainAfterFinished = false;  // Ensure this is reset due to the error.
@@ -1880,13 +1884,13 @@ Hotkey *Hotkey::FindHotkeyByTrueNature(char *aName)
 
 	for (int i = 0; i < sHotkeyCount; ++i)
 	{
-		if (!stricmp(shk[i]->mName, aName)) // Case insensitive so that something like ^A is a match for ^a
+		if (!lstrcmpi(shk[i]->mName, aName)) // Case insensitive so that something like ^A is a match for ^a
 			return shk[i];
 		// Otherwise, check more thoroughly so that things like ^!c and !^c are considered a match:
 		suffix_existing = TextToModifiers(shk[i]->mName, NULL, &modifiers_existing, &modifiersLR_existing, &properties_of_existing);
 		if (   modifiers_existing == modifiers_candidate && modifiersLR_existing == modifiersLR_candidate
 			&& properties_of_existing == properties_of_candidate  // Treat wildcard (*) and pass-through (~) as distict features.  Wildcard definitely is, but tilde to allow the Hotkey command to dynamically enable/disable ~^c vs. ^c.
-			&& !stricmp(suffix_existing, suffix_candidate)   ) // Compare suffixes, including any "up" to mean an up-hotkey (might not be precise if extra spaces are present before "Up").
+			&& !lstrcmpi(suffix_existing, suffix_candidate)   ) // Compare suffixes, including any "up" to mean an up-hotkey (might not be precise if extra spaces are present before "Up").
 			return shk[i];
 	}
 	return NULL;  // No match found.

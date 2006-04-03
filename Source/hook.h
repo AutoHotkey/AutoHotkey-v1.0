@@ -28,7 +28,12 @@ GNU General Public License for more details.
 // for possible future use by the program, so don't use a message above 0x1000 without good reason.
 enum UserMessages {AHK_HOOK_HOTKEY = WM_USER, AHK_HOTSTRING, AHK_USER_MENU, AHK_DIALOG, AHK_NOTIFYICON
 	, AHK_RETURN_PID, AHK_EXIT_BY_RELOAD, AHK_EXIT_BY_SINGLEINSTANCE
-	, AHK_GUI_ACTION = WM_USER + 100  // Allow some room in between for more "exit" type msgs to be added in the future (see below comment).
+	, AHK_GUI_ACTION = 0x7B00 // See below comment.
+	// v1.0.43.03: Changed above msg number because Micha reports that previous number (WM_USER+100) conflicts
+	// with msgs sent by HTML control (AHK_CLIPBOARD_CHANGE) and possibly others (I think WM_USER+100 may be the
+	// start of a range used by other common controls too).  So trying a higher number that's (hopefully) very
+	// unlikely to be used by OS features.
+	// Older: Allow some room in between for more "exit" type msgs to be added in the future (see below comment).
 	, AHK_CLIPBOARD_CHANGE, AHK_HOOK_TEST_MSG, AHK_CHANGE_HOOK_STATE};
 // NOTE: TRY NEVER TO CHANGE the specific numbers of the above messages, since some users might be
 // using the Post/SendMessage commands to automate AutoHotkey itself.  Here is the original order
@@ -233,7 +238,7 @@ struct KeyHistoryItem
 LRESULT CALLBACK LowLevelKeybdProc(int aCode, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK LowLevelMouseProc(int aCode, WPARAM wParam, LPARAM lParam);
 LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lParam, const vk_type aVK
-, const sc_type aSC, bool aKeyUp, ULONG_PTR aExtraInfo, DWORD aEventFlags);
+	, sc_type aSC, bool aKeyUp, ULONG_PTR aExtraInfo, DWORD aEventFlags);
 
 #define HOTSTRING_INDEX_INVALID INT_MAX  // Use a signed maximum rather than unsigned, in case indexes ever become signed.
 #define SuppressThisKey SuppressThisKeyFunc(aHook, lParam, aVK, aSC, aKeyUp, pKeyHistoryCurr, hotkey_id_to_post)

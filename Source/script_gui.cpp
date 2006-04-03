@@ -1280,17 +1280,15 @@ ResultType GuiType::Create()
 
 	// Use a separate class for GUI, which gives it a separate WindowProc and allows it to be more
 	// distinct when used with the ahk_class method of addressing windows.
-	static sGuiInitialized = false;
+	static bool sGuiInitialized = false;
 	if (!sGuiInitialized)
 	{
-		HICON hIcon = LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_MAIN));
 		WNDCLASSEX wc = {0};
 		wc.cbSize = sizeof(wc);
 		wc.lpszClassName = WINDOW_CLASS_GUI;
 		wc.hInstance = g_hInstance;
 		wc.lpfnWndProc = GuiWindowProc;
-		wc.hIcon = hIcon;
-		wc.hIconSm = hIcon;
+		wc.hIcon = wc.hIconSm = (HICON)LoadImage(g_hInstance, MAKEINTRESOURCE(IDI_MAIN), IMAGE_ICON, 0, 0, LR_SHARED); // Use LR_SHARED to conserve memory (since the main icon is loaded for so many purposes).
 		//wc.style = 0;  // CS_HREDRAW | CS_VREDRAW
 		wc.hCursor = LoadCursor((HINSTANCE) NULL, IDC_ARROW);
 		wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
@@ -1357,9 +1355,9 @@ ResultType GuiType::Create()
 		mIconEligibleForDestruction = main_icon;
 	}
 	else
-		main_icon = LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_MAIN));
-		// Unlike mCustomIcon, leave mIconEligibleForDestruction NULL because a shared HICON such as
-		// that from LoadIcon() should never be destroyed.
+		main_icon = (HICON)LoadImage(g_hInstance, MAKEINTRESOURCE(IDI_MAIN), IMAGE_ICON, 0, 0, LR_SHARED); // Use LR_SHARED to conserve memory (since the main icon is loaded for so many purposes).
+		// Unlike mCustomIcon, leave mIconEligibleForDestruction NULL because a shared HICON such as one
+		// loaded via LR_SHARED should never be destroyed.
 	// Setting the small icon puts it in the upper left corner of the dialog window.
 	// Setting the big icon makes the dialog show up correctly in the Alt-Tab menu (but big seems to
 	// have no effect unless the window is unowned, i.e. it has a button on the task bar).
@@ -1731,10 +1729,10 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		// more friendly to omit them in the automatic-label label name.  Note that a button
 		// or menu item can contain a literal ampersand by using two ampersands, such as
 		// "Save && Exit" (in this example, the auto-label would be named "ButtonSaveExit").
-		StrReplaceAll(label_name, " ", "", true);
-		StrReplaceAll(label_name, "&", "", true);
-		StrReplaceAll(label_name, "\r", "", true); // Done separate from \n in case they're ever unpaired.
-		StrReplaceAll(label_name, "\n", "", true);
+		StrReplaceAll(label_name, " ", "", true, SCS_SENSITIVE);
+		StrReplaceAll(label_name, "&", "", true, SCS_SENSITIVE);
+		StrReplaceAll(label_name, "\r", "", true, SCS_SENSITIVE); // Done separate from \n in case they're ever unpaired.
+		StrReplaceAll(label_name, "\n", "", true, SCS_SENSITIVE);
 		control.jump_to_label = g_script.FindLabel(label_name);  // OK if NULL (the button will do nothing).
 	}
 
@@ -5958,7 +5956,7 @@ ResultType GuiType::ControlGetContents(Var &aOutputVar, GuiControlType &aControl
 		// Since edit controls tend to have many hard returns in them, use "true" for the last param to
 		// enhance performance.  This performance gain is extreme when the control contains thousands
 		// of CRLFs:
-		StrReplaceAll(aOutputVar.Contents(), "\r\n", "\n", false);
+		StrReplaceAll(aOutputVar.Contents(), "\r\n", "\n", false, SCS_SENSITIVE);
 		aOutputVar.Length() = (VarSizeType)strlen(aOutputVar.Contents());
 	}
 	return aOutputVar.Close();  // In case it's the clipboard.
@@ -6267,7 +6265,7 @@ int GuiType::FindOrCreateFont(char *aOptions, char *aFontName, FontType *aFounda
 int GuiType::FindFont(FontType &aFont)
 {
 	for (int i = 0; i < sFontCount; ++i)
-		if (!stricmp(sFont[i].name, aFont.name)
+		if (!stricmp(sFont[i].name, aFont.name) // lstrcmpi() is not used: 1) avoids breaking exisitng scripts; 2) provides consistent behavior across multiple locales.
 			&& sFont[i].point_size == aFont.point_size
 			&& sFont[i].weight == aFont.weight
 			&& sFont[i].italic == aFont.italic
@@ -7839,18 +7837,38 @@ int GuiType::FindTabIndexByName(GuiControlType &aTabControl, char *aName, bool a
 	if (!tab_count)
 		return -1; // No match.
 	if (!*aName)
-		return 0;  // First item (index 0) matches empty string.
+		return 0;  // First item (index 0) matches the empty string.
+
 	TCITEM tci;
 	tci.mask = TCIF_TEXT;
 	char buf[1024];
 	tci.pszText = buf;
 	tci.cchTextMax = sizeof(buf) - 1; // MSDN example uses -1.
+
 	size_t aName_length = strlen(aName);
+	if (aName_length >= sizeof(buf)) // Checking this early avoids having to check it in the loop.
+		return -1; // No match possible.
+
 	for (int i = 0; i < tab_count; ++i)
+	{
 		if (TabCtrl_GetItem(aTabControl.hwnd, i, &tci))
-			if (   !(aExactMatch ? strcmp(tci.pszText, aName) : strnicmp(tci.pszText, aName, aName_length))   )
-				return i; // Match found.
-	return -1; // No match found.
+		{
+			if (aExactMatch)
+			{
+				if (!strcmp(tci.pszText, aName))  // Match found.
+					return i;
+			}
+			else
+			{
+				tci.pszText[aName_length] = '\0'; // Facilitates checking of only the leading part like strncmp(). Buffer overflow is impossible due to a check higher above.
+				if (!lstrcmpi(tci.pszText, aName)) // Match found.
+					return i;
+			}
+		}
+	}
+
+	// Since above didn't return, no match found.
+	return -1;
 }
 
 
@@ -8100,7 +8118,7 @@ int CALLBACK LV_GeneralSort(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort)
 	// MSDN: "return a negative value if the first item should precede the second"
 	int result;
 	if (lvs.col.type == LV_COL_TEXT)
-		result = lvs.col.case_sensitive ? strcmp(field1, lvs.lvi.pszText) : stricmp(field1, lvs.lvi.pszText); // Must not refer to buf1/buf2 directly, see above.
+		result = strcmp2(field1, lvs.lvi.pszText, lvs.col.case_sensitive); // Must not refer to buf1/buf2 directly, see above.
 	else
 		// Unlike ACT_SORT, supporting hex for an explicit-floating point column seems far too rare to
 		// justify, hence atof() is used vs. ATOF():

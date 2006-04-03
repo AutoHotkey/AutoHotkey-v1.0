@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.43.02"
+#define NAME_VERSION "1.0.43.03"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -116,8 +116,12 @@ enum MenuTypeType {MENU_TYPE_NONE, MENU_TYPE_POPUP, MENU_TYPE_BAR}; // NONE must
 // These are used for things that can be turned on, off, or left at a
 // neutral default value that is neither on nor off.  INVALID must
 // be zero:
-enum ToggleValueType {TOGGLE_INVALID = 0, TOGGLED_ON, TOGGLED_OFF, ALWAYS_ON, ALWAYS_OFF
-	, TOGGLE, TOGGLE_PERMIT, NEUTRAL, TOGGLE_SEND, TOGGLE_MOUSE, TOGGLE_SENDANDMOUSE, TOGGLE_DEFAULT};
+enum ToggleValueType {TOGGLE_INVALID = 0, TOGGLED_ON, TOGGLED_OFF, ALWAYS_ON, ALWAYS_OFF, TOGGLE
+	, TOGGLE_PERMIT, NEUTRAL, TOGGLE_SEND, TOGGLE_MOUSE, TOGGLE_SENDANDMOUSE, TOGGLE_DEFAULT};
+
+// Some things (such as ListView sorting) rely on SCS_INSENSITIVE being zero.
+// In addition, BIF_InStr relies on SCS_SENSITIVE being 1.
+enum StringCaseSenseType {SCS_INSENSITIVE, SCS_SENSITIVE, SCS_INSENSITIVE_LOCALE, SCS_INVALID};
 
 enum SymbolType // For use with ExpandExpression() and IsPureNumeric().
 {
@@ -485,9 +489,9 @@ struct global_struct
 	bool ThreadIsCritical; // Whether this thread has been marked (un)interruptible by the "Critical" command.
 	UCHAR DefaultMouseSpeed;
 	UCHAR CoordMode; // Bitwise collection of flags.
+	UCHAR StringCaseSense; // On/Off/Locale
 	bool StoreCapslockMode;
 	bool AutoTrim;
-	bool StringCaseSense;
 	bool FormatIntAsHex;
 	bool MsgBoxTimedOut; // Doesn't require initialization.
 	bool IsPaused;
@@ -560,9 +564,9 @@ inline void global_init(global_struct &g)
 	#define MAX_MOUSE_SPEED_STR "100"
 	g.DefaultMouseSpeed = DEFAULT_MOUSE_SPEED;
 	g.CoordMode = 0;  // All the flags it contains are off by default.
+	g.StringCaseSense = SCS_INSENSITIVE;  // AutoIt2 default, and it does seem best.
 	g.StoreCapslockMode = true;  // AutoIt2 (and probably 3's) default, and it makes a lot of sense.
 	g.AutoTrim = true;  // AutoIt2's default, and overall the best default in most cases.
-	g.StringCaseSense = false;  // AutoIt2 default, and it does seem best.
 	strcpy(g.FormatFloat, "%0.6f");
 	g.FormatIntAsHex = false;
 	// For FormatFloat:

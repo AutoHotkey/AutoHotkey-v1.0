@@ -500,10 +500,14 @@ int strlicmp(char *aBuf1, char *aBuf2, UINT aLength1, UINT aLength2)
 
 
 
-char *strrstr(char *aStr, char *aPattern, bool aCaseSensitive, int aOccurrence)
+char *strrstr(char *aStr, char *aPattern, StringCaseSenseType aStringCaseSense, int aOccurrence)
 // Returns NULL if not found, otherwise the address of the found string.
+// This could probably use a faster algorithm someday.  For now it seems adequate because
+// scripts rarely use it and when they do, it's usually on short haystack strings (such as
+// to find the last period in a filename).
 {
-	if (aOccurrence < 1) return NULL;
+	if (aOccurrence < 1)
+		return NULL;
 	size_t aStr_length = strlen(aStr);
 	if (!*aPattern)
 		// The empty string is found in every string, and since we're searching from the right, return
@@ -512,7 +516,9 @@ char *strrstr(char *aStr, char *aPattern, bool aCaseSensitive, int aOccurrence)
 
 	size_t aPattern_length = strlen(aPattern);
 	char aPattern_last_char = aPattern[aPattern_length - 1];
-	char aPattern_last_char_upper = toupper(aPattern_last_char);
+	char aPattern_last_char_lower = (aStringCaseSense == SCS_INSENSITIVE_LOCALE)
+		? (char)CharLower((LPSTR)aPattern_last_char)
+		: tolower(aPattern_last_char);
 
 	int occurrence = 0;
 	char *match_starting_pos = aStr + aStr_length - 1;
@@ -526,14 +532,19 @@ char *strrstr(char *aStr, char *aPattern, bool aCaseSensitive, int aOccurrence)
 		char *last_char_match;
 		for (last_char_match = match_starting_pos; last_char_match >= aStr; --last_char_match)
 		{
-			if (aCaseSensitive)
+			if (aStringCaseSense == SCS_INSENSITIVE) // The most common mode is listed first for performance.
 			{
-				if (*last_char_match == aPattern_last_char)
+				if (tolower(*last_char_match) == aPattern_last_char_lower)
 					break;
 			}
-			else
+			else if (aStringCaseSense == SCS_INSENSITIVE_LOCALE)
 			{
-				if (toupper(*last_char_match) == aPattern_last_char_upper)
+				if ((char)CharLower((LPSTR)*last_char_match) == aPattern_last_char_lower)
+					break;
+			}
+			else // Case sensitive.
+			{
+				if (*last_char_match == aPattern_last_char)
 					break;
 			}
 		}
@@ -557,14 +568,22 @@ char *strrstr(char *aStr, char *aPattern, bool aCaseSensitive, int aOccurrence)
 			}
 			if (full_match < aStr) // Only after checking the above is this checked.
 				break;
-			if (aCaseSensitive)
+
+			if (aStringCaseSense == SCS_INSENSITIVE) // The most common mode is listed first for performance.
+			{
+				if (tolower(*full_match) != tolower(*cp))
+					break;
+			}
+			else if (aStringCaseSense == SCS_INSENSITIVE_LOCALE)
+			{
+				if ((char)CharLower((LPSTR)*full_match) != (char)CharLower((LPSTR)*cp))
+					break;
+			}
+			else // Case sensitive.
 			{
 				if (*full_match != *cp)
 					break;
 			}
-			else
-				if (toupper(*full_match) != toupper(*cp))
-					break;
 		} // for() innermost
 		if (found) // Although the above found a match, it wasn't the right one, so resume searching.
 			match_starting_pos = full_match - 1;
@@ -618,11 +637,11 @@ char *strcasestr(const char *phaystack, const char *pneedle)
 	haystack = (const unsigned char *) phaystack;
 	needle = (const unsigned char *) pneedle;
 
-	bl = tolower (*needle);
+	bl = tolower(*needle);
 	if (bl != '\0')
 	{
 		// Scan haystack until the first character of needle is found:
-		bu = toupper (bl);
+		bu = toupper(bl);
 		haystack--;				/* possible ANSI violation */
 		do
 		{
@@ -633,10 +652,10 @@ char *strcasestr(const char *phaystack, const char *pneedle)
 		while ((cl != bl) && (cl != bu));
 
 		// See if the rest of needle is a one-for-one match with this part of haystack:
-		cl = tolower (*++needle);
+		cl = tolower(*++needle);
 		if (cl == '\0')  // Since needle consists of only one character, it is already a match as found above.
 			goto foundneedle;
-		cu = toupper (cl);
+		cu = toupper(cl);
 		++needle;
 		goto jin;
 		
@@ -669,23 +688,23 @@ jin:
 			
 			rhaystack = haystack-- + 1;
 			rneedle = needle;
-			a = tolower (*rneedle);
+			a = tolower(*rneedle);
 			
-			if (tolower (*rhaystack) == (int) a)
+			if (tolower(*rhaystack) == (int) a)
 			do
 			{
 				if (a == '\0')
 					goto foundneedle;
 				++rhaystack;
-				a = tolower (*++needle);
-				if (tolower (*rhaystack) != (int) a)
+				a = tolower(*++needle);
+				if (tolower(*rhaystack) != (int) a)
 					break;
 				if (a == '\0')
 					goto foundneedle;
 				++rhaystack;
-				a = tolower (*++needle);
+				a = tolower(*++needle);
 			}
-			while (tolower (*rhaystack) == (int) a);
+			while (tolower(*rhaystack) == (int) a);
 			
 			needle = rneedle;		/* took the register-poor approach */
 			
@@ -701,7 +720,105 @@ ret0:
 
 
 
-char *StrReplace(char *aBuf, char *aOld, char *aNew, bool aCaseSensitive)
+char *lstrcasestr(const char *phaystack, const char *pneedle)
+// This is the locale-obeying variant of strcasestr.  It uses CharUpper/Lower in place of toupper/lower,
+// which sees chars like ä as the same as Ä (depending on code page/locale).  This function is about
+// 1 to 8 times slower than strcasestr() depending on factors such as how many partial matches for needle
+// are in haystack.
+// License: GNU GPL
+// Copyright (C) 1994,1996,1997,1998,1999,2000 Free Software Foundation, Inc.
+// See strcasestr() for more comments.
+{
+	register const unsigned char *haystack, *needle;
+	register unsigned bl, bu, cl, cu;
+	
+	haystack = (const unsigned char *) phaystack;
+	needle = (const unsigned char *) pneedle;
+
+	bl = (UINT)(size_t)CharLower((LPSTR)*needle); // Double cast avoids compiler warning without increasing code size.
+	if (bl != '\0')
+	{
+		// Scan haystack until the first character of needle is found:
+		bu = (UINT)(size_t)CharUpper((LPSTR)(size_t)bl);
+		haystack--;				/* possible ANSI violation */
+		do
+		{
+			cl = *++haystack;
+			if (cl == '\0')
+				goto ret0;
+		}
+		while ((cl != bl) && (cl != bu));
+
+		// See if the rest of needle is a one-for-one match with this part of haystack:
+		cl = (UINT)(size_t)CharLower((LPSTR)*++needle);
+		if (cl == '\0')  // Since needle consists of only one character, it is already a match as found above.
+			goto foundneedle;
+		cu = (UINT)(size_t)CharUpper((LPSTR)(size_t)cl);
+		++needle;
+		goto jin;
+		
+		for (;;)
+		{
+			register unsigned a;
+			register const unsigned char *rhaystack, *rneedle;
+			do
+			{
+				a = *++haystack;
+				if (a == '\0')
+					goto ret0;
+				if ((a == bl) || (a == bu))
+					break;
+				a = *++haystack;
+				if (a == '\0')
+					goto ret0;
+shloop:
+				;
+			}
+			while ((a != bl) && (a != bu));
+
+jin:
+			a = *++haystack;
+			if (a == '\0')  // Remaining part of haystack is shorter than needle.  No match.
+				goto ret0;
+
+			if ((a != cl) && (a != cu)) // This promising candidate is not a complete match.
+				goto shloop;            // Start looking for another match on the first char of needle.
+			
+			rhaystack = haystack-- + 1;
+			rneedle = needle;
+			a = (UINT)(size_t)CharLower((LPSTR)*rneedle);
+			
+			if ((UINT)(size_t)CharLower((LPSTR)*rhaystack) == (int) a)
+			do
+			{
+				if (a == '\0')
+					goto foundneedle;
+				++rhaystack;
+				a = (UINT)(size_t)CharLower((LPSTR)*++needle);
+				if ((UINT)(size_t)CharLower((LPSTR)*rhaystack) != (int) a)
+					break;
+				if (a == '\0')
+					goto foundneedle;
+				++rhaystack;
+				a = (UINT)(size_t)CharLower((LPSTR)*++needle);
+			}
+			while ((UINT)(size_t)CharLower((LPSTR)*rhaystack) == (int) a);
+			
+			needle = rneedle;		/* took the register-poor approach */
+			
+			if (a == '\0')
+				break;
+		} // for(;;)
+	} // if (bl != '\0')
+foundneedle:
+	return (char*) haystack;
+ret0:
+	return 0;
+}
+
+
+
+char *StrReplace(char *aBuf, char *aOld, char *aNew, StringCaseSenseType aStringCaseSense)
 // Replaces first occurrence of aOld with aNew in string aBuf.  Caller must ensure that
 // all parameters are non-NULL (though they can be the empty string).  It must also ensure that
 // aBuf has enough allocated space for the replacement since no check is made for this.
@@ -716,7 +833,7 @@ char *StrReplace(char *aBuf, char *aOld, char *aNew, bool aCaseSensitive)
 	// would be an infinite loop.
 	if (!*aBuf || !*aOld)
 		return NULL;
-	char *found = (aCaseSensitive ? strstr(aBuf, aOld) : strcasestr(aBuf, aOld));
+	char *found = strstr2(aBuf, aOld, aStringCaseSense);
 	if (!found)
 		return NULL;
 	size_t aOld_length = strlen(aOld);
@@ -734,7 +851,8 @@ char *StrReplace(char *aBuf, char *aOld, char *aNew, bool aCaseSensitive)
 
 
 
-char *StrReplaceAll(char *aBuf, char *aOld, char *aNew, bool aAlwaysUseSlow, bool aCaseSensitive, DWORD aReplacementsNeeded)
+char *StrReplaceAll(char *aBuf, char *aOld, char *aNew, bool aAlwaysUseSlow, StringCaseSenseType aStringCaseSense
+	, DWORD aReplacementsNeeded)
 // Replaces all occurrences of aOld with aNew inside aBuf, and returns aBuf.
 {
 	// Nothing to do if aBuf is blank.  If aOld is blank, that is not supported because it
@@ -769,7 +887,7 @@ char *StrReplaceAll(char *aBuf, char *aOld, char *aNew, bool aAlwaysUseSlow, boo
 		if (aReplacementsNeeded < UINT_MAX) // Caller provided the count to avoid us having to calculate it again.
 			replacements_needed = aReplacementsNeeded;
 		else
-			for (replacements_needed = 0, cp = aBuf; cp = (aCaseSensitive ? strstr(cp, aOld) : strcasestr(cp, aOld)); cp += aOld_length)
+			for (replacements_needed = 0, cp = aBuf; cp = strstr2(cp, aOld, aStringCaseSense); cp += aOld_length)
 				++replacements_needed;
 		if (!replacements_needed) // aBuf already contains the correct contents.
 			return aBuf;
@@ -801,7 +919,7 @@ char *StrReplaceAll(char *aBuf, char *aOld, char *aNew, bool aAlwaysUseSlow, boo
 				cp = aBuf; // Source.
 				dp = buf;  // Destination.
 				size_t chars_to_copy;
-				for (char *found = aBuf; found = (aCaseSensitive ? strstr(found, aOld) : strcasestr(found, aOld));)
+				for (char *found = aBuf; found = strstr2(found, aOld, aStringCaseSense);)
 				{
 					// memcpy() might contain optimizations that make it faster than a char-moving loop such as memmove().
 					// This is because memmove() or a simple *dp++ = *cp++ loop of our own allows the source and dest
@@ -850,7 +968,7 @@ char *StrReplaceAll(char *aBuf, char *aOld, char *aNew, bool aAlwaysUseSlow, boo
 	// Therefore, use a less efficient, but more accurate method instead.  UPDATE: But this method
 	// can cause an infinite loop if the new string is a superset of the old string, so don't use
 	// it after all.
-	//for ( ; ptr = StrReplace(aBuf, aOld, aNew, aCaseSensitive); ); // Note that this very different from the below.
+	//for ( ; ptr = StrReplace(aBuf, aOld, aNew, aStringCaseSense); ); // Note that this very different from the below.
 
 	// Don't call StrReplace() because its call of strlen() within the call to memmove() signficantly
 	// reduces performance (a typical replacement of \r\n with \n in an aBuf of size 2 MB is close to
@@ -860,7 +978,7 @@ char *StrReplaceAll(char *aBuf, char *aOld, char *aNew, bool aAlwaysUseSlow, boo
 	// savings if aOld and/or aNew happen to be very long strings (unusual).
 	int length_to_add = (int)(aNew_length - aOld_length);  // Can be negative.
 	char *found, *search_area;
-	for (search_area = aBuf; found = aCaseSensitive ? strstr(search_area, aOld) : strcasestr(search_area, aOld);)
+	for (search_area = aBuf; found = strstr2(search_area, aOld, aStringCaseSense);)
 	{
 		search_area = found + aNew_length;  // The next search should start at this position when all is adjusted below.
 		// The check below can greatly improve performance if old and new strings happen to be same length:
@@ -899,7 +1017,7 @@ int StrReplaceAllSafe(char *aBuf, size_t aBufSize, char *aOld, char *aNew, bool 
 		if (length_increase > 0) // Make sure there's enough room in aBuf first.
 			if ((int)(aBufSize - strlen(aBuf) - 1) < length_increase)
 				break;  // Not enough room to do the next replacement.
-		if (   !(ptr = StrReplace(ptr, aOld, aNew, aCaseSensitive))   )
+		if (   !(ptr = StrReplace(ptr, aOld, aNew, aCaseSensitive ? SCS_SENSITIVE : SCS_INSENSITIVE))   )
 			break;
 		// Otherwise, it did actually replace one item, so increment:
 		++replacment_count;
@@ -1385,6 +1503,12 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, i
 		if (aIconIndex < 0)
 			aIconIndex = 0;  // Use the default, which is the first icon.
 		hbitmap = (HBITMAP)ExtractIcon(g_hInstance, aFilespec, aIconIndex); // Return value of 1 means "incorrect file type".
+		// Above: Although it isn't well documented at MSDN, apparently both ExtractIcon() and LoadIcon()
+		// scale the icon to the system's large-icon size (usually 32x32) regardless of the actual size of
+		// the icon inside the file.  For this reason, callers should call us in a way that allows us to
+		// give preference to LoadImage() over ExtractIcon() (unless the caller needs to retain backward
+		// compatibility with existing scripts that explicitly specify icon #1 to force the ExtractIcon
+		// method to be used).
 		if (!hbitmap || hbitmap == (HBITMAP)1 || (!aWidth && !aHeight)) // Couldn't load icon, or could but no resizing is needed.
 			return hbitmap;
 		//else continue on below so that the icon can be resized to the caller's specified dimensions.
@@ -1803,7 +1927,7 @@ char *ConvertEscapeSequences(char *aBuf, char aEscapeChar, bool aAllowEscapedSpa
 
 
 
-bool IsStringInList(char *aStr, char *aList, bool aFindExactMatch, bool aCaseSensitive)
+bool IsStringInList(char *aStr, char *aList, bool aFindExactMatch)
 // Checks if aStr exists in aList (which is a comma-separated list).
 // If aStr is blank, aList must start with a delimiting comma for there to be a match.
 {
@@ -1844,26 +1968,12 @@ bool IsStringInList(char *aStr, char *aList, bool aFindExactMatch, bool aCaseSen
 		{
 			if (aFindExactMatch)
 			{
-				if (aCaseSensitive)
-				{
-					if (!strcmp(aStr, buf)) // Match found
-						return true;
-				}
-				else // Not case sensitive
-					if (!stricmp(aStr, buf)) // Match found
-						return true;
+				if (!g_strcmp(aStr, buf)) // Match found
+					return true;
 			}
 			else // Substring match
-			{
-				if (aCaseSensitive)
-				{
-					if (strstr(aStr, buf)) // Match found
-						return true;
-				}
-				else // Not case sensitive
-					if (strcasestr(aStr, buf)) // Match found
-						return true;
-			}
+				if (g_strstr(aStr, buf)) // Match found
+					return true;
 		}
 		else // First item in the list is the empty string.
 			if (aFindExactMatch) // In this case, this is a match if aStr is also blank.

@@ -342,7 +342,6 @@ ResultType Script::CreateWindows()
 {
 	if (!mMainWindowTitle || !*mMainWindowTitle) return FAIL;  // Init() must be called before this function.
 	// Register a window class for the main window:
-	HICON hIcon = LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_MAIN)); // LoadIcon((HINSTANCE) NULL, IDI_APPLICATION)
 	WNDCLASSEX wc = {0};
 	wc.cbSize = sizeof(wc);
 	wc.lpszClassName = WINDOW_CLASS_MAIN;
@@ -352,8 +351,7 @@ ResultType Script::CreateWindows()
 	wc.style = 0;  // CS_HREDRAW | CS_VREDRAW
 	wc.cbClsExtra = 0;
 	wc.cbWndExtra = 0;
-	wc.hIcon = hIcon;
-	wc.hIconSm = hIcon;
+	wc.hIcon = wc.hIconSm = (HICON)LoadImage(g_hInstance, MAKEINTRESOURCE(IDI_MAIN), IMAGE_ICON, 0, 0, LR_SHARED); // Use LR_SHARED to conserve memory (since the main icon is loaded for so many purposes).
 	wc.hCursor = LoadCursor((HINSTANCE) NULL, IDC_ARROW);
 	wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);  // Needed for ProgressBar. Old: (HBRUSH)GetStockObject(WHITE_BRUSH);
 	wc.lpszMenuName = MAKEINTRESOURCE(IDR_MENU_MAIN); // NULL; // "MainMenu";
@@ -509,9 +507,9 @@ void Script::CreateTrayIcon()
 	mNIC.uCallbackMessage = AHK_NOTIFYICON;
 #ifdef AUTOHOTKEYSC
 	// i.e. don't override the user's custom icon:
-	mNIC.hIcon = mCustomIcon ? mCustomIcon : LoadIcon(g_hInstance, MAKEINTRESOURCE(mCompiledHasCustomIcon ? IDI_MAIN : g_IconTray));
+	mNIC.hIcon = mCustomIcon ? mCustomIcon : (HICON)LoadImage(g_hInstance, MAKEINTRESOURCE(mCompiledHasCustomIcon ? IDI_MAIN : g_IconTray), IMAGE_ICON, 0, 0, LR_SHARED);
 #else
-	mNIC.hIcon = mCustomIcon ? mCustomIcon : LoadIcon(g_hInstance, MAKEINTRESOURCE(g_IconTray));
+	mNIC.hIcon = mCustomIcon ? mCustomIcon : (HICON)LoadImage(g_hInstance, MAKEINTRESOURCE(g_IconTray), IMAGE_ICON, 0, 0, LR_SHARED); // Use LR_SHARED to conserve memory (since the main icon is loaded for so many purposes).
 #endif
 	UPDATE_TIP_FIELD
 	// If we were called due to an Explorer crash, I don't think it's necessary to call
@@ -546,7 +544,7 @@ void Script::UpdateTrayIcon(bool aForceUpdate)
 #endif
 	// Use the custom tray icon if the icon is normal (non-paused & non-suspended):
 	mNIC.hIcon = (mCustomIcon && (mIconFrozen || (!g.IsPaused && !g_IsSuspended))) ? mCustomIcon
-		: LoadIcon(g_hInstance, MAKEINTRESOURCE(icon));
+		: (HICON)LoadImage(g_hInstance, MAKEINTRESOURCE(icon), IMAGE_ICON, 0, 0, LR_SHARED); // Use LR_SHARED for simplicity and performance more than to conserve memory in this case.
 	if (Shell_NotifyIcon(NIM_MODIFY, &mNIC))
 	{
 		icon_shows_paused = g.IsPaused;
@@ -1026,7 +1024,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 		// to support automatic "include once" behavior.  So just ignore repeats:
 		if (!aAllowDuplicateInclude)
 			for (int f = 0; f < source_file_number; ++f)
-				if (!stricmp(Line::sSourceFile[f], full_path)) // Case insensitive like the file system.
+				if (!lstrcmpi(Line::sSourceFile[f], full_path)) // Case insensitive like the file system (testing shows that "Ä" == "ä" in the NTFS, which is hopefully how lstrcmpi works regardless of locale).
 					return OK;
 		// The file is added to the list further below, after the file has been opened, in case the
 		// opening fails and aIgnoreLoadFailure==true.
@@ -1440,11 +1438,11 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 					// To reduce code size, the following replacements support only the standard characters,
 					// not g_DerefChar, g_delimiter, etc.:
 					if (literal_escapes) // Must be done first because otherwise it would also replace any accents added for literal_delimiters or literal_derefs.
-						replacement_count += StrReplaceAllSafe(next_buf, LINE_SIZE, "`", "``", false);
+						replacement_count += StrReplaceAllSafe(next_buf, LINE_SIZE, "`", "``", true);
 					if (literal_derefs)
-						replacement_count += StrReplaceAllSafe(next_buf, LINE_SIZE, "%", "`%", false);
+						replacement_count += StrReplaceAllSafe(next_buf, LINE_SIZE, "%", "`%", true);
 					if (literal_delimiters)
-						replacement_count += StrReplaceAllSafe(next_buf, LINE_SIZE, ",", "`,", false);
+						replacement_count += StrReplaceAllSafe(next_buf, LINE_SIZE, ",", "`,", true);
 
 					if (replacement_count) // Update the length if any actual replacements were done.
 						next_buf_length = strlen(next_buf);
@@ -2306,13 +2304,13 @@ inline ResultType Script::IsDirective(char *aBuf)
 			if (IS_SPACE_OR_TAB(*parameter)) // Skip over at most one space or tab, since others might be a literal part of the filename.
 				++parameter;
 		}
-		StrReplace(parameter, "%A_ScriptDir%", mFileDir, false); // v1.0.35.11.  Maximum of one replacement.  Caller has ensured string is writable.
+		StrReplace(parameter, "%A_ScriptDir%", mFileDir, SCS_INSENSITIVE); // v1.0.35.11.  Maximum of one replacement.  Caller has ensured string is writable.
 		DWORD attr = GetFileAttributes(parameter);
 		if (attr != 0xFFFFFFFF && (attr & FILE_ATTRIBUTE_DIRECTORY)) // File exists and its a directory (possibly A_ScriptDir set above).
 		{
 			// v1.0.35.11 allow changing of load-time directory to increase flexibility.  This feature has
 			// been asked for directly or indirectly several times.
-			// If a filename every wants to use the string "%A_ScriptDir%" literally in an include's filename,
+			// If a script ever wants to use the string "%A_ScriptDir%" literally in an include's filename,
 			// that would not work.  But that seems too rare to worry about.
 			SetCurrentDirectory(parameter);
 			return CONDITION_TRUE;
@@ -2758,8 +2756,8 @@ Label *Script::FindLabel(char *aLabelName)
 {
 	if (!aLabelName || !*aLabelName) return NULL;
 	for (Label *label = mFirstLabel; label != NULL; label = label->mNextLabel)
-		if (!stricmp(label->mName, aLabelName)) // Match found.
-			return label;
+		if (!stricmp(label->mName, aLabelName)) // lstrcmpi() is not used: 1) avoids breaking exisitng scripts; 2) provides consistent behavior across multiple locales; 3) performance.
+			return label; // Match found.
 	return NULL; // No match found.
 }
 
@@ -4410,7 +4408,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 						*(--cp) = '\0'; // Remove the ending quote.
 						memmove(this_new_arg.text, this_new_arg.text + 1, cp - this_new_arg.text); // Remove the starting quote.
 						// Convert all pairs of quotes into single literal quotes:
-						StrReplaceAll(this_new_arg.text, "\"\"", "\"", true);
+						StrReplaceAll(this_new_arg.text, "\"\"", "\"", true, SCS_SENSITIVE);
 						// Above relies on the fact that StrReplaceAll() does not do cascading replacements,
 						// meaning that a series of characters such as """" would be correctly converted into
 						// two double quotes rather than collapsing into only one.
@@ -4675,13 +4673,17 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_AUTOTRIM:
-	case ACT_STRINGCASESENSE:
 	case ACT_DETECTHIDDENWINDOWS:
 	case ACT_DETECTHIDDENTEXT:
 	case ACT_SETSTORECAPSLOCKMODE:
 	case ACT_CRITICAL:
 		if (aArgc > 0 && !line.ArgHasDeref(1) && !line.ConvertOnOff(new_raw_arg1))
 			return ScriptError(ERR_ON_OFF, new_raw_arg1);
+		break;
+
+	case ACT_STRINGCASESENSE:
+		if (aArgc > 0 && !line.ArgHasDeref(1) && line.ConvertStringCaseSense(new_raw_arg1) == SCS_INVALID)
+			return ScriptError(ERR_ON_OFF_LOCALE, new_raw_arg1);
 		break;
 
 	case ACT_SETBATCHLINES:
@@ -5792,7 +5794,7 @@ ResultType Script::DefineFunc(char *aBuf, Var *aFuncExceptionVar[])
 			if (value_length > MAX_FORMATTED_NUMBER_LENGTH) // Too rare to justify elaborate handling or error reporting.
 				value_length = MAX_FORMATTED_NUMBER_LENGTH;
 			strlcpy(buf, param_start, value_length + 1);  // Make a temp copy to simplify the below (especially IsPureNumeric).
-			if (!stricmp(buf, "\"\"")) // Empty pair of quotes "".
+			if (!strcmp(buf, "\"\"")) // Empty pair of quotes "".
 			{
 				this_param.default_type = PARAM_DEFAULT_STR;
 				this_param.default_str = "";
@@ -5887,8 +5889,8 @@ Func *Script::FindFunc(char *aFuncName, size_t aFuncNameLength)
 
 	Func *pfunc;
 	for (pfunc = mFirstFunc; pfunc; pfunc = pfunc->mNextFunc)
-		if (!stricmp(func_name, pfunc->mName)) // Match found.
-			return pfunc;
+		if (!stricmp(func_name, pfunc->mName)) // lstrcmpi() is not used: 1) avoids breaking exisitng scripts; 2) provides consistent behavior across multiple locales; 3) performance.
+			return pfunc; // Match found.
 
 	// Since above didn't return, there is no match.  See if it's a built-in function that hasn't yet
 	// been added to the function list.
@@ -6360,7 +6362,7 @@ Var *Script::FindVar(char *aVarName, size_t aVarNameLength, int *apInsertPos, in
 			int i;
 			for (i = 0; i < mFuncExceptionVarCount; ++i)
 			{
-				if (!stricmp(var_name, mFuncExceptionVar[i]->mName))
+				if (!stricmp(var_name, mFuncExceptionVar[i]->mName)) // lstrcmpi() is not used: 1) avoids breaking exisitng scripts; 2) provides consistent behavior across multiple locales; 3) performance.
 				{
 					is_local = !is_local;  // Since it's an exception, it's always the opposite of what it would have been.
 					found_var = mFuncExceptionVar[i];
@@ -6382,7 +6384,7 @@ Var *Script::FindVar(char *aVarName, size_t aVarNameLength, int *apInsertPos, in
 			if (g.CurrentFunc->mDefaultVarType == VAR_ASSUME_GLOBAL && !is_local) // g.CurrentFunc is also known to be non-NULL in this case.
 			{
 				for (i = 0; i < g.CurrentFunc->mParamCount; ++i)
-					if (!stricmp(var_name, g.CurrentFunc->mParam[i].var->mName))
+					if (!stricmp(var_name, g.CurrentFunc->mParam[i].var->mName)) // lstrcmpi() is not used: 1) avoids breaking exisitng scripts; 2) provides consistent behavior across multiple locales; 3) performance.
 					{
 						is_local = true;
 						found_var = g.CurrentFunc->mParam[i].var;
@@ -6420,7 +6422,7 @@ Var *Script::FindVar(char *aVarName, size_t aVarNameLength, int *apInsertPos, in
 	for (left = 0; left <= right;) // "right" was already initialized above.
 	{
 		mid = (left + right) / 2;
-		result = stricmp(var_name, var[mid]->mName);
+		result = stricmp(var_name, var[mid]->mName); // lstrcmpi() is not used: 1) avoids breaking exisitng scripts; 2) provides consistent behavior across multiple locales; 3) performance.
 		if (result > 0)
 			left = mid + 1;
 		else if (result < 0)
@@ -6449,7 +6451,7 @@ Var *Script::FindVar(char *aVarName, size_t aVarNameLength, int *apInsertPos, in
 		for (left = 0; left <= right;)  // "right" was already initialized above.
 		{
 			mid = (left + right) / 2;
-			result = stricmp(var_name, var[mid]->mName);
+			result = stricmp(var_name, var[mid]->mName); // lstrcmpi() is not used: 1) avoids breaking exisitng scripts; 2) provides consistent behavior across multiple locales; 3) performance.
 			if (result > 0)
 				left = mid + 1;
 			else if (result < 0)
@@ -6695,7 +6697,7 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, int aInsertPos, bool 
 		for (target_name = lazy_var[i]->mName, left = 0, right = (int)(insert_pos - var - 1); left <= right;)
 		{
 			mid = (left + right) / 2;
-			if (stricmp(target_name, var[mid]->mName) > 0)
+			if (stricmp(target_name, var[mid]->mName) > 0) // lstrcmpi() is not used: 1) avoids breaking exisitng scripts; 2) provides consistent behavior across multiple locales; 3) performance.
 				left = mid + 1;
 			else // it must be < 0 because caller has ensured it can't be equal (i.e. that there will be no match)
 				right = mid - 1;
@@ -6925,8 +6927,8 @@ WinGroup *Script::FindGroup(char *aGroupName, bool aCreateIfNotFound)
 	if (!*aGroupName)
 		return NULL;
 	for (WinGroup *group = mFirstGroup; group != NULL; group = group->mNextGroup)
-		if (!stricmp(group->mName, aGroupName)) // Match found.
-			return group;
+		if (!stricmp(group->mName, aGroupName)) // lstrcmpi() is not used: 1) avoids breaking exisitng scripts; 2) provides consistent behavior across multiple locales; 3) performance.
+			return group; // Match found.
 	// Otherwise, no match found, so create a new group.
 	if (!aCreateIfNotFound || AddGroup(aGroupName) != OK)
 		return NULL;
@@ -8373,11 +8375,11 @@ inline ResultType Line::EvaluateCondition()
 		break;
 
 	case ACT_IFINSTRING:
-		#define STRING_SEARCH (g.StringCaseSense ? strstr(ARG1, ARG2) : strcasestr(ARG1, ARG2))
-		if_condition = STRING_SEARCH != NULL;
-		break;
 	case ACT_IFNOTINSTRING:
-		if_condition = STRING_SEARCH == NULL;
+		// The most common mode is listed first for performance:
+		if_condition = g_strstr(ARG1, ARG2) != NULL; // To reduce code size, resolve large macro only once for both these commands.
+		if (mActionType == ACT_IFNOTINSTRING)
+			if_condition = !if_condition;
 		break;
 
 	case ACT_IFEQUAL:
@@ -8397,8 +8399,7 @@ inline ResultType Line::EvaluateCondition()
 		// the two items will be compared as strings.  UPDATE: Altered it again because it
 		// seems best to consider blanks to always be non-numeric (i.e. if either var is blank,
 		// they will be compared as strings rather than as numbers):
-		#undef STRING_COMPARE
-		#define STRING_COMPARE (g.StringCaseSense ? strcmp(ARG1, ARG2) : stricmp(ARG1, ARG2))
+
 		#undef DETERMINE_NUMERIC_TYPES
 		#define DETERMINE_NUMERIC_TYPES \
 			value_is_pure_numeric = IsPureNumeric(ARG2, true, false, true);\
@@ -8418,7 +8419,7 @@ inline ResultType Line::EvaluateCondition()
 		{
 			DETERMINE_NUMERIC_TYPES
 			IF_EITHER_IS_NON_NUMERIC
-				if_condition = !STRING_COMPARE;
+				if_condition = !g_strcmp(ARG1, ARG2);
 			else IF_EITHER_IS_FLOAT  // It might perform better to only do float conversions & math when necessary.
 				if_condition = ATOF(ARG1) == ATOF(ARG2);
 			else
@@ -8431,7 +8432,7 @@ inline ResultType Line::EvaluateCondition()
 	case ACT_IFLESS:
 		DETERMINE_NUMERIC_TYPES
 		IF_EITHER_IS_NON_NUMERIC
-			if_condition = STRING_COMPARE < 0;
+			if_condition = g_strcmp(ARG1, ARG2) < 0;
 		else IF_EITHER_IS_FLOAT  // It might perform better to only do float conversions & math when necessary.
 			if_condition = ATOF(ARG1) < ATOF(ARG2);
 		else
@@ -8440,7 +8441,7 @@ inline ResultType Line::EvaluateCondition()
 	case ACT_IFLESSOREQUAL:
 		DETERMINE_NUMERIC_TYPES
 		IF_EITHER_IS_NON_NUMERIC
-			if_condition = STRING_COMPARE < 1;
+			if_condition = g_strcmp(ARG1, ARG2) < 1;
 		else IF_EITHER_IS_FLOAT  // It might perform better to only do float conversions & math when necessary.
 			if_condition = ATOF(ARG1) <= ATOF(ARG2);
 		else
@@ -8449,7 +8450,7 @@ inline ResultType Line::EvaluateCondition()
 	case ACT_IFGREATER:
 		DETERMINE_NUMERIC_TYPES
 		IF_EITHER_IS_NON_NUMERIC
-			if_condition = STRING_COMPARE > 0;
+			if_condition = g_strcmp(ARG1, ARG2) > 0;
 		else IF_EITHER_IS_FLOAT  // It might perform better to only do float conversions & math when necessary.
 			if_condition = ATOF(ARG1) > ATOF(ARG2);
 		else
@@ -8458,7 +8459,7 @@ inline ResultType Line::EvaluateCondition()
 	case ACT_IFGREATEROREQUAL:
 		DETERMINE_NUMERIC_TYPES
 		IF_EITHER_IS_NON_NUMERIC
-			if_condition = STRING_COMPARE > -1;
+			if_condition = g_strcmp(ARG1, ARG2) > -1;
 		else IF_EITHER_IS_FLOAT  // It might perform better to only do float conversions & math when necessary.
 			if_condition = ATOF(ARG1) >= ATOF(ARG2);
 		else
@@ -8470,10 +8471,12 @@ inline ResultType Line::EvaluateCondition()
 		DETERMINE_NUMERIC_TYPES2
 		IF_EITHER_IS_NON_NUMERIC2
 		{
-			if (g.StringCaseSense)
-				if_condition = !(strcmp(ARG1, ARG2) < 0 || strcmp(ARG1, ARG3) > 0);
-			else  // case insensitive
+			if (g.StringCaseSense == SCS_INSENSITIVE) // The most common mode is listed first for performance.
 				if_condition = !(stricmp(ARG1, ARG2) < 0 || stricmp(ARG1, ARG3) > 0);
+			else if (g.StringCaseSense == SCS_INSENSITIVE_LOCALE)
+				if_condition = lstrcmpi(ARG1, ARG2) > -1 && lstrcmpi(ARG1, ARG3) < 1;
+			else  // case sensitive
+				if_condition = !(strcmp(ARG1, ARG2) < 0 || strcmp(ARG1, ARG3) > 0);
 		}
 		else IF_EITHER_IS_FLOAT
 		{
@@ -8491,14 +8494,14 @@ inline ResultType Line::EvaluateCondition()
 
 	case ACT_IFIN:
 	case ACT_IFNOTIN:
-		if_condition = IsStringInList(ARG1, ARG2, true, g.StringCaseSense);
+		if_condition = IsStringInList(ARG1, ARG2, true);
 		if (mActionType == ACT_IFNOTIN)
 			if_condition = !if_condition;
 		break;
 
 	case ACT_IFCONTAINS:
 	case ACT_IFNOTCONTAINS:
-		if_condition = IsStringInList(ARG1, ARG2, false, g.StringCaseSense);
+		if_condition = IsStringInList(ARG1, ARG2, false);
 		if (mActionType == ACT_IFNOTCONTAINS)
 			if_condition = !if_condition;
 		break;
@@ -10055,7 +10058,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 						}
 						// Want it to behave like in this example: If searching for the 2nd occurrence of
 						// FF in the string FFFF, it should find the first two F's, not the middle two:
-						found = strrstr(haystack, needle, g.StringCaseSense, occurrence_number);
+						found = strrstr(haystack, needle, (StringCaseSenseType)g.StringCaseSense, occurrence_number);
 						if (offset)
 							*terminate_here = prev_char;
 					}
@@ -10066,8 +10069,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 						size_t needle_length = strlen(needle);
 						int i;
 						for (i = 1, found = haystack + offset; ; ++i, found += needle_length)
-							if (   !(found = g.StringCaseSense ? strstr(found, needle) : strcasestr(found, needle))
-								|| i == occurrence_number)
+							if (!(found = g_strstr(found, needle)) || i == occurrence_number)
 								break;
 					}
 					if (found)
@@ -10106,7 +10108,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			char *found_pos;
 			for (found_pos = ARG2;;)
 			{
-				if (   !(found_pos = g.StringCaseSense ? strstr(found_pos, ARG3) : strcasestr(found_pos, ARG3))   )
+				if (!(found_pos = g_strstr(found_pos, ARG3)))
 					break;
 				++found_count;
 				// Jump to the end of the string that was just found, in preparation
@@ -10154,9 +10156,10 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 				// search string inside of newly-inserted replace strings (e.g.
 				// replacing all occurrences of b with bcd would not keep finding
 				// b in the newly inserted bcd, infinitely):
-				StrReplaceAll(output_var->Contents(), ARG3, ARG4, always_use_slow_mode, g.StringCaseSense, found_count);
+				StrReplaceAll(output_var->Contents(), ARG3, ARG4, always_use_slow_mode
+					, (StringCaseSenseType)g.StringCaseSense, found_count);
 			else
-				StrReplace(output_var->Contents(), ARG3, ARG4, g.StringCaseSense); // Don't pass output_var->Length() because it's not up-to-date yet.
+				StrReplace(output_var->Contents(), ARG3, ARG4, (StringCaseSenseType)g.StringCaseSense); // Don't pass output_var->Length() because it's not up-to-date yet.
 
 		// UPDATE: This is NOT how AutoIt2 behaves, so don't do it:
 		//if (g_script.mIsAutoIt2)
@@ -10854,8 +10857,8 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			g.AutoTrim = (toggle == TOGGLED_ON);
 		return OK;
 	case ACT_STRINGCASESENSE:
-		if (   (toggle = ConvertOnOff(ARG1, NEUTRAL)) != NEUTRAL   )
-			g.StringCaseSense = (toggle == TOGGLED_ON);
+		if ((g.StringCaseSense = ConvertStringCaseSense(ARG1)) == SCS_INVALID)
+			g.StringCaseSense = SCS_INSENSITIVE; // For simplicity, just fall back to default if value is invalid (normally its caught at load-time; only rarely here).
 		return OK;
 	case ACT_DETECTHIDDENWINDOWS:
 		if (   (toggle = ConvertOnOff(ARG1, NEUTRAL)) != NEUTRAL   )
@@ -11094,9 +11097,11 @@ VarSizeType Script::GetAutoTrim(char *aBuf)
 VarSizeType Script::GetStringCaseSense(char *aBuf)
 {
 	if (!aBuf)
-		return 3;  // Room for either On or Off (in the estimation phase).
-	// For backward compatibility (due to StringCaseSense), never change the case used here:
-	return (VarSizeType)strlen(strcpy(aBuf, g.StringCaseSense ? "On" : "Off")); // Fixed in v1.0.42.01 to return exact length (required).
+		return 6;  // Room for On, Off, or Locale (in the estimation phase).
+	// For backward compatibility (due to StringCaseSense), never change the case used here.
+	// Fixed in v1.0.42.01 to return exact length (required).
+	return (VarSizeType)strlen(strcpy(aBuf, g.StringCaseSense == SCS_INSENSITIVE ? "Off"
+		: (g.StringCaseSense == SCS_SENSITIVE ? "On" : "Locale")));
 }
 
 VarSizeType Script::GetFormatInteger(char *aBuf)

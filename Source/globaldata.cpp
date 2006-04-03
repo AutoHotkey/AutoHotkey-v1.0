@@ -117,7 +117,7 @@ MsgMonitorStruct *g_MsgMonitor = NULL; // An array to be allocated upon first us
 int g_MsgMonitorCount = 0;
 
 // Init not needed for these:
-bool g_SortCaseSensitive;
+UCHAR g_SortCaseSensitive;
 bool g_SortNumeric;
 bool g_SortReverse;
 int g_SortColumnOffset;
@@ -480,7 +480,7 @@ Action g_act[] =
 	, {"Suspend", 0, 1, 1, NULL} // On/Off/Toggle/Permit/Blank (blank is the same as toggle)
 	, {"Pause", 0, 2, 2, NULL} // On/Off/Toggle/Blank (blank is the same as toggle), AlwaysAffectUnderlying
 	, {"AutoTrim", 1, 1, 1, NULL} // On/Off
-	, {"StringCaseSense", 1, 1, 1, NULL} // On/Off
+	, {"StringCaseSense", 1, 1, 1, NULL} // On/Off/Locale
 	, {"DetectHiddenWindows", 1, 1, 1, NULL} // On/Off
 	, {"DetectHiddenText", 1, 1, 1, NULL} // On/Off
 	, {"BlockInput", 1, 1, 1, NULL} // On/Off

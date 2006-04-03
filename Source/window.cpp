@@ -891,6 +891,7 @@ BOOL CALLBACK EnumControlFind(HWND aWnd, LPARAM lParam)
 		// more certain to work even though it's a little ugly.  It's also
 		// necessary to do this in a way functionally identical to the below
 		// so that Window Spy's sequence numbers match the ones generated here:
+		// Concerning strnicmp(), see lstrcmpi note below for why a locale-insensitive match isn't done instead.
 		if (length && !strnicmp(ws.mCriterionClass, ws.mCandidateTitle, length)) // Preliminary match of base class name.
 		{
 			// mAlreadyVisitedCount was initialized to zero by WindowSearch's constructor.  It is used
@@ -903,6 +904,8 @@ BOOL CALLBACK EnumControlFind(HWND aWnd, LPARAM lParam)
 			// which is correctly deemed not to match "01".  By contrast, the atoi() method would give
 			// the wrong result because the two numbers are numerically equal.
 			_itoa(++ws.mAlreadyVisitedCount, ws.mCandidateTitle, 10);  // Overwrite the buffer to contain only the count.
+			// lstrcmpi() is not used: 1) avoids breaking exisitng scripts; 2) provides consistent behavior
+			// across multiple locales:
 			if (!stricmp(ws.mCandidateTitle, ws.mCriterionClass + length)) // The counts match too, so it's a full match.
 			{
 				ws.mFoundChild = aWnd; // Save this in here for return to the caller.

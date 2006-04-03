@@ -438,6 +438,28 @@ inline char *UTOA(unsigned long value, char *buf)
 
 
 
+// v1.0.43.03: The following macros support the new "StringCaseSense Locale" setting.  This setting performs
+// 1 to 10 times slower for most things, but has the benefit of seeing characters like ä and Ä as identical
+// when insensitive.  MSDN implies that lstrcmpi() is the same as:
+//     CompareString(LOCALE_USER_DEFAULT, NORM_IGNORECASE, ...)
+// Note that when MSDN talks about the "word sort" vs. "string sort", it does not mean that strings like
+// "co-op" and "co-op" are considered equal.  Instead, they are considered closer together than the traditional
+// string sort would see them, so that they wind up together in a sorted list.
+// And both of them benchmark the same, so lstrcmpi is now used here and in various other places throughout
+// the program when the new locale-case-insensitive mode is in effect.
+#define strcmp2(str1, str2, string_case_sense) ((string_case_sense) == SCS_INSENSITIVE ? stricmp(str1, str2) \
+	: ((string_case_sense) == SCS_INSENSITIVE_LOCALE ? lstrcmpi(str1, str2) : strcmp(str1, str2)))
+#define g_strcmp(str1, str2) strcmp2(str1, str2, g.StringCaseSense)
+// The most common mode is listed first for performance:
+#define strstr2(haystack, needle, string_case_sense) ((string_case_sense) == SCS_INSENSITIVE ? strcasestr(haystack, needle) \
+	: ((string_case_sense) == SCS_INSENSITIVE_LOCALE ? lstrcasestr(haystack, needle) : strstr(haystack, needle)))
+#define g_strstr(haystack, needle) strstr2(haystack, needle, g.StringCaseSense)
+// For the following, caller must ensure that len1 and len2 aren't beyond the terminated length of the string
+// because CompareString() might not stop at the terminator when a length is specified.  Also, CompareString()
+// returns 0 on failure, but failure occurs only when parameter/flag is invalid, which should never happen in
+// this case.
+#define lstrcmpni(str1, len1, str2, len2) (CompareString(LOCALE_USER_DEFAULT, NORM_IGNORECASE, str1, (int)(len1), str2, (int)(len2)) - 2) // -2 for maintainability
+
 #define DATE_FORMAT_LENGTH 14 // "YYYYMMDDHHMISS"
 #define IS_LEAP_YEAR(year) ((year) % 4 == 0 && ((year) % 100 != 0 || (year) % 400 == 0))
 
@@ -460,12 +482,13 @@ int snprintfcat(char *aBuf, int aBufSize, const char *aFormat, ...);
 // Not currently used by anything, so commented out to possibly reduce code size:
 //int strlcmp (char *aBuf1, char *aBuf2, UINT aLength1 = UINT_MAX, UINT aLength2 = UINT_MAX);
 int strlicmp(char *aBuf1, char *aBuf2, UINT aLength1 = UINT_MAX, UINT aLength2 = UINT_MAX);
-char *strrstr(char *aStr, char *aPattern, bool aCaseSensitive = true, int aOccurrence = 1);
+char *strrstr(char *aStr, char *aPattern, StringCaseSenseType aStringCaseSense, int aOccurrence = 1);
+char *lstrcasestr(const char *phaystack, const char *pneedle);
 char *strcasestr (const char *phaystack, const char *pneedle);
-char *StrReplace(char *aBuf, char *aOld, char *aNew, bool aCaseSensitive = true);
-char *StrReplaceAll(char *aBuf, char *aOld, char *aNew, bool aAlwaysUseSlow, bool aCaseSensitive = true
+char *StrReplace(char *aBuf, char *aOld, char *aNew, StringCaseSenseType aStringCaseSense);
+char *StrReplaceAll(char *aBuf, char *aOld, char *aNew, bool aAlwaysUseSlow, StringCaseSenseType aStringCaseSense
 	, DWORD aReplacementsNeeded = UINT_MAX); // Caller can provide this value to avoid having to calculate it again.
-int StrReplaceAllSafe(char *aBuf, size_t aBufSize, char *aOld, char *aNew, bool aCaseSensitive = true);
+int StrReplaceAllSafe(char *aBuf, size_t aBufSize, char *aOld, char *aNew, bool aCaseSensitive);
 char *TranslateLFtoCRLF(char *aString);
 bool DoesFilePatternExist(char *aFilePattern, DWORD *aFileAttr = NULL);
 #ifdef _DEBUG
@@ -491,6 +514,6 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, i
 	, bool aUseGDIPlusIfAvailable);
 HBITMAP IconToBitmap(HICON ahIcon, bool aDestroyIcon);
 int CALLBACK FontEnumProc(ENUMLOGFONTEX *lpelfe, NEWTEXTMETRICEX *lpntme, DWORD FontType, LPARAM lParam);
-bool IsStringInList(char *aStr, char *aList, bool aFindExactMatch, bool aCaseSensitive);
+bool IsStringInList(char *aStr, char *aList, bool aFindExactMatch);
 
 #endif

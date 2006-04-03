@@ -582,7 +582,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 				// op_end is now the character after the first literal string's ending quote, which might be the terminator.
 				*(--op_end) = '\0'; // Remove the ending quote.
 				// Convert all pairs of quotes inside into single literal quotes:
-				StrReplaceAll(cp, "\"\"", "\"", true);
+				StrReplaceAll(cp, "\"\"", "\"", true, SCS_SENSITIVE);
 				// Above relies on the fact that StrReplaceAll() does not do cascading replacements,
 				// meaning that a series of characters such as """" would be correctly converted into
 				// two double quotes rather than just collapsing into one.
@@ -944,6 +944,11 @@ double_deref:
 				// than being seen as an error.  However, for simplicity of code, consecutive
 				// unary operators are not supported (they currently produce a failure [blank value]
 				// because they wind up in the postfix array in the wrong order).
+				// !!x  ; Not supported, but Laszlo pointed out this would useful to convert a blank value into
+				//      ; a zero for use with unitialized variables.  But the workaround is to use !(!x).
+				//      ; A lesser reason not to support it is to reserve !! for future use as a new operator,
+				//      ; though that may be too unlikely due to its counterintuitiveness.
+				//      ; Similarly, "not not x" is not supported for the same reasons as the others here.
 				// !-3  ; Not supported (seems of little use anyway; can be written as !(-3) to make it work).
 				// -!3  ; Not supported (seems useless anyway, can be written as -(!3) to make it work).
 				// !x   ; Supported even if X contains a negative number, since x is recognized as an isolated operand and not something containing unary minus.
@@ -1550,19 +1555,18 @@ skip_abort_udf:
 				default: left_string = left_contents; // SYM_STRING or SYM_OPERAND, which is already in the right format.
 				}
 				
-				#undef STRING_COMPARE
-				#define STRING_COMPARE (g.StringCaseSense ? strcmp(left_string, right_string) : stricmp(left_string, right_string))
-
 				switch(this_token.symbol)
 				{
-				case SYM_EQUAL:     this_token.value_int64 = !stricmp(left_string, right_string); break;
-				case SYM_EQUALCASE: this_token.value_int64 = !strcmp(left_string, right_string); break;
+				case SYM_EQUAL:     this_token.value_int64 = !((g.StringCaseSense == SCS_INSENSITIVE)
+										? stricmp(left_string, right_string)
+										: lstrcmpi(left_string, right_string)); break; // i.e. use the "more correct mode" except when explicitly told to use the fast mode (v1.0.43.03).
+				case SYM_EQUALCASE: this_token.value_int64 = !strcmp(left_string, right_string); break; // Case sensitive.
 				// The rest all obey g.StringCaseSense since they have no case sensitive counterparts:
-				case SYM_NOTEQUAL:  this_token.value_int64 = STRING_COMPARE ? 1 : 0; break;
-				case SYM_GT:        this_token.value_int64 = STRING_COMPARE > 0; break;
-				case SYM_LT:        this_token.value_int64 = STRING_COMPARE < 0; break;
-				case SYM_GTOE:      this_token.value_int64 = STRING_COMPARE > -1; break;
-				case SYM_LTOE:      this_token.value_int64 = STRING_COMPARE < 1; break;
+				case SYM_NOTEQUAL:  this_token.value_int64 = g_strcmp(left_string, right_string) ? 1 : 0; break;
+				case SYM_GT:        this_token.value_int64 = g_strcmp(left_string, right_string) > 0; break;
+				case SYM_LT:        this_token.value_int64 = g_strcmp(left_string, right_string) < 0; break;
+				case SYM_GTOE:      this_token.value_int64 = g_strcmp(left_string, right_string) > -1; break;
+				case SYM_LTOE:      this_token.value_int64 = g_strcmp(left_string, right_string) < 1; break;
 
 				case SYM_CONCAT:
 					// Even if the left or right is "", must copy the result to temporary memory, at least

@@ -315,24 +315,21 @@ LRESULT CALLBACK LowLevelMouseProc(int aCode, WPARAM wParam, LPARAM lParam)
 	// This is expected because each click in a doubleclick could be separately suppressed by
 	// the hook, which would make it become a non-doubleclick.
 	vk_type vk = 0;
-	short wheel_delta = 0;
+	sc_type sc = 0; // To be overriden if this even is a wheel turn.
+	short wheel_delta;
 	bool key_up = true;  // Set default to safest value.
+
 	switch (wParam)
 	{
 		case WM_MOUSEWHEEL:
-			// MSDN: "A positive value indicates that the wheel was rotated forward,
-			// away from the user; a negative value indicates that the wheel was rotated
-			// backward, toward the user. One wheel click is defined as WHEEL_DELTA,
-			// which is 120."  Must typecast to short (not int) otherwise the conversion
-			// to negative/positive number won't be correct.  Also, I think the delta
-			// can be greater than 120 only if the system can't keep up with how fast
-			// the wheel is being turned (thus not generating an event for every
-			// turn-click)?  UPDATE: Although I haven't seen it yet, evidence from users
-			// suggests that some mice produce large deltas because their wheels have
-			// extremely fine/smooth motion.  If the user turns such a wheel quickly,
-			// that is mostly likely to produce a delta greater than standard 120.
-			wheel_delta = GET_WHEEL_DELTA_WPARAM(event.mouseData);
+			// MSDN: "A positive value indicates that the wheel was rotated forward, away from the user;
+			// a negative value indicates that the wheel was rotated backward, toward the user. One wheel
+			// click is defined as WHEEL_DELTA, which is 120."  Testing shows that on XP at least, the
+			// abs(delta) is greater than 120 when the user turns the wheel quickly (also depends on
+			// granularity of wheel hardware); i.e. the system combines multiple turns into a single event.
+			wheel_delta = GET_WHEEL_DELTA_WPARAM(event.mouseData); // Must typecast to short (not int) via macro, otherwise the conversion to negative/positive number won't be correct.
 			vk = wheel_delta < 0 ? VK_WHEEL_DOWN : VK_WHEEL_UP;
+			sc = (wheel_delta > 0 ? wheel_delta : -wheel_delta) / WHEEL_DELTA; // Friendless of conversion seems to outweigh lack of flexibility if future OSes change the 120 default.
 			key_up = false; // Always consider wheel movements to be "key down" events.
 			break;
 		case WM_LBUTTONUP: vk = VK_LBUTTON;	break;
@@ -347,26 +344,27 @@ LRESULT CALLBACK LowLevelMouseProc(int aCode, WPARAM wParam, LPARAM lParam)
 		case WM_XBUTTONDOWN: vk = (HIWORD(event.mouseData) == XBUTTON1) ? VK_XBUTTON1 : VK_XBUTTON2; key_up = false; break;
 	}
 
-	return LowLevelCommon(g_MouseHook, aCode, wParam, lParam, vk, 0, key_up, event.dwExtraInfo, event.flags);
+	return LowLevelCommon(g_MouseHook, aCode, wParam, lParam, vk, sc, key_up, event.dwExtraInfo, event.flags);
 }
 
 
 
 LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lParam, const vk_type aVK
-	, const sc_type aSC, bool aKeyUp, ULONG_PTR aExtraInfo, DWORD aEventFlags)
+	, sc_type aSC, bool aKeyUp, ULONG_PTR aExtraInfo, DWORD aEventFlags)
 // v1.0.38.06: The keyboard and mouse hooks now call this common function to reduce code size and improve
 // maintainability.  The code size savings as of v1.0.38.06 is 3.5 KB of uncompressed code, but that
 // savings will grow larger if more complexity is ever added to the hooks.
 {
 	HotkeyIDType hotkey_id_to_post = HOTKEY_ID_INVALID; // Set default.
 	bool is_ignored = IsIgnored(aExtraInfo);
-	// This is done for more than just convenience.  It solves problems that would otherwise arise
+
+	// The following is done for more than just convenience.  It solves problems that would otherwise arise
 	// due to the value of a global var such as KeyHistoryNext changing due to the reentrancy of
 	// this procedure.  For example, a call to KeyEvent() in here would alter the value of
 	// KeyHistoryNext, in most cases before we had a chance to finish using the old value.  In other
 	// words, we use an automatic variable so that every instance of this function will get its
 	// own copy of the variable whose value will stays constant until that instance returns:
-	KeyHistoryItem *pKeyHistoryCurr, khi_temp; // Serves as a storage spot for a single keystroke in case key history is disabled.
+	KeyHistoryItem *pKeyHistoryCurr, khi_temp; // Must not be static (see above).  Serves as a storage spot for a single keystroke in case key history is disabled.
 	if (!g_KeyHistory)
 		pKeyHistoryCurr = &khi_temp;  // Having a non-NULL pKeyHistoryCurr simplifies the code in other places.
 	else
@@ -374,8 +372,7 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 		pKeyHistoryCurr = g_KeyHistory + g_KeyHistoryNext;
 		if (++g_KeyHistoryNext >= g_MaxHistoryKeys)
 			g_KeyHistoryNext = 0;
-		pKeyHistoryCurr->vk = aVK;
-		pKeyHistoryCurr->sc = aSC; // Will be zero if our caller is the mouse hook.
+		pKeyHistoryCurr->vk = aVK; // aSC is done later below.
 		pKeyHistoryCurr->key_up = aKeyUp;
 		g_HistoryTickNow = GetTickCount();
 		pKeyHistoryCurr->elapsed_time = (g_HistoryTickNow - g_HistoryTickPrev) / (float)1000;
@@ -392,6 +389,13 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 			strcpy(pKeyHistoryCurr->target_window, "N/A");
 		g_HistoryHwndPrev = fore_win;  // Updated unconditionally in case fore_win is NULL.
 	}
+	// Keep the following flush with the above to indicate that they're related.
+	// The following is done even if key history is disabled because firing a wheel hotkey via PostMessage gets
+	// the notch count from pKeyHistoryCurr->sc.
+	pKeyHistoryCurr->sc = aSC; // Will be zero if our caller is the mouse hook (except for wheel notch count).
+	// After logging the wheel notch count (above), purify aSC for readability and maintainability.
+	if (aVK == VK_WHEEL_DOWN || aVK == VK_WHEEL_UP)
+		aSC = 0; // Also relied upon by by sc_takes_precedence below.
 
 	bool is_artificial;
 	if (aHook == g_MouseHook)
@@ -1939,7 +1943,7 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 			// ... && (*this_key.pForceToggle != NEUTRAL || this_key.was_just_used);
 			if (this_key.hotkey_down_was_suppressed // Down was suppressed.
 				&& !is_explicit_key_up_hotkey // v1.0.36.02: Prevents a hotkey such as "~5 up::" from generating double characters, regardless of whether it's paired with a "~5::" hotkey.
-				&& !suppress_to_prevent_toggle)
+				&& !suppress_to_prevent_toggle) // Mouse vs. keybd hook was already checked higher above.
 				KeyEvent(KEYDOWN, aVK, aSC); // Substitute this to make up for the suppression (a check higher above has already determined that no_supress==true).
 				// Now allow the up-event to go through.  The DOWN should always wind up taking effect
 				// before the UP because the above should already have "finished" by now, since
@@ -2089,7 +2093,7 @@ LRESULT SuppressThisKeyFunc(const HHOOK aHook, LPARAM lParam, const vk_type aVK,
 	// before the hook thread gets back another (at least on some systems, perhaps due to their
 	// system settings of the same ilk as "favor background processes").
 	if (aHotkeyIDToPost != HOTKEY_ID_INVALID)
-		PostMessage(g_hWnd, AHK_HOOK_HOTKEY, aHotkeyIDToPost, 0);
+		PostMessage(g_hWnd, AHK_HOOK_HOTKEY, aHotkeyIDToPost, pKeyHistoryCurr->sc); // v1.0.43.03: sc is posted currently only to support the number of wheel turns (to store in A_EventInfo).
 	if (aHSwParamToPost != HOTSTRING_INDEX_INVALID)
 		PostMessage(g_hWnd, AHK_HOTSTRING, aHSwParamToPost, aHSlParamToPost);
 	return 1;
@@ -2324,7 +2328,7 @@ LRESULT AllowIt(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lParam, cons
 	// Search on AHK_HOOK_HOTKEY in this file for more comments.
 	LRESULT result_to_return = CallNextHookEx(aHook, aCode, wParam, lParam);
 	if (aHotkeyIDToPost != HOTKEY_ID_INVALID)
-		PostMessage(g_hWnd, AHK_HOOK_HOTKEY, aHotkeyIDToPost, 0);
+		PostMessage(g_hWnd, AHK_HOOK_HOTKEY, aHotkeyIDToPost, pKeyHistoryCurr->sc); // v1.0.43.03: sc is posted currently only to support the number of wheel turns (to store in A_EventInfo).
 	if (hs_wparam_to_post != HOTSTRING_INDEX_INVALID)
 		PostMessage(g_hWnd, AHK_HOTSTRING, hs_wparam_to_post, hs_lparam_to_post);
 	return result_to_return;
@@ -2619,25 +2623,10 @@ bool CollectInput(KBDLLHOOKSTRUCT &aEvent, const vk_type aVK, const sc_type aSC,
 							break;
 				}
 				else // case insensitive
-					// use toupper() vs. CharUpper() for consistency with Input, IfInString, etc.
-					// Update: To support hotstrings such as the following without being case
-					// sensitive, it seems best to use CharUpper() instead, e.g.
-					// (char)CharUpper((LPTSTR)(UCHAR)*ch).  Case insensitive hotstring example:
-					//::ακ::Replacement Text
-					// Update #2: On balance, it's not a clear win to use CharUpper since it
-					// is expected to perform significantly worse than toupper.  Others have
-					// said these Windows API functions that support diacritical letters can be
-					// dramatically slower than the C-lib functions, though I haven't specifically
-					// seen anything about CharUpper() being bad.  But since performance is of
-					// particular concern here in the hook -- especially if there are hundreds
-					// of hotstrings that need to be checked after each keystroke -- it seems
-					// best to stick to toupper() (note that the Input command's searching loops
-					// [further below] also use toupper() via stricmp().  One justification for
-					// this is that it is rare to have diacritical letters in hotstrings, and even
-					// rarer that someone would require them to be case insensitive.  There
-					// are ways to script hotstring variants to work around this limitation.
+					// v1.0.43.03: Using CharLower vs. tolower seems the best default behavior (even though slower)
+					// so that languages in which the higher ANSI characters are common will see "Δ" == "δ", etc.
 					for (; cphs >= hs.mString; --cpbuf, --cphs)
-						if (toupper(*cpbuf) != toupper(*cphs))
+						if (CharLower((LPSTR)*cpbuf) != CharLower((LPSTR)*cphs))
 							break;
 
 				// Check if one of the loops above found a matching hotstring (relies heavily on
@@ -2935,7 +2924,11 @@ bool CollectInput(KBDLLHOOKSTRUCT &aEvent, const vk_type aVK, const sc_type aSC,
 		{
 			for (UINT i = 0; i < g_input.MatchCount; ++i)
 			{
-				if (strcasestr(g_input.buffer, g_input.match[i]))
+				// v1.0.43.03: Changed lstrcasestr to strcasestr because it seems unlikely to break any existing
+				// scripts and is also more useful given that that Input with match-list is pretty rarely used,
+				// and even when it is used, match lists are usually short (so performance isn't impacted much
+				// by this change).
+				if (lstrcasestr(g_input.buffer, g_input.match[i]))
 				{
 					g_input.status = INPUT_TERMINATED_BY_MATCH;
 					return treat_as_visible;
@@ -2960,7 +2953,8 @@ bool CollectInput(KBDLLHOOKSTRUCT &aEvent, const vk_type aVK, const sc_type aSC,
 		{
 			for (UINT i = 0; i < g_input.MatchCount; ++i)
 			{
-				if (!stricmp(g_input.buffer, g_input.match[i]))
+				// v1.0.43.03: Changed to locale-insensitive search.  See similar v1.0.43.03 comment above for more details.
+				if (!lstrcmpi(g_input.buffer, g_input.match[i]))
 				{
 					g_input.status = INPUT_TERMINATED_BY_MATCH;
 					return treat_as_visible;

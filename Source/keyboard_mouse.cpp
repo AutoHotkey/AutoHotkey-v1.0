@@ -219,13 +219,7 @@ void SendKeys(char *aKeys, bool aSendRaw, SendModes aSendModeOrig, HWND aTargetW
 		prior_capslock_state = TOGGLE_INVALID;
 	}
 
-	// sSendMode must be set only after setting Capslock state above, because the hook method
-	// is incapable of changing the on/off state of toggleable keys like Capslock.
-	// However, it can change Capslock state as seen in the window to which playback events are being
-	// sent; but the behavior seems inconsistent and might vary depending on OS type, so it seems best
-	// not to rely on it.
-	sSendMode = aSendModeOrig;
-	if (sSendMode == SM_INPUT || sSendMode == SM_INPUT_FALLBACK_TO_PLAY)
+	if (aSendModeOrig == SM_INPUT || aSendModeOrig == SM_INPUT_FALLBACK_TO_PLAY)
 	{
 		// Both of these modes fall back to a different mode depending on whether some other script
 		// is running with a keyboard/mouse hook active.  Of course, the detection of this isn't foolproof
@@ -246,10 +240,17 @@ void SendKeys(char *aKeys, bool aSendRaw, SendModes aSendModeOrig, HWND aTargetW
 			// Finally, checking aSendRaw isn't foolproof because the string might contain {Raw} prior to {Click,
 			// but the complexity and performance of checking for that seems unjustified given the rarity,
 			// especially since there are almost never any consequences to reverting to hook mode vs. SendInput.
-			sSendMode = (sSendMode == SM_INPUT) ? SM_EVENT : SM_PLAY;
+			aSendModeOrig = (aSendModeOrig == SM_INPUT) ? SM_EVENT : SM_PLAY;
 		else // SendInput is available and no other impacting hooks are obviously present on the system, so use SendInput unconditionally.
-			sSendMode = SM_INPUT; // Resolve early so that other sections don't have to consider SM_INPUT_FALLBACK_TO_PLAY a valid value.
+			aSendModeOrig = SM_INPUT; // Resolve early so that other sections don't have to consider SM_INPUT_FALLBACK_TO_PLAY a valid value.
 	}
+
+	// sSendMode must be set only after setting Capslock state above, because the hook method
+	// is incapable of changing the on/off state of toggleable keys like Capslock.
+	// However, it can change Capslock state as seen in the window to which playback events are being
+	// sent; but the behavior seems inconsistent and might vary depending on OS type, so it seems best
+	// not to rely on it.
+	sSendMode = aSendModeOrig;
 	if (sSendMode) // Build an array.  We're also responsible for setting sSendMode to SM_EVENT prior to returning.
 	{
 		size_t mem_size;
@@ -691,6 +692,20 @@ brace_case_end: // This label is used to simplify the code without sacrificing p
 
 	if (do_selective_blockinput && !blockinput_prev) // Turn it back off only if it was off before we started.
 		Line::ScriptBlockInput(false);
+
+	// v1.0.43.03: Someone reported that when a non-autoreplace hotstring calls us to do its backspacing, the
+	// hotstring's subroutine can execute a command that activates another window owned by the script before
+	// the original window finished receiving its backspaces.  Although I can't reproduce it, this behavior
+	// fits with expectations since our thread won't necessarily have a chance to process the incoming
+	// keystrokes before executing the command that comes after SendInput.  If those command(s) activate
+	// another of this thread's windows, that window will most likely intercept the keystrokes (assuming
+	// that the message pump dispatches buffered keystrokes to whichever window is active at the time the
+	// message is processed).
+	// This fix does not apply to the SendPlay or SendEvent modes, the former due to the fact that it sleeps
+	// a lot while the playback is running, and the latter due to key-delay and because testing has never shown
+	// a need for it.
+	if (aSendModeOrig == SM_INPUT && GetWindowThreadProcessId(GetForegroundWindow(), NULL) == g_MainThreadID) // GetWindowThreadProcessId() tolerates a NULL hwnd.
+		SLEEP_WITHOUT_INTERRUPTION(-1);
 }
 
 
@@ -3670,7 +3685,7 @@ ResultType KeyHistoryToFile(char *aFilespec, char aType, bool aKeyUp, vk_type aV
 		return OK;
 	}
 
-	if (aFilespec && *aFilespec && stricmp(aFilespec, sTargetFilespec)) // Target filename has changed.
+	if (aFilespec && *aFilespec && lstrcmpi(aFilespec, sTargetFilespec)) // Target filename has changed.
 	{
 		if (fp)
 		{
@@ -3742,7 +3757,9 @@ char *GetKeyName(vk_type aVK, sc_type aSC, char *aBuf, int aBufSize)
 			aSC = vk_to_sc(aVK);
 
 	// Use 0x02000000 to tell it that we want it to give left/right specific info, lctrl/rctrl etc.
-	if (!aSC || !GetKeyNameText((long)(aSC) << 16, aBuf, (int)(aBufSize/sizeof(TCHAR))))
+	// Relies on short-circuit boolean order.  v1.0.43: WheelDown/Up store the notch/turn count in SC,
+	// so don't consider that to be a valid SC:
+	if (!aSC || aVK == VK_WHEEL_DOWN || aVK == VK_WHEEL_UP || !GetKeyNameText((long)(aSC) << 16, aBuf, (int)(aBufSize/sizeof(TCHAR))))
 	{
 		int j;
 		for (j = 0; j < g_key_to_vk_count; ++j)

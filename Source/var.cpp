@@ -77,7 +77,7 @@ ResultType Var::Assign(double aValueToAssign)
 
 
 
-ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt, bool aExactSize)
+ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt, bool aExactSize, bool aObeyMaxMem)
 // Returns OK or FAIL.
 // If aBuf isn't NULL, caller must ensure that aLength is either VARSIZE_MAX (which tells us
 // that the entire strlen() of aBuf should be used) or an explicit length (can be zero) that
@@ -134,7 +134,7 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt, bool aExac
 			// any error that occurred:
 			return g_clip.PrepareForWrite(space_needed) ? OK : FAIL;
 
-	if (space_needed > g_MaxVarCapacity)
+	if (space_needed > g_MaxVarCapacity && aObeyMaxMem) // v1.0.43.03: aObeyMaxMem was added since some callers aren't supposed to obey it.
 		return g_script.ScriptError(ERR_MEM_LIMIT_REACHED);
 
 	if (space_needed <= 1) // Variable is being assigned the empty string (or a deref that resolves to it).
@@ -202,7 +202,7 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt, bool aExac
 				else  // 6400 KB or more: Cap the extra margin at some reasonable compromise of speed vs. mem usage: 64 KB
 					alloc_size += (64 * 1024);
 			}
-			if (alloc_size > g_MaxVarCapacity)
+			if (alloc_size > g_MaxVarCapacity && aObeyMaxMem) // v1.0.43.03: aObeyMaxMem was added since some callers aren't supposed to obey it.
 				alloc_size = g_MaxVarCapacity;  // which has already been verified to be enough.
 			mHowAllocated = ALLOC_MALLOC; // This should be done first because even if the below fails, the old value of mContents (e.g. SimpleHeap) is lost.
 			if (   !(mContents = (char *)malloc(alloc_size))   )

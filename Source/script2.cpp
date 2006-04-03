@@ -608,7 +608,7 @@ ResultType Line::Splash(char *aOptions, char *aSubText, char *aMainText, char *a
 		// Setting the big icon makes the dialog show up correctly in the Alt-Tab menu (but big seems to
 		// have no effect unless the window is unowned, i.e. it has a button on the task bar).
 		LPARAM main_icon = (LPARAM)(g_script.mCustomIcon ? g_script.mCustomIcon
-			: LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_MAIN)));
+			: LoadImage(g_hInstance, MAKEINTRESOURCE(IDI_MAIN), IMAGE_ICON, 0, 0, LR_SHARED)); // Use LR_SHARED to conserve memory (since the main icon is loaded for so many purposes).
 		if (style & WS_SYSMENU)
 			SendMessage(splash.hwnd, WM_SETICON, ICON_SMALL, main_icon);
 		if (!owned)
@@ -2331,7 +2331,7 @@ ResultType Line::ControlGetListView(Var &aOutputVar, HWND aHwnd, char *aOptions)
 
 	// SET UP THE OUTPUT VARIABLE, ENLARGING IT IF NECESSARY
 	// If the aOutputVar is of type VAR_CLIPBOARD, this call will set up the clipboard for writing:
-	aOutputVar.Assign(NULL, (VarSizeType)total_length); // Since failure is extremely rare, continue onward using the available capacity.
+	aOutputVar.Assign(NULL, (VarSizeType)total_length, false, true, false); // Since failure is extremely rare, continue onward using the available capacity.
 	char *contents = aOutputVar.Contents();
 	LRESULT capacity = (int)aOutputVar.Capacity(); // LRESULT avoids signed vs. unsigned compiler warnings.
 	if (capacity > 0) // For maintainability, avoid going negative.
@@ -3278,7 +3278,7 @@ BOOL CALLBACK EnumChildGetControlList(HWND aWnd, LPARAM lParam)
 	// Check if this class already exists in the class array:
 	int class_index;
 	for (class_index = 0; class_index < cl.total_classes; ++class_index)
-		if (!stricmp(cl.class_name[class_index], class_name))
+		if (!stricmp(cl.class_name[class_index], class_name)) // lstrcmpi() is not used: 1) avoids breaking exisitng scripts; 2) provides consistent behavior across multiple locales.
 			break;
 	if (class_index < cl.total_classes) // Match found.
 	{
@@ -4517,7 +4517,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			// a small one isn't available.  This results in the FileSelectFile dialog's title
 			// being initially messed up (at least on WinXP) and also puts an unwanted icon in
 			// the title bar of each MsgBox.  So for now it's disabled:
-			//LPARAM main_icon = (LPARAM)LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_MAIN));
+			//LPARAM main_icon = (LPARAM)LoadImage(g_hInstance, MAKEINTRESOURCE(IDI_MAIN), IMAGE_ICON, 0, 0, LR_SHARED);
 			//SendMessage(top_box, WM_SETICON, ICON_BIG, main_icon);
 			//SendMessage(top_box, WM_SETICON, ICON_SMALL, 0);  // Tried this to get rid of it, but it didn't help.
 			// But don't set the small one, because it reduces the area available for title text
@@ -5323,7 +5323,7 @@ BOOL CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 		// Setting the small icon puts it in the upper left corner of the dialog window.
 		// Setting the big icon makes the dialog show up correctly in the Alt-Tab menu.
 		LPARAM main_icon = (LPARAM)(g_script.mCustomIcon ? g_script.mCustomIcon
-			: LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_MAIN)));
+			: LoadImage(g_hInstance, MAKEINTRESOURCE(IDI_MAIN), IMAGE_ICON, 0, 0, LR_SHARED)); // Use LR_SHARED to conserve memory (since the main icon is loaded for so many purposes).
 		SendMessage(hWndDlg, WM_SETICON, ICON_SMALL, main_icon);
 		SendMessage(hWndDlg, WM_SETICON, ICON_BIG, main_icon);
 
@@ -6217,7 +6217,7 @@ ResultType Line::PerformAssign()
 		}
 
 		// Resize the output variable, if needed:
-		if (!output_var->Assign(NULL, space_needed - 1))
+		if (!output_var->Assign(NULL, space_needed - 1, false, true, false))
 		{
 			g_clip.Close();
 			return FAIL; // Above should have already reported the error.
@@ -6703,10 +6703,9 @@ int SortWithOptions(const void *a1, const void *a2)
 		return g_SortReverse ? -result : result;
 	}
 	// Otherwise, it's a non-numeric sort.
-	if (g_SortReverse)
-		return g_SortCaseSensitive ? strcmp(sort_item2, sort_item1) : stricmp(sort_item2, sort_item1);
-	else
-		return g_SortCaseSensitive ? strcmp(sort_item1, sort_item2) : stricmp(sort_item1, sort_item2);
+	// v1.0.43.03: Added support the new locale-insensitive mode.
+	int result = strcmp2(sort_item1, sort_item2, g_SortCaseSensitive); // Resolve large macro only once for code size reduction.
+	return g_SortReverse ? -result : result;
 }
 
 
@@ -6721,10 +6720,9 @@ int SortByNakedFilename(const void *a1, const void *a2)
 		sort_item1 = cp + 1;
 	if (cp = strrchr(sort_item2, '\\'))  // Assign
 		sort_item2 = cp + 1;
-	if (g_SortReverse)
-		return g_SortCaseSensitive ? strcmp(sort_item2, sort_item1) : stricmp(sort_item2, sort_item1);
-	else
-		return g_SortCaseSensitive ? strcmp(sort_item1, sort_item2) : stricmp(sort_item1, sort_item2);
+	// v1.0.43.03: Added support the new locale-insensitive mode.
+	int result = strcmp2(sort_item1, sort_item2, g_SortCaseSensitive); // Resolve large macro only once for code size reduction.
+	return g_SortReverse ? -result : result;
 }
 
 
@@ -6775,7 +6773,7 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 
 	// Resolve options.  Set defaults first:
 	char delimiter = '\n';
-	g_SortCaseSensitive = false;
+	g_SortCaseSensitive = SCS_INSENSITIVE;
 	g_SortNumeric = false;
 	g_SortReverse = false;
 	g_SortColumnOffset = 0;
@@ -6790,7 +6788,13 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 		switch(toupper(*cp))
 		{
 		case 'C':
-			g_SortCaseSensitive = true;
+			if (toupper(cp[1]) == 'L') // v1.0.43.03: Locale-insensitive mode, which probably performs considerably worse.
+			{
+				++cp;
+				g_SortCaseSensitive = SCS_INSENSITIVE_LOCALE;
+			}
+			else
+				g_SortCaseSensitive = SCS_SENSITIVE;
 			break;
 		case 'D':
 			if (!cp[1]) // Avoids out-of-bounds when the loop's own ++cp is done.
@@ -6980,7 +6984,7 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 				// since the extra code size doensn't seem justified given the rarity of the need.
 				keep_this_item = (ATOF(*item_curr) != ATOF(item_prev));
 			else
-				keep_this_item = g_SortCaseSensitive ? strcmp(*item_curr, item_prev) : stricmp(*item_curr, item_prev);
+				keep_this_item = strcmp2(*item_curr, item_prev, g_SortCaseSensitive); // v1.0.43.03: Added support for locale-insensitive mode.
 				// Permutations of sorting case sensitive vs. eliminating duplicates based on case sensitivity:
 				// 1) Sort is not case sens, but dupes are: Won't work because sort didn't necessarily put
 				//    same-case dupes adjacent to each other.
@@ -7881,7 +7885,7 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 			// that separates the allowed file extensions.  The API docs specify that there
 			// should be no spaces in the pattern itself, even though it's okay if they exist
 			// in the displayed name of the file-type:
-			StrReplaceAll(pattern, " ", "", true);
+			StrReplaceAll(pattern, " ", "", true, SCS_SENSITIVE);
 			// Also include the All Files (*.*) filter, since there doesn't seem to be much
 			// point to making this an option.  This is because the user could always type
 			// *.* and press ENTER in the filename field and achieve the same result:
@@ -8101,37 +8105,57 @@ ResultType Line::FileRead(char *aFilespec)
 	output_var->Assign();
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 
+	// The program is currently compiled with a 2GB address limit, so loading files larger than that
+	// would probably fail or perhaps crash the program.  Therefore, just putting a basic 1.0 GB sanity
+	// limit on the file here, for now.  Note: a variable can still be operated upon without necessarily
+	// using the deref buffer, since that buffer only comes into play when there is no other way to
+	// manipulate the variable.  In other words, the deref buffer won't necessarily grow to be the same
+	// size as the file, which if it happened for a 1GB file would exceed the 2GB address limit.
+	// That is why a smaller limit such as 800 MB seems too severe:
+	#define FILEREAD_MAX (1024*1024*1024) // 1 GB.
+
 	// Set default options:
 	bool translate_crlf_to_lf = false;
 	bool is_binary_clipboard = false;
+	unsigned __int64 max_bytes_to_load = ULLONG_MAX;
 
 	// It's done as asterisk+option letter to permit future expansion.  A plain asterisk such as used
 	// by the FileAppend command would create ambiguity if there was ever an effort to add other asterisk-
-	// prefixed options later:
-	char *cp = omit_leading_whitespace(aFilespec); // omit leading whitespace only temporarily in case aFilespec contains literal whitespace we want to retain.
-	if (*cp == '*')
+	// prefixed options later.
+	char *cp;
+	for (;;)
 	{
-		// Currently, all the options are mutually exclusive, so only one is checked for.
-		++cp;
-		switch (toupper(*cp))
+		cp = omit_leading_whitespace(aFilespec); // omit leading whitespace only temporarily in case aFilespec contains literal whitespace we want to retain.
+		if (*cp != '*') // No more options.
+			break; // Make no further changes to aFilespec.
+		switch (toupper(*++cp)) // This could move cp to the terminator if string ends in an asterisk.
 		{
 		case 'C': // Clipboard (binary).
-			is_binary_clipboard = true;
+			is_binary_clipboard = true; // When this option is present, any others are parsed (to skip over them) but ignored as documented.
+			break;
+		case 'M': // Maximum number of bytes to load.
+			max_bytes_to_load = ATOU64(cp + 1); // Relies upon the fact that it ceases conversion upon reaching a space or tab.
+			if (max_bytes_to_load > FILEREAD_MAX) // Force a failure to avoid breaking scripts if this limit is increased in the future.
+				return OK; // Let ErrorLevel tell the story.
+			// Skip over the digits of this option in case it's the last option.
+			if (   !(cp = StrChrAny(cp, " \t"))   ) // Find next space or tab (there should be one if options are properly formatted).
+				return OK; // Let ErrorLevel tell the story.
+			--cp; // Standardize it to make it conform to the other options, for use below.
 			break;
 		case 'T': // Text mode.
-            translate_crlf_to_lf = true;
+			translate_crlf_to_lf = true;
 			break;
 		}
 		// Note: because it's possible for filenames to start with a space (even though Explorer itself
 		// won't let you create them that way), allow exactly one space between end of option and the
 		// filename itself:
-		aFilespec = cp;  // aFilespec is now the option letter after the asterisk, or empty string if there was none.
+		aFilespec = cp;  // aFilespec is now the option letter after the asterisk *or* empty string if there was none.
 		if (*aFilespec)
 		{
 			++aFilespec;
 			// Now it's the space or tab (if there is one) after the option letter.  It seems best for
 			// future expansion to assume that this is a space or tab even if it's really the start of
-			// the filename.  For example, in the future, multiletter optios might be wanted, in which
+			// the filename.  For example, in the future, multiletter options might be wanted, in which
 			// case allowing the omission of the space or tab between *t and the start of the filename
 			// would cause the following to be ambiguous:
 			// FileRead, OutputVar, *delimC:\File.txt
@@ -8140,9 +8164,10 @@ ResultType Line::FileRead(char *aFilespec)
 			// It also conforms to the precedent/behavior of GuiControl when it accepts picture sizing options
 			// such as *w/h and *x/y
 			if (*aFilespec)
-				++aFilespec; // And now it's the start of the filename.  This behavior is as documented in the help file.
+				++aFilespec; // And now it's the start of the filename or the asterisk of the next option.
+							// This behavior is as documented in the help file.
 		}
-	}
+	} // for()
 
 	// It seems more flexible to allow other processes to read and write the file while we're reading it.
 	// For example, this allows the file to be appended to during the read operation, which could be
@@ -8150,8 +8175,8 @@ ResultType Line::FileRead(char *aFilespec)
 	// MSDN: "To enable other processes to share the object while your process has it open, use a combination
 	// of one or more of [FILE_SHARE_READ, FILE_SHARE_WRITE]."
 	HANDLE hfile = CreateFile(aFilespec, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING
-		, FILE_FLAG_SEQUENTIAL_SCAN, NULL); // MSDN says that FILE_FLAG_SEQUENTIAL_SCAN will often improve performance in this case.
-	if (hfile == INVALID_HANDLE_VALUE)
+		, FILE_FLAG_SEQUENTIAL_SCAN, NULL); // MSDN says that FILE_FLAG_SEQUENTIAL_SCAN will often improve performance
+	if (hfile == INVALID_HANDLE_VALUE)      // in cases like these (and it seems best even if max_bytes_to_load was specified).
 		return OK; // Let ErrorLevel tell the story.
 
 	if (is_binary_clipboard && output_var->Type() == VAR_CLIPBOARD)
@@ -8159,31 +8184,27 @@ ResultType Line::FileRead(char *aFilespec)
 	// Otherwise, if is_binary_clipboard, load it directly into a normal variable.  The data in the
 	// clipboard file should already have the (UINT)0 as its ending terminator.
 
-	// The program is currently compiled with a 2GB address limit, so loading files larger than that
-	// would probably fail or perhaps crash the program.  Therefore, just putting a basic 1.0 GB sanity
-	// limit on the file here, for now.  Note: a variable can still be operated upon without necessarily
-	// using the deref buffer, since that buffer only comes into play when there is no other way to
-	// manipulate the variable.  In other words, the deref buffer won't necessarily grow to be the same
-	// size as the file, which if it happened for a 1GB file would exceed the 2GB address limit.
-	// That is why a smaller limit such as 800 MB seems too severe:
 	unsigned __int64 bytes_to_read = GetFileSize64(hfile);
-	if (bytes_to_read > 1024*1024*1024) // Also note that bytes_to_read==ULLONG_MAX means GetFileSize64() failed.
+	if (bytes_to_read == ULLONG_MAX // GetFileSize64() failed...
+		|| max_bytes_to_load == ULLONG_MAX && bytes_to_read > FILEREAD_MAX) // ...or the file is too large to be completely read (and the script wanted it completely read).
 	{
 		CloseHandle(hfile);
 		return OK; // Let ErrorLevel tell the story.
 	}
+	if (max_bytes_to_load < bytes_to_read)
+		bytes_to_read = max_bytes_to_load;
 
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Set default for this point forward to be "success".
 
 	if (!bytes_to_read)
 	{
 		CloseHandle(hfile);
-		return OK; // And ErrorLevel will indicate success (a zero length file results in empty output_var).
+		return OK; // And ErrorLevel will indicate success (a zero-length file results in empty output_var).
 	}
 
 	// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
 	// this call will set up the clipboard for writing:
-	if (output_var->Assign(NULL, (VarSizeType)bytes_to_read) != OK) // Probably due to "out of memory".
+	if (output_var->Assign(NULL, (VarSizeType)bytes_to_read, false, true, false) != OK) // Probably due to "out of memory".
 	{
 		CloseHandle(hfile);
 		return FAIL;  // It already displayed the error. ErrorLevel doesn't matter now because the current quasi-thread will be aborted.
@@ -8206,9 +8227,9 @@ ResultType Line::FileRead(char *aFilespec)
 		// address limit will not be exceeded by StrReplaceAll even if the file is close to the
 		// 1 GB limit as described above:
 		if (translate_crlf_to_lf)
-			StrReplaceAll(output_buf, "\r\n", "\n", false); // Safe only because larger string is being replaced with smaller.
+			StrReplaceAll(output_buf, "\r\n", "\n", false, SCS_SENSITIVE); // Safe only because larger string is being replaced with smaller.
 		output_var->Length() = is_binary_clipboard ? (bytes_actually_read - 1) // Length excludes the very last byte of the (UINT)0 terminator.
-			: (VarSizeType)strlen(output_buf); // For non-binary, explicitly calculate the "usable" length in case any binary zeros were read.
+			: (VarSizeType)strlen(output_buf); // In case file contains binary zeroes, explicitly calculate the "usable" length.
 	}
 	else
 	{
@@ -9163,7 +9184,7 @@ int Line::ConvertEscapeChar(char *aFilespec, char aOldChar, char aNewChar, bool 
 	}
 	char new_filespec[MAX_PATH + 10];  // +10 in case StrReplace below would otherwise overflow the buffer.
 	strlcpy(new_filespec, aFilespec, sizeof(new_filespec));
-	StrReplace(new_filespec, CONVERSION_FLAG, "-NEW" EXT_AUTOHOTKEY, false);
+	StrReplace(new_filespec, CONVERSION_FLAG, "-NEW" EXT_AUTOHOTKEY, SCS_INSENSITIVE);
 	FILE *f2 = fopen(new_filespec, "w");
 	if (!f2)
 	{
@@ -10157,10 +10178,22 @@ void BIF_InStr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 		aResultToken.value_int64 = -1; // Store out-of-bounds value as a flag.
 		return;
 	}
-
 	// Result type will always be an integer:
 	// Caller has set aResultToken.symbol to a default of SYM_INTEGER, so no need to set it here.
-	bool case_sensitive = aParamCount >= 3 && ExprTokenToInt64(*aParam[2]);
+
+	// v1.0.43.03: Rather than adding a third value to the CaseSensitive parameter, it seems better to
+	// obey StringCaseSense because:
+	// 1) It matches the behavior of the equal operator (=) in expressions.
+	// 2) It's more friendly for typical international uses because it avoids having to specify that special/third value
+	//    for every call of InStr.  It's nice to be able to omit the CaseSensitive parameter every time and know that
+	//    the behavior of both InStr and its counterpart the equals operator are always consistent with each other.
+	// 3) Avoids breaking existing scripts that may pass something other than true/false for the CaseSense parameter.
+	StringCaseSenseType string_case_sense = (StringCaseSenseType)(aParamCount >= 3 && ExprTokenToInt64(*aParam[2]));
+	// Above has assigned SCS_INSENSITIVE (0) or SCS_SENSITIVE (1).  If it's insensitive, resolve it to
+	// be Locale-mode if the StringCaseSense mode is either case-sensitive or Locale-insensitive.
+	if (g.StringCaseSense != SCS_INSENSITIVE && string_case_sense == SCS_INSENSITIVE) // Ordered for short-circuit performance.
+		string_case_sense = SCS_INSENSITIVE_LOCALE;
+
 	char *found_pos;
 	__int64 offset = 0; // Set default.
 
@@ -10169,7 +10202,7 @@ void BIF_InStr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 		offset = ExprTokenToInt64(*aParam[3]) - 1; // +3 to get the fourth arg.
 		if (offset == -1) // Special mode to search from the right side.  Other negative values are reserved for possible future use as offsets from the right side.
 		{
-			found_pos = strrstr(haystack, needle, case_sensitive, 1);
+			found_pos = strrstr(haystack, needle, string_case_sense, 1);
 			aResultToken.value_int64 = found_pos ? (found_pos - haystack + 1) : 0;  // +1 to convert to 1-based, since 0 indicates "not found".
 			return;
 		}
@@ -10184,8 +10217,8 @@ void BIF_InStr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 	}
 	// Since above didn't return:
 	haystack += offset; // Above has verified that this won't exceed the length of haystack.
-	found_pos = case_sensitive ? strstr(haystack, needle) : strcasestr(haystack, needle);
-	aResultToken.value_int64 = found_pos ? (found_pos - haystack + offset + 1) : 0;  // +1 
+	found_pos = strstr2(haystack, needle, string_case_sense);
+	aResultToken.value_int64 = found_pos ? (found_pos - haystack + offset + 1) : 0;
 }
 
 
@@ -10260,7 +10293,7 @@ void BIF_VarSetCapacity(ExprTokenType &aResultToken, ExprTokenType *aParam[], in
 				VarSizeType new_capacity = (VarSizeType)ExprTokenToInt64(*aParam[1]);
 				if (new_capacity)
 				{
-					var.Assign(NULL, new_capacity, false, true); // This also destroys the variables contents.
+					var.Assign(NULL, new_capacity, false, true, false); // This also destroys the variables contents.
 					VarSizeType capacity;
 					if (aParamCount > 2 && (capacity = var.Capacity()) > 1) // Third parameter is present and var has enough capacity to make FillMemory() meaningful.
 					{
@@ -11306,8 +11339,13 @@ void BIF_LV_InsertModifyDeleteCol(ExprTokenType &aResultToken, ExprTokenType *aP
 			col.unidirectional = adding;
 		else if (!stricmp(next_option, "Desc")) // Make descending order the default order (applies to uni and first click of col for non-uni).
 			col.prefer_descending = adding; // So that the next click will toggle to the opposite direction.
-		else if (!stricmp(next_option, "Case"))
-			col.case_sensitive = adding;
+		else if (!strnicmp(next_option, "Case", 4))
+		{
+			if (adding)
+				col.case_sensitive = !stricmp(next_option + 4, "Locale") ? SCS_INSENSITIVE_LOCALE : SCS_SENSITIVE;
+			else
+				col.case_sensitive = SCS_INSENSITIVE;
+		}
 
 		else if (!strnicmp(next_option, "Sort", 4)) // This is done as an option vs. LV_SortCol/LV_Sort so that the column's options can be changed simultaneously with a "sort now" to refresh.
 		{

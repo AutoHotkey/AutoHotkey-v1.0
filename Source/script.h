@@ -149,6 +149,7 @@ enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
 #define ERR_SUBMENU "Submenu does not exist."
 #define ERR_WINDOW_PARAM "Requires at least one of its window parameters."
 #define ERR_ON_OFF "Requires ON/OFF/blank"
+#define ERR_ON_OFF_LOCALE "Requires ON/OFF/LOCALE"
 #define ERR_ON_OFF_TOGGLE "Requires ON/OFF/TOGGLE/blank"
 #define ERR_ON_OFF_TOGGLE_PERMIT "Requires ON/OFF/TOGGLE/PERMIT/blank"
 #define ERR_TITLEMATCHMODE "Requires 1/2/3/Slow/Fast"
@@ -1493,6 +1494,14 @@ public:
 		return aDefault;
 	}
 
+	static StringCaseSenseType ConvertStringCaseSense(char *aBuf)
+	{
+		if (!stricmp(aBuf, "On")) return SCS_SENSITIVE;
+		if (!stricmp(aBuf, "Off")) return SCS_INSENSITIVE;
+		if (!stricmp(aBuf, "Locale")) return SCS_INSENSITIVE_LOCALE;
+		return SCS_INVALID;
+	}
+
 	static ToggleValueType ConvertOnOffTogglePermit(char *aBuf, ToggleValueType aDefault = TOGGLE_INVALID)
 	// Returns aDefault if aBuf isn't either ON, OFF, TOGGLE, PERMIT, or blank.
 	{
@@ -1869,10 +1878,10 @@ struct FontType
 enum LVColTypes {LV_COL_TEXT, LV_COL_INTEGER, LV_COL_FLOAT}; // LV_COL_TEXT must be zero so that it's the default with ZeroMemory.
 struct lv_col_type
 {
-	UCHAR type; // UCHAR vs. enum LVColTypes to save memory.
-	bool sort_disabled;  // If true, clicking the column will have no automatic sorting effect.
-	bool case_sensitive; // Ignored if type isn't LV_COL_TEXT.
-	bool unidirectional; // Sorting cannot be reversed/toggled.
+	UCHAR type;             // UCHAR vs. enum LVColTypes to save memory.
+	bool sort_disabled;     // If true, clicking the column will have no automatic sorting effect.
+	UCHAR case_sensitive;   // Ignored if type isn't LV_COL_TEXT.  TOGGLED_OFF is the default of "case insensitive".
+	bool unidirectional;    // Sorting cannot be reversed/toggled.
 	bool prefer_descending; // Whether this column defaults to descending order (on first click or for unidirectional).
 };
 

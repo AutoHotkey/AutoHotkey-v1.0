@@ -298,47 +298,64 @@ ResultType Line::WinMenuSelectItem(char *aTitle, char *aText, char *aMenu1, char
 	if (menu_item_count < 1) // Menu bar has no menus.
 		return OK;  // Let ErrorLevel tell the story.
 	
-	#define MENU_ITEM_IS_SUBMENU 0xFFFFFFFF
+#define MENU_ITEM_IS_SUBMENU 0xFFFFFFFF
+#define UPDATE_MENU_VARS(menu_pos) \
+menu_id = GetMenuItemID(hMenu, menu_pos);\
+if (menu_id == MENU_ITEM_IS_SUBMENU)\
+	menu_item_count = GetMenuItemCount(hMenu = GetSubMenu(hMenu, menu_pos));\
+else\
+{\
+	menu_item_count = 0;\
+	hMenu = NULL;\
+}
+
 	UINT menu_id = MENU_ITEM_IS_SUBMENU;
 	char menu_text[1024];
 	bool match_found;
-	size_t menu_param_length;
+	size_t this_menu_param_length, menu_text_length;
 	int pos, target_menu_pos;
-	for (int i = 0; menu_param[i] && *menu_param[i]; ++i)
+	char *this_menu_param;
+
+	for (int i = 0; ; ++i)
 	{
+		this_menu_param = menu_param[i]; // For performance and convenience.
+		if (!(this_menu_param && *this_menu_param))
+			break;
 		if (!hMenu)  // The nesting of submenus ended prior to the end of the list of menu search terms.
 			return OK;  // Let ErrorLevel tell the story.
-		menu_param_length = strlen(menu_param[i]);
-		target_menu_pos = (menu_param[i][menu_param_length - 1] == '&') ? ATOI(menu_param[i]) - 1 : -1;
+
+		this_menu_param_length = strlen(this_menu_param);
+		target_menu_pos = (this_menu_param[this_menu_param_length - 1] == '&') ? ATOI(this_menu_param) - 1 : -1;
 		if (target_menu_pos > -1)
 		{
 			if (target_menu_pos >= menu_item_count)  // Invalid menu position (doesn't exist).
 				return OK;  // Let ErrorLevel tell the story.
-			#define UPDATE_MENU_VARS(menu_pos) \
-			menu_id = GetMenuItemID(hMenu, menu_pos);\
-			if (menu_id == MENU_ITEM_IS_SUBMENU)\
-				menu_item_count = GetMenuItemCount(hMenu = GetSubMenu(hMenu, menu_pos));\
-			else\
-			{\
-				menu_item_count = 0;\
-				hMenu = NULL;\
-			}
 			UPDATE_MENU_VARS(target_menu_pos)
 		}
 		else // Searching by text rather than numerical position.
 		{
 			for (match_found = false, pos = 0; pos < menu_item_count; ++pos)
 			{
-				GetMenuString(hMenu, pos, menu_text, sizeof(menu_text) - 1, MF_BYPOSITION);
-				match_found = !strnicmp(menu_text, menu_param[i], strlen(menu_param[i]));
-				//match_found = strcasestr(menu_text, menu_param[i]);
+				menu_text_length = GetMenuString(hMenu, pos, menu_text, sizeof(menu_text) - 1, MF_BYPOSITION);
+				// v1.0.43.03: It's debatable, but it seems best to support locale's case insensitivity for
+				// menu items, since menu names tend to adapt to the user's locale.  By contrast, things
+				// like process names (in the Process command) do not tend to change, so it seems best to
+				// have them continue to use stricmp(): 1) avoids breaking exisitng scripts; 2) provides
+				// consistent behavior across multiple locales; 3) performance.
+				match_found = !lstrcmpni(menu_text  // This call is basically a strnicmp() that obeys locale.
+					, menu_text_length > this_menu_param_length ? this_menu_param_length : menu_text_length
+					, this_menu_param, this_menu_param_length);
+				//match_found = strcasestr(menu_text, this_menu_param);
 				if (!match_found)
 				{
 					// Try again to find a match, this time without the ampersands used to indicate
 					// a menu item's shortcut key:
-					StrReplaceAll(menu_text, "&", "", true);
-					match_found = !strnicmp(menu_text, menu_param[i], strlen(menu_param[i]));
-					//match_found = strcasestr(menu_text, menu_param[i]);
+					StrReplaceAll(menu_text, "&", "", true, SCS_SENSITIVE);
+					menu_text_length = strlen(menu_text);
+					match_found = !lstrcmpni(menu_text  // This call is basically a strnicmp() that obeys locale.
+						, menu_text_length > this_menu_param_length ? this_menu_param_length : menu_text_length
+						, this_menu_param, this_menu_param_length);
+					//match_found = strcasestr(menu_text, this_menu_param);
 				}
 				if (match_found)
 				{
@@ -776,7 +793,7 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 		// other precedents where a variable is sized to something larger than it winds up carrying.
 		// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
 		// this call will set up the clipboard for writing:
-		if (output_var->Assign(NULL, (VarSizeType)length) != OK)
+		if (output_var->Assign(NULL, (VarSizeType)length, false, true, true) != OK)
 			return FAIL;  // It already displayed the error.
 		for (cp = output_var->Contents(), length = item_count - 1, u = 0; u < item_count; ++u)
 		{
@@ -2093,7 +2110,7 @@ DWORD ProcessExist9x2000(char *aProcess, char *aProcessName)
 		// But in case it ever does, ensure consistency by removing the path:
 		_splitpath(proc.szExeFile, szDrive, szDir, szFile, szExt);
 		strcat(szFile, szExt);
-		if (!stricmp(szFile, aProcess))
+		if (!stricmp(szFile, aProcess)) // lstrcmpi() is not used: 1) avoids breaking exisitng scripts; 2) provides consistent behavior across multiple locales; 3) performance.
 		{
 			if (aProcessName) // Caller wanted process name also.
 				strcpy(aProcessName, szFile);
@@ -2195,7 +2212,7 @@ DWORD ProcessExistNT4(char *aProcess, char *aProcessName)
 			{
 				_splitpath(szProcessName, szDrive, szDir, szFile, szExt);
 				strcat(szFile, szExt);
-				if (!stricmp(szFile, aProcess))
+				if (!stricmp(szFile, aProcess)) // lstrcmpi() is not used: 1) avoids breaking exisitng scripts; 2) provides consistent behavior across multiple locales; 3) performance.
 				{
 					if (aProcessName) // Caller wanted process name also.
 						strcpy(aProcessName, szProcessName);

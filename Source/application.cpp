@@ -820,7 +820,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 					// which will be fired almost the instant the previous iteration of the subroutine
 					// finishes (this above descript applies only when MaxThreadsPerHotkey is 1,
 					// which it usually is).
-					hk->RunAgainAfterFinished(*variant);
+					hk->RunAgainAfterFinished(*variant); // Wheel notch count (event_info below) should be okay because subsequent launches reuse the same thread attributes to do the repeats.
 					continue;
 				}
 				priority = variant->mPriority;
@@ -1047,6 +1047,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				//default: No action for the other cases.
 				}
 
+				// We're still in case AHK_GUI_ACTION; other cases have their own handling for event_info.
 				// event_info is a separate variable because it is sometimes set before g.EventInfo is available
 				// for the new thread.  It also serves to indicate whether g_ErrorLevel should be made blank
 				// vs. assigned a number.
@@ -1058,8 +1059,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 					g_ErrorLevel->Assign();
 				else
 				{
-					// Override the thread-default of zero with this event info number:
-					g.EventInfo = event_info;
+					g.EventInfo = event_info; // Override the thread-default of zero with this event info number.
 					g_ErrorLevel->Assign(event_info); // For backward compatibility.
 				}
 
@@ -1187,6 +1187,9 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				break;
 
 			default: // hotkey
+				if (hk->mVK == VK_WHEEL_DOWN || hk->mVK == VK_WHEEL_UP) // If this is true then also: msg.message==AHK_HOOK_HOTKEY
+					g.EventInfo = (DWORD)msg.lParam; // v1.0.43.03: Override the thread default of 0 with the number of notches by which the wheel was turned.
+					// Above also works for RunAgainAfterFinished since that feature reuses the same thread attributes set above.
 				g.hWndLastUsed = criterion_found_hwnd; // v1.0.42. Even if the window is invalid for some reason, IsWindow() and such are called whenever the script accesses it (GetValidLastUsedWindow()).
 				hk->Perform(*variant);
 			}

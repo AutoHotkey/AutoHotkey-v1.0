@@ -193,7 +193,7 @@ public:
 	//ResultType Assign(unsigned __int64 aValueToAssign);
 	ResultType Assign(double aValueToAssign);
 	ResultType Assign(char *aBuf = NULL, VarSizeType aLength = VARSIZE_MAX, bool aTrimIt = false
-		, bool aExactSize = false);
+		, bool aExactSize = false, bool aObeyMaxMem = true);
 	VarSizeType Get(char *aBuf = NULL);
 
 	// Not an enum so that it can be global more easily:

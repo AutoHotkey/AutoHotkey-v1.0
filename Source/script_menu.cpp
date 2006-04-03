@@ -102,19 +102,33 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 		}
 
 		int icon_number = *aParam4 ? ATOI(aParam4) : 1;  // Need int to support signed values.
-		if (icon_number < 1)
-			icon_number = 1;
+		if (icon_number < 2)
+			icon_number = 0;
+		// Above: v1.0.43.03 uses 0 vs. 1 to allow LoadPicture() to use LoadImage() vs. ExtractIcon(),
+		// which prevents the distortion caused by the fact that ExtractIcon unconditionally scales every
+		// icon it loads to 32x32.  I've visually confirmed that the distortion occurs at least when a
+		// 16x16 icon is loaded by ExtractIcon() then put into the tray.  It might not be the scaling itself
+		// that distorts the icon: the pixels are all in the right places, it's just that some are
+		// the wrong color/shade.  This implies that some kind of unwanted interpolation or color tweaking
+		// is being done by ExtractIcon (and probably LoadIcon), but not by LoadImage.
 
-		// Alternate method, untested and probably doesn't work on EXEs:
-		// Specifying size 32x32 probably saves memory if the icon file is large:
-		//HICON new_icon = LoadImage(NULL, aParam3, IMAGE_ICON, 32, 32, LR_LOADFROMFILE);
-		HICON new_icon = ExtractIcon(g_hInstance, aParam3, icon_number - 1);
-		if (!new_icon || new_icon == (HICON)1) // 1 means "incorrect file type".
+		// v1.0.43.03: Load via LoadPicture() vs. ExtractIcon() because ExtractIcon harms the quality
+		// of 16x16 icons inside .ico files by first scaling them to 32x32 (which then has to be scaled
+		// back to 16x16 for the tray and for the SysMenu icon).  Load the icon at actual size so that
+		// when/if this icon is used for a GUI window, it's appearance in the alt-tab menu won't be
+		// unexpectedly poor due to having been scaled from its native size down to 16x16.
+		int image_type;
+		HICON new_icon = (HICON)LoadPicture(aParam3, 0, 0, image_type, icon_number - 1, false);
+		if (!new_icon || image_type == IMAGE_BITMAP) // If it's not a bitmap, it's an icon or cursor (both of which should work).
+		{
+			if (new_icon) // A bitmap was loaded, which is unsuitable in this context.
+				DeleteObject(new_icon);
 			RETURN_MENU_ERROR("Can't load icon.", aParam3);
+		}
 		GuiType::DestroyIconIfUnused(mCustomIcon); // This destroys it if non-NULL and it's not used by an GUI windows.
 
 		mCustomIcon = new_icon;
-		mCustomIconNumber = icon_number;
+		mCustomIconNumber = icon_number < 1 ? 1 : icon_number; // Adjust in case it was set to zero above.
 		// Allocate the full MAX_PATH in case the contents grow longer later.
 		// SimpleHeap improves avg. case mem load:
 		if (!mCustomIconFile)
@@ -267,7 +281,7 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 	for (menu_item = menu->mFirstMenuItem
 		; menu_item
 		; menu_item_prev = menu_item, menu_item = menu_item->mNextMenuItem)
-		if (!stricmp(menu_item->mName, aParam3)) // Match found (case insensitive).
+		if (!lstrcmpi(menu_item->mName, aParam3)) // Match found (case insensitive).
 			break;
 
 	// Whether an existing menu item's options should be updated without updating its submenu or label:
@@ -409,7 +423,7 @@ UserMenu *Script::FindMenu(char *aMenuName)
 {
 	if (!aMenuName || !*aMenuName) return NULL;
 	for (UserMenu *menu = mFirstMenu; menu != NULL; menu = menu->mNextMenu)
-		if (!stricmp(menu->mName, aMenuName)) // Match found.
+		if (!lstrcmpi(menu->mName, aMenuName)) // Match found.
 			return menu;
 	return NULL; // No match found.
 }
@@ -740,7 +754,7 @@ ResultType UserMenu::RenameItem(UserMenuItem *aMenuItem, char *aNewName)
 	{
 		// Names must be unique only within each menu:
 		for (UserMenuItem *mi = mFirstMenuItem; mi; mi = mi->mNextMenuItem)
-			if (!stricmp(mi->mName, aNewName)) // Match found (case insensitive).
+			if (!lstrcmpi(mi->mName, aNewName)) // Match found (case insensitive).
 				return FAIL; // Caller should display an error message.
 		mii.fType = MFT_STRING;
 	}
@@ -1336,11 +1350,9 @@ UINT UserMenu::GetItemPos(char *aMenuItemName)
 	int menu_item_count = GetMenuItemCount(mMenu);
 	char buf[MAX_MENU_NAME_LENGTH + 2];  // +2 due to uncertainty over whether GetMenuString()'s nMaxCount includes room for terminator.
 	for (int i = 0; i < menu_item_count; ++i)
-	{
 		if (GetMenuString(mMenu, i, buf, sizeof(buf) - 1, MF_BYPOSITION))
-			if (!stricmp(buf, aMenuItemName))  // A case insensitive match was found.
+			if (!lstrcmpi(buf, aMenuItemName))  // A case insensitive match was found.
 				return i;
-	}
 	return UINT_MAX;  // No match found.
 }
 
