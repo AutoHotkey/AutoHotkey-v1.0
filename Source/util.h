@@ -24,16 +24,23 @@ EXTERN_G;  // For ITOA() and related functions' use of g.FormatIntAsHex
 #define IS_SPACE_OR_TAB(c) (c == ' ' || c == '\t')
 #define IS_SPACE_OR_TAB_OR_NBSP(c) (c == ' ' || c == '\t' || c == -96) // Use a negative to support signed chars.
 
+// v1.0.43.04: The following are macros to avoid crash bugs caused by improper casting, namely a failure to cast
+// a signed char to UCHAR before promoting it to LPSTR, which crashes since CharLower/Upper would interpret
+// such a high unsigned value as an address rather than a single char.
+#define ltolower(ch) CharLower((LPSTR)(UCHAR)(ch))  // "L" prefix stands for "locale", like lstrcpy.
+#define ltoupper(ch) CharUpper((LPSTR)(UCHAR)(ch))  // For performance, some callers don't want return value cast to char.
+
 // NOTE: MOVING THINGS OUT OF THIS FILE AND INTO util.cpp can hurt benchmarks by 10% or more, so be careful
 // when doing so (even when the change seems inconsequential, it can impact benchmarks due to quirks of code
 // generation and caching).
 
+
+inline char *StrToTitleCase(char *aStr)
 // Inline functions like the following probably don't actually get put inline by the compiler (since it knows
 // it's not worth it).  However, changing this to be non-inline has a significant impact on benchmarks even
 // though the function is never called by those benchmarks, probably due to coincidences in how the generated
-// code gets cached in the CPU.  So it seems best not to meess with anything without making sure it doesn't
+// code gets cached in the CPU.  So it seems best not to mess with anything without making sure it doesn't
 // drop the benchmarks significantly.
-inline char *StrToTitleCase(char *aStr)
 {
 	if (!aStr) return aStr;
 	char *aStr_orig = aStr;	
@@ -43,11 +50,11 @@ inline char *StrToTitleCase(char *aStr)
 		{
 			if (convert_next_alpha_char_to_upper)
 			{
-				*aStr = (char)CharUpper((LPTSTR)(UCHAR)*aStr);
+				*aStr = (char)ltoupper(*aStr);
 				convert_next_alpha_char_to_upper = false;
 			}
 			else
-				*aStr = (char)CharLower((LPTSTR)(UCHAR)*aStr);
+				*aStr = (char)ltolower(*aStr);
 		}
 		else
 			if (isspace((UCHAR)*aStr))

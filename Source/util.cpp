@@ -517,7 +517,7 @@ char *strrstr(char *aStr, char *aPattern, StringCaseSenseType aStringCaseSense, 
 	size_t aPattern_length = strlen(aPattern);
 	char aPattern_last_char = aPattern[aPattern_length - 1];
 	char aPattern_last_char_lower = (aStringCaseSense == SCS_INSENSITIVE_LOCALE)
-		? (char)CharLower((LPSTR)aPattern_last_char)
+		? (char)ltolower(aPattern_last_char)
 		: tolower(aPattern_last_char);
 
 	int occurrence = 0;
@@ -539,7 +539,7 @@ char *strrstr(char *aStr, char *aPattern, StringCaseSenseType aStringCaseSense, 
 			}
 			else if (aStringCaseSense == SCS_INSENSITIVE_LOCALE)
 			{
-				if ((char)CharLower((LPSTR)*last_char_match) == aPattern_last_char_lower)
+				if ((char)ltolower(*last_char_match) == aPattern_last_char_lower)
 					break;
 			}
 			else // Case sensitive.
@@ -576,7 +576,7 @@ char *strrstr(char *aStr, char *aPattern, StringCaseSenseType aStringCaseSense, 
 			}
 			else if (aStringCaseSense == SCS_INSENSITIVE_LOCALE)
 			{
-				if ((char)CharLower((LPSTR)*full_match) != (char)CharLower((LPSTR)*cp))
+				if (ltolower(*full_match) != ltolower(*cp))
 					break;
 			}
 			else // Case sensitive.
@@ -735,11 +735,11 @@ char *lstrcasestr(const char *phaystack, const char *pneedle)
 	haystack = (const unsigned char *) phaystack;
 	needle = (const unsigned char *) pneedle;
 
-	bl = (UINT)(size_t)CharLower((LPSTR)*needle); // Double cast avoids compiler warning without increasing code size.
-	if (bl != '\0')
+	bl = (UINT)(size_t)ltolower(*needle); // Double cast avoids compiler warning without increasing code size.
+	if (bl != 0)
 	{
 		// Scan haystack until the first character of needle is found:
-		bu = (UINT)(size_t)CharUpper((LPSTR)(size_t)bl);
+		bu = (UINT)(size_t)ltoupper(bl);
 		haystack--;				/* possible ANSI violation */
 		do
 		{
@@ -750,10 +750,10 @@ char *lstrcasestr(const char *phaystack, const char *pneedle)
 		while ((cl != bl) && (cl != bu));
 
 		// See if the rest of needle is a one-for-one match with this part of haystack:
-		cl = (UINT)(size_t)CharLower((LPSTR)*++needle);
+		cl = (UINT)(size_t)ltolower(*++needle);
 		if (cl == '\0')  // Since needle consists of only one character, it is already a match as found above.
 			goto foundneedle;
-		cu = (UINT)(size_t)CharUpper((LPSTR)(size_t)cl);
+		cu = (UINT)(size_t)ltoupper(cl);
 		++needle;
 		goto jin;
 		
@@ -786,23 +786,23 @@ jin:
 			
 			rhaystack = haystack-- + 1;
 			rneedle = needle;
-			a = (UINT)(size_t)CharLower((LPSTR)*rneedle);
+			a = (UINT)(size_t)ltolower(*rneedle);
 			
-			if ((UINT)(size_t)CharLower((LPSTR)*rhaystack) == (int) a)
+			if ((UINT)(size_t)ltolower(*rhaystack) == (int) a)
 			do
 			{
 				if (a == '\0')
 					goto foundneedle;
 				++rhaystack;
-				a = (UINT)(size_t)CharLower((LPSTR)*++needle);
-				if ((UINT)(size_t)CharLower((LPSTR)*rhaystack) != (int) a)
+				a = (UINT)(size_t)ltolower(*++needle);
+				if ((UINT)(size_t)ltolower(*rhaystack) != (int) a)
 					break;
 				if (a == '\0')
 					goto foundneedle;
 				++rhaystack;
-				a = (UINT)(size_t)CharLower((LPSTR)*++needle);
+				a = (UINT)(size_t)ltolower(*++needle);
 			}
-			while ((UINT)(size_t)CharLower((LPSTR)*rhaystack) == (int) a);
+			while ((UINT)(size_t)ltolower(*rhaystack) == (int) a);
 			
 			needle = rneedle;		/* took the register-poor approach */
 			

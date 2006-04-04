@@ -2626,7 +2626,7 @@ bool CollectInput(KBDLLHOOKSTRUCT &aEvent, const vk_type aVK, const sc_type aSC,
 					// v1.0.43.03: Using CharLower vs. tolower seems the best default behavior (even though slower)
 					// so that languages in which the higher ANSI characters are common will see "Ä" == "ä", etc.
 					for (; cphs >= hs.mString; --cpbuf, --cphs)
-						if (CharLower((LPSTR)*cpbuf) != CharLower((LPSTR)*cphs))
+						if (ltolower(*cpbuf) != ltolower(*cphs)) // v1.0.43.04: Fixed crash by properly casting to UCHAR (via macro).
 							break;
 
 				// Check if one of the loops above found a matching hotstring (relies heavily on

@@ -2087,7 +2087,7 @@ void Hotstring::DoReplace(LPARAM alParam)
 		if (case_conform_mode == CASE_CONFORM_ALL_CAPS)
 			CharUpper(start_of_replacement);
 		else if (case_conform_mode == CASE_CONFORM_FIRST_CAP)
-			*start_of_replacement = (char)CharUpper((LPTSTR)(UCHAR)*start_of_replacement);
+			*start_of_replacement = (char)ltoupper(*start_of_replacement);
 	}
 
 	if (*mReplacement && !mOmitEndChar) // The ending character (if present) needs to be sent too.
