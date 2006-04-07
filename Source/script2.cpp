@@ -4077,7 +4077,7 @@ ResultType Line::ImageSearch(int aLeft, int aTop, int aRight, int aBottom, char 
 	// Set defaults to be possibly overridden by any specified options:
 	int aVariation = 0;  // This is named aVariation vs. variation for use with the SET_COLOR_RANGE macro.
 	COLORREF trans_color = CLR_NONE; // The default must be a value that can't occur naturally in an image.
-	int icon_index = -1; // This is the value that should be passed to LoadPicture() when there is no preference about which icon to use (in a multi-icon file).
+	int icon_index = 0;
 	int width = 0, height = 0;
 	// For icons, override the default to be 16x16 because that is what is sought 99% of the time.
 	// This new default can be overridden by explicitly specifying w0 h0:
@@ -11562,22 +11562,20 @@ void BIF_IL_Add(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParam
 
 	int param3 = (aParamCount > 2) ? (int)ExprTokenToInt64(*aParam[2]) : 0; // Default to zero so that -1 later below will get passed to LoadPicture().
 
-	int icon_number, width = 0, height = 0; // Zero width/height causes image to be loaded at its actual width/height.
+	int icon_index, width = 0, height = 0; // Zero width/height causes image to be loaded at its actual width/height.
 	if (aParamCount > 3) // Presence of fourth parameter switches mode to be "load a non-icon image".
 	{
-		icon_number = -1;
+		icon_index = 0;
 		if (ExprTokenToInt64(*aParam[3])) // A value of True indicates that the image should be scaled to fit the imagelist's image size.
 			ImageList_GetIconSize(himl, &width, &height); // Determine the width/height to which it should be scaled.
 		//else retain defaults of zero for width/height, which loads the image at actual size, which in turn
 		// lets ImageList_AddMasked() divide it up into separate images based on its width.
 	}
 	else
-		icon_number = param3 - 1; // Param3 can be explicitly 1, which results in a zero to force the ExtractIcon method.
+		icon_index = param3 - 1;
 
 	int image_type;
-	HBITMAP hbitmap = LoadPicture(filespec, width, height, image_type
-		, icon_number // -1 means "unspecified", which allows the use of LoadImage vs. ExtractIcon.
-		, false); // Defaulting to "false" for "use GDIplus" provides more consistent appearance across multiple OSes.
+	HBITMAP hbitmap = LoadPicture(filespec, width, height, image_type, icon_index, false); // Defaulting to "false" for "use GDIplus" provides more consistent appearance across multiple OSes.
 	if (!hbitmap)
 		return;
 

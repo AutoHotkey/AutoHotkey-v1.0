@@ -1884,13 +1884,14 @@ Hotkey *Hotkey::FindHotkeyByTrueNature(char *aName)
 
 	for (int i = 0; i < sHotkeyCount; ++i)
 	{
-		if (!lstrcmpi(shk[i]->mName, aName)) // Case insensitive so that something like ^A is a match for ^a
+		// v1.0.43.05: Use stricmp not lstrcmpi so that the higher ANSI letters 
+		if (!stricmp(shk[i]->mName, aName)) // Case insensitive so that something like ^A is a match for ^a
 			return shk[i];
 		// Otherwise, check more thoroughly so that things like ^!c and !^c are considered a match:
 		suffix_existing = TextToModifiers(shk[i]->mName, NULL, &modifiers_existing, &modifiersLR_existing, &properties_of_existing);
 		if (   modifiers_existing == modifiers_candidate && modifiersLR_existing == modifiersLR_candidate
 			&& properties_of_existing == properties_of_candidate  // Treat wildcard (*) and pass-through (~) as distict features.  Wildcard definitely is, but tilde to allow the Hotkey command to dynamically enable/disable ~^c vs. ^c.
-			&& !lstrcmpi(suffix_existing, suffix_candidate)   ) // Compare suffixes, including any "up" to mean an up-hotkey (might not be precise if extra spaces are present before "Up").
+			&& !stricmp(suffix_existing, suffix_candidate)   ) // Compare suffixes, including any "up" to mean an up-hotkey (might not be precise if extra spaces are present before "Up").
 			return shk[i];
 	}
 	return NULL;  // No match found.

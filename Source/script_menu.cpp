@@ -101,24 +101,28 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 			return OK;
 		}
 
-		int icon_number = *aParam4 ? ATOI(aParam4) : 1;  // Need int to support signed values.
-		if (icon_number < 2)
-			icon_number = 0;
-		// Above: v1.0.43.03 uses 0 vs. 1 to allow LoadPicture() to use LoadImage() vs. ExtractIcon(),
-		// which prevents the distortion caused by the fact that ExtractIcon unconditionally scales every
-		// icon it loads to 32x32.  I've visually confirmed that the distortion occurs at least when a
-		// 16x16 icon is loaded by ExtractIcon() then put into the tray.  It might not be the scaling itself
-		// that distorts the icon: the pixels are all in the right places, it's just that some are
-		// the wrong color/shade.  This implies that some kind of unwanted interpolation or color tweaking
-		// is being done by ExtractIcon (and probably LoadIcon), but not by LoadImage.
-
 		// v1.0.43.03: Load via LoadPicture() vs. ExtractIcon() because ExtractIcon harms the quality
 		// of 16x16 icons inside .ico files by first scaling them to 32x32 (which then has to be scaled
-		// back to 16x16 for the tray and for the SysMenu icon).  Load the icon at actual size so that
-		// when/if this icon is used for a GUI window, it's appearance in the alt-tab menu won't be
-		// unexpectedly poor due to having been scaled from its native size down to 16x16.
+		// back to 16x16 for the tray and for the SysMenu icon). I've visually confirmed that the
+		// distortion occurs at least when a 16x16 icon is loaded by ExtractIcon() then put into the
+		// tray.  It might not be the scaling itself that distorts the icon: the pixels are all in the
+		// right places, it's just that some are the wrong color/shade. This implies that some kind of
+		// unwanted interpolation or color tweaking is being done by ExtractIcon (and probably LoadIcon),
+		// but not by LoadImage.
+		// Also, load the icon at actual size so that when/if this icon is used for a GUI window, its
+		// appearance in the alt-tab menu won't be unexpectedly poor due to having been scaled from its
+		// native size down to 16x16.
+		int icon_index;
+		if (*aParam4)
+		{
+			icon_index = ATOI(aParam4) - 1;
+			if (icon_index < 0) // Must validate for use in two places below.
+				icon_index = 0;
+		}
+		else
+			icon_index = 0;
 		int image_type;
-		HICON new_icon = (HICON)LoadPicture(aParam3, 0, 0, image_type, icon_number - 1, false);
+		HICON new_icon = (HICON)LoadPicture(aParam3, 0, 0, image_type, icon_index, false);
 		if (!new_icon || image_type == IMAGE_BITMAP) // If it's not a bitmap, it's an icon or cursor (both of which should work).
 		{
 			if (new_icon) // A bitmap was loaded, which is unsuitable in this context.
@@ -128,7 +132,7 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 		GuiType::DestroyIconIfUnused(mCustomIcon); // This destroys it if non-NULL and it's not used by an GUI windows.
 
 		mCustomIcon = new_icon;
-		mCustomIconNumber = icon_number < 1 ? 1 : icon_number; // Adjust in case it was set to zero above.
+		mCustomIconNumber = icon_index + 1;
 		// Allocate the full MAX_PATH in case the contents grow longer later.
 		// SimpleHeap improves avg. case mem load:
 		if (!mCustomIconFile)

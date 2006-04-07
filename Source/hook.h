@@ -28,7 +28,10 @@ GNU General Public License for more details.
 // for possible future use by the program, so don't use a message above 0x1000 without good reason.
 enum UserMessages {AHK_HOOK_HOTKEY = WM_USER, AHK_HOTSTRING, AHK_USER_MENU, AHK_DIALOG, AHK_NOTIFYICON
 	, AHK_RETURN_PID, AHK_EXIT_BY_RELOAD, AHK_EXIT_BY_SINGLEINSTANCE
-	, AHK_GUI_ACTION = 0x7B00 // See below comment.
+	, AHK_GUI_ACTION = WM_USER+20 // Avoid WM_USER+100/101 and vicinity.  See below comment.
+	// v1.0.43.05: On second thought, it seems better to stay close to WM_USER because the OnMessage page
+	// documents, "it is best to choose a number greater than 4096 (0x1000) to the extent you have a choice.
+	// This reduces the chance of interfering with messages used internally by current and future versions..."
 	// v1.0.43.03: Changed above msg number because Micha reports that previous number (WM_USER+100) conflicts
 	// with msgs sent by HTML control (AHK_CLIPBOARD_CHANGE) and possibly others (I think WM_USER+100 may be the
 	// start of a range used by other common controls too).  So trying a higher number that's (hopefully) very

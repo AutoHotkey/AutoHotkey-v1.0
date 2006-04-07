@@ -1477,7 +1477,7 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, i
 // automatically).  The image is scaled to the specified width and height.  If zero is specified
 // for either, the image's actual size will be used for that dimension.  If -1 is specified for one,
 // that dimension will be kept proportional to the other dimension's size so that the original aspect
-// ratio is retained.  Caller should specify -1 for aIconIndex unless an icon other than 1 is desired.
+// ratio is retained.
 // .ico/.cur/.ani files are normally loaded as HICON (unless aUseGDIPlusIfAvailable is true of something
 // else unusual happened such as file contents not matching file's extension).  This is done to preserve
 // any properties that HICONs have but HBITMAPs lack, namely the ability to be animated and perhaps other things.
@@ -1488,20 +1488,28 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, i
 
 	if (!*aFilespec) // Allow blank filename to yield NULL bitmap (and currently, some callers do call it this way).
 		return NULL;
+	if (aIconIndex < 0) // Allowed to be called this way by GUI and others (to simplify code there).
+		aIconIndex = 0; // Use the default, which is the first icon.
 
 	char *file_ext = strrchr(aFilespec, '.');
 	if (file_ext)
 		++file_ext;
 
 	// Must use ExtractIcon() if either of the following is true:
-	// 1) Caller gave an explicit icon index, i.e. it wants us to use ExtractIcon() even for the first icon.
-	// 2) The target file is an EXE or DLL (LoadImage() is documented not to work on those file types).
-	bool ExtractIcon_was_used = aIconIndex > -1 || (file_ext && (!stricmp(file_ext, "exe") || !stricmp(file_ext, "dll")));
+	// 1) Caller gave an icon index of the second or higher icon in the file.  Update for v1.0.43.05: There
+	//    doesn't seem to be any reason to allow a caller to explicitly specify ExtractIcon as the method of
+	//    loading the *first* icon from a .ico file since LoadImage is likely always superior.  This is
+	//    because unlike ExtractIcon/Ex, LoadImage: 1) Doesn't distort icons, especially 16x16 icons; 2) is
+	//    capable of loading icons other than the first by means of width and height parameters.
+	// 2) The target file is an EXE, DLL, or ICL file (LoadImage() is documented not to work on those file types).
+	//    ICL files (v1.0.43.05): Apparently ICL files are an unofficial file format. Someone on the newsgroups
+	//    said that an ICL is an "ICon Library... a renamed 16-bit Windows .DLL (an NE format executable) which
+	//    typically contains nothing but a resource section. The ICL extension seems to be used by convention."
+	bool ExtractIcon_was_used = aIconIndex > 0 || (file_ext && (!stricmp(file_ext, "exe")
+		|| !stricmp(file_ext, "dll") || !stricmp(file_ext, "icl"))); // ICL: See notes above.
 	if (ExtractIcon_was_used)
 	{
 		aImageType = IMAGE_ICON;
-		if (aIconIndex < 0)
-			aIconIndex = 0;  // Use the default, which is the first icon.
 		hbitmap = (HBITMAP)ExtractIcon(g_hInstance, aFilespec, aIconIndex); // Return value of 1 means "incorrect file type".
 		// Above: Although it isn't well documented at MSDN, apparently both ExtractIcon() and LoadIcon()
 		// scale the icon to the system's large-icon size (usually 32x32) regardless of the actual size of
@@ -1535,7 +1543,7 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, i
 	bool keep_aspect_ratio = (aWidth == -1 || aHeight == -1);
 
 	HINSTANCE hinstGDI = NULL;
-	if (aUseGDIPlusIfAvailable && !(hinstGDI = LoadLibrary("gdiplus")))
+	if (aUseGDIPlusIfAvailable && !(hinstGDI = LoadLibrary("gdiplus"))) // Relies on short-circuit boolean order for performance.
 		aUseGDIPlusIfAvailable = false; // Override any original "true" value as a signal for the section below.
 
 	if (!hbitmap && aImageType > -1 && !aUseGDIPlusIfAvailable)
@@ -1551,7 +1559,10 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, i
 			desired_width = aWidth;
 			desired_height = aHeight;
 		}
-		// LR_CREATEDIBSECTION applies only when aImageType == IMAGE_BITMAP, but seems appropriate in that case:
+		// For LoadImage() below:
+		// LR_CREATEDIBSECTION applies only when aImageType == IMAGE_BITMAP, but seems appropriate in that case.
+		// Also, if width and height are non-zero, that will determine which icon of a multi-icon .ico file gets
+		// loaded (though I don't know the exact rules of precedence).
 		if (hbitmap = (HBITMAP)LoadImage(NULL, aFilespec, aImageType, desired_width, desired_height
 			, LR_LOADFROMFILE | LR_CREATEDIBSECTION))
 		{

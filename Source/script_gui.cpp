@@ -353,7 +353,7 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 			GetClientRect(control.hwnd, &rect);
 			int width = rect.right - rect.left;
 			int height = rect.bottom - rect.top;
-			int icon_index = -1;  // Tell it to use the default, which avoids the ExtractIcon() method.
+			int icon_index = 0;
 
 			// The below must be done only after the above, because setting the control's picture handle
 			// to NULL sometimes or always shrinks the control down to zero dimensions:
@@ -2265,10 +2265,6 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			// quality than using MoveWindow() (followed by redrawing the parent window) on the static
 			// control that contains the image.
 			int image_type;
-			// In the below, opt.icon_number is set to zero if there was no preference specified, which is
-			// important because it tells LoadPicture() that it can safely use LoadImage() vs. ExtractIcon()
-			// on a .ico, .cur, or .ani file, which in turn allows the icon/cursor to be animated when
-			// otherwise it wouldn't be:
 			if (   !(control.union_hbitmap = LoadPicture(aText, opt.width, opt.height, image_type, opt.icon_number - 1
 				, control.attrib & GUI_CONTROL_ATTRIB_ALTSUBMIT))   )
 				break;  // By design, no error is reported.  The picture is simply not displayed, nor is its
