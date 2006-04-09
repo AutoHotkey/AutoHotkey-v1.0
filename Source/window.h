@@ -157,7 +157,8 @@ struct control_list_type
 		cl.total_classes = 0;\
 		cl.total_length = 0;\
 		cl.buf_free_spot = cl.class_buf; // Points to the next available/writable place in the buf.
-	bool is_first_iteration;  // Must be initialized to true by caller.
+	bool fetch_hwnds;         // True if fetching HWND of each control rather than its ClassNN.
+	bool is_first_iteration;  // Must be initialized to true by Enum's caller.
 	int total_classes;        // Must be initialized to 0.
 	VarSizeType total_length; // Must be initialized to 0.
 	VarSizeType capacity;     // Must be initialized to size of the below buffer.

@@ -203,6 +203,7 @@ public:
 	#define VAR_NEVER_FREE                 3
 	#define VAR_FREE_IF_LARGE              4
 	void Free(int aWhenToFree = VAR_ALWAYS_FREE, bool aExcludeAliases = false);
+	void SetLengthFromContents();
 
 	static ResultType ValidateName(char *aName, bool aIsRuntime = false, bool aDisplayError = true);
 

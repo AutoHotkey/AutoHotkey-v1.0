@@ -413,7 +413,9 @@ VarSizeType Var::Get(char *aBuf)
 	case VAR_GUI:
 		if (!aBuf) return g_script.GetGui(mType); else aBuf += g_script.GetGui(mType, aBuf); break;
 
-	case VAR_GUICONTROL: if (!aBuf) return g_script.GetGuiControl(); else aBuf += g_script.GetGuiControl(aBuf); break;
+	// For VAR_GUICONTROL, other logic ensures that g.GuiControlIndex is out-of-bounds whenever g.GuiWindowIndex is.
+	// That is why g.GuiWindowIndex is not checked to make sure it's less than MAX_GUI_WINDOWS.
+	case VAR_GUICONTROL: if (!aBuf) return g_script.GetGuiControl(g.GuiWindowIndex, g.GuiControlIndex); else aBuf += g_script.GetGuiControl(g.GuiWindowIndex, g.GuiControlIndex, aBuf); break;
 	case VAR_GUICONTROLEVENT: if (!aBuf) return g_script.GetGuiControlEvent(); else aBuf += g_script.GetGuiControlEvent(aBuf); break;
 
 	case VAR_EVENTINFO: // It's called "EventInfo" vs. "GuiEventInfo" because it applies to non-Gui events such as OnClipboardChange.
@@ -705,6 +707,28 @@ void Var::Free(int aWhenToFree, bool aExcludeAliases)
 		// of dynamic mem, even those of size 1 or 2, incurs about 40 bytes of overhead.
 		break;
 	} // switch()
+}
+
+
+
+void Var::SetLengthFromContents()
+// Function added in v1.0.43.06.  It updates the mLength member to reflect the actual current length of mContents.
+{
+	if (mType == VAR_ALIAS) // For simplicity and reduced code size, just make a recursive call to self.
+	{
+		mAliasFor->SetLengthFromContents();
+		return;
+	}
+	VarSizeType capacity = Capacity();
+	// Below uses Contents() and Length() vs. direct members for better maintainability, even though
+	// it might not be strictly necessary.
+	char *contents = Contents();
+	if (capacity > 0)
+	{
+ 		contents[capacity - 1] = '\0';  // Caller wants us to ensure it's terminated, to avoid crashing strlen() below.
+		Length() = (VarSizeType)strlen(contents);
+	}
+	//else it has no capacity, so do nothing (it could also be a reserved/built-in variable).
 }
 
 

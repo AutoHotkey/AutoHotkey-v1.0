@@ -2059,7 +2059,7 @@ ResultType Line::ControlGetFocus(char *aTitle, char *aText, char *aExcludeTitle,
 
 BOOL CALLBACK EnumChildFindSeqNum(HWND aWnd, LPARAM lParam)
 {
-	class_and_hwnd_type &cah = *((class_and_hwnd_type *)lParam);  // For performance and convenience.
+	class_and_hwnd_type &cah = *(class_and_hwnd_type *)lParam;  // For performance and convenience.
 	char class_name[WINDOW_CLASS_SIZE];
 	if (!GetClassName(aWnd, class_name, sizeof(class_name)))
 		return TRUE;  // Continue the enumeration.
@@ -2472,7 +2472,7 @@ ResultType Line::ScriptPostSendMessage(bool aUseSend)
 	if (   !(target_window = DetermineTargetWindow(sArgDeref[4], sArgDeref[5], sArgDeref[6], sArgDeref[7]))
 		|| !(control_window = *sArgDeref[3] ? ControlExist(target_window, sArgDeref[3]) : target_window)   ) // Relies on short-circuit boolean order.
 		return g_ErrorLevel->Assign(aUseSend ? "FAIL" : ERRORLEVEL_ERROR); // Need a special value to distinguish this from numeric reply-values.
-	UINT msg = ATOU(sArgDeref[0]);
+
 	// UPDATE: Note that ATOU(), in both past and current versions, supports negative numbers too.
 	// For example, ATOU("-1") has always produced 0xFFFFFFFF.
 	// Use ATOU() to support unsigned (i.e. UINT, LPARAM, and WPARAM are all 32-bit unsigned values).
@@ -2480,20 +2480,40 @@ ResultType Line::ScriptPostSendMessage(bool aUseSend)
 	// used in functions such as this.  v1.0.40.05: Support the passing of a literal (quoted) string
 	// by checking whether the original/raw arg's first character is '"'.  The avoids the need to
 	// put the string into a variable and then pass something like &MyVar.
+	UINT msg = ATOU(sArgDeref[0]);
 	WPARAM wparam = (mArgc > 1 && mArg[1].text[0] == '"') ? (WPARAM)sArgDeref[1] : ATOU(sArgDeref[1]);
 	LPARAM lparam = (mArgc > 2 && mArg[2].text[0] == '"') ? (LPARAM)sArgDeref[2] : ATOU(sArgDeref[2]);
+
 	if (aUseSend)
 	{
 		DWORD dwResult;
 		// Timeout increased from 2000 to 5000 in v1.0.27:
 		if (!SendMessageTimeout(control_window, msg, wparam, lparam, SMTO_ABORTIFHUNG, 5000, &dwResult))
 			return g_ErrorLevel->Assign("FAIL"); // Need a special value to distinguish this from numeric reply-values.
-		return g_ErrorLevel->Assign(dwResult); // UINT seems best most of the time?
+		g_ErrorLevel->Assign(dwResult); // UINT seems best most of the time?
 	}
 	else // Post vs. Send
-		return g_ErrorLevel->Assign(PostMessage(control_window, msg, wparam, lparam)
-			? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
+	{
+		if (!PostMessage(control_window, msg, wparam, lparam))
+			return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+		g_ErrorLevel->Assign(ERRORLEVEL_NONE);
+	}
+
+	// v1.0.43.06: If either wParam or lParam contained the address of a variable, update the mLength
+	// member in case the receiver of the message wrote something to the buffer.  This is similar to the
+	// way "Str" parameters work in DllCall.
+	for (int i = 1; i < 3; ++i) // Two iterations: wParam and lParam.
+	{
+		if (mArgc > i) // The arg exists.
+		{
+			ArgStruct &this_arg = mArg[i];
+			if (this_arg.text[0] == '&' && this_arg.deref && !this_arg.deref->is_function) // Must start with '&', so things like 5+&MyVar aren't supported.
+				this_arg.deref->var->SetLengthFromContents();
+		}
+	}
+
 	// By design (since this is a power user feature), no ControlDelay is done here.
+	return OK;
 }
 
 
@@ -3167,9 +3187,11 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 			return output_var->Assign();
 
 	case WINGET_CMD_CONTROLLIST:
+	case WINGET_CMD_CONTROLLISTHWND:
 		if (!target_window_determined)
 			target_window = WinExist(g, aTitle, aText, aExcludeTitle, aExcludeText);
-		return target_window ? WinGetControlList(output_var, target_window) : output_var->Assign();
+		return target_window ? WinGetControlList(output_var, target_window, cmd == WINGET_CMD_CONTROLLISTHWND)
+			: output_var->Assign();
 
 	case WINGET_CMD_STYLE:
 	case WINGET_CMD_EXSTYLE:
@@ -3218,7 +3240,7 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 
 
 
-ResultType Line::WinGetControlList(Var *aOutputVar, HWND aTargetWindow)
+ResultType Line::WinGetControlList(Var *aOutputVar, HWND aTargetWindow, bool aFetchHWNDs)
 // Caller must ensure that aOutputVar and aTargetWindow are non-NULL and valid.
 // Every control is fetched rather than just a list of distinct class names (possibly with a
 // second script array containing the quantity of each class) because it's conceivable that the
@@ -3233,6 +3255,7 @@ ResultType Line::WinGetControlList(Var *aOutputVar, HWND aTargetWindow)
 {
 	control_list_type cl; // A big struct containing room to store class names and counts for each.
 	CL_INIT_CONTROL_LIST(cl)
+	cl.fetch_hwnds = aFetchHWNDs;
 	cl.target_buf = NULL;  // First pass: Signal it not not to write to the buf, but instead only calculate the length.
 	EnumChildWindows(aTargetWindow, EnumChildGetControlList, (LPARAM)&cl);
 	if (!cl.total_length) // No controls in the window.
@@ -3263,44 +3286,56 @@ ResultType Line::WinGetControlList(Var *aOutputVar, HWND aTargetWindow)
 
 BOOL CALLBACK EnumChildGetControlList(HWND aWnd, LPARAM lParam)
 {
-	// Note: IsWindowVisible(aWnd) is not checked because although Window Spy does not reveal
-	// hidden controls if the mouse happens to be hovering over one, it does include them in its
-	// sequence numbering (which is a relieve, since results are probably much more consistent
-	// then, esp. for apps that hide and unhide controls in response to actions on other controls).
-	char class_name[WINDOW_CLASS_SIZE + 5];  // +5 to allow room for the sequence number to be appended later below.
-	int class_name_length = GetClassName(aWnd, class_name, WINDOW_CLASS_SIZE); // Don't include the +5 in this.
-	if (!class_name_length)
-		return TRUE; // Probably very rare. Continue enumeration since Window Spy doesn't even check for failure.
-	// It has been verified that GetClassName()'s returned length does not count the terminator.
+	control_list_type &cl = *(control_list_type *)lParam;  // For performance and convenience.
+	char line[WINDOW_CLASS_SIZE + 5];  // +5 to allow room for the sequence number to be appended later below.
+	int line_length;
 
-	control_list_type &cl = *((control_list_type *)lParam);  // For performance and convenience.
-
-	// Check if this class already exists in the class array:
-	int class_index;
-	for (class_index = 0; class_index < cl.total_classes; ++class_index)
-		if (!stricmp(cl.class_name[class_index], class_name)) // lstrcmpi() is not used: 1) avoids breaking exisitng scripts; 2) provides consistent behavior across multiple locales.
-			break;
-	if (class_index < cl.total_classes) // Match found.
+	// cl.fetch_hwnds==true is a new mode in v1.0.43.06+ to help performance of AHK Window Info and other
+	// scripts that want to operate directly on the HWNDs.
+	if (cl.fetch_hwnds)
 	{
-		++cl.class_count[class_index]; // Increment the number of controls of this class that have been found so far.
-		if (cl.class_count[class_index] > 99999) // Sanity check; prevents buffer overflow or number truncation in class_name.
-			return TRUE;  // Continue the enumeration.
+		line[0] = '0';
+		line[1] = 'x';
+		line_length = 2 + (int)strlen(_ui64toa((unsigned __int64)aWnd, line + 2, 16));
 	}
-	else // No match found, so create new entry if there's room.
+	else // The mode that fetches ClassNN vs. HWND.
 	{
-		if (cl.total_classes == CL_MAX_CLASSES // No pointers left.
-			|| CL_CLASS_BUF_SIZE - (cl.buf_free_spot - cl.class_buf) - 1 < class_name_length) // Insuff. room in buf.
-			return TRUE; // Very rare. Continue the enumeration so that class names already found can be collected.
-		// Otherwise:
-		cl.class_name[class_index] = cl.buf_free_spot;  // Set this pointer to its place in the buffer.
-		strcpy(cl.class_name[class_index], class_name); // Copy the string into this place.
-		cl.buf_free_spot += class_name_length + 1;  // +1 because every string in the buf needs its own terminator.
-		cl.class_count[class_index] = 1;  // Indicate that the quantity of this class so far is 1.
-		++cl.total_classes;
+		// Note: IsWindowVisible(aWnd) is not checked because although Window Spy does not reveal
+		// hidden controls if the mouse happens to be hovering over one, it does include them in its
+		// sequence numbering (which is a relieve, since results are probably much more consistent
+		// then, esp. for apps that hide and unhide controls in response to actions on other controls).
+		if (  !(line_length = GetClassName(aWnd, line, WINDOW_CLASS_SIZE))   ) // Don't include the +5 extra size since that is reserved for seq. number.
+			return TRUE; // Probably very rare. Continue enumeration since Window Spy doesn't even check for failure.
+		// It has been verified that GetClassName()'s returned length does not count the terminator.
+
+		// Check if this class already exists in the class array:
+		int class_index;
+		for (class_index = 0; class_index < cl.total_classes; ++class_index)
+			if (!stricmp(cl.class_name[class_index], line)) // lstrcmpi() is not used: 1) avoids breaking exisitng scripts; 2) provides consistent behavior across multiple locales.
+				break;
+		if (class_index < cl.total_classes) // Match found.
+		{
+			++cl.class_count[class_index]; // Increment the number of controls of this class that have been found so far.
+			if (cl.class_count[class_index] > 99999) // Sanity check; prevents buffer overflow or number truncation in "line".
+				return TRUE;  // Continue the enumeration.
+		}
+		else // No match found, so create new entry if there's room.
+		{
+			if (cl.total_classes == CL_MAX_CLASSES // No pointers left.
+				|| CL_CLASS_BUF_SIZE - (cl.buf_free_spot - cl.class_buf) - 1 < line_length) // Insuff. room in buf.
+				return TRUE; // Very rare. Continue the enumeration so that class names already found can be collected.
+			// Otherwise:
+			cl.class_name[class_index] = cl.buf_free_spot;  // Set this pointer to its place in the buffer.
+			strcpy(cl.class_name[class_index], line); // Copy the string into this place.
+			cl.buf_free_spot += line_length + 1;  // +1 because every string in the buf needs its own terminator.
+			cl.class_count[class_index] = 1;  // Indicate that the quantity of this class so far is 1.
+			++cl.total_classes;
+		}
+
+		_itoa(cl.class_count[class_index], line + line_length, 10); // Append the seq. number to line.
+		line_length = (int)strlen(line);  // Update the length.
 	}
 
-	_itoa(cl.class_count[class_index], class_name + class_name_length, 10); // Append the seq. number to class_name.
-	class_name_length = (int)strlen(class_name);  // Update the length.
 	int extra_length;
 	if (cl.is_first_iteration)
 	{
@@ -3309,9 +3344,10 @@ BOOL CALLBACK EnumChildGetControlList(HWND aWnd, LPARAM lParam)
 	}
 	else
 		extra_length = 1;
+
 	if (cl.target_buf)
 	{
-		if ((int)(cl.capacity - cl.total_length - extra_length - 1) < class_name_length)
+		if ((int)(cl.capacity - cl.total_length - extra_length - 1) < line_length)
 			// No room in target_buf (i.e. don't write a partial item to the buffer).
 			return TRUE;  // Rare: it should only happen if size in pass #2 differed from that calc'd in pass #1.
 		if (extra_length)
@@ -3319,11 +3355,11 @@ BOOL CALLBACK EnumChildGetControlList(HWND aWnd, LPARAM lParam)
 			cl.target_buf[cl.total_length] = '\n'; // Replace previous item's terminator with newline.
 			cl.total_length += extra_length;
 		}
-		strcpy(cl.target_buf + cl.total_length, class_name); // Write class name + seq. number.
-		cl.total_length += class_name_length;
+		strcpy(cl.target_buf + cl.total_length, line); // Write hwnd or class name+seq. number.
+		cl.total_length += line_length;
 	}
 	else // Caller only wanted the total length calculated.
-		cl.total_length += class_name_length + extra_length;
+		cl.total_length += line_length + extra_length;
 
 	return TRUE; // Continue enumeration through all the windows.
 }
@@ -3396,7 +3432,7 @@ BOOL CALLBACK EnumChildGetText(HWND aWnd, LPARAM lParam)
 {
 	if (!g.DetectHiddenText && !IsWindowVisible(aWnd))
 		return TRUE;  // This child/control is hidden and user doesn't want it considered, so skip it.
-	length_and_buf_type &lab = *((length_and_buf_type *)lParam);  // For performance and convenience.
+	length_and_buf_type &lab = *(length_and_buf_type *)lParam;  // For performance and convenience.
 	int length;
 	if (lab.buf)
 		length = GetWindowTextTimeout(aWnd, lab.buf + lab.total_length
@@ -3626,7 +3662,7 @@ ResultType Line::SysGet(char *aCmd, char *aValue)
 
 BOOL CALLBACK EnumMonitorProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM lParam)
 {
-	MonitorInfoPackage &mip = *((MonitorInfoPackage *)lParam);  // For performance and convenience.
+	MonitorInfoPackage &mip = *(MonitorInfoPackage *)lParam;  // For performance and convenience.
 	if (mip.monitor_number_to_find == COUNT_ALL_MONITORS)
 	{
 		++mip.count;
@@ -5569,7 +5605,7 @@ VOID CALLBACK DerefTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
 
 
 
-ResultType Line::MouseGetPos(bool aSimpleMode)
+ResultType Line::MouseGetPos(DWORD aOptions)
 // Returns OK or FAIL.
 {
 	// Caller should already have ensured that at least one of these will be non-NULL.
@@ -5630,7 +5666,7 @@ ResultType Line::MouseGetPos(bool aSimpleMode)
 
 	// Doing it this way overcomes the limitations of WindowFromPoint() and ChildWindowFromPoint()
 	// and also better matches the control that Window Spy would think is under the cursor:
-	if (!aSimpleMode)
+	if (!(aOptions & 0x01)) // Not in simple mode, so find the control the normal/complex way.
 	{
 		point_and_hwnd_type pah = {0};
 		pah.pt = point;
@@ -5645,6 +5681,9 @@ ResultType Line::MouseGetPos(bool aSimpleMode)
 
 	if (parent_under_cursor == child_under_cursor) // if there's no control per se, make it blank.
 		return output_var_child->Assign();
+
+	if (aOptions & 0x02) // v1.0.43.06: Bitwise flag that means "return control's HWND vs. ClassNN".
+		return output_var_child->AssignHWND(child_under_cursor);
 
 	class_and_hwnd_type cah;
 	cah.hwnd = child_under_cursor;  // This is the specific control we need to find the sequence number of.
@@ -5668,7 +5707,7 @@ BOOL CALLBACK EnumChildFindPoint(HWND aWnd, LPARAM lParam)
 // This is called by more than one caller.  It finds the most appropriate child window that contains
 // the specified point (the point should be in screen coordinates).
 {
-	point_and_hwnd_type &pah = *((point_and_hwnd_type *)lParam);  // For performance and convenience.
+	point_and_hwnd_type &pah = *(point_and_hwnd_type *)lParam;  // For performance and convenience.
 	if (!IsWindowVisible(aWnd)) // Omit hidden controls, like Window Spy does.
 		return TRUE;
 	RECT rect;

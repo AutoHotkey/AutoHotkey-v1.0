@@ -1884,7 +1884,9 @@ Hotkey *Hotkey::FindHotkeyByTrueNature(char *aName)
 
 	for (int i = 0; i < sHotkeyCount; ++i)
 	{
-		// v1.0.43.05: Use stricmp not lstrcmpi so that the higher ANSI letters 
+		// v1.0.43.05: Use stricmp not lstrcmpi so that the higher ANSI letters because an uppercase
+		// high ANSI letter isn't necessarily produced by holding down the shift key and pressing the
+		// lowercase letter.  In addition, it preserves backward compatibility and may improve flexibility.
 		if (!stricmp(shk[i]->mName, aName)) // Case insensitive so that something like ^A is a match for ^a
 			return shk[i];
 		// Otherwise, check more thoroughly so that things like ^!c and !^c are considered a match:

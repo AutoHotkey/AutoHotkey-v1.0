@@ -409,7 +409,7 @@ enum JoyControls {JOYCTRL_INVALID, JOYCTRL_XPOS, JOYCTRL_YPOS, JOYCTRL_ZPOS
 #define IS_JOYSTICK_BUTTON(joy) (joy >= JOYCTRL_1 && joy <= JOYCTRL_BUTTON_MAX)
 
 enum WinGetCmds {WINGET_CMD_INVALID, WINGET_CMD_ID, WINGET_CMD_IDLAST, WINGET_CMD_PID, WINGET_CMD_PROCESSNAME
-	, WINGET_CMD_COUNT, WINGET_CMD_LIST, WINGET_CMD_MINMAX, WINGET_CMD_CONTROLLIST
+	, WINGET_CMD_COUNT, WINGET_CMD_LIST, WINGET_CMD_MINMAX, WINGET_CMD_CONTROLLIST, WINGET_CMD_CONTROLLISTHWND
 	, WINGET_CMD_STYLE, WINGET_CMD_EXSTYLE, WINGET_CMD_TRANSPARENT, WINGET_CMD_TRANSCOLOR
 };
 
@@ -447,7 +447,7 @@ enum GuiControlCmds {GUICONTROL_CMD_INVALID, GUICONTROL_CMD_OPTIONS, GUICONTROL_
 };
 
 enum GuiControlGetCmds {GUICONTROLGET_CMD_INVALID, GUICONTROLGET_CMD_CONTENTS, GUICONTROLGET_CMD_POS
-	, GUICONTROLGET_CMD_FOCUS, GUICONTROLGET_CMD_ENABLED, GUICONTROLGET_CMD_VISIBLE
+	, GUICONTROLGET_CMD_FOCUS, GUICONTROLGET_CMD_FOCUSV, GUICONTROLGET_CMD_ENABLED, GUICONTROLGET_CMD_VISIBLE
 };
 
 // Not done as an enum so that it can be a UCHAR type, which saves memory in the arrays of controls:
@@ -490,7 +490,7 @@ enum ControlGetCmds {CONTROLGET_CMD_INVALID, CONTROLGET_CMD_CHECKED, CONTROLGET_
 	, CONTROLGET_CMD_VISIBLE, CONTROLGET_CMD_TAB, CONTROLGET_CMD_FINDSTRING
 	, CONTROLGET_CMD_CHOICE, CONTROLGET_CMD_LIST, CONTROLGET_CMD_LINECOUNT, CONTROLGET_CMD_CURRENTLINE
 	, CONTROLGET_CMD_CURRENTCOL, CONTROLGET_CMD_LINE, CONTROLGET_CMD_SELECTED
-	, CONTROLGET_CMD_STYLE, CONTROLGET_CMD_EXSTYLE};
+	, CONTROLGET_CMD_STYLE, CONTROLGET_CMD_EXSTYLE, CONTROLGET_CMD_HWND};
 
 enum DriveCmds {DRIVE_CMD_INVALID, DRIVE_CMD_EJECT, DRIVE_CMD_LOCK, DRIVE_CMD_UNLOCK, DRIVE_CMD_LABEL};
 
@@ -547,7 +547,7 @@ private:
 		, __int64 &aIndex);
 	ResultType Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aCurrentRegItem, LoopReadFileStruct *aCurrentReadFile);
 
-	ResultType MouseGetPos(bool aSimpleMode);
+	ResultType MouseGetPos(DWORD aOptions);
 	ResultType FormatTime(char *aYYYYMMDD, char *aFormat);
 	ResultType PerformAssign();
 	ResultType StringSplit(char *aArrayName, char *aInputString, char *aDelimiterList, char *aOmitList);
@@ -659,7 +659,7 @@ private:
 	ResultType WinGetTitle(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType WinGetClass(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
-	ResultType WinGetControlList(Var *aOutputVar, HWND aTargetWindow);
+	ResultType WinGetControlList(Var *aOutputVar, HWND aTargetWindow, bool aFetchHWNDs);
 	ResultType WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType WinGetPos(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType SysGet(char *aCmd, char *aValue);
@@ -1310,6 +1310,7 @@ public:
 		if (!*aBuf) return GUICONTROLGET_CMD_CONTENTS; // The implicit command when nothing was specified.
 		if (!stricmp(aBuf, "Pos")) return GUICONTROLGET_CMD_POS;
 		if (!stricmp(aBuf, "Focus")) return GUICONTROLGET_CMD_FOCUS;
+		if (!stricmp(aBuf, "FocusV")) return GUICONTROLGET_CMD_FOCUSV; // Returns variable vs. ClassNN.
 		if (!stricmp(aBuf, "Enabled")) return GUICONTROLGET_CMD_ENABLED;
 		if (!stricmp(aBuf, "Visible")) return GUICONTROLGET_CMD_VISIBLE;
 		return GUICONTROLGET_CMD_INVALID;
@@ -1400,6 +1401,7 @@ public:
 		if (!stricmp(aBuf, "Selected")) return CONTROLGET_CMD_SELECTED;
 		if (!stricmp(aBuf, "Style")) return CONTROLGET_CMD_STYLE;
 		if (!stricmp(aBuf, "ExStyle")) return CONTROLGET_CMD_EXSTYLE;
+		if (!stricmp(aBuf, "Hwnd")) return CONTROLGET_CMD_HWND;
 		return CONTROLGET_CMD_INVALID;
 	}
 
@@ -1456,11 +1458,20 @@ public:
 		if (!stricmp(aBuf, "Count")) return WINGET_CMD_COUNT;
 		if (!stricmp(aBuf, "List")) return WINGET_CMD_LIST;
 		if (!stricmp(aBuf, "MinMax")) return WINGET_CMD_MINMAX;
-		if (!stricmp(aBuf, "ControlList")) return WINGET_CMD_CONTROLLIST;
 		if (!stricmp(aBuf, "Style")) return WINGET_CMD_STYLE;
 		if (!stricmp(aBuf, "ExStyle")) return WINGET_CMD_EXSTYLE;
 		if (!stricmp(aBuf, "Transparent")) return WINGET_CMD_TRANSPARENT;
 		if (!stricmp(aBuf, "TransColor")) return WINGET_CMD_TRANSCOLOR;
+		if (!strnicmp(aBuf, "ControlList", 11))
+		{
+			aBuf += 11;
+			if (!*aBuf)
+				return WINGET_CMD_CONTROLLIST;
+			if (!stricmp(aBuf, "Hwnd"))
+				return WINGET_CMD_CONTROLLISTHWND;
+			// Otherwise fall through to the below.
+		}
+		// Otherwise:
 		return WINGET_CMD_INVALID;
 	}
 
@@ -2406,7 +2417,7 @@ public:
 	VarSizeType GetTimeSincePriorHotkey(char *aBuf = NULL);
 	VarSizeType GetEndChar(char *aBuf = NULL);
 	VarSizeType GetGui(VarTypeType aVarType, char *aBuf = NULL);
-	VarSizeType GetGuiControl(char *aBuf = NULL);
+	VarSizeType GetGuiControl(GuiIndexType aGuiWindowIndex, GuiIndexType aControlIndex, char *aBuf = NULL);
 	VarSizeType GetGuiControlEvent(char *aBuf = NULL);
 	VarSizeType GetEventInfo(char *aBuf = NULL);
 	VarSizeType GetTimeIdle(char *aBuf = NULL);

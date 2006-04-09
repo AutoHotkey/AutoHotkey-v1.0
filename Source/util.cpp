@@ -1353,7 +1353,7 @@ bool FontExist(HDC aHdc, char *aTypeface)
 
 int CALLBACK FontEnumProc(ENUMLOGFONTEX *lpelfe, NEWTEXTMETRICEX *lpntme, DWORD FontType, LPARAM lParam)
 {
-	*((bool *)lParam) = true; // Indicate to the caller that the font exists.
+	*(bool *)lParam = true; // Indicate to the caller that the font exists.
 	return 0;  // Stop the enumeration after the first, since even one match means the font exists.
 }
 

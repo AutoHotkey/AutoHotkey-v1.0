@@ -621,7 +621,7 @@ BOOL CALLBACK EnumParentFind(HWND aWnd, LPARAM lParam)
 // the enumeration prematurely by returning false to its caller.  Otherwise (the enumeration went
 // through every window), it returns TRUE:
 {
-	WindowSearch &ws = *((WindowSearch *)lParam);  // For performance and convenience.
+	WindowSearch &ws = *(WindowSearch *)lParam;  // For performance and convenience.
 	// According to MSDN, GetWindowText() will hang only if it's done against
 	// one of your own app's windows and that window is hung.  I suspect
 	// this might not be true in Win95, and possibly not even Win98, but
@@ -659,7 +659,7 @@ BOOL CALLBACK EnumChildFind(HWND aWnd, LPARAM lParam)
 	// buffer because ws.mFindLastMatch might be true, in which case the original title must
 	// be preserved.
 	char win_text[WINDOW_TEXT_SIZE];
-	WindowSearch &ws = *((WindowSearch *)lParam);  // For performance and convenience.
+	WindowSearch &ws = *(WindowSearch *)lParam;  // For performance and convenience.
 
 	if (!(ws.mSettings->DetectHiddenText || IsWindowVisible(aWnd))) // This text element should not be detectible by the script.
 		return TRUE;  // Skip this child and keep enumerating to try to find a match among the other children.
@@ -839,7 +839,10 @@ HWND ControlExist(HWND aParentWindow, char *aClassNameAndNum)
 	if (!aParentWindow)
 		return NULL;
 	if (!aClassNameAndNum || !*aClassNameAndNum)
-		return GetTopChild(aParentWindow);
+		return (GetWindowLong(aParentWindow, GWL_STYLE) & WS_CHILD) ? aParentWindow : GetTopChild(aParentWindow);
+		// Above: In v1.0.43.06, the parent window itself is returned if it's a child rather than its top child
+		// because it seems more useful and intuitive.  This change allows ahk_id %ControlHwnd% to always operate
+		// directly on the specified control's HWND rather than some sub-child.
 
 	WindowSearch ws;
 	bool is_class_name = isdigit(aClassNameAndNum[strlen(aClassNameAndNum) - 1]);
@@ -877,7 +880,7 @@ HWND ControlExist(HWND aParentWindow, char *aClassNameAndNum)
 
 BOOL CALLBACK EnumControlFind(HWND aWnd, LPARAM lParam)
 {
-	WindowSearch &ws = *((WindowSearch *)lParam);  // For performance and convenience.
+	WindowSearch &ws = *(WindowSearch *)lParam;  // For performance and convenience.
 	if (*ws.mCriterionClass) // Caller told us to search by class name and number.
 	{
 		int length = GetClassName(aWnd, ws.mCandidateTitle, WINDOW_CLASS_SIZE); // Restrict the length to a small fraction of the buffer's size (also serves to leave room to append the sequence number).
@@ -1156,7 +1159,7 @@ BOOL CALLBACK EnumDialog(HWND aWnd, LPARAM lParam)
 // lParam should be a pointer to a ProcessId (ProcessIds are always non-zero?)
 // To continue enumeration, the function must return TRUE; to stop enumeration, it must return FALSE. 
 {
-	pid_and_hwnd_type &pah = *((pid_and_hwnd_type *)lParam);  // For performance and convenience.
+	pid_and_hwnd_type &pah = *(pid_and_hwnd_type *)lParam;  // For performance and convenience.
 	if (!lParam || !pah.pid) return FALSE;
 	DWORD pid;
 	GetWindowThreadProcessId(aWnd, &pid);

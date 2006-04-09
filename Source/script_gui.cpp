@@ -1063,26 +1063,32 @@ ResultType Line::GuiControlGet(char *aCommand, char *aControlID, char *aParam3)
 	// Beyond this point, errors are rare so set the default to "no error":
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE);
 
-	// Handle GUICONTROLGET_CMD_FOCUS early since it doesn't need a specified ControlID:
-	if (guicontrolget_cmd == GUICONTROLGET_CMD_FOCUS)
+	// Handle GUICONTROLGET_CMD_FOCUS(V) early since it doesn't need a specified ControlID:
+	if (guicontrolget_cmd == GUICONTROLGET_CMD_FOCUS || guicontrolget_cmd == GUICONTROLGET_CMD_FOCUSV)
 	{
 		class_and_hwnd_type cah;
 		cah.hwnd = GetFocus();
-		if (!cah.hwnd || !gui.FindControl(cah.hwnd)) // Relies on short-circuit boolean order.
+		GuiControlType *pcontrol;
+		if (!cah.hwnd || !(pcontrol = gui.FindControl(cah.hwnd))) // Relies on short-circuit boolean order.
 			return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
-		// This section is the same as that in ControlGetFocus():
-		char class_name[WINDOW_CLASS_SIZE];
-		cah.class_name = class_name;
-		if (!GetClassName(cah.hwnd, class_name, sizeof(class_name) - 5)) // -5 to allow room for sequence number.
-			return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
-		cah.class_count = 0;  // Init for the below.
-		cah.is_found = false; // Same.
-		EnumChildWindows(gui.mHwnd, EnumChildFindSeqNum, (LPARAM)&cah);
-		if (!cah.is_found) // Should be impossible due to FindControl() having already found it above.
-			return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
-		// Append the class sequence number onto the class name set the output param to be that value:
-		snprintfcat(class_name, sizeof(class_name), "%d", cah.class_count);
-		return output_var->Assign(class_name); // And leave ErrorLevel set to NONE.
+		char focused_control[WINDOW_CLASS_SIZE];
+		if (guicontrolget_cmd == GUICONTROLGET_CMD_FOCUSV) // v1.0.43.06.
+			g_script.GetGuiControl(window_index, GUI_HWND_TO_INDEX(pcontrol->hwnd), focused_control);
+		else // GUICONTROLGET_CMD_FOCUS (ClassNN mode)
+		{
+			// This section is the same as that in ControlGetFocus():
+			cah.class_name = focused_control;
+			if (!GetClassName(cah.hwnd, focused_control, sizeof(focused_control) - 5)) // -5 to allow room for sequence number.
+				return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+			cah.class_count = 0;  // Init for the below.
+			cah.is_found = false; // Same.
+			EnumChildWindows(gui.mHwnd, EnumChildFindSeqNum, (LPARAM)&cah);
+			if (!cah.is_found) // Should be impossible due to FindControl() having already found it above.
+				return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+			// Append the class sequence number onto the class name set the output param to be that value:
+			snprintfcat(focused_control, sizeof(focused_control), "%d", cah.class_count);
+		}
+		return output_var->Assign(focused_control); // And leave ErrorLevel set to NONE.
 	}
 
 	GuiIndexType control_index = gui.FindControl(aControlID);

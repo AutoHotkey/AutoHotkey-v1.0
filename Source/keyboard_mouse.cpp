@@ -2534,7 +2534,7 @@ void SendEventArray(int &aFinalKeyDelay, modLR_type aModsDuringSend)
 	// and it didn't perform any better:
 	// GetMessage(&msg, NULL, WM_CANCELJOURNAL, WM_CANCELJOURNAL);
 	while (g_PlaybackHook)
-		SLEEP_WITHOUT_INTERRUPTION(INTERVAL_UNSPECIFIED);
+		SLEEP_WITHOUT_INTERRUPTION(INTERVAL_UNSPECIFIED); // For maintainability, macro is used rather than optimizing/splitting the code it contains.
 	g_BlockWinKeys = false;
 	// Either the hook unhooked itself or the OS did due to Ctrl-Esc or Ctrl-Alt-Del.
 	// MSDN: When an application sees a [system-generated] WM_CANCELJOURNAL message, it can assume

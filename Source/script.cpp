@@ -357,7 +357,7 @@ ResultType Script::CreateWindows()
 	wc.lpszMenuName = MAKEINTRESOURCE(IDR_MENU_MAIN); // NULL; // "MainMenu";
 	if (!RegisterClassEx(&wc))
 	{
-		MsgBox("RegisterClass() #1 failed.");
+		MsgBox("RegClass"); // Short/generic msg since so rare.
 		return FAIL;
 	}
 
@@ -367,7 +367,7 @@ ResultType Script::CreateWindows()
 	wc.lpszMenuName = NULL;
 	if (!RegisterClassEx(&wc))
 	{
-		MsgBox("RegisterClass() #2 failed.");
+		MsgBox("RegClass"); // Short/generic msg since so rare.
 		return FAIL;
 	}
 
@@ -420,11 +420,15 @@ ResultType Script::CreateWindows()
 
 	if (    !(g_hWndEdit = CreateWindow("edit", NULL, WS_CHILD | WS_VISIBLE | WS_BORDER
 		| ES_LEFT | ES_MULTILINE | ES_READONLY | WS_VSCROLL // | WS_HSCROLL (saves space)
-		, 0, 0, 0, 0, g_hWnd, (HMENU)1, g_hInstance, NULL))  )
+		, 0, 0, 0, 0, g_hWnd, (HMENU)1, g_hInstance, NULL))   )
 	{
 		MsgBox("CreateWindow"); // Short msg since so rare.
 		return FAIL;
 	}
+	// FONTS: The font used by default, at least on XP, is GetStockObject(SYSTEM_FONT).
+	// It seems preferable to smaller fonts such DEFAULT_GUI_FONT(DEFAULT_GUI_FONT).
+	// For more info on pre-loaded fonts (not too many choices), see MSDN's GetStockObject().
+	//SendMessage(g_hWndEdit, WM_SETFONT, (WPARAM)GetStockObject(SYSTEM_FONT), 0);
 
 	// v1.0.30.05:
 	// Specifying a limit of zero opens the control to its maximum text capacity,
@@ -5378,7 +5382,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				if (*new_raw_arg4) // Currently true for all, since it's a FutureUse param.
 					return ScriptError(ERR_PARAM4_MUST_BE_BLANK, new_raw_arg4);
 			}
-			if (guicontrolget_cmd == GUICONTROLGET_CMD_FOCUS)
+			if (guicontrolget_cmd == GUICONTROLGET_CMD_FOCUS || guicontrolget_cmd == GUICONTROLGET_CMD_FOCUSV)
 			{
 				if (*new_raw_arg3)
 					return ScriptError(ERR_PARAM3_MUST_BE_BLANK, new_raw_arg3);
@@ -10666,7 +10670,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		return PerformMouse(mActionType, "", ARG1, ARG2, "", "", ARG3, ARG4);
 
 	case ACT_MOUSEGETPOS:
-		return MouseGetPos(ATOI(ARG5) == 1);
+		return MouseGetPos(ATOU(ARG5));
 
 //////////////////////////////////////////////////////////////////////////
 
@@ -12132,22 +12136,21 @@ VarSizeType Script::GetGui(VarTypeType aVarType, char *aBuf)
 
 
 
-VarSizeType Script::GetGuiControl(char *aBuf)
+VarSizeType Script::GetGuiControl(GuiIndexType aGuiWindowIndex, GuiIndexType aControlIndex, char *aBuf)
+// Caller has ensured that aGuiWindowIndex is less than MAX_GUI_WINDOWS.
 // We're returning the length of the var's contents, not the size.
 {
 	GuiType *pgui;
-	// Note that other logic ensures that g.GuiControlIndex is out-of-bounds whenever g.GuiWindowIndex is.
-	// That is why g.GuiWindowIndex is not checked to make sure it's less than MAX_GUI_WINDOWS.
 	// Relies on short-circuit boolean order:
-	if (g.GuiControlIndex >= MAX_CONTROLS_PER_GUI // Must check this first due to short-circuit boolean.  A non-GUI thread or one triggered by GuiClose/Escape or Gui menu bar.
-		|| !(pgui = g_gui[g.GuiWindowIndex]) // Gui Window no longer exists.
-		|| g.GuiControlIndex >= pgui->mControlCount) // Gui control no longer exists, perhaps because window was destroyed and recreated with fewer controls.
+	if (aControlIndex >= MAX_CONTROLS_PER_GUI // Must check this first due to short-circuit boolean.  A non-GUI thread or one triggered by GuiClose/Escape or Gui menu bar.
+		|| !(pgui = g_gui[aGuiWindowIndex]) // Gui Window no longer exists.
+		|| aControlIndex >= pgui->mControlCount) // Gui control no longer exists, perhaps because window was destroyed and recreated with fewer controls.
 	{
 		if (aBuf)
 			*aBuf = '\0';
 		return 0;
 	}
-	GuiControlType &control = pgui->mControl[g.GuiControlIndex]; // For performance and convenience.
+	GuiControlType &control = pgui->mControl[aControlIndex]; // For performance and convenience.
     if (aBuf)
 	{
 		// Caller has already ensured aBuf is large enough.
@@ -12156,6 +12159,8 @@ VarSizeType Script::GetGuiControl(char *aBuf)
 		else // Fall back to getting the leading characters of its caption (most often used for buttons).
 			#define A_GUICONTROL_TEXT_LENGTH (MAX_ALLOC_SIMPLE - 1)
 			return GetWindowText(control.hwnd, aBuf, A_GUICONTROL_TEXT_LENGTH + 1); // +1 is verified correct.
+			// Above: some callers don't call for a length estimate first, so they might rely on size never getting
+			// larger than the above.
 	}
 	// Otherwise, just return the length:
 	if (control.output_var)

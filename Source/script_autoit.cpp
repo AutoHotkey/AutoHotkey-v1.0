@@ -860,7 +860,7 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 		control_index = ATOI(aValue) - 1;
 		if (control_index < 0)
 			return output_var->Assign();  // Let ErrorLevel tell the story.
-		*((LPINT)buf) = sizeof(buf);  // EM_GETLINE requires first word of string to be set to its size.
+		*(LPINT)buf = sizeof(buf);  // EM_GETLINE requires first word of string to be set to its size.
 		if (!SendMessageTimeout(control_window, EM_GETLINE, (WPARAM)control_index, (LPARAM)buf, SMTO_ABORTIFHUNG, 2000, &dwResult))
 			return output_var->Assign();
 		if (!dwResult) // due to the specified line number being greater than the number of lines in the edit control.
@@ -923,6 +923,13 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 		// Seems best to always format as hex, since it has more human-readable meaning then:
 		sprintf(buf, "0x%08X", GetWindowLong(control_window, GWL_EXSTYLE));
 		output_var->Assign(buf);
+		break;
+
+	case CONTROLGET_CMD_HWND:
+		// The terminology "HWND" was chosen rather than "ID" to avoid confusion with a control's
+		// dialog ID (as retrieved by GetDlgCtrlID).  This also reserves the word ID for possible
+		// use with the control's Dialog ID in future versions.
+		output_var->AssignHWND(control_window);
 		break;
 	}
 

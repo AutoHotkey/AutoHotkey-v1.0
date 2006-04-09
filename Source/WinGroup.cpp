@@ -445,7 +445,7 @@ BOOL CALLBACK EnumParentFindAnyExcept(HWND aWnd, LPARAM lParam)
 	if (GetWindowText(aWnd, win_title, sizeof(win_title)) && !stricmp(win_title, "Program Manager"))
 		return TRUE;
 
-	WindowSearch &ws = *((WindowSearch *)lParam);  // For performance and convenience.
+	WindowSearch &ws = *(WindowSearch *)lParam;  // For performance and convenience.
 	ws.SetCandidate(aWnd);
 
 	// Check this window's attributes against each set of criteria present in the group.  If
@@ -487,7 +487,7 @@ BOOL CALLBACK EnumParentFindAnyExcept(HWND aWnd, LPARAM lParam)
 BOOL CALLBACK EnumParentActUponAll(HWND aWnd, LPARAM lParam)
 // Caller must have ensured that lParam isn't NULL and that it contains a non-NULL mFirstWinSpec.
 {
-	WindowSearch &ws = *((WindowSearch *)lParam);  // For performance and convenience.
+	WindowSearch &ws = *(WindowSearch *)lParam;  // For performance and convenience.
 
 	// Skip windows the command isn't supposed to detect.  ACT_WINSHOW is exempt because
 	// hidden windows are always detected by the WinShow command:
