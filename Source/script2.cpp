@@ -3917,7 +3917,7 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, COLOR
 		// (in 16bit there is an extra bit but i forgot for which color). And this will explain the
 		// second problem [in the test script], since GetPixel even in 16bit will return some "valid"
 		// data in the last 3bits of each byte."
-		register i;
+		register int i;
 		LONG screen_pixel_count = screen_width * screen_height;
 		if (screen_is_16bit)
 			for (i = 0; i < screen_pixel_count; ++i)
@@ -4024,7 +4024,7 @@ fast_end:
 	// This feature was requested; it was put into effect for v1.0.25.06.
 	bool right_to_left = aLeft > aRight;
 	bool bottom_to_top = aTop > aBottom;
-	register xpos, ypos;
+	register int xpos, ypos;
 
 	if (aVariation > 0)
 		SET_COLOR_RANGE
@@ -4113,7 +4113,7 @@ ResultType Line::ImageSearch(int aLeft, int aTop, int aRight, int aBottom, char 
 	// Set defaults to be possibly overridden by any specified options:
 	int aVariation = 0;  // This is named aVariation vs. variation for use with the SET_COLOR_RANGE macro.
 	COLORREF trans_color = CLR_NONE; // The default must be a value that can't occur naturally in an image.
-	int icon_index = 0;
+	int icon_number = 0; // Zero means "load icon or bitmap (doesn't matter)".
 	int width = 0, height = 0;
 	// For icons, override the default to be 16x16 because that is what is sought 99% of the time.
 	// This new default can be overridden by explicitly specifying w0 h0:
@@ -4138,7 +4138,7 @@ ResultType Line::ImageSearch(int aLeft, int aTop, int aRight, int aBottom, char 
 			if (!strnicmp(cp, "Icon", 4))
 			{
 				cp += 4;  // Now it's the character after the word.
-				icon_index = ATOI(cp) - 1; // LoadPicture() correctly handles any negative value.
+				icon_number = ATOI(cp); // LoadPicture() correctly handles any negative value.
 			}
 			else if (!strnicmp(cp, "Trans", 5))
 			{
@@ -4189,7 +4189,7 @@ ResultType Line::ImageSearch(int aLeft, int aTop, int aRight, int aBottom, char 
 	// So currently, only BMP and GIF seem to work reliably, though some of the other GDIPlus-supported
 	// formats might work too.
 	int image_type;
-	HBITMAP hbitmap_image = LoadPicture(aImageFile, width, height, image_type, icon_index, false);
+	HBITMAP hbitmap_image = LoadPicture(aImageFile, width, height, image_type, icon_number, false);
 	// The comment marked OBSOLETE below is no longer true because the elimination of the high-byte via
 	// 0x00FFFFFF seems to have fixed it.  But "true" is still not passed because that should increase
 	// consistency when GIF/BMP/ICO files are used by a script on both Win9x and other OSs (since the
@@ -11599,22 +11599,22 @@ void BIF_IL_Add(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParam
 	if (   !(filespec = ExprTokenToString(*aParam[1], buf))   ) // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
 		return; // Due to rarity of this condition, keep 0/false value as the result.
 
-	int param3 = (aParamCount > 2) ? (int)ExprTokenToInt64(*aParam[2]) : 0; // Default to zero so that -1 later below will get passed to LoadPicture().
+	int param3 = (aParamCount > 2) ? (int)ExprTokenToInt64(*aParam[2]) : 0;
 
-	int icon_index, width = 0, height = 0; // Zero width/height causes image to be loaded at its actual width/height.
+	int icon_number, width = 0, height = 0; // Zero width/height causes image to be loaded at its actual width/height.
 	if (aParamCount > 3) // Presence of fourth parameter switches mode to be "load a non-icon image".
 	{
-		icon_index = 0;
+		icon_number = 0; // Zero means "load icon or bitmap (doesn't matter)".
 		if (ExprTokenToInt64(*aParam[3])) // A value of True indicates that the image should be scaled to fit the imagelist's image size.
 			ImageList_GetIconSize(himl, &width, &height); // Determine the width/height to which it should be scaled.
 		//else retain defaults of zero for width/height, which loads the image at actual size, which in turn
 		// lets ImageList_AddMasked() divide it up into separate images based on its width.
 	}
 	else
-		icon_index = param3 - 1;
+		icon_number = param3; // LoadPicture() properly handles any wrong/negative value that might be here.
 
 	int image_type;
-	HBITMAP hbitmap = LoadPicture(filespec, width, height, image_type, icon_index, false); // Defaulting to "false" for "use GDIplus" provides more consistent appearance across multiple OSes.
+	HBITMAP hbitmap = LoadPicture(filespec, width, height, image_type, icon_number, false); // Defaulting to "false" for "use GDIplus" provides more consistent appearance across multiple OSes.
 	if (!hbitmap)
 		return;
 

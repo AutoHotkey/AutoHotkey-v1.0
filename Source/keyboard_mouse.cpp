@@ -1015,7 +1015,7 @@ LRESULT CALLBACK PlaybackProc(int aCode, WPARAM wParam, LPARAM lParam)
 		// "currently ignored", but in the older "Win32 hooks" article, it says that the behavior
 		// may change in the future.
 
-	static sThisEventHasBeenLogged, sThisEventIsScreenCoord;
+	static bool sThisEventHasBeenLogged, sThisEventIsScreenCoord;
 
 	switch (aCode)
 	{
@@ -1161,7 +1161,8 @@ LRESULT CALLBACK PlaybackProc(int aCode, WPARAM wParam, LPARAM lParam)
 		// do a trailing delay at the end of playback, it may have put a delay at the end of the
 		// array anyway for code simplicity.  For that reason and maintainability:
 		// Skip over any delays that are present to discover if there is a next event.
-		for (UINT u = sCurrentEvent; u < sEventCount && !sEventPB[u].message; ++u);
+		UINT u;
+		for (u = sCurrentEvent; u < sEventCount && !sEventPB[u].message; ++u);
 		if (u == sEventCount) // No more events.
 		{
 			// MSDN implies in the following statement that it's acceptable (and perhaps preferable in

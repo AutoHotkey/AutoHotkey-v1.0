@@ -3625,7 +3625,11 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 							continue;
 						}
 					}
-					if (np = g_act[action_type].NumericParams) // This command has at least one numeric parameter.
+					// v1.0.43.07: Fixed below to use this_action instead of g_act[action_type] so that the
+					// numeric params of legacy commands like EnvAdd/Sub/LeftClick can be detected.  Without
+					// this fix, the last comma in a line like "EnvSub, var, Add(2, 3)" is seen as a parameter
+					// delimiter, which causes a loadtime syntax error.
+					if (np = this_action.NumericParams) // This command has at least one numeric parameter.
 					{
 						// As of v1.0.25, pure numeric parameters can optionally be numeric expressions, so check for that:
 						nArgs_plus_one = nArgs + 1;
@@ -4552,7 +4556,9 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			line.mAttribute = ATTR_LOOP_NORMAL;
 			break;
 		case 1: // With only 1 arg, it must be a normal loop, file-pattern loop, or registry loop.
-			if (line.ArgHasDeref(1)) // Impossible to know now what type of loop (only at runtime).
+			// v1.0.43.07: Added check for new_arg[0].is_expression so that an expression without any variables
+			// it it works (e.g. Loop % 1+1):
+			if (line.ArgHasDeref(1) || new_arg[0].is_expression) // Impossible to know now what type of loop (only at runtime).
 				line.mAttribute = ATTR_LOOP_UNKNOWN;
 			else
 			{
@@ -6984,7 +6990,7 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 {
 	// Not thread-safe, so this can only parse one script at a time.
 	// Not a problem for the foreseeable future:
-	static nest_level; // Level zero is the outermost one: outside all blocks.
+	static int nest_level; // Level zero is the outermost one: outside all blocks.
 	static bool abort;
 	if (!aParentLine)
 	{

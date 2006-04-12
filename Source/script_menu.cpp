@@ -112,27 +112,24 @@ ResultType Script::PerformMenu(char *aMenu, char *aCommand, char *aParam3, char 
 		// Also, load the icon at actual size so that when/if this icon is used for a GUI window, its
 		// appearance in the alt-tab menu won't be unexpectedly poor due to having been scaled from its
 		// native size down to 16x16.
-		int icon_index;
+		int icon_number;
 		if (*aParam4)
 		{
-			icon_index = ATOI(aParam4) - 1;
-			if (icon_index < 0) // Must validate for use in two places below.
-				icon_index = 0;
+			icon_number = ATOI(aParam4);
+			if (icon_number < 1) // Must validate for use in two places below.
+				icon_number = 1; // Must be >0 to tell LoadPicture that "icon must be loaded, never a bitmap".
 		}
 		else
-			icon_index = 0;
+			icon_number = 1; // One vs. Zero tells LoadIcon: "must load icon, never a bitmap (e.g. no gif/jpg/png)".
+
 		int image_type;
-		HICON new_icon = (HICON)LoadPicture(aParam3, 0, 0, image_type, icon_index, false);
-		if (!new_icon || image_type == IMAGE_BITMAP) // If it's not a bitmap, it's an icon or cursor (both of which should work).
-		{
-			if (new_icon) // A bitmap was loaded, which is unsuitable in this context.
-				DeleteObject(new_icon);
+		HICON new_icon;
+		if (   !(new_icon = (HICON)LoadPicture(aParam3, 0, 0, image_type, icon_number, false))   ) // Called with icon_number > 0, it guarantees return of an HICON/HCURSOR, never an HBITMAP.
 			RETURN_MENU_ERROR("Can't load icon.", aParam3);
-		}
 		GuiType::DestroyIconIfUnused(mCustomIcon); // This destroys it if non-NULL and it's not used by an GUI windows.
 
 		mCustomIcon = new_icon;
-		mCustomIconNumber = icon_index + 1;
+		mCustomIconNumber = icon_number;
 		// Allocate the full MAX_PATH in case the contents grow longer later.
 		// SimpleHeap improves avg. case mem load:
 		if (!mCustomIconFile)

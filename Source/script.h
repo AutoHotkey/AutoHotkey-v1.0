@@ -1294,7 +1294,8 @@ public:
 		// The following example would hide the control: GuiControl, Show%VarContainingFalse%, MyControl
 		// To support hex (due to the 'x' in it), search from the left rather than the right for the
 		// first digit:
-		for (char *suffix = aBuf; *suffix && !isdigit(*suffix); ++suffix);
+		char *suffix;
+		for (suffix = aBuf; *suffix && !isdigit(*suffix); ++suffix);
 		bool invert = (*suffix ? !ATOI(suffix) : false);
 		if (!strnicmp(aBuf, "Enable", 6)) return invert ? GUICONTROL_CMD_DISABLE : GUICONTROL_CMD_ENABLE;
 		if (!strnicmp(aBuf, "Disable", 7)) return invert ? GUICONTROL_CMD_ENABLE : GUICONTROL_CMD_DISABLE;

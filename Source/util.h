@@ -517,7 +517,7 @@ void GetVirtualDesktopRect(RECT &aRect);
 LPVOID AllocInterProcMem(HANDLE &aHandle, DWORD aSize, HWND aHwnd);
 void FreeInterProcMem(HANDLE aHandle, LPVOID aMem);
 ResultType RegReadString(HKEY aRootKey, char *aSubkey, char *aValueName, char *aBuf, size_t aBufSize);
-HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, int aIconIndex
+HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, int aIconNumber
 	, bool aUseGDIPlusIfAvailable);
 HBITMAP IconToBitmap(HICON ahIcon, bool aDestroyIcon);
 int CALLBACK FontEnumProc(ENUMLOGFONTEX *lpelfe, NEWTEXTMETRICEX *lpntme, DWORD FontType, LPARAM lParam);

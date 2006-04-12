@@ -353,7 +353,7 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 			GetClientRect(control.hwnd, &rect);
 			int width = rect.right - rect.left;
 			int height = rect.bottom - rect.top;
-			int icon_index = 0;
+			int icon_number = 0; // Zero means "load icon or bitmap (doesn't matter)".
 
 			// The below must be done only after the above, because setting the control's picture handle
 			// to NULL sometimes or always shrinks the control down to zero dimensions:
@@ -393,7 +393,7 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 					*option_end = '\0';
 					++next_option; // Skip over the asterisk.  It might point to a zero terminator now.
 					if (!strnicmp(next_option, "Icon", 4))
-						icon_index = ATOI(next_option + 4) - 1; // LoadPicture() correctly handles any negative value.
+						icon_number = ATOI(next_option + 4); // LoadPicture() correctly handles any negative value.
 					else
 					{
 						switch (toupper(*next_option))
@@ -425,7 +425,7 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 
 			// See comments in AddControl():
 			int image_type;
-			if (   !(control.union_hbitmap = LoadPicture(aParam3, width, height, image_type, icon_index
+			if (   !(control.union_hbitmap = LoadPicture(aParam3, width, height, image_type, icon_number
 				, control.attrib & GUI_CONTROL_ATTRIB_ALTSUBMIT))   )
 				return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
 			DWORD style = GetWindowLong(control.hwnd, GWL_STYLE);
@@ -2271,7 +2271,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			// quality than using MoveWindow() (followed by redrawing the parent window) on the static
 			// control that contains the image.
 			int image_type;
-			if (   !(control.union_hbitmap = LoadPicture(aText, opt.width, opt.height, image_type, opt.icon_number - 1
+			if (   !(control.union_hbitmap = LoadPicture(aText, opt.width, opt.height, image_type, opt.icon_number
 				, control.attrib & GUI_CONTROL_ATTRIB_ALTSUBMIT))   )
 				break;  // By design, no error is reported.  The picture is simply not displayed, nor is its
 						// style set to SS_BITMAP/SS_ICON, which allows the control to have the specified size

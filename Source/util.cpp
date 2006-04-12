@@ -1471,46 +1471,72 @@ void FreeInterProcMem(HANDLE aHandle, LPVOID aMem)
 
 
 
-HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, int aIconIndex, bool aUseGDIPlusIfAvailable)
+HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, int aIconNumber
+	, bool aUseGDIPlusIfAvailable)
+// Returns NULL on failure.
+// If aIconNumber > 0, an HICON or HCURSOR is returned (both should be interchangeable), never an HBITMAP.
+// However, aIconNumber==1 is treated as a special icon upon which LoadImage is given preference over ExtractIcon
+// for .ico/.cur/.ani files.
+// Otherwise, .ico/.cur/.ani files are normally loaded as HICON (unless aUseGDIPlusIfAvailable is true or
+// something else unusual happened such as file contents not matching file's extension).  This is done to preserve
+// any properties that HICONs have but HBITMAPs lack, namely the ability to be animated and perhaps other things.
+//
 // Loads a JPG/GIF/BMP/ICO/etc. and returns an HBITMAP or HICON to the caller (which it may call
 // DeleteObject()/DestroyIcon() upon, though upon program termination all such handles are freed
 // automatically).  The image is scaled to the specified width and height.  If zero is specified
 // for either, the image's actual size will be used for that dimension.  If -1 is specified for one,
 // that dimension will be kept proportional to the other dimension's size so that the original aspect
 // ratio is retained.
-// .ico/.cur/.ani files are normally loaded as HICON (unless aUseGDIPlusIfAvailable is true of something
-// else unusual happened such as file contents not matching file's extension).  This is done to preserve
-// any properties that HICONs have but HBITMAPs lack, namely the ability to be animated and perhaps other things.
-// Returns NULL on failure.
 {
 	HBITMAP hbitmap = NULL;
 	aImageType = -1; // The type of image currently inside hbitmap.  Set default value for output parameter as "unknown".
 
 	if (!*aFilespec) // Allow blank filename to yield NULL bitmap (and currently, some callers do call it this way).
 		return NULL;
-	if (aIconIndex < 0) // Allowed to be called this way by GUI and others (to simplify code there).
-		aIconIndex = 0; // Use the default, which is the first icon.
+	if (aIconNumber < 0) // Allowed to be called this way by GUI and others (to avoid need for validation of user input there).
+		aIconNumber = 0; // Use the default behavior, which is "load icon or bitmap, whichever is most appropriate".
 
 	char *file_ext = strrchr(aFilespec, '.');
 	if (file_ext)
 		++file_ext;
 
+	// v1.0.43.07: If aIconNumber is zero, caller didn't specify whether it wanted an icon or bitmap.  Thus,
+	// there must be some kind of detection for whether ExtractIcon is needed instead of GDIPlus/OleLoadPicture.
+	// Although this could be done by attempting ExtractIcon only after GDIPlus/OleLoadPicture fails (or by
+	// somehow checking the internal nature of the file), for performance and code size, it seems best to not
+	// to incur this extra I/O and instead make only one attempt based on the file's extension.
 	// Must use ExtractIcon() if either of the following is true:
 	// 1) Caller gave an icon index of the second or higher icon in the file.  Update for v1.0.43.05: There
 	//    doesn't seem to be any reason to allow a caller to explicitly specify ExtractIcon as the method of
 	//    loading the *first* icon from a .ico file since LoadImage is likely always superior.  This is
 	//    because unlike ExtractIcon/Ex, LoadImage: 1) Doesn't distort icons, especially 16x16 icons; 2) is
 	//    capable of loading icons other than the first by means of width and height parameters.
-	// 2) The target file is an EXE, DLL, or ICL file (LoadImage() is documented not to work on those file types).
+	// 2) The target file is of type EXE/DLL/ICL/CPL/etc. (LoadImage() is documented not to work on those file types).
 	//    ICL files (v1.0.43.05): Apparently ICL files are an unofficial file format. Someone on the newsgroups
 	//    said that an ICL is an "ICon Library... a renamed 16-bit Windows .DLL (an NE format executable) which
 	//    typically contains nothing but a resource section. The ICL extension seems to be used by convention."
-	bool ExtractIcon_was_used = aIconIndex > 0 || (file_ext && (!stricmp(file_ext, "exe")
-		|| !stricmp(file_ext, "dll") || !stricmp(file_ext, "icl"))); // ICL: See notes above.
+	bool ExtractIcon_was_used = aIconNumber > 1 || (file_ext && (
+		   !stricmp(file_ext, "exe")
+		|| !stricmp(file_ext, "dll")
+		|| !stricmp(file_ext, "icl") // Icon library: Unofficial dll container, see notes above.
+		|| !stricmp(file_ext, "cpl") // Control panel extension/applet (ExtractIcon is said to work on these).
+		|| !stricmp(file_ext, "scr") // Screen saver (ExtractIcon should work since these are really EXEs).
+		|| !stricmp(file_ext, "drv") // Driver (ExtractIcon is said to work on these).
+		|| !stricmp(file_ext, "ocx") // OLE/ActiveX Control Extension
+		|| !stricmp(file_ext, "vbx") // Visual Basic Extension
+		|| !stricmp(file_ext, "acm") // Audio Compression Manager Driver
+		|| !stricmp(file_ext, "bpl") // Delphi Library (like a DLL?)
+		// Not supported due to rarity, code size, performance, and uncertainty of whether ExtractIcon works on them:
+		//|| !stricmp(file_ext, "nil") // Norton Icon Library 
+		//|| !stricmp(file_ext, "wlx") // Total/Windows Commander Lister Plug-in
+		//|| !stricmp(file_ext, "wfx") // Total/Windows Commander File System Plug-in
+		//|| !stricmp(file_ext, "wcx") // Total/Windows Commander Plug-in
+		//|| !stricmp(file_ext, "wdx") // Total/Windows Commander Plug-in
+		));
 	if (ExtractIcon_was_used)
 	{
 		aImageType = IMAGE_ICON;
-		hbitmap = (HBITMAP)ExtractIcon(g_hInstance, aFilespec, aIconIndex); // Return value of 1 means "incorrect file type".
+		hbitmap = (HBITMAP)ExtractIcon(g_hInstance, aFilespec, aIconNumber > 0 ? aIconNumber - 1 : 0); // Return value of 1 means "incorrect file type".
 		// Above: Although it isn't well documented at MSDN, apparently both ExtractIcon() and LoadIcon()
 		// scale the icon to the system's large-icon size (usually 32x32) regardless of the actual size of
 		// the icon inside the file.  For this reason, callers should call us in a way that allows us to
@@ -1521,27 +1547,25 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, i
 			return hbitmap;
 		//else continue on below so that the icon can be resized to the caller's specified dimensions.
 	}
-
-	// Make an initial guess of the type of image if the above didn't already determine the type:
-	if (aImageType < 0)
+	else if (aIconNumber > 0) // Caller wanted HICON, never HBITMAP, so set type now to enforce that.
+		aImageType = IMAGE_ICON; // Should be suitable for cursors too, since they're interchangeable for the most part.
+	else if (file_ext) // Make an initial guess of the type of image if the above didn't already determine the type.
 	{
-		if (file_ext) // Assume generic file-loading method if there's no file extension.
-		{
-			if (!stricmp(file_ext, "ico"))
-				aImageType = IMAGE_ICON;
-			else if (!stricmp(file_ext, "cur") || !stricmp(file_ext, "ani"))
-				aImageType = IMAGE_CURSOR;
-			else if (!stricmp(file_ext, "bmp"))
-				aImageType = IMAGE_BITMAP;
-			//else for other extensions, leave set to "unknown" so that the below knows to use IPic or GDI+ to load it.
-		}
-		//else same comment as above.
+		if (!stricmp(file_ext, "ico"))
+			aImageType = IMAGE_ICON;
+		else if (!stricmp(file_ext, "cur") || !stricmp(file_ext, "ani"))
+			aImageType = IMAGE_CURSOR;
+		else if (!stricmp(file_ext, "bmp"))
+			aImageType = IMAGE_BITMAP;
+		//else for other extensions, leave set to "unknown" so that the below knows to use IPic or GDI+ to load it.
 	}
+	//else same comment as above.
 
 	if ((aWidth == -1 || aHeight == -1) && (!aWidth || !aHeight))
 		aWidth = aHeight = 0; // i.e. One dimension is zero and the other is -1, which resolves to the same as "keep original size".
 	bool keep_aspect_ratio = (aWidth == -1 || aHeight == -1);
 
+	// Caller should ensure that aUseGDIPlusIfAvailable==false when aIconNumber > 0, since it makes no sense otherwise.
 	HINSTANCE hinstGDI = NULL;
 	if (aUseGDIPlusIfAvailable && !(hinstGDI = LoadLibrary("gdiplus"))) // Relies on short-circuit boolean order for performance.
 		aUseGDIPlusIfAvailable = false; // Override any original "true" value as a signal for the section below.
@@ -1578,7 +1602,9 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, i
 		// v1.0.40.10: Abort if file doesn't exist so that GDIPlus isn't even attempted. This is done because
 		// loading GDIPlus apparently disrupts the color palette of certain games, at least old ones that use
 		// DirectDraw in 256-color depth.
-		else if (GetFileAttributes(aFilespec) == 0xFFFFFFFF) // For simplicity, we don't check if it's a directory vs. file, since that should be too rare.
+		// v1.0.43.07: Also abort if caller wanted an HICON (not an HBITMAP), since the other methods below
+		// can't yield an HICON.
+		else if (aIconNumber > 0 || GetFileAttributes(aFilespec) == 0xFFFFFFFF) // For simplicity, we don't check if it's a directory vs. file, since that should be too rare.
 			return NULL;
 		//else file exists, so continue on so that the other methods are attempted in case file's contents
 		// differ from what the file extension indicates, or in case the other methods can be successful
