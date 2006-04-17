@@ -65,6 +65,7 @@ bool g_ForceLaunch = false;
 bool g_WinActivateForce = false;
 SingleInstanceType g_AllowOnlyOneInstance = ALLOW_MULTI_INSTANCE;
 bool g_persistent = false;  // Whether the script should stay running even after the auto-exec section finishes.
+bool g_NoEnv = false;
 bool g_NoTrayIcon = false;
 #ifdef AUTOHOTKEYSC
 	bool g_AllowMainWindow = false;
@@ -307,6 +308,7 @@ Action g_act[] =
 	, {"SplitPath", 1, 6, 6, NULL} // InputFilespec, OutName, OutDir, OutExt, OutNameNoExt, OutDrive
 	, {"Sort", 1, 2, 2, NULL} // OutputVar (it's also the input var), Options
 
+	, {"EnvGet", 2, 2, 2, NULL} // OutputVar, EnvVar
 	, {"EnvSet", 1, 2, 2, NULL} // EnvVar, Value
 	, {"EnvUpdate", 0, 0, 0, NULL}
 

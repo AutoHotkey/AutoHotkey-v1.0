@@ -280,7 +280,6 @@ VarSizeType Var::Get(char *aBuf)
 	DWORD result;
 	static DWORD timestamp_tick = 0, now_tick; // static should be thread + recursion safe in this case.
 	static SYSTEMTIME st_static = {0};
-	static Var *cached_empty_var = NULL; // Doubles the speed of accessing empty variables that aren't environment variables (i.e. most of them).
 
 	// Just a fake buffer to pass to some API functions in lieu of a NULL, to avoid
 	// any chance of misbehavior:
@@ -289,7 +288,7 @@ VarSizeType Var::Get(char *aBuf)
 	switch(mType)
 	{
 	case VAR_NORMAL:
-		if (!mLength) // If the var is empty, check to see if it's really an env. var.
+		if (!g_NoEnv && !mLength) // If auto-env retrival is on and the var is empty, check to see if it's really an env. var.
 		{
 			// Regardless of whether aBuf is NULL or not, we don't know at this stage
 			// whether mName is the name of a valid environment variable.  Therefore,
@@ -310,6 +309,7 @@ VarSizeType Var::Get(char *aBuf)
 			// Loop 500000
 			//    if Var = Test
 			//    ...
+			static Var *cached_empty_var = NULL; // Doubles the speed of accessing empty variables that aren't environment variables (i.e. most of them).
 			if (!(cached_empty_var == this && aBuf) && (result = GetEnvironmentVariable(mName, buf_temp, sizeof(buf_temp))))
 			{
 				cached_empty_var = NULL; // i.e. one use only to avoid cache from hiding the fact that an environment variable has newly come into existence since the previous call.
@@ -337,9 +337,16 @@ VarSizeType Var::Get(char *aBuf)
 				return 0;
 			}
 		}
-		// otherwise, it has non-zero length (set by user), so it takes precedence over any existing env. var.
+		// Otherwise, it's not an environment variable (or it is, but there is a script variable of non-zero length that's eclipsing it).
 		if (!aBuf)
 			return mLength;
+		else // Caller provider buffer, so if mLength is zero, just make aBuf empty now and return early (for performance).
+			if (!mLength)
+			{
+				*aBuf = '\0';
+				return 0;
+			}
+
 		// Copy the var contents into aBuf.  Although a little bit slower than CopyMemory() for large
 		// variables (say, over 100K), this loop seems much faster for small ones, which is the typical
 		// case.  Also of note is that this code section is the main bottleneck for scripts that manipulate
@@ -507,7 +514,23 @@ VarSizeType Var::Get(char *aBuf)
 	case VAR_COMPUTERNAME: if (!aBuf) return g_script.GetUserOrComputer(false); aBuf += g_script.GetUserOrComputer(false, aBuf); break;
 	case VAR_USERNAME: if (!aBuf) return g_script.GetUserOrComputer(true); aBuf += g_script.GetUserOrComputer(true, aBuf); break;
 
-	case VAR_WINDIR: if (!aBuf) return GetWindowsDirectory(buf_temp, 0) - 1; aBuf += GetWindowsDirectory(aBuf, MAX_PATH); break;  // Sizes/lengths/-1/etc. verified correct.
+	case VAR_COMSPEC:
+	case VAR_WINDIR:
+		// These two cases are atypical because they call the API directly rather than an go-between function.
+		// Sizes/lengths/-1/return-values/etc. have been verified correct.
+		if (!aBuf)
+		{
+			result = (mType == VAR_COMSPEC)
+				? GetEnvironmentVariable("comspec", buf_temp, 0)
+				: GetWindowsDirectory(buf_temp, 0);
+			return result ? result - 1 : 0; // Avoid wrapping 0 to large positive value due to unsigned type.
+		}
+		// Otherwise:
+		aBuf += (mType == VAR_COMSPEC)
+			? GetEnvironmentVariable("comspec", aBuf, 32767) // Going higher than 32767 causes it to fail on Win9x.
+			: GetWindowsDirectory(aBuf, MAX_PATH);
+		break;
+
 	case VAR_PROGRAMFILES: if (!aBuf) return g_script.GetProgramFiles(); aBuf += g_script.GetProgramFiles(aBuf); break;
 	case VAR_DESKTOP: if (!aBuf) return g_script.GetDesktop(false); aBuf += g_script.GetDesktop(false, aBuf); break;
 	case VAR_DESKTOPCOMMON: if (!aBuf) return g_script.GetDesktop(true); aBuf += g_script.GetDesktop(true, aBuf); break;

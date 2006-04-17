@@ -2002,7 +2002,17 @@ continue_main_loop: // This method is used in lieu of "continue" for performance
 				buf_length = strlen(buf);
 				goto examine_line; // Have the main loop process the contents of "buf" as though it came in from the script.
 			case 2: // Stage 2.
-				strcpy(buf, "-1"); // Copied into a writable buffer for maintainability: AddLine() might rely on this.
+				// Copied into a writable buffer for maintainability: AddLine() might rely on this.
+				// Also, it seems unnecessary to set press-duration to -1 even though the auto-exec section might
+				// have set it to something higher than -1 because:
+				// 1) Press-duration doesn't apply to normal remappings since they use down-only and up-only events.
+				// 2) Although it does apply to remappings such as a::B and a::^b (due to press-duration being
+				//    applied after a change to modifier state), those remappings are fairly rare and supporting
+				//    a non-negative-one press-duration (almost always 0) probably adds a degree of flexibility
+				//    that may be desirable to keep.
+				// 3) SendInput may become the predominant SendMode, so press-duration won't often be in effect anyway.
+				// 4) It has been documented that remappings use the auto-execute section's press-duration.
+				strcpy(buf, "-1"); // Does NOT need to be "-1, -1" for SetKeyDelay (see above).
 				// The primary reason for adding Key/MouseDelay -1 is to minimize the chance that a one of
 				// these hotkey threads will get buried under some other thread such as a timer, which
 				// would disrupt the remapping if #MaxThreadsPerHotkey is at its default of 1.
@@ -2325,6 +2335,11 @@ inline ResultType Script::IsDirective(char *aBuf)
 #endif
 	}
 
+	if (IS_DIRECTIVE_MATCH("#NoEnv"))
+	{
+		g_NoEnv = true;
+		return CONDITION_TRUE;
+	}
 	if (IS_DIRECTIVE_MATCH("#NoTrayIcon"))
 	{
 		g_NoTrayIcon = true;
@@ -6747,6 +6762,8 @@ VarTypes Script::GetVarType(char *aVarName)
 		if (!strcmp(lowercase, "false")) return VAR_FALSE;
 		if (!strcmp(lowercase, "clipboard")) return VAR_CLIPBOARD;
 		if (!strcmp(lowercase, "clipboardall")) return VAR_CLIPBOARDALL;
+		if (!strcmp(lowercase, "comspec")) return VAR_COMSPEC; // Lacks an "A_" prefix for backward compatibility with pre-NoEnv scripts and also it's easier to type & remember.
+		if (!strcmp(lowercase, "programfiles")) return VAR_PROGRAMFILES; // v1.0.43.08: Added to ease the transition to #NoEnv.
 		// Otherwise:
 		return VAR_NORMAL;
 	}
@@ -9408,6 +9425,10 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			MsgSleep(sleep_time);
 		return OK;
 	}
+
+	case ACT_ENVGET:
+		return EnvGet(ARG2);
+
 	case ACT_ENVSET:
 		// MSDN: "If [the 2nd] parameter is NULL, the variable is deleted from the current process’s environment."
 		// My: Though it seems okay, for now, just to set it to be blank if the user omitted the 2nd param or
@@ -9423,9 +9444,8 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		// Note: It seems, at least under WinXP, that env variable names can contain spaces.  So it's best
 		// not to validate ARG1 the same way we validate script variables (i.e. just let\
 		// SetEnvironmentVariable()'s return value determine whether there's an error).  However, I just
-		// realized that it's impossible to "retrieve" the value of an env var that has spaces since
-		// there is no EnvGet() command (EnvGet() is implicit whenever an undefined or blank script
-		// variable is dereferenced).  For now, this is documented here as a known limitation.
+		// realized that it's impossible to "retrieve" the value of an env var that has spaces (until now,
+		// since the EnvGet command is available).
 		return g_ErrorLevel->Assign(SetEnvironmentVariable(ARG1, ARG2) ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
 
 	case ACT_ENVUPDATE:

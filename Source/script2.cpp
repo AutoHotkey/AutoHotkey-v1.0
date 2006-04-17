@@ -3520,6 +3520,23 @@ ResultType Line::WinGetPos(char *aTitle, char *aText, char *aExcludeTitle, char 
 
 
 
+ResultType Line::EnvGet(char *aEnvVarName)
+{
+	Var *output_var = ResolveVarOfArg(0);
+	if (!output_var)
+		return FAIL;
+	// Don't use a size greater than 32767 because that will cause it to fail on Win95 (tested by Robert Yalkin).
+	// According to MSDN, 32767 is exactly large enough to handle the largest variable plus its zero terminator.
+	char buf[32767];
+	// GetEnvironmentVariable() could be called twice, the first time to get the actual size.  But that would
+	// probably perform worse since GetEnvironmentVariable() is a very slow function.  In addition, it would
+	// add code complexity, so it seems best to fetch it into a large buffer then just copy it to dest-var.
+	DWORD length = GetEnvironmentVariable(aEnvVarName, buf, sizeof(buf));
+	return output_var->Assign(length ? buf : "", length);
+}
+
+
+
 ResultType Line::SysGet(char *aCmd, char *aValue)
 // Thanks to Gregory F. Hogg of Hogg's Software for providing sample code on which this function
 // is based.

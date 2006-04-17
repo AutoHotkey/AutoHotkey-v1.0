@@ -61,6 +61,7 @@ extern bool g_ForceLaunch;
 extern bool g_WinActivateForce;
 extern SingleInstanceType g_AllowOnlyOneInstance;
 extern bool g_persistent;
+extern bool g_NoEnv;
 extern bool g_NoTrayIcon;
 #ifdef AUTOHOTKEYSC
 	extern bool g_AllowMainWindow;

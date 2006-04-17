@@ -219,6 +219,8 @@ void SendKeys(char *aKeys, bool aSendRaw, SendModes aSendModeOrig, HWND aTargetW
 		prior_capslock_state = TOGGLE_INVALID;
 	}
 
+	int orig_key_delay = g.KeyDelay;
+	int orig_press_duration = g.PressDuration;
 	if (aSendModeOrig == SM_INPUT || aSendModeOrig == SM_INPUT_FALLBACK_TO_PLAY)
 	{
 		// Both of these modes fall back to a different mode depending on whether some other script
@@ -230,6 +232,7 @@ void SendKeys(char *aKeys, bool aSendRaw, SendModes aSendModeOrig, HWND aTargetW
 		if (   !sMySendInput // Win95/NT-pre-SP3 don't support SendInput, so fall back to the specified mode.
 			|| SystemHasAnotherKeybdHook() // This function has been benchmarked to ensure it doesn't yield our timeslice, etc.  200 calls take 0ms according to tick-count, even when CPU is maxed.
 			|| !aSendRaw && SystemHasAnotherMouseHook() && !strcasestr(aKeys, "{Click")   ) // Ordered for short-circuit boolean performance.
+		{
 			// Need to detect in advance what type of array to build (for performance and code size).  That's why
 			// it done this way, and here are the comments about it:
 			// strcasestr() above has an unwanted amount of overhead if aKeys is huge, but it seems acceptable
@@ -240,7 +243,23 @@ void SendKeys(char *aKeys, bool aSendRaw, SendModes aSendModeOrig, HWND aTargetW
 			// Finally, checking aSendRaw isn't foolproof because the string might contain {Raw} prior to {Click,
 			// but the complexity and performance of checking for that seems unjustified given the rarity,
 			// especially since there are almost never any consequences to reverting to hook mode vs. SendInput.
-			aSendModeOrig = (aSendModeOrig == SM_INPUT) ? SM_EVENT : SM_PLAY;
+			if (aSendModeOrig == SM_INPUT_FALLBACK_TO_PLAY)
+				aSendModeOrig = SM_PLAY;
+			else // aSendModeOrig == SM_INPUT, so fall back to EVENT.
+			{
+				aSendModeOrig = SM_EVENT;
+				// v1.0.43.08: When SendInput reverts to SendEvent mode, the majority of users would want
+				// a fast sending rate that is more comparable to SendInput's speed that the default KeyDelay
+				// of 10ms.  PressDuration may be generally superior to KeyDelay because it does a delay after
+				// each changing of modifier state (which tends to improve reliability for certain apps).
+				// The following rules seem likely to be the best benefit in terms of speed and reliability:
+				// KeyDelay 0+,-1+ --> -1, 0
+				// KeyDelay -1, 0+ --> -1, 0
+				// KeyDelay -1,-1 --> -1, -1
+				g.PressDuration = (g.KeyDelay < 0 && g.PressDuration < 0) ? -1 : 0;
+				g.KeyDelay = -1; // Above line must be done before this one.
+			}
+		}
 		else // SendInput is available and no other impacting hooks are obviously present on the system, so use SendInput unconditionally.
 			aSendModeOrig = SM_INPUT; // Resolve early so that other sections don't have to consider SM_INPUT_FALLBACK_TO_PLAY a valid value.
 	}
@@ -706,6 +725,10 @@ brace_case_end: // This label is used to simplify the code without sacrificing p
 	// a need for it.
 	if (aSendModeOrig == SM_INPUT && GetWindowThreadProcessId(GetForegroundWindow(), NULL) == g_MainThreadID) // GetWindowThreadProcessId() tolerates a NULL hwnd.
 		SLEEP_WITHOUT_INTERRUPTION(-1);
+
+	// v1.0.43.08: Restore the original thread key-delay values in case above temporarily overrode them.
+	g.KeyDelay = orig_key_delay;
+	g.PressDuration = orig_press_duration;
 }
 
 
@@ -1009,12 +1032,6 @@ void SendASC(char *aAscii)
 LRESULT CALLBACK PlaybackProc(int aCode, WPARAM wParam, LPARAM lParam)
 // Journal playback hook.
 {
-	if (aCode < 0)  // MSDN docs specify that the hook should return in this case.
-		return CallNextHookEx(g_PlaybackHook, aCode, wParam, lParam);
-		// The first parameter uses g_PlaybackHook rather than NULL because MSDN says it's merely
-		// "currently ignored", but in the older "Win32 hooks" article, it says that the behavior
-		// may change in the future.
-
 	static bool sThisEventHasBeenLogged, sThisEventIsScreenCoord;
 
 	switch (aCode)
@@ -1177,19 +1194,35 @@ LRESULT CALLBACK PlaybackProc(int aCode, WPARAM wParam, LPARAM lParam)
 		}
 		else
 			sFirstCallForThisEvent = true; // Reset to prepare for next HC_GETNEXT.
-		break;
+		return 0; // MSDN: The return value is used only if the hook code is HC_GETNEXT; otherwise, it is ignored.
 
-	// No action seems to be needed for these:
-	//case HC_NOREMOVE: // MSDN: An application has called the PeekMessage function with wRemoveMsg set to PM_NOREMOVE, indicating that the message is not removed from the message queue after PeekMessage processing. 
-	//case HC_SYSMODALON:  // MSDN: A system-modal dialog box is being displayed. Until the dialog box is destroyed, the hook procedure must stop playing back messages.
-	//case HC_SYSMODALOFF: // MSDN: A system-modal dialog box has been destroyed. The hook procedure must resume playing back the messages.
-	//	break;
-	}
+	default:
+		// Covers the following cases:
+		//case HC_NOREMOVE: // MSDN: An application has called the PeekMessage function with wRemoveMsg set to PM_NOREMOVE, indicating that the message is not removed from the message queue after PeekMessage processing.
+		//case HC_SYSMODALON:  // MSDN: A system-modal dialog box is being displayed. Until the dialog box is destroyed, the hook procedure must stop playing back messages.
+		//case HC_SYSMODALOFF: // MSDN: A system-modal dialog box has been destroyed. The hook procedure must resume playing back the messages.
+		//case(...aCode < 0...): MSDN docs specify that the hook should return in this case.
+		//
+		// MS gives some sample code at http://support.microsoft.com/default.aspx?scid=KB;EN-US;124835
+		// about the proper values to return to avoid hangs on NT (it seems likely that this implementation
+		// is compliant enough if you read between the lines).  Their sample code indicates that
+		// "return CallNextHook()"  should be done for basically everything except HC_SKIP/HC_GETNEXT, so
+		// as of 1.0.43.08, that is what is done here.
+		// Testing shows that when a so-called system modial dialog is displayed (even if it isn't the
+		// active window) playback stops automatically, probably because the system doesn't call the hook
+		// during such times (only a "MsgBox 4096" has been tested so far).
+		//
+		// The first parameter uses g_PlaybackHook rather than NULL because MSDN says it's merely
+		// "currently ignored", but in the older "Win32 hooks" article, it says that the behavior
+		// may change in the future.
+		return CallNextHookEx(g_PlaybackHook, aCode, wParam, lParam);
+		// Except for the cases above, CallNextHookEx() is not called for performance and also because from
+		// what I can tell from the MSDN docs and other examples, it is neither required nor desirable to do so
+		// during playback's SKIP/GETNEXT.
+		// MSDN: The return value is used only if the hook code is HC_GETNEXT; otherwise, it is ignored.
+	} // switch().
 
-	// CallNextHookEx() is not called for performance and also because from what I can tell from the
-	// MSDN docs and other examples, it is neither required nor desirable to do so during playback
-	// except when aCode < 0 (which is already done higher above).
-	return 0; // MSDN: The return value is used only if the hook code is HC_GETNEXT; otherwise, it is ignored.
+	// Execution should never reach since all cases do their own custom return above.
 }
 
 
@@ -1204,7 +1237,7 @@ LRESULT CALLBACK RecordProc(int aCode, WPARAM wParam, LPARAM lParam)
 		EVENTMSG &event = *(PEVENTMSG)lParam;
 		PlaybackEvent &dest_event = sEventPB[sEventCount];
 		dest_event.message = event.message;
-		if (event.message >= WM_MOUSEFIRST && event.message <= WM_MOUSELAST)
+		if (event.message >= WM_MOUSEFIRST && event.message <= WM_MOUSELAST) // Mouse event.
 		{
 			if (event.message != WM_MOUSEMOVE)
 			{
@@ -1406,7 +1439,7 @@ void KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTargetWi
 		// the normal g.KeyDelay will be in effect.  In other words, it seems undesirable in
 		// most cases to do both delays for only "one half" of a keystroke:
 		if (aDoKeyDelay && aEventType == KEYDOWNANDUP)
-			DoKeyDelay(sSendMode == SM_PLAY ? g.PressDurationPlay : g.PressDuration); // SM_PLAY uses DoKeyDelay() to store a delay item in the event array.
+			DoKeyDelay(g.PressDuration); // Since aTargetWindow!=NULL, sSendMode!=SM_PLAY, so no need for to ever use the SendPlay press-duration.
 		if (aEventType != KEYDOWN)  // i.e. always do it for KEYDOWNANDUP
 			PostMessage(aTargetWindow, WM_KEYUP, aVK, lParam | 0xC0000001);
 	}

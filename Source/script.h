@@ -662,6 +662,7 @@ private:
 	ResultType WinGetControlList(Var *aOutputVar, HWND aTargetWindow, bool aFetchHWNDs);
 	ResultType WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType WinGetPos(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
+	ResultType EnvGet(char *aEnvVarName);
 	ResultType SysGet(char *aCmd, char *aValue);
 	ResultType PixelSearch(int aLeft, int aTop, int aRight, int aBottom, COLORREF aColorBGR, int aVariation, char *aOptions);
 	ResultType ImageSearch(int aLeft, int aTop, int aRight, int aBottom, char *aImageFile);
@@ -868,6 +869,7 @@ public:
 			case ACT_WINGETTEXT:
 			case ACT_WINGETPOS:
 			case ACT_SYSGET:
+			case ACT_ENVGET:
 			case ACT_CONTROLGETPOS:
 			case ACT_PIXELGETCOLOR:
 			case ACT_PIXELSEARCH:

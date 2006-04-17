@@ -2559,6 +2559,11 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 
 			if (opt.height == COORD_UNSPECIFIED) // Adjust the control's size to fit opt.row_count rows.
 			{
+				// Known limitation: This will be inaccurate if an ImageList is later assigned to the
+				// ListView because that increases the height of each row slightly (or a lot if
+				// a large-icon list is forced into Details/Report view and other views that are
+				// traditionally small-icon).  The code size and complexity of trying to compensate
+				// for this doesn't seem likely to be worth it.
 				GUI_SETFONT  // Required before asking it for a height estimate.
 				switch (opt.listview_view)
 				{

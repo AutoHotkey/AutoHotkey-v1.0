@@ -136,9 +136,9 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 				// an environment variable rather than a zero-length normal variable. The size estimator knew
 				// that and already provided space for it in the buffer.  But if it returns an empty string,
 				// it's a normal empty variable and thus it stays of type EXP_DEREF_VAR.
-				if (this_deref.var->Length())
+				if (g_NoEnv || this_deref.var->Length()) // v1.0.43.08: Added g_NoEnv.
 					map[map_count].var = this_deref.var;
-				else // Zero-length, so check if it's an environment variable.
+				else // Auto-env retrieval is in effect and this var is zero-length, so check if it's an environment variable.
 				{
 					map[map_count].marker = target;  // Indicate its position in the buffer.
 					target += this_deref.var->Get(target);
@@ -2161,18 +2161,18 @@ ResultType Line::ExpandArgs(VarSizeType aSpaceNeeded, Var *aArgVar[])
 				// temp buffer, it's much better for performance (especially for
 				// potentially huge variables like %clipboard%) to simply set
 				// the pointer to be the variable itself.  However, this can only
-				// be done if the var is the clipboard or a normal var of non-zero
-				// length (since zero-length normal vars need to be fetched via
-				// GetEnvironment()).  Update: Changed it so that it will deref
-				// the clipboard if it contains only files and no text, so that
-				// the files will be transcribed into the deref buffer.  This is
-				// because the clipboard object needs a memory area into which
-				// to write the filespecs it translated:
+				// be done if the var is the clipboard or a non-environment
+				// normal var (since zero-length normal vars need to be fetched via
+				// GetEnvironmentVariable() when g_NoEnv==false).
+				// Update: Changed it so that it will deref the clipboard if it contains only
+				// files and no text, so that the files will be transcribed into the deref buffer.
+				// This is because the clipboard object needs a memory area into which to write
+				// the filespecs it translated:
 				arg_deref[i] = the_only_var_of_this_arg->Contents();
 				break;
 			case CONDITION_TRUE:
-				// the_only_var_of_this_arg is either a reserved var or a normal var of
-				// zero length (for which GetEnvironment() is called for), or is used
+				// the_only_var_of_this_arg is either a reserved var or a normal var of that is also
+				// an environment var (for which GetEnvironmentVariable() is called for), or is used
 				// again in this line as an output variable.  In all these cases, it must
 				// be expanded into the buffer rather than accessed directly:
 				arg_deref[i] = our_buf_marker; // Point it to its location in the buffer.
@@ -2379,17 +2379,18 @@ VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize, Var *aArgVar[])
 		{
 			// Replace the length of the deref's literal text with the length of its variable's contents:
 			space -= deref->length;
-			// But in the case of expressions, size needs to be reserved for the variable's contents only
-			// if it will be copied into the deref buffer; namely the following cases:
-			// 1) Derefs whose type isn't VAR_NORMAL or that are env. vars (those whose length is zero but whose Get() is of non-zero length)
-			// 2) Derefs that are enclosed by the g_DerefChar character (%), which in expressions means that
-			//    must be copied into the buffer to support double references such as Array%i%.
 			if (!deref->is_function)
 			{
 				if (this_arg.is_expression)
 				{
-					if (*deref->marker == g_DerefChar || deref->var->Type() != VAR_NORMAL || !deref->var->Length()) // Relies on short-circuit boolean order.
-						space += deref->var->Get(); // If it's of zero length, Get() will give us either 0 or the size of the environment variable.
+					// In the case of expressions, size needs to be reserved for the variable's contents only
+					// if it will be copied into the deref buffer; namely the following cases:
+					// 1) Derefs whose type isn't VAR_NORMAL or that are env. vars (those whose length is zero but whose Get() is of non-zero length)
+					// 2) Derefs that are enclosed by the g_DerefChar character (%), which in expressions means that
+					//    must be copied into the buffer to support double references such as Array%i%.
+					if (*deref->marker == g_DerefChar || deref->var->Type() != VAR_NORMAL // Relies on short-circuit boolean order for the next line.
+						|| (!g_NoEnv && !deref->var->Length())) // v1.0.43.08: Added g_NoEnv.
+						space += deref->var->Get(); // If an environment var, Get() will yield its length.
 					space += 1;
 					// Fix for v1.0.35.04: The above now adds a space unconditionally because it is needed
 					// by the expression evaluation to provide an empty string (terminator) in the deref 
@@ -2406,7 +2407,7 @@ VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize, Var *aArgVar[])
 					// being needed, so our callers should be aware that that can happen.
 				}
 				else // Not an expression.
-					space += deref->var->Get(); // If it's of zero length, Get() will give us either 0 or the size of the environment variable.
+					space += deref->var->Get(); // If an environment var, Get() will yield its length.
 			}
 			//else it's a function-call's function name, in which case it's length is effectively zero.
 			// since the function name never gets copied into the deref buffer during ExpandExpression().
@@ -2434,18 +2435,17 @@ ResultType Line::ArgMustBeDereferenced(Var *aVar, int aArgIndexToExclude)
 		// the clipboard has only files on it, in which case those files need
 		// to be converted into plain text:
 		return CLIPBOARD_CONTAINS_ONLY_FILES ? CONDITION_TRUE : CONDITION_FALSE;
-	if (aVar->Type() != VAR_NORMAL || !aVar->Length() || aVar == g_ErrorLevel)
+	if (aVar->Type() != VAR_NORMAL || (!g_NoEnv && !aVar->Length()) || aVar == g_ErrorLevel) // v1.0.43.08: Added g_NoEnv.
 		// Reserved vars must always be dereferenced due to their volatile nature.
-		// Normal vars of length zero are dereferenced because they might exist
-		// as system environment variables, whose contents are also potentially
-		// volatile (i.e. they are sometimes changed by outside forces).
-		// As of v1.0.25.12, g_ErrorLevel is always dereferenced also so that
-		// a command that sets ErrorLevel can itself use ErrorLevel as in
-		// this example: StringReplace, EndKey, ErrorLevel, EndKey:
+		// When g_NoEnv==false, normal vars of length zero are dereferenced because they might exist
+		// as system environment variables, whose contents are also potentially volatile (i.e. they
+		// are sometimes changed by outside forces).
+		// As of v1.0.25.12, g_ErrorLevel is always dereferenced also so that a command that sets ErrorLevel
+		// can itself use ErrorLevel as in this example: StringReplace, EndKey, ErrorLevel, EndKey:
 		return CONDITION_TRUE;
-	// Since the above didn't return, we know that this is a NORMAL input var of
-	// non-zero length.  Such input vars only need to be dereferenced if they are
-	// also used as an output var by the current script line:
+	// Since the above didn't return, we know that this is a NORMAL input var that isn't an
+	// environment variable.  Such input vars only need to be dereferenced if they are also
+	// used as an output var by the current script line:
 	Var *output_var;
 	for (int i = 0; i < mArgc; ++i)
 		if (i != aArgIndexToExclude && mArg[i].type == ARG_TYPE_OUTPUT_VAR)
