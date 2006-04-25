@@ -66,6 +66,17 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 		case GUI_CMD_MAXIMIZE:
 		case GUI_CMD_RESTORE:
 			return OK; // Nothing needs to be done since the window object doesn't exist.
+
+		// v1.0.43.09:
+		// Don't overload "+LastFound" because it would break existing scripts that rely on the window
+		// being created by +LastFound.
+		case GUI_CMD_OPTIONS:
+			if (!stricmp(options, "+LastFoundExist"))
+			{
+				g.hWndLastUsed = NULL;
+				return OK;
+			}
+			break;
 		}
 
 		// Otherwise: Create the object and (later) its window, since all the other sub-commands below need it:
@@ -3341,7 +3352,7 @@ ResultType GuiType::ParseOptions(char *aOptions, bool &aSetLastFoundWindow, Togg
 			if (adding) mStyle |= WS_DISABLED; else mStyle &= ~WS_DISABLED;
 		}
 
-		else if (!stricmp(next_option, "LastFound"))
+		else if (!strnicmp(next_option, "LastFound", 9)) // strnicmp so that "LastFoundExist" is also recognized.
 			aSetLastFoundWindow = true; // Regardless of whether "adding" is true or false.
 
 		else if (!stricmp(next_option, "MaximizeBox")) // See above comment.

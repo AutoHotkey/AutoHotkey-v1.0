@@ -231,7 +231,7 @@ void SendKeys(char *aKeys, bool aSendRaw, SendModes aSendModeOrig, HWND aTargetW
 		// heavy load.
 		if (   !sMySendInput // Win95/NT-pre-SP3 don't support SendInput, so fall back to the specified mode.
 			|| SystemHasAnotherKeybdHook() // This function has been benchmarked to ensure it doesn't yield our timeslice, etc.  200 calls take 0ms according to tick-count, even when CPU is maxed.
-			|| !aSendRaw && SystemHasAnotherMouseHook() && !strcasestr(aKeys, "{Click")   ) // Ordered for short-circuit boolean performance.
+			|| !aSendRaw && SystemHasAnotherMouseHook() && strcasestr(aKeys, "{Click")   ) // Ordered for short-circuit boolean performance.  v1.0.43.09: Fixed to be strcasestr vs. !strcasestr
 		{
 			// Need to detect in advance what type of array to build (for performance and code size).  That's why
 			// it done this way, and here are the comments about it:

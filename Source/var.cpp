@@ -514,24 +514,35 @@ VarSizeType Var::Get(char *aBuf)
 	case VAR_COMPUTERNAME: if (!aBuf) return g_script.GetUserOrComputer(false); aBuf += g_script.GetUserOrComputer(false, aBuf); break;
 	case VAR_USERNAME: if (!aBuf) return g_script.GetUserOrComputer(true); aBuf += g_script.GetUserOrComputer(true, aBuf); break;
 
-	case VAR_COMSPEC:
-	case VAR_WINDIR:
-		// These two cases are atypical because they call the API directly rather than an go-between function.
-		// Sizes/lengths/-1/return-values/etc. have been verified correct.
-		if (!aBuf)
-		{
-			result = (mType == VAR_COMSPEC)
-				? GetEnvironmentVariable("comspec", buf_temp, 0)
-				: GetWindowsDirectory(buf_temp, 0);
-			return result ? result - 1 : 0; // Avoid wrapping 0 to large positive value due to unsigned type.
-		}
+	case VAR_COMSPEC: // Sizes/lengths/-1/return-values/etc. have been verified correct.
+		if (!aBuf) // Avoids subtracting 1 to be conservative and to reduce code size (due to the need to otherwise check for zero and avoid subtracting 1 in that case).
+			return GetEnvironmentVariable("comspec", buf_temp, 0);
 		// Otherwise:
-		aBuf += (mType == VAR_COMSPEC)
-			? GetEnvironmentVariable("comspec", aBuf, 32767) // Going higher than 32767 causes it to fail on Win9x.
-			: GetWindowsDirectory(aBuf, MAX_PATH);
+		aBuf += GetEnvironmentVariable("comspec", aBuf, 32767); // Going higher than 32767 causes it to fail on Win9x.
+		break;
+
+	case VAR_WINDIR: // Sizes/lengths/-1/return-values/etc. have been verified correct.
+		if (!aBuf) // Avoids subtracting 1 to be conservative and to reduce code size (due to the need to otherwise check for zero and avoid subtracting 1 in that case).
+			return GetWindowsDirectory(buf_temp, 0);
+		// Otherwise:
+		aBuf += GetWindowsDirectory(aBuf, MAX_PATH);
+		break;
+
+	case VAR_TEMP: // Sizes/lengths/-1/return-values/etc. have been verified correct.
+		if (!aBuf) // Avoids subtracting 1 to be conservative and to reduce code size (due to the need to otherwise check for zero and avoid subtracting 1 in that case).
+			return GetTempPath(0, buf_temp);
+		// Otherwise:
+		if (result = GetTempPath(MAX_PATH, aBuf)) // aBuf[-1] below relies on this check having been done.
+		{
+			aBuf += result;
+			if (aBuf[-1] == '\\') // For some reason, it typically yields a trailing backslash, so omit it to improve friendliness/consistency.
+				--aBuf; // aBuf is terminated later below.
+		}
 		break;
 
 	case VAR_PROGRAMFILES: if (!aBuf) return g_script.GetProgramFiles(); aBuf += g_script.GetProgramFiles(aBuf); break;
+	case VAR_APPDATA: if (!aBuf) return g_script.GetAppData(false); aBuf += g_script.GetAppData(false, aBuf); break;
+	case VAR_APPDATACOMMON: if (!aBuf) return g_script.GetAppData(true); aBuf += g_script.GetAppData(true, aBuf); break;
 	case VAR_DESKTOP: if (!aBuf) return g_script.GetDesktop(false); aBuf += g_script.GetDesktop(false, aBuf); break;
 	case VAR_DESKTOPCOMMON: if (!aBuf) return g_script.GetDesktop(true); aBuf += g_script.GetDesktop(true, aBuf); break;
 	case VAR_STARTMENU: if (!aBuf) return g_script.GetStartMenu(false); aBuf += g_script.GetStartMenu(false, aBuf); break;

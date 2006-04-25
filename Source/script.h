@@ -2375,6 +2375,7 @@ public:
 	VarSizeType GetLanguage(char *aBuf = NULL);
 	VarSizeType GetUserOrComputer(bool aGetUser, char *aBuf = NULL);
 	VarSizeType GetProgramFiles(char *aBuf = NULL);
+	VarSizeType GetAppData(bool aGetCommon, char *aBuf = NULL);
 	VarSizeType GetDesktop(bool aGetCommon, char *aBuf = NULL);
 	VarSizeType GetStartMenu(bool aGetCommon, char *aBuf = NULL);
 	VarSizeType GetPrograms(bool aGetCommon, char *aBuf = NULL);

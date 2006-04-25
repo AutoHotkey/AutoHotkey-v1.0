@@ -7995,7 +7995,11 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 	}
 
 	int options = ATOI(aOptions);
-	ofn.Flags = OFN_HIDEREADONLY | OFN_EXPLORER | OFN_NODEREFERENCELINKS;
+	// v1.0.43.09: OFN_NODEREFERENCELINKS is now omitted by default because most people probably want a click
+	// on a shortcut to navigate to the shortcut's target rather than select the shortcut and end the dialog.
+	ofn.Flags = OFN_HIDEREADONLY | OFN_EXPLORER;  // OFN_HIDEREADONLY: Hides the Read Only check box.
+	if (options & 0x20) // v1.0.43.09.
+		ofn.Flags |= OFN_NODEREFERENCELINKS;
 	if (options & 0x10)
 		ofn.Flags |= OFN_OVERWRITEPROMPT;
 	if (options & 0x08)
@@ -10776,7 +10780,7 @@ void BIF_LV_GetNextOrCount(ExprTokenType &aResultToken, ExprTokenType *aParam[],
 // 2: Options string.
 // 3: (FUTURE): Possible for use with LV_FindItem (though I think it can only search item text, not subitem text).
 {
-	bool mode_is_count = toupper(aResultToken.marker[6] == 'C'); // Marker contains the function name. LV_Get[C]ount.
+	bool mode_is_count = toupper(aResultToken.marker[6]) == 'C'; // Marker contains the function name. LV_Get[C]ount.  Bug-fixed for v1.0.43.09.
 	char *buf = aResultToken.buf; // Must be saved early since below overwrites the union (better maintainability too).
 	aResultToken.value_int64 = 0;
 	// Above sets default result in case of early return.  For code reduction, a zero is returned for all

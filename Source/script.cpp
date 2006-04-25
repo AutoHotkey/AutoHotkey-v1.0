@@ -5042,18 +5042,6 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				return ScriptError(ERR_PARAM3_INVALID, new_raw_arg3);
 		break;
 
-	case ACT_FILESELECTFILE:
-		if (*new_raw_arg2 && !line.ArgHasDeref(2))
-		{
-			if (toupper(*new_raw_arg2 == 'S'))
-                value = ATOI(new_raw_arg2 + 1);
-			else
-                value = ATOI(new_raw_arg2);
-			if (value < 0 || value > 31)
-				return ScriptError(ERR_PARAM2_INVALID, new_raw_arg2);
-		}
-		break;
-
 	case ACT_SETTITLEMATCHMODE:
 		if (aArgc > 0 && !line.ArgHasDeref(1) && !line.ConvertTitleMatchMode(new_raw_arg1))
 			return ScriptError(ERR_TITLEMATCHMODE, new_raw_arg1);
@@ -6835,7 +6823,10 @@ VarTypes Script::GetVarType(char *aVarName)
 	if (!strcmp(lower, "username")) return VAR_USERNAME;
 
 	if (!strcmp(lower, "windir")) return VAR_WINDIR;
+	if (!strcmp(lower, "temp")) return VAR_TEMP; // Debatably should be A_TempDir, but brevity seemed more popular with users, perhaps for heavy uses of the temp folder.
 	if (!strcmp(lower, "programfiles")) return VAR_PROGRAMFILES;
+	if (!strcmp(lower, "appdata")) return VAR_APPDATA;
+	if (!strcmp(lower, "appdatacommon")) return VAR_APPDATACOMMON;
 	if (!strcmp(lower, "desktop")) return VAR_DESKTOP;
 	if (!strcmp(lower, "desktopcommon")) return VAR_DESKTOPCOMMON;
 	if (!strcmp(lower, "startmenu")) return VAR_STARTMENU;
@@ -11473,6 +11464,18 @@ VarSizeType Script::GetProgramFiles(char *aBuf)
 	char buf[MAX_PATH];
 	char *target_buf = aBuf ? aBuf : buf;
 	RegReadString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion", "ProgramFilesDir", target_buf, MAX_PATH);
+	return (VarSizeType)strlen(target_buf);
+}
+
+VarSizeType Script::GetAppData(bool aGetCommon, char *aBuf)
+{
+	char buf[MAX_PATH];
+	char *target_buf = aBuf ? aBuf : buf;
+	*target_buf = '\0'; // Set default.
+	if (aGetCommon)
+		RegReadString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common AppData", target_buf, MAX_PATH);
+	if (!*target_buf) // Either the above failed or we were told to get the user/private dir instead.
+		RegReadString(HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "AppData", target_buf, MAX_PATH);
 	return (VarSizeType)strlen(target_buf);
 }
 
