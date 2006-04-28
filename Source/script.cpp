@@ -4827,11 +4827,6 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			return ScriptError(ERR_PARAM2_INVALID, new_raw_arg2);
 		break;
 
-	case ACT_PIXELGETCOLOR:
-		if (*new_raw_arg4 && !line.ArgHasDeref(4) && stricmp(new_raw_arg4, "RGB"))
-			return ScriptError(ERR_PARAM4_INVALID, new_raw_arg4);
-		break;
-
 	case ACT_PIXELSEARCH:
 	case ACT_IMAGESEARCH:
 		if (!*new_raw_arg3 || !*new_raw_arg4 || !*NEW_RAW_ARG5 || !*NEW_RAW_ARG6 || !*NEW_RAW_ARG7)
@@ -9773,11 +9768,11 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 
 	case ACT_PIXELSEARCH:
 		// ATOI() works on ARG7 (the color) because any valid BGR or RGB color has 0x00 in the high order byte:
-		return PixelSearch(ATOI(ARG3), ATOI(ARG4), ATOI(ARG5), ATOI(ARG6), ATOI(ARG7), ATOI(ARG8), ARG9);
+		return PixelSearch(ATOI(ARG3), ATOI(ARG4), ATOI(ARG5), ATOI(ARG6), ATOI(ARG7), ATOI(ARG8), ARG9, false);
 	case ACT_IMAGESEARCH:
 		return ImageSearch(ATOI(ARG3), ATOI(ARG4), ATOI(ARG5), ATOI(ARG6), ARG7);
 	case ACT_PIXELGETCOLOR:
-		return PixelGetColor(ATOI(ARG2), ATOI(ARG3), !stricmp(ARG4, "RGB"));
+		return PixelGetColor(ATOI(ARG2), ATOI(ARG3), ARG4);
 
 	case ACT_WINMINIMIZEALL:
 		PostMessage(FindWindow("Shell_TrayWnd", NULL), WM_COMMAND, 419, 0);
@@ -9956,13 +9951,22 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	case ACT_STRINGMID:
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
-		chars_to_extract = ATOI(ARG4); // Use 32-bit signed to detect negatives and fit it VarSizeType.
-		if (chars_to_extract < 0)
-			return output_var->Assign();  // Set it to be blank in this case.
+		// v1.0.43.10: Allow chars-to-extract to be blank, which means "get all characters".
+		// However, for backward compatibility, examine the raw arg, not ARG4.  That way, any existing
+		// scripts that use a variable reference or expression that resolves to an empty string will
+		// have the parameter treated as zero (as in previous versions) rather than "all characters".
+		if (mArgc < 4 || !*mArg[3].text)
+			chars_to_extract = INT_MAX;
+		else
+		{
+			chars_to_extract = ATOI(ARG4); // Use 32-bit signed to detect negatives and fit it VarSizeType.
+			if (chars_to_extract < 1)
+				return output_var->Assign();  // Set it to be blank in this case.
+		}
 		start_char_num = ATOI(ARG3);
 		if (toupper(*ARG5) == 'L')  // Chars to the left of start_char_num will be extracted.
 		{
-			if (start_char_num < 1)
+			if (start_char_num < 1) // Starting at a character number that is invalid for L mode.
 				return output_var->Assign();  // Blank seems most appropriate for the L option in this case.
 			start_char_num -= (chars_to_extract - 1);
 			if (start_char_num < 1)
@@ -9970,17 +9974,18 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 				// to the left of start_char_num, so we'll extract only them:
 				chars_to_extract -= (1 - start_char_num);
 		}
-		// UPDATE: The below is now also needed for the L option to work correctly.  Older:
+		// Above has converted "L" mode into normal mode, so "L" no longer needs to be considered below.
+		// UPDATE: The below is also needed for the L option to work correctly.  Older:
 		// It's somewhat debatable, but it seems best not to report an error in this and
 		// other cases.  The result here is probably enough to speak for itself, for script
 		// debugging purposes:
 		if (start_char_num < 1)
 			start_char_num = 1; // 1 is the position of the first char, unlike StringGetPos.
-		source_length = strlen(ARG2);
+		source_length = strlen(ARG2); // This call seems unavoidable in both "L" mode and normal mode.
 		if ((UINT)chars_to_extract > source_length)
 			chars_to_extract = (int)source_length;
-		if (source_length < (UINT)start_char_num)
-			return output_var->Assign();  // Set it to be blank in this case.
+		if (source_length < (UINT)start_char_num) // Starting character lies to the right of the entire string.
+			return output_var->Assign(); // No chars exist there, so set it to be blank.
 		else
 			return output_var->Assign(ARG2 + start_char_num - 1, chars_to_extract);
 

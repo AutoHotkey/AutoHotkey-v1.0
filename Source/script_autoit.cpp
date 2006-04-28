@@ -169,13 +169,17 @@ VarSizeType Script::GetIsAdmin(char *aBuf)
 
 
 
-ResultType Line::PixelGetColor(int aX, int aY, bool aUseRGB)
+ResultType Line::PixelGetColor(int aX, int aY, char *aOptions)
 {
+	if (strcasestr(aOptions, "Slow")) // New mode for v1.0.43.10.  Takes precedence over Alt mode.
+		return PixelSearch(aX, aY, aX, aY, 0, 0, aOptions, true); // It takes care of setting ErrorLevel and the output-var.
 	Var *output_var = ResolveVarOfArg(0);
 	if (!output_var)
 		return FAIL;
+
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 	output_var->Assign(); // Init to empty string regardless of whether we succeed here.
+
 	if (!(g.CoordMode & COORD_MODE_PIXEL)) // Using relative vs. screen coordinates.
 	{
 		// Convert from relative to absolute (screen) coordinates:
@@ -185,19 +189,25 @@ ResultType Line::PixelGetColor(int aX, int aY, bool aUseRGB)
 		aX += rect.left;
 		aY += rect.top;
 	}
-	HDC hdc = GetDC(NULL);
+
+	bool use_alt_mode = strcasestr(aOptions, "Alt") != NULL; // New mode for v1.0.43.10: Two users reported that CreateDC works better in certain windows such as SciTE, at least one some systems.
+	HDC hdc = use_alt_mode ? CreateDC("DISPLAY", NULL, NULL, NULL) : GetDC(NULL);
 	if (!hdc)
 		return OK;  // Let ErrorLevel tell the story.
+
 	// Assign the value as an 32-bit int to match Window Spy reports color values.
 	// Update for v1.0.21: Assigning in hex format seems much better, since it's easy to
 	// look at a hex BGR value to get some idea of the hue.  In addition, the result
 	// is zero padded to make it easier to convert to RGB and more consistent in
 	// appearance:
 	COLORREF color = GetPixel(hdc, aX, aY);
-	ReleaseDC(NULL, hdc);
+	if (use_alt_mode)
+		DeleteDC(hdc);
+	else
+		ReleaseDC(NULL, hdc);
 
 	char buf[32];
-	sprintf(buf, "0x%06X", aUseRGB ? bgr_to_rgb(color) : color);
+	sprintf(buf, "0x%06X", strcasestr(aOptions, "RGB") ? bgr_to_rgb(color) : color);
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 	return output_var->Assign(buf);
 }

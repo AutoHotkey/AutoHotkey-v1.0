@@ -296,7 +296,7 @@ Action g_act[] =
 
 	, {"StringLeft", 3, 3, 3, {3, 0}}  // output var, input var, number of chars to extract
 	, {"StringRight", 3, 3, 3, {3, 0}} // same
-	, {"StringMid", 4, 5, 5, {3, 4, 0}} // Output Variable, Input Variable, Start char, Number of chars to extract, L
+	, {"StringMid", 3, 5, 5, {3, 4, 0}} // Output Variable, Input Variable, Start char, Number of chars to extract, L
 	, {"StringTrimLeft", 3, 3, 3, {3, 0}}  // output var, input var, number of chars to trim
 	, {"StringTrimRight", 3, 3, 3, {3, 0}} // same
 	, {"StringLower", 2, 3, 3, NULL} // output var, input var, T = Title Case

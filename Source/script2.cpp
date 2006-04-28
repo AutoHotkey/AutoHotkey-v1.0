@@ -3830,15 +3830,16 @@ end:
 
 
 ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, COLORREF aColorBGR
-	, int aVariation, char *aOptions)
+	, int aVariation, char *aOptions, bool aIsPixelGetColor)
 // Caller has ensured that aColor is in BGR format unless caller passed true for aUseRGB, in which case
 // it's in RGB format.
 // Author: The fast-mode PixelSearch was created by Aurelian Maga.
 {
 	// For maintainability, get options and RGB/BGR conversion out of the way early.
-	bool fast_mode = strcasestr(aOptions, "Fast");
+	bool fast_mode = aIsPixelGetColor || strcasestr(aOptions, "Fast");
+	bool use_rgb = strcasestr(aOptions, "RGB") != NULL;
 	COLORREF aColorRGB;
-	if (strcasestr(aOptions, "RGB")) // aColorBGR currently contains an RGB value.
+	if (use_rgb) // aColorBGR currently contains an RGB value.
 	{
 		aColorRGB = aColorBGR;
 		aColorBGR = rgb_to_bgr(aColorBGR);
@@ -3850,9 +3851,9 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, COLOR
 	// maintained together.
 
 	Var *output_var_x = ResolveVarOfArg(0);  // Ok if NULL.
-	Var *output_var_y = ResolveVarOfArg(1);  // Ok if NULL.
+	Var *output_var_y = aIsPixelGetColor ? NULL : ResolveVarOfArg(1);  // Ok if NULL.
 
-	g_ErrorLevel->Assign(ERRORLEVEL_ERROR2); // Set default ErrorLevel.  2 means error other than "color not found".
+	g_ErrorLevel->Assign(aIsPixelGetColor ? ERRORLEVEL_ERROR : ERRORLEVEL_ERROR2); // Set default ErrorLevel.  2 means error other than "color not found".
 	if (output_var_x)
 		output_var_x->Assign();  // Init to empty string regardless of whether we succeed here.
 	if (output_var_y)
@@ -3940,7 +3941,15 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, COLOR
 			for (i = 0; i < screen_pixel_count; ++i)
 				screen_pixel[i] &= 0xF8F8F8F8;
 
-		if (aVariation < 1) // Caller wants an exact match on one particular color.
+		if (aIsPixelGetColor)
+		{
+			COLORREF color = screen_pixel[0] & 0x00FFFFFF; // See other 0x00FFFFFF below for explanation.
+			char buf[32];
+			sprintf(buf, "0x%06X", use_rgb ? color : rgb_to_bgr(color));
+			output_var_x->Assign(buf); // Caller has ensured that first output_var (x) won't be NULL in this mode.
+			found = true; // ErrorLevel will be set to 0 further below.
+		}
+		else if (aVariation < 1) // Caller wants an exact match on one particular color.
 		{
 			if (screen_is_16bit)
 				aColorRGB &= 0xF8F8F8F8;
@@ -4022,10 +4031,13 @@ fast_end:
 		// Otherwise, success.  Calculate xpos and ypos of where the match was found and adjust
 		// coords to make them relative to the position of the target window (rect will contain
 		// zeroes if this doesn't need to be done):
-		if (output_var_x && !output_var_x->Assign((aLeft + i%screen_width) - rect.left))
-			return FAIL;
-		if (output_var_y && !output_var_y->Assign((aTop + i/screen_width) - rect.top))
-			return FAIL;
+		if (!aIsPixelGetColor)
+		{
+			if (output_var_x && !output_var_x->Assign((aLeft + i%screen_width) - rect.left))
+				return FAIL;
+			if (output_var_y && !output_var_y->Assign((aTop + i/screen_width) - rect.top))
+				return FAIL;
+		}
 
 		return g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 	}
@@ -7883,25 +7895,45 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 	else
 	{
 		strlcpy(working_dir, aWorkingDir, sizeof(working_dir));
-		DWORD attr = GetFileAttributes(working_dir);
-		if (attr == 0xFFFFFFFF || !(attr & FILE_ATTRIBUTE_DIRECTORY))
+		// v1.0.43.10: Support CLSIDs such as:
+		//   My Computer  ::{20d04fe0-3aea-1069-a2d8-08002b30309d}
+		//   My Documents ::{450d8fba-ad25-11d0-98a8-0800361b1103}
+		// Also support optional subdirectory appended to the CLSID.
+		// Neither SetCurrentDirectory() nor GetFileAttributes() directly supports CLSIDs, so rely on other means
+		// to detect whether a CLSID ends in a directory vs. filename.
+		bool is_directory, is_clsid;
+		if (is_clsid = !strncmp(working_dir, "::{", 3))
 		{
-			// Above condition indicates it's either an existing file or an invalid
-			// folder/filename (one that doesn't currently exist).  In light of this,
-			// it seems best to assume it's a file because the user may want to
-			// provide a default SAVE filename, and it would be normal for such
-			// a file not to already exist.
-			char *last_backslash = strrchr(working_dir, '\\');
-			if (last_backslash)
+			char *end_brace;
+			if (end_brace = strchr(working_dir, '}'))
+				is_directory = !end_brace[1] // First '}' is also the last char in string, so it's naked CLSID (so assume directory).
+					|| working_dir[strlen(working_dir) - 1] == '\\'; // Or path ends in backslash.
+			else // Badly formatted clsid.
+				is_directory = true; // Arbitrary default due to rarity.
+		}
+		else // Not a CLSID.
+		{
+			DWORD attr = GetFileAttributes(working_dir);
+			is_directory = (attr != 0xFFFFFFFF) && (attr & FILE_ATTRIBUTE_DIRECTORY);
+		}
+		if (!is_directory)
+		{
+			// Above condition indicates it's either an existing file that's not a folder, or a nonexistent
+			// folder/filename.  In either case, it seems best to assume it's a file because the user may want
+			// to provide a default SAVE filename, and it would be normal for such a file not to already exist.
+			char *last_backslash;
+			if (last_backslash = strrchr(working_dir, '\\'))
 			{
 				strlcpy(file_buf, last_backslash + 1, sizeof(file_buf)); // Set the default filename.
 				*last_backslash = '\0'; // Make the working directory just the file's path.
 			}
-			else // the entire working_dir string is the default file.
-			{
-				strlcpy(file_buf, working_dir, sizeof(file_buf));
-				*working_dir = '\0';  // This signals it to use the default directory.
-			}
+			else // The entire working_dir string is the default file (unless this is a clsid).
+				if (!is_clsid)
+				{
+					strlcpy(file_buf, working_dir, sizeof(file_buf));
+					*working_dir = '\0';  // This signals it to use the default directory.
+				}
+				//else leave working_dir set to the entire clsid string in case it's somehow valid.
 		}
 		// else it is a directory, so just leave working_dir set as it was initially.
 	}

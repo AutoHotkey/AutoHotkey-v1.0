@@ -2198,7 +2198,9 @@ void MouseMove(int &aX, int &aY, DWORD &aEventFlags, int aSpeed, bool aMoveOffse
 	// The extra +1 would produce 65536 (an out-of-range value for a single-monitor system) if the maximum
 	// X or Y coordinate was input (e.g. x-position 1023 on a 1024x768 screen).  Although this correction
 	// seems inconsequential on single-monitor systems, it may fix certain misbehaviors that have been reported
-	// on multi-monitor systems (or maybe not).
+	// on multi-monitor systems. Update: according to someone I asked to test it, it didn't fix anything on
+	// multimonitor systems, at least those whose monitors vary in size to each other.  In such cases, he said
+	// that only SendPlay or DllCall("SetCursorPos") make mouse movement work properly.
 	#define MOUSE_COORD_TO_ABS(coord, width_or_height) ((65535 * coord) / (width_or_height - 1))
 	aX = MOUSE_COORD_TO_ABS(aX, screen_width);
 	aY = MOUSE_COORD_TO_ABS(aY, screen_height);

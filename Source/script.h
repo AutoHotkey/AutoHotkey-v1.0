@@ -664,9 +664,10 @@ private:
 	ResultType WinGetPos(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType EnvGet(char *aEnvVarName);
 	ResultType SysGet(char *aCmd, char *aValue);
-	ResultType PixelSearch(int aLeft, int aTop, int aRight, int aBottom, COLORREF aColorBGR, int aVariation, char *aOptions);
+	ResultType PixelSearch(int aLeft, int aTop, int aRight, int aBottom, COLORREF aColorBGR, int aVariation
+		, char *aOptions, bool aIsPixelGetColor);
 	ResultType ImageSearch(int aLeft, int aTop, int aRight, int aBottom, char *aImageFile);
-	ResultType PixelGetColor(int aX, int aY, bool aUseRGB);
+	ResultType PixelGetColor(int aX, int aY, char *aOptions);
 
 	static ResultType SetToggleState(vk_type aVK, ToggleValueType &ForceLock, char *aToggleText);
 
