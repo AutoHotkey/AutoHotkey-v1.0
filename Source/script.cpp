@@ -10909,6 +10909,13 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		case TOGGLE_DEFAULT:
 			g_BlockInputMode = toggle;
 			break;
+		case TOGGLE_MOUSEMOVE:
+			g_BlockMouseMove = true;
+			Hotkey::InstallMouseHook();
+			break;
+		case TOGGLE_MOUSEMOVEOFF:
+			g_BlockMouseMove = false; // But the mouse hook is left installed because it might be needed by other things. This approach is similar to that used by the Input command.
+			break;
 		// default (NEUTRAL or TOGGLE_INVALID): do nothing.
 		}
 		return OK;

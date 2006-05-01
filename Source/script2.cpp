@@ -10291,7 +10291,7 @@ void BIF_InStr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 
 	if (aParamCount >= 4) // There is a starting position present.
 	{
-		offset = ExprTokenToInt64(*aParam[3]) - 1; // +3 to get the fourth arg.
+		offset = ExprTokenToInt64(*aParam[3]) - 1; // i.e. the fourth arg.
 		if (offset == -1) // Special mode to search from the right side.  Other negative values are reserved for possible future use as offsets from the right side.
 		{
 			found_pos = strrstr(haystack, needle, string_case_sense, 1);

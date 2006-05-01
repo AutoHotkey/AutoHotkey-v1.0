@@ -1537,6 +1537,8 @@ public:
 		if (!stricmp(aBuf, "Mouse")) return TOGGLE_MOUSE;
 		if (!stricmp(aBuf, "SendAndMouse")) return TOGGLE_SENDANDMOUSE;
 		if (!stricmp(aBuf, "Default")) return TOGGLE_DEFAULT;
+		if (!stricmp(aBuf, "MouseMove")) return TOGGLE_MOUSEMOVE;
+		if (!stricmp(aBuf, "MouseMoveOff")) return TOGGLE_MOUSEMOVEOFF;
 		return TOGGLE_INVALID;
 	}
 

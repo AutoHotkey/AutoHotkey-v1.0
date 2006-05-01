@@ -191,6 +191,7 @@ ToggleValueType g_ForceScrollLock = NEUTRAL;
 
 ToggleValueType g_BlockInputMode = TOGGLE_DEFAULT;
 bool g_BlockInput = false;
+bool g_BlockMouseMove = false;
 
 // The order of initialization here must match the order in the enum contained in script.h
 // It's in there rather than in globaldata.h so that the action-type constants can be referred

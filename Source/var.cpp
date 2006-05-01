@@ -453,34 +453,6 @@ VarSizeType Var::Get(char *aBuf)
 	case VAR_LOOPREGNAME: if (!aBuf) return g_script.GetLoopRegName(); else aBuf += g_script.GetLoopRegName(aBuf); break;
 	case VAR_LOOPREGTIMEMODIFIED: if (!aBuf) return g_script.GetLoopRegTimeModified(); else aBuf += g_script.GetLoopRegTimeModified(aBuf); break;
 
-	case VAR_WORKINGDIR:
-		// Use GetCurrentDirectory() vs. g_WorkingDir because any in-progrses FileSelectFile()
-		// dialog is able to keep functioning even when it's quasi-thread is suspended.  The
-		// dialog can thus change the current directory as seen by the active quasi-thread even
-		// though g_WorkingDir hasn't been updated.  It might also be possible for the working
-		// directory to change in unusual circumstances such as a network drive being lost):
-		if (!aBuf)
-		{
-			result = GetCurrentDirectory(sizeof(buf_temp), buf_temp);
-			if (!result)
-			{
-				// Disabled because it probably never happens:
-				// This is just a warning because this function isn't set up to cause a true
-				// failure.  So don't append ERR_ABORT to the below string:
-				//g_script.ScriptError("GetCurrentDirectory."); // Short msg since probably can't realistically fail.
-				// Probably safer to return something so that caller reserves enough space for it
-				// in case the call works the next time?:
-				return MAX_PATH;
-			}
-			// Return values are done according to the documented behavior of GetCurrentDirectory():
-			if (result > sizeof(buf_temp))
-				return result - 1;
-			return result;  // Should never be reached.
-		}
-		// Otherwise:
-		aBuf += GetCurrentDirectory(9999, aBuf);  // Caller has already ensured it's large enough.
-		break;
-
 	case VAR_BATCHLINES: if (!aBuf) return g_script.GetBatchLines(); aBuf += g_script.GetBatchLines(aBuf); break;
 	case VAR_TITLEMATCHMODE: if (!aBuf) return g_script.GetTitleMatchMode(); else aBuf += g_script.GetTitleMatchMode(aBuf); break;
 	case VAR_TITLEMATCHMODESPEED: if (!aBuf) return g_script.GetTitleMatchModeSpeed(); else aBuf += g_script.GetTitleMatchModeSpeed(aBuf); break;
@@ -538,6 +510,24 @@ VarSizeType Var::Get(char *aBuf)
 			if (aBuf[-1] == '\\') // For some reason, it typically yields a trailing backslash, so omit it to improve friendliness/consistency.
 				--aBuf; // aBuf is terminated later below.
 		}
+		break;
+
+	case VAR_WORKINGDIR:
+		// Use GetCurrentDirectory() vs. g_WorkingDir because any in-progrses FileSelectFile()
+		// dialog is able to keep functioning even when it's quasi-thread is suspended.  The
+		// dialog can thus change the current directory as seen by the active quasi-thread even
+		// though g_WorkingDir hasn't been updated.  It might also be possible for the working
+		// directory to change in unusual circumstances such as a network drive being lost):
+		if (!aBuf) // Avoids subtracting 1 to be conservative and to reduce code size (due to the need to otherwise check for zero and avoid subtracting 1 in that case).
+			return GetCurrentDirectory(0, NULL); // MSDN says that this is a valid way to call it on all OSes, and testing shows that it works on WinXP and 98se.
+		// Otherwise:
+		// Fix for v1.0.43.11: Changed size below from 9999 to MAX_PATH, otherwise it fails sometimes on Win9x.
+		// Testing shows that the failure is not caused by GetCurrentDirectory() writing to the unused part of the
+		// buffer, such as zeroing it (which is good because that would require this part to be redesigned to pass
+		// the actual buffer size or use a temp buffer).  So there's something else going on to explain why the
+		// problem only occurs in longer scripts on Win98se, not in trivial ones such as Var=%A_WorkingDir%.
+		// Nor did the problem affect expression assignments such as Var:=A_WorkingDir.
+		aBuf += GetCurrentDirectory(MAX_PATH, aBuf);
 		break;
 
 	case VAR_PROGRAMFILES: if (!aBuf) return g_script.GetProgramFiles(); aBuf += g_script.GetProgramFiles(aBuf); break;

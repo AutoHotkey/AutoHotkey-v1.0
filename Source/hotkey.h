@@ -222,6 +222,7 @@ public:
 	static ResultType TextToKey(char *aText, char *aHotkeyName, bool aIsModifier, Hotkey *aThisHotkey, bool aUseErrorLevel);
 
 	static void InstallKeybdHook();
+	static void InstallMouseHook();
 
 	bool PerformIsAllowed(HotkeyVariant &aVariant)
 	{

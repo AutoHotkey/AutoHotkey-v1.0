@@ -382,7 +382,9 @@ void Hotkey::ManifestAllHotkeysHotstringsHooks()
 			|| (AtLeastOneHotstringEnabled = Hotstring::AtLeastOneEnabled()))   ) // Called last for performance due to short-circuit boolean.
 		sWhichHookNeeded |= HOOK_KEYBD;
 
-	if (!(sWhichHookNeeded & HOOK_MOUSE || sWhichHookAlways & HOOK_MOUSE) && g_HSResetUponMouseClick)
+	if (g_BlockMouseMove)
+		sWhichHookNeeded |= HOOK_MOUSE;
+	else if (!(sWhichHookNeeded & HOOK_MOUSE || sWhichHookAlways & HOOK_MOUSE) && g_HSResetUponMouseClick)
 	{
 		if (AtLeastOneHotstringEnabled == 2) // The function Hotstring::AtLeastOneEnabled() was not yet called above.
 			AtLeastOneHotstringEnabled = Hotstring::AtLeastOneEnabled();
@@ -1855,6 +1857,16 @@ void Hotkey::InstallKeybdHook()
 {
 	sWhichHookNeeded |= HOOK_KEYBD;
 	if (!g_KeybdHook)
+		ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways);
+}
+
+
+
+void Hotkey::InstallMouseHook()
+// Same comment as for InstallKeybdHook() above.
+{
+	sWhichHookNeeded |= HOOK_MOUSE;
+	if (!g_MouseHook)
 		ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways);
 }
 

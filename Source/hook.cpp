@@ -31,12 +31,12 @@ static HANDLE sMouseMutex = NULL;
 // These are made global, rather than static inside the hook function, so that
 // we can ensure they are initialized by the keyboard init function every
 // time it's called (currently it can be only called once):
-static bool sDisguiseNextLWinUp;  // Initialized by ResetHook().
-static bool sDisguiseNextRWinUp;  //
-static bool sDisguiseNextLAltUp;  //
-static bool sDisguiseNextRAltUp;  //
-static bool sAltTabMenuIsVisible; //
-static vk_type sVKtoIgnoreNextTimeDown; // Initialized by ResetHook().
+static bool sDisguiseNextLWinUp;        // Initialized by ResetHook().
+static bool sDisguiseNextRWinUp;        //
+static bool sDisguiseNextLAltUp;        //
+static bool sDisguiseNextRAltUp;        //
+static bool sAltTabMenuIsVisible;       //
+static vk_type sVKtoIgnoreNextTimeDown; //
 
 // The prefix key that's currently down (i.e. in effect).
 // It's tracked this way, rather than as a count of the number of prefixes currently down, out of
@@ -307,7 +307,12 @@ LRESULT CALLBACK LowLevelMouseProc(int aCode, WPARAM wParam, LPARAM lParam)
 		// A final concern is that some drivers might be faulty and might not generate an accurate timestamp.
 
 	if (wParam == WM_MOUSEMOVE) // Only after updating for physical input, above, is this checked.
-		return CallNextHookEx(g_MouseHook, aCode, wParam, lParam);
+		return (g_BlockMouseMove && !(event.flags & LLMHF_INJECTED)) ? 1 : CallNextHookEx(g_MouseHook, aCode, wParam, lParam);
+		// Above: In v1.0.43.11, a new mode was added to block mouse movement only since it's more flexible than
+		// BlockInput (which keybd too, and blocks all mouse buttons too).  However, this mode blocks only
+		// physical mouse movement because it seems most flexible (and simplest) to allow all artificial
+		// movement, even if that movement came from a source other than an AHK script (such as some other
+		// macro program).
 
 	// MSDN: WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN, or WM_RBUTTONUP.
 	// But what about the middle button?  It's undocumented, but it is received.

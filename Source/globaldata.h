@@ -163,6 +163,7 @@ extern ToggleValueType g_ForceScrollLock;
 
 extern ToggleValueType g_BlockInputMode;
 extern bool g_BlockInput;  // Whether input blocking is currently enabled.
+extern bool g_BlockMouseMove; // Whether physical mouse movement is currently blocked via the mouse hook.
 
 extern Action g_act[];
 extern int g_ActionCount;
