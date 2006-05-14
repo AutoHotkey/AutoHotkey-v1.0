@@ -1359,6 +1359,17 @@ int CALLBACK FontEnumProc(ENUMLOGFONTEX *lpelfe, NEWTEXTMETRICEX *lpntme, DWORD 
 
 
 
+void ScreenToWindow(POINT &aPoint, HWND aHwnd)
+// Convert screen coordinates to window coordinates.
+{
+	RECT rect;
+	GetWindowRect(aHwnd, &rect);
+	aPoint.x -= rect.left;
+	aPoint.y -= rect.top;
+}
+
+
+
 void WindowToScreen(int &aX, int &aY)
 // aX and aY are assumed to be relative to the currently active window.  Here they are converted to
 // screen coordinates based on the position of the active window upper-left corner (not its client area).
@@ -1521,12 +1532,16 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, i
 		|| !stricmp(file_ext, "icl") // Icon library: Unofficial dll container, see notes above.
 		|| !stricmp(file_ext, "cpl") // Control panel extension/applet (ExtractIcon is said to work on these).
 		|| !stricmp(file_ext, "scr") // Screen saver (ExtractIcon should work since these are really EXEs).
-		|| !stricmp(file_ext, "drv") // Driver (ExtractIcon is said to work on these).
-		|| !stricmp(file_ext, "ocx") // OLE/ActiveX Control Extension
-		|| !stricmp(file_ext, "vbx") // Visual Basic Extension
-		|| !stricmp(file_ext, "acm") // Audio Compression Manager Driver
-		|| !stricmp(file_ext, "bpl") // Delphi Library (like a DLL?)
-		// Not supported due to rarity, code size, performance, and uncertainty of whether ExtractIcon works on them:
+		// v1.0.44: Below are now omitted to reduce code size and improve performance. They are still supported
+		// indirectly because ExtractIcon is attempted whenever LoadImage() fails further below.
+		//|| !stricmp(file_ext, "drv") // Driver (ExtractIcon is said to work on these).
+		//|| !stricmp(file_ext, "ocx") // OLE/ActiveX Control Extension
+		//|| !stricmp(file_ext, "vbx") // Visual Basic Extension
+		//|| !stricmp(file_ext, "acm") // Audio Compression Manager Driver
+		//|| !stricmp(file_ext, "bpl") // Delphi Library (like a DLL?)
+		// Not supported due to rarity, code size, performance, and uncertainty of whether ExtractIcon works on them.
+		// Update for v1.0.44: The following are now supported indirectly because ExtractIcon is attempted whenever
+		// LoadImage() fails further below.
 		//|| !stricmp(file_ext, "nil") // Norton Icon Library 
 		//|| !stricmp(file_ext, "wlx") // Total/Windows Commander Lister Plug-in
 		//|| !stricmp(file_ext, "wfx") // Total/Windows Commander File System Plug-in
@@ -1536,15 +1551,15 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, i
 	if (ExtractIcon_was_used)
 	{
 		aImageType = IMAGE_ICON;
-		hbitmap = (HBITMAP)ExtractIcon(g_hInstance, aFilespec, aIconNumber > 0 ? aIconNumber - 1 : 0); // Return value of 1 means "incorrect file type".
+		hbitmap = (HBITMAP)ExtractIcon(g_hInstance, aFilespec, aIconNumber > 0 ? aIconNumber - 1 : 0);
 		// Above: Although it isn't well documented at MSDN, apparently both ExtractIcon() and LoadIcon()
 		// scale the icon to the system's large-icon size (usually 32x32) regardless of the actual size of
 		// the icon inside the file.  For this reason, callers should call us in a way that allows us to
 		// give preference to LoadImage() over ExtractIcon() (unless the caller needs to retain backward
 		// compatibility with existing scripts that explicitly specify icon #1 to force the ExtractIcon
 		// method to be used).
-		if (!hbitmap || hbitmap == (HBITMAP)1 || (!aWidth && !aHeight)) // Couldn't load icon, or could but no resizing is needed.
-			return hbitmap;
+		if (hbitmap < (HBITMAP)2) // i.e. it's NULL or 1. Return value of 1 means "incorrect file type".
+			return NULL; // v1.0.44: Fixed to return NULL vs. hbitmap, since 1 is an invalid handle (perhaps rare since no known bugs caused by it).
 		//else continue on below so that the icon can be resized to the caller's specified dimensions.
 	}
 	else if (aIconNumber > 0) // Caller wanted HICON, never HBITMAP, so set type now to enforce that.
@@ -1576,8 +1591,11 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, i
 		// LoadImage() [icon/cursor/bitmap], attempt that first.  If it fails, fall back to the other
 		// methods below in case the file's internal contents differ from what the file extension indicates.
 		int desired_width, desired_height;
-		if (keep_aspect_ratio)
-			desired_width = desired_height = 0; // Load image at its actual size.  It will be rescaled to retain aspect ratio later below.
+		if (keep_aspect_ratio) // Load image at its actual size.  It will be rescaled to retain aspect ratio later below.
+		{
+			desired_width = 0;
+			desired_height = 0;
+		}
 		else
 		{
 			desired_width = aWidth;
@@ -1602,10 +1620,19 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, i
 		// v1.0.40.10: Abort if file doesn't exist so that GDIPlus isn't even attempted. This is done because
 		// loading GDIPlus apparently disrupts the color palette of certain games, at least old ones that use
 		// DirectDraw in 256-color depth.
+		else if (GetFileAttributes(aFilespec) == 0xFFFFFFFF) // For simplicity, we don't check if it's a directory vs. file, since that should be too rare.
+			return NULL;
 		// v1.0.43.07: Also abort if caller wanted an HICON (not an HBITMAP), since the other methods below
 		// can't yield an HICON.
-		else if (aIconNumber > 0 || GetFileAttributes(aFilespec) == 0xFFFFFFFF) // For simplicity, we don't check if it's a directory vs. file, since that should be too rare.
-			return NULL;
+		else if (aIconNumber > 0)
+		{
+			// UPDATE for v1.0.44: Attempt ExtractIcon in case its some extension that's
+			// was recognized as an icon container (such as AutoHotkeySC.bin) and thus wasn't handled higher above.
+			hbitmap = (HBITMAP)ExtractIcon(g_hInstance, aFilespec, aIconNumber - 1);
+			if (hbitmap < (HBITMAP)2) // i.e. it's NULL or 1. Return value of 1 means "incorrect file type".
+				return NULL;
+			ExtractIcon_was_used = true;
+		}
 		//else file exists, so continue on so that the other methods are attempted in case file's contents
 		// differ from what the file extension indicates, or in case the other methods can be successful
 		// even when the above failed.

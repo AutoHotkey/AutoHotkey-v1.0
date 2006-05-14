@@ -29,7 +29,7 @@ EXTERN_SCRIPT;  // For g_script.
 // Note: 0xBFFF is the largest ID that can be used with RegisterHotkey().
 // But further limit this to 0x3FFF (16,383) so that the two highest order bits
 // are reserved for our other uses:
-#define HOTKEY_NO_SUPPRESS             0x8000
+#define HOTKEY_FUTURE_USE              0x8000  // Formerly HOTKEY_NO_SUPPRESS but no longer needed for that.
 #define HOTKEY_KEY_UP                  0x4000
 #define HOTKEY_ID_MASK                 0x3FFF
 #define HOTKEY_ID_INVALID              HOTKEY_ID_MASK
@@ -83,6 +83,7 @@ struct HotkeyVariant
 	// 4-byte alignment:
 	HotCriterionType mHotCriterion;
 	UCHAR mExistingThreads, mMaxThreads;
+	bool mNoSuppress; // v1.0.44: This became a per-variant attribute because it's more useful/flexible that way.
 	bool mMaxThreadsBuffer;
 	bool mRunAgainAfterFinished;
 	bool mEnabled; // Whether this variant has been disabled via the Hotkey command.
@@ -146,7 +147,7 @@ private:
 
 	// For now, constructor & destructor are private so that only static methods can create new
 	// objects.  This allow proper tracking of which OS hotkey IDs have been used.
-	Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction, char *aName, bool aUseErrorLevel);
+	Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction, char *aName, bool aHasTilde, bool aUseErrorLevel);
 	~Hotkey() {if (mIsRegistered) Unregister();}
 
 public:
@@ -165,10 +166,13 @@ public:
 	vk_type mVK; // virtual-key code, e.g. VK_TAB, VK_LWIN, VK_LMENU, VK_APPS, VK_F10.  If zero, use sc below.
 	vk_type mModifierVK; // Any other virtual key that must be pressed down in order to activate "vk" itself.
 	HotkeyTypeType mType;
-	#define NO_SUPPRESS_SUFFIX 0x01 // Bitwise: Bit #1
-	#define NO_SUPPRESS_PREFIX 0x02 // Bitwise: Bit #2
-	#define NO_SUPPRESS_NEXT_UP_EVENT 0x04 // Bitwise: Bit #3
-	#define NO_SUPPRESS_STATES NO_SUPPRESS_NEXT_UP_EVENT  // Those of the above that represent a the key's dynamically changing state as the user types.
+	#define NO_SUPPRESS_PREFIX 0x01 // Bitwise: Bit #1
+	#define AT_LEAST_ONE_VARIANT_HAS_TILDE 0x02 // Bitwise: Bit #2
+	#define AT_LEAST_ONE_VARIANT_LACKS_TILDE 0x04 // Bitwise: Bit #3
+	#define NO_SUPPRESS_NEXT_UP_EVENT 0x08 // Bitwise: Bit #4
+	#define NO_SUPPRESS_SUFFIX_VARIES (AT_LEAST_ONE_VARIANT_HAS_TILDE | AT_LEAST_ONE_VARIANT_LACKS_TILDE) // i.e. a hotkey that has variants of both types.
+	#define NO_SUPPRESS_STATES NO_SUPPRESS_NEXT_UP_EVENT  // This is a bitwise union (currently only one item) of those of the above that represent a the key's dynamically changing state as the user types.
+
 	UCHAR mNoSuppress;  // Uses the flags above.  Normally 0, but can be overridden by using the hotkey tilde (~) prefix).
 	bool mKeybdHookMandatory;
 	bool mAllowExtraModifiers;  // False if the hotkey should not fire when extraneous modifiers are held down.
@@ -200,14 +204,14 @@ public:
 	#define HOTKEY_EL_MEM                "99"
 	static ResultType Dynamic(char *aHotkeyName, char *aLabelName, char *aOptions, Label *aJumpToLabel);
 
-	static Hotkey *AddHotkey(Label *aJumpToLabel, HookActionType aHookAction, char *aName, bool aUseErrorLevel);
+	static Hotkey *AddHotkey(Label *aJumpToLabel, HookActionType aHookAction, char *aName, bool aHasTilde, bool aUseErrorLevel);
 	HotkeyVariant *FindVariant();
-	HotkeyVariant *AddVariant(Label *aJumpToLabel);
+	HotkeyVariant *AddVariant(Label *aJumpToLabel, bool aHasTilde);
 	static bool PrefixHasNoEnabledSuffixes(int aVKorSC, bool aIsSC);
 	HotkeyVariant *CriterionAllowsFiring(HWND *aFoundHWND = NULL);
 	static HotkeyVariant *CriterionAllowsFiring(HotkeyIDType aHotkeyID, HWND &aFoundHWND);
 	static bool CriterionFiringIsCertain(HotkeyIDType aHotkeyIDwithFlags, bool aKeyUp, UCHAR &aNoSuppress
-		, char *aSingleChar);
+		, bool &aFireWithNoSuppress, char *aSingleChar);
 	static void TriggerJoyHotkeys(int aJoystickID, DWORD aButtonsNewlyDown);
 	void Perform(HotkeyVariant &aVariant);
 	static void ManifestAllHotkeysHotstringsHooks();
@@ -217,7 +221,7 @@ public:
 	#define HK_PROP_ASTERISK 0x1  // Bitwise flags for use in aProperties.
 	#define HK_PROP_TILDE    0x2  //
 	static char *TextToModifiers(char *aText, Hotkey *aThisHotkey, mod_type *aModifiers = NULL
-		, modLR_type *aModifiersLR = NULL, UCHAR *aProperties = NULL);
+		, modLR_type *aModifiersLR = NULL, bool *aHasAsterisk = NULL, bool *aHasTilde = NULL);
 
 	static ResultType TextToKey(char *aText, char *aHotkeyName, bool aIsModifier, Hotkey *aThisHotkey, bool aUseErrorLevel);
 
@@ -292,7 +296,7 @@ public:
 		return 0;
 	}
 
-	static Hotkey *FindHotkeyByTrueNature(char *aName);
+	static Hotkey *FindHotkeyByTrueNature(char *aName, bool &aHasTilde);
 	static Hotkey *FindHotkeyContainingModLR(modLR_type aModifiersLR);  //, HotkeyIDType hotkey_id_to_omit);
 	//static Hotkey *FindHotkeyWithThisModifier(vk_type aVK, sc_type aSC);
 	//static Hotkey *FindHotkeyBySC(sc2_type aSC2, mod_type aModifiers, modLR_type aModifiersLR);

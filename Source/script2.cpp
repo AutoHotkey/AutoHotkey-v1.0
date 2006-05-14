@@ -4610,6 +4610,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 	case WM_HOTKEY: // As a result of this app having previously called RegisterHotkey().
 	case AHK_HOOK_HOTKEY:  // Sent from this app's keyboard or mouse hook.
 	case AHK_HOTSTRING: // Added for v1.0.36.02 so that hotstrings work even while an InputBox or other non-standard msg pump is running.
+	case AHK_CLIPBOARD_CHANGE: // Added for v1.0.44 so that clipboard notifications aren't lost while the script is displaying a MsgBox or other dialog.
 		// If the following facts are ever confirmed, there would be no need to post the message in cases where
 		// the MsgSleep() won't be done:
 		// 1) The mere fact that any of the above messages has been received here in MainWindowProc means that a
@@ -4894,7 +4895,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 
 	case WM_DRAWCLIPBOARD:
 		if (g_script.mOnClipboardChangeLabel) // In case it's a bogus msg, it's our responsibility to avoid posting the msg if there's no label to launch.
-			PostMessage(NULL, AHK_CLIPBOARD_CHANGE, 0, 0); // It's done this way to buffer it when the script is uninterruptible, etc.
+			PostMessage(g_hWnd, AHK_CLIPBOARD_CHANGE, 0, 0); // It's done this way to buffer it when the script is uninterruptible, etc.  v1.0.44: Post to g_hWnd vs. NULL so that notifications aren't lost when script is displaying a MsgBox or other dialog.
 		if (g_script.mNextClipboardViewer) // Will be NULL if there are no other windows in the chain.
 			SendMessageTimeout(g_script.mNextClipboardViewer, iMsg, wParam, lParam, SMTO_ABORTIFHUNG, 2000, &dwTemp);
 		return 0;
@@ -6967,7 +6968,7 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 			*cp = '\0';  // Terminate the item that appears before this delimiter.
 			++item_count;
 			if (sort_random)
-				*(item_curr + 1) = (char *)genrand_int31(); // i.e. the randoms are in the odd fields, the pointers in the even.
+				*(item_curr + 1) = (char *)(size_t)genrand_int31(); // i.e. the randoms are in the odd fields, the pointers in the even.
 				// For the above:
 				// I don't know the exact reasons, but using genrand_int31() is much more random than
 				// using genrand_int32() in this case.  Perhaps it is some kind of statistical/cyclical
@@ -6996,7 +6997,7 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 	{
 		++item_count;
 		if (sort_random) // Provide a random number for the last item.
-			*(item_curr + 1) = (char *)genrand_int31(); // i.e. the randoms are in the odd fields, the pointers in the even.
+			*(item_curr + 1) = (char *)(size_t)genrand_int31(); // i.e. the randoms are in the odd fields, the pointers in the even.
 	}
 	else // Since the final item is not included in the count, point item_curr to the one before the last, for use below.
 		item_curr -= unit_size;
@@ -7358,7 +7359,7 @@ ResultType Line::DriveLock(char aDriveLetter, bool aLockIt)
 		regs.reg_EAX = 0x440D;
 		regs.reg_EBX = toupper(aDriveLetter) - 'A' + 1; // Convert to drive index. 0 = default, 1 = A, 2 = B, 3 = C
 		regs.reg_ECX = 0x0848; // MS: Lock/unlock media
-		regs.reg_EDX = (DWORD)&pb;
+		regs.reg_EDX = (DWORD)(size_t)&pb;
 		
 		// MS: Open VWIN32
 		hdevice = CreateFile("\\\\.\\vwin32", 0, 0, NULL, 0, FILE_FLAG_DELETE_ON_CLOSE, NULL);
@@ -8170,8 +8171,15 @@ ResultType Line::FileCreateDir(char *aDirSpec)
 			return OK; // Let ErrorLevel tell the story.
 		strlcpy(parent_dir, aDirSpec, last_backslash - aDirSpec + 1); // Omits the last backslash.
 		FileCreateDir(parent_dir); // Recursively create all needed ancestor directories.
-		if (*g_ErrorLevel->Contents() == *ERRORLEVEL_ERROR)
-			return OK; // Let ERRORLEVEL_ERROR tell the story.
+
+		// v1.0.44: Fixed ErrorLevel being set to 1 when the specified directory ends in a backslash.  In such cases,
+		// two calls were made to CreateDirectory for the same folder: the first without the backslash and then with
+		// it.  Since the directory already existed on the second call, ErrorLevel was wrongly set to 1 even though
+		// everything succeeded.  So now, when recursion finishes creating all the ancestors of this directory
+		// our own layer here does not call CreateDirectory() when there's a trailing backslash because a previous
+		// layer already did:
+		if (!last_backslash[1] || *g_ErrorLevel->Contents() == *ERRORLEVEL_ERROR)
+			return OK; // Let the previously set ErrorLevel (whatever it is) tell the story.
 	}
 
 	// The above has recursively created all parent directories of aDirSpec if needed.
@@ -9529,7 +9537,7 @@ DYNARESULT DynaCall(int aFlags, void *aFunction, DYNAPARM aParam[], int aParamCo
 		// Push the arg or its address onto the portion of the stack that was reserved for our use above.
 		if (this_param.passed_by_address)
 		{
-			stack_dword = (DWORD)&this_param.value_int; // Any union member would work.
+			stack_dword = (DWORD)(size_t)&this_param.value_int; // Any union member would work.
 			--our_stack;              // ESP = ESP - 4
 			*our_stack = stack_dword; // SS:[ESP] = stack_dword
 			our_stack_size += 4;      // Keep track of how many bytes are on our reserved portion of the stack.
@@ -9556,7 +9564,7 @@ DYNARESULT DynaCall(int aFlags, void *aFunction, DYNAPARM aParam[], int aParamCo
 		// is performed instead. Pass the pointer as hidden arg.
 		our_stack_size += 4;       // Add stack size
 		--our_stack;               // ESP = ESP - 4
-		*our_stack = (DWORD)aRet;  // SS:[ESP] = pMem
+		*our_stack = (DWORD)(size_t)aRet;  // SS:[ESP] = pMem
 	}
 
 	// Call the function.
@@ -9760,7 +9768,7 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 	aResultToken.marker = "";
 
 	// Check that the mandatory first parameter (DLL+Function) is present and valid.
-	if (aParamCount < 1 || !IS_OPERAND(aParam[0]->symbol) || IS_NUMERIC(aParam[0]->symbol)) // Relies on short-circuit order.
+	if (aParamCount < 1 || IS_NUMERIC(aParam[0]->symbol)) // Relies on short-circuit order.
 	{
 		g_ErrorLevel->Assign("-1"); // Stage 1 error: Too few params or blank/invalid first param.
 		return;
@@ -9775,8 +9783,7 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 	{
 		// Check validity of this arg's return type:
 		ExprTokenType &token = *aParam[aParamCount - 1];
-		if (!IS_OPERAND(token.symbol) // Haven't found a way to produce this situation yet, but safe to assume it's possible.
-			|| IS_NUMERIC(token.symbol)) // The return type should be a string, not something purely numeric.
+		if (IS_NUMERIC(token.symbol)) // The return type should be a string, not something purely numeric.
 		{
 			g_ErrorLevel->Assign("-2"); // Stage 2 error: Invalid return type or arg type.
 			return;
@@ -9841,8 +9848,7 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 	for (arg_count = 0, i = 1; i < aParamCount; ++arg_count, i += 2)  // Same loop as used later below, so maintain them together.
 	{
 		// Check validity of this arg's type and contents:
-		if (!(IS_OPERAND(aParam[i]->symbol) && IS_OPERAND(aParam[i + 1]->symbol)) // Haven't found a way to produce this situation yet, but safe to assume it's possible.
-			|| IS_NUMERIC(aParam[i]->symbol)) // The arg type should be a string, not something purely numeric.
+		if (IS_NUMERIC(aParam[i]->symbol)) // The arg type should be a string, not something purely numeric.
 		{
 			g_ErrorLevel->Assign("-2"); // Stage 2 error: Invalid return type or arg type.
 			return;
@@ -10194,19 +10200,12 @@ end:
 
 void BIF_StrLen(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
 {
+	// Result will always be an integer.
+	// Caller has set aResultToken.symbol to a default of SYM_INTEGER, so no need to set it here.
 	// Loadtime validation has ensured that there's exactly one actual parameter.
-	if (aParam[0]->symbol == SYM_VAR && aParam[0]->var->IsBinaryClip())
-		aResultToken.value_int64 = aParam[0]->var->Length() + 1;
-	else
-	{
-		// Result will always be an integer.
-		// Caller has set aResultToken.symbol to a default of SYM_INTEGER, so no need to set it here.
-		char *cp;
-		if (   !(cp = ExprTokenToString(*aParam[0], aResultToken.buf))   ) // Allow StrLen(numeric_expr) for flexibility.
-			aResultToken.value_int64 = 0; // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
-		else
-			aResultToken.value_int64 = strlen(cp);
-	}
+	aResultToken.value_int64 = (aParam[0]->symbol == SYM_VAR && aParam[0]->var->IsBinaryClip())
+		? aParam[0]->var->Length() + 1
+		: strlen(ExprTokenToString(*aParam[0], aResultToken.buf)); // // Allow StrLen(numeric_expr) for flexibility.
 }
 
 
@@ -10216,11 +10215,7 @@ void BIF_Asc(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCou
 	// Result will always be an integer (this simplifies scripts that work with binary zeros since an
 	// empy string yields zero).
 	// Caller has set aResultToken.symbol to a default of SYM_INTEGER, so no need to set it here.
-	char *cp;
-	if (   !(cp = ExprTokenToString(*aParam[0], aResultToken.buf))   ) // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
-		aResultToken.value_int64 = -1; // Store out-of-bounds value as a flag.
-	else
-		aResultToken.value_int64 = (UCHAR)*cp;
+	aResultToken.value_int64 = (UCHAR)*ExprTokenToString(*aParam[0], aResultToken.buf);
 }
 
 
@@ -10250,11 +10245,7 @@ void BIF_IsLabel(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 // often performance sensitive), it might be better to add a second parameter that tells
 // IsLabel to look up the type of label, and return it as a number or letter.
 {
-	char *label_name;
-	if (   !(label_name = ExprTokenToString(*aParam[0], aResultToken.buf))   ) // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
-		aResultToken.value_int64 = 0; // Indicate false, to conform to boolean return type.
-	else
-		aResultToken.value_int64 = g_script.FindLabel(label_name) ? 1 : 0;
+	aResultToken.value_int64 = g_script.FindLabel(ExprTokenToString(*aParam[0], aResultToken.buf)) ? 1 : 0;
 }
 
 
@@ -10265,11 +10256,6 @@ void BIF_InStr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 	char needle_buf[MAX_FORMATTED_NUMBER_LENGTH + 1];
 	char *haystack = ExprTokenToString(*aParam[0], aResultToken.buf);
 	char *needle = ExprTokenToString(*aParam[1], needle_buf);
-	if (!haystack || !needle) // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
-	{
-		aResultToken.value_int64 = -1; // Store out-of-bounds value as a flag.
-		return;
-	}
 	// Result type will always be an integer:
 	// Caller has set aResultToken.symbol to a default of SYM_INTEGER, so no need to set it here.
 
@@ -10317,12 +10303,8 @@ void BIF_InStr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 
 void BIF_GetKeyState(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
 {
-	char *key_name, key_name_buf[MAX_FORMATTED_NUMBER_LENGTH + 1];
-	if (   !(key_name = ExprTokenToString(*aParam[0], key_name_buf))   ) // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
-	{
-		aResultToken.value_int64 = -1; // Store out-of-bounds value as a flag.
-		return;
-	}
+	char key_name_buf[MAX_FORMATTED_NUMBER_LENGTH + 1]; // Because aResultToken.buf is used for something else below.
+	char *key_name = ExprTokenToString(*aParam[0], key_name_buf);
 	// Keep this in sync with GetKeyJoyState().
 	// See GetKeyJoyState() for more comments about the following lines.
 	JoyControls joy;
@@ -10342,17 +10324,8 @@ void BIF_GetKeyState(ExprTokenType &aResultToken, ExprTokenType *aParam[], int a
 		return;
 	}
 	// Since above didn't return: There is a virtual key (not a joystick control).
-	char *mode, mode_buf[MAX_FORMATTED_NUMBER_LENGTH + 1];
-	if (aParamCount > 1)
-	{
-		if (   !(mode = ExprTokenToString(*aParam[1], mode_buf))   ) // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
-		{
-			aResultToken.value_int64 = -1; // Store out-of-bounds value as a flag.
-			return;
-		}
-	}
-	else
-		mode = "";
+	char mode_buf[MAX_FORMATTED_NUMBER_LENGTH + 1];
+	char *mode = (aParamCount > 1) ? ExprTokenToString(*aParam[1], mode_buf) : "";
 	KeyStateTypes key_state_type;
 	switch (toupper(*mode)) // Second parameter.
 	{
@@ -10420,15 +10393,10 @@ void BIF_VarSetCapacity(ExprTokenType &aResultToken, ExprTokenType *aParam[], in
 
 void BIF_FileExist(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
 {
-	aResultToken.symbol = SYM_STRING;
-	char *filename, filename_buf[MAX_FORMATTED_NUMBER_LENGTH + 1];
-	if (   !(filename = ExprTokenToString(*aParam[0], filename_buf))   )
-	{
-		// Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
-		aResultToken.marker = "";
-		return;
-	}
+	char filename_buf[MAX_FORMATTED_NUMBER_LENGTH + 1]; // Because aResultToken.buf is used for something else below.
+	char *filename = ExprTokenToString(*aParam[0], filename_buf);
 	aResultToken.marker = aResultToken.buf; // If necessary, it will be moved to a persistent memory location by our caller.
+	aResultToken.symbol = SYM_STRING;
 	DWORD attr;
 	if (DoesFilePatternExist(filename, &attr))
 	{
@@ -10455,25 +10423,16 @@ void BIF_WinExistActive(ExprTokenType &aResultToken, ExprTokenType *aParam[], in
 {
 	char *bif_name = aResultToken.marker;  // Save this early for maintainability (it is the name of the function, provided by the caller).
 	aResultToken.symbol = SYM_STRING; // Returns a string to preserve hex format.
+
 	char *param[4], param_buf[4][MAX_FORMATTED_NUMBER_LENGTH + 1];
 	for (int j = 0; j < 4; ++j) // For each formal parameter, including optional ones.
-	{
-		if (j >= aParamCount) // No actual to go with it (should be possible only if the parameter is optional or has a default value).
-		{
-			param[j] = "";
-			continue;
-		}
+		param[j] = (j >= aParamCount) ? "" : ExprTokenToString(*aParam[j], param_buf[j]);
+		// For above, the following are notes from a time when this function was part of expression evaluation:
+		// Assign empty string if no actual to go with it.
 		// Otherwise, assign actual parameter's value to the formal parameter.
 		// The stack can contain both generic and specific operands.  Specific operands were
 		// evaluated by a previous iteration of this section.  Generic ones were pushed as-is
 		// onto the stack by a previous iteration.
-		if (   !(param[j] = ExprTokenToString(*aParam[j], param_buf[j]))   )
-		{
-			// Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
-			aResultToken.marker = "";
-			return;
-		}
-	}
 
 	// Should be called the same was as ACT_IFWINEXIST and ACT_IFWINACTIVE:
 	HWND found_hwnd = (toupper(bif_name[3]) == 'E') // Win[E]xist.
@@ -10805,21 +10764,116 @@ void BIF_OnMessage(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 
 
 
+void BIF_StatusBar(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+{
+	char mode = toupper(aResultToken.marker[6]); // Union's marker initially contains the function name. SB_Set[T]ext.
+	char *buf = aResultToken.buf; // Must be saved early since below overwrites the union (better maintainability too).
+	aResultToken.value_int64 = 0; // Set default return value. Must be done only after consulting marker above.
+	// Above sets default result in case of early return.  For code reduction, a zero is returned for all
+	// the following conditions:
+	// Window doesn't exist.
+	// Control doesn't exist (i.e. no StatusBar in window).
+
+	if (!g_gui[g.GuiDefaultWindowIndex])
+		return;
+	GuiType &gui = *g_gui[g.GuiDefaultWindowIndex]; // Always operate on thread's default window to simplify the syntax.
+	HWND control_hwnd;
+	if (   !(control_hwnd = gui.mStatusBarHwnd)   )
+		return;
+
+	HICON hicon;
+	switch(mode)
+	{
+	case 'T': // SB_SetText()
+		aResultToken.value_int64 = SendMessage(control_hwnd, SB_SETTEXT
+			, (WPARAM)((aParamCount < 2 ? 0 : ExprTokenToInt64(*aParam[1]) - 1) // The Part# param is present.
+				| (aParamCount < 3 ? 0 : ExprTokenToInt64(*aParam[2]) << 8)) // The uType parameter is present.
+			, (LPARAM)ExprTokenToString(*aParam[0], buf)); // Load-time validation has ensured that there's at least one param in this mode.
+		break;
+
+	case 'P': // SB_SetParts()
+		LRESULT old_part_count, new_part_count;
+		int edge, part[256]; // Load-time validation has ensured aParamCount is under 255, so it shouldn't overflow.
+		for (edge = 0, new_part_count = 0; new_part_count < aParamCount; ++new_part_count)
+		{
+			edge += (int)ExprTokenToInt64(*aParam[new_part_count]); // For code simplicity, no check for negative (seems fairly harmless since the bar will simply show up with the wrong number of parts to indicate the problem).
+			part[new_part_count] = edge;
+		}
+		// For code simplicity, there is currently no means to have the last part of the bar use less than
+		// all of the bar's remaining width.  The desire to do so seems rare, especially since the script can
+		// add an extra/unused part at the end to achieve nearly (or perhaps exactly) the same effect.
+		part[new_part_count++] = -1; // Make the last part use the remaining width of the bar.
+
+		old_part_count = SendMessage(control_hwnd, SB_GETPARTS, 0, NULL); // MSDN: "This message always returns the number of parts in the status bar [regardless of how it is called]".
+		if (old_part_count > new_part_count) // Some parts are being deleted, so destroy their icons.  See other notes in GuiType::Destroy() for explanation.
+			for (LRESULT i = new_part_count; i < old_part_count; ++i) // Verified correct.
+				if (hicon = (HICON)SendMessage(control_hwnd, SB_GETICON, i, 0))
+					DestroyIcon(hicon);
+
+		aResultToken.value_int64 = SendMessage(control_hwnd, SB_SETPARTS, new_part_count, (LPARAM)part)
+			? (__int64)control_hwnd : 0; // Return HWND to provide an easy means for the script to get the bar's HWND.
+		break;
+
+	case 'I': // SB_SetIcon()
+		int unused, icon_number;
+		icon_number = (aParamCount < 2) ? 1 : (int)ExprTokenToInt64(*aParam[1]);
+		if (icon_number < 1) // Must be >0 to tell LoadPicture that "icon must be loaded, never a bitmap".
+			icon_number = 1;
+		if (hicon = (HICON)LoadPicture(ExprTokenToString(*aParam[0], buf) // Load-time validation has ensured there is at least one parameter.
+			, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON) // Apparently the bar won't scale them for us.
+			, unused, icon_number, false)) // Defaulting to "false" for "use GDIplus" provides more consistent appearance across multiple OSes.
+		{
+			WPARAM part_index = (aParamCount < 3) ? 0 : (WPARAM)ExprTokenToInt64(*aParam[2]) - 1;
+			HICON hicon_old = (HICON)SendMessage(control_hwnd, SB_GETICON, part_index, 0); // Get the old one before setting the new one.
+			// For code simplicity, the script is responsible for destroying the hicon later, if it ever destroys
+			// the window.  Though in practice, most people probably won't do this, which is usually okay (if the
+			// script doesn't load too many) since they're all destroyed by the system upon program termination.
+			if (SendMessage(control_hwnd, SB_SETICON, part_index, (LPARAM)hicon))
+			{
+				aResultToken.value_int64 = (__int64)hicon; // Override the 0 default. This allows the script to destroy the HICON later when it doesn't need it (see comments above too).
+				if (hicon_old)
+					// Although the old icon is automatically destroyed here, the script can call SendMessage(SB_SETICON)
+					// itself if it wants to work with HICONs directly (for performance reasons, etc.)
+					DestroyIcon(hicon_old);
+			}
+			else
+				DestroyIcon(hicon);
+				//And leave aResultToken.value_int64 at its default value.
+		}
+		//else can't load icon, so leave aResultToken.value_int64 at its default value.
+		break;
+	// SB_SetTipText() not implemented (though can be done via SendMessage in the script) because the conditions
+	// under which tooltips are displayed don't seem like something a script would want very often:
+	// This ToolTip text is displayed in two situations: 
+	// When the corresponding pane in the status bar contains only an icon. 
+	// When the corresponding pane in the status bar contains text that is truncated due to the size of the pane.
+	// In spite of the above, SB_SETTIPTEXT doesn't actually seem to do anything, even when the text is too long
+	// to fit in a narrowed part, tooltip text has been set, and the user hovers the cursor over the bar.  Maybe
+	// I'm not doing it right or maybe this feature is somehow disabled under certain service packs or conditions.
+	//case 'T': // SB_SetTipText()
+	//	break;
+	} // switch(mode)
+}
+
+
+
 void BIF_LV_GetNextOrCount(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+// LV_GetNext:
 // Returns: The index of the found item, or 0 on failure.
 // Parameters:
 // 1: Starting index (one-based when it comes in).  If absent, search starts at the top.
 // 2: Options string.
 // 3: (FUTURE): Possible for use with LV_FindItem (though I think it can only search item text, not subitem text).
 {
-	bool mode_is_count = toupper(aResultToken.marker[6]) == 'C'; // Marker contains the function name. LV_Get[C]ount.  Bug-fixed for v1.0.43.09.
+	bool mode_is_count = toupper(aResultToken.marker[6]) == 'C'; // Union's marker initially contains the function name. LV_Get[C]ount.  Bug-fixed for v1.0.43.09.
 	char *buf = aResultToken.buf; // Must be saved early since below overwrites the union (better maintainability too).
-	aResultToken.value_int64 = 0;
+	aResultToken.value_int64 = 0; // Set default return value. Must be done only after consulting marker above.
 	// Above sets default result in case of early return.  For code reduction, a zero is returned for all
 	// the following conditions:
 	// Window doesn't exist.
 	// Control doesn't exist (i.e. no ListView in window).
 	// Item not found in ListView.
+
 	if (!g_gui[g.GuiDefaultWindowIndex])
 		return;
 	GuiType &gui = *g_gui[g.GuiDefaultWindowIndex]; // Always operate on thread's default window to simplify the syntax.
@@ -10853,16 +10907,11 @@ void BIF_LV_GetNextOrCount(ExprTokenType &aResultToken, ExprTokenType *aParam[],
 	if (index < -1)
 		index = -1;  // Signal it to start at the top.
 
-	if (aParamCount < 2)
-		options = "";
-	else
-		if (   !(options = ExprTokenToString(*aParam[1], buf))   ) // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
-			return; // Due to rarity of this condition, keep 0/false value as the result.
-
 	// For performance, decided to always find next selected item when the "C" option hasn't been specified,
 	// even when the checkboxes style is in effect.  Otherwise, would have to fetch and check checkbox style
 	// bit for each call, which would slow down this heavily-called function.
 
+	options = (aParamCount > 1) ? ExprTokenToString(*aParam[1], buf) : "";
 	char first_char = toupper(*omit_leading_whitespace(options));
 	// To retain compatibility in the future, also allow "Check(ed)" and "Focus(ed)" since any word that
 	// starts with C or F is already supported.
@@ -10893,17 +10942,18 @@ void BIF_LV_GetText(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aP
 // Returns: 1 on success and 0 on failure.
 // Parameters:
 // 1: Output variable (doing it this way allows success/fail return value to more closely mirror the API and
-//    simplifies the code since there is currently no easy means of passing back large strings to our caller.
+//    simplifies the code since there is currently no easy means of passing back large strings to our caller).
 // 2: Row index (one-based when it comes in).
 // 3: Column index (one-based when it comes in).
 {
-	aResultToken.value_int64 = 0;
+	aResultToken.value_int64 = 0; // Set default return value.
 	// Above sets default result in case of early return.  For code reduction, a zero is returned for all
 	// the following conditions:
 	// Window doesn't exist.
 	// Control doesn't exist (i.e. no ListView in window).
 	// Item not found in ListView.
 	// And others.
+
 	if (!g_gui[g.GuiDefaultWindowIndex])
 		return;
 	GuiType &gui = *g_gui[g.GuiDefaultWindowIndex]; // Always operate on thread's default window to simplify the syntax.
@@ -10939,11 +10989,11 @@ void BIF_LV_GetText(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aP
 		LVITEM lvi;
 		// Subtract 1 because of that nagging doubt about size vs. length. Some MSDN examples subtract one, such as
 		// TabCtrl_GetItem()'s cchTextMax:
-		lvi.cchTextMax = LV_TEXT_BUF_SIZE - 1; // Note that LVM_GETITEM doesn't update this member to reflect the new length.
-		lvi.pszText = buf;
-		lvi.mask = LVIF_TEXT;
 		lvi.iItem = row_index;
 		lvi.iSubItem = col_index; // Which field to fetch.  If it's zero, the item vs. subitem will be fetched.
+		lvi.mask = LVIF_TEXT;
+		lvi.pszText = buf;
+		lvi.cchTextMax = LV_TEXT_BUF_SIZE - 1; // Note that LVM_GETITEM doesn't update this member to reflect the new length.
 		// Unlike LVM_GETITEMTEXT, LVM_GETITEM indicates success or failure, which seems more useful/preferable
 		// as a return value since a text length of zero would be ambiguous: could be an empty field or a failure.
 		if (aResultToken.value_int64 = SendMessage(gui.mCurrentListView->hwnd, LVM_GETITEM, 0, (LPARAM)&lvi)) // Assign
@@ -10966,9 +11016,9 @@ void BIF_LV_AddInsertModify(ExprTokenType &aResultToken, ExprTokenType *aParam[]
 // 3 and beyond: Additional field text.
 // In Add/Insert mode, if there are no text fields present, a blank for is appended/inserted.
 {
-	char mode = toupper(aResultToken.marker[3]); // Marker contains the function name. e.g. LV_[I]nsert.
+	char mode = toupper(aResultToken.marker[3]); // Union's marker initially contains the function name. e.g. LV_[I]nsert.
 	char *buf = aResultToken.buf; // Must be saved early since below overwrites the union (better maintainability too).
-	aResultToken.value_int64 = 0;
+	aResultToken.value_int64 = 0; // Set default return value. Must be done only after consulting marker above.
 	// Above sets default result in case of early return.  For code reduction, a zero is returned for all
 	// the following conditions:
 	// Window doesn't exist.
@@ -10997,16 +11047,8 @@ void BIF_LV_AddInsertModify(ExprTokenType &aResultToken, ExprTokenType *aParam[]
 		return;
 	GuiControlType &control = *gui.mCurrentListView;
 
-	char *options;
-	if (aParamCount > 0)
-	{
-		if (   !(options = ExprTokenToString(*aParam[0], buf))   ) // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
-			return; // Due to rarity of this condition, keep 0/false value as the result.
-	}
-	else  // No options parameter is present.
-		options = "";
-
-	bool is_checked = false;  // Checkmark.
+	char *options = (aParamCount > 0) ? ExprTokenToString(*aParam[0], buf) : "";
+	bool ensure_visible = false, is_checked = false;  // Checkmark.
 	int col_start_index = 0;
 	LVITEM lvi;
 	lvi.mask = LVIF_STATE; // LVIF_STATE: state member is valid, but only to the extent that corresponding bits are set in stateMask (the rest will be ignored).
@@ -11056,7 +11098,7 @@ void BIF_LV_AddInsertModify(ExprTokenType &aResultToken, ExprTokenType *aParam[]
 		{
 			next_option += 6;
 			// If it's Select0, invert the mode to become "no select". This allows a boolean variable
-			// to be more easily applied, such as this expression: "Check" . VarContainingState
+			// to be more easily applied, such as this expression: "Select" . VarContainingState
 			if (*next_option && !ATOI(next_option))
 				adding = !adding;
 			// Another reason for not having "Select" imply "Focus" by default is that it would probably
@@ -11089,7 +11131,7 @@ void BIF_LV_AddInsertModify(ExprTokenType &aResultToken, ExprTokenType *aParam[]
 			if (*next_option && !ATOI(next_option)) // If it's Check0, invert the mode to become "unchecked".
 				adding = !adding;
 			lvi.stateMask |= LVIS_STATEIMAGEMASK;
-			lvi.state |= INDEXTOSTATEIMAGEMASK(adding ? 2 : 1); // The #1 image is "unchecked" and the #2 is "checked".
+			lvi.state |= adding ? 0x2000 : 0x1000; // The #1 image is "unchecked" and the #2 is "checked".
 			is_checked = adding;
 		}
 		else if (!strnicmp(next_option, "Col", 3))
@@ -11117,6 +11159,10 @@ void BIF_LV_AddInsertModify(ExprTokenType &aResultToken, ExprTokenType *aParam[]
 			//else removal of icon currently not supported (see comment above), so do nothing in order
 			// to reserve "-Icon" in case a future way can be found to do it.
 		}
+		else if (!stricmp(next_option, "Vis")) // v1.0.44
+			// Since this option much more typically used with LV_Modify than LV_Add/Insert, the technique of
+			// Vis%VarContainingOneOrZero% isn't supported, to reduce code size.
+			ensure_visible = adding; // Ignored by modes other than LV_Modify(), since it's not really appropriate when adding a row (plus would add code complexity).
 
 		// If the item was not handled by the above, ignore it because it is unknown.
 		*option_end = orig_char; // Undo the temporary termination because the caller needs aOptions to be unaltered.
@@ -11133,6 +11179,7 @@ void BIF_LV_AddInsertModify(ExprTokenType &aResultToken, ExprTokenType *aParam[]
 	{
 		rows_to_change = ListView_GetItemCount(control.hwnd);
 		lvi.iItem = 0;
+		ensure_visible = false; // Not applicable when operating on all rows.
 	}
 	else // Modify or insert a single row.  Set it up for the loop to perform exactly one iteration.
 	{
@@ -11146,9 +11193,8 @@ void BIF_LV_AddInsertModify(ExprTokenType &aResultToken, ExprTokenType *aParam[]
 	{
 		if (aParamCount > 1 && col_start_index == 0) // 2nd parameter: item's text (first field) is present, so include that when setting the item.
 		{
-			if (lvi.pszText = ExprTokenToString(*aParam[1], buf)) // Fairly low-overhead, so called every iteration for simplicity (so that buf can be used for both items and subitems).
-				lvi.mask |= LVIF_TEXT;
-			//else not an operand, so don't add the mask.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
+			lvi.pszText = ExprTokenToString(*aParam[1], buf); // Fairly low-overhead, so called every iteration for simplicity (so that buf can be used for both items and subitems).
+			lvi.mask |= LVIF_TEXT;
 		}
 		if (mode == 'I') // Insert or Add.
 		{
@@ -11175,11 +11221,14 @@ void BIF_LV_AddInsertModify(ExprTokenType &aResultToken, ExprTokenType *aParam[]
 		else // Modify.
 		{
 			// Rather than trying to detect if anything was actually changed, this is called
-			// unconditionally to simplify the code.
+			// unconditionally to simplify the code (ListView_SetItem() is probably very fast if it
+			// discovers that lvi.mask==LVIF_STATE and lvi.stateMask==0).
 			// By design (to help catch script bugs), a failure here does not revert to append mode.
 			if (!ListView_SetItem(control.hwnd, &lvi)) // Returns TRUE/FALSE.
 				aResultToken.value_int64 = 0; // Indicate partial failure, but attempt to continue in case it failed for reason other than "row doesn't exist".
 			lvi_sub.iItem = lvi.iItem; // In preparation for modifying any subitems that need it.
+			if (ensure_visible) // Seems best to do this one prior to "select" below.
+				SendMessage(control.hwnd, LVM_ENSUREVISIBLE, lvi.iItem, FALSE); // PartialOK==FALSE is somewhat arbitrary.
 		}
 
 		// For each remainining parameter, assign its text to a subitem.  
@@ -11212,7 +11261,7 @@ void BIF_LV_Delete(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 // Parameters:
 // 1: Row index (one-based when it comes in).
 {
-	aResultToken.value_int64 = 0;
+	aResultToken.value_int64 = 0; // Set default return value.
 	// Above sets default result in case of early return.  For code reduction, a zero is returned for all
 	// the following conditions:
 	// Window doesn't exist.
@@ -11224,18 +11273,19 @@ void BIF_LV_Delete(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 	GuiType &gui = *g_gui[g.GuiDefaultWindowIndex]; // Always operate on thread's default window to simplify the syntax.
 	if (!gui.mCurrentListView)
 		return;
-	GuiControlType &control = *gui.mCurrentListView;
+	HWND control_hwnd = gui.mCurrentListView->hwnd;
 
 	if (aParamCount < 1)
 	{
-		aResultToken.value_int64 = SendMessage(control.hwnd, LVM_DELETEALLITEMS, 0, 0); // Returns TRUE/FALSE.
+		aResultToken.value_int64 = SendMessage(control_hwnd, LVM_DELETEALLITEMS, 0, 0); // Returns TRUE/FALSE.
 		return;
 	}
 
 	// Since above didn't return, there is a first paramter present.
 	int index = (int)ExprTokenToInt64(*aParam[0]) - 1; // -1 to convert to zero-based.
 	if (index > -1)
-		aResultToken.value_int64 = SendMessage(control.hwnd, LVM_DELETEITEM, index, 0); // Returns TRUE/FALSE.
+		aResultToken.value_int64 = SendMessage(control_hwnd, LVM_DELETEITEM, index, 0); // Returns TRUE/FALSE.
+	//else even if index==0, for safety, it seems not to do a delete-all.
 }
 
 
@@ -11248,9 +11298,9 @@ void BIF_LV_InsertModifyDeleteCol(ExprTokenType &aResultToken, ExprTokenType *aP
 // 3: New text of column
 // There are also some special modes when only zero or one parameter is present, see below.
 {
-	char mode = toupper(aResultToken.marker[3]); // Marker contains the function name. LV_[I]nsertCol.
+	char mode = toupper(aResultToken.marker[3]); // Union's marker initially contains the function name. LV_[I]nsertCol.
 	char *buf = aResultToken.buf; // Must be saved early since below overwrites the union (better maintainability too).
-	aResultToken.value_int64 = 0;
+	aResultToken.value_int64 = 0; // Set default return value. Must be done only after consulting marker above.
 	// Above sets default result in case of early return.  For code reduction, a zero is returned for all
 	// the following conditions:
 	// Window doesn't exist.
@@ -11329,21 +11379,14 @@ void BIF_LV_InsertModifyDeleteCol(ExprTokenType &aResultToken, ExprTokenType *aP
 	if (index < 0 || index >= LV_MAX_COLUMNS) // For simplicity, do nothing else if index out of bounds.
 		return; // Avoid array under/overflow below.
 
+	// In addition to other reasons, must convert any numeric value to a string so that an isolated width is
+	// recognized, e.g. LV_SetCol(1, old_width + 10):
+	char *options = (aParamCount > 1) ? ExprTokenToString(*aParam[1], buf) : "";
+
 	// It's done the following way so that when in insert-mode, if the column fails to be inserted, don't
 	// have to remove the inserted array element from the lv_attrib.col array:
 	lv_col_type temp_col = {0}; // Init unconditionally even though only needed for mode=='I'.
 	lv_col_type &col = (mode == 'I') ? temp_col : lv_attrib.col[index]; // Done only after index has been confirmed in-bounds.
-
-	// In addition to other reasons, must convert any numeric value to a string so that an isolated width is
-	// recognized, e.g. LV_SetCol(1, old_width + 10):
-	char *options;
-	if (aParamCount > 1) // Second parameter is present.
-	{
-		if (   !(options = ExprTokenToString(*aParam[1], buf))   ) // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
-			return; // Due to rarity of this condition, keep 0/false value as the result.
-	}
-	else
-		options = "";
 
 	LVCOLUMN lvc;
 	lvc.mask = LVCF_FMT;
@@ -11498,9 +11541,8 @@ void BIF_LV_InsertModifyDeleteCol(ExprTokenType &aResultToken, ExprTokenType *aP
 
 	if (aParamCount > 2) // Parameter #3 (text) is present.
 	{
-		if (lvc.pszText = ExprTokenToString(*aParam[2], buf)) // Assign.
-			lvc.mask |= LVCF_TEXT;
-		//else not an operand, so don't add the mask.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
+		lvc.pszText = ExprTokenToString(*aParam[2], buf);
+		lvc.mask |= LVCF_TEXT;
 	}
 
 	if (mode == 'M') // Modify vs. Insert (Delete was already returned from, higher above).
@@ -11562,12 +11604,13 @@ void BIF_LV_SetImageList(ExprTokenType &aResultToken, ExprTokenType *aParam[], i
 // 1: HIMAGELIST obtained from somewhere such as IL_Create().
 // 2: Optional: Type of list.
 {
-	aResultToken.value_int64 = 0;
+	aResultToken.value_int64 = 0; // Set default return value.
 	// Above sets default result in case of early return.  For code reduction, a zero is returned for all
 	// the following conditions:
 	// Window doesn't exist.
 	// Control doesn't exist (i.e. no ListView in window).
 	// Column not found in ListView.
+
 	if (!g_gui[g.GuiDefaultWindowIndex])
 		return;
 	GuiType &gui = *g_gui[g.GuiDefaultWindowIndex]; // Always operate on thread's default window to simplify the syntax.
@@ -11585,6 +11628,496 @@ void BIF_LV_SetImageList(ExprTokenType &aResultToken, ExprTokenType *aParam[], i
 		list_type = (cx > GetSystemMetrics(SM_CXSMICON)) ? LVSIL_NORMAL : LVSIL_SMALL;
 	}
 	aResultToken.value_int64 = (__int64)ListView_SetImageList(gui.mCurrentListView->hwnd, himl, list_type);
+}
+
+
+
+void BIF_TV_AddModifyDelete(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+// TV_Add():
+// Returns the HTREEITEM of the item on success, zero on failure.
+// Parameters:
+//    1: Text/name of item.
+//    2: Parent of item.
+//    3: Options.
+// TV_Modify():
+// Returns the HTREEITEM of the item on success (to allow nested calls in script, zero on failure or partial failure.
+// Parameters:
+//    1: ID of item to modify.
+//    2: Options.
+//    3: New name.
+// Parameters for TV_Delete():
+//    1: ID of item to delete (if omitted, all items are deleted).
+{
+	char mode = toupper(aResultToken.marker[3]); // Union's marker initially contains the function name. e.g. TV_[A]dd.
+	char *buf = aResultToken.buf; // Must be saved early since below overwrites the union (better maintainability too).
+	aResultToken.value_int64 = 0; // Set default return value. Must be done only after consulting marker above.
+	// Above sets default result in case of early return.  For code reduction, a zero is returned for all
+	// the following conditions:
+	// Window doesn't exist.
+	// Control doesn't exist (i.e. no TreeView in window).
+	// And others as shown below.
+
+	if (!g_gui[g.GuiDefaultWindowIndex])
+		return;
+	GuiType &gui = *g_gui[g.GuiDefaultWindowIndex]; // Always operate on thread's default window to simplify the syntax.
+	if (!gui.mCurrentTreeView)
+		return;
+	GuiControlType &control = *gui.mCurrentTreeView;
+
+	if (mode == 'D') // TV_Delete
+	{
+		// If param #1 is present but is zero, for safety it seems not to do a delete-all (in case a
+		// script bug is so rare that it is never caught until the script is distributed).  Another reason
+		// is that a script might do something like TV_Delete(TV_GetSelection()), which would be desired
+		// to fail not delete-all if there's ever any way for there to be no selection.
+		aResultToken.value_int64 = SendMessage(control.hwnd, TVM_DELETEITEM, 0
+			, aParamCount < 1 ? NULL : (LPARAM)ExprTokenToInt64(*aParam[0]));
+		return;
+	}
+
+	// Since above didn't return, this is TV_Add() or TV_Modify().
+	TVINSERTSTRUCT tvi; // It contains a TVITEMEX, which is okay even if MSIE pre-4.0 on Win95/NT because those OSes will simply never access the new/bottommost item in the struct.
+	bool add_mode = (mode == 'A'); // For readability & maint.
+
+	char *options;
+	if (add_mode) // TV_Add()
+	{
+		tvi.hParent = (aParamCount > 1) ? (HTREEITEM)ExprTokenToInt64(*aParam[1]) : NULL;
+		tvi.hInsertAfter = TVI_LAST; // i.e. default is to insert the new item underneath the bottomost sibling.
+		options = (aParamCount > 2) ? ExprTokenToString(*aParam[2], buf) : "";
+	}
+	else // TV_Modify()
+	{
+		// NOTE: Must allow hitem==0 for TV_Modify, at least for the Sort option, because otherwise there would
+		// be no way to sort the root-level items.
+		tvi.item.hItem = (HTREEITEM)ExprTokenToInt64(*aParam[0]); // Load-time validation has ensured there is a first parameter for TV_Modify().
+		// For modify-mode, set default return value to be "success" from this point forward.  Note that
+		// in the case of sorting the root-level items, this will set it to zero, but since that almost
+		// always suceeds and the script rarely cares whether it succeeds or not, adding code size for that
+		// doesn't seem worth it:
+		aResultToken.value_int64 = (size_t)tvi.item.hItem;
+		if (aParamCount < 2) // In one-parameter mode, simply select the item.
+		{
+			if (!TreeView_SelectItem(control.hwnd, tvi.item.hItem))
+				aResultToken.value_int64 = 0; // Override the HTREEITEM default value set above.
+			return;
+		}
+		// Otherwise, there's a second parameter (even if it's 0 or "").
+		options = ExprTokenToString(*aParam[1], buf);
+	}
+
+	// Set defaults prior to options-parsing, to cover all omitted defaults:
+	tvi.item.mask = TVIF_STATE; // TVIF_STATE: The state and stateMask members are valid (all other members are ignored).
+	tvi.item.stateMask = 0; // All bits in "state" below are ignored unless the corresponding bit is present here in the mask.
+	tvi.item.state = 0;
+	// It seems tvi.item.cChildren is typically maintained by the control, though one exception is I_CHILDRENCALLBACK
+	// and TVN_GETDISPINFO as mentioned at MSDN.
+
+	DWORD select_flag = 0;
+	bool ensure_visible = false, ensure_visible_first = false;
+
+	// Parse list of space-delimited options:
+	char *next_option, *option_end, orig_char;
+	bool adding; // Whether this option is beeing added (+) or removed (-).
+
+	for (next_option = options; *next_option; next_option = omit_leading_whitespace(option_end))
+	{
+		if (*next_option == '-')
+		{
+			adding = false;
+			// omit_leading_whitespace() is not called, which enforces the fact that the option word must
+			// immediately follow the +/- sign.  This is done to allow the flexibility to have options
+			// omit the plus/minus sign, and also to reserve more flexibility for future option formats.
+			++next_option;  // Point it to the option word itself.
+		}
+		else
+		{
+			// Assume option is being added in the absence of either sign.  However, when we were
+			// called by GuiControl(), the first option in the list must begin with +/- otherwise the cmd
+			// would never have been properly detected as GUICONTROL_CMD_OPTIONS in the first place.
+			adding = true;
+			if (*next_option == '+')
+				++next_option;  // Point it to the option word itself.
+			//else do not increment, under the assumption that the plus has been omitted from a valid
+			// option word and is thus an implicit plus.
+		}
+
+		if (!*next_option) // In case the entire option string ends in a naked + or -.
+			break;
+		// Find the end of this option item:
+		if (   !(option_end = StrChrAny(next_option, " \t"))   )  // Space or tab.
+			option_end = next_option + strlen(next_option); // Set to position of zero terminator instead.
+		if (option_end == next_option)
+			continue; // i.e. the string contains a + or - with a space or tab after it, which is intentionally ignored.
+
+		// Temporarily terminate to help eliminate ambiguity for words contained inside other words,
+		// such as "Checked" inside of "CheckedGray":
+		orig_char = *option_end;
+		*option_end = '\0';
+
+		if (!stricmp(next_option, "Select")) // Could further allow "ed" suffix by checking for that inside, but "Selected" is getting long so it doesn't seem something many would want to use.
+		{
+			// Selection of an item apparently needs to be done via message for the control to update itself
+			// properly.  Otherwise, single-select isn't enforced via de-selecitng previous item and the newly
+			// selected item isn't revealed/shown.  There may be other side-effects.
+			if (adding)
+				select_flag = TVGN_CARET;
+			//else since "de-select" is not a supported action, no need to support "-Select".
+			// Furthermore, since a TreeView is by its nature has only one item selected at a time, it seems
+			// unnecessary to support Select%VarContainingOneOrZero%.  This is because it seems easier for a
+			// script to simply load the Tree then select the desired item afterward.
+		}
+		else if (!strnicmp(next_option, "Vis", 3))
+		{
+			// Since this option much more typically used with TV_Modify than TV_Add, the technique of
+			// Vis%VarContainingOneOrZero% isn't supported, to reduce code size.
+			next_option += 3;
+			if (!stricmp(next_option, "First")) // VisFirst
+				ensure_visible_first = adding;
+			else if (!*next_option)
+				ensure_visible = adding;
+		}
+		else if (!stricmp(next_option, "Bold"))
+		{
+			// Bold%VarContainingOneOrZero isn't supported because due to rarity.  There might someday
+			// be a ternary operator to make such things easier anyway.
+			tvi.item.stateMask |= TVIS_BOLD;
+			if (adding)
+				tvi.item.state |= TVIS_BOLD;
+			//else removing, so the fact that this TVIS flag has just been added to the stateMask above
+			// but is absent from item.state should remove this attribute from the item.
+		}
+		else if (!strnicmp(next_option, "Expand", 6))
+		{
+			next_option += 6;
+			if (*next_option && !ATOI(next_option)) // If it's Expand0, invert the mode to become "collapse".
+				adding = !adding;
+			if (add_mode)
+			{
+				if (adding)
+				{
+					// Don't expand via msg because it won't work: since the item is being newly added
+					// now, by definition it doesn't have any children, and testing shows that sending
+					// the expand message has no effect, but setting the state bit does:
+					tvi.item.stateMask |= TVIS_EXPANDED;
+					tvi.item.state |= TVIS_EXPANDED;
+					// Since the script is deliberately expanding the item, it seems best not to send the
+					// TVN_ITEMEXPANDING/-ED messages because:
+					// 1) Sending TVN_ITEMEXPANDED without first sending a TVN_ITEMEXPANDING message might
+					//    decrease maintainability, and possibly even produce unwanted side-effects.
+					// 2) Code size and performance (avoids generating extra message traffic).
+				}
+				//else removing, so nothing needs to be done because "collapsed" is the default state
+				// of a TV item upon creation.
+			}
+			else // TV_Modify(): Expand and collapse both require a message to work properly on an existing item.
+				// Strangely, this generates a notification sometimes (such as the first time) but not for subsequent
+				// expands/collapses of that same item.  Also, TVE_TOGGLE is not currently supported because it seems
+				// like it would be too rarely used.
+				if (!TreeView_Expand(control.hwnd, tvi.item.hItem, adding ? TVE_EXPAND : TVE_COLLAPSE))
+					aResultToken.value_int64 = 0; // Indicate partial failure by overriding the HTREEITEM return value set earlier.
+					// It seems that despite what MSDN says, failure is returned when collapsing and item that is
+					// already collapsed, but not when expanding an item that is already expanded.  For performance
+					// reasons and rarity of script caring, it seems best not to try to adjust/fix this.
+		}
+		else if (!strnicmp(next_option, "Check", 5))
+		{
+			// The rationale for not checking for an optional "ed" suffix here and incrementing next_option by 2
+			// is that: 1) It would be inconsistent with the lack of support for "selected" (see reason above);
+			// 2) Checkboxes in a ListView are fairly rarely used, so code size reduction might be more important.
+			next_option += 5;
+			if (*next_option && !ATOI(next_option)) // If it's Check0, invert the mode to become "unchecked".
+				adding = !adding;
+			//else removing, so the fact that this TVIS flag has just been added to the stateMask above
+			// but is absent from item.state should remove this attribute from the item.
+			tvi.item.stateMask |= TVIS_STATEIMAGEMASK;  // Unlike ListViews, Tree checkmarks can be applied in the same step as creating a Tree item.
+			tvi.item.state |= adding ? 0x2000 : 0x1000; // The #1 image is "unchecked" and the #2 is "checked".
+		}
+		else if (!strnicmp(next_option, "Icon", 4))
+		{
+			if (adding)
+			{
+				// To me, having a different icon for when the item is selected seems rarely used.  After all,
+				// its obvious the item is selected because it's highlighed (unless it lacks a name?)  So this
+				// policy makes things easier for scripts that don't want to distinguish.  If ever it is needed,
+				// new options such as IconSel and IconUnsel can be added.
+				tvi.item.mask |= TVIF_IMAGE|TVIF_SELECTEDIMAGE;
+				tvi.item.iSelectedImage = tvi.item.iImage = ATOI(next_option + 4) - 1;  // -1 to convert to zero-based.
+			}
+			//else removal of icon currently not supported (see comment above), so do nothing in order
+			// to reserve "-Icon" in case a future way can be found to do it.
+		}
+		else if (!stricmp(next_option, "Sort"))
+		{
+			if (add_mode)
+				tvi.hInsertAfter = TVI_SORT; // For simplicity, the value of "adding" is ignored.
+			else
+				// Somewhat debatable, but it seems best to report failure via the return value even though
+				// failure probably only occurs when the item has no children, and the script probably
+				// doesn't often care about such failures.  It does result in the loss of the HTREEITEM return
+				// value, but even if that call is nested in another, the zero should produce no effect in most cases.
+				if (!TreeView_SortChildren(control.hwnd, tvi.item.hItem, FALSE)) // Best default seems no-recurse, since typically this is used after a user edits merely a single item.
+					aResultToken.value_int64 = 0; // Indicate partial failure by overriding the HTREEITEM return value set earlier.
+		}
+		else if (add_mode) // MUST BE LISTED LAST DUE TO "ELSE IF": Options valid only for TV_Add().
+		{
+			if (!stricmp(next_option, "First"))
+				tvi.hInsertAfter = TVI_FIRST; // For simplicity, the value of "adding" is ignored.
+			else if (IsPureNumeric(next_option, false, false, false))
+				tvi.hInsertAfter = (HTREEITEM)ATOI64(next_option); // ATOI64 vs. ATOU avoids need for extra casting to avoid compiler warning.
+		}
+		//else some unknown option, just ignore it.
+
+		// If the item was not handled by the above, ignore it because it is unknown.
+		*option_end = orig_char; // Undo the temporary termination because the caller needs aOptions to be unaltered.
+	}
+
+	if (add_mode) // TV_Add()
+	{
+		tvi.item.pszText = ExprTokenToString(*aParam[0], buf);
+		tvi.item.mask |= TVIF_TEXT;
+		tvi.item.hItem = TreeView_InsertItem(control.hwnd, &tvi); // Update tvi.item.hItem for convenience/maint. I'ts for use in later sections because aResultToken.value_int64 is overridden to be zero for partial failure in modify-mode.
+		aResultToken.value_int64 = (__int64)tvi.item.hItem; // Set return value.
+	}
+	else // TV_Modify()
+	{
+		if (aParamCount > 2) // An explicit empty string is allowed, which sets it to a blank value.  By contrast, if the param is omitted, the name is left changed.
+		{
+			tvi.item.pszText = ExprTokenToString(*aParam[2], buf); // Reuse buf now that options (above) is done with it.
+			tvi.item.mask |= TVIF_TEXT;
+		}
+		//else name/text parameter has been omitted, so don't change the item's name.
+		if (tvi.item.mask != LVIF_STATE || tvi.item.stateMask) // An item's property or one of the state bits needs changing.
+			if (!TreeView_SetItem(control.hwnd, &tvi.itemex))
+				aResultToken.value_int64 = 0; // Indicate partial failure by overriding the HTREEITEM return value set earlier.
+	}
+
+	if (ensure_visible) // Seems best to do this one prior to "select" below.
+		SendMessage(control.hwnd, TVM_ENSUREVISIBLE, 0, (LPARAM)tvi.item.hItem); // Return value is ignored in this case, since its definition seems a little weird.
+	if (ensure_visible_first) // Seems best to do this one prior to "select" below.
+		TreeView_Select(control.hwnd, tvi.item.hItem, TVGN_FIRSTVISIBLE); // Return value is also ignored due to rarity, code size, and because most people wouldn't care about a failure even if for some reason it failed.
+	if (select_flag)
+		if (!TreeView_Select(control.hwnd, tvi.item.hItem, select_flag) && !add_mode) // Relies on short-circuit boolean order.
+			aResultToken.value_int64 = 0; // When not in add-mode, indicate partial failure by overriding the return value set earlier (add-mode should always return the new item's ID).
+}
+
+
+
+HTREEITEM GetNextTreeItem(HWND aTreeHwnd, HTREEITEM aItem)
+// Helper function for others below.
+// If aItem is NULL, caller wants topmost ROOT item returned.
+// Otherwise, the next child, sibling, or parent's sibling is returned in a manner that allows the caller
+// to traverse every item in the tree easily.
+{
+	if (!aItem)
+		return TreeView_GetRoot(aTreeHwnd);
+	// Otherwise, do depth-first recursion.  Must be done in the following order to allow full traversal:
+	// Children first.
+	// Then siblings.
+	// Then parent's sibling(s).
+	HTREEITEM hitem;
+	if (hitem = TreeView_GetChild(aTreeHwnd, aItem))
+		return hitem;
+	if (hitem = TreeView_GetNextSibling(aTreeHwnd, aItem))
+		return hitem;
+	// The last stage is trickier than the above: parent's next sibling, or if none, its parent's parent's sibling, etc.
+	for (HTREEITEM hparent = aItem;;)
+	{
+		if (   !(hparent = TreeView_GetParent(aTreeHwnd, hparent))   ) // No parent, so this is a root-level item.
+			return NULL; // There is no next item.
+		// Now it's known there is a parent.  It's not necessary to check that parent's children because that
+		// would have been done by a prior iteration in the script.
+		if (hitem = TreeView_GetNextSibling(aTreeHwnd, hparent))
+			return hitem;
+		// Otherwise, parent has no sibling, but does its parent (and so on)? Continue looping to find out.
+	}
+}
+
+
+
+void BIF_TV_GetRelatedItem(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+// TV_GetParent/Child/Selection/Next/Prev(hitem):
+// The above all return the HTREEITEM (or 0 on failure).
+// When TV_GetNext's second parameter is present, the search scope expands to include not just siblings,
+// but also children and parents, which allows a tree to be traversed from top to bottom without the script
+// having to do something fancy.
+{
+	char *fn_name = aResultToken.marker; // Save early for maintainability: Union's marker initially contains the function name. TV_Get[S]election.
+	char *buf = aResultToken.buf; // Must be saved early since below overwrites the union (better maintainability too).
+	aResultToken.value_int64 = 0; // Set default return value. Must be done only after saving marker above.
+	// Above sets default result in case of early return.  For code reduction, a zero is returned for all
+	// the following conditions:
+	// Window doesn't exist.
+	// Control doesn't exist (i.e. no TreeView in window).
+	// Item not found in ListView.
+
+	if (!g_gui[g.GuiDefaultWindowIndex])
+		return;
+	GuiType &gui = *g_gui[g.GuiDefaultWindowIndex]; // Always operate on thread's default window to simplify the syntax.
+	if (!gui.mCurrentTreeView)
+		return;
+	HWND control_hwnd = gui.mCurrentTreeView->hwnd;
+
+	// For all built-in functions, loadtime validation has ensured that a first parameter can be
+	// present only when it's the specified HTREEITEM.
+	HTREEITEM hitem = (aParamCount < 1) ? NULL : (HTREEITEM)ExprTokenToInt64(*aParam[0]);
+
+	if (aParamCount < 2)
+	{
+		WPARAM flag;
+		char char7 = toupper(fn_name[7]);
+		switch(toupper(fn_name[6]))
+		{
+		case 'S': flag = TVGN_CARET; break; // TV_GetSelection(). TVGN_CARET is focused item.
+		case 'P': flag = (char7 == 'A') ? TVGN_PARENT : TVGN_PREVIOUS; break; // TV_GetParent/Prev.
+		case 'N': flag = (aParamCount < 1 || !hitem) ? TVGN_ROOT : TVGN_NEXT; break; // TV_GetNext(no-parameters) yields very first item in Tree (TVGN_ROOT).
+		// Above: It seems best to treat hitem==0 as "get root", even though it sacrificies some error detection,
+		// because not doing so would be inconsistent with the fact that TV_GetNext(0, "Full") does get the root
+		// (which needs to be retained to make script loops to traverse entire tree easier).
+		case 'C':
+			if (char7 == 'O') // i.e. the "CO" in TV_GetCount().
+			{
+				// There's a known bug mentioned at MSDN that a TreeView might report a negative count when there
+				// are more than 32767 items in it (though of course HTREEITEM values are never negative since they're
+				// defined as unsigned pseudo-addresses)).  But apparently, that bug only applies to Visual Basic and/or
+				// older OSes, because testing shows that SendMessage(TVM_GETCOUNT) returns 32800+ when there are more
+				// than 32767 items in the tree, even without casting to unsigned.  So I'm not sure exactly what the
+				// story is with this, so for now just casting to UINT rather than something less future-proof like WORD:
+				// Older note, apparently unneeded at least on XP SP2: Cast to WORD to convert -1 through -32768 to the
+				// positive counterparts.
+				aResultToken.value_int64 = (UINT)SendMessage(control_hwnd, TVM_GETCOUNT, 0, 0);
+				return;
+			}
+			// Since above didn't return, it's TV_GetChild():
+			flag = TVGN_CHILD;
+			break;
+		}
+		// Apparently there's no direct call to get the topmost ancestor of an item, presumably because it's rarely
+		// needed.  Therefore, no such mode is provide here yet (the syntax TV_GetParent(hitem, true) could be supported
+		// if it's ever needed).
+		aResultToken.value_int64 = SendMessage(control_hwnd, TVM_GETNEXTITEM, flag, (LPARAM)hitem);
+		return;
+	}
+
+	// Since above didn't return, this TV_GetNext's 2-parameter mode, which has an expanded scope that includes
+	// not just siblings, but also children and parents.  This allows a tree to be traversed from top to bottom
+	// without the script having to do something fancy.
+	char first_char_upper = toupper(*omit_leading_whitespace(ExprTokenToString(*aParam[1], buf))); // Resolve parameter #2.
+	bool search_checkmark;
+	if (first_char_upper == 'C')
+		search_checkmark = true;
+	else if (first_char_upper == 'F')
+		search_checkmark = false;
+	else // Reserve other option letters/words for future use by being somewhat strict.
+		return; // Retain the default value of 0 set for aResultToken.value_int64 higher above.
+
+	// When an actual item was specified, search begins at the item *after* it.  Otherwise (when NULL):
+	// It's a special mode that always considers the root node first.  Otherwise, there would be no way
+	// to start the search at the very first item in the tree to find out whether it's checked or not.
+	hitem = GetNextTreeItem(control_hwnd, hitem); // Handles the comment above.
+	if (!search_checkmark) // Simple tree traversal, so just return the next item (if any).
+	{
+		aResultToken.value_int64 = (__int64)hitem; // OK if NULL.
+		return;
+	}
+
+	// Otherwise, search for the next item having a checkmark. For performance, it seems best to assume that
+	// the control has the checkbox style (the script would realistically never call it otherwise, so the
+	// control's style isn't checked.
+	for (; hitem; hitem = GetNextTreeItem(control_hwnd, hitem))
+		if (TreeView_GetCheckState(control_hwnd, hitem) == 1) // 0 means unchecked, -1 means "no checkbox image".
+		{
+			aResultToken.value_int64 = (__int64)hitem;
+			return;
+		}
+	// Since above didn't return, the entire tree starting at the specified item has been searched,
+	// with no match found.  Retain the default value of 0 set for aResultToken.value_int64 higher above.
+}
+
+
+
+void BIF_TV_Get(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+// LV_Get()
+// Returns: Varies depending on param #2.
+// Parameters:
+// 1: HTREEITEM.
+// 2: Name of attribute to get.
+// LV_GetText()
+// Returns: 1 on success and 0 on failure.
+// Parameters:
+// 1: Output variable (doing it this way allows success/fail return value to more closely mirror the API and
+//    simplifies the code since there is currently no easy means of passing back large strings to our caller).
+// 2: HTREEITEM.
+{
+	bool get_text = (toupper(aResultToken.marker[6]) == 'T'); // Union's marker initially contains the function name. e.g. TV_Get[T]ext.
+	char *buf = aResultToken.buf; // Must be saved early since below overwrites the union (better maintainability too).
+	aResultToken.value_int64 = 0; // Set default return value. Must be done only after consulting marker above.
+	// Above sets default result in case of early return.  For code reduction, a zero is returned for all
+	// the following conditions:
+	// Window doesn't exist.
+	// Control doesn't exist (i.e. no TreeView in window).
+	// Item not found in ListView.
+	// And others.
+
+	if (!g_gui[g.GuiDefaultWindowIndex])
+		return;
+	GuiType &gui = *g_gui[g.GuiDefaultWindowIndex]; // Always operate on thread's default window to simplify the syntax.
+	if (!gui.mCurrentTreeView)
+		return;
+	HWND control_hwnd = gui.mCurrentTreeView->hwnd;
+
+	if (!get_text)
+	{
+		// Loadtime validation has ensured that param #1 and #2 are present for all these cases.
+		HTREEITEM hitem = (HTREEITEM)ExprTokenToInt64(*aParam[0]);
+		UINT state_mask;
+		switch (toupper(*omit_leading_whitespace(ExprTokenToString(*aParam[1], buf))))
+		{
+		case 'E': state_mask = TVIS_EXPANDED; break; // Expanded
+		case 'C': state_mask = TVIS_STATEIMAGEMASK; break; // Checked
+		case 'B': state_mask = TVIS_BOLD; break; // Bold
+		//case 'S' for "Selected" is not provided because TV_GetSelection() seems to cover that well enough.
+		//case 'P' for "is item a parent?" is not provided because TV_GetChild() seems to cover that well enough.
+		// (though it's possible that retrieving TVITEM's cChildren would perform a little better).
+		}
+		// Below seems to be need a bit-AND with state_mask to work properly, at least on XP SP2.  Otherwise,
+		// extra bits are present such as 0x2002 for "expanded" when it's supposed to be either 0x00 or 0x20.
+		UINT result = state_mask & (UINT)SendMessage(control_hwnd, TVM_GETITEMSTATE, (WPARAM)hitem, state_mask);
+		if (state_mask == TVIS_STATEIMAGEMASK)
+		{
+			if (result == 0x2000) // It has a checkmark state image.
+				aResultToken.value_int64 = (size_t)hitem; // Override 0 set earlier. More useful than returning 1 since it allows function-call nesting.
+		}
+		else // For all others, anything non-zero means the flag is present.
+            if (result)
+				aResultToken.value_int64 = (size_t)hitem; // Override 0 set earlier. More useful than returning 1 since it allows function-call nesting.
+		return;
+	}
+
+	// Since above didn't return, this is LV_GetText().
+	// Loadtime validation has ensured that param #1 and #2 are present.
+	if (aParam[0]->symbol != SYM_VAR) // No output variable. Supporting a NULL for the purpose of checking for the existence of an item seems too rarely needed.
+		return;
+	Var &output_var = *aParam[0]->var;
+
+	char text_buf[LV_TEXT_BUF_SIZE]; // i.e. uses same size as ListView.
+	TVITEM tvi;
+	tvi.hItem = (HTREEITEM)ExprTokenToInt64(*aParam[1]);
+	tvi.mask = TVIF_TEXT;
+	tvi.pszText = text_buf;
+	tvi.cchTextMax = LV_TEXT_BUF_SIZE - 1; // -1 because of nagging doubt about size vs. length. Some MSDN examples subtract one), such as TabCtrl_GetItem()'s cchTextMax.
+
+	if (SendMessage(control_hwnd, TVM_GETITEM, 0, (LPARAM)&tvi))
+	{
+		// Must use tvi.pszText vs. text_buf because MSDN says: "Applications should not assume that the text will
+		// necessarily be placed in the specified buffer. The control may instead change the pszText member
+		// of the structure to point to the new text rather than place it in the buffer."
+		output_var.Assign(tvi.pszText);
+		aResultToken.value_int64 = (size_t)tvi.hItem; // More useful than returning 1 since it allows function-call nesting.
+	}
+	else // On failure, it seems best to also clear the output var for better consistency and in case the script doesn't check the return value.
+		output_var.Assign();
+		// And leave aResultToken.value_int64 set to its default of 0.
 }
 
 
@@ -11647,13 +12180,7 @@ void BIF_IL_Add(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParam
 	if (!himl)
 		return;
 
-	// Load-time validation has ensured there are at least two parameters:
-	char *filespec;
-	if (   !(filespec = ExprTokenToString(*aParam[1], buf))   ) // Not an operand.  Haven't found a way to produce this situation yet, but safe to assume it's possible.
-		return; // Due to rarity of this condition, keep 0/false value as the result.
-
 	int param3 = (aParamCount > 2) ? (int)ExprTokenToInt64(*aParam[2]) : 0;
-
 	int icon_number, width = 0, height = 0; // Zero width/height causes image to be loaded at its actual width/height.
 	if (aParamCount > 3) // Presence of fourth parameter switches mode to be "load a non-icon image".
 	{
@@ -11667,7 +12194,8 @@ void BIF_IL_Add(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParam
 		icon_number = param3; // LoadPicture() properly handles any wrong/negative value that might be here.
 
 	int image_type;
-	HBITMAP hbitmap = LoadPicture(filespec, width, height, image_type, icon_number, false); // Defaulting to "false" for "use GDIplus" provides more consistent appearance across multiple OSes.
+	HBITMAP hbitmap = LoadPicture(ExprTokenToString(*aParam[1], buf) // Load-time validation has ensured there are at least two parameters.
+		, width, height, image_type, icon_number, false); // Defaulting to "false" for "use GDIplus" provides more consistent appearance across multiple OSes.
 	if (!hbitmap)
 		return;
 
@@ -11725,8 +12253,8 @@ double ExprTokenToDouble(ExprTokenType &aToken)
 
 
 char *ExprTokenToString(ExprTokenType &aToken, char *aBuf)
-// Returns NULL on failure.  Otherwise, it returns either aBuf (if aBuf was needed for the conversion)
-// or the token's own string.  Caller has ensured that aBuf is at least MAX_FORMATTED_NUMBER_LENGTH+1 in size.
+// Returns "" on failure to simplify logic in callers.  Otherwise, it returns either aBuf (if aBuf was needed for the
+// conversion) or the token's own string.  Caller has ensured that aBuf is at least MAX_FORMATTED_NUMBER_LENGTH+1 in size.
 {
 	switch (aToken.symbol)
 	{
@@ -11741,7 +12269,7 @@ char *ExprTokenToString(ExprTokenType &aToken, char *aBuf)
 		snprintf(aBuf, MAX_FORMATTED_NUMBER_LENGTH + 1, g.FormatFloat, aToken.value_double);
 		return aBuf;
 	default: // Not an operand.
-		return NULL;
+		return "";
 	}
 }
 

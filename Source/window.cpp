@@ -567,7 +567,7 @@ HWND WinExist(global_struct &aSettings, char *aTitle, char *aText, char *aExclud
 	if (ws.mCriteria & CRITERION_ID) // "ahk_id" will be satisified if that HWND still exists and is valid.
 	{
 		// Explicitly allow HWND_BROADCAST for all commands that use WinExist (which is just about all
-		// window commands), even though it's only valid with ScriptSendMessage() and ScriptPostMessage().
+		// window commands), even though it's only valid with ScriptPostSendMessage().
 		// This is because HWND_BROADCAST is probably never used as the HWND for a real window, so there
 		// should be no danger of any reasonable script ever passing that value in as a real target window,
 		// which should thus minimize the chance of a crash due to calling various API functions

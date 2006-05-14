@@ -439,7 +439,7 @@ void SendKeys(char *aKeys, bool aSendRaw, SendModes aSendModeOrig, HWND aTargetW
 							{
 								DisguiseWinAltIfNeeded(vk, in_blind_mode);
 								sModifiersLR_persistent &= ~key_as_modifiersLR;
-								// By contrast with KEYDOWN, KEYUP should also remove this modifer
+								// By contrast with KEYDOWN, KEYUP should also remove this modifier
 								// from extra_persistent_modifiers_for_blind_mode if it happens to be
 								// in there.  For example, if "#i::Send {LWin Up}" is a hotkey,
 								// LWin should become persistently up in every respect.
@@ -1186,7 +1186,10 @@ LRESULT CALLBACK PlaybackProc(int aCode, WPARAM wParam, LPARAM lParam)
 			// the case of a playback hook) for the hook to unhook itself: "The hook procedure can be in the
 			// state of being called by another thread even after UnhookWindowsHookEx returns."
 			UnhookWindowsHookEx(g_PlaybackHook);
-			PostMessage(NULL, WM_CANCELJOURNAL, 0, 0);
+			g_PlaybackHook = NULL; // Signal the installer of the hook that it's gone now.
+			// The following is an obsolete method from pre-v1.0.44.  Do not reinstate it without adding handling
+			// to MainWindowProc() to do "g_PlaybackHook = NULL" upon receipt of WM_CANCELJOURNAL.
+			// PostMessage(g_hWnd, WM_CANCELJOURNAL, 0, 0); // v1.0.44: Post it to g_hWnd vs. NULL because it's a little safer (SEE COMMENTS in MsgSleep's WM_CANCELJOURNAL for why it's almost completely safe with NULL).
 			// Above: By using WM_CANCELJOURNAL instead of a custom message, the creator of this hook can easily
 			// use a message filter to watch for both a system-generated removal of the hook (via the user
 			// pressing Ctrl-Esc. or Ctrl-Alt-Del) or one we generate here (though it's currently not implemented
@@ -1255,7 +1258,9 @@ LRESULT CALLBACK RecordProc(int aCode, WPARAM wParam, LPARAM lParam)
 			if (dest_event.vk == VK_CANCEL) // Ctrl+Break.
 			{
 				UnhookWindowsHookEx(g_PlaybackHook);
-				PostMessage(NULL, WM_CANCELJOURNAL, 0, 0);
+				g_PlaybackHook = NULL; // Signal the installer of the hook that it's gone now.
+				// Obsolete method, pre-v1.0.44:
+				//PostMessage(g_hWnd, WM_CANCELJOURNAL, 0, 0); // v1.0.44: Post it to g_hWnd vs. NULL so that it isn't lost when script is displaying a MsgBox or other dialog.
 			}
 			++sEventCount;
 		}

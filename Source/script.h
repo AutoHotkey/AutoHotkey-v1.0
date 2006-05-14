@@ -106,9 +106,9 @@ enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
 	, ID_MAIN_FIRST = 65400, ID_MAIN_LAST = 65534}; // These should match the range used by resource.h
 
 #define GUI_INDEX_TO_ID(index) (index + CONTROL_ID_FIRST)
-#define GUI_ID_TO_INDEX(id) (id - CONTROL_ID_FIRST) // Returns a negative if "id" is invalid, such as 0.
-#define GUI_HWND_TO_INDEX(hwnd) GUI_ID_TO_INDEX(GetDlgCtrlID(hwnd)) // Returns -1 on failure (e.g. HWND not found)	
-// Testing shows that GetDlgCtrlID() is dramatically faster than looping through a GUI window's control
+#define GUI_ID_TO_INDEX(id) (id - CONTROL_ID_FIRST) // Returns a small negative if "id" is invalid, such as 0.
+#define GUI_HWND_TO_INDEX(hwnd) GUI_ID_TO_INDEX(GetDlgCtrlID(hwnd)) // Returns a small negative on failure (e.g. HWND not found).
+// Testing shows that GetDlgCtrlID() is much faster than looping through a GUI window's control
 // array to find a matching HWND.
 
 
@@ -132,6 +132,7 @@ enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
 #define ERR_PARAM1_REQUIRED "Parameter #1 required"
 #define ERR_PARAM2_REQUIRED "Parameter #2 required"
 #define ERR_PARAM3_REQUIRED "Parameter #3 required"
+#define ERR_PARAM4_OMIT "Parameter #4 should be omitted in this case."
 #define ERR_PARAM2_MUST_BE_BLANK "Parameter #2 must be blank in this case."
 #define ERR_PARAM3_MUST_BE_BLANK "Parameter #3 must be blank in this case."
 #define ERR_PARAM4_MUST_BE_BLANK "Parameter #4 must be blank in this case."
@@ -436,7 +437,7 @@ enum MenuCommands {MENU_CMD_INVALID, MENU_CMD_SHOW, MENU_CMD_USEERRORLEVEL
 
 enum GuiCommands {GUI_CMD_INVALID, GUI_CMD_OPTIONS, GUI_CMD_ADD, GUI_CMD_MARGIN, GUI_CMD_MENU
 	, GUI_CMD_SHOW, GUI_CMD_SUBMIT, GUI_CMD_CANCEL, GUI_CMD_MINIMIZE, GUI_CMD_MAXIMIZE, GUI_CMD_RESTORE
-	, GUI_CMD_DESTROY, GUI_CMD_FONT, GUI_CMD_TAB, GUI_CMD_LISTVIEW, GUI_CMD_DEFAULT
+	, GUI_CMD_DESTROY, GUI_CMD_FONT, GUI_CMD_TAB, GUI_CMD_LISTVIEW, GUI_CMD_TREEVIEW, GUI_CMD_DEFAULT
 	, GUI_CMD_COLOR, GUI_CMD_FLASH
 };
 
@@ -450,27 +451,15 @@ enum GuiControlGetCmds {GUICONTROLGET_CMD_INVALID, GUICONTROLGET_CMD_CONTENTS, G
 	, GUICONTROLGET_CMD_FOCUS, GUICONTROLGET_CMD_FOCUSV, GUICONTROLGET_CMD_ENABLED, GUICONTROLGET_CMD_VISIBLE
 };
 
-// Not done as an enum so that it can be a UCHAR type, which saves memory in the arrays of controls:
 typedef UCHAR GuiControls;
-#define GUI_CONTROL_INVALID      0  // This should be zero due to use of things like ZeroMemory() on the struct.
-#define GUI_CONTROL_TEXT         1
-#define GUI_CONTROL_PIC          2
-#define GUI_CONTROL_GROUPBOX     3
-#define GUI_CONTROL_BUTTON       4
-#define GUI_CONTROL_CHECKBOX     5
-#define GUI_CONTROL_RADIO        6
-#define GUI_CONTROL_DROPDOWNLIST 7
-#define GUI_CONTROL_COMBOBOX     8
-#define GUI_CONTROL_LISTBOX      9
-#define GUI_CONTROL_LISTVIEW     10
-#define GUI_CONTROL_EDIT         11
-#define GUI_CONTROL_DATETIME     12
-#define GUI_CONTROL_MONTHCAL     13
-#define GUI_CONTROL_HOTKEY       14
-#define GUI_CONTROL_UPDOWN       15
-#define GUI_CONTROL_SLIDER       16
-#define GUI_CONTROL_PROGRESS     17
-#define GUI_CONTROL_TAB          18 // Keep below flush with above as a reminder to keep it in sync:
+enum GuiControlTypes {GUI_CONTROL_INVALID // GUI_CONTROL_INVALID must be zero due to things like ZeroMemory() on the struct.
+	, GUI_CONTROL_TEXT, GUI_CONTROL_PIC, GUI_CONTROL_GROUPBOX
+	, GUI_CONTROL_BUTTON, GUI_CONTROL_CHECKBOX, GUI_CONTROL_RADIO
+	, GUI_CONTROL_DROPDOWNLIST, GUI_CONTROL_COMBOBOX
+	, GUI_CONTROL_LISTBOX, GUI_CONTROL_LISTVIEW, GUI_CONTROL_TREEVIEW
+	, GUI_CONTROL_EDIT, GUI_CONTROL_DATETIME, GUI_CONTROL_MONTHCAL, GUI_CONTROL_HOTKEY
+	, GUI_CONTROL_UPDOWN, GUI_CONTROL_SLIDER, GUI_CONTROL_PROGRESS, GUI_CONTROL_TAB
+	, GUI_CONTROL_STATUSBAR}; // Kept last to reflect it being bottommost in switch()s (for perf), since not too often used.
 
 enum ThreadCommands {THREAD_CMD_INVALID, THREAD_CMD_PRIORITY, THREAD_CMD_INTERRUPT, THREAD_CMD_NOTIMERS};
 
@@ -1261,6 +1250,7 @@ public:
 		if (!stricmp(aBuf, "Font")) return GUI_CMD_FONT;
 		if (!stricmp(aBuf, "Tab")) return GUI_CMD_TAB;
 		if (!stricmp(aBuf, "ListView")) return GUI_CMD_LISTVIEW;
+		if (!stricmp(aBuf, "TreeView")) return GUI_CMD_TREEVIEW;
 		if (!stricmp(aBuf, "Default")) return GUI_CMD_DEFAULT;
 		if (!stricmp(aBuf, "Color")) return GUI_CMD_COLOR;
 		if (!stricmp(aBuf, "Flash")) return GUI_CMD_FLASH;
@@ -1324,6 +1314,7 @@ public:
 	{
 		if (!aBuf || !*aBuf) return GUI_CONTROL_INVALID;
 		if (!stricmp(aBuf, "Text")) return GUI_CONTROL_TEXT;
+		if (!stricmp(aBuf, "Edit")) return GUI_CONTROL_EDIT;
 		if (!stricmp(aBuf, "Button")) return GUI_CONTROL_BUTTON;
 		if (!stricmp(aBuf, "Checkbox")) return GUI_CONTROL_CHECKBOX;
 		if (!stricmp(aBuf, "Radio")) return GUI_CONTROL_RADIO;
@@ -1331,7 +1322,7 @@ public:
 		if (!stricmp(aBuf, "ComboBox")) return GUI_CONTROL_COMBOBOX;
 		if (!stricmp(aBuf, "ListBox")) return GUI_CONTROL_LISTBOX;
 		if (!stricmp(aBuf, "ListView")) return GUI_CONTROL_LISTVIEW;
-		if (!stricmp(aBuf, "Edit")) return GUI_CONTROL_EDIT;
+		if (!stricmp(aBuf, "TreeView")) return GUI_CONTROL_TREEVIEW;
 		// Keep those seldom used at the bottom for performance:
 		if (!stricmp(aBuf, "UpDown")) return GUI_CONTROL_UPDOWN;
 		if (!stricmp(aBuf, "Slider")) return GUI_CONTROL_SLIDER;
@@ -1342,6 +1333,7 @@ public:
 		if (!stricmp(aBuf, "DateTime")) return GUI_CONTROL_DATETIME;
 		if (!stricmp(aBuf, "MonthCal")) return GUI_CONTROL_MONTHCAL;
 		if (!stricmp(aBuf, "Hotkey")) return GUI_CONTROL_HOTKEY;
+		if (!stricmp(aBuf, "StatusBar")) return GUI_CONTROL_STATUSBAR;
 		return GUI_CONTROL_INVALID;
 	}
 
@@ -1906,6 +1898,7 @@ struct lv_attrib_type
 {
 	int sorted_by_col; // Index of column by which the control is currently sorted (-1 if none).
 	bool is_now_sorted_ascending; // The direction in which the above column is currently sorted.
+	bool no_auto_sort; // Automatic sorting disabled.
 	#define LV_MAX_COLUMNS 200
 	lv_col_type col[LV_MAX_COLUMNS];
 	int col_count; // Number of columns currently in the above array.
@@ -1952,6 +1945,7 @@ struct GuiControlOptionsType
 {
 	DWORD style_add, style_remove, exstyle_add, exstyle_remove, listview_style;
 	int listview_view; // Viewing mode, such as LVS_ICON, LVS_REPORT.  Int vs. DWORD to more easily use any negative value as "invalid".
+	HIMAGELIST himagelist;
 	int x, y, width, height;  // Position info.
 	float row_count;
 	int choice;  // Which item of a DropDownList/ComboBox/ListBox to initially choose.
@@ -1979,6 +1973,7 @@ struct GuiControlOptionsType
 	bool color_changed; // To discern when a control has been put back to the default color. [v1.0.26]
 	bool start_new_section;
 	bool use_theme; // v1.0.32: Provides the means for the window's current setting of mUseTheme to be overridden.
+	bool listview_no_auto_sort; // v1.0.44: More maintainable and frees up GUI_CONTROL_ATTRIB_ALTBEHAVIOR for other uses.
 };
 
 LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lParam);
@@ -1994,7 +1989,7 @@ public:
 	// to be what other apps use too, and seems to make edits stand out a little nicer:
 	#define GUI_CTL_VERTICAL_DEADSPACE 8
 	#define PROGRESS_DEFAULT_THICKNESS (2 * sFont[mCurrentFontIndex].point_size)
-	HWND mHwnd;
+	HWND mHwnd, mStatusBarHwnd;
 	// Control IDs are higher than their index in the array by the below amount.  This offset is
 	// necessary because windows that behave like dialogs automatically return IDOK and IDCANCEL in
 	// response to certain types of standard actions:
@@ -2005,15 +2000,13 @@ public:
 	GuiIndexType mDefaultButtonIndex; // Index vs. pointer is needed for some things.
 	Label *mLabelForClose, *mLabelForEscape, *mLabelForSize, *mLabelForDropFiles, *mLabelForContextMenu;
 	bool mLabelForCloseIsRunning, mLabelForEscapeIsRunning, mLabelForSizeIsRunning; // DropFiles doesn't need one of these.
-	WPARAM mSizeType; // And it does not need to be initalized since its contents are documented as being defined only in the GuiSize subroutine.
-	LPARAM mSizeWidthHeight; // Same comment as above.
 	DWORD mStyle, mExStyle; // Style of window.
 	bool mInRadioGroup; // Whether the control currently being created is inside a prior radio-group.
 	bool mUseTheme;  // Whether XP theme and styles should be applied to the parent window and subsequently added controls.
 	HWND mOwner;  // The window that owns this one, if any.  Note that Windows provides no way to change owners after window creation.
 	char mDelimiter;  // The default field delimiter when adding items to ListBox, DropDownList, ListView, etc.
 	int mCurrentFontIndex;
-	GuiControlType *mCurrentListView; // The ListView to which new rows will be added.
+	GuiControlType *mCurrentListView, *mCurrentTreeView; // The ListView and TreeView upon which the LV/TV functions operate.
 	TabControlIndexType mTabControlCount;
 	TabControlIndexType mCurrentTabControlIndex; // Which tab control of the window.
 	TabIndexType mCurrentTabIndex;// Which tab of a tab control is currently the default for newly added controls.
@@ -2033,6 +2026,7 @@ public:
 	static FontType sFont[MAX_GUI_FONTS];
 	static int sFontCount;
 	static int sObjectCount; // The number of non-NULL items in the g_gui array. Maintained only for performance reasons.
+	static HWND sTreeWithEditInProgress; // Needed because TreeView's edit control for label-editing conflicts with IDOK (default button).
 
 	// Don't overload new and delete operators in this case since we want to use real dynamic memory
 	// (since GUIs can be destroyed and recreated, over and over).
@@ -2041,7 +2035,7 @@ public:
 	// copy constructor, copy assignment operator, or a destructor, then it very likely will require all three.
 
 	GuiType(int aWindowIndex) // Constructor
-		: mHwnd(NULL), mWindowIndex(aWindowIndex), mControlCount(0), mControlCapacity(0)
+		: mHwnd(NULL), mStatusBarHwnd(NULL), mWindowIndex(aWindowIndex), mControlCount(0), mControlCapacity(0)
 		, mDefaultButtonIndex(-1), mLabelForClose(NULL), mLabelForEscape(NULL), mLabelForSize(NULL)
 		, mLabelForDropFiles(NULL), mLabelForContextMenu(NULL)
 		, mLabelForCloseIsRunning(false), mLabelForEscapeIsRunning(false), mLabelForSizeIsRunning(false)
@@ -2055,7 +2049,7 @@ public:
 		, mExStyle(0) // This and the above should not be used once the window has been created since they might get out of date.
 		, mInRadioGroup(false), mUseTheme(true), mOwner(NULL), mDelimiter('|')
 		, mCurrentFontIndex(FindOrCreateFont()) // Omit params to tell it to find or create DEFAULT_GUI_FONT.
-		, mCurrentListView(NULL)
+		, mCurrentListView(NULL), mCurrentTreeView(NULL)
 		, mTabControlCount(0), mCurrentTabControlIndex(MAX_TAB_CONTROLS), mCurrentTabIndex(0)
 		, mCurrentColor(CLR_DEFAULT)
 		, mBackgroundColorWin(CLR_DEFAULT), mBackgroundBrushWin(NULL)
@@ -2119,7 +2113,7 @@ public:
 	GuiIndexType FindControl(char *aControlID);
 	GuiControlType *FindControl(HWND aHwnd)
 	{
-		GuiIndexType index = GUI_HWND_TO_INDEX(aHwnd); // Retrieves -1 on failure, which will be out of bounds when converted to unsigned.
+		GuiIndexType index = GUI_HWND_TO_INDEX(aHwnd); // Retrieves a small negative on failure, which will be out of bounds when converted to unsigned.
 		if (index < mControlCount)
 			return &mControl[index];
 		// Otherwise: Since ComboBoxes (and possibly other future control types) have children, try looking
@@ -2127,7 +2121,7 @@ public:
 		// this extra effort:
 		if (   !(aHwnd = GetParent(aHwnd))   )
 			return NULL;
-		index = GUI_HWND_TO_INDEX(aHwnd);
+		index = GUI_HWND_TO_INDEX(aHwnd); // Retrieves a small negative on failure, which will be out of bounds when converted to unsigned.
 		return (index < mControlCount) ? &mControl[index] : NULL;
 	}
 	int FindGroup(GuiIndexType aControlIndex, GuiIndexType &aGroupStart, GuiIndexType &aGroupEnd);
@@ -2137,7 +2131,7 @@ public:
 		, COLORREF *aColor = NULL);
 	static int FindFont(FontType &aFont);
 
-	void Event(GuiIndexType aControlIndex, UINT aNotifyCode, USHORT aEventInfo = 0);
+	void Event(GuiIndexType aControlIndex, UINT aNotifyCode, USHORT aGuiEvent = GUI_EVENT_NONE, UINT aEventInfo = 0);
 
 	static WORD TextToHotkey(char *aText);
 	static char *HotkeyToText(WORD aHotkey, char *aBuf);
@@ -2147,6 +2141,7 @@ public:
 	void ControlSetSliderOptions(GuiControlType &aControl, GuiControlOptionsType &aOpt);
 	int ControlInvertSliderIfNeeded(GuiControlType &aControl, int aPosition);
 	void ControlSetListViewOptions(GuiControlType &aControl, GuiControlOptionsType &aOpt);
+	void ControlSetTreeViewOptions(GuiControlType &aControl, GuiControlOptionsType &aOpt);
 	void ControlSetProgressOptions(GuiControlType &aControl, GuiControlOptionsType &aOpt, DWORD aStyle);
 	bool ControlOverrideBkColor(GuiControlType &aControl);
 
@@ -2425,7 +2420,7 @@ public:
 	VarSizeType GetEndChar(char *aBuf = NULL);
 	VarSizeType GetGui(VarTypeType aVarType, char *aBuf = NULL);
 	VarSizeType GetGuiControl(GuiIndexType aGuiWindowIndex, GuiIndexType aControlIndex, char *aBuf = NULL);
-	VarSizeType GetGuiControlEvent(char *aBuf = NULL);
+	VarSizeType GetGuiEvent(char *aBuf = NULL);
 	VarSizeType GetEventInfo(char *aBuf = NULL);
 	VarSizeType GetTimeIdle(char *aBuf = NULL);
 	VarSizeType GetTimeIdlePhysical(char *aBuf = NULL);
@@ -2465,12 +2460,18 @@ void BIF_SqrtLogLn(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 
 void BIF_OnMessage(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 
+void BIF_StatusBar(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+
 void BIF_LV_GetNextOrCount(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_LV_GetText(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_LV_AddInsertModify(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_LV_Delete(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_LV_InsertModifyDeleteCol(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_LV_SetImageList(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+
+void BIF_TV_AddModifyDelete(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_TV_GetRelatedItem(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_TV_Get(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 
 void BIF_IL_Create(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_IL_Destroy(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);

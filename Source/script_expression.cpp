@@ -1489,8 +1489,8 @@ skip_abort_udf:
 				// an integer above.
 				if (right_int64 < 0 || right_int64 > UINT_MAX)
 					this_token.value_int64 = ~right_int64;
-				else // See comments at TRANS_CMD_BITNOT for why it's done this way.
-					this_token.value_int64 = ~((DWORD)right_int64);
+				else // See comments at TRANS_CMD_BITNOT for why it's done this way:
+					this_token.value_int64 = (size_t)~(DWORD)right_int64; // Casting this way avoids compiler warning.
 			}
 			this_token.symbol = SYM_INTEGER; // Must be done only after its old value was used above. v1.0.36.07: Fixed to be SYM_INTEGER vs. right_is_number for SYM_BITNOT.
 			break;

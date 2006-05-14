@@ -1118,7 +1118,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 	Hotkey *hk;
 	LineNumberType pending_function_line_number, saved_line_number;
 	HookActionType hook_action;
-	bool is_label;
+	bool is_label, has_tilde;
 
 	// For the remap mechanism, e.g. a::b
 	int remap_stage;
@@ -1830,9 +1830,9 @@ examine_line:
 			}
 			else // It's a hotkey vs. hotstring.
 			{
-				if (hk = Hotkey::FindHotkeyByTrueNature(buf)) // Parent hotkey found.  Add a child/variant hotkey for it.
+				if (hk = Hotkey::FindHotkeyByTrueNature(buf, has_tilde)) // Parent hotkey found.  Add a child/variant hotkey for it.
 				{
-					if (hook_action)
+					if (hook_action) // has_tilde has always been ignored for these types (alt-tab hotkeys).
 					{
 						// Hotkey::Dynamic() contains logic and comments similar to this, so maintain them together.
 						// An attempt to add an alt-tab variant to an existing hotkey.  This might have
@@ -1844,13 +1844,13 @@ examine_line:
 					else
 					{
 						// Detect duplicate hotkey variants to help spot bugs in scripts.
-						if (hk->FindVariant()) // See if there's already a variant matching the current criteria.
+						if (hk->FindVariant()) // See if there's already a variant matching the current criteria (has_tilde does not make variants distinct form each other because it would require firing two hotkey IDs in response to pressing one hotkey, which currently isn't in the design).
 						{
 							mCurrLine = NULL;  // Prevents showing unhelpful vicinity lines.
 							ScriptError("Duplicate hotkey.", buf);
 							return CloseAndReturn(fp, script_buf, FAIL);
 						}
-						if (!hk->AddVariant(mLastLabel))
+						if (!hk->AddVariant(mLastLabel, has_tilde))
 						{
 							ScriptError(ERR_OUTOFMEM, buf);
 							return CloseAndReturn(fp, script_buf, FAIL);
@@ -1858,7 +1858,7 @@ examine_line:
 					}
 				}
 				else // No parent hotkey yet, so create it.
-					if (   !(hk = Hotkey::AddHotkey(mLastLabel, hook_action, NULL, false))   )
+					if (   !(hk = Hotkey::AddHotkey(mLastLabel, hook_action, NULL, has_tilde, false))   )
 						return CloseAndReturn(fp, script_buf, FAIL); // It already displayed the error.
 			}
 			goto continue_main_loop; // In lieu of "continue", for performance.
@@ -4636,8 +4636,14 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			case GUI_CMD_INVALID:
 				return ScriptError(ERR_PARAM1_INVALID, new_raw_arg1);
 			case GUI_CMD_ADD:
-				if (aArgc > 1 && !line.ArgHasDeref(2) && !line.ConvertGuiControl(new_raw_arg2))
-					return ScriptError(ERR_PARAM2_INVALID, new_raw_arg2);
+				if (aArgc > 1 && !line.ArgHasDeref(2))
+				{
+					GuiControls control_type;
+					if (   !(control_type = line.ConvertGuiControl(new_raw_arg2))   )
+						return ScriptError(ERR_PARAM2_INVALID, new_raw_arg2);
+					if (control_type == GUI_CONTROL_TREEVIEW && aArgc > 3) // Reserve it for future use such as a tab-indented continuation section that lists the tree hierarchy.
+						return ScriptError(ERR_PARAM4_OMIT, new_raw_arg4);
+				}
 				break;
 			case GUI_CMD_CANCEL:
 			case GUI_CMD_MINIMIZE:
@@ -4652,6 +4658,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			case GUI_CMD_SUBMIT:
 			case GUI_CMD_MENU:
 			case GUI_CMD_LISTVIEW:
+			case GUI_CMD_TREEVIEW:
 			case GUI_CMD_FLASH:
 				if (aArgc > 2)
 					return ScriptError("Parameter #3 and beyond should be omitted in this case.", new_raw_arg3);
@@ -5163,7 +5170,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			case TRANS_CMD_ATAN:
 			case TRANS_CMD_BITNOT:
 				if (*new_raw_arg4)
-					return ScriptError("Parameter #4 should be omitted in this case.", new_raw_arg4);
+					return ScriptError(ERR_PARAM4_OMIT, new_raw_arg4);
 				break;
 
 			case TRANS_CMD_BITAND:
@@ -5967,13 +5974,52 @@ Func *Script::FindFunc(char *aFuncName, size_t aFuncNameLength)
 			max_params = 3;
 		}
 		else if (!stricmp(suffix, "DeleteCol"))
-		{
 			bif = BIF_LV_InsertModifyDeleteCol; // Leave min/max set to 1.
-		}
 		else if (!stricmp(suffix, "SetImageList"))
 		{
 			bif = BIF_LV_SetImageList;
 			max_params = 2; // Leave min at 1.
+		}
+		else
+			return NULL;
+	}
+	else if (!strnicmp(func_name, "TV_", 3)) // It's a TreeView function.
+	{
+		suffix = func_name + 3;
+		if (!stricmp(suffix, "Add"))
+		{
+			bif = BIF_TV_AddModifyDelete;
+			max_params = 3; // Leave min at its default of 1.
+		}
+		else if (!stricmp(suffix, "Modify"))
+		{
+			bif = BIF_TV_AddModifyDelete;
+			max_params = 3; // One-parameter mode is "select specified item".
+		}
+		else if (!stricmp(suffix, "Delete"))
+		{
+			bif = BIF_TV_AddModifyDelete;
+			min_params = 0;
+		}
+		else if (!stricmp(suffix, "GetParent") || !stricmp(suffix, "GetChild") || !stricmp(suffix, "GetPrev"))
+			bif = BIF_TV_GetRelatedItem;
+		else if (!stricmp(suffix, "GetCount") || !stricmp(suffix, "GetSelection"))
+		{
+			bif = BIF_TV_GetRelatedItem;
+			min_params = 0;
+			max_params = 0;
+		}
+		else if (!stricmp(suffix, "GetNext")) // Unlike "Prev", Next also supports 0 or 2 parameters.
+		{
+			bif = BIF_TV_GetRelatedItem;
+			min_params = 0;
+			max_params = 2;
+		}
+		else if (!stricmp(suffix, "Get") || !stricmp(suffix, "GetText"))
+		{
+			bif = BIF_TV_Get;
+			min_params = 2;
+			max_params = 2;
 		}
 		else
 			return NULL;
@@ -5999,6 +6045,22 @@ Func *Script::FindFunc(char *aFuncName, size_t aFuncNameLength)
 		}
 		else
 			return NULL;
+	}
+	else if (!stricmp(func_name, "SB_SetText"))
+	{
+		bif = BIF_StatusBar;
+		max_params = 3; // Leave min_params at its default of 1.
+	}
+	else if (!stricmp(func_name, "SB_SetParts"))
+	{
+		bif = BIF_StatusBar;
+		min_params = 0;
+		max_params = 255; // 255 params alllows for up to 256 parts, which is SB's max.
+	}
+	else if (!stricmp(func_name, "SB_SetIcon"))
+	{
+		bif = BIF_StatusBar;
+		max_params = 3; // Leave min_params at its default of 1.
 	}
 	else if (!stricmp(func_name, "StrLen"))
 		bif = BIF_StrLen;
@@ -7110,7 +7172,7 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 					if (deref->param_count >= func.mParamCount) // Check this every iteration to avoid going beyond MAX_FUNCTION_PARAMS.
 					{
 						abort = true; // So that the caller doesn't also report an error.
-						return line->PreparseError("Too many params passed to function.", deref->marker);
+						return line->PreparseError("Too many parameters passed to function.", deref->marker);
 					}
 					// Below relies on the above check having been done first to avoid reading beyond the
 					// end of the mParam array.
@@ -7168,7 +7230,7 @@ Line *Script::PreparseBlocks(Line *aStartingLine, bool aFindBlockEnd, Line *aPar
 				if (deref->param_count < func.mMinParams)
 				{
 					abort = true; // So that the caller doesn't also report an error.
-					return line->PreparseError("Too few params passed to function.", deref->marker);
+					return line->PreparseError("Too few parameters passed to function.", deref->marker);
 				}
 			} // for each deref of this arg
 		} // for each arg of this line
@@ -11592,13 +11654,7 @@ VarSizeType Script::ScriptGetCaret(VarTypeType aVarType, char *aBuf)
 		}
 		ClientToScreen(focused_control ? focused_control : target_window, &sPoint);
 		if (!(g.CoordMode & COORD_MODE_CARET))  // Using the default, which is coordinates relative to window.
-		{
-			// Convert screen coordinates to window coordinates:
-			RECT rect;
-			GetWindowRect(target_window, &rect);
-			sPoint.x -= rect.left;
-			sPoint.y -= rect.top;
-		}
+			ScreenToWindow(sPoint, target_window);
 		// Now that all failure conditions have been checked, update static variables for the next caller:
 		sForeWinPrev = target_window;
 		sTimestamp = now_tick;
@@ -11940,13 +11996,14 @@ VarSizeType Script::GetLoopFileSize(char *aBuf, int aDivider)
 	*target_buf = '\0';  // Set default.
 	if (mLoopFile)
 	{
+
+		// UPDATE: 64-bit ints are now standard, so the following is obsolete:
 		// It's a documented limitation that the size will show as negative if
 		// greater than 2 gig, and will be wrong if greater than 4 gig.  For files
 		// that large, scripts should use the KB version of this function instead.
 		// If a file is over 4gig, set the value to be the maximum size (-1 when
 		// expressed as a signed integer, since script variables are based entirely
-		// on 32-bit signed integers due to the use of ATOI(), etc.).  UPDATE: 64-bit
-		// ints are now standard, so the above is unnecessary:
+		// on 32-bit signed integers due to the use of ATOI(), etc.).
 		//sprintf(str, "%d%", mLoopFile->nFileSizeHigh ? -1 : (int)mLoopFile->nFileSizeLow);
 		ULARGE_INTEGER ul;
 		ul.HighPart = mLoopFile->nFileSizeHigh;
@@ -12146,19 +12203,14 @@ VarSizeType Script::GetGui(VarTypeType aVarType, char *aBuf)
 		return 0;
 	}
 
-	GuiType *pgui;
-
 	switch (aVarType)
 	{
 	case VAR_GUIWIDTH: // Listed first for perfommance.
 	case VAR_GUIHEIGHT:
-		if (   !(pgui = g_gui[g.GuiWindowIndex])   ) // Gui window doesn't currently exist, so return a blank.
-		{
-			*target_buf = '\0';
-			return 0;
-		}
-		// Otherwise:
-		_itoa(aVarType == VAR_GUIWIDTH ? LOWORD(pgui->mSizeWidthHeight) : HIWORD(pgui->mSizeWidthHeight), target_buf, 10);
+		// g.GuiPoint.x was overloaded to contain the size, since there are currently never any cases when
+		// A_GuiX/Y and A_GuiWidth/Height are both valid simultaneously.  It is documented that each of these
+		// variables is defined only in proper types of subroutines.
+		_itoa(aVarType == VAR_GUIWIDTH ? LOWORD(g.GuiPoint.x) : HIWORD(g.GuiPoint.x), target_buf, 10);
 		// Above is always stored as decimal vs. hex, regardless of script settings.
 		break;
 	case VAR_GUIX:
@@ -12213,7 +12265,7 @@ VarSizeType Script::GetGuiControl(GuiIndexType aGuiWindowIndex, GuiIndexType aCo
 
 
 
-VarSizeType Script::GetGuiControlEvent(char *aBuf)
+VarSizeType Script::GetGuiEvent(char *aBuf)
 // We're returning the length of the var's contents, not the size.
 {
 	if (g.GuiEvent == GUI_EVENT_DROPFILES)
@@ -12269,9 +12321,9 @@ VarSizeType Script::GetGuiControlEvent(char *aBuf)
 	// Otherwise, this event is not GUI_EVENT_DROPFILES, so use standard modes of operation.
 	static char *sNames[] = GUI_EVENT_NAMES;
 	if (!aBuf)
-		return (g.GuiEvent < GUI_EVENT_ILLEGAL) ? (VarSizeType)strlen(sNames[g.GuiEvent]) : 1;
+		return (g.GuiEvent < GUI_EVENT_FIRST_UNNAMED) ? (VarSizeType)strlen(sNames[g.GuiEvent]) : 1;
 	// Otherwise:
-	if (g.GuiEvent < GUI_EVENT_ILLEGAL)
+	if (g.GuiEvent < GUI_EVENT_FIRST_UNNAMED)
 	{
 		strcpy(aBuf, sNames[g.GuiEvent]);
 		return (VarSizeType)strlen(aBuf);

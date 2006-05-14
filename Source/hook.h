@@ -67,26 +67,17 @@ enum UserMessages {AHK_HOOK_HOTKEY = WM_USER, AHK_HOTSTRING, AHK_USER_MENU, AHK_
 		wparam = 0;\
 	} // In the above, wparam is made zero to help catch bugs.
 
-// These negative values will be seen as large unsigned values in most contexts.  The must be large
-// values to distinguish them from any reasonable combination of aEventInfo and aControlIndex that
-// might be produced by Gui::Event():
-#define AHK_GUI_CLOSE       -1
-#define AHK_GUI_ESCAPE      -2
-#define AHK_GUI_SIZE        -3
-#define AHK_GUI_DROPFILES   -4
-#define AHK_GUI_CONTEXTMENU -5
-
 // And these macros are kept here so that all this trickery is centrally located and thus more maintainable:
 #define ASK_INSTANCE_TO_CLOSE(hwnd, reason) PostMessage(hwnd, WM_COMMNOTIFY, reason, 0);
+
+// POST_AHK_USER_MENU: A gui_index value >= 0 is passed with the message if it came from a GUI's menu bar.
+// This is done because it's good way to pass the info, but also so that its value will be in sync with the
+// timestamp of the message (in case the message is stuck in the queue for a long time).  No pointer is
+// passed in this case since they might become invalid between the time the msg is posted vs. processed.
 #define POST_AHK_USER_MENU(hwnd, menu, gui_index) PostMessage(hwnd, AHK_USER_MENU, gui_index, menu);
-#define POST_AHK_GUI_ACTION(hwnd, control_index, gui_event) PostMessage(hwnd, AHK_GUI_ACTION, control_index, gui_event);
-#define POST_AHK_DIALOG(timeout) PostMessage(g_hWnd, WM_COMMNOTIFY, AHK_DIALOG, (LPARAM)timeout);
-// Notes about POST_AHK_USER_MENU: A gui_index value >= 0 is passed with the message if it came from a
-// GUI's menu bar.  This is done because it's good way to pass the info, but also so that its value will
-// be in sync with the timestamp of the message (in case the message is stuck in the queue for a long time).
-// No pointer is passed in this case since they might become invalid between the time the msg is posted vs.
-// processed.
-// Notes about POST_AHK_DIALOG above:
+#define POST_AHK_GUI_ACTION(hwnd, control_index, gui_event, event_info) PostMessage(hwnd, AHK_GUI_ACTION \
+	, (WPARAM)(((control_index) << 16) | (gui_event)), (LPARAM)(event_info)); // Caller must ensure that gui_event is less than 0xFFFF.
+// POST_AHK_DIALOG:
 // Post a special msg that will attempt to force it to the foreground after it has been displayed,
 // since the dialog often will flash in the task bar instead of becoming foreground.
 // It's enough just to queue up a single message that dialog's message pump will forward to our
@@ -97,6 +88,7 @@ enum UserMessages {AHK_HOOK_HOTKEY = WM_USER, AHK_HOTSTRING, AHK_USER_MENU, AHK_
 // being able to ensure that it's the foreground window.  That seems unlikely, however, since
 // MessageBox() and the other dialog invocating API calls (for FileSelectFile/Folder) likely
 // ensures its window really exists before dispatching messages.
+#define POST_AHK_DIALOG(timeout) PostMessage(g_hWnd, WM_COMMNOTIFY, AHK_DIALOG, (LPARAM)timeout);
 
 // Some reasoning behind the below data structures: Could build a new array for [sc][sc] and [vk][vk]
 // (since only two keys are allowed in a ModifierVK/SC combination, only 2 dimensions are needed).
@@ -129,8 +121,10 @@ struct key_type
 	HotkeyIDType hotkey_to_fire_upon_release; // A up-event hotkey queued by a prior down-event.
 	// Keep sub-32-bit members contiguous to save memory without having to sacrifice performance of
 	// 32-bit alignment:
-	bool used_as_prefix;  // whether a given virtual key or scan code is even used by a hotkey.
-	bool used_as_suffix;  // whether a given virtual key or scan code is even used by a hotkey.
+	#define PREFIX_ACTUAL 1 // Values for used_as_prefix below, for places that need to distinguish between type of prefix.
+	#define PREFIX_FORCED 2 // v1.0.44: Added so that a neutral hotkey like Control can be forced to fire on key-up even though it isn't actually a prefix key.
+	UCHAR used_as_prefix; // Whether a given virtual key or scan code is even used by a hotkey.
+	bool used_as_suffix;  //
 	bool used_as_key_up;  // Whether this suffix also has an enabled key-up hotkey.
 	UCHAR no_suppress; // Contains bitwise flags such as NO_SUPPRESS_PREFIX.
 	bool is_down; // this key is currently down.
@@ -162,7 +156,7 @@ struct key_type
 {\
 	item.nModifierVK = 0;\
 	item.nModifierSC = 0;\
-	item.used_as_prefix = false;\
+	item.used_as_prefix = 0;\
 	item.used_as_suffix = false;\
 	item.used_as_key_up = false;\
 	item.no_suppress &= NO_SUPPRESS_STATES;\

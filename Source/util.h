@@ -512,6 +512,7 @@ HRESULT MySetWindowTheme(HWND hwnd, LPCWSTR pszSubAppName, LPCWSTR pszSubIdList)
 char *ConvertEscapeSequences(char *aBuf, char aEscapeChar, bool aAllowEscapedSpace);
 POINT CenterWindow(int aWidth, int aHeight);
 bool FontExist(HDC aHdc, char *aTypeface);
+void ScreenToWindow(POINT &aPoint, HWND aHwnd);
 void WindowToScreen(int &aX, int &aY);
 void GetVirtualDesktopRect(RECT &aRect);
 LPVOID AllocInterProcMem(HANDLE &aHandle, DWORD aSize, HWND aHwnd);

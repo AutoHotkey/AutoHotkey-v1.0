@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.43.11"
+#define NAME_VERSION "1.0.44.00"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -296,7 +296,9 @@ enum enum_act_old {
 // with the MENU command, as well as the number of such menu items that are possible (currently about
 // 65500-11000=54500). See comments at ID_USER_FIRST for details:
 #define GUI_CONTROL_BLOCK_SIZE 1000
-#define MAX_CONTROLS_PER_GUI (GUI_CONTROL_BLOCK_SIZE * 11) // Some things rely on this being an even multiple of GUI_CONTROL_BLOCK_SIZE.
+#define MAX_CONTROLS_PER_GUI (GUI_CONTROL_BLOCK_SIZE * 11) // Some things rely on this being less than 0xFFFF and an even multiple of GUI_CONTROL_BLOCK_SIZE.
+#define NO_CONTROL_INDEX MAX_CONTROLS_PER_GUI // Must be 0xFFFF or less.
+#define NO_EVENT_INFO 0 // For backward compatibility with documented contents of A_EventInfo, this should be kept as 0 vs. something more special like UINT_MAX.
 
 #define MAX_TOOLTIPS 20
 #define MAX_TOOLTIPS_STR "20"   // Keep this in sync with above.
@@ -419,15 +421,16 @@ enum TitleMatchModes {MATCHMODE_INVALID = FAIL, FIND_IN_LEADING_PART, FIND_ANYWH
 
 typedef UINT GuiIndexType; // Some things rely on it being unsigned to avoid the need to check for less-than-zero.
 typedef UINT GuiEventType; // Made a UINT vs. enum so that illegal/underflow/overflow values are easier to detect.
-#define GUI_EVENT_NONE        0 // NONE must be zero for any uses of ZeroMemory(), etc.
-#define GUI_EVENT_NORMAL      1
-#define GUI_EVENT_DBLCLK      2 // Try to avoid changing this and the other numbers in case anyone automates a script via SendMessage (though that does seem exceedingly unlikely).
-#define GUI_EVENT_RCLK        3
-#define GUI_EVENT_COLCLK      4
-#define GUI_EVENT_ILLEGAL     5 // This item must always be last, and it must be 1 greater than the previous.
-#define GUI_EVENT_DROPFILES   6 // A special value separate from the above and yet less than 49 (ASCII values of '1' through '9' used by Slider controls).
-#define GUI_EVENT_DIGIT_0     48 // Values here and higher are reserved so that a single digit or character (mnemonic) can be sent.
-#define GUI_EVENT_NAMES {"", "Normal", "DoubleClick", "RightClick", "ColClick"}  // THIS MUST BE KEPT IN SYNC WITH THE ABOVE.
+
+// The following array and enum must be kept in sync with each other:
+#define GUI_EVENT_NAMES {"", "Normal", "DoubleClick", "RightClick", "ColClick"}
+enum GuiEventTypes {GUI_EVENT_NONE  // NONE must be zero for any uses of ZeroMemory(), synonymous with false, etc.
+	, GUI_EVENT_NORMAL, GUI_EVENT_DBLCLK // Try to avoid changing this and the other common ones in case anyone automates a script via SendMessage (though that does seem very unlikely).
+	, GUI_EVENT_RCLK, GUI_EVENT_COLCLK
+	, GUI_EVENT_FIRST_UNNAMED  // This item must always be 1 greater than the last item that has a name in the GUI_EVENT_NAMES array below.
+	, GUI_EVENT_DROPFILES = GUI_EVENT_FIRST_UNNAMED
+	, GUI_EVENT_CLOSE, GUI_EVENT_ESCAPE, GUI_EVENT_RESIZE, GUI_EVENT_CONTEXTMENU
+	, GUI_EVENT_DIGIT_0 = 48}; // Here just as a reminder that this value and higher are reserved so that a single printable character or digit (mnemonic) can be sent.
 
 // Bitwise flags:
 typedef UCHAR CoordModeAttribType;
@@ -544,13 +547,13 @@ inline void global_init(global_struct &g)
 	g.Priority = 0;
 	g.LastError = 0;
 	g.GuiEvent = GUI_EVENT_NONE;
-	g.EventInfo = 0;
+	g.EventInfo = NO_EVENT_INFO;
 	g.GuiPoint.x = COORD_UNSPECIFIED;
 	g.GuiPoint.y = COORD_UNSPECIFIED;
 	// For these, indexes rather than pointers are stored because handles can become invalid during the
 	// lifetime of a thread (while it's suspended, or if it destroys the control or window that created itself):
-	g.GuiWindowIndex = MAX_GUI_WINDOWS;  // Default them to out-of-bounds.
-	g.GuiControlIndex = MAX_CONTROLS_PER_GUI; // Same.
+	g.GuiWindowIndex = MAX_GUI_WINDOWS;   // Default them to out-of-bounds.
+	g.GuiControlIndex = NO_CONTROL_INDEX; //
 	g.GuiDefaultWindowIndex = 0;
 	g.WinDelay = 100;
 	g.ControlDelay = 20;

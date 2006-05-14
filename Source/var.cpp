@@ -94,8 +94,8 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt, bool aExac
 	if (mType == VAR_ALIAS) // For simplicity and reduced code size, just make a recursive call to self.
 		return mAliasFor->Assign(aBuf, aLength, aTrimIt, aExactSize);
 
-	bool do_assign = true; // Set default.
-	bool free_it_if_large = true;  // Default.
+	bool do_assign = true;        // Set defaults.
+	bool free_it_if_large = true; //
 	if (!aBuf)
 		if (aLength == VARSIZE_MAX) // Caller omitted this param too, so it wants to assign empty string.
 		{
@@ -423,7 +423,7 @@ VarSizeType Var::Get(char *aBuf)
 	// For VAR_GUICONTROL, other logic ensures that g.GuiControlIndex is out-of-bounds whenever g.GuiWindowIndex is.
 	// That is why g.GuiWindowIndex is not checked to make sure it's less than MAX_GUI_WINDOWS.
 	case VAR_GUICONTROL: if (!aBuf) return g_script.GetGuiControl(g.GuiWindowIndex, g.GuiControlIndex); else aBuf += g_script.GetGuiControl(g.GuiWindowIndex, g.GuiControlIndex, aBuf); break;
-	case VAR_GUICONTROLEVENT: if (!aBuf) return g_script.GetGuiControlEvent(); else aBuf += g_script.GetGuiControlEvent(aBuf); break;
+	case VAR_GUICONTROLEVENT: if (!aBuf) return g_script.GetGuiEvent(); else aBuf += g_script.GetGuiEvent(aBuf); break;
 
 	case VAR_EVENTINFO: // It's called "EventInfo" vs. "GuiEventInfo" because it applies to non-Gui events such as OnClipboardChange.
 		if (!aBuf) return g_script.GetEventInfo(); else aBuf += g_script.GetEventInfo(aBuf); break;

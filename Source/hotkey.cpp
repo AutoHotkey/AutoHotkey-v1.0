@@ -174,21 +174,32 @@ void Hotkey::ManifestAllHotkeysHotstringsHooks()
 		}
 		// Otherwise, this hotkey will be in effect, so check its attributes.
 
-		// v1.0.42: The following is done to support situations in which a hotkey can be a hook hotkey sometimes,
-		// but after a (de)suspend or after a change to other hotkeys via the Hotkey command, might no longer
-		// require the hook.  Examples include:
-		// 1) A hotkey can't be registered because some other app is using it, but later
-		//    that condition changes.
-		// 2) Suspend or the Hotkey command changes wildcard hotkeys so that non-wildcard
-		//    hotkeys that have the same suffix are no longer eclipsed, and thus don't need
-		//    the hook.  The same type of thing can happen if a key-up hotkey is disabled,
-		//    which would allow it's key-down hotkey to become non-hook.  Similarly, if a
-		//    all of a prefix key's hotkeys become disabled, and that prefix is also a suffix,
-		//    those suffixes no longer need to be hook hotkeys.
-		// 3) There may be other ways, especially in the future involving #IfWin keys whose
-		//    criteria change.
-		if (hot.mType == HK_KEYBD_HOOK && !hot.mKeybdHookMandatory)
-			hot.mType = HK_NORMAL; // To possibly be overridden back to HK_KEYBD_HOOK later below; but if not, it will be registered later below.
+		if (hot.mKeybdHookMandatory)
+		{
+			// v1.0.44: The following Relies upon by some things like the Hotkey constructor and the tilde prefix
+			// (the latter can set mKeybdHookMandatory for a hotkey sometime after the first variant is added [such
+			// as for a subsequent variant]).  This practice also improves maintainability.
+			if (HK_TYPE_CAN_BECOME_KEYBD_HOOK(hot.mType)) // To ensure it hasn't since become a joystick/mouse/mouse-and-keyboard hotkey.
+				hot.mType = HK_KEYBD_HOOK;
+		}
+		else // Hook isn't mandatory, so set any non-mouse/joystick/both hotkey to normal for possibly overriding later below.
+		{
+			// v1.0.42: The following is done to support situations in which a hotkey can be a hook hotkey sometimes,
+			// but after a (de)suspend or after a change to other hotkeys via the Hotkey command, might no longer
+			// require the hook.  Examples include:
+			// 1) A hotkey can't be registered because some other app is using it, but later
+			//    that condition changes.
+			// 2) Suspend or the Hotkey command changes wildcard hotkeys so that non-wildcard
+			//    hotkeys that have the same suffix are no longer eclipsed, and thus don't need
+			//    the hook.  The same type of thing can happen if a key-up hotkey is disabled,
+			//    which would allow it's key-down hotkey to become non-hook.  Similarly, if a
+			//    all of a prefix key's hotkeys become disabled, and that prefix is also a suffix,
+			//    those suffixes no longer need to be hook hotkeys.
+			// 3) There may be other ways, especially in the future involving #IfWin keys whose
+			//    criteria change.
+			if (hot.mType == HK_KEYBD_HOOK)
+				hot.mType = HK_NORMAL; // To possibly be overridden back to HK_KEYBD_HOOK later below; but if not, it will be registered later below.
+		}
 
 		if (hot.mModifierVK)
 			vk_is_prefix[hot.mModifierVK] = true;
@@ -292,6 +303,7 @@ void Hotkey::ManifestAllHotkeysHotstringsHooks()
 				// Under those conditions, the hotkey is either:
 				// 1) Single-variant hotkey that has critiera (non-global).
 				// 2) Multi-variant hotkey but all variants have criteria (non-global).
+				// 3) A hotkey with a non-suppressed (~) variant (always, for code simplicity): already handled by AddVariant().
 				// In both cases above, the hook must handle the hotkey because there can be
 				// situations in which the hook should let the hotkey's keystroke pass through
 				// to the active window (i.e. the hook is needed to dynamically disable the hotkey).
@@ -484,10 +496,18 @@ bool Hotkey::PrefixHasNoEnabledSuffixes(int aVKorSC, bool aIsSC)
 // 1) Hotkey is completely disabled via IsCompletelyDisabled().
 // 2) Hotkey has criterion and those criterion do not allow the hotkey to fire.
 {
+	// v1.0.44: Added aAsModifier so that a pair of hotkeys such as:
+	//   LControl::tooltip LControl
+	//   <^c::tooltip ^c
+	// ...works as it did in versions prior to 1.0.41, namely that LControl fires on key-up rather than
+	// down because it is considered a prefix key for the <^c hotkey .
+	modLR_type aAsModifier = KeyToModifiersLR(aIsSC ? 0 : aVKorSC, aIsSC ? aVKorSC : 0, NULL);
+
 	for (int i = 0; i < sHotkeyCount; ++i)
 	{
 		Hotkey &hk = *shk[i];
-		if (aVKorSC != (aIsSC ? hk.mModifierSC : hk.mModifierVK) || hk.IsCompletelyDisabled())
+		if (aVKorSC != (aIsSC ? hk.mModifierSC : hk.mModifierVK) && !(aAsModifier & hk.mModifiersLR)
+			|| hk.IsCompletelyDisabled())
 			continue; // This hotkey isn't enabled or it doesn't use the specified key as a prefix.  No further checking for it.
 		if (hk.mHookAction)
 		{
@@ -566,31 +586,48 @@ HotkeyVariant *Hotkey::CriterionAllowsFiring(HWND *aFoundHWND)
 
 
 bool Hotkey::CriterionFiringIsCertain(HotkeyIDType aHotkeyIDwithFlags, bool aKeyUp, UCHAR &aNoSuppress
-	, char *aSingleChar)
+	, bool &aFireWithNoSuppress, char *aSingleChar)
+// v1.0.44: Caller has ensured that aFireWithNoSuppress is true if has already been decided and false if undecided.
+// Upon return, caller can assume that the value in it is now decided rather than undecided.
 // v1.0.42: Caller must not call this for AltTab hotkeys IDs, but this will always return NULL in such cases.
 // aHotkeyToFireUponRelease is sometimes modified for the caller here, as is *aSingleChar (if aSingleChar isn't NULL).
 // Caller has ensured that aHotkeyIDwithFlags contains a valid/existing hotkey ID.
 // Technically, aHotkeyIDwithMask can be with or without a the flags in the high bits.
 // If present, they're removed.
 {
+	// aHookAction isn't checked because this should never be called for alt-tab hotkeys (see other comments above).
 	HotkeyIDType hotkey_id = aHotkeyIDwithFlags & HOTKEY_ID_MASK;
 	// The following check is for maintainability, since caller should have already checked and
 	// handled HOTKEY_ID_ALT_TAB and similar.  Less-than-zero check not necessary because it's unsigned.
 	if (hotkey_id >= sHotkeyCount)
-		return NULL; // Special alt-tab hotkey quasi-ID used by the hook.
-	// aHookAction isn't checked because this should never be called for alt-tab hotkeys (see other comments above).
+		return false; // Special alt-tab hotkey quasi-ID used by the hook.
+	Hotkey &hk = *shk[hotkey_id]; // For convenience and performance.
 
-	// For performance, the following returns without having called WinExist/Active if it sees that one of this
-	// hotkey's variant's will certainly fire due to the fact that it has a non-suspended global variant.
-	// This reduces the number of situations in which double the number of WinExist/Active() calls are made:
-	// Once in the hook to determine whether the hotkey keystroke should be passed through to the active window,
-	// and again upon receipt of the message for reasons explained there.
-	for (HotkeyVariant *vp = shk[hotkey_id]->mFirstVariant; vp; vp = vp->mNextVariant)
-		if (!vp->mHotCriterion && vp->mEnabled && (!g_IsSuspended || vp->mJumpToLabel->IsExemptFromSuspend()))
-			return true;
+	if (aFireWithNoSuppress // Caller has already determined its value with certainty...
+		|| (hk.mNoSuppress & NO_SUPPRESS_SUFFIX_VARIES) != NO_SUPPRESS_SUFFIX_VARIES) // ...or its value is easy to determine, so do it now (compare to itself since it's a bitwise union).
+	{
+		// Since this hotkey has variants only of one type (tilde or non-tilde), this variant must be of that type.
+		if (!aFireWithNoSuppress) // Caller hasn't yet determined its value with certainty (currently, this statement might always be true).
+			aFireWithNoSuppress = (hk.mNoSuppress & AT_LEAST_ONE_VARIANT_HAS_TILDE); // Due to other checks, this means all variants are tilde.
+		// Since aFireWithNoSuppress has not been determined, it's possible to take advantage of the following
+		// optimization, which is especially important in cases where TitleMatchMode is "slow":
+		// For performance, the following returns without having called WinExist/Active if it sees that one of this
+		// hotkey's variant's will certainly fire due to the fact that it has a non-suspended global variant.
+		// This reduces the number of situations in which double the number of WinExist/Active() calls are made
+		// (once in the hook to determine whether the hotkey keystroke should be passed through to the active window,
+		// and again upon receipt of the message for reasons explained there).
+		for (HotkeyVariant *vp = hk.mFirstVariant; vp; vp = vp->mNextVariant)
+			if (!vp->mHotCriterion && vp->mEnabled && (!g_IsSuspended || vp->mJumpToLabel->IsExemptFromSuspend()))
+				return true;
+	}
 
-	if (shk[hotkey_id]->CriterionAllowsFiring())
+	HotkeyVariant *vp;
+	if (vp = hk.CriterionAllowsFiring())
+	{
+		if (!aFireWithNoSuppress) // Caller hasn't yet determined its value with certainty (currently, this statement might always be true).
+			aFireWithNoSuppress = vp->mNoSuppress;
 		return true; // It found an eligible variant to fire.
+	}
 
 	// Otherwise, this hotkey has no variants that can fire.  Caller wants a few things updated in that case.
 	// If this is a key-down hotkey:
@@ -607,7 +644,7 @@ bool Hotkey::CriterionFiringIsCertain(HotkeyIDType aHotkeyIDwithFlags, bool aKey
 		aNoSuppress |= NO_SUPPRESS_NEXT_UP_EVENT;  // Update output parameter for the caller.
 	if (aSingleChar)
 		*aSingleChar = '#'; // '#' in KeyHistory to indicate this hotkey is disabled due to #IfWin criterion.
-	return NULL;
+	return false;
 }
 
 
@@ -803,7 +840,8 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, char *aLabelName, char *aOptions, 
 	// both can be zero/NULL only when the caller is updating an existing hotkey to have new options
 	// (i.e. it's retaining its current label).
 
-	Hotkey *hk = FindHotkeyByTrueNature(aHotkeyName); // NULL if not found.
+	bool has_tilde;
+	Hotkey *hk = FindHotkeyByTrueNature(aHotkeyName, has_tilde); // NULL if not found.
 	HotkeyVariant *variant = hk ? hk->FindVariant() : NULL;
 	bool update_all_hotkeys = false;  // This method avoids multiple calls to ManifestAllHotkeysHotstringsHooks() (which is high-overhead).
 	bool variant_was_just_created = false;
@@ -838,12 +876,12 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, char *aLabelName, char *aOptions, 
 		if (!hk) // No existing hotkey of this name, so create a new hotkey.
 		{
 			if (hook_action) // COMMAND (create hotkey): Hotkey, Name, AltTabAction
-				hk = AddHotkey(NULL, hook_action, aHotkeyName, use_errorlevel);
+				hk = AddHotkey(NULL, hook_action, aHotkeyName, has_tilde, use_errorlevel);
 			else // COMMAND (create hotkey): Hotkey, Name, LabelName [, Options]
 			{
 				if (!aJumpToLabel) // Caller is trying to set new aOptions for a nonexistent hotkey.
 					RETURN_HOTKEY_ERROR(HOTKEY_EL_NOTEXIST, ERR_NONEXISTENT_HOTKEY, aHotkeyName);
-				hk = AddHotkey(aJumpToLabel, 0, aHotkeyName, use_errorlevel);
+				hk = AddHotkey(aJumpToLabel, 0, aHotkeyName, has_tilde, use_errorlevel);
 			}
 			if (!hk)
 				return use_errorlevel ? OK : FAIL; // AddHotkey() already displayed the error (or set ErrorLevel).
@@ -874,10 +912,7 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, char *aLabelName, char *aOptions, 
 					// many other reasons a hotkey's mKeybdHookMandatory could be true, so can't change it back to
 					// false without checking all those other things.
 					if (HK_TYPE_CAN_BECOME_KEYBD_HOOK(hk->mType))
-					{
-						hk->mKeybdHookMandatory = true;
-						hk->mType = HK_KEYBD_HOOK;
-					}
+						hk->mKeybdHookMandatory = true; // Causes mType to be set to HK_KEYBD_HOOK by ManifestAllHotkeysHotstringsHooks().
 				}
 				// Even if it's still an alt-tab action (just a different one), hook's data structures still
 				// need to be updated.  Otherwise, this is a change from an alt-tab type to a non-alt-tab type,
@@ -913,7 +948,7 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, char *aLabelName, char *aOptions, 
 				}
 				else // No existing variant matching current #IfWin critieria, so create a new variant.
 				{
-					if (   !(variant = hk->AddVariant(aJumpToLabel))   ) // Out of memory.
+					if (   !(variant = hk->AddVariant(aJumpToLabel, has_tilde))   ) // Out of memory.
 						RETURN_HOTKEY_ERROR(HOTKEY_EL_MEM, ERR_OUTOFMEM, aHotkeyName);
 					variant_was_just_created = true;
 					update_all_hotkeys = true;
@@ -1015,7 +1050,7 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, char *aLabelName, char *aOptions, 
 
 
 
-Hotkey *Hotkey::AddHotkey(Label *aJumpToLabel, HookActionType aHookAction, char *aName, bool aUseErrorLevel)
+Hotkey *Hotkey::AddHotkey(Label *aJumpToLabel, HookActionType aHookAction, char *aName, bool aHasTilde, bool aUseErrorLevel)
 // Caller provides aJumpToLabel rather than a Line* because at the time a hotkey or hotstring
 // is created, the label's destination line is not yet known.  So the label is used a placeholder.
 // Caller must ensure that either aJumpToLabel or aName is not NULL.
@@ -1025,7 +1060,7 @@ Hotkey *Hotkey::AddHotkey(Label *aJumpToLabel, HookActionType aHookAction, char 
 // Returns the address of the new hotkey on success, or NULL otherwise.
 // The caller is responsible for calling ManifestAllHotkeysHotstringsHooks(), if appropriate.
 {
-	if (   !(shk[sNextID] = new Hotkey(sNextID, aJumpToLabel, aHookAction, aName, aUseErrorLevel))   )
+	if (   !(shk[sNextID] = new Hotkey(sNextID, aJumpToLabel, aHookAction, aName, aHasTilde, aUseErrorLevel))   )
 	{
 		if (aUseErrorLevel)
 			g_ErrorLevel->Assign(HOTKEY_EL_MEM);
@@ -1043,7 +1078,9 @@ Hotkey *Hotkey::AddHotkey(Label *aJumpToLabel, HookActionType aHookAction, char 
 
 
 
-Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction, char *aName, bool aUseErrorLevel) // Constructor
+Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction, char *aName
+	, bool aHasTilde, bool aUseErrorLevel)
+// Constructor.
 // Caller provides aJumpToLabel rather than a Line* because at the time a hotkey or hotstring
 // is created, the label's destination line is not yet known.  So the label is used a placeholder.
 // Even if the caller-provided aJumpToLabel is NULL, a non-NULL mJumpToLabel will be stored in
@@ -1326,12 +1363,12 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 		// mKeyUp: Disabled as an unintended/benevolent side-effect of older loop processing in
 		//     ManifestAllHotkeysHotstringsHooks().  This is retained, though now it's made more explicit via below,
 		//     for maintainability.
-		// Older Note: Do this for both NO_SUPPRESS_SUFFIX and NO_SUPPRESS_PREFIX.  In the case of
+		// Older Note: Do this for both AT_LEAST_ONE_VARIANT_HAS_TILDE and NO_SUPPRESS_PREFIX.  In the case of
 		// NO_SUPPRESS_PREFIX, the hook is needed anyway since the only way to get NO_SUPPRESS_PREFIX in
 		// effect is with a hotkey that has a ModifierVK/SC.
 		if (HK_TYPE_CAN_BECOME_KEYBD_HOOK(mType))
 			if (   (mModifiersLR || aHookAction || mKeyUp || mModifierVK || mModifierSC) // mSC is handled higher above.
-				|| !g_os.IsWin9x() && (g_ForceKeybdHook || mAllowExtraModifiers || mNoSuppress
+				|| !g_os.IsWin9x() && (g_ForceKeybdHook || mAllowExtraModifiers // mNoSuppress&NO_SUPPRESS_PREFIX has already been handled elsewhere. Other bits in mNoSuppress must be checked later because they can change by any variants added after *this* one.
 					|| (mVK && !mVK_WasSpecifiedByNumber && vk_to_sc(mVK, true)))   ) // Its mVK corresponds to two scan codes (such as "ENTER").
 				mKeybdHookMandatory = true;
 			// v1.0.38.02: The check of mVK_WasSpecifiedByNumber above was added so that an explicit VK hotkey such
@@ -1355,15 +1392,11 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 		}
 	} // if (mType != HK_JOYSTICK)
 
-	// The below checks HK_TYPE_CAN_BECOME_KEYBD_HOOK() for maintainability
-	// and also because the $ hotkey symbol/prefix can set mKeybdHookMandatory
-	// to true even though the hotkey later becomes a mouse or joystick type:
-	if (mKeybdHookMandatory && HK_TYPE_CAN_BECOME_KEYBD_HOOK(mType))
-		mType = HK_KEYBD_HOOK;
+	// If mKeybdHookMandatory==true, ManifestAllHotkeysHotstringsHooks() will set mType to HK_KEYBD_HOOK for us.
 
 	// To avoid memory leak, this is done only when it is certain the hotkey will be created:
 	if (   !(mName = aName ? SimpleHeap::Malloc(aName) : hotkey_name)
-		|| !(AddVariant(aJumpToLabel))   ) // Too rare to worry about freeing the other if only one fails.
+		|| !(AddVariant(aJumpToLabel, aHasTilde))   ) // Too rare to worry about freeing the other if only one fails.
 	{
 		if (aUseErrorLevel)
 			g_ErrorLevel->Assign(HOTKEY_EL_MEM);
@@ -1396,7 +1429,7 @@ HotkeyVariant *Hotkey::FindVariant()
 
 
 
-HotkeyVariant *Hotkey::AddVariant(Label *aJumpToLabel)
+HotkeyVariant *Hotkey::AddVariant(Label *aJumpToLabel, bool aHasTilde)
 // Returns NULL upon out-of-memory; otherwise, the address of the new variant.
 // Even if aJumpToLabel is NULL, a non-NULL mJumpToLabel will be stored in each variant so that
 // NULL doesn't have to be constantly checked during script runtime.
@@ -1422,6 +1455,18 @@ HotkeyVariant *Hotkey::AddVariant(Label *aJumpToLabel)
 	v.mHotWinTitle = g_HotWinTitle;
 	v.mHotWinText = g_HotWinText;  // The value of this and other globals used above can vary during load-time.
 	v.mEnabled = true;
+	if (aHasTilde)
+	{
+		v.mNoSuppress = true; // Override the false value set by ZeroMemory above.
+		mNoSuppress |= AT_LEAST_ONE_VARIANT_HAS_TILDE;
+		// For simplicity, make the hook mandatory for any hotkey that has at least one non-suppressed variant.
+		// Otherwise, ManifestAllHotkeysHotstringsHooks() would have to do a loop to check if any
+		// non-suppressed variants are actually enabled & non-suspended to decide if the hook is actually needed
+		// for a hotkey that has a global variant.  Due to rarity and code size, it doesn't seem worth it.
+		mKeybdHookMandatory = true;
+	}
+	else
+		mNoSuppress |= AT_LEAST_ONE_VARIANT_LACKS_TILDE;
 
 	// Update the linked list:
 	if (!mFirstVariant)
@@ -1455,7 +1500,10 @@ ResultType Hotkey::TextInterpret(char *aName, Hotkey *aThisHotkey, bool aUseErro
 	if (*term1 == '~')
 	{
 		if (aThisHotkey)
+		{
 			aThisHotkey->mNoSuppress |= NO_SUPPRESS_PREFIX;
+			aThisHotkey->mKeybdHookMandatory = true;
+		}
 		term1 = omit_leading_whitespace(term1 + 1);
 	}
     char *end_of_term1 = omit_trailing_whitespace(term1, term2) + 1;
@@ -1477,7 +1525,7 @@ ResultType Hotkey::TextInterpret(char *aName, Hotkey *aThisHotkey, bool aUseErro
 
 
 char *Hotkey::TextToModifiers(char *aText, Hotkey *aThisHotkey, mod_type *aModifiers, modLR_type *aModifiersLR
-	, UCHAR *aProperties)
+	, bool *aHasAsterisk, bool *aHasTilde)
 // This function and those it calls should avoid showing any error dialogs when caller passes NULL for aThisHotkey.
 // Takes input param <text> to support receiving only a subset of object.text.
 // Returns the location in <text> of the first non-modifier key.
@@ -1488,9 +1536,10 @@ char *Hotkey::TextToModifiers(char *aText, Hotkey *aThisHotkey, mod_type *aModif
 // manifest.  Thus, on these systems a hotkey such as ^+:: is now supported as meaning Ctrl-Plus.
 {
 	// Init output parameters for caller if it gave any:
-	UCHAR temp_prop;
-	UCHAR &properties = aProperties ? *aProperties : temp_prop; // To simplify other things.
-	properties = 0;
+	if (aHasAsterisk)
+		*aHasAsterisk = false;
+	if (aHasTilde)
+		*aHasTilde = false;
 	if (aModifiers)
 		*aModifiers = 0;
 	if (aModifiersLR)
@@ -1530,12 +1579,12 @@ char *Hotkey::TextToModifiers(char *aText, Hotkey *aThisHotkey, mod_type *aModif
 		case '*': // On Win9x, an attempt will be made to register such hotkeys (ignoring the wildcard).
 			if (aThisHotkey)
 				aThisHotkey->mAllowExtraModifiers = true;
-			properties |= HK_PROP_ASTERISK;
+			if (aHasAsterisk)
+				*aHasAsterisk = true;
 			break;
 		case '~':
-			if (aThisHotkey)
-				aThisHotkey->mNoSuppress |= NO_SUPPRESS_SUFFIX;
-			properties |= HK_PROP_TILDE;
+			if (aHasTilde)
+				*aHasTilde = true;
 			break;
 		case '$':
 			if (g_os.IsWin9x())
@@ -1872,7 +1921,7 @@ void Hotkey::InstallMouseHook()
 
 
 
-Hotkey *Hotkey::FindHotkeyByTrueNature(char *aName)
+Hotkey *Hotkey::FindHotkeyByTrueNature(char *aName, bool &aHasTilde)
 // Returns the address of the hotkey if found, NULL otherwise.
 // In v1.0.42, it tries harder to find a match so that the order of modifier symbols doesn't affect the true nature of a hotkey.
 // For example, ^!c should be the same as !^c, primarily because RegisterHotkey() and the hook would consider them the same.
@@ -1889,10 +1938,11 @@ Hotkey *Hotkey::FindHotkeyByTrueNature(char *aName)
 	char *suffix_candidate, *suffix_existing;
 	modLR_type modifiersLR_candidate, modifiersLR_existing;
 	mod_type modifiers_candidate, modifiers_existing;
-	UCHAR properties_of_candidate, properties_of_existing;
+	bool candidate_has_asterisk, existing_has_asterisk;
 
 	// This method also allows *~c to be seen as a match for ~*c:
-	suffix_candidate = TextToModifiers(aName, NULL, &modifiers_candidate, &modifiersLR_candidate, &properties_of_candidate);
+	suffix_candidate = TextToModifiers(aName, NULL, &modifiers_candidate, &modifiersLR_candidate
+		, &candidate_has_asterisk, &aHasTilde); // aHasTilde isn't used here, it's just for caller.
 
 	for (int i = 0; i < sHotkeyCount; ++i)
 	{
@@ -1902,9 +1952,18 @@ Hotkey *Hotkey::FindHotkeyByTrueNature(char *aName)
 		if (!stricmp(shk[i]->mName, aName)) // Case insensitive so that something like ^A is a match for ^a
 			return shk[i];
 		// Otherwise, check more thoroughly so that things like ^!c and !^c are considered a match:
-		suffix_existing = TextToModifiers(shk[i]->mName, NULL, &modifiers_existing, &modifiersLR_existing, &properties_of_existing);
+		suffix_existing = TextToModifiers(shk[i]->mName, NULL, &modifiers_existing, &modifiersLR_existing, &existing_has_asterisk);
 		if (   modifiers_existing == modifiers_candidate && modifiersLR_existing == modifiersLR_candidate
-			&& properties_of_existing == properties_of_candidate  // Treat wildcard (*) and pass-through (~) as distict features.  Wildcard definitely is, but tilde to allow the Hotkey command to dynamically enable/disable ~^c vs. ^c.
+			// Treat wildcard (*) as an entirely separate hotkey from one without a wildcard.  This is because
+			// the hook has special handling for wildcards that allow non-wildcard hotkeys that overlap them to
+			// take precedence, sort of like "clip children".  By contrast, in v1.0.44 pass-through (~) is considered
+			// an attribute of each variant of a particular hotkey, not something that makes an entirely new hotkey.
+			// This was done because the old method of having them distinct appears to have only one advantage:
+			// the ability to dynamically enable/disable ~x separately from x (since if both were in effect
+			// simultaneously, one would override the other due to two different hotkey IDs competing for the same
+			// ID slot within the VK/SC hook arrays).  The advantages of allowing tilde to be a per-variant attribute
+			// seem substantial, namely to have some variant/siblings pass-through while others do not.
+			&& existing_has_asterisk == candidate_has_asterisk
 			&& !stricmp(suffix_existing, suffix_candidate)   ) // Compare suffixes, including any "up" to mean an up-hotkey (might not be precise if extra spaces are present before "Up").
 			return shk[i];
 	}
