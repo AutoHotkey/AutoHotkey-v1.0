@@ -7541,7 +7541,7 @@ ResultType Line::DriveGet(char *aCmd, char *aValue)
 		// or not, since "open" is returned even when the tray is closed but there is no media.
 		if (!*aValue) // When drive is omitted, operate upon default CD/DVD drive.
 		{
-			if (mciSendString("status cdaudio mode", status, sizeof(status), NULL))
+			if (mciSendString("status cdaudio mode", status, sizeof(status), NULL)) // Error.
 				return output_var->Assign(); // Let ErrorLevel tell the story.
 		}
 		else // Operate upon a specific drive letter.
@@ -10448,6 +10448,8 @@ void BIF_WinExistActive(ExprTokenType &aResultToken, ExprTokenType *aParam[], in
 
 void BIF_Round(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
 {
+	char *buf = aResultToken.buf; // Must be saved early since below overwrites the union (better maintainability too).
+
 	// See TRANS_CMD_ROUND for details.
 	int param2;
 	double multiplier;
@@ -10470,8 +10472,32 @@ void BIF_Round(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 	// floating point number whenever the second param is >0.  That way, it can be used
 	// to "cast" integers into floats.  Conversely, it seems best to yield an integer
 	// whenever the second param is <=0 or omitted.
-	if (param2 > 0)
-		aResultToken.symbol = SYM_FLOAT; // aResultToken.value_double already contains the result.
+	if (param2 > 0) // aResultToken.value_double already contains the result.
+	{
+		// v1.0.44.01: Since Round (in its param2>0 mode) is almost always used to facilitate some kind of
+		// display or output of the number (hardly ever for intentional reducing the precision of a floating
+		// point math operation), it seems best by default to omit only those trailing zeroes that are beyond
+		// the specified number of decimal places.  This is done by converting the result into a string here,
+		// which will cause the expression evaluation to write out the final result as this very string as long
+		// as no further floating point math is done on it (such as Round(3.3333, 2)+0).  Also note that not
+		// all trailing zeros are removed because it is often the intent that exactly the number of decimal
+		// places specified should be *shown* (for column alignment, etc.).  For example, Round(3.5, 2) should
+		// be 3.50 not 3.5.  Similarly, Round(1, 2) should be 1.00 not 1 (see above comment about "casting" for
+		// why.
+		// Performance: This method is about twice as slow as the old method (which did merely the line
+		// "aResultToken.symbol = SYM_FLOAT" in place of the below).  However, that might be something
+		// that can be further optimized in the caller (its calls to strlen, memcpy, etc. might be optimized
+		// someday to omit certain calls when very simply situations allow it).  In addition, twice as slow is
+		// not going to impact the vast majority of scripts since as mentioned above, Round (in its param2>0
+		// mode) is almost always used for displaying data, not for intensive operations within a expressions.
+		// Note: the script can force Round(x, 2) to obey SetFormat by adding 0 to the result (if it wants).
+		// Also, a new parameter an be added someday to trim excess trailing zeros from param2>0's result
+		// (e.g. Round(3.50, 2, true) can be 3.5 rather than 3.50), but this seems less often desired due to
+		// column alignment and other goals where consistency is important.
+		sprintf(buf, "%0.*f", param2, aResultToken.value_double); // %f can handle doubles in MSVC++.
+		aResultToken.marker = buf;
+		aResultToken.symbol = SYM_STRING;
+	}
 	else
 		// Caller has set aResultToken.symbol to a default of SYM_INTEGER, so no need to set it here.
 		aResultToken.value_int64 = (__int64)aResultToken.value_double;

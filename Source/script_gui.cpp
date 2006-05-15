@@ -3014,8 +3014,9 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		// tab control don't snap onto the tab control (due to the z-order change done by the ListView creation
 		// section whenever a ListView exists inside a tab control).
 		bool provide_buddy_manually;
-		if (   provide_buddy_manually = (style & UDS_AUTOBUDDY) && owning_tab_control // mControlCount is greater than zero whenever owning_tab_control!=NULL
-			&& (owning_tab_control->attrib & GUI_CONTROL_ATTRIB_ALTBEHAVIOR)   )
+		if (   provide_buddy_manually = mStatusBarHwnd // Added for v1.0.44.01: Since the status bar is pushed to the bottom of the z-order after adding each other control, must do manual buddying whenever an UpDown is added after the status bar (to prevent it from attaching to the status bar).
+			|| (style & UDS_AUTOBUDDY) && owning_tab_control // mControlCount is greater than zero whenever owning_tab_control!=NULL
+				&& (owning_tab_control->attrib & GUI_CONTROL_ATTRIB_ALTBEHAVIOR)   )
 			style &= ~UDS_AUTOBUDDY; // Remove it during control creation to avoid up-down snapping onto tab control.
 
 		// The control is created unconditionally because if UDS_AUTOBUDDY is in effect, need to create the
@@ -3027,7 +3028,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			, opt.x, opt.y, opt.width, opt.height, mHwnd, control_id, g_hInstance, NULL))
 		{
 			if (provide_buddy_manually) // v1.0.42.02 (see comment where provide_buddy_manually is initialized).
-				SendMessage(control.hwnd, UDM_SETBUDDY, (WPARAM)mControl[mControlCount - 1].hwnd, 0); // mControlCount>0 whenever provide_buddy_manually==true.
+				SendMessage(control.hwnd, UDM_SETBUDDY, (WPARAM)mControl[mControlCount - 1].hwnd, 0); // See StatusBar notes above.  Also, mControlCount>0 whenever provide_buddy_manually==true.
 			if (   mControlCount // Ensure there is a previous control to snap onto (below relies on this check).
 				&& ((style & UDS_AUTOBUDDY) || provide_buddy_manually)   )
 			{
@@ -3334,7 +3335,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 	// (but does not completely prevent) other controls from overlapping it and getting drawn on top. This is
 	// done each time a control is added -- rather than at some single time such as when the parent window is
 	// first shown -- in case the script adds more controls later.
-	if (mStatusBarHwnd) // Relies on the fact that that only one status bar is allowed.
+	if (mStatusBarHwnd) // Seems harmless to do it even if the just-added control IS the status bar. Also relies on the fact that that only one status bar is allowed.
 		SetWindowPos(mStatusBarHwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
 
 	if (aControlType != GUI_CONTROL_STATUSBAR) // i.e. don't let status bar affect positioning of controls relative to each other.
