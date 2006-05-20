@@ -840,8 +840,8 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, char *aLabelName, char *aOptions, 
 	// both can be zero/NULL only when the caller is updating an existing hotkey to have new options
 	// (i.e. it's retaining its current label).
 
-	bool has_tilde;
-	Hotkey *hk = FindHotkeyByTrueNature(aHotkeyName, has_tilde); // NULL if not found.
+	bool suffix_has_tilde;
+	Hotkey *hk = FindHotkeyByTrueNature(aHotkeyName, suffix_has_tilde); // NULL if not found.
 	HotkeyVariant *variant = hk ? hk->FindVariant() : NULL;
 	bool update_all_hotkeys = false;  // This method avoids multiple calls to ManifestAllHotkeysHotstringsHooks() (which is high-overhead).
 	bool variant_was_just_created = false;
@@ -876,12 +876,12 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, char *aLabelName, char *aOptions, 
 		if (!hk) // No existing hotkey of this name, so create a new hotkey.
 		{
 			if (hook_action) // COMMAND (create hotkey): Hotkey, Name, AltTabAction
-				hk = AddHotkey(NULL, hook_action, aHotkeyName, has_tilde, use_errorlevel);
+				hk = AddHotkey(NULL, hook_action, aHotkeyName, suffix_has_tilde, use_errorlevel);
 			else // COMMAND (create hotkey): Hotkey, Name, LabelName [, Options]
 			{
 				if (!aJumpToLabel) // Caller is trying to set new aOptions for a nonexistent hotkey.
 					RETURN_HOTKEY_ERROR(HOTKEY_EL_NOTEXIST, ERR_NONEXISTENT_HOTKEY, aHotkeyName);
-				hk = AddHotkey(aJumpToLabel, 0, aHotkeyName, has_tilde, use_errorlevel);
+				hk = AddHotkey(aJumpToLabel, 0, aHotkeyName, suffix_has_tilde, use_errorlevel);
 			}
 			if (!hk)
 				return use_errorlevel ? OK : FAIL; // AddHotkey() already displayed the error (or set ErrorLevel).
@@ -948,7 +948,7 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, char *aLabelName, char *aOptions, 
 				}
 				else // No existing variant matching current #IfWin critieria, so create a new variant.
 				{
-					if (   !(variant = hk->AddVariant(aJumpToLabel, has_tilde))   ) // Out of memory.
+					if (   !(variant = hk->AddVariant(aJumpToLabel, suffix_has_tilde))   ) // Out of memory.
 						RETURN_HOTKEY_ERROR(HOTKEY_EL_MEM, ERR_OUTOFMEM, aHotkeyName);
 					variant_was_just_created = true;
 					update_all_hotkeys = true;
@@ -1050,7 +1050,7 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, char *aLabelName, char *aOptions, 
 
 
 
-Hotkey *Hotkey::AddHotkey(Label *aJumpToLabel, HookActionType aHookAction, char *aName, bool aHasTilde, bool aUseErrorLevel)
+Hotkey *Hotkey::AddHotkey(Label *aJumpToLabel, HookActionType aHookAction, char *aName, bool aSuffixHasTilde, bool aUseErrorLevel)
 // Caller provides aJumpToLabel rather than a Line* because at the time a hotkey or hotstring
 // is created, the label's destination line is not yet known.  So the label is used a placeholder.
 // Caller must ensure that either aJumpToLabel or aName is not NULL.
@@ -1060,7 +1060,7 @@ Hotkey *Hotkey::AddHotkey(Label *aJumpToLabel, HookActionType aHookAction, char 
 // Returns the address of the new hotkey on success, or NULL otherwise.
 // The caller is responsible for calling ManifestAllHotkeysHotstringsHooks(), if appropriate.
 {
-	if (   !(shk[sNextID] = new Hotkey(sNextID, aJumpToLabel, aHookAction, aName, aHasTilde, aUseErrorLevel))   )
+	if (   !(shk[sNextID] = new Hotkey(sNextID, aJumpToLabel, aHookAction, aName, aSuffixHasTilde, aUseErrorLevel))   )
 	{
 		if (aUseErrorLevel)
 			g_ErrorLevel->Assign(HOTKEY_EL_MEM);
@@ -1079,7 +1079,7 @@ Hotkey *Hotkey::AddHotkey(Label *aJumpToLabel, HookActionType aHookAction, char 
 
 
 Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction, char *aName
-	, bool aHasTilde, bool aUseErrorLevel)
+	, bool aSuffixHasTilde, bool aUseErrorLevel)
 // Constructor.
 // Caller provides aJumpToLabel rather than a Line* because at the time a hotkey or hotstring
 // is created, the label's destination line is not yet known.  So the label is used a placeholder.
@@ -1396,7 +1396,7 @@ Hotkey::Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction
 
 	// To avoid memory leak, this is done only when it is certain the hotkey will be created:
 	if (   !(mName = aName ? SimpleHeap::Malloc(aName) : hotkey_name)
-		|| !(AddVariant(aJumpToLabel, aHasTilde))   ) // Too rare to worry about freeing the other if only one fails.
+		|| !(AddVariant(aJumpToLabel, aSuffixHasTilde))   ) // Too rare to worry about freeing the other if only one fails.
 	{
 		if (aUseErrorLevel)
 			g_ErrorLevel->Assign(HOTKEY_EL_MEM);
@@ -1429,7 +1429,7 @@ HotkeyVariant *Hotkey::FindVariant()
 
 
 
-HotkeyVariant *Hotkey::AddVariant(Label *aJumpToLabel, bool aHasTilde)
+HotkeyVariant *Hotkey::AddVariant(Label *aJumpToLabel, bool aSuffixHasTilde)
 // Returns NULL upon out-of-memory; otherwise, the address of the new variant.
 // Even if aJumpToLabel is NULL, a non-NULL mJumpToLabel will be stored in each variant so that
 // NULL doesn't have to be constantly checked during script runtime.
@@ -1455,7 +1455,7 @@ HotkeyVariant *Hotkey::AddVariant(Label *aJumpToLabel, bool aHasTilde)
 	v.mHotWinTitle = g_HotWinTitle;
 	v.mHotWinText = g_HotWinText;  // The value of this and other globals used above can vary during load-time.
 	v.mEnabled = true;
-	if (aHasTilde)
+	if (aSuffixHasTilde)
 	{
 		v.mNoSuppress = true; // Override the false value set by ZeroMemory above.
 		mNoSuppress |= AT_LEAST_ONE_VARIANT_HAS_TILDE;
@@ -1524,8 +1524,7 @@ ResultType Hotkey::TextInterpret(char *aName, Hotkey *aThisHotkey, bool aUseErro
 
 
 
-char *Hotkey::TextToModifiers(char *aText, Hotkey *aThisHotkey, mod_type *aModifiers, modLR_type *aModifiersLR
-	, bool *aHasAsterisk, bool *aHasTilde)
+char *Hotkey::TextToModifiers(char *aText, Hotkey *aThisHotkey, HotkeyProperties *aProperties)
 // This function and those it calls should avoid showing any error dialogs when caller passes NULL for aThisHotkey.
 // Takes input param <text> to support receiving only a subset of object.text.
 // Returns the location in <text> of the first non-modifier key.
@@ -1535,15 +1534,9 @@ char *Hotkey::TextToModifiers(char *aText, Hotkey *aThisHotkey, mod_type *aModif
 // UPDATE: On some keyboard layouts, the + key (and various others) don't require the shift key to be
 // manifest.  Thus, on these systems a hotkey such as ^+:: is now supported as meaning Ctrl-Plus.
 {
-	// Init output parameters for caller if it gave any:
-	if (aHasAsterisk)
-		*aHasAsterisk = false;
-	if (aHasTilde)
-		*aHasTilde = false;
-	if (aModifiers)
-		*aModifiers = 0;
-	if (aModifiersLR)
-		*aModifiersLR = 0;
+	// Init output parameter for caller if it gave one:
+	if (aProperties)
+		ZeroMemory(aProperties, sizeof(HotkeyProperties));
 
 	if (!*aText)
 		return aText; // Below relies on this having ensured that aText isn't blank.
@@ -1555,9 +1548,9 @@ char *Hotkey::TextToModifiers(char *aText, Hotkey *aThisHotkey, mod_type *aModif
 
 	// Simplifies and reduces code size below:
 	mod_type temp_modifiers;
-	mod_type &modifiers = aModifiers ? *aModifiers : (aThisHotkey ? aThisHotkey->mModifiers : temp_modifiers);
+	mod_type &modifiers = aProperties ? aProperties->modifiers : (aThisHotkey ? aThisHotkey->mModifiers : temp_modifiers);
 	modLR_type temp_modifiersLR;
-	modLR_type &modifiersLR = aModifiersLR ? *aModifiersLR : (aThisHotkey ? aThisHotkey->mModifiersLR : temp_modifiersLR);
+	modLR_type &modifiersLR = aProperties ? aProperties->modifirsLR: (aThisHotkey ? aThisHotkey->mModifiersLR : temp_modifiersLR);
 
 	// Improved for v1.0.37.03: The loop's condition is now marker[1] vs. marker[0] so that
 	// the last character is never considered a modifier.  This allows a modifier symbol
@@ -1565,7 +1558,8 @@ char *Hotkey::TextToModifiers(char *aText, Hotkey *aThisHotkey, mod_type *aModif
 	// symbols +^#! do not require the shift key to be held down, such as the German layout.
 	//
 	// Improved for v1.0.40.01: The loop's condition now stops when it reaches a single space followed
-	// by the word "Up" so that hotkeys like "< up" and "+ up" are supported.
+	// by the word "Up" so that hotkeys like "< up" and "+ up" are supported by seeing their '<' or '+' as
+	// a key name rather than a modifier symbol.
 	for (marker = aText, key_left = false, key_right = false; marker[1] && stricmp(marker + 1, " Up"); ++marker)
 	{
 		switch (*marker)
@@ -1579,12 +1573,12 @@ char *Hotkey::TextToModifiers(char *aText, Hotkey *aThisHotkey, mod_type *aModif
 		case '*': // On Win9x, an attempt will be made to register such hotkeys (ignoring the wildcard).
 			if (aThisHotkey)
 				aThisHotkey->mAllowExtraModifiers = true;
-			if (aHasAsterisk)
-				*aHasAsterisk = true;
+			if (aProperties)
+				aProperties->has_asterisk = true;
 			break;
 		case '~':
-			if (aHasTilde)
-				*aHasTilde = true;
+			if (aProperties)
+				aProperties->suffix_has_tilde = true; // If this is the prefix's tilde rather than the suffix, it will be overridden later below.
 			break;
 		case '$':
 			if (g_os.IsWin9x())
@@ -1668,7 +1662,36 @@ char *Hotkey::TextToModifiers(char *aText, Hotkey *aThisHotkey, mod_type *aModif
 			}
 			break;
 		default:
-			return marker;  // Return immediately whenever a non-modifying char is found.
+			goto break_loop; // Stop immediately whenever a non-modifying char is found.
+		} // switch (*marker)
+	} // for()
+break_loop:
+
+	// Now *marker is the start of the key's name.  In addition, one of the following is now true:
+	// 1) marker[0] is a non-modifier symbol; that is, the loop stopped because it found the first non-modifier symbol.
+	// 2) marker[1] is '\0'; that is, the loop stopped because it reached the next-to-last char (the last char itself is never a modifier; e.g. ^+ is Ctrl+Plus on some keyboard layouts).
+	// 3) marker[1] is the start of the string " Up", in which case marker[0] is considered the suffix key even if it happens to be a modifier symbol (see comments at for-loop's control stmt).
+	if (aProperties)
+	{
+		// When caller passes non-NULL aProperties, it didn't omit the prefix portion of a composite hotkey
+		// (e.g. the "a & " part of "a & b" is present).  So parse these and all other types of hotkeys when in this mode.
+		char *composite, *temp;
+		if (composite = strstr(marker, COMPOSITE_DELIMITER))
+		{
+			strlcpy(aProperties->prefix_text, marker, sizeof(aProperties->prefix_text)); // Protect against overflow case script ultra-long (and thus invalid) key name.
+			if (temp = strstr(aProperties->prefix_text, COMPOSITE_DELIMITER)) // Check again in case it tried to overflow.
+				omit_trailing_whitespace(aProperties->prefix_text, temp)[1] = '\0'; // Truncate prefix_text so that the suffix text is omitted.
+			composite = omit_leading_whitespace(composite + COMPOSITE_DELIMITER_LENGTH);
+			if (aProperties->suffix_has_tilde = (*composite == '~')) // Override any value of suffix_has_tilde set higher above.
+				++composite; // For simplicity, no skipping of leading whitespace between tilde and the suffix key name.
+			strlcpy(aProperties->suffix_text, composite, sizeof(aProperties->suffix_text)); // Protect against overflow case script ultra-long (and thus invalid) key name.
+		}
+		else // A normal (non-composite) hotkey, so suffix_has_tilde was already set properly (higher above).
+			strlcpy(aProperties->suffix_text, omit_leading_whitespace(marker), sizeof(aProperties->suffix_text)); // Protect against overflow case script ultra-long (and thus invalid) key name.
+		if (temp = strcasestr(aProperties->suffix_text, " Up")) // Should be reliable detection method because leading spaces have been omitted and it's unlikely a legitmate key name will ever contain a space followed by "Up".
+		{
+			omit_trailing_whitespace(aProperties->suffix_text, temp)[1] = '\0'; // Omit " Up" from suffix_text since caller wants that.
+			aProperties->is_key_up = true; // Override the default set earlier.
 		}
 	}
 	return marker;
@@ -1921,7 +1944,7 @@ void Hotkey::InstallMouseHook()
 
 
 
-Hotkey *Hotkey::FindHotkeyByTrueNature(char *aName, bool &aHasTilde)
+Hotkey *Hotkey::FindHotkeyByTrueNature(char *aName, bool &aSuffixHasTilde)
 // Returns the address of the hotkey if found, NULL otherwise.
 // In v1.0.42, it tries harder to find a match so that the order of modifier symbols doesn't affect the true nature of a hotkey.
 // For example, ^!c should be the same as !^c, primarily because RegisterHotkey() and the hook would consider them the same.
@@ -1935,25 +1958,18 @@ Hotkey *Hotkey::FindHotkeyByTrueNature(char *aName, bool &aHasTilde)
 //    one of them would never fire because the hook isn't capable or storing two hotkey IDs for the same combination of
 //    modifiers+VK/SC.
 {
-	char *suffix_candidate, *suffix_existing;
-	modLR_type modifiersLR_candidate, modifiersLR_existing;
-	mod_type modifiers_candidate, modifiers_existing;
-	bool candidate_has_asterisk, existing_has_asterisk;
-
-	// This method also allows *~c to be seen as a match for ~*c:
-	suffix_candidate = TextToModifiers(aName, NULL, &modifiers_candidate, &modifiersLR_candidate
-		, &candidate_has_asterisk, &aHasTilde); // aHasTilde isn't used here, it's just for caller.
+	HotkeyProperties prop_candidate, prop_existing;
+	TextToModifiers(aName, NULL, &prop_candidate);
+	aSuffixHasTilde = prop_candidate.suffix_has_tilde; // Set for caller.
+	// Both suffix_has_tilde and a hypothetical prefix_has_tilde are ignored during dupe-checking below.
+	// See comments inside the loop for details.
 
 	for (int i = 0; i < sHotkeyCount; ++i)
 	{
-		// v1.0.43.05: Use stricmp not lstrcmpi so that the higher ANSI letters because an uppercase
-		// high ANSI letter isn't necessarily produced by holding down the shift key and pressing the
-		// lowercase letter.  In addition, it preserves backward compatibility and may improve flexibility.
-		if (!stricmp(shk[i]->mName, aName)) // Case insensitive so that something like ^A is a match for ^a
-			return shk[i];
-		// Otherwise, check more thoroughly so that things like ^!c and !^c are considered a match:
-		suffix_existing = TextToModifiers(shk[i]->mName, NULL, &modifiers_existing, &modifiersLR_existing, &existing_has_asterisk);
-		if (   modifiers_existing == modifiers_candidate && modifiersLR_existing == modifiersLR_candidate
+		TextToModifiers(shk[i]->mName, NULL, &prop_existing);
+		if (   prop_existing.modifiers == prop_candidate.modifiers
+			&& prop_existing.modifirsLR == prop_candidate.modifirsLR
+			&& prop_existing.is_key_up == prop_candidate.is_key_up
 			// Treat wildcard (*) as an entirely separate hotkey from one without a wildcard.  This is because
 			// the hook has special handling for wildcards that allow non-wildcard hotkeys that overlap them to
 			// take precedence, sort of like "clip children".  By contrast, in v1.0.44 pass-through (~) is considered
@@ -1963,10 +1979,15 @@ Hotkey *Hotkey::FindHotkeyByTrueNature(char *aName, bool &aHasTilde)
 			// simultaneously, one would override the other due to two different hotkey IDs competing for the same
 			// ID slot within the VK/SC hook arrays).  The advantages of allowing tilde to be a per-variant attribute
 			// seem substantial, namely to have some variant/siblings pass-through while others do not.
-			&& existing_has_asterisk == candidate_has_asterisk
-			&& !stricmp(suffix_existing, suffix_candidate)   ) // Compare suffixes, including any "up" to mean an up-hotkey (might not be precise if extra spaces are present before "Up").
-			return shk[i];
+			&& prop_existing.has_asterisk == prop_candidate.has_asterisk
+			// v1.0.43.05: Use stricmp not lstrcmpi so that the higher ANSI letters because an uppercase
+			// high ANSI letter isn't necessarily produced by holding down the shift key and pressing the
+			// lowercase letter.  In addition, it preserves backward compatibility and may improve flexibility.
+			&& !stricmp(prop_existing.prefix_text, prop_candidate.prefix_text)
+			&& !stricmp(prop_existing.suffix_text, prop_candidate.suffix_text)   )
+			return shk[i]; // Match found.
 	}
+
 	return NULL;  // No match found.
 }
 

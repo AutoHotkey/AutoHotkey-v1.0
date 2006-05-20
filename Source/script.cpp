@@ -1118,7 +1118,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 	Hotkey *hk;
 	LineNumberType pending_function_line_number, saved_line_number;
 	HookActionType hook_action;
-	bool is_label, has_tilde;
+	bool is_label, suffix_has_tilde;
 
 	// For the remap mechanism, e.g. a::b
 	int remap_stage;
@@ -1830,9 +1830,9 @@ examine_line:
 			}
 			else // It's a hotkey vs. hotstring.
 			{
-				if (hk = Hotkey::FindHotkeyByTrueNature(buf, has_tilde)) // Parent hotkey found.  Add a child/variant hotkey for it.
+				if (hk = Hotkey::FindHotkeyByTrueNature(buf, suffix_has_tilde)) // Parent hotkey found.  Add a child/variant hotkey for it.
 				{
-					if (hook_action) // has_tilde has always been ignored for these types (alt-tab hotkeys).
+					if (hook_action) // suffix_has_tilde has always been ignored for these types (alt-tab hotkeys).
 					{
 						// Hotkey::Dynamic() contains logic and comments similar to this, so maintain them together.
 						// An attempt to add an alt-tab variant to an existing hotkey.  This might have
@@ -1844,13 +1844,13 @@ examine_line:
 					else
 					{
 						// Detect duplicate hotkey variants to help spot bugs in scripts.
-						if (hk->FindVariant()) // See if there's already a variant matching the current criteria (has_tilde does not make variants distinct form each other because it would require firing two hotkey IDs in response to pressing one hotkey, which currently isn't in the design).
+						if (hk->FindVariant()) // See if there's already a variant matching the current criteria (suffix_has_tilde does not make variants distinct form each other because it would require firing two hotkey IDs in response to pressing one hotkey, which currently isn't in the design).
 						{
 							mCurrLine = NULL;  // Prevents showing unhelpful vicinity lines.
 							ScriptError("Duplicate hotkey.", buf);
 							return CloseAndReturn(fp, script_buf, FAIL);
 						}
-						if (!hk->AddVariant(mLastLabel, has_tilde))
+						if (!hk->AddVariant(mLastLabel, suffix_has_tilde))
 						{
 							ScriptError(ERR_OUTOFMEM, buf);
 							return CloseAndReturn(fp, script_buf, FAIL);
@@ -1858,7 +1858,7 @@ examine_line:
 					}
 				}
 				else // No parent hotkey yet, so create it.
-					if (   !(hk = Hotkey::AddHotkey(mLastLabel, hook_action, NULL, has_tilde, false))   )
+					if (   !(hk = Hotkey::AddHotkey(mLastLabel, hook_action, NULL, suffix_has_tilde, false))   )
 						return CloseAndReturn(fp, script_buf, FAIL); // It already displayed the error.
 			}
 			goto continue_main_loop; // In lieu of "continue", for performance.

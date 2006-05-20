@@ -147,7 +147,7 @@ private:
 
 	// For now, constructor & destructor are private so that only static methods can create new
 	// objects.  This allow proper tracking of which OS hotkey IDs have been used.
-	Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction, char *aName, bool aHasTilde, bool aUseErrorLevel);
+	Hotkey(HotkeyIDType aID, Label *aJumpToLabel, HookActionType aHookAction, char *aName, bool aSuffixHasTilde, bool aUseErrorLevel);
 	~Hotkey() {if (mIsRegistered) Unregister();}
 
 public:
@@ -204,9 +204,9 @@ public:
 	#define HOTKEY_EL_MEM                "99"
 	static ResultType Dynamic(char *aHotkeyName, char *aLabelName, char *aOptions, Label *aJumpToLabel);
 
-	static Hotkey *AddHotkey(Label *aJumpToLabel, HookActionType aHookAction, char *aName, bool aHasTilde, bool aUseErrorLevel);
+	static Hotkey *AddHotkey(Label *aJumpToLabel, HookActionType aHookAction, char *aName, bool aSuffixHasTilde, bool aUseErrorLevel);
 	HotkeyVariant *FindVariant();
-	HotkeyVariant *AddVariant(Label *aJumpToLabel, bool aHasTilde);
+	HotkeyVariant *AddVariant(Label *aJumpToLabel, bool aSuffixHasTilde);
 	static bool PrefixHasNoEnabledSuffixes(int aVKorSC, bool aIsSC);
 	HotkeyVariant *CriterionAllowsFiring(HWND *aFoundHWND = NULL);
 	static HotkeyVariant *CriterionAllowsFiring(HotkeyIDType aHotkeyID, HWND &aFoundHWND);
@@ -218,11 +218,17 @@ public:
 	static void RequireHook(HookType aWhichHook) {sWhichHookAlways |= aWhichHook;}
 	static ResultType TextInterpret(char *aName, Hotkey *aThisHotkey, bool aUseErrorLevel);
 
-	#define HK_PROP_ASTERISK 0x1  // Bitwise flags for use in aProperties.
-	#define HK_PROP_TILDE    0x2  //
-	static char *TextToModifiers(char *aText, Hotkey *aThisHotkey, mod_type *aModifiers = NULL
-		, modLR_type *aModifiersLR = NULL, bool *aHasAsterisk = NULL, bool *aHasTilde = NULL);
-
+	struct HotkeyProperties // Struct used by TextToModifiers() and its callers.
+	{
+		mod_type modifiers;
+		modLR_type modifirsLR;
+		char prefix_text[32];  // Has to be large enough to hold the largest key name in g_key_to_vk,
+		char suffix_text[32];  // which is probably "Browser_Favorites" (17).
+		bool suffix_has_tilde; // As opposed to "prefix has tilde".
+		bool has_asterisk;
+		bool is_key_up;
+	};
+	static char *TextToModifiers(char *aText, Hotkey *aThisHotkey, HotkeyProperties *aProperties = NULL);
 	static ResultType TextToKey(char *aText, char *aHotkeyName, bool aIsModifier, Hotkey *aThisHotkey, bool aUseErrorLevel);
 
 	static void InstallKeybdHook();
@@ -296,7 +302,7 @@ public:
 		return 0;
 	}
 
-	static Hotkey *FindHotkeyByTrueNature(char *aName, bool &aHasTilde);
+	static Hotkey *FindHotkeyByTrueNature(char *aName, bool &aSuffixHasTilde);
 	static Hotkey *FindHotkeyContainingModLR(modLR_type aModifiersLR);  //, HotkeyIDType hotkey_id_to_omit);
 	//static Hotkey *FindHotkeyWithThisModifier(vk_type aVK, sc_type aSC);
 	//static Hotkey *FindHotkeyBySC(sc2_type aSC2, mod_type aModifiers, modLR_type aModifiersLR);
