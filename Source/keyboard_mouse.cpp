@@ -33,6 +33,12 @@ static vk_type sPrevVK = 0;
 static vk_type sPrevEventModifierDown = 0;
 static modLR_type sModifiersLR_persistent = 0; // Tracks this script's own lifetime/persistent modifiers (the ones it caused to be persistent and thus is responsible for tracking).
 
+// v1.0.44.03: Below supports multiple keyboard layouts better by having script adapt to active window's layout.
+#define MAX_CACHED_LAYOUTS 10  // Hard to imagine anyone using more languages/layouts than this, but even if they do it will still work; performance would just be a little worse due to being uncached.
+static CachedLayoutType sCachedLayout[MAX_CACHED_LAYOUTS] = {{0}};
+static HKL sTargetKeybdLayout;           // Set by SendKeys() for use by the functions it calls directly and indirectly.
+static ResultType sTargetLayoutHasAltGr; //
+
 // v1.0.43: Support for SendInput() and journal-playback hook:
 #define MAX_INITIAL_EVENTS_SI 500UL  // sizeof(INPUT) == 28 as of 2006. Since Send is called so often, and since most Sends are short, reducing the load on the stack is also a deciding factor for these.
 #define MAX_INITIAL_EVENTS_PB 1500UL // sizeof(PlaybackEvent) == 8, so more events are justified before resorting to malloc().
@@ -79,7 +85,7 @@ void DisguiseWinAltIfNeeded(vk_type aVK, bool aInBlindMode)
 		// SendPlay mode can't display Start Menu, so no need for disguise keystrokes (such keystrokes might cause
 		// unwanted effects in certain games):
 		&& ((aVK == VK_LWIN || aVK == VK_RWIN) && (sPrevVK == VK_LWIN || sPrevVK == VK_RWIN) && sSendMode != SM_PLAY
-			|| (aVK == VK_LMENU || (aVK == VK_RMENU && !g_LayoutHasAltGr)) && (sPrevVK == VK_LMENU || sPrevVK == VK_RMENU)))
+			|| (aVK == VK_LMENU || (aVK == VK_RMENU && sTargetLayoutHasAltGr != CONDITION_TRUE)) && (sPrevVK == VK_LMENU || sPrevVK == VK_RMENU)))
 		KeyEvent(KEYDOWNANDUP, VK_CONTROL); // Disguise it to suppress Start Menu or prevent activation of active window's menu bar.
 }
 
@@ -96,9 +102,39 @@ void SendKeys(char *aKeys, bool aSendRaw, SendModes aSendModeOrig, HWND aTargetW
 	if (!*aKeys)
 		return;
 
-	// Maybe best to call immediately so that the amount of time during which we haven't been pumping
-	// messsages is more accurate:
-	LONG_OPERATION_INIT  // Needed even for SendInput/Play.
+	// Might be better to do this prior to changing capslock state.  UPDATE: In v1.0.44.03, the following section
+	// has been moved to the top of the function because:
+	// 1) For ControlSend, GetModifierLRState() might be more accurate if the threads are attached beforehand.
+	// 2) Determines sTargetKeybdLayout and sTargetLayoutHasAltGr early (for maintainability).
+	bool threads_are_attached = false; // Set default.
+	DWORD keybd_layout_thread = 0;     //
+	DWORD target_thread; // Doesn't need init.
+	if (aTargetWindow) // Caller has ensured this is NULL for SendInput and SendPlay modes.
+	{
+		if ((target_thread = GetWindowThreadProcessId(aTargetWindow, NULL)) // Assign.
+			&& target_thread != g_MainThreadID && !IsWindowHung(aTargetWindow))
+		{
+			threads_are_attached = AttachThreadInput(g_MainThreadID, target_thread, TRUE) != 0;
+			keybd_layout_thread = target_thread; // Testing shows that ControlSend benefits from the adapt-to-layout technique too.
+		}
+		//else no target thread, or it's our thread, or it's hung; so keep keybd_layout_thread at its default.
+	}
+	else
+	{
+		// v1.0.44.03: The following change is meaningful only to people who use more than one keyboard layout.
+		// It seems that the vast majority of them would want the Send command (as well as other features like
+		// Hotstrings and the Input command) to adapt to the keyboard layout of the active window (or target window
+		// in the case of ControlSend) rather than sticking with the script's own keyboard layout.  In addition,
+		// testing shows that this adapt-to-layout method costs almost nothing in performance, especially since
+		// the active window, its thread, and its layout are retrieved only once for each Send rather than once
+		// for each keystroke.
+		HWND active_window;
+		if (active_window = GetForegroundWindow())
+			keybd_layout_thread = GetWindowThreadProcessId(active_window, NULL);
+		//else no foreground window, so keep keybd_layout_thread at default.
+	}
+	sTargetKeybdLayout = GetKeyboardLayout(keybd_layout_thread); // If keybd_layout_thread==0, this will get our thread's own layout, which seems like the best/safest default.
+	sTargetLayoutHasAltGr = LayoutHasAltGr(sTargetKeybdLayout);  // Note that WM_INPUTLANGCHANGEREQUEST is not monitored by MsgSleep for the purpose of caching our thread's keyboard layout.  This is because it would be unreliable if another msg pump such as MsgBox is running.  Plus it hardly helps perf. at all, and hurts maintainability.
 
 	// Below is now called with "true" so that the hook's modifier state will be corrected (if necessary)
 	// prior to every send.
@@ -187,16 +223,6 @@ void SendKeys(char *aKeys, bool aSendRaw, SendModes aSendModeOrig, HWND aTargetW
 	// state of modifiers be kept in effect for the entire Send rather than having the user's release of a hotkey
 	// modifier key, which typically occurs at some unpredictable time during the Send, to suddenly alter the nature
 	// of the Send in mid-stride.  Another reason is to make the behavior of Send consistent with that of SendInput.
-
-	// Might be better to do this prior to changing capslock state:
-	bool threads_are_attached = false; // Set default.
-	DWORD target_thread;
-	if (aTargetWindow) // Caller has ensured this is NULL for SendInput and SendPlay modes.
-	{
-		target_thread = GetWindowThreadProcessId(aTargetWindow, NULL);
-		if (target_thread && target_thread != g_MainThreadID && !IsWindowHung(aTargetWindow))
-			threads_are_attached = AttachThreadInput(g_MainThreadID, target_thread, TRUE) != 0;
-	}
 
 	// The default behavior is to turn the capslock key off prior to sending any keys
 	// because otherwise lowercase letters would come through as uppercase and vice versa.
@@ -308,6 +334,7 @@ void SendKeys(char *aKeys, bool aSendRaw, SendModes aSendModeOrig, HWND aTargetW
 	int repeat_count, click_x, click_y;
 	bool move_offset;
 	DWORD placeholder;
+	LONG_OPERATION_INIT  // Needed even for SendInput/Play.
 
 	for (; *aKeys; ++aKeys, sPrevEventModifierDown = this_event_modifier_down)
 	{
@@ -407,7 +434,7 @@ void SendKeys(char *aKeys, bool aSendRaw, SendModes aSendModeOrig, HWND aTargetW
 					}
 				}
 
-				vk = TextToVK(aKeys, &mods_for_next_key, true, false); // false must be passed due to below.
+				vk = TextToVK(aKeys, &mods_for_next_key, true, false, sTargetKeybdLayout); // false must be passed due to below.
 				sc = vk ? 0 : TextToSC(aKeys);  // If sc is 0, it will be resolved by KeyEvent() later.
 				if (!vk && !sc && toupper(aKeys[0]) == 'V' && toupper(aKeys[1]) == 'K')
 				{
@@ -445,7 +472,7 @@ void SendKeys(char *aKeys, bool aSendRaw, SendModes aSendModeOrig, HWND aTargetW
 								// LWin should become persistently up in every respect.
 								extra_persistent_modifiers_for_blind_mode &= ~key_as_modifiersLR;
 								// Fix for v1.0.43: Also remove LControl if this key happens to be AltGr.
-								if (vk == VK_RMENU && g_LayoutHasAltGr)
+								if (vk == VK_RMENU && sTargetLayoutHasAltGr == CONDITION_TRUE) // It is AltGr.
 									extra_persistent_modifiers_for_blind_mode &= ~MOD_LCONTROL;
 							}
 							// else must never change sModifiersLR_persistent in response to KEYDOWNANDUP
@@ -542,7 +569,8 @@ brace_case_end: // This label is used to simplify the code without sacrificing p
 			// value for modifiers.
 			single_char_string[0] = *aKeys;
 			single_char_string[1] = '\0';
-			if (vk = TextToVK(single_char_string, &mods_for_next_key, true, true))
+			if (vk = TextToVK(single_char_string, &mods_for_next_key, true, true, sTargetKeybdLayout))
+				// TextToVK() takes no measurable time compared to the amount of time SendKey takes.
 				SendKey(vk, 0, mods_for_next_key, persistent_modifiers_for_this_SendKeys, 1, KEYDOWNANDUP
 					, 0, aTargetWindow);
 			else // Try to send it by alternate means.
@@ -1380,61 +1408,61 @@ void KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTargetWi
 	// One exception to this is something like "ControlSend, Edit1, {Control down}", which explicitly
 	// calls us with a target window.  This exception is by design and has been bug-fixed and documented
 	// in ControlSend for v1.0.21:
-	if (aTargetWindow && KeyToModifiersLR(aVK, aSC))
-	{
-		// When sending modifier keystrokes directly to a window, use the AutoIt3 SetKeyboardState()
-		// technique to improve the reliability of changes to modifier states.  If this is not done,
-		// sometimes the state of the SHIFT key (and perhaps other modifiers) will get out-of-sync
-		// with what's intended, resulting in uppercase vs. lowercase problems (and that's probably
-		// just the tip of the iceberg).  For this to be helpful, our caller must have ensured that
-		// our thread is attached to aTargetWindow's (but it seems harmless to do the below even if
-		// that wasn't done for any reason).  Doing this here in this function rather than at a
-		// higher level probably isn't best in terms of performance (e.g. in the case where more
-		// than one modifier is being changed, the multiple calls to Get/SetKeyboardState() could
-		// be consolidated into one call), but it is much easier to code and maintain this way
-		// since many different functions might call us to change the modifier state:
-		BYTE state[256];
-		GetKeyboardState((PBYTE)&state);
-		if (aEventType == KEYDOWN)
-			state[aVK] |= 0x80;
-		else if (aEventType == KEYUP)
-			state[aVK] &= ~0x80;
-		// else KEYDOWNANDUP, in which case it seems best (for now) not to change the state at all.
-		// It's rarely if ever called that way anyway.
-
-		// If aVK is a left/right specific key, be sure to also update the state of the neutral key:
-		switch(aVK)
-		{
-		case VK_LCONTROL: 
-		case VK_RCONTROL:
-			if ((state[VK_LCONTROL] & 0x80) || (state[VK_RCONTROL] & 0x80))
-				state[VK_CONTROL] |= 0x80;
-			else
-				state[VK_CONTROL] &= ~0x80;
-			break;
-		case VK_LSHIFT:
-		case VK_RSHIFT:
-			if ((state[VK_LSHIFT] & 0x80) || (state[VK_RSHIFT] & 0x80))
-				state[VK_SHIFT] |= 0x80;
-			else
-				state[VK_SHIFT] &= ~0x80;
-			break;
-		case VK_LMENU:
-		case VK_RMENU:
-			if ((state[VK_LMENU] & 0x80) || (state[VK_RMENU] & 0x80))
-				state[VK_MENU] |= 0x80;
-			else
-				state[VK_MENU] &= ~0x80;
-			break;
-		}
-
-		SetKeyboardState((PBYTE)&state);
-		// Even after doing the above, we still continue on to send the keystrokes
-		// themselves to the window, for greater reliability (same as AutoIt3).
-	}
-
 	if (aTargetWindow) // This block should be thread-safe because hook thread never calls it in this mode.
 	{
+		if (KeyToModifiersLR(aVK, aSC))
+		{
+			// When sending modifier keystrokes directly to a window, use the AutoIt3 SetKeyboardState()
+			// technique to improve the reliability of changes to modifier states.  If this is not done,
+			// sometimes the state of the SHIFT key (and perhaps other modifiers) will get out-of-sync
+			// with what's intended, resulting in uppercase vs. lowercase problems (and that's probably
+			// just the tip of the iceberg).  For this to be helpful, our caller must have ensured that
+			// our thread is attached to aTargetWindow's (but it seems harmless to do the below even if
+			// that wasn't done for any reason).  Doing this here in this function rather than at a
+			// higher level probably isn't best in terms of performance (e.g. in the case where more
+			// than one modifier is being changed, the multiple calls to Get/SetKeyboardState() could
+			// be consolidated into one call), but it is much easier to code and maintain this way
+			// since many different functions might call us to change the modifier state:
+			BYTE state[256];
+			GetKeyboardState((PBYTE)&state);
+			if (aEventType == KEYDOWN)
+				state[aVK] |= 0x80;
+			else if (aEventType == KEYUP)
+				state[aVK] &= ~0x80;
+			// else KEYDOWNANDUP, in which case it seems best (for now) not to change the state at all.
+			// It's rarely if ever called that way anyway.
+
+			// If aVK is a left/right specific key, be sure to also update the state of the neutral key:
+			switch(aVK)
+			{
+			case VK_LCONTROL: 
+			case VK_RCONTROL:
+				if ((state[VK_LCONTROL] & 0x80) || (state[VK_RCONTROL] & 0x80))
+					state[VK_CONTROL] |= 0x80;
+				else
+					state[VK_CONTROL] &= ~0x80;
+				break;
+			case VK_LSHIFT:
+			case VK_RSHIFT:
+				if ((state[VK_LSHIFT] & 0x80) || (state[VK_RSHIFT] & 0x80))
+					state[VK_SHIFT] |= 0x80;
+				else
+					state[VK_SHIFT] &= ~0x80;
+				break;
+			case VK_LMENU:
+			case VK_RMENU:
+				if ((state[VK_LMENU] & 0x80) || (state[VK_RMENU] & 0x80))
+					state[VK_MENU] |= 0x80;
+				else
+					state[VK_MENU] &= ~0x80;
+				break;
+			}
+
+			SetKeyboardState((PBYTE)&state);
+			// Even after doing the above, we still continue on to send the keystrokes
+			// themselves to the window, for greater reliability (same as AutoIt3).
+		}
+
 		// lowest 16 bits: repeat count: always 1 for up events, probably 1 for down in our case.
 		// highest order bits: 11000000 (0xC0) for keyup, usually 00000000 (0x00) for keydown.
 		LPARAM lParam = (LPARAM)(aSC << 16);
@@ -1448,7 +1476,7 @@ void KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTargetWi
 		if (aEventType != KEYDOWN)  // i.e. always do it for KEYDOWNANDUP
 			PostMessage(aTargetWindow, WM_KEYUP, aVK, lParam | 0xC0000001);
 	}
-	else // Keystrokes are to be sent with keybd_event() rather than PostMessage().
+	else // Keystrokes are to be sent with keybd_event() or the event array rather than PostMessage().
 	{
 		// The following static variables are intentionally NOT thread-safe because their whole purpose
 		// is to watch the combined stream of keystrokes from all our threads.  Due to our threads'
@@ -1474,26 +1502,43 @@ void KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTargetWi
 		if (we_turned_blockinput_off)
 			Line::ScriptBlockInput(false);
 
-		// Thread-safe: g_HookReceiptOfLControlMeansAltGr isn't thread-safe, but by its very nature it probably
-		// shouldn't be (ways to do it might introduce an unwarranted amount of complexity and performance loss
-		// given that the odds of collision might be astronimically low in this case, and the consequences too
-		// mild).  The whole point of g_HookReceiptOfLControlMeansAltGr and related altgr things below is to
-		// watch what keystrokes the hook receives in response to simulating a press of the right-alt key.
-		// Due to their global/system nature, keystrokes are never thread-safe in the sense that any process
-		// in the entire system can be sending keystrokes simultaneously with ours.
-		vk_type control_vk;
-		bool lcontrol_was_down, do_detect_altgr;
-		if (do_detect_altgr = (aVK == VK_RMENU && !g_LayoutHasAltGr && !put_event_into_array)) // Keyboard layout isn't yet marked as having an AltGr key, so auto-detect it here as well as other places.
+		vk_type control_vk;      // When not set somewhere below, these are left unitialized to help catch bugs.
+		HKL target_keybd_layout; //
+		ResultType r_mem, &target_layout_has_altgr = caller_is_keybd_hook ? r_mem : sTargetLayoutHasAltGr; // Same as above.
+		bool hookable_ralt, lcontrol_was_down, do_detect_altgr;
+		if (do_detect_altgr = hookable_ralt = (aVK == VK_RMENU && !put_event_into_array && g_KeybdHook)) // This is an RALT that the hook will be able to monitor. Using VK_RMENU vs. VK_MENU should be safe since this logic is only needed for the hook, which is never in effect on Win9x.
 		{
-			control_vk = g_os.IsWin2000orLater() ? VK_LCONTROL : VK_CONTROL;
-			lcontrol_was_down = GetAsyncKeyState(control_vk) & 0x8000;
-			// Add extra detection of AltGr if hook is installed, which has been show to be useful for some
-			// scripts where the other AltGr detection methods don't occur in a timely enough fashion.
-			// The following method relies upon the fact that it's impossible for the hook to receive
-			// events from the user while it's processing our keybd_event() here.  This is because
-			// any physical keystrokes that happen to occur at the exact moment of our keybd_event()
-			// will stay queued until the main event loop routes them to the hook via GetMessage().
-			g_HookReceiptOfLControlMeansAltGr = aExtraInfo;
+			if (!caller_is_keybd_hook) // sTargetKeybdLayout is set/valid only by SendKeys().
+				target_keybd_layout = sTargetKeybdLayout;
+			else
+			{
+				// Below is similar to the macro "Get_active_window_keybd_layout":
+				HWND active_window;
+				target_keybd_layout = GetKeyboardLayout((active_window = GetForegroundWindow())\
+					? GetWindowThreadProcessId(active_window, NULL) : 0); // When no foreground window, the script's own layout seems like the safest default.
+				target_layout_has_altgr = LayoutHasAltGr(target_keybd_layout); // In the case of this else's "if", target_layout_has_altgr was already set properly higher above.
+			}
+			if (target_layout_has_altgr != LAYOUT_UNDETERMINED) // This layout's AltGr status is already known with certainty.
+				do_detect_altgr = false; // So don't go through the detection steps here and other places later below.
+			else
+			{
+				control_vk = g_os.IsWin2000orLater() ? VK_LCONTROL : VK_CONTROL;
+				lcontrol_was_down = GetAsyncKeyState(control_vk) & 0x8000;
+				// Add extra detection of AltGr if hook is installed, which has been show to be useful for some
+				// scripts where the other AltGr detection methods don't occur in a timely enough fashion.
+				// The following method relies upon the fact that it's impossible for the hook to receive
+				// events from the user while it's processing our keybd_event() here.  This is because
+				// any physical keystrokes that happen to occur at the exact moment of our keybd_event()
+				// will stay queued until the main event loop routes them to the hook via GetMessage().
+				g_HookReceiptOfLControlMeansAltGr = aExtraInfo;
+				// Thread-safe: g_HookReceiptOfLControlMeansAltGr isn't thread-safe, but by its very nature it probably
+				// shouldn't be (ways to do it might introduce an unwarranted amount of complexity and performance loss
+				// given that the odds of collision might be astronimically low in this case, and the consequences too
+				// mild).  The whole point of g_HookReceiptOfLControlMeansAltGr and related altgr things below is to
+				// watch what keystrokes the hook receives in response to simulating a press of the right-alt key.
+				// Due to their global/system nature, keystrokes are never thread-safe in the sense that any process
+				// in the entire system can be sending keystrokes simultaneously with ours.
+			}
 		}
 
 		// Calculated only once for performance (and avoided entirely if not needed):
@@ -1505,40 +1550,51 @@ void KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTargetWi
 
 		if (aEventType != KEYUP)  // i.e. always do it for KEYDOWNANDUP
 		{
-			// In v1.0.35.07, g_IgnoreNextLControlDown/Up was added.
-			// The following global is used to flag as our own the keyboard driver's LControl-down keystroke
-			// that is triggered by RAlt-down (AltGr).  This prevents it from triggering hotkeys such as
-			// "*Control::".  It probably fixes other obscure side-effects and bugs also, since the
-			// event should be considered script-generated even though indirect.  Note: The problem with
-			// having the hook detect AltGr's automatic LControl-down is that the keyboard driver seems
-			// to generate the LControl-down *before* notifying the system of the RAlt-down.  That makes
-			// it impossible for the hook to flag the LControl keystroke in advance, so it would have to
-			// retroactively undo the effects.  But that is impossible because the previous keystroke might
-			// already have wrongly fired a hotkey.
-			if (aVK == VK_RMENU && g_LayoutHasAltGr) // VK_RMENU vs. VK_MENU should be safe since this logic is only needed for the hook, which is never in effect on Win9x.
-				g_IgnoreNextLControlDown = aExtraInfo; // Must be set prior to keybd_event() to be effective.
 			if (put_event_into_array)
 				PutKeybdEventIntoArray(key_as_modifiersLR, aVK, aSC, event_flags, aExtraInfo);
 			else
+			{
+				// In v1.0.35.07, g_IgnoreNextLControlDown/Up was added.
+				// The following global is used to flag as our own the keyboard driver's LControl-down keystroke
+				// that is triggered by RAlt-down (AltGr).  This prevents it from triggering hotkeys such as
+				// "*Control::".  It probably fixes other obscure side-effects and bugs also, since the
+				// event should be considered script-generated even though indirect.  Note: The problem with
+				// having the hook detect AltGr's automatic LControl-down is that the keyboard driver seems
+				// to generate the LControl-down *before* notifying the system of the RAlt-down.  That makes
+				// it impossible for the hook to flag the LControl keystroke in advance, so it would have to
+				// retroactively undo the effects.  But that is impossible because the previous keystroke might
+				// already have wrongly fired a hotkey.
+				if (hookable_ralt && target_layout_has_altgr == CONDITION_TRUE)
+					g_IgnoreNextLControlDown = aExtraInfo; // Must be set prior to keybd_event() to be effective.
 				keybd_event(aVK, aSC_lobyte // naked scan code (the 0xE0 prefix, if any, is omitted)
 					, event_flags, aExtraInfo);
-			// The following is done by us rather than by the hook to avoid problems where:
-			// 1) The hook is removed at a critical point during the operation, preventing the variable from
-			//    being reset to false.
-			// 2) For some reason this AltGr keystroke done above did not cause LControl to go down (perhaps
-			//    because the current keyboard layout doesn't have AltGr as we thought), which would be a bug
-			//    because some other Ctrl keystroke would then be wrongly ignored.
-			g_IgnoreNextLControlDown = 0; // Unconditional reset.
-
-			if (do_detect_altgr) // i.e. g_LayoutHasAltGr is currently false, so make it true if called for.
-			{
-				do_detect_altgr = false; // Indicate that the second half has been done (for later below).
-				g_HookReceiptOfLControlMeansAltGr = 0; // Must reset promptly in case key-delay below routes physical keystrokes to hook.
-				// Do it the following way rather than setting g_LayoutHasAltGr directly to the result of
-				// the boolean expression because keybd_event() above may have changed the value of
-				// g_LayoutHasAltGr to true, in which case that should be given precedence over the below.
-				if (!lcontrol_was_down && (GetAsyncKeyState(control_vk) & 0x8000)) // It wasn't down before but now it is.  Thus, RAlt is really AltGr.
-					g_LayoutHasAltGr = true;
+				// The following is done by us rather than by the hook to avoid problems where:
+				// 1) The hook is removed at a critical point during the operation, preventing the variable from
+				//    being reset to false.
+				// 2) For some reason this AltGr keystroke done above did not cause LControl to go down (perhaps
+				//    because the current keyboard layout doesn't have AltGr as we thought), which would be a bug
+				//    because some other Ctrl keystroke would then be wrongly ignored.
+				g_IgnoreNextLControlDown = 0; // Unconditional reset.
+				if (do_detect_altgr)
+				{
+					do_detect_altgr = false; // Indicate to the KEYUP section later below that detection has already been done.
+					if (g_HookReceiptOfLControlMeansAltGr)
+					{
+						g_HookReceiptOfLControlMeansAltGr = 0; // Must reset promptly in case key-delay below routes physical keystrokes to hook.
+						// The following line is multipurpose:
+						// 1) Retrieves an updated value of target_layout_has_altgr in case the hook just changed it.
+						// 2) If the hook didn't change it, the target keyboard layout doesn't have an AltGr key.
+						//    Only in that case will the following line set it to FALSE (because LayoutHasAltGr only
+						//    changes the value if it's currently undetermined).
+						// Finally, this also updates sTargetLayoutHasAltGr in cases where target_layout_has_altgr
+						// is an alias/reference for it.
+						target_layout_has_altgr = LayoutHasAltGr(target_keybd_layout, CONDITION_FALSE);
+					}
+					else if (!lcontrol_was_down) // i.e. if LControl was already down, this detection method isn't possible.
+						// Called this way, it updates the specified layout as long as keybd_event's call to the hook didn't already determine it to be FALSE or TRUE:
+						target_layout_has_altgr = LayoutHasAltGr(target_keybd_layout, (GetAsyncKeyState(control_vk) & 0x8000) ? CONDITION_TRUE : CONDITION_FALSE);
+						// Above also updates sTargetLayoutHasAltGr in cases where target_layout_has_altgr is an alias/reference for it.
+				}
 			}
 
 			if (aVK == VK_NUMLOCK && g_os.IsWin9x()) // Under Win9x, Numlock needs special treatment.
@@ -1555,28 +1611,31 @@ void KeyEvent(KeyEventTypes aEventType, vk_type aVK, sc_type aSC, HWND aTargetWi
 		if (aEventType != KEYDOWN)  // i.e. always do it for KEYDOWNANDUP
 		{
 			event_flags |= KEYEVENTF_KEYUP;
-			// See comments above for details about g_LayoutHasAltGr and g_IgnoreNextLControlUp:
-			if (aVK == VK_RMENU && g_LayoutHasAltGr) // VK_RMENU vs. VK_MENU should be safe since this logic is only needed for the hook, which is never in effect on Win9x.
-				g_IgnoreNextLControlUp = aExtraInfo; // Must be set prior to keybd_event() to be effective.
 			if (put_event_into_array)
 				PutKeybdEventIntoArray(key_as_modifiersLR, aVK, aSC, event_flags, aExtraInfo);
 			else
-				keybd_event(aVK, aSC_lobyte, event_flags, aExtraInfo);
-			g_IgnoreNextLControlUp = 0; // Unconditional reset.
-			if (do_detect_altgr) // This should be true only when aEventType==KEYUP. See similar section above for comments.
 			{
-				g_HookReceiptOfLControlMeansAltGr = 0;
-				// Do it the following way rather than setting g_LayoutHasAltGr directly to the result of
-				// the boolean expression because keybd_event() above may have changed the value of
-				// g_LayoutHasAltGr to true, in which case that should be given precedence over the below.
-				if (lcontrol_was_down && !(GetAsyncKeyState(control_vk) & 0x8000)) // RAlt is really AltGr.
-					g_LayoutHasAltGr = true;
+				if (hookable_ralt && target_layout_has_altgr == CONDITION_TRUE) // See comments in similar section above for details.
+					g_IgnoreNextLControlUp = aExtraInfo; // Must be set prior to keybd_event() to be effective.
+				keybd_event(aVK, aSC_lobyte, event_flags, aExtraInfo);
+				g_IgnoreNextLControlUp = 0; // Unconditional reset (see similar section above).
+				if (do_detect_altgr) // This should be true only when aEventType==KEYUP because otherwise the KEYDOWN event above would have set it to false.
+				{
+					if (g_HookReceiptOfLControlMeansAltGr)
+					{
+						g_HookReceiptOfLControlMeansAltGr = 0; // Must reset promptly in case key-delay below routes physical keystrokes to hook.
+						target_layout_has_altgr = LayoutHasAltGr(target_keybd_layout, CONDITION_FALSE); // See similar section above for comments.
+					}
+					else if (lcontrol_was_down) // i.e. if LControl was already up, this detection method isn't possible.
+						// See similar section above for comments:
+						target_layout_has_altgr = LayoutHasAltGr(target_keybd_layout, (GetAsyncKeyState(control_vk) & 0x8000) ? CONDITION_FALSE : CONDITION_TRUE);
+				}
 			}
 			if (do_key_history)
 				UpdateKeyEventHistory(true, aVK, aSC);
 		}
 
-		if (we_turned_blockinput_off)  // Aready made thread-safe by action higher above.
+		if (we_turned_blockinput_off)  // Already made thread-safe by action higher above.
 			Line::ScriptBlockInput(true);  // Turn BlockInput back on.
 	}
 
@@ -2256,6 +2315,7 @@ void MouseEvent(DWORD aEventFlags, DWORD aData, DWORD aX, DWORD aY)
 ///////////////////////
 
 void PutKeybdEventIntoArray(modLR_type aKeyAsModifiersLR, vk_type aVK, sc_type aSC, DWORD aEventFlags, DWORD aExtraInfo)
+// This function is designed to be called from only one thread (the main thread) since it's not thread-safe.
 // Playback hook only supports sending neutral modifiers.  Caller must ensure that any left/right modfiiers
 // such as VK_RCONTROL are translated into neutral (e.g. VK_CONTROL).
 {
@@ -2272,7 +2332,7 @@ void PutKeybdEventIntoArray(modLR_type aKeyAsModifiersLR, vk_type aVK, sc_type a
 	//   01d 11 Ctrl keyup	(left scan code)
 	//   138 12 Alt	 syskeyup (right vs. left scan code)
 	// Check for VK_MENU not VK_RMENU because caller should have translated it to neutral:
-	if (aVK == VK_MENU && aSC == SC_RALT && g_LayoutHasAltGr && sSendMode == SM_PLAY)
+	if (aVK == VK_MENU && aSC == SC_RALT && sTargetLayoutHasAltGr == CONDITION_TRUE && sSendMode == SM_PLAY)
 		// Must pass VK_CONTROL rather than VK_LCONTROL because playback hook requires neutral modifiers.
 		PutKeybdEventIntoArray(MOD_LCONTROL, VK_CONTROL, SC_LCONTROL, aEventFlags, aExtraInfo); // Recursive call to self.
 
@@ -2343,6 +2403,7 @@ void PutKeybdEventIntoArray(modLR_type aKeyAsModifiersLR, vk_type aVK, sc_type a
 
 
 void PutMouseEventIntoArray(DWORD aEventFlags, DWORD aData, DWORD aX, DWORD aY)
+// This function is designed to be called from only one thread (the main thread) since it's not thread-safe.
 // If the array-type is journal playback, caller should include MOUSEEVENTF_ABSOLUTE in aEventFlags if the
 // the mouse coordinates aX and aY are relative to the screen rather than the active window.
 {
@@ -2601,7 +2662,7 @@ void CleanupEventArray(int aFinalKeyDelay)
 	if (sMaxEvents > (sSendMode == SM_INPUT ? MAX_INITIAL_EVENTS_SI : MAX_INITIAL_EVENTS_PB))
 		free(sEventSI); // Previous block was malloc'd vs. _alloc'd, so free it.  Note that sEventSI and sEventPB are different views of the same variable.
 	// The following must be done only after functions called above are done using it.  But it must also be done
-	// prior to toggling capslock back on below, to avoid the capslock keystroke from going into the array.
+	// prior to our caller toggling capslock back on , to avoid the capslock keystroke from going into the array.
 	sSendMode = SM_EVENT;
 	DoKeyDelay(aFinalKeyDelay); // Do this only after resetting sSendMode above.  Should be okay for mouse events too.
 }
@@ -2793,14 +2854,15 @@ void SetKeyState (vk_type vk, int aKeyUp)
 
 void SetModifierLRState(modLR_type aModifiersLRnew, modLR_type aModifiersLRnow, HWND aTargetWindow
 	, bool aDisguiseDownWinAlt, bool aDisguiseUpWinAlt, DWORD aExtraInfo)
+// This function is designed to be called from only the main thread; it's probably not thread-safe.
 // Puts modifiers into the specified state, releasing or pressing down keys as needed.
 // The modifiers are released and pressed down in a very delicate order due to their interactions with
 // each other and their ability to show the Start Menu, activate the menu bar, or trigger the OS's language
 // bar hotkeys.  Side-effects like these would occur if a more simple approach were used, such as releasing
 // all modifiers that are going up prior to pushing down the ones that are going down.
-// When g_LayoutHasAltGr==true, it is tempting to try to simplify things by removing MOD_LCONTROL from
-// aModifiersLRnew whenever aModifiersLRnew contains MOD_RALT.  However, this a careful review how that
-// would impact various places below where g_LayoutHasAltGr is checked indicates that it wouldn't help.
+// When the target layout has an altgr key, it is tempting to try to simplify things by removing MOD_LCONTROL
+// from aModifiersLRnew whenever aModifiersLRnew contains MOD_RALT.  However, this a careful review how that
+// would impact various places below where sTargetLayoutHasAltGr is checked indicates that it wouldn't help.
 // Note that by design and as documented for ControlSend, aTargetWindow is not used as the target for the
 // various calls to KeyEvent() here.  It is only used as a workaround for the GUI window issue described
 // at the bottom.
@@ -2859,7 +2921,7 @@ void SetModifierLRState(modLR_type aModifiersLRnew, modLR_type aModifiersLRnow, 
 	modLR_type aModifiersLRunion = aModifiersLRnow | aModifiersLRnew; // The set of keys that were or will be down.
 	bool ctrl_not_down = !(aModifiersLRnow & (MOD_LCONTROL | MOD_RCONTROL)); // Neither CTRL key is down now.
 	bool ctrl_will_not_be_down = !(aModifiersLRnew & (MOD_LCONTROL | MOD_RCONTROL)) // Nor will it be.
-		&& !(g_LayoutHasAltGr && (aModifiersLRnew & MOD_RALT)); // Nor will it be pushed down indirectly due to AltGr.
+		&& !(sTargetLayoutHasAltGr == CONDITION_TRUE && (aModifiersLRnew & MOD_RALT)); // Nor will it be pushed down indirectly due to AltGr.
 
 	bool ctrl_nor_shift_nor_alt_down = ctrl_not_down                             // Neither CTRL key is down now.
 		&& !(aModifiersLRnow & (MOD_LSHIFT | MOD_RSHIFT | MOD_LALT | MOD_RALT)); // Nor is any SHIFT/ALT key.
@@ -2878,7 +2940,7 @@ void SetModifierLRState(modLR_type aModifiersLRnew, modLR_type aModifiersLRnow, 
 	// language bar hotkey.  See the bottom of this function for more explanation.
 
 	// ALT:
-	bool disguise_alt_down = aDisguiseDownWinAlt && ctrl_not_down && ctrl_will_not_be_down; // Since this applies to both Left and Right Alt, don't take g_LayoutHasAltGr into account here. That is done later below.
+	bool disguise_alt_down = aDisguiseDownWinAlt && ctrl_not_down && ctrl_will_not_be_down; // Since this applies to both Left and Right Alt, don't take sTargetLayoutHasAltGr into account here. That is done later below.
 
 	// WIN: The WIN key is successfully disguised under a greater number of conditions than ALT.
 	// Since SendPlay can't display Start Menu, there's no need to send the disguise-keystrokes (such
@@ -2987,9 +3049,9 @@ void SetModifierLRState(modLR_type aModifiersLRnew, modLR_type aModifiersLRnow, 
 
 	if (release_ralt)
 	{
-		if (!defer_alt_release || g_LayoutHasAltGr) // No need to defer if RAlt==AltGr. But don't change the value of defer_alt_release because LAlt uses it too.
+		if (!defer_alt_release || sTargetLayoutHasAltGr == CONDITION_TRUE) // No need to defer if RAlt==AltGr. But don't change the value of defer_alt_release because LAlt uses it too.
 		{
-			if (g_LayoutHasAltGr)
+			if (sTargetLayoutHasAltGr == CONDITION_TRUE)
 			{
 				// Indicate that control is up now, since the release of AltGr will cause that indirectly.
 				// Fix for v1.0.43: Unlike the pressing down of AltGr in a later section, which callers want
@@ -3010,9 +3072,9 @@ void SetModifierLRState(modLR_type aModifiersLRnew, modLR_type aModifiersLRnow, 
 	else if (!(aModifiersLRnow & MOD_RALT) && (aModifiersLRnew & MOD_RALT)) // Press down RALT.
 	{
 		// For the below: There should never be a need to disguise AltGr.  Doing so would likely cause unwanted
-		// side-effects. Also, disguise_alt_key does not take g_LayoutHasAltGr into account because
+		// side-effects. Also, disguise_alt_key does not take sTargetLayoutHasAltGr into account because
 		// disguise_alt_key also applies to the left alt key.
-		if (disguise_alt_down && !g_LayoutHasAltGr)
+		if (disguise_alt_down && sTargetLayoutHasAltGr != CONDITION_TRUE)
 		{
 			KeyEvent(KEYDOWN, VK_CONTROL, 0, NULL, false, aExtraInfo); // Ensures that menu bar is not activated.
 			KeyEvent(KEYDOWN, VK_RMENU, 0, NULL, false, aExtraInfo);
@@ -3029,10 +3091,10 @@ void SetModifierLRState(modLR_type aModifiersLRnew, modLR_type aModifiersLRnow, 
 			// This would cause LControl to get stuck down for hotkeys in German layout such as:
 			//   <^>!a::SendRaw, {
 			//   <^>!m::Send ^c
-			if (g_LayoutHasAltGr && (aModifiersLRnow & MOD_LCONTROL))
+			if (sTargetLayoutHasAltGr == CONDITION_TRUE && (aModifiersLRnow & MOD_LCONTROL))
 				KeyEvent(KEYUP, VK_LCONTROL, 0, NULL, false, aExtraInfo);
 			KeyEvent(KEYDOWN, VK_RMENU, 0, NULL, false, aExtraInfo);
-			if (g_LayoutHasAltGr) // Note that KeyEvent() might have just changed the value of g_LayoutHasAltGr.
+			if (sTargetLayoutHasAltGr == CONDITION_TRUE) // Note that KeyEvent() might have just changed the value of sTargetLayoutHasAltGr.
 			{
 				// Indicate that control is both down and required down so that the section after this one won't
 				// release it.  Without this fix, a hotkey that sends an AltGr char such as "^ä:: SendRaw, {"
@@ -3053,7 +3115,7 @@ void SetModifierLRState(modLR_type aModifiersLRnew, modLR_type aModifiersLRnow, 
 		// released when the new modifier state includes AltGr.  This solves a hotkey such as the following and
 		// probably several other circumstances:
 		// <^>!a::send \  ; Backslash is solved by this fix; it's manifest via AltGr+Dash on German layout.
-		&& !((aModifiersLRnew & MOD_RALT) && g_LayoutHasAltGr)   )
+		&& !((aModifiersLRnew & MOD_RALT) && sTargetLayoutHasAltGr == CONDITION_TRUE)   )
 		KeyEvent(KEYUP, VK_LCONTROL, 0, NULL, false, aExtraInfo);
 	else if (!(aModifiersLRnow & MOD_LCONTROL) && (aModifiersLRnew & MOD_LCONTROL)) // Press down LControl.
 		KeyEvent(KEYDOWN, VK_LCONTROL, 0, NULL, false, aExtraInfo);
@@ -3088,7 +3150,7 @@ void SetModifierLRState(modLR_type aModifiersLRnew, modLR_type aModifiersLRnow, 
 	{
 		if (release_lalt)
 			KeyEvent(KEYUP, VK_LMENU, 0, NULL, false, aExtraInfo);
-		if (release_ralt && !g_LayoutHasAltGr) // If g_LayoutHasAltGr==true, RAlt would already have been released earlier since defer_alt_release would have been ignored for it.
+		if (release_ralt && sTargetLayoutHasAltGr != CONDITION_TRUE) // If AltGr is present, RAlt would already have been released earlier since defer_alt_release would have been ignored for it.
 			KeyEvent(KEYUP, VK_RMENU, 0, NULL, false, aExtraInfo);
 	}
 
@@ -3250,22 +3312,22 @@ modLR_type GetModifierLRState(bool aExplicitlyGet)
 		// Assume it's the left key since there's no way to tell which of the pair it
 		// is? (unless the hook is installed, in which case it's value would have already
 		// been returned, above).
-		if (IsKeyDown9xNT(VK_SHIFT)) modifiersLR |= MOD_LSHIFT;
+		if (IsKeyDown9xNT(VK_SHIFT))   modifiersLR |= MOD_LSHIFT;
 		if (IsKeyDown9xNT(VK_CONTROL)) modifiersLR |= MOD_LCONTROL;
-		if (IsKeyDown9xNT(VK_MENU)) modifiersLR |= MOD_LALT;
-		if (IsKeyDown9xNT(VK_LWIN)) modifiersLR |= MOD_LWIN;
-		if (IsKeyDown9xNT(VK_RWIN)) modifiersLR |= MOD_RWIN;
+		if (IsKeyDown9xNT(VK_MENU))    modifiersLR |= MOD_LALT;
+		if (IsKeyDown9xNT(VK_LWIN))    modifiersLR |= MOD_LWIN;
+		if (IsKeyDown9xNT(VK_RWIN))    modifiersLR |= MOD_RWIN;
 	}
 	else
 	{
-		if (IsKeyDownAsync(VK_LSHIFT)) modifiersLR |= MOD_LSHIFT;
-		if (IsKeyDownAsync(VK_RSHIFT)) modifiersLR |= MOD_RSHIFT;
+		if (IsKeyDownAsync(VK_LSHIFT))   modifiersLR |= MOD_LSHIFT;
+		if (IsKeyDownAsync(VK_RSHIFT))   modifiersLR |= MOD_RSHIFT;
 		if (IsKeyDownAsync(VK_LCONTROL)) modifiersLR |= MOD_LCONTROL;
 		if (IsKeyDownAsync(VK_RCONTROL)) modifiersLR |= MOD_RCONTROL;
-		if (IsKeyDownAsync(VK_LMENU)) modifiersLR |= MOD_LALT;
-		if (IsKeyDownAsync(VK_RMENU)) modifiersLR |= MOD_RALT;
-		if (IsKeyDownAsync(VK_LWIN)) modifiersLR |= MOD_LWIN;
-		if (IsKeyDownAsync(VK_RWIN)) modifiersLR |= MOD_RWIN;
+		if (IsKeyDownAsync(VK_LMENU))    modifiersLR |= MOD_LALT;
+		if (IsKeyDownAsync(VK_RMENU))    modifiersLR |= MOD_RALT;
+		if (IsKeyDownAsync(VK_LWIN))     modifiersLR |= MOD_LWIN;
+		if (IsKeyDownAsync(VK_RWIN))     modifiersLR |= MOD_RWIN;
 	}
 
 	// Thread-safe: The following section isn't thread-safe because either the hook thread
@@ -3324,7 +3386,7 @@ modLR_type GetModifierLRState(bool aExplicitlyGet)
 
 void AdjustKeyState(BYTE aKeyState[], modLR_type aModifiersLR)
 // Caller has ensured that aKeyState is a 256-BYTE array of key states, in the same format used
-// by GetKeyboardState() and ToAscii().
+// by GetKeyboardState() and ToAsciiEx().
 {
 	aKeyState[VK_LSHIFT] = (aModifiersLR & MOD_LSHIFT) ? STATE_DOWN : 0;
 	aKeyState[VK_RSHIFT] = (aModifiersLR & MOD_RSHIFT) ? STATE_DOWN : 0;
@@ -3454,6 +3516,72 @@ char *ModifiersLRToText(modLR_type aModifiersLR, char *aBuf)
 
 
 
+bool ActiveWindowLayoutHasAltGr()
+// Thread-safety: See comments in LayoutHasAltGr() below.
+{
+	Get_active_window_keybd_layout // Defines the variable active_window_keybd_layout for use below.
+	return LayoutHasAltGr(active_window_keybd_layout) == CONDITION_TRUE; // i.e caller wants both CONDITION_FALSE and LAYOUT_UNDETERMINED to be considered non-AltGr.
+}
+
+
+
+ResultType LayoutHasAltGr(HKL aLayout, ResultType aHasAltGr)
+// Thread-safety: While not thoroughly thread-safe, due to the extreme simplicity of the cache array, even if
+// a collision occurs it should be inconsequential.
+// Caller must ensure that aLayout is a valid layout (special values like 0 aren't supported here).
+// If aHasAltGr is not at its default of LAYOUT_UNDETERMINED, the specified layout's has_altgr property is
+// updated to the new value, but only if it is currently undetermined (callers can rely on this).
+{
+	// Layouts are cached for performance (to avoid the discovery loop later below).
+	int i;
+	for (i = 0; i < MAX_CACHED_LAYOUTS && sCachedLayout[i].hkl; ++i)
+		if (sCachedLayout[i].hkl == aLayout) // Match Found.
+		{
+			if (aHasAltGr != LAYOUT_UNDETERMINED && sCachedLayout[i].has_altgr == LAYOUT_UNDETERMINED) // Caller relies on this.
+				sCachedLayout[i].has_altgr = aHasAltGr;
+			return sCachedLayout[i].has_altgr;
+		}
+
+	// Since above didn't return, this layout isn't cached yet.  So create a new cache entry for it and
+	// determine whether this layout has an AltGr key.  If i<MAX_CACHED_LAYOUTS (which it almost always will be),
+	// there's room in the array for a new cache entry.  In the very unlikely event that there isn't room,
+	// overwrite an arbitrary item in the array.  An LRU/MRU algorithm (timestamp) isn't used because running out
+	// of slots seems too unlikely, and the consequences of running out are merely a slight degradation in performance.
+	CachedLayoutType &cl = sCachedLayout[(i < MAX_CACHED_LAYOUTS) ? i : MAX_CACHED_LAYOUTS-1];
+	if (aHasAltGr != LAYOUT_UNDETERMINED) // Caller determined it for us.  See top of function for explanation.
+	{
+		cl.hkl = aLayout;
+		return cl.has_altgr = aHasAltGr;
+	}
+
+	// Otherwise, do AltGr detection on this newly cached layout so that we can return the AltGr state to caller.
+	// This detection is probably not 100% reliable because there may be some layouts (especially custom ones)
+	// that have an AltGr key yet none of its characters actually require AltGr to manifest.  A more reliable
+	// way to detect AltGr would be to simulate an RALT keystroke (maybe only an up event, not a down) and have
+	// a keyboard hook catch and block it.  If the layout has altgr, the hook would see a driver-generated LCtrl
+	// keystroke immediately prior to RAlt.
+	// Performance: This loop is quite fast. Doing this section 1000 times only takes about 160ms
+	// on a 2gHz system (0.16ms per call).
+	SHORT s; // Also, an int is used for "i" vs. char to avoid overflow on final character.
+	for (cl.has_altgr = LAYOUT_UNDETERMINED, i = 32; i < 256; ++i) // Include Spacebar up through final ANSI character (i.e. include 255 but not 256).
+	{
+		s = VkKeyScanEx((char)i, aLayout);
+		// Check for presence of Ctrl+Alt but allow other modifiers like Shift to be present because
+		// I believe there are some layouts that manifest characters via Shift+AltGr.
+		if (s != -1 && (s & 0x600) == 0x600) // In this context, Ctrl+Alt means AltGr.
+		{
+			cl.has_altgr = CONDITION_TRUE;
+			break;
+		}
+	}
+	// If loop didn't break, leave cl.has_altgr as LAYOUT_UNDETERMINED because we can't be sure whether AltGr is
+	// present (see other comments for details).
+	cl.hkl = aLayout; // This is done here (immediately after has_altgr was set in the loop above) rather than earlier to minimize the consequences of not being fully thread-safe.
+	return cl.has_altgr;
+}
+
+
+
 char *SCtoKeyName(sc_type aSC, char *aBuf, int aBufSize)
 // aBufSize is an int so that any negative values passed in from caller are not lost.
 // Always produces a non-empty string.
@@ -3506,7 +3634,8 @@ sc_type TextToSC(char *aText)
 
 
 
-vk_type TextToVK(char *aText, modLR_type *pModifiersLR, bool aExcludeThoseHandledByScanCode, bool aAllowExplicitVK)
+vk_type TextToVK(char *aText, modLR_type *pModifiersLR, bool aExcludeThoseHandledByScanCode, bool aAllowExplicitVK
+	, HKL aKeybdLayout)
 // If modifiers_p is non-NULL, place the modifiers that are needed to realize the key in there.
 // e.g. M is really +m (shift-m), # is really shift-3.
 // HOWEVER, this function does not completely overwrite the contents of pModifiersLR; instead, it just
@@ -3519,7 +3648,7 @@ vk_type TextToVK(char *aText, modLR_type *pModifiersLR, bool aExcludeThoseHandle
 	// of text during load, is that on either side of the COMPOSITE_DELIMITER (e.g. " then ").
 
 	if (strlen(aText) == 1)
-		return CharToVKAndModifiers(*aText, pModifiersLR);
+		return CharToVKAndModifiers(*aText, pModifiersLR, aKeybdLayout); // Making this a function simplifies things because it can do early return, etc.
 
 	if (aAllowExplicitVK && toupper(aText[0]) == 'V' && toupper(aText[1]) == 'K')
 		return (vk_type)strtol(aText + 2, NULL, 16);  // Convert from hex.
@@ -3539,7 +3668,7 @@ vk_type TextToVK(char *aText, modLR_type *pModifiersLR, bool aExcludeThoseHandle
 
 
 
-vk_type CharToVKAndModifiers(char aChar, modLR_type *pModifiersLR)
+vk_type CharToVKAndModifiers(char aChar, modLR_type *pModifiersLR, HKL aKeybdLayout)
 // If non-NULL, pModifiersLR contains the initial set of modifiers provided by the caller, to which
 // we add any extra modifiers required to realize aChar.
 {
@@ -3549,7 +3678,7 @@ vk_type CharToVKAndModifiers(char aChar, modLR_type *pModifiersLR)
 		return VK_RETURN;
 
 	// Otherwise:
-	SHORT mod_plus_vk = VkKeyScan(aChar);
+	SHORT mod_plus_vk = VkKeyScanEx(aChar, aKeybdLayout); // v1.0.44.03: Benchmark shows that VkKeyScanEx() is the same speed as VkKeyScan() when the layout has been pre-fetched.
 	vk_type vk = LOBYTE(mod_plus_vk);
 	char keyscan_modifiers = HIBYTE(mod_plus_vk);
 	if (keyscan_modifiers == -1 && vk == (UCHAR)-1) // No translation could be made.
@@ -3570,16 +3699,6 @@ vk_type CharToVKAndModifiers(char aChar, modLR_type *pModifiersLR)
 	// not suprising because the keyboard hook also receives neutral modifier keys on NT4 rather than
 	// a more specific left/right key.
 
-	// The following AltGr detection supplements that in the keyboard hook.  It should be retained in case
-	// the keyboard hook is not in effect.
-	// For v1.0.36.06: The following should be a 99% reliable indicator that current layout has an AltGr key.
-	// But is there a better way?  Maybe could use IOCTL to query the keyboard driver's AltGr flag whenever
-	// the main event loop receives WM_INPUTLANGCHANGEREQUEST.  Making such a thing work on both Win9x and
-	// NT/2000/XP might be an issue.
-	bool requires_altgr;
-	if (requires_altgr = ((keyscan_modifiers & 0x06) == 0x06)) // This character requires both CTRL and ALT (and possibly SHIFT, since I think Shift+AltGr combinations exist).
-		g_LayoutHasAltGr = true; // Done just in case DiscoverAltGr() was never called, which can happen if user switches languages while a MsgBox or other dialog is foremost.
-
 	// The win docs for VkKeyScan() are a bit confusing, referring to flag "bits" when it should really
 	// say flag "values".  In addition, it seems that these flag values are incompatible with
 	// MOD_ALT, MOD_SHIFT, and MOD_CONTROL, so they must be translated:
@@ -3588,7 +3707,7 @@ vk_type CharToVKAndModifiers(char aChar, modLR_type *pModifiersLR)
 		// Best not to reset this value because some callers want to retain what was in it before,
 		// merely merging these new values into it:
 		//*pModifiers = 0;
-		if (requires_altgr && g_os.IsWin2000orLater())
+		if ((keyscan_modifiers & 0x06) == 0x06 && g_os.IsWin2000orLater()) // 0x06 means "requires/includes AltGr".
 		{
 			// v1.0.35: The critical difference below is right vs. left ALT.  Must not include MOD_LCONTROL
 			// because simulating the RAlt keystroke on these keyboard layouts will automatically

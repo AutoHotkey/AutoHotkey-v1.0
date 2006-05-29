@@ -1561,8 +1561,9 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 			// number key combinations.
 			BYTE state[256] = {0};
 			state[VK_SHIFT] |= 0x80; // Indicate that the neutral shift key is down for conversion purposes.
-			int count = ToAscii(g_input.EndingVK, vk_to_sc(g_input.EndingVK), (PBYTE)&state
-				, (LPWORD)(key_name + 7), g_MenuIsVisible ? 1 : 0);
+			Get_active_window_keybd_layout // Defines the variable active_window_keybd_layout for use below.
+			int count = ToAsciiEx(g_input.EndingVK, vk_to_sc(g_input.EndingVK), (PBYTE)&state // Nothing is done about ToAsciiEx's dead key side-effects here because it seems to rare to be worth it (assuming its even a problem).
+				, (LPWORD)(key_name + 7), g_MenuIsVisible ? 1 : 0, active_window_keybd_layout); // v1.0.44.03: Changed to call ToAsciiEx() so that active window's layout can be specified (see hook.cpp for details).
 			*(key_name + 7 + count) = '\0';  // Terminate the string.
 		}
 		else
@@ -4308,6 +4309,15 @@ ResultType Line::ImageSearch(int aLeft, int aTop, int aRight, int aBottom, char 
 			image_pixel[i] &= 0x00F8F8F8;  // Same.
 	}
 
+	// v1.0.44.03: The below is now done even for variation>0 mode so its results are consistent with those of
+	// non-variation mode.  This is relied upon by variation=0 mode but now also by the following line in the
+	// variation>0 section:
+	//     || image_pixel[j] == trans_color
+	// Without this change, there are cases where variation=0 would find a match but a higher variation
+	// (for the same search) wouldn't. 
+	for (i = 0; i < image_pixel_count; ++i)
+		image_pixel[i] &= 0x00FFFFFF;
+
 	// Search the specified region for the first occurrence of the image:
 	if (aVariation < 1) // Caller wants an exact match.
 	{
@@ -4324,8 +4334,6 @@ ResultType Line::ImageSearch(int aLeft, int aTop, int aRight, int aBottom, char 
 		// order byte were also subject to the same shades-of-variation analysis as the other three bytes [RGB]).
 		for (i = 0; i < screen_pixel_count; ++i)
 			screen_pixel[i] &= 0x00FFFFFF;
-		for (i = 0; i < image_pixel_count; ++i)
-			image_pixel[i] &= 0x00FFFFFF;
 
 		for (i = 0; i < screen_pixel_count; ++i)
 		{
@@ -4428,7 +4436,7 @@ ResultType Line::ImageSearch(int aLeft, int aTop, int aRight, int aBottom, char 
 						&& green >= green_low && green <= green_high
                         && blue >= blue_low && blue <= blue_high
 							|| image_mask && image_mask[j]     // Or: It's an icon's transparent pixel, which matches any color.
-							|| image_pixel[j] == trans_color)) // This should be okay even if trans_color==CLR_NONE, since CLR none should never occur naturally in the image.
+							|| image_pixel[j] == trans_color)) // This should be okay even if trans_color==CLR_NONE, since CLR_NONE should never occur naturally in the image.
 						break; // At least one pixel doesn't match, so this candidate is discarded.
 					if (++x < image_width) // We're still within the same row of the image, so just move on to the next screen pixel.
 						++k;
@@ -4908,12 +4916,6 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		else if (g_script.mNextClipboardViewer)
 			SendMessageTimeout(g_script.mNextClipboardViewer, iMsg, wParam, lParam, SMTO_ABORTIFHUNG, 2000, &dwTemp);
 		return 0;
-
-	case WM_INPUTLANGCHANGE:
-		DiscoverAltGr();
-		if (!(wParam || lParam)) // This message is one that MsgSleep posted manually to us (see comments there for details).
-			return 0; // Don't pass it to DefWindowProc() because it lacks proper wParam/lParam.
-		break; // Currently never reached because apparently the system-sent messages are sent directly to the main window's edit control.  But in case it ever is, pass it on to DefWindowProc.
 
 	case AHK_RETURN_PID:
 		// This is obsolete in light of WinGet's support for fetching the PID of any window.
@@ -10356,6 +10358,12 @@ void BIF_VarSetCapacity(ExprTokenType &aResultToken, ExprTokenType *aParam[], in
 			if (aParamCount > 1) // Second parameter is present.
 			{
 				VarSizeType new_capacity = (VarSizeType)ExprTokenToInt64(*aParam[1]);
+				if (new_capacity == -1) // Since it's unsigned, compare directly to -1 rather than doing <0.
+				{
+					aResultToken.value_int64 = var.Length() = (VarSizeType)strlen(var.Contents());
+					return; // Seems more useful to report length vs. capacity in this special case. Scripts might be able to use this to boost performance.
+				}
+				// Since above didn't return:
 				if (new_capacity)
 				{
 					var.Assign(NULL, new_capacity, false, true, false); // This also destroys the variables contents.
@@ -10380,13 +10388,12 @@ void BIF_VarSetCapacity(ExprTokenType &aResultToken, ExprTokenType *aParam[], in
 				}
 				else // ALLOC_SIMPLE, due to its nature, will not actually be freed, which is documented.
 					var.Free();
-			}
+			} // if (aParamCount > 1)
 			//else the var is not altered; instead, the current capacity is reported, which seems more intuitive/useful than having it do a Free().
-			aResultToken.value_int64 = var.Capacity(); // Don't subtract 1 here in lieu doing it below (avoids underflow).
-			if (aResultToken.value_int64)
+			if (aResultToken.value_int64 = var.Capacity()) // Don't subtract 1 here in lieu doing it below (avoids underflow).
 				--aResultToken.value_int64; // Omit the room for the zero terminator since script capacity is defined as length vs. size.
-		}
-	}
+		} // var.Type() == VAR_NORMAL
+	} // (aParam[0]->symbol == SYM_VAR)
 }
 
 
@@ -10403,15 +10410,22 @@ void BIF_FileExist(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 		// Yield the attributes of the first matching file.  If not match, yield an empty string.
 		// This relies upon the fact that a file's attributes are never legitimately zero, which
 		// seems true but in case it ever isn't, this forces a non-empty string be used.
-		if (!attr) // Seems impossible, but the use of 0xFFFFFFFF vs. 0 as "invalid" indicates otherwise.
+		// UPDATE for v1.0.44.03: Someone reported that an existing file (created by NTbackup.exe) can
+		// apparently have undefined/invalid attributes (i.e. attributes that have no matching letter in
+		// "RASHNDOCT").  Although this is unconfirmed, it's easy to handle that possibility here by
+		// checking for a blank string.  This allows FileExist() to report boolean TRUE rather than FALSE
+		// for such "mystery files":
+		FileAttribToStr(aResultToken.marker, attr);
+		if (!*aResultToken.marker) // See above.
 		{
-			// File exists but has no attributes!  Use a placeholder so that any expression will
-			// see the result as "true" (i.e. because the file does exist):
-			aResultToken.marker[0] = 'X'; // Some arbirary letter so that it's seen as "true"; letter mustn't be reserved by RASHNDOCT.
+			// The attributes might be all 0, but more likely the file has some of the newer attributes
+			// such as FILE_ATTRIBUTE_ENCRYPTED (or has undefined attributs).  So rather than storing attr as
+			// a hex number (which could be zero and thus defeat FileExist's ability to detect the file), it
+			// seems better to store some arbirary letter (other than those in "RASHNDOCT") so that FileExist's
+			// return value is seen as boolean "true".
+			aResultToken.marker[0] = 'X';
 			aResultToken.marker[1] = '\0';
 		}
-		else
-			FileAttribToStr(aResultToken.marker, attr);
 	}
 	else // Empty string is the indicator of "not found" (seems more consistent than using an integer 0, since caller might rely on it being SYM_STRING).
 		*aResultToken.marker = '\0';

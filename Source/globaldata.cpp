@@ -49,7 +49,6 @@ WORD g_mouse_buttons_logical = 0;
 // not retrieve the physical state of a key.  Note that this array is sometimes used in a way that
 // requires its format to be the same as that returned from GetKeyboardState():
 BYTE g_PhysicalKeyState[VK_ARRAY_COUNT] = {0};
-bool g_LayoutHasAltGr = false; // Seems safer to assume false upon startup and have all other detect geared toward proving this assumption wrong.
 bool g_BlockWinKeys = false;
 DWORD g_HookReceiptOfLControlMeansAltGr = 0; // In these cases, zero is used as a false value, any others are true.
 DWORD g_IgnoreNextLControlDown = 0;          //

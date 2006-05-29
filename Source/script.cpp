@@ -1038,7 +1038,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 	ULONG nDataSize = 0;
 
 	// <buf> should be no larger than LINE_SIZE because some later functions rely upon that:
-	char buf1[LINE_SIZE], buf2[LINE_SIZE], suffix[16], pending_function[LINE_SIZE] = "";
+	char msg_text[MAX_PATH + 256], buf1[LINE_SIZE], buf2[LINE_SIZE], suffix[16], pending_function[LINE_SIZE] = "";
 	char *buf = buf1, *next_buf = buf2; // Oscillate between bufs to improve performance (avoids memcpy from buf2 to buf1).
 	size_t buf_length, next_buf_length, suffix_length;
 	bool pending_function_has_brace;
@@ -1050,7 +1050,6 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 	{
 		if (aIgnoreLoadFailure)
 			return OK;
-		char msg_text[MAX_PATH + 256];
 		snprintf(msg_text, sizeof(msg_text), "%s file \"%s\" cannot be opened."
 			, Line::nSourceFiles > 0 ? "#Include" : "Script", aFileSpec);
 		MsgBox(msg_text);
@@ -1652,14 +1651,14 @@ examine_line:
 			{
 				// v1.0.40: It appears to be a hotkey, but validate it as such before committing to processing
 				// it as a hotkey.  If it fails validation as a hotkey, treat it as a command that just happens
-				// to contain a double colon somewhere.  This avoids the need to escape double colons in scripts.
+				// to contain a double-colon somewhere.  This avoids the need to escape double colons in scripts.
 				// Note: Hotstrings can't suffer from this type of ambiguity because a leading colon or pair of
 				// colons makes them easier to detect.
 				cp = omit_trailing_whitespace(buf, hotkey_flag); // For maintainability.
 				orig_char = *cp;
 				*cp = '\0'; // Temporarily terminate.
 				if (!Hotkey::TextInterpret(omit_leading_whitespace(buf), NULL, false)) // Passing NULL calls it in validate-only mode.
-					hotkey_flag = NULL; // It's not a valid hotkey, so indicate that it's a command instead.
+					hotkey_flag = NULL; // It's not a valid hotkey, so indicate that it's a command (i.e. one that contains a literal double-colon, which avoids the need to escape the double-colon).
 				*cp = orig_char; // Undo the temp. termination above.
 			}
 		}
@@ -1768,18 +1767,24 @@ examine_line:
 			// Update: Below must check if there are any true hotkey labels, not just regular labels.
 			// Otherwise, a normal (non-hotkey) label in the autoexecute section would count and
 			// thus the RETURN would never be added here, even though it should be:
-			if (mNoHotkeyLabels)
-			{
-				mNoHotkeyLabels = false;
-				// Fix for v1.0.34: Don't point labels to this particular RETURN so that labels
-				// can point to the very first hotkey or hotstring in a script.  For example:
-				// Goto Test
-				// Test:
-				// ^!z::ToolTip Without the fix`, this is never displayed by "Goto Test".
-				if (!AddLine(ACT_RETURN, NULL, UCHAR_MAX)) // UCHAR_MAX signals it not to point any pending labels to this RETURN.
-					return CloseAndReturn(fp, script_buf, FAIL);
-				mCurrLine = NULL;  // To signify that we're in transition, trying to load a new one.
+			
+			// Notes about the below macro:
+			// Fix for v1.0.34: Don't point labels to this particular RETURN so that labels
+			// can point to the very first hotkey or hotstring in a script.  For example:
+			// Goto Test
+			// Test:
+			// ^!z::ToolTip Without the fix`, this is never displayed by "Goto Test".
+			// UCHAR_MAX signals it not to point any pending labels to this RETURN.
+			// mCurrLine = NULL -> signifies that we're in transition, trying to load a new one.
+			#define CHECK_mNoHotkeyLabels \
+			if (mNoHotkeyLabels)\
+			{\
+				mNoHotkeyLabels = false;\
+				if (!AddLine(ACT_RETURN, NULL, UCHAR_MAX))\
+					return CloseAndReturn(fp, script_buf, FAIL);\
+				mCurrLine = NULL;\
 			}
+			CHECK_mNoHotkeyLabels
 			// For hotstrings, the below makes the label include leading colon(s) and the full option
 			// string (if any) so that the uniqueness of labels is preserved.  For example, we want
 			// the following two hotstring labels to be unique rather than considered duplicates:
@@ -1871,6 +1876,20 @@ examine_line:
 			{
 				ScriptError(ERR_UNRECOGNIZED_ACTION, buf);
 				return CloseAndReturn(fp, script_buf, FAIL);
+			}
+			// Otherwise buf_length>1, so it's safe to check for double-colon:
+			// v1.0.44.03: Don't allow anything that ends in "::" (other than a line consisting only
+			// of "::") to be a normal label.  Assume it's a command instead (if it actually isn't, a
+			// later stage will report it as "invalid hotkey"). This change avoids the situation in
+			// which a hotkey like ^!ä:: is seen as invalid because the current keyboard layout doesn't
+			// have a "ä" key. Without this change, if such a hotkey appears at the top of the script,
+			// its subroutine would execute immediately as a normal label, which would be especially
+			// bad if the hotkey were something like the "Shutdown" command.
+			if (buf[buf_length - 2] == ':' && buf_length > 2) // i.e. allow "::" as a normal label, but consider anything else with double-colon to be a failed-hotkey label that terminates the auto-exec section.
+			{
+				CHECK_mNoHotkeyLabels // Terminate the auto-execute section since this is a failed hotkey vs. a mere normal label.
+				snprintf(msg_text, sizeof(msg_text), "Note: The hotkey %s will not be active because it does not exist in the current keyboard layout.", buf);
+				MsgBox(msg_text);
 			}
 			// Labels (except hotkeys) must contain no whitespace, delimiters, or escape-chars.
 			// This is to avoid problems where a legitimate action-line ends in a colon,
@@ -5569,12 +5588,14 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 		break;
 
 	case ACT_GETKEYSTATE:
-		if (aArgc > 1 && !line.ArgHasDeref(2) && !TextToVK(new_raw_arg2) && !ConvertJoy(new_raw_arg2))
+		// v1.0.44.03: Don't validate single-character key names because although a character like ü might have no
+		// matching VK in system's default layout, that layout could change to something which does have a VK for it.
+		if (aArgc > 1 && !line.ArgHasDeref(2) && strlen(new_raw_arg2) > 1 && !TextToVK(new_raw_arg2) && !ConvertJoy(new_raw_arg2))
 			return ScriptError(ERR_INVALID_KEY_OR_BUTTON, new_raw_arg2);
 		break;
 
-	case ACT_KEYWAIT:
-		if (aArgc > 0 && !line.ArgHasDeref(1) && !TextToVK(new_raw_arg1) && !ConvertJoy(new_raw_arg1))
+	case ACT_KEYWAIT: // v1.0.44.03: See comment above.
+		if (aArgc > 0 && !line.ArgHasDeref(1) && strlen(new_raw_arg1) > 1 && !TextToVK(new_raw_arg1) && !ConvertJoy(new_raw_arg1))
 			return ScriptError(ERR_INVALID_KEY_OR_BUTTON, new_raw_arg1);
 		break;
 

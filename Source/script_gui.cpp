@@ -1098,6 +1098,7 @@ ResultType Line::GuiControlGet(char *aCommand, char *aControlID, char *aParam3)
 			return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
 		char focused_control[WINDOW_CLASS_SIZE];
 		if (guicontrolget_cmd == GUICONTROLGET_CMD_FOCUSV) // v1.0.43.06.
+			// GUI_HWND_TO_INDEX vs FindControl() is enough because FindControl() was alraedy called above:
 			g_script.GetGuiControl(window_index, GUI_HWND_TO_INDEX(pcontrol->hwnd), focused_control);
 		else // GUICONTROLGET_CMD_FOCUS (ClassNN mode)
 		{
@@ -1838,6 +1839,8 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 
 	// The below will yield NULL for GUI_CONTROL_STATUSBAR because control.tab_control_index==OutOfBounds for it.
 	GuiControlType *owning_tab_control = FindTabControl(control.tab_control_index); // For use in various places.
+	GuiControlType control_temp; // Contents are unused (left uninitialized for performance and to help catch bugs).
+	GuiControlType &prev_control = mControlCount ? mControl[mControlCount - 1] : control_temp; // For code size reduction, performance, and maintainability.
 
 	////////////////////////////////////////////////////////////////////////////////////////////
 	// Automatically set the control's position in the client area if no position was specified.
@@ -1861,7 +1864,10 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			opt.x = mPrevX;
 			opt.y = mPrevY + mPrevHeight + mMarginY;  // Don't use mMaxExtentDown in this is a new column.
 		}
-		if (aControlType == GUI_CONTROL_TEXT && mControlCount && mControl[mControlCount - 1].type == GUI_CONTROL_TEXT)
+		if (aControlType == GUI_CONTROL_TEXT && mControlCount // This is a text control and there is a previous control before it.
+			&& prev_control.type == GUI_CONTROL_TEXT
+			&& prev_control.tab_control_index == control.tab_control_index  // v1.0.44.03: Don't do the adjustment if
+			&& prev_control.tab_index == control.tab_index)                 // it's on another page or in another tab control.
 			// Since this text control is being auto-positioned immediately below another, provide extra
 			// margin space so that any edit control, dropdownlist, or other "tall input" control later added
 			// to its right in "vertical progression" mode will line up with it.
@@ -3008,7 +3014,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 
 		// v1.0.44: Don't allow buddying of UpDown to StatusBar (this must be done prior to the next section).
 		// UPDATE: Due to rarity and user-should-know-better, this is not checked for (to reduce code size):
-		//if (mControlCount && mControl[mControlCount - 1].type == GUI_CONTROL_STATUSBAR)
+		//if (mControlCount && prev_control.type == GUI_CONTROL_STATUSBAR)
 		//	style &= ~UDS_AUTOBUDDY;
 		// v1.0.42.02: The below is a fix for tab controls that contain a ListView so that up-downs in the
 		// tab control don't snap onto the tab control (due to the z-order change done by the ListView creation
@@ -3028,7 +3034,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			, opt.x, opt.y, opt.width, opt.height, mHwnd, control_id, g_hInstance, NULL))
 		{
 			if (provide_buddy_manually) // v1.0.42.02 (see comment where provide_buddy_manually is initialized).
-				SendMessage(control.hwnd, UDM_SETBUDDY, (WPARAM)mControl[mControlCount - 1].hwnd, 0); // See StatusBar notes above.  Also, mControlCount>0 whenever provide_buddy_manually==true.
+				SendMessage(control.hwnd, UDM_SETBUDDY, (WPARAM)prev_control.hwnd, 0); // See StatusBar notes above.  Also, mControlCount>0 whenever provide_buddy_manually==true.
 			if (   mControlCount // Ensure there is a previous control to snap onto (below relies on this check).
 				&& ((style & UDS_AUTOBUDDY) || provide_buddy_manually)   )
 			{
@@ -3042,7 +3048,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 				opt.height = rect.bottom - rect.top;
 				// Get its buddy's rectangle for use in two places:
 				RECT buddy_rect;
-				GetWindowRect(mControl[mControlCount - 1].hwnd, &buddy_rect);
+				GetWindowRect(prev_control.hwnd, &buddy_rect);
 				MapWindowPoints(NULL, mHwnd, (LPPOINT)&buddy_rect, 2); // Convert rect to client coordinates (not the same as GetClientRect()).
 				// Note: It does not matter if UDS_HORZ is in effect because strangely, the up-down still
 				// winds up on the left or right side of the buddy, not the top/bottom.
@@ -3063,7 +3069,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 					// Enlarge the buddy control to restore it to the size it had prior to being reduced by the
 					// buddying process:
 					buddy_rect.right += opt.width; // Must be updated for use in two places.
-					MoveWindow(mControl[mControlCount - 1].hwnd, buddy_rect.left, buddy_rect.top
+					MoveWindow(prev_control.hwnd, buddy_rect.left, buddy_rect.top
 						, buddy_rect.right - buddy_rect.left, buddy_rect.bottom - buddy_rect.top, TRUE);
 				}
 				// Set x/y and width/height to be that of combined/buddied control so that auto-positioning
@@ -3080,7 +3086,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 					opt.width = buddy_rect.right - rect.left;
 					//and opt.x set to the x position of the up-down, since it's on the leftmost side.
 				// Leave opt.y and opt.height as-is.
-				if (!opt.range_changed && mControl[mControlCount - 1].type == GUI_CONTROL_LISTBOX)
+				if (!opt.range_changed && prev_control.type == GUI_CONTROL_LISTBOX)
 				{
 					// ListBox buddy needs an inverted UpDown (if the UpDown is vertical) to work the way
 					// you'd expect.
@@ -7399,6 +7405,8 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 					clicked_hwnd = pah.hwnd_found; // Okay if NULL; the next stage will handle it.
 				}
 			}
+			// Finding control_index requires only GUI_HWND_TO_INDEX (not FindControl) since context menu message
+			// never arrives for a ComboBox's Edit control (since that control has its own context menu).
 			control_index = GUI_HWND_TO_INDEX(clicked_hwnd); // Yields a small negative value on failure, which due to unsigned is seen as a large positive number.
 			if (control_index >= pgui->mControlCount) // The user probably clicked the parent window rather than inside one of its controls.
 				control_index = NO_CONTROL_INDEX;
@@ -7433,6 +7441,8 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 		// Look up the control in case the drop occurred in a child of a child, such as the edit portion
 		// of a ComboBox (FindControl will take that into account):
 		pcontrol = pah.hwnd_found ? pgui->FindControl(pah.hwnd_found) : NULL;
+		// Finding control_index requires only GUI_HWND_TO_INDEX (not FindControl) since EnumChildFindPoint (above)
+		// already properly resolves the Edit control of a ComboBox to be the ComboBox itself.
 		control_index = pcontrol ? GUI_HWND_TO_INDEX(pcontrol->hwnd) : NO_CONTROL_INDEX;
 		// Above: NO_CONTROL_INDEX indicates to GetGuiControl() that there is no control in this case.
 		POST_AHK_GUI_ACTION(hWnd, control_index, GUI_EVENT_DROPFILES, NO_EVENT_INFO); // The HDROP is not passed via message so that it can be released (via the destructor) if the program closes during the drop operation.

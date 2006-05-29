@@ -157,7 +157,7 @@ ResultType WinGroup::Activate(bool aStartWithMostRecent, WindowSpec *aWinSpec, v
 		return FAIL;  // It already displayed the error for us.
 	WindowSpec *win, *win_to_activate_next = aWinSpec;
 	bool group_is_active = false; // Set default.
-	HWND activate_win, fore_hwnd = GetForegroundWindow(); // This value is used in more than one place.
+	HWND activate_win, active_window = GetForegroundWindow(); // This value is used in more than one place.
 	if (win_to_activate_next)
 	{
 		// The caller told us which WindowSpec to start off trying to activate.
@@ -165,10 +165,10 @@ ResultType WinGroup::Activate(bool aStartWithMostRecent, WindowSpec *aWinSpec, v
 		// marking it as visited, because we want to stay on this window under
 		// the assumption that it was newly revealed due to a window on top
 		// of it having just been closed:
-		if (win_to_activate_next == IsMember(fore_hwnd, g))
+		if (win_to_activate_next == IsMember(active_window, g))
 		{
 			group_is_active = true;
-			MarkAsVisited(fore_hwnd);
+			MarkAsVisited(active_window);
 			return OK;
 		}
 		// else don't mark as visited even if it's a member of the group because
@@ -178,7 +178,7 @@ ResultType WinGroup::Activate(bool aStartWithMostRecent, WindowSpec *aWinSpec, v
 	}
 	else // Caller didn't tell us which, so determine it.
 	{
-		if (win_to_activate_next = IsMember(fore_hwnd, g)) // Foreground window is a member of this group.
+		if (win_to_activate_next = IsMember(active_window, g)) // Foreground window is a member of this group.
 		{
 			// Set it to activate this same WindowSpec again in case there's
 			// more than one that matches (e.g. multiple notepads).  But first,
@@ -193,7 +193,7 @@ ResultType WinGroup::Activate(bool aStartWithMostRecent, WindowSpec *aWinSpec, v
 			// situations in which that might otherwise happen:
 			//if (!sAlreadyVisitedCount)
 			group_is_active = true;
-			MarkAsVisited(fore_hwnd);
+			MarkAsVisited(active_window);
 		}
 		else // It's not a member.
 		{
@@ -274,7 +274,7 @@ ResultType WinGroup::Activate(bool aStartWithMostRecent, WindowSpec *aWinSpec, v
 			{
 				// Mark the foreground window as visited so that it won't be
 				// mistakenly activated again by the next iteration:
-				MarkAsVisited(fore_hwnd);
+				MarkAsVisited(active_window);
 				retry_is_in_effect = true;
 				// Now continue with the next iteration of the loop so that it
 				// will activate a different instance of this WindowSpec rather
@@ -297,8 +297,8 @@ ResultType WinGroup::Deactivate(bool aStartWithMostRecent)
 	if (!Update(false)) // Update our private member vars.
 		return FAIL;  // It already displayed the error for us.
 
-	HWND fore_hwnd = GetForegroundWindow();
-	if (IsMember(fore_hwnd, g))
+	HWND active_window = GetForegroundWindow();
+	if (IsMember(active_window, g))
 		sAlreadyVisitedCount = 0;
 
 	// Activate the next unvisited non-member:
@@ -345,7 +345,7 @@ ResultType WinGroup::Deactivate(bool aStartWithMostRecent)
 				// "something" that we can do.  And in this case there is: we can start
 				// over again through the list, excluding the foreground window (which
 				// the user has already had a chance to review):
-				MarkAsVisited(fore_hwnd);
+				MarkAsVisited(active_window);
 				// Make a recursive call to self.  This can't result in an infinite
 				// recursion (stack fault) because the called layer will only
 				// recurse a second time if sAlreadyVisitedCount > 1, which is

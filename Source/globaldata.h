@@ -44,7 +44,6 @@ extern WORD g_mouse_buttons_logical; // A bitwise combination of MK_LBUTTON, etc
 #define STATE_DOWN 0x80
 #define STATE_ON 0x01
 extern BYTE g_PhysicalKeyState[VK_ARRAY_COUNT];
-extern bool g_LayoutHasAltGr;
 extern bool g_BlockWinKeys;
 extern DWORD g_HookReceiptOfLControlMeansAltGr;
 extern DWORD g_IgnoreNextLControlDown;

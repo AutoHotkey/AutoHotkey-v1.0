@@ -168,6 +168,12 @@ typedef UCHAR modLR_type; // Only the left-right win/alt/ctrl/shift rather than 
 #define MOD_RWIN 0x80
 
 
+struct CachedLayoutType
+{
+	HKL hkl;
+	ResultType has_altgr;
+};
+
 struct key_to_vk_type // Map key names to virtual keys.
 {
 	char *key_name;
@@ -302,14 +308,18 @@ modLR_type ConvertModifiers(mod_type aModifiers);
 mod_type ConvertModifiersLR(modLR_type aModifiersLR);
 char *ModifiersLRToText(modLR_type aModifiersLR, char *aBuf);
 
+#define LAYOUT_UNDETERMINED FAIL
+bool ActiveWindowLayoutHasAltGr();
+ResultType LayoutHasAltGr(HKL aLayout, ResultType aHasAltGr = LAYOUT_UNDETERMINED);
+
 //---------------------------------------------------------------------
 
 char *SCtoKeyName(sc_type aSC, char *aBuf, int aBufSize);
 char *VKtoKeyName(vk_type aVK, sc_type aSC, char *aBuf, int aBufSize);
 sc_type TextToSC(char *aText);
 vk_type TextToVK(char *aText, modLR_type *pModifiersLR = NULL, bool aExcludeThoseHandledByScanCode = false
-	, bool aAllowExplicitVK = true);
-vk_type CharToVKAndModifiers(char aChar, modLR_type *pModifiersLR);
+	, bool aAllowExplicitVK = true, HKL aKeybdLayout = GetKeyboardLayout(0));
+vk_type CharToVKAndModifiers(char aChar, modLR_type *pModifiersLR, HKL aKeybdLayout);
 vk_type TextToSpecial(char *aText, UINT aTextLength, KeyEventTypes &aEventTypem, modLR_type &aModifiersLR
 	, bool aUpdatePersistent);
 

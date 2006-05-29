@@ -1375,8 +1375,8 @@ void WindowToScreen(int &aX, int &aY)
 // screen coordinates based on the position of the active window upper-left corner (not its client area).
 {
 	RECT rect;
-	HWND fore_hwnd = GetForegroundWindow();
-	if (fore_hwnd && !IsIconic(fore_hwnd) && GetWindowRect(fore_hwnd, &rect))
+	HWND active_window = GetForegroundWindow();
+	if (active_window && !IsIconic(active_window) && GetWindowRect(active_window, &rect))
 	{
 		aX += rect.left;
 		aY += rect.top;

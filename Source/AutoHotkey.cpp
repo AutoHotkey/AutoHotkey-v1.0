@@ -226,10 +226,6 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 
 	// At this point, it is nearly certain that the script will be executed.
 
-	// v1.0.43: Added DiscoverAltGr(), which is a very fast call. It's called upon startup for
-	// simplicity and reliability, especially since the expected prevalence of the SendPlay/Input
-	// methods provide fewer opportunities for the keyboard hook to detect AltGr.
-	DiscoverAltGr();
 	if (g_MaxHistoryKeys && (g_KeyHistory = (KeyHistoryItem *)malloc(g_MaxHistoryKeys * sizeof(KeyHistoryItem))))
 		ZeroMemory(g_KeyHistory, g_MaxHistoryKeys * sizeof(KeyHistoryItem)); // Must be zeroed.
 	//else leave it NULL as it was initialized in globaldata.

@@ -1297,24 +1297,6 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 			// the edit window:
 			break;
 
-		case WM_INPUTLANGCHANGEREQUEST:
-			// WM_INPUTLANGCHANGE does not appear to be received.  In fact, not even MainWindowProc
-			// receives it nor WM_INPUTLANGCHANGEREQUEST when the user presses the language-change
-			// hotkey while the script's main window is active.  Perhaps this is because the msg
-			// (WM_INPUTLANGCHANGE at least) is sent directly to the Window Proc of the Edit control
-			// in the main window. By contrast, MSDN says:
-			// "[WM_INPUTLANGCHANGE] is posted, not sent, to the application, so the return value is ignored."
-			// In addition, although WM_INPUTLANGCHANGEREQUEST is dispatched via DispatchMessage(),
-			// MainWindowProc() apparently never receives it (once again, this is because msg.hwnd is that
-			// of the main window's Edit control rather than the main window itself).
-			//
-			// Use Post vs. Send because we need to acknowledge this message before processing the
-			// language change; otherwise, AltGr detection will see the OLD language rather than the
-			// new one.  Also, Post to a window, not NULL, in case a create-new-thread message is in our
-			// queue and it launches a thread that displays a MsgBox (which would then discard our message).
-			PostMessage(g_hWnd, WM_INPUTLANGCHANGE, 0, 0); // Receiver of msg must be aware that both parameters are zero rather than their more standard values.
-			break; // MSDN says, "to accept the change, the application should pass the message to DefWindowProc."
-
 		case WM_QUIT:
 			// The app normally terminates before WM_QUIT is ever seen here because of the way
 			// WM_CLOSE is handled by MainWindowProc().  However, this is kept here in case anything
@@ -1706,7 +1688,7 @@ bool MsgMonitor(HWND aWnd, UINT aMsg, WPARAM awParam, LPARAM alParam, MSG *apMsg
 		{
 			g.GuiWindowIndex = pgui->mWindowIndex;  // Update the built-in variable A_GUI.
 			g.GuiDefaultWindowIndex = pgui->mWindowIndex; // Consider this a GUI thread; so it defaults to operating upon its own window.
-			GuiIndexType control_index = GUI_HWND_TO_INDEX(aWnd); // Retrieves a small negative on failure, which will be out of bounds when converted to unsigned.
+			GuiIndexType control_index = (GuiIndexType)(size_t)pgui->FindControl(aWnd, true); // v1.0.44.03: Call FindControl() vs. GUI_HWND_TO_INDEX so that a combobox's edit control is properly resolved to the combobox itself.
 			if (control_index < pgui->mControlCount) // Match found (relies on unsigned for out-of-bounds detection).
 				g.GuiControlIndex = control_index;
 			//else leave it at its default, which was set when the new thread was initialized.
@@ -2010,30 +1992,4 @@ VOID CALLBACK InputTimeout(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
 {
 	KILL_INPUT_TIMER
 	g_input.status = INPUT_TIMED_OUT;
-}
-
-
-
-void DiscoverAltGr()
-{
-	int i; // Use an int vs. char as the index to avoid overflow on final character.
-	SHORT s;
-	// This detection is probably not 100% reliable because there may be some layouts (especially custom ones)
-	// that have an AltGr key yet none of its characters actually require AltGr to manifest.  A more reliable
-	// way to detect AltGr would be to simulate an RALT keystroke (maybe only an up event, not a down) and have
-	// a keyboard hook catch and block it.  If the layout has altgr, the hook would see a driver-generated LCtrl
-	// keystroke immediately prior to RAlt.
-	// Performance: This loop is quite fast.  Calling DiscoverAltGr() 1000 times only takes about 160ms on
-	// a 2gHz system (0.16ms per call).
-	for (g_LayoutHasAltGr = false, i = 32; i < 256; ++i) // Include Spacebar up through final ANSI character (i.e. include 255 but not 256).
-	{
-		s = VkKeyScan((char)i);
-		// Check for presence of Ctrl+Alt but allow other modifiers like Shift to be present because
-		// I believe there are some layouts that manifest characters via Shift+AltGr.
-		if (s != -1 && (s & 0x600) == 0x600) // In this context, Ctrl+Alt means AltGr.
-		{
-			g_LayoutHasAltGr = true;
-			break;
-		}
-	}
 }

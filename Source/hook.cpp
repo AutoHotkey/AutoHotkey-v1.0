@@ -216,7 +216,7 @@ LRESULT CALLBACK LowLevelKeybdProc(int aCode, WPARAM wParam, LPARAM lParam)
 	if (vk == VK_LCONTROL)
 	{
 		// The following helps hasten AltGr detection after script startup.  It's kept to supplement
-		// DiscoverAltGr() because that function isn't 100% reliable for the reasons described there.
+		// LayoutHasAltGr() because that function isn't 100% reliable for the reasons described there.
 		// It shouldn't be necessary to check what type of LControl event (up or down) is received, since
 		// it should be impossible for any unrelated keystrokes to be received while g_HookReceiptOfLControlMeansAltGr
 		// is true.  This is because all unrelated keystrokes stay buffered until the main thread calls GetMessage().
@@ -235,8 +235,9 @@ LRESULT CALLBACK LowLevelKeybdProc(int aCode, WPARAM wParam, LPARAM lParam)
 			// But don't reset g_HookReceiptOfLControlMeansAltGr here to avoid timing problems where the hook
 			// is installed at a time when g_HookReceiptOfLControlMeansAltGr is wrongly true because the
 			// inactive hook never made it false.  Let KeyEvent() do that.
-			g_LayoutHasAltGr = true;
-			// The following must be done; otherwise, if g_LayoutHasAltGr hasn't yet been autodetected by the
+			Get_active_window_keybd_layout // Defines the variable active_window_keybd_layout for use below.
+			LayoutHasAltGr(active_window_keybd_layout, CONDITION_TRUE);
+			// The following must be done; otherwise, if LayoutHasAltGr hasn't yet been autodetected by the
 			// time the first AltGr keystroke comes through, that keystroke would cause LControl to get stuck down
 			// as seen in g_modifiersLR_physical.
 			event.flags |= LLKHF_INJECTED; // Flag it as artificial for any other instances of the hook that may be running.
@@ -1661,7 +1662,7 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 			// the keyboard hook to be installed.  This determination is made during the hotkey loading stage.
 			KeyEvent(KEYDOWNANDUP, VK_CONTROL);
 	}
-	else if ((g_modifiersLR_logical & MOD_RALT) && !g_LayoutHasAltGr && !kvk[VK_RMENU].used_as_prefix) // If RAlt==AltGr, it should never need disguising.
+	else if ((g_modifiersLR_logical & MOD_RALT) && !kvk[VK_RMENU].used_as_prefix && !ActiveWindowLayoutHasAltGr()) // If RAlt==AltGr, it should never need disguising.
 	{
 		// The two else if's above: If it's used as a prefix, there's no need (and it would probably break something)
 		// to disguise the key this way since the prefix-handling logic already does that whenever necessary.
@@ -2301,9 +2302,8 @@ LRESULT AllowIt(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lParam, cons
 				sAltTabMenuIsVisible = false;
 
 			bool vk_is_win = aVK == VK_LWIN || aVK == VK_RWIN;
-			if (aDisguiseWinAlt && aKeyUp && (vk_is_win || aVK == VK_LMENU
-				|| (aVK == VK_RMENU && !g_LayoutHasAltGr) // AltGr should never need disguising, and avoiding it may help avoid unwanted side-effects.
-				|| aVK == VK_MENU))
+			if (aDisguiseWinAlt && aKeyUp && (vk_is_win || aVK == VK_MENU || aVK == VK_LMENU
+				|| aVK == VK_RMENU && !ActiveWindowLayoutHasAltGr())) // AltGr should never need disguising, and avoiding it may help avoid unwanted side-effects.
 			{
 				// I think the best way to do this is to suppress the given key-event and substitute
 				// some new events to replace it.  This is because otherwise we would probably have to
@@ -2473,7 +2473,7 @@ bool CollectInput(KBDLLHOOKSTRUCT &aEvent, const vk_type aVK, const sc_type aSC,
 		// Older comment: If any modifiers except SHIFT are physically down, don't transcribe the key since
 		// most users wouldn't want that.  An additional benefit of this policy is that registered hotkeys will
 		// normally be excluded from the input (except those rare ones that have only SHIFT as a modifier).
-		// Note that ToAscii() will translate ^i to a tab character, !i to plain i, and many other modified
+		// Note that ToAsciiEx() will translate ^i to a tab character, !i to plain i, and many other modified
 		// letters as just the plain letter key, which we don't want.
 		return treat_as_visible;
 
@@ -2502,24 +2502,25 @@ bool CollectInput(KBDLLHOOKSTRUCT &aEvent, const vk_type aVK, const sc_type aSC,
 		return treat_as_visible;
 	}
 
+
 	BYTE ch[3], key_state[256];
 	memcpy(key_state, g_PhysicalKeyState, 256);
 	// As of v1.0.25.10, the below fixes the Input command so that when it is capturing artificial input,
 	// such as from the Send command or a hotstring's replacement text, the captured input will reflect
 	// any modifiers that are logically but not physically down (or vice versa):
 	AdjustKeyState(key_state, g_modifiersLR_logical);
-	// Make the state of capslock accurate so that ToAscii() will return upper vs. lower if appropriate:
+	// Make the state of capslock accurate so that ToAsciiEx() will return upper vs. lower if appropriate:
 	if (IsKeyToggledOn(VK_CAPITAL))
 		key_state[VK_CAPITAL] |= STATE_ON;
 	else
 		key_state[VK_CAPITAL] &= ~STATE_ON;
 
-	// Use ToAsciiEx() vs. ToAscii() because there is evidence from Putty author that
-	// ToAsciiEx() works better with more keyboard layouts under 2k/XP than ToAscii()
-	// does (though if true, there is no MS explanation).
+	// Use ToAsciiEx() vs. ToAscii() because there is evidence from Putty author that ToAsciiEx() works better
+	// with more keyboard layouts under 2k/XP than ToAscii() does (though if true, there is no MSDN explanation). 
+	// UPDATE: In v1.0.44.03, need to use ToAsciiEx() anyway because of the adapt-to-active-window-layout feature.
+	Get_active_window_keybd_layout // Defines the variables active_window and active_window_keybd_layout for use below.
 	int byte_count = ToAsciiEx(aVK, aEvent.scanCode  // Uses the original scan code, not the adjusted "sc" one.
-		, key_state, (LPWORD)ch, g_MenuIsVisible ? 1 : 0
-		, GetKeyboardLayout(0)); // Fetch layout every time in case it changes while the program is running.
+		, key_state, (LPWORD)ch, g_MenuIsVisible ? 1 : 0, active_window_keybd_layout);
 	if (!byte_count) // No translation for this key.
 		return treat_as_visible;
 
@@ -2579,13 +2580,12 @@ bool CollectInput(KBDLLHOOKSTRUCT &aEvent, const vk_type aVK, const sc_type aSC,
 
 	if (do_monitor_hotstring)
 	{
-		HWND fore_hwnd = GetForegroundWindow();
-		if (fore_hwnd != g_HShwnd)
+		if (active_window != g_HShwnd)
 		{
 			// Since the buffer tends to correspond to the text to the left of the caret in the
 			// active window, if the active window changes, it seems best to reset the buffer
 			// to avoid misfires.
-			g_HShwnd = fore_hwnd;
+			g_HShwnd = active_window;
 			*g_HSBuf = '\0';
 			g_HSBufLength = 0;
 		}

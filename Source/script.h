@@ -108,8 +108,11 @@ enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
 #define GUI_INDEX_TO_ID(index) (index + CONTROL_ID_FIRST)
 #define GUI_ID_TO_INDEX(id) (id - CONTROL_ID_FIRST) // Returns a small negative if "id" is invalid, such as 0.
 #define GUI_HWND_TO_INDEX(hwnd) GUI_ID_TO_INDEX(GetDlgCtrlID(hwnd)) // Returns a small negative on failure (e.g. HWND not found).
-// Testing shows that GetDlgCtrlID() is much faster than looping through a GUI window's control
-// array to find a matching HWND.
+// Notes about above:
+// 1) Callers should call GuiType::FindControl() instead of GUI_HWND_TO_INDEX() if the hwnd might be a combobox's
+//    edit control.
+// 2) Testing shows that GetDlgCtrlID() is much faster than looping through a GUI window's control array to find
+//    a matching HWND.
 
 
 #define ERR_ABORT_NO_SPACES "The current thread will exit."
@@ -2111,18 +2114,21 @@ public:
 	}
 
 	GuiIndexType FindControl(char *aControlID);
-	GuiControlType *FindControl(HWND aHwnd)
+	GuiControlType *FindControl(HWND aHwnd, bool aRetrieveIndexInstead = false)
 	{
 		GuiIndexType index = GUI_HWND_TO_INDEX(aHwnd); // Retrieves a small negative on failure, which will be out of bounds when converted to unsigned.
-		if (index < mControlCount)
-			return &mControl[index];
-		// Otherwise: Since ComboBoxes (and possibly other future control types) have children, try looking
-		// up aHwnd's parent to see if its a known control of this dialog.  Some callers rely on us making
-		// this extra effort:
-		if (   !(aHwnd = GetParent(aHwnd))   )
-			return NULL;
-		index = GUI_HWND_TO_INDEX(aHwnd); // Retrieves a small negative on failure, which will be out of bounds when converted to unsigned.
-		return (index < mControlCount) ? &mControl[index] : NULL;
+		if (index >= mControlCount) // Not found yet; try again with parent.
+		{
+			// Since ComboBoxes (and possibly other future control types) have children, try looking
+			// up aHwnd's parent to see if its a known control of this dialog.  Some callers rely on us making
+			// this extra effort:
+			if (aHwnd = GetParent(aHwnd)) // Note that a ComboBox's drop-list (class ComboLBox) is apparently a direct child of the desktop, so this won't help us in that case.
+				index = GUI_HWND_TO_INDEX(aHwnd); // Retrieves a small negative on failure, which will be out of bounds when converted to unsigned.
+		}
+		if (index < mControlCount) // A match was found.
+			return aRetrieveIndexInstead ? (GuiControlType *)(size_t)index : mControl + index;
+		else // No match, so indicate failure.
+			return aRetrieveIndexInstead ? (GuiControlType *)NO_CONTROL_INDEX : NULL;
 	}
 	int FindGroup(GuiIndexType aControlIndex, GuiIndexType &aGroupStart, GuiIndexType &aGroupEnd);
 
