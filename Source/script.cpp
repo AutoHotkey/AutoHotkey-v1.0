@@ -1867,7 +1867,7 @@ examine_line:
 						return CloseAndReturn(fp, script_buf, FAIL); // It already displayed the error.
 			}
 			goto continue_main_loop; // In lieu of "continue", for performance.
-		}
+		} // if (is_label = ...)
 
 		// Otherwise, not a hotkey or hotstring.  Check if it's a generic, non-hotkey label:
 		if (buf[buf_length - 1] == ':') // Labels must end in a colon (buf was previously rtrimmed).
@@ -1876,20 +1876,6 @@ examine_line:
 			{
 				ScriptError(ERR_UNRECOGNIZED_ACTION, buf);
 				return CloseAndReturn(fp, script_buf, FAIL);
-			}
-			// Otherwise buf_length>1, so it's safe to check for double-colon:
-			// v1.0.44.03: Don't allow anything that ends in "::" (other than a line consisting only
-			// of "::") to be a normal label.  Assume it's a command instead (if it actually isn't, a
-			// later stage will report it as "invalid hotkey"). This change avoids the situation in
-			// which a hotkey like ^!ä:: is seen as invalid because the current keyboard layout doesn't
-			// have a "ä" key. Without this change, if such a hotkey appears at the top of the script,
-			// its subroutine would execute immediately as a normal label, which would be especially
-			// bad if the hotkey were something like the "Shutdown" command.
-			if (buf[buf_length - 2] == ':' && buf_length > 2) // i.e. allow "::" as a normal label, but consider anything else with double-colon to be a failed-hotkey label that terminates the auto-exec section.
-			{
-				CHECK_mNoHotkeyLabels // Terminate the auto-execute section since this is a failed hotkey vs. a mere normal label.
-				snprintf(msg_text, sizeof(msg_text), "Note: The hotkey %s will not be active because it does not exist in the current keyboard layout.", buf);
-				MsgBox(msg_text);
 			}
 			// Labels (except hotkeys) must contain no whitespace, delimiters, or escape-chars.
 			// This is to avoid problems where a legitimate action-line ends in a colon,
@@ -1902,16 +1888,31 @@ examine_line:
 					is_label = false;
 					break;
 				}
+			if (is_label) // It's a generic, non-hotkey/non-hotstring label.
+			{
+				// v1.0.44.04: Fixed this check by moving it after the above loop.
+				// Above has ensured buf_length>1, so it's safe to check for double-colon:
+				// v1.0.44.03: Don't allow anything that ends in "::" (other than a line consisting only
+				// of "::") to be a normal label.  Assume it's a command instead (if it actually isn't, a
+				// later stage will report it as "invalid hotkey"). This change avoids the situation in
+				// which a hotkey like ^!ä:: is seen as invalid because the current keyboard layout doesn't
+				// have a "ä" key. Without this change, if such a hotkey appears at the top of the script,
+				// its subroutine would execute immediately as a normal label, which would be especially
+				// bad if the hotkey were something like the "Shutdown" command.
+				if (buf[buf_length - 2] == ':' && buf_length > 2) // i.e. allow "::" as a normal label, but consider anything else with double-colon to be a failed-hotkey label that terminates the auto-exec section.
+				{
+					CHECK_mNoHotkeyLabels // Terminate the auto-execute section since this is a failed hotkey vs. a mere normal label.
+					snprintf(msg_text, sizeof(msg_text), "Note: The hotkey %s will not be active because it does not exist in the current keyboard layout.", buf);
+					MsgBox(msg_text);
+				}
+				buf[--buf_length] = '\0';  // Remove the trailing colon.
+				rtrim(buf, buf_length); // Has already been ltrimmed.
+				if (!AddLabel(buf, false))
+					return CloseAndReturn(fp, script_buf, FAIL);
+				goto continue_main_loop; // In lieu of "continue", for performance.
+			}
 		}
-		if (is_label) // It's a generic, non-hotkey/non-hotstring label.
-		{
-			buf[--buf_length] = '\0';  // Remove the trailing colon.
-			rtrim(buf, buf_length); // Has already been ltrimmed.
-			if (!AddLabel(buf, false))
-				return CloseAndReturn(fp, script_buf, FAIL);
-			goto continue_main_loop; // In lieu of "continue", for performance.
-		}
-		// It's not a label.
+		// Since above didn't "goto", it's not a label.
 		if (*buf == '#')
 		{
 			saved_line_number = mCombinedLineNumber; // Backup in case IsDirective() processes and include file, which would change mCombinedLineNumber's value.

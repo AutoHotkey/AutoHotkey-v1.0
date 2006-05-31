@@ -3020,9 +3020,10 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		// tab control don't snap onto the tab control (due to the z-order change done by the ListView creation
 		// section whenever a ListView exists inside a tab control).
 		bool provide_buddy_manually;
-		if (   provide_buddy_manually = mStatusBarHwnd // Added for v1.0.44.01: Since the status bar is pushed to the bottom of the z-order after adding each other control, must do manual buddying whenever an UpDown is added after the status bar (to prevent it from attaching to the status bar).
-			|| (style & UDS_AUTOBUDDY) && owning_tab_control // mControlCount is greater than zero whenever owning_tab_control!=NULL
-				&& (owning_tab_control->attrib & GUI_CONTROL_ATTRIB_ALTBEHAVIOR)   )
+		if (   provide_buddy_manually = (style & UDS_AUTOBUDDY)
+			&& (mStatusBarHwnd // Added for v1.0.44.01 (fixed in v1.0.44.04): Since the status bar is pushed to the bottom of the z-order after adding each other control, must do manual buddying whenever an UpDown is added after the status bar (to prevent it from attaching to the status bar).
+			|| (owning_tab_control // mControlCount is greater than zero whenever owning_tab_control!=NULL
+				&& (owning_tab_control->attrib & GUI_CONTROL_ATTRIB_ALTBEHAVIOR)))   )
 			style &= ~UDS_AUTOBUDDY; // Remove it during control creation to avoid up-down snapping onto tab control.
 
 		// The control is created unconditionally because if UDS_AUTOBUDDY is in effect, need to create the

@@ -975,7 +975,17 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 			KeyEvent(KEYUP, VK_SHIFT);
 		}
 
-		if (this_key.no_suppress & NO_SUPPRESS_NEXT_UP_EVENT)  // v1.0.41
+		// Section added in v1.0.41:
+		// Fix for v1.0.44.04: Defer use of the ticket and avoid returning here if hotkey_id_with_flags is valid,
+		// which only happens by means of this_key.hotkey_to_fire_upon_release.  This fixes custom combination
+		// hotkeys whose composite hotkey is also present such as:
+		//LShift & ~LAlt::
+		//LAlt & ~LShift::
+		//LShift & ~LAlt up::
+		//LAlt & ~LShift up::
+		//ToolTip %A_ThisHotkey%
+		//return
+		if (hotkey_id_with_flags == HOTKEY_ID_INVALID && this_key.no_suppress & NO_SUPPRESS_NEXT_UP_EVENT)
 		{
 			this_key.no_suppress &= ~NO_SUPPRESS_NEXT_UP_EVENT;  // This ticket has been used up.
 			return AllowKeyToGoToSystem; // This should handle pForceToggle for us, suppressing if necessary.
@@ -1020,7 +1030,8 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 			// when they are used to modify other keys.  For example, if "Capslock & A" is a hotkey,
 			// the state of the Capslock key should not be changed when the hotkey is pressed.
 			// Do this check prior to the below check (give it precedence).
-			if (this_key.was_just_used) // AS_PREFIX or AS_PREFIX_FOR_HOTKEY. If this is true, it's probably impossible for hotkey_id_with_flags to be valid by means of this_key.hotkey_to_fire_upon_release.
+			if (this_key.was_just_used  // AS_PREFIX or AS_PREFIX_FOR_HOTKEY.
+				&& hotkey_id_with_flags == HOTKEY_ID_INVALID) // v1.0.44.04: Must check this because this prefix might be being used in its role as a suffix instead.
 			{
 				if (this_key.as_modifiersLR) // Always false if our caller is the mouse hook.
 					return (this_key.was_just_used == AS_PREFIX_FOR_HOTKEY) ? AllowKeyToGoToSystemButDisguiseWinAlt
