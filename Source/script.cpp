@@ -2079,7 +2079,7 @@ continue_main_loop: // This method is used in lieu of "continue" for performance
 					break;
 				}
 				mCurrLine = NULL; // v1.0.40.04: Prevents showing misleading vicinity lines for a syntax-error such as %::%
-				sprintf(buf, "{Blind}%s%s{%s down}", extra_event, remap_dest_modifiers, remap_dest);
+				sprintf(buf, "{Blind}%s%s{%s DownTemp}", extra_event, remap_dest_modifiers, remap_dest); // v1.0.44.05: DownTemp vs. Down. See Send's DownTemp handler for details.
 				if (!AddLine(ACT_SEND, &buf, 1, NULL)) // v1.0.40.04: Check for failure due to bad remaps such as %::%.
 					return CloseAndReturn(fp, script_buf, FAIL);
 				AddLine(ACT_RETURN);
@@ -2091,7 +2091,7 @@ continue_main_loop: // This method is used in lieu of "continue" for performance
 			case 3: // Stage 3.
 				strcpy(buf, "-1");
 				AddLine(remap_dest_is_mouse ? ACT_SETMOUSEDELAY : ACT_SETKEYDELAY, &buf, 1, NULL);
-				sprintf(buf, "{Blind}{%s up}", remap_dest); // Unlike the down-event above, remap_dest_modifiers is not included for the up-event; e.g. ^{b up} is inappropriate.
+				sprintf(buf, "{Blind}{%s Up}", remap_dest); // Unlike the down-event above, remap_dest_modifiers is not included for the up-event; e.g. ^{b up} is inappropriate.
 				AddLine(ACT_SEND, &buf, 1, NULL);
 				AddLine(ACT_RETURN);
 				remap_dest_vk = 0; // Reset to signal that the remapping expansion is now complete.
