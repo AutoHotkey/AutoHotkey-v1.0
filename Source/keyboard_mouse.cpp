@@ -473,6 +473,7 @@ void SendKeys(char *aKeys, bool aSendRaw, SendModes aSendModeOrig, HWND aTargetW
 								this_event_modifier_down = vk;
 								if (key_down_is_persistent) // v1.0.44.05.
 									sModifiersLR_persistent |= key_as_modifiersLR;
+								persistent_modifiers_for_this_SendKeys |= key_as_modifiersLR; // v1.0.44.06: Added this line to fix the fact that "DownTemp" should keep the key pressed down after the send.
 							}
 							else if (event_type == KEYUP) // *not* KEYDOWNANDUP, since that would be an intentional activation of the Start Menu or menu bar.
 							{
@@ -486,15 +487,14 @@ void SendKeys(char *aKeys, bool aSendRaw, SendModes aSendModeOrig, HWND aTargetW
 								// Fix for v1.0.43: Also remove LControl if this key happens to be AltGr.
 								if (vk == VK_RMENU && sTargetLayoutHasAltGr == CONDITION_TRUE) // It is AltGr.
 									extra_persistent_modifiers_for_blind_mode &= ~MOD_LCONTROL;
+								// Since key_as_modifiersLR isn't 0, update to reflect any changes made above:
+								persistent_modifiers_for_this_SendKeys = sModifiersLR_persistent | extra_persistent_modifiers_for_blind_mode;
 							}
 							// else must never change sModifiersLR_persistent in response to KEYDOWNANDUP
 							// because that would break existing scripts.  This is because that same
 							// modifier key may have been pushed down via {ShiftDown} rather than "{Shift Down}".
 							// In other words, {Shift} should never undo the effects of a prior {ShiftDown}
 							// or {Shift down}.
-
-							// Since key_as_modifiersLR isn't 0, update to reflect any changes made above:
-							persistent_modifiers_for_this_SendKeys = sModifiersLR_persistent | extra_persistent_modifiers_for_blind_mode;
 						}
 						//else don't add this event to sModifiersLR_persistent because it will not be
 						// manifest via keybd_event.  Instead, it will done via less intrusively

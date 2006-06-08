@@ -1264,17 +1264,20 @@ double_deref:
 
 			if (make_result_persistent)
 			{
+#define EXPR_SMALL_MEM_LIMIT 4097 // Something small enough that the chance that even 10 of them would cause stack overflow is vanishingly small (program is currently compiled to allow stack to expand anyway).
 				result_size = strlen(result) + 1;
 				// Must cast to int to avoid loss of negative values:
 				if (result_size <= (int)(aDerefBufSize - (target - aDerefBuf))) // There is room at the end of our deref buf, so use it.
 				{
-					memcpy(target, result, result_size); // Benches slightly faster than strcpy().
-					result = target; // Point it to its new, more persistent location.
+					// Point result to its new, more persistent location:
+					result = (char *)memcpy(target, result, result_size); // Benches slightly faster than strcpy().
 					target += result_size; // Point it to the location where the next string would be written.
 				}
+				else if (result_size < EXPR_SMALL_MEM_LIMIT) // v1.0.44.06: Should boost performance a little by avoiding the overhead of malloc+free for small strings.
+					result = (char *)memcpy(_alloca(result_size), result, result_size); // Benches slightly faster than strcpy().
 				else // Need to create some new persistent memory for our temporary use.
 				{
-					// In real-worth scripts the need for additonal memory allocation should be quite
+					// In real-world scripts the need for additonal memory allocation should be quite
 					// rare because it requires a combination of worst-case situations:
 					// - Called-function's return value is in their new deref buf (rare because return
 					//   values are more often literal numbers, true/false, or variables).
@@ -1283,15 +1286,16 @@ double_deref:
 					//   (unusual because the deref buf expands in block-increments, and also because
 					//   return values are usually small, such as numbers).
 					if (mem_count == MAX_EXPR_MEM_ITEMS // No more slots left (should be nearly impossible).
-						|| !(mem[mem_count] = (char *)malloc(result_size))) // Use malloc() vs. _alloca() because string can be very large.
+						|| !(mem[mem_count] = (char *)malloc(result_size)))
 					{
 						LineError(ERR_OUTOFMEM ERR_ABORT, FAIL, func.mName);
 						aResult = FAIL;
 						result_to_return = NULL; // Use NULL to inform our caller that this entire thread is to be terminated.
 						goto end;
 					}
-					memcpy(mem[mem_count], result, result_size); // Benches slightly faster than strcpy().
-					result = mem[mem_count++]; // Must be done last.  Point it to its new, more persistent location.
+					// Point result to its new, more persistent location:
+					result = (char *)memcpy(mem[mem_count], result, result_size); // Benches slightly faster than strcpy().
+					++mem_count; // Must be done last.
 				}
 			}
 
@@ -1580,39 +1584,27 @@ skip_abort_udf:
 					if (result_size <= (int)(aDerefBufSize - (target - aDerefBuf))) // There is room at the end of our deref buf, so use it.
 					{
 						this_token.marker = target;
-						if (left_length)
-						{
-							// memcpy() benches slightly faster than strcpy().
-							memcpy(target, left_string, left_length);  // Not +1 because don't need the zero terminator.
-							target += left_length;
-						}
-						memcpy(target, right_string, right_length + 1); // +1 to include its zero terminator.
-						target += right_length + 1;  // Adjust target for potential future use by another concat or functionc call.
+						target += result_size;  // Adjust target for potential future use by another concat or functionc call.
 					}
+					else if (result_size < EXPR_SMALL_MEM_LIMIT) // v1.0.44.06: Should boost performance a little by avoiding the overhead of malloc+free for small strings.
+						this_token.marker = (char *)_alloca(result_size);
 					else // Need to create some new persistent memory for our temporary use.
 					{
-						// In real-worth scripts the need for additonal memory allocation should be quite
-						// rare because it requires a combination of worst-case situations:
-						// - Called-function's return value is in their new deref buf (rare because return
-						//   values are more often literal numbers, true/false, or variables).
-						// - We still have more functions to call here (which is somewhat atypical).
-						// - There's insufficient room at the end of the deref buf to store the return value
-						//   (unusual because the deref buf expands in block-increments, and also because
-						//   return values are usually small, such as numbers).
+						// See the nearly identical section higher above for comments:
 						if (mem_count == MAX_EXPR_MEM_ITEMS // No more slots left (should be nearly impossible).
-							|| !(mem[mem_count] = (char *)malloc(result_size))) // Use malloc() vs. _alloca() because string can be very large.
+							|| !(this_token.marker = mem[mem_count] = (char *)malloc(result_size)))
 						{
 							LineError(ERR_OUTOFMEM ERR_ABORT, FAIL);
 							aResult = FAIL;
 							result_to_return = NULL; // Use NULL to inform our caller that this entire thread is to be terminated.
 							goto end;
 						}
-						this_token.marker = mem[mem_count++];
-						// memcpy() benches slightly faster than strcpy().
-						if (left_length)
-							memcpy(this_token.marker, left_string, left_length);  // Not +1 because don't need the zero terminator.
-						memcpy(this_token.marker + left_length, right_string, right_length + 1); // +1 to include its zero terminator.
+						++mem_count;
 					}
+					if (left_length)
+						memcpy(this_token.marker, left_string, left_length);  // Not +1 because don't need the zero terminator.
+					memcpy(this_token.marker + left_length, right_string, right_length + 1); // +1 to include its zero terminator.
+
 					// For this new concat operator introduced in v1.0.31, it seems best to treat the
 					// result as a SYM_STRING if either operand is a SYM_STRING.  That way, when the
 					// result of the operation is later used, it will be a real string even if pure numeric,
