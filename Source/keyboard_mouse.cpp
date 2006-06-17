@@ -514,8 +514,11 @@ void SendKeys(char *aKeys, bool aSendRaw, SendModes aSendModeOrig, HWND aTargetW
 				else if (key_name_length == 1) // No vk/sc means a char of length one is sent via special method.
 				{
 					// v1.0.40: SendKeySpecial sends only keybd_event keystrokes, not ControlSend style
-					// keystrokes:
-					if (!aTargetWindow) // In this mode, mods_for_next_key and event_type are ignored due to being unsupported.
+					// keystrokes.
+					// v1.0.43.07: Added check of event_type!=KEYUP, which causes something like Send {ð up} to
+					// do nothing if the curr. keyboard layout lacks such a key.  This is relied upon by remappings
+					// such as F1::ð (i.e. a destination key that doesn't have a VK, at least in English).
+					if (!aTargetWindow && event_type != KEYUP) // In this mode, mods_for_next_key and event_type are ignored due to being unsupported.
 						SendKeySpecial(aKeys[0], repeat_count);
 					//else do nothing since it's there's no known way to send the keystokes.
 				}
@@ -2281,7 +2284,12 @@ void MouseMove(int &aX, int &aY, DWORD &aEventFlags, int aSpeed, bool aMoveOffse
 	// to it was correct; i.e. unless +1 is present below, a mouse movement to coords near the upper-left corner of
 	// the screen is typically off by one pixel (only the y-coordinate is affected in 1024x768 resolution, but
 	// in other resolutions both might be affected).
-	#define MOUSE_COORD_TO_ABS(coord, width_or_height) (((65535 * coord) / (width_or_height - 1)) + 1)
+	// v1.0.44.07: The following old formula has been replaced:
+	// (((65535 * coord) / (width_or_height - 1)) + 1)
+	// ... with the new one below.  This is based on numEric's research, which indicates that mouse_event()
+	// uses the following inverse formula internally:
+	// x_or_y_coord = (x_or_y_abs_coord * screen_width_or_height) / 65536
+	#define MOUSE_COORD_TO_ABS(coord, width_or_height) (((65536 * coord) / width_or_height) + 1)
 	aX = MOUSE_COORD_TO_ABS(aX, screen_width);
 	aY = MOUSE_COORD_TO_ABS(aY, screen_height);
 	// aX and aY MUST BE SET UNCONDITIONALLY because the output parameters must be updated for caller.

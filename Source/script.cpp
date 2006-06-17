@@ -971,7 +971,8 @@ bool IsFunction(char *aBuf, bool *aPendingFunctionHasBrace = NULL)
 	// v1.0.40.04: Added condition "action_end != aBuf" to allow a hotkey or remap or hotkey such as
 	// such as "(::" to work even if it ends in a close-parenthesis such as "(::)" or "(::MsgBox )"
 	if (   !(action_end && *action_end == '(' && action_end != aBuf
-		&& (action_end - aBuf != 2 || strnicmp(aBuf, "IF", 2)))   )
+		&& (action_end - aBuf != 2 || strnicmp(aBuf, "IF", 2)))
+		|| action_end[1] == ':'   ) // v1.0.44.07: This prevents "$(::fn_call()" from being seen as a function-call vs. hotkey-with-call.  For simplicity and due to rarity, omit_leading_whitespace() isn't called; i.e. assumes that the colon immediate follows the '('.
 		return false;
 	char *aBuf_last_char = action_end + strlen(action_end) - 1; // Above has already ensured that action_end is "(...".
 	if (aPendingFunctionHasBrace) // Caller specified that an optional open-brace may be present at the end of aBuf.
@@ -1693,10 +1694,18 @@ examine_line:
 			{
 				ltrim(hotkey_flag); // Has already been rtrimmed by GetLine().
 				rtrim(buf); // Trim the new substring inside of buf (due to temp termination). It has already been ltrimmed.
+				cp = hotkey_flag; // Set default, conditionally overridden below (v1.0.44.07).
 				// v1.0.40: Check if this is a remap rather than hotkey:
 				if (   *hotkey_flag // This hotkey's action is on the same line as its label.
 					&& (remap_source_vk = TextToVK(cp1 = Hotkey::TextToModifiers(buf, NULL)))
-					&& (remap_dest_vk = TextToVK(cp = Hotkey::TextToModifiers(hotkey_flag, NULL)))   ) // And the action appears to be a remap destination rather than a command.
+					&& (remap_dest_vk = hotkey_flag[1] ? TextToVK(cp = Hotkey::TextToModifiers(hotkey_flag, NULL)) : 0xFF)   ) // And the action appears to be a remap destination rather than a command.
+					// For above:
+					// Fix for v1.0.44.07: Set remap_dest_vk to 0xFF if hotkey_flag's length is only 1 because:
+					// 1) It allows a destination key that doesn't exist in the keyboard layout (such as 6::ð in
+					//    English).
+					// 2) It improves performance a little by not calling TextToVK except when the destination key
+					//    might be a mouse button or some longer key name whose actual/correct VK value is relied
+					//    upon by other places below.
 					// Fix for v1.0.40.01: Since remap_dest_vk is also used as the flag to indicate whether
 					// this line qualifies as a remap, must do it last in the statement above.  Otherwise,
 					// the statement might short-circuit and leave remap_dest_vk as non-zero even though
@@ -8931,7 +8940,7 @@ ResultType Line::PerformLoopReg(char **apReturnValue, WIN32_FIND_DATA *apCurrent
 	DWORD i;
 
 	// See comments in PerformLoop() for details about this section.
-	// Note that &reg_item is passed to ExecUntil() rather than 
+	// Note that &reg_item is passed to ExecUntil() rather than... (comment was never finished).
 	#define MAKE_SCRIPT_LOOP_PROCESS_THIS_ITEM \
 	{\
 		result = mNextLine->ExecUntil(ONLY_ONE_LINE, apReturnValue, &jump_to_line, apCurrentFile\
@@ -8988,7 +8997,7 @@ ResultType Line::PerformLoopReg(char **apReturnValue, WIN32_FIND_DATA *apCurrent
 	// Going in reverse order allows keys to be deleted without disrupting the enumeration,
 	// at least in some cases:
 	reg_item.InitForSubkeys();
-	char subkey_full_path[MAX_KEY_LENGTH + 1]; // But doesn't include the root key name.
+	char subkey_full_path[MAX_REG_ITEM_LENGTH + 1]; // But doesn't include the root key name, which is not only by design but testing shows that if it did, the length could go over 260.
 	for (i = count_subkeys - 1, jump_to_line = NULL;; --i) // Will have zero iterations if there are no subkeys.
 	{
 		// Don't use CONTINUE in loops such as this due to the loop-ending condition being explicitly

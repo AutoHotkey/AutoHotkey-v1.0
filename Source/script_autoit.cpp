@@ -971,8 +971,18 @@ ResultType Line::URLDownloadToFile(char *aURL, char *aFilespec)
 	MyInternetOpenUrl lpfnInternetOpenUrl = (MyInternetOpenUrl)GetProcAddress(hinstLib, "InternetOpenUrlA");
 	MyInternetCloseHandle lpfnInternetCloseHandle = (MyInternetCloseHandle)GetProcAddress(hinstLib, "InternetCloseHandle");
 	MyInternetReadFileEx lpfnInternetReadFileEx = (MyInternetReadFileEx)GetProcAddress(hinstLib, "InternetReadFileExA");
-	if (!lpfnInternetOpen || !lpfnInternetOpenUrl || !lpfnInternetCloseHandle || !lpfnInternetReadFileEx)
+	if (!(lpfnInternetOpen && lpfnInternetOpenUrl && lpfnInternetCloseHandle && lpfnInternetReadFileEx))
 		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+
+	DWORD flags_for_open_url = INTERNET_FLAG_RELOAD; // v1.0.44.07: Set default to INTERNET_FLAG_RELOAD vs. 0 because the vast majority of usages would want the file to be retrieved directly rather than from the cache.
+	aURL = omit_leading_whitespace(aURL);
+	if (*aURL == '*') // v1.0.44.07: Provide an option to override flags_for_open_url.
+	{
+		flags_for_open_url = ATOU(++aURL);
+		char *cp;
+		if (cp = StrChrAny(aURL, " \t")) // Find first space or tab.
+			aURL = omit_leading_whitespace(cp);
+	}
 
 	// Open the internet session
 	HINTERNET hInet = lpfnInternetOpen(NULL, INTERNET_OPEN_TYPE_PRECONFIG_WITH_NO_AUTOPROXY, NULL, NULL, 0);
@@ -983,7 +993,7 @@ ResultType Line::URLDownloadToFile(char *aURL, char *aFilespec)
 	}
 
 	// Open the required URL
-	HINTERNET hFile = lpfnInternetOpenUrl(hInet, aURL, NULL, 0, 0, 0);
+	HINTERNET hFile = lpfnInternetOpenUrl(hInet, aURL, NULL, 0, flags_for_open_url, 0);
 	if (!hFile)
 	{
 		lpfnInternetCloseHandle(hInet);

@@ -253,6 +253,10 @@ ResultType Line::RegWrite(DWORD aValueType, HKEY aRootKey, char *aRegSubkey, cha
 		return OK;  // Let ErrorLevel tell the story.
 
 	// Open/Create the registry key
+	// The following works even on root keys (i.e. blank subkey), although values can't be created/written to
+	// HKCU's root level, perhaps because it's an alias for a subkey inside HKEY_USERS.  Even when RegOpenKeyEx()
+	// is used on HKCU (which is probably redundant since it's a pre-opened key?), the API can't create values
+	// there even though RegEdit can.
 	if (RegCreateKeyEx(aRootKey, aRegSubkey, 0, "", REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hRegKey, &dwRes)
 		!= ERROR_SUCCESS)
 		return OK;  // Let ErrorLevel tell the story.

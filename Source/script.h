@@ -341,14 +341,18 @@ struct ArgStruct
 
 // Some of these lengths and such are based on the MSDN example at
 // http://msdn.microsoft.com/library/default.asp?url=/library/en-us/sysinfo/base/enumerating_registry_subkeys.asp:
-#define MAX_KEY_LENGTH 255
-#define MAX_VALUE_NAME 16383
+// UPDATE for v1.0.44.07: Someone reported that a stack overflow was possible, implying that it only happens
+// during extremely deep nesting of subkey names (perhaps a hundred or more nested subkeys).  Upon review, it seems
+// that the prior limit of 16383 for value-name-length is higher than needed; testing shows that a value name can't
+// be longer than 259 (limit might even be 255 if API vs. RegEdit is used to create the name).  Testing also shows
+// that the total path name of a registry item (excluding the name of the root key) obeys the same limit.
+#define MAX_REG_ITEM_LENGTH 259
 #define REG_SUBKEY -2 // Custom type, not standard in Windows.
 struct RegItemStruct
 {
 	HKEY root_key_type, root_key;  // root_key_type is always a local HKEY, whereas root_key can be a remote handle.
-	char subkey[MAX_PATH];  // The branch of the registry where this subkey or value is located.
-	char name[MAX_VALUE_NAME]; // The subkey or value name.
+	char subkey[MAX_REG_ITEM_LENGTH + 1];  // The branch of the registry where this subkey or value is located.
+	char name[MAX_REG_ITEM_LENGTH + 1]; // The subkey or value name.
 	DWORD type; // Value Type (e.g REG_DWORD). This is the length used by MSDN in their example code.
 	FILETIME ftLastWriteTime; // Non-initialized.
 	void InitForValues() {ftLastWriteTime.dwHighDateTime = ftLastWriteTime.dwLowDateTime = 0;}
@@ -1014,11 +1018,11 @@ public:
 		if (aIsRemoteRegistry) // Caller wanted the below put into the output parameter.
 			*aIsRemoteRegistry = (colon_pos != NULL);
 		HKEY root_key = NULL; // Set default.
-		if (!stricmp(key_name, "HKEY_LOCAL_MACHINE") || !stricmp(key_name, "HKLM"))  root_key = HKEY_LOCAL_MACHINE;
-		if (!stricmp(key_name, "HKEY_CLASSES_ROOT") || !stricmp(key_name, "HKCR"))   root_key = HKEY_CLASSES_ROOT;
-		if (!stricmp(key_name, "HKEY_CURRENT_CONFIG") || !stricmp(key_name, "HKCC")) root_key = HKEY_CURRENT_CONFIG;
-		if (!stricmp(key_name, "HKEY_CURRENT_USER") || !stricmp(key_name, "HKCU"))   root_key = HKEY_CURRENT_USER;
-		if (!stricmp(key_name, "HKEY_USERS") || !stricmp(key_name, "HKU"))           root_key = HKEY_USERS;
+		if (!stricmp(key_name, "HKLM") || !stricmp(key_name, "HKEY_LOCAL_MACHINE"))       root_key = HKEY_LOCAL_MACHINE;
+		else if (!stricmp(key_name, "HKCR") || !stricmp(key_name, "HKEY_CLASSES_ROOT"))   root_key = HKEY_CLASSES_ROOT;
+		else if (!stricmp(key_name, "HKCC") || !stricmp(key_name, "HKEY_CURRENT_CONFIG")) root_key = HKEY_CURRENT_CONFIG;
+		else if (!stricmp(key_name, "HKCU") || !stricmp(key_name, "HKEY_CURRENT_USER"))   root_key = HKEY_CURRENT_USER;
+		else if (!stricmp(key_name, "HKU") || !stricmp(key_name, "HKEY_USERS"))           root_key = HKEY_USERS;
 		if (!root_key)  // Invalid or unsupported root key name.
 			return NULL;
 		if (!aIsRemoteRegistry || !colon_pos) // Either caller didn't want it opened, or it doesn't need to be.

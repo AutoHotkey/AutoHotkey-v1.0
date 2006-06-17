@@ -80,8 +80,8 @@ inline size_t strnlen(char *aBuf, size_t aMax)
 
 
 inline char *StrChrAny(char *aStr, char *aCharList)
-// Returns the position of the first char in aStr that is of any one of
-// the characters listed in aCharList.  Returns NULL if not found.
+// Returns the position of the first char in aStr that is of any one of the characters listed in aCharList.
+// Returns NULL if not found.
 // Update: Yes, this seems identical to strpbrk().  However, since the corresponding code would
 // have to be added to the EXE regardless of which was used, there doesn't seem to be much
 // advantage to switching (especially since if the two differ in behavior at all, things might
@@ -93,7 +93,7 @@ inline char *StrChrAny(char *aStr, char *aCharList)
 	// of the first search-char, which is not necessarily the first occurrence
 	// of *any* search-char:
 	char *look_for_this_char, char_being_analyzed;
-	for (; *aStr; ++aStr) // It's safe to use the value-parameter itself.
+	for (; *aStr; ++aStr)
 		// If *aStr is any of the search char's, we're done:
 		for (char_being_analyzed = *aStr, look_for_this_char = aCharList; *look_for_this_char; ++look_for_this_char)
 			if (char_being_analyzed == *look_for_this_char)

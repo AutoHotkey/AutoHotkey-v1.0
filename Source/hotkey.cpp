@@ -1041,8 +1041,8 @@ ResultType Hotkey::Dynamic(char *aHotkeyName, char *aLabelName, char *aOptions, 
 			if (g_os.IsWin9x())
 				g_ErrorLevel->Assign(HOTKEY_EL_WIN9X); // Reported even if the hotkey is disabled or suspended.
 		}
-		else // HK_NORMAL (registered hotkey).
-			if (!hk->mIsRegistered && (!g_IsSuspended || hk->IsExemptFromSuspend()) && !hk->IsCompletelyDisabled())
+		else // HK_NORMAL (registered hotkey).  v1.0.44.07
+			if (hk->mType != HK_JOYSTICK && !hk->mIsRegistered && (!g_IsSuspended || hk->IsExemptFromSuspend()) && !hk->IsCompletelyDisabled())
 				g_ErrorLevel->Assign(HOTKEY_EL_NOREG); // Generally affects only Win9x because other OSes should have reverted to hook when register failed.
 	}
 	return OK;

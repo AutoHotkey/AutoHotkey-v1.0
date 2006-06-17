@@ -394,7 +394,13 @@ HANDLE Clipboard::GetClipboardDataTimeout(UINT uFormat)
 		// 0xC00F Link Source Descriptor  >>> Doesn't directly cause bookmarking, but probably goes with above.
 		// 0xC0DC Hyperlink
 		if (   !strnicmp(format_name, "Link Source", 11) || !stricmp(format_name, "ObjectLink")
-			|| !stricmp(format_name, "OwnerLink")   )
+			|| !stricmp(format_name, "OwnerLink")
+			// v1.0.44.07: The following were added to solve interference with MS Outlook's MS Word editor.
+			// If a hotkey like ^F1::ClipboardSave:=ClipboardAll is pressed after pressing Ctrl-C in that
+			// editor (perhaps only when copying HTML), two of the following error dialogs would otherwise
+			// be displayed (this occurs in Outlook 2002 and probably later versions):
+			// "An outgoing call cannot be made since the application is dispatching an input-synchronous call."
+			|| !stricmp(format_name, "Native") || !stricmp(format_name, "Embed Source")   )
 			return NULL;
 	}
 
