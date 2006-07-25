@@ -1540,7 +1540,7 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 	switch(g_input.status)
 	{
 	case INPUT_TIMED_OUT:
-		g_ErrorLevel->Assign("Timeout"); // Lowercase to match IfMsgBox's string, which might help compiler string pooling.
+		g_ErrorLevel->Assign("Timeout");
 		break;
 	case INPUT_TERMINATED_BY_MATCH:
 		g_ErrorLevel->Assign("Match");

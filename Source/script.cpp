@@ -113,7 +113,7 @@ Script::Script()
 
 
 
-Script::~Script()
+Script::~Script() // Destructor.
 {
 	// MSDN: "Before terminating, an application must call the UnhookWindowsHookEx function to free
 	// system resources associated with the hook."

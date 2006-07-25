@@ -1582,7 +1582,9 @@ public:
 		if (!stricmp(aBuf, "ABORT")) return IDABORT;
 		if (!stricmp(aBuf, "IGNORE")) return IDIGNORE;
 		if (!stricmp(aBuf, "RETRY")) return IDRETRY;
-		if (!stricmp(aBuf, "Timeout")) return AHK_TIMEOUT;  // Our custom result value.  Lowercase to help compiler string pooling.
+		if (!stricmp(aBuf, "CONTINUE")) return IDCONTINUE; // v1.0.44.08: For use with 2000/XP's "Cancel/Try Again/Continue" MsgBox.
+		if (!stricmp(aBuf, "TRYAGAIN")) return IDTRYAGAIN; //
+		if (!stricmp(aBuf, "Timeout")) return AHK_TIMEOUT; // Our custom result value.
 		return 0;
 	}
 

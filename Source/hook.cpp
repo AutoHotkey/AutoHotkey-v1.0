@@ -2206,7 +2206,7 @@ LRESULT AllowIt(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lParam, cons
 		// variable will be correctly reset anyway:
 		if (sVKtoIgnoreNextTimeDown && sVKtoIgnoreNextTimeDown == aVK && !aKeyUp)
 			sVKtoIgnoreNextTimeDown = 0;  // i.e. this ignore-for-the-sake-of-CollectInput() ticket has now been used.
-		else if ((Hotstring::shs && !is_ignored) || (g_input.status == INPUT_IN_PROGRESS && !(g_input.IgnoreAHKInput && is_ignored)))
+		else if ((Hotstring::mAtLeastOneEnabled && !is_ignored) || (g_input.status == INPUT_IN_PROGRESS && !(g_input.IgnoreAHKInput && is_ignored)))
 			if (!CollectInput(event, aVK, aSC, aKeyUp, is_ignored, hs_wparam_to_post, hs_lparam_to_post)) // Key should be invisible (suppressed).
 				return SuppressThisKeyFunc(aHook, lParam, aVK, aSC, aKeyUp, pKeyHistoryCurr, aHotkeyIDToPost, hs_wparam_to_post, hs_lparam_to_post);
 
@@ -2489,7 +2489,7 @@ bool CollectInput(KBDLLHOOKSTRUCT &aEvent, const vk_type aVK, const sc_type aSC,
 		return treat_as_visible;
 
 	static vk_type sPendingDeadKeyVK = 0;
-	static sc_type sPendingDeadKeySC = 0; // Need to track this separately because sometimes default mapping isn't correct.
+	static sc_type sPendingDeadKeySC = 0; // Need to track this separately because sometimes default VK-to-SC mapping isn't correct.
 	static bool sPendingDeadKeyUsedShift = false;
 	static bool sPendingDeadKeyUsedAltGr = false;
 
@@ -2552,7 +2552,26 @@ bool CollectInput(KBDLLHOOKSTRUCT &aEvent, const vk_type aVK, const sc_type aSC,
 	// Dead keys in Danish layout as they appear on a US English keyboard: Equals and Plus /
 	// Right bracket & Brace / probably others.
 
-	// It's not a dead key, but if there's a dead key pending and this incoming key is capable of
+	// SUMMARY OF DEAD KEY ISSUE:
+	// Calling ToAsciiEx() on the dead key itself doesn't disrupt anything. The disruption occurs on the next key
+	// (for which the dead key is pending): ToAsciiEx() consumes previous/pending dead key, which causes the
+	// active window's call of ToAsciiEx() to fail to see a dead key. So unless the program reinserts the dead key
+	// after the call to ToAsciiEx() but before allowing the dead key's successor key to pass through to the
+	// active window, that window would see a non-diacritic like "u" instead of û.  In other words, the program
+	// "uses up" the dead key to populate its own hotstring buffer, depriving the active window of the dead key.
+	//
+	// JAVA ISSUE: Hotstrings are known to disrupt dead keys in Java apps on some systems (though not my XP one).
+	// I spent several hours on it but was unable to solve it using anything other than a Sleep(20) after the
+	// reinsertion of the dead key (and PhiLho reports that even that didn't fully solve it).  A Sleep here in the
+	// hook would probably do more harm than good, so is avoided for now.  Other approaches:
+	// 1) Send a simulated substitute for the successor key rather than allowing the hook to pass it through.
+	//    Maybe that would somehow put things in a better order for Java.  However, there might be side-effects to
+	//    that, such as in DirectX games.
+	// 2) Have main thread (rather than hook thread) reinsert the dead key and its successor key (hook would have
+	//    suppressed both), which allows the main thread to do a Sleep or MsgSleep.  Such a Sleep be more effective
+	//    because the main thread's priority is lower than that of the hook's, allowing better round-robin.
+	// 
+	// If this key isn't a dead key but there's a dead key pending and this incoming key is capable of
 	// completing/triggering it, do a workaround for the side-effects of ToAsciiEx().  This workaround
 	// allows dead keys to continue to operate properly in the user's foreground window, while still
 	// being capturable by the Input command and recognizable by any defined hotstrings whose
@@ -2566,8 +2585,8 @@ bool CollectInput(KBDLLHOOKSTRUCT &aEvent, const vk_type aVK, const sc_type aSC,
 			sPendingDeadKeySC = aSC;
 			sPendingDeadKeyUsedShift = g_modifiersLR_logical & (MOD_LSHIFT | MOD_RSHIFT);
 			// Detect AltGr as fully and completely as possible in case the current keyboard layout
-			// doesn't even have an AltGr key.  The section above which references
-			// sPendingDeadKeyUsedAltGr relies on this check having been done here.  UPDATE:
+			// doesn't even have an AltGr key.  The section above which references sPendingDeadKeyUsedAltGr
+			// relies on this check having been done here.  UPDATE:
 			// v1.0.35.10: Allow Ctrl+Alt to be seen as AltGr too, which allows users to press Ctrl+Alt+Deadkey
 			// rather than AltGr+Deadkey.  It might also resolve other issues.  This change seems okay since
 			// the mere fact that this IS a dead key (as checked above) should mean that it's a deadkey made
@@ -4185,7 +4204,9 @@ DWORD WINAPI HookThreadProc(LPVOID aUnused)
 			// After this message, fall through to the next case below so that the hooks will be removed before
 			// exiting this thread.
 			msg.wParam = 0; // Indicate to AHK_CHANGE_HOOK_STATE that both hooks should be deactivated.
-		// No break in above, fall into:
+		// ********
+		// NO BREAK IN ABOVE, FALL INTO NEXT CASE:
+		// ********
 		case AHK_CHANGE_HOOK_STATE: // No blank line between this in the above to indicate fall-through.
 			// In this case, wParam contains the bitwise set of hooks that should be active.
 			problem_activating_hooks = false;

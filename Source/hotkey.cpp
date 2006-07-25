@@ -388,21 +388,11 @@ void Hotkey::ManifestAllHotkeysHotstringsHooks()
 	// run on multiple OSes without a continual warning message just because it happens to be running
 	// on Win9x.  By design, the Num/Scroll/CapsLock AlwaysOn/Off setting stays in effect even when
 	// Suspend in ON.
-	int AtLeastOneHotstringEnabled = 2;  // Set to non-bool value to indicate "not yet called".
-	if (   !(sWhichHookNeeded & HOOK_KEYBD || sWhichHookAlways & HOOK_KEYBD)
-		&& (!(g_ForceNumLock == NEUTRAL && g_ForceCapsLock == NEUTRAL && g_ForceScrollLock == NEUTRAL)
-			|| (AtLeastOneHotstringEnabled = Hotstring::AtLeastOneEnabled()))   ) // Called last for performance due to short-circuit boolean.
+	if (   Hotstring::mAtLeastOneEnabled
+		|| !(g_ForceNumLock == NEUTRAL && g_ForceCapsLock == NEUTRAL && g_ForceScrollLock == NEUTRAL)   )
 		sWhichHookNeeded |= HOOK_KEYBD;
-
-	if (g_BlockMouseMove)
+	if (g_BlockMouseMove || (g_HSResetUponMouseClick && Hotstring::mAtLeastOneEnabled))
 		sWhichHookNeeded |= HOOK_MOUSE;
-	else if (!(sWhichHookNeeded & HOOK_MOUSE || sWhichHookAlways & HOOK_MOUSE) && g_HSResetUponMouseClick)
-	{
-		if (AtLeastOneHotstringEnabled == 2) // The function Hotstring::AtLeastOneEnabled() was not yet called above.
-			AtLeastOneHotstringEnabled = Hotstring::AtLeastOneEnabled();
-		if (AtLeastOneHotstringEnabled)
-			sWhichHookNeeded |= HOOK_MOUSE;
-	}
 
 	// Install or deinstall either or both hooks, if necessary, based on these param values.
 	ChangeHookState(shk, sHotkeyCount, sWhichHookNeeded, sWhichHookAlways);
@@ -2131,6 +2121,40 @@ char *Hotkey::ToText(char *aBuf, int aBufSize, bool aAppendNewline)
 Hotstring **Hotstring::shs = NULL;
 HotstringIDType Hotstring::sHotstringCount = 0;
 HotstringIDType Hotstring::sHotstringCountMax = 0;
+bool Hotstring::mAtLeastOneEnabled = false;
+
+
+void Hotstring::SuspendAll(bool aSuspend)
+{
+	if (sHotstringCount < 1) // At least one part below relies on this check.
+		return;
+
+	UINT u;
+	if (aSuspend) // Suspend all those that aren't exempt.
+	{
+		for (mAtLeastOneEnabled = false, u = 0; u < sHotstringCount; ++u)
+			if (shs[u]->mJumpToLabel->IsExemptFromSuspend())
+				mAtLeastOneEnabled = true;
+			else
+				shs[u]->mSuspended = true;
+	}
+	else // Unsuspend all.
+	{
+		for (u = 0; u < sHotstringCount; ++u)
+			shs[u]->mSuspended = false;
+		// v1.0.44.08: Added the following section.  Also, the HS buffer is reset, but only when hotstrings
+		// are newly enabled after having been entirely disabled.  This is because CollectInput() would not
+		// have been called in a long time, making the contents of g_HSBuf obsolete, which in turn might
+		// otherwise cause accidental firings based on old keystrokes coupled with new ones.
+		if (!mAtLeastOneEnabled)
+		{
+			mAtLeastOneEnabled = true; // sHotstringCount was already checked higher above.
+			*g_HSBuf = '\0';
+			g_HSBufLength = 0;
+		}
+	}
+}
+
 
 
 ResultType Hotstring::Perform()
@@ -2276,6 +2300,7 @@ ResultType Hotstring::AddHotstring(Label *aJumpToLabel, char *aOptions, char *aH
 	}
 
 	++sHotstringCount;
+	mAtLeastOneEnabled = true; // Added in v1.0.44.  This method works because the script can't be suspended while hotstrings are being created (upon startup).
 	return OK;
 }
 

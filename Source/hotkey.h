@@ -328,6 +328,7 @@ public:
 	static Hotstring **shs;  // An array to be allocated on first use (performs better than linked list).
 	static HotstringIDType sHotstringCount;
 	static HotstringIDType sHotstringCountMax;
+	static bool mAtLeastOneEnabled; // v1.0.44.08: For performance, such as avoiding calling ToAsciiEx() in the hook.
 
 	Label *mJumpToLabel;
 	char *mString, *mReplacement, *mHotWinTitle, *mHotWinText;
@@ -342,28 +343,7 @@ public:
 	bool mCaseSensitive, mConformToCase, mDoBackspace, mOmitEndChar, mSendRaw, mEndCharRequired
 		, mDetectWhenInsideWord, mDoReset, mConstructedOK;
 
-	static bool AtLeastOneEnabled()
-	{
-		for (UINT u = 0; u < sHotstringCount; ++u)
-			if (!shs[u]->mSuspended)
-				return true;
-		return false;
-	}
-
-	static void SuspendAll(bool aSuspend)
-	{
-		UINT u;
-		if (aSuspend) // Suspend all those that aren't exempt.
-		{
-			for (u = 0; u < sHotstringCount; ++u)
-				if (!shs[u]->mJumpToLabel->IsExemptFromSuspend())
-					shs[u]->mSuspended = true;
-		}
-		else // Unsuspend all.
-			for (u = 0; u < sHotstringCount; ++u)
-				shs[u]->mSuspended = false;
-	}
-
+	static void SuspendAll(bool aSuspend);
 	ResultType Perform();
 	void DoReplace(LPARAM alParam);
 	static ResultType AddHotstring(Label *aJumpToLabel, char *aOptions, char *aHotstring, char *aReplacement

@@ -2126,12 +2126,12 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			// to worry about whether this control *might* become auto-multiline after this point.
 			draw_format |= DT_EXPANDTABS|DT_EDITCONTROL;
 			// and now fall through and have the dimensions calculated based on what's in the control.
+			// ABOVE FALLS THROUGH TO BELOW
 		case GUI_CONTROL_TEXT:
 		case GUI_CONTROL_BUTTON:
 		case GUI_CONTROL_CHECKBOX:
 		case GUI_CONTROL_RADIO:
 		{
-			control_width_was_set_by_contents = true; // Indicate that this control was auto-width'd.
 			GUI_SET_HDC
 			if (aControlType == GUI_CONTROL_TEXT)
 				draw_format |= DT_EXPANDTABS; // Buttons can't expand tabs, so don't add this for them.
@@ -2178,6 +2178,9 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			}
 			if (opt.width == COORD_UNSPECIFIED || draw_width > opt.width)
 			{
+				// v1.0.44.08: Fixed the following line by moving it into this IF block.  This prevents
+				// an up-down from widening its edit control when that edit control had an explicit width.
+				control_width_was_set_by_contents = true; // Indicate that this control was auto-width'd.
 				opt.width = draw_width + extra_width;  // See comments above for why specified width is overridden.
 				if (aControlType == GUI_CONTROL_BUTTON)
 					// Allow room for border and an internal margin proportional to the font height.
@@ -4375,12 +4378,13 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 					// nothing:
 					if (aControl.hwnd)
 					{
-						if (GetWindowLong(aControl.hwnd, GWL_STYLE) & BS_CENTER) // i.e. it has both BS_LEFT and BS_RIGHT
+						// v1.0.44.08: Fixed the following by adding "== BS_CENTER":
+						if ((GetWindowLong(aControl.hwnd, GWL_STYLE) & BS_CENTER) == BS_CENTER) // i.e. it has both BS_LEFT and BS_RIGHT
 							aOpt.style_remove |= BS_CENTER;
 						//else nothing needs to be done.
 					}
-					else
-						if (aOpt.style_add & BS_CENTER) // i.e. Both BS_LEFT and BS_RIGHT are set to be added.
+					else // v1.0.44.08: Fixed the following by adding "== BS_CENTER":
+						if ((aOpt.style_add & BS_CENTER) == BS_CENTER) // i.e. Both BS_LEFT and BS_RIGHT are set to be added.
 							aOpt.style_add &= ~BS_CENTER; // Undo it, which later helps avoid the need to apply style_add prior to style_remove.
 						//else nothing needs to be done.
 					break;
@@ -4473,11 +4477,11 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 					// BS_RIGHT can't be in effect if BS_CENTER already is:
 					if (aControl.hwnd)
 					{
-						if (!(GetWindowLong(aControl.hwnd, GWL_STYLE) & BS_CENTER))
+						if ((GetWindowLong(aControl.hwnd, GWL_STYLE) & BS_CENTER) != BS_CENTER) // v1.0.44.08: Fixed by adding "!= BS_CENTER".
 							aOpt.style_remove |= BS_RIGHT;
 					}
 					else
-						if (!(aOpt.style_add & BS_CENTER))
+						if ((aOpt.style_add & BS_CENTER) != BS_CENTER) // v1.0.44.08: Fixed by adding "!= BS_CENTER".
 							aOpt.style_add &= ~BS_RIGHT;  // A little strange, but seems correct since control hasn't even been created yet.
 						//else nothing needs to be done because BS_RIGHT is already in effect removed since
 						//BS_CENTER makes BS_RIGHT impossible to manifest.
@@ -4567,11 +4571,11 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 					// BS_LEFT can't be in effect if BS_CENTER already is:
 					if (aControl.hwnd)
 					{
-						if (!(GetWindowLong(aControl.hwnd, GWL_STYLE) & BS_CENTER))
+						if ((GetWindowLong(aControl.hwnd, GWL_STYLE) & BS_CENTER) != BS_CENTER) // v1.0.44.08: Fixed by adding "!= BS_CENTER".
 							aOpt.style_remove |= BS_LEFT;
 					}
 					else
-						if (!(aOpt.style_add & BS_CENTER))
+						if ((aOpt.style_add & BS_CENTER) != BS_CENTER) // v1.0.44.08: Fixed by adding "!= BS_CENTER".
 							aOpt.style_add &= ~BS_LEFT;  // A little strange, but seems correct since control hasn't even been created yet.
 						//else nothing needs to be done because BS_LEFT is already in effect removed since
 						//BS_CENTER makes BS_LEFT impossible to manifest.
@@ -5413,12 +5417,16 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 	if (*aText)
 		SetWindowText(mHwnd, aText);
 
+	// Set defaults, to be overridden by the presence of zero or more options:
 	int x = COORD_UNSPECIFIED;
 	int y = COORD_UNSPECIFIED;
 	int width = COORD_UNSPECIFIED;
 	int height = COORD_UNSPECIFIED;
 	bool auto_size = false;
 
+	BOOL is_maximized = IsZoomed(mHwnd); // Safer to assume it's possible for both to be true simultaneously in
+	BOOL is_minimized = IsIconic(mHwnd); // future/past OSes.
+	int show_mode;
 	// There is evidence that SW_SHOWNORMAL might be better than SW_SHOW for the first showing because
 	// someone reported that a window appears centered on the screen for its first showing even if some
 	// other position was specified.  In addition, MSDN says (without explanation): "An application should
@@ -5432,18 +5440,24 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 	// it seems best to unconditionally use SW_SHOWNORMAL, rather than "mFirstGuiShowCmd ? SW_SHOWNORMAL : SW_SHOW".
 	// This is done so that the window will be restored and thus have a better chance of being successfully
 	// activated (and thus not requiring the call to SetForegroundWindowEx()).
-	int show_mode = SW_SHOWNORMAL; // Set default.
-	// Note that although SW_SHOW un-minimizes a window (at least on XP), it does not un-maximize it
-	// (unlike SW_SHOWNORMAL, which seems functionally identical to SW_RESTORE).
+	// v1.0.44.08: Fixed to default to SW_SHOW for currently-maximized windows so that they don't get unmaximized
+	// by "Gui Show" (unless other options require it).  Also, it's been observed that SW_SHOWNORMAL differs from
+	// SW_RESTORE in at least one way: When the target is a minimized window, SW_SHOWNORMAL will both restore it
+	// and unmaximize it.  But SW_RESTORE unminimizes the window in a way that retains its maximized state (if
+	// it was previously maximized).  Therefore, SW_RESTORE is now the default if the window is currently minimized.
+	if (is_minimized)
+		show_mode = SW_RESTORE; // See above comments. For backward compatibility, window is unminimized even if it was previously hidden (rather than simply showing its taskbar button and keeping it minimized).
+	else if (is_maximized)
+		show_mode = SW_SHOW; // See above.
+	else
+		show_mode = SW_SHOWNORMAL;
 
 	for (char *cp = aOptions; *cp; ++cp)
 	{
 		switch(toupper(*cp))
 		{
-		// For options such as W, H, X and Y:
-		// Use atoi() vs. ATOI() to avoid interpreting something like 0x01B as hex when in fact
-		// the B was meant to be an option letter:
-		// DIMENSIONS:
+		// For options such as W, H, X and Y: Use atoi() vs. ATOI() to avoid interpreting something like 0x01B
+		// as hex when in fact the B was meant to be an option letter.
 		case 'A':
 			if (!strnicmp(cp, "AutoSize", 8))
 			{
@@ -5461,6 +5475,10 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 				cp += 5;
 				x = COORD_CENTERED;
 				y = COORD_CENTERED;
+				// If the window is currently maximized, show_mode isn't set to SW_RESTORE unconditionally here
+				// due to obscurity and because it might reduce flexibility.  If the window is currently minimized,
+				// above has already set the default show_mode to SW_RESTORE to ensure correct operation of
+				// something like "Gui, Show, Center".
 			}
 			break;
 		case 'M':
@@ -5554,7 +5572,7 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 	// Note that SW_SHOWNOACTIVATE is very similar to SW_RESTORE in its effects.
 	bool show_was_done = false;
 	if (show_mode == SW_HIDE // Hiding a window or restoring a window known to be minimized/maximized.
-		|| (show_mode == SW_RESTORE || SW_SHOWNOACTIVATE) && (IsZoomed(mHwnd) || IsIconic(mHwnd)))
+		|| (show_mode == SW_RESTORE || show_mode == SW_SHOWNOACTIVATE) && (is_maximized || is_minimized)) // v1.0.44.08: Fixed missing "show_mode ==".
 	{
 		ShowWindow(mHwnd, show_mode);
 		show_was_done = true;
@@ -5576,7 +5594,7 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 	bool allow_move_window;
 	RECT rect;
 
-	if (allow_move_window = !IsIconic(mHwnd)) // Aasign.
+	if (allow_move_window = !IsIconic(mHwnd)) // Call IsIconic() again in case above changed the window's state.
 	{
 		if (auto_size) // Check this one first so that it takes precedence over mFirstGuiShowCmd below.
 		{
@@ -5705,6 +5723,12 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 		if (width != old_width || height != old_height || (x != COORD_UNSPECIFIED && x != old_rect.left)
 			|| (y != COORD_UNSPECIFIED && y != old_rect.bottom))
 		{
+			// v1.0.44.08: Window state gets messed up if it's resized without first unmaximizing it (for example,
+			// it can't be resized by dragging its lower-right corner).  So it seems best to unmaximize, perhaps
+			// even when merely the position is changing rather than the size (even on a multimonitor system,
+			// it might not be valid to reposition a maximized window without unmaximizing it?)
+			if (IsZoomed(mHwnd)) // Call IsZoomed() again in case above changed the state. No need to check IsIconic() because above already set default show-mode to SW_RESTORE for such windows.
+				ShowWindow(mHwnd, SW_RESTORE); // But restore isn't done for something like "Gui, Show, Center" because it's too obscure and might reduce flexibility (debatable).
 			MoveWindow(mHwnd, x == COORD_UNSPECIFIED ? old_rect.left : x, y == COORD_UNSPECIFIED ? old_rect.top : y
 				, width, height, is_visible);  // Do repaint if window is visible.
 		}
@@ -6265,6 +6289,12 @@ GuiIndexType GuiType::FindControl(char *aControlID)
 // 3) Control's title/caption.
 // Returns -1 if not found.
 {
+	// v1.0.44.08: Added the following check.  Without it, ControlExist() (further below) would retrieve the
+	// topmost child, which isn't very useful or intuitive.  This currently affects only the following commands:
+	// 1) GuiControl (but not GuiControlGet because it has special handling for a blank ControlID).
+	// 2) Gui, ListView|TreeView, MyTree|MyList
+	if (!*aControlID)
+		return -1;
 	GuiIndexType u;
 	// To keep things simple, the first search method is always conducted: It looks for a
 	// matching variable name, but only among the variables used by this particular window's
