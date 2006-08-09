@@ -2194,6 +2194,8 @@ void Hotstring::DoReplace(LPARAM alParam)
 		int backspace_count = mStringLength - 1;
 		if (mEndCharRequired)
 			++backspace_count;
+		if (!mEndCharRequired && LOWORD(alParam)) // Added for v1.0.44.09 as a dead key fix (see CollectInput()).
+			--backspace_count;
 		for (int i = 0; i < backspace_count; ++i)
 			*start_of_replacement++ = '\b';  // Use raw backspaces, not {BS n}, in case the send will be raw.
 		*start_of_replacement = '\0'; // Terminate the string created above.
@@ -2217,7 +2219,7 @@ void Hotstring::DoReplace(LPARAM alParam)
 		//    buffered keystrokes to take effect in between the two calls to SendKeys.
 		// 2) Performance: Avoids having to install the playback hook twice, etc.
 		char end_char;
-		if (end_char = (char)LOWORD(alParam))
+		if (mEndCharRequired && (end_char = (char)LOWORD(alParam))) // Must now check mEndCharRequired because LOWORD has been overloaded with context-sensitive meanings.
 		{
 			start_of_replacement += strlen(start_of_replacement);
 			sprintf(start_of_replacement, "%s%c", mSendRaw ? "" : "{Raw}", (char)end_char); // v1.0.43.02: Don't send "{Raw}" if already in raw mode!

@@ -892,6 +892,7 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 	// b & z::return
 	// I don't remember exactly what the "pPrefixKey != &this_key" check is for below, but it is kept
 	// to minimize the chance of breaking other things:
+	bool fell_through_from_case2 = false; // Set default.
 	if (this_key.used_as_suffix && aKeyUp && (pPrefixKey != &this_key || down_performed_action)) // Note: hotkey_id_with_flags might be already valid due to this_key.hotkey_to_fire_upon_release.
 	{
 		if (pPrefixKey == &this_key) // v1.0.37.05: Added so that scripts such as the example above don't leave pPrefixKey wrongly non-NULL.
@@ -931,7 +932,8 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 		// In light of the above, it seems best to keep this documented here as a known limitation for now.
 		//
 		// v1.0.28: The following check is done to support certain keyboards whose keys or scroll wheels
-		// generate up events without first having generated any down-event for the key:
+		// generate up events without first having generated any down-event for the key.  UPDATE: I think
+		// this check is now also needed to allow fall-through in cases like "b" and "b up" both existing.
 		if (!this_key.used_as_key_up)
 		{
 			bool suppress_up_event;
@@ -946,6 +948,7 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 		}
 		//else continue checking to see if the right modifiers are down to trigger one of this
 		// suffix key's key-up hotkeys.
+		fell_through_from_case2 = true;
 	}
 
 	//////////////////////////////////////////////
@@ -1080,7 +1083,7 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 		// rather than returning so that the key's own unmodified/naked suffix action will be considered.
 		// For example:
 		// a & b::
-		// a::   // Prefix fires on key-up.
+		// a::   // This fires upon release of "a".
 	}
 
 	////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1493,10 +1496,17 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 				// Even though the key is being released, a hotkey should fire unconditionally because
 				// the only way we can reach this exact point for a non-key-up hotkey is when it fell
 				// through from Case #3, in which case this hotkey_id_with_flags is implicitly a key-up
-				// hotkey if there is no actual explicit key-up hotkey for it.
+				// hotkey if there is no actual explicit key-up hotkey for it.  UPDATE: It is now possible
+				// to fall through from Case #2, so that is checked below.
 				if (hotkey_id_temp < Hotkey::sHotkeyCount && hotkey_up[hotkey_id_temp] != HOTKEY_ID_INVALID) // Relies on short-circuit boolean order.
 					hotkey_id_with_flags = hotkey_up[hotkey_id_temp];
-				//else leave it at its former value.  See comment above.
+				else // Leave it at its former value unless case#2.  See comments above and below.
+					// Fix for v1.0.44.09: Since no key-up counterpart was found above (either in hotkey_up[]
+					// or via the HOTKEY_KEY_UP flag), don't fire this hotkey when it fell through from Case #2.
+					// This prevents a hotkey like $^b from firing TWICE (once on down and again on up) when a
+					// key-up hotkey with different modifiers also exists, such as "#b" and "#b up" existing with $^b.
+					if (fell_through_from_case2)
+						hotkey_id_with_flags = HOTKEY_ID_INVALID;
 			}
 			else // hotkey_id_with_flags contains the down-hotkey that is now eligible for firing. But check if there's an up-event to queue up for later.
 				if (hotkey_id_temp < Hotkey::sHotkeyCount)
@@ -2761,6 +2771,30 @@ bool CollectInput(KBDLLHOOKSTRUCT &aEvent, const vk_type aVK, const sc_type aSC,
 					}
 				}
 
+				if (hs.mDoBackspace || hs.mOmitEndChar) // Fix for v1.0.37.07: Added hs.mOmitEndChar so that B0+O will omit the ending character.
+				{
+					// Have caller suppress this final key pressed by the user, since it would have
+					// to be backspaced over anyway.  Even if there is a visible Input command in
+					// progress, this should still be okay since the input will still see the key,
+					// it's just that the active window won't see it, which is okay since once again
+					// it would have to be backspaced over anyway.  UPDATE: If an Input is in progress,
+					// it should not receive this final key because otherwise the hotstring's backspacing
+					// would backspace one too few times from the Input's point of view, thus the input
+					// would have one extra, unwanted character left over (namely the first character
+					// of the hotstring's abbreviation).  However, this method is not a complete
+					// solution because it fails to work under a situation such as the following:
+					// A hotstring script is started, followed by a separate script that uses the
+					// Input command.  The Input script's hook will take precedence (since it was
+					// started most recently), thus when the Hotstring's script's hook does sends
+					// its replacement text, the Input script's hook will get a hold of it first
+					// before the Hotstring's script has a chance to suppress it.  In other words,
+					// The Input command will capture the ending character and then there will
+					// be insufficient backspaces sent to clear the abbrevation out of it.  This
+					// situation is quite rare so for now it's just mentioned here as a known limitation.
+					treat_as_visible = false; // It might already have been false due to an invisible-input in progress, etc.
+					suppress_hotstring_final_char = true; // This var probably must be separate from treat_as_visible to support invisible inputs.
+				}
+
 				// Post the message rather than sending it, because Send would need
 				// SendMessageTimeout(), which is undesirable because the whole point of
 				// making this hook thread separate from the main thread is to have it be
@@ -2783,8 +2817,18 @@ bool CollectInput(KBDLLHOOKSTRUCT &aEvent, const vk_type aVK, const sc_type aSC,
 				//    it and one at the end, which is clearly incorrect.
 				aHotstringWparamToPost = u; // Override the default set by caller.
 				aHotstringLparamToPost = MAKELONG(hs.mEndCharRequired && hs.mDoBackspace
-					? (UCHAR)g_HSBuf[g_HSBufLength - 1] : 0
+					? (UCHAR)g_HSBuf[g_HSBufLength - 1]
+					: (dead_key_sequence_complete && suppress_hotstring_final_char) // v1.0.44.09: See comments below.
 					, case_conform_mode);
+				// v1.0.44.09: dead_key_sequence_complete was added above to tell DoReplace() to do one fewer
+				// backspaces in cases where the final/triggering key of a hotstring is a the second key of
+				// a dead key sequence (such as a tilde in Portuguese followed by virtually any character).
+				// What happens in that case is that the dead key is suppressed (for the reasons described in
+				// the dead keys handler), but so is the key that follows it when suppress_hotstring_final_char
+				// is true.  In addition to being suppressed, no substitute ever needs to be sent for the dead key
+				// because it will never appear on the screen (due to being a true auto-replace hotstring).
+				// Note: To enhance maintainability and understandability, above also checks
+				// suppress_hotstring_final_char (even though probably not strictly necessary).
 
 				// Clean up.
 				// The keystrokes to be sent by the other thread upon receiving the message prepared above
@@ -2839,30 +2883,7 @@ bool CollectInput(KBDLLHOOKSTRUCT &aEvent, const vk_type aVK, const sc_type aSC,
 				// In case the above changed the value of g_HSBufLength, terminate the buffer at that position:
 				g_HSBuf[g_HSBufLength] = '\0';
 
-				if (hs.mDoBackspace || hs.mOmitEndChar) // Fix for v1.0.37.07: Added hs.mOmitEndChar so that B0+O will omit the ending character.
-				{
-					// Have caller suppress this final key pressed by the user, since it would have
-					// to be backspaced over anyway.  Even if there is a visible Input command in
-					// progress, this should still be okay since the input will still see the key,
-					// it's just that the active window won't see it, which is okay since once again
-					// it would have to be backspaced over anyway.  UPDATE: If an Input is in progress,
-					// it should not receive this final key because otherwise the hotstring's backspacing
-					// would backspace one too few times from the Input's point of view, thus the input
-					// would have one extra, unwanted character left over (namely the first character
-					// of the hotstring's abbreviation).  However, this method is not a complete
-					// solution because it fails to work under a situation such as the following:
-					// A hotstring script is started, followed by a separate script that uses the
-					// Input command.  The Input script's hook will take precedence (since it was
-					// started most recently), thus when the Hotstring's script's hook does sends
-					// its replacement text, the Input script's hook will get a hold of it first
-					// before the Hotstring's script has a chance to suppress it.  In other words,
-					// The Input command will capture the ending character and then there will
-					// be insufficient backspaces sent to clear the abbrevation out of it.  This
-					// situation is quite rare so for now it's just mentioned here as a known limitation.
-					treat_as_visible = false; // It might already have been false due to an invisible-input in progress, etc.
-					suppress_hotstring_final_char = true; // This var probably must be separate from treat_as_visible to support invisible inputs.
-				}
-				break; // Above would have done "continue" if a match wasn't found.
+				break; // Somewhere above would have done "continue" if a match wasn't found.
 			} // for()
 		} // if buf not empty
 	} // Yes, collect hotstring input.

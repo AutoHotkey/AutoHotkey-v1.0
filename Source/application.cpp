@@ -611,7 +611,8 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 						continue;
 					}
 					// It is not necessary to check if the label is running in this case because
-					// the caller who posted this message to us has ensured that it isn't running.
+					// the caller who posted this message to us has ensured that it's the only message in the queue
+					// or in progress (by virtue of pgui->mHdrop being NULL at the time the message was posted).
 					// Therefore, leave pgui_label_is_running at its default of NULL.
 					break;
 				default: // This is an action from a particular control in the GUI window.
@@ -783,7 +784,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 			{
 			case AHK_GUI_ACTION: // Listed first for performance.
 				if (pgui_label_is_running && *pgui_label_is_running) // GuiSize/Close/Escape/etc. These subroutines are currently limited to one thread each.
-					continue; // hdrop_to_free: Not necessary to check it because it's always NULL when pgui_label_is_running is NULL.
+					continue; // hdrop_to_free: Not necessary to check it because it's always NULL when pgui_label_is_running is non-NULL.
 				//else the check wasn't needed because it was done elsewhere (GUI_EVENT_DROPFILES) or the
 				// action is not thread-restricted (GUI_EVENT_CONTEXTMENU).
 				// And since control-specific events were already checked for "already running" higher above, this
@@ -1116,7 +1117,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 					pcontrol = gui_control_index < pgui->mControlCount ? pgui->mControl + gui_control_index : NULL; // Refresh unconditionally for maintainability.
 					switch(gui_action)
 					{
-					case GUI_EVENT_RESIZE:   pgui->mLabelForSizeIsRunning = false; break;   // Safe to reset even if there is
+					case GUI_EVENT_RESIZE: pgui->mLabelForSizeIsRunning = false; break;   // Safe to reset even if there is
 					case GUI_EVENT_CLOSE:  pgui->mLabelForCloseIsRunning = false; break;  // no label due to the window having
 					case GUI_EVENT_ESCAPE: pgui->mLabelForEscapeIsRunning = false; break; // been destroyed and recreated.
 					case GUI_EVENT_CONTEXTMENU: break; // Do nothing, but avoid the default case below.
@@ -1561,6 +1562,7 @@ void PollJoysticks()
 // MsgSleep() closer on the call stack than the nearest dialog's message pump (e.g. MsgBox).
 // This is because events posted to the thread indirectly by us here would be discarded or mishandled
 // by a non-standard (dialog) message pump.
+//
 // Polling the joysticks this way rather than using joySetCapture() is preferable for several reasons:
 // 1) I believe joySetCapture() internally polls the joystick anyway, via a system timer, so it probably
 //    doesn't perform much better (if at all) than polling "manually".
@@ -1579,7 +1581,8 @@ void PollJoysticks()
 	{
 		if (!Hotkey::sJoystickHasHotkeys[i])
 			continue;
-		// Reset these every time in case joyGetPosEx() ever changes them:
+		// Reset these every time in case joyGetPosEx() ever changes them. Also, most systems have only one joystick,
+		// so this code will hardly ever be executed more than once (and sometimes zero times):
 		jie.dwSize = sizeof(JOYINFOEX);
 		jie.dwFlags = JOY_RETURNBUTTONS; // vs. JOY_RETURNALL
 		if (joyGetPosEx(i, &jie) != JOYERR_NOERROR) // Skip this joystick and try the others.

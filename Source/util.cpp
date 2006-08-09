@@ -1273,17 +1273,14 @@ void AssignColor(char *aColorName, COLORREF &aColor, HBRUSH &aBrush)
 	}
 	if (color != aColor) // It's not already the right color.
 	{
+		aColor = color; // Set default.  v1.0.44.09: Added this line to fix the inability to change to a previously selected color after having changed to the default color.
 		if (aBrush) // Free the resources of the old brush.
 			DeleteObject(aBrush);
 		if (color == CLR_DEFAULT) // Caller doesn't need brush for CLR_DEFAULT, assuming that's even possible.
 			aBrush = NULL;
 		else
-		{
-			if (aBrush = CreateSolidBrush(color)) // Assign.  Failure should be very rare.
-				aColor = color;
-			else
+			if (   !(aBrush = CreateSolidBrush(color))   ) // Failure should be very rare.
 				aColor = CLR_DEFAULT; // A NULL HBRUSH should always corresponds to CLR_DEFAULT.
-		}
 	}
 }
 

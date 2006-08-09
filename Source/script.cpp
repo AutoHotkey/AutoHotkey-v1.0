@@ -8655,8 +8655,11 @@ inline ResultType Line::EvaluateCondition()
 				}
 			break;
 		case VAR_TYPE_XDIGIT:
+			cp = ARG1;
+			if (!strnicmp(cp, "0x", 2)) // v1.0.44.09: Allow 0x prefix, which seems to do more good than harm (unlikely to break existing scripts).
+				cp += 2;
 			if_condition = true;
-			for (cp = ARG1; *cp; ++cp)
+			for (; *cp; ++cp)
 				if (!isxdigit((UCHAR)*cp))
 				{
 					if_condition = false;

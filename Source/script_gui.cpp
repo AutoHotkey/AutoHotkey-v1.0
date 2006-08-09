@@ -1352,44 +1352,8 @@ ResultType GuiType::Create()
 		sGuiInitialized = true;
 	}
 
-	char label_name[1024];  // Labels are unlimited in length, so use a size to cover anything realistic.
-
-	// Find the label to run automatically when the form closes (if any):
-	if (mWindowIndex > 0) // Prepend the window number for windows other than the first.
-		snprintf(label_name, sizeof(label_name), "%dGuiClose", mWindowIndex + 1);
-	else
-		strcpy(label_name, "GuiClose");
-	mLabelForClose = g_script.FindLabel(label_name);  // OK if NULL (closing the window is the same as "gui, cancel").
-
-	// Find the label to run automatically when the user presses Escape (if any):
-	if (mWindowIndex > 0) // Prepend the window number for windows other than the first.
-		snprintf(label_name, sizeof(label_name), "%dGuiEscape", mWindowIndex + 1);
-	else
-		strcpy(label_name, "GuiEscape");
-	mLabelForEscape = g_script.FindLabel(label_name);  // OK if NULL (pressing ESCAPE does nothing).
-
-	// Find the label to run automatically when the user resizes the window (if any):
-	if (mWindowIndex > 0) // Prepend the window number for windows other than the first.
-		snprintf(label_name, sizeof(label_name), "%dGuiSize", mWindowIndex + 1);
-	else
-		strcpy(label_name, "GuiSize");
-	mLabelForSize = g_script.FindLabel(label_name);  // OK if NULL.
-
-	// Find the label to run automatically when the user invokes context menu via AppsKey, Rightclick, or Shift-F10:
-	if (mWindowIndex > 0) // Prepend the window number for windows other than the first.
-		snprintf(label_name, sizeof(label_name), "%dGuiContextMenu", mWindowIndex + 1);
-	else
-		strcpy(label_name, "GuiContextMenu");
-	mLabelForContextMenu = g_script.FindLabel(label_name);  // OK if NULL (leaves context menu unhandled).
-
-	// Find the label to run automatically when files are dropped onto the window:
-	if (mWindowIndex > 0) // Prepend the window number for windows other than the first.
-		snprintf(label_name, sizeof(label_name), "%dGuiDropFiles", mWindowIndex + 1);
-	else
-		strcpy(label_name, "GuiDropFiles");
-	if (mLabelForDropFiles = g_script.FindLabel(label_name))  // OK if NULL (dropping files is disallowed).
-		mExStyle |= WS_EX_ACCEPTFILES; // Makes the window accept drops. Otherwise, the WM_DROPFILES msg is not received.
-
+	if (!mLabelsHaveBeenSet) // i.e. don't set the defaults if the labels were set prior to the creation of the window.
+		SetLabels(NULL);
 	// The above is done prior to creating the window so that mLabelForDropFiles can determine
 	// whether to add the WS_EX_ACCEPTFILES style.
 
@@ -1426,6 +1390,59 @@ ResultType GuiType::Create()
 	SendMessage(mHwnd, WM_SETICON, ICON_BIG, (LPARAM)main_icon);   // i.e. there is no previous icon to destroy in this case.
 
 	return OK;
+}
+
+
+
+void GuiType::SetLabels(char *aLabelPrefix)
+// v1.0.44.09: Allow custom label prefix to be set; e.g. MyGUI vs. "5Gui" or "2Gui".  This increases flexibility
+// for scripts that dynamically create a varying number of windows, and also allows multiple windows to call the
+// same set of subroutines.
+// This function mustn't assume that mHwnd is a valid window because it might not have been created yet.
+// Caller passes NULL to indicate "use default label prefix" (i.e. the WindowNumber followed by the string "Gui").
+// Caller is reponsible for checking mLabelsHaveBeenSet as a pre-condition to calling us, if desired.
+// Caller must ensure that mExStyle is up-to-date if mHwnd is an existing window.  In addition, caller must
+// apply any changes to mExStyle that we make here.
+{
+	mLabelsHaveBeenSet = true; // Although it's value only matters in some contexts, it's set unconditionally for simplicity.
+
+	#define MAX_GUI_PREFIX_LENGTH 255
+	char *label_suffix, label_name[MAX_GUI_PREFIX_LENGTH+64]; // Labels are unlimited in length, but keep prefix+suffix relatively short so that it stays reasonable (to make it easier to limit it in the future should that ever be desirable).
+	if (aLabelPrefix)
+		strlcpy(label_name, aLabelPrefix, MAX_GUI_PREFIX_LENGTH+1); // Reserve the rest of label_name's size for the suffix below to ensure no chance of overflow.
+	else // Caller is indicating that the defaults should be used.
+	{
+		if (mWindowIndex > 0) // Prepend the window number for windows other than the first.
+			sprintf(label_name, "%dGui", mWindowIndex + 1);
+		else
+			strcpy(label_name, "Gui");
+	}
+	label_suffix = label_name + strlen(label_name); // This is the position at which the rest of the label name will be copied.
+
+	// Find the label to run automatically when the form closes (if any):
+	strcpy(label_suffix, "Close");
+	mLabelForClose = g_script.FindLabel(label_name);  // OK if NULL (closing the window is the same as "gui, cancel").
+
+	// Find the label to run automatically when the user presses Escape (if any):
+	strcpy(label_suffix, "Escape");
+	mLabelForEscape = g_script.FindLabel(label_name);  // OK if NULL (pressing ESCAPE does nothing).
+
+	// Find the label to run automatically when the user resizes the window (if any):
+	strcpy(label_suffix, "Size");
+	mLabelForSize = g_script.FindLabel(label_name);  // OK if NULL.
+
+	// Find the label to run automatically when the user invokes context menu via AppsKey, Rightclick, or Shift-F10:
+	strcpy(label_suffix, "ContextMenu");
+	mLabelForContextMenu = g_script.FindLabel(label_name);  // OK if NULL (leaves context menu unhandled).
+
+	// Find the label to run automatically when files are dropped onto the window:
+	strcpy(label_suffix, "DropFiles");
+	if ((mLabelForDropFiles = g_script.FindLabel(label_name))  // OK if NULL (dropping files is disallowed).
+		&& !mHdrop) // i.e. don't allow user to visibly drop files onto window if a drop is already queued or running.
+		mExStyle |= WS_EX_ACCEPTFILES; // Makes the window accept drops. Otherwise, the WM_DROPFILES msg is not received.
+	else
+		mExStyle &= ~WS_EX_ACCEPTFILES;
+	// It is not necessary to apply any style change made above because the caller detects changes and applies them.
 }
 
 
@@ -3522,6 +3539,18 @@ ResultType GuiType::ParseOptions(char *aOptions, bool &aSetLastFoundWindow, Togg
 			// (because mStyle hadn't been updated to reflect the change made by SetWindowPos):
 			// Gui, +AlwaysOnTop +Disabled -SysMenu
 			if (adding) mStyle |= WS_DISABLED; else mStyle &= ~WS_DISABLED;
+		}
+
+		else if (!strnicmp(next_option, "Label", 5)) // v1.0.44.09: Allow custom label prefix for the reasons described in SetLabels().
+		{
+			if (adding)
+				SetLabels(next_option + 5);
+			//else !adding (-Label), which currently does nothing.  Potential future uses include:
+			// Disable all labels (seems too rare to be useful).
+			// Revert to defaults (e.g. 2GuiSize): Doesn't seem to be of much value because the caller will likely
+			// always know the number of the window in question (if nothing else, than via A_Gui) and can thus revert
+			// to defaults via something like +Label%A_Gui%Gui.
+			// Alternative: Could also use some char that's illegal in labels to indicate one or more of the above.
 		}
 
 		else if (!strnicmp(next_option, "LastFound", 9)) // strnicmp so that "LastFoundExist" is also recognized.
