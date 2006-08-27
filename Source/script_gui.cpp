@@ -2141,7 +2141,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			// Also include DT_EXPANDTABS under the assumption that if there are tabs present, the user
 			// intended for them to be there because a multiline edit would expand them (rather than trying
 			// to worry about whether this control *might* become auto-multiline after this point.
-			draw_format |= DT_EXPANDTABS|DT_EDITCONTROL;
+			draw_format |= DT_EXPANDTABS|DT_EDITCONTROL|DT_NOPREFIX; // v1.0.44.10: Added DT_NOPREFIX because otherwise, if the text contains & or &&, the control won't be sized properly.
 			// and now fall through and have the dimensions calculated based on what's in the control.
 			// ABOVE FALLS THROUGH TO BELOW
 		case GUI_CONTROL_TEXT:
@@ -2151,7 +2151,11 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		{
 			GUI_SET_HDC
 			if (aControlType == GUI_CONTROL_TEXT)
+			{
 				draw_format |= DT_EXPANDTABS; // Buttons can't expand tabs, so don't add this for them.
+				if (style & SS_NOPREFIX) // v1.0.44.10: This is necessary to auto-width the control properly if its contents include any ampersands.
+					draw_format |= DT_NOPREFIX;
+			}
 			else if (aControlType == GUI_CONTROL_CHECKBOX || aControlType == GUI_CONTROL_RADIO)
 			{
 				// Both Checkbox and Radio seem to have the same spacing characteristics:
@@ -2180,8 +2184,16 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			// contents, presumably for revelation later.  If that is truly desired, ControlMove or
 			// similar can be used to resize the control afterward.  In addition, by specifying BOTH
 			// width and height/rows, none of these calculations happens anyway, so that's another way
-			// this override can be overridden:
-			if (opt.height == COORD_UNSPECIFIED || draw_height > opt.height)
+			// this override can be overridden.  UPDATE for v1.0.44.10: The override is now not done for Edit
+			// controls because unlike the other control types enumerated above, it is much more common to
+			// have an Edit not be tall enough to show all of it's initial text.  This fixes the following:
+			//   Gui, Add, Edit, r2 ,Line1`nLine2`nLine3`nLine4
+			// Since there's no explicit width above, the r2 option (or even an H option) would otherwise
+			// be overridden in favor of making the edit tall enough to hold all 4 lines.
+			// Another reason for not changing the other control types to be like Edit is that backward
+			// compatibility probably outweighs any value added by changing them (and the added value is dubious
+			// when the comments above are carefully considered).
+			if (opt.height == COORD_UNSPECIFIED || (draw_height > opt.height && aControlType != GUI_CONTROL_EDIT))
 			{
 				opt.height = draw_height;
 				if (aControlType == GUI_CONTROL_EDIT)
@@ -3462,27 +3474,29 @@ ResultType GuiType::ParseOptions(char *aOptions, bool &aSetLastFoundWindow, Togg
 		// Attributes and option words:
 		if (!strnicmp(next_option, "Owner", 5))
 		{
-			if (mHwnd) // OS provides no way to change an existing window's owner.
-				continue;   // Currently no effect, as documented.
-			if (!adding)
-				mOwner = NULL;
-			else
+			if (!mHwnd)
 			{
-				if (option_end - next_option > 5) // Length is greater than 5, so it has a number (e.g. Owned1).
-				{
-					// Using ATOI() vs. atoi() seems okay in these cases since spaces are required
-					// between options:
-					owner_window_index = ATOI(next_option + 5) - 1;
-					if (owner_window_index > -1 && owner_window_index < MAX_GUI_WINDOWS
-						&& owner_window_index != mWindowIndex  // Window can't own itself!
-						&& g_gui[owner_window_index] && g_gui[owner_window_index]->mHwnd) // Relies on short-circuit boolean order.
-						mOwner = g_gui[owner_window_index]->mHwnd;
-					else
-						return g_script.ScriptError("Invalid or nonexistent owner window." ERR_ABORT, next_option);
-				}
+				if (!adding)
+					mOwner = NULL;
 				else
-					mOwner = g_hWnd; // Make a window owned (by script's main window) omits its taskbar button.
+				{
+					if (option_end - next_option > 5) // Length is greater than 5, so it has a number (e.g. Owned1).
+					{
+						// Using ATOI() vs. atoi() seems okay in these cases since spaces are required
+						// between options:
+						owner_window_index = ATOI(next_option + 5) - 1;
+						if (owner_window_index > -1 && owner_window_index < MAX_GUI_WINDOWS
+							&& owner_window_index != mWindowIndex  // Window can't own itself!
+							&& g_gui[owner_window_index] && g_gui[owner_window_index]->mHwnd) // Relies on short-circuit boolean order.
+							mOwner = g_gui[owner_window_index]->mHwnd;
+						else
+							return g_script.ScriptError("Invalid or nonexistent owner window." ERR_ABORT, next_option);
+					}
+					else
+						mOwner = g_hWnd; // Make a window owned (by script's main window) omits its taskbar button.
+				}
 			}
+			//else mHwnd!=NULL. Since OS provides no way to change an existing window's owner, do nothing as documented.
 		}
 
 		else if (!stricmp(next_option, "AlwaysOnTop"))
@@ -3884,7 +3898,7 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 			switch(aControl.type)
 			{
 			case GUI_CONTROL_TEXT: // This one is a little tricky but the below should be appropriate in most cases:
-				if (adding) aOpt.style_remove |= 0x0F; else aOpt.style_add |= SS_LEFTNOWORDWRAP;
+				if (adding) aOpt.style_remove |= SS_TYPEMASK; else aOpt.style_add = (aOpt.style_add & ~SS_TYPEMASK) | SS_LEFTNOWORDWRAP; // v1.0.44.10: Added SS_TYPEMASK to "else" section to provide more graceful handling for cases like "-Wrap +Center", which would otherwise put an unexpected style like SS_OWNERDRAW into effect.
 				break;
 			case GUI_CONTROL_GROUPBOX:
 			case GUI_CONTROL_BUTTON:
@@ -4363,7 +4377,7 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 					break;
 				case GUI_CONTROL_TEXT:
 					aOpt.style_add |= SS_CENTER;
-					aOpt.style_remove |= SS_RIGHT; // Mutually exclusive since together they are invalid.
+					aOpt.style_remove |= (SS_TYPEMASK & ~SS_CENTER); // i.e. Zero out all type-bits except SS_CENTER's bit.
 					break;
 				case GUI_CONTROL_GROUPBOX: // Changes alignment of its label.
 				case GUI_CONTROL_BUTTON:   // Probably has no effect in this case, since it's centered by default?
@@ -4396,7 +4410,7 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 					aOpt.style_remove |= TBS_BOTH;
 					break;
 				case GUI_CONTROL_TEXT:
-					aOpt.style_remove |= SS_CENTER; // Seems okay since SS_ICON shouldn't be present for this control type.
+					aOpt.style_remove |= SS_TYPEMASK; // Revert to SS_LEFT because there's no way of knowing what the intended or previous value was.
 					break;
 				case GUI_CONTROL_GROUPBOX:
 				case GUI_CONTROL_BUTTON:
@@ -4450,7 +4464,7 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 					break;
 				case GUI_CONTROL_TEXT:
 					aOpt.style_add |= SS_RIGHT;
-					aOpt.style_remove |= SS_CENTER; // Mutually exclusive since together they are invalid.
+					aOpt.style_remove |= (SS_TYPEMASK & ~SS_RIGHT); // i.e. Zero out all type-bits except SS_RIGHT's bit.
 					break;
 				case GUI_CONTROL_GROUPBOX:
 				case GUI_CONTROL_BUTTON:
@@ -4495,7 +4509,7 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 					aOpt.style_remove |= TBS_BOTH; // Debatable.
 					break;
 				case GUI_CONTROL_TEXT:
-					aOpt.style_remove |= SS_RIGHT; // Seems okay since SS_ICON shouldn't be present for this control type.
+					aOpt.style_remove |= SS_TYPEMASK; // Revert to SS_LEFT because there's no way of knowing what the intended or previous value was.
 					break;
 				case GUI_CONTROL_GROUPBOX:
 				case GUI_CONTROL_BUTTON:
@@ -4551,7 +4565,7 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 					aOpt.style_remove |= TBS_BOTH;
 					break;
 				case GUI_CONTROL_TEXT:
-					aOpt.style_remove |= SS_RIGHT|SS_CENTER;  // Removing these exposes the default of 0, which is LEFT.
+					aOpt.style_remove |= SS_TYPEMASK; // i.e. Zero out all type-bits to expose the default of 0, which is SS_LEFT.
 					break;
 				case GUI_CONTROL_CHECKBOX:
 				case GUI_CONTROL_GROUPBOX:
@@ -4926,7 +4940,7 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 	if (aControl.hwnd)
 	{
 		DWORD current_style = GetWindowLong(aControl.hwnd, GWL_STYLE);
-		DWORD new_style = (current_style | aOpt.style_add) & ~aOpt.style_remove;
+		DWORD new_style = (current_style | aOpt.style_add) & ~aOpt.style_remove; // Some things such as GUI_CONTROL_TEXT+SS_TYPEMASK might rely on style_remove being applied *after* style_add.
 
 		// Fix for v1.0.24:
 		// Certain styles can't be applied with a simple bit-or.  The below section is a subset of

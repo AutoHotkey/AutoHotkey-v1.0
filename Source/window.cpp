@@ -1321,7 +1321,7 @@ bool IsWindowHung(HWND aWnd)
 		// When function not available, fall back to the old method:
 		return IsHungThread ? IsHungThread(GetWindowThreadProcessId(aWnd, NULL)) : Slow_IsWindowHung;
 	}
-	else // Otherwise: NT/2k/XP/2003 or some later OS (e.g. 64 bit?), so try to use the newer method.
+	else // Otherwise: NT/2k/XP/2003 or later, so try to use the newer method.
 	{
 		// The use of IsHungAppWindow() (supported under Win2k+) is discouraged by MS,
 		// but it's useful to prevent the script from getting hung when it tries to do something

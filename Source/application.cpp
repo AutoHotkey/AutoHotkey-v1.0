@@ -1634,8 +1634,8 @@ bool MsgMonitor(HWND aWnd, UINT aMsg, WPARAM awParam, LPARAM alParam, MSG *apMsg
 
 	// Linear search vs. binary search should perform better on average because the vast majority
 	// of message monitoring scripts are expected to monitor only a few message numbers.
-	int msg_index;
-	for (msg_index = 0; msg_index < g_MsgMonitorCount; ++msg_index)
+	int msg_index, msg_count_orig;
+	for (msg_count_orig = g_MsgMonitorCount, msg_index = 0; msg_index < g_MsgMonitorCount; ++msg_index)
 		if (g_MsgMonitor[msg_index].msg == aMsg)
 			break;
 	if (msg_index == g_MsgMonitorCount) // No match found, so the script isn't monitoring this message.
@@ -1766,10 +1766,23 @@ bool MsgMonitor(HWND aWnd, UINT aMsg, WPARAM awParam, LPARAM alParam, MSG *apMsg
 	// Thus, if "monitor" is defunct due to deletion, setting its label_is_running to false is harmless.
 	// However, "monitor" might have been reused by BIF_OnMessage() to create a new msg-monitor, so the
 	// thing that must be checked is the message number to avoid wrongly setting some other msg-monitor's
-	// label_is_running to false:
-	if (monitor.msg == aMsg)
+	// label_is_running to false.  Update: Check g_MsgMonitorCount in case it has shrunk (which could leave
+	// "monitor" pointing to an element in the array that is now unused/obsolete).
+	if (g_MsgMonitorCount >= msg_count_orig && monitor.msg == aMsg)
 		monitor.label_is_running = false;
-	//else "monitor" is now some other msg-monitor, so do don't change it (see above comments).
+	else // "monitor" is now some other msg-monitor (or an obsolete item in array), so do don't change it (see above comments).
+	{
+		// Fix for v1.0.44.10: If OnMessage is called from *inside* some other monitor function in a way that
+		// deletes a message monitorm, monitor.label_is_running would get stuck at true (but only if the
+		// message(s) that were deleted lay to the left of it in the array).  So check if the monitor is
+		// somewhere else in the array and if found (i.e. it didn't delete itself), update it.
+		for (msg_index = 0; msg_index < g_MsgMonitorCount; ++msg_index)
+			if (g_MsgMonitor[msg_index].msg == aMsg)
+			{
+				g_MsgMonitor[msg_index].label_is_running = false;
+				break;
+			}
+	}
 
 	if (!*return_value || result == EARLY_EXIT || result == FAIL) // Tell the caller to process this message normally.
 		return false; // The caller should ignore the value of aMsgReply in this case.

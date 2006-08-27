@@ -1629,10 +1629,10 @@ ResultType Line::PerformShowWindow(ActionTypeType aActionType, char *aTitle, cha
 		{
 			if (g_os.IsWin2000orLater())
 				nCmdShow = SW_FORCEMINIMIZE;
-			//else it's not Win2k or later, so don't attempt to minimize hung windows because I
-			// have an 80% expectation (i.e. untested) that our thread would hang because the
-			// call to ShowWindow() would never return.  I have confirmed that SW_MINIMIZE can
+			//else it's not Win2k or later.  I have confirmed that SW_MINIMIZE can
 			// lock up our thread on WinXP, which is why we revert to SW_FORCEMINIMIZE above.
+			// Older/obsolete comment for background: don't attempt to minimize hung windows because that
+			// might hang our thread because the call to ShowWindow() would never return.
 		}
 		else
 			nCmdShow = SW_MINIMIZE;
@@ -3994,10 +3994,8 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, COLOR
 				// Note that screen pixels sometimes have a non-zero high-order byte.  But it doesn't
 				// matter with the below approach, since that byte is not checked in the comparison.
 				pixel = screen_pixel[i];
-				// Because pixel is in RGB vs. BGR format, red is retrieved with GetBValue() and blue
-				// is retrieved with GetRValue().
-				red = GetBValue(pixel);
-				green = GetGValue(pixel);
+				red = GetBValue(pixel);   // Because pixel is in RGB vs. BGR format, red is retrieved with
+				green = GetGValue(pixel); // GetBValue() and blue is retrieved with GetRValue().
 				blue = GetRValue(pixel);
 				if (red >= red_low && red <= red_high
 					&& green >= green_low && green <= green_high
@@ -4177,12 +4175,18 @@ ResultType Line::ImageSearch(int aLeft, int aTop, int aRight, int aBottom, char 
 				strlcpy(color_name, cp, sizeof(color_name));
 				if (dp = StrChrAny(color_name, " \t")) // Find space or tab, if any.
 					*dp = '\0';
+				// Fix for v1.0.44.10: Treat trans_color as containing an RGB value (not BGR) so that it matches
+				// the documented behavior.  In older versions, a specified color like "TransYellow" was wrong in
+				// every way (inverted) and a specified numeric color like "Trans0xFFFFAA" was treated as BGR vs. RGB.
 				trans_color = ColorNameToBGR(color_name);
 				if (trans_color == CLR_NONE) // A matching color name was not found, so assume it's in hex format.
 					// It seems strtol() automatically handles the optional leading "0x" if present:
-					trans_color = rgb_to_bgr(strtol(color_name, NULL, 16));
-					// if cp did not contain something hex-numeric, black (0x00) will be assumed,
+					trans_color = strtol(color_name, NULL, 16);
+					// if color_name did not contain something hex-numeric, black (0x00) will be assumed,
 					// which seems okay given how rare such a problem would be.
+				else
+					trans_color = bgr_to_rgb(trans_color); // v1.0.44.10: See fix/comment above.
+
 			}
 			else // Assume it's a number since that's the only other asterisk-option.
 			{
@@ -4348,7 +4352,7 @@ ResultType Line::ImageSearch(int aLeft, int aTop, int aRight, int aBottom, char 
 			// match any color on the screen.
 			if ((screen_pixel[i] == image_pixel[0] // A screen pixel has been found that matches the image's first pixel.
 				|| image_mask && image_mask[0]     // Or: It's an icon's transparent pixel, which matches any color.
-				|| image_pixel[0] == trans_color)  // This should be okay even if trans_color==CLR_NONE, since CLR none should never occur naturally in the image.
+				|| image_pixel[0] == trans_color)  // This should be okay even if trans_color==CLR_NONE, since CLR_NONE should never occur naturally in the image.
 				&& image_height <= screen_height - i/screen_width // Image is short enough to fit in the remaining rows of the search region.
 				&& image_width <= screen_width - i%screen_width)  // Image is narrow enough not to exceed the right-side boundary of the search region.
 			{

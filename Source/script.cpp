@@ -4266,7 +4266,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 
 				// ParseDerefs() won't consider escaped percent signs to be illegal, but in this case
 				// they should be since they have no meaning in expressions:
-				#define ERR_EXP_ILLEGAL_CHAR "The first character above is illegal in an expression." // "above" refers to the layout of the error dialog.
+				#define ERR_EXP_ILLEGAL_CHAR "The leftmost character above is illegal in an expression." // "above" refers to the layout of the error dialog.
 				if (this_aArgMap) // This arg has an arg map indicating which chars are escaped/literal vs. normal.
 					for (j = 0; this_new_arg.text[j]; ++j)
 						if (this_aArgMap[j] && this_new_arg.text[j] == g_DerefChar)
@@ -6444,7 +6444,17 @@ Var *Script::FindVar(char *aVarName, size_t aVarNameLength, int *apInsertPos, in
 	if (aAlwaysUse == ALWAYS_USE_GLOBAL)
 		is_local = false;
 	else if (aAlwaysUse == ALWAYS_USE_LOCAL)
-		is_local = true;
+		// v1.0.44.10: The following was changed from it's former value of "true" so that places further below
+		// (including passing is_local is call to AddVar()) don't have to ensure that g.CurrentFunc!=NULL.
+		// This fixes a crash that occured when a caller specified ALWAYS_USE_LOCAL even though the current
+		// thread isn't actually inside a *called* function.
+		// Some callers like SYSGET_CMD_MONITORAREA might try to find/add a local array if they see that their
+		// base variable is classified as local (such classification occurs at loadtime, but only for non-dynamic
+		// variable references).  But the current thread entered a "container function" by means other than a
+		// function-call (such as SetTimer), not only is g.CurrentFunc NULL, but there's no easy way to discover
+		// which function owns the currently executing line (a means could be added to the class "Var" or "Line"
+		// but doesn't seem worth it yet due to performance and memory reduction).
+		is_local = (g.CurrentFunc != NULL);
 	else if (aAlwaysUse == ALWAYS_PREFER_LOCAL)
 	{
 		if (g.CurrentFunc) // Caller relies on us to do this final check.
@@ -6494,6 +6504,8 @@ Var *Script::FindVar(char *aVarName, size_t aVarNameLength, int *apInsertPos, in
 			}
 		} // if (there is an exception list)
 	} // aAlwaysUse == ALWAYS_USE_DEFAULT
+
+	// Above has ensured that g.CurrentFunc!=NULL whenever is_local==true.
 
 	if (apIsLocal) // Its purpose is to inform caller of type it would have been in case we don't find a match.
 		*apIsLocal = is_local; // And it stays this way even if globals will be searched because caller wants that.  In other words, a local var is created by default when there is not existing global or local.
@@ -6596,7 +6608,8 @@ Var *Script::FindVar(char *aVarName, size_t aVarNameLength, int *apInsertPos, in
 
 Var *Script::AddVar(char *aVarName, size_t aVarNameLength, int aInsertPos, bool aIsLocal, VarTypeType aVarType)
 // Not currently needed (e.g. for VAR_ATTRIB_PARAM):	, VarAttribType aAttrib)
-// Caller has ensured that aVarName isn't NULL, that this isn't a duplicate variable name.
+// Caller must ensure that g.CurrentFunc!=NULL whenever aIsLocal==true.
+// Caller must ensure that aVarName isn't NULL and that this isn't a duplicate variable name.
 // In addition, it has provided aInsertPos, which is the insertion point so that the list stays sorted.
 // Finally, aIsLocal has been provided to indicate which list, global or local, should receive this
 // new variable.  And aVarType should be != VAR_INVALID only when the caller wants us to add a variable
@@ -6634,7 +6647,7 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, int aInsertPos, bool 
 	// section at loadtime displays an error for any attempt to explicitly declare built-in variables as
 	// either global or local.
 	VarTypeType var_type = GetVarType(var_name);
-	if (g.CurrentFunc && aIsLocal && (var_type != VAR_NORMAL || !stricmp(var_name, "ErrorLevel"))) // Attempt to create built-in variable as local.
+	if (aIsLocal && (var_type != VAR_NORMAL || !stricmp(var_name, "ErrorLevel"))) // Attempt to create built-in variable as local.
 	{
 		if (aVarType == VAR_INVALID) // Caller didn't specify, so fall back to the global built-in variable of this name rather than displaying an error.
 			return FindOrAddVar(var_name, aVarNameLength, ALWAYS_USE_GLOBAL); // Force find-or-create of global.

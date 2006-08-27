@@ -205,7 +205,8 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aTrimIt, bool aExac
 			if (alloc_size > g_MaxVarCapacity && aObeyMaxMem) // v1.0.43.03: aObeyMaxMem was added since some callers aren't supposed to obey it.
 				alloc_size = g_MaxVarCapacity;  // which has already been verified to be enough.
 			mHowAllocated = ALLOC_MALLOC; // This should be done first because even if the below fails, the old value of mContents (e.g. SimpleHeap) is lost.
-			if (   !(mContents = (char *)malloc(alloc_size))   )
+			mContents = NULL; // Set default in case of short-circuit below.
+			if (   alloc_size > 2147483647 || !(mContents = (char *)malloc(alloc_size))   ) // v1.0.44.10: Added a sanity limit of 2 GB so that small negatives like VarSetCapacity(Var, -2) [and perhaps other callers of this function] don't crash.
 			{
 				mCapacity = 0;  // Added for v1.0.25.
 				return g_script.ScriptError(ERR_OUTOFMEM ERR_ABORT); // ERR_ABORT since an error is most likely to occur at runtime.
