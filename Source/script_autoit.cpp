@@ -1011,7 +1011,7 @@ ResultType Line::URLDownloadToFile(char *aURL, char *aFilespec)
 		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
 	}
 
-	BYTE bufData[1024 * 8];
+	BYTE bufData[1024 * 1]; // v1.0.44.11: Reduced from 8 KB to alleviate GUI window lag during UrlDownloadtoFile.  Testing shows this reduction doesn't affect performance on high-speed downloads (in fact, downloads are slightly faster; I tested two sites, one at 184 KB/s and the other at 380 KB/s).  It might affect slow downloads, but that seems less likely so wasn't tested.
 	INTERNET_BUFFERS buffers = {0};
 	buffers.dwStructSize = sizeof(INTERNET_BUFFERS);
 	buffers.lpvBuffer = bufData;

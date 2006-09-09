@@ -67,6 +67,7 @@ extern bool g_NoTrayIcon;
 #endif
 extern bool g_AllowSameLineComments;
 extern bool g_AllowInterruption;
+extern bool g_DeferMessagesForUnderlyingPump;
 extern bool g_MainTimerExists;
 extern bool g_UninterruptibleTimerExists;
 extern bool g_AutoExecTimerExists;

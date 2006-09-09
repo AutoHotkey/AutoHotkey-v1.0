@@ -206,7 +206,10 @@ public:
 	void Free(int aWhenToFree = VAR_ALWAYS_FREE, bool aExcludeAliases = false);
 	void SetLengthFromContents();
 
-	static ResultType ValidateName(char *aName, bool aIsRuntime = false, bool aDisplayError = true);
+	#define DISPLAY_NO_ERROR   0  // Must be zero.
+	#define DISPLAY_VAR_ERROR  1
+	#define DISPLAY_FUNC_ERROR 2
+	static ResultType ValidateName(char *aName, bool aIsRuntime = false, int aDisplayError = DISPLAY_VAR_ERROR);
 
 	char *ToText(char *aBuf, int aBufSize, bool aAppendNewline)
 	// aBufSize is an int so that any negative values passed in from caller are not lost.

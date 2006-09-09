@@ -34,7 +34,24 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 // caller's script subroutine is suspended due to action by us, an unknowable
 // amount of time may pass prior to finally returning to the caller.
 {
-	// This is done here for performance reasons.  UPDATE: This probably never needs
+	bool we_turned_on_defer = false; // Set default.
+	if (aMode == RETURN_AFTER_MESSAGES_SPECIAL_FILTER)
+	{
+		aMode = RETURN_AFTER_MESSAGES; // To simplify things further below, eliminate the mode RETURN_AFTER_MESSAGES_SPECIAL_FILTER from further consideration.
+		// g_DeferMessagesForUnderlyingPump is a global because the instance of MsgSleep on the calls stack
+		// that set it to true could launch new thread(s) that call MsgSleep again (i.e. a new layer), and a global
+		// is the easiest way to inform all such MsgSleeps that there's a non-standard msg pump beneath them on the
+		// call stack.
+		if (!g_DeferMessagesForUnderlyingPump)
+		{
+			g_DeferMessagesForUnderlyingPump = true;
+			we_turned_on_defer = true;
+		}
+		// So now either we turned it on or some layer beneath us did.  Therefore, we know there's at least one
+		// non-standard msg pump beneath us on the call stack.
+	}
+
+	// The following is done here for performance reasons.  UPDATE: This probably never needs
 	// to close the clipboard now that Line::ExecUntil() also calls CLOSE_CLIPBOARD_IF_OPEN:
 	CLOSE_CLIPBOARD_IF_OPEN;
 
@@ -187,11 +204,10 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 	bool sleep0_was_done = false;
 	bool empty_the_queue_via_peek = false;
 
-	int i, object_count;
+	int i, gui_count;
 	bool msg_was_handled;
 	HWND fore_window, focused_control, focused_parent, criterion_found_hwnd;
-	DWORD fore_pid;
-	char fore_class_name[32];
+	char wnd_class_name[32];
 	UserMenuItem *menu_item;
 	Hotkey *hk;
 	HotkeyVariant *variant;
@@ -203,17 +219,18 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 	GuiIndexType gui_control_index, gui_index; // gui_index is needed to avoid using pgui in cases where that pointer becomes invalid (e.g. if ExecUntil() executes "Gui Destroy").
 	GuiEventType gui_action;
 	DWORD gui_event_info, gui_size;
-	bool *pgui_label_is_running, event_is_control_generated;
+	bool *pgui_label_is_running, event_is_control_generated, peek_was_done;
 	Label *gui_label;
 	HDROP hdrop_to_free;
-	DWORD tick_before, tick_after;
+	DWORD tick_before, tick_after, peek1_time;
 	LRESULT msg_reply;
+	BOOL peek_result;
 	MSG msg;
 
-	for (;;)
+	for (;;) // Main event loop.
 	{
 		tick_before = GetTickCount();
-		if (aSleepDuration > 0 && !empty_the_queue_via_peek)
+		if (aSleepDuration > 0 && !empty_the_queue_via_peek && !g_DeferMessagesForUnderlyingPump) // g_Defer: Requires a series of Peeks to handle non-contingous ranges, which is why GetMessage() can't be used.
 		{
 			// The following comment is mostly obsolete as of v1.0.39 (which introduces a thread
 			// dedicated to the hooks).  However, using GetMessage() is still superior to
@@ -238,10 +255,61 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 			if (tick_after - tick_before > 3)  // 3 is somewhat arbitrary, just want to make sure it rested for a meaningful amount of time.
 				g_script.mLastScriptRest = tick_after;
 		}
-		else // aSleepDuration < 1 || empty_the_queue_via_peek
+		else // aSleepDuration < 1 || empty_the_queue_via_peek || g_DeferMessagesForUnderlyingPump
 		{
-			// In the above cases, we don't want to be stuck in GetMessage() for even 10ms:
-			if (!PeekMessage(&msg, NULL, 0, MSG_FILTER_MAX, PM_REMOVE)) // No more messages
+			peek_was_done = false; // Set default.
+			// Check the active window in each iteration in case a signficant amount of time has passed since
+			// the previous iteration (due to launching threads, etc.)
+			if (g_DeferMessagesForUnderlyingPump && (fore_window = GetForegroundWindow()) != NULL  // There is a foreground window.
+				&& GetWindowThreadProcessId(fore_window, NULL) == g_MainThreadID // And it belongs to our main thread (the main thread is the only one that owns any windows).
+				&& (focused_control = GetFocus()))
+			{
+				GetClassName(focused_control, wnd_class_name, sizeof(wnd_class_name));
+				if (!stricmp(wnd_class_name, "SysTreeView32")) // A TreeView owned by our thread has focus (includes FileSelectFolder's TreeView).
+				{
+					// v1.0.44.11: Since one of our thread's TreeViews has focus (even in FileSelectFolder), this
+					// section is a work-around for the fact that the TreeView's message pump (somewhere beneath
+					// us on the call stack) is apparently designed to process some mouse messages directly rather
+					// than receiving them indirectly (in its WindowProc) via our call to DispatchMessage() here
+					// in this pump.  The symptoms of this issue are an inability of a user to reliably select
+					// items in a TreeView (the selection sometimes snaps back to the previously selected item),
+					// which can be reproduced by showing a TreeView while a 10ms script timer is running doing
+					// a trivial single line such as x=1.
+					// This special handling for TreeView can someday be broadened so that focused control's
+					// class isn't checked: instead, could check whether left and/or right mouse button is
+					// logically down (which hasn't yet been tested).  Or it could be broadened to include
+					// other system dialogs and/or common controls that have unusual processing in their
+					// message pumps -- processing that requires them to directly receive certain messages
+					// rather than having them dispatched directly to their WindowProc.
+					peek_was_done = true;
+					// Peek() must be used instead of Get(), and Peek() must be called more than once to handle
+					// the two ranges on either side of the mouse messages.  But since it would be improper
+					// to process messages out of order (and might lead to side-effects), force the retrieval
+					// to be in chronological order by checking the timestamps of each Peek first message, and
+					// then fetching the one that's oldest (since it should be the one that's been waiting the
+					// longest and thus generally should be ahead of the other Peek's message in the queue):
+#define PEEK1(mode) PeekMessage(&msg, NULL, 0, WM_MOUSEFIRST-1, mode) // Relies on the fact that WM_MOUSEFIRST < MSG_FILTER_MAX
+#define PEEK2(mode) PeekMessage(&msg, NULL, WM_MOUSELAST+1, MSG_FILTER_MAX, mode)
+					if (!PEEK1(PM_NOREMOVE))  // Since no message in Peek1, safe to always use Peek2's (even if it has no message either).
+						peek_result = PEEK2(PM_REMOVE);
+					else // Peek1 has a message.  So if Peek2 does too, compare their timestamps.
+					{
+						peek1_time = msg.time; // Save it due to overwrite in next line.
+						if (!PEEK2(PM_NOREMOVE)) // Since no message in Peek2, use Peek1's.
+							peek_result = PEEK1(PM_REMOVE);
+						else // Both Peek2 and Peek1 have a message waiting, so to break the tie, retrieve the oldest one.
+						{
+							// In case tickcount has wrapped, compare it the better way (must cast to int to avoid
+							// loss of negative values):
+							peek_result = ((int)(msg.time - peek1_time) > 0) // Peek2 is newer than Peek1, so treat peak1 as oldest and thus first in queue.
+								? PEEK1(PM_REMOVE) : PEEK2(PM_REMOVE);
+						}
+					}
+				}
+			}
+			if (!peek_was_done) // Fall back to the standard filter for Peek().
+				peek_result = PeekMessage(&msg, NULL, 0, MSG_FILTER_MAX, PM_REMOVE);
+			if (!peek_result) // No more messages
 			{
 				// Since the Peek() didn't find any messages, our timeslice was probably just
 				// yielded if the CPU is under heavy load.  If so, it seems best to count that as
@@ -318,8 +386,14 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				// to turn it back on whenever a layer beneath us needs it.  Since the timer
 				// is never killed while g_script.mTimerEnabledCount is >0, it shouldn't be necessary
 				// to check g_script.mTimerEnabledCount here.
+				//
+				// "we_turned_on_defer" is necessary to prevent us from turning it off if some other
+				// instance of MsgSleep beneath us on the calls stack turned it on.  Only it should
+				// turn it off because it might still need the "true" value for further processing.
 				#define RETURN_FROM_MSGSLEEP \
 				{\
+					if (we_turned_on_defer)\
+						g_DeferMessagesForUnderlyingPump = false;\
 					if (this_layer_needs_timer)\
 						--g_nLayersNeedingTimer;\
 					if (g_MainTimerExists)\
@@ -331,17 +405,23 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 						SET_MAIN_TIMER \
 					return return_value;\
 				}
-				// Function should always return OK in this case.  Also, was_interrupted
-				// will always be false because if this "aSleepDuration < 1" call
-				// really was interrupted, it would already have returned in the
-				// hotkey cases of the switch().  UPDATE: was_interrupted can now
-				// be true since the hotkey case in the switch() doesn't return,
-				// relying on us to do it after making sure the queue is empty.
+				// IsCycleComplete should always return OK in this case.  Also, was_interrupted
+				// will always be false because if this "aSleepDuration < 1" call really
+				// was interrupted, it would already have returned in the hotkey cases
+				// of the switch().  UPDATE: was_interrupted can now the hotkey case in
+				// the switch() doesn't return, relying on us to do it after making sure
+				// the queue is empty.
 				// The below is checked here rather than in IsCycleComplete() because
 				// that function is sometimes called more than once prior to returning
 				// (e.g. empty_the_queue_via_peek) and we only want this to be decremented once:
-				IsCycleComplete(aSleepDuration, start_time, allow_early_return);
-				RETURN_FROM_MSGSLEEP
+				if (IsCycleComplete(aSleepDuration, start_time, allow_early_return)) // v1.0.44.11: IsCycleComplete() must be called for all modes, but now its return value is checked due to the new g_DeferMessagesForUnderlyingPump mode.
+					RETURN_FROM_MSGSLEEP
+				// Otherwise (since above didn't return) combined logic has ensured that all of the following are true:
+				// 1) aSleepDuration > 0
+				// 2) !empty_the_queue_via_peek
+				// 3) The above two combined with logic above means that g_DeferMessagesForUnderlyingPump==true.
+				Sleep(5); // Since Peek() didn't find a message, avoid maxing the CPU.  This is a somewhat arbitrary value: the intent of a value below 10 is to avoid yielding more than one timeslice on all systems even if they have unusual time slice sizes / system timers.
+				continue;
 			}
 			// else Peek() found a message, so process it below.
 		} // PeekMessage() vs. GetMessage()
@@ -352,22 +432,24 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 		// For max. flexibility, it seems best to allow the message filter to have the first
 		// crack at looking at the message, before even TRANSLATE_AHK_MSG:
 		if (g_MsgMonitorCount && MsgMonitor(msg.hwnd, msg.message, msg.wParam, msg.lParam, &msg, msg_reply))  // Count is checked here to avoid function-call overhead.
+		{
 			continue; // MsgMonitor has returned "true", indicating that this message should be omitted from further processing.
-			// Above does "continue" and ignores msg_reply.  This is because testing shows that
+			// NOTE: Above does "continue" and ignores msg_reply.  This is because testing shows that
 			// messages received via Get/PeekMessage() were always sent via PostMessage.  If an
 			// another thread sends ours a message, MSDN implies that Get/PeekMessage() internally
 			// calls the message's WindowProc directly and sends the reply back to the other thread.
 			// That makes sense because it seems unlikely that DispatchMessage contains any means
 			// of replying to a message because it has no way of knowing whether the MSG struct
 			// arrived via Post vs. SendMessage.
+		}
 
 		// If this message might be for one of our GUI windows, check that before doing anything
 		// else with the message.  This must be done first because some of the standard controls
 		// also use WM_USER messages, so we must not assume they're generic thread messages just
 		// because they're >= WM_USER.  The exception is AHK_GUI_ACTION should always be handled
-		// here rather than by IsDialogMessage().  Note: sObjectCount is checked first to help
+		// here rather than by IsDialogMessage().  Note: sGuiCount is checked first to help
 		// performance, since all messages must come through this bottleneck.
-		if (GuiType::sObjectCount && msg.hwnd && msg.hwnd != g_hWnd && !(msg.message == AHK_GUI_ACTION || msg.message == AHK_USER_MENU))
+		if (GuiType::sGuiCount && msg.hwnd && msg.hwnd != g_hWnd && !(msg.message == AHK_GUI_ACTION || msg.message == AHK_USER_MENU))
 		{
 			if (msg.message == WM_KEYDOWN)
 			{
@@ -482,7 +564,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				}
 			} // if (msg.message == WM_KEYDOWN)
 
-			for (i = 0, object_count = 0, msg_was_handled = false; i < MAX_GUI_WINDOWS; ++i)
+			for (i = 0, gui_count = 0, msg_was_handled = false; i < MAX_GUI_WINDOWS; ++i)
 			{
 				// Note: indications are that IsDialogMessage() should not be called with NULL as
 				// its first parameter (perhaps as an attempt to get allow dialogs owned by our
@@ -496,6 +578,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 					if (g_gui[i]->mHwnd)
 					{
 						g.CalledByIsDialogMessageOrDispatch = true;
+						g.CalledByIsDialogMessageOrDispatchMsg = msg.message; // Added in v1.0.44.11 because it's known that IsDialogMessage can change the message number (e.g. WM_KEYDOWN->WM_NOTIFY for UpDowns)
 						if (IsDialogMessage(g_gui[i]->mHwnd, &msg))
 						{
 							msg_was_handled = true;
@@ -504,7 +587,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 						}
 						g.CalledByIsDialogMessageOrDispatch = false;
 					}
-					if (GuiType::sObjectCount == ++object_count) // No need to keep searching.
+					if (GuiType::sGuiCount == ++gui_count) // No need to keep searching.
 						break;
 				}
 			}
@@ -590,7 +673,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 						continue;
 					// UPDATE: Must allow multiple threads because otherwise the user cannot right-click twice
 					// consecutively (the second click is blocked because the menu is still displayed at the
-					// instant of the click.  The following comment is probably not entirely correct because
+					// instant of the click.  The following older reason is probably not entirely correct because
 					// the display of a popup menu via "Menu, MyMenu, Show" will spin off a new thread if the
 					// user selects an item in the menu:
 					// Unlike most other Gui labels, it seems best by default to allow GuiContextMenu to be
@@ -1325,50 +1408,49 @@ break_out_of_main_switch:
 		// NOTE: THE BELOW IS CONFIRMED to be needed, at least for a FileSelectFile()
 		// dialog whose quasi-thread has been suspended, and probably for some of the other
 		// types of dialogs as well:
-		if ((fore_window = GetForegroundWindow()) != NULL)  // There is a foreground window.
+		if ((fore_window = GetForegroundWindow()) != NULL  // There is a foreground window.
+			&& GetWindowThreadProcessId(fore_window, NULL) == g_MainThreadID) // And it belongs to our main thread (the main thread is the only one that owns any windows).
 		{
-			GetWindowThreadProcessId(fore_window, &fore_pid);
-			if (fore_pid == GetCurrentProcessId())  // It belongs to our process.
+			GetClassName(fore_window, wnd_class_name, sizeof(wnd_class_name));
+			if (!strcmp(wnd_class_name, "#32770"))  // MsgBox, InputBox, FileSelectFile/Folder dialog.
 			{
-				GetClassName(fore_window, fore_class_name, sizeof(fore_class_name));
-				if (!strcmp(fore_class_name, "#32770"))  // MessageBox(), InputBox(), or FileSelectFile() window.
+				g.CalledByIsDialogMessageOrDispatch = true; // In case there is any way IsDialogMessage() can call one of our own window proc's rather than that of a MsgBox, etc.
+				g.CalledByIsDialogMessageOrDispatchMsg = msg.message; // Added in v1.0.44.11 because it's known that IsDialogMessage can change the message number (e.g. WM_KEYDOWN->WM_NOTIFY for UpDowns)
+				if (IsDialogMessage(fore_window, &msg))  // This message is for it, so let it process it.
 				{
-					g.CalledByIsDialogMessageOrDispatch = true; // In case there is any way IsDialogMessage() can call one of our own window proc's rather than that of a MsgBox, etc.
-					if (IsDialogMessage(fore_window, &msg))  // This message is for it, so let it process it.
-					{
-						// If it is likely that a FileSelectFile dialog is active, this
-						// section attempt to retain the current directory as the user
-						// navigates from folder to folder.  This is done because it is
-						// possible that our caller is a quasi-thread other than the one
-						// that originally launched the FileSelectFile (i.e. that dialog
-						// is in a suspended thread), in which case the user's navigation
-						// would cause the active threads working dir to change unexpectedly
-						// unless the below is done.  This is not a complete fix since if
-						// a message pump other than this one is running (e.g. that of a
-						// MessageBox()), these messages will not be detected:
-						if (g_nFileDialogs) // See MsgSleep() for comments on this.
-							// The below two messages that are likely connected with a user
-							// navigating to a different folder within the FileSelectFile dialog.
-							// That avoids changing the directory for every message, since there
-							// can easily be thousands of such messages every second if the
-							// user is moving the mouse.  UPDATE: This doesn't work, so for now,
-							// just call SetCurrentDirectory() for every message, which does work.
-							// A brief test of CPU utilization indicates that SetCurrentDirectory()
-							// is not a very high overhead call when it is called many times here:
-							//if (msg.message == WM_ERASEBKGND || msg.message == WM_DELETEITEM)
-							SetCurrentDirectory(g_WorkingDir);
-						g.CalledByIsDialogMessageOrDispatch = false;
-						continue;  // This message is done, so start a new iteration to get another msg.
-					}
+					// If it is likely that a FileSelectFile dialog is active, this
+					// section attempt to retain the current directory as the user
+					// navigates from folder to folder.  This is done because it is
+					// possible that our caller is a quasi-thread other than the one
+					// that originally launched the FileSelectFile (i.e. that dialog
+					// is in a suspended thread), in which case the user's navigation
+					// would cause the active threads working dir to change unexpectedly
+					// unless the below is done.  This is not a complete fix since if
+					// a message pump other than this one is running (e.g. that of a
+					// MessageBox()), these messages will not be detected:
+					if (g_nFileDialogs) // See MsgSleep() for comments on this.
+						// The below two messages that are likely connected with a user
+						// navigating to a different folder within the FileSelectFile dialog.
+						// That avoids changing the directory for every message, since there
+						// can easily be thousands of such messages every second if the
+						// user is moving the mouse.  UPDATE: This doesn't work, so for now,
+						// just call SetCurrentDirectory() for every message, which does work.
+						// A brief test of CPU utilization indicates that SetCurrentDirectory()
+						// is not a very high overhead call when it is called many times here:
+						//if (msg.message == WM_ERASEBKGND || msg.message == WM_DELETEITEM)
+						SetCurrentDirectory(g_WorkingDir);
 					g.CalledByIsDialogMessageOrDispatch = false;
+					continue;  // This message is done, so start a new iteration to get another msg.
 				}
+				g.CalledByIsDialogMessageOrDispatch = false;
 			}
 		}
 		// Translate keyboard input for any of our thread's windows that need it:
 		if (!g_hAccelTable || !TranslateAccelerator(g_hWnd, g_hAccelTable, &msg))
 		{
-			TranslateMessage(&msg);
 			g.CalledByIsDialogMessageOrDispatch = true; // Relies on the fact that the types of messages we dispatch can't result in a recursive call back to this function.
+			g.CalledByIsDialogMessageOrDispatchMsg = msg.message; // Added in v1.0.44.11. Do it prior to Translate & Dispatch in case either one of them changes the message number (it is already known that IsDialogMessage can change message numbers).
+			TranslateMessage(&msg);
 			DispatchMessage(&msg); // This is needed to send keyboard input and other messages to various windows and for some WM_TIMERs.
 			g.CalledByIsDialogMessageOrDispatch = false;
 		}
@@ -1409,8 +1491,10 @@ ResultType IsCycleComplete(int aSleepDuration, DWORD aStartTime, bool aAllowEarl
 	// v1.0.38.04: Reset mLastPeekTime because caller has just done a GetMessage() or PeekMessage(),
 	// both of which should have routed events to the keyboard/mouse hooks like LONG_OPERATION_UPDATE's
 	// PeekMessage() and thus satisified the reason that mLastPeekTime is tracked in the first place.
-	// This might also improve performance slightly by avoiding extra Peek() calls, while also reducing
-	// premature thread interruptions.
+	// UPDATE: Although the hooks now have a dedicated thread, there's a good chance mLastPeekTime is
+	// beneficial in terms of increasing GUI & script responsiveness, so it is kept.
+	// The following might also improve performance slightly by avoiding extra Peek() calls, while also
+	// reducing premature thread interruptions.
 	g_script.mLastPeekTime = tick_now;
 	return OK;
 }

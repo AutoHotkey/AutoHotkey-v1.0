@@ -513,7 +513,7 @@ ResultType Script::ScriptDeleteMenu(UserMenu *aMenu)
 #define aMenuItem_ID (aMenuItem->mSubmenu ? GetSubmenuPos(aMenuItem->mSubmenu->mMenu) : aMenuItem->mMenuID)
 #define aMenuItem_MF_BY (aMenuItem->mSubmenu ? MF_BYPOSITION : MF_BYCOMMAND)
 #define UPDATE_GUI_MENU_BARS(menu_type, hmenu) \
-	if (menu_type == MENU_TYPE_BAR && GuiType::sObjectCount)\
+	if (menu_type == MENU_TYPE_BAR && GuiType::sGuiCount)\
 		GuiType::UpdateMenuBars(hmenu); // Above: If it's not a popup, it's probably a menu bar.
 
 
@@ -1120,15 +1120,15 @@ ResultType UserMenu::Destroy()
 	{
 		// As a precaution, don't allow a menu to be destroyed if a window is using it as its
 		// menu bar. That might have bad side-effects on some OSes, especially older ones:
-		if (mMenuType == MENU_TYPE_BAR && GuiType::sObjectCount)
+		if (mMenuType == MENU_TYPE_BAR && GuiType::sGuiCount)
 		{
-			int i, object_count;
-			for (i = 0, object_count = 0; i < MAX_GUI_WINDOWS; ++i)
+			int i, gui_count;
+			for (i = 0, gui_count = 0; i < MAX_GUI_WINDOWS; ++i)
 				if (g_gui[i])
 				{
 					if (g_gui[i]->mHwnd && GetMenu(g_gui[i]->mHwnd) == mMenu)
 						return FAIL; // A GUI window is using this menu, so don't destroy the menu.
-					if (GuiType::sObjectCount == ++object_count) // No need to keep searching.
+					if (GuiType::sGuiCount == ++gui_count) // No need to keep searching.
 						break;
 				}
 		}
@@ -1265,7 +1265,7 @@ ResultType UserMenu::Display(bool aForceToForeground, int aX, int aY)
 	}
 	// Apparently, the HWND parameter of TrackPopupMenuEx() can be g_hWnd even if one of the script's
 	// other (non-main) windows is foreground. The menu still seems to operate correctly.
-	g_MenuIsVisible = MENU_TYPE_POPUP;
+	g_MenuIsVisible = MENU_TYPE_POPUP; // It seems this is also set by HANDLE_MENU_LOOP because apparently, TrackPopupMenuEx generates WM_ENTERMENULOOP. So it's done here just for added safety in case WM_ENTERMENULOOP isn't ALWAYS generated.
 	TrackPopupMenuEx(mMenu, TPM_LEFTALIGN | TPM_LEFTBUTTON, pt.x, pt.y, g_hWnd, NULL);
 	g_MenuIsVisible = MENU_TYPE_NONE;
 	// MSDN recommends this to prevent menu from closing on 2nd click.  MSDN also says that it's only

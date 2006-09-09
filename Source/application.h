@@ -19,13 +19,12 @@ GNU General Public License for more details.
 
 #include "defines.h"
 
+// Callers should note that using INTERVAL_UNSPECIFIED might not rest the CPU at all if there is
+// already at least one msg waiting in our thread's msg queue:
 // Use some negative value unlikely to ever be passed explicitly:
 #define INTERVAL_UNSPECIFIED (INT_MIN + 303)
 #define NO_SLEEP -1
-enum MessageMode {RETURN_AFTER_MESSAGES, WAIT_FOR_MESSAGES};
-
-// Callers should note that using INTERVAL_UNSPECIFIED might not rest the CPU at all if there is
-// already at least one msg waiting in our thread's msg queue:
+enum MessageMode {WAIT_FOR_MESSAGES, RETURN_AFTER_MESSAGES, RETURN_AFTER_MESSAGES_SPECIAL_FILTER};
 bool MsgSleep(int aSleepDuration = INTERVAL_UNSPECIFIED, MessageMode aMode = RETURN_AFTER_MESSAGES);
 
 // This macro is used to Sleep without the possibility of a new hotkey subroutine being launched.

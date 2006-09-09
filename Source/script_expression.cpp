@@ -234,7 +234,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 		, 16             // SYM_DEREF -- Giving this a higher precedence than the above allows !*Var to work, and also -*Var and ~*Var.
 		, 17             // SYM_FUNC -- Probably must be of highest precedence for it to work properly.
 	};
-	// Most programming languages give exponentiation a higher precedence than unary minus and !/not.
+	// Most programming languages give exponentiation a higher precedence than unary minus and logical-not.
 	// For example, -2**2 is evaluated as -(2**2), not (-2)**2 (the latter is unsupported by qmathPow anyway).
 	// However, this rule requires a small workaround in the postfix-builder to allow 2**-2 to be
 	// evaluated as 2**(-2) rather than being seen as an error.
@@ -996,7 +996,7 @@ double_deref:
 	Func *prev_func;
 	char *result; // "result" is used for return values and also the final result.
 	size_t result_size;
-	bool done, make_result_persistent, early_return, left_branch_is_true;
+	bool done, make_result_persistent, early_return, left_branch_is_true, left_was_negative;
 	ExprTokenType *circuit_token;
 	VarBkp *var_backup = NULL;  // If needed, it will hold an array of VarBkp objects. v1.0.40.07: Initialized to NULL to facilitate an approach that's more maintainable.
 	int var_backup_count; // The number of items in the above array.
@@ -1687,29 +1687,26 @@ skip_abort_udf:
 					break;
 				case SYM_POWER:
 					// Note: The function pow() in math.h adds about 28 KB of code size (uncompressed)!
-					// Even assuming pow() supports negative bases such as (-2)**2, that's why it's not used.
-					// The following comment is from TRANS_CMD_POW.  For consistency, the same policy is applied here:
-					// Currently, a negative aValue1 isn't supported.
-					// The reason for this is that since fractional exponents are supported (e.g. 0.5, which
-					// results in the square root), there would have to be some extra detection to ensure
-					// that a negative aValue1 is never used with fractional exponent (since the root of
-					// a negative is undefined).  In addition, qmathPow() doesn't support negatives, returning
-					// an unexpectedly large value or -1.#IND00 instead.  Also note that zero raised to
-					// a negative power is undefined, similar to division-by-zero, and thus a blank value is yielded.
-					if (left_int64 < 0 || (!left_int64 && right_int64 < 0)) // See comments at TRANS_CMD_POW about this.
+					// Even assuming pow() supports negative bases such as (-2)**2, its size is why it's not used.
+					// v1.0.44.11: With Laszlo's help, negative integer bases are now supported.
+					if (!left_int64 && right_int64 < 0) // In essense, this is divide-by-zero.
 					{
 						// Return a consistent result rather than something that varies:
 						this_token.marker = "";
 						this_token.symbol = SYM_STRING;
 						goto push_this_token;
 					}
+					// Otherwise, we now have a valid base and exponent and both are integers. Thus, the calculation
+					// will always have a defined result.
+					if (left_was_negative = (left_int64 < 0))
+						left_int64 = -left_int64; // Force a positive due to the limitiations of qmathPow().
+					this_token.value_double = qmathPow((double)left_int64, (double)right_int64);
+					if (left_was_negative && right_int64 % 2) // Negative base and odd exponent (not zero or even).
+						this_token.value_double = -this_token.value_double;
 					if (right_int64 < 0)
-					{
-						this_token.value_double = qmathPow((double)left_int64, (double)right_int64);
 						this_token.symbol = SYM_FLOAT;  // Due to negative exponent, override to float like TRANS_CMD_POW.
-					}
 					else
-						this_token.value_int64 = (__int64)qmathPow((double)left_int64, (double)right_int64);
+						this_token.value_int64 = (__int64)this_token.value_double;
 					break;
 				}
 				if (this_token.symbol != SYM_FLOAT)  // It wasn't overridden by SYM_POWER.
@@ -1761,15 +1758,23 @@ skip_abort_udf:
 				case SYM_LT:       this_token.value_double = left_double < right_double; break;
 				case SYM_GTOE:     this_token.value_double = left_double >= right_double; break;
 				case SYM_LTOE:     this_token.value_double = left_double <= right_double; break;
-				case SYM_POWER: // See the other SYM_POWER higher above for explanation of the below:
-					if (left_double < 0 || (left_double == 0.0 && right_double < 0))
+				case SYM_POWER:
+					// v1.0.44.11: With Laszlo's help, negative bases are now supported as long as the exponent is not fractional.
+					// See the other SYM_POWER higher above for more details about below.
+					left_was_negative = (left_double < 0);
+					if (left_double == 0.0 && right_double < 0  // In essense, this is divide-by-zero.
+						|| left_was_negative && qmathFmod(right_double, 1.0) != 0.0) // Negative base, but exponent isn't close enough to being an integer: unsupported (to simplify code).
 					{
 						this_token.marker = "";
 						this_token.symbol = SYM_STRING;
 						goto push_this_token;
 					}
 					// Otherwise:
+					if (left_was_negative)
+						left_double = -left_double; // Force a positive due to the limitiations of qmathPow().
 					this_token.value_double = qmathPow(left_double, right_double);
+					if (left_was_negative && qmathFabs(qmathFmod(right_double, 2.0)) == 1.0) // Negative base and exactly-odd exponent (otherwise, it can only be zero or even because if not it would have returned higher above).
+						this_token.value_double = -this_token.value_double;
 					break;
 				}
 				this_token.symbol = SYM_FLOAT; // Must be done only after the switch() above.

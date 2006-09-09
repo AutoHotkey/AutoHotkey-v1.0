@@ -78,6 +78,7 @@ bool g_DerefTimerExists = false;
 bool g_SoundWasPlayed = false;
 bool g_IsSuspended = false;  // Make this separate from g_AllowInterruption since that is frequently turned off & on.
 bool g_AllowInterruption = true;
+bool g_DeferMessagesForUnderlyingPump = false;
 int g_nLayersNeedingTimer = 0;
 int g_nThreads = 0;
 int g_nPausedThreads = 0;

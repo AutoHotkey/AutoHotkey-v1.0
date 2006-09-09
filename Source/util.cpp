@@ -1602,6 +1602,28 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, i
 		// LR_CREATEDIBSECTION applies only when aImageType == IMAGE_BITMAP, but seems appropriate in that case.
 		// Also, if width and height are non-zero, that will determine which icon of a multi-icon .ico file gets
 		// loaded (though I don't know the exact rules of precedence).
+		// KNOWN LIMITATIONS/BUGS:
+		// LoadImage() fails when requesting a size of 1x1 for a image whose orig/actual size is small (e.g. 1x2).
+		// Unlike CopyImage(), perhaps it detects that division by zero would occur and refuses to do the
+		// calculation rather than providing more code to do a correct calculation that doesn't divide by zero.
+		// For example:
+		// LoadImage() Success:
+		//   Gui, Add, Pic, h2 w2, bitmap 1x2.bmp
+		//   Gui, Add, Pic, h1 w1, bitmap 4x6.bmp
+		// LoadImage() Failure:
+		//   Gui, Add, Pic, h1 w1, bitmap 1x2.bmp
+		// LoadImage() also fails on:
+		//   Gui, Add, Pic, h1, bitmap 1x2.bmp
+		// And then it falls back to GDIplus, which in the particular case above appears to traumatize the
+		// parent window (or its picture control), because the GUI window hangs (but not the script) after
+		// doing a FileSelectFolder.  For example:
+		//   Gui, Add, Button,, FileSelectFile
+		//   Gui, Add, Pic, h1, bitmap 1x2.bmp  ; Causes GUI window to hang after FileSelectFolder (due to LoadImage failing then falling back to GDIplus; i.e. GDIplus is somehow triggering the problem).
+		//   Gui, Show
+		//   return
+		//   ButtonFileSelectFile:
+		//   FileSelectFile, outputvar
+		//   return
 		if (hbitmap = (HBITMAP)LoadImage(NULL, aFilespec, aImageType, desired_width, desired_height
 			, LR_LOADFROMFILE | LR_CREATEDIBSECTION))
 		{
@@ -1820,6 +1842,12 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, i
 		// from the new object.  MSDN: "LR_COPYRETURNORG returns the original hImage if it satisfies
 		// the criteria for the copy—that is, correct dimensions and color depth—in which case the
 		// LR_COPYDELETEORG flag is ignored. If this flag is not specified, a new object is always created."
+		// KNOWN BUG: Calling CopyImage() with when the source image is tiny and the destination width/height
+		// is also small (e.g. 1) causes divide-by-zero exception.
+		// For example:
+		//   Gui, Add, Pic, h1 w-1, bitmap 1x2.bmp  ; Crash (divide by zero)
+		//   Gui, Add, Pic, h1 w-1, bitmap 2x3.bmp  ; Crash (divide by zero)
+		// However, such sizes seem too rare to document or put in an exception handler for.
 		hbitmap_new = (HBITMAP)CopyImage(hbitmap, aImageType, aWidth, aHeight, LR_COPYRETURNORG | LR_COPYDELETEORG);
 		// Above's LR_COPYDELETEORG deletes the original to avoid cascading resource usage.  MSDN's
 		// LoadImage() docs say:

@@ -758,7 +758,7 @@ void Var::SetLengthFromContents()
 
 
 
-ResultType Var::ValidateName(char *aName, bool aIsRuntime, bool aDisplayError)
+ResultType Var::ValidateName(char *aName, bool aIsRuntime, int aDisplayError)
 // Returns OK or FAIL.
 {
 	if (!*aName) return FAIL;
@@ -800,10 +800,14 @@ ResultType Var::ValidateName(char *aName, bool aIsRuntime, bool aDisplayError)
 			&& !strchr("_[]$?#@", c)) // It's not a permitted punctunation mark.
 		{
 			if (aDisplayError)
-				if (aIsRuntime)
-					return g_script.ScriptError("This variable or function name contains an illegal character." ERR_ABORT, aName);
-				else
-					return g_script.ScriptError("This variable or function name contains an illegal character.", aName);
+			{
+				char msg[512];
+				snprintf(msg, sizeof(msg), "The following %s name contains an illegal character:\n\"%-1.300s\"%s"
+					, aDisplayError == DISPLAY_VAR_ERROR ? "variable" : "function"
+					, aName
+					, aIsRuntime ? ("\n\n" ERR_ABORT_NO_SPACES) : "");
+				return g_script.ScriptError(msg);
+			}
 			else
 				return FAIL;
 		}

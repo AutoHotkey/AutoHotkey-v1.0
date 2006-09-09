@@ -1291,8 +1291,7 @@ bool IsWindowHung(HWND aWnd)
 	// it seems best to give them the full 5000ms default, which is what (all?) Windows
 	// OSes use as a cutoff to determine whether a window is "not responding":
 	DWORD dwResult;
-	#define Slow_IsWindowHung !SendMessageTimeout(aWnd, WM_NULL, (WPARAM)0, (LPARAM)0\
-		, SMTO_ABORTIFHUNG, 5000, &dwResult)
+	#define Slow_IsWindowHung !SendMessageTimeout(aWnd, WM_NULL, 0, 0, SMTO_ABORTIFHUNG, 5000, &dwResult)
 
 	// NEW, FASTER METHOD:
 	// This newer method's worst-case performance is at least 30x faster than the worst-case
@@ -1321,17 +1320,34 @@ bool IsWindowHung(HWND aWnd)
 		// When function not available, fall back to the old method:
 		return IsHungThread ? IsHungThread(GetWindowThreadProcessId(aWnd, NULL)) : Slow_IsWindowHung;
 	}
-	else // Otherwise: NT/2k/XP/2003 or later, so try to use the newer method.
+
+	// Otherwise: NT/2k/XP/2003 or later, so try to use the newer method.
+	// The use of IsHungAppWindow() (supported under Win2k+) is discouraged by MS,
+	// but it's useful to prevent the script from getting hung when it tries to do something
+	// to a hung window.
+	typedef BOOL (WINAPI *MyIsHungAppWindow)(HWND);
+	static MyIsHungAppWindow IsHungAppWindow = (MyIsHungAppWindow)GetProcAddress(GetModuleHandle("user32")
+		, "IsHungAppWindow");
+	if (IsHungAppWindow) // The above successfully found the function's address.
 	{
-		// The use of IsHungAppWindow() (supported under Win2k+) is discouraged by MS,
-		// but it's useful to prevent the script from getting hung when it tries to do something
-		// to a hung window.
-		typedef BOOL (WINAPI *MyIsHungAppWindow)(HWND);
-		static MyIsHungAppWindow IsHungAppWindow = (MyIsHungAppWindow)GetProcAddress(GetModuleHandle("user32")
-			, "IsHungAppWindow");
-		// When function not available, fall back to the old method:
-		return IsHungAppWindow ? IsHungAppWindow(aWnd) : Slow_IsWindowHung;
+		// v1.0.44.11: Eric M. reported that IsHungAppWindow() crashes fairly consistently on Windows Server 2003,
+		// especially when called by WinMinimize on a window like WMP when it's busy or being unswapped.
+		// We successfully isolated the problem to IsHungAppWindow() itself, so it's either directly the culprit
+		// or it destablizes the thread in a way that causes it to crash after the call (stack corruption was
+		// tentatively indicated by WinDbg).  Further evidence against IsHungAppWindow() is that it used to
+		// cause crashes on Windows XP (reproducible on my system and others) when called "too often" by
+		// WinActivate (see its comments for details).
+		__try  // Braces are required around both sections even if only one line.
+		{
+			return IsHungAppWindow(aWnd);
+		}
+		__except(EXCEPTION_EXECUTE_HANDLER)
+		{
+			// Do nothing; just fall through to slow method.
+		}
 	}
+	// Otherwise, the function not available (or an exception occurred), so fall back to the old method.
+	return Slow_IsWindowHung;
 }
 
 

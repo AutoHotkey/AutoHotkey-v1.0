@@ -73,9 +73,14 @@ enum VariableTypeType {VAR_TYPE_INVALID, VAR_TYPE_NUMBER, VAR_TYPE_INTEGER, VAR_
 // for both types of menus to indicate to MainWindowProc() that timed subroutines should not be
 // checked or allowed to launch during such times.  Also, "break" is used rather than "return 0"
 // to let DefWindowProc()/DefaultDlgProc() take whatever action it needs to do for these.
+// UPDATE: The value of g_MenuIsVisible is checked before changing it because it might already be
+// set to MENU_TYPE_POPUP (apparently, TrackPopupMenuEx sometimes/always generates WM_ENTERMENULOOP).
+// BAR vs. POPUP currently doesn't matter (as long as its non-zero); thus, the above is done for
+// maintainability.
 #define HANDLE_MENU_LOOP \
 	case WM_ENTERMENULOOP:\
-		g_MenuIsVisible = MENU_TYPE_BAR;\
+		if (!g_MenuIsVisible)\
+			g_MenuIsVisible = MENU_TYPE_BAR;\
 		break;\
 	case WM_EXITMENULOOP:\
 		g_MenuIsVisible = MENU_TYPE_NONE;\
@@ -2035,7 +2040,7 @@ public:
 	#define MAX_GUI_FONTS 100
 	static FontType sFont[MAX_GUI_FONTS];
 	static int sFontCount;
-	static int sObjectCount; // The number of non-NULL items in the g_gui array. Maintained only for performance reasons.
+	static int sGuiCount; // The number of non-NULL items in the g_gui array. Maintained only for performance reasons.
 	static HWND sTreeWithEditInProgress; // Needed because TreeView's edit control for label-editing conflicts with IDOK (default button).
 
 	// Don't overload new and delete operators in this case since we want to use real dynamic memory
@@ -2103,19 +2108,19 @@ public:
 	{
 		#define EXTERN_GUI extern GuiType *g_gui[MAX_GUI_WINDOWS]
 		EXTERN_GUI;
-		if (!sObjectCount)
+		if (!sGuiCount)
 			return NULL;
 
 		// The loop will usually find it on the first iteration since the #1 window is default
 		// and thus most commonly used.
-		int i, object_count;
-		for (i = 0, object_count = 0; i < MAX_GUI_WINDOWS; ++i)
+		int i, gui_count;
+		for (i = 0, gui_count = 0; i < MAX_GUI_WINDOWS; ++i)
 		{
 			if (g_gui[i])
 			{
 				if (g_gui[i]->mHwnd == aHwnd)
 					return g_gui[i];
-				if (sObjectCount == ++object_count) // No need to keep searching.
+				if (sGuiCount == ++gui_count) // No need to keep searching.
 					break;
 			}
 		}

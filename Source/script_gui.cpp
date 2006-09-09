@@ -91,7 +91,7 @@ ResultType Script::PerformGui(char *aCommand, char *aParam2, char *aParam3, char
 		g_gui[window_index]->mControlCapacity = GUI_CONTROL_BLOCK_SIZE;
 		// Probably better to increment here rather than in constructor in case GuiType objects
 		// are ever created outside of the g_gui array (such as for temp local variables):
-		++GuiType::sObjectCount; // This count is maintained to help performance in the main event loop and other places.
+		++GuiType::sGuiCount; // This count is maintained to help performance in the main event loop and other places.
 	}
 
 	GuiType &gui = *g_gui[window_index];  // For performance and convenience.
@@ -1187,7 +1187,7 @@ ResultType Line::GuiControlGet(char *aCommand, char *aControlID, char *aParam3)
 /////////////////
 FontType GuiType::sFont[MAX_GUI_FONTS]; // Not intialized to help catch bugs.
 int GuiType::sFontCount = 0;
-int GuiType::sObjectCount = 0;
+int GuiType::sGuiCount = 0;
 HWND GuiType::sTreeWithEditInProgress = NULL;
 
 
@@ -1201,20 +1201,20 @@ ResultType GuiType::Destroy(GuiIndexType aWindowIndex)
 	if (!g_gui[aWindowIndex]) // It's already in the right state.
 		return OK;
 	GuiType &gui = *g_gui[aWindowIndex];  // For performance and convenience.
-	GuiIndexType u, object_count;
+	GuiIndexType u, gui_count;
 
 	if (gui.mHwnd)
 	{
 		// First destroy any windows owned by this window, since they will be auto-destroyed
 		// anyway due to their being owned.  By destroying them explicitly, the Destroy()
 		// function is called recursively which keeps everything relatively neat.
-		for (u = 0, object_count = 0; u < MAX_GUI_WINDOWS; ++u)
+		for (u = 0, gui_count = 0; u < MAX_GUI_WINDOWS; ++u)
 		{
 			if (g_gui[u])
 			{
 				if (g_gui[u]->mOwner == gui.mHwnd)
 					GuiType::Destroy(u);
-				if (sObjectCount == ++object_count) // No need to keep searching.
+				if (sGuiCount == ++gui_count) // No need to keep searching.
 					break;
 			}
 		}
@@ -1289,7 +1289,7 @@ ResultType GuiType::Destroy(GuiIndexType aWindowIndex)
 	free(gui.mControl); // Free the control array, which was previously malloc'd.
 	delete g_gui[aWindowIndex]; // After this, the var "gui" is invalid so should not be referenced, i.e. the next line.
 	g_gui[aWindowIndex] = NULL;
-	--sObjectCount; // This count is maintained to help performance in the main event loop and other places.
+	--sGuiCount; // This count is maintained to help performance in the main event loop and other places.
 	if (icon_eligible_for_destruction && icon_eligible_for_destruction != g_script.mCustomIcon) // v1.0.37.07.
 		DestroyIconIfUnused(icon_eligible_for_destruction); // Must be done only after "g_gui[aWindowIndex] = NULL".
 	// For simplicity and performance, any fonts used *solely* by a destroyed window are destroyed
@@ -1306,8 +1306,8 @@ void GuiType::DestroyIconIfUnused(HICON ahIcon)
 {
 	if (!ahIcon) // Caller relies on this check.
 		return;
-	int i, object_count;
-	for (i = 0, object_count = 0; i < MAX_GUI_WINDOWS && object_count < sObjectCount; ++i)
+	int i, gui_count;
+	for (i = 0, gui_count = 0; i < MAX_GUI_WINDOWS && gui_count < sGuiCount; ++i)
 		if (g_gui[i]) // This GUI window exists as an object.
 		{
 			// If another window is using this icon, don't destroy the because that has been reported to disrupt
@@ -1315,7 +1315,7 @@ void GuiType::DestroyIconIfUnused(HICON ahIcon)
 			// icon).  The windows still using the icon will be responsible for destroying it later.
 			if (g_gui[i]->mIconEligibleForDestruction == ahIcon)
 				return;
-			++object_count;
+			++gui_count;
 		}
 	// Since above didn't return, this icon is not currently in use by a GUI window.  The caller has
 	// authorized us to destroy it.
@@ -1452,8 +1452,8 @@ void GuiType::UpdateMenuBars(HMENU aMenu)
 // use aMenu as a menu bar.  For example, if a menu item has been disabled, the grey-color
 // won't show up immediately unless the window is refreshed.
 {
-	int i, object_count;
-	for (i = 0, object_count = 0; i < MAX_GUI_WINDOWS; ++i)
+	int i, gui_count;
+	for (i = 0, gui_count = 0; i < MAX_GUI_WINDOWS; ++i)
 	{
 		if (g_gui[i])
 		{
@@ -1475,7 +1475,7 @@ void GuiType::UpdateMenuBars(HMENU aMenu)
 				// rely on such a change being visibly finished for PixelGetColor, etc.
 				//Not enough: UpdateWindow(g_gui[i]->mHwnd);
 			}
-			if (sObjectCount == ++object_count) // No need to keep searching.
+			if (sGuiCount == ++gui_count) // No need to keep searching.
 				break;
 		}
 	}
@@ -1592,9 +1592,6 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 	// Some controls also have the WS_EX_CLIENTEDGE exstyle by default because they look pretty strange
 	// without them.  This seems to be the standard default used by most applications.
 	// Note: It seems that WS_BORDER is hardly ever used in practice with controls, just parent windows.
-	case GUI_CONTROL_GROUPBOX:
-		opt.style_add |= BS_MULTILINE;
-		break;
 	case GUI_CONTROL_BUTTON:
 	case GUI_CONTROL_CHECKBOX:
 		opt.style_add |= WS_TABSTOP|BS_MULTILINE;
@@ -1702,6 +1699,13 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 	//case GUI_CONTROL_TEXT:
 	//case GUI_CONTROL_MONTHCAL: Can't be focused, so no tabstop.
 	//case GUI_CONTROL_PIC:
+	//case GUI_CONTROL_GROUPBOX:
+		// v1.0.44.11: The following was commented out for GROUPBOX to avoid unwanted wrapping of last letter when
+		// the font is bold on XP Classic theme (other font styles and desktop themes may also be cause this).
+		// Avoiding this problem seems to outweigh the breaking of old scripts that use GroupBoxes with more than
+		// one line of text (which are likely to be very rare).
+		//opt.style_add |= BS_MULTILINE;
+		break;
 	}
 
 	/////////////////////////////
@@ -6660,7 +6664,8 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 	// CalledByIsDialogMessageOrDispatch for any threads beneath it.  Although this may technically be
 	// unnecessary, it adds maintainability.
 	LRESULT msg_reply;
-	if (g_MsgMonitorCount && !g.CalledByIsDialogMessageOrDispatch // Count is checked here to avoid function-call overhead.
+	if (g_MsgMonitorCount // Count is checked here to avoid function-call overhead.
+		&& (!g.CalledByIsDialogMessageOrDispatch || g.CalledByIsDialogMessageOrDispatchMsg != iMsg) // v1.0.44.11: If called by IsDialog or Dispatch but they changed the message number, check if the script is monitoring that new number.
 		&& MsgMonitor(hWnd, iMsg, wParam, lParam, NULL, msg_reply))
 		return msg_reply; // MsgMonitor has returned "true", indicating that this message should be omitted from further processing.
 	g.CalledByIsDialogMessageOrDispatch = false;
@@ -6939,8 +6944,8 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 			} // switch(nmhdr.code).
 
 			// Since above didn't return, make it an event.
-			if (is_actionable
-				&& (!ignore_unless_alt_submit || (control.attrib & GUI_CONTROL_ATTRIB_ALTSUBMIT)))
+			if (   is_actionable
+				&& (!ignore_unless_alt_submit || (control.attrib & GUI_CONTROL_ATTRIB_ALTSUBMIT))   )
 				pgui->Event(control_index, nmhdr.code, gui_event, event_info);
 
 			// After the event, explicitly return a special value for any notifications that absolutely
@@ -6970,7 +6975,7 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 			// because there is currently no support for vetoing the selection-change or expansion; plus these
 			// notifications each have an "-ED" counterpart notification that is reported to the script (even
 			// TVN_SINGLEEXPAND is followed by a TVN_ITEMEXPANDED notification).
-			case TVN_SELCHANGINGW: // Received even for non-Unicode apps, at least on XP.
+			case TVN_SELCHANGINGW:   // Received even for non-Unicode apps, at least on XP.
 			case TVN_SELCHANGINGA:
 			case TVN_ITEMEXPANDINGW: // Received even for non-Unicode apps, at least on XP.
 			case TVN_ITEMEXPANDINGA:
@@ -7560,7 +7565,7 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 			// the user clicks the year and uses the spinner to select a new year.  This solves both of
 			// those issues and almost certainly others:
 			PostMessage(hWnd, iMsg, wParam, lParam);
-			MsgSleep(-1);
+			MsgSleep(-1, RETURN_AFTER_MESSAGES_SPECIAL_FILTER);
 		}
 		return 0;
 
@@ -7807,8 +7812,8 @@ void GuiType::Event(GuiIndexType aControlIndex, UINT aNotifyCode, USHORT aGuiEve
 	} // if (aGuiEvent == GUI_EVENT_NONE)
 
 	POST_AHK_GUI_ACTION(mHwnd, aControlIndex, aGuiEvent, aEventInfo);
-	// MsgSleep() is not done because "case AHK_GUI_ACTION" in GuiWindowProc() takes care of it.
-	// See its comments for why.
+	// MsgSleep(-1, RETURN_AFTER_MESSAGES_SPECIAL_FILTER) is not done because "case AHK_GUI_ACTION" in GuiWindowProc()
+	// takes care of it.  See its comments for why.
 
 	// BACKGROUND ABOUT THE ABOVE:
 	// Rather than launching the thread directly from here, it seems best to always post it to our

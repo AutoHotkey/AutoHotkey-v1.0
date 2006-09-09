@@ -1102,21 +1102,23 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 		ASSIGN_BASED_ON_TYPE
 
 	case TRANS_CMD_POW:
-		// The code here should be kept in sync with the behavior of the POWER operator (**)
-		// in ExpandExpression.
-		// Currently, a negative aValue1 isn't supported.  The reason for this is that since
-		// fractional exponents are supported (e.g. 0.5, which results in the square root),
-		// there would have to be some extra detection to ensure that a negative aValue1 is
-		// never used with fractional exponent (since the sqrt of a negative is undefined).
-		// In addition, qmathPow() doesn't support negatives, returning an unexpectedly large
-		// value or -1.#IND00 instead.
+	{
+		// v1.0.44.11: With Laszlo's help, negative bases are now supported as long as the exponent is not fractional.
+		// See SYM_POWER in script_expression.cpp for similar code and more comments.
 		value_double1 = ATOF(aValue1);
 		value_double2 = ATOF(aValue2);
-		// Zero raised to a negative power is undefined, similar to division-by-zero, and thus treated as a failure.
-		if (value_double1 < 0 || (value_double1 == 0.0 && value_double2 < 0))
+		bool value1_was_negative = (value_double1 < 0);
+		if (value_double1 == 0.0 && value_double2 < 0  // In essense, this is divide-by-zero.
+			|| value1_was_negative && qmathFmod(value_double2, 1.0) != 0.0) // Negative base but exponent isn't close enough to being an integer: unsupported (to simplify code).
 			return output_var->Assign();  // Return a consistent result (blank) rather than something that varies.
+		// Otherwise:
+		if (value1_was_negative)
+			value_double1 = -value_double1; // Force a positive due to the limitiations of qmathPow().
 		result_double = qmathPow(value_double1, value_double2);
+		if (value1_was_negative && qmathFabs(qmathFmod(value_double2, 2.0)) == 1.0) // Negative base and exactly-odd exponent (otherwise, it can only be zero or even because if not it would have returned higher above).
+			result_double = -result_double;
 		ASSIGN_BASED_ON_TYPE_POW
+	}
 
 	case TRANS_CMD_EXP:
 		return output_var->Assign(qmathExp(ATOF(aValue1)));
@@ -4511,7 +4513,8 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 
 	// See GuiWindowProc() for details about this first section:
 	LRESULT msg_reply;
-	if (g_MsgMonitorCount && !g.CalledByIsDialogMessageOrDispatch // Count is checked here to avoid function-call overhead.
+	if (g_MsgMonitorCount // Count is checked here to avoid function-call overhead.
+		&& (!g.CalledByIsDialogMessageOrDispatch || g.CalledByIsDialogMessageOrDispatchMsg != iMsg) // v1.0.44.11: If called by IsDialog or Dispatch but they changed the message number, check if the script is monitoring that new number.
 		&& MsgMonitor(hWnd, iMsg, wParam, lParam, NULL, msg_reply))
 		return msg_reply; // MsgMonitor has returned "true", indicating that this message should be omitted from further processing.
 	g.CalledByIsDialogMessageOrDispatch = false; // v1.0.40.01.
@@ -4616,7 +4619,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 	case AHK_USER_MENU:
 		// Search for AHK_USER_MENU in GuiWindowProc() for comments about why this is done:
 		PostMessage(hWnd, iMsg, wParam, lParam);
-		MsgSleep(-1);
+		MsgSleep(-1, RETURN_AFTER_MESSAGES_SPECIAL_FILTER);
 		return 0;
 
 	case WM_HOTKEY: // As a result of this app having previously called RegisterHotkey().
@@ -4650,7 +4653,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		// *LCtrl up::Send {Blind}{Alt up}
 		PostMessage(NULL, iMsg, wParam, lParam);
 		if (INTERRUPTIBLE)
-			MsgSleep(-1);
+			MsgSleep(-1, RETURN_AFTER_MESSAGES_SPECIAL_FILTER);
 		//else let the other pump discard this hotkey event since in most cases it would do more harm than good
 		// (see comments above for why the message is posted even when it is 90% certain it will be discarded
 		// in all cases where MsgSleep isn't done).
@@ -4668,7 +4671,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		if (lParam)
 			break;
 		// Otherwise, it's the main timer, which is the means by which joystick hotkeys and script timers
-		// created via the SetTimer script command continue to execute even while a dialog's message pump
+		// created via the script command "SetTimer" continue to execute even while a dialog's message pump
 		// is running.  Even if the script is NOT INTERRUPTIBLE (which generally isn't possible, since
 		// the mere fact that we're here means that a dialog's message pump dispatched a message to us
 		// [since our msg pump would not dispatch this type of msg], which in turn means that the script
@@ -4695,7 +4698,7 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 		// in the menu becoming temporarily unresponsive while the user is in it (and probably other
 		// undesired effects).
 		if (!g_MenuIsVisible)
-			MsgSleep(-1);
+			MsgSleep(-1, RETURN_AFTER_MESSAGES_SPECIAL_FILTER);
 		return 0;
 
 	case WM_SYSCOMMAND:
@@ -5320,7 +5323,8 @@ BOOL CALLBACK InputBoxProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 {
 	// See GuiWindowProc() for details about this first part:
 	LRESULT msg_reply;
-	if (g_MsgMonitorCount && !g.CalledByIsDialogMessageOrDispatch // Count is checked here to avoid function-call overhead.
+	if (g_MsgMonitorCount // Count is checked here to avoid function-call overhead.
+		&& (!g.CalledByIsDialogMessageOrDispatch || g.CalledByIsDialogMessageOrDispatchMsg != uMsg) // v1.0.44.11: If called by IsDialog or Dispatch but they changed the message number, check if the script is monitoring that new number.
 		&& MsgMonitor(hWndDlg, uMsg, wParam, lParam, NULL, msg_reply))
 		return (BOOL)msg_reply; // MsgMonitor has returned "true", indicating that this message should be omitted from further processing.
 	g.CalledByIsDialogMessageOrDispatch = false; // v1.0.40.01.
@@ -10646,7 +10650,7 @@ void BIF_Tan(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCou
 void BIF_ASinACos(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
 {
 	double value = ExprTokenToDouble(*aParam[0]);
-	if (value > 1 || value < -1) // ASin and ACos aren't defined for other values.
+	if (value > 1 || value < -1) // ASin and ACos aren't defined for such values.
 	{
 		aResultToken.symbol = SYM_STRING;
 		aResultToken.marker = "";
@@ -11993,7 +11997,7 @@ void BIF_TV_GetRelatedItem(ExprTokenType &aResultToken, ExprTokenType *aParam[],
 	// the following conditions:
 	// Window doesn't exist.
 	// Control doesn't exist (i.e. no TreeView in window).
-	// Item not found in ListView.
+	// Item not found in TreeView.
 
 	if (!g_gui[g.GuiDefaultWindowIndex])
 		return;
@@ -12084,14 +12088,14 @@ void BIF_TV_Get(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParam
 // LV_Get()
 // Returns: Varies depending on param #2.
 // Parameters:
-// 1: HTREEITEM.
-// 2: Name of attribute to get.
+//    1: HTREEITEM.
+//    2: Name of attribute to get.
 // LV_GetText()
 // Returns: 1 on success and 0 on failure.
 // Parameters:
-// 1: Output variable (doing it this way allows success/fail return value to more closely mirror the API and
-//    simplifies the code since there is currently no easy means of passing back large strings to our caller).
-// 2: HTREEITEM.
+//    1: Output variable (doing it this way allows success/fail return value to more closely mirror the API and
+//       simplifies the code since there is currently no easy means of passing back large strings to our caller).
+//    2: HTREEITEM.
 {
 	bool get_text = (toupper(aResultToken.marker[6]) == 'T'); // Union's marker initially contains the function name. e.g. TV_Get[T]ext.
 	char *buf = aResultToken.buf; // Must be saved early since below overwrites the union (better maintainability too).
@@ -12100,7 +12104,7 @@ void BIF_TV_Get(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParam
 	// the following conditions:
 	// Window doesn't exist.
 	// Control doesn't exist (i.e. no TreeView in window).
-	// Item not found in ListView.
+	// Item not found in TreeView.
 	// And others.
 
 	if (!g_gui[g.GuiDefaultWindowIndex])

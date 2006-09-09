@@ -1130,7 +1130,9 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 	// For the line continuation mechanism:
 	bool do_ltrim, do_rtrim, literal_escapes, literal_derefs, literal_delimiters
 		, in_continuation_section, has_continuation_section, is_continuation_line;
-	char *next_option, *option_end, orig_char; // Line continuation mechanism's option parsing.
+	char *next_option, *option_end, orig_char, one_char_string[2], two_char_string[3]; // Line continuation mechanism's option parsing.
+	one_char_string[1] = '\0';  // Pre-terminate these to simplfy code later below.
+	two_char_string[2] = '\0';  //
 	int continuation_line_count;
 
 	#define MAX_FUNC_VAR_EXCEPTIONS 2000
@@ -1377,13 +1379,13 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 						{
 							switch (*next_option)
 							{
-							case '`': // Not using g_EscapeChar (reduces code size/complexity).
+							case '`': // Although not using g_EscapeChar (reduces code size/complexity), #EscapeChar is still supported by continuation sections; it's just that enabling the option uses '`' rather than the custom escape-char (one reason is that that custom escape-char might be ambiguous with future/past options if it's somehing weird like an alphabetic character).
 								literal_escapes = true;
 								break;
-							case '%':
+							case '%': // Same comment as above.
 								literal_derefs = true;
 								break;
-							case ',': // Not using g_delimiter (reduces code size/complexity).
+							case ',': // Same comment as above.
 								literal_delimiters = false;
 								break;
 							}
@@ -1437,16 +1439,30 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 					// 2) The translation doesn't affect the functionality of the script since escaped literals
 					//    are always de-escaped at a later stage, at least for everything that's likely to matter
 					//    or that's reasonable to put into a continuation section (e.g. a hotstring's replacement text).
+					// UPDATE for v1.0.44.11: #EscapeChar, #DerefChar, #Delimiter are now supported by continuation
+					// sections because there were some requests for that in forum.
 					int replacement_count = 0;
-
-					// To reduce code size, the following replacements support only the standard characters,
-					// not g_DerefChar, g_delimiter, etc.:
-					if (literal_escapes) // Must be done first because otherwise it would also replace any accents added for literal_delimiters or literal_derefs.
-						replacement_count += StrReplaceAllSafe(next_buf, LINE_SIZE, "`", "``", true);
+					if (literal_escapes) // literal_escapes must be done FIRST because otherwise it would also replace any accents added for literal_delimiters or literal_derefs.
+					{
+						one_char_string[0] = g_EscapeChar; // These strings were terminated earlier, so no need to
+						two_char_string[0] = g_EscapeChar; // do it here.  In addition, these strings must be set by
+						two_char_string[1] = g_EscapeChar; // each iteration because the #EscapeChar (and similar directives) can occur multiple times, anywhere in the script.
+						replacement_count += StrReplaceAllSafe(next_buf, LINE_SIZE, one_char_string, two_char_string, true);
+					}
 					if (literal_derefs)
-						replacement_count += StrReplaceAllSafe(next_buf, LINE_SIZE, "%", "`%", true);
+					{
+						one_char_string[0] = g_DerefChar;
+						two_char_string[0] = g_EscapeChar;
+						two_char_string[1] = g_DerefChar;
+						replacement_count += StrReplaceAllSafe(next_buf, LINE_SIZE, one_char_string, two_char_string, true);
+					}
 					if (literal_delimiters)
-						replacement_count += StrReplaceAllSafe(next_buf, LINE_SIZE, ",", "`,", true);
+					{
+						one_char_string[0] = g_delimiter;
+						two_char_string[0] = g_EscapeChar;
+						two_char_string[1] = g_delimiter;
+						replacement_count += StrReplaceAllSafe(next_buf, LINE_SIZE, one_char_string, two_char_string, true);
+					}
 
 					if (replacement_count) // Update the length if any actual replacements were done.
 						next_buf_length = strlen(next_buf);
@@ -2915,7 +2931,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 				// local += 3
 				char orig_char = cp[1];
 				cp[1] = '\0'; // Temporarily terminate.
-				ResultType result = Var::ValidateName(cp, false, false);
+				ResultType result = Var::ValidateName(cp, false, DISPLAY_NO_ERROR);
 				cp[1] = orig_char; // Undo the termination.
 				if (!result) // It's probably operator, e.g. local = %var%
 					break;
@@ -4264,13 +4280,21 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				if (open_parens) // At least one open-paren is never closed.
 					return ScriptError(ERR_MISSING_CLOSE_PAREN, this_new_arg.text);
 
-				// ParseDerefs() won't consider escaped percent signs to be illegal, but in this case
-				// they should be since they have no meaning in expressions:
 				#define ERR_EXP_ILLEGAL_CHAR "The leftmost character above is illegal in an expression." // "above" refers to the layout of the error dialog.
-				if (this_aArgMap) // This arg has an arg map indicating which chars are escaped/literal vs. normal.
-					for (j = 0; this_new_arg.text[j]; ++j)
-						if (this_aArgMap[j] && this_new_arg.text[j] == g_DerefChar)
-							return ScriptError(ERR_EXP_ILLEGAL_CHAR, this_new_arg.text + j);
+				// ParseDerefs() won't consider escaped percent signs to be illegal, but in this case
+				// they should be since they have no meaning in expressions.  UPDATE for v1.0.44.11: The following
+				// is now commented out because it causes false positives (and fixing that probably isn't worth the
+				// performance & code size).  Specifically, the section below reports an error for escaped delimiters
+				// inside quotes such as x := "`%".  More importantly, it defeats the continuation section's %
+				// option; for example:
+				//   MsgBox %
+				//   (%  ; <<< This option here is defeated because it causes % to be replaced with `% at an early stage.
+				//   "%"
+				//   )
+				//if (this_aArgMap) // This arg has an arg map indicating which chars are escaped/literal vs. normal.
+				//	for (j = 0; this_new_arg.text[j]; ++j)
+				//		if (this_aArgMap[j] && this_new_arg.text[j] == g_DerefChar)
+				//			return ScriptError(ERR_EXP_ILLEGAL_CHAR, this_new_arg.text + j);
 
 				// Resolve all operands that aren't numbers into variable references.  Doing this here at
 				// load-time greatly improves runtime performance, especially for scripts that have a lot
@@ -4477,7 +4501,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				// that they *are* numeric parameters.  ValidateName() serves to eliminate cases where
 				// a single deref is accompanied by literal numbers, strings, or operators, e.g.
 				// Var := X + 1 ... Var := Var2 "xyz" ... Var := -Var2
-				else if (deref_count == 1 && Var::ValidateName(this_new_arg.text, false, false)) // Single isolated deref.
+				else if (deref_count == 1 && Var::ValidateName(this_new_arg.text, false, DISPLAY_NO_ERROR)) // Single isolated deref.
 				{
 					// For the future, could consider changing ACT_ASSIGN here to ACT_ASSIGNEXPR because
 					// the latter probably performs better in this case.  However, the way ValidateName()
@@ -6222,7 +6246,7 @@ Func *Script::AddFunc(char *aFuncName, size_t aFuncNameLength, bool aIsBuiltIn)
 	// 3) Those scripts that are broken are not broken in a bad way because the pre-parser will generate a
 	//    load-time error, which is easy to fix (unlike runtime errors, which require that part of the script
 	//    to actually execute).
-	if (!Var::ValidateName(func_name, mIsReadyToExecute))  // Variable and function names are both validated the same way.
+	if (!Var::ValidateName(func_name, mIsReadyToExecute, DISPLAY_FUNC_ERROR))  // Variable and function names are both validated the same way.
 		// Above already displayed error for us.  This can happen at loadtime or runtime (e.g. StringSplit).
 		return NULL;
 
@@ -7065,7 +7089,7 @@ ResultType Script::AddGroup(char *aGroupName)
 {
 	if (strlen(aGroupName) > MAX_VAR_NAME_LENGTH)
 		return ScriptError("Group name too long.", aGroupName);
-	if (!Var::ValidateName(aGroupName, false, false)) // Seems best to use same validation as var names.
+	if (!Var::ValidateName(aGroupName, false, DISPLAY_NO_ERROR)) // Seems best to use same validation as var names.
 		return ScriptError("Illegal group name.", aGroupName);
 
 	char *new_name = SimpleHeap::Malloc(aGroupName);
@@ -12846,23 +12870,31 @@ ResultType Script::ScriptError(char *aErrorText, char *aExtraInfo) //, ResultTyp
 	}
 	else
 	{
-		char source_file[MAX_PATH * 2];
-		if (mCurrFileNumber)
-			snprintf(source_file, sizeof(source_file), " in #include file \"%s\"", Line::sSourceFile[mCurrFileNumber]);
-		else
-			*source_file = '\0'; // Don't bother cluttering the display if it's the main script file.
+		char buf[MSGBOX_TEXT_SIZE], *cp = buf;
+		int buf_space_remaining = (int)sizeof(buf);
 
-		char buf[MSGBOX_TEXT_SIZE];
-		snprintf(buf, sizeof(buf), "Error at line %u%s." // Don't call it "critical" because it's usually a syntax error.
-			"\n\nLine Text: %-1.100s%s"
-			"\nError: %-1.500s"
-			"\n\n%s"
-			, mCombinedLineNumber, source_file
-			, aExtraInfo // aExtraInfo defaults to "" so this is safe.
-			, strlen(aExtraInfo) > 100 ? "..." : ""
-			, aErrorText
-			, mIsRestart ? OLD_STILL_IN_EFFECT : WILL_EXIT
-			);
+		cp += snprintf(cp, buf_space_remaining, "Error at line %u", mCombinedLineNumber); // Don't call it "critical" because it's usually a syntax error.
+		buf_space_remaining = (int)(sizeof(buf) - (cp - buf));
+
+		if (mCurrFileNumber)
+		{
+			cp += snprintf(cp, buf_space_remaining, " in #include file \"%s\"", Line::sSourceFile[mCurrFileNumber]);
+			buf_space_remaining = (int)(sizeof(buf) - (cp - buf));
+		}
+		//else don't bother cluttering the display if it's the main script file.
+
+		cp += snprintf(cp, buf_space_remaining, ".\n\n");
+		buf_space_remaining = (int)(sizeof(buf) - (cp - buf));
+
+		if (*aExtraInfo)
+		{
+			cp += snprintf(cp, buf_space_remaining, "Line Text: %-1.100s%s\nError: "  // i.e. the word "Error" is omitted as being too noisy when there's no ExtraInfo to put into the dialog.
+				, aExtraInfo // aExtraInfo defaults to "" so this is safe.
+				, strlen(aExtraInfo) > 100 ? "..." : "");
+			buf_space_remaining = (int)(sizeof(buf) - (cp - buf));
+		}
+		snprintf(cp, buf_space_remaining, "%s\n\n%s", aErrorText, mIsRestart ? OLD_STILL_IN_EFFECT : WILL_EXIT);
+
 		//ShowInEditor();
 		MsgBox(buf);
 	}
