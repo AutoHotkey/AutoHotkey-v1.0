@@ -31,6 +31,9 @@ extern HWND g_hWndEdit;  // The edit window, child of main.
 extern HWND g_hWndSplash;  // The SplashText window.
 extern HFONT g_hFontSplash;
 extern HACCEL g_hAccelTable; // Accelerator table for main menu shortcut keys.
+
+typedef int (WINAPI *StrCmpLogicalW_type)(LPCWSTR, LPCWSTR);
+extern StrCmpLogicalW_type g_StrCmpLogicalW;
 extern WNDPROC g_TabClassProc;
 
 extern modLR_type g_modifiersLR_logical;   // Tracked by hook (if hook is active).

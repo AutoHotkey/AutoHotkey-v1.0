@@ -219,7 +219,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 	GuiIndexType gui_control_index, gui_index; // gui_index is needed to avoid using pgui in cases where that pointer becomes invalid (e.g. if ExecUntil() executes "Gui Destroy").
 	GuiEventType gui_action;
 	DWORD gui_event_info, gui_size;
-	bool *pgui_label_is_running, event_is_control_generated, peek_was_done;
+	bool *pgui_label_is_running, event_is_control_generated, peek_was_done, do_special_msg_filter;
 	Label *gui_label;
 	HDROP hdrop_to_free;
 	DWORD tick_before, tick_after, peek1_time;
@@ -261,12 +261,22 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 			// Check the active window in each iteration in case a signficant amount of time has passed since
 			// the previous iteration (due to launching threads, etc.)
 			if (g_DeferMessagesForUnderlyingPump && (fore_window = GetForegroundWindow()) != NULL  // There is a foreground window.
-				&& GetWindowThreadProcessId(fore_window, NULL) == g_MainThreadID // And it belongs to our main thread (the main thread is the only one that owns any windows).
-				&& (focused_control = GetFocus()))
+				&& GetWindowThreadProcessId(fore_window, NULL) == g_MainThreadID) // And it belongs to our main thread (the main thread is the only one that owns any windows).
 			{
-				GetClassName(focused_control, wnd_class_name, sizeof(wnd_class_name));
-				if (!stricmp(wnd_class_name, "SysTreeView32")) // A TreeView owned by our thread has focus (includes FileSelectFolder's TreeView).
+				do_special_msg_filter = false; // Set default.
+                if (g_nFileDialogs) // v1.0.44.12: Also do the special Peek/msg filter below for FileSelectFile because testing shows that frequently-running timers disrupt the ability to double-click.
 				{
+					GetClassName(fore_window, wnd_class_name, sizeof(wnd_class_name));
+					do_special_msg_filter = !strcmp(wnd_class_name, "#32770");  // Due to checking g_nFileDialogs above, this means that this dialog is probably FileSelectFile rather than MsgBox/InputBox/FileSelectFolder (even if this guess is wrong, it seems fairly inconsequential to filter the messages since other pump beneath us on the call-stack will handle them ok).
+				}
+				if (!do_special_msg_filter && (focused_control = GetFocus()))
+				{
+					GetClassName(focused_control, wnd_class_name, sizeof(wnd_class_name));
+					do_special_msg_filter = !stricmp(wnd_class_name, "SysTreeView32"); // A TreeView owned by our thread has focus (includes FileSelectFolder's TreeView).
+				}
+				if (do_special_msg_filter)
+				{
+					// v1.0.44.12: Below now applies to FileSelectFile dialogs too (see reason above).
 					// v1.0.44.11: Since one of our thread's TreeViews has focus (even in FileSelectFolder), this
 					// section is a work-around for the fact that the TreeView's message pump (somewhere beneath
 					// us on the call stack) is apparently designed to process some mouse messages directly rather
@@ -275,6 +285,9 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 					// items in a TreeView (the selection sometimes snaps back to the previously selected item),
 					// which can be reproduced by showing a TreeView while a 10ms script timer is running doing
 					// a trivial single line such as x=1.
+					// NOTE: This happens more often in FileSelectFolder dialogs, I believe because it's msg
+					// pump is ALWAYS running but that of a GUI TreeView is running only during mouse capture
+					// (i.e. when left/right button is down).
 					// This special handling for TreeView can someday be broadened so that focused control's
 					// class isn't checked: instead, could check whether left and/or right mouse button is
 					// logically down (which hasn't yet been tested).  Or it could be broadened to include
@@ -307,26 +320,29 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 					}
 				}
 			}
-			if (!peek_was_done) // Fall back to the standard filter for Peek().
+			if (!peek_was_done) // Since above didn't Peek(), fall back to doing the Peek with the standard filter.
 				peek_result = PeekMessage(&msg, NULL, 0, MSG_FILTER_MAX, PM_REMOVE);
 			if (!peek_result) // No more messages
 			{
-				// Since the Peek() didn't find any messages, our timeslice was probably just
-				// yielded if the CPU is under heavy load.  If so, it seems best to count that as
-				// a "rest" so that 10ms script-timers will run closer to the desired frequency
+				// Since the Peek() didn't find any messages, our timeslice may have just been
+				// yielded if the CPU is under heavy load (update: this yielding effect is now diffcult
+				// to reproduce, so might be a thing of past service packs).  If so, it seems best to count
+				// that as a "rest" so that 10ms script-timers will run closer to the desired frequency
 				// (see above comment for more details).
 				// These next few lines exact match the ones above, so keep them in sync:
 				tick_after = GetTickCount();
 				if (tick_after - tick_before > 3)
 					g_script.mLastScriptRest = tick_after;
-				// It is not necessary to actually do the Sleep(0) when aSleepDuration == 0
-				// because the most recent PeekMessage() has just yielded our prior timeslice.
-				// This is because when Peek() doesn't find any messages, it automatically
-				// behaves as though it did a Sleep(0). UPDATE: This is apparently not quite
-				// true.  Although Peek() does yield, it is somehow not as long or as good as
-				// Sleep(0).  This is evidenced by the fact that some of my script's
-				// WinWaitClose's now finish too quickly when DoKeyDelay(0) is done for them,
-				// but replacing DoKeyDelay(0) with Sleep(0) makes it work as it did before.
+				// UPDATE: The section marked "OLD" below is apparently not quite true: although Peek() has been
+				// caught yielding our timeslice, it's now difficult to reproduce.  Perhaps it doesn't consistently
+				// yield (maybe it depends on the relative priority of competing processes) and even when/if it
+				// does yield, it might somehow not as long or as good as Sleep(0).  This is evidenced by the fact
+				// that some of my script's WinWaitClose's finish too quickly when the Sleep(0) is omitted after a
+				// Peek() that returned FALSE.
+				// OLD (mostly obsolete in light of above): It is not necessary to actually do the Sleep(0) when
+				// aSleepDuration == 0 because the most recent PeekMessage() has just yielded our prior timeslice.
+				// This is because when Peek() doesn't find any messages, it automatically behaves as though it
+				// did a Sleep(0).
 				if (aSleepDuration == 0 && !sleep0_was_done)
 				{
 					Sleep(0);
@@ -420,7 +436,7 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				// 1) aSleepDuration > 0
 				// 2) !empty_the_queue_via_peek
 				// 3) The above two combined with logic above means that g_DeferMessagesForUnderlyingPump==true.
-				Sleep(5); // Since Peek() didn't find a message, avoid maxing the CPU.  This is a somewhat arbitrary value: the intent of a value below 10 is to avoid yielding more than one timeslice on all systems even if they have unusual time slice sizes / system timers.
+				Sleep(5); // Since Peek() didn't find a message, avoid maxing the CPU.  This is a somewhat arbitrary value: the intent of a value below 10 is to avoid yielding more than one timeslice on all systems even if they have unusual timeslice sizes / system timers.
 				continue;
 			}
 			// else Peek() found a message, so process it below.
@@ -965,25 +981,6 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 				g_script.mThisHotkeyStartTime = GetTickCount(); // Fixed for v1.0.35.10 to not happen for GUI threads.
 			}
 
-			if (g_nFileDialogs)
-				// Since there is a quasi-thread with an open file dialog underneath the one
-				// we're about to launch, set the current directory to be the one the user
-				// would expect to be in effect.  This is not a 100% fix/workaround for the
-				// fact that the dialog changes the working directory as the user navigates
-				// from folder to folder because the dialog can still function even when its
-				// quasi-thread is suspended (i.e. while our new thread being launched here
-				// is in the middle of running).  In other words, the user can still use
-				// the dialog of a suspended quasi-thread, and thus change the working
-				// directory indirectly.  But that should be very rare and I don't see an
-				// easy way to fix it completely without using a "HOOK function to monitor
-				// the WM_NOTIFY message", calling SetCurrentDirectory() after every script
-				// line executes (which seems too high in overhead to be justified), or
-				// something similar.  Note changing to a new directory here does not seem
-				// to hurt the ongoing FileSelectFile() dialog.  In other words, the dialog
-				// does not seem to care that its changing of the directory as the user
-				// navigates is "undone" here:
-				SetCurrentDirectory(g_WorkingDir);
-
 			if (aMode == RETURN_AFTER_MESSAGES)
 			{
 				// Assert: g_nThreads should be greater than 0 in this mode, which means
@@ -1028,7 +1025,27 @@ bool MsgSleep(int aSleepDuration, MessageMode aMode)
 			// will not be, so the icon needs to be checked:
 			g_script.UpdateTrayIcon();
 
-			// Do this last, right before launching the thread:
+			// Do this nearly last, right before launching the thread:
+			if (g_nFileDialogs)
+				// Since there is a quasi-thread with an open file dialog underneath the one
+				// we're about to launch, set the current directory to be the one the user
+				// would expect to be in effect.  This is not a 100% fix/workaround for the
+				// fact that the dialog changes the working directory as the user navigates
+				// from folder to folder because the dialog can still function even when its
+				// quasi-thread is suspended (i.e. while our new thread being launched here
+				// is in the middle of running).  In other words, the user can still use
+				// the dialog of a suspended quasi-thread, and thus change the working
+				// directory indirectly.  But that should be very rare and I don't see an
+				// easy way to fix it completely without using a "HOOK function to monitor
+				// the WM_NOTIFY message", calling SetCurrentDirectory() after every script
+				// line executes (which seems too high in overhead to be justified), or
+				// something similar.  Note changing to a new directory here does not seem
+				// to hurt the ongoing FileSelectFile() dialog.  In other words, the dialog
+				// does not seem to care that its changing of the directory as the user
+				// navigates is "undone" here:
+				SetCurrentDirectory(g_WorkingDir);
+
+			// Do this nearly last, right before launching the thread:
 			// It seems best to reset mLinesExecutedThisCycle unconditionally (now done by InitNewThread),
 			// because the user has pressed a hotkey or selected a custom menu item, so would expect
 			// maximum responsiveness (e.g. in a game where split second timing can matter) rather than

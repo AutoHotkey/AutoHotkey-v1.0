@@ -1340,13 +1340,14 @@ ResultType GuiType::Create()
 		wc.hInstance = g_hInstance;
 		wc.lpfnWndProc = GuiWindowProc;
 		wc.hIcon = wc.hIconSm = (HICON)LoadImage(g_hInstance, MAKEINTRESOURCE(IDI_MAIN), IMAGE_ICON, 0, 0, LR_SHARED); // Use LR_SHARED to conserve memory (since the main icon is loaded for so many purposes).
-		//wc.style = 0;  // CS_HREDRAW | CS_VREDRAW
+		wc.style = CS_DBLCLKS; // v1.0.44.12: CS_DBLCLKS is accepted as a good default by nearly everyone.  It causes the window to receive WM_LBUTTONDBLCLK, WM_RBUTTONDBLCLK, and WM_MBUTTONDBLCLK (even without this, all windows receive WM_NCLBUTTONDBLCLK, WM_NCMBUTTONDBLCLK, and WM_NCRBUTTONDBLCLK).
+			// CS_HREDRAW and CS_VREDRAW are not included above because they cause extra flickering.  It's generally better for a window to manage its own redrawing when it's resized.
 		wc.hCursor = LoadCursor((HINSTANCE) NULL, IDC_ARROW);
 		wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
 		wc.cbWndExtra = DLGWINDOWEXTRA;  // So that it will be the type that uses DefDlgProc() vs. DefWindowProc().
 		if (!RegisterClassEx(&wc))
 		{
-			MsgBox("RegisterClass() GUI failed.");
+			MsgBox("RegClass"); // Short/generic msg since so rare.
 			return FAIL;
 		}
 		sGuiInitialized = true;
@@ -8740,17 +8741,37 @@ int CALLBACK LV_GeneralSort(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort)
 {
 	LV_SortType &lvs = *(LV_SortType *)lParamSort;
 
+	// v1.0.44.12: Testing shows that LVM_GETITEMW automatically converts the ANSI contents of our ListView
+	// into Unicode, which is nice because it avoids the overhead and code size of having to call
+	// MultiByteToWideChar(), along with the extra/temp buffers it requires to receive the wide version.
+	UINT msg_lvm_getitem = (lvs.col.case_sensitive == SCS_INSENSITIVE_LOGICAL && lvs.col.type == LV_COL_TEXT)
+		? LVM_GETITEMW : LVM_GETITEM; // Both items above are checked so that SCS_INSENSITIVE_LOGICAL can be effect even for non-text columns because it allows a column to be later changed to TEXT and retain its "logical-sort" setting.
+	// NOTE: It's safe to send a LVITEM struct rather than an LVITEMW with the LVM_GETITEMW message because
+	// the only difference between them is the type "LPWSTR pszText", which is no problem as long as caller
+	// has properly halved cchTextMax to reflect that wide-chars are twice as wide as 8-bit characters.
+
+	// NOTE: I think the below is only a concern for SortItems, not SortItemsEx.  Since SortItemsEx is almost
+	// always available nowadays, the below is much less of a concern even if it happens to be an issue, which
+	// I doubt it is for the particular types of message sent here.
 	// MSDN: "During the sorting process, the list-view contents are unstable. If the [ListView_SortItems]
 	// callback function sends any messages to the list-view control, the results are unpredictable."
-	// But this seems hard to believe because how could you ever use ListView_SortItems() without either
-	// having LVS_OWNERDATA or allocating temp memory for the entire column (to whose rows lParam would point)?
-
-	// Fetch Item #1:
+	// But it seems hard to believe that you shouldn't send ANY kind of message because how could you ever use
+	// ListView_SortItems() without either having LVS_OWNERDATA or allocating temp memory for the entire column
+	// (to whose rows lParam would point)?
+	// UPDATE: The following seems to be one alternative:
+	// Do a "virtual qsort" on this column's contents by having qsort() sort an array of row numbers according
+	// to the contents of each particular row's field in that column (i.e. qsort's callback would call LV_GETITEM).
+	// In other words, the array would start off in order (1,2,3) but afterward would contain the proper sort
+	// (e.g. 3,1,2). Next, traverse the array and store the correct "order number" in the corresponding row's
+	// special "lParam container" (for example, 3,1,2 would store 1 in row 3, 2 in row 1, and 3 in row 2, and 4 in...).
+	// Then the ListView can be sorted via a method like the high performance LV_Int32Sort.
+	// However, since the above would require TWO SORTS, it would probably be slower (though the second sort would
+	// require only a tiny fraction of the time of the first).
 	lvs.lvi.pszText = lvs.buf1; // lvi's other members were already set by the caller.
 	if (lvs.incoming_is_index) // Serves to avoid the potentially high performance overhead of ListView_FindItem() where possible.
 	{
 		lvs.lvi.iItem = (int)lParam1;
-		SendMessage(lvs.hwnd, LVM_GETITEM, 0, (LPARAM)&lvs.lvi); // Use LVM_GETITEM vs. LVM_GETITEMTEXT because MSDN says that only LVM_GETITEM is safe during the sort.
+		SendMessage(lvs.hwnd, msg_lvm_getitem, 0, (LPARAM)&lvs.lvi); // Use LVM_GETITEM vs. LVM_GETITEMTEXT because MSDN says that only LVM_GETITEM is safe during the sort.
 	}
 	else
 	{
@@ -8763,7 +8784,7 @@ int CALLBACK LV_GeneralSort(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort)
 		if (lvs.lvi.iItem < 0) // Not found.  Impossible if caller set the LParam to a unique value.
 			*lvs.buf1 = '\0';
 		else
-			SendMessage(lvs.hwnd, LVM_GETITEM, 0, (LPARAM)&lvs.lvi);
+			SendMessage(lvs.hwnd, msg_lvm_getitem, 0, (LPARAM)&lvs.lvi);
 	}
 
 	// Must use lvi.pszText vs. buf because MSDN says (for LVM_GETITEM, but it might also apply to
@@ -8777,7 +8798,7 @@ int CALLBACK LV_GeneralSort(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort)
 	if (lvs.incoming_is_index)
 	{
 		lvs.lvi.iItem = (int)lParam2;
-		SendMessage(lvs.hwnd, LVM_GETITEM, 0, (LPARAM)&lvs.lvi); // Use LVM_GETITEM vs. LVM_GETITEMTEXT because MSDN says that only LVM_GETITEM is safe during the sort.
+		SendMessage(lvs.hwnd, msg_lvm_getitem, 0, (LPARAM)&lvs.lvi); // Use LVM_GETITEM vs. LVM_GETITEMTEXT because MSDN says that only LVM_GETITEM is safe during the sort.
 	}
 	else
 	{
@@ -8787,13 +8808,18 @@ int CALLBACK LV_GeneralSort(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort)
 		if (lvs.lvi.iItem < 0) // Not found.  Impossible if caller set the LParam to a unique value.
 			*lvs.buf2 = '\0';
 		else
-			SendMessage(lvs.hwnd, LVM_GETITEM, 0, (LPARAM)&lvs.lvi);
+			SendMessage(lvs.hwnd, msg_lvm_getitem, 0, (LPARAM)&lvs.lvi);
 	}
 
 	// MSDN: "return a negative value if the first item should precede the second"
 	int result;
 	if (lvs.col.type == LV_COL_TEXT)
-		result = strcmp2(field1, lvs.lvi.pszText, lvs.col.case_sensitive); // Must not refer to buf1/buf2 directly, see above.
+	{
+		if (lvs.col.case_sensitive == SCS_INSENSITIVE_LOGICAL) // v1.0.44.12: When this is true, caller has ensured that g_StrCmpLogicalW isn't NULL.
+			result = g_StrCmpLogicalW((LPCWSTR)field1, (LPCWSTR)lvs.lvi.pszText);
+		else
+			result = strcmp2(field1, lvs.lvi.pszText, lvs.col.case_sensitive); // Must not refer to buf1/buf2 directly, see above.
+	}
 	else
 		// Unlike ACT_SORT, supporting hex for an explicit-floating point column seems far too rare to
 		// justify, hence atof() is used vs. ATOF():
@@ -8838,7 +8864,7 @@ void GuiType::LV_Sort(GuiControlType &aControl, int aColumnIndex, bool aSortOnly
 	// Init those members needed for LVM_GETITEM if it turns out to be needed.  This section
 	// also serves to permanently init cchTextMax for use by the sorting functions too:
 	lvs.lvi.pszText = lvs.buf1;
-	lvs.lvi.cchTextMax = LV_TEXT_BUF_SIZE - 1; // Subtracts 1 because of that nagging doubt about size vs. length. Some MSDN examples subtract one, such as TabCtrl_GetItem()'s cchTextMax.
+	lvs.lvi.cchTextMax = LV_TEXT_BUF_SIZE - 1; // Set default. Subtracts 1 because of that nagging doubt about size vs. length. Some MSDN examples subtract one, such as TabCtrl_GetItem()'s cchTextMax.
 
 	if (col.type == LV_COL_INTEGER)
 	{
@@ -8861,6 +8887,22 @@ void GuiType::LV_Sort(GuiControlType &aControl, int aColumnIndex, bool aSortOnly
 	}
 	else // It's LV_COL_TEXT or LV_COL_FLOAT.
 	{
+		if (col.type == LV_COL_TEXT && col.case_sensitive == SCS_INSENSITIVE_LOGICAL) // SCS_INSENSITIVE_LOGICAL can be in effect even when type isn't LV_COL_TEXT because it allows a column to be later changed to TEXT and retain its "logical-sort" setting.
+		{
+			// v1.0.44.12: Support logical sorting, which treats numeric strings as true numbers like Windows XP
+			// Explorer's sorting.  This is done here rather than in LV_ModifyCol() because it seems more
+			// maintainable/robust (plus LV_GeneralSort() relies on us to do this check).
+			if (!g_StrCmpLogicalW)
+			{
+				HINSTANCE hinstLib;
+				if (hinstLib = LoadLibrary("shlwapi")) // For code simplicity and performance-upon-reuse, once loaded it is never freed.
+					g_StrCmpLogicalW = (StrCmpLogicalW_type)GetProcAddress(hinstLib, "StrCmpLogicalW");
+			}
+			if (g_StrCmpLogicalW) // Generally, this happens only if OS is older than XP. But OS version isn't checked in case it's possible for older OSes/emultators to ever have StrCmpLogicalW().
+				lvs.lvi.cchTextMax = lvs.lvi.cchTextMax/2 - 1; // Buffer can hold only half as many Unicode characters as non-Unicode (subtract 1 for the extra-wide NULL terminator).
+			else
+				col.case_sensitive = SCS_INSENSITIVE_LOCALE; // LV_GeneralSort() relies on this fallback.  Also, it falls back to the LOCALE method because it is the closest match to LOGICAL (since testing shows that StrCmpLogicalW seems to use the user's locale).
+		}
 		// Since LVM_SORTITEMSEX requires comctl32.dll version 5.80+, the non-Ex version is used
 		// whenever the EX version fails to work.  One reason to strongly prefer the Ex version
 		// is that MSDN says the non-Ex version shouldn't query the control during the sort,
@@ -8868,7 +8910,7 @@ void GuiType::LV_Sort(GuiControlType &aControl, int aColumnIndex, bool aSortOnly
 		// Try to use the SortEx() method first. If it doesn't work, fall back to the non-Ex method under
 		// the assumption that the OS doesn't support the Ex() method.
 		// Initialize struct members as much as possible so that the sort callback function doesn't have to do it
-		// each time it's called.   Some of the others were already initialized higher above for internal use here.
+		// the many times it's called. Some of the others were already initialized higher above for internal use here.
 		lvs.hwnd = aControl.hwnd;
 		lvs.lvi.iSubItem = aColumnIndex; // Zero-based column index to indicate whether the item or one of its sub-items should be retrieved.
 		lvs.col = col; // Struct copy, which should enhance sorting performance over a pointer.

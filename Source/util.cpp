@@ -1603,7 +1603,7 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, i
 		// Also, if width and height are non-zero, that will determine which icon of a multi-icon .ico file gets
 		// loaded (though I don't know the exact rules of precedence).
 		// KNOWN LIMITATIONS/BUGS:
-		// LoadImage() fails when requesting a size of 1x1 for a image whose orig/actual size is small (e.g. 1x2).
+		// LoadImage() fails when requesting a size of 1x1 for an image whose orig/actual size is small (e.g. 1x2).
 		// Unlike CopyImage(), perhaps it detects that division by zero would occur and refuses to do the
 		// calculation rather than providing more code to do a correct calculation that doesn't divide by zero.
 		// For example:
@@ -1842,8 +1842,8 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, i
 		// from the new object.  MSDN: "LR_COPYRETURNORG returns the original hImage if it satisfies
 		// the criteria for the copy—that is, correct dimensions and color depth—in which case the
 		// LR_COPYDELETEORG flag is ignored. If this flag is not specified, a new object is always created."
-		// KNOWN BUG: Calling CopyImage() with when the source image is tiny and the destination width/height
-		// is also small (e.g. 1) causes divide-by-zero exception.
+		// KNOWN BUG: Calling CopyImage() when the source image is tiny and the destination width/height
+		// is also small (e.g. 1) causes a divide-by-zero exception.
 		// For example:
 		//   Gui, Add, Pic, h1 w-1, bitmap 1x2.bmp  ; Crash (divide by zero)
 		//   Gui, Add, Pic, h1 w-1, bitmap 2x3.bmp  ; Crash (divide by zero)

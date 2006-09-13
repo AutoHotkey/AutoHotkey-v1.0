@@ -387,12 +387,61 @@ LRESULT LowLevelCommon(const HHOOK aHook, int aCode, WPARAM wParam, LPARAM lPara
 		if (fore_win)
 		{
 			if (fore_win != g_HistoryHwndPrev)
-				GetWindowText(fore_win, pKeyHistoryCurr->target_window, sizeof(pKeyHistoryCurr->target_window));
+			{
+				// The following line is commented out in favor of the one beneath it (seem below comment):
+				//GetWindowText(fore_win, pKeyHistoryCurr->target_window, sizeof(pKeyHistoryCurr->target_window));
+				PostMessage(g_hWnd, AHK_GETWINDOWTEXT, (WPARAM)pKeyHistoryCurr->target_window, (LPARAM)fore_win);
+				// v1.0.44.12: The reason for the above is that clicking a window's close or minimize button
+				// (and possibly other types of title bar clicks) causes a delay for the following window, at least
+				// when XP Theme (but not classic theme) is in effect:
+				//#InstallMouseHook
+				//Gui, +AlwaysOnTop
+				//Gui, Show, w200 h100
+				//return
+				// The problem came about from the following sequence of events:
+				// 1) User clicks the one of the script's window's title bar's close, minimize, or maximize button.
+				// 2) WM_NCLBUTTONDOWN is sent to the window's window proc, which then passes it on to
+				//    DefWindowProc or DefDlgProc, which then apparently enters a loop in which no messages
+				//    (or a very limited subset) are pumped.
+				// 3) If anyone sends a message to that window (such as GetWindowText(), which sends a message
+				//    in cases where it doesn't have the title pre-cached), the message will not receive a reply
+				//    until after the mouse button is released.
+				// 4) But the hook is the very thing that's supposed to release the mouse button, and it can't
+				//    until a reply is received.
+				// 5) Thus, a deadlock occurs.  So after a short but noticeable delay, the OS sees the hook as
+				//    unresponsive and bypasses it, sending the click through normally which breaks the deadlock.
+				// 6) A similar situation might arise when a right-click-down is sent to the title bar or
+				//    sys-menu-icon.
+				//
+				// SOLUTION:
+				// Post the message to our main thread to have it do the GetWindowText call.  That way, if
+				// the target window is one of the main thread's own window's, there's no chance it can be
+				// in an unreponsive state like the deadlock described above.  In addition, do this for ALL
+				// windows because its simpler, more maintainable, and especially might sovle other hook
+				// performance problems if GetWindowText() has other situations where it is slow to return
+				// (which seems likely).
+				// Although the above solution could create rare situations where there's a lag before window text
+				// is updated, that seems unlikely to be common or have signficant consequences.  Furthermore,
+				// it has the advantage of improving hook performance by avoiding the call to GetWindowText (which
+				// incidentally might solve hotkey lag problems that have been observed while the active window
+				// is momentarily busy/unresponsive -- but maybe not because the main thread would then be lagged
+				// instead of the hook thread, which is effectively the same result from user's POV).
+				// Note: It seems best not to post the message to the hook thread because if LButton is down,
+				// the hook's main event loop would be sending a message to an unresponsive thread (our main thread),
+				// which would create the same deadlock.
+				// ALTERNATE SOLUTIONS:
+				// - #1: Avoid calling GetWindowText at all when LButton or RButton is in a logically-down state.
+				// - Same as #1, but do so only if one of the main thread's target windows is known to be in a tight loop (might be too unreliable to detect all such cases).
+				// - Same as #1 but less rigorous and more catch-all, such as by checking if the active window belongs to our thread.
+				// - Avoid calling GetWindowText at all upon release of LButton.
+				// - Same, but only if the window to have text retrieved belongs to our process.
+				// - Same, but only if the mouse is inside the close/minimize/etc. buttons of the active window.
+			}
 			else // i.e. where possible, avoid the overhead of the call to GetWindowText().
 				*pKeyHistoryCurr->target_window = '\0';
 		}
 		else
-			strcpy(pKeyHistoryCurr->target_window, "N/A");
+			strcpy(pKeyHistoryCurr->target_window, "N/A"); // Due to AHK_GETWINDOWTEXT, this could collide with main thread's writing to same string; but in addition to being extremely rare, it would likely be inconsequential.
 		g_HistoryHwndPrev = fore_win;  // Updated unconditionally in case fore_win is NULL.
 	}
 	// Keep the following flush with the above to indicate that they're related.

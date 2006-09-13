@@ -1428,12 +1428,12 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 	// In case the Input timer has already put a WM_TIMER msg in our queue before we killed it,
 	// clean out the queue now to avoid any chance that such a WM_TIMER message will take effect
 	// later when it would be unexpected and might interfere with this input.  To avoid an
-	// unnecessary call to PeekMessage(), which might in turn yield our timeslice to other
+	// unnecessary call to PeekMessage(), which has been known to yield our timeslice to other
 	// processes if the CPU is under load (which might be undesirable if this input is
 	// time-critical, such as in a game), call GetQueueStatus() to see if there are any timer
 	// messages in the queue.  I believe that GetQueueStatus(), unlike PeekMessage(), does not
-	// have the nasty/undocumented side-effect of yielding our timeslice, but Google and MSDN
-	// are completely devoid of any confirming info on this:
+	// have the nasty/undocumented side-effect of yielding our timeslice under certain hard-to-reproduce
+	// circumstances, but Google and MSDN are completely devoid of any confirming info on this.
 	#define KILL_AND_PURGE_INPUT_TIMER \
 	if (g_InputTimerExists)\
 	{\
@@ -4924,6 +4924,20 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPar
 			SendMessageTimeout(g_script.mNextClipboardViewer, iMsg, wParam, lParam, SMTO_ABORTIFHUNG, 2000, &dwTemp);
 		return 0;
 
+	case AHK_GETWINDOWTEXT:
+		// It's best to handle this msg here rather than in the main event loop in case a non-standard message
+		// pump is running (such as MsgBox's), in which case this msg would be dispatched directly here.
+		if (IsWindow((HWND)lParam)) // In case window has been destroyed since msg was posted.
+			GetWindowText((HWND)lParam, (char *)wParam, KEY_HISTORY_WINDOW_TITLE_SIZE);
+		// Probably best not to do the following because it could result in such "low priority" messages
+		// getting out of step with each other, and could also introduce KeyHistory WinTitle "lag":
+		// Could give low priority to AHK_GETWINDOWTEXT under the theory that sometimes the call takes a long
+		// time to return: Upon receipt of such a message, repost it whenever Peek(specific_msg_range, PM_NOREMOVE)
+		// detects a thread-starting event on the queue.  However, Peek might be a high overhead call in some cases,
+		// such as when/if it yields our timeslice upon returning FALSE (uncertain/unlikely, but in any case
+		// it might do more harm than good).
+		return 0;
+
 	case AHK_RETURN_PID:
 		// This is obsolete in light of WinGet's support for fetching the PID of any window.
 		// But since it's simple, it is retained for backward compatibility.
@@ -6917,7 +6931,7 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 
 	// size_t helps performance and should be plenty of capacity for many years of advancement.
 	// In addition, things like realloc() can't accept anything larger than size_t anyway,
-	// so there's no point making this 64-bit until size_t itself becomes 64-bit:
+	// so there's no point making this 64-bit until size_t itself becomes 64-bit (it already is on some compilers?).
 	size_t item_count;
 
 	// Explicitly calculate the length in case it's the clipboard or an environment var.
@@ -6966,7 +6980,7 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 	// Scan aContents and do the following:
 	// 1) Replace each delimiter with a terminator so that the individual items can be seen
 	//    as real strings by the SortWithOptions() and when copying the sorted results back
-	//    into output_vav.  It is safe change aContents in this way because
+	//    into output_vav.  It is safe to change aContents in this way because
 	//    ArgMustBeDereferenced() has ensured that those contents are in the deref buffer.
 	// 2) Store a marker/pointer to each item (string) in aContents so that we know where
 	//    each item begins for sorting and recopying purposes.
@@ -11529,6 +11543,8 @@ void BIF_LV_InsertModifyDeleteCol(ExprTokenType &aResultToken, ExprTokenType *aP
 			else
 				col.case_sensitive = SCS_INSENSITIVE;
 		}
+		else if (!stricmp(next_option, "Logical")) // v1.0.44.12: Supports StrCmpLogicalW() method of sorting.
+			col.case_sensitive = SCS_INSENSITIVE_LOGICAL;
 
 		else if (!strnicmp(next_option, "Sort", 4)) // This is done as an option vs. LV_SortCol/LV_Sort so that the column's options can be changed simultaneously with a "sort now" to refresh.
 		{

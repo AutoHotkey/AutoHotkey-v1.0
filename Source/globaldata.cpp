@@ -35,6 +35,9 @@ HWND g_hWndEdit = NULL;
 HWND g_hWndSplash = NULL;
 HFONT g_hFontSplash = NULL;  // So that font can be deleted on program close.
 HACCEL g_hAccelTable = NULL;
+
+typedef int (WINAPI *StrCmpLogicalW_type)(LPCWSTR, LPCWSTR);
+StrCmpLogicalW_type g_StrCmpLogicalW = NULL;
 WNDPROC g_TabClassProc = NULL;
 
 modLR_type g_modifiersLR_logical = 0;

@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.44.11"
+#define NAME_VERSION "1.0.44.12"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -121,8 +121,8 @@ enum ToggleValueType {TOGGLE_INVALID = 0, TOGGLED_ON, TOGGLED_OFF, ALWAYS_ON, AL
 	, TOGGLE_MOUSEMOVE, TOGGLE_MOUSEMOVEOFF};
 
 // Some things (such as ListView sorting) rely on SCS_INSENSITIVE being zero.
-// In addition, BIF_InStr relies on SCS_SENSITIVE being 1.
-enum StringCaseSenseType {SCS_INSENSITIVE, SCS_SENSITIVE, SCS_INSENSITIVE_LOCALE, SCS_INVALID};
+// In addition, BIF_InStr relies on SCS_SENSITIVE being 1:
+enum StringCaseSenseType {SCS_INSENSITIVE, SCS_SENSITIVE, SCS_INSENSITIVE_LOCALE, SCS_INSENSITIVE_LOGICAL, SCS_INVALID};
 
 enum SymbolType // For use with ExpandExpression() and IsPureNumeric().
 {
@@ -360,7 +360,10 @@ typedef UCHAR HookType;
 // Notes applying to the macro:
 // Store tick_now for use later, in case the Peek() isn't done, though not all callers need it later.
 // ...
-// Since the Peek() will yield when there are no messages, it will often take 20ms or more to return.
+// Since the Peek() will yield when there are no messages, it will often take 20ms or more to return
+// (UPDATE: this can't be reproduced with simple tests, so either the OS has changed through service
+// packs, or Peek() yields only when the OS detects that the app is calling it too often or calling
+// it in certain ways [PM_REMOVE vs. PM_NOREMOVE seems to make no differnce: either way it doesn't yield]).
 // Therefore, must update tick_now again (its value is used by macro and possibly by its caller)
 // to avoid having to Peek() immediately after the next iteration.
 // ...

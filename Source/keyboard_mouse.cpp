@@ -2048,7 +2048,7 @@ void MouseClick(vk_type aVK, int aX, int aY, int aRepeatCount, int aSpeed, KeyEv
 			// F2::RButton
 			// The problems came about from the following sequence of events:
 			// 1) Script simulates a left-click-down in the title bar's close, minimize, or maximize button.
-			// 2) WM_NCRBUTTONDOWN is sent to the window's window proc, which then passes it on to
+			// 2) WM_NCLBUTTONDOWN is sent to the window's window proc, which then passes it on to
 			//    DefWindowProc or DefDlgProc, which then apparently enters a loop in which no messages
 			//    (or a very limited subset) are pumped.
 			// 3) Thus, if the user presses a hotkey while the thread is in this state, that hotkey is
@@ -2059,8 +2059,8 @@ void MouseClick(vk_type aVK, int aX, int aY, int aRepeatCount, int aSpeed, KeyEv
 			// 6) A similar situation arises when a right-click-down is sent to the title bar or sys-menu-icon.
 			//
 			// The following workaround operates by suppressing qualified click-down events until the
-			// corresponding click-up occurs, at which time the click-up is transformed into a down+up if
-			// the click-up is still in the same position as the down. It seems preferable to fix this here
+			// corresponding click-up occurs, at which time the click-up is transformed into a down+up if the
+			// click-up is still in the same cursor position as the down. It seems preferable to fix this here
 			// rather than changing each window proc. to always respond to click-down rather vs. click-up
 			// because that would make all of the script's windows behave in a non-standard way, possibly
 			// producing side-effects and defeating other programs' attempts to interact with them.

@@ -28,6 +28,7 @@ GNU General Public License for more details.
 // for possible future use by the program, so don't use a message above 0x1000 without good reason.
 enum UserMessages {AHK_HOOK_HOTKEY = WM_USER, AHK_HOTSTRING, AHK_USER_MENU, AHK_DIALOG, AHK_NOTIFYICON
 	, AHK_RETURN_PID, AHK_EXIT_BY_RELOAD, AHK_EXIT_BY_SINGLEINSTANCE
+	// Allow some room here in between for more "exit" type msgs to be added in the future (see below comment).
 	, AHK_GUI_ACTION = WM_USER+20 // Avoid WM_USER+100/101 and vicinity.  See below comment.
 	// v1.0.43.05: On second thought, it seems better to stay close to WM_USER because the OnMessage page
 	// documents, "it is best to choose a number greater than 4096 (0x1000) to the extent you have a choice.
@@ -36,8 +37,7 @@ enum UserMessages {AHK_HOOK_HOTKEY = WM_USER, AHK_HOTSTRING, AHK_USER_MENU, AHK_
 	// with msgs sent by HTML control (AHK_CLIPBOARD_CHANGE) and possibly others (I think WM_USER+100 may be the
 	// start of a range used by other common controls too).  So trying a higher number that's (hopefully) very
 	// unlikely to be used by OS features.
-	// Older: Allow some room in between for more "exit" type msgs to be added in the future (see below comment).
-	, AHK_CLIPBOARD_CHANGE, AHK_HOOK_TEST_MSG, AHK_CHANGE_HOOK_STATE};
+	, AHK_CLIPBOARD_CHANGE, AHK_HOOK_TEST_MSG, AHK_CHANGE_HOOK_STATE, AHK_GETWINDOWTEXT};
 // NOTE: TRY NEVER TO CHANGE the specific numbers of the above messages, since some users might be
 // using the Post/SendMessage commands to automate AutoHotkey itself.  Here is the original order
 // that should be maintained:
@@ -225,7 +225,8 @@ struct KeyHistoryItem
 	// out of space (perhaps due to the target window changing frequently), window logging would
 	// no longer be possible without adding complexity to the logging function.  Seems best
 	// to keep it simple:
-	char target_window[100];
+#define KEY_HISTORY_WINDOW_TITLE_SIZE 100
+	char target_window[KEY_HISTORY_WINDOW_TITLE_SIZE];
 };
 
 

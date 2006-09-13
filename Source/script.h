@@ -1903,7 +1903,7 @@ struct lv_col_type
 {
 	UCHAR type;             // UCHAR vs. enum LVColTypes to save memory.
 	bool sort_disabled;     // If true, clicking the column will have no automatic sorting effect.
-	UCHAR case_sensitive;   // Ignored if type isn't LV_COL_TEXT.  TOGGLED_OFF is the default of "case insensitive".
+	UCHAR case_sensitive;   // Ignored if type isn't LV_COL_TEXT.  SCS_INSENSITIVE is the default.
 	bool unidirectional;    // Sorting cannot be reversed/toggled.
 	bool prefer_descending; // Whether this column defaults to descending order (on first click or for unidirectional).
 };
