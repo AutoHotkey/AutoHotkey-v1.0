@@ -3427,6 +3427,7 @@ ResultType GuiType::ParseOptions(char *aOptions, bool &aSetLastFoundWindow, Togg
 // Caller must ensure that aOptions is a modifiable string, since this method temporarily alters it.
 {
 	int owner_window_index;
+	LONG nc_width, nc_height;
 
 	if (mHwnd)
 	{
@@ -3438,7 +3439,7 @@ ResultType GuiType::ParseOptions(char *aOptions, bool &aSetLastFoundWindow, Togg
 	DWORD style_orig = mStyle;
 	DWORD exstyle_orig = mExStyle;
 
-	char *next_option, *option_end, orig_char;
+	char *pos_of_the_x, *next_option, *option_end, orig_char;
 	bool adding; // Whether this option is beeing added (+) or removed (-).
 
 	for (next_option = aOptions; *next_option; next_option = omit_leading_whitespace(option_end))
@@ -3583,6 +3584,66 @@ ResultType GuiType::ParseOptions(char *aOptions, bool &aSetLastFoundWindow, Togg
 			// via "+MinimizeBox -SysMenu" if that functionality is ever needed.
 			if (adding) mStyle |= WS_MINIMIZEBOX|WS_SYSMENU; else mStyle &= ~WS_MINIMIZEBOX;
 
+		else if (!strnicmp(next_option, "MinSize", 7)) // v1.0.44.13: Added for use with WM_GETMINMAXINFO.
+		{
+			next_option += 7;
+			if (adding)
+			{
+				if (*next_option)
+				{
+					// The following will retrieve zeros if window hasn't yet been shown for the first time,
+					// in which case the first showing will do the NC adjustment for us.  The overall approach
+					// used here was chose to avoid any chance for Min/MaxSize to be adjusted more than once
+					// to convert client size to entire-size, which would be wrong since the adjustment must be
+					// applied only once.  Examples of such situations are when one of the coordinates is omitted,
+					// or when +MinSize is specified prior to the first "Gui Show" but +MaxSize is specified after.
+					GetNonClientArea(nc_width, nc_height);
+					// atoi() vs. ATOI() is used below to avoid ambiguity of "x" being hex 0x vs. a delimiter.
+					if ((pos_of_the_x = StrChrAny(next_option, "Xx")) && pos_of_the_x[1]) // Kept simple due to rarity of transgressions and their being inconsequential.
+						mMinHeight = atoi(pos_of_the_x + 1) + nc_height;
+					//else it's "MinSize333" or "MinSize333x", so leave height unchanged as documented.
+					if (pos_of_the_x != next_option) // There's no 'x' or it lies to the right of next_option.
+						mMinWidth = atoi(next_option) + nc_width; // atoi() automatically stops converting when it reaches non-numeric character.
+					//else it's "MinSizeX333", so leave width unchanged as documented.
+				}
+				else // Since no width or height was specified:
+					// Use the window's current size. But if window hasn't yet been shown for the
+					// first time, this will set the values to COORD_CENTERED, which tells the
+					// first-show routine to get the total width/height upon first showing (since
+					// that's where the window's initial size is determined).
+					GetTotalWidthAndHeight(mMinWidth, mMinHeight);
+			}
+			else // "-MinSize", so tell the WM_GETMINMAXINFO handler to use system defaults.
+			{
+				mMinWidth = COORD_UNSPECIFIED;
+				mMinHeight = COORD_UNSPECIFIED;
+			}
+		}
+
+		else if (!strnicmp(next_option, "MaxSize", 7)) // v1.0.44.13: Added for use with WM_GETMINMAXINFO.
+		{
+			// SEE "MinSize" section above for more comments because the section below is nearly identical to it.
+			next_option += 7;
+			if (adding)
+			{
+				if (*next_option)
+				{
+					GetNonClientArea(nc_width, nc_height);
+					if ((pos_of_the_x = StrChrAny(next_option, "Xx")) && pos_of_the_x[1]) // Kept simple due to rarity of transgressions and their being inconsequential.
+						mMaxHeight = atoi(pos_of_the_x + 1) + nc_height;
+					if (pos_of_the_x != next_option) // There's no 'x' or it lies to the right of next_option.
+						mMaxWidth = atoi(next_option) + nc_width; // atoi() automatically stops converting when it reaches non-numeric character.
+				}
+				else // No width or height was specified. See comment in "MinSize" for details about this.
+					GetTotalWidthAndHeight(mMaxWidth, mMaxHeight); // If window hasn't yet been shown for the first time, this will set them to COORD_CENTERED, which tells the first-show routine to get the total width/height.
+			}
+			else // "-MaxSize", so tell the WM_GETMINMAXINFO handler to use system defaults.
+			{
+				mMaxWidth = COORD_UNSPECIFIED;
+				mMaxHeight = COORD_UNSPECIFIED;
+			}
+		}
+
 		else if (!stricmp(next_option, "OwnDialogs"))
 			aOwnDialogs = (adding ? TOGGLED_ON : TOGGLED_OFF);
 
@@ -3681,6 +3742,51 @@ ResultType GuiType::ParseOptions(char *aOptions, bool &aSetLastFoundWindow, Togg
 	}
 
 	return OK;
+}
+
+
+
+void GuiType::GetNonClientArea(LONG &aWidth, LONG &aHeight)
+// Added for v1.0.44.13.
+// Yields only the *extra* width/height added by the windows non-client area.
+// If the window hasn't been shown for the first time, the caller wants zeros.
+// The reason for making the script specify size of client area rather than entire window is that it
+// seems far more useful.  For example, a script might know exactly how much minimum height its
+// controls require in the client area, but would find it inconvenient to have to take into account
+// the height of the title bar and menu bar (which vary depending on theme and other settings).
+{
+	if (mGuiShowHasNeverBeenDone) // In this case, the script might not yet have added the menu bar and other styles that affect the size of the non-client area.  So caller wants to do these calculations later.
+	{
+		aWidth = 0;
+		aHeight = 0;
+		return;
+	}
+	// Otherwise, mGuiShowHasNeverBeenDone==false, which should mean that mHwnd!=NULL.
+	RECT rect, client_rect;
+	GetWindowRect(mHwnd, &rect);
+	GetClientRect(mHwnd, &client_rect); // Client rect's left & top are always zero.
+	aWidth = (rect.right - rect.left) - client_rect.right;
+	aHeight = (rect.bottom - rect.top) - client_rect.bottom;
+}
+
+
+
+void GuiType::GetTotalWidthAndHeight(LONG &aWidth, LONG &aHeight)
+// Added for v1.0.44.13.
+// Yields total width and height of entire window.
+// If the window hasn't been shown for the first time, the caller wants COORD_CENTERED.
+{
+	if (mGuiShowHasNeverBeenDone)
+	{
+		aWidth = COORD_CENTERED;
+		aHeight = COORD_CENTERED;
+		return;
+	}
+	// Otherwise, mGuiShowHasNeverBeenDone==false, which should mean that mHwnd!=NULL.
+	RECT rect;
+	GetWindowRect(mHwnd, &rect);
+	aWidth = rect.right - rect.left;
+	aHeight = rect.bottom - rect.top;
 }
 
 
@@ -5481,11 +5587,11 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 	// specify [SW_SHOWNORMAL] when displaying the window for the first time."  However, SW_SHOWNORMAL is
 	// avoided after the first showing of the window because that would probably also do a "restore" on the
 	// window if it was maximized previously.  Note that the description of SW_SHOWNORMAL is virtually the
-	// same as that of SW_RESTORE in MSDN.  UPDATE: mFirstGuiShowCmd is used here instead of mFirstActivation
+	// same as that of SW_RESTORE in MSDN.  UPDATE: mGuiShowHasNeverBeenDone is used here instead of mFirstActivation
 	// because it seems more flexible to have "Gui Show" behave consistently (SW_SHOW) every time after
 	// the first use of "Gui Show".  UPDATE: Since SW_SHOW seems to have no effect on minimized windows,
 	// at least on XP, and since such a minimized window will be restored by action of SetForegroundWindowEx(),
-	// it seems best to unconditionally use SW_SHOWNORMAL, rather than "mFirstGuiShowCmd ? SW_SHOWNORMAL : SW_SHOW".
+	// it seems best to unconditionally use SW_SHOWNORMAL, rather than "mGuiShowHasNeverBeenDone ? SW_SHOWNORMAL : SW_SHOW".
 	// This is done so that the window will be restored and thus have a better chance of being successfully
 	// activated (and thus not requiring the call to SetForegroundWindowEx()).
 	// v1.0.44.08: Fixed to default to SW_SHOW for currently-maximized windows so that they don't get unmaximized
@@ -5644,7 +5750,7 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 
 	if (allow_move_window = !IsIconic(mHwnd)) // Call IsIconic() again in case above changed the window's state.
 	{
-		if (auto_size) // Check this one first so that it takes precedence over mFirstGuiShowCmd below.
+		if (auto_size) // Check this one first so that it takes precedence over mGuiShowHasNeverBeenDone below.
 		{
 			// Find out a different set of max extents rather than using mMaxExtentRight/Down, which should
 			// not be altered because they are used to position any subsequently added controls.
@@ -5678,7 +5784,7 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 		}
 		else if (width == COORD_UNSPECIFIED || height == COORD_UNSPECIFIED)
 		{
-			if (mFirstGuiShowCmd) // By default, center the window if this is the first use of "Gui Show" (even "Gui Show, Hide").
+			if (mGuiShowHasNeverBeenDone) // By default, center the window if this is the first use of "Gui Show" (even "Gui Show, Hide").
 			{
 				if (width == COORD_UNSPECIFIED)
 					width = mMaxExtentRight + mMarginX;
@@ -5701,9 +5807,25 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 					height = rect.bottom - rect.top;
 			}
 		}
+
+		// v1.0.44.13: For code size reasons and due to rarity-of-need, the following isn't done (also, it
+		// can't catch all such situations; e.g. when "Gui +MinSize" can be used after "Gui Show".
+		// Plus it might add a bit of flexibility to allow "Gui Show" to override min/max:
+		// Older: The following prevents situations in which the window starts off at a size that's
+		// too big or too small, which in turn causes it to snap to the min/max size the moment
+		// the user tries to drag-move or drag-resize it:
+		//if (mMinWidth >= 0 && width < mMinWidth) // mMinWidth >= 0 covers both COORD_UNSPECIFIED and COORD_CENTERED.
+		//	width = mMinWidth;
+		//else if (mMaxWidth >= 0 && width > mMaxWidth)
+		//	width = mMaxWidth;
+		//if (mMinHeight >= 0 && height < mMinHeight)
+		//	height = mMinHeight;
+		//else if (mMaxHeight >= 0 && height > mMaxHeight)
+		//	height = mMaxHeight;
+
 	} // if (allow_move_window)
 
-	if (mFirstGuiShowCmd)
+	if (mGuiShowHasNeverBeenDone)
 	{
 		// Update any tab controls to show only their correct pane.  This should only be necessary
 		// upon the first "Gui Show" (even "Gui, Show, Hide") of the window because subsequent switches
@@ -5723,7 +5845,7 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 	if (allow_move_window)
 	{
 		// The above has determined the height/width of the client area.  From that area, determine
-		// the window's new rect, including title bar, borders, etc.
+		// the window's new screen rect, including title bar, borders, etc.
 		// If the window has a border or caption this also changes top & left *slightly* from zero.
 		RECT rect = {0, 0, width, height}; // left,top,right,bottom
 		AdjustWindowRectEx(&rect, GetWindowLong(mHwnd, GWL_STYLE), GetMenu(mHwnd) ? TRUE : FALSE
@@ -5739,7 +5861,7 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 		// Seems best to restrict window size to the size of the desktop whenever explicit sizes
 		// weren't given, since most users would probably want that.  But only on first use of
 		// "Gui Show" (even "Gui, Show, Hide"):
-		if (mFirstGuiShowCmd)
+		if (mGuiShowHasNeverBeenDone)
 		{
 			if (width_orig == COORD_UNSPECIFIED && width > work_width)
 				width = work_width;
@@ -5780,6 +5902,51 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 			MoveWindow(mHwnd, x == COORD_UNSPECIFIED ? old_rect.left : x, y == COORD_UNSPECIFIED ? old_rect.top : y
 				, width, height, is_visible);  // Do repaint if window is visible.
 		}
+
+		// Added for v1.0.44.13:
+		// Below is done inside this block (allow_move_window) because it that way, it should always
+		// execute whenever mGuiShowHasNeverBeenDone (since the window shouldn't be iconic prior to
+		// its first showing).  In additon, below must be down prior to any ShowWindow() that does
+		// a minimize or maximize because that would prevent GetWindowRect/GetClientRect calculations
+		// below from working properly.
+		if (mGuiShowHasNeverBeenDone) // This is the first showing of this window.
+		{
+			// Now that the window's style, edge type, title bar, menu bar, and other non-client attributes have
+			// likely (but not certainly) been determined, adjust MinMaxSize values from client size to
+			// entire-window size for use with WM_GETMINMAXINFO.
+			// To help reduce code size, the following isn't done (the calls later below are probably very fast):
+			//if (   mMinWidth != COORD_UNSPECIFIED || mMinHeight != COORD_UNSPECIFIED
+			//	|| mMaxWidth != COORD_UNSPECIFIED || mMaxHeight != COORD_UNSPECIFIED   )
+			//{
+			// ...
+			RECT rect, client_rect;
+			GetWindowRect(mHwnd, &rect);        // Get both rects again in case MoveWindow wasn't
+			GetClientRect(mHwnd, &client_rect); // above to grant the requested size.
+			int total_width = rect.right - rect.left;
+			int total_height = rect.bottom - rect.top;
+			int extra_width = total_width - client_rect.right;
+			int extra_height = total_height - client_rect.bottom;
+
+			if (mMinWidth == COORD_CENTERED) // COORD_CENTERED is the flag that means, "use window's current, total width."
+				mMinWidth = total_width;
+			else if (mMinWidth != COORD_UNSPECIFIED)
+				mMinWidth += extra_width;
+
+			if (mMinHeight == COORD_CENTERED)
+				mMinHeight = total_height;
+			else if (mMinHeight != COORD_UNSPECIFIED)
+				mMinHeight += extra_height;
+
+			if (mMaxWidth == COORD_CENTERED)
+				mMaxWidth = total_width;
+			else if (mMaxWidth != COORD_UNSPECIFIED)
+				mMaxWidth += extra_width;
+
+			if (mMaxHeight == COORD_CENTERED)
+				mMaxHeight = total_height;
+			else if (mMaxHeight != COORD_UNSPECIFIED)
+				mMaxHeight += extra_height;
+		} // if (mGuiShowHasNeverBeenDone)
 	} // if (allow_move_window)
 
 	// Note that for SW_MINIMIZE and SW_MAXIMZE, the MoveWindow() above should be done prior to ShowWindow()
@@ -5841,8 +6008,7 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 		}
 	}
 
-	mFirstGuiShowCmd = false;
-
+	mGuiShowHasNeverBeenDone = false;
 	// It seems best to reset this prior to SLEEP below, but after the above line (for code clarity) since
 	// otherwise it might get stuck in a true state if the SLEEP results in the launch of a script
 	// subroutine that takes a long time to complete:
@@ -6710,6 +6876,22 @@ LRESULT CALLBACK GuiWindowProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lPara
 		return 0; // "If an application processes this message, it should return zero."
 		// Testing shows that the window still resizes correctly (controls are revealed as the window
 		// is expanded) even if the event isn't passed on to the default proc.
+
+	case WM_GETMINMAXINFO: // Added for v1.0.44.13.
+	{
+		if (   !(pgui = GuiType::FindGui(hWnd))   )
+			break; // Let default proc handle it.
+		MINMAXINFO &mmi = *(LPMINMAXINFO)lParam;
+		if (pgui->mMinWidth >= 0) // This check covers both COORD_UNSPECIFIED and COORD_CENTERED.
+			mmi.ptMinTrackSize.x = pgui->mMinWidth;
+		if (pgui->mMinHeight >= 0)
+			mmi.ptMinTrackSize.y = pgui->mMinHeight;
+		if (pgui->mMaxWidth >= 0)   // mmi.ptMaxSize.x/y aren't changed because it seems the OS
+			mmi.ptMaxTrackSize.x = pgui->mMaxWidth; // automatically uses ptMaxTrackSize for them, at least when
+		if (pgui->mMaxHeight >= 0)   // ptMaxTrackSize is smaller than the system's default for
+			mmi.ptMaxTrackSize.y = pgui->mMaxHeight; // mmi.ptMaxSize.
+		return 0; // "If an application processes this message, it should return zero."
+	}
 
 	case WM_COMMAND:
 	{
@@ -8750,14 +8932,15 @@ int CALLBACK LV_GeneralSort(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort)
 	// the only difference between them is the type "LPWSTR pszText", which is no problem as long as caller
 	// has properly halved cchTextMax to reflect that wide-chars are twice as wide as 8-bit characters.
 
-	// NOTE: I think the below is only a concern for SortItems, not SortItemsEx.  Since SortItemsEx is almost
-	// always available nowadays, the below is much less of a concern even if it happens to be an issue, which
-	// I doubt it is for the particular types of message sent here.
 	// MSDN: "During the sorting process, the list-view contents are unstable. If the [ListView_SortItems]
-	// callback function sends any messages to the list-view control, the results are unpredictable."
-	// But it seems hard to believe that you shouldn't send ANY kind of message because how could you ever use
-	// ListView_SortItems() without either having LVS_OWNERDATA or allocating temp memory for the entire column
-	// (to whose rows lParam would point)?
+	// callback function sends any messages to the list-view control, the results are unpredictable (aside
+	// from LVM_GETITEM, which is allowed by ListView_SortItemsEx but not ListView_SortItems)."
+	// Since SortItemsEx has become so much more common/available, the doubt about whether the non-Ex
+	// ListView_SortItems actually allows LVM_GETITEM (which it probably does in spite of not being
+	// documented) much less of a concern.
+	// Older: It seems hard to believe that you shouldn't send ANY kind of message because how could you
+	// ever use ListView_SortItems() without either having LVS_OWNERDATA or allocating temp memory for the
+	// entire column (to whose rows lParam would point)?
 	// UPDATE: The following seems to be one alternative:
 	// Do a "virtual qsort" on this column's contents by having qsort() sort an array of row numbers according
 	// to the contents of each particular row's field in that column (i.e. qsort's callback would call LV_GETITEM).

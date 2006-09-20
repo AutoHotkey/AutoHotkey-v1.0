@@ -124,9 +124,9 @@ enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
 #define ERR_ABORT "  " ERR_ABORT_NO_SPACES
 #define WILL_EXIT "The program will exit."
 #define OLD_STILL_IN_EFFECT "The script was not reloaded; the old version will remain in effect."
-#define ERR_COMBINED_LINE_TOO_LONG "Combined line would be too long."
+#define ERR_CONTINUATION_SECTION_TOO_LONG "Continuation section too long."
 #define ERR_UNRECOGNIZED_ACTION "This line does not contain a recognized action."
-#define ERR_NONEXISTENT_HOTKEY "Nonexistent hotkey."  // No period after short phrases.
+#define ERR_NONEXISTENT_HOTKEY "Nonexistent hotkey."
 #define ERR_NONEXISTENT_VARIANT "Nonexistent hotkey variant (IfWin)."
 #define ERR_EXE_CORRUPTED "EXE corrupted"
 #define ERR_PARAM1_INVALID "Parameter #1 invalid"
@@ -603,7 +603,7 @@ private:
 	ResultType RegDelete(HKEY aRootKey, char *aRegSubkey, char *aValueName);
 	static bool RegRemoveSubkeys(HKEY hRegKey);
 
-	#define SW_INVALID -1
+	#define SW_NONE -1
 	ResultType PerformShowWindow(ActionTypeType aActionType, char *aTitle = "", char *aText = ""
 		, char *aExcludeTitle = "", char *aExcludeText = "");
 
@@ -2034,7 +2034,8 @@ public:
 	HICON mIconEligibleForDestruction; // The window's SysMenu icon, which can be destroyed when the window is destroyed if nothing else is using it.
 	int mMarginX, mMarginY, mPrevX, mPrevY, mPrevWidth, mPrevHeight, mMaxExtentRight, mMaxExtentDown
 		, mSectionX, mSectionY, mMaxExtentRightSection, mMaxExtentDownSection;
-	bool mFirstGuiShowCmd, mFirstActivation, mShowIsInProgress, mDestroyWindowHasBeenCalled;
+	LONG mMinWidth, mMinHeight, mMaxWidth, mMaxHeight;
+	bool mGuiShowHasNeverBeenDone, mFirstActivation, mShowIsInProgress, mDestroyWindowHasBeenCalled;
 	bool mControlWidthWasSetByContents; // Whether the most recently added control was auto-width'd to fit its contents.
 
 	#define MAX_GUI_FONTS 100
@@ -2077,7 +2078,9 @@ public:
 		, mMaxExtentRight(0), mMaxExtentDown(0)
 		, mSectionX(COORD_UNSPECIFIED), mSectionY(COORD_UNSPECIFIED)
 		, mMaxExtentRightSection(COORD_UNSPECIFIED), mMaxExtentDownSection(COORD_UNSPECIFIED)
-		, mFirstGuiShowCmd(true), mFirstActivation(true), mShowIsInProgress(false)
+		, mMinWidth(COORD_UNSPECIFIED), mMinHeight(COORD_UNSPECIFIED)
+		, mMaxWidth(COORD_UNSPECIFIED), mMaxHeight(COORD_UNSPECIFIED)
+		, mGuiShowHasNeverBeenDone(true), mFirstActivation(true), mShowIsInProgress(false)
 		, mDestroyWindowHasBeenCalled(false), mControlWidthWasSetByContents(false)
 	{
 		// The array of controls is left unitialized to catch bugs.  Each control's attributes should be
@@ -2091,7 +2094,11 @@ public:
 	void SetLabels(char *aLabelPrefix);
 	static void UpdateMenuBars(HMENU aMenu);
 	ResultType AddControl(GuiControls aControlType, char *aOptions, char *aText);
+
 	ResultType ParseOptions(char *aOptions, bool &aSetLastFoundWindow, ToggleValueType &aOwnDialogs);
+	void GetNonClientArea(LONG &aWidth, LONG &aHeight);
+	void GetTotalWidthAndHeight(LONG &aWidth, LONG &aHeight);
+
 	ResultType ControlParseOptions(char *aOptions, GuiControlOptionsType &aOpt, GuiControlType &aControl
 		, GuiIndexType aControlIndex = -1); // aControlIndex is not needed upon control creation.
 	void ControlInitOptions(GuiControlOptionsType &aOpt, GuiControlType &aControl);

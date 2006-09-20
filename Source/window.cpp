@@ -835,6 +835,7 @@ ResultType StatusBarUtil(Var *aOutputVar, HWND aBarHwnd, int aPartNumber, char *
 
 
 HWND ControlExist(HWND aParentWindow, char *aClassNameAndNum)
+// This can return target_window itself for cases such as ahk_id %ControlHWND%.
 {
 	if (!aParentWindow)
 		return NULL;
@@ -1332,11 +1333,8 @@ bool IsWindowHung(HWND aWnd)
 	{
 		// v1.0.44.11: Eric M. reported that IsHungAppWindow() crashes fairly consistently on Windows Server 2003,
 		// especially when called by WinMinimize on a window like WMP when it's busy or being unswapped.
-		// We successfully isolated the problem to IsHungAppWindow() itself, so it's either directly the culprit
-		// or it destablizes the thread in a way that causes it to crash after the call (stack corruption was
-		// tentatively indicated by WinDbg).  Further evidence against IsHungAppWindow() is that it used to
-		// cause crashes on Windows XP (reproducible on my system and others) when called "too often" by
-		// WinActivate (see its comments for details).
+		// The cause of the crash appears to be that "IsHungAppWindow" contains the wrong address for the
+		// function, at least sometimes.  The cause of this is not yet known.
 		__try  // Braces are required around both sections even if only one line.
 		{
 			return IsHungAppWindow(aWnd);

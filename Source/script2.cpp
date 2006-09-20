@@ -1613,7 +1613,7 @@ ResultType Line::PerformShowWindow(ActionTypeType aActionType, char *aTitle, cha
 	// WinGroup's EnumParentActUponAll() is quite similar to the following, so the two should be
 	// maintained together.
 
-	int nCmdShow = SW_INVALID; // Set default.
+	int nCmdShow = SW_NONE; // Set default.
 
 	switch (aActionType)
 	{
@@ -1654,7 +1654,7 @@ ResultType Line::PerformShowWindow(ActionTypeType aActionType, char *aTitle, cha
 	// not using Async() because sometimes the script lines that come after the one
 	// that is doing this action here rely on this action having been completed
 	// (e.g. a window being maximized prior to clicking somewhere inside it).
-	if (nCmdShow != SW_INVALID)
+	if (nCmdShow != SW_NONE)
 	{
 		// I'm not certain that SW_FORCEMINIMIZE works with ShowWindowAsync(), but
 		// it probably does since there's absolutely no mention to the contrary
@@ -1704,7 +1704,8 @@ ResultType Line::ControlSend(char *aControl, char *aKeysToSend, char *aTitle, ch
 	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	if (!target_window)
 		return OK;
-	HWND control_window = stricmp(aControl, "ahk_parent") ? ControlExist(target_window, aControl)
+	HWND control_window = stricmp(aControl, "ahk_parent")
+		? ControlExist(target_window, aControl) // This can return target_window itself for cases such as ahk_id %ControlHWND%.
 		: target_window;
 	if (!control_window)
 		return OK;
@@ -1758,7 +1759,11 @@ ResultType Line::ControlClick(vk_type aVK, int aClickCount, char *aOptions, char
 		}
 	}
 
-	HWND control_window = position_mode ? NULL : ControlExist(target_window, aControl);
+	// It's debatable, but might be best for flexibility (and backward compatbility) to allow target_window to itself
+	// be a control (at least for the position_mode handler below).  For example, the script may have called SetParent
+	// to make a top-level window the child of some other window, in which case this policy allows it to be seen like
+	// a non-child.
+	HWND control_window = position_mode ? NULL : ControlExist(target_window, aControl); // This can return target_window itself for cases such as ahk_id %ControlHWND%.
 	if (!control_window) // Even if position_mode is false, the below is still attempted, as documented.
 	{
 		// New section for v1.0.24.  But only after the above fails to find a control do we consider
@@ -1800,8 +1805,8 @@ ResultType Line::ControlClick(vk_type aVK, int aClickCount, char *aOptions, char
 		ScreenToClient(control_window, &click);
 	}
 
-	// This is done this late because it seems better to set an ErrorLevel of 1 whenever the target
-	// window or control isn't found, or any other error condition occurs above:
+	// This is done this late because it seems better to set an ErrorLevel of 1 (above) whenever the
+	// target window or control isn't found, or any other error condition occurs above:
 	if (aClickCount < 1)
 		// Allow this to simply "do nothing", because it increases flexibility
 		// in the case where the number of clicks is a dereferenced script variable
@@ -1874,6 +1879,21 @@ ResultType Line::ControlClick(vk_type aVK, int aClickCount, char *aOptions, char
 	// it will help for certain types of dialogs.
 	ATTACH_THREAD_INPUT
 	SetActiveWindow(target_window);
+	// v1.0.44.13: Notes for the above: Unlike some other Control commands, GetNonChildParent() is not
+	// called here when target_window==control_window.  This is because the script may have called
+	// SetParent to make target_window the child of some other window, in which case target_window
+	// should still be used above (unclear).  Perhaps more importantly, it's allowed for control_window
+	// to be the same as target_window, at least in position_mode, whose docs state, "If there is no
+	// control, the target window itself will be sent the event (which might have no effect depending
+	// on the nature of the window)."  In other words, it seems too complicated and rare to add explicit
+	// handling for "ahk_id %ControlHWND%" (though the below rules should work).
+	// The line "ControlClick,, ahk_id %HWND%" can have mulitple meanings depending on the nature of HWND:
+	// 1) If HWND is a top-level window, its topmost child will be clicked.
+	// 2) If HWND is a top-level window that has become a child of another window via SetParent: same.
+	// 3) If HWND is a control, its topmost child will be clicked (or itself if it has no children).
+	//    For example, the following works (as documented in the first parameter):
+	//    ControlGet, HWND, HWND,, OK, A  ; Get the HWND of the OK button.
+	//    ControlClick,, ahk_id %HWND%
 
 	if (vk_is_wheel)
 	{
@@ -1920,7 +1940,7 @@ ResultType Line::ControlMove(char *aControl, char *aX, char *aY, char *aWidth, c
 	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	if (!target_window)
 		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
-	HWND control_window = ControlExist(target_window, aControl);
+	HWND control_window = ControlExist(target_window, aControl); // This can return target_window itself for cases such as ahk_id %ControlHWND%.
 	if (!control_window)
 		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
 
@@ -1933,7 +1953,18 @@ ResultType Line::ControlMove(char *aControl, char *aX, char *aY, char *aWidth, c
 	if (point.x != COORD_UNSPECIFIED || point.y != COORD_UNSPECIFIED)
 	{
 		RECT rect;
-		if (!GetWindowRect(target_window, &rect))
+		// v1.0.44.13: Below was fixed to allow for the fact that target_window might be the control
+		// itself (e.g. via ahk_id %ControlHWND%).  For consistency with ControlGetPos and other things,
+		// it seems best to call GetNonChildParent rather than GetParent(); for example, a Tab control
+		// that contains a child window that in turn contains the actual controls should probably report
+		// the position of each control relative to the dialog itself rather than the tab control or its
+		// master window.  The lost argument in favor of GetParent is that it seems more flexible, such
+		// as cases where the script has called SetParent() to make a top-level window the child of some
+		// other window, in which case the target control's immediate parent should be used, not its most
+		// distant ancestor. This might also be desirable for controls that are children of other controls,
+		// such as as Combobox's Edit.
+		if (!GetWindowRect(target_window == control_window ? GetNonChildParent(target_window) : target_window
+			, &rect))
 			return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
 		if (point.x != COORD_UNSPECIFIED)
 			point.x += rect.left;
@@ -1982,7 +2013,7 @@ ResultType Line::ControlGetPos(char *aControl, char *aTitle, char *aText, char *
 	Var *output_var_height = ResolveVarOfArg(3);  // Ok if NULL.
 
 	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
-	HWND control_window = target_window ? ControlExist(target_window, aControl) : NULL;
+	HWND control_window = target_window ? ControlExist(target_window, aControl) : NULL; // This can return target_window itself for cases such as ahk_id %ControlHWND%.
 	if (!control_window)
 	{
 		if (output_var_x)
@@ -1999,7 +2030,8 @@ ResultType Line::ControlGetPos(char *aControl, char *aTitle, char *aText, char *
 	RECT parent_rect, child_rect;
 	// Realistically never fails since DetermineTargetWindow() and ControlExist() should always yield
 	// valid window handles:
-	GetWindowRect(target_window, &parent_rect);
+	GetWindowRect(target_window == control_window ? GetNonChildParent(target_window) : target_window
+		, &parent_rect); // v1.0.44.13: Above was fixed to allow for the fact that target_window might be the control itself (e.g. via ahk_id %ControlHWND%).  See ControlMove for details.
 	GetWindowRect(control_window, &child_rect);
 
 	if (output_var_x && !output_var_x->Assign(child_rect.left - parent_rect.left))
@@ -2087,7 +2119,7 @@ ResultType Line::ControlFocus(char *aControl, char *aTitle, char *aText
 	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	if (!target_window)
 		return OK;
-	HWND control_window = ControlExist(target_window, aControl);
+	HWND control_window = ControlExist(target_window, aControl); // This can return target_window itself for cases such as ahk_id %ControlHWND%.
 	if (!control_window)
 		return OK;
 
@@ -2120,7 +2152,7 @@ ResultType Line::ControlSetText(char *aControl, char *aNewText, char *aTitle, ch
 	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	if (!target_window)
 		return OK;
-	HWND control_window = ControlExist(target_window, aControl);
+	HWND control_window = ControlExist(target_window, aControl); // This can return target_window itself for cases such as ahk_id %ControlHWND%.
 	if (!control_window)
 		return OK;
 	// SendMessage must be used, not PostMessage(), at least for some (probably most) apps.
@@ -2143,7 +2175,7 @@ ResultType Line::ControlGetText(char *aControl, char *aTitle, char *aText
 		return FAIL;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR);  // Set default.
 	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
-	HWND control_window = target_window ? ControlExist(target_window, aControl) : NULL;
+	HWND control_window = target_window ? ControlExist(target_window, aControl) : NULL; // This can return target_window itself for cases such as ahk_id %ControlHWND%.
 	// Even if control_window is NULL, we want to continue on so that the output
 	// param is set to be the empty string, which is the proper thing to do
 	// rather than leaving whatever was in there before.

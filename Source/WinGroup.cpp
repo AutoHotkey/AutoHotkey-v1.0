@@ -505,7 +505,7 @@ BOOL CALLBACK EnumParentActUponAll(HWND aWnd, LPARAM lParam)
 			// Match found, so aWnd is a member of the group.  In addition, IsMatch() has set
 			// the value of ws.mFoundParent to tell our caller that at least one window was acted upon.
 			// See Line::PerformShowWindow() for comments about the following section.
-			nCmdShow = SW_INVALID; // Set default each time.
+			nCmdShow = SW_NONE; // Set default each time.
 			switch (ws.mActionType)
 			{
 			case ACT_WINCLOSE:
@@ -532,7 +532,7 @@ BOOL CALLBACK EnumParentActUponAll(HWND aWnd, LPARAM lParam)
 			case ACT_WINSHOW: nCmdShow = SW_SHOW; break;
 			}
 
-			if (nCmdShow != SW_INVALID)
+			if (nCmdShow != SW_NONE)
 				ShowWindow(aWnd, nCmdShow);
 				// DoWinDelay is not done here because our caller will do it once only, which
 				// seems best when there are a lot of windows being acted upon here.

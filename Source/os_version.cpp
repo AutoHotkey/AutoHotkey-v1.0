@@ -41,13 +41,13 @@ before calling the GetVersionEx function.
 
 dwMajorVersion
 Identifies the major version number of the operating system as follows. Operating System Value
-Windows 95			4
-Windows 98			4
-Windows Me			4
-Windows NT 3.51		3
-Windows NT 4.0		4
-Windows 2000		5
-Whistler			5
+Windows 95				4
+Windows 98				4
+Windows Me				4
+Windows NT 3.51			3
+Windows NT 4.0			4
+Windows 2000/XP/2003	5
+Windows Vista			6
 
 dwMinorVersion
 Identifies the minor version number of the operating system as follows. Operating System Value
@@ -57,7 +57,9 @@ Windows Me			90
 Windows NT 3.51		51
 Windows NT 4.0		0
 Windows 2000		0
-Whistler			1
+Windows XP			1
+Windows 2003		2
+Windows Vista		0 (probably 0 for all Vista variants)
 
 dwBuildNumber
 Windows NT/2000: Identifies the build number of the operating system.
@@ -131,7 +133,7 @@ void OS_Version::Init(void)
 	m_bWinNT4	= false;	m_bWinNT4orLater	= false;
 	m_bWin2000	= false;	m_bWin2000orLater	= false;
 	m_bWinXP	= false;	m_bWinXPorLater		= false;
-	m_bWin2003  = false;
+	m_bWin2003  = false;    m_bWinVista			= false;
 
 	m_bWin98	= false;	m_bWin98orLater		= false;
 	m_bWin95	= false;	m_bWin95orLater		= false;
@@ -147,7 +149,8 @@ void OS_Version::Init(void)
 		switch (m_dwMajorVersion)
 		{
 			case 4:								// NT 4
-				m_bWinNT4 = m_bWinNT4orLater = true;
+				m_bWinNT4 = true;
+				m_bWinNT4orLater = true;
 				break;
 
 			case 5:								// Win2000 / XP
@@ -164,6 +167,13 @@ void OS_Version::Init(void)
 						m_bWin2003 = true;
 					//else it's something later than XP/2003, so there is nothing more to be done.
 				}
+				break;
+
+			case 6:								// Windows Vista
+				m_bWinNT4orLater = true;
+				m_bWin2000orLater = true;
+				m_bWinXPorLater = true;
+				m_bWinVista = true;
 				break;
 
 		} // End Switch

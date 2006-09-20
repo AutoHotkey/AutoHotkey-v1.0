@@ -408,7 +408,7 @@ ResultType Line::Control(char *aCmd, char *aValue, char *aControl, char *aTitle,
 	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	if (!target_window)
 		return OK;  // Let ErrorLevel tell the story.
-	HWND control_window = ControlExist(target_window, aControl);
+	HWND control_window = ControlExist(target_window, aControl); // This can return target_window itself for cases such as ahk_id %ControlHWND%.
 	if (!control_window)
 		return OK;  // Let ErrorLevel tell the story.
 
@@ -436,7 +436,7 @@ ResultType Line::Control(char *aCmd, char *aValue, char *aControl, char *aTitle,
 		// might fail. To ensure success in this situation, call the SetActiveWindow function to activate
 		// the dialog box before sending the BM_CLICK message to the button."
 		ATTACH_THREAD_INPUT
-		SetActiveWindow(target_window);
+		SetActiveWindow(target_window == control_window ? GetNonChildParent(control_window) : target_window); // v1.0.44.13: Fixed to allow for the fact that target_window might be the control itself (e.g. via ahk_id %ControlHWND%).
 		if (!GetWindowRect(control_window, &rect))	// au3: Code to primary click the centre of the control
 			rect.bottom = rect.left = rect.right = rect.top = 0;
 		lparam = MAKELPARAM((rect.right - rect.left) / 2, (rect.bottom - rect.top) / 2);
@@ -676,7 +676,7 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	if (!target_window)
 		return output_var->Assign();  // Let ErrorLevel tell the story.
-	HWND control_window = ControlExist(target_window, aControl);
+	HWND control_window = ControlExist(target_window, aControl); // This can return target_window itself for cases such as ahk_id %ControlHWND%.
 	if (!control_window)
 		return output_var->Assign();  // Let ErrorLevel tell the story.
 

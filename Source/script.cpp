@@ -1118,7 +1118,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 	Hotkey *hk;
 	LineNumberType pending_function_line_number, saved_line_number;
 	HookActionType hook_action;
-	bool is_label, suffix_has_tilde;
+	bool is_label, suffix_has_tilde, in_comment_section;
 
 	// For the remap mechanism, e.g. a::b
 	int remap_stage;
@@ -1155,7 +1155,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 	LineNumberType phys_line_number = 0;
 	buf_length = GetLine(buf, LINE_SIZE - 1, false, fp);
 #endif
-	bool in_comment_section;
+
 	if (in_comment_section = !strncmp(buf, "/*", 2))
 	{
 		// Fixed for v1.0.35.08. Must reset buffer to allow a script's first line to be "/*".
@@ -1163,7 +1163,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 		buf_length = 0;
 	}
 
-	for (; buf_length != -1;)  // Compare directly to -1 since length is unsigned.
+	while (buf_length != -1)  // Compare directly to -1 since length is unsigned.
 	{
 		// For each whole line (a line with continuation section is counted as only a single line
 		// for the purpose of this outer loop).
@@ -1177,6 +1177,17 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 		// indirectly by calling something that changed it:
 		mCurrLine = NULL;  // To signify that we're in transition, trying to load a new one.
 
+		// v1.0.44.13: An additional call to IsDirective() is now made up here so that #CommentFlag affects
+		// the line beneath it the same way as other lines (#EscapeChar et. al. didn't have this bug).
+		// It's best not to process ALL directives up here because then they would no longer support a
+		// continuation section beneath them (and possibly other drawbacks because it was never thoroughly
+		// tested).
+		if (!strnicmp(buf, "#CommentFlag", 12)) // Have IsDirective() process this now (it will also process it again later, which is harmless).
+			if (IsDirective(buf) == FAIL) // IsDirective() already displayed the error.
+				return CloseAndReturn(fp, script_buf, FAIL);
+
+		// Read in the next line (if that next line is the start of a continuation secttion, append
+		// it to the line currently being processed:
 		for (has_continuation_section = false, in_continuation_section = false;;)
 		{
 			// This increment relies on the fact that this loop always has at least one iteration:
@@ -1300,7 +1311,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 					{
 						if (buf_length + next_buf_length >= LINE_SIZE - 1) // -1 to account for the extra space added below.
 						{
-							ScriptError(ERR_COMBINED_LINE_TOO_LONG, next_buf);
+							ScriptError(ERR_CONTINUATION_SECTION_TOO_LONG, next_buf);
 							return CloseAndReturn(fp, script_buf, FAIL);
 						}
 						if (*next_buf != ',') // Insert space before and/or/./&&/|| so that built/combined expression works correctly and also for readability of ListLines.
@@ -1472,7 +1483,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 			// Must check the combined length only after anything that might have expanded the string above.
 			if (buf_length + next_buf_length + suffix_length >= LINE_SIZE)
 			{
-				ScriptError(ERR_COMBINED_LINE_TOO_LONG, cp);
+				ScriptError(ERR_CONTINUATION_SECTION_TOO_LONG, cp);
 				return CloseAndReturn(fp, script_buf, FAIL);
 			}
 
@@ -1500,7 +1511,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 		if (!buf_length) // Done only after the line number increments above so that the physical line number is properly tracked.
 			goto continue_main_loop; // In lieu of "continue", for performance.
 
-		// Since the neither of the above executed, or they did but didn't "continue",
+		// Since neither of the above executed, or they did but didn't "continue",
 		// buf now contains a non-commented line, either by itself or built from
 		// any continuation sections/lines that might have been present.  Also note that
 		// by design, phys_line_number will be greater than mCombinedLineNumber whenever
@@ -1940,7 +1951,7 @@ examine_line:
 		// Since above didn't "goto", it's not a label.
 		if (*buf == '#')
 		{
-			saved_line_number = mCombinedLineNumber; // Backup in case IsDirective() processes and include file, which would change mCombinedLineNumber's value.
+			saved_line_number = mCombinedLineNumber; // Backup in case IsDirective() processes an include file, which would change mCombinedLineNumber's value.
 			switch(IsDirective(buf)) // Note that it may alter the contents of buf, at least in the case of #IfWin.
 			{
 			case CONDITION_TRUE:
@@ -1951,13 +1962,13 @@ examine_line:
 				mCurrFileNumber = source_file_number;
 				mCombinedLineNumber = saved_line_number;
 				goto continue_main_loop; // In lieu of "continue", for performance.
-			case FAIL:
-				return CloseAndReturn(fp, script_buf, FAIL); // It already reported the error.
-			// Otherwise it's CONDITION_FALSE.  Do nothing.
+			case FAIL: // IsDirective() already displayed the error.
+				return CloseAndReturn(fp, script_buf, FAIL);
+			//case CONDITION_FALSE: Do nothing; let processing below handle it.
 			}
 		}
+		// Otherwise, treat it as a normal script line.
 
-		// Otherwise it's just a normal script line.
 		// v1.0.41: Support the "} else {" style in one-true-brace (OTB).  As a side-effect,
 		// any command, not just an else, is probably supported to the right of '}', not just "else".
 		// This is undocumented because it would make for less readable scripts, and doesn't seem
@@ -2122,7 +2133,7 @@ continue_main_loop: // This method is used in lieu of "continue" for performance
 				remap_dest_vk = 0; // Reset to signal that the remapping expansion is now complete.
 				break; // Fall through to the next section so that script loading can resume at the next line.
 			}
-		}
+		} // if (remap_dest_vk)
 		// Since above didn't "continue", resume loading script line by line:
 		buf = next_buf;
 		buf_length = next_buf_length;
@@ -2143,9 +2154,8 @@ continue_main_loop: // This method is used in lieu of "continue" for performance
 	}
 
 #ifdef AUTOHOTKEYSC
-	// AutoIt3: Close the archive and free the file in memory
-	free(script_buf);
-	oRead.Close();
+	free(script_buf); // AutoIt3: Close the archive and free the file in memory.
+	oRead.Close();    //
 #else
 	fclose(fp);
 #endif
@@ -2333,8 +2343,9 @@ inline ResultType Script::IsDirective(char *aBuf)
 	// Use strnicmp() so that a match is found as long as aBuf starts with the string in question.
 	// e.g. so that "#SingleInstance, on" will still work too, but
 	// "#a::run, something, "#SingleInstance" (i.e. a hotkey) will not be falsely detected
-	// due to using a more lenient function such as strcasestr().  UPDATE: Using strlicmp() now so
-	// that overlapping names, such as #MaxThreads and #MaxThreadsPerHotkey won't get mixed up:
+	// due to using a more lenient function such as strcasestr().
+	// UPDATE: Using strlicmp() now so that overlapping names, such as #MaxThreads and #MaxThreadsPerHotkey,
+	// won't get mixed up:
 	#define IS_DIRECTIVE_MATCH(directive) (!strlicmp(aBuf, directive, directive_name_length))
 	UINT directive_name_length = (UINT)(directive_end - aBuf); // To avoid calculating it every time in the macro above.
 
@@ -2721,7 +2732,7 @@ inline ResultType Script::IsDirective(char *aBuf)
 		return CONDITION_TRUE;
 	}
 
-	// Otherwise:
+	// Otherwise, report that this line isn't a directive:
 	return CONDITION_FALSE;
 }
 
@@ -11541,10 +11552,12 @@ VarSizeType Script::GetOSType(char *aBuf)
 VarSizeType Script::GetOSVersion(char *aBuf)
 {
 	char *version = "";  // Init in case OS is something later than Win2003.
-	if (g_os.IsWinNT())
+	if (g_os.IsWinNT()) // "NT" includes all NT-kernal OSes: NT4/2000/XP/2003/Vista.
 	{
 		if (g_os.IsWinXP())
 			version = "WIN_XP";
+		else if (g_os.IsWinVista())
+			version = "WIN_VISTA";
 		else if (g_os.IsWin2003())
 			version = "WIN_2003";
 		else
