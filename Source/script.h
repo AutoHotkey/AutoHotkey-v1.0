@@ -339,6 +339,7 @@ struct ArgStruct
 	// Above are kept adjacent to each other to conserve memory (any fields that aren't an even
 	// multiple of 4, if adjacent to each other, consume less memory due to default byte alignment
 	// setting [which helps performance]).
+	WORD length; // Keep adjacent with above so that it uses no extra memory. This member was added in v1.0.44.14 to improve runtime performance.  It relies on the fact that an arg's literal text can't be longer than LINE_SIZE.
 	char *text;
 	DerefType *deref;  // Will hold a NULL-terminated array of var-deref locations within <text>.
 };
@@ -350,7 +351,8 @@ struct ArgStruct
 // during extremely deep nesting of subkey names (perhaps a hundred or more nested subkeys).  Upon review, it seems
 // that the prior limit of 16383 for value-name-length is higher than needed; testing shows that a value name can't
 // be longer than 259 (limit might even be 255 if API vs. RegEdit is used to create the name).  Testing also shows
-// that the total path name of a registry item (excluding the name of the root key) obeys the same limit.
+// that the total path name of a registry item (including item/value name but excluding the name of the root key)
+// obeys the same limit.
 #define MAX_REG_ITEM_LENGTH 259
 #define REG_SUBKEY -2 // Custom type, not standard in Windows.
 struct RegItemStruct
@@ -508,9 +510,9 @@ class Line
 {
 public:
 	// AutoIt3 functions:
-	static bool Util_CopyDir (const char *szInputSource, const char *szInputDest, bool bOverwrite);
-	static bool Util_MoveDir (const char *szInputSource, const char *szInputDest, int OverwriteMode);
-	static bool Util_RemoveDir (const char *szInputSource, bool bRecurse);
+	static bool Util_CopyDir(const char *szInputSource, const char *szInputDest, bool bOverwrite);
+	static bool Util_MoveDir(const char *szInputSource, const char *szInputDest, int OverwriteMode);
+	static bool Util_RemoveDir(const char *szInputSource, bool bRecurse);
 	static int Util_CopyFile(const char *szInputSource, const char *szInputDest, bool bOverwrite, bool bMove);
 	static void Util_ExpandFilenameWildcard(const char *szSource, const char *szDest, char *szExpandedDest);
 	static void Util_ExpandFilenameWildcardPart(const char *szSource, const char *szDest, char *szExpandedDest);
@@ -532,21 +534,15 @@ private:
 	static Var *sArgVar[MAX_ARGS];
 
 	ResultType EvaluateCondition();
-	ResultType PerformLoop(char **apReturnValue, WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
-		, LoopReadFileStruct *apCurrentReadFile, char *aCurrentField, bool &aContinueMainLoop, Line *&aJumpToLine
+	ResultType PerformLoop(char **apReturnValue, bool &aContinueMainLoop, Line *&aJumpToLine
 		, AttributeType aAttr, FileLoopModeType aFileLoopMode, bool aRecurseSubfolders, char *aFilePattern
-		, __int64 aIterationLimit, bool aIsInfinite, __int64 &aIndex);
-	ResultType PerformLoopReg(char **apReturnValue, WIN32_FIND_DATA *apCurrentFile, LoopReadFileStruct *apCurrentReadFile
-		, char *aCurrentField, bool &aContinueMainLoop, Line *&aJumpToLine, FileLoopModeType aFileLoopMode
-		, bool aRecurseSubfolders, HKEY aRootKeyType, HKEY aRootKey, char *aRegSubkey, __int64 &aIndex);
-	ResultType PerformLoopParse(char **apReturnValue, WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
-		, LoopReadFileStruct *apCurrentReadFile, bool &aContinueMainLoop, Line *&aJumpToLine, __int64 &aIndex);
-	ResultType Line::PerformLoopParseCSV(char **apReturnValue, WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
-		, LoopReadFileStruct *apCurrentReadFile, bool &aContinueMainLoop, Line *&aJumpToLine, __int64 &aIndex);
-	ResultType PerformLoopReadFile(char **apReturnValue, WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
-		, char *aCurrentField, bool &aContinueMainLoop, Line *&aJumpToLine, FILE *aReadFile, char *aWriteFileName
-		, __int64 &aIndex);
-	ResultType Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aCurrentRegItem, LoopReadFileStruct *aCurrentReadFile);
+		, __int64 aIterationLimit, bool aIsInfinite);
+	ResultType PerformLoopReg(char **apReturnValue, bool &aContinueMainLoop, Line *&aJumpToLine
+		, FileLoopModeType aFileLoopMode, bool aRecurseSubfolders, HKEY aRootKeyType, HKEY aRootKey, char *aRegSubkey);
+	ResultType PerformLoopParse(char **apReturnValue, bool &aContinueMainLoop, Line *&aJumpToLine);
+	ResultType Line::PerformLoopParseCSV(char **apReturnValue, bool &aContinueMainLoop, Line *&aJumpToLine);
+	ResultType PerformLoopReadFile(char **apReturnValue, bool &aContinueMainLoop, Line *&aJumpToLine, FILE *aReadFile, char *aWriteFileName);
+	ResultType Perform();
 
 	ResultType MouseGetPos(DWORD aOptions);
 	ResultType FormatTime(char *aYYYYMMDD, char *aFormat);
@@ -581,7 +577,7 @@ private:
 	ResultType FileAppend(char *aFilespec, char *aBuf, LoopReadFileStruct *aCurrentReadFile);
 	ResultType WriteClipboardToFile(char *aFilespec);
 	ResultType ReadClipboardFromFile(HANDLE hfile);
-	ResultType FileDelete(char *aFilePattern);
+	ResultType FileDelete();
 	ResultType FileRecycle(char *aFilePattern);
 	ResultType FileRecycleEmpty(char *aDriveLetter);
 	ResultType FileInstall(char *aSource, char *aDest, char *aFlag);
@@ -620,7 +616,7 @@ private:
 	ResultType ToolTip(char *aText, char *aX, char *aY, char *aID);
 	ResultType TrayTip(char *aTitle, char *aText, char *aTimeout, char *aOptions);
 	ResultType Transform(char *aCmd, char *aValue1, char *aValue2);
-	ResultType Input(char *aOptions, char *aEndKeys, char *aMatchList);
+	ResultType Input(); // The Input command.
 	ResultType WinMove(char *aTitle, char *aText, char *aX, char *aY
 		, char *aWidth = "", char *aHeight = "", char *aExcludeTitle = "", char *aExcludeText = "");
 	ResultType WinMenuSelectItem(char *aTitle, char *aText, char *aMenu1, char *aMenu2
@@ -772,10 +768,7 @@ public:
 
 	static void FreeDerefBufIfLarge();
 
-	ResultType ExecUntil(ExecUntilMode aMode, char **apReturnValue = NULL, Line **apJumpToLine = NULL
-		, WIN32_FIND_DATA *aCurrentFile = NULL, RegItemStruct *aCurrentRegItem = NULL
-		, LoopReadFileStruct *aCurrentReadFile = NULL, char *aCurrentField = NULL
-		, __int64 aCurrentLoopIteration = 0); // Use signed, since script/ITOA64 aren't designed to work with unsigned.
+	ResultType ExecUntil(ExecUntilMode aMode, char **apReturnValue = NULL, Line **apJumpToLine = NULL);
 
 	// The following are characters that can't legally occur after an AND or OR.  It excludes all unary operators
 	// "!~*&-+" as well as the parentheses chars "()":
@@ -809,7 +802,7 @@ public:
 	HWND DetermineTargetWindow(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 
 #ifndef AUTOHOTKEYSC
-	static int ConvertEscapeChar(char *aFilespec, char aOldChar, char aNewChar, bool aFromAutoIt2 = false);
+	static int ConvertEscapeChar(char *aFilespec);
 	static size_t ConvertEscapeCharGetLine(char *aBuf, int aMaxCharsToRead, FILE *fp);
 #endif  // The functions above are not needed by the self-contained version.
 
@@ -981,10 +974,10 @@ public:
 	// Caller must ensure that aArgNum should be 1 or greater.
 	{
 #ifdef _DEBUG
-		if (!aArgNum)
+		if (aArgNum < 1)
 		{
 			LineError("DEBUG: BAD", WARN);
-			++aArgNum;  // But let it continue.
+			aArgNum = 1;  // But let it continue.
 		}
 #endif
 		if (aArgNum > mArgc) // Arg doesn't exist.
@@ -997,6 +990,40 @@ public:
 			return (arg.type == ARG_TYPE_INPUT_VAR);
 	}
 
+	size_t ArgLength(int aArgNum)
+	// "ArgLength" is the arg's fully resolved, dereferenced length during runtime.
+	// Callers must call this only at times when sArgDeref and sArgVar are defined/meaningful.
+	// Caller must ensure that aArgNum should be 1 or greater.
+	// ArgLength() was added in v1.0.44.14 to help its callers improve performance by avoiding
+	// costly calls to strlen() (which is especially beneficial for huge strings).
+	{
+#ifdef _DEBUG
+		if (aArgNum < 1)
+		{
+			LineError("DEBUG: BAD", WARN);
+			aArgNum = 1;  // But let it continue.
+		}
+#endif
+		if (aArgNum > mArgc) // Arg doesn't exist, so don't try accessing sArgVar (unlike sArgDeref, it wouldn't be valid to do so).
+			return 0; // i.e. treat it as the empty string.
+		// The length is not known and must be calculcated in the following situations:
+		// - The arg consists of more than just a single isolated variable name (not possible if the arg is
+		//   ARG_TYPE_INPUT_VAR).
+		// - The arg is a built-in variable, in which case the length isn't known, so it must be derived from
+		//   the string copied into sArgDeref[] by an earlier stage.
+		// - The arg is a normal variable but it's VAR_ATTRIB_BINARY_CLIP. In such cases, our callers do not
+		//   recognize/support binary-clipboard as binary and want the apparent length of the string returned
+		//   (i.e. strlen(), which takes into account the position of the first binary zero wherever it may be).
+		--aArgNum; // Convert to zero-based index (squeeze a little more performance out of it by avoiding a new variable).
+		if (sArgVar[aArgNum])
+		{
+			Var &var = *sArgVar[aArgNum]; // For performance and convenience.
+			if (var.Type() == VAR_NORMAL && !var.IsBinaryClip())
+				return var.Length();  // Do it the fast way.
+		}
+		// Otherwise, length isn't known, so do it the slow way.
+		return strlen(sArgDeref[aArgNum]);
+	}
 
 
 	static HKEY RegConvertRootKey(char *aBuf, bool *aIsRemoteRegistry = NULL)
@@ -1884,7 +1911,7 @@ public:
 
 struct FontType
 {
-	#define MAX_FONT_NAME_LENGTH 63  // Longest name I've seen is 29 chars, "Franklin Gothic Medium Italic".
+	#define MAX_FONT_NAME_LENGTH 63  // Longest name I've seen is 29 chars, "Franklin Gothic Medium Italic". Anyway, there's protection against overflow.
 	char name[MAX_FONT_NAME_LENGTH + 1];
 	// Keep any fields that aren't an even multiple of 4 adjacent to each other.  This conserves memory
 	// due to byte-alignment:
@@ -2038,8 +2065,8 @@ public:
 	bool mGuiShowHasNeverBeenDone, mFirstActivation, mShowIsInProgress, mDestroyWindowHasBeenCalled;
 	bool mControlWidthWasSetByContents; // Whether the most recently added control was auto-width'd to fit its contents.
 
-	#define MAX_GUI_FONTS 100
-	static FontType sFont[MAX_GUI_FONTS];
+	#define MAX_GUI_FONTS 200  // v1.0.44.14: Increased from 100 to 200 due to feedback that 100 wasn't enough.  But to alleviate memory usage, the array is now allocated upon first use.
+	static FontType *sFont; // An array of structs, allocated upon first use.
 	static int sFontCount;
 	static int sGuiCount; // The number of non-NULL items in the g_gui array. Maintained only for performance reasons.
 	static HWND sTreeWithEditInProgress; // Needed because TreeView's edit control for label-editing conflicts with IDOK (default button).
@@ -2065,7 +2092,7 @@ public:
 		, mStyle(WS_POPUP|WS_CLIPSIBLINGS|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX) // WS_CLIPCHILDREN (doesn't seem helpful currently)
 		, mExStyle(0) // This and the above should not be used once the window has been created since they might get out of date.
 		, mInRadioGroup(false), mUseTheme(true), mOwner(NULL), mDelimiter('|')
-		, mCurrentFontIndex(FindOrCreateFont()) // Omit params to tell it to find or create DEFAULT_GUI_FONT.
+		, mCurrentFontIndex(FindOrCreateFont()) // Must call this in constructor to ensure sFont array is never NULL while a GUI object exists.  Omit params to tell it to find or create DEFAULT_GUI_FONT.
 		, mCurrentListView(NULL), mCurrentTreeView(NULL)
 		, mTabControlCount(0), mCurrentTabControlIndex(MAX_TAB_CONTROLS), mCurrentTabIndex(0)
 		, mCurrentColor(CLR_DEFAULT)
@@ -2265,11 +2292,6 @@ public:
 	UserMenu *mFirstMenu, *mLastMenu;
 	UINT mMenuCount;
 
-	WIN32_FIND_DATA *mLoopFile;  // The file of the current file-loop, if applicable.
-	RegItemStruct *mLoopRegItem; // The registry subkey or value of the current registry enumeration loop.
-	LoopReadFileStruct *mLoopReadFile;  // The file whose contents are currently being read by a File-Read Loop.
-	char *mLoopField;  // The field of the current string-parsing loop.
-	__int64 mLoopIteration; // Signed, since script/ITOA64 aren't designed to handle unsigned.
 	DWORD mThisHotkeyStartTime, mPriorHotkeyStartTime;  // Tickcount timestamp of when its subroutine began.
 	char mEndChar;  // The ending character pressed to trigger the most recent non-auto-replace hotstring.
 	modLR_type mThisHotkeyModifiersLR;
@@ -2289,8 +2311,9 @@ public:
 	int mUninterruptibleTime;
 	DWORD mLastScriptRest, mLastPeekTime;
 
-	#define RUNAS_ITEM_SIZE (257 * sizeof(wchar_t))
-	wchar_t *mRunAsUser, *mRunAsPass, *mRunAsDomain; // Memory is allocated at runtime, upon first use.
+	#define RUNAS_SIZE_IN_WCHARS 257  // Includes the terminator.
+	#define RUNAS_SIZE_IN_BYTES (RUNAS_SIZE_IN_WCHARS * sizeof(WCHAR))
+	WCHAR *mRunAsUser, *mRunAsPass, *mRunAsDomain; // Memory is allocated at runtime, upon first use.
 
 	HICON mCustomIcon;  // NULL unless the script has loaded a custom icon during its runtime.
 	char *mCustomIconFile; // Filename of icon.  Allocated on first use.

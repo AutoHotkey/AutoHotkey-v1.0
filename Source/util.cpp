@@ -208,6 +208,7 @@ ResultType YYYYMMDDToSystemTime(char *aYYYYMMDD, SYSTEMTIME &aSystemTime, bool a
 
 
 char *FileTimeToYYYYMMDD(char *aBuf, FILETIME &aTime, bool aConvertToLocalTime)
+// Returns aBuf.
 {
 	FILETIME ft;
 	if (aConvertToLocalTime)
@@ -224,6 +225,7 @@ char *FileTimeToYYYYMMDD(char *aBuf, FILETIME &aTime, bool aConvertToLocalTime)
 
 
 char *SystemTimeToYYYYMMDD(char *aBuf, SYSTEMTIME &aTime)
+// Returns aBuf.
 // Remember not to offer a "aConvertToLocalTime" option, because calling SystemTimeToTzSpecificLocalTime()
 // on Win9x apparently results in an invalid time because the function is implemented only as a stub on
 // those OSes.
@@ -1696,8 +1698,8 @@ HBITMAP LoadPicture(char *aFilespec, int aWidth, int aHeight, int &aImageType, i
 			Gdiplus::GpBitmap *pgdi_bitmap;
 			if (DynGdiplusStartup && DynGdiplusStartup(&token, &gdi_input, NULL) == Gdiplus::Ok)
 			{
-				wchar_t filespec_wide[MAX_PATH];
-				mbstowcs(filespec_wide, aFilespec, sizeof(filespec_wide));
+				WCHAR filespec_wide[MAX_PATH];
+				ToWideChar(aFilespec, filespec_wide, MAX_PATH); // Dest. size is in wchars, not bytes.
 				if (DynGdipCreateBitmapFromFile(filespec_wide, &pgdi_bitmap) == Gdiplus::Ok)
 				{
 					if (DynGdipCreateHBITMAPFromBitmap(pgdi_bitmap, &hbitmap, CLR_DEFAULT) != Gdiplus::Ok)

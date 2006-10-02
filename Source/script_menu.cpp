@@ -803,7 +803,7 @@ ResultType UserMenu::UpdateName(UserMenuItem *aMenuItem, char *aNewName)
 	}
 	else // It will become a separator.
 	{
-		*aMenuItem->mName = '\0';
+		*aMenuItem->mName = '\0'; // Safe because even if it's capacity is 1 byte, it's a writable byte.
 		aMenuItem->mMenuID = 0; // Free up an ID since separators currently can't be converted back into items.
 	}
 	return OK;

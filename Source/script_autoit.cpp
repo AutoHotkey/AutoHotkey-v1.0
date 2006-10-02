@@ -72,10 +72,10 @@ ResultType Script::DoRunAs(char *aCommandLine, char *aWorkingDir, bool aDisplayE
 	//wsi.lpReserved2	= NULL;
 
 	// Convert to wide character format:
-	wchar_t command_line_wide[LINE_SIZE], working_dir_wide[MAX_PATH];
-	mbstowcs(command_line_wide, aCommandLine, sizeof(command_line_wide));
+	WCHAR command_line_wide[LINE_SIZE], working_dir_wide[MAX_PATH];
+	ToWideChar(aCommandLine, command_line_wide, LINE_SIZE); // Dest. size is in wchars, not bytes.
 	if (aWorkingDir && *aWorkingDir)
-		mbstowcs(working_dir_wide, aWorkingDir, sizeof(working_dir_wide));
+		ToWideChar(aWorkingDir, working_dir_wide, MAX_PATH); // Dest. size is in wchars, not bytes.
 	else
 		*working_dir_wide = 0;  // wide-char terminator.
 
@@ -803,7 +803,7 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 		// other precedents where a variable is sized to something larger than it winds up carrying.
 		// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
 		// this call will set up the clipboard for writing:
-		if (output_var->Assign(NULL, (VarSizeType)length, false, true, true) != OK)
+		if (output_var->Assign(NULL, (VarSizeType)length, true, true) != OK)
 			return FAIL;  // It already displayed the error.
 		for (cp = output_var->Contents(), length = item_count - 1, u = 0; u < item_count; ++u)
 		{
@@ -1127,7 +1127,7 @@ ResultType Line::FileSelectFolder(char *aRootDir, char *aOptions, char *aGreetin
 			ULONG        chEaten;
 			ULONG        dwAttributes;
 			OLECHAR olePath[MAX_PATH];			// wide-char version of path name
-			MultiByteToWideChar(CP_ACP, MB_PRECOMPOSED, root_dir, -1, olePath, sizeof(olePath));
+			ToWideChar(root_dir, olePath, MAX_PATH); // Dest. size is in wchars, not bytes.
 			pDF->ParseDisplayName(NULL, NULL, olePath, &chEaten, &pIdl, &dwAttributes);
 			pDF->Release();
 			bi.pidlRoot = pIdl;
@@ -1209,8 +1209,8 @@ ResultType Line::FileGetShortcut(char *aShortcutFile) // Credited to Holger <Hol
 		IPersistFile *ppf;
 		if (SUCCEEDED(psl->QueryInterface(IID_IPersistFile, (LPVOID *)&ppf)))
 		{
-			WORD wsz[MAX_PATH+1];
-			MultiByteToWideChar(CP_ACP, 0, aShortcutFile, -1, (LPWSTR)wsz, MAX_PATH);
+			WCHAR wsz[MAX_PATH+1]; // +1 hasn't been explained, but is retained in case it's needed.
+			ToWideChar(aShortcutFile, wsz, MAX_PATH+1); // Dest. size is in wchars, not bytes.
 			if (SUCCEEDED(ppf->Load((const WCHAR*)wsz, 0)))
 			{
 				char buf[MAX_PATH+1];
@@ -1303,10 +1303,10 @@ ResultType Line::FileCreateShortcut(char *aTargetFile, char *aShortcutFile, char
 			psl->SetShowCmd(ATOI(aRunState)); // No validation is done since there's a chance other numbers might be valid now or in the future.
 
 		IPersistFile *ppf;
-		if(SUCCEEDED(psl->QueryInterface(IID_IPersistFile,(LPVOID *)&ppf)))
+		if (SUCCEEDED(psl->QueryInterface(IID_IPersistFile,(LPVOID *)&ppf)))
 		{
-			WORD wsz[MAX_PATH];
-			MultiByteToWideChar(CP_ACP, 0, aShortcutFile, -1, (LPWSTR)wsz, MAX_PATH);
+			WCHAR wsz[MAX_PATH];
+			ToWideChar(aShortcutFile, wsz, MAX_PATH); // Dest. size is in wchars, not bytes.
 			if (SUCCEEDED(ppf->Save((LPCWSTR)wsz, TRUE)))
 				g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 			ppf->Release();
@@ -1422,7 +1422,7 @@ ResultType Line::FileGetVersion(char *aFilespec)
 
 
 
-bool Line::Util_CopyDir (const char *szInputSource, const char *szInputDest, bool bOverwrite)
+bool Line::Util_CopyDir(const char *szInputSource, const char *szInputDest, bool bOverwrite)
 {
 	SHFILEOPSTRUCT	FileOp;
 	char			szSource[_MAX_PATH+2];
@@ -1477,7 +1477,7 @@ bool Line::Util_CopyDir (const char *szInputSource, const char *szInputDest, boo
 
 
 
-bool Line::Util_MoveDir (const char *szInputSource, const char *szInputDest, int OverwriteMode)
+bool Line::Util_MoveDir(const char *szInputSource, const char *szInputDest, int OverwriteMode)
 {
 	SHFILEOPSTRUCT	FileOp;
 	char			szSource[_MAX_PATH+2];
@@ -1546,7 +1546,7 @@ bool Line::Util_MoveDir (const char *szInputSource, const char *szInputDest, int
 
 
 
-bool Line::Util_RemoveDir (const char *szInputSource, bool bRecurse)
+bool Line::Util_RemoveDir(const char *szInputSource, bool bRecurse)
 {
 	SHFILEOPSTRUCT	FileOp;
 	char			szSource[_MAX_PATH+2];
@@ -1569,7 +1569,7 @@ bool Line::Util_RemoveDir (const char *szInputSource, bool bRecurse)
 	}
 
 	// We must also make double nulled strings for the SHFileOp API
-	szSource[strlen(szSource)+1] = '\0';	
+	szSource[strlen(szSource)+1] = '\0';
 
 	// Setup the struct
 	FileOp.pFrom					= szSource;
@@ -1797,9 +1797,9 @@ void Line::Util_ExpandFilenameWildcardPart(const char *szSource, const char *szD
 bool Line::Util_CreateDir(const char *szDirName) // Recursive directory creation function.
 {
 	DWORD	dwTemp;
-	bool	bRes;
 	char	*szTemp = NULL;
 	char	*psz_Loc = NULL;
+	size_t  length;
 
 	dwTemp = GetFileAttributes(szDirName);
 
@@ -1809,28 +1809,20 @@ bool Line::Util_CreateDir(const char *szDirName) // Recursive directory creation
 		{
 		case ERROR_PATH_NOT_FOUND:
 			// Create path
-			szTemp = new char[strlen(szDirName)+1];
+			length = strlen(szDirName);
+			if (length > MAX_PATH) // Sanity check to reduce chance of stack overflow (since this function recursively calls self).
+				return false;
+			szTemp = (char *)_alloca(length+1); // Faster, and also avoids need to delete it afterward.
 			strcpy(szTemp, szDirName);
 			psz_Loc = strrchr(szTemp, '\\');	/* find last \ */
 			if (psz_Loc == NULL)				// not found
-			{
-				delete [] szTemp;
 				return false;
-			}
 			else 
 			{
 				*psz_Loc = '\0';				// remove \ and everything after
-				bRes = Util_CreateDir(szTemp);
-				delete [] szTemp;
-				if (bRes)
-				{
-					if (CreateDirectory(szDirName, NULL))
-						bRes = true;
-					else
-						bRes = false;
-				}
-
-				return bRes;
+				if (!Util_CreateDir(szTemp))
+					return false;
+				return CreateDirectory(szDirName, NULL) ? true : false;
 			}
 			// All paths above "return".
 		case ERROR_FILE_NOT_FOUND:

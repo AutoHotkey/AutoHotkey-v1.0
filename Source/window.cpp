@@ -1170,7 +1170,7 @@ BOOL CALLBACK EnumDialog(HWND aWnd, LPARAM lParam)
 		GetClassName(aWnd, buf, sizeof(buf));
 		// This is the class name for windows created via MessageBox(), GetOpenFileName(), and probably
 		// other things that use modal dialogs:
-		if(!strcmp(buf, "#32770"))
+		if (!strcmp(buf, "#32770"))
 		{
 			pah.hwnd = aWnd;  // An output value for the caller.
 			return FALSE;  // We're done.
@@ -1329,23 +1329,7 @@ bool IsWindowHung(HWND aWnd)
 	typedef BOOL (WINAPI *MyIsHungAppWindow)(HWND);
 	static MyIsHungAppWindow IsHungAppWindow = (MyIsHungAppWindow)GetProcAddress(GetModuleHandle("user32")
 		, "IsHungAppWindow");
-	if (IsHungAppWindow) // The above successfully found the function's address.
-	{
-		// v1.0.44.11: Eric M. reported that IsHungAppWindow() crashes fairly consistently on Windows Server 2003,
-		// especially when called by WinMinimize on a window like WMP when it's busy or being unswapped.
-		// The cause of the crash appears to be that "IsHungAppWindow" contains the wrong address for the
-		// function, at least sometimes.  The cause of this is not yet known.
-		__try  // Braces are required around both sections even if only one line.
-		{
-			return IsHungAppWindow(aWnd);
-		}
-		__except(EXCEPTION_EXECUTE_HANDLER)
-		{
-			// Do nothing; just fall through to slow method.
-		}
-	}
-	// Otherwise, the function not available (or an exception occurred), so fall back to the old method.
-	return Slow_IsWindowHung;
+	return IsHungAppWindow ? IsHungAppWindow(aWnd) : Slow_IsWindowHung;
 }
 
 

@@ -45,7 +45,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	#ifdef _DEBUG
 		//char *script_filespec = "C:\\Util\\AutoHotkey.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\GUI Demo.ahk";
-		char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\MAIN.ahk";
+		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\MAIN.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\Expressions.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\Line Continuation.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\DllCall.ahk";
@@ -55,7 +55,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\OnMessage.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\TEST SUITES\\Send command.ahk";
 		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Ref\\ImageSearch\\TEST SUITE\\MAIN.ahk";
-		//char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\New Text Document.ahk";
+		char *script_filespec = "C:\\A-Source\\AutoHotkey\\Test\\New Text Document.ahk";
 	#else
 		char *script_filespec = NAME_P ".ini";  // Use this extension for better file association with editor(s).
 	#endif
@@ -74,28 +74,30 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	// and will be added as variables %1% %2% etc.
 	// The above rules effectively make it impossible to autostart AutoHotkey.ini with parameters
 	// unless the filename is explicitly given (shouldn't be an issue for 99.9% of people).
-	char var_name[32]; // Small size since only numbers will be used (e.g. %1%, %2%).
+	char var_name[32], *param; // Small size since only numbers will be used (e.g. %1%, %2%).
 	Var *var;
 	bool switch_processing_is_complete = false;
 	int script_param_num = 1;
+
 	for (int i = 1; i < __argc; ++i) // Start at 1 because 0 contains the program name.
 	{
+		param = __argv[i]; // For performance and convenience.
 		if (switch_processing_is_complete) // All args are now considered to be input parameters for the script.
 		{
 			snprintf(var_name, sizeof(var_name), "%d", script_param_num);
 			if (   !(var = g_script.FindOrAddVar(var_name))   )
 				return CRITICAL_ERROR;  // Realistically should never happen.
-			var->Assign(__argv[i]);
+			var->Assign(param);
 			++script_param_num;
 		}
 		// Insist that switches be an exact match for the allowed values to cut down on ambiguity.
 		// For example, if the user runs "CompiledScript.exe /find", we want /find to be considered
 		// an input parameter for the script rather than a switch:
-		else if (!stricmp(__argv[i], "/R") || !stricmp(__argv[i], "/restart"))
+		else if (!stricmp(param, "/R") || !stricmp(param, "/restart"))
 			restart_mode = true;
-		else if (!stricmp(__argv[i], "/F") || !stricmp(__argv[i], "/force"))
+		else if (!stricmp(param, "/F") || !stricmp(param, "/force"))
 			g_ForceLaunch = true;
-		else if (!stricmp(__argv[i], "/ErrorStdOut"))
+		else if (!stricmp(param, "/ErrorStdOut"))
 			g_script.mErrorStdOut = true;
 		else // since this is not a recognized switch, the end of the [Switches] section has been reached (by design).
 		{
@@ -103,7 +105,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 #ifdef AUTOHOTKEYSC
 			--i; // Make the loop process this item again so that it will be treated as a script param.
 #else
-			script_filespec = __argv[i];  // The first unrecognized switch must be the script filespec, by design.
+			script_filespec = param;  // The first unrecognized switch must be the script filespec, by design.
 #endif
 		}
 	}
@@ -120,7 +122,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		char *cp = script_filespec + filespec_length - CONVERSION_FLAG_LENGTH;
 		// Now cp points to the first dot in the CONVERSION_FLAG of script_filespec (if it has one).
 		if (!stricmp(cp, CONVERSION_FLAG))
-			return Line::ConvertEscapeChar(script_filespec, '\\', '`', true);
+			return Line::ConvertEscapeChar(script_filespec);
 	}
 #endif
 

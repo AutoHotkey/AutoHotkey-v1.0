@@ -184,7 +184,7 @@ inline size_t ltrim(char *aStr, size_t aLength = -1)
 	if (!*aStr) return 0;
 	char *ptr;
 	// Find the first non-whitespace char (which might be the terminator):
-	for (ptr = aStr; IS_SPACE_OR_TAB(*ptr); ++ptr);
+	for (ptr = aStr; IS_SPACE_OR_TAB(*ptr); ++ptr); // Self-contained loop.
 	// v1.0.25: If no trimming needed, don't do the memmove.  This seems to make a big difference
 	// in the performance of critical sections of the program such as PerformAssign():
 	size_t offset;
@@ -196,11 +196,12 @@ inline size_t ltrim(char *aStr, size_t aLength = -1)
 			aLength -= offset;
 		memmove(aStr, ptr, aLength + 1); // +1 to include the '\0'.  memmove() permits source & dest to overlap.
 	}
-	return aLength;
+	return aLength; // This will return -1 if the block above didn't execute and caller didn't specify the length.
 }
 
 inline size_t rtrim(char *aStr, size_t aLength = -1)
 // Caller must ensure that aStr is not NULL.
+// To improve performance, caller may specify a length (e.g. when it is already known).
 // v1.0.25: Always returns the new length of the string.  This greatly improves the performance of
 // PerformAssign().
 // NOTE: THIS VERSION trims only tabs and spaces.  It specifically avoids trimming newlines because
@@ -239,6 +240,7 @@ inline size_t rtrim(char *aStr, size_t aLength = -1)
 inline size_t rtrim_with_nbsp(char *aStr, size_t aLength = -1)
 // Returns the new length of the string.
 // Caller must ensure that aStr is not NULL.
+// To improve performance, caller may specify a length (e.g. when it is already known).
 // Same as rtrim but also gets rid of those annoying nbsp (non breaking space) chars that sometimes
 // wind up on the clipboard when copied from an HTML document, and thus get pasted into the text
 // editor as part of the code (such as the sample code in some of the examples).
@@ -268,6 +270,7 @@ inline size_t rtrim_with_nbsp(char *aStr, size_t aLength = -1)
 inline size_t trim(char *aStr, size_t aLength = -1)
 // Caller must ensure that aStr is not NULL.
 // Returns new length of aStr.
+// To improve performance, caller may specify a length (e.g. when it is already known).
 // NOTE: THIS VERSION trims only tabs and spaces.  It specifically avoids
 // trimming newlines because some callers want to retain those.
 {
@@ -466,6 +469,33 @@ inline char *UTOA(unsigned long value, char *buf)
 // returns 0 on failure, but failure occurs only when parameter/flag is invalid, which should never happen in
 // this case.
 #define lstrcmpni(str1, len1, str2, len2) (CompareString(LOCALE_USER_DEFAULT, NORM_IGNORECASE, str1, (int)(len1), str2, (int)(len2)) - 2) // -2 for maintainability
+
+// The following macros simplify and make consistent the calls to MultiByteToWideChar().
+// MSDN implies that passing -1 for cbMultiByte is the most typical and secure usage because it ensures
+// that the output is null-terminated: "the resulting wide character string has a null terminator, and the
+// length returned by the function includes the terminating null character."
+//
+// I couldn't find any info on when MB_PRECOMPOSED is needed (if ever).  It's the default anyway,
+// which implies that passing zero (which is quite common in many examples I've seen) is essentially
+// the same as passing MB_PRECOMPOSED.  However, some modes such as CP_UTF8 should never use MB_PRECOMPOSED
+// or the function will fail.
+//
+// #1: FROM ANSI TO UNICODE (UTF-16).  dest_size_in_wchars includes the terminator.
+// From looking at the source to mbstowcs(), it might be faster when the "C" locale is in effect (which is
+// the default in the absence of setlocale()) than MultiByteToWideChar() depending on how the latter is
+// implemented. This is because mbstowcs() simply casts the characters to (wchar_t)(unsigned char) without
+// any other translation at all.  Although that behavior is probably identical to MultiByteToWideChar(CP_ACP...),
+// it's not completely certain -- so it seems best to stick with MultiByteToWideChar() for consistency
+// (also, avoiding mbstowcs slightly reduces code size).  If there's ever a case where performance is
+// important, create a simple casting loop (see mbstowcs.c for an example) that converts source to dest,
+// and test if it performs significantly better than MultiByteToWideChar(CP_ACP...).
+#define ToWideChar(source, dest, dest_size_in_wchars) MultiByteToWideChar(CP_ACP, 0, source, -1, dest, dest_size_in_wchars)
+//
+// #2: FROM UTF-8 TO UNICODE (UTF-16). dest_size_in_wchars includes the terminator.  MSDN: "For UTF-8, dwFlags must be set to either 0 or MB_ERR_INVALID_CHARS. Otherwise, the function fails with ERROR_INVALID_FLAGS."
+#define UTF8ToWideChar(source, dest, dest_size_in_wchars) MultiByteToWideChar(CP_UTF8, 0, source, -1, dest, dest_size_in_wchars)
+//
+// #3: FROM UNICODE (UTF-16) TO UTF-8. dest_size_in_bytes includes the terminator.
+#define WideCharToUTF8(source, dest, dest_size_in_bytes) WideCharToMultiByte(CP_UTF8, 0, source, -1, dest, dest_size_in_bytes, NULL, NULL)
 
 // v1.0.44.03: Callers now use the following macro rather than the old approach.  However, this change
 // is meaningful only to people who use more than one keyboard layout.  In the case of hotstrings:

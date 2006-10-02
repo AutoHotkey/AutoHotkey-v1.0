@@ -19,7 +19,7 @@ GNU General Public License for more details.
 
 #include "stdafx.h" // pre-compiled headers
 
-// In a large script (200 KB) of a typical nature, using SimpleHeap rather than malloc() saves
+// In a large script (200 KB of text) of a typical nature, using SimpleHeap rather than malloc() saves
 // nearly 200 KB of memory as shown by Task Manager's "VM Size" column (2384 vs. 2580 KB).
 // This is because many callers allocate chunks of memory that are very small on average.  If each
 // such chunk were allocated with malloc (or worse, "new"), the percentage of system overhead
@@ -53,7 +53,7 @@ private:
 	~SimpleHeap();
 public:
 	static UINT GetBlockCount() {return sBlockCount;}
-	static char *Malloc(char *aBuf); // Return a block of memory to the caller and copy aBuf into it.
+	static char *Malloc(char *aBuf, size_t aLength = -1); // Return a block of memory to the caller and copy aBuf into it.
 	static char *Malloc(size_t aSize); // Return a block of memory to the caller.
 	static void Delete(void *aPtr);
 	//static void DeleteAll();

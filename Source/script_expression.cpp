@@ -105,10 +105,11 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 		//result2 := vText = %A_space%ABC AND vNum = 1
 		//MsgBox %result1%`n%result2%
 
+		map_item &this_map_item = map[map_count]; // For performance, but be careful not to use after ++map_count, etc.
 		if (this_deref.is_function)
 		{
-			map[map_count].type = EXP_DEREF_FUNC;
-			map[map_count].deref = deref;
+			this_map_item.type = EXP_DEREF_FUNC;
+			this_map_item.deref = deref;
 			// But nothing goes into target, so this is an invisible item of sorts.
 			// However, everything after the function's name, starting at its open-paren, will soon be
 			// put in as a collection of normal items (raw text and derefs).
@@ -124,11 +125,11 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 			// been verified to be large enough, assuming the value hasn't changed between the time we
 			// were called and the time the caller calculated the space needed.
 			if (*this_deref.marker == g_DerefChar)
-				map[map_count].type = EXP_DEREF_DOUBLE;
+				this_map_item.type = EXP_DEREF_DOUBLE;
 			else // SINGLE or VAR.  Set initial guess to possibly be overridden later:
-				map[map_count].type = (this_deref.var->Type() == VAR_NORMAL) ? EXP_DEREF_VAR : EXP_DEREF_SINGLE;
+				this_map_item.type = (this_deref.var->Type() == VAR_NORMAL) ? EXP_DEREF_VAR : EXP_DEREF_SINGLE;
 
-			if (map[map_count].type == EXP_DEREF_VAR)
+			if (this_map_item.type == EXP_DEREF_VAR)
 			{
 				// Need to distinguish between empty variables and environment variables because the former
 				// we want to pass by reference into functions but the latter need to go into the deref buffer.
@@ -137,25 +138,25 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 				// that and already provided space for it in the buffer.  But if it returns an empty string,
 				// it's a normal empty variable and thus it stays of type EXP_DEREF_VAR.
 				if (g_NoEnv || this_deref.var->Length()) // v1.0.43.08: Added g_NoEnv.
-					map[map_count].var = this_deref.var;
+					this_map_item.var = this_deref.var;
 				else // Auto-env retrieval is in effect and this var is zero-length, so check if it's an environment variable.
 				{
-					map[map_count].marker = target;  // Indicate its position in the buffer.
+					this_map_item.marker = target;  // Indicate its position in the buffer.
 					target += this_deref.var->Get(target);
-					if (map[map_count].marker == target) // Empty string, so it's not an environment variable.
-						map[map_count].var = this_deref.var;
+					if (this_map_item.marker == target) // Empty string, so it's not an environment variable.
+						this_map_item.var = this_deref.var;
 					else // Override it's original EXP_DEREF_VAR type.
 					{
-						map[map_count].end = target;
-						map[map_count].type = EXP_DEREF_SINGLE;
+						this_map_item.end = target;
+						this_map_item.type = EXP_DEREF_SINGLE;
 					}
 				}
 			}
 			else // SINGLE or DOUBLE, both of which need to go into the buffer.
 			{
-				map[map_count].marker = target;  // Indicate its position in the buffer.
+				this_map_item.marker = target;  // Indicate its position in the buffer.
 				target += this_deref.var->Get(target);
-				map[map_count].end = target;
+				this_map_item.end = target;
 				// For performance reasons, the expression parser relies on an extra space to the right of each
 				// single deref.  For example, (x=str), which is seen as (x_contents=str_contents) during
 				// evaluation, would instead me seen as (x_contents =str_contents ), which allows string
@@ -172,7 +173,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 			// fix isn't needed for EXP_DEREF_FUNC because the functions parentheses and arg list are
 			// always present in the deref buffer, which prevents SYM_POWER and similar from seeing
 			// the character after the first operator symbol as something that changes the operator.
-			if (map[map_count].type != EXP_DEREF_DOUBLE) // EXP_DEREF_VAR or EXP_DEREF_SINGLE.
+			if (this_map_item.type != EXP_DEREF_DOUBLE) // EXP_DEREF_VAR or EXP_DEREF_SINGLE.
 				*target++ = '\0'; // Always terminated since they can't form a part of a double-deref.
 			// For EXP_DEREF_VAR, if our caller will be assigning the result of our expression to
 			// one of the variables involved in the expression, that should be okay because:
@@ -1181,13 +1182,12 @@ double_deref:
 				result = ""; // Init to default in case function doesn't return a value or it EXITs or fails.
 
 				// Launch the function similar to Gosub (i.e. not as a new quasi-thread):
-				// The performance again of conditionally passing NULL in place of result (when this is the
+				// The performance gain of conditionally passing NULL in place of result (when this is the
 				// outermost function call of a line consisting only of function calls, namely ACT_FUNCTIONCALL)
 				// would not be significant because the Return command's expression (arg1) must still be evaluated
 				// in case it calls any functions that have side-effects, e.g. "return LogThisError()".
 				prev_func = g.CurrentFunc; // This will be non-NULL when a function is called from inside another function.
 				g.CurrentFunc = &func;
-				++func.mInstances;
 				// Although a GOTO that jumps to a position outside of the function's body could be supported,
 				// it seems best not to for these reasons:
 				// 1) The extreme rarity of a legitimate desire to intentionally do so.
@@ -1198,8 +1198,9 @@ double_deref:
 				//    back into the function body belongs to the Gosub and not the function itself.
 				// 3) More difficult to maintain because we have handle jump_to_line the same way ExecUntil() does,
 				//    checking aResult the same way it does, then checking jump_to_line the same way it does, etc.
-				// Fix for v1.0.31.05: g_script.mLoopFile and the other g_script members that follow it are
-				// now passed to ExecUntil() for two reasons:
+				// Fix for v1.0.31.05: g.mLoopFile and the other g_script members that follow it are
+				// now passed to ExecUntil() for two reasons (update for v1.0.44.14: now they're implicitly "passed"
+				// because they're done via parameter anymore):
 				// 1) To fix the fact that any function call in one parameter of a command would reset
 				// A_Index and related variables so that if those variables are referenced in another
 				// parameter of the same command, they would be wrong.
@@ -1208,8 +1209,8 @@ double_deref:
 				// which seems to add flexibility without giving up anything.  This fix is necessary at least
 				// for a command that references A_Index in two of its args such as the following:
 				// ToolTip, O, ((cos(A_Index) * 500) + 500), A_Index
-				aResult = func.mJumpToLine->ExecUntil(UNTIL_BLOCK_END, &result, NULL, g_script.mLoopFile
-					, g_script.mLoopRegItem	, g_script.mLoopReadFile, g_script.mLoopField, g_script.mLoopIteration);
+				++func.mInstances;
+				aResult = func.mJumpToLine->ExecUntil(UNTIL_BLOCK_END, &result, NULL);
 				--func.mInstances;
 				// Restore the original value in case this function is called from inside another function.
 				// Due to the synchronous nature of recursion and recursion-collapse, this should keep
@@ -1575,8 +1576,8 @@ skip_abort_udf:
 				case SYM_CONCAT:
 					// Even if the left or right is "", must copy the result to temporary memory, at least
 					// when integers and floats had to be converted to temporary strings above.
-					right_length = (right.symbol == SYM_VAR) ? right.var->Length() : strlen(right_string);
-					left_length = (left.symbol == SYM_VAR) ? left.var->Length() : strlen(left_string);
+					right_length = (right.symbol == SYM_VAR) ? right.var->Length() : strlen(right_string); // Length() is valid because SYM_VAR's Type() is always VAR_NORMAL.
+					left_length = (left.symbol == SYM_VAR) ? left.var->Length() : strlen(left_string);     //
 					result_size = right_length + left_length + 1;
 					// The following section is similar to the one for "symbol == SYM_FUNC", so they
 					// should be maintained together.
@@ -2209,9 +2210,10 @@ ResultType Line::ExpandArgs(VarSizeType aSpaceNeeded, Var *aArgVar[])
 	// that all the other sections don't need to check mArgc anymore.
 	// Benchmarks show that it doesn't help performance to try to tweak this with a pre-check such as
 	// "if (mArgc < max_params)":
-	int max_params = g_act[mActionType].MaxParams;
-	for (i = mArgc; i < max_params; ++i)
+	int max_params = g_act[mActionType].MaxParams; // Resolve once for performance.
+	for (i = mArgc; i < max_params; ++i) // For performance, this only does the actual max args for THIS command, not MAX_ARGS.
 		sArgDeref[i] = "";
+		// But sArgVar isn't (done since it's more rarely used), so users of sArgVar must check mArgC if they have any doubt how many args are present in the script line.
 
 	// When the main/large loop above ends normally, it falls into the label below and uses the original/default
 	// value of "result_to_return".
@@ -2330,7 +2332,7 @@ VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize, Var *aArgVar[])
 				// Below relies on the fact that caller has ensure no args are expressions
 				// when !aCalcDerefBufSize.
 				if (!aCalcDerefBufSize || this_arg.is_expression) // i.e. we want the total size of what the args resolve to.
-					space_needed += (VarSizeType)strlen(this_arg.text) + 1;  // +1 for the zero terminator.
+					space_needed += this_arg.length + 1;  // +1 for the zero terminator.
 				// else don't increase space_needed, even by 1 for the zero terminator, because
 				// the terminator isn't needed if the arg won't exist in the buffer at all.
 				continue;
@@ -2340,7 +2342,7 @@ VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize, Var *aArgVar[])
 			// false for function calls since they are always followed by a set of parentheses
 			// (empty or otherwise), thus they will never be seen as isolated by it:
 			#define SINGLE_ISOLATED_DEREF (!this_arg.deref[1].marker\
-				&& this_arg.deref[0].length == strlen(this_arg.text)) // and the arg contains no literal text
+				&& this_arg.deref[0].length == this_arg.length) // and the arg contains no literal text
 			if (SINGLE_ISOLATED_DEREF) // This also ensures the deref isn't a function-call.
 				the_only_var_of_this_arg = this_arg.deref[0].var;
 		}
@@ -2371,7 +2373,7 @@ VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize, Var *aArgVar[])
 		}
 
 		// Otherwise: This arg has more than one deref, or a single deref with some literal text around it.
-		space = (VarSizeType)strlen(this_arg.text) + 1; // +1 for this arg's zero terminator in the buffer.
+		space = this_arg.length + 1; // +1 for this arg's zero terminator in the buffer.
 		for (deref = this_arg.deref; deref && deref->marker; ++deref)
 		{
 			// Replace the length of the deref's literal text with the length of its variable's contents:
@@ -2458,7 +2460,7 @@ ResultType Line::ArgMustBeDereferenced(Var *aVar, int aArgIndexToExclude)
 
 
 
-char *Line::ExpandArg(char *aBuf, int aArgIndex, Var *aArgVar)
+char *Line::ExpandArg(char *aBuf, int aArgIndex, Var *aArgVar) // 10/2/2006: Doesn't seem worth making it inline due to more complexity than expected.  It would also increase code size without being likely to help performance much.
 // Caller must ensure that aArgVar is the input variable of the aArgIndex arg whenever it's an input variable.
 // Caller must be sure not to call this for an arg that's marked as an expression, since
 // expressions are handled by a different function.  Similarly, it must ensure that none

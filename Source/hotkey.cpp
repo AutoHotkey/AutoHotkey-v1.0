@@ -740,54 +740,53 @@ void Hotkey::Perform(HotkeyVariant &aVariant)
 		// of the dialog itself.
 		return;
 
-	ResultType result;
+
+	// This is stored as an attribute of the script (semi-globally) rather than passed
+	// as a parameter to ExecUntil (and from their on to any calls to SendKeys() that it
+	// makes) because it's possible for SendKeys to be called asynchronously, namely
+	// by a timed subroutine, while #HotkeyModifierTimeout is still in effect,
+	// in which case we would want SendKeys() to take note of these modifiers even
+	// if it was called from an ExecUntil() other than ours here:
+	g_script.mThisHotkeyModifiersLR = mModifiersConsolidatedLR;
 	bool unregistered_during_thread = mUnregisterDuringThread && mIsRegistered;
+
+	// LAUNCH HOTKEY SUBROUTINE:
+	// For v1.0.23, the below allows the $ hotkey prefix to unregister the hotkey on
+	// Windows 9x, which allows the send command to send the hotkey itself without
+	// causing an infinite loop of keystrokes.  For simplicity, the hotkey is kept
+	// unregistered during the entire duration of the thread, rather than trying to
+	// selectively do it before and after each Send command of the thread:
+	if (unregistered_during_thread) // Do it every time through the loop in case the hotkey is re-registered by its own subroutine.
+		Unregister(); // This takes care of other details for us.
 	++aVariant.mExistingThreads;  // This is the thread count for this particular hotkey only.
-
-	for (;;)
-	{
-		// This is stored as an attribute of the script (semi-globally) rather than passed
-		// as a param to ExecUntil (and from their on to any calls to SendKeys() that it
-		// makes) because it's possible for SendKeys to be called asynchronously, namely
-		// by a timed subroutine, while #HotkeyModifierTimeout is still in effect,
-		// in which case we would want SendKeys() to take not of these modifiers even
-		// if it was called from an ExecUntil() other than ours here:
-		g_script.mThisHotkeyModifiersLR = mModifiersConsolidatedLR; // Do this every iteration because some other thread may have interrupted this one and overwrote this value.
-
-		// LAUNCH HOTKEY SUBROUTINE:
-		// For v1.0.23, the below allows the $ hotkey prefix to unregister the hotkey on
-		// Windows 9x, which allows the send command to send the hotkey itself without
-		// causing an infinite loop of keystrokes.  For simplicity, the hotkey is kept
-		// unregistered during the entire duration of the thread, rather than trying to
-		// selectively do it before and after each Send command of the thread:
-		if (unregistered_during_thread) // Do it every time through the loop in case the hotkey is re-registered by its own subroutine.
-			Unregister(); // This takes care of other details for us.
-		result = aVariant.mJumpToLabel->mJumpToLine->ExecUntil(UNTIL_RETURN);
-		if (unregistered_during_thread)
-			Register();
-
-		if (result == FAIL)
-		{
-			aVariant.mRunAgainAfterFinished = false;  // Ensure this is reset due to the error.
-			break;
-		}
-		if (aVariant.mRunAgainAfterFinished)
-		{
-			// But MsgSleep() can change it back to true again, when called by the above call
-			// to ExecUntil(), to keep it auto-repeating:
-			aVariant.mRunAgainAfterFinished = false;  // i.e. this "run again" ticket has now been used up.
-			// And if it was posted too long ago, don't do it.  This is because most users wouldn't
-			// want a buffered hotkey to stay pending for a long time after it was pressed, because
-			// that might lead to unexpected behavior:
-			if (GetTickCount() - aVariant.mRunAgainTime > 1000)
-				break;
-			// else don't break, but continue the loop until the flag becomes false.
-		}
-		else
-			break;
-	}
+	ResultType result = aVariant.mJumpToLabel->mJumpToLine->ExecUntil(UNTIL_RETURN);
 	--aVariant.mExistingThreads;
-	// return (result == FAIL) ? FAIL : OK;
+	if (unregistered_during_thread)
+		Register();
+
+	if (result == FAIL)
+		aVariant.mRunAgainAfterFinished = false;  // Ensure this is reset due to the error.
+	else if (aVariant.mRunAgainAfterFinished)
+	{
+		// But MsgSleep() can change it back to true again, when called by the above call
+		// to ExecUntil(), to keep it auto-repeating:
+		aVariant.mRunAgainAfterFinished = false;  // i.e. this "run again" ticket has now been used up.
+		if (GetTickCount() - aVariant.mRunAgainTime <= 1000)
+		{
+			// v1.0.44.14: Post a message rather than directly running the above ExecUntil again.
+			// This fixes unreported bugs in previous versions where the thread isn't reinitialized before
+			// the launch of one of these buffered hotkeys, which caused settings such as SetKeyDelay
+			// not to start off at their defaults.  Also, there are quite a few other things that the main
+			// event loop does to prep for the launch of a hotkey.  Rather than copying them here or
+			// trying to put them into a shared function (which would be difficult due to their nature),
+			// it's much more maintainable to post a message, and in most cases, it shouldn't measurably
+			// affect response time (this feature is rarely used anyway).
+			PostMessage(g_hWnd, WM_HOTKEY, (WPARAM)mID, 0);
+		}
+		//else it was posted too long ago, so don't do it.  This is because most users wouldn't
+		// want a buffered hotkey to stay pending for a long time after it was pressed, because
+		// that might lead to unexpected behavior.
+	}
 }
 
 

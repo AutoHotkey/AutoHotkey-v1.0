@@ -30,7 +30,7 @@ class Clipboard
 public:
 	HGLOBAL mClipMemNow, mClipMemNew;
 	char *mClipMemNowLocked, *mClipMemNewLocked;
-	size_t mLength;  // Last-known length of the clipboard contents.
+	size_t mLength;  // Last-known length of the clipboard contents (for internal use only because it's valid only during certain specific times).
 	UINT mCapacity;  // Capacity of mClipMemNewLocked.
 	bool mIsOpen;  // Whether the clipboard is physically open due to action by this class.
 

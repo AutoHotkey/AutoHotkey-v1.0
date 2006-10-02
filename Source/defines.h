@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.44.13"
+#define NAME_VERSION "1.0.44.14"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -55,8 +55,8 @@ GNU General Public License for more details.
 
 // AutoIt2 supports lines up to 16384 characters long, and we want to be able to do so too
 // so that really long lines from aut2 scripts, such as a chain of IF commands, can be
-// brought in and parsed:
-#define LINE_SIZE (16384 + 1)  // +1 for terminator.
+// brought in and parsed.  In addition, it also allows continuation sections to be long.
+#define LINE_SIZE (16384 + 1)  // +1 for terminator.  Don't increase LINE_SIZE above 65535 without considering ArgStruct::length's type (WORD).
 
 // Items that may be needed for VC++ 6.X:
 #ifndef SPI_GETFOREGROUNDLOCKTIMEOUT
@@ -453,10 +453,21 @@ typedef UCHAR CoordModeAttribType;
 // a new thread typically saves the old thread's struct values on its stack so that they can later
 // be copied back into the g struct when the thread is resumed:
 class Func;  // Forward declaration.
+struct RegItemStruct;
+struct LoopReadFileStruct;
 struct global_struct
 {
-	TitleMatchModes TitleMatchMode;
+	// 8-byte items are listed first, which might improve alignment for 64-bit processors (dubious).
 	__int64 LinesPerCycle; // Use 64-bits for this so that user can specify really large values.
+	__int64 mLoopIteration; // Signed, since script/ITOA64 aren't designed to handle unsigned.
+	WIN32_FIND_DATA *mLoopFile;  // The file of the current file-loop, if applicable.
+	RegItemStruct *mLoopRegItem; // The registry subkey or value of the current registry enumeration loop.
+	LoopReadFileStruct *mLoopReadFile;  // The file whose contents are currently being read by a File-Read Loop.
+	char *mLoopField;  // The field of the current string-parsing loop.
+	// v1.0.44.14: The above mLoop attributes were moved into this structure from the script class
+	// because they're more approriate as thread-attributes rather than being global to the entire script.
+
+	TitleMatchModes TitleMatchMode;
 	int IntervalBeforeRest;
 	int UninterruptedLineCount; // Stored as a g-struct attribute in case OnExit sub interrupts it while uninterruptible.
 	int Priority;  // This thread's priority relative to others.
@@ -507,7 +518,9 @@ struct global_struct
 };
 
 inline void global_clear_state(global_struct &g)
-// Reset those values which represent the condition or state created by previously executed commands.
+// Reset those values that represent the condition or state created by previously executed commands
+// but that shouldn't be retained for future threads (e.g. SetTitleMatchMode should be retained for
+// future threads if it occurs in the auto-execute section, but ErrorLevel shouldn't).
 {
 	*g.ErrorLevel = '\0'; // This isn't the actual ErrorLevel: it's used to save and restore it.
 	// But don't reset g_ErrorLevel itself because we want to handle that conditional behavior elsewhere.
@@ -525,6 +538,11 @@ inline void global_clear_state(global_struct &g)
 	// seems like it would cause more confusion that it's worth.  A change to the global default
 	// or even an override/always-use-this-window-number mode can be added if there is ever a
 	// demand for it.
+	g.mLoopIteration = 0; // Zero seems preferable to 1, to indicate "no loop currently running" when a thread first starts off.  This should probably be left unchanged for backward compatibility (even though script's aren't supposed to rely on it).
+	g.mLoopFile = NULL;
+	g.mLoopRegItem = NULL;
+	g.mLoopReadFile = NULL;
+	g.mLoopField = NULL;
 }
 
 inline void global_init(global_struct &g)

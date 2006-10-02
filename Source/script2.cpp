@@ -953,15 +953,13 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 			// Convert aValue1 from UTF-8 to Unicode and put the result onto the clipboard.
 			// MSDN: "Windows 95: Under the Microsoft Layer for Unicode, MultiByteToWideChar also
 			// supports CP_UTF7 and CP_UTF8."
-			// First, get the number of characters needed for the buffer size.  This count includes
-			// room for the terminating char:
-			if (   !(char_count = MultiByteToWideChar(CP_UTF8, 0, aValue1, -1, NULL, 0))   )
-				return output_var->Assign(); // Make output_var (i.e. the clipboard) blank to indicate failure.
-			LPVOID clip_buf = g_clip.PrepareForWrite(char_count * sizeof(WCHAR));
-			if (!clip_buf)
+			if (   !(char_count = UTF8ToWideChar(aValue1, NULL, 0))   ) // Get required buffer size in WCHARs (includes terminator).
+				return output_var->Assign(); // Make output_var (the clipboard in this case) blank to indicate failure.
+			LPVOID clip_buf;
+			if (   !(clip_buf = g_clip.PrepareForWrite(char_count * sizeof(WCHAR)))   )
 				return output_var->Assign(); // Make output_var (the clipboard in this case) blank to indicate failure.
 			// Perform the conversion:
-			if (!MultiByteToWideChar(CP_UTF8, 0, aValue1, -1, (LPWSTR)clip_buf, char_count))
+			if (!UTF8ToWideChar(aValue1, (LPWSTR)clip_buf, char_count))
 			{
 				g_clip.AbortWrite();
 				return output_var->Assign(); // Make clipboard blank to indicate failure.
@@ -974,7 +972,7 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 			return output_var->Assign(); // Make the (non-clipboard) output_var blank to indicate failure.
 		if (   !(g_clip.mClipMemNow = g_clip.GetClipboardDataTimeout(CF_UNICODETEXT)) // Relies on short-circuit boolean order.
 			|| !(g_clip.mClipMemNowLocked = (char *)GlobalLock(g_clip.mClipMemNow))
-			|| !(char_count = WideCharToMultiByte(CP_UTF8, 0, (LPCWSTR)g_clip.mClipMemNowLocked, -1, NULL, 0, NULL, NULL))   )
+			|| !(char_count = WideCharToUTF8((LPCWSTR)g_clip.mClipMemNowLocked, NULL, 0))   ) // char_count includes terminator.
 		{
 			// Above finds out how large the contents will be when converted to UTF-8.
 			// In this case, it failed to determine the count, perhaps due to Win95 lacking Unicode layer, etc.
@@ -988,9 +986,9 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 			return FAIL;  // It already displayed the error.
 		}
 		// Perform the conversion:
-		char_count = WideCharToMultiByte(CP_UTF8, 0, (LPCWSTR)g_clip.mClipMemNowLocked, -1, output_var->Contents(), char_count, NULL, NULL);
+		char_count = WideCharToUTF8((LPCWSTR)g_clip.mClipMemNowLocked, output_var->Contents(), char_count);
 		g_clip.Close(); // Close the clipboard and free the memory.
-		output_var->Close();  // In case it's the clipboard, though currently it can't be since that would auto-detect as the reverse direction.
+		output_var->Close(); // NOTE: Length() was already set properly by Assign() above. In case it's the clipboard, though currently it can't be since that would auto-detect as the reverse direction.
 		if (!char_count)
 			return output_var->Assign(); // Make non-clipboard output_var blank to indicate failure.
 		return OK;
@@ -1148,10 +1146,8 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 		value32 = ATOI(aValue2);
 		multiplier = *aValue2 ? qmathPow(10, value32) : 1;
 		value_double1 = ATOF(aValue1);
-		if (value_double1 >= 0.0)
-			result_double = qmathFloor(value_double1 * multiplier + 0.5) / multiplier;
-		else
-			result_double = qmathCeil(value_double1 * multiplier - 0.5) / multiplier;
+		result_double = (value_double1 >= 0.0 ? qmathFloor(value_double1 * multiplier + 0.5)
+			: qmathCeil(value_double1 * multiplier - 0.5)) / multiplier;
 		ASSIGN_BASED_ON_TYPE_SINGLE_ROUND
 
 	case TRANS_CMD_CEIL:
@@ -1240,9 +1236,7 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 
 
 
-ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
-// The aEndKeys string must be modifiable (not constant), since for performance reasons,
-// it's allowed to be temporarily altered by this function.
+ResultType Line::Input()
 // OVERVIEW:
 // Although a script can have many concurrent quasi-threads, there can only be one input
 // at a time.  Thus, if an input is ongoing and a new thread starts, and it begins its
@@ -1253,6 +1247,9 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 // This signals the quasi-threads beneath, when they finally return, that their input
 // was terminated due to a new input that took precedence.
 {
+	if (g_os.IsWin9x()) // v1.0.44.14: For simplicity, do nothing on Win9x rather than try to see if it actually supports the hook (such as if its some kind of emultated/hybrid OS).
+		return OK; // Could also set ErrorLevel to "Timeout" and output_var to be blank, but the benefits to backward compatibility seemed too dubious.
+
 	Var *output_var = ResolveVarOfArg(0);
 	if (!output_var)
 	{
@@ -1265,6 +1262,13 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 		return g_ErrorLevel->Assign(prior_input_is_being_terminated ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
 		// Above: It's considered an "error" of sorts when there is no prior input to terminate.
 	}
+
+	// Below are done directly this way rather than passed in as args mainly to emphasize that
+	// ArgLength() can safely be called in Line methods like this one (which is done further below).
+	// It also may also slightly improve performance and reduce code size.
+	char *aOptions = ARG2, *aEndKeys = ARG3, *aMatchList = ARG4;
+	// The aEndKeys string must be modifiable (not constant), since for performance reasons,
+	// it's allowed to be temporarily altered by this function.
 
 	// Set default in case of early return (we want these to be in effect even if
 	// FAIL is returned for our thread, since the underlying thread that had the
@@ -1361,7 +1365,7 @@ ResultType Line::Input(char *aOptions, char *aEndKeys, char *aMatchList)
 			g_input.MatchCountMax = INPUT_ARRAY_BLOCK_SIZE;
 		}
 		// If needed, create or enlarge the buffer that contains all the match phrases:
-		size_t aMatchList_length = strlen(aMatchList);
+		size_t aMatchList_length = ArgLength(4); // Performs better than strlen(aMatchList);
 		size_t space_needed = aMatchList_length + 1;  // +1 for the final zero terminator.
 		if (space_needed > g_input.MatchBufSize)
 		{
@@ -2366,7 +2370,7 @@ ResultType Line::ControlGetListView(Var &aOutputVar, HWND aHwnd, char *aOptions)
 
 	// SET UP THE OUTPUT VARIABLE, ENLARGING IT IF NECESSARY
 	// If the aOutputVar is of type VAR_CLIPBOARD, this call will set up the clipboard for writing:
-	aOutputVar.Assign(NULL, (VarSizeType)total_length, false, true, false); // Since failure is extremely rare, continue onward using the available capacity.
+	aOutputVar.Assign(NULL, (VarSizeType)total_length, true, false); // Since failure is extremely rare, continue onward using the available capacity.
 	char *contents = aOutputVar.Contents();
 	LRESULT capacity = (int)aOutputVar.Capacity(); // LRESULT avoids signed vs. unsigned compiler warnings.
 	if (capacity > 0) // For maintainability, avoid going negative.
@@ -6158,19 +6162,17 @@ ResultType Line::PerformAssign()
 	Var *output_var = ResolveVarOfArg(0);
 	if (!output_var)
 		return FAIL;
+	// Now output_var->Type() must be clipboard or normal because otherwise load-time validation (or
+	// ResolveVarOfArg() above, if it's dynamic) would have prevented us from getting this far.
+
 	output_var = output_var->ResolveAlias(); // Resolve alias now to detect "source_is_being_appended_to_target" and perhaps other things.
 	// Find out if output_var (the var being assigned to) is dereferenced (mentioned) in this line's
 	// second arg, which is the value to be assigned.  If it isn't, things are much simpler.
 	// Note: Since Arg#2 for this function is never an output or an input variable, it is not
 	// necessary to check whether its the same variable as Arg#1 for this determination.
-	// Note: If output_var is the clipboard, it can be used in the source deref(s) while also
-	// being the target -- without having to use the deref buffer -- because the clipboard
-	// has it's own temp buffer: the memory area to which the result is written.
-	// The prior content of the clipboard remains available in its other memory area
-	// until Commit() is called (i.e. long enough for our purposes):
 	bool target_is_involved_in_source = false;
 	bool source_is_being_appended_to_target = false; // v1.0.25
-	if (output_var->Type() != VAR_CLIPBOARD && mArgc > 1)
+	if (output_var->Type() != VAR_CLIPBOARD && mArgc > 1) // If types is VAR_CLIPBOARD, it can be used in the source deref(s) while also being the target -- without having to use the deref buffer -- because the clipboard has it's own temp buffer: the memory area to which the result is written. The prior content of the clipboard remains available in its other memory area until Commit() is called (i.e. long enough for our purposes).
 	{
 		// It has a second arg, which in this case is the value to be assigned to the var.
 		// Examine any derefs that the second arg has to see if output_var is mentioned.
@@ -6342,7 +6344,7 @@ ResultType Line::PerformAssign()
 		}
 
 		// Resize the output variable, if needed:
-		if (!output_var->Assign(NULL, space_needed - 1, false, true, false))
+		if (!output_var->Assign(NULL, space_needed - 1, true, false))
 		{
 			g_clip.Close();
 			return FAIL; // Above should have already reported the error.
@@ -6472,12 +6474,13 @@ ResultType Line::PerformAssign()
 	// output_var is mentioned only once in the deref list (which as of v1.0.25,
 	// has been partially done via the concatenation improvement, e.g. Var = %Var%Text).
 	Var *arg_var[MAX_ARGS];
-	if (target_is_involved_in_source && !source_is_being_appended_to_target)
+	if (target_is_involved_in_source && !source_is_being_appended_to_target) // If true, output_var isn't the clipboard due to invariant: target_is_involved_in_source==false whenever output_var->Type()==VAR_CLIPBOARD.
 	{
 		if (ExpandArgs() != OK)
 			return FAIL;
 		// ARG2 now contains the dereferenced (literal) contents of the text we want to assign.
-		space_needed = (VarSizeType)strlen(ARG2) + 1;  // +1 for the zero terminator.
+		// Therefore, calling ArgLength() is safe now too (i.e. ExpandArgs set things up for it).
+		space_needed = (VarSizeType)ArgLength(2) + 1;  // +1 for the zero terminator.
 	}
 	else
 	{
@@ -6489,7 +6492,7 @@ ResultType Line::PerformAssign()
 	// Now above has ensured that space_needed is at least 1 (it should not be zero because even
 	// the empty string uses up 1 char for its zero terminator).  The below relies upon this fact.
 
-	if (space_needed <= 1) // Variable is being assigned the empty string (or a deref that resolves to it).
+	if (space_needed < 2) // Variable is being assigned the empty string (or a deref that resolves to it).
 		return output_var->Assign("");  // If the var is of large capacity, this will also free its memory.
 
 	if (source_is_being_appended_to_target)
@@ -6506,30 +6509,39 @@ ResultType Line::PerformAssign()
 			target_is_involved_in_source = false;  // Tell the below not to consider expanding the args.
 	}
 
-	if (target_is_involved_in_source)
+	char *contents;
+	if (target_is_involved_in_source) // output_var can't be clipboard due to invariant: target_is_involved_in_source==false whenever output_var->Type()==VAR_CLIPBOARD.
+	{
 		// It was already dereferenced above, so use ARG2, which points to the
 		// derefed contents of ARG2 (i.e. the data to be assigned).
-		return output_var->Assign(ARG2, VARSIZE_MAX, g.AutoTrim); // Pass VARSIZE_MAX to have it recalculate, since space_needed might be a conservative estimate larger than the actual length+1.
+		if (!output_var->Assign(ARG2)) // Don't pass it space_needed-1 as the length because space_needed might be a conservative estimate larger than the actual length+terminator.
+			return FAIL;
+		if (g.AutoTrim)
+		{
+			contents = output_var->Contents();
+			if (*contents)
+			{
+				VarSizeType &var_len = output_var->Length(); // Might help perf. slightly.
+				var_len = (VarSizeType)trim(contents, var_len); // Passing length to trim() is known to greatly improve performance for long strings.
+			}
+		}
+		return OK;
+	}
 
-	// Otherwise:
-	// If we're here, output_var->Type() must be clipboard or normal because otherwise
-	// the validation during load would have prevented the script from loading:
-
+	// Otherwise: target isn't involved in source (output_var isn't itself involved in the source data/parameter).
 	// First set everything up for the operation.  If output_var is the clipboard, this
 	// will prepare the clipboard for writing.  Update: If source is being appended
 	// to target using the simple method, we know output_var isn't the clipboard because the
 	// logic at the top of this function ensures that.
-	if (!source_is_being_appended_to_target && output_var->Assign(NULL, space_needed - 1) != OK)
-		return FAIL;
-	// Expand Arg2 directly into the var.  Also set the length explicitly
-	// in case actual size written was off from the esimated size, perhaps
-	// due to a failure or size discrepancy between the deref size-estimate
-	// and the actual deref itself.  Note: If output_var is the clipboard,
+	if (!source_is_being_appended_to_target)
+		if (output_var->Assign(NULL, space_needed - 1) != OK)
+			return FAIL;
+	// Expand Arg2 directly into the var.  Note: If output_var is the clipboard,
 	// it's probably okay if the below actually writes less than the size of
 	// the mem that has already been allocated for the new clipboard contents
 	// That might happen due to a failure or size discrepancy between the
 	// deref size-estimate and the actual deref itself:
-	char *contents = output_var->Contents();
+	contents = output_var->Contents();
 	// This knows not to copy the first var-ref onto itself (for when source_is_being_appended_to_target is true).
 	// In addition, to reach this point, arg_var[0]'s value will already have been determined (possibly NULL)
 	// by GetExpandedArgSize():
@@ -6727,7 +6739,7 @@ ResultType Line::SplitPath(char *aFileSpec)
 		// UNCs are detected with this approach so that double sets of backslashes -- which sometimes
 		// occur by accident in "built filespecs" and are tolerated by the OS -- are not falsely
 		// detected as UNCs.
-		if (*drive == '\\' && *(drive + 1) == '\\') // Relies on short-circuit evaluation order.
+		if (drive[0] == '\\' && drive[1] == '\\') // Relies on short-circuit evaluation order.
 		{
 			if (   !(drive_end = strchr(drive + 2, '\\'))   )
 				drive_end = drive + strlen(drive); // Set it to the position of the zero terminator instead.
@@ -8360,7 +8372,7 @@ ResultType Line::FileRead(char *aFilespec)
 
 	// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
 	// this call will set up the clipboard for writing:
-	if (output_var->Assign(NULL, (VarSizeType)bytes_to_read, false, true, false) != OK) // Probably due to "out of memory".
+	if (output_var->Assign(NULL, (VarSizeType)bytes_to_read, true, false) != OK) // Probably due to "out of memory".
 	{
 		CloseHandle(hfile);
 		return FAIL;  // It already displayed the error. ErrorLevel doesn't matter now because the current quasi-thread will be aborted.
@@ -8385,7 +8397,7 @@ ResultType Line::FileRead(char *aFilespec)
 		if (translate_crlf_to_lf)
 			StrReplaceAll(output_buf, "\r\n", "\n", false, SCS_SENSITIVE); // Safe only because larger string is being replaced with smaller.
 		output_var->Length() = is_binary_clipboard ? (bytes_actually_read - 1) // Length excludes the very last byte of the (UINT)0 terminator.
-			: (VarSizeType)strlen(output_buf); // In case file contains binary zeroes, explicitly calculate the "usable" length.
+			: (VarSizeType)strlen(output_buf); // In case file contains binary zeroes, explicitly calculate the "usable" length so that it's accurate.
 	}
 	else
 	{
@@ -8709,10 +8721,15 @@ ResultType Line::ReadClipboardFromFile(HANDLE hfile)
 
 
 
-ResultType Line::FileDelete(char *aFilePattern)
+ResultType Line::FileDelete()
 {
+	// Below is done directly this way rather than passed in as args mainly to emphasize that
+	// ArgLength() can safely be called in Line methods like this one (which is done further below).
+	// It also may also slightly improve performance and reduce code size.
+	char *aFilePattern = ARG1;
+
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
-	if (!aFilePattern || !*aFilePattern)
+	if (!*aFilePattern)
 		return OK;  // Let ErrorLevel indicate an error, since this is probably not what the user intended.
 
 	if (!StrChrAny(aFilePattern, "?*"))
@@ -8729,7 +8746,7 @@ ResultType Line::FileDelete(char *aFilePattern)
 	// MSDN confirms this in a vague way: "In the ANSI version of FindFirstFile(), [plpFileName] is
 	// limited to MAX_PATH characters."
 	char file_path[MAX_PATH], target_filespec[MAX_PATH];
-	if (strlen(aFilePattern) >= sizeof(file_path))
+	if (ArgLength(1) >= sizeof(file_path))
 		return OK; // Return OK because this is non-critical.  Let the above ErrorLevel indicate the problem.
 	strlcpy(file_path, aFilePattern, sizeof(file_path));
 	char *last_backslash = strrchr(file_path, '\\');
@@ -9324,28 +9341,33 @@ HWND Line::DetermineTargetWindow(char *aTitle, char *aText, char *aExcludeTitle,
 
 
 #ifndef AUTOHOTKEYSC
-int Line::ConvertEscapeChar(char *aFilespec, char aOldChar, char aNewChar, bool aFromAutoIt2)
+int Line::ConvertEscapeChar(char *aFilespec)
 {
-	if (!aFilespec || !*aFilespec) return 1;  // Non-zero is failure in this case.
-	if (aOldChar == aNewChar)
+	bool aFromAutoIt2 = true;  // This function currnetly always uses these defaults, so they're no longer passed in.
+	char aOldChar = '\\';      //
+	char aNewChar = '`';       //
+	// Commented out since currently no need:
+	//if (aOldChar == aNewChar)
+	//{
+	//	MsgBox("Conversion: The OldChar must not be the same as the NewChar.");
+	//	return 1;
+	//}
+
+	FILE *f1, *f2;
+	if (   !(f1 = fopen(aFilespec, "r"))   )
 	{
-		MsgBox("Conversion: The OldChar must not be the same as the NewChar.");
-		return 1;
+		MsgBox(aFilespec, 0, "Can't open file:"); // Short msg, and same as one below, since rare.
+		return 1; // Failure.
 	}
-	FILE *f1 = fopen(aFilespec, "r");
-	if (!f1)
-	{
-		MsgBox(aFilespec, 0, "Could not open source file for conversion:");
-		return 1; // Failure
-	}
+
 	char new_filespec[MAX_PATH + 10];  // +10 in case StrReplace below would otherwise overflow the buffer.
 	strlcpy(new_filespec, aFilespec, sizeof(new_filespec));
 	StrReplace(new_filespec, CONVERSION_FLAG, "-NEW" EXT_AUTOHOTKEY, SCS_INSENSITIVE);
-	FILE *f2 = fopen(new_filespec, "w");
-	if (!f2)
+
+	if (   !(f2 = fopen(new_filespec, "w"))   )
 	{
 		fclose(f1);
-		MsgBox(new_filespec, 0, "Could not open target file for conversion:");
+		MsgBox(new_filespec, 0, "Can't open file:"); // Short msg, and same as previous, since rare.
 		return 1; // Failure
 	}
 
@@ -9917,7 +9939,7 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 			// v1.0.33.01: arg_type_string2 improves convenience by falling back to the variable's name
 			// if the contents are not appropriate.  In other words, both Int and "Int" are treated the same.
 			// It's done this way to allow the variable named "Int" to actually contain some other legitimate
-			// type-name such as "Str".
+			// type-name such as "Str" (in case anyone ever happens to do that).
 		}
 		else
 		{
@@ -9925,8 +9947,8 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 			arg_type_string[1] = NULL;
 		}
 
-		ExprTokenType &this_param = *aParam[i + 1];  // This and the next are resolved for performance and convenience.
-		DYNAPARM &this_dyna_param = dyna_param[arg_count];
+		ExprTokenType &this_param = *aParam[i + 1];         // Resolved for performance and convenience.
+		DYNAPARM &this_dyna_param = dyna_param[arg_count];  //
 
 		// If the arg's contents is a string, resolve it once here to simplify things that reference it later.
 		// NOTE: aResultToken.buf is not used here to resolve a number to a string because although it would
@@ -9935,7 +9957,28 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 		if (IS_NUMERIC(this_param.symbol))
 			arg_as_string = NULL;
 		else
-			arg_as_string = (this_param.symbol == SYM_VAR) ? this_param.var->Contents() : this_param.marker;
+		{
+			if (this_param.symbol == SYM_VAR)
+			{
+				// v1.0.44.14: If a variable is being passed that has no capacity, pass a read-only
+				// memory area instead of a writable empty string. There are two big benefits to this:
+				// 1) It forces an immediate exception (catchable by DllCall's exception handler) so
+				//    that the program doesn't crash from memory corruption later on.
+				// 2) It avoids corrupting the program's static memory area (because sEmptyString
+				//    resides there), which can save many hours of debugging for users when the program
+				//    crashes on some seemingly unrelated line.
+				// Of course, it's not a complete solution because it doesn't stop a script from
+				// passing a variable whose capacity is non-zero yet too small to handle what the
+				// function will write to it.  But it's a far cry better than nothing because it's
+				// common for a script to forget to call VarSetCapacity before psssing a buffer to some
+				// function that writes a string to it.
+				arg_as_string = this_param.var->Contents();
+				if (arg_as_string == Var::sEmptyString) // To improve performance, compare directly to Var::sEmptyString rather than calling Capacity().
+					arg_as_string = ""; // Make it read-only to force an exception.  See comments above.
+			}
+			else
+				arg_as_string = this_param.marker;
+		}
 
 		// Store the each arg into a dyna_param struct, using its arg type to determine how.
 		ConvertDllArgType(arg_type_string, this_dyna_param);
@@ -10259,9 +10302,10 @@ void BIF_StrLen(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParam
 	// Result will always be an integer.
 	// Caller has set aResultToken.symbol to a default of SYM_INTEGER, so no need to set it here.
 	// Loadtime validation has ensured that there's exactly one actual parameter.
-	aResultToken.value_int64 = (aParam[0]->symbol == SYM_VAR && aParam[0]->var->IsBinaryClip())
-		? aParam[0]->var->Length() + 1
-		: strlen(ExprTokenToString(*aParam[0], aResultToken.buf)); // // Allow StrLen(numeric_expr) for flexibility.
+	// Calling Length() is always valid for SYM_VAR because SYM_VAR's Type() is always VAR_NORMAL.
+	aResultToken.value_int64 = (aParam[0]->symbol == SYM_VAR)
+		? aParam[0]->var->Length() + aParam[0]->var->IsBinaryClip() // i.e. Add 1 if it's binary-clipboard, as documented.
+		: strlen(ExprTokenToString(*aParam[0], aResultToken.buf));  // Allow StrLen(numeric_expr) for flexibility.
 }
 
 
@@ -10308,7 +10352,7 @@ void BIF_IsLabel(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 
 void BIF_InStr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
 {
-	// Load-time validation has already ensured that at least two actual params are present.
+	// Load-time validation has already ensured that at least two actual parameters are present.
 	char needle_buf[MAX_FORMATTED_NUMBER_LENGTH + 1];
 	char *haystack = ExprTokenToString(*aParam[0], aResultToken.buf);
 	char *needle = ExprTokenToString(*aParam[1], needle_buf);
@@ -10343,7 +10387,9 @@ void BIF_InStr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 		// Otherwise, offset is less than -1 or >= 0.
 		// Since InStr("", "") yields 1, it seems consistent for InStr("Red", "", 4) to yield
 		// 4 rather than 0.  The below takes this into account:
-		if (offset < 0 || offset > strlen(haystack))
+		if (offset < 0 || offset > // ...greater-than the length of haystack calculated below.
+			(aParam[0]->symbol == SYM_VAR && !aParam[0]->var->IsBinaryClip() // InStr() doesn't recognize/support binary-clip, so treat it as a normal string (i.e. find first binary zero via strlen()).
+				? aParam[0]->var->Length() : strlen(haystack)))
 		{
 			aResultToken.value_int64 = 0; // Match never found when offset is beyond length of string.
 			return;
@@ -10412,15 +10458,18 @@ void BIF_VarSetCapacity(ExprTokenType &aResultToken, ExprTokenType *aParam[], in
 			if (aParamCount > 1) // Second parameter is present.
 			{
 				VarSizeType new_capacity = (VarSizeType)ExprTokenToInt64(*aParam[1]);
-				if (new_capacity == -1) // Since it's unsigned, compare directly to -1 rather than doing <0.
+				if (new_capacity == -1) // Adjust variable's internal length. Since new_capacity is unsigned, compare directly to -1 rather than doing <0.
 				{
+					// Seems more useful to report length vs. capacity in this special case. Scripts might be able
+					// to use this to boost performance.
 					aResultToken.value_int64 = var.Length() = (VarSizeType)strlen(var.Contents());
-					return; // Seems more useful to report length vs. capacity in this special case. Scripts might be able to use this to boost performance.
+					var.Close(); // v1.0.44.14: Removes the VAR_ATTRIB_BINARY_CLIP (if it was present) because it seems more flexible to convert binary-to-normal rather than checking IsBinaryClip() then doing nothing if it binary.
+					return;
 				}
 				// Since above didn't return:
 				if (new_capacity)
 				{
-					var.Assign(NULL, new_capacity, false, true, false); // This also destroys the variables contents.
+					var.Assign(NULL, new_capacity, true, false); // This also destroys the variables contents.
 					VarSizeType capacity;
 					if (aParamCount > 2 && (capacity = var.Capacity()) > 1) // Third parameter is present and var has enough capacity to make FillMemory() meaningful.
 					{
@@ -10532,10 +10581,9 @@ void BIF_Round(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 		multiplier = 1;
 	}
 	double value = ExprTokenToDouble(*aParam[0]);
-	if (value >= 0.0)
-		aResultToken.value_double = qmathFloor(value * multiplier + 0.5) / multiplier;
-	else
-		aResultToken.value_double = qmathCeil(value * multiplier - 0.5) / multiplier;
+	aResultToken.value_double = (value >= 0.0 ? qmathFloor(value * multiplier + 0.5)
+		: qmathCeil(value * multiplier - 0.5)) / multiplier;
+
 	// If incoming value is an integer, it seems best for flexibility to convert it to a
 	// floating point number whenever the second param is >0.  That way, it can be used
 	// to "cast" integers into floats.  Conversely, it seems best to yield an integer
@@ -11325,7 +11373,13 @@ void BIF_LV_AddInsertModify(ExprTokenType &aResultToken, ExprTokenType *aParam[]
 				SendMessage(control.hwnd, LVM_ENSUREVISIBLE, lvi.iItem, FALSE); // PartialOK==FALSE is somewhat arbitrary.
 		}
 
-		// For each remainining parameter, assign its text to a subitem.  
+		// For each remainining parameter, assign its text to a subitem.
+		// Testing shows that if the control has too few columns for all of the fields/parameters
+		// present, the ones at the end are automatically ignored: they do not consume memory nor
+		// do they signficantly impact performance (at least on Windows XP).  For this reason, there
+		// is no code above the for-loop above to reduce aParamCount if it's "too large" because
+		// it might reduce flexibility (in case future/past OSes allow non-existent columns to be
+		// populated, or in case current OSes allow the contents of recently removed columns to be modified).
 		for (lvi_sub.iSubItem = (col_start_index > 1) ? col_start_index : 1 // Start at the first subitem unless we were told to start at or after the third column.
 			// "i" starts at 2 (the third parameter) unless col_start_index is greater than 0, in which case
 			// it starts at 1 (the second parameter) because that parameter has not yet been assigned to anything:

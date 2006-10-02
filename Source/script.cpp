@@ -38,7 +38,6 @@ static size_t g_CommentFlagLength = 1; // pre-calculated for performance
 
 Script::Script()
 	: mFirstLine(NULL), mLastLine(NULL), mCurrLine(NULL), mPlaceholderLabel(NULL), mLineCount(0)
-	, mLoopFile(NULL), mLoopRegItem(NULL), mLoopReadFile(NULL), mLoopField(NULL), mLoopIteration(0)
 	, mThisHotkeyName(""), mPriorHotkeyName(""), mThisHotkeyStartTime(0), mPriorHotkeyStartTime(0)
 	, mEndChar(0), mThisHotkeyModifiersLR(0)
 	, mNextClipboardViewer(NULL), mOnClipboardChangeIsRunning(false), mOnClipboardChangeLabel(NULL)
@@ -2502,7 +2501,7 @@ inline ResultType Script::IsDirective(char *aBuf)
 			ConvertEscapeSequences(hot_win_text, g_EscapeChar, true);
 		}
 		else
-			hot_win_text = Var::sEmptyString; // Modifiable empty string (for maintainability). And leave hot_win_title set to the entire string because there's only one parameter.
+			hot_win_text = ""; // And leave hot_win_title set to the entire string because there's only one parameter.
 		// The following must be done only after trimming and omitting whitespace above (see similar comment above).
 		ConvertEscapeSequences(hot_win_title, g_EscapeChar, true);
 		// The following also handles the case where both title and text are blank, which could happen
@@ -4142,7 +4141,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 				else
 				{
 					// Does this input or output variable contain a dereference?  If so, it must
-					// be resolved at runtime (to support old-style AutoIt2 arrays, etc.).
+					// be resolved at runtime (to support arrays, etc.).
 					// Find the first non-escaped dereference symbol:
 					for (j = 0; this_aArg[j] && (this_aArg[j] != g_DerefChar || (this_aArgMap && this_aArgMap[j])); ++j);
 					if (!this_aArg[j])
@@ -4161,6 +4160,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 						// text if that arg is a pure variable (i.e. since the name of the variable is already
 						// stored in the Var object, we don't need to store it twice):
 						this_new_arg.text = "";
+						this_new_arg.length = 0;
 						this_new_arg.deref = (DerefType *)target_var;
 						continue;
 					}
@@ -4203,8 +4203,14 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 			// empty string here should make things a lot more maintainable
 			// and less bug-prone.  If there's ever a need for the contents
 			// of this_new_arg to be modifiable (perhaps some obscure API calls require
-			// modifiable strings?) can malloc a single-char to contain the empty string:
-			if (   !(this_new_arg.text = SimpleHeap::Malloc(this_aArg))   )
+			// modifiable strings?) can malloc a single-char to contain the empty string.
+			// 
+			// So that it can be passed to Malloc(), first update the length to match what the text will be
+			// (if the alloc fails, an inaccurate length won't matter because it's an program-abort situation).
+			// The length must fit into a WORD, which it will since each arg is literal text from a script's line,
+			// which is limited to LINE_SIZE. The length member was added in v1.0.44.14 to boost runtime performance.
+			this_new_arg.length = (WORD)strlen(this_aArg);
+			if (   !(this_new_arg.text = SimpleHeap::Malloc(this_aArg, this_new_arg.length))   )
 				return FAIL;  // It already displayed the error for us.
 
 			////////////////////////////////////////////////////
@@ -4499,6 +4505,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 						// Above relies on the fact that StrReplaceAll() does not do cascading replacements,
 						// meaning that a series of characters such as """" would be correctly converted into
 						// two double quotes rather than collapsing into only one.
+						this_new_arg.length = (WORD)strlen(this_new_arg.text); // Update length to reflect changes made above.
 					}
 				}
 				// Make things like "Sleep Var" and "Var := X" into non-expressions.  At runtime,
@@ -6248,7 +6255,7 @@ Func *Script::AddFunc(char *aFuncName, size_t aFuncNameLength, bool aIsBuiltIn)
 
 	// Make a temporary copy that includes only the first aFuncNameLength characters from aFuncName:
 	char func_name[MAX_VAR_NAME_LENGTH + 1];
-	strlcpy(func_name, aFuncName, aFuncNameLength + 1);  // +1 to convert length to size.
+	strlcpy(func_name, aFuncName, aFuncNameLength + 1);  // See explanation above.  +1 to convert length to size.
 
 	// In the future, it might be best to add another check here to disallow function names that consist
 	// entirely of numbers.  However, this hasn't been done yet because:
@@ -6262,7 +6269,7 @@ Func *Script::AddFunc(char *aFuncName, size_t aFuncNameLength, bool aIsBuiltIn)
 		return NULL;
 
 	// Allocate some dynamic memory to pass to the constructor:
-	char *new_name = SimpleHeap::Malloc(func_name);
+	char *new_name = SimpleHeap::Malloc(func_name, aFuncNameLength);
 	if (!new_name)
 		// It already displayed the error for us.  These mem errors are so unusual that we're not going
 		// to bother varying the error message to include ERR_ABORT if this occurs during runtime.
@@ -6671,7 +6678,7 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, int aInsertPos, bool 
 
 	// Make a temporary copy that includes only the first aVarNameLength characters from aVarName:
 	char var_name[MAX_VAR_NAME_LENGTH + 1];
-	strlcpy(var_name, aVarName, aVarNameLength + 1);  // +1 to convert length to size.
+	strlcpy(var_name, aVarName, aVarNameLength + 1);  // See explanation above.  +1 to convert length to size.
 
 	if (!Var::ValidateName(var_name, mIsReadyToExecute))
 		// Above already displayed error for us.  This can happen at loadtime or runtime (e.g. StringSplit).
@@ -6697,7 +6704,7 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, int aInsertPos, bool 
 		var_type = aVarType;
 
 	// Allocate some dynamic memory to pass to the constructor:
-	char *new_name = SimpleHeap::Malloc(var_name);
+	char *new_name = SimpleHeap::Malloc(var_name, aVarNameLength);
 	if (!new_name)
 		// It already displayed the error for us.  These mem errors are so unusual that we're not going
 		// to bother varying the error message to include ERR_ABORT if this occurs during runtime.
@@ -7098,12 +7105,13 @@ ResultType Script::AddGroup(char *aGroupName)
 // In addition, if this function is being called by one thread while another thread is calling FindGroup(),
 // the thread-safety notes in FindGroup() apply.
 {
-	if (strlen(aGroupName) > MAX_VAR_NAME_LENGTH)
+	size_t aGroupName_length = strlen(aGroupName);
+	if (aGroupName_length > MAX_VAR_NAME_LENGTH)
 		return ScriptError("Group name too long.", aGroupName);
 	if (!Var::ValidateName(aGroupName, false, DISPLAY_NO_ERROR)) // Seems best to use same validation as var names.
 		return ScriptError("Illegal group name.", aGroupName);
 
-	char *new_name = SimpleHeap::Malloc(aGroupName);
+	char *new_name = SimpleHeap::Malloc(aGroupName, aGroupName_length);
 	if (!new_name)
 		return FAIL;  // It already displayed the error for us.
 
@@ -7757,14 +7765,12 @@ void Line::FreeDerefBufIfLarge()
 
 
 
-ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJumpToLine
-	, WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aCurrentRegItem, LoopReadFileStruct *aCurrentReadFile
-	, char *aCurrentField, __int64 aCurrentLoopIteration)
+ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJumpToLine)
 // Start executing at "this" line, stop when aMode indicates.
 // RECURSIVE: Handles all lines that involve flow-control.
 // aMode can be UNTIL_RETURN, UNTIL_BLOCK_END, ONLY_ONE_LINE.
 // Returns FAIL, OK, EARLY_RETURN, or EARLY_EXIT.
-// apJumpToLine is a pointer to Line-ptr (handle), which is an output param.  If NULL,
+// apJumpToLine is a pointer to Line-ptr (handle), which is an output parameter.  If NULL,
 // the caller is indicating it doesn't need this value, so it won't (and can't) be set by
 // the called recursion layer.
 {
@@ -7773,6 +7779,15 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 	// Important to init, since most of the time it will keep this value.
 	// Tells caller that no jump is required (default):
 	caller_jump_to_line = NULL;
+
+	// The benchmark improvement of having the following variables declared outside the loop rather than inside
+	// is about 0.25%.  Since that is probably not even statistically significant, the only reason for declaring
+	// them here is in case compilers other than MSVC++ 7.1 benefit more -- and because it's an old silly habit.
+	__int64 loop_iteration;
+	WIN32_FIND_DATA *loop_file;
+	RegItemStruct *loop_reg_item;
+	LoopReadFileStruct *loop_read_file;
+	char *loop_field;
 
 	Line *jump_to_line; // Don't use *apJumpToLine because it might not exist.
 	Line *jump_target;  // For use with Gosub & Goto & GroupActivate.
@@ -7844,7 +7859,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 
 		// At this point, a pause may have been triggered either by the above MsgSleep()
 		// or due to the action of a command (e.g. Pause, or perhaps tray menu "pause" was selected during Sleep):
-		for (; g.IsPaused;) // Benches slightly faster than while() for some reason. Also, an initial "if (g.IsPaused)" prior to the loop doesn't make it any faster.
+		while (g.IsPaused) // Benches slightly faster than while() for some reason. Also, an initial "if (g.IsPaused)" prior to the loop doesn't make it any faster.
 			MsgSleep(INTERVAL_UNSPECIFIED);  // Must check often to periodically run timed subroutines.
 
 		// Do these only after the above has had its opportunity to spend a significant amount
@@ -7862,30 +7877,6 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 		sLogTick[sLogNext++] = GetTickCount();  // Incrementing here vs. separately benches a little faster.
 		if (sLogNext >= LINE_LOG_SIZE)
 			sLogNext = 0;
-
-		// Do this only after the opportunity to Sleep (above) has passed, but before
-		// calling ExpandArgs() below, because any of the MsgSleep's above or any of
-		// those called the command of a prior loop iteration (e.g. WinWait or Sleep)
-		// may have changed the value of the global.  We now want the global to reflect
-		// the memory address that our caller gave to us (by definition, we must have
-		// been called recursively if we're in a file-loop, so aCurrentFile will be
-		// non-NULL if our caller, or its caller, was in a file-loop).  If aCurrentFile
-		// is NULL, set the variable to be our own layer's current_file, so that the
-		// value of a variable such as %A_LoopFileName% can still be fetched even if
-		// we're currently outside a file-loop (in which case, the most recently found
-		// file by any loop invoked by our layer will be used?  UPDATE: It seems better,
-		// both to simplify the code and enforce the fact that loop variables should not
-		// be valid outside the context of a loop, to use NULL for the current file
-		// whenever aCurrentFile is NULL.  Note: The memory for this variable resides
-		// in the stack of an instance of PerformLoop(), which is our caller or our
-		// caller's caller, etc.  In other words, it shouldn't be possible for
-		// aCurrentFile to be non-NULL if there isn't a PerformLoop() beneath us
-		// in the stack:
-		g_script.mLoopFile = aCurrentFile;
-		g_script.mLoopRegItem = aCurrentRegItem; // Similar in function to the above.
-		g_script.mLoopReadFile = aCurrentReadFile; // Similar in function to the above.
-		g_script.mLoopField = aCurrentField; // Similar in function to the above.
-		g_script.mLoopIteration = aCurrentLoopIteration; // Similar in function to the above.
 
 		// Do this only after the opportunity to Sleep (above) has passed, because during
 		// that sleep, a new subroutine might be launched which would likely overwrite the
@@ -7915,8 +7906,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 			{
 				// line->mNextLine has already been verified non-NULL by the pre-parser, so
 				// this dereference is safe:
-				result = line->mNextLine->ExecUntil(ONLY_ONE_LINE, apReturnValue, &jump_to_line, aCurrentFile
-					, aCurrentRegItem, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
+				result = line->mNextLine->ExecUntil(ONLY_ONE_LINE, apReturnValue, &jump_to_line);
 				if (jump_to_line == line)
 					// Since this IF's ExecUntil() encountered a Goto whose target is the IF
 					// itself, continue with the for-loop without moving to a different
@@ -7993,8 +7983,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 				if (line->mActionType == ACT_ELSE) // This IF has an else.
 				{
 					// Preparser has ensured that every ELSE has a non-NULL next line:
-					result = line->mNextLine->ExecUntil(ONLY_ONE_LINE, apReturnValue, &jump_to_line, aCurrentFile
-						, aCurrentRegItem, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
+					result = line->mNextLine->ExecUntil(ONLY_ONE_LINE, apReturnValue, &jump_to_line);
 					if (aMode == ONLY_ONE_LINE)
 					{
 						// When jump_to_line!=NULL, the above call to ExecUntil() told us to jump somewhere.
@@ -8044,9 +8033,8 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 					return FAIL; // Error was already displayed by called function.
 			// I'm pretty sure it's not valid for this call to ExecUntil() to tell us to jump
 			// somewhere, because the called function, or a layer even deeper, should handle
-			// the goto prior to returning to us?  So the last param is omitted:
-			result = jump_target->ExecUntil(UNTIL_RETURN, NULL, NULL, aCurrentFile, aCurrentRegItem
-				, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
+			// the goto prior to returning to us?  So the last parameter is omitted:
+			result = jump_target->ExecUntil(UNTIL_RETURN, NULL, NULL);
 			// Must do these return conditions in this specific order:
 			if (result == FAIL || result == EARLY_EXIT)
 				return result;
@@ -8105,8 +8093,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 						// crazy place:
 						return FAIL;
 					// This section is just like the Gosub code above, so maintain them together.
-					result = jump_target->ExecUntil(UNTIL_RETURN, NULL, NULL, aCurrentFile, aCurrentRegItem
-						, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
+					result = jump_target->ExecUntil(UNTIL_RETURN, NULL, NULL);
 					if (result == FAIL || result == EARLY_EXIT)
 						return result;
 					if (aMode == ONLY_ONE_LINE)
@@ -8226,24 +8213,29 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 			bool continue_main_loop = false; // Init prior to below call.
 			jump_to_line = NULL; // Init prior to below call.
 
-			// This must be a variable in this function's stack because registry loops and file-pattern
-			// loops can be intrinsically recursive, in which case not only does it need to pass on the
-			// correct/current iteration to the instance it calls, it must also receive back the updated
-			// count when it is returned to.  This is also related to the loop-recursion bugfix documented
-			// for v1.0.20: fixes A_Index so that it doesn't wrongly reset to 0 inside recursive file-loops
-			// and registry loops:
-			__int64 script_iteration = 0;
+			// BACK UP THE OUTER LOOP'S A_LOOPXXX VARIABLES:
+			loop_iteration = g.mLoopIteration;
+			loop_file = g.mLoopFile;
+			loop_reg_item = g.mLoopRegItem;
+			loop_read_file = g.mLoopReadFile;
+			loop_field = g.mLoopField;
 
+			// INIT "A_INDEX" (one-based not zero-based). This is done here rather than in each PerformLoop()
+			// function because it reduces code size and also because registry loops and file-pattern loops
+			// can be intrinsically recursive (this is also related to the loop-recursion bugfix documented
+			// for v1.0.20: fixes A_Index so that it doesn't wrongly reset to 0 inside recursive file-loops
+			// and registry loops).
+			g.mLoopIteration = 1;
+
+			// PERFORM THE LOOP:
 			if (attr == ATTR_LOOP_PARSE)
 			{
 				// The phrase "csv" is unique enough since user can always rearrange the letters
 				// to do a literal parse using C, S, and V as delimiters:
 				if (stricmp(ARG3, "CSV"))
-					result = line->PerformLoopParse(apReturnValue, aCurrentFile, aCurrentRegItem, aCurrentReadFile
-						, continue_main_loop, jump_to_line, script_iteration);
+					result = line->PerformLoopParse(apReturnValue, continue_main_loop, jump_to_line);
 				else
-					result = line->PerformLoopParseCSV(apReturnValue, aCurrentFile, aCurrentRegItem, aCurrentReadFile
-						, continue_main_loop, jump_to_line, script_iteration);
+					result = line->PerformLoopParseCSV(apReturnValue, continue_main_loop, jump_to_line);
 			}
 			else if (attr == ATTR_LOOP_READ_FILE)
 			{
@@ -8251,8 +8243,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 				FILE *read_file = fopen(ARG2, "r");
 				if (read_file)
 				{
-					result = line->PerformLoopReadFile(apReturnValue, aCurrentFile, aCurrentRegItem, aCurrentField
-						, continue_main_loop, jump_to_line, read_file, ARG3, script_iteration);
+					result = line->PerformLoopReadFile(apReturnValue, continue_main_loop, jump_to_line, read_file, ARG3);
 					fclose(read_file);
 				}
 				else
@@ -8273,9 +8264,8 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 				if (root_key)
 				{
 					// root_key_type needs to be passed in order to support GetLoopRegKey():
-					result = line->PerformLoopReg(apReturnValue, aCurrentFile, aCurrentReadFile, aCurrentField
-						, continue_main_loop, jump_to_line, file_loop_mode, recurse_subfolders
-						, root_key_type, root_key, ARG2, script_iteration);
+					result = line->PerformLoopReg(apReturnValue, continue_main_loop, jump_to_line, file_loop_mode
+						, recurse_subfolders, root_key_type, root_key, ARG2);
 					if (is_remote_registry)
 						RegCloseKey(root_key);
 				}
@@ -8288,9 +8278,38 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 					result = OK;
 			}
 			else // All other loops types are handled this way:
-				result = line->PerformLoop(apReturnValue, aCurrentFile, aCurrentRegItem, aCurrentReadFile
-					, aCurrentField, continue_main_loop, jump_to_line, attr, file_loop_mode, recurse_subfolders
-					, ARG1, iteration_limit, is_infinite, script_iteration);
+				result = line->PerformLoop(apReturnValue, continue_main_loop, jump_to_line, attr, file_loop_mode, recurse_subfolders
+					, ARG1, iteration_limit, is_infinite);
+
+			// RESTORE THE PREVIOUS A_LOOPXXX VARIABLES.  If there isn't an outer loop, this will set them
+			// all to NULL/0, which is the most proper and also in keeping with historical behavior.
+			// This backup/restore approach was adopted in v1.0.44.14 to simplify things and improve maintainability.
+			// This change improved performance by only 1%, which isn't statistically significant.  More importantly,
+			// it indirectly fixed the following bug:
+			// When a "return" is executed inside a loop's body (and possibly an Exit or Fail too, but those are
+			// covered more for simplicity and maintainability), the situations below require superglobals like
+			// A_Index and A_LoopField to be restored for the outermost caller of ExecUntil():
+			// 1) Var%A_Index% := func_that_returns_directly_from_inside_a_loop_body().
+			//    The above happened because the return in the function's loop failed to restore A_Index for its
+			//    caller because it had been designed to restore inter-line, not for intra-line activities like
+			//    calling functions.
+			// 2) A command that has expressions in two separate parameters and one of those parameters calls
+			//    a function that returns directly from inside one of its loop bodies.
+			//
+			// This change was made feasible by making the A_LoopXXX attributes thread-specific, which prevents
+			// interrupting threads from affecting the values our thread sees here.  So that change protects
+			// against thread interruptions, and this backup/restore change here keeps the Loop variables in
+			// sync with the current nesting level (braces, gosub, etc.)
+			// 
+			// The memory for structs like g.mLoopFile resides in the stack of an instance of PerformLoop(),
+			// which is our caller or our caller's caller, etc.  In other words, it shouldn't be possible for
+			// variables like g.mLoopFile to be non-NULL if there isn't a PerformLoop() beneath us in the stack.
+			g.mLoopIteration = loop_iteration;
+			g.mLoopFile = loop_file;
+			g.mLoopRegItem = loop_reg_item;
+			g.mLoopReadFile = loop_read_file;
+			g.mLoopField = loop_field;
+			// Above is done unconditionally (regardless of the value of "result") for simplicity and maintainability.
 
 			if (result == FAIL || result == EARLY_RETURN || result == EARLY_EXIT)
 				return result;
@@ -8366,8 +8385,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 			// Don't count block-begin/end against the total since they should be nearly instantaneous:
 			//++g_script.mLinesExecutedThisCycle;
 			// In this case, line->mNextLine is already verified non-NULL by the pre-parser:
-			result = line->mNextLine->ExecUntil(UNTIL_BLOCK_END, apReturnValue, &jump_to_line, aCurrentFile
-				, aCurrentRegItem, aCurrentReadFile, aCurrentField, aCurrentLoopIteration);
+			result = line->mNextLine->ExecUntil(UNTIL_BLOCK_END, apReturnValue, &jump_to_line);
 			if (jump_to_line == line)
 				// Since this Block-begin's ExecUntil() encountered a Goto whose target is the
 				// block-begin itself, continue with the for-loop without moving to a different
@@ -8436,7 +8454,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 			return line->LineError("Unexpected ELSE." ERR_ABORT);
 		default:
 			++g_script.mLinesExecutedThisCycle;
-			result = line->Perform(aCurrentFile, aCurrentRegItem, aCurrentReadFile);
+			result = line->Perform();
 			if (!result || aMode == ONLY_ONE_LINE)
 				// Thus, Perform() should be designed to only return FAIL if it's an error that would make
 				// it unsafe to proceed in the subroutine we're executing now:
@@ -8787,11 +8805,9 @@ inline ResultType Line::EvaluateCondition()
 
 
 
-ResultType Line::PerformLoop(char **apReturnValue, WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
-	, LoopReadFileStruct *apCurrentReadFile, char *aCurrentField, bool &aContinueMainLoop
+ResultType Line::PerformLoop(char **apReturnValue, bool &aContinueMainLoop
 	, Line *&aJumpToLine, AttributeType aAttr, FileLoopModeType aFileLoopMode
-	, bool aRecurseSubfolders, char *aFilePattern, __int64 aIterationLimit, bool aIsInfinite
-	, __int64 &aIndex)
+	, bool aRecurseSubfolders, char *aFilePattern, __int64 aIterationLimit, bool aIsInfinite)
 // Note: Even if aFilePattern is just a directory (i.e. with not wildcard pattern), it seems best
 // not to append "\\*.*" to it because the pattern might be a script variable that the user wants
 // to conditionally resolve to various things at runtime.  In other words, it's valid to have
@@ -8801,9 +8817,9 @@ ResultType Line::PerformLoop(char **apReturnValue, WIN32_FIND_DATA *apCurrentFil
 	HANDLE file_search = INVALID_HANDLE_VALUE;
 	char file_path[MAX_PATH] = "";
 	char naked_filename_or_pattern[MAX_PATH] = "";
-	// apCurrentFile is the file of the file-loop that encloses this file-loop, if any.
-	// The below is our own current_file, which will take precedence over apCurrentFile
-	// if this loop is a file-loop:
+	// g.mLoopFile is the current file of the file-loop that encloses this file-loop, if any.
+	// The below is our own current_file, which will take precedence over g.mLoopFile if this
+	// loop is a file-loop:
 	WIN32_FIND_DATA new_current_file = {0};
 	if (aAttr == ATTR_LOOP_FILE)
 	{
@@ -8836,16 +8852,16 @@ ResultType Line::PerformLoop(char **apReturnValue, WIN32_FIND_DATA *apCurrentFil
 
 	ResultType result;
 	Line *jump_to_line = NULL;
-	for (; aIsInfinite || file_found || aIndex < aIterationLimit; ++aIndex)
+	for (; aIsInfinite || file_found || g.mLoopIteration <= aIterationLimit; ++g.mLoopIteration)
 	{
+		if (file_found) // inner loop's file takes precedence over outer's.
+			g.mLoopFile = &new_current_file;
+		//else leave g.mLoopFile unchanged so that a file-loop can enclose some other type of inner loop,
+		// and that inner loop will still have access to the outer loop's current file.
+
 		// Execute once the body of the loop (either just one statement or a block of statements).
 		// Preparser has ensured that every LOOP has a non-NULL next line.
-		// apCurrentFile is sent as an arg so that more than one nested/recursive
-		// file-loop can be supported:
-		result = mNextLine->ExecUntil(ONLY_ONE_LINE, apReturnValue, &jump_to_line
-			, file_found ? &new_current_file : apCurrentFile // inner loop's file takes precedence over outer's.
-			, apCurrentRegItem, apCurrentReadFile, aCurrentField
-			, aIndex + 1);  // i+1, since 1 is the first iteration as reported to the script.
+		result = mNextLine->ExecUntil(ONLY_ONE_LINE, apReturnValue, &jump_to_line);
 		if (result == LOOP_BREAK || result == EARLY_RETURN || result == EARLY_EXIT || result == FAIL)
 		{
 			#define CLOSE_FILE_SEARCH \
@@ -8936,9 +8952,8 @@ ResultType Line::PerformLoop(char **apReturnValue, WIN32_FIND_DATA *apCurrentFil
 		// its first loop iteration.  This is because this directory is being recursed into, not
 		// processed itself as a file-loop item (since this was already done in the first loop,
 		// above, if its name matches the original search pattern):
-		result = PerformLoop(apReturnValue, NULL, apCurrentRegItem, apCurrentReadFile, aCurrentField
-			, aContinueMainLoop, aJumpToLine, aAttr, aFileLoopMode, aRecurseSubfolders, file_path
-			, aIterationLimit, aIsInfinite, aIndex);
+		result = PerformLoop(apReturnValue, aContinueMainLoop, aJumpToLine, aAttr, aFileLoopMode, aRecurseSubfolders, file_path
+			, aIterationLimit, aIsInfinite);
 		// result should never be LOOP_CONTINUE because the above call to PerformLoop() should have
 		// handled that case.  However, it can be LOOP_BREAK if it encoutered the break command.
 		if (result == LOOP_BREAK || result == EARLY_RETURN || result == EARLY_EXIT || result == FAIL)
@@ -8960,9 +8975,8 @@ ResultType Line::PerformLoop(char **apReturnValue, WIN32_FIND_DATA *apCurrentFil
 
 
 
-ResultType Line::PerformLoopReg(char **apReturnValue, WIN32_FIND_DATA *apCurrentFile, LoopReadFileStruct *apCurrentReadFile
-	, char *aCurrentField, bool &aContinueMainLoop, Line *&aJumpToLine, FileLoopModeType aFileLoopMode
-	, bool aRecurseSubfolders, HKEY aRootKeyType, HKEY aRootKey, char *aRegSubkey, __int64 &aIndex)
+ResultType Line::PerformLoopReg(char **apReturnValue, bool &aContinueMainLoop, Line *&aJumpToLine, FileLoopModeType aFileLoopMode
+	, bool aRecurseSubfolders, HKEY aRootKeyType, HKEY aRootKey, char *aRegSubkey)
 // aRootKeyType is the type of root key, independent of whether it's local or remote.
 // This is used because there's no easy way to determine which root key a remote HKEY
 // refers to.
@@ -8994,8 +9008,9 @@ ResultType Line::PerformLoopReg(char **apReturnValue, WIN32_FIND_DATA *apCurrent
 	// Note that &reg_item is passed to ExecUntil() rather than... (comment was never finished).
 	#define MAKE_SCRIPT_LOOP_PROCESS_THIS_ITEM \
 	{\
-		result = mNextLine->ExecUntil(ONLY_ONE_LINE, apReturnValue, &jump_to_line, apCurrentFile\
-			, &reg_item, apCurrentReadFile, aCurrentField, ++aIndex);\
+		g.mLoopRegItem = &reg_item;\
+		result = mNextLine->ExecUntil(ONLY_ONE_LINE, apReturnValue, &jump_to_line);\
+		++g.mLoopIteration;\
 		if (result == LOOP_BREAK || result == EARLY_RETURN || result == EARLY_EXIT || result == FAIL)\
 		{\
 			RegCloseKey(hRegKey);\
@@ -9067,8 +9082,8 @@ ResultType Line::PerformLoopReg(char **apReturnValue, WIN32_FIND_DATA *apCurrent
 				snprintf(subkey_full_path, sizeof(subkey_full_path), "%s%s%s", reg_item.subkey
 					, *reg_item.subkey ? "\\" : "", reg_item.name);
 				// This section is very similar to the one in PerformLoop(), so see it for comments:
-				result = PerformLoopReg(apReturnValue, apCurrentFile, apCurrentReadFile, aCurrentField, aContinueMainLoop
-					, aJumpToLine, aFileLoopMode, aRecurseSubfolders, aRootKeyType, aRootKey, subkey_full_path, aIndex);
+				result = PerformLoopReg(apReturnValue, aContinueMainLoop, aJumpToLine, aFileLoopMode
+					, aRecurseSubfolders, aRootKeyType, aRootKey, subkey_full_path);
 				if (result == LOOP_BREAK || result == EARLY_RETURN || result == EARLY_EXIT || result == FAIL)
 				{
 					RegCloseKey(hRegKey);
@@ -9088,8 +9103,7 @@ ResultType Line::PerformLoopReg(char **apReturnValue, WIN32_FIND_DATA *apCurrent
 
 
 
-ResultType Line::PerformLoopParse(char **apReturnValue, WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
-	, LoopReadFileStruct *apCurrentReadFile, bool &aContinueMainLoop, Line *&aJumpToLine, __int64 &aIndex)
+ResultType Line::PerformLoopParse(char **apReturnValue, bool &aContinueMainLoop, Line *&aJumpToLine)
 {
 	if (!*ARG2) // Since the input variable's contents are blank, the loop will execute zero times.
 		return OK;
@@ -9110,7 +9124,7 @@ ResultType Line::PerformLoopParse(char **apReturnValue, WIN32_FIND_DATA *apCurre
 	// constantly doing malloc() and free(), which are much higher overhead and probably
 	// cause memory fragmentation (especially with thousands of calls):
 	char stack_buf[16384], *buf;
-	size_t space_needed = strlen(ARG2) + 1;  // +1 for the zero terminator.
+	size_t space_needed = ArgLength(2) + 1;  // +1 for the zero terminator.
 	if (space_needed <= sizeof(stack_buf))
 		buf = stack_buf;
 	else
@@ -9170,8 +9184,9 @@ ResultType Line::PerformLoopParse(char **apReturnValue, WIN32_FIND_DATA *apCurre
 		}
 
 		// See comments in PerformLoop() for details about this section.
-		result = mNextLine->ExecUntil(ONLY_ONE_LINE, apReturnValue, &jump_to_line, apCurrentFile, apCurrentRegItem
-			, apCurrentReadFile, field, ++aIndex);
+		g.mLoopField = field;
+		result = mNextLine->ExecUntil(ONLY_ONE_LINE, apReturnValue, &jump_to_line);
+		++g.mLoopIteration;
 
 		if (result == LOOP_BREAK || result == EARLY_RETURN || result == EARLY_EXIT || result == FAIL)
 		{
@@ -9199,8 +9214,7 @@ ResultType Line::PerformLoopParse(char **apReturnValue, WIN32_FIND_DATA *apCurre
 
 
 
-ResultType Line::PerformLoopParseCSV(char **apReturnValue, WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
-	, LoopReadFileStruct *apCurrentReadFile, bool &aContinueMainLoop, Line *&aJumpToLine, __int64 &aIndex)
+ResultType Line::PerformLoopParseCSV(char **apReturnValue, bool &aContinueMainLoop, Line *&aJumpToLine)
 // This function is similar to PerformLoopParse() so the two should be maintained together.
 // See PerformLoopParse() for comments about the below (comments have been mostly stripped
 // from this function).
@@ -9209,7 +9223,7 @@ ResultType Line::PerformLoopParseCSV(char **apReturnValue, WIN32_FIND_DATA *apCu
 		return OK;
 
 	char stack_buf[16384], *buf;
-	size_t space_needed = strlen(ARG2) + 1;  // +1 for the zero terminator.
+	size_t space_needed = ArgLength(2) + 1;  // +1 for the zero terminator.
 	if (space_needed <= sizeof(stack_buf))
 		buf = stack_buf;
 	else
@@ -9286,8 +9300,9 @@ ResultType Line::PerformLoopParseCSV(char **apReturnValue, WIN32_FIND_DATA *apCu
 		}
 
 		// See comments in PerformLoop() for details about this section.
-		result = mNextLine->ExecUntil(ONLY_ONE_LINE, apReturnValue, &jump_to_line, apCurrentFile, apCurrentRegItem
-			, apCurrentReadFile, field, ++aIndex);
+		g.mLoopField = field;
+		result = mNextLine->ExecUntil(ONLY_ONE_LINE, apReturnValue, &jump_to_line);
+		++g.mLoopIteration;
 
 		if (result == LOOP_BREAK || result == EARLY_RETURN || result == EARLY_EXIT || result == FAIL)
 		{
@@ -9328,9 +9343,7 @@ ResultType Line::PerformLoopParseCSV(char **apReturnValue, WIN32_FIND_DATA *apCu
 
 
 
-ResultType Line::PerformLoopReadFile(char **apReturnValue, WIN32_FIND_DATA *apCurrentFile, RegItemStruct *apCurrentRegItem
-	, char *aCurrentField, bool &aContinueMainLoop, Line *&aJumpToLine, FILE *aReadFile, char *aWriteFileName
-	, __int64 &aIndex)
+ResultType Line::PerformLoopReadFile(char **apReturnValue, bool &aContinueMainLoop, Line *&aJumpToLine, FILE *aReadFile, char *aWriteFileName)
 {
 	LoopReadFileStruct loop_info(aReadFile, aWriteFileName);
 	size_t line_length;
@@ -9343,8 +9356,9 @@ ResultType Line::PerformLoopReadFile(char **apReturnValue, WIN32_FIND_DATA *apCu
 		if (line_length && loop_info.mCurrentLine[line_length - 1] == '\n') // Remove newlines like FileReadLine does.
 			loop_info.mCurrentLine[--line_length] = '\0';
 		// See comments in PerformLoop() for details about this section.
-		result = mNextLine->ExecUntil(ONLY_ONE_LINE, apReturnValue, &jump_to_line, apCurrentFile, apCurrentRegItem
-			, &loop_info, aCurrentField, ++aIndex);
+		g.mLoopReadFile = &loop_info;
+		result = mNextLine->ExecUntil(ONLY_ONE_LINE, apReturnValue, &jump_to_line);
+		++g.mLoopIteration;
 		if (result == LOOP_BREAK || result == EARLY_RETURN || result == EARLY_EXIT || result == FAIL)
 		{
 			if (loop_info.mWriteFile)
@@ -9374,19 +9388,13 @@ ResultType Line::PerformLoopReadFile(char **apReturnValue, WIN32_FIND_DATA *apCu
 
 
 
-inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aCurrentRegItem
-	, LoopReadFileStruct *aCurrentReadFile)
+inline ResultType Line::Perform()
 // Performs only this line's action.
 // Returns OK or FAIL.
 // The function should not be called to perform any flow-control actions such as
 // Goto, Gosub, Return, Block-Begin, Block-End, If, Else, etc.
 {
-	// Since most compilers create functions that, upon entry, reserve stack space
-	// for all of their automatic/local vars (even if those vars are inside
-	// nested blocks whose code is never executed): Rather than having
-	// a dozen or more buffers, one for each case in the switch() stmt that needs
-	// one, just have one or two for general purpose use (helps conserve stack space):
-	char buf_temp[LINE_SIZE]; // Work area for use in various places.  Some things rely on it being large.
+	char buf_temp[MAX_REG_ITEM_LENGTH + 1]; // For registry and other things.
 	WinGroup *group; // For the group commands.
 	Var *output_var;
 	VarSizeType space_needed; // For the commands that assign directly to an output var.
@@ -9485,11 +9493,11 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		return IniDelete(ARG1, ARG2, mArgc < 3 ? NULL : ARG3);
 
 	case ACT_REGREAD:
-		if (mArgc < 2 && aCurrentRegItem) // Uses the registry loop's current item.
-			// If aCurrentRegItem->name specifies a subkey rather than a value name, do this anyway
+		if (mArgc < 2 && g.mLoopRegItem) // Uses the registry loop's current item.
+			// If g.mLoopRegItem->name specifies a subkey rather than a value name, do this anyway
 			// so that it will set ErrorLevel to ERROR and set the output variable to be blank.
 			// Also, do not use RegCloseKey() on this, even if it's a remote key, since our caller handles that:
-			return RegRead(aCurrentRegItem->root_key, aCurrentRegItem->subkey, aCurrentRegItem->name);
+			return RegRead(g.mLoopRegItem->root_key, g.mLoopRegItem->subkey, g.mLoopRegItem->name);
 		// Otherwise:
 		if (mArgc > 4 || RegConvertValueType(ARG2)) // The obsolete 5-param method (ARG2 is unused).
 			result = RegRead(root_key = RegConvertRootKey(ARG3, &is_remote_registry), ARG4, ARG5);
@@ -9499,11 +9507,11 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			RegCloseKey(root_key);
 		return result;
 	case ACT_REGWRITE:
-		if (mArgc < 2 && aCurrentRegItem) // Uses the registry loop's current item.
-			// If aCurrentRegItem->name specifies a subkey rather than a value name, do this anyway
+		if (mArgc < 2 && g.mLoopRegItem) // Uses the registry loop's current item.
+			// If g.mLoopRegItem->name specifies a subkey rather than a value name, do this anyway
 			// so that it will set ErrorLevel to ERROR.  An error will also be indicated if
-			// aCurrentRegItem->type is an unsupported type:
-			return RegWrite(aCurrentRegItem->type, aCurrentRegItem->root_key, aCurrentRegItem->subkey, aCurrentRegItem->name, ARG1);
+			// g.mLoopRegItem->type is an unsupported type:
+			return RegWrite(g.mLoopRegItem->type, g.mLoopRegItem->root_key, g.mLoopRegItem->subkey, g.mLoopRegItem->name, ARG1);
 		// Otherwise:
 		result = RegWrite(RegConvertValueType(ARG1), root_key = RegConvertRootKey(ARG2, &is_remote_registry)
 			, ARG3, ARG4, ARG5); // If RegConvertValueType(ARG1) yields REG_NONE, RegWrite() will set ErrorLevel rather than displaying a runtime error.
@@ -9511,18 +9519,18 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			RegCloseKey(root_key);
 		return result;
 	case ACT_REGDELETE:
-		if (mArgc < 1 && aCurrentRegItem) // Uses the registry loop's current item.
+		if (mArgc < 1 && g.mLoopRegItem) // Uses the registry loop's current item.
 		{
-			// In this case, if the CurrentRegItem is a value, just delete it normally.
+			// In this case, if the current reg item is a value, just delete it normally.
 			// But if it's a subkey, append it to the dir name so that the proper subkey
 			// will be deleted as the user intended:
-			if (aCurrentRegItem->type == REG_SUBKEY)
+			if (g.mLoopRegItem->type == REG_SUBKEY)
 			{
-				snprintf(buf_temp, sizeof(buf_temp), "%s\\%s", aCurrentRegItem->subkey, aCurrentRegItem->name);
-				return RegDelete(aCurrentRegItem->root_key, buf_temp, "");
+				snprintf(buf_temp, sizeof(buf_temp), "%s\\%s", g.mLoopRegItem->subkey, g.mLoopRegItem->name);
+				return RegDelete(g.mLoopRegItem->root_key, buf_temp, "");
 			}
 			else
-				return RegDelete(aCurrentRegItem->root_key, aCurrentRegItem->subkey, aCurrentRegItem->name);
+				return RegDelete(g.mLoopRegItem->root_key, g.mLoopRegItem->subkey, g.mLoopRegItem->name);
 		}
 		// Otherwise:
 		result = RegDelete(root_key = RegConvertRootKey(ARG1, &is_remote_registry), ARG2, ARG3);
@@ -9608,14 +9616,14 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		{
 			// It's more memory efficient to allocate a single block and divide it up.
 			// This memory is freed automatically by the OS upon program termination.
-			if (   !(g_script.mRunAsUser = (wchar_t *)malloc(3 * RUNAS_ITEM_SIZE))   )
+			if (   !(g_script.mRunAsUser = (WCHAR *)malloc(3 * RUNAS_SIZE_IN_BYTES))   )
 				return LineError(ERR_OUTOFMEM ERR_ABORT);
-			g_script.mRunAsPass = g_script.mRunAsUser + RUNAS_ITEM_SIZE;
-			g_script.mRunAsDomain = g_script.mRunAsPass + RUNAS_ITEM_SIZE;
+			g_script.mRunAsPass = g_script.mRunAsUser + RUNAS_SIZE_IN_BYTES;
+			g_script.mRunAsDomain = g_script.mRunAsPass + RUNAS_SIZE_IN_BYTES;
 		}
-		mbstowcs(g_script.mRunAsUser, ARG1, RUNAS_ITEM_SIZE);
-		mbstowcs(g_script.mRunAsPass, ARG2, RUNAS_ITEM_SIZE);
-		mbstowcs(g_script.mRunAsDomain, ARG3, RUNAS_ITEM_SIZE);
+		ToWideChar(ARG1, g_script.mRunAsUser, RUNAS_SIZE_IN_WCHARS);    // Dest. size is in wchars, not bytes.
+		ToWideChar(ARG2, g_script.mRunAsPass, RUNAS_SIZE_IN_WCHARS);    //
+		ToWideChar(ARG3, g_script.mRunAsDomain, RUNAS_SIZE_IN_WCHARS);  //
 		return OK;
 
 	case ACT_RUN: // Be sure to pass NULL for 2nd param.
@@ -9657,6 +9665,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		JoyControls joy;
 		int joystick_id;
 		ExprTokenType token;
+		char *alloca_buf = (char *)_alloca(LINE_SIZE);
 
 		if (mActionType == ACT_KEYWAIT)
 		{
@@ -9694,7 +9703,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			}
 			// The following must be set for ScriptGetJoyState():
 			token.symbol = SYM_STRING;
-			token.marker = buf_temp;
+			token.marker = alloca_buf;
 		}
 		else if (   (mActionType != ACT_RUNWAIT && mActionType != ACT_CLIPWAIT && *ARG3)
 			|| (mActionType == ACT_CLIPWAIT && *ARG1)   )
@@ -9728,7 +9737,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		// if any of them happen to be in the Deref buffer:
 		char *arg[MAX_ARGS], *marker;
 		int i, space_remaining;
-		for (i = 0, space_remaining = (int)sizeof(buf_temp), marker = buf_temp; i < mArgc; ++i)
+		for (i = 0, space_remaining = LINE_SIZE, marker = alloca_buf; i < mArgc; ++i)
 		{
 			if (!space_remaining) // Realistically, should never happen.
 				arg[i] = "";
@@ -9737,7 +9746,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 				arg[i] = marker;  // Point it to its place in the buffer.
 				strlcpy(marker, sArgDeref[i], space_remaining); // Make the copy.
 				marker += strlen(marker) + 1;  // +1 for the zero terminator of each arg.
-				space_remaining = (int)(sizeof(buf_temp) - (marker - buf_temp));
+				space_remaining = (int)(LINE_SIZE - (marker - alloca_buf));
 			}
 		}
 
@@ -10073,11 +10082,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			// it to be called this way, in which case it will do nothing other than
 			// set the output var to be blank.
 			chars_to_extract = 0;
-		// It will display any error that occurs.  Also, tell it to trim if AutoIt2 mode is in effect,
-		// because I think all of AutoIt2's string commands trim the output variable as part of the
-		// process.  But don't change Assign() to unconditionally trim because AutoIt2 does not trim
-		// for some of its commands, such as FileReadLine.  UPDATE: AutoIt2 apprarently doesn't trim
-		// when one of the STRING commands does an assignment.
+		// It will display any error that occurs.
 		return output_var->Assign(ARG2, (VarSizeType)strnlen(ARG2, chars_to_extract));
 
 	case ACT_STRINGRIGHT:
@@ -10086,7 +10091,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		chars_to_extract = ATOI(ARG3); // Use 32-bit signed to detect negatives and fit it VarSizeType.
 		if (chars_to_extract < 0)
 			chars_to_extract = 0;
-		source_length = strlen(ARG2);
+		source_length = ArgLength(2);
 		if ((UINT)chars_to_extract > source_length)
 			chars_to_extract = (int)source_length;
 		// It will display any error that occurs:
@@ -10110,6 +10115,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		start_char_num = ATOI(ARG3);
 		if (toupper(*ARG5) == 'L')  // Chars to the left of start_char_num will be extracted.
 		{
+			// TRANSLATE "L" MODE INTO THE EQUIVALENT NORMAL MODE:
 			if (start_char_num < 1) // Starting at a character number that is invalid for L mode.
 				return output_var->Assign();  // Blank seems most appropriate for the L option in this case.
 			start_char_num -= (chars_to_extract - 1);
@@ -10118,20 +10124,20 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 				// to the left of start_char_num, so we'll extract only them:
 				chars_to_extract -= (1 - start_char_num);
 		}
-		// Above has converted "L" mode into normal mode, so "L" no longer needs to be considered below.
+		// ABOVE HAS CONVERTED "L" MODE INTO NORMAL MODE, so "L" no longer needs to be considered below.
 		// UPDATE: The below is also needed for the L option to work correctly.  Older:
 		// It's somewhat debatable, but it seems best not to report an error in this and
 		// other cases.  The result here is probably enough to speak for itself, for script
 		// debugging purposes:
 		if (start_char_num < 1)
 			start_char_num = 1; // 1 is the position of the first char, unlike StringGetPos.
-		source_length = strlen(ARG2); // This call seems unavoidable in both "L" mode and normal mode.
+		source_length = ArgLength(2); // This call seems unavoidable in both "L" mode and normal mode.
+		if (source_length < (UINT)start_char_num) // Source is empty or start_char_num lies to the right of the entire string.
+			return output_var->Assign(); // No chars exist there, so set it to be blank.
+		source_length -= (start_char_num - 1); // Fix for v1.0.44.14: Adjust source_length to be the length starting at start_char_num.  Otherwise, the length passed to Assign() could be too long, and it now expects an accurate length.
 		if ((UINT)chars_to_extract > source_length)
 			chars_to_extract = (int)source_length;
-		if (source_length < (UINT)start_char_num) // Starting character lies to the right of the entire string.
-			return output_var->Assign(); // No chars exist there, so set it to be blank.
-		else
-			return output_var->Assign(ARG2 + start_char_num - 1, chars_to_extract);
+		return output_var->Assign(ARG2 + start_char_num - 1, chars_to_extract);
 
 	case ACT_STRINGTRIMLEFT:
 		if (   !(output_var = ResolveVarOfArg(0))   )
@@ -10139,7 +10145,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		chars_to_extract = ATOI(ARG3); // Use 32-bit signed to detect negatives and fit it VarSizeType.
 		if (chars_to_extract < 0)
 			chars_to_extract = 0;
-		source_length = strlen(ARG2);
+		source_length = ArgLength(2);
 		if ((UINT)chars_to_extract > source_length) // This could be intentional, so don't display an error.
 			chars_to_extract = (int)source_length;
 		return output_var->Assign(ARG2 + chars_to_extract, (VarSizeType)(source_length - chars_to_extract));
@@ -10150,7 +10156,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		chars_to_extract = ATOI(ARG3); // Use 32-bit signed to detect negatives and fit it VarSizeType.
 		if (chars_to_extract < 0)
 			chars_to_extract = 0;
-		source_length = strlen(ARG2);
+		source_length = ArgLength(2);
 		if ((UINT)chars_to_extract > source_length) // This could be intentional, so don't display an error.
 			chars_to_extract = (int)source_length;
 		return output_var->Assign(ARG2, (VarSizeType)(source_length - chars_to_extract)); // It already displayed any error.
@@ -10159,7 +10165,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	case ACT_STRINGUPPER:
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
-		space_needed = (VarSizeType)(strlen(ARG2) + 1);
+		space_needed = (VarSizeType)(ArgLength(2) + 1);
 		// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
 		// this call will set up the clipboard for writing:
 		if (output_var->Assign(NULL, space_needed - 1) != OK)
@@ -10177,16 +10183,9 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	case ACT_STRINGLEN:
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
-		// Since ARG2 can be a reserved variable whose contents does not have an accurate
-		// Var::mLength member, strlen() is always called explicitly rather than just
-		// returning mLength.  Another reason to call strlen explicitly is for a case such
-		// as StringLen, OutputVar, %InputVar%, where InputVar contains the name of the
-		// variable to be checked.  ExpandArgs() has already taken care of resolving that,
-		// so the only way to avoid strlen() would be to avoid the call to ExpandArgs()
-		// in ExecUntil(), and instead resolve the variable name here directly.
-		return output_var->Assign((__int64)(mArgc > 1 && sArgVar[1] && sArgVar[1]->IsBinaryClip()
+		return output_var->Assign((__int64)(sArgVar[1] && sArgVar[1]->IsBinaryClip() // Load-time validation has ensured mArgc > 1.
 			? sArgVar[1]->Length() + 1 // +1 to include the entire 4-byte terminator, which seems best in this case.
-			: strlen(ARG2)));
+			: ArgLength(2)));
 		// The above must be kept in sync with the StringLen() function elsewhere.
 
 	case ACT_STRINGGETPOS:
@@ -10214,7 +10213,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 				int offset = ATOI(ARG5); // v1.0.30.03
 				if (offset < 0)
 					offset = 0;
-				size_t haystack_length = offset ? strlen(haystack) : 1; // Avoids calling strlen() if no offset, in which case length isn't needed here.
+				size_t haystack_length = offset ? ArgLength(2) : 1; // Avoids calling ArgLength() if no offset, in which case length isn't needed here.
 				if (offset < (int)haystack_length)
 				{
 					if (*arg4 == '1' || toupper(*arg4) == 'R') // Conduct the search starting at the right side, moving leftward.
@@ -10236,7 +10235,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 					{
 						// Want it to behave like in this example: If searching for the 2nd occurrence of
 						// FF in the string FFFF, it should find position 3 (the 2nd pair), not position 2:
-						size_t needle_length = strlen(needle);
+						size_t needle_length = ArgLength(3);
 						int i;
 						for (i = 1, found = haystack + offset; ; ++i, found += needle_length)
 							if (!(found = g_strstr(found, needle)) || i == occurrence_number)
@@ -10246,7 +10245,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 						pos = (int)(found - haystack);
 					// else leave pos set to its default value, -1.
 				}
-				//else offset >= strlen(haystack), so no match is possible in either left or right mode.
+				//else offset >= haystack_length, so no match is possible in either left or right mode.
 			}
 		}
 		g_ErrorLevel->Assign(pos < 0 ? ERRORLEVEL_ERROR : ERRORLEVEL_NONE);
@@ -10257,7 +10256,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	{
 		if (   !(output_var = ResolveVarOfArg(0))   )
 			return FAIL;
-		source_length = strlen(ARG2);
+		source_length = ArgLength(2);
 		space_needed = (VarSizeType)source_length + 1;  // Set default, or starting value for accumulation.
 		VarSizeType final_space_needed = space_needed;
 		bool do_replace = *ARG2 && *ARG3; // i.e. don't allow replacement of the empty string.
@@ -10273,8 +10272,8 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 			// Example: Replacing all occurrences of "a" with "abc" would be
 			// safe the way this StrReplaceAll() works (other implementations
 			// might cause on infinite loop).
-			size_t search_str_len = strlen(ARG3);
-			size_t replace_str_len = strlen(ARG4);
+			size_t search_str_len = ArgLength(3);
+			size_t replace_str_len = ArgLength(4);
 			char *found_pos;
 			for (found_pos = ARG2;;)
 			{
@@ -10307,10 +10306,9 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		if (output_var->Assign(NULL, space_needed - 1) != OK)
 			return FAIL;
 		// Fetch the text directly into the var:
-		if (space_needed == 1)
-			*output_var->Contents() = '\0';
-		else
+		if (space_needed > 1)
 			strlcpy(output_var->Contents(), ARG2, space_needed);
+		//else don't put anything into Contents() because the call to Assign() already set it up properly to be blank.
 		output_var->Length() = final_space_needed - 1;  // This will be the length after replacement is done.
 
 		// Now that we've put a copy of the Input Variable into the Output Variable,
@@ -10330,13 +10328,6 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 					, (StringCaseSenseType)g.StringCaseSense, found_count);
 			else
 				StrReplace(output_var->Contents(), ARG3, ARG4, (StringCaseSenseType)g.StringCaseSense); // Don't pass output_var->Length() because it's not up-to-date yet.
-
-		// UPDATE: This is NOT how AutoIt2 behaves, so don't do it:
-		//if (g_script.mIsAutoIt2)
-		//{
-		//	trim(output_var->Contents());  // Since this is how AutoIt2 behaves.
-		//	output_var->Length() = (VarSizeType)strlen(output_var->Contents());
-		//}
 
 		// Consider the above to have been always successful unless the below returns an error:
 		return output_var->Close();  // In case it's the clipboard.
@@ -10466,7 +10457,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 	case ACT_FILEAPPEND:
 		// Uses the read-file loop's current item filename was explicitly leave blank (i.e. not just
 		// a reference to a variable that's blank):
-		return FileAppend(ARG2, ARG1, (mArgc < 2) ? aCurrentReadFile : NULL);
+		return FileAppend(ARG2, ARG1, (mArgc < 2) ? g.mLoopReadFile : NULL);
 
 	case ACT_FILEREAD:
 		return FileRead(ARG2);
@@ -10475,7 +10466,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		return FileReadLine(ARG2, ARG3);
 
 	case ACT_FILEDELETE:
-		return FileDelete(ARG1);
+		return FileDelete();
 
 	case ACT_FILERECYCLE:
 		return FileRecycle(ARG1);
@@ -10521,7 +10512,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 
 	case ACT_FILEGETATTRIB:
 		// The specified ARG, if non-blank, takes precedence over the file-loop's file (if any):
-		#define USE_FILE_LOOP_FILE_IF_ARG_BLANK(arg) (*arg ? arg : (aCurrentFile ? aCurrentFile->cFileName : ""))
+		#define USE_FILE_LOOP_FILE_IF_ARG_BLANK(arg) (*arg ? arg : (g.mLoopFile ? g.mLoopFile->cFileName : ""))
 		return FileGetAttrib(USE_FILE_LOOP_FILE_IF_ARG_BLANK(ARG2));
 	case ACT_FILESETATTRIB:
 		FileSetAttrib(ARG1, USE_FILE_LOOP_FILE_IF_ARG_BLANK(ARG2), ConvertLoopMode(ARG3), ATOI(ARG4) == 1);
@@ -10628,8 +10619,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 				// Convert back into ft struct:
 				ft.dwLowDateTime = ul.LowPart;
 				ft.dwHighDateTime = ul.HighPart;
-				FileTimeToYYYYMMDD(buf_temp, ft, false);
-				return output_var->Assign(buf_temp);
+				return output_var->Assign(FileTimeToYYYYMMDD(buf_temp, ft, false));
 			}
 		}
 		else // The command is being used to do normal math (not date-time).
@@ -10672,11 +10662,8 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 				return output_var->Assign(ATOF(output_var->Contents()) - ATOF(ARG2));  // Overload: Assigns a double.
 			else // Non-numeric variables or values are considered to be zero for the purpose of the calculation.
 				return output_var->Assign(ATOI64(output_var->Contents()) - ATOI64(ARG2));  // Overload: Assigns an INT.
-			break;
 		}
-
-		// If above didn't return, buf_temp now has the value to store:
-		return output_var->Assign(buf_temp);
+		// All paths above return.
 
 	case ACT_MULT:
 		if (   !(output_var = ResolveVarOfArg(0))   )
@@ -10810,7 +10797,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		return TrayTip(FOUR_ARGS);
 
 	case ACT_INPUT:
-		return Input(ARG2, ARG3, ARG4);
+		return Input();
 
 	case ACT_SEND:
 	case ACT_SENDRAW:
@@ -10944,7 +10931,7 @@ inline ResultType Line::Perform(WIN32_FIND_DATA *aCurrentFile, RegItemStruct *aC
 		if (!stricmp(ARG1, "Float"))
 		{
 			// -2 to allow room for the letter 'f' and the '%' that will be added:
-			if (strlen(ARG2) >= sizeof(g.FormatFloat) - 2) // A variable that resolved to something too long.
+			if (ArgLength(2) >= sizeof(g.FormatFloat) - 2) // A variable that resolved to something too long.
 				return OK; // Seems best not to bother with a runtime error for something so rare.
 			// Make sure the formatted string wouldn't exceed the buffer size:
 			__int64 width = ATOI64(ARG2);
@@ -11894,13 +11881,13 @@ VarSizeType Script::GetLineFile(char *aBuf)
 VarSizeType Script::GetLoopFileName(char *aBuf)
 {
 	char *naked_filename;
-	if (mLoopFile)
+	if (g.mLoopFile)
 	{
 		// The loop handler already prepended the script's directory in here for us:
-		if (naked_filename = strrchr(mLoopFile->cFileName, '\\'))
+		if (naked_filename = strrchr(g.mLoopFile->cFileName, '\\'))
 			++naked_filename;
 		else // No backslash, so just make it the entire file name.
-			naked_filename = mLoopFile->cFileName;
+			naked_filename = g.mLoopFile->cFileName;
 	}
 	else
 		naked_filename = "";
@@ -11912,9 +11899,9 @@ VarSizeType Script::GetLoopFileName(char *aBuf)
 VarSizeType Script::GetLoopFileShortName(char *aBuf)
 {
 	char *short_filename = "";  // Set default.
-	if (mLoopFile)
+	if (g.mLoopFile)
 	{
-		if (   !*(short_filename = mLoopFile->cAlternateFileName)   )
+		if (   !*(short_filename = g.mLoopFile->cAlternateFileName)   )
 			// Files whose long name is shorter than the 8.3 usually don't have value stored here,
 			// so use the long name whenever a short name is unavailable for any reason (could
 			// also happen if NTFS has short-name generation disabled?)
@@ -11928,10 +11915,10 @@ VarSizeType Script::GetLoopFileShortName(char *aBuf)
 VarSizeType Script::GetLoopFileExt(char *aBuf)
 {
 	char *file_ext = "";  // Set default.
-	if (mLoopFile)
+	if (g.mLoopFile)
 	{
 		// The loop handler already prepended the script's directory in here for us:
-		if (file_ext = strrchr(mLoopFile->cFileName, '.'))
+		if (file_ext = strrchr(g.mLoopFile->cFileName, '.'))
 			++file_ext;
 		else // Reset to empty string vs. NULL.
 			file_ext = "";
@@ -11945,16 +11932,16 @@ VarSizeType Script::GetLoopFileDir(char *aBuf)
 {
 	char *file_dir = "";  // Set default.
 	char *last_backslash = NULL;
-	if (mLoopFile)
+	if (g.mLoopFile)
 	{
 		// The loop handler already prepended the script's directory in here for us.
 		// But if the loop had a relative path in its FilePattern, there might be
 		// only a relative directory here, or no directory at all if the current
 		// file is in the origin/root dir of the search:
-		if (last_backslash = strrchr(mLoopFile->cFileName, '\\'))
+		if (last_backslash = strrchr(g.mLoopFile->cFileName, '\\'))
 		{
 			*last_backslash = '\0'; // Temporarily terminate.
-			file_dir = mLoopFile->cFileName;
+			file_dir = g.mLoopFile->cFileName;
 		}
 		else // No backslash, so there is no directory in this case.
 			file_dir = "";
@@ -11975,7 +11962,7 @@ VarSizeType Script::GetLoopFileDir(char *aBuf)
 VarSizeType Script::GetLoopFileFullPath(char *aBuf)
 {
 	// The loop handler already prepended the script's directory in cFileName for us:
-	char *full_path = mLoopFile ? mLoopFile->cFileName : "";
+	char *full_path = g.mLoopFile ? g.mLoopFile->cFileName : "";
 	if (aBuf)
 		strcpy(aBuf, full_path);
 	return (VarSizeType)strlen(full_path);
@@ -11986,7 +11973,7 @@ VarSizeType Script::GetLoopFileLongPath(char *aBuf)
 	char *unused, buf[MAX_PATH];
 	char *target_buf = aBuf ? aBuf : buf;
 	*target_buf = '\0';  // Set default.
-	if (mLoopFile)
+	if (g.mLoopFile)
 	{
 		// GetFullPathName() is done in addition to ConvertFilespecToCorrectCase() for the following reasons:
 		// 1) It's currrently the only easy way to get the full path of the directory in which a file resides.
@@ -12001,7 +11988,7 @@ VarSizeType Script::GetLoopFileLongPath(char *aBuf)
 		// The below also serves to make a copy because changing the original would yield
 		// unexpected/inconsistent results in a script that retrieves the A_LoopFileFullPath
 		// but only conditionally retrieves A_LoopFileLongPath.
-		if (!GetFullPathName(mLoopFile->cFileName, MAX_PATH, target_buf, &unused))
+		if (!GetFullPathName(g.mLoopFile->cFileName, MAX_PATH, target_buf, &unused))
 			*target_buf = '\0'; // It might fail if NtfsDisable8dot3NameCreation is turned on in the registry, and possibly for other reasons.
 		else
 			// The below is called in case the loop is being used to convert filename specs that were passed
@@ -12025,9 +12012,9 @@ VarSizeType Script::GetLoopFileShortPath(char *aBuf)
 	char *target_buf = aBuf ? aBuf : buf;
 	*target_buf = '\0'; // Set default.
 	DWORD length = 0;   //
-	if (mLoopFile)
+	if (g.mLoopFile)
 		// The loop handler already prepended the script's directory in cFileName for us:
-		if (   !(length = GetShortPathName(mLoopFile->cFileName, target_buf, MAX_PATH))   )
+		if (   !(length = GetShortPathName(g.mLoopFile->cFileName, target_buf, MAX_PATH))   )
 			*target_buf = '\0'; // It might fail if NtfsDisable8dot3NameCreation is turned on in the registry, and possibly for other reasons.
 	return (VarSizeType)length;
 }
@@ -12037,8 +12024,8 @@ VarSizeType Script::GetLoopFileTimeModified(char *aBuf)
 	char buf[64];
 	char *target_buf = aBuf ? aBuf : buf;
 	*target_buf = '\0'; // Set default.
-	if (mLoopFile)
-		FileTimeToYYYYMMDD(target_buf, mLoopFile->ftLastWriteTime, true);
+	if (g.mLoopFile)
+		FileTimeToYYYYMMDD(target_buf, g.mLoopFile->ftLastWriteTime, true);
 	return (VarSizeType)strlen(target_buf);
 }
 
@@ -12047,8 +12034,8 @@ VarSizeType Script::GetLoopFileTimeCreated(char *aBuf)
 	char buf[64];
 	char *target_buf = aBuf ? aBuf : buf;
 	*target_buf = '\0'; // Set default.
-	if (mLoopFile)
-		FileTimeToYYYYMMDD(target_buf, mLoopFile->ftCreationTime, true);
+	if (g.mLoopFile)
+		FileTimeToYYYYMMDD(target_buf, g.mLoopFile->ftCreationTime, true);
 	return (VarSizeType)strlen(target_buf);
 }
 
@@ -12057,8 +12044,8 @@ VarSizeType Script::GetLoopFileTimeAccessed(char *aBuf)
 	char buf[64];
 	char *target_buf = aBuf ? aBuf : buf;
 	*target_buf = '\0'; // Set default.
-	if (mLoopFile)
-		FileTimeToYYYYMMDD(target_buf, mLoopFile->ftLastAccessTime, true);
+	if (g.mLoopFile)
+		FileTimeToYYYYMMDD(target_buf, g.mLoopFile->ftLastAccessTime, true);
 	return (VarSizeType)strlen(target_buf);
 }
 
@@ -12067,8 +12054,8 @@ VarSizeType Script::GetLoopFileAttrib(char *aBuf)
 	char buf[64];
 	char *target_buf = aBuf ? aBuf : buf;
 	*target_buf = '\0'; // Set default.
-	if (mLoopFile)
-		FileAttribToStr(target_buf, mLoopFile->dwFileAttributes);
+	if (g.mLoopFile)
+		FileAttribToStr(target_buf, g.mLoopFile->dwFileAttributes);
 	return (VarSizeType)strlen(target_buf);
 }
 
@@ -12078,7 +12065,7 @@ VarSizeType Script::GetLoopFileSize(char *aBuf, int aDivider)
 	char str[128];
 	char *target_buf = aBuf ? aBuf : str;
 	*target_buf = '\0';  // Set default.
-	if (mLoopFile)
+	if (g.mLoopFile)
 	{
 
 		// UPDATE: 64-bit ints are now standard, so the following is obsolete:
@@ -12088,10 +12075,10 @@ VarSizeType Script::GetLoopFileSize(char *aBuf, int aDivider)
 		// If a file is over 4gig, set the value to be the maximum size (-1 when
 		// expressed as a signed integer, since script variables are based entirely
 		// on 32-bit signed integers due to the use of ATOI(), etc.).
-		//sprintf(str, "%d%", mLoopFile->nFileSizeHigh ? -1 : (int)mLoopFile->nFileSizeLow);
+		//sprintf(str, "%d%", g.mLoopFile->nFileSizeHigh ? -1 : (int)g.mLoopFile->nFileSizeLow);
 		ULARGE_INTEGER ul;
-		ul.HighPart = mLoopFile->nFileSizeHigh;
-		ul.LowPart = mLoopFile->nFileSizeLow;
+		ul.HighPart = g.mLoopFile->nFileSizeHigh;
+		ul.LowPart = g.mLoopFile->nFileSizeLow;
 		ITOA64((__int64)(aDivider ? ((unsigned __int64)ul.QuadPart / aDivider) : ul.QuadPart), target_buf);
 	}
 	return (VarSizeType)strlen(target_buf);
@@ -12102,8 +12089,8 @@ VarSizeType Script::GetLoopRegType(char *aBuf)
 	char buf[MAX_PATH];
 	char *target_buf = aBuf ? aBuf : buf;
 	*target_buf = '\0'; // Set default.
-	if (mLoopRegItem)
-		Line::RegConvertValueType(target_buf, MAX_PATH, mLoopRegItem->type);
+	if (g.mLoopRegItem)
+		Line::RegConvertValueType(target_buf, MAX_PATH, g.mLoopRegItem->type);
 	return (VarSizeType)strlen(target_buf);
 }
 
@@ -12112,15 +12099,15 @@ VarSizeType Script::GetLoopRegKey(char *aBuf)
 	char buf[MAX_PATH];
 	char *target_buf = aBuf ? aBuf : buf;
 	*target_buf = '\0'; // Set default.
-	if (mLoopRegItem)
+	if (g.mLoopRegItem)
 		// Use root_key_type, not root_key (which might be a remote vs. local HKEY):
-		Line::RegConvertRootKey(target_buf, MAX_PATH, mLoopRegItem->root_key_type);
+		Line::RegConvertRootKey(target_buf, MAX_PATH, g.mLoopRegItem->root_key_type);
 	return (VarSizeType)strlen(target_buf);
 }
 
 VarSizeType Script::GetLoopRegSubKey(char *aBuf)
 {
-	char *str = mLoopRegItem ? mLoopRegItem->subkey : "";
+	char *str = g.mLoopRegItem ? g.mLoopRegItem->subkey : "";
 	if (aBuf)
 		strcpy(aBuf, str);
 	return (VarSizeType)strlen(str);
@@ -12129,7 +12116,7 @@ VarSizeType Script::GetLoopRegSubKey(char *aBuf)
 VarSizeType Script::GetLoopRegName(char *aBuf)
 {
 	// This can be either the name of a subkey or the name of a value.
-	char *str = mLoopRegItem ? mLoopRegItem->name : "";
+	char *str = g.mLoopRegItem ? g.mLoopRegItem->name : "";
 	if (aBuf)
 		strcpy(aBuf, str);
 	return (VarSizeType)strlen(str);
@@ -12142,14 +12129,14 @@ VarSizeType Script::GetLoopRegTimeModified(char *aBuf)
 	*target_buf = '\0'; // Set default.
 	// Only subkeys (not values) have a time.  In addition, Win9x doesn't support retrieval
 	// of the time (nor does it store it), so make the var blank in that case:
-	if (mLoopRegItem && mLoopRegItem->type == REG_SUBKEY && !g_os.IsWin9x())
-		FileTimeToYYYYMMDD(target_buf, mLoopRegItem->ftLastWriteTime, true);
+	if (g.mLoopRegItem && g.mLoopRegItem->type == REG_SUBKEY && !g_os.IsWin9x())
+		FileTimeToYYYYMMDD(target_buf, g.mLoopRegItem->ftLastWriteTime, true);
 	return (VarSizeType)strlen(target_buf);
 }
 
 VarSizeType Script::GetLoopReadLine(char *aBuf)
 {
-	char *str = mLoopReadFile ? mLoopReadFile->mCurrentLine : "";
+	char *str = g.mLoopReadFile ? g.mLoopReadFile->mCurrentLine : "";
 	if (aBuf)
 		strcpy(aBuf, str);
 	return (VarSizeType)strlen(str);
@@ -12157,7 +12144,7 @@ VarSizeType Script::GetLoopReadLine(char *aBuf)
 
 VarSizeType Script::GetLoopField(char *aBuf)
 {
-	char *str = mLoopField ? mLoopField : "";
+	char *str = g.mLoopField ? g.mLoopField : "";
 	if (aBuf)
 		strcpy(aBuf, str);
 	return (VarSizeType)strlen(str);
@@ -12167,7 +12154,7 @@ VarSizeType Script::GetLoopIndex(char *aBuf)
 {
 	if (!aBuf) // Probably performs better to return a conservative estimate for the first pass than to call ITOA64 for both passes.
 		return MAX_NUMBER_LENGTH;
-	return (VarSizeType)strlen(ITOA64(mLoopIteration, aBuf)); // Must return exact length when aBuf isn't NULL.
+	return (VarSizeType)strlen(ITOA64(g.mLoopIteration, aBuf)); // Must return exact length when aBuf isn't NULL.
 }
 
 
@@ -13029,12 +13016,16 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 	// Launching nothing is always a success:
 	if (!aAction || !*aAction) return OK;
 
-	if (strlen(aAction) >= LINE_SIZE) // This can happen if user runs the contents of a very large variable.
+	size_t aAction_length = strlen(aAction);
+	if (aAction_length >= LINE_SIZE) // Max length supported by CreateProcess() is 32 KB. But there hasn't been any demand to go above 16 KB, so seems little need to support it (plus it reduces risk of stack overflow).
 	{
         if (aDisplayErrors)
 			ScriptError("String too long." ERR_ABORT); // Short msg since so rare.
 		return FAIL;
 	}
+	// Declare this buf here to ensure it's in scope for the entire function, since its
+	// contents may be referred to indirectly:
+	char *parse_buf = (char *)_alloca(aAction_length + 1); // v1.0.44.14: _alloca() helps conserve stack space.
 
 	// Make sure this is set to NULL because CreateProcess() won't work if it's the empty string:
 	if (aWorkingDir && !*aWorkingDir)
@@ -13042,10 +13033,6 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 
 	#define IS_VERB(str) (   !stricmp(str, "find") || !stricmp(str, "explore") || !stricmp(str, "open")\
 		|| !stricmp(str, "edit") || !stricmp(str, "print") || !stricmp(str, "properties")   )
-
-	// Declare this buf here to ensure it's in scope for the entire function, since its
-	// contents may be referred to indirectly:
-	char parse_buf[LINE_SIZE];
 
 	// Set default items to be run by ShellExecute().  These are also used by the error
 	// reporting at the end, which is why they're initialized even if CreateProcess() works
@@ -13063,7 +13050,7 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 	else // Caller wants us to try to parse params out of aAction.
 	{
 		// Make a copy so that we can modify it (i.e. split it into action & params):
-		strlcpy(parse_buf, aAction, sizeof(parse_buf));
+		strcpy(parse_buf, aAction); // parse_buf is already known to be large enough.
 
 		// Find out the "first phrase" in the string.  This is done to support the special "find" and "explore"
 		// operations as well as minmize the chance that executable names intended by the user to be parameters
@@ -13110,7 +13097,7 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 // It's important that it finds the first occurrence of an executable extension in case there are other
 // occurrences in the parameters.  Also, .pif and .lnk are currently not considered executables for this purpose
 // since they probably don't accept parameters:
-			strlcpy(parse_buf, aAction, sizeof(parse_buf));  // Restore the original value in case it was changed.
+			strcpy(parse_buf, aAction);  // Restore the original value in case it was changed. parse_buf is already known to be large enough.
 			char *action_extension;
 			if (   !(action_extension = strcasestr(parse_buf, ".exe "))   )
 				if (   !(action_extension = strcasestr(parse_buf, ".exe\""))   )
@@ -13180,11 +13167,17 @@ ResultType Script::ActionExec(char *aAction, char *aParams, char *aWorkingDir, b
 
 		// Since CreateProcess() requires that the 2nd param be modifiable, ensure that it is
 		// (even if this is ANSI and not Unicode; it's just safer):
-		char command_line[LINE_SIZE];
+		char *command_line; // Need a new buffer other than parse_buf because parse_buf's contents may still be pointed to directly or indirectly for use further below.
 		if (aParams && *aParams)
-			snprintf(command_line, sizeof(command_line), "%s %s", aAction, aParams);
-		else
-        	strlcpy(command_line, aAction, sizeof(command_line)); // i.e. we're running the original action from caller.
+		{
+			command_line = (char *)_alloca(aAction_length + strlen(aParams) + 10); // +10 to allow room for space, terminator, and any extra chars that might get added in the future.
+			sprintf(command_line, "%s %s", aAction, aParams);
+		}
+		else // We're running the original action from caller.
+		{
+			command_line = (char *)_alloca(aAction_length + 1);
+        	strcpy(command_line, aAction); // CreateProcessW() requires modifiable string.  Although non-W version is used now, it feels safer to make it modifiable anyway.
+		}
 
 		if (use_runas)
 		{

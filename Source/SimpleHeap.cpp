@@ -24,17 +24,22 @@ SimpleHeap *SimpleHeap::sLast  = NULL;
 char *SimpleHeap::sMostRecentlyAllocated = NULL;
 UINT SimpleHeap::sBlockCount = 0;
 
-char *SimpleHeap::Malloc(char *aBuf)
+char *SimpleHeap::Malloc(char *aBuf, size_t aLength)
+// v1.0.44.14: Added aLength to improve performance in cases where callers already know the length.
+// If aLength is at its default of -1, the length will be calculated here.
+// Caller must ensture that aBuf isn't NULL.
 {
-	char *new_buf = "";
-	if (!aBuf || !*aBuf)
-		return new_buf; // Return the constant empty string to the caller.
-	if (   !(new_buf = SimpleHeap::Malloc(strlen(aBuf) + 1))   ) // +1 for the zero terminator.
+	if (!aBuf || !*aBuf) // aBuf is checked for NULL because it's not worth avoiding it for such a low-level, frequently-called function.
+		return ""; // Return the constant empty string to the caller (not aBuf itself since that might be volatile).
+	if (aLength == -1) // Caller wanted us to calculate it.  Compare directly to -1 since aLength is unsigned.
+		aLength = strlen(aBuf);
+	char *new_buf;
+	if (   !(new_buf = SimpleHeap::Malloc(aLength + 1))   ) // +1 for the zero terminator.
 	{
 		g_script.ScriptError(ERR_OUTOFMEM, aBuf);
-		return NULL;
+		return NULL; // Callers may rely on NULL vs. "" being returned in the event of failure.
 	}
-	strcpy(new_buf, aBuf);
+	memcpy(new_buf, aBuf, aLength + 1); // memcpy() typically benchmarks slightly faster than strcpy().
 	return new_buf;
 }
 

@@ -1185,7 +1185,7 @@ ResultType Line::GuiControlGet(char *aCommand, char *aControlID, char *aParam3)
 /////////////////
 // Static members
 /////////////////
-FontType GuiType::sFont[MAX_GUI_FONTS]; // Not intialized to help catch bugs.
+FontType *GuiType::sFont = NULL; // An array of structs, allocated upon first use.
 int GuiType::sFontCount = 0;
 int GuiType::sGuiCount = 0;
 HWND GuiType::sTreeWithEditInProgress = NULL;
@@ -6618,7 +6618,11 @@ int GuiType::FindOrCreateFont(char *aOptions, char *aFontName, FontType *aFounda
 		// If not, we create it here:
 		if (!sFontCount)
 		{
-			// Otherwise, for simplifying other code sections, create an entry in the array for the default font:
+			// For simplifying other code sections, create an entry in the array for the default font
+			// (GUI constructor relies on at least one font existing in the array).
+			if (!sFont) // v1.0.44.14: Created upon first use to conserve ~14 KB memory in non-GUI scripts.
+				if (   !(sFont = (FontType *)malloc(sizeof(FontType) * MAX_GUI_FONTS))   )
+					g_script.ExitApp(EXIT_CRITICAL, ERR_OUTOFMEM); // Since this condition is so rare, just abort to avoid the need to add extra logic in several places to detect a failed/NULL array.
 			// Doesn't seem likely that DEFAULT_GUI_FONT face/size will change while a script is running,
 			// or even while the system is running for that matter.  I think it's always an 8 or 9 point
 			// font regardless of desktop's appearance/theme settings.
@@ -6629,7 +6633,7 @@ int GuiType::FindOrCreateFont(char *aOptions, char *aFontName, FontType *aFounda
 			// Get attributes of DEFAULT_GUI_FONT (name, size, etc.)
 			hdc = GetDC(HWND_DESKTOP);
 			HFONT hfont_old = (HFONT)SelectObject(hdc, sFont[sFontCount].hfont);
-			GetTextFace(hdc, sizeof(sFont[sFontCount].name) - 1, sFont[sFontCount].name);
+			GetTextFace(hdc, MAX_FONT_NAME_LENGTH, sFont[sFontCount].name);
 			TEXTMETRIC tm;
 			GetTextMetrics(hdc, &tm);
 			// Convert height to points.  Use MulDiv's build-in rounding to get a more accurate result.
@@ -6665,7 +6669,7 @@ int GuiType::FindOrCreateFont(char *aOptions, char *aFontName, FontType *aFounda
 	// The caller must ensure that mCurrentFontIndex array element exists:
 	FontType font = *aFoundationFont;
 	if (*aFontName)
-		strlcpy(font.name, aFontName, sizeof(font.name));
+		strlcpy(font.name, aFontName, MAX_FONT_NAME_LENGTH+1);
 	COLORREF color = CLR_NONE; // Because we want to treat CLR_DEFAULT as a real color.
 
 	// Temp vars:
@@ -8925,7 +8929,7 @@ int CALLBACK LV_GeneralSort(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort)
 
 	// v1.0.44.12: Testing shows that LVM_GETITEMW automatically converts the ANSI contents of our ListView
 	// into Unicode, which is nice because it avoids the overhead and code size of having to call
-	// MultiByteToWideChar(), along with the extra/temp buffers it requires to receive the wide version.
+	// ToWideChar(), along with the extra/temp buffers it requires to receive the wide version.
 	UINT msg_lvm_getitem = (lvs.col.case_sensitive == SCS_INSENSITIVE_LOGICAL && lvs.col.type == LV_COL_TEXT)
 		? LVM_GETITEMW : LVM_GETITEM; // Both items above are checked so that SCS_INSENSITIVE_LOGICAL can be effect even for non-text columns because it allows a column to be later changed to TEXT and retain its "logical-sort" setting.
 	// NOTE: It's safe to send a LVITEM struct rather than an LVITEMW with the LVM_GETITEMW message because

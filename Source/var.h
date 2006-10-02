@@ -25,7 +25,7 @@ EXTERN_CLIPBOARD;
 
 #define MAX_ALLOC_SIMPLE 64  // Do not decrease this much since it is used for the sizing of some built-in variables.
 #define SMALL_STRING_LENGTH (MAX_ALLOC_SIMPLE - 1)  // The largest string that can fit in the above.
-#define DEREF_BUF_EXPAND_INCREMENT (32 * 1024)
+#define DEREF_BUF_EXPAND_INCREMENT (32 * 1024) // 32 seems to work well, so might not be ever a good enough reason to ever increase it.
 #define ERRORLEVEL_NONE "0"
 #define ERRORLEVEL_ERROR "1"
 #define ERRORLEVEL_ERROR2 "2"
@@ -124,7 +124,20 @@ public:
 	// Testing shows that due to data alignment, keeping mType adjacent to the other less-than-4-size member
 	// above it reduces size of each object by 4 bytes.
 	char *mName;    // The name of the var.
-	static char sEmptyString[1]; // A special, non-constant memory area for empty variables.
+
+	// sEmptyString is a special *writable* memory area for empty variables (those with zero capacity).
+	// Although making it writable does make buffer overflows difficult to detect and analyze (since they
+	// tend to corrupt the program's static memory pool), the advantages in maintainability and robustness
+	// see to far outweigh that.  For example, it avoids having to constantly think about whether
+	// *Contents()='\0' is safe. The sheer number of places that's avoided is a great relief, and it also
+	// cuts down on code size due to not having to always check Capacity() and/or create more functions to
+	// protect from writing to read-only strings, which would hurt performance.
+	// The biggest offender of buffer overflow in sEmptyString is DllCall, which happens most frequently
+	// when a script forgets to call VarSetCapacity before psssing a buffer to some function that writes a
+	// string to it.  That drawback has been addressed by passing the read-only empty string in place of
+	// sEmptyString in DllCall(), which forces an exception to occur immediately, which is caught by the
+	// exception handler there.
+	static char sEmptyString[1]; // See above.
 
 
 	void Backup(VarBkp &aVarBkp)
@@ -151,11 +164,11 @@ public:
 		// this variable (or formal parameter) to be given a new value in the future:
 		if (mAttrib & VAR_ATTRIB_STATIC) // By definition, static variables retain their contents between calls.
 			return;
-		mContents = sEmptyString;
+		mCapacity = 0;             // Invariant: Anyone setting mCapacity to 0 must also set
+		mContents = sEmptyString;  // mContents to the empty string.
 		if (mType != VAR_ALIAS) // Fix for v1.0.42.07: Don't reset mLength if the other member of the union is in effect.
 			mLength = 0;
-		mCapacity = 0;
-		mHowAllocated = ALLOC_MALLOC;
+		mHowAllocated = ALLOC_MALLOC; // Never NONE because that would permit SIMPLE. See comments above.
 		mAttrib &= ~VAR_ATTRIB_BINARY_CLIP;  // But the VAR_ATTRIB_PARAM/STATIC flags are unaltered.
 	}
 
@@ -193,14 +206,13 @@ public:
 	ResultType Assign(__int64 aValueToAssign);
 	//ResultType Assign(unsigned __int64 aValueToAssign);
 	ResultType Assign(double aValueToAssign);
-	ResultType Assign(char *aBuf = NULL, VarSizeType aLength = VARSIZE_MAX, bool aTrimIt = false
-		, bool aExactSize = false, bool aObeyMaxMem = true);
+	ResultType Assign(char *aBuf = NULL, VarSizeType aLength = VARSIZE_MAX, bool aExactSize = false, bool aObeyMaxMem = true);
 	VarSizeType Get(char *aBuf = NULL);
 
 	// Not an enum so that it can be global more easily:
 	#define VAR_ALWAYS_FREE                0 // This item and the next must be first and numerically adjacent to
 	#define VAR_ALWAYS_FREE_EXCLUDE_STATIC 1 // each other so that VAR_ALWAYS_FREE_LAST covers only them.
-	#define VAR_ALWAYS_FREE_LAST           2 // Never actually passed as a parameter, just a placeholder.
+	#define VAR_ALWAYS_FREE_LAST           2 // Never actually passed as a parameter, just a placeholder (see above comment).
 	#define VAR_NEVER_FREE                 3
 	#define VAR_FREE_IF_LARGE              4
 	void Free(int aWhenToFree = VAR_ALWAYS_FREE, bool aExcludeAliases = false);
@@ -217,12 +229,14 @@ public:
 	// Translates this var into its text equivalent, putting the result into aBuf andp
 	// returning the position in aBuf of its new string terminator.
 	{
-		if (mType == VAR_ALIAS) // For simplicity and reduced code size, just make a recursive call to self.
-			return mAliasFor->ToText(aBuf, aBufSize, aAppendNewline);
+		// Relies on the fact that aliases can't point to other aliases (enforced by UpdateAlias()).
+		Var &var = *(mType == VAR_ALIAS ? mAliasFor : this);
+		// v1.0.44.14: Changed it so that ByRef/Aliases report their own name rather than the target's/caller's
+		// (it seems more useful and intuitive).
 		char *aBuf_orig = aBuf;
-		aBuf += snprintf(aBuf, BUF_SPACE_REMAINING, "%s[%u of %u]: %-1.60s%s", mName
-			, mLength, mCapacity ? (mCapacity - 1) : 0  // Use -1 since it makes more sense to exclude the terminator.
-			, mContents, mLength > 60 ? "..." : "");
+		aBuf += snprintf(aBuf, BUF_SPACE_REMAINING, "%s[%u of %u]: %-1.60s%s", mName // mName not var.mName (see comment above).
+			, var.mLength, var.mCapacity ? (var.mCapacity - 1) : 0  // Use -1 since it makes more sense to exclude the terminator.
+			, var.mContents, var.mLength > 60 ? "..." : "");
 		if (aAppendNewline && BUF_SPACE_REMAINING >= 2)
 		{
 			*aBuf++ = '\r';
@@ -232,38 +246,48 @@ public:
 		return aBuf;
 	}
 
-	// These rely on the fact that currently, aliases can't point to other aliases:
 	VarTypeType Type()
 	{
+		// Relies on the fact that aliases can't point to other aliases (enforced by UpdateAlias()).
 		return (mType == VAR_ALIAS) ? mAliasFor->mType : mType;
 	}
+
 	bool IsByRef()
 	{
 		return mType < VAR_FIRST_NON_BYREF;
 	}
+
 	bool IsLocal()
 	{
-		// Callers want to know whether this variable is local, even if it's a local alias for a global:
+		// Since callers want to know whether this variable is local, even if it's a local alias for a
+		// global, don't use the method below:
+		//    return (mType == VAR_ALIAS) ? mAliasFor->mIsLocal : mIsLocal;
 		return mIsLocal;
-		//return (mType == VAR_ALIAS) ? mAliasFor->mIsLocal : mIsLocal;
 	}
+
 	bool IsBinaryClip()
 	{
+		// Relies on the fact that aliases can't point to other aliases (enforced by UpdateAlias()).
 		return (mType == VAR_ALIAS ? mAliasFor->mAttrib : mAttrib) & VAR_ATTRIB_BINARY_CLIP;
 	}
+
 	void OverwriteAttrib(VarAttribType aAttrib)
 	{
+		// Relies on the fact that aliases can't point to other aliases (enforced by UpdateAlias()).
 		if (mType == VAR_ALIAS)
 			mAliasFor->mAttrib = aAttrib;
 		else
 			mAttrib = aAttrib;
 	}
-	VarSizeType Capacity() // Capacity includes the zero terminator.
+
+	VarSizeType Capacity() // Capacity includes the zero terminator (though if capacity is zero, there will also be a zero terminator in mContents due to it being "").
 	{
+		// Relies on the fact that aliases can't point to other aliases (enforced by UpdateAlias()).
+		Var &var = *(mType == VAR_ALIAS ? mAliasFor : this);
 		// Fix for v1.0.37: Callers want the clipboard's capacity returned, if it has a capacity.  This is
 		// because Capacity() is defined as being the size available in Contents(), which for the clipboard
 		// would be a pointer to the clipboard-buffer-to-be-written (or zero if none).
-		return (mType == VAR_ALIAS) ? mAliasFor->Capacity() : (mType == VAR_CLIPBOARD ? g_clip.mCapacity : mCapacity);
+		return var.mType == VAR_CLIPBOARD ? g_clip.mCapacity : var.mCapacity;
 	}
 
 	VarSizeType &Length()
@@ -271,10 +295,10 @@ public:
 	// of most such variables aren't knowable without calling Get() on them.
 	// Returns a reference so that caller can use this function as an lvalue.
 	{
-		if (mType == VAR_ALIAS) // For simplicity and reduced code size, just make a recursive call to self.
-			return mAliasFor->Length();
-		if (mType == VAR_NORMAL)
-			return mLength;
+		// Relies on the fact that aliases can't point to other aliases (enforced by UpdateAlias()).
+		Var &var = *(mType == VAR_ALIAS ? mAliasFor : this);
+		if (var.mType == VAR_NORMAL)
+			return var.mLength;
 		// Since the length of the clipboard isn't normally tracked, we just return a
 		// temporary storage area for the caller to use.  Note: This approach is probably
 		// not thread-safe, but currently there's only one thread so it's not an issue.
@@ -286,26 +310,28 @@ public:
 
 	char *Contents()
 	{
-		if (mType == VAR_ALIAS) // For simplicity and reduced code size, just make a recursive call to self.
-			return mAliasFor->Contents();
-		if (mType == VAR_NORMAL)
-			return mContents;
-		if (mType == VAR_CLIPBOARD)
+		// Relies on the fact that aliases can't point to other aliases (enforced by UpdateAlias()).
+		Var &var = *(mType == VAR_ALIAS ? mAliasFor : this);
+		if (var.mType == VAR_NORMAL)
+			return var.mContents;
+		if (var.mType == VAR_CLIPBOARD)
 			// The returned value will be a writable mem area if clipboard is open for write.
 			// Otherwise, the clipboard will be opened physically, if it isn't already, and
 			// a pointer to its contents returned to the caller:
 			return g_clip.Contents();
-		return ""; // For reserved vars (but this method should probably never be called for them).
+		return sEmptyString; // For reserved vars (but this method should probably never be called for them).
 	}
 
 	Var *ResolveAlias()
 	{
+		// Relies on the fact that aliases can't point to other aliases (enforced by UpdateAlias()).
 		return (mType == VAR_ALIAS) ? mAliasFor : this; // Return target if it's an alias, or itself if not.
 	}
 
 	void UpdateAlias(Var *aTargetVar)
 	// Caller must ensure that this variable is VAR_BYREF or VAR_ALIAS and that aTargetVar isn't NULL.
 	{
+		// BELOW IS THE MEANS BY WHICH ALIASES AREN'T ALLOWED TO POINT TO OTHER ALIASES, ONLY DIRECTLY TO THE TARGET VAR.
 		// Resolve aliases-to-aliases for performance and to increase the expectation of
 		// reliability since a chain of aliases-to-aliases might break if an alias in
 		// the middle is ever allowed to revert to a non-alias (or gets deleted).
@@ -330,35 +356,26 @@ public:
 
 	ResultType Close(bool aIsBinaryClip = false)
 	{
-		if (mType == VAR_ALIAS) // For simplicity and reduced code size, just make a recursive call to self.
-			return mAliasFor->Close(aIsBinaryClip);
-		if (mType == VAR_CLIPBOARD && g_clip.IsReadyForWrite())
+		// Relies on the fact that aliases can't point to other aliases (enforced by UpdateAlias()).
+		Var &var = *(mType == VAR_ALIAS ? mAliasFor : this);
+		if (var.mType == VAR_CLIPBOARD && g_clip.IsReadyForWrite())
 			return g_clip.Commit(); // Writes the new clipboard contents to the clipboard and closes it.
 		// The binary-clip attribute is also reset here for cases where a caller uses a variable without
 		// having called Assign() to resize it first, which can happen if the variable's capacity is already
 		// sufficient to hold the desired contents.
 		if (aIsBinaryClip)
-			mAttrib |= VAR_ATTRIB_BINARY_CLIP;
+			var.mAttrib |= VAR_ATTRIB_BINARY_CLIP;
 		else
-			mAttrib &= ~VAR_ATTRIB_BINARY_CLIP;
+			var.mAttrib &= ~VAR_ATTRIB_BINARY_CLIP;
 		return OK; // In all other cases.
 	}
 
+	// Constructor:
 	Var(char *aVarName, VarTypeType aType, bool aIsLocal)  // Not currently needed (e.g. for VAR_ATTRIB_PARAM): , VarAttribType aAttrib = 0)  [also would need to change mAttrib(aAttrib)] in initializier]
 		// The caller must ensure that aVarName is non-null.
-		// This initial empty-string value may be relied upon (i.e. don't make it NULL).
-		// In addition, it's safer to make it modifiable rather than a constant such
-		// as "" so that any caller that accesses the memory via Contents() can write
-		// to it (e.g. it can do *buf = '\0').  In some sense this is a little scary
-		// because if anything misbehaves and sets this value to be something other
-		// than '\0', all empty variables will suddenly take on the wrong value and
-		// there will suddenly be a lot of buffer overflows probably, since those
-		// variables will no longer be terminated.  However, you could argue that this
-		// is a good thing because any bug that ever does that is more likely to cause
-		// a crash right away rather than go silently undetected for a long time:
-		: mContents(sEmptyString)
+		: mCapacity(0), mContents(sEmptyString) // Invariant: Anyone setting mCapacity to 0 must also set mContents to the empty string.
 		, mLength(0) // This also initializes mAliasFor within the same union.
-		, mCapacity(0), mHowAllocated(ALLOC_NONE)
+		, mHowAllocated(ALLOC_NONE)
 		, mAttrib(0), mIsLocal(aIsLocal), mType(aType)
 		, mName(aVarName) // Caller gave us a pointer to dynamic memory for this (or static in the case of ResolveVarOfArg()).
 	{}
