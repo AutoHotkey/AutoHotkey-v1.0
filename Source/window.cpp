@@ -682,16 +682,41 @@ BOOL CALLBACK EnumChildFind(HWND aWnd, LPARAM lParam)
 
 	// For compatibility with AutoIt v2, strstr() is always used for control/child text elements.
 
-	// This first check takes precedence over the next, so it is done first:
-	if (*ws.mCriterionExcludeText && strstr(win_text, ws.mCriterionExcludeText))
-		// Since this child window contains the specified ExcludeText anywhere inside its text,
-		// the parent window is always a non-match.
-		return FALSE; // Parent can't be a match, so stop searching its children.
-	if (!*ws.mCriterionText || strstr(win_text, ws.mCriterionText)) // Match found.
+	// EXCLUDE-TEXT: The following check takes precedence over the next, so it's done first:
+	if (*ws.mCriterionExcludeText) // For performance, avoid doing the checks below when blank.
+	{
+		if (ws.mSettings->TitleMatchMode == FIND_REGEX)
+		{
+			if (RegExMatch(win_text, ws.mCriterionExcludeText))
+				return FALSE; // Parent can't be a match, so stop searching its children.
+		}
+		else // For backward compatibility, all modes other than RegEx behave as follows.
+			if (strstr(win_text, ws.mCriterionExcludeText))
+				// Since this child window contains the specified ExcludeText anywhere inside its text,
+				// the parent window is always a non-match.
+				return FALSE; // Parent can't be a match, so stop searching its children.
+	}
+
+	// WIN-TEXT:
+	if (!*ws.mCriterionText) // Match always found in this case. This check is for performance: it avoids doing the checks below when not needed, especially RegEx. Note: It's possible for mCriterionText to be blank, at least when mCriterionExcludeText isn't blank.
 	{
 		ws.mFoundChild = aWnd;
 		return FALSE; // Match found, so stop searching.
 	}
+	if (ws.mSettings->TitleMatchMode == FIND_REGEX)
+	{
+		if (RegExMatch(win_text, ws.mCriterionText)) // Match found.
+		{
+			ws.mFoundChild = aWnd;
+			return FALSE; // Match found, so stop searching.
+		}
+	}
+	else // For backward compatibility, all modes other than RegEx behave as follows.
+		if (strstr(win_text, ws.mCriterionText)) // Match found.
+		{
+			ws.mFoundChild = aWnd;
+			return FALSE; // Match found, so stop searching.
+		}
 
 	// UPDATE to the below: The MSDN docs state that EnumChildWindows() already handles the
 	// recursion for us: "If a child window has created child windows of its own,
@@ -1524,6 +1549,10 @@ ResultType WindowSearch::SetCriteria(global_struct &aSettings, char *aTitle, cha
 		{
 			cp += 5;
 			mCriteria |= CRITERION_CLASS;
+			// In the following line, it may have been preferable to skip only zero or one spaces rather than
+			// calling omit_leading_whitespace().  But now this should probably be kept for backward compatibility.
+			// Besides, even if it's possible for a class name to start with a space, a RegEx dot or other symbol
+			// can be used to match it via SetTitleMatchMode RegEx.
 			strlcpy(mCriterionClass, omit_leading_whitespace(cp), sizeof(mCriterionClass)); // Copy all of the remaining string to simplify the below.
 			for (cp = mCriterionClass; cp = strstr(cp, "ahk_"); cp += 4)
 			{
@@ -1628,16 +1657,20 @@ HWND WindowSearch::IsMatch(bool aInvert)
 	if (!mCandidateParent || !mCriteria) // Nothing to check, so no match.
 		return NULL;
 
-	if ((mCriteria & CRITERION_TITLE) && *mCriterionTitle)
+	if ((mCriteria & CRITERION_TITLE) && *mCriterionTitle) // For performance, avoid the calls below (especially RegEx) when mCriterionTitle is blank (assuming it's even possible for it to be blank under these conditions).
 	{
 		switch(mSettings->TitleMatchMode)
 		{
 		case FIND_ANYWHERE:
-			if (!strstr(mCandidateTitle, mCriterionTitle))
+			if (!strstr(mCandidateTitle, mCriterionTitle)) // Suitable even if mCriterionTitle is blank, though that's already ruled out above.
 				return NULL;
 			break;
 		case FIND_IN_LEADING_PART:
-			if (strncmp(mCandidateTitle, mCriterionTitle, mCriterionTitleLength))
+			if (strncmp(mCandidateTitle, mCriterionTitle, mCriterionTitleLength)) // Suitable even if mCriterionTitle is blank, though that's already ruled out above. If it were possible, mCriterionTitleLength would be 0 and thus strncmp would yield 0 to indicate "strings are equal".
+				return NULL;
+			break;
+		case FIND_REGEX:
+			if (!RegExMatch(mCandidateTitle, mCriterionTitle))
 				return NULL;
 			break;
 		default: // Exact match.
@@ -1647,9 +1680,18 @@ HWND WindowSearch::IsMatch(bool aInvert)
 		// If above didn't return, it's a match so far so continue onward to the other checks.
 	}
 
-	if ((mCriteria & CRITERION_CLASS) && strcmp(mCandidateClass, mCriterionClass)) // Doesn't match required class name.
-		return NULL;
-	//else it's a match so far, but continue onward in case there are other criteria.
+	if (mCriteria & CRITERION_CLASS) // mCriterionClass is probably always non-blank when CRITERION_CLASS is present (harmless even if it isn't), so *mCriterionClass isn't checked.
+	{
+		if (mSettings->TitleMatchMode == FIND_REGEX)
+		{
+			if (!RegExMatch(mCandidateClass, mCriterionClass))
+				return NULL;
+		}
+		else // For backward compatibility, all other modes use exact-match for Class.
+			if (strcmp(mCandidateClass, mCriterionClass)) // Doesn't match the required class name.
+				return NULL;
+		// If nothing above returned, it's a match so far so continue onward to the other checks.
+	}
 
 	// For the following, mCriterionPID would already be filled in, though it might be an explicitly specified zero.
 	if ((mCriteria & CRITERION_PID) && mCandidatePID != mCriterionPID) // Doesn't match required PID.
@@ -1687,6 +1729,10 @@ HWND WindowSearch::IsMatch(bool aInvert)
 			break;
 		case FIND_IN_LEADING_PART:
 			if (!strncmp(mCandidateTitle, mCriterionExcludeTitle, mCriterionExcludeTitleLength))
+				return NULL;
+			break;
+		case FIND_REGEX:
+			if (RegExMatch(mCandidateTitle, mCriterionExcludeTitle))
 				return NULL;
 			break;
 		default: // Exact match.

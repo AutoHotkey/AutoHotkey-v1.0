@@ -820,220 +820,368 @@ ret0:
 
 
 
-char *StrReplace(char *aBuf, char *aOld, char *aNew, StringCaseSenseType aStringCaseSense)
-// Replaces first occurrence of aOld with aNew in string aBuf.  Caller must ensure that
-// all parameters are non-NULL (though they can be the empty string).  It must also ensure that
-// aBuf has enough allocated space for the replacement since no check is made for this.
-// Finally, aOld/aNew should not be inside the same memory area as aBuf.
-// The empty string ("") is found at the beginning of every string.
-// Returns NULL if aOld was not found.  Otherwise, returns address of first location
-// behind where aNew was inserted.  This is useful for multiple replacements (though performance
-// would be bad since length of old/new and Buf has to be recalculated with strlen() for each
-// call, rather than just once for all calls).
+UINT StrReplace(char *aHaystack, char *aOld, char *aNew, StringCaseSenseType aStringCaseSense
+	, UINT aLimit, size_t aSizeLimit, char **aDest, size_t *aHaystackLength)
+// Replaces all (or aLimit) occurrences of aOld with aNew in aHaystack.
+// On success, it returns the number of replacements done (0 if none).  On failure (out of memory), it returns 0
+// (and if aDest isn't NULL, it also sets *aDest to NULL on failure).
+//
+// PARAMETERS:
+// - aLimit: Specify UINT_MAX to have no restriction on the number of replacements.  Otherwise, specify a number >=0.
+// - aSizeLimit: Specify -1 to assume that aHaystack has enough capacity for any mode #1 replacement. Otherwise,
+//   specify the size limit (in either mode 1 or 2), but it must be >= length of aHaystack (simplifies the code).
+// - aDest: If NULL, the function will operate in mode #1.  Otherwise, it uses mode #2 (see further below).
+// - aHaystackLength: If it isn't NULL, *aHaystackLength must be the length of aHaystack.  HOWEVER, *aHaystackLength
+//   is then changed here to be the length of the result string so that caller can use it to improve performance.
+//
+// MODE 1 (when aDest==NULL): aHaystack is used as both the source and the destination (sometimes temporary memory
+// is used for performance, but it's freed afterward and so transparent to the caller).
+// When it passes in -1 for aSizeLimit (the deafult), caller must ensure that aHaystack has enough capacity to hold
+// the new/replaced result.  When non-NULL, aSizeLimit will be enforced by limiting the number of replacements to
+// the available memory (i.e. any remamining replacements are simply not done and that part of haystack is unaltered).
+//
+// MODE 2 (when aDest!=NULL): If zero replacements are needed, we set *aDest to be aHaystack to indicate that no
+// new memory was allocated.  Otherwise, we store in *aDest the address of the new memory that holds the result.
+// - The caller is responsible for any new memory in *aDest (freeing it, etc.)
+// - The initial value of *aDest doesn't matter.
+// - The contents of aHaystack isn't altered, not even if aOld_length==aNew_length (some callers rely on this).
+//
+// v1.0.45: This function was heavily revised to improve performance and flexibility.  It has also made
+// two other/related StrReplace() functions obsolete.  Also, the code has been simplified to avoid doing
+// a first pass through haystack to find out exactly how many replacements there are because that step
+// nearly doubles the time required for the entire operation (in most cases).  Its benefit was mainly in
+// memory savings and avoidance of any reallocs since the initial alloc was always exactly right; however,
+// testing shows that one or two reallocs are generally much quicker than doing the size-calculation phase
+// because extra alloc'ing & memcpy'ing is much faster than an extra search through haystack for all the matches.
+// Furthermore, the new approach minimizes reallocs by using smart prediction.  It also shrinks the result memory
+// via _expand() to avoid giving the caller back more memory than it needs.  These optimizations seem to make
+// the new approach better than the old one in every way, but especially performance.
 {
-	// Nothing to do if aBuf is blank.  If aOld is blank, that is not supported because it
-	// would be an infinite loop.
-	if (!*aBuf || !*aOld)
-		return NULL;
-	char *found = strstr2(aBuf, aOld, aStringCaseSense);
-	if (!found)
-		return NULL;
-	size_t aOld_length = strlen(aOld);
-	size_t aNew_length = strlen(aNew);
-	char *the_part_of_aBuf_to_remain_unaltered = found + aNew_length;
-	// The check below can greatly improve performance if old and new strings happen to be same length
-	// (especially if this function is called thousands of times in a loop to replace multiple strings):
-	if (aOld_length != aNew_length)
-		// Since new string can't fit exactly in place of old string, adjust the target area to
-		// accept exactly the right length so that the rest of the string stays unaltered:
-		memmove(the_part_of_aBuf_to_remain_unaltered, found + aOld_length, strlen(found + aOld_length) + 1); // +1 to include the terminator.
-	memcpy(found, aNew, aNew_length); // Perform the replacement.
-	return the_part_of_aBuf_to_remain_unaltered;
-}
+	#define REPLACEMENT_MODE2 aDest  // For readability.
 
+	// THINGS TO SET NOW IN CASE OF EARLY RETURN OR GOTO:
+	// Set up the input/output lengths:
+	size_t haystack_length = aHaystackLength ? *aHaystackLength : strlen(aHaystack); // For performance, use caller's length if it was provided.
+	size_t length_temp; // Just a placeholder/memory location used by the alias below.
+	size_t &result_length = aHaystackLength ? *aHaystackLength : length_temp; // Make an alias for convenience and maintainability (if this is an output parameter for our caller, this step takes care that in advance).
+	// Set up the output buffer:
+	char *result_temp; // In mode #1, holds temporary memory that is freed before we return.
+	char *&result = aDest ? *aDest : result_temp; // Make an alias for convenience and maintainability (if aDest is non-NULL, it's an output parameter for our caller, and this step takes care that in advance).
+	result = NULL;     // It's allocated only upon first use to avoid a potentially massive allocation that might
+	result_length = 0; // be wasted and cause swapping (not to mention that we'll have better ability to estimate the correct total size after the first replacement is discovered).
+	size_t result_size = 0;
+	// Variables used by both replacement methods.
+	char *src, *match_pos;
+	// END OF INITIAL SETUP.
 
+	// From now on, result_length and result should be kept up-to-date because they may have been set up
+	// as output parameters above.
 
-char *StrReplaceAll(char *aBuf, char *aOld, char *aNew, bool aAlwaysUseSlow, StringCaseSenseType aStringCaseSense
-	, DWORD aReplacementsNeeded)
-// Replaces all occurrences of aOld with aNew inside aBuf, and returns aBuf.
-{
-	// Nothing to do if aBuf is blank.  If aOld is blank, that is not supported because it
-	// would be an infinite loop.
-	if (!*aBuf || !*aOld)
-		return aBuf;
-	// When the replacement string is equal in length to the search string, StrReplace()
-	// already contains an enhancement to avoid the memmove() (though some implementations of
-	// memmove() might already check if source and dest are the same and if so, return
-	// immediately, in which case the extra check wouldn't be needed).
-	// When replacement string is longer than search string, I don't know if there is
-	// a simple algorithm to avoid a memmove() for each replacement.   One obvious way would
-	// be to allocate a temporary memory area and build an entirely new string in place of
-	// the old one.  Obviously that would only be better if the system had the memory to spare
-	// and didn't have to swap to allocate it.  So such an algorithm should probably be offered
-	// only as an option (in the future), especially since it wouldn't help performance much
-	// unless many replacements are needed within the target string.
-	size_t aOld_length = strlen(aOld);
-	size_t aNew_length = strlen(aNew);
-	size_t aBuf_length = strlen(aBuf);
-	if (aOld_length == aNew_length)
-		aAlwaysUseSlow = true; // Use slow mode because it's just as fast in this case, while avoiding the extra memory allocation.
-
-	if (!aAlwaysUseSlow) // Auto-detect whether to use fast mode.
+	if (!(*aHaystack && *aOld))
 	{
-		// The fast method is much faster when many replacements are needed because it avoids
-		// a memmove() to shift the remainder of the buffer up against the area of memory that
-		// will be replaced (which for the slow method is done for every replacement).  The savings
-		// can be enormous if aBuf is very large, assuming the system has the memory to spare.
-		char *cp, *dp;
-		UINT replacements_needed;
-		if (aReplacementsNeeded < UINT_MAX) // Caller provided the count to avoid us having to calculate it again.
-			replacements_needed = aReplacementsNeeded;
-		else
-			for (replacements_needed = 0, cp = aBuf; cp = strstr2(cp, aOld, aStringCaseSense); cp += aOld_length)
-				++replacements_needed;
-		if (!replacements_needed) // aBuf already contains the correct contents.
-			return aBuf;
-		// Fall back to the slow method unless the fast method's performance gain is worth the risk of
-		// stressing the system (in case it's low on memory).
-		// Testing shows that the below cutoffs seem approximately correct based on the fact that the
-		// slow method's execution time is proportional to both aBuf_length and replacements_needed.
-		// By contrast, the fast method takes about the same amount of time for a given aBuf_length
-		// regardless of how many replacements are needed.  Here are the test results (not rigorously
-		// conducted -- they were done only to get a idea of the shape of the curve):
-		//1415 KB with 5 evenly spaced replacements: slow and fast are about the same speed.
-		//2800 KB with 10 replacements: 110ms vs. 90ms
-		//5600 KB with 10 replacements: 220ms vs. 175ms
-		//Same but with 20 replacements: 335 vs. 195 (at this point, the slow method is taking more than 50% longer)
-		//Same but with 40 replacements: 525 vs. 185 (fast method is more than twice as fast)
-		//475KB with 6200 replacements: 3055 vs. 25  (the difference becomes dramatic for thousands of replacements).
-		//150 KB with 2000 replacements: 91 vs. 0ms
-		//293 KB with 100,000 replacements: 14000 vs. 30
-		//146 KB with 50,000 replacements: 2954 vs 20
-		//30KB with 10000 replacements: 60 vs. 0
-		if (replacements_needed > 20 && aBuf_length > 5000) // Also fall back to slow method if buffer is of trivial size, since there isn't much difference in that case.
-		{
-			// Allocate the memory:
-			size_t buf_size = aBuf_length + replacements_needed*(aNew_length - aOld_length) + 1; // +1 for zero terminator.
-			char *buf = (char *)malloc(buf_size);
-			if (buf)
-			{
-				// Perform the replacement:
-				cp = aBuf; // Source.
-				dp = buf;  // Destination.
-				size_t chars_to_copy;
-				for (char *found = aBuf; found = strstr2(found, aOld, aStringCaseSense);)
-				{
-					// memcpy() might contain optimizations that make it faster than a char-moving loop such as memmove().
-					// This is because memmove() or a simple *dp++ = *cp++ loop of our own allows the source and dest
-					// to overlap.  Since they don't in this case, a CPU instruction might be used to copy a block of
-					// memory much more quickly:
-					chars_to_copy = found - cp;
-					if (chars_to_copy) // Copy the part of the source string up to the position of this match.
-					{
-						memcpy(dp, cp, chars_to_copy);
-						dp += chars_to_copy;
-					}
-					if (aNew_length) // Insert the replacement string in place of the old string.
-					{
-						memcpy(dp, aNew, aNew_length);
-						dp += aNew_length;
-					}
-					//else omit it altogether; that is, replace every aOld with the empty string.
-
-					// Set up "found" for the next search to be done by the for-loop.  For consistency, like
-					// the "slow" method, overlapping matches are not detected.  For example, the replacement
-					// of all occurrences of ".." with ". ." would transform an aBuf of "..." into ". ..",
-					// not ". . .":
-					found += aOld_length;
-					cp = found; // Since "found" is about to be altered by strstr, cp serves as a placeholder for use by the next iteration.
-				}
-
-				// Fixed for v1.0.25.11: Copy the remaining characters after the last replacement (if any).
-				// Due to the check above, it is known there was more than zero replacements.
-				memcpy(dp, cp, aBuf_length - (cp - aBuf) + 1); // Should perform better than strcpy(). +1 to include the terminator.
-
-				// Copy the result back into the caller's original buf (with added complexity by the caller, this step
-				// could be avoided):
-				memcpy(aBuf, buf, buf_size); // Include the zero terminator. Caller has already ensured that aBuf is large enough.
-				free(buf);
-				return aBuf;
-			}
-			//else not enough memory, so fall through to the slow method below.
-		}
-		// else only 1 replacement needed, so the slow mode should be about the same speed while requiring less memory.
+		// Nothing to do if aHaystack is blank. If aOld is blank, that is not supported because it would be an
+		// infinite loop. This policy is now largely due to backward compatibility because some other policy
+		// may have been better.
+		result = aHaystack; // Return unaltered string to caller in its output paremeter (result is an alias for *aDest).
+		result_length = haystack_length; // This is an alias for an output parameter, so update it for caller.
+		return 0; // Report "no replacements".
 	}
 
-	// Since the above didn't return, either the slow method was originally in effect or it's being
-	// used because the fast method could not allocate enough memory or isn't worth the cost.
+	size_t aOld_length = strlen(aOld);
+	size_t aNew_length = strlen(aNew);
+	int length_delta = (int)(aNew_length - aOld_length); // Cast to int to avoid loss of unsigned. A negative delta means the replacment substring is smaller than what it's replacing.
+
+	if (aSizeLimit != -1) // Caller provided a size *restriction*, so if necessary reduce aLimit to stay within bounds.  Compare directly to -1 due to unsigned.
+	{
+		int extra_room = (int)(aSizeLimit-1 - haystack_length); // Cast to int to preserve negatives.
+		if (extra_room < 0) // Caller isn't supposed to call it this way.  To avoid having to complicate the
+			aLimit = 0;     // calculations in the else-if below, allow no replacements in this case.
+		else if (length_delta > 0) // New-str is bigger than old-str.  This is checked to avoid going negative or dividing by 0 below. A positive delta means length of new/replacement string is greater than that of what it's replacing.
+		{
+			UINT upper_limit = (UINT)(extra_room / length_delta);
+			if (aLimit > upper_limit)
+				aLimit = upper_limit;
+		}
+		//else length_delta <= 0, so there no overflow should be possible.  Leave aLimit as-is.
+	}
+
+	if (!REPLACEMENT_MODE2) // Mode #1
+	{
+		if (!length_delta // old_len==new_len, so use in-place method because it's just as fast in this case but it avoids the extra memory allocation.
+			|| haystack_length < 5000) // ...or the in-place method will likely be faster, and an earlier stage has ensured there's no risk of overflow.
+			goto in_place_method; // "Goto" to avoid annoying indentation and long IF-blocks.
+		//else continue on because the extra-memory method will usually perform better than the in-place method.
+		// The extra-memory method is much faster than the in-place method when many replacements are needed because
+		// it avoids a memmove() to shift the remainder of the buffer up against the area of memory that
+		// will be replaced (which for the in-place method is done for every replacement).  The savings
+		// can be enormous if aSource is very large, assuming the system can allocate the memory without swapping.
+	}
+	// Otherwise:
+	// Since above didn't jump to the in place method, either the extra-memory method is preferred or this is mode #2.
+	// Never use the in-place method for mode #2 because caller always wants a separate memory area used (for its
+	// purposes, the extra-memory method is probably just as fast or faster than in-place method).
+
+	// Below uses a temp var. because realloc() returns NULL on failure but leaves original block allocated.
+	// Note that if it's given a NULL pointer, realloc() does a malloc() instead.
+	char *realloc_temp;
+	#define STRREPLACE_REALLOC(size) \
+	{\
+		result_size = size;\
+		if (   !(realloc_temp = (char *)realloc(result, result_size))   )\
+			goto out_of_mem;\
+		result = realloc_temp;\
+	}
+
+	// Other variables used by the replacement loop:
+	size_t haystack_portion_length, new_result_length;
+	UINT replacement_count;
+
+	// Perform the replacement:
+	for (replacement_count = 0, src = aHaystack
+		; aLimit && (match_pos = strstr2(src, aOld, aStringCaseSense));) // Relies on short-circuit boolean order.
+	{
+		++replacement_count;
+		--aLimit;
+		haystack_portion_length = match_pos - src; // The length of the haystack section between the end of the previous match and the start of the current one.
+
+		// Using the required length calculated below, expand/realloc "result" if necessary.
+		new_result_length = result_length + haystack_portion_length + aNew_length;
+		if (new_result_length >= result_size) // Uses >= to allow room for terminator.
+			STRREPLACE_REALLOC(PredictReplacementSize(length_delta, replacement_count, aLimit, (int)haystack_length
+				, (int)new_result_length, (int)(match_pos - aHaystack))); // This will return if an alloc error occurs.
+
+		// Now that we know "result" has enough capacity, put the new text into it.  The first step
+		// is to copy over the part of haystack that appears before the match.
+		if (haystack_portion_length)
+		{
+			memcpy(result + result_length, src, haystack_portion_length);
+			result_length += haystack_portion_length;
+		}
+		// Now append the replacement string in place of the old string.
+		if (aNew_length)
+		{
+			memcpy(result + result_length, aNew, aNew_length);
+			result_length += aNew_length;
+		}
+		//else omit it altogether; i.e. replace every aOld with the empty string.
+
+		// Set up src to be the position where the next iteration will start searching.  For consistency with
+		// the in-place method, overlapping matches are not detected.  For example, the replacement
+		// of all occurrences of ".." with ". ." in "..." would produce ". ..", not ". . .":
+		src = match_pos + aOld_length; // This has two purposes: 1) Since match_pos is about to be altered by strstr, src serves as a placeholder for use by the next iteration; 2) it's also used further below.
+	}
+
+	if (!replacement_count) // No replacements were done, so optimize by keeping the original (avoids a malloc+memcpy).
+	{
+		// The following steps are appropriate for both mode #1 and #2 (for simplicity and maintainability,
+		// they're all done unconditionally even though mode #1 might not require them all).
+		result = aHaystack; // Return unaltered string to caller in its output paremeter (result is an alias for *aDest).
+		result_length = haystack_length; // This is an alias for an output parameter, so update it for caller.
+		return replacement_count;
+		// Since no memory was allocated, there's never anything to free.
+	}
+	// (Below relies only above having returned when no replacements because it assumes result!=NULL from now on.)
+
+	// Otherwise, copy the remaining characters after the last replacement (if any) (fixed for v1.0.25.11).
+	if (haystack_portion_length = haystack_length - (src - aHaystack)) // This is the remaining part of haystack that need to be copied over as-is.
+	{
+		new_result_length = result_length + haystack_portion_length;
+		if (new_result_length >= result_size) // Uses >= to allow room for terminator.
+			STRREPLACE_REALLOC(new_result_length + 1); // This will return if an alloc error occurs.
+		memcpy(result + result_length, src, haystack_portion_length); // memcpy() usually benches a little faster than strcpy().
+		result_length = new_result_length; // Remember that result_length is actually an output for our caller, so even if for no other reason, it must be kept accurate for that.
+	}
+	result[result_length] = '\0'; // Must terminate it unconditionally because other sections usually don't do it.
+
+	if (REPLACEMENT_MODE2)
+	{
+		// Since at least 80% of the time, the caller will be hanging this memory onto a variable rather than
+		// immediately freeing it, shrink the memory if there's a lot of wasted space in it (even if caller calls
+		// _msize() to determine the entire capacity, the extra capacity is seldom utilized in real-world scripts).
+		if (result_size - result_length > 1024)
+			result = (char *)_expand(result, result_length + 1); // MSDN implies that when shrinking, this won't return NULL unless something is terribly wrong (e.g. corrupted heap).  So caller probably doesn't need to worry about that.
+			// _expand() is only about 75 bytes of uncompressed code size and probably performs very quickly when shrinking.
+	}
+	else // Mode #1.
+	{
+		// Since caller didn't provide destination memory, copy the result from our temporary memory (that was used
+		// for performance) back into the caller's original buf (which has already been confirmed to be large enough).
+		memcpy(aHaystack, result, result_length + 1); // Include the zero terminator.
+		free(result); // Free the temp. mem that was used for performance.
+	}
+	return replacement_count;  // The output parameters have already been populated properly above.
+
+out_of_mem: // This can only happen with the extra-memory method above (which due to its nature can't fall back to the in-place method).
+	if (result)
+	{
+		free(result); // Must be freed in mode #1.  In mode #2, it's probably a non-terminated string (not to mention being an incomplete result), so if it ever isn't freed, it should be terminated.
+		result = NULL; // Indicate failure by setting output param for our caller (this also indicates that the memory was freed).
+	}
+	result_length = 0; // Output parameter for caller, though upon failure it shouldn't matter (just for robustness).
+	return 0;
+
+in_place_method:
+	// This method is available only to mode #1.  It should help performance for short strings such as those from
+	// ExpandExpression().
+	// This in-place method is used when the extra-memory method wouldn't be faster enough to be worth its cost
+	// for the particular strings involved here.
+	//
+	// Older comment:
 	// The below doesn't quite work when doing a simple replacement such as ".." with ". .".
 	// In the above example, "..." would be changed to ". .." rather than ". . ." as it should be.
 	// Therefore, use a less efficient, but more accurate method instead.  UPDATE: But this method
 	// can cause an infinite loop if the new string is a superset of the old string, so don't use
 	// it after all.
-	//for ( ; ptr = StrReplace(aBuf, aOld, aNew, aStringCaseSense); ); // Note that this very different from the below.
+	//for ( ; ptr = StrReplace(aHaystack, aOld, aNew, aStringCaseSense); ); // Note that this very different from the below.
 
-	// Don't call StrReplace() because its call of strlen() within the call to memmove() signficantly
-	// reduces performance (a typical replacement of \r\n with \n in an aBuf of size 2 MB is close to
-	// twice as fast due to the avoidance of a call to strlen() inside the loop).  Reproducing the code
-	// here has the additional advantage that the lengths of aOld and aNew need be calculated only once
-	// at the beginning rather than having StrReplace() do it every time, which can be a very large
-	// savings if aOld and/or aNew happen to be very long strings (unusual).
-	int length_to_add = (int)(aNew_length - aOld_length);  // Can be negative.
-	char *found, *search_area;
-	for (search_area = aBuf; found = strstr2(search_area, aOld, aStringCaseSense);)
+	for (replacement_count = 0, src = aHaystack
+		; aLimit && (match_pos = strstr2(src, aOld, aStringCaseSense)) // Relies on short-circuit boolean order.
+		; --aLimit, ++replacement_count)
 	{
-		search_area = found + aNew_length;  // The next search should start at this position when all is adjusted below.
-		// The check below can greatly improve performance if old and new strings happen to be same length:
-		if (aOld_length != aNew_length)
+		src = match_pos + aNew_length;  // The next search should start at this position when all is adjusted below.
+		if (length_delta) // This check can greatly improve performance if old and new strings happen to be same length.
 		{
 			// Since new string can't fit exactly in place of old string, adjust the target area to
 			// accept exactly the right length so that the rest of the string stays unaltered:
-			memmove(search_area, found + aOld_length
-				, aBuf_length - (found - aBuf) - aOld_length + 1); // +1 to include zero terminator.
+			memmove(src, match_pos + aOld_length
+				, haystack_length - (match_pos - aHaystack) - aOld_length + 1); // +1 to include zero terminator.
 			// Above: Calculating length vs. using strlen() makes overall speed of the operation about
 			// twice as fast for some typical test cases in a 2 MB buffer such as replacing \r\n with \n.
 		}
-		memcpy(found, aNew, aNew_length); // Perform the replacement.
-		// Must keep aBuf_length updated as we go, for use with memmove() above:
-		aBuf_length += length_to_add; // Note that length_to_add will be negative if aNew is shorter than aOld.
+		memcpy(match_pos, aNew, aNew_length); // Perform the replacement.
+		// Must keep haystack_length updated as we go, for use with memmove() above:
+		haystack_length += length_delta; // Note that length_delta will be negative if aNew is shorter than aOld.
 	}
 
-	return aBuf;
+	result_length = haystack_length; // Set for caller (it's an alias for an output parameter).
+	result = aHaystack; // Not actually needed in this method, so this is just for maintainability.
+	return replacement_count;
 }
 
 
 
-int StrReplaceAllSafe(char *aBuf, size_t aBufSize, char *aOld, char *aNew, bool aCaseSensitive)
-// Similar to above but checks to ensure that the size of the buffer isn't exceeded.
-// Returns how many replacements were done.
+int PredictReplacementSize(int aLengthDelta, int aReplacementCount, int aLimit, int aHaystackLength
+	, int aCurrentLength, int aEndOffsetOfCurrMatch)
+// Predict how much size the remainder of a replacement operation will consume, including its actual replacements
+// and the parts of haystack that won't need replacement.
+// PARAMETERS:
+// - aLengthDelta: The estimated or actual difference between the length of the replacement and what it's replacing.
+//   A negative number means the replacement is smaller, which will cause a shrinking of the result.
+// - aReplacementCount: The number of replacements so far, including the one the caller is about to do.
+// - aLimit: The *remaining* number of replacements *allowed* (not including the one the caller is about to do).
+// - aHaystackLength: The total length of the original haystack/subject string.
+// - aCurrentLength: The total length of the new/result string including the one the caller is about to do.
+// - aEndOffsetOfCurrMatch: The offset of the char after the last char of the current match.  For example, if
+//   the empty string is the current match and it's found at the beginning of haystack, this value would be 0.
 {
-	// Nothing to do if aBuf is blank.  If aOld is blank, that is not supported because it
-	// would be an infinite loop.
-	if (!*aBuf || !*aOld)
-		return 0;
-	char *ptr;
-	int replacment_count;
-	int length_increase = (int)(strlen(aNew) - strlen(aOld));  // Can be negative.
-	for (replacment_count = 0, ptr = aBuf;; )
+	// Since realloc() is an expensive operation, especially for huge strings, make an extra
+	// effort to get a good estimate based on how things have been going so far.
+	// While this should definitely improve average-case memory-utilization and usually performance
+	// (by avoiding costly realloc's), this estimate is crude because:
+	// 1) The length of what is being replaced can vary due to wildcards in pattern, etc.
+	// 2) The length of what is replacing it can vary due to backreferences.  Thus, the delta
+	//    of each replacement is only a guess based on that of the current replacement.
+	// 3) For code simplicity, the number of upcoming replacements isn't yet known; thus a guess
+	//    is made based on how many there have been so far compared to percentage complete.
+
+	int total_delta; // The total increase/decrease in length from the number of predicted additional replacements.
+	int repl_multiplier = aLengthDelta < 0 ? -1 : 1; // Negative is used to keep additional_replacements_expected conservative even when delta is negative.
+
+	if (aLengthDelta == 0) // Avoid all the calculations because it will wind up being zero anyway.
+		total_delta = 0;
+	else
 	{
-		if (length_increase > 0) // Make sure there's enough room in aBuf first.
-			if ((int)(aBufSize - strlen(aBuf) - 1) < length_increase)
-				break;  // Not enough room to do the next replacement.
-		if (   !(ptr = StrReplace(ptr, aOld, aNew, aCaseSensitive ? SCS_SENSITIVE : SCS_INSENSITIVE))   )
-			break;
-		// Otherwise, it did actually replace one item, so increment:
-		++replacment_count;
-	}
-	return replacment_count;
+		if (!aHaystackLength // aHaystackLength can be 0 if an empty haystack being replaced by something else. If so, avoid divide-by-zero in the prediction by doing something simpler.
+			|| !aEndOffsetOfCurrMatch)  // i.e. don't the prediction if the current match is the empty string and it was found at the very beginning of Haystack because it would be difficult to be accurate (very rare anyway).
+			total_delta = repl_multiplier * aLengthDelta; // Due to rarity, just allow room for one extra after the one we're about to do.
+		else // So the above has ensured that the following won't divide by zero anywhere.
+		{
+			// The following doesn't take into account the original value of aStartingOffset passed in
+			// from the caller because:
+			// 1) It's pretty rare for it to be greater than 0.
+			// 2) Even if it is, the prediction will just be too conservative at first, but that's
+			//    pretty harmless; and anyway each successive realloc followed by a match makes the
+			//    prediction more and more accurate in spite of aStartingOffset>0.
+			// percent_complete must be a double because we need at least 9 digits of precision for cases where
+			// 1 is divided by a big number like 1 GB.
+			double percent_complete = aEndOffsetOfCurrMatch  // Don't subtract 1 (verified correct).
+				/ (double)aHaystackLength; // percent_complete isn't actually a percentage, but a fraction of 1.  e.g. 0.5 rather than 50.
+			int additional_replacements_expected = percent_complete >= 1.0 ? 0  // It's often 100% complete, in which case there's hardly ever another replacement after this one (the only possibility is to replace the final empty-string in haystack with something).
+				: (int)(
+				(aReplacementCount / percent_complete) // This is basically "replacements per percentage point, so far".
+				* (1 - percent_complete) // This is the percentage of haystack remaining to be scanned (e.g. 0.5 for 50%).
+				+ 1 * repl_multiplier // Add 1 or -1 to make it more conservative (i.e. go the opposite direction of ceil when repl_multiplier is negative).
+				);
+			// additional_replacements_expected is defined as the replacements expected *after* the one the caller
+			// is about to do.
+
+			if (aLimit >= 0 && aLimit < additional_replacements_expected)
+			{	// A limit is currently in effect and it's less than expected replacements, so cap the expected.
+				// This helps reduce memory utilization.
+				additional_replacements_expected = aLimit;
+			}
+			else // No limit or additional_replacements_expected is within the limit.
+			{
+				// So now things are set up so that there's about a 50/50 chance than no more reallocs
+				// will be needed.  Since recalloc is costly (due to internal memcpy), try to reduce
+				// the odds of it happening without going overboard on memory utilization.
+				// Something a lot more complicated could be used in place of the below to improve things
+				// a little, but it just doesn't seem worth it given the usage patterns expected and
+				// the actual benefits.  Besides, there is some limiting logic further below that will
+				// cap this if it's unreasonably large:
+				additional_replacements_expected += (int)(0.20*additional_replacements_expected + 1) // +1 so that there's always at least one extra.
+					* repl_multiplier; // This keeps the estimate conservative if delta < 0.
+			}
+			// The following is the "quality" of the estimate.  For example, if this is the very first replacement
+			// and 1000 more replacements are predicted, there will often be far fewer than 1000 replacements;
+			// in fact, there could well be zero.  So in the below, the quality will range from 1 to 3, where
+			// 1 is the worst quality and 3 is the best.
+			double quality = 1 + 2*(1-(
+				(double)additional_replacements_expected / (aReplacementCount + additional_replacements_expected)
+				));
+			// It seems best to use whichever of the following is greater in the calculation further below:
+			int haystack_or_new_length = (aCurrentLength > aHaystackLength) ? aCurrentLength : aHaystackLength;
+			// The following is a crude sanity limit to avoid going overboard with memory
+			// utilization in extreme cases such as when a big string has many replacements
+			// in its first half, but hardly any in its second.  It does the following:
+			// 1) When Haystack-or-current length is huge, this tries to keep the portion of the memory increase
+			//    that's speculative proportionate to that length, which should reduce the chance of swapping
+			//    (at the expense of some performance in cases where it causes another realloc to be required).
+			// 2) When Haystack-or-current length is relatively small, allow the speculative memory allocation
+			//    to be many times larger than that length because the risk of swapping is low.  HOWEVER, TO
+			//    AVOID WASTING MEMORY, the caller should probably call _expand() to shrink the result
+			//    when it detects that far fewer replacements were needed than predicted.
+			int total_delta_limit = (int)(haystack_or_new_length < 10*1024*1024 ? quality*10*1024*1024
+				: quality*haystack_or_new_length); // See comment above.
+			total_delta = additional_replacements_expected
+				* (aLengthDelta < 0 ? -aLengthDelta : aLengthDelta); // So actually, total_delta will be the absolute value.
+			if (total_delta > total_delta_limit)
+				total_delta = total_delta_limit;
+			total_delta *= repl_multiplier;  // Convert back from absolute value.
+		} // The current match isn't an empty string at the very beginning of haystack.
+	} // aLengthDelta!=0
+
+	// Above is responsible for having set total_delta properly.
+	int subsequent_length = aHaystackLength - aEndOffsetOfCurrMatch // This is the length of the remaining portion of haystack that might wind up going into the result exactly as-is (adjusted by the below).
+		+ total_delta; // This is additional_replacements_expected times the expected delta (the length of each replacement minus what it replaces) [can be negative].
+	if (subsequent_length < 0) // Must not go below zero because that would cause the next line to
+		subsequent_length = 0; // create an increase that's too small to handle the current replacement.
+
+	// Return the sum of the following:
+	// 1) subsequent_length: The predicted length needed for the remainder of the operation.
+	// 2) aCurrentLength: The amount we need now, which includes room for the replacement the caller is about to do.
+	//    Note that aCurrentLength can be 0 (such as for an empty string replacement).
+	return subsequent_length + aCurrentLength + 1; // Caller relies on +1 for the terminator.
 }
 
 
 
 char *TranslateLFtoCRLF(char *aString)
-// Translates any naked LFs in aString to CRLF.  If there are non, the original string is returned.
-// Otherwise, the translated versionis copied into a malloc'd buffer, which the caller must free
-// when it's done with it).  Any CRLFs originally present in aString are not changed (i.e. they
-// don't become CRCRLF).
+// Can't use StrReplace() for this because any CRLFs originally present in aString are not changed (i.e. they
+// don't become CRCRLF) [there may be other reasons].
+// Translates any naked LFs in aString to CRLF.  If there are none, the original string is returned.
+// Otherwise, the translated version is copied into a malloc'd buffer, which the caller must free
+// when it's done with it).  
 {
 	UINT naked_LF_count = 0;
 	size_t length = 0;

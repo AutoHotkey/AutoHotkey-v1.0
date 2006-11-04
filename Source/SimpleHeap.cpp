@@ -64,8 +64,8 @@ char *SimpleHeap::Malloc(size_t aSize)
 	if (aSize > sLast->mSpaceAvailable)
 		if (   !(sLast->mNextBlock = CreateBlock())   )
 			return NULL;
-	sMostRecentlyAllocated = sLast->mFreeMarker;
-	// v1.0.40.04: Set up the next chunk to be aligned on a 32-bit boundary (the first chunk in each block
+	sMostRecentlyAllocated = sLast->mFreeMarker; // THIS IS NOW THE NEWLY ALLOCATED BLOCK FOR THE CALLER, which is 32-bit aligned because the previous call to this function (i.e. the logic below) set it up that way.
+	// v1.0.40.04: Set up the NEXT chunk to be aligned on a 32-bit boundary (the first chunk in each block
 	// should always be aligned since the block's address came from malloc()).  On average, this change
 	// "wastes" only 1.5 bytes per chunk. In a 200 KB script of typical contents, this change requires less
 	// than 8 KB of additional memory (as shown by temporarily making BLOCK_SIZE a smaller value such as 8 KB
@@ -76,8 +76,9 @@ char *SimpleHeap::Malloc(size_t aSize)
 	// 3) May slightly improve performance since aligned data is easier for the CPU to access and cache.
 	size_t remainder = aSize % 4;
 	size_t size_consumed = remainder ? aSize + (4 - remainder) : aSize;
-	if (size_consumed > sLast->mSpaceAvailable) // For maintainability, don't allow mFreeMarker to go out of bounds or
-		size_consumed = sLast->mSpaceAvailable; // mSpaceAvailable to go negative (which it can't due to be unsigned).
+	// v1.0.45: The following can't happen when BLOCK_SIZE is a multiple of 4, so it's commented out:
+	//if (size_consumed > sLast->mSpaceAvailable) // For maintainability, don't allow mFreeMarker to go out of bounds or
+	//	size_consumed = sLast->mSpaceAvailable; // mSpaceAvailable to go negative (which it can't due to be unsigned).
 	sLast->mFreeMarker += size_consumed;
 	sLast->mSpaceAvailable -= size_consumed;
 	return sMostRecentlyAllocated;

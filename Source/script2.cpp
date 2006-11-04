@@ -24,6 +24,10 @@ GNU General Public License for more details.
 #include "application.h" // for MsgSleep()
 #include "resources\resource.h"  // For InputBox.
 
+#define PCRE_STATIC             // For RegEx. PCRE_STATIC tells PCRE to declare its functions for normal, static
+#include "lib_pcre/pcre/pcre.h" // linkage rather than as functions inside an external DLL.
+
+
 ////////////////////
 // Window related //
 ////////////////////
@@ -870,9 +874,7 @@ ResultType Line::TrayTip(char *aTitle, char *aText, char *aTimeout, char *aOptio
 
 ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 {
-	Var *output_var = ResolveVarOfArg(0);
-	if (!output_var)
-		return FAIL;
+	Var *output_var = OUTPUT_VAR;
 	TransformCmds trans_cmd = ConvertTransformCmd(aCmd);
 	// Since command names are validated at load-time, this only happens if the command name
 	// was contained in a variable reference.  Since that is very rare, output_var is simply
@@ -1034,9 +1036,11 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 			case '&': // &amp;
 			case '\n': // <br>\n
 				length += 5;
+				break; // v1.0.45: Added missing break.  This had caused incorrect lengths inside some variables, which led to problems in places that relied on the accuracy of the internal lengths.
 			case '<': // &lt;
 			case '>': // &gt;
 				length += 4;
+				break; // v1.0.45: Added missing break.
 			default:
 				if (*ucp > 127)
 					length += (VarSizeType)strlen(sHtml[*ucp - 128]) + 2; // +2 for the leading '&' and the trailing ';'.
@@ -1250,7 +1254,7 @@ ResultType Line::Input()
 	if (g_os.IsWin9x()) // v1.0.44.14: For simplicity, do nothing on Win9x rather than try to see if it actually supports the hook (such as if its some kind of emultated/hybrid OS).
 		return OK; // Could also set ErrorLevel to "Timeout" and output_var to be blank, but the benefits to backward compatibility seemed too dubious.
 
-	Var *output_var = ResolveVarOfArg(0);
+	Var *output_var = OUTPUT_VAR;
 	if (!output_var)
 	{
 		// No output variable, which due to load-time validation means there are no other args either.
@@ -1282,72 +1286,83 @@ ResultType Line::Input()
 	UCHAR end_vk[VK_ARRAY_COUNT] = {0};  // A sparse array that indicates which VKs terminate the input.
 	UCHAR end_sc[SC_ARRAY_COUNT] = {0};  // A sparse array that indicates which SCs terminate the input.
 
-	char single_char_string[2];
-	vk_type vk = 0;
+	vk_type vk;
 	sc_type sc = 0;
 	modLR_type modifiersLR;
+	size_t key_text_length;
+	char *end_pos, single_char_string[2];
+	single_char_string[1] = '\0'; // Init its second character once, since the loop only changes the first char.
 
 	for (; *aEndKeys; ++aEndKeys) // This a modified version of the processing loop used in SendKeys().
 	{
+		vk = 0; // Set default.  Not strictly necessary but more maintainable.
+		*single_char_string = '\0';  // Set default as "this key name is not a single-char string".
+
 		switch (*aEndKeys)
 		{
-		case '}': break;  // Important that these be ignored.
+		case '}': continue;  // Important that these be ignored.
 		case '{':
 		{
-			char *end_pos = strchr(aEndKeys + 1, '}');
-			if (!end_pos)
-				break;  // do nothing, just ignore it and continue.
-			size_t key_text_length = end_pos - aEndKeys - 1;
-			if (!key_text_length)
+			if (   !(end_pos = strchr(aEndKeys + 1, '}'))   )
+				continue;  // Do nothing, just ignore the unclosed '{' and continue.
+			if (   !(key_text_length = end_pos - aEndKeys - 1)   )
 			{
-				if (end_pos[1] == '}')
+				if (end_pos[1] == '}') // The string "{}}" has been encountered, which is interpreted as a single "}".
 				{
-					// The literal string "{}}" has been encountered, which is interpreted as a single "}".
 					++end_pos;
 					key_text_length = 1;
 				}
 				else // Empty braces {} were encountered.
-					break;  // do nothing: let it proceed to the }, which will then be ignored.
+					continue;  // do nothing: let it proceed to the }, which will then be ignored.
 			}
 
 			*end_pos = '\0';  // temporarily terminate the string here.
 
-			if (vk = TextToVK(aEndKeys + 1, NULL, true))
-				end_vk[vk] = END_KEY_ENABLED;
-			else
+			// v1.0.45: Fixed this section to differentiate between } and ] (and also { and [, as well as
+			// anything else enclosed in {} that requirds END_KEY_WITH_SHIFT/END_KEY_WITHOUT_SHIFT consideration.
+			modifiersLR = 0;  // Init prior to below.
+			if (vk = TextToVK(aEndKeys + 1, &modifiersLR, true))
+			{
+				if (key_text_length == 1)
+					*single_char_string = aEndKeys[1];
+				//else leave it at its default of "not a single-char key-name".
+			}
+			else // No virtual key, so try to find a scan code.
 				if (sc = TextToSC(aEndKeys + 1))
 					end_sc[sc] = END_KEY_ENABLED;
 
 			*end_pos = '}';  // undo the temporary termination
 
 			aEndKeys = end_pos;  // In prep for aEndKeys++ at the bottom of the loop.
-			break;
+			break; // Break out of the switch() and do the vk handling beneath it (if there is a vk).
 		}
+
 		default:
-			single_char_string[0] = *aEndKeys;
-			single_char_string[1] = '\0';
+			*single_char_string = *aEndKeys;
 			modifiersLR = 0;  // Init prior to below.
-			if (vk = TextToVK(single_char_string, &modifiersLR, true))
-			{
-				end_vk[vk] |= END_KEY_ENABLED; // Use of |= is essential for cases such as ";:".
-				// Insist the shift key be down to form genuinely different symbols --
-				// namely punctuation marks -- but not for alphabetic chars.  In the
-				// future, an option can be added to the Options param to treat
-				// end chars as case sensitive (if there is any demand for that):
-				if (!IsCharAlpha(*single_char_string))
-				{
-					// Now we know it's not alphabetic, and it's not a key whose name
-					// is longer than one char such as a function key or numpad number.
-					// That leaves mostly just the number keys (top row) and all
-					// punctuation chars, which are the ones that we want to be
-					// distinguished between shifted and unshifted:
-					if (modifiersLR & (MOD_LSHIFT | MOD_RSHIFT))
-						end_vk[vk] |= END_KEY_WITH_SHIFT;
-					else
-						end_vk[vk] |= END_KEY_WITHOUT_SHIFT;
-				}
-			}
+			vk = TextToVK(single_char_string, &modifiersLR, true);
 		} // switch()
+
+		if (vk) // A valid virtual key code was discovered above.
+		{
+			end_vk[vk] |= END_KEY_ENABLED; // Use of |= is essential for cases such as ";:".
+			// Insist the shift key be down to form genuinely different symbols --
+			// namely punctuation marks -- but not for alphabetic chars.  In the
+			// future, an option can be added to the Options param to treat
+			// end chars as case sensitive (if there is any demand for that):
+			if (!IsCharAlpha(*single_char_string))
+			{
+				// Now we know it's not alphabetic, and it's not a key whose name
+				// is longer than one char such as a function key or numpad number.
+				// That leaves mostly just the number keys (top row) and all
+				// punctuation chars, which are the ones that we want to be
+				// distinguished between shifted and unshifted:
+				if (modifiersLR & (MOD_LSHIFT | MOD_RSHIFT))
+					end_vk[vk] |= END_KEY_WITH_SHIFT;
+				else
+					end_vk[vk] |= END_KEY_WITHOUT_SHIFT;
+			}
+		}
 	} // for()
 
 	/////////////////////////////////////////////////
@@ -1678,6 +1693,236 @@ ResultType Line::PerformShowWindow(ActionTypeType aActionType, char *aTitle, cha
 
 
 
+ResultType Line::PerformWait()
+{
+	bool wait_indefinitely;
+	int sleep_duration;
+	DWORD start_time;
+
+	vk_type vk; // For GetKeyState.
+	HANDLE running_process; // For RUNWAIT
+	DWORD exit_code; // For RUNWAIT
+
+	// For ACT_KEYWAIT:
+	bool wait_for_keydown;
+	KeyStateTypes key_state_type;
+	JoyControls joy;
+	int joystick_id;
+	ExprTokenType token;
+	char buf[LINE_SIZE];
+
+	if (mActionType == ACT_RUNWAIT)
+	{
+		if (strcasestr(ARG3, "UseErrorLevel"))
+		{
+			if (!g_script.ActionExec(ARG1, NULL, ARG2, false, ARG3, &running_process, true, true, ARGVAR4))
+				return g_ErrorLevel->Assign("ERROR"); // See above comment for explanation.
+			//else fall through to the waiting-phase of the operation.
+			// Above: The special string ERROR is used, rather than a number like 1, because currently
+			// RunWait might in the future be able to return any value, including 259 (STATUS_PENDING).
+		}
+		else // If launch fails, display warning dialog and terminate current thread.
+			if (!g_script.ActionExec(ARG1, NULL, ARG2, true, ARG3, &running_process, false, true, ARGVAR4))
+				return FAIL;
+			//else fall through to the waiting-phase of the operation.
+	}
+	
+	// Must NOT use ELSE-IF in line below due to ELSE further down needing to execute for RunWait.
+	if (mActionType == ACT_KEYWAIT)
+	{
+		if (   !(vk = TextToVK(ARG1))   )
+		{
+			if (   !(joy = (JoyControls)ConvertJoy(ARG1, &joystick_id))   ) // Not a valid key name.
+				// Indicate immediate timeout (if timeout was specified) or error.
+				return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+			if (!IS_JOYSTICK_BUTTON(joy)) // Currently, only buttons are supported.
+				return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+		}
+		// Set defaults:
+		wait_for_keydown = false;  // The default is to wait for the key to be released.
+		key_state_type = KEYSTATE_PHYSICAL;  // Since physical is more often used.
+		wait_indefinitely = true;
+		sleep_duration = 0;
+		for (char *cp = ARG2; *cp; ++cp)
+		{
+			switch(toupper(*cp))
+			{
+			case 'D':
+				wait_for_keydown = true;
+				break;
+			case 'L':
+				key_state_type = KEYSTATE_LOGICAL;
+				break;
+			case 'T':
+				// Although ATOF() supports hex, it's been documented in the help file that hex should
+				// not be used (see comment above) so if someone does it anyway, some option letters
+				// might be misinterpreted:
+				wait_indefinitely = false;
+				sleep_duration = (int)(ATOF(cp + 1) * 1000);
+				break;
+			}
+		}
+		// The following must be set for ScriptGetJoyState():
+		token.symbol = SYM_STRING;
+		token.marker = buf;
+	}
+	else if (   (mActionType != ACT_RUNWAIT && mActionType != ACT_CLIPWAIT && *ARG3)
+		|| (mActionType == ACT_CLIPWAIT && *ARG1)   )
+	{
+		// Since the param containing the timeout value isn't blank, it must be numeric,
+		// otherwise, the loading validation would have prevented the script from loading.
+		wait_indefinitely = false;
+		sleep_duration = (int)(ATOF(mActionType == ACT_CLIPWAIT ? ARG1 : ARG3) * 1000); // Can be zero.
+		if (sleep_duration < 1)
+			// Waiting 500ms in place of a "0" seems more useful than a true zero, which
+			// doens't need to be supported because it's the same thing as something like
+			// "IfWinExist".  A true zero for clipboard would be the same as
+			// "IfEqual, clipboard, , xxx" (though admittedly it's higher overhead to
+			// actually fetch the contents of the clipboard).
+			sleep_duration = 500;
+	}
+	else
+	{
+		wait_indefinitely = true;
+		sleep_duration = 0; // Just to catch any bugs.
+	}
+
+	if (mActionType != ACT_RUNWAIT)
+		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Set default ErrorLevel to be possibly overridden later on.
+
+	bool any_clipboard_format = (mActionType == ACT_CLIPWAIT && ATOI(ARG2) == 1);
+
+	// Right before starting the wait-loop, make a copy of our args using the stack
+	// space in our recursion layer.  This is done in case other hotkey subroutine(s)
+	// are launched while we're waiting here, which might cause our args to be overwritten
+	// if any of them happen to be in the Deref buffer:
+	char *arg[MAX_ARGS], *marker;
+	int i, space_remaining;
+	for (i = 0, space_remaining = LINE_SIZE, marker = buf; i < mArgc; ++i)
+	{
+		if (!space_remaining) // Realistically, should never happen.
+			arg[i] = "";
+		else
+		{
+			arg[i] = marker;  // Point it to its place in the buffer.
+			strlcpy(marker, sArgDeref[i], space_remaining); // Make the copy.
+			marker += strlen(marker) + 1;  // +1 for the zero terminator of each arg.
+			space_remaining = (int)(LINE_SIZE - (marker - buf));
+		}
+	}
+
+	for (start_time = GetTickCount();;) // start_time is initialized unconditionally for use with v1.0.30.02's new logging feature further below.
+	{ // Always do the first iteration so that at least one check is done.
+		switch(mActionType)
+		{
+		case ACT_WINWAIT:
+			#define SAVED_WIN_ARGS SAVED_ARG1, SAVED_ARG2, SAVED_ARG4, SAVED_ARG5
+			if (WinExist(g, SAVED_WIN_ARGS, false, true))
+			{
+				DoWinDelay;
+				return OK;
+			}
+			break;
+		case ACT_WINWAITCLOSE:
+			if (!WinExist(g, SAVED_WIN_ARGS))
+			{
+				DoWinDelay;
+				return OK;
+			}
+			break;
+		case ACT_WINWAITACTIVE:
+			if (WinActive(g, SAVED_WIN_ARGS, true))
+			{
+				DoWinDelay;
+				return OK;
+			}
+			break;
+		case ACT_WINWAITNOTACTIVE:
+			if (!WinActive(g, SAVED_WIN_ARGS, true))
+			{
+				DoWinDelay;
+				return OK;
+			}
+			break;
+		case ACT_CLIPWAIT:
+			// Seems best to consider CF_HDROP to be a non-empty clipboard, since we
+			// support the implicit conversion of that format to text:
+			if (any_clipboard_format)
+			{
+				if (CountClipboardFormats())
+					return OK;
+			}
+			else
+				if (IsClipboardFormatAvailable(CF_TEXT) || IsClipboardFormatAvailable(CF_HDROP))
+					return OK;
+			break;
+		case ACT_KEYWAIT:
+			if (vk) // Waiting for key or mouse button, not joystick.
+			{
+				if (ScriptGetKeyState(vk, key_state_type) == wait_for_keydown)
+					return OK;
+			}
+			else // Waiting for joystick button
+			{
+				if ((bool)ScriptGetJoyState(joy, joystick_id, token, false) == wait_for_keydown)
+					return OK;
+			}
+			break;
+		case ACT_RUNWAIT:
+			// Pretty nasty, but for now, nothing is done to prevent an infinite loop.
+			// In the future, maybe OpenProcess() can be used to detect if a process still
+			// exists (is there any other way?):
+			// MSDN: "Warning: If a process happens to return STILL_ACTIVE (259) as an error code,
+			// applications that test for this value could end up in an infinite loop."
+			if (running_process)
+				GetExitCodeProcess(running_process, &exit_code);
+			else // it can be NULL in the case of launching things like "find D:\" or "www.yahoo.com"
+				exit_code = 0;
+			if (exit_code != STATUS_PENDING) // STATUS_PENDING == STILL_ACTIVE
+			{
+				if (running_process)
+					CloseHandle(running_process);
+				// Use signed vs. unsigned, since that is more typical?  No, it seems better
+				// to use unsigned now that script variables store 64-bit ints.  This is because
+				// GetExitCodeProcess() yields a DWORD, implying that the value should be unsigned.
+				// Unsigned also is more useful in cases where an app returns a (potentially large)
+				// count of something as its result.  However, if this is done, it won't be easy
+				// to check against a return value of -1, for example, which I suspect many apps
+				// return.  AutoIt3 (and probably 2) use a signed int as well, so that is another
+				// reason to keep it this way:
+				return g_ErrorLevel->Assign((int)exit_code);
+			}
+			break;
+		}
+
+		// Must cast to int or any negative result will be lost due to DWORD type:
+		if (wait_indefinitely || (int)(sleep_duration - (GetTickCount() - start_time)) > SLEEP_INTERVAL_HALF)
+		{
+			if (MsgSleep(INTERVAL_UNSPECIFIED)) // INTERVAL_UNSPECIFIED performs better.
+			{
+				// v1.0.30.02: Since MsgSleep() launched and returned from at least one new thread, put the
+				// current waiting line into the line-log again to make it easy to see what the current
+				// thread is doing.  This is especially useful for figuring out which subroutine is holding
+				// another thread interrupted beneath it.  For example, if a timer gets interrupted by
+				// a hotkey that has an indefinite WinWait, and that window never appears, this will allow
+				// the user to find out the culprit thread by showing its line in the log (and usually
+				// it will appear as the very last line, since usually the script is idle and thus the
+				// currently active thread is the one that's still waiting for the window).
+				sLog[sLogNext] = this;
+				sLogTick[sLogNext++] = start_time; // Store a special value so that Line::LogToText() can report that its "still waiting" from earlier.
+				if (sLogNext >= LINE_LOG_SIZE)
+					sLogNext = 0;
+				// The lines above are the similar to those used in ExecUntil(), so the two should be
+				// maintained together.
+			}
+		}
+		else // Done waiting.
+			return g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Since it timed out, we override the default with this.
+	} // for()
+}
+
+
+
 ResultType Line::WinMove(char *aTitle, char *aText, char *aX, char *aY
 	, char *aWidth, char *aHeight, char *aExcludeTitle, char *aExcludeText)
 {
@@ -1731,6 +1976,7 @@ ResultType Line::ControlClick(vk_type aVK, int aClickCount, char *aOptions, char
 	// Set the defaults that will be in effect unless overridden by options:
 	KeyEventTypes event_type = KEYDOWNANDUP;
 	bool position_mode = false;
+	bool do_activate = true;
 	// These default coords can be overridden either by aOptions or aControl's X/Y mode:
 	POINT click = {COORD_UNSPECIFIED, COORD_UNSPECIFIED};
 
@@ -1743,6 +1989,24 @@ ResultType Line::ControlClick(vk_type aVK, int aClickCount, char *aOptions, char
 			break;
 		case 'U':
 			event_type = KEYUP;
+			break;
+		case 'N':
+			// v1.0.45:
+			// It was reported (and confirmed through testing) that this new NA mode (which avoids
+			// AttachThreadInput() and SetActiveWindow()) improves the reliability of ControlClick when
+			// the user is moving the mouse fairly quickly at the time the command tries to click a button.
+			// In addition, the new mode avoids activating the window, which tends to happen otherwise.
+			// HOWEVER, the new mode seems no more reliable than the old mode when the target window is
+			// the active window.  In addition, there may be side-effects of the new mode (I caught it
+			// causing Notepad's Save-As dialog to hang once, during the display of its "Overwrite?" dialog).
+			// ALSO, SetControlDelay -1 seems to fix the unreliability issue as well (independently of NA),
+			// though it might not work with some types of windows/controls (thus, for backward
+			// compatibility, ControlClick still obeys SetControlDelay).
+			if (toupper(cp[1]) == 'A')
+			{
+				cp += 1;  // Add 1 vs. 2 to skip over the rest of the letters in this option word.
+				do_activate = false;
+			}
 			break;
 		case 'P':
 			if (!strnicmp(cp, "Pos", 3))
@@ -1881,8 +2145,7 @@ ResultType Line::ControlClick(vk_type aVK, int aClickCount, char *aOptions, char
 	// that SetActiveWindow() resolved some problems for some users.  In any case, it seems best
 	// to do this in case the window really is foreground, in which case MSDN indicates that
 	// it will help for certain types of dialogs.
-	ATTACH_THREAD_INPUT
-	SetActiveWindow(target_window);
+	ATTACH_THREAD_INPUT_AND_SETACTIVEWINDOW_IF_DO_ACTIVATE  // It's kept with a similar macro for maintainability.
 	// v1.0.44.13: Notes for the above: Unlike some other Control commands, GetNonChildParent() is not
 	// called here when target_window==control_window.  This is because the script may have called
 	// SetParent to make target_window the child of some other window, in which case target_window
@@ -1931,7 +2194,7 @@ ResultType Line::ControlClick(vk_type aVK, int aClickCount, char *aOptions, char
 		}
 	}
 
-	DETACH_THREAD_INPUT
+	DETACH_THREAD_INPUT  // Also takes into account do_activate, indirectly.
 
 	return g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 }
@@ -2011,10 +2274,10 @@ ResultType Line::ControlMove(char *aControl, char *aX, char *aY, char *aWidth, c
 
 ResultType Line::ControlGetPos(char *aControl, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
 {
-	Var *output_var_x = ResolveVarOfArg(0);  // Ok if NULL.
-	Var *output_var_y = ResolveVarOfArg(1);  // Ok if NULL.
-	Var *output_var_width = ResolveVarOfArg(2);  // Ok if NULL.
-	Var *output_var_height = ResolveVarOfArg(3);  // Ok if NULL.
+	Var *output_var_x = ARGVAR1;  // Ok if NULL.
+	Var *output_var_y = ARGVAR2;  // Ok if NULL.
+	Var *output_var_width = ARGVAR3;  // Ok if NULL.
+	Var *output_var_height = ARGVAR4;  // Ok if NULL.
 
 	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	HWND control_window = target_window ? ControlExist(target_window, aControl) : NULL; // This can return target_window itself for cases such as ahk_id %ControlHWND%.
@@ -2054,11 +2317,8 @@ ResultType Line::ControlGetPos(char *aControl, char *aTitle, char *aText, char *
 
 ResultType Line::ControlGetFocus(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
 {
-	Var *output_var = ResolveVarOfArg(0);
-	if (!output_var)
-		return FAIL;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
-	output_var->Assign();  // Set default: blank for the output variable.
+	OUTPUT_VAR->Assign();  // Set default: blank for the output variable.
 	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	if (!target_window)
 		return OK;  // Let ErrorLevel and the blank output variable tell the story.
@@ -2091,7 +2351,7 @@ ResultType Line::ControlGetFocus(char *aTitle, char *aText, char *aExcludeTitle,
 	// Append the class sequence number onto the class name set the output param to be that value:
 	snprintfcat(class_name, sizeof(class_name), "%d", cah.class_count);
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-	return output_var->Assign(class_name);
+	return OUTPUT_VAR->Assign(class_name);
 }
 
 
@@ -2174,9 +2434,7 @@ ResultType Line::ControlSetText(char *aControl, char *aNewText, char *aTitle, ch
 ResultType Line::ControlGetText(char *aControl, char *aTitle, char *aText
 	, char *aExcludeTitle, char *aExcludeText)
 {
-	Var *output_var = ResolveVarOfArg(0);
-	if (!output_var)
-		return FAIL;
+	Var *output_var = OUTPUT_VAR;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR);  // Set default.
 	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	HWND control_window = target_window ? ControlExist(target_window, aControl) : NULL; // This can return target_window itself for cases such as ahk_id %ControlHWND%.
@@ -2465,15 +2723,12 @@ break_both:
 ResultType Line::StatusBarGetText(char *aPart, char *aTitle, char *aText
 	, char *aExcludeTitle, char *aExcludeText)
 {
-	Var *output_var = ResolveVarOfArg(0);
-	if (!output_var)
-		return FAIL;
 	// Note: ErrorLevel is handled by StatusBarUtil(), below.
 	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	HWND control_window = target_window ? ControlExist(target_window, "msctls_statusbar321") : NULL;
 	// Call this even if control_window is NULL because in that case, it will set the output var to
 	// be blank for us:
-	return StatusBarUtil(output_var, control_window, ATOI(aPart)); // It will handle any zero part# for us.
+	return StatusBarUtil(OUTPUT_VAR, control_window, ATOI(aPart)); // It will handle any zero part# for us.
 }
 
 
@@ -3061,9 +3316,7 @@ ResultType Line::WinSetTitle(char *aTitle, char *aText, char *aNewTitle, char *a
 
 ResultType Line::WinGetTitle(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
 {
-	Var *output_var = ResolveVarOfArg(0);
-	if (!output_var)
-		return FAIL;
+	Var *output_var = OUTPUT_VAR;
 	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	// Even if target_window is NULL, we want to continue on so that the output
 	// param is set to be the empty string, which is the proper thing to do
@@ -3093,16 +3346,13 @@ ResultType Line::WinGetTitle(char *aTitle, char *aText, char *aExcludeTitle, cha
 
 ResultType Line::WinGetClass(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
 {
-	Var *output_var = ResolveVarOfArg(0);
-	if (!output_var)
-		return FAIL;
 	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	if (!target_window)
-		return output_var->Assign();
+		return OUTPUT_VAR->Assign();
 	char class_name[WINDOW_CLASS_SIZE];
 	if (!GetClassName(target_window, class_name, sizeof(class_name)))
-		return output_var->Assign();
-	return output_var->Assign(class_name);
+		return OUTPUT_VAR->Assign();
+	return OUTPUT_VAR->Assign(class_name);
 }
 
 
@@ -3126,10 +3376,7 @@ ResultType WinGetList(Var *output_var, WinGetCmds aCmd, char *aTitle, char *aTex
 
 ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
 {
-	Var *output_var = ResolveVarOfArg(0);  // This is done even for WINGET_CMD_LIST.
-	if (!output_var)
-		return FAIL;
-
+	Var *output_var = OUTPUT_VAR;  // This is done even for WINGET_CMD_LIST.
 	WinGetCmds cmd = ConvertWinGetCmd(aCmd);
 	// Since command names are validated at load-time, this only happens if the command name
 	// was contained in a variable reference.  But for simplicity of design here, return
@@ -3407,9 +3654,7 @@ BOOL CALLBACK EnumChildGetControlList(HWND aWnd, LPARAM lParam)
 
 ResultType Line::WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
 {
-	Var *output_var = ResolveVarOfArg(0);
-	if (!output_var)
-		return FAIL;
+	Var *output_var = OUTPUT_VAR;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	// Even if target_window is NULL, we want to continue on so that the output
@@ -3500,10 +3745,10 @@ BOOL CALLBACK EnumChildGetText(HWND aWnd, LPARAM lParam)
 
 ResultType Line::WinGetPos(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
 {
-	Var *output_var_x = ResolveVarOfArg(0);  // Ok if NULL.
-	Var *output_var_y = ResolveVarOfArg(1);  // Ok if NULL.
-	Var *output_var_width = ResolveVarOfArg(2);  // Ok if NULL.
-	Var *output_var_height = ResolveVarOfArg(3);  // Ok if NULL.
+	Var *output_var_x = ARGVAR1;  // Ok if NULL.
+	Var *output_var_y = ARGVAR2;  // Ok if NULL.
+	Var *output_var_width = ARGVAR3;  // Ok if NULL.
+	Var *output_var_height = ARGVAR4;  // Ok if NULL.
 
 	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	// Even if target_window is NULL, we want to continue on so that the output
@@ -3561,9 +3806,6 @@ ResultType Line::WinGetPos(char *aTitle, char *aText, char *aExcludeTitle, char 
 
 ResultType Line::EnvGet(char *aEnvVarName)
 {
-	Var *output_var = ResolveVarOfArg(0);
-	if (!output_var)
-		return FAIL;
 	// Don't use a size greater than 32767 because that will cause it to fail on Win95 (tested by Robert Yalkin).
 	// According to MSDN, 32767 is exactly large enough to handle the largest variable plus its zero terminator.
 	char buf[32767];
@@ -3571,7 +3813,7 @@ ResultType Line::EnvGet(char *aEnvVarName)
 	// probably perform worse since GetEnvironmentVariable() is a very slow function.  In addition, it would
 	// add code complexity, so it seems best to fetch it into a large buffer then just copy it to dest-var.
 	DWORD length = GetEnvironmentVariable(aEnvVarName, buf, sizeof(buf));
-	return output_var->Assign(length ? buf : "", length);
+	return OUTPUT_VAR->Assign(length ? buf : "", length);
 }
 
 
@@ -3581,10 +3823,7 @@ ResultType Line::SysGet(char *aCmd, char *aValue)
 // is based.
 {
 	// For simplicity and array look-up performance, this is done even for sub-commands that output to an array:
-	Var *output_var = ResolveVarOfArg(0);
-	if (!output_var)
-		return FAIL;
-
+	Var *output_var = OUTPUT_VAR;
 	SysGetCmds cmd = ConvertSysGetCmd(aCmd);
 	// Since command names are validated at load-time, this only happens if the command name
 	// was contained in a variable reference.  But for simplicity of design here, return
@@ -3889,8 +4128,8 @@ ResultType Line::PixelSearch(int aLeft, int aTop, int aRight, int aBottom, COLOR
 	// Many of the following sections are similar to those in ImageSearch(), so they should be
 	// maintained together.
 
-	Var *output_var_x = ResolveVarOfArg(0);  // Ok if NULL.
-	Var *output_var_y = aIsPixelGetColor ? NULL : ResolveVarOfArg(1);  // Ok if NULL.
+	Var *output_var_x = ARGVAR1;  // Ok if NULL.
+	Var *output_var_y = aIsPixelGetColor ? NULL : ARGVAR2;  // Ok if NULL. ARGVARRAW2 wouldn't be safe because load-time validation requires a min of only zero parameters to allow the output variables to be left blank.
 
 	g_ErrorLevel->Assign(aIsPixelGetColor ? ERRORLEVEL_ERROR : ERRORLEVEL_ERROR2); // Set default ErrorLevel.  2 means error other than "color not found".
 	if (output_var_x)
@@ -4154,8 +4393,8 @@ ResultType Line::ImageSearch(int aLeft, int aTop, int aRight, int aBottom, char 
 {
 	// Many of the following sections are similar to those in PixelSearch(), so they should be
 	// maintained together.
-	Var *output_var_x = ResolveVarOfArg(0);  // Ok if NULL.
-	Var *output_var_y = ResolveVarOfArg(1);  // Ok if NULL.
+	Var *output_var_x = ARGVAR1;  // Ok if NULL. RAW wouldn't be safe because load-time validation actually
+	Var *output_var_y = ARGVAR2;  // requires a minimum of zero parameters so that the output-vars can be optional.
 
 	// Set default results, both ErrorLevel and output variables, in case of early return:
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR2);  // 2 means error other than "image not found".
@@ -5702,10 +5941,10 @@ ResultType Line::MouseGetPos(DWORD aOptions)
 	// The only time this isn't true is for dynamically-built variable names.  In that
 	// case, we don't worry about it if it's NULL, since the user will already have been
 	// warned:
-	Var *output_var_x = ResolveVarOfArg(0);  // Ok if NULL.
-	Var *output_var_y = ResolveVarOfArg(1);  // Ok if NULL.
-	Var *output_var_parent = ResolveVarOfArg(2);  // Ok if NULL.
-	Var *output_var_child = ResolveVarOfArg(3);  // Ok if NULL.
+	Var *output_var_x = ARGVAR1;  // Ok if NULL.
+	Var *output_var_y = ARGVAR2;  // Ok if NULL.
+	Var *output_var_parent = ARGVAR3;  // Ok if NULL.
+	Var *output_var_child = ARGVAR4;  // Ok if NULL.
 
 	POINT point;
 	GetCursorPos(&point);  // Realistically, can't fail?
@@ -5854,9 +6093,7 @@ ResultType Line::FormatTime(char *aYYYYMMDD, char *aFormat)
 // (setlocale() seems to be needed to put the user's or system's locale into effect for strftime()).
 // setlocale() weighs in at about 6.5 KB compressed (14 KB uncompressed).
 {
-	Var *output_var = ResolveVarOfArg(0);
-	if (!output_var)
-		return FAIL;
+	Var *output_var = OUTPUT_VAR;
 
 	#define FT_MAX_INPUT_CHARS 2000  // In preparation for future use of TCHARs, since GetDateFormat() uses char-count not size.
 	// Input/format length is restricted since it must be translated and expanded into a new format
@@ -6159,20 +6396,35 @@ ResultType Line::FormatTime(char *aYYYYMMDD, char *aFormat)
 ResultType Line::PerformAssign()
 // Returns OK or FAIL.  Caller has ensured that none of this line's derefs is a function-call.
 {
-	Var *output_var = ResolveVarOfArg(0);
-	if (!output_var)
-		return FAIL;
-	// Now output_var->Type() must be clipboard or normal because otherwise load-time validation (or
-	// ResolveVarOfArg() above, if it's dynamic) would have prevented us from getting this far.
+	// Resolve alias now to detect "source_is_being_appended_to_target" and perhaps other things.
+	// Can't use OUTPUT_VAR or sArgVar here because ExpandArgs() isn't called prior to PerformAssign().
+	Var &output_var = *(ResolveVarOfArg(0)->ResolveAlias());
+	// Now output_var.Type() must be clipboard or normal because otherwise load-time validation (or
+	// ResolveVarOfArg() in GetExpandedArgSize, if it's dynamic) would have prevented us from getting this far.
 
-	output_var = output_var->ResolveAlias(); // Resolve alias now to detect "source_is_being_appended_to_target" and perhaps other things.
+	if (mArgc > 1 && ArgHasDeref(2)) // There is at least one deref in Arg #2.
+	{
+		// Can't use sArgVar here because ExecUntil() never calls ExpandArgs() for ACT_ASSIGN.
+		// For simplicity, we don't check that it's the only deref, nor whether it has any literal text
+		// around it, since those things aren't supported anyway.
+		Var *source_var;
+		if (source_var = mArg[1].deref[0].var) // Caller has ensured none of this line's derefs is a function-call, so var should always be the proper member of the union to check.
+		{
+			if (source_var->Type() == VAR_CLIPBOARDALL) // The caller is performing the special mode "Var = %ClipboardAll%".
+				return AssignClipboardAll(output_var); // Outsourced to another function to help CPU cache hits/misses in this frequently-called function.
+			if (source_var->IsBinaryClip()) // Caller wants a variable with binary contents assigned (copied) to another variable (usually VAR_CLIPBOARD).
+				return AssignBinaryClip(output_var, *source_var); // Outsourced to another function to help CPU cache hits/misses in this frequently-called function.
+		}
+	}
+
+	// Otherwise (since above didn't return):
 	// Find out if output_var (the var being assigned to) is dereferenced (mentioned) in this line's
 	// second arg, which is the value to be assigned.  If it isn't, things are much simpler.
 	// Note: Since Arg#2 for this function is never an output or an input variable, it is not
 	// necessary to check whether its the same variable as Arg#1 for this determination.
 	bool target_is_involved_in_source = false;
 	bool source_is_being_appended_to_target = false; // v1.0.25
-	if (output_var->Type() != VAR_CLIPBOARD && mArgc > 1) // If types is VAR_CLIPBOARD, it can be used in the source deref(s) while also being the target -- without having to use the deref buffer -- because the clipboard has it's own temp buffer: the memory area to which the result is written. The prior content of the clipboard remains available in its other memory area until Commit() is called (i.e. long enough for our purposes).
+	if (output_var.Type() != VAR_CLIPBOARD && mArgc > 1) // If types is VAR_CLIPBOARD, it can be used in the source deref(s) while also being the target -- without having to use the deref buffer -- because the clipboard has it's own temp buffer: the memory area to which the result is written. The prior content of the clipboard remains available in its other memory area until Commit() is called (i.e. long enough for our purposes).
 	{
 		// It has a second arg, which in this case is the value to be assigned to the var.
 		// Examine any derefs that the second arg has to see if output_var is mentioned.
@@ -6181,13 +6433,13 @@ ResultType Line::PerformAssign()
 		// inside this line.
 		for (DerefType *deref = mArg[1].deref; deref && deref->marker; ++deref)
 		{
-			if (deref->is_function) // Silent failure, for rare cases such ACT_ASSIGNEXPR calling us due to something like Clipboard:=SavedClipboard + fn(x)
+			if (deref->is_function) // Silent failure, for rare cases such ACT_ASSIGNEXPR calling us due to something like Clipboard:=SavedBinaryClipboard + fn(x) [which isn't valid for binary clipboard]
 				return FAIL;
 			if (source_is_being_appended_to_target)
 			{
 				// Check if target is mentioned more than once in source, e.g. Var = %Var%Some Text%Var%
 				// would be disqualified for the "fast append" method because %Var% occurs more than once.
-				if (deref->var->ResolveAlias() == output_var) // deref->is_function was checked above just in case.
+				if (deref->var->ResolveAlias() == &output_var) // deref->is_function was checked above just in case.
 				{
 					source_is_being_appended_to_target = false;
 					break;
@@ -6195,7 +6447,7 @@ ResultType Line::PerformAssign()
 			}
 			else
 			{
-				if (deref->var->ResolveAlias() == output_var) // deref->is_function was checked above just in case.
+				if (deref->var->ResolveAlias() == &output_var) // deref->is_function was checked above just in case.
 				{
 					target_is_involved_in_source = true;
 					// The below disqualifies both of the following cases from the simple-append mode:
@@ -6212,254 +6464,6 @@ ResultType Line::PerformAssign()
 		}
 	}
 
-	VarSizeType space_needed;
-	bool assign_clipboardall = false, assign_binary_var = false;
-	Var *source_var;
-
-	if (mArgc > 1)
-	{
-		source_var = NULL;
-		if (mArg[1].type == ARG_TYPE_INPUT_VAR) // This can only happen when called from ACT_ASSIGNEXPR, in which case it's safe to look at sArgVar.
-			source_var = sArgVar[1]; // Should be non-null, but okay even if it isn't.
-		else // Can't use sArgVar here because ExecUntil() never calls ExpandArgs() for ACT_ASSIGN.
-			if (ArgHasDeref(2)) // There is at least one deref in Arg #2.
-				// For simplicity, we don't check that it's the only deref, nor whether it has any literal text
-				// around it, since those things aren't supported anyway.
-				source_var = mArg[1].deref[0].var; // Caller has ensured none of this line's derefs is a function-call.
-		if (source_var)
-		{
-			assign_clipboardall = source_var->Type() == VAR_CLIPBOARDALL;
-			assign_binary_var = source_var->IsBinaryClip();
-		}
-	}
-
-	LPVOID binary_contents;
-	HGLOBAL hglobal;
-	LPVOID hglobal_locked;
-	UINT format;
-	SIZE_T size;
-	VarSizeType added_size;
-
-	if (assign_clipboardall)
-	{
-		// The caller is performing the special mode "Var = %ClipboardAll%".
-		if (output_var->Type() == VAR_CLIPBOARD) // Seems pointless (nor is the below equipped to handle it), so make this have no effect.
-			return OK;
-		if (!g_clip.Open())
-			return LineError(CANT_OPEN_CLIPBOARD_READ);
-		// Calculate the size needed:
-		// EnumClipboardFormats() retrieves all formats, including synthesized formats that don't
-		// actually exist on the clipboard but are instead constructed on demand.  Unfortunately,
-		// there doesn't appear to be any way to reliably determine which formats are real and
-		// which are synthesized (if there were such a way, a large memory savings could be
-		// realized by omitting the synthesized formats from the saved version). One thing that
-		// is certain is that the "real" format(s) come first and the synthesized ones afterward.
-		// However, that's not quite enough because although it is recommended that apps store
-		// the primary/preferred format first, the OS does not enforce this.  For example, testing
-		// shows that the apps do not have to store CF_UNICODETEXT prior to storing CF_TEXT,
-		// in which case the clipboard might have inaccurate CF_TEXT as the first element and
-		// more accurate/complete (non-synthesized) CF_UNICODETEXT stored as the next.
-		// In spite of the above, the below seems likely to be accurate 99% or more of the time,
-		// which seems worth it given the large savings of memory that are achieved, especially
-		// for large quantities of text or large images. Confidence is further raised by the
-		// fact that MSDN says there's no advantage/reason for an app to place multiple formats
-		// onto the clipboard if those formats are available through synthesis.
-		// And since CF_TEXT always(?) yields synthetic CF_OEMTEXT and CF_UNICODETEXT, and
-		// probably (but less certainly) vice versa: if CF_TEXT is listed first, it might certainly
-		// mean that the other two do not need to be stored.  There is some slight doubt about this
-		// in a situation where an app explicitly put CF_TEXT onto the clipboard and then followed
-		// it with CF_UNICODETEXT that isn't synthesized, nor does it match what would have been
-		// synthesized. However, that seems extremely unlikely (it would be much more likely for
-		// an app to store CF_UNICODETEXT *first* followed by custom/non-synthesized CF_TEXT, but
-		// even that might be unheard of in practice).  So for now -- since there is no documentation
-		// to be found about this anywhere -- it seems best to omit some of the most common
-		// synthesized formats:
-		// CF_TEXT is the first of three text formats to appear: Omit CF_OEMTEXT and CF_UNICODETEXT.
-		//    (but not vice versa since those are less certain to be synthesized)
-		//    (above avoids using four times the amount of memory that would otherwise be required)
-		//    UPDATE: Only the first text format is included now, since MSDN says there is no
-		//    advantage/reason to having multiple non-synthesized text formats on the clipboard.
-		// CF_DIB: Always omit this if CF_DIBV5 is available (which must be present on Win2k+, at least
-		// as a synthesized format, whenever CF_DIB is present?) This policy seems likely to avoid
-		// the issue where CF_DIB occurs first yet CF_DIBV5 that comes later is *not* synthesized,
-		// perhaps simply because the app stored DIB prior to DIBV5 by mistake (though there is
-		// nothing mandatory, so maybe it's not really a mistake). Note: CF_DIBV5 supports alpha
-		// channel / transparency, and perhaps other things, and it is likely that when synthesized,
-		// no information of the original CF_DIB is lost. Thus, when CF_DIBV5 is placed back onto
-		// the clipboard, any app that needs CF_DIB will have it synthesized back to the original
-		// data (hopefully). It's debatable whether to do it that way or store whichever comes first
-		// under the theory that an app would never store both formats on the clipboard since MSDN
-		// says: "If the system provides an automatic type conversion for a particular clipboard format,
-		// there is no advantage to placing the conversion format(s) on the clipboard."
-		bool format_is_text;
-		UINT dib_format_to_omit = 0, meta_format_to_omit = 0, text_format_to_include = 0;
-		// Start space_needed off at 4 to allow room for guaranteed final termination of output_var's contents.
-		// The termination must be of the same size as format because a single-byte terminator would
-		// be read in as a format of 0x00?????? where ?????? is an access violation beyond the buffer.
-		for (space_needed = sizeof(format), format = 0; format = EnumClipboardFormats(format);)
-		{
-			// No point in calling GetLastError() since it would never be executed because the loop's
-			// condition breaks on zero return value.
-			format_is_text = (format == CF_TEXT || format == CF_OEMTEXT || format == CF_UNICODETEXT);
-			if ((format_is_text && text_format_to_include) // The first text format has already been found and included, so exclude all other text formats.
-				|| format == dib_format_to_omit) // ... or this format was marked excluded by a prior iteration.
-				continue;
-			// GetClipboardData() causes Task Manager to report a (sometimes large) increase in
-			// memory utilization for the script, which is odd since it persists even after the
-			// clipboard is closed.  However, when something new is put onto the clipboard by the
-			// the user or any app, that memory seems to get freed automatically.  Also, 
-			// GetClipboardData(49356) fails in MS Visual C++ when the copied text is greater than
-			// about 200 KB (but GetLastError() returns ERROR_SUCCESS).  When pasting large sections
-			// of colorized text into MS Word, it can't get the colorized text either (just the plain
-			// text). Because of this example, it seems likely it can fail in other places or under
-			// other circumstances, perhaps by design of the app. Therefore, be tolerant of failures
-			// because partially saving the clipboard seems much better than aborting the operation.
-			if (hglobal = g_clip.GetClipboardDataTimeout(format))
-			{
-				space_needed += (VarSizeType)(sizeof(format) + sizeof(size) + GlobalSize(hglobal)); // The total amount of storage space required for this item.
-				if (format_is_text) // If this is true, then text_format_to_include must be 0 since above didn't "continue".
-					text_format_to_include = format;
-				if (!dib_format_to_omit)
-				{
-					if (format == CF_DIB)
-						dib_format_to_omit = CF_DIBV5;
-					else if (format == CF_DIBV5)
-						dib_format_to_omit = CF_DIB;
-				}
-				if (!meta_format_to_omit) // Checked for the same reasons as dib_format_to_omit.
-				{
-					if (format == CF_ENHMETAFILE)
-						meta_format_to_omit = CF_METAFILEPICT;
-					else if (format == CF_METAFILEPICT)
-						meta_format_to_omit = CF_ENHMETAFILE;
-				}
-			}
-			//else omit this format from consideration.
-		}
-
-		if (space_needed == sizeof(format)) // This works because even a single empty format requires space beyond sizeof(format) for storing its format+size.
-		{
-			g_clip.Close();
-			return output_var->Assign(); // Nothing on the clipboard, so just make output_var blank.
-		}
-
-		// Resize the output variable, if needed:
-		if (!output_var->Assign(NULL, space_needed - 1, true, false))
-		{
-			g_clip.Close();
-			return FAIL; // Above should have already reported the error.
-		}
-
-		// Retrieve and store all the clipboard formats.  Because failures of GetClipboardData() are now
-		// tolerated, it seems safest to recalculate the actual size (actual_space_needed) of the data
-		// in case it varies from that found in the estimation phase.  This is especially necessary in
-		// case GlobalLock() ever fails, since that isn't even attempted during the estimation phase.
-		// Otherwise, the variable's mLength member would be set to something too high (the estimate),
-		// which might cause problems elsewhere.
-		binary_contents = output_var->Contents();
-		VarSizeType capacity = output_var->Capacity(); // Note that this is the granted capacity, which might be a little larger than requested.
-		VarSizeType actual_space_used;
-		for (actual_space_used = sizeof(format), format = 0; format = EnumClipboardFormats(format);)
-		{
-			// No point in calling GetLastError() since it would never be executed because the loop's
-			// condition breaks on zero return value.
-			if ((format == CF_TEXT || format == CF_OEMTEXT || format == CF_UNICODETEXT) && format != text_format_to_include
-				|| format == dib_format_to_omit || format == meta_format_to_omit)
-				continue;
-			// Although the GlobalSize() documentation implies that a valid HGLOBAL should not be zero in
-			// size, it does happen, at least in MS Word and for CF_BITMAP.  Therefore, in order to save
-			// the clipboard as accurately as possible, also save formats whose size is zero.  Note that
-			// GlobalLock() fails to work on hglobals of size zero, so don't do it for them.
-			if ((hglobal = g_clip.GetClipboardDataTimeout(format)) // This and the next line rely on short-circuit boolean order.
-				&& (!(size = GlobalSize(hglobal)) || (hglobal_locked = GlobalLock(hglobal)))) // Size of zero or lock succeeded: Include this format.
-			{
-				// Any changes made to how things are stored here should also be made to the size-estimation
-				// phase so that space_needed matches what is done here:
-				added_size = (VarSizeType)(sizeof(format) + sizeof(size) + size);
-				actual_space_used += added_size;
-				if (actual_space_used > capacity) // Tolerate incorrect estimate by omitting formats that won't fit.
-					actual_space_used -= added_size;
-				else
-				{
-					*(UINT *)binary_contents = format;
-					binary_contents = (char *)binary_contents + sizeof(format);
-					*(SIZE_T *)binary_contents = size;
-					binary_contents = (char *)binary_contents + sizeof(size);
-					if (size)
-					{
-						memcpy(binary_contents, hglobal_locked, size);
-						binary_contents = (char *)binary_contents + size;
-					}
-					//else hglobal_locked is not valid, so don't reference it or unlock it.
-				}
-				if (size)
-					GlobalUnlock(hglobal); // hglobal not hglobal_locked.
-			}
-		}
-		g_clip.Close();
-		*(UINT *)binary_contents = 0; // Final termination (must be UINT, see above).
-		output_var->Length() = actual_space_used - 1; // Omit the final zero-byte from the length in case any other routines assume that exactly one zero exists at the end of var's length.
-		return output_var->Close(true); // Pass "true" to make it binary-clipboard type.
-	}
-
-	if (assign_binary_var)
-	{
-		// Caller wants a variable with binary contents assigned (copied) to another variable (usually VAR_CLIPBOARD).
-		binary_contents = source_var->Contents();
-		VarSizeType source_length = source_var->Length();
-		if (output_var->Type() != VAR_CLIPBOARD) // Copy a binary variable to another variable that isn't the clipboard.
-		{
-			if (!output_var->Assign(NULL, source_length))
-				return FAIL; // Above should have already reported the error.
-			memcpy(output_var->Contents(), binary_contents, source_length + 1);  // Add 1 not sizeof(format).
-			output_var->Length() = source_length;
-			return output_var->Close(true); // Pass "true" to make it binary-clipboard type.
-		}
-
-		// Since above didn't return, a variable containing binary clipboard data is being copied back onto
-		// the clipboard.
-		if (!g_clip.Open())
-			return LineError(CANT_OPEN_CLIPBOARD_WRITE);
-		EmptyClipboard(); // Failure is not checked for since it's probably impossible under these conditions.
-
-		// In case the variable contents are incomplete or corrupted (such as having been read in from a
-		// bad file with FileRead), prevent reading beyond the end of the variable:
-		LPVOID next, binary_contents_max = (char *)binary_contents + source_length + 1; // The last acessible byte, which should be the last byte of the (UINT)0 terminator.
-
-		while ((next = (char *)binary_contents + sizeof(format)) <= binary_contents_max
-			&& (format = *(UINT *)binary_contents)) // Get the format.  Relies on short-circuit boolean order.
-		{
-			binary_contents = next;
-			if ((next = (char *)binary_contents + sizeof(size)) > binary_contents_max)
-				break;
-			size = *(UINT *)binary_contents; // Get the size of this format's data.
-			binary_contents = next;
-			if ((next = (char *)binary_contents + size) > binary_contents_max)
-				break;
-	        if (   !(hglobal = GlobalAlloc(GMEM_MOVEABLE, size))   ) // size==0 is okay.
-			{
-				g_clip.Close();
-				return LineError(ERR_OUTOFMEM, FAIL); // Short msg since so rare.
-			}
-			if (size) // i.e. Don't try to lock memory of size zero.  It won't work and it's not needed.
-			{
-				if (   !(hglobal_locked = GlobalLock(hglobal))   )
-				{
-					GlobalFree(hglobal);
-					g_clip.Close();
-					return LineError("GlobalLock", FAIL); // Short msg since so rare.
-				}
-				memcpy(hglobal_locked, binary_contents, size);
-				GlobalUnlock(hglobal);
-				binary_contents = next;
-			}
-			//else hglobal is just an empty format, but store it for completeness/accuracy (e.g. CF_BITMAP).
-			SetClipboardData(format, hglobal); // The system now owns hglobal.
-		}
-		return g_clip.Close();
-	}
-
-	// Otherwise (since above didn't return):
 	// Note: It might be possible to improve performance in the case where
 	// the target variable is large enough to accommodate the new source data
 	// by moving memory around inside it.  For example, Var1 = xxxxxVar1
@@ -6474,7 +6478,8 @@ ResultType Line::PerformAssign()
 	// output_var is mentioned only once in the deref list (which as of v1.0.25,
 	// has been partially done via the concatenation improvement, e.g. Var = %Var%Text).
 	Var *arg_var[MAX_ARGS];
-	if (target_is_involved_in_source && !source_is_being_appended_to_target) // If true, output_var isn't the clipboard due to invariant: target_is_involved_in_source==false whenever output_var->Type()==VAR_CLIPBOARD.
+	VarSizeType space_needed;
+	if (target_is_involved_in_source && !source_is_being_appended_to_target) // If true, output_var isn't the clipboard due to invariant: target_is_involved_in_source==false whenever output_var.Type()==VAR_CLIPBOARD.
 	{
 		if (ExpandArgs() != OK)
 			return FAIL;
@@ -6493,11 +6498,11 @@ ResultType Line::PerformAssign()
 	// the empty string uses up 1 char for its zero terminator).  The below relies upon this fact.
 
 	if (space_needed < 2) // Variable is being assigned the empty string (or a deref that resolves to it).
-		return output_var->Assign("");  // If the var is of large capacity, this will also free its memory.
+		return output_var.Assign("");  // If the var is of large capacity, this will also free its memory.
 
 	if (source_is_being_appended_to_target)
 	{
-		if (space_needed > output_var->Capacity())
+		if (space_needed > output_var.Capacity())
 		{
 			// Since expanding the size of output_var while preserving its existing contents would
 			// likely be a slow operation, revert to the normal method rather than the fast-append
@@ -6510,18 +6515,20 @@ ResultType Line::PerformAssign()
 	}
 
 	char *contents;
-	if (target_is_involved_in_source) // output_var can't be clipboard due to invariant: target_is_involved_in_source==false whenever output_var->Type()==VAR_CLIPBOARD.
+	if (target_is_involved_in_source) // output_var can't be clipboard due to invariant: target_is_involved_in_source==false whenever output_var.Type()==VAR_CLIPBOARD.
 	{
-		// It was already dereferenced above, so use ARG2, which points to the
-		// derefed contents of ARG2 (i.e. the data to be assigned).
-		if (!output_var->Assign(ARG2)) // Don't pass it space_needed-1 as the length because space_needed might be a conservative estimate larger than the actual length+terminator.
+		// It was already dereferenced above, so use ARG2, which points to the deref'ed contents of ARG2
+		// (i.e. the data to be assigned).  I don't think there's any point to checking ARGVAR2!=NULL
+		// and if so passing ARGVAR2->LengthIgnoreBinaryClip, because when we're here, ExpandArgs() will
+		// have seen that it can't optimize it that way and thus it has fully expanded the variable into the buffer.
+		if (!output_var.Assign(ARG2)) // Don't pass it space_needed-1 as the length because space_needed might be a conservative estimate larger than the actual length+terminator.
 			return FAIL;
 		if (g.AutoTrim)
 		{
-			contents = output_var->Contents();
+			contents = output_var.Contents();
 			if (*contents)
 			{
-				VarSizeType &var_len = output_var->Length(); // Might help perf. slightly.
+				VarSizeType &var_len = output_var.Length(); // Might help perf. slightly.
 				var_len = (VarSizeType)trim(contents, var_len); // Passing length to trim() is known to greatly improve performance for long strings.
 			}
 		}
@@ -6534,18 +6541,18 @@ ResultType Line::PerformAssign()
 	// to target using the simple method, we know output_var isn't the clipboard because the
 	// logic at the top of this function ensures that.
 	if (!source_is_being_appended_to_target)
-		if (output_var->Assign(NULL, space_needed - 1) != OK)
+		if (output_var.Assign(NULL, space_needed - 1) != OK)
 			return FAIL;
 	// Expand Arg2 directly into the var.  Note: If output_var is the clipboard,
 	// it's probably okay if the below actually writes less than the size of
 	// the mem that has already been allocated for the new clipboard contents
 	// That might happen due to a failure or size discrepancy between the
 	// deref size-estimate and the actual deref itself:
-	contents = output_var->Contents();
+	contents = output_var.Contents();
 	// This knows not to copy the first var-ref onto itself (for when source_is_being_appended_to_target is true).
 	// In addition, to reach this point, arg_var[0]'s value will already have been determined (possibly NULL)
 	// by GetExpandedArgSize():
-	char *one_beyond_contents_end = ExpandArg(contents, 1, arg_var[0]);
+	char *one_beyond_contents_end = ExpandArg(contents, 1, arg_var[1]); // v1.0.45: Fixed arg_var[0] to be arg_var[1] (but this was only a performance issue).
 	if (!one_beyond_contents_end)
 		return FAIL;  // ExpandArg() will have already displayed the error.
 	// Set the length explicitly rather than using space_needed because GetExpandedArgSize()
@@ -6553,8 +6560,304 @@ ResultType Line::PerformAssign()
 	size_t length = one_beyond_contents_end - contents - 1;
 	// v1.0.25: Passing the precalculated length to trim() greatly improves performance,
 	// especially for concat loops involving things like Var = %Var%String:
-	output_var->Length() = (VarSizeType)(g.AutoTrim ? trim(contents, length) : length);
-	return output_var->Close();  // i.e. Consider this function to be always successful unless this fails.
+	output_var.Length() = (VarSizeType)(g.AutoTrim ? trim(contents, length) : length);
+	return output_var.Close();  // i.e. Consider this function to be always successful unless this fails.
+}
+
+
+
+ResultType Line::AssignClipboardAll(Var &aOutputVar)
+{
+	if (aOutputVar.Type() == VAR_CLIPBOARD) // Seems pointless (nor is the below equipped to handle it), so make this have no effect.
+		return OK;
+	if (!g_clip.Open())
+		return LineError(CANT_OPEN_CLIPBOARD_READ);
+	// Calculate the size needed:
+	// EnumClipboardFormats() retrieves all formats, including synthesized formats that don't
+	// actually exist on the clipboard but are instead constructed on demand.  Unfortunately,
+	// there doesn't appear to be any way to reliably determine which formats are real and
+	// which are synthesized (if there were such a way, a large memory savings could be
+	// realized by omitting the synthesized formats from the saved version). One thing that
+	// is certain is that the "real" format(s) come first and the synthesized ones afterward.
+	// However, that's not quite enough because although it is recommended that apps store
+	// the primary/preferred format first, the OS does not enforce this.  For example, testing
+	// shows that the apps do not have to store CF_UNICODETEXT prior to storing CF_TEXT,
+	// in which case the clipboard might have inaccurate CF_TEXT as the first element and
+	// more accurate/complete (non-synthesized) CF_UNICODETEXT stored as the next.
+	// In spite of the above, the below seems likely to be accurate 99% or more of the time,
+	// which seems worth it given the large savings of memory that are achieved, especially
+	// for large quantities of text or large images. Confidence is further raised by the
+	// fact that MSDN says there's no advantage/reason for an app to place multiple formats
+	// onto the clipboard if those formats are available through synthesis.
+	// And since CF_TEXT always(?) yields synthetic CF_OEMTEXT and CF_UNICODETEXT, and
+	// probably (but less certainly) vice versa: if CF_TEXT is listed first, it might certainly
+	// mean that the other two do not need to be stored.  There is some slight doubt about this
+	// in a situation where an app explicitly put CF_TEXT onto the clipboard and then followed
+	// it with CF_UNICODETEXT that isn't synthesized, nor does it match what would have been
+	// synthesized. However, that seems extremely unlikely (it would be much more likely for
+	// an app to store CF_UNICODETEXT *first* followed by custom/non-synthesized CF_TEXT, but
+	// even that might be unheard of in practice).  So for now -- since there is no documentation
+	// to be found about this anywhere -- it seems best to omit some of the most common
+	// synthesized formats:
+	// CF_TEXT is the first of three text formats to appear: Omit CF_OEMTEXT and CF_UNICODETEXT.
+	//    (but not vice versa since those are less certain to be synthesized)
+	//    (above avoids using four times the amount of memory that would otherwise be required)
+	//    UPDATE: Only the first text format is included now, since MSDN says there is no
+	//    advantage/reason to having multiple non-synthesized text formats on the clipboard.
+	// CF_DIB: Always omit this if CF_DIBV5 is available (which must be present on Win2k+, at least
+	// as a synthesized format, whenever CF_DIB is present?) This policy seems likely to avoid
+	// the issue where CF_DIB occurs first yet CF_DIBV5 that comes later is *not* synthesized,
+	// perhaps simply because the app stored DIB prior to DIBV5 by mistake (though there is
+	// nothing mandatory, so maybe it's not really a mistake). Note: CF_DIBV5 supports alpha
+	// channel / transparency, and perhaps other things, and it is likely that when synthesized,
+	// no information of the original CF_DIB is lost. Thus, when CF_DIBV5 is placed back onto
+	// the clipboard, any app that needs CF_DIB will have it synthesized back to the original
+	// data (hopefully). It's debatable whether to do it that way or store whichever comes first
+	// under the theory that an app would never store both formats on the clipboard since MSDN
+	// says: "If the system provides an automatic type conversion for a particular clipboard format,
+	// there is no advantage to placing the conversion format(s) on the clipboard."
+	bool format_is_text;
+	HGLOBAL hglobal;
+	SIZE_T size;
+	UINT format;
+	VarSizeType space_needed;
+	UINT dib_format_to_omit = 0, meta_format_to_omit = 0, text_format_to_include = 0;
+	// Start space_needed off at 4 to allow room for guaranteed final termination of aOutputVar's contents.
+	// The termination must be of the same size as format because a single-byte terminator would
+	// be read in as a format of 0x00?????? where ?????? is an access violation beyond the buffer.
+	for (space_needed = sizeof(format), format = 0; format = EnumClipboardFormats(format);)
+	{
+		// No point in calling GetLastError() since it would never be executed because the loop's
+		// condition breaks on zero return value.
+		format_is_text = (format == CF_TEXT || format == CF_OEMTEXT || format == CF_UNICODETEXT);
+		if ((format_is_text && text_format_to_include) // The first text format has already been found and included, so exclude all other text formats.
+			|| format == dib_format_to_omit) // ... or this format was marked excluded by a prior iteration.
+			continue;
+		// GetClipboardData() causes Task Manager to report a (sometimes large) increase in
+		// memory utilization for the script, which is odd since it persists even after the
+		// clipboard is closed.  However, when something new is put onto the clipboard by the
+		// the user or any app, that memory seems to get freed automatically.  Also, 
+		// GetClipboardData(49356) fails in MS Visual C++ when the copied text is greater than
+		// about 200 KB (but GetLastError() returns ERROR_SUCCESS).  When pasting large sections
+		// of colorized text into MS Word, it can't get the colorized text either (just the plain
+		// text). Because of this example, it seems likely it can fail in other places or under
+		// other circumstances, perhaps by design of the app. Therefore, be tolerant of failures
+		// because partially saving the clipboard seems much better than aborting the operation.
+		if (hglobal = g_clip.GetClipboardDataTimeout(format))
+		{
+			space_needed += (VarSizeType)(sizeof(format) + sizeof(size) + GlobalSize(hglobal)); // The total amount of storage space required for this item.
+			if (format_is_text) // If this is true, then text_format_to_include must be 0 since above didn't "continue".
+				text_format_to_include = format;
+			if (!dib_format_to_omit)
+			{
+				if (format == CF_DIB)
+					dib_format_to_omit = CF_DIBV5;
+				else if (format == CF_DIBV5)
+					dib_format_to_omit = CF_DIB;
+			}
+			if (!meta_format_to_omit) // Checked for the same reasons as dib_format_to_omit.
+			{
+				if (format == CF_ENHMETAFILE)
+					meta_format_to_omit = CF_METAFILEPICT;
+				else if (format == CF_METAFILEPICT)
+					meta_format_to_omit = CF_ENHMETAFILE;
+			}
+		}
+		//else omit this format from consideration.
+	}
+
+	if (space_needed == sizeof(format)) // This works because even a single empty format requires space beyond sizeof(format) for storing its format+size.
+	{
+		g_clip.Close();
+		return aOutputVar.Assign(); // Nothing on the clipboard, so just make aOutputVar blank.
+	}
+
+	// Resize the output variable, if needed:
+	if (!aOutputVar.Assign(NULL, space_needed - 1, true, false))
+	{
+		g_clip.Close();
+		return FAIL; // Above should have already reported the error.
+	}
+
+	// Retrieve and store all the clipboard formats.  Because failures of GetClipboardData() are now
+	// tolerated, it seems safest to recalculate the actual size (actual_space_needed) of the data
+	// in case it varies from that found in the estimation phase.  This is especially necessary in
+	// case GlobalLock() ever fails, since that isn't even attempted during the estimation phase.
+	// Otherwise, the variable's mLength member would be set to something too high (the estimate),
+	// which might cause problems elsewhere.
+	LPVOID hglobal_locked;
+	LPVOID binary_contents = aOutputVar.Contents();
+	VarSizeType capacity = aOutputVar.Capacity(); // Note that this is the granted capacity, which might be a little larger than requested.
+	VarSizeType added_size, actual_space_used;
+	for (actual_space_used = sizeof(format), format = 0; format = EnumClipboardFormats(format);)
+	{
+		// No point in calling GetLastError() since it would never be executed because the loop's
+		// condition breaks on zero return value.
+		if ((format == CF_TEXT || format == CF_OEMTEXT || format == CF_UNICODETEXT) && format != text_format_to_include
+			|| format == dib_format_to_omit || format == meta_format_to_omit)
+			continue;
+		// Although the GlobalSize() documentation implies that a valid HGLOBAL should not be zero in
+		// size, it does happen, at least in MS Word and for CF_BITMAP.  Therefore, in order to save
+		// the clipboard as accurately as possible, also save formats whose size is zero.  Note that
+		// GlobalLock() fails to work on hglobals of size zero, so don't do it for them.
+		if ((hglobal = g_clip.GetClipboardDataTimeout(format)) // This and the next line rely on short-circuit boolean order.
+			&& (!(size = GlobalSize(hglobal)) || (hglobal_locked = GlobalLock(hglobal)))) // Size of zero or lock succeeded: Include this format.
+		{
+			// Any changes made to how things are stored here should also be made to the size-estimation
+			// phase so that space_needed matches what is done here:
+			added_size = (VarSizeType)(sizeof(format) + sizeof(size) + size);
+			actual_space_used += added_size;
+			if (actual_space_used > capacity) // Tolerate incorrect estimate by omitting formats that won't fit.
+				actual_space_used -= added_size;
+			else
+			{
+				*(UINT *)binary_contents = format;
+				binary_contents = (char *)binary_contents + sizeof(format);
+				*(SIZE_T *)binary_contents = size;
+				binary_contents = (char *)binary_contents + sizeof(size);
+				if (size)
+				{
+					memcpy(binary_contents, hglobal_locked, size);
+					binary_contents = (char *)binary_contents + size;
+				}
+				//else hglobal_locked is not valid, so don't reference it or unlock it.
+			}
+			if (size)
+				GlobalUnlock(hglobal); // hglobal not hglobal_locked.
+		}
+	}
+	g_clip.Close();
+	*(UINT *)binary_contents = 0; // Final termination (must be UINT, see above).
+	aOutputVar.Length() = actual_space_used - 1; // Omit the final zero-byte from the length in case any other routines assume that exactly one zero exists at the end of var's length.
+	return aOutputVar.Close(true); // Pass "true" to make it binary-clipboard type.
+}
+
+
+
+ResultType Line::AssignBinaryClip(Var &aOutputVar, Var &aInputVar)
+// Caller has ensured that aOutputVar.Type() is VAR_NORMAL or VAR_CLIPBOARD (usually via load-time validation).
+// Caller has ensured that aInputVar.IsBinaryClip()==true.
+{
+	LPVOID binary_contents = aInputVar.Contents();
+	VarSizeType source_length = aInputVar.Length();
+	if (aOutputVar.Type() == VAR_NORMAL) // Copy a binary variable to another variable that isn't the clipboard.
+	{
+		if (binary_contents == aOutputVar.Contents()) // v1.0.45: source==dest, so nothing to do. It's compared this way in case ByRef/aliases are involved. This will detect even them.
+			return OK;
+		if (!aOutputVar.Assign(NULL, source_length))
+			return FAIL; // Above should have already reported the error.
+		memcpy(aOutputVar.Contents(), binary_contents, source_length + 1); // MUST CALL Contents() again in case Assign() changed it. Add 1 not sizeof(format).
+		aOutputVar.Length() = source_length;
+		return aOutputVar.Close(true); // Pass "true" to make it binary-clipboard type.
+	}
+
+	// Since above didn't return, a variable containing binary clipboard data is being copied back onto
+	// the clipboard.
+	if (!g_clip.Open())
+		return LineError(CANT_OPEN_CLIPBOARD_WRITE);
+	EmptyClipboard(); // Failure is not checked for since it's probably impossible under these conditions.
+
+	// In case the variable contents are incomplete or corrupted (such as having been read in from a
+	// bad file with FileRead), prevent reading beyond the end of the variable:
+	LPVOID next, binary_contents_max = (char *)binary_contents + source_length + 1; // The last acessible byte, which should be the last byte of the (UINT)0 terminator.
+	HGLOBAL hglobal;
+	LPVOID hglobal_locked;
+	UINT format;
+	SIZE_T size;
+
+	while ((next = (char *)binary_contents + sizeof(format)) <= binary_contents_max
+		&& (format = *(UINT *)binary_contents)) // Get the format.  Relies on short-circuit boolean order.
+	{
+		binary_contents = next;
+		if ((next = (char *)binary_contents + sizeof(size)) > binary_contents_max)
+			break;
+		size = *(UINT *)binary_contents; // Get the size of this format's data.
+		binary_contents = next;
+		if ((next = (char *)binary_contents + size) > binary_contents_max)
+			break;
+	    if (   !(hglobal = GlobalAlloc(GMEM_MOVEABLE, size))   ) // size==0 is okay.
+		{
+			g_clip.Close();
+			return LineError(ERR_OUTOFMEM); // Short msg since so rare.
+		}
+		if (size) // i.e. Don't try to lock memory of size zero.  It won't work and it's not needed.
+		{
+			if (   !(hglobal_locked = GlobalLock(hglobal))   )
+			{
+				GlobalFree(hglobal);
+				g_clip.Close();
+				return LineError("GlobalLock"); // Short msg since so rare.
+			}
+			memcpy(hglobal_locked, binary_contents, size);
+			GlobalUnlock(hglobal);
+			binary_contents = next;
+		}
+		//else hglobal is just an empty format, but store it for completeness/accuracy (e.g. CF_BITMAP).
+		SetClipboardData(format, hglobal); // The system now owns hglobal.
+	}
+	return g_clip.Close();
+}
+
+
+
+ResultType Line::StringReplace()
+// v1.0.45: Revised to improve average-case performance and reduce memory utilization.
+{
+	Var *output_var = OUTPUT_VAR;
+	char *source = ARG2;
+	size_t length = ArgLength(2); // Going in, it's the haystack length. Later (coming out), it's the result length.
+
+	bool alternate_errorlevel = strcasestr(ARG5, "UseErrorLevel"); // This also implies replace-all.
+	UINT replacement_limit = (alternate_errorlevel || StrChrAny(ARG5, "1aA")) // This must be done in a way that recognizes "AllSlow" as meaning replace-all (even though the slow method itself is obsolete).
+		? UINT_MAX : 1;
+
+	// In case the strings involved are massive, free the output_var in advance of the operation to
+	// reduce memory load and avoid swapping (but only if output_var isn't the same address as the input_var).
+	if (output_var->Type() == VAR_NORMAL && source != output_var->Contents()) // It's compared this way in case ByRef/aliases are involved.  This will detect even them.
+		output_var->Free();
+	//else source and dest are the same, so can't free the dest until after the operation.
+
+	// Note: The current implementation of StrReplace() should be able to handle any conceivable inputs
+	// without an empty string causing an infinite loop and without going infinite due to finding the
+	// search string inside of newly-inserted replace strings (e.g. replacing all occurrences
+	// of b with bcd would not keep finding b in the newly inserted bcd, infinitely).
+	char *dest;
+	UINT found_count = StrReplace(source, ARG3, ARG4, (StringCaseSenseType)g.StringCaseSense
+		, replacement_limit, -1, &dest, &length); // Length of haystack is passed to improve performance because ArgLength() can often discover it instantaneously.
+
+	if (!dest) // Failure due to out of memory.
+		return LineError(ERR_OUTOFMEM ERR_ABORT);
+
+	if (dest != source) // StrReplace() allocated new memory rather than returning "source" to us unaltered.
+	{
+		// v1.0.45: Take a shortcut for performance: Hang the newly allocated memory (populated by the callee)
+		// directly onto the variable, which saves a memcpy() over the old method (and possible other savings).
+		output_var->AcceptNewMem(dest, (VarSizeType)length); // Tells the variable to adopt this memory as its new memory. Callee has set "length" for us.
+		// Above also handles the case where output_var is VAR_CLIPBOARD.
+	}
+	else // StrReplace gave us back "source" unaltered because no replacements were needed.
+	{
+		if (output_var->Type() == VAR_NORMAL)
+		{
+			// Technically the following check isn't necessary because Assign() also checks for it.
+			// But since StringReplace is a frequently-used command, checking it here seems worthwhile
+			// to avoid calling Assign().
+			if (source != output_var->Contents()) // It's compared this way in case ByRef/aliases are involved.  This will detect even them.
+				output_var->Assign(source, (VarSizeType)length); // Callee has set "length" for us.
+			//else the unaltered result and output_var same the same address.  Nothing needs to be done (for
+			// simplicity, not even the binary-clipboard attribute is removed if it happnes to be present).
+		}
+		else // output_var is of type VAR_CLIPBOARD.
+			if (ARGVARRAW2->Type() != VAR_CLIPBOARD) // Arg index #1 (the second arg) is a normal var or some read-only var.
+				output_var->Assign(source, (VarSizeType)length); // Callee has set "length" for us.
+			//else the unaltered result and output_var are both the clipboard.  Nothing needs to be done.
+	}
+
+	if (alternate_errorlevel)
+		g_ErrorLevel->Assign((DWORD)found_count);
+	else // Use old ErrorLevel method for backward compatibility.
+		g_ErrorLevel->Assign(found_count ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR);
+	return OK;
 }
 
 
@@ -6564,8 +6867,11 @@ ResultType Line::StringSplit(char *aArrayName, char *aInputString, char *aDelimi
 	// Make it longer than Max so that FindOrAddVar() will be able to spot and report var names
 	// that are too long, either because the base-name is too long, or the name becomes too long
 	// as a result of appending the array index number:
-	char var_name[MAX_VAR_NAME_LENGTH + 20];
-	snprintf(var_name, sizeof(var_name), "%s0", aArrayName);
+	char var_name[MAX_VAR_NAME_LENGTH + 21]; // Allow room for largest 64-bit integer, 20 chars: 18446744073709551616.
+	strlcpy(var_name, aArrayName, MAX_VAR_NAME_LENGTH+1); // This prefix is copied into it only once, for performance.
+	char *var_name_suffix = var_name + strlen(var_name);
+
+	strcpy(var_name_suffix, "0");
 	// ALWAYS_PREFER_LOCAL below allows any existing local variable that matches array0's name
 	// (e.g. Array0) to be given preference over creating a new global variable if the function's
 	// mode is to assume globals:
@@ -6586,8 +6892,7 @@ ResultType Line::StringSplit(char *aArrayName, char *aInputString, char *aDelimi
 		size_t element_length;
 		for (contents_of_next_element = aInputString, next_element_number = 1; ; ++next_element_number)
 		{
-			snprintf(var_name, sizeof(var_name), "%s%u", aArrayName, next_element_number);
-
+			_ultoa(next_element_number, var_name_suffix, 10);
 			// To help performance (in case the linked list of variables is huge), tell it where
 			// to start the search.  Use element #0 rather than the preceding element because,
 			// for example, Array19 is alphabetially less than Array2, so we can't rely on the
@@ -6644,7 +6949,7 @@ ResultType Line::StringSplit(char *aArrayName, char *aInputString, char *aDelimi
 				break;
 		if (*dp) // Omitted.
 			continue;
-		snprintf(var_name, sizeof(var_name), "%s%u", aArrayName, next_element_number);
+		_ultoa(next_element_number, var_name_suffix, 10);
 		if (   !(next_element = g_script.FindOrAddVar(var_name, 0, always_use))   )
 			return FAIL;  // It will have already displayed the error.
 		if (!next_element->Assign(cp, 1))
@@ -6658,11 +6963,11 @@ ResultType Line::StringSplit(char *aArrayName, char *aInputString, char *aDelimi
 
 ResultType Line::SplitPath(char *aFileSpec)
 {
-	Var *output_var_name = ResolveVarOfArg(1);  // i.e. Param #2. Ok if NULL.
-	Var *output_var_dir = ResolveVarOfArg(2);  // Ok if NULL.
-	Var *output_var_ext = ResolveVarOfArg(3);  // Ok if NULL.
-	Var *output_var_name_no_ext = ResolveVarOfArg(4);  // Ok if NULL.
-	Var *output_var_drive = ResolveVarOfArg(5);  // Ok if NULL.
+	Var *output_var_name = ARGVAR2;  // i.e. Param #2. Ok if NULL.
+	Var *output_var_dir = ARGVAR3;  // Ok if NULL.
+	Var *output_var_ext = ARGVAR4;  // Ok if NULL.
+	Var *output_var_name_no_ext = ARGVAR5;  // Ok if NULL.
+	Var *output_var_drive = ARGVAR6;  // Ok if NULL.
 
 	// For URLs, "drive" is defined as the server name, e.g. http://somedomain.com
 	char *name = "", *name_delimiter = NULL, *drive_end = NULL; // Set defaults to improve maintainability.
@@ -6750,12 +7055,15 @@ ResultType Line::SplitPath(char *aFileSpec)
 			// whether it needs a colon added or not.
 			drive_end = drive + 2;
 		else
+		{
 			// It's debatable, but it seems best to return a blank drive if a aFileSpec is a relative path.
 			// rather than trying to use GetFullPathName() on a potentially non-existent file/dir.
 			// _splitpath() doesn't fetch the drive letter of relative paths either.  This also reports
 			// a blank drive for something like file://C:\My Folder\My File.txt, which seems too rarely
 			// to justify a special mode.
-			drive_end = drive = ""; // This is necessary to allow Assign() to work correctly later below, since it interprets a length of zero as "use string's entire length".
+			drive_end = "";
+			drive = ""; // This is necessary to allow Assign() to work correctly later below, since it interprets a length of zero as "use string's entire length".
+		}
 
 		if (   !(name_delimiter = strrchr(aFileSpec, '\\'))   ) // No backslash.
 			if (   !(name_delimiter = strrchr(aFileSpec, ':'))   ) // No colon.
@@ -6885,7 +7193,9 @@ int SortRandom(const void *a1, const void *a2)
 
 
 ResultType Line::PerformSort(char *aContents, char *aOptions)
-// Caller must ensure that aContents is modifiable (ArgMustBeDereferenced() currently ensures this).
+// Caller must ensure that aContents is modifiable (ArgMustBeDereferenced() currently ensures this) because
+// not only does this function modify it, it also needs to store its result back into output_var in a way
+// that requires that output_var not be at the same address as the contents that were sorted.
 // It seems best to treat ACT_SORT's var to be an input vs. output var because if
 // it's an environment variable or the clipboard, the input variable handler will
 // automatically resolve it to be ARG1 (i.e. put its contents into the deref buf).
@@ -6899,13 +7209,10 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 	if (!*aContents) // Variable is empty, nothing to sort.
 		return OK;
 
-	Var *output_var = ResolveVarOfArg(0); // The input var (ARG1) is also the output var in this case.
-	if (!output_var)
-		return FAIL;
-
+	Var *output_var = OUTPUT_VAR; // The input var (ARG1) is also the output var in this case.
 	// Do nothing for reserved variables, since most of them are read-only and besides, none
 	// of them (realistically) should ever need sorting:
-	if (VAR_IS_RESERVED(output_var))
+	if (VAR_IS_RESERVED(output_var)) // output_var can be a reserved variable because it's not marked as an output-var by ArgIsVar() [since it has a dual purpose as an input-var].
 		return OK;
 
 	// Resolve options.  Set defaults first:
@@ -7086,7 +7393,7 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 
 	// Set default in case original last item is still the last item, or if last item was omitted due to being a dupe:
 	char *pos_of_original_last_item_in_dest = NULL;
-	size_t i, item_count_less_1 = item_count - 1;
+	size_t i, item_count_minus_1 = item_count - 1;
 	DWORD omit_dupe_count = 0;
 	bool keep_this_item;
 	char *source, *dest;
@@ -7129,19 +7436,20 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 				//    two strings that are duplicates but weren't sorted adjacently due to their case.
 				// 3) Both are case sensitive: seems okay
 				// 4) Both are not case sensitive: seems okay
+				//
 				// In light of the above, using the g_SortCaseSensitive flag to control the behavior of
 				// both sorting and dupe-removal seems best.
 		}
 		if (keep_this_item)
 		{
-			if (*item_curr == original_last_item && i < item_count_less_1) // i.e. If last item is still last, don't update the below.
+			if (*item_curr == original_last_item && i < item_count_minus_1) // i.e. If last item is still last, don't update the below.
 				pos_of_original_last_item_in_dest = dest;
 			for (source = *item_curr; *source;)
 				*dest++ = *source++;
 			// If we're at the last item and the original list's last item had a terminating delimiter
 			// and the specified options said to treat it not as a delimiter but as a final char of sorts,
 			// include it after the item that is now last so that the overall layout is the same:
-			if (i < item_count_less_1 || terminate_last_item_with_delimiter)
+			if (i < item_count_minus_1 || terminate_last_item_with_delimiter)
 				*dest++ = delimiter;  // Put each item's delimiter back in so that format is the same as the original.
 			item_prev = *item_curr; // Since the item just processed above isn't a dupe, save this item to compare against the next item.
 		}
@@ -7204,9 +7512,7 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 ResultType Line::GetKeyJoyState(char *aKeyName, char *aOption)
 // Keep this in sync with FUNC_GETKEYSTATE.
 {
-	Var *output_var = ResolveVarOfArg(0);
-	if (!output_var)
-		return FAIL;
+	Var *output_var = OUTPUT_VAR;
 	JoyControls joy;
 	int joystick_id;
 	vk_type vk = TextToVK(aKeyName);
@@ -7246,11 +7552,8 @@ ResultType Line::DriveSpace(char *aPath, bool aGetFreeSpace)
 // have the same amount of free space as its root drive.  However, I'm not sure if this
 // method here actually takes that into account.
 {
-	Var *output_var = ResolveVarOfArg(0);
-	if (!output_var)
-		return FAIL;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
-	output_var->Assign(); // Init to empty string regardless of whether we succeed here.
+	OUTPUT_VAR->Assign(); // Init to empty string regardless of whether we succeed here.
 
 	if (!aPath || !*aPath) return OK;  // Let ErrorLevel tell the story.  Below relies on this check.
 
@@ -7295,7 +7598,7 @@ ResultType Line::DriveSpace(char *aPath, bool aGetFreeSpace)
 	}
 
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-	return output_var->Assign(free_space);
+	return OUTPUT_VAR->Assign(free_space);
 }
 
 
@@ -7485,9 +7788,7 @@ ResultType Line::DriveGet(char *aCmd, char *aValue)
 
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR);  // Set default since there are many points of return.
 
-	Var *output_var = ResolveVarOfArg(0);
-	if (!output_var)
-		return FAIL;
+	Var *output_var = OUTPUT_VAR;
 
 	switch(drive_get_cmd)
 	{
@@ -7652,8 +7953,7 @@ ResultType Line::SoundSetGet(char *aSetting, DWORD aComponentType, int aComponen
 	}
 	else // The mode is GET.
 	{
-		if (   !(output_var = ResolveVarOfArg(0))   )
-			return FAIL;  // Don't bother setting ErrorLevel if there's a critical error like this.
+		output_var = OUTPUT_VAR;
 		output_var->Assign(); // Init to empty string regardless of whether we succeed here.
 	}
 
@@ -7829,10 +8129,7 @@ ResultType Line::SoundSetGet(char *aSetting, DWORD aComponentType, int aComponen
 
 ResultType Line::SoundGetWaveVolume(HWAVEOUT aDeviceID)
 {
-	Var *output_var = ResolveVarOfArg(0);
-	if (!output_var)
-		return FAIL;
-	output_var->Assign(); // Init to empty string regardless of whether we succeed here.
+	OUTPUT_VAR->Assign(); // Init to empty string regardless of whether we succeed here.
 
 	DWORD current_vol;
 	if (waveOutGetVolume(aDeviceID, &current_vol) != MMSYSERR_NOERROR)
@@ -7843,7 +8140,7 @@ ResultType Line::SoundGetWaveVolume(HWAVEOUT aDeviceID)
 	// Return only the left channel volume level (in case right is different, or device is mono vs. stereo).
 	// MSDN: "If a device does not support both left and right volume control, the low-order word
 	// of the specified location contains the mono volume level.
-	return output_var->Assign((double)(LOWORD(current_vol) * 100) / 0xFFFF);
+	return OUTPUT_VAR->Assign((double)(LOWORD(current_vol) * 100) / 0xFFFF);
 }
 
 
@@ -7941,9 +8238,6 @@ ResultType Line::SoundPlay(char *aFilespec, bool aSleepUntilDone)
 
 ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeting, char *aFilter)
 {
-	Var *output_var = ResolveVarOfArg(0);
-	if (!output_var)
-		return FAIL;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 	if (g_nFileDialogs >= MAX_FILEDIALOGS)
 	{
@@ -8042,7 +8336,7 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 			// that separates the allowed file extensions.  The API docs specify that there
 			// should be no spaces in the pattern itself, even though it's okay if they exist
 			// in the displayed name of the file-type:
-			StrReplaceAll(pattern, " ", "", true, SCS_SENSITIVE);
+			StrReplace(pattern, " ", "", SCS_SENSITIVE);
 			// Also include the All Files (*.*) filter, since there doesn't seem to be much
 			// point to making this an option.  This is because the user could always type
 			// *.* and press ENTER in the filename field and achieve the same result:
@@ -8146,7 +8440,7 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 		// It seems best to clear the variable in these cases, since this is a scripting
 		// language where performance is not the primary goal.  So do that and return OK,
 		// but leave ErrorLevel set to ERRORLEVEL_ERROR.
-		return output_var->Assign(); // Tell it not to free the memory by not calling with "".
+		return OUTPUT_VAR->Assign(); // Tell it not to free the memory by not calling with "".
 	else
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate that the user pressed OK vs. CANCEL.
 
@@ -8209,7 +8503,7 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 			}
 		}
 	}
-	return output_var->Assign(file_buf);
+	return OUTPUT_VAR->Assign(file_buf);
 }
 
 
@@ -8264,10 +8558,7 @@ ResultType Line::FileRead(char *aFilespec)
 // kind of unexpected and more serious error occurs, such as variable-out-of-memory,
 // that will cause FAIL to be returned.
 {
-	Var *output_var = ResolveVarOfArg(0);
-	if (!output_var)
-		return FAIL;
-
+	Var *output_var = OUTPUT_VAR;
 	// Init output var to be blank as an additional indicator of failure (or empty file).
 	// Caller must check ErrorLevel to distinguish between an empty file and an error.
 	output_var->Assign();
@@ -8392,10 +8683,10 @@ ResultType Line::FileRead(char *aFilespec)
 	{
 		output_buf[bytes_actually_read] = '\0';  // Ensure text is terminated where indicated.
 		// Since a larger string is being replaced with a smaller, there's a good chance the 2 GB
-		// address limit will not be exceeded by StrReplaceAll even if the file is close to the
+		// address limit will not be exceeded by StrReplace even if the file is close to the
 		// 1 GB limit as described above:
 		if (translate_crlf_to_lf)
-			StrReplaceAll(output_buf, "\r\n", "\n", false, SCS_SENSITIVE); // Safe only because larger string is being replaced with smaller.
+			StrReplace(output_buf, "\r\n", "\n", SCS_SENSITIVE); // Safe only because larger string is being replaced with smaller.
 		output_var->Length() = is_binary_clipboard ? (bytes_actually_read - 1) // Length excludes the very last byte of the (UINT)0 terminator.
 			: (VarSizeType)strlen(output_buf); // In case file contains binary zeroes, explicitly calculate the "usable" length so that it's accurate.
 	}
@@ -8424,9 +8715,6 @@ ResultType Line::FileReadLine(char *aFilespec, char *aLineNumber)
 // kind of unexpected and more serious error occurs, such as variable-out-of-memory,
 // that will cause FAIL to be returned.
 {
-	Var *output_var = ResolveVarOfArg(0);
-	if (!output_var)
-		return FAIL;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 	__int64 line_number = ATOI64(aLineNumber);
 	if (line_number < 1)
@@ -8460,11 +8748,11 @@ ResultType Line::FileReadLine(char *aFilespec, char *aLineNumber)
 		buf[--buf_length] = '\0';
 	if (!buf_length)
 	{
-		if (!output_var->Assign()) // Explicitly call it this way so that it won't free the memory.
+		if (!OUTPUT_VAR->Assign()) // Explicitly call it this way so that it won't free the memory.
 			return FAIL;
 	}
 	else
-		if (!output_var->Assign(buf, (VarSizeType)buf_length))
+		if (!OUTPUT_VAR->Assign(buf, (VarSizeType)buf_length))
 			return FAIL;
 	return g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 }
@@ -8504,11 +8792,11 @@ ResultType Line::FileAppend(char *aFilespec, char *aBuf, LoopReadFileStruct *aCu
 		// 1) It properly resolves dynamic variables, such as "FileAppend, %VarContainingTheStringClipboardAll%, File".
 		// 2) It resolves them only once at a prior stage, rather than having to do them again here
 		//    (which helps performance).
-		if (mArgc > 0 && sArgVar[0])
+		if (ARGVAR1)
 		{
-			if (sArgVar[0]->Type() == VAR_CLIPBOARDALL)
+			if (ARGVAR1->Type() == VAR_CLIPBOARDALL)
 				return WriteClipboardToFile(aFilespec);
-			else if (sArgVar[0]->IsBinaryClip())
+			else if (ARGVAR1->IsBinaryClip())
 			{
 				// Since there is at least one deref in Arg #1 and the first deref is binary clipboard,
 				// assume this operation's only purpose is to write binary data from that deref to a file.
@@ -8520,7 +8808,7 @@ ResultType Line::FileAppend(char *aFilespec, char *aBuf, LoopReadFileStruct *aCu
 				// 2) There is a 4-byte zero terminator at the end of the file.
 				if (   !(fp = fopen(aFilespec, "wb"))   ) // Overwrite.
 					return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
-				g_ErrorLevel->Assign(fwrite(sArgVar[0]->Contents(), sArgVar[0]->Length() + 1, 1, fp)
+				g_ErrorLevel->Assign(fwrite(ARGVAR1->Contents(), ARGVAR1->Length() + 1, 1, fp)
 					? ERRORLEVEL_NONE : ERRORLEVEL_ERROR); // In this case, fwrite() will return 1 on success, 0 on failure.
 				fclose(fp);
 				return OK;
@@ -8682,7 +8970,7 @@ ResultType Line::ReadClipboardFromFile(HANDLE hfile)
 		{
 			g_clip.Close();
 			CloseHandle(hfile);
-			return LineError(ERR_OUTOFMEM, FAIL); // Short msg since so rare.
+			return LineError(ERR_OUTOFMEM); // Short msg since so rare.
 		}
 
 		if (size) // i.e. Don't try to lock memory of size zero.  It won't work and it's not needed.
@@ -8692,7 +8980,7 @@ ResultType Line::ReadClipboardFromFile(HANDLE hfile)
 				GlobalFree(hglobal);
 				g_clip.Close();
 				CloseHandle(hfile);
-				return LineError("GlobalLock", FAIL); // Short msg since so rare.
+				return LineError("GlobalLock"); // Short msg since so rare.
 			}
 			if (!ReadFile(hfile, hglobal_locked, (DWORD)size, &bytes_read, NULL) || bytes_read < size)
 			{
@@ -8825,11 +9113,8 @@ ResultType Line::FileInstall(char *aSource, char *aDest, char *aFlag)
 
 ResultType Line::FileGetAttrib(char *aFilespec)
 {
-	Var *output_var = ResolveVarOfArg(0);
-	if (!output_var)
-		return FAIL;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default
-	output_var->Assign(); // Init to be blank, in case of failure.
+	OUTPUT_VAR->Assign(); // Init to be blank, in case of failure.
 
 	if (!aFilespec || !*aFilespec)
 		return OK;  // Let ErrorLevel indicate an error, since this is probably not what the user intended.
@@ -8840,7 +9125,7 @@ ResultType Line::FileGetAttrib(char *aFilespec)
 
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE);
 	char attr_string[128];
-	return output_var->Assign(FileAttribToStr(attr_string, attr));
+	return OUTPUT_VAR->Assign(FileAttribToStr(attr_string, attr));
 }
 
 
@@ -9034,11 +9319,8 @@ int Line::FileSetAttrib(char *aAttributes, char *aFilePattern, FileLoopModeType 
 
 ResultType Line::FileGetTime(char *aFilespec, char aWhichTime)
 {
-	Var *output_var = ResolveVarOfArg(0);
-	if (!output_var)
-		return FAIL;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default.
-	output_var->Assign(); // Init to be blank, in case of failure.
+	OUTPUT_VAR->Assign(); // Init to be blank, in case of failure.
 
 	if (!aFilespec || !*aFilespec)
 		return OK;  // Let ErrorLevel indicate an error, since this is probably not what the user intended.
@@ -9066,7 +9348,7 @@ ResultType Line::FileGetTime(char *aFilespec, char aWhichTime)
 
     g_ErrorLevel->Assign(ERRORLEVEL_NONE);  // Indicate success.
 	char local_file_time_string[128];
-	return output_var->Assign(FileTimeToYYYYMMDD(local_file_time_string, local_file_time));
+	return OUTPUT_VAR->Assign(FileTimeToYYYYMMDD(local_file_time_string, local_file_time));
 }
 
 
@@ -9230,11 +9512,8 @@ int Line::FileSetTime(char *aYYYYMMDD, char *aFilePattern, char aWhichTime
 
 ResultType Line::FileGetSize(char *aFilespec, char *aGranularity)
 {
-	Var *output_var = ResolveVarOfArg(0);
-	if (!output_var)
-		return FAIL;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default
-	output_var->Assign(); // Init to be blank, in case of failure.
+	OUTPUT_VAR->Assign(); // Init to be blank, in case of failure.
 
 	if (!aFilespec || !*aFilespec)
 		return OK;  // Let ErrorLevel indicate an error, since this is probably not what the user intended.
@@ -9262,7 +9541,7 @@ ResultType Line::FileGetSize(char *aFilespec, char *aGranularity)
 	}
 
     g_ErrorLevel->Assign(ERRORLEVEL_NONE);  // Indicate success.
-	return output_var->Assign((__int64)(size > ULLONG_MAX ? -1 : size)); // i.e. don't allow it to wrap around.
+	return OUTPUT_VAR->Assign((__int64)(size > ULLONG_MAX ? -1 : size)); // i.e. don't allow it to wrap around.
 	// The below comment is obsolete in light of the switch to 64-bit integers.  But it might
 	// be good to keep for background:
 	// Currently, the above is basically subject to a 2 gig limit, I believe, after which the
@@ -9424,7 +9703,7 @@ int Line::ConvertEscapeChar(char *aFilespec)
 		{
 			// This will not fix all possible uses of A_ScriptDir, just those that are dereferences.
 			// For example, this would not be fixed: StringLen, length, a_ScriptDir
-			StrReplaceAllSafe(buf, sizeof(buf), "%A_ScriptDir%", "%A_ScriptDir%\\", false);
+			StrReplace(buf, "%A_ScriptDir%", "%A_ScriptDir%\\", SCS_INSENSITIVE, UINT_MAX, sizeof(buf));
 			// Later can add some other, similar conversions here.
 		}
 		fputs(buf, f2);
@@ -9845,10 +10124,11 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 	aResultToken.symbol = SYM_STRING;
 	aResultToken.marker = "";
 
-	// Check that the mandatory first parameter (DLL+Function) is present and valid.
-	if (aParamCount < 1 || IS_NUMERIC(aParam[0]->symbol)) // Relies on short-circuit order.
+	// Check that the mandatory first parameter (DLL+Function) is valid.
+	// (load-time validation has ensured at least one parameter is present).
+	if (IS_NUMERIC(aParam[0]->symbol))
 	{
-		g_ErrorLevel->Assign("-1"); // Stage 1 error: Too few params or blank/invalid first param.
+		g_ErrorLevel->Assign("-1"); // Stage 1 error: Blank/invalid first param.
 		return;
 	}
 
@@ -9867,7 +10147,7 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 			return;
 		}
 		char *return_type_string[2];
-		if (token.symbol == SYM_VAR)
+		if (token.symbol == SYM_VAR) // SYM_VAR's Type() is always VAR_NORMAL.
 		{
 			return_type_string[0] = token.var->Contents();
 			return_type_string[1] = token.var->mName; // v1.0.33.01: Improve convenience by falling back to the variable's name if the contents are not appropriate.
@@ -9932,7 +10212,7 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 			return;
 		}
 		// Otherwise, this arg's type is a string as it should be, so retrieve it:
-		if (aParam[i]->symbol == SYM_VAR)
+		if (aParam[i]->symbol == SYM_VAR) // SYM_VAR's Type() is always VAR_NORMAL.
 		{
 			arg_type_string[0] = aParam[i]->var->Contents();
 			arg_type_string[1] = aParam[i]->var->mName;
@@ -9958,7 +10238,7 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 			arg_as_string = NULL;
 		else
 		{
-			if (this_param.symbol == SYM_VAR)
+			if (this_param.symbol == SYM_VAR) // SYM_VAR's Type() is always VAR_NORMAL.
 			{
 				// v1.0.44.14: If a variable is being passed that has no capacity, pass a read-only
 				// memory area instead of a writable empty string. There are two big benefits to this:
@@ -10060,7 +10340,7 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
     
 	void *function = NULL;
 	HMODULE hmodule, hmodule_to_free = NULL;
-	char param1_buf[MAX_PATH*2], *function_name, *dll_name; // Uses MAX_PATH*2 to hold worst-case PATH plus function name.
+	char param1_buf[MAX_PATH*2], *function_name, *dll_name; // Must use MAX_PATH*2 because the function name is INSIDE the Dll file, and thus MAX_PATH can be exceeded.
 
 	// Define the standard libraries here. If they reside in %SYSTEMROOT%\system32 it is not
 	// necessary to specify the full path (it wouldn't make sense anyway).
@@ -10388,8 +10668,8 @@ void BIF_InStr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 		// Since InStr("", "") yields 1, it seems consistent for InStr("Red", "", 4) to yield
 		// 4 rather than 0.  The below takes this into account:
 		if (offset < 0 || offset > // ...greater-than the length of haystack calculated below.
-			(aParam[0]->symbol == SYM_VAR && !aParam[0]->var->IsBinaryClip() // InStr() doesn't recognize/support binary-clip, so treat it as a normal string (i.e. find first binary zero via strlen()).
-				? aParam[0]->var->Length() : strlen(haystack)))
+			(aParam[0]->symbol == SYM_VAR  // LengthIgnoreBinaryClip() is used because InStr() doesn't recognize/support binary-clip, so treat it as a normal string (i.e. find first binary zero via strlen()).
+				? aParam[0]->var->LengthIgnoreBinaryClip() : strlen(haystack)))
 		{
 			aResultToken.value_int64 = 0; // Match never found when offset is beyond length of string.
 			return;
@@ -10399,6 +10679,876 @@ void BIF_InStr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 	haystack += offset; // Above has verified that this won't exceed the length of haystack.
 	found_pos = strstr2(haystack, needle, string_case_sense);
 	aResultToken.value_int64 = found_pos ? (found_pos - haystack + offset + 1) : 0;
+}
+
+
+
+pcre *get_compiled_regex(char *aRegEx, bool &aGetPositionsNotSubstrings, pcre_extra *&aExtra
+	, ExprTokenType *aResultToken)
+// Returns the compiled RegEx, or NULL on failure.
+// This function is called by things other than built-in functions so it should be kept general-purpose.
+// Upon failure, if aResultToken!=NULL:
+//   - ErrorLevel is set to a descriptive string other than "0".
+//   - *aResultToken is set up to contain an empty string.
+// Upon success, the following output parameters are set based on the options that were specified:
+//    aGetPositionsNotSubstrings
+//    aExtra
+//    (but it doesn't change ErrorLevel on success, not even if aResultToken!=NULL)
+{
+	// While reading from or writing to the cache, don't allow another thread entry.  This is because
+	// that thread (or this one) might write to the cache while the other one is reading/writing, which
+	// could cause loss of data integrity (the hook thread can enter here via #IfWin & SetTitleMatchMode RegEx).
+	// Together, Enter/LeaveCriticalSection reduce performance by only 1.4% in the tightest possible script
+	// loop that hits the first cache entry every time.  So that's the worst case except when there's an actual
+	// collision, in which case performance suffers more because internally, EnterCriticalSection() does a
+	// wait/semaphore operation, which is more costly.
+	// Finally, the code size of all critical-section features together is less than 512 bytes (uncompressed),
+	// so like performance, that's not a concern either.
+	EnterCriticalSection(&CriticalRegExCache); // Request ownership of the critical section. If another thread already owns it, this thread will block until the other thread finishes.
+
+	// SET UP THE CACHE.
+	// This is a very crude cache for linear search. Of course, hashing would be better in the sense that it
+	// would allow the cache to get much larger while still being fast (I believe PHP caches up to 4096 items).
+	// Binary search might not be such a good idea in this case due to the time required to find the right spot
+	// to insert a new cache item (however, items aren't inserted often, so it might perform quite well until
+	// the cache contained thousands of RegEx's, which is unlikely to ever happen in most scripts).
+	struct pcre_cache_entry
+	{
+		// For simplicity (and thus performance), the entire RegEx pattern including its options is cached
+		// is stored in re_raw and that entire string becomes the RegEx's unique identifier for the purpose
+		// of finding an entry in the cache.  Technically, this isn't optimal because some options like study
+		// and aGetPositionsNotSubstrings don't alter the nature of the compiled RegEx.  However, the CPU time
+		// required to strip off some options prior to doing a cache search seems likely to offset much of the
+		// cache's benefit.  So for this reason, as well as rarity and code size issues, this policy seems best.
+		char *re_raw;      // The RegEx's literal string pattern such as "abc.*123".
+		pcre *re_compiled; // The RegEx in compiled form.
+		pcre_extra *extra; // NULL unless a study() was done.
+		// int pcre_options; // Not currently needed in the cache since options are implicitly inside re_compiled.
+		bool get_positions_not_substrings;
+	};
+
+	#define PCRE_CACHE_SIZE 100 // Going too high would be counterproductive due to the slowness of linear search (and also the memory utilization of so many compiled RegEx's).
+	static pcre_cache_entry sCache[PCRE_CACHE_SIZE] = {{0}};
+	static int sLastInsert, sLastFound = -1; // -1 indicates "cache empty".
+
+	// CHECK IF THIS REGEX IS ALREADY IN THE CACHE.
+	if (sLastFound == -1) // Cache is empty, so insert this RegEx at the first position.
+		sLastInsert = 0;  // A section further below will change sLastFound to be 0.
+	else
+	{
+		// Search the cache to see if it contains the caller-specified RegEx in compiled form.
+		// First check if the last-found item is a match, since often it will be (such as cases
+		// where a script-loop executes only one RegEx, and also for SetTitleMatchMode RegEx).
+		if (!strcmp(aRegEx, sCache[sLastFound].re_raw)) // Match found (case sensitive).
+			goto match_found; // And no need to update sLastFound because it's already set right.
+
+		// Since above didn't find a match, search outward in both directions from the last-found match.
+		// A bidirectional search is done because consecutively-called regex's tend to be adjacent to each other
+		// in the array, so performance is improved on average (since most of the time when repeating a previously
+		// executed regex, that regex will already be in the cache -- so optimizing the finding behavior is
+		// more important than optimizing the never-found-because-not-cached behavior).
+		bool go_right;
+		int i, item_to_check, left, right;
+		int last_populated_item = (sCache[PCRE_CACHE_SIZE-1].re_compiled) // When the array is full...
+			? PCRE_CACHE_SIZE - 1  // ...all items must be checked except the one already done earlier.
+			: sLastInsert;         // ...else only the items actually populated need to be checked.
+
+		for (go_right = true, left = sLastFound, right = sLastFound, i = 0
+			; i < last_populated_item  // This limits it to exactly the number of items remaining to be checked.
+			; ++i, go_right = !go_right)
+		{
+			if (go_right) // Proceed rightward in the array.
+			{
+				right = (right == last_populated_item) ? 0 : right + 1; // Increment or wrap around back to the left side.
+				item_to_check = right;
+			}
+			else // Proceed leftward.
+			{
+				left = (left == 0) ? last_populated_item : left - 1; // Decrement or wrap around back to the right side.
+				item_to_check = left;
+			}
+			if (!strcmp(aRegEx, sCache[item_to_check].re_raw)) // Match found (case sensitive).
+			{
+				sLastFound = item_to_check;
+				goto match_found;
+			}
+		}
+
+		// Since above didn't goto, no match was found nor is one possible.  So just indicate the insert position
+		// for where this RegEx will be put into the cache.
+		// The following formula is for both cache-full and cache-partially-full.  When the cache is full,
+		// it might not be the best possible formula; but it seems pretty good because it takes a round-robin
+		// approach to overwriting/discarding old cache entries.  A discarded entry might have just been
+		// used -- or even be sLastFound itself -- but on average, this approach seems pretty good because a
+		// script loop that uses 50 unique RegEx's will quickly stabilize in the cache so that all 50 of them
+		// stay compiled/cached until the loop ends.
+		sLastInsert = (sLastInsert == PCRE_CACHE_SIZE-1) ? 0 : sLastInsert + 1; // Formula works for both full and partially-full array.
+	}
+	// Since the above didn't goto:
+	// - This RegEx isn't yet in the cache.  So compile it and put it in the cache, then return it to caller.
+	// - Above is responsible for having set sLastInsert to the cache position where the new RegEx will be stored.
+
+	// The following macro is for maintainability, to enforce the definition of "default" in multiple places.
+	// PCRE_NEWLINE_CRLF is the default rather than PCRE_NEWLINE_LF because *multiline* haystacks
+	// that scripts will use are expected to come from:
+	// 50%: FileRead: Uses `r`n by default, for performance)
+	// 10%: Clipboard: Normally uses `r`n (includes files copied from Explorer, text data, etc.)
+	// 20%: UrlDownloadToFile: Testing shows that it varies: e.g. microsoft.com uses `r`n, but `n is probably
+	//      more common due to FTP programs automatically translating CRLF to LF when uploading to UNIX servers.
+	// 20%: Other sources such as GUI edit controls: It's fairly unusual to want to use RegEx on multiline data
+	//      from GUI controls, but in such case `n is much more common than `r`n.
+	#define SET_DEFAULT_PCRE_OPTIONS \
+	{\
+		pcre_options = PCRE_NEWLINE_CRLF;\
+		aGetPositionsNotSubstrings = false;\
+		do_study = false;\
+	}
+
+	// SET DEFAULT OPTIONS:
+	int pcre_options;
+	bool do_study;
+	SET_DEFAULT_PCRE_OPTIONS
+
+	// PARSE THE OPTIONS (if any).
+	char *pat; // When options-parsing is done, pat will point to the start of the pattern.
+	for (pat = aRegEx;; ++pat)
+	{
+		switch(*pat)
+		{
+		case 'i': pcre_options |= PCRE_CASELESS;  break;  // Perl-compatible options.
+		case 'm': pcre_options |= PCRE_MULTILINE; break;  //
+		case 's': pcre_options |= PCRE_DOTALL;    break;  //
+		case 'x': pcre_options |= PCRE_EXTENDED;  break;  //
+		case 'A': pcre_options |= PCRE_ANCHORED;  break;      // PCRE-specific options (uppercase used by convention, even internally by PCRE itself).
+		case 'D': pcre_options |= PCRE_DOLLAR_ENDONLY; break; //
+		case 'J': pcre_options |= PCRE_DUPNAMES;       break; //
+		case 'U': pcre_options |= PCRE_UNGREEDY;       break; //
+		case 'X': pcre_options |= PCRE_EXTRA;          break; //
+		case '\n':                                            //
+			// Could alternatively have called this option "LF" rather than or in addition to "`n", but that
+			// seems slightly less desirable due to potential overlap/conflict with future option letters,
+			// plus the fact that `n should be pretty well known to AutoHotkey users, especially advanced ones
+			// using RegEx.  Note: `n`r is NOT treated the same as `r`n because there's a slight chance PCRE
+			// will someday support `n`r for some obscure usage (or just for symmetry/completeness).
+			pcre_options &= ~PCRE_NEWLINE_CRLF; // Do it this way because PCRE_NEWLINE_CRLF is a bitwise combination of PCRE_NEWLINE_CR and PCRE_NEWLINE_LF (i.e. this purges both flags).
+			// The PCRE_NEWLINE_XXX options are valid for both compile() and exec(), but specifying it for exec()
+			// would only serve to override the default stored inside the compiled pattern (seems rarely needed).
+			break;
+		case '\r':
+			if (pat[1] == '\n') // Even though `r`n is the default, it's recognized as an option for flexibility and intuitiveness.
+			{
+				++pat; // Skip over the second character so that it's not recognized as a separate option by the next iteration.
+				pcre_options |= PCRE_NEWLINE_CRLF; // Remember that PCRE_NEWLINE_CRLF is a bitwise combination of PCRE_NEWLINE_LF and CR.
+			}
+			else // For completeness, it's easy to support PCRE_NEWLINE_CR too, though nowadays I think it's quite rare (former Macintosh format).
+				pcre_options = (pcre_options & ~PCRE_NEWLINE_LF) | PCRE_NEWLINE_CR; // Do it this way because PCRE_NEWLINE_CRLF is a bitwise combination of PCRE_NEWLINE_CR and PCRE_NEWLINE_LF.
+			break;
+
+		// Other options (uppercase so that lowercase can be reserved for future/PERL options):
+		case 'P': aGetPositionsNotSubstrings = true;   break;
+		case 'S': do_study = true;                     break;
+
+		case ' ':  // Allow only spaces and tabs as fillers so that everything else is protected/reserved for
+		case '\t': // future use (such as future PERL options).
+			break;
+
+		case ')': // This character, when not escaped, marks the normal end of the options section.  We know it's not escaped because if it had been, the loop would have stopped at the backslash before getting here.
+			++pat; // Set pat to be the start of the actual RegEx pattern, and leave options set to how they were by any prior iterations above.
+			goto break_both;
+
+		default: // Namely the following:
+		//case '\0': No options are present, so ignore any letters that were accidentally recognized and treat entire string as the pattern.
+		//case '(' : An open parenthesis must be considered an invalid option because otherwise it would be ambiguous with a subpattern.
+		//case '\\': In addition to backslash being an invalid option, it also covers "\)" as being invalid (i.e. so that it's never necessary to check for an escaped close-parenthesis).
+		//case all-other-chars: All others are invalid options; so like backslash above, ignore any letters that were accidentally recognized and treat entire string as the pattern.
+			SET_DEFAULT_PCRE_OPTIONS // Revert to original options in case any early letters happened to match valid options.
+			pat = aRegEx; // Indicate that the entire string is the pattern (no options).
+			// To distinguish between a bad option and no options at all (for better error reporting), could check if
+			// within the next few chars there's an unmatched close-parenthesis (non-escaped).  If so, the user
+			// intended some options but one of them was invalid.  However, that would be somewhat difficult to do
+			// because both \) and [)] are valid regex patterns that contain an unmatched close-parenthesis.
+			// Since I don't know for sure if there are other cases (or whether future RegEx extensions might
+			// introduce more such cases), it seems best not to attempt to distinguish.  Using more than two options
+			// is extremely rare anyway, so syntax errors of this type do not happen often (and the only harm done
+			// is a misleading error message from PCRE rather than something like "Bad option").  In addition,
+			// omitting it simplifies the code and slightly improves performance.
+			goto break_both;
+		} // switch(*pat)
+	} // for()
+
+break_both:
+	// Reaching here means that pat has been set to the beginning of the RegEx pattern itself and all options
+	// are set properly.
+
+	const char *error_msg;
+	char error_buf[ERRORLEVEL_SAVED_SIZE];
+	int error_code, error_offset;
+	pcre *re_compiled;
+
+	// COMPILE THE REGEX.
+	if (   !(re_compiled = pcre_compile2(pat, pcre_options, &error_code, &error_msg, &error_offset, NULL))   )
+	{
+		if (aResultToken) // Only when this is non-NULL does caller want ErrorLevel changed.
+		{
+			// Since both the error code and the offset are desirable outputs, it semes best to also
+			// include descriptive error text (debatable).
+			snprintf(error_buf, sizeof(error_buf), "Compile error %d at offset %d: %s"
+				, error_code, error_offset, error_msg);
+			g_ErrorLevel->Assign(error_buf);
+		}
+		goto error;
+	}
+
+	if (do_study)
+	{
+		// Currently, PCRE has no study options so that parameter is always 0.
+		// Calling pcre_study currently adds about 1.5 KB of uncompressed code size; but it seems likely to be
+		// a worthwhile option for complex RegEx's that are executed many times in a loop.
+		aExtra = pcre_study(re_compiled, 0, &error_msg); // aExtra is an output parameter for caller.
+		// Above returns NULL on failure or inability to find anything worthwhile in its study.  NULL is exactly
+		// the right value to pass to exec() to indicate "no study info".
+		// The following isn't done because:
+		// 1) It seems best not to abort the caller's RegEx operation just due to a study error, since the only
+		//    error likely to happen (from looking at PCRE's source code) is out-of-memory.
+		// 2) ErrorLevel is traditioally used for error/abort conditions only, not warnings.  So it seems best
+		//    not to pollute it with a warning message that indicates, "yes it worked, but here's a warning".
+		//    ErrorLevel 0 (success) seems better and more desirable.
+		// 3) Reduced code size.
+		//if (error_msg)
+		//{
+			//if (aResultToken) // Only when this is non-NULL does caller want ErrorLevel changed.
+			//{
+			//	snprintf(error_buf, sizeof(error_buf), "Study error: %s", error_msg);
+			//	g_ErrorLevel->Assign(error_buf);
+			//}
+			//goto error;
+		//}
+	}
+	else // No studying desired.
+		aExtra = NULL; // aExtra is an output parameter for caller.
+
+	// ADD THE NEWLY-COMPILED REGEX TO THE CACHE.
+	// An earlier stage has set sLastInsert to be the desired insert-position in the cache.
+	pcre_cache_entry &this_entry = sCache[sLastInsert]; // For performance and convenience.
+	if (this_entry.re_compiled) // An existing cache item is being overwritten, so free it's attributes.
+	{
+		// Free the old cache entry's attributes in preparation for overwriting them with the new one's.
+		free(this_entry.re_raw);           // Free the uncompiled pattern.
+		pcre_free(this_entry.re_compiled); // Free the compiled pattern.
+	}
+	//else the insert-position is an empty slot, which is usually the case because most scripts contain fewer than
+	// PCRE_CACHE_SIZE unique regex's.  Nothing extra needs to be done.
+	this_entry.re_raw = _strdup(aRegEx); // _strdup() is very tiny and basically just calls strlen+malloc+strcpy.
+	this_entry.re_compiled = re_compiled;
+	this_entry.extra = aExtra;
+	this_entry.get_positions_not_substrings = aGetPositionsNotSubstrings;
+	// "this_entry.pcre_options" doesn't exist because it isn't currently needed in the cache.  This is
+	// because the RE's options are implicitly stored inside re_compiled.
+
+	sLastFound = sLastInsert; // Relied upon in the case where sLastFound==-1. But it also sets things up to start the search at this item next time, because it's a bit more likely to be found here such as tight loops containing only one RegEx.
+	// Remember that although sLastFound==sLastInsert in this case, it isn't always so -- namely when a previous
+	// call found an existing match in the cache without having to compile and insert the item.
+
+	LeaveCriticalSection(&CriticalRegExCache);
+	return re_compiled; // Indicate success.
+
+match_found: // RegEx was found in the cache at position sLastFound, so return the cached info back to the caller.
+	aGetPositionsNotSubstrings = sCache[sLastFound].get_positions_not_substrings;
+	aExtra = sCache[sLastFound].extra;
+
+	LeaveCriticalSection(&CriticalRegExCache);
+	return sCache[sLastFound].re_compiled; // Indicate success.
+
+error: // Since NULL is returned here, caller should ignore the contents of the output parameters.
+	if (aResultToken)
+	{
+		aResultToken->symbol = SYM_STRING;
+		aResultToken->marker = "";
+	}
+
+	LeaveCriticalSection(&CriticalRegExCache);
+	return NULL; // Indicate failure.
+}
+
+
+
+char *RegExMatch(char *aHaystack, char *aNeedleRegEx)
+// Returns NULL if no match.  Otherwise, returns the position in aHaystack.
+{
+	bool get_positions_not_substrings; // Currently ignored.
+	pcre_extra *extra;
+	pcre *re;
+
+	// Compile the regex or get it from cache.
+	if (   !(re = get_compiled_regex(aNeedleRegEx, get_positions_not_substrings, extra, NULL))   ) // Compiling problem.
+		return NULL;
+
+	// Set up the offset array, which consists of int-pairs containing the start/end offset of each match.
+	// For simplicity, use a fixed size because even if it's too small (unlikely for our types of callers),
+	// PCRE will still operate properly (though it returns 0 to indicate the too-small condition).
+	#define RXM_INT_COUNT 30  // Should be a multiple of 3.
+	int offset[RXM_INT_COUNT];
+
+	// Execute the regex.
+	int captured_pattern_count = pcre_exec(re, extra, aHaystack, (int)strlen(aHaystack), 0, 0, offset, RXM_INT_COUNT);
+	if (captured_pattern_count < 0) // PCRE_ERROR_NOMATCH or some kind of error.
+		return NULL;
+
+	// Otherwise, captured_pattern_count>=0 (it's 0 when offset[] was too small; but that's harmless in this case).
+	return aHaystack + offset[0]; // Return the position of the entire-pattern match.
+}
+
+
+
+void RegExReplace(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount
+	, pcre *aRE, pcre_extra *aExtra, char *aHaystack, int aHaystackLength, int aStartingOffset
+	, int aOffset[], int aNumberOfIntsInOffset)
+{
+	// Set default return value in case of early return.
+	aResultToken.symbol = SYM_STRING;
+	aResultToken.marker = "";
+
+	// If an output variable was provided for the count, get it and initialize it in case of early return.
+	Var *output_var = (aParamCount > 3 && aParam[3]->symbol == SYM_VAR) ? aParam[3]->var : NULL; // SYM_VAR's Type() is always VAR_NORMAL.
+	if (output_var)
+		output_var->Assign(0); // In case of early return, set default as "zero replacements done".
+
+	// Get the replacement text (if any) from the incoming parameters.  If it was omitted, treat it as "".
+	char repl_buf[MAX_FORMATTED_NUMBER_LENGTH + 1];
+	char *replacement = (aParamCount > 2) ? ExprTokenToString(*aParam[2], repl_buf) : "";
+
+	// In PCRE, lengths and such are confined to ints, so there's little reason for using unsigned for anything.
+	int captured_pattern_count, empty_string_is_not_a_match, replacement_count, match_length, ref_num
+		, result_size, new_result_length, haystack_portion_length, second_iteration, substring_name_length
+		, extra_offset;
+	char *haystack_pos, *match_pos, *src, *src_orig, *dest, *closing_brace, char_after_dollar
+		, *substring_name_pos, substring_name[33] // In PCRE, "Names consist of up to 32 alphanumeric characters and underscores."
+		, transform;
+
+	// Caller has provided a NULL circuit_token as a means of passing back memory we allocate here.
+	// So if we change "result" to be non-NULL, the caller will take over responsibility for freeing that memory.
+	char *&result = (char *&)aResultToken.circuit_token; // Make an alias to type-cast and for convenience.
+	int &result_length = (int &)aResultToken.buf; // MANDATORY FOR USERS OF CIRCUIT_TOKEN: "buf" is being overloaded to store the length for our caller.
+	result_size = 0;   // And caller has already set "result" to be NULL.  The buffer is allocated only upon
+	result_length = 0; // first use to avoid a potentially massive allocation that might be wasted and cause swapping (not to mention that we'll have better ability to estimate the correct total size after the first replacement is discovered).
+
+	// Below uses a temp var. because realloc() returns NULL on failure but leaves original block allocated.
+	// Note that if it's given a NULL pointer, realloc() does a malloc() instead.
+	char *realloc_temp;
+	#define REGEX_REALLOC(size) \
+	{\
+		result_size = size;\
+		if (   !(realloc_temp = (char *)realloc(result, result_size))   )\
+			goto out_of_mem;\
+		result = realloc_temp;\
+	}
+
+	// See if a replacement limit was specified.  If not, use the default (-1 means "replace all").
+	int limit = (aParamCount > 4) ? (int)ExprTokenToInt64(*aParam[4]) : -1;
+
+	// aStartingOffset is altered further on in the loop; but for its initial value, the caller has ensured
+	// that it lies within aHaystackLength.  Also, if there are no replacements yet, haystack_pos ignores
+	// aStartingOffset because otherwise, when the first replacement occurs, any part of haystack that lies
+	// to the left of a caller-specified aStartingOffset won't get copied into the result.
+	for (replacement_count = 0, empty_string_is_not_a_match = 0, haystack_pos = aHaystack
+		;; haystack_pos = aHaystack + aStartingOffset) // See comment above.
+	{
+		// Execute the expression to find the next match.
+		captured_pattern_count = (limit == 0) ? PCRE_ERROR_NOMATCH // Only when limit is exactly 0 are we done replacing.  All negative values are "replace all".
+			: pcre_exec(aRE, aExtra, aHaystack, (int)aHaystackLength, aStartingOffset
+				, empty_string_is_not_a_match, aOffset, aNumberOfIntsInOffset);
+
+		if (captured_pattern_count == PCRE_ERROR_NOMATCH)
+		{
+			if (empty_string_is_not_a_match && aStartingOffset < aHaystackLength && limit != 0) // replacement_count>0 whenever empty_string_is_not_a_match!=0.
+			{
+				// This situation happens when a previous iteration found a match but it was the empty string.
+				// That iteration told the pcre_exec that just occurred above to try to match something other than ""
+				// at the same position.  But since we're here, it wasn't able to find such a match.  So just copy
+				// the current character over literally then advance to the next character to resume normal searching.
+				result[result_length++] = *haystack_pos; // This can't overflow because the size calculations in a previous iteration reserved at least two bytes: 1 for this character and 1 for the terminator.
+				++aStartingOffset; // Advance to next candidate section of haystack.
+				empty_string_is_not_a_match = 0; // Reset so that the next iteration starts off with the normal matching method.
+				continue; // i.e. we're not done yet because the "no match" above was a special one and there's still more haystack to check.
+			}
+			// Otherwise, there aren't any more matches, so just copy the last part of haystack into the result and
+			// end the loop.
+			if (replacement_count) // And by definition, result!=NULL due in this case to prior iterations.
+			{
+				if (haystack_portion_length = aHaystackLength - aStartingOffset) // This is the remaining part of haystack that needs to be copied over as-is.
+				{
+					new_result_length = result_length + haystack_portion_length;
+					if (new_result_length >= result_size)
+						REGEX_REALLOC(new_result_length + 1); // This will end the loop if an alloc error occurs.
+					memcpy(result + result_length, haystack_pos, haystack_portion_length); // memcpy() usually benches a little faster than strcpy().
+					result_length = new_result_length; // Remember that result_length is actually an output for our caller, so even if for no other reason, it must be kept accurate for that.
+				}
+				result[result_length] = '\0'; // result!=NULL when replacement_count!=0.  Also, must terminate it unconditionally because other sections usually don't do it.
+
+				// Since the caller will be hanging this memory onto a variable rather than immediately freeing it,
+				// shrink the memory if there's a lot of wasted space in it (even if caller calls _msize() to
+				// determine the entire capacity, the extra capacity is seldom utilized).
+				if (result_size - result_length > 1024)
+					result = (char *)_expand(result, result_length + 1); // MSDN implies that when shrinking, this won't return NULL unless something is terribly wrong (e.g. corrupted heap).  So caller probably doesn't need to worry about that.
+					// _expand() is only about 75 bytes of uncompressed code size and probably performs very quickly when shrinking.
+
+				// Set RegExMatch()'s return value to be "result":
+				aResultToken.marker = result;  // Caller will take care of freeing result's memory.
+			}
+			else // No replacements were actually done, so just return the original string to avoid malloc+memcpy (in addition, returning the original might help the caller make other optimizations).
+			{
+				aResultToken.marker = aHaystack;
+				result_length = aHaystackLength; // result_length is an alias for an output parameter, so update for maintainability even though currently callers don't use it when no alloc of circuit_token.
+				// There's no need to do the following because it should already be that way when replacement_count==0.
+				//if (result)
+				//	free(result);
+				//result = NULL; // This tells the caller that we already freed it (i.e. from its POV, we never allocated anything).
+			}
+			// All done, indicate success via ErrorLevel, and the count via output_var (if any).
+			g_ErrorLevel->Assign(ERRORLEVEL_NONE);
+			if (output_var)
+				output_var->Assign(replacement_count);
+			return;
+		}
+
+		// Otherwise:
+		if (captured_pattern_count < 0) // An error other than "no match". These seem very rare, so it seems best to abort rather than yielding a partially-converted result.
+		{
+			g_ErrorLevel->Assign(captured_pattern_count); // No error text is stored; just a negative integer (since these errors are pretty rare).
+			return; // Return vs. break to leave aResultToken.marker set to "" and output_var set to 0, and let ErrorLevel tell the story.
+		}
+
+		// Otherwise (since above didn't return, break, or continue), a match has been found (i.e. captured_pattern_count > 0;
+		// it should never be 0 in this case because that only happens when offset[] is too small, which it isn't).
+		++replacement_count;
+		--limit; // It's okay if it goes below -1 because all negatives are treated as "replace all".
+		match_pos = aHaystack + aOffset[0]; // This is the location in aHaystack of the entire-pattern match.
+		haystack_portion_length = (int)(match_pos - haystack_pos); // The length of the haystack section between the end of the previous match and the start of the current one.
+
+		// Handle this replacement by making two passes through the replacement-text: The first calculates the size
+		// (which avoids having to constantly check for buffer overflow with potential realloc at multiple stages).
+		// The second iteration copies the replacement (along with any literal text in haystack before it) into the
+		// result buffer (which was expanded if necessary by the first iteration).
+		for (second_iteration = 0; second_iteration < 2; ++second_iteration) // second_iteration is used as a boolean for readability.
+		{
+			if (second_iteration)
+			{
+				// Using the required length calculated by the first iteration, expand/realloc "result" if necessary.
+				if (new_result_length + 2 > result_size) // Must use +2 not +1 in case of empty_string_is_not_a_match (which needs an extra character).
+				{
+					// The first expression passed to REGEX_REALLOC is the average length of each replacement so far.
+					// It's more typically more accurate to pass that than the following "length of current
+					// replacement":
+					//    new_result_length - haystack_portion_length - (aOffset[1] - aOffset[0])
+					// Above is the length difference between the current replacement text and what it's
+					// replacing (it's negative when replacement is smaller than what it replaces).
+					REGEX_REALLOC(PredictReplacementSize((new_result_length - aOffset[1]) / replacement_count // See above.
+						, replacement_count, limit, aHaystackLength, new_result_length+1, aOffset[1])); // +1 in case of empty_string_is_not_a_match (which needs an extra character).  The function will also do another +1 to convert length to size (for terminator).
+					// The above will return if an alloc error occurs.
+				}
+				//else result_size is not only large enough, but also non-zero.  Other sections rely on it always
+				// being non-zero when replacement_count>0.
+
+				// Before doing the actual replacement and its backreferences, copy over the part of haystack that
+				// appears before the match.
+				if (haystack_portion_length)
+				{
+					memcpy(result + result_length, haystack_pos, haystack_portion_length);
+					result_length += haystack_portion_length;
+				}
+				dest = result + result_length; // Init dest for use by the loops further below.
+			}
+			else // i.e. it's the first iteration, so begin calculating the size required.
+				new_result_length = result_length + haystack_portion_length; // Init length to the part of haystack before the match (it must be copied over as literal text).
+
+			// DOLLAR SIGN ($) is the only method supported because it simplifies the code, improves performance,
+			// and avoids the need to escape anything other than $ (which simplifies the syntax).
+			for (src = replacement; ; ++src)  // For each '$' (increment to skip over the symbol just found by the inner for()).
+			{
+				// Find the next '$', if any.
+				src_orig = src; // Init once for both loops below.
+				if (second_iteration) // Mode: copy src-to-dest.
+				{
+					while (*src && *src != '$') // While looking for the next '$', copy over everything up until the '$'.
+						*dest++ = *src++;
+					result_length += (int)(src - src_orig);
+				}		
+				else // Mode: size-calculation.
+				{
+					for (; *src && *src != '$'; ++src); // Find the next '$', if any.
+					new_result_length += (int)(src - src_orig); // '$' or '\0' was found: same expansion either way.
+				}
+				if (!*src)  // Reached the end of the replacement text.
+					break;  // Nothing left to do, so if this is the first major iteration, begin the second.
+
+				// Otherwise, a '$' has been found.  Check if it's a backreference and handle it.
+				// But first process any special flags that are present.
+				transform = '\0'; // Set default. Indicate "no transformation".
+				extra_offset = 0; // Set default. Indicate that there's no need to hop over an extra character.
+				if (char_after_dollar = src[1]) // This check avoids calling toupper on '\0', which directly or indirectly causes an assertion error in CRT.
+				{
+					switch(char_after_dollar = toupper(char_after_dollar))
+					{
+					case 'U':
+					case 'L':
+					case 'T':
+						transform = char_after_dollar;
+						extra_offset = 1;
+						char_after_dollar = src[2]; // Ignore the transform character for the purposes of backreference recognition further below.
+						break;
+					//else leave things at their defaults.
+					}
+				}
+				//else leave things at their defaults.
+
+				ref_num = INT_MIN; // Set default to "no valid backreference".  Use INT_MIN to virtually guaranty that anything other than INT_MIN means that something like a backreference was found (even if it's invalid, such as ${-5}).
+				switch (char_after_dollar)
+				{
+				case '{':  // Found a backreference: ${
+					substring_name_pos = src + 2 + extra_offset;
+					if (closing_brace = strchr(substring_name_pos, '}'))
+					{
+						if (substring_name_length = (int)(closing_brace - substring_name_pos))
+						{
+							if (substring_name_length < sizeof(substring_name))
+							{
+								strlcpy(substring_name, substring_name_pos, substring_name_length + 1); // +1 to convert length to size, which truncates the new string at the desired position.
+								if (IsPureNumeric(substring_name, true, false, true)) // Seems best to allow floating point such as 1.0 because it will then get truncated to an integer.  It seems to rare that anyone would want to use floats as names.
+									ref_num = atoi(substring_name); // Uses atoi() vs. ATOI to avoid potential overlap with non-numeric names such as ${0x5}, which should probably be considered a name not a number?  In other words, seems best not to make some names that start with numbers "special" just because they happen to be hex numbers.
+								else // For simplicity, no checking is done to ensure it consiss of the "32 alphanumeric characters and underscores".  Let pcre_get_stringnumber() figure that out for us.
+									ref_num = pcre_get_stringnumber(aRE, substring_name); // Returns a negative on failure, which when stored in ref_num is relied upon as an inticator.
+							}
+							//else it's too long, so it seems best (debatable) to treat it as a unmatched/unfound name, i.e. "".
+							src = closing_brace; // Set things up for the next iteration to resume at the char after "${..}"
+						}
+						//else it's ${}, so do nothing, which in effect will treat it all as literal text.
+					}
+					//else unclosed '{': for simplicity, do nothing, which in effect will treat it all as literal text.
+					break;
+
+				case '$':  // i.e. Two consecutive $ amounts to one literal $.
+					++src;  // Skip over the first '$', and the loop's increment will skip over the second. "extra_offset" is ignored due to rarity and silliness.  Just transcribe things like $U$ as U$ to indicate the problem.
+					break; // This also sets up things properly to copy a single literal '$' into the result.
+
+				case '\0': // i.e. a single $ was found at the end of the string.
+					break; // Seems best to treat it as literal (strictly speaking the script should have escaped it).
+
+				default:
+					if (isdigit(char_after_dollar)) // Treat it as a single-digit backreference. CONSEQUENTLY, $15 is really $1 followed by a literal '5'.
+					{
+						ref_num = char_after_dollar - '0'; // $0 is the whole pattern rather than a subpattern.
+						src += 1 + extra_offset; // Set things up for the next iteration to resume at the char after $d. Consequently, $19 is seen as $1 followed by a literal 9.
+					}
+					//else not a digit: do nothing, which treats a $x as literal text (seems ok since like $19, $name will never be supported due to ambiguity; only ${name}).
+				} // switch (char_after_dollar)
+
+				if (ref_num == INT_MIN) // Nothing that looks like backreference is present (or the very unlikely ${-2147483648}).
+				{
+					if (second_iteration)
+					{
+						*dest++ = *src;  // src is incremented by the loop.  Copy only one character because the enclosing loop will take care of copying the rest.
+						++result_length; // Update the actual length.
+					}
+					else
+						++new_result_length; // Update the calculated length.
+					// And now the enclosing loop will take care of the characters beyond src.
+				}
+				else // Something that looks like a backreference was found, even if it's invalid (e.g. ${-5}).
+				{
+					// It seems to improve convenience and flexibility to transcribe a nonexistent backreference
+					// as a "" rather than literally (e.g. putting a ${1} literally into the new string).  Although
+					// putting it in literally has the advantage of helping debugging, it doesn't seem to outweigh
+					// the convenience of being able to specify nonexistent subpatterns. MORE IMPORANTLY a subpattern
+					// might not exist per se if it hasn't been matched, such as an "or" like (abc)|(xyz), at least
+					// when it's the last subpattern, in which case it should definitely be treated as "" and not
+					// copied over literally.  So that would have to be checked for if this is changed.
+					if (ref_num >= 0 && ref_num < captured_pattern_count) // Treat ref_num==0 as reference to the entire-pattern's match.
+					{
+						if (match_length = aOffset[ref_num*2 + 1] - aOffset[ref_num*2])
+						{
+							if (second_iteration)
+							{
+								memcpy(dest, aHaystack + aOffset[ref_num*2], match_length);
+								if (transform)
+								{
+									dest[match_length] = '\0'; // Terminate for use below (shouldn't cause overflow because REALLOC reserved space for terminator; nor should there be any need to undo the termination afterward).
+									switch(transform)
+									{
+									case 'U': CharUpper(dest); break;
+									case 'L': CharLower(dest); break;
+									case 'T': StrToTitleCase(dest); break;
+									}
+								}
+								dest += match_length;
+								result_length += match_length;
+							}
+							else // First iteration.
+								new_result_length += match_length;
+						}
+					}
+					//else subpattern doesn't exist (or its invalid such as ${-5}, so treat it as blank because:
+					// 1) It's boosts script flexibility and convenience (at the cost of making it hard to detect
+					//    script bugs, which would be assisted by transcribing ${999} as literal text rather than "").
+					// 2) It simplifies the code.
+					// 3) A subpattern might not exist per se if it hasn't been matched, such as "(abc)|(xyz)"
+					//    (in which case only one of them is matched).  If such a thing occurs at the end
+					//    of the RegEx pattern, captured_pattern_count might not include it.  But it seems
+					//    pretty clear that it should be treated as "" rather than some kind of error condition.
+				}
+			} // for() (for each '$')
+		} // for() (a 2-iteration for-loop)
+
+		// If we're here, a match was found.
+		// Technique and comments from pcredemo.c:
+		// If the previous match was NOT for an empty string, we can just start the next match at the end
+		// of the previous one.
+		// If the previous match WAS for an empty string, we can't do that, as it would lead to an
+		// infinite loop. Instead, a special call of pcre_exec() is made with the PCRE_NOTEMPTY and
+		// PCRE_ANCHORED flags set. The first of these tells PCRE that an empty string is not a valid match;
+		// other possibilities must be tried. The second flag restricts PCRE to one match attempt at the
+		// initial string position. If this match succeeds, an alternative to the empty string match has been
+		// found, and we can proceed round the loop.
+		//
+		// If this match is "" (length 0), then by definitition we just found a match in normal mode, not
+		// PCRE_NOTEMPTY mode (since that mode isn't capable of finding "").  Thus, empty_string_is_not_a_match
+		// is currently 0.
+		if (aOffset[0] == aOffset[1]) // A match was found but it's "".
+			empty_string_is_not_a_match = PCRE_NOTEMPTY | PCRE_ANCHORED; // Try to find a non-"" match at the same position by switching to an alternate mode and doing another iteration.
+		//else not an empty match, so advance to next candidate section of haystack and resume searching.
+		aStartingOffset = aOffset[1]; // In either case, set starting offset to the candidate for the next search.
+	} // for()
+
+	// All paths above should return, so execution should never reach here except through goto.
+out_of_mem:
+	// Due to extreme rarity and since this is a regex execution error of sorts, use PCRE's own error code.
+	g_ErrorLevel->Assign(PCRE_ERROR_NOMEMORY);
+	if (result)
+	{
+		free(result);  // Since result is probably an non-terminated string (not to mention an incompletely created result), it seems best to free it here to remove it from any further consideration by the caller.
+		result = NULL; // Tell caller that it was freed.
+		// AND LEAVE aResultToken.marker == "", because the result is indeterminate and thus discarded.
+		// The caller knows to free the old block (in result) for us, if there is one.
+	}
+}
+
+
+
+void BIF_RegEx(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+// Caller has set aResultToken.symbol to a default of SYM_INTEGER.
+{
+	bool mode_is_replace = toupper(aResultToken.marker[5]) == 'R'; // Union's marker initially contains the function name; e.g. RegEx[R]eplace.
+	char *needle = ExprTokenToString(*aParam[1], aResultToken.buf); // Load-time validation has already ensured that at least two actual parameters are present.
+
+	bool get_positions_not_substrings;
+	pcre_extra *extra;
+	pcre *re;
+
+	// COMPILE THE REGEX OR GET IT FROM CACHE.
+	if (   !(re = get_compiled_regex(needle, get_positions_not_substrings, extra, &aResultToken))   ) // Compiling problem.
+		return; // It already set ErrorLevel and aResultToken for us. If caller provided an output var/array, it is not changed under these conditions because there's no way of knowing how many subpatterns are in the RegEx, and thus no way of knowing how far to init the array.
+
+	// Since compiling succeeded, get info about other parameters.
+	char haystack_buf[MAX_FORMATTED_NUMBER_LENGTH + 1];
+	char *haystack = ExprTokenToString(*aParam[0], haystack_buf); // Load-time validation has already ensured that at least two actual parameters are present.
+	int haystack_length = (int)EXPR_TOKEN_LENGTH(aParam[0], haystack);
+	int param_index = mode_is_replace ? 5 : 3;
+	int starting_offset = aParamCount > param_index ? (int)ExprTokenToInt64(*aParam[param_index])-1 : 0; // The one-based starting position in haystack (if any).  Convert it to zero-based.
+	if (starting_offset < 0) // Treat a StartingPos of 0 (offset -1) as "start at the string's last char".  Similarly, treat negatives as starting further to the left of the end of the string.
+	{
+		starting_offset += haystack_length;
+		if (starting_offset < 0)
+			starting_offset = 0;
+	}
+	else if (starting_offset > haystack_length)
+		// Although pcre_exec() seems to work properly even without this check, its absence would allow
+		// the empty string to be found beyond the length of haystack, which could lead to problems and is
+		// probably more trouble than its worth (assuming it has any worth -- perhaps for a pattern that
+		// looks backward from itself; but that seems too rare to support and might create code that's
+		// harder to maintain, especially in RegExReplace()).
+		starting_offset = haystack_length; // Due to rarity of this condition, opt for simplicity: just point it to the terminator, which is in essence an empty string (which will cause result in "no match" except when searcing for "").
+
+	// SET UP THE OFFSET ARRAY, which consists of int-pairs containing the start/end offset of each match.
+	int pattern_count;
+	pcre_fullinfo(re, extra, PCRE_INFO_CAPTURECOUNT, &pattern_count); // The number of capturing subpatterns (i.e. all except (?:xxx) I think). Failure is not checked because it seems too unlikely in this case.
+	++pattern_count; // Increment to include room for the entire-pattern match.
+	int number_of_ints_in_offset = pattern_count * 3; // PCRE uses 3 ints for each (sub)pattern: 2 for offsets and 1 for its internal use.
+	int *offset = (int *)_alloca(number_of_ints_in_offset * sizeof(int)); // _alloca() boosts performance and seems safe because subpattern_count would usually have to be ridiculously high to cause a stack overflow.
+
+	if (mode_is_replace)
+	{
+		RegExReplace(aResultToken, aParam, aParamCount
+			, re, extra, haystack, haystack_length, starting_offset, offset, number_of_ints_in_offset);
+		return;
+	}
+
+	// OTHERWISE, THIS IS MATCH() NOT REPLACE().
+	// EXECUTE THE REGEX.
+	int captured_pattern_count = pcre_exec(re, extra, haystack, haystack_length, starting_offset, 0, offset, number_of_ints_in_offset);
+
+	// SET THE RETURN VALUE AND ERRORLEVEL BASED ON THE RESULTS OF EXECUTING THE EXPRESSION.
+	if (captured_pattern_count == PCRE_ERROR_NOMATCH)
+	{
+		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // i.e. "no match" isn't an error.
+		aResultToken.value_int64 = 0;
+		// BUT CONTINUE ON so that the output-array (if any) is fully reset (made blank), which improves
+		// convenience for the script.
+	}
+	else if (captured_pattern_count < 0) // An error other than "no match".
+	{
+		g_ErrorLevel->Assign(captured_pattern_count); // No error text is stored; just a negative integer (since these errors are pretty rare).
+		aResultToken.symbol = SYM_STRING;
+		aResultToken.marker = "";
+	}
+	else // Match found, and captured_pattern_count <= 0 (but should never be 0 in this case because that only happens when offset[] is too small, which it isn't).
+	{
+		g_ErrorLevel->Assign(ERRORLEVEL_NONE);
+		aResultToken.value_int64 = offset[0] + 1; // i.e. the position of the entire-pattern match is the function's return value.
+	}
+
+	if (aParamCount < 3 || aParam[2]->symbol != SYM_VAR) // No output var, so nothing more to do.
+		return;
+
+	// OTHERWISE, THE CALLER PROVIDED AN OUTPUT VAR/ARRAY: Store the substrings that matched the patterns.
+	Var &output_var = *aParam[2]->var; // SYM_VAR's Type() is always VAR_NORMAL.
+
+	if (get_positions_not_substrings) // In this mode, it's done this way to avoid creating an array if there are no subpatterns; i.e. the return value is the starting position and the array name will contain the length of what was found.
+		output_var.Assign(captured_pattern_count < 0 ? 0 : offset[1] - offset[0]); // Seems better to store length of zero rather than something non-length like -1 (after all, the return value is blank in this case, which should be used as the error indicator).
+	else
+	{
+		if (captured_pattern_count < 0) // Failed or no match.
+			output_var.Assign(); // Make the full-pattern substring blank as a further indicator, and for convenience consistency in the script.
+		else // Greater than 0 (it can't be equal to zero because offset[] was definitely large enough).
+			output_var.Assign(haystack + offset[0], offset[1] - offset[0]); // It shouldn't be possible for the full-pattern match's offset to be -1, since if where here, a match on the full pattern was always found.
+	}
+
+	if (pattern_count < 2) // There are no subpatterns (only the main pattern), so nothing more to do.
+		return;
+
+	// OTHERWISE, CONTINUE ON TO STORE THE SUBSTRINGS THAT MATCHED THE SUBPATTERNS (EVEN IF PCRE_ERROR_NOMATCH).
+	// For lookup performance, create a table of subpattern names indexed by subpattern number.
+	char **subpat_name = NULL; // Set default as "no subpattern names present or available".
+	char *name_table;
+	int name_count, name_entry_size;
+	if (   captured_pattern_count >= 0 // i.e. *not* PCRE_ERROR_NOMATCH.
+		&& !pcre_fullinfo(re, extra, PCRE_INFO_NAMECOUNT, &name_count) // Success.
+		&& name_count // There's at least one named subpattern.  Relies on short-circuit boolean order.
+		&& !pcre_fullinfo(re, extra, PCRE_INFO_NAMETABLE, &name_table) // Success.
+		&& !pcre_fullinfo(re, extra, PCRE_INFO_NAMEENTRYSIZE, &name_entry_size)   ) // Success.
+	{
+		// For indexing simplicity, also include an entry for the main/entire pattern at index 0 even though
+		// it's never used because the entire pattern can't have a name without enclosing it in parentheses
+		// (in which case it's not the entire pattern anymore, but in fact subpattern #1).
+		size_t subpat_array_size = pattern_count * sizeof(char *);
+		subpat_name = (char **)_alloca(subpat_array_size); // See other use of _alloca() above for reasons why it's used.
+		ZeroMemory(subpat_name, subpat_array_size); // Set default for each index to be "no name corresponds to this subpattern number".
+		for (int i = 0; i < name_count; ++i, name_table += name_entry_size)
+		{
+			// Below converts first two bytes of each name-table entry into the pattern number (it might be
+			// possible to simplify this, but I'm not sure if big vs. little-endian will ever be a concern).
+			subpat_name[(name_table[0] << 8) + name_table[1]] = name_table + 2; // For indexing simplicity, subpat_name[0] is for the main/entire pattern though it is never actually used for that because it can't be named without being enclosed in parentheses (in which case it becomes a subpattern).
+			// For simplicity and unlike PHP, IsPureNumeric() isn't called to forbid numeric subpattern names.
+			// It seems the worst than could happen if it is numeric is that it would overlap/overwrite some of
+			// the numerically-indexed elements in the output-array.  Seems pretty harmless given the rarity.
+		}
+	}
+	//else one of the pcre_fullinfo() calls failed.  The PCRE docs indicate that this realistically never happens
+	// unless bad inputs were given.  So due to rarity, just leave subpat_name==NULL; i.e. "no named subpatterns".
+
+	// Make var_name longer than Max so that FindOrAddVar() will be able to spot and report var names
+	// that are too long, either because the base-name is too long, or the name becomes too long
+	// as a result of appending the array index number:
+	char var_name[MAX_VAR_NAME_LENGTH + 68]; // Allow +3 extra for "Len" and "Pos" suffixes, +1 for terminator, and +64 for largest sub-pattern name (actually it's 32, but 64 allows room for future expansion).  64 is also enough room for the largest 64-bit integer, 20 chars: 18446744073709551616
+	strcpy(var_name, output_var.mName); // This prefix is copied in only once, for performance.
+	char *var_name_suffix = var_name + strlen(var_name); // The position at which to copy the sequence number (index).
+	int always_use = output_var.IsLocal() ? ALWAYS_USE_LOCAL : ALWAYS_USE_GLOBAL;
+	int p = 1, *this_offset = offset + 2; // Init for both loops below.
+	Var *array_item;
+
+	if (get_positions_not_substrings)
+	{
+		int subpat_pos, subpat_len;
+		for (; p < pattern_count; ++p, this_offset += 2) // Start at 1 because above already did pattern #0 (the full pattern).
+		{
+			if (p >= captured_pattern_count) // Works even if captured_pattern_count==PCRE_ERROR_NOMATCH. There are more comments about this in a later section below.
+			{
+				subpat_pos = 0;
+				subpat_len = 0;
+			}
+			else // NOTE: The formulas below work even for a capturing subpattern that wasn't actually matched, such as one of the following: (abc)|(123)
+			{
+				subpat_pos = this_offset[0] + 1; // One-based (i.e. position zero means "not found").
+				subpat_len = this_offset[1] - this_offset[0]; // It seemed more convenient for scripts to store Length instead of an ending offset.
+			}
+
+			if (subpat_name && subpat_name[p]) // This subpattern number has a name, so store it under that name.
+			{
+				sprintf(var_name_suffix, "Pos%s", subpat_name[p]); // Append the subpattern to the array's base name.
+				if (array_item = g_script.FindOrAddVar(var_name, 0, always_use))
+					array_item->Assign(subpat_pos);
+				sprintf(var_name_suffix, "Len%s", subpat_name[p]); // Append the subpattern name to the array's base name.
+				if (array_item = g_script.FindOrAddVar(var_name, 0, always_use))
+					array_item->Assign(subpat_len);
+			}
+			else // This subpattern has no name, so write it out as its pattern number instead. For performance and memory utilization, it seems best to store only one or the other (named or number), not both.
+			{
+				// For comments about this section, see the similar for-loop later below.
+				sprintf(var_name_suffix, "Pos%d", p); // Append the element number to the array's base name.
+				if (array_item = g_script.FindOrAddVar(var_name, 0, always_use))
+					array_item->Assign(subpat_pos);
+				//else var couldn't be created: no error reporting currently, since it basically should never happen.
+				sprintf(var_name_suffix, "Len%d", p); // Append the element number to the array's base name.
+				if (array_item = g_script.FindOrAddVar(var_name, 0, always_use))
+					array_item->Assign(subpat_len);
+			}
+		}
+		return;
+	} // if (get_positions_not_substrings)
+
+	// Otherwise, we're in get-substring mode (not offset mode), so store the substring that matches each subpattern.
+	bool subpat_not_matched;
+	for (; p < pattern_count; ++p, this_offset += 2) // Start at 1 because above already did pattern #0 (the full pattern).
+	{
+		// If both items in this_offset are -1, that means the substring wasn't populated because it's
+		// subpattern wasn't needed to find a match (or there was no match for *anything*).  For example:
+		// "(xyz)|(abc)" (in which only one is subpattern will match).
+		// NOTE: PCRE isn't clear on this, but it seems likely that captured_pattern_count
+		// (returned from pcre_exec()) can be less than pattern_count (from pcre_fullinfo/
+		// PCRE_INFO_CAPTURECOUNT).  So the below takes this into account by not trusting values
+		// in offset[] that are beyond captured_pattern_count.  Further evidence of this is PCRE's
+		// pcre_copy_substring() function, which consults captured_pattern_count to decide whether to
+		// consult the offset array. The formula below works even if captured_pattern_count==PCRE_ERROR_NOMATCH.
+		subpat_not_matched = (p >= captured_pattern_count || this_offset[0] < 0); // Relies on short-circuit boolean order.
+
+		if (subpat_name && subpat_name[p]) // This subpattern number has a name, so store it under that name.
+		{
+			// This section is similar to the one in the "else" below, so see it for more comments.
+			strcpy(var_name_suffix, subpat_name[p]); // Append the subpat name to the array's base name.  strcpy() seems safe because PCRE almost certainly enforces the 32-char limit on subpattern names.
+			if (array_item = g_script.FindOrAddVar(var_name, 0, always_use))
+			{
+				if (subpat_not_matched)
+					array_item->Assign(); // Omit all parameters to make the var empty without freeing its memory (for performance, in case this RegEx is being used many times in a loop).
+				else
+					array_item->Assign(haystack + this_offset[0], this_offset[1] - this_offset[0]);
+			}
+			//else var couldn't be created: no error reporting currently, since it basically should never happen.
+		}
+		else // This subpattern has no name, so instead write it out as its actual pattern number. For performance and memory utilization, it seems best to store only one or the other (named or number), not both.
+		{
+			_itoa(p, var_name_suffix, 10); // Append the element number to the array's base name.
+			// To help performance (in case the linked list of variables is huge), tell it where
+			// to start the search.  Use the base array name rather than the preceding element because,
+			// for example, Array19 is alphabetially less than Array2, so we can't rely on the
+			// numerical ordering:
+			if (array_item = g_script.FindOrAddVar(var_name, 0, always_use))
+			{
+				if (subpat_not_matched)
+					array_item->Assign(); // Omit all parameters to make the var empty without freeing its memory (for performance, in case this RegEx is being used many times in a loop).
+				else
+					array_item->Assign(haystack + this_offset[0], this_offset[1] - this_offset[0]);
+			}
+			//else var couldn't be created: no error reporting currently, since it basically should never happen.
+		}
+	} // for() each subpattern.
 }
 
 
@@ -10450,52 +11600,49 @@ void BIF_VarSetCapacity(ExprTokenType &aResultToken, ExprTokenType *aParam[], in
 {
 	// Caller has set aResultToken.symbol to a default of SYM_INTEGER, so no need to set it here.
 	aResultToken.value_int64 = 0; // Set default. In spite of being ambiguous with the result of Free(), 0 seems a little better than -1 since it indicates "no capacity" and is also equal to "false" for easy use in expressions.
-	if (aParam[0]->symbol == SYM_VAR)
+	if (aParam[0]->symbol == SYM_VAR) // SYM_VAR's Type() is always VAR_NORMAL.
 	{
-		Var &var = *aParam[0]->var; // For performance and convenience.
-		if (var.Type() == VAR_NORMAL) // Don't allow resizing/reporting of built-in variables since Assign() isn't designed to work on them, and resizing the clipboard's memory area would serve no purpose and isn't intended for this anyway.
+		Var &var = *aParam[0]->var; // For performance and convenience. Note: SYM_VAR's Type() is always VAR_NORMAL.
+		if (aParamCount > 1) // Second parameter is present.
 		{
-			if (aParamCount > 1) // Second parameter is present.
+			VarSizeType new_capacity = (VarSizeType)ExprTokenToInt64(*aParam[1]);
+			if (new_capacity == -1) // Adjust variable's internal length. Since new_capacity is unsigned, compare directly to -1 rather than doing <0.
 			{
-				VarSizeType new_capacity = (VarSizeType)ExprTokenToInt64(*aParam[1]);
-				if (new_capacity == -1) // Adjust variable's internal length. Since new_capacity is unsigned, compare directly to -1 rather than doing <0.
+				// Seems more useful to report length vs. capacity in this special case. Scripts might be able
+				// to use this to boost performance.
+				aResultToken.value_int64 = var.Length() = (VarSizeType)strlen(var.Contents());
+				var.Close(); // v1.0.44.14: Removes the VAR_ATTRIB_BINARY_CLIP (if it was present) because it seems more flexible to convert binary-to-normal rather than checking IsBinaryClip() then doing nothing if it binary.
+				return;
+			}
+			// Since above didn't return:
+			if (new_capacity)
+			{
+				var.Assign(NULL, new_capacity, true, false); // This also destroys the variables contents.
+				VarSizeType capacity;
+				if (aParamCount > 2 && (capacity = var.Capacity()) > 1) // Third parameter is present and var has enough capacity to make FillMemory() meaningful.
 				{
-					// Seems more useful to report length vs. capacity in this special case. Scripts might be able
-					// to use this to boost performance.
-					aResultToken.value_int64 = var.Length() = (VarSizeType)strlen(var.Contents());
-					var.Close(); // v1.0.44.14: Removes the VAR_ATTRIB_BINARY_CLIP (if it was present) because it seems more flexible to convert binary-to-normal rather than checking IsBinaryClip() then doing nothing if it binary.
-					return;
+					--capacity; // Convert to script-POV capacity. To avoid underflow, do this only now that Capacity() is known not to be zero.
+					// The following uses capacity-1 because the last byte of a variable should always
+					// be left as a binary zero to avoid crashes and problems due to unterminated strings.
+					// In other words, a variable's usable capacity from the script's POV is always one
+					// less than its actual capacity:
+					BYTE fill_byte = (BYTE)ExprTokenToInt64(*aParam[2]); // For simplicity, only numeric characters are supported, not something like "a" to mean the character 'a'.
+					char *contents = var.Contents();
+					FillMemory(contents, capacity, fill_byte); // Last byte of variable is always left as a binary zero.
+					contents[capacity] = '\0'; // Must terminate because nothing else is explicitly reponsible for doing it.
+					var.Length() = fill_byte ? capacity : 0; // Length is same as capacity unless fill_byte is zero.
 				}
-				// Since above didn't return:
-				if (new_capacity)
-				{
-					var.Assign(NULL, new_capacity, true, false); // This also destroys the variables contents.
-					VarSizeType capacity;
-					if (aParamCount > 2 && (capacity = var.Capacity()) > 1) // Third parameter is present and var has enough capacity to make FillMemory() meaningful.
-					{
-						--capacity; // Convert to script-POV capacity. To avoid underflow, do this only now that Capacity() is known not to be zero.
-						// The following uses capacity-1 because the last byte of a variable should always
-						// be left as a binary zero to avoid crashes and problems due to unterminated strings.
-						// In other words, a variable's usable capacity from the script's POV is always one
-						// less than its actual capacity:
-						BYTE fill_byte = (BYTE)ExprTokenToInt64(*aParam[2]); // For simplicity, only numeric characters are supported, not something like "a" to mean the character 'a'.
-						char *contents = var.Contents();
-						FillMemory(contents, capacity, fill_byte); // Last byte of variable is always left as a binary zero.
-						contents[capacity] = '\0'; // Must terminate because nothing else is explicitly reponsible for doing it.
-						var.Length() = fill_byte ? capacity : 0; // Length is same as capacity unless fill_byte is zero.
-					}
-					else
-						// By design, Assign() has already set the length of the variable to reflect new_capacity.
-						// This is not what is wanted in this case since it should be truly empty.
-						var.Length() = 0;
-				}
-				else // ALLOC_SIMPLE, due to its nature, will not actually be freed, which is documented.
-					var.Free();
-			} // if (aParamCount > 1)
-			//else the var is not altered; instead, the current capacity is reported, which seems more intuitive/useful than having it do a Free().
-			if (aResultToken.value_int64 = var.Capacity()) // Don't subtract 1 here in lieu doing it below (avoids underflow).
-				--aResultToken.value_int64; // Omit the room for the zero terminator since script capacity is defined as length vs. size.
-		} // var.Type() == VAR_NORMAL
+				else
+					// By design, Assign() has already set the length of the variable to reflect new_capacity.
+					// This is not what is wanted in this case since it should be truly empty.
+					var.Length() = 0;
+			}
+			else // ALLOC_SIMPLE, due to its nature, will not actually be freed, which is documented.
+				var.Free();
+		} // if (aParamCount > 1)
+		//else the var is not altered; instead, the current capacity is reported, which seems more intuitive/useful than having it do a Free().
+		if (aResultToken.value_int64 = var.Capacity()) // Don't subtract 1 here in lieu doing it below (avoids underflow).
+			--aResultToken.value_int64; // Omit the room for the zero terminator since script capacity is defined as length vs. size.
 	} // (aParam[0]->symbol == SYM_VAR)
 }
 
@@ -10564,6 +11711,8 @@ void BIF_WinExistActive(ExprTokenType &aResultToken, ExprTokenType *aParam[], in
 
 
 void BIF_Round(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+// For simplicity and backward compatibility, this always yields something numeric (or a string that's numeric).
+// Even Round(empty_or_unintialized_var) is zero rather than "".
 {
 	char *buf = aResultToken.buf; // Must be saved early since below overwrites the union (better maintainability too).
 
@@ -10626,6 +11775,9 @@ void BIF_FloorCeil(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 // Floor() rounds down to the nearest integer; that is, to the integer that lies to the left on the
 // number line (this is not the same as truncation because Floor(-1.2) is -2, not -1).
 // Ceil() rounds up to the nearest integer; that is, to the integer that lies to the right on the number line.
+//
+// For simplicity and backward compatibility, a numeric result is always returned (even if the input
+// is non-numeric or an empty string).
 {
 	// The code here is similar to that in TRANS_CMD_FLOOR/CEIL, so maintain them together.
 	// The qmath routines are used because Floor() and Ceil() are deceptively difficult to implement in a way
@@ -10718,6 +11870,8 @@ void BIF_Abs(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCou
 
 
 void BIF_Sin(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+// For simplicity and backward compatibility, a numeric result is always returned (even if the input
+// is non-numeric or an empty string).
 {
 	aResultToken.symbol = SYM_FLOAT;
 	aResultToken.value_double = qmathSin(ExprTokenToDouble(*aParam[0]));
@@ -10726,6 +11880,8 @@ void BIF_Sin(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCou
 
 
 void BIF_Cos(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+// For simplicity and backward compatibility, a numeric result is always returned (even if the input
+// is non-numeric or an empty string).
 {
 	aResultToken.symbol = SYM_FLOAT;
 	aResultToken.value_double = qmathCos(ExprTokenToDouble(*aParam[0]));
@@ -10734,6 +11890,8 @@ void BIF_Cos(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCou
 
 
 void BIF_Tan(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+// For simplicity and backward compatibility, a numeric result is always returned (even if the input
+// is non-numeric or an empty string).
 {
 	aResultToken.symbol = SYM_FLOAT;
 	aResultToken.value_double = qmathTan(ExprTokenToDouble(*aParam[0]));
@@ -10751,6 +11909,8 @@ void BIF_ASinACos(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPar
 	}
 	else
 	{
+		// For simplicity and backward compatibility, a numeric result is always returned in this case (even if
+		// the input is non-numeric or an empty string).
 		aResultToken.symbol = SYM_FLOAT;
 		// Below: marker contains either "ASin" or "ACos"
 		aResultToken.value_double = (toupper(aResultToken.marker[1]) == 'S') ? qmathAsin(value) : qmathAcos(value);
@@ -10760,6 +11920,8 @@ void BIF_ASinACos(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPar
 
 
 void BIF_ATan(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+// For simplicity and backward compatibility, a numeric result is always returned (even if the input
+// is non-numeric or an empty string).
 {
 	aResultToken.symbol = SYM_FLOAT;
 	aResultToken.value_double = qmathAtan(ExprTokenToDouble(*aParam[0]));
@@ -10768,6 +11930,8 @@ void BIF_ATan(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCo
 
 
 void BIF_Exp(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+// For simplicity and backward compatibility, a numeric result is always returned (even if the input
+// is non-numeric or an empty string).
 {
 	aResultToken.symbol = SYM_FLOAT;
 	aResultToken.value_double = qmathExp(ExprTokenToDouble(*aParam[0]));
@@ -10785,6 +11949,8 @@ void BIF_SqrtLogLn(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPa
 	}
 	else
 	{
+		// For simplicity and backward compatibility, a numeric result is always returned in this case (even if
+		// the input is non-numeric or an empty string).
 		aResultToken.symbol = SYM_FLOAT;
 		switch (toupper(aResultToken.marker[1]))
 		{
@@ -12371,17 +13537,17 @@ void BIF_IL_Add(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParam
 ////////////////////////////////////////////////////////
 
 __int64 ExprTokenToInt64(ExprTokenType &aToken)
-// Converts the contents of aToken to an int.
+// Converts the contents of aToken to a 64-bit int.
 {
 	// Some callers, such as those that cast our return value to UINT, rely on the use of 64-bit to preserve
 	// unsigned values and also wrap any signed values into the unsigned domain.
 	switch (aToken.symbol)
 	{
-		case SYM_INTEGER: return (int)aToken.value_int64;
+		case SYM_INTEGER: return aToken.value_int64; // Fixed in v1.0.45 not to cast to int.
 		case SYM_FLOAT: return (int)aToken.value_double;
-		case SYM_VAR: return (int)ATOI(aToken.var->Contents());
+		case SYM_VAR: return ATOI64(aToken.var->Contents()); // Fixed in v1.0.45 to use ATOI64 vs. ATOI().
 		default: // SYM_STRING or SYM_OPERAND
-			return ATOI(aToken.marker);
+			return ATOI64(aToken.marker); // Fixed in v1.0.45 to use ATOI64 vs. ATOI().
 	}
 }
 

@@ -310,7 +310,7 @@ void SendKeys(char *aKeys, bool aSendRaw, SendModes aSendModeOrig, HWND aTargetW
 			sMaxEvents = MAX_INITIAL_EVENTS_PB;
 		}
 		// _alloca() is used to avoid the overhead of malloc/free (99% of Sends will thus fit in stack memory).
-		// _alloca() never returns a failure code, it just raises an exception (stack overflow I think).
+		// _alloca() never returns a failure code, it just raises an exception (e.g. stack overflow).
 		InitEventArray(_alloca(mem_size), sMaxEvents, mods_current);
 	}
 
@@ -334,6 +334,8 @@ void SendKeys(char *aKeys, bool aSendRaw, SendModes aSendModeOrig, HWND aTargetW
 	int repeat_count, click_x, click_y;
 	bool move_offset, key_down_is_persistent;
 	DWORD placeholder;
+	single_char_string[1] = '\0'; // Terminate in advance.
+
 	LONG_OPERATION_INIT  // Needed even for SendInput/Play.
 
 	for (; *aKeys; ++aKeys, sPrevEventModifierDown = this_event_modifier_down)
@@ -582,8 +584,7 @@ brace_case_end: // This label is used to simplify the code without sacrificing p
 			// value of modifiers and the updated value is *not* guaranteed to be passed.
 			// In other words, SendKey(TextToVK(...), modifiers, ...) would often send the old
 			// value for modifiers.
-			single_char_string[0] = *aKeys;
-			single_char_string[1] = '\0';
+			single_char_string[0] = *aKeys; // String was pre-terminated earlier.
 			if (vk = TextToVK(single_char_string, &mods_for_next_key, true, true, sTargetKeybdLayout))
 				// TextToVK() takes no measurable time compared to the amount of time SendKey takes.
 				SendKey(vk, 0, mods_for_next_key, persistent_modifiers_for_this_SendKeys, 1, KEYDOWNANDUP
@@ -855,13 +856,13 @@ void SendKey(vk_type aVK, sc_type aSC, modLR_type aModifiersLR, modLR_type aModi
 
 		// v1.0.42.04: Mouse clicks are now handled here in the same loop as keystrokes so that the modifiers
 		// will be readjusted (above) if the user presses/releases modifier keys during the mouse clicks.
-		// Sending mouse clicks via ControlSend is not supported, so in that case fall back to the
-		// old method of sending the VK directly (which probably has no effect 99% of the time):
 		if (vk_is_mouse && !aTargetWindow)
 			MouseClick(aVK, aX, aY, 1, g.DefaultMouseSpeed, aEventType, aMoveOffset);
 			// Above: Since it's rare to send more than one click, it seems best to simplify and reduce code size
 			// by not doing more than one click at a time event when mode is SendInput/Play.
 		else
+			// Sending mouse clicks via ControlSend is not supported, so in that case fall back to the
+			// old method of sending the VK directly (which probably has no effect 99% of the time):
 			KeyEvent(aEventType, aVK, aSC, aTargetWindow, true);
 	} // for() [aRepeatCount]
 

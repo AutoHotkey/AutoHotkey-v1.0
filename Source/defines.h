@@ -33,7 +33,7 @@ GNU General Public License for more details.
 #endif
 
 #define NAME_P "AutoHotkey"
-#define NAME_VERSION "1.0.44.14"
+#define NAME_VERSION "1.0.45.00"
 #define NAME_PV NAME_P " v" NAME_VERSION
 
 // Window class names: Changing these may result in new versions not being able to detect any old instances
@@ -57,6 +57,11 @@ GNU General Public License for more details.
 // so that really long lines from aut2 scripts, such as a chain of IF commands, can be
 // brought in and parsed.  In addition, it also allows continuation sections to be long.
 #define LINE_SIZE (16384 + 1)  // +1 for terminator.  Don't increase LINE_SIZE above 65535 without considering ArgStruct::length's type (WORD).
+
+// The following avoid having to link to OLDNAMES.lib, but they probably don't
+// reduce code size at all.
+#define stricmp(str1, str2) _stricmp(str1, str2)
+#define strnicmp(str1, str2, size) _strnicmp(str1, str2, size)
 
 // Items that may be needed for VC++ 6.X:
 #ifndef SPI_GETFOREGROUNDLOCKTIMEOUT
@@ -150,7 +155,7 @@ enum SymbolType // For use with ExpandExpression() and IsPureNumeric().
 	, SYM_BITSHIFTLEFT, SYM_BITSHIFTRIGHT // << >>
 	, SYM_PLUS, SYM_MINUS
 	, SYM_TIMES, SYM_DIVIDE, SYM_FLOORDIVIDE
-	, SYM_NEGATIVE, SYM_HIGHNOT, SYM_BITNOT, SYM_ADDRESS  // Unary minus (unary plus is handled without needing a value here), !, ~, and &var.
+	, SYM_NEGATIVE, SYM_HIGHNOT, SYM_BITNOT, SYM_ADDRESS  // Don't change position or order of these because Infix-to-postfix converter's special handling for SYM_POWER relies on them being adjacent to each other.
 	, SYM_POWER    // See below for why this takes precedence over negative.
 	, SYM_DEREF
 	, SYM_FUNC     // A call to a function.
@@ -162,7 +167,7 @@ enum SymbolType // For use with ExpandExpression() and IsPureNumeric().
 // of the array in here (since it's only extern to modules other than
 // script.cpp):
 enum enum_act {
-// Seems best to make this one zero so that it will be the ZeroMemory() default within
+// Seems best to make ACT_INVALID zero so that it will be the ZeroMemory() default within
 // any POD structures that contain an action_type field:
   ACT_INVALID = FAIL  // These should both be zero for initialization and function-return-value purposes.
 , ACT_ASSIGN, ACT_ASSIGNEXPR, ACT_FUNCTIONCALL, ACT_ADD, ACT_SUB, ACT_MULT, ACT_DIV
@@ -397,13 +402,14 @@ typedef UCHAR HookType;
 // Defining these here avoids awkwardness due to the fact that globaldata.cpp
 // does not (for design reasons) include globaldata.h:
 typedef UCHAR ActionTypeType; // If ever have more than 256 actions, will have to change this (but it would increase code size due to static data in g_act).
+#pragma pack(1) // v1.0.45: Reduces code size a little without impacting runtime performance because this struct is hardly ever accessed during runtime.
 struct Action
 {
 	char *Name;
 	// Just make them int's, rather than something smaller, because the collection
 	// of actions will take up very little memory.  Int's are probably faster
 	// for the processor to access since they are the native word size, or something:
-	// Update for v1.0.40.02: Now that the ARGn macros don't check mArgc, MaxParamsAu2
+	// Update for v1.0.40.02: Now that the ARGn macros don't check mArgc, MaxParamsAu2WithHighBit
 	// is needed to allow MaxParams to stay pure, which in turn prevents Line::Perform()
 	// from accessing a NULL arg in the sArgDeref array (i.e. an arg that exists only for
 	// non-AutoIt2 scripts, such as the extra ones in StringGetPos).
@@ -411,7 +417,7 @@ struct Action
 	// is used by g_act to build static data into the code.  Testing shows that the compiler
 	// will generate a warning even when not in debug mode in the unlikely event that a constant
 	// larger than 127 is ever stored in one of these:
-	char MinParams, MaxParams, MaxParamsAu2;
+	char MinParams, MaxParams, MaxParamsAu2WithHighBit;
 	// Array indicating which args must be purely numeric.  The first arg is
 	// number 1, the second 2, etc (i.e. it doesn't start at zero).  The list
 	// is ended with a zero, much like a string.  The compiler will notify us
@@ -419,8 +425,11 @@ struct Action
 	#define MAX_NUMERIC_PARAMS 7
 	ActionTypeType NumericParams[MAX_NUMERIC_PARAMS];
 };
+#pragma pack()  // Calling pack with no arguments restores the default value (which is 8, but "the alignment of a member will be on a boundary that is either a multiple of n or a multiple of the size of the member, whichever is smaller.")
 
-enum TitleMatchModes {MATCHMODE_INVALID = FAIL, FIND_IN_LEADING_PART, FIND_ANYWHERE, FIND_EXACT, FIND_FAST, FIND_SLOW};
+// Values are hard-coded for some of the below because they must not deviate from the documented, numerical
+// TitleMatchModes:
+enum TitleMatchModes {MATCHMODE_INVALID = FAIL, FIND_IN_LEADING_PART = 1, FIND_ANYWHERE = 2, FIND_EXACT = 3, FIND_REGEX, FIND_FAST, FIND_SLOW};
 
 typedef UINT GuiIndexType; // Some things rely on it being unsigned to avoid the need to check for less-than-zero.
 typedef UINT GuiEventType; // Made a UINT vs. enum so that illegal/underflow/overflow values are easier to detect.
@@ -489,7 +498,8 @@ struct global_struct
 	int MouseDelay;     // negative values may be used as special flags.
 	int MouseDelayPlay; //
 	char FormatFloat[32];
-	char ErrorLevel[128]; // Big in case user put something bigger than a number in g_ErrorLevel.
+	#define ERRORLEVEL_SAVED_SIZE 128 // The size that can be remembered (saved & restored) if a thread is interrupted.
+	char ErrorLevel[ERRORLEVEL_SAVED_SIZE]; // Big in case user put something bigger than a number in g_ErrorLevel.
 	Func *CurrentFunc; // The function whose body is currently being processed at load-time, or being run at runtime (if any).
 	HWND hWndLastUsed;  // In many cases, it's better to use GetValidLastUsedWindow() when referring to this.
 	//HWND hWndToRestore;

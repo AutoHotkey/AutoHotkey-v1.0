@@ -30,6 +30,11 @@ GNU General Public License for more details.
 // modifications to impact the overall performance of the generated code by as much as
 // 7%.  However, this might have more to do with cache hits and misses in the CPU than
 // with the nature of the code produced by the compiler.
+// UPDATE 10/18/2006: There's not much difference anymore -- in fact, using min size
+// for everything makes compiled scripts slightly faster in basic benchmarks, probably
+// due to the recent addition of the linker optimization that physically orders
+// functions in a better order inside the EXE.  Therefore, script_expression.cpp no
+// longer has a separate "favor fast code" option.
 //////////////////////////////////////////////////////////////////////////////////////
 
 #include "stdafx.h" // pre-compiled headers
@@ -37,7 +42,13 @@ GNU General Public License for more details.
 #include "globaldata.h" // for a lot of things
 #include "qmath.h" // For ExpandExpression()
 
-
+// __forceinline: Decided against it for this function because alhough it's only called by one caller,
+// testing shows that it wastes stack space (room for its automatic variables would be unconditionally 
+// reserved in the stack of its caller).  Also, the performance benefit of inlining this is too slight.
+// Here's a simple way to verify wasted stack space in a caller that calls an inlined function:
+//    DWORD stack
+//    _asm mov stack, esp
+//    MsgBox(stack);
 char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget, char *&aDerefBuf
 	, size_t &aDerefBufSize, char *aArgDeref[], size_t aExtraSize)
 // Caller should ignore aResult unless this function returns NULL.
@@ -63,7 +74,8 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 	#define MAX_EXPR_MEM_ITEMS 100 // Hard to imagine using even a few in a typical script, let alone 100.
 	char *mem[MAX_EXPR_MEM_ITEMS]; // No init necessary.  In most cases, it will never be used.
 	int mem_count = 0; // The actual number of items in use in the above array.
-	char *result_to_return = "";
+	char *result_to_return = ""; // By contrast, NULL is used to tell the caller to abort the current thread.  That isn't done for normal syntax errors, just critical conditions such as out-of-memory.
+	Var *output_var = (mActionType == ACT_ASSIGNEXPR) ? OUTPUT_VAR : NULL; // Resolve early because it's similar in usage/scope to the above.  Plus MUST be resolved prior to calling any script-functions since they could change the values in sArgVar[].
 
 	map_item map[MAX_DEREFS_PER_ARG*2 + 1];
 	int map_count = 0;
@@ -238,7 +250,8 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 	// Most programming languages give exponentiation a higher precedence than unary minus and logical-not.
 	// For example, -2**2 is evaluated as -(2**2), not (-2)**2 (the latter is unsupported by qmathPow anyway).
 	// However, this rule requires a small workaround in the postfix-builder to allow 2**-2 to be
-	// evaluated as 2**(-2) rather than being seen as an error.
+	// evaluated as 2**(-2) rather than being seen as an error.  v1.0.45: A similar thing is required
+	// to allow the following to work: 2**!1, 2**not 0, 2**~0xFFFFFFFE, 2**&x.
 	// On a related note, the right-to-left tradition of something like 2**3**4 is not implemented.
 	// Instead, the expression is evaluated from left-to-right (like other operators) to simplify the code.
 
@@ -260,13 +273,14 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 	char *op_end, *cp, *terminate_string_here;
 	UINT op_length;
 	Var *found_var;
+	size_t literal_string_length;
 
 	for (int map_index = 0; map_index < map_count; ++map_index) // For each deref and raw item in map.
 	{
 		// Because neither the postfix array nor the stack can ever wind up with more tokens than were
 		// contained in the original infix array, only the infix array need be checked for overflow:
 		if (infix_count > MAX_TOKENS - 1) // No room for this operator or operand to be added.
-			goto fail;
+			goto abnormal_end;
 
 		map_item &this_map_item = map[map_index];
 
@@ -278,13 +292,13 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 			if (infix_count && IS_OPERAND_OR_CPAREN(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
 			{
 				if (infix_count > MAX_TOKENS - 2) // -2 to ensure room for this operator and the operand further below.
-					goto fail;
+					goto abnormal_end;
 				infix[infix_count++].symbol = SYM_CONCAT;
 			}
-			switch(this_map_item.type)
+			switch (this_map_item.type)
 			{
-			case EXP_DEREF_VAR:
-				infix[infix_count].symbol = SYM_VAR; // DllCall() and possibly others rely on this having been done to support changing the value of the the parameter (similar to by-ref).
+			case EXP_DEREF_VAR: // Type() is always VAR_NORMAL as verified earlier. This is relied upon in several places such as built-in functions.
+				infix[infix_count].symbol = SYM_VAR; // DllCall() and possibly others rely on this having been done to support changing the value of a parameter (similar to by-ref).
 				infix[infix_count].var = this_map_item.var;
 				break;
 			case EXP_DEREF_FUNC:
@@ -347,7 +361,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 			// Because neither the postfix array nor the stack can ever wind up with more tokens than were
 			// contained in the original infix array, only the infix array need be checked for overflow:
 			if (infix_count > MAX_TOKENS - 1) // No room for this operator or operand to be added.
-				goto fail;
+				goto abnormal_end;
 
 			// Only spaces and tabs are considered whitespace, leaving newlines and other whitespace characters
 			// for possible future use:
@@ -360,7 +374,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 			ExprTokenType &this_infix_item = infix[infix_count]; // Might help reduce code size since it's referenced many places below.
 
 			// Check if it's an operator.
-			switch(*cp)
+			switch (*cp)
 			{
 			// The most common cases are kept up top to enhance performance if switch() is implemented as if-else ladder.
 			case '+':
@@ -470,7 +484,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 				if (infix_count && IS_OPERAND_OR_CPAREN(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
 				{
 					if (infix_count > MAX_TOKENS - 2) // -2 to ensure room for this operator and the operand further below.
-						goto fail;
+						goto abnormal_end;
 					this_infix_item.symbol = SYM_CONCAT;
 					++infix_count;
 				}
@@ -570,7 +584,7 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 				for (op_end = cp;; ++op_end)
 				{
 					if (!*op_end) // No matching end-quote. Probably impossible due to load-time validation.
-						goto fail;
+						goto abnormal_end;
 					if (*op_end == '"') // If not followed immediately by another, this is the end of it.
 					{
 						++op_end;
@@ -583,15 +597,16 @@ char *Line::ExpandExpression(int aArgIndex, ResultType &aResult, char *&aTarget,
 				// op_end is now the character after the first literal string's ending quote, which might be the terminator.
 				*(--op_end) = '\0'; // Remove the ending quote.
 				// Convert all pairs of quotes inside into single literal quotes:
-				StrReplaceAll(cp, "\"\"", "\"", true, SCS_SENSITIVE);
-				// Above relies on the fact that StrReplaceAll() does not do cascading replacements,
+				literal_string_length = op_end - cp;
+				StrReplace(cp, "\"\"", "\"", SCS_SENSITIVE, UINT_MAX, -1, NULL, &literal_string_length); // PERFORMANCE: Combining this with the loop above isn't trival due to the fact that the terminator isn't added until after that loop.  Another loop could be done here, but it's unlikely to improve perf. much since literal strings tend to be short.
+				// Above relies on the fact that StrReplace() does not do cascading replacements,
 				// meaning that a series of characters such as """" would be correctly converted into
 				// two double quotes rather than just collapsing into one.
 				// For the below, see comments at (this_map_item.type == EXP_DEREF_SINGLE) above.
 				if (infix_count && IS_OPERAND_OR_CPAREN(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
 				{
 					if (infix_count > MAX_TOKENS - 2) // -2 to ensure room for this operator and the operand further below.
-						goto fail;
+						goto abnormal_end;
 					this_infix_item.symbol = SYM_CONCAT;
 					++infix_count;
 				}
@@ -635,48 +650,21 @@ numeric_literal:
 					goto double_deref; // This also serves to break out of this for(), equivalent to a break.
 				// Otherwise, this operand is a normal raw numeric-literal or a word-operator (and/or/not).
 				// The section below is very similar to the one used at load-time to recognize and/or/not,
-				// so it should be maintained with that section:
-				op_length = (UINT)(op_end - cp);
-				if (op_length < 4 && op_length > 1) // Ordered for short-circuit performance.
+				// so it should be maintained with that section.  UPDATE for v1.0.45: The load-time parser
+				// now resolves "OR" to || and "AND" to && to improve runtime performance and reduce code size here.
+				// However, "NOT" but still be parsed here at runtime because it's not quite the same as the "!"
+				// operator (different precedence), and it seemed too much trouble to invent some special
+				// operator symbol for load-time to insert as a placeholder/substitute (especially since that
+				// symbol would appear in ListLines).
+				if (op_end-cp == 3
+					&& (cp[0] == 'n' || cp[0] == 'N')
+					&& (cp[1] == 'o' || cp[1] == 'O')
+					&& (cp[2] == 't' || cp[2] == 'T')) // "NOT" was found.
 				{
-					// Since this item is of an appropriate length, check if it's AND/OR/NOT:
-					if (op_length == 2)
-					{
-						if ((*cp == 'o' || *cp == 'O') && (cp[1] == 'r' || cp[1] == 'R')) // "OR" was found.
-						{
-							this_infix_item.symbol = SYM_OR;
-							*cp = '\0';  // Terminate any previous raw numeric-literal such as "1 or (x < 3)"
-							cp = op_end; // Have the loop process whatever lies at op_end and beyond.
-							continue;
-						}
-					}
-					else // op_length must be 3
-					{
-						switch (*cp)
-						{
-						case 'a':
-						case 'A':
-							if ((cp[1] == 'n' || cp[1] == 'N') && (cp[2] == 'd' || cp[2] == 'D')) // "AND" was found.
-							{
-								this_infix_item.symbol = SYM_AND;
-								*cp = '\0';  // Terminate any previous raw numeric-literal such as "1 and (x < 3)"
-								cp = op_end; // Have the loop process whatever lies at op_end and beyond.
-								continue;
-							}
-							break;
-
-						case 'n':
-						case 'N':
-							if ((cp[1] == 'o' || cp[1] == 'O') && (cp[2] == 't' || cp[2] == 'T')) // "NOT" was found.
-							{
-								this_infix_item.symbol = SYM_LOWNOT;
-								*cp = '\0';  // Terminate any previous raw numeric-literal such as "1 not (x < 3)" (even though "not" would be invalid if used this way)
-								cp = op_end; // Have the loop process whatever lies at op_end and beyond.
-								continue;
-							}
-							break;
-						}
-					}
+					this_infix_item.symbol = SYM_LOWNOT;
+					*cp = '\0';  // Terminate any previous raw numeric-literal such as "1 not (x < 3)" (even though "not" would be invalid if used this way)
+					cp = op_end; // Have the loop process whatever lies at op_end and beyond.
+					continue;
 				}
 				// Since above didn't "continue", this item is a raw numeric literal, either SYM_FLOAT or
 				// SYM_INTEGER (to be differentiated later).
@@ -684,7 +672,7 @@ numeric_literal:
 				if (infix_count && IS_OPERAND_OR_CPAREN(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
 				{
 					if (infix_count > MAX_TOKENS - 2) // -2 to ensure room for this operator and the operand further below.
-						goto fail;
+						goto abnormal_end;
 					this_infix_item.symbol = SYM_CONCAT;
 					++infix_count;
 				}
@@ -772,7 +760,7 @@ double_deref:
 		if (infix_count && IS_OPERAND_OR_CPAREN(infix[infix_count - 1].symbol)) // If it's an operand, at this stage it can only be SYM_OPERAND or SYM_STRING.
 		{
 			if (infix_count > MAX_TOKENS - 2) // -2 to ensure room for this operator and the operand further below.
-				goto fail;
+				goto abnormal_end;
 			infix[infix_count++].symbol = SYM_CONCAT;
 		}
 
@@ -801,9 +789,7 @@ double_deref:
 				// Above already displayed the error.  As of v1.0.31, this type of error is displayed and
 				// causes the current thread to terminate, which seems more useful than the old behavior
 				// that tolerated anything in expressions.
-				aResult = FAIL; // Indicate reason to caller.
-				result_to_return = NULL; // Use NULL to inform our caller that this entire thread is to be terminated.
-				goto end;
+				goto abort;
 			}
 			// Otherwise, var was found or created.
 			if (found_var->Type() != VAR_NORMAL)
@@ -828,10 +814,10 @@ double_deref:
 				// as always-blank due to the use of Var::Contents() vs. Var::Get() in various places below.
 				// This seems okay due to the extreme rarity of anyone intentionally wanting a double
 				// reference such as Array%i% to resolve to the name of an environment variable.
-				infix[infix_count].symbol = SYM_VAR;
+				infix[infix_count].symbol = SYM_VAR; // The fact that a SYM_VAR operand is always VAR_NORMAL is relied upon in several places such as built-in functions.
 				infix[infix_count].var = found_var;
 			}
-		}
+		} // Double-deref section.
 		++infix_count;
 	} // for each map item
 
@@ -861,7 +847,7 @@ double_deref:
 				// This also signals our loop to stop.
 				--stack_count;
 			else if (stack_symbol == SYM_OPAREN) // Open paren is never closed (currently impossible due to load-time balancing, but kept for completeness).
-				goto fail;
+				goto abnormal_end;
 			else // Pop item of the stack, and continue iterating, which will hit this line until stack is empty.
 			{
 				postfix[postfix_count] = STACK_POP;
@@ -900,7 +886,7 @@ double_deref:
 				}
 			}
 			else if (stack_symbol == SYM_BEGIN) // Paren is closed without having been opened (currently impossible due to load-time balancing, but kept for completeness).
-				goto fail; 
+				goto abnormal_end; 
 			else
 			{
 				postfix[postfix_count] = STACK_POP;
@@ -939,10 +925,11 @@ double_deref:
 			// Note: BEGIN and OPAREN are the lowest precedence items ever to appear on the stack (CPAREN
 			// never goes on the stack, so can't be encountered there).
 			if (   sPrecedence[stack_symbol] < sPrecedence[infix_symbol]
-				|| stack_symbol == SYM_POWER && infix_symbol == SYM_NEGATIVE   )
+				|| stack_symbol == SYM_POWER && (infix_symbol >= SYM_NEGATIVE && infix_symbol <= SYM_ADDRESS
+					|| infix_symbol == SYM_LOWNOT)   )
 			{
-				// The line above is a workaround to allow 2**-2 to be evaluated as 2**(-2) rather
-				// than being seen as an error.  However, for simplicity of code, consecutive
+				// The line above is a workaround to allow 2**-2 (and others in v1.0.45) to be evaluated as
+				// 2**(-2) rather than being seen as an error.  However, for simplicity of code, consecutive
 				// unary operators are not supported (they currently produce a failure [blank value]
 				// because they wind up in the postfix array in the wrong order).
 				// !!x  ; Not supported, but Laszlo pointed out this would useful to convert a blank value into
@@ -996,11 +983,11 @@ double_deref:
 	int j, s, actual_param_count;
 	Func *prev_func;
 	char *result; // "result" is used for return values and also the final result.
-	size_t result_size;
-	bool done, make_result_persistent, early_return, left_branch_is_true, left_was_negative;
+	size_t result_size, alloca_usage = 0; // v1.0.45: Track amount of alloca mem to avoid stress on stack from extreme expressions (mostly theoretical).
+	bool done, udf_is_final_action, make_result_persistent, early_return, left_branch_is_true, left_was_negative;
 	ExprTokenType *circuit_token;
 	VarBkp *var_backup = NULL;  // If needed, it will hold an array of VarBkp objects. v1.0.40.07: Initialized to NULL to facilitate an approach that's more maintainable.
-	int var_backup_count; // The number of items in the above array.
+	int var_backup_count; // The number of items in the above array (when it's non-NULL).
 
 	// For each item in the postfix array: if it's an operand, push it onto stack; if it's an operator or
 	// function call, evaluate it and push its result onto the stack.
@@ -1013,12 +1000,12 @@ double_deref:
 		if (IS_OPERAND(this_token.symbol)) // If it's an operand, just push it onto stack for use by an operator in a future iteration.
 			goto push_this_token;
 
-		if (this_token.symbol == SYM_FUNC) // A call to a function in the script.
+		if (this_token.symbol == SYM_FUNC) // A call to a function (either built-in or defined by the script).
 		{
 			Func &func = *this_token.deref->func; // For performance.
 			actual_param_count = this_token.deref->param_count; // For performance.
 			if (actual_param_count > stack_count) // Prevent stack underflow (probably impossible if actual_param_count is accurate).
-				goto fail;
+				goto abnormal_end;
 			if (func.mIsBuiltIn)
 			{
 				// Adjust the stack early to simplify.  Above already confirmed that this won't underflow.
@@ -1030,18 +1017,66 @@ double_deref:
 				this_token.symbol = SYM_INTEGER; // Set default return type so that functions don't have to do it if they return INTs.
 				this_token.marker = func.mName;  // Inform function of which built-in function called it (allows code sharing/reduction). Can't use circuit_token because it's value is still needed later below.
 				this_token.buf = left_buf;       // mBIF() can use this to store a string result, and for other purposes.
+
+				// BACKUP THE CIRCUIT TOKEN:
+				circuit_token = this_token.circuit_token; // Backup the current circuit_token, which can be non-NULL (verified through code review).
+				this_token.circuit_token = NULL; // Init to detect whether the called function allocates it (i.e. we're overloading it with a new purpose).
+
+				// CALL THE FUNCTION:
 				func.mBIF(this_token, stack + stack_count, actual_param_count);
-				if (IS_NUMERIC(this_token.symbol)) // Any numeric result can be considered final.
-					goto push_this_token;
+
+				// RESTORE IT (after handling what came back inside it):
+				#define EXPR_IS_DONE (!stack_count && i == postfix_count - 1) // True if we've used up the last of the operators & operands.
+				done = output_var && EXPR_IS_DONE; // i.e. this is ACT_ASSIGNEXPR and we've now produced the final result.
+				if (this_token.circuit_token) // The called function allocated some memory here and turned it over to us.
+				{
+					// In most cases, the string stored in circuit_token is the same address as this_token.marker
+					// (i.e. what is named "result" further below), because that's what the built-in functions
+					// are normally using the memory for.
+					if (done && (char *)this_token.circuit_token == this_token.marker) // circuit_token is checked in case caller alloc'd mem but didn't use it as its actual result.
+					{
+						// v1.0.45: Take a shortcut for performance.  Doing it this way saves at least two
+						// memcpy's (one into deref buffer and then another back into the output_var by
+						// ACT_ASSIGNEXPR itself).  In some cases is also saves from having to expand the deref buffer
+						// as well as the output_var (since it's current memory might be too small to hold the
+						// new memory block). Thus we give it a new block directly to avoid all of that.
+						// This should be a big boost to performance when long strings are involved.
+						output_var->AcceptNewMem((char *)this_token.circuit_token, (VarSizeType)(size_t)this_token.buf); // The called function is responsible for having stored the length as an overload of this_token.buf.
+						goto normal_end_skip_output_var; // No need to restore circuit_token because the expression is finished.
+					}
+					// Otherwise, not done yet; so handle this memory the normal way: Mark it to be freed at the
+					// time we return.
+					if (mem_count == MAX_EXPR_MEM_ITEMS) // No more slots left (should be nearly impossible).
+					{
+						LineError(ERR_OUTOFMEM ERR_ABORT, FAIL, func.mName);
+						goto abort;
+					}
+					mem[mem_count++] = (char *)this_token.circuit_token;
+				}
+				this_token.circuit_token = circuit_token; // Restore it to its original value.
+
+				// HANDLE THE RESULT (unless it was already handled above due to an optimization):
+				if (IS_NUMERIC(this_token.symbol)) // Any numeric result can be considered final because it's already stored in permanent memory (namely the token itself).
+					goto push_this_token; // For code simplicity, the optimization for numeric results is done at a later stage.
 				//else it's a string, which might need to be moved to persistent memory further below.
+				if (done) // In this case, "done" means the expression is finished *and* we have an output_var available.
+				{
+					// v1.0.45: This mode improves performance by avoiding the need to copy the result into
+					// more persistent memory, then avoiding the need to copy it into the defer buffer (which
+					// also avoids the possibility of needing to expand that buffer).
+					output_var->Assign(this_token.marker); // Marker can be used because symbol will never be SYM_VAR
+					goto normal_end_skip_output_var;       // in this case. ALSO: Assign() contains an optimization that avoids actually doing the mem-copying if output_var is being assigned to itself (which can happen in cases like RegExMatch()).
+				}
+				// Otherwise, there's no output_var or the expressions isn't finished yet, so do normal processing.
 				result = this_token.marker; // Marker can be used because symbol will never be SYM_VAR in this case.
-				early_return = false; // For maintainability.
+				early_return = false; // For maintainability.  A built-in function can't cause an early return, unlike the Exit command in a user-defined function.
 			}
 			else // It's not a built-in function, or it's a built-in that was overridden with a custom function.
 			{
+				udf_is_final_action = false; // Set default.
 				// If there are other instances of this function already running, either via recursion or
-				// an interrupted quasi-thread, backup the local variables of the instance that lies immediately
-				// beneath ours (in turn, that instance is responsible for backup up any instance that lies
+				// an interrupted quasi-thread, back up the local variables of the instance that lies immediately
+				// beneath ours (in turn, that instance is responsible for backing up any instance that lies
 				// beneath it, and so on, since when recursion collapses or threads resume, they always do so
 				// in the reverse order in which they were created.
 				//
@@ -1049,8 +1084,8 @@ double_deref:
 				// other approaches, perhaps a lot.  This is because most of the time there will be no other
 				// instances of a given function on the call stack, thus no backup/restore is needed, and thus
 				// the function's existing local variables can be reused as though they're globals (i.e.
-				// memory allocation/deallocation overhead is often completely avoided for calls to a function
-				// after the first).
+				// memory allocation/deallocation overhead is often completely avoided for non-recursive calls
+				// to a function after the first).
 				if (func.mInstances > 0) // i.e. treat negatives as zero to help catch any bugs in the way mInstances is maintained.
 				{
 					// Backup/restore of function's variables is needed.
@@ -1094,9 +1129,7 @@ double_deref:
 					if (!BackupFunctionVars(func, var_backup, var_backup_count)) // Out of memory.
 					{
 						LineError(ERR_OUTOFMEM ERR_ABORT, FAIL, func.mName);
-						aResult = FAIL;
-						result_to_return = NULL; // Use NULL to inform our caller that this entire thread is to be terminated.
-						goto end;
+						goto abort;
 					}
 				}
 				//else backup is not needed because there are no other instances of this function on the call-stack.
@@ -1161,17 +1194,21 @@ double_deref:
 					{
 						switch(token.symbol)
 						{
-						case SYM_INTEGER:
-							this_formal_param.var->Assign(token.value_int64);
-							break;
-						case SYM_FLOAT:
-							this_formal_param.var->Assign(token.value_double);
-							break;
 						case SYM_VAR:
 							// This case can still happen because the previous loop's conversion of all
 							// by-value SYM_VAR operands into SYM_OPERAND would not have happened if no
-							// backup was needed for this function:
-							this_formal_param.var->Assign(token.var->Contents());
+							// backup was needed for this function.
+							// v1.0.45: Pass length (since it's known) so that Assign() doesn't have to call strlen().
+							// But ignore binary clipboard because it's documented that except for certain features,
+							// binary clipboard variables are seen only up to the first binary zero (mostly to
+							// simplify the code).
+							this_formal_param.var->Assign(token.var->Contents(), token.var->LengthIgnoreBinaryClip());
+							break;
+						case SYM_INTEGER:
+							this_formal_param.var->Assign(token.value_int64);
+							break;
+						case SYM_FLOAT: // Listed last for performance.
+							this_formal_param.var->Assign(token.value_double);
 							break;
 						default: // SYM_STRING or SYM_OPERAND
 							this_formal_param.var->Assign(token.marker);
@@ -1217,10 +1254,34 @@ double_deref:
 				// g.CurrentFunc accurate, even amidst the asynchronous saving and restoring of "g" itself:
 				g.CurrentFunc = prev_func;
 
-				early_return = (aResult == EARLY_EXIT || aResult == FAIL);
+				if (   !(early_return = (aResult == EARLY_EXIT || aResult == FAIL))   ) // No need to do any of this for early_return because for backward compatibility, ACT_ASSIGNEXPR is aborted by early return (i.e. output_var's original contents are not altered).
+				{
+					if (output_var && EXPR_IS_DONE) // i.e. this is ACT_ASSIGNEXPR and we've now produced the final result.
+					{
+						// v1.0.45: Take a shortcut for performance.  Doing it this way saves up to two memcpy's
+						// (make_result_persistent then copy into deref buffer).  In some cases, it also saves
+						// from having to make_result_persistent and prevents the need to expand the deref buffer.
+						// HOWEVER, the following optimization isn't done because not only does it complicate the
+						// code a lot (such as verifying that the variable isn't static, isn't ALLOC_SIMPLE, isn't
+						// a ByRef to a global or some other function's local, etc.), there's also currently
+						// no way to find out which function owns a particular local variable (a name lookup
+						// via binary search is a possibility, but its performance probably isn't worth it)
+						// Abandoned idea: When a user-defined function returns one of its local variables,
+						// the contents of that local variable can be salvaged if it's about to be destroyed
+						// anyway in conjunction with normal function-call cleanup. In other words, we can take
+						// that local variable's memory and directly hang it onto the output_var.
+						output_var->Assign(result);
+						udf_is_final_action = true; // This tells the label below that after the cleanup, we're done.
+						goto skip_abort_udf; // Do end-of-function-call cleanup (see comment above).  No need to do make_result_persistent section.
+					}
+					// Otherwise (since above didn't goto): !output_var || !EXPR_IS_DONE, so do normal handling of
+					// "result" below.
+				}
+				//else early_return==true, so no need to store anything in result because for backward compatibility, this expression will have no result storable by the outside world (e.g. ACT_ASSIGNEXPR).
 			} // Call to a user defined function.
 
-			done = !stack_count && i == postfix_count - 1; // True if we've used up the last of the operators & operands.
+			// Above just called a function (either user-defined or built-in).
+			done = EXPR_IS_DONE; // Macro called again because its components may have changed. Resolve macro only once for use in more than one place below.
 
 			// The result just returned needs to be copied to a more persistent location.  This is done right
 			// away if the result is the contents of a local variable (since all locals are about to be freed
@@ -1228,7 +1289,8 @@ double_deref:
 			// difficult to distinguish between when the function returned one of its own local variables
 			// rather than a global or a string/numeric literal).  The only exceptions are:
 			if (early_return // We're about to return early, so the caller will be ignoring this result entirely.
-				|| done && mActionType == ACT_FUNCTIONCALL) // Outermost function call's result will be ignored, so no need to store it.
+				|| done && mActionType == ACT_FUNCTIONCALL // Outermost function call's result will be ignored, so no need to store it.
+				|| mem_count && result == mem[mem_count - 1]) // v1.0.45: A call to a built-in function can sometimes store its result here, which is already persistent.
 				make_result_persistent = false;
 			else if (result < sDerefBuf || result >= sDerefBuf + sDerefBufSize) // Not in their deref buffer (yields correct result even if sDerefBuf is NULL).
 				make_result_persistent = true; // Since above didn't set it to false, this result must be assumed to be one of their local variables, so must be immediately copied since it's about to be cleared.
@@ -1239,7 +1301,7 @@ double_deref:
 			else // There are more operators/operands to be evaluated, but if there are no more function calls, we don't have to make it persistent since their deref buf won't be overwritten by anything during the time we need it.
 			{
 				if (func.mIsBuiltIn)
-					make_result_persistent = true; // Future operators/operands might use the buffer where the result is stored, so must copy it somewhere else.
+					make_result_persistent = true; // Future operators/operands might use the buffer where the result is stored, so must copy it somewhere else (unless "done", which was already checked above).
 				else
 				{
 					make_result_persistent = false; // Set default to be possibly overridden below.
@@ -1265,7 +1327,16 @@ double_deref:
 
 			if (make_result_persistent)
 			{
-#define EXPR_SMALL_MEM_LIMIT 4097 // Something small enough that the chance that even 10 of them would cause stack overflow is vanishingly small (program is currently compiled to allow stack to expand anyway).
+				// v1.0.44.06: EXPR_SMALL_MEM_LIMIT is the means by which _alloca() is used to boost performance a
+				// little by avoiding the overhead of malloc+free for small strings.  The limit should be something
+				// small enough that the chance that even 10 of them would cause stack overflow is vanishingly small
+				// (the program is currently compiled to allow stack to expand anyway).  Even in a worst-case
+				// scenario where an expression is composed entirely of functions and they all need to use this
+				// limit of stack space, there's a practical limit on how many functions you can call in an
+				// expression due to MAX_TOKENS (probably around MAX_TOKENS / 3).
+				#define EXPR_SMALL_MEM_LIMIT 4097
+				#define EXPR_ALLOCA_LIMIT 40000  // v1.0.45: Just as an extra precaution against stack stress in extreme/theoretical cases.
+
 				result_size = strlen(result) + 1;
 				// Must cast to int to avoid loss of negative values:
 				if (result_size <= (int)(aDerefBufSize - (target - aDerefBuf))) // There is room at the end of our deref buf, so use it.
@@ -1274,8 +1345,11 @@ double_deref:
 					result = (char *)memcpy(target, result, result_size); // Benches slightly faster than strcpy().
 					target += result_size; // Point it to the location where the next string would be written.
 				}
-				else if (result_size < EXPR_SMALL_MEM_LIMIT) // v1.0.44.06: Should boost performance a little by avoiding the overhead of malloc+free for small strings.
+				else if (result_size < EXPR_SMALL_MEM_LIMIT && alloca_usage < EXPR_ALLOCA_LIMIT) // See comments at EXPR_SMALL_MEM_LIMIT.
+				{
 					result = (char *)memcpy(_alloca(result_size), result, result_size); // Benches slightly faster than strcpy().
+					alloca_usage += result_size; // This might put alloca_usage over the limit by as much as EXPR_SMALL_MEM_LIMIT, but that is fine because it's more of a guideline than a limit.
+				}
 				else // Need to create some new persistent memory for our temporary use.
 				{
 					// In real-world scripts the need for additonal memory allocation should be quite
@@ -1290,9 +1364,7 @@ double_deref:
 						|| !(mem[mem_count] = (char *)malloc(result_size)))
 					{
 						LineError(ERR_OUTOFMEM ERR_ABORT, FAIL, func.mName);
-						aResult = FAIL;
-						result_to_return = NULL; // Use NULL to inform our caller that this entire thread is to be terminated.
-						goto end;
+						goto abort;
 					}
 					// Point result to its new, more persistent location:
 					result = (char *)memcpy(mem[mem_count], result, result_size); // Benches slightly faster than strcpy().
@@ -1330,22 +1402,31 @@ abort_udf:
 				early_return = true;
 skip_abort_udf:
 				for (j = 0; j < func.mVarCount; ++j)
-					func.mVar[j]->Free(VAR_ALWAYS_FREE_EXCLUDE_STATIC, true); // Pass "true" to exclude aliases, since their targets should not be freed (they don't belong to this function).
+					func.mVar[j]->Free(VAR_ALWAYS_FREE_BUT_EXCLUDE_STATIC, true); // Pass "true" to exclude aliases, since their targets should not be freed (they don't belong to this function).
 				for (j = 0; j < func.mLazyVarCount; ++j)
-					func.mLazyVar[j]->Free(VAR_ALWAYS_FREE_EXCLUDE_STATIC, true);
+					func.mLazyVar[j]->Free(VAR_ALWAYS_FREE_BUT_EXCLUDE_STATIC, true);
 
+				// The following used to be the contents of RestoreFunctionVars() [it does too little to be kept
+				// as separate a function.]
 				// The following call to RestoreFunctionVars() relies on the fact that Free() was already called above.
 				// The previous call to BackupFunctionVars() has ensured that none of the variables Free()'d above
 				// were ALLOC_SIMPLE, because that would be a memory leak since there's no way to free that type.
-				if (var_backup) // This is the indicator that a backup was made, a restore is also needed
-					RestoreFunctionVars(func, var_backup, var_backup_count); // It avoids restoring statics.
+				if (var_backup) // This is the indicator that a backup was made, so a restore is also needed.
+				{
+					for (j = 0; j < var_backup_count; ++j)
+						var_backup[j].mVar->Restore(var_backup[j]); // This also frees any existing contents of the variable prior to restoring the original contents from backup.  But it avoids restoring statics.
+					free(var_backup);
+					var_backup = NULL; // Reset this because it's an indicator of whether the next function call in this expression (if any) will have a backup.
+				}
 
-				// The callers of this function know that the value of aResult (which contains the reason
+				if (udf_is_final_action) // v1.0.45: An earlier stage has already taken care of this expression's result.
+					goto normal_end_skip_output_var; // Nothing more to do because it has even taken care of output_var already.
+				// The callers of this function know that the value of aResult (which already contains the reason
 				// for early exit) should be considered valid/meaningful only if result_to_return is NULL.
 				if (early_return) // aResult has already been set above for our caller.
 				{
-					result_to_return = NULL; // Use NULL to inform our caller that this entire thread is to be terminated.
-					goto end;
+					result_to_return = NULL; // Use NULL to inform our caller that this thread is finished (whether through normal means such as Exit or a critical error).
+					goto normal_end;
 				}
 			} // if (!func.mIsBuiltIn)
 
@@ -1355,18 +1436,18 @@ skip_abort_udf:
 			this_token.symbol = SYM_OPERAND;
 			this_token.marker = result;
 			goto push_this_token;
-		}
+		} // if (this_token.symbol == SYM_FUNC)
 
 		// Since the above didn't "goto", this token must be a unary or binary operator.
 		// Get the first operand for this operator (for non-unary operators, this is the right-side operand):
 		if (!stack_count) // Prevent stack underflow.  An expression such as -*3 causes this.
-			goto fail;
+			goto abnormal_end;
 		ExprTokenType &right = *STACK_POP;
 		// Below uses IS_OPERAND rather than checking for only SYM_OPERAND because the stack can contain
 		// both generic and specific operands.  Specific operands were evaluated by a previous iteration
 		// of this section.  Generic ones were pushed as-is onto the stack by a previous iteration.
 		if (!IS_OPERAND(right.symbol)) // Haven't found a way to produce this situation yet, but safe to assume it's possible.
-			goto fail;
+			goto abnormal_end;
 		// If the operand is still generic/undetermined, find out whether it is a string, integer, or float:
 		switch(right.symbol)
 		{
@@ -1516,10 +1597,10 @@ skip_abort_udf:
 		default: // Non-unary operator.
 			// GET THE SECOND (LEFT-SIDE) OPERAND FOR THIS OPERATOR:
 			if (!stack_count) // Prevent stack underflow.
-				goto fail;
+				goto abnormal_end;
 			ExprTokenType &left = *STACK_POP; // i.e. the right operand always comes off the stack before the left.
 			if (!IS_OPERAND(left.symbol)) // Haven't found a way to produce this situation yet, but safe to assume it's possible.
-				goto fail;
+				goto abnormal_end;
 			// If the operand is still generic/undetermined, find out whether it is a string, integer, or float:
 			switch(left.symbol)
 			{
@@ -1576,8 +1657,12 @@ skip_abort_udf:
 				case SYM_CONCAT:
 					// Even if the left or right is "", must copy the result to temporary memory, at least
 					// when integers and floats had to be converted to temporary strings above.
-					right_length = (right.symbol == SYM_VAR) ? right.var->Length() : strlen(right_string); // Length() is valid because SYM_VAR's Type() is always VAR_NORMAL.
-					left_length = (left.symbol == SYM_VAR) ? left.var->Length() : strlen(left_string);     //
+					// Calling LengthIgnoreBinaryClip() is valid because SYM_VAR's Type() is always VAR_NORMAL.
+					// Binary clipboard is ignored because it's documented that except for certain features,
+					// binary clipboard variables are seen only up to the first binary zero (mostly to
+					// simplify the code).
+					right_length = (right.symbol == SYM_VAR) ? right.var->LengthIgnoreBinaryClip() : strlen(right_string);
+					left_length = (left.symbol == SYM_VAR) ? left.var->LengthIgnoreBinaryClip() : strlen(left_string);
 					result_size = right_length + left_length + 1;
 					// The following section is similar to the one for "symbol == SYM_FUNC", so they
 					// should be maintained together.
@@ -1587,18 +1672,19 @@ skip_abort_udf:
 						this_token.marker = target;
 						target += result_size;  // Adjust target for potential future use by another concat or functionc call.
 					}
-					else if (result_size < EXPR_SMALL_MEM_LIMIT) // v1.0.44.06: Should boost performance a little by avoiding the overhead of malloc+free for small strings.
+					else if (result_size < EXPR_SMALL_MEM_LIMIT && alloca_usage < EXPR_ALLOCA_LIMIT) // See comments at EXPR_SMALL_MEM_LIMIT.
+					{
 						this_token.marker = (char *)_alloca(result_size);
+						alloca_usage += result_size; // This might put alloca_usage over the limit by as much as EXPR_SMALL_MEM_LIMIT, but that is fine because it's more of a guideline than a limit.
+					}
 					else // Need to create some new persistent memory for our temporary use.
 					{
 						// See the nearly identical section higher above for comments:
 						if (mem_count == MAX_EXPR_MEM_ITEMS // No more slots left (should be nearly impossible).
 							|| !(this_token.marker = mem[mem_count] = (char *)malloc(result_size)))
 						{
-							LineError(ERR_OUTOFMEM ERR_ABORT, FAIL);
-							aResult = FAIL;
-							result_to_return = NULL; // Use NULL to inform our caller that this entire thread is to be terminated.
-							goto end;
+							LineError(ERR_OUTOFMEM ERR_ABORT);
+							goto abort;
 						}
 						++mem_count;
 					}
@@ -1868,11 +1954,11 @@ push_this_token:
 				}
 				//else there is more cascading to be checked, so continue looping.
 			}
-			// If the while-loop ends normally (not via "break"), postfix[i] is now the left branch of an
+			// If the loop ends normally (not via "break"), postfix[i] is now the left branch of an
 			// AND/OR that should not short-circuit.  As a result, this left branch is simply discarded
 			// (by means of the outer loop's ++i) because its right branch will be the sole determination
 			// of whether this AND/OR is true or false.
-		} // Left branch of an AND/OR.
+		} // Short-circuit (left branch of an AND/OR).
 	} // For each item in the postfix array.
 
 	// Although ACT_FUNCTIONCALL was already checked higher above, it's checked again here for maintainability.
@@ -1881,10 +1967,10 @@ push_this_token:
 	// It seems best to avoid any chance of looking at the result since it might be invalid due to the above
 	// having taken shortcuts (since it knew the result wouldn't be needed).
 	if (mActionType == ACT_FUNCTIONCALL) // A line consisting only of a function call (possibly with nested function calls): the end result doesn't matter, even if it's a failure.
-		goto end;
+		goto normal_end; // And leave result_to_return at its default of "".
 
 	if (stack_count != 1) // Stack should have only one item left on it: the result. If not, it's a syntax error.
-		goto fail; // This with these examples: 1) (); 2) x y; 3) (x + y) (x + z); etc.
+		goto abnormal_end; // This with these examples: 1) (); 2) x y; 3) (x + y) (x + z); etc.
 
 	ExprTokenType &result_token = *stack[0];  // For performance and convenience.
 
@@ -1897,17 +1983,33 @@ push_this_token:
 	//    it seems okay for the moment.
 	switch (result_token.symbol)
 	{
+	// The numeric cases below will always fit into our deref buffer because an earlier stage has already ensured
+	// that the buffer is large enough to hold at least one number.  But a string/generic might not fit if it's
+	// a concatenation and/or a large string returned from a called function.
+	case SYM_INTEGER:
+		// To reduce code size, the following isn't done (it's unlikely to help performance anyway if you think
+		// about what steps it actually takes):
+		//if (output_var)
+		//{
+		//	output_var->Assign(result_token.value_int64);
+		//	goto normal_end_skip_output_var;
+		//}
+		//// Otherwise:
+		ITOA64(result_token.value_int64, aTarget); // Store in hex or decimal format, as appropriate.
+		break;
 	case SYM_FLOAT:
+		// To reduce code size, the following isn't done (it's unlikely to help performance anyway if you think
+		// about what steps it actually takes):
+		//if (output_var)
+		//{
+		//	output_var->Assign(result_token.value_double);
+		//	goto normal_end_skip_output_var;
+		//}
+		//// Otherwise:
 		// In case of float formats that are too long to be supported, use snprint() to restrict the length.
 		snprintf(aTarget, MAX_FORMATTED_NUMBER_LENGTH + 1, g.FormatFloat, result_token.value_double); // %f probably defaults to %0.6f.  %f can handle doubles in MSVC++.
 		break;
-	case SYM_INTEGER:
-		ITOA64(result_token.value_int64, aTarget); // Store in hex or decimal format, as appropriate.
-		break;
 
-	// The cases above will always fit into our deref buffer because an earlier stage has already ensured
-	// that the buffer is large enough to hold at least one number.  But a string/generic might not fit if
-	// it's a concatenation and/or a large string returned from a called function:
 	case SYM_STRING:
 	case SYM_OPERAND:
 	case SYM_VAR: // SYM_VAR is somewhat unusual at this late a stage.
@@ -1923,13 +2025,21 @@ push_this_token:
 		if (result_token.symbol == SYM_VAR)
 		{
 			result = result_token.var->Contents();
-            result_size = result_token.var->Length() + 1;
+            result_size = result_token.var->LengthIgnoreBinaryClip() + 1; // Ignore binary clipboard because it's documented that except for certain features, binary clipboard variables are seen only up to the first binary zero (mostly to simplify the code).
 		}
 		else
 		{
 			result = result_token.marker;
 			result_size = strlen(result) + 1;
 		}
+		if (output_var)
+		{
+			// v1.0.45: Take a shortcut, which avoids one memcpy (into the deref buffer).  In some cases, this
+			// also saves from having to expand the deref buffer.
+			output_var->Assign(result, (VarSizeType)result_size - 1);
+			goto normal_end_skip_output_var;
+		}
+		// Otherwise:
 		// If result is the empty string or a number, it should always fit because the size estimation
 		// phase has ensured that capacity_of_our_buf_portion is large enough to hold those:
 		if (result_size > capacity_of_our_buf_portion)
@@ -1937,20 +2047,18 @@ push_this_token:
 			// Do a simple expansion of our deref buffer to handle the fact that our actual result is bigger
 			// than the size estimator could have calculated (due to a concatenation or a large string returned
 			// from a called function).  This performs poorly but seems justified by the fact that it is
-			// typically needed only in extreme cases.  Use a temp var. because realloc() returns NULL on
-			// failure but leaves original block allocated.
+			// typically needed only in extreme cases.
 			size_t new_buf_size = aDerefBufSize + result_size - capacity_of_our_buf_portion;
 
 			// malloc() and free() are used instead of realloc() because in many cases, the overhead of
 			// realloc()'s internal memcpy(entire contents) can be avoided because only part or
-			// none of the contents needs to be copied:
+			// none of the contents needs to be copied (realloc's ability to do an in-place resize might
+			// be unlikely for anything other than small blocks; see compiler's realloc.c):
 			char *new_buf = (char *)malloc(new_buf_size);
 			if (!new_buf)
 			{
-				LineError(ERR_OUTOFMEM ERR_ABORT, FAIL);
-				aResult = FAIL;
-				result_to_return = NULL; // Use NULL to inform our caller that this entire thread is to be terminated.
-				goto end;
+				LineError(ERR_OUTOFMEM ERR_ABORT);
+				goto abort;
 			}
 			if (new_buf_size > LARGE_DEREF_BUF_SIZE)
 				++sLargeDerefBufs;
@@ -1983,28 +2091,41 @@ push_this_token:
 			aDerefBuf = new_buf; // Must be the last step, since the old address is used above.  Set for our caller.
 			aDerefBufSize = new_buf_size; // Set for our caller.
 		}
-		else if (aTarget != result) // Currently, might be always true.
-			memmove(aTarget, result, result_size); // memmove() vs. memcpy() in this case, since source and dest might overlap.
+		else // Deref buf is already large enough to fit the string.
+			if (aTarget != result) // Currently, might be always true.
+				memmove(aTarget, result, result_size); // memmove() vs. memcpy() in this case, since source and dest might overlap.
 		result_to_return = aTarget;
 		aTarget += result_size;
-		goto end;
+		goto normal_end;
 
 	default: // Result contains a non-operand symbol such as an operator.
-		goto fail;
+		goto abnormal_end;
 	}
 
 	// Since above didn't "goto", this is SYM_FLOAT/SYM_INTEGER.  Calculate the length and use it to adjust
 	// aTarget for use by our caller:
 	result_to_return = aTarget;
 	aTarget += strlen(aTarget) + 1;  // +1 because that's what callers want; i.e. the position after the terminator.
+	goto normal_end;
 
-//goto end;
-// Uncomment the above line if the below ever changes:
-// For now, fail and end are the same location, but distinguishing between them helps readability.
-fail:
-end:
+abort:
+	// The callers of this function know that the value of aResult (which contains the reason
+	// for early exit) should be considered valid/meaningful only if result_to_return is NULL.
+	result_to_return = NULL; // Use NULL to inform our caller that this entire thread is to be terminated.
+	aResult = FAIL; // Indicate reason to caller.
+
+abnormal_end: // Currently the same as normal_end; it's separate to improve readability.  When this happens, result_to_return is typically "" (unless the caller overrode that default).
+normal_end:
+	// v1.0.45: ACT_ASSIGNEXPR relies on us to set the output_var (i.e. whenever it's ARG1's is_expression==true).
+	// Our taking charge of output_var allows certain performance optimizations in other parts of this function,
+	// such as avoiding excess memcpy's and malloc's during intermediate stages.
+	if (output_var && result_to_return) // i.e. don't assign if NULL to preserve backward compatibility with scripts that rely on the old value being changed in cases where an expression fails (unlikely).
+		output_var->Assign(result_to_return);
+
+normal_end_skip_output_var:
 	for (i = 0; i < mem_count; ++i) // Free any temporary memory blocks that were used.
 		free(mem[i]);
+
 	return result_to_return;
 }
 
@@ -2023,13 +2144,13 @@ ResultType Line::ExpandArgs(VarSizeType aSpaceNeeded, Var *aArgVar[])
 	int i;
 
 	// Make two passes through this line's arg list.  This is done because the performance of
-	// realloc() is worse than doing a free() and malloc() because the former does a memcpy()
+	// realloc() is worse than doing a free() and malloc() because the former often does a memcpy()
 	// in addition to the latter's steps.  In addition, realloc() as much as doubles the memory
 	// load on the system during the brief time that both the old and the new blocks of memory exist.
 	// First pass: determine how much space will be needed to do all the args and allocate
 	// more memory if needed.  Second pass: dereference the args into the buffer.
 
-	 // First pass. It takes into account the same things as 2nd pass.
+	// First pass. It takes into account the same things as 2nd pass.
 	size_t space_needed;
 	if (aSpaceNeeded == VARSIZE_ERROR)
 	{
@@ -2040,7 +2161,7 @@ ResultType Line::ExpandArgs(VarSizeType aSpaceNeeded, Var *aArgVar[])
 	else // Caller already determined it.
 	{
 		space_needed = aSpaceNeeded;
-		for (i = 0; i < mArgc; ++i) // Copying actual/used elements is probably faster than using memcpy to copy both entire arrays.
+		for (i = 0; i < mArgc; ++i) // Copying only the actual/used elements is probably faster than using memcpy to copy both entire arrays.
 			arg_var[i] = aArgVar[i]; // Init to values determined by caller, which helps performance if any of the args are dynamic variables.
 	}
 
@@ -2059,8 +2180,9 @@ ResultType Line::ExpandArgs(VarSizeType aSpaceNeeded, Var *aArgVar[])
 		size_t new_buf_size = increments_needed * DEREF_BUF_EXPAND_INCREMENT;
 		if (sDerefBuf)
 		{
-			// Do a free() and malloc(), which should be far more efficient than realloc(),
-			// especially if there is a large amount of memory involved here:
+			// Do a free() and malloc(), which should be far more efficient than realloc(), especially if
+			// there is a large amount of memory involved here (realloc's ability to do an in-place resize
+			// might be unlikely for anything other than small blocks; see compiler's realloc.c):
 			free(sDerefBuf);
 			if (sDerefBufSize > LARGE_DEREF_BUF_SIZE)
 				--sLargeDerefBufs;
@@ -2102,107 +2224,122 @@ ResultType Line::ExpandArgs(VarSizeType aSpaceNeeded, Var *aArgVar[])
 	ResultType result, result_to_return = OK;  // Set default return value.
 	Var *the_only_var_of_this_arg;
 
-	for (i = 0; i < mArgc; ++i) // Second pass.  For each arg:
+	if (!mArgc)            // v1.0.45: Required by some commands that can have zero parameters (such as Random and
+		sArgVar[0] = NULL; // PixelSearch), even if it's just to allow their output-var(s) to be omitted.  This allows OUTPUT_VAR to be used without any need to check mArgC.
+	else
 	{
-		ArgStruct &this_arg = mArg[i]; // For performance and convenience.
-
-		// Load-time routines have already ensured that an arg can be an expression only if
-		// it's not an input or output var.
-		if (this_arg.is_expression)
+		for (i = 0; i < mArgc; ++i) // Second pass.  For each arg:
 		{
-			// In addition to producing its return value, ExpandExpression() will alter our_buf_marker
-			// to point to the place in our_deref_buf where the next arg should be written.
-			// In addition, in some cases it will alter some of the other parameters that are arrays or
-			// that are passed by ref.  Finally, it might tempoarily use parts of the buffer beyond
-			// what the size estimator provide for it, so we should be sure here that everything in
-			// our_deref_buf after our_buf_marker is available to it as temporary memory.
-			if (   !(arg_deref[i] = ExpandExpression(i, result, our_buf_marker, our_deref_buf
-				, our_deref_buf_size, arg_deref, our_deref_buf_size - space_needed))   )
+			ArgStruct &this_arg = mArg[i]; // For performance and convenience.
+
+			// Load-time routines have already ensured that an arg can be an expression only if
+			// it's not an input or output var.
+			if (this_arg.is_expression)
 			{
-				// A script-function-call inside the expression returned EARLY_EXIT or FAIL.  Report "result"
-				// to our caller (otherwise, the contents of "result" should be ignored since they're undefined).
-				result_to_return = result;
-				goto end;
+				// v1.0.45:
+				// Make ARGVAR1 (OUTPUT_VAR) temporarily valid (the entire array is made valid only later, near the
+				// bottom of this function).  This helps the performance of ACT_ASSIGNEXPR by avoiding the need
+				// resolve a dynamic output variable like "Array%i% := (Expr)" twice: once in GetExpandedArgSize
+				// and again in ExpandExpression()).
+				*sArgVar = *arg_var; // Shouldn't need to be backed up or restored because no one beneath us on the call stack should be using it; only things that go on top of us might overwrite it, so ExpandExpr() must be sure to copy this out before it launches any script-functions.
+				// In addition to producing its return value, ExpandExpression() will alter our_buf_marker
+				// to point to the place in our_deref_buf where the next arg should be written.
+				// In addition, in some cases it will alter some of the other parameters that are arrays or
+				// that are passed by ref.  Finally, it might tempoarily use parts of the buffer beyond
+				// what the size estimator provide for it, so we should be sure here that everything in
+				// our_deref_buf after our_buf_marker is available to it as temporary memory.
+				// Note: It doesn't seem worthwhile to enhance ExpandExpression to give us back a variable
+				// for use in arg_var[] (for performance) because only rarely does an expression yield
+				// a variable other than some function's local variable (and a local's contents are no
+				// longer valid due to having been freed after the call [unless it's static]).
+				if (   !(arg_deref[i] = ExpandExpression(i, result, our_buf_marker, our_deref_buf
+					, our_deref_buf_size, arg_deref, our_deref_buf_size - space_needed))   )
+				{
+					// A script-function-call inside the expression returned EARLY_EXIT or FAIL.  Report "result"
+					// to our caller (otherwise, the contents of "result" should be ignored since they're undefined).
+					result_to_return = result;
+					goto end;
+				}
+				continue;
 			}
-			continue;
-		}
 
-		if (this_arg.type == ARG_TYPE_OUTPUT_VAR)  // Don't bother wasting the mem to deref output var.
-		{
-			// In case its "dereferenced" contents are ever directly examined, set it to be
-			// the empty string.  This also allows the ARG to be passed a dummy param, which
-			// makes things more convenient and maintainable in other places:
-			arg_deref[i] = "";
-			continue;
-		}
-
-		// arg_var[i] was previously set by GetExpandedArgSize() so that we don't have to determine its
-		// value again:
-		if (   !(the_only_var_of_this_arg = arg_var[i])   ) // Arg isn't an input var or singled isolated deref.
-		{
-			#define NO_DEREF (!ArgHasDeref(i + 1))
-			if (NO_DEREF)
+			if (this_arg.type == ARG_TYPE_OUTPUT_VAR)  // Don't bother wasting the mem to deref output var.
 			{
-				arg_deref[i] = this_arg.text;  // Point the dereferenced arg to the arg text itself.
-				continue;  // Don't need to use the deref buffer in this case.
+				// In case its "dereferenced" contents are ever directly examined, set it to be
+				// the empty string.  This also allows the ARG to be passed a dummy param, which
+				// makes things more convenient and maintainable in other places:
+				arg_deref[i] = "";
+				continue;
 			}
-		}
 
-		// Check the value of the_only_var_of_this_arg again in case the above changed it:
-		if (the_only_var_of_this_arg) // This arg resolves to only a single, naked var.
-		{
-			switch(ArgMustBeDereferenced(the_only_var_of_this_arg, i))
+			// arg_var[i] was previously set by GetExpandedArgSize() so that we don't have to determine its
+			// value again:
+			if (   !(the_only_var_of_this_arg = arg_var[i])   ) // Arg isn't an input var or singled isolated deref.
 			{
-			case CONDITION_FALSE:
-				// This arg contains only a single dereference variable, and no
-				// other text at all.  So rather than copy the contents into the
-				// temp buffer, it's much better for performance (especially for
-				// potentially huge variables like %clipboard%) to simply set
-				// the pointer to be the variable itself.  However, this can only
-				// be done if the var is the clipboard or a non-environment
-				// normal var (since zero-length normal vars need to be fetched via
-				// GetEnvironmentVariable() when g_NoEnv==false).
-				// Update: Changed it so that it will deref the clipboard if it contains only
-				// files and no text, so that the files will be transcribed into the deref buffer.
-				// This is because the clipboard object needs a memory area into which to write
-				// the filespecs it translated:
-				arg_deref[i] = the_only_var_of_this_arg->Contents();
-				break;
-			case CONDITION_TRUE:
-				// the_only_var_of_this_arg is either a reserved var or a normal var of that is also
-				// an environment var (for which GetEnvironmentVariable() is called for), or is used
-				// again in this line as an output variable.  In all these cases, it must
-				// be expanded into the buffer rather than accessed directly:
+				#define NO_DEREF (!ArgHasDeref(i + 1))
+				if (NO_DEREF)
+				{
+					arg_deref[i] = this_arg.text;  // Point the dereferenced arg to the arg text itself.
+					continue;  // Don't need to use the deref buffer in this case.
+				}
+			}
+
+			// Check the value of the_only_var_of_this_arg again in case the above changed it:
+			if (the_only_var_of_this_arg) // This arg resolves to only a single, naked var.
+			{
+				switch(ArgMustBeDereferenced(the_only_var_of_this_arg, i, arg_var)) // Yes, it was called by GetExpandedArgSize() too, but a review shows it's difficult to avoid this without being worse than the disease (10/22/2006).
+				{
+				case CONDITION_FALSE:
+					// This arg contains only a single dereference variable, and no
+					// other text at all.  So rather than copy the contents into the
+					// temp buffer, it's much better for performance (especially for
+					// potentially huge variables like %clipboard%) to simply set
+					// the pointer to be the variable itself.  However, this can only
+					// be done if the var is the clipboard or a non-environment
+					// normal var (since zero-length normal vars need to be fetched via
+					// GetEnvironmentVariable() when g_NoEnv==false).
+					// Update: Changed it so that it will deref the clipboard if it contains only
+					// files and no text, so that the files will be transcribed into the deref buffer.
+					// This is because the clipboard object needs a memory area into which to write
+					// the filespecs it translated:
+					arg_deref[i] = the_only_var_of_this_arg->Contents();
+					break;
+				case CONDITION_TRUE:
+					// the_only_var_of_this_arg is either a reserved var or a normal var of that is also
+					// an environment var (for which GetEnvironmentVariable() is called for), or is used
+					// again in this line as an output variable.  In all these cases, it must
+					// be expanded into the buffer rather than accessed directly:
+					arg_deref[i] = our_buf_marker; // Point it to its location in the buffer.
+					our_buf_marker += the_only_var_of_this_arg->Get(our_buf_marker) + 1; // +1 for terminator.
+					break;
+				default: // FAIL should be the only other possibility.
+					result_to_return = FAIL; // ArgMustBeDereferenced() will already have displayed the error.
+					goto end;
+				}
+			}
+			else // The arg must be expanded in the normal, lower-performance way.
+			{
 				arg_deref[i] = our_buf_marker; // Point it to its location in the buffer.
-				our_buf_marker += the_only_var_of_this_arg->Get(our_buf_marker) + 1; // +1 for terminator.
-				break;
-			default: // FAIL should be the only other possibility.
-				result_to_return = FAIL; // ArgMustBeDereferenced() will already have displayed the error.
-				goto end;
+				if (   !(our_buf_marker = ExpandArg(our_buf_marker, i))   ) // Expand the arg into that location.
+				{
+					result_to_return = FAIL; // ExpandArg() will have already displayed the error.
+					goto end;
+				}
 			}
-		}
-		else // The arg must be expanded in the normal, lower-performance way.
-		{
-			arg_deref[i] = our_buf_marker; // Point it to its location in the buffer.
-			if (   !(our_buf_marker = ExpandArg(our_buf_marker, i))   ) // Expand the arg into that location.
-			{
-				result_to_return = FAIL; // ExpandArg() will have already displayed the error.
-				goto end;
-			}
-		}
-	} // for each arg.
+		} // for each arg.
 
-	// It's not safe to do the following until the above loop fully completes because any calls made above to
-	// ExpandExpression() might call functions, which in turn might result in a recursive call to ExpandArgs(),
-	// which in turn might change the values in the static arrays sArgDeref and sArgVar.
-	// Also, only when the loop ends normally is the following needed, since otherwise it's a failure condition.
-	// Now that any recursive calls to ExpandArgs() above us on the stack have collapsed back to us, it's
-	// safe to set the args of this command for use by our caller, to whom we're about to return.
-	for (i = 0; i < mArgc; ++i) // Copying actual/used elements is probably faster than using memcpy to copy both entire arrays.
-	{
-		sArgDeref[i] = arg_deref[i];
-		sArgVar[i] = arg_var[i];
-	}
+		// IT'S NOT SAFE to do the following until the above loop FULLY completes because any calls made above to
+		// ExpandExpression() might call functions, which in turn might result in a recursive call to ExpandArgs(),
+		// which in turn might change the values in the static arrays sArgDeref and sArgVar.
+		// Also, only when the loop ends normally is the following needed, since otherwise it's a failure condition.
+		// Now that any recursive calls to ExpandArgs() above us on the stack have collapsed back to us, it's
+		// safe to set the args of this command for use by our caller, to whom we're about to return.
+		for (i = 0; i < mArgc; ++i) // Copying actual/used elements is probably faster than using memcpy to copy both entire arrays.
+		{
+			sArgDeref[i] = arg_deref[i];
+			sArgVar[i] = arg_var[i];
+		}
+	} // mArgc > 0
 
 	// v1.0.40.02: The following loop was added to avoid the need for the ARGn macros to provide an empty
 	// string when mArgc was too small (indicating that the parameter is absent).  This saves quite a bit
@@ -2213,7 +2350,9 @@ ResultType Line::ExpandArgs(VarSizeType aSpaceNeeded, Var *aArgVar[])
 	int max_params = g_act[mActionType].MaxParams; // Resolve once for performance.
 	for (i = mArgc; i < max_params; ++i) // For performance, this only does the actual max args for THIS command, not MAX_ARGS.
 		sArgDeref[i] = "";
-		// But sArgVar isn't (done since it's more rarely used), so users of sArgVar must check mArgC if they have any doubt how many args are present in the script line.
+		// But sArgVar isn't done (since it's more rarely used) except sArgVar[0] = NULL higher above.
+		// Therefore, users of sArgVar must check mArgC if they have any doubt how many args are present in
+		// the script line (this is now enforced via macros).
 
 	// When the main/large loop above ends normally, it falls into the label below and uses the original/default
 	// value of "result_to_return".
@@ -2306,7 +2445,6 @@ VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize, Var *aArgVar[])
 	// maintained together:
 	for (i = 0, space_needed = 0; i < mArgc; ++i) // For each arg:
 	{
-		aArgVar[i] = NULL; // Set default.
 		ArgStruct &this_arg = mArg[i]; // For performance and convenience.
 
 		// If this_arg.is_expression is true, the space is still calculated as though the
@@ -2316,7 +2454,16 @@ VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize, Var *aArgVar[])
 
 		// Accumulate the total of how much space we will need.
 		if (this_arg.type == ARG_TYPE_OUTPUT_VAR)  // These should never be included in the space calculation.
+		{
+			if (mActionType != ACT_ASSIGN) // PerformAssign() already resolve its output-var, so don't do it again here.
+			{
+				if (   !(aArgVar[i] = ResolveVarOfArg(i))   ) // v1.0.45: Resolve output variables too, which eliminates a ton of calls to ResolveVarOfArg() in various other functions.  This helps code size more than performance.
+					return VARSIZE_ERROR;  // The above will have already displayed the error.
+			}
 			continue;
+		}
+		// Otherwise, set default.
+		aArgVar[i] = NULL;
 
 		// Always do this check before attempting to traverse the list of dereferences, since
 		// such an attempt would be invalid in this case:
@@ -2343,10 +2490,10 @@ VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize, Var *aArgVar[])
 			// (empty or otherwise), thus they will never be seen as isolated by it:
 			#define SINGLE_ISOLATED_DEREF (!this_arg.deref[1].marker\
 				&& this_arg.deref[0].length == this_arg.length) // and the arg contains no literal text
-			if (SINGLE_ISOLATED_DEREF) // This also ensures the deref isn't a function-call.
+			if (SINGLE_ISOLATED_DEREF) // This also ensures the deref isn't a function-call.  10/25/2006: It might be possible to avoid the need for detecting SINGLE_ISOLATED_DEREF by transforming them into INPUT_VARs at loadtime.  I almost finished such a mod but the testing and complications with things like ListLines didn't seem worth the tiny benefit.
 				the_only_var_of_this_arg = this_arg.deref[0].var;
 		}
-		if (the_only_var_of_this_arg)
+		if (the_only_var_of_this_arg) // i.e. check it again in case the above block changed the value.
 		{
 			// This is set for our caller so that it doesn't have to call ResolveVarOfArg() again, which
 			// would a performance hit if this variable is dynamically built and thus searched for at runtime:
@@ -2354,7 +2501,7 @@ VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize, Var *aArgVar[])
 			include_this_arg = !aCalcDerefBufSize || this_arg.is_expression;  // i.e. caller wanted its size unconditionally included
 			if (!include_this_arg)
 			{
-				if (   !(result = ArgMustBeDereferenced(the_only_var_of_this_arg, i))   )
+				if (   !(result = ArgMustBeDereferenced(the_only_var_of_this_arg, i, aArgVar))   )
 					return VARSIZE_ERROR;
 				if (result == CONDITION_TRUE) // The size of these types of args is always included.
 					include_this_arg = true;
@@ -2421,7 +2568,11 @@ VarSizeType Line::GetExpandedArgSize(bool aCalcDerefBufSize, Var *aArgVar[])
 
 
 
-ResultType Line::ArgMustBeDereferenced(Var *aVar, int aArgIndexToExclude)
+ResultType Line::ArgMustBeDereferenced(Var *aVar, int aArgIndex, Var *aArgVar[]) // 10/22/2006: __forceinline didn't help enough to be worth the added code size of having two instances.
+// Shouldn't be called only for args of type ARG_TYPE_OUTPUT_VAR because they never need to be dereferenced.
+// aArgVar[] is used for performance; it's assumed to contain valid items only up to aArgIndex, not beyond
+// (since normally output vars lie to the left of all input vars, so it doesn't seem worth doing anything
+// more complicated).
 // Returns CONDITION_TRUE, CONDITION_FALSE, or FAIL.
 {
 	if (mActionType == ACT_SORT) // See PerformSort() for why it's always dereferenced.
@@ -2442,14 +2593,26 @@ ResultType Line::ArgMustBeDereferenced(Var *aVar, int aArgIndexToExclude)
 		// As of v1.0.25.12, g_ErrorLevel is always dereferenced also so that a command that sets ErrorLevel
 		// can itself use ErrorLevel as in this example: StringReplace, EndKey, ErrorLevel, EndKey:
 		return CONDITION_TRUE;
+
+	// Before doing the below, the checks above must be done to ensure it's VAR_NORMAL.  Otherwise, things like
+	// the following won't work: StringReplace, o, A_ScriptFullPath, xxx
+	// v1.0.45: The following check improves performance slightly by avoiding the loop further below in cases
+	// where it's known that a command either doesn't have an output_var or can tolerate the output_var's
+	// contents being at the same address as that of one or more of the input-vars.  For example, the commands
+	// StringRight/Left and similar can tolerate the same address because they always produce a string whose
+	// length is less-than-or-equal to the input-string, thus Assign() will never need to free/realloc the
+	// output-var prior to assigning the input-var's contents to it (whose contents are the same as output-var).
+	if (!(g_act[mActionType].MaxParamsAu2WithHighBit & 0x80)) // Commands that have this bit don't need final check
+		return CONDITION_FALSE;                               // further below (though they do need the ones above).
+
 	// Since the above didn't return, we know that this is a NORMAL input var that isn't an
 	// environment variable.  Such input vars only need to be dereferenced if they are also
 	// used as an output var by the current script line:
 	Var *output_var;
 	for (int i = 0; i < mArgc; ++i)
-		if (i != aArgIndexToExclude && mArg[i].type == ARG_TYPE_OUTPUT_VAR)
+		if (i != aArgIndex && mArg[i].type == ARG_TYPE_OUTPUT_VAR)
 		{
-			if (   !(output_var = ResolveVarOfArg(i, false))   )
+			if (   !(output_var = (i < aArgIndex) ? aArgVar[i] : ResolveVarOfArg(i, false))   ) // aArgVar: See top of this function for comments.
 				return FAIL;  // It will have already displayed the error.
 			if (output_var->ResolveAlias() == aVar)
 				return CONDITION_TRUE;
@@ -2461,7 +2624,7 @@ ResultType Line::ArgMustBeDereferenced(Var *aVar, int aArgIndexToExclude)
 
 
 char *Line::ExpandArg(char *aBuf, int aArgIndex, Var *aArgVar) // 10/2/2006: Doesn't seem worth making it inline due to more complexity than expected.  It would also increase code size without being likely to help performance much.
-// Caller must ensure that aArgVar is the input variable of the aArgIndex arg whenever it's an input variable.
+// Caller must ensure that aArgVar is the variable of the aArgIndex arg when it's of type ARG_TYPE_INPUT_VAR.
 // Caller must be sure not to call this for an arg that's marked as an expression, since
 // expressions are handled by a different function.  Similarly, it must ensure that none
 // of this arg's deref's are function-calls, i.e. that deref->is_function is always false.
@@ -2522,6 +2685,11 @@ ResultType BackupFunctionVars(Func &aFunc, VarBkp *&aVarBackup, int &aVarBackupC
 	if (   !(aVarBackupCount = aFunc.mVarCount + aFunc.mLazyVarCount)   )  // Nothing needs to be backed up.
 		return OK; // Leave aVarBackup set to NULL as set by the caller.
 
+	// NOTES ABOUT MALLOC(): Apparently, the implementation of malloc() is quite good, at least for small blocks
+	// needed to back up 50 or less variables.  It nearly as fast as alloca(), at least when the system
+	// isn't under load and has the memory to spare without swapping.  Therefore, the attempt to use alloca to
+	// speed up recursive script-functions didn't result in enough of a speed-up (only 1 to 5%) to be worth the
+	// added complexity.
 	// Since Var is not a POD struct (it contains private members, a custom constructor, etc.), the VarBkp
 	// POD struct is used to hold the backup because it's probably better performance than using Var's
 	// constructor to create each backup array element.
@@ -2529,7 +2697,7 @@ ResultType BackupFunctionVars(Func &aFunc, VarBkp *&aVarBackup, int &aVarBackupC
 		return FAIL;
 
 	int i;
-	aVarBackupCount = 0;  // Init only once prior to both loops.
+	aVarBackupCount = 0;  // Init only once prior to both loops. aVarBackupCount is being "overloaded" to track the current item in aVarBackup.
 
 	// Note that Backup() does not make the variable empty after backing it up because that is something
 	// that must be done by our caller at a later stage.
@@ -2538,19 +2706,4 @@ ResultType BackupFunctionVars(Func &aFunc, VarBkp *&aVarBackup, int &aVarBackupC
 	for (i = 0; i < aFunc.mLazyVarCount; ++i)
 		aFunc.mLazyVar[i]->Backup(aVarBackup[aVarBackupCount++]);
 	return OK;
-}
-
-
-
-void RestoreFunctionVars(Func &aFunc, VarBkp *&aVarBackup, int aVarBackupCount)
-// Caller must ensure that aVarBackup isn't NULL.
-// Helper function for ExpandExpression().  Restores aVarBackup back into their original variables and
-// frees aVarBackup afterward.
-{
-	// Restore() will also free any existing contents of the variable prior to restoring the original
-	// contents from backup:
-	for (int i = 0; i < aVarBackupCount; ++i)
-		aVarBackup[i].mVar->Restore(aVarBackup[i]);
-	free(aVarBackup);
-	aVarBackup = NULL; // So that the caller knows it's been freed.  Currently only for maintainability.
 }

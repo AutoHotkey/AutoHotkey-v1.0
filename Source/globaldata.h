@@ -25,6 +25,8 @@ GNU General Public License for more details.
 extern HINSTANCE g_hInstance;
 extern DWORD g_MainThreadID;
 extern DWORD g_HookThreadID;
+extern CRITICAL_SECTION CriticalRegExCache;
+
 extern bool g_DestroyWindowCalled;
 extern HWND g_hWnd;  // The main window
 extern HWND g_hWndEdit;  // The edit window, child of main.

@@ -66,19 +66,6 @@ inline char *StrToTitleCase(char *aStr)
 
 
 
-inline size_t strnlen(char *aBuf, size_t aMax)
-// Caller has ensured that aBuf isn't NULL.
-// Returns the length of aBuf or aMax, whichever is least.
-// But it does so efficiently, in case aBuf is huge.
-{
-	if (!aMax || !*aBuf) return 0;
-	size_t i;
-	for (i = 0; aBuf[i] && i < aMax; ++i);
-	return i;
-}
-
-
-
 inline char *StrChrAny(char *aStr, char *aCharList)
 // Returns the position of the first char in aStr that is of any one of the characters listed in aCharList.
 // Returns NULL if not found.
@@ -103,7 +90,7 @@ inline char *StrChrAny(char *aStr, char *aCharList)
 
 
 
-inline char *omit_leading_whitespace(char *aBuf)
+inline char *omit_leading_whitespace(char *aBuf) // 10/17/2006: __forceinline didn't help significantly.
 // While aBuf points to a whitespace, moves to the right and returns the first non-whitespace
 // encountered.
 {
@@ -293,12 +280,12 @@ inline COLORREF rgb_to_bgr(DWORD aRGB)
 
 
 
-inline bool IsHex(char *aBuf)
+inline bool IsHex(char *aBuf) // 10/17/2006: __forceinline worsens performance, but physically ordering it near ATOI64() [via /ORDER] boosts by 3.5%.
 // Note: AHK support for hex ints reduces performance by only 10% for decimal ints, even in the tightest
 // of math loops that have SetBatchLines set to -1.
 {
 	// For whatever reason, omit_leading_whitespace() benches consistently faster (albeit slightly) than
-	// the same code put inline:
+	// the same code put inline (confirmed again on 10/17/2006, though the difference is hardly anything):
 	//for (; IS_SPACE_OR_TAB(*aBuf); ++aBuf);
 	aBuf = omit_leading_whitespace(aBuf); // i.e. caller doesn't have to have ltrimmed.
 	if (!*aBuf)
@@ -535,10 +522,10 @@ int strlicmp(char *aBuf1, char *aBuf2, UINT aLength1 = UINT_MAX, UINT aLength2 =
 char *strrstr(char *aStr, char *aPattern, StringCaseSenseType aStringCaseSense, int aOccurrence = 1);
 char *lstrcasestr(const char *phaystack, const char *pneedle);
 char *strcasestr (const char *phaystack, const char *pneedle);
-char *StrReplace(char *aBuf, char *aOld, char *aNew, StringCaseSenseType aStringCaseSense);
-char *StrReplaceAll(char *aBuf, char *aOld, char *aNew, bool aAlwaysUseSlow, StringCaseSenseType aStringCaseSense
-	, DWORD aReplacementsNeeded = UINT_MAX); // Caller can provide this value to avoid having to calculate it again.
-int StrReplaceAllSafe(char *aBuf, size_t aBufSize, char *aOld, char *aNew, bool aCaseSensitive);
+UINT StrReplace(char *aHaystack, char *aOld, char *aNew, StringCaseSenseType aStringCaseSense
+	, UINT aLimit = UINT_MAX, size_t aSizeLimit = -1, char **aDest = NULL, size_t *aHaystackLength = NULL);
+int PredictReplacementSize(int aLengthDelta, int aReplacementCount, int aLimit, int aHaystackLength
+	, int aCurrentLength, int aEndOffsetOfCurrMatch);
 char *TranslateLFtoCRLF(char *aString);
 bool DoesFilePatternExist(char *aFilePattern, DWORD *aFileAttr = NULL);
 #ifdef _DEBUG

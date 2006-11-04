@@ -107,7 +107,7 @@ public:
 	int mAlreadyVisitedCount;   // Count of items in the above.
 	WindowSpec *mFirstWinSpec;  // Linked list used by the WinGroup commands.
 	ActionTypeType mActionType; // Used only by WinGroup::PerformShowWindow().
-	int mTimeToWaitForClose;    // Used only by WinGroup::PerformShowWindow().
+	int mTimeToWaitForClose;    // Same.
 	Var *mArrayStart;           // Used by WinGetList() to fetch an array of matching HWNDs.
 
 	// Controlled by the SetCandidate() method:

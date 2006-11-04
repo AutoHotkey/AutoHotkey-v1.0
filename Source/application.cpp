@@ -1843,11 +1843,15 @@ bool MsgMonitor(HWND aWnd, UINT aMsg, WPARAM awParam, LPARAM alParam, MSG *apMsg
 
 	int i;
 	for (i = 0; i < func.mVarCount; ++i)
-		func.mVar[i]->Free(VAR_ALWAYS_FREE_EXCLUDE_STATIC, true); // Pass "true" to exclude aliases, since their targets should not be freed (they don't belong to this function).
+		func.mVar[i]->Free(VAR_ALWAYS_FREE_BUT_EXCLUDE_STATIC, true); // Pass "true" to exclude aliases, since their targets should not be freed (they don't belong to this function).
 	for (i = 0; i < func.mLazyVarCount; ++i)
-		func.mLazyVar[i]->Free(VAR_ALWAYS_FREE_EXCLUDE_STATIC, true);
+		func.mLazyVar[i]->Free(VAR_ALWAYS_FREE_BUT_EXCLUDE_STATIC, true);
 	if (var_backup) // This is the indicator that a backup was made, a restore is also needed.
-		RestoreFunctionVars(func, var_backup, var_backup_count); // It avoids restoring statics.
+	{
+		for (i = 0; i < var_backup_count; ++i)
+			var_backup[i].mVar->Restore(var_backup[i]); // This also frees any existing contents of the variable prior to restoring the original contents from backup.  But it avoids restoring statics.
+		free(var_backup);
+	}
 
 	ResumeUnderlyingThread(&global_saved, true);
 	// Check that the msg_index item still exists (it may have been deleted during the thread that just finished,

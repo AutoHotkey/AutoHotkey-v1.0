@@ -35,7 +35,7 @@ GNU General Public License for more details.
 // (the maximum line length that can be loaded -- currently 16K), otherwise,
 // memory for that line might be impossible to allocate.
 // Update: reduced it from 64K to 32K since many scripts tend to be small.
-#define BLOCK_SIZE (32 * 1024)
+#define BLOCK_SIZE (32 * 1024) // Relied upon by Malloc() to be a multiple of 4.
 
 class SimpleHeap
 {

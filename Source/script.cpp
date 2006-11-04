@@ -200,9 +200,12 @@ Script::~Script() // Destructor.
 		if (*buf) // "playing" or "stopped"
 			mciSendString("close " SOUNDPLAY_ALIAS, NULL, 0, NULL);
 	}
+
 #ifdef ENABLE_KEY_HISTORY_FILE
 	KeyHistoryToFile();  // Close the KeyHistory file if it's open.
 #endif
+
+	DeleteCriticalSection(&CriticalRegExCache); // CriticalRegExCache is used elsewhere for thread-safety.
 }
 
 
@@ -429,8 +432,7 @@ ResultType Script::CreateWindows()
 	// For more info on pre-loaded fonts (not too many choices), see MSDN's GetStockObject().
 	//SendMessage(g_hWndEdit, WM_SETFONT, (WPARAM)GetStockObject(SYSTEM_FONT), 0);
 
-	// v1.0.30.05:
-	// Specifying a limit of zero opens the control to its maximum text capacity,
+	// v1.0.30.05: Specifying a limit of zero opens the control to its maximum text capacity,
 	// which removes the 32K size restriction.  Testing shows that this does not increase the actual
 	// amount of memory used for controls containing small amounts of text.  All it does is allow
 	// the control to allocate more memory as needed.  By specifying zero, a max
@@ -465,7 +467,6 @@ ResultType Script::CreateWindows()
 		ShowWindow(g_hWnd, SW_MINIMIZE);
 		SetWindowLong(g_hWnd, GWL_EXSTYLE, 0); // Give the main window back its taskbar button.
 	}
-
 	// Note: When the window is not minimized, task manager reports that a simple script (such as
 	// one consisting only of the single line "#Persistent") uses 2600 KB of memory vs. ~452 KB if
 	// it were immediately minimized.  That is probably just due to the vagaries of how the OS
@@ -1457,21 +1458,21 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 						one_char_string[0] = g_EscapeChar; // These strings were terminated earlier, so no need to
 						two_char_string[0] = g_EscapeChar; // do it here.  In addition, these strings must be set by
 						two_char_string[1] = g_EscapeChar; // each iteration because the #EscapeChar (and similar directives) can occur multiple times, anywhere in the script.
-						replacement_count += StrReplaceAllSafe(next_buf, LINE_SIZE, one_char_string, two_char_string, true);
+						replacement_count += StrReplace(next_buf, one_char_string, two_char_string, SCS_SENSITIVE, UINT_MAX, LINE_SIZE);
 					}
 					if (literal_derefs)
 					{
 						one_char_string[0] = g_DerefChar;
 						two_char_string[0] = g_EscapeChar;
 						two_char_string[1] = g_DerefChar;
-						replacement_count += StrReplaceAllSafe(next_buf, LINE_SIZE, one_char_string, two_char_string, true);
+						replacement_count += StrReplace(next_buf, one_char_string, two_char_string, SCS_SENSITIVE, UINT_MAX, LINE_SIZE);
 					}
 					if (literal_delimiters)
 					{
 						one_char_string[0] = g_delimiter;
 						two_char_string[0] = g_EscapeChar;
 						two_char_string[1] = g_delimiter;
-						replacement_count += StrReplaceAllSafe(next_buf, LINE_SIZE, one_char_string, two_char_string, true);
+						replacement_count += StrReplace(next_buf, one_char_string, two_char_string, SCS_SENSITIVE, UINT_MAX, LINE_SIZE);
 					}
 
 					if (replacement_count) // Update the length if any actual replacements were done.
@@ -2373,7 +2374,7 @@ inline ResultType Script::IsDirective(char *aBuf)
 			if (IS_SPACE_OR_TAB(*parameter)) // Skip over at most one space or tab, since others might be a literal part of the filename.
 				++parameter;
 		}
-		StrReplace(parameter, "%A_ScriptDir%", mFileDir, SCS_INSENSITIVE); // v1.0.35.11.  Maximum of one replacement.  Caller has ensured string is writable.
+		StrReplace(parameter, "%A_ScriptDir%", mFileDir, SCS_INSENSITIVE, 1, LINE_SIZE - (parameter-aBuf)); // v1.0.35.11.  Caller has ensured string is writable.
 		DWORD attr = GetFileAttributes(parameter);
 		if (attr != 0xFFFFFFFF && (attr & FILE_ATTRIBUTE_DIRECTORY)) // File exists and its a directory (possibly A_ScriptDir set above).
 		{
@@ -3168,7 +3169,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 				else
 					operation = omit_leading_whitespace(operation);
 
-				// v1.0.42: Fix "If not Installed" not be seen as "If var-called-not in MatchList", being
+				// v1.0.42: Fix "If not Installed" not be seen as "If var-named-'not' in MatchList", being
 				// careful not to break "If NotInstalled in MatchList".  The following are also fixed in
 				// a similar way:
 				// If not BetweenXXX
@@ -3191,7 +3192,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 					default: action_type = ACT_IFLESS;  // i.e. some other symbol follows '<'
 					}
 					break;
-				case '>': // Don't allow >< to be NotEqual since the '<' might be literal.
+				case '>': // Don't allow >< to be NotEqual since the '<' might be intended as a literal part of an arg.
 					if (operation[1] == '=')
 					{
 						action_type = ACT_IFGREATEROREQUAL;
@@ -3213,9 +3214,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 					break;
 				case 'b': // "Between"
 				case 'B':
-					// Seems too rare a thing to warrant falling back to ACT_IFEXPR for this.
-					// UPDATE: It must fall back to ACT_IFEXPR, otherwise "if not var_name_beginning_with_b"
-					// is a syntax error.
+					// Must fall back to ACT_IFEXPR, otherwise "if not var_name_beginning_with_b" is a syntax error.
 					if (first_word_is_not || strnicmp(operation, "between", 7))
 						action_type = ACT_IFEXPR;
 					else
@@ -3227,9 +3226,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 					break;
 				case 'c': // "Contains"
 				case 'C':
-					// Seems too rare a thing to warrant falling back to ACT_IFEXPR for this.
-					// UPDATE: It must fall back to ACT_IFEXPR, otherwise "if not var_name_beginning_with_c"
-					// is a syntax error.
+					// Must fall back to ACT_IFEXPR, otherwise "if not var_name_beginning_with_c" is a syntax error.
 					if (first_word_is_not || strnicmp(operation, "contains", 8))
 						action_type = ACT_IFEXPR;
 					else
@@ -3245,16 +3242,21 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 					{
 					case 's':  // "IS"
 					case 'S':
-						next_word = omit_leading_whitespace(operation + 2);
-						if (strnicmp(next_word, "not", 3))
-							action_type = ACT_IFIS;
+						if (first_word_is_not)        // v1.0.45: Had forgotten to fix this one with the others,
+							action_type = ACT_IFEXPR; // so now "if not is_something" and "if not is_something()" work.
 						else
 						{
-							action_type = ACT_IFISNOT;
-							// Remove the word "not" to set things up to be parsed as args further down.
-							memset(next_word, ' ', 3);
+							next_word = omit_leading_whitespace(operation + 2);
+							if (strnicmp(next_word, "not", 3))
+								action_type = ACT_IFIS;
+							else
+							{
+								action_type = ACT_IFISNOT;
+								// Remove the word "not" to set things up to be parsed as args further down.
+								memset(next_word, ' ', 3);
+							}
+							operation[1] = ' '; // Remove the 'S' in "IS".  'I' is replaced with ',' later below.
 						}
-						operation[1] = ' '; // Remove the 'S' in "IS".  'I' is replaced with ',' later below.
 						break;
 					case 'n':  // "IN"
 					case 'N':
@@ -3274,9 +3276,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 					break;
 				case 'n':  // It's either "not in", "not between", or "not contains"
 				case 'N':
-					// Seems too rare a thing to warrant falling back to ACT_IFEXPR for this.
-					// UPDATE: It must fall back to ACT_IFEXPR, otherwise "if not var_name_beginning_with_n"
-					// is a syntax error.
+					// Must fall back to ACT_IFEXPR, otherwise "if not var_name_beginning_with_n" is a syntax error.
 					if (strnicmp(operation, "not", 3))
 						action_type = ACT_IFEXPR;
 					else
@@ -3591,7 +3591,9 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 	ActionTypeType subaction_type = ACT_INVALID; // Must init these.
 	ActionTypeType suboldaction_type = OLD_INVALID;
 	char subaction_name[MAX_VAR_NAME_LENGTH + 1], *subaction_end_marker = NULL, *subaction_start = NULL;
-	int max_params = max_params_override ? max_params_override : (mIsAutoIt2 ? this_action.MaxParamsAu2 : this_action.MaxParams);
+	int max_params = max_params_override ? max_params_override
+		: (mIsAutoIt2 ? (this_action.MaxParamsAu2WithHighBit & 0x7F) // 0x7F removes the high-bit from consideration; that bit is used for an unrelated purpose.
+			: this_action.MaxParams);
 	int max_params_minus_one = max_params - 1;
 	bool in_quotes, is_expression;
 	ActionTypeType *np;
@@ -3632,6 +3634,7 @@ ResultType Script::ParseAndAddLine(char *aLineText, ActionTypeType aActionType, 
 		// The above does not need the in_quotes and in_parens checks because commas in the last arg
 		// are always literal, so there's no problem even in expressions.
 
+		// The following implements the "% " prefix as a means of forcing an expression:
 		is_expression = *arg[nArgs] == g_DerefChar && !*arg_map[nArgs] // It's a non-literal deref character.
 			&& IS_SPACE_OR_TAB(arg[nArgs][1]); // Followed by a space or tab.
 
@@ -4363,7 +4366,11 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 						if (operand_length == 2)
 						{
 							if ((*op_begin == 'o' || *op_begin == 'O') && (op_begin[1] == 'r' || op_begin[1] == 'R'))
-								continue; // "OR" was found.
+							{	// "OR" was found.
+								op_begin[0] = '|'; // v1.0.45: Transform into easier-to-parse symbols for improved
+								op_begin[1] = '|'; // runtime performance and reduced code size.
+								continue;
+							}
 						}
 						else // operand_length must be 3
 						{
@@ -4373,11 +4380,22 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 							case 'A':
 								if (   (op_begin[1] == 'n' || op_begin[1] == 'N') // Relies on short-circuit boolean order.
 									&& (op_begin[2] == 'd' || op_begin[2] == 'D')   )
-									continue; // "AND" was found.
+								{	// "AND" was found.
+									op_begin[0] = '&'; // v1.0.45: Transform into easier-to-parse symbols for
+									op_begin[1] = '&'; // improved runtime performance and reduced code size.
+									op_begin[2] = ' '; // A space is used lieu of the complexity of the below.
+									// Above seems better than below even though below would make it look a little
+									// nicer in ListLines.  BELOW CAN'T WORK because this_new_arg.deref[] can contain
+									// offsets that would also need to be adjusted:
+									//memmove(op_begin + 2, op_begin + 3, strlen(op_begin+3)+1 ... or some expression involving this_new_arg.length this_new_arg.text);
+									//--this_new_arg.length;
+									//--op_end; // Ensure op_end is set up properly for the for-loop's post-iteration action.
+									continue;
+								}
 								break;
 
-							case 'n':
-							case 'N':
+							case 'n': // v1.0.45: Unlike "AND" and "OR" above, this one is not given a substitute
+							case 'N': // because it's not the same as the "!" operator. See SYM_LOWNOT for comments.
 								if (   (op_begin[1] == 'o' || op_begin[1] == 'O') // Relies on short-circuit boolean order.
 									&& (op_begin[2] == 't' || op_begin[2] == 'T')   )
 									continue; // "NOT" was found.
@@ -4501,8 +4519,8 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 						*(--cp) = '\0'; // Remove the ending quote.
 						memmove(this_new_arg.text, this_new_arg.text + 1, cp - this_new_arg.text); // Remove the starting quote.
 						// Convert all pairs of quotes into single literal quotes:
-						StrReplaceAll(this_new_arg.text, "\"\"", "\"", true, SCS_SENSITIVE);
-						// Above relies on the fact that StrReplaceAll() does not do cascading replacements,
+						StrReplace(this_new_arg.text, "\"\"", "\"", SCS_SENSITIVE);
+						// Above relies on the fact that StrReplace() does not do cascading replacements,
 						// meaning that a series of characters such as """" would be correctly converted into
 						// two double quotes rather than collapsing into only one.
 						this_new_arg.length = (WORD)strlen(this_new_arg.text); // Update length to reflect changes made above.
@@ -4525,7 +4543,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 					// the latter probably performs better in this case.  However, the way ValidateName()
 					// is used above is probably not correct/sufficient to exclude cases to which this
 					// method should not be applied, such as Var := abc%Var2%.  In any case, some careful
-					// review of PerformAssign() should be done to guage side-effects and determine
+					// review of PerformAssign() should be done to gauge side-effects and determine
 					// whether the performance boost is really that signficant given that PerformAssign()
 					// is already boosted by the fact that it's exempt from automatic ExpandArgs() in
 					// ExecUntil().
@@ -4570,7 +4588,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 						this_new_arg.type = ARG_TYPE_INPUT_VAR;
 					}
 				}
-			}
+			} // if (this_new_arg.is_expression)
 			else // this arg does not contain an expression.
 				if (!ParseDerefs(this_new_arg.text, this_aArgMap, deref, deref_count))
 					return FAIL; // It already displayed the error.
@@ -6143,6 +6161,18 @@ Func *Script::FindFunc(char *aFuncName, size_t aFuncNameLength)
 		min_params = 2;
 		max_params = 4;
 	}
+	else if (!stricmp(func_name, "RegExMatch"))
+	{
+		bif = BIF_RegEx;
+		min_params = 2;
+		max_params = 4;
+	}
+	else if (!stricmp(func_name, "RegExReplace"))
+	{
+		bif = BIF_RegEx;
+		min_params = 2;
+		max_params = 6;
+	}
 	else if (!stricmp(func_name, "GetKeyState"))
 	{
 		bif = BIF_GetKeyState;
@@ -6489,7 +6519,8 @@ Var *Script::FindVar(char *aVarName, size_t aVarNameLength, int *apInsertPos, in
 		// v1.0.44.10: The following was changed from it's former value of "true" so that places further below
 		// (including passing is_local is call to AddVar()) don't have to ensure that g.CurrentFunc!=NULL.
 		// This fixes a crash that occured when a caller specified ALWAYS_USE_LOCAL even though the current
-		// thread isn't actually inside a *called* function.
+		// thread isn't actually inside a *called* function (perhaps meaning things like a timed subroutine
+		// that lies inside a "container function").
 		// Some callers like SYSGET_CMD_MONITORAREA might try to find/add a local array if they see that their
 		// base variable is classified as local (such classification occurs at loadtime, but only for non-dynamic
 		// variable references).  But the current thread entered a "container function" by means other than a
@@ -6781,7 +6812,7 @@ Var *Script::AddVar(char *aVarName, size_t aVarNameLength, int aInsertPos, bool 
 		else
 			alloc_count = var_count_max + 1000000;  // i.e. continue to increase by 4MB (1M*4) each time.
 
-		Var **temp = (Var **)realloc(var, alloc_count * sizeof(Var *));
+		Var **temp = (Var **)realloc(var, alloc_count * sizeof(Var *)); // If passed NULL, realloc() will do a malloc().
 		if (!temp)
 		{
 			ScriptError(ERR_OUTOFMEM);
@@ -8012,9 +8043,9 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 					// else the IF had NO else, so we're already at the IF's "I'm finished" jump-point.
 				}
 				// else the IF had NO else, so we're already at the IF's "I'm finished" jump-point.
-			}
+			} // if_condition == CONDITION_FALSE
 			continue; // Let the for-loop process the new location specified by <line>.
-		}
+		} // if (ACT_IS_IF)
 
 		// If above didn't continue, it's not an IF, so handle the other
 		// flow-control types:
@@ -8045,7 +8076,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 			// If the above didn't return, the subroutine finished successfully and
 			// we should now continue on with the line after the Gosub:
 			line = line->mNextLine;
-			break;  // Resume looping starting at the above line.
+			continue;  // Resume looping starting at the above line.  "continue" is actually slight faster than "break" in these cases.
 
 		case ACT_GOTO:
 			// A single goto can cause an infinite loop if misused, so be sure to do this to
@@ -8071,16 +8102,15 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 			}
 			// Otherwise, we will handle this Goto since it's in our nesting layer:
 			line = jump_target;
-			break;  // Resume looping starting at the above line.
+			continue;  // Resume looping starting at the above line.  "continue" is actually slight faster than "break" in these cases.
 
-		case ACT_GROUPACTIVATE:
+		case ACT_GROUPACTIVATE: // Similar to ACT_GOSUB, which is why this section is here rather than in Perform().
 		{
-			// This section is here rather than in Perform() because GroupActivate can
-			// sometimes execute a Gosub.
 			++g_script.mLinesExecutedThisCycle; // Always increment for GroupActivate.
 			WinGroup *group;
 			if (   !(group = (WinGroup *)mAttribute)   )
 				group = g_script.FindGroup(ARG1);
+			result = OK; // Set default.
 			if (group)
 			{
 				// Note: This will take care of DoWinDelay if needed:
@@ -8096,13 +8126,13 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 					result = jump_target->ExecUntil(UNTIL_RETURN, NULL, NULL);
 					if (result == FAIL || result == EARLY_EXIT)
 						return result;
-					if (aMode == ONLY_ONE_LINE)
-						return (result == EARLY_RETURN) ? OK : result;
 				}
 			}
 			//else no such group, so just proceed.
+			if (aMode == ONLY_ONE_LINE)  // v1.0.45: These two lines were moved here from above to provide proper handling for GroupActivate that lacks a jump/gosub and that lies directly beneath an IF or ELSE.
+				return (result == EARLY_RETURN) ? OK : result;
 			line = line->mNextLine;
-			break;
+			continue;  // Resume looping starting at the above line.  "continue" is actually slight faster than "break" in these cases.
 		}
 
 		case ACT_RETURN:
@@ -8112,13 +8142,13 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 			// NOTE: The return's ARG1 expression has been evaluated by ExpandArgs() above,
 			// which is desirable *even* if apReturnValue is NULL (i.e. the caller will be
 			// ignoring the return value) in case the return's expression calls a function
-			// which has side-effects.  For example, "return LogThisEvent()" would likely
-			// be a function call that does something, so it should be called even though
-			// its return value is discarded.
+			// which has side-effects.  For example, "return LogThisEvent()".
 			if (apReturnValue) // Caller wants the return value.
 				*apReturnValue = ARG1; // This sets it to blank if this return lacks an arg.
 			//else the return value, if any, is discarded.
-			// Don't count returns against the total since they should be nearly instantaneous:
+			// Don't count returns against the total since they should be nearly instantaneous. UPDATE: even if
+			// the return called a function (e.g. return fn()), that function's lines would have been added
+			// to the total, so there doesn't seem much problem with not doing it here.
 			//++g_script.mLinesExecutedThisCycle;
 			if (aMode != UNTIL_RETURN)
 				// Tells the caller to return early if it's not the Gosub that directly
@@ -8128,6 +8158,12 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 				// to someone (at the right recursion layer):
 				return EARLY_RETURN;
 			return OK;
+
+		case ACT_BREAK:
+			return LOOP_BREAK;
+
+		case ACT_CONTINUE:
+			return LOOP_CONTINUE;
 
 		case ACT_LOOP:
 		case ACT_REPEAT:
@@ -8339,20 +8375,14 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 				// Since above didn't return, we're supposed to handle this jump.  So jump and then
 				// continue execution from there:
 				line = jump_to_line;
-				break; // end this case of the switch().
+				continue; // end this case of the switch().
 			}
 			// Since the above didn't return or break, either the loop has completed the specified
 			// number of iterations or it was broken via the break command.  In either case, we jump
 			// to the line after our loop's structure and continue there:
 			line = line->mRelatedLine;
-			break;
+			continue;  // Resume looping starting at the above line.  "continue" is actually slight faster than "break" in these cases.
 		} // case ACT_LOOP.
-
-		case ACT_BREAK:
-			return LOOP_BREAK;
-
-		case ACT_CONTINUE:
-			return LOOP_CONTINUE;
 
 		case ACT_EXIT:
 			// If this script has no hotkeys and hasn't activated one of the hooks, EXIT will cause the
@@ -8380,7 +8410,7 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 				// opening brace will show up in ListLines, but that seems preferable to the performance
 				// overhead of explicitly removing it here.
 				line = line->mRelatedLine; // Resume execution at the line following this functions end-block.
-				break;
+				continue;  // Resume looping starting at the above line.  "continue" is actually slight faster than "break" in these cases.
 			}
 			// Don't count block-begin/end against the total since they should be nearly instantaneous:
 			//++g_script.mLinesExecutedThisCycle;
@@ -8432,14 +8462,13 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 				// Now line is the line after the end of this block.  Can be NULL (end of script).
 				// UPDATE: It can't be NULL (not that it matters in this case) since the loader
 				// has ensured that all scripts now end in an ACT_EXIT.
-			break;  // Resume looping starting at the above line.
+			continue;  // Resume looping starting at the above line.  "continue" is actually slight faster than "break" in these cases.
 
 		case ACT_BLOCK_END:
 			// Don't count block-begin/end against the total since they should be nearly instantaneous:
 			//++g_script.mLinesExecutedThisCycle;
 			if (aMode != UNTIL_BLOCK_END)
-				// Shouldn't happen if the pre-parser and this function are designed properly?
-				// Update: Rajat found a way for this to happen that basically amounts to this:
+				// Rajat found a way for this to happen that basically amounts to this:
 				// If within a loop you gosub a label that is also inside of the block, and
 				// that label sometimes doesn't return (i.e. due to a missing "return" somewhere
 				// in its flow of control), the loop(s)'s block-end symbols will be encountered
@@ -8447,11 +8476,17 @@ ResultType Line::ExecUntil(ExecUntilMode aMode, char **apReturnValue, Line **apJ
 				// the subroutine has put us into a waiting-for-return state rather than a
 				// waiting-for-block-end state, so when block-end's are encountered, that is
 				// considered a runtime error:
-				return line->LineError("Unexpected end-of-block (Gosub without Return?)." ERR_ABORT);
+				return line->LineError("A \"return\" must be encountered prior to this \"}\"." ERR_ABORT);  // Former error msg was "Unexpected end-of-block (Gosub without Return?)."
 			return OK; // It's the caller's responsibility to resume execution at the next line, if appropriate.
-		case ACT_ELSE:
-			// Shouldn't happen if the pre-parser and this function are designed properly?
-			return line->LineError("Unexpected ELSE." ERR_ABORT);
+
+		// ACT_ELSE can happen when one of the cases in this switch failed to properly handle
+		// aMode == ONLY_ONE_LINE.  But even if ever happens, it will just drop into the default
+		// case, which will result in a FAIL (silent exit of thread) as an indicator of the problem.
+		// So it's commented out:
+		//case ACT_ELSE:
+		//	// Shouldn't happen if the pre-parser and this function are designed properly?
+		//	return line->LineError("Unexpected ELSE." ERR_ABORT);
+
 		default:
 			++g_script.mLinesExecutedThisCycle;
 			result = line->Perform();
@@ -8584,9 +8619,9 @@ inline ResultType Line::EvaluateCondition()
 		#undef IF_EITHER_IS_FLOAT
 		#define IF_EITHER_IS_FLOAT if (value_is_pure_numeric == PURE_FLOAT || var_is_pure_numeric == PURE_FLOAT)
 
-		if (mArgc > 1 && sArgVar[0] && sArgVar[0]->IsBinaryClip() && sArgVar[1] && sArgVar[1]->IsBinaryClip())
-			if_condition = (sArgVar[0]->Length() == sArgVar[1]->Length())
-				&& !memcmp(sArgVar[0]->Contents(), sArgVar[1]->Contents(), sArgVar[0]->Length());
+		if (mArgc > 1 && ARGVARRAW1 && ARGVARRAW1->IsBinaryClip() && ARGVARRAW2 && ARGVARRAW2->IsBinaryClip())
+			if_condition = (ARGVARRAW1->Length() == ARGVARRAW2->Length()) // Accessing ARGVARRAW in all these places is safe due to the check mArgc > 1.
+				&& !memcmp(ARGVARRAW1->Contents(), ARGVARRAW2->Contents(), ARGVARRAW1->Length());
 		else
 		{
 			DETERMINE_NUMERIC_TYPES
@@ -9108,7 +9143,7 @@ ResultType Line::PerformLoopParse(char **apReturnValue, bool &aContinueMainLoop,
 	if (!*ARG2) // Since the input variable's contents are blank, the loop will execute zero times.
 		return OK;
 
-	// This will be used to hold the parsed items.  It needs to have its own storage because
+	// The following will be used to hold the parsed items.  It needs to have its own storage because
 	// even though ARG2 might always be a writable memory area, we can't rely upon it being
 	// persistent because it might reside in the deref buffer, in which case the other commands
 	// in the loop's body would probably overwrite it.  Even if the ARG2's contents aren't in
@@ -9123,20 +9158,24 @@ ResultType Line::PerformLoopParse(char **apReturnValue, bool &aContinueMainLoop,
 	// it should help average performance to use the stack for small vars rather than
 	// constantly doing malloc() and free(), which are much higher overhead and probably
 	// cause memory fragmentation (especially with thousands of calls):
-	char stack_buf[16384], *buf;
 	size_t space_needed = ArgLength(2) + 1;  // +1 for the zero terminator.
-	if (space_needed <= sizeof(stack_buf))
+	char *stack_buf, *buf;
+	#define FREE_PARSE_MEMORY if (buf != stack_buf) free(buf)  // Also used by the CSV version of this function.
+	#define LOOP_PARSE_BUF_SIZE 40000                          //
+	if (space_needed <= LOOP_PARSE_BUF_SIZE)
+	{
+		stack_buf = (char *)_alloca(LOOP_PARSE_BUF_SIZE); // Helps performance.  See comments above.
 		buf = stack_buf;
+	}
 	else
 	{
 		if (   !(buf = (char *)malloc(space_needed))   )
 			// Probably best to consider this a critical error, since on the rare times it does happen, the user
 			// would probably want to know about it immediately.
 			return LineError(ERR_OUTOFMEM, FAIL, ARG2);
+		stack_buf = NULL; // For comparison purposes later below.
 	}
 	strcpy(buf, ARG2); // Make the copy.
-
-	#define FREE_PARSE_MEMORY if (buf != stack_buf) free(buf)
 
 	// Make a copy of ARG3 and ARG4 in case either one's contents are in the deref buffer, which would
 	// probably be overwritten by the commands in the script loop's body:
@@ -9222,18 +9261,21 @@ ResultType Line::PerformLoopParseCSV(char **apReturnValue, bool &aContinueMainLo
 	if (!*ARG2) // Since the input variable's contents are blank, the loop will execute zero times.
 		return OK;
 
-	char stack_buf[16384], *buf;
+	// See comments in PerformLoopParse() for details.
 	size_t space_needed = ArgLength(2) + 1;  // +1 for the zero terminator.
-	if (space_needed <= sizeof(stack_buf))
+	char *stack_buf, *buf;
+	if (space_needed <= LOOP_PARSE_BUF_SIZE)
+	{
+		stack_buf = (char *)_alloca(LOOP_PARSE_BUF_SIZE); // Helps performance.  See comments above.
 		buf = stack_buf;
+	}
 	else
 	{
 		if (   !(buf = (char *)malloc(space_needed))   )
 			return LineError(ERR_OUTOFMEM, FAIL, ARG2);
+		stack_buf = NULL; // For comparison purposes later below.
 	}
 	strcpy(buf, ARG2); // Make the copy.
-
-	#define FREE_PARSE_MEMORY if (buf != stack_buf) free(buf)
 
 	char omit_list[512];
 	strlcpy(omit_list, ARG4, sizeof(omit_list));
@@ -9388,7 +9430,7 @@ ResultType Line::PerformLoopReadFile(char **apReturnValue, bool &aContinueMainLo
 
 
 
-inline ResultType Line::Perform()
+__forceinline ResultType Line::Perform() // __forceinline() currently boosts performance a bit, though it's probably more due to the butterly effect and cache hits/misses.
 // Performs only this line's action.
 // Returns OK or FAIL.
 // The function should not be called to perform any flow-control actions such as
@@ -9396,8 +9438,7 @@ inline ResultType Line::Perform()
 {
 	char buf_temp[MAX_REG_ITEM_LENGTH + 1]; // For registry and other things.
 	WinGroup *group; // For the group commands.
-	Var *output_var;
-	VarSizeType space_needed; // For the commands that assign directly to an output var.
+	Var *output_var = OUTPUT_VAR; // Okay if NULL.  Users of it should only consider it valid if their first arg is actually an output_variable.
 	ToggleValueType toggle;  // For commands that use on/off/neutral.
 	// Use signed values for these in case they're really given an explicit negative value:
 	int start_char_num, chars_to_extract; // For String commands.
@@ -9411,8 +9452,6 @@ inline ResultType Line::Perform()
 	bool is_remote_registry; // For Registry commands.
 	HKEY root_key; // For Registry commands.
 	ResultType result;  // General purpose.
-	HANDLE running_process; // For RUNWAIT
-	DWORD exit_code; // For RUNWAIT
 
 	// Even though the loading-parser already checked, check again, for now,
 	// at least until testing raises confidence.  UPDATE: Don't this because
@@ -9423,6 +9462,388 @@ inline ResultType Line::Perform()
 
 	switch (mActionType)
 	{
+	case ACT_ASSIGN:
+		// Note: This line's args have not yet been dereferenced in this case (i.e. ExpandArgs() hasn't been
+		// called).  The below function will handle that if it is needed.
+		return PerformAssign();  // It will report any errors for us.
+
+	case ACT_ASSIGNEXPR:
+		// Currently, this can occur even when mArg[1].is_expression==false, such as things like var:=5 and
+		// maybe var:=Array%i%.  Search on "is_expression = " to find such cases in the script-loading/parsing
+		// routines.
+		if (mArgc > 1)
+		{
+			if (mArg[1].is_expression) // v1.0.45: ExpandExpression() already took care of it for us (for performance reasons).
+				return OK;
+			// sArgVar is used to enhance performance, which would otherwise be poor for dynamic variables
+			// such as Var:=Array%i% (which is an expression and handled by ACT_ASSIGNEXPR rather than
+			// ACT_ASSIGN) because Array%i% would have to be resolved twice (once here and once
+			// previously by ExpandArgs()) just to find out if it's IsBinaryClip()).
+			if (ARGVARRAW2) // RAW is safe due to the above check of mArgc > 1.
+			{
+				if (ARGVARRAW2->IsBinaryClip())             // This is executed via things like: x := %binary_clip%
+					return AssignBinaryClip(*output_var, *ARGVARRAW2);
+					// Performance should be good in this case since IsBinaryClip() implies a single isolated deref,
+					// which would never have been copied into the deref buffer.
+				if (ARGVARRAW2->Type() == VAR_CLIPBOARDALL) // Probably never called this way due to load-time
+					return AssignClipboardAll(*output_var); // conversion to ACT_ASSIGN.  But kept in case it can be.
+			}
+		}
+		// Note that simple assignments such as Var:="xyz" or Var:=Var2 are resolved to be
+		// non-expressions at load-time.  In these cases, ARG2 would have been expanded
+		// normally rather than evaluated as an expression.
+		return output_var->Assign(ARG2); // ARG2 now contains the evaluated result of the expression.
+
+	case ACT_FUNCTIONCALL:
+		// Nothing needs to be done because the expression in ARG1 (which is the only arg) has already
+		// been evaluated and its functions and subfunctions called, e.g. the following line:
+		// fn(123, "string", var, fn2(y))
+		return OK;
+
+	// Like AutoIt2, if either output_var or ARG1 aren't purely numeric, they
+	// will be considered to be zero for all of the below math functions:
+	case ACT_ADD:
+		#undef DETERMINE_NUMERIC_TYPES
+		#define DETERMINE_NUMERIC_TYPES \
+			value_is_pure_numeric = IsPureNumeric(ARG2, true, false, true, true);\
+			var_is_pure_numeric = IsPureNumeric(output_var->Contents(), true, false, true, true);
+
+		// Some performance can be gained by relying on the fact that short-circuit boolean
+		// can skip the "var_is_pure_numeric" check whenever value_is_pure_numeric == PURE_FLOAT.
+		// This is because var_is_pure_numeric is never directly needed here (unlike EvaluateCondition()).
+		// However, benchmarks show that this makes such a small difference that it's not worth the
+		// loss of maintainability and the slightly larger code size due to macro expansion:
+		//#undef IF_EITHER_IS_FLOAT
+		//#define IF_EITHER_IS_FLOAT if (value_is_pure_numeric == PURE_FLOAT \
+		//	|| IsPureNumeric(output_var->Contents(), true, false, true, true) == PURE_FLOAT)
+
+		DETERMINE_NUMERIC_TYPES
+
+		if (*ARG3 && strchr("SMHD", toupper(*ARG3))) // the command is being used to add a value to a date-time.
+		{
+			if (!value_is_pure_numeric) // It's considered to be zero, so the output_var is left unchanged:
+				return OK;
+			else
+			{
+				// Use double to support a floating point value for days, hours, minutes, etc:
+				double nUnits = ATOF(ARG2);  // ATOF() returns a double, at least on MSVC++ 7.x
+				FILETIME ft, ftNowUTC;
+				if (*output_var->Contents())
+				{
+					if (!YYYYMMDDToFileTime(output_var->Contents(), ft))
+						return output_var->Assign(""); // Set to blank to indicate the problem.
+				}
+				else // The output variable is currently blank, so substitute the current time for it.
+				{
+					GetSystemTimeAsFileTime(&ftNowUTC);
+					FileTimeToLocalFileTime(&ftNowUTC, &ft);  // Convert UTC to local time.
+				}
+				// Convert to 10ths of a microsecond (the units of the FILETIME struct):
+				switch (toupper(*ARG3))
+				{
+				case 'S': // Seconds
+					nUnits *= (double)10000000;
+					break;
+				case 'M': // Minutes
+					nUnits *= ((double)10000000 * 60);
+					break;
+				case 'H': // Hours
+					nUnits *= ((double)10000000 * 60 * 60);
+					break;
+				case 'D': // Days
+					nUnits *= ((double)10000000 * 60 * 60 * 24);
+					break;
+				}
+				// Convert ft struct to a 64-bit variable (maybe there's some way to avoid these conversions):
+				ULARGE_INTEGER ul;
+				ul.LowPart = ft.dwLowDateTime;
+				ul.HighPart = ft.dwHighDateTime;
+				// Add the specified amount of time to the result value:
+				ul.QuadPart += (__int64)nUnits;  // Seems ok to cast/truncate in light of the *=10000000 above.
+				// Convert back into ft struct:
+				ft.dwLowDateTime = ul.LowPart;
+				ft.dwHighDateTime = ul.HighPart;
+				return output_var->Assign(FileTimeToYYYYMMDD(buf_temp, ft, false));
+			}
+		}
+		else // ARG3 is absent or invalid, so do normal math (not date-time).
+		{
+			IF_EITHER_IS_FLOAT
+				return output_var->Assign(ATOF(output_var->Contents()) + ATOF(ARG2));  // Overload: Assigns a double.
+			else // Non-numeric variables or values are considered to be zero for the purpose of the calculation.
+				return output_var->Assign(ATOI64(output_var->Contents()) + ATOI64(ARG2));  // Overload: Assigns an int.
+		}
+		return OK;  // Never executed.
+
+	case ACT_SUB:
+		if (*ARG3 && strchr("SMHD", toupper(*ARG3))) // the command is being used to subtract date-time values.
+		{
+			bool failed;
+			// If either ARG2 or output_var->Contents() is blank, it will default to the current time:
+			__int64 time_until = YYYYMMDDSecondsUntil(ARG2, output_var->Contents(), failed);
+			if (failed) // Usually caused by an invalid component in the date-time string.
+				return output_var->Assign("");
+			switch (toupper(*ARG3))
+			{
+			// Do nothing in the case of 'S' (seconds).  Otherwise:
+			case 'M': time_until /= 60; break; // Minutes
+			case 'H': time_until /= 60 * 60; break; // Hours
+			case 'D': time_until /= 60 * 60 * 24; break; // Days
+			}
+			// Only now that any division has been performed (to reduce the magnitude of
+			// time_until) do we cast down into an int, which is the standard size
+			// used for non-float results (the result is always non-float for subtraction
+			// of two date-times):
+			return output_var->Assign(time_until); // Assign as signed 64-bit.
+		}
+		else // ARG3 is absent or invalid, so do normal math (not date-time).
+		{
+			DETERMINE_NUMERIC_TYPES
+			IF_EITHER_IS_FLOAT
+				return output_var->Assign(ATOF(output_var->Contents()) - ATOF(ARG2));  // Overload: Assigns a double.
+			else // Non-numeric variables or values are considered to be zero for the purpose of the calculation.
+				return output_var->Assign(ATOI64(output_var->Contents()) - ATOI64(ARG2));  // Overload: Assigns an INT.
+		}
+		// All paths above return.
+
+	case ACT_MULT:
+		DETERMINE_NUMERIC_TYPES
+		IF_EITHER_IS_FLOAT
+			return output_var->Assign(ATOF(output_var->Contents()) * ATOF(ARG2));  // Overload: Assigns a double.
+		else // Non-numeric variables or values are considered to be zero for the purpose of the calculation.
+			return output_var->Assign(ATOI64(output_var->Contents()) * ATOI64(ARG2));  // Overload: Assigns an INT.
+
+	case ACT_DIV:
+	{
+		DETERMINE_NUMERIC_TYPES
+		IF_EITHER_IS_FLOAT
+		{
+			double ARG2_as_float = ATOF(ARG2);  // Since ATOF() returns double, at least on MSVC++ 7.x
+			if (!ARG2_as_float)
+				return LineError(ERR_DIVIDEBYZERO ERR_ABORT, FAIL, ARG2);
+			return output_var->Assign(ATOF(output_var->Contents()) / ARG2_as_float);  // Overload: Assigns a double.
+		}
+		else // Non-numeric variables or values are considered to be zero for the purpose of the calculation.
+		{
+			__int64 ARG2_as_int = ATOI64(ARG2);
+			if (!ARG2_as_int)
+				return LineError(ERR_DIVIDEBYZERO ERR_ABORT, FAIL, ARG2);
+			return output_var->Assign(ATOI64(output_var->Contents()) / ARG2_as_int);  // Overload: Assigns an INT.
+		}
+	}
+
+	case ACT_STRINGLEFT:
+		chars_to_extract = ATOI(ARG3); // Use 32-bit signed to detect negatives and fit it VarSizeType.
+		if (chars_to_extract < 0)
+			// For these we don't report an error, since it might be intentional for
+			// it to be called this way, in which case it will do nothing other than
+			// set the output var to be blank.
+			chars_to_extract = 0;
+		else
+		{
+			source_length = ArgLength(2); // Should be quick because Arg2 is an InputVar (except when it's a built-in var perhaps).
+			if (chars_to_extract > (int)source_length)
+				chars_to_extract = (int)source_length; // Assign() requires a length that's <= the actual length of the string.
+		}
+		// It will display any error that occurs.
+		return output_var->Assign(ARG2, chars_to_extract);
+
+	case ACT_STRINGRIGHT:
+		chars_to_extract = ATOI(ARG3); // Use 32-bit signed to detect negatives and fit it VarSizeType.
+		if (chars_to_extract < 0)
+			chars_to_extract = 0;
+		source_length = ArgLength(2);
+		if ((UINT)chars_to_extract > source_length)
+			chars_to_extract = (int)source_length;
+		// It will display any error that occurs:
+		return output_var->Assign(ARG2 + source_length - chars_to_extract, chars_to_extract);
+
+	case ACT_STRINGMID:
+		// v1.0.43.10: Allow chars-to-extract to be blank, which means "get all characters".
+		// However, for backward compatibility, examine the raw arg, not ARG4.  That way, any existing
+		// scripts that use a variable reference or expression that resolves to an empty string will
+		// have the parameter treated as zero (as in previous versions) rather than "all characters".
+		if (mArgc < 4 || !*mArg[3].text)
+			chars_to_extract = INT_MAX;
+		else
+		{
+			chars_to_extract = ATOI(ARG4); // Use 32-bit signed to detect negatives and fit it VarSizeType.
+			if (chars_to_extract < 1)
+				return output_var->Assign();  // Set it to be blank in this case.
+		}
+		start_char_num = ATOI(ARG3);
+		if (toupper(*ARG5) == 'L')  // Chars to the left of start_char_num will be extracted.
+		{
+			// TRANSLATE "L" MODE INTO THE EQUIVALENT NORMAL MODE:
+			if (start_char_num < 1) // Starting at a character number that is invalid for L mode.
+				return output_var->Assign();  // Blank seems most appropriate for the L option in this case.
+			start_char_num -= (chars_to_extract - 1);
+			if (start_char_num < 1)
+				// Reduce chars_to_extract to reflect the fact that there aren't enough chars
+				// to the left of start_char_num, so we'll extract only them:
+				chars_to_extract -= (1 - start_char_num);
+		}
+		// ABOVE HAS CONVERTED "L" MODE INTO NORMAL MODE, so "L" no longer needs to be considered below.
+		// UPDATE: The below is also needed for the L option to work correctly.  Older:
+		// It's somewhat debatable, but it seems best not to report an error in this and
+		// other cases.  The result here is probably enough to speak for itself, for script
+		// debugging purposes:
+		if (start_char_num < 1)
+			start_char_num = 1; // 1 is the position of the first char, unlike StringGetPos.
+		source_length = ArgLength(2); // This call seems unavoidable in both "L" mode and normal mode.
+		if (source_length < (UINT)start_char_num) // Source is empty or start_char_num lies to the right of the entire string.
+			return output_var->Assign(); // No chars exist there, so set it to be blank.
+		source_length -= (start_char_num - 1); // Fix for v1.0.44.14: Adjust source_length to be the length starting at start_char_num.  Otherwise, the length passed to Assign() could be too long, and it now expects an accurate length.
+		if ((UINT)chars_to_extract > source_length)
+			chars_to_extract = (int)source_length;
+		return output_var->Assign(ARG2 + start_char_num - 1, chars_to_extract);
+
+	case ACT_STRINGTRIMLEFT:
+		chars_to_extract = ATOI(ARG3); // Use 32-bit signed to detect negatives and fit it VarSizeType.
+		if (chars_to_extract < 0)
+			chars_to_extract = 0;
+		source_length = ArgLength(2);
+		if ((UINT)chars_to_extract > source_length) // This could be intentional, so don't display an error.
+			chars_to_extract = (int)source_length;
+		return output_var->Assign(ARG2 + chars_to_extract, (VarSizeType)(source_length - chars_to_extract));
+
+	case ACT_STRINGTRIMRIGHT:
+		chars_to_extract = ATOI(ARG3); // Use 32-bit signed to detect negatives and fit it VarSizeType.
+		if (chars_to_extract < 0)
+			chars_to_extract = 0;
+		source_length = ArgLength(2);
+		if ((UINT)chars_to_extract > source_length) // This could be intentional, so don't display an error.
+			chars_to_extract = (int)source_length;
+		return output_var->Assign(ARG2, (VarSizeType)(source_length - chars_to_extract)); // It already displayed any error.
+
+	case ACT_STRINGLOWER:
+	case ACT_STRINGUPPER:
+		output_var->Assign(ARG2, (VarSizeType)ArgLength(2));
+		if (*ARG3 && toupper(*ARG3) == 'T' && !*(ARG3 + 1)) // Convert to title case
+			StrToTitleCase(output_var->Contents());
+		else if (mActionType == ACT_STRINGLOWER)
+			CharLower(output_var->Contents());
+		else
+			CharUpper(output_var->Contents());
+		return OK;
+
+	case ACT_STRINGLEN:
+		return output_var->Assign((__int64)(ARGVARRAW2 && ARGVARRAW2->IsBinaryClip() // Load-time validation has ensured mArgc > 1.
+			? ARGVARRAW2->Length() + 1 // +1 to include the entire 4-byte terminator, which seems best in this case.
+			: ArgLength(2)));
+		// The above must be kept in sync with the StringLen() function elsewhere.
+
+	case ACT_STRINGGETPOS:
+	{
+		char *arg4 = ARG4;
+		int pos = -1; // Set default.
+		int occurrence_number;
+		if (*arg4 && strchr("LR", toupper(*arg4)))
+			occurrence_number = *(arg4 + 1) ? ATOI(arg4 + 1) : 1;
+		else
+			occurrence_number = 1;
+		// Intentionally allow occurrence_number to resolve to a negative, for scripting flexibililty:
+		if (occurrence_number > 0)
+		{
+			if (!*ARG3) // It might be intentional, in obscure cases, to search for the empty string.
+				pos = 0;
+				// Above: empty string is always found immediately (first char from left) regardless
+				// of whether the search will be conducted from the right.  This is because it's too
+				// rare to worry about giving it any more explicit handling based on search direction.
+			else
+			{
+				char *found, *haystack = ARG2, *needle = ARG3;
+				int offset = ATOI(ARG5); // v1.0.30.03
+				if (offset < 0)
+					offset = 0;
+				size_t haystack_length = offset ? ArgLength(2) : 1; // Avoids calling ArgLength() if no offset, in which case length isn't needed here.
+				if (offset < (int)haystack_length)
+				{
+					if (*arg4 == '1' || toupper(*arg4) == 'R') // Conduct the search starting at the right side, moving leftward.
+					{
+						char prev_char, *terminate_here;
+						if (offset)
+						{
+							terminate_here = haystack + haystack_length - offset;
+							prev_char = *terminate_here;
+							*terminate_here = '\0';  // Temporarily terminate for the duration of the search.
+						}
+						// Want it to behave like in this example: If searching for the 2nd occurrence of
+						// FF in the string FFFF, it should find the first two F's, not the middle two:
+						found = strrstr(haystack, needle, (StringCaseSenseType)g.StringCaseSense, occurrence_number);
+						if (offset)
+							*terminate_here = prev_char;
+					}
+					else
+					{
+						// Want it to behave like in this example: If searching for the 2nd occurrence of
+						// FF in the string FFFF, it should find position 3 (the 2nd pair), not position 2:
+						size_t needle_length = ArgLength(3);
+						int i;
+						for (i = 1, found = haystack + offset; ; ++i, found += needle_length)
+							if (!(found = g_strstr(found, needle)) || i == occurrence_number)
+								break;
+					}
+					if (found)
+						pos = (int)(found - haystack);
+					// else leave pos set to its default value, -1.
+				}
+				//else offset >= haystack_length, so no match is possible in either left or right mode.
+			}
+		}
+		g_ErrorLevel->Assign(pos < 0 ? ERRORLEVEL_ERROR : ERRORLEVEL_NONE);
+		return output_var->Assign(pos); // Assign() already displayed any error that may have occurred.
+	}
+
+	case ACT_STRINGREPLACE:
+		return StringReplace();
+
+	case ACT_TRANSFORM:
+		return Transform(ARG2, ARG3, ARG4);
+
+	case ACT_STRINGSPLIT:
+		return StringSplit(ARG1, ARG2, ARG3, ARG4);
+
+	case ACT_SPLITPATH:
+		return SplitPath(ARG1);
+
+	case ACT_SORT:
+		return PerformSort(ARG1, ARG2);
+
+	case ACT_PIXELSEARCH:
+		// ATOI() works on ARG7 (the color) because any valid BGR or RGB color has 0x00 in the high order byte:
+		return PixelSearch(ATOI(ARG3), ATOI(ARG4), ATOI(ARG5), ATOI(ARG6), ATOI(ARG7), ATOI(ARG8), ARG9, false);
+	case ACT_IMAGESEARCH:
+		return ImageSearch(ATOI(ARG3), ATOI(ARG4), ATOI(ARG5), ATOI(ARG6), ARG7);
+	case ACT_PIXELGETCOLOR:
+		return PixelGetColor(ATOI(ARG2), ATOI(ARG3), ARG4);
+
+	case ACT_SEND:
+	case ACT_SENDRAW:
+		SendKeys(ARG1, mActionType == ACT_SENDRAW, g.SendMode);
+		return OK;
+	case ACT_SENDINPUT: // Raw mode is supported via {Raw} in ARG1.
+		SendKeys(ARG1, false, g.SendMode == SM_INPUT_FALLBACK_TO_PLAY ? SM_INPUT_FALLBACK_TO_PLAY : SM_INPUT);
+		return OK;
+	case ACT_SENDPLAY: // Raw mode is supported via {Raw} in ARG1.
+		SendKeys(ARG1, false, SM_PLAY);
+		return OK;
+	case ACT_SENDEVENT:
+		SendKeys(ARG1, false, SM_EVENT);
+		return OK;
+
+	case ACT_CLICK:
+		return PerformClick(ARG1);
+	case ACT_MOUSECLICKDRAG:
+		return PerformMouse(mActionType, SEVEN_ARGS);
+	case ACT_MOUSECLICK:
+		return PerformMouse(mActionType, THREE_ARGS, "", "", ARG5, ARG7, ARG4, ARG6);
+	case ACT_MOUSEMOVE:
+		return PerformMouse(mActionType, "", ARG1, ARG2, "", "", ARG3, ARG4);
+
+	case ACT_MOUSEGETPOS:
+		return MouseGetPos(ATOU(ARG5));
+
 	case ACT_WINACTIVATE:
 	case ACT_WINACTIVATEBOTTOM:
 		if (WinActivate(g, FOUR_ARGS, mActionType == ACT_WINACTIVATEBOTTOM))
@@ -9479,89 +9900,6 @@ inline ResultType Line::Perform()
 		}
 		else
 			return PerformShowWindow(mActionType, FOUR_ARGS);
-	}
-
-	case ACT_INIREAD:
-		return IniRead(ARG2, ARG3, ARG4, ARG5);
-	case ACT_INIWRITE:
-		return IniWrite(FOUR_ARGS);
-	case ACT_INIDELETE:
-		// To preserve maximum compatibility with existing scripts, only send NULL if ARG3
-		// was explicitly omitted.  This is because some older scripts might rely on the
-		// fact that a blank ARG3 does not delete the entire section, but rather does
-		// nothing (that fact is untested):
-		return IniDelete(ARG1, ARG2, mArgc < 3 ? NULL : ARG3);
-
-	case ACT_REGREAD:
-		if (mArgc < 2 && g.mLoopRegItem) // Uses the registry loop's current item.
-			// If g.mLoopRegItem->name specifies a subkey rather than a value name, do this anyway
-			// so that it will set ErrorLevel to ERROR and set the output variable to be blank.
-			// Also, do not use RegCloseKey() on this, even if it's a remote key, since our caller handles that:
-			return RegRead(g.mLoopRegItem->root_key, g.mLoopRegItem->subkey, g.mLoopRegItem->name);
-		// Otherwise:
-		if (mArgc > 4 || RegConvertValueType(ARG2)) // The obsolete 5-param method (ARG2 is unused).
-			result = RegRead(root_key = RegConvertRootKey(ARG3, &is_remote_registry), ARG4, ARG5);
-		else
-			result = RegRead(root_key = RegConvertRootKey(ARG2, &is_remote_registry), ARG3, ARG4);
-		if (is_remote_registry && root_key) // Never try to close local root keys, which the OS keeps always-open.
-			RegCloseKey(root_key);
-		return result;
-	case ACT_REGWRITE:
-		if (mArgc < 2 && g.mLoopRegItem) // Uses the registry loop's current item.
-			// If g.mLoopRegItem->name specifies a subkey rather than a value name, do this anyway
-			// so that it will set ErrorLevel to ERROR.  An error will also be indicated if
-			// g.mLoopRegItem->type is an unsupported type:
-			return RegWrite(g.mLoopRegItem->type, g.mLoopRegItem->root_key, g.mLoopRegItem->subkey, g.mLoopRegItem->name, ARG1);
-		// Otherwise:
-		result = RegWrite(RegConvertValueType(ARG1), root_key = RegConvertRootKey(ARG2, &is_remote_registry)
-			, ARG3, ARG4, ARG5); // If RegConvertValueType(ARG1) yields REG_NONE, RegWrite() will set ErrorLevel rather than displaying a runtime error.
-		if (is_remote_registry && root_key) // Never try to close local root keys, which the OS keeps always-open.
-			RegCloseKey(root_key);
-		return result;
-	case ACT_REGDELETE:
-		if (mArgc < 1 && g.mLoopRegItem) // Uses the registry loop's current item.
-		{
-			// In this case, if the current reg item is a value, just delete it normally.
-			// But if it's a subkey, append it to the dir name so that the proper subkey
-			// will be deleted as the user intended:
-			if (g.mLoopRegItem->type == REG_SUBKEY)
-			{
-				snprintf(buf_temp, sizeof(buf_temp), "%s\\%s", g.mLoopRegItem->subkey, g.mLoopRegItem->name);
-				return RegDelete(g.mLoopRegItem->root_key, buf_temp, "");
-			}
-			else
-				return RegDelete(g.mLoopRegItem->root_key, g.mLoopRegItem->subkey, g.mLoopRegItem->name);
-		}
-		// Otherwise:
-		result = RegDelete(root_key = RegConvertRootKey(ARG1, &is_remote_registry), ARG2, ARG3);
-		if (is_remote_registry && root_key) // Never try to close local root keys, which the OS always keeps open.
-			RegCloseKey(root_key);
-		return result;
-
-	case ACT_OUTPUTDEBUG:
-		OutputDebugString(ARG1); // It does not return a value for the purpose of setting ErrorLevel.
-		return OK;
-
-	case ACT_SHUTDOWN:
-		return Util_Shutdown(ATOI(ARG1)) ? OK : FAIL; // Range of ARG1 is not validated in case other values are supported in the future.
-
-	case ACT_SLEEP:
-	{
-		// Only support 32-bit values for this command, since it seems unlikely anyone would to have
-		// it sleep more than 24.8 days or so.  It also helps performance on 32-bit hardware because
-		// MsgSleep() is so heavily called and checks the value of the first parameter frequently:
-		int sleep_time = ATOI(ARG1); // Keep it signed vs. unsigned for backward compatibility (e.g. scripts that do Sleep -1).
-
-		// Do a true sleep on Win9x because the MsgSleep() method is very inaccurate on Win9x
-		// for some reason (a MsgSleep(1) causes a sleep between 10 and 55ms, for example).
-		// But only do so for short sleeps, for which the user has a greater expectation of
-		// accuracy.  UPDATE: Do not change the 25 below without also changing it in Critical's
-		// documentation.
-		if (sleep_time < 25 && sleep_time > 0 && g_os.IsWin9x()) // Ordered for short-circuit performance. v1.0.38.05: Added "sleep_time > 0" so that Sleep -1/0 will work the same on Win9x as it does on other OSes.
-			Sleep(sleep_time);
-		else
-			MsgSleep(sleep_time);
-		return OK;
 	}
 
 	case ACT_ENVGET:
@@ -9629,237 +9967,20 @@ inline ResultType Line::Perform()
 	case ACT_RUN: // Be sure to pass NULL for 2nd param.
 		if (strcasestr(ARG3, "UseErrorLevel"))
 			return g_ErrorLevel->Assign(g_script.ActionExec(ARG1, NULL, ARG2, false, ARG3, NULL, true
-				, true, ResolveVarOfArg(3)) ? ERRORLEVEL_NONE : "ERROR");
+				, true, ARGVAR4) ? ERRORLEVEL_NONE : "ERROR");
 			// The special string ERROR is used, rather than a number like 1, because currently
 			// RunWait might in the future be able to return any value, including 259 (STATUS_PENDING).
 		else // If launch fails, display warning dialog and terminate current thread.
-			return g_script.ActionExec(ARG1, NULL, ARG2, true, ARG3, NULL, false, true, ResolveVarOfArg(3));
+			return g_script.ActionExec(ARG1, NULL, ARG2, true, ARG3, NULL, false, true, ARGVAR4);
 
 	case ACT_RUNWAIT:
-		if (strcasestr(ARG3, "UseErrorLevel"))
-		{
-			if (!g_script.ActionExec(ARG1, NULL, ARG2, false, ARG3, &running_process, true, true, ResolveVarOfArg(3)))
-				return g_ErrorLevel->Assign("ERROR"); // See above comment for explanation.
-			//else fall through to the waiting-phase of the operation.
-			// Above: The special string ERROR is used, rather than a number like 1, because currently
-			// RunWait might in the future be able to return any value, including 259 (STATUS_PENDING).
-		}
-		else // If launch fails, display warning dialog and terminate current thread.
-			if (!g_script.ActionExec(ARG1, NULL, ARG2, true, ARG3, &running_process, false, true, ResolveVarOfArg(3)))
-				return FAIL;
-			//else fall through to the waiting-phase of the operation.
-
 	case ACT_CLIPWAIT:
 	case ACT_KEYWAIT:
 	case ACT_WINWAIT:
 	case ACT_WINWAITCLOSE:
 	case ACT_WINWAITACTIVE:
 	case ACT_WINWAITNOTACTIVE:
-	{
-		bool wait_indefinitely;
-		int sleep_duration;
-		DWORD start_time;
-		// For ACT_KEYWAIT:
-		bool wait_for_keydown;
-		KeyStateTypes key_state_type;
-		JoyControls joy;
-		int joystick_id;
-		ExprTokenType token;
-		char *alloca_buf = (char *)_alloca(LINE_SIZE);
-
-		if (mActionType == ACT_KEYWAIT)
-		{
-			if (   !(vk = TextToVK(ARG1))   )
-			{
-				if (   !(joy = (JoyControls)ConvertJoy(ARG1, &joystick_id))   ) // Not a valid key name.
-					// Indicate immediate timeout (if timeout was specified) or error.
-					return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
-				if (!IS_JOYSTICK_BUTTON(joy)) // Currently, only buttons are supported.
-					return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
-			}
-			// Set defaults:
-			wait_for_keydown = false;  // The default is to wait for the key to be released.
-			key_state_type = KEYSTATE_PHYSICAL;  // Since physical is more often used.
-			wait_indefinitely = true;
-			sleep_duration = 0;
-			for (char *cp = ARG2; *cp; ++cp)
-			{
-				switch(toupper(*cp))
-				{
-				case 'D':
-					wait_for_keydown = true;
-					break;
-				case 'L':
-					key_state_type = KEYSTATE_LOGICAL;
-					break;
-				case 'T':
-					// Although ATOF() supports hex, it's been documented in the help file that hex should
-					// not be used (see comment above) so if someone does it anyway, some option letters
-					// might be misinterpreted:
-					wait_indefinitely = false;
-					sleep_duration = (int)(ATOF(cp + 1) * 1000);
-					break;
-				}
-			}
-			// The following must be set for ScriptGetJoyState():
-			token.symbol = SYM_STRING;
-			token.marker = alloca_buf;
-		}
-		else if (   (mActionType != ACT_RUNWAIT && mActionType != ACT_CLIPWAIT && *ARG3)
-			|| (mActionType == ACT_CLIPWAIT && *ARG1)   )
-		{
-			// Since the param containing the timeout value isn't blank, it must be numeric,
-			// otherwise, the loading validation would have prevented the script from loading.
-			wait_indefinitely = false;
-			sleep_duration = (int)(ATOF(mActionType == ACT_CLIPWAIT ? ARG1 : ARG3) * 1000); // Can be zero.
-			if (sleep_duration < 1)
-				// Waiting 500ms in place of a "0" seems more useful than a true zero, which
-				// doens't need to be supported because it's the same thing as something like
-				// "IfWinExist".  A true zero for clipboard would be the same as
-				// "IfEqual, clipboard, , xxx" (though admittedly it's higher overhead to
-				// actually fetch the contents of the clipboard).
-				sleep_duration = 500;
-		}
-		else
-		{
-			wait_indefinitely = true;
-			sleep_duration = 0; // Just to catch any bugs.
-		}
-
-		if (mActionType != ACT_RUNWAIT)
-			g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Set default ErrorLevel to be possibly overridden later on.
-
-		bool any_clipboard_format = (mActionType == ACT_CLIPWAIT && ATOI(ARG2) == 1);
-
-		// Right before starting the wait-loop, make a copy of our args using the stack
-		// space in our recursion layer.  This is done in case other hotkey subroutine(s)
-		// are launched while we're waiting here, which might cause our args to be overwritten
-		// if any of them happen to be in the Deref buffer:
-		char *arg[MAX_ARGS], *marker;
-		int i, space_remaining;
-		for (i = 0, space_remaining = LINE_SIZE, marker = alloca_buf; i < mArgc; ++i)
-		{
-			if (!space_remaining) // Realistically, should never happen.
-				arg[i] = "";
-			else
-			{
-				arg[i] = marker;  // Point it to its place in the buffer.
-				strlcpy(marker, sArgDeref[i], space_remaining); // Make the copy.
-				marker += strlen(marker) + 1;  // +1 for the zero terminator of each arg.
-				space_remaining = (int)(LINE_SIZE - (marker - alloca_buf));
-			}
-		}
-
-		for (start_time = GetTickCount();;) // start_time is initialized unconditionally for use with v1.0.30.02's new logging feature further below.
-		{ // Always do the first iteration so that at least one check is done.
-			switch(mActionType)
-			{
-			case ACT_WINWAIT:
-				#define SAVED_WIN_ARGS SAVED_ARG1, SAVED_ARG2, SAVED_ARG4, SAVED_ARG5
-				if (WinExist(g, SAVED_WIN_ARGS, false, true))
-				{
-					DoWinDelay;
-					return OK;
-				}
-				break;
-			case ACT_WINWAITCLOSE:
-				if (!WinExist(g, SAVED_WIN_ARGS))
-				{
-					DoWinDelay;
-					return OK;
-				}
-				break;
-			case ACT_WINWAITACTIVE:
-				if (WinActive(g, SAVED_WIN_ARGS, true))
-				{
-					DoWinDelay;
-					return OK;
-				}
-				break;
-			case ACT_WINWAITNOTACTIVE:
-				if (!WinActive(g, SAVED_WIN_ARGS, true))
-				{
-					DoWinDelay;
-					return OK;
-				}
-				break;
-			case ACT_CLIPWAIT:
-				// Seems best to consider CF_HDROP to be a non-empty clipboard, since we
-				// support the implicit conversion of that format to text:
-				if (any_clipboard_format)
-				{
-					if (CountClipboardFormats())
-						return OK;
-				}
-				else
-					if (IsClipboardFormatAvailable(CF_TEXT) || IsClipboardFormatAvailable(CF_HDROP))
-						return OK;
-				break;
-			case ACT_KEYWAIT:
-				if (vk) // Waiting for key or mouse button, not joystick.
-				{
-					if (ScriptGetKeyState(vk, key_state_type) == wait_for_keydown)
-						return OK;
-				}
-				else // Waiting for joystick button
-				{
-					if ((bool)ScriptGetJoyState(joy, joystick_id, token, false) == wait_for_keydown)
-						return OK;
-				}
-				break;
-			case ACT_RUNWAIT:
-				// Pretty nasty, but for now, nothing is done to prevent an infinite loop.
-				// In the future, maybe OpenProcess() can be used to detect if a process still
-				// exists (is there any other way?):
-				// MSDN: "Warning: If a process happens to return STILL_ACTIVE (259) as an error code,
-				// applications that test for this value could end up in an infinite loop."
-				if (running_process)
-					GetExitCodeProcess(running_process, &exit_code);
-				else // it can be NULL in the case of launching things like "find D:\" or "www.yahoo.com"
-					exit_code = 0;
-				if (exit_code != STATUS_PENDING) // STATUS_PENDING == STILL_ACTIVE
-				{
-					if (running_process)
-						CloseHandle(running_process);
-					// Use signed vs. unsigned, since that is more typical?  No, it seems better
-					// to use unsigned now that script variables store 64-bit ints.  This is because
-					// GetExitCodeProcess() yields a DWORD, implying that the value should be unsigned.
-					// Unsigned also is more useful in cases where an app returns a (potentially large)
-					// count of something as its result.  However, if this is done, it won't be easy
-					// to check against a return value of -1, for example, which I suspect many apps
-					// return.  AutoIt3 (and probably 2) use a signed int as well, so that is another
-					// reason to keep it this way:
-					return g_ErrorLevel->Assign((int)exit_code);
-				}
-				break;
-			}
-
-			// Must cast to int or any negative result will be lost due to DWORD type:
-			if (wait_indefinitely || (int)(sleep_duration - (GetTickCount() - start_time)) > SLEEP_INTERVAL_HALF)
-			{
-				if (MsgSleep(INTERVAL_UNSPECIFIED)) // INTERVAL_UNSPECIFIED performs better.
-				{
-					// v1.0.30.02: Since MsgSleep() launched and returned from at least one new thread, put the
-					// current waiting line into the line-log again to make it easy to see what the current
-					// thread is doing.  This is especially useful for figuring out which subroutine is holding
-					// another thread interrupted beneath it.  For example, if a timer gets interrupted by
-					// a hotkey that has an indefinite WinWait, and that window never appears, this will allow
-					// the user to find out the culprit thread by showing its line in the log (and usually
-					// it will appear as the very last line, since usually the script is idle and thus the
-					// currently active thread is the one that's still waiting for the window).
-					sLog[sLogNext] = this;
-					sLogTick[sLogNext++] = start_time; // Store a special value so that Line::LogToText() can report that its "still waiting" from earlier.
-					if (sLogNext >= LINE_LOG_SIZE)
-						sLogNext = 0;
-					// The lines above are the similar to those used in ExecUntil(), so the two should be
-					// maintained together.
-				}
-			}
-			else // Done waiting.
-				return g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Since it timed out, we override the default with this.
-		} // for()
-		//break; // Never executed.
-	}
+		return PerformWait();
 
 	case ACT_WINMOVE:
 		return mArgc > 2 ? WinMove(EIGHT_ARGS) : WinMove("", "", ARG1, ARG2);
@@ -9918,14 +10039,6 @@ inline ResultType Line::Perform()
 
 	case ACT_SYSGET:
 		return SysGet(ARG2, ARG3);
-
-	case ACT_PIXELSEARCH:
-		// ATOI() works on ARG7 (the color) because any valid BGR or RGB color has 0x00 in the high order byte:
-		return PixelSearch(ATOI(ARG3), ATOI(ARG4), ATOI(ARG5), ATOI(ARG6), ATOI(ARG7), ATOI(ARG8), ARG9, false);
-	case ACT_IMAGESEARCH:
-		return ImageSearch(ATOI(ARG3), ATOI(ARG4), ATOI(ARG5), ATOI(ARG6), ARG7);
-	case ACT_PIXELGETCOLOR:
-		return PixelGetColor(ATOI(ARG2), ATOI(ARG3), ARG4);
 
 	case ACT_WINMINIMIZEALL:
 		PostMessage(FindWindow("Shell_TrayWnd", NULL), WM_COMMAND, 419, 0);
@@ -10070,284 +10183,12 @@ inline ResultType Line::Perform()
 		//else nonexistent group: By design, do nothing.
 		return OK;
 
-	case ACT_TRANSFORM:
-		return Transform(ARG2, ARG3, ARG4);
-
-	case ACT_STRINGLEFT:
-		if (   !(output_var = ResolveVarOfArg(0))   )
-			return FAIL;
-		chars_to_extract = ATOI(ARG3); // Use 32-bit signed to detect negatives and fit it VarSizeType.
-		if (chars_to_extract < 0)
-			// For these we don't report an error, since it might be intentional for
-			// it to be called this way, in which case it will do nothing other than
-			// set the output var to be blank.
-			chars_to_extract = 0;
-		// It will display any error that occurs.
-		return output_var->Assign(ARG2, (VarSizeType)strnlen(ARG2, chars_to_extract));
-
-	case ACT_STRINGRIGHT:
-		if (   !(output_var = ResolveVarOfArg(0))   )
-			return FAIL;
-		chars_to_extract = ATOI(ARG3); // Use 32-bit signed to detect negatives and fit it VarSizeType.
-		if (chars_to_extract < 0)
-			chars_to_extract = 0;
-		source_length = ArgLength(2);
-		if ((UINT)chars_to_extract > source_length)
-			chars_to_extract = (int)source_length;
-		// It will display any error that occurs:
-		return output_var->Assign(ARG2 + source_length - chars_to_extract, chars_to_extract);
-
-	case ACT_STRINGMID:
-		if (   !(output_var = ResolveVarOfArg(0))   )
-			return FAIL;
-		// v1.0.43.10: Allow chars-to-extract to be blank, which means "get all characters".
-		// However, for backward compatibility, examine the raw arg, not ARG4.  That way, any existing
-		// scripts that use a variable reference or expression that resolves to an empty string will
-		// have the parameter treated as zero (as in previous versions) rather than "all characters".
-		if (mArgc < 4 || !*mArg[3].text)
-			chars_to_extract = INT_MAX;
-		else
-		{
-			chars_to_extract = ATOI(ARG4); // Use 32-bit signed to detect negatives and fit it VarSizeType.
-			if (chars_to_extract < 1)
-				return output_var->Assign();  // Set it to be blank in this case.
-		}
-		start_char_num = ATOI(ARG3);
-		if (toupper(*ARG5) == 'L')  // Chars to the left of start_char_num will be extracted.
-		{
-			// TRANSLATE "L" MODE INTO THE EQUIVALENT NORMAL MODE:
-			if (start_char_num < 1) // Starting at a character number that is invalid for L mode.
-				return output_var->Assign();  // Blank seems most appropriate for the L option in this case.
-			start_char_num -= (chars_to_extract - 1);
-			if (start_char_num < 1)
-				// Reduce chars_to_extract to reflect the fact that there aren't enough chars
-				// to the left of start_char_num, so we'll extract only them:
-				chars_to_extract -= (1 - start_char_num);
-		}
-		// ABOVE HAS CONVERTED "L" MODE INTO NORMAL MODE, so "L" no longer needs to be considered below.
-		// UPDATE: The below is also needed for the L option to work correctly.  Older:
-		// It's somewhat debatable, but it seems best not to report an error in this and
-		// other cases.  The result here is probably enough to speak for itself, for script
-		// debugging purposes:
-		if (start_char_num < 1)
-			start_char_num = 1; // 1 is the position of the first char, unlike StringGetPos.
-		source_length = ArgLength(2); // This call seems unavoidable in both "L" mode and normal mode.
-		if (source_length < (UINT)start_char_num) // Source is empty or start_char_num lies to the right of the entire string.
-			return output_var->Assign(); // No chars exist there, so set it to be blank.
-		source_length -= (start_char_num - 1); // Fix for v1.0.44.14: Adjust source_length to be the length starting at start_char_num.  Otherwise, the length passed to Assign() could be too long, and it now expects an accurate length.
-		if ((UINT)chars_to_extract > source_length)
-			chars_to_extract = (int)source_length;
-		return output_var->Assign(ARG2 + start_char_num - 1, chars_to_extract);
-
-	case ACT_STRINGTRIMLEFT:
-		if (   !(output_var = ResolveVarOfArg(0))   )
-			return FAIL;
-		chars_to_extract = ATOI(ARG3); // Use 32-bit signed to detect negatives and fit it VarSizeType.
-		if (chars_to_extract < 0)
-			chars_to_extract = 0;
-		source_length = ArgLength(2);
-		if ((UINT)chars_to_extract > source_length) // This could be intentional, so don't display an error.
-			chars_to_extract = (int)source_length;
-		return output_var->Assign(ARG2 + chars_to_extract, (VarSizeType)(source_length - chars_to_extract));
-
-	case ACT_STRINGTRIMRIGHT:
-		if (   !(output_var = ResolveVarOfArg(0))   )
-			return FAIL;
-		chars_to_extract = ATOI(ARG3); // Use 32-bit signed to detect negatives and fit it VarSizeType.
-		if (chars_to_extract < 0)
-			chars_to_extract = 0;
-		source_length = ArgLength(2);
-		if ((UINT)chars_to_extract > source_length) // This could be intentional, so don't display an error.
-			chars_to_extract = (int)source_length;
-		return output_var->Assign(ARG2, (VarSizeType)(source_length - chars_to_extract)); // It already displayed any error.
-
-	case ACT_STRINGLOWER:
-	case ACT_STRINGUPPER:
-		if (   !(output_var = ResolveVarOfArg(0))   )
-			return FAIL;
-		space_needed = (VarSizeType)(ArgLength(2) + 1);
-		// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
-		// this call will set up the clipboard for writing:
-		if (output_var->Assign(NULL, space_needed - 1) != OK)
-			return FAIL;
-		// Copy the input variable's text directly into the output variable:
-		strlcpy(output_var->Contents(), ARG2, space_needed);
-		if (*ARG3 && toupper(*ARG3) == 'T' && !*(ARG3 + 1)) // Convert to title case
-			StrToTitleCase(output_var->Contents());
-		else if (mActionType == ACT_STRINGLOWER)
-			CharLower(output_var->Contents());
-		else
-			CharUpper(output_var->Contents());
-		return output_var->Close();  // In case it's the clipboard.
-
-	case ACT_STRINGLEN:
-		if (   !(output_var = ResolveVarOfArg(0))   )
-			return FAIL;
-		return output_var->Assign((__int64)(sArgVar[1] && sArgVar[1]->IsBinaryClip() // Load-time validation has ensured mArgc > 1.
-			? sArgVar[1]->Length() + 1 // +1 to include the entire 4-byte terminator, which seems best in this case.
-			: ArgLength(2)));
-		// The above must be kept in sync with the StringLen() function elsewhere.
-
-	case ACT_STRINGGETPOS:
-	{
-		if (   !(output_var = ResolveVarOfArg(0))   )
-			return FAIL;
-		char *arg4 = ARG4;
-		int pos = -1; // Set default.
-		int occurrence_number;
-		if (*arg4 && strchr("LR", toupper(*arg4)))
-			occurrence_number = *(arg4 + 1) ? ATOI(arg4 + 1) : 1;
-		else
-			occurrence_number = 1;
-		// Intentionally allow occurrence_number to resolve to a negative, for scripting flexibililty:
-		if (occurrence_number > 0)
-		{
-			if (!*ARG3) // It might be intentional, in obscure cases, to search for the empty string.
-				pos = 0;
-				// Above: empty string is always found immediately (first char from left) regardless
-				// of whether the search will be conducted from the right.  This is because it's too
-				// rare to worry about giving it any more explicit handling based on search direction.
-			else
-			{
-				char *found, *haystack = ARG2, *needle = ARG3;
-				int offset = ATOI(ARG5); // v1.0.30.03
-				if (offset < 0)
-					offset = 0;
-				size_t haystack_length = offset ? ArgLength(2) : 1; // Avoids calling ArgLength() if no offset, in which case length isn't needed here.
-				if (offset < (int)haystack_length)
-				{
-					if (*arg4 == '1' || toupper(*arg4) == 'R') // Conduct the search starting at the right side, moving leftward.
-					{
-						char prev_char, *terminate_here;
-						if (offset)
-						{
-							terminate_here = haystack + haystack_length - offset;
-							prev_char = *terminate_here;
-							*terminate_here = '\0';  // Temporarily terminate for the duration of the search.
-						}
-						// Want it to behave like in this example: If searching for the 2nd occurrence of
-						// FF in the string FFFF, it should find the first two F's, not the middle two:
-						found = strrstr(haystack, needle, (StringCaseSenseType)g.StringCaseSense, occurrence_number);
-						if (offset)
-							*terminate_here = prev_char;
-					}
-					else
-					{
-						// Want it to behave like in this example: If searching for the 2nd occurrence of
-						// FF in the string FFFF, it should find position 3 (the 2nd pair), not position 2:
-						size_t needle_length = ArgLength(3);
-						int i;
-						for (i = 1, found = haystack + offset; ; ++i, found += needle_length)
-							if (!(found = g_strstr(found, needle)) || i == occurrence_number)
-								break;
-					}
-					if (found)
-						pos = (int)(found - haystack);
-					// else leave pos set to its default value, -1.
-				}
-				//else offset >= haystack_length, so no match is possible in either left or right mode.
-			}
-		}
-		g_ErrorLevel->Assign(pos < 0 ? ERRORLEVEL_ERROR : ERRORLEVEL_NONE);
-		return output_var->Assign(pos); // Assign() already displayed any error that may have occurred.
-	}
-
-	case ACT_STRINGREPLACE:
-	{
-		if (   !(output_var = ResolveVarOfArg(0))   )
-			return FAIL;
-		source_length = ArgLength(2);
-		space_needed = (VarSizeType)source_length + 1;  // Set default, or starting value for accumulation.
-		VarSizeType final_space_needed = space_needed;
-		bool do_replace = *ARG2 && *ARG3; // i.e. don't allow replacement of the empty string.
-		bool always_use_slow_mode = strcasestr(ARG5, "AllSlow");
-		bool alternate_error_level = strcasestr(ARG5, "UseErrorLevel");
-		// Both AllSlow and UseErrorLevel imply "replace all":
-		bool replace_all = always_use_slow_mode || alternate_error_level || StrChrAny(ARG5, "1aA");
-		DWORD found_count = 0; // Set default.
-
-		if (do_replace) 
-		{
-			// Note: It's okay if Search String is a subset of Replace String.
-			// Example: Replacing all occurrences of "a" with "abc" would be
-			// safe the way this StrReplaceAll() works (other implementations
-			// might cause on infinite loop).
-			size_t search_str_len = ArgLength(3);
-			size_t replace_str_len = ArgLength(4);
-			char *found_pos;
-			for (found_pos = ARG2;;)
-			{
-				if (!(found_pos = g_strstr(found_pos, ARG3)))
-					break;
-				++found_count;
-				// Jump to the end of the string that was just found, in preparation
-				// for the next iteration:
-				found_pos += search_str_len;
-				if (!replace_all) // Replacing only one, so we're done.
-					break;
-			}
-			final_space_needed += (int)found_count * (int)(replace_str_len - search_str_len); // Must cast to int in case value is negative.
-			// Use the greater of the two because temporarily need more space in the output
-			// var, because that is where the replacement will be conducted:
-			if (final_space_needed > space_needed)
-				space_needed = final_space_needed;
-		}
-
-		// For compatibility with AutoIt2, whose behavior is: "If the search string cannot be found, the
-		// contents of <Output Variable> will be the same as <Input Variable>."
-		if (alternate_error_level)
-			g_ErrorLevel->Assign(found_count);
-		else
-			g_ErrorLevel->Assign(found_count ? ERRORLEVEL_NONE : ERRORLEVEL_ERROR); // So that it behaves like AutoIt2.
-	
-		// Handle the output parameter.  This section is similar to that in PerformAssign().
-		// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
-		// this call will set up the clipboard for writing:
-		if (output_var->Assign(NULL, space_needed - 1) != OK)
-			return FAIL;
-		// Fetch the text directly into the var:
-		if (space_needed > 1)
-			strlcpy(output_var->Contents(), ARG2, space_needed);
-		//else don't put anything into Contents() because the call to Assign() already set it up properly to be blank.
-		output_var->Length() = final_space_needed - 1;  // This will be the length after replacement is done.
-
-		// Now that we've put a copy of the Input Variable into the Output Variable,
-		// and ensured that the output var is large enough to holder either
-		// the original or the new version (whichever is greatest), we can actually
-		// do the replacement.
-		if (do_replace)
-			if (replace_all)
-				// Note: The current implementation of StrReplaceAll() should be
-				// able to handle any conceivable inputs without causing an infinite
-				// loop due to empty string (since we already checked for the empty
-				// string above) and without going infinite due to finding the
-				// search string inside of newly-inserted replace strings (e.g.
-				// replacing all occurrences of b with bcd would not keep finding
-				// b in the newly inserted bcd, infinitely):
-				StrReplaceAll(output_var->Contents(), ARG3, ARG4, always_use_slow_mode
-					, (StringCaseSenseType)g.StringCaseSense, found_count);
-			else
-				StrReplace(output_var->Contents(), ARG3, ARG4, (StringCaseSenseType)g.StringCaseSense); // Don't pass output_var->Length() because it's not up-to-date yet.
-
-		// Consider the above to have been always successful unless the below returns an error:
-		return output_var->Close();  // In case it's the clipboard.
-	}
-
-	case ACT_STRINGSPLIT:
-		return StringSplit(ARG1, ARG2, ARG3, ARG4);
-
-	case ACT_SPLITPATH:
-		return SplitPath(ARG1);
-
-	case ACT_SORT:
-		return PerformSort(ARG1, ARG2);
-
 	case ACT_GETKEYSTATE:
 		return GetKeyJoyState(ARG2, ARG3);
 
 	case ACT_RANDOM:
 	{
-		if (   !(output_var = ResolveVarOfArg(0))   ) // v1.0.42.03: Special mode to change the seed.
+		if (!output_var) // v1.0.42.03: Special mode to change the seed.
 		{
 			init_genrand(ATOU(ARG2)); // It's documented that an unsigned 32-bit number is required.
 			return OK;
@@ -10389,30 +10230,6 @@ inline ResultType Line::Perform()
 				% ((__int64)rand_max - rand_min + 1)) + rand_min)   );
 		}
 	}
-
-	case ACT_ASSIGN:
-		// Note: This line's args have not yet been dereferenced in this case (i.e. ExpandArgs() hasn't been
-		// called).  The below function will handle that if it is needed.
-		return PerformAssign();  // It will report any errors for us.
-
-	case ACT_ASSIGNEXPR:
-		// sArgVar is used to enhance performance, which would otherwise be poor for dynamic variables
-		// such as Var:=Array%i% because Array%i% would have to be resolved twice (once here and once
-		// previously by ExpandArgs()) just to find out if it's IsBinaryClip()).
-		if (mArgc > 1 && sArgVar[1] && (sArgVar[1]->IsBinaryClip() || sArgVar[1]->Type() == VAR_CLIPBOARDALL)) // Relies on short-circuit boolean order.
-			return PerformAssign();  // Performance should be good in this case since IsBinaryClip() implies a single isolated deref, which thus would never have been copied into the deref buffer.
-		// Note that simple assignments such as Var:="xyz" or Var:=Var2 are resolved to be
-		// non-expressions at load-time.  In these cases, ARG2 would have been expanded
-		// normally rather than evaluated as an expression.
-		if (   !(output_var = ResolveVarOfArg(0))   )
-			return FAIL;
-		return output_var->Assign(ARG2); // ARG2 now contains the evaluated result of the expression.
-
-	case ACT_FUNCTIONCALL:
-		// Nothing needs to be done because the expression in ARG1 (which is the only arg) has already
-		// been evaluated and its functions and subfunctions called, e.g. the following line:
-		// fn(123, "string", var, fn2(y))
-		return OK;
 
 	case ACT_DRIVESPACEFREE:
 		return DriveSpace(ARG2, true);
@@ -10553,148 +10370,6 @@ inline ResultType Line::Perform()
 	case ACT_FILECREATESHORTCUT:
 		return FileCreateShortcut(NINE_ARGS);
 
-	// Like AutoIt2, if either output_var or ARG1 aren't purely numeric, they
-	// will be considered to be zero for all of the below math functions:
-	case ACT_ADD:
-		if (   !(output_var = ResolveVarOfArg(0))   )
-			return FAIL;
-
-		#undef DETERMINE_NUMERIC_TYPES
-		#define DETERMINE_NUMERIC_TYPES \
-			value_is_pure_numeric = IsPureNumeric(ARG2, true, false, true, true);\
-			var_is_pure_numeric = IsPureNumeric(output_var->Contents(), true, false, true, true);
-
-		// Some performance can be gained by relying on the fact that short-circuit boolean
-		// can skip the "var_is_pure_numeric" check whenever value_is_pure_numeric == PURE_FLOAT.
-		// This is because var_is_pure_numeric is never directly needed here (unlike EvaluateCondition()).
-		// However, benchmarks show that this makes such a small difference that it's not worth the
-		// loss of maintainability and the slightly larger code size due to macro expansion:
-		//#undef IF_EITHER_IS_FLOAT
-		//#define IF_EITHER_IS_FLOAT if (value_is_pure_numeric == PURE_FLOAT \
-		//	|| IsPureNumeric(output_var->Contents(), true, false, true, true) == PURE_FLOAT)
-
-		DETERMINE_NUMERIC_TYPES
-
-		if (*ARG3 && strchr("SMHD", toupper(*ARG3))) // the command is being used to add a value to a date-time.
-		{
-			if (!value_is_pure_numeric) // It's considered to be zero, so the output_var is left unchanged:
-				return OK;
-			else
-			{
-				// Use double to support a floating point value for days, hours, minutes, etc:
-				double nUnits = ATOF(ARG2);  // ATOF() returns a double, at least on MSVC++ 7.x
-				FILETIME ft, ftNowUTC;
-				if (*output_var->Contents())
-				{
-					if (!YYYYMMDDToFileTime(output_var->Contents(), ft))
-						return output_var->Assign(""); // Set to blank to indicate the problem.
-				}
-				else // The output variable is currently blank, so substitute the current time for it.
-				{
-					GetSystemTimeAsFileTime(&ftNowUTC);
-					FileTimeToLocalFileTime(&ftNowUTC, &ft);  // Convert UTC to local time.
-				}
-				// Convert to 10ths of a microsecond (the units of the FILETIME struct):
-				switch (toupper(*ARG3))
-				{
-				case 'S': // Seconds
-					nUnits *= (double)10000000;
-					break;
-				case 'M': // Minutes
-					nUnits *= ((double)10000000 * 60);
-					break;
-				case 'H': // Hours
-					nUnits *= ((double)10000000 * 60 * 60);
-					break;
-				case 'D': // Days
-					nUnits *= ((double)10000000 * 60 * 60 * 24);
-					break;
-				}
-				// Convert ft struct to a 64-bit variable (maybe there's some way to avoid these conversions):
-				ULARGE_INTEGER ul;
-				ul.LowPart = ft.dwLowDateTime;
-				ul.HighPart = ft.dwHighDateTime;
-				// Add the specified amount of time to the result value:
-				ul.QuadPart += (__int64)nUnits;  // Seems ok to cast/truncate in light of the *=10000000 above.
-				// Convert back into ft struct:
-				ft.dwLowDateTime = ul.LowPart;
-				ft.dwHighDateTime = ul.HighPart;
-				return output_var->Assign(FileTimeToYYYYMMDD(buf_temp, ft, false));
-			}
-		}
-		else // The command is being used to do normal math (not date-time).
-		{
-			IF_EITHER_IS_FLOAT
-				return output_var->Assign(ATOF(output_var->Contents()) + ATOF(ARG2));  // Overload: Assigns a double.
-			else // Non-numeric variables or values are considered to be zero for the purpose of the calculation.
-				return output_var->Assign(ATOI64(output_var->Contents()) + ATOI64(ARG2));  // Overload: Assigns an int.
-		}
-		return OK;  // Never executed.
-
-	case ACT_SUB:
-		if (   !(output_var = ResolveVarOfArg(0))   )
-			return FAIL;
-
-		if (*ARG3 && strchr("SMHD", toupper(*ARG3))) // the command is being used to subtract date-time values.
-		{
-			bool failed;
-			// If either ARG2 or output_var->Contents() is blank, it will default to the current time:
-			__int64 time_until = YYYYMMDDSecondsUntil(ARG2, output_var->Contents(), failed);
-			if (failed) // Usually caused by an invalid component in the date-time string.
-				return output_var->Assign("");
-			switch (toupper(*ARG3))
-			{
-			// Do nothing in the case of 'S' (seconds).  Otherwise:
-			case 'M': time_until /= 60; break; // Minutes
-			case 'H': time_until /= 60 * 60; break; // Hours
-			case 'D': time_until /= 60 * 60 * 24; break; // Days
-			}
-			// Only now that any division has been performed (to reduce the magnitude of
-			// time_until) do we cast down into an int, which is the standard size
-			// used for non-float results (the result is always non-float for subtraction
-			// of two date-times):
-			return output_var->Assign(time_until); // Assign as signed 64-bit.
-		}
-		else
-		{
-			DETERMINE_NUMERIC_TYPES
-			IF_EITHER_IS_FLOAT
-				return output_var->Assign(ATOF(output_var->Contents()) - ATOF(ARG2));  // Overload: Assigns a double.
-			else // Non-numeric variables or values are considered to be zero for the purpose of the calculation.
-				return output_var->Assign(ATOI64(output_var->Contents()) - ATOI64(ARG2));  // Overload: Assigns an INT.
-		}
-		// All paths above return.
-
-	case ACT_MULT:
-		if (   !(output_var = ResolveVarOfArg(0))   )
-			return FAIL;
-		DETERMINE_NUMERIC_TYPES
-		IF_EITHER_IS_FLOAT
-			return output_var->Assign(ATOF(output_var->Contents()) * ATOF(ARG2));  // Overload: Assigns a double.
-		else // Non-numeric variables or values are considered to be zero for the purpose of the calculation.
-			return output_var->Assign(ATOI64(output_var->Contents()) * ATOI64(ARG2));  // Overload: Assigns an INT.
-
-	case ACT_DIV:
-	{
-		if (   !(output_var = ResolveVarOfArg(0))   )
-			return FAIL;
-		DETERMINE_NUMERIC_TYPES
-		IF_EITHER_IS_FLOAT
-		{
-			double ARG2_as_float = ATOF(ARG2);  // Since ATOF() returns double, at least on MSVC++ 7.x
-			if (!ARG2_as_float)
-				return LineError(ERR_DIVIDEBYZERO ERR_ABORT, FAIL, ARG2);
-			return output_var->Assign(ATOF(output_var->Contents()) / ARG2_as_float);  // Overload: Assigns a double.
-		}
-		else // Non-numeric variables or values are considered to be zero for the purpose of the calculation.
-		{
-			__int64 ARG2_as_int = ATOI64(ARG2);
-			if (!ARG2_as_int)
-				return LineError(ERR_DIVIDEBYZERO ERR_ABORT, FAIL, ARG2);
-			return output_var->Assign(ATOI64(output_var->Contents()) / ARG2_as_int);  // Overload: Assigns an INT.
-		}
-	}
-
 	case ACT_KEYHISTORY:
 #ifdef ENABLE_KEY_HISTORY_FILE
 		if (*ARG1 || *ARG2)
@@ -10766,8 +10441,6 @@ inline ResultType Line::Perform()
 	}
 
 	case ACT_INPUTBOX:
-		if (   !(output_var = ResolveVarOfArg(0))   )
-			return FAIL;
 		return InputBox(output_var, ARG2, ARG3, toupper(*ARG4) == 'H' // 4th is whether to hide input.
 			, *ARG5 ? ATOI(ARG5) : INPUTBOX_DEFAULT  // Width
 			, *ARG6 ? ATOI(ARG6) : INPUTBOX_DEFAULT  // Height
@@ -10799,31 +10472,6 @@ inline ResultType Line::Perform()
 	case ACT_INPUT:
 		return Input();
 
-	case ACT_SEND:
-	case ACT_SENDRAW:
-		SendKeys(ARG1, mActionType == ACT_SENDRAW, g.SendMode);
-		return OK;
-	case ACT_SENDINPUT: // Raw mode is supported via {Raw} in ARG1.
-		SendKeys(ARG1, false, g.SendMode == SM_INPUT_FALLBACK_TO_PLAY ? SM_INPUT_FALLBACK_TO_PLAY : SM_INPUT);
-		return OK;
-	case ACT_SENDPLAY: // Raw mode is supported via {Raw} in ARG1.
-		SendKeys(ARG1, false, SM_PLAY);
-		return OK;
-	case ACT_SENDEVENT:
-		SendKeys(ARG1, false, SM_EVENT);
-		return OK;
-
-	case ACT_CLICK:
-		return PerformClick(ARG1);
-	case ACT_MOUSECLICKDRAG:
-		return PerformMouse(mActionType, SEVEN_ARGS);
-	case ACT_MOUSECLICK:
-		return PerformMouse(mActionType, THREE_ARGS, "", "", ARG5, ARG7, ARG4, ARG6);
-	case ACT_MOUSEMOVE:
-		return PerformMouse(mActionType, "", ARG1, ARG2, "", "", ARG3, ARG4);
-
-	case ACT_MOUSEGETPOS:
-		return MouseGetPos(ATOU(ARG5));
 
 //////////////////////////////////////////////////////////////////////////
 
@@ -10919,6 +10567,7 @@ inline ResultType Line::Perform()
 		{
 		case FIND_IN_LEADING_PART: g.TitleMatchMode = FIND_IN_LEADING_PART; return OK;
 		case FIND_ANYWHERE: g.TitleMatchMode = FIND_ANYWHERE; return OK;
+		case FIND_REGEX: g.TitleMatchMode = FIND_REGEX; return OK;
 		case FIND_EXACT: g.TitleMatchMode = FIND_EXACT; return OK;
 		case FIND_FAST: g.TitleFindFast = true; return OK;
 		case FIND_SLOW: g.TitleFindFast = false; return OK;
@@ -11074,7 +10723,90 @@ inline ResultType Line::Perform()
 		// that the reload didn't work (since obviously if the process and thread
 		// in which the Sleep is running still exist, it didn't work):
 		return OK;
+
+	case ACT_SLEEP:
+	{
+		// Only support 32-bit values for this command, since it seems unlikely anyone would to have
+		// it sleep more than 24.8 days or so.  It also helps performance on 32-bit hardware because
+		// MsgSleep() is so heavily called and checks the value of the first parameter frequently:
+		int sleep_time = ATOI(ARG1); // Keep it signed vs. unsigned for backward compatibility (e.g. scripts that do Sleep -1).
+
+		// Do a true sleep on Win9x because the MsgSleep() method is very inaccurate on Win9x
+		// for some reason (a MsgSleep(1) causes a sleep between 10 and 55ms, for example).
+		// But only do so for short sleeps, for which the user has a greater expectation of
+		// accuracy.  UPDATE: Do not change the 25 below without also changing it in Critical's
+		// documentation.
+		if (sleep_time < 25 && sleep_time > 0 && g_os.IsWin9x()) // Ordered for short-circuit performance. v1.0.38.05: Added "sleep_time > 0" so that Sleep -1/0 will work the same on Win9x as it does on other OSes.
+			Sleep(sleep_time);
+		else
+			MsgSleep(sleep_time);
+		return OK;
 	}
+
+	case ACT_INIREAD:
+		return IniRead(ARG2, ARG3, ARG4, ARG5);
+	case ACT_INIWRITE:
+		return IniWrite(FOUR_ARGS);
+	case ACT_INIDELETE:
+		// To preserve maximum compatibility with existing scripts, only send NULL if ARG3
+		// was explicitly omitted.  This is because some older scripts might rely on the
+		// fact that a blank ARG3 does not delete the entire section, but rather does
+		// nothing (that fact is untested):
+		return IniDelete(ARG1, ARG2, mArgc < 3 ? NULL : ARG3);
+
+	case ACT_REGREAD:
+		if (mArgc < 2 && g.mLoopRegItem) // Uses the registry loop's current item.
+			// If g.mLoopRegItem->name specifies a subkey rather than a value name, do this anyway
+			// so that it will set ErrorLevel to ERROR and set the output variable to be blank.
+			// Also, do not use RegCloseKey() on this, even if it's a remote key, since our caller handles that:
+			return RegRead(g.mLoopRegItem->root_key, g.mLoopRegItem->subkey, g.mLoopRegItem->name);
+		// Otherwise:
+		if (mArgc > 4 || RegConvertValueType(ARG2)) // The obsolete 5-param method (ARG2 is unused).
+			result = RegRead(root_key = RegConvertRootKey(ARG3, &is_remote_registry), ARG4, ARG5);
+		else
+			result = RegRead(root_key = RegConvertRootKey(ARG2, &is_remote_registry), ARG3, ARG4);
+		if (is_remote_registry && root_key) // Never try to close local root keys, which the OS keeps always-open.
+			RegCloseKey(root_key);
+		return result;
+	case ACT_REGWRITE:
+		if (mArgc < 2 && g.mLoopRegItem) // Uses the registry loop's current item.
+			// If g.mLoopRegItem->name specifies a subkey rather than a value name, do this anyway
+			// so that it will set ErrorLevel to ERROR.  An error will also be indicated if
+			// g.mLoopRegItem->type is an unsupported type:
+			return RegWrite(g.mLoopRegItem->type, g.mLoopRegItem->root_key, g.mLoopRegItem->subkey, g.mLoopRegItem->name, ARG1);
+		// Otherwise:
+		result = RegWrite(RegConvertValueType(ARG1), root_key = RegConvertRootKey(ARG2, &is_remote_registry)
+			, ARG3, ARG4, ARG5); // If RegConvertValueType(ARG1) yields REG_NONE, RegWrite() will set ErrorLevel rather than displaying a runtime error.
+		if (is_remote_registry && root_key) // Never try to close local root keys, which the OS keeps always-open.
+			RegCloseKey(root_key);
+		return result;
+	case ACT_REGDELETE:
+		if (mArgc < 1 && g.mLoopRegItem) // Uses the registry loop's current item.
+		{
+			// In this case, if the current reg item is a value, just delete it normally.
+			// But if it's a subkey, append it to the dir name so that the proper subkey
+			// will be deleted as the user intended:
+			if (g.mLoopRegItem->type == REG_SUBKEY)
+			{
+				snprintf(buf_temp, sizeof(buf_temp), "%s\\%s", g.mLoopRegItem->subkey, g.mLoopRegItem->name);
+				return RegDelete(g.mLoopRegItem->root_key, buf_temp, "");
+			}
+			else
+				return RegDelete(g.mLoopRegItem->root_key, g.mLoopRegItem->subkey, g.mLoopRegItem->name);
+		}
+		// Otherwise:
+		result = RegDelete(root_key = RegConvertRootKey(ARG1, &is_remote_registry), ARG2, ARG3);
+		if (is_remote_registry && root_key) // Never try to close local root keys, which the OS always keeps open.
+			RegCloseKey(root_key);
+		return result;
+
+	case ACT_OUTPUTDEBUG:
+		OutputDebugString(ARG1); // It does not return a value for the purpose of setting ErrorLevel.
+		return OK;
+
+	case ACT_SHUTDOWN:
+		return Util_Shutdown(ATOI(ARG1)) ? OK : FAIL; // Range of ARG1 is not validated in case other values are supported in the future.
+	} // switch()
 
 	// Since above didn't return, this line's mActionType isn't handled here,
 	// so caller called it wrong.  ACT_INVALID should be impossible because
@@ -11220,7 +10952,14 @@ VarSizeType Script::GetBatchLines(char *aBuf)
 
 VarSizeType Script::GetTitleMatchMode(char *aBuf)
 {
-	// Done this way in case it's ever allowed to go beyond a single-digit number.
+	if (g.TitleMatchMode == FIND_REGEX) // v1.0.45.
+	{
+		if (aBuf)  // For backward compatibility (due to StringCaseSense), never change the case used here:
+			strcpy(aBuf, "RegEx");
+		return 5; // The length.
+	}
+	// Otherwise, it's a numerical mode:
+	// It's done this way in case it's ever allowed to go beyond a single-digit number.
 	char buf[MAX_NUMBER_SIZE];
 	char *target_buf = aBuf ? aBuf : buf;
 	_itoa(g.TitleMatchMode, target_buf, 10);  // Always output as decimal vs. hex in this case (so that scripts can use "If var in list" with confidence).

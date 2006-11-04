@@ -20,7 +20,6 @@
 			<Tool
 				Name="VCCLCompilerTool"
 				Optimization="0"
-				ImproveFloatingPointConsistency="FALSE"
 				PreprocessorDefinitions="WIN32;_DEBUG;_WINDOWS"
 				MinimalRebuild="TRUE"
 				BasicRuntimeChecks="3"
@@ -77,7 +76,6 @@
 				Name="VCCLCompilerTool"
 				Optimization="2"
 				GlobalOptimizations="TRUE"
-				InlineFunctionExpansion="0"
 				EnableIntrinsicFunctions="TRUE"
 				FavorSizeOrSpeed="1"
 				OmitFramePointers="TRUE"
@@ -89,16 +87,16 @@
 				RuntimeLibrary="4"
 				StructMemberAlignment="0"
 				BufferSecurityCheck="FALSE"
+				EnableFunctionLevelLinking="TRUE"
 				UsePrecompiledHeader="2"
 				WarningLevel="3"
 				WarnAsError="TRUE"
-				Detect64BitPortabilityProblems="FALSE"
-				DebugInformationFormat="3"/>
+				DebugInformationFormat="0"/>
 			<Tool
 				Name="VCCustomBuildTool"/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalOptions="/SAFESEH:NO"
+				AdditionalOptions="/SAFESEH:NO /Verbose"
 				AdditionalDependencies="wsock32.lib winmm.lib version.lib comctl32.lib"
 				OutputFile="$(OutDir)/AutoHotkey.exe"
 				LinkIncremental="1"
@@ -112,6 +110,7 @@
 				OptimizeReferences="2"
 				EnableCOMDATFolding="2"
 				OptimizeForWindows98="1"
+				FunctionOrder="@source/misc/function_order_for_linker_optimization.txt"
 				TargetMachine="1"/>
 			<Tool
 				Name="VCMIDLTool"/>
@@ -146,7 +145,6 @@
 				Name="VCCLCompilerTool"
 				Optimization="1"
 				GlobalOptimizations="TRUE"
-				InlineFunctionExpansion="0"
 				EnableIntrinsicFunctions="TRUE"
 				FavorSizeOrSpeed="2"
 				OmitFramePointers="TRUE"
@@ -156,10 +154,11 @@
 				RuntimeLibrary="4"
 				StructMemberAlignment="0"
 				BufferSecurityCheck="FALSE"
+				EnableFunctionLevelLinking="TRUE"
 				UsePrecompiledHeader="2"
 				WarningLevel="3"
-				Detect64BitPortabilityProblems="FALSE"
-				DebugInformationFormat="3"/>
+				WarnAsError="TRUE"
+				DebugInformationFormat="0"/>
 			<Tool
 				Name="VCCustomBuildTool"/>
 			<Tool
@@ -177,6 +176,7 @@
 				OptimizeReferences="2"
 				EnableCOMDATFolding="2"
 				OptimizeForWindows98="1"
+				FunctionOrder="@source/misc/function_order_for_linker_optimization.txt"
 				TargetMachine="1"/>
 			<Tool
 				Name="VCMIDLTool"/>
@@ -206,7 +206,7 @@
 			IntermediateDirectory="$(ConfigurationName)"
 			ConfigurationType="1"
 			CharacterSet="2"
-			WholeProgramOptimization="FALSE">
+			WholeProgramOptimization="TRUE">
 			<Tool
 				Name="VCCLCompilerTool"
 				Optimization="1"
@@ -215,18 +215,17 @@
 				EnableIntrinsicFunctions="TRUE"
 				FavorSizeOrSpeed="2"
 				OmitFramePointers="TRUE"
-				OptimizeForProcessor="0"
-				OptimizeForWindowsApplication="FALSE"
 				PreprocessorDefinitions="WIN32;NDEBUG;_WINDOWS;AUTOHOTKEYSC"
 				StringPooling="TRUE"
 				ExceptionHandling="FALSE"
 				RuntimeLibrary="2"
 				StructMemberAlignment="0"
 				BufferSecurityCheck="FALSE"
+				EnableFunctionLevelLinking="TRUE"
 				UsePrecompiledHeader="2"
 				WarningLevel="3"
-				Detect64BitPortabilityProblems="FALSE"
-				DebugInformationFormat="3"/>
+				WarnAsError="TRUE"
+				DebugInformationFormat="0"/>
 			<Tool
 				Name="VCCustomBuildTool"/>
 			<Tool
@@ -244,6 +243,7 @@
 				OptimizeReferences="2"
 				EnableCOMDATFolding="2"
 				OptimizeForWindows98="1"
+				FunctionOrder="@source/misc/function_order_for_linker_optimization.txt"
 				TargetMachine="1"/>
 			<Tool
 				Name="VCMIDLTool"/>
@@ -324,16 +324,12 @@
 					Name="SC (self-contained)|Win32">
 					<Tool
 						Name="VCCLCompilerTool"
-						Optimization="2"
-						FavorSizeOrSpeed="1"
 						UsePrecompiledHeader="0"/>
 				</FileConfiguration>
 				<FileConfiguration
 					Name="SC (minimum size)|Win32">
 					<Tool
 						Name="VCCLCompilerTool"
-						Optimization="2"
-						FavorSizeOrSpeed="1"
 						UsePrecompiledHeader="0"/>
 				</FileConfiguration>
 			</File>
@@ -400,6 +396,9 @@
 				RelativePath=".\source\os_version.h">
 			</File>
 			<File
+				RelativePath=".\source\lib_pcre\pcre\pcre.h">
+			</File>
+			<File
 				RelativePath=".\source\qmath.h">
 			</File>
 			<File
@@ -459,6 +458,9 @@
 				RelativePath=".\source\resources\icon_tray_win9x_suspend.ico">
 			</File>
 		</Filter>
+		<File
+			RelativePath=".\source\misc\function_order_for_linker_optimization.txt">
+		</File>
 	</Files>
 	<Globals>
 	</Globals>

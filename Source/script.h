@@ -26,7 +26,7 @@ GNU General Public License for more details.
 #include "Util.h" // for FileTimeToYYYYMMDD(), strlcpy()
 #include "resources\resource.h"  // For tray icon.
 #ifdef AUTOHOTKEYSC
-	#include "lib/exearc_read.h"
+	#include "lib\exearc_read.h"
 #endif
 
 #include "os_version.h" // For the global OS_Version object
@@ -59,6 +59,17 @@ enum VariableTypeType {VAR_TYPE_INVALID, VAR_TYPE_NUMBER, VAR_TYPE_INTEGER, VAR_
 	DWORD target_thread = GetWindowThreadProcessId(target_window, NULL);\
 	if (target_thread && target_thread != g_MainThreadID && !IsWindowHung(target_window))\
 		threads_are_attached = AttachThreadInput(g_MainThreadID, target_thread, TRUE) != 0;
+// BELOW IS SAME AS ABOVE except it checks do_activate and also does a SetActiveWindow():
+#define ATTACH_THREAD_INPUT_AND_SETACTIVEWINDOW_IF_DO_ACTIVATE \
+	bool threads_are_attached = false;\
+	DWORD target_thread;\
+	if (do_activate)\
+	{\
+		target_thread = GetWindowThreadProcessId(target_window, NULL);\
+		if (target_thread && target_thread != g_MainThreadID && !IsWindowHung(target_window))\
+			threads_are_attached = AttachThreadInput(g_MainThreadID, target_thread, TRUE) != 0;\
+		SetActiveWindow(target_window);\
+	}
 
 #define DETACH_THREAD_INPUT \
 	if (threads_are_attached)\
@@ -151,7 +162,7 @@ enum CommandIDs {CONTROL_ID_FIRST = IDCANCEL + 1
 #define ERR_BLANK_PARAM "Blank parameter"
 #define ERR_BYREF "Caller must pass a variable to this ByRef parameter."
 #define ERR_ELSE_WITH_NO_IF "ELSE with no matching IF"
-#define ERR_OUTOFMEM "Out of memory."
+#define ERR_OUTOFMEM "Out of memory."  // Used by RegEx too, so don't change it without also changing RegEx to keep the former string.
 #define ERR_MEM_LIMIT_REACHED "Memory limit reached (see #MaxMem in the help file)." ERR_ABORT
 #define ERR_NO_LABEL "Target label does not exist."
 #define ERR_MENU "Menu does not exist."
@@ -240,7 +251,8 @@ struct SplashType
 #define PROGRESS_BAR_POS  splash.margin_x, bar_y, control_width, splash.object_height
 #define PROGRESS_SUB_POS  splash.margin_x, sub_y, control_width, (client_rect.bottom - client_rect.top) - sub_y
 
-// From AutoIt3's InputBox:
+// From AutoIt3's InputBox.  This doesn't add a measurable amount of code size, so the compiler seems to implement
+// it efficiently (somewhat like a macro).
 template <class T>
 inline void swap(T &v1, T &v2) {
 	T tmp=v1;
@@ -508,21 +520,6 @@ enum WinSetAttributes {WINSET_INVALID, WINSET_TRANSPARENT, WINSET_TRANSCOLOR, WI
 
 class Line
 {
-public:
-	// AutoIt3 functions:
-	static bool Util_CopyDir(const char *szInputSource, const char *szInputDest, bool bOverwrite);
-	static bool Util_MoveDir(const char *szInputSource, const char *szInputDest, int OverwriteMode);
-	static bool Util_RemoveDir(const char *szInputSource, bool bRecurse);
-	static int Util_CopyFile(const char *szInputSource, const char *szInputDest, bool bOverwrite, bool bMove);
-	static void Util_ExpandFilenameWildcard(const char *szSource, const char *szDest, char *szExpandedDest);
-	static void Util_ExpandFilenameWildcardPart(const char *szSource, const char *szDest, char *szExpandedDest);
-	static bool Util_CreateDir(const char *szDirName);
-	static bool Util_DoesFileExist(const char *szFilename);
-	static bool Util_IsDir(const char *szPath);
-	static void Util_GetFullPathName(const char *szIn, char *szOut);
-	static void Util_StripTrailingDir(char *szPath);
-	static bool Util_IsDifferentVolumes(const char *szPath1, const char *szPath2);
-
 private:
 	static char *sDerefBuf;  // Buffer to hold the values of any args that need to be dereferenced.
 	static size_t sDerefBufSize;
@@ -547,6 +544,9 @@ private:
 	ResultType MouseGetPos(DWORD aOptions);
 	ResultType FormatTime(char *aYYYYMMDD, char *aFormat);
 	ResultType PerformAssign();
+	ResultType AssignClipboardAll(Var &aOutputVar);
+	ResultType AssignBinaryClip(Var &aOutputVar, Var &aInputVar);
+	ResultType StringReplace();
 	ResultType StringSplit(char *aArrayName, char *aInputString, char *aDelimiterList, char *aOmitList);
 	ResultType SplitPath(char *aFileSpec);
 	ResultType PerformSort(char *aContents, char *aOptions);
@@ -599,10 +599,6 @@ private:
 	ResultType RegDelete(HKEY aRootKey, char *aRegSubkey, char *aValueName);
 	static bool RegRemoveSubkeys(HKEY hRegKey);
 
-	#define SW_NONE -1
-	ResultType PerformShowWindow(ActionTypeType aActionType, char *aTitle = "", char *aText = ""
-		, char *aExcludeTitle = "", char *aExcludeText = "");
-
 	#define DESTROY_SPLASH \
 	{\
 		if (g_hWndSplash && IsWindow(g_hWndSplash))\
@@ -617,6 +613,12 @@ private:
 	ResultType TrayTip(char *aTitle, char *aText, char *aTimeout, char *aOptions);
 	ResultType Transform(char *aCmd, char *aValue1, char *aValue2);
 	ResultType Input(); // The Input command.
+
+	#define SW_NONE -1
+	ResultType PerformShowWindow(ActionTypeType aActionType, char *aTitle = "", char *aText = ""
+		, char *aExcludeTitle = "", char *aExcludeText = "");
+	ResultType PerformWait();
+
 	ResultType WinMove(char *aTitle, char *aText, char *aX, char *aY
 		, char *aWidth = "", char *aHeight = "", char *aExcludeTitle = "", char *aExcludeText = "");
 	ResultType WinMenuSelectItem(char *aTitle, char *aText, char *aMenu1, char *aMenu2
@@ -700,6 +702,7 @@ public:
 	#define RAW_ARG6 (mArgc > 5 ? mArg[5].text : "")
 	#define RAW_ARG7 (mArgc > 6 ? mArg[6].text : "")
 	#define RAW_ARG8 (mArgc > 7 ? mArg[7].text : "")
+
 	#define LINE_RAW_ARG1 (line->mArgc > 0 ? line->mArg[0].text : "")
 	#define LINE_RAW_ARG2 (line->mArgc > 1 ? line->mArg[1].text : "")
 	#define LINE_RAW_ARG3 (line->mArgc > 2 ? line->mArg[2].text : "")
@@ -709,6 +712,7 @@ public:
 	#define LINE_RAW_ARG7 (line->mArgc > 6 ? line->mArg[6].text : "")
 	#define LINE_RAW_ARG8 (line->mArgc > 7 ? line->mArg[7].text : "")
 	#define LINE_RAW_ARG9 (line->mArgc > 8 ? line->mArg[8].text : "")
+	
 	#define NEW_RAW_ARG1 (aArgc > 0 ? new_arg[0].text : "") // Helps performance to use this vs. LINE_RAW_ARG where possible.
 	#define NEW_RAW_ARG2 (aArgc > 1 ? new_arg[1].text : "")
 	#define NEW_RAW_ARG3 (aArgc > 2 ? new_arg[2].text : "")
@@ -718,13 +722,31 @@ public:
 	#define NEW_RAW_ARG7 (aArgc > 6 ? new_arg[6].text : "")
 	#define NEW_RAW_ARG8 (aArgc > 7 ? new_arg[7].text : "")
 	#define NEW_RAW_ARG9 (aArgc > 8 ? new_arg[8].text : "")
+	
 	#define SAVED_ARG1 (mArgc > 0 ? arg[0] : "")
 	#define SAVED_ARG2 (mArgc > 1 ? arg[1] : "")
 	#define SAVED_ARG3 (mArgc > 2 ? arg[2] : "")
 	#define SAVED_ARG4 (mArgc > 3 ? arg[3] : "")
 	#define SAVED_ARG5 (mArgc > 4 ? arg[4] : "")
-	#define ARG1 sArgDeref[0]
-	#define ARG2 sArgDeref[1]
+
+	// For the below, it is the caller's responsibility to ensure that mArgc is
+	// large enough (either via load-time validation or a runtime check of mArgc).
+	// This is because for performance reasons, the sArgVar entry for omitted args isn't
+	// initialized, so may have an old/obsolete value from some previous command.
+	#define OUTPUT_VAR (*sArgVar) // ExpandArgs() has ensured this first ArgVar is always initialized, so there's never any need to check mArgc > 0.
+	#define ARGVARRAW1 (*sArgVar) // i.e. sArgVar[0], and same as OUTPUT_VAR (it's a duplicate to help readability).
+	#define ARGVARRAW2 (sArgVar[1]) // It's called RAW because its user is responsible for ensuring the arg exists by checking mArgc at loadtime or runtime.
+	#define ARGVAR1 ARGVARRAW1 // This first one doesn't need the check below because ExpandArgs() has ensured it's initialized.
+	#define ARGVAR2 (mArgc > 1 ? sArgVar[1] : NULL) // Caller relies on the check of mArgc because for performance,
+	#define ARGVAR3 (mArgc > 2 ? sArgVar[2] : NULL) // sArgVar[] isn't initialied for parameters the script
+	#define ARGVAR4 (mArgc > 3 ? sArgVar[3] : NULL) // omitted entirely from the end of the parameter list.
+	#define ARGVAR5 (mArgc > 4 ? sArgVar[4] : NULL)
+	#define ARGVAR6 (mArgc > 5 ? sArgVar[5] : NULL)
+	#define ARGVAR7 (mArgc > 6 ? sArgVar[6] : NULL)
+	#define ARGVAR8 (mArgc > 7 ? sArgVar[7] : NULL)
+
+	#define ARG1 sArgDeref[0] // These are the expanded/resolved parameters for the currently-executing command.
+	#define ARG2 sArgDeref[1] // They're populated by ExpandArgs().
 	#define ARG3 sArgDeref[2]
 	#define ARG4 sArgDeref[3]
 	#define ARG5 sArgDeref[4]
@@ -734,7 +756,8 @@ public:
 	#define ARG9 sArgDeref[8]
 	#define ARG10 sArgDeref[9]
 	#define ARG11 sArgDeref[10]
-	#define TWO_ARGS ARG1, ARG2
+
+	#define TWO_ARGS    ARG1, ARG2
 	#define THREE_ARGS  ARG1, ARG2, ARG3
 	#define FOUR_ARGS   ARG1, ARG2, ARG3, ARG4
 	#define FIVE_ARGS   ARG1, ARG2, ARG3, ARG4, ARG5
@@ -744,6 +767,7 @@ public:
 	#define NINE_ARGS   ARG1, ARG2, ARG3, ARG4, ARG5, ARG6, ARG7, ARG8, ARG9
 	#define TEN_ARGS    ARG1, ARG2, ARG3, ARG4, ARG5, ARG6, ARG7, ARG8, ARG9, ARG10
 	#define ELEVEN_ARGS ARG1, ARG2, ARG3, ARG4, ARG5, ARG6, ARG7, ARG8, ARG9, ARG10, ARG11
+
 	// If the arg's text is non-blank, it means the variable is a dynamic name such as array%i%
 	// that must be resolved at runtime rather than load-time.  Therefore, this macro must not
 	// be used without first having checked that arg.text is blank:
@@ -752,12 +776,11 @@ public:
 	// the arg in question is an input or output variable (since that isn't checked there):
 	#define ARG_HAS_VAR(ArgNum) (mArgc >= ArgNum && (*mArg[ArgNum-1].text || mArg[ArgNum-1].deref))
 
-	// Shouldn't go much higher than 200 since the main window's Edit control is currently limited
-	// to 32K to be compatible with the Win9x limit.  Avg. line length is probably under 100 for
-	// the vast majority of scripts, so 200 seems unlikely to exceed the buffer size.  Even in the
-	// worst case where the buffer size is exceeded, the text is simply truncated, so it's not too
-	// bad:
-	#define LINE_LOG_SIZE 400  // Going much higher than this would risk overflowing the 32K edit buffer size (32K is the default limit on Win9x, though I think it can be increased to as much as 64K).
+	// Shouldn't go much higher than 400 since the main window's Edit control is currently limited
+	// to 64KB to be compatible with the Win9x limit.  Avg. line length is probably under 100 for
+	// the vast majority of scripts, so 400 seems unlikely to exceed the buffer size.  Even in the
+	// worst case where the buffer size is exceeded, the text is simply truncated, so it's not too bad:
+	#define LINE_LOG_SIZE 400  // See above.
 	static Line *sLog[LINE_LOG_SIZE];
 	static DWORD sLogTick[LINE_LOG_SIZE];
 	static int sLogNext;
@@ -965,7 +988,7 @@ public:
 
 
 
-	ResultType ArgMustBeDereferenced(Var *aVar, int aArgIndexToExclude);
+	ResultType ArgMustBeDereferenced(Var *aVar, int aArgIndex, Var *aArgVar[]);
 
 	bool ArgHasDeref(int aArgNum)
 	// This function should always be called in lieu of doing something like "strchr(arg.text, g_DerefChar)"
@@ -1018,8 +1041,8 @@ public:
 		if (sArgVar[aArgNum])
 		{
 			Var &var = *sArgVar[aArgNum]; // For performance and convenience.
-			if (var.Type() == VAR_NORMAL && !var.IsBinaryClip())
-				return var.Length();  // Do it the fast way.
+			if (var.Type() == VAR_NORMAL)
+				return var.LengthIgnoreBinaryClip(); // Do it the fast way (unless it's binary clipboard, in which case this call will internally call strlen()).
 		}
 		// Otherwise, length isn't known, so do it the slow way.
 		return strlen(sArgDeref[aArgNum]);
@@ -1177,6 +1200,8 @@ public:
 		if (*aBuf == '1' && !*(aBuf + 1)) return FIND_IN_LEADING_PART;
 		if (*aBuf == '2' && !*(aBuf + 1)) return FIND_ANYWHERE;
 		if (*aBuf == '3' && !*(aBuf + 1)) return FIND_EXACT;
+		if (!stricmp(aBuf, "RegEx")) return FIND_REGEX; // Goes with the above, not fast/slow below.
+
 		if (!stricmp(aBuf, "FAST")) return FIND_FAST;
 		if (!stricmp(aBuf, "SLOW")) return FIND_SLOW;
 		return MATCHMODE_INVALID;
@@ -1710,6 +1735,20 @@ public:
 	void *operator new[](size_t aBytes) {return SimpleHeap::Malloc(aBytes);}
 	void operator delete(void *aPtr) {}  // Intentionally does nothing because we're using SimpleHeap for everything.
 	void operator delete[](void *aPtr) {}
+
+	// AutoIt3 functions:
+	static bool Util_CopyDir(const char *szInputSource, const char *szInputDest, bool bOverwrite);
+	static bool Util_MoveDir(const char *szInputSource, const char *szInputDest, int OverwriteMode);
+	static bool Util_RemoveDir(const char *szInputSource, bool bRecurse);
+	static int Util_CopyFile(const char *szInputSource, const char *szInputDest, bool bOverwrite, bool bMove);
+	static void Util_ExpandFilenameWildcard(const char *szSource, const char *szDest, char *szExpandedDest);
+	static void Util_ExpandFilenameWildcardPart(const char *szSource, const char *szDest, char *szExpandedDest);
+	static bool Util_CreateDir(const char *szDirName);
+	static bool Util_DoesFileExist(const char *szFilename);
+	static bool Util_IsDir(const char *szPath);
+	static void Util_GetFullPathName(const char *szIn, char *szOut);
+	static void Util_StripTrailingDir(char *szPath);
+	static bool Util_IsDifferentVolumes(const char *szPath1, const char *szPath2);
 };
 
 
@@ -2486,12 +2525,20 @@ public:
 
 
 
+
+// SYM_VAR's Type() is always VAR_NORMAL.
+#define EXPR_TOKEN_LENGTH(token_raw, token_as_string) \
+(token_raw->symbol == SYM_VAR && !token_raw->var->IsBinaryClip()) \
+	? token_raw->var->Length()\
+	: strlen(token_as_string)
+
 void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_StrLen(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_Asc(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_Chr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_IsLabel(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_InStr(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
+void BIF_RegEx(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_GetKeyState(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_VarSetCapacity(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
 void BIF_FileExist(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount);
@@ -2536,6 +2583,7 @@ ResultType ExprTokenToDoubleOrInt(ExprTokenType &aToken);
 ResultType BackupFunctionVars(Func &aFunc, VarBkp *&aVarBackup, int &aVarBackupCount);
 void RestoreFunctionVars(Func &aFunc, VarBkp *&aVarBackup, int aVarBackupCount);
 
+char *RegExMatch(char *aHaystack, char *aNeedleRegEx);
 int ConvertJoy(char *aBuf, int *aJoystickID = NULL, bool aAllowOnlyButtons = false);
 bool ScriptGetKeyState(vk_type aVK, KeyStateTypes aKeyStateType);
 double ScriptGetJoyState(JoyControls aJoy, int aJoystickID, ExprTokenType &aToken, bool aUseBoolForUpDown);

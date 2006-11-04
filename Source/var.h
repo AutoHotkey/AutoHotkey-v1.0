@@ -118,7 +118,7 @@ private:
 	#define VAR_ATTRIB_STATIC       0x04 // Next in series would be 0x08, 0x10, etc.
 	VarAttribType mAttrib;  // Bitwise combination of the above flags.
 	bool mIsLocal;
-	VarTypeType mType;  // Keep adjacent/contiguous with the above.
+	VarTypeType mType;  // Keep adjacent/contiguous with the above due to struct alignment, to save memory.
 
 public:
 	// Testing shows that due to data alignment, keeping mType adjacent to the other less-than-4-size member
@@ -210,12 +210,13 @@ public:
 	VarSizeType Get(char *aBuf = NULL);
 
 	// Not an enum so that it can be global more easily:
-	#define VAR_ALWAYS_FREE                0 // This item and the next must be first and numerically adjacent to
-	#define VAR_ALWAYS_FREE_EXCLUDE_STATIC 1 // each other so that VAR_ALWAYS_FREE_LAST covers only them.
-	#define VAR_ALWAYS_FREE_LAST           2 // Never actually passed as a parameter, just a placeholder (see above comment).
-	#define VAR_NEVER_FREE                 3
-	#define VAR_FREE_IF_LARGE              4
+	#define VAR_ALWAYS_FREE                    0 // This item and the next must be first and numerically adjacent to
+	#define VAR_ALWAYS_FREE_BUT_EXCLUDE_STATIC 1 // each other so that VAR_ALWAYS_FREE_LAST covers only them.
+	#define VAR_ALWAYS_FREE_LAST               2 // Never actually passed as a parameter, just a placeholder (see above comment).
+	#define VAR_NEVER_FREE                     3
+	#define VAR_FREE_IF_LARGE                  4
 	void Free(int aWhenToFree = VAR_ALWAYS_FREE, bool aExcludeAliases = false);
+	void AcceptNewMem(char *aNewMem, VarSizeType aLength);
 	void SetLengthFromContents();
 
 	#define DISPLAY_NO_ERROR   0  // Must be zero.
@@ -246,18 +247,18 @@ public:
 		return aBuf;
 	}
 
-	VarTypeType Type()
+	__forceinline VarTypeType Type()
 	{
 		// Relies on the fact that aliases can't point to other aliases (enforced by UpdateAlias()).
 		return (mType == VAR_ALIAS) ? mAliasFor->mType : mType;
 	}
 
-	bool IsByRef()
+	__forceinline bool IsByRef()
 	{
 		return mType < VAR_FIRST_NON_BYREF;
 	}
 
-	bool IsLocal()
+	__forceinline bool IsLocal()
 	{
 		// Since callers want to know whether this variable is local, even if it's a local alias for a
 		// global, don't use the method below:
@@ -265,7 +266,7 @@ public:
 		return mIsLocal;
 	}
 
-	bool IsBinaryClip()
+	__forceinline bool IsBinaryClip()
 	{
 		// Relies on the fact that aliases can't point to other aliases (enforced by UpdateAlias()).
 		return (mType == VAR_ALIAS ? mAliasFor->mAttrib : mAttrib) & VAR_ATTRIB_BINARY_CLIP;
@@ -280,7 +281,8 @@ public:
 			mAttrib = aAttrib;
 	}
 
-	VarSizeType Capacity() // Capacity includes the zero terminator (though if capacity is zero, there will also be a zero terminator in mContents due to it being "").
+	VarSizeType Capacity() // __forceinline() on Capacity, Length, and/or Contents bloats the code and reduces performance.
+	// Capacity includes the zero terminator (though if capacity is zero, there will also be a zero terminator in mContents due to it being "").
 	{
 		// Relies on the fact that aliases can't point to other aliases (enforced by UpdateAlias()).
 		Var &var = *(mType == VAR_ALIAS ? mAliasFor : this);
@@ -290,7 +292,7 @@ public:
 		return var.mType == VAR_CLIPBOARD ? g_clip.mCapacity : var.mCapacity;
 	}
 
-	VarSizeType &Length()
+	VarSizeType &Length() // __forceinline() on Capacity, Length, and/or Contents bloats the code and reduces performance.
 	// This should not be called to discover a non-NORMAL var's length because the length
 	// of most such variables aren't knowable without calling Get() on them.
 	// Returns a reference so that caller can use this function as an lvalue.
@@ -308,7 +310,16 @@ public:
 		return length;
 	}
 
-	char *Contents()
+	VarSizeType LengthIgnoreBinaryClip()
+	{
+		// Relies on the fact that aliases can't point to other aliases (enforced by UpdateAlias()).
+		Var &var = *(mType == VAR_ALIAS ? mAliasFor : this);
+		// Return the apparent length of the string (i.e. the position of its first binary zero).
+		return (var.mType == VAR_NORMAL && !(var.mAttrib & VAR_ATTRIB_BINARY_CLIP))
+			? var.mLength : strlen(var.mContents);
+	}
+
+	char *Contents() // __forceinline() on Capacity, Length, and/or Contents bloats the code and reduces performance.
 	{
 		// Relies on the fact that aliases can't point to other aliases (enforced by UpdateAlias()).
 		Var &var = *(mType == VAR_ALIAS ? mAliasFor : this);
@@ -322,13 +333,13 @@ public:
 		return sEmptyString; // For reserved vars (but this method should probably never be called for them).
 	}
 
-	Var *ResolveAlias()
+	__forceinline Var *ResolveAlias()
 	{
 		// Relies on the fact that aliases can't point to other aliases (enforced by UpdateAlias()).
 		return (mType == VAR_ALIAS) ? mAliasFor : this; // Return target if it's an alias, or itself if not.
 	}
 
-	void UpdateAlias(Var *aTargetVar)
+	__forceinline void UpdateAlias(Var *aTargetVar) // __forceinline because it's currently only called from one place.
 	// Caller must ensure that this variable is VAR_BYREF or VAR_ALIAS and that aTargetVar isn't NULL.
 	{
 		// BELOW IS THE MEANS BY WHICH ALIASES AREN'T ALLOWED TO POINT TO OTHER ALIASES, ONLY DIRECTLY TO THE TARGET VAR.

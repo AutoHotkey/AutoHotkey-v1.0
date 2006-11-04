@@ -79,43 +79,48 @@ void init_genrand(unsigned long s)
 	initf = 1;
 }
 
-/* initialize by an array with array-length
- * init_key is the array for initializing keys 
- * key_length is its length */
-void init_by_array(unsigned long init_key[], long key_length)
-{
-    int i, j, k;
 
-    init_genrand(19650218UL);
-    i=1;
-	j=0;
-    k = (N>key_length ? N : key_length);  //return lesser of N and key_length
-    for (; k; k--) {
-        state[i] = (state[i] ^ ((state[i-1] ^ (state[i-1] >> 30)) * 1664525UL)) + init_key[j] + j; // non linear 
-        state[i] &= 0xffffffffUL; // for WORDSIZE > 32 machines
-        i++;
-		j++;
-        if (i>=N) { 
-			state[0] = state[N-1];
-			i=1;
-		}
-        if (j>=key_length) 
-			j = 0;
-    }
-    for (k=N-1; k; k--) {
-        state[i] = (state[i] ^ ((state[i-1] ^ (state[i-1] >> 30)) * 1566083941UL)) - i; // non linear 
-        state[i] &= 0xffffffffUL; // for WORDSIZE > 32 machines 
-        i++;
-        if (i>=N) { 
-			state[0] = state[N-1];
-			i=1;
-		}
-    }
+// AutoHotkey: Comment out unused functions because sometimes the compiler puts them in the EXE.  This happened
+// with PCRE but not with the functions in this particular file; but even so, it seems best to do so in case
+// other compilers behave differently.
 
-    state[0] = 0x80000000UL; // MSB is 1; assuring non-zero initial array 
-    left = 1;
-	initf = 1;
-}
+///* initialize by an array with array-length
+// * init_key is the array for initializing keys 
+// * key_length is its length */
+//void init_by_array(unsigned long init_key[], long key_length)
+//{
+//    int i, j, k;
+//
+//    init_genrand(19650218UL);
+//    i=1;
+//	j=0;
+//    k = (N>key_length ? N : key_length);  //return lesser of N and key_length
+//    for (; k; k--) {
+//        state[i] = (state[i] ^ ((state[i-1] ^ (state[i-1] >> 30)) * 1664525UL)) + init_key[j] + j; // non linear 
+//        state[i] &= 0xffffffffUL; // for WORDSIZE > 32 machines
+//        i++;
+//		j++;
+//        if (i>=N) { 
+//			state[0] = state[N-1];
+//			i=1;
+//		}
+//        if (j>=key_length) 
+//			j = 0;
+//    }
+//    for (k=N-1; k; k--) {
+//        state[i] = (state[i] ^ ((state[i-1] ^ (state[i-1] >> 30)) * 1566083941UL)) - i; // non linear 
+//        state[i] &= 0xffffffffUL; // for WORDSIZE > 32 machines 
+//        i++;
+//        if (i>=N) { 
+//			state[0] = state[N-1];
+//			i=1;
+//		}
+//    }
+//
+//    state[0] = 0x80000000UL; // MSB is 1; assuring non-zero initial array 
+//    left = 1;
+//	initf = 1;
+//}
 
 static void next_state(void)
 {
@@ -194,50 +199,51 @@ double genrand_real1(void)
     // divided by 2^32-1 
 }
 
-// generates a random number on [0,1)-real-interval 
-double genrand_real2(void)
-{
-    unsigned long y;
 
-    if (--left == 0) 
-		next_state();
-    y = *next++;
+// AutoHotkey: Comment out unused functions (see similar comment above for details).
 
-    // Tempering 
-    y ^= (y >> 11);
-    y ^= (y << 7) & 0x9d2c5680UL;
-    y ^= (y << 15) & 0xefc60000UL;
-    y ^= (y >> 18);
-
-    return (double)y * (1.0/4294967296.0);
-    // divided by 2^32
-}
-
-// generates a random number on (0,1)-real-interval 
-double genrand_real3(void)
-{
-    unsigned long y;
-
-    if (--left == 0) 
-		next_state();
-    y = *next++;
-
-    // Tempering
-    y ^= (y >> 11);
-    y ^= (y << 7) & 0x9d2c5680UL;
-    y ^= (y << 15) & 0xefc60000UL;
-    y ^= (y >> 18);
-
-    return ((double)y + 0.5) * (1.0/4294967296.0);
-    // divided by 2^32
-}
-
-// generates a random number on [0,1) with 53-bit resolution
-double genrand_res53(void) 
-{ 
-    unsigned long a=genrand_int32()>>5, b=genrand_int32()>>6;
-
-    return(a*67108864.0+b)*(1.0/9007199254740992.0);
-} 
-// These real versions are due to Isaku Wada, 2002/01/09 added */
-
+//double genrand_real2(void)
+//{
+//    unsigned long y;
+//
+//    if (--left == 0) 
+//		next_state();
+//    y = *next++;
+//
+//    // Tempering 
+//    y ^= (y >> 11);
+//    y ^= (y << 7) & 0x9d2c5680UL;
+//    y ^= (y << 15) & 0xefc60000UL;
+//    y ^= (y >> 18);
+//
+//    return (double)y * (1.0/4294967296.0);
+//    // divided by 2^32
+//}
+//
+//// generates a random number on (0,1)-real-interval 
+//double genrand_real3(void)
+//{
+//    unsigned long y;
+//
+//    if (--left == 0) 
+//		next_state();
+//    y = *next++;
+//
+//    // Tempering
+//    y ^= (y >> 11);
+//    y ^= (y << 7) & 0x9d2c5680UL;
+//    y ^= (y << 15) & 0xefc60000UL;
+//    y ^= (y >> 18);
+//
+//    return ((double)y + 0.5) * (1.0/4294967296.0);
+//    // divided by 2^32
+//}
+//
+//// generates a random number on [0,1) with 53-bit resolution
+//double genrand_res53(void) 
+//{ 
+//    unsigned long a=genrand_int32()>>5, b=genrand_int32()>>6;
+//
+//    return(a*67108864.0+b)*(1.0/9007199254740992.0);
+//} 
+//// These real versions are due to Isaku Wada, 2002/01/09 added */

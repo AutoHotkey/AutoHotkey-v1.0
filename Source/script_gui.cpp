@@ -1063,9 +1063,7 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 
 ResultType Line::GuiControlGet(char *aCommand, char *aControlID, char *aParam3)
 {
-	Var *output_var = ResolveVarOfArg(0);
-	if (!output_var)
-		return FAIL; // ErrorLevel is not used in this case since it's an unexpected and critical error.
+	Var *output_var = OUTPUT_VAR;
 	output_var->Assign(); // Set default to be blank for all commands, for consistency.
 
 	int window_index = g.GuiDefaultWindowIndex; // Which window to operate upon.  Initialized to thread's default.
@@ -1496,7 +1494,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		// used to access the list of controls in various places.
 		// Expand the array by one block:
 		GuiControlType *realloc_temp;  // Needed since realloc returns NULL on failure but leaves original block allocated.
-		if (   !(realloc_temp = (GuiControlType *)realloc(mControl
+		if (   !(realloc_temp = (GuiControlType *)realloc(mControl  // If passed NULL, realloc() will do a malloc().
 			, (mControlCapacity + GUI_CONTROL_BLOCK_SIZE) * sizeof(GuiControlType)))   )
 			return g_script.ScriptError(TOO_MANY_CONTROLS); // A non-specific msg since this error is so rare.
 		mControl = realloc_temp;
@@ -1593,7 +1591,6 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 	// Some controls also have the WS_EX_CLIENTEDGE exstyle by default because they look pretty strange
 	// without them.  This seems to be the standard default used by most applications.
 	// Note: It seems that WS_BORDER is hardly ever used in practice with controls, just parent windows.
-	case GUI_CONTROL_BUTTON:
 	case GUI_CONTROL_CHECKBOX:
 		opt.style_add |= WS_TABSTOP|BS_MULTILINE;
 		break;
@@ -1668,6 +1665,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		// effect automatically (untested).
 		opt.style_add |= WS_TABSTOP|DTS_SHORTDATECENTURYFORMAT;
 		break;
+	case GUI_CONTROL_BUTTON: // v1.0.45: Removed BS_MULTILINE from default because it is conditionally applied later below.
 	case GUI_CONTROL_HOTKEY:
 	case GUI_CONTROL_SLIDER:
 		opt.style_add |= WS_TABSTOP;
@@ -1749,6 +1747,16 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 			style = (style & ~BS_TYPEMASK) | BS_DEFPUSHBUTTON; // Done to ensure the lowest four bits are pure.
 		else
 			style &= ~BS_TYPEMASK;  // Force it to be the right type of button --> BS_PUSHBUTTON == 0
+		if (opt.width != COORD_UNSPECIFIED || opt.height != COORD_UNSPECIFIED || opt.row_count > 1.5 || StrChrAny(aText, "\n\r")) // Both LF and CR can start new lines.
+		{
+			// Above: Do the following whenever there's an explicit width present because in that case,
+			// the button text can automatically word-wrap to the next line if it contains any spaces/tabs/dashes
+			// (and thus may need BS_MULTILINE).  It's also to improve backward compatibility.
+			// v1.0.45: Under some desktop themes, it has been reported that the last letter of
+			// the button text gets truncated or causes an unwanted wrap that prevents proper display
+			// of the text.  Adding the wrap property only when necessary has been known to help.
+			style |= (BS_MULTILINE & ~opt.style_remove); // Add BS_MULTILINE unless it was explicitly removed.
+		}
 		break;
 	case GUI_CONTROL_CHECKBOX:
 		// Note: BS_AUTO3STATE and BS_AUTOCHECKBOX are mutually exclusive due to their overlap within
@@ -1852,10 +1860,10 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		// more friendly to omit them in the automatic-label label name.  Note that a button
 		// or menu item can contain a literal ampersand by using two ampersands, such as
 		// "Save && Exit" (in this example, the auto-label would be named "ButtonSaveExit").
-		StrReplaceAll(label_name, " ", "", true, SCS_SENSITIVE);
-		StrReplaceAll(label_name, "&", "", true, SCS_SENSITIVE);
-		StrReplaceAll(label_name, "\r", "", true, SCS_SENSITIVE); // Done separate from \n in case they're ever unpaired.
-		StrReplaceAll(label_name, "\n", "", true, SCS_SENSITIVE);
+		StrReplace(label_name, " ", "", SCS_SENSITIVE);
+		StrReplace(label_name, "&", "", SCS_SENSITIVE);
+		StrReplace(label_name, "\r", "", SCS_SENSITIVE); // Done separate from \n in case they're ever unpaired.
+		StrReplace(label_name, "\n", "", SCS_SENSITIVE);
 		control.jump_to_label = g_script.FindLabel(label_name);  // OK if NULL (the button will do nothing).
 	}
 
@@ -5891,7 +5899,7 @@ ResultType GuiType::Show(char *aOptions, char *aText)
 		// Avoid calling MoveWindow() if nothing changed because it might repaint/redraw even if window size/pos
 		// didn't change:
 		if (width != old_width || height != old_height || (x != COORD_UNSPECIFIED && x != old_rect.left)
-			|| (y != COORD_UNSPECIFIED && y != old_rect.bottom))
+			|| (y != COORD_UNSPECIFIED && y != old_rect.top)) // v1.0.45: Fixed to be old_rect.top not old_rect.bottom.
 		{
 			// v1.0.44.08: Window state gets messed up if it's resized without first unmaximizing it (for example,
 			// it can't be resized by dragging its lower-right corner).  So it seems best to unmaximize, perhaps
@@ -6488,7 +6496,7 @@ ResultType GuiType::ControlGetContents(Var &aOutputVar, GuiControlType &aControl
 		// Since edit controls tend to have many hard returns in them, use "true" for the last param to
 		// enhance performance.  This performance gain is extreme when the control contains thousands
 		// of CRLFs:
-		StrReplaceAll(aOutputVar.Contents(), "\r\n", "\n", false, SCS_SENSITIVE);
+		StrReplace(aOutputVar.Contents(), "\r\n", "\n", SCS_SENSITIVE);
 		aOutputVar.Length() = (VarSizeType)strlen(aOutputVar.Contents());
 	}
 	return aOutputVar.Close();  // In case it's the clipboard.
@@ -6637,7 +6645,7 @@ int GuiType::FindOrCreateFont(char *aOptions, char *aFontName, FontType *aFounda
 			TEXTMETRIC tm;
 			GetTextMetrics(hdc, &tm);
 			// Convert height to points.  Use MulDiv's build-in rounding to get a more accurate result.
-			// This is confirmed to be the correct forumla to convert tm's height to font point size,
+			// This is confirmed to be the correct formula to convert tm's height to font point size,
 			// and it does yield 8 for DEFAULT_GUI_FONT as it should:
 			sFont[sFontCount].point_size = MulDiv(tm.tmHeight - tm.tmInternalLeading, 72, GetDeviceCaps(hdc, LOGPIXELSY));
 			sFont[sFontCount].weight = tm.tmWeight;
