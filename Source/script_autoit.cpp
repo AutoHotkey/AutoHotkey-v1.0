@@ -173,9 +173,9 @@ ResultType Line::PixelGetColor(int aX, int aY, char *aOptions)
 {
 	if (strcasestr(aOptions, "Slow")) // New mode for v1.0.43.10.  Takes precedence over Alt mode.
 		return PixelSearch(aX, aY, aX, aY, 0, 0, aOptions, true); // It takes care of setting ErrorLevel and the output-var.
-	Var *output_var = OUTPUT_VAR;
+	Var &output_var = *OUTPUT_VAR;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
-	output_var->Assign(); // Init to empty string regardless of whether we succeed here.
+	output_var.Assign(); // Init to empty string regardless of whether we succeed here.
 
 	if (!(g.CoordMode & COORD_MODE_PIXEL)) // Using relative vs. screen coordinates.
 	{
@@ -206,7 +206,7 @@ ResultType Line::PixelGetColor(int aX, int aY, char *aOptions)
 	char buf[32];
 	sprintf(buf, "0x%06X", strcasestr(aOptions, "RGB") ? bgr_to_rgb(color) : color);
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-	return output_var->Assign(buf);
+	return output_var.Assign(buf);
 }
 
 
@@ -659,21 +659,21 @@ ResultType Line::Control(char *aCmd, char *aValue, char *aControl, char *aTitle,
 ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTitle, char *aText
 	, char *aExcludeTitle, char *aExcludeText)
 {
-	Var *output_var = OUTPUT_VAR;
+	Var &output_var = *OUTPUT_VAR;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR);  // Set default since there are many points of return.
 	ControlGetCmds control_cmd = ConvertControlGetCmd(aCmd);
 	// Since command names are validated at load-time, this only happens if the command name
 	// was contained in a variable reference.  Since that is very rare, just set ErrorLevel
 	// and return:
 	if (control_cmd == CONTROLGET_CMD_INVALID)
-		return output_var->Assign();  // Let ErrorLevel tell the story.
+		return output_var.Assign();  // Let ErrorLevel tell the story.
 
 	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	if (!target_window)
-		return output_var->Assign();  // Let ErrorLevel tell the story.
+		return output_var.Assign();  // Let ErrorLevel tell the story.
 	HWND control_window = ControlExist(target_window, aControl); // This can return target_window itself for cases such as ahk_id %ControlHWND%.
 	if (!control_window)
-		return output_var->Assign();  // Let ErrorLevel tell the story.
+		return output_var.Assign();  // Let ErrorLevel tell the story.
 
 	DWORD dwResult, index, length, item_length, start, end, u, item_count;
 	UINT msg, x_msg, y_msg;
@@ -684,22 +684,22 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 	{
 	case CONTROLGET_CMD_CHECKED: //Must be a Button
 		if (!SendMessageTimeout(control_window, BM_GETCHECK, 0, 0, SMTO_ABORTIFHUNG, 2000, &dwResult))
-			return output_var->Assign();
-		output_var->Assign(dwResult == BST_CHECKED ? "1" : "0");
+			return output_var.Assign();
+		output_var.Assign(dwResult == BST_CHECKED ? "1" : "0");
 		break;
 
 	case CONTROLGET_CMD_ENABLED:
-		output_var->Assign(IsWindowEnabled(control_window) ? "1" : "0");
+		output_var.Assign(IsWindowEnabled(control_window) ? "1" : "0");
 		break;
 
 	case CONTROLGET_CMD_VISIBLE:
-		output_var->Assign(IsWindowVisible(control_window) ? "1" : "0");
+		output_var.Assign(IsWindowVisible(control_window) ? "1" : "0");
 		break;
 
 	case CONTROLGET_CMD_TAB: // must be a Tab Control
 		if (!SendMessageTimeout(control_window, TCM_GETCURSEL, 0, 0, SMTO_ABORTIFHUNG, 2000, &index) || index == -1) // Relies on short-circuit boolean order.
-			return output_var->Assign();
-		output_var->Assign(index + 1);
+			return output_var.Assign();
+		output_var.Assign(index + 1);
 		break;
 
 	case CONTROLGET_CMD_FINDSTRING:
@@ -708,11 +708,11 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 		else if (strcasestr(aControl, "List"))
 			msg = LB_FINDSTRINGEXACT;
 		else // Must be ComboBox or ListBox
-			return output_var->Assign();  // Let ErrorLevel tell the story.
+			return output_var.Assign();  // Let ErrorLevel tell the story.
 		if (!SendMessageTimeout(control_window, msg, 1, (LPARAM)aValue, SMTO_ABORTIFHUNG, 2000, &index)
 			|| index == CB_ERR) // CB_ERR == LB_ERR
-			return output_var->Assign();
-		output_var->Assign(index + 1);
+			return output_var.Assign();
+		output_var.Assign(index + 1);
 		break;
 
 	case CONTROLGET_CMD_CHOICE:
@@ -729,33 +729,33 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 			y_msg = LB_GETTEXT;
 		}
 		else // Must be ComboBox or ListBox
-			return output_var->Assign();  // Let ErrorLevel tell the story.
+			return output_var.Assign();  // Let ErrorLevel tell the story.
 		if (!SendMessageTimeout(control_window, msg, 0, 0, SMTO_ABORTIFHUNG, 2000, &index)
 			|| index == CB_ERR  // CB_ERR == LB_ERR.  There is no selection (or very rarely, some other type of problem).
 			|| !SendMessageTimeout(control_window, x_msg, (WPARAM)index, 0, SMTO_ABORTIFHUNG, 2000, &length)
 			|| length == CB_ERR)  // CB_ERR == LB_ERR
-			return output_var->Assign(); // Above relies on short-circuit boolean order.
+			return output_var.Assign(); // Above relies on short-circuit boolean order.
 		// In unusual cases, MSDN says the indicated length might be longer than it actually winds up
 		// being when the item's text is retrieved.  This should be harmless, since there are many
 		// other precedents where a variable is sized to something larger than it winds up carrying.
 		// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
 		// this call will set up the clipboard for writing:
-		if (output_var->Assign(NULL, (VarSizeType)length) != OK) // It already displayed the error.
+		if (output_var.Assign(NULL, (VarSizeType)length) != OK) // It already displayed the error.
 			return FAIL;
-		if (!SendMessageTimeout(control_window, y_msg, (WPARAM)index, (LPARAM)output_var->Contents()
+		if (!SendMessageTimeout(control_window, y_msg, (WPARAM)index, (LPARAM)output_var.Contents()
 			, SMTO_ABORTIFHUNG, 2000, &length)
 			|| length == CB_ERR) // Probably impossible given the way it was called above.  Also, CB_ERR == LB_ERR. Relies on short-circuit boolean order.
 		{
-			output_var->Close(); // In case it's the clipboard.
-			return output_var->Assign(); // Let ErrorLevel tell the story.
+			output_var.Close(); // In case it's the clipboard.
+			return output_var.Assign(); // Let ErrorLevel tell the story.
 		}
-		output_var->Close(); // In case it's the clipboard.
-		output_var->Length() = length;  // Update to actual vs. estimated length.
+		output_var.Close(); // In case it's the clipboard.
+		output_var.Length() = length;  // Update to actual vs. estimated length.
 		break;
 
 	case CONTROLGET_CMD_LIST:
 		if (!strnicmp(aControl, "SysListView32", 13)) // Tried strcasestr(aControl, "ListView") to get it to work with IZArc's Delphi TListView1, but none of the modes or options worked.
-			return ControlGetListView(*output_var, control_window, aValue); // It will also set ErrorLevel to "success" if successful.
+			return ControlGetListView(output_var, control_window, aValue); // It will also set ErrorLevel to "success" if successful.
 		// This is done here as the special LIST sub-command rather than just being built into
 		// ControlGetText because ControlGetText already has a function for ComboBoxes: it fetches
 		// the current selection.  Although ListBox does not have such a function, it seem best
@@ -773,17 +773,17 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 			y_msg = LB_GETTEXT;
 		}
 		else // Must be ComboBox or ListBox
-			return output_var->Assign();  // Let ErrorLevel tell the story.
+			return output_var.Assign();  // Let ErrorLevel tell the story.
 		if (!(SendMessageTimeout(control_window, msg, 0, 0, SMTO_ABORTIFHUNG, 5000, &item_count))
 			|| item_count < 1) // No items in ListBox/ComboBox or there was a problem getting the count.
-			return output_var->Assign();  // Let ErrorLevel tell the story.
+			return output_var.Assign();  // Let ErrorLevel tell the story.
 		// Calculate the length of delimited list of items.  Length is initialized to provide enough
 		// room for each item's delimiter (the last item does not have a delimiter).
 		for (length = item_count - 1, u = 0; u < item_count; ++u)
 		{
 			if (!SendMessageTimeout(control_window, x_msg, u, 0, SMTO_ABORTIFHUNG, 5000, &item_length)
 				|| item_length == LB_ERR) // Note that item_length is legitimately zero for a blank item in the list.
-				return output_var->Assign();  // Let ErrorLevel tell the story.
+				return output_var.Assign();  // Let ErrorLevel tell the story.
 			length += item_length;
 		}
 		// In unusual cases, MSDN says the indicated length might be longer than it actually winds up
@@ -791,9 +791,9 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 		// other precedents where a variable is sized to something larger than it winds up carrying.
 		// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
 		// this call will set up the clipboard for writing:
-		if (output_var->Assign(NULL, (VarSizeType)length, true, true) != OK)
+		if (output_var.Assign(NULL, (VarSizeType)length, true, true) != OK)
 			return FAIL;  // It already displayed the error.
-		for (cp = output_var->Contents(), length = item_count - 1, u = 0; u < item_count; ++u)
+		for (cp = output_var.Contents(), length = item_count - 1, u = 0; u < item_count; ++u)
 		{
 			if (SendMessageTimeout(control_window, y_msg, (WPARAM)u, (LPARAM)cp, SMTO_ABORTIFHUNG, 5000, &item_length)
 				&& item_length != LB_ERR)
@@ -807,21 +807,21 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 			// Above: In this case, seems better to use \n rather than pipe as default delimiter in case
 			// the listbox/combobox contains any real pipes.
 		}
-		output_var->Close(); // In case it's the clipboard.
-		output_var->Length() = (VarSizeType)length;  // Update it to the actual length, which can vary from the estimate.
+		output_var.Close(); // In case it's the clipboard.
+		output_var.Length() = (VarSizeType)length;  // Update it to the actual length, which can vary from the estimate.
 		break;
 
 	case CONTROLGET_CMD_LINECOUNT:  //Must be an Edit
 		// MSDN: "If the control has no text, the return value is 1. The return value will never be less than 1."
 		if (!SendMessageTimeout(control_window, EM_GETLINECOUNT, 0, 0, SMTO_ABORTIFHUNG, 2000, &dwResult))
-			return output_var->Assign();
-		output_var->Assign(dwResult);
+			return output_var.Assign();
+		output_var.Assign(dwResult);
 		break;
 
 	case CONTROLGET_CMD_CURRENTLINE:
 		if (!SendMessageTimeout(control_window, EM_LINEFROMCHAR, -1, 0, SMTO_ABORTIFHUNG, 2000, &dwResult))
-			return output_var->Assign();
-		output_var->Assign(dwResult + 1);
+			return output_var.Assign();
+		output_var.Assign(dwResult + 1);
 		break;
 
 	case CONTROLGET_CMD_CURRENTCOL:
@@ -830,10 +830,10 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 		// The dwResult from the first msg below is not useful and is not checked.
 		if (   !SendMessageTimeout(control_window, EM_GETSEL, (WPARAM)&start, (LPARAM)&end, SMTO_ABORTIFHUNG, 2000, &dwResult)
 			|| !SendMessageTimeout(control_window, EM_LINEFROMCHAR, (WPARAM)start, 0, SMTO_ABORTIFHUNG, 2000, &line_number)   )
-			return output_var->Assign();
+			return output_var.Assign();
 		if (!line_number) // Since we're on line zero, the column number is simply start+1.
 		{
-			output_var->Assign(start + 1);  // +1 to convert from zero based.
+			output_var.Assign(start + 1);  // +1 to convert from zero based.
 			break; // Fall out of the switch so that ErrorLevel will be set to 0 (no error).
 		}
 		// Au3: Decrement the character index until the row changes.  Difference between this
@@ -842,28 +842,28 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 		for (;;)
 		{
 			if (!SendMessageTimeout(control_window, EM_LINEFROMCHAR, (WPARAM)start, 0, SMTO_ABORTIFHUNG, 2000, &dwResult))
-				return output_var->Assign();
+				return output_var.Assign();
 			if (dwResult != line_number)
 				break;
 			--start;
 		}
-		output_var->Assign((int)(start_orig - start));
+		output_var.Assign((int)(start_orig - start));
 		break;
 	}
 
 	case CONTROLGET_CMD_LINE:
 		if (!*aValue)
-			return output_var->Assign();
+			return output_var.Assign();
 		control_index = ATOI(aValue) - 1;
 		if (control_index < 0)
-			return output_var->Assign();  // Let ErrorLevel tell the story.
+			return output_var.Assign();  // Let ErrorLevel tell the story.
 		dyn_buf = (char *)_alloca(32768); // 32768 is the size Au3 uses for GETLINE and such.
 		*(LPINT)dyn_buf = 32768; // EM_GETLINE requires first word of string to be set to its size.
 		if (   !SendMessageTimeout(control_window, EM_GETLINE, (WPARAM)control_index, (LPARAM)dyn_buf, SMTO_ABORTIFHUNG, 2000, &dwResult)
 			|| !dwResult   ) // due to the specified line number being greater than the number of lines in the edit control.
-			return output_var->Assign();
+			return output_var.Assign();
 		dyn_buf[dwResult] = '\0'; // Ensure terminated since the API might not do it in some cases.
-		output_var->Assign(dyn_buf);
+		output_var.Assign(dyn_buf);
 		break;
 
 	case CONTROLGET_CMD_SELECTED: // Must be an Edit.
@@ -871,13 +871,13 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 		// with this technique.  Au3 has the same problem with them, so for now it's just documented here
 		// as a limitation.
 		if (!SendMessageTimeout(control_window, EM_GETSEL, (WPARAM)&start,(LPARAM)&end, SMTO_ABORTIFHUNG, 2000, &dwResult))
-			return output_var->Assign();
+			return output_var.Assign();
 		// The above sets start to be the zero-based position of the start of the selection (similar for end).
 		// If there is no selection, start and end will be equal, at least in the edit controls I tried it with.
 		// The dwResult from the above is not useful and is not checked.
 		if (start == end) // Unlike Au3, it seems best to consider a blank selection to be a non-error.
 		{
-			output_var->Assign();
+			output_var.Assign();
 			break; // Fall out of the switch so that ErrorLevel will be set to 0 (no error).
 		}
 		// Dynamic memory is used because must get all the control's text so that just the selected region
@@ -886,7 +886,7 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 		if (   !SendMessageTimeout(control_window, WM_GETTEXTLENGTH, 0, 0, SMTO_ABORTIFHUNG, 2000, &length)
 			|| !length  // Since the above didn't return for start == end, this is an error because we have a selection of non-zero length, but no text to go with it!
 			|| !(dyn_buf = (char *)malloc(length + 1))   ) // Relies on short-circuit boolean order.
-			return output_var->Assign();
+			return output_var.Assign();
 		if (   !SendMessageTimeout(control_window, WM_GETTEXT, (WPARAM)(length + 1), (LPARAM)dyn_buf, SMTO_ABORTIFHUNG, 2000, &length)
 			|| !length || end > length   )
 		{
@@ -895,30 +895,30 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 			// a problem because the end of the selection should not be beyond length of text
 			// that was retrieved.
 			free(dyn_buf);
-			return output_var->Assign();
+			return output_var.Assign();
 		}
 		dyn_buf[end] = '\0'; // Terminate the string at the end of the selection.
-		output_var->Assign(dyn_buf + start);
+		output_var.Assign(dyn_buf + start);
 		free(dyn_buf);
 		break;
 
 	case CONTROLGET_CMD_STYLE:
 		// Seems best to always format as hex, since it has more human-readable meaning then:
 		sprintf(hex_buf, "0x%08X", GetWindowLong(control_window, GWL_STYLE));
-		output_var->Assign(hex_buf);
+		output_var.Assign(hex_buf);
 		break;
 
 	case CONTROLGET_CMD_EXSTYLE:
 		// Seems best to always format as hex, since it has more human-readable meaning then:
 		sprintf(hex_buf, "0x%08X", GetWindowLong(control_window, GWL_EXSTYLE));
-		output_var->Assign(hex_buf);
+		output_var.Assign(hex_buf);
 		break;
 
 	case CONTROLGET_CMD_HWND:
 		// The terminology "HWND" was chosen rather than "ID" to avoid confusion with a control's
 		// dialog ID (as retrieved by GetDlgCtrlID).  This also reserves the word ID for possible
 		// use with the control's Dialog ID in future versions.
-		output_var->AssignHWND(control_window);
+		output_var.AssignHWND(control_window);
 		break;
 	}
 
@@ -1047,10 +1047,13 @@ int CALLBACK FileSelectFolderCallback(HWND hwnd, UINT uMsg, LPARAM lParam, LPARA
 
 
 ResultType Line::FileSelectFolder(char *aRootDir, char *aOptions, char *aGreeting)
+// Since other script threads can interrupt this command while it's running, it's important that
+// the command not refer to sArgDeref[] and sArgVar[] anytime after an interruption becomes possible.
+// This is because an interrupting thread usually changes the values to something inappropriate for this thread.
 {
-	Var *output_var = OUTPUT_VAR;
+	Var &output_var = *OUTPUT_VAR; // Must be resolved early.  See comment above.
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
-	if (!output_var->Assign())  // Initialize the output variable.
+	if (!output_var.Assign())  // Initialize the output variable.
 		return FAIL;
 
 	if (g_nFolderDialogs >= MAX_FOLDERDIALOGS)
@@ -1146,16 +1149,15 @@ ResultType Line::FileSelectFolder(char *aRootDir, char *aOptions, char *aGreetin
 	pMalloc->Release();
 
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-	return output_var->Assign(Result);
+	return output_var.Assign(Result);
 }
 
 
 
 ResultType Line::FileGetShortcut(char *aShortcutFile) // Credited to Holger <Holger.Kotsch at GMX de>.
 {
-	// These might be omitted in the parameter list, so it's okay if they resolve to NULL.
-	Var *output_var_target = ARGVAR2;
-	Var *output_var_dir = ARGVAR3;
+	Var *output_var_target = ARGVAR2; // These might be omitted in the parameter list, so it's okay if 
+	Var *output_var_dir = ARGVAR3;    // they resolve to NULL.
 	Var *output_var_arg = ARGVAR4;
 	Var *output_var_desc = ARGVAR5;
 	Var *output_var_icon = ARGVAR6;
@@ -1602,6 +1604,10 @@ int Line::Util_CopyFile(const char *szInputSource, const char *szInputDest, bool
 		; is_found
 		; is_found = FindNextFile(hSearch, &findData))
 	{
+		// Since other script threads can interrupt during LONG_OPERATION_UPDATE, it's important that
+		// this function and those that call it not refer to sArgDeref[] and sArgVar[] anytime after an
+		// interruption becomes possible. This is because an interrupting thread usually changes the
+		// values to something inappropriate for this thread.
 		LONG_OPERATION_UPDATE
 
 		// Make sure the returned handle is a file and not a directory before we

@@ -874,13 +874,13 @@ ResultType Line::TrayTip(char *aTitle, char *aText, char *aTimeout, char *aOptio
 
 ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 {
-	Var *output_var = OUTPUT_VAR;
+	Var &output_var = *OUTPUT_VAR;
 	TransformCmds trans_cmd = ConvertTransformCmd(aCmd);
 	// Since command names are validated at load-time, this only happens if the command name
 	// was contained in a variable reference.  Since that is very rare, output_var is simply
 	// made blank to indicate the problem:
 	if (trans_cmd == TRANS_CMD_INVALID)
-		return output_var->Assign();
+		return output_var.Assign();
 
 	char buf[32];
 	int value32;
@@ -900,78 +900,78 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 	#define ASSIGN_BASED_ON_TYPE \
 		DETERMINE_NUMERIC_TYPES \
 		if (EITHER_IS_FLOAT) \
-			return output_var->Assign(result_double);\
+			return output_var.Assign(result_double);\
 		else\
-			return output_var->Assign((INT64)result_double);
+			return output_var.Assign((INT64)result_double);
 
 	// Have a negative exponent always cause a floating point result:
 	#define ASSIGN_BASED_ON_TYPE_POW \
 		DETERMINE_NUMERIC_TYPES \
 		if (EITHER_IS_FLOAT || value_double2 < 0) \
-			return output_var->Assign(result_double);\
+			return output_var.Assign(result_double);\
 		else\
-			return output_var->Assign((INT64)result_double);
+			return output_var.Assign((INT64)result_double);
 
 	#define ASSIGN_BASED_ON_TYPE_SINGLE \
 		if (IsPureNumeric(aValue1, true, false, true) == PURE_FLOAT)\
-			return output_var->Assign(result_double);\
+			return output_var.Assign(result_double);\
 		else\
-			return output_var->Assign((INT64)result_double);
+			return output_var.Assign((INT64)result_double);
 
 	// If rounding to an integer, ensure the result is stored as an integer:
 	#define ASSIGN_BASED_ON_TYPE_SINGLE_ROUND \
 		if (IsPureNumeric(aValue1, true, false, true) == PURE_FLOAT && value32 > 0)\
-			return output_var->Assign(result_double);\
+			return output_var.Assign(result_double);\
 		else\
-			return output_var->Assign((INT64)result_double);
+			return output_var.Assign((INT64)result_double);
 
 	switch(trans_cmd)
 	{
 	case TRANS_CMD_ASC:
 		if (*aValue1)
-			return output_var->Assign((int)(UCHAR)*aValue1); // Cast to UCHAR so that chars above Asc(128) show as positive.
+			return output_var.Assign((int)(UCHAR)*aValue1); // Cast to UCHAR so that chars above Asc(128) show as positive.
 		else
-			return output_var->Assign();
+			return output_var.Assign();
 
 	case TRANS_CMD_CHR:
 		value32 = ATOI(aValue1);
 		if (value32 < 0 || value32 > 255)
-			return output_var->Assign();
+			return output_var.Assign();
 		else
 		{
 			*buf = value32;  // Store ASCII value as a single-character string.
 			*(buf + 1) = '\0';
-			return output_var->Assign(buf);
+			return output_var.Assign(buf);
 		}
 
 	case TRANS_CMD_DEREF:
-		return Deref(output_var, aValue1);
+		return Deref(&output_var, aValue1);
 
 	case TRANS_CMD_UNICODE:
 		int char_count;
-		if (output_var->Type() == VAR_CLIPBOARD)
+		if (output_var.Type() == VAR_CLIPBOARD)
 		{
 			// Since the output var is the clipboard, the mode is autodetected as the following:
 			// Convert aValue1 from UTF-8 to Unicode and put the result onto the clipboard.
 			// MSDN: "Windows 95: Under the Microsoft Layer for Unicode, MultiByteToWideChar also
 			// supports CP_UTF7 and CP_UTF8."
 			if (   !(char_count = UTF8ToWideChar(aValue1, NULL, 0))   ) // Get required buffer size in WCHARs (includes terminator).
-				return output_var->Assign(); // Make output_var (the clipboard in this case) blank to indicate failure.
+				return output_var.Assign(); // Make output_var (the clipboard in this case) blank to indicate failure.
 			LPVOID clip_buf;
 			if (   !(clip_buf = g_clip.PrepareForWrite(char_count * sizeof(WCHAR)))   )
-				return output_var->Assign(); // Make output_var (the clipboard in this case) blank to indicate failure.
+				return output_var.Assign(); // Make output_var (the clipboard in this case) blank to indicate failure.
 			// Perform the conversion:
 			if (!UTF8ToWideChar(aValue1, (LPWSTR)clip_buf, char_count))
 			{
 				g_clip.AbortWrite();
-				return output_var->Assign(); // Make clipboard blank to indicate failure.
+				return output_var.Assign(); // Make clipboard blank to indicate failure.
 			}
 			return g_clip.Commit(CF_UNICODETEXT); // Save as type Unicode. It will display any error that occurs.
 		}
 		// Otherwise, going in the reverse direction: convert the clipboard contents to UTF-8 and put
 		// the result into a normal variable.
 		if (!IsClipboardFormatAvailable(CF_UNICODETEXT) || !g_clip.Open()) // Relies on short-circuit boolean order.
-			return output_var->Assign(); // Make the (non-clipboard) output_var blank to indicate failure.
+			return output_var.Assign(); // Make the (non-clipboard) output_var blank to indicate failure.
 		if (   !(g_clip.mClipMemNow = g_clip.GetClipboardDataTimeout(CF_UNICODETEXT)) // Relies on short-circuit boolean order.
 			|| !(g_clip.mClipMemNowLocked = (char *)GlobalLock(g_clip.mClipMemNow))
 			|| !(char_count = WideCharToUTF8((LPCWSTR)g_clip.mClipMemNowLocked, NULL, 0))   ) // char_count includes terminator.
@@ -979,20 +979,20 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 			// Above finds out how large the contents will be when converted to UTF-8.
 			// In this case, it failed to determine the count, perhaps due to Win95 lacking Unicode layer, etc.
 			g_clip.Close();
-			return output_var->Assign(); // Make the (non-clipboard) output_var blank to indicate failure.
+			return output_var.Assign(); // Make the (non-clipboard) output_var blank to indicate failure.
 		}
 		// Othewise, it found the count.  Set up the output variable, enlarging it if needed:
-		if (output_var->Assign(NULL, char_count - 1) != OK) // Don't combine this with the above or below it can return FAIL.
+		if (output_var.Assign(NULL, char_count - 1) != OK) // Don't combine this with the above or below it can return FAIL.
 		{
 			g_clip.Close();
 			return FAIL;  // It already displayed the error.
 		}
 		// Perform the conversion:
-		char_count = WideCharToUTF8((LPCWSTR)g_clip.mClipMemNowLocked, output_var->Contents(), char_count);
+		char_count = WideCharToUTF8((LPCWSTR)g_clip.mClipMemNowLocked, output_var.Contents(), char_count);
 		g_clip.Close(); // Close the clipboard and free the memory.
-		output_var->Close(); // NOTE: Length() was already set properly by Assign() above. In case it's the clipboard, though currently it can't be since that would auto-detect as the reverse direction.
+		output_var.Close(); // NOTE: Length() was already set properly by Assign() above. In case it's the clipboard, though currently it can't be since that would auto-detect as the reverse direction.
 		if (!char_count)
-			return output_var->Assign(); // Make non-clipboard output_var blank to indicate failure.
+			return output_var.Assign(); // Make non-clipboard output_var blank to indicate failure.
 		return OK;
 
 	case TRANS_CMD_HTML:
@@ -1051,9 +1051,9 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 
 		// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
 		// this call will set up the clipboard for writing:
-		if (output_var->Assign(NULL, length) != OK)
+		if (output_var.Assign(NULL, length) != OK)
 			return FAIL;  // It already displayed the error.
-		char *contents = output_var->Contents();  // For performance and tracking.
+		char *contents = output_var.Contents();  // For performance and tracking.
 
 		// Translate the text to HTML:
 		for (ucp = (UCHAR *)aValue1; *ucp; ++ucp)
@@ -1093,12 +1093,12 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 			}
 		}
 		*contents = '\0';  // Terminate the string.
-		return output_var->Close();  // In case it's the clipboard.
+		return output_var.Close();  // In case it's the clipboard.
 	}
 
 	case TRANS_CMD_MOD:
 		if (   !(value_double2 = ATOF(aValue2))   ) // Divide by zero, set it to be blank to indicate the problem.
-			return output_var->Assign();
+			return output_var.Assign();
 		// Otherwise:
 		result_double = qmathFmod(ATOF(aValue1), value_double2);
 		ASSIGN_BASED_ON_TYPE
@@ -1112,7 +1112,7 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 		bool value1_was_negative = (value_double1 < 0);
 		if (value_double1 == 0.0 && value_double2 < 0  // In essense, this is divide-by-zero.
 			|| value1_was_negative && qmathFmod(value_double2, 1.0) != 0.0) // Negative base but exponent isn't close enough to being an integer: unsupported (to simplify code).
-			return output_var->Assign();  // Return a consistent result (blank) rather than something that varies.
+			return output_var.Assign();  // Return a consistent result (blank) rather than something that varies.
 		// Otherwise:
 		if (value1_was_negative)
 			value_double1 = -value_double1; // Force a positive due to the limitiations of qmathPow().
@@ -1123,25 +1123,25 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 	}
 
 	case TRANS_CMD_EXP:
-		return output_var->Assign(qmathExp(ATOF(aValue1)));
+		return output_var.Assign(qmathExp(ATOF(aValue1)));
 
 	case TRANS_CMD_SQRT:
 		value_double1 = ATOF(aValue1);
 		if (value_double1 < 0)
-			return output_var->Assign();
-		return output_var->Assign(qmathSqrt(value_double1));
+			return output_var.Assign();
+		return output_var.Assign(qmathSqrt(value_double1));
 
 	case TRANS_CMD_LOG:
 		value_double1 = ATOF(aValue1);
 		if (value_double1 < 0)
-			return output_var->Assign();
-		return output_var->Assign(qmathLog10(ATOF(aValue1)));
+			return output_var.Assign();
+		return output_var.Assign(qmathLog10(ATOF(aValue1)));
 
 	case TRANS_CMD_LN:
 		value_double1 = ATOF(aValue1);
 		if (value_double1 < 0)
-			return output_var->Assign();
-		return output_var->Assign(qmathLog(ATOF(aValue1)));
+			return output_var.Assign();
+		return output_var.Assign(qmathLog(ATOF(aValue1)));
 
 	case TRANS_CMD_ROUND:
 		// In the future, a string conversion algorithm might be better to avoid the loss
@@ -1159,7 +1159,7 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 		// The code here is similar to that in BIF_FloorCeil(), so maintain them together.
 		result_double = ATOF(aValue1);
 		result_double = (trans_cmd == TRANS_CMD_FLOOR) ? qmathFloor(result_double) : qmathCeil(result_double);
-		return output_var->Assign((__int64)(result_double + (result_double > 0 ? 0.2 : -0.2))); // Fixed for v1.0.40.05: See comments in BIF_FloorCeil() for details.
+		return output_var.Assign((__int64)(result_double + (result_double > 0 ? 0.2 : -0.2))); // Fixed for v1.0.40.05: See comments in BIF_FloorCeil() for details.
 
 	case TRANS_CMD_ABS:
 	{
@@ -1171,34 +1171,34 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 		//ASSIGN_BASED_ON_TYPE_SINGLE
 		char *cp = omit_leading_whitespace(aValue1); // i.e. caller doesn't have to have ltrimmed it.
 		if (*cp == '-')
-			return output_var->Assign(cp + 1);  // Omit the first minus sign (simple conversion only).
+			return output_var.Assign(cp + 1);  // Omit the first minus sign (simple conversion only).
 		// Otherwise, no minus sign, so just omit the leading whitespace for consistency:
-		return output_var->Assign(cp);
+		return output_var.Assign(cp);
 	}
 
 	case TRANS_CMD_SIN:
-		return output_var->Assign(qmathSin(ATOF(aValue1)));
+		return output_var.Assign(qmathSin(ATOF(aValue1)));
 
 	case TRANS_CMD_COS:
-		return output_var->Assign(qmathCos(ATOF(aValue1)));
+		return output_var.Assign(qmathCos(ATOF(aValue1)));
 
 	case TRANS_CMD_TAN:
-		return output_var->Assign(qmathTan(ATOF(aValue1)));
+		return output_var.Assign(qmathTan(ATOF(aValue1)));
 
 	case TRANS_CMD_ASIN:
 		value_double1 = ATOF(aValue1);
 		if (value_double1 > 1 || value_double1 < -1)
-			return output_var->Assign(); // ASin and ACos aren't defined for other values.
-		return output_var->Assign(qmathAsin(ATOF(aValue1)));
+			return output_var.Assign(); // ASin and ACos aren't defined for other values.
+		return output_var.Assign(qmathAsin(ATOF(aValue1)));
 
 	case TRANS_CMD_ACOS:
 		value_double1 = ATOF(aValue1);
 		if (value_double1 > 1 || value_double1 < -1)
-			return output_var->Assign(); // ASin and ACos aren't defined for other values.
-		return output_var->Assign(qmathAcos(ATOF(aValue1)));
+			return output_var.Assign(); // ASin and ACos aren't defined for other values.
+		return output_var.Assign(qmathAcos(ATOF(aValue1)));
 
 	case TRANS_CMD_ATAN:
-		return output_var->Assign(qmathAtan(ATOF(aValue1)));
+		return output_var.Assign(qmathAtan(ATOF(aValue1)));
 
 	// For all of the below bitwise operations:
 	// Seems better to convert to signed rather than unsigned so that signed values can
@@ -1207,32 +1207,32 @@ ResultType Line::Transform(char *aCmd, char *aValue1, char *aValue2)
 	// so if we were to produce unsigned 64 bit values here, they would be somewhat incompatible
 	// with other script operations.
 	case TRANS_CMD_BITAND:
-		return output_var->Assign(ATOI64(aValue1) & ATOI64(aValue2));
+		return output_var.Assign(ATOI64(aValue1) & ATOI64(aValue2));
 
 	case TRANS_CMD_BITOR:
-		return output_var->Assign(ATOI64(aValue1) | ATOI64(aValue2));
+		return output_var.Assign(ATOI64(aValue1) | ATOI64(aValue2));
 
 	case TRANS_CMD_BITXOR:
-		return output_var->Assign(ATOI64(aValue1) ^ ATOI64(aValue2));
+		return output_var.Assign(ATOI64(aValue1) ^ ATOI64(aValue2));
 
 	case TRANS_CMD_BITNOT:
 		value64 = ATOI64(aValue1);
 		if (value64 < 0 || value64 > UINT_MAX)
 			// Treat it as a 64-bit signed value, since no other aspects of the program
 			// (e.g. IfEqual) will recognize an unsigned 64 bit number.
-			return output_var->Assign(~value64);
+			return output_var.Assign(~value64);
 		else
 			// Treat it as a 32-bit unsigned value when inverting and assigning.  This is
 			// because assigning it as a signed value would "convert" it into a 64-bit
 			// value, which in turn is caused by the fact that the script sees all negative
 			// numbers as 64-bit values (e.g. -1 is 0xFFFFFFFFFFFFFFFF).
-			return output_var->Assign(~(DWORD)value64);
+			return output_var.Assign(~(DWORD)value64);
 
 	case TRANS_CMD_BITSHIFTLEFT:  // Equivalent to multiplying by 2^value2
-		return output_var->Assign(ATOI64(aValue1) << ATOI(aValue2));
+		return output_var.Assign(ATOI64(aValue1) << ATOI(aValue2));
 
 	case TRANS_CMD_BITSHIFTRIGHT:  // Equivalent to dividing (integer) by 2^value2
-		return output_var->Assign(ATOI64(aValue1) >> ATOI(aValue2));
+		return output_var.Assign(ATOI64(aValue1) >> ATOI(aValue2));
 	}
 
 	return FAIL;  // Never executed (increases maintainability and avoids compiler warning).
@@ -1254,7 +1254,10 @@ ResultType Line::Input()
 	if (g_os.IsWin9x()) // v1.0.44.14: For simplicity, do nothing on Win9x rather than try to see if it actually supports the hook (such as if its some kind of emultated/hybrid OS).
 		return OK; // Could also set ErrorLevel to "Timeout" and output_var to be blank, but the benefits to backward compatibility seemed too dubious.
 
-	Var *output_var = OUTPUT_VAR;
+	// Since other script threads can interrupt this command while it's running, it's important that
+	// this command not refer to sArgDeref[] and sArgVar[] anytime after an interruption becomes possible.
+	// This is because an interrupting thread usually changes the values to something inappropriate for this thread.
+	Var *output_var = OUTPUT_VAR; // See comment above.
 	if (!output_var)
 	{
 		// No output variable, which due to load-time validation means there are no other args either.
@@ -1694,6 +1697,9 @@ ResultType Line::PerformShowWindow(ActionTypeType aActionType, char *aTitle, cha
 
 
 ResultType Line::PerformWait()
+// Since other script threads can interrupt these commands while they're running, it's important that
+// these commands not refer to sArgDeref[] and sArgVar[] anytime after an interruption becomes possible.
+// This is because an interrupting thread usually changes the values to something inappropriate for this thread.
 {
 	bool wait_indefinitely;
 	int sleep_duration;
@@ -2434,7 +2440,7 @@ ResultType Line::ControlSetText(char *aControl, char *aNewText, char *aTitle, ch
 ResultType Line::ControlGetText(char *aControl, char *aTitle, char *aText
 	, char *aExcludeTitle, char *aExcludeText)
 {
-	Var *output_var = OUTPUT_VAR;
+	Var &output_var = *OUTPUT_VAR;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR);  // Set default.
 	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	HWND control_window = target_window ? ControlExist(target_window, aControl) : NULL; // This can return target_window itself for cases such as ahk_id %ControlHWND%.
@@ -2451,7 +2457,7 @@ ResultType Line::ControlGetText(char *aControl, char *aTitle, char *aText
 
 	// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
 	// this call will set up the clipboard for writing:
-	if (output_var->Assign(NULL, space_needed - 1) != OK)
+	if (output_var.Assign(NULL, space_needed - 1) != OK)
 		return FAIL;  // It already displayed the error.
 	// Fetch the text directly into the var.  Also set the length explicitly
 	// in case actual size written was off from the esimated size (since
@@ -2459,21 +2465,21 @@ ResultType Line::ControlGetText(char *aControl, char *aTitle, char *aText
 	// in certain circumstances, see MS docs):
 	if (control_window)
 	{
-		if (   !(output_var->Length() = (VarSizeType)GetWindowTextTimeout(control_window
-			, output_var->Contents(), space_needed))   ) // There was no text to get or GetWindowTextTimeout() failed.
-			*output_var->Contents() = '\0';  // Safe because Assign() gave us a non-constant memory area.
+		if (   !(output_var.Length() = (VarSizeType)GetWindowTextTimeout(control_window
+			, output_var.Contents(), space_needed))   ) // There was no text to get or GetWindowTextTimeout() failed.
+			*output_var.Contents() = '\0';  // Safe because Assign() gave us a non-constant memory area.
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 	}
 	else
 	{
-		*output_var->Contents() = '\0';
-		output_var->Length() = 0;
+		*output_var.Contents() = '\0';
+		output_var.Length() = 0;
 		// And leave g_ErrorLevel set to ERRORLEVEL_ERROR to distinguish a non-existent control
 		// from a one that does exist but returns no text.
 	}
 	// Consider the above to be always successful, even if the window wasn't found, except
 	// when below returns an error:
-	return output_var->Close();  // In case it's the clipboard.
+	return output_var.Close();  // In case it's the clipboard.
 }
 
 
@@ -2735,6 +2741,9 @@ ResultType Line::StatusBarGetText(char *aPart, char *aTitle, char *aText
 
 ResultType Line::StatusBarWait(char *aTextToWaitFor, char *aSeconds, char *aPart, char *aTitle, char *aText
 	, char *aInterval, char *aExcludeTitle, char *aExcludeText)
+// Since other script threads can interrupt this command while it's running, it's important that
+// this command not refer to sArgDeref[] and sArgVar[] anytime after an interruption becomes possible.
+// This is because an interrupting thread usually changes the values to something inappropriate for this thread.
 {
 	// Note: ErrorLevel is handled by StatusBarUtil(), below.
 	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
@@ -3316,7 +3325,7 @@ ResultType Line::WinSetTitle(char *aTitle, char *aText, char *aNewTitle, char *a
 
 ResultType Line::WinGetTitle(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
 {
-	Var *output_var = OUTPUT_VAR;
+	Var &output_var = *OUTPUT_VAR;
 	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	// Even if target_window is NULL, we want to continue on so that the output
 	// param is set to be the empty string, which is the proper thing to do
@@ -3324,22 +3333,22 @@ ResultType Line::WinGetTitle(char *aTitle, char *aText, char *aExcludeTitle, cha
 
 	// Handle the output parameter.  See the comments in ACT_CONTROLGETTEXT for details.
 	VarSizeType space_needed = target_window ? GetWindowTextLength(target_window) + 1 : 1; // 1 for terminator.
-	if (output_var->Assign(NULL, space_needed - 1) != OK)
+	if (output_var.Assign(NULL, space_needed - 1) != OK)
 		return FAIL;  // It already displayed the error.
 	if (target_window)
 	{
 		// Update length using the actual length, rather than the estimate provided by GetWindowTextLength():
-		output_var->Length() = (VarSizeType)GetWindowText(target_window, output_var->Contents(), space_needed);
-		if (!output_var->Length())
+		output_var.Length() = (VarSizeType)GetWindowText(target_window, output_var.Contents(), space_needed);
+		if (!output_var.Length())
 			// There was no text to get or GetWindowTextTimeout() failed.
-			*output_var->Contents() = '\0';  // Safe because Assign() gave us a non-constant memory area.
+			*output_var.Contents() = '\0';  // Safe because Assign() gave us a non-constant memory area.
 	}
 	else
 	{
-		*output_var->Contents() = '\0';
-		output_var->Length() = 0;
+		*output_var.Contents() = '\0';
+		output_var.Length() = 0;
 	}
-	return output_var->Close();  // In case it's the clipboard.
+	return output_var.Close();  // In case it's the clipboard.
 }
 
 
@@ -3357,26 +3366,26 @@ ResultType Line::WinGetClass(char *aTitle, char *aText, char *aExcludeTitle, cha
 
 
 
-ResultType WinGetList(Var *output_var, WinGetCmds aCmd, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
+ResultType WinGetList(Var &aOutputVar, WinGetCmds aCmd, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
 // Helper function for WinGet() to avoid having a WindowSearch object on its stack (since that object
-// normally isn't needed).  Caller has ensured that output_var isn't NULL.
+// normally isn't needed).
 {
 	WindowSearch ws;
 	ws.mFindLastMatch = true; // Must set mFindLastMatch to get all matches rather than just the first.
-	ws.mArrayStart = (aCmd == WINGET_CMD_LIST) ? output_var : NULL; // Provide the position in the var list of where the array-element vars will be.
+	ws.mArrayStart = (aCmd == WINGET_CMD_LIST) ? &aOutputVar : NULL; // Provide the position in the var list of where the array-element vars will be.
 	// If aTitle is ahk_id nnnn, the Enum() below will be inefficient.  However, ahk_id is almost unheard of
 	// in this context because it makes little sense, so no extra code is added to make that case efficient.
 	if (ws.SetCriteria(g, aTitle, aText, aExcludeTitle, aExcludeText)) // These criteria allow the possibilty of a match.
 		EnumWindows(EnumParentFind, (LPARAM)&ws);
 	//else leave ws.mFoundCount set to zero (by the constructor).
-	return output_var->Assign(ws.mFoundCount);
+	return aOutputVar.Assign(ws.mFoundCount);
 }
 
 
 
 ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
 {
-	Var *output_var = OUTPUT_VAR;  // This is done even for WINGET_CMD_LIST.
+	Var &output_var = *OUTPUT_VAR;  // This is done even for WINGET_CMD_LIST.
 	WinGetCmds cmd = ConvertWinGetCmd(aCmd);
 	// Since command names are validated at load-time, this only happens if the command name
 	// was contained in a variable reference.  But for simplicity of design here, return
@@ -3405,9 +3414,9 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 		if (!target_window_determined)
 			target_window = WinExist(g, aTitle, aText, aExcludeTitle, aExcludeText, cmd == WINGET_CMD_IDLAST);
 		if (target_window)
-			return output_var->AssignHWND(target_window);
+			return output_var.AssignHWND(target_window);
 		else
-			return output_var->Assign();
+			return output_var.Assign();
 
 	case WINGET_CMD_PID:
 	case WINGET_CMD_PROCESSNAME:
@@ -3418,15 +3427,15 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 			DWORD pid;
 			GetWindowThreadProcessId(target_window, &pid);
 			if (cmd == WINGET_CMD_PID)
-				return output_var->Assign(pid);
+				return output_var.Assign(pid);
 			// Otherwise, get the full path and name of the executable that owns this window.
 			_ultoa(pid, buf, 10);
 			char process_name[MAX_PATH];
 			if (ProcessExist(buf, process_name))
-				return output_var->Assign(process_name);
+				return output_var.Assign(process_name);
 		}
 		// If above didn't return:
-		return output_var->Assign();
+		return output_var.Assign();
 
 	case WINGET_CMD_COUNT:
 	case WINGET_CMD_LIST:
@@ -3442,19 +3451,19 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 		if (target_window_determined)
 		{
 			if (!target_window)
-				return output_var->Assign("0"); // 0 windows found
+				return output_var.Assign("0"); // 0 windows found
 			if (cmd == WINGET_CMD_LIST)
 			{
 				// Otherwise, since the target window has been determined, we know that it is
 				// the only window to be put into the array:
-				snprintf(var_name, sizeof(var_name), "%s1", output_var->mName);
-				if (   !(array_item = g_script.FindOrAddVar(var_name, 0, output_var->IsLocal()
+				snprintf(var_name, sizeof(var_name), "%s1", output_var.mName);
+				if (   !(array_item = g_script.FindOrAddVar(var_name, 0, output_var.IsLocal()
 					? ALWAYS_USE_LOCAL : ALWAYS_USE_GLOBAL))   )  // Find or create element #1.
 					return FAIL;  // It will have already displayed the error.
 				if (!array_item->AssignHWND(target_window))
 					return FAIL;
 			}
-			return output_var->Assign("1");  // 1 window found
+			return output_var.Assign("1");  // 1 window found
 		}
 		// Otherwise, the target window(s) have not yet been determined and a special method
 		// is required to gather them.
@@ -3468,32 +3477,32 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 		// is no other way to determine what the restoration size and maxmized state will be for a
 		// minimized window.
 		if (target_window)
-			return output_var->Assign(IsZoomed(target_window) ? 1 : (IsIconic(target_window) ? -1 : 0));
+			return output_var.Assign(IsZoomed(target_window) ? 1 : (IsIconic(target_window) ? -1 : 0));
 		else
-			return output_var->Assign();
+			return output_var.Assign();
 
 	case WINGET_CMD_CONTROLLIST:
 	case WINGET_CMD_CONTROLLISTHWND:
 		if (!target_window_determined)
 			target_window = WinExist(g, aTitle, aText, aExcludeTitle, aExcludeText);
 		return target_window ? WinGetControlList(output_var, target_window, cmd == WINGET_CMD_CONTROLLISTHWND)
-			: output_var->Assign();
+			: output_var.Assign();
 
 	case WINGET_CMD_STYLE:
 	case WINGET_CMD_EXSTYLE:
 		if (!target_window_determined)
 			target_window = WinExist(g, aTitle, aText, aExcludeTitle, aExcludeText);
 		if (!target_window)
-			return output_var->Assign();
+			return output_var.Assign();
 		sprintf(buf, "0x%08X", GetWindowLong(target_window, cmd == WINGET_CMD_STYLE ? GWL_STYLE : GWL_EXSTYLE));
-		return output_var->Assign(buf);
+		return output_var.Assign(buf);
 
 	case WINGET_CMD_TRANSPARENT:
 	case WINGET_CMD_TRANSCOLOR:
 		if (!target_window_determined)
 			target_window = WinExist(g, aTitle, aText, aExcludeTitle, aExcludeText);
 		if (!target_window)
-			return output_var->Assign();
+			return output_var.Assign();
 		typedef BOOL (WINAPI *MyGetLayeredWindowAttributesType)(HWND, COLORREF*, BYTE*, DWORD*);
 		static MyGetLayeredWindowAttributesType MyGetLayeredWindowAttributes = (MyGetLayeredWindowAttributesType)
 			GetProcAddress(GetModuleHandle("user32"), "GetLayeredWindowAttributes");
@@ -3504,9 +3513,9 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 		// SetLayeredWindowAttributes(), which works on Windows 2000, GetLayeredWindowAttributes()
 		// is supported only on XP or later.
 		if (!MyGetLayeredWindowAttributes || !(MyGetLayeredWindowAttributes(target_window, &color, &alpha, &flags)))
-			return output_var->Assign();
+			return output_var.Assign();
 		if (cmd == WINGET_CMD_TRANSPARENT)
-			return (flags & LWA_ALPHA) ? output_var->Assign((DWORD)alpha) : output_var->Assign();
+			return (flags & LWA_ALPHA) ? output_var.Assign((DWORD)alpha) : output_var.Assign();
 		else // WINGET_CMD_TRANSCOLOR
 		{
 			if (flags & LWA_COLORKEY)
@@ -3514,10 +3523,10 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 				// Store in hex format to aid in debugging scripts.  Also, the color is always
 				// stored in RGB format, since that's what WinSet uses:
 				sprintf(buf, "0x%06X", bgr_to_rgb(color));
-				return output_var->Assign(buf);
+				return output_var.Assign(buf);
 			}
 			else // This window does not have a transparent color (or it's not accessible to us, perhaps for reasons described at MSDN GetLayeredWindowAttributes()).
-				return output_var->Assign();
+				return output_var.Assign();
 		}
 	}
 
@@ -3526,8 +3535,8 @@ ResultType Line::WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTit
 
 
 
-ResultType Line::WinGetControlList(Var *aOutputVar, HWND aTargetWindow, bool aFetchHWNDs)
-// Caller must ensure that aOutputVar and aTargetWindow are non-NULL and valid.
+ResultType Line::WinGetControlList(Var &aOutputVar, HWND aTargetWindow, bool aFetchHWNDs)
+// Caller must ensure that aTargetWindow is non-NULL and valid.
 // Every control is fetched rather than just a list of distinct class names (possibly with a
 // second script array containing the quantity of each class) because it's conceivable that the
 // z-order of the controls will be useful information to some script authors.
@@ -3545,7 +3554,7 @@ ResultType Line::WinGetControlList(Var *aOutputVar, HWND aTargetWindow, bool aFe
 	cl.target_buf = NULL;  // First pass: Signal it not not to write to the buf, but instead only calculate the length.
 	EnumChildWindows(aTargetWindow, EnumChildGetControlList, (LPARAM)&cl);
 	if (!cl.total_length) // No controls in the window.
-		return aOutputVar->Assign();
+		return aOutputVar.Assign();
 	// This adjustment was added because someone reported that max variable capacity was being
 	// exceeded in some cases (perhaps custom controls that retrieve large amounts of text
 	// from the disk in response to the "get text" message):
@@ -3553,19 +3562,19 @@ ResultType Line::WinGetControlList(Var *aOutputVar, HWND aTargetWindow, bool aFe
 		cl.total_length = g_MaxVarCapacity - 1;
 	// Set up the var, enlarging it if necessary.  If the aOutputVar is of type VAR_CLIPBOARD,
 	// this call will set up the clipboard for writing:
-	if (aOutputVar->Assign(NULL, (VarSizeType)cl.total_length) != OK)
+	if (aOutputVar.Assign(NULL, (VarSizeType)cl.total_length) != OK)
 		return FAIL;  // It already displayed the error.
 	// Fetch the text directly into the var.  Also set the length explicitly
 	// in case actual size written was off from the esimated size (in case the list of
 	// controls changed in the split second between pass #1 and pass #2):
 	CL_INIT_CONTROL_LIST(cl)
-	cl.target_buf = aOutputVar->Contents();  // Second pass: Write to the buffer.
-	cl.capacity = aOutputVar->Capacity(); // Because granted capacity might be a little larger than we asked for.
+	cl.target_buf = aOutputVar.Contents();  // Second pass: Write to the buffer.
+	cl.capacity = aOutputVar.Capacity(); // Because granted capacity might be a little larger than we asked for.
 	EnumChildWindows(aTargetWindow, EnumChildGetControlList, (LPARAM)&cl);
-	aOutputVar->Length() = (VarSizeType)cl.total_length;  // In case it wound up being smaller than expected.
+	aOutputVar.Length() = (VarSizeType)cl.total_length;  // In case it wound up being smaller than expected.
 	if (!cl.total_length) // Something went wrong, so make sure its terminated just in case.
-		*aOutputVar->Contents() = '\0';  // Safe because Assign() gave us a non-constant memory area.
-	return aOutputVar->Close();  // In case it's the clipboard.
+		*aOutputVar.Contents() = '\0';  // Safe because Assign() gave us a non-constant memory area.
+	return aOutputVar.Close();  // In case it's the clipboard.
 }
 
 
@@ -3654,14 +3663,14 @@ BOOL CALLBACK EnumChildGetControlList(HWND aWnd, LPARAM lParam)
 
 ResultType Line::WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText)
 {
-	Var *output_var = OUTPUT_VAR;
+	Var &output_var = *OUTPUT_VAR;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 	HWND target_window = DetermineTargetWindow(aTitle, aText, aExcludeTitle, aExcludeText);
 	// Even if target_window is NULL, we want to continue on so that the output
 	// variables are set to be the empty string, which is the proper thing to do
 	// rather than leaving whatever was in there before:
 	if (!target_window)
-		return output_var->Assign(); // Tell it not to free the memory by not calling with "".
+		return output_var.Assign(); // Tell it not to free the memory by not calling with "".
 
 	length_and_buf_type sab;
 	sab.buf = NULL; // Tell it just to calculate the length this time around.
@@ -3672,7 +3681,7 @@ ResultType Line::WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char
 	if (!sab.total_length) // No text in window.
 	{
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-		return output_var->Assign(); // Tell it not to free the memory by omitting all params.
+		return output_var.Assign(); // Tell it not to free the memory by omitting all params.
 	}
 	// This adjustment was added because someone reported that max variable capacity was being
 	// exceeded in some cases (perhaps custom controls that retrieve large amounts of text
@@ -3682,32 +3691,32 @@ ResultType Line::WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char
 
 	// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
 	// this call will set up the clipboard for writing:
-	if (output_var->Assign(NULL, (VarSizeType)sab.total_length) != OK)
+	if (output_var.Assign(NULL, (VarSizeType)sab.total_length) != OK)
 		return FAIL;  // It already displayed the error.
 
 	// Fetch the text directly into the var.  Also set the length explicitly
 	// in case actual size written was different than the esimated size (since
 	// GetWindowTextLength() can return more space that will actually be required
 	// in certain circumstances, see MSDN):
-	sab.buf = output_var->Contents();
+	sab.buf = output_var.Contents();
 	sab.total_length = 0; // Init
 	// Note: The capacity member below exists because granted capacity might be a little larger than we asked for,
 	// which allows the actual text fetched to be larger than the length estimate retrieved by the first pass
 	// (which generally shouldn't happen since MSDN docs say that the actual length can be less, but never greater,
 	// than the estimate length):
-	sab.capacity = output_var->Capacity(); // Capacity includes the zero terminator, i.e. it's the size of the memory area.
+	sab.capacity = output_var.Capacity(); // Capacity includes the zero terminator, i.e. it's the size of the memory area.
 	EnumChildWindows(target_window, EnumChildGetText, (LPARAM)&sab); // Get the text.
 
 	// Length is set explicitly below in case it wound up being smaller than expected/estimated.
 	// MSDN says that can happen generally, and also specifically because: "ANSI applications may have
 	// the string in the buffer reduced in size (to a minimum of half that of the wParam value) due to
 	// conversion from ANSI to Unicode."
-	output_var->Length() = (VarSizeType)sab.total_length;
+	output_var.Length() = (VarSizeType)sab.total_length;
 	if (sab.total_length)
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 	else // Something went wrong, so make sure we set to empty string.
 		*sab.buf = '\0';  // Safe because Assign() gave us a non-constant memory area.
-	return output_var->Close();  // In case it's the clipboard.
+	return output_var.Close();  // In case it's the clipboard.
 }
 
 
@@ -3823,7 +3832,7 @@ ResultType Line::SysGet(char *aCmd, char *aValue)
 // is based.
 {
 	// For simplicity and array look-up performance, this is done even for sub-commands that output to an array:
-	Var *output_var = OUTPUT_VAR;
+	Var &output_var = *OUTPUT_VAR;
 	SysGetCmds cmd = ConvertSysGetCmd(aCmd);
 	// Since command names are validated at load-time, this only happens if the command name
 	// was contained in a variable reference.  But for simplicity of design here, return
@@ -3842,7 +3851,7 @@ ResultType Line::SysGet(char *aCmd, char *aValue)
 	switch(cmd)
 	{
 	case SYSGET_CMD_METRICS: // In this case, aCmd is the value itself.
-		return output_var->Assign(GetSystemMetrics(ATOI(aCmd)));  // Input and output are both signed integers.
+		return output_var.Assign(GetSystemMetrics(ATOI(aCmd)));  // Input and output are both signed integers.
 
 	// For the next few cases, I'm not sure if it is possible to have zero monitors.  Obviously it's possible
 	// to not have a monitor turned on or not connected at all.  But it seems likely that these various API
@@ -3856,20 +3865,20 @@ ResultType Line::SysGet(char *aCmd, char *aValue)
 		// MSDN: "GetSystemMetrics(SM_CMONITORS) counts only display monitors. This is different from
 		// EnumDisplayMonitors, which enumerates display monitors and also non-display pseudo-monitors."
 		if (!MyEnumDisplayMonitors) // Since system only supports 1 monitor, the first must be primary.
-			return output_var->Assign(1); // Assign as 1 vs. "1" to use hexidecimal display if that is in effect.
+			return output_var.Assign(1); // Assign as 1 vs. "1" to use hexidecimal display if that is in effect.
 		mip.monitor_number_to_find = COUNT_ALL_MONITORS;
 		MyEnumDisplayMonitors(NULL, NULL, EnumMonitorProc, (LPARAM)&mip);
-		return output_var->Assign(mip.count); // Will assign zero if the API ever returns a legitimate zero.
+		return output_var.Assign(mip.count); // Will assign zero if the API ever returns a legitimate zero.
 
 	// Even if the first monitor to be retrieved by the EnumProc is always the primary (which is doubtful
 	// since there's no mention of this in the MSDN docs) it seems best to have this sub-cmd in case that
 	// policy ever changes:
 	case SYSGET_CMD_MONITORPRIMARY:
 		if (!MyEnumDisplayMonitors) // Since system only supports 1 monitor, the first must be primary.
-			return output_var->Assign(1); // Assign as 1 vs. "1" to use hexidecimal display if that is in effect.
+			return output_var.Assign(1); // Assign as 1 vs. "1" to use hexidecimal display if that is in effect.
 		// The mip struct's values have already initalized correctly for the below:
 		MyEnumDisplayMonitors(NULL, NULL, EnumMonitorProc, (LPARAM)&mip);
-		return output_var->Assign(mip.count); // Will assign zero if the API ever returns a legitimate zero.
+		return output_var.Assign(mip.count); // Will assign zero if the API ever returns a legitimate zero.
 
 	case SYSGET_CMD_MONITORAREA:
 	case SYSGET_CMD_MONITORWORKAREA:
@@ -3882,17 +3891,17 @@ ResultType Line::SysGet(char *aCmd, char *aValue)
 		// for example, Array19 is alphabetially less than Array2, so we can't rely on the
 		// numerical ordering:
 		int always_use;
-		always_use = output_var->IsLocal() ? ALWAYS_USE_LOCAL : ALWAYS_USE_GLOBAL;
-		snprintf(var_name, sizeof(var_name), "%sLeft", output_var->mName);
+		always_use = output_var.IsLocal() ? ALWAYS_USE_LOCAL : ALWAYS_USE_GLOBAL;
+		snprintf(var_name, sizeof(var_name), "%sLeft", output_var.mName);
 		if (   !(output_var_left = g_script.FindOrAddVar(var_name, 0, always_use))   )
 			return FAIL;  // It already reported the error.
-		snprintf(var_name, sizeof(var_name), "%sTop", output_var->mName);
+		snprintf(var_name, sizeof(var_name), "%sTop", output_var.mName);
 		if (   !(output_var_top = g_script.FindOrAddVar(var_name, 0, always_use))   )
 			return FAIL;
-		snprintf(var_name, sizeof(var_name), "%sRight", output_var->mName);
+		snprintf(var_name, sizeof(var_name), "%sRight", output_var.mName);
 		if (   !(output_var_right = g_script.FindOrAddVar(var_name, 0, always_use))   )
 			return FAIL;
-		snprintf(var_name, sizeof(var_name), "%sBottom", output_var->mName);
+		snprintf(var_name, sizeof(var_name), "%sBottom", output_var.mName);
 		if (   !(output_var_bottom = g_script.FindOrAddVar(var_name, 0, always_use))   )
 			return FAIL;
 
@@ -3942,12 +3951,12 @@ ResultType Line::SysGet(char *aCmd, char *aValue)
 				// With the exception of the caller having specified a non-existent monitor number, all of
 				// the ways the above can happen are probably impossible in practice.  Make the variable
 				// blank to indicate the problem:
-				return output_var->Assign();
+				return output_var.Assign();
 			else
-				return output_var->Assign(mip.monitor_info_ex.szDevice);
+				return output_var.Assign(mip.monitor_info_ex.szDevice);
 		}
 		else // Win95/NT: There is probably no way to find out the name of the monitor.
-			return output_var->Assign();
+			return output_var.Assign();
 	} // switch()
 
 	return FAIL;  // Never executed (increases maintainability and avoids compiler warning).
@@ -6093,13 +6102,13 @@ ResultType Line::FormatTime(char *aYYYYMMDD, char *aFormat)
 // (setlocale() seems to be needed to put the user's or system's locale into effect for strftime()).
 // setlocale() weighs in at about 6.5 KB compressed (14 KB uncompressed).
 {
-	Var *output_var = OUTPUT_VAR;
+	Var &output_var = *OUTPUT_VAR;
 
 	#define FT_MAX_INPUT_CHARS 2000  // In preparation for future use of TCHARs, since GetDateFormat() uses char-count not size.
 	// Input/format length is restricted since it must be translated and expanded into a new format
 	// string that uses single quotes around non-alphanumeric characters such as punctuation:
 	if (strlen(aFormat) > FT_MAX_INPUT_CHARS)
-		return output_var->Assign();
+		return output_var.Assign();
 
 	// Worst case expansion: .d.d.d.d. (9 chars) --> '.'d'.'d'.'d'.'d'.' (19 chars)
 	// Buffer below is sized to a little more than twice as big as the largest allowed format,
@@ -6210,19 +6219,19 @@ ResultType Line::FormatTime(char *aYYYYMMDD, char *aFormat)
 		if (!stricmp(candidate, "YWeek"))
 		{
 			GetISOWeekNumber(output_buf, st.wYear, GetYDay(st.wMonth, st.wDay, IS_LEAP_YEAR(st.wYear)), st.wDayOfWeek);
-			return output_var->Assign(output_buf);
+			return output_var.Assign(output_buf);
 		}
 		if (!stricmp(candidate, "YDay") || !stricmp(candidate, "YDay0"))
 		{
 			int yday = GetYDay(st.wMonth, st.wDay, IS_LEAP_YEAR(st.wYear));
 			if (!stricmp(candidate, "YDay"))
-				return output_var->Assign(yday); // Assign with no leading zeroes, also will be in hex format if that format is in effect.
+				return output_var.Assign(yday); // Assign with no leading zeroes, also will be in hex format if that format is in effect.
 			// Otherwise:
 			sprintf(output_buf, "%03d", yday);
-			return output_var->Assign(output_buf);
+			return output_var.Assign(output_buf);
 		}
 		if (!stricmp(candidate, "WDay"))
-			return output_var->Assign(st.wDayOfWeek + 1);  // Convert to 1-based for compatibility with A_WDay.
+			return output_var.Assign(st.wDayOfWeek + 1);  // Convert to 1-based for compatibility with A_WDay.
 
 		// Since above didn't return, check for those that require a call to GetTimeFormat/GetDateFormat
 		// further below:
@@ -6388,7 +6397,7 @@ ResultType Line::FormatTime(char *aYYYYMMDD, char *aFormat)
 			output_buf[output_buf_length] = '\0'; // Ensure the first part is still terminated and just return that rather than nothing.
 	}
 
-	return output_var->Assign(output_buf);
+	return output_var.Assign(output_buf);
 }
 
 
@@ -6803,7 +6812,7 @@ ResultType Line::AssignBinaryClip(Var &aOutputVar, Var &aInputVar)
 ResultType Line::StringReplace()
 // v1.0.45: Revised to improve average-case performance and reduce memory utilization.
 {
-	Var *output_var = OUTPUT_VAR;
+	Var &output_var = *OUTPUT_VAR;
 	char *source = ARG2;
 	size_t length = ArgLength(2); // Going in, it's the haystack length. Later (coming out), it's the result length.
 
@@ -6813,8 +6822,8 @@ ResultType Line::StringReplace()
 
 	// In case the strings involved are massive, free the output_var in advance of the operation to
 	// reduce memory load and avoid swapping (but only if output_var isn't the same address as the input_var).
-	if (output_var->Type() == VAR_NORMAL && source != output_var->Contents()) // It's compared this way in case ByRef/aliases are involved.  This will detect even them.
-		output_var->Free();
+	if (output_var.Type() == VAR_NORMAL && source != output_var.Contents()) // It's compared this way in case ByRef/aliases are involved.  This will detect even them.
+		output_var.Free();
 	//else source and dest are the same, so can't free the dest until after the operation.
 
 	// Note: The current implementation of StrReplace() should be able to handle any conceivable inputs
@@ -6832,24 +6841,24 @@ ResultType Line::StringReplace()
 	{
 		// v1.0.45: Take a shortcut for performance: Hang the newly allocated memory (populated by the callee)
 		// directly onto the variable, which saves a memcpy() over the old method (and possible other savings).
-		output_var->AcceptNewMem(dest, (VarSizeType)length); // Tells the variable to adopt this memory as its new memory. Callee has set "length" for us.
+		output_var.AcceptNewMem(dest, (VarSizeType)length); // Tells the variable to adopt this memory as its new memory. Callee has set "length" for us.
 		// Above also handles the case where output_var is VAR_CLIPBOARD.
 	}
 	else // StrReplace gave us back "source" unaltered because no replacements were needed.
 	{
-		if (output_var->Type() == VAR_NORMAL)
+		if (output_var.Type() == VAR_NORMAL)
 		{
 			// Technically the following check isn't necessary because Assign() also checks for it.
 			// But since StringReplace is a frequently-used command, checking it here seems worthwhile
 			// to avoid calling Assign().
-			if (source != output_var->Contents()) // It's compared this way in case ByRef/aliases are involved.  This will detect even them.
-				output_var->Assign(source, (VarSizeType)length); // Callee has set "length" for us.
+			if (source != output_var.Contents()) // It's compared this way in case ByRef/aliases are involved.  This will detect even them.
+				output_var.Assign(source, (VarSizeType)length); // Callee has set "length" for us.
 			//else the unaltered result and output_var same the same address.  Nothing needs to be done (for
 			// simplicity, not even the binary-clipboard attribute is removed if it happnes to be present).
 		}
 		else // output_var is of type VAR_CLIPBOARD.
 			if (ARGVARRAW2->Type() != VAR_CLIPBOARD) // Arg index #1 (the second arg) is a normal var or some read-only var.
-				output_var->Assign(source, (VarSizeType)length); // Callee has set "length" for us.
+				output_var.Assign(source, (VarSizeType)length); // Callee has set "length" for us.
 			//else the unaltered result and output_var are both the clipboard.  Nothing needs to be done.
 	}
 
@@ -7209,7 +7218,7 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 	if (!*aContents) // Variable is empty, nothing to sort.
 		return OK;
 
-	Var *output_var = OUTPUT_VAR; // The input var (ARG1) is also the output var in this case.
+	Var &output_var = *OUTPUT_VAR; // The input var (ARG1) is also the output var in this case.
 	// Do nothing for reserved variables, since most of them are read-only and besides, none
 	// of them (realistically) should ever need sorting:
 	if (VAR_IS_RESERVED(output_var)) // output_var can be a reserved variable because it's not marked as an output-var by ArgIsVar() [since it has a dual purpose as an input-var].
@@ -7311,7 +7320,7 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 		// text equivalent.  Var was an environment variable: the corresponding script
 		// variable should be assigned the contents, so it will basically "take over"
 		// for the environment variable.
-		return output_var->Assign(aContents);
+		return output_var.Assign(aContents);
 
 	// Create the array of pointers that points into aContents to each delimited item.
 	// Use item_count + 1 to allow space for the last (blank) item in case
@@ -7388,7 +7397,7 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 	// Copy the sorted pointers back into output_var, which might not already be sized correctly
 	// if it's the clipboard or it was an environment variable when it came in as the input.
 	// If output_var is the clipboard, this call will set up the clipboard for writing:
-	if (output_var->Assign(NULL, (VarSizeType)aContents_length) != OK) // Might fail due to clipboard problem.
+	if (output_var.Assign(NULL, (VarSizeType)aContents_length) != OK) // Might fail due to clipboard problem.
 		return FAIL;
 
 	// Set default in case original last item is still the last item, or if last item was omitted due to being a dupe:
@@ -7403,7 +7412,7 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 	// item gets special treatment depending on the options that were specified.  The call to
 	// output_var->Contents() below should never fail due to the above having prepped it:
 	item_curr = item; // i.e. Don't use [] indexing for the reason described higher above (same applies to item += unit_size below).
-	for (dest = output_var->Contents(), i = 0; i < item_count; ++i, item_curr += unit_size)
+	for (dest = output_var.Contents(), i = 0; i < item_count; ++i, item_curr += unit_size)
 	{
 		keep_this_item = true;  // Set default.
 		if (omit_dupes && item_prev)
@@ -7499,12 +7508,12 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 	if (omit_dupes)
 	{
 		if (omit_dupe_count) // Update the length to actual whenever at least one dupe was omitted.
-			output_var->Length() = (VarSizeType)strlen(output_var->Contents());
+			output_var.Length() = (VarSizeType)strlen(output_var.Contents());
 		g_ErrorLevel->Assign(omit_dupe_count); // ErrorLevel is set only when dupe-mode is in effect.
 	}
-	//else it is not necessary to set output_var->Length() here because its length hasn't changed
-	// since it was originally set by the above call "output_var->Assign(NULL..."
-	return output_var->Close();  // Close in case it's the clipboard.
+	//else it is not necessary to set output_var.Length() here because its length hasn't changed
+	// since it was originally set by the above call "output_var.Assign(NULL..."
+	return output_var.Close();  // Close in case it's the clipboard.
 }
 
 
@@ -7512,14 +7521,14 @@ ResultType Line::PerformSort(char *aContents, char *aOptions)
 ResultType Line::GetKeyJoyState(char *aKeyName, char *aOption)
 // Keep this in sync with FUNC_GETKEYSTATE.
 {
-	Var *output_var = OUTPUT_VAR;
+	Var &output_var = *OUTPUT_VAR;
 	JoyControls joy;
 	int joystick_id;
 	vk_type vk = TextToVK(aKeyName);
     if (!vk)
 	{
 		if (   !(joy = (JoyControls)ConvertJoy(aKeyName, &joystick_id))   )
-			return output_var->Assign("");
+			return output_var.Assign("");
 		// Since the above didn't return, joy contains a valid joystick button/control ID.
 		// Caller needs a token with a buffer of at least this size:
 		char buf[MAX_FORMATTED_NUMBER_LENGTH + 1];
@@ -7528,7 +7537,7 @@ ResultType Line::GetKeyJoyState(char *aKeyName, char *aOption)
 		token.symbol = SYM_STRING;
 		token.marker = buf;
 		ScriptGetJoyState(joy, joystick_id, token, false);
-		ExprTokenToVar(token, *output_var); // Write the result based on whether the token is a string or number.
+		ExprTokenToVar(token, output_var); // Write the result based on whether the token is a string or number.
 		// Always returns OK since ScriptGetJoyState() returns FAIL and sets output_var to be blank if
 		// the result is indeterminate or there was a problem reading the joystick.  We don't want
 		// such a failure to be considered a "critical failure" that will exit the current quasi-thread.
@@ -7542,7 +7551,7 @@ ResultType Line::GetKeyJoyState(char *aKeyName, char *aOption)
 	case 'P': key_state_type = KEYSTATE_PHYSICAL; break; // Physical state of key.
 	default: key_state_type = KEYSTATE_LOGICAL;
 	}
-	return output_var->Assign(ScriptGetKeyState(vk, key_state_type) ? "D" : "U");
+	return output_var.Assign(ScriptGetKeyState(vk, key_state_type) ? "D" : "U");
 }
 
 
@@ -7788,7 +7797,7 @@ ResultType Line::DriveGet(char *aCmd, char *aValue)
 
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR);  // Set default since there are many points of return.
 
-	Var *output_var = OUTPUT_VAR;
+	Var &output_var = *OUTPUT_VAR;
 
 	switch(drive_get_cmd)
 	{
@@ -7797,7 +7806,7 @@ ResultType Line::DriveGet(char *aCmd, char *aValue)
 		// Since command names are validated at load-time, this only happens if the command name
 		// was contained in a variable reference.  Since that is very rare, just set ErrorLevel
 		// and return:
-		return output_var->Assign();  // Let ErrorLevel tell the story.
+		return output_var.Assign();  // Let ErrorLevel tell the story.
 
 	case DRIVEGET_CMD_LIST:
 	{
@@ -7832,7 +7841,7 @@ ResultType Line::DriveGet(char *aCmd, char *aValue)
 				found_drives[found_drives_count++] = letter;  // Store just the drive letters.
 		}
 		found_drives[found_drives_count] = '\0';  // Terminate the string of found drive letters.
-		output_var->Assign(found_drives);
+		output_var.Assign(found_drives);
 		if (!*found_drives)
 			return OK;  // Seems best to flag zero drives in the system as default ErrorLevel of "1".
 		break;
@@ -7849,12 +7858,12 @@ ResultType Line::DriveGet(char *aCmd, char *aValue)
 		DWORD serial_number, max_component_length, file_system_flags;
 		if (!GetVolumeInformation(path, volume_name, sizeof(volume_name) - 1, &serial_number, &max_component_length
 			, &file_system_flags, file_system, sizeof(file_system) - 1))
-			return output_var->Assign(); // Let ErrorLevel tell the story.
+			return output_var.Assign(); // Let ErrorLevel tell the story.
 		switch(drive_get_cmd)
 		{
-		case DRIVEGET_CMD_FILESYSTEM: output_var->Assign(file_system); break;
-		case DRIVEGET_CMD_LABEL: output_var->Assign(volume_name); break;
-		case DRIVEGET_CMD_SERIAL: output_var->Assign(serial_number); break;
+		case DRIVEGET_CMD_FILESYSTEM: output_var.Assign(file_system); break;
+		case DRIVEGET_CMD_LABEL: output_var.Assign(volume_name); break;
+		case DRIVEGET_CMD_SERIAL: output_var.Assign(serial_number); break;
 		}
 		break;
 	}
@@ -7865,14 +7874,14 @@ ResultType Line::DriveGet(char *aCmd, char *aValue)
 		SetErrorMode(SEM_FAILCRITICALERRORS); // If drive is a floppy, prevents pop-up dialog prompting to insert disk.
 		switch (GetDriveType(path))
 		{
-		case DRIVE_UNKNOWN:   output_var->Assign("Unknown"); break;
-		case DRIVE_REMOVABLE: output_var->Assign("Removable"); break;
-		case DRIVE_FIXED:     output_var->Assign("Fixed"); break;
-		case DRIVE_REMOTE:    output_var->Assign("Network"); break;
-		case DRIVE_CDROM:     output_var->Assign("CDROM"); break;
-		case DRIVE_RAMDISK:   output_var->Assign("RAMDisk"); break;
+		case DRIVE_UNKNOWN:   output_var.Assign("Unknown"); break;
+		case DRIVE_REMOVABLE: output_var.Assign("Removable"); break;
+		case DRIVE_FIXED:     output_var.Assign("Fixed"); break;
+		case DRIVE_REMOTE:    output_var.Assign("Network"); break;
+		case DRIVE_CDROM:     output_var.Assign("CDROM"); break;
+		case DRIVE_RAMDISK:   output_var.Assign("RAMDisk"); break;
 		default: // DRIVE_NO_ROOT_DIR
-			return output_var->Assign();  // Let ErrorLevel tell the story.
+			return output_var.Assign();  // Let ErrorLevel tell the story.
 		}
 		break;
 	}
@@ -7885,11 +7894,11 @@ ResultType Line::DriveGet(char *aCmd, char *aValue)
 		switch (GetDiskFreeSpace(path, &sectors_per_cluster, &bytes_per_sector, &free_clusters, &total_clusters)
 			? ERROR_SUCCESS : GetLastError())
 		{
-		case ERROR_SUCCESS:        output_var->Assign("Ready"); break;
-		case ERROR_PATH_NOT_FOUND: output_var->Assign("Invalid"); break;
-		case ERROR_NOT_READY:      output_var->Assign("NotReady"); break;
-		case ERROR_WRITE_PROTECT:  output_var->Assign("ReadOnly"); break;
-		default:                   output_var->Assign("Unknown");
+		case ERROR_SUCCESS:        output_var.Assign("Ready"); break;
+		case ERROR_PATH_NOT_FOUND: output_var.Assign("Invalid"); break;
+		case ERROR_NOT_READY:      output_var.Assign("NotReady"); break;
+		case ERROR_WRITE_PROTECT:  output_var.Assign("ReadOnly"); break;
+		default:                   output_var.Assign("Unknown");
 		}
 		break;
 	}
@@ -7911,20 +7920,20 @@ ResultType Line::DriveGet(char *aCmd, char *aValue)
 		if (!*aValue) // When drive is omitted, operate upon default CD/DVD drive.
 		{
 			if (mciSendString("status cdaudio mode", status, sizeof(status), NULL)) // Error.
-				return output_var->Assign(); // Let ErrorLevel tell the story.
+				return output_var.Assign(); // Let ErrorLevel tell the story.
 		}
 		else // Operate upon a specific drive letter.
 		{
 			snprintf(mci_string, sizeof(mci_string), "open %s type cdaudio alias cd wait shareable", aValue);
 			if (mciSendString(mci_string, NULL, 0, NULL)) // Error.
-				return output_var->Assign(); // Let ErrorLevel tell the story.
+				return output_var.Assign(); // Let ErrorLevel tell the story.
 			MCIERROR error = mciSendString("status cd mode", status, sizeof(status), NULL);
 			mciSendString("close cd wait", NULL, 0, NULL);
 			if (error)
-				return output_var->Assign(); // Let ErrorLevel tell the story.
+				return output_var.Assign(); // Let ErrorLevel tell the story.
 		}
 		// Otherwise, success:
-		output_var->Assign(status);
+		output_var.Assign(status);
 		break;
 
 	} // switch()
@@ -8236,8 +8245,75 @@ ResultType Line::SoundPlay(char *aFilespec, bool aSleepUntilDone)
 
 
 
-ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeting, char *aFilter)
+void SetWorkingDir(char *aNewDir)
+// Sets ErrorLevel to indicate success/failure, but only if the script has begun runtime execution (callers
+// want that).
+// This function was added in v1.0.45.01 for the reasons commented further below.
+// It's similar to the one in the ahk2exe source, so maintain them together.
 {
+	if (!SetCurrentDirectory(aNewDir)) // Caused by nonexistent directory, permission denied, etc.
+	{
+		if (g_script.mIsReadyToExecute)
+			g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+		return;
+	}
+
+	// Otherwise, the change to the working directory *apparently* succeeded (but is confirmed below for root drives
+	// and also because we want the absolute path in cases where aNewDir is relative).
+	char buf[sizeof(g_WorkingDir)];
+	char *actual_working_dir = g_script.mIsReadyToExecute ? g_WorkingDir : buf; // i.e. don't update g_WorkingDir when our caller is the #include directive.
+	// Other than during program startup, this should be the only place where the official
+	// working dir can change.  The exception is FileSelectFile(), which changes the working
+	// dir as the user navigates from folder to folder.  However, the whole purpose of
+	// maintaining g_WorkingDir is to workaround that very issue.
+
+	// GetCurrentDirectory() is called explicitly, to confirm the change, in case aNewDir is a relative path.
+	// We want to store the absolute path:
+	if (!GetCurrentDirectory(sizeof(buf), actual_working_dir)) // Might never fail in this case, but kept for backward compatibility.
+	{
+		strlcpy(actual_working_dir, aNewDir, sizeof(buf)); // Update the global to the best info available.
+		// But ErrorLevel is set to "none" further below because the actual "set" did succeed; it's also for
+		// backward compatibility.
+	}
+	else // GetCurrentDirectory() succeeded, so it's appropriate to compare what we asked for to what was received.
+	{
+		if (aNewDir[0] && aNewDir[1] == ':' && !aNewDir[2] // Root with missing backslash. Relies on short-circuit boolean order.
+			&& stricmp(aNewDir, actual_working_dir)) // The root directory we requested didn't actually get set. See below.
+		{
+			// There is some strange OS behavior here: If the current working directory is C:\anything\...
+			// and SetCurrentDirectory() is called to switch to "C:", the function reports success but doesn't
+			// actually change the directory.  However, if you first change to D: then back to C:, the change
+			// works as expected.  Presumably this is for backward compatibility with DOS days; but it's 
+			// inconvenient and seems desirable to override it in this case, especially because:
+			// v1.0.45.01: Since A_ScriptDir omits the trailing backslash for roots of drives (such as C:),
+			// and since that variable probably shouldn't be changed for backward compatibility, provide
+			// the missing backslash to allow SetWorkingDir %A_ScriptDir% (and others) to work in the root
+			// of a drive.
+			char buf_temp[8];
+			sprintf(buf_temp, "%s\\", aNewDir); // No danger of buffer overflow in this case.
+			if (SetCurrentDirectory(buf_temp))
+			{
+				if (!GetCurrentDirectory(sizeof(buf), actual_working_dir)) // Might never fail in this case, but kept for backward compatibility.
+					strlcpy(actual_working_dir, aNewDir, sizeof(buf)); // But still report "no error" (below) because the Set() actually did succeed.
+					// But treat this as a success like the similar one higher above.
+			}
+			//else Set() failed; but since the origial Set() succeeded (and for simplicity) report ErrorLevel "none".
+		}
+	}
+
+	// Since the above didn't return, it wants us to indicate success.
+	if (g_script.mIsReadyToExecute) // Callers want ErrorLevel changed only during script runtime.
+		g_ErrorLevel->Assign(ERRORLEVEL_NONE);
+}
+
+
+
+ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeting, char *aFilter)
+// Since other script threads can interrupt this command while it's running, it's important that
+// this command not refer to sArgDeref[] and sArgVar[] anytime after an interruption becomes possible.
+// This is because an interrupting thread usually changes the values to something inappropriate for this thread.
+{
+	Var &output_var = *OUTPUT_VAR; // Fix for v1.0.45.01: Must be resolved and saved early.  See comment above.
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 	if (g_nFileDialogs >= MAX_FILEDIALOGS)
 	{
@@ -8440,7 +8516,7 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 		// It seems best to clear the variable in these cases, since this is a scripting
 		// language where performance is not the primary goal.  So do that and return OK,
 		// but leave ErrorLevel set to ERRORLEVEL_ERROR.
-		return OUTPUT_VAR->Assign(); // Tell it not to free the memory by not calling with "".
+		return output_var.Assign(); // Tell it not to free the memory by not calling with "".
 	else
 		g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate that the user pressed OK vs. CANCEL.
 
@@ -8503,7 +8579,7 @@ ResultType Line::FileSelectFile(char *aOptions, char *aWorkingDir, char *aGreeti
 			}
 		}
 	}
-	return OUTPUT_VAR->Assign(file_buf);
+	return output_var.Assign(file_buf);
 }
 
 
@@ -8558,10 +8634,10 @@ ResultType Line::FileRead(char *aFilespec)
 // kind of unexpected and more serious error occurs, such as variable-out-of-memory,
 // that will cause FAIL to be returned.
 {
-	Var *output_var = OUTPUT_VAR;
+	Var &output_var = *OUTPUT_VAR;
 	// Init output var to be blank as an additional indicator of failure (or empty file).
 	// Caller must check ErrorLevel to distinguish between an empty file and an error.
-	output_var->Assign();
+	output_var.Assign();
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 
 	// The program is currently compiled with a 2GB address limit, so loading files larger than that
@@ -8638,7 +8714,7 @@ ResultType Line::FileRead(char *aFilespec)
 	if (hfile == INVALID_HANDLE_VALUE)      // in cases like these (and it seems best even if max_bytes_to_load was specified).
 		return OK; // Let ErrorLevel tell the story.
 
-	if (is_binary_clipboard && output_var->Type() == VAR_CLIPBOARD)
+	if (is_binary_clipboard && output_var.Type() == VAR_CLIPBOARD)
 		return ReadClipboardFromFile(hfile);
 	// Otherwise, if is_binary_clipboard, load it directly into a normal variable.  The data in the
 	// clipboard file should already have the (UINT)0 as its ending terminator.
@@ -8663,12 +8739,12 @@ ResultType Line::FileRead(char *aFilespec)
 
 	// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
 	// this call will set up the clipboard for writing:
-	if (output_var->Assign(NULL, (VarSizeType)bytes_to_read, true, false) != OK) // Probably due to "out of memory".
+	if (output_var.Assign(NULL, (VarSizeType)bytes_to_read, true, false) != OK) // Probably due to "out of memory".
 	{
 		CloseHandle(hfile);
 		return FAIL;  // It already displayed the error. ErrorLevel doesn't matter now because the current quasi-thread will be aborted.
 	}
-	char *output_buf = output_var->Contents();
+	char *output_buf = output_var.Contents();
 
 	DWORD bytes_actually_read;
 	BOOL result = ReadFile(hfile, output_buf, (DWORD)bytes_to_read, &bytes_actually_read, NULL);
@@ -8687,7 +8763,7 @@ ResultType Line::FileRead(char *aFilespec)
 		// 1 GB limit as described above:
 		if (translate_crlf_to_lf)
 			StrReplace(output_buf, "\r\n", "\n", SCS_SENSITIVE); // Safe only because larger string is being replaced with smaller.
-		output_var->Length() = is_binary_clipboard ? (bytes_actually_read - 1) // Length excludes the very last byte of the (UINT)0 terminator.
+		output_var.Length() = is_binary_clipboard ? (bytes_actually_read - 1) // Length excludes the very last byte of the (UINT)0 terminator.
 			: (VarSizeType)strlen(output_buf); // In case file contains binary zeroes, explicitly calculate the "usable" length so that it's accurate.
 	}
 	else
@@ -8699,12 +8775,12 @@ ResultType Line::FileRead(char *aFilespec)
 		// Since ReadFile() failed, to avoid complications or side-effects in functions such as Var::Close(),
 		// avoid storing a potentially non-terminated string in the variable.
 		*output_buf = '\0';
-		output_var->Length() = 0;
+		output_var.Length() = 0;
 		g_ErrorLevel->Assign(ERRORLEVEL_ERROR);  // Override the success default that was set in the middle of this function.
 	}
 
 	// ErrorLevel, as set in various places above, indicates success or failure.
-	return output_var->Close(is_binary_clipboard);
+	return output_var.Close(is_binary_clipboard);
 }
 
 
@@ -8715,6 +8791,8 @@ ResultType Line::FileReadLine(char *aFilespec, char *aLineNumber)
 // kind of unexpected and more serious error occurs, such as variable-out-of-memory,
 // that will cause FAIL to be returned.
 {
+	Var &output_var = *OUTPUT_VAR; // Fix for v1.0.45.01: Must be resolved and saved before MsgSleep() (LONG_OPERATION) because that allows some other thread to interrupt and overwrite sArgVar[].
+
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
 	__int64 line_number = ATOI64(aLineNumber);
 	if (line_number < 1)
@@ -8748,11 +8826,11 @@ ResultType Line::FileReadLine(char *aFilespec, char *aLineNumber)
 		buf[--buf_length] = '\0';
 	if (!buf_length)
 	{
-		if (!OUTPUT_VAR->Assign()) // Explicitly call it this way so that it won't free the memory.
+		if (!output_var.Assign()) // Explicitly call it this way so that it won't free the memory.
 			return FAIL;
 	}
 	else
-		if (!OUTPUT_VAR->Assign(buf, (VarSizeType)buf_length))
+		if (!output_var.Assign(buf, (VarSizeType)buf_length))
 			return FAIL;
 	return g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 }
@@ -9054,7 +9132,12 @@ ResultType Line::FileDelete()
 
 	for (; file_found; file_found = FindNextFile(file_search, &current_file))
 	{
+		// Since other script threads can interrupt during LONG_OPERATION_UPDATE, it's important that
+		// this command not refer to sArgDeref[] and sArgVar[] anytime after an interruption becomes
+		// possible. This is because an interrupting thread usually changes the values to something
+		// inappropriate for this thread.
 		LONG_OPERATION_UPDATE
+
 		if (current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) // skip any matching directories.
 			continue;
 		snprintf(target_filespec, sizeof(target_filespec), "%s%s", file_path, current_file.cFileName);
@@ -9192,7 +9275,12 @@ int Line::FileSetAttrib(char *aAttributes, char *aFilePattern, FileLoopModeType 
 
 	for (; file_found; file_found = FindNextFile(file_search, &current_file))
 	{
+		// Since other script threads can interrupt during LONG_OPERATION_UPDATE, it's important that
+		// this command not refer to sArgDeref[] and sArgVar[] anytime after an interruption becomes
+		// possible. This is because an interrupting thread usually changes the values to something
+		// inappropriate for this thread.
 		LONG_OPERATION_UPDATE
+
 		if (current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
 		{
 			if (!strcmp(current_file.cFileName, "..") || !strcmp(current_file.cFileName, "."))
@@ -9424,7 +9512,12 @@ int Line::FileSetTime(char *aYYYYMMDD, char *aFilePattern, char aWhichTime
 
 	for (; file_found; file_found = FindNextFile(file_search, &current_file))
 	{
+		// Since other script threads can interrupt during LONG_OPERATION_UPDATE, it's important that
+		// this command not refer to sArgDeref[] and sArgVar[] anytime after an interruption becomes
+		// possible. This is because an interrupting thread usually changes the values to something
+		// inappropriate for this thread.
 		LONG_OPERATION_UPDATE
+
 		if (current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
 		{
 			if (!strcmp(current_file.cFileName, "..") || !strcmp(current_file.cFileName, "."))
@@ -10216,7 +10309,7 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 		{
 			arg_type_string[0] = aParam[i]->var->Contents();
 			arg_type_string[1] = aParam[i]->var->mName;
-			// v1.0.33.01: arg_type_string2 improves convenience by falling back to the variable's name
+			// v1.0.33.01: arg_type_string[1] improves convenience by falling back to the variable's name
 			// if the contents are not appropriate.  In other words, both Int and "Int" are treated the same.
 			// It's done this way to allow the variable named "Int" to actually contain some other legitimate
 			// type-name such as "Str" (in case anyone ever happens to do that).
@@ -10240,8 +10333,19 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 		{
 			if (this_param.symbol == SYM_VAR) // SYM_VAR's Type() is always VAR_NORMAL.
 			{
-				// v1.0.44.14: If a variable is being passed that has no capacity, pass a read-only
-				// memory area instead of a writable empty string. There are two big benefits to this:
+				arg_as_string = this_param.var->Contents(); // See below.
+				// UPDATE: The v1.0.44.14 item below doesn't work in release mode, only debug mode (turning off
+				// "string pooling" doesn't help either).  So it's commented out until a way is found
+				// to pass the address of a read-only empty string (if such a thing is possible in
+				// release mode).  Such a string should have the following properties:
+				// 1) The first byte at its address should be '\0' so that functions can read it
+				//    and recognize it as a valid empty string.
+				// 2) The memory address should be readable but not writable: it should throw an
+				//    access violation if the function tries to write to it (like "" does in debug mode).
+				// SO INSTEAD of the following, DllCall() now checks further below for whether sEmptyString
+				// has been overwritten/trashed by the call, and if so displays a warning dialog.
+				// See note above about this: v1.0.44.14: If a variable is being passed that has no capacity, pass a
+				// read-only memory area instead of a writable empty string. There are two big benefits to this:
 				// 1) It forces an immediate exception (catchable by DllCall's exception handler) so
 				//    that the program doesn't crash from memory corruption later on.
 				// 2) It avoids corrupting the program's static memory area (because sEmptyString
@@ -10252,9 +10356,8 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 				// function will write to it.  But it's a far cry better than nothing because it's
 				// common for a script to forget to call VarSetCapacity before psssing a buffer to some
 				// function that writes a string to it.
-				arg_as_string = this_param.var->Contents();
-				if (arg_as_string == Var::sEmptyString) // To improve performance, compare directly to Var::sEmptyString rather than calling Capacity().
-					arg_as_string = ""; // Make it read-only to force an exception.  See comments above.
+				//if (arg_as_string == Var::sEmptyString) // To improve performance, compare directly to Var::sEmptyString rather than calling Capacity().
+				//	arg_as_string = ""; // Make it read-only to force an exception.  See comments above.
 			}
 			else
 				arg_as_string = this_param.marker;
@@ -10413,6 +10516,22 @@ void BIF_DllCall(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPara
 	return_value = DynaCall(dll_call_mode, function, dyna_param, arg_count, exception_occurred, NULL, 0);
 	// The above has also set g_ErrorLevel appropriately.
 
+	if (*Var::sEmptyString)
+	{
+		// v1.0.45.01 Above has detected that a variable of zero capacity was passed to the called function
+		// and the function wrote to it (assuming sEmptyString wasn't already trashed some other way even
+		// before the call).  So patch up the empty string to stabilize a little; but it's too late to
+		// salvage this instance of the program because there's no knowing how much static data adjacent to
+		// sEmptyString has been overwritten and corrupted.
+		*Var::sEmptyString = '\0';
+		// Call ScriptErrror() so that the user knows *which* DllCall is at fault:
+		g_script.ScriptError("This DllCall requires a prior VarSetCapacity. The program is now unstable and will exit.");
+		g_script.ExitApp(EXIT_CRITICAL); // Called this way, it will run the OnExit routine, which is debatable because it could cause more good than harm, but might avoid loss of data if the OnExit routine does something important.
+		// Don't bother with "goto end" since a critical error like this calls for minimal cleanup.  The OS
+		// almost certainly frees hmodule_to_free upon termination anyway.
+	}
+
+	// It seems best to have the above take precedence over "exception_occurred" below.
 	if (exception_occurred)
 	{
 		// If the called function generated an exception, I think it's impossible for the return value
@@ -10810,7 +10929,7 @@ pcre *get_compiled_regex(char *aRegEx, bool &aGetPositionsNotSubstrings, pcre_ex
 	SET_DEFAULT_PCRE_OPTIONS
 
 	// PARSE THE OPTIONS (if any).
-	char *pat; // When options-parsing is done, pat will point to the start of the pattern.
+	char *pat; // When options-parsing is done, pat will point to the start of the pattern itself.
 	for (pat = aRegEx;; ++pat)
 	{
 		switch(*pat)
@@ -10838,7 +10957,7 @@ pcre *get_compiled_regex(char *aRegEx, bool &aGetPositionsNotSubstrings, pcre_ex
 			if (pat[1] == '\n') // Even though `r`n is the default, it's recognized as an option for flexibility and intuitiveness.
 			{
 				++pat; // Skip over the second character so that it's not recognized as a separate option by the next iteration.
-				pcre_options |= PCRE_NEWLINE_CRLF; // Remember that PCRE_NEWLINE_CRLF is a bitwise combination of PCRE_NEWLINE_LF and CR.
+				pcre_options |= PCRE_NEWLINE_CRLF; // Set explicitly in case it was unset by an earlier option. Remember that PCRE_NEWLINE_CRLF is a bitwise combination of PCRE_NEWLINE_LF and CR.
 			}
 			else // For completeness, it's easy to support PCRE_NEWLINE_CR too, though nowadays I think it's quite rare (former Macintosh format).
 				pcre_options = (pcre_options & ~PCRE_NEWLINE_LF) | PCRE_NEWLINE_CR; // Do it this way because PCRE_NEWLINE_CRLF is a bitwise combination of PCRE_NEWLINE_CR and PCRE_NEWLINE_LF.
@@ -11173,7 +11292,7 @@ void RegExReplace(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPar
 						*dest++ = *src++;
 					result_length += (int)(src - src_orig);
 				}		
-				else // Mode: size-calculation.
+				else // This is the first iteration (mode: size-calculation).
 				{
 					for (; *src && *src != '$'; ++src); // Find the next '$', if any.
 					new_result_length += (int)(src - src_orig); // '$' or '\0' was found: same expansion either way.
@@ -11334,6 +11453,7 @@ out_of_mem:
 
 
 void BIF_RegEx(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamCount)
+// This function is the initial entry point for both RegExMatch() and RegExReplace().
 // Caller has set aResultToken.symbol to a default of SYM_INTEGER.
 {
 	bool mode_is_replace = toupper(aResultToken.marker[5]) == 'R'; // Union's marker initially contains the function name; e.g. RegEx[R]eplace.
@@ -11374,14 +11494,14 @@ void BIF_RegEx(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 	int number_of_ints_in_offset = pattern_count * 3; // PCRE uses 3 ints for each (sub)pattern: 2 for offsets and 1 for its internal use.
 	int *offset = (int *)_alloca(number_of_ints_in_offset * sizeof(int)); // _alloca() boosts performance and seems safe because subpattern_count would usually have to be ridiculously high to cause a stack overflow.
 
-	if (mode_is_replace)
+	if (mode_is_replace) // Handle RegExReplace() completely then return.
 	{
 		RegExReplace(aResultToken, aParam, aParamCount
 			, re, extra, haystack, haystack_length, starting_offset, offset, number_of_ints_in_offset);
 		return;
 	}
 
-	// OTHERWISE, THIS IS MATCH() NOT REPLACE().
+	// OTHERWISE, THIS IS RegExMatch() not RegExReplace().
 	// EXECUTE THE REGEX.
 	int captured_pattern_count = pcre_exec(re, extra, haystack, haystack_length, starting_offset, 0, offset, number_of_ints_in_offset);
 
@@ -11427,14 +11547,17 @@ void BIF_RegEx(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 	// OTHERWISE, CONTINUE ON TO STORE THE SUBSTRINGS THAT MATCHED THE SUBPATTERNS (EVEN IF PCRE_ERROR_NOMATCH).
 	// For lookup performance, create a table of subpattern names indexed by subpattern number.
 	char **subpat_name = NULL; // Set default as "no subpattern names present or available".
+	bool allow_dupe_subpat_names = false; // Set default.
 	char *name_table;
 	int name_count, name_entry_size;
-	if (   captured_pattern_count >= 0 // i.e. *not* PCRE_ERROR_NOMATCH.
-		&& !pcre_fullinfo(re, extra, PCRE_INFO_NAMECOUNT, &name_count) // Success.
+	if (   !pcre_fullinfo(re, extra, PCRE_INFO_NAMECOUNT, &name_count) // Success. Fix for v1.0.45.01: Don't check captured_pattern_count>=0 because PCRE_ERROR_NOMATCH can still have named patterns!
 		&& name_count // There's at least one named subpattern.  Relies on short-circuit boolean order.
 		&& !pcre_fullinfo(re, extra, PCRE_INFO_NAMETABLE, &name_table) // Success.
 		&& !pcre_fullinfo(re, extra, PCRE_INFO_NAMEENTRYSIZE, &name_entry_size)   ) // Success.
 	{
+		int pcre_options;
+		if (!pcre_fullinfo(re, extra, PCRE_INFO_OPTIONS, &pcre_options)) // Success.
+			allow_dupe_subpat_names = pcre_options & PCRE_DUPNAMES;
 		// For indexing simplicity, also include an entry for the main/entire pattern at index 0 even though
 		// it's never used because the entire pattern can't have a name without enclosing it in parentheses
 		// (in which case it's not the entire pattern anymore, but in fact subpattern #1).
@@ -11451,8 +11574,8 @@ void BIF_RegEx(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 			// the numerically-indexed elements in the output-array.  Seems pretty harmless given the rarity.
 		}
 	}
-	//else one of the pcre_fullinfo() calls failed.  The PCRE docs indicate that this realistically never happens
-	// unless bad inputs were given.  So due to rarity, just leave subpat_name==NULL; i.e. "no named subpatterns".
+	//else one of the pcre_fullinfo() calls may have failed.  The PCRE docs indicate that this realistically never
+	// happens unless bad inputs were given.  So due to rarity, just leave subpat_name==NULL; i.e. "no named subpatterns".
 
 	// Make var_name longer than Max so that FindOrAddVar() will be able to spot and report var names
 	// that are too long, either because the base-name is too long, or the name becomes too long
@@ -11461,15 +11584,17 @@ void BIF_RegEx(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 	strcpy(var_name, output_var.mName); // This prefix is copied in only once, for performance.
 	char *var_name_suffix = var_name + strlen(var_name); // The position at which to copy the sequence number (index).
 	int always_use = output_var.IsLocal() ? ALWAYS_USE_LOCAL : ALWAYS_USE_GLOBAL;
-	int p = 1, *this_offset = offset + 2; // Init for both loops below.
+	int n, p = 1, *this_offset = offset + 2; // Init for both loops below.
 	Var *array_item;
+	bool subpat_not_matched;
 
 	if (get_positions_not_substrings)
 	{
 		int subpat_pos, subpat_len;
 		for (; p < pattern_count; ++p, this_offset += 2) // Start at 1 because above already did pattern #0 (the full pattern).
 		{
-			if (p >= captured_pattern_count) // Works even if captured_pattern_count==PCRE_ERROR_NOMATCH. There are more comments about this in a later section below.
+			subpat_not_matched = (p >= captured_pattern_count || this_offset[0] < 0); // See comments in similar section below about this.
+			if (subpat_not_matched)
 			{
 				subpat_pos = 0;
 				subpat_len = 0;
@@ -11482,12 +11607,21 @@ void BIF_RegEx(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 
 			if (subpat_name && subpat_name[p]) // This subpattern number has a name, so store it under that name.
 			{
-				sprintf(var_name_suffix, "Pos%s", subpat_name[p]); // Append the subpattern to the array's base name.
-				if (array_item = g_script.FindOrAddVar(var_name, 0, always_use))
-					array_item->Assign(subpat_pos);
-				sprintf(var_name_suffix, "Len%s", subpat_name[p]); // Append the subpattern name to the array's base name.
-				if (array_item = g_script.FindOrAddVar(var_name, 0, always_use))
-					array_item->Assign(subpat_len);
+				if (*subpat_name[p]) // This check supports allow_dupe_subpat_names. See comments below.
+				{
+					sprintf(var_name_suffix, "Pos%s", subpat_name[p]); // Append the subpattern to the array's base name.
+					if (array_item = g_script.FindOrAddVar(var_name, 0, always_use))
+						array_item->Assign(subpat_pos);
+					sprintf(var_name_suffix, "Len%s", subpat_name[p]); // Append the subpattern name to the array's base name.
+					if (array_item = g_script.FindOrAddVar(var_name, 0, always_use))
+						array_item->Assign(subpat_len);
+					// Fix for v1.0.45.01: Section below added.  See similar section further below for comments.
+					if (!subpat_not_matched && allow_dupe_subpat_names) // Explicitly check subpat_not_matched not pos/len so that behavior is consistent with the default mode (non-position).
+						for (n = p + 1; n < pattern_count; ++n) // Search to the right of this subpat to find others with the same name.
+							if (subpat_name[n] && !stricmp(subpat_name[n], subpat_name[p])) // Case-insensitive because unlike PCRE, named subpatterns conform to AHK convention of insensitive variable names.
+								subpat_name[n] = ""; // Empty string signals subsequent iterations to skip it entirely.
+				}
+				//else an empty subpat name caused by "allow duplicate names".  Do nothing (see comments above).
 			}
 			else // This subpattern has no name, so write it out as its pattern number instead. For performance and memory utilization, it seems best to store only one or the other (named or number), not both.
 			{
@@ -11505,7 +11639,6 @@ void BIF_RegEx(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 	} // if (get_positions_not_substrings)
 
 	// Otherwise, we're in get-substring mode (not offset mode), so store the substring that matches each subpattern.
-	bool subpat_not_matched;
 	for (; p < pattern_count; ++p, this_offset += 2) // Start at 1 because above already did pattern #0 (the full pattern).
 	{
 		// If both items in this_offset are -1, that means the substring wasn't populated because it's
@@ -11521,16 +11654,31 @@ void BIF_RegEx(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aParamC
 
 		if (subpat_name && subpat_name[p]) // This subpattern number has a name, so store it under that name.
 		{
-			// This section is similar to the one in the "else" below, so see it for more comments.
-			strcpy(var_name_suffix, subpat_name[p]); // Append the subpat name to the array's base name.  strcpy() seems safe because PCRE almost certainly enforces the 32-char limit on subpattern names.
-			if (array_item = g_script.FindOrAddVar(var_name, 0, always_use))
+			if (*subpat_name[p]) // This check supports allow_dupe_subpat_names. See comments below.
 			{
-				if (subpat_not_matched)
-					array_item->Assign(); // Omit all parameters to make the var empty without freeing its memory (for performance, in case this RegEx is being used many times in a loop).
-				else
-					array_item->Assign(haystack + this_offset[0], this_offset[1] - this_offset[0]);
+				// This section is similar to the one in the "else" below, so see it for more comments.
+				strcpy(var_name_suffix, subpat_name[p]); // Append the subpat name to the array's base name.  strcpy() seems safe because PCRE almost certainly enforces the 32-char limit on subpattern names.
+				if (array_item = g_script.FindOrAddVar(var_name, 0, always_use))
+				{
+					if (subpat_not_matched)
+						array_item->Assign(); // Omit all parameters to make the var empty without freeing its memory (for performance, in case this RegEx is being used many times in a loop).
+					else
+					{
+						array_item->Assign(haystack + this_offset[0], this_offset[1] - this_offset[0]);
+						// Fix for v1.0.45.01: When the J option (allow duplicate named subpatterns) is in effect,
+						// PCRE returns entries for all the duplicates.  But we don't want an unmatched duplicate
+						// to overwrite a previously matched duplicate.  To prevent this, when we're here (i.e.
+						// this subpattern matched something), mark duplicate entries in the names array that lie
+						// to the right of this item to indicate that they should be skipped by subsequent iterations.
+						if (allow_dupe_subpat_names)
+							for (n = p + 1; n < pattern_count; ++n) // Search to the right of this subpat to find others with the same name.
+								if (subpat_name[n] && !stricmp(subpat_name[n], subpat_name[p])) // Case-insensitive because unlike PCRE, named subpatterns conform to AHK convention of insensitive variable names.
+									subpat_name[n] = ""; // Empty string signals subsequent iterations to skip it entirely.
+					}
+				}
+				//else var couldn't be created: no error reporting currently, since it basically should never happen.
 			}
-			//else var couldn't be created: no error reporting currently, since it basically should never happen.
+			//else an empty subpat name caused by "allow duplicate names".  Do nothing (see comments above).
 		}
 		else // This subpattern has no name, so instead write it out as its actual pattern number. For performance and memory utilization, it seems best to store only one or the other (named or number), not both.
 		{

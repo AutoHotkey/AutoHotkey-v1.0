@@ -823,8 +823,8 @@ qmathTan@8
 ; WINDOW RELATED
 ?WinGet@Line@@AAE?AW4ResultType@@PAD0000@Z
 ?WinGetClass@Line@@AAE?AW4ResultType@@PAD000@Z
-?WinGetControlList@Line@@AAE?AW4ResultType@@PAVVar@@PAUHWND__@@_N@Z
-?WinGetList@@YA?AW4ResultType@@PAVVar@@W4WinGetCmds@@PAD222@Z
+?WinGetControlList@Line@@AAE?AW4ResultType@@AAVVar@@PAUHWND__@@_N@Z
+?WinGetList@@YA?AW4ResultType@@AAVVar@@W4WinGetCmds@@PAD222@Z
 ?WinGetPos@Line@@AAE?AW4ResultType@@PAD000@Z
 ?WinGetText@Line@@AAE?AW4ResultType@@PAD000@Z
 ?WinGetTitle@Line@@AAE?AW4ResultType@@PAD000@Z

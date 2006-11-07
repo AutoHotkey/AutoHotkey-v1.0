@@ -658,7 +658,7 @@ private:
 	ResultType WinGetTitle(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType WinGetClass(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType WinGet(char *aCmd, char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
-	ResultType WinGetControlList(Var *aOutputVar, HWND aTargetWindow, bool aFetchHWNDs);
+	ResultType WinGetControlList(Var &aOutputVar, HWND aTargetWindow, bool aFetchHWNDs);
 	ResultType WinGetText(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType WinGetPos(char *aTitle, char *aText, char *aExcludeTitle, char *aExcludeText);
 	ResultType EnvGet(char *aEnvVarName);
@@ -2584,6 +2584,7 @@ ResultType BackupFunctionVars(Func &aFunc, VarBkp *&aVarBackup, int &aVarBackupC
 void RestoreFunctionVars(Func &aFunc, VarBkp *&aVarBackup, int aVarBackupCount);
 
 char *RegExMatch(char *aHaystack, char *aNeedleRegEx);
+void SetWorkingDir(char *aNewDir);
 int ConvertJoy(char *aBuf, int *aJoystickID = NULL, bool aAllowOnlyButtons = false);
 bool ScriptGetKeyState(vk_type aVK, KeyStateTypes aKeyStateType);
 double ScriptGetJoyState(JoyControls aJoy, int aJoystickID, ExprTokenType &aToken, bool aUseBoolForUpDown);

@@ -77,9 +77,9 @@ ResultType Line::IniDelete(char *aFilespec, char *aSection, char *aKey)
 
 ResultType Line::RegRead(HKEY aRootKey, char *aRegSubkey, char *aValueName)
 {
-	Var *output_var = OUTPUT_VAR;
+	Var &output_var = *OUTPUT_VAR;
 	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
-	output_var->Assign(); // Init.  Tell it not to free the memory by not calling with "".
+	output_var.Assign(); // Init.  Tell it not to free the memory by not calling with "".
 
 	HKEY	hRegKey;
 	DWORD	dwRes, dwBuf, dwType;
@@ -110,7 +110,7 @@ ResultType Line::RegRead(HKEY aRootKey, char *aRegSubkey, char *aValueName)
 			RegQueryValueEx(hRegKey, aValueName, NULL, NULL, (LPBYTE)&dwBuf, &dwRes);
 			RegCloseKey(hRegKey);
 			g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-			return output_var->Assign((__int64)dwBuf);
+			return output_var.Assign((__int64)dwBuf);
 
 		// Note: The contents of any of these types can be >64K on NT/2k/XP+ (though that is probably rare):
 		case REG_SZ:
@@ -133,13 +133,13 @@ ResultType Line::RegRead(HKEY aRootKey, char *aRegSubkey, char *aValueName)
 			// which leaves room for the final newline character to be inserted after
 			// the last item.  Even so, it feels safer to add 2 to the requested capacity
 			// to avoid any chance of a buffer overrun:
-			if (output_var->Assign(NULL, (VarSizeType)(dwRes + 2)) != OK)
+			if (output_var.Assign(NULL, (VarSizeType)(dwRes + 2)) != OK)
 			{
 				RegCloseKey(hRegKey);
 				return FAIL; // FAIL is only returned when the error is a critical one such as this one.
 			}
 
-			buf = output_var->Contents(); // This target buf should now be large enough for the result.
+			buf = output_var.Contents(); // This target buf should now be large enough for the result.
 
 			RegQueryValueEx(hRegKey, aValueName, NULL, NULL, (LPBYTE)buf, &dwRes);
 			RegCloseKey(hRegKey);
@@ -180,8 +180,8 @@ ResultType Line::RegRead(HKEY aRootKey, char *aRegSubkey, char *aValueName)
 			g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 			// Due to conservative buffer sizes above, length is probably too large by 3.
 			// So update to reflect the true length:
-			output_var->Length() = (VarSizeType)strlen(output_var->Contents());
-			return output_var->Close();  // In case it's the clipboard.
+			output_var.Length() = (VarSizeType)strlen(output_var.Contents());
+			return output_var.Close();  // In case it's the clipboard.
 		}
 
 		case REG_BINARY:
@@ -197,9 +197,9 @@ ResultType Line::RegRead(HKEY aRootKey, char *aRegSubkey, char *aValueName)
 
 			// Set up the variable to receive the contents, enlarging it if necessary.
 			// AutoIt3: Each byte will turned into 2 digits, plus a final null:
-			if (output_var->Assign(NULL, (VarSizeType)(dwRes * 2)) != OK)
+			if (output_var.Assign(NULL, (VarSizeType)(dwRes * 2)) != OK)
 				return FAIL;
-			buf = output_var->Contents();
+			buf = output_var.Contents();
 			*buf = '\0';
 
 			int j = 0;
@@ -215,7 +215,7 @@ ResultType Line::RegRead(HKEY aRootKey, char *aRegSubkey, char *aValueName)
 			}
 			buf[j] = '\0'; // Terminate
 			g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
-			return output_var->Close();  // In case it's the clipboard.
+			return output_var.Close();  // In case it's the clipboard.
 		}
 	}
 

@@ -4,6 +4,10 @@
 	Version="7.10"
 	Name="lib_pcre"
 	ProjectGUID="{39037993-9571-4DF2-8E39-CD2909043574}"
+	SccProjectName="SAK"
+	SccAuxPath="SAK"
+	SccLocalPath="SAK"
+	SccProvider="SAK"
 	Keyword="Win32Proj">
 	<Platforms>
 		<Platform

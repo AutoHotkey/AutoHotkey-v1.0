@@ -2369,9 +2369,9 @@ end:
 	// until the line that contains the function-calling expressions finishes completely.
 	// Description of recursion and usage of multiple deref buffers:
 	// 1) ExpandArgs() receives a line with one or more expressions containing one or more function-calls.
-	// 2) Worst-case: the function calls create a new sDerefBuf automatically via us having set sDerefBuf to NULL.
+	// 2) Worst-case: those function-calls create a new sDerefBuf automatically via us having set sDerefBuf to NULL.
 	// 3) Even worse, the bodies of those functions call other functions, which ExpandArgs() receives, resulting in
-	// a recursive leap back to step #1.
+	//    a recursive leap back to step #1.
 	// So the above shows how any number of new deref buffers can be created.  But that's okay as long as the
 	// recursion collapses in an orderly manner (or the program exits, in which case the OS frees all its memory
 	// automatically).  This is because prior to returning, each recursion layer properly frees any extra deref

@@ -1915,7 +1915,7 @@ examine_line:
 			}
 			// Labels (except hotkeys) must contain no whitespace, delimiters, or escape-chars.
 			// This is to avoid problems where a legitimate action-line ends in a colon,
-			// such as WinActivate, SomeTitle:
+			// such as "WinActivate SomeTitle" and "#Include c:".
 			// We allow hotkeys to violate this since they may contain commas, and since a normal
 			// script line (i.e. just a plain command) is unlikely to ever end in a double-colon:
 			for (cp = buf, is_label = true; *cp; ++cp)
@@ -2382,7 +2382,9 @@ inline ResultType Script::IsDirective(char *aBuf)
 			// been asked for directly or indirectly several times.
 			// If a script ever wants to use the string "%A_ScriptDir%" literally in an include's filename,
 			// that would not work.  But that seems too rare to worry about.
-			SetCurrentDirectory(parameter);
+			// v1.0.45.01: Call SetWorkingDir() vs. SetCurrentDirectory() so that it succeeds even for a root
+			// drive like C: that lacks a backslash (see SetWorkingDir() for details).
+			SetWorkingDir(parameter);
 			return CONDITION_TRUE;
 		}
 		// Since above didn't return, it's a file (or non-existent file, in which case the below will display
@@ -4155,7 +4157,7 @@ ResultType Script::AddLine(ActionTypeType aActionType, char *aArg[], ArgCountTyp
 							return FAIL;  // The above already displayed the error.
 						// If this action type is something that modifies the contents of the var, ensure the var
 						// isn't a special/reserved one:
-						if (this_new_arg.type == ARG_TYPE_OUTPUT_VAR && VAR_IS_RESERVED(target_var))
+						if (this_new_arg.type == ARG_TYPE_OUTPUT_VAR && VAR_IS_RESERVED(*target_var))
 							return ScriptError(ERR_VAR_IS_RESERVED, this_aArg);
 						// Rather than removing this arg from the list altogether -- which would distrub
 						// the ordering and hurt the maintainability of the code -- the next best thing
@@ -6456,7 +6458,7 @@ Var *Line::ResolveVarOfArg(int aArgIndex, bool aCreateIfNecessary)
 	// of variable exists, a global variable will be created if assume-global is in effect.
 	if (   !(found_var = g_script.FindOrAddVar(sVarName, 0, ALWAYS_PREFER_LOCAL))   )
 		return NULL;  // Above will already have displayed the error.
-	if (this_arg.type == ARG_TYPE_OUTPUT_VAR && VAR_IS_RESERVED(found_var))
+	if (this_arg.type == ARG_TYPE_OUTPUT_VAR && VAR_IS_RESERVED(*found_var))
 	{
 		LineError(ERR_VAR_IS_RESERVED, FAIL, sVarName);
 		return NULL;  // Don't return the var, preventing the caller from assigning to it.
@@ -9438,7 +9440,7 @@ __forceinline ResultType Line::Perform() // __forceinline() currently boosts per
 {
 	char buf_temp[MAX_REG_ITEM_LENGTH + 1]; // For registry and other things.
 	WinGroup *group; // For the group commands.
-	Var *output_var = OUTPUT_VAR; // Okay if NULL.  Users of it should only consider it valid if their first arg is actually an output_variable.
+	Var *output_var = OUTPUT_VAR; // Okay if NULL. Users of it should only consider it valid if their first arg is actually an output_variable.
 	ToggleValueType toggle;  // For commands that use on/off/neutral.
 	// Use signed values for these in case they're really given an explicit negative value:
 	int start_char_num, chars_to_extract; // For String commands.
@@ -10345,19 +10347,8 @@ __forceinline ResultType Line::Perform() // __forceinline() currently boosts per
 		return FileGetVersion(USE_FILE_LOOP_FILE_IF_ARG_BLANK(ARG2));
 
 	case ACT_SETWORKINGDIR:
-		if (SetCurrentDirectory(ARG1))
-		{
-			// Other than during program startup, this should be the only place where the official
-			// working dir can change.  The exception is FileSelectFile(), which changes the working
-			// dir as the user navigates from folder to folder.  However, the whole purpose of
-			// maintaining g_WorkingDir is to workaround that very issue.
-			// NOTE: GetCurrentDirectory() is called explicitly in case ARG1 is a relative path.
-			// We want to store the absolute path:
-			if (!GetCurrentDirectory(sizeof(g_WorkingDir), g_WorkingDir))
-				strlcpy(g_WorkingDir, ARG1, sizeof(g_WorkingDir));
-			return g_ErrorLevel->Assign(ERRORLEVEL_NONE);
-		}
-		return g_ErrorLevel->Assign(ERRORLEVEL_ERROR);
+		SetWorkingDir(ARG1);
+		return OK;
 
 	case ACT_FILESELECTFILE:
 		return FileSelectFile(ARG2, ARG3, ARG4, ARG5);

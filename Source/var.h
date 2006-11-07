@@ -41,7 +41,7 @@ enum VarTypes
 , VAR_NORMAL = VAR_FIRST_NON_BYREF  // Most variables are this type.
 , VAR_CLIPBOARD
 , VAR_LAST_UNRESERVED = VAR_CLIPBOARD  // Keep this in sync with any changes to the set of unreserved variables.
-#define VAR_IS_RESERVED(var) (var->Type() > VAR_LAST_UNRESERVED)
+#define VAR_IS_RESERVED(var) ((var).Type() > VAR_LAST_UNRESERVED)
 , VAR_CLIPBOARDALL // Must be reserved because it's not designed to be writable.
 , VAR_TRUE, VAR_FALSE
 , VAR_YYYY, VAR_MM, VAR_MMMM, VAR_MMM, VAR_DD, VAR_YDAY, VAR_YWEEK, VAR_WDAY, VAR_DDDD, VAR_DDD

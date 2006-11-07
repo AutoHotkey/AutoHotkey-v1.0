@@ -1063,8 +1063,8 @@ ResultType Line::GuiControl(char *aCommand, char *aControlID, char *aParam3)
 
 ResultType Line::GuiControlGet(char *aCommand, char *aControlID, char *aParam3)
 {
-	Var *output_var = OUTPUT_VAR;
-	output_var->Assign(); // Set default to be blank for all commands, for consistency.
+	Var &output_var = *OUTPUT_VAR;
+	output_var.Assign(); // Set default to be blank for all commands, for consistency.
 
 	int window_index = g.GuiDefaultWindowIndex; // Which window to operate upon.  Initialized to thread's default.
 	GuiControlGetCmds guicontrolget_cmd = Line::ConvertGuiControlGetCmd(aCommand, &window_index);
@@ -1081,7 +1081,7 @@ ResultType Line::GuiControlGet(char *aCommand, char *aControlID, char *aParam3)
 
 	GuiType &gui = *g_gui[window_index];  // For performance and convenience.
 	if (!*aControlID) // In this case, default to the name of the output variable, as documented.
-		aControlID = output_var->mName;
+		aControlID = output_var.mName;
 
 	// Beyond this point, errors are rare so set the default to "no error":
 	g_ErrorLevel->Assign(ERRORLEVEL_NONE);
@@ -1112,7 +1112,7 @@ ResultType Line::GuiControlGet(char *aCommand, char *aControlID, char *aParam3)
 			// Append the class sequence number onto the class name set the output param to be that value:
 			snprintfcat(focused_control, sizeof(focused_control), "%d", cah.class_count);
 		}
-		return output_var->Assign(focused_control); // And leave ErrorLevel set to NONE.
+		return output_var.Assign(focused_control); // And leave ErrorLevel set to NONE.
 	}
 
 	GuiIndexType control_index = gui.FindControl(aControlID);
@@ -1125,7 +1125,7 @@ ResultType Line::GuiControlGet(char *aCommand, char *aControlID, char *aParam3)
 	case GUICONTROLGET_CMD_CONTENTS:
 		// Because the below returns FAIL only if a critical error occurred, g_ErrorLevel is
 		// left at NONE as set above for all cases.
-		return gui.ControlGetContents(*output_var, control, aParam3);
+		return gui.ControlGetContents(output_var, control, aParam3);
 
 	case GUICONTROLGET_CMD_POS:
 	{
@@ -1142,20 +1142,20 @@ ResultType Line::GuiControlGet(char *aCommand, char *aControlID, char *aParam3)
 		// var names that are too long:
 		char var_name[MAX_VAR_NAME_LENGTH + 20];
 		Var *var;
-		int always_use = output_var->IsLocal() ? ALWAYS_USE_LOCAL : ALWAYS_USE_GLOBAL;
-		snprintf(var_name, sizeof(var_name), "%sX", output_var->mName);
+		int always_use = output_var.IsLocal() ? ALWAYS_USE_LOCAL : ALWAYS_USE_GLOBAL;
+		snprintf(var_name, sizeof(var_name), "%sX", output_var.mName);
 		if (   !(var = g_script.FindOrAddVar(var_name, 0, always_use))   ) // Called with output_var to enhance performance.
 			return FAIL;  // It will have already displayed the error.
 		var->Assign(pt.x);
-		snprintf(var_name, sizeof(var_name), "%sY", output_var->mName);
+		snprintf(var_name, sizeof(var_name), "%sY", output_var.mName);
 		if (   !(var = g_script.FindOrAddVar(var_name, 0, always_use))   ) // Called with output_var to enhance performance.
 			return FAIL;  // It will have already displayed the error.
 		var->Assign(pt.y);
-		snprintf(var_name, sizeof(var_name), "%sW", output_var->mName);
+		snprintf(var_name, sizeof(var_name), "%sW", output_var.mName);
 		if (   !(var = g_script.FindOrAddVar(var_name, 0, always_use))   ) // Called with output_var to enhance performance.
 			return FAIL;  // It will have already displayed the error.
 		var->Assign(rect.right - rect.left);
-		snprintf(var_name, sizeof(var_name), "%sH", output_var->mName);
+		snprintf(var_name, sizeof(var_name), "%sH", output_var.mName);
 		if (   !(var = g_script.FindOrAddVar(var_name, 0, always_use))   ) // Called with output_var to enhance performance.
 			return FAIL;  // It will have already displayed the error.
 		return var->Assign(rect.bottom - rect.top);
@@ -1163,7 +1163,7 @@ ResultType Line::GuiControlGet(char *aCommand, char *aControlID, char *aParam3)
 
 	case GUICONTROLGET_CMD_ENABLED:
 		// See commment below.
-		return output_var->Assign(IsWindowEnabled(control.hwnd) ? "1" : "0");
+		return output_var.Assign(IsWindowEnabled(control.hwnd) ? "1" : "0");
 
 	case GUICONTROLGET_CMD_VISIBLE:
 		// From working on Window Spy, I seem to remember that IsWindowVisible() uses different standards
@@ -1172,7 +1172,7 @@ ResultType Line::GuiControlGet(char *aCommand, char *aControlID, char *aParam3)
 		// this "visible" sub-cmd is kept separate from some figure command such as "GuiControlGet, Out, Style":
 		// 1) The style method is cumbersome to script with since it requires bitwise operates afterward.
 		// 2) IsVisible() uses a different standard of detection than simply checking WS_VISIBLE.
-		return output_var->Assign(IsWindowVisible(control.hwnd) ? "1" : "0");
+		return output_var.Assign(IsWindowVisible(control.hwnd) ? "1" : "0");
 	} // switch()
 
 	return FAIL;  // Should never be reached, but avoids compiler warning and improves bug detection.
@@ -3259,7 +3259,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 	// Below also serves as a bug check, i.e. GUI_CONTROL_INVALID or some unknown type.
 	if (!control.hwnd)
 		return g_script.ScriptError("Can't create control." ERR_ABORT);
-	// Otherwise the above control creation succeeed.
+	// Otherwise the above control creation succeeded.
 	++mControlCount;
 	mControlWidthWasSetByContents = control_width_was_set_by_contents; // Set for use by next control, if any.
 
@@ -3271,7 +3271,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		// related to unchecking, such as tabstop adjustment.
 		mInRadioGroup = true; // Set here, only after creation was successful.
 	}
-	else // For code simplicity and due to rarity, GUI_CONTROL_STATUSBAR also starts a new radio group.
+	else // For code simplicity and due to rarity, even GUI_CONTROL_STATUSBAR starts a new radio group.
 		mInRadioGroup = false;
 
 	// Check style_remove vs. style because this control might be hidden just because it was added
