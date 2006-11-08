@@ -312,8 +312,8 @@ Action g_act[] =
 	, {"StringMid", 3, 5, 5, {3, 4, 0}} // Output Variable, Input Variable, Start char, Number of chars to extract, L
 	, {"StringTrimLeft", 3, 3, 3, {3, 0}}  // output var, input var, number of chars to trim
 	, {"StringTrimRight", 3, 3, 3, {3, 0}} // same
-	, {"StringLower", 2, 3, 3, NULL} // output var, input var, T = Title Case
-	, {"StringUpper", 2, 3, 3, NULL} // output var, input var, T = Title Case
+	, {"StringLower", 2, 3, 3 H, NULL} // output var, input var, T = Title Case
+	, {"StringUpper", 2, 3, 3 H, NULL} // output var, input var, T = Title Case
 	, {"StringLen", 2, 2, 2, NULL} // output var, input var
 	, {"StringGetPos", 3, 5, 3, {5, 0}}  // Output Variable, Input Variable, Search Text, R or Right (from right), Offset
 	, {"StringReplace", 3, 5, 4, NULL} // Output Variable, Input Variable, Search String, Replace String, do-all.

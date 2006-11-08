@@ -166,10 +166,10 @@ public:
 	vk_type mVK; // virtual-key code, e.g. VK_TAB, VK_LWIN, VK_LMENU, VK_APPS, VK_F10.  If zero, use sc below.
 	vk_type mModifierVK; // Any other virtual key that must be pressed down in order to activate "vk" itself.
 	HotkeyTypeType mType;
-	#define NO_SUPPRESS_PREFIX 0x01 // Bitwise: Bit #1
-	#define AT_LEAST_ONE_VARIANT_HAS_TILDE 0x02 // Bitwise: Bit #2
+	#define NO_SUPPRESS_PREFIX 0x01               // Bitwise: Bit #1
+	#define AT_LEAST_ONE_VARIANT_HAS_TILDE 0x02   // Bitwise: Bit #2
 	#define AT_LEAST_ONE_VARIANT_LACKS_TILDE 0x04 // Bitwise: Bit #3
-	#define NO_SUPPRESS_NEXT_UP_EVENT 0x08 // Bitwise: Bit #4
+	#define NO_SUPPRESS_NEXT_UP_EVENT 0x08        // Bitwise: Bit #4
 	#define NO_SUPPRESS_SUFFIX_VARIES (AT_LEAST_ONE_VARIANT_HAS_TILDE | AT_LEAST_ONE_VARIANT_LACKS_TILDE) // i.e. a hotkey that has variants of both types.
 	#define NO_SUPPRESS_STATES NO_SUPPRESS_NEXT_UP_EVENT  // This is a bitwise union (currently only one item) of those of the above that represent a the key's dynamically changing state as the user types.
 

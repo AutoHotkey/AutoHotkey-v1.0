@@ -9438,7 +9438,7 @@ __forceinline ResultType Line::Perform() // __forceinline() currently boosts per
 // The function should not be called to perform any flow-control actions such as
 // Goto, Gosub, Return, Block-Begin, Block-End, If, Else, etc.
 {
-	char buf_temp[MAX_REG_ITEM_LENGTH + 1]; // For registry and other things.
+	char buf_temp[MAX_REG_ITEM_LENGTH + 1], *contents; // For registry and other things.
 	WinGroup *group; // For the group commands.
 	Var *output_var = OUTPUT_VAR; // Okay if NULL. Users of it should only consider it valid if their first arg is actually an output_variable.
 	ToggleValueType toggle;  // For commands that use on/off/neutral.
@@ -9720,14 +9720,24 @@ __forceinline ResultType Line::Perform() // __forceinline() currently boosts per
 
 	case ACT_STRINGLOWER:
 	case ACT_STRINGUPPER:
-		output_var->Assign(ARG2, (VarSizeType)ArgLength(2));
+		// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
+		// this call will set up the clipboard for writing.
+		// Fix for v1.0.45.02: The v1.0.45 change where the value is assigned directly without sizing the variable
+		// first doesn't work in cases when the variable is the clipboard.  This is because the clipboard's buffer
+		// is changeable (for the case conversion later below) only when using the following approach, not a simple
+		// "assign then modify its Contents()".
+		if (output_var->Assign(NULL, (VarSizeType)ArgLength(2)) != OK)
+			return FAIL;
+		contents = output_var->Contents(); // Do this only after the above might have changed the contents mem address.
+		// Copy the input variable's text directly into the output variable:
+		strcpy(contents, ARG2);
 		if (*ARG3 && toupper(*ARG3) == 'T' && !*(ARG3 + 1)) // Convert to title case
-			StrToTitleCase(output_var->Contents());
+			StrToTitleCase(contents);
 		else if (mActionType == ACT_STRINGLOWER)
-			CharLower(output_var->Contents());
+			CharLower(contents);
 		else
-			CharUpper(output_var->Contents());
-		return OK;
+			CharUpper(contents);
+		return output_var->Close();  // In case it's the clipboard.
 
 	case ACT_STRINGLEN:
 		return output_var->Assign((__int64)(ARGVARRAW2 && ARGVARRAW2->IsBinaryClip() // Load-time validation has ensured mArgc > 1.
