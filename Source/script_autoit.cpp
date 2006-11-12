@@ -870,7 +870,7 @@ ResultType Line::ControlGet(char *aCmd, char *aValue, char *aControl, char *aTit
 		// Note: The RichEdit controls of certain apps such as Metapad don't return the right selection
 		// with this technique.  Au3 has the same problem with them, so for now it's just documented here
 		// as a limitation.
-		if (!SendMessageTimeout(control_window, EM_GETSEL, (WPARAM)&start,(LPARAM)&end, SMTO_ABORTIFHUNG, 2000, &dwResult))
+		if (!SendMessageTimeout(control_window, EM_GETSEL, (WPARAM)&start, (LPARAM)&end, SMTO_ABORTIFHUNG, 2000, &dwResult))
 			return output_var.Assign();
 		// The above sets start to be the zero-based position of the start of the selection (similar for end).
 		// If there is no selection, start and end will be equal, at least in the edit controls I tried it with.
@@ -963,8 +963,10 @@ ResultType Line::URLDownloadToFile(char *aURL, char *aFilespec)
 			aURL = omit_leading_whitespace(cp);
 	}
 
-	// Open the internet session
-	HINTERNET hInet = lpfnInternetOpen(NULL, INTERNET_OPEN_TYPE_PRECONFIG_WITH_NO_AUTOPROXY, NULL, NULL, 0);
+	// Open the internet session. v1.0.45.03: Provide a non-NULL user-agent because  some servers reject
+	// requests that lack a user-agent.  Furthermore, it's more professional to have one, in which case it
+	// should probably be kept as simple and unchanging as possible.
+	HINTERNET hInet = lpfnInternetOpen("AutoHotkey", INTERNET_OPEN_TYPE_PRECONFIG_WITH_NO_AUTOPROXY, NULL, NULL, 0);
 	if (!hInet)
 	{
 		FreeLibrary(hinstLib);
@@ -1588,21 +1590,24 @@ int Line::Util_CopyFile(const char *szInputSource, const char *szInputDest, bool
 	if (Util_IsDir(szDest))
 		strcat(szDest, "\\*.*");
 
-	// Split source into file and extension (we need this info in the loop below to recontstruct the path)
-	_splitpath( szSource, szDrive, szDir, szFile, szExt );
-
-	// Note we now rely on the SOURCE being the contents of szDrive, szDir, szFile, etc.
-
-	LONG_OPERATION_INIT
-
-	bool is_found;
-	int failure_count;
 	WIN32_FIND_DATA	findData;
 	HANDLE hSearch = FindFirstFile(szSource, &findData);
+	if (hSearch == INVALID_HANDLE_VALUE)
+		return 0; // Indicate no failures.
 
-	for (failure_count = 0, is_found = (hSearch != INVALID_HANDLE_VALUE)
-		; is_found
-		; is_found = FindNextFile(hSearch, &findData))
+	// Otherwise, loop through all the matching files.
+	// Split source into file and extension (we need this info in the loop below to recontstruct the path)
+	_splitpath(szSource, szDrive, szDir, szFile, szExt);
+	// Note we now rely on the SOURCE being the contents of szDrive, szDir, szFile, etc.
+	snprintf(szTempPath, sizeof(szTempPath), "%s%s", szDrive, szDir);
+	size_t szTempPath_length = strlen(szTempPath);
+	char *append_pos = szTempPath + szTempPath_length;
+	size_t space_remaining = sizeof(szTempPath) - szTempPath_length - 1;
+
+	int failure_count = 0;
+	LONG_OPERATION_INIT
+
+	do
 	{
 		// Since other script threads can interrupt during LONG_OPERATION_UPDATE, it's important that
 		// this function and those that call it not refer to sArgDeref[] and sArgVar[] anytime after an
@@ -1615,13 +1620,15 @@ int Line::Util_CopyFile(const char *szInputSource, const char *szInputDest, bool
 		if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) // dwFileAttributes should never be invalid (0xFFFFFFFF) in this case.
 			continue;
 
+		if (strlen(findData.cFileName) > space_remaining) // v1.0.45.03: Basic check in case of files whose full spec is over 260 characters long.
+		{
+			++failure_count;
+			continue;
+		}
+		strcpy(append_pos, findData.cFileName); // Indirectly populate szTempPath. Above has ensured this won't overflow.
+
 		// Expand the destination based on this found file
 		Util_ExpandFilenameWildcard(findData.cFileName, szDest, szExpandedDest);
-	
-		// The find struct only returns the file NAME, we need to reconstruct the path!
-		strcpy(szTempPath, szDrive);	
-		strcat(szTempPath, szDir);
-		strcat(szTempPath, findData.cFileName);
 
 		// Fixed for v1.0.36.01: This section has been revised to avoid unnecessary calls; but more
 		// importantly, it now avoids the deletion and complete loss of a file when it is copied or
@@ -1660,11 +1667,10 @@ int Line::Util_CopyFile(const char *szInputSource, const char *szInputDest, bool
 		else // The mode is "Copy" vs. "Move"
 			if (!CopyFile(szTempPath, szExpandedDest, !bOverwrite)) // Force it to fail if bOverwrite==false.
 				++failure_count;
-	} // for() each file.
+	} while (FindNextFile(hSearch, &findData));
 
 	FindClose(hSearch);
 	return failure_count;
-
 }
 
 

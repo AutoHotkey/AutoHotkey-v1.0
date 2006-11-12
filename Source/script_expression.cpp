@@ -1126,7 +1126,7 @@ double_deref:
 					// if that parameter or local var or is assigned a value by any other means during our call
 					// to it, new memory will be allocated to hold that value rather than overwriting the
 					// underlying recursed/interrupted instance's memory, which it will need intact when it's resumed.
-					if (!BackupFunctionVars(func, var_backup, var_backup_count)) // Out of memory.
+					if (!Var::BackupFunctionVars(func, var_backup, var_backup_count)) // Out of memory.
 					{
 						LineError(ERR_OUTOFMEM ERR_ABORT, FAIL, func.mName);
 						goto abort;
@@ -1256,7 +1256,16 @@ double_deref:
 
 				if (   !(early_return = (aResult == EARLY_EXIT || aResult == FAIL))   ) // No need to do any of this for early_return because for backward compatibility, ACT_ASSIGNEXPR is aborted by early return (i.e. output_var's original contents are not altered).
 				{
-					if (output_var && EXPR_IS_DONE) // i.e. this is ACT_ASSIGNEXPR and we've now produced the final result.
+					// Fix for v1.0.45.03: The second line below was added to detect whether output_var is among
+					// the variables that are about to be restored from backup.  If it is, we can't assign to it
+					// now because it's currently a local that belongs to the instance we're in the middle of
+					// calling; i.e. it doesn't belong to our instance (which is beneath it on the call stack
+					// until after the restore-from-backup is done later below).  And we can't assign "result"
+					// to it *after* the restore because by then result may have been freed (if it happens to be
+					// a local variable too).  Therefore, continue on to the normal method, which will check
+					// whether "result" needs to be stored in more persistent memory.
+					if (output_var && EXPR_IS_DONE // i.e. this is ACT_ASSIGNEXPR and we've now produced the final result.
+						&& !(var_backup && g.CurrentFunc == &func && output_var->IsNonStaticLocal())) // Ordered for short-circuit performance. See multiline comment above.
 					{
 						// v1.0.45: Take a shortcut for performance.  Doing it this way saves up to two memcpy's
 						// (make_result_persistent then copy into deref buffer).  In some cases, it also saves
@@ -1274,8 +1283,8 @@ double_deref:
 						udf_is_final_action = true; // This tells the label below that after the cleanup, we're done.
 						goto skip_abort_udf; // Do end-of-function-call cleanup (see comment above).  No need to do make_result_persistent section.
 					}
-					// Otherwise (since above didn't goto): !output_var || !EXPR_IS_DONE, so do normal handling of
-					// "result" below.
+					// Otherwise (since above didn't goto): !output_var || !EXPR_IS_DONE || var_backup, so do
+					// normal handling of "result" below.
 				}
 				//else early_return==true, so no need to store anything in result because for backward compatibility, this expression will have no result storable by the outside world (e.g. ACT_ASSIGNEXPR).
 			} // Call to a user defined function.
@@ -1401,24 +1410,7 @@ abort_udf:
 				aResult = FAIL;
 				early_return = true;
 skip_abort_udf:
-				for (j = 0; j < func.mVarCount; ++j)
-					func.mVar[j]->Free(VAR_ALWAYS_FREE_BUT_EXCLUDE_STATIC, true); // Pass "true" to exclude aliases, since their targets should not be freed (they don't belong to this function).
-				for (j = 0; j < func.mLazyVarCount; ++j)
-					func.mLazyVar[j]->Free(VAR_ALWAYS_FREE_BUT_EXCLUDE_STATIC, true);
-
-				// The following used to be the contents of RestoreFunctionVars() [it does too little to be kept
-				// as separate a function.]
-				// The following call to RestoreFunctionVars() relies on the fact that Free() was already called above.
-				// The previous call to BackupFunctionVars() has ensured that none of the variables Free()'d above
-				// were ALLOC_SIMPLE, because that would be a memory leak since there's no way to free that type.
-				if (var_backup) // This is the indicator that a backup was made, so a restore is also needed.
-				{
-					for (j = 0; j < var_backup_count; ++j)
-						var_backup[j].mVar->Restore(var_backup[j]); // This also frees any existing contents of the variable prior to restoring the original contents from backup.  But it avoids restoring statics.
-					free(var_backup);
-					var_backup = NULL; // Reset this because it's an indicator of whether the next function call in this expression (if any) will have a backup.
-				}
-
+				Var::FreeAndRestoreFunctionVars(func, var_backup, var_backup_count);
 				if (udf_is_final_action) // v1.0.45: An earlier stage has already taken care of this expression's result.
 					goto normal_end_skip_output_var; // Nothing more to do because it has even taken care of output_var already.
 				// The callers of this function know that the value of aResult (which already contains the reason
@@ -2672,38 +2664,4 @@ char *Line::ExpandArg(char *aBuf, int aArgIndex, Var *aArgVar) // 10/2/2006: Doe
 	// Terminate the buffer, even if nothing was written into it:
 	*aBuf++ = '\0';
 	return aBuf; // Returns the position after the terminator.
-}
-
-
-
-ResultType BackupFunctionVars(Func &aFunc, VarBkp *&aVarBackup, int &aVarBackupCount)
-// Helper function for ExpandExpression().  All parameters except the first are output parameters that
-// are set for our caller (though caller is responsible for having initialized aVarBackup to NULL).
-// If there is nothing to backup, only the aVarBackupCount is changed (to zero).
-// Returns OK or FAIL.
-{
-	if (   !(aVarBackupCount = aFunc.mVarCount + aFunc.mLazyVarCount)   )  // Nothing needs to be backed up.
-		return OK; // Leave aVarBackup set to NULL as set by the caller.
-
-	// NOTES ABOUT MALLOC(): Apparently, the implementation of malloc() is quite good, at least for small blocks
-	// needed to back up 50 or less variables.  It nearly as fast as alloca(), at least when the system
-	// isn't under load and has the memory to spare without swapping.  Therefore, the attempt to use alloca to
-	// speed up recursive script-functions didn't result in enough of a speed-up (only 1 to 5%) to be worth the
-	// added complexity.
-	// Since Var is not a POD struct (it contains private members, a custom constructor, etc.), the VarBkp
-	// POD struct is used to hold the backup because it's probably better performance than using Var's
-	// constructor to create each backup array element.
-	if (   !(aVarBackup = (VarBkp *)malloc(aVarBackupCount * sizeof(VarBkp)))   ) // Caller will take care of freeing it.
-		return FAIL;
-
-	int i;
-	aVarBackupCount = 0;  // Init only once prior to both loops. aVarBackupCount is being "overloaded" to track the current item in aVarBackup.
-
-	// Note that Backup() does not make the variable empty after backing it up because that is something
-	// that must be done by our caller at a later stage.
-	for (i = 0; i < aFunc.mVarCount; ++i)
-		aFunc.mVar[i]->Backup(aVarBackup[aVarBackupCount++]);
-	for (i = 0; i < aFunc.mLazyVarCount; ++i)
-		aFunc.mLazyVar[i]->Backup(aVarBackup[aVarBackupCount++]);
-	return OK;
 }

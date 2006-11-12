@@ -207,7 +207,9 @@ ResultType Var::Assign(char *aBuf, VarSizeType aLength, bool aExactSize, bool aO
 			{
 				// Allow a little room for future expansion to cut down on the number of
 				// free's and malloc's we expect to have to do in the future for this var:
-				if (new_size < MAX_PATH)
+				if (new_size < 16) // v1.0.45.03: Added this new size to prevent all local variables in a recursive
+					new_size = 16; // function from having a minimum size of MAX_PATH.  16 seems like a good size because it holds nearly any number.  It seems counterproductive to go too small because each malloc, no matter how small, could have around 40 bytes of overhead.
+				else if (new_size < MAX_PATH)
 					new_size = MAX_PATH;  // An amount that will fit all standard filenames seems good.
 				else if (new_size < (160 * 1024)) // MAX_PATH to 160 KB or less -> 10% extra.
 					new_size = (size_t)(new_size * 1.1);
@@ -834,6 +836,107 @@ void Var::SetLengthFromContents()
 		var.mLength = (VarSizeType)strlen(contents);
 	}
 	//else it has no capacity, so do nothing (it could also be a reserved/built-in variable).
+}
+
+
+
+ResultType Var::BackupFunctionVars(Func &aFunc, VarBkp *&aVarBackup, int &aVarBackupCount)
+// All parameters except the first are output parameters that are set for our caller (though caller
+// is responsible for having initialized aVarBackup to NULL).
+// If there is nothing to backup, only the aVarBackupCount is changed (to zero).
+// Returns OK or FAIL.
+{
+	if (   !(aVarBackupCount = aFunc.mVarCount + aFunc.mLazyVarCount)   )  // Nothing needs to be backed up.
+		return OK; // Leave aVarBackup set to NULL as set by the caller.
+
+	// NOTES ABOUT MALLOC(): Apparently, the implementation of malloc() is quite good, at least for small blocks
+	// needed to back up 50 or less variables.  It nearly as fast as alloca(), at least when the system
+	// isn't under load and has the memory to spare without swapping.  Therefore, the attempt to use alloca to
+	// speed up recursive script-functions didn't result in enough of a speed-up (only 1 to 5%) to be worth the
+	// added complexity.
+	// Since Var is not a POD struct (it contains private members, a custom constructor, etc.), the VarBkp
+	// POD struct is used to hold the backup because it's probably better performance than using Var's
+	// constructor to create each backup array element.
+	if (   !(aVarBackup = (VarBkp *)malloc(aVarBackupCount * sizeof(VarBkp)))   ) // Caller will take care of freeing it.
+		return FAIL;
+
+	int i;
+	aVarBackupCount = 0;  // Init only once prior to both loops. aVarBackupCount is being "overloaded" to track the current item in aVarBackup, BUT ALSO its being updated to an actual count in case some statics are omitted from the array.
+
+	// Note that Backup() does not make the variable empty after backing it up because that is something
+	// that must be done by our caller at a later stage.
+	for (i = 0; i < aFunc.mVarCount; ++i)
+		if (!(aFunc.mVar[i]->mAttrib & VAR_ATTRIB_STATIC)) // Don't bother backing up statics because they won't need to be restored.
+			aFunc.mVar[i]->Backup(aVarBackup[aVarBackupCount++]);
+	for (i = 0; i < aFunc.mLazyVarCount; ++i)
+		if (!(aFunc.mLazyVar[i]->mAttrib & VAR_ATTRIB_STATIC)) // Don't bother backing up statics because they won't need to be restored.
+			aFunc.mLazyVar[i]->Backup(aVarBackup[aVarBackupCount++]);
+	return OK;
+}
+
+
+
+void Var::Backup(VarBkp &aVarBkp)
+// Caller must not call this function for static variables because it's not equipped to deal with them
+// (they don't need to be backed up or restored anyway).
+// This method is used rather than struct copy (=) because it's of expected higher performance than
+// using the Var::constructor to make a copy of each var.  Also note that something like memcpy()
+// can't be used on Var objects since they're not POD (e.g. they have a contructor and they have
+// private members).
+{
+	aVarBkp.mVar = this; // Allows the restoration process to always know its target without searching.
+	aVarBkp.mContents = mContents;
+	aVarBkp.mLength = mLength; // Since it's a union, it might actually be backing up mAliasFor (happens at least for recursive functions that pass parameters ByRef).
+	aVarBkp.mCapacity = mCapacity;
+	aVarBkp.mHowAllocated = mHowAllocated; // This might be ALLOC_SIMPLE or ALLOC_NONE if backed up variable was at the lowest layer of the call stack.
+	aVarBkp.mAttrib = mAttrib;
+	// Once the backup is made, Free() is not called because the whole point of the backup is to
+	// preserve the original memory/contents of each variable.  Instead, clear the variable
+	// completely and set it up to become ALLOC_MALLOC in case anything actually winds up using
+	// the variable prior to the restoration of the backup.  In other words, ALLOC_SIMPLE and NONE
+	// retained (if present) because that would cause a memory leak when multiple layers are all
+	// allowed to use ALLOC_SIMPLE yet none are ever able to free it (the bottommost layer is
+	// allowed to use ALLOC_SIMPLE because that's a fixed/constant amount of memory gets freed
+	// when the program exits).
+	// Now reset this variable (caller has ensured it's non-static) to create a "new layer" for it, keeping
+	// its backup intact but allowing this variable (or formal parameter) to be given a new value in the future:
+	mCapacity = 0;             // Invariant: Anyone setting mCapacity to 0 must also set
+	mContents = sEmptyString;  // mContents to the empty string.
+	if (mType != VAR_ALIAS) // Fix for v1.0.42.07: Don't reset mLength if the other member of the union is in 
+		mLength = 0;        // effect.  Otherwise, functions that recursively pass ByRef parameters can crash because mType is left as VAR_ALIAS.
+	mHowAllocated = ALLOC_MALLOC; // Never NONE because that would permit SIMPLE. See comments higher above.
+	mAttrib &= ~VAR_ATTRIB_BINARY_CLIP; // But the VAR_ATTRIB_PARAM/STATIC flags are not altered.
+}
+
+
+
+void Var::FreeAndRestoreFunctionVars(Func &aFunc, VarBkp *&aVarBackup, int &aVarBackupCount)
+{
+	int i;
+	for (i = 0; i < aFunc.mVarCount; ++i)
+		aFunc.mVar[i]->Free(VAR_ALWAYS_FREE_BUT_EXCLUDE_STATIC, true); // Pass "true" to exclude aliases, since their targets should not be freed (they don't belong to this function).
+	for (i = 0; i < aFunc.mLazyVarCount; ++i)
+		aFunc.mLazyVar[i]->Free(VAR_ALWAYS_FREE_BUT_EXCLUDE_STATIC, true);
+
+	// The freeing (above) MUST be done prior to the restore-from-backup below (otherwise there would be
+	// a memory leak).  Static variables are never backed up and thus do not exist in the aVarBackup array.
+	// This is because by definition, the contents of statics are not freed or altered by the calling process
+	// (regardless how how recursive or multi-threaded the function is).
+	if (aVarBackup) // This is the indicator that a backup was made; thus a restore is also needed.
+	{
+		for (i = 0; i < aVarBackupCount; ++i) // Static variables were never backed up so they won't be in this array.
+		{
+			VarBkp &bkp = aVarBackup[i]; // Resolve only once for performance.
+			Var &var = *bkp.mVar;        //
+			var.mContents = bkp.mContents;
+			var.mLength = bkp.mLength; // Since it's a union, it might actually be restoring mAliasFor, which is desired.
+			var.mCapacity = bkp.mCapacity;
+			var.mHowAllocated = bkp.mHowAllocated; // This might be ALLOC_SIMPLE or ALLOC_NONE if backed up variable was at the lowest layer of the call stack.
+			var.mAttrib = bkp.mAttrib;
+		}
+		free(aVarBackup);
+		aVarBackup = NULL; // Some callers want this reset; it's an indicator of whether the next function call in this expression (if any) will have a backup.
+	}
 }
 
 

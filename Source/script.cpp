@@ -205,7 +205,7 @@ Script::~Script() // Destructor.
 	KeyHistoryToFile();  // Close the KeyHistory file if it's open.
 #endif
 
-	DeleteCriticalSection(&CriticalRegExCache); // CriticalRegExCache is used elsewhere for thread-safety.
+	DeleteCriticalSection(&g_CriticalRegExCache); // g_CriticalRegExCache is used elsewhere for thread-safety.
 }
 
 
@@ -1129,7 +1129,11 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 
 	// For the line continuation mechanism:
 	bool do_ltrim, do_rtrim, literal_escapes, literal_derefs, literal_delimiters
-		, in_continuation_section, has_continuation_section, is_continuation_line;
+		, has_continuation_section, is_continuation_line;
+	#define CONTINUATION_SECTION_WITHOUT_COMMENTS 1 // MUST BE 1 because it's the default set by anything boolean-true.
+	#define CONTINUATION_SECTION_WITH_COMMENTS    2 // Zero means "not in a continuation section".
+	int in_continuation_section;
+
 	char *next_option, *option_end, orig_char, one_char_string[2], two_char_string[3]; // Line continuation mechanism's option parsing.
 	one_char_string[1] = '\0';  // Pre-terminate these to simplfy code later below.
 	two_char_string[2] = '\0';  //
@@ -1150,10 +1154,10 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 	script_buf_space_remaining = SCRIPT_BUF_SPACE_REMAINING;  // Resolve macro only once, for performance.
 	max_chars_to_read = (LINE_SIZE - 1 < script_buf_space_remaining) ? LINE_SIZE - 1
 		: script_buf_space_remaining;
-	buf_length = GetLine(buf, max_chars_to_read, false, script_buf_marker);
+	buf_length = GetLine(buf, max_chars_to_read, 0, script_buf_marker);
 #else
 	LineNumberType phys_line_number = 0;
-	buf_length = GetLine(buf, LINE_SIZE - 1, false, fp);
+	buf_length = GetLine(buf, LINE_SIZE - 1, 0, fp);
 #endif
 
 	if (in_comment_section = !strncmp(buf, "/*", 2))
@@ -1188,7 +1192,7 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 
 		// Read in the next line (if that next line is the start of a continuation secttion, append
 		// it to the line currently being processed:
-		for (has_continuation_section = false, in_continuation_section = false;;)
+		for (has_continuation_section = false, in_continuation_section = 0;;)
 		{
 			// This increment relies on the fact that this loop always has at least one iteration:
 			++phys_line_number; // Tracks phys. line number in *this* file (independent of any recursion caused by #Include).
@@ -1324,6 +1328,9 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 					// since this line isn't blank, no further searching is needed.
 					break;
 				} // if (!in_continuation_section)
+
+				// OTHERWISE in_continuation_section != 0, so the above has found the first line of a new
+				// continuation seciton.
 				// "has_continuation_section" indicates whether the line we're about to construct is partially
 				// composed of continuation lines beneath it.  It's separate from continuation_line_count
 				// in case there is another continuation section immediately after/adjacent to the first one,
@@ -1399,6 +1406,10 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 							case ',': // Same comment as above.
 								literal_delimiters = false;
 								break;
+							case 'C': // v1.0.45.03: For simplicity, anything that begins with "C" is enough to
+							case 'c': // identify it as the option to allow comments in the section.
+								in_continuation_section = CONTINUATION_SECTION_WITH_COMMENTS; // Override the default, which is boolean true (i.e. 1).
+								break;
 							}
 						}
 					}
@@ -1419,9 +1430,12 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 				ScriptError(ERR_MISSING_CLOSE_PAREN, buf);
 				return CloseAndReturn(fp, script_buf, FAIL);
 			}
+			if (next_buf_length == -2) // v1.0.45.03: Special flag that means "this is a commented-out line to be
+				continue;              // entirely omitted from the continuation section." Compare directly to -2 since length is unsigned.
+
 			if (*next_buf == ')')
 			{
-				in_continuation_section = false; // Facilitates back-to-back continuation sections and proper incrementing of phys_line_number.
+				in_continuation_section = 0; // Facilitates back-to-back continuation sections and proper incrementing of phys_line_number.
 				next_buf_length = rtrim(next_buf); // Done because GetLine() wouldn't have done it due to have told it we're in a continuation section.
 				// Anything that lies to the right of the close-parenthesis gets appended verbatim, with
 				// no trimming (for flexibility) and no options-driven translation:
@@ -1439,46 +1453,43 @@ ResultType Script::LoadIncludedFile(char *aFileSpec, bool aAllowDuplicateInclude
 					next_buf_length = rtrim(next_buf, next_buf_length);
 				if (do_ltrim)
 					next_buf_length = ltrim(next_buf, next_buf_length);
-				if (literal_delimiters || literal_derefs)
+				// Escape each comma and percent sign in the body of the continuation section so that
+				// the later parsing stages will see them as literals.  Although, it's not always
+				// necessary to do this (e.g. commas in the last parameter of a command don't need to
+				// be escaped, nor do percent signs in hotstrings' auto-replace text), the settings
+				// are applied unconditionally because:
+				// 1) Determining when its safe to omit the translation would add a lot of code size and complexity.
+				// 2) The translation doesn't affect the functionality of the script since escaped literals
+				//    are always de-escaped at a later stage, at least for everything that's likely to matter
+				//    or that's reasonable to put into a continuation section (e.g. a hotstring's replacement text).
+				// UPDATE for v1.0.44.11: #EscapeChar, #DerefChar, #Delimiter are now supported by continuation
+				// sections because there were some requests for that in forum.
+				int replacement_count = 0;
+				if (literal_escapes) // literal_escapes must be done FIRST because otherwise it would also replace any accents added for literal_delimiters or literal_derefs.
 				{
-					// Escape each comma and percent sign in the body of the continuation section so that
-					// the later parsing stages will see them as literals.  Although, it's not always
-					// necessary to do this (e.g. commas in the last parameter of a command don't need to
-					// be escaped, nor do percent signs in hotstrings' auto-replace text), the settings
-					// are applied unconditionally because:
-					// 1) Determining when its safe to omit the translation would add a lot of code size and complexity.
-					// 2) The translation doesn't affect the functionality of the script since escaped literals
-					//    are always de-escaped at a later stage, at least for everything that's likely to matter
-					//    or that's reasonable to put into a continuation section (e.g. a hotstring's replacement text).
-					// UPDATE for v1.0.44.11: #EscapeChar, #DerefChar, #Delimiter are now supported by continuation
-					// sections because there were some requests for that in forum.
-					int replacement_count = 0;
-					if (literal_escapes) // literal_escapes must be done FIRST because otherwise it would also replace any accents added for literal_delimiters or literal_derefs.
-					{
-						one_char_string[0] = g_EscapeChar; // These strings were terminated earlier, so no need to
-						two_char_string[0] = g_EscapeChar; // do it here.  In addition, these strings must be set by
-						two_char_string[1] = g_EscapeChar; // each iteration because the #EscapeChar (and similar directives) can occur multiple times, anywhere in the script.
-						replacement_count += StrReplace(next_buf, one_char_string, two_char_string, SCS_SENSITIVE, UINT_MAX, LINE_SIZE);
-					}
-					if (literal_derefs)
-					{
-						one_char_string[0] = g_DerefChar;
-						two_char_string[0] = g_EscapeChar;
-						two_char_string[1] = g_DerefChar;
-						replacement_count += StrReplace(next_buf, one_char_string, two_char_string, SCS_SENSITIVE, UINT_MAX, LINE_SIZE);
-					}
-					if (literal_delimiters)
-					{
-						one_char_string[0] = g_delimiter;
-						two_char_string[0] = g_EscapeChar;
-						two_char_string[1] = g_delimiter;
-						replacement_count += StrReplace(next_buf, one_char_string, two_char_string, SCS_SENSITIVE, UINT_MAX, LINE_SIZE);
-					}
-
-					if (replacement_count) // Update the length if any actual replacements were done.
-						next_buf_length = strlen(next_buf);
+					one_char_string[0] = g_EscapeChar; // These strings were terminated earlier, so no need to
+					two_char_string[0] = g_EscapeChar; // do it here.  In addition, these strings must be set by
+					two_char_string[1] = g_EscapeChar; // each iteration because the #EscapeChar (and similar directives) can occur multiple times, anywhere in the script.
+					replacement_count += StrReplace(next_buf, one_char_string, two_char_string, SCS_SENSITIVE, UINT_MAX, LINE_SIZE);
 				}
-			}
+				if (literal_derefs)
+				{
+					one_char_string[0] = g_DerefChar;
+					two_char_string[0] = g_EscapeChar;
+					two_char_string[1] = g_DerefChar;
+					replacement_count += StrReplace(next_buf, one_char_string, two_char_string, SCS_SENSITIVE, UINT_MAX, LINE_SIZE);
+				}
+				if (literal_delimiters)
+				{
+					one_char_string[0] = g_delimiter;
+					two_char_string[0] = g_EscapeChar;
+					two_char_string[1] = g_delimiter;
+					replacement_count += StrReplace(next_buf, one_char_string, two_char_string, SCS_SENSITIVE, UINT_MAX, LINE_SIZE);
+				}
+
+				if (replacement_count) // Update the length if any actual replacements were done.
+					next_buf_length = strlen(next_buf);
+			} // Handling of a normal line within a continuation section.
 
 			// Must check the combined length only after anything that might have expanded the string above.
 			if (buf_length + next_buf_length + suffix_length >= LINE_SIZE)
@@ -2184,9 +2195,9 @@ inline ResultType Script::CloseAndReturn(FILE *fp, UCHAR *aBuf, ResultType aRetu
 
 
 #ifdef AUTOHOTKEYSC
-size_t Script::GetLine(char *aBuf, int aMaxCharsToRead, bool aInContinuationSection, UCHAR *&aMemFile) // last param = reference to pointer
+size_t Script::GetLine(char *aBuf, int aMaxCharsToRead, int aInContinuationSection, UCHAR *&aMemFile) // last param = reference to pointer
 #else
-size_t Script::GetLine(char *aBuf, int aMaxCharsToRead, bool aInContinuationSection, FILE *fp)
+size_t Script::GetLine(char *aBuf, int aMaxCharsToRead, int aInContinuationSection, FILE *fp)
 #endif
 {
 	size_t aBuf_length = 0;
@@ -2237,7 +2248,7 @@ size_t Script::GetLine(char *aBuf, int aMaxCharsToRead, bool aInContinuationSect
 		aBuf[--aBuf_length] = '\0';
 #endif
 
-	if (aInContinuationSection)
+	if (aInContinuationSection == CONTINUATION_SECTION_WITHOUT_COMMENTS)
 	{
 		// Caller relies on us to make detect the end of the continuation section so that trimming
 		// will be done on the final line of the section and so that a comment can immediately
@@ -2249,14 +2260,16 @@ size_t Script::GetLine(char *aBuf, int aMaxCharsToRead, bool aInContinuationSect
 		if (*cp != ')')
 			return aBuf_length; // The above is responsible for keeping aBufLength up-to-date with any changes to aBuf.
 	}
+	//else no continuation section or it allows comments, so the check above isn't necessary.
 
-	// Since above didn't return, either we're not in a continuation section or this is the final line of one.
-	// ltrim to support semicolons after tab keys or other whitespace.  Seems best to rtrim also:
+	// Since above didn't return, either we're not in a continuation section, or this is the final line of one,
+	// or comments are allowed inside the section.
+	// Apply ltrim() to support semicolons after tabs or other whitespace.  Seems best to rtrim also:
 	aBuf_length = trim(aBuf);
 	if (!strncmp(aBuf, g_CommentFlag, g_CommentFlagLength)) // Case sensitive.
 	{
 		*aBuf = '\0';
-		return 0;
+		return aInContinuationSection ? -2 : 0; // Callers tolerate -2 only when in a continuation section.  -2 indicates, "don't include this line at all, not even as a blank line to which the JOIN string (default "\n") will apply.
 	}
 	if (g_AllowSameLineComments)
 	{
@@ -8850,18 +8863,17 @@ ResultType Line::PerformLoop(char **apReturnValue, bool &aContinueMainLoop
 // to conditionally resolve to various things at runtime.  In other words, it's valid to have
 // only a single directory be the target of the loop.
 {
-	BOOL file_found = FALSE;
-	HANDLE file_search = INVALID_HANDLE_VALUE;
-	char file_path[MAX_PATH] = "";
-	char naked_filename_or_pattern[MAX_PATH] = "";
 	// g.mLoopFile is the current file of the file-loop that encloses this file-loop, if any.
 	// The below is our own current_file, which will take precedence over g.mLoopFile if this
 	// loop is a file-loop:
-	WIN32_FIND_DATA new_current_file = {0};
+	WIN32_FIND_DATA new_current_file;
+	BOOL file_found;
+	HANDLE file_search;
+	char file_path[MAX_PATH], naked_filename_or_pattern[MAX_PATH]; // Giving +3 extra for "*.*" seems fairly pointless because any files that actually need that extra room would fail to be retrieved by FindFirst/Next due to their inability to support paths much over 256.
+	size_t file_path_length;
+
 	if (aAttr == ATTR_LOOP_FILE)
 	{
-		file_search = FindFirstFile(aFilePattern, &new_current_file);
-		file_found = (file_search != INVALID_HANDLE_VALUE);
 		// Make a local copy of the path given in aFilePattern because as the lines of
 		// the loop are executed, the deref buffer (which is what aFilePattern might
 		// point to if we were called from ExecUntil()) may be overwritten --
@@ -8871,21 +8883,29 @@ ResultType Line::PerformLoop(char **apReturnValue, bool &aContinueMainLoop
 		char *last_backslash = strrchr(file_path, '\\');
 		if (last_backslash)
 		{
-			strlcpy(naked_filename_or_pattern, last_backslash + 1, sizeof(naked_filename_or_pattern));
-			*(last_backslash + 1) = '\0';  // i.e. retain the final backslash on the string.
+			strcpy(naked_filename_or_pattern, last_backslash + 1); // Naked filename.  No danger of overflow due size of src vs. dest.
+			*(last_backslash + 1) = '\0';  // Convert file_path to be the file's path, but use +1 to retain the final backslash on the string.
+			file_path_length = strlen(file_path);
 		}
 		else
 		{
-			strlcpy(naked_filename_or_pattern, file_path, sizeof(naked_filename_or_pattern));
-			*file_path = '\0'; // There is no path, so use current working directory.
+			strcpy(naked_filename_or_pattern, file_path); // No danger of overflow due size of src vs. dest.
+			*file_path = '\0'; // There is no path, so make it empty to use current working directory.
+			file_path_length = 0;
 		}
-		for (; file_found && FileIsFilteredOut(new_current_file, aFileLoopMode, file_path)
-			; file_found = FindNextFile(file_search, &new_current_file));
-	}
 
-	// Note: It seems best NOT to report warning if the loop iterates zero times
-	// (e.g if no files are found by FindFirstFile() above), since that could
-	// easily be an expected outcome.
+		file_search = FindFirstFile(aFilePattern, &new_current_file);
+		for ( file_found = (file_search != INVALID_HANDLE_VALUE) // Convert FindFirst's return value into a boolean so that it's compatible with with FindNext's.
+			; file_found && FileIsFilteredOut(new_current_file, aFileLoopMode, file_path, file_path_length)
+			; file_found = FindNextFile(file_search, &new_current_file));
+		// file_found and new_current_file have now been set for use below.
+	}
+	else // Not a file loop, but some of its things still need initializing.
+	{
+		file_found = FALSE;
+		file_search = INVALID_HANDLE_VALUE; // Setting this simplifies the checking in multiple points of return.
+	}
+	// Above is responsible for having properly set file_found and file_search.
 
 	ResultType result;
 	Line *jump_to_line = NULL;
@@ -8901,13 +8921,8 @@ ResultType Line::PerformLoop(char **apReturnValue, bool &aContinueMainLoop
 		result = mNextLine->ExecUntil(ONLY_ONE_LINE, apReturnValue, &jump_to_line);
 		if (result == LOOP_BREAK || result == EARLY_RETURN || result == EARLY_EXIT || result == FAIL)
 		{
-			#define CLOSE_FILE_SEARCH \
-			if (file_search != INVALID_HANDLE_VALUE)\
-			{\
-				FindClose(file_search);\
-				file_search = INVALID_HANDLE_VALUE;\
-			}
-			CLOSE_FILE_SEARCH
+			if (file_search != INVALID_HANDLE_VALUE)
+				FindClose(file_search);
 			// Although ExecUntil() will treat the LOOP_BREAK result identically to OK, we
 			// need to return LOOP_BREAK in case our caller is another instance of this
 			// same function (i.e. due to recursing into subfolders):
@@ -8945,20 +8960,16 @@ ResultType Line::PerformLoop(char **apReturnValue, bool &aContinueMainLoop
 		// iteration was cut short).  In both cases, just continue on through the loop.
 		// But first do any end-of-iteration stuff:
 		if (file_search != INVALID_HANDLE_VALUE)
-		{
-			for (;;)
-			{
-				if (   !(file_found = FindNextFile(file_search, &new_current_file))   )
-					break;
-				if (FileIsFilteredOut(new_current_file, aFileLoopMode, file_path))
-					continue; // Ignore this one, get another one.
-				else
-					break;
-			}
-		}
-	}
+			while ((file_found = FindNextFile(file_search, &new_current_file))
+				&& FileIsFilteredOut(new_current_file, aFileLoopMode, file_path, file_path_length)); // Relies on short-circuit boolean order.
+				// Above is a self-contained loop that keeps fetching files until there's no more files, or a file
+				// is found that isn't filtered out.  It also sets file_found and new_current_file for use by the
+				// outer loop.
+	} // for()
+
 	// The script's loop is now over.
-	CLOSE_FILE_SEARCH
+	if (file_search != INVALID_HANDLE_VALUE)
+		FindClose(file_search);
 
 	// If it's a file_loop and aRecurseSubfolders is true, we now need to perform the loop's body for
 	// every subfolder to search for more files and folders inside that match aFilePattern.  We can't
@@ -8967,46 +8978,58 @@ ResultType Line::PerformLoop(char **apReturnValue, bool &aContinueMainLoop
 	if (aAttr != ATTR_LOOP_FILE || !aRecurseSubfolders)
 		return OK;
 
+	// Since above didn't return, this is a file-loop and recursion into sub-folders has been requested.
 	// Append *.* to file_path so that we can retrieve all files and folders in the aFilePattern
 	// main folder.  We're only interested in the folders, but we have to use *.* to ensure
 	// that the search will find all folder names:
-	char *append_location = file_path + strlen(file_path);
-	strlcpy(append_location, "*.*", sizeof(file_path) - (append_location - file_path));
-	file_search = FindFirstFile(file_path, &new_current_file);
-	file_found = (file_search != INVALID_HANDLE_VALUE);
-	*append_location = '\0'; // Restore file_path to be just the path (i.e. remove the wildcard pattern) for use below.
+	if (file_path_length > sizeof(file_path) - 4) // v1.0.45.03: No room to append "*.*", so for simplicity, skip this folder (don't recurse into it).
+		return OK; // This situation might be impossible except for 32000-capable paths because the OS seems to reserve room inside every directory for at least the maximum length of a short filename.
+	char *append_pos = file_path + file_path_length;
+	strcpy(append_pos, "*.*"); // Above has already verified that no overflow is possible.
 
-	for (; file_found; file_found = FindNextFile(file_search, &new_current_file))
+	file_search = FindFirstFile(file_path, &new_current_file);
+	if (file_search == INVALID_HANDLE_VALUE)
+		return OK; // Nothing more to do.
+	// Otherwise, recurse into any subdirectories found inside this parent directory.
+
+	size_t path_and_pattern_length = file_path_length + strlen(naked_filename_or_pattern); // Calculated only once for performance.
+	do
 	{
-		if (!(new_current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) // We only want directories.
-			|| !strcmp(new_current_file.cFileName, "..") || !strcmp(new_current_file.cFileName, ".")) // Never recurse into these.
+		if (!(new_current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) // We only want directories (except "." and "..").
+			|| new_current_file.cFileName[0] == '.' && (!new_current_file.cFileName[1]      // Relies on short-circuit boolean order.
+				|| new_current_file.cFileName[1] == '.' && !new_current_file.cFileName[2])  //
+			// v1.0.45.03: Skip over folders whose full-path-names are too long to be supported by the ANSI
+			// versions of FindFirst/FindNext.  Without this fix, the section below formerly called PerformLoop()
+			// with a truncated full-path-name, which caused the last_backslash-finding logic to find the wrong
+			// backslash, which in turn caused infinite recursion and a stack overflow (i.e. caused by the
+			// full-path-name getting truncated in the same spot every time, endlessly).
+			|| path_and_pattern_length + strlen(new_current_file.cFileName) > sizeof(file_path) - 2) // -2 to reflect: 1) the backslash to be added between cFileName and naked_filename_or_pattern; 2) the zero terminator.
 			continue;
 		// Build the new search pattern, which consists of the original file_path + the subfolder name
 		// we just discovered + the original pattern:
-		snprintf(append_location, (int)(sizeof(file_path) - (append_location - file_path)), "%s\\%s"  // Cast to int to preserve any negative results.
-			, new_current_file.cFileName, naked_filename_or_pattern);
+		sprintf(append_pos, "%s\\%s", new_current_file.cFileName, naked_filename_or_pattern); // Indirectly set file_path to the new search pattern.  This won't overflow due to the check above.
 		// Pass NULL for the 2nd param because it will determine its own current-file when it does
 		// its first loop iteration.  This is because this directory is being recursed into, not
 		// processed itself as a file-loop item (since this was already done in the first loop,
 		// above, if its name matches the original search pattern):
-		result = PerformLoop(apReturnValue, aContinueMainLoop, aJumpToLine, aAttr, aFileLoopMode, aRecurseSubfolders, file_path
-			, aIterationLimit, aIsInfinite);
+		result = PerformLoop(apReturnValue, aContinueMainLoop, aJumpToLine, aAttr, aFileLoopMode, aRecurseSubfolders
+			, file_path, aIterationLimit, aIsInfinite);
 		// result should never be LOOP_CONTINUE because the above call to PerformLoop() should have
 		// handled that case.  However, it can be LOOP_BREAK if it encoutered the break command.
 		if (result == LOOP_BREAK || result == EARLY_RETURN || result == EARLY_EXIT || result == FAIL)
 		{
-			CLOSE_FILE_SEARCH
+			FindClose(file_search);
 			return result;  // Return even LOOP_BREAK, since our caller can be either ExecUntil() or ourself.
 		}
-		if (aContinueMainLoop) // The call to PerformLoop() above signaled us to break & return.
+		if (aContinueMainLoop // The call to PerformLoop() above signaled us to break & return.
+			|| aJumpToLine)
+			// Above: There's no need to check "aJumpToLine == this" because PerformLoop() would already have
+			// handled it.  But if it set aJumpToLine to be non-NULL, it means we have to return and let our caller
+			// handle the jump.
 			break;
-		// There's no need to check "aJumpToLine == this" because PerformLoop() would already have handled it.
-		// But if it set aJumpToLine to be non-NULL, it means we have to return and let our caller handle
-		// the jump:
-		if (aJumpToLine)
-			break;
-	}
-	CLOSE_FILE_SEARCH
+	} while (FindNextFile(file_search, &new_current_file));
+	FindClose(file_search);
+
 	return OK;
 }
 
@@ -9720,18 +9743,25 @@ __forceinline ResultType Line::Perform() // __forceinline() currently boosts per
 
 	case ACT_STRINGLOWER:
 	case ACT_STRINGUPPER:
-		// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
-		// this call will set up the clipboard for writing.
-		// Fix for v1.0.45.02: The v1.0.45 change where the value is assigned directly without sizing the variable
-		// first doesn't work in cases when the variable is the clipboard.  This is because the clipboard's buffer
-		// is changeable (for the case conversion later below) only when using the following approach, not a simple
-		// "assign then modify its Contents()".
-		if (output_var->Assign(NULL, (VarSizeType)ArgLength(2)) != OK)
-			return FAIL;
-		contents = output_var->Contents(); // Do this only after the above might have changed the contents mem address.
-		// Copy the input variable's text directly into the output variable:
-		strcpy(contents, ARG2);
-		if (*ARG3 && toupper(*ARG3) == 'T' && !*(ARG3 + 1)) // Convert to title case
+		contents = output_var->Contents(); // Set default.
+		if (contents != ARG2 || output_var->Type() != VAR_NORMAL) // It's compared this way in case ByRef/aliases are involved.  This will detect even them.
+		{
+			// Clipboard is involved and/or source != dest.  Do it the more comprehensive way.
+			// Set up the var, enlarging it if necessary.  If the output_var is of type VAR_CLIPBOARD,
+			// this call will set up the clipboard for writing.
+			// Fix for v1.0.45.02: The v1.0.45 change where the value is assigned directly without sizing the
+			// variable first doesn't work in cases when the variable is the clipboard.  This is because the
+			// clipboard's buffer is changeable (for the case conversion later below) only when using the following
+			// approach, not a simple "assign then modify its Contents()".
+			if (output_var->Assign(NULL, (VarSizeType)ArgLength(2)) != OK)
+				return FAIL;
+			contents = output_var->Contents(); // Do this only after the above might have changed the contents mem address.
+			// Copy the input variable's text directly into the output variable:
+			strcpy(contents, ARG2);
+		}
+		//else input and output are the same, normal variable; so nothing needs to be copied over.  Just leave
+		// contents at the default set earlier, then convert its case.
+		if (*ARG3 && toupper(*ARG3) == 'T' && !*(ARG3 + 1)) // Convert to title case.
 			StrToTitleCase(contents);
 		else if (mActionType == ACT_STRINGLOWER)
 			CharLower(contents);

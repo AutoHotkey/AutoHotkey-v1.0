@@ -1743,7 +1743,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 		style = (style & ~BS_TYPEMASK) | BS_GROUPBOX;  // Force it to be the right type of button.
 		break;
 	case GUI_CONTROL_BUTTON:
-		if (style & BS_DEFPUSHBUTTON)
+		if (style & BS_DEFPUSHBUTTON) // i.e. its single bit is present. BS_TYPEMASK is not involved in this line because it's a purity check.
 			style = (style & ~BS_TYPEMASK) | BS_DEFPUSHBUTTON; // Done to ensure the lowest four bits are pure.
 		else
 			style &= ~BS_TYPEMASK;  // Force it to be the right type of button --> BS_PUSHBUTTON == 0
@@ -1761,7 +1761,7 @@ ResultType GuiType::AddControl(GuiControls aControlType, char *aOptions, char *a
 	case GUI_CONTROL_CHECKBOX:
 		// Note: BS_AUTO3STATE and BS_AUTOCHECKBOX are mutually exclusive due to their overlap within
 		// the bit field:
-		if (style & BS_AUTO3STATE)
+		if ((style & BS_AUTO3STATE) == BS_AUTO3STATE) // Fixed for v1.0.45.03 to check if all the BS_AUTO3STATE bits are present, not just "any" of them. BS_TYPEMASK is not involved here because this is a purity check, and TYPEMASK would defeat the whole purpose.
 			style = (style & ~BS_TYPEMASK) | BS_AUTO3STATE; // Done to ensure the lowest four bits are pure.
 		else
 			style = (style & ~BS_TYPEMASK) | BS_AUTOCHECKBOX;  // Force it to be the right type of button.
@@ -5125,7 +5125,7 @@ ResultType GuiType::ControlParseOptions(char *aOptions, GuiControlOptionsType &a
 		case GUI_CONTROL_CHECKBOX:
 			// Note: BS_AUTO3STATE and BS_AUTOCHECKBOX are mutually exclusive due to their overlap within
 			// the bit field:
-			if (new_style & BS_AUTO3STATE)
+			if ((new_style & BS_AUTO3STATE) == BS_AUTO3STATE) // Fixed for v1.0.45.03 to check if all the BS_AUTO3STATE bits are present, not just "any" of them. BS_TYPEMASK is not involved here because this is a purity check, and TYPEMASK would defeat the whole purpose.
 				new_style = (new_style & ~BS_TYPEMASK) | BS_AUTO3STATE; // Done to ensure the lowest four bits are pure.
 			else
 				new_style = (new_style & ~BS_TYPEMASK) | BS_AUTOCHECKBOX;  // Force it to be the right type of button.
@@ -8227,7 +8227,7 @@ void GuiType::ControlCheckRadioButton(GuiControlType &aControl, GuiIndexType aCo
 		// respond to being unchecked.  Compensate for this by giving the first radio in the group the
 		// tabstop style. Update: The below no longer checks to see if the radio group has the tabstop style
 		// because it's fairly pointless.  This is because when the user checks/clicks a radio button,
-		// the control automatically acquires the tabstop style.  In other words, even though -TabStop is
+		// the control automatically acquires the tabstop style.  In other words, even though -Tabstop is
 		// allowed in a radio's options, it will be overridden the first time a user selects a radio button.
 		HWND first_radio_in_group = NULL;
 		// Find the first radio in this control group:

@@ -81,6 +81,7 @@ _atoi64
 ?IsPureNumeric@@YA?AW4SymbolType@@PAD_N111@Z
 ; Probably intrinsic: strchr (warning LNK4065: '_strchr' cannot be ordered)
 
+?FreeAndRestoreFunctionVars@Var@@SAXAAVFunc@@AAPAUVarBkp@@AAH@Z
 ?UpdateAlias@Var@@QAEXPAV1@@Z
 ?IsByRef@Var@@QAE_NXZ
 ?LengthIgnoreBinaryClip@Var@@QAEKXZ
@@ -346,7 +347,7 @@ _vsnprintf  ; Sandwiching this function between the other two seems likely to yi
 ?GetIconTip@Script@@QAEKPAD@Z
 ?GetKeyDelay@Script@@QAEKPAD@Z
 ?GetLanguage@Script@@QAEKPAD@Z
-?GetLine@Script@@AAEIPADH_NPAU_iobuf@@@Z
+?GetLine@Script@@AAEIPADHHPAU_iobuf@@@Z
 ?GetLineFile@Script@@QAEKPAD@Z
 ?GetLineNumber@Script@@QAEKPAD@Z
 ?GetLoopField@Script@@QAEKPAD@Z
@@ -519,9 +520,9 @@ EnterCriticalSection@4
 ?Close@Var@@QAE?AW4ResultType@@_N@Z
 ?ArgLength@Line@@QAEIH@Z
 ?IsBinaryClip@Var@@QAE_NXZ
+?IsNonStaticLocal@Var@@QAE_NXZ
 ?IsLocal@Var@@QAE_NXZ
-?Restore@Var@@QAEXAAUVarBkp@@@Z
-?BackupFunctionVars@@YA?AW4ResultType@@AAVFunc@@AAPAUVarBkp@@AAH@Z
+?BackupFunctionVars@Var@@SA?AW4ResultType@@AAVFunc@@AAPAUVarBkp@@AAH@Z
 ?Backup@Var@@QAEXAAUVarBkp@@@Z
 ?AcceptNewMem@Var@@QAEXPADK@Z
 ?AssignHWND@Var@@QAE?AW4ResultType@@PAUHWND__@@@Z  ; Assign an HWND.
@@ -589,7 +590,7 @@ qmathTan@8
 ?FileGetSize@Line@@AAE?AW4ResultType@@PAD0@Z
 ?FileGetTime@Line@@AAE?AW4ResultType@@PADD@Z
 ?FileInstall@Line@@AAE?AW4ResultType@@PAD00@Z
-?FileIsFilteredOut@Line@@QAE_NAAU_WIN32_FIND_DATAA@@W4FileLoopModeType@@PAD@Z
+?FileIsFilteredOut@Line@@SA_NAAU_WIN32_FIND_DATAA@@W4FileLoopModeType@@PADI@Z
 ?FileRead@Line@@AAE?AW4ResultType@@PAD@Z
 ?FileReadLine@Line@@AAE?AW4ResultType@@PAD0@Z
 ?FileSelectFile@Line@@AAE?AW4ResultType@@PAD000@Z
@@ -1547,6 +1548,7 @@ WSAStartup@8
 ?AutoExecSectionTimeout@@YGXPAUHWND__@@IIK@Z
 ?AutoExecSection@Script@@QAE?AW4ResultType@@XZ
 
+?SetWorkingDir@@YAXPAD@Z
 ?LoadFromFile@Script@@QAEIXZ
 ?LoadIncludedFile@Script@@QAE?AW4ResultType@@PAD_N1@Z
 ?IsDirective@Script@@AAE?AW4ResultType@@PAD@Z

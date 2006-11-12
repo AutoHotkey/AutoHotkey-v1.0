@@ -817,7 +817,8 @@ public:
 
 	ResultType Deref(Var *aOutputVar, char *aBuf);
 
-	bool FileIsFilteredOut(WIN32_FIND_DATA &aCurrentFile, FileLoopModeType aFileLoopMode, char *aFilePath);
+	static bool FileIsFilteredOut(WIN32_FIND_DATA &aCurrentFile, FileLoopModeType aFileLoopMode
+		, char *aFilePath, size_t aFilePathLength);
 
 	Line *GetJumpTarget(bool aIsDereferenced);
 	ResultType IsJumpValid(Line *aDestination);
@@ -2288,10 +2289,10 @@ private:
 
 #ifdef AUTOHOTKEYSC
 	ResultType CloseAndReturn(HS_EXEArc_Read *fp, UCHAR *aBuf, ResultType return_value);
-	size_t GetLine(char *aBuf, int aMaxCharsToRead, bool aInContinuationSection, UCHAR *&aMemFile);
+	size_t GetLine(char *aBuf, int aMaxCharsToRead, int aInContinuationSection, UCHAR *&aMemFile);
 #else
 	ResultType CloseAndReturn(FILE *fp, UCHAR *aBuf, ResultType return_value);
-	size_t GetLine(char *aBuf, int aMaxCharsToRead, bool aInContinuationSection, FILE *fp);
+	size_t GetLine(char *aBuf, int aMaxCharsToRead, int aInContinuationSection, FILE *fp);
 #endif
 	ResultType IsDirective(char *aBuf);
 
@@ -2579,9 +2580,6 @@ double ExprTokenToDouble(ExprTokenType &aToken);
 char *ExprTokenToString(ExprTokenType &aToken, char *aBuf);
 ResultType ExprTokenToVar(ExprTokenType &aToken, Var &aOutputVar);
 ResultType ExprTokenToDoubleOrInt(ExprTokenType &aToken);
-
-ResultType BackupFunctionVars(Func &aFunc, VarBkp *&aVarBackup, int &aVarBackupCount);
-void RestoreFunctionVars(Func &aFunc, VarBkp *&aVarBackup, int aVarBackupCount);
 
 char *RegExMatch(char *aHaystack, char *aNeedleRegEx);
 void SetWorkingDir(char *aNewDir);

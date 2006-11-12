@@ -139,52 +139,6 @@ public:
 	// exception handler there.
 	static char sEmptyString[1]; // See above.
 
-
-	void Backup(VarBkp &aVarBkp)
-	// This method is used rather than struct copy (=) because it's of expected higher performance than
-	// using the Var::constructor to make a copy of each var.  Also note that something like memcpy()
-	// can't be used on Var objects since they're not POD (e.g. they have a contructor and they have
-	// private members).
-	{
-		aVarBkp.mVar = this; // Allows the Restore() to always know its target without searching.
-		aVarBkp.mContents = mContents;
-		aVarBkp.mLength = mLength; // Since it's a union, it might actually be backing up mAliasFor (happens at least for recursive functions that pass parameters ByRef).
-		aVarBkp.mCapacity = mCapacity;
-		aVarBkp.mHowAllocated = mHowAllocated; // This might be ALLOC_SIMPLE or ALLOC_NONE if backed up variable was at the lowest layer of the call stack.
-		aVarBkp.mAttrib = mAttrib;
-		// Once the backup is made, Free() is not called because the whole point of the backup is to
-		// preserve the original memory/contents of each variable.  Instead, clear the variable
-		// completely and set it up to become ALLOC_MALLOC in case anything actually winds up using
-		// the variable prior to the restoration of the backup.  In other words, ALLOC_SIMPLE and NONE
-		// retained (if present) because that would cause a memory leak when multiple layers are all
-		// allowed to use ALLOC_SIMPLE yet none are ever able to free it (the bottommost layer is
-		// allowed to use ALLOC_SIMPLE because that's a fixed/constant amount of memory gets freed
-		// when the program exits).
-		// Reset this variable to create a "new layer" for it, keeping its backup intact but allowing
-		// this variable (or formal parameter) to be given a new value in the future:
-		if (mAttrib & VAR_ATTRIB_STATIC) // By definition, static variables retain their contents between calls.
-			return;
-		mCapacity = 0;             // Invariant: Anyone setting mCapacity to 0 must also set
-		mContents = sEmptyString;  // mContents to the empty string.
-		if (mType != VAR_ALIAS) // Fix for v1.0.42.07: Don't reset mLength if the other member of the union is in effect.
-			mLength = 0;
-		mHowAllocated = ALLOC_MALLOC; // Never NONE because that would permit SIMPLE. See comments above.
-		mAttrib &= ~VAR_ATTRIB_BINARY_CLIP;  // But the VAR_ATTRIB_PARAM/STATIC flags are unaltered.
-	}
-
-	void Restore(VarBkp &aVarBkp)
-	// Caller must ensure that Free() has been called for this variable prior calling Restore(), since otherwise
-	// there would be a memory leak.
-	{
-		if (mAttrib & VAR_ATTRIB_STATIC)
-			return;
-		mContents = aVarBkp.mContents;
-		mLength = aVarBkp.mLength; // Since it's a union, it might actually be restoring mAliasFor, which is okay since it should be the same value as what's already in there.
-		mCapacity = aVarBkp.mCapacity;
-		mHowAllocated = aVarBkp.mHowAllocated; // This might be ALLOC_SIMPLE or ALLOC_NONE if backed up variable was at the lowest layer of the call stack.
-		mAttrib = aVarBkp.mAttrib;
-	}
-
 	ResultType AssignHWND(HWND aWnd)
 	{
 		// Convert to unsigned 64-bit to support for 64-bit pointers.  Since most script operations --
@@ -218,6 +172,10 @@ public:
 	void Free(int aWhenToFree = VAR_ALWAYS_FREE, bool aExcludeAliases = false);
 	void AcceptNewMem(char *aNewMem, VarSizeType aLength);
 	void SetLengthFromContents();
+
+	static ResultType BackupFunctionVars(Func &aFunc, VarBkp *&aVarBackup, int &aVarBackupCount);
+	void Backup(VarBkp &aVarBkp);
+	static void FreeAndRestoreFunctionVars(Func &aFunc, VarBkp *&aVarBackup, int &aVarBackupCount);
 
 	#define DISPLAY_NO_ERROR   0  // Must be zero.
 	#define DISPLAY_VAR_ERROR  1
@@ -264,6 +222,16 @@ public:
 		// global, don't use the method below:
 		//    return (mType == VAR_ALIAS) ? mAliasFor->mIsLocal : mIsLocal;
 		return mIsLocal;
+	}
+
+	__forceinline bool IsNonStaticLocal()
+	{
+		// Since callers want to know whether this variable is local, even if it's a local alias for a
+		// global, don't use resolve VAR_ALIAS.
+		// Even a ByRef local is considered local here because callers are interested in whether this
+		// variable can vary from call to call to the same function (and a ByRef can vary in what it
+		// points to).  Variables that vary can thus be altered by the backup/restore process.
+		return mIsLocal && !(mAttrib & VAR_ATTRIB_STATIC);
 	}
 
 	__forceinline bool IsBinaryClip()

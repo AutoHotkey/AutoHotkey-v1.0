@@ -6829,7 +6829,7 @@ ResultType Line::StringReplace()
 	// Note: The current implementation of StrReplace() should be able to handle any conceivable inputs
 	// without an empty string causing an infinite loop and without going infinite due to finding the
 	// search string inside of newly-inserted replace strings (e.g. replacing all occurrences
-	// of b with bcd would not keep finding b in the newly inserted bcd, infinitely).
+	// of b with bcb would not keep finding b in the newly inserted bcd, infinitely).
 	char *dest;
 	UINT found_count = StrReplace(source, ARG3, ARG4, (StringCaseSenseType)g.StringCaseSense
 		, replacement_limit, -1, &dest, &length); // Length of haystack is passed to improve performance because ArgLength() can often discover it instantaneously.
@@ -9094,7 +9094,7 @@ ResultType Line::FileDelete()
 	// It also may also slightly improve performance and reduce code size.
 	char *aFilePattern = ARG1;
 
-	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel.
+	g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default ErrorLevel, namely that "one file couldn't be deleted".
 	if (!*aFilePattern)
 		return OK;  // Let ErrorLevel indicate an error, since this is probably not what the user intended.
 
@@ -9111,42 +9111,63 @@ ResultType Line::FileDelete()
 	// Therefore, as of v1.0.25, there is also a hard limit of MAX_PATH on all these variables.
 	// MSDN confirms this in a vague way: "In the ANSI version of FindFirstFile(), [plpFileName] is
 	// limited to MAX_PATH characters."
-	char file_path[MAX_PATH], target_filespec[MAX_PATH];
-	if (ArgLength(1) >= sizeof(file_path))
-		return OK; // Return OK because this is non-critical.  Let the above ErrorLevel indicate the problem.
-	strlcpy(file_path, aFilePattern, sizeof(file_path));
-	char *last_backslash = strrchr(file_path, '\\');
-	// Remove the filename and/or wildcard part.   But leave the trailing backslash on it for
-	// consistency with below:
-	if (last_backslash)
-		*(last_backslash + 1) = '\0';
-	else // Use current working directory, e.g. if user specified only *.*
-		*file_path = '\0';
+	if (ArgLength(1) >= MAX_PATH) // Checked early to simplify things later below.
+		return OK; // Return OK because this is non-critical.  Due to rarity (and backward compatibility), it seems best leave ErrorLevel at 1 to indicate the problem
 
 	LONG_OPERATION_INIT
+	int failure_count = 0; // Set default.
 
 	WIN32_FIND_DATA current_file;
 	HANDLE file_search = FindFirstFile(aFilePattern, &current_file);
-	bool file_found = (file_search != INVALID_HANDLE_VALUE);
-	int failure_count = 0;
+	if (file_search == INVALID_HANDLE_VALUE) // No matching files found.
+		return g_ErrorLevel->Assign(0); // Deleting a wildcard pattern that matches zero files is a success.
 
-	for (; file_found; file_found = FindNextFile(file_search, &current_file))
+	// Otherwise:
+	char file_path[MAX_PATH];
+	strcpy(file_path, aFilePattern); // Above has already confirmed this won't overflow.
+
+	// Remove the filename and/or wildcard part.   But leave the trailing backslash on it for
+	// consistency with below:
+	size_t file_path_length;
+	char *last_backslash = strrchr(file_path, '\\');
+	if (last_backslash)
+	{
+		*(last_backslash + 1) = '\0'; // i.e. retain the trailing backslash.
+		file_path_length = strlen(file_path);
+	}
+	else // Use current working directory, e.g. if user specified only *.*
+	{
+		*file_path = '\0';
+		file_path_length = 0;
+	}
+
+	char *append_pos = file_path + file_path_length; // For performance, copy in the unchanging part only once.  This is where the changing part gets appended.
+	size_t space_remaining = sizeof(file_path) - file_path_length - 1; // Space left in file_path for the changing part.
+
+	do
 	{
 		// Since other script threads can interrupt during LONG_OPERATION_UPDATE, it's important that
 		// this command not refer to sArgDeref[] and sArgVar[] anytime after an interruption becomes
 		// possible. This is because an interrupting thread usually changes the values to something
 		// inappropriate for this thread.
 		LONG_OPERATION_UPDATE
-
 		if (current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) // skip any matching directories.
 			continue;
-		snprintf(target_filespec, sizeof(target_filespec), "%s%s", file_path, current_file.cFileName);
-		if (!DeleteFile(target_filespec))
+		if (strlen(current_file.cFileName) > space_remaining)
+		{
+			// v1.0.45.03: Don't even try to operate upon truncated filenames in case they accidentally
+			// match the name of a real/existing file.
 			++failure_count;
-	}
+		}
+		else
+		{
+			strcpy(append_pos, current_file.cFileName); // Above has ensured this won't overflow.
+			if (!DeleteFile(file_path))
+				++failure_count;
+		}
+	} while (FindNextFile(file_search, &current_file));
+	FindClose(file_search);
 
-	if (file_search != INVALID_HANDLE_VALUE) // In case the loop had zero iterations.
-		FindClose(file_search);
 	return g_ErrorLevel->Assign(failure_count); // i.e. indicate success if there were no failures.
 }
 
@@ -9220,11 +9241,14 @@ int Line::FileSetAttrib(char *aAttributes, char *aFilePattern, FileLoopModeType 
 	if (!aCalledRecursively)  // i.e. Only need to do this if we're not called by ourself:
 	{
 		g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default
-		if (!aFilePattern || !*aFilePattern)
+		if (!*aFilePattern)
 			return 0;  // Let ErrorLevel indicate an error, since this is probably not what the user intended.
 		if (aOperateOnFolders == FILE_LOOP_INVALID) // In case runtime dereference of a var was an invalid value.
 			aOperateOnFolders = FILE_LOOP_FILES_ONLY;  // Set default.
 	}
+
+	if (strlen(aFilePattern) >= MAX_PATH) // Checked early to simplify other things below.
+		return 0; // Let the above ErrorLevel indicate the problem.
 
 	// Related to the comment at the top: Since the script subroutine that resulted in the call to
 	// this function can be interrupted during our MsgSleep(), make a copy of any params that might
@@ -9238,19 +9262,26 @@ int Line::FileSetAttrib(char *aAttributes, char *aFilePattern, FileLoopModeType 
 	// Therefore, as of v1.0.25, there is also a hard limit of MAX_PATH on all these variables.
 	// MSDN confirms this in a vague way: "In the ANSI version of FindFirstFile(), [plpFileName] is
 	// limited to MAX_PATH characters."
-	char file_pattern[MAX_PATH], file_path[MAX_PATH], target_filespec[MAX_PATH];
-	strlcpy(file_pattern, aFilePattern, sizeof(file_pattern));
+	char file_pattern[MAX_PATH], file_path[MAX_PATH]; // Giving +3 extra for "*.*" seems fairly pointless because any files that actually need that extra room would fail to be retrieved by FindFirst/Next due to their inability to support paths much over 256.
+	strcpy(file_pattern, aFilePattern); // Make a copy in case of overwrite of deref buf during LONG_OPERATION/MsgSleep.
+	strcpy(file_path, aFilePattern);    // An earlier check has ensured these won't overflow.
 
-	if (strlen(file_pattern) >= sizeof(file_path))
-		return 0; // Let the above ErrorLevel indicate the problem.
-	strlcpy(file_path, file_pattern, sizeof(file_path));
+	size_t file_path_length; // The length of just the path portion of the filespec.
 	char *last_backslash = strrchr(file_path, '\\');
-	// Remove the filename and/or wildcard part.   But leave the trailing backslash on it for
-	// consistency with below:
 	if (last_backslash)
+	{
+		// Remove the filename and/or wildcard part.   But leave the trailing backslash on it for
+		// consistency with below:
 		*(last_backslash + 1) = '\0';
+		file_path_length = strlen(file_path);
+	}
 	else // Use current working directory, e.g. if user specified only *.*
+	{
 		*file_path = '\0';
+		file_path_length = 0;
+	}
+	char *append_pos = file_path + file_path_length; // For performance, copy in the unchanging part only once.  This is where the changing part gets appended.
+	size_t space_remaining = sizeof(file_path) - file_path_length - 1; // Space left in file_path for the changing part.
 
 	// For use with aDoRecurse, get just the naked file name/pattern:
 	char *naked_filename_or_pattern = strrchr(file_pattern, '\\');
@@ -9263,140 +9294,159 @@ int Line::FileSetAttrib(char *aAttributes, char *aFilePattern, FileLoopModeType 
 		// Since no wildcards, always operate on this single item even if it's a folder.
 		aOperateOnFolders = FILE_LOOP_FILES_AND_FOLDERS;
 
-	LONG_OPERATION_INIT
-
-	WIN32_FIND_DATA current_file;
-	HANDLE file_search = FindFirstFile(file_pattern, &current_file);
-	bool file_found = (file_search != INVALID_HANDLE_VALUE);
 	char *cp;
-	int failure_count = 0;
 	enum attrib_modes {ATTRIB_MODE_NONE, ATTRIB_MODE_ADD, ATTRIB_MODE_REMOVE, ATTRIB_MODE_TOGGLE};
 	attrib_modes mode = ATTRIB_MODE_NONE;
 
-	for (; file_found; file_found = FindNextFile(file_search, &current_file))
+	LONG_OPERATION_INIT
+	int failure_count = 0;
+	WIN32_FIND_DATA current_file;
+	HANDLE file_search = FindFirstFile(file_pattern, &current_file);
+
+	if (file_search != INVALID_HANDLE_VALUE)
 	{
-		// Since other script threads can interrupt during LONG_OPERATION_UPDATE, it's important that
-		// this command not refer to sArgDeref[] and sArgVar[] anytime after an interruption becomes
-		// possible. This is because an interrupting thread usually changes the values to something
-		// inappropriate for this thread.
-		LONG_OPERATION_UPDATE
+		do
+		{
+			// Since other script threads can interrupt during LONG_OPERATION_UPDATE, it's important that
+			// this command not refer to sArgDeref[] and sArgVar[] anytime after an interruption becomes
+			// possible. This is because an interrupting thread usually changes the values to something
+			// inappropriate for this thread.
+			LONG_OPERATION_UPDATE
 
-		if (current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-		{
-			if (!strcmp(current_file.cFileName, "..") || !strcmp(current_file.cFileName, "."))
-				continue; // Never operate upon or recurse into these.
-			// Regardless of whether this folder will be recursed into, if this param
-			// is false, this folder's own attributes will not be affected:
-			if (aOperateOnFolders == FILE_LOOP_FILES_ONLY)
-				continue;
-		}
-		else // It's a file, not a folder.
-			if (aOperateOnFolders == FILE_LOOP_FOLDERS_ONLY)
-				continue;
-		for (cp = attributes; *cp; ++cp)
-		{
-			switch (toupper(*cp))
+			if (current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
 			{
-			case '+': mode = ATTRIB_MODE_ADD; break;
-			case '-': mode = ATTRIB_MODE_REMOVE; break;
-			case '^': mode = ATTRIB_MODE_TOGGLE; break;
-			// Note that D (directory) and C (compressed) are currently not supported:
-			case 'R':
-				if (mode == ATTRIB_MODE_ADD)
-					current_file.dwFileAttributes |= FILE_ATTRIBUTE_READONLY;
-				else if (mode == ATTRIB_MODE_REMOVE)
-					current_file.dwFileAttributes &= ~FILE_ATTRIBUTE_READONLY;
-				else if (mode == ATTRIB_MODE_TOGGLE)
-					current_file.dwFileAttributes ^= FILE_ATTRIBUTE_READONLY;
-				break;
-			case 'A':
-				if (mode == ATTRIB_MODE_ADD)
-					current_file.dwFileAttributes |= FILE_ATTRIBUTE_ARCHIVE;
-				else if (mode == ATTRIB_MODE_REMOVE)
-					current_file.dwFileAttributes &= ~FILE_ATTRIBUTE_ARCHIVE;
-				else if (mode == ATTRIB_MODE_TOGGLE)
-					current_file.dwFileAttributes ^= FILE_ATTRIBUTE_ARCHIVE;
-				break;
-			case 'S':
-				if (mode == ATTRIB_MODE_ADD)
-					current_file.dwFileAttributes |= FILE_ATTRIBUTE_SYSTEM;
-				else if (mode == ATTRIB_MODE_REMOVE)
-					current_file.dwFileAttributes &= ~FILE_ATTRIBUTE_SYSTEM;
-				else if (mode == ATTRIB_MODE_TOGGLE)
-					current_file.dwFileAttributes ^= FILE_ATTRIBUTE_SYSTEM;
-				break;
-			case 'H':
-				if (mode == ATTRIB_MODE_ADD)
-					current_file.dwFileAttributes |= FILE_ATTRIBUTE_HIDDEN;
-				else if (mode == ATTRIB_MODE_REMOVE)
-					current_file.dwFileAttributes &= ~FILE_ATTRIBUTE_HIDDEN;
-				else if (mode == ATTRIB_MODE_TOGGLE)
-					current_file.dwFileAttributes ^= FILE_ATTRIBUTE_HIDDEN;
-				break;
-			case 'N':  // Docs say it's valid only when used alone.  But let the API handle it if this is not so.
-				if (mode == ATTRIB_MODE_ADD)
-					current_file.dwFileAttributes |= FILE_ATTRIBUTE_NORMAL;
-				else if (mode == ATTRIB_MODE_REMOVE)
-					current_file.dwFileAttributes &= ~FILE_ATTRIBUTE_NORMAL;
-				else if (mode == ATTRIB_MODE_TOGGLE)
-					current_file.dwFileAttributes ^= FILE_ATTRIBUTE_NORMAL;
-				break;
-			case 'O':
-				if (mode == ATTRIB_MODE_ADD)
-					current_file.dwFileAttributes |= FILE_ATTRIBUTE_OFFLINE;
-				else if (mode == ATTRIB_MODE_REMOVE)
-					current_file.dwFileAttributes &= ~FILE_ATTRIBUTE_OFFLINE;
-				else if (mode == ATTRIB_MODE_TOGGLE)
-					current_file.dwFileAttributes ^= FILE_ATTRIBUTE_OFFLINE;
-				break;
-			case 'T':
-				if (mode == ATTRIB_MODE_ADD)
-					current_file.dwFileAttributes |= FILE_ATTRIBUTE_TEMPORARY;
-				else if (mode == ATTRIB_MODE_REMOVE)
-					current_file.dwFileAttributes &= ~FILE_ATTRIBUTE_TEMPORARY;
-				else if (mode == ATTRIB_MODE_TOGGLE)
-					current_file.dwFileAttributes ^= FILE_ATTRIBUTE_TEMPORARY;
-				break;
+				if (current_file.cFileName[0] == '.' && (!current_file.cFileName[1]    // Relies on short-circuit boolean order.
+					|| current_file.cFileName[1] == '.' && !current_file.cFileName[2]) //
+					// Regardless of whether this folder will be recursed into, this folder's own attributes
+					// will not be affected when the mode is files-only:
+					|| aOperateOnFolders == FILE_LOOP_FILES_ONLY)
+					continue; // Never operate upon or recurse into these.
 			}
-		}
-		snprintf(target_filespec, sizeof(target_filespec), "%s%s", file_path, current_file.cFileName);
-		if (!SetFileAttributes(target_filespec, current_file.dwFileAttributes))
-			++failure_count;
-	}
+			else // It's a file, not a folder.
+				if (aOperateOnFolders == FILE_LOOP_FOLDERS_ONLY)
+					continue;
 
-	if (file_search != INVALID_HANDLE_VALUE) // In case the loop had zero iterations.
+			if (strlen(current_file.cFileName) > space_remaining)
+			{
+				// v1.0.45.03: Don't even try to operate upon truncated filenames in case they accidentally
+				// match the name of a real/existing file.
+				++failure_count;
+				continue;
+			}
+			// Otherwise, make file_path be the filespec of the file to operate upon:
+			strcpy(append_pos, current_file.cFileName); // Above has ensured this won't overflow.
+
+			for (cp = attributes; *cp; ++cp)
+			{
+				switch (toupper(*cp))
+				{
+				case '+': mode = ATTRIB_MODE_ADD; break;
+				case '-': mode = ATTRIB_MODE_REMOVE; break;
+				case '^': mode = ATTRIB_MODE_TOGGLE; break;
+				// Note that D (directory) and C (compressed) are currently not supported:
+				case 'R':
+					if (mode == ATTRIB_MODE_ADD)
+						current_file.dwFileAttributes |= FILE_ATTRIBUTE_READONLY;
+					else if (mode == ATTRIB_MODE_REMOVE)
+						current_file.dwFileAttributes &= ~FILE_ATTRIBUTE_READONLY;
+					else if (mode == ATTRIB_MODE_TOGGLE)
+						current_file.dwFileAttributes ^= FILE_ATTRIBUTE_READONLY;
+					break;
+				case 'A':
+					if (mode == ATTRIB_MODE_ADD)
+						current_file.dwFileAttributes |= FILE_ATTRIBUTE_ARCHIVE;
+					else if (mode == ATTRIB_MODE_REMOVE)
+						current_file.dwFileAttributes &= ~FILE_ATTRIBUTE_ARCHIVE;
+					else if (mode == ATTRIB_MODE_TOGGLE)
+						current_file.dwFileAttributes ^= FILE_ATTRIBUTE_ARCHIVE;
+					break;
+				case 'S':
+					if (mode == ATTRIB_MODE_ADD)
+						current_file.dwFileAttributes |= FILE_ATTRIBUTE_SYSTEM;
+					else if (mode == ATTRIB_MODE_REMOVE)
+						current_file.dwFileAttributes &= ~FILE_ATTRIBUTE_SYSTEM;
+					else if (mode == ATTRIB_MODE_TOGGLE)
+						current_file.dwFileAttributes ^= FILE_ATTRIBUTE_SYSTEM;
+					break;
+				case 'H':
+					if (mode == ATTRIB_MODE_ADD)
+						current_file.dwFileAttributes |= FILE_ATTRIBUTE_HIDDEN;
+					else if (mode == ATTRIB_MODE_REMOVE)
+						current_file.dwFileAttributes &= ~FILE_ATTRIBUTE_HIDDEN;
+					else if (mode == ATTRIB_MODE_TOGGLE)
+						current_file.dwFileAttributes ^= FILE_ATTRIBUTE_HIDDEN;
+					break;
+				case 'N':  // Docs say it's valid only when used alone.  But let the API handle it if this is not so.
+					if (mode == ATTRIB_MODE_ADD)
+						current_file.dwFileAttributes |= FILE_ATTRIBUTE_NORMAL;
+					else if (mode == ATTRIB_MODE_REMOVE)
+						current_file.dwFileAttributes &= ~FILE_ATTRIBUTE_NORMAL;
+					else if (mode == ATTRIB_MODE_TOGGLE)
+						current_file.dwFileAttributes ^= FILE_ATTRIBUTE_NORMAL;
+					break;
+				case 'O':
+					if (mode == ATTRIB_MODE_ADD)
+						current_file.dwFileAttributes |= FILE_ATTRIBUTE_OFFLINE;
+					else if (mode == ATTRIB_MODE_REMOVE)
+						current_file.dwFileAttributes &= ~FILE_ATTRIBUTE_OFFLINE;
+					else if (mode == ATTRIB_MODE_TOGGLE)
+						current_file.dwFileAttributes ^= FILE_ATTRIBUTE_OFFLINE;
+					break;
+				case 'T':
+					if (mode == ATTRIB_MODE_ADD)
+						current_file.dwFileAttributes |= FILE_ATTRIBUTE_TEMPORARY;
+					else if (mode == ATTRIB_MODE_REMOVE)
+						current_file.dwFileAttributes &= ~FILE_ATTRIBUTE_TEMPORARY;
+					else if (mode == ATTRIB_MODE_TOGGLE)
+						current_file.dwFileAttributes ^= FILE_ATTRIBUTE_TEMPORARY;
+					break;
+				}
+			}
+
+			if (!SetFileAttributes(file_path, current_file.dwFileAttributes))
+				++failure_count;
+		} while (FindNextFile(file_search, &current_file));
+
 		FindClose(file_search);
+	} // if (file_search != INVALID_HANDLE_VALUE)
 
-	if (aDoRecurse)
+	if (aDoRecurse && space_remaining > 2) // The space_remaining check ensures there's enough room to append "*.*" (if not, just avoid recursing into it due to rarity).
 	{
 		// Testing shows that the ANSI version of FindFirstFile() will not accept a path+pattern longer
 		// than 256 or so, even if the pattern would match files whose names are short enough to be legal.
 		// Therefore, as of v1.0.25, there is also a hard limit of MAX_PATH on all these variables.
 		// MSDN confirms this in a vague way: "In the ANSI version of FindFirstFile(), [plpFileName] is
 		// limited to MAX_PATH characters."
-		char all_file_pattern[MAX_PATH];
-		snprintf(all_file_pattern, sizeof(all_file_pattern), "%s*.*", file_path);
-		file_search = FindFirstFile(all_file_pattern, &current_file);
-		file_found = (file_search != INVALID_HANDLE_VALUE);
-		for (; file_found; file_found = FindNextFile(file_search, &current_file))
+		strcpy(append_pos, "*.*"); // Above has ensured this won't overflow.
+		file_search = FindFirstFile(file_path, &current_file);
+
+		if (file_search != INVALID_HANDLE_VALUE)
 		{
-			LONG_OPERATION_UPDATE
-			if (!(current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-				|| !strcmp(current_file.cFileName, "..") || !strcmp(current_file.cFileName, "."))
-				continue; // Never recurse into these.
-			// This will build the string CurrentDir+SubDir+FilePatternOrName.
-			// If FilePatternOrName doesn't contain a wildcard, the recursion
-			// process will attempt to operate on the originally-specified
-			// single filename or folder name if it occurs anywhere else in the
-			// tree, e.g. recursing C:\Temp\temp.txt would affect all occurences
-			// of temp.txt both in C:\Temp and any subdirectories it might contain:
-			snprintf(target_filespec, sizeof(target_filespec), "%s%s\\%s"
-				, file_path, current_file.cFileName, naked_filename_or_pattern);
-			failure_count += FileSetAttrib(attributes, target_filespec, aOperateOnFolders, aDoRecurse, true);
-		}
-		if (file_search != INVALID_HANDLE_VALUE) // In case the loop had zero iterations.
+			size_t pattern_length = strlen(naked_filename_or_pattern);
+			do
+			{
+				LONG_OPERATION_UPDATE
+				if (!(current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+					|| current_file.cFileName[0] == '.' && (!current_file.cFileName[1]     // Relies on short-circuit boolean order.
+						|| current_file.cFileName[1] == '.' && !current_file.cFileName[2]) //
+					// v1.0.45.03: Skip over folders whose full-path-names are too long to be supported by the ANSI
+					// versions of FindFirst/FindNext.  Without this fix, it might be possible for infinite recursion
+					// to occur (see PerformLoop() for more comments).
+					|| pattern_length + strlen(current_file.cFileName) >= space_remaining) // >= vs. > to reserve 1 for the backslash to be added between cFileName and naked_filename_or_pattern.
+					continue; // Never recurse into these.
+				// This will build the string CurrentDir+SubDir+FilePatternOrName.
+				// If FilePatternOrName doesn't contain a wildcard, the recursion
+				// process will attempt to operate on the originally-specified
+				// single filename or folder name if it occurs anywhere else in the
+				// tree, e.g. recursing C:\Temp\temp.txt would affect all occurences
+				// of temp.txt both in C:\Temp and any subdirectories it might contain:
+				sprintf(append_pos, "%s\\%s" // Above has ensured this won't overflow.
+					, current_file.cFileName, naked_filename_or_pattern);
+				failure_count += FileSetAttrib(attributes, file_path, aOperateOnFolders, aDoRecurse, true);
+			} while (FindNextFile(file_search, &current_file));
 			FindClose(file_search);
-	}
+		} // if (file_search != INVALID_HANDLE_VALUE)
+	} // if (aDoRecurse)
 
 	if (!aCalledRecursively) // i.e. Only need to do this if we're returning to top-level caller:
 		g_ErrorLevel->Assign(failure_count); // i.e. indicate success if there were no failures.
@@ -9450,11 +9500,14 @@ int Line::FileSetTime(char *aYYYYMMDD, char *aFilePattern, char aWhichTime
 	if (!aCalledRecursively)  // i.e. Only need to do this if we're not called by ourself:
 	{
 		g_ErrorLevel->Assign(ERRORLEVEL_ERROR); // Set default
-		if (!aFilePattern || !*aFilePattern)
+		if (!*aFilePattern)
 			return 0;  // Let ErrorLevel indicate an error, since this is probably not what the user intended.
 		if (aOperateOnFolders == FILE_LOOP_INVALID) // In case runtime dereference of a var was an invalid value.
 			aOperateOnFolders = FILE_LOOP_FILES_ONLY;  // Set default.
 	}
+
+	if (strlen(aFilePattern) >= MAX_PATH) // Checked early to simplify other things below.
+		return 0; // Let the above ErrorLevel indicate the problem.
 
 	// Related to the comment at the top: Since the script subroutine that resulted in the call to
 	// this function can be interrupted during our MsgSleep(), make a copy of any params that might
@@ -9463,7 +9516,7 @@ int Line::FileSetTime(char *aYYYYMMDD, char *aFilePattern, char aWhichTime
 	char yyyymmdd[64]; // Even do this one since its value is passed recursively in calls to self.
 	strlcpy(yyyymmdd, aYYYYMMDD, sizeof(yyyymmdd));
 	char file_pattern[MAX_PATH];
-	strlcpy(file_pattern, aFilePattern, sizeof(file_pattern));
+	strcpy(file_pattern, aFilePattern); // An earlier check has ensured this won't overflow.
 
 	FILETIME ft, ftUTC;
 	if (*yyyymmdd)
@@ -9479,17 +9532,25 @@ int Line::FileSetTime(char *aYYYYMMDD, char *aFilePattern, char aWhichTime
 		GetSystemTimeAsFileTime(&ftUTC);
 
 	// This following section is very similar to that in FileSetAttrib and FileDelete:
-	char file_path[MAX_PATH], target_filespec[MAX_PATH];
-	if (strlen(aFilePattern) >= sizeof(file_path))
-		return 0; // Return OK because this is non-critical.  Let the above ErrorLevel indicate the problem.
-	strlcpy(file_path, aFilePattern, sizeof(file_path));
+	char file_path[MAX_PATH]; // Giving +3 extra for "*.*" seems fairly pointless because any files that actually need that extra room would fail to be retrieved by FindFirst/Next due to their inability to support paths much over 256.
+	strcpy(file_path, aFilePattern); // An earlier check has ensured this won't overflow.
+
+	size_t file_path_length; // The length of just the path portion of the filespec.
 	char *last_backslash = strrchr(file_path, '\\');
-	// Remove the filename and/or wildcard part.   But leave the trailing backslash on it for
-	// consistency with below:
 	if (last_backslash)
+	{
+		// Remove the filename and/or wildcard part.   But leave the trailing backslash on it for
+		// consistency with below:
 		*(last_backslash + 1) = '\0';
+		file_path_length = strlen(file_path);
+	}
 	else // Use current working directory, e.g. if user specified only *.*
+	{
 		*file_path = '\0';
+		file_path_length = 0;
+	}
+	char *append_pos = file_path + file_path_length; // For performance, copy in the unchanging part only once.  This is where the changing part gets appended.
+	size_t space_remaining = sizeof(file_path) - file_path_length - 1; // Space left in file_path for the changing part.
 
 	// For use with aDoRecurse, get just the naked file name/pattern:
 	char *naked_filename_or_pattern = strrchr(file_pattern, '\\');
@@ -9502,99 +9563,115 @@ int Line::FileSetTime(char *aYYYYMMDD, char *aFilePattern, char aWhichTime
 		// Since no wildcards, always operate on this single item even if it's a folder.
 		aOperateOnFolders = FILE_LOOP_FILES_AND_FOLDERS;
 
-	LONG_OPERATION_INIT
-
-	WIN32_FIND_DATA current_file;
-	HANDLE file_search = FindFirstFile(aFilePattern, &current_file);
-	bool file_found = (file_search != INVALID_HANDLE_VALUE);
-	int failure_count = 0;
 	HANDLE hFile;
+	LONG_OPERATION_INIT
+	int failure_count = 0;
+	WIN32_FIND_DATA current_file;
+	HANDLE file_search = FindFirstFile(file_pattern, &current_file);
 
-	for (; file_found; file_found = FindNextFile(file_search, &current_file))
+	if (file_search != INVALID_HANDLE_VALUE)
 	{
-		// Since other script threads can interrupt during LONG_OPERATION_UPDATE, it's important that
-		// this command not refer to sArgDeref[] and sArgVar[] anytime after an interruption becomes
-		// possible. This is because an interrupting thread usually changes the values to something
-		// inappropriate for this thread.
-		LONG_OPERATION_UPDATE
-
-		if (current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+		do
 		{
-			if (!strcmp(current_file.cFileName, "..") || !strcmp(current_file.cFileName, "."))
-				continue; // Never operate upon or recurse into these.
-			// Regardless of whether this folder was recursed-into by the above, if this param
-			// is false, its own attributes will not be affected:
-			if (aOperateOnFolders == FILE_LOOP_FILES_ONLY)
+			// Since other script threads can interrupt during LONG_OPERATION_UPDATE, it's important that
+			// this command not refer to sArgDeref[] and sArgVar[] anytime after an interruption becomes
+			// possible. This is because an interrupting thread usually changes the values to something
+			// inappropriate for this thread.
+			LONG_OPERATION_UPDATE
+
+			if (current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+			{
+				if (current_file.cFileName[0] == '.' && (!current_file.cFileName[1]    // Relies on short-circuit boolean order.
+					|| current_file.cFileName[1] == '.' && !current_file.cFileName[2]) //
+					// Regardless of whether this folder will be recursed into, this folder's own timestamp
+					// will not be affected when the mode is files-only:
+					|| aOperateOnFolders == FILE_LOOP_FILES_ONLY)
+					continue; // Never operate upon or recurse into these.
+			}
+			else // It's a file, not a folder.
+				if (aOperateOnFolders == FILE_LOOP_FOLDERS_ONLY)
+					continue;
+
+			if (strlen(current_file.cFileName) > space_remaining)
+			{
+				// v1.0.45.03: Don't even try to operate upon truncated filenames in case they accidentally
+				// match the name of a real/existing file.
+				++failure_count;
 				continue;
-		}
-		else // It's a file, not a folder.
-			if (aOperateOnFolders == FILE_LOOP_FOLDERS_ONLY)
+			}
+			// Otherwise, make file_path be the filespec of the file to operate upon:
+			strcpy(append_pos, current_file.cFileName); // Above has ensured this won't overflow.
+
+			// Open existing file.  Uses CreateFile() rather than OpenFile for an expectation
+			// of greater compatibility for all files, and folder support too.
+			// FILE_FLAG_NO_BUFFERING might improve performance because all we're doing is
+			// changing one of the file's attributes.  FILE_FLAG_BACKUP_SEMANTICS must be
+			// used, otherwise changing the time of a directory under NT and beyond will
+			// not succeed.  Win95 (not sure about Win98/Me) does not support this, but it
+			// should be harmless to specify it even if the OS is Win95:
+			hFile = CreateFile(file_path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE
+				, (LPSECURITY_ATTRIBUTES)NULL, OPEN_EXISTING
+				, FILE_FLAG_NO_BUFFERING | FILE_FLAG_BACKUP_SEMANTICS, NULL);
+			if (hFile == INVALID_HANDLE_VALUE)
+			{
+				++failure_count;
 				continue;
+			}
 
-		snprintf(target_filespec, sizeof(target_filespec), "%s%s", file_path, current_file.cFileName);
+			switch (toupper(aWhichTime))
+			{
+			case 'C': // File's creation time.
+				if (!SetFileTime(hFile, &ftUTC, NULL, NULL))
+					++failure_count;
+				break;
+			case 'A': // File's last access time.
+				if (!SetFileTime(hFile, NULL, &ftUTC, NULL))
+					++failure_count;
+				break;
+			default:  // 'M', unspecified, or some other value.  Use the file's modification time.
+				if (!SetFileTime(hFile, NULL, NULL, &ftUTC))
+					++failure_count;
+			}
 
-		// Open existing file.  Uses CreateFile() rather than OpenFile for an expectation
-		// of greater compatibility for all files, and folder support too.
-		// FILE_FLAG_NO_BUFFERING might improve performance because all we're doing is
-		// changing one of the file's attributes.  FILE_FLAG_BACKUP_SEMANTICS must be
-		// used, otherwise changing the time of a directory under NT and beyond will
-		// not succeed.  Win95 (not sure about Win98/Me) does not support this, but it
-		// should be harmless to specify it even if the OS is Win95:
-		hFile = CreateFile(target_filespec, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE
-			, (LPSECURITY_ATTRIBUTES)NULL, OPEN_EXISTING
-			, FILE_FLAG_NO_BUFFERING | FILE_FLAG_BACKUP_SEMANTICS, NULL);
-		if (hFile == INVALID_HANDLE_VALUE)
-		{
-			++failure_count;
-			continue;
-		}
+			CloseHandle(hFile);
+		} while (FindNextFile(file_search, &current_file));
 
-		switch (toupper(aWhichTime))
-		{
-		case 'C': // File's creation time.
-			if (!SetFileTime(hFile, &ftUTC, NULL, NULL))
-				++failure_count;
-			break;
-		case 'A': // File's last access time.
-			if (!SetFileTime(hFile, NULL, &ftUTC, NULL))
-				++failure_count;
-			break;
-		default:  // 'M', unspecified, or some other value.  Use the file's modification time.
-			if (!SetFileTime(hFile, NULL, NULL, &ftUTC))
-				++failure_count;
-		}
-		CloseHandle(hFile);
-	}
-
-	if (file_search != INVALID_HANDLE_VALUE) // In case the loop had zero iterations.
 		FindClose(file_search);
+	} // if (file_search != INVALID_HANDLE_VALUE)
 
 	// This section is identical to that in FileSetAttrib() except for the recursive function
 	// call itself, so see comments there for details:
-	if (aDoRecurse) 
+	if (aDoRecurse && space_remaining > 2) // The space_remaining check ensures there's enough room to append "*.*" (if not, just avoid recursing into it due to rarity).
 	{
 		// Testing shows that the ANSI version of FindFirstFile() will not accept a path+pattern longer
 		// than 256 or so, even if the pattern would match files whose names are short enough to be legal.
 		// Therefore, as of v1.0.25, there is also a hard limit of MAX_PATH on all these variables.
 		// MSDN confirms this in a vague way: "In the ANSI version of FindFirstFile(), [plpFileName] is
 		// limited to MAX_PATH characters."
-		char all_file_pattern[MAX_PATH];
-		snprintf(all_file_pattern, sizeof(all_file_pattern), "%s*.*", file_path);
-		file_search = FindFirstFile(all_file_pattern, &current_file);
-		file_found = (file_search != INVALID_HANDLE_VALUE);
-		for (; file_found; file_found = FindNextFile(file_search, &current_file))
+		strcpy(append_pos, "*.*"); // Above has ensured this won't overflow.
+		file_search = FindFirstFile(file_path, &current_file);
+
+		if (file_search != INVALID_HANDLE_VALUE)
 		{
-			LONG_OPERATION_UPDATE
-			if (!(current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-				|| !strcmp(current_file.cFileName, "..") || !strcmp(current_file.cFileName, "."))
-				continue;
-			snprintf(target_filespec, sizeof(target_filespec), "%s%s\\%s"
-				, file_path, current_file.cFileName, naked_filename_or_pattern);
-			failure_count += FileSetTime(yyyymmdd, target_filespec, aWhichTime, aOperateOnFolders, aDoRecurse, true);
-		}
-		if (file_search != INVALID_HANDLE_VALUE) // In case the loop had zero iterations.
+			size_t pattern_length = strlen(naked_filename_or_pattern);
+			do
+			{
+				LONG_OPERATION_UPDATE
+				if (!(current_file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+					|| current_file.cFileName[0] == '.' && (!current_file.cFileName[1]     // Relies on short-circuit boolean order.
+						|| current_file.cFileName[1] == '.' && !current_file.cFileName[2]) //
+					// v1.0.45.03: Skip over folders whose full-path-names are too long to be supported by the ANSI
+					// versions of FindFirst/FindNext.  Without this fix, it might be possible for infinite recursion
+					// to occur (see PerformLoop() for more comments).
+					|| pattern_length + strlen(current_file.cFileName) >= space_remaining) // >= vs. > to reserve 1 for the backslash to be added between cFileName and naked_filename_or_pattern.
+					continue;
+				sprintf(append_pos, "%s\\%s" // Above has ensured this won't overflow.
+					, current_file.cFileName, naked_filename_or_pattern);
+				failure_count += FileSetTime(yyyymmdd, file_path, aWhichTime, aOperateOnFolders, aDoRecurse, true);
+			} while (FindNextFile(file_search, &current_file));
 			FindClose(file_search);
-	}
+		} // if (file_search != INVALID_HANDLE_VALUE)
+	} // if (aDoRecurse)
 
 	if (!aCalledRecursively) // i.e. Only need to do this if we're returning to top-level caller:
 		g_ErrorLevel->Assign(failure_count); // i.e. indicate success if there were no failures.
@@ -9826,12 +9903,15 @@ size_t Line::ConvertEscapeCharGetLine(char *aBuf, int aMaxCharsToRead, FILE *fp)
 
 
 
-bool Line::FileIsFilteredOut(WIN32_FIND_DATA &aCurrentFile, FileLoopModeType aFileLoopMode, char *aFilePath)
+bool Line::FileIsFilteredOut(WIN32_FIND_DATA &aCurrentFile, FileLoopModeType aFileLoopMode
+	, char *aFilePath, size_t aFilePathLength)
+// Caller has ensured that aFilePath (if non-blank) has a trailing backslash.
 {
 	if (aCurrentFile.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) // It's a folder.
 	{
 		if (aFileLoopMode == FILE_LOOP_FILES_ONLY
-			|| !strcmp(aCurrentFile.cFileName, "..") || !strcmp(aCurrentFile.cFileName, "."))
+			|| aCurrentFile.cFileName[0] == '.' && (!aCurrentFile.cFileName[1]      // Relies on short-circuit boolean order.
+				|| aCurrentFile.cFileName[1] == '.' && !aCurrentFile.cFileName[2])) //
 			return true; // Exclude this folder by returning true.
 	}
 	else // it's not a folder.
@@ -9839,12 +9919,23 @@ bool Line::FileIsFilteredOut(WIN32_FIND_DATA &aCurrentFile, FileLoopModeType aFi
 			return true; // Exclude this file by returning true.
 
 	// Since file was found, also prepend the file's path to its name for the caller:
-	if (!aFilePath || !*aFilePath) // don't bother.
-		return false;
-	char temp[MAX_PATH];
-	strlcpy(temp, aCurrentFile.cFileName, sizeof(temp));
-	snprintf(aCurrentFile.cFileName, sizeof(aCurrentFile.cFileName), "%s%s", aFilePath, temp);
-	return false;  // i.e. this file has not been filtered out.
+	if (*aFilePath)
+	{
+		// Seems best to check length in advance because it allows a faster move/copy method further below
+		// (in lieu of snprintf(), which is probably quite a bit slower than the method here).
+		size_t name_length = strlen(aCurrentFile.cFileName);
+		if (aFilePathLength + name_length >= MAX_PATH)
+			// v1.0.45.03: Filter out filenames that would be truncated because it seems undesirable in 99% of
+			// cases to include such "faulty" data in the loop.  Most scripts would want to skip them rather than
+			// seeing the truncated names.  Furthermore, a truncated name might accidentally match the name
+			// of a legitimate non-trucated filename, which could cause such a name to get retrieved twice by
+			// the loop (or other undesirable side-effects).
+			return true;
+		//else no overflow is possible, so below can move things around inside the buffer without concern.
+		memmove(aCurrentFile.cFileName + aFilePathLength, aCurrentFile.cFileName, name_length + 1); // memmove() because source & dest might overlap.  +1 to include the terminator.
+		memcpy(aCurrentFile.cFileName, aFilePath, aFilePathLength); // Prepend in the area liberated by the above. Don't include the terminator since this is a concat operation.
+	}
+	return false; // Indicate that this file is not to be filtered out.
 }
 
 
@@ -10823,7 +10914,7 @@ pcre *get_compiled_regex(char *aRegEx, bool &aGetPositionsNotSubstrings, pcre_ex
 	// wait/semaphore operation, which is more costly.
 	// Finally, the code size of all critical-section features together is less than 512 bytes (uncompressed),
 	// so like performance, that's not a concern either.
-	EnterCriticalSection(&CriticalRegExCache); // Request ownership of the critical section. If another thread already owns it, this thread will block until the other thread finishes.
+	EnterCriticalSection(&g_CriticalRegExCache); // Request ownership of the critical section. If another thread already owns it, this thread will block until the other thread finishes.
 
 	// SET UP THE CACHE.
 	// This is a very crude cache for linear search. Of course, hashing would be better in the sense that it
@@ -10835,13 +10926,13 @@ pcre *get_compiled_regex(char *aRegEx, bool &aGetPositionsNotSubstrings, pcre_ex
 	{
 		// For simplicity (and thus performance), the entire RegEx pattern including its options is cached
 		// is stored in re_raw and that entire string becomes the RegEx's unique identifier for the purpose
-		// of finding an entry in the cache.  Technically, this isn't optimal because some options like study
+		// of finding an entry in the cache.  Technically, this isn't optimal because some options like Study
 		// and aGetPositionsNotSubstrings don't alter the nature of the compiled RegEx.  However, the CPU time
 		// required to strip off some options prior to doing a cache search seems likely to offset much of the
 		// cache's benefit.  So for this reason, as well as rarity and code size issues, this policy seems best.
 		char *re_raw;      // The RegEx's literal string pattern such as "abc.*123".
 		pcre *re_compiled; // The RegEx in compiled form.
-		pcre_extra *extra; // NULL unless a study() was done.
+		pcre_extra *extra; // NULL unless a study() was done (and NULL even then if study() didn't find anything).
 		// int pcre_options; // Not currently needed in the cache since options are implicitly inside re_compiled.
 		bool get_positions_not_substrings;
 	};
@@ -10849,10 +10940,11 @@ pcre *get_compiled_regex(char *aRegEx, bool &aGetPositionsNotSubstrings, pcre_ex
 	#define PCRE_CACHE_SIZE 100 // Going too high would be counterproductive due to the slowness of linear search (and also the memory utilization of so many compiled RegEx's).
 	static pcre_cache_entry sCache[PCRE_CACHE_SIZE] = {{0}};
 	static int sLastInsert, sLastFound = -1; // -1 indicates "cache empty".
+	int insert_pos; // v1.0.45.03: This is used to avoid updating sLastInsert until an insert actually occurs (it might not occur if a compile error occurs in the regex, or something else stops it early).
 
 	// CHECK IF THIS REGEX IS ALREADY IN THE CACHE.
 	if (sLastFound == -1) // Cache is empty, so insert this RegEx at the first position.
-		sLastInsert = 0;  // A section further below will change sLastFound to be 0.
+		insert_pos = 0;  // A section further below will change sLastFound to be 0.
 	else
 	{
 		// Search the cache to see if it contains the caller-specified RegEx in compiled form.
@@ -10901,11 +10993,11 @@ pcre *get_compiled_regex(char *aRegEx, bool &aGetPositionsNotSubstrings, pcre_ex
 		// used -- or even be sLastFound itself -- but on average, this approach seems pretty good because a
 		// script loop that uses 50 unique RegEx's will quickly stabilize in the cache so that all 50 of them
 		// stay compiled/cached until the loop ends.
-		sLastInsert = (sLastInsert == PCRE_CACHE_SIZE-1) ? 0 : sLastInsert + 1; // Formula works for both full and partially-full array.
+		insert_pos = (sLastInsert == PCRE_CACHE_SIZE-1) ? 0 : sLastInsert + 1; // Formula works for both full and partially-full array.
 	}
 	// Since the above didn't goto:
 	// - This RegEx isn't yet in the cache.  So compile it and put it in the cache, then return it to caller.
-	// - Above is responsible for having set sLastInsert to the cache position where the new RegEx will be stored.
+	// - Above is responsible for having set insert_pos to the cache position where the new RegEx will be stored.
 
 	// The following macro is for maintainability, to enforce the definition of "default" in multiple places.
 	// PCRE_NEWLINE_CRLF is the default rather than PCRE_NEWLINE_LF because *multiline* haystacks
@@ -11047,8 +11139,8 @@ break_both:
 		aExtra = NULL; // aExtra is an output parameter for caller.
 
 	// ADD THE NEWLY-COMPILED REGEX TO THE CACHE.
-	// An earlier stage has set sLastInsert to be the desired insert-position in the cache.
-	pcre_cache_entry &this_entry = sCache[sLastInsert]; // For performance and convenience.
+	// An earlier stage has set insert_pos to be the desired insert-position in the cache.
+	pcre_cache_entry &this_entry = sCache[insert_pos]; // For performance and convenience.
 	if (this_entry.re_compiled) // An existing cache item is being overwritten, so free it's attributes.
 	{
 		// Free the old cache entry's attributes in preparation for overwriting them with the new one's.
@@ -11064,18 +11156,19 @@ break_both:
 	// "this_entry.pcre_options" doesn't exist because it isn't currently needed in the cache.  This is
 	// because the RE's options are implicitly stored inside re_compiled.
 
+	sLastInsert = insert_pos; // v1.0.45.03: Must be done only *after* the insert succeeded because some things rely on sLastInsert being synonymous with the last populated item in the cache (when the cache isn't yet full).
 	sLastFound = sLastInsert; // Relied upon in the case where sLastFound==-1. But it also sets things up to start the search at this item next time, because it's a bit more likely to be found here such as tight loops containing only one RegEx.
 	// Remember that although sLastFound==sLastInsert in this case, it isn't always so -- namely when a previous
 	// call found an existing match in the cache without having to compile and insert the item.
 
-	LeaveCriticalSection(&CriticalRegExCache);
+	LeaveCriticalSection(&g_CriticalRegExCache);
 	return re_compiled; // Indicate success.
 
 match_found: // RegEx was found in the cache at position sLastFound, so return the cached info back to the caller.
 	aGetPositionsNotSubstrings = sCache[sLastFound].get_positions_not_substrings;
 	aExtra = sCache[sLastFound].extra;
 
-	LeaveCriticalSection(&CriticalRegExCache);
+	LeaveCriticalSection(&g_CriticalRegExCache);
 	return sCache[sLastFound].re_compiled; // Indicate success.
 
 error: // Since NULL is returned here, caller should ignore the contents of the output parameters.
@@ -11085,7 +11178,7 @@ error: // Since NULL is returned here, caller should ignore the contents of the 
 		aResultToken->marker = "";
 	}
 
-	LeaveCriticalSection(&CriticalRegExCache);
+	LeaveCriticalSection(&g_CriticalRegExCache);
 	return NULL; // Indicate failure.
 }
 
@@ -11100,7 +11193,7 @@ char *RegExMatch(char *aHaystack, char *aNeedleRegEx)
 
 	// Compile the regex or get it from cache.
 	if (   !(re = get_compiled_regex(aNeedleRegEx, get_positions_not_substrings, extra, NULL))   ) // Compiling problem.
-		return NULL;
+		return NULL; // Our callers just want there to be "no match" in this case.
 
 	// Set up the offset array, which consists of int-pairs containing the start/end offset of each match.
 	// For simplicity, use a fixed size because even if it's too small (unlikely for our types of callers),
@@ -11151,7 +11244,7 @@ void RegExReplace(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPar
 	result_size = 0;   // And caller has already set "result" to be NULL.  The buffer is allocated only upon
 	result_length = 0; // first use to avoid a potentially massive allocation that might be wasted and cause swapping (not to mention that we'll have better ability to estimate the correct total size after the first replacement is discovered).
 
-	// Below uses a temp var. because realloc() returns NULL on failure but leaves original block allocated.
+	// Below uses a temp variable because realloc() returns NULL on failure but leaves original block allocated.
 	// Note that if it's given a NULL pointer, realloc() does a malloc() instead.
 	char *realloc_temp;
 	#define REGEX_REALLOC(size) \
@@ -11428,6 +11521,16 @@ void RegExReplace(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPar
 		// initial string position. If this match succeeds, an alternative to the empty string match has been
 		// found, and we can proceed round the loop.
 		//
+		// The following may be one example of this concept:
+		// In the string "xy", replace the pattern "x?" by "z".  The traditional/proper answer (achieved by
+		// the logic here) is "zzyz" because: 1) The first x is replaced by z; 2) The empty string before y
+		// is replaced by z; 3) the logic here applies PCRE_NOTEMPTY to search again at the same position, but
+		// that search doesn't find a match; so the logic higher above advances to the next character (y) and
+		// continues the search; it finds the empty string at the end of haystack, which is replaced by z.
+		// On the other hand, maybe there's a better example than the above that explains what would happen
+		// if PCRE_NOTEMPTY actually finds a match, or what would happen if this PCRE_NOTEMPTY method weren't
+		// used at all (possible infinite loop?).
+		// 
 		// If this match is "" (length 0), then by definitition we just found a match in normal mode, not
 		// PCRE_NOTEMPTY mode (since that mode isn't capable of finding "").  Thus, empty_string_is_not_a_match
 		// is currently 0.
@@ -11446,7 +11549,6 @@ out_of_mem:
 		free(result);  // Since result is probably an non-terminated string (not to mention an incompletely created result), it seems best to free it here to remove it from any further consideration by the caller.
 		result = NULL; // Tell caller that it was freed.
 		// AND LEAVE aResultToken.marker == "", because the result is indeterminate and thus discarded.
-		// The caller knows to free the old block (in result) for us, if there is one.
 	}
 }
 

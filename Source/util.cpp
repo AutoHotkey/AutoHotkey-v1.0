@@ -1507,7 +1507,7 @@ int CALLBACK FontEnumProc(ENUMLOGFONTEX *lpelfe, NEWTEXTMETRICEX *lpntme, DWORD 
 
 
 void ScreenToWindow(POINT &aPoint, HWND aHwnd)
-// Convert screen coordinates to window coordinates.
+// Convert screen coordinates to window coordinates (i.e. relative to the window's upper-left corner).
 {
 	RECT rect;
 	GetWindowRect(aHwnd, &rect);
