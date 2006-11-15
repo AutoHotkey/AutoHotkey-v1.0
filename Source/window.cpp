@@ -129,7 +129,7 @@ HWND AttemptSetForeground(HWND aTargetWindow, HWND aForeWindow)
 	}
 #endif
 	return NULL;
-}	
+}
 
 
 

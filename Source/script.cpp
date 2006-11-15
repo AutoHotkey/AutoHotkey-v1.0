@@ -2387,13 +2387,27 @@ inline ResultType Script::IsDirective(char *aBuf)
 			if (IS_SPACE_OR_TAB(*parameter)) // Skip over at most one space or tab, since others might be a literal part of the filename.
 				++parameter;
 		}
-		StrReplace(parameter, "%A_ScriptDir%", mFileDir, SCS_INSENSITIVE, 1, LINE_SIZE - (parameter-aBuf)); // v1.0.35.11.  Caller has ensured string is writable.
+
+		size_t space_remaining = LINE_SIZE - (parameter-aBuf);
+		char buf[MAX_PATH];
+		StrReplace(parameter, "%A_ScriptDir%", mFileDir, SCS_INSENSITIVE, 1, space_remaining); // v1.0.35.11.  Caller has ensured string is writable.
+		if (strcasestr(parameter, "%A_AppData%")) // v1.0.45.04: This and the next were requested by Tekl to make it easier to customize scripts on a per-user basis.
+		{
+			GetAppData(false, buf);
+			StrReplace(parameter, "%A_AppData%", buf, SCS_INSENSITIVE, 1, space_remaining);
+		}
+		if (strcasestr(parameter, "%A_AppDataCommon%")) // v1.0.45.04.
+		{
+			GetAppData(true, buf);
+			StrReplace(parameter, "%A_AppDataCommon%", buf, SCS_INSENSITIVE, 1, space_remaining);
+		}
+
 		DWORD attr = GetFileAttributes(parameter);
-		if (attr != 0xFFFFFFFF && (attr & FILE_ATTRIBUTE_DIRECTORY)) // File exists and its a directory (possibly A_ScriptDir set above).
+		if (attr != 0xFFFFFFFF && (attr & FILE_ATTRIBUTE_DIRECTORY)) // File exists and its a directory (possibly A_ScriptDir or A_AppData set above).
 		{
 			// v1.0.35.11 allow changing of load-time directory to increase flexibility.  This feature has
 			// been asked for directly or indirectly several times.
-			// If a script ever wants to use the string "%A_ScriptDir%" literally in an include's filename,
+			// If a script ever wants to use a string like "%A_ScriptDir%" literally in an include's filename,
 			// that would not work.  But that seems too rare to worry about.
 			// v1.0.45.01: Call SetWorkingDir() vs. SetCurrentDirectory() so that it succeeds even for a root
 			// drive like C: that lacks a backslash (see SetWorkingDir() for details).
@@ -11384,7 +11398,7 @@ VarSizeType Script::GetProgramFiles(char *aBuf)
 
 VarSizeType Script::GetAppData(bool aGetCommon, char *aBuf)
 {
-	char buf[MAX_PATH];
+	char buf[MAX_PATH]; // One caller relies on this being explicitly limited to MAX_PATH.
 	char *target_buf = aBuf ? aBuf : buf;
 	*target_buf = '\0'; // Set default.
 	if (aGetCommon)

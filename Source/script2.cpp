@@ -11384,7 +11384,7 @@ void RegExReplace(ExprTokenType &aResultToken, ExprTokenType *aParam[], int aPar
 					while (*src && *src != '$') // While looking for the next '$', copy over everything up until the '$'.
 						*dest++ = *src++;
 					result_length += (int)(src - src_orig);
-				}		
+				}
 				else // This is the first iteration (mode: size-calculation).
 				{
 					for (; *src && *src != '$'; ++src); // Find the next '$', if any.

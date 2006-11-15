@@ -480,6 +480,8 @@ ResultType Line::Control(char *aCmd, char *aValue, char *aControl, char *aTitle,
 			case '^': new_style = orig_style ^ style_change; break;
 			}
 		}
+		if (new_style == orig_style) // v1.0.45.04: Ask for an unnecessary change (i.e. one that is already in effect) should not be considered an error.
+			return g_ErrorLevel->Assign(ERRORLEVEL_NONE); // Indicate success.
 		// Currently, BM_SETSTYLE is not done when GetClassName() says that the control is a button/checkbox/groupbox.
 		// This is because the docs for BM_SETSTYLE don't contain much, if anything, that anyone would ever
 		// want to change.
@@ -965,7 +967,8 @@ ResultType Line::URLDownloadToFile(char *aURL, char *aFilespec)
 
 	// Open the internet session. v1.0.45.03: Provide a non-NULL user-agent because  some servers reject
 	// requests that lack a user-agent.  Furthermore, it's more professional to have one, in which case it
-	// should probably be kept as simple and unchanging as possible.
+	// should probably be kept as simple and unchanging as possible.  Using something like the script's name
+	// as the user agent (even if documented) seems like a bad idea because it might contain personal/sensitive info.
 	HINTERNET hInet = lpfnInternetOpen("AutoHotkey", INTERNET_OPEN_TYPE_PRECONFIG_WITH_NO_AUTOPROXY, NULL, NULL, 0);
 	if (!hInet)
 	{

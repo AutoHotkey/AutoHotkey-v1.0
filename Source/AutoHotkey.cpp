@@ -31,6 +31,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 {
 	// Init any globals not in "struct g" that need it:
 	g_hInstance = hInstance;
+	InitializeCriticalSection(&g_CriticalRegExCache); // v1.0.45.04: Must be done early so that it's unconditional, so that DeleteCriticalSection() in the script destructor can also be unconditional (deleting when never initialized can crash, at least on Win 9x).
 
 	if (!GetCurrentDirectory(sizeof(g_WorkingDir), g_WorkingDir)) // Needed for the FileSelectFile() workaround.
 		*g_WorkingDir = '\0';
@@ -254,8 +255,6 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		else // InitCommonControlsEx not available, so must revert to non-Ex() to make controls work on Win95/NT4.
 			InitCommonControls();
 	}
-
-	InitializeCriticalSection(&g_CriticalRegExCache); // g_CriticalRegExCache is used elsewhere for thread-safety.
 
 	// Activate the hotkeys, hotstrings, and any hooks that are required prior to executing the
 	// top part (the auto-execute part) of the script so that they will be in effect even if the

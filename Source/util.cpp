@@ -467,7 +467,7 @@ int snprintfcat(char *aBuf, int aBufSize, const char *aFormat, ...)
 //		if (   diff = (int)((UCHAR)aBuf1[i] - (UCHAR)aBuf2[i])   ) // Use unsigned chars like strcmp().
 //			return diff;
 //	return (int)(aLength1 - aLength2);
-//}	
+//}
 
 
 
@@ -498,7 +498,7 @@ int strlicmp(char *aBuf1, char *aBuf2, UINT aLength1, UINT aLength2)
 	// longer one's next character is by definition something non-zero.  I'm not completely
 	// sure that this is the same policy followed by ANSI strcmp():
 	return (int)(aLength1 - aLength2);
-}	
+}
 
 
 
@@ -1566,7 +1566,7 @@ ResultType RegReadString(HKEY aRootKey, char *aSubkey, char *aValueName, char *a
 	LONG result = RegQueryValueEx(hkey, aValueName, NULL, NULL, (LPBYTE)aBuf, &buf_size);
 	RegCloseKey(hkey);
 	return (result == ERROR_SUCCESS) ? OK : FAIL;
-}	
+}
 
 
 

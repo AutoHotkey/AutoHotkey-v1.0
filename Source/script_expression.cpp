@@ -951,7 +951,7 @@ double_deref:
 				// in which the first and's parent in an imaginary tree is the second "and".
 				// But how is it certain that this is the final operator or operand of and AND/OR's left branch?
 				// Here is the explanation:
-				// Everything higher priority than the AND/OR came off the stack right before it, resulting in
+				// Everything higher precedence than the AND/OR came off the stack right before it, resulting in
 				// what must be a balanced/complete sub-postfix-expression in and of itself (unless the expression
 				// has a syntax error, which is caught in various places).  Because it's complete, during the
 				// postfix evaluation phase, that sub-expression will result in a new operand for the stack,
